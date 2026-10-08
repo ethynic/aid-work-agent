@@ -216,7 +216,7 @@ _THINKING_OFF_PARAMS = {
 _SUMMARY_MAX_TOKENS_CAP = 4096
 
 # 经济性闸门：摘要输入 tokens ÷ 50 低于此值（即输入 < 4 万 token）且上下文
-# 未接近模型上限时，压缩无经济价值，跳过 LLM 摘要走 truncate 降级
+# 未接近有效阈值（min(比例阈值, 绝对上限)）时，压缩无经济价值，跳过 LLM 摘要走 truncate 降级
 _SUMMARY_GATE_MIN_INPUT_TOKENS = 800 * 50
 
 
@@ -305,10 +305,18 @@ async def _call_summary_llm_direct(
     }
     # 摘要是概括任务，关思考：思考+正文共享 max_tokens 预算，思考开启会烧穿预算致 content 为空
     body.update(_THINKING_OFF_PARAMS.get(provider, {}))
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(api_url, headers=headers, json=body)
-        resp.raise_for_status()
-        data = resp.json()
+    async def request():
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(api_url, headers=headers, json=body)
+            resp.raise_for_status()
+            data = resp.json()
+        raw_usage = data.get('usage')
+        return {"raw": data, "usage": _normalize_summary_usage(raw_usage),
+                '_provider_usage_reported':isinstance(raw_usage,dict) and {'prompt_tokens','completion_tokens'}<=raw_usage.keys(),
+                "request_id": data.get("id", "")}
+    from src.llm.call_observer import observed_call
+    response = await observed_call(request, provider=provider, model=model, kwargs={}, purpose="compression")
+    data = response["raw"]
     # OpenAI 兼容响应
     choices = data.get("choices") or []
     content: Optional[str] = None
@@ -317,7 +325,7 @@ async def _call_summary_llm_direct(
         msg = choices[0].get("message") or {}
         content = msg.get("content")
         finish_reason = choices[0].get("finish_reason") or "stop"
-    usage = _normalize_summary_usage(data.get("usage"))
+    usage = response["usage"]
     return content, usage, finish_reason
 
 
@@ -350,6 +358,7 @@ class ContextCompressionService:
         settings_cfg: Optional[Any] = None,
         redis_client: Optional[Any] = None,
         llm_gateway: Optional[Any] = None,
+        session_repository: Optional[Any] = None,
     ):
         """初始化压缩服务
 
@@ -361,6 +370,8 @@ class ContextCompressionService:
         self._settings = settings_cfg or settings.memory.mid_term
         self._redis = redis_client
         self._llm_gateway = llm_gateway
+        from src.memory.session_repository import CompressionSessionRepository
+        self._session_repository = session_repository or CompressionSessionRepository()
         # 摘要 LLM 提供者/模型（配置值，实际调用可能 fallback 到主 gateway）
         self._summary_provider_cfg = self._settings.summary_llm.provider
         self._summary_model_cfg = self._settings.summary_llm.model
@@ -393,7 +404,7 @@ class ContextCompressionService:
 
         - source_type='chat' → 查 chat_sessions 表（SessionDB.get_by_id）
         - 其他 source_type（wecom_kf/dingtalk/feishu/wecom_personal_rpa）
-          → 查 channel_sessions 表（ChannelSessionManager.get_session_by_id）
+          → 查 channel_sessions 表（CompressionSessionRepository.get_session）
 
         v3.2.1（P0-2）：底层 DB 调用是同步阻塞的（psycopg2），用 asyncio.to_thread
         转入线程池执行，避免阻塞 FastAPI 事件循环。FastAPI 单 worker 高并发下，
@@ -420,16 +431,8 @@ class ContextCompressionService:
 
         在 asyncio.to_thread 中执行；不要直接在 async 调用栈中调用本方法。
         """
-        # 延迟 import 避免循环依赖
-        from src.db.models import SessionDB
-        from src.channels.session import channel_session_manager
-
         try:
-            if source_type == "chat":
-                row = SessionDB.get_by_id(session_id)
-            else:
-                # 复用模块级单例，避免每次新建 ChannelSessionManager（P1-4）
-                row = channel_session_manager.get_session_by_id(session_id)
+            row = self._session_repository.get_session(session_id, source_type)
         except Exception as e:
             logger.warning(
                 f"ContextCompression _resolve_session_meta failed: "
@@ -510,6 +513,23 @@ class ContextCompressionService:
             )
         return limit
 
+    def _effective_token_threshold(self, model_limit: int) -> int:
+        """有效 token 阈值 = min(比例阈值, 绝对上限)。
+
+        - 比例阈值 = int(model_limit × token_threshold_ratio)
+        - 绝对上限 = token_threshold_absolute（默认 60000，<=0 禁用退回纯比例）：
+          现役模型统一按 512K 档登记（_MODEL_CONTEXT_LIMITS），纯比例阈值高达
+          358.4K，大会话要膨胀到 10 万+ token 才触发压缩，主链路单轮成本/延迟
+          失控；绝对上限封顶后任何档位都不晚于该值触发
+        - _eval_threshold / compress_now 经济性闸门 / run_background_compression_scan
+          三处共用本方法，避免阈值公式分叉
+        """
+        threshold = int(model_limit * self._settings.token_threshold_ratio)
+        absolute = self._settings.token_threshold_absolute
+        if absolute > 0:
+            threshold = min(threshold, absolute)
+        return threshold
+
     async def _load_messages(
         self,
         session_id: str,
@@ -519,20 +539,12 @@ class ContextCompressionService:
         """从 DB 加载 messages（v3.1 Phase 3）。
 
         - source_type='chat' → MessageDB.list_by_session（默认过滤 compacted=true）
-        - 其他 source_type → ChannelSessionManager.get_messages（默认过滤 compacted=true）
+        - 其他 source_type → CompressionSessionRepository.load_messages（默认过滤 compacted=true）
 
         返回的 messages 包含 id 字段（用于压缩时记录 compressed_message_ids）。
         """
-        from src.db.models import MessageDB
-        from src.channels.session import channel_session_manager
-
         try:
-            if source_type == "chat":
-                # limit 给个大值，避免默认 100 截断；实际由 _eval_threshold / 精确回退判断
-                messages = MessageDB.list_by_session(session_id, limit=10000)
-            else:
-                # 复用模块级单例，避免每次新建 ChannelSessionManager（P1-4）
-                messages = channel_session_manager.get_messages(session_id, limit=10000)
+            messages = await asyncio.to_thread(self._session_repository.load_messages, session_id, source_type)
         except Exception as e:
             logger.warning(
                 f"ContextCompression _load_messages failed: "
@@ -568,7 +580,8 @@ class ContextCompressionService:
         """纯函数双阈值判断（v3.2 新增；v3.2.1 P1-2 起成为唯一阈值判断函数）。
 
         - 不依赖 messages 数组，只用 cached_tokens（session 表缓存）和 msg_count（COUNT 查询）
-        - token 阈值优先：cached_tokens >= model_limit × 70% → 压缩
+        - token 阈值优先：cached_tokens >= 有效阈值（min(model_limit × 比例, 绝对上限)）→ 压缩
+          绝对上限见 token_threshold_absolute（默认 60000，0=禁用），防止大上限模型压缩过晚
         - 缓存 = 0（新 session 首轮 / Agent 异常未写入）时不做 token 判断，
           等下一轮 LLM 写入缓存后再判；极端长会话由消息数阈值兜底
         - 消息数阈值兜底：msg_count >= message_count_threshold（默认 200）→ 压缩
@@ -585,8 +598,10 @@ class ContextCompressionService:
         # token 阈值优先（用缓存值，不调 count_tokens）
         # 缓存 = 0 时不做 token 判断，让消息数阈值兜底
         if cached_tokens > 0:
-            token_threshold = int(model_limit * self._settings.token_threshold_ratio)
+            token_threshold = self._effective_token_threshold(model_limit)
             if cached_tokens >= token_threshold:
+                # pct 为相对 model_limit 的占用率（观测口径不变）；绝对上限封顶触发时
+                # pct 可能远小于 100%，阈值封顶信息由 cached/threshold 两个数值体现
                 pct = cached_tokens * 100 // model_limit if model_limit > 0 else 0
                 return True, f"token_threshold({cached_tokens}/{token_threshold}, {pct}%, cached=True)"
 
@@ -1061,6 +1076,8 @@ class ContextCompressionService:
                                     f"after continuation, session budget={max_tokens}x2"
                                 )
                         except Exception as cont_err:
+                            if getattr(cont_err, 'authoritative_storage_failure', False):
+                                raise
                             # 续写失败不影响已有摘要可用性，但首段确实被截断了
                             truncated = True
                             logger.warning(
@@ -1084,6 +1101,8 @@ class ContextCompressionService:
                 )
             except Exception as e:
                 last_error = e
+                if getattr(e, 'authoritative_storage_failure', False):
+                    raise
                 logger.warning(
                     f"ContextCompression summary LLM error, attempt={attempt}/{max_attempts}, "
                     f"err={type(e).__name__}: {e}"
@@ -1397,20 +1416,12 @@ class ContextCompressionService:
         """COUNT 消息数（v3.2.1 P0-2：用 asyncio.to_thread 包裹同步 DB 调用）。
 
         - source_type='chat' → MessageDB.count_messages_by_session
-        - 其他 source_type → ChannelSessionManager.count_messages_by_session
+        - 其他 source_type → CompressionSessionRepository.count_messages
 
         默认过滤 compacted=true（与 _load_messages 保持一致），让消息数兜底阈值
         基于实际活跃消息数（与 v3.2 行为保持一致）。
         """
-        if source_type == "chat":
-            from src.db.models import MessageDB
-            return await asyncio.to_thread(
-                MessageDB.count_messages_by_session, session_id
-            )
-        from src.channels.session import channel_session_manager
-        return await asyncio.to_thread(
-            channel_session_manager.count_messages_by_session, session_id
-        )
+        return await asyncio.to_thread(self._session_repository.count_messages, session_id, source_type)
 
     async def compress_now(
         self,
@@ -1474,18 +1485,23 @@ class ContextCompressionService:
         processed_compress = self._preprocess_tool_results(compress)
 
         # 5.5) 经济性闸门（2026-09-30）：COMPRESS 区太小（< 4 万 token，摘要
-        # 输入:摘要比凑不出 50:1）且上下文远未接近模型上限时，压缩无经济价值
-        # ——后续重读走 cache-hit 便宜价即可，跳过 LLM 摘要走 truncate 降级
+        # 输入:摘要比凑不出 50:1）且上下文未接近**有效阈值**（min(比例阈值, 绝对上限)）
+        # 时，压缩无经济价值——后续重读走 cache-hit 便宜价即可，跳过 LLM 摘要走
+        # truncate 降级。
+        # 联动（2026-10-04 绝对上限）：near_limit 原按 0.8×model_limit 判断，绝对
+        # 上限封顶触发时 context≈60k << 0.8×512k，会被闸门误降级为硬截断骨架
+        # （摘要质量坍塌），必须同样按 0.8×有效阈值判断
         existing_summary = self.get_active_summary(session_id, source_type)
         zone_tokens = count_text_tokens(
             self._build_summary_prompt(existing_summary, processed_compress)
         )
-        near_limit = meta.context_token_count >= int(self._get_model_limit() * 0.8)
+        effective_threshold = self._effective_token_threshold(self._get_model_limit())
+        near_limit = meta.context_token_count >= int(effective_threshold * 0.8)
         if zone_tokens < _SUMMARY_GATE_MIN_INPUT_TOKENS and not near_limit:
             logger.info(
                 f"ContextCompression gate skip: zone_tokens={zone_tokens} < "
-                f"{_SUMMARY_GATE_MIN_INPUT_TOKENS} and context far from model limit "
-                f"({meta.context_token_count}/{self._get_model_limit()}), "
+                f"{_SUMMARY_GATE_MIN_INPUT_TOKENS} and context far from effective "
+                f"threshold ({meta.context_token_count}/{effective_threshold}), "
                 f"sid={session_id}, source={source_type}"
             )
             summary_text = self._fallback_truncate(compress)
@@ -1748,7 +1764,9 @@ async def run_background_compression_scan() -> Dict[str, int]:
 
     service = get_compression_service()
     model_limit = service._get_model_limit()
-    threshold = int(model_limit * cfg.token_threshold_ratio)
+    # 与 _eval_threshold / compress_now 闸门共用同一公式（min(比例阈值, 绝对上限)），
+    # 单例 service._settings 即 settings.memory.mid_term，避免主流程/后台扫描阈值分叉
+    threshold = service._effective_token_threshold(model_limit)
 
     sessions = await service.scan_over_threshold_sessions(
         threshold, cfg.background_scan_batch_size

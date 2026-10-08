@@ -20,7 +20,8 @@ from unittest.mock import patch
 
 import pytest
 
-from src.core.agent import Agent
+from src.services.agent_runner.runtime.history import SessionHistory
+from src.core.agent_engine.context import reorder_history
 from src.channels.session import channel_session_manager
 
 pytestmark = pytest.mark.agent
@@ -36,22 +37,12 @@ def _channel_msg(role, content, source=None, created_at="2026-09-07 14:00:00"):
     }
 
 
-def _make_agent(max_messages=30):
-    """最小 Agent 实例（跳过 __init__），仅提供 _load_channel_history 所需属性。"""
-    agent = Agent.__new__(Agent)
-    agent.memory = SimpleNamespace(
-        short_term=SimpleNamespace(max_messages=max_messages)
-    )
-    return agent
-
-
 class TestLoadChannelHistoryServicerRole:
     def _load(self, msgs, current_input=""):
-        agent = _make_agent()
-        with patch.object(
-            channel_session_manager, "get_messages", return_value=list(msgs)
-        ):
-            return agent._load_channel_history("sess1", current_input)
+        memory = SimpleNamespace(short_term=SimpleNamespace(max_messages=30))
+        reader = SimpleNamespace(read_channel=lambda session_id, **kwargs: list(msgs))
+        history = SessionHistory(memory, "wecom_kf", reader)
+        return history._load_channel_history("sess1", current_input)
 
     def test_servicer_message_converted_to_assistant(self):
         """source=servicer 的 user 消息 → role=assistant，content 前缀保留。"""
@@ -105,7 +96,7 @@ class TestLoadChannelHistoryServicerRole:
             _channel_msg("user", "[人工客服] 好的，已经帮您预定好了", source="servicer"),
             _channel_msg("user", "酒店帮我订好了吗", source="customer_human"),
         ])
-        messages = Agent._reorder_messages_for_llm(history)
+        messages = reorder_history(history)
         roles = [m["role"] for m in messages]
         for i in range(1, len(roles)):
             assert not (roles[i] == "user" and roles[i - 1] == "user"), f"连续 user: {roles}"

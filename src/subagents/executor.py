@@ -57,6 +57,7 @@ class SubagentExecutor:
         tool_registry: Optional['ToolRegistry'] = None,
         skill_registry: Optional['SkillRegistry'] = None,
         parent_plan_manager: Optional['PlanManager'] = None,
+        child_factory=None,
     ):
         """
         初始化执行管理器
@@ -73,7 +74,9 @@ class SubagentExecutor:
         self.tool_registry = tool_registry
         self.skill_registry = skill_registry
         self.parent_plan_manager = parent_plan_manager
+        self.child_factory = child_factory
         self._active_executions: Dict[str, asyncio.Task] = {}
+        self._execution_errors: Dict[str, Exception] = {}
         self._subagent_instances: Dict[str, 'Agent'] = {}
         # 并发限制：防止高并发下子智能体数量无上限导致 OOM
         # 默认 max_workers = min(32, cpu_count * 2)，与 ThreadPoolExecutor 有上限的语义一致
@@ -238,9 +241,6 @@ class SubagentExecutor:
         )
         logger.info(f"[SUBAGENT] Task record created: {record.task_id}")
 
-        # 导入Agent类（避免循环导入）
-        from src.core.agent import Agent
-
         # 解析 tenant_id（子智能体线程中 ContextVar 可能不可用，需在主线程提前获取）
         tenant_id = None
         try:
@@ -251,15 +251,17 @@ class SubagentExecutor:
 
         # 创建子智能体实例
         logger.info(f"[SUBAGENT] Creating subagent Agent instance...")
-        subagent_instance = Agent(
-            is_master=False,
-            subagent_config=config,
-            session_id=session_id,
-            execution_id=execution_id,
-            parent_plan_manager=self.parent_plan_manager,
-            tenant_id=tenant_id,
-            user_id=user_id,
-        )
+        if self.child_factory is not None:
+            subagent_instance = await asyncio.to_thread(self.child_factory,
+                config=config, session_id=session_id, execution_id=execution_id,
+                parent_plan_manager=self.parent_plan_manager,
+                tenant_id=tenant_id, user_id=user_id)
+        else:
+            # Compatibility callers which have not adopted an explicit identity.
+            from src.core.agent import Agent
+            subagent_instance = Agent(is_master=False, subagent_config=config,
+                session_id=session_id, execution_id=execution_id,
+                parent_plan_manager=self.parent_plan_manager, tenant_id=tenant_id, user_id=user_id)
         self._subagent_instances[execution_id] = subagent_instance
         logger.info(f"[SUBAGENT] Subagent Agent instance created")
 
@@ -354,11 +356,21 @@ class SubagentExecutor:
 
                 # 更新结果
                 if result:
-                    # 检查是否为 clarifying 状态（子智能体需要用户补充信息）
+                    if result.get("token_usage"):
+                        record.token_usage = result["token_usage"]
+                    # 等待与失败不能被投影成已完成。
                     if result.get("status") == "clarifying":
                         # CLARIFYING 状态由 execute_as_subagent 内部设置，
                         # 这里只需要记录日志，不需要再调用 record.request_clarification()
                         logger.info(f"[SUBAGENT] Subagent returned clarifying status for execution_id={record.execution_id}")
+                    elif result.get("status") in {"waiting", "paused"}:
+                        record.status = result["status"]
+                        record.result = {"waiting": result.get("waiting", {})}
+                        record.summary = result.get("summary", "")
+                    elif result.get("status") == "cancelled":
+                        record.cancel()
+                    elif result.get("error") or result.get("status") in {"failed", "iteration_limit"}:
+                        record.fail(result.get("error") or result["status"])
                     else:
                         record.complete(
                             result=result.get("result"),
@@ -380,6 +392,8 @@ class SubagentExecutor:
                 record.cancel()
 
             except Exception as e:
+                if getattr(e, "authoritative_storage_failure", False):
+                    self._execution_errors[record.execution_id] = e
                 import traceback
                 error_trace = traceback.format_exc()
                 logger.error(f"[SUBAGENT] Execution failed: {record.execution_id}, error: {e}")
@@ -422,6 +436,8 @@ class SubagentExecutor:
                 record = self._get_task_record(execution_id)
                 
                 if record:
+                    if execution_id in self._execution_errors:
+                        raise self._execution_errors.pop(execution_id)
                     current_status = record.status
                     # 每10次轮询记录一次状态（约每5秒）
                     if poll_count % 10 == 0:
@@ -538,6 +554,34 @@ class SubagentExecutor:
     def get_active_executions(self) -> List[str]:
         """获取所有活跃的执行ID列表"""
         return list(self._active_executions.keys())
+
+    async def restore_owned_task(self, instance, task_record, session_id):
+        """Restore a validated private task fact; never create a new delegation ID."""
+        record = SubagentTaskRecord.model_validate(task_record)
+        if record.execution_id in self._active_executions:
+            raise ValueError('CHILD_ALREADY_OWNED')
+        if instance.runtime.identity.session_id != session_id or instance.runtime.resources.execution_id != record.execution_id:
+            raise ValueError('CHILD_RESTORE_IDENTITY_MISMATCH')
+        # Reset the old parked projection before spawning. A waiter must not
+        # mistake the previous clarification for the new attempt's result.
+        record.start()
+        self._save_task_record(record)
+        self._subagent_instances[record.execution_id] = instance
+        self._active_executions[record.execution_id] = asyncio.create_task(
+            self._run_instance(instance,record,7200,record.task_description,session_id),
+            name='restored_subagent_'+record.execution_id)
+
+    async def drain_owned_tasks(self, *, stop=False):
+        """Application finalization owns all tasks, including semaphore waiters."""
+        tasks = list(self._active_executions.values())
+        if stop:
+            for task in tasks:
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def has_active_tasks(self):
+        return any(not task.done() for task in self._active_executions.values())
     
     async def cancel_all(self) -> None:
         """取消所有活跃的执行"""

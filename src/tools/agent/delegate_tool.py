@@ -206,6 +206,8 @@ class DelegateToSubagentTool(BaseTool):
 
                 return {
                     "success": record.status == "completed",
+                    "status": record.status,
+                    "waiting": (record.result or {}).get("waiting") if isinstance(record.result, dict) else None,
                     "subagent_name": subagent_name,
                     "execution_id": response.execution_id,
                     "result": record.result,
@@ -220,6 +222,8 @@ class DelegateToSubagentTool(BaseTool):
             }
 
         except Exception as e:
+            if getattr(e, "authoritative_storage_failure", False):
+                raise
             logger.error(f"Delegation failed: {e}")
             return {
                 "success": False,

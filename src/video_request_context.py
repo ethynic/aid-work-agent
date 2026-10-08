@@ -69,7 +69,14 @@ def build_video_agent_request_context(
 ) -> Optional[AgentRequestContext]:
     """仅按实际路由到的视频子智能体构造上下文；其他 Agent 忽略参数。"""
     config = getattr(agent, "subagent_config", None)
-    if getattr(config, "dir_name", None) != VIDEO_AGENT_ID or not video_params:
+    return build_video_profile_request_context(video_params, profile_id=getattr(config, "dir_name", None))
+
+
+def build_video_profile_request_context(
+    video_params: Optional[Mapping[str, Any]], *, profile_id: Optional[str],
+) -> Optional[AgentRequestContext]:
+    """Normalize domain input after trusted routing, without constructing an Agent."""
+    if profile_id != VIDEO_AGENT_ID or not video_params:
         return None
     normalized = dict(video_params)
     normalized.update({

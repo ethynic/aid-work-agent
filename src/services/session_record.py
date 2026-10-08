@@ -594,6 +594,9 @@ def record_background_llm_usage_strict(
     会话任务决策（C3 #1）使用——调用方据此保留预留待处理状态、不标记已结算；
     其余后台调用继续使用吞异常的原版本（不影响既有行为）。
     """
+    from src.services.agent_runner.usage_context import accounted_background_usage
+    if accounted_background_usage(usage):
+        return
     if not usage:
         return
     record = SessionRecordManager.get_current_record()
@@ -650,6 +653,9 @@ def record_background_llm_usage(
     对话内调用方（case_matching/classification/sentiment/analysis_agent/
     content_generate_tool）不传这些参数，默认 None 向后兼容。
     """
+    from src.services.agent_runner.usage_context import accounted_background_usage
+    if accounted_background_usage(usage):
+        return
     if not usage:
         return
     try:
@@ -817,6 +823,9 @@ def record_skill_llm_usage(
     异常只记 warning 不抛（对齐 _persist_background_llm_record 容错风格，
     计量失败不能影响技能主流程）。
     """
+    from src.services.agent_runner.usage_context import accounted_skill_usage
+    if accounted_skill_usage(usage):
+        return
     if not usage:
         return
     if tenant_id is None:

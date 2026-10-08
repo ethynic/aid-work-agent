@@ -14,6 +14,7 @@
 两个表存在内容冗余但设计合理，服务于不同的业务目的。
 """
 
+import asyncio
 from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException, Request
@@ -178,19 +179,12 @@ async def delete_session(request: Request, session_id: str):
 @router.get("/{session_id}/messages")
 async def list_messages(request: Request, session_id: str, limit: int = 100):
     """获取会话的所有消息"""
-    user = get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="未登录")
-
-    session = SessionDB.get_by_id(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="会话不存在")
-
-    if session["user_id"] != user["user_id"]:
-        raise HTTPException(status_code=403, detail="无权访问此会话")
-
-    messages = MessageDB.list_by_session(session_id, limit)
-    return {"messages": messages}
+    from src.api.web_subject import owned_web_session
+    await asyncio.to_thread(owned_web_session, request.headers.get('Authorization',''),
+                            request.headers.get('X-Tenant-Id'), session_id)
+    messages = await asyncio.to_thread(MessageDB.list_by_session, session_id, limit)
+    from src.api.message_projection import public_conversation_messages
+    return {"messages": public_conversation_messages(messages)}
 
 
 @router.post("/{session_id}/messages")

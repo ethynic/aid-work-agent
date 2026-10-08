@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import yaml
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, StrictBool, validator
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -265,6 +265,7 @@ class MidTermMemoryConfig(BaseModel):
     enabled: bool = True
     # 触发条件（双阈值，任一满足即触发）
     token_threshold_ratio: float = 0.7       # token 主阈值：占模型上下文上限的比例
+    token_threshold_absolute: int = 60000    # token 阈值绝对上限：有效阈值=min(比例阈值, 此值)，防大上限模型膨胀过晚才压缩；0=禁用
     message_count_threshold: int = 200       # 消息数兜底阈值（含工具消息）；缓存=0 时靠它兜底极端长会话
     # 分段保留
     header_keep: int = 0                     # 头部保留消息数（0=开场消息一并压缩，避免摘要与开场原文的时序倒挂）
@@ -333,10 +334,42 @@ class SubagentSkillsConfig(BaseModel):
     default_allowed: List[str] = Field(default_factory=list)  # 默认允许列表
 
 
+class SkillDeviceExecutionConfig(BaseModel):
+    """插件 skill 设备执行配置（M2 执行路由，docs/plans/plan-external-skill-plugin-m2.md §4.1）
+
+    enabled=false 时 evaluate_device_execution 判定 c 项不满足（DEVICE_EXECUTION_DISABLED
+    拦截，不建 invocation）；timeout/max_args/max_arg_chars 为云端入队前命令门禁上限，
+    设备侧双端强制同值（设备 timeout 另取 min(下发值, 设备硬顶 1800s)）。
+    """
+    enabled: bool = False  # M2 设备执行开关，默认关
+    timeout_seconds: int = 900  # 单次执行超时（proxy 轮询超时 + payload 下发值）
+    max_args: int = 16  # args 数量上限
+    max_arg_chars: int = 500  # 单 arg 字符上限
+    max_stdout_chars: int = 200_000  # 工具结果 stdout 截断上限（尾部保留）
+
+
+class SkillPluginsConfig(BaseModel):
+    """外部 Skill 插件配置（M1 知识层，docs/plans/plan-external-skill-plugin-m1.md §3.10）
+
+    目录链低 → 高：repo_dir（仓库根第一方插件位，compose 已挂载）→
+    storage_subdir（运维动态安装位）。审批门唯一出口 src/core/skill_plugin_gate.py；
+    插件 skill 经审批 + allowed 白名单后对 Agent 可见，M1 只读不可执行
+    （skill_executor 入口全量拦截；M2 起已审批 device 声明经下方 device_execution 放行）。
+    """
+    enabled: bool = False  # 总开关，默认关（合入即安全）
+    repo_dir: str = "skills"  # 相对仓库根（容器内 /app/skills）；绝对路径按原样使用
+    storage_subdir: str = "skills/plugins"  # 相对 configured_storage_root()
+    approvals_subpath: str = "skills/plugin-approvals.json"  # 审批清单，相对 storage 根
+    # M2 设备执行链路（plan-external-skill-plugin-m2.md §3.1/§3.2/§4.1）：
+    # 默认关——放行需「已审批插件 + execution=device + 审批含 entries/exec_hash」全满足
+    device_execution: SkillDeviceExecutionConfig = Field(default_factory=SkillDeviceExecutionConfig)
+
+
 class SkillsConfig(BaseModel):
     """Skill 全局配置"""
     master_agent: MasterAgentSkillsConfig = Field(default_factory=MasterAgentSkillsConfig)
     subagent: SubagentSkillsConfig = Field(default_factory=SubagentSkillsConfig)
+    plugins: SkillPluginsConfig = Field(default_factory=SkillPluginsConfig)
 
 
 class AgentVerboseFeedbackConfig(BaseModel):
@@ -580,6 +613,87 @@ class DesktopAgentConfig(BaseModel):
     allowed_remote_tools: List[str] = Field(default_factory=list)
 
 
+class AgentRunnerPeerConfig(BaseModel):
+    """Dedicated internal caller credential; unrelated to end-user login tokens."""
+    token_hash: str = ""
+    sources: List[str] = Field(default_factory=lambda: ["chat"])
+
+
+class BrowserGatewayPeerConfig(BaseModel):
+    """Dedicated Browser observer gateway; channel peers grant no view access."""
+    token_hash: str = ""
+
+
+class AgentRunnerBrowserOwnerConfig(BaseModel):
+    """Temporary producer admission while the owner sidecar is being wired."""
+    enabled: bool = False
+    endpoint: str = "http://127.0.0.1:8092/internal/runner-browser"
+    allowed_endpoints: List[str] = Field(default_factory=lambda: ["http://127.0.0.1:8092/internal/runner-browser"])
+    view_enabled: bool = False
+    bind_host: str = Field(default='127.0.0.1',min_length=1,max_length=253)
+    bind_port: int = Field(default=8092,ge=1,le=65535)
+    gateway_service_id: str = Field(default='browser-web',min_length=1,max_length=128)
+    gateway_peers: Dict[str, BrowserGatewayPeerConfig] = Field(default_factory=dict)
+
+
+class AgentRunnerWeComKfConfig(BaseModel):
+    """Server-only KF migration switch; foundation stores received facts only."""
+    enabled: StrictBool = False
+    service_id: str = Field(default='wecom_kf_native',min_length=1,max_length=128)
+    poll_seconds: float = Field(default=1.0, gt=0, le=30)
+    lease_seconds: int = Field(default=30, ge=5, le=300)
+    heartbeat_seconds: int = Field(default=10, ge=1, le=150)
+    page_limit: int = Field(default=100, ge=1, le=1000)
+    page_bytes: int = Field(default=1048576, ge=65536, le=4194304)
+    # Bounded in-process reuse of original SDK clients per (account_id,
+    # config_version): process cache only, no cross-process/durable token
+    # sharing. Eviction: key/credential mismatch, page failure, capacity,
+    # idle TTL, worker close.
+    client_pool_capacity: int = Field(default=16, ge=1, le=256)
+    client_pool_idle_seconds: float = Field(default=300.0, gt=0.0, le=86400.0)
+
+    @validator("heartbeat_seconds")
+    def heartbeat_margin(cls, value, values):
+        if value * 2 > values.get("lease_seconds", 30):
+            raise ValueError("KF_INGRESS_HEARTBEAT_REQUIRES_HALF_LEASE_MARGIN")
+        return value
+
+
+class AgentRunnerLimitsConfig(BaseModel):
+    """Byte ceilings for durable persistence and single-input admission.
+
+    Admission limits reject a single oversized request/control before any row is
+    written (HTTP 413); checkpoint/snapshot limits convert an oversized durable
+    serialization into an explicit storage failure instead of silent growth.
+    """
+    request_bytes: int = Field(default=2 * 1024 * 1024, ge=1024, le=64 * 1024 * 1024)
+    checkpoint_bytes: int = Field(default=8 * 1024 * 1024, ge=65536, le=256 * 1024 * 1024)
+    snapshot_bytes: int = Field(default=2 * 1024 * 1024, ge=65536, le=64 * 1024 * 1024)
+
+
+class AgentRunnerConfig(BaseModel):
+    enabled: bool = False
+    web_enabled: bool = False
+    api_url: str = "http://127.0.0.1:8091"
+    web_service_id: str = "web"
+    peers: Dict[str, AgentRunnerPeerConfig] = Field(default_factory=dict)
+    host: str = "127.0.0.1"
+    port: int = Field(default=8091, ge=1, le=65535)
+    lease_seconds: int = Field(default=30, ge=5)
+    heartbeat_seconds: int = Field(default=10, ge=1)
+    poll_seconds: float = Field(default=1.0, gt=0)
+    concurrency: int = Field(default=4, ge=1, le=100)
+    browser_owner: AgentRunnerBrowserOwnerConfig = Field(default_factory=AgentRunnerBrowserOwnerConfig)
+    wecom_kf: AgentRunnerWeComKfConfig = Field(default_factory=AgentRunnerWeComKfConfig)
+    limits: AgentRunnerLimitsConfig = Field(default_factory=AgentRunnerLimitsConfig)
+
+    @validator("heartbeat_seconds")
+    def heartbeat_margin(cls, value, values):
+        if value * 2 > values.get("lease_seconds", 30):
+            raise ValueError("AGENT_RUNNER_HEARTBEAT_REQUIRES_HALF_LEASE_MARGIN")
+        return value
+
+
 class Settings(BaseModel):
     """全局配置"""
     app: AppConfig = Field(default_factory=AppConfig)
@@ -604,6 +718,7 @@ class Settings(BaseModel):
     client_usage_report: ClientUsageReportConfig = Field(default_factory=ClientUsageReportConfig)
     session_history: SessionHistoryConfig = Field(default_factory=SessionHistoryConfig)
     desktop_agent: DesktopAgentConfig = Field(default_factory=DesktopAgentConfig)
+    agent_runner: AgentRunnerConfig = Field(default_factory=AgentRunnerConfig)
 
     # 认证相关配置（从环境变量加载）
     qb_token: str = ""  # 平台管理员超级token（明文，仅用于向后兼容，推荐使用 qb_token_hash）
@@ -779,6 +894,50 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         yaml_config.setdefault("app", {})["simulation_mode"] = os.getenv("SIMULATION_MODE", "").lower() in ("true", "1", "yes")
     if os.getenv("PUBLIC_BASE_URL"):
         yaml_config.setdefault("app", {})["public_base_url"] = os.getenv("PUBLIC_BASE_URL")
+
+    runner_cfg = yaml_config.setdefault("agent_runner", {})
+    if os.getenv("AGENT_RUNNER_WECOM_KF_ENABLED") is not None:
+        value = os.environ["AGENT_RUNNER_WECOM_KF_ENABLED"].lower()
+        if value not in ("true", "false"):
+            raise ValueError("KF_INGRESS_ENABLED_REQUIRES_TRUE_OR_FALSE")
+        runner_cfg.setdefault("wecom_kf", {})["enabled"] = value == "true"
+    if os.getenv("AGENT_RUNNER_WEB_ENABLED") is not None:
+        runner_cfg["web_enabled"] = os.environ["AGENT_RUNNER_WEB_ENABLED"].lower() in ("true", "1", "yes")
+    if os.getenv("AGENT_RUNNER_API_URL") is not None:
+        runner_cfg["api_url"] = os.environ["AGENT_RUNNER_API_URL"]
+    if os.getenv("AGENT_RUNNER_WEB_SERVICE_ID") is not None:
+        runner_cfg["web_service_id"] = os.environ["AGENT_RUNNER_WEB_SERVICE_ID"]
+    if os.getenv("AGENT_RUNNER_ENABLED") is not None:
+        runner_cfg["enabled"] = os.getenv("AGENT_RUNNER_ENABLED", "").lower() in ("true", "1", "yes")
+    browser_owner = runner_cfg.setdefault('browser_owner', {})
+    if os.getenv('AGENT_RUNNER_BROWSER_OWNER_ENABLED') is not None:
+        browser_owner['enabled'] = os.environ['AGENT_RUNNER_BROWSER_OWNER_ENABLED'].lower() in ('true','1','yes')
+    if os.getenv('AGENT_RUNNER_BROWSER_OWNER_ENDPOINT') is not None:
+        browser_owner['endpoint'] = os.environ['AGENT_RUNNER_BROWSER_OWNER_ENDPOINT']
+    if os.getenv('AGENT_RUNNER_BROWSER_ALLOWED_ENDPOINTS') is not None:
+        browser_owner['allowed_endpoints'] = [value.strip() for value in os.environ['AGENT_RUNNER_BROWSER_ALLOWED_ENDPOINTS'].split(',') if value.strip()]
+    if os.getenv('AGENT_RUNNER_BROWSER_VIEW_ENABLED') is not None:
+        browser_owner['view_enabled'] = os.environ['AGENT_RUNNER_BROWSER_VIEW_ENABLED'].lower() in ('true','1','yes')
+    if os.getenv('AGENT_RUNNER_BROWSER_BIND_HOST') is not None:
+        browser_owner['bind_host'] = os.environ['AGENT_RUNNER_BROWSER_BIND_HOST']
+    if os.getenv('AGENT_RUNNER_BROWSER_BIND_PORT') is not None:
+        browser_owner['bind_port'] = int(os.environ['AGENT_RUNNER_BROWSER_BIND_PORT'])
+    if os.getenv('AGENT_RUNNER_BROWSER_GATEWAY_SERVICE_ID') is not None:
+        browser_owner['gateway_service_id'] = os.environ['AGENT_RUNNER_BROWSER_GATEWAY_SERVICE_ID']
+    if os.getenv('AGENT_RUNNER_BROWSER_GATEWAY_TOKEN_HASH') is not None:
+        peer = browser_owner.setdefault('gateway_peers',{}).setdefault(browser_owner.get('gateway_service_id','browser-web'),{})
+        peer['token_hash'] = os.environ['AGENT_RUNNER_BROWSER_GATEWAY_TOKEN_HASH']
+    if os.getenv("AGENT_RUNNER_SERVICE_ID") and os.getenv("AGENT_RUNNER_SERVICE_TOKEN_HASH"):
+        peer = runner_cfg.setdefault("peers", {}).setdefault(os.environ["AGENT_RUNNER_SERVICE_ID"], {})
+        peer["token_hash"] = os.environ["AGENT_RUNNER_SERVICE_TOKEN_HASH"]
+        peer["sources"] = [value.strip() for value in os.getenv("AGENT_RUNNER_SERVICE_SOURCES", "chat").split(",") if value.strip()]
+    # Byte ceilings for persistence admission/serialization; AGENT_RUNNER_LIMITS_*
+    # follows the same explicit-env override pattern as the KF/browser nodes.
+    limits_cfg = runner_cfg.setdefault("limits", {})
+    for name in ("request_bytes", "checkpoint_bytes", "snapshot_bytes"):
+        value = os.getenv("AGENT_RUNNER_LIMITS_" + name.upper())
+        if value is not None:
+            limits_cfg[name] = int(value)
 
     desktop_cfg = yaml_config.setdefault("desktop_agent", {})
     if os.getenv("DESKTOP_AGENT_ENABLED") is not None:

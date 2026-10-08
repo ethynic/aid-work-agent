@@ -191,13 +191,35 @@ fi
 
 # 3. 后端重启（与前端编译并行；前端无变更时直接重启）
 #    不先 down：up --force-recreate 会自动 stop→remove→create，避免全停窗口
+#    AgentRunner overlay：分支含 docker-compose.agent-runner.yml 时叠加一并重建
+#    （runner-api/runner-worker/kf-ingress/kf-admission）。必须与主 compose 一起传给
+#    同一条 up，否则 --remove-orphans 会把 overlay 服务当孤儿容器删除；KF 服务随
+#    --profile wecom-kf 纳入（agent3 已启用微信客服 native）。overlay 缺失（如早期
+#    分支）自动退回纯主 compose。
 echo "[3] 重启后端服务..."
-docker compose -f docker-compose.dev.yml up -d --force-recreate --remove-orphans --wait
+COMPOSE_FILES=(-f docker-compose.dev.yml)
+COMPOSE_PROFILES=()
+if [ -f docker-compose.agent-runner.yml ]; then
+    COMPOSE_FILES+=(-f docker-compose.agent-runner.yml)
+    COMPOSE_PROFILES=(--profile wecom-kf)
+    echo "    叠加 AgentRunner overlay（含 wecom-kf profile）"
+else
+    echo "    未发现 AgentRunner overlay，仅主 compose"
+fi
+docker compose "${COMPOSE_FILES[@]}" "${COMPOSE_PROFILES[@]}" up -d --force-recreate --remove-orphans --wait
 
 # 4. 施加资源限制（docker compose 非 swarm 会忽略 deploy.resources，改用 docker update
 #    显式施加 cgroup 限制；资源值在本脚本内维护，为唯一来源；本环境无 background）
+#    runner-api/kf 两类为轻量 IO 进程给 0.5C/512M；runner-worker 执行负载给 1C/1G。
+#    容器不存在时（未启用 overlay 的分支）docker update 报错忽略。
 echo "[4] 施加容器资源限制..."
 docker update --cpus 1 --memory 1G --memory-reservation 512M aid-agent-api3
+for c in aid-runner-api aid-kf-ingress aid-kf-admission; do
+    docker update --cpus 0.5 --memory 512M --memory-reservation 256M "$c" 2>/dev/null \
+        || echo "  跳过 $c（不存在）"
+done
+docker update --cpus 1 --memory 1G --memory-reservation 512M aid-runner-worker 2>/dev/null \
+    || echo "  跳过 aid-runner-worker（不存在）"
 
 # 5. 修复容器内 /tmp 权限（python:3.11-slim 的 /tmp 是 tmpfs 且默认 755，
 #    Dockerfile 的 chmod 不生效，entrypoint 已处理；此处作为运行时兜底）

@@ -341,8 +341,8 @@ class WordFileHandler:
         与用户上传文件共用同一目录，生成的文件天然支持下载和预览。
         """
         try:
-            from src.main import _get_tenant_upload_dir
-            return _get_tenant_upload_dir()
+            from src.core.storage import get_current_conversation_dir
+            return get_current_conversation_dir()
         except ImportError:
             import tempfile
             return Path(tempfile.mkdtemp(prefix="word_"))

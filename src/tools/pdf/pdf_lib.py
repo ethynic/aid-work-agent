@@ -70,8 +70,8 @@ class PdfFileHandler:
     def get_session_dir() -> Path:
         """获取当前用户会话的文件存储目录。"""
         try:
-            from src.main import _get_tenant_upload_dir
-            return _get_tenant_upload_dir()
+            from src.core.storage import get_current_conversation_dir
+            return get_current_conversation_dir()
         except ImportError:
             import tempfile
             return Path(tempfile.mkdtemp(prefix="pdf_"))

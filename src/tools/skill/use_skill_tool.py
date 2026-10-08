@@ -68,9 +68,21 @@ class UseSkillTool(BaseTool):
             }
 
         skill = self.skill_registry.get(skill_name)
-        skill_content = self.skill_registry.get_content(skill_name, substitutions=substitutions)
+        from src.tools.context import current_tool_execution_context
+        import asyncio
+        context = current_tool_execution_context()
+        skill_content = await asyncio.to_thread(self.skill_registry.get_content, skill_name, substitutions=substitutions,
+            tenant_id=context.tenant_id if context else None, env_vars=context.env_vars if context else None, context=context)
 
         if skill_content is None:
+            # 插件来源内容门失败（hash 不符/已撤销/残留）与「技能不存在」区分：
+            # 前者重试加载无意义，明确告知暂停原因，避免 LLM 反复 use_skill 同名
+            if hasattr(self.skill_registry, "is_plugin_skill") and self.skill_registry.is_plugin_skill(skill_name):
+                return {
+                    "success": False,
+                    "error": f"插件技能 '{skill_name}' 内容与审批时不符（校验失败或已被撤销），"
+                             "已暂停提供。请勿重试加载；请向用户说明该技能暂不可用。"
+                }
             available = self.skill_registry.list_skills()
             return {
                 "success": False,
@@ -80,11 +92,37 @@ class UseSkillTool(BaseTool):
 
         skill_version = skill.version if skill else "unknown"
 
+        # M2 执行边界提示（plan §3.7）：插件来源 / device 声明的手册尾部追加提示，
+        # LLM 读手册即知执行方式，减少无效 skill_execute 调用。提示与 executor 路由层
+        # 共用同一决策函数（evaluate_device_execution）——「提示可执行 ⇔ 实际可执行」
+        # 不漂移：放行 → 设备执行说明（无「请勿」类拦截表述）；未放行 → 按区分码
+        # 给出真实原因（均含「请勿调用 skill_execute」防试错）。
+        boundary_hints = []
+        try:
+            from src.local_tools import skill_runner_proxy
+            decision = skill_runner_proxy.evaluate_device_execution(self.skill_registry, skill_name)
+            hint = skill_runner_proxy.decision_use_skill_hint(decision)
+        except Exception as e:  # noqa: BLE001 提示层失败不阻断手册加载（拦截仍由 executor 路由层兜底）
+            logger.debug(f"skill '{skill_name}' 设备执行提示判定失败（跳过尾注）: {e}")
+            hint = None
+        if hint:
+            boundary_hints.append(hint)
         logger.info(f"后端日志：UseSkillTool 加载技能", extra={
             "skill_name": skill_name,
             "skill_version": skill_version,
             "skill_content_length": len(skill_content) if skill_content else 0
         })
+
+        if boundary_hints:
+            # 有边界提示时跳过通用执行指引：指引中的「shell 命令 → skill_execute」
+            # 映射表与「请勿调用 skill_execute」的提示对同一份手册自相矛盾
+            return {
+                "success": True,
+                "skill_name": skill_name,
+                "skill_version": skill_version,
+                "content": skill_content + "\n\n" + "\n\n".join(boundary_hints),
+                "message": f"✅ Skill '{skill_name}' (v{skill_version}) loaded."
+            }
 
         # 增强引导：在技能内容后附加执行指引
         guidance_suffix = f"""

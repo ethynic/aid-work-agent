@@ -167,6 +167,8 @@ class SubagentTaskRecord(BaseModel):
             SubagentTaskStatus.FAILED,
             SubagentTaskStatus.CANCELLED,
             SubagentTaskStatus.CLARIFYING,
+            SubagentTaskStatus.WAITING,
+            SubagentTaskStatus.PAUSED,
         ]
     
     def is_clarifying(self) -> bool:

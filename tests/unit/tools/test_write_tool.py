@@ -476,6 +476,7 @@ class TestPathResolution:
     def _isolated(self, tmp_path, monkeypatch):
         from src.core import storage as storage_mod
         monkeypatch.setattr(storage_mod, "_TENANTS_ROOT", str(tmp_path / "tenants"))
+        monkeypatch.setenv("AGENT_RUNNER_STORAGE_ROOT", str(tmp_path))
         self.tmp_path = tmp_path
         from src.tools.context import ToolExecutionContext, _CURRENT_TOOL_CONTEXT
         token = _CURRENT_TOOL_CONTEXT.set(

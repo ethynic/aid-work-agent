@@ -250,66 +250,95 @@ def create_invocation(
       claim 领取，通用 claim 在 SQL 层排除。旧行为 default 'standard'。
     """
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        if business_kind is not None and dedupe_key is not None:
-            cursor.execute(
-                """
-                INSERT INTO local_tool_invocations
-                    (tenant_id, user_id, device_id, tool_name, arguments_json, session_id,
-                     provider_key, business_kind, business_ref, dedupe_key, deadline_at,
-                     authorization_epoch, execution_lane)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (tenant_id, business_kind, dedupe_key)
-                    WHERE business_kind IS NOT NULL AND dedupe_key IS NOT NULL
-                    DO NOTHING
-                RETURNING id
-                """,
-                (
-                    tenant_id, user_id, device_id, tool_name, Json(arguments), session_id,
-                    provider_key, business_kind, Json(business_ref) if business_ref else None,
-                    dedupe_key, deadline_at, authorization_epoch, execution_lane,
-                ),
-            )
-            row = cursor.fetchone()
-            if row is None:
-                # ON CONFLICT DO NOTHING 在冲突事务提交后才返回无行，同键行此处必可见
-                cursor.execute(
-                    """
-                    SELECT id FROM local_tool_invocations
-                    WHERE tenant_id = %s AND business_kind = %s AND dedupe_key = %s
-                    """,
-                    (tenant_id, business_kind, dedupe_key),
-                )
-                existing = cursor.fetchone()
-                conn.commit()
-                if existing is None:
-                    raise RuntimeError(
-                        f"dedupe invocation 冲突但同键行不可见 tenant={tenant_id} "
-                        f"business_kind={business_kind} dedupe_key={dedupe_key}"
-                    )
-                return str(existing["id"])
-            conn.commit()
-            return str(row["id"])
-
-        cursor.execute(
-            """
-            INSERT INTO local_tool_invocations
-                (tenant_id, user_id, device_id, tool_name, arguments_json, session_id,
-                 provider_key, business_kind, business_ref, dedupe_key, deadline_at,
-                 authorization_epoch, execution_lane)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id
-            """,
-            (
-                tenant_id, user_id, device_id, tool_name, Json(arguments), session_id,
-                provider_key, business_kind,
-                Json(business_ref) if business_ref else None,
-                dedupe_key, deadline_at, authorization_epoch, execution_lane,
-            ),
+        invocation_id = create_invocation_in_tx(
+            conn.cursor(), tenant_id, user_id, device_id, tool_name, arguments, session_id,
+            provider_key=provider_key, business_kind=business_kind, business_ref=business_ref,
+            dedupe_key=dedupe_key, deadline_at=deadline_at,
+            authorization_epoch=authorization_epoch, execution_lane=execution_lane,
         )
-        invocation_id = str(cursor.fetchone()["id"])
         conn.commit()
         return invocation_id
+
+
+def create_invocation_in_tx(
+    cursor,
+    tenant_id: str,
+    user_id: str,
+    device_id: str,
+    tool_name: str,
+    arguments: Dict[str, Any],
+    session_id: Optional[str] = None,
+    *,
+    provider_key: Optional[str] = None,
+    business_kind: Optional[str] = None,
+    business_ref: Optional[Dict[str, Any]] = None,
+    dedupe_key: Optional[str] = None,
+    deadline_at: Optional[datetime] = None,
+    authorization_epoch: Optional[int] = None,
+    execution_lane: str = "standard",
+    verify_binding: bool = False,
+) -> str:
+    """Write through the caller's transaction; never open or commit a connection.
+
+    Legacy callers retain their existing dedupe behavior. Durable execution
+    owners enable verify_binding to reject a key bound to a different request.
+    The caller owns authorization, execution fencing and transaction rollback.
+    """
+    if verify_binding and (not business_kind or not dedupe_key):
+        raise ValueError("LOCAL_INVOCATION_BINDING_REQUIRES_DEDUPE")
+    conflict = """
+        ON CONFLICT (tenant_id, business_kind, dedupe_key)
+            WHERE business_kind IS NOT NULL AND dedupe_key IS NOT NULL
+            DO NOTHING
+    """ if business_kind is not None and dedupe_key is not None else ""
+    cursor.execute(
+        """
+        INSERT INTO local_tool_invocations
+            (tenant_id, user_id, device_id, tool_name, arguments_json, session_id,
+             provider_key, business_kind, business_ref, dedupe_key, deadline_at,
+             authorization_epoch, execution_lane)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """ + conflict + " RETURNING id",
+        (tenant_id, user_id, device_id, tool_name, Json(arguments), session_id,
+         provider_key, business_kind, Json(business_ref) if business_ref else None,
+         dedupe_key, deadline_at, authorization_epoch, execution_lane),
+    )
+    row = cursor.fetchone()
+    if row is not None:
+        return str(row["id"])
+    # The conflicting insert must have committed before DO NOTHING returns.
+    # Lock the actual fact before comparing its complete immutable binding.
+    cursor.execute(
+        """SELECT id, tenant_id, user_id, device_id, tool_name, arguments_json,
+                  session_id, provider_key, business_kind, business_ref,
+                  dedupe_key, deadline_at, authorization_epoch,
+                  COALESCE(execution_lane, 'standard') AS execution_lane
+           FROM local_tool_invocations
+           WHERE tenant_id = %s AND business_kind = %s AND dedupe_key = %s
+           FOR UPDATE""",
+        (tenant_id, business_kind, dedupe_key),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        raise RuntimeError("LOCAL_INVOCATION_DEDUPE_NOT_FOUND")
+    if verify_binding:
+        expected = dict(
+            tenant_id=tenant_id, user_id=user_id, device_id=device_id,
+            tool_name=tool_name, arguments_json=arguments, session_id=session_id,
+            provider_key=provider_key, business_kind=business_kind,
+            business_ref=business_ref or None, dedupe_key=dedupe_key,
+            deadline_at=deadline_at, authorization_epoch=authorization_epoch,
+            execution_lane=execution_lane,
+        )
+        # UUID columns are decoded as UUID or str depending on connection setup.
+        for key, value in expected.items():
+            actual = row[key]
+            if key in ("device_id", "user_id", "session_id", "tenant_id"):
+                actual = str(actual) if actual is not None else None
+                value = str(value) if value is not None else None
+            if actual != value:
+                raise ValueError("LOCAL_INVOCATION_BINDING_CHANGED")
+    return str(row["id"])
 
 
 def set_invocation_credit_cost(invocation_id: str, credit_cost: float) -> None:
@@ -333,7 +362,7 @@ def get_invocation(invocation_id: str, tenant_id: str) -> Optional[Dict[str, Any
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT id, tenant_id, user_id, device_id, tool_name, arguments_json,
+            SELECT id, tenant_id, user_id, device_id, tool_name, arguments_json, session_id,
                    state, effect, result_json, error_code, error_message, credit_cost,
                    created_at, claimed_at, started_at, finished_at,
                    provider_key, business_kind, business_ref, dedupe_key, deadline_at,
@@ -688,8 +717,14 @@ def request_cancel(invocation_id: str, tenant_id: str) -> bool:
     - claimed/running → cancel_requested：等设备在 progress 响应里看到 cancel=true 后写终态
     """
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
+        changed = request_cancel_in_tx(conn.cursor(), invocation_id, tenant_id)
+        conn.commit()
+        return changed
+
+
+def request_cancel_in_tx(cursor, invocation_id: str, tenant_id: str) -> bool:
+    """Original cancellation SQL using the caller's transaction, no commit."""
+    cursor.execute(
             """
             UPDATE local_tool_invocations
             SET state = 'cancelled', effect = 'none', finished_at = NOW()
@@ -697,8 +732,8 @@ def request_cancel(invocation_id: str, tenant_id: str) -> bool:
             """,
             (invocation_id, tenant_id),
         )
-        count = cursor.rowcount
-        cursor.execute(
+    count = cursor.rowcount
+    cursor.execute(
             """
             UPDATE local_tool_invocations
             SET state = 'cancel_requested'
@@ -706,6 +741,5 @@ def request_cancel(invocation_id: str, tenant_id: str) -> bool:
             """,
             (invocation_id, tenant_id),
         )
-        count += cursor.rowcount
-        conn.commit()
-        return count > 0
+    count += cursor.rowcount
+    return count > 0

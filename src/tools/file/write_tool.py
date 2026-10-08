@@ -177,10 +177,12 @@ def _resolve_upload_dir(tenant_id: Optional[str], user_id: Optional[str]) -> Pat
 
     user_id 不进入路径，避免目录碎片化。
     """
-    from src.core.storage import ensure_tenant_storage_dir
-    tid = tenant_id or "_anonymous"
+    from src.core.storage import get_conversation_dir
+    from src.tools.context import current_tool_execution_context
+    context = current_tool_execution_context()
+    tid = context.tenant_id if context is not None else tenant_id
     _ = user_id  # 保留参数兼容性，但不进路径
-    return Path(ensure_tenant_storage_dir(tid, "conversation"))
+    return get_conversation_dir(tid)
 
 
 # ---------------------------------------------------------------------------
@@ -236,16 +238,9 @@ display_name 必须使用用户能理解的业务文件名，不要使用工具�
 
         无租户上下文时落 _anonymous，保证不写出租户目录之外。
         """
-        from src.core.storage import ensure_tenant_storage_dir
-        tid = None
-        try:
-            from src.tools.context import current_tool_execution_context
-            ctx = current_tool_execution_context()
-            if ctx:
-                tid = ctx.tenant_id
-        except Exception:
-            pass
-        return Path(ensure_tenant_storage_dir(tid or "_anonymous", "conversation"))
+        from src.tools.context import current_tool_execution_context
+        context = current_tool_execution_context()
+        return _resolve_upload_dir(context.tenant_id if context is not None else None, None)
 
     def _legacy_output_base(self) -> Path:
         """旧版输出目录（storage/output），仅用于把历史绝对路径 rebase 到租户目录"""

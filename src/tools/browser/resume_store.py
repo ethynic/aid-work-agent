@@ -41,6 +41,9 @@ class AssistanceRecord(BaseModel):
     agent_execution_id: str
     tool_call_id: str
     continuation_id: str
+    # Server-produced native ownership marker denies the old continuation
+    # transport. It is never a grant of permission or a client assertion.
+    runner_id: str | None = None
     agent_name: str | None = None
     state: str = "pending"
     reason_code: str
@@ -136,6 +139,55 @@ class ResumeStore:
                 return all(redis_client.expire(key, ttl + 120) for key in keys)
             finally:
                 redis_client.release_lock(session_key + ":cas", token)
+        return await asyncio.to_thread(op)
+
+    async def project_owned_assistance(self, owner, wait):
+        """Project the committed original PG action without extending it again."""
+        from .owner_port import HumanActionRejected
+        tenant_id,assistance_id=wait['tenant_id'],wait['assistance_id']
+        def op():
+            session_key=self._session_key(tenant_id,owner.record.session_id)
+            assistance_key=self._assistance_key(tenant_id,assistance_id)
+            token=f'project:{time.time_ns()}'
+            if not redis_client.acquire_lock(session_key+':cas',token,ex=5):
+                raise HumanActionRejected('HUMAN_STATE_PROJECTION_UNAVAILABLE')
+            assistance_locked=False
+            try:
+                if not redis_client.acquire_lock(assistance_key+':cas',token,ex=5):
+                    raise HumanActionRejected('HUMAN_STATE_PROJECTION_UNAVAILABLE')
+                assistance_locked=True
+                active=redis_client.get(session_key)
+                raw=redis_client.get(self._assistance_key(tenant_id,assistance_id))
+                record=AssistanceRecord.model_validate(raw) if raw else None
+                if (not active or active.get('assistance_id')!=assistance_id or not record
+                        or record.runner_id!=owner.runner_id or record.run_id!=owner.record.run_id
+                        or record.agent_execution_id!=owner.state.execution_id or record.tool_call_id!=owner.call_id):
+                    raise HumanActionRejected('HUMAN_STATE_PROJECTION_UNAVAILABLE')
+                expires=wait['expiry_instant'].timestamp()
+                # A delayed PG projection may extend expiry but never regress
+                # a concurrent queued/resumed/terminal continuation projection.
+                state=record.state
+                if state=='pending' and wait['state']=='controlling':
+                    state='controlling'
+                updated=record.model_copy(update=dict(state=state,
+                    extended=record.extended or wait['extended_at'] is not None,
+                    expires_at=max(record.expires_at,expires)))
+                ttl=max(1,int(expires-time.time()))+120
+                redis_client.set(self._assistance_key(tenant_id,assistance_id),updated.model_dump(mode='json'),ex=ttl)
+                # The shared client logs write failures rather than returning a
+                # success flag. Confirm this exact projection under the same
+                # assistance CAS before acknowledging it to the caller.
+                projected=redis_client.get(assistance_key)
+                if projected != updated.model_dump(mode='json'):
+                    raise HumanActionRejected('HUMAN_STATE_PROJECTION_UNAVAILABLE')
+                for key in (session_key,self._suspension_key(tenant_id,record.agent_execution_id,record.tool_call_id)):
+                    if not redis_client.expire(key,ttl):
+                        raise HumanActionRejected('HUMAN_STATE_PROJECTION_UNAVAILABLE')
+                return updated
+            finally:
+                if assistance_locked:
+                    redis_client.release_lock(assistance_key+':cas',token)
+                redis_client.release_lock(session_key+':cas',token)
         return await asyncio.to_thread(op)
 
     async def replace_suspension(

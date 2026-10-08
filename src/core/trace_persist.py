@@ -76,6 +76,27 @@ def schedule_persist(trace: 'TraceRecord'):
     _persist_queue.put(trace)
 
 
+def persist_now(trace):
+    """Flush an owned worker trace before its process exits; best-effort only."""
+    _do_persist(trace)
+
+
+def update_completion(trace_id, *, status, output, duration_ms):
+    """Finalizer retry updates outcome without replacing prior execution spans."""
+    try:
+        from src.db.database import get_logs_connection
+        with get_logs_connection() as cursor:
+            cursor.execute('''UPDATE obs_traces SET status=%s,output=%s,
+                duration_ms=%s,updated_at=NOW() WHERE trace_id=%s''',
+                (status,output,duration_ms,trace_id))
+            updated = bool(cursor.rowcount)
+            cursor.commit()
+            return updated
+    except Exception as error:
+        logger.warning('Trace completion projection unavailable kind={}',type(error).__name__)
+        return False
+
+
 def _start_persist_worker():
     """启动后台持久化线程"""
     def worker():
@@ -97,6 +118,14 @@ def _do_persist(trace):
     try:
         from src.db.database import get_logs_connection
         with get_logs_connection() as cur:
+
+            runner_summary = bool((getattr(trace,'metadata',None) or {}).get('runner_summary'))
+            if runner_summary:
+                trace.duration_ms = trace.metadata['runner_duration_ms']
+                cur.execute('SELECT tags FROM obs_traces WHERE trace_id=%s FOR UPDATE',(trace.trace_id,))
+                existing = cur.fetchone()
+                if existing:
+                    trace.tags = list(dict.fromkeys([*(existing.get('tags') or []), *trace.tags]))
 
             # UPSERT trace
             # total_cost 为参数而非字面量 0：初始取 trace.total_cost（默认 0），
@@ -216,6 +245,13 @@ def _do_persist(trace):
                     'completed' if span.success else 'failed',
                 ))
 
+            if runner_summary:
+                # Previously committed spans remain authoritative across resumed
+                # attempts; a new collector must not replace their total by its
+                # own attempt's span count.
+                cur.execute('''UPDATE obs_traces SET tool_calls_count=(
+                    SELECT COUNT(*) FROM obs_spans WHERE trace_id=%s)
+                    WHERE trace_id=%s''',(trace.trace_id,trace.trace_id))
             cur.commit()
             logger.debug(f"Trace persisted: {trace.trace_id}, spans={len(trace.spans)}")
     except Exception as e:

@@ -1139,18 +1139,13 @@ def _default_llm(
         # qwen3.x 系列走 OpenAI 兼容接口（原生 Generation 端点不适用），思考开关用 enable_thinking
         if not enable_thinking:
             payload["enable_thinking"] = False
-        resp = httpx.post(
-            api_url,
-            headers={"Authorization": f"Bearer {keys[0]}", "Content-Type": "application/json"},
-            json=payload,
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        data = _observed_skill_llm_request(api_url,payload,keys[0],timeout,provider,model)
         content = data["choices"][0]["message"]["content"]
         if return_usage:
             usage = _normalize_usage(data.get("usage"))
             usage["model"] = model
+            if data.get("_runner_receipt_id"):
+                usage["_runner_receipt_id"] = data["_runner_receipt_id"]
             return content, usage
         return content
 
@@ -1175,22 +1170,42 @@ def _default_llm(
         }
         if provider == "deepseek" and not enable_thinking:
             payload["thinking"] = {"type": "disabled"}
-        resp = httpx.post(
-            api_url,
-            headers={"Authorization": f"Bearer {keys[0]}", "Content-Type": "application/json"},
-            json=payload,
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        data = _observed_skill_llm_request(api_url,payload,keys[0],timeout,provider,model)
         content = data["choices"][0]["message"]["content"]
         if return_usage:
             usage = _normalize_usage(data.get("usage"))
             usage["model"] = model
+            if data.get("_runner_receipt_id"):
+                usage["_runner_receipt_id"] = data["_runner_receipt_id"]
             return content, usage
         return content
 
     raise ValueError(f"不支持的 LLM 提供商: {provider}")
+
+
+def _observed_skill_llm_request(api_url,payload,key,timeout,provider,model):
+    import httpx
+    from src.llm.call_observer import observed_call_sync
+    def request():
+        response = httpx.post(api_url,headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"},
+                              json=payload,timeout=timeout)
+        response.raise_for_status()
+        data = response.json()
+        return data
+    def normalize(data):
+        raw = data.get('usage')
+        # A missing provider count is unknown, never a fabricated free call.
+        usage = dict(raw) if isinstance(raw,dict) and {'prompt_tokens','completion_tokens'} <= raw.keys() else None
+        if usage is not None and 'cached_tokens' not in usage:
+            details = usage.get('prompt_tokens_details')
+            usage['cached_tokens'] = (details.get('cached_tokens',0) if isinstance(details,dict)
+                                      else usage.get('prompt_cache_hit_tokens',0))
+        return {"usage":usage,
+                "request_id":data.get("id","")}
+    data = observed_call_sync(request,provider=provider,model=model,kwargs={},normalize=normalize,purpose="skill")
+    if isinstance(data.get("usage"),dict) and data["usage"].get("_runner_receipt_id"):
+        data["_runner_receipt_id"] = data["usage"]["_runner_receipt_id"]
+    return data
 
 
 def _normalize_usage(raw_usage) -> Dict[str, Any]:

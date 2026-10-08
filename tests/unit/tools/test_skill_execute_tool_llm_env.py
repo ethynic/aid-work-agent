@@ -19,11 +19,16 @@ def _fake_skill_registry():
     return registry
 
 
+def _successful_execution():
+    from src.core.skill_executor import ExecutionResult
+    return ExecutionResult(success=True, stdout="fixture complete", stderr="", exit_code=0, duration=0)
+
+
 class TestSkillExecuteToolLlmEnv:
     def test_llm_env_passed_to_execute_skill_command(self):
         registry = _fake_skill_registry()
         executor = MagicMock()
-        executor.execute_skill_command = AsyncMock()
+        executor.execute_skill_command = AsyncMock(return_value=_successful_execution())
 
         tool = SkillExecuteTool(
             skill_executor=executor,
@@ -52,7 +57,7 @@ class TestSkillExecuteToolLlmEnv:
     def test_no_llm_env_defaults_empty(self):
         registry = _fake_skill_registry()
         executor = MagicMock()
-        executor.execute_skill_command = AsyncMock()
+        executor.execute_skill_command = AsyncMock(return_value=_successful_execution())
 
         tool = SkillExecuteTool(
             skill_executor=executor,
@@ -76,7 +81,7 @@ class TestSkillExecuteFilesStrTolerance:
     def _run(self, files):
         registry = _fake_skill_registry()
         executor = MagicMock()
-        executor.execute_skill_command = AsyncMock()
+        executor.execute_skill_command = AsyncMock(return_value=_successful_execution())
         tool = SkillExecuteTool(skill_executor=executor, skill_registry=registry)
 
         import asyncio
@@ -101,3 +106,30 @@ class TestSkillExecuteFilesStrTolerance:
 
     def test_files_dict_still_works(self):
         assert self._run({"b.bin": "aGk="}) == {"b.bin": b"hi"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("trusted_user", ["trusted-user", None])
+async def test_skill_command_and_identity_ignore_provider_spoof_and_never_read_web_owner(monkeypatch, trusted_user):
+    from src.tools.context import ToolExecutionContext, tool_execution_scope
+    registry = _fake_skill_registry()
+    executor = MagicMock()
+    executor.execute_skill_command = AsyncMock(return_value=_successful_execution())
+    database = MagicMock(side_effect=AssertionError("Channel execution cannot consult Web session owner"))
+    monkeypatch.setattr("src.db.models.SessionDB.get_by_id", database)
+    tool = SkillExecuteTool(skill_executor=executor, skill_registry=registry)
+    context = ToolExecutionContext(tenant_id="trusted-tenant", user_id=trusted_user,
+                                  session_id="trusted-session", channel="feishu")
+    with tool_execution_scope(context):
+        await tool.execute(skill="same-skill", command='python fixture.py --user-id forged-user --owner {user_id} --session {session_id}',
+                           session_id="forged-session", user_id="forged-user")
+    arguments = executor.execute_skill_command.call_args.kwargs
+    assert arguments["session_id"] == "trusted-session"
+    assert arguments["user_id"] == trusted_user
+    assert "forged-user" not in arguments["command"]
+    assert "forged-session" not in arguments["command"]
+    assert "{user_id}" not in arguments["command"]
+    assert "trusted-session" in arguments["command"]
+    if trusted_user:
+        assert "trusted-user" in arguments["command"]
+    database.assert_not_called()

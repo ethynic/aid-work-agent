@@ -255,9 +255,7 @@ async def _continue_browser_agent(record, browser_result: dict) -> None:
     agent = agent_router.get_agent(
         record.agent_name, record.session_id, tenant_id=record.tenant_id
     )
-    if record.tenant_id and not agent._init_tenant_id:
-        agent._init_tenant_id = record.tenant_id
-    user = User(user_id=record.user_id, name=record.user_id)
+    user = User(user_id=record.user_id, name=record.user_id, tenant_id=record.tenant_id)
     store = ResumeStore()
     response_parts: list[str] = []
     tool_messages: list[dict] = []
@@ -577,10 +575,10 @@ from pathlib import Path
 
 # 上传文件存储目录（基于项目根目录，不受 cwd 影响）
 # 新结构: storage/tenants/{tenant_id}/conversation/ (遵循租户附件存储规范)
-# 新写入统一走 src.core.storage.ensure_tenant_storage_dir。
+# 新写入统一走 src.core.storage.get_current_conversation_dir。
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-# 新版租户附件根目录（写入路径，由 ensure_tenant_storage_dir 创建子目录）
-TENANTS_STORAGE_DIR = _PROJECT_ROOT / "storage" / "tenants"
+from src.core.storage import configured_storage_root
+TENANTS_STORAGE_DIR = configured_storage_root() / "tenants"
 TENANTS_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -626,12 +624,8 @@ def _get_tenant_upload_dir() -> Path:
 
     user_id 不进入路径，避免目录碎片化；user_id 仅作为元数据写入 Redis。
     """
-    from src.core.storage import ensure_tenant_storage_dir
-    from src.saas.context import get_current_tenant_id, get_current_user_id
-    tenant_id = get_current_tenant_id() or "_anonymous"
-    # user_id 仅作元数据，不进路径（保持兼容性，调用方仍可通过 ContextVar 取到）
-    _ = get_current_user_id()
-    return Path(ensure_tenant_storage_dir(tenant_id, "conversation"))
+    from src.core.storage import get_current_conversation_dir
+    return get_current_conversation_dir()
 
 # 已上传的文件元数据已迁移到 Redis: uploaded_file:{file_id}, TTL=86400s
 
@@ -830,6 +824,9 @@ async def chat(request: Request):
 
     For direct web client calls
     """
+    if request.headers.get('X-AgentRunner-Transport') == 'runner':
+        from src.services.agent_runner.web_sync import synchronous_web_reply
+        return await synchronous_web_reply(request)
     try:
         data = await request.json()
         user_input = data.get("message", "")
@@ -881,9 +878,6 @@ async def chat(request: Request):
         subagent_name = _resolve_default_subagent(subagent_name, _tenant_id, current_user)
         agent = agent_router.get_agent(subagent_name, session_id, tenant_id=_tenant_id)
 
-        # 注入 tenant_id（供租户 skills 按需加载使用）
-        if _tenant_id and not agent._init_tenant_id:
-            agent._init_tenant_id = _tenant_id
 
         # Process message — process_message_sync is now pure async, no thread needed
         response_text = await agent.process_message_sync(
@@ -1091,12 +1085,8 @@ def _get_file_info(file_id: str) -> dict | None:
                 cached["size"] = int(cached["size"])
             except (ValueError, TypeError):
                 pass
-        return cached
-
-    # 尝试从磁盘目录扫描恢复（全场景：storage/tenants/{tenant}/{scene}/ 等，
-    # 命中后回写 Redis 自愈，与文件工具的 resolve_uploaded_file_path 共用实现）
-    from src.core.storage import find_uploaded_file_on_disk
-    return find_uploaded_file_on_disk(file_id)
+    from src.core.storage import resolve_delivery_file_info
+    return resolve_delivery_file_info(file_id, cached or None)
 
 
 @app.get("/api/files/{file_id}")
@@ -1274,6 +1264,39 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                 "assistance_id": active_suspension["assistance_id"],
             }, status_code=409)
 
+    # M7 旧页面透明迁移桥：仅凭 fresh 登录 + 实际 owned chat_sessions 行做服务端
+    # 分流（不认 User-Agent/客户端自报 header）。转接经 Runner 持久 claim 接单，
+    # 兼容 stream 严格只读代理（不写历史、不结费用、断线只 detach）；匿名内存
+    # 会话与未迁移入口保持原 legacy 授权范围。
+    if request.session_id and current_user:
+        from src.services.agent_runner.legacy_stream_bridge import (
+            bridged_stream_response,
+            bridged_web_subject,
+            legacy_loop_interlock,
+        )
+        bridge_subject = await asyncio.to_thread(
+            bridged_web_subject,
+            http_request.headers.get("Authorization", ""),
+            http_request.headers.get("X-Tenant-Id") or None,
+            request.session_id,
+        )
+        if bridge_subject is not None:
+            return await bridged_stream_response(
+                http_request,
+                message=request.message,
+                session_id=request.session_id,
+                files=request.files,
+                subagent=request.subagent,
+                instance_id=instance_id,
+                video_params=request.video_params,
+            )
+        # legacy 回退路径互锁：fresh 主体的旧 loop 不得与已接受 Runner（持久
+        # claim）或 legacy 推送标记并行；服务不可用时封闭失败，不静默并行。
+        interlock = await legacy_loop_interlock(http_request, request.session_id)
+        if interlock is not None:
+            interlock_status, interlock_payload = interlock
+            return JSONResponse(interlock_payload, status_code=interlock_status)
+
     # 处理附件
     attachments = None
     if request.files:
@@ -1334,9 +1357,6 @@ async def chat_stream(http_request: Request, request: ChatRequest):
         agent=agent,
     )
 
-    # 注入 tenant_id（供租户 skills 按需加载使用）
-    if _tenant_id and not agent._init_tenant_id:
-        agent._init_tenant_id = _tenant_id
 
     async def event_generator():
         """SSE事件生成器 — 直接 async for 迭代，无需线程"""
@@ -1688,10 +1708,18 @@ async def delete_chat_session(session_id: str):
 
 
 @app.post("/api/chat/{session_id}/cancel")
-async def cancel_chat_generation(session_id: str):
+async def cancel_chat_generation(session_id: str, http_request: Request):
     """用户主动取消当前正在生成的会话"""
     sse_manager.cancel_session(session_id)
     logger.info(f"[Cancel] User requested cancel generation: session_id={session_id}")
+    # M7：fresh 主体 + owned 会话的旧 Stop 同时取消其 active Runner 并如实返回
+    # 取消清单；无 active runner 或服务不可达不再返回无条件假成功。未迁移入口
+    # （匿名/非 owned 会话）保持原 legacy 响应不变。
+    from src.services.agent_runner.legacy_stream_bridge import cancel_session_runners
+    cancelled = await cancel_session_runners(http_request, session_id)
+    if cancelled is not None:
+        cancel_status, cancel_payload = cancelled
+        return JSONResponse(cancel_payload, status_code=cancel_status)
     return JSONResponse({
         "success": True,
         "message": "Cancel request accepted",
@@ -1703,6 +1731,8 @@ async def cancel_chat_generation(session_id: str):
 
 app.include_router(auth.router)
 app.include_router(session_api.router)
+from src.api.agent_runner_web import router as agent_runner_web_router
+app.include_router(agent_runner_web_router)
 app.include_router(channels_api.router)
 app.include_router(customer.router)
 app.include_router(customer_followup.router)

@@ -1313,6 +1313,30 @@ async def tenant_wecom_kf_callback_get(
 @router.post("/t/{tenant_id}/wecom_kf/callback/{config_id}")
 async def tenant_wecom_kf_callback_post(tenant_id: str, config_id: str, request: Request):
     """微信客服消息回调"""
+    from src.config.settings import settings
+    if settings.agent_runner.wecom_kf.enabled:
+        # Native ingress never traverses the old query/XML temporary logs or
+        # launches its ephemeral Agent/send path, even when native auth rejects.
+        from src.channels.wecom_kf.ingress_auth import KfIngressError
+        from src.channels.wecom_kf.ingress_worker import accept_callback
+        try:
+            chunks = []
+            size = 0
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > 65536:
+                    raise KfIngressError("KF_INGRESS_INVALID_CALLBACK", 413)
+                chunks.append(chunk)
+            await accept_callback(tenant_id, config_id, dict(request.query_params), b"".join(chunks))
+            return PlainTextResponse("success")
+        except KfIngressError as error:
+            return JSONResponse({"success": False, "error": "消息暂未接受，请重试", "debug": error.code},
+                                status_code=error.status)
+        except Exception as error:
+            # No SDK response, query, XML, exception repr or credential in logs.
+            logger.error("KF durable ingress unavailable: type={}", type(error).__name__)
+            return JSONResponse({"success": False, "error": "消息暂未接受，请重试",
+                                 "debug": "KF_INGRESS_STORAGE_UNAVAILABLE"}, status_code=503)
     try:
         body = await request.body()
         body_str = body.decode()
@@ -1783,6 +1807,11 @@ async def _process_tenant_wecom_kf_messages(
             servicer_msgs_to_persist = []  # 本页员工消息（origin=5），按 send_time 正序，供穿插入库
             recalled_msgids_in_batch = set()  # 本批次内被用户撤回的消息 msgid（供后续剔除用）
             for msg in result.get("msg_list", []):
+                # A native receipt already owned by accepted/classified/business
+                # facts never re-enters the ephemeral legacy Agent on rollback.
+                from src.channels.wecom_kf.completion_business import native_receipt_owned
+                if await asyncio.to_thread(native_receipt_owned,tenant_id,config_id,adapter.corp_id,open_kfid,msg):
+                    continue
                 msg_id = msg.get("msgid", "")
                 msg_origin = msg.get("origin", "")
                 msg_type = msg.get("msgtype", "")

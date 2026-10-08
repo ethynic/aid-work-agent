@@ -242,6 +242,7 @@ async def evaluate_resume(
     candidate_name: str,
     job_ctx: Optional[Dict[str, Any]] = None,
     model_param: Optional[str] = None,
+    model_call=None,
 ) -> Dict[str, Any]:
     """拼接横带一次发 VL 评估，返回 {name_seen, resume_summary, score, match_summary, key_info, usage, model}。
 
@@ -273,10 +274,15 @@ async def evaluate_resume(
     for attempt in (1, 2):
         try:
             # 温度 0.1：结构化评审要确定性（与 recruiting_match_service 同取向）
-            response = await llm_gateway.chat_direct(
-                provider_name, model, messages=messages, temperature=0.1
-            )
+            async def invoke():
+                return await llm_gateway.chat_direct(
+                    provider_name, model, messages=messages, temperature=0.1)
+            response = (await model_call(attempt-1, invoke)
+                if model_call is not None else await invoke())
         except Exception as e:  # noqa: BLE001 LLM 异常统一走重试，最终转 ResumeVLError
+            if (getattr(e, 'authoritative_storage_failure', False)
+                    or getattr(e, 'tool_continuation_required', False)):
+                raise
             last_error = f"LLM 调用失败: {type(e).__name__}: {e}"
             logger.warning(
                 f"后端日志：简历 VL 评估失败（第 {attempt} 次）provider={provider_name} "

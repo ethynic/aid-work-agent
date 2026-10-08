@@ -15,6 +15,7 @@ from src.tools.base import BaseTool
 from src.tools.browser.orchestrator import BrowserOrchestrator
 from src.tools.browser.run_manager import BrowserRunManager, RunState
 from src.tools.browser.human_control import HumanControlCoordinator
+from src.tools.browser.owner_port import propagate_owner_failure
 
 
 _DEPRECATED_RESUME_ERROR = (
@@ -199,7 +200,9 @@ class BrowserAutomationTool(BaseTool):
                     session_id=record.session_id, agent_execution_id=execution_id,
                     tool_call_id=tool_call_id, run_id=record.run_id,
                     manager=manager, orchestrator=orchestrator,
-                    executor=orchestrator.executor,
+                    executor=(manager.human_executor(record.tenant_id,record.run_id)
+                              if getattr(manager,'execution_owner',None) is not None
+                              else orchestrator.executor),
                     reason_code=result.get("error_code", "HUMAN_REQUIRED"),
                     step_index=len(orchestrator.steps),
                 )
@@ -214,6 +217,7 @@ class BrowserAutomationTool(BaseTool):
             orchestrator.cancel()
             raise
         except Exception as exc:
+            propagate_owner_failure(exc)
             logger.error("浏览器自动化执行失败: type={}", type(exc).__name__)
             return {
                 "success": False,
@@ -238,4 +242,5 @@ class BrowserAutomationTool(BaseTool):
                         )
                     )
             except Exception as exc:
+                propagate_owner_failure(exc)
                 logger.warning("browser tool 边界回收异常: type={}", type(exc).__name__)

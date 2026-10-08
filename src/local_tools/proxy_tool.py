@@ -230,6 +230,11 @@ class LocalToolProxyTool(BaseTool):
     heal_eligible = True
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
+        from src.local_tools.lifecycle import current_local_operation
+        operation = current_local_operation()
+        if operation is not None:
+            from src.local_tools.overlay_flow import run_base
+            return await run_base(self,operation,kwargs)
         tenant_id = kwargs.get("_trusted_tenant_id")
         user_id = kwargs.get("_trusted_user_id")
         session_id = kwargs.get("_session_id")
@@ -288,16 +293,18 @@ class LocalToolProxyTool(BaseTool):
         """
         from src.local_tools.service import LocalInvocationService
 
-        invocation = await asyncio.to_thread(
-            LocalInvocationService().enqueue,
-            tenant_id=tenant_id,
-            user_id=user_id,
-            device_id=str(device["id"]),
-            tool_name=self.name,
-            arguments=args,
-            session_id=session_id,
-            provider_key=self.invocation_provider_key,
-        )
+        from src.local_tools.lifecycle import current_local_operation
+        operation = current_local_operation()
+        if operation is not None:
+            from src.local_tools.durable_flow import original_invocation
+            invocation = await original_invocation(self, operation, device, args)
+        else:
+            invocation = await asyncio.to_thread(
+                LocalInvocationService().enqueue,
+                tenant_id=tenant_id, user_id=user_id, device_id=str(device["id"]),
+                tool_name=self.name, arguments=args, session_id=session_id,
+                provider_key=self.invocation_provider_key,
+            )
         invocation_id = str(invocation["id"])
         logger.info(
             f"后端日志：本地工具 invocation 已创建 id={invocation_id} "
@@ -308,6 +315,13 @@ class LocalToolProxyTool(BaseTool):
             "invocation_id": invocation_id,
             "text": f"⏳ 已下发到本机执行：{self.display_name}",
         })
+
+        return await self._poll_invocation(invocation, tenant_id, progress_queue,
+            durable_deadline=invocation.get('deadline_at') if operation is not None else None)
+
+    async def _poll_invocation(self, invocation, tenant_id, progress_queue, *, durable_deadline=None):
+        """Keep the original wire/event polling; durable owners keep its deadline."""
+        invocation_id = str(invocation['id'])
 
         seq_cursor = 0
         loop = asyncio.get_event_loop()
@@ -329,7 +343,12 @@ class LocalToolProxyTool(BaseTool):
                 result = self._map_terminal(invocation)
                 return self._attach_credit_cost(invocation, result)
 
-            if loop.time() >= deadline:
+            expired = (datetime.now(durable_deadline.tzinfo) >= durable_deadline
+                if durable_deadline else loop.time() >= deadline)
+            if expired:
+                if durable_deadline is not None:
+                    from src.local_tools.durable_flow import LocalContinuationRequired
+                    raise LocalContinuationRequired('LOCAL_DEADLINE_VERIFICATION_REQUIRED', invocation_id)
                 # TIMEOUT 是 proxy 本地码：云端状态机由 request_cancel 推进，不受影响
                 await asyncio.to_thread(repository.request_cancel, invocation_id, tenant_id)
                 logger.warning(
@@ -365,19 +384,17 @@ class LocalToolProxyTool(BaseTool):
             return None, "尚未选定本地设备。请点击左侧菜单栏底部的用户名，在弹出菜单中选择『本地工具』，在页面中选定一台已配对的设备，然后再试"
 
         device = selected[0]
-        last_seen = device.get("last_seen_at")
-        online = bool(
-            last_seen and (datetime.now() - last_seen).total_seconds() <= ONLINE_THRESHOLD_SECONDS
-        )
-        if not online:
+        from src.local_tools.device_policy import device_ready_error
+        from datetime import timezone
+        ready_error = device_ready_error(device, self.name, datetime.now(timezone.utc))
+        if ready_error == 'offline':
             return None, "本机 Runtime 当前离线。请在本机启动 Runtime 并保持运行，然后再试"
 
         # 多 Provider 解析（M11c）：设备可同时覆盖多个 provider（boss+wecom 等），
         # 本工具只需其中任一 provider 的 catalog 白名单放行即可。对 boss 单
         # Provider 设备与旧解析（get_provider_key_for_device 单键）结论一致：
         # boss 设备 → boss 键放行 boss 工具；非 boss 设备对 boss 工具同样拒绝。
-        provider_keys = catalog.get_provider_keys_for_device(device.get("capabilities_json"))
-        if not any(catalog.is_tool_allowed(pk, self.name) for pk in provider_keys):
+        if ready_error == 'unsupported':
             return None, self.unsupported_provider_message
 
         return device, None
@@ -809,6 +826,14 @@ class BossInterviewNotifyTool(LocalToolProxyTool):
     InputModel = BossInterviewNotifyInput
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
+        from .lifecycle import current_local_operation
+        operation = current_local_operation()
+        if operation is not None:
+            from .domain_flow import execute_domain
+            return await execute_domain(self,operation,kwargs)
+        return await self._execute_legacy(**kwargs)
+
+    async def _execute_legacy(self, **kwargs) -> Dict[str, Any]:
         tenant_id = kwargs.get("_trusted_tenant_id")
         if not tenant_id:
             return {"success": False, "code": "NO_IDENTITY",
@@ -951,6 +976,14 @@ class BossJobsListTool(LocalToolProxyTool):
         pass
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
+        from .lifecycle import current_local_operation
+        operation = current_local_operation()
+        if operation is not None:
+            from .domain_flow import execute_domain
+            return await execute_domain(self, operation, kwargs)
+        return await self._execute_legacy(**kwargs)
+
+    async def _execute_legacy(self, **kwargs) -> Dict[str, Any]:
         tenant_id = kwargs.get("_trusted_tenant_id")
         if not tenant_id:
             return {"success": False, "code": "NO_IDENTITY",
@@ -1106,6 +1139,14 @@ class BossResumeDetailTool(LocalToolProxyTool):
         return resume_recognition_price()
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
+        from .lifecycle import current_local_operation
+        operation = current_local_operation()
+        if operation is not None:
+            from .domain_flow import execute_domain
+            return await execute_domain(self, operation, kwargs)
+        return await self._execute_legacy(**kwargs)
+
+    async def _execute_legacy(self, **kwargs) -> Dict[str, Any]:
         tenant_id = kwargs.get("_trusted_tenant_id")
         user_id = kwargs.get("_trusted_user_id")
         session_id = kwargs.get("_session_id")
@@ -1257,6 +1298,14 @@ class BossResumeBatchTool(LocalToolProxyTool):
         return resume_recognition_price()
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
+        from .lifecycle import current_local_operation
+        operation = current_local_operation()
+        if operation is not None:
+            from .domain_flow import execute_domain
+            return await execute_domain(self, operation, kwargs)
+        return await self._execute_legacy(**kwargs)
+
+    async def _execute_legacy(self, **kwargs) -> Dict[str, Any]:
         tenant_id = kwargs.get("_trusted_tenant_id")
         user_id = kwargs.get("_trusted_user_id")
         session_id = kwargs.get("_session_id")
@@ -1653,6 +1702,14 @@ class BossSendToTool(LocalToolProxyTool):
         dry_run: bool = Field(False, description="只输入不发送（测试链路，默认 false 真发送）")
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
+        from .lifecycle import current_local_operation
+        operation = current_local_operation()
+        if operation is not None:
+            from .domain_flow import execute_domain
+            return await execute_domain(self, operation, kwargs)
+        return await self._execute_legacy(**kwargs)
+
+    async def _execute_legacy(self, **kwargs) -> Dict[str, Any]:
         tenant_id = kwargs.get("_trusted_tenant_id")
         script_title = (kwargs.get("script_title") or "").strip()
         if script_title:
@@ -1737,6 +1794,14 @@ class BossSendCurrentTool(LocalToolProxyTool):
         dry_run: bool = Field(False, description="只输入不发送（测试链路，默认 false 真发送）")
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
+        from .lifecycle import current_local_operation
+        operation = current_local_operation()
+        if operation is not None:
+            from .domain_flow import execute_domain
+            return await execute_domain(self, operation, kwargs)
+        return await self._execute_legacy(**kwargs)
+
+    async def _execute_legacy(self, **kwargs) -> Dict[str, Any]:
         tenant_id = kwargs.get("_trusted_tenant_id")
         script_title = (kwargs.get("script_title") or "").strip()
         if script_title:

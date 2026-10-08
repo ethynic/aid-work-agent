@@ -582,3 +582,18 @@ class TestProcessorError:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
+
+
+@pytest.mark.asyncio
+async def test_real_queue_preserves_image_only_agent_response_owner(q, fake_redis):
+    from src.core.agent import AgentResponse
+    image = {"file_id": "image-only", "download_url": "/api/files/image-only/download"}
+    reply = AgentResponse("", [image])
+    result = await q.enqueue_and_process(session_id="image-only-session", user_input="show image",
+        processor=AsyncMock(return_value=reply))
+    try:
+        assert result.status == "success"
+        assert str(result.response_text) == ""
+        assert result.response_text.images == (image,)
+    finally:
+        q.finish_processing("image-only-session", result.lease_token)

@@ -12,6 +12,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { effectiveManifestFor, manifestDigestOf, TRUSTED_MANIFESTS } from './providers.js'
+import { discoverInstalledSkills } from './skillRunner.js'
 
 /** 运行时版本（读 package.json，src/dist 两种布局兜底；不手写字符串防漂移误导排障） */
 export const RUNTIME_VERSION: string = (() => {
@@ -39,6 +40,15 @@ export interface RuntimeConfig {
   providers?: Record<string, { entry: string; v2Send?: boolean }>
   /** 端侧会话任务引擎开关（C2；默认关闭，显式开启后与 pollLoop 并存运行） */
   sessionTasks?: boolean
+  /** skill-runner（M2）设备执行配置：python = 受管解释器绝对路径（未配置/文件不存在
+   *   → 不上报 skill-runner 能力，行级 claim 天然不派发）；dir = skills 目录（默认
+   *   <runtimeHome>/skills）。本机管理员配置，禁止云端下发（对齐 Provider entry 本地信任原则） */
+  skills?: { dir?: string; python?: string }
+}
+
+/** skill-runner 默认 skills 目录（计划 §3.4 D4：<runtimeHome>/skills） */
+export function defaultSkillsDir(): string {
+  return path.join(runtimeHomeDir(), 'skills')
 }
 
 export function runtimeHomeDir(): string {
@@ -134,10 +144,14 @@ export function machineFingerprint(): string {
 /**
  * 设备能力上报。显式传 config（cli/测试）；缺省读当前 config.json。
  *
- * - providers：已配置入口的可用 provider key 数组（无 entry 的 manifest 不进数组，如默认未安装的 weixin）
+ * - providers：已配置入口的可用 provider key 数组（无 entry 的 manifest 不进数组，如默认未安装的 weixin）；
+ *   skill-runner 例外：进程内 handler 无 MCP entry，以 skills.python 配置且文件存在为准
+ *   （能力真实性对齐 weixin v2Send 先例——未配置/解释器不存在不上报，行级 claim 天然不派发）
  * - protocol_version：Runtime 侧统一操作协议版本（v2 支持按 invocation 级 provider 路由）
  * - provider_manifests：各可用 provider 的 manifest 摘要（provider_id/manifest_digest/protocol_version）
  * - provider_id：第一个可用 provider 的 id（云端 catalog 兼容字段；boss-only 环境与历史一致）
+ * - skills：skill-runner 可用时上报已安装技能清单 [{name, hash}]（hash 为 exec_hash，
+ *   供云端版本门对账 SKILL_NOT_INSTALLED / SKILL_VERSION_MISMATCH；≤50 条截断）
  *
  * 键序契约：providers 数组与 provider_manifests 键序固定为 boss-recruiting 恒首位、其余
  * 按字典序——首个可用 provider 即旧 provider_id 兼容字段的取值来源，顺序漂移会改变
@@ -146,8 +160,11 @@ export function machineFingerprint(): string {
 export function deviceCapabilities(config?: RuntimeConfig | null): Record<string, unknown> {
   const cfg = config === undefined ? loadConfig() : config
   const entries = resolveProviderEntries(cfg)
+  const skillsPython = typeof cfg?.skills?.python === 'string' && cfg.skills.python !== '' ? cfg.skills.python : null
+  // 能力真实性（计划 §3.4 D4）：解释器未配置或文件不存在 → 不上报 skill-runner
+  const skillRunnerReady = skillsPython !== null && existsSync(skillsPython)
   const available = Object.keys(TRUSTED_MANIFESTS)
-    .filter((key) => Boolean(entries[key]))
+    .filter((key) => (key === 'skill-runner' ? skillRunnerReady : Boolean(entries[key])))
     // 键序契约：boss 恒首位（provider_id 兼容字段来源），其余字典序稳定
     .sort((a, b) => {
       if (a === 'boss-recruiting') return b === 'boss-recruiting' ? 0 : -1
@@ -192,5 +209,7 @@ export function deviceCapabilities(config?: RuntimeConfig | null): Record<string
     provider_manifests: manifests,
     capabilities,
     ...(first ? { provider_id: TRUSTED_MANIFESTS[first]!.provider_id } : {}),
+    // skill-runner 可用才上报 skills 清单（目录不存在 → 空数组 = 已知无已安装技能）
+    ...(skillRunnerReady ? { skills: discoverInstalledSkills(cfg!.skills!.dir ?? defaultSkillsDir()) } : {}),
   }
 }

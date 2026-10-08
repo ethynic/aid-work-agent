@@ -123,7 +123,7 @@
 
             <!-- Stop Button（处理中替换发送按钮） -->
             <button
-              v-if="isProcessing"
+              v-if="canStop ?? isProcessing"
               @click="handleStopClick"
               class="w-9 h-9 rounded-full bg-danger-50 text-danger-600 border border-danger-200 hover:bg-danger-100 transition-colors flex items-center justify-center"
               title="停止生成"
@@ -134,7 +134,7 @@
             </button>
             <!-- Send Button：圆形向上箭头 -->
             <button
-              v-else
+              v-if="!isProcessing"
               @click="handleSend"
               :disabled="(!inputText.trim() && files.length === 0) || disabled || hasUploading"
               :class="[
@@ -167,6 +167,7 @@ import ChatToolbar from './chat/ChatToolbar.vue'
 interface Props {
   disabled: boolean
   isProcessing: boolean
+  canStop?: boolean
   files: UploadedFile[]
   /** 当前会话 subagent 的上传文件类型限定（如 "image/*"），未声明时 fallback 到默认白名单 */
   uploadAccept?: string | null
@@ -254,7 +255,8 @@ function handleSend() {
 }
 
 /** 快捷按钮点击：把预设消息填入输入框并聚焦，用户补充细节后手动发送 */
-function fillQuickPrompt(message: string) {
+function fillQuickPrompt(message: string, onlyIfEmpty = false) {
+  if (onlyIfEmpty && inputText.value.trim()) return
   inputText.value = message
   nextTick(() => {
     autoResize()

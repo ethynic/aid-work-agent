@@ -25,6 +25,7 @@ def isolated_tenants_root(tmp_path: Path, monkeypatch):
     from src.core import storage as storage_mod
     fake_root = str(tmp_path / "tenants")
     monkeypatch.setattr(storage_mod, "_TENANTS_ROOT", fake_root)
+    monkeypatch.setenv("AGENT_RUNNER_STORAGE_ROOT", str(tmp_path))
     return tmp_path
 
 

@@ -60,3 +60,4 @@
 | 邮箱服务器自动发现（Autoconfig）调研与配置体验优化方案 | [调研](research/email-server-autoconfig-research.md) | 邮箱设置体验优化：内置表+MX/ISPDB/Autoconfig 探测链，用户只填地址+授权码；含前端两步式表单与分期建议。 |
 | 文生图/图生图能力缺失核查与生图模型选型调研 | [调研](research/image-generation-model-research.md) | 生图工具选型（2026-09-28）：确认项目无 AI 生图能力；建议一期智谱 CogView-4（文生图）+ 百炼 qwen-image-edit（图生图）复用现有账号，二期可选火山 Seedream。 |
 | PPT 生成质量课题调研：从「能生成」到「能交付」 | [调研](research/ppt-generation-quality-research.md) | PPT 工具重构方向（2026-09-29）：三轮 trace 实证+业界调研（Codex/Anthropic skill/Presenton/Gamma 系）；结论=LLM 只选布局填槽、样式由主题库+规则排版保底、模板改一次性转译、QA 变门禁、python-pptx 回退废弃；分 P0-P3 落地路线。 |
+| 外部 Skill 插件接入 Runtime 机制调研与设计（workbuddy 样本） | [调研](research/external-skill-plugin-integration-research.md) | Runtime 插件生态（2026-10-06）：可行——Skill 通道做知识层（AgentSkills 格式直接兼容）+ invocation 队列做执行层（新增通用 skill-runner Provider，纯加法不触碰三 CLI 清单）；关键交互点=桌面锁互斥（skill 与 weixin-cli 同微信进程）；分 M1-M4。 |

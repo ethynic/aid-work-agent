@@ -90,6 +90,21 @@ TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
             "wecom_unread_list",
         ],
     },
+    # 通用 Skill 脚本执行 Provider（M2，docs/plans/plan-external-skill-plugin-m2.md §4.1）：
+    # 设备端 skill-runner 通用执行器（进程内 handler，不走 MCP stdio），承载已审批
+    # 插件 device 技能的脚本执行。与三 CLI「封闭 schema 工具」不同——skill_script_run
+    # 的参数为结构化 payload（skill/entry/args/exec_hash），任意执行参数约束由
+    # 「云端命令门禁（entry ∈ 审批 entries 白名单）+ exec_hash 对账 + 设备侧命令门禁」
+    # 三层补偿（计划 §3.1/§3.6）。云端侧不注册 LLM 可见代理工具（skill_execute 保持
+    # 单入口，路由对 LLM 透明），条目仅供设备闸门/claim 行级过滤/计费取价消费。
+    "skill-runner": {
+        "provider_id": "ai.aidwork.skill-runner",
+        "min_provider_version": "1.0.0",
+        "execution_target": "local_required",
+        "tools": [
+            "skill_script_run",
+        ],
+    },
 }
 
 

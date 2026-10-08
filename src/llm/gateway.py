@@ -202,7 +202,9 @@ class LLMGateway:
                 method = getattr(provider, fn_name)
                 logger.debug(f"[LLM] Provider built, calling {fn_name}")
                 
-                result = await method(**kwargs)
+                from src.llm.call_observer import observed_call
+                result = await observed_call(method, provider=self.provider_name,
+                    model=kwargs.get("model") or provider.model, kwargs=kwargs)
                 
                 call_duration = time.time() - call_start
                 logger.info(f"[LLM] _call_with_pool completed, provider={self.provider_name}, fn={fn_name}, duration={call_duration:.2f}s")
@@ -411,14 +413,10 @@ class LLMGateway:
         try:
             async with key_pool.acquire() as api_key:
                 provider = _build_provider(lite_provider, api_key, model=lite_model)
-                result = await provider.chat(
-                    messages=messages,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    **kwargs,
-                )
+                from src.llm.call_observer import observed_call
+                result = await observed_call(provider.chat, provider=lite_provider, model=lite_model,
+                    kwargs=dict(messages=messages, tools=tools, tool_choice=tool_choice,
+                                temperature=temperature, max_tokens=max_tokens, **kwargs))
         except Exception as e:
             logger.opt(exception=True).error(
                 "[LLM] chat_lite() failed (cross-provider), provider={p}, model={m}, error: {err}",
@@ -506,14 +504,10 @@ class LLMGateway:
         try:
             async with key_pool.acquire() as api_key:
                 provider = _build_provider(provider_name, api_key, model=model)
-                result = await provider.chat(
-                    messages=messages,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    **kwargs,
-                )
+                from src.llm.call_observer import observed_call
+                result = await observed_call(provider.chat, provider=provider_name, model=model,
+                    kwargs=dict(messages=messages, tools=tools, tool_choice=tool_choice,
+                                temperature=temperature, max_tokens=max_tokens, **kwargs))
         except Exception as e:
             logger.opt(exception=True).error(
                 "[LLM] chat_direct() failed, provider={p}, model={m}, error: {err}",

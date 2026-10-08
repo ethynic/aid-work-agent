@@ -131,10 +131,12 @@ def _resolve_upload_dir(tenant_id: Optional[str], user_id: Optional[str]) -> Pat
 
     user_id 不进入路径，避免目录碎片化。
     """
-    from src.core.storage import ensure_tenant_storage_dir
-    tid = tenant_id or "_anonymous"
+    from src.core.storage import get_conversation_dir
+    from src.tools.context import current_tool_execution_context
+    context = current_tool_execution_context()
+    tid = context.tenant_id if context is not None else tenant_id
     _ = user_id  # 保留参数兼容性，但不进路径
-    return Path(ensure_tenant_storage_dir(tid, "conversation"))
+    return get_conversation_dir(tid)
 
 
 class CpTool(BaseTool):
@@ -212,7 +214,12 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="ppt/index.
 
         from src.core.tenant_path_guard import find_foreign_tenant_owner
 
-        foreign_owner = find_foreign_tenant_owner(src, self._current_tenant_id())
+        from src.tools.context import current_tool_execution_context
+        context = current_tool_execution_context()
+        # A deliberate global tool identity owns the anonymous directory.
+        # No context still has no authority to read any tenant directory.
+        owner = (context.tenant_id or '_anonymous') if context is not None else None
+        foreign_owner = find_foreign_tenant_owner(src, owner)
         if foreign_owner:
             logger.warning(
                 f"[安全防护] cp 源路径位于其他租户存储目录，已拒绝: "

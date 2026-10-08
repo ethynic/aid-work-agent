@@ -48,7 +48,7 @@ async def test_resolve_chat_session(service, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_resolve_channel_session(service, monkeypatch):
-    """source_type='wecom_kf' → 调 channel_session_manager.get_session_by_id（模块级单例，P1-4）"""
+    """source_type='wecom_kf' → 调 CompressionSessionRepository.get_session"""
     fake_row = {
         "session_id": "sess_kf_1",
         "tenant_id": "tenant_kf",
@@ -59,14 +59,11 @@ async def test_resolve_channel_session(service, monkeypatch):
     }
 
     class _FakeMgr:
-        def get_session_by_id(self, session_id):
+        def get_session(self, session_id, source_type):
             assert session_id == "sess_kf_1"
             return fake_row
 
-    import src.channels.session as session_mod
-    # P1-4：_resolve_session_meta 复用模块级单例 channel_session_manager，
-    # 测试需直接替换单例对象，而非替换类构造函数
-    monkeypatch.setattr(session_mod, "channel_session_manager", _FakeMgr())
+    monkeypatch.setattr(service, "_session_repository", _FakeMgr())
 
     meta = await service._resolve_session_meta("sess_kf_1", "wecom_kf")
     assert meta.tenant_id == "tenant_kf"

@@ -184,5 +184,76 @@ class TestSkillRegistryMultiDirectory(unittest.TestCase):
         )
 
 
+class TestGetExecutionDecl(unittest.TestCase):
+    """get_execution_decl：读取 metadata.execution 声明（外部 Skill 插件 M1 §3.8）"""
+
+    def setUp(self):
+        import tempfile
+        self.temp_dir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _write_skill(self, dirname: str, extra_frontmatter: str = ""):
+        skill_dir = self.temp_dir / dirname
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\n"
+            f"name: {dirname}\n"
+            f"description: {dirname}\n"
+            f"{extra_frontmatter}"
+            "---\n"
+            f"# {dirname}\n",
+            encoding="utf-8",
+        )
+
+    def _registry(self, allowed=None) -> SkillRegistry:
+        registry = SkillRegistry()
+        registry.load_from_directory(self.temp_dir, allowed=allowed)
+        return registry
+
+    def test_device_decl(self):
+        self._write_skill("s-device", extra_frontmatter=(
+            "metadata:\n"
+            "  execution: device\n"
+            "  device_requirements: {\"camera\": true}\n"
+            "  entry: [\"scripts/run.py\"]\n"
+        ))
+        decl = self._registry().get_execution_decl("s-device")
+        self.assertEqual(decl["execution"], "device")
+        self.assertEqual(decl["device_requirements"], {"camera": True})
+        self.assertEqual(decl["entry"], ["scripts/run.py"])
+
+    def test_server_decl(self):
+        self._write_skill("s-server", extra_frontmatter="metadata:\n  execution: server\n")
+        decl = self._registry().get_execution_decl("s-server")
+        self.assertEqual(decl["execution"], "server")
+        self.assertNotIn("device_requirements", decl)
+
+    def test_missing_execution_key_returns_none(self):
+        self._write_skill("s-plain", extra_frontmatter="metadata:\n  other: 1\n")
+        self.assertIsNone(self._registry().get_execution_decl("s-plain"))
+
+    def test_no_metadata_returns_none(self):
+        self._write_skill("s-bare")
+        self.assertIsNone(self._registry().get_execution_decl("s-bare"))
+
+    def test_invalid_execution_value_fails_safe(self):
+        """execution 非法值（非 server/device）→ None（按默认 server 处理，不炸加载链）"""
+        self._write_skill("s-weird", extra_frontmatter="metadata:\n  execution: cloud\n")
+        self.assertIsNone(self._registry().get_execution_decl("s-weird"))
+
+    def test_nonexistent_skill_returns_none(self):
+        self._write_skill("s-x")
+        self.assertIsNone(self._registry().get_execution_decl("no-such-skill"))
+
+    def test_filtered_out_skill_returns_none(self):
+        """allowed 过滤掉的 skill 对 get()/get_execution_decl 均不可见"""
+        self._write_skill("s-device", extra_frontmatter="metadata:\n  execution: device\n")
+        registry = self._registry(allowed=["unrelated-skill"])
+        self.assertIsNone(registry.get_execution_decl("s-device"))
+
+
 if __name__ == "__main__":
     unittest.main()

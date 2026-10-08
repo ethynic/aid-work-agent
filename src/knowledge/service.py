@@ -25,7 +25,6 @@ from src.config.settings import settings
 from src.db.database import get_db_connection
 from src.db.models import ChatRecordDB
 from src.db.subagent_knowledge_source_db import SubagentKnowledgeSourceDB
-from src.llm.gateway import LLMGateway
 from src.services.billing import (
     calculate_credit_cost_with_breakdown,
     calculate_embedding_credit_cost_with_breakdown,
@@ -49,9 +48,10 @@ class KnowledgeBaseService:
 
     @property
     def llm_gateway(self):
-        """获取 LLM 网关实例（懒加载）"""
+        """获取 LLM 网关实例（懒加载，共享进程级单例）"""
         if self._llm_gateway is None:
-            self._llm_gateway = LLMGateway()
+            from src.llm.gateway import llm_gateway
+            self._llm_gateway = llm_gateway
         return self._llm_gateway
 
     async def generate_summary(self, text: str, title: str, max_length: int = 300) -> str:

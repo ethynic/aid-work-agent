@@ -6,16 +6,43 @@
 > 2026-07-17 Browser Run/Executor Phase 2 例外登记：新增业务审计表
 > `bs_browser_runs`、`bs_browser_assistance_requests`。两表只保存租户归属、
 > 状态枚举和恢复关联，不保存完整 URL、DOM、截图、cookie、header、表单值或
-> 用户输入；所有读取和更新均要求 `tenant_id` 条件。两表 DDL 已同步
-> `deploy/init-postgres.sql` 与 `deploy/db_update.sql`，不创建长期 device 表。
+> 用户输入；所有读取和更新均要求 `tenant_id` 条件，不创建长期 device 表。
+> 2026-10-02 源码核对发现旧基础表未出现在部署 DDL；本次补入
+> `deploy/init-postgres.sql` 与 `deploy/db_update.yaml`，对既有表采用非破坏增列。
 >
 > 2026-07-22 Phase 3R 已新增 `bs_browser_resume_jobs` 持久 lease 队列，替代
 > Redis Stream。字段仅包括任务/租户/assistance/run 标识、pending/processing/
 > completed/failed 状态、lease、重试调度、白名单错误码和时间戳；
 > `assistance_id` 唯一保证幂等入队。worker 用 `FOR UPDATE SKIP LOCKED` 领取，
-> lease 过期可回收。DDL 已同步 `deploy/init-postgres.sql` 与 `deploy/db_update.sql`，
+> lease 过期可回收。本次基础兼容 DDL 同步于上述两份实际部署文件，
 > Python service 为 `src/tools/browser/run_db.py` 的 `BrowserResumeJobDB`。
 > 遵循 `database_dev.md` 不加外键约束。
+
+> M4 Browser 原 Runner 绑定基础片：`bs_browser_runs` 新增可空的
+> `runner_id/runner_execution_id/runner_tool_call_id`、`owner_worker_id/owner_boot_id`、
+> `browser_epoch/owner_endpoint/owner_lease_until/runtime_state/closed_at`。
+> 原调用到 run 为部分唯一索引；原 worker boot/epoch 一旦绑定不得用同调用换 runtime。
+> legacy 行保持整组 NULL；原 Runner 行必须完整绑定，`starting/live` 有租约且无关闭时间，
+> `closed/lost` 清租约并保关闭时间。新 owner 租约为 TIMESTAMPTZ，锁后读数据库时钟；
+> 旧审计 TIMESTAMP 保持数据库会话原有墙钟语义，不作为 owner fence。
+> `bs_browser_assistance_requests` 新增可空 `runner_id/runner_wait_id/owner_boot_id/browser_epoch`
+> 和成对可空的 `completion_ref/completion_fact`，只容纳白名单完成事实，不含页面证据。
+> 原生人工操作使用 `extended_at TIMESTAMPTZ NULL` 标记唯一延期；同事务更新原 `expires_at`，旧 NULL 表示尚未延期。Redis 只投影已提交期限，不重新授予延期。
+> `owner_endpoint` 是服务器固定配置的内控服务地址，不是网页 URL，也不含凭据。
+> 新仓储将 mandatory run/wait 行和原完整执行树 CP 关联同事务提交；基础片尚未装配到
+> Browser Runtime，不以此声明人工续跑可用。原 Runner 完成不进入 `bs_browser_resume_jobs`。
+> 此 Browser 迁移块以单条原子 DO 执行并核对实际列类型、关键唯一索引和已验证 CHECK 定义；
+> 不兼容旧结构整块回滚且不推进原迁移水位，不自动删除或替换历史结构。
+> 旧自增主键 int4/int8、审计 timestamp/timestamptz 以及 text/无长度上限 varchar 可兼容；
+> 新 fencing 时间严格为 timestamptz，完成事实严格为 jsonb。
+> 等待绑定还须核当前受信 worker/boot/epoch，assistance SQL 锁等待后再次校验独立 Browser 租约。
+>
+> 2026-10-05 M7 旧卡片透明迁移：`bs_browser_assistance_requests` 新增可空
+> `continuation_id`，native `bind_wait` 每新 wait 持久写入 audit 中的原随机 bac，
+> 与 Runner execution/call/wait 同事务关联，独立于 completion 相位；
+> 部分唯一索引 `uq_browser_assistance_continuation`（WHERE continuation_id IS NOT NULL）
+> 保证一 bac 一行，存量 legacy 行保持 NULL 不受影响。旧 events 薄读桥按该持久行
+> JOIN `agent_runners` 复验当前 owner/tenant；纯只读，不入 `bs_browser_resume_jobs`。
 
 > 2026-07-21 社媒营销智能体 outbound 模块 B0.5 例外登记：新增托管登录态表
 > `bs_outbound_account_sessions`。存知乎/小红书等 web 操作型连接器的 Playwright
@@ -761,3 +788,180 @@ BOSS 直聘端侧会话（`boss.chat_reply.v1`，设计 §5；DDL 四处同步 `
 - `bs_boss_rate_settlement_anomalies`：结算异常队列（只存受控错误码 `rate_slot_missing|rate_slot_state_conflict|settlement_failed` 等，不落敏感详情）；`(tenant_id, delivery_id)` 唯一幂等；slot 缺失补建成功仍登记。
 - `bs_boss_comm_log_projection_queue`：沟通日志投影队列（发送 verified 或 unknown 人工判定后入队；后台 job 幂等 upsert 到 `bs_recruiting_operator_resume_comm_logs`，按 `binding.resume_id` 关联不按姓名匹配；失败退避重试仅补投影）；`(tenant_id, delivery_id)` 唯一防双写。
 - `bs_recruiting_operator_resume_comm_logs` ALTER 补列 `source_delivery_id UUID NULL`、`source_message_id TEXT NULL` + 唯一索引 `uq_boss_comm_logs_source_delivery (tenant_id, source_delivery_id)`（NULL 不判重；目标表由 recruiting 模块自建，ALTER 幂等且表不存在时条件跳过）。
+
+
+## AgentRunner 独立运行服务（2026-10-01）
+
+M2 系统表：`agent_runners`、`agent_runner_session_claims`、`agent_runner_usage_receipts`。
+DDL 同步维护于 `deploy/init-postgres.sql` 与 `deploy/db_update.yaml`
+（`2026-10-01 20:45:58`）；服务启动只检查 schema，不自动迁移或启动渠道/调度。
+开发计划：[AgentRunner](../plans/plan-agent-runner-service.md)。公开订阅 events 属 M5，
+不与计费 receipts 共表。本节记录实际 schema，worker/计费状态能力以计划阶段验收为准。
+
+| 表 | 字段与职责 |
+|---|---|
+| `agent_runners` | `runner_id` 主键；`queue_order` 持久队列顺序；真实 nullable `tenant_id`、内部 `scope_key`、`session_kind/session_id`、`actor_kind/actor_id/user_id/service_id/source`；`client_request_id/input_digest/input` 保存不可变意图；`profile_id/profile_fingerprint` 分开保存解析配置；`checkpoint/checkpoint_version` 为私有恢复事实；`status` 执行状态与 `settlement_status` 费用状态分开；`attempt/worker_id/lease_until` 执行权；`revision` 恢复点 CAS、`view_revision` 公开变化、`control_revision/cancel_requested` 控制请求；`public_snapshot/result` 可见投影；`event_seq` 永不回退的通知 head、`event_floor_seq` 已清理连续前缀末序（历史默认均为 0）；唯一稳定 `record_id`；`accepted_at/updated_at/finished_at` |
+| `agent_runner_events` | M5 公开通知系统表，主键 `(runner_id,seq)`；`tenant_id/scope_key` 与原 root 精确归属；`kind=created/revision_changed/terminal/settlement_changed`、`payload` 仅安全 invalidate 与版本/attempt/公开状态水位、`created_at TIMESTAMPTZ`；不复制累计回复、私有模型/收据/画面；created/terminal 保留期唯一索引，长期一次事实仍由原接单 winner/Finalizer 状态控制 |
+| `agent_runner_session_claims` | 主键 `(scope_key,session_kind,session_id)`，`tenant_id` 与 scope 对应；唯一 `owner_runner_id`、`revision`、`gate=execution/delivery`、创建/更新时间；表达会话逻辑位置，不是 worker lease，不按 TTL 释放 paused/waiting/interrupted |
+| `agent_runner_usage_receipts` | `receipt_id` 主键，唯一 `(runner_id,call_id)`；`tenant_id/scope_key/execution_id/tool_call_id/authorized_attempt` 归属；`owner/purpose/billing_boundary` 费用责任；真实 `provider/model/provider_request_id`、`phase=started/observed/unknown/no_usage`、原始 `usage/price_snapshot/fact_digest`；`applied/external_owner_id/record_id` 结算水位及外部台账引用；创建/观测/应用时间 |
+
+M5 事件基础块同步于双 DDL `2026-10-02 17:38:36`，单原子 DO 核字段、关键索引、
+已验证 CHECK 与零默认值；不回填旧事件。通知只在原 root 锁下最终 commit 尾点与公开
+变化同事务提交，私有 checkpoint、heartbeat 或单独 view_revision 变化不产生事件。
+仅输出变化按 head 的 DB 时间窗 250ms 合并，重要状态/控制/财务/卡片变化和 terminal
+即时通知；查询 snapshot 始终权威。短一致 RR 页面携 head/floor 与实际 paged last_seq，
+低于 floor、未来 cursor 或序列缺口返回 reset，不从剩余 events 的 MAX 重建水位。
+有界维护入口 `python -m src.services.agent_runner.event_maintenance --keep-last 1000 --roots 16
+--delete-limit 1000 --after 0` 每次只删连续前缀并返回 next_cursor（0 表示可环回），不自动
+启动 cron；删除全部后 head 仍保留。事件不授派发/人控权，也不是渠道送达证明；SSE
+及客户端接线另属后续片。
+
+真实 `tenant_id` 允许 NULL，仅已验证 platform_admin 自己的全局 Web 会话可使用；
+渠道必须 tenant-bound。`scope_key` 由服务内部导出：NULL 对应 `global`，有 tenant 对应
+`tenant:<tenant_id>`，CHECK 防止二者漂移。它不含 session，不是假 tenant，不接受客户端提交。
+接单幂等 UNIQUE `(scope_key,actor_kind,actor_id,source,client_request_id)`，同键换会话仍是
+输入冲突；会话另在意图摘要与 claim 中表达。所有 NULL tenant 查询使用
+`IS NOT DISTINCT FROM`，不代表跨租户全局查询。
+
+Web 输入接单时只写 runner；结束事务才写 `chat_messages`，稳定 `runner_id:user` 投影
+用于刷新去重，当前 runner 不会读到未来 queued 输入。渠道始终读写 `channel_*`；
+费用审计共用 `chat_records`。M2a queued cancel 不创造聊天、收费记录或余额变动。
+运行中 cancel 仅增加控制/公开版本，不增加 checkpoint revision；worker 仍须实际派发前
+核对控制与 attempt/lease。M2 三表无外键、触发器或自动清理业务资源；M4 controls 曾以
+SQL 外键关联原 Runner，2026-10-04 起撤除外键级联，引用完整性由应用层同事务检查。
+
+### M4 控制命令（2026-10-02）
+
+`agent_runner_controls` 是私有系统表，记录控制意图，不承担公开事件订阅或计费。
+
+| 表/字段 | 用途和约束 |
+|---------|------------|
+| `agent_runners.pause_requested` | 用户暂停请求，与已安全停稳的 `status=paused`、内部停机/失租标记分别表示；默认 false |
+| `agent_runners.resume_control_id` | 原 claim 上等待专用领取的控制 ID；不是新的 queued Runner，不改变原 queue_order |
+| `agent_runner_controls` | `control_id` 主键；`runner_id` 关联原 Runner（无 SQL 外键，存在性与归属由应用层同事务检查）；`tenant_id/scope_key` 同原归属，合法 global 保持 NULL；`action` 为 pause/resume/reply/browser_complete；唯一 `(runner_id,client_request_id)`，`intent_digest` 包含动作、目标 execution/wait、回答/附件/完成引用；`payload` 私有，不在 GET/list 公开；`status=accepted/claimed/consumed/rejected`、稳定 `error_code`、`consumed_attempt`、接受/消费时间 |
+
+先验证当前主体及原 Runner 归属，再查命令幂等事实，然后判断当前状态是否可操作。
+同键换动作或参数返回冲突；同键重试可读取原消费结果。暂停保留会话 claim；
+恢复必须原 claim、新 attempt/lease 和消费后的完整 checkpoint 在同一事务提交，
+已提交的 finalizing 结果不被后续暂停、恢复或取消命令覆盖。公开只投影命令 ID、动作和状态，
+回答、附件内容、子执行私有状态和完成事实引用不作为公开命令 payload。
+
+
+## M6a 微信客服 received 事实基础（2026-10-03）
+
+三表为渠道执行协调系统表，部署 schema 同步于 `deploy/init-postgres.sql` 与
+`deploy/db_update.yaml` 的 2026-10-03 12:00:00 单语句原子 DO。所有归属字段必须完整，
+可空 SaaS `user_id` 保持原渠道主体语义；引用完整性由同 cursor 的 Python 检查维护，不加 SQL 外键。
+
+| 表 | 身份与关键字段 | 用途 |
+|---|---|---|
+| `wecom_kf_account_sync` | `account_id` PK；完整 tenant/config/corp/open 唯一；自增 `account_order`；profile/raw selector；config_version；requested/completed_generation；cursor；worker_id/claim_epoch/lease_until；verification_code | callback 已提交拉取意图才 ACK；有界 keyset 领取原账号，网络请求不持 SQL 锁；锁后数据库时钟、epoch、expected cursor 强校验 |
+| `channel_session_routes` | `route_id` PK；tenant/source/config/corp/open/actor/chat_kind/chat_id/profile 唯一；raw_profile；session_id/user_id；legacy_shared/config_version | 固定当前配置的完整路由到原渠道 SID，原空 selector 与 canonical main 等价；首次绑定存在两个旧候选时拒绝；不任意新建来掩盖缺失历史 |
+| `wecom_kf_inbox` | `(account_id,namespace,message_id)` PK；完整原账号/actor/route；origin/message_type/send_time；payload/payload_digest；私有 capability_ciphertext；config_version；state=received/received_at | 有界白名单消息与生命周期事实，page 全部 inbox/route/session 与 next cursor 同事务；无 Agent、Runner、发送或计费 |
+
+新 lease/audit 时刻为 TIMESTAMPTZ；`config_version` 保持原配置 `updated_at` TIMESTAMP。
+版本是本次 IO fence：配置变化后旧 owner 不可提交。仅欢迎文案等非路由修改或空/main
+默认 selector 等价变更，下一 fresh owner 可领取同一未完成 generation，保原 cursor；
+旧 inbox/route 的版本、raw selector、SID 不改。真实 corp/account/profile 差异或账号不可用
+保意图并记录安全 verification_code。内部 `read_received` 复验既有 route/session，不创建绑定。
+
+同步消息保 provider msgid；直接 encrypted callback 的 lifecycle 使用独立 `callback`
+namespace，按原安全类型字段、CreateTime 与必要 grant digest 定义 receipt 幂等边界，
+不冒充用户 msgid。未知 msgtype 仅存有界 unsupported 类型事实，避免阻断后续整页。
+enter_session 的 scene、状态/员工字段保留；Code/welcome_code 仅以既有 `secret_crypto`
+Fernet 加密存私有 capability 字段，主密钥缺失明确拒绝，明文不入公共 payload/日志/CP。
+截图、鉴权 XML/query、callback Token、corp secret/access_token 均不入这三表。
+当前原 SDK sync_msg 未使用 callback Token，其平台合同待后片核定；不据猜测新建凭据平台。
+
+`agent_runner.wecom_kf.enabled` 为服务端 typed default false，环境覆盖
+`AGENT_RUNNER_WECOM_KF_ENABLED` 仅接受 true/false。启用时 KF POST 在旧 XML/调试日志前
+分流：真实四元素密文签名与 decrypt receiverCorp/current config 验证后短 PG 提交；
+不接受 plain XML 为 durable proof。其他渠道及旧关闭分支不改，不声明全部 KF 已迁移。
+显式 worker `python -m src.channels.wecom_kf.ingress_worker --max-pages N` 只保存 received。
+原 SDK native HTTP 模式在 JSON 解码前限制字节，日志仅安全 code/type；实际 HTTP 与
+线程归还后才释放 lease。当前每页短生命周期 SDK owner，页内 token/cache 复用，跨页
+不复用，account_list+sync_msg+首次 gettoken 开销留 M7 性能核定，不宣称生产容量。
+
+迁移校验全部实际列类型/NULL、关键 btree 索引键/唯一/有效性、CHECK 的 relation
+绑定 deparse 与 validated、默认值和 account_order 的自增来源。不兼容整块回滚，不推进
+迁移水位、不清历史/不静默重建错误结构。无自动部署或默认切换。
+
+KF 仓储仅在自身短事务使用 LOCAL statement_timeout=5s / lock_timeout=3s，
+page 每条 inbox 写入前后与提交前均独立重核 lease/epoch/cursor。原 pool checkout/connect
+策略不改；此为单次 SQL 界限，不承诺所有线程清理或整个页事务在 5 秒内完成。
+
+
+### M6a text source input facts（2026-10-03）
+
+- `agent_runner_inputs` 是系统表，租户与完整执行 route 保存在服务器核实的 `provenance`，不使用 SQL 外键。`input_ref` 和唯一 `source_key` 对应原平台 receipt，`intent`/`intent_digest` 为不可变规范输入；不是正文去重。
+- `ordinal` 为全局稳定接受顺序；`receipt_seq` 是原 account 已提交的接收顺序。`accepted_runner_id` 不变，`current_runner_id`/`deferred_to_runner` 仅在原 root/claim/cutoff 同事务内关联下一 queued Runner。旧 delivery claim 继续阻止下一执行。
+- `phase`：`accepted` 未挂入 CP，`attached` 已在 CP followup 且未进 messages，`appended` 已进原 messages，`applied` 已在原 Finalizer 同事务写稳定 `input_ref:user` 历史，`deferred` 原预算/cutoff 转接，`cancelled` 未用输入随原取消闭合。`applied` 不代替 model/usage 物理调用事实。`attached_revision` 对应实际 CP CAS，不能把仅接受升级为已执行。
+- 原 `wecom_kf_account_sync.inbox_seq` 从 0 计新 receipt；`wecom_kf_inbox.receive_seq` 可 NULL，旧行不伪造 account 顺序。`receipt_order` 供渠道有限扫描，`accepted_input_ref` 可 NULL，由受信 Runner service 在接受/相同 key 恢复事务内核原 receipt 后写；渠道 consumer 不读 Runner 私有 input 表。
+- 首门仅当前明确 service_state=1 的 origin=3 sync text。state 未知、生命周期、语音、员工/人工消息及 parked clarification 仍 received；不同完整 route 可同 SID 排队，但不追加原 Runner。2 秒前置合并、精确人工期/clarification、语音与发送仍是完整迁移前门，不默认启用。
+- 同事务锁序为候选 Runner root → 原 claim → 当前配置/来源 receipt → input；网络状态读在 SQL 事务外，实际响应时间及当前配置版本在最终派发 cursor 复核。输入队列上限 128，满时原 receipt 保留而不接新输入。仅完成 cutoff/确实 iteration limit 可以转接未进入原 messages 的后续 input；未知或前置失败保事实等待核对。
+- canonical 迁移 `2026-10-03 13:00:00` 与初始化脚本使用相同原子块，核字段类型/NULL/default、独占序列、有效唯一索引与 validated CHECK。来源 receipt 查询不回填旧未知顺序。
+
+
+### wecom_kf_input_preparations — 已接受 AI 语音的私有准备事实
+
+仅原生客服 AI 客户语音使用。`input_ref + operation_version` 唯一，稳定 `preparation_ref` 与物理调用 ID 来源于该引用；不使用音频正文摘要作为接单键。系统表无 SQL 外键；原 root/claim 与来源绑定由同事务仓储校验。
+
+| 字段 | 类型 | 约束/用途 |
+|---|---|---|
+| preparation_ref | TEXT | 主键，稳定准备引用 |
+| input_ref / operation_version | TEXT / INTEGER | 唯一组合，版本正整数 |
+| tenant_id / intent_digest / provenance / media_id | TEXT / TEXT / JSONB / TEXT | 原租户、不可变输入与完整来源证明；不含凭据 |
+| phase | TEXT | media_ready / started / known / unknown；started/unknown 不授权再次 POST |
+| artifact | JSONB，允许 NULL | 租户有界音频 artifact、格式、大小和 sha256；无 base64 |
+| transcript / success / result_kind | TEXT / BOOLEAN / TEXT | ≤32KiB 可信文字；recognition/preflight/provider；未知不伪装失败文字 |
+| fee_owner_runner_id / authorized_attempt / authorized_worker_id | TEXT / INTEGER / TEXT，允许 NULL | 付费开始后固定原 owner/Attempt；输入转交不迁移费用 |
+| physical_call_id / receipt_id / provider_status | TEXT / TEXT / BIGINT，允许 NULL | 原物理调用/唯一 Usage receipt 与明确 provider 状态 |
+| error_code | TEXT，允许 NULL | 有限稳定未知代码，不保存异常正文 |
+| io_config_version / dispatch_observed_at | TIMESTAMPTZ，允许 NULL | 原实际 POST 的配置 fence 版本与状态观察时点 |
+| created_at / started_at / observed_at | TIMESTAMPTZ | 创建默认 DBclock；物理开始/已知结果时间 |
+
+付费 POST 前准备 `started` 与原 `asr/main/aliyun/aliyun-nls-asr` receipt 同 cursor 提交；价格在事务外冻结。可信文字和 Usage 观察同事务，晚到结果仍归原授权 Attempt；取消或失租不取消已派发的结果保存。识别文字只以局部投影提供模型/历史/record，不改变提交 intent/hash。未开始、已知失败的准备可为零收费；未知保留原 claim 与待核对费用。原页面可信 recognition 可零 ASR，旧 inbox 摘要不回填。媒体下载/固定 SILK 子进程均实际有界排水。人工/员工语音、发送和预合并尚未迁移，默认开关保持关闭。
+
+### 微信客服 Context13：固定分类与普通文本语境
+
+`wecom_kf_receipt_classifications` 以 `(account_id, namespace, message_id)` 唯一保存原 inbox digest、完整 route scope、首次可靠 SDK 状态及原观察时间/配置版本；类别为 `ai/human/ended/employee/unknown/event`。客户暂时网络/格式失败不插入分类，允许后续首次可靠观察；员工 `origin=5` 可凭原可信 receipt/full route 固定 `employee`，SDK 不是员工身份前置。没有真实 SDK 观察时 `observed_state/observed_at/io_config_version` 三字段均为 NULL；首次回合的可选可靠观察可补一次，失败仍落员工历史，已固定重试不重新取状态。已有可靠非 AI 分类不因当前状态变为 1 而改属。`classification_resolved` 只表示可信事件的分类影响已解释，`business_pending` 与欢迎、注册、发送效果分离。已有 `accepted_input_ref` 的 Text/Voice 不伪补接待时期、不改原 intent/provenance/digest。
+
+`wecom_kf_context_consumptions` 同 receipt 保存稳定公共 history ID、精确 recall target 及 disposition。首次可靠分类先独立短事务固定；普通客户/员工文本的 history、context 消费、recap 意图在其后一个事务中原子提交，投影失败不撤销已固定分类；客户保留 `customer_human/customer_ended`，员工保留 `source=servicer` 与 `[人工客服] `，NULL user/原 SID 不改。撤回只匹配原完整 tenant/config/corp/account/actor/chat/profile/user/route 和 sync msgid；已有稳定历史逐字段核合法客户/员工展示 source，实际 UPDATE 命中才确认历史撤回，真正尚无历史仍保留先到撤回事实。未到目标为 `pending_target`；已接受目标仅保撤回证明，不删除 Runtime 消息或模型/工具/费用事实。`pending_history` 表示更早接受输入的当前公开执行状态尚不能证明结束，不从历史行或私有 Runner 表推断。
+
+本域 `source_terminal` 是独立完成观察，不是 context 消费或 SDK 分类。唯一 Runner 服务受信 `GET /v1/source-inputs` 要求 source/account_id/namespace/message_id 恰各一次、无多余 query；在短一致只读事务中返回原 input/current Runner 的小公开状态；首次写回需原 observed_at 距 DBclock 0..10 秒、full route/inbox accepted link/digest 一致。仅不可逆 terminal 且原 input applied/cancelled 的绑定可缓存到 `accepted_input_ref/completion_observation`；不要求财务 settled，不当投递成功。每次只查询最多 4 个未缓存较早接受事实；未查完、状态非终态、查询失败或绑定变化均保留待核对。
+
+`wecom_kf_context_task_intents` 保存原完整 route/receipt/history 与 operation_version=1，原任务名仅 `lead_refresh/external_push_human`，状态仅 `pending_adapter`；客户固定 3/4 或员工可靠 3/4 才生成。未调用旧 void adapter/Redis 队列，不代表 recap 效果完成。
+
+三表采用 TIMESTAMPTZ 事实时间、原配置版本 TIMESTAMP、无 SQL 外键；canonical 双 DDL 原子创建与严格 catalog 校验，主/唯一键分别按各 relation 的键序映射列名比较，不跨表比较原始 attnum。锁序为 cfg→route/session→inbox→本域事实，网络/名字查找/服务观察均锁外；本片不增加员工姓名 SDK 读口。由既有 admission worker 有界组合，KF 新接单开关关闭时仍可排水固定 context，CLI `--max-inputs` 只计 AI 服务接受，不计历史/待执行 recap。人工 Voice、媒体、recap 实际执行、欢迎/归因、2 秒合并及投递仍属后续片。
+
+
+### wecom_kf_context_voice_preparations — 人工/员工语音的独立识别 owner
+
+每个完整 KF receipt/route/payload digest/operation_version=1 一个稳定 `operation_ref`，与 AI `wecom_kf_input_preparations`、Runner Attempt 和费用 receipts 分开。客户须已固定 human/ended，员工须可信 origin5/employee；`accepted_input_ref` 非空仍由原 AI 链处理。当前配置/既存 NULL-user SID 与完整来源复核用于首次媒体与识别，不新增 AI 执行权限、余额或价格必填拦截。
+
+`phase` 为 media_ready/started/unknown/known；`authorized_epoch` 只在原首次 start 增加一次，started/unknown 不再取得第二次 POST 许可。固定 artifact/hash、冻结 price_snapshot、原 config_version、started/lease 时点及稳定 `record_id` 属于原物理调用，迟到返回按该原授权事实保存，不重新检查新派发权限。`cost=NULL/finance_pending=true` 表示未知费用；unknown 不创建 completed/credit0 的 chat_record。只有 known ASR 返回才同事务存结果、原独立 `wecom_kf_human_asr` record（aliyun/aliyun-nls-asr）与实际差额 debit；成功 calls1，明确失败 calls0。缺价/零价按原 billing 产生已知0费用，区别于 unknown。Recognition/确定零POST本地失败不产生付费 record。
+
+`history_projection` pending/projected/cleared/recalled 跟原稳定 channel_messages ID 独立。`wecom_kf_context_consumptions.disposition=pending_asr` 的可见 `[语音消息]`/`[人工客服] [语音消息]` 带完整 operation/version、pending_asr/asr_phase，不是消费 done；unknown 不授 recap意图。每次历史投影前仍用原 SourceGET ordering 与最终短事务候选复核；排序等待不丢已知费用或重新 ASR。可信 known 可 CAS 原精确 pending 内容/metadata/attachments，明确 fullscope 冲突拒绝；合法 clear 或 recalled 不复造旧历史、不清除撤回标记、不产生新 effect。known 正常历史消费/原真实3或4资格的 recap `pending_adapter` 意图同事务，未执行 recap。
+
+一条唯一键 `(account_id,namespace,message_id,operation_version)` 与独立唯一 record_id 防重复 owner；无 SQL FK、无自动重发/任务平台、无第四方回调凭证存储。当前只语音准备、历史与独立计费，不包含任意媒体下载链接、欢迎/注册/发送或通用 effect 调度。
+
+### KF 完整收发事实（2026-10-03 17:00:00）
+
+原双 DDL 同一原子 DO 增加以下 system 表，无 SQL FK；应用在原来源与会话锁下核完整租户/配置/企业/账号/actor/profile/SID。
+
+| 表 | 有限事实 | 唯一键 |
+|---|---|---|
+| wecom_kf_input_batches | 固定两秒接收窗与 sealed/accepted 清单 | batch_ref |
+| wecom_kf_input_batch_members | 原 receipt、固定成员顺序、不可改 digest | batch_ref/ordinal；account/namespace/message |
+| agent_runner_input_batch_members | 单 Runner 模型消息与成员原 intent 的关联 | input_ref；batch_ref/ordinal |
+| wecom_kf_deliveries | 捕获公开 presentation、原路由、收尾封口 | delivery_id；input_ref/runner/presentation_digest |
+| wecom_kf_wire_operations | 客户物理 POST 的 started/ACK/reject/unknown/零派发事实 | operation_ref；delivery_id/ordinal |
+| wecom_kf_business_facts | 原注册、first-touch 与后台薄交接事实 | business_ref；account/namespace/message/kind |
+
+原 context_task_intents 扩展为 pending_adapter/claimed/started/dispatch_returned/unknown/suppressed；claimed 可按本域短 lease 恢复，started/unknown 不重新调用整项后台业务。dispatch_returned 仅为原 void adapter 返回，不证明留资或外推完成。历史人工任务保原 NULL user 财务角色。SDK 真平台响应与合成错误严格分开，未知客户写不重 POST；收尾由服务核原公开终态和领域已封完整表示证明。重新引用旧 ACK 不再次消耗实际五条预算。
+
+2026-10-04 00:03:10：delivery 的 `closed_outcome` 增加 `closed_unknown`。原 wire 操作仍为 unknown、无平台 ACK/成功结果；仅本 owner 的实际 HTTP/adapter 已强排水，持久 `proof.transport_drained`、原 delivery/epoch 同一，且服务执行终态、无未完成派发时，由原服务事务关闭本轮并释放会话 claim，让下一客户消息继续。覆盖同 Runner 所有旧 presentation 的未知操作；无真实排水证明或仍 started 的操作继续保留待核对，租约超时不证明传输结束。关闭未知不授成功 recap，不重发旧正文/资产，不改原费用、输入或历史；迟到真实结果仍可补原操作事实。双 DDL 只允许原精确 CHECK 形状向新枚举升级，并支持完整 updater 回放。
+
+客户回复真实子澄清只核原当前唯一 clarification leaf、可信来源与控制 revision，不要求先持有问题发送 ACK；展示从当前嵌套 child_wait 取原问题，不从累计旧问题列表选择。
+
+AgentRunner 来源输入的 `source_control_id` 为服务内部澄清回复控制的可空唯一锚关联。批的所有成员保留原意图，只有锚关联控制；派发、历史和幂等按原批关系与稳定输入引用确认，不接受客户端 proof。

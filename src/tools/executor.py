@@ -15,6 +15,17 @@ from .context import ToolExecutionContext, tool_execution_scope
 from src.core.text_sanitizer import sanitize_value
 
 
+def normalize_provided_parameters(tool, parameters):
+    """Coerce supplied fields exactly as execution does, without new defaults."""
+    if tool.InputModel is None:
+        return dict(parameters)
+    validated = tool.InputModel(**parameters)
+    coerced = dict(parameters)
+    for key in validated.model_fields_set:
+        coerced[key] = getattr(validated, key)
+    return coerced
+
+
 class ToolExecutor:
     """
     工具执行器
@@ -110,11 +121,7 @@ class ToolExecutor:
         # 内部注入参数（_trusted_tenant_id/_progress_queue 等）原样保留。
         if tool.InputModel is not None:
             try:
-                validated = tool.InputModel(**parameters)
-                coerced = dict(parameters)
-                for k in validated.model_fields_set:
-                    coerced[k] = getattr(validated, k)
-                parameters = coerced
+                parameters = normalize_provided_parameters(tool, parameters)
             except Exception:
                 # validate_parameters 已保证 InputModel 可构造，此处仅兜底
                 logger.opt(exception=True).warning(f"工具参数类型规范化失败: {tool_name}")
@@ -132,6 +139,9 @@ class ToolExecutor:
             logger.info(f"工具执行成功: {tool_name}")
             return result
         except Exception as e:
+            if (getattr(e, 'authoritative_storage_failure', False)
+                    or getattr(e, 'tool_continuation_required', False)):
+                raise
             # Desktop arguments may contain credentials. Tool exceptions often
             # interpolate their inputs, so never log or return exception text on
             # the explicitly redacted Remote Gateway path.

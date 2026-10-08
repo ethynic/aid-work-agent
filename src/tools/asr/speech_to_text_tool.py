@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from src.config.settings import settings
 from src.tools.base import BaseTool
 from src.utils import sanitize_error_info
+from .call_observer import current_asr_observer, AsrCallUnknown
 
 
 class SpeechToTextInput(BaseModel):
@@ -124,7 +125,7 @@ class SpeechToTextTool(BaseTool):
                 return {
                     "success": False,
                     "error": "读取音频文件失败",
-                    "debug": sanitize_error_info(str(e)),
+                    "debug": type(e).__name__,
                 }
 
             # 文件路径模式：自动检测音频格式（修复调用者未传 format 的问题）
@@ -149,7 +150,7 @@ class SpeechToTextTool(BaseTool):
                 return {
                     "success": False,
                     "error": "base64 解码失败，请提供合法的 base64 音频内容",
-                    "debug": sanitize_error_info(str(e)),
+                    "debug": type(e).__name__,
                 }
 
         if len(audio_bytes) > 10 * 1024 * 1024:  # 10MB 限制
@@ -234,17 +235,25 @@ class SpeechToTextTool(BaseTool):
             timeout = aiohttp.ClientTimeout(total=15)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(full_url) as resp:
-                    resp_text = await resp.text()
+                    if current_asr_observer() is not None:
+                        body = bytearray()
+                        async for chunk in resp.content.iter_chunked(8192):
+                            if len(body) + len(chunk) > 65536:
+                                raise RuntimeError('ASR_TOKEN_RESPONSE_TOO_LARGE')
+                            body.extend(chunk)
+                        resp_text = body.decode('utf-8')
+                    else:
+                        resp_text = await resp.text()
                     if resp.status != 200:
                         raise RuntimeError(
-                            f"GetToken HTTP {resp.status}: {resp_text[:300]}"
+                            f"ASR_TOKEN_HTTP_{resp.status}"
                         )
                     data = json.loads(resp_text)
                     token_info = data.get("Token") or {}
                     token_id = token_info.get("Id")
                     expire_time = int(token_info.get("ExpireTime", 0))
                     if not token_id or not expire_time:
-                        raise RuntimeError(f"GetToken 响应异常: {resp_text[:300]}")
+                        raise RuntimeError("ASR_TOKEN_RESPONSE_INVALID")
 
                     _TOKEN_CACHE["token"] = token_id
                     _TOKEN_CACHE["expire_at"] = expire_time
@@ -271,25 +280,11 @@ class SpeechToTextTool(BaseTool):
 
         官方文档：https://help.aliyun.com/zh/isi/developer-reference/restful-api-2
         """
+        observer = current_asr_observer()
+        if observer is not None:
+            return await self._observed_post(observer, audio_bytes, audio_format, sample_rate,
+                language, access_key_id, access_key_secret, appkey, endpoint)
         try:
-            # ========== 临时调试日志：音频信息 ==========
-            logger.info(
-                "后端日志：ASR 调试信息 audio_size_kb={}, format={}, sample_rate={}, language={}",
-                round(len(audio_bytes) / 1024, 2),
-                audio_format,
-                sample_rate,
-                language,
-            )
-            # 检查 AMR 文件头（AMR 魔术字节：#!AMR\n 或 #!AMR-WB\n）
-            if audio_format == "amr" and len(audio_bytes) >= 6:
-                header = audio_bytes[:12]
-                logger.info(
-                    "后端日志：AMR 文件头 hex={}, decoded={}",
-                    header.hex(),
-                    header.decode("utf-8", errors="replace"),
-                )
-            # ========== 调试日志结束 ==========
-
             # 1) 获取 Token（CreateToken 不需要 AppKey）
             token = await self._get_or_refresh_token(
                 access_key_id, access_key_secret
@@ -311,13 +306,6 @@ class SpeechToTextTool(BaseTool):
             from urllib.parse import urlencode
             full_url = f"{url}?{urlencode(query_params)}"
 
-            # ========== 临时调试日志：请求信息 ==========
-            logger.info(
-                "后端日志：ASR 请求 URL: {}",
-                full_url.replace(token, "***") if token else full_url,
-            )
-            # ========== 调试日志结束 ==========
-
             # 3) 发送请求（X-NLS-Token 鉴权）
             headers = {
                 "X-NLS-Token": token,
@@ -332,13 +320,12 @@ class SpeechToTextTool(BaseTool):
 
                     if resp.status != 200:
                         logger.error(
-                            "后端日志：阿里云 ASR HTTP 异常 status={}, body={}",
-                            resp.status, resp_text[:500],
+                            "后端日志：阿里云 ASR HTTP 异常 status={}", resp.status,
                         )
                         return {
                             "success": False,
                             "error": f"阿里云 ASR 服务异常: HTTP {resp.status}",
-                            "debug": sanitize_error_info(resp_text),
+                            "debug": "ASR_HTTP_ERROR",
                         }
 
                     result_json = json.loads(resp_text)
@@ -347,7 +334,7 @@ class SpeechToTextTool(BaseTool):
                     # 官方成功码：20000000
                     if status_code == 20000000:
                         text = result_json.get("result", "")
-                        logger.info("后端日志：语音转文字成功 text={}", text[:100])
+                        logger.info("后端日志：语音转文字成功")
                         # 补计费：ASR 调用成功后累加到当前 SessionRecordService
                         # （工具内部统一计费，覆盖 agent 主循环与渠道侧所有入口）
                         try:
@@ -366,8 +353,7 @@ class SpeechToTextTool(BaseTool):
                         error_msg = result_json.get("message", "未知错误")
                         task_id = result_json.get("task_id", "")
                         logger.error(
-                            "后端日志：阿里云 ASR 识别失败 status={}, task_id={}, message={}",
-                            status_code, task_id, error_msg,
+                            "后端日志：阿里云 ASR 识别失败 status={}", status_code,
                         )
                         return {
                             "success": False,
@@ -378,19 +364,76 @@ class SpeechToTextTool(BaseTool):
                         }
 
         except aiohttp.ClientError as e:
-            logger.opt(exception=True).error("后端日志：阿里云 ASR 网络错误: {}", e)
+            logger.error("后端日志：阿里云 ASR 网络错误 type={}", type(e).__name__)
             return {
                 "success": False,
                 "error": "阿里云 ASR 网络错误，请稍后重试",
-                "debug": sanitize_error_info(str(e)),
+                "debug": type(e).__name__,
             }
         except Exception as e:
-            logger.opt(exception=True).error("后端日志：阿里云 ASR 未知错误: {}", e)
+            logger.error("后端日志：阿里云 ASR 未知错误 type={}", type(e).__name__)
             return {
                 "success": False,
                 "error": "语音转文字失败",
-                "debug": sanitize_error_info(str(e)),
+                "debug": type(e).__name__,
             }
+
+    async def _observed_post(self, observer, audio_bytes, audio_format, sample_rate,
+                             language, access_key_id, access_key_secret, appkey, endpoint):
+        # Token acquisition is a non-paid preflight. A failed preflight cannot
+        # create a started ASR receipt or grant permission to issue a POST.
+        try:
+            token = await self._get_or_refresh_token(access_key_id, access_key_secret)
+        except Exception as error:
+            logger.warning('ASR token preflight failed type={}', type(error).__name__)
+            return {'success': False, 'error': '语音识别暂不可用'}
+        from urllib.parse import urlencode
+        base = endpoint if endpoint.startswith('http') else 'https://' + endpoint
+        query = {'appkey': appkey, 'format': audio_format, 'sample_rate': str(sample_rate),
+                 'enable_punctuation_prediction': 'true', 'enable_inverse_text_normalization': 'true'}
+        if language:
+            query['language'] = language
+        url = base.rstrip('/') + '/stream/v1/asr?' + urlencode(query)
+        await observer.before_post(audio_format=audio_format,
+            audio_size=len(audio_bytes), sample_rate=sample_rate)
+        # Every error after this boundary may represent a dispatched request.
+        # The application retains this whole task through observer detach/cancel.
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+                async with session.post(url, headers={'X-NLS-Token': token,
+                        'Content-Type': 'application/octet-stream'}, data=audio_bytes) as response:
+                    body = bytearray()
+                    async for chunk in response.content.iter_chunked(8192):
+                        if len(body) + len(chunk) > 65536:
+                            raise AsrCallUnknown('ASR_RESPONSE_TOO_LARGE')
+                        body.extend(chunk)
+                    if response.status != 200:
+                        raise AsrCallUnknown('ASR_HTTP_RESULT_UNKNOWN')
+                    value = json.loads(body)
+                    if not isinstance(value, dict) or (type(value.get('status')) is not int or not -(2**63)<=value['status']<2**63):
+                        raise AsrCallUnknown('ASR_RESPONSE_INVALID')
+                    status = value['status']
+                    success = status == 20000000
+                    text = value.get('result', '') if success else ''
+                    if success and (not isinstance(text, str) or not text.strip()
+                            or len(text.encode()) > 32768 or '\x00' in text):
+                        raise AsrCallUnknown('ASR_TRANSCRIPT_MISSING')
+                    await observer.known(success=success, text=text, status=status)
+                    return {'success': success, 'text': text,
+                            'message' if success else 'error': '语音转文字成功' if success else '语音识别失败'}
+        except BaseException as error:
+            # Observation/SQL failures also preserve started rather than permit
+            # another physical invocation. No raw exception/response is logged.
+            code = str(error) if isinstance(error, AsrCallUnknown) else 'ASR_RESULT_UNKNOWN'
+            try:
+                await observer.unknown(code)
+            except BaseException:
+                if getattr(error, 'authoritative_storage_failure', False):
+                    raise error
+                raise
+            if isinstance(error, asyncio.CancelledError) or getattr(error, 'authoritative_storage_failure', False):
+                raise
+            raise AsrCallUnknown(code) from error
 
 
 def parse_quote(s: str, safe: str = "") -> str:

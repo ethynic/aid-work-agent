@@ -213,3 +213,13 @@ def error_result(command: BrowserCommand, code: str) -> CommandResult:
         run_id=command.run_id, command_id=command.command_id, seq=command.seq,
         status=ResultStatus.ERROR, error_code=code,
     )
+
+
+class InputMessage(BaseModel):
+    type: str
+    action: str | None = None
+    x: float = Field(default=0, ge=0, le=1280, allow_inf_nan=False)
+    y: float = Field(default=0, ge=0, le=720, allow_inf_nan=False)
+    delta_x: float = Field(default=0, ge=-10000, le=10000, allow_inf_nan=False)
+    delta_y: float = Field(default=0, ge=-10000, le=10000, allow_inf_nan=False)
+    key: str | None = Field(default=None, max_length=128)

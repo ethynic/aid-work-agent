@@ -102,6 +102,14 @@ const WECOM_WRITE_TOOLS: ReadonlySet<string> = new Set([
   'wecom_send_file',
 ])
 
+// M2 skill-runner：通用执行器 Provider（进程内 handler，非 MCP stdio）。
+// Provider 规范「禁止 command/raw_argv 任意执行参数」由设备侧命令门禁 +
+// 云端审批 entries/exec_hash 对账补偿（计划 §3.6），manifest 层只声明工具面。
+// 写集合：skill_script_run 统一归写（通用执行器无法逐脚本区分读写，保守归写——
+// 含 status 这类只读探测；锁屏前置 DESKTOP_NOT_INTERACTIVE、崩溃 EXECUTION_UNKNOWN）
+const SKILL_RUNNER_TOOLS = ['skill_script_run'] as const
+const SKILL_RUNNER_WRITE_TOOLS: ReadonlySet<string> = new Set(['skill_script_run'])
+
 export const TRUSTED_MANIFESTS: Readonly<Record<string, ProviderManifest>> = {
   'boss-recruiting': {
     provider_key: 'boss-recruiting',
@@ -132,6 +140,19 @@ export const TRUSTED_MANIFESTS: Readonly<Record<string, ProviderManifest>> = {
     protocol_version: 1,
     shared_lock_capable: false,
     write_tools: WECOM_WRITE_TOOLS,
+  },
+  // M2：skill-runner 镜像 manifest（云端 catalog 同步条目 ai.aidwork.skill-runner）。
+  // 与三 CLI 同互斥域：shared_lock_capable=false 即独占桌面锁，与 boss/weixin/wecom
+  // 互斥排队不并发（RPA 脚本操作微信 PC 端与 weixin-cli 同进程，串行是安全前提）。
+  // v1 形态：v2 invocation 在能力门禁处拒绝（PROTOCOL_NOT_SUPPORTED）。
+  'skill-runner': {
+    provider_key: 'skill-runner',
+    provider_id: 'ai.aidwork.skill-runner',
+    tools: SKILL_RUNNER_TOOLS,
+    execution_target: 'local_required',
+    protocol_version: 1,
+    shared_lock_capable: false,
+    write_tools: SKILL_RUNNER_WRITE_TOOLS,
   },
 }
 

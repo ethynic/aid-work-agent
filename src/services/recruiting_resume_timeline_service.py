@@ -160,6 +160,32 @@ def list_comm_logs(tenant_id: str, resume_id: int) -> List[Dict[str, Any]]:
         return [_row_to_timeline_item(row) for row in cursor.fetchall()]
 
 
+def create_comm_log_in_tx(cursor, tenant_id: str, resume_id: int, direction: str,
+                          channel: str, content: str, user_id: Optional[str] = None,
+                          occurred_at: Optional[str] = None) -> Dict[str, Any]:
+    """Append via the caller's cursor; the owning phase controls idempotency."""
+    _validate_direction(direction)
+    _validate_channel(channel)
+    if not (content or '').strip():
+        raise ValueError('沟通内容不能为空')
+    occurred_dt = _parse_occurred_at(occurred_at) if occurred_at and occurred_at.strip() else None
+    cursor.execute('SELECT id FROM bs_recruiting_operator_resumes WHERE id=%s AND tenant_id=%s',
+                   (resume_id,tenant_id))
+    if not cursor.fetchone():
+        raise ValueError('RESUME_OWNER_MISMATCH')
+    cursor.execute(
+        """
+        INSERT INTO bs_recruiting_operator_resume_comm_logs
+            (tenant_id, resume_id, direction, channel, content, user_id, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s, COALESCE(%s, NOW()))
+        RETURNING *
+        """,
+        (tenant_id, resume_id, direction, channel, content.strip(), user_id, occurred_dt),
+    )
+    row = cursor.fetchone()
+    return _row_to_timeline_item(row)
+
+
 def create_comm_log(
     tenant_id: str,
     resume_id: int,
@@ -174,31 +200,16 @@ def create_comm_log(
     occurred_at：沟通发生时间（ISO 字符串，可选）——回写历史聊天时传原始时间戳，
     缺省/None/空串 = 当前时间（页面即时补录场景）；格式非法抛 ValueError。
     """
-    _validate_direction(direction)
-    _validate_channel(channel)
-    if not (content or "").strip():
-        raise ValueError("沟通内容不能为空")
-    occurred_dt = _parse_occurred_at(occurred_at) if occurred_at and occurred_at.strip() else None
-
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO bs_recruiting_operator_resume_comm_logs
-                (tenant_id, resume_id, direction, channel, content, user_id, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, COALESCE(%s, NOW()))
-            RETURNING *
-            """,
-            (tenant_id, resume_id, direction, channel, content.strip(), user_id, occurred_dt),
-        )
-        row = cursor.fetchone()
+        record = create_comm_log_in_tx(conn.cursor(),tenant_id,resume_id,direction,channel,content,
+                                       user_id,occurred_at)
         conn.commit()
 
     logger.info(
         f"沟通记录补录: tenant={tenant_id}, resume={resume_id}, "
         f"direction={direction}, channel={channel}"
     )
-    return _row_to_timeline_item(row)
+    return record
 
 
 def delete_comm_log(tenant_id: str, log_id: int) -> bool:

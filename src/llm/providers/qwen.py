@@ -374,6 +374,7 @@ class QwenProvider(BaseLLMProvider):
                 "cache_creation_tokens": cache_creation_tokens,
             },
             "request_id": response.get("id", ""),
+            "_provider_usage_reported": isinstance(response.get("usage"), dict) and "prompt_tokens" in response["usage"] and "completion_tokens" in response["usage"],
         }
 
         # 处理工具调用

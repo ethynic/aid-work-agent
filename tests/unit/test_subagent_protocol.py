@@ -161,29 +161,26 @@ class TestSubagentExecutorClarification:
 class TestMasterAgentPendingClarification:
     """测试主 Agent 的 pending clarification 管理"""
 
-    @patch("src.core.agent.redis_client")
+    @patch("src.services.agent_runner.runtime.clarification.redis_client")
     def test_pending_clarification_is_saved_loaded_and_cleared_in_redis(self, mock_redis):
-        from src.core.agent import Agent
-
-        agent = Agent.__new__(Agent)
-        session_id = "session_001"
-        key = "pending_clarification:session_001"
+        from src.core.agent_engine.contracts import Identity
+        from src.services.agent_runner.runtime.clarification import ClarificationStore
+        store = ClarificationStore()
+        identity = Identity("tenant-a", "user-a", "session_001")
+        key = "pending_clarification:scoped-session"
         data = {"execution_id": "exec_001", "question": "请提供邮箱地址"}
         mock_redis.make_key.return_value = key
-        mock_redis.hgetall.return_value = data
-
-        agent._save_pending_clarification(session_id, data)
-        assert mock_redis.hset.call_args_list == [
-            call(key, "execution_id", "exec_001"),
-            call(key, "question", "请提供邮箱地址"),
-        ]
+        mock_redis.hget.return_value = data
+        store.save(identity, data)
+        mock_redis.hset.assert_called_once_with(key, "data", data)
         mock_redis.expire.assert_called_once_with(key, 3600)
-
-        assert agent._get_pending_clarification(session_id) == data
-        mock_redis.hgetall.assert_called_once_with(key)
-
-        agent._clear_pending_clarification(session_id)
+        assert store.read(identity) == data
+        mock_redis.hget.assert_called_once_with(key, "data")
+        store.clear(identity)
         mock_redis.delete.assert_called_once_with(key)
+        import json
+        scope = json.loads(mock_redis.make_key.call_args.args[1])
+        assert scope == ["tenant-a", "web", "session_001", "user-a"]
 
 
 class TestClarificationFlowIntegration:

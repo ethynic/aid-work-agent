@@ -1,5 +1,8 @@
 from datetime import datetime, timedelta, timezone
 import uuid
+from pathlib import Path
+import shutil
+import tempfile
 
 import pytest
 
@@ -14,9 +17,22 @@ def _fields(run_id, seq, command_id):
     return dict(run_id=run_id, seq=seq, command_id=command_id, deadline_at=datetime.now(timezone.utc) + timedelta(seconds=15))
 
 
+@pytest.fixture
+def worker_temporary_directory(monkeypatch):
+    directory = Path(tempfile.mkdtemp(prefix='browser-protocol-fixture-', dir='/tmp'))
+    monkeypatch.setenv('TMPDIR', str(directory))
+    monkeypatch.setattr(tempfile, 'tempdir', str(directory))
+    try:
+        yield directory
+    finally:
+        shutil.rmtree(directory)
+        assert not directory.exists()
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("factory", [FakeRemoteExecutor, LocalPlaywrightExecutor], ids=["fake_remote", "local_worker"])
-async def test_executor_contract_start_command_idempotence_seq_and_close(factory):
+@pytest.mark.parametrize("factory", [FakeRemoteExecutor,
+    pytest.param(LocalPlaywrightExecutor, marks=pytest.mark.real_browser)], ids=["fake_remote", "local_worker"])
+async def test_executor_contract_start_command_idempotence_seq_and_close(factory, worker_temporary_directory):
     executor = factory()
     run = BrowserRunSpec(run_id="br_" + uuid.uuid4().hex, tenant_id="tenant-a", user_id="user-a", session_id="same-session")
     try:

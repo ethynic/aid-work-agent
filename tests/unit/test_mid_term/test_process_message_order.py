@@ -1,9 +1,9 @@
-"""Agent._run_compression_phase 执行顺序测试（v3.2.1 P1-3 重写）
+"""CompressionCoordinator._run_compression_phase 执行顺序测试（v3.2.1 P1-3 重写）
 
 v3.2 原版本是「重构型测试」：把 v3.2 顺序代码硬编码在测试里，不 import agent.py，
 有人改坏 agent.py 这测试仍会全绿（零回归保护）。
 
-v3.2.1 重写：调真实 `Agent._run_compression_phase`（从 _process_message_impl 提取的
+v3.2.1 重写：调真实 `CompressionCoordinator._run_compression_phase`（从 _process_message_impl 提取的
 独立方法），通过 spy compression_service 各方法验证调用顺序与次数，
 真正保护 v3.2 执行顺序不被破坏。
 
@@ -34,16 +34,9 @@ class _StubMemory:
 
 
 def _make_minimal_agent():
-    """构造一个最小可用的 Agent 实例（绕过 __init__ 的复杂依赖）。
-
-    _run_compression_phase 只用到 self._detect_source_type()（间接）。
-    我们直接导入 Agent 类，给实例赋上必要属性即可。
-    """
-    from src.core.agent import Agent
-
-    agent = Agent.__new__(Agent)  # 跳过 __init__
-    agent.memory = _StubMemory()  # type: ignore[assignment]
-    return agent
+    """Call the actual compression owner rather than the legacy facade."""
+    from src.services.agent_runner.runtime.compression import CompressionCoordinator
+    return CompressionCoordinator("chat")
 
 
 def _patch_compression_service(monkeypatch, *, should_compress, check_exc=None, compress_exc=None):
@@ -99,7 +92,7 @@ def _patch_list_by_session(monkeypatch) -> dict:
 async def test_v32_below_threshold_skips_compress_now(monkeypatch):
     """v3.2 顺序断言 1：未达阈值 → compress_now 不被调用。"""
     agent = _make_minimal_agent()
-    agent._detect_source_type = lambda: "chat"  # type: ignore[assignment]
+    agent.source_type = "chat"  # type: ignore[assignment]
     call_trace = _patch_compression_service(monkeypatch, should_compress=False)
     list_calls = _patch_list_by_session(monkeypatch)
 
@@ -117,7 +110,7 @@ async def test_v32_below_threshold_skips_compress_now(monkeypatch):
 async def test_v32_at_threshold_calls_compress_now_with_reason(monkeypatch):
     """v3.2 顺序断言 2：达阈值 → check_threshold → compress_now，且 reason 透传。"""
     agent = _make_minimal_agent()
-    agent._detect_source_type = lambda: "chat"  # type: ignore[assignment]
+    agent.source_type = "chat"  # type: ignore[assignment]
     call_trace = _patch_compression_service(monkeypatch, should_compress=True)
 
     result = await agent._run_compression_phase("sess")
@@ -138,7 +131,7 @@ async def test_v32_check_threshold_exception_isolated(monkeypatch):
     v3.2.1 P1-4：日志必须含 action=skipped_due_to_error。
     """
     agent = _make_minimal_agent()
-    agent._detect_source_type = lambda: "chat"  # type: ignore[assignment]
+    agent.source_type = "chat"  # type: ignore[assignment]
     _patch_compression_service(
         monkeypatch,
         should_compress=True,
@@ -169,7 +162,7 @@ async def test_v32_check_threshold_exception_isolated(monkeypatch):
 async def test_v32_compress_now_exception_isolated(monkeypatch):
     """v3.2 顺序断言 4：compress_now 抛异常 → 不向上抛，返回 None。"""
     agent = _make_minimal_agent()
-    agent._detect_source_type = lambda: "chat"  # type: ignore[assignment]
+    agent.source_type = "chat"  # type: ignore[assignment]
     _patch_compression_service(
         monkeypatch,
         should_compress=True,
@@ -184,7 +177,7 @@ async def test_v32_compress_now_exception_isolated(monkeypatch):
 async def test_v32_disabled_mid_term_skips_compression(monkeypatch):
     """v3.2 顺序断言 5：mid_term.enabled=False 时直接返回 None，不调用任何 service。"""
     agent = _make_minimal_agent()
-    agent._detect_source_type = lambda: "chat"  # type: ignore[assignment]
+    agent.source_type = "chat"  # type: ignore[assignment]
 
     from src.config.settings import settings
     monkeypatch.setattr(settings.memory.mid_term, "enabled", False)
@@ -205,7 +198,7 @@ async def test_v32_run_compression_phase_does_not_load_messages(monkeypatch):
     主流程的 memory 重建在 _run_compression_phase 之外。
     """
     agent = _make_minimal_agent()
-    agent._detect_source_type = lambda: "chat"  # type: ignore[assignment]
+    agent.source_type = "chat"  # type: ignore[assignment]
     _patch_compression_service(monkeypatch, should_compress=True)
     list_calls = _patch_list_by_session(monkeypatch)
 

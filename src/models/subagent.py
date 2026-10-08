@@ -19,6 +19,8 @@ class SubagentTaskStatus(str, Enum):
     FAILED = "failed"
     CLARIFYING = "clarifying"  # 等待澄清
     CANCELLED = "cancelled"
+    WAITING = "waiting"
+    PAUSED = "paused"
 
 
 class SubagentConfig(BaseModel):

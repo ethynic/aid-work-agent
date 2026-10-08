@@ -101,6 +101,7 @@ async def pick_dismiss_text_with_llm(
     candidates: List[Dict[str, Any]],
     icon_candidates: Optional[List[Dict[str, Any]]] = None,
     viewport: Optional[Dict[str, int]] = None,
+    model_call=None,
 ) -> Optional[str]:
     """LLM 从候选（文本节点 + icon 关闭控件）挑关闭控件（chat_no_thinking 关思考，token 记账）。
 
@@ -123,8 +124,12 @@ async def pick_dismiss_text_with_llm(
     last_error = "未知"
     for attempt in (1, 2):
         try:
-            response = await llm_gateway.chat_no_thinking(messages=messages, temperature=0, max_tokens=300)
+            async def invoke():
+                return await llm_gateway.chat_no_thinking(messages=messages, temperature=0, max_tokens=300)
+            response = await model_call(attempt-1,invoke) if model_call is not None else await invoke()
         except Exception as e:  # noqa: BLE001  LLM 异常不外抛，自愈放弃返回 None
+            if getattr(e,'authoritative_storage_failure',False) or getattr(e,'tool_continuation_required',False):
+                raise
             last_error = f"{type(e).__name__}: {e}"
             logger.warning(f"弹层自愈 LLM 调用失败（第 {attempt} 次）: {last_error}")
             continue

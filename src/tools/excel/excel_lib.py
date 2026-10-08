@@ -187,14 +187,12 @@ class ExcelFileHandler:
         路径: storage/tenants/{tenant_id}/conversation/
         无租户时: storage/tenants/_anonymous/conversation/
         """
+        from src.core.storage import get_current_conversation_dir
+        from src.tools.context import current_tool_execution_context
+        if current_tool_execution_context() is not None:
+            return get_current_conversation_dir()
         try:
-            from src.core.storage import ensure_tenant_storage_dir
-            from src.saas.context import get_current_tenant_id, get_current_user_id
-            tenant_id = get_current_tenant_id()
-            # user_id 不进路径，仅作元数据
-            _ = get_current_user_id()
-            tid = tenant_id or "_anonymous"
-            return Path(ensure_tenant_storage_dir(tid, "conversation"))
+            return get_current_conversation_dir()
         except Exception as e:
             logger.warning(f"[ExcelFileHandler] 获取会话目录失败，使用临时目录: {e}")
             import tempfile

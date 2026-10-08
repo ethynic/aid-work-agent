@@ -1,9 +1,10 @@
 """compress_now 经济性闸门 + CompressionResult 真实用量透传测试（2026-09-30）
 
 覆盖：
-- 闸门命中：COMPRESS 区 < 4 万 token 且上下文未接近模型上限 → 跳过 LLM 走
+- 闸门命中：COMPRESS 区 < 4 万 token 且上下文未接近有效阈值 → 跳过 LLM 走
   truncate 降级（fallback_used=True，不调 LLM，llm_* 全 0）
 - 接近模型上限（>= 80%）时闸门不生效，正常调 LLM
+- 绝对上限封顶触发（context≈有效阈值但 << 0.8×model_limit）时闸门不生效
 - COMPRESS 区足够大时闸门不生效
 - 真实 usage 透传 CompressionResult 的 llm_prompt/completion/cached_tokens
 """
@@ -80,6 +81,27 @@ async def test_gate_bypassed_when_near_model_limit(service, mock_llm_for_summary
 
     result = await service.compress_now(
         "sess", "chat", _make_meta(context_token_count=900_000)
+    )
+    assert result is not None
+    assert result.fallback_used is False
+    assert mock_llm_for_summary.chat_lite.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_gate_bypassed_when_absolute_cap_triggered(service, mock_llm_for_summary):
+    """绝对上限封顶触发时闸门不得降级为硬截断（2026-10-04 联动）。
+
+    context=60k 达有效阈值（min(358.4k, 60000)=60k），但远未接近
+    0.8×model_limit=409.6k；near_limit 已改为按 0.8×有效阈值=48k 判断，
+    60k >= 48k → 走 LLM 摘要。
+    mutation: 若 near_limit 仍按 0.8×model_limit 判断，本测试失败
+    （压缩被经济性闸门降级为 truncate，摘要质量坍塌）。
+    """
+    _patch_load(service, _make_msgs())
+    service._model_limit_cache = 512_000
+
+    result = await service.compress_now(
+        "sess", "chat", _make_meta(context_token_count=60_000)
     )
     assert result is not None
     assert result.fallback_used is False

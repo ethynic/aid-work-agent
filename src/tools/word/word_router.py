@@ -138,8 +138,8 @@ class WordRouter:
     def _get_gateway(self):
         """延迟初始化 LLM Gateway，避免模块导入时的依赖问题"""
         if self._gateway is None:
-            from src.llm.gateway import LLMGateway
-            self._gateway = LLMGateway()
+            from src.llm.gateway import llm_gateway
+            self._gateway = llm_gateway
         # 优先用执行上下文中的 agent gateway（含子智能体 model_code 覆盖，与计费模型同源）
         return resolve_llm_gateway(self._gateway)
 

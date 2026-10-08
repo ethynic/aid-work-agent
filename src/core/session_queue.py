@@ -849,7 +849,7 @@ class SessionMessageQueue:
                     # processor 成功，立即记录正常返回值
                     success_result = EnqueueResult(
                         status="success",
-                        response_text=response or "",
+                        response_text=response if response is not None else "",
                         merged_input=final_input,
                         was_merged=was_merged,
                         merged_attachments_meta=final_meta,
@@ -892,7 +892,7 @@ class SessionMessageQueue:
                     (text, merged_input, merged_meta, from_msgids, segments,
                      _agent_attachments) = reprocessed
                     current = EnqueueResult(
-                        status="success", response_text=text or "",
+                        status="success", response_text=text if text is not None else "",
                         merged_input=merged_input, was_merged=True,
                         merged_attachments_meta=merged_meta,
                         merged_from_msgids=from_msgids,
@@ -953,7 +953,7 @@ class SessionMessageQueue:
                                 merged_attachments_meta=pending_meta,
                             )
                         current = EnqueueResult(
-                            status="success", response_text=pending_response or "",
+                            status="success", response_text=pending_response if pending_response is not None else "",
                             merged_input=pending_input, was_merged=False,
                             merged_attachments_meta=pending_meta,
                             merged_from_msgids=[

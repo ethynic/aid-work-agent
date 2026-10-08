@@ -166,6 +166,7 @@ memory:
     enabled: true
     # 触发条件（双阈值，任一满足即触发）
     token_threshold_ratio: 0.7       # token 主阈值：占模型上下文上限的比例
+    token_threshold_absolute: 256000  # token 阈值绝对上限：有效阈值=min(比例阈值, 此值)；实际模型窗口 1M（登记表保守取 512K，纯比例 358K），用户决策按 256K 封顶；0=禁用
     message_count_threshold: 200     # 消息数兜底阈值（含工具消息）；缓存=0 时靠它兜底极端长会话
     # 分段保留
     header_keep: 0                   # 头部保留消息数（0=开场消息一并压缩，避免摘要与开场原文的时序倒挂）
@@ -225,9 +226,29 @@ admin:
 skills:
   # 多目录发现（优先级从低到高，高优先级目录覆盖同名 skill）
   # AgentSkills 标准支持多级发现
+  # 注意：directories 键暂未消费，插件目录链由下方 plugins 定义（M1，勿双源配置）
   directories:
     - src/skills/
     # - storage/skills/enterprise/  # 企业级 skill（取消注释启用）
+
+  # 外部 Skill 插件（M1 知识层）：默认关闭；开启后插件 skill 需经
+  # scripts/approve_skill_plugin.py 审批（内容 hash 锁定）并进入 allowed 白名单
+  # 才对 Agent 可见；M1 只读不可执行（skill_execute 对插件来源全量拦截）。
+  # 审批清单是平台级清单，无租户维度（一次审批 + 进白名单 = 所有租户可见）。
+  plugins:
+    enabled: false                        # 总开关，默认关
+    repo_dir: "skills"                    # 仓库根第一方插件位（compose 已挂载 /app/skills）
+    storage_subdir: "skills/plugins"      # 运维动态安装位（相对 storage 根）
+    approvals_subpath: "skills/plugin-approvals.json"  # 审批清单（相对 storage 根）
+    # 设备执行链路（M2 执行路由，docs/plans/plan-external-skill-plugin-m2.md）：
+    # 默认关——放行需「已审批插件 + metadata.execution=device + 审批含 entries/exec_hash」
+    # 全满足；关闭时该类技能返回 DEVICE_EXECUTION_DISABLED 拦截（不建 invocation）。
+    device_execution:
+      enabled: false                      # M2 设备执行开关，默认关
+      timeout_seconds: 900                # 单次执行超时（云端轮询 + payload 下发值，设备侧另截顶 1800s）
+      max_args: 16                        # 命令参数数量上限（双端强制）
+      max_arg_chars: 500                  # 单个参数字符上限（双端强制）
+      max_stdout_chars: 200000            # 工具结果 stdout 截断上限（尾部保留）
 
   # 安全配置
   security:
@@ -344,6 +365,7 @@ boss_tool_billing:
     boss_filter: 0.5           # 设置筛选
     boss_open_detail: 0.0      # 找人开简历详情（页面状态操作，与 goto/open_chat 同类免费）
     boss_close_detail: 0.0     # 关闭简历详情（清理步，无业务副作用）
+    skill_script_run: 0        # 插件 skill 设备脚本执行（M2，台账科目=tool_name；默认免费，按 skill 细分/差异化定价属 M4）
     # 以下工具默认免费（未列出走 default_credit_price）：
     # boss_goto / boss_clear_filter / boss_filter_options / boss_list_jobs /
     # boss_read_chat / boss_open_chat / boss_jobs_list / boss_interview_notify / boss_interview_demo
@@ -446,3 +468,57 @@ weixin_conversation:
 boss_conversation:
   enabled: false
   tenant_allowlist: []
+
+# Independent AgentRunner service. Enable only when its API and worker are configured.
+# Dedicated peer bcrypt hashes are injected through AGENT_RUNNER_SERVICE_TOKEN_HASH.
+agent_runner:
+  # 本地容器验证（2026-10-04）：Web 闭环走 Runner；令牌明文仅在 .env。
+  enabled: true
+  web_enabled: true
+  api_url: "http://127.0.0.1:8091"
+  web_service_id: "web"
+  # Plaintext caller token stays in AGENT_RUNNER_WEB_SERVICE_TOKEN on the Web server.
+  peers:
+    web:
+      token_hash: "$2b$12$mtUPOeTozqL.GCQjD2PsAuas1Nw6G3aCSAnLV6FGvThV9neI1WGeC"
+      sources: ["chat"]
+  host: "127.0.0.1"
+  port: 8091
+  lease_seconds: 30
+  heartbeat_seconds: 10
+  poll_seconds: 1.0
+  concurrency: 4
+  # Byte ceilings: single request/control admission (413), checkpoint and public
+  # snapshot serialization. Defaults stay wide until M7 real-workload sizing.
+  limits:
+    request_bytes: 2097152
+    checkpoint_bytes: 8388608
+    snapshot_bytes: 2097152
+  # Server-only KF migration; text admission is opt-in, delivery remains separate.
+  wecom_kf:
+    enabled: false
+    service_id: "wecom_kf_native"
+    poll_seconds: 1.0
+    lease_seconds: 30
+    heartbeat_seconds: 10
+    page_limit: 100
+    page_bytes: 1048576
+    # Bounded in-process SDK client/token reuse per (account_id, config_version);
+    # process cache only, no cross-process/durable token sharing. Eviction:
+    # key/credential mismatch, page failure, capacity, idle TTL, worker close.
+    client_pool_capacity: 16
+    client_pool_idle_seconds: 300
+  # Temporary Browser producer admission; legacy non-Runner Browser is unchanged.
+  browser_owner:
+    enabled: false
+    endpoint: "http://127.0.0.1:8092/internal/runner-browser"
+    allowed_endpoints: ["http://127.0.0.1:8092/internal/runner-browser"]
+    # One listener per Worker process/container; a port conflict fails before
+    # Runner acquisition. Multiple workers need distinct configured endpoints.
+    view_enabled: false
+    bind_host: "127.0.0.1"
+    bind_port: 8092
+    gateway_service_id: "browser-web"
+    # Only dedicated Browser gateway hashes, never inherited channel peers.
+    # Caller plaintext stays solely in AGENT_RUNNER_BROWSER_GATEWAY_TOKEN.
+    gateway_peers: {}

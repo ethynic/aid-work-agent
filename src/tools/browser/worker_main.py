@@ -169,7 +169,9 @@ class BrowserWorker:
             }
         if isinstance(command, CloseCommand):
             await self.close()
-            return {**self._base(command), "closed": True, "forced": False}
+            return {**self._base(command, "ok" if self.closed else "error",
+                                 None if self.closed else "CLOSE_UNCONFIRMED"),
+                    "closed": self.closed, "forced": False}
         return self._base(command, "error", "UNKNOWN_MESSAGE")
 
     async def _start(self, command: StartCommand) -> dict[str, Any]:
@@ -284,15 +286,26 @@ class BrowserWorker:
     async def close(self) -> None:
         if self.closed:
             return
-        self.closed = True
         for attr, method in (("page", "close"), ("context", "close"), ("browser", "close"), ("playwright", "stop")):
             resource = getattr(self, attr)
-            setattr(self, attr, None)
             if resource is not None:
                 try:
-                    await getattr(resource, method)()
-                except BaseException:
+                    is_closed = getattr(resource,'is_closed',None) if attr == 'page' else None
+                    if is_closed is None or is_closed() is not True:
+                        await getattr(resource, method)()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
                     pass
+                else:
+                    setattr(self, attr, None)
+                    # Successful parent closure proves its original child
+                    # resources closed even if their earlier close raised.
+                    if attr in {'context','browser'}:
+                        self.page = None
+                    if attr == 'browser':
+                        self.context = None
+        self.closed = all(getattr(self,attr) is None for attr in ('page','context','browser','playwright'))
 
 
 async def _run() -> int:
@@ -320,7 +333,7 @@ async def _run() -> int:
                 continue
             result = await worker.handle(command)
             await asyncio.to_thread(write_frame_sync, sys.stdout.buffer, result)
-            if isinstance(command, CloseCommand):
+            if isinstance(command, CloseCommand) and result.get('closed'):
                 return 0
     finally:
         await worker.close()

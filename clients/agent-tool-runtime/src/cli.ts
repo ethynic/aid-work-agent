@@ -18,6 +18,7 @@ import { ApiClient } from './apiClient.js'
 import {
   configPath,
   credentialsPath,
+  defaultSkillsDir,
   deviceCapabilities,
   loadConfig,
   machineFingerprint,
@@ -27,6 +28,7 @@ import {
   runtimeHomeDir,
   saveConfig,
 } from './config.js'
+import { SkillRunnerHandler } from './skillRunner.js'
 import { clearCredentials, hasDeviceToken, loadDeviceToken, saveDeviceToken } from './credentials.js'
 import { checkDesktopInteractive } from './desktopCheck.js'
 import { deriveResourceKey } from './desktopLock.js'
@@ -165,6 +167,15 @@ async function cmdStart(args: ParsedArgs): Promise<number> {
   // 无需代码改动；未来交付 runtime 机器级凭据时再在此加 wecom 项注入。
   const providers = new ProviderSet(entries, { providerEnv: { weixin: { AIDWORK_WEIXIN_BRIDGE_KEY: bridgeKey } } })
   const nameBridge = new NameSessionBridge(providers, api, bridgeKey)
+  // skill-runner（M2）：config.skills.python 配置且存在才构造 handler（能力真实性——
+  // 未配置/解释器缺失不上报能力、不注入 runner，行级 claim 天然不派发该设备）
+  const skillsCfg = config.skills
+  const skillRunner = skillsCfg?.python && existsSync(skillsCfg.python)
+    ? new SkillRunnerHandler({ skillsDir: skillsCfg.dir ?? defaultSkillsDir(), pythonPath: skillsCfg.python })
+    : undefined
+  if (skillRunner) {
+    logInfo(`[runtime] skill-runner 已启用：skills 目录=${skillsCfg!.dir ?? defaultSkillsDir()} 解释器=${skillsCfg!.python}`)
+  }
   // #6 能力真实性：v2 会话 manifest 变体仅经 config.providers.weixin.v2Send 显式
   // 协商（隔离测试 / 真实 v2 Provider 交付后）；未协商保持真实 v1 受信形态
   if (config?.providers?.['weixin']?.v2Send === true) {
@@ -179,6 +190,7 @@ async function cmdStart(args: ParsedArgs): Promise<number> {
     api,
     runnerDeps: {
       providers,
+      ...(skillRunner ? { skillRunner } : {}),
       desktopCheck: async () => (await checkDesktopInteractive()).interactive,
       desktopResourceKey: deriveResourceKey(),
       runtimeDataDir: dataDir,
@@ -216,6 +228,7 @@ async function cmdStart(args: ParsedArgs): Promise<number> {
           runInvocation(inv, {
             api,
             providers,
+            ...(skillRunner ? { skillRunner } : {}),
             desktopCheck: async () => (await checkDesktopInteractive()).interactive,
             desktopResourceKey: deriveResourceKey(),
             runtimeDataDir: dataDir,

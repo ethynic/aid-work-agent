@@ -548,7 +548,8 @@ def _load_job_context(
     }
 
 
-def _update_match_fields(
+def update_match_fields_in_tx(
+    cursor,
     tenant_id: str,
     resume_id: int,
     match_score: int,
@@ -562,24 +563,33 @@ def _update_match_fields(
     resume_summary（v2）：VL 人物总结，传入时一并回写（None 不动原值——文本 fallback
     路径没有总结，不能把 VL 路径已写入的总结清掉）。
     """
+    cursor.execute(
+        """
+        UPDATE bs_recruiting_operator_resumes
+        SET match_score = %s, match_summary = %s, match_status = %s, key_info = %s,
+            resume_summary = COALESCE(%s, resume_summary),
+            updated_at = NOW()
+        WHERE id = %s AND tenant_id = %s
+        """,
+        (
+            match_score, match_summary, match_status,
+            psycopg2.extras.Json(key_info) if key_info is not None else None,
+            resume_summary,
+            resume_id, tenant_id,
+        ),
+    )
+    return cursor.rowcount > 0
+
+
+def _update_match_fields(
+    tenant_id: str, resume_id: int, match_score: int,
+    match_summary: Optional[str], match_status: str,
+    key_info: Optional[Dict[str, Any]], resume_summary: Optional[str] = None,
+) -> bool:
+    """Legacy wrapper retains its own transaction and original field policy."""
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            UPDATE bs_recruiting_operator_resumes
-            SET match_score = %s, match_summary = %s, match_status = %s, key_info = %s,
-                resume_summary = COALESCE(%s, resume_summary),
-                updated_at = NOW()
-            WHERE id = %s AND tenant_id = %s
-            """,
-            (
-                match_score, match_summary, match_status,
-                psycopg2.extras.Json(key_info) if key_info is not None else None,
-                resume_summary,
-                resume_id, tenant_id,
-            ),
-        )
-        updated = cursor.rowcount > 0
+        updated = update_match_fields_in_tx(conn.cursor(), tenant_id, resume_id,
+            match_score, match_summary, match_status, key_info, resume_summary)
         conn.commit()
     return updated
 

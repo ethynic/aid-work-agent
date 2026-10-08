@@ -155,17 +155,25 @@ class SkillLoader:
     这种设计保持上下文精简，同时允许任意深度的资源访问。
     """
     
-    def __init__(self, skills_dir: Path):
+    def __init__(self, skills_dir: Path, include: Optional[set] = None, run_init: bool = True):
         """
         初始化Skill加载器
-        
+
         Args:
             skills_dir: Skill目录路径
+            include: 仅注册 frontmatter name 命中该集合的 skill（None 表示不过滤）。
+                未注册的 skill 不参与 _init_skill_tables——外部插件目录 loader
+                以此确保插件 init_script 不被 importlib 执行（纵深防御第一层，
+                见 docs/plans/plan-external-skill-plugin-m1.md §3.2）。
+            run_init: 是否在加载后执行 skill 声明的 init_script（默认 True，现状
+                行为）。插件目录 loader 必须传 False。
         """
         self.skills_dir = Path(skills_dir)
         self.skills: Dict[str, Skill] = {}
         self._metadata_cache: Dict[str, Dict] = {}  # 元数据缓存
-        
+        self._include = include
+        self._run_init = run_init
+
         if self.skills_dir.exists():
             self.load_skills()
         else:
@@ -354,13 +362,18 @@ class SkillLoader:
 
             skill = self.parse_skill_md(skill_md)
             if skill:
+                # include 过滤：未命中的 skill 不注册（插件审批门 include 集），
+                # 未注册即不参与 _init_skill_tables
+                if self._include is not None and skill.name not in self._include:
+                    continue
                 self.skills[skill.name] = skill
                 # logger.info(f"Loaded skill: {skill.name} v{skill.version}")
 
         logger.info(f"Total skills loaded: {len(self.skills)}")
 
-        # 对需要数据库初始化的 skill 执行初始化
-        self._init_skill_tables()
+        # 对需要数据库初始化的 skill 执行初始化（插件 loader run_init=False 跳过）
+        if self._run_init:
+            self._init_skill_tables()
 
     def _init_skill_tables(self):
         """初始化需要数据库表的 skill（通用机制）
@@ -409,7 +422,7 @@ class SkillLoader:
             for name, skill in self.skills.items()
         )
     
-    def get_skill_content(self, name: str, substitutions: Optional[Dict[str, str]] = None) -> Optional[str]:
+    def get_skill_content(self, name: str, substitutions: Optional[Dict[str, str]] = None, *, tenant_id=None, env_vars=None, context=None) -> Optional[str]:
         """
         获取Skill完整内容用于注入
 
@@ -427,8 +440,8 @@ class SkillLoader:
 
         skill = self.skills[name]
 
-        # 加载 Skill .env 文件到进程环境变量
-        self._load_skill_env(skill)
+        from src.core.skill_environment import resolve_skill_environment
+        environment = resolve_skill_environment(skill, tenant_id=tenant_id, env_vars=env_vars, context=context)
 
         body = skill.body
 
@@ -438,7 +451,7 @@ class SkillLoader:
             body = SkillSubstitutor.substitute(body, substitutions)
 
         # 处理动态上下文注入 !`command`（AgentSkills 标准）
-        body = self._process_dynamic_context(body, skill.dir)
+        body = self._process_dynamic_context(body, skill.dir, env=environment)
 
         content = f"# Skill: {skill.name}\n\n{body}"
 
@@ -459,59 +472,7 @@ class SkillLoader:
 
         return content
 
-    def _load_skill_env(self, skill: Skill) -> None:
-        """加载 Skill 目录下的 .env 文件到进程环境变量。
-
-        加载优先级（从低到高）：
-        1. Skill 默认级: skill_dir/.env
-        2. 租户级: storage/tenants/{tenant_id}/skills/{skill_name}/.env
-
-        使用 override=False，不覆盖已有的同名变量。
-        """
-        import os
-        env_files = []
-
-        # 优先级 1: Skill 默认级 .env
-        skill_env = skill.dir / ".env"
-        if skill_env.exists():
-            env_files.append(skill_env)
-
-        # 优先级 2: 租户级 .env
-        tenant_id = os.environ.get("CURRENT_TENANT_ID")
-        if tenant_id:
-            from src.core.storage import normalize_tenant_id
-            tenant_env = Path(f"storage/tenants/{normalize_tenant_id(tenant_id)}/skills/{skill.name}/.env")
-            if tenant_env.exists():
-                env_files.append(tenant_env)
-
-        for env_file in env_files:
-            try:
-                from dotenv import load_dotenv
-                load_dotenv(env_file, override=False)
-                logger.debug(f"Loaded skill env from {env_file}")
-            except ImportError:
-                logger.warning("python-dotenv not installed, skipping .env loading")
-            except Exception as e:
-                logger.warning(f"Failed to load skill env from {env_file}: {e}")
-
-        # 注入 env 声明中的默认值（仅对环境中尚不存在的变量）
-        for var_decl in skill.env:
-            var_name = var_decl.get("name", "")
-            default_val = var_decl.get("default")
-            if var_name and default_val is not None and var_name not in os.environ:
-                os.environ[var_name] = str(default_val)
-                logger.debug(f"Set default env var {var_name}={default_val}")
-
-        # 检查必需变量（无默认值的变量是否已设置）
-        for var_decl in skill.env:
-            var_name = var_decl.get("name", "")
-            default_val = var_decl.get("default")
-            if var_name and default_val is None and var_name not in os.environ:
-                logger.warning(
-                    f"Skill '{skill.name}' requires env var '{var_name}' but it is not set"
-                )
-
-    def _process_dynamic_context(self, body: str, skill_dir: Path) -> str:
+    def _process_dynamic_context(self, body: str, skill_dir: Path, *, env=None) -> str:
         """
         处理 SKILL.md body 中的动态上下文注入语法 !`command`。
 
@@ -544,19 +505,35 @@ class SkillLoader:
         def replacer(match: re.Match) -> str:
             cmd = match.group(1)
             try:
-                result = subprocess.run(
-                    cmd,
-                    shell=True,
-                    capture_output=True,
-                    text=True,
-                    cwd=str(skill_dir),
-                    timeout=10,
-                )
-                return result.stdout.strip()
+                import os
+                from src.core.subprocess_owner import stop_process_group
+                from src.llm.call_observer import (observe_child_exit,prepare_child_process,
+                    register_child_process,release_child_process)
+                environment = dict(env) if env is not None else None
+                if environment is not None:
+                    prepare_child_process(environment)
+                process = subprocess.Popen(cmd,shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+                    text=True,cwd=str(skill_dir),env=environment,start_new_session=os.name=='posix')
+                if environment is not None:
+                    register_child_process(process.pid,environment)
+                try:
+                    stdout,_ = process.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    stop_process_group(process)
+                    process.wait()
+                    observe_child_exit(None)
+                    raise
+                observe_child_exit(process.returncode)
+                return stdout.strip()
             except subprocess.TimeoutExpired:
                 return f"(error: command timed out: {cmd})"
             except Exception as e:
+                if getattr(e,'authoritative_storage_failure',False):
+                    raise
                 return f"(error running: {cmd}: {e})"
+            finally:
+                if 'environment' in locals() and environment is not None:
+                    release_child_process(environment)
 
         return re.sub(pattern, replacer, body)
 

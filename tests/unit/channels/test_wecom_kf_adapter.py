@@ -31,6 +31,11 @@ def adapter():
     a.current_open_kfid = "kfXXX"
     # mock API 客户端，所有方法返回成功空响应
     a.api_client = MagicMock()
+    # 真实客户端 native_write_enabled 为 property，恒等于 _write_observer is not None
+    # （src/channels/wecom_kf/api_client.py:105-107），未走 enable_native_writes 绑定时为 False。
+    # 裸 MagicMock 会使该属性恒为真值，误入 native owner 守卫（adapter.py:129-131），
+    # 故显式置 False 以建模"未绑定 native 写入"的旧回调客户端。
+    a.api_client.native_write_enabled = False
     a.api_client.upload_media = AsyncMock(return_value={"errcode": 0, "media_id": "MEDIA_FAKE"})
     a.api_client.send_msg = AsyncMock(return_value={"errcode": 0, "errmsg": "ok"})
     # mock 默认缩略图，避免触发真实 PNG 生成与上传

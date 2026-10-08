@@ -2968,3 +2968,2320 @@ CREATE TABLE IF NOT EXISTS bs_image_vision_cache (
     UNIQUE(tenant_id, image_url),
     CHECK (status IN ('ok', 'unrecognized', 'failed'))
 );
+
+-- AgentRunner: durable acceptance, logical session ownership, authoritative usage facts.
+CREATE TABLE IF NOT EXISTS agent_runners (
+    runner_id TEXT PRIMARY KEY,
+    queue_order BIGSERIAL UNIQUE NOT NULL,
+    tenant_id TEXT,
+    scope_key TEXT NOT NULL,
+    session_kind TEXT NOT NULL CHECK (session_kind IN ('web','channel')),
+    session_id TEXT NOT NULL,
+    actor_kind TEXT NOT NULL CHECK (actor_kind IN ('user','channel')),
+    actor_id TEXT NOT NULL,
+    user_id TEXT,
+    service_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    client_request_id TEXT NOT NULL,
+    input_digest TEXT NOT NULL,
+    input JSONB NOT NULL,
+    profile_id TEXT NOT NULL,
+    profile_fingerprint TEXT NOT NULL,
+    checkpoint JSONB,
+    checkpoint_version INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN
+        ('queued','running','waiting','paused','interrupted','finalizing','completed','failed','cancelled')),
+    settlement_status TEXT NOT NULL DEFAULT 'pending' CHECK (settlement_status IN ('pending','settled')),
+    attempt INTEGER NOT NULL DEFAULT 0,
+    worker_id TEXT,
+    lease_until TIMESTAMPTZ,
+    revision BIGINT NOT NULL DEFAULT 0,
+    view_revision BIGINT NOT NULL DEFAULT 0,
+    control_revision BIGINT NOT NULL DEFAULT 0,
+    cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
+    public_snapshot JSONB NOT NULL DEFAULT '{}',
+    result JSONB,
+    record_id TEXT UNIQUE NOT NULL,
+    accepted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    finished_at TIMESTAMPTZ,
+    CHECK ((tenant_id IS NULL AND scope_key='global') OR
+           (tenant_id IS NOT NULL AND scope_key='tenant:' || tenant_id)),
+    CHECK (session_kind <> 'channel' OR tenant_id IS NOT NULL),
+    UNIQUE(scope_key,actor_kind,actor_id,source,client_request_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runners_queue ON agent_runners(status,queue_order);
+CREATE INDEX IF NOT EXISTS idx_agent_runners_session ON agent_runners(scope_key,session_kind,session_id,queue_order);
+CREATE INDEX IF NOT EXISTS idx_agent_runners_lease ON agent_runners(lease_until) WHERE status IN ('running','finalizing');
+
+CREATE TABLE IF NOT EXISTS agent_runner_session_claims (
+    scope_key TEXT NOT NULL,
+    tenant_id TEXT,
+    session_kind TEXT NOT NULL CHECK (session_kind IN ('web','channel')),
+    session_id TEXT NOT NULL,
+    owner_runner_id TEXT UNIQUE NOT NULL,
+    revision BIGINT NOT NULL DEFAULT 0,
+    gate TEXT NOT NULL DEFAULT 'execution' CHECK (gate IN ('execution','delivery')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(scope_key,session_kind,session_id),
+    CHECK ((tenant_id IS NULL AND scope_key='global') OR
+           (tenant_id IS NOT NULL AND scope_key='tenant:' || tenant_id)),
+    CHECK (session_kind <> 'channel' OR tenant_id IS NOT NULL)
+);
+
+CREATE TABLE IF NOT EXISTS agent_runner_usage_receipts (
+    receipt_id TEXT PRIMARY KEY,
+    runner_id TEXT NOT NULL,
+    tenant_id TEXT,
+    scope_key TEXT NOT NULL,
+    call_id TEXT NOT NULL,
+    execution_id TEXT NOT NULL,
+    tool_call_id TEXT,
+    authorized_attempt INTEGER NOT NULL,
+    owner TEXT NOT NULL CHECK (owner IN ('llm','embedding','asr','local_reference')),
+    purpose TEXT NOT NULL,
+    billing_boundary TEXT NOT NULL,
+    provider TEXT,
+    model TEXT,
+    provider_request_id TEXT,
+    phase TEXT NOT NULL DEFAULT 'started' CHECK (phase IN ('started','observed','unknown','no_usage')),
+    usage JSONB,
+    price_snapshot JSONB NOT NULL DEFAULT '{}',
+    fact_digest TEXT,
+    applied BOOLEAN NOT NULL DEFAULT FALSE,
+    external_owner_id TEXT,
+    record_id TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    observed_at TIMESTAMPTZ,
+    applied_at TIMESTAMPTZ,
+    UNIQUE(runner_id,call_id),
+    CHECK ((tenant_id IS NULL AND scope_key='global') OR
+           (tenant_id IS NOT NULL AND scope_key='tenant:' || tenant_id)),
+    CHECK (phase <> 'observed' OR usage IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runner_usage_pending ON agent_runner_usage_receipts(runner_id,applied,phase);
+
+-- M4 private pause/resume/reply command ledger; public events remain separate.
+ALTER TABLE agent_runners ADD COLUMN IF NOT EXISTS pause_requested BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE agent_runners ADD COLUMN IF NOT EXISTS resume_control_id TEXT;
+CREATE TABLE IF NOT EXISTS agent_runner_controls (
+    control_id TEXT PRIMARY KEY,
+    runner_id TEXT NOT NULL,
+    tenant_id TEXT,
+    scope_key TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('pause','resume','reply','browser_complete')),
+    client_request_id TEXT NOT NULL,
+    intent_digest TEXT NOT NULL,
+    payload JSONB NOT NULL,
+    status TEXT NOT NULL DEFAULT 'accepted' CHECK (status IN ('accepted','claimed','consumed','rejected')),
+    error_code TEXT,
+    consumed_attempt INTEGER,
+    accepted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    consumed_at TIMESTAMPTZ,
+    UNIQUE(runner_id,client_request_id),
+    CHECK ((tenant_id IS NULL AND scope_key='global') OR
+           (tenant_id IS NOT NULL AND scope_key='tenant:' || tenant_id))
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runner_controls_pending ON agent_runner_controls(runner_id,status);
+
+-- Browser baseline audit compatibility and mandatory Runner owner linkage.
+-- One DO is one savepoint in the existing incremental migration driver: any
+-- incompatible catalog rolls back this whole Browser block, not partial DDL.
+DO $$
+DECLARE
+    spec RECORD;
+    attribute RECORD;
+BEGIN
+CREATE TABLE IF NOT EXISTS bs_browser_runs (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT,
+    user_id TEXT,
+    run_id TEXT,
+    parent_run_id TEXT,
+    session_id TEXT,
+    execution_target TEXT DEFAULT 'server',
+    executor_client_id TEXT,
+    state TEXT DEFAULT 'CREATED',
+    routing_reason TEXT,
+    failure_class TEXT,
+    evidence_level TEXT,
+    escalation_count INTEGER DEFAULT 0,
+    started_at TIMESTAMP,
+    finished_at TIMESTAMP,
+    close_reason TEXT,
+    error_code TEXT,
+    steps_count INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    runner_id TEXT,
+    runner_execution_id TEXT,
+    runner_tool_call_id TEXT,
+    owner_worker_id TEXT,
+    owner_boot_id TEXT,
+    browser_epoch TEXT,
+    owner_endpoint TEXT,
+    owner_lease_until TIMESTAMPTZ,
+    runtime_state TEXT,
+    closed_at TIMESTAMPTZ
+);
+
+IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='bs_browser_runs'::regclass AND attname='id' AND NOT attisdropped) THEN
+        ALTER TABLE bs_browser_runs ADD COLUMN id BIGSERIAL;
+    END IF;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS user_id TEXT;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS run_id TEXT;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS parent_run_id TEXT;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS session_id TEXT;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS execution_target TEXT DEFAULT 'server';
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS executor_client_id TEXT;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS state TEXT DEFAULT 'CREATED';
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS routing_reason TEXT;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS failure_class TEXT;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS evidence_level TEXT;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS escalation_count INTEGER DEFAULT 0;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS started_at TIMESTAMP;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS finished_at TIMESTAMP;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS close_reason TEXT;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS error_code TEXT;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS steps_count INTEGER DEFAULT 0;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS runner_id TEXT;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS runner_execution_id TEXT;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS runner_tool_call_id TEXT;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS owner_worker_id TEXT;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS owner_boot_id TEXT;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS browser_epoch TEXT;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS owner_endpoint TEXT;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS owner_lease_until TIMESTAMPTZ;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS runtime_state TEXT;
+
+ALTER TABLE bs_browser_runs ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS bs_browser_assistance_requests (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT,
+    user_id TEXT,
+    assistance_id TEXT,
+    run_id TEXT,
+    agent_execution_id TEXT,
+    tool_call_id TEXT,
+    state TEXT DEFAULT 'pending',
+    reason_code TEXT,
+    instruction_code TEXT,
+    completion_mode TEXT,
+    predicate_type TEXT,
+    expires_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    resumed_at TIMESTAMP,
+    error_code TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    runner_id TEXT,
+    runner_wait_id TEXT,
+    owner_boot_id TEXT,
+    browser_epoch TEXT,
+    completion_ref TEXT,
+    completion_fact JSONB,
+    extended_at TIMESTAMPTZ,
+    continuation_id TEXT
+);
+
+IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='bs_browser_assistance_requests'::regclass AND attname='id' AND NOT attisdropped) THEN
+        ALTER TABLE bs_browser_assistance_requests ADD COLUMN id BIGSERIAL;
+    END IF;
+
+ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+
+ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS user_id TEXT;
+
+ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS assistance_id TEXT;
+
+ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS run_id TEXT;
+
+ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS agent_execution_id TEXT;
+
+ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS tool_call_id TEXT;
+
+ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS state TEXT DEFAULT 'pending';
+
+ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS reason_code TEXT;
+
+ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS instruction_code TEXT;
+
+ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS completion_mode TEXT;
+
+ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS predicate_type TEXT;
+
+ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP;
+
+ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP;
+
+ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS resumed_at TIMESTAMP;
+
+ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS error_code TEXT;
+
+ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS runner_id TEXT;
+
+ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS runner_wait_id TEXT;
+
+ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS owner_boot_id TEXT;
+
+ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS browser_epoch TEXT;
+
+ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS completion_ref TEXT;
+
+ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS completion_fact JSONB;
+
+ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS continuation_id TEXT;
+
+-- 原随机 bac 与 Runner execution/call/wait 的持久关联（独立于 completion 相位）。
+-- 存量 legacy 行 continuation_id 为 NULL，部分唯一索引允许多行 NULL 共存。
+CREATE UNIQUE INDEX IF NOT EXISTS uq_browser_assistance_continuation
+    ON bs_browser_assistance_requests (continuation_id)
+    WHERE continuation_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS bs_browser_resume_jobs (
+    id BIGSERIAL PRIMARY KEY,
+    job_id TEXT,
+    tenant_id TEXT,
+    assistance_id TEXT,
+    run_id TEXT,
+    state TEXT DEFAULT 'pending',
+    lease_owner TEXT,
+    lease_until TIMESTAMPTZ,
+    attempts INTEGER DEFAULT 0,
+    available_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    last_error_code TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP
+);
+
+IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='bs_browser_resume_jobs'::regclass AND attname='id' AND NOT attisdropped) THEN
+        ALTER TABLE bs_browser_resume_jobs ADD COLUMN id BIGSERIAL;
+    END IF;
+
+ALTER TABLE bs_browser_resume_jobs ADD COLUMN IF NOT EXISTS job_id TEXT;
+
+ALTER TABLE bs_browser_resume_jobs ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+
+ALTER TABLE bs_browser_resume_jobs ADD COLUMN IF NOT EXISTS assistance_id TEXT;
+
+ALTER TABLE bs_browser_resume_jobs ADD COLUMN IF NOT EXISTS run_id TEXT;
+
+ALTER TABLE bs_browser_resume_jobs ADD COLUMN IF NOT EXISTS state TEXT DEFAULT 'pending';
+
+ALTER TABLE bs_browser_resume_jobs ADD COLUMN IF NOT EXISTS lease_owner TEXT;
+
+ALTER TABLE bs_browser_resume_jobs ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ;
+
+ALTER TABLE bs_browser_resume_jobs ADD COLUMN IF NOT EXISTS attempts INTEGER DEFAULT 0;
+
+ALTER TABLE bs_browser_resume_jobs ADD COLUMN IF NOT EXISTS available_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
+
+ALTER TABLE bs_browser_resume_jobs ADD COLUMN IF NOT EXISTS last_error_code TEXT;
+
+ALTER TABLE bs_browser_resume_jobs ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+ALTER TABLE bs_browser_resume_jobs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+ALTER TABLE bs_browser_resume_jobs ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_browser_runs_run_id ON bs_browser_runs(run_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_browser_assistance_id ON bs_browser_assistance_requests(assistance_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_browser_resume_job_id ON bs_browser_resume_jobs(job_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_browser_resume_assistance ON bs_browser_resume_jobs(assistance_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_browser_runner_original_call ON bs_browser_runs(runner_id,runner_execution_id,runner_tool_call_id) WHERE runner_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_browser_completion_ref ON bs_browser_assistance_requests(completion_ref) WHERE completion_ref IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_browser_runner_owner ON bs_browser_runs(owner_worker_id,owner_boot_id,owner_lease_until) WHERE runner_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_browser_assistance_runner_wait ON bs_browser_assistance_requests(runner_id,runner_wait_id) WHERE runner_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_browser_resume_pending ON bs_browser_resume_jobs(state,available_at);
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='bs_browser_runs'::regclass AND conname='ck_browser_runner_binding') THEN
+        ALTER TABLE bs_browser_runs ADD CONSTRAINT ck_browser_runner_binding CHECK ((runner_id IS NULL AND runner_execution_id IS NULL AND runner_tool_call_id IS NULL
+    AND owner_worker_id IS NULL AND owner_boot_id IS NULL AND browser_epoch IS NULL
+    AND owner_endpoint IS NULL AND owner_lease_until IS NULL AND runtime_state IS NULL AND closed_at IS NULL)
+ OR (runner_id IS NOT NULL AND tenant_id IS NOT NULL AND user_id IS NOT NULL AND session_id IS NOT NULL
+    AND run_id IS NOT NULL AND runner_execution_id IS NOT NULL AND runner_tool_call_id IS NOT NULL
+    AND owner_worker_id IS NOT NULL AND owner_boot_id IS NOT NULL AND browser_epoch IS NOT NULL AND owner_endpoint IS NOT NULL
+    AND runtime_state IS NOT NULL AND ((runtime_state IN ('starting','live') AND owner_lease_until IS NOT NULL AND closed_at IS NULL)
+      OR (runtime_state IN ('closed','lost') AND owner_lease_until IS NULL AND closed_at IS NOT NULL))));
+    END IF;
+
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='bs_browser_assistance_requests'::regclass AND conname='ck_browser_assistance_runner_binding') THEN
+        ALTER TABLE bs_browser_assistance_requests ADD CONSTRAINT ck_browser_assistance_runner_binding CHECK ((runner_id IS NULL AND runner_wait_id IS NULL AND owner_boot_id IS NULL AND browser_epoch IS NULL
+    AND completion_ref IS NULL AND completion_fact IS NULL)
+ OR (runner_id IS NOT NULL AND tenant_id IS NOT NULL AND user_id IS NOT NULL AND assistance_id IS NOT NULL
+    AND run_id IS NOT NULL AND agent_execution_id IS NOT NULL AND tool_call_id IS NOT NULL
+    AND runner_wait_id IS NOT NULL AND owner_boot_id IS NOT NULL AND browser_epoch IS NOT NULL
+    AND ((completion_ref IS NULL AND completion_fact IS NULL) OR (completion_ref IS NOT NULL AND completion_fact IS NOT NULL AND jsonb_typeof(completion_fact)='object'))));
+    END IF;
+
+    -- Only these three tables are checked. Legacy audit wall-clock timestamps
+    -- and int4/int8 auto-increment primary IDs are accepted without conversion.
+    FOR spec IN SELECT * FROM (VALUES
+        ('bs_browser_runs','id','BIGSERIAL'),
+        ('bs_browser_runs','tenant_id','TEXT'),
+        ('bs_browser_runs','user_id','TEXT'),
+        ('bs_browser_runs','run_id','TEXT'),
+        ('bs_browser_runs','parent_run_id','TEXT'),
+        ('bs_browser_runs','session_id','TEXT'),
+        ('bs_browser_runs','execution_target','TEXT'),
+        ('bs_browser_runs','executor_client_id','TEXT'),
+        ('bs_browser_runs','state','TEXT'),
+        ('bs_browser_runs','routing_reason','TEXT'),
+        ('bs_browser_runs','failure_class','TEXT'),
+        ('bs_browser_runs','evidence_level','TEXT'),
+        ('bs_browser_runs','escalation_count','INTEGER'),
+        ('bs_browser_runs','started_at','TIMESTAMP'),
+        ('bs_browser_runs','finished_at','TIMESTAMP'),
+        ('bs_browser_runs','close_reason','TEXT'),
+        ('bs_browser_runs','error_code','TEXT'),
+        ('bs_browser_runs','steps_count','INTEGER'),
+        ('bs_browser_runs','created_at','TIMESTAMP'),
+        ('bs_browser_runs','updated_at','TIMESTAMP'),
+        ('bs_browser_runs','runner_id','TEXT'),
+        ('bs_browser_runs','runner_execution_id','TEXT'),
+        ('bs_browser_runs','runner_tool_call_id','TEXT'),
+        ('bs_browser_runs','owner_worker_id','TEXT'),
+        ('bs_browser_runs','owner_boot_id','TEXT'),
+        ('bs_browser_runs','browser_epoch','TEXT'),
+        ('bs_browser_runs','owner_endpoint','TEXT'),
+        ('bs_browser_runs','owner_lease_until','TIMESTAMPTZ'),
+        ('bs_browser_runs','runtime_state','TEXT'),
+        ('bs_browser_runs','closed_at','TIMESTAMPTZ'),
+        ('bs_browser_assistance_requests','id','BIGSERIAL'),
+        ('bs_browser_assistance_requests','tenant_id','TEXT'),
+        ('bs_browser_assistance_requests','user_id','TEXT'),
+        ('bs_browser_assistance_requests','assistance_id','TEXT'),
+        ('bs_browser_assistance_requests','run_id','TEXT'),
+        ('bs_browser_assistance_requests','agent_execution_id','TEXT'),
+        ('bs_browser_assistance_requests','tool_call_id','TEXT'),
+        ('bs_browser_assistance_requests','state','TEXT'),
+        ('bs_browser_assistance_requests','reason_code','TEXT'),
+        ('bs_browser_assistance_requests','instruction_code','TEXT'),
+        ('bs_browser_assistance_requests','completion_mode','TEXT'),
+        ('bs_browser_assistance_requests','predicate_type','TEXT'),
+        ('bs_browser_assistance_requests','expires_at','TIMESTAMP'),
+        ('bs_browser_assistance_requests','completed_at','TIMESTAMP'),
+        ('bs_browser_assistance_requests','resumed_at','TIMESTAMP'),
+        ('bs_browser_assistance_requests','error_code','TEXT'),
+        ('bs_browser_assistance_requests','created_at','TIMESTAMP'),
+        ('bs_browser_assistance_requests','updated_at','TIMESTAMP'),
+        ('bs_browser_assistance_requests','runner_id','TEXT'),
+        ('bs_browser_assistance_requests','runner_wait_id','TEXT'),
+        ('bs_browser_assistance_requests','owner_boot_id','TEXT'),
+        ('bs_browser_assistance_requests','browser_epoch','TEXT'),
+        ('bs_browser_assistance_requests','completion_ref','TEXT'),
+        ('bs_browser_assistance_requests','completion_fact','JSONB'),
+        ('bs_browser_resume_jobs','id','BIGSERIAL'),
+        ('bs_browser_resume_jobs','job_id','TEXT'),
+        ('bs_browser_resume_jobs','tenant_id','TEXT'),
+        ('bs_browser_resume_jobs','assistance_id','TEXT'),
+        ('bs_browser_resume_jobs','run_id','TEXT'),
+        ('bs_browser_resume_jobs','state','TEXT'),
+        ('bs_browser_resume_jobs','lease_owner','TEXT'),
+        ('bs_browser_resume_jobs','lease_until','TIMESTAMPTZ'),
+        ('bs_browser_resume_jobs','attempts','INTEGER'),
+        ('bs_browser_resume_jobs','available_at','TIMESTAMPTZ'),
+        ('bs_browser_resume_jobs','last_error_code','TEXT'),
+        ('bs_browser_resume_jobs','created_at','TIMESTAMP'),
+        ('bs_browser_resume_jobs','updated_at','TIMESTAMP'),
+        ('bs_browser_resume_jobs','completed_at','TIMESTAMP')
+    ) AS required(table_name,column_name,column_kind) LOOP
+        SELECT a.atttypid,a.atttypmod,a.attnotnull,a.attidentity,
+               pg_get_expr(d.adbin,d.adrelid) AS default_expression,a.attnum
+          INTO attribute
+          FROM pg_attribute a LEFT JOIN pg_attrdef d
+            ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+         WHERE a.attrelid=to_regclass(spec.table_name) AND a.attname=spec.column_name
+           AND a.attnum>0 AND NOT a.attisdropped;
+        IF NOT FOUND OR NOT (CASE spec.column_kind
+            WHEN 'TEXT' THEN attribute.atttypid IN ('text'::regtype,'varchar'::regtype)
+                              AND attribute.atttypmod=-1
+            WHEN 'BIGSERIAL' THEN attribute.atttypid IN ('int4'::regtype,'int8'::regtype)
+            WHEN 'INTEGER' THEN attribute.atttypid='int4'::regtype
+            WHEN 'TIMESTAMP' THEN attribute.atttypid IN ('timestamp'::regtype,'timestamptz'::regtype)
+            WHEN 'TIMESTAMPTZ' THEN attribute.atttypid='timestamptz'::regtype
+            WHEN 'JSONB' THEN attribute.atttypid='jsonb'::regtype
+            ELSE FALSE END) THEN
+            RAISE EXCEPTION 'BROWSER_SCHEMA_COLUMN_INCOMPATIBLE: %.%',spec.table_name,spec.column_name;
+        END IF;
+        IF spec.column_kind='BIGSERIAL' AND (
+            NOT attribute.attnotnull OR NOT (
+                attribute.attidentity IN ('a','d') OR
+                COALESCE(attribute.default_expression LIKE 'nextval(%',FALSE)) OR
+            NOT EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid=to_regclass(spec.table_name)
+                AND i.indisprimary AND i.indisvalid AND i.indisready
+                AND i.indnatts=1 AND i.indkey[0]=attribute.attnum)) THEN
+            RAISE EXCEPTION 'BROWSER_SCHEMA_PRIMARY_ID_INCOMPATIBLE: %',spec.table_name;
+        END IF;
+    END LOOP;
+
+    -- A same-name index must prove the original immutable uniqueness contract.
+    FOR spec IN SELECT * FROM (VALUES
+        ('idx_browser_runs_run_id','bs_browser_runs',ARRAY['run_id']::text[],NULL::text),
+        ('idx_browser_assistance_id','bs_browser_assistance_requests',ARRAY['assistance_id']::text[],NULL::text),
+        ('idx_browser_resume_job_id','bs_browser_resume_jobs',ARRAY['job_id']::text[],NULL::text),
+        ('idx_browser_resume_assistance','bs_browser_resume_jobs',ARRAY['assistance_id']::text[],NULL::text),
+        ('idx_browser_runner_original_call','bs_browser_runs',ARRAY['runner_id','runner_execution_id','runner_tool_call_id']::text[],'(runner_id IS NOT NULL)'),
+        ('idx_browser_completion_ref','bs_browser_assistance_requests',ARRAY['completion_ref']::text[],'(completion_ref IS NOT NULL)')
+    ) AS required(index_name,table_name,column_names,predicate) LOOP
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid
+              JOIN pg_am am ON am.oid=c.relam
+             WHERE i.indexrelid=to_regclass(spec.index_name)
+               AND i.indrelid=to_regclass(spec.table_name) AND am.amname='btree'
+               AND i.indisunique AND i.indisvalid AND i.indisready
+               AND i.indnatts=cardinality(spec.column_names)
+               AND i.indnkeyatts=cardinality(spec.column_names) AND i.indexprs IS NULL
+               AND ARRAY(SELECT a.attname::text FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum,ordinal)
+                         JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum
+                         ORDER BY k.ordinal)=spec.column_names
+               AND pg_get_expr(i.indpred,i.indrelid) IS NOT DISTINCT FROM spec.predicate
+        ) THEN
+            RAISE EXCEPTION 'BROWSER_SCHEMA_INDEX_INCOMPATIBLE: %',spec.index_name;
+        END IF;
+    END LOOP;
+
+    -- Parse the expected CHECK using the actual column types. Deparse against
+    -- each relation before comparing: legacy dropped-column attnum gaps differ.
+    IF to_regclass('pg_temp.runner_browser_check_0_reference') IS NOT NULL THEN
+        RAISE EXCEPTION 'BROWSER_SCHEMA_CHECK_REFERENCE_COLLISION';
+    END IF;
+    CREATE TEMP TABLE runner_browser_check_0_reference (LIKE bs_browser_runs) ON COMMIT DROP;
+    ALTER TABLE runner_browser_check_0_reference ADD CONSTRAINT expected_browser_binding CHECK ((runner_id IS NULL AND runner_execution_id IS NULL AND runner_tool_call_id IS NULL
+    AND owner_worker_id IS NULL AND owner_boot_id IS NULL AND browser_epoch IS NULL
+    AND owner_endpoint IS NULL AND owner_lease_until IS NULL AND runtime_state IS NULL AND closed_at IS NULL)
+ OR (runner_id IS NOT NULL AND tenant_id IS NOT NULL AND user_id IS NOT NULL AND session_id IS NOT NULL
+    AND run_id IS NOT NULL AND runner_execution_id IS NOT NULL AND runner_tool_call_id IS NOT NULL
+    AND owner_worker_id IS NOT NULL AND owner_boot_id IS NOT NULL AND browser_epoch IS NOT NULL AND owner_endpoint IS NOT NULL
+    AND runtime_state IS NOT NULL AND ((runtime_state IN ('starting','live') AND owner_lease_until IS NOT NULL AND closed_at IS NULL)
+      OR (runtime_state IN ('closed','lost') AND owner_lease_until IS NULL AND closed_at IS NOT NULL))));
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint actual JOIN pg_constraint expected
+          ON expected.conrelid='pg_temp.runner_browser_check_0_reference'::regclass
+         AND expected.conname='expected_browser_binding'
+         WHERE actual.conrelid='bs_browser_runs'::regclass AND actual.conname='ck_browser_runner_binding'
+           AND actual.contype='c' AND actual.convalidated AND NOT actual.connoinherit
+           AND pg_get_expr(actual.conbin,actual.conrelid)=pg_get_expr(expected.conbin,expected.conrelid)
+    ) THEN
+        RAISE EXCEPTION 'BROWSER_SCHEMA_CHECK_INCOMPATIBLE: ck_browser_runner_binding';
+    END IF;
+    DROP TABLE runner_browser_check_0_reference;
+
+    IF to_regclass('pg_temp.runner_browser_check_1_reference') IS NOT NULL THEN
+        RAISE EXCEPTION 'BROWSER_SCHEMA_CHECK_REFERENCE_COLLISION';
+    END IF;
+    CREATE TEMP TABLE runner_browser_check_1_reference (LIKE bs_browser_assistance_requests) ON COMMIT DROP;
+    ALTER TABLE runner_browser_check_1_reference ADD CONSTRAINT expected_browser_binding CHECK ((runner_id IS NULL AND runner_wait_id IS NULL AND owner_boot_id IS NULL AND browser_epoch IS NULL
+    AND completion_ref IS NULL AND completion_fact IS NULL)
+ OR (runner_id IS NOT NULL AND tenant_id IS NOT NULL AND user_id IS NOT NULL AND assistance_id IS NOT NULL
+    AND run_id IS NOT NULL AND agent_execution_id IS NOT NULL AND tool_call_id IS NOT NULL
+    AND runner_wait_id IS NOT NULL AND owner_boot_id IS NOT NULL AND browser_epoch IS NOT NULL
+    AND ((completion_ref IS NULL AND completion_fact IS NULL) OR (completion_ref IS NOT NULL AND completion_fact IS NOT NULL AND jsonb_typeof(completion_fact)='object'))));
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint actual JOIN pg_constraint expected
+          ON expected.conrelid='pg_temp.runner_browser_check_1_reference'::regclass
+         AND expected.conname='expected_browser_binding'
+         WHERE actual.conrelid='bs_browser_assistance_requests'::regclass AND actual.conname='ck_browser_assistance_runner_binding'
+           AND actual.contype='c' AND actual.convalidated AND NOT actual.connoinherit
+           AND pg_get_expr(actual.conbin,actual.conrelid)=pg_get_expr(expected.conbin,expected.conrelid)
+    ) THEN
+        RAISE EXCEPTION 'BROWSER_SCHEMA_CHECK_INCOMPATIBLE: ck_browser_assistance_runner_binding';
+    END IF;
+    DROP TABLE runner_browser_check_1_reference;
+
+END $$;
+
+-- Original native assistance has one durable extension. Legacy NULL remains unused.
+DO $$
+BEGIN
+    ALTER TABLE bs_browser_assistance_requests ADD COLUMN IF NOT EXISTS extended_at TIMESTAMPTZ;
+    IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='bs_browser_assistance_requests'::regclass
+        AND attname='extended_at' AND atttypid='timestamptz'::regtype AND NOT attisdropped AND NOT attnotnull) THEN
+        RAISE EXCEPTION 'BROWSER_SCHEMA_COLUMN_INCOMPATIBLE: bs_browser_assistance_requests.extended_at';
+    END IF;
+END $$;
+
+-- AgentRunner M5 public notification ledger; historical roots start at head/floor zero.
+DO $$
+DECLARE
+    spec RECORD;
+BEGIN
+    ALTER TABLE agent_runners ADD COLUMN IF NOT EXISTS event_seq BIGINT NOT NULL DEFAULT 0;
+    ALTER TABLE agent_runners ADD COLUMN IF NOT EXISTS event_floor_seq BIGINT NOT NULL DEFAULT 0;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='agent_runners'::regclass AND conname='ck_runner_event_watermarks') THEN
+        ALTER TABLE agent_runners ADD CONSTRAINT ck_runner_event_watermarks CHECK (event_seq>=event_floor_seq AND event_floor_seq>=0);
+    END IF;
+    CREATE TABLE IF NOT EXISTS agent_runner_events (
+        runner_id TEXT NOT NULL,
+        seq BIGINT NOT NULL,
+        tenant_id TEXT,
+        scope_key TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        payload JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        PRIMARY KEY (runner_id,seq),
+        CONSTRAINT ck_runner_event_shape CHECK (seq>0 AND jsonb_typeof(payload)='object'
+            AND kind IN ('created','revision_changed','terminal','settlement_changed')),
+        CONSTRAINT ck_runner_event_scope CHECK ((tenant_id IS NULL AND scope_key='global')
+            OR (tenant_id IS NOT NULL AND scope_key='tenant:' || tenant_id))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_runner_event_created ON agent_runner_events(runner_id) WHERE kind='created';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_runner_event_terminal ON agent_runner_events(runner_id) WHERE kind='terminal';
+    FOR spec IN SELECT * FROM (VALUES
+        ('agent_runners','event_seq','int8',TRUE),
+        ('agent_runners','event_floor_seq','int8',TRUE),
+        ('agent_runner_events','runner_id','text',TRUE),
+        ('agent_runner_events','seq','int8',TRUE),
+        ('agent_runner_events','tenant_id','text',FALSE),
+        ('agent_runner_events','scope_key','text',TRUE),
+        ('agent_runner_events','kind','text',TRUE),
+        ('agent_runner_events','payload','jsonb',TRUE),
+        ('agent_runner_events','created_at','timestamptz',TRUE)
+    ) AS wanted(table_name,column_name,type_name,required) LOOP
+        IF NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=to_regclass(spec.table_name)
+            AND a.attname=spec.column_name AND a.atttypid=to_regtype(spec.type_name)
+            AND a.attnotnull=spec.required AND NOT a.attisdropped) THEN
+            RAISE EXCEPTION 'RUNNER_EVENT_SCHEMA_COLUMN_INCOMPATIBLE: %.%',spec.table_name,spec.column_name;
+        END IF;
+    END LOOP;
+    FOR spec IN SELECT * FROM (VALUES
+        ('agent_runner_events_pkey',ARRAY['runner_id','seq']::text[],NULL::text),
+        ('idx_runner_event_created',ARRAY['runner_id']::text[], '(kind = ''created''::text)'),
+        ('idx_runner_event_terminal',ARRAY['runner_id']::text[], '(kind = ''terminal''::text)')
+    ) AS wanted(index_name,column_names,predicate) LOOP
+        IF NOT EXISTS (SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid
+            JOIN pg_am am ON am.oid=c.relam WHERE c.oid=to_regclass(spec.index_name)
+            AND i.indrelid='agent_runner_events'::regclass AND i.indisunique AND i.indisvalid
+            AND i.indisready AND (spec.index_name<>'agent_runner_events_pkey' OR i.indisprimary) AND am.amname='btree' AND i.indexprs IS NULL
+            AND i.indnkeyatts=array_length(spec.column_names,1) AND i.indnatts=i.indnkeyatts
+            AND ARRAY(SELECT a.attname::text FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum,ordinal)
+                JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum ORDER BY k.ordinal)=spec.column_names
+            AND pg_get_expr(i.indpred,i.indrelid) IS NOT DISTINCT FROM spec.predicate) THEN
+            RAISE EXCEPTION 'RUNNER_EVENT_SCHEMA_INDEX_INCOMPATIBLE: %',spec.index_name;
+        END IF;
+    END LOOP;
+    IF to_regclass('pg_temp.runner_event_root_check_reference') IS NOT NULL
+        OR to_regclass('pg_temp.runner_event_check_reference') IS NOT NULL THEN
+        RAISE EXCEPTION 'RUNNER_EVENT_SCHEMA_REFERENCE_COLLISION';
+    END IF;
+    CREATE TEMP TABLE runner_event_root_check_reference (LIKE agent_runners) ON COMMIT DROP;
+    ALTER TABLE runner_event_root_check_reference ADD CONSTRAINT expected_watermarks CHECK (event_seq>=event_floor_seq AND event_floor_seq>=0);
+    ALTER TABLE runner_event_root_check_reference ALTER COLUMN event_seq SET DEFAULT 0;
+    ALTER TABLE runner_event_root_check_reference ALTER COLUMN event_floor_seq SET DEFAULT 0;
+    FOR spec IN SELECT * FROM (VALUES ('event_seq'),('event_floor_seq')) AS wanted(column_name) LOOP
+        IF NOT EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+            JOIN pg_attribute expected_a ON expected_a.attrelid='pg_temp.runner_event_root_check_reference'::regclass
+                AND expected_a.attname=spec.column_name
+            JOIN pg_attrdef expected_d ON expected_d.adrelid=expected_a.attrelid AND expected_d.adnum=expected_a.attnum
+            WHERE a.attrelid='agent_runners'::regclass AND a.attname=spec.column_name
+                AND pg_get_expr(d.adbin,d.adrelid)=pg_get_expr(expected_d.adbin,expected_d.adrelid)) THEN
+            RAISE EXCEPTION 'RUNNER_EVENT_SCHEMA_DEFAULT_INCOMPATIBLE: %',spec.column_name;
+        END IF;
+    END LOOP;
+    CREATE TEMP TABLE runner_event_check_reference (LIKE agent_runner_events) ON COMMIT DROP;
+    ALTER TABLE runner_event_check_reference ADD CONSTRAINT expected_shape CHECK (seq>0 AND jsonb_typeof(payload)='object'
+        AND kind IN ('created','revision_changed','terminal','settlement_changed'));
+    ALTER TABLE runner_event_check_reference ADD CONSTRAINT expected_scope CHECK ((tenant_id IS NULL AND scope_key='global')
+        OR (tenant_id IS NOT NULL AND scope_key='tenant:' || tenant_id));
+    FOR spec IN SELECT * FROM (VALUES
+        ('agent_runners','ck_runner_event_watermarks','runner_event_root_check_reference','expected_watermarks'),
+        ('agent_runner_events','ck_runner_event_shape','runner_event_check_reference','expected_shape'),
+        ('agent_runner_events','ck_runner_event_scope','runner_event_check_reference','expected_scope')
+    ) AS wanted(table_name,check_name,reference_table,reference_check) LOOP
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint actual JOIN pg_constraint expected
+            ON expected.conrelid=to_regclass('pg_temp.' || spec.reference_table) AND expected.conname=spec.reference_check
+            WHERE actual.conrelid=to_regclass(spec.table_name) AND actual.conname=spec.check_name
+            AND actual.contype='c' AND actual.convalidated AND NOT actual.connoinherit
+            AND pg_get_expr(actual.conbin,actual.conrelid)=pg_get_expr(expected.conbin,expected.conrelid)) THEN
+            RAISE EXCEPTION 'RUNNER_EVENT_SCHEMA_CHECK_INCOMPATIBLE: %',spec.check_name;
+        END IF;
+    END LOOP;
+    DROP TABLE runner_event_root_check_reference;
+    DROP TABLE runner_event_check_reference;
+END $$;
+
+-- M6a KF received-only ingress: no Runner, fee or delivery owner.
+DO $$
+DECLARE spec RECORD; reference_name TEXT; BEGIN
+CREATE TABLE IF NOT EXISTS wecom_kf_account_sync (
+    account_id TEXT NOT NULL,
+    account_order BIGSERIAL NOT NULL,
+    tenant_id TEXT NOT NULL,
+    config_id TEXT NOT NULL,
+    corp_id TEXT NOT NULL,
+    open_kfid TEXT NOT NULL,
+    profile_id TEXT NOT NULL,
+    raw_profile TEXT NOT NULL,
+    config_version TIMESTAMP NOT NULL,
+    requested_generation BIGINT NOT NULL DEFAULT 0,
+    completed_generation BIGINT NOT NULL DEFAULT 0,
+    cursor TEXT NOT NULL DEFAULT '',
+    worker_id TEXT,
+    claim_epoch BIGINT NOT NULL DEFAULT 0,
+    lease_until TIMESTAMPTZ,
+    verification_code TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY (account_id),
+    CONSTRAINT ck_kf_account_watermarks CHECK (requested_generation>=completed_generation AND completed_generation>=0 AND claim_epoch>=0),
+    CONSTRAINT ck_kf_account_lease CHECK ((worker_id IS NULL AND lease_until IS NULL) OR (worker_id IS NOT NULL AND lease_until IS NOT NULL)),
+    CONSTRAINT ck_kf_account_profile CHECK (profile_id=CASE WHEN raw_profile='' THEN 'main' ELSE raw_profile END)
+);
+CREATE TABLE IF NOT EXISTS channel_session_routes (
+    route_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    config_id TEXT NOT NULL,
+    corp_id TEXT NOT NULL,
+    open_kfid TEXT NOT NULL,
+    actor_id TEXT NOT NULL,
+    chat_kind TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    profile_id TEXT NOT NULL,
+    raw_profile TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    user_id TEXT,
+    legacy_shared BOOLEAN NOT NULL DEFAULT FALSE,
+    config_version TIMESTAMP NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY (route_id),
+    CONSTRAINT ck_kf_route_shape CHECK (source='wecom_kf' AND chat_kind='kf_direct' AND chat_id=open_kfid AND profile_id=CASE WHEN raw_profile='' THEN 'main' ELSE raw_profile END)
+);
+CREATE TABLE IF NOT EXISTS wecom_kf_inbox (
+    account_id TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    config_id TEXT NOT NULL,
+    corp_id TEXT NOT NULL,
+    open_kfid TEXT NOT NULL,
+    actor_id TEXT NOT NULL DEFAULT '',
+    route_id TEXT,
+    origin BIGINT NOT NULL,
+    message_type TEXT NOT NULL,
+    send_time BIGINT NOT NULL,
+    payload JSONB NOT NULL,
+    payload_digest TEXT NOT NULL,
+    capability_ciphertext TEXT,
+    config_version TIMESTAMP NOT NULL,
+    state TEXT NOT NULL DEFAULT 'received',
+    received_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY (account_id,namespace,message_id),
+    CONSTRAINT ck_kf_inbox_shape CHECK (namespace IN ('sync','callback') AND state='received' AND origin>=0 AND origin<=10 AND send_time>=0 AND jsonb_typeof(payload)='object' AND ((actor_id='' AND route_id IS NULL) OR (actor_id<>'' AND route_id IS NOT NULL)))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_kf_account_order ON wecom_kf_account_sync(account_order);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_kf_account_scope ON wecom_kf_account_sync(tenant_id,config_id,corp_id,open_kfid);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_kf_route_scope ON channel_session_routes(tenant_id,source,config_id,corp_id,open_kfid,actor_id,chat_kind,chat_id,profile_id);
+CREATE INDEX IF NOT EXISTS idx_kf_inbox_scope ON wecom_kf_inbox(tenant_id,config_id,account_id,received_at);
+FOR spec IN SELECT * FROM (VALUES ('wecom_kf_account_sync','account_id','text',TRUE),
+('wecom_kf_account_sync','account_order','int8',TRUE),
+('wecom_kf_account_sync','tenant_id','text',TRUE),
+('wecom_kf_account_sync','config_id','text',TRUE),
+('wecom_kf_account_sync','corp_id','text',TRUE),
+('wecom_kf_account_sync','open_kfid','text',TRUE),
+('wecom_kf_account_sync','profile_id','text',TRUE),
+('wecom_kf_account_sync','raw_profile','text',TRUE),
+('wecom_kf_account_sync','config_version','timestamp',TRUE),
+('wecom_kf_account_sync','requested_generation','int8',TRUE),
+('wecom_kf_account_sync','completed_generation','int8',TRUE),
+('wecom_kf_account_sync','cursor','text',TRUE),
+('wecom_kf_account_sync','worker_id','text',FALSE),
+('wecom_kf_account_sync','claim_epoch','int8',TRUE),
+('wecom_kf_account_sync','lease_until','timestamptz',FALSE),
+('wecom_kf_account_sync','verification_code','text',FALSE),
+('wecom_kf_account_sync','created_at','timestamptz',TRUE),
+('wecom_kf_account_sync','updated_at','timestamptz',TRUE),
+('channel_session_routes','route_id','text',TRUE),
+('channel_session_routes','tenant_id','text',TRUE),
+('channel_session_routes','source','text',TRUE),
+('channel_session_routes','config_id','text',TRUE),
+('channel_session_routes','corp_id','text',TRUE),
+('channel_session_routes','open_kfid','text',TRUE),
+('channel_session_routes','actor_id','text',TRUE),
+('channel_session_routes','chat_kind','text',TRUE),
+('channel_session_routes','chat_id','text',TRUE),
+('channel_session_routes','profile_id','text',TRUE),
+('channel_session_routes','raw_profile','text',TRUE),
+('channel_session_routes','session_id','text',TRUE),
+('channel_session_routes','user_id','text',FALSE),
+('channel_session_routes','legacy_shared','bool',TRUE),
+('channel_session_routes','config_version','timestamp',TRUE),
+('channel_session_routes','created_at','timestamptz',TRUE),
+('wecom_kf_inbox','account_id','text',TRUE),
+('wecom_kf_inbox','namespace','text',TRUE),
+('wecom_kf_inbox','message_id','text',TRUE),
+('wecom_kf_inbox','tenant_id','text',TRUE),
+('wecom_kf_inbox','config_id','text',TRUE),
+('wecom_kf_inbox','corp_id','text',TRUE),
+('wecom_kf_inbox','open_kfid','text',TRUE),
+('wecom_kf_inbox','actor_id','text',TRUE),
+('wecom_kf_inbox','route_id','text',FALSE),
+('wecom_kf_inbox','origin','int8',TRUE),
+('wecom_kf_inbox','message_type','text',TRUE),
+('wecom_kf_inbox','send_time','int8',TRUE),
+('wecom_kf_inbox','payload','jsonb',TRUE),
+('wecom_kf_inbox','payload_digest','text',TRUE),
+('wecom_kf_inbox','capability_ciphertext','text',FALSE),
+('wecom_kf_inbox','config_version','timestamp',TRUE),
+('wecom_kf_inbox','state','text',TRUE),
+('wecom_kf_inbox','received_at','timestamptz',TRUE)) AS wanted(table_name,column_name,type_name,required) LOOP
+IF NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=to_regclass(spec.table_name)
+ AND a.attname=spec.column_name AND a.atttypid=to_regtype(spec.type_name)
+ AND a.attnotnull=spec.required AND NOT a.attisdropped) THEN
+ RAISE EXCEPTION 'KF_INGRESS_SCHEMA_COLUMN_INCOMPATIBLE: %.%',spec.table_name,spec.column_name;
+END IF; END LOOP;
+FOR spec IN SELECT * FROM (VALUES ('wecom_kf_account_sync','wecom_kf_account_sync_pkey',ARRAY['account_id']::text[],TRUE,TRUE),
+('wecom_kf_account_sync','uq_kf_account_order',ARRAY['account_order']::text[],TRUE,FALSE),
+('wecom_kf_account_sync','uq_kf_account_scope',ARRAY['tenant_id','config_id','corp_id','open_kfid']::text[],TRUE,FALSE),
+('channel_session_routes','channel_session_routes_pkey',ARRAY['route_id']::text[],TRUE,TRUE),
+('channel_session_routes','uq_kf_route_scope',ARRAY['tenant_id','source','config_id','corp_id','open_kfid','actor_id','chat_kind','chat_id','profile_id']::text[],TRUE,FALSE),
+('wecom_kf_inbox','wecom_kf_inbox_pkey',ARRAY['account_id','namespace','message_id']::text[],TRUE,TRUE),
+('wecom_kf_inbox','idx_kf_inbox_scope',ARRAY['tenant_id','config_id','account_id','received_at']::text[],FALSE,FALSE)) AS wanted(table_name,index_name,column_names,is_unique,is_primary) LOOP
+IF NOT EXISTS (SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid JOIN pg_am am ON am.oid=c.relam
+ WHERE c.oid=to_regclass(spec.index_name) AND i.indrelid=to_regclass(spec.table_name)
+ AND i.indisunique=spec.is_unique AND i.indisprimary=spec.is_primary AND i.indisvalid AND i.indisready
+ AND am.amname='btree' AND i.indexprs IS NULL AND i.indpred IS NULL
+ AND i.indnkeyatts=array_length(spec.column_names,1) AND i.indnatts=i.indnkeyatts
+ AND ARRAY(SELECT a.attname::text FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum,ordinal)
+ JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum ORDER BY k.ordinal)=spec.column_names) THEN
+ RAISE EXCEPTION 'KF_INGRESS_SCHEMA_INDEX_INCOMPATIBLE: %',spec.index_name;
+END IF; END LOOP;
+IF to_regclass('pg_temp.kf_wecom_kf_account_sync_reference') IS NOT NULL THEN RAISE EXCEPTION 'KF_INGRESS_SCHEMA_REFERENCE_COLLISION'; END IF;
+CREATE TEMP TABLE kf_wecom_kf_account_sync_reference (LIKE wecom_kf_account_sync) ON COMMIT DROP;
+ALTER TABLE kf_wecom_kf_account_sync_reference ALTER COLUMN requested_generation SET DEFAULT 0;
+ALTER TABLE kf_wecom_kf_account_sync_reference ALTER COLUMN completed_generation SET DEFAULT 0;
+ALTER TABLE kf_wecom_kf_account_sync_reference ALTER COLUMN cursor SET DEFAULT '';
+ALTER TABLE kf_wecom_kf_account_sync_reference ALTER COLUMN claim_epoch SET DEFAULT 0;
+ALTER TABLE kf_wecom_kf_account_sync_reference ALTER COLUMN created_at SET DEFAULT clock_timestamp();
+ALTER TABLE kf_wecom_kf_account_sync_reference ALTER COLUMN updated_at SET DEFAULT clock_timestamp();
+ALTER TABLE kf_wecom_kf_account_sync_reference ADD CONSTRAINT ck_kf_account_watermarks CHECK (requested_generation>=completed_generation AND completed_generation>=0 AND claim_epoch>=0);
+ALTER TABLE kf_wecom_kf_account_sync_reference ADD CONSTRAINT ck_kf_account_lease CHECK ((worker_id IS NULL AND lease_until IS NULL) OR (worker_id IS NOT NULL AND lease_until IS NOT NULL));
+ALTER TABLE kf_wecom_kf_account_sync_reference ADD CONSTRAINT ck_kf_account_profile CHECK (profile_id=CASE WHEN raw_profile='' THEN 'main' ELSE raw_profile END);
+FOR spec IN SELECT conname FROM pg_constraint WHERE conrelid='pg_temp.kf_wecom_kf_account_sync_reference'::regclass LOOP
+IF NOT EXISTS (SELECT 1 FROM pg_constraint actual JOIN pg_constraint expected
+ ON expected.conrelid='pg_temp.kf_wecom_kf_account_sync_reference'::regclass AND expected.conname=spec.conname
+ WHERE actual.conrelid='wecom_kf_account_sync'::regclass AND actual.conname=spec.conname
+ AND actual.contype='c' AND actual.convalidated AND NOT actual.connoinherit
+ AND pg_get_expr(actual.conbin,actual.conrelid)=pg_get_expr(expected.conbin,expected.conrelid)) THEN
+ RAISE EXCEPTION 'KF_INGRESS_SCHEMA_CHECK_INCOMPATIBLE: %',spec.conname; END IF; END LOOP;
+FOR spec IN SELECT a.attname FROM pg_attribute a JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+ WHERE a.attrelid='pg_temp.kf_wecom_kf_account_sync_reference'::regclass LOOP
+ IF NOT EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_attrdef actual ON actual.adrelid=a.attrelid AND actual.adnum=a.attnum
+ JOIN pg_attribute expected_a ON expected_a.attrelid='pg_temp.kf_wecom_kf_account_sync_reference'::regclass AND expected_a.attname=spec.attname
+ JOIN pg_attrdef expected ON expected.adrelid=expected_a.attrelid AND expected.adnum=expected_a.attnum
+ WHERE a.attrelid='wecom_kf_account_sync'::regclass AND a.attname=spec.attname
+ AND pg_get_expr(actual.adbin,actual.adrelid)=pg_get_expr(expected.adbin,expected.adrelid)) THEN
+ RAISE EXCEPTION 'KF_INGRESS_SCHEMA_DEFAULT_INCOMPATIBLE: %.%','wecom_kf_account_sync',spec.attname; END IF; END LOOP;
+DROP TABLE kf_wecom_kf_account_sync_reference;
+IF to_regclass('pg_temp.kf_channel_session_routes_reference') IS NOT NULL THEN RAISE EXCEPTION 'KF_INGRESS_SCHEMA_REFERENCE_COLLISION'; END IF;
+CREATE TEMP TABLE kf_channel_session_routes_reference (LIKE channel_session_routes) ON COMMIT DROP;
+ALTER TABLE kf_channel_session_routes_reference ALTER COLUMN legacy_shared SET DEFAULT FALSE;
+ALTER TABLE kf_channel_session_routes_reference ALTER COLUMN created_at SET DEFAULT clock_timestamp();
+ALTER TABLE kf_channel_session_routes_reference ADD CONSTRAINT ck_kf_route_shape CHECK (source='wecom_kf' AND chat_kind='kf_direct' AND chat_id=open_kfid AND profile_id=CASE WHEN raw_profile='' THEN 'main' ELSE raw_profile END);
+FOR spec IN SELECT conname FROM pg_constraint WHERE conrelid='pg_temp.kf_channel_session_routes_reference'::regclass LOOP
+IF NOT EXISTS (SELECT 1 FROM pg_constraint actual JOIN pg_constraint expected
+ ON expected.conrelid='pg_temp.kf_channel_session_routes_reference'::regclass AND expected.conname=spec.conname
+ WHERE actual.conrelid='channel_session_routes'::regclass AND actual.conname=spec.conname
+ AND actual.contype='c' AND actual.convalidated AND NOT actual.connoinherit
+ AND pg_get_expr(actual.conbin,actual.conrelid)=pg_get_expr(expected.conbin,expected.conrelid)) THEN
+ RAISE EXCEPTION 'KF_INGRESS_SCHEMA_CHECK_INCOMPATIBLE: %',spec.conname; END IF; END LOOP;
+FOR spec IN SELECT a.attname FROM pg_attribute a JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+ WHERE a.attrelid='pg_temp.kf_channel_session_routes_reference'::regclass LOOP
+ IF NOT EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_attrdef actual ON actual.adrelid=a.attrelid AND actual.adnum=a.attnum
+ JOIN pg_attribute expected_a ON expected_a.attrelid='pg_temp.kf_channel_session_routes_reference'::regclass AND expected_a.attname=spec.attname
+ JOIN pg_attrdef expected ON expected.adrelid=expected_a.attrelid AND expected.adnum=expected_a.attnum
+ WHERE a.attrelid='channel_session_routes'::regclass AND a.attname=spec.attname
+ AND pg_get_expr(actual.adbin,actual.adrelid)=pg_get_expr(expected.adbin,expected.adrelid)) THEN
+ RAISE EXCEPTION 'KF_INGRESS_SCHEMA_DEFAULT_INCOMPATIBLE: %.%','channel_session_routes',spec.attname; END IF; END LOOP;
+DROP TABLE kf_channel_session_routes_reference;
+IF to_regclass('pg_temp.kf_wecom_kf_inbox_reference') IS NOT NULL THEN RAISE EXCEPTION 'KF_INGRESS_SCHEMA_REFERENCE_COLLISION'; END IF;
+CREATE TEMP TABLE kf_wecom_kf_inbox_reference (LIKE wecom_kf_inbox) ON COMMIT DROP;
+ALTER TABLE kf_wecom_kf_inbox_reference ALTER COLUMN actor_id SET DEFAULT '';
+ALTER TABLE kf_wecom_kf_inbox_reference ALTER COLUMN state SET DEFAULT 'received';
+ALTER TABLE kf_wecom_kf_inbox_reference ALTER COLUMN received_at SET DEFAULT clock_timestamp();
+ALTER TABLE kf_wecom_kf_inbox_reference ADD CONSTRAINT ck_kf_inbox_shape CHECK (namespace IN ('sync','callback') AND state='received' AND origin>=0 AND origin<=10 AND send_time>=0 AND jsonb_typeof(payload)='object' AND ((actor_id='' AND route_id IS NULL) OR (actor_id<>'' AND route_id IS NOT NULL)));
+FOR spec IN SELECT conname FROM pg_constraint WHERE conrelid='pg_temp.kf_wecom_kf_inbox_reference'::regclass LOOP
+IF NOT EXISTS (SELECT 1 FROM pg_constraint actual JOIN pg_constraint expected
+ ON expected.conrelid='pg_temp.kf_wecom_kf_inbox_reference'::regclass AND expected.conname=spec.conname
+ WHERE actual.conrelid='wecom_kf_inbox'::regclass AND actual.conname=spec.conname
+ AND actual.contype='c' AND actual.convalidated AND NOT actual.connoinherit
+ AND pg_get_expr(actual.conbin,actual.conrelid)=pg_get_expr(expected.conbin,expected.conrelid)) THEN
+ RAISE EXCEPTION 'KF_INGRESS_SCHEMA_CHECK_INCOMPATIBLE: %',spec.conname; END IF; END LOOP;
+FOR spec IN SELECT a.attname FROM pg_attribute a JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+ WHERE a.attrelid='pg_temp.kf_wecom_kf_inbox_reference'::regclass LOOP
+ IF NOT EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_attrdef actual ON actual.adrelid=a.attrelid AND actual.adnum=a.attnum
+ JOIN pg_attribute expected_a ON expected_a.attrelid='pg_temp.kf_wecom_kf_inbox_reference'::regclass AND expected_a.attname=spec.attname
+ JOIN pg_attrdef expected ON expected.adrelid=expected_a.attrelid AND expected.adnum=expected_a.attnum
+ WHERE a.attrelid='wecom_kf_inbox'::regclass AND a.attname=spec.attname
+ AND pg_get_expr(actual.adbin,actual.adrelid)=pg_get_expr(expected.adbin,expected.adrelid)) THEN
+ RAISE EXCEPTION 'KF_INGRESS_SCHEMA_DEFAULT_INCOMPATIBLE: %.%','wecom_kf_inbox',spec.attname; END IF; END LOOP;
+DROP TABLE kf_wecom_kf_inbox_reference;
+IF pg_get_serial_sequence('wecom_kf_account_sync','account_order') IS NULL THEN RAISE EXCEPTION 'KF_INGRESS_SCHEMA_ORDER_SEQUENCE_INCOMPATIBLE'; END IF;
+IF NOT EXISTS (SELECT 1 FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid=d.adrelid AND a.attnum=d.adnum
+ WHERE a.attrelid='wecom_kf_account_sync'::regclass AND a.attname='account_order'
+ AND pg_get_expr(d.adbin,d.adrelid)=format('nextval(%L::regclass)',pg_get_serial_sequence('wecom_kf_account_sync','account_order')::regclass::text)) THEN
+ RAISE EXCEPTION 'KF_INGRESS_SCHEMA_ORDER_DEFAULT_INCOMPATIBLE'; END IF;
+END $$;
+
+-- M6a text source admission: original source receipt and execution input facts.
+DO $$
+DECLARE spec RECORD; BEGIN
+ALTER TABLE wecom_kf_account_sync ADD COLUMN IF NOT EXISTS inbox_seq BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE wecom_kf_inbox ADD COLUMN IF NOT EXISTS receive_seq BIGINT;
+ALTER TABLE wecom_kf_inbox ADD COLUMN IF NOT EXISTS receipt_order BIGSERIAL NOT NULL;
+ALTER TABLE wecom_kf_inbox ADD COLUMN IF NOT EXISTS accepted_input_ref TEXT;
+CREATE TABLE IF NOT EXISTS agent_runner_inputs (
+    input_ref TEXT NOT NULL,
+    source TEXT NOT NULL,
+    source_key TEXT NOT NULL,
+    locator JSONB NOT NULL,
+    provenance JSONB NOT NULL,
+    intent JSONB NOT NULL,
+    intent_digest TEXT NOT NULL,
+    receipt_seq BIGINT NOT NULL,
+    ordinal BIGSERIAL NOT NULL,
+    accepted_runner_id TEXT NOT NULL,
+    current_runner_id TEXT NOT NULL,
+    phase TEXT NOT NULL DEFAULT 'accepted',
+    attached_revision BIGINT,
+    deferred_to_runner TEXT,
+    accepted_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY(input_ref)
+);
+IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='wecom_kf_account_sync'::regclass AND conname='ck_kf_account_inbox_seq') THEN
+ALTER TABLE wecom_kf_account_sync ADD CONSTRAINT ck_kf_account_inbox_seq CHECK (inbox_seq>=0);
+END IF;
+IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='wecom_kf_inbox'::regclass AND conname='ck_kf_inbox_receipt_order') THEN
+ALTER TABLE wecom_kf_inbox ADD CONSTRAINT ck_kf_inbox_receipt_order CHECK (receipt_order>0 AND (receive_seq IS NULL OR receive_seq>0) AND (accepted_input_ref IS NULL OR receive_seq IS NOT NULL));
+END IF;
+IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='agent_runner_inputs'::regclass AND conname='ck_runner_input_shape') THEN
+ALTER TABLE agent_runner_inputs ADD CONSTRAINT ck_runner_input_shape CHECK (source IN ('wecom_kf','feishu','dingtalk') AND phase IN ('accepted','attached','appended','applied','deferred','cancelled') AND receipt_seq>0 AND ordinal>0 AND (attached_revision IS NULL OR attached_revision>=0) AND jsonb_typeof(locator)='object' AND jsonb_typeof(provenance)='object' AND jsonb_typeof(intent)='object');
+END IF;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_runner_input_source ON agent_runner_inputs(source_key);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_runner_input_ordinal ON agent_runner_inputs(ordinal);
+CREATE INDEX IF NOT EXISTS idx_runner_input_current ON agent_runner_inputs(current_runner_id,ordinal);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_kf_inbox_receipt_order ON wecom_kf_inbox(receipt_order);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_kf_inbox_receive_seq ON wecom_kf_inbox(account_id,receive_seq);
+FOR spec IN SELECT * FROM (VALUES ('wecom_kf_account_sync','inbox_seq','int8',TRUE),
+('wecom_kf_inbox','receive_seq','int8',FALSE),
+('wecom_kf_inbox','receipt_order','int8',TRUE),
+('wecom_kf_inbox','accepted_input_ref','text',FALSE),
+('agent_runner_inputs','input_ref','text',TRUE),
+('agent_runner_inputs','source','text',TRUE),
+('agent_runner_inputs','source_key','text',TRUE),
+('agent_runner_inputs','locator','jsonb',TRUE),
+('agent_runner_inputs','provenance','jsonb',TRUE),
+('agent_runner_inputs','intent','jsonb',TRUE),
+('agent_runner_inputs','intent_digest','text',TRUE),
+('agent_runner_inputs','receipt_seq','int8',TRUE),
+('agent_runner_inputs','ordinal','int8',TRUE),
+('agent_runner_inputs','accepted_runner_id','text',TRUE),
+('agent_runner_inputs','current_runner_id','text',TRUE),
+('agent_runner_inputs','phase','text',TRUE),
+('agent_runner_inputs','attached_revision','int8',FALSE),
+('agent_runner_inputs','deferred_to_runner','text',FALSE),
+('agent_runner_inputs','accepted_at','timestamptz',TRUE)) AS wanted(table_name,column_name,type_name,required) LOOP
+IF NOT EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_type t ON t.oid=a.atttypid
+ WHERE a.attrelid=to_regclass(spec.table_name) AND a.attname=spec.column_name
+ AND t.typname=spec.type_name AND a.attnotnull=spec.required AND NOT a.attisdropped
+ AND a.atttypmod=-1 AND a.attgenerated='' AND a.attidentity='') THEN
+ RAISE EXCEPTION 'SOURCE_INPUT_SCHEMA_COLUMN_INCOMPATIBLE: %.%',spec.table_name,spec.column_name;
+END IF; END LOOP;
+FOR spec IN SELECT * FROM (VALUES ('agent_runner_inputs','agent_runner_inputs_pkey',ARRAY['input_ref']::text[],TRUE,TRUE),
+('agent_runner_inputs','uq_runner_input_source',ARRAY['source_key']::text[],TRUE,FALSE),
+('agent_runner_inputs','uq_runner_input_ordinal',ARRAY['ordinal']::text[],TRUE,FALSE),
+('agent_runner_inputs','idx_runner_input_current',ARRAY['current_runner_id','ordinal']::text[],FALSE,FALSE),
+('wecom_kf_inbox','uq_kf_inbox_receipt_order',ARRAY['receipt_order']::text[],TRUE,FALSE),
+('wecom_kf_inbox','uq_kf_inbox_receive_seq',ARRAY['account_id','receive_seq']::text[],TRUE,FALSE)) AS wanted(table_name,index_name,column_names,is_unique,is_primary) LOOP
+IF NOT EXISTS (SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid JOIN pg_am am ON am.oid=c.relam
+ WHERE c.oid=to_regclass(spec.index_name) AND i.indrelid=to_regclass(spec.table_name)
+ AND i.indisunique=spec.is_unique AND i.indisprimary=spec.is_primary AND i.indisvalid AND i.indisready
+ AND am.amname='btree' AND i.indexprs IS NULL AND i.indpred IS NULL
+ AND i.indnkeyatts=array_length(spec.column_names,1) AND i.indnatts=i.indnkeyatts
+ AND ARRAY(SELECT a.attname::text FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum,ordinal)
+ JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum ORDER BY k.ordinal)=spec.column_names) THEN
+ RAISE EXCEPTION 'SOURCE_INPUT_SCHEMA_INDEX_INCOMPATIBLE: %',spec.index_name;
+END IF; END LOOP;
+IF to_regclass('pg_temp.source_wecom_kf_account_sync_reference') IS NOT NULL THEN RAISE EXCEPTION 'SOURCE_INPUT_SCHEMA_REFERENCE_COLLISION'; END IF;
+CREATE TEMP TABLE source_wecom_kf_account_sync_reference (LIKE wecom_kf_account_sync) ON COMMIT DROP;
+ALTER TABLE source_wecom_kf_account_sync_reference ALTER COLUMN inbox_seq SET DEFAULT 0;
+ALTER TABLE source_wecom_kf_account_sync_reference ADD CONSTRAINT ck_kf_account_inbox_seq CHECK (inbox_seq>=0);
+FOR spec IN SELECT conname FROM pg_constraint WHERE conrelid='pg_temp.source_wecom_kf_account_sync_reference'::regclass LOOP
+ IF NOT EXISTS (SELECT 1 FROM pg_constraint actual JOIN pg_constraint expected
+ ON expected.conrelid='pg_temp.source_wecom_kf_account_sync_reference'::regclass AND expected.conname=spec.conname
+ WHERE actual.conrelid='wecom_kf_account_sync'::regclass AND actual.conname=spec.conname
+ AND actual.contype='c' AND actual.convalidated AND NOT actual.connoinherit
+ AND pg_get_expr(actual.conbin,actual.conrelid)=pg_get_expr(expected.conbin,expected.conrelid)) THEN
+ RAISE EXCEPTION 'SOURCE_INPUT_SCHEMA_CHECK_INCOMPATIBLE: %',spec.conname; END IF; END LOOP;
+FOR spec IN SELECT a.attname FROM pg_attribute a JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+ WHERE a.attrelid='pg_temp.source_wecom_kf_account_sync_reference'::regclass LOOP
+ IF NOT EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_attrdef actual ON actual.adrelid=a.attrelid AND actual.adnum=a.attnum
+ JOIN pg_attribute expected_a ON expected_a.attrelid='pg_temp.source_wecom_kf_account_sync_reference'::regclass AND expected_a.attname=spec.attname
+ JOIN pg_attrdef expected ON expected.adrelid=expected_a.attrelid AND expected.adnum=expected_a.attnum
+ WHERE a.attrelid='wecom_kf_account_sync'::regclass AND a.attname=spec.attname
+ AND pg_get_expr(actual.adbin,actual.adrelid)=pg_get_expr(expected.adbin,expected.adrelid)) THEN
+ RAISE EXCEPTION 'SOURCE_INPUT_SCHEMA_DEFAULT_INCOMPATIBLE: %.%','wecom_kf_account_sync',spec.attname; END IF; END LOOP;
+DROP TABLE source_wecom_kf_account_sync_reference;
+IF to_regclass('pg_temp.source_wecom_kf_inbox_reference') IS NOT NULL THEN RAISE EXCEPTION 'SOURCE_INPUT_SCHEMA_REFERENCE_COLLISION'; END IF;
+CREATE TEMP TABLE source_wecom_kf_inbox_reference (LIKE wecom_kf_inbox) ON COMMIT DROP;
+ALTER TABLE source_wecom_kf_inbox_reference ADD CONSTRAINT ck_kf_inbox_receipt_order CHECK (receipt_order>0 AND (receive_seq IS NULL OR receive_seq>0) AND (accepted_input_ref IS NULL OR receive_seq IS NOT NULL));
+FOR spec IN SELECT conname FROM pg_constraint WHERE conrelid='pg_temp.source_wecom_kf_inbox_reference'::regclass LOOP
+ IF NOT EXISTS (SELECT 1 FROM pg_constraint actual JOIN pg_constraint expected
+ ON expected.conrelid='pg_temp.source_wecom_kf_inbox_reference'::regclass AND expected.conname=spec.conname
+ WHERE actual.conrelid='wecom_kf_inbox'::regclass AND actual.conname=spec.conname
+ AND actual.contype='c' AND actual.convalidated AND NOT actual.connoinherit
+ AND pg_get_expr(actual.conbin,actual.conrelid)=pg_get_expr(expected.conbin,expected.conrelid)) THEN
+ RAISE EXCEPTION 'SOURCE_INPUT_SCHEMA_CHECK_INCOMPATIBLE: %',spec.conname; END IF; END LOOP;
+FOR spec IN SELECT a.attname FROM pg_attribute a JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+ WHERE a.attrelid='pg_temp.source_wecom_kf_inbox_reference'::regclass LOOP
+ IF NOT EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_attrdef actual ON actual.adrelid=a.attrelid AND actual.adnum=a.attnum
+ JOIN pg_attribute expected_a ON expected_a.attrelid='pg_temp.source_wecom_kf_inbox_reference'::regclass AND expected_a.attname=spec.attname
+ JOIN pg_attrdef expected ON expected.adrelid=expected_a.attrelid AND expected.adnum=expected_a.attnum
+ WHERE a.attrelid='wecom_kf_inbox'::regclass AND a.attname=spec.attname
+ AND pg_get_expr(actual.adbin,actual.adrelid)=pg_get_expr(expected.adbin,expected.adrelid)) THEN
+ RAISE EXCEPTION 'SOURCE_INPUT_SCHEMA_DEFAULT_INCOMPATIBLE: %.%','wecom_kf_inbox',spec.attname; END IF; END LOOP;
+DROP TABLE source_wecom_kf_inbox_reference;
+IF to_regclass('pg_temp.source_agent_runner_inputs_reference') IS NOT NULL THEN RAISE EXCEPTION 'SOURCE_INPUT_SCHEMA_REFERENCE_COLLISION'; END IF;
+CREATE TEMP TABLE source_agent_runner_inputs_reference (LIKE agent_runner_inputs) ON COMMIT DROP;
+ALTER TABLE source_agent_runner_inputs_reference ALTER COLUMN phase SET DEFAULT 'accepted';
+ALTER TABLE source_agent_runner_inputs_reference ALTER COLUMN accepted_at SET DEFAULT clock_timestamp();
+ALTER TABLE source_agent_runner_inputs_reference ADD CONSTRAINT ck_runner_input_shape CHECK (source IN ('wecom_kf','feishu','dingtalk') AND phase IN ('accepted','attached','appended','applied','deferred','cancelled') AND receipt_seq>0 AND ordinal>0 AND (attached_revision IS NULL OR attached_revision>=0) AND jsonb_typeof(locator)='object' AND jsonb_typeof(provenance)='object' AND jsonb_typeof(intent)='object');
+FOR spec IN SELECT conname FROM pg_constraint WHERE conrelid='pg_temp.source_agent_runner_inputs_reference'::regclass LOOP
+ IF NOT EXISTS (SELECT 1 FROM pg_constraint actual JOIN pg_constraint expected
+ ON expected.conrelid='pg_temp.source_agent_runner_inputs_reference'::regclass AND expected.conname=spec.conname
+ WHERE actual.conrelid='agent_runner_inputs'::regclass AND actual.conname=spec.conname
+ AND actual.contype='c' AND actual.convalidated AND NOT actual.connoinherit
+ AND pg_get_expr(actual.conbin,actual.conrelid)=pg_get_expr(expected.conbin,expected.conrelid)) THEN
+ RAISE EXCEPTION 'SOURCE_INPUT_SCHEMA_CHECK_INCOMPATIBLE: %',spec.conname; END IF; END LOOP;
+FOR spec IN SELECT a.attname FROM pg_attribute a JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+ WHERE a.attrelid='pg_temp.source_agent_runner_inputs_reference'::regclass LOOP
+ IF NOT EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_attrdef actual ON actual.adrelid=a.attrelid AND actual.adnum=a.attnum
+ JOIN pg_attribute expected_a ON expected_a.attrelid='pg_temp.source_agent_runner_inputs_reference'::regclass AND expected_a.attname=spec.attname
+ JOIN pg_attrdef expected ON expected.adrelid=expected_a.attrelid AND expected.adnum=expected_a.attnum
+ WHERE a.attrelid='agent_runner_inputs'::regclass AND a.attname=spec.attname
+ AND pg_get_expr(actual.adbin,actual.adrelid)=pg_get_expr(expected.adbin,expected.adrelid)) THEN
+ RAISE EXCEPTION 'SOURCE_INPUT_SCHEMA_DEFAULT_INCOMPATIBLE: %.%','agent_runner_inputs',spec.attname; END IF; END LOOP;
+DROP TABLE source_agent_runner_inputs_reference;
+IF pg_get_serial_sequence('wecom_kf_inbox','receipt_order') IS NULL THEN RAISE EXCEPTION 'SOURCE_INPUT_SCHEMA_SEQUENCE_INCOMPATIBLE'; END IF;
+IF NOT EXISTS (SELECT 1 FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid=d.adrelid AND a.attnum=d.adnum
+ WHERE a.attrelid='wecom_kf_inbox'::regclass AND a.attname='receipt_order'
+ AND pg_get_expr(d.adbin,d.adrelid)=format('nextval(%L::regclass)',pg_get_serial_sequence('wecom_kf_inbox','receipt_order')::regclass::text)) THEN
+ RAISE EXCEPTION 'SOURCE_INPUT_SCHEMA_SEQUENCE_DEFAULT_INCOMPATIBLE'; END IF;
+IF pg_get_serial_sequence('agent_runner_inputs','ordinal') IS NULL THEN RAISE EXCEPTION 'SOURCE_INPUT_SCHEMA_SEQUENCE_INCOMPATIBLE'; END IF;
+IF NOT EXISTS (SELECT 1 FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid=d.adrelid AND a.attnum=d.adnum
+ WHERE a.attrelid='agent_runner_inputs'::regclass AND a.attname='ordinal'
+ AND pg_get_expr(d.adbin,d.adrelid)=format('nextval(%L::regclass)',pg_get_serial_sequence('agent_runner_inputs','ordinal')::regclass::text)) THEN
+ RAISE EXCEPTION 'SOURCE_INPUT_SCHEMA_SEQUENCE_DEFAULT_INCOMPATIBLE'; END IF;
+IF EXISTS (SELECT 1 FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid=d.adrelid AND a.attnum=d.adnum WHERE a.attrelid='wecom_kf_inbox'::regclass AND a.attname='receive_seq') THEN RAISE EXCEPTION 'SOURCE_INPUT_SCHEMA_NULL_DEFAULT_INCOMPATIBLE'; END IF;
+IF EXISTS (SELECT 1 FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid=d.adrelid AND a.attnum=d.adnum WHERE a.attrelid='wecom_kf_inbox'::regclass AND a.attname='accepted_input_ref') THEN RAISE EXCEPTION 'SOURCE_INPUT_SCHEMA_NULL_DEFAULT_INCOMPATIBLE'; END IF;
+IF EXISTS (SELECT 1 FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid=d.adrelid AND a.attnum=d.adnum WHERE a.attrelid='agent_runner_inputs'::regclass AND a.attname='attached_revision') THEN RAISE EXCEPTION 'SOURCE_INPUT_SCHEMA_NULL_DEFAULT_INCOMPATIBLE'; END IF;
+IF EXISTS (SELECT 1 FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid=d.adrelid AND a.attnum=d.adnum WHERE a.attrelid='agent_runner_inputs'::regclass AND a.attname='deferred_to_runner') THEN RAISE EXCEPTION 'SOURCE_INPUT_SCHEMA_NULL_DEFAULT_INCOMPATIBLE'; END IF;
+END $$;
+
+
+
+-- Native accepted AI voice preparation; private facts, no SQL FK.
+DO $$
+DECLARE spec RECORD;
+BEGIN
+CREATE TABLE IF NOT EXISTS wecom_kf_input_preparations (
+    preparation_ref TEXT PRIMARY KEY,
+    input_ref TEXT NOT NULL,
+    operation_version INTEGER NOT NULL,
+    tenant_id TEXT NOT NULL,
+    intent_digest TEXT NOT NULL,
+    provenance JSONB NOT NULL,
+    media_id TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    artifact JSONB,
+    transcript TEXT,
+    success BOOLEAN NOT NULL DEFAULT FALSE,
+    result_kind TEXT,
+    fee_owner_runner_id TEXT,
+    authorized_attempt INTEGER,
+    authorized_worker_id TEXT,
+    physical_call_id TEXT,
+    receipt_id TEXT,
+    provider_status BIGINT,
+    error_code TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    started_at TIMESTAMPTZ,
+    io_config_version TIMESTAMPTZ,
+    dispatch_observed_at TIMESTAMPTZ,
+    observed_at TIMESTAMPTZ,
+    UNIQUE(input_ref,operation_version),
+    CONSTRAINT ck_kf_preparation_shape CHECK (
+        operation_version>0 AND length(tenant_id)>0 AND length(intent_digest)=64
+        AND jsonb_typeof(provenance)='object'
+        AND phase IN ('media_ready','started','known','unknown')
+        AND (artifact IS NULL OR jsonb_typeof(artifact)='object')
+        AND (transcript IS NULL OR octet_length(transcript)<=32768)
+        AND (authorized_attempt IS NULL OR authorized_attempt>0)
+        AND (result_kind IS NULL OR result_kind IN ('recognition','preflight','provider'))
+        AND (phase<>'media_ready' OR artifact IS NOT NULL)
+        AND (phase<>'known' OR (result_kind IS NOT NULL AND transcript IS NOT NULL AND observed_at IS NOT NULL))
+        AND (NOT success OR (phase='known' AND length(transcript)>0))
+        AND ((receipt_id IS NULL AND fee_owner_runner_id IS NULL AND authorized_attempt IS NULL
+              AND authorized_worker_id IS NULL AND physical_call_id IS NULL AND started_at IS NULL AND io_config_version IS NULL AND dispatch_observed_at IS NULL)
+             OR (receipt_id IS NOT NULL AND fee_owner_runner_id IS NOT NULL AND authorized_attempt IS NOT NULL
+              AND authorized_worker_id IS NOT NULL AND physical_call_id IS NOT NULL AND started_at IS NOT NULL AND io_config_version IS NOT NULL AND dispatch_observed_at IS NOT NULL))
+        AND (phase NOT IN ('started','unknown') OR receipt_id IS NOT NULL)
+        AND (result_kind IS DISTINCT FROM 'provider' OR receipt_id IS NOT NULL)
+    )
+);
+IF NOT EXISTS (SELECT 1 FROM pg_class WHERE oid='wecom_kf_input_preparations'::regclass AND relkind='r') THEN
+ RAISE EXCEPTION 'VOICE_PREPARATION_SCHEMA_RELATION_INCOMPATIBLE'; END IF;
+IF to_regclass('pg_temp.voice_preparation_reference') IS NOT NULL THEN
+ RAISE EXCEPTION 'VOICE_PREPARATION_SCHEMA_REFERENCE_COLLISION'; END IF;
+CREATE TEMP TABLE voice_preparation_reference (
+    preparation_ref TEXT PRIMARY KEY,
+    input_ref TEXT NOT NULL,
+    operation_version INTEGER NOT NULL,
+    tenant_id TEXT NOT NULL,
+    intent_digest TEXT NOT NULL,
+    provenance JSONB NOT NULL,
+    media_id TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    artifact JSONB,
+    transcript TEXT,
+    success BOOLEAN NOT NULL DEFAULT FALSE,
+    result_kind TEXT,
+    fee_owner_runner_id TEXT,
+    authorized_attempt INTEGER,
+    authorized_worker_id TEXT,
+    physical_call_id TEXT,
+    receipt_id TEXT,
+    provider_status BIGINT,
+    error_code TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    started_at TIMESTAMPTZ,
+    io_config_version TIMESTAMPTZ,
+    dispatch_observed_at TIMESTAMPTZ,
+    observed_at TIMESTAMPTZ,
+    UNIQUE(input_ref,operation_version),
+    CONSTRAINT ck_kf_preparation_shape CHECK (
+        operation_version>0 AND length(tenant_id)>0 AND length(intent_digest)=64
+        AND jsonb_typeof(provenance)='object'
+        AND phase IN ('media_ready','started','known','unknown')
+        AND (artifact IS NULL OR jsonb_typeof(artifact)='object')
+        AND (transcript IS NULL OR octet_length(transcript)<=32768)
+        AND (authorized_attempt IS NULL OR authorized_attempt>0)
+        AND (result_kind IS NULL OR result_kind IN ('recognition','preflight','provider'))
+        AND (phase<>'media_ready' OR artifact IS NOT NULL)
+        AND (phase<>'known' OR (result_kind IS NOT NULL AND transcript IS NOT NULL AND observed_at IS NOT NULL))
+        AND (NOT success OR (phase='known' AND length(transcript)>0))
+        AND ((receipt_id IS NULL AND fee_owner_runner_id IS NULL AND authorized_attempt IS NULL
+              AND authorized_worker_id IS NULL AND physical_call_id IS NULL AND started_at IS NULL AND io_config_version IS NULL AND dispatch_observed_at IS NULL)
+             OR (receipt_id IS NOT NULL AND fee_owner_runner_id IS NOT NULL AND authorized_attempt IS NOT NULL
+              AND authorized_worker_id IS NOT NULL AND physical_call_id IS NOT NULL AND started_at IS NOT NULL AND io_config_version IS NOT NULL AND dispatch_observed_at IS NOT NULL))
+        AND (phase NOT IN ('started','unknown') OR receipt_id IS NOT NULL)
+        AND (result_kind IS DISTINCT FROM 'provider' OR receipt_id IS NOT NULL)
+    )
+) ON COMMIT DROP;
+IF (SELECT count(*) FROM pg_attribute WHERE attrelid='wecom_kf_input_preparations'::regclass AND attnum>0 AND NOT attisdropped)
+ <> (SELECT count(*) FROM pg_attribute WHERE attrelid='pg_temp.voice_preparation_reference'::regclass AND attnum>0 AND NOT attisdropped) THEN
+ RAISE EXCEPTION 'VOICE_PREPARATION_SCHEMA_COLUMNS_INCOMPATIBLE'; END IF;
+FOR spec IN SELECT * FROM pg_attribute WHERE attrelid='pg_temp.voice_preparation_reference'::regclass AND attnum>0 AND NOT attisdropped LOOP
+ IF NOT EXISTS (SELECT 1 FROM pg_attribute actual WHERE actual.attrelid='wecom_kf_input_preparations'::regclass
+  AND actual.attname=spec.attname AND actual.attnum>0 AND NOT actual.attisdropped
+  AND actual.atttypid=spec.atttypid AND actual.atttypmod=spec.atttypmod AND actual.attnotnull=spec.attnotnull
+  AND actual.attidentity=spec.attidentity AND actual.attgenerated=spec.attgenerated) THEN
+  RAISE EXCEPTION 'VOICE_PREPARATION_SCHEMA_COLUMN_INCOMPATIBLE: %',spec.attname; END IF;
+ IF (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid=d.adrelid AND a.attnum=d.adnum
+  WHERE a.attrelid='wecom_kf_input_preparations'::regclass AND a.attname=spec.attname)
+ IS DISTINCT FROM (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d
+  WHERE d.adrelid='pg_temp.voice_preparation_reference'::regclass AND d.adnum=spec.attnum) THEN
+  RAISE EXCEPTION 'VOICE_PREPARATION_SCHEMA_DEFAULT_INCOMPATIBLE: %',spec.attname; END IF;
+END LOOP;
+IF (SELECT count(*) FROM pg_constraint WHERE conrelid='wecom_kf_input_preparations'::regclass AND contype IN ('c','p','u','f'))
+ <> (SELECT count(*) FROM pg_constraint WHERE conrelid='pg_temp.voice_preparation_reference'::regclass AND contype IN ('c','p','u','f')) THEN
+ RAISE EXCEPTION 'VOICE_PREPARATION_SCHEMA_CONSTRAINTS_INCOMPATIBLE'; END IF;
+FOR spec IN SELECT * FROM pg_constraint WHERE conrelid='pg_temp.voice_preparation_reference'::regclass AND contype IN ('c','p','u') LOOP
+ IF spec.contype='c' THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint actual WHERE actual.conrelid='wecom_kf_input_preparations'::regclass
+   AND actual.conname=spec.conname AND actual.contype='c' AND actual.convalidated AND NOT actual.connoinherit
+   AND pg_get_expr(actual.conbin,actual.conrelid)=pg_get_expr(spec.conbin,spec.conrelid)) THEN
+   RAISE EXCEPTION 'VOICE_PREPARATION_SCHEMA_CHECK_INCOMPATIBLE'; END IF;
+ ELSE
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint actual JOIN pg_index i ON i.indexrelid=actual.conindid
+   WHERE actual.conrelid='wecom_kf_input_preparations'::regclass AND actual.contype=spec.contype
+   AND actual.conkey=spec.conkey AND NOT actual.condeferrable AND i.indisvalid AND i.indisready
+   AND i.indpred IS NULL AND i.indexprs IS NULL AND i.indnkeyatts=array_length(spec.conkey,1)
+   AND i.indnatts=i.indnkeyatts) THEN
+   RAISE EXCEPTION 'VOICE_PREPARATION_SCHEMA_INDEX_INCOMPATIBLE'; END IF;
+ END IF;
+END LOOP;
+DROP TABLE voice_preparation_reference;
+END $$;
+
+-- M6a fixed receipt classification and ordinary context history; no task dispatch.
+DO $$
+DECLARE spec RECORD; table_name TEXT; reference_name TEXT; BEGIN
+CREATE TABLE IF NOT EXISTS wecom_kf_receipt_classifications (
+    account_id TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    route_id TEXT,
+    payload_digest TEXT NOT NULL,
+    scope JSONB NOT NULL,
+    classification TEXT NOT NULL,
+    observed_state INTEGER,
+    observed_at TIMESTAMPTZ,
+    io_config_version TIMESTAMP,
+    event_state INTEGER,
+    classification_resolved BOOLEAN NOT NULL,
+    business_pending BOOLEAN NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY(account_id,namespace,message_id),
+    CONSTRAINT ck_kf_classification_shape CHECK (
+        namespace IN ('sync','callback') AND length(payload_digest)=64 AND jsonb_typeof(scope)='object'
+        AND classification IN ('ai','human','ended','employee','unknown','event')
+        AND (observed_state IS NULL OR observed_state BETWEEN 0 AND 4)
+        AND (event_state IS NULL OR (classification='event' AND event_state BETWEEN 0 AND 4))
+        AND ((observed_state IS NULL AND observed_at IS NULL AND io_config_version IS NULL)
+             OR (observed_state IS NOT NULL AND observed_at IS NOT NULL AND io_config_version IS NOT NULL))
+        AND (classification='event' OR (route_id IS NOT NULL AND (classification='employee' OR observed_state IS NOT NULL)))
+        AND (classification<>'ai' OR observed_state=1)
+        AND (classification<>'human' OR observed_state=3)
+        AND (classification<>'ended' OR observed_state=4)
+    )
+);
+CREATE TABLE IF NOT EXISTS wecom_kf_context_consumptions (
+    account_id TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    route_id TEXT,
+    session_id TEXT,
+    payload_digest TEXT NOT NULL,
+    accepted_input_ref TEXT,
+    completion_observation JSONB,
+    history_id TEXT,
+    target_message_id TEXT,
+    disposition TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY(account_id,namespace,message_id),
+    CONSTRAINT ck_kf_context_consumption_shape CHECK (
+        namespace IN ('sync','callback') AND length(payload_digest)=64
+        AND disposition IN ('persisted','pending_asr','pending_history','pending_target','recalled','accepted_target','pending_scope','pending_business','source_terminal')
+        AND (disposition<>'source_terminal' OR (route_id IS NOT NULL AND session_id IS NOT NULL AND accepted_input_ref IS NOT NULL AND jsonb_typeof(completion_observation)='object'))
+        AND (disposition NOT IN ('persisted','pending_asr') OR (route_id IS NOT NULL AND session_id IS NOT NULL AND history_id IS NOT NULL))
+        AND (disposition NOT IN ('pending_target','recalled','accepted_target') OR (route_id IS NOT NULL AND target_message_id IS NOT NULL))
+    )
+);
+CREATE TABLE IF NOT EXISTS wecom_kf_context_task_intents (
+    task_id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    route_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    history_id TEXT NOT NULL,
+    task_name TEXT NOT NULL,
+    operation_version INTEGER NOT NULL,
+    scope JSONB NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending_adapter',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    UNIQUE(account_id,namespace,message_id,task_name,operation_version),
+    CONSTRAINT ck_kf_context_task_shape CHECK (
+        namespace IN ('sync','callback') AND operation_version=1
+        AND task_name IN ('lead_refresh','external_push_human')
+        AND state='pending_adapter' AND jsonb_typeof(scope)='object'
+    )
+);
+IF to_regclass('pg_temp.context_reference_wecom_kf_receipt_classifications') IS NOT NULL THEN RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_REFERENCE_COLLISION'; END IF;
+CREATE TEMP TABLE context_reference_wecom_kf_receipt_classifications (
+    account_id TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    route_id TEXT,
+    payload_digest TEXT NOT NULL,
+    scope JSONB NOT NULL,
+    classification TEXT NOT NULL,
+    observed_state INTEGER,
+    observed_at TIMESTAMPTZ,
+    io_config_version TIMESTAMP,
+    event_state INTEGER,
+    classification_resolved BOOLEAN NOT NULL,
+    business_pending BOOLEAN NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY(account_id,namespace,message_id),
+    CONSTRAINT ck_kf_classification_shape CHECK (
+        namespace IN ('sync','callback') AND length(payload_digest)=64 AND jsonb_typeof(scope)='object'
+        AND classification IN ('ai','human','ended','employee','unknown','event')
+        AND (observed_state IS NULL OR observed_state BETWEEN 0 AND 4)
+        AND (event_state IS NULL OR (classification='event' AND event_state BETWEEN 0 AND 4))
+        AND ((observed_state IS NULL AND observed_at IS NULL AND io_config_version IS NULL)
+             OR (observed_state IS NOT NULL AND observed_at IS NOT NULL AND io_config_version IS NOT NULL))
+        AND (classification='event' OR (route_id IS NOT NULL AND (classification='employee' OR observed_state IS NOT NULL)))
+        AND (classification<>'ai' OR observed_state=1)
+        AND (classification<>'human' OR observed_state=3)
+        AND (classification<>'ended' OR observed_state=4)
+    )
+) ON COMMIT DROP;
+table_name:='wecom_kf_receipt_classifications'; reference_name:='pg_temp.context_reference_wecom_kf_receipt_classifications';
+IF NOT EXISTS (SELECT 1 FROM pg_class WHERE oid=table_name::regclass AND relkind='r') THEN
+ RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_RELATION_INCOMPATIBLE: %',table_name; END IF;
+IF (SELECT count(*) FROM pg_attribute WHERE attrelid=table_name::regclass AND attnum>0 AND NOT attisdropped)
+ <> (SELECT count(*) FROM pg_attribute WHERE attrelid=reference_name::regclass AND attnum>0 AND NOT attisdropped) THEN
+ RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_COLUMNS_INCOMPATIBLE: %',table_name; END IF;
+FOR spec IN SELECT * FROM pg_attribute WHERE attrelid=reference_name::regclass AND attnum>0 AND NOT attisdropped LOOP
+ IF NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=table_name::regclass
+  AND a.attname=spec.attname AND a.attnum>0 AND NOT a.attisdropped
+  AND a.atttypid=spec.atttypid AND a.atttypmod=spec.atttypmod AND a.attnotnull=spec.attnotnull
+  AND a.attidentity=spec.attidentity AND a.attgenerated=spec.attgenerated) THEN
+  RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_COLUMN_INCOMPATIBLE: %.%',table_name,spec.attname; END IF;
+ IF (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d JOIN pg_attribute a
+  ON a.attrelid=d.adrelid AND a.attnum=d.adnum WHERE a.attrelid=table_name::regclass AND a.attname=spec.attname)
+ IS DISTINCT FROM (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d
+  WHERE d.adrelid=reference_name::regclass AND d.adnum=spec.attnum) THEN
+  RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_DEFAULT_INCOMPATIBLE: %.%',table_name,spec.attname; END IF;
+END LOOP;
+IF (SELECT count(*) FROM pg_constraint WHERE conrelid=table_name::regclass AND contype IN ('c','p','u','f'))
+ <> (SELECT count(*) FROM pg_constraint WHERE conrelid=reference_name::regclass AND contype IN ('c','p','u','f')) THEN
+ RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_CONSTRAINTS_INCOMPATIBLE: %',table_name; END IF;
+FOR spec IN SELECT * FROM pg_constraint WHERE conrelid=reference_name::regclass AND contype IN ('c','p','u') LOOP
+ IF spec.contype='c' THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint actual WHERE actual.conrelid=table_name::regclass
+   AND actual.conname=spec.conname AND actual.contype='c' AND actual.convalidated AND NOT actual.connoinherit
+   AND pg_get_expr(actual.conbin,actual.conrelid)=pg_get_expr(spec.conbin,spec.conrelid)) THEN
+   RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_CHECK_INCOMPATIBLE: %',table_name; END IF;
+ ELSE
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint actual JOIN pg_index i ON i.indexrelid=actual.conindid
+   WHERE actual.conrelid=table_name::regclass AND actual.contype=spec.contype
+   AND (SELECT array_agg(a.attname ORDER BY k.position) FROM unnest(actual.conkey)
+        WITH ORDINALITY AS k(attnum,position) JOIN pg_attribute a
+        ON a.attrelid=actual.conrelid AND a.attnum=k.attnum AND NOT a.attisdropped)
+     = (SELECT array_agg(a.attname ORDER BY k.position) FROM unnest(spec.conkey)
+        WITH ORDINALITY AS k(attnum,position) JOIN pg_attribute a
+        ON a.attrelid=spec.conrelid AND a.attnum=k.attnum AND NOT a.attisdropped)
+   AND NOT actual.condeferrable AND i.indisvalid AND i.indisready AND i.indpred IS NULL AND i.indexprs IS NULL
+   AND i.indnkeyatts=array_length(spec.conkey,1) AND i.indnatts=i.indnkeyatts) THEN
+   RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_INDEX_INCOMPATIBLE: %',table_name; END IF;
+ END IF;
+END LOOP;
+DROP TABLE context_reference_wecom_kf_receipt_classifications;
+IF to_regclass('pg_temp.context_reference_wecom_kf_context_consumptions') IS NOT NULL THEN RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_REFERENCE_COLLISION'; END IF;
+IF to_regclass('pg_temp.context_compat_consumption') IS NOT NULL THEN RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_REFERENCE_COLLISION'; END IF;
+CREATE TEMP TABLE context_compat_consumption (
+    account_id TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    route_id TEXT,
+    session_id TEXT,
+    payload_digest TEXT NOT NULL,
+    accepted_input_ref TEXT,
+    completion_observation JSONB,
+    history_id TEXT,
+    target_message_id TEXT,
+    disposition TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY(account_id,namespace,message_id),
+    CONSTRAINT ck_kf_context_consumption_shape CHECK (
+        namespace IN ('sync','callback') AND length(payload_digest)=64
+        AND disposition IN ('persisted','pending_history','pending_target','recalled','accepted_target','pending_scope','pending_business','source_terminal')
+        AND (disposition<>'source_terminal' OR (route_id IS NOT NULL AND session_id IS NOT NULL AND accepted_input_ref IS NOT NULL AND jsonb_typeof(completion_observation)='object'))
+        AND (disposition<>'persisted' OR (route_id IS NOT NULL AND session_id IS NOT NULL AND history_id IS NOT NULL))
+        AND (disposition NOT IN ('pending_target','recalled','accepted_target') OR (route_id IS NOT NULL AND target_message_id IS NOT NULL))
+    )
+) ON COMMIT DROP;
+CREATE TEMP TABLE context_reference_wecom_kf_context_consumptions (
+    account_id TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    route_id TEXT,
+    session_id TEXT,
+    payload_digest TEXT NOT NULL,
+    accepted_input_ref TEXT,
+    completion_observation JSONB,
+    history_id TEXT,
+    target_message_id TEXT,
+    disposition TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY(account_id,namespace,message_id),
+    CONSTRAINT ck_kf_context_consumption_shape CHECK (
+        namespace IN ('sync','callback') AND length(payload_digest)=64
+        AND disposition IN ('persisted','pending_asr','pending_history','pending_target','recalled','accepted_target','pending_scope','pending_business','source_terminal')
+        AND (disposition<>'source_terminal' OR (route_id IS NOT NULL AND session_id IS NOT NULL AND accepted_input_ref IS NOT NULL AND jsonb_typeof(completion_observation)='object'))
+        AND (disposition NOT IN ('persisted','pending_asr') OR (route_id IS NOT NULL AND session_id IS NOT NULL AND history_id IS NOT NULL))
+        AND (disposition NOT IN ('pending_target','recalled','accepted_target') OR (route_id IS NOT NULL AND target_message_id IS NOT NULL))
+    )
+) ON COMMIT DROP;
+table_name:='wecom_kf_context_consumptions'; reference_name:='pg_temp.context_reference_wecom_kf_context_consumptions';
+IF NOT EXISTS (SELECT 1 FROM pg_class WHERE oid=table_name::regclass AND relkind='r') THEN
+ RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_RELATION_INCOMPATIBLE: %',table_name; END IF;
+IF (SELECT count(*) FROM pg_attribute WHERE attrelid=table_name::regclass AND attnum>0 AND NOT attisdropped)
+ <> (SELECT count(*) FROM pg_attribute WHERE attrelid=reference_name::regclass AND attnum>0 AND NOT attisdropped) THEN
+ RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_COLUMNS_INCOMPATIBLE: %',table_name; END IF;
+FOR spec IN SELECT * FROM pg_attribute WHERE attrelid=reference_name::regclass AND attnum>0 AND NOT attisdropped LOOP
+ IF NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=table_name::regclass
+  AND a.attname=spec.attname AND a.attnum>0 AND NOT a.attisdropped
+  AND a.atttypid=spec.atttypid AND a.atttypmod=spec.atttypmod AND a.attnotnull=spec.attnotnull
+  AND a.attidentity=spec.attidentity AND a.attgenerated=spec.attgenerated) THEN
+  RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_COLUMN_INCOMPATIBLE: %.%',table_name,spec.attname; END IF;
+ IF (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d JOIN pg_attribute a
+  ON a.attrelid=d.adrelid AND a.attnum=d.adnum WHERE a.attrelid=table_name::regclass AND a.attname=spec.attname)
+ IS DISTINCT FROM (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d
+  WHERE d.adrelid=reference_name::regclass AND d.adnum=spec.attnum) THEN
+  RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_DEFAULT_INCOMPATIBLE: %.%',table_name,spec.attname; END IF;
+END LOOP;
+IF (SELECT count(*) FROM pg_constraint WHERE conrelid=table_name::regclass AND contype IN ('c','p','u','f'))
+ <> (SELECT count(*) FROM pg_constraint WHERE conrelid=reference_name::regclass AND contype IN ('c','p','u','f')) THEN
+ RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_CONSTRAINTS_INCOMPATIBLE: %',table_name; END IF;
+FOR spec IN SELECT * FROM pg_constraint WHERE conrelid=reference_name::regclass AND contype IN ('c','p','u') LOOP
+ IF spec.contype='c' THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint actual WHERE actual.conrelid=table_name::regclass
+   AND actual.conname=spec.conname AND actual.contype='c' AND actual.convalidated AND NOT actual.connoinherit
+   AND (pg_get_expr(actual.conbin,actual.conrelid)=pg_get_expr(spec.conbin,spec.conrelid)
+   OR (spec.conname='ck_kf_context_consumption_shape' AND pg_get_expr(actual.conbin,actual.conrelid)=
+       (SELECT pg_get_expr(c.conbin,c.conrelid) FROM pg_constraint c
+        WHERE c.conrelid='pg_temp.context_compat_consumption'::regclass
+          AND c.conname='ck_kf_context_consumption_shape')))) THEN
+   RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_CHECK_INCOMPATIBLE: %',table_name; END IF;
+ ELSE
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint actual JOIN pg_index i ON i.indexrelid=actual.conindid
+   WHERE actual.conrelid=table_name::regclass AND actual.contype=spec.contype
+   AND (SELECT array_agg(a.attname ORDER BY k.position) FROM unnest(actual.conkey)
+        WITH ORDINALITY AS k(attnum,position) JOIN pg_attribute a
+        ON a.attrelid=actual.conrelid AND a.attnum=k.attnum AND NOT a.attisdropped)
+     = (SELECT array_agg(a.attname ORDER BY k.position) FROM unnest(spec.conkey)
+        WITH ORDINALITY AS k(attnum,position) JOIN pg_attribute a
+        ON a.attrelid=spec.conrelid AND a.attnum=k.attnum AND NOT a.attisdropped)
+   AND NOT actual.condeferrable AND i.indisvalid AND i.indisready AND i.indpred IS NULL AND i.indexprs IS NULL
+   AND i.indnkeyatts=array_length(spec.conkey,1) AND i.indnatts=i.indnkeyatts) THEN
+   RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_INDEX_INCOMPATIBLE: %',table_name; END IF;
+ END IF;
+END LOOP;
+DROP TABLE context_reference_wecom_kf_context_consumptions;
+DROP TABLE context_compat_consumption;
+IF to_regclass('pg_temp.context_reference_wecom_kf_context_task_intents') IS NOT NULL THEN RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_REFERENCE_COLLISION'; END IF;
+CREATE TEMP TABLE context_reference_wecom_kf_context_task_intents (
+    task_id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    route_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    history_id TEXT NOT NULL,
+    task_name TEXT NOT NULL,
+    operation_version INTEGER NOT NULL,
+    scope JSONB NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending_adapter',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    UNIQUE(account_id,namespace,message_id,task_name,operation_version),
+    CONSTRAINT ck_kf_context_task_shape CHECK (
+        namespace IN ('sync','callback') AND operation_version=1
+        AND task_name IN ('lead_refresh','external_push_human')
+        AND state='pending_adapter' AND jsonb_typeof(scope)='object'
+    )
+) ON COMMIT DROP;
+CREATE TEMP TABLE context_reference_task_effects (LIKE context_reference_wecom_kf_context_task_intents INCLUDING ALL) ON COMMIT DROP;
+ALTER TABLE context_reference_task_effects DROP CONSTRAINT ck_kf_context_task_shape;
+ALTER TABLE context_reference_task_effects ADD CONSTRAINT ck_kf_context_task_shape CHECK (
+ namespace IN ('sync','callback') AND operation_version=1
+ AND task_name IN ('lead_refresh','external_push_human','external_push')
+ AND state IN ('pending_adapter','claimed','started','dispatch_returned','unknown','suppressed') AND jsonb_typeof(scope)='object');
+table_name:='wecom_kf_context_task_intents'; reference_name:='pg_temp.context_reference_wecom_kf_context_task_intents';
+IF NOT EXISTS (SELECT 1 FROM pg_class WHERE oid=table_name::regclass AND relkind='r') THEN
+ RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_RELATION_INCOMPATIBLE: %',table_name; END IF;
+IF (SELECT count(*) FROM pg_attribute WHERE attrelid=table_name::regclass AND attnum>0 AND NOT attisdropped)
+ <> (SELECT count(*) FROM pg_attribute WHERE attrelid=reference_name::regclass AND attnum>0 AND NOT attisdropped) THEN
+ RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_COLUMNS_INCOMPATIBLE: %',table_name; END IF;
+FOR spec IN SELECT * FROM pg_attribute WHERE attrelid=reference_name::regclass AND attnum>0 AND NOT attisdropped LOOP
+ IF NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=table_name::regclass
+  AND a.attname=spec.attname AND a.attnum>0 AND NOT a.attisdropped
+  AND a.atttypid=spec.atttypid AND a.atttypmod=spec.atttypmod AND a.attnotnull=spec.attnotnull
+  AND a.attidentity=spec.attidentity AND a.attgenerated=spec.attgenerated) THEN
+  RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_COLUMN_INCOMPATIBLE: %.%',table_name,spec.attname; END IF;
+ IF (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d JOIN pg_attribute a
+  ON a.attrelid=d.adrelid AND a.attnum=d.adnum WHERE a.attrelid=table_name::regclass AND a.attname=spec.attname)
+ IS DISTINCT FROM (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d
+  WHERE d.adrelid=reference_name::regclass AND d.adnum=spec.attnum) THEN
+  RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_DEFAULT_INCOMPATIBLE: %.%',table_name,spec.attname; END IF;
+END LOOP;
+IF (SELECT count(*) FROM pg_constraint WHERE conrelid=table_name::regclass AND contype IN ('c','p','u','f'))
+ <> (SELECT count(*) FROM pg_constraint WHERE conrelid=reference_name::regclass AND contype IN ('c','p','u','f')) THEN
+ RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_CONSTRAINTS_INCOMPATIBLE: %',table_name; END IF;
+FOR spec IN SELECT * FROM pg_constraint WHERE conrelid=reference_name::regclass AND contype IN ('c','p','u') LOOP
+ IF spec.contype='c' THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint actual WHERE actual.conrelid=table_name::regclass
+   AND actual.conname=spec.conname AND actual.contype='c' AND actual.convalidated AND NOT actual.connoinherit
+   AND (pg_get_expr(actual.conbin,actual.conrelid)=pg_get_expr(spec.conbin,spec.conrelid)
+   OR pg_get_expr(actual.conbin,actual.conrelid)=(SELECT pg_get_expr(v.conbin,v.conrelid) FROM pg_constraint v WHERE v.conrelid='pg_temp.context_reference_task_effects'::regclass AND v.conname='ck_kf_context_task_shape'))) THEN
+   RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_CHECK_INCOMPATIBLE: %',table_name; END IF;
+ ELSE
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint actual JOIN pg_index i ON i.indexrelid=actual.conindid
+   WHERE actual.conrelid=table_name::regclass AND actual.contype=spec.contype
+   AND (SELECT array_agg(a.attname ORDER BY k.position) FROM unnest(actual.conkey)
+        WITH ORDINALITY AS k(attnum,position) JOIN pg_attribute a
+        ON a.attrelid=actual.conrelid AND a.attnum=k.attnum AND NOT a.attisdropped)
+     = (SELECT array_agg(a.attname ORDER BY k.position) FROM unnest(spec.conkey)
+        WITH ORDINALITY AS k(attnum,position) JOIN pg_attribute a
+        ON a.attrelid=spec.conrelid AND a.attnum=k.attnum AND NOT a.attisdropped)
+   AND NOT actual.condeferrable AND i.indisvalid AND i.indisready AND i.indpred IS NULL AND i.indexprs IS NULL
+   AND i.indnkeyatts=array_length(spec.conkey,1) AND i.indnatts=i.indnkeyatts) THEN
+   RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_INDEX_INCOMPATIBLE: %',table_name; END IF;
+ END IF;
+END LOOP;
+DROP TABLE context_reference_task_effects;
+DROP TABLE context_reference_wecom_kf_context_task_intents;
+END $$;
+
+-- M6a human/employee voice owner, pending display and original independent ASR billing.
+DO $$
+DECLARE spec RECORD; table_name TEXT; reference_name TEXT; BEGIN
+IF to_regclass('pg_temp.context_voice_old_consumption') IS NOT NULL THEN RAISE EXCEPTION 'KF_CONTEXT_VOICE_SCHEMA_REFERENCE_COLLISION'; END IF;
+CREATE TEMP TABLE context_voice_old_consumption (
+    account_id TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    route_id TEXT,
+    session_id TEXT,
+    payload_digest TEXT NOT NULL,
+    accepted_input_ref TEXT,
+    completion_observation JSONB,
+    history_id TEXT,
+    target_message_id TEXT,
+    disposition TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY(account_id,namespace,message_id),
+    CONSTRAINT ck_kf_context_consumption_shape CHECK (
+        namespace IN ('sync','callback') AND length(payload_digest)=64
+        AND disposition IN ('persisted','pending_history','pending_target','recalled','accepted_target','pending_scope','pending_business','source_terminal')
+        AND (disposition<>'source_terminal' OR (route_id IS NOT NULL AND session_id IS NOT NULL AND accepted_input_ref IS NOT NULL AND jsonb_typeof(completion_observation)='object'))
+        AND (disposition<>'persisted' OR (route_id IS NOT NULL AND session_id IS NOT NULL AND history_id IS NOT NULL))
+        AND (disposition NOT IN ('pending_target','recalled','accepted_target') OR (route_id IS NOT NULL AND target_message_id IS NOT NULL))
+    )
+) ON COMMIT DROP;
+IF to_regclass('pg_temp.context_voice_new_consumption') IS NOT NULL THEN RAISE EXCEPTION 'KF_CONTEXT_VOICE_SCHEMA_REFERENCE_COLLISION'; END IF;
+CREATE TEMP TABLE context_voice_new_consumption (
+    account_id TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    route_id TEXT,
+    session_id TEXT,
+    payload_digest TEXT NOT NULL,
+    accepted_input_ref TEXT,
+    completion_observation JSONB,
+    history_id TEXT,
+    target_message_id TEXT,
+    disposition TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY(account_id,namespace,message_id),
+    CONSTRAINT ck_kf_context_consumption_shape CHECK (
+        namespace IN ('sync','callback') AND length(payload_digest)=64
+        AND disposition IN ('persisted','pending_asr','pending_history','pending_target','recalled','accepted_target','pending_scope','pending_business','source_terminal')
+        AND (disposition<>'source_terminal' OR (route_id IS NOT NULL AND session_id IS NOT NULL AND accepted_input_ref IS NOT NULL AND jsonb_typeof(completion_observation)='object'))
+        AND (disposition NOT IN ('persisted','pending_asr') OR (route_id IS NOT NULL AND session_id IS NOT NULL AND history_id IS NOT NULL))
+        AND (disposition NOT IN ('pending_target','recalled','accepted_target') OR (route_id IS NOT NULL AND target_message_id IS NOT NULL))
+    )
+) ON COMMIT DROP;
+IF NOT EXISTS (SELECT 1 FROM pg_constraint a WHERE a.conrelid='wecom_kf_context_consumptions'::regclass
+ AND a.conname='ck_kf_context_consumption_shape' AND a.contype='c' AND a.convalidated AND NOT a.connoinherit
+ AND pg_get_expr(a.conbin,a.conrelid) IN (
+  SELECT pg_get_expr(c.conbin,c.conrelid) FROM pg_constraint c
+  WHERE c.conrelid IN ('pg_temp.context_voice_old_consumption'::regclass,'pg_temp.context_voice_new_consumption'::regclass)
+    AND c.conname='ck_kf_context_consumption_shape')) THEN
+ RAISE EXCEPTION 'KF_CONTEXT_VOICE_CONSUMPTION_INCOMPATIBLE'; END IF;
+ALTER TABLE wecom_kf_context_consumptions DROP CONSTRAINT ck_kf_context_consumption_shape;
+ALTER TABLE wecom_kf_context_consumptions ADD CONSTRAINT ck_kf_context_consumption_shape CHECK (
+        namespace IN ('sync','callback') AND length(payload_digest)=64
+        AND disposition IN ('persisted','pending_asr','pending_history','pending_target','recalled','accepted_target','pending_scope','pending_business','source_terminal')
+        AND (disposition<>'source_terminal' OR (route_id IS NOT NULL AND session_id IS NOT NULL AND accepted_input_ref IS NOT NULL AND jsonb_typeof(completion_observation)='object'))
+        AND (disposition NOT IN ('persisted','pending_asr') OR (route_id IS NOT NULL AND session_id IS NOT NULL AND history_id IS NOT NULL))
+        AND (disposition NOT IN ('pending_target','recalled','accepted_target') OR (route_id IS NOT NULL AND target_message_id IS NOT NULL))
+    );
+table_name:='wecom_kf_context_consumptions'; reference_name:='pg_temp.context_voice_new_consumption';
+IF NOT EXISTS (SELECT 1 FROM pg_class WHERE oid=table_name::regclass AND relkind='r') THEN
+ RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_RELATION_INCOMPATIBLE: %',table_name; END IF;
+IF (SELECT count(*) FROM pg_attribute WHERE attrelid=table_name::regclass AND attnum>0 AND NOT attisdropped)
+ <> (SELECT count(*) FROM pg_attribute WHERE attrelid=reference_name::regclass AND attnum>0 AND NOT attisdropped) THEN
+ RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_COLUMNS_INCOMPATIBLE: %',table_name; END IF;
+FOR spec IN SELECT * FROM pg_attribute WHERE attrelid=reference_name::regclass AND attnum>0 AND NOT attisdropped LOOP
+ IF NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=table_name::regclass
+  AND a.attname=spec.attname AND a.attnum>0 AND NOT a.attisdropped
+  AND a.atttypid=spec.atttypid AND a.atttypmod=spec.atttypmod AND a.attnotnull=spec.attnotnull
+  AND a.attidentity=spec.attidentity AND a.attgenerated=spec.attgenerated) THEN
+  RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_COLUMN_INCOMPATIBLE: %.%',table_name,spec.attname; END IF;
+ IF (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d JOIN pg_attribute a
+  ON a.attrelid=d.adrelid AND a.attnum=d.adnum WHERE a.attrelid=table_name::regclass AND a.attname=spec.attname)
+ IS DISTINCT FROM (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d
+  WHERE d.adrelid=reference_name::regclass AND d.adnum=spec.attnum) THEN
+  RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_DEFAULT_INCOMPATIBLE: %.%',table_name,spec.attname; END IF;
+END LOOP;
+IF (SELECT count(*) FROM pg_constraint WHERE conrelid=table_name::regclass AND contype IN ('c','p','u','f'))
+ <> (SELECT count(*) FROM pg_constraint WHERE conrelid=reference_name::regclass AND contype IN ('c','p','u','f')) THEN
+ RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_CONSTRAINTS_INCOMPATIBLE: %',table_name; END IF;
+FOR spec IN SELECT * FROM pg_constraint WHERE conrelid=reference_name::regclass AND contype IN ('c','p','u') LOOP
+ IF spec.contype='c' THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint actual WHERE actual.conrelid=table_name::regclass
+   AND actual.conname=spec.conname AND actual.contype='c' AND actual.convalidated AND NOT actual.connoinherit
+   AND pg_get_expr(actual.conbin,actual.conrelid)=pg_get_expr(spec.conbin,spec.conrelid)) THEN
+   RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_CHECK_INCOMPATIBLE: %',table_name; END IF;
+ ELSE
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint actual JOIN pg_index i ON i.indexrelid=actual.conindid
+   WHERE actual.conrelid=table_name::regclass AND actual.contype=spec.contype
+   AND (SELECT array_agg(a.attname ORDER BY k.position) FROM unnest(actual.conkey)
+        WITH ORDINALITY AS k(attnum,position) JOIN pg_attribute a
+        ON a.attrelid=actual.conrelid AND a.attnum=k.attnum AND NOT a.attisdropped)
+     = (SELECT array_agg(a.attname ORDER BY k.position) FROM unnest(spec.conkey)
+        WITH ORDINALITY AS k(attnum,position) JOIN pg_attribute a
+        ON a.attrelid=spec.conrelid AND a.attnum=k.attnum AND NOT a.attisdropped)
+   AND NOT actual.condeferrable AND i.indisvalid AND i.indisready AND i.indpred IS NULL AND i.indexprs IS NULL
+   AND i.indnkeyatts=array_length(spec.conkey,1) AND i.indnatts=i.indnkeyatts) THEN
+   RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_INDEX_INCOMPATIBLE: %',table_name; END IF;
+ END IF;
+END LOOP;
+DROP TABLE context_voice_old_consumption;
+DROP TABLE context_voice_new_consumption;
+CREATE TABLE IF NOT EXISTS wecom_kf_context_voice_preparations (
+    operation_ref TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    operation_version INTEGER NOT NULL,
+    tenant_id TEXT NOT NULL,
+    payload_digest TEXT NOT NULL,
+    scope JSONB NOT NULL,
+    io_config_version TIMESTAMP NOT NULL,
+    media_id TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    artifact JSONB,
+    authorized_epoch BIGINT NOT NULL DEFAULT 0,
+    price_snapshot JSONB,
+    record_id TEXT NOT NULL UNIQUE,
+    cost NUMERIC,
+    finance_pending BOOLEAN NOT NULL,
+    success BOOLEAN,
+    transcript TEXT,
+    result_kind TEXT,
+    provider_status BIGINT,
+    failure_code TEXT,
+    history_projection TEXT NOT NULL DEFAULT 'pending',
+    started_at TIMESTAMPTZ,
+    lease_expires_at TIMESTAMPTZ,
+    observed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    UNIQUE(account_id,namespace,message_id,operation_version),
+    CONSTRAINT ck_kf_context_voice_shape CHECK (
+        namespace='sync' AND operation_version=1 AND length(payload_digest)=64
+        AND jsonb_typeof(scope)='object' AND length(media_id)>0 AND authorized_epoch>=0
+        AND phase IN ('media_ready','started','unknown','known')
+        AND history_projection IN ('pending','projected','cleared','recalled')
+        AND (artifact IS NULL OR jsonb_typeof(artifact)='object')
+        AND (price_snapshot IS NULL OR jsonb_typeof(price_snapshot)='object')
+        AND (cost IS NULL OR (cost>=0 AND cost<>'NaN'::numeric))
+        AND ((phase='known' AND success IS NOT NULL AND transcript IS NOT NULL
+              AND result_kind IN ('recognition','preflight','asr') AND observed_at IS NOT NULL
+              AND cost IS NOT NULL AND NOT finance_pending)
+          OR (phase IN ('media_ready','started','unknown') AND success IS NULL AND transcript IS NULL
+              AND result_kind IS NULL AND observed_at IS NULL AND cost IS NULL))
+        AND (phase<>'media_ready' OR (artifact IS NOT NULL AND NOT finance_pending))
+        AND (phase NOT IN ('started','unknown') OR (authorized_epoch>0 AND price_snapshot IS NOT NULL
+             AND artifact IS NOT NULL AND started_at IS NOT NULL AND lease_expires_at IS NOT NULL AND finance_pending))
+        AND (result_kind IS DISTINCT FROM 'asr' OR (authorized_epoch>0 AND price_snapshot IS NOT NULL
+             AND provider_status IS NOT NULL))
+        AND (result_kind IS DISTINCT FROM 'recognition' OR (authorized_epoch=0 AND success AND length(transcript)>0))
+        AND (success IS DISTINCT FROM TRUE OR length(transcript)>0)
+    )
+);
+IF to_regclass('pg_temp.context_voice_reference_preparations') IS NOT NULL THEN RAISE EXCEPTION 'KF_CONTEXT_VOICE_SCHEMA_REFERENCE_COLLISION'; END IF;
+CREATE TEMP TABLE context_voice_reference_preparations (
+    operation_ref TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    operation_version INTEGER NOT NULL,
+    tenant_id TEXT NOT NULL,
+    payload_digest TEXT NOT NULL,
+    scope JSONB NOT NULL,
+    io_config_version TIMESTAMP NOT NULL,
+    media_id TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    artifact JSONB,
+    authorized_epoch BIGINT NOT NULL DEFAULT 0,
+    price_snapshot JSONB,
+    record_id TEXT NOT NULL UNIQUE,
+    cost NUMERIC,
+    finance_pending BOOLEAN NOT NULL,
+    success BOOLEAN,
+    transcript TEXT,
+    result_kind TEXT,
+    provider_status BIGINT,
+    failure_code TEXT,
+    history_projection TEXT NOT NULL DEFAULT 'pending',
+    started_at TIMESTAMPTZ,
+    lease_expires_at TIMESTAMPTZ,
+    observed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    UNIQUE(account_id,namespace,message_id,operation_version),
+    CONSTRAINT ck_kf_context_voice_shape CHECK (
+        namespace='sync' AND operation_version=1 AND length(payload_digest)=64
+        AND jsonb_typeof(scope)='object' AND length(media_id)>0 AND authorized_epoch>=0
+        AND phase IN ('media_ready','started','unknown','known')
+        AND history_projection IN ('pending','projected','cleared','recalled')
+        AND (artifact IS NULL OR jsonb_typeof(artifact)='object')
+        AND (price_snapshot IS NULL OR jsonb_typeof(price_snapshot)='object')
+        AND (cost IS NULL OR (cost>=0 AND cost<>'NaN'::numeric))
+        AND ((phase='known' AND success IS NOT NULL AND transcript IS NOT NULL
+              AND result_kind IN ('recognition','preflight','asr') AND observed_at IS NOT NULL
+              AND cost IS NOT NULL AND NOT finance_pending)
+          OR (phase IN ('media_ready','started','unknown') AND success IS NULL AND transcript IS NULL
+              AND result_kind IS NULL AND observed_at IS NULL AND cost IS NULL))
+        AND (phase<>'media_ready' OR (artifact IS NOT NULL AND NOT finance_pending))
+        AND (phase NOT IN ('started','unknown') OR (authorized_epoch>0 AND price_snapshot IS NOT NULL
+             AND artifact IS NOT NULL AND started_at IS NOT NULL AND lease_expires_at IS NOT NULL AND finance_pending))
+        AND (result_kind IS DISTINCT FROM 'asr' OR (authorized_epoch>0 AND price_snapshot IS NOT NULL
+             AND provider_status IS NOT NULL))
+        AND (result_kind IS DISTINCT FROM 'recognition' OR (authorized_epoch=0 AND success AND length(transcript)>0))
+        AND (success IS DISTINCT FROM TRUE OR length(transcript)>0)
+    )
+) ON COMMIT DROP;
+table_name:='wecom_kf_context_voice_preparations'; reference_name:='pg_temp.context_voice_reference_preparations';
+IF NOT EXISTS (SELECT 1 FROM pg_class WHERE oid=table_name::regclass AND relkind='r') THEN
+ RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_RELATION_INCOMPATIBLE: %',table_name; END IF;
+IF (SELECT count(*) FROM pg_attribute WHERE attrelid=table_name::regclass AND attnum>0 AND NOT attisdropped)
+ <> (SELECT count(*) FROM pg_attribute WHERE attrelid=reference_name::regclass AND attnum>0 AND NOT attisdropped) THEN
+ RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_COLUMNS_INCOMPATIBLE: %',table_name; END IF;
+FOR spec IN SELECT * FROM pg_attribute WHERE attrelid=reference_name::regclass AND attnum>0 AND NOT attisdropped LOOP
+ IF NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=table_name::regclass
+  AND a.attname=spec.attname AND a.attnum>0 AND NOT a.attisdropped
+  AND a.atttypid=spec.atttypid AND a.atttypmod=spec.atttypmod AND a.attnotnull=spec.attnotnull
+  AND a.attidentity=spec.attidentity AND a.attgenerated=spec.attgenerated) THEN
+  RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_COLUMN_INCOMPATIBLE: %.%',table_name,spec.attname; END IF;
+ IF (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d JOIN pg_attribute a
+  ON a.attrelid=d.adrelid AND a.attnum=d.adnum WHERE a.attrelid=table_name::regclass AND a.attname=spec.attname)
+ IS DISTINCT FROM (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d
+  WHERE d.adrelid=reference_name::regclass AND d.adnum=spec.attnum) THEN
+  RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_DEFAULT_INCOMPATIBLE: %.%',table_name,spec.attname; END IF;
+END LOOP;
+IF (SELECT count(*) FROM pg_constraint WHERE conrelid=table_name::regclass AND contype IN ('c','p','u','f'))
+ <> (SELECT count(*) FROM pg_constraint WHERE conrelid=reference_name::regclass AND contype IN ('c','p','u','f')) THEN
+ RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_CONSTRAINTS_INCOMPATIBLE: %',table_name; END IF;
+FOR spec IN SELECT * FROM pg_constraint WHERE conrelid=reference_name::regclass AND contype IN ('c','p','u') LOOP
+ IF spec.contype='c' THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint actual WHERE actual.conrelid=table_name::regclass
+   AND actual.conname=spec.conname AND actual.contype='c' AND actual.convalidated AND NOT actual.connoinherit
+   AND pg_get_expr(actual.conbin,actual.conrelid)=pg_get_expr(spec.conbin,spec.conrelid)) THEN
+   RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_CHECK_INCOMPATIBLE: %',table_name; END IF;
+ ELSE
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint actual JOIN pg_index i ON i.indexrelid=actual.conindid
+   WHERE actual.conrelid=table_name::regclass AND actual.contype=spec.contype
+   AND (SELECT array_agg(a.attname ORDER BY k.position) FROM unnest(actual.conkey)
+        WITH ORDINALITY AS k(attnum,position) JOIN pg_attribute a
+        ON a.attrelid=actual.conrelid AND a.attnum=k.attnum AND NOT a.attisdropped)
+     = (SELECT array_agg(a.attname ORDER BY k.position) FROM unnest(spec.conkey)
+        WITH ORDINALITY AS k(attnum,position) JOIN pg_attribute a
+        ON a.attrelid=spec.conrelid AND a.attnum=k.attnum AND NOT a.attisdropped)
+   AND NOT actual.condeferrable AND i.indisvalid AND i.indisready AND i.indpred IS NULL AND i.indexprs IS NULL
+   AND i.indnkeyatts=array_length(spec.conkey,1) AND i.indnatts=i.indnkeyatts) THEN
+   RAISE EXCEPTION 'KF_CONTEXT_SCHEMA_INDEX_INCOMPATIBLE: %',table_name; END IF;
+ END IF;
+END LOOP;
+DROP TABLE context_voice_reference_preparations;
+END $$;
+
+-- KF complete receipt batching and customer wire facts.
+DO $$ DECLARE spec RECORD; table_name TEXT; reference_name TEXT; BEGIN
+ALTER TABLE agent_runner_inputs ADD COLUMN IF NOT EXISTS source_control_id TEXT;
+IF NOT EXISTS(SELECT 1 FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+ WHERE a.attrelid='agent_runner_inputs'::regclass AND a.attname='source_control_id' AND NOT a.attisdropped
+ AND a.atttypid='text'::regtype AND a.atttypmod=-1 AND NOT a.attnotnull AND d.adbin IS NULL) THEN
+ RAISE EXCEPTION 'SOURCE_CONTROL_SCHEMA_COLUMN_INCOMPATIBLE'; END IF;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_runner_input_source_control ON agent_runner_inputs(source_control_id);
+IF NOT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class idx ON idx.oid=i.indexrelid
+ JOIN pg_am am ON am.oid=idx.relam WHERE i.indexrelid='uq_runner_input_source_control'::regclass
+ AND i.indrelid='agent_runner_inputs'::regclass AND i.indisunique AND i.indisvalid AND i.indisready
+ AND i.indpred IS NULL AND i.indexprs IS NULL AND am.amname='btree' AND i.indnkeyatts=1 AND i.indnatts=1
+ AND ARRAY(SELECT a.attname::text FROM unnest(i.indkey) WITH ORDINALITY k(attnum,n)
+ JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum ORDER BY k.n)=ARRAY['source_control_id']) THEN
+ RAISE EXCEPTION 'SOURCE_CONTROL_SCHEMA_INDEX_INCOMPATIBLE'; END IF;
+ALTER TABLE wecom_kf_context_task_intents DROP CONSTRAINT ck_kf_context_task_shape;
+ALTER TABLE wecom_kf_context_task_intents ADD CONSTRAINT ck_kf_context_task_shape CHECK (
+ namespace IN ('sync','callback') AND operation_version=1
+ AND task_name IN ('lead_refresh','external_push_human','external_push')
+ AND state IN ('pending_adapter','claimed','started','dispatch_returned','unknown','suppressed') AND jsonb_typeof(scope)='object');
+CREATE TABLE IF NOT EXISTS wecom_kf_input_batches (
+ batch_ref TEXT PRIMARY KEY,
+ tenant_id TEXT NOT NULL, account_id TEXT NOT NULL, scope JSONB NOT NULL,
+ opened_at TIMESTAMPTZ NOT NULL, deadline_at TIMESTAMPTZ NOT NULL,
+ sealed_at TIMESTAMPTZ, phase TEXT NOT NULL, accepted_runner_id TEXT,
+ CONSTRAINT ck_kf_batch_shape CHECK(jsonb_typeof(scope)='object'
+  AND deadline_at>=opened_at AND phase IN ('collecting','sealed','accepted')
+  AND (phase='collecting' OR sealed_at IS NOT NULL)
+  AND ((phase='accepted')=(accepted_runner_id IS NOT NULL)))
+);
+IF to_regclass('pg_temp.kf_completion_reference_0') IS NOT NULL THEN RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_REFERENCE_COLLISION'; END IF;
+CREATE TEMP TABLE kf_completion_reference_0 (
+ batch_ref TEXT PRIMARY KEY,
+ tenant_id TEXT NOT NULL, account_id TEXT NOT NULL, scope JSONB NOT NULL,
+ opened_at TIMESTAMPTZ NOT NULL, deadline_at TIMESTAMPTZ NOT NULL,
+ sealed_at TIMESTAMPTZ, phase TEXT NOT NULL, accepted_runner_id TEXT,
+ CONSTRAINT ck_kf_batch_shape CHECK(jsonb_typeof(scope)='object'
+  AND deadline_at>=opened_at AND phase IN ('collecting','sealed','accepted')
+  AND (phase='collecting' OR sealed_at IS NOT NULL)
+  AND ((phase='accepted')=(accepted_runner_id IS NOT NULL)))
+) ON COMMIT DROP;
+table_name:='wecom_kf_input_batches'; reference_name:='pg_temp.kf_completion_reference_0';
+IF NOT EXISTS(SELECT 1 FROM pg_class WHERE oid=table_name::regclass AND relkind='r') THEN
+ RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_RELATION_INCOMPATIBLE: %',table_name; END IF;
+IF (SELECT count(*) FROM pg_attribute WHERE attrelid=table_name::regclass AND attnum>0 AND NOT attisdropped)
+ <> (SELECT count(*) FROM pg_attribute WHERE attrelid=reference_name::regclass AND attnum>0 AND NOT attisdropped) THEN
+ RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_COLUMNS_INCOMPATIBLE: %',table_name; END IF;
+FOR spec IN SELECT * FROM pg_attribute WHERE attrelid=reference_name::regclass AND attnum>0 AND NOT attisdropped LOOP
+ IF NOT EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=table_name::regclass AND a.attname=spec.attname
+  AND a.attnum>0 AND NOT a.attisdropped AND a.atttypid=spec.atttypid AND a.atttypmod=spec.atttypmod
+  AND a.attnotnull=spec.attnotnull AND a.attidentity=spec.attidentity AND a.attgenerated=spec.attgenerated) THEN
+  RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_COLUMN_INCOMPATIBLE: %.%',table_name,spec.attname; END IF;
+ IF (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d JOIN pg_attribute a
+  ON a.attrelid=d.adrelid AND a.attnum=d.adnum WHERE a.attrelid=table_name::regclass AND a.attname=spec.attname)
+ IS DISTINCT FROM (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d WHERE d.adrelid=reference_name::regclass AND d.adnum=spec.attnum) THEN
+  RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_DEFAULT_INCOMPATIBLE: %.%',table_name,spec.attname; END IF;
+END LOOP;
+IF (SELECT count(*) FROM pg_constraint WHERE conrelid=table_name::regclass AND contype IN ('c','p','u','f'))
+ <> (SELECT count(*) FROM pg_constraint WHERE conrelid=reference_name::regclass AND contype IN ('c','p','u','f')) THEN
+ RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_CONSTRAINTS_INCOMPATIBLE: %',table_name; END IF;
+FOR spec IN SELECT * FROM pg_constraint WHERE conrelid=reference_name::regclass AND contype IN ('c','p','u') LOOP
+ IF spec.contype='c' THEN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint a WHERE a.conrelid=table_name::regclass AND a.contype='c'
+   AND a.conname=spec.conname AND a.convalidated AND NOT a.connoinherit
+   AND pg_get_expr(a.conbin,a.conrelid)=pg_get_expr(spec.conbin,spec.conrelid)) THEN
+   RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_CHECK_INCOMPATIBLE: %',table_name; END IF;
+ ELSE
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint a JOIN pg_index i ON i.indexrelid=a.conindid
+   WHERE a.conrelid=table_name::regclass AND a.contype=spec.contype AND NOT a.condeferrable
+   AND (SELECT array_agg(t.attname ORDER BY k.n) FROM unnest(a.conkey) WITH ORDINALITY k(attnum,n)
+    JOIN pg_attribute t ON t.attrelid=a.conrelid AND t.attnum=k.attnum AND NOT t.attisdropped)
+    = (SELECT array_agg(t.attname ORDER BY k.n) FROM unnest(spec.conkey) WITH ORDINALITY k(attnum,n)
+    JOIN pg_attribute t ON t.attrelid=spec.conrelid AND t.attnum=k.attnum AND NOT t.attisdropped)
+   AND i.indisvalid AND i.indisready AND i.indpred IS NULL AND i.indexprs IS NULL
+   AND i.indnkeyatts=array_length(spec.conkey,1) AND i.indnatts=i.indnkeyatts) THEN
+   RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_INDEX_INCOMPATIBLE: %',table_name; END IF;
+ END IF;
+END LOOP;
+DROP TABLE kf_completion_reference_0;
+CREATE TABLE IF NOT EXISTS wecom_kf_input_batch_members (
+ batch_ref TEXT NOT NULL, ordinal INTEGER NOT NULL,
+ account_id TEXT NOT NULL, namespace TEXT NOT NULL, message_id TEXT NOT NULL,
+ payload_digest TEXT NOT NULL, receipt_seq BIGINT NOT NULL,
+ PRIMARY KEY(batch_ref,ordinal), UNIQUE(account_id,namespace,message_id),
+ CONSTRAINT ck_kf_batch_member_shape CHECK(ordinal>=0 AND ordinal<32
+  AND namespace='sync' AND receipt_seq>0 AND length(payload_digest)=64)
+);
+IF to_regclass('pg_temp.kf_completion_reference_1') IS NOT NULL THEN RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_REFERENCE_COLLISION'; END IF;
+CREATE TEMP TABLE kf_completion_reference_1 (
+ batch_ref TEXT NOT NULL, ordinal INTEGER NOT NULL,
+ account_id TEXT NOT NULL, namespace TEXT NOT NULL, message_id TEXT NOT NULL,
+ payload_digest TEXT NOT NULL, receipt_seq BIGINT NOT NULL,
+ PRIMARY KEY(batch_ref,ordinal), UNIQUE(account_id,namespace,message_id),
+ CONSTRAINT ck_kf_batch_member_shape CHECK(ordinal>=0 AND ordinal<32
+  AND namespace='sync' AND receipt_seq>0 AND length(payload_digest)=64)
+) ON COMMIT DROP;
+table_name:='wecom_kf_input_batch_members'; reference_name:='pg_temp.kf_completion_reference_1';
+IF NOT EXISTS(SELECT 1 FROM pg_class WHERE oid=table_name::regclass AND relkind='r') THEN
+ RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_RELATION_INCOMPATIBLE: %',table_name; END IF;
+IF (SELECT count(*) FROM pg_attribute WHERE attrelid=table_name::regclass AND attnum>0 AND NOT attisdropped)
+ <> (SELECT count(*) FROM pg_attribute WHERE attrelid=reference_name::regclass AND attnum>0 AND NOT attisdropped) THEN
+ RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_COLUMNS_INCOMPATIBLE: %',table_name; END IF;
+FOR spec IN SELECT * FROM pg_attribute WHERE attrelid=reference_name::regclass AND attnum>0 AND NOT attisdropped LOOP
+ IF NOT EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=table_name::regclass AND a.attname=spec.attname
+  AND a.attnum>0 AND NOT a.attisdropped AND a.atttypid=spec.atttypid AND a.atttypmod=spec.atttypmod
+  AND a.attnotnull=spec.attnotnull AND a.attidentity=spec.attidentity AND a.attgenerated=spec.attgenerated) THEN
+  RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_COLUMN_INCOMPATIBLE: %.%',table_name,spec.attname; END IF;
+ IF (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d JOIN pg_attribute a
+  ON a.attrelid=d.adrelid AND a.attnum=d.adnum WHERE a.attrelid=table_name::regclass AND a.attname=spec.attname)
+ IS DISTINCT FROM (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d WHERE d.adrelid=reference_name::regclass AND d.adnum=spec.attnum) THEN
+  RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_DEFAULT_INCOMPATIBLE: %.%',table_name,spec.attname; END IF;
+END LOOP;
+IF (SELECT count(*) FROM pg_constraint WHERE conrelid=table_name::regclass AND contype IN ('c','p','u','f'))
+ <> (SELECT count(*) FROM pg_constraint WHERE conrelid=reference_name::regclass AND contype IN ('c','p','u','f')) THEN
+ RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_CONSTRAINTS_INCOMPATIBLE: %',table_name; END IF;
+FOR spec IN SELECT * FROM pg_constraint WHERE conrelid=reference_name::regclass AND contype IN ('c','p','u') LOOP
+ IF spec.contype='c' THEN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint a WHERE a.conrelid=table_name::regclass AND a.contype='c'
+   AND a.conname=spec.conname AND a.convalidated AND NOT a.connoinherit
+   AND pg_get_expr(a.conbin,a.conrelid)=pg_get_expr(spec.conbin,spec.conrelid)) THEN
+   RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_CHECK_INCOMPATIBLE: %',table_name; END IF;
+ ELSE
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint a JOIN pg_index i ON i.indexrelid=a.conindid
+   WHERE a.conrelid=table_name::regclass AND a.contype=spec.contype AND NOT a.condeferrable
+   AND (SELECT array_agg(t.attname ORDER BY k.n) FROM unnest(a.conkey) WITH ORDINALITY k(attnum,n)
+    JOIN pg_attribute t ON t.attrelid=a.conrelid AND t.attnum=k.attnum AND NOT t.attisdropped)
+    = (SELECT array_agg(t.attname ORDER BY k.n) FROM unnest(spec.conkey) WITH ORDINALITY k(attnum,n)
+    JOIN pg_attribute t ON t.attrelid=spec.conrelid AND t.attnum=k.attnum AND NOT t.attisdropped)
+   AND i.indisvalid AND i.indisready AND i.indpred IS NULL AND i.indexprs IS NULL
+   AND i.indnkeyatts=array_length(spec.conkey,1) AND i.indnatts=i.indnkeyatts) THEN
+   RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_INDEX_INCOMPATIBLE: %',table_name; END IF;
+ END IF;
+END LOOP;
+DROP TABLE kf_completion_reference_1;
+CREATE TABLE IF NOT EXISTS agent_runner_input_batch_members (
+ input_ref TEXT PRIMARY KEY,
+ batch_ref TEXT NOT NULL, ordinal INTEGER NOT NULL, members_digest TEXT NOT NULL,
+ history_group_ref TEXT NOT NULL, UNIQUE(batch_ref,ordinal),
+ CONSTRAINT ck_runner_batch_member_shape CHECK(ordinal>=0 AND ordinal<32 AND length(members_digest)=64)
+);
+IF to_regclass('pg_temp.kf_completion_reference_2') IS NOT NULL THEN RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_REFERENCE_COLLISION'; END IF;
+CREATE TEMP TABLE kf_completion_reference_2 (
+ input_ref TEXT PRIMARY KEY,
+ batch_ref TEXT NOT NULL, ordinal INTEGER NOT NULL, members_digest TEXT NOT NULL,
+ history_group_ref TEXT NOT NULL, UNIQUE(batch_ref,ordinal),
+ CONSTRAINT ck_runner_batch_member_shape CHECK(ordinal>=0 AND ordinal<32 AND length(members_digest)=64)
+) ON COMMIT DROP;
+table_name:='agent_runner_input_batch_members'; reference_name:='pg_temp.kf_completion_reference_2';
+IF NOT EXISTS(SELECT 1 FROM pg_class WHERE oid=table_name::regclass AND relkind='r') THEN
+ RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_RELATION_INCOMPATIBLE: %',table_name; END IF;
+IF (SELECT count(*) FROM pg_attribute WHERE attrelid=table_name::regclass AND attnum>0 AND NOT attisdropped)
+ <> (SELECT count(*) FROM pg_attribute WHERE attrelid=reference_name::regclass AND attnum>0 AND NOT attisdropped) THEN
+ RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_COLUMNS_INCOMPATIBLE: %',table_name; END IF;
+FOR spec IN SELECT * FROM pg_attribute WHERE attrelid=reference_name::regclass AND attnum>0 AND NOT attisdropped LOOP
+ IF NOT EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=table_name::regclass AND a.attname=spec.attname
+  AND a.attnum>0 AND NOT a.attisdropped AND a.atttypid=spec.atttypid AND a.atttypmod=spec.atttypmod
+  AND a.attnotnull=spec.attnotnull AND a.attidentity=spec.attidentity AND a.attgenerated=spec.attgenerated) THEN
+  RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_COLUMN_INCOMPATIBLE: %.%',table_name,spec.attname; END IF;
+ IF (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d JOIN pg_attribute a
+  ON a.attrelid=d.adrelid AND a.attnum=d.adnum WHERE a.attrelid=table_name::regclass AND a.attname=spec.attname)
+ IS DISTINCT FROM (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d WHERE d.adrelid=reference_name::regclass AND d.adnum=spec.attnum) THEN
+  RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_DEFAULT_INCOMPATIBLE: %.%',table_name,spec.attname; END IF;
+END LOOP;
+IF (SELECT count(*) FROM pg_constraint WHERE conrelid=table_name::regclass AND contype IN ('c','p','u','f'))
+ <> (SELECT count(*) FROM pg_constraint WHERE conrelid=reference_name::regclass AND contype IN ('c','p','u','f')) THEN
+ RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_CONSTRAINTS_INCOMPATIBLE: %',table_name; END IF;
+FOR spec IN SELECT * FROM pg_constraint WHERE conrelid=reference_name::regclass AND contype IN ('c','p','u') LOOP
+ IF spec.contype='c' THEN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint a WHERE a.conrelid=table_name::regclass AND a.contype='c'
+   AND a.conname=spec.conname AND a.convalidated AND NOT a.connoinherit
+   AND pg_get_expr(a.conbin,a.conrelid)=pg_get_expr(spec.conbin,spec.conrelid)) THEN
+   RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_CHECK_INCOMPATIBLE: %',table_name; END IF;
+ ELSE
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint a JOIN pg_index i ON i.indexrelid=a.conindid
+   WHERE a.conrelid=table_name::regclass AND a.contype=spec.contype AND NOT a.condeferrable
+   AND (SELECT array_agg(t.attname ORDER BY k.n) FROM unnest(a.conkey) WITH ORDINALITY k(attnum,n)
+    JOIN pg_attribute t ON t.attrelid=a.conrelid AND t.attnum=k.attnum AND NOT t.attisdropped)
+    = (SELECT array_agg(t.attname ORDER BY k.n) FROM unnest(spec.conkey) WITH ORDINALITY k(attnum,n)
+    JOIN pg_attribute t ON t.attrelid=spec.conrelid AND t.attnum=k.attnum AND NOT t.attisdropped)
+   AND i.indisvalid AND i.indisready AND i.indpred IS NULL AND i.indexprs IS NULL
+   AND i.indnkeyatts=array_length(spec.conkey,1) AND i.indnatts=i.indnkeyatts) THEN
+   RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_INDEX_INCOMPATIBLE: %',table_name; END IF;
+ END IF;
+END LOOP;
+DROP TABLE kf_completion_reference_2;
+CREATE TABLE IF NOT EXISTS wecom_kf_deliveries (
+ delivery_id TEXT PRIMARY KEY, input_ref TEXT NOT NULL,
+ runner_id TEXT NOT NULL, tenant_id TEXT NOT NULL, locator JSONB NOT NULL,
+ scope JSONB NOT NULL, payload_digest TEXT NOT NULL,
+ presentation_digest TEXT NOT NULL, presentation JSONB NOT NULL,
+ view_revision BIGINT NOT NULL, control_revision BIGINT NOT NULL,
+ phase TEXT NOT NULL DEFAULT 'open', owner_id TEXT, claim_epoch BIGINT NOT NULL DEFAULT 0,
+ lease_until TIMESTAMPTZ, sealed_at TIMESTAMPTZ, closed_at TIMESTAMPTZ,
+ closed_outcome TEXT, policy_version INTEGER NOT NULL DEFAULT 1,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+ UNIQUE(input_ref,runner_id,presentation_digest),
+ CONSTRAINT ck_kf_delivery_shape CHECK(jsonb_typeof(locator)='object' AND jsonb_typeof(scope)='object'
+  AND jsonb_typeof(presentation)='object' AND length(payload_digest)=64 AND length(presentation_digest)=64
+  AND view_revision>=0 AND control_revision>=0 AND claim_epoch>=0 AND policy_version=1
+  AND phase IN ('open','sealed','closed') AND (phase='open' OR sealed_at IS NOT NULL)
+  AND ((phase='closed')=(closed_at IS NOT NULL))
+  AND ((phase='closed')=(closed_outcome IS NOT NULL))
+  AND (closed_outcome IS NULL OR closed_outcome IN ('closed_accepted_known','closed_failed_known','closed_suppressed_known','closed_unknown')))
+);
+IF to_regclass('pg_temp.kf_completion_reference_3') IS NOT NULL THEN RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_REFERENCE_COLLISION'; END IF;
+CREATE TEMP TABLE kf_completion_reference_3 (
+ delivery_id TEXT PRIMARY KEY, input_ref TEXT NOT NULL,
+ runner_id TEXT NOT NULL, tenant_id TEXT NOT NULL, locator JSONB NOT NULL,
+ scope JSONB NOT NULL, payload_digest TEXT NOT NULL,
+ presentation_digest TEXT NOT NULL, presentation JSONB NOT NULL,
+ view_revision BIGINT NOT NULL, control_revision BIGINT NOT NULL,
+ phase TEXT NOT NULL DEFAULT 'open', owner_id TEXT, claim_epoch BIGINT NOT NULL DEFAULT 0,
+ lease_until TIMESTAMPTZ, sealed_at TIMESTAMPTZ, closed_at TIMESTAMPTZ,
+ closed_outcome TEXT, policy_version INTEGER NOT NULL DEFAULT 1,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+ UNIQUE(input_ref,runner_id,presentation_digest),
+ CONSTRAINT ck_kf_delivery_shape CHECK(jsonb_typeof(locator)='object' AND jsonb_typeof(scope)='object'
+  AND jsonb_typeof(presentation)='object' AND length(payload_digest)=64 AND length(presentation_digest)=64
+  AND view_revision>=0 AND control_revision>=0 AND claim_epoch>=0 AND policy_version=1
+  AND phase IN ('open','sealed','closed') AND (phase='open' OR sealed_at IS NOT NULL)
+  AND ((phase='closed')=(closed_at IS NOT NULL))
+  AND ((phase='closed')=(closed_outcome IS NOT NULL))
+  AND (closed_outcome IS NULL OR closed_outcome IN ('closed_accepted_known','closed_failed_known','closed_suppressed_known','closed_unknown')))
+) ON COMMIT DROP;
+IF to_regclass('pg_temp.kf_completion_old_delivery_reference') IS NOT NULL THEN
+ RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_REFERENCE_COLLISION'; END IF;
+CREATE TEMP TABLE kf_completion_old_delivery_reference
+ (LIKE kf_completion_reference_3 INCLUDING ALL) ON COMMIT DROP;
+ALTER TABLE kf_completion_old_delivery_reference DROP CONSTRAINT ck_kf_delivery_shape;
+ALTER TABLE kf_completion_old_delivery_reference ADD CONSTRAINT ck_kf_delivery_shape CHECK(jsonb_typeof(locator)='object' AND jsonb_typeof(scope)='object'
+  AND jsonb_typeof(presentation)='object' AND length(payload_digest)=64 AND length(presentation_digest)=64
+  AND view_revision>=0 AND control_revision>=0 AND claim_epoch>=0 AND policy_version=1
+  AND phase IN ('open','sealed','closed') AND (phase='open' OR sealed_at IS NOT NULL)
+  AND ((phase='closed')=(closed_at IS NOT NULL))
+  AND ((phase='closed')=(closed_outcome IS NOT NULL))
+  AND (closed_outcome IS NULL OR closed_outcome IN ('closed_accepted_known','closed_failed_known','closed_suppressed_known')));
+-- Accept only the exact previously validated shape before widening its outcome.
+IF EXISTS(SELECT 1 FROM pg_constraint actual JOIN pg_constraint prior
+ ON prior.conrelid='pg_temp.kf_completion_old_delivery_reference'::regclass
+ AND prior.conname='ck_kf_delivery_shape'
+ WHERE actual.conrelid='wecom_kf_deliveries'::regclass
+ AND actual.conname='ck_kf_delivery_shape' AND actual.contype='c'
+ AND actual.convalidated AND NOT actual.connoinherit
+ AND pg_get_expr(actual.conbin,actual.conrelid)=pg_get_expr(prior.conbin,prior.conrelid)) THEN
+ ALTER TABLE wecom_kf_deliveries DROP CONSTRAINT ck_kf_delivery_shape;
+ ALTER TABLE wecom_kf_deliveries ADD CONSTRAINT ck_kf_delivery_shape CHECK(jsonb_typeof(locator)='object' AND jsonb_typeof(scope)='object'
+  AND jsonb_typeof(presentation)='object' AND length(payload_digest)=64 AND length(presentation_digest)=64
+  AND view_revision>=0 AND control_revision>=0 AND claim_epoch>=0 AND policy_version=1
+  AND phase IN ('open','sealed','closed') AND (phase='open' OR sealed_at IS NOT NULL)
+  AND ((phase='closed')=(closed_at IS NOT NULL))
+  AND ((phase='closed')=(closed_outcome IS NOT NULL))
+  AND (closed_outcome IS NULL OR closed_outcome IN ('closed_accepted_known','closed_failed_known','closed_suppressed_known','closed_unknown')));
+END IF;
+DROP TABLE kf_completion_old_delivery_reference;
+table_name:='wecom_kf_deliveries'; reference_name:='pg_temp.kf_completion_reference_3';
+IF NOT EXISTS(SELECT 1 FROM pg_class WHERE oid=table_name::regclass AND relkind='r') THEN
+ RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_RELATION_INCOMPATIBLE: %',table_name; END IF;
+IF (SELECT count(*) FROM pg_attribute WHERE attrelid=table_name::regclass AND attnum>0 AND NOT attisdropped)
+ <> (SELECT count(*) FROM pg_attribute WHERE attrelid=reference_name::regclass AND attnum>0 AND NOT attisdropped) THEN
+ RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_COLUMNS_INCOMPATIBLE: %',table_name; END IF;
+FOR spec IN SELECT * FROM pg_attribute WHERE attrelid=reference_name::regclass AND attnum>0 AND NOT attisdropped LOOP
+ IF NOT EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=table_name::regclass AND a.attname=spec.attname
+  AND a.attnum>0 AND NOT a.attisdropped AND a.atttypid=spec.atttypid AND a.atttypmod=spec.atttypmod
+  AND a.attnotnull=spec.attnotnull AND a.attidentity=spec.attidentity AND a.attgenerated=spec.attgenerated) THEN
+  RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_COLUMN_INCOMPATIBLE: %.%',table_name,spec.attname; END IF;
+ IF (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d JOIN pg_attribute a
+  ON a.attrelid=d.adrelid AND a.attnum=d.adnum WHERE a.attrelid=table_name::regclass AND a.attname=spec.attname)
+ IS DISTINCT FROM (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d WHERE d.adrelid=reference_name::regclass AND d.adnum=spec.attnum) THEN
+  RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_DEFAULT_INCOMPATIBLE: %.%',table_name,spec.attname; END IF;
+END LOOP;
+IF (SELECT count(*) FROM pg_constraint WHERE conrelid=table_name::regclass AND contype IN ('c','p','u','f'))
+ <> (SELECT count(*) FROM pg_constraint WHERE conrelid=reference_name::regclass AND contype IN ('c','p','u','f')) THEN
+ RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_CONSTRAINTS_INCOMPATIBLE: %',table_name; END IF;
+FOR spec IN SELECT * FROM pg_constraint WHERE conrelid=reference_name::regclass AND contype IN ('c','p','u') LOOP
+ IF spec.contype='c' THEN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint a WHERE a.conrelid=table_name::regclass AND a.contype='c'
+   AND a.conname=spec.conname AND a.convalidated AND NOT a.connoinherit
+   AND pg_get_expr(a.conbin,a.conrelid)=pg_get_expr(spec.conbin,spec.conrelid)) THEN
+   RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_CHECK_INCOMPATIBLE: %',table_name; END IF;
+ ELSE
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint a JOIN pg_index i ON i.indexrelid=a.conindid
+   WHERE a.conrelid=table_name::regclass AND a.contype=spec.contype AND NOT a.condeferrable
+   AND (SELECT array_agg(t.attname ORDER BY k.n) FROM unnest(a.conkey) WITH ORDINALITY k(attnum,n)
+    JOIN pg_attribute t ON t.attrelid=a.conrelid AND t.attnum=k.attnum AND NOT t.attisdropped)
+    = (SELECT array_agg(t.attname ORDER BY k.n) FROM unnest(spec.conkey) WITH ORDINALITY k(attnum,n)
+    JOIN pg_attribute t ON t.attrelid=spec.conrelid AND t.attnum=k.attnum AND NOT t.attisdropped)
+   AND i.indisvalid AND i.indisready AND i.indpred IS NULL AND i.indexprs IS NULL
+   AND i.indnkeyatts=array_length(spec.conkey,1) AND i.indnatts=i.indnkeyatts) THEN
+   RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_INDEX_INCOMPATIBLE: %',table_name; END IF;
+ END IF;
+END LOOP;
+DROP TABLE kf_completion_reference_3;
+CREATE TABLE IF NOT EXISTS wecom_kf_wire_operations (
+ operation_ref TEXT PRIMARY KEY, delivery_id TEXT,
+ tenant_id TEXT NOT NULL, locator JSONB NOT NULL, scope JSONB NOT NULL,
+ payload_digest TEXT NOT NULL, operation_version INTEGER NOT NULL DEFAULT 1,
+ ordinal INTEGER NOT NULL, purpose TEXT NOT NULL, endpoint TEXT NOT NULL,
+ request_digest TEXT NOT NULL, fallback_of TEXT,
+ phase TEXT NOT NULL, authorized_epoch BIGINT NOT NULL,
+ started_at TIMESTAMPTZ, observed_at TIMESTAMPTZ,
+ response_origin TEXT, errcode BIGINT, result JSONB, proof JSONB,
+ UNIQUE(delivery_id,ordinal),
+ CONSTRAINT ck_kf_wire_shape CHECK(jsonb_typeof(locator)='object' AND jsonb_typeof(scope)='object'
+  AND length(payload_digest)=64 AND length(request_digest)=64 AND ordinal>=0 AND ordinal<128
+  AND operation_version=1 AND authorized_epoch>0
+  AND phase IN ('started','ack','reject','unknown','suppressed','unwritten')
+  AND (phase NOT IN ('started','ack','reject','unknown') OR started_at IS NOT NULL)
+  AND (phase NOT IN ('ack','reject') OR (observed_at IS NOT NULL AND response_origin='platform' AND errcode IS NOT NULL))
+  AND (phase<>'ack' OR errcode=0) AND (phase<>'reject' OR errcode<>0)
+  AND (phase<>'suppressed' OR (observed_at IS NOT NULL AND jsonb_typeof(proof)='object'))
+  AND (result IS NULL OR jsonb_typeof(result)='object') AND (proof IS NULL OR jsonb_typeof(proof)='object'))
+);
+IF to_regclass('pg_temp.kf_completion_reference_4') IS NOT NULL THEN RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_REFERENCE_COLLISION'; END IF;
+CREATE TEMP TABLE kf_completion_reference_4 (
+ operation_ref TEXT PRIMARY KEY, delivery_id TEXT,
+ tenant_id TEXT NOT NULL, locator JSONB NOT NULL, scope JSONB NOT NULL,
+ payload_digest TEXT NOT NULL, operation_version INTEGER NOT NULL DEFAULT 1,
+ ordinal INTEGER NOT NULL, purpose TEXT NOT NULL, endpoint TEXT NOT NULL,
+ request_digest TEXT NOT NULL, fallback_of TEXT,
+ phase TEXT NOT NULL, authorized_epoch BIGINT NOT NULL,
+ started_at TIMESTAMPTZ, observed_at TIMESTAMPTZ,
+ response_origin TEXT, errcode BIGINT, result JSONB, proof JSONB,
+ UNIQUE(delivery_id,ordinal),
+ CONSTRAINT ck_kf_wire_shape CHECK(jsonb_typeof(locator)='object' AND jsonb_typeof(scope)='object'
+  AND length(payload_digest)=64 AND length(request_digest)=64 AND ordinal>=0 AND ordinal<128
+  AND operation_version=1 AND authorized_epoch>0
+  AND phase IN ('started','ack','reject','unknown','suppressed','unwritten')
+  AND (phase NOT IN ('started','ack','reject','unknown') OR started_at IS NOT NULL)
+  AND (phase NOT IN ('ack','reject') OR (observed_at IS NOT NULL AND response_origin='platform' AND errcode IS NOT NULL))
+  AND (phase<>'ack' OR errcode=0) AND (phase<>'reject' OR errcode<>0)
+  AND (phase<>'suppressed' OR (observed_at IS NOT NULL AND jsonb_typeof(proof)='object'))
+  AND (result IS NULL OR jsonb_typeof(result)='object') AND (proof IS NULL OR jsonb_typeof(proof)='object'))
+) ON COMMIT DROP;
+table_name:='wecom_kf_wire_operations'; reference_name:='pg_temp.kf_completion_reference_4';
+IF NOT EXISTS(SELECT 1 FROM pg_class WHERE oid=table_name::regclass AND relkind='r') THEN
+ RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_RELATION_INCOMPATIBLE: %',table_name; END IF;
+IF (SELECT count(*) FROM pg_attribute WHERE attrelid=table_name::regclass AND attnum>0 AND NOT attisdropped)
+ <> (SELECT count(*) FROM pg_attribute WHERE attrelid=reference_name::regclass AND attnum>0 AND NOT attisdropped) THEN
+ RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_COLUMNS_INCOMPATIBLE: %',table_name; END IF;
+FOR spec IN SELECT * FROM pg_attribute WHERE attrelid=reference_name::regclass AND attnum>0 AND NOT attisdropped LOOP
+ IF NOT EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=table_name::regclass AND a.attname=spec.attname
+  AND a.attnum>0 AND NOT a.attisdropped AND a.atttypid=spec.atttypid AND a.atttypmod=spec.atttypmod
+  AND a.attnotnull=spec.attnotnull AND a.attidentity=spec.attidentity AND a.attgenerated=spec.attgenerated) THEN
+  RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_COLUMN_INCOMPATIBLE: %.%',table_name,spec.attname; END IF;
+ IF (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d JOIN pg_attribute a
+  ON a.attrelid=d.adrelid AND a.attnum=d.adnum WHERE a.attrelid=table_name::regclass AND a.attname=spec.attname)
+ IS DISTINCT FROM (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d WHERE d.adrelid=reference_name::regclass AND d.adnum=spec.attnum) THEN
+  RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_DEFAULT_INCOMPATIBLE: %.%',table_name,spec.attname; END IF;
+END LOOP;
+IF (SELECT count(*) FROM pg_constraint WHERE conrelid=table_name::regclass AND contype IN ('c','p','u','f'))
+ <> (SELECT count(*) FROM pg_constraint WHERE conrelid=reference_name::regclass AND contype IN ('c','p','u','f')) THEN
+ RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_CONSTRAINTS_INCOMPATIBLE: %',table_name; END IF;
+FOR spec IN SELECT * FROM pg_constraint WHERE conrelid=reference_name::regclass AND contype IN ('c','p','u') LOOP
+ IF spec.contype='c' THEN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint a WHERE a.conrelid=table_name::regclass AND a.contype='c'
+   AND a.conname=spec.conname AND a.convalidated AND NOT a.connoinherit
+   AND pg_get_expr(a.conbin,a.conrelid)=pg_get_expr(spec.conbin,spec.conrelid)) THEN
+   RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_CHECK_INCOMPATIBLE: %',table_name; END IF;
+ ELSE
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint a JOIN pg_index i ON i.indexrelid=a.conindid
+   WHERE a.conrelid=table_name::regclass AND a.contype=spec.contype AND NOT a.condeferrable
+   AND (SELECT array_agg(t.attname ORDER BY k.n) FROM unnest(a.conkey) WITH ORDINALITY k(attnum,n)
+    JOIN pg_attribute t ON t.attrelid=a.conrelid AND t.attnum=k.attnum AND NOT t.attisdropped)
+    = (SELECT array_agg(t.attname ORDER BY k.n) FROM unnest(spec.conkey) WITH ORDINALITY k(attnum,n)
+    JOIN pg_attribute t ON t.attrelid=spec.conrelid AND t.attnum=k.attnum AND NOT t.attisdropped)
+   AND i.indisvalid AND i.indisready AND i.indpred IS NULL AND i.indexprs IS NULL
+   AND i.indnkeyatts=array_length(spec.conkey,1) AND i.indnatts=i.indnkeyatts) THEN
+   RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_INDEX_INCOMPATIBLE: %',table_name; END IF;
+ END IF;
+END LOOP;
+DROP TABLE kf_completion_reference_4;
+CREATE TABLE IF NOT EXISTS wecom_kf_business_facts (
+ business_ref TEXT PRIMARY KEY, tenant_id TEXT NOT NULL,
+ account_id TEXT NOT NULL, namespace TEXT NOT NULL, message_id TEXT NOT NULL,
+ route_id TEXT, scope JSONB NOT NULL, payload_digest TEXT NOT NULL,
+ business_kind TEXT NOT NULL, phase TEXT NOT NULL, value JSONB NOT NULL,
+ observed_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+ UNIQUE(account_id,namespace,message_id,business_kind),
+ CONSTRAINT ck_kf_business_shape CHECK(jsonb_typeof(scope)='object' AND jsonb_typeof(value)='object'
+  AND length(payload_digest)=64 AND phase IN ('known','unknown','suppressed'))
+);
+IF to_regclass('pg_temp.kf_completion_reference_5') IS NOT NULL THEN RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_REFERENCE_COLLISION'; END IF;
+CREATE TEMP TABLE kf_completion_reference_5 (
+ business_ref TEXT PRIMARY KEY, tenant_id TEXT NOT NULL,
+ account_id TEXT NOT NULL, namespace TEXT NOT NULL, message_id TEXT NOT NULL,
+ route_id TEXT, scope JSONB NOT NULL, payload_digest TEXT NOT NULL,
+ business_kind TEXT NOT NULL, phase TEXT NOT NULL, value JSONB NOT NULL,
+ observed_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+ UNIQUE(account_id,namespace,message_id,business_kind),
+ CONSTRAINT ck_kf_business_shape CHECK(jsonb_typeof(scope)='object' AND jsonb_typeof(value)='object'
+  AND length(payload_digest)=64 AND phase IN ('known','unknown','suppressed'))
+) ON COMMIT DROP;
+table_name:='wecom_kf_business_facts'; reference_name:='pg_temp.kf_completion_reference_5';
+IF NOT EXISTS(SELECT 1 FROM pg_class WHERE oid=table_name::regclass AND relkind='r') THEN
+ RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_RELATION_INCOMPATIBLE: %',table_name; END IF;
+IF (SELECT count(*) FROM pg_attribute WHERE attrelid=table_name::regclass AND attnum>0 AND NOT attisdropped)
+ <> (SELECT count(*) FROM pg_attribute WHERE attrelid=reference_name::regclass AND attnum>0 AND NOT attisdropped) THEN
+ RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_COLUMNS_INCOMPATIBLE: %',table_name; END IF;
+FOR spec IN SELECT * FROM pg_attribute WHERE attrelid=reference_name::regclass AND attnum>0 AND NOT attisdropped LOOP
+ IF NOT EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=table_name::regclass AND a.attname=spec.attname
+  AND a.attnum>0 AND NOT a.attisdropped AND a.atttypid=spec.atttypid AND a.atttypmod=spec.atttypmod
+  AND a.attnotnull=spec.attnotnull AND a.attidentity=spec.attidentity AND a.attgenerated=spec.attgenerated) THEN
+  RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_COLUMN_INCOMPATIBLE: %.%',table_name,spec.attname; END IF;
+ IF (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d JOIN pg_attribute a
+  ON a.attrelid=d.adrelid AND a.attnum=d.adnum WHERE a.attrelid=table_name::regclass AND a.attname=spec.attname)
+ IS DISTINCT FROM (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d WHERE d.adrelid=reference_name::regclass AND d.adnum=spec.attnum) THEN
+  RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_DEFAULT_INCOMPATIBLE: %.%',table_name,spec.attname; END IF;
+END LOOP;
+IF (SELECT count(*) FROM pg_constraint WHERE conrelid=table_name::regclass AND contype IN ('c','p','u','f'))
+ <> (SELECT count(*) FROM pg_constraint WHERE conrelid=reference_name::regclass AND contype IN ('c','p','u','f')) THEN
+ RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_CONSTRAINTS_INCOMPATIBLE: %',table_name; END IF;
+FOR spec IN SELECT * FROM pg_constraint WHERE conrelid=reference_name::regclass AND contype IN ('c','p','u') LOOP
+ IF spec.contype='c' THEN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint a WHERE a.conrelid=table_name::regclass AND a.contype='c'
+   AND a.conname=spec.conname AND a.convalidated AND NOT a.connoinherit
+   AND pg_get_expr(a.conbin,a.conrelid)=pg_get_expr(spec.conbin,spec.conrelid)) THEN
+   RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_CHECK_INCOMPATIBLE: %',table_name; END IF;
+ ELSE
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint a JOIN pg_index i ON i.indexrelid=a.conindid
+   WHERE a.conrelid=table_name::regclass AND a.contype=spec.contype AND NOT a.condeferrable
+   AND (SELECT array_agg(t.attname ORDER BY k.n) FROM unnest(a.conkey) WITH ORDINALITY k(attnum,n)
+    JOIN pg_attribute t ON t.attrelid=a.conrelid AND t.attnum=k.attnum AND NOT t.attisdropped)
+    = (SELECT array_agg(t.attname ORDER BY k.n) FROM unnest(spec.conkey) WITH ORDINALITY k(attnum,n)
+    JOIN pg_attribute t ON t.attrelid=spec.conrelid AND t.attnum=k.attnum AND NOT t.attisdropped)
+   AND i.indisvalid AND i.indisready AND i.indpred IS NULL AND i.indexprs IS NULL
+   AND i.indnkeyatts=array_length(spec.conkey,1) AND i.indnatts=i.indnkeyatts) THEN
+   RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_INDEX_INCOMPATIBLE: %',table_name; END IF;
+ END IF;
+END LOOP;
+DROP TABLE kf_completion_reference_5;
+END $$;
+
+-- KF ended unknown sends: retain wire facts and release only terminal chat ownership.
+DO $$ DECLARE spec RECORD; table_name TEXT; reference_name TEXT; BEGIN
+CREATE TABLE IF NOT EXISTS wecom_kf_deliveries (
+ delivery_id TEXT PRIMARY KEY, input_ref TEXT NOT NULL,
+ runner_id TEXT NOT NULL, tenant_id TEXT NOT NULL, locator JSONB NOT NULL,
+ scope JSONB NOT NULL, payload_digest TEXT NOT NULL,
+ presentation_digest TEXT NOT NULL, presentation JSONB NOT NULL,
+ view_revision BIGINT NOT NULL, control_revision BIGINT NOT NULL,
+ phase TEXT NOT NULL DEFAULT 'open', owner_id TEXT, claim_epoch BIGINT NOT NULL DEFAULT 0,
+ lease_until TIMESTAMPTZ, sealed_at TIMESTAMPTZ, closed_at TIMESTAMPTZ,
+ closed_outcome TEXT, policy_version INTEGER NOT NULL DEFAULT 1,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+ UNIQUE(input_ref,runner_id,presentation_digest),
+ CONSTRAINT ck_kf_delivery_shape CHECK(jsonb_typeof(locator)='object' AND jsonb_typeof(scope)='object'
+  AND jsonb_typeof(presentation)='object' AND length(payload_digest)=64 AND length(presentation_digest)=64
+  AND view_revision>=0 AND control_revision>=0 AND claim_epoch>=0 AND policy_version=1
+  AND phase IN ('open','sealed','closed') AND (phase='open' OR sealed_at IS NOT NULL)
+  AND ((phase='closed')=(closed_at IS NOT NULL))
+  AND ((phase='closed')=(closed_outcome IS NOT NULL))
+  AND (closed_outcome IS NULL OR closed_outcome IN ('closed_accepted_known','closed_failed_known','closed_suppressed_known','closed_unknown')))
+);
+IF to_regclass('pg_temp.kf_completion_reference_3') IS NOT NULL THEN RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_REFERENCE_COLLISION'; END IF;
+CREATE TEMP TABLE kf_completion_reference_3 (
+ delivery_id TEXT PRIMARY KEY, input_ref TEXT NOT NULL,
+ runner_id TEXT NOT NULL, tenant_id TEXT NOT NULL, locator JSONB NOT NULL,
+ scope JSONB NOT NULL, payload_digest TEXT NOT NULL,
+ presentation_digest TEXT NOT NULL, presentation JSONB NOT NULL,
+ view_revision BIGINT NOT NULL, control_revision BIGINT NOT NULL,
+ phase TEXT NOT NULL DEFAULT 'open', owner_id TEXT, claim_epoch BIGINT NOT NULL DEFAULT 0,
+ lease_until TIMESTAMPTZ, sealed_at TIMESTAMPTZ, closed_at TIMESTAMPTZ,
+ closed_outcome TEXT, policy_version INTEGER NOT NULL DEFAULT 1,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+ UNIQUE(input_ref,runner_id,presentation_digest),
+ CONSTRAINT ck_kf_delivery_shape CHECK(jsonb_typeof(locator)='object' AND jsonb_typeof(scope)='object'
+  AND jsonb_typeof(presentation)='object' AND length(payload_digest)=64 AND length(presentation_digest)=64
+  AND view_revision>=0 AND control_revision>=0 AND claim_epoch>=0 AND policy_version=1
+  AND phase IN ('open','sealed','closed') AND (phase='open' OR sealed_at IS NOT NULL)
+  AND ((phase='closed')=(closed_at IS NOT NULL))
+  AND ((phase='closed')=(closed_outcome IS NOT NULL))
+  AND (closed_outcome IS NULL OR closed_outcome IN ('closed_accepted_known','closed_failed_known','closed_suppressed_known','closed_unknown')))
+) ON COMMIT DROP;
+IF to_regclass('pg_temp.kf_completion_old_delivery_reference') IS NOT NULL THEN
+ RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_REFERENCE_COLLISION'; END IF;
+CREATE TEMP TABLE kf_completion_old_delivery_reference
+ (LIKE kf_completion_reference_3 INCLUDING ALL) ON COMMIT DROP;
+ALTER TABLE kf_completion_old_delivery_reference DROP CONSTRAINT ck_kf_delivery_shape;
+ALTER TABLE kf_completion_old_delivery_reference ADD CONSTRAINT ck_kf_delivery_shape CHECK(jsonb_typeof(locator)='object' AND jsonb_typeof(scope)='object'
+  AND jsonb_typeof(presentation)='object' AND length(payload_digest)=64 AND length(presentation_digest)=64
+  AND view_revision>=0 AND control_revision>=0 AND claim_epoch>=0 AND policy_version=1
+  AND phase IN ('open','sealed','closed') AND (phase='open' OR sealed_at IS NOT NULL)
+  AND ((phase='closed')=(closed_at IS NOT NULL))
+  AND ((phase='closed')=(closed_outcome IS NOT NULL))
+  AND (closed_outcome IS NULL OR closed_outcome IN ('closed_accepted_known','closed_failed_known','closed_suppressed_known')));
+-- Accept only the exact previously validated shape before widening its outcome.
+IF EXISTS(SELECT 1 FROM pg_constraint actual JOIN pg_constraint prior
+ ON prior.conrelid='pg_temp.kf_completion_old_delivery_reference'::regclass
+ AND prior.conname='ck_kf_delivery_shape'
+ WHERE actual.conrelid='wecom_kf_deliveries'::regclass
+ AND actual.conname='ck_kf_delivery_shape' AND actual.contype='c'
+ AND actual.convalidated AND NOT actual.connoinherit
+ AND pg_get_expr(actual.conbin,actual.conrelid)=pg_get_expr(prior.conbin,prior.conrelid)) THEN
+ ALTER TABLE wecom_kf_deliveries DROP CONSTRAINT ck_kf_delivery_shape;
+ ALTER TABLE wecom_kf_deliveries ADD CONSTRAINT ck_kf_delivery_shape CHECK(jsonb_typeof(locator)='object' AND jsonb_typeof(scope)='object'
+  AND jsonb_typeof(presentation)='object' AND length(payload_digest)=64 AND length(presentation_digest)=64
+  AND view_revision>=0 AND control_revision>=0 AND claim_epoch>=0 AND policy_version=1
+  AND phase IN ('open','sealed','closed') AND (phase='open' OR sealed_at IS NOT NULL)
+  AND ((phase='closed')=(closed_at IS NOT NULL))
+  AND ((phase='closed')=(closed_outcome IS NOT NULL))
+  AND (closed_outcome IS NULL OR closed_outcome IN ('closed_accepted_known','closed_failed_known','closed_suppressed_known','closed_unknown')));
+END IF;
+DROP TABLE kf_completion_old_delivery_reference;
+table_name:='wecom_kf_deliveries'; reference_name:='pg_temp.kf_completion_reference_3';
+IF NOT EXISTS(SELECT 1 FROM pg_class WHERE oid=table_name::regclass AND relkind='r') THEN
+ RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_RELATION_INCOMPATIBLE: %',table_name; END IF;
+IF (SELECT count(*) FROM pg_attribute WHERE attrelid=table_name::regclass AND attnum>0 AND NOT attisdropped)
+ <> (SELECT count(*) FROM pg_attribute WHERE attrelid=reference_name::regclass AND attnum>0 AND NOT attisdropped) THEN
+ RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_COLUMNS_INCOMPATIBLE: %',table_name; END IF;
+FOR spec IN SELECT * FROM pg_attribute WHERE attrelid=reference_name::regclass AND attnum>0 AND NOT attisdropped LOOP
+ IF NOT EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=table_name::regclass AND a.attname=spec.attname
+  AND a.attnum>0 AND NOT a.attisdropped AND a.atttypid=spec.atttypid AND a.atttypmod=spec.atttypmod
+  AND a.attnotnull=spec.attnotnull AND a.attidentity=spec.attidentity AND a.attgenerated=spec.attgenerated) THEN
+  RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_COLUMN_INCOMPATIBLE: %.%',table_name,spec.attname; END IF;
+ IF (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d JOIN pg_attribute a
+  ON a.attrelid=d.adrelid AND a.attnum=d.adnum WHERE a.attrelid=table_name::regclass AND a.attname=spec.attname)
+ IS DISTINCT FROM (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d WHERE d.adrelid=reference_name::regclass AND d.adnum=spec.attnum) THEN
+  RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_DEFAULT_INCOMPATIBLE: %.%',table_name,spec.attname; END IF;
+END LOOP;
+IF (SELECT count(*) FROM pg_constraint WHERE conrelid=table_name::regclass AND contype IN ('c','p','u','f'))
+ <> (SELECT count(*) FROM pg_constraint WHERE conrelid=reference_name::regclass AND contype IN ('c','p','u','f')) THEN
+ RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_CONSTRAINTS_INCOMPATIBLE: %',table_name; END IF;
+FOR spec IN SELECT * FROM pg_constraint WHERE conrelid=reference_name::regclass AND contype IN ('c','p','u') LOOP
+ IF spec.contype='c' THEN
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint a WHERE a.conrelid=table_name::regclass AND a.contype='c'
+   AND a.conname=spec.conname AND a.convalidated AND NOT a.connoinherit
+   AND pg_get_expr(a.conbin,a.conrelid)=pg_get_expr(spec.conbin,spec.conrelid)) THEN
+   RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_CHECK_INCOMPATIBLE: %',table_name; END IF;
+ ELSE
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint a JOIN pg_index i ON i.indexrelid=a.conindid
+   WHERE a.conrelid=table_name::regclass AND a.contype=spec.contype AND NOT a.condeferrable
+   AND (SELECT array_agg(t.attname ORDER BY k.n) FROM unnest(a.conkey) WITH ORDINALITY k(attnum,n)
+    JOIN pg_attribute t ON t.attrelid=a.conrelid AND t.attnum=k.attnum AND NOT t.attisdropped)
+    = (SELECT array_agg(t.attname ORDER BY k.n) FROM unnest(spec.conkey) WITH ORDINALITY k(attnum,n)
+    JOIN pg_attribute t ON t.attrelid=spec.conrelid AND t.attnum=k.attnum AND NOT t.attisdropped)
+   AND i.indisvalid AND i.indisready AND i.indpred IS NULL AND i.indexprs IS NULL
+   AND i.indnkeyatts=array_length(spec.conkey,1) AND i.indnatts=i.indnkeyatts) THEN
+   RAISE EXCEPTION 'KF_COMPLETION_SCHEMA_INDEX_INCOMPATIBLE: %',table_name; END IF;
+ END IF;
+END LOOP;
+DROP TABLE kf_completion_reference_3;
+END $$;

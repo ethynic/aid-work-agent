@@ -1049,6 +1049,25 @@ class MessageDB:
                 return None
 
     @staticmethod
+    def create_batch_in_tx(cursor, session_id, messages):
+        """Cursor-only insertion. Caller owns stable IDs, commit and cache work."""
+        created = []
+        for msg in messages:
+            message_id = msg.get("message_id") or generate_message_id()
+            columns = ["message_id", "session_id", "role", "content", "metadata"]
+            values = [message_id, session_id, msg.get("role"), msg.get("content"),
+                      json.dumps(msg["metadata"], ensure_ascii=False, default=str) if msg.get("metadata") else None]
+            if msg.get("created_at") is not None:
+                columns.append("created_at")
+                values.append(msg["created_at"])
+            suffix = " ON CONFLICT(message_id) DO NOTHING" if msg.get("idempotent") else ""
+            cursor.execute("INSERT INTO chat_messages ("+",".join(columns)+") VALUES ("+",".join(["%s"]*len(values))+")"+suffix, values)
+            created.append({"message_id": message_id, "session_id": session_id,
+                            "role": msg.get("role"), "content": msg.get("content"),
+                            "metadata": msg.get("metadata"), "created_at": msg.get("created_at")})
+        return created
+
+    @staticmethod
     def create_batch_transactional(session_id: str, messages: List[Dict[str, Any]]) -> Optional[List[Dict[str, Any]]]:
         """事务性批量创建消息。所有消息作为一个原子事务写入，要么全部成功要么全部失败。
 
@@ -1075,35 +1094,7 @@ class MessageDB:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             try:
-                for msg in messages:
-                    message_id = generate_message_id()
-                    role = msg.get("role")
-                    content = msg.get("content")
-                    metadata = msg.get("metadata")
-                    created_at = msg.get("created_at")
-
-                    # 显式传入 created_at 时写入该列；否则省略列让数据库走默认值
-                    if created_at is not None:
-                        cursor.execute(f"""
-                            INSERT INTO chat_messages (message_id, session_id, role, content, metadata, created_at)
-                            VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
-                        """, (message_id, session_id, role, content,
-                              json.dumps(metadata, ensure_ascii=False, default=str) if metadata else None,
-                              created_at))
-                    else:
-                        cursor.execute(f"""
-                            INSERT INTO chat_messages (message_id, session_id, role, content, metadata)
-                            VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
-                        """, (message_id, session_id, role, content,
-                              json.dumps(metadata, ensure_ascii=False, default=str) if metadata else None))
-                    created_messages.append({
-                        "message_id": message_id,
-                        "session_id": session_id,
-                        "role": role,
-                        "content": content,
-                        "metadata": metadata,
-                        "created_at": created_at,
-                    })
+                created_messages = MessageDB.create_batch_in_tx(cursor, session_id, messages)
 
                 conn.commit()
 
@@ -1274,6 +1265,37 @@ class ChatRecordDB:
     """
 
     @staticmethod
+    def create_in_tx(cursor, record_id, **fields):
+        columns = ("session_id", "tenant_id", "user_id", "user_message", "assistant_message",
+            "total_token_count", "prompt_tokens", "completion_tokens", "cached_input_tokens",
+            "model", "provider", "execution_details", "agent_iterations", "subagent_calls",
+            "status", "error_message", "duration_ms", "source_type", "credit_cost",
+            "embedding_tokens", "asr_calls", "usage_breakdown")
+        unknown = set(fields) - set(columns)
+        if unknown:
+            raise ValueError("CHAT_RECORD_FIELD_UNSUPPORTED")
+        defaults = {"status":"completed", "source_type":"chat", "credit_cost":0,
+                    "total_token_count":0,"prompt_tokens":0,"completion_tokens":0,
+                    "cached_input_tokens":0,"agent_iterations":0,"duration_ms":0,"embedding_tokens":0,"asr_calls":0}
+        values = [record_id]
+        for column in columns:
+            value = fields.get(column,defaults.get(column))
+            if column in {"execution_details","subagent_calls","usage_breakdown"} and value is not None:
+                value = json.dumps(value,ensure_ascii=False,default=str)
+            values.append(value)
+        cursor.execute("INSERT INTO chat_records (record_id,"+",".join(columns)+") VALUES ("+
+                       ",".join(["%s"]*len(values))+") RETURNING *",values)
+        return cursor.fetchone()
+
+    @staticmethod
+    def debit_in_tx(cursor, tenant_id, credit):
+        if tenant_id is None or not credit:
+            return True
+        cursor.execute("UPDATE tenants SET credit_balance=credit_balance-%s WHERE tenant_id=%s RETURNING tenant_id",
+                       (credit,tenant_id))
+        return cursor.fetchone() is not None
+
+    @staticmethod
     def create(
         session_id: str,
         tenant_id: str = None,
@@ -1312,39 +1334,19 @@ class ChatRecordDB:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute(f"""
-                    INSERT INTO chat_records
-                    (record_id, session_id, tenant_id, user_id, user_message, assistant_message,
-                     total_token_count, prompt_tokens, completion_tokens, cached_input_tokens,
-                     model, provider, execution_details, agent_iterations, subagent_calls,
-                     status, error_message, duration_ms, source_type, credit_cost,
-                     embedding_tokens, asr_calls, usage_breakdown)
-                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
-                            {placeholder}, {placeholder}, {placeholder}, {placeholder},
-                            {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
-                            {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
-                            {placeholder}, {placeholder}, {placeholder})
-                    RETURNING *
-                """, (
-                    record_id, session_id, tenant_id, user_id, user_message, assistant_message,
-                    total_token_count, prompt_tokens, completion_tokens, cached_input_tokens,
-                    model, provider,
-                    json.dumps(execution_details) if execution_details else None,
-                    agent_iterations,
-                    json.dumps(subagent_calls) if subagent_calls else None,
-                    status, error_message, duration_ms, source_type, credit_cost,
-                    embedding_tokens or 0,
-                    asr_calls or 0,
-                    json.dumps(usage_breakdown) if usage_breakdown else None,
-                ))
-                row = cursor.fetchone()
-
-                # 同事务原子扣减余额：tenant_id 为空（非 SaaS 模式）或 credit_cost = 0 时跳过
+                row = ChatRecordDB.create_in_tx(cursor, record_id,
+                    session_id=session_id, tenant_id=tenant_id, user_id=user_id,
+                    user_message=user_message, assistant_message=assistant_message,
+                    total_token_count=total_token_count, prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens, cached_input_tokens=cached_input_tokens,
+                    model=model, provider=provider, execution_details=execution_details,
+                    agent_iterations=agent_iterations, subagent_calls=subagent_calls,
+                    status=status, error_message=error_message, duration_ms=duration_ms,
+                    source_type=source_type, credit_cost=credit_cost,
+                    embedding_tokens=embedding_tokens or 0, asr_calls=asr_calls or 0,
+                    usage_breakdown=usage_breakdown)
                 if tenant_id and credit_cost and credit_cost > 0:
-                    cursor.execute(
-                        "UPDATE tenants SET credit_balance = credit_balance - %s WHERE tenant_id = %s",
-                        (credit_cost, tenant_id)
-                    )
+                    ChatRecordDB.debit_in_tx(cursor, tenant_id, credit_cost)
 
                 conn.commit()
 

@@ -8,6 +8,7 @@
       </div>
       <span class="rounded bg-white/5 px-2 py-1">{{ controlEnabled ? '人工控制' : '只读观察' }}</span>
     </header>
+    <p v-if="notice" class="px-3 py-2 text-xs text-gray-300" role="status">{{ notice }}</p>
     <div
       ref="surface"
       class="relative aspect-video bg-slate-900 outline-none"
@@ -31,28 +32,60 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { browserApi } from '@/api/agent'
 
-const props = defineProps<{ runId: string; authHeaders: Record<string, string>; controlEnabled: boolean }>()
+const props = defineProps<{ runId: string; assistanceId?: string; authHeaders: Record<string, string>; controlEnabled: boolean }>()
 const connected = ref(false)
 const frameUrl = ref('')
 const surface = ref<HTMLElement | null>(null)
 let socket: WebSocket | null = null
 let awaitingFrame = false
 let lastPointerMoveAt = 0
+const notice = ref('')
+const identity = computed(() => JSON.stringify([props.runId, props.assistanceId, Object.entries(props.authHeaders).sort()]))
+let mounted = false
+let generation = 0
 
-onMounted(async () => {
+function detach() {
+  generation++
+  if (socket) {
+    socket.onopen = socket.onclose = socket.onmessage = socket.onerror = null
+    socket.close()
+    socket = null
+  }
+  connected.value = false
+  awaitingFrame = false
+  if (frameUrl.value) URL.revokeObjectURL(frameUrl.value)
+  frameUrl.value = ''
+}
+
+async function connect() {
+  detach()
+  if (!mounted) return
+  const currentGeneration = generation
+  const original = identity.value
+  const runId = props.runId
+  const headers = { ...props.authHeaders }
+  const current = () => mounted && generation === currentGeneration && identity.value === original
+  notice.value = ''
   try {
-    const { ticket } = await browserApi.viewTicket(props.runId, props.authHeaders)
-    socket = new WebSocket(browserApi.viewWebSocketUrl(props.runId, ticket))
-    socket.binaryType = 'blob'
-    socket.onopen = () => { connected.value = true }
-    socket.onclose = () => { connected.value = false }
-    socket.onmessage = (event) => {
+    const { ticket } = await browserApi.viewTicket(runId, headers)
+    if (!current()) return
+    const active = new WebSocket(browserApi.viewWebSocketUrl(runId, ticket))
+    socket = active
+    active.binaryType = 'blob'
+    active.onopen = () => { if (current()) connected.value = true }
+    active.onclose = () => { if (current()) connected.value = false }
+    active.onerror = () => { if (current()) notice.value = '画面暂时无法连接，请稍后重试。' }
+    active.onmessage = (event) => {
+      if (!current() || socket !== active) return
       if (typeof event.data === 'string') {
-        const message = JSON.parse(event.data)
-        awaitingFrame = message.type === 'frame'
+        try {
+          const message = JSON.parse(event.data)
+          awaitingFrame = message.type === 'frame'
+          if (message.type === 'input_rejected') notice.value = '当前操作未获许可，请核对接管状态。'
+        } catch { awaitingFrame = false }
         return
       }
       if (awaitingFrame && event.data instanceof Blob) {
@@ -63,13 +96,20 @@ onMounted(async () => {
       }
     }
   } catch {
-    connected.value = false
+    if (current()) {
+      connected.value = false
+      notice.value = '画面暂时无法连接，请稍后重试。'
+    }
   }
-})
+}
+
+watch(identity, () => { void connect() }, { flush: 'sync' })
+watch(() => props.controlEnabled, () => { notice.value = '' })
+onMounted(() => { mounted = true; void connect() })
 
 onBeforeUnmount(() => {
-  socket?.close()
-  if (frameUrl.value) URL.revokeObjectURL(frameUrl.value)
+  mounted = false
+  detach()
 })
 
 function point(event: MouseEvent) {
