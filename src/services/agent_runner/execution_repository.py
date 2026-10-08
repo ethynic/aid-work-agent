@@ -57,12 +57,9 @@ class ExecutionRepository:
     def __init__(self, connection_factory=get_db_connection):
         self.connection_factory = connection_factory
         self.source_port = None
-        self.input_repository = None
 
     def _source_dispatch(self,cursor,row,prepared):
         if self.source_port is not None:
-            if (row.get('checkpoint') or {}).get('source_initial_ref'):
-                self.input_repository.lock_claim(cursor,row)
             self.source_port.authorize_row_in_tx(cursor,row,execute=True,prepared=prepared)
 
     def _final_dispatch(self,cursor,attempt,prepared):
@@ -145,7 +142,7 @@ class ExecutionRepository:
             return self._final_dispatch(cursor,attempt,source_prepared)
 
     def save_checkpoint(self, attempt, revision, checkpoint, snapshot=None, *, dispatch=False,
-                        source_prepared=None,input_boundary=None):
+                        source_prepared=None):
         with self.connection_factory() as conn:
             cursor = conn.cursor()
             row = lock_runner(cursor, attempt.runner_id, attempt, dispatch=dispatch)
@@ -153,12 +150,9 @@ class ExecutionRepository:
                 raise LeaseLost('RUNNER_EXECUTION_CLOSED')
             if row["revision"] != revision:
                 raise LeaseLost("CHECKPOINT_REVISION_CHANGED")
-            physical_dispatch=(dispatch or ((row.get('checkpoint') or {}).get('source_initial_ref')
-                and input_boundary in {'child.before_model','child.before_tool'}))
+            physical_dispatch=dispatch
             if physical_dispatch:
                 self._source_dispatch(cursor,row,source_prepared)
-            if self.input_repository is not None:
-                checkpoint=self.input_repository.merge_in_tx(cursor,row,checkpoint,before_model=input_boundary=='before_model')
             snapshot = merge_control_projection(snapshot,row.get('public_snapshot'))
             snapshot = project_public_snapshot(cursor,row,checkpoint=checkpoint,snapshot=snapshot)
             cursor.execute("""UPDATE agent_runners SET checkpoint=%s::jsonb,
@@ -171,8 +165,6 @@ class ExecutionRepository:
             result = EventRepository.notify_in_tx(cursor,row,after=result)
             if physical_dispatch:
                 result=self._final_dispatch(cursor,attempt,source_prepared)
-            elif (row.get('checkpoint') or {}).get('source_initial_ref'):
-                result=lock_runner(cursor,attempt.runner_id,attempt)
             conn.commit()
             return result
 
@@ -240,15 +232,6 @@ class ExecutionRepository:
                     raise LeaseLost('FINALIZATION_INTENT_IMMUTABLE')
                 return row
             if row['revision']!=revision: raise LeaseLost('CHECKPOINT_REVISION_CHANGED')
-            if self.input_repository is not None and not (row.get('checkpoint') or {}).get('pending_finalization'):
-                from .repository import RunnerRepository
-                checkpoint,continuation=self.input_repository.finish_in_tx(cursor,row,checkpoint,result,RunnerRepository(self.connection_factory))
-                if continuation:
-                    cursor.execute('''UPDATE agent_runners SET checkpoint=%s::jsonb,revision=revision+1
-                        WHERE runner_id=%s RETURNING *''',(capped_checkpoint_dumps(checkpoint),row['runner_id']))
-                    resumed=decoded(cursor.fetchone())
-                    lock_runner(cursor,attempt.runner_id,attempt)
-                    conn.commit();return resumed
             checkpoint = {**checkpoint, "pending_finalization": result}
             snapshot = merge_control_projection(snapshot,row.get('public_snapshot'))
             snapshot = project_public_snapshot(cursor,row,checkpoint=checkpoint,snapshot=snapshot,status='finalizing')
@@ -271,8 +254,6 @@ class ExecutionRepository:
             result = decoded(cursor.fetchone())
             result = sync_public_display(cursor,result,advance_view=False)
             result = EventRepository.notify_in_tx(cursor,row,after=result)
-            if (row.get('checkpoint') or {}).get('source_initial_ref'):
-                result=lock_runner(cursor,attempt.runner_id,attempt)
             conn.commit()
             return result
 

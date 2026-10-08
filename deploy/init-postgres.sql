@@ -5285,3 +5285,7 @@ FOR spec IN SELECT * FROM pg_constraint WHERE conrelid=reference_name::regclass 
 END LOOP;
 DROP TABLE kf_completion_reference_3;
 END $$;
+
+-- KF 原渠道恢复（2026-10-08）：保留累积建表记录及旧 KF 表，不再由运行代码消费。
+-- 与 db_update.yaml 的 2026-10-08 15:21:10 增量块对齐；新库最终同样无 delivery gate。
+ALTER TABLE IF EXISTS agent_runner_session_claims DROP COLUMN IF EXISTS gate;

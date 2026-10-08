@@ -197,9 +197,6 @@ async def _run():
     # 4. recap 任务消费者（API worker 入队 Redis、本进程执行，与 HTTP worker
     # 重启解耦；多副本下 LPOP 天然单消费者，配 RECAP_TASK_DEDUP 双保险）
     recap_consumer=asyncio.create_task(_recap_consumer())
-    from src.channels.wecom_kf.recap_handoff import KfRecapHandoff
-    native_recap=KfRecapHandoff()
-    native_recap_task=asyncio.create_task(native_recap.run(_stop))
 
     # 5. wechat_mp 队列驱动 + 定时复核（WP7；单副本 Redis 锁，抢不到/Redis 不可用
     # 时不启动；对齐 poller 模式 try/except，启动失败不影响 runner）
@@ -264,8 +261,6 @@ async def _run():
     except Exception as e:
         logger.opt(exception=True).error(f"background runner: scheduler shutdown error: {e}")
 
-    await native_recap.close()
-    await native_recap_task
     await recap_consumer
     if _recap_bg_tasks:
         await asyncio.gather(*tuple(_recap_bg_tasks),return_exceptions=True)

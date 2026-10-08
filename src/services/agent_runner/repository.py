@@ -144,8 +144,6 @@ class RunnerRepository:
                     control_revision=control_revision+1, updated_at=CURRENT_TIMESTAMP,
                     finished_at=CURRENT_TIMESTAMP WHERE runner_id=%s RETURNING *""", (runner_id,))
                 row = decoded(cursor.fetchone())
-                if (row.get('checkpoint') or {}).get('source_initial_ref'):
-                    cursor.execute("UPDATE agent_runner_inputs SET phase='cancelled' WHERE current_runner_id=%s AND phase IN ('accepted','attached','deferred')",(runner_id,))
                 view_advanced=True
             elif row["status"] not in ("completed", "failed", "cancelled") and not row["cancel_requested"]:
                 cursor.execute("""UPDATE agent_runners SET cancel_requested=TRUE,

@@ -234,6 +234,10 @@ class ToolDispatcher:
                     _normalize_image_placement(images)
                     preserve = bool(isinstance(result, dict) and result.pop("_no_truncate", False))
                     terminal = DispatchResult(result, success=success, preserve_content=preserve, images=tuple(images))
+                    if execution_call.name == 'transfer_to_human' and success and state.identity.source == 'wecom_kf':
+                        from dataclasses import replace
+                        from src.core.agent_engine.contracts import TerminalDirective
+                        terminal = replace(terminal, final_output='', terminal_directive=TerminalDirective.STOP_EXECUTION)
             if terminal is None:
                 raise RuntimeError("CONTROL_TOOL_MISSING_RESULT")
             await self._finish_plan_task(state,call,terminal)

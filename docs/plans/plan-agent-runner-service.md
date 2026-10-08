@@ -10,20 +10,16 @@
 | M3 | Web 接入：提交、轮询、刷新找回 | ✅ 完成（2026-10-02） | 普通Web/opt-in同步：后端32、前端44、原页面5步骤通过；24源CR/SHA/build验收，完整等待续接及默认切换依赖M4 |
 | M4 | 暂停、继续与进程中断恢复 | ✅ 完成（2026-10-02） | Web/Local/Browser服务端及原页面续接验收；卡片正式15＋开发1；v2 CR0，425源/102辅助封存；默认迁移及外部真机仍M7 |
 | M5 | 实时事件订阅增强 | ✅ 完成（2026-10-03） | 事件账/代理已验收；前端26＋真实页面1、关联6、CR0/build0；552源/32辅助末核一致 |
-| M6a | 微信客服接入 | ✅ 完成（2026-10-04） | 前任交接后接手收尾：2条失败均为测试自身错误（证据见M6a接手收尾记录），修复后尾批18用例两轮全量各17/18、失败均为隔离库连接抖动且单跑通过；真机/外部环境未验证，开关默认关闭 |
+| M6a | 微信客服原渠道接通用 Runner HTTP | 🔧 进行中 | 按恢复计划实施；原渠道业务与历史保留，Runner 独立执行/来源及模型计费需重新验收 |
 | M6b | 飞书接入 | 📋 待开发 | — |
 | M6c | 钉钉接入 | 📋 待开发 | — |
-| M7 | 四入口与 Runtime+BOSS CLI 综合验收 | 🔧 进行中 | 性能整改①完成：每执行全量资源装配 15.5s→亚秒级，新会话端到端 22.0s→4.1s(暖)/6.9s(冷)；66+54 定向测试通过；controls SQL FK/级联已按库规则收口（2026-10-04）：增量迁移撤 FK+fresh DDL 同步+4 处 fixture 有序清理，定向 20+10+1 通过；adapter 契约版本机制落地（2026-10-04）：派发 stamp+两道恢复门，单测20+集成3 通过；图片改可信产物引用+持久化字节上限落地（2026-10-04）：durable 装配点只存 runner_image 引用（登记 resources.image_artifacts、落 owner workspace），ModelAdapter 按 owner 校验深拷贝装配 wire data URL 不回写 state；limits（request/checkpoint/snapshot 字节）入口 413 与全部 checkpoint/快照写点 capped dumps；定向 134+回归通过；KF 拉取 SDK client 有界复用收口（2026-10-05）：同键页外调 3.0→1.03 次/页，池按 (account_id,config_version)+corp_id/secret 硬校验，进程内有界（容量16/空闲300s/页失败/关闭即弃），定向 13+关联 5 通过；十项整改全部完成并经独立复核（2026-10-05，每项一行登记见 M7 段增量登记，完整报告 out/m7-report.md）：legacy 测试分类/压缩阈值绝对上限 60k/前端提交失败提示（build 退出码 0）/FK 收口核验/认证收口核验/adapter 契约版本复核/图片引用+字节上限复核/KF 池化复核/real_browser sidecar 供给/分进程部署配置就绪；容量测量完成：吞吐 1.30 runner/s、瓶颈为每执行≈60 次远程 DB 事务、cost12 鉴权 173ms/验（建议 token 校验进程内缓存后真机复测），不外推生产承载；待用户授权：提交代码/agent3 部署/默认入口切换/真实渠道外网验收 |
-
-> **2026-10-04 停止交接：** 用户取消剩余 M6a 开发和验收；最后独立回归实际16通过、2失败。[正式交接](agent-runner-m6a-handoff-2026-10-04.md)。
->
-> **2026-10-04 接手收尾完成：** 接手者核验交接证据属实后，用探针实证将2条失败定位为测试自身错误并修复（生产代码零改动）；尾批18用例全量回归两轮各17/18，两轮中先后失败的转人工/子任务澄清用例均为远程隔离库（124.222.3.254:5433）高负载连接拒绝，单独重跑通过。细节见下文「M6a 接手收尾记录」。真机/外部环境验收、M6b/M6c/M7 未开始。
+| M7 | 四入口与 Runtime+BOSS CLI 综合验收 | 🔧 进行中 | 通用性能、认证、恢复版本、图片引用/字节上限与 Web 验证保留；KF 原渠道接入重新验证；其余渠道和真实环境待验收 |
 
 > 制定日期：2026-10-01
 >
 > 设计：[AgentRunner 服务架构设计](../system/agent-application-architecture-design.md)
 >
-> 实施已获授权，M0–M5 分阶段验收完成，M6 渠道迁移实施中；默认迁移、综合验收和真机部署按后续门槛。主控担任总工程师，负责协调、需求/架构/代码质量验收，不写生产代码或测试；实施、独立测试和独立 CodeReview 分工进行。实现涉及启动、并发、鉴权、计费和数据库，属于高风险；每个代码阶段均须独立验证。
+> 实施已获授权，M0–M5 分阶段验收完成，M6 渠道迁移实施中；默认迁移、综合验收和真机部署按后续门槛。主控负责开发、协调及整合；测试与 CodeReview 分别由独立角色验证。实现涉及启动、并发、鉴权、计费和数据库，属于高风险；每个代码阶段均须独立验证。
 
 ## 1. 交付路线与范围
 
@@ -65,7 +61,7 @@ M2 建立 `agent_runners` 系统表：身份与会话引用、输入/配置引�
 
 - 真实 tenant_id 可空，非空内部 scope_key 由认证主体导出 tenant/global 命名空间，客户端不能指定，不伪造业务 tenant。仅当前数据库确认的平台管理员可访问自己的 NULL tenant Web 会话，渠道仍要求真实 tenant；NULL 比较采用 IS NOT DISTINCT FROM，不解释为全租户。
 - 创建去重唯一约束按 scope_key、主体、source、client_request_id 设置；runner_id 稳定，attempt 恢复后递增。
-- M2 同时建立 `agent_runner_session_claims`：按 scope_key/kind/session 唯一、owner_runner_id 与 revision 表达逻辑占有，与执行 lease 分开。领取与取得 claim 同事务；paused/waiting/interrupted 保留位置，queued 不占有，resume 只能续原 owner。Web 结果提交后释放，渠道执行终态不提前释放，要等发送处理按原规则收尾。只按 runner 状态建 partial unique 无法表达这个发送边界，因此建立独立 claim 表。
+- M2 同时建立 `agent_runner_session_claims`：通用仓储按 scope_key/kind/session 唯一保存逻辑 owner，与执行 lease 分开；paused/waiting/interrupted 保留位置，queued 不占有，resume 续原 owner，终态释放。KF 沿用原渠道队列，共用通用执行 claim 与 attempt/lease，finalizer 终态释放 claim；不再有 KF 专用接单或投递 gate。原队列取消确认终态后交接。其他渠道在其接入阶段单独核定。
 - M2 建立 `agent_runner_usage_receipts`：调用/用量事实与结算水位单独保存，迟到事实在原 record 补差，不借用公开事件的顺序或保留策略。
 - M4 建立 `agent_runner_controls`：持久保存控制请求、输入摘要与单次消费事实，和公开事件、费用账本分开。实际接口统一为 controls 资源，不再分别建立 pause/resume 路由；browser_complete 只允许受信完成端口，公共接口不接受自报工具完成。
 - checkpoint 只保存 JSON 可序列化数据及稳定资源引用，不保存协程、连接或密钥；版本不兼容明确拒绝恢复。
@@ -233,8 +229,8 @@ M3 开工只读审查提前发现 M2 公共 DTO 仍直接透传 result.messages 
 - 独立 FastAPI API 与独立 CLI worker，只通过 PostgreSQL 交换请求、状态及控制。API 不创建执行 task，组合根不导入 main、渠道管理/注册、调度或 legacy 仓储。
 - 私有服务调用先验证专用服务凭据，再验证最终主体：Web 复用既有 `tokens` 表 + Redis 的 opaque token 校验和数据库主体/会话权限，不新增 JWT 链；渠道按现有 channel_sessions 的平台主体、来源和路由绑定映射内部用户。凭据只用于当前认证，绝不保存进 input、checkpoint、事件或 Trace；worker 重验数据库权限，不能要求原登录 token 在整个任务期间不过期。
 - runner 保存稳定 ID、真实 nullable tenant 与内部 scope_key、session/actor/source、请求键与规范化输入摘要、私有 input/版本化 checkpoint、profile 引用和指纹、执行及结算两轴状态、attempt/worker/lease/revision、公开快照/结果、record 与费用水位、控制请求及时间。创建键按 scope/actor/source 唯一，同键同输入返回原 runner，同键异输入拒绝。global scope 只给数据库确认的 platform_admin 自己的全局 Web 会话；不能作为跨租户读权限。
-- Web 选择完成时写聊天历史：接单事务只持久保存 runner 输入及可见输入投影。M3 刷新从历史与待执行 runner 重建消息，按稳定标识去重；当前执行只读先前已收尾历史，加本次输入，不加载未来排队任务的消息。渠道保留原合并后写入边界，并明确持久 cutoff。
-- claim 仍与执行 lease 分开；领取 claim 与 queued→running 同事务。持久 queue_order 保证会话最早 queued 优先，SKIP LOCKED 不能跳过被锁首条让次条取得 claim。每个 runner 共用一把控制写锁，在锁内捕获 JSON 深拷贝并按 attempt/worker/lease/expected revision 写入，避免并发 child 的旧快照后写覆盖新快照。租约失效先 interrupted，不从头重发未知工具。
+- Web 选择完成时写聊天历史：接单事务只持久保存 runner 输入及可见输入投影。M3 刷新从历史与待执行 runner 重建消息，按稳定标识去重；当前执行只读先前已收尾历史，加本次输入，不加载未来排队任务的消息。KF 历史保留原渠道合并后唯一写入边界，不由 Runner 终态重复写入。
+- 通用执行 claim 与执行 lease 分开；领取 claim 与 queued→running 同事务。Web 持久 queue_order 保证会话最早 queued 优先，SKIP LOCKED 不能跳过被锁首条让次条取得 claim。每个 runner 共用一把控制写锁，在锁内捕获 JSON 深拷贝并按 attempt/worker/lease/expected revision 写入，避免并发 child 的旧快照后写覆盖新快照。租约失效先 interrupted，不从头重发未知工具。
 - 同 cursor 完成结果、消息、稳定 record/扣费与 Web claim 释放；失败全部 rollback。Engine completed 只是执行安全点，应用事务未提交时不能公开为已收尾。缓存、Trace 回填和 Redis 清理在 commit 后。
 - 普通/child/压缩/background/embedding/skill 的真实用量需稳定 receipt 和实际 model/provider，每项只有一个收费 owner；local invocation 保持原计费。旧 worker 的迟到事实不得授予新的执行权，终态后迟到事实如何结算也必须明确。
 
@@ -769,7 +765,7 @@ M5 按实时体验需要排期，可以在 M4 之后先用查询适配渠道；�
 
 复用现有安全展示投影生成小型 typed payload、累计输出替换或 revision 通知，不将 Engine 私有 `llm_call`/原始工具结果/child response 直接公开，也不在每条进度中复制完整累计快照。单 runner 的序号从持久递增水位分配，不能从会被清理的 events 最大值重算；事件与对应公开状态同 cursor 提交，结束事件由 Finalizer 随结果/历史/费用/claim 原子提交，Engine 自称 completed 尚不等于公开终态。接单、排队取消、领取、park/interrupted、控制和终态均有真实 DAL 接线；迟到费用仅发布结算变化，不重复结束或执行。
 
-SSE 使用查询同一 fresh 主体/当前渠道 actor 的授权链，并周期复验。每连接只持有有界分页及游标，不在网络发送时占 worker/control 锁或数据库连接；断开不取消、慢连接不拖执行。过期游标明确返回一致已提交 snapshot/revision/last_seq 的重置事实，再从 last_seq+1 补读，客户端按 seq 去重，查询保持权威。四入口共用公开流，渠道发送 offset、投递幂等与发送后 claim 释放仍归渠道 adapter。当前为提前审查建议，未实施或验收，不阻塞 M4。
+SSE 使用查询同一 fresh 主体/当前渠道 actor 的授权链，并周期复验。每连接只持有有界分页及游标，不在网络发送时占 worker/control 锁或数据库连接；断开不取消、慢连接不拖执行。过期游标明确返回一致已提交 snapshot/revision/last_seq 的重置事实，再从 last_seq+1 补读，客户端按 seq 去重，查询保持权威。四入口共用公开流；KF 发送与发送后的原队列释放仍归原渠道 adapter，不要求新增发送 offset、投递账本或 KF 专用投递 gate；通用执行 claim 由 finalizer 在终态释放。当前为提前审查建议，未实施或验收，不阻塞 M4。
 
 实施准备采用三个有限切片：事件账及一致读取→服务SSE/原Web薄代理→现RunnerClient header-auth fetch订阅与查询fallback。Runner持久head/floor为递增序号/最后已删除序号，`head>=floor>=0`；既有行基线0不回放执行，保留清理即使删除全部事件也不重置head。明确仓储commit前尾点，领域投影只返回最终row/changed，外层一次写本事务最终安全公开通知，避免内外hook重复；暂不引入DB内部事务标识列或异步flush框架。created只新接受、terminal只原Finalizer一次，late usage仅实际结算变化；lease/私有receipt/模型消息/画面不发事件。分页按短一致读事务取得row/head/floor/page后释放连接再发送，读取水位缺口/过期/未来游标明确reset；超限事件只invalidate引导权威查询，不截断结果或逐token复制累计全文。此时只读准备，待A片验收才开放生产写口，各片仍须独立测试/CR。
 
@@ -837,284 +833,34 @@ M5②实施中的预查补充（尚未冻结验收）：真实应用的 `BaseHTT
 
 ## 9. M6a–M6c：逐个渠道接入
 
-### M6a 最终收尾契约（2026-10-03）
+### M6a：微信客服原渠道接通用 Runner HTTP
 
-用户本次授权仅完成 M6a，完成后停止并交接，不进入 M6b、M6c 或 M7；不提交、推送或部署。以下契约替代本节历史记录中的冲突验收要求；历史通过、失败与未运行证据保留，不能作为扩大需求的依据。
+本阶段保留 AgentRunner/AgentEngine 重构，恢复微信客服原渠道实现和用户行为。开发详情、进度与验证记录统一在[原渠道恢复计划](plan-kf-voice-fix-and-session-unlock.md)维护。接入独立 API/worker 是要求；仅调用兼容 Agent 壳中的新 Engine 不能代替服务接入。
 
-| 验收范围 | 固定预期 |
-|----------|----------|
-| 普通收发 | 原可信回调及拉取、注册/归因/欢迎、连续聊天、正文/附件回发、原历史和发送后 recap/收费；最终正常流程经过实际 Admission 消费器 |
-| 消息规则 | 保留原两秒合并、段级去重/撤回、客户与员工历史顺序、隐藏命令、旧消息和服务状态过滤；不得用换会话规避 |
-| 追问 | 普通 master/standalone clarify 交回模型组织回复，不一律进入 WAITING；真实子任务的问题正确展示，聊天答案绑定原唯一等待继续，不要求问题已获平台 ACK |
-| 语音与媒体 | 识别成功继续聊天；原识别失败/请求异常保占位继续，不因识别结果不确定无限阻塞普通聊天；不重复识别/收费。保原媒体支持及大小边界 |
-| 客服账号限制 | 原客服账号 expire_at/credit_limit 检查与固定微信提示/历史等价迁移；命中不执行模型、不收本轮 AI 费用，租户授权拒绝不能替代此功能 |
-| 转人工 | 成功后不追加机器人答复，后续客户消息只按人工期原规则处理；明确拒绝后继续原 AI 流程；复用未受影响独验 |
-| 服务责任 | 持久接受后独立运行/可查询，单会话执行归属、当前可信身份与租户隔离、费用唯一归属、已发生外部操作不盲重放；发送 unknown 保事实，但执行终态且真实网络收尾后释放会话，后续聊天不永久锁住 |
-| 交付 | 最终源码独立 CR、受影响定向回归及隔离启动/import 检查通过；列明有效结果、未验证外部环境、开关与启动方式，清理自有测试资源后交接停止 |
+| 边界 | 唯一责任方 | 接入要求 |
+|---|---|---|
+| 回调验签、拉取、游标、平台去重 | 原 KF 渠道 | 保持原入口与业务，不建立新接收管线 |
+| 合并、follower、取消重跑、发送期 pending | 原 session_queue | 在原 processor 位置提交最终合并输入；取消映射到通用 Runner cancel，不假定请求受理即已停稳 |
+| 模型与工具执行、恢复点、任务状态 | Runner API/worker | `source=wecom_kf`、channel session、原 profile；使用通用 create/read/cancel/controls/events |
+| 用户、工具及回复历史 | 原 ChannelSessionManager | 原 msgid、语音附件、merged_segments、撤回、人工历史与图片元数据继续保留；Runner 不重复写 KF 历史 |
+| 模型与工具计费 | Runner usage receipts/finalizer | 原记录不再次累加模型用量或扣费 |
+| 入口语音识别与 ASR 计费 | 原渠道 ASR/SessionRecordService | 每次真实成功识别沿原记录计费，模型费用不写入该记录 |
+| 转人工、留资、客户资料 | 原工具与 KF ContextVar | Worker 按可信配置及 session 重建工具上下文，真实转人工成功后原发送闭包抑制追加回复 |
+| 渲染、发送、回复预算和 recap | 原 adapter/渠道收尾 | 保持现有媒体与文本路径；发送成功后按原规则触发 recap，无 Runner delivery gate |
 
-撤销以下 M6a 门槛：微信暂停/继续按钮或手工控制流程；强制余额归零叠加人工恢复/数据库故障；多层人工构造子任务恢复点；微信 Browser 人工卡片/门户闭环；普通追问必须匹配同 Runner 的精确等待编号；固定 Attempt/内部 phase/只读 SDK GET 次数；将手工重投可信 ASR/发送结果声称为生产自动找回。未知外部操作不冒成功、不盲重发仍须保留，但不据此要求普通语音聊天永久等待。
+薄桥使用主 API 已有 service peer，其授权来源包含 `wecom_kf`。提交与读取携带当前平台用户、客服账号以及来源；Runner 从现有 `channel_sessions` 验证绑定并推导 tenant/user/profile，保留当前租户订阅与余额检查。Worker 的 KF 配置引用必须按同租户读取，凭据只在服务端装配，不进入 input、checkpoint、事件或 Trace。
 
-测试作者先给出原实现或明确需求依据，审查确认预期后固定断言；失败先定位生产、环境或测试前提，不能直接修改断言来过关。生产代码由实施者单一写入，测试与 CR 独立；复用与当前变更无关的有效证据，不机械重复全部历史窗口。
+创建使用稳定请求键，网络重试复用原键；合并输入改变时按实际输入构造新请求。events 仅通知公开状态失效，薄桥再读 runner 快照并转换原渠道所需的进度、文件、图片、追问和结果；原历史收尾需要的脱敏工具消息通过同一 Runner 身份授权的 `GET /v1/runners/{id}/channel-result` 只读结果接口取得，不另建渠道投递管线。真实子澄清通过通用 controls 将回复关联原 runner/wait；当前 KF 薄桥遇到其它工具等待时请求取消、等待取消确认并明确报错，不保留无法续接的渠道等待状态；取消未确认时说明仍在核对，不虚报已停止。普通业务追问不扩大成新渠道状态机。paused/interrupted 或取消尚待外部操作核对时明确说明状态，不冒充完成，也不盲重演已派发操作。
 
-此前已核实两处语义差异（普通 clarify 强制等待、ASR unknown 阻塞本轮）及一处功能遗漏（客服账号限制固定提示）；当前没有丢失 ASR 结果的自动回调/查询恢复，手工可信结果重投只能证明结果保存能力。本次只恢复原使用行为，不开发新结果核对系统。账号阻断语音保原识别文本历史、固定提示且不建 AI record/收费，正常语音不迁移既有识别/费用 owner。旧路由残留 should_transfer_to_human 调用的底层方法已废弃且恒为 False，不复活自动关键词转人工；实际转人工仍是原 Agent 工具。共享暂停防御仅核对实际依赖，不作为微信验收门或继续扩展；不整文件回滚原通用控制。
+附件沿用通用 Runner 契约：语音/视频按文件附件传递；较大媒体复用既有同租户 conversation `file_id` 引用，避免 base64 请求超过通用 POST 上限。不得为适配新增 KF 媒体持久管线。
 
-### M6a 接手收尾记录（2026-10-04）
+KF 共用通用 `agent_runner_session_claims` 执行 claim 及每个任务的 attempt/lease，领取、恢复、取消与终态使用通用仓储，finalizer 终态释放 claim。原队列取消重跑须确认原 Runner 已达终态、claim 已释放后再交接；不再有 KF 专用接单或投递 gate，发送与 recap 不延长 Runner claim。
 
-接手者核验交接文档证据全部属实（run-evidence/command/log/清理记录，运行期间源码未变）。两条失败用探针 dump 真实 wire/落库行定案，均为**测试自身错误，生产代码零改动**：
+验收覆盖真实调用链“原回调 → 原合并队列 → 通用 Runner API → 独立 worker → 原渠道历史与发送”，以及稳定重试键、来源鉴权、跨租户拒绝、语音、合并取消、追问、转人工、图片/文件、预算、撤回与发送成功后 recap。历史不得双写，模型和 ASR 不得重复扣费；取消确认终态后通用执行 claim 必须释放，原队列才能交接；不得因旧 KF 投递 gate 遗留而阻塞新输入。独立测试、独立 CR 与启动检查按高风险流程执行，真实微信/付费模型与部署仍按当场授权范围。
 
-1. **test_kf_completion_commands（隐藏命令/过滤）**，两层错误：
-   - 断言 `wecom_kf_context_task_intents` 全空与原行为矛盾——原代码 `channel_routes.py:2047`「人工期/已结束期需落库并推送第三方（external_push_human）」+ `services/recap/runner.py` 的 `lead_refresh`；新代码 `context_repository.py` 对 state 3/4 消息各建 2 条 pending_adapter 意图，测试注入 2 条消息恰为 4 条，数字吻合。改为断言恰好 2×2 有界意图。
-   - 修后暴露下一层：`not c.platform.errors` 门禁下的 4 个错误实为原行为调用——注册流程 `customer/batchget`（`completion_business.py` 注册分支，契约「注册/归因/欢迎」要求保留）×2、素材只读 `media/get` ×2。测试补 batchget 脚本；假平台对 media/get 提供确定性「素材不可用」响应（调用方按原有界降级，不计错误）。
-2. **test_kf_completion_sends（平台拒发）**：原 adapter 发任何可下载文件前先上传默认缩略图（`adapter.py:358-361`），真实环境该 media_id 有 1 小时缓存（228-231 行缓存优先）；前任假平台不提供 `media/upload` 端点，上传被拒抛异常致 unknown 中断。测试预热缩略图缓存一行后，wire 序列恢复 [body ack, file-link reject] → `closed_failed_known`。
+### M6b / M6c：飞书与钉钉
 
-期间一个错误假设（"≤2MB 文件转图片路径导致 upload"，实为默认缩略图上传；该路径仅对 `image/*` mime 生效）被探针证伪后，基于它的夹具改动已全部撤回。
-
-**尾批回归**：18 用例（同交接 command.txt 窗口）两轮全量各 17 通过/1 失败；两轮先后失败的转人工、子任务澄清用例单独重跑均通过，失败原因均为远程隔离库（124.222.3.254:5433）在约 11 分钟整批负载下的连接拒绝，非代码问题。DROP DATABASE 清理抖动与交接记录一致。**遗留基建项**：隔离测试库为远程共享实例，整批高负载下有连接拒绝抖动，建议 M7 前核实其容量/连接池配置，避免环境噪声混入验收判断。
-
-18 用例逐项对照收尾契约行核对（追问/语音媒体/账号限制/普通收发/消息规则/边界/发送未知与已知失败/转人工/迁移回放），全部有契约依据，无「为测试而测试」项，全部保留。
-
-### M6a 最后修复记录（待最终验收）
-
-首个兼容开发窗 81327 为 4 通过、2 失败，未计整组通过。普通追问的业务断言已到末，失败来自测试遗漏原注册流程的 customer/batchget 响应脚本；只补该前提，保留错误列表与全部业务断言。子追问接单被拒，源码确认顶层展示与内层 question ACK 门冲突；取消没有原功能依据的 ACK 门，保留可信来源、唯一真实澄清与当前版本绑定。原日志没有捕获内层错误码，不倒填实际错误码。
-
-另已核实旧发送异常仍释放会话；新投递 unknown 永久保留 claim 会使同一会话后续聊天停住。最后修复仅在原 transport 实际结束、服务确认执行已终态且发送台账没有 started/未决定操作时，诚实关闭为 closed_unknown；原操作仍 unknown、不重发、不触发成功 recap，由原 Manager 在同一事务释放 claim。不以租约过期推断网络请求完成，不新增结果核对服务。
-
-最后增量为 Delivery 两源、双 DDL 及数据库表说明，另补 SourceClient 对 closed_unknown 的单一允许枚举遗漏；与此前八个兼容源一起冻结后，完成定向开发验证、独立业务回归和最终源码审查。测试的同会话继续预期来自原实现，不再用不同客户的新会话绕过卡住的会话。自有旧窗六份数据库/连接/进程已审计清理，不扫描或删除未登记资源。 新版运行前独立审查发现，测试强制抛出 NativeWriteUnknown 只是原内部异常形态；域内实际排水并诚实收尾后可以返回。因此仅撤该异常形态断言，真实 dropped HTTP、原操作 unknown/没有 ACK、不重发、不成功 recap、原费用与同会话下一轮继续的业务断言全部保留，归档修改前后字节和理由。
-
-最后投递 v1 开发窗 10962 实际为 1 通过、2 失败、1 setup error（122.02 秒）。普通追问通过；子追问已完成客户回复接单和执行结果，但共用测试辅助错误要求所有 presentation 记录只能有一份；等待追问与最终答复本可分别保存。未知发送用例因未导入原 prices fixture 未进入 body。迁移用例 rewind 早于原更新器对旧元数据表的初始化，未进入增量升级验证。四项结果保持原记录，不将前提失败当产品验证。
-
-独立源码审查另拦住新增 CP 检查：Finalizer 在正常终态保留 pending_finalization 供迟到费用补结，并不代表执行未结束；微信投递域不应重复解释核心执行树。v2 仅删除这块判断，保留服务终态/当前绑定/无恢复命令及本域发送操作实际排水证明，未修改业务测试断言。v1 两项审查问题与失败证据保留；v2 定向独立审查 P0/P1/P2 均为 0，470 当前源与单叶归档/首末一致，其余 469 同 v1，待原相关节点复验。
-
-10962 后的前提修正已先审查再冻结：仅导入原 prices fixture；迁移先用自有临时文件内的 canonical 最后一块调用原 updater 初始化旧元数据表，再用原完整路径验证 fresh/upgrade/skip/replay；投递辅助只严格选取当前真实服务终态 presentation，核对它自己的原初始来源绑定、结果正文和平台 ACK，不将客户答案的 locator 当初始 anchor，不强制累计投递记录只有一份。原业务与来源断言保留，未为测试调整生产逻辑。复验只跑此前未完成的三项，普通追问已通过开发证据保留。
-
-投递 v2 开发窗 72674 为 1 通过、2 失败（119.45 秒）：DDL 完整新建、原精确 CHECK 升级、重复执行与原 known 行守恒通过；子追问的接单、执行终态和来源/投递收尾已到末，测试仍错误把所有 wire 限成一条正文；未知发送已真实排水并经服务关闭，旧 SourceClient 不接受新的 closed_unknown 结果值。生产 v3 只补这一允许枚举；单叶编译/import 与独立审查通过，其余 469 源与 v2 相同。测试只将正文校验限定 purpose=body，保唯一真实平台 ACK，合法原进度消息不再被这条正文断言禁止；原失败日志未保存额外 wire 的具体类型，不倒填本窗实测类型。DDL 与普通追问已通过开发结果复用，最后开发只复验子追问及同会话继续两项。
-
-最后开发窗 82071 实际 exit 0、2 通过（164.38 秒），源码 470/辅助 25 首末零差异：一层子任务真实追问、客户聊天答案、原执行完成与正文 ACK/历史/费用到末；发送响应丢失保原 unknown、不重旧 POST、不成功 recap，同客户同 SID 下一批真实接单、模型执行及正常回发到末。v3 SourceClient 单枚举独立 CR0；主控亲核当前 470/归档单源和最终辅助 43 均一致。最终固定 18 条独立回归已自然结束：16 通过、2 失败，实际 exit 1；用户随后取消剩余工作，阶段不关闭为完成，详见正式交接。
-
-### M6a 交接边界与运行入口
-
-本次只交付到 M6a；M6b 飞书、M6c 钉钉、M7 默认迁移与四入口/Runtime+BOSS CLI 综合验收由接手者继续。现有 Runtime+BOSS CLI 仍是兼容对象，不新增为本次服务入口。代码保留在当前 master 工作区，未获提交、推送或部署授权；不因阶段验收自动打开开关。
-
-`agent_runner.enabled` 与 `agent_runner.wecom_kf.enabled` 默认关闭。接手者在明确获得部署授权后，按既有增量数据库机制应用 `deploy/db_update.yaml`，新库使用 `deploy/init-postgres.sql`；配置服务地址、可信 peer 及微信 service_id/原渠道配置，不把令牌或密钥写入文档/日志。HTTP 入口本身不执行迁移，也不替代 Worker。
-
-运行组件（入口说明，不是本次部署记录）：
-
-- HTTP API：`python -m src.services.agent_runner.bootstrap`，接受 `--host`、`--port`。
-- 执行器：`python -m src.services.agent_runner.worker`，接受 `--worker-id`、`--once`、`--max-tasks`。
-- 微信拉取消费器：`python -m src.channels.wecom_kf.ingress_worker`，接受 `--max-pages`。
-- 微信接单/投递消费器：`python -m src.channels.wecom_kf.admission_worker`，接受 `--once`、`--max-inputs`。
-- recap 交接消费器装配在现有 `src/background_runner.py`，没有独立 recap_handoff CLI；继续使用原后台组件启动方式。
-
-最终验证使用现有容器内隔离 PostgreSQL、真实服务/Worker/渠道代码以及 localhost 的微信和模型响应夹具，不宣称已验证真实微信账号、大模型付费链路、生产容量或正式部署。已撤销测试保留原字节和撤销理由，不计通过；原 workspace 授权测试仅需接手者换合法等待前提，其授权边界并未取消。ASR 未知结果没有新增自动查询/回调找回服务，运行期丢失的未知外部结果仍诚实保存，不能手工重投冒充自动恢复。
-
-### M6 历史实施与验证记录
-
-顺序：微信客服 → 飞书 → 钉钉。每次只修改目标渠道路由/适配器；`channels/session.py` 的共享修改必须验证尚未切换渠道仍走原路径。
-
-微信客服内部按三片交接，不一次改完共享渠道流程：第一片是完整路由绑定、耐久拉取意图/入站页与账号游标仓储、当前配置及可信路由授权；第二片是耐久接单、接单前合并与接单后安全点补充、ASR事实和原执行上下文；第三片是固定回发路由、耐久发送预算/投递状态、发送后claim释放及一次recap。每片实施前明确写入范围，分别开发自测、独立测试和审查；前两片不能单独宣称微信客服已迁移完成。飞书、钉钉复用已验收的中性边界，平台协议仍在各自适配器内。
-
-第一片已授权实施（2026-10-03）：新增KF来源验证、纯仓储、拉取worker及同cursor会话DAL，必要修改仅KF callback分流、配置和双DDL/表文档。`agent_runner.wecom_kf.enabled` 默认关闭，先不接Runner/ASR/回发；开启来源为服务器配置，不信请求布尔证明。回调用当前明确配置、真实密文签名和corp解密绑定，配置中的账号/profile精确匹配后短事务保存拉取意图再ACK；ACK前不增加账号列表联网依赖。worker在网络前后复核当前配置，以原owner/epoch/cursor和领取generation一次提交整页inbox及新游标，期间新通知不被覆盖。page事务不得调用旧会话方法的Redis/network/self-commit，新DAL保原SID及NULL用户、拒绝模糊匹配。新入口在原query/XML调试日志之前分流，台账只保存有界业务事实，不保存鉴权参数或原XML。plain认证及callback Token官方语义仍有明确迁移门；未知条款不扩建凭据平台，首片默认不切换，也不冒整渠道已兼容。
-
-实施预查补充兼容门：不支持的表情/消息类型保存有界事实，不能卡住整页后续文字；原直接欢迎/会话状态回调与同步页进入会话的scene、欢迎能力须耐久保全，欢迎Code使用既有secret_crypto私有加密存储，不放公开payload、日志或Runner上下文。同步消息保原provider msgid，直接回调使用独立事件命名空间，不伪造用户消息编号。默认profile的旧空值与main保持原SID；缺失绑定的事实读不能创建会话。配置版本只约束本次在途IO，不能使同账号/profile下旧事实因文案更新失效；真正归属或执行profile变化不静默重新指向旧消息。已随首片冻结进入验证，不作为整渠道验收结论。
-
-### M6a 第一片冻结与开发正常窗口（2026-10-03）
-
-[交接](../../tmp/agent-runner-evidence/m6-kf-foundation/v1-handoff.md)精确11生产/schema/文档源（7Python），[源码](../../tmp/agent-runner-evidence/m6-kf-foundation/v1-source-sha.json)及有限86源/入口见证已由主控实读、当前与归档字节亲核一致。原SDK新增仅native有界私密模式，仍保持两参数factory与原默认模式；SQL期限仅本仓储LOCAL statement5s/lock3s，不改共享pool策略。双DDL为同形单DO，变更号`2026-10-03 12:00:00`，暂无行为迁移结论。真实编译/import/配置/原DDL split检查exit0不代替业务测试。
-
-[开发正常99279](../../tmp/agent-runner-evidence/m6-kf-foundation/development-1-run-evidence.json)实际exit0，1 passed（2.89s）；86源/12实际测试辅助首末一致。独立作者用例由实施者执行，真实隔离PG、原Crypto、原SDK与loopback平台HTTP、原Worker/DAL保存页、游标、route及既有NULL用户/旧空profile SID；不建Runner、不调用ASR、不发送、不计费，也不是官方平台认证。独立11风险节点/7有限组及必要SDK原默认关联、独立CR已调度，当前未正式验收。仅测试自有数据库/peer收尾，未知旧库、Yohar及master容器保留。
-
-独立首窗[34597](../../tmp/agent-runner-evidence/m6-kf-foundation/formal-b1-run-evidence.json)实际exit0，6 passed（21.14s），86源/14测试辅助首末一致；涵盖原callback ASGI、currentcfg/crypto、在途新generation、真实晚期SQL失败整页回滚、private欢迎/unsupported/recall/servicer，以及原SDK真实HTTP超限/安全错误/在途配置撤销。ASGI不代真实socket压力，原SDK错误已实源证转安全失败而非直接退出worker。独立[v1 CR](../../tmp/agent-runner-evidence/m6-kf-foundation/v1-cr-report.md)P0/P1=0、P2=1：新增无依据±300s期限会拒绝合法延迟通知，不能等默认切换时才处理。CR实际00:08:27→00:15:56 UTC，86当前/11归档首末匹配。主控在运行窗结束后仅授权auth去该期限、保原签名/currentcfg及严格timestamp形状；独立作者在原HTTP节点加入延迟签名通知，后续v2实际补验与剩余5风险/关联尚待，v1结论不倒填v2。
-
-[v2单源交接](../../tmp/agent-runner-evidence/m6-kf-foundation/v2-handoff.md)仅`ingress_auth.py`去未证期限及unused time，其他10源/85有限闭包路径同v1。主控已亲核当前86与归档11一致；实际单源compile、既有API容器affected import及diffcheck退出0，首次Docker sandbox拒绝未执行Python，如实保留。独立[v2定向CR](../../tmp/agent-runner-evidence/m6-kf-foundation/v2-cr-report.md)实际00:19:48→00:20:23 UTC，86/11首末零漂移，P0/P1/P2=0。延迟真实签名及剩余风险运行仍待；不重复开发正常或已通过且不受时间策略影响的其他5项。
-
-主控基础片正式验收：[63429](../../tmp/agent-runner-evidence/m6-kf-foundation/formal-b2-run-evidence.json)实际exit0，10 passed（27.29s）为剩余5风险、同一authority的v2补验1及SDK/原Crypto关联4；延迟900s合法签名首通知、原双DDL fresh/增量/replay/错索引原子拒绝、真实锁等待跨lease到期、cosmetic配置与旧fact/新epoch、空/main兼容、真实profile改向拒绝和缺route纯读不自建均到末。合计[清单](../../tmp/agent-runner-evidence/m6-kf-foundation/final-inventory.json)正式11唯一＋关联4＋开发1，3个实际行为窗；未把v1五项复用声称实际加载v2。主控实读日志/首末/CR并亲核最终86源/23实际辅助union当前一致，复用范围限唯一timeguard改动的无影响行为。末[清理](../../tmp/agent-runner-evidence/m6-kf-foundation/cleanup-final.json)确认pytest/KF CLI及自有HTTP线程已收尾、新测试库0；已知旧库1且0连接明确排除。随机数据库ID原wrapper未输出，只记录实际finally DROP返回及catalog无新增，不补造ID。本段只证明耐久接收、游标及原会话绑定，Runner接单、ASR、投递和真实平台认证仍未完成；释放源码冻结仅供后续获授权的具体片修改，不倒算本次证据漂移。
-
-下一段先文本可信来源＋接单＋同Runner安全补充，之后独立增加voice/ASR；通过受信内部API提交有界receipt定位而非渠道worker直接运行第二套Manager。中性来源端口由应用装配平台DAL，提交/运行/读都以当前配置及原inbox/route证明授权；public DTO不接受布尔proof。有序输入以原root/claim锁与CP CAS确认attach/apply，最终cutoff同事务复核。预算耗尽时仅未实际进入原模型/历史的pending或精确queued引用可原子defer到下一queuedRunner，不重置旧预算、重演旧事实或丢追加输入；保原SID/顺序及旧deliveryclaim。文本小门仅origin3/text且原SDK当前service_state严格为1可派发，网络在SQL锁外且回事务fresh复核；unknown/人工/voice/lifecycle等保received，0/4转换及欢迎发送后门处理，默认不开启完整迁移。
-
-文本小门原21源（17Python＋配置/双DDL/表文档）实施中，新增6分别是中性`source_receipts`、唯一应用装配`application_sources`、固定内部HTTP`source_client`、纯cursor`input_repository`、KF`admission_repository`与薄`admission_worker`；原修改限定API/Manager/Authorizer/Runner DAL、Worker应用装配、DurableControl/ExecutionRepository/TransactionRepository、settings、KF入站仓储/SDK和canonical双DDL。已批准必要第22源`runtime/context_assembler.py`：仅实际新增root用户消息附服务器可信initial input_ref，默认None保兼容，旧历史/child不附、恢复不重装；不能以历史中存在user推断本次输入已应用。内部`POST /v1/source-inputs`只接有界原receipt定位及服务端重算稳定键，不收tenant/user/target/proof布尔；返回immutable首接归属、当前Runner及耐久disposition。原source/actor/chat查询头与私有input定位仍需当前原归属验证，定位不是权限。应用服务同TX提交来源link和Runner/input，薄consumer只读平台inbox并HTTP重试原键，不直接读Runner私有输入表、接单或运行Agent。新增源范围外有实际必要时先说明因果，不将白名单冒当最终manifest。
-
-迁移兼容门：native新接单/执行必须原receipt，不能随入口开关回退自证；旧无receipt已接受KF Runner不伪造升级，当前可信actor及原ownedSession下按服务端明确legacy read/cancel政策保持可查可取消，不能因新来源门锁死旧任务。原2秒接单前合并如不在本text小门完成，必须在完整M6默认切换前补齐，raw单receipt API不代原batch语义；每成员来源/order/历史稳定ID仍须保存。实施不碰Engine、前端、voice/usage、发送及其他渠道；尚未运行或验收文本链路。
-
-实施前审追加两处收口：平台inbox仅存自身nullable接受链接，由来源provider在原Runner接单事务写入，consumer不依赖服务私有表；同SID但完整执行来源不同必须新建queued Runner，保旧来源与delivery claim。补充输入触发同Runtime继续时复用原统一执行/终结判定，保verbose观察、停机、暂停安全树、取消及未完成child保护，不复制第二条弱化流程。上述为待实施/待验证约束，不算行为通过。
-
-终结收口仅允许明确completed cutoff或实际iteration_limit且预算已耗尽转接未用后续输入；runtime未装配/普通失败仍有pending时保原事实与claim核对，不将初始输入自动重排。平台状态观察时点固定在真实成功响应时，关闭客户端不刷新观察年龄。后续voice有限接口提案已只读核原Speech真实POST、AI与人工ASR记录边界：先接原voice intent，AI准备和费用归原Runner，人工/员工仍独立记录；已发生识别的defer复用文字并保原费用owner，started未知不得重发。voice尚未授权具体源、实施或测试。
-
-文本v1已冻结：[交接](../../tmp/agent-runner-evidence/m6-kf-admission/v1-handoff.md)与[元数据](../../tmp/agent-runner-evidence/m6-kf-admission/v1-freeze-meta.json)实际01:11:39 UTC记录22源/18Python、374有限依赖见证（最小实际import97、保守静态Python329、原profile资源14去重，不宣称374均实际加载）。主控亲核owned当前/22归档及374当前全一致。第22源before字节为精确逆转见证，另与可用M5 final-end及真实UI首末封存hash一致，不冒实施前独立捕获。[检查](../../tmp/agent-runner-evidence/m6-kf-admission/v1-check-evidence.json)末18compile/import、globaldiffcheck实际exit0，原updater13:00块split1且双DDL一致/defaultfalse；两次检查脚本选错入口/键失败发生在业务前，未运行SQL/Worker。已放唯一开发normal等待tester最终helper核定，独立只读CR并行；本时点尚无文本业务通过或独立风险结果。
-
-文本开发[85858](../../tmp/agent-runner-evidence/m6-kf-admission/v1-development-1-run-evidence.json)实际exit0、1 passed（17.69s），374源/23测试辅助首末/current一致；主控实读日志/捕获及末断言，原Crypto/SDK→平台inbox薄consumer→独立socket API→原resident Runtime/Engine→18tokens/唯一0.01 record/稳定source:user历史到末，terminal保delivery claim；非真实平台或独立风险验收。[清理](../../tmp/agent-runner-evidence/m6-kf-admission/v1-development-1-cleanup.json)只读确认新增库/连接/pytest/probe/KF CLI0，旧未知库排除；原finally DROP、HTTP线程收尾已返回，不补造随机库ID。完整[v1 CR](../../tmp/agent-runner-evidence/m6-kf-admission/v1-cr-report.md)实际01:14:53→01:20:51 UTC首末374/归档22一致，P0=0/P1=3/P2=1：unstarted暂停后取消无法收尾、来源锁等待后缺最终Attempt派发复核、已完成父恢复期新source补充被旧child mirror吞掉，以及明确外属read ref错误映成500；均为源码可达判断，未冒实际复现。已闭开发窗后只授权Input/DurableControl/Execution/Transaction仓储与KF provider五源v2收口，其余369保持；独验准备对应真实取消、真实锁等待及真实child producer反例。取消仅明确unstarted零IO事实，source新输入复用原root continuation意图并同步live root字段，无新输入旧mirror保原；此片尚未验收。
-
-文本[v2交接](../../tmp/agent-runner-evidence/m6-kf-admission/v2-handoff.md)实际01:36:13 UTC冻结，主控亲核374同路径且只有上述5变化、其余369对v1不变、22当前/归档一致；combination SHA `31bcc66c5c3b134687f6982ca33ad97e461ec52524514e9901eed664f535eee2`。[检查](../../tmp/agent-runner-evidence/m6-kf-admission/v2-check-evidence.json)末五源实际containercompile/import及globaldiff0，保中间缩进及host python不可用失败记录，不冒业务失败/通过。unstarted取消用原精确pause release proof及零receipt两处验证；原child.before_model/tool的rootCAS也增加最终派发复核，known-result保存只复核Attempt；初始取消历史保持cancelled未执行事实。独立角色已准备13正式风险＋开发normal1，34为有限静态测试/helper union而非全加载。已调v2定向CR与首批3实际反例＋read authority1，等各自actual pre/exit/end；无v2业务通过证据，后续9风险及有限原关联未启动，不重跑旧阶段矩阵。
-
-[v2正式B1](../../tmp/agent-runner-evidence/m6-kf-admission/v2-formal-b1-run-evidence.json) session49443实际exit4：测试相对import错误，0业务节点；374源/28辅助首末一致，不是生产失败或通过。独立作者修正child及尚未运行的storage/filter测试import；实际清理自有新库/连接/测试进程为0，未知旧库保留。[v2 CR](../../tmp/agent-runner-evidence/m6-kf-admission/v2-cr-report.md)实际01:40:18→01:43:23 UTC，首末零漂移；既有四项源码门关闭，新增P1：来源continuation标记处理后残留，可使已知FAILED的空恢复误进新模型。主控关闭该窗口后，仅授权InputRepository/DurableControl修复标记生命周期。
-
-[v3交接](../../tmp/agent-runner-evidence/m6-kf-admission/v3-handoff.md)实际01:51:41 UTC冻结；主控亲核374当前/22归档一致，仅上述两源变化、其余372对v2不变，SHA `696440191da8d6886e5034e4656d978d36297dc3bcae87dc5ab3c5a3f034a0ec`。普通补充输入不安装标记；只有completed父镜像的尚未处理新来源意图才安装，并仅清自己所有的意图。控制ID变化本身不转交所有权，真实独立父续接还须原root continuation映射和同控制user消息，child回复/空resume不能冒父续接。末版两源compile/import及diffcheck实际0，尚无v3业务通过。已调独立v3定向CR及五节点实际isolated collect-only；收集通过后同五节点正式新窗，含真实FAILED后明确CP/interruption时序注入、默认空resume不重放。静态import核验不代实际加载，注入不冒自然崩溃。
-
-[v3定向CR](../../tmp/agent-runner-evidence/m6-kf-admission/v3-cr-report.md)实际01:57:55→02:02:01 UTC，374当前/22归档首末零漂移，P0/P1/P2=0；读取两源delta及原控制/child恢复/Engine关联，未变372复用既有审查并核字节，不冒全量重读。[实际collect33942](../../tmp/agent-runner-evidence/m6-kf-admission/v3-collect-b1r-run-evidence.json)exit0，5 collected（0.23s）、0业务通过；主控亲算374源/30辅助首末及当前一致。正式B1r session67171已启动同五节点，待真实退出与收尾；源码CR和成功加载均不替代业务结论。
-
-[B1r67171](../../tmp/agent-runner-evidence/m6-kf-admission/v3-formal-b1r-run-evidence.json)实际exit1，5 setup errors（0.87s）：风险模块未注册既有`kf_scope`，未到receipt/API/Worker业务，374源/30辅助首末一致。成功collect未证明fixture依赖闭合，不能记业务通过或生产失败。作者仅显式注册原fixture、未改fixture行为或生产；[原窗清理](../../tmp/agent-runner-evidence/m6-kf-admission/v3-formal-b1r-cleanup.json)实际新库/连接/匹配进程0、wrapper finally返回。B1r2 session93806以新首捕启动同五节点，待退出/末捕，不重复collect。
-
-[B1r293806](../../tmp/agent-runner-evidence/m6-kf-admission/v3-formal-b1r2-run-evidence.json)实际exit1，4 failed/1 passed（80.89s），374源/30辅助首末一致；native read authority及legacy receiptless read/cancel末验通过。cancel/dispatch两节点在空provider script前置失败；FAILED节点实际第二模型400、1observed＋1unknown及两input appended，但故障注入位置在Worker已interrupt后，未到空resume断言，须仅改测试时序，不能记生命周期通过。child节点实际原父completed＋子waiting、3observed后合法reply返回500，未到Attempt2；源码候选为原ControlApplication执行授权未提供native PreparedSource，主控已调独立定位及有限修复提案，不倒填已丢私日志的确切异常。原窗自有数据库/进程/HTTP线程收尾为0，来源版本继续冻结，未开下一批或Voice生产。
-
-[v4交接](../../tmp/agent-runner-evidence/m6-kf-admission/v4-handoff.md)精确API/ControlApplication两源修HTTP控制：首次fresh读/幂等→锁外来源准备→二次fresh读/同key优先→prepared执行授权/credit→原控制仓储；native追加原expected_revision，sync/Web/receiptless/pause保持兼容。主控亲核374当前/23归档零差异、仅两delta其余372同v3，SHA `0f09aa9511df9d4286867f25127e3b69bff627d7662bc83978b351b194d45315`；新增ControlApplication原字节实际预捕匹配v3，非回填旧22。末compile/import/diff0。[开发原Web65375](../../tmp/agent-runner-evidence/m6-kf-admission/v4-development-1-run-evidence.json)exit0、1 passed（10.53s），374源/20辅助首末一致：原API pause/resume/currentcredit/已接受duplicate、执行前撤信用均验证，model/receipt/record0；不冒native恢复通过。真实自有库/连接/进程清理0，原provider peer teardown返回而非不存在。
-
-[v4定向CR](../../tmp/agent-runner-evidence/m6-kf-admission/v4-cr-report.md)实际02:22:59→02:26:04 UTC，374当前/23归档首末一致，P0=0/P1=1/P2=1。HTTP缺prepared原P1源码关闭，但关联Worker领取恢复→Recovery.prepare仍缺prepared且SourceUnavailable未按候选隔离，可中止Worker；另明确state3拒绝被Worker包装语义映500。两项为可达源码判断，不冒实际复现。开发窗结束后主控仅授权Worker/RecoveryCoordinator/RecoveryRepository/ControlApplication四源修：中性锁外prepare、短claim事务末来源/新Attempt复核、精确CAS核对保留原CP/control/claim/wait、HTTP只恢复已知安全RunnerError cause，未知SQL/异常不泛化。待v5冻结及真实反例，未启动后批。
-
-[v5交接](../../tmp/agent-runner-evidence/m6-kf-admission/v5-handoff.md)精确上述四源、25自有文件（新纳Recovery两叶）、374有限见证；主控实读末四源compile/import/diff0并亲核当前/归档零差异、其余370对v4不变，SHA `0f20841483eb99b40815aa629182cde084cffdd7843e3801621e71ecba18af06`。恢复claim在消费/CP/公开投影/event SQL后重核来源及实际新Attempt许可，仅这个未commit末fence的LeaseLost转候选hold，整笔回滚；全局SQL/commit/其他marker不吞。公开hold保原waiting字段及CP/control/claim，只真变化通知；HTTPtyped安全拒绝保持同keywinner优先。已调独立四源CR；新增nativecontrol正常节点明确API+Worker均gateoff、accepted来源临时不可用hold后原Attempt2执行到记录/费用/历史末验，作为v5唯一开发业务窗，再由独立角色必要重验，不混角色结果。独立另准备真实event表锁跨新lease反例：明确只lease实参1s时序DI、真实DBclock/Attempt/SQL/原notify，不能冒默认lease自然过期；当前尚未运行该反例。
-
-[v5 CR](../../tmp/agent-runner-evidence/m6-kf-admission/v5-cr-report.md)实际02:37:38→02:39:49 UTC，374当前/25归档首末一致，主控实读并亲算当前/首末0，P0/P1/P2=0；原关联恢复及HTTP拒绝两项源码关闭，不冒业务通过。[v5开发22712](../../tmp/agent-runner-evidence/m6-kf-admission/v5-development-1-run-evidence.json)实际exit0、1 passed（27.20s），374源/24辅助首末及当前/归档亲核0：真实SDK state3→HTTP409，credit402，当前actor及同key幂等，API与默认Worker gateoff下原控制hold→恢复同Runner Attempt2，原model/receipt1、18tokens/.01、source历史一次/delivery claim。真实自有库/连接/进程0、原HTTP peer teardown返回，非单独线程普查。开发通过不代独验，已放行五正式新窗（前三反例＋FAILED时序节点＋native控制），不重复收集，另新claim租约回滚及剩余风险/原关联分批。
-
-[v5正式B151627](../../tmp/agent-runner-evidence/m6-kf-admission/v5-formal-b1-run-evidence.json)实际exit1、4 passed/1 failed（125.93s），374源/31辅助首末及归档由主控亲核0，真实自有资源清理0。取消、真实parent/child恢复期间新来源、真实第二模型FAILED＋明确原CP/interruption时序注入后的默认空resume、native控制/gateoff/drain全部末验通过。dispatch在本地端口config未安装API实际native peer处失败，尚未acquire/SQL锁/lease断言；仅该测试局部typed配置修同真实peer/hash/exactsource，来源/时钟/PreparedSource均不伪造。四pass不重验；第二窗已放行dispatch修后、新claim lease回滚、ordered input/cancel、budget defer、real CAS/SQL回滚共五节点；其他六风险及必要原关联另批，当前不记未运行结果。
-
-[v5正式B251905](../../tmp/agent-runner-evidence/m6-kf-admission/v5-formal-b2-run-evidence.json)实际exit1、4 passed/1 failed（71.88s），374源/29辅助首末一致、自有资源清理0。已commit dispatch租约、未commit新Recovery租约（明确lease实参1s DI＋真实event表锁/DBclock）、ordered/cancel、真实CAS/SQL回滚都到末通过；hold可新增合法Attempt1公开核对事件，不冒新Attempt2成功事件。budget实测max/iteration1、第二输入接受及模型释放后公开failed，后续断言未到；主控与独测实读原Engine/Worker，原followup耗尽为ITERATION_LIMIT→failed，本例completed预期错误。只改测试严格failed/ITERATION_LIMIT/实际CP预算及原output，保所有defer/claim/usage末断言，不改生产或伪造此次未观测到的具体error。第三窗放行修后budget＋剩余六风险；旧通过八项与未受影响read1不重验，原Web关联末批另验。
-
-本text小门对已parked clarification/paused/interrupted/Browser wait明确保received，不接受为新Runner、不猜普通文本为子回复/物理工具完成，不改原等待/兄弟执行树；不另提取或复制控制仓储。对应独验只证明这个hold边界，不能宣已实现渠道续接。完整M6切换前必须补真实问题投递/原wait绑定、exact leaf reply与安全resume桥；来源未知或副作用未知仍拒盲重放。已accepted native任务在入口开关关闭后仍用原receipt/currentpeer证明收尾，开关仅挡新接单，不降legacy。平台state读取返回的内部PreparedSource在原派发事务中核IO配置版本及新鲜度，不能只再核相同语义身份而漏在途配置变更。
-
-本次查齐persisted授权调用另核Browser边界：BrowserWebAuth两个入口有web/chat约束；BrowserHumanActions.automatic_guard本身无Web-only约束且未安装native来源能力，不能宣渠道Browser自动完成可用。此text片不扩该叶，完整渠道Browser及M7切换前必须补中性来源proof与accepted flagoff一致性、原自动/等待恢复实测；沿BrowserOwner原物理动作dispatch fence，不降低WebOwned权限或让普通渠道文字证明物理完成。
-
-[v5正式B335568](../../tmp/agent-runner-evidence/m6-kf-admission/v5-formal-b3-run-evidence.json)实际exit1、6 passed/1 failed（73.16s）；主控亲读原日志、运行与清理记录，复算374源/29辅助首末及辅助封存均0漂移，当前源相同，自有资源0。严格预算ITERATION_LIMIT及defer/claim/history/费用末验、消费者过滤、双DDL正负迁移、完整route隔离、有限PG unknown/parked契约六项通过。authority三种SDK拒绝、在飞配置变更拒绝及无落库断言通过，但最后正常接受失败；只读定位为测试finally将原TEXT配置再次JSON编码，恢复形状错误。批准仅恢复原TEXT字节并核原config/updated_at、保最后202/created/事实/SDK次数断言；下一窗唯一authority复验加原Web revoke-401关联，不重跑已有十五项有效风险结果，不修改374生产源。该失败窗口不计完整authority通过。
-
-**文本接单片验收通过（2026-10-03）**：[末窗5855](../../tmp/agent-runner-evidence/m6-kf-admission/v5-formal-b4-run-evidence.json)实际exit0、2 passed（13.49s），唯一authority完整复验与原Web revoke-401关联到末；374源/27辅助首末及实际加载归档主控亲核一致。累计正式16 unique（未受影响v3 read1＋v5其余15）、原关联1，开发三窗分别保原版本/角色；旧失败不改为通过。v5独立CR P0/P1/P2均0，最终4源编译/import exit0有效。主控亲核[最终记录](../../tmp/agent-runner-evidence/m6-kf-admission/v5-final-meta.json)的374当前源、25原生产归档、43实际辅助路径union及原末窗，当前hash均一致；[实际清理](../../tmp/agent-runner-evidence/m6-kf-admission/v5-final-cleanup.json)自有数据库/进程0，未知旧库0连接排除保留，HTTP finally关闭/join返回不冒独立线程普查。解除该片冻结，仅供后续明确范围修改；文本通过不代表平台发送、人工/语音、原2秒batch、Browser渠道续接或整M6已完成。
-
-**AI语音片实施范围（2026-10-03）**：采用[最终20源提案](../../tmp/agent-runner-evidence/m6-kf-foundation/voice-first-slice-handoff.md)的AI业务闭环，17Python＋双DDL＋数据库文档；10源准备原语不是业务验收结论。先接受可信voice intent，再在原Runner/Attempt下媒体准备及真实ASR；稳定输入/物理调用身份、原费用owner、结果与usage同事务，未知不重识别。可信平台Recognition零ASR；模型只识别文字，历史与record用户文字共用中性投影，原intent/hash不改。网络/价格在SQL锁外，ASR后刷新来源证明；取消须等待自己实际HTTP/SQL/codec收尾。保旧默认Speech补计，仅可信native observer停其旧补计；媒体大小/租户路径/敏感日志有界。人工与员工ASR、平台发送、batch、其他渠道、默认开关仍留各自后片，不修改Engine/Finalizer/UI/API DTO。实施后独立测试及CR，尚无语音运行通过结论。
-
-语音片范围补充（2026-10-03，实施中）：主控实读旧入站仓储的digest比较，发现新reader加入Recognition后，原仅media_id的旧voice回放会冲突并阻整页游标。批准必要第21叶`src/channels/wecom_kf/ingress_repository.py`，修改前单独封原字节；只兼容相同完整来源及原字段、自洽旧digest、旧voice缺Recognition时的新字段差异，不改旧payload/digest/acceptedref、不反补识别结果，真实媒体/来源冲突和已存Recognition改变仍拒。生产编排同时收口为中性准备描述及注入能力，平台表/SDK结构留KF adapter，唯一`application_sources`有限装配，不将平台判断藏进通用helper。
-
-**AI语音v1冻结交接（2026-10-03）**：[交接](../../tmp/agent-runner-evidence/m6-kf-voice/v1-handoff.md)封存21自有文件及449有限依赖路径，107为实际import见证，不冒449均动态加载。末版18源编译/import、默认开关关闭、双DDL14:00单DO解析及diff检查实际exit0；DDL尚未执行。检查没有持久全闭包pre-compile map，已在[真实记录](../../tmp/agent-runner-evidence/m6-kf-voice/v1-check-evidence.json)明确，不复造历史首末。主控亲核当前449、21归档及[正常辅助27](../../tmp/agent-runner-evidence/m6-kf-voice/normal-ready.json)均零漂移，放行唯一开发正常节点及只读独立CR；正式12风险节点、Text关联2及旧Speech关联3准备中，尚无语音业务通过结论。媒体/token/model采用有限本地IO替身，原Speech物理POST、Usage/费用、Worker与原SQL路径保留；不宣称付费平台真机验证。
-
-语音开发正常窗[44066](../../tmp/agent-runner-evidence/m6-kf-voice/v1-development-1-run-evidence.json)实际exit0、1 passed（20.33s），449源/27辅助首末及辅助归档主控亲核一致。原HTTP接受后才媒体/ASR，原Worker、Speech POST、模型、历史与单record到末：2 observed/applied receipts、18 tokens、费用.11；终态claim为delivery，待发送owner确认后释放，不能记为已投递。自有进程0、原隔离wrapper退出完成drop finally，未知旧库0连接保留；媒体作为私有可信产物保留。独立CR已定位需修P2：未started的pause被当preflight失败固化为knownFalse，resume不再识别；冻结未改，正式风险测试尚未放行，等待完整CR统一修复，不将开发正常通过记为语音片验收。
-
-语音v1独立[CR](../../tmp/agent-runner-evidence/m6-kf-voice/v1-cr-report.md)实际首末449及归档21一致，P0=0/P1=1/P2=2：已有execution时取消绕过late started/unknown preparation核对并推进终态/delivery；prePOST暂停误固化失败且新准备调用在原StopRequested归一化边界外；voice缺必填media_id仍被接收。独立[暂停复现19225](../../tmp/agent-runner-evidence/m6-kf-voice/v1-pause-before-run-evidence.json)实际exit1、1 failed（12.15s），449源/29辅助首末及归档主控亲核一致；确实到paused、0POST/0receipt，指定retained断言显示media_ready变known/preflight，未到resume，不冒后半段通过。自有库/进程收尾0、旧库排除保留。主控批准原21范围内5叶最小v2修复，不动Engine/Worker/Finalizer/接口/界面；正式风险准备追加初始/late暂停与lateunknown取消因果节点至15，字段拒绝并入原节点，不扩参数矩阵，业务运行等待修后冻结。
-
-语音[v2](../../tmp/agent-runner-evidence/m6-kf-voice/v2-handoff.md)已冻结：主控实读精确5叶差异，449当前源、21归档与修改前5叶真实归档一致，实际编译/import检查首末449相同、18源检查exit0，配置仍默认关闭；未修改DDL/Engine/Worker/Finalizer。取消统一先经原中性装配口核未知preparation，平台查询留VoiceRepository；有execution时不生成无模型取消证书。暂停保media_ready，原before_model停止归一化覆盖准备/授权；可信voice必填media_id。放行唯一正常开发复验及5叶独立delta CR，正式15风险与关联5尚待运行，不提前标语音验收完成。
-
-语音v2开发正常复验[30484](../../tmp/agent-runner-evidence/m6-kf-voice/v2-development-1-run-evidence.json)实际exit0、1 passed（20.12s），449源/27辅助首末、当前及辅助归档主控亲核一致；原完整ASR/模型/历史/record、2 receipts、18 tokens、费用.11及delivery claim到末，独立测试尚待运行。自有进程0、原wrapper drop finally返回、未知旧库0连接排除保留。lateunknown取消的有限契约是阻止终态/delivery推进并保输入/费用/claim；原cancel_only仍finalizing、没有pending_finalization，原lease过期后允许再次尝试收尾，不宣称已自动变成verification waiting或费用已确定。
-
-语音v2独立[5叶delta CR](../../tmp/agent-runner-evidence/m6-kf-voice/v2-cr-report.md)P0/P1/P2均0，原三组源码问题关闭；449源/21归档及审查首末一致。主控已核[正式准备15](../../tmp/agent-runner-evidence/m6-kf-voice/v2-formal-ready.json)的42有限辅助union与首控制组30路径当前一致，放行七组串行独验（控制4、Recognition2、结果2、SQL回滚1、late/预算2、媒体codec2、DDL2）及原Text2＋Speech3关联；首次真实失败立即停后组，运行前后封当窗原版本，不将准备或CR当测试通过。
-
-语音v2首正式[控制窗13173](../../tmp/agent-runner-evidence/m6-kf-voice/v2-formal-g4-run-evidence.json)实际exit1、3 passed/1 failed（82.92s），449源/30辅助首末及归档主控亲核一致；已知ASR迟到取消、原初始pause反例恢复、已有Runtime lateunknown取消保留事实三项到末通过。latepause节点期望末model not_started，实际completed；原首模型仅普通final内容，cutoff继续后Worker先准备追加输入，尚未进入下一before_model，主控与审查者静读确认是测试入口错位，不能据此称生产归一化失败。旧失败及未到resume保原版本；后组已停，源冻结，准备真正before_model时序，仅失败节点重验，不复跑原3通过。自有库/进程0、未知旧库0连接排除保留。
-
-语音v2唯一latepause定向[复验70305](../../tmp/agent-runner-evidence/m6-kf-voice/v2-formal-g4r-run-evidence.json)实际exit0、1 passed（36.98s），453源/29辅助首末、当前及辅助归档主控亲核一致。453只追加未修改的原Read/三个parser依赖见证，原449窗口不倒填；未执行Word/Excel/PPT操作。原Read实际读自有文本后仅延迟原结果返回，通过真实晚到语音接单后放行，透明ContextVar确认原root before_model；CP工具配对/结果只一次、第二model not_started、媒体保留及resume到末，2 LLM/36 tokens＋1 ASR/费用.11，claim为delivery。原失败不改通过、原三通过复用，控制组正式累计4 unique；自有资源清零（新增probe单独实际末普查），继续剩余组。
-
-语音v2 Recognition[26113](../../tmp/agent-runner-evidence/m6-kf-voice/v2-formal-g1-run-evidence.json)实际exit0、2 passed（43.73s），449源/28辅助首末/当前/归档主控亲核一致：缺media_id真实页拒绝且cursor无写、可信Recognition零ASR、旧media-only回放不改旧事实并走原ASR到末。随后结果[14252](../../tmp/agent-runner-evidence/m6-kf-voice/v2-formal-g2-run-evidence.json)实际exit1、1 passed/1 failed（34.26s），449源/27辅助首末/归档一致；badJSON unknown及resume不再次POST到末通过，正式累计7 unique。known reject已发生1 ASR POST/1 observed receipt，模型请求处HTTP异常，未到calls0、完成及.01末验。主控实读原Assembler会pop末旧未配对user及测试provider仅匹配user，确认本node把随机marker塞旧孤立history不可靠；批准仅外部模型脚本用原占位文字作为选择标记、删除旧history UPDATE，保持所有业务oracle，唯一失败复验后继续，不复跑坏JSON通过项。失败原版及自有收尾0保留，源未改。
-
-语音v2 known reject唯一[复验42092](../../tmp/agent-runner-evidence/m6-kf-voice/v2-formal-g2r-run-evidence.json)实际exit0、1 passed（19.86s），449源/27辅助首末与当前主控亲核一致；固定占位选择标记后原业务oracle全部到末，整数明确失败calls0、原时间/占位历史及LLM18 tokens/费用.01。坏JSON原通过项复用，正式累计8 unique，非开发窗计数；自有库/进程收尾0，未知旧库保留。
-
-语音v2 SQL结果[2885](../../tmp/agent-runner-evidence/m6-kf-voice/v2-formal-g3-run-evidence.json)实际exit1、1 failed（40.16s），449源/28辅助首末与当前主控亲核一致。真实ASR POST1与PG result rollback→unknown、原typed observer显式exact result重投/重复/冲突断言及HTTP resume202均已到；terminal收敛失败，原Attempt1/interrupted、resume rejected、receipt observed、input accepted。原失败未打印control error_code或CP标记且私资源已清，不补造历史拒因。独立审查发现初始prep在Runtime创建前失败、原CP未标unstarted的恢复契约缺口，尚须新诊断窗确认；仅批准本node安全诊断增强及唯一复验，源冻结、后组暂停、末费用/history/新Attempt未验。自有库/进程收尾0，未知旧库保留。
-
-语音v2安全诊断[54980](../../tmp/agent-runner-evidence/m6-kf-voice/v2-formal-g3d-run-evidence.json)实际exit1、1 failed（40.98s），主控亲读原log及449源/28辅助首末与当前一致；新窗真实拒因CHECKPOINT_TREE_INVALID、execution不存在且unstarted=false，prep known/receipt observed、ASR1/model0。仅本node安全诊断增强、业务oracle未变，旧2885缺失历史不倒填。独立[只读源码复核](../../tmp/agent-runner-evidence/m6-kf-voice/v2-g3-readonly-review.json)确认P1，最小方案仅Worker原CAS在可信初始source准备前存unstarted、成功与fresh授权后Factory前清；窗口外missing execution仍拒，避免Assembler压缩已付费故障借标记重演，原业务计划首次装配一并保留。原窗已封存、自有库/进程0；唯一writer获授权实施Worker1叶修复，开发自验与独立CR/相关独验尚待，未把提案标为完成。
-
-语音v3冻结生产delta仅原Worker1叶；主控亲读actual before/diff、453见证/21源码归档当前一致（新增Read4为未改依赖见证，旧449窗不倒填）。两次原dispatch CAS把unstarted限定于首来源准备窗口，成功后Factory前清，包括明确resume；Factory以真实execution区分已有计划与首次装配。最小[compile/import检查](../../tmp/agent-runner-evidence/m6-kf-voice/v3-check-evidence.json)实际exit0（0.269166875s）、1编译/1导入、真实loaded50、开关False，453首末一致，无SQL/调度/付费；开发原g3定向及独立delta CR进行中，仍未验收。未知resume可consume并新Attempt再hold，但不重ASR/模型、不推进终态/delivery；未另扩preconsume端口。
-
-语音v3原g3开发[63987](../../tmp/agent-runner-evidence/m6-kf-voice/v3-development-1-run-evidence.json)实际exit0、1 passed（26.74s），453源/28辅助首末及当前主控亲核一致。真实ASR SQL结果rollback、原typed观察exact重投后resume到原Attempt2 completed/settled，ASR POST1/原Attempt1费用owner保留，LLM1/Attempt2、单record18 tokens/.11、input applied到末；开发通过不替代正式复验。原资源wrapper/peer/child收尾返回，自有进程0、未知旧库1/0连接保留。独立[单叶CR](../../tmp/agent-runner-evidence/m6-kf-voice/v3-cr-report.md)P0/P1/P2=0，453源/21归档真正首末一致，主控实读报告；原20叶复用既有未变审查。放行原g3独验先跑，新首次计划继承/付费摘要storage故障2项按真实组件另准备；v3总17 unique门，旧v2八通过保历史，不冒同版通过，关联仍Text2＋Speech3。
-
-语音v3原SQL结果恢复独立[13397](../../tmp/agent-runner-evidence/m6-kf-voice/v3-formal-g3-run-evidence.json)实际exit0、1 passed（26.54s），453源/28辅助首末/当前主控亲核一致；原known结果显式观察重投后Attempt2到completed/settled、ASR1/原owner/历史费用.11全部到末，正式v3累计1 unique。报告archive字段初写v2后仅元数据纠正为真实v3归档21并记录原因/时点，原log/loaded/start/end不改。自有资源收尾0，旧库保留。主控核原剩余14＋关联5准备map，42有限helperunion当前一致、无冲突、AST节点全在，放行六组串行；新计划/摘要2另准备，首失败即停。
-
-语音v3控制[7357](../../tmp/agent-runner-evidence/m6-kf-voice/v3-formal-g4-controls-run-evidence.json)实际exit0、4 passed（105.27s），453源/31辅助首末与当前主控親核一致；初始pause/resume、真实Read到before_model的latepause、known ASR迟到取消、已有Runtime lateunknown取消保原事实全到末。随后Recognition[25431](../../tmp/agent-runner-evidence/m6-kf-voice/v3-formal-g1-recognition-run-evidence.json)实际exit0、2 passed（47.74s），453源/28辅助首末与当前一致，缺media整页拒、Recognition0ASR、旧media-only回放/原ASR到末；v3正式累计7 unique，自有资源收尾0。新增计划与付费摘要存储故障2独验ready已交，静态准备不算通过；真实默认summary retry保留，门槛仅配置参数DI，原40k经济闸不改。开发清理[补充事实](../../tmp/agent-runner-evidence/m6-kf-voice/v3-development-1-cleanup-addendum.json)澄清原“media retained”文案无依据；原finally删除自有root返回，随机路径未预存，不倒造历史路径不存在。
-
-语音v3结果[83392](../../tmp/agent-runner-evidence/m6-kf-voice/v3-formal-g2-results-run-evidence.json)实际exit0、2 passed（34.99s），453源/27辅助首末/当前主控亲核一致；整数明确失败calls0/占位模型与badJSON未知拒重POST都到末，v3正式累计9 unique、自有收尾0。新2独验全3文件主控实读、28/29静态map当前一致，批准原14及关联通过后依序末验；计划使用明示PG前序状态fixture、不假发送/释放claim，摘要用真原provider/usage SQL故障与fatalguard、保持默认retry2，不造storage异常。当前late/预算2进行中，首失败即停。
-
-语音v3 late/预算[77256](../../tmp/agent-runner-evidence/m6-kf-voice/v3-formal-g5-late-budget-run-evidence.json)实际exit1、1 passed/1 failed（74.94s），453源/30辅助首末与当前主控亲核一致，自有收尾0、后组暂停。原completed-parent child回复后准备lateVoice/单次parent模型/no redelegate全到末，v3累计10 unique。budget首终态预期failed/ITERATION_LIMIT，实际completed/settled、iteration=max1、ASR0；主控与独立审查实读原Engine与cutoff，确认未prepared Voice不进入followup，原final回复应completed/error_code None，跟Text已queued followup才iteration_limit不同。批准仅首node两个状态严格oracle修正、唯一复验，保输出/max1/defer新Root/claim阻挡/零媒体ASR/费用/重复接单全门；旧失败的末defer/claim/fee未到不倒填，旧child通过保原helper版本，不重复运行。源码未改。
-
-语音v3预算唯一[复验16216](../../tmp/agent-runner-evidence/m6-kf-voice/v3-formal-g5r-run-evidence.json)实际exit0、1 passed（22.20s），453源/30辅助首末/当前主控亲核一致；仅本node状态oracle按原completed契约修，AST及源码片段核第二child函数/全局imports未改，原child通过复用旧加载版本不重复计数。精确defer新Root/不可变accepted及current refs、原delivery claim阻挡下一执行、0 media/prep/ASR、18 tokens/.01和重复locator全到末，v3累计11 unique；旧失败不改通过，自有收尾0，继续媒体/codec及DDL。
-
-语音v3媒体codec[59231](../../tmp/agent-runner-evidence/m6-kf-voice/v3-formal-g6-media-codec-run-evidence.json)实际exit0、2 passed（4.42s），453源/27辅助首末/当前主控亲核一致；原SDK实际下载上限/租户hash与symlink、原codec坏输入实际退出及exact返回PID时序取消后的kill/wait/temp收尾到末，非有效SILK质量/吞吐证据。随后DDL[75931](../../tmp/agent-runner-evidence/m6-kf-voice/v3-formal-g7-ddl-run-evidence.json)实际exit0、2 passed（7.79s），453源/27辅助同版一致；原fresh/upgrade/force/replay/catalog、legacyNULL/media-only保留、真实错误TZ整DO rollback且水位不进都到末。原15 unique已通过，自有收尾0；必要关联5及新增恢复计划/摘要2仍待独验，不先验收完整Voice或默认切换。
-
-语音v3有限关联[46322](../../tmp/agent-runner-evidence/m6-kf-voice/v3-association-run-evidence.json)实际exit0、5 passed（44.24s），453源/31辅助首末/当前主控亲核一致，自有收尾0。Text2原ordered/cancel与真实ITERATION_LIMIT预算defer门保持，旧Text43未改；原Speech3无observer默认路径回归使用外部response mocks，不冒native物理付费链证据。当前正式15 unique＋关联5，新增计划/摘要2尚待，未复跑无关基线或构建。
-
-语音v3新增首次计划恢复[99291](../../tmp/agent-runner-evidence/m6-kf-voice/v3-formal-g8-first-plan-run-evidence.json)实际exit0、1 passed（29.52s），453源/28辅助首末/当前主控亲核一致，自有收尾0。原ExecutionPlan前序PG状态为明示历史fixture，不冒已执行/投递；本次真实ASR unknown、typed结果观察已知DI后原Attempt2/Factory/BusinessPlan/Read推进首task、第二pending、旧root不变，ASR1/LLM2/36 tokens/.11到末。未称可自然重建未知HTTP内容，未声称不存在的当前delivery gate末assert。当前正式16 unique＋关联5；真实摘要付费receipt SQL故障最后1独验进行中。
-
-语音v3摘要保护[11889](../../tmp/agent-runner-evidence/m6-kf-voice/v3-formal-g9-compression-run-evidence.json)实际exit0、1 passed（23.07s），453源/29辅助首末/当前一致。原长历史、摘要HTTP与真实receipt UPDATE故障触发fatal保护；摘要已发生付费后空execution恢复被拒，原ASR/摘要不重复调用，原输入、收据、claim保持待核对。这是阻止未知副作用重演的证据，不是摘要自动恢复证明。默认摘要retry2保持，自有资源收尾0。
-
-**AI语音首片主控验收通过（2026-10-03）**：[最终清单](../../tmp/agent-runner-evidence/m6-kf-voice/final-inventory.md)及[证据](../../tmp/agent-runner-evidence/m6-kf-voice/final-evidence.json)记录正式17 unique＋关联5；开发3窗口独列，22实际业务窗口和6历史失败保留。主控实际重算当前453源、47辅助union及21生产归档均无漂移，独立源码CR P0/P1/P2=0、最终import/compile有效。历史4处辅助文件混合版本按实际各窗口保留，不冒全部47文件均以最后版本运行；预算oracle唯一复验与旧child通过按原加载版本计数。最终自有DB/连接/列明进程0，原fixture媒体目录清理返回；未知旧库排除并保留。批准释放本片生产冻结，仍不代表整渠道迁移、人工语音、平台发送、codec质量/吞吐或默认切换已完成。
-
-**下一片实施授权：人工语境文本与分类（Context13，原十叶加必要服务只读接口）**。按[十叶边界](../../tmp/agent-runner-evidence/m6-kf-foundation/context-ten-leaf-readonly.md)仅新增微信客服lifecycle/context仓储及context worker，修改该域ingress_auth、admission仓储/worker、channel_session仓储，双DDL与数据库说明原10叶；增加服务manager、api、source_client三叶的可信来源只读GET，准确13叶。由唯一现有admission worker装配有界consumer，Runner/Engine不加入渠道判断。已有accepted Text/Voice链接优先，原provenance/hash不变，仍核完整可信来源及当前执行许可；未接受消息可靠分类和接受共用inbox锁winner。暂时SDK网络/格式失败保持未观测可重试，可靠人工/结束或已证冲突不被后来state1改属。历史写入、精确路由撤回及稳定recap意图同事务；recap仅pending_adapter，不能调用旧void执行器或宣称业务效果完成。原NULL用户、空/main profile及legacy SID保持，不猜路由、不创建替代会话。锁顺序cfg→route/session→inbox，SDK在锁外，末重核DB时钟/配置版本；新接单仍默认关。开发自测后冻结，独立测试与源码CR分别验收；媒体/人工ASR、发送、注册/归因、欢迎/结束通知、活跃AI撤回控制与真实两秒合并仍属后片。
-
-Context实施预审发现后到客服历史可能先被较早accepted Runner首次装配读入。为避免以聊天历史代理任务状态、清空历史后永久等待，撤销临时history存在判定方案，批准上述3叶必要契约扩展：`GET /v1/source-inputs` 只读严格locator；同短RR只读事务核可信receipt/provenance、current_runner绑定与原read权限，返回有限公开状态及原服务DB观测时点，无正文/checkpoint/SDK/余额/分类或链接写入。渠道锁外有界查询，短TX末重核原cfg/fullroute/inbox/link及较早已接受候选集合；非terminal、绑定/候选改变、失败或原观测超过10s均保pending_history，不写历史或recap意图。不能收到HTTP响应后重造fresh时间，不能读Runner/claim私表，也不冒送达或完整交错保证。查询与扫描须有界，不每条重扫全部终生消息。按原控制/恢复拒绝终态、defer仅终态前改current绑定的实际契约，可在本域既有表存独立source_terminal观察；首次观测须fresh，后来仅完整绑定不变才复用，不能冒历史消费、送达或结算完成。最终门还须保守检查更早已入站但尚未accepted、仍可被AI接单的消息，避免另一个worker锁外准备时后到历史抢先进来；可靠固定non-AI与原不可接单事实不按潜在AI乱挡。开发期草稿未冻结，旧历史代理门不得进入最终代码；具体公开读取/时序/clear与queuedcancel兼容均纳本片独验，完整跨AI/context合并时序仍属后片。
-
-Context开发态阶段收口：首次可靠SDK分类先经原inbox winner短事务独立保存，再锁外查询更早任务、逐单短事务保存fresh公开终态观察，最后同事务写历史/消费/recap意图。此前草稿把分类与历史绑在同一事务，后续SQL失败会丢已确认人工归属，多个HTTP也会耗尽首次10s时效；开发期修正后需验证可靠3/4不因投影失败转AI、临时SDK无观测仍可重试、既有accepted无新class不被阻。历史失败不回滚已提交分类或其他已提交终态观察，后续历史投影不要求过去SDK时点持续新鲜；当前完整绑定、配置与本次公开观察的提交时效仍分别核验。本段是实施约束，尚无Context运行/CR通过证据。
-
-**Context13 v1 冻结与开发自测（2026-10-03）**：[冻结交接](../../tmp/agent-runner-evidence/m6-kf-context/v1-handoff.md)固定13自有文件、456有限源码见证，10源编译/10模块导入与diff检查实际退出0；75为实际加载源码，不称456均导入。首次开发窗3660为fixture注册缺失，实际exit1、1 setup error（0.17s），业务未执行；只补测试模块导入，生产代码与业务断言不变，原失败证据保留。复验[43355](../../tmp/agent-runner-evidence/m6-kf-context/v1-development-2-run-evidence.json)实际exit0、1 passed（8.17s）。主控亲核456源码/15辅助首末及当前一致、13归档字节及日志hash一致。原加密回调、SDK HTTP、隔离PG、NULL用户/空profile旧SID、可靠人工及员工分类、两条历史与四条pending_adapter意图、原两种历史读者角色转换和重复幂等均到断言末；未验证来源GET、付费执行或真实recap。开发unique1独列，尚非独立验收。[独立末审计](../../tmp/agent-runner-evidence/m6-kf-context/v1-development-2-readonly-audit.json)06:46:37.868 UTC晚于运行末06:45:12.968，排除未知旧库后自有测试库/连接及列明进程为0；随机历史库名未预留，不追造归属。正式独立CR及分组风险测试已启动准备，源码保持冻结，M6a仍进行中。
-
-Context v1 独立首组[33124](../../tmp/agent-runner-evidence/m6-kf-context/v1-formal-b1-run-evidence.json)实际exit0、4 passed（33.87s）；主控亲核456源码/19辅助首末及当前、日志hash一致。正式正常1、临时SDK重试1、可靠分类/真实事件冲突1、实际SQL故障原子性1均到断言末。末只读审计自有库/连接及列明进程0，未知旧库排除。独立CR已指出待收口：GET额外/重复参数未拒绝、撤回对已存在历史缺完整scope/未命中区分、员工普通历史不应依赖SDK状态成功；冻结期间未修改源码，其余正式风险组暂不运行，待统一修复复核。本首组不覆盖来源GET、旧accepted执行、撤回、锁等待或完整Context验收。
-
-Context v1 [完整独立CR](../../tmp/agent-runner-evidence/m6-kf-context/v1-cr.md)P0/P1=0、P2=4；已核四项具体源证据并授权唯一实施者在原13内7叶统一v2修复：严格Query、撤回完整历史命中证明、员工身份与可选SDK状态分离、双DDL按列名核主/唯一键。现有recap已要求真实状态3/4，不作为无条件意图缺陷；无状态员工不得伪造观察。旧schema反例需核所有键而非只换PK，其真实SQL拒绝由独验补证。生产修改期暂停其余正式组，v1原字节与首组通过保留；最终受影响正常/风险和定向CR待v2冻结后验收。下一人工语音/外围效果[只读候选](../../tmp/agent-runner-evidence/m6-kf-context/next-context-effects-handoff.md)仅作后片准备，未批准其中新owned recap子系统或扩大当前范围。
-
-Context v2 四P2候选于07:13:48 UTC真实冻结，7叶修改、4模块编译/导入实际exit0，尚无业务测试；[交接/检查](../../tmp/agent-runner-evidence/m6-kf-context/v2-handoff.md)原样保留。主控预读发现员工可选状态后到的并发窗：另一consumer先写history后，首次SDK3补观察会因prior persisted早返而漏意图。已解除v2冻结，仅授权ContextRepository一叶形成v3；已有历史须完整投影证明后按真实3/4补稳定意图，合法清空历史不重插/不裸造意图，错行明确拒绝。独验补实际两个ContextWorkers＋原SDK响应时序节点；v2不机械追加业务运行，也不将其事后改称未冻结草稿。其余风险运行继续等v3固定。
-
-Context [v3最终交接](../../tmp/agent-runner-evidence/m6-kf-context/v3-handoff.md)实际07:19:24 UTC冻结，仅ContextRepo相对v2变化；末单源编译/导入exit0，主控亲核456当前/13归档0。[v3定向CR](../../tmp/agent-runner-evidence/m6-kf-context/v3-cr.md)原四P2关闭，余一P2：真实员工3/4状态提交后、业务意图投影前退出，已persisted历史不再候选。已授权v4仅Lifecycle有界扫描补选真实known3/4、既有历史仍存在、指定两意图缺失的员工记录；最终复用v3完整历史证明及幂等意图，clear不重插，不回滚可靠事实或重新SDK。独验扩现双consumer节点覆盖观察提交后退出及新Worker恢复，正常辅助15保持原字节；v2/v3均无业务窗，不虚构通过。
-
-Context [v4交接](../../tmp/agent-runner-evidence/m6-kf-context/v4-handoff.md)实际07:32:17 UTC冻结，仅Lifecycle新增已known员工缺意图的有界修复候选，其他455不变；末单源编译/import exit0，主控亲核456当前/13归档0。[最终定向CR](../../tmp/agent-runner-evidence/m6-kf-context/v4-cr.md)P0/P1/P2=0。开发[18983](../../tmp/agent-runner-evidence/m6-kf-context/v4-development-1-run-evidence.json)actualexit0、1 passed（8.34s），456/15首末/当前及日志hash主控亲核一致；末自有库/连接及列明进程0，未知旧库保留。独立[B2 46651](../../tmp/agent-runner-evidence/m6-kf-context/v4-formal-b2-run-evidence.json)actualexit1、5 passed/1 failed（65.96s），456/24首末不变；员工2（含真正已提交观察后的退出DI/新消费者恢复）、全scope撤回、真实时钟/配置锁、坏消息后继续均到末。winner node在测试查未注册模型marker处KeyError，正向接受winner已到、反向未到，不计通过；已授权仅该测试注册标识修正及单项复验，业务断言不放宽、5有效结果保留。旧accepted/真实排序与双DDL组仍待正式运行，不称本片已验收。
-
-Context 后续正式窗口已完成：[winner 单项26976](../../tmp/agent-runner-evidence/m6-kf-context/v4-formal-b2r-run-evidence.json) actualexit0、1 passed（10.20s），456/19首末不变；仅测试注册原模型标识，严格零模型调用及反向 human winner 断言完整通过，原失败字节保留。首次辅助资源审计因输出前缀白名单未纳 b2r 失败，前缀修正后的实际审计0，区别于业务失败。[B3 76961](../../tmp/agent-runner-evidence/m6-kf-context/v4-formal-b3-run-evidence.json) actualexit0、3 passed（74.95s），456/29首末不变：真实新接受后仅移除新分类的旧数据形状，原文本读取/取消/计费及已知语音唯一识别/原费用 owner 均到末；未接受→queued→原模型无未来员工→公开终态→清历史后复用终态证明到末。清历史使用隔离PG fixture，未冒公共clear或实际平台发送；新增资源记录仅核真实分配的3个DB/进程root，原容器fixture teardown后均0。[DDL 34146](../../tmp/agent-runner-evidence/m6-kf-context/v4-formal-ddl-run-evidence.json) actualexit0、2 passed（15.66s），456/15首末不变；原升级器fresh/force/replay、NULL用户旧SID与入站事实保留、同物理attnums但错误语义主键/唯一键整体拒绝和水印不推进到末，原CHECK完整恢复；未执行旧v1反例。以上日志hash及456当前/13归档由主控亲核一致，自有资源审计0，未知旧库0连接保留。当前版独立正常回归另行补验，不把开发正常结果混为正式结果；最终清单未封前不标整个Context片完成。
-
-**人工语境文本片验收通过（2026-10-03）**：[末正常80032](../../tmp/agent-runner-evidence/m6-kf-context/v4-formal-normal-run-evidence.json) actualexit0、1 passed（8.27s），456/15首末不变；当前v4原客户/员工历史、NULL用户旧SID、两个原历史读者员工映射assistant、四个稳定pending_adapter意图及重复处理原ID不变到末。正式13 unique（v1未受影响分类/SQL三项复用、v4其余十项，正常版本复验不加数）＋双DDL关联2；开发正常独立角色、setup失败及winner测试失败窗口均保留。v4单叶修复及此前审查继承后P0/P1/P2=0，末实际编译/import0。[最终hash记录](../../tmp/agent-runner-evidence/m6-kf-context/final-meta.json)456有限源码、13原字节归档、37实际测试辅助路径union由主控现场亲核一致；9实际测试窗＝开发3＋正式6，不声称一次跑全部union。末资源审计新库/连接/列明进程0，旧未知库0连接排除。解除该片源码冻结只允许后续明确授权变化；人工语音、媒体、真实recap、batch及投递继续后片，pending_adapter不等于真实效果已完成，M6a仍进行中。
-
-**下一片实施授权：人工/员工语音（Voice10）**。按[原功能校准与具体口](../../tmp/agent-runner-evidence/m6-kf-context/next-voice-contract-addendum.md)新增context_voice仓储及编排两叶，修改原context仓储/worker、lifecycle、voice_media四叶，双DDL与表说明三叶，再增加既有存储调用方登记file_usage一叶；精确十叶不新造Runner/Attempt/计费平台。原人工识别没有AI执行/余额门，保余额0或负值可识别与原独立费用记录；新的可靠归属、物理started/known/unknown及同事务stable record/debit排重复。unknown显示原语音占位但pending_asr不消费完成、不发recap、不再POST；可信迟到known沿原operation核对并更新同一history ID，尊重clear/recall。全部历史投影复用公共SourceGET及末事务排序，已发生识别/费用不被新credit或historygate抹去。nativeflagoff只停新分类，原fixed分类的已接受本域工作继续准备与未started首次识别；worker stopping不新POST、未知不重发、真实资源排水。证据新目录m6-kf-context-voice，开发正常、独立测试和独立CR分别进行；当前是授权实施，尚无该片实际运行通过证据。人工媒体、真实recap和整渠道默认迁移仍后续门。
-
-人工Voice [v1交接](../../tmp/agent-runner-evidence/m6-kf-context-voice/v1-handoff.md)准确10叶、459有限source见证，末6源编译/import actual0、实际loaded80都在闭包、defaultoff/pairedDO/diff0；原15:00 CHECK只接受精确旧/新两形以兼容完整force/replay，真实迁移待独验。开发[1027](../../tmp/agent-runner-evidence/m6-kf-context-voice/v1-development-1-run-evidence.json) actualexit0、1 passed（13.12s），459/17首末0，原Crypto/SDK/SpeechPOST客户员工两次、原读者/费用各一次/余额0扣负及重试不二次调用到末，主控亲核loghash。exact分配的库、进程/存储根和两音频在原容器审计0；首辅助审计pool未初始化失败另记，纠正后只读实际0，不改业务通过事实。[完整v1 CR](../../tmp/agent-runner-evidence/m6-kf-context-voice/v1-cr.md)P0/P1=0、P2=2：原CLI stop未及时传内层owner；双worker占位后零POST unwritten回media_ready可能漏复选。已在正常窗口结束后统一授权VoiceRepo/Lifecycle及必要第11叶AdmissionWorker修复，保v1字节，不新扩平台；修后只用真实CLI停止+原selector恢复的定向开发/独立验证，正常有效结果复用。人工Voice仍未验收通过。
-
-人工Voice [v2交接](../../tmp/agent-runner-evidence/m6-kf-context-voice/v2-handoff.md)已统一三叶修复，owned11（新增必要原AdmissionWorker），有限source仍459、其余456同v1；主控亲核当前/归档0，末三源实际compile/import0。[定向CR](../../tmp/agent-runner-evidence/m6-kf-context-voice/v2-cr.md)P0/P1/P2=0：CLI与close统一stop同步传播，Context及候选SQL后不新接受；零POST撤回保原epoch/history并复选media_ready+pending_asr，真正started/unknown不重派，clear/recall保留。真实CLI停止及双consumer恢复开发验证已通过（88826，1 passed），正式批次中该节点亦通过；实际停止后零POST，新进程沿原selector恢复，同一历史/费用仅一次。正常v1不机械重跑，剩余风险合并相关批进行。
-
-人工Voice首轮独立批量验收：[B1r实际结果](../../tmp/agent-runner-evidence/m6-kf-context-voice/v2-formal-b1r-run-evidence.json)5 passed、1 failed（81.22s）。已通过正常历史/费用、可信识别与明确失败、事务回滚、真实CLI恢复、双consumer并发。失败是G4测试提前接收下一消息，worker正确选中它，原unknown不可重派；只修测试接收时序，撤回/清空后迟到真实结果仍待复验。原失败日志及23辅助快照保留，459源码首末不变、CR无待修项；主控核对原日志hash与[六份自有资源末审计](../../tmp/agent-runner-evidence/m6-kf-context-voice/v2-formal-b1r-cleanup.json)，库/连接/根目录/音频及列明子进程均已闭合。余下顺序、媒体与双DDL验收待运行，人工Voice尚未整体验收，不将5项通过计作M6a完成。
-
-**人工Voice11主控验收通过（2026-10-03）**：[最终独立报告](../../tmp/agent-runner-evidence/m6-kf-context-voice/final-inventory.md)正式业务8 unique＋关联4（双DDL2、旧Context及AIvoice各1）全部通过，开发2独列。最后G7r实际87578退出0（5.42s）；先前G4接收顺序/异步fixture及G7目录断言三次失败原字节、日志保留，仅测试修正，不改业务。停止途中已完成落盘的合法音频保留可复用，codec两次结束后原目录baseline不变、真实子进程已退出，fixture末全清；不冒生产零artifact。主控亲核当前459有限源、11生产归档、40当前辅助union及末实际日志hash一致，union非一次全跑；编译/import及v2独立CR无待修项结果复用。各实际窗口自有库/连接/目录/音频/列明子进程审计闭合，未知资源不动。释放本片冻结，进入已审查的KF完整收发整合；人工Voice通过不代表整渠道、真实平台发送/后台效果、容量或默认迁移完成。
-
-**M6a 收口调整（2026-10-03）**：此前旧功能拆片过细、验证记录过重，整体微信客服仍未交付。人工Voice完成后，剩余功能集中到一个微信客服收发整合阶段，按完整用户流程验收，不再为每项旧业务另建执行子系统。复用原欢迎/场景注册/附件/命令/后台adapter；原2秒合并及客户/员工穿插、耐久Runner接单、真实平台结果发送与预算、转人工与服务中断恢复、已知送达或明确终止后会话释放是主闭环。微信客服只有聊天消息，不提供 Web 的暂停按钮；不将用户点击暂停列为本渠道功能或验收门槛。新增阻断项须说明真实消息或后台执行的可达路径，不以构造渠道不存在的操作扩大范围。正式检查只覆盖实际影响与真实回归，复用有效旧结果；不减少独立测试/CR或放宽断言。
-
-Recap采用原常驻consumer/adapter薄交接，持久保存原intent/受信归属、实际领取/派发/返回或未知；void正常返回只表示dispatch_returned，不宣称线索已更新或外推已成功，派发未知不自动整轮重做。保原业务窗口、收费、冷却与配置，不重建Lead模型/HTTP结果owner平台。[此前Lead效果迁移候选](../../tmp/agent-runner-evidence/m6-kf-context/next-lead-refresh-handoff.md)只读保留供参考，本期不实施该扩展。人工Context当前pending_adapter仍待整合交接，不能提前称旧后台功能已接通。四入口安装能力最终集中于中性composition，Engine/Worker不散布平台分支。
-
-**KF整合契约与转人工收缩（2026-10-03）**：[完整收发交接](../../tmp/agent-runner-evidence/m6-kf-completion/integration-handoff.md)及[独立方案审查](../../tmp/agent-runner-evidence/m6-kf-completion/integration-review.md)中的普通收发责任保持；此前新增的转人工专用自动恢复方案已由用户明确要求收缩并授权实施，本段取代相关旧完成许可、余额豁免与多层恢复约定。转人工是渠道接待状态切换：微信明确成功后保原会话信息和标记，本轮停止AI处理，原费用与记录收尾；渠道只在可信智能助手状态下提交消息，人工接待期间后续客户消息不得新接单、调用模型或回复机器人消息。明确转接失败保原失败行为，不授予停止指令或标记转接成功。
-
-删除转人工专用 completion 执行许可、余额豁免与自动恢复分支，删除未证明真实生产入口的多层子任务递归重装；保留真实一层已完成子任务的原结果配对及中性 STOP_EXECUTION，核心不加入微信判断。域内精确同Runner/执行/调用的真实ACK只用于发送抑制、原业务收尾及claim证明，不作为新执行许可。微信成功而工具恢复点保存失败时，沿通用 interrupted/verification 保留原事实待核对，不重复转接，不自动恢复AI或宣称本轮已完成。Voice消息回复准备、晚到结果、Web/Browser/local与原通用控制的真实共用职责按实际依赖保留，禁止整文件回滚。
-
-验收优先两条真实渠道流程：成功转人工后同路由再次收到真实客户消息，确认0新agent接单/模型调用/机器人回复；微信明确拒绝转接，确认不标人工并按原规则处理。不将手工调用恢复API、强制余额归零、精确Attempt或多层人工CP的组合测试反推为产品需求。其他合并/历史/发送未知/费用/租户边界保既有责任及受影响验证，复用有效结果，不再扩大执行子系统。真实部署仍另需当场授权。
-
-**整合实施与验证分工（2026-10-03）**：批接单、完整结果查询、发送事实与原业务接线已落地；实际Admission普通双轮开发窗口63483退出0（1 passed，87.97s），470源码/25辅助首末一致，自有库/连接/目录/列明进程清理已核。该结果不代替最终独立验收。此前复杂转人工组合用例与多层Kernel准备仅AST检查，未实际运行、没有业务失败记录，不以其作为扩展实现依据。用户已授权执行转人工收缩；[精简差异](../../tmp/agent-runner-evidence/m6-kf-completion/transfer-simplification/delta.patch)已落地，11源编译/import通过，[独立CR](../../tmp/agent-runner-evidence/m6-kf-completion/transfer-simplification/cr.md)无待修项，470有限源中仅11变化、其余459及SDK未改。[最终独立验收](../../tmp/agent-runner-evidence/m6-kf-completion/transfer-simplification/formal-run-evidence.json)89784退出0（94.75s）：真实渠道成功/拒绝2项及必要核心关联3项全部通过；470源码/26辅助首末、当前及归档一致，日志hash核对一致，自有库/连接/目录/列明进程实际审计为零。开发28535两项通过（97.53s）另列。外部微信/模型为localhost替身，不冒真实客户或提供者实测。实施者先定向自测，测试者独立运行固定版本，主控只协调、检查证据与更新文档。SDK v4三叶未改时复用原作者与审查者分离的CR。暂停按钮不属于微信客服入口，不作本期验收项。两次开发失败原记录保留：6587为prices fixture缺注册、未进入业务；24297核心流程到末但无关客户只读GET计数错误，整体仍为失败。测试修正包括fixture注册、真实转接响应后即切人工的外部peer时点及移除无业务依据的只读次数断言，核心0接单/0模型/0回复、失败行为与费用断言未删，最终测试已由非作者独立审查。主控承认前提核对不足及频繁调整测试的验收纪律问题；后续需求断言须先核业务依据与独立审查，失败先定位报告，测试修改先提供依据及差异，禁止边跑边调整预期以求通过。本次只验收转人工收缩，M6a整体仍未完成。
-
-**普通完整收发开发运行通过（2026-10-03）**：实际窗口54204，严格正常用例1项通过（67.81s）；原加密回调/拉取、注册及归因、欢迎一次、连续两轮2秒文本批，各一个原Runtime/模型及费用、SDK正文ACK、服务核发送事实后释放claim并接受下一轮、原LeadRefresh适配器两次返回及intent的dispatch_returned均实际到达。外部平台/模型为localhost替身，不冒真实客户发送或后台效果完成。主控亲核470源码及24辅助的首末/当前hash、日志hash一致。前一10530窗口欢迎断言失败来自测试将原账号欢迎配置误放顶层，仅该fixture修正，生产未迁就测试；原日志/版本及末资源审计保留。本次为逐段调用真实组件的开发自测，尚未覆盖实际Admission消费器的候选/持续编排；最终正常及风险流程须走原消费器，不以组件直调代替。第二窗自有DB/连接/进程目录及两个列明PID已独立末审闭合，释放生产冻结补原兼容口。本次不代替独立测试与最终CR，M6a仍进行中。
-
-每个渠道相同的工作清单：
-
-1. 将经过验证、去重与现有合并策略处理的输入提交 runner，记录平台消息与 runner 的对应关系。
-2. 后台适配器查询或订阅完成结果并负责发送；后台消费本身可从已保存的 owner/游标/投递状态恢复，不能只依赖 HTTP 回调里的临时 task。
-3. 保留输入合并、图片/文件、verbose 配额/限频及发送后锁释放边界；接单后的补充输入在原 Runner 安全点处理，不取消后从头重演已发生的操作。暂停不长期占物理 lease，但会话占有仍受控。
-4. 区分执行完成与发送完成，沿用现有平台去重和失败规则；无法确认送达时不盲重发；只在原条件满足时触发 recap。
-5. 消息和费用不能由旧入口与新 runner 双重写入；新的发送 owner 只负责协议回发与投递事实。
-
-验收：目标渠道真实相关回归、并发合并/重跑、发送失败、媒体和计费通过；已接入与尚未接入渠道不串路径。各自具备单独开关和回退，不能一次切三个渠道。
-
-### M6 有界只读盘点（2026-10-02）
-
-目标入站分支在 `src/saas/api/channel_routes.py`，共享 `ChannelSessionManager` 当前将 Queue/Agent 执行、batch 历史、record.complete、发送、Redis lease 释放及发送成功后 recap 串在一起。迁移应从目标三个分支接 Runner 接单及耐久发送 consumer，复用现有 `make_send_response`/平台 adapter；不能在新终态提交后继续旧 `process_and_persist`、历史或 record 收尾，否则双写/双费。Runner 的 channel 终态只将原 claim 转到 delivery gate，发送 owner 另行按真实结果释放。
-
-已有入站 `MessageDedup` 是 PostgreSQL 布尔去重，微信客服 cursor 是 Redis 30 天拉取游标，共有 `send_response` 仅有稳定 ID/bool；这些均不等于已有耐久 outbox 或发送 exactly-once。最小迁移必须持久保存入站 event→accepted Runner 绑定，以及发送状态/offset；平台 ACK 后不能仅依赖临时 background task。按平台来源/account/event 构造稳定 Runner key，服务短暂失败仍重试原 key，持久接受后才认已处理。必要 inbox/delivery 事实留在渠道 adapter 的现有 PG 消息/会话扩展或小表，不扩成通用通知框架；无法判定送达则等待核对，不盲重发。当前为盘点事实和后续门槛，渠道尚未迁移或验收。
-
-| 当前责任/事实 | M6 迁移门槛 |
-|---------------|-------------|
-| SessionQueue 前置2秒合并，processing 中取消追加重跑，finalizing/responding 后切下一轮 | 明确接单前 cutoff、接单后持久补充意图和发送 cutoff；不能 cancel旧Runner 后新建merged Runner 重演已发生操作。在原Runner安全点纳入新意图并复用事实，发送cutoff后排下一轮；具体最小控制接口在M6开工另审，不改Web默认排队语义 |
-| merged_segments/msgids 与附件历史 metadata，follower 不写 owner 历史 | 保留段级归属/去重，入站来源及消息ID由可信adapter导出，原接单input不覆盖 |
-| 原客户/员工消息30分钟旧消息过滤、AI前隐藏命令、C1→S1→C2→S2穿插历史 | 默认迁移前分别验证：cursor重放不产生过期新回复；原命令仍在应用边界处理；员工角色与跨AI/context顺序沿原业务时序，不由独立轮询完成先后猜测 |
-| 微信客服同批连续消息合并、同批 recall 剔除、跨批 mark_recalled_message/merged_segments、人工客服切分 | 回撤仅作用对应消息段，保留原历史/人工消息边界，不用新会话规避 |
-| 微信客服先ASR，再建record/add_asr_usage；成功语音不再作为voice附件送Agent，历史仍存voice metadata，follower可有独立ASR费 | 每次真实ASR有稳定事实及唯一费用owner，不能合并只计一次或旧record与Runner双扣 |
-| WeComKfReplyBudget=5 贯穿 verbose/final，目前为进程内预算 | 投递账本保存已消耗预算，恢复/重试不重置；transfer_to_human成功的final压制由可信delivery disposition表达，不解析公开rawtoolresult |
-| make_send_response 平台render/send、final_delivery_id、images/files；send_ok后才recap | 原适配器继续呈现媒体；确定 delivered/suppressed 后收尾claim，unknown等待核对；recap保stable round_message_id/原队列、配置及trace，不随Engine完成提前触发 |
-| 钉钉group路由已提取但旧get_or_create_session未传chat_id，飞书同样存在NULL chat会话；自动SaaS注册失败可合法user_id=NULL | 按可信provider/account/user/chat证明兼容绑定旧session，不能伪填route或新建丢历史；保当前平台actor授权，不伪造SaaS用户 |
-
-本次有限入口准备：[飞书只读提案](../../tmp/agent-runner-evidence/m6-feishu/readonly-ingress-handoff.md)与[钉钉只读提案](../../tmp/agent-runner-evidence/m6-dingtalk/readonly-ingress-handoff.md)列出源码落点、身份/旧SID、ACK耐久及有限组合门，未实施或验收。钉钉现已强制timestamp签名但不覆盖body，不能发明平台不支持的body HMAC；已支持群回conversationId，与飞书当前actor回发不同。当前均未发现项目Stream接线，具体官方协议核验仍有限，不将SDK能力冒已接入功能。
-
-可信来源补充预审：旧飞书普通事件只在提供 signature 且已配置 crypto 时校签，事件 token/app 归属未完整校验，challenge 成功不证明后续每条消息。M6 入站写 binding/inbox 前须沿配置的真实安全模式验证原 body、时间与账号归属，未校验 JSON 不能成为平台证明；长连接来源与实际 HTTP 回调分别核信任。旧自动注册按平台 ID 尾4匹配用户名，不能用其结果作为完整平台身份到 SaaS 用户的授权证明，NULL 用户仍合法。
-
-完整路由采用渠道 adapter 内最小持久绑定，必要新增 `channel_session_routes`：tenant/source/config/provider-account/full actor/chat-kind/chat/profile 对原 session，唯一完整 route；保存非敏感事件/配置版本证明，不存密钥或原鉴权头。已有多群或多配置共用的 legacy session 可有多个显式 legacy_shared route 保原历史与 claim，不能回填当前 callback 成单群自证；新会话才按完整 route 唯一。Runner 由仓储读取当前配置归属/可用与绑定，接单键纳配置/账号完整作用域，Engine 不处理渠道。具体 DDL 和已接受旧行版本兼容在 M6 开工审查，不在 M4 先扩表。
-
-微信客服后续有限只读核对：现callback只有encrypt且crypto存在才校签/解密，明文分支原XML直通；M6新inbox/route须采用该配置真实认证模式，URL tenant及payload不能自证可信。原KF会话按full external_userid/tenant/profile/open_kfid保持绑定，open_kfid为客服账号，route chat_kind明确kf_direct，另纳config/corp账号；旧不同配置重合session显式legacy_shared，不换会话或伪造SaaSuser。当前cursor仅open_kfid/Redis30天，最小PG保存原同步页及account cursor水位后才推进，Redis只投影；先布尔dedup再临时后台执行不等于耐久接受。
-
-发送侧实源补充：adapter.current_open_kfid为共享可变字段，delivery必须捕获可信完整route；api_client.send_msg body未透传上层stable message_id，不能靠内部ID宣称平台幂等，响应缺失不能默认errcode0当ACK。每正文/资产ordinal保存原intent/started/显式ACK或reject/unknown及平台ref，未知不自动重发；原进程内预算改持久尝试/ACK/未知消耗。ASR每原voice/follower有唯一事实/收费owner；转人工抑制记suppressed_transfer，保原人工期消息落库与语音费；仅确认投递或明确抑制后释放delivery claim并按原roundid一次recap。渠道所有规则仍归adapter，Engine不处理。
-
-官方接口当前核验未完成：审查者只读尝试微信客服官方发送/状态/读取页面均读取失败，未用第三方镜像替代。上述代码事实已核，不将源码中的窗口/数量/保留期注释冒当前官方条款；M6实际实施前用可访问官方入口核定接口幂等、错误/ACK语义、回复限额及回调认证。当前仅后续准备，无渠道源码改动、平台发送或部署。
-
-主控本次补查官方developer.work.weixin.qq.com的94677/94670页面，web读取仍失败；CUA打开94677被浏览器site-safety明确拒绝，未经过auto-review。已停止该浏览器动作，不用其他浏览器、代理或原始下载绕过。官方条款保留待核验，当前M5不依赖该页面。
-
-渠道Browser边界已只读核实：原工具装配不按渠道禁Browser，自主执行取决于实际profile允许及真实tenant/SaaSuser身份；旧automation_tool同样拒绝NULL执行身份，不将此称为Runner新增回归。旧HumanControl固定server_web，渠道callback未发送required卡片或可信URL，旧续接仅写Web历史/SSE，未找到微信客服/飞书/钉钉人工Browser完整闭环。保留原自主能力及现有授权边界，不为未有闭环新建OAuth/门户；共享Browser有效结果按受影响范围复用。普通主任务追问沿原模型回复/下一轮聊天语义，只有原真实子澄清或已有工具等待才关联等待事实；普通平台文本不能冒可信Browser completion。此项不是微信新增人工交互验收门。
+分别接入通用 Runner API/worker，沿用各自原消息解析、媒体、平台去重与发送业务。开发前核定各渠道的历史/费用责任及原控制行为，逐个验收，不以 KF 接入替代其他渠道验证，也不预设专用 inbox、投递账本或消费者。
 
 ## 10. M7：综合验收与回退
 
@@ -1125,7 +871,7 @@ Recap采用原常驻consumer/adapter薄交接，持久保存原intent/受信归�
 **改动**（7 文件，生产代码）：
 - 新增 `src/services/agent_runner/runtime/resource_cache.py`：进程级缓存——SkillRegistry 按 allowed 集合缓存一次（建表 DDL 随之只跑一次）；内置 SubagentRegistry 按目录缓存；DB overlay 注册表用 `SELECT COUNT(*), MAX(updated_at) FROM subagent_definitions WHERE status='active'` 一条廉价签名查询决定是否刷新（替代全量 load_from_db，保证 API/worker 两进程指纹不与 DB 分叉）。
 - `runtime/profile.py`、`profiles.py` 接入缓存；excel/pdf/word/ppt 路由与 knowledge service 懒建网关改用共享 `llm_gateway` 单例。
-- `src/channels/__init__.py` 改 PEP 562 惰性导入（manager/session/callback 按需加载）：修复 M6a 遗留的 bootstrap 边界违规——`application_sources` 导入 wecom_kf 子包时经包 `__init__` 拉起整个遗留渠道栈，`test_actual_bootstrap_and_nonmain_profile_import_start_no_legacy_execution_services` 因此从失败转绿。
+- `src/channels/__init__.py` 保持 PEP 562 惰性导入，独立 API/worker 导入通用模块时不启动渠道回调或旧执行服务；KF 工具所需适配器在执行范围内装配。
 
 **隔离边界**：只缓存配置形态资源（定义/连接）；MemoryManager、PlanManager、执行身份等单次 runner 状态不进缓存。RuntimeResources 的子代理注册表保持仅内置定义（不含 DB overlay）的既有行为——与旧共享 Agent 可委派 DB 定义子代理存在功能差异，登记为 M7 待裁决项（本次不悄悄改变委派面）。
 
@@ -1133,7 +879,7 @@ Recap采用原常驻consumer/adapter薄交接，持久保存原intent/受信归�
 
 **验证**：test_api+test_worker+test_agent_loop+test_session_queue 66 通过；test_worker_resources/test_worker_skills/test_resources/test_agent_engine_acceptance/test_tenant_skill_cache 54 通过。开发中自查修复一处自有缺陷（签名查询按 RealDictCursor 列名取值）。独立测试与独立 CR 另行记录。
 
-**遗留**：① `tests/unit/channels/test_wecom_kf_adapter.py` 31 个既有失败（M6a 适配器 native owner 语义 vs 旧单测预期，对照实验证明与本次改动无关），待按测试完整性协议分类处理；② 每执行残留一次 0-skill 租户技能合并扫描与 ~14 个内存 Redis 降级客户端（亚秒级，暂不动）；③ 大会话压缩阈值策略（0.7×256k=179k 过高）待产品决策，见接手收尾记录前的性能分析。
+**遗留**：每执行的租户技能合并扫描与内存 Redis 降级客户端开销，以及大会话压缩阈值策略，按通用性能与容量验证继续核定。
 
 **独立验证（2026-10-04）**：独立测试最终版全量 37/37 通过，缓存正确性三项（同实例/单次加载/签名刷新恰好一次）全过，无 mock 语义变化；批跑偶发失败均属共享测试实例时序抖动（单跑/重跑即过）。独立 CR 报 P0×0、P1×2、P2×4：P1（注册表原地刷新读写竞争、DB 签名未覆盖 prompt 表致指纹可能持久分叉）已修复——改为 copy-on-write（锁外新建实例原子换入）+ 签名扩展 prompt_versions/prompt_labels（修正：prompt_registries 不存在、prompt_versions 无 updated_at 改用 count+max(version)）；P2 死导入已清理、其余登记。修复后 test_api+test_worker 47 项全绿。
 
@@ -1165,32 +911,19 @@ Recap采用原常驻consumer/adapter薄交接，持久保存原intent/受信归�
 
 **验证**：新增单测 `tests/unit/test_runner_adapter_contract.py`（常量不变式+非法值矩阵+coordinator 未知拒绝/缺字段放行/当前版本放行/活跃子拒绝/已完成子树不校验，20 项）；`test_worker_recovery.py` 增端到端用例——delegate+child clarify 挂起后 jsonb_set 篡改 root/child 版本为 99→resume 被 rejected（RECOVERY_ADAPTER_VERSION_UNSUPPORTED）且零模型 IO、attempt/revision/checkpoint 原状；剥字段遗留行→续跑成功且 root/child checkpoint 补 stamp（3 项）。定向回归 `dev_test.sh --isolated-db tests/unit/test_runner_adapter_contract.py tests/integration/agent_runner_service/test_worker_recovery.py`：40 通过/1 既有 skip。executor 门的拒绝分支当前无运行时路径可直达（所有 restore 必先过 coordinator），与既有 configuration_fingerprint executor 门同属纵深防御，由单测函数矩阵+集成放行侧覆盖其共享判定逻辑。
 
-### M7 整改⑤：KF 拉取路径 SDK client 有界复用与外调收口（2026-10-05）
+### M7 通用整改与容量测量登记（2026-10-05）
 
-落实本节门槛「微信客服首片采用每页独立SDK client……M7须测量首gettoken、账号核对与sync实际外调/吞吐及恢复成本，收口有界复用和配置失效策略」。
+下列保留通用 Runner 与 Web 整改的验证记录；KF 原渠道接入以恢复计划中的新验证为准。
 
-**测量结论（回环假平台基准，真实 WeComKfApiClient，60 页，脚本未入仓库）**：现状每页固定 3 次外调（gettoken+account/list+sync_msg），60 页共 180 次、60 个 TCP 连接（ingress_worker 每页 `_pull` 内新建 client、页末 finally 关闭，token 缓存仅页内）。按 (account_id, config_version) 键控复用 client+token 后同键页降至 1.03 次外调/页（62 次、1 连接），复用页跳过重复账号核对后页均往返 -66%；RTT=30ms 时吞吐 5.0→12.6 pps（2.5×）。绝对吞吐含回环 ~40ms delayed-ACK 伪影且无 TLS/真实 RTT，不可外推真机承载量；外调数与连接数比值为精确值。token 被外部轮换（200+42001）时现有 api_client 40014/42001 失效重取路径自动恢复：+1 gettoken+1 拒绝重试，额外 143ms（RTT=0）/222ms（RTT=30ms），无需新恢复逻辑。官方约束（91039/90312）：access_token 有效期 7200s、不能频繁 gettoken（频率拦截）、企业可能使其提前失效；基础频率每企业单 cgi/api ≤1万次/分。
-
-**实现**：新增渠道层 `src/channels/wecom_kf/client_pool.py`（KfClientPool）；`ingress_worker._pull` 改为 acquire/release——条目键=(account_id, proof.config_version)，acquire 时硬校验 corp_id+secret 一致才复用（兜住「secret 变了 updated_at 未变」窗口；claim 侧 `_account_matches(require_version=False)` 不拦这种窗口），新条目首用仍做完整 `_verify_account`，成功后随键缓存账号核对结论。失效策略：键不符/凭据不一致、页失败（含 errcode=-1 HTTP 级失败——api_client 该分支不失效 token，由池整体弃条目补上）、容量上限（`client_pool_capacity` 默认 16，超出先逐空闲 LRU、全忙时仅从池表剥离由其页持有者释放时关闭，池表大小即边界）、空闲 TTL（`client_pool_idle_seconds` 默认 300s，acquire/release 时清扫）、worker.close 全量弃并 close。声明口径为**进程内有界缓存**（非跨进程、非持久，不做跨进程 token 共享以避免 token 明文入 Redis；多副本部署各进程独立持池各自 gettoken，40014/42001 恢复路径已实测覆盖，部署形态说明留 M7 综合验收）。Engine 零触碰，client_factory seam 保持兼容。
-
-**验证**：新增 `tests/integration/agent_runner_service/test_kf_ingress_client_pool.py`（池机制 7 项：同键复用/首用核验一次、页失败弃条目、同键 secret 轮换硬校验拒绝复用、容量与空闲 TTL 有界、全忙溢出剥离不关在用、close 全弃+secret 不入 repr+关闭后 acquire 拒绝、配置默认值与非法值；真实回环 2 项：同 worker 跨页复用后外调序列 [gettoken,account/list,sync,sync,sync,gettoken,account/list,sync] 与失败后冷重启、平台侧删号首错移至 sync_msg 且冷启动重验）。`test_kf_ingress_http_bounds.py:63-64` 断言按池语义改写（原断言即首片「每页新 client」行为，证据为改动前 ingress_worker.py:74/:88-91；本流三个页均失败，失败页弃条目后数值不变、语义更新为「失败页各持有唯一已关闭 client 且池零残留」）；`test_kf_ingress_foundation.py` 单页冷启动序列实测不变未改。定向 `dev_test.sh --isolated-db`（client_pool+foundation+http_bounds+lease_and_routes）13 通过；关联（transactions+config+sdk_legacy_association，transactions 覆盖同 worker 双成功页复用路径）5 通过。
-
-### M7 十项整改与容量测量增量登记（2026-10-05）
-
-十项整改每项一行（改——/验——/遗——），各项均含独立复核记录；完整明细、验收发现与待授权事项见 `out/m7-report.md`。
-
-- **legacy-tests（31 个微信客服旧单测分类）**：改——31 个失败全归类测试过时（fixture 缺陷）：裸 MagicMock 使 `native_write_enabled` 恒真，30 例误入 `adapter.py:131` native owner 守卫、1 例经 `:590-591` 真值分支重抛；仅在 fixture 补 `a.api_client.native_write_enabled = False`（真实语义=api_client.py:105-107 property，未绑定 enable_native_writes 恒 False），断言与生产代码零改动；验——复核 diff 仅 fixture 一个 hunk（test_wecom_kf_adapter.py:34-38），实跑该文件 38 passed；遗——无阻塞（mock 真值陷阱归因成立，测试修复与生产语义一致）。
 - **compression-cap（压缩阈值绝对上限）**：改——settings.py:268 新增 `token_threshold_absolute=60000`（0/负禁用）+config.yaml:169 同步；mid_term.py:516-531 抽 `_effective_token_threshold=min(比例,绝对)`，三消费点统一（:601 阈值、:1769 后台扫描、:1498-1499 经济闸门 near_limit 改 0.8×有效阈值防 60k 封顶被误降级硬截断），新增 8 用例；验——grep 比例公式仅存 helper（:527）无分叉，实跑 test_check_threshold.py 19 passed，create_settings 实测 absolute=60000 生效、旧配置缺键可启动；遗——diff 四文件混有他人未提交 hunk，本轮仅评审阈值相关改动。
 - **submit-failure-ui（前端提交失败明确提示）**：改——POST /api/chat/runners 失败给乐观消息挂内存态 submitFailure（definitive 403/4xx=错误态+重试钮、网络/5xx=自动重试），🚀 progress 行原地替换文案，重试复用原 client_request_id 幂等重放，本轮补 retryRunnerSubmit 互斥 guard（useAgent.ts:352-354）+竞态回归测试；restoreInput 复用 ChatContainer.vue:538-541 既有消费零改动；后端零改动；验——3 测试文件 47/47+vue-tsc 0 错+build 通过（前端构建退出码 0）；遗——state.submitSelecting=false（useAgent.ts:356）恒 false 冗余赋值，防御性无害。
 - **fk-migration（controls FK 与库规则收口）**：改——init-postgres.sql:3070 撤 REFERENCES；db_update.yaml:3410 增量块 2026-10-04 02:00:00（to_regclass 守卫+contype='f' 全删，幂等）；4 处 fixture controls 先删；迁移测试断言按 datetime 定位（改动系接手前已落盘，本轮逐点核验+复跑）；验——应用层无 FK 级联依赖（src/ 无 DELETE FROM agent_runners，lock_owned_runner→ownership.py:26-29 FOR UPDATE，INSERT 均在同事务其后）；三迁移/存储测试实跑 20 passed；遗——无（历史 2026-10-02 块 append-only 保留正确，范围外 FK 未触碰）。
 - **auth-boundary（共享登录校验收口中性认证服务）**：改——verify_token/_verify_qb_token/fresh_web_subject 三原语落 src/services/auth_service.py（AST 对比与原 api/auth.py 逐行一致，缓存/auto_refresh/租期语义不动）；api/auth.py 再导出保可 patch；web_subject 薄适配同状态码；RunnerAuthorizer 懒导入换源；BrowserWebAuth 直连转 USER_UNAUTHORIZED(401)；agent_runner 包认证链路零 src.api 引用（web_sync.py:16 惰性导入为应用边缘刻意保留）（改动系前序会话落盘，本轮核对+自测）；验——AST verbatim identical=True，7 定向测试实跑 137 passed（253.12s），缓存命中后仍权威行二验 fail-closed；遗——原 patch src.api.auth.get_db_connection/get_cached 拦截内部的测试会失效（唯一实例已登记 P2-1，不阻塞）。
 - **adapter-version（adapter 契约版本）**：改/验——机制详见本节「M7 整改④」，独立复核逐点核实（常量/写点唯一 executor.py:294/coordinator 门先于 fingerprint/篡改矩阵），复核实跑 40 passed 1 skip（438.49s，skip 为既有）；遗——无 P0/P1，checkpoint_version 死列不启用。
 - **checkpoint-refs（图片可信引用+持久化字节上限）**：改——durable 装配点只存 runner_image 引用（登记 resources.image_artifacts、sha256 幂等落 owner workspace），ModelAdapter._resolve_image_references 按包含性+登记+尺寸/哈希复查深拷贝装配 wire、不回写 state；AgentRunnerLimitsConfig（request 2M/checkpoint 8M/snapshot 2M+env 覆盖）入口 413 闸（幂等重放不受限）+capped dumps 超限走既有失败终态；验——复核 grep 写点 checkpoint 17/snapshot 12 处全覆盖，定向实跑 44+4+31 passed（开发者全量 9 文件 136 passed）；遗——usage_repository.py:60 计费列不在范围未改；cleanup/resolve symlink 检查不对称由哈希复查兜底。
-- **kf-sdk-reuse（KF SDK client 有界复用）**：改/验——详见本节「M7 整改⑤」，复核逐项成立（硬校验兜 secret 轮换窗口、容量溢出 detach 闭环、secret 不入 repr、_pull finally release 无泄漏），定向实跑 13 passed+关联 4 passed；遗——admission_service 1 例稳定失败系前片既有环境依赖（ContextWorker 真实 BASE_URL 外调必败 40013），本片未触碰未修，待环境侧收口。
 - **legacy-web-compat（旧页面迁移桥测试基建）**：改——dev_test.sh 仅容器模式+显式 -m real_browser 时自动起一次性 sidecar aid-test-browser-redis（参数与 browser_io.py:91-95 断言一致，ping 探测复用外部 helper 不接管清理，退出码保真），普通路径不变，生产代码与断言零改动，不重启任何既有容器；验——两条门禁路径端到端实测（-m real_browser → exit=4 透传+无容器残留；无 -m → 零供给日志），主容器全程 Up 未动；遗——shellcheck 不可用未跑，完整套件以门禁路径验证替代复跑。
-- **deploy-config（分进程部署配置准备）**：改——新增 docker-compose.agent-runner.yml（同镜像 runner-api/runner-worker/kf-ingress/kf-admission，KF 由 wecom-kf profile 门控+enabled 注入防重启风暴，healthcheck+depends_on，四服务无 ports）与 deploy/agent-runner-deploy-checklist.md（迁移前置/旧主容器补 env 必检/共库警告/peer 令牌/启动顺序与回退红线/Browser owner 拓扑），DEPLOYMENT.md 纯增量 16 行；验——compose config 四形态+渲染抽查+yaml 解析+定向 57 passed（244.33s），引用逐条核实无虚引；遗——未部署未启动任何容器（仅客户端解析），pgrep 判活局限已标注，部署待授权。
+- **deploy-config（分进程部署配置准备）**：通用 Runner API/worker 使用同一制品和共享产物路径；主 API 的 KF 原入口调用通用服务，不配置独立 KF 拉取、接单或投递容器。当前部署说明以 deploy 目录现行配置为准；未启动或部署任何服务。
 - **容量测量（落实本节测量门槛）**：本地容器真实 API/worker+假 LLM（延迟≈0）+一次性隔离库（脚本在 /tmp 未入仓）：吞吐 1.30 runner/s（concurrency=4 打满）、每执行占槽≈3.1s 纯机器开销、≈60 次远程 DB 事务/执行（瓶颈在事务数而非并发上限，真实承载≈4/(模型时长+3.1s)）；空闲轮询 3.8 语句/s；checkpoint 逻辑 15.6KB/落盘 7.4KB（上限 8MB 余量充足）；真实 cost12 bcrypt 173ms/验（fixture cost4 相差 258×，verify_service authorization.py:24 无缓存，单进程串行≈5.8 验/s）；结论——模型延迟 0+远程测试库+单轮尺寸，不可外推生产承载，建议 service token 校验加进程内缓存后真机复测。
-- **验收发现 1 条（low/unconfirmed）**：微信客服尾批 1 例失败（test_actual_crypto_business_batch...[pre-sales]）为共享测试库 124.222.3.254:5433 批次中途瞬时 TCP connection refused，单跑同命令 1 passed（89.43s）复验通过，非代码回归、未修改文件；与 M6a 已登记隔离库高负载抖动遗留基建项同源，建议核实实例容量/连接池。
 
 **待用户授权事项**（未授权不执行）：① 提交代码（全部改动仍在 master 工作区未提交）；② agent3 部署（overlay 与清单已备好，含 db_update.yaml 迁移前置与旧主 API 容器补 env 并 recreate）；③ 默认入口切换（默认 Web 切 Runner，须先过本节旧页面 /api/chat/stream 并行执行协调门槛，当前默认未切）；④ 真实渠道外网验收（微信客服真实 corp 凭据/公网回调/token 轮换，本地均为回环假平台基准）。
 
@@ -1200,7 +933,6 @@ Recap采用原常驻consumer/adapter薄交接，持久保存原intent/受信归�
 - 实际源码已确认图片 data URL 被放入 state.messages 后进入 asdict checkpoint，旧“仅内存”注释不符；M7 应将持久消息改为可信产物引用，ModelAdapter 按 owner 读取并装配 provider wire。单请求/控制输入、checkpoint/公开快照总字节及队列拒绝背压须有配置与实测，不能只凭图片单张上限或执行并发认为持久体量已受控。
 - 当前配置 fingerprint 覆盖 profile/settings/prompts，工具及恢复适配器没有独立兼容契约版本。M7 核定派发时持久的有界 adapter 契约版本及兼容策略，未知版本拒恢复；不能用全源码 hash 让文案/格式修改导致所有任务不可继续，也不能默默用改变语义的新适配器执行旧阶段。
 - 内部服务凭据与登录校验的 CPU/数据库成本按实际部署参数测量。M2a 的 101 请求功能 fixture 为提速使用随机凭据的 bcrypt cost 4，不是生产鉴权开销或容量证据；M7 不沿用该低成本参数作承载结论。
-- 微信客服首片采用每页独立SDK client，仅页内复用token/连接，并在同步前核账号。M7须测量首gettoken、账号核对与sync实际外调/吞吐及恢复成本，收口有界复用和配置失效策略；不能将短生命周期页内缓存称为已保原跨页长期缓存，也不以低成本fixture宣称平台承载量。
 - 最终依赖复核须收口共享登录校验的层次：当前RunnerAuthorizer默认懒加载api.auth.verify_token，BrowserWebAuth复用api.web_subject，又加载登录路由模块；现`src/services/auth_service.py`自身亦顶层反向导入api.auth的管理员校验函数，不能简单迁入该文件就称服务边界中性。现api包已惰性加载且独立进程启动成立，不称启动故障；共享token/current-subject校验应移至现有认证服务边界，由Web薄适配转HTTP错误，Runner及Browser应用只依赖中性身份结果/错误。保持原缓存、auto_refresh=False、真实token行二验及角色/owned-session规则，不借此重写登录/SMS或加另一套认证；正式调整后重验受影响身份与启动边界。
 - 配置与停止清理有界：服务停止接单后按策略安全停在恢复点；异常退出明确中断；测试产生的容器、卷和文件用命名清单清理，不动 master/Yohar 资源。
 - 独立 API/worker 已有各自 `bootstrap`/`worker` 可运行入口，但当前部署 compose 未接 AgentRunner。M7补同一代码制品下分进程的部署配置、共享数据库/产物路径及 Browser owner 拓扑说明；只准备配置与隔离启动验证，不自行启动或更新用户环境。

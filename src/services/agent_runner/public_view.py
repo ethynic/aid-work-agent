@@ -102,6 +102,7 @@ def public_runner(row):
     """Explicit allowlist: tokens, checkpoints, prompts, receipts never cross API."""
     return {
         "runner_id": row["runner_id"], "session": {"kind": row["session_kind"], "session_id": row["session_id"]},
+        "source": row["source"],
         "status": row["status"], "settlement_status": row["settlement_status"],
         "client_request_id": row["client_request_id"],
         "profile_id": row['profile_id'],
@@ -114,4 +115,3 @@ def public_runner(row):
         "finished_at": row.get("finished_at"), "snapshot": _public_snapshot(row["public_snapshot"]),
         "result": _public_result(row.get("result")),
     }
-

@@ -163,27 +163,6 @@ class RuntimeFactory:
         observer = DurableObserver(control,history,getattr(control,'trace_collector',None))
         runtime = RuntimeExecution(resources,principal.identity,control=control,observer=observer,history_reader=history,
             initial_followup_inputs=(row.get('checkpoint') or {}).get('pending_root_inputs') or [])
-        initial_ref=(row.get('checkpoint') or {}).get('source_initial_ref')
-        if initial_ref and not (row.get('checkpoint') or {}).get('execution'):
-            def initial_input():
-                with control.repository.connection_factory() as conn:
-                    cursor=conn.cursor()
-                    cursor.execute('SELECT * FROM agent_runner_inputs WHERE input_ref=%s',(initial_ref,))
-                    fact=cursor.fetchone()
-                    if (fact is None or fact['current_runner_id']!=row['runner_id']
-                            or fact['intent']['text']!=row['input']['text']):
-                        raise CheckpointFailure('SOURCE_INITIAL_INPUT_CHANGED')
-                    from .application_sources import project_input_in_tx
-                    from .input_repository import source_group_in_tx
-                    members,projection=source_group_in_tx(cursor,fact,project_input_in_tx)
-                    if projection is None:
-                        from .source_receipts import SourceUnavailable
-                        raise SourceUnavailable('SOURCE_INITIAL_PREPARATION_REQUIRED')
-                    return fact,projection
-            fact,projection=await asyncio.to_thread(initial_input)
-            runtime.assembler.initial_input_ref=fact['input_ref']
-            runtime.assembler.initial_input_text=fact['intent']['text']
-            runtime.assembler.initial_input_projection=projection
         from .runtime.child_recovery import ChildRecoveryAdapter
         runtime.child_recovery = ChildRecoveryAdapter(runtime,self.profiles)
         return runtime
@@ -222,7 +201,7 @@ def execution_result(state, status=None, error_code=None):
     for message in state.messages[state.initial_len:]:
         if message.get('role')=='user':
             metadata = message.get('metadata') or {}
-            if metadata.get('control_id') or metadata.get('input_ref'):
+            if metadata.get('control_id'):
                 messages.append({'role':'user','content':metadata.get('submitted_text',''),
                                  'metadata':copy.deepcopy(metadata)})
         elif message.get('role')=='tool' or message.get('tool_calls'):
@@ -259,7 +238,6 @@ class RunnerWorker:
         if self.sources is not None:
             self.authorizer.source_port=self.sources
             self.executions.source_port=self.sources
-            self.executions.input_repository=self.sources.inputs
         if tool_recovery is None:
             recovery_port=getattr(self.factory,'recovery_port',None)
             if recovery_port is not None:
@@ -376,33 +354,6 @@ class RunnerWorker:
             if profile_id and profile_id != row['profile_id']:
                 await asyncio.to_thread(self.authorizer.authorize_child_profile,principal,profile_id)
         control.authorization_check = authorize_current
-        async def prepare_current_inputs():
-            if self.sources is None:return
-            async def preparation_dispatch_check():
-                await control.authorize_dispatch()
-                principal=await asyncio.to_thread(self.authorizer.authorize_persisted,row,
-                    **({'prepared_source':control.prepared_source} if control.prepared_source is not None else {}))
-                await asyncio.to_thread(self.authorizer.assert_credit,principal)
-            return await self.sources.prepare_inputs({**row,'checkpoint':control.envelope},attempt,preparation_dispatch_check)
-        async def save_initial_preparation_marker(value):
-            # This explicit window precedes Factory/Assembler IO. Missing state
-            # after that window never gains an inferred restart permission.
-            async with control.lock:
-                checkpoint=copy.deepcopy(control.envelope)
-                if value:
-                    checkpoint['unstarted']=True
-                else:
-                    checkpoint.pop('unstarted',None)
-                saved=await asyncio.to_thread(self.executions.save_checkpoint,attempt,
-                    control.revision,checkpoint,control.snapshot,dispatch=True,
-                    source_prepared=control.prepared_source)
-                control.envelope=copy.deepcopy(saved['checkpoint'])
-                control.snapshot=copy.deepcopy(saved['public_snapshot'])
-                control.revision=saved['revision']
-                # Factory and every later authorization use this same committed
-                # row, including all original plan/input/source projections.
-                row.update(saved)
-        control.input_preparation=prepare_current_inputs
         self.jobs[asyncio.current_task()] = control
         heartbeat = asyncio.create_task(self._heartbeat(attempt,control,asyncio.current_task()))
         runtime = None
@@ -446,41 +397,6 @@ class RunnerWorker:
                             principal = await asyncio.to_thread(self.authorizer.authorize_persisted,row,
                                 **({'prepared_source':control.prepared_source} if control.prepared_source is not None else {}))
                             await asyncio.to_thread(self.authorizer.assert_credit,principal)
-                            initial=control.envelope
-                            initial_preparation=(self.sources is not None
-                                and isinstance(initial.get('source_initial_ref'),str)
-                                and bool(initial['source_initial_ref'])
-                                and row['status']=='running'
-                                and not any(initial.get(key) for key in
-                                    ('execution','children','tools','pending_finalization'))
-                                and (initial.get('unstarted') is True or
-                                    row['attempt']==1 and not initial.get('applied_control_id')))
-                            if initial_preparation:
-                                await save_initial_preparation_marker(True)
-                            await prepare_current_inputs()
-                            # Preparation can take longer than the source proof.
-                            # Refresh authority, never repeat an already known ASR.
-                            await control.authorize_dispatch()
-                            if initial_preparation:
-                                await save_initial_preparation_marker(False)
-                            marker=control.envelope.get('source_reply_preparation')
-                            if marker:
-                                from .control_repository import ControlRepository
-                                from .recovery import RecoveryCoordinator
-                                from .recovery_repository import RecoveryRepository
-                                reply=await asyncio.to_thread(ControlRepository(self.repository.connection_factory).get,
-                                    principal,row['runner_id'],marker['control_id'])
-                                prepared=await asyncio.to_thread(RecoveryCoordinator(self.authorizer,self.factory.profiles,
-                                    tool_recovery=self.tool_recovery,attachment_resolver=self.factory.attachments,
-                                    resource_directory=self.factory.resource_directory).prepare,
-                                    {**row,'checkpoint':control.envelope},reply,prepared_source=control.prepared_source)
-                                async with control.lock:
-                                    saved=await asyncio.to_thread(RecoveryRepository(self.repository.connection_factory).complete_source_reply_preparation,
-                                        attempt,control.revision,marker['control_id'],prepared.checkpoint,
-                                        source_port=self.sources,prepared_source=control.prepared_source)
-                                    row.update(saved);control.envelope=copy.deepcopy(saved['checkpoint'])
-                                    control.snapshot=copy.deepcopy(saved['public_snapshot']);control.revision=saved['revision']
-                                    resume_state=ExecutionState.restore(control.envelope['execution'])
                             runtime = await self.factory.create(row,principal,control)
                             attachments = await asyncio.to_thread(self.factory.attachments,row)
                             from src.core.request_context import AgentRequestContext
@@ -496,10 +412,11 @@ class RunnerWorker:
                             user = await asyncio.to_thread(self._agent_user,principal.identity.user_id,principal.identity.tenant_id)
                             from src.core.verbose_feedback import default_feedback_config, VerboseFeedbackState, iter_with_verbose_feedback
                             config, feedback = default_feedback_config(), VerboseFeedbackState()
-                        if runtime.state is not None and await prepare_current_inputs():
-                            # Attach known input on the same original safe CAS
-                            # before completed-parent recovery can mirror a child.
-                            await control.save(resume_state or runtime.state,'source_prepared_inputs')
+                            if row['source'] == 'wecom_kf' and request.request_data.get('verbose_feedback'):
+                                from dataclasses import replace
+                                from src.core.verbose_feedback import VerboseFeedbackConfig
+                                channel_feedback = VerboseFeedbackConfig(**request.request_data['verbose_feedback'])
+                                config = replace(channel_feedback, force_disabled=config.force_disabled or channel_feedback.force_disabled)
                         events = runtime.run(row['input']['text'],user=user,attachments=attachments,request_context=request,
                             verbose_config=config,verbose_state=feedback,
                             state=resume_state)
@@ -544,10 +461,6 @@ class RunnerWorker:
                         await asyncio.to_thread(self.executions.interrupt_attempt,attempt)
                         return
                     if control.pause_requested and not control.cancel_requested:
-                        if state is None and control.envelope.get('source_reply_preparation') and control.envelope.get('execution'):
-                            # Preparation had no Runtime yet; its original wait
-                            # tree is durable and cannot be labelled unstarted.
-                            state=ExecutionState.restore(control.envelope['execution'])
                         if state is None:
                             from .recovery_repository import RecoveryRepository
                             await asyncio.to_thread(RecoveryRepository(self.executions.connection_factory).acknowledge_pause,
@@ -796,19 +709,6 @@ class RunnerWorker:
                 control = await asyncio.to_thread(ControlRepository(self.repository.connection_factory).get,
                     principal,row['runner_id'],row['resume_control_id'])
                 prepared_source=await self.sources.prepare_execution(row) if self.sources is not None else None
-                coordinator=RecoveryCoordinator(self.authorizer,self.factory.profiles,
-                    tool_recovery=self.tool_recovery,attachment_resolver=self.factory.attachments,
-                    resource_directory=self.factory.resource_directory)
-                if await asyncio.to_thread(coordinator.source_reply_needs_preparation,row,control):
-                    await self.sources.assert_preparation_recoverable(row)
-                    await asyncio.to_thread(coordinator.prepare,row,control,prepared_source=prepared_source,preparation_only=True)
-                    principal=await asyncio.to_thread(self.authorizer.authorize_persisted,row,prepared_source=prepared_source)
-                    await asyncio.to_thread(self.authorizer.assert_credit,principal)
-                    resumed=await asyncio.to_thread(recovery.claim_source_reply_preparation,row['runner_id'],self.worker_id,
-                        self.config.lease_seconds,revision=row['revision'],control_id=control['control_id'],
-                        source_port=self.sources,prepared_source=prepared_source)
-                    if resumed is not None:return resumed
-                    continue
                 prepared = await asyncio.to_thread(RecoveryCoordinator(self.authorizer,self.factory.profiles,
                     tool_recovery=self.tool_recovery,
                     attachment_resolver=self.factory.attachments,

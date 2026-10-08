@@ -1,4 +1,4 @@
-"""Web gateway transport. It never owns execution tasks or runner repositories."""
+"""主 API 的 Web/渠道网关传输，不在调用进程执行任务。"""
 
 import os
 import asyncio
@@ -98,17 +98,24 @@ class RunnerServiceClient:
         self.config = config
         self.token = token if token is not None else os.environ.get('AGENT_RUNNER_WEB_SERVICE_TOKEN', '')
 
-    async def request(self, method, path, *, authorization, tenant=None, body=None, params=None, accept_new=None):
+    async def request(self, method, path, *, authorization, tenant=None, body=None, params=None, accept_new=None,
+                      channel_source=None, channel_user=None, channel_chat=None):
         if not self.token:
             raise RunnerError('RUNNER_GATEWAY_NOT_CONFIGURED', 503)
         headers = {'X-AgentRunner-Service':self.config.web_service_id,
-                   'X-AgentRunner-Service-Token':self.token, 'Authorization':authorization}
+                   'X-AgentRunner-Service-Token':self.token}
+        if authorization:
+            headers['Authorization'] = authorization
+        if channel_source:
+            headers.update({'X-AgentRunner-Source':channel_source, 'X-AgentRunner-Channel-User':channel_user})
+            if channel_chat:
+                headers['X-AgentRunner-Channel-Chat'] = channel_chat
         if tenant:
             headers['X-Tenant-Id'] = tenant
         if accept_new is not None:
             headers['X-AgentRunner-Accept-New'] = 'true' if accept_new else 'false'
         try:
-            async with httpx.AsyncClient(base_url=self.config.api_url.rstrip('/'), timeout=15, follow_redirects=False) as client:
+            async with httpx.AsyncClient(base_url=self.config.api_url.rstrip('/'), timeout=15, follow_redirects=False, trust_env=False) as client:
                 response = await client.request(method, path, headers=headers, json=body, params=params)
         except httpx.HTTPError:
             raise RunnerError('RUNNER_SERVICE_UNAVAILABLE', 503) from None

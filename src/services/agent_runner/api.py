@@ -9,40 +9,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
-from pydantic import BaseModel,Field
 
 from .contracts import RunnerError, RunnerSubmit, SessionRef, SessionQuery
 from .control_contracts import RunnerControl
 from .event_stream import ObserverAdmission, open_runner_events, parse_cursor
-
-
-class SourceInputRequest(BaseModel):
-    source: Literal['wecom_kf','feishu','dingtalk']
-    account_id: str=Field(min_length=1,max_length=256)
-    namespace: str=Field(min_length=1,max_length=256)
-    message_id: str=Field(min_length=1,max_length=256)
-    client_request_id: str=Field(min_length=1,max_length=128)
-
-    class Config:
-        extra='forbid'
-
-
-class SourceReceiptRequest(BaseModel):
-    source: Literal['wecom_kf', 'feishu', 'dingtalk']
-    account_id: str = Field(min_length=1, max_length=256)
-    namespace: str = Field(min_length=1, max_length=256)
-    message_id: str = Field(min_length=1, max_length=256)
-
-    class Config:
-        extra = 'forbid'
-
-
-class SourceBatchRequest(BaseModel):
-    members: list[SourceReceiptRequest] = Field(min_length=1, max_length=32)
-    client_request_id: str = Field(min_length=1, max_length=128)
-
-    class Config:
-        extra = 'forbid'
 
 
 class EventOperationMiddleware(BaseHTTPMiddleware):
@@ -79,8 +49,7 @@ def credentials(request):
             "target_tenant": request.headers.get("X-Tenant-Id") or None,
             "actor_user": request.headers.get("X-AgentRunner-Channel-User") or None,
             "actor_chat": request.headers.get("X-AgentRunner-Channel-Chat") or None,
-            "actor_source": request.headers.get("X-AgentRunner-Source") or None,
-            "source_input":request.headers.get('X-AgentRunner-Source-Input') or None}
+            "actor_source": request.headers.get("X-AgentRunner-Source") or None}
 
 
 def create_app(*, config=None, manager=None):
@@ -143,66 +112,6 @@ def create_app(*, config=None, manager=None):
         value, created = await asyncio.to_thread(manager.submit, body, credentials(request), accept_new=accept_new=='true')
         return {"success": True, "created": created, "runner": value}
 
-    @app.post('/v1/source-inputs',status_code=202)
-    async def accept_source(body:SourceInputRequest,request:Request):
-        enabled()
-        from .source_receipts import SourceLocator,source_offload
-        locator=SourceLocator(body.source,body.account_id,body.namespace,body.message_id)
-        if body.client_request_id!=locator.stable_key:
-            raise RunnerError('INVALID_SOURCE_RECEIPT',422)
-        auth=credentials(request)
-        existing=await source_offload(manager.find_source,locator,auth)
-        if existing is not None: return existing
-        prepared=await manager.prepare_source(locator,auth)
-        return await source_offload(manager.accept_source,locator,body.client_request_id,auth,prepared)
-
-    @app.get('/v1/source-inputs')
-    async def read_source(request:Request,
-                          source:str=Query(min_length=1,max_length=32),
-                          account_id:str=Query(min_length=1,max_length=256),
-                          namespace:str=Query(min_length=1,max_length=256),
-                          message_id:str=Query(min_length=1,max_length=256)):
-        enabled()
-        items=request.query_params.multi_items()
-        if (len(items)!=4 or {key for key,_ in items}!=
-                {'source','account_id','namespace','message_id'}):
-            raise RunnerError('SOURCE_LOCATOR_QUERY_INVALID',422)
-        from .source_receipts import SourceLocator,source_offload
-        locator=SourceLocator(source,account_id,namespace,message_id)
-        return await source_offload(manager.read_source,locator,credentials(request))
-
-    @app.get('/v1/source-presentations')
-    async def source_presentation(request:Request, source:str=Query(min_length=1,max_length=32),
-            account_id:str=Query(min_length=1,max_length=256),namespace:str=Query(min_length=1,max_length=256),
-            message_id:str=Query(min_length=1,max_length=256)):
-        enabled()
-        if len(request.query_params.multi_items())!=4 or set(request.query_params)!= {'source','account_id','namespace','message_id'}:
-            raise RunnerError('SOURCE_LOCATOR_QUERY_INVALID',422)
-        from .source_receipts import SourceLocator,source_offload
-        return await source_offload(manager.read_source,SourceLocator(source,account_id,namespace,message_id),
-                                    credentials(request),presentation=True)
-
-    @app.post('/v1/source-deliveries/{delivery_id}/finish')
-    async def finish_source_delivery(delivery_id:str,body:SourceReceiptRequest,request:Request):
-        enabled()
-        if not re.fullmatch(r'kf_delivery_[a-f0-9]{64}',delivery_id):
-            raise RunnerError('SOURCE_DELIVERY_INVALID',422)
-        from .source_receipts import SourceLocator,source_offload
-        return await source_offload(manager.finish_source_delivery,SourceLocator(**body.model_dump()),delivery_id,credentials(request))
-
-    @app.post('/v1/source-input-batches', status_code=202)
-    async def accept_source_batch(body: SourceBatchRequest, request: Request):
-        enabled()
-        from .source_receipts import SourceBatch, SourceLocator, source_offload
-        batch = SourceBatch(tuple(SourceLocator(**member.model_dump()) for member in body.members))
-        if body.client_request_id != batch.stable_key:
-            raise RunnerError('INVALID_SOURCE_BATCH', 422)
-        auth = credentials(request)
-        existing = await source_offload(manager.find_source_batch, batch, auth)
-        if existing is not None:
-            return existing
-        prepared = await manager.prepare_source_batch(batch, auth)
-        return await source_offload(manager.accept_source_batch, batch, body.client_request_id, auth, prepared)
 
     @app.get("/v1/runners/{runner_id}")
     async def get(runner_id: str, request: Request):
@@ -215,6 +124,11 @@ def create_app(*, config=None, manager=None):
         enabled()
         cursor = parse_cursor(after_seq, request.headers.get('Last-Event-ID'))
         return await open_runner_events(manager, runner_id, credentials(request), cursor, event_admission)
+
+    @app.get('/v1/runners/{runner_id}/channel-result')
+    async def channel_result(runner_id: str, request: Request):
+        enabled()
+        return await asyncio.to_thread(manager.channel_result, runner_id, credentials(request))
 
     @app.post("/v1/runners/{runner_id}/cancel")
     async def cancel(runner_id: str, request: Request):

@@ -10,7 +10,6 @@ from src.services.agent_runner import persistence_limits
 from src.services.agent_runner.contracts import Principal, RunnerError, RunnerSubmit
 from src.services.agent_runner.control_contracts import RunnerControl
 from src.services.agent_runner.control_repository import ControlRepository
-from src.services.agent_runner.input_repository import InputRepository
 from src.core.agent_engine.contracts import Identity
 
 pytestmark = pytest.mark.unit
@@ -99,45 +98,6 @@ class _FakeCursor:
         return self._rows.pop(0) if self._rows else None
 
 
-class TestAcceptInTxByteGate:
-    def _repository(self):
-        return InputRepository(connection_factory=lambda: None)
-
-    def _locator(self):
-        from src.services.agent_runner.source_receipts import SourceLocator
-        return SourceLocator("wecom_kf", "account", "ns", "m1")
-
-    def test_oversized_source_input_rejected_after_idempotent_lookup(self, monkeypatch):
-        monkeypatch.setattr(settings_limits(), "request_bytes", 256)
-        request = RunnerSubmit(client_request_id="k", text="x" * 512,
-                               session={"kind": "web", "session_id": "s"},
-                               profile_id="main", source="wecom_kf")
-        cursor = _FakeCursor([None])  # find_in_tx: 无既有 receipt
-        with pytest.raises(RunnerError) as error:
-            self._repository().accept_in_tx(
-                cursor, self._locator(), request, {"execution_binding": "b"}, 1,
-                Principal(Identity("t", "u", "s", "wecom_kf", "channel"), "user", "u", "svc"),
-                repository=object(), fingerprint="f", execution_context={})
-        assert error.value.status == 413 and error.value.code == "REQUEST_TOO_LARGE"
-        # 只执行了幂等查找一条 SQL，字节闸先于任何写入
-        assert len(cursor.statements) == 1
-
-    def test_existing_receipt_returns_before_the_gate(self, monkeypatch):
-        monkeypatch.setattr(settings_limits(), "request_bytes", 8)
-        request = RunnerSubmit(client_request_id="k", text="x" * 512,
-                               session={"kind": "web", "session_id": "s"},
-                               profile_id="main", source="wecom_kf")
-        receipt = {"input_ref": "i", "phase": "accepted", "accepted_runner_id": "r",
-                   "current_runner_id": "r", "provenance": {"execution_binding": "b"},
-                   "intent_digest": request.digest()}
-        cursor = _FakeCursor([receipt])
-        response = self._repository().accept_in_tx(
-            cursor, self._locator(), request, {"execution_binding": "b"}, 1,
-            Principal(Identity("t", "u", "s", "wecom_kf", "channel"), "user", "u", "svc"),
-            repository=object(), fingerprint="f", execution_context={})
-        assert response["input_ref"] == "i" and not response["created"]
-        # 已受理输入的幂等重放只做一次查找，不受字节闸影响
-        assert len(cursor.statements) == 1
 
 
 class TestControlSubmitByteGate:

@@ -15,19 +15,10 @@ class ContextAssembler:
         self.identity, self.role, self.profile_config = identity, role, profile_config
         self.history, self.compression, self.prompt_sources = history, compression, prompt_sources
         self.skills, self.remember, self.attachments, self.visibility = skills, remember, attachments, visibility
-        self.initial_input_ref = None
-        self.initial_input_text = None
-        self.initial_input_projection = None
 
     async def prepare(self, text, execution_id=None, user=None, attachments=None,
                       request_context=None, extra_system_prompt=None, continuation=None,
                       image_paths=None):
-        if (self.initial_input_projection is not None
-                and (self.initial_input_projection.get('preparation_ref') or self.initial_input_projection.get('batch_ref'))
-                and self.role != AgentMode.SUBAGENT):
-            text = self.initial_input_projection['model_text']
-            attachments = None
-            image_paths = None
         workspace = None
         # continuation 分支不装配图片附件，必须预置 None——公开续跑路径
         # （agent.continue_tool_call）走 continuation 分支，缺省会 UnboundLocalError
@@ -75,16 +66,7 @@ class ContextAssembler:
                     content = await asyncio.to_thread(
                         self.attachments._build_multimodal_user_content, enhanced, image_paths)
                 incoming = {"role": "user", "content": content if content is not None else enhanced}
-                if self.initial_input_ref and self.role != AgentMode.SUBAGENT:
-                    incoming["metadata"] = {"input_ref": self.initial_input_ref,
-                                            "submitted_text": self.initial_input_text,
-                                            "preparation_ref": (self.initial_input_projection or {}).get('preparation_ref')}
-                    if (self.initial_input_projection or {}).get('batch_ref'):
-                        import copy
-                        incoming['metadata'].update({key: copy.deepcopy(self.initial_input_projection[key])
-                            for key in ('batch_ref','history_group_ref','input_refs','merged_segments')})
-                else:
-                    raw_history.append(incoming)
+                raw_history.append(incoming)
                 await self.remember._handle_remember_intent(text, user)
             markers = [message for message in raw_history if message.get("role") == "system"]
             history = [message for message in raw_history if message.get("role") != "system"]

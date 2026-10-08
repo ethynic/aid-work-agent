@@ -481,7 +481,7 @@ agent_runner:
   peers:
     web:
       token_hash: "$2b$12$mtUPOeTozqL.GCQjD2PsAuas1Nw6G3aCSAnLV6FGvThV9neI1WGeC"
-      sources: ["chat"]
+      sources: ["chat", "wecom_kf"]
   host: "127.0.0.1"
   port: 8091
   lease_seconds: 30
@@ -495,20 +495,6 @@ agent_runner:
     checkpoint_bytes: 8388608
     snapshot_bytes: 2097152
   # Server-only KF migration; text admission is opt-in, delivery remains separate.
-  wecom_kf:
-    enabled: false
-    service_id: "wecom_kf_native"
-    poll_seconds: 1.0
-    lease_seconds: 30
-    heartbeat_seconds: 10
-    page_limit: 100
-    page_bytes: 1048576
-    # Bounded in-process SDK client/token reuse per (account_id, config_version);
-    # process cache only, no cross-process/durable token sharing. Eviction:
-    # key/credential mismatch, page failure, capacity, idle TTL, worker close.
-    client_pool_capacity: 16
-    client_pool_idle_seconds: 300
-  # Temporary Browser producer admission; legacy non-Runner Browser is unchanged.
   browser_owner:
     enabled: false
     endpoint: "http://127.0.0.1:8092/internal/runner-browser"

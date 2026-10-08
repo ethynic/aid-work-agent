@@ -28,7 +28,7 @@ class RunnerAuthorizer:
         return service_id
 
     def authorize(self, request, service_id, service_token, user_token=None, target_tenant=None,
-                  actor_user=None, actor_chat=None, actor_source=None, source_input=None, *, execute=True):
+                  actor_user=None, actor_chat=None, actor_source=None, *, execute=True):
         self.verify_service(service_id, service_token, request.source)
         if request.session.kind == "web":
             if request.source != "chat" or request.channel_user_id is not None or request.channel_chat_id is not None:
@@ -48,11 +48,6 @@ class RunnerAuthorizer:
             return self._web(request, service_id, user_id, target_tenant, execute=execute)
         if request.source == "chat":
             raise RunnerError("SESSION_SOURCE_MISMATCH", 400)
-        native_config=getattr(self.config,'wecom_kf',None)
-        if ((self.source_port and self.source_port.requires_receipt(request.source,service_id,purpose='submit'))
-                or (not self.source_port and request.source=='wecom_kf' and native_config is not None
-                    and (native_config.enabled or service_id==native_config.service_id))):
-            raise RunnerError('SOURCE_RECEIPT_REQUIRED',403)
         if actor_source is not None and actor_source != request.source:
             raise RunnerError("CHANNEL_ACTOR_FORBIDDEN", 403)
         if actor_user is not None and (actor_user != request.channel_user_id or actor_chat != request.channel_chat_id):
@@ -74,9 +69,6 @@ class RunnerAuthorizer:
                 cursor=conn.cursor()
                 if self.source_port:
                     self.source_port.authorize_row_in_tx(cursor,row,execute=execute,prepared=prepared_source)
-                elif execute and row['source']=='wecom_kf' and self.config.wecom_kf.enabled:
-                    from .source_receipts import SourceUnavailable
-                    raise SourceUnavailable('SOURCE_RECEIPT_REQUIRED')
                 principal=self._channel_in_tx(cursor,request,row['service_id'],execute=execute)
         from .repository import RunnerRepository
         RunnerRepository.assert_owner(principal, row)
@@ -129,19 +121,6 @@ class RunnerAuthorizer:
         with self.connection_factory() as conn:
             return self.authorize_read_in_tx(conn.cursor(),row,credentials)
 
-    def authorize_source_in_tx(self,cursor,locator,service_id,prepared=None,*,execute=True):
-        if self.source_port is None:
-            raise RunnerError('SOURCE_SERVICE_UNAVAILABLE',503)
-        request,provenance,ordinal=self.source_port.authorize_in_tx(cursor,locator,service_id,prepared=prepared)
-        principal=self._channel_in_tx(cursor,request,service_id,execute=execute)
-        if (principal.identity.tenant_id!=provenance['tenant_id']
-                or principal.identity.user_id!=provenance['user_id']):
-            raise RunnerError('SOURCE_BINDING_CHANGED',409)
-        if execute:
-            cursor.execute('SELECT credit_balance FROM tenants WHERE tenant_id=%s',(principal.identity.tenant_id,))
-            row=cursor.fetchone()
-            if not row or row['credit_balance']<=0: raise RunnerError('CREDIT_BLOCKED',402)
-        return principal,request,provenance,ordinal
 
     def authorize_child_profile(self, principal, profile_id):
         with self.connection_factory() as conn:
@@ -214,6 +193,9 @@ class RunnerAuthorizer:
             # 渠道执行授权只看租户订阅，与产品授权模型一致（绑定用户不构成为
             # web 用户，平台 actor 分支同样不查用户级权限）。
             self._profile(cursor, request.profile_id, None, session["tenant_id"])
+        if execute and request.source == 'wecom_kf':
+            from .channel_context import kf_binding
+            kf_binding(cursor, request, session)
         actor_id = canonical_json([request.channel_user_id, request.channel_chat_id])
         return Principal(Identity(session["tenant_id"], user_id, request.session.session_id, request.source, "channel"),
                      "channel", actor_id, service_id)

@@ -34,21 +34,13 @@ class WeComKfReplyBudget:
     - ``can_reserve(n)``：校验剩余额度是否满足「本次发送 + 预留」需求，不扣减；
     - ``consume(n)``：发送成功后实际扣减（失败/抑制不扣，调用方先发送后扣）；
     - ``record_suppressed``：超预算资产可观测记录（日志 + suppressed_assets 列表）。
-
-    native_remaining 安装后只是域账本的展示快照，consume 不扣减或授派发；
-    真正的预算 reservation 与抑制证明由每次 POST 的可信 owner 同事务决定。
     """
 
-    def __init__(self, total: int = 5, *, native_remaining=None):
+    def __init__(self, total: int = 5):
         if int(total) < 1:
             raise ValueError(f"reply budget total 必须 >= 1，实际: {total}")
         self.total = int(total)
         self._remaining = int(total)
-        self._native = native_remaining is not None
-        if self._native:
-            if type(native_remaining) is not int or not 0 <= native_remaining <= self.total:
-                raise ValueError('KF_NATIVE_BUDGET_INVALID')
-            self._remaining = native_remaining
         self.suppressed_assets: List[Dict[str, Any]] = []
 
     @property
@@ -61,26 +53,11 @@ class WeComKfReplyBudget:
 
     def consume(self, count: int = 1) -> bool:
         """扣减 count 次额度（同步无 await，事件循环内原子）；不足时返回 False 不扣。"""
-        if self._native:
-            # This snapshot is only an adapter display hint. The installed wire
-            # owner atomically reserves the actual POST in its own transaction.
-            return True
         count = max(0, int(count))
         if self._remaining >= count:
             self._remaining -= count
             return True
         return False
-
-    @property
-    def native(self):
-        return self._native
-
-    async def suppress_native(self, observer, kind, **descriptor):
-        if not self._native or not callable(getattr(observer, 'suppressed', None)):
-            raise ValueError('KF_NATIVE_SUPPRESSION_OWNER_REQUIRED')
-        await observer.suppressed(kind, {**descriptor, 'reason': 'suppressed_reply_budget'})
-        # Do not log native customer filenames or route data.
-        self.suppressed_assets.append({'kind': kind, **descriptor, 'reason': 'suppressed_reply_budget'})
 
     def record_suppressed(
         self,

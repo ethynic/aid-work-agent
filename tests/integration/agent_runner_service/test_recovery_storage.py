@@ -107,7 +107,8 @@ def test_resume_revalidates_durable_cas_claim_and_wait_before_consumption(
         stale_cp = dict(checkpoint, applied_control_id=stale["control_id"])
         assert claim(recovery, row, stale, stale_cp) is None
     elif changed == "claim":
-        service_database.rows("UPDATE agent_runner_session_claims SET gate='delivery' WHERE owner_runner_id=%s", (row["runner_id"],))
+        # 已丢失会话所有权时，回复不能恢复旧执行；渠道投递没有额外 claim gate。
+        service_database.rows("DELETE FROM agent_runner_session_claims WHERE owner_runner_id=%s", (row["runner_id"],))
         with pytest.raises(RunnerError, match="RECOVERY_CLAIM_LOST"):
             claim(recovery, row, control, checkpoint)
     else:

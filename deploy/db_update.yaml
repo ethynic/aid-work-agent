@@ -3509,3 +3509,10 @@
             RAISE EXCEPTION 'VOICE_PREPARATION_COLUMNS_MISSING';
         END IF;
     END $$;
+
+# KF 原渠道恢复：历史迁移不可删除或改写。旧 KF 表及审计数据保留，运行代码已退出该管线。
+# 发布前须在旧制品完成存量核对并停止旧消费者，见 agent-runner-deploy-checklist.md。
+- datetime: "2026-10-08 15:21:10"
+  remark: "KF 恢复原渠道：移除废弃 delivery gate，保留旧表及审计数据"
+  statements: |
+    ALTER TABLE IF EXISTS agent_runner_session_claims DROP COLUMN IF EXISTS gate;

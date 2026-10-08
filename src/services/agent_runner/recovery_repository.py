@@ -20,7 +20,7 @@ def lock_original_claim(cursor, row):
         AND session_kind=%s AND session_id=%s FOR UPDATE''',
         (row['scope_key'],row['session_kind'],row['session_id']))
     claim = cursor.fetchone()
-    if not claim or claim['owner_runner_id'] != row['runner_id'] or claim['gate'] != 'execution':
+    if not claim or claim['owner_runner_id'] != row['runner_id']:
         raise RunnerError('RECOVERY_CLAIM_LOST',409)
     return claim
 
@@ -43,76 +43,11 @@ class RecoveryRepository:
                 AND (r.lease_until IS NULL OR r.lease_until<=clock_timestamp())
                 AND EXISTS (SELECT 1 FROM agent_runner_session_claims c
                     WHERE c.scope_key=r.scope_key AND c.session_kind=r.session_kind
-                    AND c.session_id=r.session_id AND c.owner_runner_id=r.runner_id AND c.gate='execution')
+                    AND c.session_id=r.session_id AND c.owner_runner_id=r.runner_id)
                 AND r.queue_order>%s ORDER BY r.queue_order LIMIT %s''',(after_queue_order,limit))
             return [decoded(row) for row in cursor.fetchall()]
 
-    def claim_source_reply_preparation(self,runner_id,worker_id,lease_seconds,*,revision,control_id,
-                                       source_port,prepared_source):
-        """Own only the accepted reply's preparation; keep its original wait."""
-        if source_port is None or lease_seconds<=0:raise ValueError('SOURCE_REPLY_OWNER_REQUIRED')
-        with self.connection_factory() as connection:
-            cursor=connection.cursor()
-            row=lock_runner(cursor,runner_id)
-            if (row['status'] not in {'waiting','paused','interrupted'} or row['cancel_requested']
-                    or row['lease_valid'] or row['revision']!=revision or row.get('resume_control_id')!=control_id):return None
-            lock_original_claim(cursor,row)
-            source_port.authorize_row_in_tx(cursor,row,execute=True,prepared=prepared_source)
-            cursor.execute('SELECT * FROM agent_runner_controls WHERE runner_id=%s AND control_id=%s FOR UPDATE',(runner_id,control_id))
-            control=cursor.fetchone()
-            if not control or control['status']!='accepted' or control['action']!='reply':
-                raise RunnerError('RECOVERY_CONTROL_STALE',409)
-            ControlRepository.assert_wait(row,RunnerControl(client_request_id=control['client_request_id'],**control['payload']))
-            cursor.execute('SELECT input_ref,current_runner_id FROM agent_runner_inputs WHERE source_control_id=%s FOR UPDATE',(control_id,))
-            fact=cursor.fetchone()
-            if not fact or fact['current_runner_id']!=runner_id or not row['checkpoint'].get('execution'):
-                raise RunnerError('SOURCE_REPLY_UNAVAILABLE',409)
-            checkpoint=copy.deepcopy(row['checkpoint'])
-            if checkpoint.get('pending_finalization'):raise RunnerError('RECOVERY_FINALIZATION_PENDING',409)
-            checkpoint['source_reply_preparation']={'control_id':control_id,'input_ref':fact['input_ref']}
-            number=row['attempt']+1
-            cursor.execute("""UPDATE agent_runners SET status='running',attempt=%s,worker_id=%s,
-                lease_until=clock_timestamp()+(%s*INTERVAL '1 second'),checkpoint=%s::jsonb,
-                pause_requested=FALSE,revision=revision+1,view_revision=view_revision+1,
-                updated_at=clock_timestamp() WHERE runner_id=%s RETURNING *""",
-                (number,worker_id,lease_seconds,capped_checkpoint_dumps(checkpoint),runner_id))
-            result=decoded(cursor.fetchone())
-            result=sync_public_display(cursor,result,advance_view=False)
-            result=EventRepository.notify_in_tx(cursor,row,after=result)
-            source_port.authorize_row_in_tx(cursor,result,execute=True,prepared=prepared_source)
-            try:lock_runner(cursor,runner_id,Attempt(runner_id,worker_id,number),dispatch=True)
-            except LeaseLost as error:
-                from .source_receipts import SourceUnavailable
-                unavailable=SourceUnavailable('SOURCE_RECOVERY_ATTEMPT_UNAVAILABLE')
-                unavailable.public_verification='恢复执行许可尚待核对，任务与原命令已保留。'
-                raise unavailable from error
-            connection.commit();return result
 
-    def complete_source_reply_preparation(self,attempt,revision,control_id,checkpoint,*,source_port,prepared_source):
-        if checkpoint.get('applied_control_id')!=control_id:raise ValueError('RECOVERY_CONTROL_CHECKPOINT_MISMATCH')
-        with self.connection_factory() as connection:
-            cursor=connection.cursor()
-            row=lock_runner(cursor,attempt.runner_id,attempt,dispatch=True)
-            marker=(row.get('checkpoint') or {}).get('source_reply_preparation') or {}
-            if row['revision']!=revision or marker.get('control_id')!=control_id or row.get('resume_control_id')!=control_id:
-                raise LeaseLost('SOURCE_REPLY_PREPARATION_CHANGED')
-            lock_original_claim(cursor,row)
-            source_port.authorize_row_in_tx(cursor,row,execute=True,prepared=prepared_source)
-            cursor.execute('SELECT * FROM agent_runner_controls WHERE runner_id=%s AND control_id=%s FOR UPDATE',(row['runner_id'],control_id))
-            control=cursor.fetchone()
-            if not control or control['status']!='accepted' or control['action']!='reply':raise RunnerError('RECOVERY_CONTROL_STALE',409)
-            ControlRepository.assert_wait(row,RunnerControl(client_request_id=control['client_request_id'],**control['payload']))
-            checkpoint=copy.deepcopy(checkpoint);checkpoint.pop('source_reply_preparation',None)
-            cursor.execute("UPDATE agent_runner_controls SET status='consumed',consumed_attempt=%s,consumed_at=clock_timestamp() WHERE control_id=%s",(attempt.number,control_id))
-            cursor.execute("""UPDATE agent_runners SET checkpoint=%s::jsonb,resume_control_id=NULL,
-                revision=revision+1,control_revision=control_revision+1,view_revision=view_revision+1,
-                updated_at=clock_timestamp() WHERE runner_id=%s RETURNING *""",
-                (capped_checkpoint_dumps(checkpoint),row['runner_id']))
-            result=decoded(cursor.fetchone());result=sync_public_display(cursor,result,advance_view=False)
-            result=EventRepository.notify_in_tx(cursor,row,after=result)
-            source_port.authorize_row_in_tx(cursor,result,execute=True,prepared=prepared_source)
-            lock_runner(cursor,row['runner_id'],attempt,dispatch=True)
-            connection.commit();return result
 
     def claim_resume(self, runner_id, worker_id, lease_seconds, *, revision, control_id, checkpoint,
                      recovery_port=None, source_port=None, prepared_source=None):
@@ -147,10 +82,6 @@ class RecoveryRepository:
                 raise RunnerError('RECOVERY_FINALIZATION_PENDING',409)
             if recovery_port is not None:
                 recovery_port.assert_claim_in_tx(cursor,row,control,worker_id=worker_id)
-            marker=(row.get('checkpoint') or {}).get('source_reply_preparation')
-            if marker and marker.get('control_id')!=control_id:
-                from .input_repository import InputRepository
-                checkpoint=InputRepository.supersede_reply_in_tx(cursor,row,copy.deepcopy(checkpoint),marker)
             number = row['attempt'] + 1
             cursor.execute('''UPDATE agent_runner_controls SET status='consumed',consumed_attempt=%s,
                 consumed_at=clock_timestamp() WHERE control_id=%s AND status='accepted' ''',(number,control_id))

@@ -42,17 +42,11 @@ class RunnerFinalizer:
                 raise CheckpointFailure('FINALIZATION_INTENT_NOT_SAVED')
             settlement, delta = self._settle(cursor, runner, result)
             snapshot,result=project_terminal_public_state(cursor,runner,result)
-            write_history(cursor, runner, result)
-            # Claim belongs to this exact runner and conversation. A channel keeps
-            # its delivery gate until the original channel owner finishes sending.
-            if runner['session_kind'] == 'web':
-                cursor.execute('''DELETE FROM agent_runner_session_claims WHERE owner_runner_id=%s
+            # KF 原渠道以最终合并 owner 写入历史，避免 Runner 与渠道重复落库。
+            if runner['source'] != 'wecom_kf':
+                write_history(cursor, runner, result)
+            cursor.execute('''DELETE FROM agent_runner_session_claims WHERE owner_runner_id=%s
                     AND scope_key=%s AND session_kind=%s AND session_id=%s RETURNING owner_runner_id''',
-                    (runner['runner_id'],runner['scope_key'],runner['session_kind'],runner['session_id']))
-            else:
-                cursor.execute('''UPDATE agent_runner_session_claims SET gate='delivery',revision=revision+1,
-                    updated_at=clock_timestamp() WHERE owner_runner_id=%s AND scope_key=%s
-                    AND session_kind=%s AND session_id=%s RETURNING owner_runner_id''',
                     (runner['runner_id'],runner['scope_key'],runner['session_kind'],runner['session_id']))
             if not cursor.fetchone():
                 raise CheckpointFailure('FINALIZE_CLAIM_OWNER_CHANGED')

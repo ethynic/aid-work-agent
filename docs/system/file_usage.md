@@ -380,18 +380,8 @@ storage/
 `src/weixin_conversation/name_contexts.py` 消费设备成功只读名称解析结果，同draft事务建立名称路由上下文。只加密保存名称和不透明证据引用，不新增截图文件或微信账号身份证据。
 
 
-## 原生 KF 语音准备附件（AI 与人工/员工共用媒体叶）
+## 微信客服文件与语音
 
-- **位置**：`configured_storage_root()/tenants/{normalize_tenant_id(tenant_id)}/conversation/`，通过 `get_conversation_dir` 的可信 tenant anchor 获取，不新增 uploads 路径；API/Worker 可沿 `AGENT_RUNNER_STORAGE_ROOT` 使用同挂载。
-- **文件**：已验证音频类型（wav/mp3/amr/amr-wb/opus/pcm/aac），原流式及归一化10MiB上限；可信PCM包装、固定SILK codec完成后保存。无可证音频格式不盲提交 ASR。
-- **命名**：已用 `voice_{64位operation引用摘要}.{audio_format}` 稳定引用（不是随机重试文件）；AI input preparation 和本域 human receipt preparation 各自派生原 owner 引用。相同名必须 hash 一致，exclusive atomic publish；hash不符/符号链接/tenant变化明确拒绝，禁止覆盖。
-- **调用方**：`src/channels/wecom_kf/voice_media.py`（store/read/fixed codec），AI `source_preparation` 经唯一应用 capability 装配，人工/员工 `context_voice.py` 经 trusted client/tenant/ref/media_id 能力复用；不借原 AI input/Runner 授权人工工作。持久 artifact 仅 bounded metadata/hash/ref，历史不含 base64/凭据。
-- **临时与清理**：写入/codec 临时文件由实际 owner finally 删除，已 spawn codec 必须 kill/wait 完成才归还。已持久附件由原 preparation/history fact 引用；started/unknown 的核对所需文件不能当超时垃圾删除，清理需沿租户生命周期和仍存引用核对，不新增本片自动 TTL/全局清理。历史 clear 不表示该物理调用结果/费用可删除。
-- **访问**：本片不注册旧 Redis 免认证 file 链接，不声称任意文件/视频下载已迁移；附件沿现租户访问控制复核。稳定 owner 音频引用与公开展示文本分开。
+微信客服文件与语音继续由原 `channel_routes.py` 处理，使用既有 conversation 存储、素材下载、ASR 与文件链接登记。Runner 接收已准备的文本及附件引用，返回图片或工具产物给原渠道渲染发送；主 API、Runner API/worker 共用原 storage 挂载。
 
-
-### KF 完整收发中的人工媒体与旧文件链接
-
-`completion_business.py` 的 `prepare_context_media` 只为已固定 human/ended/employee 的 image/video/file 下载原临时素材（流式20MiB）；AI期仍原过滤提示，不新增附件理解。文件复用上述 tenant conversation 锚点，稳定 `file_` owner摘要名称，O_NOFOLLOW/hash/exclusive publish，历史仅保存有界附件事实；按原 uploaded_file Redis24h元数据与原 `/api/files/{id}/download` 链接登记。历史clear不重新创建已有消费文件。
-
-`delivery_repository.py` 保存捕获的表示/资产稳定成员与真实wire事实；`delivery.py` 复用原renderer与发送adapter，不借文件缺失覆盖旧started/unknown。`recap_handoff.py` 仅交接原后台业务，不创建新媒体/文件根。注册/场景/welcome由 `completion_business.py` 复用原业务，客户业务身份与执行principal分开。
+KF 专有语音 preparation、人工媒体 receipt、投递资产及 recap handoff 存储方案已删除，不再按该方案新建文件或注册清理任务。既有存量文件不能因代码退出就自动清除，应沿现有租户生命周期与引用检查处理。

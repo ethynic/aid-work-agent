@@ -26,7 +26,6 @@ class DurableControl:
         self.plan_manager = None
         self.authorization_check = None
         self.prepared_source = None
-        self.input_preparation = None
         self.tool_started = {}
         self.started_at = time.monotonic()
         self.active_attempt = row['status'] == 'running'
@@ -115,8 +114,6 @@ class DurableControl:
         if self.stopped:
             raise LeaseLost('RUNNER_WORKER_STOPPED')
         try:
-            if boundary=='before_model' and state.execution_id==self.attempt.runner_id and self.input_preparation is not None:
-                await self.input_preparation()
             if boundary in {'before_model','before_tool','child.before_model','child.before_tool'}:
                 await self._authorize_execution()
             if self.plan_manager is not None:
@@ -124,10 +121,9 @@ class DurableControl:
                 self.envelope['business_plan'] = plan.model_dump(mode='json') if plan is not None else None
                 state.plan_ref = plan.plan_id if plan is not None else None
             checkpoint, snapshot = self._capture(state)
-            kwargs={'source_prepared':self.prepared_source,'input_boundary':boundary} if getattr(self.repository,'input_repository',None) is not None else {}
             row = await asyncio.to_thread(self.repository.save_checkpoint, self.attempt,
                 self.revision, checkpoint, snapshot,
-                dispatch=boundary in {'before_model', 'before_tool'},**kwargs)
+                dispatch=boundary in {'before_model', 'before_tool'})
         except StopRequested as error:
             self.pause_requested = error.command == 'pause'
             self.cancel_requested = error.command == 'cancel'
@@ -142,25 +138,6 @@ class DurableControl:
         self.snapshot = copy.deepcopy(row['public_snapshot'])
         self.cancel_requested = row['cancel_requested']
         self.pause_requested = row.get('pause_requested',False)
-        # The same CAS may have attached source inputs. Hydrate only the root
-        # input projection, never a live child's messages/model/tool phases.
-        if (row.get('checkpoint') or {}).get('source_initial_ref'):
-            saved=row['checkpoint'].get('execution')
-            if saved and state.execution_id==self.attempt.runner_id:
-                state.messages=copy.deepcopy(saved['messages'])
-                state.followup_messages=copy.deepcopy(saved['followup_messages'])
-                state.resources['continuation_inputs']=copy.deepcopy(saved['resources'].get('continuation_inputs',{}))
-                if saved['resources'].get('root_continuation_requested') is True:
-                    state.resources['root_continuation_requested']=True
-                else:
-                    state.resources.pop('root_continuation_requested',None)
-                if 'source_continuation_intent' in saved['resources']:
-                    state.resources['source_continuation_intent']=copy.deepcopy(
-                        saved['resources']['source_continuation_intent'])
-                else:
-                    state.resources.pop('source_continuation_intent',None)
-            self.envelope=copy.deepcopy(row['checkpoint'])
-
     async def save(self, state, boundary):
         async with self.lock:
             # Capture inside the shared lock; a queued old child snapshot cannot

@@ -28,7 +28,7 @@ class RecoveryCoordinator:
         self.attachment_resolver = attachment_resolver
         self.resource_directory = resource_directory
 
-    def prepare(self, row, control, *, prepared_source=None, preparation_only=False):
+    def prepare(self, row, control, *, prepared_source=None):
         kwargs={'prepared_source':prepared_source} if prepared_source is not None else {}
         principal = self.authorizer.authorize_persisted(row,**kwargs)
         self.authorizer.assert_credit(principal)
@@ -38,21 +38,6 @@ class RecoveryCoordinator:
         checkpoint = copy.deepcopy(row.get('checkpoint') or {})
         if checkpoint.get('pending_finalization'):
             raise RunnerError('RECOVERY_FINALIZATION_PENDING',409)
-        marker=checkpoint.get('source_reply_preparation')
-        if marker is not None and (not isinstance(marker,dict) or set(marker)!={'control_id','input_ref'}
-                or any(not isinstance(value,str) or not value for value in marker.values())):
-            raise RunnerError('CHECKPOINT_TREE_INVALID',409)
-        if marker and marker.get('control_id')!=control['control_id']:
-            # Actual cancellation of queued reply is committed by the owning
-            # resume transaction; this copy only leaves the old prep window.
-            with self.authorizer.source_port.inputs.connection_factory() as conn:
-                cursor=conn.cursor()
-                cursor.execute('SELECT status,error_code FROM agent_runner_controls WHERE runner_id=%s AND control_id=%s',
-                               (row['runner_id'],marker['control_id']))
-                original=cursor.fetchone()
-                if not original or original['status']!='rejected' or original['error_code']!='RESUME_SUPERSEDED_BY_PAUSE':
-                    raise RunnerError('SOURCE_REPLY_PREPARATION_CHANGED',409)
-            checkpoint.pop('source_reply_preparation',None)
         states = {}
         from .runtime_manifest import configuration_fingerprint
 
@@ -165,12 +150,6 @@ class RecoveryCoordinator:
         else:
             root = validate(checkpoint.get('execution'),execution_id=row['runner_id'],
                             fingerprint=row['profile_fingerprint'],business_plan=checkpoint.get('business_plan'))
-            if preparation_only:
-                if control['action']!='reply' or not self.source_reply_needs_preparation(row,control):
-                    raise RunnerError('SOURCE_REPLY_PREPARATION_CHANGED',409)
-                # Only validate the original tree here. No reply is attached or
-                # applied until its original physical preparation is known.
-                return PreparedRecovery(checkpoint,states,principal)
             if control['action']=='reply':
                 self._apply_reply(row,control,root,states,checkpoint)
             elif control['action']=='browser_complete':
@@ -215,9 +194,6 @@ class RecoveryCoordinator:
                 root.outcome = Outcome.RUNNING
             self._capture(root,states)
             checkpoint['execution'] = root.checkpoint()
-        if marker and marker.get('control_id')==control['control_id']:
-            if control['action']!='reply':raise RunnerError('SOURCE_REPLY_PREPARATION_CHANGED',409)
-            checkpoint.pop('source_reply_preparation',None)
         checkpoint['applied_control_id'] = control['control_id']
         return PreparedRecovery(checkpoint,states,principal)
 
@@ -226,42 +202,7 @@ class RecoveryCoordinator:
         payload = control.get('payload') or {}
         return control['action']=='resume' and bool(payload.get('answer','').strip() or payload.get('attachments'))
 
-    def source_reply_needs_preparation(self,row,control):
-        if control['action']!='reply' or self.authorizer.source_port is None:return False
-        from .input_repository import source_group_in_tx
-        from .application_sources import project_input_in_tx
-        with self.authorizer.source_port.inputs.connection_factory() as conn:
-            cursor=conn.cursor()
-            cursor.execute('SELECT * FROM agent_runner_inputs WHERE source_control_id=%s',(control['control_id'],))
-            fact=cursor.fetchone()
-            if fact is None:return False
-            if fact['current_runner_id']!=row['runner_id']:raise RunnerError('SOURCE_BINDING_CHANGED',409)
-            members,projection=source_group_in_tx(cursor,fact,project_input_in_tx)
-            if '\n'.join(member['intent']['text'] for member in members)!=control['payload']['answer']:
-                raise RunnerError('SOURCE_REPLY_CHANGED',409)
-            return projection is None
 
-    def _source_control_message(self,row,control):
-        port=self.authorizer.source_port
-        if port is None:return None
-        from .input_repository import source_group_in_tx,group_input_message
-        from .application_sources import project_input_in_tx
-        with port.inputs.connection_factory() as conn:
-            cursor=conn.cursor()
-            cursor.execute('SELECT * FROM agent_runner_inputs WHERE source_control_id=%s',(control['control_id'],))
-            fact=cursor.fetchone()
-            if fact is None:
-                if (row.get('checkpoint') or {}).get('source_reply_preparation'):
-                    raise RunnerError('SOURCE_REPLY_PREPARATION_CHANGED',409)
-                return None
-            if fact['current_runner_id']!=row['runner_id']:raise RunnerError('SOURCE_BINDING_CHANGED',409)
-            members,projection=source_group_in_tx(cursor,fact,project_input_in_tx)
-            if '\n'.join(member['intent']['text'] for member in members)!=control['payload']['answer']:
-                raise RunnerError('SOURCE_REPLY_CHANGED',409)
-            if projection is None:raise RunnerError('SOURCE_REPLY_UNAVAILABLE',409)
-            message=group_input_message(members,projection)
-            message['metadata']['control_id']=control['control_id']
-            return message
 
     def _user_message(self, row, control):
         payload = control['payload']
@@ -313,10 +254,6 @@ class RecoveryCoordinator:
                                'submitted_text':payload['answer'],
                                'accepted_at':str(control['accepted_at']),
                                'attachments':copy.deepcopy(payload.get('attachments') or [])}}
-        source_message=self._source_control_message(row,control)
-        if source_message is not None:
-            message=source_message
-            fact.result['answer']=message['content']
         if attachments:
             message['_attachments'] = attachments
         target.followup_messages.append(copy.deepcopy(message))
@@ -325,8 +262,7 @@ class RecoveryCoordinator:
         checkpoint.setdefault('supplemental_inputs',[]).append({
             'control_id':control['control_id'],'message_id':control['control_id']+':user',
             'text':payload['answer'],'attachments':copy.deepcopy(payload.get('attachments') or []),
-            'accepted_at':str(control['accepted_at']),
-            'source_metadata':copy.deepcopy(message.get('metadata') or {}) if source_message is not None else None})
+            'accepted_at':str(control['accepted_at'])})
 
     @staticmethod
     def _capture(state, states):

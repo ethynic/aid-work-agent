@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import yaml
-from pydantic import BaseModel, Field, StrictBool, validator
+from pydantic import BaseModel, Field, validator
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -636,27 +636,6 @@ class AgentRunnerBrowserOwnerConfig(BaseModel):
     gateway_peers: Dict[str, BrowserGatewayPeerConfig] = Field(default_factory=dict)
 
 
-class AgentRunnerWeComKfConfig(BaseModel):
-    """Server-only KF migration switch; foundation stores received facts only."""
-    enabled: StrictBool = False
-    service_id: str = Field(default='wecom_kf_native',min_length=1,max_length=128)
-    poll_seconds: float = Field(default=1.0, gt=0, le=30)
-    lease_seconds: int = Field(default=30, ge=5, le=300)
-    heartbeat_seconds: int = Field(default=10, ge=1, le=150)
-    page_limit: int = Field(default=100, ge=1, le=1000)
-    page_bytes: int = Field(default=1048576, ge=65536, le=4194304)
-    # Bounded in-process reuse of original SDK clients per (account_id,
-    # config_version): process cache only, no cross-process/durable token
-    # sharing. Eviction: key/credential mismatch, page failure, capacity,
-    # idle TTL, worker close.
-    client_pool_capacity: int = Field(default=16, ge=1, le=256)
-    client_pool_idle_seconds: float = Field(default=300.0, gt=0.0, le=86400.0)
-
-    @validator("heartbeat_seconds")
-    def heartbeat_margin(cls, value, values):
-        if value * 2 > values.get("lease_seconds", 30):
-            raise ValueError("KF_INGRESS_HEARTBEAT_REQUIRES_HALF_LEASE_MARGIN")
-        return value
 
 
 class AgentRunnerLimitsConfig(BaseModel):
@@ -684,7 +663,6 @@ class AgentRunnerConfig(BaseModel):
     poll_seconds: float = Field(default=1.0, gt=0)
     concurrency: int = Field(default=4, ge=1, le=100)
     browser_owner: AgentRunnerBrowserOwnerConfig = Field(default_factory=AgentRunnerBrowserOwnerConfig)
-    wecom_kf: AgentRunnerWeComKfConfig = Field(default_factory=AgentRunnerWeComKfConfig)
     limits: AgentRunnerLimitsConfig = Field(default_factory=AgentRunnerLimitsConfig)
 
     @validator("heartbeat_seconds")
@@ -896,11 +874,6 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         yaml_config.setdefault("app", {})["public_base_url"] = os.getenv("PUBLIC_BASE_URL")
 
     runner_cfg = yaml_config.setdefault("agent_runner", {})
-    if os.getenv("AGENT_RUNNER_WECOM_KF_ENABLED") is not None:
-        value = os.environ["AGENT_RUNNER_WECOM_KF_ENABLED"].lower()
-        if value not in ("true", "false"):
-            raise ValueError("KF_INGRESS_ENABLED_REQUIRES_TRUE_OR_FALSE")
-        runner_cfg.setdefault("wecom_kf", {})["enabled"] = value == "true"
     if os.getenv("AGENT_RUNNER_WEB_ENABLED") is not None:
         runner_cfg["web_enabled"] = os.environ["AGENT_RUNNER_WEB_ENABLED"].lower() in ("true", "1", "yes")
     if os.getenv("AGENT_RUNNER_API_URL") is not None:

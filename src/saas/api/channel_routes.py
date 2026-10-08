@@ -409,6 +409,7 @@ def _build_attachments_for_agent(attachments: list) -> list:
             "name": att["file_name"],
             "content": att["content"],
             "mime_type": att["mime_type"],
+            "file_id": os.path.basename(att["local_path"]) if att.get("local_path") else None,
         })
     return result
 
@@ -1313,30 +1314,6 @@ async def tenant_wecom_kf_callback_get(
 @router.post("/t/{tenant_id}/wecom_kf/callback/{config_id}")
 async def tenant_wecom_kf_callback_post(tenant_id: str, config_id: str, request: Request):
     """微信客服消息回调"""
-    from src.config.settings import settings
-    if settings.agent_runner.wecom_kf.enabled:
-        # Native ingress never traverses the old query/XML temporary logs or
-        # launches its ephemeral Agent/send path, even when native auth rejects.
-        from src.channels.wecom_kf.ingress_auth import KfIngressError
-        from src.channels.wecom_kf.ingress_worker import accept_callback
-        try:
-            chunks = []
-            size = 0
-            async for chunk in request.stream():
-                size += len(chunk)
-                if size > 65536:
-                    raise KfIngressError("KF_INGRESS_INVALID_CALLBACK", 413)
-                chunks.append(chunk)
-            await accept_callback(tenant_id, config_id, dict(request.query_params), b"".join(chunks))
-            return PlainTextResponse("success")
-        except KfIngressError as error:
-            return JSONResponse({"success": False, "error": "消息暂未接受，请重试", "debug": error.code},
-                                status_code=error.status)
-        except Exception as error:
-            # No SDK response, query, XML, exception repr or credential in logs.
-            logger.error("KF durable ingress unavailable: type={}", type(error).__name__)
-            return JSONResponse({"success": False, "error": "消息暂未接受，请重试",
-                                 "debug": "KF_INGRESS_STORAGE_UNAVAILABLE"}, status_code=503)
     try:
         body = await request.body()
         body_str = body.decode()
@@ -1734,6 +1711,7 @@ async def _process_tenant_wecom_kf_messages(
                 )
                 return
             adapter = new_adapter
+            config_id = filled_config_id
             kf_config = adapter.get_kf_config(open_kfid)
             if not kf_config:
                 _kf_tlog(
@@ -1807,11 +1785,6 @@ async def _process_tenant_wecom_kf_messages(
             servicer_msgs_to_persist = []  # 本页员工消息（origin=5），按 send_time 正序，供穿插入库
             recalled_msgids_in_batch = set()  # 本批次内被用户撤回的消息 msgid（供后续剔除用）
             for msg in result.get("msg_list", []):
-                # A native receipt already owned by accepted/classified/business
-                # facts never re-enters the ephemeral legacy Agent on rollback.
-                from src.channels.wecom_kf.completion_business import native_receipt_owned
-                if await asyncio.to_thread(native_receipt_owned,tenant_id,config_id,adapter.corp_id,open_kfid,msg):
-                    continue
                 msg_id = msg.get("msgid", "")
                 msg_origin = msg.get("origin", "")
                 msg_type = msg.get("msgtype", "")
@@ -2616,8 +2589,11 @@ async def _process_tenant_wecom_kf_messages(
                 ):
                     continue
 
-                # 路由到智能体
-                agent = agent_router.get_agent(subagent_type, session_id, tenant_id=tenant_id)
+                # 只替换对话执行，渠道业务和原会话队列保持原实现。
+                from src.channels.runner_agent import ChannelRunnerAgent
+                agent = ChannelRunnerAgent(source='wecom_kf', session_id=session_id,
+                    channel_user_id=unified_msg.user_id, channel_chat_id=open_kfid,
+                    profile_id=subagent_type or 'main', config_id=config_id)
                 _kf_tlog(
                     "Agent路由: tenant={tenant}, session_id={session_id}, "
                     "subagent_type={subagent_type}, agent_class={agent_class}, "
@@ -2626,7 +2602,7 @@ async def _process_tenant_wecom_kf_messages(
                     session_id=session_id,
                     subagent_type=subagent_type,
                     agent_class=agent.__class__.__name__,
-                    model=agent.llm.get_model_name() if agent.llm else "unknown",
+                    model="AgentRunner",
                     user_input_len=len(user_input),
                     user_input=user_input[:300],
                 )
@@ -2639,8 +2615,8 @@ async def _process_tenant_wecom_kf_messages(
                     tenant_id=tenant_id,
                     source_type="wecom_kf",
                 )
-                record_service.set_model(agent.llm.get_model_name())
-                record_service.set_provider(agent.llm.get_provider_name())
+                # 模型/工具用量由独立 Runner 结算；这里仅保留渠道侧 ASR 记录。
+                record_service.skip_save = not asr_success
 
                 # ASR 计费（按次计费，识别成功才计费；必须在 start_record 之后，否则 get_current_record 返回 None）
                 # 注意：SpeechToTextTool 内部也已补 add_asr_usage，但仅当调用时已有当前 record 才生效；

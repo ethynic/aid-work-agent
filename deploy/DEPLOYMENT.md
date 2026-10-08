@@ -644,15 +644,18 @@ gunzip -c /backups/202606/aid_work_agent2_20260605_120310.sql.gz | docker exec -
 
 ## 🤖 AgentRunner 分进程部署（同一代码制品 overlay）
 
-AgentRunner 独立 API / 执行 worker / 微信客服 ingress / admission 四个进程用同一镜像
+AgentRunner 独立 API / 执行 worker 两个进程用同一镜像
 `aid-agent-api:latest`，经根目录 overlay [`../docker-compose.agent-runner.yml`](../docker-compose.agent-runner.yml)
-叠加到目标环境主 compose 启动（KF 两服务需 `--profile wecom-kf`）。
+叠加到目标环境主 compose 启动。微信 KF 恢复主 API 原渠道入口，通过 HTTP 向共用 Runner 提交
+`source=wecom_kf` 的对话；渠道合并、ASR、历史和投递仍走原链路。两个 KF 专属服务已删除，
+不再新增渠道容器；发布脚本沿 `--remove-orphans` 移除其旧容器。
 
 - 服务组成、共享数据库/产物路径（`AGENT_RUNNER_STORAGE_ROOT` 等）、宿主路径与网络变量、
   启动顺序与回退步骤：见 [`deploy/agent-runner-deploy-checklist.md`](agent-runner-deploy-checklist.md)。
 - **前置硬条件**：目标库已按 `deploy/db_update.yaml` 迁移到最新（runner 启动只断言 schema
   不建表）；旧主 API 容器需补注入 `AGENT_RUNNER_API_URL` 并 recreate（详见清单前置①②）。
 - ⚠️ 任何 `up/down/recreate` 均属部署动作，须用户当场明确授权后按清单执行；agent2/agent3
-  共用 `aid_work_agent2` 库，同一时刻只允许一个环境常驻 runner worker/KF worker。
-
+  共用 `aid_work_agent2` 库，同一时刻只允许一个环境常驻 runner worker；切回前须在旧制品核对
+  全部已拉取 KF 消息、任务及送达结论，完成原 cursor 交接；停止旧 KF 与旧共用 Runner 服务，
+  清理旧专用凭据后再执行 gate 退役迁移，详见部署清单。
 
