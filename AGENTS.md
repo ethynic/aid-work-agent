@@ -35,6 +35,10 @@
 - 现有企业后台优先复用 Base* 组件、语义 token 和布局规范。`frontend-design` 的视觉创新建议仅在需求允许时采用，不强制更换字体、主题、布局或添加动画。
 - 仅运行与变更及风险相关的验证；同一代码状态已有可核验结果时，不机械重复测试。保留开发流程要求的独立测试和发布前关键启动检查；修复、合并或环境变化后重跑受影响检查。
 
+## Desktop / Runtime 共同契约
+
+涉及桌面客户端重设计、Runtime、插件或任务级设备/workspace 授权时，先读取并遵守 [Runner / Desktop / Runtime 集成契约](docs/system/runner-desktop-runtime-integration-contract.md)，再读各自设计与计划。页面与产品壳可独立调整；共用 Runtime core、Device API、binding、授权和 wire schema 不得各自实现或单方面改义。修改共同接口先登记版本、唯一写入者与兼容方案，实施前完成契约中的共同检查点；旧 D1/本地 Coordinator 不作为新开发基线。已有代码事实与计划扩展须明确区分。
+
 ## Git 提交规范
 **不要自动提交代码，仅当用户明确说“提交代码”才提交**
 1. 此限制同样适用于 hotfix 和 skill 中的提交步骤；完成开发不等于获得提交授权。

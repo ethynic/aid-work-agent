@@ -1,8 +1,8 @@
 # 开发计划：企业微信个人账号 RPA 生产级独立客户端
 
-> 关联设计：[docs/system/wecom-personal-rpa-design.md](../docs/system/wecom-personal-rpa-design.md)
-> 关联调研：[docs/research/wecom-personal-rpa-client-implementation-research.md](../docs/research/wecom-personal-rpa-client-implementation-research.md)
-> 登记：[docs/ideas.md](../docs/ideas.md) 渠道集成分区
+> 关联设计：[docs/system/wecom-personal-rpa-design.md](../system/wecom-personal-rpa-design.md)
+> 关联调研：[docs/research/wecom-personal-rpa-client-implementation-research.md](../research/wecom-personal-rpa-client-implementation-research.md)
+> 登记：[docs/ideas.md](../ideas.md) 渠道集成分区
 > 创建日期：2026-06-16
 > 更新日期：2026-06-23
 > 状态：🔧 部分完成（服务端渠道完整、83 测试通过、休眠上线安全；C# 客户端 5 工程全部编译通过、36 测试通过；操作手册、PowerShell 脚本及准入验证探测工具已交付；P1.1 管理前端已交付——`WecomPersonalRpaManager.vue` 三 Tab 接入全部 9 个管理端点，`npm run build` 0 错误，未真实联调；P1.4 指标+告警已交付——`GET /metrics` + `GET /alerts` + 纯逻辑 `observability.py`（9 单测）+ 前端「监控」Tab，未真实联调。待：真实环境准入验证回填节点常量、删 Stubs 接真自动化、14 天验收。2026-07-13 起安装包方案永久废弃，客户端仅使用 Release build 或 `scripts/publish.ps1` 生成 EXE 目录）

@@ -2,7 +2,7 @@
 
 > **关联开发计划**：[plan-excel-template-ai.md](../../plans/plan-excel-template-ai.md)
 > **登记**：[docs/ideas.md](../../ideas.md)「工具」分区「Excel 智能模板填充」(#44)
-> **消费者**：旅游报价（[design-travel-quote-template-engine.md](../system/design-travel-quote-template-engine.md)）、后续 CRM 对账单 / 财务报表 / 贸易报价单等
+> **消费者**：旅游报价（[design-travel-quote-template-engine.md](../../system/design-travel-quote-template-engine.md)）、后续 CRM 对账单 / 财务报表 / 贸易报价单等
 
 ## 背景与动机
 
@@ -238,5 +238,5 @@ def fill_with_sample(sample_file_path, data, output_name=None, tenant_id=None) -
 
 - **既有 `excel_template.py`**：本设计扩展它（AI 分析 + 行数处理 + data 模式），不重写既有函数。
 - **既有 `ExcelProcessTool` 管线**：fill_template action 增强；不新增 list/get/set_default/delete（无状态）。
-- **旅游报价消费者**：[design-travel-quote-template-engine.md](../system/design-travel-quote-template-engine.md) 负责领域计费 + QuoteData→data 适配 + 持有样例路径，调本工具 `fill_with_sample`。
+- **旅游报价消费者**：[design-travel-quote-template-engine.md](../../system/design-travel-quote-template-engine.md) 负责领域计费 + QuoteData→data 适配 + 持有样例路径，调本工具 `fill_with_sample`。
 - **PDF 固定版式生成器**（#30）：本设计是 Excel 侧"样例驱动生成"，与之互补。

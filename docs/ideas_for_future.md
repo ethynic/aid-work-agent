@@ -2,41 +2,20 @@
 
 > 本文件收录尚未进入当前开发主线的中长期调研、架构设计与开发计划，避免 `ideas.md` 因远期规划持续膨胀。
 >
-> 当前日期：2026-08-28。进入实际开发时，再将对应项目迁入 `ideas.md`；开发完成后按规范归档到 `ideas_finished.md`。
+> 更新日期：2026-10-08。进入实际开发时，再将对应项目迁入 `ideas.md`；开发完成后按规范归档到 `ideas_finished.md`。本索引不保留已撤销架构的开工方案。
 
 ## Agent Desktop 相关长期调研
 
 | 主题 | 状态 | 文档 |
 |---|---|---|
-| Desktop 本地工具、服务端工具与远端 Runtime 分工 | 📋 调研完成；业务执行所有权待桌面规划重写 | [调研](research/desktop-agent-local-vs-server-tool-execution-research.md) |
+| Desktop 本地工具、服务端工具与远端 Runtime 分工 | 📋 调研资料；按现行职责接入 | [调研](research/desktop-agent-local-vs-server-tool-execution-research.md) |
 | 第一方 CLI / MCP Provider 跨 Host 规范 | 📋 规范完成 | [架构规范](system/first-party-cli-mcp-provider-standard.md) |
 
-## 企业 Agent 平台长期设想
+## 企业能力与团队协作长期设想
 
-> 各能力面必须以自身可量化的客户问题、验收指标和可见产品结果独立立项，不设置统一业务任务模型作为共同前置。
+策略治理、业务证据、企业记忆、发布评测和团队协作仍可作为产品方向，但旧平台及协作蓝图已删除，不是已确认设计或待实施项目。各方向只有在真实客户问题、验收指标和产品结果明确后才能独立设计；不设置统一任务模型、第二套 Coordinator 或执行网络作为共同前置。
 
-| 能力面 | 状态 | 文档 |
-|---|---|---|
-| 六能力面总体集成架构 | 📋 架构设计，按能力独立评审 | [总体架构](system/enterprise-agent-platform/enterprise-agent-platform-integration-design.md) |
-| 企业 Policy Engine | 📋 待独立评审 | [Policy Engine](system/enterprise-agent-platform/enterprise-policy-engine-design.md) |
-| Server / Desktop / Runtime 执行网络 | 📋 待独立评审 | [Execution Fabric](system/enterprise-agent-platform/enterprise-execution-fabric-design.md) |
-| 企业动作与业务结果证据 | 📋 待独立评审 | [Evidence Ledger](system/enterprise-agent-platform/enterprise-evidence-ledger-design.md) |
-| 企业记忆与知识治理 | 📋 待独立评审 | [Memory & Knowledge](system/enterprise-agent-platform/enterprise-memory-knowledge-design.md) |
-| Agent 发布评测与运营 | 📋 待独立评审 | [Evaluation & Operations](system/enterprise-agent-platform/enterprise-agent-evaluation-operations-design.md) |
-
-各能力必须按真实业务场景独立验证边界，并遵守统一 Run P0 与 Desktop P1：云端 RunService
-拥有业务执行权威，设备只执行已授权 Invocation；旧 `DEVICE_OWNED`/Local Coordinator 假设
-只存在于带“基线替代”提示的历史研究稿中，不能作为新实施前提。
-
-## 企业多智能体协作体系
-
-| 主题 | 状态 | 文档 |
-|---|---|---|
-| 当前子智能体实现与 Codex/WorkBuddy 差距 | 📋 调研完成 | [调研与现状审计](research/enterprise-multi-agent-collaboration-research.md) |
-| Web/Desktop 共用 Multi-Agent Collaboration Fabric | ⛔ 暂停，禁止按旧设计开工 | [暂停说明](system/enterprise-agent-platform/enterprise-multi-agent-collaboration-design.md) |
-| 持久 Coordinator、并行协作、团队模板与双端 UI | ⛔ 原计划撤销 | [暂停计划](plans/plan-enterprise-multi-agent-collaboration.md) |
-
-协作方向暂不定案。只有协作自身权威对象、生命周期、权限与真实客户场景独立重审后，才能重新立项；旧字段、状态机和协议不构成兼容要求。
+后续方案复用[现行 AgentRunner 架构](system/agent-application-architecture-design.md)。Agent 重构已完成；设备执行已授权工具，原渠道只接入对话服务。旧桌面所有权、状态机、字段和协议不构成兼容要求。
 
 ## 产品战略建议
 

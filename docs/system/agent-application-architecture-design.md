@@ -12,7 +12,11 @@
 
 > 完成记录：[AgentRunner 独立服务开发计划与完成记录](../plans/plan-agent-runner-service.md)；后续接入：[飞书渠道计划](../channel/feishu/implementation_plan.md#agentrunner-接入后续独立事项)、[钉钉渠道计划](../channel/dingtalk/implementation_plan.md#agentrunner-接入后续独立事项)。
 
+> 桌面后续设计（2026-10-08）：[Agent 桌面客户端 v3](desktop-agent-client-design.md) 与[开发计划](../plans/plan-desktop-agent-client.md)独立跟踪；保留已有 Shell，建议复用云端 Runner 并扩展任务级设备/workspace 授权与本地工具。本文“桌面 D1 不迁移”指已完成重构的范围，不限制新版桌面独立开发；本轮仅设计，尚未接入。
+
 ## 1. 已确认的目标与范围
+
+桌面与Runtime后续开发共同遵守[集成契约v1.1](runner-desktop-runtime-integration-contract.md)。已完成Runner保持任务与推理权威；新增设备binding和插件登记在应用适配边界版本化接入，Runtime提供统一客户机执行环境，不因桌面重设计建立第二套执行循环。
 
 服务名称为 **AgentRunner**。Web、微信客服、飞书、钉钉共用这套独立服务。入口提交请求后，服务为实际执行的任务分派一个 runner；runner 绑定现有会话，自主执行，保存运行上下文，并发布过程与结果事件。
 

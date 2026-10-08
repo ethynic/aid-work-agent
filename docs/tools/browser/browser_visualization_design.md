@@ -4,7 +4,7 @@
 >
 > 日期：2026-07-14
 >
-> 状态：🔧 设计完成，Phase 3 修复待开发
+> 状态（2026-10-08）：浏览器领域设计与 legacy 兼容资料。本文保留 2026-07 的领域及修复基线；AgentRunner 主/子执行、等待及恢复已按[现行架构](../../system/agent-application-architecture-design.md)落地，不将原 Phase 3 队列方案作为 Runner 接入前置。
 >
 > 替代：v1.0《浏览器工具可视化设计文档》（2026-05-21）
 >
@@ -14,7 +14,7 @@
 >
 > v2.5 变更：把人工参与改为可持久化的工具 suspend/resume；增加结构化操作指引、完成条件监测、自动/手工交还和原 Agent 工具调用续跑，禁止依赖用户再次发消息或 LLM 重新调用工具。
 >
-> v2.6 变更：确立 Agent-first 原则。桌面执行能力改为 Agent Desktop 的可选 browser runtime。桌面规划重写前不接入 browser legacy，后续须按 Execution Fabric 重新评审。
+> v2.6 历史变更：确立 Agent-first 原则。桌面执行能力是可选 browser runtime；后续按现行桌面/Runtime 方案单独评审，不引入旧 Execution Fabric 或桌面业务 Coordinator。
 >
 > v2.7 变更：彻底删除独立浏览器客户端产品、工程、安装包、协议 scheme、更新器和发布依赖。桌面执行只作为 Agent Desktop 内置可选 `browser-runtime` 模块存在；`browser/1.0` 仅是主进程内 runtime 与服务端 RemoteExecutor 的隔离协议。
 >
@@ -269,6 +269,8 @@ Agent Desktop runtime 执行同一逻辑，并在服务端收到 `closed` ACK �
 显式“取消任务”和应用 shutdown 必须向 run cancellation token 传播。工具挂起后原 SSE 正常结束、页面刷新或短暂断线不视为取消；由 Web presence 的 30 秒宽限和人工租约决定是否保留。人工等待期间暂停自动执行预算，但不突破人工租约和 15 分钟硬上限；恢复后从剩余自动执行预算继续。reaper 处理 owner worker 崩溃后的过期租约。
 
 ## 6. Agent Desktop browser runtime
+
+本节是旧浏览器领域的可选桌面设想，不是当前桌面客户端或 Runtime 的实施契约。客户端与工具 Host 的职责以[桌面客户端设计](../../system/desktop-agent-client-design.md)和[Runtime Plugin Host 设计](../../system/runtime-plugin-host-architecture-design.md)为准；不得据此恢复旧浏览器专有连接、第二套业务状态机或另建客户端产品。下面的协议、认证及交付设想只有在具体 browser 能力单独评审后才可采用。
 
 ### 6.1 产品与工程边界
 

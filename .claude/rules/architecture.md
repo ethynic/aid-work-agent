@@ -9,27 +9,36 @@
 | 既有功能模块 | `src/` 根目录存量（wechat_mp、session_tasks 等） | 原地维护不强制迁移；新模块不再进根目录 |
 
 ## 请求流程
+
+Agent/AgentRunner 架构重构已完成，现行职责以 [AgentRunner 架构](../../docs/system/agent-application-architecture-design.md) 为准。
+
 ```
-用户/渠道（企业微信、钉钉、飞书、Web）
-  → FastAPI (src/main.py) — HTTP 路由、SSE 流式输出
-    → 主智能体 (src/core/agent.py) — 大模型智能体循环（最多 20 轮）
-      → 大模型网关 (src/llm/gateway.py) + 工具注册表 (src/tools/)
-        → 子智能体执行器 / 技能执行器 / 直接工具执行
+Web / 微信客服原渠道
+  → 主 API (src/main.py) — 原入口业务、可信身份及对话调用适配
+    → 独立 Runner API → Runner worker (src/services/agent_runner/)
+      → RuntimeExecution → AgentEngine (src/core/agent_engine/)
+        → 模型网关 / 工具派发 / 同一内核的子执行
+
+飞书 / 钉钉等未接入入口
+  → 原入口与兼容 Agent API → 同一 AgentEngine
+  → 后续只将对话调用接入独立 Runner，保留原渠道业务
 ```
 
 ## 核心组件
 
-**智能体** (`src/core/agent.py`)：核心大脑。单个 `Agent` 类同时作为主智能体和子智能体（通过 `is_master` 标志区分）。`master_agent` 单例从 `src/core/__init__.py` 导出。智能体循环调用大模型、执行工具、累积结果，并通过回调推送进度事件。
+**智能体执行**：`src/core/agent_engine/` 负责主/子共用 Loop；`src/services/agent_runner/runtime/` 装配上下文、模型、工具及生命周期。独立 Runner API/worker 承担持久任务、授权、控制、恢复和事件。`src/core/agent.py` 是未接入入口的兼容 API，复用同一内核，不作为新执行循环或请求身份的共享存储。
 
 **工具系统** (`src/tools/`)：工具继承 `BaseTool` 并实现 `async execute(self, **kwargs)`。普通工具由 Catalog 自动发现，`src/tools/assembly.py` 的 `assemble_agent_tools()` 负责实例化、注册并按 Agent 角色和配置筛选；schema 从工具类定义生成。**新增普通工具无需在 `agent.py` 中添加注册或 schema 代码**。控制工具由 `src/tools/control_set.py` 单独装配，具体要求见下方「添加工具」。
 
 **技能系统** (`src/core/skill_*.py` + `src/skills/`)：领域知识扩展包，存储在带 `SKILL.md` 文件（YAML 头部 + Markdown）的目录中。`SkillRegistry` 发现并索引技能。当大模型调用 `use_skill` 时，技能被加载到上下文中，并通过 `skill_execute` 执行。技能支持按文件扩展名自动匹配。
 
-**子智能体系统** (`subagents/` + `src/subagents/`)：在 `subagents/<name>/SUBAGENT.md` 中定义（YAML + Markdown）。主智能体通过 `delegate_to_subagent` 委托任务。`SubagentExecutor` 实例化一个子 `Agent(is_master=False)` 并在线程中运行。
+**子智能体系统** (`subagents/` + `src/subagents/`)：在 `subagents/<name>/SUBAGENT.md` 中定义（YAML + Markdown）。主智能体通过 `delegate_to_subagent` 委托任务；主/子共用 AgentEngine，子执行有独立上下文并向父执行汇总结果与用量。兼容 API 的子 Agent 调用也复用该内核，不建立第二套模型循环。
 
 **大模型网关** (`src/llm/gateway.py`)：统一接口到 `qwen`（DashScope）和 `zhipu`（ZhipuAI）提供商。所有调用都通过 `chat_with_tools()`。提供商可通过 `configs/config.yaml` 中的 `llm.provider` 切换。`KeyPool` 通过信号量控制并发，管理多个 API 密钥。
 
 **渠道系统** (`src/channels/`)：每个渠道（企业微信、钉钉、飞书）继承 `ChannelAdapter`。`ChannelManager` 分发消息。渠道通过 `configs/config.yaml` 中的 `enabled` 标志启用/禁用。
+
+渠道接入 Runner 只调整对话执行调用并传递可信 source/会话绑定；原回调、去重、队列、媒体/ASR、历史、发送及业务状态沿用。不得以接入为由新增渠道专用接单/投递闸门、管线或容器。
 
 **记忆** (`src/memory/short_term.py`)：`ShortTermMemory` 使用基于 deque 的滑动窗口，按 session_id 分隔，配置 max_messages 和 TTL。
 

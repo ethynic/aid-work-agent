@@ -257,5 +257,5 @@ grep -rn "async def" src/tools/ -A 20 | grep -B 20 "subprocess\.run\|\.execute("
 
 ## 相关文档
 
-- [异步/同步开发规范](../../../.codebuddy/rules/async-sync-guidelines.md) — 项目规范要求使用 `asyncio.to_thread`
+- 异步/同步开发规范（旧文档已移除） — 项目规范要求使用 `asyncio.to_thread`
 - Gunicorn 配置：`deploy/gunicorn.conf.py` — `worker_class = "uvicorn.workers.UvicornWorker"`，workers=3

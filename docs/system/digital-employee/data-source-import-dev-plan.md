@@ -177,7 +177,7 @@ CREATE TABLE IF NOT EXISTS data_connectors (
 | 2 | `frontend/src/pages/DataSourceManager.vue` | 新建 | 数据源管理主页面 |
 | 3 | `frontend/src/main.ts` | 修改 | 注册路由 `/data-sources` 和 `/t/:tenant_id/data-sources` |
 
-> 页面遵循 [page_patterns.md](../../.claude/rules/page_patterns.md) 规范，使用 BaseTable / BaseModal / BaseButton / BaseInput / BaseSelect 组件。
+> 页面遵循 [page_patterns.md](../../../.claude/rules/page_patterns.md) 规范，使用 BaseTable / BaseModal / BaseButton / BaseInput / BaseSelect 组件。
 
 #### 2.2 页面结构
 

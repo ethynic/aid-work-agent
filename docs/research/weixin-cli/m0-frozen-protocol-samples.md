@@ -2,7 +2,7 @@
 
 > 日期：2026-08-11
 >
-> 阶段：M0，对应 [开发计划](../../../plans/weixin/plan-weixin-cli.md) §2「冻结旧 ps1 stdin/stdout、错误码、artifact 和 cleanup 行为样本」
+> 阶段：M0，对应 [开发计划](../../plans/weixin/plan-weixin-cli.md) §2「冻结旧 ps1 stdin/stdout、错误码、artifact 和 cleanup 行为样本」
 >
 > 冻结源：`clients/wechat-souyisou-rpa/scripts/wechat-souyisou.ps1` + `wechat-souyisou-lib.ps1`（与协会客户端同名文件字节一致）
 >

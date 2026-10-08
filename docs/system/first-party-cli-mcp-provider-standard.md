@@ -10,6 +10,8 @@
 >
 > 关联架构：[Agent 应用层架构优化设计](agent-application-architecture-design.md)（桌面客户端规划待重写）
 
+> Runtime 按需插件与 UI 落地建议（2026-10-08）：[Runtime 插件宿主设计](runtime-plugin-host-architecture-design.md)及[开发计划](../plans/plan-runtime-plugin-host.md)。复用本规范第 8/10.1 节方向；第三方 skill 本机导入不等于开放第三方云端自动分发，客户端描述仍须经过验证和授权才进入模型。
+
 ## 1. 核心决策
 
 第一方 CLI 必须是独立、标准、可分发的 MCP Provider，而不是 aid-work-agent 内部专用脚本。

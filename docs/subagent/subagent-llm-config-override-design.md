@@ -268,4 +268,4 @@ ALTER TABLE subagent_definitions ALTER COLUMN llm_provider TYPE JSONB USING
 
 - [LLM Failover 设计文档](../infrastructure/llm-failover-design.md) §7「子智能体 model_codes 覆盖」--本文档的 failover 部分扩展
 - [Prompt 全生命周期管理设计](../infrastructure/prompt-lifecycle-design.md)--`subagent_definitions` 表的另一个主要改造方
-- [数字员工管理](../system/digital-employee/digital-employee-management.md)--子智能体整体管理规范
+- 数字员工管理（旧文档已移除）--子智能体整体管理规范

@@ -3,6 +3,10 @@
 > 日期：2026-08-12
 >
 > 当前架构：[Agent 应用层架构优化设计](../system/agent-application-architecture-design.md)（原桌面 P1 基线已于 2026-10-01 删除）
+
+> 桌面重新设计（2026-10-08）：[桌面客户端 v3](../system/desktop-agent-client-design.md)。本文的 RunService/Agent API/Device API 是概念职责，当前实际实现为 AgentRunner、公开 `/api/chat/runners` 网关和既有 `/api/local-tools` 设备协议；文件 grant、任务级设备绑定与通用本地文件执行器仍待开发。
+
+> 新补充：[Codex、DeepSeek Harness、Hermes 源码调研](desktop-agent-harness-architecture-research.md)核对了同核心多入口、执行环境与程序化批处理。桌面共用云端 Runner 已由用户明确；本地直接执行文件/脚本不要求本地模型循环。
 >
 > 架构替代说明：本文关于本地/服务端双文件执行器、受权 FileRef、Provider Host 和本地副作用
 > 安全边界的调研结论仍有效；第 8 节推荐的 Local Agent Coordinator、旧 `agent/next` 与

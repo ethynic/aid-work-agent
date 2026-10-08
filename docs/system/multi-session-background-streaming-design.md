@@ -1,7 +1,7 @@
 # 多会话后台流式设计
 
 > 关联开发计划：[plan-multi-session-background-streaming.md](../plans/plan-multi-session-background-streaming.md)
-> 登记：[ideas.md](../../ideas.md) 前端分区 #43
+> 登记：[ideas.md](../ideas.md) 前端分区 #43
 
 ## 背景与问题
 

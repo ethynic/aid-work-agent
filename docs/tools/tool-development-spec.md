@@ -21,7 +21,7 @@ LLM 每轮对话都消耗两类工具 token：① **工具 schema**（`descripti
 | 依赖 | 用途 | Linux/Docker | Windows（venv） | macOS |
 |------|------|------|------|------|
 | **ripgrep (`rg`)** | `grep` 工具（文件内搜索，grep_tool.py 调系统 rg 二进制） | `apt-get install -y ripgrep`（Dockerfile 已内置） | `winget install BurntSushi.ripgrep.MSVC` 或 `scoop install ripgrep` | `brew install ripgrep` |
-| **pandoc** | `word_process` 的 md_to_word 操作 | `apt-get install -y pandoc`（Dockerfile 已内置，详见 [pandoc 安装指南](../md-to-word/pandoc-install-guide.md)） | `winget install JohnMacFarlane.Pandoc` | `brew install pandoc` |
+| **pandoc** | `word_process` 的 md_to_word 操作 | `apt-get install -y pandoc`（Dockerfile 已内置，详见 [pandoc 安装指南](md-to-word/pandoc-install-guide.md)） | `winget install JohnMacFarlane.Pandoc` | `brew install pandoc` |
 
 **验证**：`rg --version`、`pandoc --version` 能输出版本号即可。
 

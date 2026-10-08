@@ -657,7 +657,7 @@ POST /api/org-knowledge/skill-drafts/{id}/publish  # 发布为正式 Skill
 
 L3 组织规则直接复用 `prompt_registry` 表，已有版本管理、审核流程、A/B 灰度能力。无需重新建设。
 
-### 5.5 与 Skill 系统（[架构](../.claude/rules/architecture.md)）的关系
+### 5.5 与 Skill 系统（[架构](../../.claude/rules/architecture.md)）的关系
 
 自动生成的 Skill 草案进入 `src/skills/auto/`，由管理员审核后加入 `subagent_definitions.skills.allowed` 白名单。**关键约束**：自动生成的 Skill **不能自动生效**，必须经管理员审核（避免幻觉 Skill 污染生产环境）。
 

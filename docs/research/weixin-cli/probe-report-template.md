@@ -1,6 +1,6 @@
 # Probe 报告模板
 
-> 阶段：M0 产物，对应 [开发计划](../../../plans/weixin/plan-weixin-cli.md) §2 与设计 §7.2
+> 阶段：M0 产物，对应 [开发计划](../../plans/weixin/plan-weixin-cli.md) §2 与设计 §7.2
 >
 > 使用方式：每个 probe 在 `docs/research/weixin-cli/<probe-id>.md` 按本模板填写；实验代码与 `probe.json` 放 `clients/weixin-cli/experiments/probes/<probe-id>/`。
 >

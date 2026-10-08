@@ -1,7 +1,6 @@
 # 对 AID Work Agent 项目的真诚建议
 
-> **2026-09-22 阅读说明**：本文早于统一 Run P0。涉及 `DEVICE_OWNED`、Desktop Local
-> Coordinator 或本地业务 Run 权威的建议已被 P0/P1 替代；其余产品战略观点只作为研究输入。
+> **2026-10-08 阅读说明**：本文是 2026-08-12 的产品战略研究，不是当前架构或待开发清单。Agent/AgentRunner 重构已完成；§10 的母体行数、职责集中和 Kernel 拆分建议是当时基线。旧桌面业务执行权威已撤销；产品设想需基于现行架构单独评审，不重新启动核心或渠道重构。
 >
 > 日期：2026-08-12
 >
@@ -9,7 +8,7 @@
 >
 > 适用范围：AID Work Agent 整体产品，包括 Web、渠道、服务端、Desktop、Runtime、数字员工、Skill 与行业解决方案
 >
-> 关联架构：[企业 Agent 平台总体架构](../system/enterprise-agent-platform/enterprise-agent-platform-integration-design.md)
+> 现行架构：[AgentRunner 服务架构](../system/agent-application-architecture-design.md)
 
 ## 1. 结论先行
 
@@ -392,12 +391,12 @@ Prompt 主要负责语义理解、推理、内容生成和在确定性规则允�
 - 运行状态持久化并支持 lease/fencing/reconcile，不以进程内任务为权威；
 - 团队有并发、深度、token、积分、时间、工具与副作用预算；
 - root 必须记录对成员结论的采纳、拒绝、冲突和证据依据；
-- Web 与 Desktop 展示同一团队状态并允许用户纠偏，但 `DEVICE_OWNED` 协调器始终留在原设备；
+- Web 与 Desktop 可展示服务端任务状态并允许用户纠偏；业务执行由服务端 Runner 负责，桌面不新增独立业务 Coordinator；
 - 工具执行节点与智能体成员解耦，成员仍可调用 Server、本机或远端 Runtime 工具。
 
 首批不要追求“智能体数量最多”，只做三类能证明价值的团队：并行深度调研、方案制作+独立复核、批量资料处理。每个团队都必须与单智能体基线比较质量、总时延和单位成功成本；没有显著收益的任务不自动组队。
 
-详细审计、架构和实施路线见：[多智能体调研](enterprise-multi-agent-collaboration-research.md)、[协作架构](../system/enterprise-agent-platform/enterprise-multi-agent-collaboration-design.md)、[开发计划](../plans/plan-enterprise-multi-agent-collaboration.md)。
+本节只保留团队协作的产品设想；旧协作审计、架构和实施计划已删除，不构成当前实施要求。只有真实协作场景和验收目标明确后才另行设计，复用现有 Runner 与主/子内核。
 
 ## 13. 建议的 90 天行动路线
 

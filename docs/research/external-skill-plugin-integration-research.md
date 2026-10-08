@@ -3,6 +3,8 @@
 > 2026-10-06 · 样本：workbuddy 制作的 `jingpian-house-finder-v2.0.0.zip`（镜片找房小程序桌面 RPA skill）
 > 关联：Runtime 插件生态扩展 · 不对应已立项开发任务
 
+> 修订（2026-10-08）：第 1～7 节保留 M1/M2 的历史方案；目标架构调整为“客户机安装代码、云端登记手册和调用契约、UI 管理可选插件”，见第 8 节及[新设计](../system/runtime-plugin-host-architecture-design.md)、[开发计划](../plans/plan-runtime-plugin-host.md)。第 6 节对旧 Desktop 网关路线的否定，不适用于复用同一 Runtime core 的新 UI 方案。
+
 ## 1. 结论（TL;DR）
 
 **可行，且不需要发明第三种接入机制**。本 runtime 已有两条能力接入通道，把它们组合即可：
@@ -162,3 +164,42 @@ jingpian-house-finder/
 3. 截图回传大小护栏与张数上限（详情页一次 1 张、seq 产物全量引用 + 按需取图，建议按此设计）。
 4. `ui-cache.json` 自学习写回在多租户共用一台设备时的隔离策略（首期假设「一台设备单租户使用」，与三 CLI 现状一致）。
 5. weixin-cli 与本 skill 的微信会话占用语义：skill 运行期间 weixin-cli 的 unread 轮询是否需要让位（桌面锁之外的业务级协调）。
+
+## 8. 2026-10-08 架构复核：单端安装与 Runtime UI
+
+### 8.1 用户意见及结论
+
+两点意见成立：设备执行 skill 的代码和依赖没有必要同时安装在云端；Runtime 可提供可视化配对/插件管理，BOSS、weixin、wecom 改为可选独立插件。
+
+双端放完整包是旧 M1/M2 的最小接入方式：服务端依赖目录加载器计算审批 hash、读取手册和入口。它是实现复用造成的耦合，不是执行机制必须要求。新架构把注册依据改为受权契约和不可变内容摘要，设备执行包由本地宿主管理。
+
+云端仍需 SKILL.md、调用参数/入口、版本及权限；部分技能还需参考文档，不能把“无需代码”简化成“只要技能名称即可”。官方包分发存储或可选代码审核不等于云端运行时安装。
+
+### 8.2 新核对事实
+
+- M2 代码已存在：`skill_runner_proxy.py` 派发，设备 `skillRunner.ts` 执行；`configs/config.yaml` 两个开关仍默认关闭。部署和 Windows 实测不能由源码存在推断。
+- `clients/release/aidwork-recruiting-client-0.2.14.zip` 中 Runtime tgz 不含 skillRunner 编译模块，cli/config/providers 编译产物无对应引用。现有包不能承载源码中的新能力。
+- Runtime package 仍捆绑 BOSS，config 将其默认入口视为可用；并非已经实现零业务插件核心。
+- Electron Desktop 已有 UI、安全 IPC 和发行基础，但没有运行 Runtime；共用 Host core 当前只定义接口。
+- MCP Provider 可以提供 tools/list；现有 Runtime ProviderManager 尚未把工具发现转成云端注册，云端仍依赖静态 catalog/proxy。
+- skill-runner manifest 是 protocol v1，不等同于 v2 受控写动作的 write-authorize 与结果持久 ACK 全链已经适用于第三方脚本。
+- 原 jingpian ZIP 本次不在工作区；历史依赖、mutable、截图行为需用原包重新核实。
+
+### 8.3 推荐调整
+
+1. 本机 ZIP 导入生成独立执行侧清单，保留原 SKILL.md；环境、入口、状态和输出由宿主管理。
+2. 配对设备只登记手册、批准的文档/schema 与 digest；心跳提供短清单。新私有登记按租户/用户/设备授权，不复用 M1 平台级审批为全局可见。
+3. 云端 Agent 编排任务，Runtime 执行结构化脚本或 MCP 调用。普通 skill 不变成本地自治 Agent；无完整流程入口时仍需多轮脚本/截图交互。
+4. 复用 Electron 工程，提供独立 Runtime 产品形态；main 监管同一 Runtime core，renderer 无业务执行旁路。
+5. 三 CLI 保持标准 MCP，对外兼容；本地 lifecycle 和安装共用，工具 schema 与 skill 手册保持各自语义。
+6. 原子版本与调用固定、撤销复查、unknown 不重试、截图真正进入模型输入纳入首轮验收。市场和在线分发后置。
+
+与现有规范的冲突处理：第一方 CLI 规范第 8/10.1 节已要求 Runtime core 共用和业务插件按需交付；选择该方向，当前 BOSS 捆绑作为兼容旧版迁移。旧本地 Agent Coordinator 路线已被 AgentRunner 替代，不重新启用。
+
+### 8.4 外部依据
+
+- [AgentSkills 格式](https://agentskills.io/specification)：手册和可选脚本/参考资源、渐进加载。标准 metadata 为字符串映射，现有 entry/mutable 列表是本项目扩展，执行清单独立可减少第三方适配改写。
+- [MCP Tools（2025-06-18）](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)：发现、schema、调用及图片等结果；不替代平台授权。
+- [Electron 安全](https://www.electronjs.org/docs/latest/tutorial/security)和[进程监管 API](https://www.electronjs.org/docs/latest/api/utility-process)：支持隔离 UI 与执行进程。具体宿主适配依仓库锁定版本实测。
+
+本次为只读核查与设计，没有运行客户机插件、重打发行包或部署。详细边界、数据契约、安装流程与阶段验收见关联设计和计划。

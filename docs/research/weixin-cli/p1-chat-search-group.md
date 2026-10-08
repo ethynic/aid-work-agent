@@ -2,7 +2,7 @@
 
 > Probe ID：`p1-chat-search-group`
 >
-> 阶段：M3 probe，对应 [设计文档 §7.3 首批 probe 第 4 项](../../../design/weixin/weixin-cli-design.md) 与 [开发计划](../../../plans/weixin/plan-weixin-cli.md)
+> 阶段：M3 probe，对应 [设计文档 §7.3 首批 probe 第 4 项](../../design/weixin/weixin-cli-design.md) 与 [开发计划](../../plans/weixin/plan-weixin-cli.md)
 >
 > 风险等级：**P1（导航）** — 激活窗口、打开搜索、输入但不提交或只读提交、点击进入会话；不发送消息、不读历史、不关闭用户窗口。
 >

@@ -1,7 +1,7 @@
 # 开发计划：研学报价技能 Prompt 稳定性优化（方案 A）
 
-> **关联设计文档**：[design-travel-quote-prompt-stability.md](../docs/system/design-travel-quote-prompt-stability.md)
-> **登记**：[docs/ideas.md](../docs/ideas.md)
+> **关联设计文档**：[design-travel-quote-prompt-stability.md](../system/design-travel-quote-prompt-stability.md)
+> **登记**：[docs/ideas.md](../ideas.md)
 
 ## 任务清单
 

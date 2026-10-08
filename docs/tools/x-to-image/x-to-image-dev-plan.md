@@ -104,7 +104,7 @@
 
 待完成改动：
 1. `src/tools/image/__init__.py` + `src/tools/image/x_to_image_tool.py`：
-   - `XToImageInputModel`（Pydantic，见设计 §5.8；遵循 [入参契约](../../tool-input-contract-redesign.md) 的 `content/content_type/output_name` 约定）。
+   - `XToImageInputModel`（Pydantic，见设计 §5.8；遵循 [入参契约](../tool-input-contract-redesign.md) 的 `content/content_type/output_name` 约定）。
    - `XToImageTool(BaseTool)`：`name="x_to_image"`、`display_name="内容转图片"`、`category="image"`、`description`、`InputModel`。
    - `execute`：构造 `XToImageInput` → `await x_to_image_service.convert()` → 失败透传 → 成功返回临时路径 + 元信息 dict（`image_path`/`image_name`/`file_size`/`image_width`/`image_height`/`truncated`/`renderer`）。**不返回 download_url，不调 cp 注册。**
 2. 在 `src/core/agent.py:_register_builtin_tools`（line 306 起）PDF 工具注册后追加：

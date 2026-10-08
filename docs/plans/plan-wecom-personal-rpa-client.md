@@ -1,11 +1,11 @@
 # 开发计划 —— 企业微信个人账号 RPA 客户端
 
 > 关联：
-> - 设计文档：[docs/system/wecom-personal-rpa-client-design.md](../docs/system/wecom-personal-rpa-client-design.md)
+> - 设计文档：[docs/system/wecom-personal-rpa-client-design.md](../system/wecom-personal-rpa-client-design.md)
 > - 主计划（服务端 + 部署）：[plans/plan-wecom-personal-rpa.md](./plan-wecom-personal-rpa.md)
 > - 调试脚本：[clients/wecom-personal-rpa/scripts/debug-navigate.ps1](../clients/wecom-personal-rpa/scripts/debug-navigate.ps1)
 >
-> 登记位置：[docs/ideas.md](../docs/ideas.md) #29
+> 登记位置：[docs/ideas.md](../ideas.md) #29
 >
 > 创建日期：2026-06-26
 > 状态：🔧 计划已制定，待执行
@@ -103,7 +103,7 @@
   - 先把调用点注释掉或改为 throw NotImplementedException（待阶段 2 替换）
 
 - [ ] **1.2.7** 文档同步
-  - `docs/system/wecom-personal-rpa-design.md` §6.2 三层自动化策略 → 改为「已废弃，见 [客户端设计](./wecom-personal-rpa-client-design.md)」
+  - `docs/system/wecom-personal-rpa-design.md` §6.2 三层自动化策略 → 改为「已废弃，见 [客户端设计](../system/wecom-personal-rpa-client-design.md)」
   - `docs/system/wecom-personal-rpa-design.md` §13.4 实现进度 → 更新当前状态（删除 Qwen3-VL 落地描述）
   - `docs/ideas.md` #29 → 更新（删除 vision/enter-fix 关联，加 client-design）
 

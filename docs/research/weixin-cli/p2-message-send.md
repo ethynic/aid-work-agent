@@ -2,7 +2,7 @@
 
 > Probe ID：`p2-message-send`
 >
-> 阶段：M3 probe，对应 [设计文档 §5.4 v0.4 受控写动作](../../../design/weixin/weixin-cli-design.md) 与 [开发计划](../../../plans/weixin/plan-weixin-cli.md)
+> 阶段：M3 probe，对应 [设计文档 §5.4 v0.4 受控写动作](../../design/weixin/weixin-cli-design.md) 与 [开发计划](../../plans/weixin/plan-weixin-cli.md)
 >
 > 风险等级：**P2（沙箱写）** — 真实发送 1 条文本消息到用户当前打开的会话。运行前由用户确认当前会话即测试目标。禁止：群发、发图/文件、读历史、未知目标重试。
 >

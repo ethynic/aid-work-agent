@@ -95,7 +95,7 @@ async *run(options): AsyncGenerator<AgentEvent, TurnRunnerResult> {
 
 #### 深度对比：Callback 模式 vs AsyncGenerator 模式
 
-> **注意（2026-06-01）**：以下对比中的"我们的模式"描述的是 AsyncGenerator 迁移**之前**的旧架构（Callback + 线程轮询）。迁移已完成，当前架构已采用 AsyncGenerator + yield 模式，与 PilotDeck 的模式一致。详见 [AsyncGenerator 迁移方案设计](../infrastructure/async-generator-migration-design.md)。本节保留作为历史参考。
+> **注意（2026-06-01）**：以下对比中的"我们的模式"描述的是 AsyncGenerator 迁移**之前**的旧架构（Callback + 线程轮询）。迁移已完成，当前架构已采用 AsyncGenerator + yield 模式，与 PilotDeck 的模式一致。详见 AsyncGenerator 迁移方案设计（旧文档已移除）。本节保留作为历史参考。
 
 **一句话概括（迁移前）**：我们的 agent 循环产出数据是"推"（callback 推给消费者），PilotDeck 是"拉"（消费者通过迭代器拉取）。前者耦合，后者解耦。**迁移后两者模式一致**。
 
@@ -189,7 +189,7 @@ yield { type: "tool_result", name: toolName, result, success };
 
 ##### 迁移价值与成本评估（已实施）
 
-**迁移已完成**（2026-06-01），详见 [AsyncGenerator 迁移方案设计](../infrastructure/async-generator-migration-design.md)。
+**迁移已完成**（2026-06-01），详见 AsyncGenerator 迁移方案设计（旧文档已移除）。
 
 **已实现的好处**：
 - 消除线程+轮询的复杂度（`main.py` 里 200+ 行的线程管理代码已简化为 ~80 行）

@@ -12,8 +12,8 @@
 | 版本 | v0.4（回归本质：抽卡式 AI 视频工具，见第 0 章权威定义） |
 | 日期 | 2026-07-29 |
 | 状态 | 📋 待开发 |
-| 关联条目 | [ideas.md](../../../ideas.md) #49 |
-| 相关文档 | ⭐[深度调研：从API到可用视频的工艺链](../../research/ai-video-production-research.md) / [社媒营销智能体设计 #20](../digital-employee/social-media-marketing-agent-design.md) / [发布调度设计](../digital-employee/publish-dispatcher-design.md) / [图片资产管线设计](../image-asset-pipeline-design.md) / [后台运行时设计](../infrastructure/background-runner-design.md) |
+| 关联条目 | [ideas.md](../../ideas.md) #49 |
+| 相关文档 | ⭐[深度调研：从API到可用视频的工艺链](../../research/ai-video-production-research.md) / [社媒营销智能体设计 #20](../digital-employee/social-media-marketing-agent-design.md) / [发布调度设计](../digital-employee/publish-dispatcher-design.md) / [图片资产管线设计](../image-asset-pipeline-design.md) / [后台运行时设计](../../infrastructure/background-runner-design.md) |
 
 > **⚠️ v0.4 是当前权威版本**：回归产品本质——**选场景→上传素材填文案→生成2-4个视频抽卡→满意留下继续优化编辑→下载**。这是个抽卡式工具，不是批量生产系统。**第 0 章为 MVP 权威定义，与文档其他章节冲突时以第 0 章为准**（其余章节保留作 Phase 1+ 演进参考）。v0.4 删除了审核台、发布链路、批量任务看板，编辑改为"重新生成式"。
 > 历史修订：v0.2（深度调研：工艺链/场景预设/合规/反同质化）、v0.3（移除产品库）。详见[调研报告](../../research/ai-video-production-research.md)。

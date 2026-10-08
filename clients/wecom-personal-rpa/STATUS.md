@@ -10,8 +10,8 @@
 > 盘点日期：2026-06-24
 > 前序盘点：2026-06-22 初版（仅工程骨架 + 36 单测）→ 2026-06-23 视觉定位方案验证 → 2026-06-24 视觉定位落地
 > 关联：
->   - 视觉定位设计：[docs/system/wecom-personal-rpa-vision-design.md](../../docs/system/wecom-personal-rpa-vision-design.md)
->   - 开发计划：[plans/plan-wecom-personal-rpa-vision.md](../../plans/plan-wecom-personal-rpa-vision.md)
+>   - 视觉定位设计：docs/system/wecom-personal-rpa-vision-design.md（旧文档已移除）
+>   - 开发计划：plans/plan-wecom-personal-rpa-vision.md（旧文档已移除）
 >   - 真机回归报告：`vision-regression-out/report_20260623_235539.yaml`
 
 ---
@@ -33,7 +33,7 @@ UIA3（FlaUI）和 MSAA（IAccessible）在企微 D2D 自绘 UI 上双双失效�
 Windows.Media.Ocr 中文识别率 < 10%。
 **改走 Qwen3-VL 多模态视觉定位**：真机验证 24 个 UI 元素 bbox 全部精准命中。
 
-详见 [docs/system/wecom-personal-rpa-vision-design.md](../../docs/system/wecom-personal-rpa-vision-design.md)。
+详见 docs/system/wecom-personal-rpa-vision-design.md（旧文档已移除）。
 
 ### 已落地的视觉层模块（全部带单测）
 
@@ -66,7 +66,7 @@ Windows.Media.Ocr 中文识别率 < 10%。
 - `scripts/capture-wecom-for-csharp.ps1`：PowerShell 截图脚本（前台权限正常，C# ScreenCapturer 调用）
 - `scripts/run-vision-regression.ps1`：两阶段回归（PS 截图 → C# 验证视觉定位）
 
-> **已清理**：早期失效工具 `Client.Probe`（UIA/MSAA 探测，已证伪）、`Client.VisionProbe`（B 方案 OCR 验证，已证伪）、`Client.GraphicsCaptureSpike`（WGC COM spike，方案否决）已全部删除。详见 [docs/system/wecom-personal-rpa-vision-breakthrough.md](../../docs/system/wecom-personal-rpa-vision-breakthrough.md) §1.4。
+> **已清理**：早期失效工具 `Client.Probe`（UIA/MSAA 探测，已证伪）、`Client.VisionProbe`（B 方案 OCR 验证，已证伪）、`Client.GraphicsCaptureSpike`（WGC COM spike，方案否决）已全部删除。详见 docs/system/wecom-personal-rpa-vision-breakthrough.md（旧文档已移除） §1.4。
 
 ---
 

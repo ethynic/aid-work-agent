@@ -1,6 +1,6 @@
 # 开发计划 — 企业微信个人账号 RPA 平台后台绑定管理
 
-> **关联设计**：[docs/system/wecom-personal-rpa-portal-binding-design.md](../docs/system/wecom-personal-rpa-portal-binding-design.md)
+> **关联设计**：[docs/system/wecom-personal-rpa-portal-binding-design.md](../system/wecom-personal-rpa-portal-binding-design.md)
 >
 > **登记位置**：`docs/ideas.md` 渠道集成 #29「企业微信个人账号 RPA 接入」条目「开发计划」列。
 
@@ -110,7 +110,7 @@ const {
 - [ ] 点击「恢复」状态变 active（或 online）
 - [ ] 详情弹框中 agent_base_url 占位地址正确显示，未修改时有黄色警告
 - [ ] 使用平台管理员账号访问；租户管理员账号访问 `/admin/*` 被 403 拒绝
-- [ ] 遵循 [list-page-convention.md](../.claude/rules/list-page-convention.md) 规范（序号列、操作列、分页器固定底部）
+- [ ] 遵循 [list-page-convention.md](../../.claude/rules/list-page-convention.md) 规范（序号列、操作列、分页器固定底部）
 
 ### 依赖
 

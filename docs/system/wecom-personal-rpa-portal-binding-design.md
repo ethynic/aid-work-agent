@@ -56,8 +56,8 @@
 
 - 协议：[wecom-personal-rpa-protocol.md](wecom-personal-rpa-protocol.md)
 - 主设计：[wecom-personal-rpa-design.md](wecom-personal-rpa-design.md)
-- 视觉定位设计：[wecom-personal-rpa-vision-design.md](wecom-personal-rpa-vision-design.md)
-- 视觉定位突破总结：[wecom-personal-rpa-vision-breakthrough.md](wecom-personal-rpa-vision-breakthrough.md)
+- 视觉定位设计：wecom-personal-rpa-vision-design.md（旧文档已移除）
+- 视觉定位突破总结：wecom-personal-rpa-vision-breakthrough.md（旧文档已移除）
 - 客户端操作手册：[clients/wecom-personal-rpa/docs/操作手册.md](../../clients/wecom-personal-rpa/docs/操作手册.md)
 - 客户端 EXE 构建与部署：[clients/wecom-personal-rpa/docs/操作手册.md](../../clients/wecom-personal-rpa/docs/操作手册.md)
 
@@ -238,8 +238,8 @@ POST /api/saas/wecom-personal-rpa/resume
 |------|------|
 | 主设计 | [wecom-personal-rpa-design.md](wecom-personal-rpa-design.md) |
 | 协议 | [wecom-personal-rpa-protocol.md](wecom-personal-rpa-protocol.md) |
-| 视觉定位 | [wecom-personal-rpa-vision-design.md](wecom-personal-rpa-vision-design.md) |
-| 视觉突破总结 | [wecom-personal-rpa-vision-breakthrough.md](wecom-personal-rpa-vision-breakthrough.md) |
+| 视觉定位 | wecom-personal-rpa-vision-design.md（旧文档已移除） |
+| 视觉突破总结 | wecom-personal-rpa-vision-breakthrough.md（旧文档已移除） |
 | 客户端操作手册 | [clients/wecom-personal-rpa/docs/操作手册.md](../../clients/wecom-personal-rpa/docs/操作手册.md) |
 | 客户端 EXE 构建与部署 | [clients/wecom-personal-rpa/docs/操作手册.md](../../clients/wecom-personal-rpa/docs/操作手册.md) |
 | 开发计划 | [docs/plans/plan-wecom-personal-rpa-portal-binding.md](../plans/plan-wecom-personal-rpa-portal-binding.md) |

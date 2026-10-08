@@ -53,7 +53,7 @@
 > | 第一部分：酒店资源 | 向量知识库方案（替代原 `bs_travel_quote_hotels` + `bs_travel_quote_rooms`） |
 > | 第二部分：景点门票资源 | 向量知识库方案（替代原 `bs_travel_quote_attractions` + `bs_travel_quote_tickets`） |
 > | 第三部分：车辆资源 | 关系型表扩展（保留 `bs_travel_quote_vehicles`，新增按公里计费模式） |
-> | 导航距离计算 Skill | 基于高德地图 API 的导航距离计算，详见 [route_distance_skill_design.md](../../subagent/travel-consultant/route_distance_skill_design.md) |
+> | 导航距离计算 Skill | 基于高德地图 API 的导航距离计算，详见 [route_distance_skill_design.md（历史资料）](archive/route_distance_skill_design.md) |
 >
 > **仍在关系型表中的数据**（区域匹配逻辑继续适用）：
 > - `bs_travel_quote_vehicles` — 车辆（扩展，新增按公里计费）
@@ -692,7 +692,7 @@ YAML Frontmatter（固定）
 | Skill | 说明 |
 |-------|------|
 | `travel-quote` | 报价全流程：查库 + 向量搜索 → 计算 → 模板导出 Excel |
-| `route-distance` | 导航距离计算（高德地图 API），详见 [设计文档](../../subagent/travel-consultant/route_distance_skill_design.md) |
+| `route-distance` | 导航距离计算（高德地图 API），详见 [设计文档（历史资料）](archive/route_distance_skill_design.md) |
 
 **已删除的表**：
 - ~~`bs_travel_quote_templates`~~ — 模板路径写在 extra.md 中

@@ -19,7 +19,7 @@
 - **协议边界**：所有交互走 `src/channels/wecom_personal_rpa/` 的 callback / WebSocket / outbox 接口，
   客户端**不** import `src/core/agent.py`。
 
-详见 [设计文档](../docs/system/wecom-personal-rpa-design.md) §0 / §2.2 模块边界。
+详见 [设计文档](../../docs/system/wecom-personal-rpa-design.md) §0 / §2.2 模块边界。
 
 ## 目录结构
 
@@ -52,7 +52,7 @@ clients/wecom-personal-rpa/
 | `Client.Supervisor` | net8.0-windows | Windows Service / 计划任务，监督 App 存活、拉起、离线上报 |
 | `Client.Tests` | net8.0 | xUnit 单元/集成测试 |
 
-命名空间与协议 DTO 镜像表见 [协议文档 §C.2 / §C.3](../docs/system/wecom-personal-rpa-protocol.md)。
+命名空间与协议 DTO 镜像表见 [协议文档 §C.2 / §C.3](../../docs/system/wecom-personal-rpa-protocol.md)。
 
 ## 构建与运行
 
@@ -89,12 +89,12 @@ powershell clients/wecom-personal-rpa/scripts/publish.ps1 -Configuration Release
 | 桌面会话 | 保持可见桌面，禁止锁屏执行自动化 | 锁屏后 SendInput / UIA 不可靠 |
 | 输入独占 | 发送任务期间独占鼠标/键盘/剪贴板 | 避免员工本人操作与 RPA 冲突 |
 
-详见 [设计文档 §6.1 Windows 环境约束](../docs/system/wecom-personal-rpa-design.md)。
+详见 [设计文档 §6.1 Windows 环境约束](../../docs/system/wecom-personal-rpa-design.md)。
 
 ## ⚠️ 自动化节点常量待准入验证回填
 
 `assets/wecom_nodes.yaml` 中的 `class_name` / `title_contains` / `offset` / `size` / `template`
-**全部为占位默认值**，必须在编码前准入验证阶段（[设计文档 §10.1](../docs/system/wecom-personal-rpa-design.md)）
+**全部为占位默认值**，必须在编码前准入验证阶段（[设计文档 §10.1](../../docs/system/wecom-personal-rpa-design.md)）
 用真实企微版本回填：
 
 - UIA 可见性：FlaUI 能稳定识别主窗口、输入框、部分会话元素
@@ -106,7 +106,7 @@ powershell clients/wecom-personal-rpa/scripts/publish.ps1 -Configuration Release
 
 ## 关联文档
 
-- 设计：[docs/system/wecom-personal-rpa-design.md](../docs/system/wecom-personal-rpa-design.md)
-- 协议（共享契约）：[docs/system/wecom-personal-rpa-protocol.md](../docs/system/wecom-personal-rpa-protocol.md)
-- 开发计划：[plans/plan-wecom-personal-rpa.md](../plans/plan-wecom-personal-rpa.md)
-- 调研：[docs/research/wecom-personal-rpa-client-implementation-research.md](../docs/research/wecom-personal-rpa-client-implementation-research.md)
+- 设计：[docs/system/wecom-personal-rpa-design.md](../../docs/system/wecom-personal-rpa-design.md)
+- 协议（共享契约）：[docs/system/wecom-personal-rpa-protocol.md](../../docs/system/wecom-personal-rpa-protocol.md)
+- 开发计划：[plans/plan-wecom-personal-rpa.md](../../docs/plans/plan-wecom-personal-rpa.md)
+- 调研：[docs/research/wecom-personal-rpa-client-implementation-research.md](../../docs/research/wecom-personal-rpa-client-implementation-research.md)

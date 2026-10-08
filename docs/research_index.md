@@ -6,6 +6,7 @@
 
 | 调研主题 | 文档 | 关联功能 |
 |---------|------|---------|
+| Codex、DeepSeek Harness、Hermes 桌面执行架构对比 | [调研](research/desktop-agent-harness-architecture-research.md) | 桌面 Agent：共用云端 Runner、本机文件/程序与批处理执行边界。 |
 | 企业级智能体平台调研 | [enterprise-agent-platform-research.md](research/enterprise-agent-platform-research.md) | 可观测性、Prompt 管理、知识库 |
 | 基础设施差距分析 | [enterprise-agent-infrastructure-gap-analysis.md](research/enterprise-agent-infrastructure-gap-analysis.md) | 整体规划 |
 | Prompt 版本管理调研 | [prompt-version-management-research.md](research/prompt-version-management-research.md) | Prompt 全生命周期管理 |
@@ -15,7 +16,7 @@
 | Text-to-SQL 调研 | [text-to-sql-data-analysis-agent-research.md](research/text-to-sql-data-analysis-agent-research.md) | 数据分析智能体 |
 | 企微客服 AI 绑定调研 | [wecom-kf-ai-chatbot-binding-research.md](research/wecom-kf-ai-chatbot-binding-research.md) | 企业微信客服 AI 绑定 |
 | 前端样式调研 | [frontend-style-research.md](research/frontend/frontend-style-research.md) | 前端样式统一 |
-| 前端 Office 预览调研 | [frontend-office-preview-research.md](research/frontend/frontend-office-preview-research.md) | 前端 Office 预览 |
+| 前端 Office 预览调研 | [frontend-office-preview-research.md](research/frontend-office-preview-research.md) | 前端 Office 预览 |
 | HTML 转 PPTX 技术调研 | [html-to-pptx-conversion-research.md](research/html-to-pptx-conversion-research.md) | PPT 技能 PPTX 导出 |
 | 企业微信个人账号 RPA 生产级客户端技术方案调研 | [wecom-personal-rpa-client-implementation-research.md](research/wecom-personal-rpa-client-implementation-research.md) | 企业微信个人账号 RPA 接入 |
 | 会话内上下文压缩业界方案调研 | [context_compression_research.md](research/context_compression_research.md) | 会话内上下文压缩（中期记忆） |
@@ -49,8 +50,8 @@
 | 上传文件存储合规审计 | [审计报告](plans/upload-storage-compliance-audit.md) | ✅ 已修复并发生产、已验证（2026-08-14 审计 + 当日修复 + 当日发生产验证）：主体合规（Phase 1~8 改造有效，持久化入口均走 storage.py 工具函数）。 |
 | deepseek-v4-flash 平替模型调研 | [deepseek-v4-flash-replacement-research.md](research/deepseek-v4-flash-replacement-research.md) | LLM 模型选型、计费降本（2026-08-16 调研完成：选定 qwen3.7-flash 0.2/0.8 + enable_thinking:false + 显式缓存，… |
 | 小米 MiMo-v2.5 平替可行性调研（扩展） | [mimo-v2.5-replacement-research.md](research/mimo-v2.5-replacement-research.md) | 评估小米 MiMo-v2.5 平替 deepseek-v4-flash（2026-08-16 调研+实测完成）。 |
-| LLM 提供商文档入口速查 | [ext/llm-doc-entrances.md](ext/llm-doc-entrances.md) | 记录百炼/DeepSeek/小米 MiMo/火山方舟官方文档入口 URL（2026-08-16 均验证 HTTP 200 可达），供 curl 兜底抓取资料用。 |
-| 火山方舟模型平替调研摘要 | [ext/volc-ark-replacement-research.md](ext/volc-ark-replacement-research.md) | 评估火山方舟文本模型平替 qwen3.7-flash（2026-08-16）。 |
+| LLM 提供商文档入口速查 | [ext/llm-doc-entrances.md](../ext/llm-doc-entrances.md) | 记录百炼/DeepSeek/小米 MiMo/火山方舟官方文档入口 URL（2026-08-16 均验证 HTTP 200 可达），供 curl 兜底抓取资料用。 |
+| 火山方舟模型平替调研摘要 | [ext/volc-ark-replacement-research.md](../ext/volc-ark-replacement-research.md) | 评估火山方舟文本模型平替 qwen3.7-flash（2026-08-16）。 |
 | BOSS CLI 部署方案调研：员工电脑本地虚拟机 vs 云桌面 | [boss-cli-vm-vs-cloud-desktop-deployment.md](research/boss-cli-vm-vs-cloud-desktop-deployment.md) | 100 账号/100 台员工电脑场景（2026-09）。 |
 | BOSS 矩阵账号—企业微信招聘协同客户方案 | [客户解决方案](solutions/recruiting/boss-wecom-recruiting-service-solution.md) / [实施与验证计划](plans/recruiting/boss-wecom-recruiting-service-rollout-plan.md) | 🔧 部分完成（2026-08-31）：形成约 100 个 BOSS 账号、约 10 台在线 VM 的客户方案，云端虚拟机报价 1,000 元/台/年，按 10 台初算约 10,000 元/年，… |
 | 桌面 CLI 无人值守底座与微信/BOSS 就绪度调研（2026-09-08） | [调研](research/weixin-cli/automation-readiness-2026-09-08.md) | 核实微信能力与 Windows/Mac 边界；补核 BOSS 未读/写后证据/候选人/话术/通知现状，通用能力归中立底座设计与计划；本轮无真实发送。 |
@@ -60,4 +61,4 @@
 | 邮箱服务器自动发现（Autoconfig）调研与配置体验优化方案 | [调研](research/email-server-autoconfig-research.md) | 邮箱设置体验优化：内置表+MX/ISPDB/Autoconfig 探测链，用户只填地址+授权码；含前端两步式表单与分期建议。 |
 | 文生图/图生图能力缺失核查与生图模型选型调研 | [调研](research/image-generation-model-research.md) | 生图工具选型（2026-09-28）：确认项目无 AI 生图能力；建议一期智谱 CogView-4（文生图）+ 百炼 qwen-image-edit（图生图）复用现有账号，二期可选火山 Seedream。 |
 | PPT 生成质量课题调研：从「能生成」到「能交付」 | [调研](research/ppt-generation-quality-research.md) | PPT 工具重构方向（2026-09-29）：三轮 trace 实证+业界调研（Codex/Anthropic skill/Presenton/Gamma 系）；结论=LLM 只选布局填槽、样式由主题库+规则排版保底、模板改一次性转译、QA 变门禁、python-pptx 回退废弃；分 P0-P3 落地路线。 |
-| 外部 Skill 插件接入 Runtime 机制调研与设计（workbuddy 样本） | [调研](research/external-skill-plugin-integration-research.md) | Runtime 插件生态（2026-10-06）：可行——Skill 通道做知识层（AgentSkills 格式直接兼容）+ invocation 队列做执行层（新增通用 skill-runner Provider，纯加法不触碰三 CLI 清单）；关键交互点=桌面锁互斥（skill 与 weixin-cli 同微信进程）；分 M1-M4。 |
+| 外部 Skill 插件接入 Runtime 机制调研与设计（workbuddy 样本） | [调研](research/external-skill-plugin-integration-research.md) | 2026-10-08 复核：客户机安装代码、云端登记契约，复用 Desktop 提供配对与可选插件 UI；历史 M1/M2 保留，新设计与计划见调研第 8 节。 |

@@ -1,7 +1,7 @@
 # 租户级 Skills 设计文档
 
 > 创建日期: 2026-05-07 | 状态: 已实现
-> 关联: [ideas.md - 租户级 Skills](ideas.md)
+> 关联: [ideas.md - 租户级 Skills](../../ideas.md)
 
 ## Context
 

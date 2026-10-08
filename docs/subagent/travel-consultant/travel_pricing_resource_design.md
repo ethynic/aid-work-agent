@@ -1163,7 +1163,7 @@ LLM 映射时需要处理的常见转换：
 
 保留的关系型表：`bs_travel_quote_vehicles`、`bs_travel_quote_meals`、`bs_travel_quote_guides`、`bs_travel_quote_fees`、`bs_travel_quote_seasons`、`bs_travel_quote_regions`
 
-新增的 Skill：`route-distance`（导航距离计算，详见 [Skill 设计文档](route_distance_skill_design.md)）
+新增的 Skill：`route-distance`（导航距离计算，详见 [Skill 设计文档（历史资料）](archive/route_distance_skill_design.md)）
 
 ---
 

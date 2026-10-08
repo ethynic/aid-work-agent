@@ -2,7 +2,7 @@
 
 > 日期：2026-07-22
 >
-> 状态：🔧 部分完成（Phase 0～1 完成；Phase 2 实现完成、真实服务门禁待验证；Phase 3 真实验收未通过，进入 Phase 3R 修复；Phase 4 继续阻塞）
+> 状态（2026-10-08）：历史浏览器领域实施记录。下文 Phase 状态反映 2026-07 当时的开发与验证边界，不作为当前 Agent 重构待办；Runner 执行和恢复以[完成记录](../../plans/plan-agent-runner-service.md)为准。原领域未验证项不因 Runner 完成而自动视为通过，后续修复须按实际缺口单独核定。
 >
 > 设计基线：[browser_visualization_design.md](./browser_visualization_design.md)
 >
@@ -223,10 +223,7 @@ Phase 3R 实施按项目三智能体流程串行执行：开发与自测 → 独
 
 ## 7. Phase 4：Agent Desktop 项目内集成 browser runtime
 
-本 Phase 不属于当前任何桌面开发计划（原 Desktop P1 计划已于 2026-10-01 删除）；
-只有桌面规划按[应用层架构](../../system/agent-application-architecture-design.md)重写、Execution Fabric 重新评审并建立独立门禁后，
-才能作为 Desktop 可选模块排期。浏览器计划不创建另一套客户端工程、安装包、更新器、托盘或
-业务 Run 状态机。
+本 Phase 是旧浏览器可选能力规划，不自动并入当前桌面开发计划。后续只有在[桌面客户端](../../system/desktop-agent-client-design.md)与[Runtime Plugin Host](../../system/runtime-plugin-host-architecture-design.md)职责下单独评审 browser 能力并建立门禁后，才能排期。不以旧 Execution Fabric 为前置，也不创建另一套客户端工程、安装包、更新器、托盘或业务 Run 状态机。
 
 ### Phase 4A：浏览器侧协议与服务端适配
 

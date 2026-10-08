@@ -335,7 +335,7 @@ bs_outbound_account_sessions      托管登录态（Cookie 加密）
 | `social_ad_*`（9 表） | 广告管理 | ⬜ |
 | `bs_outbound_*`（4 表） | 巡检商机 | ⬜ |
 
-所有新表遵循 [database_dev.md](.claude/rules/database_dev.md)：业务表 `bs_`/`social_` 前缀、`tenant_id`/`user_id`/`created_at` 必备、DB 变更同步 `init-postgres.sql` + `db_update.sql` + `database_system_table.md`。
+所有新表遵循 [database_dev.md](../../../.claude/rules/database_dev.md)：业务表 `bs_`/`social_` 前缀、`tenant_id`/`user_id`/`created_at` 必备、DB 变更同步 `init-postgres.sql` + `db_update.sql` + `database_system_table.md`。
 
 ---
 

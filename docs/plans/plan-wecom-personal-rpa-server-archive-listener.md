@@ -1,10 +1,10 @@
 # 开发计划：企业微信个人账号 RPA — 服务端拉取模式（复用 wecom_personal_rpa 渠道）
 
-> **关联设计**：[docs/system/wecom-personal-rpa-server-archive-listener-design.md](../docs/system/wecom-personal-rpa-server-archive-listener-design.md)
+> **关联设计**：[docs/system/wecom-personal-rpa-server-archive-listener-design.md](../system/wecom-personal-rpa-server-archive-listener-design.md)
 >
-> **登记位置**：[docs/ideas.md](../docs/ideas.md) §渠道集成 #29 子条目
+> **登记位置**：[docs/ideas.md](../ideas.md) §渠道集成 #29 子条目
 >
-> **遵循流程**：[dev_workflow.md](../.claude/rules/dev_workflow.md) 三智能体流程（开发 → 测试 → CodeReview）
+> **遵循流程**：[dev_workflow.md](../../.claude/rules/dev_workflow.md) 三智能体流程（开发 → 测试 → CodeReview）
 >
 > **核心策略**：**不新增 channel_type**。"服务端拉取 vs 客户端拉取"作为现有 `wecom_personal_rpa` 渠道的 `listen_mode` 字段开关。
 >
@@ -505,7 +505,7 @@ agent2 部署明文字段映射修复后，用户新发两条消息均成功拉�
 - [ ] 12.3 更新关联文档：
   - `docs/system/wecom-personal-rpa-client-design.md` — `ChatArchiveListener` 章节加「第一期 listen_mode 永远 server，客户端跳过本地轮询；未来开放 client 模式后启用」
   - `docs/system/wecom-personal-rpa-portal-binding-design.md` — 补充 listen_mode 字段说明（标注「第一期 client 选项禁用」）
-- [ ] 12.4 三个智能体串行流程：开发 → 测试 → CodeReview（遵循 [dev_workflow.md](../.claude/rules/dev_workflow.md)）
+- [ ] 12.4 三个智能体串行流程：开发 → 测试 → CodeReview（遵循 [dev_workflow.md](../../.claude/rules/dev_workflow.md)）
 
 ### 验收标准
 

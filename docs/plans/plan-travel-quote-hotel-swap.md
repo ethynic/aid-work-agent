@@ -1,7 +1,7 @@
 # 开发计划：旅游报价技能 - 酒店局部替换
 
-> **关联设计文档**：[design-travel-quote-hotel-swap.md](../docs/system/design-travel-quote-hotel-swap.md)
-> **登记**：[docs/ideas.md](../docs/ideas.md) 第 19 条「旅游报价酒店局部替换」
+> **关联设计文档**：[design-travel-quote-hotel-swap.md](../system/design-travel-quote-hotel-swap.md)
+> **登记**：[docs/ideas.md](../ideas.md) 第 19 条「旅游报价酒店局部替换」
 
 ## 任务清单
 

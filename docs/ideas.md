@@ -28,6 +28,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261008-runtime-plugin-host | Runtime 执行环境、插件宿主与可视化客户端 | 📋 待开发 | 统一客户机文件、程序和插件执行环境，云端登记契约，复用 Desktop 壳管理。 | [设计](system/runtime-plugin-host-architecture-design.md) / [共同契约](system/runner-desktop-runtime-integration-contract.md) | [开发计划](plans/plan-runtime-plugin-host.md) |
 | 20261006-1204 | 外部 Skill 插件机制 M2（执行路由 + skill-runner Provider） | 🔧 部分完成（待真机验收） | 云端+设备端开发完成、测试门/typecheck 通过；评审修复 3 条复核未全过，待 Windows 真机验收。 | [调研](research/external-skill-plugin-integration-research.md) | [开发计划](plans/plan-external-skill-plugin-m2.md) |
 | 20260920-1006 | API 数据源入知识库（api_ingest，多租户通用） | ⛔ 暂不开发（宏陶由专用模块承接） | **文档即配置、agent 驱动、不写每接口代码**：租户上传接口文档 → agent 实探生成源契约 → dry-run 人审；运行期契约直执（白名单 HttpApiTool 翻页，零 token）+ agent_loop 兜底；键值数据按字段 label 转语义 markdown、原始记录存 metadata.raw_payload；**知识粒度由 agent 决定**（产品类一记录=一条知识整条入库，长文类切分）；in_doc/metadata_only 分家防易变字段重嵌入；external_id/hash 判新增更新、幂等 upsert、调度协程、two_strike 删除、手动 API+工具；已按宏陶商城 API 说明完成适配核对。 | [设计](system/api-ingest/api-ingest-knowledge-design.md) | [开发计划](plans/plan-api-ingest-knowledge.md) |
 | 20260921-1100 | 宏陶商城产品知识库同步（hongtao_shop 专用模块） | 🔧 部分完成 | P1 已提交（f9e8dcbf）；P2 后端已提交（0fa634c5，含按需加载/单闸/退避强制）；P2.3 前端完成（build 过）；P2.5 已提交（c1993b04）；agent2 试跑修复三轮（v1.6 VL 上限 400/v1.7 正文结构化字段/v1.8 去开场句+部分同步更名+滚动修复），17 产品已重灌，待全量验收。 | [设计](system/hongtao-shop/hongtao-shop-kb-design.md) | [开发计划](plans/plan-hongtao-shop-kb.md) |
@@ -100,8 +101,8 @@
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
 | 20260922-1931 | 租户前台知识库「访问授权」矩阵 | 🔧 部分完成（开发完成，待部署验收） | 租户管理员在知识库页面右上角「访问授权」弹框中以矩阵（行=一级栏目、列=数字员工）自助查看/配置数字员工栏目授权，补齐管理后台按员工勾选视角下「未配置=全部允许」不可见的盲区。三态复选框（半选=未配置默认全允许）；首勾弹窗确认收窄；取消全部勾选恢复默认全允许；复用现有 /api/saas/tenant/subagent-knowledge 接口（后端零改动），保存时原样保留跨租户共享项。三态语义已同步到管理后台 TenantMgmt 知识库授权弹框（本租户栏目三态、共享栏目保持二态），前后台 UI 一致。 | — | — |
-| 20260602-0956 | 前端 Office 预览 | 📋 待开发 | 前端在线预览 Office 文档（Word/Excel/PPT） | [设计](research/frontend/frontend-office-preview-design.md) | — |
-| 20260714-1912 | Agent 跨平台桌面客户端 | 🔧 部分完成 | 已有 Shell 基础，原 P1 已取消；预留 AgentRunner 接口，本次不迁移桌面入口。 | [应用层架构](system/agent-application-architecture-design.md) | — |
+| 20260602-0956 | 前端 Office 预览 | 📋 待开发 | 前端在线预览 Office 文档（Word/Excel/PPT） | [设计](research/frontend-office-preview-design.md) | — |
+| 20260714-1912 | Agent 跨平台桌面客户端 | 🔧 部分完成（新版设计初稿） | 保留 Shell，基于现有 Runner 重设对话、本机工具与任务级设备授权。 | [桌面设计 v3](system/desktop-agent-client-design.md) / [Runner 架构](system/agent-application-architecture-design.md) / [共同契约](system/runner-desktop-runtime-integration-contract.md) | [开发计划](plans/plan-desktop-agent-client.md) |
 | 20260720-1459 | 多会话后台流式 | 🔧 部分完成 | 2026-07-20 代码与单测完成，待真实环境 E2E 验收。 | [设计](system/multi-session-background-streaming-design.md) | [开发计划](plans/plan-multi-session-background-streaming.md) |
 
 ---

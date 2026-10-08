@@ -7,6 +7,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261008-1633 | 过时架构文档与入口引用清理 | ✅ 已完成开发：删除失效执行/协作方案，修正架构规则并清理旧入口链接。 | — | [清理记录](plans/plan-obsolete-architecture-doc-cleanup.md) |
 | 20260819-1126 | 母体 Agent 收敛（并入 AgentRunner 重构） | ✅ 已完成开发：agent.py 保留兼容壳，执行内核与运行时职责已拆分，后续遵守治理原则。 | [原则](system/agent-kernel-convergence-principles.md) | [完成记录](plans/plan-agent-runner-service.md) |
 | 20260906-1101 | ✅ 用户行为审计日志 | 登录/登出/改密/管理后台增删改/普通用户关键动作全量留痕（user_behavior_logs 系统表，IP/UA/设备快照/token 指纹），满足安全审计与追责定位。 | [设计](system/user-behavior-audit-log-design.md) | — |
 | 20260528-1533 | LLM 故障转移 | 提供商故障自动切换，多 Key 轮换与降级策略 | [设计](infrastructure/llm-failover-design.md) | — |
@@ -37,7 +38,7 @@
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
 | 20261001-1849 | Agent/AgentRunner 重构及独立服务 | ✅ 已完成开发：内核与独立服务、Web 接入已完成；后续渠道接入另行跟踪。 | [设计](system/agent-application-architecture-design.md) | [计划](plans/plan-agent-runner-service.md) |
-| 20261006-0958 | 外部 Skill 插件机制（M1 知识层） | ✅ 已完成开发（开发+独立测试+CR，257 单测 + 26 集成验收全绿，未部署）。插件目录链+审批/hash 门+同名拒绝；M1 全拦插件云端执行（device 占位）；第二轮整改含 33f9dba1 遗留修复（红测试/截断豁免断链/续跑崩溃）。执行路由与设备侧属 M2（另行立项）。 | [调研](../research/external-skill-plugin-integration-research.md) | [开发计划](../plans/plan-external-skill-plugin-m1.md) |
+| 20261006-0958 | 外部 Skill 插件机制（M1 知识层） | ✅ 已完成开发（开发+独立测试+CR，257 单测 + 26 集成验收全绿，未部署）。插件目录链+审批/hash 门+同名拒绝；M1 全拦插件云端执行（device 占位）；第二轮整改含 33f9dba1 遗留修复（红测试/截断豁免断链/续跑崩溃）。执行路由与设备侧属 M2（另行立项）。 | [调研](research/external-skill-plugin-integration-research.md) | [开发计划](plans/plan-external-skill-plugin-m1.md) |
 | 20260901-1358 | 客户端计费统一接入（boss cli / 协会采集 / 未来客户端三模式） | ✅ 已完成开发。 | [设计](design/billing/client-billing-integration-design.md) | — |
 | 20260922-0920 | 知识库文档元数据查看 | ✅ 已完成开发（开发+独立测试+审查，待部署）。文档操作列新增「详情」弹窗查看 documents.metadata：溯源/易变字段键值展示、raw_payload 折叠 JSON；新增 GET /documents/{id} 详情接口（按需拉取，租户隔离与 chunks 同口径）。 | [设计](system/knowledge-base/doc-metadata-view-design.md) | — |
 | 20260918-2031 | 生产主日志 WARNING 审计（09-16~09-18） | ✅ 全部完成。3 天 119 条 WARNING 聚合 8 类全部收口：#1 deepseek-flash 部署时差噪音、#3 丢弃预览加长 500 字符（含完整 ASR 文本）、#4 sanitizer 降级 INFO + source 来源标签（8 入口）、#6 Redis DNS 降级三层防御（compose 健康依赖 + 启动重试 + 恢复清残留）、#7 ASR 400 根因为免费试用过期（渠道侧 WARNING 降级 INFO）、#2/#5/#8 人工核对/观察；另 agent_update.sh 发版不再连带重启 redis、Redis 夜间巡检任务（每日 00:30）上线。 | — | [审计报告](ops/log-warning-audit-20260918.md) |
@@ -65,7 +66,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
-| 20260518-2215 | 数字员工管理 | 实例管理、选择策略、并发控制 | [设计](system/digital-employee/digital-employee-management.md) | — |
+| 20260518-2215 | 数字员工管理 | 实例管理、选择策略、并发控制 | 设计（旧文档已移除） | — |
 | 20260512-2159 | 旅行顾问智能体 | 旅游报价、路线规划、酒店景点知识库集成 | [设计](subagent/travel-consultant/travel_subagent_design.md) | — |
 | 20260518-2222 | 竞品调研智能体 | 竞品信息收集、HTML 预览、数据结构化输出 | [设计](subagent/competitor-research/competitor_research_subagent_design.md) | — |
 | 20260518-2223 | 售后处理智能体 | 售后工单处理、退款退货流程自动化 | [设计](subagent/after-sales/after_sales_subagent_design.md) | — |
@@ -131,10 +132,10 @@
 | 20260606-1456 | RPA 客户端 EXE 单一交付 | ✅ 已完成开发。按运维决策永久下线安装包交付：删除安装包工程、构建/安装脚本及专属指南，只保留 `dotnet build -c Release` 本机编译和 `scripts/publish.ps1` 自包含 EXE 目录发布；同步 README、状态、操作手册、设计与计划，并新增静态防回归检查。 | — | — |
 | 20260716-1437 | RPA 外部联系人绑定识别与清理 | ✅ 已完成开发。RPA 与 `wecom_kf` 完全隔离；仅外部联系人进入 binding/Agent。 | [姓名解析调研](research/wecom-rpa-external-user-name-resolution-research.md) | — |
 | 20260822-1022 | wecom_kf 多媒体消息支持 | ✅ 已完成开发。 | — | — |
-| 20260619-2043 | 钉钉渠道接入 | ✅ 已完成开发。钉钉开放平台企业机器人接入，支持单聊/群聊消息收发、签名验证（HmacSHA256）、媒体文件处理、长消息拆分。 | [设计](channel/dingtalk/integration_guide.md) / [接入手册](channel/dingtalk/onboarding_guide.md) | [计划](channel/dingtalk/implementation_plan.md) |
+| 20260619-2043 | 钉钉渠道接入 | ✅ 已完成开发。钉钉开放平台企业机器人接入，支持单聊/群聊消息收发、签名验证（HmacSHA256）、媒体文件处理、长消息拆分。 | 设计（旧文档已移除） / [接入手册](channel/dingtalk/onboarding_guide.md) | [计划](channel/dingtalk/implementation_plan.md) |
 | 20260903-1501 | 飞书渠道接入代码审核 | ✅ 已完成开发。 | — | [审核报告](plans/feishu-channel-code-review.md) |
 | 20260518-2230 | 企业微信集成 | 应用消息收发、回调处理 | [设计](channel/wecom/wecom-integration.md) | — |
-| 20260518-2216 | 飞书 / 钉钉集成 | 飞书和钉钉渠道适配器实现 | [设计](channel/feishu-dingtalk/channel_integration.md) | — |
+| 20260518-2216 | 飞书 / 钉钉集成 | 飞书和钉钉渠道适配器实现 | 设计（旧文档已移除） | — |
 | 20260619-1950 | 飞书渠道对接（完整实施） | 修复 FeishuAdapter 错误实现（AES 密钥、签名验证），补齐 crypto/media 子模块、连接池复用、长消息拆分、速率限制、欢迎消息，… | [方案](channel/feishu/implementation_plan.md) / [实施](channel/feishu/integration_guide.md) | — |
 | 20260629-2159 | 微信客服转人工工具优化（schema + 渠道隔离） | ✅ 已完成开发 优化 transfer_to_human：①reason 改为必填；②渠道隔离完全由工具 execute 段的 get_kf_context 判断，… | [设计](channel/wecom_kf/transfer_to_human_optimization.md) | [计划](channel/wecom_kf/transfer_to_human_optimization_plan.md) |
 | 20260820-1623 | 渠道上下文丢失修复（channel_messages 事务化 + 连续 user 兜底 + 合并写入时机 + send_response 统一封装） | 已通过用户手工测试。P0-1/P0-2/P0-3 全部落地，**一次改造全渠道复用**（wecom_kf/wecom/wecom_personal_rpa/dingtalk/feishu 共 6 个调用点统一走 `ChannelSessionManager.process_and_persist`）。 | [调研](incidents/wecom-kf-context-loss-research.md) | — |

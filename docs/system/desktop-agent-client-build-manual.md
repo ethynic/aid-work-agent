@@ -1,5 +1,7 @@
 # Windows 桌面客户端编译与打包手册
 
+> 新版产品设计与后续实施见[桌面客户端 v3](desktop-agent-client-design.md)和[开发计划](../plans/plan-desktop-agent-client.md)。本手册描述现有 Shell 的构建链路；构建成功不表示 Runner 对话或本地工具已接入。
+
 本文适用于提交 `60ed0d7adb1e8cd4708c07292efef1d5164c2ca1` 引入的 Electron 桌面客户端，也适用于当前 `master` 中相同的构建链路。第 3～10 节的逐步命令可用于该提交；第 11 节的一键脚本是后续新增能力，仅在包含 `scripts/build-win-dev.ps1` 的当前代码中可用。客户端仅支持 Windows x64；开发包未签名，只能用于内部验证，不能作为正式发行包。
 
 ## 1. 构建环境

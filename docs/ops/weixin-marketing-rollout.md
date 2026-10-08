@@ -2,7 +2,7 @@
 
 > 适用范围：`src/weixin_marketing/`（weixin.fixed_content.v1 场景）+ 底座 `src/desktop_automation/` 的发布准备、灰度开启、监控、回滚与故障应急。
 > 前置红线：**P0 真机门禁（账号/群身份验证、相同文字新增证据、图片 probe）未通过前，不开启无人值守真实发送**。本手册的全部操作在 `enabled=false` 时零行为变化。
-> 权威文档：[微信实施计划 §9/§10](../plans/weixin/plan-weixin-marketing-automation.md) / [阶段宪章 R59](../../.zcode/plans/p1-stage-charters.md)。
+> 权威文档：[微信实施计划 §9/§10](../plans/weixin/plan-weixin-marketing-automation.md) / 阶段宪章 R59（旧文档已移除）。
 
 ---
 

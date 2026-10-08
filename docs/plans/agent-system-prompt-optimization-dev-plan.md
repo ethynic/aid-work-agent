@@ -1,7 +1,7 @@
 # 主智能体系统提示词优化 — 开发计划
 
-> 关联设计：[docs/system/prompt/agent-system-prompt-optimization-design.md](../docs/system/prompt/agent-system-prompt-optimization-design.md)
-> 反向关联：[docs/infrastructure/prompt-lifecycle-design.md](../docs/infrastructure/prompt-lifecycle-design.md)
+> 关联设计：[docs/system/prompt/agent-system-prompt-optimization-design.md](../system/prompt/agent-system-prompt-optimization-design.md)
+> 反向关联：[docs/infrastructure/prompt-lifecycle-design.md](../infrastructure/prompt-lifecycle-design.md)
 
 ## 阶段总览
 

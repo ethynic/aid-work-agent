@@ -5,7 +5,7 @@ api/worker/runner 容器，M1 起开始消费）；运维动态安装位在
 `storage/skills/plugins/`。目录链优先级：`src/skills`（内置）→ 本目录 →
 `storage/skills/plugins/`（低 → 高，插件间同名时高优先级覆盖）。
 
-设计文档：[docs/plans/plan-external-skill-plugin-m1.md](docs/plans/plan-external-skill-plugin-m1.md)
+设计文档：[docs/plans/plan-external-skill-plugin-m1.md](../docs/plans/plan-external-skill-plugin-m1.md)
 （M1 只做知识层：插件 skill 经审批后对 Agent 可见，执行层路由属 M2）。
 
 ## 使用步骤

@@ -4,7 +4,7 @@
 > 环境：测试环境 agent2.aidingyi.cn
 > 影响：after-sales 会话历史页显示智能体回复为一长段 JSON（tool_result 序列化），非自然语言
 > 根因：`src/llm/providers/base.py` 显式缓存"末尾标记"逻辑把 **tool 消息**的纯字符串 content 改写成多模态 content 数组，违反 OpenAI 兼容规范；qwen3.7-flash 对非法格式**概率性**按 Anthropic 语义回显工具结果
-> 关联文档：[plan-qwen3-7-flash-context-cache-optimization.md](../plans/plan-qwen3-7-flash-context-cache-optimization.md)、[deepseek-v4-flash-replacement-research.md](./deepseek-v4-flash-replacement-research.md)
+> 关联文档：[plan-qwen3-7-flash-context-cache-optimization.md](../plans/plan-qwen3-7-flash-context-cache-optimization.md)、[deepseek-v4-flash-replacement-research.md](../research/deepseek-v4-flash-replacement-research.md)
 
 ---
 
@@ -181,5 +181,5 @@ reviewer 直连 api2/api3 容器复核原始日志，确认：
 ## 八、关联文档
 
 - [qwen3.7-flash 上下文缓存优化方案](../plans/plan-qwen3-7-flash-context-cache-optimization.md)（引入"末尾标记"策略的原始方案，Phase 2 工具结果截断待做）
-- [deepseek-v4-flash 平替模型调研](./deepseek-v4-flash-replacement-research.md)（qwen3.7-flash 选型依据）
+- [deepseek-v4-flash 平替模型调研](../research/deepseek-v4-flash-replacement-research.md)（qwen3.7-flash 选型依据）
 - [qwen 官方上下文缓存文档快照](../../ext/qwen-llm-context-cache.md)（含"合并工具结果 + 块内 tool_call_id"官方写法）
