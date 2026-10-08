@@ -203,18 +203,17 @@ class RunnerAuthorizer:
             self._tenant(cursor, session["tenant_id"])
         user_id = session.get("user_id")
         if user_id:
+            # 绑定用户仅做存在性/有效性检查：渠道会话绑定的常是外部客户映射账号
+            # （普通角色，无用户级智能体授权概念），用户级权限对渠道路径不适用。
             cursor.execute("SELECT user_id,tenant_id,role,status FROM users WHERE user_id=%s AND tenant_id=%s",
                            (user_id, session["tenant_id"]))
             user = cursor.fetchone()
             if not user or user["status"] != UserStatus.ACTIVE.value:
                 raise RunnerError("CHANNEL_USER_FORBIDDEN", 403)
-            if execute:
-                self._profile(cursor, request.profile_id, dict(user), session["tenant_id"])
-        else:
-            # Platform actors without a web account still require the tenant
-            # subscription. They are not fabricated into a web user.
-            if execute:
-                self._profile(cursor, request.profile_id, None, session["tenant_id"])
+        if execute:
+            # 渠道执行授权只看租户订阅，与产品授权模型一致（绑定用户不构成为
+            # web 用户，平台 actor 分支同样不查用户级权限）。
+            self._profile(cursor, request.profile_id, None, session["tenant_id"])
         actor_id = canonical_json([request.channel_user_id, request.channel_chat_id])
         return Principal(Identity(session["tenant_id"], user_id, request.session.session_id, request.source, "channel"),
                      "channel", actor_id, service_id)
