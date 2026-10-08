@@ -3464,3 +3464,48 @@
                 WHERE continuation_id IS NOT NULL;
         END IF;
     END $$;
+
+- datetime: "2026-10-08 11:00:00"
+  remark: "wecom_kf_input_preparations 补 io_config_version/dispatch_observed_at 两列并升级 ck_kf_preparation_shape——共库旧表结构缺列致语音转写授权 UPDATE 报 UndefinedColumn、语音任务全部中断"
+  statements: |
+    -- 背景：agent2/agent3 共库的 wecom_kf_input_preparations 建于 2026-09 开发期
+    -- （旧结构无 io_config_version/dispatch_observed_at）；2026-10-03 14:00 块的
+    -- CREATE TABLE IF NOT EXISTS 对已存在表跳过、同名约束 IF NOT EXISTS 亦跳过，
+    -- 两列从未补上。voice_repository 授权 UPDATE 引用两列，语音任务执行即
+    -- UndefinedColumn 中断（agent2 真机 2026-10-08 首条语音复现）。本块显式
+    -- 补列并把约束升级到与 fresh DDL 一致（存量行为全 NULL，满足约束）。
+    ALTER TABLE wecom_kf_input_preparations
+        ADD COLUMN IF NOT EXISTS io_config_version TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS dispatch_observed_at TIMESTAMPTZ;
+    ALTER TABLE wecom_kf_input_preparations DROP CONSTRAINT IF EXISTS ck_kf_preparation_shape;
+    ALTER TABLE wecom_kf_input_preparations ADD CONSTRAINT ck_kf_preparation_shape CHECK (
+        operation_version>0 AND length(tenant_id)>0 AND length(intent_digest)=64
+        AND jsonb_typeof(provenance)='object'
+        AND phase IN ('media_ready','started','known','unknown')
+        AND (artifact IS NULL OR jsonb_typeof(artifact)='object')
+        AND (transcript IS NULL OR octet_length(transcript)<=32768)
+        AND (authorized_attempt IS NULL OR authorized_attempt>0)
+        AND (result_kind IS NULL OR result_kind IN ('recognition','preflight','provider'))
+        AND (phase<>'media_ready' OR artifact IS NOT NULL)
+        AND (phase<>'known' OR (result_kind IS NOT NULL AND transcript IS NOT NULL AND observed_at IS NOT NULL))
+        AND (NOT success OR (phase='known' AND length(transcript)>0))
+        AND ((receipt_id IS NULL AND fee_owner_runner_id IS NULL AND authorized_attempt IS NULL
+              AND authorized_worker_id IS NULL AND physical_call_id IS NULL AND started_at IS NULL
+              AND io_config_version IS NULL AND dispatch_observed_at IS NULL)
+             OR (receipt_id IS NOT NULL AND fee_owner_runner_id IS NOT NULL AND authorized_attempt IS NOT NULL
+              AND authorized_worker_id IS NOT NULL AND physical_call_id IS NOT NULL AND started_at IS NOT NULL
+              AND io_config_version IS NOT NULL AND dispatch_observed_at IS NOT NULL))
+        AND (phase NOT IN ('started','unknown') OR receipt_id IS NOT NULL)
+        AND (result_kind IS DISTINCT FROM 'provider' OR receipt_id IS NOT NULL)
+    );
+    DO $$
+    BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_attribute
+                WHERE attrelid='wecom_kf_input_preparations'::regclass
+                  AND attname='io_config_version' AND NOT attisdropped)
+           OR NOT EXISTS (SELECT 1 FROM pg_attribute
+                WHERE attrelid='wecom_kf_input_preparations'::regclass
+                  AND attname='dispatch_observed_at' AND NOT attisdropped) THEN
+            RAISE EXCEPTION 'VOICE_PREPARATION_COLUMNS_MISSING';
+        END IF;
+    END $$;
