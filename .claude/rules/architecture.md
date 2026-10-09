@@ -34,6 +34,8 @@ Web / 微信客服原渠道
 
 **子智能体系统** (`subagents/` + `src/subagents/`)：在 `subagents/<name>/SUBAGENT.md` 中定义（YAML + Markdown）。主智能体通过 `delegate_to_subagent` 委托任务；主/子共用 AgentEngine，子执行有独立上下文并向父执行汇总结果与用量。兼容 API 的子 Agent 调用也复用该内核，不建立第二套模型循环。
 
+**租户 API 接口文档**（`src/services/tenant_api_doc.py`，2026-09-16 起）：子智能体对接第三方系统的接口文档按 `storage/tenants/{tid}/templates/{subagent_name}-api.md` 存放，文档顶部 `api-meta` 围栏（YAML 风格）承载 login_url/SSO 模式等元数据；推送 recap 任务、对话技能（如 pre-sales-api）、SSO 外部系统入口三处消费（推送侧有独立 parse_api_meta 带 login_url 必填校验，与公共入口校验口径不同）。租户未上传文档时走通用模板 fallback：子智能体技能白名单命中 `configs/api_doc_templates/{skill}.md`（按技能基础名命名）即使用之；应用号等租户差异用 `${VAR}` 占位符，加载期按租户环境变量（subagent_env_vars 子智能体精确 → 租户级兜底 → 进程环境）渲染。凭证类占位符（AGENT_TOKEN 及 api-meta `user_token_name` 声明的身份 token）刻意不在此渲染，由 http_api 工具每次请求时经 ToolExecutionContext 替换，防明文凭证进 LLM 上下文。租户上传文档优先级最高。
+
 **大模型网关** (`src/llm/gateway.py`)：统一接口到 `qwen`（DashScope）和 `zhipu`（ZhipuAI）提供商。所有调用都通过 `chat_with_tools()`。提供商可通过 `configs/config.yaml` 中的 `llm.provider` 切换。`KeyPool` 通过信号量控制并发，管理多个 API 密钥。
 
 **渠道系统** (`src/channels/`)：每个渠道（企业微信、钉钉、飞书）继承 `ChannelAdapter`。`ChannelManager` 分发消息。渠道通过 `configs/config.yaml` 中的 `enabled` 标志启用/禁用。
