@@ -710,15 +710,14 @@ class WeComKfAdapter(ChannelAdapter):
         Returns:
             (handled, success)
             - (True, True): 已成功以 image 消息发送
-            - (True, False): 已尝试但发送失败（已记录日志）
-            - (False, False): 未处理（不满足前置条件），调用方应走原 link/纯文本逻辑
+            - (False, False): 未处理或已尝试但失败（调用方走原 link/纯文本降级）
         """
         # 企微临时素材 image 限制 2MB
         if file_info.file_size > 2 * 1024 * 1024:
             return (False, False)
 
         file_id = file_info.file_id
-        if not file_id:
+        if not file_id or not self._tenant_id:
             return (False, False)
 
         key = redis_client.make_key("uploaded_file", file_id)
@@ -728,6 +727,14 @@ class WeComKfAdapter(ChannelAdapter):
 
         file_path = file_meta.get("path")
         if not file_path or not os.path.exists(file_path):
+            return (False, False)
+
+        # 租户归属校验：与 file 直发路径一致，防止构造 file_id 读取其他租户文件
+        from src.core.storage import is_tenant_owned_file
+        if not is_tenant_owned_file(file_path, self._tenant_id):
+            logger.warning(
+                f"图片不在本租户存储目录内，跳过 image 直发: file_id={file_id}"
+            )
             return (False, False)
 
         try:
@@ -842,8 +849,8 @@ class WeComKfAdapter(ChannelAdapter):
             True 发送成功或无可发送内容（跳过），False 已尝试但发送失败
         """
         file_id = ref.get("file_id") if isinstance(ref, dict) else None
-        if not file_id:
-            # 无可发送内容，不视为失败
+        if not file_id or not self._tenant_id:
+            # 无可发送内容或不满足直发前置条件，不视为失败
             return True
         # 企微临时素材 image 限制 2MB
         if (ref.get("size_bytes") or 0) > 2 * 1024 * 1024:
@@ -858,6 +865,13 @@ class WeComKfAdapter(ChannelAdapter):
         file_path = file_meta.get("path")
         if not file_path or not os.path.exists(file_path):
             logger.warning(f"图片 ref 本地文件不存在，跳过: file_id={file_id}")
+            return True
+
+        # 租户归属校验：与 downloadable_files 直发路径一致，防止构造 file_id
+        # 读取其他租户文件（ImageRef 与 uploaded_file 同命名空间）
+        from src.core.storage import is_tenant_owned_file
+        if not is_tenant_owned_file(file_path, self._tenant_id):
+            logger.warning(f"图片 ref 不在本租户存储目录内，跳过发送: file_id={file_id}")
             return True
 
         try:

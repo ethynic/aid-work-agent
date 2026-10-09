@@ -10,7 +10,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import bcrypt
 import httpx
 import pytest
 
@@ -122,9 +121,9 @@ def bridge(monkeypatch):
     store = ChannelStore()
     repository = MemoryRunners(store)
     token = 'test-service-token'
-    token_hash = bcrypt.hashpw(token.encode(), bcrypt.gensalt(rounds=4)).decode()
     config = AgentRunnerConfig(enabled=True, web_service_id='bridge', api_url='http://runner.test',
-        peers={'bridge': {'sources': ['wecom_kf', 'chat'], 'token_hash': token_hash}})
+        web_service_token=token,
+        peers={'bridge': {'sources': ['wecom_kf', 'chat']}})
     authorizer = RunnerAuthorizer(config, store.connection,
         source_port=build_source_capabilities(config, store.connection))
     manager = RunnerManager(repository, authorizer, SimpleNamespace(resolve=lambda profile: (None, 'fingerprint')))
