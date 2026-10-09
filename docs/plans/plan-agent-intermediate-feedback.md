@@ -1,11 +1,11 @@
 # Agent 用户可见中间消息（verbose）开发计划
 
-> 状态：🔧 代码与自动化测试已全部完成（2026-08-31，Phase 0–4 各经 开发→独立测试→独立CR 三智能体流程；待用户按 [verbose-feedback-rollout-runbook.md](verbose-feedback-rollout-runbook.md) 完成真机验收与灰度后移入 ideas_finished.md）  
+> 状态：✅ 已完成开发、发布与验收（2026-10-09 收口）。代码与自动化测试 2026-08-31 完成（Phase 0–4 各经 开发→独立测试→独立CR 三智能体流程）；2026-09-01 起全局默认启用并随正式环境发布运行（产品确认），原灰度/回滚手册（verbose-feedback-rollout-runbook.md）已完成使命删除，紧急回滚仅靠 `force_disabled=true` kill switch。
 > 制定日期：2026-08-31  
 > 审计状态：✅ 已通过三轮独立设计审查，全部阻断项已纳入计划  
 > 产品决策：2026-08-31 删除 LLM 候选路径，verbose 全部由 Tool/Skill/System 确定性产生  
-> 设计文档：[agent-intermediate-feedback-design.md](../system/agent-intermediate-feedback-design.md)  
-> 开发要求：跨 Agent 内核、Web、渠道的非平凡改动；每个实施 Phase 均执行“开发 → 独立测试 → 独立 CodeReview”，不自动提交代码。
+> 设计归属：设计已整合进 [AgentRunner 服务架构设计 §6.4](../system/agent-application-architecture-design.md#64-用户可见中间消息verbose)（2026-10-09），独立设计文档已删除，原文见 Git 历史  
+> 开发要求：跨 Agent 内核、Web、渠道的非平凡改动；每个实施 Phase 均执行"开发 → 独立测试 → 独立 CodeReview"，不自动提交代码。
 
 ## 1. MVP 交付边界
 
@@ -539,8 +539,14 @@ CR 报告未修项（P2）：P0-1 草案 skip reason 声称依赖 Phase 3「owne
 
 #### Phase 4 遗留项
 
-1. 真机验收矩阵与灰度执行属用户/运维动作，见 `docs/plans/verbose-feedback-rollout-runbook.md` §2/§3/§5。
+1. ~~真机验收矩阵与灰度执行属用户/运维动作，见 runbook §2/§3/§5~~ 已收口（2026-10-09）：功能随正式环境发布运行（产品确认），原 runbook 已删除，紧急回滚手段为全局 `force_disabled=true`。
 2. `max_text_chars` 配置双源接线已裁决不做（理由见改动表），无遗留代码项。
+
+### 11.8 收口（2026-10-09）
+
+- 发布确认：verbose 自 2026-09-01 全局默认启用（§11.5），已随正式环境发布运行（产品 2026-10-09 确认）；旧微信客服 waiting_indicator 机制已删除（commit 90f12193），仅保留开关语义作兼容映射。
+- 文档整合：设计文档与灰度回滚手册删除，现行设计并入 [AgentRunner 服务架构设计 §6.4](../system/agent-application-architecture-design.md#64-用户可见中间消息verbose)；原文见 Git 历史。
+- 条目 `20260831-1508` 移入 `docs/ideas_finished.md`。
 
 ### 11.5 产品决策变更：全局默认启用（2026-09-01，主控者执行）
 

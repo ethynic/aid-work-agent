@@ -27,7 +27,6 @@
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
 | 20261008-runtime-plugin-host | Runtime 执行环境、插件宿主与可视化客户端 | 🔧 部分完成 | A1～A3完成；隔离验收包已交付，待人工及正式发行，第三方暂不开发。 | [唯一架构](system/runtime-plugin-host-architecture-design.md) / [共同契约](system/runner-desktop-runtime-integration-contract.md) / [接口](../contracts/runtime-host/v1/README.md) | [统一计划](plans/plan-runtime-plugin-host.md) |
-| 20260831-1508 | Agent 用户可见中间消息（verbose） | 🔧 部分完成 | Agent 面向用户的中间进度提示（verbose 事件，确定性文案 + owner 级限流 + 渠道适配）；代码完成，待灰度真机验收。 | [设计](system/agent-intermediate-feedback-design.md) | [开发计划](plans/plan-agent-intermediate-feedback.md) / [灰度回滚手册](plans/verbose-feedback-rollout-runbook.md) |
 | 20260908-2229 | 外部系统入口（SSO 打开第三方系统） | 🔧 部分完成（Phase 1 开发完成，待真机联调） | 连接中心「外部系统」入口 + SSO 通用契约（direct_url/ticket_redirect/token_param）打开第三方系统；Phase 1 完成待真机联调。 | [方案](system/external-system-entry-design.md) | — |
 | 20260918-2045 | Redis 夜间巡检任务（生产专用） | 🔧 部分完成 | background_runner 调度器每日 00:30 巡检生产 Redis（容器 mem_limit 1g）：内存水位（600MB 警告/800MB 严重）、碎片率（仅 used>100MB 判）、AOF 写入/重写状态、键淘汰、连接数、无 TTL 键抽样（上限 1000，超 200 疑似泄漏）。结果以「[Redis巡检]」前缀进主日志（1 条 INFO 汇总 + 越界项 WARNING/ERROR）。REDIS_INSPECTION_ENABLED 门控默认关（测试环境为腾讯云托管无需巡检），生产 .env 已开启待重启生效。改动：新增 src/core/redis_inspection.py + RedisClient.info() + scheduler 注册；单测 11 用例通过，待部署。 | — | — |
 | 20260930-1520 | 上下文压缩可观测性与计费改造 | 🔧 部分完成 | 触发：生产 trace tr_d6f82ad4ac6145ac 审计发现 context_compressed span token/cost 恒 0、obs_spans.cost 列全 0、口径不一致。改动：①mid_term 压缩 LLM 真实 usage 全链路透传（重试/续写累计，cache-hit token 规范化修复计费漏记）→ ContextCompressedEvent → span.usage；②obs_spans 两处 INSERT 补 cost 列（calculate_credit_cost 按价目计价，cached_tokens 参与）；③summary_max_tokens 改自适应 clamp(COMPRESS区tokens÷50, 1500, 4096) + finish_reason=length 续写一次兜底（仍截断标 summary_truncated）；④经济性闸门：COMPRESS 区 < 4 万 token 且未接近模型上限时跳过 LLM 摘要走 truncate（50:1 经济性）；⑤obs_traces.metadata 标注 total_tokens_scope=session_record_main，recap 摘要写 recap_tokens。480 单测全绿，待部署观察真实压缩。 | — | — |
@@ -87,6 +86,8 @@
 | BOSS 批量读简历 0 份入库且日志无线索 | [boss-resume-batch-empty-incident.md](incidents/boss-resume-batch-empty-incident.md) | 2026-09-10 客户现场：boss_resume_batch 大部分卡片点击无反应打不开详情、打开的详情与卡片姓名不符（0.2.9 曾把王亦菲简历存到任玮鹤名下）、… |
 | 数据分析智能体单次 392 积分消耗复盘 | [analysis-agent-cost-392-credits-incident.md](incidents/analysis-agent-cost-392-credits-incident.md) | 2026-09-20 生产：重分析任务 6 次 analyze_data 内层 200+ 调用致 1319 万 prompt token（95% 在内层循环）；压缩只摘 preview 压不住、tool_calls 参数不压缩；含 create_plan TypeError 崩溃（已修 fc24dfa9 待部署）与内层成本优化细化方案 |
 | 用户取消会话计费缺失复盘 | [user-cancel-billing-gap-incident.md](incidents/user-cancel-billing-gap-incident.md) | 2026-09-22：web 手动取消的轮次 chat_records 无落账（392 积分事故第 1 次尝试同因未落账）；根因 = 前端先断连后 POST /cancel + main.py CancelledError except 内先 yield 后落账（anyio cancel scope 内 send 再抛 CancelledError 致落账不可达）；修复 = 后端先落账再 yield + 前端先 cancel 后 disconnect；含「菜单切换取消」历史行为澄清（2026-07-20 多会话后台流式后已不存在） |
+
+---
 
 ## 调研报告索引
 

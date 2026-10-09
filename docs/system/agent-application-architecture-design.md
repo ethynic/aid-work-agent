@@ -4,6 +4,8 @@
 >
 > 状态（2026-10-08）：Agent/AgentRunner 重构已完成，Web 已接入；微信客服恢复原渠道并接入独立 Runner，agent2 已发布及真机验收。飞书、钉钉待接入，后续渠道接入及综合验收单独跟踪，不将其列为 Agent 重构未完成。
 >
+> 修订（2026-10-09）：整合已完成的独立设计——verbose 用户可见中间消息（原 agent-intermediate-feedback-design.md）、入口绑定子智能体与提示词装配（原 master-subagent / prompt 目录设计）并入本文；被整合原文可从 Git 历史追溯。
+>
 > 渠道接入原则：保留各渠道原有业务实现，只将对话执行接入共用、独立的 AgentRunner API/worker，并传递经可信边界校验的渠道来源与会话身份。接入 AgentRunner 不包含重构渠道本身。
 >
 > 微信客服接入范围：保留原回调、拉取、合并队列、语音、人工客服、历史、渲染发送与 recap，仅将对话调用替换为独立 AgentRunner API/worker；Runner 记录 `source=wecom_kf`。详见[原渠道恢复计划](../plans/plan-wecom-kf-channel-restore.md)。
@@ -123,6 +125,15 @@ flowchart TB
 
 以上是已完成重构后持续遵守的架构约束。后续渠道接入复用现有内核，不再建立第二套模型循环。依赖检查必须结合代码审查与真实执行测试，不能只检查新目录的 import。租户和会话引用传至本地工具必须来自 ExecutionState，不能从共享 Agent 的实例字段读取。
 
+### 3.2 入口绑定子智能体与提示词装配（现行实现）
+
+历史设计（原 master-subagent 目录、prompt 目录各文档）中的入口绑定与提示词方案已实现并被现行结构超越，本节登记现行事实：
+
+- **路由与入口绑定**：`src/core/agent_router.py` 的 `AgentRouter` 按请求解析目标 AgentProfile；`src/tools/assembly.py` 的 `ToolAssemblyRole`（MASTER / SUBAGENT / STANDALONE）决定工具装配范围。Web 请求可经 `ChatRequest.subagent` 显式绑定子智能体（`src/main.py` `_resolve_default_subagent` 解析默认绑定），租户自定义智能体经 `subagent_definitions` 数据库定义加载。路由器含 Redis 配置变更检测，配置变化自动失效重载。
+- **子智能体现状**：子智能体定义位于 `src/subagents/`（14 个）；子执行不再使用旧的 `SubagentExecutor` 轮询任务，而是在父 runner 内以独立子上下文运行（§3.1 主/子共用 Loop engine，子恢复由 `runtime/child_recovery.py`、profile 由 `runtime/profile.py` 负责）。
+- **提示词装配**：`src/prompts/` 的 `PromptManager` + `renderer` 加载 `templates/master_agent.md`、`templates/subagent_base.md` 模板并渲染；Runner 侧经 `src/services/agent_runner/runtime/prompt_sources.py` 组装系统提示词，不再存在旧 agent.py 内的硬编码 f-string。文件交付规则统一为 `cp(source_file_path=..., display_name=...)` 单规则（原 `register_download_file` 工具已删除），文件提取走 `src/core/agent_events.py`。
+- **Web SSE 与取消桥接**：Web 前端 `/api/chat/stream` 与取消端点经 `src/services/agent_runner/legacy_stream_bridge.py` 与 Runner 桥接（旧 SSE 协议保持兼容，取消调用 `cancel_session_runners`）；旧 chat-interrupt 独立设计已由该桥接与 §5 的取消语义取代。
+
 ## 4. Runner 与会话、请求的关系
 
 - `session_ref = tenant_id + 会话种类 + session_id`：指向现有 Web 或渠道会话，服务端校验归属。不能仅靠客户端传来的字符串或读表 fallback 判断会话来源。
@@ -226,6 +237,28 @@ M5采用精简通知：上述字段组成公开事件，不复制完整输出、
 完成收尾时，runner 最终状态、结果、结束事件及其负责的 Web 会话写入在同一数据库事务中提交，避免出现“显示成功但消息未保存”。KF 历史仍由原渠道在取得结果后独立收尾，不包含在 Runner 终态事务中；后续渠道按原历史责任确定唯一写入方。旧用量台账用稳定 runner/调用标识衔接，沿用现有收费规则，恢复尝试不能重复扣同一已记录调用的费用。跨系统外部效果不宣称事务原子性。
 
 Agent 执行结束和平台消息送达是两个事实。平台发送失败不回滚已发生的执行，也不自动重跑工具。平台无法确认是否发送时，沿用既有失败/去重策略，不承诺恰好发送一次。recap 的发送成功条件保持。
+
+### 6.4 用户可见中间消息（verbose）
+
+长任务在最终回复前向最终用户发送一句确定性等待提示（如"正在生成报价单，这可能需要一点时间，请耐心等待"）。MVP 收敛为**每轮（owner 生命周期）最多一条**；多阶段提示、ETA、子智能体内部透传均不做。实现位于 `src/core/verbose_feedback.py`；2026-09-01 上线（commit 4256f206），全局默认启用，正式环境运行中，原微信客服 waiting_indicator 机制已删除（commit 90f12193，仅保留开关语义作兼容映射）。
+
+**事件结构**（五字段）：`type="verbose"`、`eventId`（本轮唯一）、`data`（单句、无换行、1～60 字）、`source="policy"`、`timestamp`。`progress / tool_start / tool_result / llm_call` 等技术事件继续默认隐藏。
+
+**文案只来自确定性策略，LLM 不参与**（2026-08-31/09-01 产品决策：删除 LLM 候选路径与 system watchdog 兜底，无策略命中的 turn 无论多慢都不提示）。解析顺序固定（`resolve_feedback_policy`，在 valid_tool_calls 解析后、首个 tool_start 前）：
+
+1. `skill_execute`：Skill `metadata.user_feedback.start_message`；
+2. `delegate_to_subagent`：代码级固定文案，视为长任务；
+3. 普通工具：可选 `get_user_feedback(tool_args)`（如 Excel 仅 `fill_template` AI 路径命中）。
+
+策略文案产生事件前统一校验（单句、无换行、1～60 字、不含路径/命令/敏感键/ETA/百分比）；违规整体降级 fallback 文案，仍记 `source="policy"`。
+
+**上下文隔离**：verbose 不进入 Agent messages、不新增消息表行，只附着在最终结果的 `presentation.verboseMessages`；`_build_messages` 忽略该字段，同一轮后续与下一轮 LLM 调用均看不到 verbose 文案。Skill feedback metadata 不渲染进 system prompt。
+
+**Runner 集成**：Runner worker 执行时以 `iter_with_verbose_feedback` 包装 runtime 事件流（`surface="web"|"channel"`，`src/services/agent_runner/worker.py`）；渠道级 verbose 配置经请求 `request_data.verbose_feedback` 传入并与全局配置合并（`force_disabled` 取或）。每轮状态（event/emitted/response_started/closed）在 owner 生命周期创建一次，session queue 取消/合并导致的 attempt 重跑不重置，因此累计仍最多一条。
+
+**渠道投递**（`src/channels/verbose_dispatcher.py`，渠道侧沿用原流程）：容量 1 的 dispatcher 串行发送，DB batch 前 drain 冻结投递状态；发送走 adapter 低优先级 `send_status_message(reserve_for_final=1)`——限流判定与扣减必须原子完成并为最终正文预留额度，不支持安全预留的 adapter 默认抑制（`suppressed_rate_limit`），不能降级调用普通 `send_message` 挤占 final 额度。微信客服由 owner 级回复预算（单次咨询 5 条）同时约束 verbose 与 final：正文优先、长内容合成长图或截断、超预算资产记 `suppressed_reply_budget` 不发送。verbose 失败为 best-effort，不影响工具执行与最终回复；不调用 `mark_responding`，不改变 cancel/merge 语义。企微个人 RPA 的 outbox 幂等键使用唯一 delivery_id（`{event_id}:verbose:1` / `{event_id}:final`），不能复用 `UnifiedResponse.message_id`。
+
+**配置**（`agent.verbose_feedback`，Pydantic 强类型）：`force_disabled=true` 为最高优先级 kill switch（请求/渠道/旧配置均不可覆盖）；其余优先级为请求级 → 渠道级 → 微信客服旧 `waiting_indicator` 兼容映射（`enabled=false` 或 `delay<=0` 视为关闭，`message` 映射 fallback）→ 全局 → 代码默认。默认 `enabled=true`（2026-09-01 产品决策，替代原灰度策略）。kill switch 在 owner 创建与 dispatcher 发送前各读一次；不支持热加载时改配置需重启。可观测性经 feedback observer 记录 source、time-to-first、delivery outcome、suppressed reason 与文本长度（不记全文），结束时合并进 trace metadata。
 
 ## 7. 独立服务接口与存储
 

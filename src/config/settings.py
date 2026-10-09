@@ -375,7 +375,7 @@ class SkillsConfig(BaseModel):
 class AgentVerboseFeedbackConfig(BaseModel):
     """Agent 用户可见中间消息（verbose）配置（Phase 1）
 
-    详见 docs/system/agent-intermediate-feedback-design.md §11。
+    详见 docs/system/agent-application-architecture-design.md §6.4。
     字段语义与 src/core/verbose_feedback.VerboseFeedbackConfig（运行期冻结副本）
     一致；默认开启（2026-09-01 产品决策，替代原"首版灰度前关闭"策略）。
     force_disabled 是最高优先级全局 kill switch：置 true 后任何请求级、渠道级

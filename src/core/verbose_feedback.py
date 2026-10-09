@@ -2,9 +2,8 @@
 # -*- coding: utf-8 -*-
 """Agent 用户可见中间消息（verbose）统一反馈内核（Phase 1）
 
-设计文档：docs/system/agent-intermediate-feedback-design.md
-（§4 事件协议 / §5 唯一解析契约 / §6 内容安全与上下文隔离 / §7 每轮状态 /
-  §11 配置 / §12 可观测性）
+设计：docs/system/agent-application-architecture-design.md §6.4
+（事件协议 / 唯一解析契约 / 内容安全与上下文隔离 / 每轮状态 / 配置 / 可观测性）
 开发计划：docs/plans/plan-agent-intermediate-feedback.md「Phase 1：统一反馈内核」
 
 本模块是 verbose 的唯一策略解析与事件包装入口，仅供编排层（Agent 主循环 /

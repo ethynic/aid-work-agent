@@ -15,7 +15,7 @@
 | 20260906-1101 | ✅ 用户行为审计日志 | 登录/登出/改密/管理后台增删改/普通用户关键动作全量留痕（user_behavior_logs 系统表，IP/UA/设备快照/token 指纹），满足安全审计与追责定位。 | [设计](system/user-behavior-audit-log-design.md) | — |
 | 20260528-1533 | LLM 故障转移 | 提供商故障自动切换，多 Key 轮换与降级策略 | [设计](infrastructure/llm-failover-design.md) | — |
 | 20260526-1053 | MCP Server | Model Context Protocol 服务器，支持外部工具集成 | [设计](infrastructure/mcp_server.md) | — |
-| 20260618-1140 | ✅ 主智能体系统提示词优化 | 重写 master_agent.md / subagent_base.md 为原则化结构，新增「文件交付规则」段统一约束"工具生成文件后必须用 cp 注册"。 | [设计](system/prompt/agent-system-prompt-optimization-design.md) | [计划](plans/agent-system-prompt-optimization-dev-plan.md) |
+| 20260618-1140 | ✅ 主智能体系统提示词优化 | 重写 master_agent.md / subagent_base.md 为原则化结构，新增「文件交付规则」段统一约束"工具生成文件后必须用 cp 注册"。（设计与计划文档已于 2026-10-09 清理，现行提示词装配见架构 §3.2） | [架构 §3.2](system/agent-application-architecture-design.md#32-入口绑定子智能体与提示词装配现行实现) | — |
 | 20260618-1052 | 系统核心表文档 | 数据库核心表用途与关系文档，覆盖用户/对话/渠道/知识库/数字员工/SaaS/Prompt 管理等 30+ 张系统表。2026-06-18 | [文档](system/database_system_table.md) | — |
 | 20260618-1705 | 缓存使用情况文档 | 系统缓存使用全景文档，覆盖 Redis 缓存、内存缓存、数据库去重共 17 类缓存，含键模式、TTL、失效策略。2026-06-18 | [文档](system/cache_usage.md) | — |
 | 20260618-1518 | 文件存储使用情况文档 | 系统文件存储全景文档，覆盖新旧双轨路径、文件命名规范、目录结构、清理策略。2026-06-18 | [文档](system/file_usage.md) | — |
@@ -39,7 +39,9 @@
 ## 系统功能
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
-|---|------|------|---------|---------|
+|------|------|------|---------|---------|
+| 20260831-1508 | Agent 用户可见中间消息（verbose） | ✅ 已完成开发（2026-10-09 收口）：长任务确定性等待提示（每轮一条、策略文案、渠道限流预留 final 额度）；2026-09-01 全局默认启用并随正式环境发布运行，旧 waiting_indicator 机制已移除；设计已并入 AgentRunner 架构 §6.4。 | [架构 §6.4](system/agent-application-architecture-design.md#64-用户可见中间消息verbose) | [计划](plans/plan-agent-intermediate-feedback.md) |
+| 20261009-2100 | verbose 收口与 agent 过时文档二轮清理 | ✅ 已完成：verbose 条目收口移档；删除 9 份已实现/被超越的 agent 相关设计（verbose 设计与 runbook、master-subagent、chat-interrupt、scheduled-task、prompt 目录、提示词优化计划），有用部分并入 AgentRunner 架构 §3.2/§6.4；修正 plan-background-runner 失真状态。 | — | [清理记录](plans/plan-obsolete-architecture-doc-cleanup.md) |
 | 20260921-1100 | 宏陶商城产品知识库同步（hongtao_shop 专用模块） | ✅ 已完成开发：宏陶专用模块拉取产品/帖子 + VL 描述 + 结构化正文入知识库（raw_payload 存原始记录），2026-10-09 验收通过。 | [设计](system/hongtao-shop/hongtao-shop-kb-design.md) | [开发计划](plans/plan-hongtao-shop-kb.md) |
 | 20261001-1849 | Agent/AgentRunner 重构及独立服务 | ✅ 已完成开发：内核与独立服务、Web 接入已完成；后续渠道接入另行跟踪。 | [设计](system/agent-application-architecture-design.md) | [计划](plans/plan-agent-runner-service.md) |
 | 20260918-2010 | 用户取消请求的 trace 标记与历史可见性 | ✅ 已完成开发（待部署）。触发：线上 tr_30005ad7dd284b3e 排查发现用户取消后 trace 落库 completed 且 output 为空、取消轮次消息不落库（历史页整轮消失）。改动：①agent 两条取消路径（cancel_check 命中 yield cancelled 事件 / CancelledError 穿透包装层）均标记 trace status=cancelled + termination_reason=user_cancelled；②Web SSE 取消轮次落库 user+assistant 消息并打 metadata.cancelled=true（不落 tool 序列防悬空 tool_calls）；③前端停止按钮加 confirm；④历史消息渲染"用户已取消本轮回复"徽章；⑤追踪页（TraceBrowser/TraceDetail/SessionTraces）状态文案改"用户取消"+warning 色。开发+单测（5 用例）+独立验证完成，待部署。 | — | — |

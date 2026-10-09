@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """verbose Phase 4：首批长任务接入与全链路验收测试
 
-对应 docs/plans/plan-agent-intermediate-feedback.md「Phase 4」与设计文档
-agent-intermediate-feedback-design.md §5（首批策略）/§14（验收标准）：
+对应 docs/plans/plan-agent-intermediate-feedback.md「Phase 4」与架构文档
+agent-application-architecture-design.md §6.4（首批策略 / 验收标准）：
 
 1. 真实 SKILL.md（travel-quote）的 metadata.user_feedback
    能被 skill_loader 解析、经 resolve_feedback_policy 命中，且不渲染进

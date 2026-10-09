@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """第三方渠道 verbose 中间消息投递设施（Phase 3）
 
-设计文档：docs/system/agent-intermediate-feedback-design.md §7/§9/§10/§11
+设计：docs/system/agent-application-architecture-design.md §6.4（渠道投递）
 开发计划：docs/plans/plan-agent-intermediate-feedback.md「Phase 3：第三方渠道可靠投递」
 
 为什么独立于 src/channels/session.py：session.py 已 2100+ 行且职责是「持久化与

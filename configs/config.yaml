@@ -22,7 +22,7 @@ tenant_custom_modules: ["hongtao_shop"]
 # 智能体全局配置
 agent:
   reply_style: human-like  # 默认回复风格 ID，对应 src/prompts/styles/{style_id}.md
-  # 用户可见中间消息（verbose）配置（Phase 1，docs/system/agent-intermediate-feedback-design.md §11）
+  # 用户可见中间消息（verbose）配置（Phase 1，docs/system/agent-application-architecture-design.md §6.4）
   # 2026-09-01 产品决策：全局默认启用；force_disabled=true 为最高优先级 kill switch
   # （紧急回滚用，覆盖请求级/渠道级/旧 waiting_indicator 全部配置，修改后需重启生效）。
   # 文案仅来自工具/Skill/delegate 等策略，无系统兜底（system watchdog 已删除）；

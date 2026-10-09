@@ -7,6 +7,7 @@
 | Phase 1 | 文档和引用盘点 | ✅ 完成（2026-10-08） | 检索 521 个 Markdown 文件；核对现行 AgentRunner、兼容壳、渠道及桌面职责 |
 | Phase 2 | 删除失效方案、清理引用并修订有效文档 | ✅ 完成（2026-10-08） | 删除 9 份方案及入口引用；修复 62 个移动/相对路径链接，移除 19 个缺失或歧义链接 |
 | Phase 3 | 引用与差异验证、登记 | ✅ 完成（2026-10-08） | 538 个 Markdown（含隐藏规则）检查通过；被删文件仅在本清单留名；相对 .md 目标缺失 0、修改文件代码块异常 0；差异检查通过 |
+| Phase 4 | agent 相关二轮清理（verbose 收口 + 已实现/被超越设计整合） | ✅ 完成（2026-10-09） | 删除 9 份（见下表第二轮）；verbose/入口绑定/提示词装配现行设计并入架构文档 §3.2/§6.4；修正 plan-background-runner 失真状态头；索引与登记同步 |
 
 ## 清理依据
 
@@ -29,6 +30,23 @@
 | 旧平台设计目录 | `enterprise-multi-agent-collaboration-design.md` | 依赖桌面 Coordinator 和第二套协作执行体系 |
 | 计划目录 | `plan-enterprise-multi-agent-collaboration.md` | 已明确撤销，仍保留 Phase 0–6 详细开工步骤 |
 | 调研目录 | `enterprise-multi-agent-collaboration-research.md` | 旧 Agent/子智能体现状及直接导向撤销协作方案的结论已失效 |
+
+### 第二轮（2026-10-09，agent 相关）
+
+共同特征：功能已实现并上线/被现行结构超越、状态字段失真或描述已拆除的旧架构（agent.py 巨类、SubagentExecutor 轮询、硬编码提示词、SQLite 无租户 schema）、无权威入口引用。有用的现行事实已并入 [AgentRunner 架构](../system/agent-application-architecture-design.md) §3.2（入口绑定与提示词装配）与 §6.4（verbose）。
+
+| 位置 | 文件 | 删除原因 |
+|------|------|----------|
+| system | `agent-intermediate-feedback-design.md` | verbose 设计已实现并全局默认启用发布；现行设计并入架构 §6.4 |
+| plans | `verbose-feedback-rollout-runbook.md` | 灰度已完成使命（全局默认启用+正式运行）；紧急回滚仅靠 force_disabled kill switch，操作说明并入架构 §6.4 与计划 §11.8 |
+| system/master-subagent | `design_master_subagent.md` | §2 复盘描述已拆除的 agent.py 巨类/轮询 Executor 旧世界；§3 入口绑定已实现且被 AgentRouter/STANDALONE 超越；现行事实并入架构 §3.2 |
+| system/chat-interrupt | `design_chat_interrupt.md` | 功能已实现在线，取消链路已升级为 legacy_stream_bridge 桥接 + Runner cancel；现状并入架构 §3.2 |
+| system/scheduled-task | `design_scheduled_task.md` | schema 无租户、启动位置已迁 background 容器、状态"待实施"失真；现行调度由 infrastructure 双文档（single-worker / background-runner）覆盖 |
+| system/prompt | `agent-system-prompt-optimization-design.md` | 已完成方案记录；register_download_file 工具已删除，规则统一为 cp；现行装配见架构 §3.2 |
+| system/prompt | `prompt_system_refactor_design.md` / `prompt_system_refactor_plan.md` | 2026-05 已实施完毕；"现状分析"描述的 agent.py f-string 世界已拆除 |
+| plans | `agent-system-prompt-optimization-dev-plan.md` | 4 阶段全标"待开发"但工作已完成，机制描述围绕已删除工具 |
+
+保留并修正：`plan-background-runner.md` 状态头由"📋 待开发"改为 ✅（决策 D1–D15 已全部落地）。保留未动：kernel-convergence-principles、runtime-safety-hardening、security-debt-closure（设计+计划）、skill-complete-removal、plan-agent-registration-decoupling、multi-session-background-streaming（活跃条目）——均为准确登记的完成记录或仍有效文档。
 
 旧平台设计目录为 `docs/system/enterprise-agent-platform/`；其中独立工具副作用审计保留，不递归删除目录。
 
