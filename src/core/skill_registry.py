@@ -181,8 +181,8 @@ class SkillRegistry:
     ) -> int:
         """M1 专用加载入口：内置 loader（gate 构造，init 照旧）+ 已审批插件 loader。
 
-        与 load_from_directory/load_from_directories 的差异（docs/plans/
-        plan-external-skill-plugin-m1.md §3.5）：
+        与 load_from_directory/load_from_directories 的差异见
+        docs/system/runtime-plugin-host-architecture-design.md 第9节：
 
         - ``_loader`` 显式置 None（fail-closed）：多目录链下「最后目录」语义只会
           造成错位；插件 skill 的读出保护由 get_content 内容门（强制 loader 路径）
@@ -644,7 +644,7 @@ class SkillRegistry:
 
         load_from_sources 加载链（M1 插件目录链）不支持 reload：_loader 为 None，
         调用时 warning 并返回当前数量；插件/审批变更由 resource_cache 签名刷新
-        整体重建（docs/plans/plan-external-skill-plugin-m1.md §3.5/§3.6）。
+        整体重建（docs/system/runtime-plugin-host-architecture-design.md 第9节）。
 
         Returns:
             加载的Skill数量

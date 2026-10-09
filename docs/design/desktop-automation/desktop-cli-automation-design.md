@@ -1,5 +1,7 @@
 # 桌面 CLI 无人值守自动任务底座
 
+> 本文的权威范围是自动任务调度与业务账本；客户机执行核心、插件安装、停止/配对及产品壳以[Runtime架构](../../system/runtime-plugin-host-architecture-design.md)和[共同契约](../../system/runner-desktop-runtime-integration-contract.md)为准。旧领域阶段不代表Runtime Host仍待开发。
+
 版本 V1.1 · 2026-09-08 · 设计修订，待开发。
 
 关联：[底座实施计划](../../plans/desktop-automation/plan-desktop-cli-automation.md) · [微信首场景与 BOSS 第二场景](../weixin/weixin-marketing-automation-design.md) · [源码就绪度](../../research/weixin-cli/automation-readiness-2026-09-08.md)。本文件是通用能力的权威设计；微信文档不再承载底座协议定义。

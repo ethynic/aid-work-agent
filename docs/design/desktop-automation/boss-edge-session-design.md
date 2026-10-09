@@ -1,5 +1,7 @@
 ﻿# BOSS 直聘端侧会话任务接入设计（boss.chat_reply.v1）
 
+> 本文定义BOSS会话业务，B3场景接线不等于Runtime Host建设；复用[当前Runtime架构](../../system/runtime-plugin-host-architecture-design.md)及[共同契约](../../system/runner-desktop-runtime-integration-contract.md)，不复制插件宿主。业务开发状态以本领域计划为准。
+
 版本 V1.10 · 2026-09-18 · 设计交付（V1.8 基础上按 B1.2 实现复审冻结协议变更：控制请求幂等键升级五元、gate 契约升级严格判别联合与 UTC 要求、settlement 结构化返回与 guard 缺失升级语义），待开发。启动开发前须另立开发计划文档并登记。
 
 ### V1.10 协议变更记录（2026-09-19，随 B2 实现复审冻结）

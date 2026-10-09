@@ -124,7 +124,7 @@ SKILL_RUNNER_PROVIDER_ID = "ai.aidwork.skill-runner"
 
 
 class TestSkillRunnerProviderEntry:
-    """M2（docs/plans/plan-external-skill-plugin-m2.md §4.1）：skill-runner 通用执行器
+    """M2（docs/system/runtime-plugin-host-architecture-design.md 第9节）：skill-runner 通用执行器
     Provider 条目——纯追加，不动 boss/weixin/wecom 三既有条目。"""
 
     def test_entry_registered_with_contract_fields(self):

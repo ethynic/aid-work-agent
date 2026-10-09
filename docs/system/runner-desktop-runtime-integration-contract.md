@@ -4,7 +4,7 @@
 >
 > 版本：`2.0`；日期：2026-10-09
 >
-> 状态：v2.0按用户逐条复核确定，替代v1.3的插件额外审批语义；Desktop已消费候选0.2，当前候选0.3须重新复核。现有公开API以代码为基线；Host管理、插件描述/清单及输出共享入口见第8.1节，尚未共同冻结。任务binding、授权及资源占用wire仍待主导交付。定稿不代表接口上线或兼容验收通过。
+> 状态：v2.0按用户逐条复核确定，替代v1.3的插件额外审批语义；候选0.3已有真实Host与Desktop消费验证，Windows隔离验收版已交付，尚未共同登记wire冻结。现有公开API以代码为基线；共享格式见第8.1节，任务binding、授权及资源占用wire仍待主导交付。隔离验收不代表生产发行或真实业务验收通过。
 >
 > 用户目标：两个会话可分别设计 Desktop 与 Runtime，桌面改版通过适配层接入，不重复开发 Runtime 或 CLI/skill。
 >
@@ -26,7 +26,7 @@
 
 2026-10-09用户复核决议：安装即本机使用授权，安装成功默认enabled=true，运行条件独立决定ready，不另设插件审批或默认逐次弹窗。账号/配对/设备使用关系、目标workspace及既有任务策略继续复用。允许安装分析调用云端模型：先读SKILL.md，信息不足时才补传必要源码；这不是本地任务Agent loop。日期标为v1.3的记录属于历史基线，冲突处以v2.0及第8.1节当前候选0.3为准。
 
-当前实施范围（2026-10-09用户调整）：第一部分只做Runtime UI与我们自己的BOSS/weixin/wecom CLI插件安装管理及必要核心/既有执行兼容。第三方skill的安装、AI分析、动态登记/执行为第二部分，契约/schema/fixture保留，暂不开发。此为实施范围裁剪，不改变C01～C12或候选0.2格式，不新增版本；第一部分不能把保留的skill格式作为已支持能力对外展示。公共壳/H2/H3职责保持。
+当前实施范围：第一部分Runtime UI、BOSS/weixin/wecom第一方插件安装管理及必要核心/既有执行兼容已交付隔离验收版，人工与正式发行门见统一Runtime计划。第三方skill安装、AI分析、动态登记/执行为第二部分，契约/schema/fixture保留，暂不开发。当前以候选0.3为格式入口，不因文档收敛改变C01～C12、schema或版本；第一部分不能把保留的skill格式展示为已支持能力。公共壳/H2/H3职责保持。
 
 ## 2. 必须稳定的十二项边界
 
@@ -252,7 +252,7 @@ Provider 的 Node executable、进程监管、凭证后端由平台 adapter注�
 
 这批有意保持最小格式，不定义H2 binding/grant/claim/许可/长占用，不替代现有Device结果与ACK，不引入另一套模型循环、事件账本或类型生成框架。沿用候选0.2的固定request_id/method/code/error/result；code为非负整数，0且error为空表示请求成功，失败code非零/error非空/result为null。管理operation也固定code/error，查询成功与operation失败分开。工具内容不带success，effect/complete独立保留。plugins.list无registration审批字段；skill有entry.description、可选output_schema及code_map（包内相对path/description），手册型允许空entries/code_map。
 
-候选0.1未上线/未冻结；0.2替代该候选，保持目录v1、api_major/schema_version=1作为首个待冻结wire版本，不能把架构2.0当成API major。旧候选回复需消费方显式迁移/适配并重新验证，严格schema拒绝旧形状；已有生产Device协议不改。摘要规范化、真实producer/consumer、进程及产物接线仍未完成，不能登记wire已冻结。后续状态以两份计划H1/H4登记为准。
+候选0.1/0.2未上线或冻结，当前由0.3替代；目录v1、api_major/schema_version=1保持，不能把架构2.0当成API major。旧候选回复需显式迁移/重新验证，严格schema拒绝旧形状；已有生产Device协议不改。首期签名规范化、真实Host/Desktop管理接线、进程监管及隔离验收包已有实现证据，但共同wire尚未登记冻结，H2/H4新登记与产物链仍未完成。当前实现及限制统一见[Runtime架构](runtime-plugin-host-architecture-design.md)和[Runtime计划](../plans/plan-runtime-plugin-host.md)，不沿用历史候选的待开发状态。
 
 ## 9. 兼容验收矩阵
 

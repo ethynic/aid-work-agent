@@ -90,7 +90,7 @@ TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
             "wecom_unread_list",
         ],
     },
-    # 通用 Skill 脚本执行 Provider（M2，docs/plans/plan-external-skill-plugin-m2.md §4.1）：
+    # 通用 Skill 脚本执行 Provider（M2，docs/system/runtime-plugin-host-architecture-design.md 第9节）：
     # 设备端 skill-runner 通用执行器（进程内 handler，不走 MCP stdio），承载已审批
     # 插件 device 技能的脚本执行。与三 CLI「封闭 schema 工具」不同——skill_script_run
     # 的参数为结构化 payload（skill/entry/args/exec_hash），任意执行参数约束由

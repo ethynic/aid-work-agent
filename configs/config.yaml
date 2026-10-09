@@ -240,7 +240,7 @@ skills:
     repo_dir: "skills"                    # 仓库根第一方插件位（compose 已挂载 /app/skills）
     storage_subdir: "skills/plugins"      # 运维动态安装位（相对 storage 根）
     approvals_subpath: "skills/plugin-approvals.json"  # 审批清单（相对 storage 根）
-    # 设备执行链路（M2 执行路由，docs/plans/plan-external-skill-plugin-m2.md）：
+    # 设备执行链路（M2 执行路由，docs/system/runtime-plugin-host-architecture-design.md 第9节）：
     # 默认关——放行需「已审批插件 + metadata.execution=device + 审批含 entries/exec_hash」
     # 全满足；关闭时该类技能返回 DEVICE_EXECUTION_DISABLED 拦截（不建 invocation）。
     device_execution:

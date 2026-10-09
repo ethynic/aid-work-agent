@@ -1,7 +1,7 @@
 /**
  * skill-runner 通用执行器 Provider（M2，进程内 handler，非 MCP stdio）。
  *
- * 计划 docs/plans/plan-external-skill-plugin-m2.md §4.3.3：
+ * 计划 docs/system/runtime-plugin-host-architecture-design.md 第9节：
  * - 目录发现：skills dir 一级子目录 SKILL.md 轻量 frontmatter 子集解析（自研，不引入
  *   yaml 依赖；解析不了即 fail-closed 拒执行）；hash 镜像云端 compute_skill_exec_hash
  *   算法（排序相对路径 + 每文件 sha256 + \x00 分隔聚合，排除 __pycache__/shots/log/

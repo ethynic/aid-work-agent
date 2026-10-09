@@ -361,7 +361,7 @@ Desktop实际运行Python7项（7schema/59fixture）、Node14项，0失败/跳�
 
 ### 13.6 A1实际资产接收与H3落点
 
-2026-10-09接收Runtime A1开发包0.2.14，依据[core资产说明](../../clients/shared/local-tool-host-core/README.md)和[Runtime计划第9节](../plans/plan-runtime-plugin-host.md#9-a1本批实现与h3交接2026-10-09)。开发tgz为3060079字节，SHA-256为`b5db68c2677139c75455e8feea4844d4910385f3bfc06348b1d34d5cafc9bccc`；只标识本次临时交接，正式构建须可复现重建并锁定新摘要，不将临时文件登记为发布版本。
+2026-10-09接收Runtime A1开发包0.2.14，依据[core资产说明](../../clients/shared/local-tool-host-core/README.md)和[Runtime当前交付记录](../plans/plan-runtime-plugin-host.md#10-最终交付与验证记录)。开发tgz为3060079字节，SHA-256为`b5db68c2677139c75455e8feea4844d4910385f3bfc06348b1d34d5cafc9bccc`；只标识本次临时交接，正式构建须可复现重建并锁定新摘要，不将临时文件登记为发布版本。
 
 H3构建应把完整`dist/src/**`放入`resources/runtime/host/`，保留sessionTasks相对结构，将ESM package元数据及完整bundled node_modules放在同一host目录。不能只复制managed-entry.js、依赖开发机node_modules或在客户机npm install。包内已有core JS/types及SDK/zod运行依赖，无BOSS强依赖和Runtime tests。本次在仓库外按该布局复制，3564个文件逐项摘要一致。
 

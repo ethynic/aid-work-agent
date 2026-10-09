@@ -3,7 +3,7 @@
 核心回归点：缓存按 tenant_id 存「全量」skills，allowed 白名单在返回时过滤，
 避免首个加载的 Agent 白名单污染后续不同白名单的 Agent（缓存污染事故根因）。
 
-外部 Skill 插件 M1 扩展（docs/plans/plan-external-skill-plugin-m1.md §3.7/§6）：
+外部 Skill 插件 M1 扩展（docs/system/runtime-plugin-host-architecture-design.md 第9节）：
 - base 加载 mock 面已从 tenant_skill_cache.SkillLoader 迁移到
   skill_plugin_gate.build_base_registry_sources（base 改走 gate，语义保持）；
 - base 含插件：已审批可见 / 未审批不可见；

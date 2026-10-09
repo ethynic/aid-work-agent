@@ -121,4 +121,4 @@ node --test contracts/runtime-host/v1/tests/consumer.test.mjs
 
 Python使用Draft2020-12和本地registry，不网络解析；[consumer-fake.mjs](fixtures/consumer-fake.mjs)只供消费规则测试，不导入生产或执行插件。Desktop读取本README、schema和fixture实现实际main/preload adapter，重新验证候选0.3；服务端接纳/Host producer/H2/H3/资源与图片联调仍未完成，不能据样例登记wire已冻结。
 
-状态与交接见[Runtime计划](../../../docs/plans/plan-runtime-plugin-host.md#8-开发前七项决议与候选03交付2026-10-09)。Desktop候选0.2的[历史审阅](../../../docs/plans/plan-desktop-agent-client.md#92-用户复核后候选02交接2026-10-09)保留，本批接收结论由其另行登记。
+状态与交接见[Runtime计划](../../../docs/plans/plan-runtime-plugin-host.md#8-首期实施约束)。Desktop候选0.2的[历史审阅](../../../docs/plans/plan-desktop-agent-client.md#92-用户复核后候选02交接2026-10-09)保留，本批接收结论由其另行登记。

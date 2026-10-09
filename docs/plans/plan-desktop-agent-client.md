@@ -212,7 +212,7 @@ Runtime接口产出通知（2026-10-08）：Runtime工作流在共享目录`cont
 
 Runtime已按上述P2修复[消费fake](../../contracts/runtime-host/v1/fixtures/consumer-fake.mjs)，补齐同实例最高水位、新实例清旧快照/重置水位、旧实例在途回复隔离和通知/查询竞态保护；[Node回归](../../contracts/runtime-host/v1/tests/consumer.test.mjs)新增3项。Schema、47个静态fixture、候选0.1与共同契约v1.3不变。[共享README](../../contracts/runtime-host/v1/README.md)已说明真实adapter还需结束失效Promise并补查/保持dirty。
 
-Runtime最终独立测试Node 9项、Python 5项及29项补充边界断言通过，独立CR通过；完整证据见[Runtime计划](plan-runtime-plugin-host.md#desktop状态消费p2修复2026-10-09)。这条为Runtime交付记录，保留本节原审阅；Desktop复核和真实adapter联调仍待本工作流登记，不能把fake修复当共同wire已冻结。
+Runtime最终独立测试Node 9项、Python 5项及29项补充边界断言通过，独立CR通过；完整证据见[Runtime计划](plan-runtime-plugin-host.md#7-当前接口与依赖)。这条为Runtime交付记录，保留本节原审阅；Desktop复核和真实adapter联调仍待本工作流登记，不能把fake修复当共同wire已冻结。
 
 #### Desktop修复复核（2026-10-09）
 
@@ -222,7 +222,7 @@ Desktop已读取修复代码及新增回归，运行Node9项全部通过、0失�
 
 Runtime按用户逐条确认更新共同契约v2.0及[共享候选0.2](../../contracts/runtime-host/v1/README.md)：安装即插件授权/默认启用，取消registration审批；管理与工具输出固定数字code/error；skill新增入口description/可选output_schema和最小code_map，AI先分析SKILL.md，必要时才补传源码。候选0.1未冻结，需Main/preload消费参考显式迁移并重新验证；不能以第9.1节对旧候选的复核代表本批接受。
 
-Runtime验证结果以其[计划](plan-runtime-plugin-host.md#用户复核修订候选022026-10-09)为准。Desktop的重新消费、真实adapter/Host/服务端联调及H2/H3仍待本工作流登记；本条是Runtime交接记录，不改变桌面业务阶段状态。
+Runtime验证结果以其[计划](plan-runtime-plugin-host.md#7-当前接口与依赖)为准。Desktop的重新消费、真实adapter/Host/服务端联调及H2/H3仍待本工作流登记；本条是Runtime交接记录，不改变桌面业务阶段状态。
 
 #### Desktop候选0.2消费审阅（2026-10-09）
 

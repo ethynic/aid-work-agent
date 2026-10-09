@@ -18,7 +18,7 @@
 - 清单写入采用「临时文件 + os.replace」原子 rename，避免 runner 并发读到
   半写 JSON 触发全量插件不可见闪断。
 - 审批清单是平台级清单，无租户维度：审批 + 进入 allowed 白名单 = 所有租户
-  立即可见（见 docs/plans/plan-external-skill-plugin-m1.md §3.2 / 风险 5）。
+  立即可见（见 docs/system/runtime-plugin-host-architecture-design.md 第9节）。
 """
 
 import argparse

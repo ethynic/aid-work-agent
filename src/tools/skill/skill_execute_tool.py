@@ -165,7 +165,7 @@ class SkillExecuteTool(BaseTool):
         stdin_content = None
         content_text = kwargs.get("content")
 
-        # M2 设备执行路由（docs/plans/plan-external-skill-plugin-m2.md §3.1）：
+        # M2 设备执行路由（docs/system/runtime-plugin-host-architecture-design.md 第9节）：
         # device 路由技能 + 显式 content → 提前拒绝（INVALID_DEVICE_INPUT）。
         # executor 侧无法区分用户 content 与服务端注入的身份 JSON（skill_executor
         # 只见合并后的 stdin bytes），判定必须在 tool 层完成；设备链路 stdin_content

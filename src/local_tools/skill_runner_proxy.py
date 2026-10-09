@@ -1,4 +1,4 @@
-"""skill-runner Provider 派发代理（M2 云端执行路由，plan-external-skill-plugin-m2.md §4.2）
+"""skill-runner Provider 派发代理（M2 云端执行路由，docs/system/runtime-plugin-host-architecture-design.md 第9节）
 
 职责：把「已审批插件 + execution=device」技能的 skill_execute 命令，经既有
 invocation 队列（LocalInvocationService.enqueue）下发到用户 Windows 设备的

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """外部 Skill 插件审批门（M1 知识层）
 
-设计文档：docs/plans/plan-external-skill-plugin-m1.md §3.1/§3.2/§3.3。
+设计文档：docs/system/runtime-plugin-host-architecture-design.md 第9节。
 
 目录链（低 → 高优先级）：
     src/skills（内置，不经过本 gate）→ 仓库根 skills/（第一方插件位）
@@ -175,7 +175,7 @@ def compute_skill_md_hash(skill_dir: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 设备执行入口声明（M2，plan-external-skill-plugin-m2.md §3.6）
+# 设备执行入口声明（M2，docs/system/runtime-plugin-host-architecture-design.md 第9节）
 # ---------------------------------------------------------------------------
 
 class SkillDeviceDeclarationError(ValueError):

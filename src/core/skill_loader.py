@@ -164,7 +164,7 @@ class SkillLoader:
             include: 仅注册 frontmatter name 命中该集合的 skill（None 表示不过滤）。
                 未注册的 skill 不参与 _init_skill_tables——外部插件目录 loader
                 以此确保插件 init_script 不被 importlib 执行（纵深防御第一层，
-                见 docs/plans/plan-external-skill-plugin-m1.md §3.2）。
+                见 docs/system/runtime-plugin-host-architecture-design.md 第9节）。
             run_init: 是否在加载后执行 skill 声明的 init_script（默认 True，现状
                 行为）。插件目录 loader 必须传 False。
         """

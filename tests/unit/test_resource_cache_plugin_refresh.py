@@ -1,6 +1,6 @@
 """resource_cache.cached_skill_registry 签名刷新单元测试（外部 Skill 插件 M1）
 
-覆盖（docs/plans/plan-external-skill-plugin-m1.md §3.6/§6）：
+覆盖（docs/system/runtime-plugin-host-architecture-design.md 第9节）：
 - enabled=False → 签名恒 ()，行为与现状一致（永久缓存，不重扫）；
 - enabled=True 但插件目录/清单不存在 → 签名恒定，不重复重建；
 - 插件目录/审批清单变更触发重建（换新实例，插件可见）；

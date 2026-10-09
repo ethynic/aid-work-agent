@@ -335,7 +335,7 @@ class SubagentSkillsConfig(BaseModel):
 
 
 class SkillDeviceExecutionConfig(BaseModel):
-    """插件 skill 设备执行配置（M2 执行路由，docs/plans/plan-external-skill-plugin-m2.md §4.1）
+    """插件 skill 设备执行配置（M2 执行路由，docs/system/runtime-plugin-host-architecture-design.md 第9节）
 
     enabled=false 时 evaluate_device_execution 判定 c 项不满足（DEVICE_EXECUTION_DISABLED
     拦截，不建 invocation）；timeout/max_args/max_arg_chars 为云端入队前命令门禁上限，
@@ -349,7 +349,7 @@ class SkillDeviceExecutionConfig(BaseModel):
 
 
 class SkillPluginsConfig(BaseModel):
-    """外部 Skill 插件配置（M1 知识层，docs/plans/plan-external-skill-plugin-m1.md §3.10）
+    """外部 Skill 插件配置（M1 知识层，docs/system/runtime-plugin-host-architecture-design.md 第9节）
 
     目录链低 → 高：repo_dir（仓库根第一方插件位，compose 已挂载）→
     storage_subdir（运维动态安装位）。审批门唯一出口 src/core/skill_plugin_gate.py；
@@ -360,7 +360,7 @@ class SkillPluginsConfig(BaseModel):
     repo_dir: str = "skills"  # 相对仓库根（容器内 /app/skills）；绝对路径按原样使用
     storage_subdir: str = "skills/plugins"  # 相对 configured_storage_root()
     approvals_subpath: str = "skills/plugin-approvals.json"  # 审批清单，相对 storage 根
-    # M2 设备执行链路（plan-external-skill-plugin-m2.md §3.1/§3.2/§4.1）：
+    # M2 设备执行链路（docs/system/runtime-plugin-host-architecture-design.md 第9节）：
     # 默认关——放行需「已审批插件 + execution=device + 审批含 entries/exec_hash」全满足
     device_execution: SkillDeviceExecutionConfig = Field(default_factory=SkillDeviceExecutionConfig)
 

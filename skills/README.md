@@ -5,8 +5,8 @@ api/worker/runner 容器，M1 起开始消费）；运维动态安装位在
 `storage/skills/plugins/`。目录链优先级：`src/skills`（内置）→ 本目录 →
 `storage/skills/plugins/`（低 → 高，插件间同名时高优先级覆盖）。
 
-设计文档：[docs/plans/plan-external-skill-plugin-m1.md](../docs/plans/plan-external-skill-plugin-m1.md)
-（M1 只做知识层：插件 skill 经审批后对 Agent 可见，执行层路由属 M2）。
+当前兼容设计：[Runtime 架构第9节](../docs/system/runtime-plugin-host-architecture-design.md#9-旧-m1m2-代码的兼容与限制)。
+本目录属于旧服务端目录机制，不是新 Runtime 客户机安装入口；第三方 Skill 新安装链暂不开发。
 
 ## 使用步骤
 
@@ -26,8 +26,9 @@ api/worker/runner 容器，M1 起开始消费）；运维动态安装位在
 
 ## 安全边界（务必阅读）
 
-- **审批 ≠ 可执行**：M1 对插件来源 skill 的 `skill_execute` 全量拦截
-  （`src/core/skill_executor.py` 入口，只读不可执行）；设备执行链路属 M2。
+- **审批不保证可执行**：现代码仅对插件来源、声明 `execution=device`、审批含
+  `entries/exec_hash` 且设备执行开关与环境齐备的技能放行旧设备路由；其余插件
+  执行仍被拦截。该旧门槛不因新契约“安装即授权”而自动取消。
 - **审批即锁定内容**：插件目录内容变化后必须重新 `--approve`，否则注册表
   重建时被剔除（fail-closed）；读手册时另校验 SKILL.md hash（两层内容门）。
 - **与内置 skill 同名的插件会被拒绝注册**（内置优先）。

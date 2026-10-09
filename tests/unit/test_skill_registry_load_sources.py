@@ -1,6 +1,6 @@
 """SkillRegistry.load_from_sources 单元测试（外部 Skill 插件 M1 知识层）
 
-覆盖（docs/plans/plan-external-skill-plugin-m1.md §6）：
+覆盖（docs/system/runtime-plugin-host-architecture-design.md 第9节）：
 - 合并顺序（内置 + 插件低→高）与 allowed 过滤；
 - _all_skills 含已审批插件；_plugin_hashes 填充；_loader 为 None；
 - get_content 内容门：SKILL.md 篡改后返回 None（fail-closed），一致时正常返回；

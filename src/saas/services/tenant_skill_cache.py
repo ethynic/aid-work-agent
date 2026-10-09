@@ -82,7 +82,7 @@ class TenantSkillCache:
         base 部分经审批门（skill_plugin_gate.build_base_registry_sources）：
         内置 + 已审批插件（插件 loader run_init=False），未审批 / hash 不符 /
         与内置同名的插件在 gate 扫描阶段剔除——租户链不得绕过审批门
-        （docs/plans/plan-external-skill-plugin-m1.md §3.7）。
+        （docs/system/runtime-plugin-host-architecture-design.md 第9节）。
         """
         try:
             combined: Dict[str, Skill] = {}

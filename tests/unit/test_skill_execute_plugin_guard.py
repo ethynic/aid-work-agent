@@ -1,6 +1,6 @@
 """skill_executor 插件执行边界单元测试（外部 Skill 插件 M1 知识层）
 
-覆盖（docs/plans/plan-external-skill-plugin-m1.md §3.1/§3.9/§6）：
+覆盖（docs/system/runtime-plugin-host-architecture-design.md 第9节）：
 - 未声明 device 的插件 skill 走 execute_skill_command 被拦截（success=False、
   文案含「请勿重试」）；
 - 拦截先于 _process_command 路径替换与 _execute_command 子进程创建

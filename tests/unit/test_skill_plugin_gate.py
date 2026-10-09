@@ -1,6 +1,6 @@
 """skill_plugin_gate 单元测试（外部 Skill 插件 M1 知识层）
 
-覆盖（docs/plans/plan-external-skill-plugin-m1.md §6）：
+覆盖（docs/system/runtime-plugin-host-architecture-design.md 第9节）：
 - 目录 hash：内容变更敏感、排除项生效、文件创建顺序无关；
 - 审批清单：缺失/损坏 JSON → {}（fail-closed）；原子写（replace 时刻临时文件内容完整）；
 - scan_plugin_dir：未审批不可见、hash 不符剔除、与内置同名拒绝、通过者进入 include；
