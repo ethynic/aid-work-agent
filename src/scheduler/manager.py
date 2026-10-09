@@ -892,11 +892,9 @@ class ScheduledTaskManager:
                             session_id=session_id,
                             metadata={"service_state": 4},
                         )
-                        await adapter.send_text(
-                            f"人工服务已超时（超过{timeout_minutes}分钟无新消息），"
-                            f"本次会话已结束。如有新问题，请重新发送消息。",
-                            external_userid,
-                        )
+                        # 不发超时通知：state=3 人工接待期机器人 send_msg 被微信拒收（95018），
+                        # state=4 已结束后同样拒收，该文案无法送达；客户重新发消息会自动
+                        # 进入新会话并走智能助手接待流程
                         logger.info(
                             f"[wecom_kf] 超时结束人工会话成功: session_id={session_id}"
                         )
