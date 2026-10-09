@@ -6,7 +6,6 @@
 
 | 调研主题 | 文档 | 关联功能 |
 |---------|------|---------|
-| 微信客服长答复交付 | [调研](research/wecom-kf-long-reply-delivery-research.md) | 全文 MD，默认无模型前缀、可切模型摘要，正文图片长图策略。 |
 | Codex、DeepSeek Harness、Hermes 桌面执行架构对比 | [调研](research/desktop-agent-harness-architecture-research.md) | 桌面 Agent：共用云端 Runner、本机文件/程序与批处理执行边界。 |
 | 企业级智能体平台调研 | [enterprise-agent-platform-research.md](research/enterprise-agent-platform-research.md) | 可观测性、Prompt 管理、知识库 |
 | 基础设施差距分析 | [enterprise-agent-infrastructure-gap-analysis.md](research/enterprise-agent-infrastructure-gap-analysis.md) | 整体规划 |
@@ -28,7 +27,6 @@
 | 懂车帝与汽车之家客户留资统一接入可行性调研 | [automotive-platform-lead-integration-research.md](research/automotive-platform-lead-integration-research.md) | CRM 智能体、汽车平台渠道集成 |
 | 抖音电商飞鸽客服接入 Agent 可行性调研 | [douyin-shop-pigeon-agent-customer-service-research.md](research/douyin-shop-pigeon-agent-customer-service-research.md) | 抖店/飞鸽客服渠道、Agent 自动接待、转人工 |
 | 摘要生成模型性价比实测 | [llm-summary-cost-benchmark.md](research/llm-summary-cost-benchmark.md) | 知识库摘要、lite 通道选型（deepseek/qwen/GLM 三家已实测，含缓存机制对比；2026-09-17 补充外部推送工具调用重放实测：GLM 全漏写鉴权头不可用于工具调用型任务，deepseek-flash 综合最优） |
-| wecom-cli 取代 wecom-personal-rpa 差距分析与实验设计 | [rpa-replacement-gap-analysis-20260928.md](research/wecom-cli/rpa-replacement-gap-analysis-20260928.md) | wecom-cli 第二期（图片/文件发送、粘贴机制裁定、视觉定位对比、登录态二维码） |
 | 抖音本地生活订单→门店微信群推送系统 私有化部署可行性评估 | [douyin-lifeservice-order-wechat-group-dispatch-research.md](research/douyin-lifeservice-order-wechat-group-dispatch-research.md) | 竞品（TkTok Sys）视频还原；抖音生活服务开放能力接入路径（商家自研 vs 服务商）、微信/企微推送通道选型、功能模块与工作量（一期约 8~10 人月）、预开通账号清单、… |
 | 抖音来客订单同步与门店微信播报系统 解决方案（含开发计划与报价，面向客户） | [design/douyin-lifeservice-dispatch/solution-proposal.md](design/douyin-lifeservice-dispatch/solution-proposal.md) | 一期打包价 ¥29.8 万/203 人日/约 14 周交付；通道矩阵（企微内部群 webhook 全自动合规 / 企微客户群群发限频 / RPA 播报为可选项）；抖店发货提醒等为二期可选包 |
 | 小红书客服接入 Agent 可行性调研 | [xiaohongshu-agent-customer-service-integration-research.md](research/xiaohongshu-agent-customer-service-integration-research.md) | 小红书电商客服、专业号私信、小程序客服、Agent 自动接待与转人工 |
@@ -36,7 +34,7 @@
 | 从个人经验到组织能力：AI 智能体组织知识沉淀调研与方案设计 | [org-knowledge-sedimentation-research.md](research/org-knowledge-sedimentation-research.md) | 组织知识沉淀（三层知识架构 + 专家识别 + 自动抽取 + 主动推荐）、个人经验转组织资产、续费护城河 |
 | 微信公众号文章搜索「不依赖微信 App」可行性调研 | [wechat-article-search-without-app-feasibility.md](research/wechat-article-search-without-app-feasibility.md) | 搜一搜无 App 外通道；不依赖 App 全域关键词搜文章只能在「搜狗(免费不稳)/商业聚合API(付费稳)/回退App内搜一搜」间三角取舍，无完美解 |
 | BOSS 直聘智能招聘 Agent 可行性调研 | [boss-recruiting-agent-research.md](research/boss-recruiting-agent-research.md) | BOSS 简历筛选助手（独立桌面应用）。 |
-| BOSS CLI 接入 Web Agent MVP（覆盖上行旧方案） | [设计](design/recruiting/recruiting-cli-agent-integration-design.md) / [MVP 开发计划](plans/recruiting/plan-recruiting-cli-agent-integration.md) | 🔧 部分完成（2026-08-11：M0.0~M0.6 全部完成并过三智能体流程；M0.7 真机验收待进行）：… |
+| BOSS CLI 接入 Web Agent MVP（覆盖上行旧方案） | [设计](design/recruiting/recruiting-cli-agent-integration-design.md) | ✅ 已交付（BOSS CLI 0.2.14 客户发货，VL 识别/VIP 筛选/详情页打分相继上线；MVP 过程计划已删，交付记录见设计文档头部） |
 | 网页操作实时视图（Boss CDP 首期，原 login assist / page stream） | [设计](design/recruiting/login-assist-page-stream-design.md) / [开发计划](plans/recruiting/web-operation-live-view-dev-plan.md) / [实验纪要](research/cdp-page-stream-experiment-notes.md) | 📋 设计完成待开发（2026-09-01，v3.2/v2.2 已吸收开发前全仓代码核查与独立复审）：通用 `page-stream/1.0` 首期接入 `aid-runtime + boss-cli… |
 | 招聘 CLI 接入 Agent：MVP 后总体架构 | [总体架构基线](design/recruiting/recruiting-cli-agent-post-mvp-architecture.md) | 🧭 总体方向已保留、待 MVP 后分阶段深化：MVP 的用户当前 PC 就是第一台 Windows 执行节点；… |
 | BOSS CLI 沟通发消息能力（send-to / send-current） | [原生 CDP 设计 §10.6](design/recruiting/boss-resume-assistant-native-cdp-design.md) | 🔧 部分完成（2026-08-13）：把已真机验证的「搜索找人 + 输入 + 发送」链路封装为两个 CLI 子命令与同名 MCP tool——`send-to <姓名> --message <消息>… |
@@ -62,4 +60,3 @@
 | 邮箱服务器自动发现（Autoconfig）调研与配置体验优化方案 | [调研](research/email-server-autoconfig-research.md) | 邮箱设置体验优化：内置表+MX/ISPDB/Autoconfig 探测链，用户只填地址+授权码；含前端两步式表单与分期建议。 |
 | 文生图/图生图能力缺失核查与生图模型选型调研 | [调研](research/image-generation-model-research.md) | 生图工具选型（2026-09-28）：确认项目无 AI 生图能力；建议一期智谱 CogView-4（文生图）+ 百炼 qwen-image-edit（图生图）复用现有账号，二期可选火山 Seedream。 |
 | PPT 生成质量课题调研：从「能生成」到「能交付」 | [调研](research/ppt-generation-quality-research.md) | PPT 工具重构方向（2026-09-29）：三轮 trace 实证+业界调研（Codex/Anthropic skill/Presenton/Gamma 系）；结论=LLM 只选布局填槽、样式由主题库+规则排版保底、模板改一次性转译、QA 变门禁、python-pptx 回退废弃；分 P0-P3 落地路线。 |
-| 外部 Skill 插件接入 Runtime 机制调研与设计（workbuddy 样本） | [调研](research/external-skill-plugin-integration-research.md) | 2026-10-08 复核：客户机安装代码、云端登记契约，复用 Desktop 提供配对与可选插件 UI；历史 M1/M2 保留，新设计与计划见调研第 8 节。 |

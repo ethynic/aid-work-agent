@@ -467,7 +467,7 @@ Select-String -LiteralPath $latestLog.FullName -Pattern 'name_send_timing' | Sel
 
 ## 12. 依据与关联文档
 
-- [端侧会话任务计划与实验记录](../plans/desktop-automation/plan-edge-session-task.md)
+- [端侧会话任务设计（含实现与验证记录）](../design/desktop-automation/edge-session-task-design.md)
 - [Runtime CLI与配对实现](../../clients/agent-tool-runtime/src/cli.ts)
 - [Runtime配置与Provider入口](../../clients/agent-tool-runtime/src/config.ts)
 - [OCR解释器路径](../../clients/weixin-cli/src/platform/ocrResident.ts)

@@ -1,7 +1,7 @@
 # x-to-image 服务设计文档
 
-> 创建日期：2026-07-01
-> 状态：设计完成，待审核（v1.1，按反馈调整：强制 headless + 输出走临时目录）
+> 创建日期：2026-07-01 · 整合更新：2026-10-09
+> 状态：✅ v1 已实现（2026-07-01，Phase 1-5 完成）并持续演进（图片内联、渠道复用，见 §13）
 > 关联模块：`src/services/x_to_image/`、`src/tools/image/`
 > 关联现有能力：`WeComKfRenderer`（Playwright 元素截图）、`pdf_renderer.render_pages`、`pdf_writer.docx_to_pdf`
 
@@ -459,4 +459,17 @@ __all__ = ["XToImageService", "x_to_image_service",
 
 - [PDF 工具设计文档](../pdf/pdf_tool_design.md)（`docx_to_pdf` / `render_pages` 来源）
 - [文件工具入参契约重设计](../tool-input-contract-redesign.md)（`instruction/content/content_type/output_name` 结构化入参约定，本工具的 InputModel 遵循之）
-- 开发计划：[x-to-image 开发计划](x-to-image-dev-plan.md)
+
+## 13. 演进记录（交付后新增能力，原开发计划已删除）
+
+**v2：HTML 图片 base64 内联 + 租户身份**（服务/工具层，已实现）
+
+- `XToImageInput` 增加 `tenant_id` / `user_id`（`models.py:26-38`）；`HtmlRenderer` 渲染前当 `tenant_id` 存在时调用 `src/tools/_image_inliner.py::inline_images_as_data_uri()`（`:302`），把 HTML 中 `<img src="file_id:xxx">` 与远程 URL 解析为 base64 data URI（单图失败保留原 src 不阻断；底层 `src/core/image_asset.py::ImageRegistry` 负责 file_id→本地路径与远程拉取）。
+- `XToImageTool` 照搬 Word 工具的双轨租户注入：`set_tenant_id`/`set_user_id` 钩子 + ContextVar 兜底（`x_to_image_tool.py:63-116`）。
+- 动机与完整方案原属「旅游行程 HTML 长图导出」设计（2026-07-20，工具层为其 Phase A）——工具层落地后，行程子智能体侧的 HTML 导出路径未接线（仍走 Word 备路径），该设计文档已删除，能力归属本文档记录。
+
+**渠道复用**（已实现）
+
+- `src/channels/wecom_kf/renderer.py` 不经服务封装，直接复用本服务的 `browser_pool`（全页/元素级截图 `acquire_page`）、`finalize_long_image`、`XToImageInput` 与 `inline_images_as_data_uri`（`:206-299`），把超长 Markdown 渲染为单张长图（`max_file_size_mb=2` 适配企微 2MB 限制），产物落 `storage/tenants/{tid}/conversation/`；调用点 `adapter.py:364/595/672`，用于规避企微单次咨询 5 条回复限制。原 §9"渠道复用未来可改"已兑现为此直接组件复用形态。
+
+**测试基线**：服务单测 75（renderers 16 / models 22 / image_utils 18 / service 8 / browser_pool 11）+ 工具单测 16 + 集成 5。已知缺口：HtmlRenderer 的租户内联分支无专属单测。

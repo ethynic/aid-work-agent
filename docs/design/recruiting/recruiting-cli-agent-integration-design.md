@@ -4,7 +4,7 @@
 >
 > MVP：云端 aid-work-agent 服务端 + 用户 Windows 电脑上的 Local Tool Runtime + 7 个已真机验证的 BOSS 操作
 >
-> 开发计划：[plan-recruiting-cli-agent-integration.md](../../plans/recruiting/plan-recruiting-cli-agent-integration.md)
+> 交付记录：M0.0–M0.6 完成（2026-08-11）→ 简历-职位匹配体系与招聘演示闭环（2026-09-01 真机验收）→ VL 简历识别去 OCR 化（2026-09-17，1 积分/份）→ 0.2.14 客户发货包（去 OCR 捆绑，140MB→3.4MB）+ pack.sh 一键打包 → VIP 筛选 + 性能埋点 → 详情页打分即打招呼（主路径切换）。MVP 开发计划与 M2–M6 实施规格等过程文档已删除（M07 验收指南因 Runtime 验收引用其 Chrome 启动说明而保留），过程明细见 git 历史。
 >
 > 上位规范：[第一方 CLI / MCP Provider 架构与开发规范](../../system/first-party-cli-mcp-provider-standard.md)
 >

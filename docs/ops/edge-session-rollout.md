@@ -1,13 +1,13 @@
 # 端侧会话任务 C5 发布与回滚
 
-日期：2026-09-15。适用场景仅 `weixin.conversation.v1`。当前 **禁止灰度**，见 [验收报告](../research/weixin-cli/edge-session-acceptance.md)。本文件是后续操作规程，不代表已执行发布。
+日期：2026-09-15。适用场景仅 `weixin.conversation.v1`。当前 **禁止灰度**（C5 隔离 fake 综合验证通过但真机灰度门禁未开，结论与记录见 [设计文档文末实现与验证记录](../design/desktop-automation/edge-session-task-design.md)）。本文件是后续操作规程，不代表已执行发布。
 
 ## 放行前置条件
 
 1. C0 真机授权记录完整：设备、微信版本、账号、单聊/群聊绑定、对端配合方式、时段、内容范围、发送上限。单聊/群聊分别验收，未验证类型不开。
 2. 受信身份验证与真实截图接线有证据；当前 `sessionObserve.ts` 默认无 captureFn，返回 unavailable，不能用 fixture 身份覆盖生产绑定。
 3. 干净 Windows 用户环境实际安装产物，验证 Node/Provider/驱动/OCR 模型及解释器可定位。本轮 `ocrResident.ts` 已优先使用包根 `ocr-python/python.exe`，没有随包解释器时保留开发venv回退。实际安装闭环尚未验收；禁止靠把开发机 PATH 当随包依赖来验收。
-4. [计划 §8 A1–A11](../plans/desktop-automation/plan-edge-session-task.md) 全部有对应范围证据，无未关闭 P0/P1；端到端同条件至少30样本，编排性能/正确性/预算分别通过。
+4. A1–A11 放行证据项（原 C0–C5 计划 §8 定义，计划文档已并入设计文档）全部有对应范围证据，无未关闭 P0/P1；端到端同条件至少30样本，编排性能/正确性/预算分别通过。
 5. 空库初始化与幂等重放、增量迁移、隔离 API/background 两进程启动通过。不得在生产环境运行测试 fixture 或启用测试 verified 绑定。
 
 ## 灰度配置与操作

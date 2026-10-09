@@ -1189,7 +1189,7 @@ async def _process_kf_messages(tenant_id, config_id, open_kfid, adapter):
 
 ## 十四、2026-10-09 长答复交付调整
 
-关联：[代码调研](../../research/wecom-kf-long-reply-delivery-research.md)、[开发计划](../../plans/plan-wecom-kf-long-reply-delivery.md)、[既有配额方案](reply_quota_control_plan.md)。本节更新既有渠道交付设计，已完成代码与自动化验证，尚未部署真机验收。
+关联：[既有配额方案](reply_quota_control_plan.md)。本节更新既有渠道交付设计，2026-10-09 开发完成并通过自动化验证与独立 CodeReview；开发前调研快照与开发计划等过程文档已删除，有效内容并入本节（实现与验证记录见 §14.8），真机验收待部署后执行。
 
 ### 14.1 用户决策与适用范围
 
@@ -1302,4 +1302,26 @@ KF owner 级 `WeComKfReplyBudget` 无论 verbose 开关均创建；状态提示�
 
 本次调整作用于 KF 的长文、表格与正文图片交付；普通短回复维持直发，其他渠道、原任务工具能力、Runner 恢复、Runtime 设备授权均不改义。准备回调启用时，以现有 queue lease 覆盖 verbose drain、文件/模型/长图准备、持久化和发送；每 30 秒原子校验 lock token 与 finalizing 标记并同时续期 120 秒，落库与发送前重验。失主中止旧交付，原子 token 释放不清后继 owner；不得复活过期锁。长图准备总超时 60 秒，准备明确失败可退文字，发送未知不重放。
 
-重点验证：原回复默认 2048/2049 字节触发边界及配置覆盖；501 个 ASCII 字符、600 汉字（1800 字节）、2030 字节原回复均不因摘要字符上限而总结；生成后摘要的 500/501 字符校验；标准 MD 的实际表格/列表/代码渲染及内容完整性、短表格不总结/不转图、仅真实正文图片考虑长图、摘要无表格且含提示后字符数合格、长图失败降级、独立图片、原生文件名/编码、metadata 附件、预算优先级、费用不漏记/不双计、发送部分失败及取消/转人工/合并边界。微信打开 MD 支持表格由用户提供本次实测，未独立证明全部客户端兼容；真机验收以目标客户端为准。本轮已实施并通过定向、组合测试及独立 CodeReview；真实微信客户端、外部模型风格及 Redis Lua 实际服务未验收，详情见开发计划。
+重点验证：原回复默认 2048/2049 字节触发边界及配置覆盖；501 个 ASCII 字符、600 汉字（1800 字节）、2030 字节原回复均不因摘要字符上限而总结；生成后摘要的 500/501 字符校验；标准 MD 的实际表格/列表/代码渲染及内容完整性、短表格不总结/不转图、仅真实正文图片考虑长图、摘要无表格且含提示后字符数合格、长图失败降级、独立图片、原生文件名/编码、metadata 附件、预算优先级、费用不漏记/不双计、发送部分失败及取消/转人工/合并边界。微信打开 MD 支持表格由用户提供本次实测，未独立证明全部客户端兼容；真机验收以目标客户端为准。本轮已实施并通过定向、组合测试及独立 CodeReview，真实微信客户端、外部模型风格及 Redis Lua 实际服务未验收，记录见 §14.8。
+
+### 14.8 实现与验证记录（2026-10-09）
+
+本节整合自已删除的开发计划与调研快照（过程明细见 git 历史）。
+
+**实现落点**
+
+- 新模块 `src/channels/wecom_kf/reply_format.py`：Markdown 结构校验与纯文本投影（markdown-it-py）；表格超出可判定列数时明确文件准备失败，不静默丢列；代码中的图片示例不进入长图判定；MD 只含可交付 URL，未授权/不可映射图片保留 alt 与不可显示说明。
+- 新模块 `src/channels/wecom_kf/reply_delivery.py`：交付准备（规范化 MD 生成、可信目录注册、channelDelivery 投影）。KF 路由成功结果进入 `prepare_reply`，会话持久化前追加完整 MD；历史正文保留原始完整可见答复；其他渠道不传准备回调，缺省行为不变。
+- 策略配置 `summary_mode=prefix|llm` 默认 prefix：由现有 ChannelFactory 从 KF 渠道 config JSON 透传到 adapter，不新增全局 Settings/YAML 节点或后台页面；显式切换设 `summary_mode: llm`。
+- 可选模型摘要走统一网关 `chat_no_thinking`（无工具、单次调用、有限超时）；物理调用 observer 记录实际 provider/model/usage 并修订 `skip_save` 条件，纯文本摘要不漏记；未调用模型不计摘要费，已消费未采用的调用仍计费。
+- 客户可见顺序：文字/长图 → 原生 MD → 剩余图片/文件；verbose 为最终交付预留 2；发送传输异常按结果未知处理，不自动重试。
+- 交付期间 ownership：沿用 queue lease 覆盖 verbose drain、文件/模型/长图准备、持久化与发送（见 §14.7）；首次 ownership 校验失败也取消并等待独立 verbose worker、关闭 state，不准备、不落库、不发 final。
+- `requirements-test.txt` 显式登记 `markdown-it-py>=4.0.0`，独立 CommonMark 表格测试不依赖宿主传递依赖。
+
+**验证记录**
+
+- 自测（定向 8 个测试文件）：192 passed / 3 skipped（Windows 对应 POSIX 源路径用例）。
+- 独立定向与组合复验（含 13 项常驻组合用例：真实路由、实际 LLMGateway 物理调用、独立 CommonMark 表格解析、真实存储与 Redis wrapper、失主/取消/过期锁、已消费摘要取消结算）：113 passed / 0 failed / 0 skipped。
+- 扩大回归：285 passed / 7 skipped——3 项 Windows 不适用 POSIX 路径 + 4 项需真实 Redis 服务，不得称作已通过。
+- CR 初审 1 项 P1（准备期 ownership 过期）+ 4 项 P2（取消漏结算、缺价调用、短代码图片误判、摘要投影为空）全部修复并经源码复核关闭；入口失主收尾补修后独立复验 4 passed / 0 failed。
+- 遗留（Phase 4，需用户部署授权后执行）：真实微信客户端文件名/中文编码/MD 可打开性与全文、平台错误事件、外部摘要模型风格、真实扣费余额、Redis Lua 实际服务；未执行时明确登记未验收，不以 mock 测试替代。
