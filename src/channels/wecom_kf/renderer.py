@@ -11,7 +11,6 @@ HTML 模板针对微信聊天窗口优化（窄宽度 420px、14px 字体）。
 """
 import hashlib
 import os
-import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -107,11 +106,6 @@ class WeComKfRenderer:
 <body>{html_content}</body>
 </html>"""
 
-    # Markdown 图片 file_id: scheme 正则（与 _image_inliner.py 保持一致）
-    _FILE_ID_IMAGE_PATTERN = re.compile(
-        r'!\[([^\]]*)\]\(file_id:([a-z0-9_]+)\)'
-    )
-
     # 渲染视窗宽度（适配微信气泡）
     _VIEWPORT_WIDTH = 440
 
@@ -190,9 +184,10 @@ class WeComKfRenderer:
         规避单次咨询 5 次回复限制。
 
         处理流程：
-        1. 扫描 markdown 中的 `![alt](file_id:xxx)`，通过 Redis 查本地路径，
-           替换为 `file://` URL 供 Playwright 加载
-        2. markdown 库转 HTML（启用 tables / fenced_code / nl2br / sane_lists 扩展）
+        1. markdown 库转 HTML（启用 tables / fenced_code / nl2br / sane_lists 扩展）
+        2. 图片内联：`<img src="file_id:xxx">` / 远程 URL 解析为 base64 data URI
+           （set_content 页面 origin=about:blank，Chromium 禁止加载 file:// 本地资源，
+           内联 data URI 是唯一可靠加载方式；单图失败保留原 src，不阻断长图）
         3. browser_pool.shoot() 生成临时页图（整页截图）
         4. finalize_long_image 做空白检测 + 高度截断 + 2MB 体积控制
         5. 把最终长图 move 到持久化目录（storage/tenants/{tenant_id}/conversation/）
@@ -212,21 +207,21 @@ class WeComKfRenderer:
         from src.services.x_to_image.models import InputType, XToImageInput
         from src.services.x_to_image.renderers.browser_pool import browser_pool
 
-        # 1. 解析 file_id: scheme 为本地 file:// URL
-        resolved_text = await self._resolve_file_id_images(markdown_text)
-
-        # 2. markdown -> HTML
+        # 1. markdown -> HTML
         try:
             import markdown
 
             html = markdown.markdown(
-                resolved_text,
+                markdown_text,
                 extensions=["tables", "fenced_code", "nl2br", "sane_lists"],
             )
-            full_html = self.HTML_TEMPLATE.format(html_content=html)
         except Exception as e:
             logger.opt(exception=True).error(f"markdown 转 HTML 失败: {e}")
             return None
+
+        # 2. 图片内联为 base64 data URI（Chromium 禁止 about:blank 页面加载 file://）
+        html = await self._inline_images_as_data_uri(html)
+        full_html = self.HTML_TEMPLATE.format(html_content=html)
 
         # 3. 临时目录 + browser_pool 生成页图
         work_dir = Path(tempfile.mkdtemp(prefix="wecom_kf_md_"))
@@ -281,44 +276,36 @@ class WeComKfRenderer:
         finally:
             shutil.rmtree(work_dir, ignore_errors=True)
 
-    async def _resolve_file_id_images(self, markdown_text: str) -> str:
-        """把 markdown 中的 `![alt](file_id:xxx)` 替换为 `![alt](file:///abs/path)`。
+    async def _inline_images_as_data_uri(self, html: str) -> str:
+        """把 HTML 中的 `<img src="file_id:xxx">` / 远程 URL 替换为 base64 data URI。
 
-        通过 Redis `uploaded_file:{file_id}` hash 的 path 字段查本地路径。
-        解析失败的引用保留原文（Playwright 渲染时会显示破图占位，但不阻断整张长图生成）。
+        browser_pool 用 set_content 加载页面（origin=about:blank），Chromium 禁止
+        此类页面加载 file:// 本地资源（"Not allowed to load local resource"），
+        图片必须内联成 data URI 才能渲染进长图；与 x_to_image HtmlRenderer 同方案。
+        单图失败保留原 src（破图占位），不阻断整张长图生成。
 
         Args:
-            markdown_text: 原始 markdown 文本
+            html: markdown 转出的 HTML 片段
 
         Returns:
-            替换后的 markdown 文本
+            内联后的 HTML 片段
         """
         try:
-            from src.core.redis_client import redis_client
+            from src.tools._image_inliner import inline_images_as_data_uri
         except Exception as e:
-            logger.warning(f"redis_client 导入失败，file_id: 图片无法解析: {e}")
-            return markdown_text
-
-        def _replace(m: "re.Match[str]") -> str:
-            alt, file_id = m.group(1), m.group(2)
-            try:
-                key = redis_client.make_key("uploaded_file", file_id)
-                path_str = redis_client.hget(key, "path")
-                if not path_str or not os.path.exists(path_str):
-                    logger.warning(
-                        f"file_id={file_id} 在 Redis 中无 path 或文件不存在，保留原文"
-                    )
-                    return m.group(0)
-                # 转 file:// URL 供 Playwright 加载（绝对路径需以 / 开头）
-                abs_path = os.path.abspath(path_str)
-                return f"![{alt}](file://{abs_path})"
-            except Exception as e:
-                logger.warning(
-                    f"解析 file_id={file_id} 失败，保留原文: {e}"
-                )
-                return m.group(0)
-
-        return self._FILE_ID_IMAGE_PATTERN.sub(_replace, markdown_text)
+            logger.warning(f"_image_inliner 导入失败，图片无法内联: {e}")
+            return html
+        try:
+            inlined, _refs = await inline_images_as_data_uri(
+                html,
+                tenant_id=self._tenant_id,
+                # 匿名渲染（无租户）无法下载远程图，仅解析 file_id:
+                fetch_remote=bool(self._tenant_id),
+            )
+            return inlined
+        except Exception as e:
+            logger.opt(exception=True).warning(f"图片 data URI 内联失败，回退原始 HTML: {e}")
+            return html
 
     async def close(self):
         """no-op：浏览器生命周期由 browser_pool 统一管理。
