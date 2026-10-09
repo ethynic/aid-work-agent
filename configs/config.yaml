@@ -480,7 +480,7 @@ agent_runner:
   web_service_id: "web"
   peers:
     web:
-      sources: ["chat", "wecom_kf"]
+      sources: ["chat", "wecom_kf", "feishu", "dingtalk"]
   host: "127.0.0.1"
   port: 8091
   lease_seconds: 30

@@ -24,6 +24,21 @@ from .usage_repository import UsageRepository
 from .source_receipts import SourceUnavailable
 
 
+def channel_verbose_config(source, request_data, base_config):
+    """按来源 + request_data 构造最终 verbose 配置。
+
+    渠道三源（wecom_kf/feishu/dingtalk）透传渠道侧冻结的 verbose 配置；
+    force_disabled 与全局 base 取或——全局强制关闭时渠道配置不能重新启用。
+    其余来源或无 request_data 时保持 base 不变。
+    """
+    if source in ('wecom_kf', 'feishu', 'dingtalk') and request_data and request_data.get('verbose_feedback'):
+        from dataclasses import replace
+        from src.core.verbose_feedback import VerboseFeedbackConfig
+        channel_feedback = VerboseFeedbackConfig(**request_data['verbose_feedback'])
+        return replace(channel_feedback, force_disabled=base_config.force_disabled or channel_feedback.force_disabled)
+    return base_config
+
+
 class RuntimeFactory:
     def __init__(self, resource_directory=None, profiles=None, browser_process=None):
         self.resource_directory = Path(resource_directory or os.environ.get('AGENT_RUNNER_RESOURCE_DIR', 'storage/agent_runner')).resolve()
@@ -409,14 +424,11 @@ class RunnerWorker:
                                 raise CheckpointFailure('EXECUTION_CONTEXT_VERSION_MISMATCH')
                             request = AgentRequestContext(prompt_augmentations=tuple(projection.get('prompt_augmentations') or []),
                                                           request_data=projection.get('request_data') or {})
-                            user = await asyncio.to_thread(self._agent_user,principal.identity.user_id,principal.identity.tenant_id)
+                            user = await asyncio.to_thread(self._agent_user,principal.identity.user_id,principal.identity.tenant_id,
+                                source=row['source'],channel_user_id=(row['input'] or {}).get('channel_user_id'))
                             from src.core.verbose_feedback import default_feedback_config, VerboseFeedbackState, iter_with_verbose_feedback
                             config, feedback = default_feedback_config(), VerboseFeedbackState()
-                            if row['source'] == 'wecom_kf' and request.request_data.get('verbose_feedback'):
-                                from dataclasses import replace
-                                from src.core.verbose_feedback import VerboseFeedbackConfig
-                                channel_feedback = VerboseFeedbackConfig(**request.request_data['verbose_feedback'])
-                                config = replace(channel_feedback, force_disabled=config.force_disabled or channel_feedback.force_disabled)
+                            config = channel_verbose_config(row['source'], request.request_data, config)
                         events = runtime.run(row['input']['text'],user=user,attachments=attachments,request_context=request,
                             verbose_config=config,verbose_state=feedback,
                             state=resume_state)
@@ -592,7 +604,7 @@ class RunnerWorker:
             logger.warning('AgentRunner resource cleanup unavailable kind={}',type(error).__name__)
 
     @staticmethod
-    def _agent_user(user_id, tenant_id):
+    def _agent_user(user_id, tenant_id, *, source=None, channel_user_id=None):
         if user_id is None:
             return None
         from src.db.models import UserDB
@@ -600,6 +612,15 @@ class RunnerWorker:
         user = UserDB.get_by_id(user_id)
         if not user:
             raise RunnerError('USER_UNAUTHORIZED',401)
+        if source is not None and source != 'chat':
+            # 渠道来源：自动注册账号的 username 是 feishu_xxx 等技术名，
+            # name 优先 nickname（与渠道侧 agent_user_builder 一致），并携带
+            # 渠道身份字段，避免技术名直接进入 prompt 的「## 当前用户」段。
+            return User(user_id=user_id,
+                name=user.get('nickname') or user.get('username') or user.get('phone') or user_id,
+                phone=user.get('phone'),tenant_id=tenant_id,
+                channel_type=source,channel_user_id=channel_user_id)
+        # web 来源行为不变：username 优先，不带渠道字段
         return User(user_id=user_id,name=user.get('username') or user.get('phone') or user_id,
                     phone=user.get('phone'),tenant_id=tenant_id)
 

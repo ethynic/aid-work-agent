@@ -907,9 +907,11 @@ async def _process_tenant_dingtalk_background(
 
         # 记录用户消息 —— P0-2：推迟到 process_and_persist 内统一写入
 
-        # 获取 agent
-        from src.core.agent_router import agent_router
-        agent = agent_router.get_agent(subagent_type, session_id)
+        # 只替换对话执行，渠道业务和原会话队列保持原实现。
+        from src.channels.runner_agent import ChannelRunnerAgent
+        agent = ChannelRunnerAgent(source='dingtalk', session_id=session_id,
+            channel_user_id=message.user_id, channel_chat_id=None,
+            profile_id=subagent_type or 'main', config_id=config_id)
 
         # 开始记录 token 消耗
         record_service = SessionRecordManager.start_record(
@@ -919,8 +921,9 @@ async def _process_tenant_dingtalk_background(
             tenant_id=tenant_id,
             source_type="dingtalk",
         )
-        record_service.set_model(agent.llm.get_model_name())
-        record_service.set_provider(agent.llm.get_provider_name())
+        # KF 同款归属：渠道侧无独立入口用量，模型/工具费用由 Runner 结算；
+        # 跳过零用量 chat_record，避免对话数/耗时统计重复计算。
+        record_service.skip_save = True
 
         # 处理消息 + 持久化（P0-1 / P0-2 统一在 process_and_persist 内完成）
         # 发送回复：单聊用 userId，群聊用 openConversationId
@@ -1076,9 +1079,11 @@ async def _process_tenant_feishu_background(
 
         # 记录用户消息 —— P0-2：推迟到 process_and_persist 内统一写入
 
-        # 获取 agent
-        from src.core.agent_router import agent_router
-        agent = agent_router.get_agent(subagent_type, session_id)
+        # 只替换对话执行，渠道业务和原会话队列保持原实现。
+        from src.channels.runner_agent import ChannelRunnerAgent
+        agent = ChannelRunnerAgent(source='feishu', session_id=session_id,
+            channel_user_id=message.user_id, channel_chat_id=None,
+            profile_id=subagent_type or 'main', config_id=config_id)
 
         # 开始记录 token 消耗
         record_service = SessionRecordManager.start_record(
@@ -1088,8 +1093,9 @@ async def _process_tenant_feishu_background(
             tenant_id=tenant_id,
             source_type="feishu",
         )
-        record_service.set_model(agent.llm.get_model_name())
-        record_service.set_provider(agent.llm.get_provider_name())
+        # KF 同款归属：渠道侧无独立入口用量，模型/工具费用由 Runner 结算；
+        # 跳过零用量 chat_record，避免对话数/耗时统计重复计算。
+        record_service.skip_save = True
 
         # 处理消息 + 持久化（P0-1 / P0-2 统一在 process_and_persist 内完成）
         send_response = channel_session_manager.make_send_response(

@@ -879,6 +879,9 @@ class ChannelSessionManager:
             1. 注册 collect_files_callback 收集 downloadable_files
             2. 调用 session_queue.enqueue_and_process（user 消息此刻尚未写入）
             3. status == "merged"：直接返回，不写任何消息
+            3b. status == "error"（processor 异常被 session_queue 转为 error 返回）：
+               - 关闭 verbose dispatcher、mark_error 记录失败状态
+               - 经 send_response 发送失败提示（不写空 assistant、不发空正文、不触发 recap）
             4. status == "success"：
                - 决定 user_to_write（合并方用 merged_input，否则用 user_content）
                - 构造 batch：[user, *tool_messages, assistant]，事务化批量写入
@@ -1146,6 +1149,44 @@ class ChannelSessionManager:
                 "downloadable_files": downloadable_files,
                 "was_merged": True,
                 "merged_input": result.merged_input,
+            }
+
+        # ===== status == "error"：processor 抛异常（如 ChannelRunnerAgent 抛 RunnerError），
+        # 被 session_queue 转为 error_result 正常返回，必须在此显式分流，不能落入
+        # success 路径：不写空 assistant、不发空正文、不触发 recap；不调用
+        # record_service.complete()（保留失败状态）。merged follower 已在上方提前
+        # return，不受本分支影响；取消路径由 enqueue_and_process 以空 AgentResponse
+        # 走 success 语义，保持不变。runner 侧清理（远程 cancel 等）在
+        # ChannelRunnerAgent 内完成，本分支只发失败提示，不重交任务、不重放工具
+        # 副作用；会话锁已由 enqueue_and_process 的 error 返回路径释放，无需 finish。
+        if result.status == "error":
+            if dispatcher is not None:
+                try:
+                    await dispatcher.cancel_and_await()
+                except Exception as close_err:
+                    logger.warning(f"[VERBOSE] error 路径 dispatcher 收尾失败 session={session_id}: {close_err}")
+            verbose_state.close()
+            if record_service is not None:
+                try:
+                    record_service.mark_error("对话处理失败")
+                except Exception as mark_err:
+                    logger.warning(
+                        f"后端日志：error 路径 record_service.mark_error 异常 session={session_id}: {mark_err}"
+                    )
+            # 发送非空失败提示（与渠道入口外层兜底文案一致）；adapter 自身故障时
+            # 不能再抛，避免掩盖原始错误
+            try:
+                await send_response("抱歉，处理您的消息时遇到了问题，请稍后重试。", [])
+            except Exception as send_err:
+                logger.opt(exception=True).error(
+                    f"后端日志：error 路径失败提示发送异常 session={session_id}: {send_err}",
+                )
+            return {
+                "status": "error",
+                "response_text": "",
+                "downloadable_files": [],
+                "was_merged": result.was_merged,
+                "merged_input": result.merged_input or "",
             }
 
         # ===== status == "success" =====

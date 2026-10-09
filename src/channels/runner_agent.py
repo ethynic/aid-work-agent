@@ -130,6 +130,8 @@ class ChannelRunnerAgent:
                 from src.channels.wecom_kf.context import get_kf_context
                 ctx = get_kf_context() or {}
                 body['request_data']['channel_user_info'] = ctx.get('channel_user_info') or {}
+            if self.source in ('wecom_kf', 'feishu', 'dingtalk'):
+                # 三渠道渠道侧均有 verbose 中间反馈；channel_user_info 仍为 KF 工具上下文专属。
                 from src.core.verbose_feedback import VerboseFeedbackConfig
                 if isinstance(kwargs.get('verbose_config'), VerboseFeedbackConfig):
                     body['request_data']['verbose_feedback'] = asdict(kwargs['verbose_config'])

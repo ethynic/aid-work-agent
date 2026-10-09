@@ -4,16 +4,72 @@
 
 ### AgentRunner 接入（后续独立事项）
 
-> 状态：📋 待开发。Agent/AgentRunner 架构重构已完成，本项仅让原飞书渠道使用独立 Runner 提供对话服务。
+> 状态：🔧 进行中（开发与两轮审核修复完成，待部署真机验收）。Agent/AgentRunner 架构重构已完成，本项仅让原飞书渠道使用独立 Runner 提供对话服务。
 >
 > 下文为原飞书渠道建设时的方案与问题基线；接入 Runner 不重新执行其中的 adapter 改造或重写步骤。
 
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
-| 对话接入 | 原对话调用提交至共用 Runner API/worker，传递可信渠道 source、会话及主体绑定 | 📋 待开发 | 保留原回调、验签、去重、媒体、队列、历史、发送及业务收尾 |
-| 接入验收 | 验证来源授权、对话结果、原控制语义及历史/费用唯一责任 | 📋 待开发 | 单独核对原飞书行为，不以 Web/KF 验收代替 |
+| Phase 1 | 设计核对与计划更新 | ✅ 完成（2026-10-09） | 按接入前仓库核对接入点、公共设施与缺口，设计见下 |
+| Phase 2 | Runner 共享缺口最小修复 | ✅ 完成（2026-10-09） | channel-result 放开三源；verbose source 门扩展；finalizer 历史门扩三源（CR 发现双写缺口）；peer sources 配置 |
+| Phase 3 | 飞书对话接入点替换 | ✅ 完成（2026-10-09） | `_process_tenant_feishu_background` 换用 `ChannelRunnerAgent`，渠道业务不动 |
+| Phase 4 | 独立测试与 CodeReview（首轮） | ✅ 完成（2026-10-09） | 当时证据：bridge 45+4 用例、回调路由 26 回归、CR P0 finalizer 双写已修；后被第一轮审核认定测试不足，由 Phase 4a/4b 扩充（本行保留为历史记录） |
+| Phase 4a | 审核修复 R1–R3 + 入口/参数化测试 | ✅ 完成（2026-10-09） | error 显式分流发非空失败提示；worker 用户重建（nickname 优先 + 渠道字段）；skip_save 防零用量空账单；新增入口 28 用例 + bridge 参数化至 59；独立测试与 CR 通过 |
+| Phase 4b | 真实接线与 worker 执行测试固化（R4.2）+ 计划同步（R4.1） | ✅ 完成（2026-10-09） | 每渠道 completed/failed/foreign_actor/history_unavailable 4×2 组合经真实入口+真实薄桥+HTTP/ASGI+真实授权/脱敏；真实 `RunnerWorker.execute` 断言 Runtime 用户与 verbose 配置；CR 无 P0/P1；验证记录见下 |
+| Phase 5 | 部署与真机验收 | 📋 待开发 | 用户授权部署后单独核对原飞书行为，不以 Web/KF 验收代替；未验证范围见「验证记录」 |
 
-只做必要的调用、身份和结果适配；不新增渠道专用锁闸门、inbox/投递管线、消费者或容器。开发前按现有实现核定历史及费用责任，详细边界见[AgentRunner 架构 §8.1](../../system/agent-application-architecture-design.md#81-后续接入的固定边界)，已完成核心证据见[重构完成记录](../../plans/plan-agent-runner-service.md)。
+只做必要的调用、身份和结果适配；不新增渠道专用锁闸门、inbox/投递管线、消费者或容器。详细边界见[AgentRunner 架构 §8.1](../../system/agent-application-architecture-design.md#81-后续接入的固定边界)，KF 参考实现见[微信客服恢复计划](../../plans/plan-wecom-kf-channel-restore.md)，两轮审核记录见[审核报告](../../reviews/feishu-dingtalk-agentrunner-review-2026-10-09.md)。
+
+#### 接入前基线核对（2026-10-09，描述接入前代码状态，非现状）
+
+- 接入点唯一：`_process_tenant_feishu_background`（`src/saas/api/channel_routes.py`）内原为 `agent_router.get_agent(subagent_type, session_id)` 构造进程内 Agent，经 `channel_session_manager.process_and_persist → session_queue.enqueue_and_process → agent.process_message_sync` 执行；主 API 进程内运行模型与引擎。**接入后**该处为 `ChannelRunnerAgent(source='feishu', ...)`。
+- 会话：`get_or_create_session(channel_type='feishu', channel_user_id=message.user_id, subagent_id=subagent_type or '')`；`channel_chat_id` 未落库（恒空），接入前后一致。群聊场景 parse_message 已在入口过滤未 @ 机器人事件。
+- 用户上下文：`ensure_user_registered` 建号，`build_agent_user_for_channel` 补全并写回 `users` 表 phone/nickname 后构造 User 传给 agent（name 优先级 nickname > username）。**接入后**该 User 不再随请求传递，由 worker `_agent_user` 重建（见设计表）。
+- 历史：引擎 `tool_messages` 事件经 progress_callback 汇入 `process_and_persist` 批量事务，与 user/assistant 一同写 `channel_messages`；接入后改由 channel-result 脱敏取回，落库路径不变。
+- 费用：接入前渠道 `SessionRecordManager` 经 `set_model/set_provider` 记录进程内 llm token 用量；接入后见设计表「费用责任」。
+- verbose：`resolve_verbose_feedback_config` + `make_send_verbose` 已接线，事件由进程内 Agent 经 feedback_state 产出；接入后配置随请求传递给 Runner。
+
+#### 接入设计（含两轮审核修订）
+
+| 项 | 决定 |
+|----|------|
+| 替换边界 | 仅把 `agent_router.get_agent(...)` 换成 `ChannelRunnerAgent(source='feishu', session_id=..., channel_user_id=message.user_id, channel_chat_id=None, profile_id=subagent_type or 'main', config_id=config_id)`；回调验签/去重、隐藏命令、自动注册、send_response/send_verbose、`process_and_persist`、session_queue 合并/取消全部保留 |
+| 参数映射 | `channel_chat_id=None` 与 `channel_sessions` 行一致（授权校验 `(channel_chat_id or None) == None`）；`profile_id` 与会话行 `subagent_id` 对齐（Runner `CHANNEL_PROFILE_MISMATCH` 校验）；`config_id` 随 `request_data.channel_config_id` 持久化，仅供追踪 |
+| 失败交付（R1） | `process_and_persist` 显式分流 `status="error"`：`mark_error("对话处理失败")`、经 send_response 发非空提示「抱歉，处理您的消息时遇到了问题，请稍后重试。」；不写空 assistant、不发空正文、不触发成功 recap；merged follower 提前 return 不受影响；取消仍走空 success 语义；不重交任务、不重放工具副作用 |
+| 历史责任 | `channel_messages` 仍由原 `process_and_persist` 事务写入；完成时经 `GET /v1/runners/{id}/channel-result` 取脱敏工具消息汇入；读取失败按失败交付处理（发提示、不发正文） |
+| 费用责任（R3） | 模型/工具费用由 Runner receipts/finalizer 结算；渠道入口 `start_record` 后 `skip_save=True`（KF 同款归属）——无渠道侧独立用量时不写零用量 chat_record，避免对话数/耗时统计重复；`end_record` 收尾保留。无证据表明模型费用双扣，本项仅统计口径修复 |
+| 用户上下文（R2） | 不随请求传 `channel_user_info`（KF 专属），不以自由请求字段建立身份；worker `_agent_user(source, channel_user_id)` 从已授权 Runner 行与 `users` 表重建原渠道语义：channel 来源 name 优先级 nickname > username > phone（修复技术账号名进入「当前用户」提示词），并恢复 `channel_type`/`channel_user_id` 字段；Web 构造不变 |
+| 不新增 | 渠道专属 runtime scope/工具上下文、channel_chat_id 落库、附件/媒体新能力、专用消费者或容器 |
+
+#### Runner 共享缺口最小修复（已随本项实施，含审核补充）
+
+1. `manager.channel_result` 的 `source != 'wecom_kf'` 403 限制放开到 feishu/dingtalk（脱敏逻辑不变）——否则工具消息历史回退。
+2. `worker.py` verbose 配置门提炼为 `channel_verbose_config(source, request_data, base)` 并扩为三源（`channel_user_info` 仍仅 KF）——否则 verbose 中间反馈静默失效。
+3. `finalizer.py` 的 `write_history` 门由 `!= 'wecom_kf'` 扩为三源渠道均不写——否则 Runner 与渠道 `process_and_persist` 对同一轮 `channel_messages` 双写（首轮 CR 发现，计划初稿漏列）。
+4. `configs/config.yaml` `peers.web.sources` 增加 `feishu`、`dingtalk`（共用 web peer，不新增令牌）；部署环境配置同步。
+5. `src/channels/session.py` `process_and_persist` 显式 error 分流（R1，共享层既有缺口，全渠道受益）。
+6. `worker.py` `_agent_user` 渠道用户重建（R2）。
+7. 两渠道入口 `skip_save=True`（R3）。
+
+#### 验证记录（2026-10-09，本机 Windows/Git Bash，venv Python 3.12.6；`scripts/dev_test.sh` 宿主机降级模式——容器 aid-agent-api 未运行）
+
+标准命令与实际结果（最终代码状态）：
+
+```bash
+bash ./scripts/dev_test.sh tests/unit/channels/test_channel_agent_runner_wiring.py \
+  tests/unit/services/agent_runner/test_worker_execution.py \
+  tests/unit/channels/test_channel_runner_service_independent.py \
+  tests/integration/test_channel_agent_runner_entries.py \
+  tests/integration/test_feishu_routes.py tests/integration/test_dingtalk_routes.py \
+  tests/integration/test_wecom_kf_reply_delivery.py -p no:cacheprovider -q
+# → 138 passed（接线 10 + worker 执行 2 + bridge 59 + 入口 28 + 回调 26 + KF 交付 13）
+bash ./scripts/dev_test.sh tests/unit/channels tests/unit/services/agent_runner -q
+# → 1130 passed, 7 skipped, 2 failed（均为预存环境问题，与本任务无关）
+```
+
+- 接线测试真/假边界：真实后台入口函数体、ChannelRunnerAgent、RunnerServiceClient（httpx→ASGI）、API 全路由、RunnerManager/RunnerAuthorizer、channel-result 脱敏、`process_and_persist` error 分流、`RunnerWorker.execute`/`_agent_user`/`channel_verbose_config`/`iter_with_verbose_feedback` 均为真实代码；桩仅落在平台 adapter、内存 DB 行、session_queue 契约镜像（不覆盖 merge/pending 路径）、环境配置，以及 worker 执行侧的 MemoryRunners/MemoryExecutions（受理即终态 + 最小方法集）、记录型 Runtime/factory、finalizer 与 trace IO（`_persist_trace`）假件——与两个测试文件内的边界注释一致。
+- 预存失败 2 个（未处理，与本任务无关）：`test_artifact_refs` symlink（Windows WinError 1314）、`test_wecom_kf_servicer_visibility` 下载链接绝对 URL（并行任务 settings 改动）。
+- **未验证范围**：真实飞书平台投递、Runner 进程 lifespan、真实 PostgreSQL 结算（agent_runner_usage_receipts）、跨进程 Redis 合并/取消竞争、`tests/integration/agent_runner_service/` 隔离库套件（本机无 aid_test 库）；真机验收待用户授权部署后单独执行（来源授权、对话结果、追问、新消息取代旧任务、历史含工具消息、失败提示、费用不双记）。
 
 ## 原渠道建设方案（历史基线）
 

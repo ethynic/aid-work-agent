@@ -16,7 +16,7 @@ import pytest
 from src.channels.runner_agent import ChannelRunnerAgent
 from src.config.settings import AgentRunnerConfig
 from src.core.agent_events import extract_downloadable_file, make_verbose_event
-from src.core.verbose_feedback import VerboseFeedbackState
+from src.core.verbose_feedback import VerboseFeedbackConfig, VerboseFeedbackState
 from src.services.agent_runner.api import create_app
 from src.services.agent_runner.authorization import RunnerAuthorizer
 from src.services.agent_runner.contracts import RunnerError, RunnerSubmit, canonical_json
@@ -123,7 +123,7 @@ def bridge(monkeypatch):
     token = 'test-service-token'
     config = AgentRunnerConfig(enabled=True, web_service_id='bridge', api_url='http://runner.test',
         web_service_token=token,
-        peers={'bridge': {'sources': ['wecom_kf', 'chat']}})
+        peers={'bridge': {'sources': ['wecom_kf', 'chat', 'feishu', 'dingtalk']}})
     authorizer = RunnerAuthorizer(config, store.connection,
         source_port=build_source_capabilities(config, store.connection))
     manager = RunnerManager(repository, authorizer, SimpleNamespace(resolve=lambda profile: (None, 'fingerprint')))
@@ -212,38 +212,45 @@ async def test_actual_http_authorization_rejects_untrusted_route_before_any_runn
 
 
 @pytest.mark.asyncio
-async def test_cancelled_merge_attempt_is_cancelled_remotely_before_replacement_is_accepted(bridge):
+@pytest.mark.parametrize('source', ['wecom_kf', 'feishu', 'dingtalk'])
+async def test_cancelled_merge_attempt_is_cancelled_remotely_before_replacement_is_accepted(bridge, source):
     bridge.repository.status = 'running'
-    request = RunnerSubmit(source='wecom_kf', session={'kind': 'channel', 'session_id': 'session'},
-        channel_user_id='actor', channel_chat_id='kf', client_request_id='old', text='old',
+    agent = _channel_agent(bridge, source)
+    chat = 'kf' if source == 'wecom_kf' else None
+    request = RunnerSubmit(source=source, session={'kind': 'channel', 'session_id': 'session'},
+        channel_user_id='actor', channel_chat_id=chat, client_request_id='old', text='old',
         request_data={'channel_config_id': 'config'})
     credentials = {'service_id': 'bridge', 'service_token': bridge.client.token,
-        'actor_source': 'wecom_kf', 'actor_user': 'actor', 'actor_chat': 'kf'}
+        'actor_source': source, 'actor_user': 'actor', 'actor_chat': chat}
     old = bridge.manager.submit(request, credentials)[0]
     bridge.repository.status = 'completed'
-    assert str(await bridge.agent.process_message_sync(user_input='merged', session_id='session')) == 'answer'
+    assert str(await agent.process_message_sync(user_input='merged', session_id='session')) == 'answer'
     assert bridge.repository.cancelled == [old['runner_id']]
     assert [request.text for request in bridge.repository.submitted] == ['old', 'merged']
 
 
 @pytest.mark.asyncio
-async def test_local_cancel_check_cancels_service_task_instead_of_abandoning_it(bridge):
+@pytest.mark.parametrize('source', ['wecom_kf', 'feishu', 'dingtalk'])
+async def test_local_cancel_check_cancels_service_task_instead_of_abandoning_it(bridge, source):
     bridge.repository.status = 'running'
     checks = iter([False, True])
-    result = await bridge.agent.process_message_sync(user_input='request', session_id='session', cancel_check=lambda: next(checks))
+    agent = _channel_agent(bridge, source)
+    result = await agent.process_message_sync(user_input='request', session_id='session', cancel_check=lambda: next(checks))
     assert str(result) == '' and bridge.repository.cancelled == ['runner-1']
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('wrapper', [None, 'child_wait', 'child_clarification'])
-async def test_clarification_reply_uses_control_and_waits_for_applied_reply_without_resubmitting(bridge, wrapper):
+@pytest.mark.parametrize('source', ['wecom_kf', 'feishu', 'dingtalk'])
+async def test_clarification_reply_uses_control_and_waits_for_applied_reply_without_resubmitting(bridge, wrapper, source):
     bridge.repository.status = 'waiting'
     bridge.repository.snapshot = {'waiting': {'kind': 'clarification', 'question': 'Which city?',
         'wait_id': 'wait', 'target_execution_id': 'execution'}}
     if wrapper:
         bridge.repository.snapshot['waiting'] = {'kind': wrapper, 'child_wait': bridge.repository.snapshot['waiting']}
-    assert str(await bridge.agent.process_message_sync(user_input='book', session_id='session')) == 'Which city?'
-    assert str(await bridge.agent.process_message_sync(user_input='Shanghai', session_id='session')) == 'answer'
+    agent = _channel_agent(bridge, source)
+    assert str(await agent.process_message_sync(user_input='book', session_id='session')) == 'Which city?'
+    assert str(await agent.process_message_sync(user_input='Shanghai', session_id='session')) == 'answer'
     assert len(bridge.repository.submitted) == 1 and not bridge.repository.cancelled
     assert bridge.controls['request'].answer == 'Shanghai' and bridge.controls['request'].wait_id == 'wait'
 
@@ -269,9 +276,11 @@ async def test_accepted_http_response_loss_reuses_same_submit_key_without_second
 
 
 @pytest.mark.asyncio
-async def test_coroutine_cancellation_waits_for_service_cancel_confirmation(bridge):
+@pytest.mark.parametrize('source', ['wecom_kf', 'feishu', 'dingtalk'])
+async def test_coroutine_cancellation_waits_for_service_cancel_confirmation(bridge, source):
     bridge.repository.status = 'running'
-    task = asyncio.create_task(bridge.agent.process_message_sync(user_input='request', session_id='session'))
+    agent = _channel_agent(bridge, source)
+    task = asyncio.create_task(agent.process_message_sync(user_input='request', session_id='session'))
     async def wait_for_acceptance():
         while not bridge.repository.submitted:
             await asyncio.sleep(0)
@@ -335,6 +344,59 @@ async def test_channel_result_masks_real_json_string_tool_arguments_and_invalid_
     safe = value['messages'][0]['tool_calls'][0]['function']['arguments']
     assert 'test-hidden' not in str(safe) and 'invalid-test-secret' not in str(safe)
     assert private['tool_calls'][0]['function']['arguments'] == arguments
+
+
+def _as_chatless_channel(bridge, source):
+    """feishu/dingtalk 会话行 channel_chat_id 恒空、subagent_id 按渠道写入空串。"""
+    bridge.store.sessions['session'].update(channel_type=source, channel_chat_id=None, subagent_id='')
+    return ChannelRunnerAgent(source=source, session_id='session', channel_user_id='actor',
+        channel_chat_id=None, config_id='config', client=bridge.client)
+
+
+def _channel_agent(bridge, source):
+    """KF 保留原 bridge.agent（channel_chat_id='kf'）；feishu/dingtalk 用无 chat 渠道形态。"""
+    return bridge.agent if source == 'wecom_kf' else _as_chatless_channel(bridge, source)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('source', ['feishu', 'dingtalk'])
+async def test_chatless_channel_source_passes_channel_authorization_and_completes(bridge, source):
+    agent = _as_chatless_channel(bridge, source)
+    config = VerboseFeedbackConfig(enabled=True, max_per_turn=2, max_text_chars=42)
+    result = await agent.process_message_sync(user_input='request', session_id='session',
+        verbose_config=config)
+    assert str(result) == 'answer' and result.images[0]['file_id'] == 'image'
+    submitted = bridge.repository.submitted[0]
+    assert submitted.source == source and submitted.profile_id == 'main'
+    assert submitted.channel_chat_id is None and submitted.request_data['channel_config_id'] == 'config'
+    assert submitted.request_data['verbose_feedback'] == {'enabled': True, 'force_disabled': False,
+        'max_per_turn': 2, 'max_text_chars': 42, 'delivery_timeout_seconds': 5.0,
+        'fallback_message': config.fallback_message}
+    # channel_user_info 是 KF 工具上下文专属，不随新渠道传递。
+    assert 'channel_user_info' not in submitted.request_data
+    # 授权比对要求 None 保持 None，持久化 intent 不允许退化为空串。
+    assert bridge.repository.rows['runner-1']['input']['channel_chat_id'] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('source', ['feishu', 'dingtalk'])
+async def test_channel_result_reads_and_masks_for_chatless_channels_and_rejects_foreign_actor(bridge, source):
+    agent = _as_chatless_channel(bridge, source)
+    await agent.process_message_sync(user_input='request', session_id='session')
+    value = await bridge.client.request('GET', '/v1/runners/runner-1/channel-result', authorization=None,
+        channel_source=source, channel_user='actor')
+    assert [message['role'] for message in value['messages']] == ['assistant', 'tool']
+    safe = value['messages'][0]['tool_calls'][0]['function']['arguments']
+    assert 'test-hidden' not in str(safe)
+    with pytest.raises(RunnerError, match='CHANNEL_ACTOR_FORBIDDEN'):
+        await bridge.client.request('GET', '/v1/runners/runner-1/channel-result', authorization=None,
+            channel_source=source, channel_user='another-actor')
+    # 跨渠道 actor 同样拒绝：feishu 凭据读 dingtalk runner（及反向）在
+    # authorize_read_in_tx 的 actor_source != row['source'] 处被拦截。
+    foreign_source = 'feishu' if source == 'dingtalk' else 'dingtalk'
+    with pytest.raises(RunnerError, match='CHANNEL_ACTOR_REQUIRED'):
+        await bridge.client.request('GET', '/v1/runners/runner-1/channel-result', authorization=None,
+            channel_source=foreign_source, channel_user='actor')
 
 
 @pytest.mark.asyncio
@@ -427,14 +489,14 @@ async def test_worker_channel_context_isolated_by_tenant_session_and_always_clos
         _kf_context.reset(token)
 
 
-@pytest.mark.parametrize('source,history_count', [('wecom_kf', 0), ('chat', 1)])
-def test_finalizer_settles_execution_once_releases_claim_and_leaves_kf_history_to_channel(source, history_count):
+@pytest.mark.parametrize('source,history_count', [('wecom_kf', 0), ('feishu', 0), ('dingtalk', 0), ('chat', 1)])
+def test_finalizer_settles_execution_once_releases_claim_and_leaves_integrated_channel_history_to_channel(source, history_count):
     from src.services.agent_runner.finalizer import RunnerFinalizer
     from src.services.agent_runner.ownership import Attempt
     cursor, connection = MagicMock(), MagicMock()
     connection.__enter__.return_value.cursor.return_value = cursor
     row = {'source': source, 'runner_id': 'runner', 'record_id': 'record', 'status': 'finalizing',
-        'scope_key': 'tenant:tenant', 'session_kind': 'channel' if source == 'wecom_kf' else 'web',
+        'scope_key': 'tenant:tenant', 'session_kind': 'channel' if source != 'chat' else 'web',
         'session_id': 'session', 'checkpoint': {'pending_finalization': {'status': 'completed', 'output': 'answer'}}}
     finished = {**row, 'status': 'completed'}
     cursor.fetchone.side_effect = [{'owner_runner_id': 'runner'}, finished]

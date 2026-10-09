@@ -60,7 +60,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20261008-1603 | 飞书、钉钉对话服务接入 AgentRunner | 🔧 部分完成 | 保留原渠道业务，仅接入独立 Runner 并传递可信渠道来源。 | [接入边界](system/agent-application-architecture-design.md#81-后续接入的固定边界) | [飞书](channel/feishu/implementation_plan.md#agentrunner-接入后续独立事项) / [钉钉](channel/dingtalk/implementation_plan.md#agentrunner-接入后续独立事项) |
+| 20261008-1603 | 飞书、钉钉对话服务接入 AgentRunner | 🔧 部分完成（开发完成，待部署验收） | 保留原渠道业务，仅接入独立 Runner 并传递可信渠道来源。 | [接入边界](system/agent-application-architecture-design.md#81-后续接入的固定边界) | [飞书](channel/feishu/implementation_plan.md#agentrunner-接入后续独立事项) / [钉钉](channel/dingtalk/implementation_plan.md#agentrunner-接入后续独立事项) / [审核](reviews/feishu-dingtalk-agentrunner-review-2026-10-09.md) |
 | 20260910-1259 | 留资线索动态刷新（lead_refresh：意向度 + 需求分条 + 人工归属） | 🔧 部分完成 | **Phase 1 开发+单测完成（2026-09-16），待部署真机验证；Phase 2 §9.5 人工期对话推送（external_push_human：节流推送 + 转人工字段 + 跟进汇总摘要同步 + 不要求留资）开发+单测完成（2026-09-16）**。触发：2026-09-10 产品需求——留资后客户继续交流（智能体轮次 + 转人工期）仅落 `channel_messages`，线索行不再更新，运营页看不到最新客户状态。 | [设计](subagent/pre-sales/lead-capture-refresh-design.md) | — |
 
 ## 前端

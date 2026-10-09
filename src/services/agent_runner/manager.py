@@ -72,7 +72,7 @@ class RunnerManager:
         self.authorizer.verify_service(credentials['service_id'], credentials['service_token'], None)
         row = self.repository.get(runner_id)
         self._authorize_row(row, credentials)
-        if row['source'] != 'wecom_kf' or row['session_kind'] != 'channel':
+        if row['source'] not in ('wecom_kf', 'feishu', 'dingtalk') or row['session_kind'] != 'channel':
             raise RunnerError('CHANNEL_RESULT_FORBIDDEN', 403)
         messages = []
         if row['status'] == 'completed':

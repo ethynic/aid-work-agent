@@ -42,8 +42,9 @@ class RunnerFinalizer:
                 raise CheckpointFailure('FINALIZATION_INTENT_NOT_SAVED')
             settlement, delta = self._settle(cursor, runner, result)
             snapshot,result=project_terminal_public_state(cursor,runner,result)
-            # KF 原渠道以最终合并 owner 写入历史，避免 Runner 与渠道重复落库。
-            if runner['source'] != 'wecom_kf':
+            # 已接入 Runner 的渠道（KF/飞书/钉钉）以最终合并 owner 写入历史，
+            # 避免 Runner 与渠道 process_and_persist 双写 channel_messages。
+            if runner['source'] not in ('wecom_kf', 'feishu', 'dingtalk'):
                 write_history(cursor, runner, result)
             cursor.execute('''DELETE FROM agent_runner_session_claims WHERE owner_runner_id=%s
                     AND scope_key=%s AND session_kind=%s AND session_id=%s RETURNING owner_runner_id''',
