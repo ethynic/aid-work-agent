@@ -22,6 +22,7 @@ import pytest
 
 from src.core.tenant_path_guard import (
     check_text_for_foreign_tenant_paths,
+    check_text_for_platform_source_paths,
     extract_flat_knowledge_ref,
     extract_knowledge_refs,
     find_foreign_tenant_owner,
@@ -670,3 +671,82 @@ class TestResolveSourceTypesByFile:
         assert resolve_source_types_by_file("", "f.pdf") == []
         assert resolve_source_types_by_file("bbb", "") == []
         assert not called
+
+
+class TestCheckTextForPlatformSourcePaths:
+    """平台源码目录（src/）引用检查（2026-10-09 事故：LLM 用 skill_execute
+    翻找 /app/src 源码定位文件下载逻辑，撞满迭代上限）"""
+
+    def test_absolute_src_read_blocked(self):
+        blocked, ref = check_text_for_platform_source_paths(
+            "sed -n '1,50p' /app/src/tools/llm/http_api.py"
+        )
+        assert blocked is True
+
+    def test_relative_src_read_blocked(self):
+        blocked, _ = check_text_for_platform_source_paths(
+            "cat src/core/agent.py"
+        )
+        assert blocked is True
+
+    def test_src_enumeration_blocked(self):
+        blocked, _ = check_text_for_platform_source_paths(
+            "grep -rn download /app/src/"
+        )
+        assert blocked is True
+
+    def test_bare_src_blocked(self):
+        blocked, _ = check_text_for_platform_source_paths("ls /app/src")
+        assert blocked is True
+
+    def test_src_skills_script_allowed(self):
+        """技能指南中的 src/skills/ 脚本路径放行（eas-contract-verify 实际用法）"""
+        blocked, _ = check_text_for_platform_source_paths(
+            "python src/skills/contract-approval-1.0.0/scripts/contract_approval.py"
+            " --contract-no \"C123\" --approve"
+        )
+        assert blocked is False
+
+    def test_no_src_reference_allowed(self):
+        blocked, _ = check_text_for_platform_source_paths(
+            "python scripts/load_api_config.py --user-id u1"
+        )
+        assert blocked is False
+
+    def test_word_containing_src_not_blocked(self):
+        """source、srcs 等含 src 前缀的单词不命中"""
+        blocked, _ = check_text_for_platform_source_paths(
+            "python scripts/load_api_config.py --source manual"
+        )
+        assert blocked is False
+
+
+class TestSkillExecutePlatformSourceGuard:
+    @pytest.mark.asyncio
+    async def test_src_read_command_blocked(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.saas.context.get_current_tenant_id", lambda: "tenant_aaa"
+        )
+        tool, executor = _make_skill_tool()
+        resp = await tool.execute(
+            skill="pre-sales-api",
+            command="cat /app/src/tools/knowledge/knowledge_file_search_tool.py",
+        )
+        assert resp["success"] is False
+        assert "安全防护拦截" in resp["error"]
+        assert "knowledge_file_search" in resp["error"]
+        executor.execute_skill_command.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_src_skills_command_allowed(self, monkeypatch):
+        """技能脚本 src/skills/ 路径不受拦截"""
+        monkeypatch.setattr(
+            "src.saas.context.get_current_tenant_id", lambda: "tenant_aaa"
+        )
+        tool, executor = _make_skill_tool()
+        resp = await tool.execute(
+            skill="contract-approval",
+            command="python src/skills/contract-approval-1.0.0/scripts/contract_approval.py",
+        )
+        assert resp["success"] is True
+        executor.execute_skill_command.assert_awaited_once()

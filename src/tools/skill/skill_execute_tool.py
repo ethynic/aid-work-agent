@@ -35,8 +35,20 @@ class SkillExecuteTool(BaseTool):
     # 控制工具：不进普通 registry，由 ToolControlSet 带依赖构造。
     catalog = False
     name = "skill_execute"
-    description = "在技能上下文中执行命令（仅当操作指南要求时才使用，如 python scripts/xxx.py）。引导式技能（无脚本的技能）通常不需要调用此工具。"
-    usage_guide = ""
+    description = ("在技能上下文中执行命令（仅当操作指南要求时才使用，如 python scripts/xxx.py）。"
+                   "引导式技能（无脚本的技能）通常不需要调用此工具。"
+                   "禁止用本工具执行 grep/sed/cat/find 等命令探测平台源码或翻找存储目录；"
+                   "查找业务文件（课件、文档、报价单等）请用 knowledge_file_search / knowledge_base_search，"
+                   "把知识库文件交付给用户请用 cp 工具。")
+    usage_guide = (
+        "### skill_execute\n"
+        "- 仅执行当前已加载技能指南中明确给出的命令；引导式技能（无脚本）不需要本工具。\n"
+        "- 禁止用 shell 命令（grep/sed/cat/find/ls 等）探测平台源码目录（src/）或枚举租户存储目录，"
+        "此类命令会被安全防护拦截，反复尝试会耗尽迭代次数导致任务失败。\n"
+        "- 查找用户的业务文件（培训课件、报价单、合同等）：用 knowledge_file_search 按文件名定位，"
+        "或 knowledge_base_search 按内容语义搜索；需要把知识库文件发给用户时用 cp 工具复制到会话交付，"
+        "不要在 shell 里翻找文件路径。"
+    )
     display_name = "执行技能"
     category = "skill"
     InputModel = SkillExecuteInput
@@ -267,6 +279,7 @@ class SkillExecuteTool(BaseTool):
             # 拦截引用其他租户 tenants 目录或 source_storage（生产存储挂载点）的命令。
             from src.core.tenant_path_guard import (
                 check_text_for_foreign_tenant_paths,
+                check_text_for_platform_source_paths,
                 is_source_storage_reference,
             )
 
@@ -287,6 +300,24 @@ class SkillExecuteTool(BaseTool):
                     "success": False,
                     "error": "命令包含对其他租户存储目录的访问，已被安全防护拦截。"
                     "只能访问当前租户目录下的文件。",
+                    "skill_name": skill_name,
+                }
+
+            # 平台源码目录探测拦截（2026-10-09 事故）：LLM 用 grep/sed/cat 翻找
+            # /app/src 源码定位文件下载逻辑，撞满迭代上限。src/skills/ 技能脚本放行。
+            _src_blocked, source_ref = check_text_for_platform_source_paths(processed_command)
+            if _src_blocked:
+                logger.warning(
+                    f"[安全防护] skill_execute 命令引用平台源码目录，已拦截: "
+                    f"skill={skill_name}, tenant={resolved_tenant_id or '无'}, "
+                    f"reference={source_ref}, command={processed_command[:300]}"
+                )
+                return {
+                    "success": False,
+                    "error": "命令包含对平台源码目录（src/）的访问，已被安全防护拦截。"
+                    "查找业务文件（课件、文档、报价单等）请使用 knowledge_file_search "
+                    "或 knowledge_base_search 工具，交付文件使用 cp 工具；"
+                    "技能脚本按技能指南给出的相对路径执行。",
                     "skill_name": skill_name,
                 }
 

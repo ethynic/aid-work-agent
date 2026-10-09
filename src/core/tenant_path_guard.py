@@ -1,9 +1,15 @@
-"""跨租户文件路径防护
+"""LLM 命令路径安全防护（跨租户存储 + 平台源码目录）
 
 多租户 SaaS 场景下，LLM 可调用的文件工具（cp、skill_execute 等）不得触碰
 其他租户的存储目录。真实案例（2026-09-11）：售前会话中 LLM 通过
 `skill_execute` 执行 `find /app -iname '*爱定义*'`，枚举到了其他租户
 storage/tenants/ 下的报价单文件路径。
+
+真实案例（2026-10-09）：微信客服会话中 LLM 连续 15 轮用 skill_execute 执行
+`grep -r ... /app/src`、`sed -n ... src/tools/http_api.py`、`cat src/...` 等
+命令翻找平台源码定位文件下载逻辑，撞满迭代上限。check_text_for_platform_source_paths
+拦截对平台源码目录（src/）的引用；src/skills/ 是技能指南让 LLM 执行的脚本
+路径，放行。
 
 本模块提供统一的路径归属判定与输出脱敏：
 - find_foreign_tenant_owner(): 判断路径是否落在其他租户的 tenants 目录内
@@ -179,6 +185,29 @@ def is_source_storage_reference(text: str) -> bool:
     source_storage 仅租户迁移运维脚本使用，skill 命令中出现即为探测行为。
     """
     return "source_storage" in text
+
+
+# 独立的 `src` 词（/app/src、src/tools、cd src 等形态）；
+# source/srcs 等含 src 前缀的单词不命中。
+_PLATFORM_SRC_RE = re.compile(r"(?<![A-Za-z0-9_])src(?![A-Za-z0-9_])")
+
+
+def check_text_for_platform_source_paths(text: str) -> Tuple[bool, Optional[str]]:
+    """检查命令文本是否引用了平台源码目录（src/，src/skills/ 除外）。
+
+    返回 (是否违规, 命中位置附近的文本片段)。用于 skill_execute 执行前的
+    命令预检，拦截 LLM 用 grep/sed/cat/find 等命令翻找平台源码的探测行为；
+    查找业务文件应走 knowledge_file_search / knowledge_base_search / cp。
+
+    src/skills/ 是技能指南中让 LLM 直接执行的脚本路径（如
+    `python src/skills/contract-approval-1.0.0/scripts/xxx.py`），放行。
+    """
+    for match in _PLATFORM_SRC_RE.finditer(text):
+        rest = text[match.end():]
+        if re.match(r"/skills(?:/|[\r\n]|$)", rest):
+            continue
+        return True, text[max(0, match.start() - 20):match.end() + 40].strip()
+    return False, None
 
 
 def redact_foreign_tenant_paths(

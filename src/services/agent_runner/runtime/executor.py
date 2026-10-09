@@ -360,7 +360,7 @@ class RuntimeExecution:
                 if event["type"] == "execution_completed":
                     yield make_event("progress", data="✅ 任务完成，正在生成回复...")
                 elif event["type"] == "iteration_limit":
-                    yield make_event("response", data="I apologize, but the task is taking too long. Please try again or break it into smaller steps.")
+                    yield make_event("response", data="抱歉，这个问题处理时间较长，暂时未能完成。请稍后重试，或把问题拆分成几个小问题分别问我。")
                 else:
                     yield event
         finally:
