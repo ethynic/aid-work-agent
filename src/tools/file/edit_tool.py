@@ -2,7 +2,7 @@
 文件局部编辑工具
 
 对已存在文件做局部编辑，支持三种模式：
-- replace_string：精确字符串替换（强制唯一匹配）
+- replace_string：精确字符串替换（默认强制唯一匹配，replace_all=True 时批量替换）
 - replace_section：标记之间内容替换（标记行保留）
 - replace_lines：按行号范围替换
 
@@ -17,6 +17,11 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
+
+
+def _offset_to_index(offset: int) -> int:
+    """offset（1-based 行号）转 0-based 列表索引。调用方需先保证 offset ≥ 1。"""
+    return offset - 1
 
 
 class EditError(Exception):
@@ -48,6 +53,11 @@ class EditInput(BaseModel):
         None,
         description="[replace_string 专用] 替换为的新内容。",
     )
+    replace_all: bool = Field(
+        False,
+        description="[replace_string 专用] True 时替换 old_string 的全部匹配（不校验唯一）；"
+        "False 时要求 old_string 在文件中唯一（默认）。",
+    )
 
     # === replace_section 专用 ===
     section_start: Optional[str] = Field(
@@ -64,7 +74,8 @@ class EditInput(BaseModel):
     # === replace_lines 专用 ===
     offset: Optional[int] = Field(
         None,
-        description="[replace_lines 专用] 起始行偏移（0-based），第 0 行 = 文件第 1 行。",
+        ge=1,
+        description="[replace_lines 专用] 起始行号（1-based），offset=1 表示文件第 1 行。",
     )
     limit: Optional[int] = Field(
         None,
@@ -87,7 +98,7 @@ class EditTool(BaseTool):
 
 1. replace_string（精确字符串替换，相当于 sed 's/old/new/'）：
    edit(file_path="...", mode="replace_string", old_string="<title>旧标题</title>", new_string="<title>新标题</title>")
-   → old_string 必须在文件中唯一（多个匹配会报错），防止误改
+   → old_string 必须在文件中唯一（多个匹配会报错），防止误改；批量替换传 replace_all=True
    → skill 要求改 title / 改占位符时用此模式
 
 2. replace_section（标记之间内容替换）：
@@ -99,7 +110,7 @@ class EditTool(BaseTool):
 
 3. replace_lines（按行号范围替换）：
    edit(file_path="...", mode="replace_lines", offset=120, limit=10, content="新内容")
-   → 替换从 offset+1 行开始的 limit 行
+   → 替换从第 offset 行开始的 limit 行（offset 是 1-based 行号，与 read 返回行号一致）
 
 目标文件必须已存在；先校验再写，失败不影响原文件。
 任何需要修改已存在文件内容的场景都用本工具：修改配置项、替换占位符、
@@ -144,34 +155,42 @@ class EditTool(BaseTool):
         return p
 
     def _do_replace_string(
-        self, original: str, old_string: str, new_string: str
-    ) -> Tuple[str, int]:
-        """精确字符串替换，强制 old_string 唯一。
+        self,
+        original: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> Tuple[str, int, int]:
+        """精确字符串替换。默认强制 old_string 唯一；replace_all=True 时替换全部匹配。
 
         Args:
             original: 原始文件内容
             old_string: 要被替换的字符串
             new_string: 替换为的新字符串
+            replace_all: True 时跳过唯一性校验，替换全部匹配
 
         Returns:
-            (新内容, 匹配行号) 的元组
+            (新内容, 首个匹配行号, 替换次数) 的元组，行号 1-based
 
         Raises:
-            EditError: old_string 未找到或出现多次
+            EditError: old_string 未找到；或出现多次且 replace_all=False
         """
         count = original.count(old_string)
         if count == 0:
             raise EditError(
                 f"未在文件中找到 old_string: {old_string[:60]}..."
             )
-        if count > 1:
+        if count > 1 and not replace_all:
             raise EditError(
                 f"old_string 在文件中出现 {count} 次，无法唯一匹配。"
-                f"请加入更多上下文使其唯一。"
+                f"请加入更多上下文使其唯一，或传 replace_all=True 批量替换。"
             )
-        new_content = original.replace(old_string, new_string, 1)
+        if replace_all:
+            new_content = original.replace(old_string, new_string)
+        else:
+            new_content = original.replace(old_string, new_string, 1)
         matched_line = original[: original.index(old_string)].count("\n") + 1
-        return new_content, matched_line
+        return new_content, matched_line, count
 
     def _do_replace_section(
         self,
@@ -246,7 +265,7 @@ class EditTool(BaseTool):
 
         Args:
             original: 原始文件内容
-            offset: 起始行偏移（0-based）
+            offset: 起始行号（1-based，offset=1 表示第 1 行）
             limit: 要替换的行数
             content: 替换为的新内容
 
@@ -254,11 +273,16 @@ class EditTool(BaseTool):
             (新内容, 起始行号, 结束行号) 的元组，行号 1-based
 
         Raises:
-            EditError: offset 超出文件行数
+            EditError: offset 非法（<1）或超出文件行数
         """
+        if offset < 1:
+            raise EditError(
+                "offset 必须是 1-based 行号（≥1）：offset=1 表示第 1 行"
+            )
+
         lines = original.splitlines(keepends=True)
-        start = offset
-        end = offset + limit
+        start = _offset_to_index(offset)
+        end = start + limit
 
         if start >= len(lines):
             raise EditError(
@@ -306,18 +330,22 @@ class EditTool(BaseTool):
             return f"读取文件失败: {e}"
 
         # 4. 在内存中计算新内容（关键：失败不影响原文件）
+        replaced_count: Optional[int] = None
         try:
             if mode == "replace_string":
                 old_string = kwargs.get("old_string")
                 new_string = kwargs.get("new_string")
+                replace_all = bool(kwargs.get("replace_all", False))
                 if not old_string:
                     return "replace_string 模式需要 old_string 参数"
                 if new_string is None:
                     return "replace_string 模式需要 new_string 参数"
-                new_content, matched_info = self._do_replace_string(
-                    original, old_string, new_string
+                new_content, matched_info, replaced = self._do_replace_string(
+                    original, old_string, new_string, replace_all
                 )
                 matched_lines = matched_info
+                if replace_all:
+                    replaced_count = replaced
 
             elif mode == "replace_section":
                 section_start = kwargs.get("section_start")
@@ -369,8 +397,12 @@ class EditTool(BaseTool):
             f"文件编辑成功: {path} ({file_size} bytes, mode={mode})"
         )
 
-        return {
+        result: Dict[str, Any] = {
             "file_path": str(path),
             "file_size": file_size,
             "matched_lines": matched_lines,
         }
+        # 仅 replace_all=True 时报告替换次数；默认模式行为不变
+        if replaced_count is not None:
+            result["replaced_count"] = replaced_count
+        return result

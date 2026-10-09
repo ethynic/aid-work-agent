@@ -3,7 +3,7 @@ ReadTool 单元测试
 
 覆盖：
 - 整文件读取（小文件，返回 cat -n 格式）
-- 行号范围（offset=0-based，返回 1-based 行号）
+- 行号范围（offset 为 1-based 行号，与返回行号一致；0/负数为非法入参）
 - 标记定位（section_start + section_end，含标记行）
 - section_end 不传时读到末尾或 limit
 - section_start 找不到时返回字符串错误
@@ -11,7 +11,7 @@ ReadTool 单元测试
 - 不存在文件返回字符串错误
 - 项目根目录外的绝对路径返回错误
 - 空文件路径返回错误
-- 返回的 dict 含 content / total_lines / read_lines 字段，截断时含 next_hint
+- 返回的 dict 含 content / total_lines / read_lines 字段，截断时含 next_hint（1-based）
 """
 
 import pytest
@@ -59,6 +59,22 @@ class TestReadToolDefinition:
         assert "section_end" in props
         # encoding 不应存在
         assert "encoding" not in props
+
+    def test_offset_field_declares_1based(self):
+        """schema 自描述：offset 说明与最小值均为 1-based"""
+        from src.tools.file.read_tool import ReadTool
+        tool = ReadTool()
+        schema = tool.to_tool_definition()["input_schema"]
+        offset_prop = schema["properties"]["offset"]
+        assert "1-based" in offset_prop["description"]
+        # Optional[int] 的约束在 anyOf 的 integer 分支里
+        if "anyOf" in offset_prop:
+            int_branch = next(
+                sub for sub in offset_prop["anyOf"] if sub.get("type") == "integer"
+            )
+        else:
+            int_branch = offset_prop
+        assert int_branch.get("minimum") == 1
 
     def test_tool_has_description(self):
         from src.tools.file.read_tool import ReadTool
@@ -151,7 +167,7 @@ class TestReadRange:
 
     @pytest.mark.asyncio
     async def test_offset_and_limit(self, tmp_path):
-        """offset + limit 读取指定范围"""
+        """offset + limit 读取指定范围（offset 为 1-based 行号）"""
         from src.tools.file.read_tool import ReadTool
         tool = ReadTool()
 
@@ -159,7 +175,7 @@ class TestReadRange:
         lines = [f"line{i}" for i in range(20)]
         f.write_text("\n".join(lines), encoding="utf-8")
 
-        # offset=5（0-based），limit=3 → 读 line5, line6, line7
+        # offset=5（1-based 第 5 行），limit=3 → 读 line4, line5, line6
         result = await tool.execute(file_path=str(f), offset=5, limit=3)
 
         assert isinstance(result, dict)
@@ -167,24 +183,24 @@ class TestReadRange:
         assert result["read_lines"] == 3
 
         content = result["content"]
-        # 行号是 1-based，所以 offset=5 对应第 6 行
+        # 所见即所填：offset=5 对应返回行号 5
+        assert "5\tline4" in content
         assert "6\tline5" in content
         assert "7\tline6" in content
-        assert "8\tline7" in content
         # 不应包含其他行
-        assert "line4" not in content
-        assert "line8" not in content
+        assert "line3" not in content
+        assert "line7" not in content
 
     @pytest.mark.asyncio
-    async def test_offset_zero(self, tmp_path):
-        """offset=0 从第一行开始"""
+    async def test_offset_one_reads_first_line(self, tmp_path):
+        """offset=1 读第 1 行（验收标准：read offset=1 读到第 1 行）"""
         from src.tools.file.read_tool import ReadTool
         tool = ReadTool()
 
         f = tmp_path / "data.txt"
         f.write_text("alpha\nbeta\ngamma", encoding="utf-8")
 
-        result = await tool.execute(file_path=str(f), offset=0, limit=2)
+        result = await tool.execute(file_path=str(f), offset=1, limit=2)
         assert isinstance(result, dict)
         assert result["read_lines"] == 2
         assert "1\talpha" in result["content"]
@@ -192,19 +208,49 @@ class TestReadRange:
         assert "gamma" not in result["content"]
 
     @pytest.mark.asyncio
+    async def test_offset_zero_rejected(self, tmp_path):
+        """offset=0 为非法入参（0-based 残留），返回报错引导"""
+        from src.tools.file.read_tool import ReadTool
+        tool = ReadTool()
+
+        f = tmp_path / "data.txt"
+        f.write_text("alpha\nbeta\ngamma", encoding="utf-8")
+
+        result = await tool.execute(file_path=str(f), offset=0, limit=2)
+        assert isinstance(result, str)
+        assert "1-based" in result
+        assert "offset=1" in result
+
+    @pytest.mark.asyncio
+    async def test_negative_offset_rejected(self, tmp_path):
+        """负数 offset 为非法入参，返回报错引导"""
+        from src.tools.file.read_tool import ReadTool
+        tool = ReadTool()
+
+        f = tmp_path / "data.txt"
+        f.write_text("a\nb\nc", encoding="utf-8")
+
+        result = await tool.execute(file_path=str(f), offset=-1, limit=2)
+        assert isinstance(result, str)
+        assert "1-based" in result
+
+    @pytest.mark.asyncio
     async def test_offset_without_limit(self, tmp_path):
-        """只传 offset 不传 limit，读到末尾"""
+        """只传 offset 不传 limit，从该行读到末尾"""
         from src.tools.file.read_tool import ReadTool
         tool = ReadTool()
 
         f = tmp_path / "data.txt"
         f.write_text("a\nb\nc\nd\ne", encoding="utf-8")
 
+        # offset=3（1-based 第 3 行）→ 读 c, d, e
         result = await tool.execute(file_path=str(f), offset=3)
         assert isinstance(result, dict)
-        assert result["read_lines"] == 2
+        assert result["read_lines"] == 3
+        assert "3\tc" in result["content"]
         assert "4\td" in result["content"]
         assert "5\te" in result["content"]
+        assert "a" not in result["content"]
 
     @pytest.mark.asyncio
     async def test_limit_without_offset(self, tmp_path):
@@ -237,7 +283,7 @@ class TestReadRange:
 
     @pytest.mark.asyncio
     async def test_truncation_with_next_hint(self, tmp_path):
-        """截断时返回 next_hint"""
+        """截断时返回 next_hint，offset 为 1-based 行号（指向下一行）"""
         from src.tools.file.read_tool import ReadTool
         tool = ReadTool()
 
@@ -252,21 +298,24 @@ class TestReadRange:
         assert isinstance(result, dict)
         assert result["read_lines"] == 3
         assert "next_hint" in result
-        assert "offset=3" in result["next_hint"]
+        # 已读 1-3 行，继续读第 4 行 → offset=4（1-based）
+        assert "offset=4" in result["next_hint"]
 
     @pytest.mark.asyncio
-    async def test_negative_offset_treated_as_none(self, tmp_path):
-        """负数 offset 视为 None（从头开始）"""
+    async def test_next_hint_after_offset_read_is_1based(self, tmp_path):
+        """从中间行读满 limit 后，next_hint 的 offset 指向下一行（1-based）"""
         from src.tools.file.read_tool import ReadTool
         tool = ReadTool()
 
         f = tmp_path / "data.txt"
-        f.write_text("a\nb\nc", encoding="utf-8")
+        f.write_text("\n".join(f"line{i}" for i in range(10)), encoding="utf-8")
 
-        result = await tool.execute(file_path=str(f), offset=-1, limit=2)
+        # 读第 2-4 行，继续应从第 5 行开始 → offset=5
+        result = await tool.execute(file_path=str(f), offset=2, limit=3)
+
         assert isinstance(result, dict)
-        assert result["read_lines"] == 2
-        assert "1\ta" in result["content"]
+        assert "next_hint" in result
+        assert "offset=5" in result["next_hint"]
 
     @pytest.mark.asyncio
     async def test_negative_limit_treated_as_none(self, tmp_path):
@@ -279,7 +328,75 @@ class TestReadRange:
 
         result = await tool.execute(file_path=str(f), offset=1, limit=-5)
         assert isinstance(result, dict)
+        assert result["read_lines"] == 3
+        assert "1\ta" in result["content"]
+
+    @pytest.mark.asyncio
+    async def test_offset_one_content_exact(self, tmp_path):
+        """offset=1 + limit 的返回内容逐字符精确（1-based 且不多不少）"""
+        from src.tools.file.read_tool import ReadTool
+        tool = ReadTool()
+
+        f = tmp_path / "data.txt"
+        f.write_text("alpha\nbeta\ngamma\ndelta", encoding="utf-8")
+
+        result = await tool.execute(file_path=str(f), offset=1, limit=2)
+
+        assert isinstance(result, dict)
+        assert result["content"] == "1\talpha\n2\tbeta"
         assert result["read_lines"] == 2
+        # 读满 limit 但未到末尾 → next_hint 指向下一行（1-based：第 3 行）
+        assert "offset=3" in result["next_hint"]
+
+    @pytest.mark.asyncio
+    async def test_offset_equals_total_reads_last_line(self, tmp_path):
+        """offset=文件总行数（边界）：读到最后一行，不报错、无 next_hint"""
+        from src.tools.file.read_tool import ReadTool
+        tool = ReadTool()
+
+        f = tmp_path / "data.txt"
+        f.write_text("alpha\nbeta\ngamma\ndelta", encoding="utf-8")
+
+        result = await tool.execute(file_path=str(f), offset=4, limit=1)
+
+        assert isinstance(result, dict)
+        assert result["content"] == "4\tdelta"
+        assert result["read_lines"] == 1
+        assert "next_hint" not in result
+
+    @pytest.mark.asyncio
+    async def test_no_next_hint_when_offset_limit_reaches_eof(self, tmp_path):
+        """offset+limit 恰好读到文件末尾：不产生 next_hint"""
+        from src.tools.file.read_tool import ReadTool
+        tool = ReadTool()
+
+        f = tmp_path / "data.txt"
+        f.write_text("alpha\nbeta\ngamma\ndelta", encoding="utf-8")
+
+        # 从第 2 行读 3 行 → 第 2-4 行，正好到末尾
+        result = await tool.execute(file_path=str(f), offset=2, limit=3)
+
+        assert isinstance(result, dict)
+        assert result["read_lines"] == 3
+        assert result["content"] == "2\tbeta\n3\tgamma\n4\tdelta"
+        assert "next_hint" not in result
+
+    @pytest.mark.asyncio
+    async def test_offset_one_without_limit_reads_all(self, tmp_path):
+        """offset=1 不传 limit：从第 1 行读到末尾，无 next_hint"""
+        from src.tools.file.read_tool import ReadTool
+        tool = ReadTool()
+
+        f = tmp_path / "data.txt"
+        f.write_text("alpha\nbeta\ngamma\ndelta", encoding="utf-8")
+
+        result = await tool.execute(file_path=str(f), offset=1)
+
+        assert isinstance(result, dict)
+        assert result["read_lines"] == 4
+        assert "1\talpha" in result["content"]
+        assert "4\tdelta" in result["content"]
+        assert "next_hint" not in result
 
 
 # ---------------------------------------------------------------------------

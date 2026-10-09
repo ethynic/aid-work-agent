@@ -23,6 +23,11 @@ from src.tools.file.ppt_reader import PPTReader, is_ppt_document
 MAX_LINES = 2000
 
 
+def _offset_to_index(offset: int) -> int:
+    """offset（1-based 行号）转 0-based 列表索引。调用方需先保证 offset ≥ 1。"""
+    return offset - 1
+
+
 class ReadInput(BaseModel):
     """读取文件参数"""
     file_path: str = Field(
@@ -31,7 +36,8 @@ class ReadInput(BaseModel):
     )
     offset: Optional[int] = Field(
         None,
-        description="起始行偏移（0-based）。第 0 行 = 文件第 1 行。"
+        ge=1,
+        description="起始行号（1-based）。offset=1 读第 1 行，与返回内容中的行号一致。"
         "配合 limit 实现分页读取。",
     )
     limit: Optional[int] = Field(
@@ -61,7 +67,7 @@ class ReadTool(BaseTool):
 1. 整文件：read(file_path="...")
    -> 读全部（上限 2000 行），适合小文件
 2. 行号范围：read(file_path="...", offset=100, limit=50)
-   -> offset 是 0-based（第 0 行 = 文件第 1 行），返回行号 1-based
+   -> offset 是 1-based 行号（offset=1 读第 1 行），与返回行号一致
    -> 配合 limit 分页读取
 3. 标记定位：read(file_path="...", section_start="<style>", section_end="</style>")
    -> 读两个标记文本之间的行（含标记行），适合读 HTML 区域、配置段
@@ -120,9 +126,10 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
         section_start = kwargs.get("section_start")
         section_end = kwargs.get("section_end")
 
-        # 负数 offset/limit 视为 None
-        if offset is not None and offset < 0:
-            offset = None
+        # offset 是 1-based 行号：0/负数为非法入参，报错引导而非静默纠正
+        if offset is not None and offset < 1:
+            return "offset 必须是 1-based 行号（≥1）：offset=1 读第 1 行"
+        # 负数 limit 视为 None
         if limit is not None and limit < 0:
             limit = None
 
@@ -318,11 +325,11 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
         total: int,
     ) -> Dict[str, Any]:
         """
-        按 offset（0-based）+ limit 读取行范围。
+        按 offset（1-based 行号）+ limit 读取行范围。
 
         返回 cat -n 格式，行号 1-based。
         """
-        start_0 = offset if offset is not None else 0
+        start_0 = _offset_to_index(offset) if offset is not None else 0
         if start_0 >= total:
             return {
                 "content": "",
@@ -347,11 +354,11 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
             "read_lines": read_count,
         }
 
-        # 截断时附 next_hint
+        # 截断时附 next_hint（offset 为 1-based 行号，指向下一行）
         if end_0 < total:
             result["next_hint"] = (
                 f"文件共 {total} 行，已读 {start_0 + 1}-{end_0} 行。"
-                f"继续: offset={end_0}"
+                f"继续: offset={end_0 + 1}"
             )
 
         return result
@@ -420,12 +427,12 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
         if end_idx is not None:
             result["section_end_line"] = end_idx + 1
 
-        # 截断时附 next_hint
+        # 截断时附 next_hint（offset 为 1-based 行号，指向下一行）
         actual_end = start_idx + read_count
         if actual_end < total and (end_idx is None or limit is not None):
             result["next_hint"] = (
                 f"文件共 {total} 行，已读 {start_idx + 1}-{actual_end} 行。"
-                f"继续: offset={actual_end}"
+                f"继续: offset={actual_end + 1}"
             )
 
         return result
@@ -487,7 +494,7 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
             if read_lines < total:
                 ret["next_hint"] = (
                     f"文件共 {total} 行，已读 1-{read_lines} 行。"
-                    f"继续: offset={read_lines}"
+                    f"继续: offset={read_lines + 1}"
                 )
             return ret
 
@@ -518,7 +525,7 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
             if read_lines < total:
                 ret["next_hint"] = (
                     f"文件共 {total} 行，已读 1-{read_lines} 行。"
-                    f"继续: offset={read_lines}"
+                    f"继续: offset={read_lines + 1}"
                 )
             return ret
 
@@ -549,7 +556,7 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
             if read_lines < total:
                 ret["next_hint"] = (
                     f"文件共 {total} 行，已读 1-{read_lines} 行。"
-                    f"继续: offset={read_lines}"
+                    f"继续: offset={read_lines + 1}"
                 )
             return ret
 

@@ -5,6 +5,8 @@ edit 工具单元测试
 - 正常路径
 - 边界条件
 - 异常路径（失败时原文件字节级不变、临时文件不残留）
+- replace_string 的 replace_all 批量替换（默认 False 行为不变）
+- replace_lines 的 offset 1-based 语义（0/负数为非法入参）
 """
 
 import hashlib
@@ -76,6 +78,8 @@ class TestReplaceString:
         assert isinstance(result, str)
         assert "出现 3 次" in result
         assert "无法唯一匹配" in result
+        # 报错应引导到 replace_all 批量替换通道
+        assert "replace_all=True" in result
         assert _sha256(f) == original_hash
 
     @pytest.mark.asyncio
@@ -153,6 +157,187 @@ class TestReplaceString:
         )
         assert isinstance(result, str)
         assert _sha256(f) == original_hash
+
+    @pytest.mark.asyncio
+    async def test_default_return_shape_has_no_replaced_count(self, tmp_path: Path):
+        """默认模式（replace_all=False）返回值不带 replaced_count（向后兼容）"""
+        f = tmp_path / "test.txt"
+        _write(f, "hello world\n")
+
+        tool = EditTool()
+        result = await tool.execute(
+            file_path=str(f),
+            mode="replace_string",
+            old_string="hello",
+            new_string="hi",
+        )
+
+        assert isinstance(result, dict)
+        assert "replaced_count" not in result
+        assert set(result.keys()) == {"file_path", "file_size", "matched_lines"}
+
+
+# ============================================================
+# replace_string + replace_all 批量替换
+# ============================================================
+
+class TestReplaceAll:
+    """replace_all=True：跳过唯一性校验，替换全部匹配并报告替换次数"""
+
+    @pytest.mark.asyncio
+    async def test_replace_all_replaces_every_occurrence(self, tmp_path: Path):
+        """多匹配时全部替换，replaced_count 报告次数（验收标准）"""
+        f = tmp_path / "test.txt"
+        _write(f, "line1 foo\nline2 bar\nline3 foo\nline4 foo\n")
+
+        tool = EditTool()
+        result = await tool.execute(
+            file_path=str(f),
+            mode="replace_string",
+            old_string="foo",
+            new_string="BAZ",
+            replace_all=True,
+        )
+
+        assert isinstance(result, dict)
+        assert result["replaced_count"] == 3
+        # matched_lines 为首个匹配行（1-based）
+        assert result["matched_lines"] == 1
+        content = f.read_text(encoding="utf-8")
+        assert content == "line1 BAZ\nline2 bar\nline3 BAZ\nline4 BAZ\n"
+
+    @pytest.mark.asyncio
+    async def test_replace_all_single_match_reports_one(self, tmp_path: Path):
+        """唯一匹配 + replace_all=True：正常替换，replaced_count=1"""
+        f = tmp_path / "test.txt"
+        _write(f, "only one foo here\n")
+
+        tool = EditTool()
+        result = await tool.execute(
+            file_path=str(f),
+            mode="replace_string",
+            old_string="foo",
+            new_string="qux",
+            replace_all=True,
+        )
+
+        assert isinstance(result, dict)
+        assert result["replaced_count"] == 1
+        assert f.read_text(encoding="utf-8") == "only one qux here\n"
+
+    @pytest.mark.asyncio
+    async def test_replace_all_false_keeps_uniqueness_check(self, tmp_path: Path):
+        """显式 replace_all=False：唯一性校验仍生效，原文件不变（验收标准）"""
+        f = tmp_path / "test.txt"
+        _write(f, "a foo\nb foo\n")
+        original_hash = _sha256(f)
+
+        tool = EditTool()
+        result = await tool.execute(
+            file_path=str(f),
+            mode="replace_string",
+            old_string="foo",
+            new_string="bar",
+            replace_all=False,
+        )
+
+        assert isinstance(result, str)
+        assert "无法唯一匹配" in result
+        assert _sha256(f) == original_hash
+
+    @pytest.mark.asyncio
+    async def test_replace_all_zero_matches_error(self, tmp_path: Path):
+        """replace_all=True 但 0 匹配：仍报错（不能凭空替换）"""
+        f = tmp_path / "test.txt"
+        _write(f, "nothing to see\n")
+        original_hash = _sha256(f)
+
+        tool = EditTool()
+        result = await tool.execute(
+            file_path=str(f),
+            mode="replace_string",
+            old_string="nonexistent",
+            new_string="x",
+            replace_all=True,
+        )
+
+        assert isinstance(result, str)
+        assert "未在文件中找到 old_string" in result
+        assert _sha256(f) == original_hash
+
+    @pytest.mark.asyncio
+    async def test_replace_all_multiline_old_string(self, tmp_path: Path):
+        """多行 old_string 批量替换（批量改代码块场景）"""
+        f = tmp_path / "test.css"
+        _write(f, (
+            ".a { color: red; }\n"
+            ".prefix { margin: 0; }\n"
+            ".b { color: red; }\n"
+            ".prefix { margin: 0; }\n"
+        ))
+
+        tool = EditTool()
+        result = await tool.execute(
+            file_path=str(f),
+            mode="replace_string",
+            old_string="color: red; }\n.prefix { margin: 0; }",
+            new_string="color: blue; }\n.prefix { margin: 1px; }",
+            replace_all=True,
+        )
+
+        assert isinstance(result, dict)
+        assert result["replaced_count"] == 2
+        content = f.read_text(encoding="utf-8")
+        assert content.count("color: blue;") == 2
+        assert "color: red;" not in content
+
+    @pytest.mark.asyncio
+    async def test_replace_all_multiple_matches_same_line(self, tmp_path: Path):
+        """同一行内多个匹配 + 跨行匹配：全部替换，次数统计正确"""
+        f = tmp_path / "test.txt"
+        _write(f, "foo and foo\nbar foo\n")
+
+        tool = EditTool()
+        result = await tool.execute(
+            file_path=str(f),
+            mode="replace_string",
+            old_string="foo",
+            new_string="X",
+            replace_all=True,
+        )
+
+        assert isinstance(result, dict)
+        assert result["replaced_count"] == 3
+        assert result["matched_lines"] == 1  # 首个匹配在第 1 行
+        assert f.read_text(encoding="utf-8") == "X and X\nbar X\n"
+
+    @pytest.mark.asyncio
+    async def test_replace_all_return_shape_exact_keys(self, tmp_path: Path):
+        """replace_all=True 返回值键集合精确为四字段（向后兼容形状可追踪）"""
+        f = tmp_path / "test.txt"
+        _write(f, "a foo\nb foo\n")
+
+        tool = EditTool()
+        result = await tool.execute(
+            file_path=str(f),
+            mode="replace_string",
+            old_string="foo",
+            new_string="bar",
+            replace_all=True,
+        )
+
+        assert isinstance(result, dict)
+        assert set(result.keys()) == {
+            "file_path", "file_size", "matched_lines", "replaced_count",
+        }
+
+    def test_replace_all_in_schema(self):
+        """schema 自描述：replace_all 字段存在且默认 False"""
+        tool = EditTool()
+        schema = tool.to_tool_definition()["input_schema"]
+        props = schema["properties"]
+        assert "replace_all" in props
+        assert props["replace_all"]["default"] is False
 
 
 # ============================================================
@@ -311,11 +496,11 @@ class TestReplaceSection:
 # ============================================================
 
 class TestReplaceLines:
-    """replace_lines：按行号范围替换"""
+    """replace_lines：按行号范围替换（offset 为 1-based 行号）"""
 
     @pytest.mark.asyncio
     async def test_normal_range_replacement(self, tmp_path: Path):
-        """正常范围替换（offset=2, limit=3）"""
+        """正常范围替换：offset=2, limit=3 → 替换第 2-4 行"""
         f = tmp_path / "test.txt"
         _write(f, "line0\nline1\nline2\nline3\nline4\nline5\n")
 
@@ -329,13 +514,100 @@ class TestReplaceLines:
         )
 
         assert isinstance(result, dict)
-        assert result["matched_lines"] == [3, 5]  # 1-based: lines 3-5
+        assert result["matched_lines"] == [2, 4]  # 1-based: 第 2-4 行
         content = f.read_text(encoding="utf-8")
         assert "line0" in content
-        assert "line1" in content
         assert "REPLACED" in content
+        assert "line4" in content
         assert "line5" in content
+        assert "line1" not in content
         assert "line2" not in content
+        assert "line3" not in content
+
+    @pytest.mark.asyncio
+    async def test_offset_one_replaces_first_line(self, tmp_path: Path):
+        """offset=1 操作第 1 行（验收标准：edit replace_lines offset=1 操作第 1 行）"""
+        f = tmp_path / "test.txt"
+        _write(f, "first\nsecond\nthird\n")
+
+        tool = EditTool()
+        result = await tool.execute(
+            file_path=str(f),
+            mode="replace_lines",
+            offset=1,
+            limit=1,
+            content="NEW_FIRST",
+        )
+
+        assert isinstance(result, dict)
+        assert result["matched_lines"] == [1, 1]
+        content = f.read_text(encoding="utf-8")
+        assert "NEW_FIRST" in content
+        assert "first" not in content
+        assert "second" in content
+        assert "third" in content
+
+    @pytest.mark.asyncio
+    async def test_offset_zero_rejected(self, tmp_path: Path):
+        """offset=0 为非法入参（0-based 残留），返回报错引导"""
+        f = tmp_path / "test.txt"
+        _write(f, "line0\nline1\n")
+        original_hash = _sha256(f)
+
+        tool = EditTool()
+        result = await tool.execute(
+            file_path=str(f),
+            mode="replace_lines",
+            offset=0,
+            limit=1,
+            content="x",
+        )
+
+        assert isinstance(result, str)
+        assert "1-based" in result
+        assert "offset=1" in result
+        assert _sha256(f) == original_hash
+
+    @pytest.mark.asyncio
+    async def test_negative_offset_rejected(self, tmp_path: Path):
+        """负数 offset 为非法入参，返回报错引导，原文件不变"""
+        f = tmp_path / "test.txt"
+        _write(f, "l1\nl2\nl3\n")
+        original_hash = _sha256(f)
+
+        tool = EditTool()
+        result = await tool.execute(
+            file_path=str(f),
+            mode="replace_lines",
+            offset=-3,
+            limit=1,
+            content="x",
+        )
+
+        assert isinstance(result, str)
+        assert "1-based" in result
+        assert "offset=1" in result
+        assert _sha256(f) == original_hash
+
+    @pytest.mark.asyncio
+    async def test_offset_equals_total_replaces_last_line(self, tmp_path: Path):
+        """offset=文件总行数（边界）：替换最后一行，不报错"""
+        f = tmp_path / "test.txt"
+        _write(f, "l1\nl2\nl3\n")
+
+        tool = EditTool()
+        result = await tool.execute(
+            file_path=str(f),
+            mode="replace_lines",
+            offset=3,
+            limit=1,
+            content="LAST",
+        )
+
+        assert isinstance(result, dict)
+        assert result["matched_lines"] == [3, 3]  # 1-based：第 3 行
+        content = f.read_text(encoding="utf-8")
+        assert content == "l1\nl2\nLAST\n"
 
     @pytest.mark.asyncio
     async def test_replace_last_lines(self, tmp_path: Path):
@@ -355,8 +627,10 @@ class TestReplaceLines:
         assert isinstance(result, dict)
         content = f.read_text(encoding="utf-8")
         assert "line0" in content
-        assert "line1" in content
         assert "TAIL" in content
+        # 1-based：offset=2 起的 line1/line2 都被替换
+        assert "line1" not in content
+        assert "line2" not in content
 
     @pytest.mark.asyncio
     async def test_offset_exceeds_file_lines_error(self, tmp_path: Path):
@@ -393,9 +667,9 @@ class TestReplaceLines:
 
         assert isinstance(result, dict)
         content = f.read_text(encoding="utf-8")
-        assert "line0" in content
         assert "BIG_REPLACE" in content
-        # line1 and line2 should be gone
+        # offset=1（第 1 行）起全部替换
+        assert "line0" not in content
         assert "line1" not in content
         assert "line2" not in content
 
@@ -540,7 +814,7 @@ class TestEditToolGeneral:
         result = await tool.execute(
             file_path=str(f),
             mode="replace_lines",
-            offset=0,
+            offset=1,
             limit=1,
         )
 
@@ -595,3 +869,18 @@ class TestEditToolGeneral:
         )
         assert isinstance(result, str)
         assert _sha256(f) == original_hash
+
+    def test_offset_field_declares_1based(self):
+        """schema 自描述：edit offset 说明与最小值均为 1-based"""
+        tool = EditTool()
+        schema = tool.to_tool_definition()["input_schema"]
+        offset_prop = schema["properties"]["offset"]
+        assert "1-based" in offset_prop["description"]
+        # Optional[int] 的约束在 anyOf 的 integer 分支里
+        if "anyOf" in offset_prop:
+            int_branch = next(
+                sub for sub in offset_prop["anyOf"] if sub.get("type") == "integer"
+            )
+        else:
+            int_branch = offset_prop
+        assert int_branch.get("minimum") == 1

@@ -87,7 +87,7 @@ class GrepTool(BaseTool):
         "在文件或目录中搜索文本（正则匹配），返回匹配行+1-based行号+上下文。"
         "output_mode: content(默认,返回匹配行+上下文)/files_with_matches(只返回文件名)/count(匹配数)。"
         "context/before_context/after_context 取上下文行，glob 按扩展名过滤（如 *.json），"
-        "max_matches 默认50。配合 read 精读：offset=行号-1。只读不写。"
+        "max_matches 默认50。配合 read 精读：offset=行号（1-based）。只读不写。"
     )
     usage_guide = ""
     display_name = "搜索文本"
