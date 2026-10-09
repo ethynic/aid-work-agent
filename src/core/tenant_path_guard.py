@@ -76,6 +76,37 @@ def find_foreign_tenant_owner(path: Path, current_tenant_id: Optional[str]) -> O
     return None
 
 
+def extract_knowledge_refs(path: Path) -> Optional[List[Tuple[str, str]]]:
+    """提取路径中所有 `tenants/{owner}/knowledge/{source_type}/` 段对。
+
+    用于 cp 工具的共享知识库放行判定（2026-10-10）：共享知识库授权了
+    来源租户的文档检索与读取，cp 复制交付应遵循同一授权边界。
+
+    返回值语义（fail-closed）：
+    - 无 tenants 段 → []（非租户路径，与本函数无关）
+    - 任一 tenants/{owner} 段后不是 `knowledge/{source_type}/<文件>` 结构
+      （如 conversation/ 附件、knowledge/ 后直接是文件名或到末尾）→ None
+      （无法确认是共享知识库文件，调用方必须拒绝）
+    - 否则返回所有 (owner, source_type) 对（含本租户自身的段，由调用方比对）
+    """
+    parts = path.parts
+    n = len(parts)
+    refs: List[Tuple[str, str]] = []
+    i = 0
+    while i < n:
+        if parts[i] == "tenants" and i + 1 < n:
+            owner = parts[i + 1]
+            # source_type 段之后必须还有文件段：knowledge/{st} 末段是文件名的
+            # 旧版路径（无分类子目录）无法确认归属授权，按解析失败处理
+            if i + 4 < n and parts[i + 2] == "knowledge":
+                refs.append((owner, parts[i + 3]))
+                i += 4
+                continue
+            return None
+        i += 1
+    return refs
+
+
 def check_text_for_foreign_tenant_paths(
     text: str, current_tenant_id: Optional[str]
 ) -> Tuple[bool, Optional[str]]:

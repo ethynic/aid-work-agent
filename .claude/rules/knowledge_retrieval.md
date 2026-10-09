@@ -68,3 +68,8 @@
 | `analysis_agent.py`（search_data_tables / list_data_tables / load_table） | A + SQL 租户范围 |
 | `attraction_search_tool.py` / `hotel_search_tool.py` | B |
 | travel_quote 独立 API + hotel/attraction retriever | C |
+
+非检索消费方：`cp_tool.py` 的文件交付（2026-10-10）对来源租户的
+`knowledge/{source_type}/` 文件按 `load_shared_ranges` 精确对放行复制
+（`extract_knowledge_refs` 解析 + fail-closed，仅子智能体 + 租户模式生效），
+与检索/读取同一授权边界；conversation 等非 knowledge 场景外来路径仍一律拒绝。

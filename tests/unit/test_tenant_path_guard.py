@@ -4,9 +4,9 @@
 覆盖：
 - src.core.tenant_path_guard：find_foreign_tenant_owner /
   check_text_for_foreign_tenant_paths / redact_foreign_tenant_paths /
-  is_source_storage_reference
+  is_source_storage_reference / extract_knowledge_refs
 - src.tools.file.cp_tool._resolve_source：其他租户路径拒绝、本租户放行
-  （tenant_ 前缀等价）、无上下文拒绝
+  （tenant_ 前缀等价）、无上下文拒绝、共享知识库授权放行（2026-10-10）
 - src.tools.skill.skill_execute_tool：命令预检拦截（其他租户路径 /
   source_storage）+ 输出后置脱敏
 
@@ -22,6 +22,7 @@ import pytest
 
 from src.core.tenant_path_guard import (
     check_text_for_foreign_tenant_paths,
+    extract_knowledge_refs,
     find_foreign_tenant_owner,
     is_source_storage_reference,
     redact_foreign_tenant_paths,
@@ -159,6 +160,48 @@ class TestRedactForeignTenantPaths:
         assert violations == ["tenant_bbb"]
 
 
+class TestExtractKnowledgeRefs:
+    def test_normal_knowledge_path(self):
+        p = Path("/app/storage/tenants/tenant_bbb/knowledge/attraction_resource/file_abc.pdf")
+        assert extract_knowledge_refs(p) == [("tenant_bbb", "attraction_resource")]
+
+    def test_no_tenants_segment(self):
+        assert extract_knowledge_refs(Path("/tmp/build/quote.xlsx")) == []
+
+    def test_non_knowledge_scene_fail_closed(self):
+        """conversation 等非 knowledge 场景无法确认共享授权，返回 None"""
+        p = Path("/app/storage/tenants/tenant_bbb/conversation/x.xlsx")
+        assert extract_knowledge_refs(p) is None
+
+    def test_knowledge_then_filename_fail_closed(self):
+        """旧版无分类子目录路径（knowledge/ 后直接是文件名）返回 None"""
+        p = Path("/app/storage/tenants/tenant_bbb/knowledge/file_abc.pdf")
+        assert extract_knowledge_refs(p) is None
+
+    def test_knowledge_last_segment_fail_closed(self):
+        assert extract_knowledge_refs(Path("/app/storage/tenants/bbb/knowledge")) is None
+
+    def test_multiple_owner_segments(self):
+        p = Path(
+            "/x/tenants/aaa/knowledge/st1/f1/tenants/bbb/knowledge/st2/f2"
+        )
+        assert extract_knowledge_refs(p) == [
+            ("aaa", "st1"),
+            ("bbb", "st2"),
+        ]
+
+    def test_multiple_segments_one_bad_fail_closed(self):
+        p = Path("/x/tenants/aaa/knowledge/st1/f1/tenants/bbb/conversation/f2")
+        assert extract_knowledge_refs(p) is None
+
+    def test_literal_tenants_as_owner_segment(self):
+        """owner 段或 source_type 段本身是字面 tenants 时的跳段解析"""
+        p = Path("/app/tenants/tenants/knowledge/st/f1")
+        assert extract_knowledge_refs(p) == [("tenants", "st")]
+        p2 = Path("/app/tenants/aaa/knowledge/tenants/f1")
+        assert extract_knowledge_refs(p2) == [("aaa", "tenants")]
+
+
 def _make_file(tmp_path: Path, rel: str) -> Path:
     f = tmp_path / rel
     f.parent.mkdir(parents=True, exist_ok=True)
@@ -211,6 +254,126 @@ class TestCpSourceTenantBoundary:
             resp = await tool.execute(source_file_path=str(src), register_download=False)
         assert resp["success"] is False
         assert "其他租户" in resp["error"]
+
+
+class TestCpSharedKnowledgeAllowance:
+    """cp 对共享知识库文件的放行/拒绝（2026-10-10，与 load_shared_ranges 同一授权边界）"""
+
+    def _patch_ranges(self, monkeypatch, ranges):
+        monkeypatch.setattr(
+            "src.knowledge.retriever.tenant_range.load_shared_ranges",
+            lambda tenant_id, subagent_id, source_type=None: ranges,
+        )
+
+    def _shared_ctx(self):
+        return tool_execution_scope(
+            ToolExecutionContext(
+                tenant_id="tenant_aaa", subagent_id="pre-sales", session_id="s1"
+            )
+        )
+
+    def test_shared_knowledge_source_allowed(self, tmp_path, monkeypatch):
+        from src.tools.file.cp_tool import CpTool
+
+        self._patch_ranges(monkeypatch, [("tenant_bbb", "attraction_resource")])
+        src = _make_file(
+            tmp_path, "tenants/bbb/knowledge/attraction_resource/file_abc.pdf"
+        )
+        tool = CpTool()
+        with self._shared_ctx():
+            assert tool._resolve_source(str(src)) == src.resolve()
+
+    def test_prefix_equivalent_allowed(self, tmp_path, monkeypatch):
+        """路径 owner 段 bbb 与 DB tenant_bbb 经 normalize 后视为同一租户"""
+        from src.tools.file.cp_tool import CpTool
+
+        self._patch_ranges(monkeypatch, [("bbb", "attraction_resource")])
+        src = _make_file(
+            tmp_path, "tenants/tenant_bbb/knowledge/attraction_resource/file_abc.pdf"
+        )
+        tool = CpTool()
+        with self._shared_ctx():
+            assert tool._resolve_source(str(src)) == src.resolve()
+
+    def test_source_type_not_authorized_denied(self, tmp_path, monkeypatch):
+        """owner 命中但 source_type 不在授权对内，拒绝"""
+        from src.tools.file.cp_tool import CpTool
+
+        self._patch_ranges(monkeypatch, [("tenant_bbb", "hotel_resource")])
+        src = _make_file(
+            tmp_path, "tenants/tenant_bbb/knowledge/attraction_resource/file_abc.pdf"
+        )
+        tool = CpTool()
+        with self._shared_ctx():
+            with pytest.raises(PermissionError):
+                tool._resolve_source(str(src))
+
+    def test_no_subagent_context_denied(self, tmp_path, monkeypatch):
+        """主智能体（subagent_id 为空）不享共享放行，即使授权表有记录"""
+        from src.tools.file.cp_tool import CpTool
+
+        ranges_mock = MagicMock(return_value=[("tenant_bbb", "attraction_resource")])
+        monkeypatch.setattr(
+            "src.knowledge.retriever.tenant_range.load_shared_ranges", ranges_mock
+        )
+        src = _make_file(
+            tmp_path, "tenants/tenant_bbb/knowledge/attraction_resource/file_abc.pdf"
+        )
+        tool = CpTool()
+        with tool_execution_scope(ToolExecutionContext(tenant_id="tenant_aaa", session_id="s1")):
+            with pytest.raises(PermissionError):
+                tool._resolve_source(str(src))
+        ranges_mock.assert_not_called()
+
+    def test_revoked_authorization_denied(self, tmp_path, monkeypatch):
+        """授权撤销（交集为空）后立即失效"""
+        from src.tools.file.cp_tool import CpTool
+
+        self._patch_ranges(monkeypatch, [])
+        src = _make_file(
+            tmp_path, "tenants/tenant_bbb/knowledge/attraction_resource/file_abc.pdf"
+        )
+        tool = CpTool()
+        with self._shared_ctx():
+            with pytest.raises(PermissionError):
+                tool._resolve_source(str(src))
+
+    def test_non_knowledge_scene_fail_closed(self, tmp_path, monkeypatch):
+        """conversation 等非 knowledge 场景即使授权对存在也拒绝（解析失败 fail-closed）"""
+        from src.tools.file.cp_tool import CpTool
+
+        self._patch_ranges(monkeypatch, [("tenant_bbb", "attraction_resource")])
+        src = _make_file(tmp_path, "tenants/tenant_bbb/conversation/q.xlsx")
+        tool = CpTool()
+        with self._shared_ctx():
+            with pytest.raises(PermissionError):
+                tool._resolve_source(str(src))
+
+    def test_legacy_knowledge_path_fail_closed(self, tmp_path, monkeypatch):
+        """旧版无分类子目录的 knowledge 路径（knowledge/ 后直接文件名）拒绝"""
+        from src.tools.file.cp_tool import CpTool
+
+        self._patch_ranges(monkeypatch, [("tenant_bbb", "attraction_resource")])
+        src = _make_file(tmp_path, "tenants/tenant_bbb/knowledge/file_abc.pdf")
+        tool = CpTool()
+        with self._shared_ctx():
+            with pytest.raises(PermissionError):
+                tool._resolve_source(str(src))
+
+    def test_multi_owner_partial_authorized_denied(self, tmp_path, monkeypatch):
+        """路径含两个租户段、仅一段命中授权对，拒绝"""
+        from src.tools.file.cp_tool import CpTool
+
+        self._patch_ranges(monkeypatch, [("tenant_bbb", "attraction_resource")])
+        src = _make_file(
+            tmp_path,
+            "tenants/tenant_bbb/knowledge/attraction_resource/f1"
+            "/__x__/tenants/tenant_ccc/knowledge/attraction_resource/f2",
+        )
+        tool = CpTool()
+        with self._shared_ctx():
+            with pytest.raises(PermissionError):
+                tool._resolve_source(str(src))
 
 
 def _make_skill_tool():

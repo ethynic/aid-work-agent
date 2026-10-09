@@ -14,7 +14,7 @@ import shutil
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -205,6 +205,11 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="ppt/index.
         `tenants/{owner}/` 目录下，owner 必须是当前租户（含 tenant_ 前缀
         等价），否则拒绝——否则本租户会话可复制其他租户文件并作为附件
         交付给用户。
+
+        共享知识库放行（2026-10-10）：与共享检索/读取（load_shared_ranges）
+        同一授权边界——子智能体 + 租户模式下，源路径若为共享范围内来源
+        租户的 `knowledge/{source_type}/` 文件（精确 (owner, source_type)
+        对命中），允许复制交付；解析失败或未命中仍拒绝。
         """
         project_root = Path(__file__).resolve().parent.parent.parent.parent
         src = Path(source_file_path)
@@ -221,14 +226,22 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="ppt/index.
         owner = (context.tenant_id or '_anonymous') if context is not None else None
         foreign_owner = find_foreign_tenant_owner(src, owner)
         if foreign_owner:
-            logger.warning(
-                f"[安全防护] cp 源路径位于其他租户存储目录，已拒绝: "
-                f"src={src}, foreign_tenant={foreign_owner}"
-            )
-            raise PermissionError(
-                "源文件位于其他租户的存储目录，禁止访问。"
-                "请改用当前租户目录或本会话中已确认存在的文件。"
-            )
+            shared_refs = self._match_shared_knowledge_refs(src, context)
+            if shared_refs:
+                logger.info(
+                    f"[安全防护] cp 放行共享知识库文件: "
+                    f"tenant_id={context.tenant_id}, subagent_id={context.subagent_id}, "
+                    f"refs={shared_refs}, src={src}"
+                )
+            else:
+                logger.warning(
+                    f"[安全防护] cp 源路径位于其他租户存储目录，已拒绝: "
+                    f"src={src}, foreign_tenant={foreign_owner}"
+                )
+                raise PermissionError(
+                    "源文件位于其他租户的存储目录，禁止访问。"
+                    "请改用当前租户目录或本会话中已确认存在的文件。"
+                )
 
         if not src.exists():
             raise FileNotFoundError(
@@ -241,6 +254,46 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="ppt/index.
                 f"源路径不是文件: {src}。请确认路径指向具体文件而不是目录。"
             )
         return src
+
+    def _match_shared_knowledge_refs(
+        self, src: Path, context: Optional[Any]
+    ) -> Optional[List[Tuple[str, str]]]:
+        """源路径是否命中共享知识库授权（精确 (owner, source_type) 对）。
+
+        命中时返回命中的 (owner, source_type) 对列表（审计日志用），
+        否则返回 None。仅子智能体 + 租户模式生效（tenant_id + subagent_id
+        均非空，与 load_shared_ranges 语义一致）；路径解析失败或授权为空
+        一律 None（fail-closed，load_shared_ranges 的 DB 异常也返回空）。
+
+        放行粒度为 (owner, source_type) 目录级：目录下任意文件（含已删除
+        登记或过期的文档残留）均可复制。粒度宽于检索侧的 active 文档过滤
+        （build_active_document_condition），但 read 工具本就无路径守卫，
+        放行面未超出既有读取面。
+        """
+        if not (context and context.tenant_id and context.subagent_id):
+            return None
+
+        from src.core.storage import normalize_tenant_id
+        from src.core.tenant_path_guard import extract_knowledge_refs
+
+        refs = extract_knowledge_refs(src)
+        if not refs:
+            return None
+
+        from src.knowledge.retriever.tenant_range import load_shared_ranges
+
+        allowed = {
+            (normalize_tenant_id(owner), source_type)
+            for owner, source_type in load_shared_ranges(
+                context.tenant_id, context.subagent_id
+            )
+        }
+        if not allowed:
+            return None
+        normalized = [(normalize_tenant_id(o), st) for o, st in refs]
+        if all(ref in allowed for ref in normalized):
+            return normalized
+        return None
 
     def _current_tenant_id(self) -> Optional[str]:
         from src.tools.context import current_tool_execution_context
