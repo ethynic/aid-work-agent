@@ -1196,22 +1196,30 @@
   remark: "Browser 基础审计兼容及原 Runner mandatory owner/wait 绑定"
   statements: |
     -- Browser baseline audit compatibility and mandatory Runner owner linkage.
-    -- One DO is one savepoint in the existing incremental migration driver: any
-    -- incompatible catalog rolls back this whole Browser block, not partial DDL.
+    -- In the incremental migration driver each statement (each DO) runs inside
+    -- its own SAVEPOINT: a failing statement rolls back only itself, earlier
+    -- statements of the block persist, and the watermark advances only after
+    -- every block succeeds -- failed blocks replay idempotently on next startup
+    -- (src/db/database.py _apply_db_updates), which is why the guards below are
+    -- written to be rerun-safe.
     -- Legacy tables were created with lease_until/available_at as TIMESTAMP
     -- (pre-M0-M7); the spec validation below requires TIMESTAMPTZ strictly.
-    -- Convert existing columns first; guarded so reruns never convert back.
+    -- Convert existing columns first: scoped to current_schema(), guarded by
+    -- data_type so reruns never convert back, and interpreted with the
+    -- database TimeZone (the same GUC CURRENT_TIMESTAMP wrote the values in).
     DO $$
     BEGIN
         IF EXISTS (SELECT 1 FROM information_schema.columns
-                   WHERE table_name='bs_browser_resume_jobs' AND column_name='lease_until'
+                   WHERE table_schema = current_schema()
+                     AND table_name='bs_browser_resume_jobs' AND column_name='lease_until'
                      AND data_type='timestamp without time zone') THEN
-            EXECUTE 'ALTER TABLE bs_browser_resume_jobs ALTER COLUMN lease_until TYPE timestamptz USING lease_until AT TIME ZONE ''Asia/Shanghai''';
+            EXECUTE format('ALTER TABLE bs_browser_resume_jobs ALTER COLUMN lease_until TYPE timestamptz USING lease_until AT TIME ZONE %L', current_setting('TimeZone'));
         END IF;
         IF EXISTS (SELECT 1 FROM information_schema.columns
-                   WHERE table_name='bs_browser_resume_jobs' AND column_name='available_at'
+                   WHERE table_schema = current_schema()
+                     AND table_name='bs_browser_resume_jobs' AND column_name='available_at'
                      AND data_type='timestamp without time zone') THEN
-            EXECUTE 'ALTER TABLE bs_browser_resume_jobs ALTER COLUMN available_at TYPE timestamptz USING available_at AT TIME ZONE ''Asia/Shanghai''';
+            EXECUTE format('ALTER TABLE bs_browser_resume_jobs ALTER COLUMN available_at TYPE timestamptz USING available_at AT TIME ZONE %L', current_setting('TimeZone'));
         END IF;
     END $$;
     DO $$
