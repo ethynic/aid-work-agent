@@ -56,6 +56,7 @@ storage/
 | 类别 | 目录 | 存储类型 | 租户隔离 | 说明 |
 |------|------|---------|---------|------|
 | 对话附件 | `uploads/conversation/` / `tenants/{id}/conversation/` | 磁盘 | 部分有 | 用户上传/Agent 生成的文档、图片 |
+| 微信客服完整答复 | `tenants/{id}/conversation/file_{uuid12}.md`（配置的共享存储根下） | 磁盘+Redis | 是 | 渠道 `reply_delivery.py` 确定性保存 UTF-8 标准 Markdown，显示名 `详细答复.md`；持久化引用后原生文件发送，复用附件 TTL/清理 |
 | 知识图文档 | `uploads/{tenant_id}/knowledge/` | 磁盘 | 是 | 上传后解析、向量化的知识文件 |
 | 渠道媒体文件 | `uploads/wecom/`、`uploads/wecom_kf/` | 磁盘 | 否 | 企业微信下载的媒体文件和渲染图片 |
 | 用户个人文件 | `uploads/tenant_{id}/user_{uid}/` | 磁盘 | 是 | 用户个人上传的混合类型文件 |

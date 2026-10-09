@@ -946,3 +946,136 @@ async def test_image_only_reply_flows_through_real_queue_then_channel_storage_an
         metadata = json.loads(metadata)
     assert metadata["images"] == [image]
     assert send.call_args.args[2] == [image]
+
+
+@pytest.mark.asyncio
+async def test_channel_preparation_preserves_full_history_and_registers_file_before_send(
+    manager, mock_db_ctx, patched_session_queue, stub_agent,
+):
+    full = "完整答复。" * 500
+    patched_session_queue.enqueue_and_process.return_value = EnqueueResult(
+        status="success", response_text=full, lease_token="lease-prepare",
+    )
+    attachment = {"file_id": "full_md", "file_name": "详细答复.md", "mime_type": "text/markdown"}
+    order = []
+
+    async def prepare(text, files):
+        assert text == full
+        order.append("prepare")
+        files.append(attachment)
+        return {"channelDelivery": {"mode": "prefix", "text": "预览…", "file_id": "full_md"}}
+
+    async def send(text, files, images):
+        order.append("send")
+        memory, _, _ = mock_db_ctx
+        row = next(row for row in memory["messages"] if row["role"] == "assistant")
+        assert row["content"] == full and text == full
+        assert json.loads(row["metadata"])["downloadableFiles"] == [attachment]
+        assert files == [attachment]
+        return True
+
+    result = await manager.process_and_persist(session_id="prepared", tenant_id="t1",
+        user_content="问题", agent=stub_agent, send_response=send, prepare_response=prepare,
+        assistant_metadata={"existing": "preserved"})
+    assert result["send_ok"] and order == ["prepare", "send"]
+    memory, _, _ = mock_db_ctx
+    metadata = json.loads(memory["messages"][-1]["metadata"])
+    assert metadata["existing"] == "preserved"
+
+
+@pytest.mark.asyncio
+async def test_merged_follower_does_not_prepare_or_send_assets(manager, patched_session_queue, stub_agent):
+    patched_session_queue.enqueue_and_process.return_value = EnqueueResult(status="merged")
+    prepare, send = AsyncMock(), AsyncMock()
+    result = await manager.process_and_persist(session_id="follower", tenant_id="t1",
+        user_content="追加", agent=stub_agent, send_response=send, prepare_response=prepare)
+    assert result["status"] == "merged"
+    prepare.assert_not_awaited()
+    send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_prepare_cancellation_releases_finalization_lease(manager, patched_session_queue, stub_agent):
+    import asyncio
+    patched_session_queue.enqueue_and_process.return_value = EnqueueResult(
+        status="success", response_text="完整答复", lease_token="lease-cancel",
+    )
+    send = AsyncMock()
+    with pytest.raises(asyncio.CancelledError):
+        await manager.process_and_persist(session_id="cancel", tenant_id="t1",
+            user_content="问题", agent=stub_agent, send_response=send,
+            prepare_response=AsyncMock(side_effect=asyncio.CancelledError()))
+    patched_session_queue.finish_processing.assert_called_once_with("cancel", "lease-cancel")
+    send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_prepare_error_preserves_history_but_suppresses_delivery(
+    manager, mock_db_ctx, patched_session_queue, stub_agent,
+):
+    patched_session_queue.enqueue_and_process.return_value = EnqueueResult(
+        status="success", response_text="完整答复", lease_token="lease-error",
+    )
+    send = AsyncMock()
+    result = await manager.process_and_persist(session_id="error", tenant_id="t1",
+        user_content="问题", agent=stub_agent, send_response=send,
+        prepare_response=AsyncMock(side_effect=RuntimeError("failed")))
+    assert result["send_ok"] is False
+    send.assert_not_awaited()
+    memory, _, _ = mock_db_ctx
+    assert memory["messages"][-1]["content"] == "完整答复"
+    patched_session_queue.finish_processing.assert_called_once_with("error", "lease-error")
+
+
+@pytest.mark.asyncio
+async def test_initial_delivery_owner_loss_stops_verbose_worker_before_any_preparation(
+    manager, mock_db_ctx, patched_session_queue, stub_agent, monkeypatch,
+):
+    import asyncio
+    from src.channels import session as session_module
+    from src.core.agent_events import make_verbose_event
+
+    started, cancelled = asyncio.Event(), asyncio.Event()
+    dispatchers = []
+    dispatcher_type = session_module.ChannelVerboseDispatcher
+
+    def capture_dispatcher(**kwargs):
+        dispatcher = dispatcher_type(**kwargs)
+        dispatchers.append((dispatcher, kwargs["state"]))
+        return dispatcher
+
+    monkeypatch.setattr(session_module, "ChannelVerboseDispatcher", capture_dispatcher)
+
+    async def verbose(event, delivery_id):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    async def agent_reply(**kwargs):
+        event = make_verbose_event(event_id="verbose-owner", data="正在处理，请稍候。", source="policy")
+        assert kwargs["feedback_state"].try_emit(event)
+        await kwargs["progress_callback"](event)
+        await asyncio.wait_for(started.wait(), timeout=1)
+        return "完整答复"
+
+    async def queued(**kwargs):
+        text = await kwargs["processor"](lambda: False)
+        return EnqueueResult(status="success", response_text=text, lease_token="lost-owner")
+
+    stub_agent.process_message_sync.side_effect = agent_reply
+    patched_session_queue.enqueue_and_process.side_effect = queued
+    patched_session_queue.renew_finalizing.return_value = False
+    prepare, send = AsyncMock(), AsyncMock()
+    with pytest.raises(RuntimeError, match="CHANNEL_DELIVERY_OWNERSHIP_LOST"):
+        await manager.process_and_persist(session_id="initial-owner-loss", tenant_id="t1",
+            user_content="问题", agent=stub_agent, send_response=send,
+            send_verbose=verbose, prepare_response=prepare)
+    assert started.is_set() and cancelled.is_set()
+    assert len(dispatchers) == 1
+    assert dispatchers[0][0]._task is None and dispatchers[0][1].closed
+    prepare.assert_not_awaited()
+    send.assert_not_awaited()
+    assert mock_db_ctx[0]["messages"] == []
+    patched_session_queue.finish_processing.assert_called_once_with("initial-owner-loss", "lost-owner")

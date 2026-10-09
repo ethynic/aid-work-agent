@@ -2615,7 +2615,7 @@ async def _process_tenant_wecom_kf_messages(
                     tenant_id=tenant_id,
                     source_type="wecom_kf",
                 )
-                # 模型/工具用量由独立 Runner 结算；这里仅保留渠道侧 ASR 记录。
+                # 原任务由 Runner 结算；这里只保留 ASR 及显式启用的渠道摘要用量。
                 record_service.skip_save = not asr_success
 
                 # ASR 计费（按次计费，识别成功才计费；必须在 start_record 之后，否则 get_current_record 返回 None）
@@ -2649,17 +2649,16 @@ async def _process_tenant_wecom_kf_messages(
                     channel_cfg=getattr(adapter, "verbose_feedback", None),
                     legacy_waiting_indicator=getattr(adapter, "waiting_indicator", None),
                 )
-                # owner 级 5 次回复预算（设计 §9.3）：verbose/final 共享；
-                # verbose 关闭时不注入预算，final 行为与历史完全一致
-                _kf_reply_budget = (
-                    WeComKfReplyBudget(total=5) if _verbose_cfg.effective_enabled else None
-                )
+                # verbose 关闭时仍保护最终呈现和完整 MD 的两次交付。
+                _kf_reply_budget = WeComKfReplyBudget(total=5)
+                _delivery_content = {}
                 _base_send_response = channel_session_manager.make_send_response(
                     adapter=adapter,
                     message_id=msg_id,
                     reply_to=unified_msg.user_id,
                     log_tag="[wecom_kf]",
                     reply_budget=_kf_reply_budget,
+                    extra_content=_delivery_content,
                 )
                 _send_verbose = channel_session_manager.make_send_verbose(
                     adapter=adapter,
@@ -2667,7 +2666,28 @@ async def _process_tenant_wecom_kf_messages(
                     reply_to=unified_msg.user_id,
                     log_tag="[wecom_kf]",
                     reply_budget=_kf_reply_budget,
+                    reserve_for_final=2,
                 )
+
+                async def prepare_response(response_text, downloadable_files):
+                    if _has_successful_transfer_to_human(tool_messages_collected):
+                        return {}
+                    from src.channels.wecom_kf.reply_delivery import prepare_reply
+
+                    delivery = await prepare_reply(
+                        response_text, downloadable_files, tenant_id=tenant_id,
+                        user_id=user_id or unified_msg.user_id, session_id=session_id,
+                        owner_id=msg_id, max_bytes=adapter._max_bytes,
+                        summary_mode=adapter.summary_mode, record_service=record_service,
+                        question=user_input,
+                        prepare_image=adapter.prepare_reply_image if adapter._render_enabled else None,
+                    )
+                    if not delivery:
+                        return {}
+                    _delivery_content["_kf_delivery"] = delivery
+                    return {"channelDelivery": {
+                        key: delivery[key] for key in ("mode", "text", "file_id") if key in delivery
+                    }}
 
                 async def send_response(response_text, downloadable_files, images=None):
                     # 若本轮 LLM 已成功调用 transfer_to_human，会话已切到人工状态，
@@ -2686,6 +2706,10 @@ async def _process_tenant_wecom_kf_messages(
                             p=(response_text or "")[:200],
                         )
                         return True
+                    if not response_text and _delivery_content:
+                        # Transactional history failed: prepared assets must not
+                        # escape through the existing empty-response failure hook.
+                        return False
                     return await _base_send_response(response_text, downloadable_files, images)
 
                 assistant_metadata = None
@@ -2726,6 +2750,7 @@ async def _process_tenant_wecom_kf_messages(
                         send_response=send_response,
                         send_verbose=_send_verbose,
                         verbose_feedback_config=_verbose_cfg,
+                        prepare_response=prepare_response,
                     )
                     _kf_tlog(
                         "process_and_persist完成: tenant={tenant}, session_id={session_id}, "
@@ -2746,10 +2771,11 @@ async def _process_tenant_wecom_kf_messages(
                         level="ERROR",
                     )
                     record_service.mark_error(str(e))
-                    SessionRecordManager.end_record()
                     continue
-
-                SessionRecordManager.end_record()
+                finally:
+                    # Cancellation also settles already observed local summary
+                    # usage; Runner billing remains owned by its original path.
+                    SessionRecordManager.end_record()
                 logger.info(
                     f"[微信消息] 队列处理返回: status={result.get('status')}, "
                     f"response_text_len={len(result.get('response_text') or '')}"

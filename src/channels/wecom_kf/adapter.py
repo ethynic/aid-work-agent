@@ -13,6 +13,7 @@
 import asyncio
 import hashlib
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -56,6 +57,7 @@ class WeComKfAdapter(ChannelAdapter):
         *,
         max_bytes: int = 2048,
         media_upload_dir: str = "./storage/uploads/wecom_kf",
+        summary_mode: str = "prefix",
         **kwargs,
     ):
         self.corp_id = corp_id
@@ -63,6 +65,9 @@ class WeComKfAdapter(ChannelAdapter):
         self.token = token
         self.encoding_aes_key = encoding_aes_key
         self._max_bytes = max_bytes
+        if summary_mode not in {"prefix", "llm"}:
+            raise ValueError("summary_mode must be prefix or llm")
+        self.summary_mode = summary_mode
 
         # 客服账号配置列表
         self.kf_accounts: List[Dict[str, Any]] = kf_account or []
@@ -260,8 +265,11 @@ class WeComKfAdapter(ChannelAdapter):
         # owner 级回复预算（Phase 3，设计 §9.3）：由 make_send_response /
         # make_send_verbose 注入 content 私有键；无预算注入时行为与历史完全一致。
         budget: Optional[WeComKfReplyBudget] = message.content.pop("_kf_reply_budget", None)
+        delivery = message.content.pop("_kf_delivery", None)
 
-        if text:
+        if delivery is not None:
+            all_success = await self._send_prepared_reply(message, delivery, budget)
+        elif text:
             if budget is not None:
                 # 预算约束正文：恰好至多 1 条额度，正文优先（规则 2/3）
                 all_success = await self._send_body_with_budget(text, message.reply_to, budget)
@@ -302,9 +310,13 @@ class WeComKfAdapter(ChannelAdapter):
 
         # 发送可下载文件链接
         thumb_media_id = ""
-        if message.downloadable_files:
+        remaining_files = [
+            info for info in message.downloadable_files
+            if not delivery or info.file_id != delivery.get("file_id")
+        ]
+        if remaining_files:
             thumb_media_id = await self._get_default_thumb_media_id()
-        for file_info in message.downloadable_files:
+        for file_info in remaining_files:
             if budget is not None and not budget.consume(1):
                 # 超预算资产不发送并记录 suppressed_reply_budget（规则 4）
                 budget.record_suppressed(
@@ -345,6 +357,96 @@ class WeComKfAdapter(ChannelAdapter):
                 all_success = False
 
         return all_success
+
+    async def prepare_reply_image(self, markdown_text: str) -> Optional[str]:
+        """Prepare/upload an image without sending; preparation failures may use text."""
+        try:
+            image_path = await self.renderer.render_markdown(markdown_text)
+            if not image_path or not await asyncio.to_thread(os.path.isfile, image_path):
+                return None
+            result = await self.api_client.upload_media(image_path, "image")
+            if result.get("errcode", 0) == 0:
+                return result.get("media_id")
+        except Exception:
+            logger.opt(exception=True).warning("[wecom_kf] 正文图片长图准备失败，改用文字与 MD")
+        return None
+
+    def _resolve_reply_file(self, delivery: Dict[str, Any]) -> Optional[str]:
+        """Only a trusted, registered attachment for this owner may be uploaded."""
+        from src.core.storage import get_conversation_dir, normalize_tenant_id
+
+        tenant_id = delivery.get("tenant_id", "")
+        if not tenant_id or normalize_tenant_id(tenant_id) != normalize_tenant_id(self._tenant_id):
+            return None
+        file_id = delivery.get("file_id", "")
+        meta = redis_client.hgetall(redis_client.make_key("uploaded_file", file_id))
+        if not meta or any(meta.get(key) != delivery.get(key) for key in
+                           ("tenant_id", "session_id", "owner_id")):
+            return None
+        if meta.get("purpose") != "wecom_kf_full_reply" or meta.get("mime_type") != "text/markdown":
+            return None
+        path = Path(meta.get("path") or "").resolve()
+        directory = get_conversation_dir(tenant_id).resolve()
+        if path.parent != directory or path.name != file_id + ".md" or not path.is_file():
+            return None
+        return str(path)
+
+    async def _send_prepared_reply(
+        self, message: UnifiedResponse, delivery: Dict[str, Any],
+        budget: Optional[WeComKfReplyBudget],
+    ) -> bool:
+        if delivery.get("mode") == "failed":
+            if budget is None or budget.consume(1):
+                await self._send_text_single(delivery.get("text", ""), message.reply_to)
+            return False
+        file_info = next((info for info in message.downloadable_files
+                          if info.file_id == delivery.get("file_id")), None)
+        path = await asyncio.to_thread(self._resolve_reply_file, delivery)
+        if not file_info or not path:
+            logger.error("[wecom_kf] 完整回复文件不存在或归属校验失败")
+            return False
+        # Upload before announcing the file, but keep the visible order text/image
+        # then file. Native MD does not depend on public_base_url or a thumbnail.
+        upload = await self.api_client.upload_media(
+            path, "file", display_name=file_info.file_name, mime_type="text/markdown",
+        )
+        media_id = upload.get("media_id") if upload.get("errcode", 0) == 0 else None
+        body = delivery.get("text", "")
+        body_ok = True
+        complete_budget = budget is None or budget.can_reserve(2)
+        if complete_budget:
+            if budget is not None:
+                budget.consume(1)
+            if delivery.get("mode") == "image":
+                # After a send starts, rejection/timeout is never turned into
+                # another text send. The complete MD remains the second message.
+                result = await self.api_client.send_msg(
+                    touser=message.reply_to, open_kfid=self.current_open_kfid,
+                    msgtype="image", content={"media_id": delivery["media_id"]},
+                )
+                body_ok = result.get("errcode", 0) == 0
+            elif len(body) <= 500 and len(body.encode("utf-8")) <= self._max_bytes:
+                body_ok = await self._send_text_single(body, message.reply_to)
+            else:
+                body_ok = False
+        else:
+            body_ok = False
+            budget.record_suppressed("reply_preview")
+        if budget is not None and not budget.consume(1):
+            budget.record_suppressed("full_reply_md", file_id=file_info.file_id)
+            return False
+        if media_id:
+            result = await self.api_client.send_msg(
+                touser=message.reply_to, open_kfid=self.current_open_kfid,
+                msgtype="file", content={"media_id": media_id},
+            )
+            return body_ok and result.get("errcode", 0) == 0
+        url = build_public_url(file_info.download_url)
+        fallback = f"完整回复文件暂无法直接发送，请通过链接查看《{file_info.file_name}》：\n{url}"
+        if url.startswith(("https://", "http://")) and len(fallback.encode("utf-8")) <= self._max_bytes:
+            await self._send_text_single(fallback, message.reply_to)
+        # The native file wasn't accepted: expose partial delivery, not success.
+        return False
 
     async def _send_segmented(self, text: str, user_id: str) -> bool:
         """按 segment_markdown 分段逐块发送（text/table/link 三种块类型）。"""
@@ -417,7 +519,10 @@ class WeComKfAdapter(ChannelAdapter):
         verbose 侧预留保证正常情况下 remaining >= 1）。
         """
         plain = markdown_to_plain_text(text)
-        needs_image = contains_table_or_image(text) or len(plain.encode("utf-8")) > self._max_bytes
+        from src.channels.wecom_kf.reply_format import inspect_reply_markdown
+
+        has_table, has_image = inspect_reply_markdown(text)
+        needs_image = has_table or has_image or len(plain.encode("utf-8")) > self._max_bytes
 
         if self._render_enabled and needs_image:
             sent = await self._send_full_text_as_image(text, user_id)

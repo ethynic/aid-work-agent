@@ -99,6 +99,7 @@ class WeComKfApiClient:
         path: str,
         json_body: Optional[Dict] = None,
         extra_params: Optional[Dict] = None,
+        retry_transport_errors: bool = True,
     ) -> Dict[str, Any]:
         """发送请求（带 token 自动刷新重试）"""
         url = f"{self.BASE_URL}{path}"
@@ -135,12 +136,12 @@ class WeComKfApiClient:
 
                 return data
             except Exception as e:
-                if attempt < max_retries - 1:
+                if retry_transport_errors and attempt < max_retries - 1:
                     logger.warning(f"请求 {path} 重试 {attempt + 1}/{max_retries}: {e}")
                     await asyncio.sleep(1)
                 else:
                     logger.error(f"请求 {path} 最终失败: {e}")
-                    return {"errcode": -1, "errmsg": str(e)}
+                    return {"errcode": -1, "errmsg": type(e).__name__, "delivery_unknown": True}
         return {"errcode": -1, "errmsg": "unknown error"}
 
     # ==================== 客服账号管理 ====================
@@ -349,7 +350,9 @@ class WeComKfApiClient:
             "msgtype": msgtype,
             msgtype: content,
         }
-        result = await self._request("POST", "/cgi-bin/kf/send_msg", json_body=body)
+        result = await self._request(
+            "POST", "/cgi-bin/kf/send_msg", json_body=body, retry_transport_errors=False,
+        )
         if result.get("errcode", 0) != 0:
             logger.error(f"微信客服发送消息失败: errcode={result.get('errcode')}, errmsg={result.get('errmsg')}")
         return result
@@ -430,13 +433,18 @@ class WeComKfApiClient:
 
     # ==================== 临时素材 ====================
 
-    async def upload_media(self, file_path: str, media_type: str = "file") -> Dict[str, Any]:
+    async def upload_media(
+        self, file_path: str, media_type: str = "file", *,
+        display_name: Optional[str] = None, mime_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         上传临时素材，获取 media_id。
 
         Args:
             file_path: 本地文件路径
             media_type: 素材类型（image/voice/video/file）
+            display_name: 客户可见文件名；不传保持原文件名
+            mime_type: 可选 MIME 类型（标准 MD 使用 text/markdown）
 
         Returns:
             {"errcode": 0, "type": "file", "media_id": "MEDIA_ID", "created_at": 123}
@@ -448,7 +456,8 @@ class WeComKfApiClient:
                 token = await self.get_access_token()
                 client = await self._get_client()
                 with open(file_path, "rb") as f:
-                    files = {"media": (file_path.split("/")[-1], f)}
+                    name = display_name or file_path.replace("\\", "/").split("/")[-1]
+                    files = {"media": (name, f, mime_type)} if mime_type else {"media": (name, f)}
                     response = await client.post(
                         url,
                         params={"access_token": token, "type": media_type},

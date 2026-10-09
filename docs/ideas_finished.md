@@ -133,6 +133,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261009-1452 | 微信客服完整 Markdown 交付 | ✅ 已完成开发：默认原文前缀与原生完整 MD，仅正文图片考虑长图；待真机验收。 | [设计](channel/wecom_kf/wecom_kf_design.md#十四2026-10-09-长答复交付调整) | [计划](plans/plan-wecom-kf-long-reply-delivery.md) |
 | 20261008-1340 | 微信客服原渠道恢复与 AgentRunner 接入 | ✅ 已完成开发：原渠道接入独立 Runner，误重构已移除，迁移历史保留；agent2 已发布并真机验收通过（文本/语音/合并/取代）。 | [设计](system/agent-application-architecture-design.md) | [计划](plans/plan-wecom-kf-channel-restore.md) |
 | 20260916-1830 | 公众号自有号清单源（历史文章导入，主通道） | ✅ 已完成开发：租户扫码绑定自有号，定期拉「发表记录」清单走既有 URL 直采入库（首次回填上限+增量重叠即停，r3 修生产超量回填事故）；2026-10-09 验收通过。 | [设计](system/wechat-mp/wechat-mp-list-source-design.md) | — |
 | 20260914-1901 | 微信公众号内容入知识库 | ✅ 已完成开发：回调/URL 直采/手动粘贴/freepublish 接口对账多通道入库，图片 VL 解析（门禁放开+r2 白描指令/200 张护栏）、content_md 组装、500 字总结、按 token 计费；WP0–WP13 全交付，2026-10-09 验收通过。 | [设计](system/wechat-mp/wechat-mp-knowledge-ingestion-design.md) | [计划](plans/plan-wechat-mp-knowledge-ingestion.md) |

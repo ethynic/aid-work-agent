@@ -416,6 +416,12 @@ class SessionMessageQueue:
                 f"session={session_id[:20]}"
             )
 
+    def renew_finalizing(self, session_id: str, lease_token: str) -> bool:
+        return redis_client.session_renew_finalized(
+            self._key("session_lock", session_id), lease_token,
+            self._key("session_finalizing", session_id), self.LOCK_TTL,
+        )
+
     async def _acquire_state_guard(self, session_id: str) -> tuple[str, str]:
         key = self._key("session_state_guard", session_id)
         while True:

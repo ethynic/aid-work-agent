@@ -1064,6 +1064,34 @@ class RedisClient:
             logger.warning(f"[Redis] session finalize 失败 [{lock_key}]: {e}")
             return False
 
+    def session_renew_finalized(self, lock_key: str, lock_value: str,
+                               finalizing_key: str, ttl: int) -> bool:
+        """原子核验交接 ownership 并同时续期；不得复活已失效的锁。"""
+        backend = self._get_backend()
+        try:
+            if self._connected and self._client:
+                script = r'''
+                if redis.call('get', KEYS[1]) ~= ARGV[1] then return 0 end
+                if redis.call('exists', KEYS[2]) == 0 then return 0 end
+                redis.call('expire', KEYS[1], tonumber(ARGV[2]))
+                redis.call('expire', KEYS[2], tonumber(ARGV[2]))
+                return 1
+                '''
+                return bool(backend.eval(script, 2, lock_key, finalizing_key, lock_value, ttl))
+            with self._fallback._lock:
+                if (self._fallback._is_expired(lock_key)
+                        or self._fallback._data.get(lock_key) != lock_value
+                        or self._fallback._is_expired(finalizing_key)
+                        or finalizing_key not in self._fallback._data):
+                    return False
+                import time
+                for key in (lock_key, finalizing_key):
+                    self._fallback._ttls[key] = time.time() + ttl
+                return True
+        except Exception as e:
+            logger.warning(f"[Redis] session finalized renewal 失败 [{lock_key}]: {e}")
+            return False
+
     def session_release_finalized(
         self, lock_key: str, lock_value: str, cancel_key: str,
         merge_key: str, responding_key: str, finalizing_key: str,

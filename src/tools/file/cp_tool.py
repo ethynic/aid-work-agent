@@ -424,7 +424,7 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="ppt/index.
         visible: bool = True,
     ) -> Dict[str, Any]:
         """将生成的文件注册到下载系统。"""
-        from src.core.redis_client import redis_client
+        from src.services.files.download_registry import register_download_metadata
 
         file_id = f"file_{uuid.uuid4().hex[:12]}"
         suffix = file_path.suffix.lower()
@@ -448,20 +448,10 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="ppt/index.
 
         file_size = dest_path.stat().st_size
 
-        file_info = {
-            "file_id": file_id,
-            "name": display_name,
-            "path": str(dest_path.absolute()),
-            "size": file_size,
-            "mime_type": mime_type,
-            "type": "file",
-            "visible": visible,
-        }
-
-        key = redis_client.make_key("uploaded_file", file_id)
-        for field, value in file_info.items():
-            redis_client.hset(key, field, value)
-        redis_client.expire(key, 86400)
+        register_download_metadata(
+            dest_path, file_id=file_id, display_name=display_name,
+            mime_type=mime_type, visible=visible,
+        )
 
         download_url = f"/api/files/{file_id}/download"
 

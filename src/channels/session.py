@@ -5,9 +5,11 @@
 支持租户隔离：tenant_id 参与 session_id 生成和所有查询，防止跨租户数据串扰。
 """
 
+import asyncio
 import inspect
 import json
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
@@ -26,6 +28,62 @@ from src.channels.verbose_dispatcher import (
     final_delivery_id,
     verbose_delivery_id,
 )
+
+
+@asynccontextmanager
+async def _hold_prepared_delivery(queue, session_id, lease_token, enabled,
+                                  *, dispatcher=None, verbose_state=None):
+    """Keep the existing owner through preparation, persistence and delivery."""
+    if not enabled or not lease_token:
+        yield lambda: None
+        return
+    owner = asyncio.current_task()
+    lost = False
+
+    def check():
+        if not queue.renew_finalizing(session_id, lease_token):
+            raise RuntimeError("CHANNEL_DELIVERY_OWNERSHIP_LOST")
+
+    async def keepalive():
+        nonlocal lost
+        while True:
+            await asyncio.sleep(queue.KEEPALIVE_INTERVAL)
+            try:
+                check()
+            except Exception:
+                lost = True
+                logger.error("后端日志：渠道交付 ownership 丢失 session={}", session_id)
+                owner.cancel()
+                return
+
+    task = None
+    try:
+        check()
+        task = asyncio.create_task(keepalive())
+        yield check
+    except BaseException as error:
+        # Also covers __aenter__ failing before the usual dispatcher drain.
+        # A verbose worker is an independent task and must not outlive its owner.
+        try:
+            if dispatcher is not None:
+                await dispatcher.cancel_and_await()
+        except Exception as cleanup_error:
+            logger.warning("[VERBOSE] 交付失主/取消收尾失败: {}", cleanup_error)
+        finally:
+            if verbose_state is not None:
+                verbose_state.close()
+        if lost and isinstance(error, asyncio.CancelledError):
+            raise RuntimeError("CHANNEL_DELIVERY_OWNERSHIP_LOST") from None
+        raise
+    finally:
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        # Atomic release won't clear a successor owner's lock or markers.
+        queue.finish_processing(session_id, lease_token)
 
 
 def _invoke_pre_send(pre_send: Callable[..., Any], delivery_id: str) -> None:
@@ -812,6 +870,7 @@ class ChannelSessionManager:
         agent_extra_system_prompt: Optional[str] = None,
         send_verbose: Optional[Callable[[Dict[str, Any], str], Awaitable[Any]]] = None,
         verbose_feedback_config: Optional[VerboseFeedbackConfig] = None,
+        prepare_response: Optional[Callable[[str, List[Dict[str, Any]]], Awaitable[Dict[str, Any]]]] = None,
     ) -> Dict[str, Any]:
         """
         统一渠道消息处理路径。覆盖 P0-1（事务化批量写入）+ P0-2（user 写入推迟）+ 异常兜底。
@@ -866,6 +925,8 @@ class ChannelSessionManager:
             verbose_feedback_config: 本轮冻结配置（渠道配置解析产物）；None 时
                                 process_message_sync 回落全局配置（feedback_state
                                 始终显式传入，保证 owner 级复用）。
+            prepare_response: 可选渠道交付准备，成功结果净化后、最终持久化前调用。
+                                可追加附件并返回交付 metadata；不得截断历史正文。
 
         Returns:
             {
@@ -1093,281 +1154,312 @@ class ChannelSessionManager:
         # 文本而非长图，线上案例 tr_45b66335492c4540）
         response_text = sanitize_llm_markdown(result.response_text or "")
         lease_token = result.lease_token
-        if result.was_merged and record_service is not None:
-            record_service.set_trace_merge_semantics(merge_role="merged_owner")
-        # 合并方应持久化「合并后的输入」，否则用原始 user_content
-        user_to_write = result.merged_input if result.was_merged else user_content
-        # 合并方持久化附件元数据：优先用 session_queue 透传的 merged_attachments_meta
-        # （含被取消方的附件元数据，避免语音被并入前一条消息后附件 local_path 丢失）
-        if result.was_merged and result.merged_attachments_meta is not None:
-            attachments_to_write = result.merged_attachments_meta
-        else:
-            attachments_to_write = user_attachments_meta
-        # if result.was_merged:
-            # tlog(
-            #     "语音合并",
-            #     "持久化用户消息 session={sid}..., was_merged=True, "
-            #     "user_content_len={uc_len}, merged_input_len={mi_len}, "
-            #     "write_len={w_len}, write_preview={w_prev!r}, "
-            #     "user_meta_count={um_n}, merged_meta_count={mm_n}, write_meta_count={wm_n}",
-            #     sid=session_id[:20],
-            #     uc_len=len(user_content),
-            #     mi_len=len(result.merged_input),
-            #     w_len=len(user_to_write),
-            #     w_prev=user_to_write[:120],
-            #     um_n=len(user_attachments_meta) if user_attachments_meta else 0,
-            #     mm_n=len(result.merged_attachments_meta) if result.merged_attachments_meta else 0,
-            #     wm_n=len(attachments_to_write) if attachments_to_write else 0,
-            # )
-
-        # ===== final 持久化前：drain dispatcher 并冻结 verbose metadata（设计 §9.2 步骤 5）=====
-        # 必须在构造 DB batch 之前完成：drain 超时会 cancel 并 await 实际发送 task，
-        # 保证投递结果冻结后不再有晚到发送与落库竞态。
-        if dispatcher is not None:
-            try:
-                drain_timeout = None
-                if isinstance(verbose_feedback_config, VerboseFeedbackConfig):
-                    drain_timeout = verbose_feedback_config.delivery_timeout_seconds + 1.0
-                await dispatcher.close_and_drain(timeout=drain_timeout)
-            except Exception as drain_err:
-                logger.warning(
-                    f"[VERBOSE] dispatcher drain 失败 session={session_id}: {drain_err}"
-                )
-        verbose_state.close()
-        verbose_entries = build_channel_verbose_metadata_entries(verbose_events, dispatcher)
-
-        # 本轮 agent 产出的图片（ImageRef，如顾问二维码）：读取须在构造 batch 之前，
-        # 落库到 assistant metadata.images 供外部接待页等历史消息渲染；
-        # 发送链路不变，仍由 send_response 透传渠道 adapter
-        agent_images: List[Dict[str, Any]] = []
-        try:
-            agent_images = list(getattr(result.response_text, "images", []) or [])
-        except Exception:
-            agent_images = []
-
-        # 构造批量写入的消息序列
-        batch: List[Dict[str, Any]] = []
-        if user_to_write:
-            # 合并方用 session_queue 透传的 merged_from_msgids / merged_segments 构造 metadata，
-            # 供撤回时按段重建 content。单条消息保留原 user_metadata（含 msgid）。
-            if result.was_merged and result.merged_from_msgids:
-                merged_user_metadata = {
-                    "open_kfid": (user_metadata or {}).get("open_kfid", "") if isinstance(user_metadata, dict) else "",
-                    "merged_from_msgids": result.merged_from_msgids,
-                    "merged_segments": result.merged_segments or [],
-                }
+        async with _hold_prepared_delivery(
+            session_queue, session_id, lease_token, prepare_response is not None,
+            dispatcher=dispatcher, verbose_state=verbose_state,
+        ) as check_ownership:
+            if result.was_merged and record_service is not None:
+                record_service.set_trace_merge_semantics(merge_role="merged_owner")
+            # 合并方应持久化「合并后的输入」，否则用原始 user_content
+            user_to_write = result.merged_input if result.was_merged else user_content
+            # 合并方持久化附件元数据：优先用 session_queue 透传的 merged_attachments_meta
+            # （含被取消方的附件元数据，避免语音被并入前一条消息后附件 local_path 丢失）
+            if result.was_merged and result.merged_attachments_meta is not None:
+                attachments_to_write = result.merged_attachments_meta
             else:
-                merged_user_metadata = user_metadata
-            batch.append({
-                "role": "user",
-                "content": user_to_write,
-                "message_type": message_type,
-                "attachments": attachments_to_write if attachments_to_write else None,
-                "metadata": merged_user_metadata,
-            })
+                attachments_to_write = user_attachments_meta
+            # if result.was_merged:
+                # tlog(
+                #     "语音合并",
+                #     "持久化用户消息 session={sid}..., was_merged=True, "
+                #     "user_content_len={uc_len}, merged_input_len={mi_len}, "
+                #     "write_len={w_len}, write_preview={w_prev!r}, "
+                #     "user_meta_count={um_n}, merged_meta_count={mm_n}, write_meta_count={wm_n}",
+                #     sid=session_id[:20],
+                #     uc_len=len(user_content),
+                #     mi_len=len(result.merged_input),
+                #     w_len=len(user_to_write),
+                #     w_prev=user_to_write[:120],
+                #     um_n=len(user_attachments_meta) if user_attachments_meta else 0,
+                #     mm_n=len(result.merged_attachments_meta) if result.merged_attachments_meta else 0,
+                #     wm_n=len(attachments_to_write) if attachments_to_write else 0,
+                # )
 
-        # tool 消息序列（wecom_kf 等需要持久化 tool_calls + tool 结果）
-        for tm in tool_messages_collected:
-            if tm.get("role") == "assistant" and tm.get("tool_calls"):
-                tm_metadata = {"tool_calls": tm["tool_calls"]}
-                if tm.get("reasoning_content"):
-                    tm_metadata["reasoning_content"] = tm["reasoning_content"]
-                batch.append({
-                    "role": "assistant",
-                    "content": "",
-                    "message_type": "text",
-                    "metadata": tm_metadata,
-                })
-            elif tm.get("role") == "tool":
-                tc = tm.get("content", "")
-                if isinstance(tc, (dict, list)):
-                    tc = json.dumps(tc, ensure_ascii=False, default=str)
-                batch.append({
-                    "role": "tool",
-                    "content": tc,
-                    "message_type": "text",
-                    "metadata": {"tool_call_id": tm.get("tool_call_id", "")},
-                })
-
-        # 最终 assistant 回复
-        # assistant_metadata：优先用外部传入；否则当 downloadable_files 非空时自动构造
-        final_assistant_metadata = assistant_metadata
-        if final_assistant_metadata is None and downloadable_files:
-            final_assistant_metadata = {"downloadableFiles": downloadable_files}
-        # verboseMessages 合并（设计 §10）：浅复制调用方 metadata（未知字段保留），
-        # verboseMessages 为系统字段，按 eventId 去重后覆盖写入。本轮无 verbose 时
-        # 不写该键，metadata 结构与历史消息完全一致（verbose 关闭零行为变化）。
-        if verbose_entries:
-            merged_metadata = dict(final_assistant_metadata) if final_assistant_metadata else {}
-            merged_metadata["verboseMessages"] = verbose_entries
-            final_assistant_metadata = merged_metadata
-        # images 合并：图片落库与 verboseMessages 同策略，只在有值时写入该键，
-        # 历史消息 metadata 结构不变
-        if agent_images:
-            merged_metadata = dict(final_assistant_metadata) if final_assistant_metadata else {}
-            merged_metadata["images"] = agent_images
-            final_assistant_metadata = merged_metadata
-
-        batch.append({
-            "role": "assistant",
-            "content": response_text,
-            "message_type": "text",
-            "metadata": final_assistant_metadata,
-        })
-
-        # 事务化批量写入
-        # tlog(
-        #     "语音合并",
-        #     "[持久化] session={sid}..., was_merged={merged}, "
-        #     "user_content_len={uc_len}, user_content_preview={uc_prev!r}, "
-        #     "merged_input_len={mi_len}, merged_input_preview={mi_prev!r}, "
-        #     "user_to_write_len={uw_len}, user_to_write_full={uw_full!r}, "
-        #     "batch_roles={roles}, response_len={r_len}, response_preview={r_prev!r}",
-        #     sid=session_id[:20],
-        #     merged=result.was_merged,
-        #     uc_len=len(user_content),
-        #     uc_prev=user_content[:120],
-        #     mi_len=len(result.merged_input),
-        #     mi_prev=result.merged_input[:120],
-        #     uw_len=len(user_to_write),
-        #     uw_full=user_to_write,
-        #     roles=[m.get("role") for m in batch],
-        #     r_len=len(response_text),
-        #     r_prev=response_text[:120],
-        # )
-        write_ok = self.add_messages_batch_transactional(session_id, tenant_id, batch)
-        if write_ok is None:
-            logger.error(
-                f"后端日志：channel_messages 批量写入失败 session={session_id}，"
-                f"user 和 assistant 均未落库"
-            )
-            # 兜底：防御性补占位 assistant（新流程下 user+assistant 是同事务，
-            # 要么都成功要么都失败，理论上 _ensure_last_not_orphan_user 不会触发；
-            # 保留是为了兼容外部预置脏数据 / 极端历史回放场景）。
-            self._ensure_last_not_orphan_user(session_id, tenant_id)
-            # 记录失败到 record_service
-            if record_service is not None:
+            # ===== final 持久化前：drain dispatcher 并冻结 verbose metadata（设计 §9.2 步骤 5）=====
+            # 必须在构造 DB batch 之前完成：drain 超时会 cancel 并 await 实际发送 task，
+            # 保证投递结果冻结后不再有晚到发送与落库竞态。
+            if dispatcher is not None:
                 try:
-                    record_service.mark_error("批量写入失败")
-                except Exception as mark_err:
+                    drain_timeout = None
+                    if isinstance(verbose_feedback_config, VerboseFeedbackConfig):
+                        drain_timeout = verbose_feedback_config.delivery_timeout_seconds + 1.0
+                    await dispatcher.close_and_drain(timeout=drain_timeout)
+                except Exception as drain_err:
                     logger.warning(
-                        f"后端日志：批量写入失败后 record_service.mark_error 异常: {mark_err}"
+                        f"[VERBOSE] dispatcher drain 失败 session={session_id}: {drain_err}"
                     )
-            # 通过 send_response 告知用户失败（如渠道决定），否则静默
-            try:
-                session_queue.mark_responding(session_id)
-                await send_response("", downloadable_files)
-            except Exception as send_err:
-                logger.opt(exception=True).error(
-                    f"后端日志：批量写入失败后 send_response 异常 session={session_id}: {send_err}",
-                )
-            finally:
-                session_queue.mark_idle(session_id)
-                session_queue.finish_processing(session_id, lease_token)
-            return {
-                "status": "error",
-                "response_text": "",
-                "downloadable_files": downloadable_files,
-                "was_merged": result.was_merged,
-                "merged_input": result.merged_input,
-            }
+            verbose_state.close()
+            verbose_entries = build_channel_verbose_metadata_entries(verbose_events, dispatcher)
 
-        # 回填 trace.user_message_id（user 消息对应 batch[0]），用于 monitor.py
-        # 精确匹配撤回状态。双轨覆盖：set_user_message_id 覆盖 trace_persist worker
-        # 未处理的场景（内存 trace 携带该值写入），update_user_message_id UPDATE
-        # 覆盖 worker 已处理的场景。整个回填失败只记 debug log，不影响业务。
-        user_msg_id = None
-        try:
-            user_msg_id = (
-                write_ok[0]
-                if write_ok and batch and batch[0].get("role") == "user"
-                else None
-            )
-            if user_msg_id and record_service is not None:
-                tc = getattr(record_service, "trace_collector", None)
-                trace_id = None
-                if tc is not None:
-                    tc.set_user_message_id(user_msg_id)  # 覆盖 worker 未处理
-                    trace_id = tc.trace_id
-                if trace_id:
-                    from src.core.trace_persist import update_user_message_id
-                    update_user_message_id(trace_id, user_msg_id)  # 覆盖 worker 已处理
-        except Exception as e:
-            logger.debug(
-                f"后端日志：trace user_message_id 回填失败 session={session_id}: {e}"
-            )
-
-        # response_text 为空（agent 内部异常被吞掉返回空字符串）→ 标记错误状态
-        if not response_text:
-            logger.warning(
-                f"后端日志：agent 返回空响应 session={session_id}，可能内部异常"
-            )
-            if record_service is not None:
-                try:
-                    record_service.mark_error("agent 返回空响应")
-                except Exception as mark_err:
-                    logger.warning(
-                        f"后端日志：空响应后 record_service.mark_error 异常: {mark_err}"
-                    )
-
-        # 批量写入成功 → 记录完成
-        if record_service is not None:
-            try:
-                record_service.complete(response_text)
-            except Exception as e:
-                logger.warning(f"后端日志：record_service.complete 异常: {e}")
-
-        # 发送响应
-        send_ok = False
-        try:
-            session_queue.mark_responding(session_id)
-            # Phase 2 P2.3 CodeReview P0 修复：从本次执行结果读取累积的 ImageRef
-            # 列表，透传给渠道 adapter（feishu/dingtalk 拆分发送，wecom_kf 不用）
-            agent_images = []
+            # 本轮 agent 产出的图片（ImageRef，如顾问二维码）：读取须在构造 batch 之前，
+            # 落库到 assistant metadata.images 供外部接待页等历史消息渲染；
+            # 发送链路不变，仍由 send_response 透传渠道 adapter
+            agent_images: List[Dict[str, Any]] = []
             try:
                 agent_images = list(getattr(result.response_text, "images", []) or [])
             except Exception:
                 agent_images = []
-            send_ok = await send_response(response_text, downloadable_files, agent_images)
-        except Exception as e:
-            logger.opt(exception=True).error(
-                f"后端日志：send_response 异常 session={session_id}: {e}",
-            )
-        finally:
-            session_queue.mark_idle(session_id)
-            session_queue.finish_processing(session_id, lease_token)
 
-        # send_response 失败的兜底：保留 _ensure_last_not_orphan_user 作为防御性兜底
-        # （新流程下 user+assistant 同事务，理论上末尾不会是孤立 user；保留是防御性）
-        if not send_ok:
-            self._ensure_last_not_orphan_user(session_id, tenant_id)
+            delivery_metadata: Dict[str, Any] = {}
+            delivery_preparation_failed = False
+            if prepare_response is not None:
+                try:
+                    delivery_metadata = await prepare_response(response_text, downloadable_files) or {}
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.opt(exception=True).error(
+                        "后端日志：渠道交付准备失败 session={}", session_id
+                    )
+                    delivery_preparation_failed = True
+                    delivery_metadata = {"deliveryPreparationFailed": True}
+                    if record_service is not None:
+                        record_service.mark_error("渠道交付准备失败")
 
-        # recap 轮后异步沉淀任务（全部渠道单一收口，仅回复送达的轮次触发；
-        # 失败不影响对话，trigger_recap 内部吞异常。docs/subagent/recap-mechanism-design.md §4.3）
-        if send_ok:
-            try:
-                from src.services.recap import trigger_recap
+            # 构造批量写入的消息序列
+            batch: List[Dict[str, Any]] = []
+            if user_to_write:
+                # 合并方用 session_queue 透传的 merged_from_msgids / merged_segments 构造 metadata，
+                # 供撤回时按段重建 content。单条消息保留原 user_metadata（含 msgid）。
+                if result.was_merged and result.merged_from_msgids:
+                    merged_user_metadata = {
+                        "open_kfid": (user_metadata or {}).get("open_kfid", "") if isinstance(user_metadata, dict) else "",
+                        "merged_from_msgids": result.merged_from_msgids,
+                        "merged_segments": result.merged_segments or [],
+                    }
+                else:
+                    merged_user_metadata = user_metadata
+                batch.append({
+                    "role": "user",
+                    "content": user_to_write,
+                    "message_type": message_type,
+                    "attachments": attachments_to_write if attachments_to_write else None,
+                    "metadata": merged_user_metadata,
+                })
 
-                trigger_recap(
-                    agent=agent,
-                    session_id=session_id,
-                    tenant_id=tenant_id,
-                    user_content=result.merged_input or user_content,
-                    assistant_reply=response_text,
-                    round_message_id=user_msg_id,
-                    record_service=record_service,
+            # tool 消息序列（wecom_kf 等需要持久化 tool_calls + tool 结果）
+            for tm in tool_messages_collected:
+                if tm.get("role") == "assistant" and tm.get("tool_calls"):
+                    tm_metadata = {"tool_calls": tm["tool_calls"]}
+                    if tm.get("reasoning_content"):
+                        tm_metadata["reasoning_content"] = tm["reasoning_content"]
+                    batch.append({
+                        "role": "assistant",
+                        "content": "",
+                        "message_type": "text",
+                        "metadata": tm_metadata,
+                    })
+                elif tm.get("role") == "tool":
+                    tc = tm.get("content", "")
+                    if isinstance(tc, (dict, list)):
+                        tc = json.dumps(tc, ensure_ascii=False, default=str)
+                    batch.append({
+                        "role": "tool",
+                        "content": tc,
+                        "message_type": "text",
+                        "metadata": {"tool_call_id": tm.get("tool_call_id", "")},
+                    })
+
+            # 最终 assistant 回复
+            # assistant_metadata：优先用外部传入；否则当 downloadable_files 非空时自动构造
+            final_assistant_metadata = assistant_metadata
+            if final_assistant_metadata is None and downloadable_files:
+                final_assistant_metadata = {"downloadableFiles": downloadable_files}
+            if delivery_metadata:
+                final_assistant_metadata = dict(final_assistant_metadata or {})
+                final_assistant_metadata.update(delivery_metadata)
+                if downloadable_files:
+                    final_assistant_metadata["downloadableFiles"] = downloadable_files
+            # verboseMessages 合并（设计 §10）：浅复制调用方 metadata（未知字段保留），
+            # verboseMessages 为系统字段，按 eventId 去重后覆盖写入。本轮无 verbose 时
+            # 不写该键，metadata 结构与历史消息完全一致（verbose 关闭零行为变化）。
+            if verbose_entries:
+                merged_metadata = dict(final_assistant_metadata) if final_assistant_metadata else {}
+                merged_metadata["verboseMessages"] = verbose_entries
+                final_assistant_metadata = merged_metadata
+            # images 合并：图片落库与 verboseMessages 同策略，只在有值时写入该键，
+            # 历史消息 metadata 结构不变
+            if agent_images:
+                merged_metadata = dict(final_assistant_metadata) if final_assistant_metadata else {}
+                merged_metadata["images"] = agent_images
+                final_assistant_metadata = merged_metadata
+
+            batch.append({
+                "role": "assistant",
+                "content": response_text,
+                "message_type": "text",
+                "metadata": final_assistant_metadata,
+            })
+
+            # 事务化批量写入
+            # tlog(
+            #     "语音合并",
+            #     "[持久化] session={sid}..., was_merged={merged}, "
+            #     "user_content_len={uc_len}, user_content_preview={uc_prev!r}, "
+            #     "merged_input_len={mi_len}, merged_input_preview={mi_prev!r}, "
+            #     "user_to_write_len={uw_len}, user_to_write_full={uw_full!r}, "
+            #     "batch_roles={roles}, response_len={r_len}, response_preview={r_prev!r}",
+            #     sid=session_id[:20],
+            #     merged=result.was_merged,
+            #     uc_len=len(user_content),
+            #     uc_prev=user_content[:120],
+            #     mi_len=len(result.merged_input),
+            #     mi_prev=result.merged_input[:120],
+            #     uw_len=len(user_to_write),
+            #     uw_full=user_to_write,
+            #     roles=[m.get("role") for m in batch],
+            #     r_len=len(response_text),
+            #     r_prev=response_text[:120],
+            # )
+            check_ownership()
+            write_ok = self.add_messages_batch_transactional(session_id, tenant_id, batch)
+            if write_ok is None:
+                logger.error(
+                    f"后端日志：channel_messages 批量写入失败 session={session_id}，"
+                    f"user 和 assistant 均未落库"
                 )
-            except Exception as e:
-                logger.warning(f"后端日志：recap 触发失败（不影响对话）session={session_id}: {e}")
+                # 兜底：防御性补占位 assistant（新流程下 user+assistant 是同事务，
+                # 要么都成功要么都失败，理论上 _ensure_last_not_orphan_user 不会触发；
+                # 保留是为了兼容外部预置脏数据 / 极端历史回放场景）。
+                self._ensure_last_not_orphan_user(session_id, tenant_id)
+                # 记录失败到 record_service
+                if record_service is not None:
+                    try:
+                        record_service.mark_error("批量写入失败")
+                    except Exception as mark_err:
+                        logger.warning(
+                            f"后端日志：批量写入失败后 record_service.mark_error 异常: {mark_err}"
+                        )
+                # 通过 send_response 告知用户失败（如渠道决定），否则静默
+                try:
+                    check_ownership()
+                    session_queue.mark_responding(session_id)
+                    await send_response("", downloadable_files)
+                except Exception as send_err:
+                    logger.opt(exception=True).error(
+                        f"后端日志：批量写入失败后 send_response 异常 session={session_id}: {send_err}",
+                    )
+                finally:
+                    if prepare_response is None:
+                        session_queue.mark_idle(session_id)
+                        session_queue.finish_processing(session_id, lease_token)
+                return {
+                    "status": "error",
+                    "response_text": "",
+                    "downloadable_files": downloadable_files,
+                    "was_merged": result.was_merged,
+                    "merged_input": result.merged_input,
+                }
 
-        return {
-            "status": "success",
-            "send_ok": send_ok,
-            "response_text": response_text,
-            "downloadable_files": downloadable_files,
-            "was_merged": result.was_merged,
-            "merged_input": result.merged_input,
-        }
+            # 回填 trace.user_message_id（user 消息对应 batch[0]），用于 monitor.py
+            # 精确匹配撤回状态。双轨覆盖：set_user_message_id 覆盖 trace_persist worker
+            # 未处理的场景（内存 trace 携带该值写入），update_user_message_id UPDATE
+            # 覆盖 worker 已处理的场景。整个回填失败只记 debug log，不影响业务。
+            user_msg_id = None
+            try:
+                user_msg_id = (
+                    write_ok[0]
+                    if write_ok and batch and batch[0].get("role") == "user"
+                    else None
+                )
+                if user_msg_id and record_service is not None:
+                    tc = getattr(record_service, "trace_collector", None)
+                    trace_id = None
+                    if tc is not None:
+                        tc.set_user_message_id(user_msg_id)  # 覆盖 worker 未处理
+                        trace_id = tc.trace_id
+                    if trace_id:
+                        from src.core.trace_persist import update_user_message_id
+                        update_user_message_id(trace_id, user_msg_id)  # 覆盖 worker 已处理
+            except Exception as e:
+                logger.debug(
+                    f"后端日志：trace user_message_id 回填失败 session={session_id}: {e}"
+                )
+
+            # response_text 为空（agent 内部异常被吞掉返回空字符串）→ 标记错误状态
+            if not response_text:
+                logger.warning(
+                    f"后端日志：agent 返回空响应 session={session_id}，可能内部异常"
+                )
+                if record_service is not None:
+                    try:
+                        record_service.mark_error("agent 返回空响应")
+                    except Exception as mark_err:
+                        logger.warning(
+                            f"后端日志：空响应后 record_service.mark_error 异常: {mark_err}"
+                        )
+
+            # 批量写入成功 → 记录完成
+            if record_service is not None:
+                try:
+                    record_service.complete(response_text)
+                except Exception as e:
+                    logger.warning(f"后端日志：record_service.complete 异常: {e}")
+
+            # 发送响应
+            send_ok = False
+            try:
+                check_ownership()
+                session_queue.mark_responding(session_id)
+                # Phase 2 P2.3 CodeReview P0 修复：从本次执行结果读取累积的 ImageRef
+                # 列表，透传给渠道 adapter（feishu/dingtalk 拆分发送，wecom_kf 不用）
+                agent_images = []
+                try:
+                    agent_images = list(getattr(result.response_text, "images", []) or [])
+                except Exception:
+                    agent_images = []
+                if not delivery_preparation_failed:
+                    send_ok = await send_response(response_text, downloadable_files, agent_images)
+            except Exception as e:
+                logger.opt(exception=True).error(
+                    f"后端日志：send_response 异常 session={session_id}: {e}",
+                )
+            finally:
+                if prepare_response is None:
+                    session_queue.mark_idle(session_id)
+                    session_queue.finish_processing(session_id, lease_token)
+
+            # send_response 失败的兜底：保留 _ensure_last_not_orphan_user 作为防御性兜底
+            # （新流程下 user+assistant 同事务，理论上末尾不会是孤立 user；保留是防御性）
+            if not send_ok:
+                self._ensure_last_not_orphan_user(session_id, tenant_id)
+
+            # recap 轮后异步沉淀任务（全部渠道单一收口，仅回复送达的轮次触发；
+            # 失败不影响对话，trigger_recap 内部吞异常。docs/subagent/recap-mechanism-design.md §4.3）
+            if send_ok:
+                try:
+                    from src.services.recap import trigger_recap
+
+                    trigger_recap(
+                        agent=agent,
+                        session_id=session_id,
+                        tenant_id=tenant_id,
+                        user_content=result.merged_input or user_content,
+                        assistant_reply=response_text,
+                        round_message_id=user_msg_id,
+                        record_service=record_service,
+                    )
+                except Exception as e:
+                    logger.warning(f"后端日志：recap 触发失败（不影响对话）session={session_id}: {e}")
+
+            return {
+                "status": "success",
+                "send_ok": send_ok,
+                "response_text": response_text,
+                "downloadable_files": downloadable_files,
+                "was_merged": result.was_merged,
+                "merged_input": result.merged_input,
+            }
 
     def make_send_response(
         self,
@@ -1456,11 +1548,12 @@ class ChannelSessionManager:
         log_tag: str = "[Verbose]",
         pre_send: Optional[Callable[..., None]] = None,
         reply_budget: Optional[Any] = None,
+        reserve_for_final: int = 1,
     ) -> Callable[[Dict[str, Any], str], Awaitable[Any]]:
         """构造 send_verbose 闭包（Phase 3，设计 §9.3）。
 
         由 ChannelVerboseDispatcher 串行调用：``send_verbose(event, delivery_id)``。
-        内部走 adapter 的低优先级 ``send_status_message(reserve_for_final=1)``，
+        内部走 adapter 的低优先级 ``send_status_message(reserve_for_final)``，
         只构造纯文本 UnifiedResponse，不携带文件/图片/Markdown 长图；绝不调用
         普通 send_message（否则 verbose 可能占掉内部限流器最后一个额度）。
         任何异常都收敛为 StatusDeliveryResult，不向 dispatcher 泄漏。
@@ -1475,6 +1568,7 @@ class ChannelSessionManager:
             pre_send: 发送前钩子，接收 delivery_id ``{eventId}:verbose:1``
                      （RPA set_reply_context 用）
             reply_budget: wecom_kf owner 级回复预算（可选）
+            reserve_for_final: 最终交付预留条数；KF 完整文件交付使用 2，其他渠道默认 1
         """
         from src.channels.base import StatusDeliveryResult
         from src.models.message import UnifiedResponse
@@ -1510,7 +1604,7 @@ class ChannelSessionManager:
                     reply_to=reply_to,
                     content=content,
                 )
-                result = await adapter.send_status_message(response, reserve_for_final=1)
+                result = await adapter.send_status_message(response, reserve_for_final=reserve_for_final)
                 if isinstance(result, StatusDeliveryResult):
                     return result
                 # 防御：不规范 bool 返回按真值收敛

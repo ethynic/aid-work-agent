@@ -6,6 +6,7 @@
 
 | 调研主题 | 文档 | 关联功能 |
 |---------|------|---------|
+| 微信客服长答复交付 | [调研](research/wecom-kf-long-reply-delivery-research.md) | 全文 MD，默认无模型前缀、可切模型摘要，正文图片长图策略。 |
 | Codex、DeepSeek Harness、Hermes 桌面执行架构对比 | [调研](research/desktop-agent-harness-architecture-research.md) | 桌面 Agent：共用云端 Runner、本机文件/程序与批处理执行边界。 |
 | 企业级智能体平台调研 | [enterprise-agent-platform-research.md](research/enterprise-agent-platform-research.md) | 可观测性、Prompt 管理、知识库 |
 | 基础设施差距分析 | [enterprise-agent-infrastructure-gap-analysis.md](research/enterprise-agent-infrastructure-gap-analysis.md) | 整体规划 |

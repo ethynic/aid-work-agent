@@ -253,6 +253,7 @@ production 标签缓存 → 标签→版本映射缓存 → Prompt 内容缓存
 | 键模式 | 用途 | TTL |
 |--------|------|-----|
 | `session_lock:{sid}` | 会话处理锁 | 120s |
+| `session_finalizing:{sid}` | 当前 owner 持久化与交付交接标记 | 120s |
 | `session_cancel:{sid}` | 会话取消标记 | 10s |
 | `session_merge:{sid}` | 消息合并标记 | 5s |
 | `session_pending:{sid}` | 待处理消息队列 | 30s |
@@ -260,6 +261,7 @@ production 标签缓存 → 标签→版本映射缓存 → Prompt 内容缓存
 | `recall_pending:{sid}` | 竞态兜底：撤回事件到达时消息还在处理中，落库前查此 SET 命中则打 is_recalled=TRUE | 300s |
 
 **释放策略**：处理完成后释放；TTL 自动过期兜底
+微信客服交付准备启用后，沿既有 owner token 每 30 秒原子续期 `session_lock` 与 `session_finalizing`，覆盖准备、持久化和发送；失主中止旧交付，结束时原子释放，不清除后继 owner 的标记。过期锁不得续活（`session_renew_finalized`）。
 **源文件**：`src/core/session_queue.py`；`recall_pending` 由 `src/channels/session.py::mark_recalled_message`（写入）和 `add_messages_batch_transactional`（读取+清理）协作。
 
 ### 7.2 短期记忆（Short-Term Memory）
@@ -305,13 +307,14 @@ ImageRegistry 管理的图片资产元信息（复用 cp 的 `uploaded_file:{fil
 **源文件**：`src/core/image_asset.py`
 **关联模块**：[image-asset-pipeline-design.md](image-asset-pipeline-design.md) §3 + §7.2
 
-`uploaded_file` 命名空间共三处写入方（file_id 全局唯一，多租户互不覆盖）：
+`uploaded_file` 命名空间的主要写入方（file_id 全局唯一，多租户互不覆盖）：
 
 | 写入方 | 键模式 | TTL | 失效时机 |
 |--------|--------|-----|---------|
 | `/api/upload` 通用上传 | `uploaded_file:file_{uuid12}` | 86400s | TTL 自动过期 |
 | 子智能体模板文件 | `uploaded_file:file_{uuid12}` | -1（永久） | 删除模板时主动 delete（`src/api/subagent_template_file.py`） |
 | ImageRegistry 图片资产 | `uploaded_file:file_{uuid12}` | 86400s / 永久（knowledge_base） | `cleanup_temp` / 文档删除级联 |
+| cp 下载附件 / 微信客服完整 MD | `uploaded_file:file_{uuid12}` | 86400s | TTL 自动过期，复用对话附件文件清理；共享 `services/files/download_registry.py`，KF 额外登记 tenant/session/owner/purpose/content_sha256 并核验写入 |
 
 ### 7.4.1 企微客服默认缩略图 media_id
 
