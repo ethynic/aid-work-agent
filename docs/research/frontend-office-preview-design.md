@@ -1,7 +1,7 @@
 # 前端 Office 文件预览功能设计文档
 
-> 日期：2026-05-28
-> 状态：设计中
+> 日期：2026-05-28（2026-10-09 修订定稿）
+> 状态：设计定稿，待开发
 
 ---
 
@@ -42,21 +42,21 @@
 
 采用**纯前端方案**，无需后端支持，按文件类型分别集成：
 
-| 文件类型 | 库 | 包体积(gzip) | 渲染质量 | 集成难度 |
-|---------|-----|-------------|---------|---------|
-| Word (.docx) | `docx-preview`（已集成） | ~80KB | 高 | 已完成 |
-| Excel (.xlsx) | `xlsx` (SheetJS) | ~150KB | 中（数据准确，样式简化） | 低 |
-| PowerPoint (.pptx) | `pptx-preview` | ~30KB | 中低 | 低 |
+| 文件类型 | 库 | 真实体积 | 渲染质量 | 集成难度 |
+|---------|-----|---------|---------|---------|
+| Word (.docx) | `docx-preview`（已集成） | ~80KB gzip | 高 | 已完成，仅需在入口放行 |
+| Excel (.xlsx) | `xlsx-js-style` | ~150KB gzip | 中（数据准确，无颜色边框，合并单元格保留） | 低 |
+| PowerPoint (.pptx) | `pptx-preview` | **~1.2MB min / 400KB+ gzip**（主包仅 ~134KB，但硬依赖 echarts@5.5 + jszip + lodash，echarts 全量约 1MB） | 中（文本/图片/形状/主题色；动画、SmartArt 降级） | 低 |
 
-**总新增包体积**：约 180KB gzip（xlsx + pptx-preview），可按需懒加载。
+**体积说明**：三库均 dynamic import 懒加载，用户首次点击对应格式预览时才下载，之后浏览器缓存，不影响首屏。注意 pptx-preview 曾被低估为 ~30KB，实际以 echarts 硬依赖为准——接受该懒加载 chunk 是"纯前端、零后端改动"路线的已知代价。
 
 ### 2.2 Excel 预览方案
 
-**选型：`xlsx` (SheetJS) + HTML 表格渲染**
+**选型：`xlsx-js-style`（SheetJS 社区 fork）+ HTML 表格渲染**
 
 ```typescript
 // 核心逻辑
-import * as XLSX from 'xlsx'
+import * as XLSX from 'xlsx-js-style'
 
 async function loadExcel(blob: Blob) {
   const arrayBuffer = await blob.arrayBuffer()
@@ -108,6 +108,17 @@ async function loadPptx(blob: Blob) {
 | .xls（旧 Excel 格式） | 尝试用 xlsx 解析，失败则提示下载 |
 | 复杂 PPT（动画、嵌入视频） | 静默降级，渲染能渲染的内容 |
 
+### 2.5 已评估并排除的备选方案（登记备查，避免重复调研）
+
+| 方案 | 排除理由 |
+|------|---------|
+| 后端 LibreOffice headless（office→pdf→png，"微信式转图"） | 镜像 +400~500MB、需处理 soffice 并发锁与中文字体包；项目曾引入又下架（`src/tools/pdf/pdf_router.py` 注明"Word 转 PDF 已下架，LibreOffice 无法保证表格格式保真"）。微信内置预览即此类服务端转码，但腾讯实现（TBS/X5 内核）闭源，Web 场景的开源等价物只有 LibreOffice 这条路 |
+| 后端 openpyxl 生成时转 HTML（仅 Excel） | 覆盖不了用户上传的 xlsx（除非再加实时转换 API，超时/缓存/并发复杂度回归）；且与 Word/PPT 形成两套预览架构。决定性因素是覆盖范围：前端方案一套代码同时覆盖 AI 产出与用户上传两类入口 |
+| `@vue-office/excel` / `@vue-office/pptx` | 前者 ~430KB gzip 的完整电子表格组件，为"看一眼内容"过重；后者内部即 pptx-preview 的封装，直接用 pptx-preview 更小 |
+| Luckysheet / Univer / x-spreadsheet | 完整电子表格应用框架，过重；Luckysheet 与 x-spreadsheet 已停更（后继 Univer） |
+| Free Spire.XLS / Aspose / PyMuPDF Pro | 免费版有行数/页数限制与试用水印；商业授权收费；PyMuPDF 开源版不支持 Office，Office 渲染仅在商业许可层 |
+| excel2img（pywin32 COM 截图） | 依赖 Windows + 本机安装 MS Excel，Linux 容器不可用 |
+
 ---
 
 ## 三、影响范围
@@ -117,8 +128,10 @@ async function loadPptx(blob: Blob) {
 | 文件 | 修改内容 |
 |------|---------|
 | `frontend/package.json` | 新增 `xlsx-js-style`、`pptx-preview` 依赖 |
-| `frontend/src/components/AttachmentPreviewPanel.vue` | 新增 Excel/PPT 预览模板和加载逻辑 |
-| `frontend/src/components/DownloadFileCard.vue` | `isPreviewable` 增加 docx/xlsx/pptx 判断 |
+| `frontend/web/components/AttachmentPreviewPanel.vue` | 新增 Excel/PPT 预览模板、加载逻辑与移动端内容层适配 |
+| `frontend/web/components/DownloadFileCard.vue` | `isPreviewable` 增加 docx/xlsx/pptx 判断（含大小门槛） |
+
+> 注：早期版本写的 `frontend/src/` 路径已随前端目录重构变为 `frontend/web/`（commit `0d48fb36`）。
 
 ### 3.2 不需要修改的文件
 
@@ -144,10 +157,11 @@ const isPreviewable = computed(() => {
   if (mime.value.startsWith('image/') || ['png', 'jpg', 'jpeg', 'gif'].includes(ext.value)) return true
   if (['md', 'markdown'].includes(ext.value)) return true
 
-  // 新增：Office 文件
-  if (mime.value.includes('wordprocessing') || ext.value === 'docx') return true
-  if (mime.value.includes('spreadsheet') || ['xlsx', 'xls'].includes(ext.value)) return true
-  if (mime.value.includes('presentation') || ['pptx', 'ppt'].includes(ext.value)) return true
+  // 新增：Office 文件（大小门槛见 5.2，超限在卡片上点击直接下载）
+  const size = props.file.file_size ?? 0
+  if (mime.value.includes('wordprocessing') || ext.value === 'docx') return size <= PREVIEW_MAX_BYTES.doc
+  if (mime.value.includes('spreadsheet') || ['xlsx', 'xls'].includes(ext.value)) return size <= PREVIEW_MAX_BYTES.excel
+  if (mime.value.includes('presentation') || ['pptx', 'ppt'].includes(ext.value)) return size <= PREVIEW_MAX_BYTES.doc
 
   return false
 })
@@ -319,6 +333,16 @@ async function loadPptx() {
 }
 ```
 
+### 4.4 移动端内容层适配
+
+面板壳层已具备移动端适配（手机全屏 `w-full md:max-w-[80vw]`、关闭按钮 44px 触控目标、`safe-area-inset-bottom`），这里只补内容层：
+
+| 类型 | 适配方式 |
+|------|---------|
+| Word | 窄屏（<768px）`renderAsync` 改传 `ignoreWidth: true`，文字按容器宽度自动重排；否则 A4 原始页宽（~794px）在手机上必横向溢出。桌面保持原页宽不变 |
+| Excel | 表格容器 `overflow-auto` 横向滚动即可，这是表格的自然交互，无需特殊处理 |
+| PPT | `pptx-preview` 传 `slideScale` 按容器宽度等比缩放，整页可见，细节滚动查看 |
+
 ---
 
 ## 五、性能考虑
@@ -340,13 +364,20 @@ const pptxModule = await import('pptx-preview')
 
 Vite 会自动将这些动态 import 拆分为独立的 chunk，不影响首屏加载速度。
 
-### 5.2 大文件处理
+### 5.2 大小与行数门槛（硬门槛）
 
-| 场景 | 处理策略 |
-|------|---------|
-| Excel 超过 10MB | 提示"文件较大，预览可能较慢"，加载后只渲染当前 Sheet |
-| PPT 超过 20 页 | 正常渲染，提供翻页导航 |
-| Word 超过 100 页 | docx-preview 已支持分页，正常渲染 |
+纯前端预览是"JS 解析 + 一次性建全部 DOM"，超大文件会卡死低端手机浏览器；且 xlsx 压缩比极高，文件大小对 Excel 是很差的代理指标（2MB 文件展开可能是几十万行）。门槛在打开预览**之前**判断——`attachment.size` / `file_size` 已知，无需先下载文件：
+
+| 类型 | 门槛 | 超出行为 |
+|------|------|---------|
+| Excel | > 10MB | 不预览，走"文件较大，建议下载查看"提示 + 下载按钮（复用现有不支持预览 UI） |
+| Excel | 单 sheet > 1000 行 | 渲染前 1000 行：从 `sheet['!ref']` 解码行列数，重写 `!ref` 截断后渲染；顶部必须显示显眼截断提示"仅显示前 1000 行，完整内容请下载"（静默截断会让用户误以为表格就这么大） |
+| Word / PPT | > 20MB | 不预览，同 Excel 提示 |
+
+- 三个阈值（10MB / 20MB / 1000 行）定义为具名常量集中一处，便于调整。
+- `DownloadFileCard.vue` 的 `isPreviewable` 与面板 `previewType` 判定处加同一判断：超大文件在下载卡片点击直接下载，连面板都不打开；其他入口（消息附件 chip）打开面板后显示提示。
+- PPT 超过 20 页、Word 超过 100 页：正常渲染（pptx 翻页导航、docx 自带分页），不设门槛。
+- 不做分片渲染 / 虚拟滚动 / Web Worker：这些库不支持，自己包一层等于造轮子；超界引导下载是合理的产品边界。
 
 ---
 
@@ -359,7 +390,8 @@ Vite 会自动将这些动态 import 拆分为独立的 chunk，不影响首屏�
 | PPT (.pptx) 预览 | 点击 pptx 文件，幻灯片正确渲染 |
 | DownloadFileCard 图标 | docx/xlsx/pptx 文件显示对应的 emoji 图标和类型标签 |
 | 不可预览文件降级 | .doc/.ppt 等旧格式文件显示"不支持预览" + 下载按钮 |
-| 移动端适配 | 面板在移动端全屏显示，Excel/PPT 预览可滚动 |
+| 移动端适配 | 手机全屏面板；docx 窄屏自动重排不横向溢出；pptx 按容器缩放整页可见；Excel 横向滚动 |
+| 大小与行数门槛 | 超限文件不打开预览并提示下载；>1000 行 sheet 截断渲染且顶部显示截断提示 |
 | 构建验证 | `npm run build` 无错误 |
 
 ---
