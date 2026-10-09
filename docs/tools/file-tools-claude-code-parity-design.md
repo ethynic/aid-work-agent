@@ -79,13 +79,13 @@
 
 ## 4. 验收标准
 
-- [ ] read `offset=1` 读到第 1 行（原 `offset=0` 行为）
-- [ ] next_hint 的 offset 值为 1-based 行号
-- [ ] edit `replace_lines offset=1` 操作第 1 行
-- [ ] edit `replace_string replace_all=True` 能批量替换，返回替换次数
-- [ ] edit `replace_all=False`（默认）行为不变（唯一性校验仍生效）
-- [ ] 全局 skill 中无残留 0-based offset 示例
-- [ ] description ≤80 字符
+- [x] read `offset=1` 读到第 1 行（原 `offset=0` 行为）——2026-10-10 实施，单测验证
+- [x] next_hint 的 offset 值为 1-based 行号——5 处 next_hint 全部更新，单测验证
+- [x] edit `replace_lines offset=1` 操作第 1 行——单测验证
+- [x] edit `replace_string replace_all=True` 能批量替换，返回替换次数（replaced_count）——单测验证
+- [x] edit `replace_all=False`（默认）行为不变（唯一性校验仍生效）——单测验证
+- [x] 全局 skill 中无残留 0-based offset 示例——全局 grep 零命中；grep_tool.py 跨工具描述同步 1-based
+- [x] description 长度条款按 2026-10 修订规范执行（唯一通道、能短则短、不设硬上限），仅更新既有 description 的 offset 措辞
 
 ## 5. 风险
 

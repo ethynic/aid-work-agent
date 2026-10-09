@@ -6,6 +6,34 @@
 >
 > **重要约束**：每个 Phase 走项目三智能体开发流程（开发 → 测试 → CodeReview）。改造完成不等于上线——试点 Phase（Phase 2）设置 token 对比验收 gate，达标后才铺开后续批次。
 
+## 开发进度
+
+| 阶段 | 内容 | 状态 | 完成记录 |
+|------|------|------|---------|
+| Phase 0 | 删除 upload_to_remote | ✅ 完成（2026-07） | commit 516bad7a，src/ 无残留 |
+| Phase 1 | 工具开发规范 + BaseTool helper | ✅ 完成（2026-07） | commit 516bad7a，规范文档落地 |
+| Phase 2 | http_api/pdf_process/paddleocr 试点 | ✅ 完成（2026-07） | commit 539be40a，paddleocr 提前并入 |
+| Phase 3a | _spill 落盘管理器 + grep 工具 | ✅ 完成（2026-07） | commit a71208d5 |
+| Phase 3b | http_api/pdf/paddleocr 落盘回填 | ✅ 完成（2026-07-15） | commits b39243ec、a17443d5，spill 已接入 http_api.py 与 pdf_process_tool.py |
+| Phase 3c | read/edit offset 1-based + replace_all | ✅ 完成（2026-10-10） | 工作流三角色闭环（开发/独立测试/CR）：定向与 tests/unit/tools 全量单测全绿、CR 0 阻塞 6 建议；grep_tool 跨工具描述同步；验收清单见 file-tools-claude-code-parity-design.md §4。全量回归轮顺带修复 8 处与 3c 无关的存量测试失败（deploy SQL 幂等分发、windows 结构体宽度、image_assets realpath、4 个过期断言），独立成提交 |
+| Phase 3d | write/cp token 去重 | ✅ 基本完成（被 026ca30b 吸收） | desc 已达标（write 80/cp 49 字符）；残留 cp resolved_source echo（cp_tool.py:538,557）并入小项清理 |
+| Phase 4 | content_generate | 🔧 部分残留（降级为小项） | usage_guide 已清（026ca30b）；残留 language echo（content_generate_tool.py:127,136）、prompt Field desc 教程化 |
+| Phase 5 | email 三件套 | 🔧 部分残留（降级为小项） | original_name 已移除 ✅；残留 email_read few-shot（email_tool.py:61-66）、email_send details echo（:258-260） |
+| Phase 6 | word/excel_process | 🔧 部分残留（仍有效） | desc 部分瘦身（776/634 字符，未达 80）；word_to_md/diff 仍回塞全文（word_process_tool.py:467-470）——建议改走 _spill 落盘闭环 |
+| Phase 7 | attraction/hotel_search | 🔧 部分残留（降级为小项） | top_k=8 ✅、info[:500] 截断 ✅；残留 project_table/price_table 不截断 |
+| Phase 8 | analyze_data/upload_data_file 合规确认 | ✅ 完成（被后续演进吸收） | 两工具后续持续演进（产物复用 c36590bd 等），维持正面标杆 |
+| Phase 9 | create/manage_scheduled_task | 🔧 部分残留（降级为小项） | debug 字段仍在返回值（scheduled_task_tool.py:203-270，已加 sanitize+截断但违反规范「禁止 debug 字段」） |
+| Phase 10 | ai_call | 🔧 部分残留（降级为小项） | echo phone/lead_id/call_purpose（ai_call_tool.py:25-27）、mock=True 进返回值（:88） |
+| Phase 11 | ppt_process | ✅ 基本完成 | desc 303 字符（原 ~1050），cp 注册已并入 description（026ca30b 新架构）；是否再压缩随规范修订统一评估 |
+
+### 2026-10 复核结论
+
+任务停滞于 2026-07-15（commit a17443d5）。2026-08-05 commit `026ca30b`（提示词压缩重构）**反转了本计划的核心机制**：usage_guide 独有内容被合并进 description 并清空，工具说明统一走 tools 参数 description 通道——原「desc ≤80 字符 + 教程迁 usage_guide」的迁移方案不再成立。由此：
+
+1. **规范修订（✅ 2026-10-09 完成）**：[tool-development-spec.md](./tool-development-spec.md) 已按新架构修订——description 唯一通道、usage_guide 停用、补齐大内容落盘闭环契约（含落盘计划 Phase D 的 spec 章节）。
+2. **仍有效开发项**：Phase 3c 已于 2026-10-10 完成（工作流三角色闭环，全量工具单测全绿）；剩余 Phase 6 的 word/excel to_md/diff 全文回塞改走 _spill 落盘闭环。
+3. **小项清理清单**（合并为一次清理即可）：cp resolved_source echo、ai_call 3 参数 echo + mock 标记、email_send details echo、content_generate language echo、email_read few-shot 文案、scheduled_task debug 字段、attraction/hotel table 截断。
+
 ## 排序原则
 
 1. **先删后改**：先把待删除工具清掉，减少干扰。
@@ -13,9 +41,9 @@
 3. **试点先行**：`http_api` + `pdf_process` 最早做，用 token 对比 + 人工抽检验证规范有效，再铺开。
 4. **闭环优先**：Phase 2 试点只做了截断（信息黑洞），Phase 3 立即补齐「落盘 + read/grep 回读」闭环 + 新增 grep 工具 + 文件工具对齐 Claude Code（offset 1-based、replace_all）。这是基础设施级改造，优先于其他高频工具的纯 token 优化。
 5. **按使用频率排优先级**（高频优先，低频末尾）：
-   - **高频梯队**：文件四件套（read/write/edit/cp）+ grep、knowledge_base_search、content_generate、email 三件套、word/excel_process
-   - **中频梯队**：attraction/hotel_search、web_search、analyze_data/upload_data_file
-   - **低频梯队（放最后）**：browser_automation、create/manage_scheduled_task、ai_call、transfer_to_human、ppt_process（paddleocr 已在 Phase 2 提前完成）
+   - **高频梯队**：文件四件套（read/write/edit/cp）+ grep、content_generate、email 三件套、word/excel_process
+   - **中频梯队**：attraction/hotel_search、analyze_data/upload_data_file
+   - **低频梯队（放最后）**：create/manage_scheduled_task、ai_call、ppt_process（paddleocr 已在 Phase 2 提前完成）
 6. **依赖就近**：`paddleocr_doc_parsing` 被 `pdf_process.ocr` 内部调用，已在 Phase 2 提前完成。
 
 ## 全局里程碑
@@ -25,10 +53,10 @@
 | M0 清理 | Phase 0 | upload_to_remote 从代码库彻底移除 ✅ |
 | M1 规范 | Phase 1 | 工具开发规范文档落地 + BaseTool 公共能力可用 ✅ |
 | M2 试点 | Phase 2 | http_api + pdf_process + paddleocr 改造完成，token 对比达标 ✅ |
-| M2.5 闭环 | Phase 3a-3b | **落盘闭环基建 + 回填 Phase 2 落盘 + 新增 grep**，agent 能 read/grep 回读被截断内容 |
-| M3 高频 | Phase 3c-7 | 文件工具对齐 Claude Code（offset 1-based、replace_all）+ 高频梯队全部符合规范 |
-| M4 中频 | Phase 8-10 | 中频梯队全部符合规范 |
-| M5 低频 | Phase 11-15 | 低频梯队全部符合规范，整体收尾（原 Phase 15 paddleocr 已并入 Phase 2） |
+| M2.5 闭环 | Phase 3a-3b | **落盘闭环基建 + 回填 Phase 2 落盘 + 新增 grep**，agent 能 read/grep 回读被截断内容 ✅（Phase D 端到端验收未留记录，见落盘计划） |
+| M3 高频 | Phase 3c-6 | 3c ✅ 完成（2026-10-10）；3d 基本完成；4/5/6 部分残留降级小项 |
+| M4 中频 | Phase 7/8 | 2026-10 复核：7 部分残留降级小项；8 已被后续演进吸收 |
+| M5 低频 | Phase 9/10/11 | 2026-10 复核：9/10 部分残留降级小项；11 基本完成 |
 
 ---
 
@@ -140,17 +168,7 @@ Phase 2 只截断没落盘，本步回填：
 
 ---
 
-## Phase 4 — 高频：`knowledge_base_search`
-
-- 每条返回的 `text`（完整 chunk，不截断）加字符截断
-- `metadata` 改为按需提取单字段（doc_title 等有用项），不再整体透传
-- `top_k` 默认值从 10 下调到 5
-
-**验收**：符合规范 + 检索结果质量人工抽检（命中未因 top_k 下调而显著变差）。
-
----
-
-## Phase 5 — 高频：`content_generate`
+## Phase 4 — 高频：`content_generate`
 
 - `prompt` 参数 description 内嵌的 5 要素教学说明迁移到 usage_guide（或精简）
 - usage_guide 中 ~15 行完整邮件示例 prompt 精简（每轮常驻注入，压减固定成本）
@@ -160,7 +178,7 @@ Phase 2 只截断没落盘，本步回填：
 
 ---
 
-## Phase 6 — 高频：email 三件套 `email_send` / `email_read` / `email_list_folders`
+## Phase 5 — 高频：email 三件套 `email_send` / `email_read` / `email_list_folders`
 
 - **email_read**：`limit` / `unseen_only` 的 Field description few-shot（"查询近期邮件时建议…"、"用户问…时设 True"）迁移到 usage_guide
 - **email_send**：返回值 `details` 去 echo（to/cc/subject 回显）
@@ -170,7 +188,7 @@ Phase 2 只截断没落盘，本步回填：
 
 ---
 
-## Phase 7 — 高频：`word_process` + `excel_process`
+## Phase 6 — 高频：`word_process` + `excel_process`
 
 - 两者 `description`（word ~900、excel ~1050 字符）瘦身到 ≤ 80 字符；触发规则、excel 负面清单、cp 注册迁移到 usage_guide
 - `word_to_md` / `excel.to_md` 返回值不再回塞全文 markdown，改为元信息 + preview + 文件路径
@@ -181,26 +199,17 @@ Phase 2 只截断没落盘，本步回填：
 
 ---
 
-## Phase 8 — 中频：`attraction_search` + `hotel_search`
+## Phase 7 — 中频：`attraction_search` + `hotel_search`
 
 - `project_table` / `price_table`（不截断裸传）加字符截断
 - `top_k` 默认值从 20 下调到 5-8
-- 复用 Phase 4 的截断/精简模式
+- 复用[规范](./tool-development-spec.md) §1.3 的截断模式
 
 **验收**：符合规范 + 旅游顾问子智能体报价流程抽检正常。
 
 ---
 
-## Phase 9 — 中频：`web_search`
-
-- 删除未使用的 `limit` 死参数（与 `max_results` 语义重叠，从不消费）
-- `message` 中文话术精简或移除
-
-**验收**：符合规范 + 搜索结果抽检正常。
-
----
-
-## Phase 10 — 中频：`analyze_data` + `upload_data_file`
+## Phase 8 — 中频：`analyze_data` + `upload_data_file`
 
 审查为低风险（已是正面标杆），本 Phase 主要是**对照规范确认符合性**，仅做轻微调整：
 - 确认 `analysis_meta`、table artifact preview 符合截断规范
@@ -210,22 +219,7 @@ Phase 2 只截断没落盘，本步回填：
 
 ---
 
-## Phase 11 — 低频：`browser_automation`
-
-> 频率低但 token 风险🔴高，放低频梯队但仍需认真改。
-
-- 删除返回值 `message = result` 的**完全重复**（整页 markdown ≤ 5 万字符双份占用）
-- `result`（done 时整页 markdown）加截断
-- `steps` 完整历史（最长 30 步）精简或截断
-- 返回值 echo 的 `task` 输入字段去除
-- description（~400 字符，含 3 个 task 示例）瘦身，示例迁移到 usage_guide
-- `ask_user` 状态注入的 `instruction` 引导文字审视必要性
-
-**验收**：符合规范 + 浏览器自动化任务抽检正常。
-
----
-
-## Phase 12 — 低频：`create_scheduled_task` + `manage_scheduled_task`
+## Phase 9 — 低频：`create_scheduled_task` + `manage_scheduled_task`
 
 > 用户明确要求放后面。
 
@@ -236,7 +230,7 @@ Phase 2 只截断没落盘，本步回填：
 
 ---
 
-## Phase 13 — 低频：`ai_call`
+## Phase 10 — 低频：`ai_call`
 
 - 返回值 echo 的 3 个输入参数（phone/lead_id/call_purpose）去除
 - `mock` debug 标记移到日志，不进返回值
@@ -245,19 +239,9 @@ Phase 2 只截断没落盘，本步回填：
 
 ---
 
-## Phase 14 — 低频：`transfer_to_human`
+## Phase 11 — 低频：`ppt_process`
 
-- description（~200 字符，适用/不适用场景 + 调用后指引 4 条）迁移到 usage_guide（当前刻意留空，设计自相矛盾）
-- 各失败分支的 `hint` 引导文字审视：保留对纠错必要的，去纯话术
-
-**验收**：符合规范 + 转人工流程抽检正常。
-
----
-
-## Phase 15 — 低频：`ppt_process`
-
-> `paddleocr_doc_parsing` 已在 Phase 2 提前完成，原 Phase 15 取消，本 Phase 顺延。
-> ppt_process 返回值已干净（正面标杆之一），本 Phase 主要是 description 瘦身。
+> `paddleocr_doc_parsing` 已在 Phase 2 提前完成。ppt_process 返回值已干净（正面标杆之一），本 Phase 主要是 description 瘦身。
 
 - description（~1050 字符，含嵌套 cp 调用示例代码）瘦身，cp 注册迁移到 usage_guide
 - 复用其 `_format_user_error` 脱敏机制作为规范参照（已在 Phase 1 提取为公共能力）
@@ -266,21 +250,8 @@ Phase 2 只截断没落盘，本步回填：
 
 ---
 
-## 时间预估（粗略）
-
-| 批次 | Phase | 预估 |
-|------|-------|------|
-| M0-M1 清理+规范 | 0-1 | 1-1.5 天 |
-| M2 试点 | 2 | 1-2 天（含 token 对比验收） |
-| M3 高频 | 3-7 | 3-4 天 |
-| M4 中频 | 8-10 | 1-1.5 天 |
-| M5 低频 | 11-16 | 2-3 天 |
-
-> 每个 Phase 含三智能体流程（开发 → 测试 → CodeReview），预估含来回。实际依改造复杂度浮动。
-
 ## 风险与回滚
 
 - **每个工具独立 Phase**：一旦某工具改造引入回归，可单独回滚，不影响其他。
-- **试点 gate 是硬门槛**：token 对比不达标不铺开，避免错误模式扩散到 16 个工具。
-- **截断阈值需联调校准**：规范里的 2000/5000 字符是初值，试点阶段据实调整后写进规范。
-- **文档同步**：每个 Phase 完成后更新 `docs/ideas.md` #34 条目状态，并在 design 文档速查表标注该工具已优化。
+- **试点 gate 是硬门槛**：token 对比不达标不铺开（Phase 2 已达标通过）。
+- **截断阈值以规范为准**：2000/5000 字符初值经试点校准后已写入 [tool-development-spec.md](./tool-development-spec.md)，全文类超限同时要求落盘闭环。

@@ -4,6 +4,17 @@
 >
 > 本计划把「落盘闭环 + grep 工具」拆为 4 个 Phase，串行推进。**第一个拿 http_api 开刀**——它既是信息黑洞最严重的工具，也是「智能复用决策」的试验田。
 
+## 开发进度
+
+| 阶段 | 内容 | 状态 | 完成记录 |
+|------|------|------|---------|
+| Phase A | 基建：_spill + grep + Dockerfile rg | ✅ 完成（2026-07） | commit a71208d5 |
+| Phase B | http_api 落盘 + 智能复用决策提示 | ✅ 完成（2026-07） | commit b39243ec，spill_large_content 已接入 http_api.py |
+| Phase C | pdf/paddleocr 回填落盘 | ✅ 完成（2026-07-15） | commit a17443d5，spill 已接入 pdf_process_tool.py |
+| Phase D | 端到端验收 + spec 补落盘章节 | 🔧 收尾中（2026-10 复核） | spec 已补「截断 + 落盘闭环」契约（2026-10-09 随规范修订完成，见 [tool-development-spec.md](./tool-development-spec.md) §1.3）；仅剩端到端验收（大响应→落盘→grep→read）无记录，随主计划 Phase 6 word/excel 落盘改造一并补 |
+
+> 2026-10 复核备注：Phase A-C 代码均在位，闭环模式将由主计划 Phase 6 剩余项（word/excel to_md/diff 落盘）继续复用；Phase D 的 spec 章节已随规范修订完成，端到端验收并入 Phase 6 改造一并验证。
+
 ## 依赖链与推进顺序
 
 ```

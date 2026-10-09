@@ -8,8 +8,10 @@
 
 | # | 优化项 | 状态 | 类型 |
 |---|--------|------|------|
-| 1 | `upload_to_remote` 工具直接删除 | 📋 待开发 | 工具移除 |
-| 2 | 工具输入/输出 Token 效率审查与统一规范 | 📋 待开发 | 跨工具 token 治理 |
+| 1 | `upload_to_remote` 工具直接删除 | ✅ 已完成（commit 516bad7a） | 工具移除 |
+| 2 | 工具输入/输出 Token 效率审查与统一规范 | 🔧 部分完成（2026-10 复核：剩余项收敛，见[开发计划复核结论](./tool-overall-optimization-dev-plan.md#2026-10-复核结论)） | 跨工具 token 治理 |
+
+> **2026-10 复核备注**：本文 #2 的问题清单与速查表是 **2026-07 审计时点快照**，未随代码演进更新；后续 026ca30b（提示词压缩重构）反转了「教程迁 usage_guide」机制（usage_guide 已并入 description 并清空），多轮工具重构已消除部分问题，已失效/被覆盖工具的条目连同引用已删除。各项当前真实状态以[开发计划进度表](./tool-overall-optimization-dev-plan.md#开发进度)为准，统一规范以[工具开发规范](./tool-development-spec.md)（2026-10 修订）为准，不要按本文直接判断代码现状。
 
 ---
 
@@ -100,19 +102,16 @@ LLM 每轮对话都会消耗两类工具 token：① **工具 schema**（`descri
 | 工具 | 问题 | 位置 |
 |------|------|------|
 | **http_api** | JSON 响应 `data` 字段**零大小限制**（text 有 5000 字符截断、error 有 500 字符截断，唯独 JSON 无防护） | `src/tools/network/http_api.py:273` |
-| **browser_automation** | `done` 时回传整页 markdown（上限 5 万字符），且 `result` 与 `message` **完全重复存两份**；`steps` 完整回传最长 30 步历史 | `orchestrator.py:490-495,768,781` |
 | **paddleocr_doc_parsing** | 同一份 OCR 结果以 `texts`(数组) + `full_text`(拼接串) + `result`(原始API响应) **三重复制**塞回 | `src/tools/ocr/ocr_tool.py:297-303` |
 | **pdf_process** | read/ocr/pdf_to_md 回塞全文；`read_tables` 回塞完整表格数组 | `src/tools/pdf/pdf_process_tool.py:371-383` |
 | **word_process** | `word_to_md` 回塞完整 markdown；diff 回塞完整 diff_text+changes+summary | `src/tools/word/word_process_tool.py:432-444` |
 | **excel_process** | `to_md` 回塞完整表格 markdown | `src/tools/excel/excel_process_tool.py:355-370` |
-| **knowledge_base_search** | 每条返回**完整 chunk 文本（不截断）** + 完整 metadata dict 原样透传；默认 top_k=10 | `src/tools/knowledge/knowledge_base_tool.py:143,146` |
 | **attraction_search** / **hotel_search** | `project_table` / `price_table` **不截断**裸传；默认 top_k=**20** | `attraction_search_tool.py:145` / `hotel_search_tool.py:191` |
 
 **统一规范建议**：
 - 所有文本型返回字段统一加字符上限（建议：单字段 ≤ 2000 字符，全文类 ≤ 5000 字符，超出时返回截断 + `truncated: true` 标记，参照 `x_to_image` 的做法）。
-- 知识库类默认 `top_k` 下调到 5；`*_table` 字段必须截断。
+- `*_table` 字段必须截断。
 - `http_api` 的 JSON 响应补齐截断（与 text 一视同仁）。
-- `browser_automation` 删除 `message=result` 重复；`result` 加截断。
 - `paddleocr_doc_parsing` 删除冗余的 `result` 原始响应字段，保留 `full_text`（已截断）即可。
 - 读取类工具（word/excel/pdf 的 to_md/read）回塞全文的设计应改为「返回行数/页数元信息 + 可选 preview（前 N 行），全文走文件路径让 LLM 按需 `read`」。
 
@@ -126,18 +125,15 @@ LLM 每轮对话都会消耗两类工具 token：① **工具 schema**（`descri
 | **excel_process** | ~1050 字符 | 触发规则 + 「不要调用本工具」负面清单 + cp 注册 |
 | **ppt_process** | ~1050 字符 | cp 注册 + **嵌套完整 cp 调用示例代码** |
 | **word_process** | ~900 字符 | 触发规则 + cp 注册（占近 1/3） |
-| **transfer_to_human** | ~200 字符 | 适用/不适用场景 + 调用后行为指引（4 条），而 `usage_guide` 刻意留空 |
 | **read** | ~19 行 | 3 种读取模式教程 + 大文件建议 + SKILL_ROOT 注释 |
 | **write/edit/cp** | ~20 行 | 调用示例 + 参数说明（与 Field description 逐条重复） |
 | **create_scheduled_task** | 含「必须先向用户确认」「禁止自行猜测」强制指令 | 指令污染 |
-| **browser_automation** | ~400 字符（含 3 个 task 示例） | 适用场景 + 使用方式 + 注意事项 |
 | **email_read** | （短，但参数描述） | `limit`/`unseen_only` 的 Field description 混入调参 few-shot |
 
-**统一规范建议**：
-- `description` 限一句话功能说明（建议 ≤ 80 字符），仅说明「做什么」+「何时触发」。
-- 所有「如何调用」「参数怎么填」「不要怎么用」「调用后要 cp 注册」等教程**统一收归 `usage_guide`**（仍是常驻注入，但集中管理、避免与 schema 重复）。
+**统一规范建议**（以 [tool-development-spec.md](./tool-development-spec.md) 现行版为准）：
+- `description` 是工具说明唯一通道：功能 + 触发场景 + 必要教程/约束，能短则短，与 Field description 及系统提示词模板零重复。
 - Field description 只描述字段本身（类型/含义/默认值），**禁止写调参示例、few-shot、业务背景**。
-- cp 注册提醒是跨工具复用的高频内容，建议提取为统一的 BaseTool 提示片段或固化进相关工具 usage_guide，而非在每个 description 里重复一遍。
+- cp 注册提醒等跨工具复用内容不逐工具重复——可利用系统提示词模板统一承载一次，或并入各工具 description 紧凑表述。
 
 #### 问题 C：错误路径泄漏 `debug` 字段 / traceback（含安全风险）
 
@@ -163,17 +159,14 @@ LLM 每轮对话都会消耗两类工具 token：① **工具 schema**（`descri
 |------|------|
 | **email_send** | `details` echo 回 to/cc/subject |
 | **ai_call** | echo 回 phone/lead_id/call_purpose + `mock` debug 标记 |
-| **browser_automation** | echo 回 `task` 输入 |
 | **cp** | `resolved_source` 重复 source_file_path |
 | **content_generate** | echo 回 language/content_type + 固定 `message` |
 | **create/manage_scheduled_task** | `message` 与已有字段拼接重复 |
-| **web_search** | `limit` 参数定义了却从不消费（死参数）；`message` 中文话术 |
 | **email_list_folders** | `original_name`（modified UTF-7）debug 级字段对 LLM 无用 |
 
 **统一规范建议**：
 - 成功返回只带 LLM 无法从调用本身得知的**新信息**（生成的路径、行数、count、id、状态）。禁止 echo 输入参数。
 - 删除纯话术 `message`，或仅保留真正承载新信息的 message。
-- `web_search` 删除未使用的 `limit` 死参数。
 - `ai_call` 的 `mock` 标记应走日志而非返回值。
 
 #### 问题 E：条件必填参数全标 Optional（低风险，影响 schema 准确性）
@@ -187,16 +180,13 @@ LLM 每轮对话都会消耗两类工具 token：① **工具 schema**（`descri
 | 工具 | 风险 | 首要问题 |
 |------|------|------|
 | **http_api** | 🔴高 | JSON 响应无大小限制，外部大响应整体灌入 |
-| **browser_automation** | 🔴高 | result=message 双份；整页 markdown(≤5万字符)；steps 全历史；description 最长 |
 | **paddleocr_doc_parsing** | 🔴高 | 三重复制（texts+full_text+result）+ debug 字段 |
 | **pdf_process** | 🔴高 | description 最长；read/ocr/to_md 回塞全文；透传 OCR 全文 |
-| **knowledge_base_search** | 🔴高 | chunk 文本不截断 + metadata 整体透传 |
 | **attraction_search** | 🔴高 | project_table 不截断 × top_k=20 |
 | **hotel_search** | 🔴高 | price_table 不截断 × top_k=20 |
 | **word_process** | 🟠中高 | description 教程化；word_to_md/diff 回塞全文 |
 | **excel_process** | 🟠中高 | description 含负面清单；to_md 回塞表格 |
 | **upload_to_remote** | 🔴高 | debug 回显明文密码（随 #1 工具删除一并解决） |
-| **transfer_to_human** | 🔴高 | description 塞场景教程；hint 引导文字；usage_guide 留空 |
 | **create_scheduled_task** | 🟠中 | description 指令污染；错误 debug 字段；message 重复 |
 | **manage_scheduled_task** | 🟠中 | list 返回 message+tasks 双重数据；错误 debug |
 | **read** | 🟠中 | description 教程化 + Field desc 重复 |
@@ -206,7 +196,6 @@ LLM 每轮对话都会消耗两类工具 token：① **工具 schema**（`descri
 | **email_send** | 🟠中 | details echo 输入参数 |
 | **email_read** | 🟠中 | limit/unseen_only Field description 混入 few-shot |
 | **ai_call** | 🟠中 | echo 3 个输入参数 + mock 标记 |
-| **web_search** | 🟡低中 | limit 死参数；message 中文话术 |
 | **email_list_folders** | 🟡低 | original_name debug 字段；message 重复 |
 | **content_generate** | 🟡低 | prompt 参数 description 教程化；usage_guide 示例偏长 |
 | **ppt_process** | 🟡低 | description 偏长但返回值干净；错误处理是正面标杆 |
@@ -214,29 +203,11 @@ LLM 每轮对话都会消耗两类工具 token：① **工具 schema**（`descri
 | **upload_data_file** | 🟢优 | 仅返回元信息，不 echo 数据 |
 | **x_to_image** | 🟢优 | description 简短、返回纯元信息、不回塞内容 |
 
-### 统一规范（新工具 + 重构旧工具共同遵循）
+### 统一规范与实施优先级
 
-| 维度 | 规范 |
-|------|------|
-| `description` | 一句话功能 + 触发场景，≤ 80 字符。禁止教程/示例/指令 |
-| Field description | 只描述字段本身（类型/含义/默认/枚举值）。禁止 few-shot/业务背景 |
-| `usage_guide` | 集中放调用教程、cp 注册提醒、负面清单。仍常驻注入但避免与 schema 重复 |
-| 文本返回字段 | 统一字符上限（单字段 ≤2000，全文类 ≤5000），超出返回截断 + `truncated:true` |
-| 错误返回 | 仅 `{"success":False,"error":"<脱敏一句话>"}`。**禁止 debug/traceback/kwargs** |
-| 成功返回 | 只带新信息（路径/行数/count/id/状态）。**禁止 echo 输入参数**、禁止纯话术 message |
-| 参数约束 | 条件必填用 `model_validator` + `Literal` 枚举，让 schema 自描述 |
-
-### 实施建议
-
-按「影响 × 成本」分批，不在本轮开发：
-
-- **P0（安全 + 高频黑洞，优先）**：upload_to_remote（随 #1 删除）、http_api JSON 截断、browser_automation 删重复+截断、paddleocr 删三重复制。
-- **P1（搜索类默认值 + 截断）**：knowledge_base_search / attraction_search / hotel_search 的 top_k 与 table 截断。
-- **P2（description/usage_guide 文案治理）**：文档四件套、transfer_to_human、read/write/edit/cp、create_scheduled_task 的 description 瘦身 + 教程迁移。
-- **P3（低风险清理）**：echo 输入、debug 字段、死参数、条件必填参数。
+统一规范不再在本文维护（历史版本曾规定「description ≤80 字符 + 教程迁 usage_guide」，已被 026ca30b 架构反转取代），以 [tool-development-spec.md](./tool-development-spec.md)（2026-10 修订：description 唯一通道、usage_guide 停用、大内容落盘闭环）为准。剩余待修项范围与优先级见[开发计划 2026-10 复核结论](./tool-overall-optimization-dev-plan.md)。
 
 ### 非目标
 
 - 不改变工具的核心功能语义（read 还是读文件、http_api 还是调 API）。
-- 截断阈值的具体数值（2000/5000）待联调时按实际场景校准。
 - 本轮只做审查与规范登记，不做代码改动。
