@@ -57,6 +57,7 @@
 - 新增调研报告 → 登记到 [docs/research_index.md](docs/research_index.md)（调研报告索引）
 - 新增设计文档 → 在 `docs/ideas.md` 对应分区添加条目，关联设计文档链接
 - 新增开发计划 → 在对应条目补充开发计划链接
+- 新增故障复盘 → 登记到 [docs/incidents/index.md](docs/incidents/index.md)（故障复盘索引，复盘文档存放于 `docs/incidents/`，不进 ideas 索引；修复开发任务按常规条目登记并关联复盘链接）
 
 **不得遗漏登记**，`docs/ideas.md` 与 `docs/ideas_finished.md` 共同维护进行中和已完成事项的索引；单纯修订 AGENTS.md、规则或 skill 不要求虚构功能条目。
 
