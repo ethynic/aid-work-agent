@@ -1198,6 +1198,22 @@
     -- Browser baseline audit compatibility and mandatory Runner owner linkage.
     -- One DO is one savepoint in the existing incremental migration driver: any
     -- incompatible catalog rolls back this whole Browser block, not partial DDL.
+    -- Legacy tables were created with lease_until/available_at as TIMESTAMP
+    -- (pre-M0-M7); the spec validation below requires TIMESTAMPTZ strictly.
+    -- Convert existing columns first; guarded so reruns never convert back.
+    DO $$
+    BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name='bs_browser_resume_jobs' AND column_name='lease_until'
+                     AND data_type='timestamp without time zone') THEN
+            EXECUTE 'ALTER TABLE bs_browser_resume_jobs ALTER COLUMN lease_until TYPE timestamptz USING lease_until AT TIME ZONE ''Asia/Shanghai''';
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name='bs_browser_resume_jobs' AND column_name='available_at'
+                     AND data_type='timestamp without time zone') THEN
+            EXECUTE 'ALTER TABLE bs_browser_resume_jobs ALTER COLUMN available_at TYPE timestamptz USING available_at AT TIME ZONE ''Asia/Shanghai''';
+        END IF;
+    END $$;
     DO $$
     DECLARE
         spec RECORD;
