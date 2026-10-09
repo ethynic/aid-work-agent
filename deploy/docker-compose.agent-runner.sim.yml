@@ -1,0 +1,129 @@
+# ============================================================================
+# 仿真环境（staging）AgentRunner overlay —— 与 docker-compose.sim.yml 叠加使用
+#
+# 用法（在仿真根目录 /var/www/agent1 执行）：
+#   docker compose -f docker-compose.sim.yml -f docker-compose.agent-runner.sim.yml up -d
+#   docker compose -f docker-compose.sim.yml -f docker-compose.agent-runner.sim.yml stop
+#
+# sim.sh / agent1_update.sh 检测到本文件（根级副本）存在时自动叠加并管理
+# runner 服务；删除根级副本即回到「仅 api 容器」形态。
+# 部署前提与核查项见 deploy/agent-runner-deploy-checklist.md。
+#
+# 与生产 overlay（docker-compose.agent-runner.yml）的差异：
+#   - restart: "no"（仿真按需启停，对齐 docker-compose.sim.yml 的 api 服务）
+#   - 容器名带 1 后缀（aid-runner-api1 / aid-runner-worker1），
+#     避免与生产未来部署的 aid-runner-api / aid-runner-worker 同主机冲突
+#   - 网络/卷路径对齐 docker-compose.sim.yml（agent_default 外部网络、
+#     附件共享生产目录、SIMULATION_MODE=1 门控随 .env 注入）
+#   - 主 API 容器经 .env 注入 AGENT_RUNNER_API_URL 与
+#     AGENT_RUNNER_WEB_SERVICE_TOKEN（web_client 直读 os.environ，
+#     由 sim.yml api 服务的 env_file: .env 全量注入，无需在此 patch api 服务）
+#
+# ⚠️ 前提（deploy/agent-runner-deploy-checklist.md）：runner-api/worker 启动仅
+#   assert_schema 断言五张 agent_runner* 表（不建表），缺表以
+#   AGENT_RUNNER_SCHEMA_REQUIRED 失败退出；worker 启动门槛要求
+#   agent_runner.enabled=true 且全部 peer 均有 token_hash（configs/config.yaml）。
+# ============================================================================
+
+networks:
+  aid-prod-net:
+    external: true
+    name: ${SIM_EXTERNAL_NETWORK:-agent_default}
+
+services:
+  # AgentRunner 独立 API：接单/事件/控制 HTTP 面（8091），不执行任务。
+  # 与主 API/worker 共享数据库与 storage 挂载；不迁移、不建表。
+  runner-api:
+    image: aid-agent-api:latest
+    container_name: aid-runner-api1
+    restart: "no"                    # 仿真按需启停，不随机自启
+    mem_limit: 1g
+    env_file:
+      - .env
+    environment:
+      # 运维识别标签（应用不读取），先例：background 的 SERVER_MODE=background
+      - SERVER_MODE=agent-runner-api
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # 指向 compose 服务名（127.0.0.1:8091 仅单机同进程形态可用）；
+      # 消费者是主 API 容器的 web_client（经 .env 注入同值），本服务自身不调用
+      - AGENT_RUNNER_API_URL=http://runner-api:8091
+      # 共享产物路径显式注入：storage 根 = src/core/storage.py::configured_storage_root
+      - AGENT_RUNNER_STORAGE_ROOT=/app/storage
+      # worker 侧 RuntimeFactory 资源目录（storage/agent_runner，同挂载卷内）
+      - AGENT_RUNNER_RESOURCE_DIR=/app/storage/agent_runner
+    # 覆盖镜像默认 gunicorn 入口：直接跑 bootstrap（uvicorn 单进程）。
+    # config.yaml agent_runner.host 为 127.0.0.1，容器内须 --host 0.0.0.0
+    # 才能被同网络服务按服务名访问。fix_tmp.sh + gosu 降权沿用生产先例。
+    entrypoint: ["sh", "-c"]
+    command: ["/usr/local/bin/fix_tmp.sh && exec gosu appuser python -m src.services.agent_runner.bootstrap --host 0.0.0.0 --port 8091"]
+    volumes:
+      - /var/www/agent1:/app
+      - /var/www/agent1/log:/app/log
+      - /var/www/agent1/configs:/app/configs
+      - /var/www/agent1/skills:/app/skills
+      # 附件共享生产目录（读写；删除/覆盖由 SIMULATION_MODE 门控跳过）
+      - /var/www/qb3_upload/agent_uploads:/app/uploads
+      - /var/www/qb3_upload/agent_storage:/app/storage
+    tmpfs:
+      - /tmp:size=200m,mode=1777
+    networks:
+      - aid-prod-net
+    # /health 仅报告进程与 enabled 状态，不代表 DB/lease 健康（清单 §4）
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8091/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # AgentRunner 执行 worker：认领/心跳/执行/恢复，全部经共享数据库，不监听 HTTP。
+  # 内存口径对齐 aid-agent-api1（加载整套 Agent 运行时）。
+  runner-worker:
+    image: aid-agent-api:latest
+    container_name: aid-runner-worker1
+    restart: "no"
+    mem_limit: 4g
+    # 先起独立 API（schema 断言/接单面就绪）再起 worker；只为启动顺序确定性，
+    # 不构成运行时耦合（worker 只访问 DB，不调用 API）
+    depends_on:
+      runner-api:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - SERVER_MODE=agent-runner-worker
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - AGENT_RUNNER_API_URL=http://runner-api:8091
+      - AGENT_RUNNER_STORAGE_ROOT=/app/storage
+      - AGENT_RUNNER_RESOURCE_DIR=/app/storage/agent_runner
+    entrypoint: ["sh", "-c"]
+    command: ["/usr/local/bin/fix_tmp.sh && exec gosu appuser python -m src.services.agent_runner.worker"]
+    volumes:
+      - /var/www/agent1:/app
+      - /var/www/agent1/log:/app/log
+      - /var/www/agent1/configs:/app/configs
+      - /var/www/agent1/skills:/app/skills
+      - /var/www/qb3_upload/agent_uploads:/app/uploads
+      - /var/www/qb3_upload/agent_storage:/app/storage
+    tmpfs:
+      - /tmp:size=200m,mode=1777     # worker 执行 Browser 工具（Playwright/Chromium）需要可写 /tmp
+    networks:
+      - aid-prod-net
+    # worker 无 HTTP/心跳端点，只能 pgrep 进程判活（[.] 防自匹配）；
+    # 仅证明进程存活，不证明 lease/执行健康（清单 §4）
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'src[.]services[.]agent_runner[.]worker' >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

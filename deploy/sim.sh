@@ -131,6 +131,15 @@ fi
 #   复现模式（本脚本）= 与生产代码一致；验证模式 = agent1_update.sh（git reset 到 master/指定提交）
 PROD_DIR="/var/www/agent"
 SIM_DIR="/var/www/agent1"
+
+# compose 命令封装：根级存在 runner overlay（docker-compose.agent-runner.sim.yml，
+# 由 deploy/ 版本复制，见下方代码同步步骤）时自动叠加并统一管理 runner 容器；
+# 删除根级 overlay 副本即回到「仅 api 容器」形态
+sim_compose() {
+  local args=(-f docker-compose.sim.yml)
+  [[ -f "$SIM_DIR/docker-compose.agent-runner.sim.yml" ]] && args+=(-f docker-compose.agent-runner.sim.yml)
+  (cd "$SIM_DIR" && docker compose "${args[@]}" "$@")
+}
 RSYNC_EXCLUDES=(
   --exclude='.env' --exclude='.git/' --exclude='.db_passwords'
   --exclude='log/' --exclude='configs/' --exclude='plans/'
@@ -162,13 +171,14 @@ else
     # 而它在仓库里位于 deploy/（生产无根级同名文件，rsync --delete 会清掉根级手工副本），
     # 故每次同步后从仓库版本重新部署，根目录副本视为构建产物，不手工维护
     sudo cp "$SIM_DIR/deploy/docker-compose.sim.yml" "$SIM_DIR/docker-compose.sim.yml"
+    sudo cp "$SIM_DIR/deploy/docker-compose.agent-runner.sim.yml" "$SIM_DIR/docker-compose.agent-runner.sim.yml"
 
     log "configs 差异核对（仿真独立维护，仅提示不覆盖）:"
     sudo diff -rq "$PROD_DIR/configs" "$SIM_DIR/configs" 2>/dev/null | sed 's/^/  /' || true
 
     if [[ -n "$(docker ps --filter name=^aid-agent-api1$ --filter status=running -q)" ]]; then
-      log "重启仿真容器 aid-agent-api1..."
-      (cd "$SIM_DIR" && docker compose -f docker-compose.sim.yml restart)
+      log "重启仿真容器（aid-agent-api1 及已启用的 runner 容器）..."
+      sim_compose restart
       HEALTH_OK=0
       for i in $(seq 1 24); do
         if curl -sf http://localhost:8010/health >/dev/null; then HEALTH_OK=1; break; fi
@@ -177,7 +187,7 @@ else
       [[ $HEALTH_OK -eq 1 ]] && log "仿真环境健康检查通过 (localhost:8010/health)" \
         || warn "健康检查超时（120s），请查看 docker logs aid-agent-api1"
     else
-      log "仿真容器未运行，跳过重启（需要时: cd $SIM_DIR && docker compose -f docker-compose.sim.yml up -d）"
+      log "仿真容器未运行，跳过重启（需要时: cd $SIM_DIR && docker compose -f docker-compose.sim.yml [-f docker-compose.agent-runner.sim.yml] up -d）"
     fi
   fi
 fi
@@ -376,8 +386,8 @@ if [[ $FULL_MODE -eq 1 ]]; then
 
   # 先停仿真容器，避免 DROP 库后应用半路连接报错
   if [[ -n "$(docker ps --filter name=^aid-agent-api1$ --filter status=running -q)" ]]; then
-    log "停止仿真容器 aid-agent-api1（还原完成后自动重启）..."
-    (cd "$SIM_DIR" && docker compose -f docker-compose.sim.yml stop api)
+    log "停止仿真容器（aid-agent-api1 及已启用的 runner 容器，还原完成后自动重启）..."
+    sim_compose stop
   fi
 
   log "重建仿真库 $SIM_DB（DROP + CREATE，编码/排序规则对齐生产库）..."
@@ -501,8 +511,8 @@ fi
 
 # ---------- 启动仿真容器（渠道配置就绪后再拉起；up -d 幂等） ----------
 if [[ $FULL_MODE -eq 1 ]]; then
-  log "启动仿真容器 aid-agent-api1..."
-  (cd "$SIM_DIR" && docker compose -f docker-compose.sim.yml up -d api)
+  log "启动仿真容器（aid-agent-api1 及已启用的 runner 容器）..."
+  sim_compose up -d
   HEALTH_OK=0
   for i in $(seq 1 24); do
     curl -sf http://localhost:8010/health >/dev/null 2>&1 && { HEALTH_OK=1; break; }
@@ -542,4 +552,4 @@ else
   for c in "${SYNCED_COUNT[@]:-}"; do TOTAL_ROWS=$((TOTAL_ROWS + ${c:-0})) ; done
   log "同步完成: $(echo "${!SYNCED_COUNT[@]}" | wc -w) 张表 / $TOTAL_ROWS 行 / 耗时 ${ELAPSED}s"
 fi
-log "仿真环境已就绪: http://localhost:8010（用完可 docker compose -f docker-compose.sim.yml stop 停止）"
+log "仿真环境已就绪: http://localhost:8010（用完可 cd $SIM_DIR && docker compose -f docker-compose.sim.yml [-f docker-compose.agent-runner.sim.yml] stop 停止）"
