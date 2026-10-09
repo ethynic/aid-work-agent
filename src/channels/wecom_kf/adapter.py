@@ -257,7 +257,8 @@ class WeComKfAdapter(ChannelAdapter):
             - text 块 -> 增强纯文本 -> 拆分 -> text 消息
             - table 块 -> 渲染图片 -> 上传 -> image 消息（降级为纯文本）
             - link 块 -> link 消息（降级为纯文本 URL）
-        随后逐个发送 downloadable_files 为 link 消息。
+        随后逐个发送 downloadable_files：图片优先 image 消息，非图片文件
+        优先 file 消息直发（≤20MB），失败降级为 link 消息。
         """
         all_success = True
         text = message.text
@@ -314,8 +315,6 @@ class WeComKfAdapter(ChannelAdapter):
             info for info in message.downloadable_files
             if not delivery or info.file_id != delivery.get("file_id")
         ]
-        if remaining_files:
-            thumb_media_id = await self._get_default_thumb_media_id()
         for file_info in remaining_files:
             if budget is not None and not budget.consume(1):
                 # 超预算资产不发送并记录 suppressed_reply_budget（规则 4）
@@ -333,7 +332,18 @@ class WeComKfAdapter(ChannelAdapter):
                         all_success = False
                     continue
 
+            # 非图片文件优先作为 file 消息直发（经微信服务器中转，不受本站
+            # 带宽/下载限速影响）；失败/超限时降级为 link 卡片或纯文本链接
+            handled, success = await self._send_file_as_file_message(file_info, message.reply_to)
+            if handled:
+                if not success:
+                    all_success = False
+                continue
+
             url = build_public_url(file_info.download_url)
+            # 缩略图延迟到真正需要发 link 卡片时才取，避免 file 直发成功时浪费上传
+            if not thumb_media_id:
+                thumb_media_id = await self._get_default_thumb_media_id()
             # 无缩略图时降级为纯文本链接
             if not thumb_media_id:
                 fallback = f"{file_info.file_name}: {url}"
@@ -745,6 +755,74 @@ class WeComKfAdapter(ChannelAdapter):
         except Exception as e:
             logger.warning(
                 f"图片文件 image 消息发送异常，降级为 link: file_id={file_id}, err={e}"
+            )
+            return (False, False)
+
+    async def _send_file_as_file_message(self, file_info, user_id: str) -> tuple[bool, bool]:
+        """将非图片文件以企微 file 消息直接发送，失败时降级（返回 handled=False）。
+
+        下载链接受 nginx 限速保护（128KB/s），大文件在本站链路上下载很慢，
+        iOS 微信内置下载器对长时间低速传输会卡死；≤20MB 的文件先上传临时
+        素材以 file 消息直发（经微信服务器中转），失败再降级为 link 卡片。
+
+        Returns:
+            (handled, success)
+            - (True, True): 已成功以 file 消息发送
+            - (False, False): 未处理或已尝试但失败（均降级为 link/纯文本逻辑）
+        """
+        # 企微临时素材 file 限制 20MB
+        if file_info.file_size > 20 * 1024 * 1024:
+            return (False, False)
+        file_id = file_info.file_id
+        if not file_id or not self._tenant_id:
+            return (False, False)
+
+        key = redis_client.make_key("uploaded_file", file_id)
+        file_meta = redis_client.hgetall(key)
+        if not file_meta:
+            return (False, False)
+
+        file_path = file_meta.get("path")
+        if not file_path or not os.path.exists(file_path):
+            return (False, False)
+
+        # 租户归属校验：只允许直发本租户存储目录内的文件
+        from src.core.storage import is_tenant_owned_file
+        if not is_tenant_owned_file(file_path, self._tenant_id):
+            logger.warning(
+                f"文件不在本租户存储目录内，跳过 file 直发降级为 link: file_id={file_id}"
+            )
+            return (False, False)
+
+        try:
+            upload_result = await self.api_client.upload_media(
+                file_path, "file",
+                display_name=file_info.file_name,
+                mime_type=file_info.mime_type or None,
+            )
+            media_id = upload_result.get("media_id")
+            if not media_id:
+                logger.warning(
+                    f"文件上传素材未返回 media_id，降级为 link: file_id={file_id}"
+                )
+                return (False, False)
+
+            send_result = await self.api_client.send_msg(
+                touser=user_id,
+                open_kfid=self.current_open_kfid,
+                msgtype="file",
+                content={"media_id": media_id},
+            )
+            if send_result.get("errcode", 0) == 0:
+                return (True, True)
+            logger.warning(
+                f"文件 file 消息发送失败 errcode={send_result.get('errcode')}, "
+                f"降级为 link: file_id={file_id}"
+            )
+            return (False, False)
+        except Exception as e:
+            logger.warning(
+                f"文件 file 消息发送异常，降级为 link: file_id={file_id}, err={e}"
             )
             return (False, False)
 

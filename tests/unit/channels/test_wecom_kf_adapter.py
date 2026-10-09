@@ -313,6 +313,152 @@ class TestNonImageFile:
         assert "r.pdf" in content
 
 
+# ---------- 非图片文件 -> file 消息直发 ----------
+
+
+class TestSendFileAsFileMessage:
+    """非图片文件 ≤20MB 应优先走 file 消息直发（失败降级 link）。"""
+
+    @pytest.mark.asyncio
+    async def test_pdf_sent_as_file_message(self, adapter, tmp_path):
+        """租户目录内的 PDF，应 upload_media(file) + send_msg(msgtype=file)。"""
+        adapter._tenant_id = "29304e2196e8"
+        pdf_path = tmp_path / "file_abc123.pdf"
+        pdf_path.write_bytes(b"fake-pdf")
+
+        with patch("src.channels.wecom_kf.adapter.redis_client") as mock_redis, \
+             patch("src.channels.wecom_kf.adapter.os.path.exists", return_value=True), \
+             patch("src.core.storage.is_tenant_owned_file", return_value=True):
+            mock_redis.make_key.return_value = "k"
+            mock_redis.hgetall.return_value = {"path": str(pdf_path)}
+
+            response = _make_response([
+                _file(mime_type="application/pdf", file_size=10240, file_name="report.pdf")
+            ])
+            result = await adapter.send_message(response)
+
+        assert result is True
+        upload_args = adapter.api_client.upload_media.call_args
+        assert upload_args.args[0] == str(pdf_path)
+        assert upload_args.args[1] == "file"
+        assert upload_args.kwargs["display_name"] == "report.pdf"
+        send_call = adapter.api_client.send_msg.call_args
+        assert send_call.kwargs["msgtype"] == "file"
+        assert send_call.kwargs["content"] == {"media_id": "MEDIA_FAKE"}
+        # file 直发成功不应浪费缩略图上传
+        adapter._get_default_thumb_media_id.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_oversize_file_fallback_to_link(self, adapter):
+        """超过 20MB 的文件不直发，降级为 link 卡片。"""
+        adapter._tenant_id = "29304e2196e8"
+
+        with patch("src.channels.wecom_kf.adapter.redis_client") as mock_redis:
+            mock_redis.make_key.return_value = "k"
+            mock_redis.hgetall.return_value = {}
+
+            response = _make_response([
+                _file(mime_type="application/pdf", file_size=21 * 1024 * 1024,
+                      file_name="big.pdf")
+            ])
+            await adapter.send_message(response)
+
+        adapter.api_client.upload_media.assert_not_awaited()
+        assert adapter.api_client.send_msg.call_args.kwargs["msgtype"] == "link"
+
+    @pytest.mark.asyncio
+    async def test_no_tenant_context_fallback_to_link(self, adapter, tmp_path):
+        """无租户上下文（_tenant_id 为空）不直发，降级为 link。"""
+        pdf_path = tmp_path / "file_abc123.pdf"
+        pdf_path.write_bytes(b"x")
+
+        with patch("src.channels.wecom_kf.adapter.redis_client") as mock_redis, \
+             patch("src.channels.wecom_kf.adapter.os.path.exists", return_value=True):
+            mock_redis.make_key.return_value = "k"
+            mock_redis.hgetall.return_value = {"path": str(pdf_path)}
+
+            response = _make_response([
+                _file(mime_type="application/pdf", file_size=1024, file_name="r.pdf")
+            ])
+            await adapter.send_message(response)
+
+        adapter.api_client.upload_media.assert_not_awaited()
+        assert adapter.api_client.send_msg.call_args.kwargs["msgtype"] == "link"
+
+    @pytest.mark.asyncio
+    async def test_path_outside_tenant_fallback_to_link(self, adapter, tmp_path):
+        """文件不在本租户存储目录内不直发，降级为 link。"""
+        adapter._tenant_id = "29304e2196e8"
+        pdf_path = tmp_path / "file_abc123.pdf"
+        pdf_path.write_bytes(b"x")
+
+        with patch("src.channels.wecom_kf.adapter.redis_client") as mock_redis, \
+             patch("src.channels.wecom_kf.adapter.os.path.exists", return_value=True), \
+             patch("src.core.storage.is_tenant_owned_file", return_value=False):
+            mock_redis.make_key.return_value = "k"
+            mock_redis.hgetall.return_value = {"path": str(pdf_path)}
+
+            response = _make_response([
+                _file(mime_type="application/pdf", file_size=1024, file_name="r.pdf")
+            ])
+            await adapter.send_message(response)
+
+        adapter.api_client.upload_media.assert_not_awaited()
+        assert adapter.api_client.send_msg.call_args.kwargs["msgtype"] == "link"
+
+    @pytest.mark.asyncio
+    async def test_upload_failure_fallback_to_link(self, adapter, tmp_path):
+        """上传素材失败（无 media_id）降级为 link 卡片。"""
+        adapter._tenant_id = "29304e2196e8"
+        adapter.api_client.upload_media = AsyncMock(
+            return_value={"errcode": 40006, "errmsg": "invalid media size"}
+        )
+        pdf_path = tmp_path / "file_abc123.pdf"
+        pdf_path.write_bytes(b"x")
+
+        with patch("src.channels.wecom_kf.adapter.redis_client") as mock_redis, \
+             patch("src.channels.wecom_kf.adapter.os.path.exists", return_value=True), \
+             patch("src.core.storage.is_tenant_owned_file", return_value=True):
+            mock_redis.make_key.return_value = "k"
+            mock_redis.hgetall.return_value = {"path": str(pdf_path)}
+
+            response = _make_response([
+                _file(mime_type="application/pdf", file_size=1024, file_name="r.pdf")
+            ])
+            await adapter.send_message(response)
+
+        assert adapter.api_client.send_msg.call_args.kwargs["msgtype"] == "link"
+
+    @pytest.mark.asyncio
+    async def test_send_failure_fallback_to_link(self, adapter, tmp_path):
+        """file 消息发送失败时降级为 link 卡片。"""
+        adapter._tenant_id = "29304e2196e8"
+        pdf_path = tmp_path / "file_abc123.pdf"
+        pdf_path.write_bytes(b"x")
+        send_results = [{"errcode": 45001, "errmsg": "api forbidden"},
+                        {"errcode": 0, "errmsg": "ok"}]
+
+        async def _send(*args, **kwargs):
+            return send_results.pop(0)
+
+        adapter.api_client.send_msg = AsyncMock(side_effect=_send)
+
+        with patch("src.channels.wecom_kf.adapter.redis_client") as mock_redis, \
+             patch("src.channels.wecom_kf.adapter.os.path.exists", return_value=True), \
+             patch("src.core.storage.is_tenant_owned_file", return_value=True):
+            mock_redis.make_key.return_value = "k"
+            mock_redis.hgetall.return_value = {"path": str(pdf_path)}
+
+            response = _make_response([
+                _file(mime_type="application/pdf", file_size=1024, file_name="r.pdf")
+            ])
+            result = await adapter.send_message(response)
+
+        assert result is True
+        types = [c.kwargs["msgtype"] for c in adapter.api_client.send_msg.call_args_list]
+        assert types == ["file", "link"]
+
+
 # ---------- 混合场景 ----------
 
 
