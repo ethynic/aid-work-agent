@@ -740,7 +740,7 @@ async def run_worker(arguments):
     config = settings.agent_runner
     if not config.enabled:
         raise RuntimeError('AGENT_RUNNER_DISABLED')
-    if not config.peers or any(not peer.token_hash for peer in config.peers.values()):
+    if not config.peers or not config.web_service_token:
         raise RuntimeError('AGENT_RUNNER_SERVICE_AUTH_REQUIRED')
     await asyncio.to_thread(init_postgres_pool)
     try:

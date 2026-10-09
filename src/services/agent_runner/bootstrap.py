@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 def create_app():
     from src.config.settings import settings
     if settings.agent_runner.enabled:
-        if not settings.agent_runner.peers or any(not peer.token_hash for peer in settings.agent_runner.peers.values()):
+        if not settings.agent_runner.peers or not settings.agent_runner.web_service_token:
             raise RuntimeError("AGENT_RUNNER_SERVICE_AUTH_REQUIRED")
     from .api import create_app as build_app
     app = build_app()

@@ -63,7 +63,6 @@ async def acknowledged_tree(workers, recruiting_domain, service_database):
     config = settings.agent_runner.model_copy(update={'peers': {
         **settings.agent_runner.peers,
         workers.api.service_id: AgentRunnerPeerConfig(
-            token_hash=workers.environment['AGENT_RUNNER_SERVICE_TOKEN_HASH'],
             sources=['chat', 'wecom_kf', 'feishu', 'dingtalk']),
     }})
     async def authorize(profile_id=None):

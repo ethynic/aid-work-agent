@@ -51,7 +51,7 @@ def start_api_pair(service_processes, *, extra_environment=None):
     credential = secrets.token_urlsafe(32)
     service_id = "runner-test"
     environment = {"AGENT_RUNNER_ENABLED": "true", "AGENT_RUNNER_SERVICE_ID": service_id,
-                   "AGENT_RUNNER_SERVICE_TOKEN_HASH": bcrypt.hashpw(credential.encode(), bcrypt.gensalt(rounds=4)).decode(),
+                   "AGENT_RUNNER_WEB_SERVICE_TOKEN": credential,
                    "AGENT_RUNNER_SERVICE_SOURCES": "chat,wecom_kf,feishu,dingtalk"}
     environment.update(extra_environment or {})
     urls, children = [], []
@@ -350,7 +350,7 @@ assert get_postgres_pool() is None
 '''
     child = service_processes.start(["-c", script, str(report)], environment={
         "AGENT_RUNNER_ENABLED": "true", "AGENT_RUNNER_SERVICE_ID": api_pair.service_id,
-        "AGENT_RUNNER_SERVICE_TOKEN_HASH": bcrypt.hashpw(api_pair._service_token.encode(), bcrypt.gensalt(rounds=4)).decode(),
+        "AGENT_RUNNER_WEB_SERVICE_TOKEN": api_pair._service_token,
         "AGENT_RUNNER_SERVICE_SOURCES": "chat"})
     assert child.wait(timeout=15) == 0, "Independent bootstrap/profile inspection failed; no credential output emitted"
     graph = json.loads(report.read_text())
@@ -368,7 +368,7 @@ def cache_api(api_pair, service_processes):
         port = reserve.getsockname()[1]
     child = service_processes.start(["-m", "tests.integration.agent_runner_service.cache_probe", "--port", str(port), "--report", str(report)],
         environment={"AGENT_RUNNER_ENABLED": "true", "AGENT_RUNNER_SERVICE_ID": api_pair.service_id,
-                     "AGENT_RUNNER_SERVICE_TOKEN_HASH": bcrypt.hashpw(api_pair._service_token.encode(), bcrypt.gensalt(rounds=4)).decode(),
+                     "AGENT_RUNNER_WEB_SERVICE_TOKEN": api_pair._service_token,
                      "AGENT_RUNNER_SERVICE_SOURCES": "chat"})
     url = f"http://127.0.0.1:{port}"
     def ready():

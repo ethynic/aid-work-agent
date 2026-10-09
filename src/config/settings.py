@@ -615,7 +615,6 @@ class DesktopAgentConfig(BaseModel):
 
 class AgentRunnerPeerConfig(BaseModel):
     """Dedicated internal caller credential; unrelated to end-user login tokens."""
-    token_hash: str = ""
     sources: List[str] = Field(default_factory=lambda: ["chat"])
 
 
@@ -655,6 +654,9 @@ class AgentRunnerConfig(BaseModel):
     web_enabled: bool = False
     api_url: str = "http://127.0.0.1:8091"
     web_service_id: str = "web"
+    # 服务间明文凭据：主 API 与 runner-api 共用同一 .env 注入，恒等比较即验证。
+    # 4 套环境 .env 各自独立，config.yaml 不再存 token_hash。
+    web_service_token: str = ""
     peers: Dict[str, AgentRunnerPeerConfig] = Field(default_factory=dict)
     host: str = "127.0.0.1"
     port: int = Field(default=8091, ge=1, le=65535)
@@ -900,9 +902,10 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
     if os.getenv('AGENT_RUNNER_BROWSER_GATEWAY_TOKEN_HASH') is not None:
         peer = browser_owner.setdefault('gateway_peers',{}).setdefault(browser_owner.get('gateway_service_id','browser-web'),{})
         peer['token_hash'] = os.environ['AGENT_RUNNER_BROWSER_GATEWAY_TOKEN_HASH']
-    if os.getenv("AGENT_RUNNER_SERVICE_ID") and os.getenv("AGENT_RUNNER_SERVICE_TOKEN_HASH"):
+    if os.getenv("AGENT_RUNNER_WEB_SERVICE_TOKEN"):
+        runner_cfg["web_service_token"] = os.environ["AGENT_RUNNER_WEB_SERVICE_TOKEN"]
+    if os.getenv("AGENT_RUNNER_SERVICE_ID"):
         peer = runner_cfg.setdefault("peers", {}).setdefault(os.environ["AGENT_RUNNER_SERVICE_ID"], {})
-        peer["token_hash"] = os.environ["AGENT_RUNNER_SERVICE_TOKEN_HASH"]
         peer["sources"] = [value.strip() for value in os.getenv("AGENT_RUNNER_SERVICE_SOURCES", "chat").split(",") if value.strip()]
     # Byte ceilings for persistence admission/serialization; AGENT_RUNNER_LIMITS_*
     # follows the same explicit-env override pattern as the KF/browser nodes.

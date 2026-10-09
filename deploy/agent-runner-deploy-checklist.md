@@ -114,12 +114,15 @@ agent2（test）与 agent3（dev）共用业务库 `aid_work_agent2`（`deploy/�
 
 ### ④ 令牌与 peer 检查（凭据不入文档/日志）
 
-`runner-worker` 启动门槛：`agent_runner.enabled=true` 且全部 peer 都有 `token_hash`
+`runner-worker` 启动门槛：`agent_runner.enabled=true` 且 `web_service_token` 明文存在
 （`src/services/agent_runner/worker.py` `AGENT_RUNNER_SERVICE_AUTH_REQUIRED`）；`runner-api`
-同样校验（`bootstrap.py`）。主 API peer hash 位于 config.yaml `agent_runner.peers`，sources 包含 `chat` 与 `wecom_kf`；明文 token
-只在 `.env` 的 `AGENT_RUNNER_WEB_SERVICE_TOKEN`（勿写进本清单、日志或提交），Web/KF 共用该可信网关身份。
+同样校验（`bootstrap.py`）。服务间凭据统一为 `.env` 明文 `AGENT_RUNNER_WEB_SERVICE_TOKEN`，
+主 API 与 runner-api 共用同一 `.env` 注入（恒等比较即验证，2026-10-04 起不再用 bcrypt hash，
+config.yaml 的 `peers` 仅保留 service 身份与 sources 白名单；勿把明文写进本清单、日志或提交）。
+4 套环境 `.env` 各自独立，token 对必须同批生成、两侧同值——一侧重建 `.env` 时另一侧必须同步，
+否则前端 `/runners` 查询报 401 `SERVICE_UNAUTHORIZED`。
 KF 原平台凭据仍由租户渠道配置提供，worker 只为原工具重建上下文。新增 peer 用 `AGENT_RUNNER_SERVICE_ID` +
-`AGENT_RUNNER_SERVICE_TOKEN_HASH`（+可选 `AGENT_RUNNER_SERVICE_SOURCES`）注入。
+`AGENT_RUNNER_SERVICE_SOURCES`（来源白名单）注入；令牌仍共用同一明文。
 
 ### ⑤ 纯语法校验（无部署动作，可随时执行）
 

@@ -37,7 +37,7 @@ class Workers:
         self.children = []
         self.environment = {**provider.environment, "QWEN_MODEL_CODE": models[0],
             "AGENT_RUNNER_ENABLED": "true", "AGENT_RUNNER_SERVICE_ID": api.service_id,
-            "AGENT_RUNNER_SERVICE_TOKEN_HASH": bcrypt.hashpw(api._service_token.encode(), bcrypt.gensalt(rounds=4)).decode(),
+            "AGENT_RUNNER_WEB_SERVICE_TOKEN": api._service_token,
             "AGENT_RUNNER_SERVICE_SOURCES": "chat,wecom_kf,feishu,dingtalk",
             "AGENT_RUNNER_RESOURCE_DIR": str(self.root), "AGENT_RUNNER_STORAGE_ROOT": str(self.storage),
             "REDIS_ENABLED": "false"}

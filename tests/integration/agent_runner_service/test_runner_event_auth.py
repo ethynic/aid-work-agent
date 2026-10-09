@@ -9,7 +9,6 @@ from dataclasses import replace
 import secrets
 import uuid
 
-import bcrypt
 import pytest
 
 from src.config.settings import AgentRunnerConfig, AgentRunnerPeerConfig
@@ -27,8 +26,7 @@ pytestmark = pytest.mark.integration
 @pytest.fixture
 def reader(service_database, actors):
     secret = secrets.token_urlsafe(32)
-    config = AgentRunnerConfig(peers={'event-reader': AgentRunnerPeerConfig(
-        token_hash=bcrypt.hashpw(secret.encode(), bcrypt.gensalt(rounds=4)).decode(),
+    config = AgentRunnerConfig(web_service_token=secret, peers={'event-reader': AgentRunnerPeerConfig(
         sources=['chat', 'wecom_kf'])})
     authorizer = RunnerAuthorizer(config, service_database.connect)
     repository = RunnerRepository(service_database.connect)

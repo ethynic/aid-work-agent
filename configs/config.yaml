@@ -470,17 +470,16 @@ boss_conversation:
   tenant_allowlist: []
 
 # Independent AgentRunner service. Enable only when its API and worker are configured.
-# Dedicated peer bcrypt hashes are injected through AGENT_RUNNER_SERVICE_TOKEN_HASH.
+# 服务间凭据统一为 .env 明文 AGENT_RUNNER_WEB_SERVICE_TOKEN（主 API 与 runner-api
+# 共用同一 .env 注入，恒等比较即验证）；config.yaml 不存 token_hash，4 套环境 .env 各自独立。
 agent_runner:
   # 本地容器验证（2026-10-04）：Web 闭环走 Runner；令牌明文仅在 .env。
   enabled: true
   web_enabled: true
   api_url: "http://127.0.0.1:8091"
   web_service_id: "web"
-  # Plaintext caller token stays in AGENT_RUNNER_WEB_SERVICE_TOKEN on the Web server.
   peers:
     web:
-      token_hash: "$2b$12$mtUPOeTozqL.GCQjD2PsAuas1Nw6G3aCSAnLV6FGvThV9neI1WGeC"
       sources: ["chat", "wecom_kf"]
   host: "127.0.0.1"
   port: 8091

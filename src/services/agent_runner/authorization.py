@@ -1,10 +1,10 @@
 """Validate internal callers and the current database principal/session binding."""
 
+import hmac
 from datetime import datetime, timezone
 
 from src.core.agent_engine.contracts import Identity
 from src.db.database import get_db_connection
-from src.db.models import verify_password
 from src.saas.models.enums import TenantStatus, UserRole, UserStatus
 from .contracts import Principal, RunnerError, canonical_json
 
@@ -20,8 +20,11 @@ class RunnerAuthorizer:
         self.source_port = source_port
 
     def verify_service(self, service_id, service_token, source):
+        # 明文凭据唯一验证源：主 API 与 runner-api 共用同一 .env 注入的
+        # AGENT_RUNNER_WEB_SERVICE_TOKEN，恒等比较即验证（无 config.yaml 回退）。
         peer = self.config.peers.get(service_id or "")
-        if not peer or not service_token or not peer.token_hash or not verify_password(service_token, peer.token_hash):
+        if (not peer or not service_token or not self.config.web_service_token
+                or not hmac.compare_digest(service_token, self.config.web_service_token)):
             raise RunnerError("SERVICE_UNAUTHORIZED", 401)
         if source is not None and source not in peer.sources:
             raise RunnerError("SERVICE_SOURCE_FORBIDDEN", 403)
