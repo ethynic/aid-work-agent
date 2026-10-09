@@ -22,6 +22,7 @@ import pytest
 
 from src.core.tenant_path_guard import (
     check_text_for_foreign_tenant_paths,
+    extract_flat_knowledge_ref,
     extract_knowledge_refs,
     find_foreign_tenant_owner,
     is_source_storage_reference,
@@ -202,6 +203,44 @@ class TestExtractKnowledgeRefs:
         assert extract_knowledge_refs(p2) == [("aaa", "tenants")]
 
 
+class TestExtractFlatKnowledgeRef:
+    """extract_flat_knowledge_ref：旧版平铺知识库路径识别（fail-closed）"""
+
+    def test_flat_path_matched(self):
+        p = Path("/app/storage/tenants/bbb/knowledge/kb_68d5ec23082f.pdf")
+        assert extract_flat_knowledge_ref(p) == ("bbb", "kb_68d5ec23082f.pdf")
+
+    def test_owner_segment_returned_verbatim(self):
+        """owner 段原样返回（tenant_ 前缀等价由调用方归一化比对）"""
+        p = Path("/app/storage/tenants/tenant_bbb/knowledge/file_abc.pdf")
+        assert extract_flat_knowledge_ref(p) == ("tenant_bbb", "file_abc.pdf")
+
+    def test_no_tenants_segment(self):
+        assert extract_flat_knowledge_ref(Path("/app/storage/tmp_build/quote.xlsx")) is None
+
+    def test_conversation_scene_not_matched(self):
+        p = Path("/app/storage/tenants/bbb/conversation/q.xlsx")
+        assert extract_flat_knowledge_ref(p) is None
+
+    def test_new_style_four_segment_not_matched(self):
+        """新版四段路径（有 source_type 段）不属于平铺形态"""
+        p = Path("/app/storage/tenants/bbb/knowledge/attraction_resource/f.pdf")
+        assert extract_flat_knowledge_ref(p) is None
+
+    def test_deeper_nesting_not_matched(self):
+        """knowledge/ 下还有更深层级（filename 非末段）不匹配"""
+        p = Path("/app/storage/tenants/bbb/knowledge/st/sub/f.pdf")
+        assert extract_flat_knowledge_ref(p) is None
+
+    def test_knowledge_as_last_segment_not_matched(self):
+        p = Path("/app/storage/tenants/bbb/knowledge")
+        assert extract_flat_knowledge_ref(p) is None
+
+    def test_multiple_tenant_segments_not_matched(self):
+        p = Path("/x/tenants/aaa/knowledge/f1/tenants/bbb/knowledge/f2")
+        assert extract_flat_knowledge_ref(p) is None
+
+
 def _make_file(tmp_path: Path, rel: str) -> Path:
     f = tmp_path / rel
     f.parent.mkdir(parents=True, exist_ok=True)
@@ -349,16 +388,107 @@ class TestCpSharedKnowledgeAllowance:
             with pytest.raises(PermissionError):
                 tool._resolve_source(str(src))
 
-    def test_legacy_knowledge_path_fail_closed(self, tmp_path, monkeypatch):
-        """旧版无分类子目录的 knowledge 路径（knowledge/ 后直接文件名）拒绝"""
+    def _patch_resolve(self, monkeypatch, source_types, calls=None):
+        def _resolve(owner, filename):
+            if calls is not None:
+                calls.append((owner, filename))
+            return source_types
+
+        monkeypatch.setattr(
+            "src.knowledge.retriever.tenant_range.resolve_source_types_by_file",
+            _resolve,
+        )
+
+    def test_flat_knowledge_path_allowed_via_db_lookup(self, tmp_path, monkeypatch):
+        """旧版平铺路径：DB 回查 source_type 命中授权对，放行（兜底修复）"""
         from src.tools.file.cp_tool import CpTool
 
-        self._patch_ranges(monkeypatch, [("tenant_bbb", "attraction_resource")])
+        self._patch_ranges(monkeypatch, [("tenant_bbb", "k_389b41101269")])
+        calls = []
+        self._patch_resolve(monkeypatch, ["k_389b41101269"], calls)
+        src = _make_file(tmp_path, "tenants/tenant_bbb/knowledge/file_abc.pdf")
+        tool = CpTool()
+        with self._shared_ctx():
+            assert tool._resolve_source(str(src)) == src.resolve()
+        assert calls == [("tenant_bbb", "file_abc.pdf")]
+
+    def test_flat_knowledge_path_unauthorized_source_type_denied(self, tmp_path, monkeypatch):
+        """旧版平铺路径：DB 登记的 source_type 不在授权对内，拒绝"""
+        from src.tools.file.cp_tool import CpTool
+
+        self._patch_ranges(monkeypatch, [("tenant_bbb", "k_other")])
+        self._patch_resolve(monkeypatch, ["k_389b41101269"])
         src = _make_file(tmp_path, "tenants/tenant_bbb/knowledge/file_abc.pdf")
         tool = CpTool()
         with self._shared_ctx():
             with pytest.raises(PermissionError):
                 tool._resolve_source(str(src))
+
+    def test_legacy_knowledge_path_no_registration_fail_closed(self, tmp_path, monkeypatch):
+        """旧版平铺路径：DB 查无 active 登记（已删除/过期/无登记），fail-closed 拒绝"""
+        from src.tools.file.cp_tool import CpTool
+
+        self._patch_ranges(monkeypatch, [("tenant_bbb", "attraction_resource")])
+        self._patch_resolve(monkeypatch, [])
+        src = _make_file(tmp_path, "tenants/tenant_bbb/knowledge/file_abc.pdf")
+        tool = CpTool()
+        with self._shared_ctx():
+            with pytest.raises(PermissionError):
+                tool._resolve_source(str(src))
+
+    def test_flat_path_conversation_scene_no_db_lookup(self, tmp_path, monkeypatch):
+        """conversation 场景不属于平铺知识库形态，不触发 DB 回查，直接拒绝"""
+        from src.tools.file.cp_tool import CpTool
+
+        resolve_mock = MagicMock(return_value=["attraction_resource"])
+        monkeypatch.setattr(
+            "src.knowledge.retriever.tenant_range.resolve_source_types_by_file",
+            resolve_mock,
+        )
+        src = _make_file(tmp_path, "tenants/tenant_bbb/conversation/q.xlsx")
+        tool = CpTool()
+        with self._shared_ctx():
+            with pytest.raises(PermissionError):
+                tool._resolve_source(str(src))
+        resolve_mock.assert_not_called()
+
+    def test_flat_multi_tenant_segments_no_db_lookup(self, tmp_path, monkeypatch):
+        """多租户段路径无法确认平铺形态，不触发 DB 回查，fail-closed 拒绝"""
+        from src.tools.file.cp_tool import CpTool
+
+        resolve_mock = MagicMock(return_value=["attraction_resource"])
+        monkeypatch.setattr(
+            "src.knowledge.retriever.tenant_range.resolve_source_types_by_file",
+            resolve_mock,
+        )
+        src = _make_file(
+            tmp_path,
+            "tenants/tenant_bbb/knowledge/attraction_resource/f1"
+            "/__x__/tenants/tenant_ccc/knowledge/f2",
+        )
+        tool = CpTool()
+        with self._shared_ctx():
+            with pytest.raises(PermissionError):
+                tool._resolve_source(str(src))
+        resolve_mock.assert_not_called()
+
+    def test_flat_new_style_path_not_routed_to_db_lookup(self, tmp_path, monkeypatch):
+        """新版四段路径不走 DB 回查兜底（仍走路径段解析）"""
+        from src.tools.file.cp_tool import CpTool
+
+        self._patch_ranges(monkeypatch, [("tenant_bbb", "attraction_resource")])
+        resolve_mock = MagicMock(return_value=["attraction_resource"])
+        monkeypatch.setattr(
+            "src.knowledge.retriever.tenant_range.resolve_source_types_by_file",
+            resolve_mock,
+        )
+        src = _make_file(
+            tmp_path, "tenants/tenant_bbb/knowledge/attraction_resource/file_abc.pdf"
+        )
+        tool = CpTool()
+        with self._shared_ctx():
+            assert tool._resolve_source(str(src)) == src.resolve()
+        resolve_mock.assert_not_called()
 
     def test_multi_owner_partial_authorized_denied(self, tmp_path, monkeypatch):
         """路径含两个租户段、仅一段命中授权对，拒绝"""
@@ -463,3 +593,80 @@ class TestSkillExecuteTenantGuard:
         assert "爱定义运动服饰报价单" not in resp["stdout"]
         assert "[安全防护]" in resp["stdout"]
         assert "security_note" in resp
+
+
+class TestResolveSourceTypesByFile:
+    """resolve_source_types_by_file：documents 登记 DB 回查（fail-closed）"""
+
+    def _install_db(self, monkeypatch, rows=None, error=None, captured=None):
+        class _FakeCursor:
+            def execute(self, sql, params):
+                if captured is not None:
+                    captured["sql"] = sql
+                    captured["params"] = params
+                if error is not None:
+                    raise error
+
+            def fetchall(self):
+                return rows or []
+
+        class _FakeConn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def cursor(self):
+                return _FakeCursor()
+
+        monkeypatch.setattr("src.db.database.get_db_connection", lambda: _FakeConn())
+
+    def test_returns_registered_source_types(self, monkeypatch):
+        from src.knowledge.retriever.tenant_range import resolve_source_types_by_file
+
+        self._install_db(
+            monkeypatch,
+            rows=[
+                {"source_type": "k_389b41101269"},
+                {"source_type": "k_dup"},
+                {"source_type": None},
+                {"source_type": ""},
+            ],
+        )
+        assert resolve_source_types_by_file("bbb", "file_abc.pdf") == [
+            "k_389b41101269",
+            "k_dup",
+        ]
+
+    def test_suffix_and_tenant_forms_in_query(self, monkeypatch):
+        from src.knowledge.retriever.tenant_range import resolve_source_types_by_file
+
+        captured = {}
+        self._install_db(monkeypatch, rows=[], captured=captured)
+        resolve_source_types_by_file("bbb", "file_abc.pdf")
+        assert captured["params"][0] == ["tenant_bbb", "bbb"]
+        assert captured["params"][1] == "tenants/bbb/knowledge/file_abc.pdf"
+        assert "RIGHT(file_path" in captured["sql"]
+        assert "status = 'active'" in captured["sql"]
+        assert "expires_at" in captured["sql"]
+
+    def test_db_error_fail_closed(self, monkeypatch):
+        from src.knowledge.retriever.tenant_range import resolve_source_types_by_file
+
+        self._install_db(monkeypatch, error=RuntimeError("db down"))
+        assert resolve_source_types_by_file("bbb", "file_abc.pdf") == []
+
+    def test_empty_args_no_query(self, monkeypatch):
+        from src.knowledge.retriever.tenant_range import resolve_source_types_by_file
+
+        called = []
+
+        def _boom():
+            called.append(1)
+            raise AssertionError("不应触达 DB")
+
+        monkeypatch.setattr("src.db.database.get_db_connection", _boom)
+        assert resolve_source_types_by_file("", "f.pdf") == []
+        assert resolve_source_types_by_file("bbb", "") == []
+        assert not called

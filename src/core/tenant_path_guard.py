@@ -107,6 +107,36 @@ def extract_knowledge_refs(path: Path) -> Optional[List[Tuple[str, str]]]:
     return refs
 
 
+def extract_flat_knowledge_ref(path: Path) -> Optional[Tuple[str, str]]:
+    """识别旧版平铺知识库路径 `tenants/{owner}/knowledge/{filename}`。
+
+    旧版文档（分类子目录引入前）磁盘与 documents.file_path 登记均为
+    `knowledge/` 下直接放文件，路径无 source_type 段，extract_knowledge_refs
+    解析失败。cp 共享放行判定用本函数识别该形态后，由调用方回查
+    documents 表确定 source_type（路径本身不含授权信息，必须查库）。
+
+    返回值语义（fail-closed）：
+    - 无 tenants 段 → None
+    - 恰好一个 tenants/{owner} 段且其后为 `knowledge/{filename}`（filename
+      为末段）→ (owner, filename)
+    - 其余结构（多个 tenants 段、新版四段路径、conversation 等其他 scene、
+      knowledge/ 下还有更深层级）→ None
+    """
+    parts = path.parts
+    n = len(parts)
+    idx: Optional[int] = None
+    for i, part in enumerate(parts):
+        if part == "tenants":
+            if idx is not None:
+                return None
+            idx = i
+    if idx is None or idx + 3 != n - 1:
+        return None
+    if parts[idx + 2] != "knowledge":
+        return None
+    return parts[idx + 1], parts[idx + 3]
+
+
 def check_text_for_foreign_tenant_paths(
     text: str, current_tenant_id: Optional[str]
 ) -> Tuple[bool, Optional[str]]:

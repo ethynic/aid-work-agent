@@ -73,3 +73,12 @@
 `knowledge/{source_type}/` 文件按 `load_shared_ranges` 精确对放行复制
 （`extract_knowledge_refs` 解析 + fail-closed，仅子智能体 + 租户模式生效），
 与检索/读取同一授权边界；conversation 等非 knowledge 场景外来路径仍一律拒绝。
+
+**旧版平铺路径兜底（2026-10-10，agent1 仿真修复）**：存量文档磁盘与
+`documents.file_path` 登记多为 `knowledge/{filename}` 平铺形态（无
+source_type 段），路径无法确认授权归属。`extract_flat_knowledge_ref`
+识别该形态后，由 `resolve_source_types_by_file`（tenant_range.py）按
+owner 目录名 + `RIGHT(file_path)` 后缀精确回查 documents 登记确定
+source_type（仅认可 active 且未过期登记，与检索侧可见性同界）；
+回查结果仍与 `load_shared_ranges` 精确对比对，任一登记命中即放行，
+查无登记或 DB 异常一律拒绝（fail-closed）。

@@ -269,19 +269,24 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="ppt/index.
         登记或过期的文档残留）均可复制。粒度宽于检索侧的 active 文档过滤
         （build_active_document_condition），但 read 工具本就无路径守卫，
         放行面未超出既有读取面。
+
+        旧版平铺路径兜底（2026-10-10，agent1 仿真报错）：存量文档磁盘与
+        documents.file_path 登记均为 `knowledge/{filename}` 平铺形态，路径无
+        source_type 段。此时回查 documents 表（active 且未过期登记）确定
+        source_type，再与授权精确对比对；任一登记命中即放行（同一物理文件
+        可能登记在多个栏目，read 工具本就无路径守卫）。查无登记仍拒绝。
         """
         if not (context and context.tenant_id and context.subagent_id):
             return None
 
         from src.core.storage import normalize_tenant_id
-        from src.core.tenant_path_guard import extract_knowledge_refs
-
-        refs = extract_knowledge_refs(src)
-        if not refs:
-            return None
-
+        from src.core.tenant_path_guard import (
+            extract_flat_knowledge_ref,
+            extract_knowledge_refs,
+        )
         from src.knowledge.retriever.tenant_range import load_shared_ranges
 
+        # 先取授权集合：无共享授权（常态）直接拒绝，避免白打一次回查 DB
         allowed = {
             (normalize_tenant_id(owner), source_type)
             for owner, source_type in load_shared_ranges(
@@ -290,7 +295,24 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="ppt/index.
         }
         if not allowed:
             return None
+
+        refs = extract_knowledge_refs(src)
+        flat_used = False
+        if not refs:
+            flat = extract_flat_knowledge_ref(src)
+            if flat is None:
+                return None
+            from src.knowledge.retriever.tenant_range import resolve_source_types_by_file
+            source_types = resolve_source_types_by_file(flat[0], flat[1])
+            if not source_types:
+                return None
+            refs = [(flat[0], st) for st in source_types]
+            flat_used = True
+
         normalized = [(normalize_tenant_id(o), st) for o, st in refs]
+        if flat_used:
+            matched = [ref for ref in normalized if ref in allowed]
+            return matched or None
         if all(ref in allowed for ref in normalized):
             return normalized
         return None

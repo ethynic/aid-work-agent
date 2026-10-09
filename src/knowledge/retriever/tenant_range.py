@@ -66,6 +66,39 @@ def load_shared_ranges(
     return ranges
 
 
+def resolve_source_types_by_file(owner: str, filename: str) -> List[str]:
+    """旧版平铺知识库文件回查 source_type（cp 共享放行兜底，2026-10-10）。
+
+    平铺布局（knowledge/ 下直接放文件）路径中无 source_type 段，无法从路径
+    确认授权归属，按 owner 目录名 + 文件名后缀精确匹配 documents 登记
+    （RIGHT(file_path) 后缀比较，避免 LIKE 通配符与文件名中 _ 混淆）。
+    仅认可 active 且未过期的文档登记为授权证据（与检索侧可见性同界）；
+    查无登记或 DB 异常返回空（fail-closed，调用方拒绝）。
+
+    owner 为存储目录名（不带 tenant_ 前缀），documents.tenant_id 可能带
+    前缀，两种形态都参与匹配。
+    """
+    if not owner or not filename:
+        return []
+    suffix = f"tenants/{owner}/knowledge/{filename}"
+    try:
+        from src.db.database import get_db_connection
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """SELECT DISTINCT source_type FROM documents
+                   WHERE tenant_id = ANY(%s)
+                     AND RIGHT(file_path, LENGTH(%s)) = %s
+                     AND status = 'active'
+                     AND (expires_at IS NULL OR expires_at > now())""",
+                ([f"tenant_{owner}", owner], suffix, suffix),
+            )
+            return [r["source_type"] for r in cursor.fetchall() if r["source_type"]]
+    except Exception as e:
+        logger.warning(f"后端日志：平铺知识库文件回查 source_type 失败: {e}")
+        return []
+
+
 def load_authorized_source_types(
     tenant_id: Optional[str],
     subagent_id: Optional[str],
