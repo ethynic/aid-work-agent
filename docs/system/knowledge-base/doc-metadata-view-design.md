@@ -2,7 +2,7 @@
 
 ## 背景与问题
 
-`documents.metadata`（TEXT JSON）是知识库的重要字段：api-ingest 管线写入溯源信息（source_code/external_id/run_id/pipeline_version/ingested_at）、metadata_only 易变字段（销量/库存/评论分等，D10 分家防易变字段重嵌入）、`raw_payload` 原始记录（默认 ≤32KB，D12）；公众号等外部来源写入 original_url 等。但整条链路断在两处：
+`documents.metadata`（TEXT JSON）是知识库的重要字段：API 同步管线（宏陶商城专用模块）写入溯源信息（source_code/external_id/run_id/pipeline_version/ingested_at）、metadata_only 易变字段（销量/库存/评论分等，分家防易变字段重嵌入）、`raw_payload` 原始记录（默认 ≤32KB）；公众号等外部来源写入 original_url 等。但整条链路断在两处：
 
 1. 后端 `GET /documents` 列表的 `DocumentResponse` 不含 metadata，SQL 也不查询，前端拿不到；
 2. 分块接口已返回 chunk 级 metadata，前端类型已声明但 UI 从未渲染。

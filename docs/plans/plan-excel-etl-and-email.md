@@ -1,6 +1,16 @@
 # 开发计划：#63 多源脏 Excel → 标准模板 LLM 抽取填充 + #64 邮件工具整改
 
-> 2026-08-19。设计/决议/测算见 [调研+决议](../tools/excel/excel-etl-gap-analysis.md)（D1~D24、Q1~Q3 已拍板）、[邮件审查](../tools/email/email-tool-audit.md)、[点数测算](../tools/excel/excel-etl-points-estimation.md)。
+> 2026-08-19。设计/决议见 [调研+决议](../tools/excel/excel-etl-gap-analysis.md)（D1~D24、Q1~Q3 已拍板）与 [邮件审查](../tools/email/email-tool-audit.md)。
+
+## 开发进度
+
+| 阶段 | 内容 | 状态 | 完成记录 |
+|------|------|------|---------|
+| Phase 0 | 邮件工具整改（email_lib 拆分 + email_process 三合一 + P0/P1 修复） | ✅ 完成 | src/tools/email/（send/read/download_attachments 确定性分发，不建 LLM 路由）；#64 邮件条目（20260819-1724）剩余范围另行跟踪 |
+| Phase 1 | M1 渲染层 + 黄金夹具 | ✅ 完成 | excel_reader.render_llm_view + excel_mask 脱敏往返 + tests/fixtures/excel_etl（5 来源样本 + 黄金 JSON） |
+| Phase 2 | M3 抽取 + M4 校验修复 + 计量 | ✅ 完成 | excel_extract 抽取/校验修复回路 + record_skill_llm_usage 子进程 LLM 计量 |
+| Phase 3 | M5 skill 编排 + 邮件附件 + 端到端 | ✅ 完成 | src/skills/excel-to-template-1.0.0（SKILL.md + pipeline.py 文件/邮件双入口） |
+| 任务归档 | #63 收口 | ✅ 完成（2026-10-09） | 用户确认验收通过，各 Phase 代码核对均已落地；ideas 条目归档 ideas_finished（点数测算文档随清理删除） |
 > 开工核对结论：设计无歧义；新发现 1 个必须补的缺口——**skill 子进程 LLM 调用零计量**（存量 skill 漏账，本管线为公用云计费必须解决）；`_default_llm` 已覆盖 qwen/zhipu/deepseek 且 deepseek 支持关思考，无需改。
 
 ## Phase 0 — 邮件工具整改（#64 第一步，约 1~1.5 天）

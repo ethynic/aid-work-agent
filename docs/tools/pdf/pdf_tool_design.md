@@ -1,8 +1,8 @@
 # PDF 工具设计文档
 
-> 版本: v1.2 | 创建日期: 2026-05-09 | 最近更新: 2026-07-01 | 状态: 第一阶段已完成，质量验证增强开发中
+> 版本: v1.3 | 创建日期: 2026-05-09 | 最近更新: 2026-10-09 | 状态: 已交付（质量验证增强与图片支持完成，条目归档 ideas_finished）
 
-> **实现校准（2026-07-01）**：本文档早期 v1.1 方案曾以 Pandoc + WeasyPrint 作为 Markdown/HTML 转 PDF 主路径。当前代码已调整为 `markdown` 解析 + `fpdf2` 纯 Python 生成；`docx_to_pdf` 统一使用 LibreOffice。PDF 质量验证增强、实现质量修复和差距分析见 [PDF 工具能力差距分析与增强设计方案](pdf_tool_gap_analysis_design.md)，开发计划见 [PDF 工具质量验证增强开发计划](pdf_tool_quality_validation_dev_plan.md)。
+> **实现校准（2026-07-01）**：本文档早期 v1.1 方案曾以 Pandoc + WeasyPrint 作为 Markdown/HTML 转 PDF 主路径。当前代码已调整为 `markdown` 解析 + `fpdf2` 纯 Python 生成；`docx_to_pdf` 统一使用 LibreOffice。质量验证增强已交付：inspect/render_pages/validate 操作、结构化检查、生成后自动校验、页码语义统一、运行时依赖探测（pdf_inspector/pdf_renderer/pdf_validator/pdf_capabilities/pdf_enhancer）；图片支持已交付（2026-07-15，inline_images 接入 md_to_pdf/html_to_pdf 双入口）。中间过程文档（差距分析、质量验证开发计划、图片支持设计与计划）已随 2026-10-09 归档清理。
 
 > **能力下架（2026-07-02）**：`docx_to_pdf` 已下架。LibreOffice 转 Word→PDF 时对复杂表格（合并单元格、嵌套表格、复杂列宽）格式保真度差，是架构性缺陷无法通过参数修复；pandoc/mammoth 等替代方案保真度更差；Docker 环境下无可用的 Microsoft Word 高保真替代。代码已删除 `PdfProcessTool` 的 docx_to_pdf 操作、`pdf_writer.docx_to_pdf`/`_docx_to_pdf_via_libreoffice` 函数及相关测试。`TaskType.ALL`、`PdfRouter` valid_tasks、prompt 同步移除。Word→PDF 请求会在确定性路由阶段返回明确错误，引导用户改用 `md_to_pdf`/`html_to_pdf` 直接生成 PDF。Dockerfile 中 `libreoffice-writer` **保留**，因为 PPT 工具的质量校验（`src/tools/ppt/quality_validator.py`）依赖它生成 PPT 预览图。
 

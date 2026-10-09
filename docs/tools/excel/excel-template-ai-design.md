@@ -1,7 +1,7 @@
 # Excel 智能模板填充工具设计（样例 + 数据 → 按版式生成）
 
 > **关联开发计划**：[plan-excel-template-ai.md](../../plans/plan-excel-template-ai.md)
-> **登记**：[docs/ideas.md](../../ideas.md)「工具」分区「Excel 智能模板填充」(#44)
+> **登记**：[docs/ideas_finished.md](../../ideas_finished.md)「工具」分区（2026-10-09 验收归档）
 > **消费者**：旅游报价（[design-travel-quote-template-engine.md](../../system/design-travel-quote-template-engine.md)）、后续 CRM 对账单 / 财务报表 / 贸易报价单等
 
 ## 背景与动机

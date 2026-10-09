@@ -7,6 +7,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20260828-1421 | zhipu 默认模型切 GLM-5.3-Flash + 价目表多模态标识 | ✅ 已完成开发：zhipu 缺省切 GLM-5.3-Flash，token_cost_prices 增 is_multimodal 并标记存量多模态模型（预留图片路由）；commit 7f7e3235，缓存价修正 c1cd3915。 | [设计](design/weixin/weixin-cli-billing.md) | — |
 | 20261008-1633 | 过时架构文档与入口引用清理 | ✅ 已完成开发：删除失效执行/协作方案，修正架构规则并清理旧入口链接。 | — | [清理记录](plans/plan-obsolete-architecture-doc-cleanup.md) |
 | 20260819-1126 | 母体 Agent 收敛（并入 AgentRunner 重构） | ✅ 已完成开发：agent.py 保留兼容壳，执行内核与运行时职责已拆分，后续遵守治理原则。 | [原则](system/agent-kernel-convergence-principles.md) | [完成记录](plans/plan-agent-runner-service.md) |
 | 20260906-1101 | ✅ 用户行为审计日志 | 登录/登出/改密/管理后台增删改/普通用户关键动作全量留痕（user_behavior_logs 系统表，IP/UA/设备快照/token 指纹），满足安全审计与追责定位。 | [设计](system/user-behavior-audit-log-design.md) | — |
@@ -37,6 +38,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20260921-1100 | 宏陶商城产品知识库同步（hongtao_shop 专用模块） | ✅ 已完成开发：宏陶专用模块拉取产品/帖子 + VL 描述 + 结构化正文入知识库（raw_payload 存原始记录），2026-10-09 验收通过。 | [设计](system/hongtao-shop/hongtao-shop-kb-design.md) | [开发计划](plans/plan-hongtao-shop-kb.md) |
 | 20261001-1849 | Agent/AgentRunner 重构及独立服务 | ✅ 已完成开发：内核与独立服务、Web 接入已完成；后续渠道接入另行跟踪。 | [设计](system/agent-application-architecture-design.md) | [计划](plans/plan-agent-runner-service.md) |
 | 20261006-0958 | 外部 Skill 插件机制（M1 知识层） | ✅ 已完成开发（开发+独立测试+CR，257 单测 + 26 集成验收全绿，未部署）。插件目录链+审批/hash 门+同名拒绝；M1 全拦插件云端执行（device 占位）；第二轮整改含 33f9dba1 遗留修复（红测试/截断豁免断链/续跑崩溃）。执行路由与设备侧属 M2（另行立项）。 | [调研](research/external-skill-plugin-integration-research.md) | [开发计划](plans/plan-external-skill-plugin-m1.md) |
 | 20260901-1358 | 客户端计费统一接入（boss cli / 协会采集 / 未来客户端三模式） | ✅ 已完成开发。 | [设计](design/billing/client-billing-integration-design.md) | — |
@@ -97,6 +99,11 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20260917-1422 | BOSS 简历识别去 OCR 化（GLM-5.3-Flash 多模态） | ✅ 已完成开发：客户端只交图，云端 VL 一次评估姓名/总结/评分/key_info（11s/份），姓名门防点错人、文本不可信防计费造假，识别费 1 积分/份成功即扣；commit 5d14e64d。 | [设计](design/desktop-automation/boss-resume-vl-recognition-design.md) | — |
+| 20260819-1724 | 邮件工具整体审查与整改 | ✅ 已完成开发：email_process 三合一（send/read/download_attachments 确定性分发）+ email_lib 拆分 + 异步包裹/超时/错误脱敏等规范修复；2026-10-09 验收通过。 | [审查](tools/email/email-tool-audit.md) | [开发计划](plans/plan-excel-etl-and-email.md) |
+| 20260630-1555 | PDF 工具质量验证增强 | ✅ 已完成开发：inspect/render_pages/validate 操作、结构化检查、生成后自动校验、页码语义统一、依赖探测、Playwright HTML 转 PDF、图片 inline 双入口；2026-10-09 验收通过。 | [设计](tools/pdf/pdf_tool_design.md) | — |
+| 20260819-1127 | 多源脏 Excel → 标准模板 LLM 抽取填充 | ✅ 已完成开发：excel-to-template skill 管线（render_llm_view 语义渲染+脱敏往返、LLM 抽取+确定性校验回喂修复、子进程 LLM 计量、文件/邮件双入口）；2026-10-09 验收通过。 | [调研+决议](tools/excel/excel-etl-gap-analysis.md) | [开发计划](plans/plan-excel-etl-and-email.md) |
+| 20260720-2104 | Excel 智能模板填充工具（样例 + 数据 → 按版式生成） | ✅ 已完成开发：无状态 fill_template（AI 数据感知结构分析+行数不匹配处理+样式位级保留），2026-09-23 补缺 data 首拍引导兜底；2026-10-09 验收通过。 | [设计](tools/excel/excel-template-ai-design.md) | [开发计划](plans/plan-excel-template-ai.md) |
 | 20260819-1724 | 工具注册与 Agent 解耦 | ✅ 已完成开发。 | [设计](tools/tool-auto-discovery-design.md) / [总体设计](plans/plan-agent-registration-decoupling.md) | [开发计划](plans/plan-agent-registration-decoupling.md) |
 | 20260821-0835 | 普通工具特殊分支删除与统一执行链 | ✅ 已完成开发。 | [设计与开发计划](plans/plan-tool-outcome-presentation-decoupling.md) | [计划](plans/plan-tool-outcome-presentation-decoupling.md) |
 | 20260630-1713 | 文件生成类工具入参语义拆分与路由健壮性 | ✅ 已完成开发。Word/PDF/Excel/PPT 通用 `context` 同时承载"用户目的 + 待处理正文 + 隐含参数"导致内部 LLM 路由不稳定、转换正文被工具指令污染。 | [设计](tools/tool-input-contract-redesign.md) | [开发计划](tools/tool-input-contract-redesign-dev-plan.md) |
@@ -109,7 +116,7 @@
 | 20260518-2226 | Word 工具 | Word 文档读取与生成 | [设计](tools/word/word_tool_design.md) | — |
 | 20260511-1713 | PDF 工具 | PDF 文档解析与处理 | [设计](tools/pdf/pdf_tool_design.md) | — |
 | 20260509-1748 | Excel 工具 | Excel 文件读取与数据提取 | [设计](tools/excel/excel_tool_design.md) | — |
-| 20260609-1552 | Excel 工具重构 | ✅ 已完成开发 移除 analyze 和 chart 操作（由数据分析工具替代），增强 read 操作（复制 FileReaderTool 的文档级读取能力）。 | [设计](tools/excel/excel-tool-refactor-design.md) | [计划](tools/excel/excel-tool-refactor-dev-plan.md) |
+| 20260609-1552 | Excel 工具重构 | ✅ 已完成开发 移除 analyze 和 chart 操作（由数据分析工具替代），增强 read 操作（复制 FileReaderTool 的文档级读取能力）。重构结果已并入总设计（重构专项文档 2026-10-09 清理）。 | [设计](tools/excel/excel_tool_design.md) | — |
 | 20260518-2227 | HTTP API 适配器 | 通用 HTTP API 调用适配器 | [设计](tools/http_api_adapter_design.md) | [指南](tools/http_api_skill_developer_guide.md) |
 | 20260519-1036 | 文本文件生成工具 | 文本/Markdown 文件生成与内容写入优化 | [设计](tools/text-file/text_file_generator_design.md) | — |
 | 20260622-1311 | Pandoc 安装与部署 | word_process 工具的 md_to_word 操作依赖 Pandoc 命令行工具。 | [安装部署指南](tools/md-to-word/pandoc-install-guide.md) | — |
@@ -127,6 +134,8 @@
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
 | 20261008-1340 | 微信客服原渠道恢复与 AgentRunner 接入 | ✅ 已完成开发：原渠道接入独立 Runner，误重构已移除，迁移历史保留；agent2 已发布并真机验收通过（文本/语音/合并/取代）。 | [设计](system/agent-application-architecture-design.md) | [计划](plans/plan-wecom-kf-channel-restore.md) |
+| 20260916-1830 | 公众号自有号清单源（历史文章导入，主通道） | ✅ 已完成开发：租户扫码绑定自有号，定期拉「发表记录」清单走既有 URL 直采入库（首次回填上限+增量重叠即停，r3 修生产超量回填事故）；2026-10-09 验收通过。 | [设计](system/wechat-mp/wechat-mp-list-source-design.md) | — |
+| 20260914-1901 | 微信公众号内容入知识库 | ✅ 已完成开发：回调/URL 直采/手动粘贴/freepublish 接口对账多通道入库，图片 VL 解析（门禁放开+r2 白描指令/200 张护栏）、content_md 组装、500 字总结、按 token 计费；WP0–WP13 全交付，2026-10-09 验收通过。 | [设计](system/wechat-mp/wechat-mp-knowledge-ingestion-design.md) | [计划](plans/plan-wechat-mp-knowledge-ingestion.md) |
 | 20260713-1358 | RPA 连续消息合并与无效 Trace 治理 | ✅ 已完成开发。稳定 session key 与 legacy 原地迁移、Redis 原子 finalizing/ownership lease、文本及附件 merge/pending、Trace 显式终止语义、监控页中间过程折叠。 | [方案](channel/wecom-personal-rpa-message-merge-and-trace-plan.md) / [关联设计](channel/concurrent-message-serialization-plan.md) | [开发计划](channel/wecom-personal-rpa-message-merge-and-trace-dev-plan.md) |
 | 20260713-1821 | RPA 自消息循环与错发防护 | ✅ 已完成开发。 | [优化方案](channel/wecom-personal-rpa-self-message-loop-and-safe-send-plan.md) | [技术实现与开发计划](channel/wecom-personal-rpa-self-message-loop-and-safe-send-dev-plan.md) |
 | 20260606-1456 | RPA 客户端 EXE 单一交付 | ✅ 已完成开发。按运维决策永久下线安装包交付：删除安装包工程、构建/安装脚本及专属指南，只保留 `dotnet build -c Release` 本机编译和 `scripts/publish.ps1` 自包含 EXE 目录发布；同步 README、状态、操作手册、设计与计划，并新增静态防回归检查。 | — | — |

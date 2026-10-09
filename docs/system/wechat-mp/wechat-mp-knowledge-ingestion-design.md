@@ -1,6 +1,7 @@
 # 微信公众号内容入知识库 设计文档
 
 > 状态：2026-09-14 审阅修订，已按用户补充确认历史范围与三种获取入口（D9/D10）；外部接口能力仍需实测。
+> 2026-10-09：部署验收通过（用户确认），任务归档完成。
 > 开发计划：[P1 开发计划](../../plans/plan-wechat-mp-knowledge-ingestion.md)。本次仅审阅文档，未开发或实测公众号。
 > 关联：`docs/system/crawler/website-product-crawler-design.md`（feature/crawler-phase1 分支，网站爬虫，本设计的多数据源姊妹篇）
 

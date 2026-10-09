@@ -1,6 +1,6 @@
 # BOSS 简历识别去 OCR 化（GLM-5.3-Flash 多模态）设计
 
-- 状态：v2 设计定稿（2026-09-17 修订：合并评分、取消全文转写、防造假收口），按此修订开发
+- 状态：✅ 已交付（v2 定稿后按此开发，2026-09-17 六个 Phase 全完成：云端 VL 服务/工具层/接口与前端/测试/真机验证/CR 修复 P0 闭环；真图评估 11.1s（v1 转写 47s），识别费 1 积分/份姓名门通过即扣；commit 5d14e64d。2026-10-09 验收归档，开发计划等过程文档已清理）
 - 关联：`boss_resume_detail` / `boss_resume_batch` 工具链路；`docs/design/billing/client-billing-integration-design.md`（计费模式）；简历-职位匹配设计 §2/§3（key_info schema 与评分规则，本设计沿用）
 - 租户决策记录：
   - 2026-09-17 ①云端切片方案 B；②截图不扣费，VL 解析成功一份扣一份；③OCR 价目全部替换为简历识别费；④`ocr_engine` 回填实际模型名；⑤batch 逐份识别逐份入库
