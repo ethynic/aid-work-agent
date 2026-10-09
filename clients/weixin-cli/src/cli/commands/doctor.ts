@@ -29,6 +29,8 @@ export interface DoctorReport {
   success: boolean
   checks: DoctorCheck[]
   artifact_dir: string | null
+  /** 基础运行条件；进程存在不等于已核验登录态。 */
+  runtime_readiness: { ready: boolean; reason?: string }
 }
 
 export interface DoctorCommandOptions {
@@ -92,6 +94,11 @@ export async function runDoctorChecks(opts: DoctorCommandOptions = {}): Promise<
     success: checks.every((c) => c.severity !== 'gate' || c.ok),
     checks,
     artifact_dir: dir,
+    runtime_readiness: {
+      ready: checks.every((c) => c.severity !== 'gate' || c.ok) && env.weixin_running,
+      reason: !env.weixin_running ? '请启动微信并登录'
+        : checks.some((c) => c.severity === 'gate' && !c.ok) ? '桌面运行条件未满足' : '基础条件已满足，请确认微信已登录',
+    },
   }
 }
 

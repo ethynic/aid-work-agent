@@ -1,0 +1,272 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aidwork.local/contracts/runtime-host/v1/management-request.schema.json",
+  "title": "RuntimeManagementRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "request_id",
+    "method",
+    "params"
+  ],
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "method": {
+      "enum": [
+        "describe",
+        "getState",
+        "start",
+        "stop",
+        "pair",
+        "plugins.list",
+        "plugins.import",
+        "plugins.enable",
+        "plugins.disable",
+        "plugins.uninstall",
+        "operations.get"
+      ]
+    },
+    "params": {
+      "type": "object"
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "method": {
+          "const": "describe"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {}
+        }
+      }
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "getState"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {}
+        }
+      }
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "start"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_key"
+          ],
+          "properties": {
+            "request_key": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "stop"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_key"
+          ],
+          "properties": {
+            "request_key": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "pair"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_key",
+            "server",
+            "device_name",
+            "pairing_code"
+          ],
+          "properties": {
+            "request_key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "server": {
+              "type": "string",
+              "minLength": 1
+            },
+            "device_name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "pairing_code": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "plugins.list"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {}
+        }
+      }
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "plugins.import"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_key",
+            "selection_ref"
+          ],
+          "properties": {
+            "request_key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "selection_ref": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "plugins.enable"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_key",
+            "installation_id"
+          ],
+          "properties": {
+            "request_key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "installation_id": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "plugins.disable"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_key",
+            "installation_id"
+          ],
+          "properties": {
+            "request_key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "installation_id": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "plugins.uninstall"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_key",
+            "installation_id"
+          ],
+          "properties": {
+            "request_key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "installation_id": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "operations.get"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation_id"
+          ],
+          "properties": {
+            "operation_id": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    }
+  ]
+}

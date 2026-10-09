@@ -1,0 +1,193 @@
+{
+  "python": {
+    "version": "3.12.10",
+    "filename": "python-3.12.10-embed-amd64.zip",
+    "url": "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip",
+    "sha256": "4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3",
+    "digest_source": "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip.sigstore"
+  },
+  "wheels": [
+    {
+      "name": "rapidocr-onnxruntime",
+      "version": "1.4.4",
+      "filename": "rapidocr_onnxruntime-1.4.4-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/ba/12/1e5497183bdbe782dbb91bad1d0d2297dba4d2831b2652657f7517bfc6df/rapidocr_onnxruntime-1.4.4-py3-none-any.whl",
+      "sha256": "971d7d5f223a7a808662229df1ef69893809d8457d834e6373d3854bc1782cbf",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/rapidocr-onnxruntime/1.4.4/"
+    },
+    {
+      "name": "onnxruntime",
+      "version": "1.20.1",
+      "filename": "onnxruntime-1.20.1-cp312-cp312-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/dd/80/76979e0b744307d488c79e41051117634b956612cc731f1028eb17ee7294/onnxruntime-1.20.1-cp312-cp312-win_amd64.whl",
+      "sha256": "19c2d843eb074f385e8bbb753a40df780511061a63f9def1b216bf53860223fb",
+      "license": "MIT License",
+      "source": "https://pypi.org/project/onnxruntime/1.20.1/"
+    },
+    {
+      "name": "numpy",
+      "version": "2.4.3",
+      "filename": "numpy-2.4.3-cp312-cp312-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/d7/7c/f5ee1bf6ed888494978046a809df2882aad35d414b622893322df7286879/numpy-2.4.3-cp312-cp312-win_amd64.whl",
+      "sha256": "65f3c2455188f09678355f5cae1f959a06b778bc66d535da07bf2ef20cd319d5",
+      "license": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
+      "source": "https://pypi.org/project/numpy/2.4.3/"
+    },
+    {
+      "name": "opencv-python",
+      "version": "5.0.0.93",
+      "filename": "opencv_python-5.0.0.93-cp37-abi3-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/21/f0/9fa6e85cb10c8eb36a0222d27e50fe381b86ce49a55446bf39f491727564/opencv_python-5.0.0.93-cp37-abi3-win_amd64.whl",
+      "sha256": "f90ba04b8f73bc5c3814037699739f0156f597338a98f05956c684e7c3ca10d2",
+      "license": "Apache 2.0",
+      "source": "https://pypi.org/project/opencv-python/5.0.0.93/"
+    },
+    {
+      "name": "Pillow",
+      "version": "12.1.1",
+      "filename": "pillow-12.1.1-cp312-cp312-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/3d/17/688626d192d7261bbbf98846fc98995726bddc2c945344b65bec3a29d731/pillow-12.1.1-cp312-cp312-win_amd64.whl",
+      "sha256": "21329ec8c96c6e979cd0dfd29406c40c1d52521a90544463057d2aaa937d66a6",
+      "license": "MIT-CMU",
+      "source": "https://pypi.org/project/Pillow/12.1.1/"
+    },
+    {
+      "name": "pyclipper",
+      "version": "1.4.0",
+      "filename": "pyclipper-1.4.0-cp312-cp312-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/97/77/dfea08e3b230b82ee22543c30c35d33d42f846a77f96caf7c504dd54fab1/pyclipper-1.4.0-cp312-cp312-win_amd64.whl",
+      "sha256": "d1e5498d883b706a4ce636247f0d830c6eb34a25b843a1b78e2c969754ca9037",
+      "license": "MIT",
+      "source": "https://pypi.org/project/pyclipper/1.4.0/"
+    },
+    {
+      "name": "Shapely",
+      "version": "2.1.2",
+      "filename": "shapely-2.1.2-cp312-cp312-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/ec/bf/cb6c1c505cb31e818e900b9312d514f381fbfa5c4363edfce0fcc4f8c1a4/shapely-2.1.2-cp312-cp312-win_amd64.whl",
+      "sha256": "743044b4cfb34f9a67205cee9279feaf60ba7d02e69febc2afc609047cb49179",
+      "license": "BSD 3-Clause",
+      "source": "https://pypi.org/project/Shapely/2.1.2/"
+    },
+    {
+      "name": "PyYAML",
+      "version": "6.0.3",
+      "filename": "pyyaml-6.0.3-cp312-cp312-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/86/bf/899e81e4cce32febab4fb42bb97dcdf66bc135272882d1987881a4b519e9/pyyaml-6.0.3-cp312-cp312-win_amd64.whl",
+      "sha256": "5fcd34e47f6e0b794d17de1b4ff496c00986e1c83f7ab2fb8fcfe9616ff7477b",
+      "license": "MIT",
+      "source": "https://pypi.org/project/PyYAML/6.0.3/"
+    },
+    {
+      "name": "coloredlogs",
+      "version": "15.0.1",
+      "filename": "coloredlogs-15.0.1-py2.py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/a7/06/3d6badcf13db419e25b07041d9c7b4a2c331d3f4e7134445ec5df57714cd/coloredlogs-15.0.1-py2.py3-none-any.whl",
+      "sha256": "612ee75c546f53e92e70049c9dbfcc18c935a2b9a53b66085ce9ef6a6e5c0934",
+      "license": "MIT",
+      "source": "https://pypi.org/project/coloredlogs/15.0.1/"
+    },
+    {
+      "name": "flatbuffers",
+      "version": "25.12.19",
+      "filename": "flatbuffers-25.12.19-py2.py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/e8/2d/d2a548598be01649e2d46231d151a6c56d10b964d94043a335ae56ea2d92/flatbuffers-25.12.19-py2.py3-none-any.whl",
+      "sha256": "7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4",
+      "license": "Apache 2.0",
+      "source": "https://pypi.org/project/flatbuffers/25.12.19/"
+    },
+    {
+      "name": "packaging",
+      "version": "26.0",
+      "filename": "packaging-26.0-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/b7/b9/c538f279a4e237a006a2c98387d081e9eb060d203d8ed34467cc0f0b9b53/packaging-26.0-py3-none-any.whl",
+      "sha256": "b36f1fef9334a5588b4166f8bcd26a14e521f2b55e6b9de3aaa80d3ff7a37529",
+      "license": "Apache-2.0 OR BSD-2-Clause",
+      "source": "https://pypi.org/project/packaging/26.0/"
+    },
+    {
+      "name": "protobuf",
+      "version": "7.34.1",
+      "filename": "protobuf-7.34.1-cp310-abi3-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/4d/87/cb5e585192a22b8bd457df5a2c16a75ea0db9674c3a0a39fc9347d84e075/protobuf-7.34.1-cp310-abi3-win_amd64.whl",
+      "sha256": "e97b55646e6ce5cbb0954a8c28cd39a5869b59090dfaa7df4598a7fba869468c",
+      "license": "3-Clause BSD License",
+      "source": "https://pypi.org/project/protobuf/7.34.1/"
+    },
+    {
+      "name": "sympy",
+      "version": "1.14.0",
+      "filename": "sympy-1.14.0-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/a2/09/77d55d46fd61b4a135c444fc97158ef34a095e5681d0a6c10b75bf356191/sympy-1.14.0-py3-none-any.whl",
+      "sha256": "e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5",
+      "license": "BSD",
+      "source": "https://pypi.org/project/sympy/1.14.0/"
+    },
+    {
+      "name": "mpmath",
+      "version": "1.3.0",
+      "filename": "mpmath-1.3.0-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/43/e3/7d92a15f894aa0c9c4b49b8ee9ac9850d6e63b03c9c32c0367a13ae62209/mpmath-1.3.0-py3-none-any.whl",
+      "sha256": "a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c",
+      "license": "BSD",
+      "source": "https://pypi.org/project/mpmath/1.3.0/"
+    },
+    {
+      "name": "six",
+      "version": "1.17.0",
+      "filename": "six-1.17.0-py2.py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl",
+      "sha256": "4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274",
+      "license": "MIT",
+      "source": "https://pypi.org/project/six/1.17.0/"
+    },
+    {
+      "name": "tqdm",
+      "version": "4.67.3",
+      "filename": "tqdm-4.67.3-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/16/e1/3079a9ff9b8e11b846c6ac5c8b5bfb7ff225eee721825310c91b3b50304f/tqdm-4.67.3-py3-none-any.whl",
+      "sha256": "ee1e4c0e59148062281c49d80b25b67771a127c85fc9676d3be5f243206826bf",
+      "license": "MPL-2.0 AND MIT",
+      "source": "https://pypi.org/project/tqdm/4.67.3/"
+    },
+    {
+      "name": "humanfriendly",
+      "version": "10.0",
+      "filename": "humanfriendly-10.0-py2.py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/f0/0f/310fb31e39e2d734ccaa2c0fb981ee41f7bd5056ce9bc29b2248bd569169/humanfriendly-10.0-py2.py3-none-any.whl",
+      "sha256": "1697e1a8a8f550fd43c2865cd84542fc175a61dcb779b6fee18cf6b6ccba1477",
+      "license": "MIT",
+      "source": "https://pypi.org/project/humanfriendly/10.0/"
+    },
+    {
+      "name": "colorama",
+      "version": "0.4.6",
+      "filename": "colorama-0.4.6-py2.py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/d1/d6/3965ed04c63042e047cb6a3e6ed1a63a35087b6a609aa3a15ed8ac56c221/colorama-0.4.6-py2.py3-none-any.whl",
+      "sha256": "4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6",
+      "license": "",
+      "source": "https://pypi.org/project/colorama/0.4.6/"
+    }
+  ],
+  "msvc": {
+    "version": "14.44.35211",
+    "source": "https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170",
+    "license_gate": "Redistribution requires licensed Visual Studio users; production release must verify this separately.",
+    "redist": {
+      "filename": "vc_redist.x64.exe",
+      "url": "https://download.visualstudio.microsoft.com/download/pr/bd1c8d9d-ba95-4eee-bc6e-df1fcc876373/CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B/VC_redist.x64.exe",
+      "sha256": "cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"
+    },
+    "extractor_bootstrap": {
+      "filename": "7zr.exe",
+      "url": "https://github.com/ip7z/7zip/releases/download/26.04/7zr.exe",
+      "sha256": "256feca8e274e5da655e2a284fabafd9f554365eb164862089dacd4e8276d282"
+    },
+    "extractor": {
+      "filename": "7z-extra.7z",
+      "url": "https://www.7-zip.org/a/7z2501-extra.7z",
+      "sha256": "cd3cf38085c2cc6839cf72716dafb3175ae425f4fd34faafc6c0b64d618d307f"
+    }
+  }
+}

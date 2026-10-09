@@ -20,12 +20,15 @@ interface Window {
       apiBaseUrl: string
       apiOrigin: string
       smokeMode: boolean
+      productKind?: 'desktop' | 'runtime'
+      productProfile?: 'production' | 'acceptance'
       versions: Readonly<{ electron: string; chrome: string }>
     }>
     readonly startup: Readonly<{
       getState(): Promise<Readonly<{ secureStorageAvailable: boolean; online: boolean }>>
     }>
     readonly credentials: import('@shared/platform/contracts').CredentialStore
+    readonly runtimeHost?: import('../features/runtime/contracts').RuntimeManagementPort
     readonly system: Readonly<{
       openExternal(url: string): Promise<void>
       saveDownload(input: Readonly<{ url: string; suggestedName: string; authorization?: string; tenantId?: string }>): Promise<Readonly<{ saved: boolean }>>

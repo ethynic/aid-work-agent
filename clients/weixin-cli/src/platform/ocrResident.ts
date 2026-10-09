@@ -41,6 +41,9 @@ export function defaultPythonPath(scriptDir = fileURLToPath(new URL('.', import.
   // Prefer it to the developer fallback, so relocation needs no repository venv.
   const bundled = join(scriptDir, '..', '..', '..', 'ocr-python', 'python.exe')
   if (existsSync(bundled)) return bundled
+  if (existsSync(join(scriptDir, '..', '..', '..', 'runtime-manifest.json'))) {
+    throw new OcrServerUnavailable('发行包缺少内部 OCR Python，请重新安装完整插件')
+  }
   const repoRoot = join(scriptDir, '..', '..', '..', '..', '..')
   return join(repoRoot, 'venv', 'Scripts', 'python.exe')
 }
@@ -65,7 +68,7 @@ export class ResidentOcr {
 
   private start(): OcrContext {
     if (this.context) return this.context
-    const proc = spawn(this.opts.pythonPath ?? defaultPythonPath(), [this.opts.scriptPath ?? defaultScriptPath()],
+    const proc = spawn(this.opts.pythonPath ?? defaultPythonPath(), ['-I', '-B', this.opts.scriptPath ?? defaultScriptPath()],
       { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }) as ChildProcessWithoutNullStreams
     const pending = new Map<number, OcrPending>()
     let buffer = '', stopped = false, warmed = false

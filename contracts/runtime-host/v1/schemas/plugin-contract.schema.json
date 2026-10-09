@@ -1,0 +1,240 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aidwork.local/contracts/runtime-host/v1/plugin-contract.schema.json",
+  "title": "RuntimePluginContract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "plugin_id",
+    "release_id",
+    "kind",
+    "display_name",
+    "description",
+    "content_digest",
+    "contract_digest",
+    "platforms",
+    "resources"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "plugin_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "release_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "enum": [
+        "skill",
+        "mcp"
+      ]
+    },
+    "display_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "content_digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "contract_digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "platforms": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "desktop",
+          "workspace",
+          "network"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "documents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "text"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(?:^|/)\\.\\.?(?:/|$))[^\\r\\n]+$"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "args_schema",
+          "description"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "args_schema": {
+            "type": "object"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "output_schema": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "description",
+          "input_schema"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "input_schema": {
+            "type": "object"
+          },
+          "output_schema": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "code_map": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "description"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(?:^|/)\\.\\.?(?:/|$))[^\\r\\n]+$"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "required": [
+        "documents",
+        "entries",
+        "code_map"
+      ],
+      "not": {
+        "required": [
+          "tools"
+        ]
+      },
+      "properties": {
+        "kind": {
+          "const": "skill"
+        },
+        "documents": {
+          "minItems": 1,
+          "contains": {
+            "type": "object",
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "const": "SKILL.md"
+              }
+            }
+          }
+        },
+        "entries": {}
+      }
+    },
+    {
+      "required": [
+        "tools"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "entries"
+            ]
+          },
+          {
+            "required": [
+              "documents"
+            ]
+          },
+          {
+            "required": [
+              "code_map"
+            ]
+          }
+        ]
+      },
+      "properties": {
+        "kind": {
+          "const": "mcp"
+        },
+        "tools": {
+          "minItems": 1
+        }
+      }
+    }
+  ]
+}

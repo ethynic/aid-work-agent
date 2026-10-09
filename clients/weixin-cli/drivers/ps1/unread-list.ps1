@@ -1,5 +1,5 @@
 ﻿# drivers/ps1/unread-list.ps1 — weixin_unread_list 驱动（只读，不开会话不清未读）
-# PrintWindow 截主窗口（不要求前台，被遮挡也能出图）→ venv python 跑 RapidOCR
+# PrintWindow 截主窗口（不要求前台，被遮挡也能出图）→ 包内 OCR Python 跑 RapidOCR
 # （drivers/py/unread_list.py，只取窗口宽 29% 以左的会话列表区）→
 # 聚合 {name, preview, unread_count} → DRIVER_JSON 输出 unread。
 # 单栏模式（无左侧会话列表）→ UI_CHANGED（message 说明需恢复两栏）。
@@ -16,14 +16,12 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WeixinCli.UnreadList' -Body {
     $shotPath = Join-Path $env:TEMP 'weixin-driver-unread-list.png'
     Get-WeixinWindowSnapshot $mainHwnd $shotPath | Out-Null
 
-    # venv 里的 python（rapidocr_onnxruntime 装在其中）；drivers/ps1 上四级为仓库根
-    $repoRoot = (Resolve-Path (Join-Path $script:DriverPs1Dir '..\..\..\..')).Path
-    $pythonExe = Join-Path $repoRoot 'venv\Scripts\python.exe'
+    $pythonExe = Resolve-WeixinOcrPython
     $ocrScript = Join-Path $script:DriverPs1Dir '..\py\unread_list.py'
-    if (-not (Test-Path $pythonExe)) { Throw-DriverError 'INTERNAL_ERROR' ("未找到 venv python：" + $pythonExe) }
+    if (-not (Test-Path $pythonExe)) { Throw-DriverError 'INTERNAL_ERROR' ("未找到 OCR Python：" + $pythonExe) }
     if (-not (Test-Path $ocrScript)) { Throw-DriverError 'INTERNAL_ERROR' ("未找到 OCR 脚本：" + $ocrScript) }
 
-    $out = & $pythonExe $ocrScript $shotPath 2>$null
+    $out = & $pythonExe -I -B $ocrScript $shotPath 2>$null
     if ($LASTEXITCODE -ne 0) { Throw-DriverError 'INTERNAL_ERROR' ("OCR 脚本执行失败（exit=$LASTEXITCODE）") }
     $jsonLine = @($out | Where-Object { $_ -match '^UNREAD_JSON:' }) | Select-Object -Last 1
     if (-not $jsonLine) { Throw-DriverError 'INTERNAL_ERROR' 'OCR 脚本未输出 UNREAD_JSON' }

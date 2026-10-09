@@ -1,6 +1,6 @@
 ﻿# drivers/ps1/_common.ps1 — M2 驱动公共底座
 # 职责：
-#   - dot-source 已真机验证的 experiments/probes/p1-chat-search-group/probe-lib.ps1（只读引用，不改动）
+#   - dot-source 包内 win32-lib.ps1（由原已验证 Win32/UIA 底座迁入）
 #   - DRIVER_JSON 输出约定与 Invoke-DriverMain 包装（单飞 mutex + 统一错误映射）
 #   - Kimi 视觉调用（kimi-k3，429 重试 25s×4，```json 包裹剥离）
 #   - 主窗口解析（ClassName/标题校验 + 兜底枚举，规避 MainWindowHandle 被弹窗抢走）
@@ -13,7 +13,7 @@
 # 注意：本文件含中文，必须以 UTF-8 with BOM 保存（Windows PowerShell 5.1 否则按 GBK 解析报错）。
 
 $script:DriverPs1Dir = Split-Path -Parent $MyInvocation.MyCommand.Path
-. (Join-Path $script:DriverPs1Dir '..\..\experiments\probes\p1-chat-search-group\probe-lib.ps1')
+. (Join-Path $script:DriverPs1Dir 'win32-lib.ps1')
 
 # 视觉模型配置：GLM-5.3-Flash 为默认通道，kimi-k3 保留为备份
 # （2026-08-28 评估结论：坐标定位与 kimi-k3 等效、成本约 1/40、快 3-4 倍，
@@ -377,4 +377,17 @@ function Invoke-DriverMain {
         [void]$mutex.ReleaseMutex()
         $mutex.Dispose()
     }
+}
+
+# 只有开发 checkout 允许仓库 venv；签名发行包缺内部解释器须明确失败。
+function Resolve-WeixinOcrPython {
+    $packageRoot = [IO.Path]::GetFullPath((Join-Path $script:DriverPs1Dir '..\..'))
+    $bundled = Join-Path $packageRoot 'ocr-python\python.exe'
+    if (Test-Path -LiteralPath $bundled -PathType Leaf) { return $bundled }
+    if (Test-Path -LiteralPath (Join-Path $packageRoot 'runtime-manifest.json')) {
+        Throw-DriverError 'CONFIG_MISSING' '发行包缺少内部 OCR Python，请重新安装完整插件'
+    }
+    $development = [IO.Path]::GetFullPath((Join-Path $packageRoot '..\..\venv\Scripts\python.exe'))
+    if (Test-Path -LiteralPath $development -PathType Leaf) { return $development }
+    Throw-DriverError 'CONFIG_MISSING' '缺少内部 OCR Python'
 }

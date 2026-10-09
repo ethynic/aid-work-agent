@@ -2,13 +2,16 @@ import { existsSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, protocol, safeStorage, screen, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, protocol, safeStorage, screen, shell, Tray } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import electronUpdater from 'electron-updater'
 import { EncryptedCredentialStore, isAllowedCredentialKey, isAllowedCredentialValue } from './credentials.js'
 import { resolveApiConfiguration } from './apiConfiguration.js'
 import { DesktopUpdater, type UpdateAdapter } from './desktopUpdater.js'
 import { resolveUpdateConfiguration } from './updateConfiguration.js'
+import { resolveProductConfiguration } from './productConfiguration.js'
+import { RuntimeSupervisor } from './runtimeSupervisor.js'
+import { RuntimeSelections } from './runtimeSelection.js'
 import { applicationMenuTemplate, resolvePlatformWindowOptions, shouldQuitWhenAllWindowsClosed } from './platform.js'
 import { normalizeDownloadUrl, normalizeExternalUrl, readDownloadBody, safeSuggestedName } from './systemCapabilities.js'
 import {
@@ -47,8 +50,14 @@ protocol.registerSchemesAsPrivileged([
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 const rendererRoot = path.resolve(dirname, '../renderer')
 const preloadPath = path.resolve(dirname, 'preload.cjs')
+const runtimeResources = app.isPackaged ? process.resourcesPath : path.resolve(dirname, '../../build/runtime-resources')
+const product = resolveProductConfiguration({ resourcesPath: runtimeResources, isPackaged: app.isPackaged, appDataPath: app.getPath('appData') })
+const legacyUserDataPath = app.getPath('userData')
+app.setName(product.productName)
+app.setPath('userData', product.userDataPath ?? legacyUserDataPath)
+if (process.platform === 'win32') app.setAppUserModelId(product.appId)
 const smokeMode = process.env.AID_AGENT_DESKTOP_SMOKE === '1'
-if (smokeMode && process.env.AID_AGENT_DESKTOP_SMOKE_USER_DATA) {
+if (smokeMode && product.kind === 'desktop' && process.env.AID_AGENT_DESKTOP_SMOKE_USER_DATA) {
   app.setPath('userData', path.resolve(process.env.AID_AGENT_DESKTOP_SMOKE_USER_DATA))
 }
 let apiBaseUrl = ''
@@ -57,8 +66,15 @@ let mainWindow: BrowserWindow | null = null
 let credentialStore: EncryptedCredentialStore | null = null
 let desktopUpdater: DesktopUpdater | null = null
 let pendingDeepLink: string | null = null
+let runtimeSupervisor: RuntimeSupervisor | null = null
+let runtimeSelections: RuntimeSelections | null = null
+let runtimeTray: Tray | null = null
+let quitting = false
+let exitAllowed = false
+let exitPending = false
 
 function navigateDeepLink(argumentsList: readonly string[]): void {
+  if (product.kind !== 'desktop') return
   const deepLink = parseAgentDeepLink(argumentsList)
   if (!deepLink) return
   if (!mainWindow) {
@@ -119,6 +135,24 @@ function registerDesktopIpc(): void {
       throw new Error('desktop IPC sender rejected')
     }
   }
+  ipcMain.handle('desktop:runtime:request', (event, request: unknown) => {
+    assertTrustedSender(event)
+    if (!runtimeSupervisor) throw new Error('当前产品没有本机Runtime管理能力')
+    return runtimeSupervisor.request(request)
+  })
+  ipcMain.handle('desktop:runtime:choose-package', async (event, input: unknown) => {
+    assertTrustedSender(event)
+    if (!runtimeSelections || !runtimeSupervisor?.instanceId || !input || typeof input !== 'object' || Array.isArray(input)) throw new Error('选包请求无效')
+    const request = input as Record<string, unknown>
+    if (Object.keys(request).sort().join(',') !== 'instance_id,request_key' || request.instance_id !== runtimeSupervisor.instanceId || typeof request.request_key !== 'string' || !request.request_key || request.request_key.length > 200) throw new Error('选包实例或请求键无效')
+    const window = mainWindow!
+    const instance = runtimeSupervisor.instanceId
+    const selection = await dialog.showOpenDialog(window, { title: '选择第一方离线插件包', properties: ['openFile'], filters: [{ name: '第一方离线插件包', extensions: ['zip'] }] })
+    if (selection.canceled || !selection.filePaths[0]) return null
+    assertTrustedSender(event)
+    if (runtimeSupervisor.instanceId !== instance || window.isDestroyed()) throw new Error('Runtime连接已变更，请重新选择')
+    return runtimeSelections.choose(selection.filePaths[0], event.sender.id, instance, request.request_key)
+  })
   ipcMain.handle('desktop:startup:get-state', (event) => {
     assertTrustedSender(event)
     return { secureStorageAvailable: safeStorage.isEncryptionAvailable(), online: net.isOnline() }
@@ -183,13 +217,19 @@ function registerDesktopIpc(): void {
     assertTrustedSender(event)
     await desktopUpdater!.download()
   })
-  ipcMain.handle('desktop:update:restart-and-install', (event) => {
+  ipcMain.handle('desktop:update:restart-and-install', async (event) => {
     assertTrustedSender(event)
+    if (desktopUpdater!.getState().status !== 'downloaded') throw new Error('尚无已下载的更新包')
+    await runtimeSupervisor?.stopAndExit()
     desktopUpdater!.restartAndInstall()
   })
 }
 
 function initializeDesktopUpdater(): void {
+  if (product.kind === 'runtime' || product.profile === 'acceptance') {
+    desktopUpdater = new DesktopUpdater(null, app.getVersion(), () => {}, 'Runtime更新源尚未验收')
+    return
+  }
   const configuration = resolveUpdateConfiguration({
     isPackaged: app.isPackaged,
     smokeMode,
@@ -260,16 +300,26 @@ async function createWindow(): Promise<BrowserWindow> {
         '--aidagent-bridge-version=3',
         `--aidagent-api-base-url=${apiBaseUrl}`,
         `--aidagent-smoke-mode=${smokeMode ? '1' : '0'}`,
+        `--aidagent-product-kind=${product.kind}`,
+        `--aidagent-product-profile=${product.profile}`,
+        `--aidagent-runtime-enabled=${product.runtimeEnabled ? '1' : '0'}`,
       ],
     },
   })
   mainWindow = window
+  const runtimeOwner = window.webContents.id
   if (state.maximized) window.maximize()
 
   installSecurityHandlers(window)
   installZoomShortcuts(window)
   installFailLoudHandlers(window)
-  window.on('close', () => {
+  window.on('close', (event) => {
+    if (product.kind === 'runtime' && !quitting && !smokeMode) { event.preventDefault(); window.hide(); return }
+    if (runtimeSupervisor && !exitAllowed && !smokeMode) {
+      event.preventDefault()
+      if (!quitting) app.quit()
+      return
+    }
     try {
       saveWindowState(statePath, { bounds: window.getNormalBounds(), maximized: window.isMaximized() })
     } catch (error) {
@@ -277,6 +327,7 @@ async function createWindow(): Promise<BrowserWindow> {
     }
   })
   window.on('closed', () => {
+    void runtimeSelections?.invalidate(runtimeOwner)
     if (mainWindow === window) mainWindow = null
   })
 
@@ -312,7 +363,7 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) {
   app.quit()
 } else {
-  if (!smokeMode) app.setAsDefaultProtocolClient(DESKTOP_SCHEME)
+  if (!smokeMode && product.kind === 'desktop') app.setAsDefaultProtocolClient(DESKTOP_SCHEME)
   app.on('second-instance', (_event, argv) => {
     if (parseAgentDeepLink(argv)) navigateDeepLink(argv)
     else if (mainWindow) focusExistingWindow(mainWindow)
@@ -321,7 +372,7 @@ if (!hasSingleInstanceLock) {
   app.whenReady().then(async () => {
     let configuration
     try {
-      configuration = resolveApiConfiguration({
+      configuration = product.kind === 'runtime' ? { apiBaseUrl: 'https://runtime.invalid', source: 'runtime-local' } : resolveApiConfiguration({
         environmentValue: process.env.AID_AGENT_API_BASE_URL,
         userDataPath: app.getPath('userData'),
         resourcesPath: process.resourcesPath,
@@ -336,15 +387,40 @@ if (!hasSingleInstanceLock) {
     nativeTheme.themeSource = 'system'
     Menu.setApplicationMenu(Menu.buildFromTemplate(applicationMenuTemplate(process.platform)))
     initializeDesktopUpdater()
+    if (product.runtimeEnabled && product.nodeExecutable && product.hostEntry && product.runtimeHome) {
+      runtimeSelections = new RuntimeSelections(product.runtimeHome)
+      runtimeSupervisor = new RuntimeSupervisor({
+        nodeExecutable: product.nodeExecutable, hostEntry: product.hostEntry, home: product.runtimeHome,
+        supervisor: product.kind === 'runtime' ? 'runtime_app' : 'desktop',
+        takeSelectedPackage: input => {
+          if (!mainWindow || mainWindow.isDestroyed() || !runtimeSelections) throw new Error('选包窗口已失效')
+          return runtimeSelections.take(input, mainWindow.webContents.id)
+        },
+        onEvent: event => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('desktop:runtime:event', event) },
+        onDisconnect: () => {
+          void runtimeSelections?.invalidate()
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('desktop:runtime:disconnected')
+        },
+      })
+    }
     registerDesktopIpc()
     await registerRendererProtocol()
     await createWindow()
+    if (product.kind === 'runtime' && !smokeMode) {
+      runtimeTray = new Tray(await app.getFileIcon(process.execPath))
+      runtimeTray.setToolTip(product.productName)
+      runtimeTray.setContextMenu(Menu.buildFromTemplate([
+        { label: '打开执行节点', click: () => { if (mainWindow) focusExistingWindow(mainWindow) } },
+        { type: 'separator' }, { label: '退出', click: () => app.quit() },
+      ]))
+      runtimeTray.on('double-click', () => { if (mainWindow) focusExistingWindow(mainWindow) })
+    }
     if (pendingDeepLink) {
       const deepLink = pendingDeepLink
       pendingDeepLink = null
       navigateDeepLink([deepLink])
     } else {
-      navigateDeepLink(process.argv)
+      if (product.kind === 'desktop') navigateDeepLink(process.argv)
     }
   }).catch((error) => {
     logLifecycle('startup-failed', error instanceof Error ? error.name : 'unknown')
@@ -358,8 +434,22 @@ if (!hasSingleInstanceLock) {
   })
 
   app.on('window-all-closed', () => {
-    if (shouldQuitWhenAllWindowsClosed(process.platform)) app.quit()
+    if (product.kind === 'desktop' && shouldQuitWhenAllWindowsClosed(process.platform)) app.quit()
   })
 
-  app.on('before-quit', () => desktopUpdater?.stop())
+  app.on('before-quit', (event) => {
+    desktopUpdater?.stop()
+    if (!runtimeSupervisor || exitAllowed) { runtimeTray?.destroy(); return }
+    event.preventDefault(); quitting = true
+    if (exitPending) return
+    exitPending = true
+    void runtimeSupervisor.stopAndExit().then(async () => {
+      await runtimeSelections?.invalidate()
+      exitAllowed = true; app.quit()
+    }).catch(async () => {
+      quitting = false
+      if (mainWindow) focusExistingWindow(mainWindow)
+      await dialog.showMessageBox({ type: 'warning', title: '执行仍需收尾', message: '本机执行尚未确认安全停止。请保留当前进程和执行记录，完成收尾或核对后再退出。' })
+    }).finally(() => { exitPending = false })
+  })
 }

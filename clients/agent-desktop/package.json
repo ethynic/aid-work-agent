@@ -13,12 +13,19 @@
     "start": "npm run build && electron .",
     "package:win:dev": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-win-dev.ps1",
     "package:win:release": "npm run typecheck && npm test && node scripts/package-win.mjs release",
-    "verify:package": "node scripts/verify-package.mjs release"
+    "verify:package": "node scripts/verify-package.mjs release",
+    "runtime:prepare": "node scripts/prepare-runtime.mjs",
+    "runtime:package:acceptance": "npm run build && node scripts/package-runtime-win.mjs acceptance",
+    "runtime:package:production": "npm run build && node scripts/package-runtime-win.mjs production",
+    "runtime:verify": "node scripts/verify-runtime-package.mjs",
+    "runtime:test:packaging": "node --test scripts/tests/runtime-packaging.test.mjs",
+    "runtime:test:import": "node --test scripts/tests/runtime-host-import.test.mjs"
   },
   "dependencies": {
     "electron-updater": "^6.8.3"
   },
   "devDependencies": {
+    "@aid/local-tool-host-core": "file:../shared/local-tool-host-core",
     "@electron/asar": "^4.2.0",
     "@types/node": "^24.0.0",
     "electron": "43.1.0",

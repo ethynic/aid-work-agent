@@ -40,9 +40,16 @@ if (files.length === 0) {
 console.log(`running ${files.length} test file(s):`)
 for (const f of files) console.log('  ' + path.relative(root, f))
 
-const result = spawnSync(process.execPath, ['--test', ...files], {
-  stdio: 'inherit',
-  cwd: root,
-})
-
-process.exit(result.status ?? 1)
+// The legacy CLI fixture intentionally holds an OS-user-wide unverified claimant.
+// Run Host compositions serially so it cannot poison another suite's pairing probe.
+const hostSuites = new Set(['hostIndependent.test.js', 'pair.test.js'])
+const serial = files.filter(file => hostSuites.has(path.basename(file)))
+const parallel = files.filter(file => !hostSuites.has(path.basename(file)))
+for (const [batch, options] of [[serial, ['--test-concurrency=1']], [parallel, []]]) {
+  if (batch.length === 0) continue
+  const result = spawnSync(process.execPath, ['--test', ...options, ...batch], {
+    stdio: 'inherit',
+    cwd: root,
+  })
+  if (result.status !== 0) process.exit(result.status ?? 1)
+}

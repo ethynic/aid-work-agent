@@ -35,6 +35,13 @@ TGZ="$RUNTIME/agent-tool-runtime-$VER.tgz"
 command -v node >/dev/null && command -v npm >/dev/null || { echo "需要 node/npm"; exit 1; }
 [ -d "$BOSS" ] && [ -d "$RUNTIME" ] || { echo "目录不对：请在 clients/ 仓库里运行"; exit 1; }
 
+# 此脚本仅适用于历史内嵌 BOSS 的发货包；新 Host 必须在修改版本或清理文件前拒绝。
+if ! node -e "const p=require(process.argv[1]); process.exit(p.dependencies?.['boss-resume-assistant'] ? 0 : 1)" "$RUNTIME/package.json"; then
+    echo "当前 Runtime 使用独立插件布局，不支持旧内嵌 BOSS 发货脚本；尚未修改任何文件。"
+    echo "Host 使用 clients/agent-tool-runtime 的 npm pack；Windows 验收包见 docs/system/desktop-agent-client-build-manual.md 第12节。"
+    exit 1
+fi
+
 echo "[1/8] 两处 package.json 版本 → $VER（同步 lockfile）"
 # 注意：node -e 里不能用 MSYS 风格绝对路径（/c/... 会被当成 C:\c\...），cd 进目录用相对路径
 (cd "$BOSS" && node -e "

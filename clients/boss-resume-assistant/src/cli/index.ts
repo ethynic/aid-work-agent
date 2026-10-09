@@ -327,7 +327,7 @@ async function main(): Promise<number> {
       const cdpPort = parseCdpPort(args)
       if (cdpPort === 'invalid') return 2
       const { doctorCommand } = await import('./commands/doctor.js')
-      return doctorCommand({ cdpPort })
+      return doctorCommand({ cdpPort, json: hasFlag(args, 'json') })
     }
     case 'version': {
       const { versionCommand } = await import('./commands/version.js')

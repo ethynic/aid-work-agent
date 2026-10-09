@@ -26,6 +26,16 @@ test('development checkout retains existing venv fallback', () => {
   } finally { rmSync(home, { recursive: true, force: true }) }
 })
 
+test('installed distribution cannot use a repository venv when bundled OCR is missing', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ocr-installed-test-'))
+  try {
+    const pkg = join(home, 'relocated-provider')
+    mkdirSync(pkg)
+    writeFileSync(join(pkg, 'runtime-manifest.json'), '{}')
+    assert.throws(() => defaultPythonPath(join(pkg, 'dist', 'src', 'platform')), /发行包缺少内部 OCR Python/)
+  } finally { rmSync(home, { recursive: true, force: true }) }
+})
+
 test('portable pack rejects a venv before copying or executing it', () => {
   const home = mkdtempSync(join(tmpdir(), 'ocr-pack-test-'))
   try {

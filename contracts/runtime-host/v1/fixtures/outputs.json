@@ -1,0 +1,51 @@
+[
+  {
+    "name": "screenshot_output",
+    "schema": "tool-output.schema.json",
+    "valid": true,
+    "value": {
+      "effect": "applied",
+      "complete": true,
+      "text": "已生成截图",
+      "artifacts": [
+        {
+          "artifact_ref": "artifact-1",
+          "device_id": "device-B",
+          "invocation_id": "inv-1",
+          "name": "screen.png",
+          "mime_type": "image/png"
+        }
+      ],
+      "code": 0,
+      "error": ""
+    }
+  },
+  {
+    "name": "unknown_business_effect",
+    "schema": "tool-output.schema.json",
+    "valid": true,
+    "value": {
+      "effect": "unknown",
+      "complete": true,
+      "code": 100,
+      "text": "脚本停止，实际业务效果仍待核对",
+      "error": "脚本停止，实际业务效果仍待核对"
+    }
+  },
+  {
+    "name": "truncated_read_output",
+    "schema": "tool-output.schema.json",
+    "valid": true,
+    "value": {
+      "effect": "none",
+      "complete": false,
+      "text": "只返回前100条记录",
+      "data": {
+        "matched": 350,
+        "returned": 100
+      },
+      "code": 0,
+      "error": ""
+    }
+  }
+]

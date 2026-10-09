@@ -21,6 +21,9 @@ import { GREET_TEXT, findButtonsByExactText, pairCardName } from '../../main/bos
 
 export interface DoctorCommandOptions {
   cdpPort?: number
+  json?: boolean
+  /** 只读测试注入，不由 CLI 参数构造。 */
+  gateway?: Pick<CdpGateway, 'connect' | 'attachToRecommendPage' | 'captureDomSnapshot' | 'close'>
 }
 
 /** 登录态特征：推荐页「筛选」按钮或左侧菜单文案 */
@@ -30,8 +33,11 @@ export async function doctorCommand(opts: DoctorCommandOptions): Promise<number>
   const port = opts.cdpPort ?? DEFAULT_CDP_PORT
   const endpoint = `http://127.0.0.1:${port}`
   let failed = false
+  const checks: Array<{ name: string; ok: boolean; severity: 'gate'; detail: string }> = []
+  const print = (message: string) => { if (!opts.json) console.log(message) }
   const check = (ok: boolean, label: string, detail = '') => {
-    console.log(`${ok ? '✅' : '❌'} ${label}${detail ? `：${detail}` : ''}`)
+    checks.push({ name: label, ok, severity: 'gate', detail })
+    print(`${ok ? '✅' : '❌'} ${label}${detail ? `：${detail}` : ''}`)
     if (!ok) failed = true
     return ok
   }
@@ -45,7 +51,7 @@ export async function doctorCommand(opts: DoctorCommandOptions): Promise<number>
   }
 
   // ② CDP 端点可连
-  const gw = new CdpGateway({ timeoutMs: 5000 })
+  const gw = opts.gateway ?? new CdpGateway({ timeoutMs: 5000 })
   let connected = false
   try {
     await gw.connect(endpoint)
@@ -77,7 +83,7 @@ export async function doctorCommand(opts: DoctorCommandOptions): Promise<number>
       // 0 配对且有按钮：锚定规则与当前页面布局失配 → 定向打招呼必然「找不到人」，fail
       const buttons = findButtonsByExactText(snap, GREET_TEXT)
       if (buttons.length === 0) {
-        console.log('ℹ️ 姓名配对自检：当前视口无「打招呼」按钮（可能已全部打过招呼或不在推荐牛人页），跳过')
+        print('ℹ️ 姓名配对自检：当前视口无「打招呼」按钮（可能已全部打过招呼或不在推荐牛人页），跳过')
       } else {
         const viewport = viewportOf(snap)
         const names = buttons.map((b) => pairCardName(snap, b, viewport))
@@ -86,9 +92,9 @@ export async function doctorCommand(opts: DoctorCommandOptions): Promise<number>
           check(false, `姓名配对自检（${buttons.length} 个「打招呼」按钮配对成功 0）`,
             '锚定规则与当前页面布局失配：定向打招呼将「滚遍列表也找不到人」，请把 collect_logs 诊断包发给管理员')
         } else if (paired.length < buttons.length) {
-          console.log(`✅ 姓名配对自检：${buttons.length} 个「打招呼」按钮配对成功 ${paired.length}（${paired.join('、')}）；${buttons.length - paired.length} 个未配上（无中文名卡片属正常，fail-safe 跳过）`)
+          print(`✅ 姓名配对自检：${buttons.length} 个「打招呼」按钮配对成功 ${paired.length}（${paired.join('、')}）；${buttons.length - paired.length} 个未配上（无中文名卡片属正常，fail-safe 跳过）`)
         } else {
-          console.log(`✅ 姓名配对自检：${buttons.length} 个「打招呼」按钮全部配对成功（${paired.join('、')}）`)
+          print(`✅ 姓名配对自检：${buttons.length} 个「打招呼」按钮全部配对成功（${paired.join('、')}）`)
         }
       }
     } catch (e) {
@@ -97,6 +103,13 @@ export async function doctorCommand(opts: DoctorCommandOptions): Promise<number>
   }
 
   await gw.close().catch(() => {})
+  if (opts.json) {
+    console.log(JSON.stringify({
+      success: !failed, checks,
+      runtime_readiness: { ready: !failed && connected && attached, reason: failed ? '请启动调试 Chrome 并登录 BOSS，检查页面与脚本条件' : '只读 BOSS 页面与登录态检查通过' },
+    }))
+    return failed ? 1 : 0
+  }
   if (failed) {
     console.log('\n存在失败项，请按提示修复后重试（doctor 为只读检查，未对页面做任何操作）')
     return 1

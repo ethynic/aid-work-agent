@@ -38,7 +38,7 @@ const COMMAND_FLAGS: Readonly<Record<string, readonly string[]>> = {
   'greet-detail': ['dry-run'],
   'close-detail': [],
   mcp: ['stdio'],
-  doctor: [],
+  doctor: ['json'],
   version: ['json'],
 }
 

@@ -14,6 +14,10 @@ files:
   - dist/electron/security.js
   - dist/electron/systemCapabilities.js
   - dist/electron/windowState.js
+  - dist/electron/platform.js
+  - dist/electron/productConfiguration.js
+  - dist/electron/runtimeSupervisor.js
+  - dist/electron/runtimeSelection.js
   - dist/renderer/**/*
   - package.json
   - "!**/*.map"

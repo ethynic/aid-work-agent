@@ -490,17 +490,16 @@ function Close-WeComSearchOverlay {
 }
 
 function Invoke-WeComChatOcr {
-    # 仓库 venv python 跑 drivers/py/chat_ocr.py（M2 单一 RapidOCR 入口）；
-    # drivers/ps1 上四级为仓库根。CHATOCR_JSON 协议；error 归并 CONFIG_MISSING/INTERNAL_ERROR。
+    # 包内 OCR Python 跑 drivers/py/chat_ocr.py（M2 单一 RapidOCR 入口）；
+    # 优先使用发行包内解释器。CHATOCR_JSON 协议；error 归并 CONFIG_MISSING/INTERNAL_ERROR。
     param(
         [Parameter(Mandatory)][string]$ImagePath,
         [Parameter(Mandatory)][string]$Mode
     )
-    $repoRoot = (Resolve-Path (Join-Path $script:DriverPs1Dir '..\..\..\..')).Path
-    $pythonExe = Join-Path $repoRoot 'venv\Scripts\python.exe'
+    $pythonExe = Resolve-WeComOcrPython
     $ocrScript = Join-Path $script:DriverPs1Dir '..\py\chat_ocr.py'
     if (-not (Test-Path $ocrScript)) { Throw-DriverError 'INTERNAL_ERROR' ('未找到 OCR 脚本：' + $ocrScript) }
-    if (-not (Test-Path $pythonExe)) { Throw-DriverError 'CONFIG_MISSING' ('未找到仓库 venv python（RapidOCR 所在解释器）：' + $pythonExe) }
+    if (-not (Test-Path $pythonExe)) { Throw-DriverError 'CONFIG_MISSING' ('未找到 OCR Python：' + $pythonExe) }
     # 用 System.Diagnostics.Process 直接启动（不走 PS 原生命令管道）：MCP stdio 场景下
     # Host 可能只继承白名单环境变量（@modelcontextprotocol/sdk getDefaultEnvironment），
     # PS 5.1 对管道化原生命令的「文档激活」在该环境下抛 CantActivateDocumentInPipeline，
@@ -508,7 +507,7 @@ function Invoke-WeComChatOcr {
     # 且 stderr 可留存诊断。
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $pythonExe
-    $psi.Arguments = ('"' + $ocrScript + '" "' + $ImagePath + '" ' + $Mode)
+    $psi.Arguments = ('-I -B "' + $ocrScript + '" "' + $ImagePath + '" ' + $Mode)
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
@@ -959,4 +958,16 @@ function Invoke-DriverMain {
         [void]$mutex.ReleaseMutex()
         $mutex.Dispose()
     }
+}
+
+function Resolve-WeComOcrPython {
+    $packageRoot = [IO.Path]::GetFullPath((Join-Path $script:DriverPs1Dir '..\..'))
+    $bundled = Join-Path $packageRoot 'ocr-python\python.exe'
+    if (Test-Path -LiteralPath $bundled -PathType Leaf) { return $bundled }
+    if (Test-Path -LiteralPath (Join-Path $packageRoot 'runtime-manifest.json')) {
+        Throw-DriverError 'CONFIG_MISSING' '发行包缺少内部 OCR Python，请重新安装完整插件'
+    }
+    $development = [IO.Path]::GetFullPath((Join-Path $packageRoot '..\..\venv\Scripts\python.exe'))
+    if (Test-Path -LiteralPath $development -PathType Leaf) { return $development }
+    Throw-DriverError 'CONFIG_MISSING' '缺少内部 OCR Python'
 }

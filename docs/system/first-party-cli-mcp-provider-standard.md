@@ -184,8 +184,8 @@ catalog 中另有不可变 package envelope，描述一次可下载发布：
   路径，不得含 `..`、绝对路径、shell 或任意环境注入；
 - `provider_release_id` 是 package 发布身份，不写入业务 tool contract；同一 release id 一经发布，
   envelope、package digest、manifest digest 和内容全部不可覆盖。修复必须创建新 release id；
-- package envelope 使用 RFC 8785 规范化后的无 `signature` 字段内容，并与 package digest 绑定后做
-  Ed25519 签名。操作系统代码签名可作为额外门禁，不能替代该跨平台包签名；
+- package envelope 使用 RFC 8785 规范化后的无 `signature` 字段内容做Ed25519签名；该内容已含
+  package_digest，不另拼接一份未定义的摘要字节。操作系统代码签名不能替代跨平台包签名；
 - Runtime 内置平台 trust root/key id allowlist；签名私钥只存在于批准的 release KMS/HSM/离线签名
   边界。轮换使用新旧公钥重叠窗口，紧急撤回进入 catalog denylist 并随 heartbeat/resolve 传播；
 - Host 只取自身批准 catalog 与运行时 capability 的交集；
@@ -271,6 +271,24 @@ reproducible build + tests + SBOM
 catalog 数据与不可变包对象的 owner、存储位置、审核角色、发布审计、撤回 SLA、密钥轮换和灾难恢复
 由 Desktop P1 D00 package/signing ADR 冻结。上传成功不等于发布；只有受权 publisher/reviewer 才能
 把 release 从 draft 提升为 active。撤回不删除历史审计或已发生 Invocation 的 release 引用。
+
+### 10.2 Runtime首期离线包实施格式
+
+本节为Runtime A2的离线实施约束；10.1的在线catalog/云端release固定仍是后续目标，现有Device claim未携带这些release字段，不以规范描述声称已有实现。
+
+外层`.aidplugin.zip`仅含`envelope.json`与`payload.zip`。envelope使用第6节字段；package_format=zip、package_size为内层payload.zip字节数、package_digest为内层文件原始字节SHA-256，故不把包含签名的外层文件做自引用摘要。签名输入为移除signature后整个envelope的RFC8785 UTF-8字节，signature为`base64:`前缀的签名字节编码；验签公钥仅取Host批准的trust root。外层仍做数量/体积/路径限制，随后验签及核对payload字节，再受限解包。
+
+payload根包含构建机生成的完整`runtime-manifest.json`以及实际运行所需的编译代码、package元数据、node_modules/原生模块、drivers和适用的内部Python/OCR模型等。manifest_digest为完整runtime-manifest.json对象经RFC8785规范化的UTF-8字节SHA-256；provider_id/provider_version须与envelope一致。该完整文件不同于现有CLI静态provider-manifest.json；构建后只读version输出与MCP工具契约需验证一致。schema_digest继续使用各Provider已有契约算法，不在此改写legacy摘要算法；H4设备contract_digest亦不在此冻结。
+
+构建机完成依赖与hook，客户机不运行npm/pip/Git安装、package安装hook或外部下载。Node由H3提供，首期Windows x64/Node22.23.3，包须满足engines/ABI/运行库；内部Python若为支持operation所必需，必须随包交付。搬离仓库且无系统开发工具的端到端验证是A2/A4门禁。
+
+2026-10-09 A2完整manifest发行扩展（Runtime唯一写入，不改变H1管理schema或legacy摘要）：`manifest_version=1`、`display_name`、`description`及`distribution={platform:"win32",arch:"x64",node:{version:"22.23.3",modules_abi:"127"},required_files:[{path,size,sha256}]}`随完整manifest签名。required_files完整列举payload中的普通文件，唯一排除manifest自身；缺失、多余、大小/摘要错误或链接均拒绝。entrypoint固定为包内相对JS入口及`mcp --stdio`，不能提供任意外部可执行路径。只读version核对Provider业务字段与既有schema_digest，不要求CLI输出发行文件清单。开发包Python/OCR版本和下载来源登记于包内asset-provenance及构建资产锁；此证据不能代替正式依赖/许可证/安全发行审核。
+
+trust root须由正式发行配置提供key id、公钥及允许的provider范围；签名私钥留正式签名边界。仓库尚无生产trust root/实包；测试密钥不得进入发行配置。离线只核对内置及已可信取得的撤回数据，不能保证实时撤回，无须为离线首期提前建设catalog服务。
+
+A2/H3信任资产唯一格式：`resources/runtime/trust-roots.json`为`{schemaVersion:1,profile:"production"|"acceptance",roots:[{key_id,public_key,providers,test_only:boolean}]}`，providers仅含命名空间第一方Provider ID，public_key为Ed25519 PEM。test_only必填；正式产品拒绝测试根。固定产品资源`config/runtime-product.json`严格为schemaVersion/productKind/profile，与信任资产profile一致；受管入口按自身资源布局读取，不能从renderer/env/argv指定根或开启测试模式。普通CLI/A1资产无该产品配置时不获得安装能力；已有受管inventory缺批准信任时明确失败，不能让legacy入口复活。Runtime负责根格式与验签，H3负责固定资源构建/身份隔离与消费，不维护第二套格式。
+
+首期运行只保留一个active版本，新调用关闭准入并排空旧执行后原子切换，未ACK/未知事实与旧release恢复引用保留；不要求实现多版本并行管理。启用/就绪、升级去重和旧入口优先级见[Runtime设计第12节](runtime-plugin-host-architecture-design.md#12-第一部分开发前实施决议)。第9节关闭MCP的限时回收只能发生在批准的取消/停止边界并核对实际停止，不能绕过drain或按时间耗尽认定桌面已释放。
 
 ## 11. 统一契约测试
 

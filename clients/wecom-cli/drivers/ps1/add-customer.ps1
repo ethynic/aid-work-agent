@@ -65,17 +65,16 @@ function Save-StepShot([int64]$Hwnd, [string]$Name) {
 }
 
 function Invoke-AddCustomerOcr([string]$ImagePath, [string]$Mode) {
-    # 仓库 venv python 跑 RapidOCR（drivers/py/add_customer_result.py：result/reason 模式）；
-    # drivers/ps1 上四级为仓库根。经 System.Diagnostics.Process 直启（同 Invoke-WeComChatOcr，
+    # 包内 OCR Python 跑 RapidOCR（drivers/py/add_customer_result.py：result/reason 模式）；
+    # 优先使用发行包内解释器。经 System.Diagnostics.Process 直启（同 Invoke-WeComChatOcr，
     # 规避 MCP stdio 白名单环境下 PS 5.1 管道原生命令的 CantActivateDocumentInPipeline）
-    $repoRoot = (Resolve-Path (Join-Path $script:DriverPs1Dir '..\..\..\..')).Path
-    $pythonExe = Join-Path $repoRoot 'venv\Scripts\python.exe'
+    $pythonExe = Resolve-WeComOcrPython
     $ocrScript = Join-Path $script:DriverPs1Dir '..\py\add_customer_result.py'
     if (-not (Test-Path $ocrScript)) { Throw-DriverError 'INTERNAL_ERROR' ('未找到 OCR 脚本：' + $ocrScript) }
-    if (-not (Test-Path $pythonExe)) { Throw-DriverError 'CONFIG_MISSING' ('未找到仓库 venv python（RapidOCR 所在解释器）：' + $pythonExe) }
+    if (-not (Test-Path $pythonExe)) { Throw-DriverError 'CONFIG_MISSING' ('未找到 OCR Python：' + $pythonExe) }
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $pythonExe
-    $psi.Arguments = ('"' + $ocrScript + '" "' + $ImagePath + '" ' + $Mode)
+    $psi.Arguments = ('-I -B "' + $ocrScript + '" "' + $ImagePath + '" ' + $Mode)
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true

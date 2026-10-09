@@ -1,0 +1,349 @@
+[
+  {
+    "name": "describe_request",
+    "schema": "management-request.schema.json",
+    "valid": true,
+    "value": {
+      "request_id": "read-1",
+      "method": "describe",
+      "params": {}
+    }
+  },
+  {
+    "name": "describe_response",
+    "schema": "management-response.schema.json",
+    "valid": true,
+    "value": {
+      "request_id": "read-1",
+      "method": "describe",
+      "result": {
+        "api_major": 1,
+        "host_version": "0.3.0",
+        "features": [
+          "plugins",
+          "events"
+        ],
+        "instance_id": "host-B-1",
+        "revision": 4
+      },
+      "code": 0,
+      "error": ""
+    }
+  },
+  {
+    "name": "state_request",
+    "schema": "management-request.schema.json",
+    "valid": true,
+    "value": {
+      "request_id": "read-2",
+      "method": "getState",
+      "params": {}
+    }
+  },
+  {
+    "name": "state_response",
+    "schema": "management-response.schema.json",
+    "valid": true,
+    "value": {
+      "request_id": "read-2",
+      "method": "getState",
+      "result": {
+        "instance_id": "host-B-1",
+        "revision": 4,
+        "supervisor": "runtime_app",
+        "state": "running",
+        "connection": "online",
+        "device": {
+          "device_id": "device-B",
+          "name": "专用执行电脑"
+        }
+      },
+      "code": 0,
+      "error": ""
+    }
+  },
+  {
+    "name": "empty_plugins_request",
+    "schema": "management-request.schema.json",
+    "valid": true,
+    "value": {
+      "request_id": "read-3",
+      "method": "plugins.list",
+      "params": {}
+    }
+  },
+  {
+    "name": "empty_plugins_response",
+    "schema": "management-response.schema.json",
+    "valid": true,
+    "value": {
+      "request_id": "read-3",
+      "method": "plugins.list",
+      "result": {
+        "instance_id": "host-B-1",
+        "revision": 4,
+        "plugins": []
+      },
+      "code": 0,
+      "error": ""
+    }
+  },
+  {
+    "name": "import_request",
+    "schema": "management-request.schema.json",
+    "valid": true,
+    "value": {
+      "request_id": "import-1",
+      "method": "plugins.import",
+      "params": {
+        "request_key": "install-once-1",
+        "selection_ref": "selected-zip-1"
+      }
+    }
+  },
+  {
+    "name": "import_response",
+    "schema": "management-response.schema.json",
+    "valid": true,
+    "value": {
+      "request_id": "import-1",
+      "method": "plugins.import",
+      "result": {
+        "operation_id": "install-1",
+        "operation": "import",
+        "status": "running",
+        "code": 0,
+        "error": ""
+      },
+      "code": 0,
+      "error": ""
+    }
+  },
+  {
+    "name": "operation_request",
+    "schema": "management-request.schema.json",
+    "valid": true,
+    "value": {
+      "request_id": "op-1",
+      "method": "operations.get",
+      "params": {
+        "operation_id": "install-1"
+      }
+    }
+  },
+  {
+    "name": "dependency_missing",
+    "schema": "management-response.schema.json",
+    "valid": true,
+    "value": {
+      "request_id": "op-1",
+      "method": "operations.get",
+      "result": {
+        "operation_id": "install-1",
+        "operation": "import",
+        "status": "failed",
+        "code": 9,
+        "error": "缺少兼容的Python环境"
+      },
+      "code": 0,
+      "error": ""
+    }
+  },
+  {
+    "name": "installed_ready",
+    "schema": "management-response.schema.json",
+    "valid": true,
+    "value": {
+      "request_id": "read-4",
+      "method": "plugins.list",
+      "result": {
+        "instance_id": "host-B-1",
+        "revision": 5,
+        "plugins": [
+          {
+            "installation_id": "installation-1",
+            "plugin_id": "private/sample-skill",
+            "display_name": "示例技能",
+            "release_id": "release-1",
+            "enabled": true,
+            "ready": true,
+            "version": "0.3.0"
+          }
+        ]
+      },
+      "code": 0,
+      "error": ""
+    }
+  },
+  {
+    "name": "stop_request",
+    "schema": "management-request.schema.json",
+    "valid": true,
+    "value": {
+      "request_id": "stop-1",
+      "method": "stop",
+      "params": {
+        "request_key": "stop-once-1"
+      }
+    }
+  },
+  {
+    "name": "stop_waiting_for_reconciliation",
+    "schema": "management-response.schema.json",
+    "valid": true,
+    "value": {
+      "request_id": "stop-1",
+      "method": "stop",
+      "result": {
+        "operation_id": "stop-op-1",
+        "operation": "stop",
+        "status": "reconciling",
+        "message": "原进程停止状态待核对",
+        "code": 0,
+        "error": ""
+      },
+      "code": 0,
+      "error": ""
+    }
+  },
+  {
+    "name": "unsupported_feature",
+    "schema": "management-response.schema.json",
+    "valid": true,
+    "value": {
+      "request_id": "feature-1",
+      "method": "plugins.import",
+      "error": "当前Host不支持插件管理",
+      "code": 3,
+      "result": null
+    }
+  },
+  {
+    "name": "blocked_host",
+    "schema": "host-state.schema.json",
+    "valid": true,
+    "value": {
+      "instance_id": "host-B-1",
+      "revision": 5,
+      "supervisor": "runtime_app",
+      "state": "blocked",
+      "connection": "online",
+      "device": {
+        "device_id": "device-B",
+        "name": "专用执行电脑"
+      },
+      "blocked_reason": "原桌面操作进程停止状态待核对"
+    }
+  },
+  {
+    "name": "unpaired_host",
+    "schema": "host-state.schema.json",
+    "valid": true,
+    "value": {
+      "instance_id": "host-new",
+      "revision": 0,
+      "supervisor": "desktop",
+      "state": "stopped",
+      "connection": "unpaired"
+    }
+  },
+  {
+    "name": "state_notification",
+    "schema": "host-event.schema.json",
+    "valid": true,
+    "value": {
+      "event": "state_changed",
+      "instance_id": "host-B-1",
+      "revision": 5
+    }
+  },
+  {
+    "name": "enable_request",
+    "schema": "management-request.schema.json",
+    "valid": true,
+    "value": {
+      "request_id": "enable-1",
+      "method": "plugins.enable",
+      "params": {
+        "request_key": "enable-once-1",
+        "installation_id": "installation-1"
+      }
+    }
+  },
+  {
+    "name": "disable_request",
+    "schema": "management-request.schema.json",
+    "valid": true,
+    "value": {
+      "request_id": "disable-1",
+      "method": "plugins.disable",
+      "params": {
+        "request_key": "disable-once-1",
+        "installation_id": "installation-1"
+      }
+    }
+  },
+  {
+    "name": "uninstall_request",
+    "schema": "management-request.schema.json",
+    "valid": true,
+    "value": {
+      "request_id": "uninstall-1",
+      "method": "plugins.uninstall",
+      "params": {
+        "request_key": "uninstall-once-1",
+        "installation_id": "installation-1"
+      }
+    }
+  },
+  {
+    "name": "pair_request",
+    "schema": "management-request.schema.json",
+    "valid": true,
+    "value": {
+      "request_id": "pair-1",
+      "method": "pair",
+      "params": {
+        "request_key": "pair-once-1",
+        "server": "https://example.invalid",
+        "device_name": "专用执行电脑",
+        "pairing_code": "00000000"
+      }
+    }
+  },
+  {
+    "name": "start_request",
+    "schema": "management-request.schema.json",
+    "valid": true,
+    "value": {
+      "request_id": "start-1",
+      "method": "start",
+      "params": {
+        "request_key": "start-once-1"
+      }
+    }
+  },
+  {
+    "name": "installed_plugins_request",
+    "schema": "management-request.schema.json",
+    "valid": true,
+    "value": {
+      "request_id": "read-4",
+      "method": "plugins.list",
+      "params": {}
+    }
+  },
+  {
+    "name": "unavailable_plugins_request",
+    "schema": "management-request.schema.json",
+    "valid": true,
+    "value": {
+      "request_id": "feature-1",
+      "method": "plugins.import",
+      "params": {
+        "request_key": "feature-once-1",
+        "selection_ref": "selected-zip-1"
+      }
+    }
+  }
+]

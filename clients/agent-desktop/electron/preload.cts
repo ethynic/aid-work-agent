@@ -13,6 +13,8 @@ const runtime = Object.freeze({
   apiBaseUrl,
   apiOrigin: new URL(apiBaseUrl).origin,
   smokeMode: readArgument('aidagent-smoke-mode') === '1',
+  productKind: readArgument('aidagent-product-kind') === 'runtime' ? 'runtime' as const : 'desktop' as const,
+  productProfile: readArgument('aidagent-product-profile') === 'acceptance' ? 'acceptance' as const : 'production' as const,
   versions: Object.freeze({ electron: process.versions.electron, chrome: process.versions.chrome }),
 })
 
@@ -52,4 +54,18 @@ const updates = Object.freeze({
   restartAndInstall: () => ipcRenderer.invoke('desktop:update:restart-and-install') as Promise<void>,
 })
 
-contextBridge.exposeInMainWorld('agentDesktop', Object.freeze({ version: 3 as const, runtime, startup, credentials, system, updates }))
+const runtimeHost = readArgument('aidagent-runtime-enabled') === '1' ? Object.freeze({
+  request: (request: unknown) => ipcRenderer.invoke('desktop:runtime:request', request) as Promise<unknown>,
+  choosePackage: (input: unknown) => ipcRenderer.invoke('desktop:runtime:choose-package', input) as Promise<unknown>,
+  observe: (callback: (event: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, event: unknown) => callback(event)
+    ipcRenderer.on('desktop:runtime:event', listener)
+    return () => ipcRenderer.removeListener('desktop:runtime:event', listener)
+  },
+  onDisconnect: (callback: () => void) => {
+    const listener = () => callback()
+    ipcRenderer.on('desktop:runtime:disconnected', listener)
+    return () => ipcRenderer.removeListener('desktop:runtime:disconnected', listener)
+  },
+}) : undefined
+contextBridge.exposeInMainWorld('agentDesktop', Object.freeze({ version: 3 as const, runtime, startup, credentials, system, updates, runtimeHost }))

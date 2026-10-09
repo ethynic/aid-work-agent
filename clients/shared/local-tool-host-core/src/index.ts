@@ -10,3 +10,10 @@ export interface LocalToolHostCore {
   invoke(request: LocalToolInvocation, signal: AbortSignal): Promise<unknown>
   shutdown(): Promise<void>
 }
+
+export { RuntimeHost, ManagementError } from './management.js'
+export type { HostAdapter, HostStatus, ConnectionStatus, DeviceSummary, PluginSummary, ManagementOperation, PreparedPluginImport } from './management.js'
+export { acquireHostLease } from './instanceLease.js'
+export type { SelectedPackageInput, SelectedPackageSnapshot, RuntimePlatform, RuntimePlatformRequest, RuntimePlatformResponse } from './platform.js'
+export { verifyOfflinePackage, extractVerifiedPackage, safePackagePath, canonicalJson, sha256, PACKAGE_LIMITS, publisherPublicKey } from './plugins/package.js'
+export type { PublisherTrust, PackagePlatform, RuntimeManifest, ReleaseEnvelope, VerifiedPackage } from './plugins/package.js'

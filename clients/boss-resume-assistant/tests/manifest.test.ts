@@ -39,7 +39,7 @@ test('manifest 字段完整（标准 §6）', () => {
   assert.equal(m.protocol, 'mcp')
   assert.equal(m.transport, 'stdio')
   assert.deepEqual(m.platforms, ['win32-x64'])
-  assert.deepEqual(m.entrypoint, ['boss-recruiting.exe', 'mcp', '--stdio'])
+  assert.deepEqual(m.entrypoint, ['dist/src/cli/index.js', 'mcp', '--stdio'])
   assert.equal(m.execution_target, 'local_required')
   assert.equal(m.min_mcp_protocol_version, '2024-11-05')
   assert.equal(m.schema_digest, computeSchemaDigest())

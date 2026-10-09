@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aidwork.local/contracts/runtime-host/v1/host-event.schema.json",
+  "title": "RuntimeHostEvent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event",
+    "instance_id",
+    "revision"
+  ],
+  "properties": {
+    "event": {
+      "const": "state_changed"
+    },
+    "instance_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

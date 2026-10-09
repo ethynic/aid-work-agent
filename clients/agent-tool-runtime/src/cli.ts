@@ -12,39 +12,19 @@
  * 约束：不打印 token/claim_token；pair 后 config.json 不含 token（DPAPI 密文存 credentials.bin）。
  */
 import { existsSync } from 'node:fs'
-import { randomUUID, randomBytes } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
+import { hostname } from 'node:os'
+import { setTimeout as delay } from 'node:timers/promises'
+import { ManagementError, type ManagementOperation, type RuntimeHost } from '@aid/local-tool-host-core'
+import { openRuntimeHost } from './runtimeHost.js'
 import { ApiClient } from './apiClient.js'
-import {
-  configPath,
-  credentialsPath,
-  defaultSkillsDir,
-  deviceCapabilities,
-  loadConfig,
-  machineFingerprint,
-  PLATFORM,
-  resolveProviderEntries,
-  RUNTIME_VERSION,
-  runtimeHomeDir,
-  saveConfig,
-} from './config.js'
-import { SkillRunnerHandler } from './skillRunner.js'
-import { clearCredentials, hasDeviceToken, loadDeviceToken, saveDeviceToken } from './credentials.js'
+import { configPath, credentialsPath, deviceCapabilities, loadConfig, resolveProviderEntries, RUNTIME_VERSION, runtimeHomeDir } from './config.js'
+import { hasDeviceToken, loadDeviceToken } from './credentials.js'
 import { checkDesktopInteractive } from './desktopCheck.js'
-import { deriveResourceKey } from './desktopLock.js'
-import { PollLoop } from './pollLoop.js'
-import { ProviderSet } from './providerManager.js'
-import { runInvocation } from './invocationRunner.js'
-import { ResultOutbox, resultOutboxDir } from './resultOutbox.js'
-import { SessionTaskEngine } from './sessionTasks/engine.js'
-import { NameSessionBridge } from './sessionTasks/nameBridge.js'
-import { acquireSessionTasksSingleInstance, type SingleInstanceGuard } from './sessionTasks/singleInstance.js'
-import { enforceRetention } from './sessionTasks/retention.js'
 import { dpapiProtect, dpapiUnprotect } from './dpapi.js'
-import { withDesktopLock, desktopLockName } from './desktopLock.js'
 import { manifestDigest } from './manifestVerifier.js'
-import { logError, logInfo } from './log.js'
-import { rmSync } from 'node:fs'
+import { clearPairing } from './pairingStore.js'
 
 const USAGE = `agent-tool-runtime — 本地工具 Runtime（云端 invocation → 本地 MCP Provider 执行）
 
@@ -93,9 +73,26 @@ function flagString(args: ParsedArgs, key: string): string | undefined {
   return typeof v === 'string' ? v : undefined
 }
 
+async function runOperation(host: RuntimeHost, method: 'pair' | 'start' | 'stop', params: Record<string, string> = {}): Promise<void> {
+  const response = await host.request({ request_id: randomUUID(), method, params: { ...params, request_key: randomUUID() } })
+  if (response.code !== 0) throw new ManagementError(Number(response.code), String(response.error))
+  let operation = response.result as ManagementOperation
+  while (operation.status === 'running') {
+    await delay(25)
+    const update = await host.request({ request_id: randomUUID(), method: 'operations.get', params: { operation_id: operation.operation_id } })
+    if (update.code !== 0) throw new ManagementError(Number(update.code), String(update.error))
+    operation = update.result as ManagementOperation
+  }
+  if (operation.status !== 'succeeded') throw new ManagementError(operation.code || 11, operation.error || operation.message || '执行事实尚需核对')
+}
+
+async function disposeIfStopped(host: RuntimeHost): Promise<void> {
+  if (host.getState().state === 'stopped') await host.dispose()
+}
+
 async function cmdPair(args: ParsedArgs): Promise<number> {
   const code = flagString(args, 'code')
-  if (!code) {
+  if (!code?.trim()) {
     console.error('缺少 --code <8位配对码>（在 Web 端「本地工具」页面生成）')
     return 1
   }
@@ -105,170 +102,56 @@ async function cmdPair(args: ParsedArgs): Promise<number> {
     console.error('缺少 --server <云端地址>（首次 pair 必须提供，之后可从 config.json 继承）')
     return 1
   }
-  const name = flagString(args, 'name') ?? undefined
-
-  const api = new ApiClient(server)
-  let pairResult
+  const host = await openRuntimeHost()
   try {
-    pairResult = await api.pair({
-      code: code.trim(),
-      name,
-      platform: PLATFORM,
-      runtime_version: RUNTIME_VERSION,
-      capabilities: deviceCapabilities(),
-      machine_fingerprint: machineFingerprint(),
-    })
+    await runOperation(host, 'pair', { server, device_name: flagString(args, 'name') || existing?.name || hostname(), pairing_code: code.trim() })
+    const device = host.getState().device as { device_id: string }
+    console.log(`配对成功：device_id=${device.device_id} server=${server}`)
+    console.log(`凭证已加密保存到 ${credentialsPath()}（DPAPI CurrentUser）`)
+    return 0
   } catch (err) {
-    console.error(`配对失败: ${err instanceof Error ? err.message : String(err)}`)
+    console.error(`配对失败: ${err instanceof ManagementError ? err.message : '本机配对事务未完成，需核对'}`)
     return 1
-  }
-
-  await saveDeviceToken(pairResult.device_token)
-  saveConfig({ server, device_id: pairResult.device_id, name })
-  console.log(`配对成功：device_id=${pairResult.device_id} server=${server}`)
-  console.log(`凭证已加密保存到 ${credentialsPath()}（DPAPI CurrentUser）`)
-  return 0
+  } finally { await disposeIfStopped(host) }
 }
 
 async function cmdStart(args: ParsedArgs): Promise<number> {
-  const config = loadConfig()
-  const server = flagString(args, 'server') ?? config?.server
-  if (!server || !config) {
-    console.error('未配对或缺少配置，请先执行 pair --code <配对码> --server <云端地址>')
+  const serverOverride = flagString(args, 'server')
+  if (serverOverride && serverOverride !== loadConfig()?.server) {
+    console.error('启动不能切换配对服务地址，请停止并重新配对')
     return 1
   }
-  let token: string
+  const host = await openRuntimeHost()
+  let stopPromise: Promise<void> | null = null
+  const stop = () => {
+    if (stopPromise) return
+    stopPromise = (async () => {
+      await runOperation(host, 'stop')
+      await host.dispose()
+      process.removeListener('SIGINT', stop)
+      process.removeListener('SIGTERM', stop)
+    })()
+    void stopPromise.catch(() => {
+      process.exitCode = 1
+      console.error('停止事实尚需核对，保留实例保护')
+    })
+  }
+  // Keep listeners through the complete drain, including repeated signals. A second
+  // signal must not revert to Node's default forced termination while work is accepted.
+  process.on('SIGINT', stop)
+  process.on('SIGTERM', stop)
   try {
-    token = await loadDeviceToken()
+    await runOperation(host, 'start')
+    return 0
   } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err))
-    return 1
-  }
-
-  const entries = resolveProviderEntries(config)
-  const missing = Object.entries(entries).filter(([, entry]) => !existsSync(entry))
-  if (missing.length > 0) {
-    for (const [key, entry] of missing) {
-      if (key === 'boss-recruiting') {
-        console.error(`boss CLI 入口不存在: ${entry}（可在 config.json 配置 bossCliEntry 绝对路径）`)
-      } else {
-        console.error(`Provider ${key} 入口不存在: ${entry}（可在 config.json providers.${key}.entry 配置绝对路径）`)
-      }
+    console.error(`启动失败: ${err instanceof ManagementError ? err.message : '本机启动事实尚需核对'}`)
+    if (host.getState().state === 'stopped') {
+      await host.dispose()
+      process.removeListener('SIGINT', stop)
+      process.removeListener('SIGTERM', stop)
     }
     return 1
   }
-
-  const api = new ApiClient(server, token)
-  const bridgeKey = randomBytes(32).toString('hex')
-  // providerEnv：仅 per-Provider 追加注入（weixin bridge key）。wecom Phase 1 不注入——
-  // read_session 未配置模型通道时自动走本地 OCR 兜底，开箱即用；如需启用模型通道，
-  // 在本机（runtime 进程）环境配 AID_WECOM_SERVER_URL + AID_WECOM_SERVER_TOKEN 即可：
-  // providerManager spawn 显式继承完整环境（env: { ...process.env, ...providerEnv }），
-  // 无需代码改动；未来交付 runtime 机器级凭据时再在此加 wecom 项注入。
-  const providers = new ProviderSet(entries, { providerEnv: { weixin: { AIDWORK_WEIXIN_BRIDGE_KEY: bridgeKey } } })
-  const nameBridge = new NameSessionBridge(providers, api, bridgeKey)
-  // skill-runner（M2）：config.skills.python 配置且存在才构造 handler（能力真实性——
-  // 未配置/解释器缺失不上报能力、不注入 runner，行级 claim 天然不派发该设备）
-  const skillsCfg = config.skills
-  const skillRunner = skillsCfg?.python && existsSync(skillsCfg.python)
-    ? new SkillRunnerHandler({ skillsDir: skillsCfg.dir ?? defaultSkillsDir(), pythonPath: skillsCfg.python })
-    : undefined
-  if (skillRunner) {
-    logInfo(`[runtime] skill-runner 已启用：skills 目录=${skillsCfg!.dir ?? defaultSkillsDir()} 解释器=${skillsCfg!.python}`)
-  }
-  // #6 能力真实性：v2 会话 manifest 变体仅经 config.providers.weixin.v2Send 显式
-  // 协商（隔离测试 / 真实 v2 Provider 交付后）；未协商保持真实 v1 受信形态
-  if (config?.providers?.['weixin']?.v2Send === true) {
-    const { setManifestOverride, weixinV2Manifest } = await import('./providers.js')
-    setManifestOverride('weixin', weixinV2Manifest())
-    logInfo('[runtime] weixin v2 会话能力已显式协商（v2Send=true）：manifest 升级 v2 变体')
-  }
-  console.log(`[runtime] providers: ${Object.keys(entries).join(', ')}`)
-  // v2 写路径数据目录（journal/ + result-outbox/，跟随 runtime home；启动重投共用同一 outbox 实例）
-  const dataDir = runtimeHomeDir()
-  const loop = new PollLoop({
-    api,
-    runnerDeps: {
-      providers,
-      ...(skillRunner ? { skillRunner } : {}),
-      desktopCheck: async () => (await checkDesktopInteractive()).interactive,
-      desktopResourceKey: deriveResourceKey(),
-      runtimeDataDir: dataDir,
-      resultOutbox: new ResultOutbox(resultOutboxDir(dataDir)),
-    },
-    // 2026-09-10 排障整改：invocation 生命周期行（领取/开始/终态回传/重试）此前只 console.log 到
-    // stdout，服务化启动无重定向时文件日志全无回传链路痕迹（2026-09-10 客户现场诊断包实证）。
-    // logInfo = stderr + %APPDATA% 文件双写，前缀格式不变。
-    onEvent: (msg) => logInfo(msg),
-  })
-
-  // ----- 端侧会话任务引擎（C2）：与 pollLoop 共存，共享 Provider 与桌面锁 -----
-  let sessionEngine: SessionTaskEngine | null = null
-  let sessionGuard: SingleInstanceGuard | null = null
-  if (config.sessionTasks === true) {
-    sessionGuard = await acquireSessionTasksSingleInstance(dataDir)
-    if (sessionGuard === null) {
-      logInfo('[session-tasks] 已有实例持有单实例锁，本进程不启动会话引擎（standard lane 正常运行）')
-    } else {
-      const retention = enforceRetention(dataDir, [], {}) // 启动时评估磁盘水位（终态清理由引擎周期执行）
-      if (retention.stopNew) logInfo('[session-tasks] 本地会话日志已达上限（256MiB），停止新观察持久化')
-      else if (retention.warn80) logInfo('[session-tasks] 本地会话日志超 80% 水位')
-      sessionEngine = new SessionTaskEngine({
-        api,
-        runtimeHome: dataDir,
-        crypto: { protect: dpapiProtect, unprotect: dpapiUnprotect },
-        runtimeInstanceId: `rt-${RUNTIME_VERSION}-${randomUUID().slice(0, 8)}`,
-        withLock: <T,>(fn: () => Promise<T>) => withDesktopLock(desktopLockName(deriveResourceKey()), fn),
-        observer: nameBridge.observe,
-        emit: (msg) => logInfo(`[session-tasks] ${msg}`),
-        // C3：会话任务发送复用既有 v2 单动作执行器（许可/journal/outbox 全在原链内）；
-        // sessionPrecheck 为引擎构造的锁内会话复核（§7 顺序 4），由 runner 在桌面锁内、
-        // write-authorize 之前执行
-        runInvocation: (inv, sessionPrecheck) =>
-          runInvocation(inv, {
-            api,
-            providers,
-            ...(skillRunner ? { skillRunner } : {}),
-            desktopCheck: async () => (await checkDesktopInteractive()).interactive,
-            desktopResourceKey: deriveResourceKey(),
-            runtimeDataDir: dataDir,
-            resultOutbox: new ResultOutbox(resultOutboxDir(dataDir)),
-            sessionPrecheck,
-            prepareProviderCall: nameBridge.prepare,
-          }),
-      })
-      logInfo('[session-tasks] 会话任务引擎已启动（共享桌面锁；observer 经 weixin Provider）')
-    }
-  }
-
-  const shutdown = (signal: string) => {
-    logInfo(`收到 ${signal}，停止领取新任务并回收 Provider…`)
-    loop.shutdown()
-    sessionEngine?.shutdown()
-    void sessionGuard?.release()
-    // 兜底：runner 协作式中止 + provider 回收最长给 20s，超时强退
-    setTimeout(() => {
-      logError('关闭超时，强制退出')
-      process.exit(2)
-    }, 20_000).unref()
-  }
-  process.on('SIGINT', () => shutdown('SIGINT'))
-  process.on('SIGTERM', () => shutdown('SIGTERM'))
-
-  console.log(`[runtime] 已启动 device_id=${config.device_id} server=${server} version=${RUNTIME_VERSION}`)
-  try {
-    // 等待全部运行循环退出（评审 P1-1）：未开启 sessionTasks 或未取得单实例锁时
-    // 只有 pollLoop 在跑；race 会让已完成的 Promise.resolve() 立即结束、误关 Provider
-    const loops: Array<Promise<void>> = [loop.run()]
-    if (sessionEngine) loops.push(sessionEngine.run())
-    await Promise.all(loops)
-  } finally {
-    sessionEngine?.shutdown()
-    await providers.shutdownAll()
-    await sessionGuard?.release()
-  }
-  console.log('[runtime] 已退出')
-  return 0
 }
 
 async function cmdStatus(): Promise<number> {
@@ -378,46 +261,55 @@ async function cmdDoctor(): Promise<number> {
 }
 
 async function cmdUnpair(): Promise<number> {
-  const hadCreds = clearCredentials()
-  const hadConfig = existsSync(configPath())
-  if (hadConfig) rmSync(configPath())
-  if (!hadCreds && !hadConfig) {
-    console.log('本地无配对信息，无需解除')
-  } else {
-    console.log('已清除本地凭证与配置')
-  }
-  console.log('注意：本命令仅清除本地数据；请在 Web 端「本地工具设备管理」中删除设备以真正撤销 token')
-  return 0
+  const host = await openRuntimeHost()
+  try {
+    let hadIdentity = false
+    await host.runLocalIdentityChange(async () => {
+      hadIdentity = hasDeviceToken() || existsSync(configPath())
+      await clearPairing()
+    })
+    console.log(hadIdentity ? '已清除本地凭证与配置' : '本地无配对信息，无需解除')
+    console.log('注意：本命令仅清除本地数据；请在 Web 端「本地工具设备管理」中删除设备以真正撤销 token')
+    return 0
+  } catch (err) {
+    console.error(`解除配对失败: ${err instanceof ManagementError ? err.message : '本机身份事务未完成，需核对'}`)
+    return 1
+  } finally { await disposeIfStopped(host) }
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
   const args = parseArgs(argv)
-  switch (args.command) {
-    case 'pair':
-      return cmdPair(args)
-    case 'start':
-      return cmdStart(args)
-    case 'status':
-      return cmdStatus()
-    case 'doctor':
-      return cmdDoctor()
-    case 'unpair':
-      return cmdUnpair()
-    case null:
-    case 'help':
-      console.log(USAGE)
-      return args.command === null ? 0 : 0
-    default:
-      console.error(`未知命令: ${args.command}\n`)
-      console.log(USAGE)
-      return 1
+  try {
+    switch (args.command) {
+      case 'pair':
+        return await cmdPair(args)
+      case 'start':
+        return await cmdStart(args)
+      case 'status':
+        return await cmdStatus()
+      case 'doctor':
+        return await cmdDoctor()
+      case 'unpair':
+        return await cmdUnpair()
+      case null:
+      case 'help':
+        console.log(USAGE)
+        return args.command === null ? 0 : 0
+      default:
+        console.error(`未知命令: ${args.command}\n`)
+        console.log(USAGE)
+        return 1
+    }
+  } catch (err) {
+    console.error(`运行时错误: ${err instanceof ManagementError ? err.message : '本机操作未完成，需核对'}`)
+    return 1
   }
 }
 
 // 只有 node 直接执行本文件（cli.js）才进入 main；被测试 import 时不触发
 if (process.argv[1] && /cli\.js$/.test(process.argv[1].replace(/\\/g, '/'))) {
-  main().then((code) => process.exit(code)).catch((err) => {
-    console.error(`运行时错误: ${err instanceof Error ? err.message : String(err)}`)
-    process.exit(1)
+  main().then((code) => { process.exitCode = code }).catch(() => {
+    console.error('运行时错误: 本机操作未完成，需核对')
+    process.exitCode = 1
   })
 }

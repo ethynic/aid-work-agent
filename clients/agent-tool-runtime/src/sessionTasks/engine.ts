@@ -24,6 +24,7 @@ import { ApiError, NetworkError } from '../apiClient.js'
 import { ReadyQueue, type QueueKind } from './readyQueue.js'
 import { SessionStore, SessionStoreCorruptError, sessionTaskDir, type AssignmentMeta, type SessionCrypto, type ReplayedEvent } from './sessionStore.js'
 import { enforceRetention } from './retention.js'
+import { recordSessionCompletion } from './completionProof.js'
 
 export type TaskPhase =
   | 'ready' // 已领取，待观察
@@ -180,6 +181,9 @@ export class SessionTaskEngine {
   private readonly queue = new ReadyQueue()
   private readonly opts: Required<Pick<EngineOptions, 'claimIntervalMs' | 'renewIntervalMs' | 'maxInFlightDecisions' | 'batchSilenceMs' | 'batchMaxWaitMs' | 'syncRetryBaseMs' | 'syncRetryMaxMs'>> & EngineOptions
   private stopped = false
+  private retiredCompletionCandidates = new Map<string, TaskRuntime>()
+  private recoveryCompletionCandidates = new Map<string, { store: SessionStore; control: { status: string; control_epoch: number } }>()
+  private readonly pendingWork = new Set<Promise<void>>()
   private lastClaimAt = 0
   private lastServedTaskId: string | null = null
   /** 磁盘水位（P2-8）：stopNew=true 时拒绝新观察持久化/新发送 */
@@ -224,6 +228,35 @@ export class SessionTaskEngine {
 
   shutdown(): void {
     this.stopped = true
+  }
+
+  /** Wait for accepted actions/renewal persistence; no new work is dispatched. */
+  async drain(): Promise<void> {
+    this.shutdown()
+    while (this.pendingWork.size || this.controlChains.size) {
+      await Promise.all([...this.pendingWork, ...this.controlChains.values()])
+    }
+    await this.syncPending(this.now())
+    await this.flushRecovery()
+    for (const task of new Map([...this.retiredCompletionCandidates, ...[...this.tasks.values()].map(task => [task.assignmentId, task] as const)]).values()) {
+      if (task.busy || task.submitting || task.execution || task.inFlight || task.sendReady || task.metaPersistPending
+        || task.phase === 'blocked' || task.store.lastLocalSeq !== task.store.ackedLocalSeq) continue
+      await recordSessionCompletion(sessionTaskDir(this.opts.runtimeHome, task.assignmentId), {
+        assignment_id: task.assignmentId, task_id: task.taskId, status: task.lastKnownControlStatus,
+        control_epoch: task.controlEpoch, local_seq: task.store.lastLocalSeq, acked_seq: task.store.ackedLocalSeq,
+      }, this.opts.crypto)
+    }
+    for (const [assignmentId, candidate] of this.recoveryCompletionCandidates) {
+      const meta = await candidate.store.readMeta()
+      if (meta.status !== 'ok' || candidate.control.control_epoch < meta.meta.control_epoch) continue
+      const replay = await candidate.store.replay(); const work = extractOldTaskWork(assignmentId, replay.events)
+      if (work.unrecoverable || work.executionInvocation || work.lastPhase === 'blocked' || candidate.store.ackedLocalSeq !== candidate.store.lastLocalSeq) continue
+      await recordSessionCompletion(sessionTaskDir(this.opts.runtimeHome, assignmentId), {
+        assignment_id: assignmentId, task_id: meta.meta.task_id, status: candidate.control.status,
+        control_epoch: candidate.control.control_epoch, meta_control_epoch: meta.meta.control_epoch,
+        local_seq: candidate.store.lastLocalSeq, acked_seq: candidate.store.ackedLocalSeq,
+      }, this.opts.crypto)
+    }
   }
 
   private emit(message: string): void {
@@ -433,6 +466,7 @@ export class SessionTaskEngine {
         entry.backoff = this.opts.syncRetryBaseMs
         const remaining = entry.events.filter((e) => e.record.local_seq > ack.ack_seq)
         if (remaining.length === 0) {
+          if (ack.control.status === 'completed' || ack.control.status === 'stopped') this.recoveryCompletionCandidates.set(assignmentId, { store: entry.store, control: ack.control })
           this.recoveryPending.delete(assignmentId)
           // 持久 ACK 标记：retention 据此判定可清理（重启后不误删）
           writeAckedMarker(this.opts.runtimeHome, assignmentId, ack.ack_seq)
@@ -1067,6 +1101,7 @@ export class SessionTaskEngine {
   }
 
   private renewDue(now: number, signal?: AbortSignal): void {
+    if (this.stopped) return
     for (const task of this.tasks.values()) {
       // 本地租约兜底（评审 P1-6）：断网/续租持续失败超过租约期 → 停止新副作用
       if (task.gate === 'open' && now > task.leaseDeadline) {
@@ -1075,7 +1110,7 @@ export class SessionTaskEngine {
       }
       if (now < task.renewDueAt) continue
       task.renewDueAt = now + this.opts.renewIntervalMs
-      void this.opts.api
+      const work = this.opts.api
         .sessionTaskRenew(task.assignmentId, { fence: task.fence, control_epoch: task.controlEpoch }, signal)
         .then(async (ack) => {
           // 租约管理（非控制状态）：刷新本地租约截止
@@ -1099,6 +1134,8 @@ export class SessionTaskEngine {
           this.emit(`task ${task.taskId} 续租被拒（等待重新分配）: ${err instanceof Error ? err.message : String(err)}`)
           task.gate = 'lease_stale'
         })
+      this.pendingWork.add(work)
+      void work.finally(() => this.pendingWork.delete(work))
     }
   }
 
@@ -1187,6 +1224,7 @@ export class SessionTaskEngine {
   // ---------------- 动作调度（每轮一个动作单元） ----------------
 
   private dispatchOne(now: number): void {
+    if (this.stopped) return
     const entry = this.queue.peek(now, { excludeTaskId: this.lastServedTaskId ?? undefined })
     if (entry === null) return
     const task = this.tasks.get(entry.taskId)
@@ -1198,13 +1236,15 @@ export class SessionTaskEngine {
     this.queue.markServed(task.taskId, now)
     this.lastServedTaskId = task.taskId
     task.busy = true
-    void this.actionUnit(task, now)
+    const work = this.actionUnit(task, now)
       .catch((err: unknown) => {
         this.emit(`task ${task.taskId} 动作单元异常: ${err instanceof Error ? err.message : String(err)}`)
       })
       .finally(() => {
         task.busy = false
       })
+    this.pendingWork.add(work)
+    void work.finally(() => this.pendingWork.delete(work))
   }
 
   private async actionUnit(task: TaskRuntime, now: number): Promise<void> {
@@ -1263,6 +1303,7 @@ export class SessionTaskEngine {
 
   /** 一次观察动作（共享桌面锁内调用观察器；结果先落日志再推进内存） */
   private async observeOnce(task: TaskRuntime, now: number): Promise<void> {
+    if (this.stopped) return
     if (this.diskStopNew) {
       // P2-8：磁盘上限——停止新观察持久化（不删未 ACK 数据，仅等待/清理）
       this.queue.set(task.taskId, 'observe', now + 30_000)
@@ -1467,9 +1508,11 @@ export class SessionTaskEngine {
 
   /** 决策队列冲刷（评审 P1-6/P1-7）：批次事件 ACK 后才可提交；并发满/断网保留队列 */
   private async drainDecisionQueue(task: TaskRuntime, now: number): Promise<void> {
+    if (this.stopped) return
     if (task.gapStreak > 0) return // Event ACK may arrive while a read is recovering.
     if (task.submitting) return // 任务级提交锁：同一任务提交在途，先占任务再占全局
     while (task.decisionQueue.length > 0 && !task.inFlight) {
+      if (this.stopped) return
       const head = task.decisionQueue[0]!
       if (task.store.ackedLocalSeq < head.batchSeq) {
         // ACK 门禁：批次事件尚未获云端 ACK（C1 查不到批次），等同步完成再冲刷
@@ -1653,6 +1696,7 @@ export class SessionTaskEngine {
    * 决策 superseded/版本失配返回 invocation_id=null → 放弃发送相位回
    * waiting_peer；工作时段外/网络失败按间隔重试（不放弃决策）。 */
   private async executeSend(task: TaskRuntime, now: number): Promise<boolean> {
+    if (this.stopped) return false
     const sr = task.sendReady
     if (!sr) {
       await this.setPhase(task, 'waiting_peer', now)
@@ -1936,6 +1980,7 @@ export class SessionTaskEngine {
 
   private dropTask(task: TaskRuntime): void {
     if (this.tasks.get(task.taskId) !== task) return
+    if (task.lastKnownControlStatus === 'completed' || task.lastKnownControlStatus === 'stopped') this.retiredCompletionCandidates.set(task.assignmentId, task)
     this.tasks.delete(task.taskId)
     this.queue.remove(task.taskId)
     this.emit(`task ${task.taskId} 移出调度（assignment 过时，等待重新 claim）`)

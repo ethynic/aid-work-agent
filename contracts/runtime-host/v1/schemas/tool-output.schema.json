@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aidwork.local/contracts/runtime-host/v1/tool-output.schema.json",
+  "title": "RuntimeToolOutput",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "code",
+    "error",
+    "effect",
+    "complete"
+  ],
+  "properties": {
+    "effect": {
+      "enum": [
+        "none",
+        "applied",
+        "partial",
+        "unknown"
+      ]
+    },
+    "complete": {
+      "type": "boolean"
+    },
+    "code": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "text": {
+      "type": "string"
+    },
+    "data": {
+      "type": "object"
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "artifact_ref",
+          "device_id",
+          "invocation_id",
+          "name",
+          "mime_type"
+        ],
+        "properties": {
+          "artifact_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "device_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "invocation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "mime_type": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "error": {
+      "type": "string"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "code": {
+            "const": 0
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "error": {
+            "const": ""
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "error": {
+            "minLength": 1
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,206 @@
+[
+  {
+    "name": "skill_handbook_and_entry",
+    "schema": "plugin-contract.schema.json",
+    "valid": true,
+    "value": {
+      "schema_version": 1,
+      "plugin_id": "private/sample-skill",
+      "release_id": "release-1",
+      "kind": "skill",
+      "display_name": "示例技能",
+      "description": "读取手册并调用本机已安装的入口",
+      "content_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+      "contract_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+      "platforms": [
+        "win32-x64"
+      ],
+      "resources": [
+        "desktop"
+      ],
+      "documents": [
+        {
+          "path": "SKILL.md",
+          "text": "# 示例技能\n先运行status入口检查环境。"
+        }
+      ],
+      "entries": [
+        {
+          "name": "status",
+          "args_schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 16
+          },
+          "description": "检查运行环境并返回状态"
+        }
+      ],
+      "code_map": [
+        {
+          "path": "scripts/status.py",
+          "description": "检查运行环境并返回状态"
+        }
+      ]
+    }
+  },
+  {
+    "name": "mcp_tool_contract",
+    "schema": "plugin-contract.schema.json",
+    "valid": true,
+    "value": {
+      "schema_version": 1,
+      "plugin_id": "official/sample-cli",
+      "release_id": "release-1",
+      "kind": "mcp",
+      "display_name": "示例CLI",
+      "description": "提供结构化软件操作",
+      "content_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+      "contract_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+      "platforms": [
+        "win32-x64"
+      ],
+      "resources": [
+        "desktop"
+      ],
+      "tools": [
+        {
+          "name": "sample_status",
+          "description": "查看软件状态",
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "empty_inventory",
+    "schema": "plugin-inventory.schema.json",
+    "valid": true,
+    "value": {
+      "schema_version": 1,
+      "inventory_revision": 0,
+      "installations": []
+    }
+  },
+  {
+    "name": "enabled_installation",
+    "schema": "plugin-inventory.schema.json",
+    "valid": true,
+    "value": {
+      "schema_version": 1,
+      "inventory_revision": 1,
+      "installations": [
+        {
+          "installation_id": "installation-1",
+          "plugin_id": "private/sample-skill",
+          "release_id": "release-1",
+          "contract_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+          "revision": 1,
+          "enabled": true,
+          "ready": true
+        }
+      ]
+    }
+  },
+  {
+    "name": "disabled_installation",
+    "schema": "plugin-inventory.schema.json",
+    "valid": true,
+    "value": {
+      "schema_version": 1,
+      "inventory_revision": 2,
+      "installations": [
+        {
+          "installation_id": "installation-1",
+          "plugin_id": "private/sample-skill",
+          "release_id": "release-1",
+          "contract_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+          "revision": 2,
+          "enabled": false,
+          "ready": true,
+          "reason": "本机已停用"
+        }
+      ]
+    }
+  },
+  {
+    "name": "same_name_different_identity",
+    "schema": "plugin-contract.schema.json",
+    "valid": true,
+    "value": {
+      "schema_version": 1,
+      "plugin_id": "private/other-sample-skill",
+      "release_id": "release-1",
+      "kind": "skill",
+      "display_name": "示例技能",
+      "description": "读取手册并调用本机已安装的入口",
+      "content_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+      "contract_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+      "platforms": [
+        "win32-x64"
+      ],
+      "resources": [
+        "desktop"
+      ],
+      "documents": [
+        {
+          "path": "SKILL.md",
+          "text": "# 示例技能\n先运行status入口检查环境。"
+        }
+      ],
+      "entries": [
+        {
+          "name": "status",
+          "args_schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 16
+          },
+          "description": "检查运行环境并返回状态"
+        }
+      ],
+      "code_map": [
+        {
+          "path": "scripts/status.py",
+          "description": "检查运行环境并返回状态"
+        }
+      ]
+    }
+  },
+  {
+    "name": "manual_only_skill_no_invented_entry",
+    "schema": "plugin-contract.schema.json",
+    "valid": true,
+    "value": {
+      "schema_version": 1,
+      "plugin_id": "private/manual-only",
+      "release_id": "release-1",
+      "kind": "skill",
+      "display_name": "示例技能",
+      "description": "仅通过手册指导使用已有能力",
+      "content_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+      "contract_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+      "platforms": [
+        "win32-x64"
+      ],
+      "resources": [
+        "desktop"
+      ],
+      "documents": [
+        {
+          "path": "SKILL.md",
+          "text": "# 示例技能\n先运行status入口检查环境。"
+        }
+      ],
+      "entries": [],
+      "code_map": []
+    }
+  }
+]

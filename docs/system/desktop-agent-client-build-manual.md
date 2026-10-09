@@ -315,3 +315,53 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 ```
 
 一键脚本必须通过 `-ApiBaseUrl` 参数或 `AID_AGENT_PACKAGE_API_BASE_URL` 环境变量提供其中一种 API 地址。通过 npm 入口时使用环境变量，直接调用 PowerShell 脚本时两种方式均可；`AID_AGENT_API_BASE_URL` 只保留为开发/运维运行期覆盖，普通安装者无需设置环境变量。
+
+## 12. 独立Runtime首期验收包
+
+本节描述H3新增构建链路。2026-10-09提交前UI握手revision竞态已由Runtime唯一作者修复，独立52项UI测试/typecheck/CR通过后，按标准流程重新构建；新包68b855通过标准验包、独立复验及包内EXE实际启动/退出。以下为当前交付，替代旧a8b0安装器。证据见[桌面计划9.7](../plans/plan-desktop-agent-client.md#97-第一部分h3实施登记2026-10-09)。第一部分只包含配对、执行实例管理与第一方BOSS/微信/企业微信插件管理，第三方skill和完整桌面对话不在此包范围。
+
+本次可人工验收的文件：
+
+| 文件 | 位置 / 核验值 |
+|---|---|
+| Windows x64安装器 | [AID-Work-Runtime-0.0.2-win-x64-acceptance-unsigned.exe](../../clients/agent-desktop/build/runtime-release/acceptance/AID-Work-Runtime-0.0.2-win-x64-acceptance-unsigned.exe) |
+| 安装器 SHA-256 | `68b855010c8f39798a8822df83191e3044bdbb7860d46123345fe1dfbee9d3bd`，126241075字节 |
+| 构建输入 SHA-256 | `d12b14e1758bdba88ffaff6d79d4e17a68181e3f3d947e21e3f6616bb3e76aff` |
+| 完整资源/构建记录 | [runtime-release-manifest.json](../../clients/agent-desktop/build/runtime-release/acceptance/runtime-release-manifest.json) |
+| 本批离线插件包 | [BOSS](../../clients/runtime-plugin-packaging/release/final-acceptance/boss-0.3.0-dev.aidplugin.zip)、[微信](../../clients/runtime-plugin-packaging/release/final-acceptance/weixin-0.1.0-dev.aidplugin.zip)、[企业微信](../../clients/runtime-plugin-packaging/release/final-acceptance/wecom-0.1.0-dev.aidplugin.zip) |
+
+三包实际manifest版本为0.3.0/0.1.0/0.1.0，文件名-dev为验收资产名称。最终Host摘要为`f52b056be3b729ebfef1cc9786079b34d16eb9092312d19076269bed527fc13f`，验收公钥根摘要为`cdc5d4b0f5f27f62f23c06a43436217306525f3f1c16fbe16a6396eca28c3cec`；不得混用前期候选tgz。资源准备完成后下列package/verify使用同一冻结输入。输出目录属于本机构建产物，不进入Git提交。
+
+Runtime作者交付新Host tgz及SHA-256、wrapped验收信任根、对应三份签名离线包后，先在桌面工程执行以下命令。路径与摘要必须替换为该次正式交接值，不能使用第9.6节旧A1资产声称插件安装已接通。
+
+```powershell
+cd C:\repos\aid-work-agent\clients\agent-desktop
+node scripts/prepare-runtime.mjs `
+  --profile acceptance `
+  --host-package 'C:\交付目录\runtime-a2.tgz' `
+  --host-sha256 '<交接的64位SHA-256>' `
+  --trust-roots 'C:\交付目录\trust-roots.json'
+npm run runtime:package:acceptance
+npm run runtime:verify
+```
+
+资源准备使用固定Node22.23.3 Windows x64及官方摘要，不取latest；Host完整编译目录与预构建依赖随包复制，构建期间不安装插件依赖。信任输入固定为`schemaVersion/profile/roots`，每根必须显式包含`test_only:boolean`，只包含发布者公钥，不包含签名私钥。production拒绝测试根；验收根不会转换为正式根。
+
+验收输出位于`clients/agent-desktop/build/runtime-release/acceptance/`，包括NSIS安装器、`win-unpacked`与`runtime-release-manifest.json`。验收安装器未签Windows证书，仅用于内部验收；插件包自身的发布者签名仍须验证。正式发行另用production输入与有效Windows证书，不能将验收包直接改名发行。
+
+| 验收项 | 预期行为 |
+|---|---|
+| 身份与目录 | 标题显示“AID Work Runtime 验收版”；独立appId/userData，Runtime home为`%APPDATA%\aidwork-tool-runtime-acceptance`，不覆盖生产home |
+| 初始状态 | 打开“本机执行环境”，未配对时禁止启动；不要求先登录完整Desktop账号 |
+| 配对 | 输入管理员提供的服务地址、设备名和一次性码；UI不展示device token，未核对旧事实时拒绝替换身份 |
+| 安装与就绪 | 原生选择器导入交接的签名离线包，安装成功默认启用；应用缺失或未登录可显示未就绪及原因 |
+| 错包 | 签名/内容/平台错误返回明确失败，原已安装版本不被损坏；不靠重新选择同名文件改变已接受意图 |
+| 停用/卸载 | 核对旧执行后切换；旧执行/回执记录保留，不能静默回退到legacy入口 |
+| 窗口与退出 | 关窗收至托盘；托盘可重新打开，显式退出等待收尾。待核对时保留进程，不以强杀当完成 |
+| 恢复 | 重开查询真实当前实例及持久operation；不自动重放未知业务动作 |
+
+业务软件的真实登录与操作在人工验收阶段按实际环境确认。构建、空Host smoke和UI fixture通过不能代替这一验收；服务端部署仍须用户明确授权。
+
+人工先运行上表安装器并打开“AID Work Runtime 验收版”，依次用“安装 / 升级离线包”的原生选择器导入上表三包；安装后应显示默认启用。实际软件未安装、未登录或依赖条件未满足时，显示未就绪及原因是预期结果，按提示准备环境后刷新状态。随后检查关窗留托盘、托盘重开与退出、重开后插件/操作记录保持。真实配对使用管理员提供的现有服务地址及一次性码，核对未配对禁止启动与已配对执行状态；不得为通过验收自行部署服务或绕过旧执行核对。
+
+自动化三包安装使用了原生dialog返回值替代，其后Main/可信文件快照/私有callback/Host签名验证均真实；实际NSIS安装、OS选择框交互、软件登录和服务端配对/业务执行尚未由本批自动化验证。包内EXE已实际启动并安全退出，不能把这个结果写成NSIS安装通过。

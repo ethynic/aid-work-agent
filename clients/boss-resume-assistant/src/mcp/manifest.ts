@@ -83,7 +83,7 @@ export function buildManifest(): ProviderManifest {
     protocol: 'mcp',
     transport: 'stdio',
     platforms: ['win32-x64'],
-    entrypoint: ['boss-recruiting.exe', 'mcp', '--stdio'],
+    entrypoint: ['dist/src/cli/index.js', 'mcp', '--stdio'],
     tools: manifestTools(),
     schema_digest: computeSchemaDigest(),
     execution_target: 'local_required',

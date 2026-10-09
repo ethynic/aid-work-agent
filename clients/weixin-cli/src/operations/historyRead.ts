@@ -4,8 +4,8 @@
  * 注意：会打开会话窗口、清除该会话未读角标，但无外部写副作用。
  *
  * 流程：TS 验 ref → drivers/ps1/resolve-open.ps1（搜索+定位+点击+校验标题，
- * 与 message_send 共用 Open-WeixinChat）→ 调 experiments/probes/p4-history-capture/
- * run.ps1（滚动截屏 + RapidOCR）抓取 → TS 读输出文本，解析 `[时间]/[我]/[对方名]`
+ * 与 message_send 共用 Open-WeixinChat）→ 调 drivers/ps1/
+ * history-read.ps1（滚动截屏 + RapidOCR）抓取 → TS 读输出文本，解析 `[时间]/[我]/[对方名]`
  * 行为 messages。内联最多 200 条，超出只返回最新 200 条并给 file 路径。
  */
 import { randomUUID } from 'node:crypto'
@@ -23,10 +23,10 @@ import {
 } from '../platform/powershell.js'
 import { verifyTargetRef, type VerifyTargetRefFn } from '../platform/targetRef.js'
 
-/** dist/src/operations → 包根 drivers/ps1 / experiments/probes/p4-history-capture */
+/** dist/src/operations → 包根 drivers/ps1 */
 const RESOLVE_OPEN_PATH = fileURLToPath(new URL('../../../drivers/ps1/resolve-open.ps1', import.meta.url))
 const HISTORY_CAPTURE_PATH = fileURLToPath(
-  new URL('../../../experiments/probes/p4-history-capture/run.ps1', import.meta.url),
+  new URL('../../../drivers/ps1/history-read.ps1', import.meta.url),
 )
 
 export interface WeixinHistoryReadArgs {

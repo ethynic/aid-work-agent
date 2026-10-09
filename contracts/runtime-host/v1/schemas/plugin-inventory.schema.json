@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aidwork.local/contracts/runtime-host/v1/plugin-inventory.schema.json",
+  "title": "RuntimePluginInventory",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "inventory_revision",
+    "installations"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "inventory_revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "installations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "installation_id",
+          "plugin_id",
+          "release_id",
+          "contract_digest",
+          "revision",
+          "enabled",
+          "ready"
+        ],
+        "properties": {
+          "installation_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "plugin_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "release_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "contract_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

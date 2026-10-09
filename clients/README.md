@@ -1,5 +1,7 @@
 # 客户端工具部署手册（boss CLI + agent-tool-runtime）
 
+> 本页保留历史内嵌BOSS发货包说明。独立Runtime与签名插件的本次验收使用[构建手册第12节](../docs/system/desktop-agent-client-build-manual.md#12-独立runtime首期验收包)；当前源码不再支持本页的旧捆绑打包流程，`clients/pack.sh`会在修改文件前明确拒绝。
+
 > 面向角色：给客户 Windows 电脑安装「招聘智能体本地执行组件」的实施/支持人员。
 > 两个组件的关系：**agent-tool-runtime（执行节点）在打包时已捆绑 boss CLI（BOSS 直聘
 > 操作能力）**——客户机只需安装一个 tgz 包，得到 `aid-runtime` 命令。
@@ -140,7 +142,7 @@ Runtime 从多 Provider 版本起支持在**一台设备上承载多个受信 Pr
 
 **微信 Provider（`ai.aidwork.weixin`）启用前提**（三者缺一不可）：
 1. **安装**：目标机器具备微信操作 CLI（weixin-cli 构建产物），并在 `config.json` 的 `providers.weixin.entry` 配置其入口路径；`aid-runtime doctor` 逐 Provider 自检通过、`status` 列出 weixin；
-2. **受信**：CLI 的工具集必须落在服务端与 Runtime 双侧受信清单内——设备侧 `weixin_probe` / `weixin_chat_search` / `weixin_history_read` / `weixin_unread_list`（只读）与写操作 `weixin_message_send`（服务端另批准 v2 统一操作名 `weixin_message_send_v2`，走许可/证据链，不经 v1 发送）；清单外工具一律 TOOL_NOT_ALLOWED；
+2. **受信**：CLI 的工具集必须落在服务端与 Runtime 双侧受信清单内——设备侧 `weixin_probe` / `weixin_name_resolve` / `weixin_chat_search` / `weixin_history_read` / `weixin_unread_list`（只读）与写操作 `weixin_message_send`（服务端另批准 v2 统一操作名 `weixin_message_send_v2`，走许可/证据链，不经 v1 发送）；清单外工具一律 TOOL_NOT_ALLOWED；
 3. **capability**：配对后设备上报的 capabilities 含 weixin 条目（manifest digest 匹配），服务端才会把微信任务派给该设备。
 
 > 版本边界：weixin Provider 当前 `protocol_version=1`（v2 受控写协议随真机验收 P0 交付前，v2 任务在 Runtime 侧 PROTOCOL_NOT_SUPPORTED 拒绝、不降级旧发送）。因此**仅安装+配置 entry 不会产生任何自动发送行为**；发送链路的服务端总开关见 `docs/ops/weixin-marketing-rollout.md`。

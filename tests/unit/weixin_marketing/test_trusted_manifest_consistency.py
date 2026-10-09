@@ -2,7 +2,8 @@
 
 三方锚点：
 - src/local_tools/catalog.py TRUSTED_PROVIDERS['weixin'].tools（服务端受信清单，import 读取）
-- clients/agent-tool-runtime/src/providers.ts WEIXIN_TOOLS（Runtime manifest，读文件
+- clients/shared/local-tool-host-core/src/legacy/providers.ts WEIXIN_TOOLS（Runtime
+  共用清单唯一来源，agent-tool-runtime/src/providers.ts 仅重新导出；读文件
   正则解析——不 import TS，避免构建依赖）
 - clients/README.md 微信 Provider 配置段（安装手册清单，文档内工具名逐一出现）
 
@@ -23,7 +24,9 @@ from src.local_tools.catalog import TRUSTED_PROVIDERS
 pytestmark = pytest.mark.unit
 
 _REPO_ROOT = Path(__file__).parents[3]
-_PROVIDERS_TS = _REPO_ROOT / "clients" / "agent-tool-runtime" / "src" / "providers.ts"
+_PROVIDERS_TS = (
+    _REPO_ROOT / "clients" / "shared" / "local-tool-host-core" / "src" / "legacy" / "providers.ts"
+)
 _INSTALL_README = _REPO_ROOT / "clients" / "README.md"
 
 

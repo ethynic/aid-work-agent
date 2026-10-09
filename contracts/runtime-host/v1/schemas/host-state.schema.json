@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aidwork.local/contracts/runtime-host/v1/host-state.schema.json",
+  "title": "RuntimeHostState",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "instance_id",
+    "revision",
+    "supervisor",
+    "state",
+    "connection"
+  ],
+  "properties": {
+    "instance_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "supervisor": {
+      "enum": [
+        "cli",
+        "desktop",
+        "runtime_app"
+      ]
+    },
+    "state": {
+      "enum": [
+        "stopped",
+        "starting",
+        "running",
+        "draining",
+        "reconciling",
+        "blocked"
+      ]
+    },
+    "connection": {
+      "enum": [
+        "unpaired",
+        "connecting",
+        "online",
+        "offline",
+        "revoked"
+      ]
+    },
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "device_id"
+      ],
+      "properties": {
+        "device_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "blocked_reason": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}
