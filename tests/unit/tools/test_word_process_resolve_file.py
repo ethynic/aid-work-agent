@@ -61,9 +61,9 @@ class TestResolvePathViaRedis:
         target = tenant_dir / "file_xyz.docx"
         target.write_text("x")
 
-        # patch _TENANTS_ROOT 指向 tmp_path/tenants
-        from src.core import storage as storage_mod
-        monkeypatch.setattr(storage_mod, "_TENANTS_ROOT", str(tenants_root))
+        # patch 扫描根：find_uploaded_file_on_disk 用 configured_storage_root()
+        # （读 AGENT_RUNNER_STORAGE_ROOT 环境变量）而非 _TENANTS_ROOT 全局量
+        monkeypatch.setenv("AGENT_RUNNER_STORAGE_ROOT", str(tenants_root.parent))
 
         # Redis miss
         with patch(

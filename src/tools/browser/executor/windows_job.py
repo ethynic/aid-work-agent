@@ -14,16 +14,19 @@ PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 
 class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+    # 字段宽度用 c_uint32 显式声明而非 wintypes.DWORD：后者在 Linux 上是
+    # c_ulong（LP64 下 8 字节），会使结构体镜像尺寸偏离 Windows ABI（DWORD=4），
+    # 单测在非 Windows 平台量不出正确尺寸。c_uint32 与 Windows DWORD 逐位一致。
     _fields_ = [
         ("PerProcessUserTimeLimit", ctypes.c_longlong),
         ("PerJobUserTimeLimit", ctypes.c_longlong),
-        ("LimitFlags", wintypes.DWORD),
+        ("LimitFlags", ctypes.c_uint32),
         ("MinimumWorkingSetSize", ctypes.c_size_t),
         ("MaximumWorkingSetSize", ctypes.c_size_t),
-        ("ActiveProcessLimit", wintypes.DWORD),
+        ("ActiveProcessLimit", ctypes.c_uint32),
         ("Affinity", ctypes.c_size_t),
-        ("PriorityClass", wintypes.DWORD),
-        ("SchedulingClass", wintypes.DWORD),
+        ("PriorityClass", ctypes.c_uint32),
+        ("SchedulingClass", ctypes.c_uint32),
     ]
 
 

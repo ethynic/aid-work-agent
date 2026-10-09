@@ -280,7 +280,7 @@ class TestSpeechToTextAliyunAPI:
 
     @pytest.mark.asyncio
     async def test_get_token_http_error(self, tool, mock_asr_config):
-        """GetToken HTTP 错误处理"""
+        """CreateToken HTTP 非 200：抛 ASR_TOKEN_HTTP_{status} 错误码"""
         import src.tools.asr.speech_to_text_tool as asr_module
         asr_module._TOKEN_CACHE["token"] = ""
         asr_module._TOKEN_CACHE["expire_at"] = 0.0
@@ -297,7 +297,7 @@ class TestSpeechToTextAliyunAPI:
             mock_cs.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_cs.return_value.__aexit__ = AsyncMock(return_value=False)
 
-            with pytest.raises(RuntimeError, match="GetToken HTTP 401"):
+            with pytest.raises(RuntimeError, match="ASR_TOKEN_HTTP_401"):
                 await tool._get_or_refresh_token(
                     access_key_id=mock_asr_config.aliyun_access_key_id,
                     access_key_secret=mock_asr_config.aliyun_access_key_secret,
@@ -305,7 +305,7 @@ class TestSpeechToTextAliyunAPI:
 
     @pytest.mark.asyncio
     async def test_get_token_response_missing_id(self, tool, mock_asr_config):
-        """GetToken 响应缺少 Token.Id"""
+        """CreateToken 响应缺少 Token.Id：抛 ASR_TOKEN_RESPONSE_INVALID 错误码"""
         import src.tools.asr.speech_to_text_tool as asr_module
         asr_module._TOKEN_CACHE["token"] = ""
         asr_module._TOKEN_CACHE["expire_at"] = 0.0
@@ -322,7 +322,7 @@ class TestSpeechToTextAliyunAPI:
             mock_cs.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_cs.return_value.__aexit__ = AsyncMock(return_value=False)
 
-            with pytest.raises(RuntimeError, match="GetToken 响应异常"):
+            with pytest.raises(RuntimeError, match="ASR_TOKEN_RESPONSE_INVALID"):
                 await tool._get_or_refresh_token(
                     access_key_id=mock_asr_config.aliyun_access_key_id,
                     access_key_secret=mock_asr_config.aliyun_access_key_secret,

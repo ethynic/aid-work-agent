@@ -3097,7 +3097,7 @@ CREATE TABLE IF NOT EXISTS bs_browser_runs (
     id BIGSERIAL PRIMARY KEY,
     tenant_id TEXT,
     user_id TEXT,
-    run_id TEXT,
+    run_id TEXT NOT NULL UNIQUE,
     parent_run_id TEXT,
     session_id TEXT,
     execution_target TEXT DEFAULT 'server',
@@ -3123,7 +3123,9 @@ CREATE TABLE IF NOT EXISTS bs_browser_runs (
     owner_endpoint TEXT,
     owner_lease_until TIMESTAMPTZ,
     runtime_state TEXT,
-    closed_at TIMESTAMPTZ
+    closed_at TIMESTAMPTZ,
+    -- 复合唯一：bs_browser_assistance_requests 复合外键的引用目标（租户内 run 唯一）
+    UNIQUE (tenant_id, run_id)
 );
 
 IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='bs_browser_runs'::regclass AND attname='id' AND NOT attisdropped) THEN
@@ -3192,7 +3194,7 @@ CREATE TABLE IF NOT EXISTS bs_browser_assistance_requests (
     id BIGSERIAL PRIMARY KEY,
     tenant_id TEXT,
     user_id TEXT,
-    assistance_id TEXT,
+    assistance_id TEXT NOT NULL UNIQUE,
     run_id TEXT,
     agent_execution_id TEXT,
     tool_call_id TEXT,
@@ -3214,7 +3216,9 @@ CREATE TABLE IF NOT EXISTS bs_browser_assistance_requests (
     completion_ref TEXT,
     completion_fact JSONB,
     extended_at TIMESTAMPTZ,
-    continuation_id TEXT
+    continuation_id TEXT,
+    -- 租户内关联到 run（引用 bs_browser_runs 的 UNIQUE (tenant_id, run_id)）
+    FOREIGN KEY (tenant_id, run_id) REFERENCES bs_browser_runs(tenant_id, run_id)
 );
 
 IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='bs_browser_assistance_requests'::regclass AND attname='id' AND NOT attisdropped) THEN

@@ -91,13 +91,17 @@ def validate_images(
         if not _within_root(raw_path, root):
             errors.append(f"第 {index} 张图片《{title}》路径不在当前租户存储目录内")
             continue
+        # realpath 归一化（含 ../ 往返路径）：_within_root 已按归一化结果放行，
+        # 存在性/大小检查与最终资产路径必须用同一归一化路径，避免
+        # 「根内合法路径因中间目录不存在被误报文件不存在」
+        real_path = os.path.realpath(raw_path)
         if os.path.splitext(raw_path)[1].lower() not in ALLOWED_IMAGE_EXTENSIONS:
             errors.append(f"第 {index} 张图片《{title}》格式不支持，仅支持 png/jpg/jpeg")
             continue
-        if not os.path.isfile(raw_path):
+        if not os.path.isfile(real_path):
             errors.append(f"第 {index} 张图片《{title}》文件不存在")
             continue
-        size = os.path.getsize(raw_path)
+        size = os.path.getsize(real_path)
         if size == 0:
             errors.append(f"第 {index} 张图片《{title}》文件为空")
             continue
@@ -105,7 +109,7 @@ def validate_images(
             errors.append(f"第 {index} 张图片《{title}》超过 20MB 大小限制")
             continue
         validated.append(
-            ImageAsset(path=os.path.realpath(raw_path), title=title, caption=caption)
+            ImageAsset(path=real_path, title=title, caption=caption)
         )
     return validated, errors
 

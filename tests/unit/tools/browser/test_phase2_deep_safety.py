@@ -171,7 +171,11 @@ def _same_process(pid: int, create_time: float) -> bool:
 
 
 @pytest.mark.asyncio
+@pytest.mark.real_browser
 async def test_real_local_worker_contract_leaves_no_owned_processes():
+    """拉起真实 Node renderer worker 验证进程回收契约（real_browser：默认排除，
+    与 test_executor_contract_phase2.py 的 LocalPlaywrightExecutor 参数同约定；
+    容器内真实进程回收时序不稳定，归入 -m real_browser 专跑批次）"""
     executor = LocalPlaywrightExecutor()
     run = _run_spec()
     owned: list[tuple[int, float]] = []

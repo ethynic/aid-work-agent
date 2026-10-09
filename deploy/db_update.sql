@@ -757,3 +757,106 @@ ALTER TABLE chat_records ALTER COLUMN user_id DROP NOT NULL;
 --   tenant_id 保持必填（复盘仅对租户有效，无租户会话直接跳过）。
 ALTER TABLE work_outcomes ALTER COLUMN user_id DROP NOT NULL;
 ALTER TABLE work_outcomes ALTER COLUMN session_id DROP NOT NULL;
+
+-- ============================================================================
+-- 2026-10-10 浏览器统一执行架构 bs_browser 三表（幂等，补齐 db_update 侧分发）
+-- 背景：61e9d7e7 简化维护脚本时曾整体移出；33f9dba1 重加 init 侧时丢了
+--   run_id/assistance_id 唯一与复合约束，被 deploy 守卫
+--   （tests/unit/tools/browser/test_run_db_phase2.py 等）捕获。
+--   run_db.py 的 ON CONFLICT (assistance_id) 依赖 assistance_id 唯一，
+--   复合 FK 依赖 bs_browser_runs 的 UNIQUE (tenant_id, run_id)，此处按
+--   Phase 2 完整约束恢复，与 init-postgres.sql 当前列集对齐。
+--   已有表的库执行为 no-op（IF NOT EXISTS 全幂等）。
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS bs_browser_runs (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT,
+    user_id TEXT,
+    run_id TEXT NOT NULL UNIQUE,
+    parent_run_id TEXT,
+    session_id TEXT,
+    execution_target TEXT DEFAULT 'server',
+    executor_client_id TEXT,
+    state TEXT DEFAULT 'CREATED',
+    routing_reason TEXT,
+    failure_class TEXT,
+    evidence_level TEXT,
+    escalation_count INTEGER DEFAULT 0,
+    started_at TIMESTAMP,
+    finished_at TIMESTAMP,
+    close_reason TEXT,
+    error_code TEXT,
+    steps_count INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    runner_id TEXT,
+    runner_execution_id TEXT,
+    runner_tool_call_id TEXT,
+    owner_worker_id TEXT,
+    owner_boot_id TEXT,
+    browser_epoch TEXT,
+    owner_endpoint TEXT,
+    owner_lease_until TIMESTAMPTZ,
+    runtime_state TEXT,
+    closed_at TIMESTAMPTZ,
+    -- 复合唯一：bs_browser_assistance_requests 复合外键的引用目标（租户内 run 唯一）
+    UNIQUE (tenant_id, run_id)
+);
+
+CREATE TABLE IF NOT EXISTS bs_browser_assistance_requests (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT,
+    user_id TEXT,
+    assistance_id TEXT NOT NULL UNIQUE,
+    run_id TEXT,
+    agent_execution_id TEXT,
+    tool_call_id TEXT,
+    state TEXT DEFAULT 'pending',
+    reason_code TEXT,
+    instruction_code TEXT,
+    completion_mode TEXT,
+    predicate_type TEXT,
+    expires_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    resumed_at TIMESTAMP,
+    error_code TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    runner_id TEXT,
+    runner_wait_id TEXT,
+    owner_boot_id TEXT,
+    browser_epoch TEXT,
+    completion_ref TEXT,
+    completion_fact JSONB,
+    extended_at TIMESTAMPTZ,
+    continuation_id TEXT,
+    -- 租户内关联到 run（引用 bs_browser_runs 的 UNIQUE (tenant_id, run_id)）
+    FOREIGN KEY (tenant_id, run_id) REFERENCES bs_browser_runs(tenant_id, run_id)
+);
+
+-- 原随机 bac 与 Runner execution/call/wait 的持久关联（独立于 completion 相位）。
+-- 存量 legacy 行 continuation_id 为 NULL，部分唯一索引允许多行 NULL 共存。
+CREATE UNIQUE INDEX IF NOT EXISTS uq_browser_assistance_continuation
+    ON bs_browser_assistance_requests (continuation_id)
+    WHERE continuation_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS bs_browser_resume_jobs (
+    id BIGSERIAL PRIMARY KEY,
+    job_id TEXT,
+    tenant_id TEXT,
+    assistance_id TEXT,
+    run_id TEXT,
+    state TEXT DEFAULT 'pending',
+    lease_owner TEXT,
+    lease_until TIMESTAMPTZ,
+    attempts INTEGER DEFAULT 0,
+    available_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    last_error_code TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_browser_runs_run_id ON bs_browser_runs(run_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_browser_assistance_id ON bs_browser_assistance_requests(assistance_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_browser_resume_job_id ON bs_browser_resume_jobs(job_id);
