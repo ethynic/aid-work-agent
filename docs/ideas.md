@@ -51,7 +51,6 @@
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
 | 20260920-1554 | 知识库文件搜索工具（knowledge_file_search） | 🔧 部分完成（开发+测试完成，待部署验证） | 按原始文件名（documents.title，模糊/精确）定位知识库文档，返回 file_path 供 LLM 用 read 分页读取，解决「提示词按文件名引用知识库文档 → LLM 拿标题当路径 read 连败」（2026-09-20 生产案例：tenant_923f70a485a1 数据分析助手 3 连 read 失败）。与 /api/knowledge/search_documents 语义检索互补不替代；领域逻辑下沉 KnowledgeService.search_documents_by_title，共享范围/可见性/owner 标注公共化复用，模式 A；互引 description + 0 命中引导防与 knowledge_base_search 误用。纯 DB 元数据查询，无计费点。 | — | [开发计划](plans/plan-knowledge-file-search.md) |
-| 20260806-1318 | 协会信息收集客户端（交付产品） | 🔧 部分完成 | 「协会信息收集」四步流水线（搜官网→Playwright 采集→网络兜底→微信 RPA 取证）改造为交付客户的独立客户端。 | [设计](tools/association-client-design.md) | [开发计划](tools/association-client-dev-plan.md) |
 | 20260714-1911 | 浏览器混合执行、可视化与人工接管 | 🔧 部分完成 | Phase 0～1 已完成；Phase 2 已实现、待真实 Redis/PostgreSQL 门禁。 | [设计](tools/browser/browser_visualization_design.md) | [开发计划](tools/browser/browser_execution_dev_plan.md) |
 | 20260630-1733 | PDF reportlab 固定版式生成器 | 📋 待开发 | 暂不开发，未来如出现强固定版式需求再评估。 | [设计](tools/pdf/pdf_tool_design.md) | — |
 | 20260630-1734 | PDF 视觉回归样本集 | 💡 灵感 | 低优先级未来项。用于沉淀小型样例 PDF、渲染 PNG 或预期检查结果，后续在改动 PDF 生成器、渲染器、验证器时做回归校验，防止中文乱码、空白页、黑页、页数错误、表格溢出等质量退化。 | [设计](tools/pdf/pdf_tool_design.md) | — |

@@ -198,9 +198,9 @@ CLI 核心保持不变，新增独立本机 FastAPI UI 复用批处理与 provid
 
 官网 collector/provider 增加可选审计回调，记录打开 URL 及采集页面；微信既有 DPAPI
 artifact 经当前用户解密后重新写入任务级 DPAPI 详细日志。普通元数据只含脱敏摘要，
-页面正文、列表、详情与 OCR 仅通过环回接口按需解密。完整设计与开发状态见
-[本地调查工作台 UI 设计](association-enrichment-ui-design.md) 和
-[UI 开发计划](association-enrichment-ui-dev-plan.md)。
+页面正文、列表、详情与 OCR 仅通过环回接口按需解密。（原「本地调查工作台 UI」设计
+与开发计划已随前身内部工具的过时文档一并删除，2026-10-09；该工作台由交付版
+Electron 客户端取代，见 [协会信息收集客户端设计](association-client-design.md)。）
 
 ## 2026-08-03：微信会话故障熔断契约
 

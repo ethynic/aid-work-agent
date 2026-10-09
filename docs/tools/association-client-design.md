@@ -1,8 +1,8 @@
 # 协会信息收集客户端 — 技术设计文档
 
-> **权威设计**。本文档是客户端、命令行工具、服务端三端开发的唯一依据。智能体开发时必须严格按照本文档的接口契约、数据结构、协议格式实现，不得猜测。
+> **权威设计**。本文档是客户端、命令行工具、服务端三端开发的唯一依据。开发时严格按照本文档的接口契约、数据结构、协议格式实现，不得猜测。
 >
-> **交付目标**：下周一（2026-08-10）交付给客户。客户安装后即可在单台 Windows 电脑上完成协会信息收集全流程。
+> **状态**：✅ 已交付客户（2026-08-10，NSIS 安装包，交付清单与部署规程见 [部署手册](association-client-deployment.md)）。2026-10-09 归档整合：开发计划与前身内部工具（enrichment-cli/ui）的过时文档已删除，交付与实现记录见文末；核心采集引擎的设计演进保留在 [协会官网优先资料补全设计](association-profile-enrichment-design.md)。
 
 ---
 
@@ -1723,4 +1723,24 @@ credit_cost（客户端实扣） = ceil(raw_credit_cost × 5 × 100) / 100
 
 ---
 
-*文档结束。开发计划见 [association-client-dev-plan.md](association-client-dev-plan.md)。*
+## 交付与实现记录（2026-10-09 归档整合）
+
+**交付事实**
+
+- 2026-08-10 按期交付客户：NSIS 安装包 `AssociationClient-<version>-win-x64.exe`（约 218MB，appId `cn.aidingyi.association.client`，非一键/按用户安装/可改目录/桌面+开始菜单快捷方式），PyInstaller onefile CLI 经 electron-builder `extraResources` 固化打入为 `resources/cli/association-cli.exe`，Electron `cliRunner.ts` 打包模式从 resourcesPath 取用、开发模式 spawn python。
+- 生产服务端 `https://agent.aidingyi.cn`（agent2 为测试环境）；激活码 `AC-XXXXXXXXXXXX` + machine_id（WMI 指纹 sha256）换 access_token，后台经 API 生成/吊销（client_activation_mgmt.py）；LLM/OCR 走 `/api/client/v1/*` 服务端代理集中计费（积分系数历史沿革 5→10→25→10，见 client_binding_db.py）。
+- 交付后修复线：2026-08-09 GUI 激活页默认服务器地址坑（旧 exe 重打包）；2026-08-30 停止按钮修复（bcb3de28）。上门交付清单（安装包 U 盘 + 激活码 + 租户充值 + Chrome/微信安装包）见部署手册第 10 节。
+
+**实现与设计的差异（如实登记）**
+
+- 流水线步数口径：本文与 CLI docstring 称"5 步"，代码进度标注为 4 步（【1/4】文心联网采集→【2/4】官网 Playwright 采集→【3/4】微信搜一搜搜姓名→【4/4】手机号取证；LLM 证据判断与 Excel 导出不单独计步）。
+- 版本号线索不一致：`package.json` 为 1.2.0，README 与部署手册写 1.0.0——最近实际交付版本号以发布记录为准。
+- 结果落盘：增量 `*.partial.jsonl` 防进程被杀丢结果；最终 `write_enrichment_workbook` 产出中文表头 xlsx；本地加密详情复用 EncryptedAuditStore（DPAPI）。
+
+**测试基线**：仓库 pytest 约 286 用例（batch_enrichment 58 / profile_extractor 48 / client_routes 47 / official_site_browser_collector 36 / stop 11+7 等）+ Electron cliRunner 4 用例（node:test）。
+
+**前身工具与文档处置**：`clients/association-enrichment-cli`（本机批量 CLI，2026-07-29）与 `clients/association-enrichment-ui`（本机工作台，127.0.0.1:8765）为内部前身工具，与交付客户端共享 `src/services/association_*` 引擎，交付版注入 ProxyLLMGateway 计费而前身走本地 gateway；其设计/计划/演示手册已按过时文档删除（git 历史可查），核心引擎设计保留在 [association-profile-enrichment-design.md](association-profile-enrichment-design.md)。
+
+---
+
+*文档结束。原开发计划（Phase 0-5 与增补记录）已删除，有效结论并入本节。*
