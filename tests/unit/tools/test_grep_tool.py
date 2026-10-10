@@ -38,11 +38,6 @@ skip_if_no_rg = pytest.mark.skipif(not _RG_AVAILABLE, reason="ripgrep 未安装"
 class TestGrepToolDefinition:
     """工具定义测试"""
 
-    def test_tool_name(self):
-        from src.tools.file.grep_tool import GrepTool
-        tool = GrepTool()
-        assert tool.name == "grep"
-
     def test_tool_category(self):
         from src.tools.file.grep_tool import GrepTool
         tool = GrepTool()

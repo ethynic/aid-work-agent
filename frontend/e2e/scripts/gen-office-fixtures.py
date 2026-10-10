@@ -5,7 +5,9 @@
 在容器 aid-agent-api 内执行（仓库整体挂载于 /app）：
     docker exec aid-agent-api python /app/frontend/e2e/scripts/gen-office-fixtures.py
 
-输出 5 个文件到 /app/test_uploads/office_preview/（宿主机对应仓库根 test_uploads/office_preview/）：
+默认输出四个小型文件到仓库 test_uploads/office_preview/，不依赖 /app 路径。
+更新入库单测夹具：python frontend/e2e/scripts/gen-office-fixtures.py --output-dir frontend/web/__tests__/fixtures/office
+生成手工超限验收文件时显式加 --include-oversize。
     multisheet.xlsx  3 个 sheet，中文表头与数据，含合并单元格 —— 验收基本预览与 sheet 切换
     bigrows.xlsx     单 sheet 1250 行真实感数据 —— 验收 1000 行截断提示
     oversize.xlsx    压缩后 >10MB(10485760 字节) —— 验收 Excel 大小门槛
@@ -15,7 +17,9 @@
 脚本可重入：重跑覆盖同名文件；oversize 生成后用 os.path.getsize 校验，不足则扩大规模重写。
 随机数据使用固定种子，保证重跑产物规模一致。
 """
+import argparse
 import os
+from pathlib import Path
 import random
 import datetime
 
@@ -30,7 +34,7 @@ from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from docx import Document
 from docx.shared import Pt as DocPt
 
-OUT_DIR = "/app/test_uploads/office_preview"
+OUT_DIR = Path(__file__).resolve().parents[3] / "test_uploads/office_preview"
 OVERSIZE_MIN_BYTES = 10 * 1024 * 1024  # 10485760，须严格大于
 OVERSIZE_ROW_ATTEMPTS = [60000, 100000, 160000, 260000]  # 逐级扩大直至超过门槛
 
@@ -370,19 +374,24 @@ def gen_docx(path):
 
 
 def main():
-    os.makedirs(OUT_DIR, exist_ok=True)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output-dir", type=Path, default=OUT_DIR)
+    parser.add_argument("--include-oversize", action="store_true", help="生成 >10MB 手工验收文件")
+    args = parser.parse_args()
+    args.output_dir.mkdir(parents=True, exist_ok=True)
     jobs = [
         ("multisheet.xlsx", gen_multisheet),
         ("bigrows.xlsx", gen_bigrows),
-        ("oversize.xlsx", gen_oversize),
         ("sample.pptx", gen_pptx),
         ("sample.docx", gen_docx),
     ]
+    if args.include_oversize:
+        jobs.append(("oversize.xlsx", gen_oversize))
     for name, fn in jobs:
-        path = os.path.join(OUT_DIR, name)
+        path = args.output_dir / name
         fn(path)
         print(f"[ok] {name}: {os.path.getsize(path)} 字节")
-    print(f"输出目录: {OUT_DIR}")
+    print(f"输出目录: {args.output_dir}")
 
 
 if __name__ == "__main__":

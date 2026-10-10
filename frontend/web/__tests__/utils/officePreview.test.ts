@@ -86,17 +86,12 @@ describe('truncateSheetRange（!ref 重写纯函数）', () => {
     e: { c: 8, r: endRow },
   })
 
-  it('行数未超门槛：原样返回且不截断', () => {
+  it('行数恰好等于门槛：原样返回且不截断', () => {
     const r = range(0, 999) // 1000 行
     const result = truncateSheetRange(r, 1000)
     expect(result.truncated).toBe(false)
     expect(result.totalRows).toBe(1000)
     expect(result.range).toBe(r) // 同一引用，未新建副本
-  })
-
-  it('恰好等于门槛不截断（边界）', () => {
-    const result = truncateSheetRange(range(0, 999), 1000)
-    expect(result.truncated).toBe(false)
   })
 
   it('超过门槛：结尾行重写为 起始行 + maxRows - 1', () => {

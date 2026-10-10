@@ -5,10 +5,8 @@
 - MarkdownRenderer（Markdown → HTML → 截图）
 - HtmlRenderer（HTML 字符串 / 文件 → 截图）
 
-分两类：
-1. 注册测试（无浏览器）—— 验证 XToImageService 内置注册的三个渲染器类型与 name。
-2. 真实渲染测试（需 Chromium）—— 通过 browser_pool.is_available() 探测，
-   不可用时 pytest.skip()，使本测试在本地（有 Chromium）跑通、在 CI（可能无）跳过。
+真实渲染需 Chromium，通过 browser_pool.is_available() 探测，不可用时跳过。
+不依赖浏览器的注册与分派检查放在 test_service.py。
 
 参见设计文档 §5.6 / §10。
 """
@@ -18,9 +16,8 @@ from pathlib import Path
 import pytest
 
 from src.services.x_to_image.models import XToImageInput, InputType
-from src.services.x_to_image.service import x_to_image_service
 from src.services.x_to_image.renderers.browser_pool import browser_pool
-from src.services.x_to_image.renderers.text_renderer import TextRenderer, _build_html as text_build_html
+from src.services.x_to_image.renderers.text_renderer import TextRenderer
 from src.services.x_to_image.renderers.markdown_renderer import MarkdownRenderer
 from src.services.x_to_image.renderers.html_renderer import HtmlRenderer
 
@@ -59,36 +56,6 @@ def _assert_valid_png(path: str, *, min_width_frac: float = 0.9) -> tuple:
         # 非空白：灰度 extrema 不应全是 255（全白）
         assert extrema != (255, 255), f"PNG 全白（空白）: {path}, extrema={extrema}"
     return w, h, extrema
-
-
-# ============================================================
-# 注册测试（无浏览器）
-# ============================================================
-
-
-def test_builtin_renderers_registered():
-    """XToImageService 单例应注册 TEXT / MARKDOWN / HTML 三个渲染器。"""
-    renderers = x_to_image_service._renderers
-    assert InputType.TEXT in renderers, "TEXT 渲染器未注册"
-    assert InputType.MARKDOWN in renderers, "MARKDOWN 渲染器未注册"
-    assert InputType.HTML in renderers, "HTML 渲染器未注册"
-    assert len(renderers) >= 3, f"注册渲染器数量 < 3: {len(renderers)}"
-
-
-def test_registered_renderers_are_correct_classes():
-    """三个注册的渲染器实例类型应分别为 TextRenderer/MarkdownRenderer/HtmlRenderer。"""
-    renderers = x_to_image_service._renderers
-    assert isinstance(renderers[InputType.TEXT], TextRenderer)
-    assert isinstance(renderers[InputType.MARKDOWN], MarkdownRenderer)
-    assert isinstance(renderers[InputType.HTML], HtmlRenderer)
-
-
-def test_renderer_names_match_input_types():
-    """每个渲染器的 .name 属性应为 "text"/"markdown"/"html"。"""
-    renderers = x_to_image_service._renderers
-    assert renderers[InputType.TEXT].name == "text"
-    assert renderers[InputType.MARKDOWN].name == "markdown"
-    assert renderers[InputType.HTML].name == "html"
 
 
 # ============================================================
@@ -135,25 +102,6 @@ class TestTextRenderer:
         )
         assert len(paths) == 1
         _assert_valid_png(paths[0])
-
-
-def test_text_build_html_escapes_special_chars():
-    """TextRenderer 的 HTML 构造函数应转义 < > &，使文本不被当作标签解析（单元级断言）。
-
-    _build_html 接收的是「已经转义后」的 safe_text（render 中先 html.escape 再传入），
-    故这里模拟 render 的流程：先 escape(source) 再 _build_html，断言产物不含原始标签。
-    """
-    import html as html_lib
-
-    raw = "<b>not bold</b> & a < b"
-    safe = html_lib.escape(raw)
-    doc = text_build_html(safe, width=400)
-    # 转义后的 &lt; &gt; &amp; 应出现
-    assert "&lt;b&gt;" in doc, "转义后的标签字符未出现在生成的 HTML 中"
-    assert "&amp;" in doc
-    # 原始（未转义的）<b> 标签不应作为活动标签出现在 <pre> 中
-    # safe 文本里已不含字面 <b>，doc 中 <body>...<pre> 区域内也不应出现 <b>not bold</b>
-    assert "<b>not bold</b>" not in doc, "未转义的 <b> 标签泄漏进 HTML"
 
 
 # ============================================================

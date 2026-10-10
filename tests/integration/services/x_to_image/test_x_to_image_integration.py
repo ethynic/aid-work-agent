@@ -13,7 +13,7 @@ import pytest
 from src.services.x_to_image import XToImageInput, InputType, x_to_image_service
 from src.services.x_to_image.renderers.browser_pool import browser_pool
 
-pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
+pytestmark = [pytest.mark.integration, pytest.mark.asyncio, pytest.mark.real_browser]
 
 
 async def _skip_if_no_chromium():

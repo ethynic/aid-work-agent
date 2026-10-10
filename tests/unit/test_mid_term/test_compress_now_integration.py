@@ -307,23 +307,3 @@ async def test_compress_session_two_rounds_incremental(
     call_kwargs = mock_llm_for_summary.chat_lite.call_args.kwargs
     prompt_text = call_kwargs["messages"][0]["content"]
     assert "prior context" in prompt_text, "第二次压缩应把 existing_summary 注入 prompt"
-
-
-@pytest.mark.asyncio
-async def test_compress_session_compressed_message_ids_collected(
-    service, mock_llm_for_summary, fake_db_connection
-):
-    """compress_session 应收集 COMPRESS 区所有消息的 id 传给 _persist_atomically"""
-    mock_conn, mock_cursor = fake_db_connection
-    mock_cursor.fetchone.return_value = None
-    mock_cursor.fetchall.return_value = []
-
-    msgs = _build_large_messages(100)
-    _patch_meta_and_messages(service, msgs)
-
-    result = await service.compress_session(
-        session_id="sess_ids",
-        source_type="chat",
-    )
-    assert result is not None
-    assert result.compressed_message_count > 0

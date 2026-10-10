@@ -117,11 +117,6 @@ def _assert_name_set_equal(actual: list, expected: list, label: str) -> None:
 class TestDiscoveryGoldenList:
     """断言一：discover 结果与 HEAD 基线一致"""
 
-    def test_discovered_names_match_golden_auto_list(self):
-        discovered = discover_tool_classes()
-        expected_auto = sorted(set(GOLDEN_TOOLS) - SPECIAL_REGISTERED_TOOLS)
-        _assert_name_set_equal(list(discovered.keys()), expected_auto, "discover 工具名集合")
-
     def test_discovered_classes_instantiate_with_matching_names(self):
         discovered = discover_tool_classes()
         instance_names = [cls().name for cls in discovered.values()]

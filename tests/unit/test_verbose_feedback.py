@@ -924,14 +924,6 @@ class TestConfigIntegration:
         )
         assert runtime.effective_enabled is False
 
-    def test_config_is_frozen(self):
-        from dataclasses import FrozenInstanceError
-
-        cfg = VerboseFeedbackConfig()
-        with pytest.raises(FrozenInstanceError):
-            cfg.enabled = True
-
-
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
 

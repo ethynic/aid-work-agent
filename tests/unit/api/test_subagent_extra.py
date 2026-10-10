@@ -13,6 +13,7 @@ extra_md API 单元测试（Phase 4 起 DB 驱动）
 """
 
 import pytest
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 from fastapi import HTTPException
 
@@ -305,43 +306,45 @@ class TestDeleteExtraMd:
 
 
 # ============================================================
-# _load_extra_md（agent.py）行为契约测试
+# _load_extra_md（Runner PromptSources）行为契约测试
 # ============================================================
 
 class TestLoadExtraMdContract:
-    """_load_extra_md 行为契约（不直接测 agent，测契约）
+    """调用真实 PromptSources 方法，验证租户 scope、返回内容及异常兜底。"""
 
-    验证 _load_extra_md 的核心契约：
-    - 调用 prompt_resolver.resolve(scope='tenant_extra', scope_id=...)
-    - miss 时返回 None（不抛异常）
-    - 返回内容 strip 首尾空白
-    """
+    @pytest.fixture
+    def agent(self):
+        from src.services.agent_runner.runtime.prompt_sources import PromptSources
 
-    def test_resolver_call_contract(self):
-        """prompt_resolver.resolve 必须用正确的 scope 和 scope_id
+        instance = PromptSources.__new__(PromptSources)
+        instance.subagent_config = SimpleNamespace(dir_name="travel-consultant")
+        instance._init_tenant_id = "tenant_001"
+        return instance
 
-        此契约由 TestGetExtraMd.test_get_calls_resolver_with_correct_args 验证，
-        这里保留方法签名以标记契约存在。
-        """
-        # 见 TestGetExtraMd.test_get_calls_resolver_with_correct_args
-        assert hasattr(extra_module, "get_extra_md")
+    @pytest.mark.parametrize("content, expected", [("  定制内容\n", "定制内容"), (None, None), ("", None)])
+    def test_load_uses_tenant_resolver_and_strips_content(self, agent, content, expected):
+        with patch("src.prompts.prompt_resolver.prompt_resolver.resolve", return_value=content) as resolve:
+            assert agent._load_extra_md() == expected
+        resolve.assert_called_once_with(
+            scope="tenant_extra", scope_id="extra:travel-consultant:tenant_001", tenant_id="tenant_001",
+        )
 
-    def test_no_file_io_in_source(self):
-        """源代码中不应再有 Path() 或 read_text() 文件 IO"""
-        import inspect
-        from src.core.agent import Agent
-        source = inspect.getsource(Agent._load_extra_md)
-        assert "Path(" not in source, "_load_extra_md 不应再使用 Path()"
-        assert "read_text" not in source, "_load_extra_md 不应再使用 read_text()"
-        assert "exists()" not in source, "_load_extra_md 不应再调用 exists()"
-        assert "prompt_resolver.resolve" in source, "_load_extra_md 应调用 prompt_resolver.resolve"
+    def test_missing_runtime_tenant_does_not_inherit_request_context(self, agent):
+        agent._init_tenant_id = None
+        with patch("src.saas.context.get_current_tenant_id", return_value="tenant_002") as current_tenant, \
+             patch("src.prompts.prompt_resolver.prompt_resolver.resolve", return_value="request content") as resolve:
+            assert agent._load_extra_md() is None
+        resolve.assert_not_called()
+        current_tenant.assert_not_called()
 
-    def test_no_file_io_in_api_source(self):
-        """API 源代码中不应再有文件 IO"""
-        import inspect
-        source = inspect.getsource(extra_module)
-        assert "EXTRA_BASE_DIR" not in source, "subagent_extra.py 不应再有 EXTRA_BASE_DIR"
-        assert "_resolve_extra_path" not in source, "subagent_extra.py 不应再有 _resolve_extra_path"
-        assert "read_text" not in source, "subagent_extra.py 不应再有 read_text"
-        assert "write_text" not in source, "subagent_extra.py 不应再有 write_text"
-        assert ".unlink()" not in source, "subagent_extra.py 不应再有 .unlink()"
+    def test_load_without_tenant_skips_resolver(self, agent):
+        agent._init_tenant_id = None
+        with patch("src.saas.context.get_current_tenant_id", return_value=None), \
+             patch("src.prompts.prompt_resolver.prompt_resolver.resolve") as resolve:
+            assert agent._load_extra_md() is None
+        resolve.assert_not_called()
+
+    def test_load_resolver_failure_returns_none(self, agent):
+        with patch("src.prompts.prompt_resolver.prompt_resolver.resolve", side_effect=RuntimeError("DB unavailable")) as resolve:
+            assert agent._load_extra_md() is None
+        resolve.assert_called_once()

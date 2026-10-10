@@ -424,13 +424,3 @@ class TestUpdateHotelTotals:
             assert row["成本类别"] == item["category"]
             assert row["费用小计"] == item["subtotal"]
             assert row["随队老师"] == item["teacher_subtotal"]
-
-
-class TestGenerateOutputContract:
-    """验证 generate.py 返回结构契约"""
-
-    def test_generate_returns_internal_data(self):
-        """generate.py 返回中应含 internal_data 字段（不实际跑 LLM，只做 import 后静态检查）"""
-        import generate
-        # generate.py 模块可正常导入，说明改造未破坏 import
-        assert hasattr(generate, 'generate_quote')

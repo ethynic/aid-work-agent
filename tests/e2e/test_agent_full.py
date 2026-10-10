@@ -1,7 +1,7 @@
 """
 端到端测试：完整 Agent + 真实 LLM 交互场景
 
-需要环境变量：API_KEYS
+需要配置当前 LLM_PROVIDER 对应的 *_API_KEYS（或启用的备用 provider 密钥）
 运行：pytest -m e2e tests/e2e/test_agent_full.py
 """
 
@@ -17,10 +17,6 @@ pytestmark = [
 ]
 
 
-@pytest.mark.skipif(
-    not os.getenv("API_KEYS"),
-    reason="需要 LLM API 密钥",
-)
 class TestAgentFull:
     """完整 Agent 交互测试"""
 

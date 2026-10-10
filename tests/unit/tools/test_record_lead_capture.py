@@ -133,17 +133,6 @@ class TestRecordLeadCaptureToolDefinition:
         assert "上次留资时间" in tool.description
         assert "不要重复引导客户留资" in tool.description
 
-    def test_tool_in_catalog_registry(self):
-        """catalog=True：工具出现在 discover_tool_classes 发现的目录中（Phase 2 放开）。"""
-        from src.tools.lead_capture.record_lead_capture import RecordLeadCaptureTool
-        from src.tools.base import _CATALOG
-        from src.tools.registry import discover_tool_classes
-
-        discover_tool_classes()
-        names = {cls.name for cls in _CATALOG.values()}
-        assert RecordLeadCaptureTool.name in names
-
-
 class TestRecordLeadCaptureExecute:
     @pytest.mark.asyncio
     async def test_non_wecom_channel_returns_friendly_failure(self):

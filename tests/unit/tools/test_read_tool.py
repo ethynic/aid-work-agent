@@ -29,11 +29,6 @@ pytestmark = [pytest.mark.tools]
 class TestReadToolDefinition:
     """工具定义测试"""
 
-    def test_tool_name(self):
-        from src.tools.file.read_tool import ReadTool
-        tool = ReadTool()
-        assert tool.name == "read"
-
     def test_tool_display_name(self):
         from src.tools.file.read_tool import ReadTool
         tool = ReadTool()

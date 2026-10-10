@@ -6,7 +6,7 @@ H3 在公共壳中渲染 `RuntimeManagementPage`，注入 `port: RuntimeManageme
 
 消费端在生产模块校验回复形状；共享 instance/revision 水位，state/list 分别 dirty。连接代次变更清快照并结束旧 Promise；同实例短暂断连保留原未确认意图及已接单operation，重连后由用户用原key重查未知请求，已接单仅查询operation。确认为新实例时清除未确认意图并提示核对，禁止自动重放；显式dispose清敏感内存。配对码仅在提交过程和不确定结果重试的必要内存意图内，页面不保存至浏览器存储或日志。
 
-feature 内 Vitest 配置可独立运行：`npx vitest run --config desktop/features/runtime/vitest.config.ts`。H3 可将这些测试纳入公共 Desktop include；Runtime 不修改全局配置。页面视觉验收须 H3 实际接线后执行。
+feature 内 Vitest 配置可独立运行：`npx vitest run --config desktop/features/runtime/vitest.config.ts`。公共 Desktop include 已纳入这些测试，常规 `npm test` 同时验证 Runtime feature。页面视觉验收须 H3 实际接线后执行。
 
 完整签名包检查可能包含大型OCR依赖；管理查询默认有界等待120秒，H3的请求与首次describe预算须一致。连接变更/页面卸载立即结束等待，超时只说明结果未确认，不取消已接单Host动作或自动重放。
 

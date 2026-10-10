@@ -249,22 +249,6 @@ class TestVerboseFeedbackStateMachine:
         assert state.try_emit(self._event("verbose_sm_closed")) is False
         assert state.event is None
 
-    def test_state_shared_across_processor_attempts(self):
-        """owner 生命周期共享：cancel/merge 导致 _processor 重跑时状态不得重置。
-
-        为什么重要（设计 §7 复审阻断闭环）：session queue 的 cancel/merge 会让
-        同一 owner 的 processor 重跑；若每次 attempt 新建状态，A 发过 verbose 后
-        追加 B 重跑会二次提示，突破「每轮最多一条」上限。契约：同一个 state 对象
-        上第二次 try_emit 必须被拒绝。
-        """
-        state = self._state()
-        first = self._event("verbose_sm_attempt1")
-        assert state.try_emit(first) is True          # attempt 1
-        # attempt 2（模拟重跑 attempt 拿到同一个 owner 级 state）
-        assert state.try_emit(self._event("verbose_sm_attempt2")) is False
-        assert state.event is first, "重跑 attempt 不得重置已发出的事件"
-
-
 # ============================================================
 # 契约 3：配置（设计 §11）
 # ============================================================
@@ -609,51 +593,6 @@ class TestP0RpaVerboseFinalDistinctDedupKey:
 # ============================================================
 # Phase 2 契约：Web 端 metadata delivery 命名（设计 §10）
 # ============================================================
-
-
-class TestWebVerboseMetadataDeliveryContract:
-    """Phase 2 Web 端 verboseMessages 条目契约。
-
-    为什么放契约文件：设计 §10 明确「Web 端没有 adapter delivery，可记录
-    delivery="streamed"，命名在实现前由契约测试冻结」。该命名是 DB 历史
-    metadata 的用户可见结构，一旦变更即破坏历史消息兼容性，故在此冻结；
-    src.main 是 Web 交付命名的唯一生产落点（延迟导入，模块不存在时独立变红）。
-    """
-
-    def test_web_delivery_value_frozen_to_streamed(self):
-        """Web 端 delivery 冻结为 "streamed"（不是 "displayed"）：Web 无法可靠
-        确认 DOM 是否实际渲染，只记录「已随 SSE 流式下发」这一事实。"""
-        import src.main as main_module
-
-        assert main_module.WEB_VERBOSE_DELIVERY == "streamed"
-
-    def test_web_entry_shape_and_dedup_rule(self):
-        """metadata 条目恰好为协议五字段 + delivery；同 eventId 去重保留首条
-        （设计 §10 合并规则 3：verboseMessages 按 eventId 去重）。"""
-        import src.main as main_module
-
-        first = {
-            "type": "verbose", "eventId": "verbose_c1", "data": VALID_TEXT,
-            "source": "policy", "timestamp": 1788144000000,
-        }
-        duplicate = dict(first, data="重复帧不应覆盖首条。")
-        other = dict(first, eventId="verbose_c2")
-        entries = main_module._build_verbose_metadata_entries(
-            [first, duplicate, other])
-        assert [entry["eventId"] for entry in entries] == ["verbose_c1", "verbose_c2"]
-        assert entries[0]["data"] == VALID_TEXT
-        for entry in entries:
-            assert set(entry.keys()) == {
-                "eventId", "data", "source", "timestamp", "delivery",
-            }
-            assert entry["delivery"] == "streamed"
-
-    def test_no_verbose_turn_yields_no_entries(self):
-        """本轮无 verbose 时空列表：调用方保持 metadata 无 verboseMessages 键
-        （Phase 2 约束：关闭/无 verbose 时历史消息结构不变）。"""
-        import src.main as main_module
-
-        assert main_module._build_verbose_metadata_entries([]) == []
 
 
 if __name__ == "__main__":

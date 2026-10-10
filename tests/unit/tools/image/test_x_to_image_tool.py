@@ -24,10 +24,6 @@ pytestmark = pytest.mark.tools
 class TestXToImageToolDefinition:
     """工具定义、显示名、分类、描述、schema 测试。"""
 
-    def test_name_is_x_to_image(self):
-        from src.tools.image.x_to_image_tool import XToImageTool
-        assert XToImageTool().name == "x_to_image"
-
     def test_display_name_is_chinese(self):
         from src.tools.image.x_to_image_tool import XToImageTool
         assert XToImageTool().display_name == "内容转图片"

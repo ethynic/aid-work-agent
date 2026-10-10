@@ -7,14 +7,16 @@ import pytest
 
 def pytest_collection_modifyitems(config, items):
     """根据环境变量自动跳过缺少凭证的 e2e 测试"""
-    skip_llm = pytest.mark.skip(reason="未配置 LLM API 密钥 (API_KEYS)")
+    skip_llm = pytest.mark.skip(reason="当前 LLM provider 链未配置 API 密钥")
     skip_email = pytest.mark.skip(reason="未配置邮件测试凭证 (TEST_SMTP_SERVER)")
     skip_search = pytest.mark.skip(reason="未配置搜索 API 密钥 (TAVILY_API_KEY)")
     skip_browser = pytest.mark.skip(reason="未安装 playwright")
 
     for item in items:
+        if "e2e" not in item.keywords:
+            continue
         if "llm" in item.keywords:
-            if not os.getenv("API_KEYS"):
+            if not _has_llm_credentials():
                 item.add_marker(skip_llm)
         if "email" in item.keywords:
             if not os.getenv("TEST_SMTP_SERVER"):
@@ -27,6 +29,19 @@ def pytest_collection_modifyitems(config, items):
                 import playwright  # noqa: F401
             except ImportError:
                 item.add_marker(skip_browser)
+
+
+def _has_llm_credentials() -> bool:
+    """与 Gateway 一致，读取当前 provider（含启用的备用链）的实际 Key 配置。"""
+    from src.config.settings import settings
+
+    providers = [settings.llm.provider]
+    if settings.llm.failover.enabled:
+        providers.extend(settings.llm.failover.providers)
+    return any(
+        cfg is not None and bool(cfg.get_effective_keys())
+        for cfg in (getattr(settings.llm, provider, None) for provider in providers)
+    )
 
 
 @pytest.fixture

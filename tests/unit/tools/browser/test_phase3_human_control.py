@@ -113,26 +113,6 @@ async def test_completion_stops_on_unmet_first_sample():
 
 
 @pytest.mark.asyncio
-async def test_agent_runtime_treats_suspension_as_control_flow():
-    # Agent is now the compatibility API. Its execution owner is the real
-    # Engine; use the existing behavior case rather than an obsolete substring.
-    from tests.unit.test_agent_engine_acceptance import (
-        test_unknown_external_effect_stays_waiting_and_never_repeats_write,
-    )
-    await test_unknown_external_effect_stays_waiting_and_never_repeats_write()
-
-
-@pytest.mark.asyncio
-async def test_suspension_preserves_executed_siblings_and_defers_pending_calls():
-    from tests.unit.test_agent_engine_acceptance import (
-        test_pause_between_sibling_calls_preserves_remaining_work_and_result_pairing,
-        test_waiting_tool_resume_recovers_call_then_executes_untouched_siblings,
-    )
-    await test_pause_between_sibling_calls_preserves_remaining_work_and_result_pairing()
-    await test_waiting_tool_resume_recovers_call_then_executes_untouched_siblings()
-
-
-@pytest.mark.asyncio
 async def test_agent_continuation_does_not_create_synthetic_user_message():
     agent = object.__new__(Agent)
     captured = {}

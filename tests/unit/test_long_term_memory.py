@@ -150,10 +150,6 @@ class TestLegacyMigration:
         assert new_path.exists()
         assert not old_dir.exists() or not list(old_dir.iterdir())
 
-    def test_no_legacy_file_no_error(self, memory):
-        """旧目录无文件时静默返回空模板，不抛异常"""
-        assert memory.get_memory("tenant_none", "user_none").startswith("# 用户记忆")
-
     def test_save_after_migration_keeps_migrated_content(
         self, memory, isolated_tenants_root, legacy_storage_dir
     ):

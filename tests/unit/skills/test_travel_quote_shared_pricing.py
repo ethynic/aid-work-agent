@@ -334,3 +334,8 @@ class TestGenerateQuoteSubagentId:
         assert m_other.call_args.kwargs.get('subagent_id') == 'travel-sub'
         # 实现 9dcc9bc8 起 file_path 经 os.path.abspath（Windows 下会补盘符，Linux 原样返回）
         assert result['file_path'] == os.path.abspath('/tmp/quote.xlsx')
+        internal_data = result['internal_data']
+        assert internal_data['items'] == []
+        assert internal_data['hotel_stays'] == []
+        assert internal_data['total_people'] == 30
+        assert 'file_path' not in internal_data

@@ -6,8 +6,6 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from src.services.recap.runner import (
     RecapPayload,
     _run_tasks,
@@ -25,12 +23,6 @@ def _make_payload(round_message_id=101, tenant_id="tenant_x"):
         user_content="客户消息",
         assistant_reply="AI 回复",
     )
-
-
-def _fake_create_task_close(coro):
-    """mock create_task 的 side_effect：显式关闭未调度的 coroutine，避免 GC 泄漏警告"""
-    coro.close()
-    return MagicMock()
 
 
 # ============== parse_recap_tasks：配置解析 ==============
@@ -87,21 +79,6 @@ class TestTriggerRecap:
                 user_content="u", assistant_reply="a", round_message_id=1,
             )
             mock_create.assert_not_called()
-
-    def test_recap_tasks_dispatched(self):
-        agent = SimpleNamespace(subagent_config=SimpleNamespace(
-            recap={"tasks": [{"name": "external_push"}]},
-            name="售前咨询专员", dir_name="pre-sales",
-        ))
-        with patch("src.services.recap.runner.asyncio.create_task") as mock_create, \
-             patch("src.services.recap.runner._background_tasks"):
-            mock_create.side_effect = _fake_create_task_close
-            trigger_recap(
-                agent=agent, session_id="tenant_x_wecom_kf_kf_u_sa",
-                tenant_id="tenant_x",
-                user_content="u", assistant_reply="a", round_message_id=5,
-            )
-            mock_create.assert_called_once()
 
     def test_round_message_id_missing_skips(self):
         agent = SimpleNamespace(subagent_config=SimpleNamespace(

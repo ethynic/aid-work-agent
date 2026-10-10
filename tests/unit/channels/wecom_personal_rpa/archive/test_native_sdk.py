@@ -38,15 +38,6 @@ def test_sdk_lib_path_constant():
     assert os.path.basename(_SDK_LIB_PATH) == "libWeWorkFinanceSdk_C.so"
 
 
-def test_sdk_lib_file_exists():
-    """本地开发环境应有 .so 文件（缺失时 skip 并提示部署）。"""
-    if not os.path.exists(_SDK_LIB_PATH):
-        pytest.skip(
-            f"libWeWorkFinanceSdk_C.so 未部署（{_SDK_LIB_PATH}），"
-            f"按 docs/system/wecom-personal-rpa-sdk-deploy.md 部署后跑此测试"
-        )
-
-
 # ----------------- ctypes 加载 + 函数签名 -----------------
 
 

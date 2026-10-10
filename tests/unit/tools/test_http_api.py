@@ -9,18 +9,6 @@ pytestmark = pytest.mark.tools
 
 
 class TestHttpApiToolDefinition:
-    def test_tool_name(self):
-        from src.tools.network.http_api import HttpApiTool
-
-        tool = HttpApiTool()
-        assert tool.name == "http_api"
-
-    def test_tool_has_input_model(self):
-        from src.tools.network.http_api import HttpApiTool
-
-        tool = HttpApiTool()
-        assert tool.InputModel is not None
-
     def test_tool_definition_structure(self):
         from src.tools.network.http_api import HttpApiTool
 

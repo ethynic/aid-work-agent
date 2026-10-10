@@ -29,20 +29,6 @@ describe('JsonNode', () => {
     writeText = mockClipboard()
   })
 
-  it('Object 节点渲染复制按钮', () => {
-    const wrapper = mount(JsonNode, {
-      props: { data: { a: 1 }, keyName: 'root', depth: 0 },
-    })
-    expect(wrapper.find('.json-copy-btn').exists()).toBe(true)
-  })
-
-  it('String 节点渲染复制按钮', () => {
-    const wrapper = mount(JsonNode, {
-      props: { data: 'some content', keyName: 'content', depth: 0 },
-    })
-    expect(wrapper.find('.json-copy-btn').exists()).toBe(true)
-  })
-
   it('Object 节点点击复制把格式化 JSON 写入剪贴板', async () => {
     const obj = { a: 1, b: 'x' }
     const wrapper = mount(JsonNode, {

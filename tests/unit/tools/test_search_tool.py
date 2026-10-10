@@ -5,17 +5,14 @@
 import pytest
 
 pytestmark = [pytest.mark.tools, pytest.mark.search]
-from unittest.mock import AsyncMock, patch, MagicMock
+from types import SimpleNamespace
+from unittest.mock import patch, MagicMock
 
 from src.tools.search.search_tool import WebSearchTool
 
 
 class TestWebSearchToolDefinition:
     """工具定义测试"""
-
-    def test_tool_name(self):
-        tool = WebSearchTool()
-        assert tool.name == "web_search"
 
     def test_tool_definition_has_schema(self):
         tool = WebSearchTool()
@@ -51,8 +48,7 @@ class TestWebSearchToolExecution:
     """工具执行测试（mock 外部 API）"""
 
     @pytest.mark.asyncio
-    @patch("src.tools.search.search_tool.TavilyClient", create=True)
-    async def test_search_returns_results(self, mock_tavily_cls):
+    async def test_search_returns_results(self):
         """搜索返回结果（mock Tavily SDK）"""
         # TavilyClient 在方法内部动态 import，用 sys.modules mock
         mock_client = MagicMock()
@@ -63,9 +59,25 @@ class TestWebSearchToolExecution:
             "answer": "Test answer",
         }
 
+        mock_tavily_cls = MagicMock(return_value=mock_client)
+        fake_settings = SimpleNamespace(tools=SimpleNamespace(search=SimpleNamespace(
+            tavily_api_key="test-search-key", max_results=5,
+            include_answer=True, search_depth="basic",
+        )))
         tool = WebSearchTool()
-        # 使用 patch 在 execute 内部拦截 tavily import
-        with patch.dict("sys.modules", {"tavily": MagicMock(TavilyClient=MagicMock(return_value=mock_client))}):
-            result = await tool.execute(keyword="test query", limit=5)
-            # 结果可能是 success 或包含 results
-            assert result is not None
+        with patch("src.tools.search.search_tool.settings", fake_settings), \
+             patch.dict("sys.modules", {"tavily": SimpleNamespace(TavilyClient=mock_tavily_cls)}):
+            result = await tool.execute(keyword="test query", max_results=3)
+
+        assert result["success"] is True
+        assert result["results"] == [{
+            "title": "Test Result", "url": "https://example.com",
+            "content": "Test content", "score": 0.9,
+        }]
+        assert result["count"] == 1
+        assert result["answer"] == "Test answer"
+        mock_tavily_cls.assert_called_once_with(api_key="test-search-key")
+        mock_client.search.assert_called_once_with(
+            query="test query", max_results=3, include_answer=True,
+            search_depth="basic", topic="general",
+        )

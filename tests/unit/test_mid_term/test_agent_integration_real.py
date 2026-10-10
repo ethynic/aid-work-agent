@@ -3,8 +3,8 @@
 既有 test_agent_compress_call_site.py 通过重构 agent.py 代码片段来「模拟」压缩调用，
 这种测试对 agent.py 实际代码无防御能力（删了 agent.py 那段代码测试还能过）。
 
-本文件通过 monkeypatch 让 Agent._process_message_impl 之外的部分方法变成可控的 stub，
-但保留 _detect_source_type、_build_messages、_reload_memory_from_db 的真实代码。
+本文件调用当前 Agent 身份解析、SessionHistory 与 ContextAssembler，
+只替换 I/O 边界，保留历史重载、消息组装和压缩顺序的真实行为。
 
 目的：让 mutation testing 真正有效。
 """
@@ -341,7 +341,7 @@ def test_reload_memory_real_code_assistant_with_tool_calls(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_agent_has_compress_call_site_attribute(monkeypatch):
+async def test_context_preparation_compresses_before_history_reload():
     """Actual context preparation calls compression before reloading history.
 
     Replaces the old assertion tying private methods to the facade with a
@@ -363,6 +363,7 @@ async def test_agent_has_compress_call_site_attribute(monkeypatch):
     history.active_summary = lambda session_id: None
     attachments = MagicMock()
     attachments.prepare.return_value = ("user input", "", None)
+    attachments.build_image_reference_content.return_value = (None, None)
     attachments._build_multimodal_user_content.return_value = None
     visibility, remember = MagicMock(), MagicMock()
     visibility.prime = AsyncMock()
@@ -375,17 +376,3 @@ async def test_agent_has_compress_call_site_attribute(monkeypatch):
     execution, _ = await assembler.prepare("user input")
     assert order == ["compress", "reload"]
     assert execution.messages[-1]["content"] == "user input"
-
-
-def test_agent_compress_session_imports_correctly():
-    """验证 compress_session 入口可以从 src.memory.mid_term 正常导入。
-
-    mutation: 如果有人重命名了 compress_session，所有 Agent 调用站点会崩。
-    """
-    from src.memory.mid_term import ContextCompressionService
-    assert hasattr(ContextCompressionService, "compress_session"), (
-        "ContextCompressionService 必须有 compress_session 方法"
-    )
-    # 确认是 async 函数
-    import inspect
-    assert inspect.iscoroutinefunction(ContextCompressionService.compress_session)

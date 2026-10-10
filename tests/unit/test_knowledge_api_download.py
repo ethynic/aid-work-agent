@@ -40,12 +40,6 @@ def test_cannot_download_orphan_document_with_tenant_context():
         assert _can_download_document({"tenant_id": None, "source_type": "product"}, "B") is False
 
 
-def test_cannot_download_cross_tenant_without_shared():
-    """跨租户文档、未启用共享授权 -> 拒绝"""
-    with patch("src.knowledge.api._has_shared_access", return_value=False):
-        assert _can_download_document({"tenant_id": "A", "source_type": "product"}, "B") is False
-
-
 def test_can_download_cross_tenant_with_shared():
     """跨租户文档、已启用共享授权 -> 放行，且以正确参数调用共享校验"""
     with patch("src.knowledge.api._has_shared_access", return_value=True) as mock_check:

@@ -1,10 +1,9 @@
 """browser_pool 单元测试。
 
 验证 src/services/x_to_image/renderers/browser_pool.py：
-- 模块级单例 browser_pool 存在
 - is_available() 返回 bool 且缓存（两次调用不抛异常、结果一致）
 - _ensure_browser 中 headless=True 为硬编码字面量（通过读源码字符串匹配守护）
-- 不在单元测试中真正启动 Chromium（shoot 类测试打 integration 标记且默认 skip）
+- 不在单元测试中真正启动 Chromium，真实截图由 real_browser 套件覆盖
 """
 from pathlib import Path
 
@@ -15,21 +14,7 @@ from src.services.x_to_image.renderers.browser_pool import BrowserPool, browser_
 pytestmark = pytest.mark.unit
 
 
-# ---------- 单例 ----------
-
-
-def test_singleton_exists():
-    assert browser_pool is not None
-    assert isinstance(browser_pool, BrowserPool)
-
-
 # ---------- is_available ----------
-
-
-async def test_is_available_returns_bool():
-    result = await browser_pool.is_available()
-    assert isinstance(result, bool)
-    # 不在此环境断言 True —— Playwright 可能未安装；只断言类型
 
 
 async def test_is_available_is_cached_and_consistent():
@@ -39,12 +24,6 @@ async def test_is_available_is_cached_and_consistent():
     assert first == second
     assert isinstance(first, bool)
     assert browser_pool._available is first  # 缓存已被写入
-
-
-async def test_is_available_does_not_raise():
-    # 多次调用均不应抛异常
-    for _ in range(3):
-        await browser_pool.is_available()
 
 
 async def test_is_available_caches_after_first_call(monkeypatch):
@@ -111,28 +90,7 @@ def test_headless_not_parameterized_from_outside():
     )
 
 
-# ---------- shoot（集成级，默认 skip，不在此真正启动 Chromium） ----------
-
-
-@pytest.mark.integration
-class TestShootRequiresChromium:
-    """shoot 端到端测试需要真实 Chromium，标记为 integration，默认不运行。
-
-    addopts = -m "not e2e" 不会跳过 integration，但 CI 环境若无 Chromium，
-    可通过 -m "not integration" 跳过。保留此用例作为冒烟测试入口。
-    """
-
-    async def test_shoot_produces_png(self, tmp_path):
-        pytest.skip(reason="需要真实 Chromium，CI 中可能不可用")
-
-
 # ---------- acquire_page（async context manager） ----------
-
-
-def test_acquire_page_exists():
-    """acquire_page 方法存在且可调用。"""
-    assert hasattr(browser_pool, "acquire_page")
-    assert callable(browser_pool.acquire_page)
 
 
 def test_acquire_page_signature_no_headless():

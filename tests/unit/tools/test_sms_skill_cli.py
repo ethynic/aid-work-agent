@@ -2,7 +2,7 @@
 sms-verification skill CLI 单元测试
 
 测试 sms_cli.py 的 send / verify 子命令核心逻辑。
-mock 依赖：send_sms_code / verify_sms_code / sms_manager / redis_client / settings。
+mock 依赖：send_sms_code / verify_sms_code / sms_manager / redis_client / settings / 数据库连接池初始化。
 """
 
 import os
@@ -31,6 +31,13 @@ pytestmark = pytest.mark.tools
 
 # 说明：settings.demo（演示模式开关）与固定码 888888 已随 demo 模式移除而删除，
 # 原 demo_on / demo_off fixtures 一并删除；send/verify 行为不再分模式。
+
+
+@pytest.fixture(autouse=True)
+def isolate_database_pool():
+    """底层发送/校验已 mock，CLI 单测不初始化真实数据库连接池。"""
+    with patch.object(sms_cli, "_ensure_db_pool"):
+        yield
 
 
 @pytest.fixture
@@ -290,18 +297,6 @@ class TestVerifySms:
         assert result["success"] is True
         assert result["reason"] == "bypass"
         # bypass 时底层 verify_sms_code 不应被调用
-        assert not _mock_verify.called
-
-    @patch.object(sms_cli, "verify_sms_code", return_value=True)
-    def test_verify_bypass_code_not_6_digits(
-        self, _mock_verify, mock_redis, qb_code_set
-    ):
-        """场景8：bypass 码非 6 位数字，仍应走 bypass 分支"""
-        # qb_sms_code='QBTEST'（5 位且非纯数字），应直接走 bypass
-        result = sms_cli.verify_sms(mobile="13800138000", code="QBTEST")
-
-        assert result["success"] is True
-        assert result["reason"] == "bypass"
         assert not _mock_verify.called
 
     def test_verify_code_wrong_format(

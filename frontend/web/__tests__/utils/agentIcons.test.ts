@@ -42,10 +42,10 @@ describe('agentIcons', () => {
   })
 
   it('100 个虚拟 agentId 的碰撞率应 < 30%（分布性）', () => {
-    // 生成 100 个不同的虚拟 agentId
+    // 固定样本保证失败可复现，避免概率阈值成为随机门禁
     const ids: string[] = []
     for (let i = 0; i < 100; i++) {
-      ids.push(`agent-${i}-${Math.random().toString(36).slice(2, 8)}`)
+      ids.push(`agent-${i}`)
     }
     // 收集每个 path 被命中的次数
     const pathCounts = new Map<string, number>()

@@ -19,11 +19,6 @@ pytestmark = pytest.mark.tools
 class TestWordProcessToolDefinition:
     """WordProcessTool 工具定义测试"""
 
-    def test_tool_name(self):
-        from src.tools.word.word_process_tool import WordProcessTool
-        tool = WordProcessTool()
-        assert tool.name == "word_process"
-
     def test_tool_display_name(self):
         from src.tools.word.word_process_tool import WordProcessTool
         tool = WordProcessTool()

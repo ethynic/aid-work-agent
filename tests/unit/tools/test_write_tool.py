@@ -62,10 +62,6 @@ def _resolve_to_tmp(self, file_path: str) -> Path:
 
 
 class TestToolDefinition:
-    def test_tool_name(self):
-        tool = WriteTool()
-        assert tool.name == "write"
-
     def test_tool_display_name(self):
         tool = WriteTool()
         assert tool.display_name == "生成文本文件"

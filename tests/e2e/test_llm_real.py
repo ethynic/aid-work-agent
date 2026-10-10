@@ -1,11 +1,9 @@
 """
 端到端测试：真实 LLM API 调用
 
-需要环境变量：API_KEYS
+需要配置当前 LLM_PROVIDER 对应的 *_API_KEYS（或启用的备用 provider 密钥）
 运行：pytest -m e2e tests/e2e/test_llm_real.py
 """
-
-import os
 
 import pytest
 
@@ -16,10 +14,6 @@ pytestmark = [
 ]
 
 
-@pytest.mark.skipif(
-    not os.getenv("API_KEYS"),
-    reason="需要 LLM API 密钥",
-)
 class TestLLMRealAPI:
     """真实 LLM API 调用测试"""
 

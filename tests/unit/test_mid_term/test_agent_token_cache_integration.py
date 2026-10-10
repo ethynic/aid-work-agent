@@ -1,21 +1,14 @@
-"""Agent token 缓存写入集成测试（v3.1 Phase 4.6）
+"""SessionDB / ChannelSessionManager token 更新接口的边界测试。
 
-验证 _process_message_impl 中嵌入的 token 缓存写入逻辑边界：
-- prompt+completion=0 → 不写入
-- usage 字段缺失 → 不崩溃，不写入
-- chat 源路由到 SessionDB.update_context_token_count
-- channel 源路由到 ChannelSessionManager.update_context_token_count
-- 子智能体（mode=SUBAGENT）也写入缓存（设计文档 §4.4 没有说子智能体排除）
+直接调用真实接口，数据库连接替换为 mock：
+- 零值及负值的参数传递
+- 数据库异常返回 False，不向调用方传播
 
-通过直接调用 SessionDB/ChannelSessionManager.update_context_token_count 的接口测试
-（因为 token 缓存写入逻辑嵌入在 _process_message_impl 里无法直接触达）。
+不覆盖 Agent 消息循环、usage 解析或来源路由。
 """
 
 from contextlib import contextmanager
 from unittest.mock import MagicMock
-
-import pytest
-
 
 def _patch_db_conn(monkeypatch, module, rowcount=1):
     mock_cursor = MagicMock()

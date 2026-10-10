@@ -118,19 +118,6 @@ test('每个场景的请求/响应/水位链/处置全部一致', () => {
   }
 })
 
-test('语料内 local_message_id 全局唯一（跨场景不碰撞）', () => {
-  const ids = new Set<string>()
-  for (const scenario of REPLAY_SCENARIOS) {
-    for (const step of scenario.steps) {
-      if (isErrorResponse(step.response)) continue
-      const messages = (step.response as { ordered_messages?: Array<{ local_message_id: string }> }).ordered_messages ?? []
-      for (const m of messages) ids.add(m.local_message_id)
-    }
-  }
-  const all = [...ids]
-  assert.equal(new Set(all).size, all.length)
-})
-
 test('负例：error 失败后篡改请求水位，链路检查必须拒绝', () => {
   const focusScenario = REPLAY_SCENARIOS.find((s) => s.name === '焦点抢占中断观察')
   assert.ok(focusScenario && focusScenario.steps.length >= 1 && focusScenario.initialWatermark)

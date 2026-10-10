@@ -42,6 +42,12 @@ def _make_payload(**overrides) -> RecapPayload:
     return RecapPayload(**base)
 
 
+def _close_scheduled_coroutine(coro):
+    """只验证任务交接；关闭未真正调度的协程，避免测试产生泄漏警告。"""
+    coro.close()
+    return MagicMock()
+
+
 # ============== 序列化往返 ==============
 
 class TestPayloadSerialization:
@@ -105,6 +111,10 @@ class TestRebuildTasks:
 # ============== 触发侧入队/降级 ==============
 
 class TestTriggerRecapEnqueue:
+    @pytest.fixture(autouse=True)
+    def _isolate_background_tasks(self, monkeypatch):
+        monkeypatch.setattr("src.services.recap.runner._background_tasks", set())
+
     def _make_agent(self):
         agent = MagicMock()
         agent.subagent_config.recap = {
@@ -122,7 +132,7 @@ class TestTriggerRecapEnqueue:
         record_service.trace_collector = collector
 
         with patch("src.services.recap.runner.redis_client") as mock_redis, \
-                patch("src.services.recap.runner.asyncio.create_task") as mock_create:
+                patch("src.services.recap.runner.asyncio.create_task", side_effect=_close_scheduled_coroutine) as mock_create:
             mock_redis.rpush.return_value = True
             mock_redis.acquire_lock.return_value = True
             trigger_recap(
@@ -141,7 +151,7 @@ class TestTriggerRecapEnqueue:
         """Redis 不可用（rpush 返回 False）时降级进程内 create_task"""
         with patch("src.services.recap.runner.redis_client") as mock_redis, \
                 patch("src.services.recap.runner._run_tasks") as mock_run, \
-                patch("src.services.recap.runner.asyncio.create_task") as mock_create:
+                patch("src.services.recap.runner.asyncio.create_task", side_effect=_close_scheduled_coroutine) as mock_create:
             mock_redis.rpush.return_value = False
             trigger_recap(
                 agent=self._make_agent(),
@@ -195,6 +205,10 @@ class TestTriggerRecapEnqueue:
 class TestHandleRecapMessage:
     """background_runner._handle_recap_message（真实序列化语义，非 mock 返回值）"""
 
+    @pytest.fixture(autouse=True)
+    def _isolate_consumer_tasks(self, monkeypatch):
+        monkeypatch.setattr("src.background_runner._recap_bg_tasks", set())
+
     def _make_msg_dict(self, **overrides) -> dict:
         payload = _make_payload()
         payload.task_config = [{"name": "external_push", "when": "every_round", "enabled": True}]
@@ -208,7 +222,7 @@ class TestHandleRecapMessage:
         import src.background_runner as br
 
         with patch("src.services.recap.runner._run_tasks") as mock_run, \
-                patch("src.background_runner.asyncio.create_task") as mock_create:
+                patch("src.background_runner.asyncio.create_task", side_effect=_close_scheduled_coroutine) as mock_create:
             br._handle_recap_message(self._make_msg_dict())
             assert mock_create.called is True
         tasks_arg, payload_arg = mock_run.call_args[0]
@@ -226,7 +240,7 @@ class TestHandleRecapMessage:
         assert isinstance(msg, str)
 
         with patch("src.services.recap.runner._run_tasks"), \
-                patch("src.background_runner.asyncio.create_task") as mock_create:
+                patch("src.background_runner.asyncio.create_task", side_effect=_close_scheduled_coroutine) as mock_create:
             br._handle_recap_message(msg)
             assert mock_create.called is True
 
@@ -237,7 +251,7 @@ class TestHandleRecapMessage:
 
         msg = self._make_msg_dict(enqueued_at=time.time() - RECAP_MAX_QUEUE_AGE_SECONDS - 60)
         with patch("src.services.recap.runner._run_tasks"), \
-                patch("src.background_runner.asyncio.create_task") as mock_create:
+                patch("src.background_runner.asyncio.create_task", side_effect=_close_scheduled_coroutine) as mock_create:
             br._handle_recap_message(msg)
             assert mock_create.called is False
 
@@ -248,7 +262,7 @@ class TestHandleRecapMessage:
 
         msg = self._make_msg_dict(enqueued_at=None)
         with patch("src.services.recap.runner._run_tasks"), \
-                patch("src.background_runner.asyncio.create_task") as mock_create:
+                patch("src.background_runner.asyncio.create_task", side_effect=_close_scheduled_coroutine) as mock_create:
             br._handle_recap_message(msg)
             assert mock_create.called is True
 
@@ -257,7 +271,7 @@ class TestHandleRecapMessage:
         import src.background_runner as br
 
         with patch("src.services.recap.runner._run_tasks"), \
-                patch("src.background_runner.asyncio.create_task") as mock_create:
+                patch("src.background_runner.asyncio.create_task", side_effect=_close_scheduled_coroutine) as mock_create:
             br._handle_recap_message("not-json{{{")
             br._handle_recap_message(12345)
             br._handle_recap_message({"task_config": []})

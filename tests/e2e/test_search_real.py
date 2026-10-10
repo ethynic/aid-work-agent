@@ -29,6 +29,9 @@ class TestSearchReal:
         from src.tools.search.search_tool import WebSearchTool
 
         tool = WebSearchTool()
-        result = await tool.execute(keyword="Python programming", limit=3)
+        result = await tool.execute(keyword="Python programming", max_results=3)
         assert result.get("success") is True
-        assert result.get("count", 0) > 0
+        results = result["results"]
+        assert 0 < len(results) <= 3
+        assert result["count"] == len(results)
+        assert all(item["url"] for item in results)

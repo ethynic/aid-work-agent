@@ -60,11 +60,6 @@ def _mock_doc(pages_text=None, page_count=None, metadata=None):
 class TestPdfProcessToolDefinition:
     """PdfProcessTool 工具定义测试"""
 
-    def test_tool_name(self):
-        from src.tools.pdf.pdf_process_tool import PdfProcessTool
-        tool = PdfProcessTool()
-        assert tool.name == "pdf_process"
-
     def test_tool_display_name(self):
         from src.tools.pdf.pdf_process_tool import PdfProcessTool
         tool = PdfProcessTool()

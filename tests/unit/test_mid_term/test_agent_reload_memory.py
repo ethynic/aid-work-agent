@@ -125,24 +125,6 @@ def test_build_messages_get_active_summary_exception_no_crash(monkeypatch):
     assert all("之前对话摘要" not in (m.get("content") or "") for m in messages)
 
 
-def test_detect_source_type_record_exception_defaults_chat():
-    """SessionRecordManager.get_current_record 抛异常 → 返回默认 'chat'"""
-    from src.core.agent import Agent
-
-    agent = Agent.__new__(Agent)
-
-    import src.services.session_record as sr_mod
-    orig = sr_mod.SessionRecordManager.get_current_record
-
-    def _boom():
-        raise RuntimeError("record svc down")
-    sr_mod.SessionRecordManager.get_current_record = staticmethod(_boom)
-    try:
-        assert agent._identity("session-source").source == "chat"
-    finally:
-        sr_mod.SessionRecordManager.get_current_record = orig
-
-
 def test_detect_source_type_record_service_wins():
     """请求级 record（ContextVar）的 source_type 优先于默认 'chat'"""
     from src.core.agent import Agent

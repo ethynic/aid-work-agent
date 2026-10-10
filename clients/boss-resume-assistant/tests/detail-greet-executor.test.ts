@@ -22,7 +22,6 @@ import {
   detailSnap,
   GREET_STRING,
   listSnap,
-  VIEWPORT,
   type SnapItem,
 } from './detailGreetFixture.js'
 
@@ -306,9 +305,4 @@ test('open-detail 起点防残留：带着已打开的详情 → 先 Escape 关�
   // 第一次 Escape 是关残留弹层；点击是目标姓名节点 (342,138)
   assert.equal(r.escapeCount(), 1)
   assert.deepEqual(r.clicks, [{ x: 342, y: 138 }])
-})
-
-// 视口常量回归（fixture 与真机探查一致）
-test('fixture 视口与真机探查一致', () => {
-  assert.deepEqual(VIEWPORT, { width: 1249, height: 1277 })
 })

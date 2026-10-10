@@ -38,7 +38,6 @@ sys.modules["src.knowledge.vector_db.vector_db"] = vector_db_mod
 
 # 在导入 src 模块之前设置测试环境变量
 os.environ.setdefault("LLM_PROVIDER", "qwen")
-os.environ.setdefault("API_KEYS", "api-key-1,api-key-2")
 
 # 尝试从 .env 文件加载 DATABASE_URL，如果不存在则使用 PostgreSQL 默认值
 from pathlib import Path
@@ -229,6 +228,8 @@ def _purge_test_tenants() -> int:
 
 def pytest_sessionstart(session):
     """开跑前清历史测试残留（上次中断/漏删的测试租户及其数据）"""
+    if session.config.option.collectonly:
+        return
     purged = _purge_test_tenants()
     if purged:
         print(f"\n[conftest] 已清理历史测试租户残留 {purged} 个")
@@ -236,6 +237,8 @@ def pytest_sessionstart(session):
 
 def pytest_sessionfinish(session, exitstatus):
     """跑完后清本次测试数据（测试好了及时删除所有测试数据的兜底）"""
+    if session.config.option.collectonly:
+        return
     purged = _purge_test_tenants()
     if purged:
         print(f"\n[conftest] 已清理本次测试租户 {purged} 个（含全部关联表数据）")

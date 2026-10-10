@@ -2,7 +2,6 @@
 认证和会话用户身份测试
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
 from fastapi import Request
 
@@ -10,14 +9,9 @@ from fastapi import Request
 class TestAuthModule:
     """测试 auth 模块基本功能"""
 
-    def test_auth_module_imports(self):
-        """验证 auth 模块可导入"""
-        from src.api import auth
-        assert hasattr(auth, "verify_token")
-        assert hasattr(auth, "get_current_user")
-
-    @patch("src.api.auth.get_db_connection")
-    def test_verify_invalid_token(self, mock_db):
+    @patch("src.services.auth_service.get_cached", return_value=None)
+    @patch("src.services.auth_service.get_db_connection")
+    def test_verify_invalid_token(self, mock_db, mock_cache):
         """验证无效 token 返回 None"""
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -30,6 +24,9 @@ class TestAuthModule:
         from src.api import auth
         result = auth.verify_token("invalid_token")
         assert result is None
+        mock_db.assert_called_once()
+        mock_cursor.execute.assert_called_once()
+        assert mock_cursor.execute.call_args.args[1] == ("invalid_token",)
 
     def test_get_current_user_no_header(self):
         """无 Authorization header 返回 None"""

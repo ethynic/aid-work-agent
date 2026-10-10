@@ -67,17 +67,6 @@ test('findChromeExe：全部无果返回 undefined（未装 Chrome）', () => {
   assert.equal(findChromeExe({ queryAppPaths: () => undefined, existsSyncImpl: () => false }), undefined)
 })
 
-test('ensureDebugChrome：端口已通则不拉起', async () => {
-  let spawned = 0
-  const launched = await withoutAutoChromeSwitch(() => ensureDebugChrome(
-    9222,
-    {},
-    { fetchImpl: okFetch as typeof fetch, spawnImpl: () => { spawned++; return { unref() {} } }, sleep: () => Promise.resolve() },
-  ))
-  assert.equal(launched, false)
-  assert.equal(spawned, 0)
-})
-
 test('ensureDebugChrome：端口不通→拉起→就绪返回 true，参数带固定 profile 与初始页', async () => {
   let probeCount = 0
   const fetchImpl = (() => {
@@ -111,19 +100,27 @@ test('ensureDebugChrome：找不到 chrome.exe 返回 false 不抛', async () =>
   assert.equal(launched, false)
 })
 
-test('ensureDebugChrome：spawn 后端口一直不就绪（超时）返回 false 不抛', async () => {
+test('ensureDebugChrome：spawn 后端口一直不就绪（超时）返回 false 不抛', async (t) => {
+  let now = 0
+  let probes = 0
+  let spawned = 0
+  t.mock.method(Date, 'now', () => now)
   const launched = await withoutAutoChromeSwitch(() => ensureDebugChrome(
     9222,
     {},
     {
-      fetchImpl: failFetch as typeof fetch,
+      fetchImpl: (() => { probes++; return failFetch() }) as typeof fetch,
       queryAppPaths: () => 'C:\\Chrome\\chrome.exe',
       existsSyncImpl: () => true,
-      spawnImpl: () => ({ unref() {} }),
-      sleep: () => Promise.resolve(),
+      spawnImpl: () => { spawned++; return { unref() {} } },
+      // 按生产传入的等待时长推进虚拟时间，避免立即 resolve 后忙等真实 15 秒。
+      sleep: (ms) => { now += ms; return Promise.resolve() },
     },
   ))
   assert.equal(launched, false)
+  assert.equal(spawned, 1)
+  assert.ok(probes > 1)
+  assert.ok(now > 0)
 })
 
 test('ensureDebugChrome：spawn 抛异常也 fail-open 返回 false', async () => {

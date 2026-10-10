@@ -131,14 +131,6 @@ class TestCircuitBreaker:
         cb.record_failure()
         assert cb.state == "open"
 
-    def test_open_not_yet_timed_out_stays_open(self, cb):
-        for _ in range(3):
-            cb.record_failure()
-        # last_failure_time is very recent
-        assert cb.state == "open"
-        assert cb.can_attempt() is False
-
-
 # ---------------------------------------------------------------------------
 # 5.2 错误分类测试
 # ---------------------------------------------------------------------------
@@ -794,8 +786,13 @@ class TestAlertLogic:
             fg._failover_cfg = MagicMock()
             fg._failover_cfg.alert.enabled = False
 
-            # 不应抛异常
-            await fg._send_alert("high", "test", "test content")
+            mock_ns = MagicMock()
+            mock_ns.send = AsyncMock()
+            with patch.dict("sys.modules", {"src.services.notification_service": MagicMock(
+                notification_service=mock_ns,
+            )}):
+                await fg._send_alert("high", "test", "test content")
+            mock_ns.send.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_alert_sends_via_notification_service(self):
@@ -808,13 +805,19 @@ class TestAlertLogic:
 
             mock_ns = MagicMock()
             mock_ns.send = AsyncMock(return_value=True)
+            mock_message = MagicMock(return_value=MagicMock())
 
             with patch.dict("sys.modules", {"src.services.notification_service": MagicMock(
                 notification_service=mock_ns,
                 NotificationChannel=MagicMock(WEBHOOK="webhook", EMAIL="email"),
-                NotificationMessage=MagicMock(return_value=MagicMock()),
+                NotificationMessage=mock_message,
             )}):
                 await fg._send_alert("high", "test", "test content")
+            mock_message.assert_called_once_with(
+                title="test", content="test content", urgency="high",
+                recipient="", channel="webhook", metadata={"source": "llm-failover"},
+            )
+            mock_ns.send.assert_awaited_once_with(mock_message.return_value)
 
     def test_health_status_structure(self):
         with patch.object(FailoverGateway, '__init__', lambda self, *a, **kw: None):

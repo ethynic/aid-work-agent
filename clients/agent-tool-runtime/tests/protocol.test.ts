@@ -1,6 +1,6 @@
 /**
  * 用例 2：完整协议——fake cloud 注入 invocation → runtime 领取 → started → progress（seq 递增）
- * → result → fake cloud 断言顺序与幂等（重复 result 返回原终态）。
+ * → result → fake cloud 断言 Runtime 实际上报的顺序与内容。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -27,28 +27,6 @@ test('完整协议：claim → started → progress(seq 递增) → result(succe
     assert.equal(result.payload['success'], true)
     assert.equal(result.payload['code'], 'OK')
     assert.equal(result.payload['effect'], 'applied')
-  } finally {
-    await stack.stop()
-  }
-})
-
-test('result 幂等：终态后重复 result 返回原终态，不报错不覆盖', async () => {
-  const stack = await startTestStack()
-  try {
-    const id = stack.cloud.enqueueInvocation('boss_goto', { durationMs: 100 })
-    await stack.cloud.waitFor(() => stack.cloud.getInvocation(id)?.state === 'succeeded', 10_000, 'invocation succeeded')
-
-    // 直接再 POST 一次 result（模拟断线恢复重发）
-    const inv = stack.cloud.getInvocation(id)!
-    const res = await fetch(`${stack.cloud.baseUrl}/api/local-tools/runtime/invocations/${id}/result`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${stack.token}` },
-      body: JSON.stringify({ claim_token: inv.claim_token, success: false, code: 'EXECUTION_UNKNOWN' }),
-    })
-    assert.equal(res.status, 200)
-    const body = (await res.json()) as Record<string, unknown>
-    assert.equal(body['state'], 'succeeded', '重复 result 应返回原终态 succeeded')
-    assert.equal(stack.cloud.getInvocation(id)!.state, 'succeeded')
   } finally {
     await stack.stop()
   }

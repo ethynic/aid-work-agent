@@ -25,7 +25,7 @@ test.describe('租户前台冒烟', () => {
     await expect(page.getByText('每日用量明细').first()).toBeVisible()
   })
 
-  test('每日用量明细弹窗可打开且含分项列头', async ({ page }) => {
+  test('每日用量明细弹窗可打开并显示标题', async ({ page }) => {
     await page.goto(`/t/${TENANT_ID}/token-usage`)
     // 点击表格中任意一条「消耗积分」链接打开弹窗
     await page.locator('tbody a').first().click()

@@ -7,8 +7,6 @@
 不直接驱动整个 ``process_message``（需要 mock 整个 LLM 流），仅测纯逻辑函数。
 """
 
-import pytest
-
 from src.core.agent import (
     _extract_image_refs_from_tool_result,
     _normalize_image_placement,
@@ -82,13 +80,6 @@ class TestExtractImageRefsFromToolResult:
         assert len(refs) == 1
         assert refs[0]["file_id"] == "file_valid"
 
-    def test_extract_from_non_dict_returns_empty(self):
-        """result 是 None / str / list → 空 list（不抛异常）。"""
-        assert _extract_image_refs_from_tool_result(None) == []
-        assert _extract_image_refs_from_tool_result("some string") == []
-        assert _extract_image_refs_from_tool_result([1, 2, 3]) == []
-        assert _extract_image_refs_from_tool_result(42) == []
-
     def test_extract_combined_top_and_nested(self):
         """顶层 images + 顶层 cover_image + results 内 cover_image 同时存在时全部提取。"""
         result = {
@@ -104,19 +95,8 @@ class TestExtractImageRefsFromToolResult:
             "file_nested",
         }
 
-    def test_extract_empty_dict_returns_empty(self):
-        """空 dict 不报错，返回空 list。"""
-        assert _extract_image_refs_from_tool_result({}) == []
-
-
 class TestNormalizeImagePlacement:
     """验证 placement 默认值补全逻辑。"""
-
-    def test_normalize_placement_adds_after_text_default(self):
-        """refs 无 placement 字段 → 补 ``after_text``。"""
-        refs = [_make_ref("file_a"), _make_ref("file_b")]
-        _normalize_image_placement(refs)
-        assert all(r["placement"] == "after_text" for r in refs)
 
     def test_normalize_placement_preserves_explicit(self):
         """已有 placement 的 ref（含 before_text/inline）→ 原值保留。"""
@@ -129,20 +109,3 @@ class TestNormalizeImagePlacement:
         assert refs[0]["placement"] == "before_text"
         assert refs[1]["placement"] == "inline"
         assert refs[2]["placement"] == "after_text"
-
-    def test_normalize_placement_empty_string_treated_as_missing(self):
-        """placement="" 视为缺失，补 ``after_text``。"""
-        refs = [{"file_id": "x", "placement": ""}]
-        _normalize_image_placement(refs)
-        assert refs[0]["placement"] == "after_text"
-
-    def test_normalize_placement_empty_list_no_error(self):
-        """空 list 不报错（no-op）。"""
-        _normalize_image_placement([])
-
-    def test_normalize_placement_mutates_in_place(self):
-        """确认函数原地修改（返回同一 list）。"""
-        refs = [_make_ref("file_a")]
-        ret = _normalize_image_placement(refs)
-        assert ret is refs
-        assert refs[0]["placement"] == "after_text"

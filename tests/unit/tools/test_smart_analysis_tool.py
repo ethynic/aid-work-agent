@@ -24,10 +24,6 @@ from src.tools.data_analysis.smart_analysis_tool import SmartDataAnalysisTool, A
 class TestSmartDataAnalysisToolDefinition:
     """工具定义测试"""
 
-    def test_tool_name(self):
-        tool = SmartDataAnalysisTool()
-        assert tool.name == "analyze_data"
-
     def test_tool_description(self):
         tool = SmartDataAnalysisTool()
         assert "分析" in tool.description
@@ -40,10 +36,6 @@ class TestSmartDataAnalysisToolDefinition:
     def test_tool_category(self):
         tool = SmartDataAnalysisTool()
         assert tool.category == "data_analysis"
-
-    def test_tool_has_input_model(self):
-        tool = SmartDataAnalysisTool()
-        assert tool.InputModel is AnalyzeDataInput
 
     def test_tool_definition_schema(self):
         tool = SmartDataAnalysisTool()
@@ -414,4 +406,3 @@ class TestGatewaySelection:
 
             assert result["success"] is True
             assert MockAgent.call_args.kwargs["llm_gateway"] is master_llm
-

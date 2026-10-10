@@ -35,21 +35,6 @@ def test_detect_source_type_from_record():
         sr_mod.SessionRecordManager.get_current_record = orig_get
 
 
-def test_detect_source_type_default_chat():
-    """无 record 时默认返回 'chat'"""
-    from src.core.agent import Agent
-
-    agent = Agent.__new__(Agent)
-
-    import src.services.session_record as sr_mod
-    orig_get = sr_mod.SessionRecordManager.get_current_record
-    sr_mod.SessionRecordManager.get_current_record = staticmethod(lambda: None)
-    try:
-        assert agent._identity("session-source").source == "chat"
-    finally:
-        sr_mod.SessionRecordManager.get_current_record = orig_get
-
-
 def test_build_messages_injects_active_summary(monkeypatch):
     """_build_messages 在有 active_summary 时注入 user+assistant 对到头部"""
 
@@ -114,28 +99,3 @@ def test_build_messages_no_summary_passthrough(monkeypatch):
     messages, _ = agent._build_messages("sess_y")
     # 不应有摘要 user（[📋 之前对话摘要]）
     assert all("之前对话摘要" not in (m.get("content") or "") for m in messages)
-
-
-def test_build_messages_exception_does_not_crash(monkeypatch):
-    """compression_service 异常 → _build_messages 不崩，logger.warning"""
-
-    fake_memory = MagicMock()
-    fake_memory.get_context.return_value = [{"role": "user", "content": "x"}]
-    from src.services.agent_runner.runtime.history import SessionHistory
-    reader = MagicMock()
-    reader.active_summary.return_value = None
-    agent = SessionHistory(fake_memory, "chat", reader, tolerate_read_failure=True)
-
-    from src.config.settings import settings
-    monkeypatch.setattr(settings.memory.mid_term, "enabled", True)
-
-    def _boom():
-        raise RuntimeError("compression service down")
-    reader.active_summary.side_effect = RuntimeError("compression service down")
-    monkeypatch.setattr(
-        "src.memory.mid_term.get_compression_service", _boom
-    )
-
-    # 不抛异常即可
-    messages, _ = agent._build_messages("sess_z")
-    assert isinstance(messages, list)

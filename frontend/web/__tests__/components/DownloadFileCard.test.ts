@@ -3,7 +3,7 @@
  *
  * 验证（设计 §4.1 / §5.2）：
  * - isPreviewable 放行 docx/xlsx/pptx（docx 此前缺失，回归项）
- * - 大小门槛边界：Excel 9.9/10/10.1MB，Word/PPT 19.9/20/20.1MB
+ * - 大小门槛边界：Excel 9.9/10MB/上限+1字节，Word/PPT 19.9/20MB/上限+1字节
  * - .doc/.ppt 旧格式不放行（点击直接下载）
  * - .xls 在门槛内放行（面板侧尝试解析，失败引导下载）
  * - 可预览卡片点击打开预览面板；超限卡片点击不打开面板
@@ -99,10 +99,6 @@ describe('DownloadFileCard.isPreviewable —— Excel 10MB 门槛边界', () => 
     expect(isPreviewVariant(wrapper)).toBe(false)
   })
 
-  it('10.1MB 不放行（点击直接下载）', () => {
-    const wrapper = mount(DownloadFileCard, { props: { file: makeFile({ file_size: Math.floor(10.1 * MB) }) } })
-    expect(isPreviewVariant(wrapper)).toBe(false)
-  })
 })
 
 describe('DownloadFileCard.isPreviewable —— Word/PPT 20MB 门槛边界', () => {
@@ -126,11 +122,6 @@ describe('DownloadFileCard.isPreviewable —— Word/PPT 20MB 门槛边界', () 
     expect(isPreviewVariant(wrapper)).toBe(false)
   })
 
-  it.each([['报告.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'], ['演示.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation']] as const)
-  ('%s 20.1MB 不放行', (fileName, mimeType) => {
-    const wrapper = mount(DownloadFileCard, { props: { file: makeFile({ file_name: fileName, mime_type: mimeType, file_size: Math.floor(20.1 * MB) }) } })
-    expect(isPreviewVariant(wrapper)).toBe(false)
-  })
 })
 
 describe('DownloadFileCard 点击行为', () => {

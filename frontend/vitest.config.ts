@@ -35,7 +35,7 @@ export default defineConfig({
           globals: true,
           environment: 'jsdom',
           setupFiles: ['desktop/__tests__/setup.ts'],
-          include: ['desktop/__tests__/**/*.test.ts'],
+          include: ['desktop/__tests__/**/*.test.ts', 'desktop/features/runtime/__tests__/**/*.test.ts'],
         },
       },
     ],

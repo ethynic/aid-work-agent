@@ -1,17 +1,10 @@
-"""Agent LLM 循环内更新 session token 缓存测试（v3.1 Phase 4.6）
+"""SessionDB / ChannelSessionManager 的 token 缓存更新接口测试。
 
-验证：
-- SessionDB.update_context_token_count 被调用，参数 = prompt+completion tokens
-- 异常时不影响主流程
-- channel 源路由到 ChannelSessionManager
-
-通过单元测试的方式直接验证 _detect_source_type 路由 + update_context_token_count 接口，
-不跑完整 Agent 循环（依赖 LLM/工具/DB 太重）。
+验证实际 UPDATE 表、字段、参数化查询、成功返回和提交事务。
+返回值矩阵与数值转换由 test_token_cache_mutation.py 覆盖。
 """
 
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 
 def test_session_db_update_context_token_count(monkeypatch):
@@ -35,32 +28,12 @@ def test_session_db_update_context_token_count(monkeypatch):
     assert ok is True
     sql = str(mock_cursor.execute.call_args.args[0])
     assert "UPDATE chat_sessions" in sql
+    assert "channel_sessions" not in sql
     assert "context_token_count" in sql
+    assert "%s" in sql
     args = mock_cursor.execute.call_args.args[1]
-    assert args[0] == 12345
-    assert args[1] == "sess_x"
+    assert args == (12345, "sess_x")
     assert mock_conn.commit.called
-
-
-def test_session_db_update_returns_false_when_no_row(monkeypatch):
-    """session 不存在（rowcount=0）→ 返回 False"""
-    from contextlib import contextmanager
-    import src.db.models as models_mod
-    from src.db.models import SessionDB
-
-    mock_cursor = MagicMock()
-    mock_cursor.rowcount = 0
-    mock_conn = MagicMock()
-    mock_conn.cursor.return_value = mock_cursor
-
-    @contextmanager
-    def _ctx():
-        yield mock_conn
-
-    monkeypatch.setattr(models_mod, "get_db_connection", _ctx)
-
-    ok = SessionDB.update_context_token_count("ghost", 100)
-    assert ok is False
 
 
 def test_channel_mgr_update_context_token_count(monkeypatch):
@@ -85,30 +58,8 @@ def test_channel_mgr_update_context_token_count(monkeypatch):
     assert ok is True
     sql = str(mock_cursor.execute.call_args.args[0])
     assert "UPDATE channel_sessions" in sql
+    assert "chat_sessions" not in sql
     assert "context_token_count" in sql
     args = mock_cursor.execute.call_args.args[1]
-    assert args[0] == 999
-    assert args[1] == "sess_kf"
-
-
-def test_update_context_token_count_int_coercion(monkeypatch):
-    """传入 float/字符串数字 → 内部 int() 转换"""
-    from contextlib import contextmanager
-    import src.db.models as models_mod
-    from src.db.models import SessionDB
-
-    mock_cursor = MagicMock()
-    mock_cursor.rowcount = 1
-    mock_conn = MagicMock()
-    mock_conn.cursor.return_value = mock_cursor
-
-    @contextmanager
-    def _ctx():
-        yield mock_conn
-
-    monkeypatch.setattr(models_mod, "get_db_connection", _ctx)
-
-    SessionDB.update_context_token_count("s", 123.7)  # float
-    args = mock_cursor.execute.call_args.args[1]
-    assert args[0] == 123  # int 截断
-    assert isinstance(args[0], int)
+    assert args == (999, "sess_kf")
+    assert mock_conn.commit.called

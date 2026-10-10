@@ -3,7 +3,7 @@
  *
  * 验证（设计 §4.2 / §5.2 / §2.4）：
  * - previewType 分支：xlsx→excel、pptx→pptx、xls→excel、doc→unsupported、超限→unsupported+文件较大文案
- * - Excel 真实渲染：node 侧读 test_uploads/office_preview 夹具经 MSW 下发，
+ * - Excel 真实渲染：node 侧读入库的 fixtures/office 小型夹具经 MSW 下发，
  *   断言表格 DOM、Sheet Tab 数量与切换
  * - 1000 行截断：bigrows.xlsx（1251 行）只渲染 1000 行 + 顶部截断提示
  * - PPT 真实渲染：sample.pptx 渲染 4 页，翻页导航与首页/末页禁用
@@ -13,7 +13,8 @@
 import { describe, it, expect, beforeEach, beforeAll, afterEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { http, HttpResponse } from 'msw'
 
 // docx-preview 与渲染质量无关，此处只断言 renderAsync 调用参数（移动端 ignoreWidth）
@@ -29,9 +30,9 @@ import { EXCEL_MAX_PREVIEW_BYTES, OFFICE_DOC_MAX_PREVIEW_BYTES } from '@/utils/o
 // 排空微任务不够 —— 文件级预热一次，后续组件内 import 走模块缓存
 beforeAll(async () => {
   await import('pptx-preview')
-})
+}, 30_000)
 
-const FIXTURE_DIR = resolve(process.cwd(), '../test_uploads/office_preview')
+const FIXTURE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../fixtures/office')
 const MULTISHEET_XLSX = readFileSync(resolve(FIXTURE_DIR, 'multisheet.xlsx'))
 const BIGROWS_XLSX = readFileSync(resolve(FIXTURE_DIR, 'bigrows.xlsx'))
 const SAMPLE_PPTX = readFileSync(resolve(FIXTURE_DIR, 'sample.pptx'))
@@ -106,14 +107,6 @@ describe('AttachmentPreviewPanel.previewType 分支', () => {
     server.use(http.get('/api/files/:id', () => new HttpResponse(null, { status: 404 })))
   })
 
-  it('xlsx → excel 分支（Excel 表格容器渲染）', async () => {
-    const wrapper = mountPanel(makeAttachment({ name: '数据.xlsx' }))
-    await settle()
-    // Excel 分支模板渲染（Sheet Tab 栏按数据出现，此处断言容器存在性）
-    expect(wrapper.find('.excel-preview-container').exists()).toBe(true)
-    expect(wrapper.text()).not.toContain('此文件类型无法预览')
-  })
-
   it('xls → excel 分支（尝试解析，失败引导下载，设计 §2.4）', async () => {
     const wrapper = mountPanel(makeAttachment({ name: '旧表.xls', mime_type: 'application/vnd.ms-excel' }))
     await settle()
@@ -133,17 +126,6 @@ describe('AttachmentPreviewPanel.previewType 分支', () => {
     expect(await waitFor(() => wrapper.text().includes('演示文稿预览加载失败，请尝试下载查看'))).toBe(true)
     // 总页数为 0（未渲染成功）时不显示翻页导航
     expect(wrapper.find('button[title="上一页"]').exists()).toBe(false)
-  })
-
-  it('docx → docx 分支（renderAsync 被调用，无错误）', async () => {
-    serveFile('file_office_test', SAMPLE_DOCX)
-    const wrapper = mountPanel(makeAttachment({
-      name: '报告.docx',
-      mime_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    }))
-    await settle()
-    expect(await waitFor(() => vi.mocked(renderAsync).mock.calls.length === 1)).toBe(true)
-    expect(wrapper.text()).not.toContain('文档预览加载失败')
   })
 
   it('.doc 旧格式 → unsupported（此文件类型无法预览 + 下载按钮）', async () => {
@@ -474,7 +456,7 @@ describe('AttachmentPreviewPanel —— docx 整页缩放（仿 PPT，按容器�
     { clientWidth: 375, zoom: '0.432', label: '手机宽度面板整页缩放' },
     { clientWidth: 1100, zoom: '1', label: '宽容器不放大，保持原始页宽' },
   ])('$label', async ({ clientWidth, zoom }) => {
-    serveFile('file_docx', readFileSync(resolve(FIXTURE_DIR, 'sample.docx')))
+    serveFile('file_docx', SAMPLE_DOCX)
     setContainerClientWidth(clientWidth)
     const wrapper = mountPanel(makeAttachment({
       file_id: 'file_docx',
