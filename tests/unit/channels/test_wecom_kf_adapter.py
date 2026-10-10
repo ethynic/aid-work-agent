@@ -478,6 +478,59 @@ class TestSendFileAsFileMessage:
         assert adapter.api_client.send_msg.call_args.kwargs["msgtype"] == "link"
 
     @pytest.mark.asyncio
+    async def test_storage_file_name_uses_meta_display_name(self, adapter, tmp_path):
+        """file_name 为存储名（file_{id}.ext）时，用注册元数据里的原始文件名上传。"""
+        adapter._tenant_id = "29304e2196e8"
+        pdf_path = tmp_path / "file_fc9f09e93a9f.pdf"
+        pdf_path.write_bytes(b"x")
+
+        with patch("src.channels.wecom_kf.adapter.redis_client") as mock_redis, \
+             patch("src.channels.wecom_kf.adapter.os.path.exists", return_value=True), \
+             patch("src.core.storage.is_tenant_owned_file", return_value=True):
+            mock_redis.make_key.return_value = "k"
+            mock_redis.hgetall.return_value = {
+                "path": str(pdf_path),
+                "name": "大地系列产品解读-新(2026).pdf",
+            }
+
+            response = _make_response([
+                _file(file_id="file_fc9f09e93a9f", mime_type="application/pdf",
+                      file_size=1024, file_name="file_fc9f09e93a9f.pdf")
+            ])
+            result = await adapter.send_message(response)
+
+        assert result is True
+        upload_args = adapter.api_client.upload_media.call_args
+        assert upload_args.kwargs["display_name"] == "大地系列产品解读-新(2026).pdf"
+        assert adapter.api_client.send_msg.call_args.kwargs["msgtype"] == "file"
+
+    @pytest.mark.asyncio
+    async def test_storage_file_name_meta_unusable_keeps_file_name(self, adapter, tmp_path):
+        """meta 缺失原始名（或仍是存储名）时保持 tool 结果文件名。"""
+        adapter._tenant_id = "29304e2196e8"
+        pdf_path = tmp_path / "file_fc9f09e93a9f.pdf"
+        pdf_path.write_bytes(b"x")
+
+        with patch("src.channels.wecom_kf.adapter.redis_client") as mock_redis, \
+             patch("src.channels.wecom_kf.adapter.os.path.exists", return_value=True), \
+             patch("src.core.storage.is_tenant_owned_file", return_value=True):
+            mock_redis.make_key.return_value = "k"
+            mock_redis.hgetall.return_value = {
+                "path": str(pdf_path),
+                "name": "file_fc9f09e93a9f.pdf",
+            }
+
+            response = _make_response([
+                _file(file_id="file_fc9f09e93a9f", mime_type="application/pdf",
+                      file_size=1024, file_name="file_fc9f09e93a9f.pdf")
+            ])
+            result = await adapter.send_message(response)
+
+        assert result is True
+        upload_args = adapter.api_client.upload_media.call_args
+        assert upload_args.kwargs["display_name"] == "file_fc9f09e93a9f.pdf"
+
+    @pytest.mark.asyncio
     async def test_send_failure_fallback_to_link(self, adapter, tmp_path):
         """file 消息发送失败时降级为 link 卡片。"""
         adapter._tenant_id = "29304e2196e8"

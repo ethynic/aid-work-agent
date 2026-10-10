@@ -801,10 +801,22 @@ class WeComKfAdapter(ChannelAdapter):
             )
             return (False, False)
 
+        # file 消息在微信端显示的文件名取自上传 multipart 的 filename；
+        # 工具结果文件名退化为存储名（file_{id}.ext）时，用注册元数据里的
+        # 原始显示名兜底
+        display_name = file_info.file_name
+        from src.services.files.download_registry import is_storage_file_name
+        if is_storage_file_name(display_name):
+            meta_name = str(file_meta.get("name") or "").strip()
+            # 无扩展名的 meta 名（如 "unknown"）替换后反而更差，一并排除
+            if (meta_name and not is_storage_file_name(meta_name)
+                    and os.path.splitext(meta_name)[1]):
+                display_name = meta_name
+
         try:
             upload_result = await self.api_client.upload_media(
                 file_path, "file",
-                display_name=file_info.file_name,
+                display_name=display_name,
                 mime_type=file_info.mime_type or None,
             )
             media_id = upload_result.get("media_id")

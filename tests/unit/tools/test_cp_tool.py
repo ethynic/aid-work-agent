@@ -504,6 +504,93 @@ class TestCpToolContentIntegrity:
             dst_path.unlink(missing_ok=True)
 
 
+class TestCpToolDisplayRecovery:
+    """源文件为存储名（file_{id}.ext）时回查原始显示名"""
+
+    @pytest.mark.asyncio
+    async def test_storage_source_recovers_original_name(self, tmp_path):
+        """display_name 未传且源为存储名形态时，用回查到的原始名注册"""
+        from src.tools.file.cp_tool import CpTool
+
+        src_file = tmp_path / "file_fc9f09e93a9f.pdf"
+        src_file.write_bytes(b"%PDF-fake")
+
+        tool = CpTool()
+        _set_test_context(user_id="user_recover", tenant_id="tenant_recover")
+
+        with patch.object(tool, "_register_download") as mock_reg, \
+             patch("src.tools.file.cp_tool.recover_original_display_name") as mock_recover:
+            mock_recover.return_value = "大地系列产品解读-新(2026).pdf"
+            mock_reg.return_value = {
+                "success": True,
+                "file_id": "file_new_copy",
+                "file_name": "大地系列产品解读-新(2026).pdf",
+                "file_size": 9,
+                "download_url": "/api/files/file_new_copy/download",
+                "file_path": "/tmp/upload/x.pdf",
+            }
+            result = await tool.execute(source_file_path=str(src_file))
+
+        mock_recover.assert_called_once_with(str(src_file))
+        assert mock_reg.call_args[0][1] == "大地系列产品解读-新(2026).pdf"
+        assert result["file_name"] == "大地系列产品解读-新(2026).pdf"
+
+    @pytest.mark.asyncio
+    async def test_storage_source_recovery_miss_falls_back_to_src_name(self, tmp_path):
+        """回查无结果时退回源文件名"""
+        from src.tools.file.cp_tool import CpTool
+
+        src_file = tmp_path / "file_fc9f09e93a9f.pdf"
+        src_file.write_bytes(b"%PDF-fake")
+
+        tool = CpTool()
+        _set_test_context(user_id="user_recover2", tenant_id="tenant_recover2")
+
+        with patch.object(tool, "_register_download") as mock_reg, \
+             patch("src.tools.file.cp_tool.recover_original_display_name") as mock_recover:
+            mock_recover.return_value = None
+            mock_reg.return_value = {
+                "success": True,
+                "file_id": "file_new_copy2",
+                "file_name": "file_fc9f09e93a9f.pdf",
+                "file_size": 9,
+                "download_url": "/api/files/file_new_copy2/download",
+                "file_path": "/tmp/upload/x.pdf",
+            }
+            result = await tool.execute(source_file_path=str(src_file))
+
+        assert mock_reg.call_args[0][1] == "file_fc9f09e93a9f.pdf"
+        assert result["file_name"] == "file_fc9f09e93a9f.pdf"
+
+    @pytest.mark.asyncio
+    async def test_explicit_display_name_skips_recovery(self, tmp_path):
+        """显式传 display_name 时不触发回查"""
+        from src.tools.file.cp_tool import CpTool
+
+        src_file = tmp_path / "file_fc9f09e93a9f.pdf"
+        src_file.write_bytes(b"%PDF-fake")
+
+        tool = CpTool()
+        _set_test_context(user_id="user_recover3", tenant_id="tenant_recover3")
+
+        with patch.object(tool, "_register_download") as mock_reg, \
+             patch("src.tools.file.cp_tool.recover_original_display_name") as mock_recover:
+            mock_reg.return_value = {
+                "success": True,
+                "file_id": "file_new_copy3",
+                "file_name": "自定义.pdf",
+                "file_size": 9,
+                "download_url": "/api/files/file_new_copy3/download",
+                "file_path": "/tmp/upload/x.pdf",
+            }
+            await tool.execute(
+                source_file_path=str(src_file), display_name="自定义"
+            )
+
+        mock_recover.assert_not_called()
+        assert mock_reg.call_args[0][1] == "自定义"
+
+
 class TestCpToolRegisterDownload:
     """注册下载调用验证"""
 

@@ -20,6 +20,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
+from src.services.files.download_registry import recover_original_display_name
 
 
 class CpInput(BaseModel):
@@ -516,6 +517,11 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="ppt/index.
 
             # 7. 注册下载
             if register_download:
+                if not display_name:
+                    # 源文件落盘名是存储名形态（file_{id}.ext）时，回查注册
+                    # 元数据恢复用户上传时的原始文件名，避免交付文件名退化为
+                    # file_xxx.pdf（微信侧 file 消息与下载都以此名为准）
+                    display_name = recover_original_display_name(str(src))
                 download_info = self._register_download(
                     dst, display_name or src.name, visible=visible
                 )
