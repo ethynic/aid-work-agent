@@ -365,3 +365,168 @@ npm run runtime:verify
 人工先运行上表安装器并打开“AID Work Runtime 验收版”，依次用“安装 / 升级离线包”的原生选择器导入上表三包；安装后应显示默认启用。实际软件未安装、未登录或依赖条件未满足时，显示未就绪及原因是预期结果，按提示准备环境后刷新状态。随后检查关窗留托盘、托盘重开与退出、重开后插件/操作记录保持。真实配对使用管理员提供的现有服务地址及一次性码，核对未配对禁止启动与已配对执行状态；不得为通过验收自行部署服务或绕过旧执行核对。
 
 自动化三包安装使用了原生dialog返回值替代，其后Main/可信文件快照/私有callback/Host签名验证均真实；实际NSIS安装、OS选择框交互、软件登录和服务端配对/业务执行尚未由本批自动化验证。包内EXE已实际启动并安全退出，不能把这个结果写成NSIS安装通过。
+
+### 12.1 BOSS完整人工验收：构建到招聘智能体调用
+
+适用源码：`f1087289`或包含该提交的版本。这里只写本机构建与验收，不要求部署服务器或执行旧M0.7指南的建表SQL。云端使用已有本地工具/招聘操作智能体服务；以下以`https://agent2.aidingyi.cn`为例，换成实际已运行环境。Web配对、设备选定和招聘对话必须使用同一租户、同一登录用户。
+
+#### 路径选择与前置条件
+
+快速测试可以直接使用12节已交付的`68b855…`安装器和`final-acceptance/boss-0.3.0-dev.aidplugin.zip`，跳过本节构建步骤。这两个文件已经匹配信任根。客户机只需Windows10/11 x64、交互桌面、Chrome和BOSS测试账号，不需要源码、Node/npm/Python/Git；安装插件也不会生成全局`boss-cli`命令。
+
+完整源码出包按下方执行：构建机需要Windows x64、Node22或更高、npm、仓库及下载构建依赖的网络。运行`--test`每次都会生成新签名公钥根，必须先出插件，再把同一次输出的根写入Runtime安装器。新插件不能混用12节旧安装器；新安装器也不能配旧签名包。输出目录必须新建。重新生成根的验收宜使用未使用本验收profile的Windows测试账户/测试机，避免旧插件仍使用上次签名根；不要删除凭证或执行记录绕过核对。
+
+开始前正常停止旧`aid-runtime`/旧执行节点，避免同一桌面并行自动化；未完成业务先正常收尾。使用受控BOSS测试账号，不进行批量招呼/发送或简历处理。已有Chrome调试profile可继续使用，不新建临时profile轮换登录。
+
+#### 第一步：构建单个BOSS签名插件与Runtime安装器
+
+以下PowerShell命令逐条执行；任一步非零退出或报错先停止，不能继续用不完整产物。路径按当前构建机写，换机器时调整repo/npm-cli路径。
+
+```powershell
+$repo = 'C:\repos\aid-work-agent'
+Set-Location $repo
+git log -1 --oneline
+
+# 构建依赖；只构建BOSS，不需要微信/企微的OCR资产
+npm --prefix clients/shared ci
+npm --prefix clients/agent-tool-runtime ci --ignore-scripts
+npm --prefix clients/boss-resume-assistant ci --ignore-scripts
+npm --prefix clients/runtime-plugin-packaging ci --ignore-scripts
+npm --prefix frontend ci
+npm --prefix clients/agent-desktop ci
+
+# 准备项目锁定的Node22.23.3（只下载/校验Node，不生成产品信任配置）
+node clients/agent-desktop/scripts/prepare-runtime.mjs --node-only
+$fixedNode = Join-Path $repo 'clients\agent-desktop\build\runtime-cache\node-v22.23.3-win-x64\node.exe'
+$npmCli = Join-Path (Split-Path (Get-Command npm).Source) 'node_modules\npm\bin\npm-cli.js'
+if (!(Test-Path $npmCli)) { throw '请将npmCli改为构建机实际npm/bin/npm-cli.js路径' }
+& $fixedNode -v
+# 预期v22.23.3
+
+$batchDir = Join-Path $repo ('clients\agent-desktop\build\manual-boss-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+New-Item -ItemType Directory -Path $batchDir | Out-Null
+$pluginDir = Join-Path $batchDir 'plugins'
+
+npm --prefix clients/boss-resume-assistant run build:main
+node clients/runtime-plugin-packaging/package.mjs --test --provider boss --node $fixedNode --npm-cli $npmCli --output $pluginDir
+# plugins内应有boss-0.3.0-dev.aidplugin.zip及ISOLATED-TEST-TRUST-ROOT.json
+
+# Host打包走新入口，不使用clients/pack.sh
+npm --prefix clients/agent-tool-runtime pack --pack-destination $batchDir
+$hostVersion = (Get-Content clients/agent-tool-runtime/package.json -Raw | ConvertFrom-Json).version
+$hostPackage = Join-Path $batchDir "agent-tool-runtime-$hostVersion.tgz"
+$hostSha = (Get-FileHash -LiteralPath $hostPackage -Algorithm SHA256).Hash.ToLowerInvariant()
+$trustRoots = Join-Path $pluginDir 'ISOLATED-TEST-TRUST-ROOT.json'
+
+node clients/agent-desktop/scripts/prepare-runtime.mjs --profile acceptance --host-package $hostPackage --host-sha256 $hostSha --trust-roots $trustRoots
+npm --prefix clients/agent-desktop run runtime:package:acceptance
+npm --prefix clients/agent-desktop run runtime:verify
+
+$installer = Join-Path $repo 'clients\agent-desktop\build\runtime-release\acceptance\AID-Work-Runtime-0.0.2-win-x64-acceptance-unsigned.exe'
+Get-FileHash -LiteralPath $installer -Algorithm SHA256
+Get-FileHash -LiteralPath (Join-Path $pluginDir 'boss-0.3.0-dev.aidplugin.zip') -Algorithm SHA256
+```
+
+通过标准：构建均exit0，出现`RUNTIME_PACKAGE_PASS`与`RUNTIME_VERIFY_PASS`。交给客户机的是安装器和同次`pluginDir`中的BOSS包；公钥根已嵌入安装器，不让客户机手工改信任文件。构建记录位于安装器同目录`runtime-release-manifest.json`，记录该次实际摘要。重新打包的文件不要求摘要等于12节旧交付摘要；新根、新签名和重建安装器会改变字节。
+
+#### 第二步：安装Runtime
+
+1. 把该次安装器与BOSS `.aidplugin.zip`复制到验收电脑，保留原文件名，插件不解压。
+2. 双击NSIS安装器，按向导进行当前Windows用户安装。该包为内部未签Windows证书的验收版；若系统策略阻止安装，先记录提示，不把`win-unpacked`启动冒充安装通过。
+3. 从开始菜单或快捷方式打开“AID Work Runtime 验收版”。应显示“本机执行环境”；初始未配对、执行已停止、插件列表为空，“启动执行”不可用。
+4. 验收目录为`%APPDATA%\aidwork-runtime-app-acceptance`与`%APPDATA%\aidwork-tool-runtime-acceptance`；不要修改生产Runtime目录。
+
+通过标准：实际安装成功，启动窗口正确，没有资源缺失/管理版本不兼容错误。首次旧实例或旧事实阻断应保留现场，不手改JSON/删目录。
+
+#### 第三步：准备BOSS调试Chrome
+
+使用稳定的非默认Chrome profile和默认CDP端口9222。下面示例首次建立验收专用的持久profile；已有受控profile时改用其原路径，后续重复使用。
+
+```powershell
+$chrome = 'C:\Program Files\Google\Chrome\Application\chrome.exe'
+# 若安装在其他目录，替换chrome路径
+$bossProfile = Join-Path $env:LOCALAPPDATA 'AidWorkRuntimeBossChrome'
+& $chrome --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir="$bossProfile"
+Invoke-RestMethod 'http://127.0.0.1:9222/json/version' | Select-Object Browser
+```
+
+在这一个Chrome窗口打开BOSS直聘，登录受控招聘者账号，进入“推荐牛人”，确认存在可读取的筛选面板和职位下拉。保持窗口可见、桌面不锁屏；RDP不能断开或最小化。测试调用借用真实鼠标，发出指令后停止鼠标键盘输入，避免遮挡业务窗口。Web对话可从另一台设备用同一账号操作。
+
+通过标准：9222返回Browser字段，BOSS推荐牛人页面为已登录招聘者视图。普通Chrome已登录但该调试profile未登录不算通过。参考M0.7指南仅采用其Chrome说明，不采用旧npm全局安装/服务器部署/建表步骤。
+
+#### 第四步：通过Web生成配对码，配置Runtime
+
+1. 打开现有企业Web，登录将要测试招聘智能体的用户；进入“本地工具”，也可访问`<服务地址>/t/<租户ID>/local-tools`。
+2. 点击“生成配对码”。有效期5分钟，一次性使用；过期重新生成，不复用旧码。
+3. Runtime填写：服务地址=`https://agent2.aidingyi.cn`或实际企业服务根地址（不附加`/api`）；设备名称=`BOSS插件验收机`；一次性配对码=刚生成的码。
+4. 点击“确认配对”，等待管理操作“已完成”；设备栏显示配对身份，执行仍为已停止。未启动时离线/连接中不单独判失败。
+
+通过标准：Web设备列表出现同名设备，Runtime保留设备身份；界面不展示device token。不需要手写config.json或Provider entry路径。
+
+#### 第五步：安装并确认BOSS插件就绪
+
+1. Runtime“第一方插件”区域点击“安装 / 升级离线包”。
+2. 在Windows原生选择器选中同次构建的`boss-0.3.0-dev.aidplugin.zip`。
+3. 等待管理操作完成，再点“刷新状态”。应出现BOSS插件、版本0.3.0、“已启用”。
+4. 在已启动调试Chrome、已登录并处于推荐牛人页的条件下，刷新后还应出现“已就绪”。
+
+“安装成功/已启用”和“已就绪”分别验收：没开Chrome、没登录或不在适当页面时，安装可成功但显示“未就绪”及原因；准备好页面再刷新，不反复重装。不使用npm全局boss-cli来替代安装插件，不填旧`bossCliEntry`，也不手改插件manifest/信任根。签名失败优先检查是否把新测试包和旧安装器混用。
+
+#### 第六步：启动执行，选定同一设备
+
+1. Runtime点“启动执行”，刷新后应显示“运行中”与“在线”。
+2. Web“本地工具”页刷新，找到“BOSS插件验收机”，点击“选定”。
+3. Web应显示设备在线并有“使用中”标记。
+
+通过标准：Runtime在线、BOSS已启用且已就绪、Web同一用户选定本机设备三项齐备。只配对未启动或启动但未选定都不能验证云端调用。
+
+#### 第七步：招聘操作智能体实际调用
+
+打开Web“招聘操作智能体”，常见路由为`<服务地址>/t/<租户ID>/chat/recruiting-operator`。若该智能体未提供给此用户，先由管理员确认现有账号权限，不在本流程部署服务器。
+
+用例1：查询页面筛选档位，发送：
+
+> 请只调用一次 boss_filter_options，读取我本机BOSS“推荐牛人”页的筛选可选档位。返回经验、学历、薪资选项；不要设置筛选、打招呼、发消息或处理简历。
+
+预期：本机BOSS筛选面板短暂打开后收起；智能体返回实际可选档位。没有可见工具调用/本机日志，只有口头回复不算通过。
+
+用例2：查询BOSS页面职位，发送：
+
+> 请只调用一次 boss_list_jobs，列出我当前BOSS页面中的招聘职位。使用BOSS页面工具，不要查询云端职位库boss_jobs_list，不要切换职位或打招呼。
+
+预期：本机职位下拉被短暂打开，返回职位名及相应属性，与页面核对一致。该“只读”工具会点击下拉并使用真实鼠标，但不改变职位业务状态。
+
+用例3：改变页面筛选状态。先从用例1选择一个实际存在的档位，再发送（替换占位内容）：
+
+> 请只调用boss_filter，把学历设置为“<刚查到的精确学历选项>”。只改变页面筛选状态，不打开候选人详情、不读取简历、不打招呼、不发送消息。
+
+预期：页面筛选条件实际改变，智能体报告执行成功。随后可单独请求`boss_clear_filter`清除筛选，核对页面恢复。此次用例验证受控操作执行，不能据此宣称真实打招呼/消息发送已经验收。
+
+当前已知限制：插件MCP完整工具21项，而Host既有BOSS受信子集18项；`boss_open_detail`、`boss_greet_detail`、`boss_close_detail`仍不在Host白名单。新的详情页筛选/打招呼主流程可能报`TOOL_NOT_ALLOWED`；这就是计划10.4登记的既有清单差异，不把该流程当作本轮应通过用例，也不通过手改白名单绕过。上述两项查询与页面筛选工具在当前子集内。
+
+#### 第八步：用事实确认链路及记录结果
+
+可在验收电脑PowerShell查看当前Runtime日志：
+
+```powershell
+$runtimeLog = Join-Path $env:APPDATA 'aidwork-tool-runtime-acceptance\logs\runtime.log'
+Get-Content -LiteralPath $runtimeLog -Tail 100
+# 需要实时观察时：Get-Content -LiteralPath $runtimeLog -Tail 20 -Wait
+# 结束观察用Ctrl+C，只退出日志查看，不停止Runtime
+```
+
+核对同一次调用出现相应`tool=boss_filter_options`或`tool=boss_list_jobs`的领取记录、Provider工具结果以及`invocation … 终态已回传 success=true`。结合Web工具执行记录、本机页面动作、返回数据人工比对；最终判据是云端下发→Runtime领取→插件执行→结果回传均有证据，不能只看安装“已就绪”或智能体声称成功。
+
+| 检查点 | 必须观察到 |
+|---|---|
+| 出包 | package/verify成功，同一次根与插件匹配 |
+| 安装 | 真实NSIS完成，Runtime能打开 |
+| 配对/路由 | 同用户设备在线且已选定 |
+| 插件 | BOSS0.3.0已启用且已就绪 |
+| 只读调用 | 两个指定工具执行，返回与BOSS页面一致 |
+| 页面操作 | 可选档位实际筛选生效，清除可恢复 |
+| 收尾 | 停止执行收尾完成、关窗托盘恢复、显式退出后可重开 |
+
+排查顺序：管理连接失败→安装资源/旧实例；验签失败→同批根与包；未就绪→9222/登录/推荐牛人页；Web设备离线→Runtime启动/服务地址/网络；LOCAL_DEVICE_NOT_FOUND→同用户与选定设备；PROVIDER_NOT_AVAILABLE→BOSS插件启用/就绪/刷新后能力上报；WRONG_PAGE→回推荐牛人页；指定只读工具仍TOOL_NOT_ALLOWED→记录实际工具名/版本，不修改清单；effect=unknown/partial→先核对页面与原操作，不能重复写动作。
+
+反馈提供失败步骤、测试时间、设备是否在线/选定、插件状态、实际工具名与错误码、相关脱敏截图/日志片段；不要发送配对码、token、credentials.bin或完整个人简历内容。退出核对受阻保留原身份和事实，不强杀或删记录作通过。
