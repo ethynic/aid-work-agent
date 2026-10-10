@@ -149,6 +149,33 @@ class TestEmailProcessSend:
         assert "a@example.com, b@example.com" in result["message"]
 
     @pytest.mark.asyncio
+    @patch("src.tools.email.email_lib.smtplib.SMTP_SSL")
+    async def test_send_success_details_new_info_only(self, mock_smtp_ssl, user_email):
+        """spec §1.5：成功返回只带新信息——details 不回显 to/cc/subject（输入参数），
+        仅保留 from（发件邮箱来自用户绑定配置，非调用入参）；to 以归一化展示并入 message"""
+        server = MagicMock()
+        mock_smtp_ssl.return_value.__enter__.return_value = server
+        mock_smtp_ssl.return_value.__exit__.return_value = False
+
+        tool = EmailProcessTool(user_email)
+        result = await tool.execute(
+            action="send",
+            to="recipient@example.com",
+            subject="Test Subject",
+            body="Test body content",
+            cc="cc@example.com",
+        )
+        assert result["success"] is True
+        # details 只含新信息键 from（发件邮箱），无输入回显
+        assert set(result["details"].keys()) == {"from"}
+        assert result["details"]["from"] == "test@example.com"
+        # 输入参数不整键回显（to 的归一化展示并入 message 属状态说明）
+        assert "to" not in result["details"]
+        assert "cc" not in result["details"]
+        assert "subject" not in result["details"]
+        assert "recipient@example.com" in result["message"]
+
+    @pytest.mark.asyncio
     async def test_send_missing_to_fails(self, user_email):
         tool = EmailProcessTool(user_email)
         result = await tool.execute(action="send", to="", subject="Test", body="Test body")
@@ -504,6 +531,23 @@ class TestToolDefinition:
         defn = tool.to_tool_definition()
         assert defn["name"] == "email_process"
         assert "action" in defn["input_schema"]["properties"]
+
+    def test_read_param_field_descriptions_no_fewshot(self, user_email):
+        """spec §1.2：Field description 只描述字段本身（类型/含义/默认值），
+        limit/unseen_only 不含 few-shot 调参建议（如「查询近期邮件时建议 limit=5」）"""
+        from src.tools.email.email_tool import EmailProcessInput
+
+        schema = EmailProcessInput.model_json_schema()
+        props = schema["properties"]
+        limit_desc = props["limit"]["description"]
+        unseen_desc = props["unseen_only"]["description"]
+        # 字段本身信息保留：含义 + 默认值
+        assert "上限" in limit_desc and "10" in limit_desc
+        assert "未读" in unseen_desc and "False" in unseen_desc
+        # few-shot / 调参建议短语不得出现
+        for phrase in ("建议", "配合", "设为", "例如", "示例", "场景：查"):
+            assert phrase not in limit_desc, f"limit description 含 few-shot 短语: {phrase}"
+            assert phrase not in unseen_desc, f"unseen_only description 含 few-shot 短语: {phrase}"
 
     def test_display_name_send(self, user_email):
         tool = EmailProcessTool(user_email)

@@ -535,7 +535,6 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="ppt/index.
                     "file_size": file_size,
                     "download_url": download_info["download_url"],
                     "file_id": download_info["file_id"],
-                    "resolved_source": str(src),
                     "visible": visible,
                 }
 
@@ -554,7 +553,6 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="ppt/index.
                 "file_path": str(dst),
                 "file_name": dst.name,
                 "file_size": file_size,
-                "resolved_source": str(src),
             }
 
         except Exception as e:

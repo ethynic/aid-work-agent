@@ -18,15 +18,10 @@ from src.llm.gateway import llm_gateway
 
 class ContentGenerateInput(BaseModel):
     """生成内容参数"""
-    prompt: str = Field(..., description=(
-        "完整的内容生成指令，由调用方组织。"
-        "应包含：(1)角色定义——以什么身份/专业视角生成内容 "
-        "(2)任务描述——生成什么内容、给谁看、达到什么目的 "
-        "(3)输入素材——相关的背景信息、数据、上下文要点，直接嵌入文本中 "
-        "(4)输出格式——结构要求（段落、列表、表格、JSON、Markdown等）、长度限制 "
-        "(5)质量标准——语气（正式/亲切）、风格、专业度要求。"
-        "写得越详细具体，生成质量越高。"
-    ))
+    # Field description 只描述字段本身（spec §1.2）；prompt 的 5 要素
+    # 写法要点（角色/任务/素材/格式/质量要求）已在工具 description 中，
+    # 不在两处重复
+    prompt: str = Field(..., description="完整的内容生成指令文本，由调用方组织，作为本次生成任务的全部要求")
     language: Optional[str] = Field("zh", description="生成内容的语言，如：zh、en、ru、de、ja、ko等")
     content_type: Optional[str] = Field("", description=(
         "内容类型标签。已知预设可自动获得专业系统提示："
@@ -124,8 +119,6 @@ class ContentGenerateTool(BaseTool):
                 return {
                     "success": False,
                     "error": "生成内容为空，可能是 max_tokens 不足以覆盖思考+输出",
-                    "language": language,
-                    "content_type": content_type,
                 }
 
             logger.info(f"内容生成成功: 长度={len(generated_content)}")
@@ -133,7 +126,6 @@ class ContentGenerateTool(BaseTool):
             return {
                 "success": True,
                 "content": generated_content,
-                "language": language,
                 "content_type": content_type,
                 "message": "内容生成成功"
             }

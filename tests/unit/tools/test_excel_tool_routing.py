@@ -1,4 +1,5 @@
 import sys
+import uuid
 from pathlib import Path
 
 import openpyxl
@@ -416,7 +417,8 @@ async def test_fill_template_routed_with_flat_data_heals_in_one_roundtrip(tmp_pa
 # =============================================================================
 # to_md 落盘闭环（Phase 6：全文不再回塞）
 # 契约：docs/tools/tool-development-spec.md §1.3 —— 全文类 > 5000 字符
-# 必须调 spill_large_content 落盘，返回 preview + file_path + truncated + full_size
+# 必须调 spill_large_content 落盘，返回 preview + 专属落盘键 + truncated + full_size
+# （markdown_file_path，file_path 只留给产物类操作，对齐 pdf 样板）
 # =============================================================================
 
 class TestExcelToMdSpill:
@@ -444,7 +446,7 @@ class TestExcelToMdSpill:
         merged = self._merge_to_md(md)
 
         assert merged["markdown"] == md
-        for key in ("preview", "file_path", "truncated", "full_size"):
+        for key in ("preview", "file_path", "markdown_file_path", "truncated", "full_size"):
             assert key not in merged
 
     def test_boundary_exactly_5000_chars_not_spilled(self):
@@ -454,6 +456,7 @@ class TestExcelToMdSpill:
 
         assert merged["markdown"] == "x" * PREVIEW_LIMIT
         assert "file_path" not in merged
+        assert "markdown_file_path" not in merged
 
     def test_oversized_markdown_spilled(self):
         from src.tools._spill import PREVIEW_LIMIT
@@ -467,8 +470,8 @@ class TestExcelToMdSpill:
         assert merged["full_size"] == len(big)
         assert merged["preview"].startswith("## Sheet1")
         assert "markdown" not in merged
-        # 落盘的是完整原文（可 read/grep 回读），suffix=.md
-        spilled = Path(merged["file_path"])
+        # 落盘的是完整原文（可 read/grep 回读），suffix=.md；落盘路径用专属键
+        spilled = Path(merged["markdown_file_path"])
         assert spilled.exists()
         assert spilled.read_text(encoding="utf-8") == big
         assert spilled.name.endswith(".md")
@@ -511,15 +514,109 @@ class TestExcelToMdRealFileSpill:
 
         assert merged["truncated"] is True
         assert "markdown" not in merged
-        spilled = Path(merged["file_path"])
+        spilled = Path(merged["markdown_file_path"])
         assert spilled.name.endswith(".md")
         assert spilled.read_text(encoding="utf-8") == step["markdown"]  # 落盘=转换全文
 
         g = await GrepTool().execute(
-            pattern="条目099", path=merged["file_path"], output_mode="content",
+            pattern="条目099", path=merged["markdown_file_path"], output_mode="content",
         )
         assert g["success"] is True and g["count"] >= 1
         r = await ReadTool().execute(
-            file_path=merged["file_path"], offset=g["matches"][0]["line"], limit=2,
+            file_path=merged["markdown_file_path"], offset=g["matches"][0]["line"], limit=2,
         )
         assert isinstance(r, dict) and "条目099" in r["content"]
+
+
+class TestMultiOpSpillKeyNoConflict:
+    """多操作串联时落盘路径不覆盖交付物路径（P1 评审建议 1）。
+
+    场景：export（产物操作）+ to_md（超长读取操作）串联，结果中
+    file_path 必须指向交付物 .xlsx，落盘文件走专属键 markdown_file_path。
+    """
+
+    def test_export_then_oversized_to_md_keys_do_not_clash(self):
+        from src.tools._spill import PREVIEW_LIMIT
+        from src.tools.excel.excel_process_tool import PipelineContext, ExcelProcessTool
+
+        deliverable = "/tmp/report.xlsx"
+        big_md = "## Sheet1\n| a | b |\n| --- | --- |\n" + ("| 数据 | 值 |\n" * 900)
+        assert len(big_md) > PREVIEW_LIMIT
+
+        tool = ExcelProcessTool()
+        ctx = PipelineContext()
+        ctx.results = [
+            {
+                "operation": "export",
+                "success": True,
+                "file_path": deliverable,
+                "file_name": "report.xlsx",
+                "file_size": 4096,
+            },
+            {
+                "operation": "to_md",
+                "success": True,
+                "markdown": big_md,
+                "truncated": True,
+            },
+        ]
+        # 模拟 _update_context：产物操作把交付物写入 ctx.file_paths
+        ctx.file_paths = [deliverable]
+
+        merged = tool._merge_results(ctx)
+
+        # file_path 指向交付物，落盘文件走 markdown_file_path，互不覆盖
+        assert merged["file_path"] == deliverable
+        assert merged["file_name"] == "report.xlsx"
+        assert merged["file_size"] == 4096
+        assert merged["truncated"] is True
+        spilled = Path(merged["markdown_file_path"])
+        assert spilled.exists()
+        assert spilled.read_text(encoding="utf-8") == big_md
+        assert spilled.name.endswith(".md")
+        assert merged["markdown_file_path"] != merged["file_path"]
+
+    @pytest.mark.asyncio
+    async def test_execute_level_export_then_to_md_chain(self, tmp_path):
+        """execute() 级真实串联：export（产物）+ to_md（超长读取）。
+        patch 内部 LLM 路由为确定性双操作，真实执行 handler 与 _merge_results，
+        验证 file_path 指向交付物 .xlsx、markdown_file_path 指向落盘 .md，互不覆盖。
+        """
+        from unittest.mock import AsyncMock
+
+        from src.tools._spill import PREVIEW_LIMIT
+        from src.tools.excel.excel_process_tool import ExcelProcessTool
+
+        long_cell = "真实串联场景的长单元格文本内容" * 4  # ~52 字/行
+        rows = [{"项目": f"条目{i:03d}", "数值": i * 3, "备注": long_cell}
+                for i in range(120)]  # 100 行内已 > PREVIEW_LIMIT
+        # 唯一 output_name：避免跨会话残留产物触发重名加后缀机制
+        output_name = f"chain_report_{uuid.uuid4().hex[:8]}.xlsx"
+
+        tool = ExcelProcessTool()
+        tool._resolve_task = AsyncMock(return_value={
+            "task": "export,to_md",
+            "params": {"data_type": "dict_list", "data": rows,
+                       "output_name": output_name, "max_rows": 200},
+        })
+
+        merged = await tool.execute(
+            content=str(rows),
+            instruction="导出表格并转换为 markdown",
+        )
+
+        assert merged["success"] is True
+        # export 产物（交付物）：真实落盘的 .xlsx
+        deliverable = Path(merged["file_path"])
+        assert deliverable.name == output_name
+        assert deliverable.exists()
+        assert openpyxl.load_workbook(str(deliverable)).active.max_row > 100
+        # to_md 超限走落盘：专属键 markdown_file_path，不占用产物键 file_path
+        assert merged["truncated"] is True
+        assert "markdown" not in merged
+        spilled = Path(merged["markdown_file_path"])
+        assert spilled.name.endswith(".md")
+        spilled_text = spilled.read_text(encoding="utf-8")
+        assert len(spilled_text) == merged["full_size"] > PREVIEW_LIMIT
+        assert "条目00" in spilled_text  # 落盘为转换全文（转换的是 export 产物）
+        assert merged["markdown_file_path"] != merged["file_path"]

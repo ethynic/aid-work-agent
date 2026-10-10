@@ -501,12 +501,15 @@ class ExcelProcessTool(BaseTool):
                 if r.get("markdown"):
                     md_text = r["markdown"]
                     if len(md_text) > PREVIEW_LIMIT:
-                        # 全文类超限 → 落盘闭环（spec §1.3）：preview + file_path，
-                        # 完整 markdown 可 read/grep 回读；≤5000 字原样返回零变化
+                        # 全文类超限 → 落盘闭环（spec §1.3）：preview + 专属键，
+                        # 完整 markdown 可 read/grep 回读；≤5000 字原样返回零变化。
+                        # 落盘路径用专属键 markdown_file_path（对齐 pdf 样板），
+                        # file_path 只留给产物类操作——多操作串联（如 export,to_md）
+                        # 时落盘路径不覆盖交付物路径
                         spill = spill_large_content(md_text, prefix="excel_to_md_", suffix=".md")
                         merged["preview"] = spill["preview"]
                         merged["truncated"] = spill["truncated"]
-                        merged["file_path"] = spill["file_path"]
+                        merged["markdown_file_path"] = spill["file_path"]
                         merged["full_size"] = spill["full_size"]
                     else:
                         merged["markdown"] = md_text

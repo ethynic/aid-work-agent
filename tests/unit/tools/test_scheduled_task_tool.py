@@ -8,11 +8,14 @@ CreateScheduledTaskTool / ManageScheduledTaskTool 单元测试
 SaaS 部署下缺租户按安全设计 fail-closed 拒绝（该行为由专项用例覆盖）。
 """
 from unittest.mock import AsyncMock, MagicMock, patch
+from contextlib import contextmanager
 import asyncio
 
 import pytest
 
 pytestmark = pytest.mark.tools
+
+from loguru import logger
 
 from src.tools.scheduler.scheduled_task_tool import (
     CreateScheduledTaskTool,
@@ -21,6 +24,17 @@ from src.tools.scheduler.scheduled_task_tool import (
 from src.tools.context import ToolExecutionContext, tool_execution_scope
 from src.tools.executor import ToolExecutor
 from src.tools.registry import ToolRegistry
+
+
+@contextmanager
+def _capture_logs():
+    """捕获 loguru 输出（验证脱敏诊断走日志、凭据不外泄）"""
+    sink = []
+    handler_id = logger.add(sink.append, format="{message}")
+    try:
+        yield sink
+    finally:
+        logger.remove(handler_id)
 
 
 def _make_tool():
@@ -216,8 +230,8 @@ async def test_manage_task_does_not_expose_internal_exception():
 
 
 @pytest.mark.asyncio
-async def test_create_dry_run_failure_debug_sanitized():
-    """试执行失败：dry_run error 中的凭据在 debug 返回前被遮蔽（工具结果直达用户会话）"""
+async def test_create_dry_run_failure_error_sanitized():
+    """试执行失败：凭据不进 tool_result（无 debug 字段），脱敏细节只走日志"""
     from src.scheduler.executor import ScheduledTaskExecutor
 
     tool = _make_tool()
@@ -229,6 +243,7 @@ async def test_create_dry_run_failure_debug_sanitized():
         patch("src.scheduler.db.ScheduledTaskDB.count_by_user", return_value=0) as count_mock,
         patch.object(ScheduledTaskExecutor, "dry_run", dry_run_mock),
         patch("src.scheduler.db.ScheduledTaskDB.create") as create_mock,
+        _capture_logs() as logs,
         tool_execution_scope(
             ToolExecutionContext(user_id="user-a", tenant_id="tenant_a")
         ),
@@ -239,8 +254,11 @@ async def test_create_dry_run_failure_debug_sanitized():
         )
 
     assert result["success"] is False
-    assert "sk-leak-99" not in result["debug"]
-    assert "api_key=***" in result["debug"]
+    # spec §1.4：错误返回仅 success/error，debug 细节不进会话
+    assert set(result.keys()) == {"success", "error"}
+    joined_logs = "\n".join(logs)
+    assert "sk-leak-99" not in joined_logs
+    assert "api_key=***" in joined_logs
     # 真正进入试执行分支：配额查询与试执行身份均携带可信租户
     assert count_mock.call_args.args == ("user-a", "active")
     assert count_mock.call_args.kwargs == {"tenant_id": "tenant_a"}
@@ -249,8 +267,8 @@ async def test_create_dry_run_failure_debug_sanitized():
 
 
 @pytest.mark.asyncio
-async def test_create_dry_run_exception_debug_sanitized():
-    """试执行抛异常：str(e) 中的凭据在 debug 返回前被遮蔽"""
+async def test_create_dry_run_exception_error_sanitized():
+    """试执行抛异常：凭据不进 tool_result（无 debug 字段），脱敏细节只走日志"""
     from src.scheduler.executor import ScheduledTaskExecutor
 
     tool = _make_tool()
@@ -259,6 +277,7 @@ async def test_create_dry_run_exception_debug_sanitized():
         patch("src.scheduler.db.ScheduledTaskDB.count_by_user", return_value=0) as count_mock,
         patch.object(ScheduledTaskExecutor, "dry_run", dry_run_mock),
         patch("src.scheduler.db.ScheduledTaskDB.create") as create_mock,
+        _capture_logs() as logs,
         tool_execution_scope(
             ToolExecutionContext(user_id="user-a", tenant_id="tenant_a")
         ),
@@ -269,13 +288,100 @@ async def test_create_dry_run_exception_debug_sanitized():
         )
 
     assert result["success"] is False
-    assert "hunter-xy" not in result["debug"]
-    assert "password=***" in result["debug"]
+    assert set(result.keys()) == {"success", "error"}
+    # 工具结果（直达用户会话）不含凭据；错误文案为固定脱敏话术
+    assert "hunter-xy" not in str(result)
+    joined_logs = "\n".join(logs)
+    # 日志消息携带脱敏后的失败原因（backend_dev.md 强制 opt(exception=True)，
+    # traceback 尾行按 loguru 机制固有携带原始异常 repr，属既有系统行为）
+    assert "password=***" in joined_logs
     # 真正进入试执行分支：配额查询与试执行身份均携带可信租户
     assert count_mock.call_args.args == ("user-a", "active")
     assert count_mock.call_args.kwargs == {"tenant_id": "tenant_a"}
     assert dry_run_mock.await_args.kwargs["tenant_id"] == "tenant_a"
     create_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_validation_failures_keys_and_log_capture():
+    """校验类失败路径（spec §1.4）：返回仅 success/error 两键，
+    原 debug 诊断内容（参数缺失/超长细节）由 logger.warning 承接，不直接丢弃"""
+    tool = _make_tool()
+
+    # ① 缺 name/task_prompt
+    with (
+        _capture_logs() as logs,
+        tool_execution_scope(
+            ToolExecutionContext(user_id="user-a", tenant_id="tenant_a")
+        ),
+    ):
+        result = await tool.execute(name="", task_prompt="生成日报",
+                                    schedule_type="daily", time_config={"hour": 9})
+    assert set(result.keys()) == {"success", "error"}
+    assert result["success"] is False
+    assert any("参数校验失败" in line for line in logs)
+
+    # ② task_prompt 超长
+    with (
+        _capture_logs() as logs,
+        tool_execution_scope(
+            ToolExecutionContext(user_id="user-a", tenant_id="tenant_a")
+        ),
+    ):
+        result = await tool.execute(name="每日报告", task_prompt="长" * 2001,
+                                    schedule_type="daily", time_config={"hour": 9})
+    assert set(result.keys()) == {"success", "error"}
+    assert any("超长" in line and "2001" in line for line in logs)
+
+    # ③ 缺 time_config
+    with (
+        tool_execution_scope(
+            ToolExecutionContext(user_id="user-a", tenant_id="tenant_a")
+        ),
+    ):
+        result = await tool.execute(name="每日报告", task_prompt="生成日报",
+                                    schedule_type="daily", time_config=None)
+    assert set(result.keys()) == {"success", "error"}
+
+    # ④ 未登录：键集同样仅两键，user 缺失由日志承接
+    with (
+        _capture_logs() as logs,
+        tool_execution_scope(ToolExecutionContext(user_id=None, tenant_id="tenant_a")),
+    ):
+        result = await tool.execute(name="每日报告", task_prompt="生成日报",
+                                    schedule_type="daily", time_config={"hour": 9})
+    assert set(result.keys()) == {"success", "error"}
+    assert any("缺少 user_id" in line for line in logs)
+
+
+@pytest.mark.asyncio
+async def test_manage_failure_paths_keys_only_success_error():
+    """manage 失败路径（spec §1.4）：无 task_id、不支持的操作、未登录均仅两键返回"""
+    tool = ManageScheduledTaskTool()
+
+    with (
+        tool_execution_scope(
+            ToolExecutionContext(user_id="user-a", tenant_id="tenant_a")
+        ),
+    ):
+        result = await tool.execute(action="pause", task_id="")
+    assert set(result.keys()) == {"success", "error"}
+
+    with (
+        tool_execution_scope(
+            ToolExecutionContext(user_id="user-a", tenant_id="tenant_a")
+        ),
+    ):
+        result = await tool.execute(action="unknown_action")
+    assert set(result.keys()) == {"success", "error"}
+
+    with (
+        _capture_logs() as logs,
+        tool_execution_scope(ToolExecutionContext(user_id=None, tenant_id="tenant_a")),
+    ):
+        result = await tool.execute(action="list")
+    assert set(result.keys()) == {"success", "error"}
+    assert any("缺少 user_id" in line for line in logs)
 
 
 @pytest.mark.asyncio

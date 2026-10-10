@@ -200,19 +200,23 @@ class CreateScheduledTaskTool(BaseTool):
 
         # 必须有用户信息才能创建定时任务
         if not user_id:
-            return {"success": False, "error": "用户未登录，无法创建定时任务", "debug": "user is None, cannot determine user_id"}
+            logger.warning("后端日志：创建定时任务失败，工具执行上下文缺少 user_id")
+            return {"success": False, "error": "用户未登录，无法创建定时任务"}
         if tenant_id is None:
             return {"success": False, "error": "租户上下文缺失，无法创建定时任务"}
 
         # 参数校验
         if not name or not task_prompt:
-            return {"success": False, "error": "缺少必要参数（name 或 task_prompt）", "debug": "参数校验失败"}
+            logger.warning(f"后端日志：创建定时任务参数校验失败 name空={not name}, task_prompt空={not task_prompt}")
+            return {"success": False, "error": "缺少必要参数（name 或 task_prompt）"}
 
         if not time_config:
-            return {"success": False, "error": "缺少时间配置（time_config），请明确指定调度时间", "debug": "time_config is empty"}
+            logger.warning("后端日志：创建定时任务缺少时间配置 time_config 为空")
+            return {"success": False, "error": "缺少时间配置（time_config），请明确指定调度时间"}
 
         if len(task_prompt) > 2000:
-            return {"success": False, "error": "task_prompt 长度超过限制（最大2000字符）", "debug": f"task_prompt 长度: {len(task_prompt)}"}
+            logger.warning(f"后端日志：创建定时任务 task_prompt 超长 length={len(task_prompt)}")
+            return {"success": False, "error": "task_prompt 长度超过限制（最大2000字符）"}
 
         # R56 路由约束：确定为微信营销定时发送任务时拒绝创建并引导专用工具。
         # 放在 dry_run 与任何 DB 写入之前；检测保守（不确定不拦截），见函数注释。
@@ -232,10 +236,13 @@ class CreateScheduledTaskTool(BaseTool):
             ScheduledTaskDB.count_by_user, user_id, "active", tenant_id=tenant_id
         )
         if current_count >= max_tasks:
+            logger.warning(
+                f"后端日志：定时任务达上限 user_id={user_id}, "
+                f"active_count={current_count}, max={max_tasks}"
+            )
             return {
                 "success": False,
                 "error": f"您的定时任务已达上限（{max_tasks}个），请先取消不需要的任务",
-                "debug": f"当前活跃任务数: {current_count}, 最大限制: {max_tasks}"
             }
 
         # 生成 cron 表达式
@@ -254,20 +261,26 @@ class CreateScheduledTaskTool(BaseTool):
                 tenant_id=tenant_id,
             )
         except Exception as e:
-            logger.opt(exception=True).error(f"后端日志：定时任务试执行异常 user_id={user_id}, error={e}")
+            # 诊断细节（脱敏后）走日志，不进 tool_result（spec §1.4 禁止 debug 字段）
+            logger.opt(exception=True).error(
+                f"后端日志：定时任务试执行异常 user_id={user_id}, "
+                f"error={sanitize_scheduled_task_error(str(e))}"
+            )
             return {
                 "success": False,
                 "error": "任务验证过程出错，无法创建定时任务",
-                "debug": sanitize_scheduled_task_error(str(e))
             }
 
         if not dry_run_result.get("success"):
-            # debug 会随工具结果进入会话返回给用户：先脱敏再截断——
-            # 先截断会把凭据切成两半，后半段脱离键名后无法再被识别遮蔽
+            # 失败原因（脱敏 + 截断）走日志：先脱敏再截断——先截断会把凭据切成
+            # 两半，后半段脱离键名后无法再被识别遮蔽
+            logger.error(
+                "后端日志：定时任务试执行失败 "
+                f"error={sanitize_scheduled_task_error(dry_run_result.get('error', '未知错误'))[:500]}"
+            )
             return {
                 "success": False,
                 "error": "任务验证失败，当前无法完成此类定时任务",
-                "debug": sanitize_scheduled_task_error(dry_run_result.get("error", "未知错误"))[:500]
             }
 
         # 试执行成功，创建定时任务
@@ -286,7 +299,8 @@ class CreateScheduledTaskTool(BaseTool):
         )
 
         if not task:
-            return {"success": False, "error": "创建定时任务失败（数据库错误）", "debug": "ScheduledTaskDB.create 返回 None"}
+            logger.error(f"后端日志：定时任务落库失败 user_id={user_id}, name={name}")
+            return {"success": False, "error": "创建定时任务失败（数据库错误）"}
 
         # 注册到调度器由 background runner 的 reconcile 对账负责（≤30s 内自动注册），
         # 本工具只写 DB，不做跨进程 manager 调用。
@@ -328,7 +342,8 @@ class ManageScheduledTaskTool(BaseTool):
         tenant_id = _resolve_runtime_tenant_id(context)
 
         if not user_id:
-            return {"success": False, "error": "用户未登录，无法操作定时任务", "debug": "user is None, cannot determine user_id"}
+            logger.warning("后端日志：管理定时任务失败，工具执行上下文缺少 user_id")
+            return {"success": False, "error": "用户未登录，无法操作定时任务"}
         if tenant_id is None:
             return {"success": False, "error": "租户上下文缺失，无法操作定时任务"}
 

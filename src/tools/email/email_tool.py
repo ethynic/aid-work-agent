@@ -59,10 +59,10 @@ class EmailProcessInput(BaseModel):
     # ---- read 动作参数 ----
     folder: Optional[str] = Field("INBOX", description="read/download_attachments 可选：邮件文件夹，默认INBOX")
     limit: Optional[int] = Field(
-        10, description="read 可选：收取邮件数量，默认10封。查询近期邮件时可设大些，精确查找时设小值"
+        10, description="read 可选：收取邮件数量上限，默认10封"
     )
     unseen_only: Optional[bool] = Field(
-        False, description="read 可选：是否只收取未读邮件，默认False。用户问'未读邮件'时设True"
+        False, description="read 可选：是否只收取未读邮件，默认False"
     )
     from_filter: Optional[str] = Field("", description="read 可选：发件人过滤条件（本地过滤）")
     subject_filter: Optional[str] = Field("", description="read 可选：主题过滤条件（本地过滤）")
@@ -256,11 +256,10 @@ class EmailProcessTool(BaseTool):
         return {
             "success": True,
             "message": f"邮件已成功发送给 {details.get('to')}",
+            # spec §1.5：只带新信息——to/cc/subject 是输入回显（to 已并入 message），
+            # 仅保留发件邮箱（来自用户绑定配置，非调用入参）
             "details": {
                 "from": details.get("from"),
-                "to": details.get("to"),
-                "cc": details.get("cc"),
-                "subject": details.get("subject"),
             },
         }
 

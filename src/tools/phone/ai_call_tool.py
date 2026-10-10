@@ -77,13 +77,12 @@ class AICallTool(BaseTool):
     ) -> Dict[str, Any]:
         """Mock 实现 — 用户后续替换为真实 HTTP 调用"""
 
+        # mock 标记走日志，不进返回值（spec §1.4/§1.5：返回值不带 debug 标记）
+        logger.info(f"AI外呼 Mock 模拟: call_id={call_id}, lead_id={lead_id}")
+
         return {
             "success": True,
             "call_id": call_id,
             "status": "initiated",
-            "phone": phone,
-            "lead_id": lead_id,
-            "call_purpose": call_purpose,
             "message": "Mock: 外呼已模拟发起，等待接听",
-            "mock": True,
         }

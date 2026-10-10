@@ -170,7 +170,8 @@ class TestCpToolBasic:
         assert "file_size" in result
         assert "download_url" in result
         assert "file_id" in result
-        assert "resolved_source" in result
+        # spec §1.5：成功返回禁止 echo 输入参数（源路径已由调用方得知）
+        assert "resolved_source" not in result
         assert result["download_url"] == "/api/files/file_abc123/download"
         assert result["file_id"] == "file_abc123"
         # 相对路径 output/ 前缀被剥离，落到当前租户 conversation 目录
@@ -232,7 +233,8 @@ class TestCpToolBasic:
         assert "file_path" in result
         assert "file_name" in result
         assert "file_size" in result
-        assert "resolved_source" in result
+        # spec §1.5：成功返回禁止 echo 输入参数（源路径已由调用方得知）
+        assert "resolved_source" not in result
         # 不注册下载时不应有 download_url 和 file_id
         assert "download_url" not in result
         assert "file_id" not in result

@@ -936,7 +936,8 @@ class TestWordRouter:
 # =============================================================================
 # _merge_results 落盘闭环（Phase 6：word_to_md / diff 全文不再回塞）
 # 契约：docs/tools/tool-development-spec.md §1.3 —— 全文类 > 5000 字符
-# 必须调 spill_large_content 落盘，返回 preview + file_path + truncated + full_size
+# 必须调 spill_large_content 落盘，返回 preview + 专属落盘键 + truncated + full_size
+# （markdown_file_path / diff_file_path，file_path 只留给产物类操作，对齐 pdf 样板）
 # =============================================================================
 
 class TestWordToMdSpill:
@@ -960,7 +961,7 @@ class TestWordToMdSpill:
         merged = self._merge("# 标题\n\n短文档")
 
         assert merged["markdown"] == "# 标题\n\n短文档"
-        for key in ("preview", "file_path", "truncated", "full_size"):
+        for key in ("preview", "file_path", "markdown_file_path", "truncated", "full_size"):
             assert key not in merged
 
     def test_boundary_exactly_5000_chars_not_spilled(self):
@@ -970,6 +971,7 @@ class TestWordToMdSpill:
 
         assert merged["markdown"] == "x" * PREVIEW_LIMIT
         assert "file_path" not in merged
+        assert "markdown_file_path" not in merged
 
     def test_oversized_markdown_spilled(self):
         from src.tools._spill import PREVIEW_LIMIT
@@ -982,8 +984,8 @@ class TestWordToMdSpill:
         assert merged["preview"].startswith("# 大文档")
         assert len(merged["preview"]) <= PREVIEW_LIMIT + 3  # preview(5000) + 截断后缀
         assert "markdown" not in merged
-        # 落盘的是完整原文（可 read/grep 回读），suffix=.md
-        spilled = Path(merged["file_path"])
+        # 落盘的是完整原文（可 read/grep 回读），suffix=.md；落盘路径用专属键
+        spilled = Path(merged["markdown_file_path"])
         assert spilled.exists()
         assert spilled.read_text(encoding="utf-8") == big
         assert spilled.name.endswith(".md")
@@ -1019,7 +1021,7 @@ class TestWordDiffSpill:
         assert merged["changes"] == changes
         assert merged["change_count"] == 1
         assert merged["summary"] == "共发现1处差异：1处修改"
-        for key in ("preview", "file_path", "truncated", "full_size"):
+        for key in ("preview", "file_path", "diff_file_path", "truncated", "full_size"):
             assert key not in merged
 
     def test_oversized_diff_spilled(self):
@@ -1041,8 +1043,8 @@ class TestWordDiffSpill:
         # 超限时不再回塞 diff_text 与 changes 数组（明细随落盘文件回读，避免双份灌入）
         assert "diff_text" not in merged
         assert "changes" not in merged
-        # 落盘 = 完整 diff 报告 + 完整变更明细附录，suffix=.txt
-        spilled = Path(merged["file_path"])
+        # 落盘 = 完整 diff 报告 + 完整变更明细附录，suffix=.txt；落盘路径用专属键
+        spilled = Path(merged["diff_file_path"])
         assert spilled.exists()
         spilled_text = spilled.read_text(encoding="utf-8")
         assert spilled_text.startswith(big_diff)
@@ -1073,7 +1075,7 @@ class TestWordDiffSpill:
 
         merged = self._merge(big_diff, changes, "共发现1处差异：1处修改")
 
-        spilled_text = Path(merged["file_path"]).read_text(encoding="utf-8")
+        spilled_text = Path(merged["diff_file_path"]).read_text(encoding="utf-8")
         assert spilled_text.startswith(big_diff)
         # 报告部分只有截断视图；附录部分含完整原文（含被截出的尾部标记）
         assert report_view in spilled_text
@@ -1115,7 +1117,7 @@ class TestWordDiffSpill:
         merged = tool._merge_results(ctx)
 
         assert merged["truncated"] is True
-        spilled_text = Path(merged["file_path"]).read_text(encoding="utf-8")
+        spilled_text = Path(merged["diff_file_path"]).read_text(encoding="utf-8")
         assert spilled_text.startswith(result["diff_text"])
         assert marker in spilled_text  # 附录补全被截断的尾部，无信息损失
 
@@ -1151,7 +1153,7 @@ class TestSpillEndToEndRetrieval:
 
         # ① grep 在落盘文件中定位关键词（拿到 1-based 行号）
         grep_result = await GrepTool().execute(
-            pattern="关键结论", path=merged["file_path"], output_mode="content",
+            pattern="关键结论", path=merged["markdown_file_path"], output_mode="content",
         )
         assert grep_result["success"] is True
         assert grep_result["count"] == 1
@@ -1161,7 +1163,7 @@ class TestSpillEndToEndRetrieval:
 
         # ② read 按 grep 行号精读落盘文件（offset 1-based）
         read_result = await ReadTool().execute(
-            file_path=merged["file_path"], offset=match["line"], limit=1,
+            file_path=merged["markdown_file_path"], offset=match["line"], limit=1,
         )
         assert isinstance(read_result, dict)
         assert read_result["read_lines"] == 1
@@ -1209,16 +1211,16 @@ class TestSpillRealFileEndToEnd:
 
         assert merged["truncated"] is True
         assert needle not in merged["preview"]  # 关键信息确在预览窗口外
-        spilled = Path(merged["file_path"])
+        spilled = Path(merged["markdown_file_path"])
         assert spilled.name.endswith(".md")
         assert needle in spilled.read_text(encoding="utf-8")  # 落盘含预览窗外全文
 
         g = await GrepTool().execute(
-            pattern="关键结论", path=merged["file_path"], output_mode="content",
+            pattern="关键结论", path=merged["markdown_file_path"], output_mode="content",
         )
         assert g["success"] is True and g["count"] == 1
         r = await ReadTool().execute(
-            file_path=merged["file_path"], offset=g["matches"][0]["line"], limit=1,
+            file_path=merged["markdown_file_path"], offset=g["matches"][0]["line"], limit=1,
         )
         assert r["read_lines"] == 1 and "37.5%" in r["content"]
 
@@ -1252,7 +1254,7 @@ class TestSpillRealFileEndToEnd:
         assert merged["change_count"] == step["change_count"]
         assert merged["summary"] == step["summary"]
         assert "diff_text" not in merged and "changes" not in merged
-        spilled_text = Path(merged["file_path"]).read_text(encoding="utf-8")
+        spilled_text = Path(merged["diff_file_path"]).read_text(encoding="utf-8")
         assert len(spilled_text) == merged["full_size"]
         assert "新增" in spilled_text
 
@@ -1261,6 +1263,138 @@ class TestSpillRealFileEndToEnd:
         from src.tools.file.grep_tool import GrepTool
 
         g = await GrepTool().execute(
-            pattern="这是一段很长的新增段落内容", path=merged["file_path"], output_mode="content",
+            pattern="这是一段很长的新增段落内容", path=merged["diff_file_path"], output_mode="content",
         )
         assert g["success"] is True and g["count"] >= 1
+
+
+class TestMultiOpSpillKeyNoConflict:
+    """多操作串联时落盘路径不覆盖交付物路径（P1 评审建议 1）。
+
+    场景：modify（产物操作）+ word_to_md / diff（超长读取操作）串联，
+    结果中 file_path 必须指向交付物 .docx，落盘文件走专属键
+    markdown_file_path / diff_file_path，互不覆盖。
+    """
+
+    @staticmethod
+    def _chain_results(second_op_result):
+        from src.tools.word.word_process_tool import PipelineContext, WordProcessTool
+
+        deliverable = "/tmp/report_modified.docx"
+        tool = WordProcessTool()
+        ctx = PipelineContext()
+        ctx.results = [
+            {
+                "operation": "modify",
+                "success": True,
+                "file_path": deliverable,
+                "file_size": 2048,
+            },
+            second_op_result,
+        ]
+        # 模拟 _update_context：产物操作把交付物写入 ctx.file_paths
+        ctx.file_paths = [deliverable]
+        return tool._merge_results(ctx)
+
+    def test_modify_then_oversized_word_to_md_keys_do_not_clash(self):
+        from src.tools._spill import PREVIEW_LIMIT
+
+        big_md = "# 转换结果\n" + "m" * (PREVIEW_LIMIT + 500)
+        step = {
+            "operation": "word_to_md",
+            "success": True,
+            "markdown": big_md,
+            "file_path": "/tmp/src.docx",
+        }
+
+        merged = self._chain_results(step)
+
+        # file_path 指向交付物，落盘文件走 markdown_file_path，互不覆盖
+        assert merged["file_path"] == "/tmp/report_modified.docx"
+        assert merged["file_size"] == 2048
+        assert merged["truncated"] is True
+        spilled = Path(merged["markdown_file_path"])
+        assert spilled.exists()
+        assert spilled.read_text(encoding="utf-8") == big_md
+        assert spilled.name.endswith(".md")
+        assert merged["markdown_file_path"] != merged["file_path"]
+
+    def test_modify_then_oversized_diff_keys_do_not_clash(self):
+        from src.tools._spill import PREVIEW_LIMIT
+
+        big_diff = "文档差异报告\n" + "d" * (PREVIEW_LIMIT + 500)
+        step = {
+            "operation": "diff",
+            "success": True,
+            "diff_text": big_diff,
+            "changes": [
+                {"type": "modified", "location": "paragraph", "index": 1,
+                 "old_text": "旧", "new_text": "新"},
+            ],
+            "change_count": 1,
+            "summary": "共发现1处差异：1处修改",
+        }
+
+        merged = self._chain_results(step)
+
+        assert merged["file_path"] == "/tmp/report_modified.docx"
+        assert merged["truncated"] is True
+        spilled = Path(merged["diff_file_path"])
+        assert spilled.exists()
+        assert spilled.read_text(encoding="utf-8").startswith(big_diff)
+        assert spilled.name.endswith(".txt")
+        assert merged["diff_file_path"] != merged["file_path"]
+
+    @pytest.mark.asyncio
+    async def test_execute_level_modify_then_word_to_md_chain(self, tmp_path):
+        """execute() 级真实串联：modify（产物）+ word_to_md（超长读取）。
+        patch 内部 LLM 路由为确定性双操作，真实执行 handler 与 _merge_results，
+        验证 file_path 指向交付物 .docx、markdown_file_path 指向落盘 .md，互不覆盖。
+        """
+        from unittest.mock import AsyncMock
+
+        from docx import Document
+
+        from src.tools._spill import PREVIEW_LIMIT
+        from src.tools.word.word_process_tool import WordProcessTool
+
+        filler = "真实串联场景的填充段落，用于将 word_to_md 转换结果推过落盘阈值。"
+        docx_path = tmp_path / "chain_src.docx"
+        doc = Document()
+        doc.add_heading("串联源文档", level=1)
+        doc.add_paragraph("待修改目标句 World")
+        for _ in range(120):  # 120 段 × ~30 字 > PREVIEW_LIMIT
+            doc.add_paragraph(filler)
+        doc.save(str(docx_path))
+
+        tool = WordProcessTool()
+        tool._resolve_task = AsyncMock(return_value={
+            "task": "modify,word_to_md",
+            "params": {
+                "operations": [{"type": "replace_text", "target": "World", "replacement": "Python"}],
+                "output_name": "chain_modified.docx",
+            },
+        })
+
+        merged = await tool.execute(
+            file_paths=[str(docx_path)],
+            instruction="把 World 替换为 Python 后转出 markdown",
+        )
+
+        assert merged["success"] is True
+        # modify 产物（交付物）：modify 应用了替换且产出新 docx
+        assert merged["operations_applied"] == 1
+        deliverable = Path(merged["file_path"])
+        assert deliverable.name == "chain_modified.docx"
+        assert deliverable.exists()
+        from docx import Document as _Doc
+        assert "Python" in " ".join(p.text for p in _Doc(str(deliverable)).paragraphs)
+        # word_to_md 超限走落盘：专属键 markdown_file_path，不占用产物键 file_path
+        assert merged["truncated"] is True
+        assert "markdown" not in merged
+        spilled = Path(merged["markdown_file_path"])
+        assert spilled.name.endswith(".md")
+        spilled_text = spilled.read_text(encoding="utf-8")
+        assert len(spilled_text) == merged["full_size"] > PREVIEW_LIMIT
+        assert "串联源文档" in spilled_text  # 落盘为转换全文
+        assert merged["markdown_file_path"] != merged["file_path"]

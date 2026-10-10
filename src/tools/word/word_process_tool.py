@@ -489,12 +489,15 @@ class WordProcessTool(BaseTool):
             elif op == "word_to_md":
                 md_text = r.get("markdown", "")
                 if len(md_text) > PREVIEW_LIMIT:
-                    # 全文类超限 → 落盘闭环（spec §1.3）：preview + file_path，
-                    # 完整 markdown 可 read/grep 回读；≤5000 字原样返回零变化
+                    # 全文类超限 → 落盘闭环（spec §1.3）：preview + 专属键，
+                    # 完整 markdown 可 read/grep 回读；≤5000 字原样返回零变化。
+                    # 落盘路径用专属键 markdown_file_path（对齐 pdf 样板），
+                    # file_path 只留给产物类操作——多操作串联（如 modify,word_to_md）
+                    # 时落盘路径不覆盖交付物路径
                     spill = spill_large_content(md_text, prefix="word_to_md_", suffix=".md")
                     merged["preview"] = spill["preview"]
                     merged["truncated"] = spill["truncated"]
-                    merged["file_path"] = spill["file_path"]
+                    merged["markdown_file_path"] = spill["file_path"]
                     merged["full_size"] = spill["full_size"]
                 else:
                     merged["markdown"] = md_text
@@ -507,7 +510,8 @@ class WordProcessTool(BaseTool):
                     # diff 报告对每处变更文本截断至 100 字（word_differ._format_text），
                     # 落盘内容 = 完整报告 + 完整变更明细附录（changes 原文不截断），
                     # 超限路径无信息损失；changes 数组本身不再回塞，避免报告+数组
-                    # 双份灌入上下文（明细已随落盘文件可 read/grep 回读）
+                    # 双份灌入上下文（明细已随落盘文件可 read/grep 回读）。
+                    # 落盘路径用专属键 diff_file_path，不占用产物键 file_path
                     spill = spill_large_content(
                         diff_text + self._format_full_changes(changes),
                         prefix="word_diff_",
@@ -515,7 +519,7 @@ class WordProcessTool(BaseTool):
                     )
                     merged["preview"] = spill["preview"]
                     merged["truncated"] = spill["truncated"]
-                    merged["file_path"] = spill["file_path"]
+                    merged["diff_file_path"] = spill["file_path"]
                     merged["full_size"] = spill["full_size"]
                 else:
                     merged["diff_text"] = diff_text
