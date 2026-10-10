@@ -4,7 +4,8 @@
 
 在 documents + chunks + chunks_vec 知识库中检索酒店资源。
 - chunk_index=0: 酒店信息摘要（已向量化）
-- chunk_index=1: 价格明细表（不向量化）
+- 价格明细表：metadata.raw_payload.price_table（Phase 2 起单一数据源；
+  存量未迁移数据回退 chunk_index=1，Phase 5 清场后移除回退）
 - source_type='hotel_resource'
 """
 
@@ -12,6 +13,8 @@ import json
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
+
+import kb_metadata
 
 
 class HotelRetriever:
@@ -231,8 +234,15 @@ class HotelRetriever:
             return row["text"] if row else None
 
     def get_price_table(self, doc_id: int) -> Optional[str]:
-        """取出酒店价格明细表（chunk_index=1）"""
+        """取出酒店价格明细表：优先 documents.metadata.raw_payload（单一数据源），
+        未迁移存量回退 chunk 1（过渡期兼容，Phase 5 清场后随清理任务移除）"""
         with self._get_conn() as conn:
+            conn.execute("SELECT metadata FROM documents WHERE id = %s", (doc_id,))
+            row = conn.fetchone()
+            if row:
+                text = kb_metadata.get_payload_table_text(row["metadata"], "price_table")
+                if text is not None:
+                    return text
             conn.execute(
                 "SELECT text FROM chunks WHERE doc_id = %s AND chunk_index = 1",
                 (doc_id,)
@@ -252,12 +262,15 @@ class HotelRetriever:
         """
         导入一个酒店到知识库。
 
+        表文本写入 metadata.raw_payload（统一知识库工具默认透出），不再插
+        chunk 1；顶层业务键同步镜像（region 补入顶层，设计 §3 目标结构）。
+
         Args:
             tenant_id: 租户 ID
             hotel_name: 酒店名称
-            region: 区域
+            region: 区域（写入顶层 metadata 与 raw_payload 镜像）
             info_text: 酒店信息摘要（chunk 0，会向量化）
-            price_table_text: 价格明细表（chunk 1，不向量化）
+            price_table_text: 价格明细表（写入 raw_payload.price_table，不向量化）
             metadata: 额外元信息
             source_file: 来源文件名（仅记入 metadata）
             user_id: 上传用户 ID
@@ -286,14 +299,20 @@ class HotelRetriever:
 
         embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
-        meta_json = json.dumps(metadata or {}, ensure_ascii=False)
+        # metadata：region 补入顶层（存储本位）→ 表键入 raw_payload → 业务键镜像
+        meta = dict(metadata or {})
+        if region:
+            meta.setdefault("region", region)
+        kb_metadata.put_table_keys(meta, {"price_table": price_table_text})
+        kb_metadata.sync_raw_payload(meta)
+        meta_json = json.dumps(meta, ensure_ascii=False)
 
         with self._get_conn() as conn:
-            # 1. 创建 document
+            # 1. 创建 document（仅 chunk 0 摘要，表数据在 metadata.raw_payload）
             conn.execute("""
                 INSERT INTO documents (user_id, tenant_id, title, source_type, file_type, file_path,
                                        total_chunks, embedding_model, metadata, summary)
-                VALUES (%s, %s, %s, %s, 'xlsx', %s, 2, 'text-embedding-v3', %s, %s)
+                VALUES (%s, %s, %s, %s, 'xlsx', %s, 1, 'text-embedding-v3', %s, %s)
                 RETURNING id
             """, (user_id, tenant_id, f"酒店：{hotel_name}", self.SOURCE_TYPE, source_file, meta_json, info_text))
             doc_id = conn.fetchone()["id"]
@@ -307,14 +326,7 @@ class HotelRetriever:
                   json.dumps({"type": "hotel_info", "region": region}, ensure_ascii=False)))
             chunk_id_0 = conn.fetchone()["id"]
 
-            # 3. 插入 chunk 1（价格明细表）
-            conn.execute("""
-                INSERT INTO chunks (doc_id, chunk_index, text, tokens, metadata)
-                VALUES (%s, 1, %s, %s, %s)
-            """, (doc_id, price_table_text, len(price_table_text),
-                  json.dumps({"type": "price_table"}, ensure_ascii=False)))
-
-            # 4. 向量化 chunk 0
+            # 3. 向量化 chunk 0
             conn.execute("""
                 INSERT INTO chunks_vec (chunk_id, embedding)
                 VALUES (%s, %s::vector)

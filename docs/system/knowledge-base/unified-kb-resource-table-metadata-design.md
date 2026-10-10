@@ -106,6 +106,13 @@ HybridRetriever 向量（阈值 0.5）+ FTS（tsvector）+ 加权 RRF 融合；`
 - `PUT /kb/hotels|attractions/{doc_id}`：`price_table` / `ticket_table` / `project_table` 字段改写 `metadata.raw_payload`（保持合并语义）；顶层 `metadata` 字段更新时同步镜像业务键。
 - `PATCH /kb/attractions/{doc_id}/images`：更新顶层 `images` 的同时同步 `raw_payload.images`。
 
+**Phase 2 实现细化（2026-10-10）**：
+
+1. **共享同步模块**：镜像/表键写入/PUT 合并逻辑收敛到 `src/skills/travel-quote/scripts/kb_metadata.py`（SYSTEM_KEYS 与迁移脚本同清单、TABLE_KEYS 表键保护、`apply_put_metadata` 供两个 PUT 端点复用），三处写读路径共用，避免双源漂移。
+2. **过渡期 PUT 双写 chunk**：PUT 表字段在写 `raw_payload` 的同时仍 UPDATE chunks 1/2（未迁移文档行存在时生效；已迁移/新导入 0 行命中无副作用）。理由：迁移脚本 `--verify` 与 `--drop-chunks` 的值一致性校验依赖「raw/chunk 文本相等」不变量——若只写 raw，观察期内被 PUT 过的文档会因 chunk 陈旧被 drop 防线拒绝或被 `--force` 重跑回退到陈旧值。双写保持不变量恒成立，Phase 5 清场后随回退读一并清理。
+3. **region 确定性补入顶层**：`import_hotel` / `import_attraction` 将 region 参数 `setdefault` 进顶层 metadata（hotel parser 历史上不输出顶层 region、attraction parser 偶尔漏输出），使 §3 目标结构（顶层 region + raw_payload 镜像）对齐。
+4. **空串语义**：表键值为空串 = 表存在但无内容（命中不回退 chunk），与旧契约「chunk 行在而文本空」一致；键缺失才回退。
+
 ### D3 读路径切换（travel-quote skill）
 
 - `HotelRetriever.get_price_table` / `AttractionRetriever.get_ticket_table/get_project_table` 改读 `documents.metadata.raw_payload`；
@@ -140,6 +147,8 @@ HybridRetriever 向量（阈值 0.5）+ FTS（tsvector）+ 加权 RRF 融合；`
 | 4 | raw_payload 超 32KB | 迁移脚本告警清单，人工拆分或精简 |
 | 5 | 双写镜像（顶层 + raw_payload）漂移 | 写入收敛在同一函数/事务；`--verify` 模式可随时比对 |
 | 6 | uuid 导入 attractions/hotels 不带 chunks 的存量缺口 | 迁移后价格表随 metadata 行复制反而更完整；chunk 0 缺失为存量独立问题，不在本任务修 |
+| 7 | Phase 2 上线 → Phase 4 工具下线之间的部署窗口：新导入文档无 chunks 1/2，未下线的 attraction/hotel_search 取表静默为空 | 已缓解：两工具取表函数加 raw_payload 回退（Phase 2 实现细化），新导入数据照常取到；工具下线后回退随之消亡 |
+| 8 | body.metadata 携带 raw_payload/images 经 PUT 注入（raw_payload 是 LLM 唯一可见通道，伪造表数据/提示注入） | 已缓解：`apply_put_metadata` 剥离 body 的 raw_payload/images/系统键/表键，表数据只能经表字段写入（Phase 2 实现细化） |
 
 ## 6. 验收标准
 

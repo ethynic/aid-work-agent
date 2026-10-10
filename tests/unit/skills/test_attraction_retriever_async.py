@@ -159,11 +159,12 @@ class TestImportAttractionAsync:
         update_conn = instances[1]
         update_sqls = [sql for sql, _ in update_conn.calls]
         assert any("UPDATE DOCUMENTS" in s for s in update_sqls)
-        # 验证 metadata 含 images.cover
+        # 验证 metadata 含 images.cover（顶层 + raw_payload 镜像，D2 双写一致性）
         update_args = [args for _, args in update_conn.calls if args]
         update_meta_json = update_args[0][0]
         meta = json.loads(update_meta_json)
         assert meta["images"]["cover"] == "file_coverxxx"
+        assert meta["raw_payload"]["images"]["cover"] == "file_coverxxx"
 
     @pytest.mark.asyncio
     async def test_import_attraction_with_gallery(
@@ -201,6 +202,7 @@ class TestImportAttractionAsync:
         meta = json.loads(update_args[0][0])
         assert meta["images"]["gallery"] == ["file_g0", "file_g1", "file_g2"]
         assert "cover" not in meta["images"]
+        assert meta["raw_payload"]["images"]["gallery"] == ["file_g0", "file_g1", "file_g2"]
 
     @pytest.mark.asyncio
     async def test_import_attraction_without_images(self, retriever, fake_conn_factory):
@@ -232,13 +234,17 @@ class TestImportAttractionAsync:
         assert mock_registry.register.call_count == 0
         # 只有一次 _get_conn（INSERT document + chunks + chunks_vec），没有第二次 UPDATE
         assert len(instances) == 1
-        # 验证 INSERT documents 时 metadata 只有原始 custom_key，无 images
+        # 验证 INSERT documents 时 metadata：顶层业务键保留、表文本入 raw_payload
+        # （Phase 2 D2：不再插 chunks 1/2，表数据随 metadata 行落库），无 images 键
         insert_doc_call = instances[0].calls[0]
         sql_upper, args = insert_doc_call
         assert "INSERT INTO DOCUMENTS" in sql_upper
         meta_arg = args[5]  # SQL 中 metadata 位置：user_id, tenant_id, title, source_type, file_path, metadata, summary
         meta = json.loads(meta_arg)
-        assert meta == {"custom_key": "custom_value"}
+        assert meta["custom_key"] == "custom_value"
+        assert meta["raw_payload"]["ticket_table"] == "ticket"
+        assert meta["raw_payload"]["project_table"] == "project"
+        assert meta["raw_payload"]["custom_key"] == "custom_value"  # 业务键镜像
         assert "images" not in meta
 
     @pytest.mark.asyncio

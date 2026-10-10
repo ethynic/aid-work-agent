@@ -110,7 +110,12 @@ class HotelSearchTool(BaseTool):
         }
 
     def _fetch_price_tables(self, doc_ids: List[int]) -> Dict[int, str]:
-        """批量查询 chunk_index=1 的价格明细表，避免 N+1"""
+        """批量查询价格明细表，避免 N+1。
+
+        存量文档读 chunk 1；缺行（Phase 2 起新导入的文档表文本在
+        metadata.raw_payload，不再插 chunk 1）回退读 documents.metadata。
+        本工具 Phase 4 下线，此回退仅覆盖过渡部署窗口。
+        """
         if not doc_ids:
             return {}
         price_map: Dict[int, str] = {}
@@ -123,6 +128,24 @@ class HotelSearchTool(BaseTool):
             """, doc_ids)
             for pt_row in cursor.fetchall():
                 price_map[pt_row["doc_id"]] = pt_row["text"] or ""
+        missing = [d for d in doc_ids if d not in price_map]
+        if missing:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                placeholders = ",".join(["%s"] * len(missing))
+                cursor.execute(f"""
+                    SELECT id, metadata FROM documents WHERE id IN ({placeholders})
+                """, missing)
+                for row in cursor.fetchall():
+                    meta = row["metadata"]
+                    if isinstance(meta, str):
+                        try:
+                            meta = json.loads(meta)
+                        except (json.JSONDecodeError, TypeError):
+                            continue
+                    raw = meta.get("raw_payload") if isinstance(meta, dict) else None
+                    if isinstance(raw, dict) and isinstance(raw.get("price_table"), str):
+                        price_map[row["id"]] = raw["price_table"]
         return price_map
 
     async def execute(self, **kwargs) -> Dict[str, Any]:

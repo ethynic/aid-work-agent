@@ -117,7 +117,10 @@ class AttractionSearchTool(BaseTool):
                 """, (embedding_str, *tenant_params, top_k))
                 rows = cursor.fetchall()
 
-            # 批量查询 chunk_index=2 的项目/服务信息，避免 N+1
+            # 批量查询项目/服务信息，避免 N+1。存量文档读 chunk 2；缺行
+            # （Phase 2 起新导入的文档表文本在 metadata.raw_payload，不再插
+            # chunk 2）回退读 documents.metadata。本工具 Phase 4 下线，此回退
+            # 仅覆盖过渡部署窗口
             doc_ids = [row["doc_id"] for row in rows]
             project_table_map = {}
             if doc_ids:
@@ -130,6 +133,24 @@ class AttractionSearchTool(BaseTool):
                     """, doc_ids)
                     for pt_row in cursor.fetchall():
                         project_table_map[pt_row["doc_id"]] = pt_row["text"] or ""
+                missing = [d for d in doc_ids if d not in project_table_map]
+                if missing:
+                    with get_db_connection() as conn:
+                        cursor = conn.cursor()
+                        placeholders = ",".join(["%s"] * len(missing))
+                        cursor.execute(f"""
+                            SELECT id, metadata FROM documents WHERE id IN ({placeholders})
+                        """, missing)
+                        for row in cursor.fetchall():
+                            meta = row["metadata"]
+                            if isinstance(meta, str):
+                                try:
+                                    meta = json.loads(meta)
+                                except (json.JSONDecodeError, TypeError):
+                                    continue
+                            raw = meta.get("raw_payload") if isinstance(meta, dict) else None
+                            if isinstance(raw, dict) and isinstance(raw.get("project_table"), str):
+                                project_table_map[row["id"]] = raw["project_table"]
 
             formatted = []
             for row in rows:

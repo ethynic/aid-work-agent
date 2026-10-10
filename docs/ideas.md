@@ -49,7 +49,7 @@
 | 20260714-1911 | 浏览器混合执行、可视化与人工接管 | 🔧 部分完成 | Phase 0～1 已完成；Phase 2 已实现、待真实 Redis/PostgreSQL 门禁。 | [设计](tools/browser/browser_visualization_design.md) | [开发计划](tools/browser/browser_execution_dev_plan.md) |
 | 20260630-1733 | PDF reportlab 固定版式生成器 | 📋 待开发 | 暂不开发，未来如出现强固定版式需求再评估。 | [设计](tools/pdf/pdf_tool_design.md) | — |
 | 20260630-1734 | PDF 视觉回归样本集 | 💡 灵感 | 低优先级未来项。用于沉淀小型样例 PDF、渲染 PNG 或预期检查结果，后续在改动 PDF 生成器、渲染器、验证器时做回归校验，防止中文乱码、空白页、黑页、页数错误、表格溢出等质量退化。 | [设计](tools/pdf/pdf_tool_design.md) | — |
-| 20261010-1053 | 统一知识库检索工具替代 attraction/hotel_search | 🔧 部分完成 | 两工具由统一知识库工具替代；价格/项目表迁入文档 metadata（raw_payload 契约），替代固定 chunk 位次取表。Phase 1 迁移脚本已完成（37 单测 + 3 集成 + 独立测试/CR 三轮修复，终审可合入）；Phase 2-5 待开发。 | [设计](system/knowledge-base/unified-kb-resource-table-metadata-design.md) | [开发计划](plans/plan-unified-kb-resource-metadata.md) |
+| 20261010-1053 | 统一知识库检索工具替代 attraction/hotel_search | 🔧 部分完成 | 两工具由统一知识库工具替代；价格/项目表迁入文档 metadata（raw_payload 契约），替代固定 chunk 位次取表。Phase 1 迁移脚本、Phase 2 写读路径切换均已完成（各经独立测试/CR 多轮修复终审可合入）；Phase 3-5 待开发。 | [设计](system/knowledge-base/unified-kb-resource-table-metadata-design.md) | [开发计划](plans/plan-unified-kb-resource-metadata.md) |
 
 ## 渠道集成
 

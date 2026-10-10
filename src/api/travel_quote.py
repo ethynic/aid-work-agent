@@ -42,6 +42,21 @@ def _get_tenant_id(request: Request) -> str:
     return tenant_id
 
 
+def _kb_metadata():
+    """延迟加载 travel-quote scripts 的 kb_metadata 模块（顶层/raw_payload 双写工具）。
+
+    与本文件其它 skill 脚本导入（parser/retriever）同模式：函数内注入
+    scripts 目录到 sys.path，避免模块级副作用。
+    """
+    import sys
+    from pathlib import Path
+    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "travel-quote" / "scripts"
+    if str(skill_dir) not in sys.path:
+        sys.path.insert(0, str(skill_dir))
+    import kb_metadata
+    return kb_metadata
+
+
 def _resolve_travel_shared_tenant_ids(tenant_id: str, source_type: str) -> List[str]:
     """聚合该租户所有子智能体已启用共享的来源租户 ID（∩ 租户级授权），含本租户。
 
@@ -313,14 +328,12 @@ async def update_attraction_kb(doc_id: int, request: Request, body: Dict[str, An
         if "title" in body:
             updates.append("title = %s")
             params.append(body["title"])
-        if "metadata" in body:
-            existing_meta = row["metadata"] or {}
-            if isinstance(existing_meta, str):
-                try:
-                    existing_meta = json.loads(existing_meta)
-                except (json.JSONDecodeError, TypeError):
-                    existing_meta = {}
-            merged = {**existing_meta, **body["metadata"]}
+        # 表字段（ticket/project）改写 metadata.raw_payload；metadata 合并后
+        # 业务键同步镜像进 raw_payload（D2：顶层存储本位 + raw_payload 镜像双写）
+        if "metadata" in body or "ticket_table" in body or "project_table" in body:
+            table_updates = {k: body[k] for k in ("ticket_table", "project_table") if k in body}
+            merged = _kb_metadata().apply_put_metadata(
+                row["metadata"], body.get("metadata"), table_updates)
             updates.append("metadata = %s")
             params.append(json.dumps(merged, ensure_ascii=False))
         if updates:
@@ -330,6 +343,9 @@ async def update_attraction_kb(doc_id: int, request: Request, body: Dict[str, An
         if "info" in body:
             cursor.execute("UPDATE chunks SET text = %s WHERE doc_id = %s AND chunk_index = 0",
                            (body["info"], doc_id))
+        # 过渡期双写：未迁移文档的 chunk 1/2 行仍存在时同步更新，保持
+        # raw/chunk 文本一致（迁移 --verify 与 --drop-chunks 校验依赖的不变量）；
+        # 已迁移/新导入文档 0 行命中无副作用。Phase 5 清场后随清理任务移除
         if "ticket_table" in body:
             cursor.execute("UPDATE chunks SET text = %s WHERE doc_id = %s AND chunk_index = 1",
                            (body["ticket_table"], doc_id))
@@ -491,13 +507,23 @@ async def patch_attraction_images(
             detail="action 必须是 replace_cover / add_gallery / remove_cover / remove_gallery_file_id",
         )
 
-    # 3. 写回 documents.metadata（合并 images 字段，保留其他 metadata 不变）
+    # 3. 写回 documents.metadata（合并 images 字段，保留其他 metadata 不变；
+    #    raw_payload.images 同步镜像，D2 双写一致性）
     new_images_meta = {}
     if cover_now:
         new_images_meta["cover"] = cover_now
     if gallery_now:
         new_images_meta["gallery"] = gallery_now
     merged_meta = {**existing_meta, "images": new_images_meta} if new_images_meta else {k: v for k, v in existing_meta.items() if k != "images"}
+    _kb_metadata().sync_raw_payload(merged_meta)
+    if not new_images_meta:
+        # 全删分支：顶层 images 键已剔除，同步删除 raw_payload.images 镜像
+        # （sync 只增改不删，镜像删除需显式——否则已删图片持续对 LLM 可见）
+        raw = merged_meta.get("raw_payload")
+        if isinstance(raw, dict):
+            raw.pop("images", None)
+            if not raw:
+                merged_meta.pop("raw_payload", None)
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -565,14 +591,12 @@ async def update_hotel_kb(doc_id: int, request: Request, body: Dict[str, Any]):
         if "title" in body:
             updates.append("title = %s")
             params.append(body["title"])
-        if "metadata" in body:
-            existing_meta = row["metadata"] or {}
-            if isinstance(existing_meta, str):
-                try:
-                    existing_meta = json.loads(existing_meta)
-                except (json.JSONDecodeError, TypeError):
-                    existing_meta = {}
-            merged = {**existing_meta, **body["metadata"]}
+        # 表字段（price_table）改写 metadata.raw_payload；metadata 合并后
+        # 业务键同步镜像进 raw_payload（D2：顶层存储本位 + raw_payload 镜像双写）
+        if "metadata" in body or "price_table" in body:
+            table_updates = {"price_table": body["price_table"]} if "price_table" in body else {}
+            merged = _kb_metadata().apply_put_metadata(
+                row["metadata"], body.get("metadata"), table_updates)
             updates.append("metadata = %s")
             params.append(json.dumps(merged, ensure_ascii=False))
         if updates:
@@ -582,6 +606,8 @@ async def update_hotel_kb(doc_id: int, request: Request, body: Dict[str, Any]):
         if "info" in body:
             cursor.execute("UPDATE chunks SET text = %s WHERE doc_id = %s AND chunk_index = 0",
                            (body["info"], doc_id))
+        # 过渡期双写：未迁移文档的 chunk 1 行仍存在时同步更新（迁移校验不变量）；
+        # 已迁移/新导入文档 0 行命中无副作用。Phase 5 清场后随清理任务移除
         if "price_table" in body:
             cursor.execute("UPDATE chunks SET text = %s WHERE doc_id = %s AND chunk_index = 1",
                            (body["price_table"], doc_id))

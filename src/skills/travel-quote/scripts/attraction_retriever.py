@@ -4,7 +4,9 @@
 
 在 documents + chunks + chunks_vec 知识库中检索景点资源。
 - chunk_index=0: 景点信息摘要（已向量化）
-- chunk_index=1: 门票价格表（不向量化）
+- 门票/项目价格表：metadata.raw_payload.ticket_table / project_table
+  （Phase 2 起单一数据源；存量未迁移数据回退 chunk_index=1/2，
+  Phase 5 清场后移除回退）
 - source_type='attraction_resource'
 """
 
@@ -12,6 +14,8 @@ import json
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
+
+import kb_metadata
 
 
 class AttractionRetriever:
@@ -214,25 +218,30 @@ class AttractionRetriever:
             row = conn.fetchone()
             return row["text"] if row else None
 
-    def get_ticket_table(self, doc_id: int) -> Optional[str]:
-        """取出景点门票价格表（chunk_index=1）"""
+    def _get_table_text(self, doc_id: int, key: str, chunk_index: int) -> Optional[str]:
+        """表文本读取公共路径：优先 metadata.raw_payload（单一数据源），
+        未迁移存量回退对应 chunk 位次（过渡期兼容，Phase 5 清场后随清理任务移除）"""
         with self._get_conn() as conn:
+            conn.execute("SELECT metadata FROM documents WHERE id = %s", (doc_id,))
+            row = conn.fetchone()
+            if row:
+                text = kb_metadata.get_payload_table_text(row["metadata"], key)
+                if text is not None:
+                    return text
             conn.execute(
-                "SELECT text FROM chunks WHERE doc_id = %s AND chunk_index = 1",
-                (doc_id,)
+                "SELECT text FROM chunks WHERE doc_id = %s AND chunk_index = %s",
+                (doc_id, chunk_index)
             )
             row = conn.fetchone()
             return row["text"] if row else None
 
+    def get_ticket_table(self, doc_id: int) -> Optional[str]:
+        """取出景点门票价格表（raw_payload.ticket_table，回退 chunk 1）"""
+        return self._get_table_text(doc_id, "ticket_table", 1)
+
     def get_project_table(self, doc_id: int) -> Optional[str]:
-        """取出景点项目/服务价格表（chunk_index=2）"""
-        with self._get_conn() as conn:
-            conn.execute(
-                "SELECT text FROM chunks WHERE doc_id = %s AND chunk_index = 2",
-                (doc_id,)
-            )
-            row = conn.fetchone()
-            return row["text"] if row else None
+        """取出景点项目/服务价格表（raw_payload.project_table，回退 chunk 2）"""
+        return self._get_table_text(doc_id, "project_table", 2)
 
     # ----------------------------------------------------------
     # 导入
@@ -260,22 +269,24 @@ class AttractionRetriever:
             attraction_name: 景点名称
             region: 区域
             info_text: 景点信息摘要（chunk 0，会向量化）
-            ticket_table_text: 门票价格表（chunk 1，不向量化）
-            project_table_text: 项目/服务价格表（chunk 2，不向量化）
+            ticket_table_text: 门票价格表（写入 raw_payload.ticket_table，不向量化）
+            project_table_text: 项目/服务价格表（写入 raw_payload.project_table，不向量化）
             metadata: 额外元信息
             source_file: 来源文件名（仅记入 metadata）
             user_id: 上传用户 ID
             cover_image_path: 封面图本地路径；提供时注册到 ImageRegistry 并写入
-                metadata.images.cover（source="knowledge_base", usage="thumbnail"）
+                metadata.images.cover（顶层与 raw_payload 镜像同步；source="knowledge_base",
+                usage="thumbnail"）
             gallery_image_paths: 图集本地路径列表；提供时循环注册，写入
-                metadata.images.gallery（file_id 列表）
+                metadata.images.gallery（file_id 列表，同步镜像进 raw_payload）
 
         Returns:
             doc_id
 
         Notes:
             - 单张图片注册失败仅记 warning 不阻断（设计文档 §5.1.1 metadata.images 契约）
-            - chunks / chunks_vec 部分逻辑与改造前完全一致
+            - 表文本写入 metadata.raw_payload（统一知识库工具默认透出），不再插
+              chunks 1/2；顶层业务键同步镜像（设计 §3/D2）
         """
         # reset 后向量化，配合下方独立落库计费（避免批量导入时计数器累积重复记账）
         client = self._get_embedding_client()
@@ -298,15 +309,25 @@ class AttractionRetriever:
 
         embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
-        # 先用原始 metadata 创建 document 拿 doc_id（图片注册需要 linked_doc_id）
-        initial_meta_json = json.dumps(metadata or {}, ensure_ascii=False)
+        # metadata：表键入 raw_payload → 业务键镜像（region 等）。图片注册后经
+        # sync_raw_payload 再同步 images 镜像，两处始终一致
+        base_meta = dict(metadata or {})
+        if region:
+            base_meta.setdefault("region", region)  # 确定性补入顶层（设计 §3；parser 偶尔漏输出时兜底）
+        kb_metadata.put_table_keys(base_meta, {
+            "ticket_table": ticket_table_text,
+            "project_table": project_table_text,
+        })
+        kb_metadata.sync_raw_payload(base_meta)
+        initial_meta_json = json.dumps(base_meta, ensure_ascii=False)
 
         with self._get_conn() as conn:
-            # 1. 创建 document（先用初始 metadata，后续可能 UPDATE 合入 images）
+            # 1. 创建 document（先用初始 metadata，后续可能 UPDATE 合入 images；
+            #    仅 chunk 0 摘要，表数据在 metadata.raw_payload）
             conn.execute("""
                 INSERT INTO documents (user_id, tenant_id, title, source_type, file_type, file_path,
                                        total_chunks, embedding_model, metadata, summary)
-                VALUES (%s, %s, %s, %s, 'xlsx', %s, 3, 'text-embedding-v3', %s, %s)
+                VALUES (%s, %s, %s, %s, 'xlsx', %s, 1, 'text-embedding-v3', %s, %s)
                 RETURNING id
             """, (user_id, tenant_id, f"景点：{attraction_name}", self.SOURCE_TYPE,
                   source_file, initial_meta_json, info_text))
@@ -321,21 +342,7 @@ class AttractionRetriever:
                   json.dumps({"type": "attraction_info", "region": region}, ensure_ascii=False)))
             chunk_id_0 = conn.fetchone()["id"]
 
-            # 3. 插入 chunk 1（门票价格表）
-            conn.execute("""
-                INSERT INTO chunks (doc_id, chunk_index, text, tokens, metadata)
-                VALUES (%s, 1, %s, %s, %s)
-            """, (doc_id, ticket_table_text, len(ticket_table_text),
-                  json.dumps({"type": "ticket_table"}, ensure_ascii=False)))
-
-            # 4. 插入 chunk 2（项目/服务价格表）
-            conn.execute("""
-                INSERT INTO chunks (doc_id, chunk_index, text, tokens, metadata)
-                VALUES (%s, 2, %s, %s, %s)
-            """, (doc_id, project_table_text, len(project_table_text),
-                  json.dumps({"type": "project_table"}, ensure_ascii=False)))
-
-            # 5. 向量化 chunk 0
+            # 3. 向量化 chunk 0
             conn.execute("""
                 INSERT INTO chunks_vec (chunk_id, embedding)
                 VALUES (%s, %s::vector)
@@ -396,8 +403,10 @@ class AttractionRetriever:
                     images_meta["gallery"] = gallery_file_ids
 
         # 7. 如果有图片注册成功，合并到 metadata 并 UPDATE documents
+        #    （顶层 images + raw_payload.images 镜像同步，D2 双写一致性）
         if images_meta:
-            final_metadata = {**(metadata or {}), "images": images_meta}
+            final_metadata = {**base_meta, "images": images_meta}
+            kb_metadata.sync_raw_payload(final_metadata)
             final_meta_json = json.dumps(final_metadata, ensure_ascii=False)
             with self._get_conn() as conn:
                 conn.execute(

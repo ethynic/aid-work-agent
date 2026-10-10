@@ -8,7 +8,7 @@
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
 | Phase 1 | 迁移脚本 + 单测（dry-run/execute/verify/幂等/32KB 告警） | ✅ 已完成 | 2026-10-10：脚本 + 37 单测 + 3 集成（真实库写路径乐观锁三方向）全过；真实库 dry-run 286 文档零冲突零超限。独立测试（3 P2）+ 独立 CR（2 P1 + 5 P2 + 复核发现 1 P0 乐观锁方向反写）全部修复并经 CR 终审「可合入」 |
-| Phase 2 | 写读路径切 metadata（importer / PUT / PATCH / retrievers 兼容回退读）+ 单测 | 📋 待开发 | — |
+| Phase 2 | 写读路径切 metadata（importer / PUT / PATCH / retrievers 兼容回退读）+ 单测 | ✅ 已完成 | 2026-10-10：kb_metadata 共享模块 + 两 importer/两 PUT/PATCH/retriever getter 全切换；独立测试（3 P1）+ 独立 CR（2 P1 + 2 P2）全部修复并终审可合入；工具回退正例、PUT 端点级、注入剥离、计费回归齐备；全量回归 2347 过（1 存量无关失败） |
 | Phase 3 | 统一工具 cover_image 增强 + agent_events documents 扫描 + 测试 | 📋 待开发 | — |
 | Phase 4 | 工具下线（删类 / 黄金清单 / SUBAGENT.md 改写 / 测试清理） | 📋 待开发 | — |
 | Phase 5 | 真机迁移执行（--execute → verify → 观察 ≥1 周 → --drop-chunks，需用户部署授权） | 📋 待开发 | — |
@@ -26,11 +26,14 @@
 
 ## Phase 2 — 写读路径切换
 
-- [ ] `import_hotel` / `import_attraction`：表文本写 `raw_payload`、业务键镜像、total_chunks=1、不再插 chunks 1/2
-- [ ] `PUT /kb/hotels|attractions/{doc_id}`：三个表字段改写 `raw_payload`；`metadata` 合并时同步镜像业务键
-- [ ] `PATCH /kb/attractions/{doc_id}/images`：顶层 `images` 与 `raw_payload.images` 同事务同步
-- [ ] `HotelRetriever.get_price_table` / `AttractionRetriever.get_ticket_table/get_project_table`：优先 `raw_payload`，回退 chunk 1/2
-- [ ] 单测：导入→检索→报价取表闭环；PUT/PATCH 双写一致性；回退读
+✅ 2026-10-10 完成。实现细化见设计 §4 D2「Phase 2 实现细化」（共享模块 / 过渡期双写 / region 补顶层 / 空串语义）。
+
+- [x] `import_hotel` / `import_attraction`：表文本写 `raw_payload`、业务键镜像、total_chunks=1、不再插 chunks 1/2
+- [x] `PUT /kb/hotels|attractions/{doc_id}`：三个表字段改写 `raw_payload`；`metadata` 合并时同步镜像业务键（body 的 raw_payload/images/系统键/表键剥离，防 LLM 通道注入）
+- [x] `PATCH /kb/attractions/{doc_id}/images`：顶层 `images` 与 `raw_payload.images` 同步（含全删分支镜像清理）
+- [x] `HotelRetriever.get_price_table` / `AttractionRetriever.get_ticket_table/get_project_table`：优先 `raw_payload`，回退 chunk 1/2
+- [x] 部署窗口保护：attraction/hotel_search 两工具取表加 raw_payload 回退（Phase 4 下线前新导入数据不缺表，设计 §5 风险 #7）
+- [x] 单测：kb_metadata 合成/镜像/注入剥离；retriever 导入写路径与回退读边界；PATCH 双写/双清；PUT 端点级四方向；工具回退正例；导入计费回归
 
 ## Phase 3 — 统一工具图片增强
 
@@ -64,3 +67,5 @@
 
 - 迁移只增改 `documents.metadata`（保留 chunks），任意时刻可重跑 verify 核对；回退即恢复读取 chunks 路径（Phase 2 回退读天然支持）。
 - `--drop-chunks` 为不可逆动作（chunks 1/2 删除），前置条件：verify 通过 + 观察期无回归 + 用户明确授权；执行前对两类资源行数与文本做导出备份。
+- **部署顺序**：Phase 2 先于 Phase 4 上线时，attraction/hotel_search 两工具已加 raw_payload 取表回退（见设计 §5 风险 #7），新导入文档不缺表；Phase 3/4 可独立节奏发布。
+- **注入防护**：PUT body 的 metadata 剥离 raw_payload/images/系统键/表键（设计 §5 风险 #8），表数据只能经表字段写入。

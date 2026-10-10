@@ -87,7 +87,7 @@ def _make_mock_conn(fetchall_side_effects):
 async def test_search_returns_cover_image_when_metadata_has_cover():
     """metadata.images.cover 存在时，cover_image 应为 ImageRef dict（含 file_id）"""
     rows = [_build_row(metadata={"region": "安顺", "images": {"cover": "file_cover001"}})]
-    mock_conn = _make_mock_conn([rows, []])  # 第一次查 chunks_vec，第二次查 chunk_index=2
+    mock_conn = _make_mock_conn([rows, [], []])  # 第一次查 chunks_vec，第二次查 chunk_index=2，第三次查 raw_payload 回退（新导入文档）
     expected_ref = _make_image_ref("file_cover001")
 
     with patch(
@@ -121,7 +121,7 @@ async def test_search_returns_cover_image_when_metadata_has_cover():
 async def test_search_returns_null_when_no_cover():
     """metadata 无 images 键时，cover_image 应为 None"""
     rows = [_build_row(metadata={"region": "安顺"})]  # 无 images
-    mock_conn = _make_mock_conn([rows, []])
+    mock_conn = _make_mock_conn([rows, [], []])
 
     with patch(
         "src.tools.knowledge.attraction_search_tool.get_db_connection",
@@ -145,7 +145,7 @@ async def test_search_returns_null_when_no_cover():
 async def test_search_returns_null_when_images_meta_not_dict():
     """metadata.images 为字符串（脏数据）时，cover_image 应为 None 不抛异常"""
     rows = [_build_row(metadata={"region": "安顺", "images": "not_a_dict"})]
-    mock_conn = _make_mock_conn([rows, []])
+    mock_conn = _make_mock_conn([rows, [], []])
 
     with patch(
         "src.tools.knowledge.attraction_search_tool.get_db_connection",
@@ -169,7 +169,7 @@ async def test_search_returns_null_when_images_meta_not_dict():
 async def test_search_resolve_failure_does_not_block():
     """registry.get_ref_by_file_id 抛异常时，仅 warning，cover_image=None，其他字段正常"""
     rows = [_build_row(metadata={"region": "安顺", "images": {"cover": "file_bad"}})]
-    mock_conn = _make_mock_conn([rows, []])
+    mock_conn = _make_mock_conn([rows, [], []])
 
     boom_registry = MagicMock()
     boom_registry.get_ref_by_file_id = AsyncMock(side_effect=RuntimeError("redis down"))

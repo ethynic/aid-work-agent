@@ -75,7 +75,11 @@ class TestPatchAttractionImages:
         """action=replace_cover：上传新封面，cover 被替换为新 file_id"""
         from src.core.image_asset import ImageRef
 
-        existing_meta = {"category": "natural", "images": {"cover": "file_OLD123"}}
+        existing_meta = {
+            "category": "natural",
+            "images": {"cover": "file_OLD123"},
+            "raw_payload": {"category": "natural", "images": {"cover": "file_OLD123"}},
+        }
         _make_conn, captured = _mock_db_connection(existing_meta)
 
         fake_ref = ImageRef(
@@ -111,6 +115,8 @@ class TestPatchAttractionImages:
         params = captured["update_params"][0]
         merged = json.loads(params[0])
         assert merged["images"]["cover"] == "file_NEW456"
+        # raw_payload.images 镜像同步更新（D2 双写一致性）
+        assert merged["raw_payload"]["images"]["cover"] == "file_NEW456"
         # 其他 metadata 保留
         assert merged["category"] == "natural"
 
@@ -239,8 +245,15 @@ class TestPatchAttractionImages:
 
     @pytest.mark.asyncio
     async def test_remove_gallery_last_id_drops_images_key(self):
-        """删图后 cover+gallery 全空时，metadata 不保留 images 键"""
-        existing_meta = {"category": "natural", "images": {"gallery": ["file_G1"]}}
+        """删图后 cover+gallery 全空时，metadata 不保留 images 键（顶层与 raw_payload 镜像一并清除）"""
+        existing_meta = {
+            "category": "natural",
+            "images": {"gallery": ["file_G1"]},
+            "raw_payload": {
+                "ticket_table": "T", "project_table": "P", "category": "natural",
+                "images": {"gallery": ["file_G1"]},
+            },
+        }
         _make_conn, captured = _mock_db_connection(existing_meta)
 
         with patch.object(tq, "_get_tenant_id", return_value="t1"), \
@@ -258,6 +271,11 @@ class TestPatchAttractionImages:
         merged = json.loads(captured["update_params"][0][0])
         # images 键被完全移除（cover+gallery 全空）
         assert "images" not in merged
+        # raw_payload.images 镜像同步删除（P1 回归：已删图片不得残留对 LLM 可见）
+        assert "images" not in merged["raw_payload"]
+        # 表键与其他镜像键保留
+        assert merged["raw_payload"]["ticket_table"] == "T"
+        assert merged["raw_payload"]["category"] == "natural"
         # 其他 metadata 保留
         assert merged["category"] == "natural"
 
