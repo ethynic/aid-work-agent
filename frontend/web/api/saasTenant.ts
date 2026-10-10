@@ -6,6 +6,7 @@
  */
 
 import { getTenantScopedKey } from './tenantStorage'
+import { prepareLogout } from '@/platform/logoutHooks'
 import { credentialGet, credentialRemove } from '@/platform/credentialStore'
 
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/saas`
@@ -84,19 +85,33 @@ export async function adminLogout(): Promise<void> {
   }
 
   const token = credentialGet(tokenKey)
-  if (token) {
-    try {
-      await fetch(`${API_BASE}/auth/admin_logout`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-    } catch (e) {
-      console.warn('admin_logout 调用失败，继续清理本地状态:', e)
+  const adminSnapshot = credentialGet(adminKey)
+  const tenantSnapshot = credentialGet(tenantKey)
+  let cleanup: Awaited<ReturnType<typeof prepareLogout>> | undefined
+  let serverSuccess = false
+  try {
+    cleanup = await prepareLogout()
+    if (token) {
+      const controller = new AbortController()
+      const deadline = setTimeout(() => controller.abort(), 15_000)
+      try {
+        const response = await fetch(`${API_BASE}/auth/admin_logout`, {
+          method: 'POST',
+          signal: controller.signal,
+          headers: { 'Authorization': `Bearer ${token}`, ...cleanup.headers, ...(window.location.pathname.match(/^\/t\/([^/]+)/)?.[1] ? { 'X-Tenant-Id': window.location.pathname.match(/^\/t\/([^/]+)/)![1] } : {}) }
+        })
+        serverSuccess = response.ok
+      } catch (e) {
+        console.warn('admin_logout 调用失败，继续清理本地状态:', e)
+      } finally { clearTimeout(deadline) }
     }
+  } finally {
+    try {
+      if (credentialGet(tokenKey) === token && credentialGet(adminKey) === adminSnapshot) await credentialRemove(adminKey)
+      if (credentialGet(tokenKey) === token && credentialGet(tenantKey) === tenantSnapshot) await credentialRemove(tenantKey)
+      if (credentialGet(tokenKey) === token) await credentialRemove(tokenKey)
+    } finally { await cleanup?.complete(serverSuccess) }
   }
-  await credentialRemove(adminKey)
-  await credentialRemove(tenantKey)
-  await credentialRemove(tokenKey)
 }
 
 // ==================== 租户信息 ====================

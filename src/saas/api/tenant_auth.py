@@ -750,11 +750,11 @@ async def admin_logout(request: Request):
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
         # token 删除前验证一次拿 user_id（登出审计需要操作人身份）
-        user_id = verify_token(token, auto_refresh=False)
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM tokens WHERE token = %s", (token,))
-            conn.commit()
+        import asyncio
+        from src.api.auth import delete_token
+        user_id = await asyncio.to_thread(verify_token, token, auto_refresh=False)
+        await asyncio.to_thread(delete_token, token, notification_user_id=user_id,
+                                notification_headers=request.headers)
         await record_behavior(request, BehaviorAction.LOGOUT, user_id=user_id)
     else:
         await record_behavior(request, BehaviorAction.LOGOUT, success=False,

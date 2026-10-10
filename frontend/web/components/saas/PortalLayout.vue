@@ -1,7 +1,8 @@
 <template>
   <div class="h-screen flex bg-surface-hover">
     <!-- 管理后台菜单 - 仅 /portal 路由下显示 -->
-    <aside v-if="!isTenantRoute" class="w-60 bg-gray-900 text-white flex flex-col flex-shrink-0">
+    <div v-if="!isTenantRoute && isMobile && !sidebarCollapsed" class="fixed inset-0 z-30 bg-gray-900/40" @click="sidebarCollapsed = true" />
+    <aside v-if="!isTenantRoute && !sidebarCollapsed" class="w-60 bg-gray-900 text-white flex flex-col flex-shrink-0" :class="isMobile ? 'fixed inset-y-0 left-0 z-40' : ''">
       <!-- 企业信息 -->
       <div class="p-4 border-b border-gray-700 flex items-center gap-3">
         <img
@@ -22,6 +23,7 @@
           v-for="item in currentMenuItems"
           :key="item.path"
           :to="item.path"
+          @click="isMobile && (sidebarCollapsed = true)"
           class="flex items-center gap-3 px-4 py-3 text-sm transition-colors hover:bg-gray-800"
           :class="isActive(item.path) ? 'bg-gray-800 text-primary-400 border-r-2 border-primary-400' : 'text-gray-300'"
         >
@@ -211,6 +213,7 @@ const logoUrl = computed(() => {
 // /portal 下的菜单（仅平台管理员）
 // icon 字段为统一的 SVG path 数据，使用 stroke="currentColor" 的细线描边风格
 const portalMenuItems = [
+  { path: '/portal/notifications', label: '通知设置', icon: 'M18 8a6 6 0 00-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4' },
   // 仪表盘：九宫格统计图（与参考图风格一致）
   { path: '/portal', label: '仪表盘', icon: 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z' },
   // 租户管理：办公建筑

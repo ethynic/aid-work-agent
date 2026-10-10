@@ -5,11 +5,13 @@
 """
 
 import os
+import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import yaml
-from pydantic import BaseModel, Field, validator
+from pydantic import SecretStr, BaseModel, Field, validator
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -674,6 +676,38 @@ class AgentRunnerConfig(BaseModel):
         return value
 
 
+class NotificationPreviousKey(BaseModel):
+    private_key: SecretStr = Field(default_factory=lambda: SecretStr(''))
+    accept_until: datetime | None = None
+
+
+class WebPushConfig(BaseModel):
+    enabled: bool = False
+    key_id: str = Field(default='v1', min_length=1, max_length=64)
+    public_key: str = ''
+    private_key: SecretStr = Field(default_factory=lambda: SecretStr(''))
+    subject: str = ''
+    previous_keys: Dict[str, NotificationPreviousKey] = Field(default_factory=dict)
+    allowed_hosts: List[str] = Field(default_factory=lambda: [
+        'fcm.googleapis.com', 'updates.push.services.mozilla.com',
+        'web.push.apple.com', '*.notify.windows.com'])
+    timeout_seconds: int = Field(default=10, ge=1, le=30)
+
+
+class NotificationsConfig(BaseModel):
+    rate_per_second: int = Field(default=5, ge=1, le=100)
+    enabled: bool = False
+    ttl_seconds: int = Field(default=86400, ge=60, le=604800)
+    max_attempts: int = Field(default=6, ge=1, le=20)
+    concurrency: int = Field(default=4, ge=1, le=16)
+    lease_seconds: int = Field(default=120, ge=90, le=600)
+    poll_seconds: float = Field(default=2.0, gt=0, le=60)
+    batch_size: int = Field(default=50, ge=1, le=200)
+    retention_days: int = Field(default=30, ge=1, le=365)
+    allowed_tenants: List[str] | None = None  # None: all active tenants; []: none.
+    web_push: WebPushConfig = Field(default_factory=WebPushConfig)
+
+
 class Settings(BaseModel):
     """全局配置"""
     app: AppConfig = Field(default_factory=AppConfig)
@@ -699,6 +733,7 @@ class Settings(BaseModel):
     session_history: SessionHistoryConfig = Field(default_factory=SessionHistoryConfig)
     desktop_agent: DesktopAgentConfig = Field(default_factory=DesktopAgentConfig)
     agent_runner: AgentRunnerConfig = Field(default_factory=AgentRunnerConfig)
+    notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
 
     # 认证相关配置（从环境变量加载）
     qb_token: str = ""  # 平台管理员超级token（明文，仅用于向后兼容，推荐使用 qb_token_hash）
@@ -874,6 +909,21 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         yaml_config.setdefault("app", {})["simulation_mode"] = os.getenv("SIMULATION_MODE", "").lower() in ("true", "1", "yes")
     if os.getenv("PUBLIC_BASE_URL"):
         yaml_config.setdefault("app", {})["public_base_url"] = os.getenv("PUBLIC_BASE_URL")
+
+    notification_cfg = yaml_config.setdefault('notifications', {})
+    push_cfg = notification_cfg.setdefault('web_push', {})
+    for name, field in (('NOTIFICATIONS_ENABLED', 'enabled'),):
+        if os.getenv(name) is not None:
+            notification_cfg[field] = os.environ[name].lower() in ('true', '1', 'yes')
+    if os.getenv('WEB_PUSH_ENABLED') is not None:
+        push_cfg['enabled'] = os.environ['WEB_PUSH_ENABLED'].lower() in ('true', '1', 'yes')
+    for name, field in (('WEB_PUSH_VAPID_PUBLIC_KEY', 'public_key'),
+                        ('WEB_PUSH_VAPID_PRIVATE_KEY', 'private_key'),
+                        ('WEB_PUSH_VAPID_KEY_ID', 'key_id'), ('WEB_PUSH_VAPID_SUBJECT', 'subject')):
+        if os.getenv(name) is not None:
+            push_cfg[field] = os.environ[name]
+    if os.getenv('WEB_PUSH_VAPID_PREVIOUS_KEYS') is not None:
+        push_cfg['previous_keys'] = json.loads(os.environ['WEB_PUSH_VAPID_PREVIOUS_KEYS'])
 
     runner_cfg = yaml_config.setdefault("agent_runner", {})
     if os.getenv("AGENT_RUNNER_WEB_ENABLED") is not None:

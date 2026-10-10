@@ -230,10 +230,16 @@ async def _run():
         logger.opt(exception=True).error(
             f"background runner: 可选模块调度加载失败（不影响 runner）: {e}",
         )
+    # User notifications use this dedicated lifecycle, never request workers.
+    from src.notifications.dispatcher import NotificationDispatcher
+    _notification_dispatcher = NotificationDispatcher()
+    await _notification_dispatcher.start()
     logger.info("background runner 就绪")
 
     await _stop.wait()
     logger.info("background runner 收到停止信号，开始优雅停机")
+
+    await _notification_dispatcher.stop()
 
     # 停机：poller → wechat_mp scheduler → hongtao_shop scheduler → scheduler → DB 池
     try:

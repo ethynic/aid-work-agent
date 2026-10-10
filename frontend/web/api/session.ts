@@ -68,6 +68,14 @@ export interface CreateSessionRequest {
   subagent_id?: string
 }
 
+/** Read one existing session with the same owner/tenant checks as history. */
+export async function getSession(sessionId: string): Promise<ChatSession> {
+  const response = await fetch(`${API_BASE}/${encodeURIComponent(sessionId)}`, { headers: getAuthHeader() })
+  if (!response.ok) throw new Error(response.status === 404 ? '原会话已不存在。' : response.status === 401 || response.status === 403 ? '当前账号无权访问原会话。' : '加载原会话失败，请稍后重试。')
+  const result = await response.json()
+  return result.session
+}
+
 /**
  * 获取当前用户的所有会话（分页）
  */

@@ -5293,3 +5293,199 @@ END $$;
 -- KF 原渠道恢复（2026-10-08）：保留累积建表记录及旧 KF 表，不再由运行代码消费。
 -- 与 db_update.yaml 的 2026-10-08 15:21:10 增量块对齐；新库最终同样无 delivery gate。
 ALTER TABLE IF EXISTS agent_runner_session_claims DROP COLUMN IF EXISTS gate;
+
+-- Notification schema v1: transport configuration and rendered content are protected.
+CREATE TABLE IF NOT EXISTS notification_messages (
+    notification_id TEXT PRIMARY KEY,
+    notification_ref TEXT UNIQUE,
+    schema_version INTEGER DEFAULT 1,
+    producer TEXT,
+    event_type TEXT,
+    event_key TEXT,
+    scope_key TEXT,
+    tenant_id TEXT,
+    recipient_user_id TEXT,
+    resource_ref JSONB,
+    template_key TEXT,
+    template_version INTEGER DEFAULT 1,
+    parameters_encrypted TEXT,
+    occurred_at TIMESTAMPTZ,
+    accepted_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ,
+    category TEXT,
+    priority INTEGER DEFAULT 0,
+    policy_key TEXT,
+    expansion_state TEXT DEFAULT 'pending',
+    route_snapshot JSONB DEFAULT '[]',
+    created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+    CONSTRAINT notification_message_identity UNIQUE(scope_key,recipient_user_id,producer,event_key),
+    CONSTRAINT notification_message_scope CHECK (
+        (tenant_id IS NULL AND scope_key='global') OR
+        (tenant_id IS NOT NULL AND scope_key='tenant:' || tenant_id)),
+    CONSTRAINT notification_message_state CHECK(expansion_state IN ('pending','expanded','expired')),
+    CONSTRAINT notification_message_version CHECK(schema_version=1)
+);
+CREATE INDEX IF NOT EXISTS idx_notification_expansion ON notification_messages(priority DESC,created_at)
+    WHERE expansion_state='pending';
+CREATE INDEX IF NOT EXISTS idx_notification_message_expiry ON notification_messages(expires_at);
+CREATE TABLE IF NOT EXISTS notification_targets (
+    target_id TEXT PRIMARY KEY,
+    scope_key TEXT,
+    tenant_id TEXT,
+    recipient_user_id TEXT,
+    channel TEXT,
+    provider TEXT,
+    installation_ref TEXT,
+    identity_digest TEXT,
+    target_schema_version INTEGER DEFAULT 1,
+    configuration_encrypted TEXT,
+    binding_version BIGINT DEFAULT 1,
+    state TEXT DEFAULT 'active',
+    enabled_since TIMESTAMPTZ DEFAULT clock_timestamp(),
+    verified_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+    created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+    updated_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+    CONSTRAINT notification_target_identity UNIQUE(provider,identity_digest),
+    CONSTRAINT notification_target_scope CHECK (
+        (tenant_id IS NULL AND scope_key='global') OR
+        (tenant_id IS NOT NULL AND scope_key='tenant:' || tenant_id)),
+    CONSTRAINT notification_target_state CHECK(state IN ('active','revoked','invalid')),
+    CONSTRAINT notification_target_version CHECK(binding_version>=1 AND target_schema_version>=1)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_active_installation
+    ON notification_targets(provider,installation_ref) WHERE state='active';
+CREATE INDEX IF NOT EXISTS idx_notification_target_recipient
+    ON notification_targets(scope_key,recipient_user_id,channel,provider,state);
+CREATE TABLE IF NOT EXISTS notification_preferences (
+    scope_key TEXT,
+    tenant_id TEXT,
+    recipient_user_id TEXT,
+    category TEXT,
+    channel TEXT,
+    provider TEXT,
+    enabled BOOLEAN DEFAULT FALSE,
+    event_types JSONB DEFAULT '["task.completed","task.failed"]',
+    enabled_since TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+    PRIMARY KEY(scope_key,recipient_user_id,category,channel,provider),
+    CONSTRAINT notification_preference_scope CHECK (
+        (tenant_id IS NULL AND scope_key='global') OR
+        (tenant_id IS NOT NULL AND scope_key='tenant:' || tenant_id))
+);
+CREATE TABLE IF NOT EXISTS notification_deliveries (
+    delivery_id TEXT PRIMARY KEY,
+    notification_id TEXT,
+    target_id TEXT,
+    binding_version BIGINT,
+    rendered_encrypted TEXT,
+    state TEXT DEFAULT 'pending',
+    attempts INTEGER DEFAULT 0,
+    next_attempt_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+    owner TEXT,
+    lease_until TIMESTAMPTZ,
+    claim_version BIGINT DEFAULT 0,
+    error_class TEXT,
+    provider_acceptance_id TEXT,
+    accepted_at TIMESTAMPTZ,
+    delivered_at TIMESTAMPTZ,
+    displayed_at TIMESTAMPTZ,
+    read_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+    updated_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+    CONSTRAINT notification_delivery_target UNIQUE(notification_id,target_id),
+    CONSTRAINT notification_delivery_state CHECK(state IN
+        ('pending','sending','accepted','expired','skipped','failed','delivered','displayed','read')),
+    CONSTRAINT notification_delivery_attempts CHECK(attempts>=0 AND claim_version>=0)
+);
+CREATE INDEX IF NOT EXISTS idx_notification_delivery_due ON notification_deliveries(next_attempt_at)
+    WHERE state='pending';
+CREATE INDEX IF NOT EXISTS idx_notification_delivery_lease ON notification_deliveries(lease_until)
+    WHERE state='sending';
+CREATE INDEX IF NOT EXISTS idx_notification_delivery_message ON notification_deliveries(notification_id);
+-- Explicit version/type gate: existing incompatible tables must not be relabelled.
+DO $$
+DECLARE wanted RECORD;
+BEGIN
+    FOR wanted IN SELECT * FROM (VALUES
+        ('notification_messages','notification_id','text'),
+        ('notification_messages','notification_ref','text'),
+        ('notification_messages','schema_version','int4'),
+        ('notification_messages','producer','text'),
+        ('notification_messages','event_type','text'),
+        ('notification_messages','event_key','text'),
+        ('notification_messages','scope_key','text'),
+        ('notification_messages','tenant_id','text'),
+        ('notification_messages','recipient_user_id','text'),
+        ('notification_messages','resource_ref','jsonb'),
+        ('notification_messages','template_key','text'),
+        ('notification_messages','template_version','int4'),
+        ('notification_messages','parameters_encrypted','text'),
+        ('notification_messages','occurred_at','timestamptz'),
+        ('notification_messages','accepted_at','timestamptz'),
+        ('notification_messages','expires_at','timestamptz'),
+        ('notification_messages','category','text'),
+        ('notification_messages','priority','int4'),
+        ('notification_messages','policy_key','text'),
+        ('notification_messages','expansion_state','text'),
+        ('notification_messages','route_snapshot','jsonb'),
+        ('notification_messages','created_at','timestamptz'),
+        ('notification_targets','target_id','text'),
+        ('notification_targets','scope_key','text'),
+        ('notification_targets','tenant_id','text'),
+        ('notification_targets','recipient_user_id','text'),
+        ('notification_targets','channel','text'),
+        ('notification_targets','provider','text'),
+        ('notification_targets','installation_ref','text'),
+        ('notification_targets','identity_digest','text'),
+        ('notification_targets','target_schema_version','int4'),
+        ('notification_targets','configuration_encrypted','text'),
+        ('notification_targets','binding_version','int8'),
+        ('notification_targets','state','text'),
+        ('notification_targets','enabled_since','timestamptz'),
+        ('notification_targets','verified_at','timestamptz'),
+        ('notification_targets','created_at','timestamptz'),
+        ('notification_targets','updated_at','timestamptz'),
+        ('notification_preferences','scope_key','text'),
+        ('notification_preferences','tenant_id','text'),
+        ('notification_preferences','recipient_user_id','text'),
+        ('notification_preferences','category','text'),
+        ('notification_preferences','channel','text'),
+        ('notification_preferences','provider','text'),
+        ('notification_preferences','enabled','bool'),
+        ('notification_preferences','event_types','jsonb'),
+        ('notification_preferences','enabled_since','timestamptz'),
+        ('notification_preferences','updated_at','timestamptz'),
+        ('notification_deliveries','delivery_id','text'),
+        ('notification_deliveries','notification_id','text'),
+        ('notification_deliveries','target_id','text'),
+        ('notification_deliveries','binding_version','int8'),
+        ('notification_deliveries','rendered_encrypted','text'),
+        ('notification_deliveries','state','text'),
+        ('notification_deliveries','attempts','int4'),
+        ('notification_deliveries','next_attempt_at','timestamptz'),
+        ('notification_deliveries','owner','text'),
+        ('notification_deliveries','lease_until','timestamptz'),
+        ('notification_deliveries','claim_version','int8'),
+        ('notification_deliveries','error_class','text'),
+        ('notification_deliveries','provider_acceptance_id','text'),
+        ('notification_deliveries','accepted_at','timestamptz'),
+        ('notification_deliveries','delivered_at','timestamptz'),
+        ('notification_deliveries','displayed_at','timestamptz'),
+        ('notification_deliveries','read_at','timestamptz'),
+        ('notification_deliveries','created_at','timestamptz'),
+        ('notification_deliveries','updated_at','timestamptz')) AS spec(table_name,column_name,type_name) LOOP
+        IF NOT EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_type t ON t.oid=a.atttypid
+            WHERE a.attrelid=to_regclass(wanted.table_name) AND a.attname=wanted.column_name
+            AND NOT a.attisdropped AND t.typname=wanted.type_name) THEN
+            RAISE EXCEPTION 'NOTIFICATION_SCHEMA_COLUMNS_REQUIRED';
+        END IF;
+        IF obj_description(to_regclass(wanted.table_name)) IS NOT NULL
+            AND obj_description(to_regclass(wanted.table_name)) <> 'AID_NOTIFICATION_SCHEMA_V1' THEN
+            RAISE EXCEPTION 'NOTIFICATION_SCHEMA_VERSION_REQUIRED';
+        END IF;
+    END LOOP;
+END $$;
+COMMENT ON TABLE notification_messages IS 'AID_NOTIFICATION_SCHEMA_V1';
+COMMENT ON TABLE notification_targets IS 'AID_NOTIFICATION_SCHEMA_V1';
+COMMENT ON TABLE notification_preferences IS 'AID_NOTIFICATION_SCHEMA_V1';
+COMMENT ON TABLE notification_deliveries IS 'AID_NOTIFICATION_SCHEMA_V1';

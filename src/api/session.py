@@ -176,6 +176,24 @@ async def delete_session(request: Request, session_id: str):
     raise HTTPException(status_code=500, detail="删除失败")
 
 
+@router.get("/{session_id}")
+async def get_session(request: Request, session_id: str):
+    """Read existing-session metadata using the same fresh ownership guard."""
+    from src.api.web_subject import owned_web_session
+    session = await asyncio.to_thread(owned_web_session, request.headers.get('Authorization', ''),
+                                      request.headers.get('X-Tenant-Id'), session_id)
+    import json
+    context = session.get('context_data')
+    if isinstance(context, str):
+        try:
+            context = json.loads(context)
+        except (ValueError, TypeError):
+            context = None
+    return {"session": {**{key: session.get(key) for key in (
+        'session_id', 'user_id', 'tenant_id', 'title', 'subagent_id', 'instance_id',
+        'created_at', 'updated_at')}, 'context_data': context}}
+
+
 @router.get("/{session_id}/messages")
 async def list_messages(request: Request, session_id: str, limit: int = 100):
     """获取会话的所有消息"""

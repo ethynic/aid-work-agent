@@ -103,6 +103,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { notificationReturnUrl } from '@/notifications/returnUrl'
 import { useToast } from 'vue-toastification'
 import { getCaptcha } from '@/api/auth'
 import { adminPasswordLogin, getTenantPublicInfo } from '@/api/saasTenant'
@@ -209,7 +210,10 @@ async function handleLogin() {
         })
       }
       // 根据当前路由决定跳转
-      if (isPortalRoute.value) {
+      const notificationReturn = notificationReturnUrl(route.query.return_to)
+      if (notificationReturn) {
+        window.location.assign(notificationReturn)
+      } else if (isPortalRoute.value) {
         router.push('/portal')
       } else {
         router.push(`/t/${tenantId.value}`)

@@ -11,6 +11,7 @@ import { ref, computed } from 'vue'
 import { adminLogout as apiLogout } from '@/api/saasTenant'
 import { getTenantScopedKey, type SaasBaseKey } from '@/api/tenantStorage'
 import { credentialGet, credentialRemove, credentialSet } from '@/platform/credentialStore'
+import { prepareIdentityChange } from '@/platform/identityHooks'
 import { useCreditCheck } from './useCreditCheck'
 
 export interface TenantAdmin {
@@ -175,19 +176,22 @@ export function useTenantAuth() {
    * 敏感信息（手机号等）通过 API 获取，不持久化到 localStorage。
    */
   async function setLogin(token: string, adminInfo: TenantAdmin, tenantInfo: TenantInfo) {
+    const identityCleanup = await prepareIdentityChange({ user_id: adminInfo.user_id, tenant_id: tenantInfo.tenant_id || null })
     // 按 tenant_id 解析目标 key（兼容登录页路由与目标路由不一致的场景）
     const tokenKey = resolveLoginKey('saas_token', tenantInfo.tenant_id)
     const adminKey = resolveLoginKey('saas_admin', tenantInfo.tenant_id)
     const tenantKey = resolveLoginKey('saas_tenant', tenantInfo.tenant_id)
 
     // 仅存储非敏感字段
-    await credentialSet(adminKey, JSON.stringify({
-      user_id: adminInfo.user_id,
-      username: adminInfo.username,
-      role: adminInfo.role,
-    }))
-    await credentialSet(tenantKey, JSON.stringify(tenantInfo))
-    await credentialSet(tokenKey, token)
+    try {
+      await credentialSet(adminKey, JSON.stringify({
+        user_id: adminInfo.user_id,
+        username: adminInfo.username,
+        role: adminInfo.role,
+      }))
+      await credentialSet(tenantKey, JSON.stringify(tenantInfo))
+      await credentialSet(tokenKey, token)
+    } finally { await identityCleanup.complete() }
     saasToken.value = token
     admin.value = adminInfo
     tenant.value = tenantInfo
@@ -205,10 +209,13 @@ export function useTenantAuth() {
    * 登出
    */
   async function logout() {
+    const token = saasToken.value
     await apiLogout()
-    saasToken.value = null
-    admin.value = null
-    tenant.value = null
+    if (saasToken.value === token) {
+      saasToken.value = null
+      admin.value = null
+      tenant.value = null
+    }
   }
 
   /**

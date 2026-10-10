@@ -3,6 +3,7 @@
 包括登录、注册、短信验证码等
 """
 
+import asyncio
 import secrets
 import uuid
 from datetime import datetime, timedelta
@@ -156,11 +157,14 @@ def generate_token(user_id: str) -> str:
     return token
 
 
-def delete_token(token: str) -> bool:
+def delete_token(token: str, *, notification_user_id=None, notification_headers=None) -> bool:
     """删除指定的 token（同时清除 Redis 缓存）"""
     delete_cached(CacheKeys.TOKEN, token)
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        if notification_headers is not None:
+            from src.notifications.logout import revoke_browser_logout_in_tx
+            revoke_browser_logout_in_tx(cursor, notification_user_id, notification_headers)
         cursor.execute("DELETE FROM tokens WHERE token = %s", (token,))
         conn.commit()
         return cursor.rowcount > 0
@@ -840,8 +844,9 @@ async def logout(request: Request):
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
         # token 删除前验证一次拿 user_id（登出审计需要操作人身份）
-        user_id = verify_token(token, auto_refresh=False)
-        delete_token(token)
+        user_id = await asyncio.to_thread(verify_token, token, auto_refresh=False)
+        await asyncio.to_thread(delete_token, token, notification_user_id=user_id,
+                                notification_headers=request.headers)
         await record_behavior(request, BehaviorAction.LOGOUT, user_id=user_id)
     else:
         await record_behavior(request, BehaviorAction.LOGOUT, success=False,

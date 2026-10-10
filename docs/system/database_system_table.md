@@ -863,3 +863,16 @@ Web 与 KF 恢复均须核验原 claim，并将新 attempt/lease 和消费后的
 原渠道恢复不引入新的渠道表族。通用 Runner 和 Web schema 继续维护；任何存量废弃表的物理清理需单独确认范围和数据保留需求。
 
 `agent_runner_session_claims.gate` 的历史建表定义保留，通过 `db_update.yaml` 末尾 `2026-10-08 15:21:10` 幂等删列块退役，初始化 SQL 末尾同步该操作。新库/升级库最终均无 gate；会话执行所有权仍由原 claim/attempt/lease 字段维护。执行该块前必须停止旧 KF 消费者及仍读写 gate 的旧共用 Runner API/worker；本次未运行迁移或操作数据库。
+
+## 统一通知基础设施（2026-10-10）
+
+四张通用系统表的 DDL 同步于 `deploy/init-postgres.sql` 与 `deploy/db_update.yaml` 的 `2026-10-10 17:10:00` 块；表注释版本标识为 `AID_NOTIFICATION_SCHEMA_V1`。通知核心是唯一写入者，启动及 API 检查版本、列类型和关键唯一约束，不自动迁移。设计：[统一通知基础设施](notification-infrastructure-design.md)；计划：[Web 推送](../plans/plan-web-task-push-notification.md)。
+
+| 表 | 字段与职责 |
+|---|---|
+| `notification_messages` | `notification_id` 主键，`notification_ref` 唯一不透明定位引用；schema/template 版本、producer/event_type/event_key；真实 nullable `tenant_id`、`scope_key`、`recipient_user_id`；类型化 `resource_ref`、加密模板参数；`occurred_at/accepted_at/expires_at`、category/priority/policy；`expansion_state/route_snapshot` 固定首次展开路由。唯一 `(scope_key,recipient_user_id,producer,event_key)` 防业务重复发布；pending 部分索引及 expiry 索引服务有界展开与清理 |
+| `notification_targets` | `target_id` 主键；scope/tenant/recipient、channel/provider；`installation_ref` 和 provider 内 `identity_digest`；目标 schema、加密配置；`binding_version/state/enabled_since/verified_at` 与创建更新时间。唯一 `(provider,identity_digest)` 防 endpoint 被其他账号接管；active installation 部分唯一索引和 recipient 索引服务绑定与路由；浏览器 endpoint/密钥仅在 Web 配置密文中，不成为通用表列 |
+| `notification_preferences` | 主键 `(scope_key,recipient_user_id,category,channel,provider)`；真实 tenant、`enabled/event_types/enabled_since/updated_at`。首次启用与关后重开记录新边界；任务仅在偏好及目标均已于接单时启用的情况下展开，不回填历史 |
+| `notification_deliveries` | `delivery_id` 主键，唯一 `(notification_id,target_id)`；固定 `binding_version`、加密渲染快照；state/attempts/next_attempt_at；owner/lease_until/claim_version 提供认领 fencing；受限 error_class/provider_acceptance_id 与 accepted/delivered/displayed/read 时间。pending due、sending lease、message 索引服务重试与清理；Web accepted 仅表示供应商接纳，不写虚构展示或已读回执 |
+
+message、target、preference 的 scope CHECK 保证 NULL tenant 对应 `global`，有 tenant 对应 `tenant:<id>`，用户始终独立隔离。delivery 不重复存租户，所有读写通过原 message/target 核验精确归属。四表无外键、触发器；引用完整性和原资源权限由通知核心在短事务内检查。网络发送不持数据库锁；清理仅删除过保留期的通知消息及其投递账本，不删除 Runner、会话、目标或偏好。参数、配置及渲染内容沿用既有 EncryptionManager，目标配置不存登录 bearer。

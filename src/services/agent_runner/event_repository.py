@@ -86,6 +86,9 @@ class EventRepository:
         updated = decoded(cursor.fetchone())
         if updated is None:
             raise EventContractError('EVENT_HEAD_CHANGED')
+        if selected == 'terminal':
+            from src.notifications.producer import publish_runner_terminal_in_tx
+            publish_runner_terminal_in_tx(cursor, updated)
         return updated, event
 
     @staticmethod

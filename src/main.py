@@ -1837,6 +1837,8 @@ app.include_router(permissions.router)
 app.include_router(reply_styles.router)
 app.include_router(external_customers.router)
 app.include_router(web_sessions.router)
+from src.notifications.api import router as notification_router
+app.include_router(notification_router)
 app.include_router(tenant_migration.router)
 app.include_router(context_compression_routes.router)
 app.include_router(billing_recharges.router)

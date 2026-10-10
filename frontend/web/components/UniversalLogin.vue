@@ -121,6 +121,7 @@
 </template>
 
 <script setup lang="ts">
+import { notificationReturnUrl } from '@/notifications/returnUrl'
 import { ref, onMounted } from 'vue'
 import { useToast } from 'vue-toastification'
 import { getCaptcha } from '@/api/auth'
@@ -250,7 +251,7 @@ async function handleLogin() {
       clearSessionListCache()
 
       // 跳转
-      window.location.href = res.redirect_url
+      window.location.href = notificationReturnUrl(new URLSearchParams(window.location.search).get('return_to')) || res.redirect_url
     } else if (res.errors && res.errors.length > 0) {
       // 处理字段级错误
       res.errors.forEach((error: any) => {

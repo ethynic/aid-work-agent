@@ -3,6 +3,7 @@
  */
 
 import { getTenantScopedKey } from './tenantStorage'
+import { prepareLogout } from '@/platform/logoutHooks'
 import { credentialGet, credentialRemove } from '@/platform/credentialStore'
 
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/auth`
@@ -124,18 +125,31 @@ export async function getCurrentUser(): Promise<any> {
 export async function logout(): Promise<void> {
   const tokenKey = getTenantScopedKey('saas_token')
   const token = credentialGet(tokenKey)
-  if (token) {
-    try {
-      await fetch(`${API_BASE}/logout`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-    } catch {
-      // 服务端注销失败不能阻止安全凭证从本机删除。
+  const userInfo = credentialGet('user_info')
+  let cleanup: Awaited<ReturnType<typeof prepareLogout>> | undefined
+  let serverSuccess = false
+  try {
+    cleanup = await prepareLogout()
+    if (token) {
+      const controller = new AbortController()
+      const deadline = setTimeout(() => controller.abort(), 15_000)
+      try {
+        const response = await fetch(`${API_BASE}/logout`, {
+          method: 'POST',
+          signal: controller.signal,
+          headers: { 'Authorization': `Bearer ${token}`, ...cleanup.headers, ...(window.location.pathname.match(/^\/t\/([^/]+)/)?.[1] ? { 'X-Tenant-Id': window.location.pathname.match(/^\/t\/([^/]+)/)![1] } : {}) }
+        })
+        serverSuccess = response.ok
+      } catch {
+        // 服务端注销失败不能阻止安全凭证从本机删除。
+      } finally { clearTimeout(deadline) }
     }
+  } finally {
+    try {
+      if (credentialGet(tokenKey) === token && credentialGet('user_info') === userInfo) await credentialRemove('user_info')
+      if (credentialGet(tokenKey) === token) await credentialRemove(tokenKey)
+    } finally { await cleanup?.complete(serverSuccess) }
   }
-  await credentialRemove('user_info')
-  await credentialRemove(tokenKey)
 }
 
 /**

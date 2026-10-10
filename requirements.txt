@@ -86,3 +86,6 @@ cryptography>=41.0.0  # Password encryption
 
 # Audio
 pysilk-mod>=1.6.0  # SILK v3/v2 audio decoding (WeChat mobile voice format)
+
+# Standards-based Web Push payload encryption (notification provider).
+pywebpush==2.1.2

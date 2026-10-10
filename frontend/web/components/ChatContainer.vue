@@ -31,6 +31,9 @@
           >
           </AppHeader>
 
+          <p v-if="existingSessionLoading" role="status" class="px-4 py-3 text-muted">正在加载原会话…</p>
+          <p v-if="existingSessionError" role="alert" class="px-4 py-3 text-danger-600">{{ existingSessionError }}</p>
+
           <!-- Messages Area -->
           <div class="flex-1 overflow-hidden">
             <MessageList
@@ -52,7 +55,7 @@
               @upload="handleUpload"
               @remove="handleRemoveFile"
               @stop="abortStreaming"
-              :disabled="isProcessing || isWaitingHuman"
+              :disabled="isProcessing || isWaitingHuman || existingSessionLoading || !!existingSessionError"
               :is-processing="isProcessing"
               :files="currentFiles"
               :can-stop="canStop"
@@ -91,6 +94,9 @@ import MenuSidebar from './MenuSidebar.vue'
 import AttachmentPreviewPanel from './AttachmentPreviewPanel.vue'
 
 import { useAgent } from '@/composables/useAgent'
+import { getSession } from '@/api/session'
+import { getAuthHeader } from '@/api/auth'
+import { sessionNavigationIntent } from '@/utils/chatSessionNavigation'
 import { quickPromptsForSubagent } from '@/utils/quickPrompts'
 import { greetingForSubagent, DEFAULT_GREETING, type SubagentGreeting } from '@/utils/sessionGreetings'
 import { getSubagentGreeting } from '@/api/subagent'
@@ -183,8 +189,54 @@ const instanceId = computed<string | null>(() => {
 
 // 从路由 query 参数中获取预生成的会话 ID（从 Lobby 跳转时传入）
 const pregeneratedSessionId = computed<string | null>(() => {
-  return (route.query._sid as string) || null
+  return route.query._load_session ? null : (route.query._sid as string) || null
 })
+
+// Explicit existing-session navigation; _sid remains reserved for new-session sends.
+const existingSessionLoading = ref(false)
+const existingSessionError = ref('')
+let existingSessionGeneration = 0
+let existingSessionDisposed = false
+function invalidateExistingSession(): void {
+  existingSessionGeneration += 1
+  existingSessionLoading.value = false
+  existingSessionError.value = ''
+}
+async function loadExistingSession(): Promise<boolean> {
+  const requested = route.query._load_session
+  if (existingSessionDisposed) return true
+  if (requested == null) { invalidateExistingSession(); return false }
+  const generation = ++existingSessionGeneration
+  const path = route.fullPath
+  const userId = tenantAdmin.value?.user_id
+  const scope = tenantId.value
+  const auth = JSON.stringify(getAuthHeader())
+  const isCurrent = () => !existingSessionDisposed && generation === existingSessionGeneration &&
+    route.fullPath === path && tenantAdmin.value?.user_id === userId && tenantId.value === scope &&
+    JSON.stringify(getAuthHeader()) === auth
+  existingSessionLoading.value = true
+  existingSessionError.value = ''
+  try {
+    if (typeof requested !== 'string' || !/^[a-zA-Z0-9_-]{1,160}$/.test(requested)) throw new Error('原会话链接无效。')
+    const session = await getSession(requested)
+    if (!isCurrent()) return true
+    if (!session || session.session_id !== requested || (session.tenant_id && session.tenant_id !== tenantId.value) ||
+      (route.query.instance_id && session.instance_id !== route.query.instance_id)) throw new Error('原会话与当前租户或数字员工不匹配。')
+    const sessionAgent = session.subagent_id || session.context_data?.subagent || 'main'
+    if (sessionAgent !== (subagentName.value || 'main')) throw new Error('原会话与当前数字员工不匹配。')
+    const index = sessions.value.findIndex(item => item.session_id === requested)
+    if (index === -1) sessions.value.unshift(session)
+    else sessions.value[index] = session
+    skipNextSwitch.value = currentSessionId.value !== requested
+    selectSession(requested)
+    await switchSession(requested)
+  } catch (e) {
+    if (isCurrent()) existingSessionError.value = e instanceof Error ? e.message : '原会话加载失败。'
+  } finally {
+    if (isCurrent()) existingSessionLoading.value = false
+  }
+  return true
+}
 
 // 可用的数字员工列表（带缓存，避免重复请求）
 const { availableSubagents, loadAvailableSubagents } = useSubagentList()
@@ -450,11 +502,16 @@ async function handleSubagentChange(agentId: string) {
 
 // 模拟在线状态检测
 onMounted(async () => {
+  const navigation = sessionNavigationIntent.value
   // 初始化租户认证状态
   await initAuth()
 
   // 加载可用数字员工列表（带缓存，避免重复请求）
   await loadAvailableSubagents(isTenantMode.value)
+  if (existingSessionDisposed || navigation !== sessionNavigationIntent.value) return
+
+  // Notification links load an authorized existing session before default-agent redirects.
+  if (await loadExistingSession()) return
 
   // 检查并处理主智能体不可用的情况
   await checkAndRedirectIfMainAgentUnavailable()
@@ -482,6 +539,8 @@ onMounted(async () => {
 
 
 onUnmounted(() => {
+  existingSessionDisposed = true
+  invalidateExistingSession()
   // 卸载时关闭附件预览框，避免模块级单例状态残留到重新挂载的对话界面
   closePreview()
 })
@@ -493,6 +552,8 @@ function handleQuickPrompt(message: string) {
 }
 
 async function handleSend(content: string) {
+  if (existingSessionLoading.value || existingSessionError.value) return
+
   //console.log(`[${now()}] [handleSend] start, content length=${content.length}, currentSessionId=`, currentSessionId.value)
 
   // 如果有预生成的会话ID，直接使用它
@@ -596,6 +657,10 @@ watch(effectiveIsLoggedIn, async (loggedIn) => {
     await loadSessions()
   }
 })
+
+watch(sessionNavigationIntent, invalidateExistingSession, { flush: 'sync' })
+watch(() => [tenantAdmin.value, tenantId.value, tenantIsLoggedIn.value], invalidateExistingSession, { flush: 'sync' })
+watch(() => route.fullPath, () => { void loadExistingSession() }, { flush: 'sync' })
 
 // 监听当前会话变化，通过 switchSession 保存/恢复消息
 watch(currentSessionId, async (newSessionId) => {

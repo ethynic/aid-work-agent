@@ -504,6 +504,15 @@
           <span>设置</span>
         </button>
 
+        <button
+          v-if="isTenantMode && tenantIsLoggedIn && !isDesktopNotificationsUnavailable"
+          @click="showUserMenu = false; router.push(`/t/${tenantId}/notifications`)"
+          class="w-full flex items-center gap-3 px-3 py-2 text-left text-sm text-default hover:bg-surface-hover"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 8a6 6 0 00-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" /></svg>
+          <span>通知设置</span>
+        </button>
+
         <!-- 修改密码 -->
         <button
           v-if="isTenantMode && tenantIsLoggedIn"
@@ -795,6 +804,7 @@ import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAgent } from '@/composables/useAgent'
 import { useTheme, type ThemeName } from '@/composables/useTheme'
 import { useDesktopUpdater } from '@/composables/useDesktopUpdater'
+import { notifySessionNavigation } from '@/utils/chatSessionNavigation'
 import { listConnectionSources, listChannels } from '@/api/saasTenant'
 import SettingsDialog from './SettingsDialog.vue'
 import MenuIcon from './ui/MenuIcon.vue'
@@ -827,6 +837,7 @@ const emit = defineEmits<{
 
 const router = useRouter()
 const route = useRoute()
+const isDesktopNotificationsUnavailable = import.meta.env.VITE_DESKTOP_TARGET === 'true'
 const { admin: tenantAdmin, tenant, logout: tenantLogout, isLoggedIn: tenantIsLoggedIn } = useTenantAuth()
 const { currentTheme, setTheme, getAvailableThemes } = useTheme()
 
@@ -1261,6 +1272,7 @@ async function handleNewSession() {
   // 直接清空当前会话，导航到空界面，用户输入第一条消息时才真正创建会话
   isCreating.value = true
   try {
+    notifySessionNavigation()
     selectSession(null)
     // 导航到对应路由（租户模式使用 /t/:tenant_id/chat）
     // 租户模式下，如果有选中的 subagent，尝试匹配 instance_id 传递到 query
@@ -1296,12 +1308,7 @@ async function handleNewSession() {
       targetPath = `/t/${tenantId.value}/chat`
     }
 
-    if (route.path !== targetPath || Object.keys(queryParams).length > 0) {
-      router.push({ path: targetPath, query: Object.keys(queryParams).length > 0 ? queryParams : undefined })
-    } else {
-      // 如果已经在目标路由，still need to trigger watch by selecting null
-      // 路由相同但 currentSessionId 变化会触发 watch 清空 messages
-    }
+    await router.push({ path: targetPath, query: queryParams })
   } finally {
     isCreating.value = false
   }
@@ -1314,6 +1321,7 @@ async function handleNewSession() {
 // 选择会话
 async function handleSelectSession(sessionId: string) {
   // 多会话后台流式：切换会话不再中断正在进行的会话，旧会话在后台继续生成
+  notifySessionNavigation()
   selectSession(sessionId)
 
   // 跳转到聊天页面（如果当前不在聊天页面）
@@ -1364,9 +1372,7 @@ async function handleSelectSession(sessionId: string) {
     targetPath = `/chat/${subagent}`
   }
 
-  if (route.path !== targetPath) {
-    router.push({ path: targetPath, query: Object.keys(queryParams).length > 0 ? queryParams : undefined })
-  }
+  await router.push({ path: targetPath, query: queryParams })
   // 手机端点击后自动收起左侧菜单
   if (props.isMobile) {
     emit('collapse')

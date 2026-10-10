@@ -507,3 +507,25 @@ agent_runner:
     # Only dedicated Browser gateway hashes, never inherited channel peers.
     # Caller plaintext stays solely in AGENT_RUNNER_BROWSER_GATEWAY_TOKEN.
     gateway_peers: {}
+
+# 通用用户通知：默认关闭；VAPID 密钥和 subject 由环境注入。
+notifications:
+  enabled: false
+  ttl_seconds: 86400
+  max_attempts: 6
+  concurrency: 4
+  lease_seconds: 120
+  poll_seconds: 2
+  batch_size: 50
+  retention_days: 30
+  rate_per_second: 5
+  allowed_tenants: null
+  web_push:
+    enabled: false
+    key_id: v1
+    timeout_seconds: 10
+    allowed_hosts:
+      - fcm.googleapis.com
+      - updates.push.services.mozilla.com
+      - web.push.apple.com
+      - '*.notify.windows.com'
