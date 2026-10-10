@@ -55,7 +55,15 @@ export async function uploadFile(file: File, authHeaders?: Record<string, string
       throw new Error(result.error || '上传失败')
     }
 
-    return result
+    // 只返回 UploadedFile 声明的字段。整个 body 透传会混入 success 等额外字段，
+    // Runner 提交时 AttachmentRef（extra='forbid'）校验失败导致 422 INVALID_REQUEST
+    return {
+      file_id: result.file_id,
+      name: result.name,
+      size: result.size,
+      mime_type: result.mime_type,
+      type: result.type,
+    }
   } catch (error: any) {
     console.error('前端日志：upload 异常捕获', error)
     if (error instanceof Error) {

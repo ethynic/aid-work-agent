@@ -140,3 +140,38 @@ describe('SSEManager 错误处理', () => {
     )
   })
 })
+
+describe('uploadFile 返回字段过滤', () => {
+  const originalFetch = globalThis.fetch
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+    vi.restoreAllMocks()
+  })
+
+  it('响应中的 success 等额外字段不得混入返回对象（Runner AttachmentRef extra=forbid 会 422）', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        success: true,
+        file_id: 'file_abc123',
+        name: '方案.pdf',
+        size: 6253089,
+        mime_type: 'application/pdf',
+        type: 'file',
+      }),
+    } as any)
+
+    const { uploadFile } = await import('@/api/agent')
+    const uploaded = await uploadFile(new File(['x'], '方案.pdf', { type: 'application/pdf' }))
+
+    expect(uploaded).toEqual({
+      file_id: 'file_abc123',
+      name: '方案.pdf',
+      size: 6253089,
+      mime_type: 'application/pdf',
+      type: 'file',
+    })
+    expect('success' in uploaded).toBe(false)
+  })
+})
