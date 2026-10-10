@@ -1,4 +1,4 @@
-"""飞书/钉钉对话服务接入 AgentRunner 的入口级集成测试。
+"""企业微信/飞书/钉钉对话服务接入 AgentRunner 的入口级集成测试。
 
 覆盖审核修复点：
 1. Runner 失败（RunnerError）经 process_and_persist 显式 error 分支：
@@ -26,7 +26,7 @@ from src.services.agent_runner.contracts import RunnerError
 
 FAILURE_NOTICE = "抱歉，处理您的消息时遇到了问题，请稍后重试。"
 
-_CHANNEL_USER_IDS = {"feishu": "ou_user_1", "dingtalk": "staff_1"}
+_CHANNEL_USER_IDS = {"feishu": "ou_user_1", "dingtalk": "staff_1", "wecom": "wecom_user_1"}
 
 
 def _entry_function(channel):
@@ -35,6 +35,7 @@ def _entry_function(channel):
     return {
         "feishu": channel_routes._process_tenant_feishu_background,
         "dingtalk": channel_routes._process_tenant_dingtalk_background,
+        "wecom": channel_routes._process_tenant_wecom_background,
     }[channel]
 
 
@@ -59,6 +60,8 @@ def _make_message(channel, *, text="你好", conversation_type="1"):
 
 
 def _make_event(channel, *, conversation_type="1"):
+    if channel == "wecom":
+        return _make_message(channel, conversation_type=conversation_type)
     if channel == "dingtalk":
         return {
             "msgtype": "text",
@@ -198,7 +201,7 @@ def _patch_entry_environment(monkeypatch, channel, message, enqueue):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("channel", ["feishu", "dingtalk"])
+@pytest.mark.parametrize("channel", ["feishu", "dingtalk", "wecom"])
 @pytest.mark.parametrize("conversation_type", ["2", "1"])
 async def test_runner_error_sends_failure_notice_without_empty_assistant(
     monkeypatch, channel, conversation_type
@@ -218,7 +221,7 @@ async def test_runner_error_sends_failure_notice_without_empty_assistant(
         expected_target = "cid-group" if conversation_type == "2" else "staff_1"
         assert response.content["conversation_type"] == conversation_type
     else:
-        expected_target = "ou_user_1"
+        expected_target = _CHANNEL_USER_IDS[channel]
     assert response.reply_to == expected_target
     # 不写空 assistant、不触发 recap、record 标记失败
     harness.batch_write.assert_not_called()
@@ -228,7 +231,7 @@ async def test_runner_error_sends_failure_notice_without_empty_assistant(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("channel", ["feishu", "dingtalk"])
+@pytest.mark.parametrize("channel", ["feishu", "dingtalk", "wecom"])
 async def test_runner_error_send_failure_does_not_raise_when_adapter_fails(
     monkeypatch, channel
 ):
@@ -248,7 +251,7 @@ async def test_runner_error_send_failure_does_not_raise_when_adapter_fails(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("channel", ["feishu", "dingtalk"])
+@pytest.mark.parametrize("channel", ["feishu", "dingtalk", "wecom"])
 @pytest.mark.parametrize(
     "subagent_type,expected_profile", [(None, "main"), ("sales", "sales")]
 )
@@ -291,7 +294,7 @@ async def test_success_round_trip_constructs_agent_and_persists_batch(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("channel", ["feishu", "dingtalk"])
+@pytest.mark.parametrize("channel", ["feishu", "dingtalk", "wecom"])
 async def test_merged_result_sends_nothing(monkeypatch, channel):
     message = _make_message(channel)
     harness = _patch_entry_environment(monkeypatch, channel, message, _make_enqueue("merged"))
@@ -309,7 +312,7 @@ async def test_merged_result_sends_nothing(monkeypatch, channel):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("channel", ["feishu", "dingtalk"])
+@pytest.mark.parametrize("channel", ["feishu", "dingtalk", "wecom"])
 async def test_start_record_marks_skip_save_and_keeps_end_record(monkeypatch, channel):
     """渠道侧无独立入口用量：start_record 后 skip_save=True，end_record 仍收尾。"""
     message = _make_message(channel)
@@ -409,7 +412,7 @@ def test_worker_agent_user_raises_for_missing_user(monkeypatch):
 # ---------- 7. worker 渠道 verbose 配置归属（修复 4D） ----------
 
 
-@pytest.mark.parametrize("source", ["wecom_kf", "feishu", "dingtalk"])
+@pytest.mark.parametrize("source", ["wecom_kf", "feishu", "dingtalk", "wecom"])
 def test_channel_verbose_config_uses_channel_config_with_or_merged_force_disabled(source):
     from src.core.verbose_feedback import VerboseFeedbackConfig
     from src.services.agent_runner.worker import channel_verbose_config
@@ -450,6 +453,36 @@ def test_channel_verbose_config_keeps_base_without_request_data():
     from src.services.agent_runner.worker import channel_verbose_config
 
     base = VerboseFeedbackConfig(force_disabled=False)
-    for source in ("feishu", "dingtalk", "wecom_kf", "chat"):
+    for source in ("feishu", "dingtalk", "wecom_kf", "wecom", "chat"):
         assert channel_verbose_config(source, {}, base) is base
         assert channel_verbose_config(source, None, base) is base
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('text', ['平台识别文本', '[语音消息]'])
+async def test_wecom_voice_keeps_platform_text_and_no_independent_asr(monkeypatch, text):
+    message = _make_message('wecom', text=text)
+    message.message_type = 'voice'
+    harness = _patch_entry_environment(monkeypatch, 'wecom', message, _make_enqueue())
+    asr = AsyncMock(side_effect=AssertionError('WeCom uses platform Recognition only'))
+    monkeypatch.setattr('src.saas.api.channel_routes._transcribe_voice_with_asr', asr)
+    await _entry_function('wecom')('tenant-1', message)
+    assert harness.agent_cls.instances[-1].user_inputs == [text]
+    asr.assert_not_awaited()
+    assert harness.record.skip_save is True
+
+
+@pytest.mark.asyncio
+async def test_wecom_hidden_command_keeps_original_reply_without_runner(monkeypatch):
+    message = _make_message('wecom', text='hidden')
+    harness = _patch_entry_environment(monkeypatch, 'wecom', message, _make_enqueue())
+    harness.adapter.send_text = AsyncMock(return_value=True)
+    monkeypatch.setattr('src.core.hidden_commands.is_hidden_command', lambda text: True)
+    command = AsyncMock(return_value='command reply')
+    monkeypatch.setattr('src.core.hidden_commands.execute_hidden_command', command)
+    await _entry_function('wecom')('tenant-1', message, config_id='cfg-1')
+    command.assert_awaited_once_with('hidden', 'sess-1', 'tenant-1')
+    harness.adapter.send_text.assert_awaited_once_with('command reply', 'wecom_user_1')
+    assert harness.agent_cls.instances == []
+    harness.batch_write.assert_not_called()
+    harness.end_record.assert_not_called()

@@ -48,7 +48,7 @@ class AttachmentRef(BaseModel):
 
 class SessionQuery(BaseModel):
     session: SessionRef
-    source: Literal["chat", "wecom_kf", "feishu", "dingtalk"] = "chat"
+    source: Literal["chat", "wecom_kf", "feishu", "dingtalk", "wecom"] = "chat"
     profile_id: str = Field(default="main", min_length=1, max_length=128)
     # Only platform identifiers are submitted for a channel actor. The internal
     # tenant/user are derived from the registered session, never supplied here.

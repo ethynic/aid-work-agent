@@ -1,4 +1,4 @@
-"""飞书/钉钉后台入口到独立 Runner 服务的真实接线回归（R4.2 固化）。
+"""企业微信/飞书/钉钉后台入口到独立 Runner 服务的真实接线回归（R4.2 固化）。
 
 与 tests/integration/test_channel_agent_runner_entries.py 的区别：入口测试用
 FakeChannelRunnerAgent 整体替换真实适配器；本文件恢复**真实 ChannelRunnerAgent +
@@ -36,7 +36,7 @@ from src.services.agent_runner.contracts import RunnerError
 
 FAILURE_NOTICE = "抱歉，处理您的消息时遇到了问题，请稍后重试。"
 
-_CHANNEL_USER_IDS = {"feishu": "ou_user_1", "dingtalk": "staff_1"}
+_CHANNEL_USER_IDS = {"feishu": "ou_user_1", "dingtalk": "staff_1", "wecom": "wecom_user_1"}
 
 
 def _make_message(channel, *, conversation_type="1"):
@@ -61,6 +61,8 @@ def _make_message(channel, *, conversation_type="1"):
 
 def _make_event(channel, *, conversation_type="1"):
     """与真实回调解密后的 event_data 同构（钉钉 JSON / 飞书 v2.0 事件）。"""
+    if channel == "wecom":
+        return _make_message(channel, conversation_type=conversation_type)
     if channel == "dingtalk":
         return {
             "msgtype": "text",
@@ -192,6 +194,7 @@ def entry_env(bridge, monkeypatch):
         return {
             "feishu": channel_routes._process_tenant_feishu_background,
             "dingtalk": channel_routes._process_tenant_dingtalk_background,
+            "wecom": channel_routes._process_tenant_wecom_background,
         }[channel]
 
     return SimpleNamespace(
@@ -210,7 +213,7 @@ def entry_env(bridge, monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("conversation_type", ["1", "2"])
-@pytest.mark.parametrize("channel", ["feishu", "dingtalk"])
+@pytest.mark.parametrize("channel", ["feishu", "dingtalk", "wecom"])
 async def test_real_entry_completes_through_actual_service(
     bridge, entry_env, channel, conversation_type
 ):
@@ -229,7 +232,7 @@ async def test_real_entry_completes_through_actual_service(
         )
         assert response.content["conversation_type"] == conversation_type
     else:
-        assert response.reply_to == "ou_user_1"
+        assert response.reply_to == _CHANNEL_USER_IDS[channel]
     entry_env.adapter.send_text.assert_not_called()
 
     # ChannelRunnerAgent 构造参数经真实提交到达 bridge 仓库
@@ -273,7 +276,7 @@ async def test_real_entry_completes_through_actual_service(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("channel", ["feishu", "dingtalk"])
+@pytest.mark.parametrize("channel", ["feishu", "dingtalk", "wecom"])
 async def test_real_entry_runner_failure_sends_notice(bridge, entry_env, channel):
     # 测试设施开关：bridge fake 执行直接以 failed 终态受理
     bridge.repository.status = "failed"
@@ -303,7 +306,7 @@ async def test_real_entry_runner_failure_sends_notice(bridge, entry_env, channel
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("channel", ["feishu", "dingtalk"])
+@pytest.mark.parametrize("channel", ["feishu", "dingtalk", "wecom"])
 async def test_real_entry_foreign_actor_rejected_before_acceptance(
     bridge, entry_env, channel
 ):
@@ -333,7 +336,7 @@ async def test_real_entry_foreign_actor_rejected_before_acceptance(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("channel", ["feishu", "dingtalk"])
+@pytest.mark.parametrize("channel", ["feishu", "dingtalk", "wecom"])
 async def test_real_entry_history_unavailable_sends_notice_without_answer(
     bridge, entry_env, monkeypatch, channel
 ):

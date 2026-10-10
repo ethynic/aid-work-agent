@@ -123,7 +123,7 @@ def bridge(monkeypatch):
     token = 'test-service-token'
     config = AgentRunnerConfig(enabled=True, web_service_id='bridge', api_url='http://runner.test',
         web_service_token=token,
-        peers={'bridge': {'sources': ['wecom_kf', 'chat', 'feishu', 'dingtalk']}})
+        peers={'bridge': {'sources': ['wecom_kf', 'chat', 'feishu', 'dingtalk', 'wecom']}})
     authorizer = RunnerAuthorizer(config, store.connection,
         source_port=build_source_capabilities(config, store.connection))
     manager = RunnerManager(repository, authorizer, SimpleNamespace(resolve=lambda profile: (None, 'fingerprint')))
@@ -212,7 +212,7 @@ async def test_actual_http_authorization_rejects_untrusted_route_before_any_runn
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('source', ['wecom_kf', 'feishu', 'dingtalk'])
+@pytest.mark.parametrize('source', ['wecom_kf', 'feishu', 'dingtalk', 'wecom'])
 async def test_cancelled_merge_attempt_is_cancelled_remotely_before_replacement_is_accepted(bridge, source):
     bridge.repository.status = 'running'
     agent = _channel_agent(bridge, source)
@@ -230,7 +230,7 @@ async def test_cancelled_merge_attempt_is_cancelled_remotely_before_replacement_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('source', ['wecom_kf', 'feishu', 'dingtalk'])
+@pytest.mark.parametrize('source', ['wecom_kf', 'feishu', 'dingtalk', 'wecom'])
 async def test_local_cancel_check_cancels_service_task_instead_of_abandoning_it(bridge, source):
     bridge.repository.status = 'running'
     checks = iter([False, True])
@@ -241,7 +241,7 @@ async def test_local_cancel_check_cancels_service_task_instead_of_abandoning_it(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('wrapper', [None, 'child_wait', 'child_clarification'])
-@pytest.mark.parametrize('source', ['wecom_kf', 'feishu', 'dingtalk'])
+@pytest.mark.parametrize('source', ['wecom_kf', 'feishu', 'dingtalk', 'wecom'])
 async def test_clarification_reply_uses_control_and_waits_for_applied_reply_without_resubmitting(bridge, wrapper, source):
     bridge.repository.status = 'waiting'
     bridge.repository.snapshot = {'waiting': {'kind': 'clarification', 'question': 'Which city?',
@@ -276,7 +276,7 @@ async def test_accepted_http_response_loss_reuses_same_submit_key_without_second
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('source', ['wecom_kf', 'feishu', 'dingtalk'])
+@pytest.mark.parametrize('source', ['wecom_kf', 'feishu', 'dingtalk', 'wecom'])
 async def test_coroutine_cancellation_waits_for_service_cancel_confirmation(bridge, source):
     bridge.repository.status = 'running'
     agent = _channel_agent(bridge, source)
@@ -293,30 +293,36 @@ async def test_coroutine_cancellation_waits_for_service_cancel_confirmation(brid
 
 
 @pytest.mark.asyncio
-async def test_unsupported_browser_wait_does_not_leave_session_claim_parked(bridge):
+@pytest.mark.parametrize('source', ['wecom_kf', 'feishu', 'dingtalk', 'wecom'])
+async def test_unsupported_browser_wait_does_not_leave_session_claim_parked(bridge, source):
+    agent = _channel_agent(bridge, source)
     bridge.repository.status = 'waiting'
     bridge.repository.snapshot = {'waiting': {'kind': 'browser', 'wait_id': 'wait'}}
     with pytest.raises(RunnerError, match='CHANNEL_EXECUTION_WAIT_UNSUPPORTED'):
-        await bridge.agent.process_message_sync(user_input='request', session_id='session')
+        await agent.process_message_sync(user_input='request', session_id='session')
     assert bridge.repository.cancelled == ['runner-1']
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('status', ['paused', 'interrupted'])
-async def test_unsupported_parked_execution_is_cancelled_and_reported(bridge, status):
+@pytest.mark.parametrize('source', ['wecom_kf', 'feishu', 'dingtalk', 'wecom'])
+async def test_unsupported_parked_execution_is_cancelled_and_reported(bridge, status, source):
+    agent = _channel_agent(bridge, source)
     bridge.repository.status = status
     with pytest.raises(RunnerError, match='CHANNEL_EXECUTION_INTERRUPTED'):
-        await bridge.agent.process_message_sync(user_input='request', session_id='session')
+        await agent.process_message_sync(user_input='request', session_id='session')
     assert bridge.repository.cancelled == ['runner-1']
 
 
 @pytest.mark.asyncio
-async def test_original_owner_feedback_state_suppresses_duplicate_service_feedback_across_reprocessing(bridge):
+@pytest.mark.parametrize('source', ['wecom_kf', 'feishu', 'dingtalk', 'wecom'])
+async def test_original_owner_feedback_state_suppresses_duplicate_service_feedback_across_reprocessing(bridge, source):
+    agent = _channel_agent(bridge, source)
     verbose = make_verbose_event('verbose-1', '正在查询相关信息', 'policy')
     bridge.repository.snapshot = {'verboseMessages': [verbose, verbose]}
     state, events = VerboseFeedbackState(), []
     for text in ('first', 'merged'):
-        await bridge.agent.process_message_sync(user_input=text, session_id='session',
+        await agent.process_message_sync(user_input=text, session_id='session',
             feedback_state=state, progress_callback=events.append)
     observed = [event for event in events if event['type'] == 'verbose']
     assert len(observed) == 1 and state.event is observed[0]
@@ -347,19 +353,19 @@ async def test_channel_result_masks_real_json_string_tool_arguments_and_invalid_
 
 
 def _as_chatless_channel(bridge, source):
-    """feishu/dingtalk 会话行 channel_chat_id 恒空、subagent_id 按渠道写入空串。"""
+    """企业微信/feishu/dingtalk 会话行 channel_chat_id 恒空、subagent_id 按渠道写入空串。"""
     bridge.store.sessions['session'].update(channel_type=source, channel_chat_id=None, subagent_id='')
     return ChannelRunnerAgent(source=source, session_id='session', channel_user_id='actor',
         channel_chat_id=None, config_id='config', client=bridge.client)
 
 
 def _channel_agent(bridge, source):
-    """KF 保留原 bridge.agent（channel_chat_id='kf'）；feishu/dingtalk 用无 chat 渠道形态。"""
+    """KF 保留原 bridge.agent（channel_chat_id='kf'）；企业微信/feishu/dingtalk 用无 chat 渠道形态。"""
     return bridge.agent if source == 'wecom_kf' else _as_chatless_channel(bridge, source)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('source', ['feishu', 'dingtalk'])
+@pytest.mark.parametrize('source', ['feishu', 'dingtalk', 'wecom'])
 async def test_chatless_channel_source_passes_channel_authorization_and_completes(bridge, source):
     agent = _as_chatless_channel(bridge, source)
     config = VerboseFeedbackConfig(enabled=True, max_per_turn=2, max_text_chars=42)
@@ -379,7 +385,7 @@ async def test_chatless_channel_source_passes_channel_authorization_and_complete
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('source', ['feishu', 'dingtalk'])
+@pytest.mark.parametrize('source', ['feishu', 'dingtalk', 'wecom'])
 async def test_channel_result_reads_and_masks_for_chatless_channels_and_rejects_foreign_actor(bridge, source):
     agent = _as_chatless_channel(bridge, source)
     await agent.process_message_sync(user_input='request', session_id='session')
@@ -401,7 +407,9 @@ async def test_channel_result_reads_and_masks_for_chatless_channels_and_rejects_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('follower', [False, True])
-async def test_original_channel_processor_keeps_one_history_and_delivery_owner_for_merged_batch(bridge, follower):
+@pytest.mark.parametrize('source', ['wecom_kf', 'feishu', 'dingtalk', 'wecom'])
+async def test_original_channel_processor_keeps_one_history_and_delivery_owner_for_merged_batch(bridge, follower, source):
+    agent = _channel_agent(bridge, source)
     from src.channels.session import ChannelSessionManager
     from src.core.session_queue import EnqueueResult
     manager = ChannelSessionManager()
@@ -422,7 +430,7 @@ async def test_original_channel_processor_keeps_one_history_and_delivery_owner_f
             patch('src.saas.db.tenant_db.TenantDB.get_by_id', return_value={'credit_balance': 100}), \
             patch('src.services.recap.trigger_recap'):
         result = await manager.process_and_persist(session_id='session', tenant_id='tenant',
-            agent=bridge.agent, user_content='first', send_response=sender)
+            agent=agent, user_content='first', send_response=sender)
     if follower:
         assert result['status'] == 'merged' and not bridge.repository.submitted
         batch_write.assert_not_called()
@@ -489,7 +497,7 @@ async def test_worker_channel_context_isolated_by_tenant_session_and_always_clos
         _kf_context.reset(token)
 
 
-@pytest.mark.parametrize('source,history_count', [('wecom_kf', 0), ('feishu', 0), ('dingtalk', 0), ('chat', 1)])
+@pytest.mark.parametrize('source,history_count', [('wecom_kf', 0), ('feishu', 0), ('dingtalk', 0), ('wecom', 0), ('chat', 1)])
 def test_finalizer_settles_execution_once_releases_claim_and_leaves_integrated_channel_history_to_channel(source, history_count):
     from src.services.agent_runner.finalizer import RunnerFinalizer
     from src.services.agent_runner.ownership import Attempt
@@ -571,7 +579,9 @@ async def test_failed_asr_voice_original_attachment_build_crosses_http_by_id_and
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('failed_path', ['/v1/runners/runner-1', '/v1/runners/runner-1/channel-result'])
-async def test_transient_poll_or_result_response_loss_does_not_restart_accepted_execution(bridge, monkeypatch, failed_path):
+@pytest.mark.parametrize('source', ['wecom_kf', 'feishu', 'dingtalk', 'wecom'])
+async def test_transient_poll_or_result_response_loss_does_not_restart_accepted_execution(bridge, monkeypatch, failed_path, source):
+    agent = _channel_agent(bridge, source)
     bridge.repository.status = 'running'
     events = []
 
@@ -591,18 +601,20 @@ async def test_transient_poll_or_result_response_loss_does_not_restart_accepted_
     transport = LoseReadOnce()
     monkeypatch.setattr('src.services.agent_runner.web_client.httpx.AsyncClient',
         lambda **kwargs: bridge.original_client(**kwargs, transport=transport))
-    response = await bridge.agent.process_message_sync(user_input='request', session_id='session', progress_callback=events.append)
+    response = await agent.process_message_sync(user_input='request', session_id='session', progress_callback=events.append)
     assert str(response) == 'answer' and transport.lost
     assert len(bridge.repository.submitted) == 1 and not bridge.repository.cancelled
     assert len([event for event in events if event['type'] == 'tool_messages']) == 1
 
 
 @pytest.mark.asyncio
-async def test_reply_acceptance_window_cancellation_confirms_original_runner_cancellation(bridge, monkeypatch):
+@pytest.mark.parametrize('source', ['wecom_kf', 'feishu', 'dingtalk', 'wecom'])
+async def test_reply_acceptance_window_cancellation_confirms_original_runner_cancellation(bridge, monkeypatch, source):
+    agent = _channel_agent(bridge, source)
     bridge.repository.status = 'waiting'
     bridge.repository.snapshot = {'waiting': {'kind': 'clarification', 'question': 'Which city?',
         'wait_id': 'wait', 'target_execution_id': 'execution'}}
-    await bridge.agent.process_message_sync(user_input='book', session_id='session')
+    await agent.process_message_sync(user_input='book', session_id='session')
     accepted, release = asyncio.Event(), asyncio.Event()
 
     class DelayedReply(httpx.AsyncBaseTransport):
@@ -615,7 +627,7 @@ async def test_reply_acceptance_window_cancellation_confirms_original_runner_can
 
     monkeypatch.setattr('src.services.agent_runner.web_client.httpx.AsyncClient',
         lambda **kwargs: bridge.original_client(**kwargs, transport=DelayedReply()))
-    task = asyncio.create_task(bridge.agent.process_message_sync(user_input='Shanghai', session_id='session'))
+    task = asyncio.create_task(agent.process_message_sync(user_input='Shanghai', session_id='session'))
     await asyncio.wait_for(accepted.wait(), 1)
     task.cancel()
     await asyncio.sleep(0)
@@ -761,3 +773,27 @@ async def test_context_assembler_keeps_generic_incoming_and_browser_continuation
         compression._run_compression_phase.assert_awaited_once_with('session')
         assert any('new request' in message.get('content', '') for message in state.messages)
         assert state.messages[-1]['content'] == 'file instructions'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('operation', ['list', 'get', 'result', 'cancel', 'reply'])
+@pytest.mark.parametrize('foreign', ['actor', 'source'])
+async def test_wecom_observation_and_controls_reject_foreign_subject(bridge, operation, foreign):
+    agent = _as_chatless_channel(bridge, 'wecom')
+    await agent.process_message_sync(user_input='request', session_id='session')
+    source, actor = ('wecom', 'other-actor') if foreign == 'actor' else ('feishu', 'actor')
+    kwargs = dict(authorization=None, channel_source=source, channel_user=actor)
+    if operation == 'list':
+        path = '/v1/sessions/channel/session/runners'
+        kwargs['params'] = {'source': 'wecom', 'channel_user_id': 'actor'}
+        method = 'GET'
+    else:
+        path = '/v1/runners/runner-1' + {'get': '', 'result': '/channel-result', 'cancel': '/cancel', 'reply': '/controls'}[operation]
+        method = 'POST' if operation in ('cancel', 'reply') else 'GET'
+        if operation == 'reply':
+            kwargs['body'] = {'client_request_id': 'reply-foreign', 'action': 'reply',
+                'answer': 'answer', 'wait_id': 'wait', 'target_execution_id': 'execution'}
+    with pytest.raises(RunnerError, match='CHANNEL_ACTOR_(FORBIDDEN|REQUIRED)'):
+        await bridge.client.request(method, path, **kwargs)
+    assert len(bridge.repository.submitted) == 1 and bridge.repository.cancelled == []
+    assert bridge.controls == {}

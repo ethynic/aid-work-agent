@@ -13,16 +13,18 @@
 Agent/AgentRunner 架构重构已完成，现行职责以 [AgentRunner 架构](../../docs/system/agent-application-architecture-design.md) 为准。
 
 ```
-Web / 微信客服原渠道
+Web / 微信客服 / 飞书 / 钉钉 / 企业微信应用
   → 主 API (src/main.py) — 原入口业务、可信身份及对话调用适配
     → 独立 Runner API → Runner worker (src/services/agent_runner/)
       → RuntimeExecution → AgentEngine (src/core/agent_engine/)
         → 模型网关 / 工具派发 / 同一内核的子执行
 
-飞书 / 钉钉等未接入入口
+其他尚未接入入口
   → 原入口与兼容 Agent API → 同一 AgentEngine
   → 后续只将对话调用接入独立 Runner，保留原渠道业务
 ```
+
+飞书/钉钉/企业微信应用代码已接入，部署真机验收仍按各渠道计划登记；企业微信应用验证与待部署事项见[开发计划](../../docs/plans/plan-wecom-agent-runner-integration.md)。
 
 ## 核心组件
 

@@ -42,7 +42,7 @@ from src.services.agent_runner.authorization import RunnerAuthorizer
 from src.services.agent_runner.contracts import canonical_json
 from src.services.agent_runner.worker import RunnerWorker
 
-_CHANNEL_USERS = {"feishu": "ou1", "dingtalk": "staff_1"}
+_CHANNEL_USERS = {"feishu": "ou1", "dingtalk": "staff_1", "wecom": "wecom_user_1"}
 
 
 class WorkerStore:
@@ -246,9 +246,10 @@ def _channel_row(source):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("source", ["feishu", "dingtalk"])
+@pytest.mark.parametrize("source", ["feishu", "dingtalk", "wecom"])
+@pytest.mark.parametrize("force_disabled", [False, True])
 async def test_worker_execute_delivers_channel_user_and_verbose_config(
-    monkeypatch, tmp_path, source
+    monkeypatch, tmp_path, source, force_disabled
 ):
     from src.config.settings import settings
     from src.db.models import UserDB
@@ -272,7 +273,7 @@ async def test_worker_execute_delivers_channel_user_and_verbose_config(
         web_service_id="bridge",
         api_url="http://runner.test",
         peers={
-            "bridge": {"sources": ["wecom_kf", "chat", "feishu", "dingtalk"]},
+            "bridge": {"sources": ["wecom_kf", "chat", "feishu", "dingtalk", "wecom"]},
         },
     )
     finalizer = SimpleNamespace(finalize=MagicMock())
@@ -304,7 +305,7 @@ async def test_worker_execute_delivers_channel_user_and_verbose_config(
         RunnerWorker, "_persist_trace", lambda self, *args, **kwargs: None
     )
     monkeypatch.setattr(
-        settings.agent, "verbose_feedback", None, raising=False
+        settings.agent, "verbose_feedback", SimpleNamespace(force_disabled=force_disabled), raising=False
     )
 
     await worker.execute(row)  # 正常返回不抛即主断言之一
@@ -325,7 +326,7 @@ async def test_worker_execute_delivers_channel_user_and_verbose_config(
     assert verbose_config.enabled is True
     assert verbose_config.max_per_turn == 3
     assert verbose_config.max_text_chars == 42
-    assert verbose_config.force_disabled is False
+    assert verbose_config.force_disabled is force_disabled
 
     # 请求上下文与输入透传
     assert runtime.run_args == ("你好",)

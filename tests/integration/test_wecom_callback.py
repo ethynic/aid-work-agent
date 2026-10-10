@@ -412,3 +412,61 @@ class TestMultiWeComAppCallback:
             assert results[1]["subagent_type"] in ["travel-consultant", "trade-specialist"]
             # 两个配置的 subagent_type 不同
             assert results[0]["subagent_type"] != results[1]["subagent_type"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('case,status,dispatched', [
+    ('text', 200, True), ('voice', 200, True), ('event', 200, False),
+    ('duplicate', 200, False), ('bad_signature', 403, False), ('bad_cipher', 400, False)])
+async def test_tenant_wecom_callback_preserves_crypto_filtering_and_original_dispatch(
+    crypto, monkeypatch, tmp_path, case, status, dispatched
+):
+    """真实租户回调和 adapter.parse_message；平台接收/去重/后台调度为边界假件。"""
+    import asyncio
+    import hashlib
+    from types import SimpleNamespace
+    from src.channels.wecom.adapter import WeComAdapter
+    from src.saas.api import channel_routes
+
+    adapter = WeComAdapter('ww_test_corp', 'test-agent', 'fixture-secret', media_upload_dir=str(tmp_path))
+    adapter.crypto = crypto
+    msg_type = 'voice' if case == 'voice' else ('event' if case == 'event' else 'text')
+    plaintext = f'<xml><MsgType>{msg_type}</MsgType><Content>你好</Content><Recognition>平台识别文本</Recognition><FromUserName>staff-test</FromUserName><MsgId>msg-test</MsgId></xml>'
+    encrypted = crypto.encrypt(plaintext) if case != 'bad_cipher' else 'broken-cipher'
+    signature = hashlib.sha1(''.join(sorted(['test_token', '1', 'nonce', encrypted])).encode()).hexdigest()
+    if case == 'bad_signature':
+        signature = 'invalid-signature'
+    factory = AsyncMock(return_value=(adapter, 'cfg-test', 'sales'))
+    background = AsyncMock()
+    dedup = SimpleNamespace(is_duplicate=AsyncMock(return_value=case == 'duplicate'))
+    monkeypatch.setattr(channel_routes.ChannelFactory, 'create_from_tenant_config', factory)
+    monkeypatch.setattr(channel_routes, '_process_tenant_wecom_background', background)
+    monkeypatch.setattr(channel_routes, '_get_tenant_dedup', lambda tenant_id: dedup)
+    request = SimpleNamespace(body=AsyncMock(return_value=f'<xml><Encrypt>{encrypted}</Encrypt></xml>'.encode()),
+        query_params={'msg_signature': signature, 'timestamp': '1', 'nonce': 'nonce'})
+    response = await channel_routes.tenant_wecom_callback_post('tenant-test', 'cfg-test', request)
+    await asyncio.sleep(0)
+    assert response.status_code == status
+    factory.assert_awaited_once_with('tenant-test', 'wecom', config_id='cfg-test')
+    if dispatched:
+        assert response.body == b'success'
+        background.assert_awaited_once()
+        args, kwargs = background.await_args
+        assert args[0] == 'tenant-test' and args[1].user_id == 'staff-test'
+        assert args[1].text == ('平台识别文本' if case == 'voice' else '你好')
+        assert kwargs == {'config_id': 'cfg-test', 'subagent_type': 'sales'}
+    else:
+        background.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_tenant_wecom_get_callback_returns_decrypted_echostr(crypto, monkeypatch):
+    import hashlib
+    from types import SimpleNamespace
+    from src.saas.api import channel_routes
+    encrypted = crypto.encrypt('challenge')
+    signature = hashlib.sha1(''.join(sorted(['test_token', '1', 'nonce', encrypted])).encode()).hexdigest()
+    monkeypatch.setattr(channel_routes.ChannelFactory, 'create_from_tenant_config',
+        AsyncMock(return_value=(SimpleNamespace(crypto=crypto), 'cfg-test', 'sales')))
+    response = await channel_routes.tenant_wecom_callback_get('tenant-test', 'cfg-test', signature, '1', 'nonce', encrypted)
+    assert response.status_code == 200 and response.body == b'challenge'

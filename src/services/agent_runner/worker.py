@@ -27,11 +27,11 @@ from .source_receipts import SourceUnavailable
 def channel_verbose_config(source, request_data, base_config):
     """按来源 + request_data 构造最终 verbose 配置。
 
-    渠道三源（wecom_kf/feishu/dingtalk）透传渠道侧冻结的 verbose 配置；
+    已接入渠道（wecom_kf/feishu/dingtalk/wecom）透传渠道侧冻结的 verbose 配置；
     force_disabled 与全局 base 取或——全局强制关闭时渠道配置不能重新启用。
     其余来源或无 request_data 时保持 base 不变。
     """
-    if source in ('wecom_kf', 'feishu', 'dingtalk') and request_data and request_data.get('verbose_feedback'):
+    if source in ('wecom_kf', 'feishu', 'dingtalk', 'wecom') and request_data and request_data.get('verbose_feedback'):
         from dataclasses import replace
         from src.core.verbose_feedback import VerboseFeedbackConfig
         channel_feedback = VerboseFeedbackConfig(**request_data['verbose_feedback'])

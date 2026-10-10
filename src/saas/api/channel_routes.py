@@ -475,7 +475,7 @@ async def _process_tenant_wecom_background(
     Args:
         tenant_id: 租户 ID
         message: 解析后的统一消息
-        subagent_type: 关联的数字员工类型（如 travel-consultant），None 时使用 master_agent
+        subagent_type: 关联的数字员工类型（如 travel-consultant），None 时使用 main profile
     """
     adapter = None
     try:
@@ -518,14 +518,11 @@ async def _process_tenant_wecom_background(
 
         # 记录用户消息 —— P0-2：推迟到 process_and_persist 内统一写入
 
-        # 获取对话上下文
-        history = channel_session_manager.get_conversation_context(
-            session_id, max_messages=20
-        )
-
-        # 获取 agent：根据 subagent_type 路由到对应数字员工
-        from src.core.agent_router import agent_router
-        agent = agent_router.get_agent(subagent_type, session_id)
+        # 只替换对话执行，渠道业务和原会话队列保持原实现。
+        from src.channels.runner_agent import ChannelRunnerAgent
+        agent = ChannelRunnerAgent(source='wecom', session_id=session_id,
+            channel_user_id=message.user_id, channel_chat_id=None,
+            profile_id=subagent_type or 'main', config_id=config_id)
 
         # 开始记录 token 消耗
         record_service = SessionRecordManager.start_record(
@@ -535,8 +532,8 @@ async def _process_tenant_wecom_background(
             tenant_id=tenant_id,
             source_type="wecom",
         )
-        record_service.set_model(agent.llm.get_model_name())
-        record_service.set_provider(agent.llm.get_provider_name())
+        # 入口仅使用平台语音识别文本，无独立用量；模型/工具费用由 Runner 结算。
+        record_service.skip_save = True
 
         # 处理消息 + 持久化（P0-1 / P0-2 统一在 process_and_persist 内完成）
         send_response = channel_session_manager.make_send_response(
