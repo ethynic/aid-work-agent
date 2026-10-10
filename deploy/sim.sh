@@ -9,7 +9,8 @@
 # 行为:
 #   0. 代码同步（默认执行，--skip-code 跳过）: 纯 rsync 整体替换为生产版本，便于复现 bug
 #      - rsync 生产工作区 /var/www/agent -> /var/www/agent1（--delete 整体替换，排除
-#        .env/.git/log/configs/plans/storage/uploads/frontend/node_modules，configs 仿真侧独立维护）
+#        .env/.git/log/configs/plans/storage/uploads/frontend/node_modules，configs 仿真侧独立维护；
+#        frontend/dist/WW_verify_*.txt 企微可信域名校验文件不覆盖不删除，企微会不定期复核）
 #      - 仿真侧不保留任何自有代码改动，只有两种状态: 复现模式（本脚本，与生产一致）/
 #        验证模式（agent1_update.sh，git reset 到 master 或指定提交）
 #   1. 安全断言（fail-fast）：写入目标库必须为 aid_work_agent1；
@@ -145,6 +146,8 @@ RSYNC_EXCLUDES=(
   --exclude='log/' --exclude='configs/' --exclude='plans/'
   --exclude='storage/' --exclude='uploads/'
   --exclude='frontend/node_modules/'
+  --exclude='frontend/dist/WW_verify_*.txt'
+  --exclude='deploy/WW_verify_*.txt'
   --exclude='__pycache__/' --exclude='*.pyc'
 )
 
@@ -158,7 +161,7 @@ else
 
   if [[ $DRY_RUN -eq 1 ]]; then
     log "== DRY-RUN 代码同步预览 =="
-    log "  将 rsync 生产工作区整体替换 $SIM_DIR（--delete，排除 .env/.git/log/configs/plans/storage/uploads/frontend/node_modules）"
+    log "  将 rsync 生产工作区整体替换 $SIM_DIR（--delete，排除 .env/.git/log/configs/plans/storage/uploads/frontend/node_modules/WW_verify_*.txt）"
   else
     log "rsync 生产工作区 -> 仿真目录（--delete 整体替换，清除生产已删除的文件）..."
     sudo rsync -a --delete "${RSYNC_EXCLUDES[@]}" "$PROD_DIR/" "$SIM_DIR/"

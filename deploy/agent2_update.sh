@@ -193,6 +193,9 @@ echo "[10] 原子切换前端 dist..."
 sudo rm -rf "$DIST_DIR.old"
 [ -d "$DIST_DIR" ] && mv "$DIST_DIR" "$DIST_DIR.old"
 mv "$DIST_DIR.new" "$DIST_DIR"
+# 保留企微可信域名校验文件：企微不定期复核，文件丢失会导致可信域名回退为待审核
+ls "$DIST_DIR.old"/WW_verify_*.txt >/dev/null 2>&1 && \
+    sudo cp "$DIST_DIR.old"/WW_verify_*.txt "$DIST_DIR"/
 sudo rm -rf "$DIST_DIR.old"
 # dist 由 docker root 容器创建，属主为 root；恢复为 ubuntu，避免残留 root 属主文件
 # 在后续 git 更新/排查时造成 Permission denied 干扰（2026-09-20 事故）
