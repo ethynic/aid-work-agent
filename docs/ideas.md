@@ -28,13 +28,11 @@
 |---|------|------|------|---------|---------|
 | 20261008-runtime-plugin-host | Runtime 执行环境、插件宿主与可视化客户端 | 🔧 部分完成 | A1～A3完成；隔离验收包已交付，待人工及正式发行，第三方暂不开发。 | [唯一架构](system/runtime-plugin-host-architecture-design.md) / [共同契约](system/runner-desktop-runtime-integration-contract.md) / [接口](../contracts/runtime-host/v1/README.md) | [统一计划](plans/plan-runtime-plugin-host.md) |
 | 20260908-2229 | 外部系统入口（SSO 打开第三方系统） | 🔧 部分完成（Phase 1 开发完成，待真机联调） | 连接中心「外部系统」入口 + SSO 通用契约（direct_url/ticket_redirect/token_param）打开第三方系统；Phase 1 完成待真机联调。 | [方案](system/external-system-entry-design.md) | — |
-| 20260918-2045 | Redis 夜间巡检任务（生产专用） | 🔧 部分完成 | background_runner 调度器每日 00:30 巡检生产 Redis（容器 mem_limit 1g）：内存水位（600MB 警告/800MB 严重）、碎片率（仅 used>100MB 判）、AOF 写入/重写状态、键淘汰、连接数、无 TTL 键抽样（上限 1000，超 200 疑似泄漏）。结果以「[Redis巡检]」前缀进主日志（1 条 INFO 汇总 + 越界项 WARNING/ERROR）。REDIS_INSPECTION_ENABLED 门控默认关（测试环境为腾讯云托管无需巡检），生产 .env 已开启待重启生效。改动：新增 src/core/redis_inspection.py + RedisClient.info() + scheduler 注册；单测 11 用例通过，待部署。 | — | — |
 
 ## 数字员工 / 子智能体
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20260914-1300 | SubagentRegistry 按 agent_id 为 key + 前端展示 agent_id | 🔧 部分完成 | 2026-09-14 修复生产事故：`subagent_definitions` 两条 active 定义（pre-sales / aidefine-sales-assistant）显示名相同，… | — | — |
 | 20260908-1431 | 桌面 CLI 无人值守自动任务底座＋微信营销首场景 | 🔧 部分完成 | 桌面 CLI 无人值守任务底座（调度/账本/许可/journal/桌面锁）＋微信营销首场景，与端侧会话任务（20260912-2313）共用底座。 | [底座设计](design/desktop-automation/desktop-cli-automation-design.md) / [场景设计](design/weixin/weixin-marketing-automation-design.md) | [底座计划](plans/desktop-automation/plan-desktop-cli-automation.md) / [微信实施与BOSS衔接](plans/weixin/plan-weixin-marketing-automation.md) |
 | 20260908-1432 | BOSS 直聘聊天自动化 | 🔧 部分完成 | B2 场景包（fake 端到端）十审通过入库；进入 B3 Runtime+Provider 真机接线。 | [场景设计 §11](design/weixin/weixin-marketing-automation-design.md#11-第二场景boss-直聘聊天自动化待独立立项) / [端侧接入设计](design/desktop-automation/boss-edge-session-design.md) / [底座设计](design/desktop-automation/desktop-cli-automation-design.md) | [BOSS 端侧接入计划](plans/desktop-automation/plan-boss-edge-session.md) / [BOSS 里程碑](plans/weixin/plan-weixin-marketing-automation.md#12-boss-聊天自动化实施衔接-待独立立项) / [底座计划](plans/desktop-automation/plan-desktop-cli-automation.md) / [VIP筛选+性能埋点](plans/desktop-automation/plan-boss-cli-vip-filter-perf.md) / [详情页打分即打招呼](plans/desktop-automation/plan-boss-detail-greet.md) |
 | 20260905-1753 | 营销 App 智能外呼代理 | 🔧 部分完成 | 2026-09-05 完成调研、详细设计与实施规划。 | [设计](design/marketing-call-agent-design.md) | [验证与计划](plans/marketing-call-agent-plan.md) / [GLM 实验执行手册](plans/marketing-call-agent-experiment-runbook.md) |
@@ -47,7 +45,6 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20260920-1554 | 知识库文件搜索工具（knowledge_file_search） | 🔧 部分完成（开发+测试完成，待部署验证） | 按原始文件名（documents.title，模糊/精确）定位知识库文档，返回 file_path 供 LLM 用 read 分页读取，解决「提示词按文件名引用知识库文档 → LLM 拿标题当路径 read 连败」（2026-09-20 生产案例：tenant_923f70a485a1 数据分析助手 3 连 read 失败）。与 /api/knowledge/search_documents 语义检索互补不替代；领域逻辑下沉 KnowledgeService.search_documents_by_title，共享范围/可见性/owner 标注公共化复用，模式 A；互引 description + 0 命中引导防与 knowledge_base_search 误用。纯 DB 元数据查询，无计费点。 | — | [开发计划](plans/plan-knowledge-file-search.md) |
 | 20260714-1911 | 浏览器混合执行、可视化与人工接管 | 🔧 部分完成 | Phase 0～1 已完成；Phase 2 已实现、待真实 Redis/PostgreSQL 门禁。 | [设计](tools/browser/browser_visualization_design.md) | [开发计划](tools/browser/browser_execution_dev_plan.md) |
 | 20260630-1733 | PDF reportlab 固定版式生成器 | 📋 待开发 | 暂不开发，未来如出现强固定版式需求再评估。 | [设计](tools/pdf/pdf_tool_design.md) | — |
 | 20260630-1734 | PDF 视觉回归样本集 | 💡 灵感 | 低优先级未来项。用于沉淀小型样例 PDF、渲染 PNG 或预期检查结果，后续在改动 PDF 生成器、渲染器、验证器时做回归校验，防止中文乱码、空白页、黑页、页数错误、表格溢出等质量退化。 | [设计](tools/pdf/pdf_tool_design.md) | — |
@@ -66,9 +63,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20260922-1931 | 租户前台知识库「访问授权」矩阵 | 🔧 部分完成（开发完成，待部署验收） | 租户管理员在知识库页面右上角「访问授权」弹框中以矩阵（行=一级栏目、列=数字员工）自助查看/配置数字员工栏目授权，补齐管理后台按员工勾选视角下「未配置=全部允许」不可见的盲区。三态复选框（半选=未配置默认全允许）；首勾弹窗确认收窄；取消全部勾选恢复默认全允许；复用现有 /api/saas/tenant/subagent-knowledge 接口（后端零改动），保存时原样保留跨租户共享项。三态语义已同步到管理后台 TenantMgmt 知识库授权弹框（本租户栏目三态、共享栏目保持二态），前后台 UI 一致。 | — | — |
 | 20260714-1912 | Agent 跨平台桌面客户端 | 🔧 部分完成（H3待人工验收） | 共用 Runner 与 Runtime，UI竞态修复后的首期验收包已重建验证。 | [桌面设计 v3](system/desktop-agent-client-design.md) / [Runner 架构](system/agent-application-architecture-design.md) / [共同契约](system/runner-desktop-runtime-integration-contract.md) | [开发计划](plans/plan-desktop-agent-client.md) |
-| 20260720-1459 | 多会话后台流式 | 🔧 部分完成 | 2026-07-20 代码与单测完成，待真实环境 E2E 验收。 | [设计](system/multi-session-background-streaming-design.md) | [开发计划](plans/plan-multi-session-background-streaming.md) |
 
 ---
 

@@ -119,6 +119,44 @@ async def test_my_route():
 | `skills_dir` | 临时目录含示例 SKILL.md |
 | `plans_dir` | 临时计划目录 |
 
+## 已部署前端 E2E 验证：登录态注入（免验证码）
+
+**问题**：登录接口需要图形验证码 + IP 速率限制，浏览器自动化（Playwright 等）走 UI 登录会卡在验证码。验证已部署页面行为时，不值得为绕验证码做工程。
+
+**方案**：测试环境直接为目标用户铸短期 token 写入 `tokens` 表，再向浏览器 localStorage 注入对应 key，跳过登录页。前端 `useTenantAuth.init()` 只读 token key，随后调 `/api/saas/auth/me` 拉取用户/租户信息，注入一个 key 即完成登录态恢复。
+
+### 步骤（以测试环境 agent2 为例）
+
+1. **铸 token**（测试库，选目标用户如租户管理员）：
+
+   ```sql
+   INSERT INTO tokens (token, user_id, expires_at)
+   VALUES ('e2e_<随机串>', '<user_id>', NOW() + interval '2 hours');
+   ```
+
+2. **注入 localStorage**：先打开站点任意页面（建立同 origin），再设 key、后跳转目标路由：
+
+   | 目标 | localStorage key |
+   |------|-----------------|
+   | 租户前台 `/t/{tenant_id}` | `saas_token_{safe_tenant_id}`（safeId = tenant_id 中非 `[a-zA-Z0-9_-]` 字符替换为 `_`） |
+   | 平台管理后台 `/portal` | `portal_token` |
+   | 其他路径（桌面端等） | `saas_token` |
+
+3. **跳转目标页面**正常操作验证。
+4. **清理**：`DELETE FROM tokens WHERE token='e2e_<随机串>';`，验证产生的测试数据（会话、配置变更）一并删除/还原。
+
+### 代码位置（key 解析与校验）
+
+- key 解析：`frontend/web/composables/useTenantAuth.ts` 的 `getTokenKey()` / `resolveLoginKey()`
+- 存储后端：`frontend/web/platform/credentialStore.ts`（浏览器上下文无 `window.agentDesktop` 时直接读写 localStorage）
+- token 校验：`src/services/auth_service.py` `verify_token()`（Redis 缓存优先、DB 兜底、滑动续期）
+
+### 注意
+
+- **仅测试环境**使用，生产禁止铸 token
+- 该方法用于「已部署页面的行为验证」（点检 UI 交互、验收待部署功能）；单元/集成测试仍按分层规则用 mock，不要用真页面代替
+- Playwright 截图偶发复用缓存图（同 URL 幂等去重），需要留视觉证据时对关键状态连续截图并核对本地文件内容，勿只信返回的图片 URL
+
 ## 注意事项
 
 - **导入 `src.core.*` 会触发 `master_agent` 单例创建**。`tests/conftest.py` 已 mock `VectorDBSQLite` 解决此问题。如果遇到新的导入链问题，在 `conftest.py` 中添加 mock。

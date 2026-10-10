@@ -171,3 +171,4 @@ out/
 
 # Office 预览手动验收样例(本地测试用途,含 >10MB 二进制)
 test_uploads/office_preview/
+.playwright-mcp/

@@ -40,6 +40,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |------|------|------|---------|---------|
+| 20260918-2045 | Redis 夜间巡检任务（生产专用） | ✅ 已完成开发：background_runner 调度器每日 00:30 巡检 Redis——内存水位（600MB 警告/800MB 严重）、碎片率（仅 used>100MB 判）、AOF 写入/重写状态、键淘汰、连接数、无 TTL 键抽样（上限 1000，超 200 疑似泄漏），「[Redis巡检]」前缀进主日志（1 条 INFO 汇总 + 越界 WARNING/ERROR）；REDIS_INSPECTION_ENABLED 门控默认关。2026-10-10 agent2 容器内对腾讯云托管 Redis 实跑验证通过（INFO 汇总 + 告警格式正确，顺带发现测试 Redis evicted=4599 真实告警）；生产 .env 已开启待重启生效（属部署事项，不影响任务关闭）。 | — | — |
 | 20260930-1520 | 上下文压缩可观测性与计费改造 | ✅ 已完成开发：span usage/cost 透传 + 自适应摘要预算 + 50:1 经济性闸门（commit f947812f，2026-09-30）；2026-10-10 agent2 容器内全链路真机验证（check_threshold→compress_now→事件→TraceCollector）：压缩 LLM 真实用量透传 pt=24072/ct=175/cached=256，obs_spans.cost=3.66（tr_425af2359ea247a7，修复前恒 0），chat_records 独立计费 rec_713be10fa46f（background_llm，租户归属正确）。生产 agent1 部署 ≥f947812f 后生产 span 自然有值。 | — | — |
 | 20260831-1508 | Agent 用户可见中间消息（verbose） | ✅ 已完成开发（2026-10-09 收口）：长任务确定性等待提示（每轮一条、策略文案、渠道限流预留 final 额度）；2026-09-01 全局默认启用并随正式环境发布运行，旧 waiting_indicator 机制已移除；设计已并入 AgentRunner 架构 §6.4。 | [架构 §6.4](system/agent-application-architecture-design.md#64-用户可见中间消息verbose) | [计划](plans/plan-agent-intermediate-feedback.md) |
 | 20261009-2100 | verbose 收口与 agent 过时文档二轮清理 | ✅ 已完成：verbose 条目收口移档；删除 9 份已实现/被超越的 agent 相关设计（verbose 设计与 runbook、master-subagent、chat-interrupt、scheduled-task、prompt 目录、提示词优化计划），有用部分并入 AgentRunner 架构 §3.2/§6.4；修正 plan-background-runner 失真状态。 | — | [清理记录](plans/plan-obsolete-architecture-doc-cleanup.md) |
@@ -75,6 +76,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20260914-1300 | SubagentRegistry 按 agent_id 为 key + 前端展示 agent_id | ✅ 已完成开发：修复同名数字员工互相覆盖消失的生产事故（commit fbbbd057，2026-09-14）——registry/loader/agent/权限检查改按 dir_name（agent_id）为 key，显示名仅展示允许重名；前端 DigitalEmployeeManager / MyDigitalEmployees / TenantMgmt 同步展示 agent_id；新增 110 行 DB override 单测。事故当日修复上线，生产运行稳定；2026-10-10 agent2 容器内复核 14 个子智能体 key==dir_name 不变式全部成立。 | — | — |
 | 20260929-1530 | spec-to-quotation-list 升级 2.0.0：分阶段交互确认门（合并 workbuddy v3.1.0） | ✅ 已完成开发。依第三方 workbuddy v3.1.0 技能包升级：新增两个确认门（生成前先与用户确认「空间」与「大类」清单，确认结果落盘 confirmed_structure.json，生成器 --structure 约束）、items.json 数据模型改为 items[] + space/theme/category 三维度数据驱动、global_themes 跨空间合并大类、非产品条目（供应商名录）不进主表；新增 discover_structure.py 扫描提案脚本。保留我方增强：--size-budget-mb（移植到数据驱动生成器）、merge_items.py（适配新格式 + code/维度/参数引用硬校验）、validate 跳过非报价工作簿。修复第三方 bug：global_themes 大类被 themes 白名单误过滤。新增通用控制工具 present_options（选项卡片：web 端点按钮、渠道端打字回数字，复用前端 quickOptions 机制零前端改动）。技能目录升为 spec-to-quotation-list-2.0.0，SUBAGENT.md v2.0.0。容器合成 PDF 全链路冒烟 4 文件 4/4 已算量全绿；单测 30 例通过。 | — | — |
 | 20260917-1600 | spec-to-quotation-list WorkBuddy 对标改进 | ✅ 已完成开发。同输入下 WorkBuddy 18 分钟产出 8 文件 289 条，agent 20 轮中断。已修：process_message 硬编码 20 轮 -> 子智能体 get_max_iterations（agent.py）、probe 批量探查/禁读脚本源码（SKILL.md）、兜底图每文件去重（generate）、validate.py 数字表头崩溃、merge_items.py 参数引用自检、交付前强制产出任务台账 summary.md（跨会话续作手柄）。P2 后续：全文优先模式、Python 分片模式。WorkBuddy 289 条/43 组/92% 已算量为重测 benchmark。**2026-09-17 实测（scripts/e2e_spec2quote_test.py）**：39 轮完成（上限 60 余量 35%）、12 分钟、62 次工具调用、input 518 万 tokens 99% 缓存命中、9 文件+台账 182 条/75%；实测揪出真瓶颈并已修——模型改名后 config.yaml model_max_tokens 缺旧名 key 回退 16384 截断长输出（补 deepseek-v4-flash 别名）；遗留 P2：截断静默退出无提示。 | [对标文档](subagent/building-supply-chain/workbuddy-benchmark-improvement.md) | — |
 | 20260917-1200 | spec-to-quotation-list 大项目扩容（轮数/分批/体积） | ✅ 已完成开发。解决真实规范书几百条目场景的三大瓶颈：智能体轮数硬编码 20 -> 子智能体可配置（context.max_iterations，缺省 20 上限 100）、items.json 一次性编写 -> 分批编条目 + merge_items.py 合并、xlsx 超 20MB -> --size-budget-mb 图片体积预算自动降质（floor 60）。单测 17 例 + 容器端到端回归通过。 | [设计](subagent/building-supply-chain/spec-to-quotation-scaling-design.md) | — |
@@ -113,6 +115,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20260920-1554 | 知识库文件搜索工具（knowledge_file_search） | ✅ 已完成开发：按 documents.title 模糊/精确定位知识库文档，返回 file_path 供 read 分页读取，解决提示词按文件名引用文档时 LLM 拿标题当路径连败；模式 A 共享范围 + 栏目授权收口，纯 DB 元数据查询无计费点。2026-10-10 agent2 全场景验证通过：模糊/精确/0 命中引导/跨租户隔离/栏目授权收窄（subagent 上下文收窄为授权栏目 list）/带物理文件命中返回 file_path + read_hint（无物理文件的 DB-only 文档不返回路径，行为正确）。 | — | [开发计划](plans/plan-knowledge-file-search.md) |
 | 20260923-2340 | PPT 图片资产接入（分析图表嵌入） | ✅ 已完成开发：ppt_process 新增 images 结构化入参（path+title+caption，≤20 张）+ 租户根域校验 + planner 资源注入与确定性 reconcile + python-pptx 兜底图片页渲染；开发+测试+CR 完成（2026-09-23，ppt 套件 98 passed）。 | [设计（整合版）](tools/ppt/ppt_tool_design.md) | — |
 | 20260923-1142 | 数据分析产物复用（analyze_data 跨调用） | ✅ 已完成开发：会话级产物注册表 + load_output 工具 + 子代理清单注入 + 主代理 reusable_outputs 引导；P0 session_id 路径穿越已修（PoC 闭合）、254 定向测试通过（2026-09-23）。 | [设计](tools/data_analysis/analysis-artifact-reuse-design.md) / [事故复盘](incidents/analysis-agent-cost-392-credits-incident.md) | — |
 | 20260831-1509 | wecom-cli 第一方企业微信操作 CLI / MCP Provider | ✅ 已完成开发：M1–M12 + E5 全落地，13 命令真机验证通过（M12 网络查找直达路线）；read_session 双通道（服务端 /session-history ×100 积分 + 本地 OCR 兜底 + 直连静态 token）、target_name 智能分发、Runtime productTrust 注册；209 用例。遗留：常驻 OCR 迁移、协议壳对接（RPA C# 壳清退）、side 判定启发式。 | [设计](design/wecom/wecom-cli-design.md) | — |
@@ -193,6 +196,8 @@
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
 | 20260602-0956 | 前端 Office 预览 | ✅ 已完成开发：Word/Excel/PPT 三格式预览（整页/整表缩放、10MB/20MB/1000 行硬门槛、FileTypeIcon 类型徽标、懒加载分包），511 项单测与手动验收全过。 | [设计](research/frontend-office-preview-design.md) | — |
+| 20260922-1931 | 租户前台知识库「访问授权」矩阵 | ✅ 已完成开发：知识库页面「访问授权」矩阵弹框（行=一级栏目、列=数字员工）三态复选框自助配置栏目授权——半选=未配置默认全允许、首勾 confirm 收窄、取消全部勾选恢复默认、保存原样保留跨租户共享项（复用现有接口后端零改动）；三态语义同步管理后台 TenantMgmt「知识库关联」弹框（本租户栏目三态、共享栏目二态）。2026-10-10 agent2 全链路验证：矩阵渲染/首勾确认文案/半选→勾选流转/保存落库（own 项 owner_tenant_id=null）/共享项原样保留/取消勾选恢复未配置/后台三态一致；验证后租户配置已还原。 | — | — |
+| 20260720-1459 | 执行中任务切走不打断（后台继续执行 + 侧栏完成角标；原名「多会话后台流式」） | ✅ 已完成开发：会话后台执行不阻塞切换。2026-10-10 agent2 E2E 五步验证：长任务发出→侧栏 spinner；点新会话无 confirm 弹窗、后台任务继续执行并完成落库（assistant 回复持久化）；点回原会话显示完整回复、角标清除；新建会话携带所选数字员工无弹窗。「spinner→完成小点」瞬时视觉因截图缓存未独立留证，功能由后端落库与返回展示证实。 | [设计](system/multi-session-background-streaming-design.md) | [开发计划](plans/plan-multi-session-background-streaming.md) |
 | 20260526-1120 | 前端样式统一 | 统一 UI 组件库、语义化 Token、变体系统 | [设计](research/frontend/phase1-unify-foundation-design.md) | [计划](research/frontend/phase1-unify-foundation-plan.md) |
 | 20260602-1420 | 租户定制提示词前端入口（恢复 + 上线侧栏菜单） | ✅ 已完成开发。 | [设计](infrastructure/prompt-lifecycle-design.md) | — |
 | 20260602-1421 | 定制提示词页模板文件上传 | ✅ 已完成开发。 | [设计](infrastructure/prompt-lifecycle-design.md) | — |
