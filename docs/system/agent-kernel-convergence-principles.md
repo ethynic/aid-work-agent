@@ -6,7 +6,7 @@
 >
 > 性质：架构治理原则与执行顺序决策，不是功能设计。对后续所有涉及 `src/core/agent.py` 的开发工作有约束力。
 >
-> 关联：[AgentRunner 现行架构](agent-application-architecture-design.md) / [重构完成记录](../plans/plan-agent-runner-service.md) / [真诚建议 §10](../research/aid-work-agent-honest-advice.md) / [运行时安全加固设计](agent-runtime-safety-hardening-design.md)
+> 关联：[AgentRunner 现行架构](agent-application-architecture-design.md) / [重构完成记录](../plans/plan-agent-runner-service.md) / [运行时安全加固设计](agent-runtime-safety-hardening-design.md)
 >
 ## 1. 背景与核实数据
 

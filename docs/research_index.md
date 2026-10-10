@@ -7,6 +7,7 @@
 | 调研主题 | 文档 | 关联功能 |
 |---------|------|---------|
 | Codex、DeepSeek Harness、Hermes 桌面执行架构对比 | [调研](research/desktop-agent-harness-architecture-research.md) | 桌面 Agent：共用云端 Runner、本机文件/程序与批处理执行边界。 |
+| Desktop 本地与服务端工具执行分工调研 | [调研](research/desktop-agent-local-vs-server-tool-execution-research.md) | 桌面客户端 v3 / Runtime 插件宿主：本地/服务端双文件执行器、DeviceFileRef 与路由边界；结论已被桌面 v3 设计（§8）与 Phase 2/3 计划吸收，旧 Coordinator 路线作废。 |
 | 企业级智能体平台调研 | [enterprise-agent-platform-research.md](research/enterprise-agent-platform-research.md) | 可观测性、Prompt 管理、知识库 |
 | 基础设施差距分析 | [enterprise-agent-infrastructure-gap-analysis.md](research/enterprise-agent-infrastructure-gap-analysis.md) | 整体规划 |
 | Prompt 版本管理调研 | [prompt-version-management-research.md](research/prompt-version-management-research.md) | Prompt 全生命周期管理 |

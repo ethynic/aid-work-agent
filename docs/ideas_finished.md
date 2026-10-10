@@ -40,6 +40,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |------|------|------|---------|---------|
+| 20260930-1520 | 上下文压缩可观测性与计费改造 | ✅ 已完成开发：span usage/cost 透传 + 自适应摘要预算 + 50:1 经济性闸门（commit f947812f，2026-09-30）；2026-10-10 agent2 容器内全链路真机验证（check_threshold→compress_now→事件→TraceCollector）：压缩 LLM 真实用量透传 pt=24072/ct=175/cached=256，obs_spans.cost=3.66（tr_425af2359ea247a7，修复前恒 0），chat_records 独立计费 rec_713be10fa46f（background_llm，租户归属正确）。生产 agent1 部署 ≥f947812f 后生产 span 自然有值。 | — | — |
 | 20260831-1508 | Agent 用户可见中间消息（verbose） | ✅ 已完成开发（2026-10-09 收口）：长任务确定性等待提示（每轮一条、策略文案、渠道限流预留 final 额度）；2026-09-01 全局默认启用并随正式环境发布运行，旧 waiting_indicator 机制已移除；设计已并入 AgentRunner 架构 §6.4。 | [架构 §6.4](system/agent-application-architecture-design.md#64-用户可见中间消息verbose) | [计划](plans/plan-agent-intermediate-feedback.md) |
 | 20261009-2100 | verbose 收口与 agent 过时文档二轮清理 | ✅ 已完成：verbose 条目收口移档；删除 9 份已实现/被超越的 agent 相关设计（verbose 设计与 runbook、master-subagent、chat-interrupt、scheduled-task、prompt 目录、提示词优化计划），有用部分并入 AgentRunner 架构 §3.2/§6.4；修正 plan-background-runner 失真状态。 | — | [清理记录](plans/plan-obsolete-architecture-doc-cleanup.md) |
 | 20260921-1100 | 宏陶商城产品知识库同步（hongtao_shop 专用模块） | ✅ 已完成开发：宏陶专用模块拉取产品/帖子 + VL 描述 + 结构化正文入知识库（raw_payload 存原始记录），2026-10-09 验收通过。 | [设计](system/hongtao-shop/hongtao-shop-kb-design.md) | [开发计划](plans/plan-hongtao-shop-kb.md) |
