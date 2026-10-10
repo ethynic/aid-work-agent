@@ -19,6 +19,13 @@ export default defineConfig(({ mode }) => {
             'markdown-renderer': ['marked', 'marked-highlight', 'highlight.js'],
             'ui-libs': ['vue-toastification'],
             'http-client': ['axios'],
+            // Office PPT 预览懒加载库：仅动态 import 引用，仍按需加载；
+            // 显式命名避免与 echarts 等依赖合并成无名 index chunk，便于分包核验。
+            // echarts（~1MB，pptx-preview 硬依赖）单独拆 chunk：
+            // 合并后 pptx chunk 超 1000 kB，vite 经 npm 管道输出时尺寸带千分位逗号
+            // （"1,352.26 kB"），会破坏构建产物解析
+            'pptx-preview': ['pptx-preview'],
+            'echarts': ['echarts'],
           }
         }
       }

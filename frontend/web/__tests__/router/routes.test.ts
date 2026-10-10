@@ -53,6 +53,7 @@ describe('entry route responsibilities', () => {
         "monitoring/trace/:trace_id",
         "context-compression",
         "rpa-bindings",
+        "wechat-mp",
         "redis-cache",
       ]
     `)
@@ -66,6 +67,8 @@ describe('entry route responsibilities', () => {
         "connections",
         "connections/external-systems",
         "channels",
+        "wechat-mp",
+        "hongtao-shop",
         "wecom-personal-rpa",
         "settings",
         "local-tools",
@@ -82,6 +85,8 @@ describe('entry route responsibilities', () => {
         "recharge-records",
         "reply-styles",
         "external-customers",
+        "office-sessions",
+        "web-sessions",
         "data-sources",
         "social-media",
         "assets",

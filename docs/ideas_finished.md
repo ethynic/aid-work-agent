@@ -192,6 +192,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20260602-0956 | 前端 Office 预览 | ✅ 已完成开发：Word/Excel/PPT 三格式预览（整页/整表缩放、10MB/20MB/1000 行硬门槛、FileTypeIcon 类型徽标、懒加载分包），511 项单测与手动验收全过。 | [设计](research/frontend-office-preview-design.md) | — |
 | 20260526-1120 | 前端样式统一 | 统一 UI 组件库、语义化 Token、变体系统 | [设计](research/frontend/phase1-unify-foundation-design.md) | [计划](research/frontend/phase1-unify-foundation-plan.md) |
 | 20260602-1420 | 租户定制提示词前端入口（恢复 + 上线侧栏菜单） | ✅ 已完成开发。 | [设计](infrastructure/prompt-lifecycle-design.md) | — |
 | 20260602-1421 | 定制提示词页模板文件上传 | ✅ 已完成开发。 | [设计](infrastructure/prompt-lifecycle-design.md) | — |

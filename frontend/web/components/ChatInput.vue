@@ -14,8 +14,8 @@
           {{ p.label }}
         </button>
       </div>
-      <!-- 附件预览区 -->
-      <div v-if="files.length > 0" class="mb-3 flex flex-wrap gap-2">
+      <!-- 附件预览区（紧凑样式：小内边距/小图标/28px 移除触区，一行可排更多附件） -->
+      <div v-if="files.length > 0" class="mb-3 flex flex-wrap gap-1.5">
         <div
           v-for="(file, index) in files"
           :key="file.file_id || `uploading-${index}-${file.name}`"
@@ -25,37 +25,32 @@
             v-if="file.file_id"
             type="button"
             @click="openPreview(file)"
-            class="flex items-center gap-2 pl-3 pr-2 py-1.5 text-left hover:bg-primary-50 transition-colors min-w-0"
+            class="flex items-center gap-1.5 pl-2.5 pr-1 py-1 text-left hover:bg-primary-50 transition-colors min-w-0"
             :title="`预览 ${file.name}`"
           >
-            <svg v-if="file.type === 'image'" class="w-4 h-4 text-primary-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-            </svg>
-            <svg v-else class="w-4 h-4 text-primary-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            <span class="text-sm text-gray-600 max-w-32 truncate">{{ file.name }}</span>
+            <FileTypeIcon :kind="detectFileIconKind(file.mime_type, file.name)" class="w-3.5 h-3.5 flex-shrink-0" />
+            <span class="text-xs text-gray-600 max-w-32 truncate">{{ file.name }}</span>
           </button>
           <span
             v-else
-            class="flex items-center gap-2 pl-3 pr-2 py-1.5 min-w-0"
+            class="flex items-center gap-1.5 pl-2.5 pr-1 py-1 min-w-0"
             :title="`上传中：${file.name}`"
           >
-            <svg class="w-4 h-4 text-primary-500 animate-spin flex-shrink-0" fill="none" viewBox="0 0 24 24">
+            <svg class="w-3.5 h-3.5 text-primary-500 animate-spin flex-shrink-0" fill="none" viewBox="0 0 24 24">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
             </svg>
-            <span class="text-sm text-gray-400 max-w-32 truncate">{{ file.name }}</span>
+            <span class="text-xs text-gray-400 max-w-32 truncate">{{ file.name }}</span>
             <span class="text-xs text-gray-400 flex-shrink-0">上传中...</span>
           </span>
           <button
             type="button"
             :disabled="!file.file_id"
             @click.stop="emit('remove', file.file_id)"
-            class="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-danger-500 hover:bg-danger-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-gray-400 disabled:hover:bg-transparent"
+            class="flex w-7 h-7 self-center mr-1 items-center justify-center rounded text-gray-400 hover:text-danger-500 hover:bg-danger-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-gray-400 disabled:hover:bg-transparent"
             title="移除附件"
           >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
@@ -162,7 +157,9 @@ import { useMobile } from '@/composables/useMobile'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 import type { UploadedFile } from '@/api/agent'
 import type { QuickPrompt } from '@/utils/quickPrompts'
+import { detectFileIconKind } from '@/utils/file'
 import ChatToolbar from './chat/ChatToolbar.vue'
+import FileTypeIcon from './FileTypeIcon.vue'
 
 interface Props {
   disabled: boolean

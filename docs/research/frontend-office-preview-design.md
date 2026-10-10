@@ -1,7 +1,20 @@
 # 前端 Office 文件预览功能设计文档
 
 > 日期：2026-05-28（2026-10-09 修订定稿）
-> 状态：设计定稿，待开发
+> 状态：✅ 已完成开发与手动验收（2026-10-10）
+
+---
+
+## 开发进度
+
+| 阶段 | 内容 | 状态 | 完成记录 |
+|------|------|------|---------|
+| Phase 1 | 样例文件与构建基线 | ✅ 完成（2026-10-10） | 5 个样例落盘 `test_uploads/office_preview/`（oversize 实测 18.6MB）；基线入口 chunk gzip 33.69 kB |
+| Phase 2 | 三格式预览开发 + 单元测试 | ✅ 完成（2026-10-10） | 新增 utils/officePreview.ts 阈值/截断纯函数 + 4 个测试文件 57 项定向测试全过；全量 vitest（豁免 1 例存量路由快照失败）与 vue-tsc+vite build 门禁通过 |
+| Phase 3 | 独立测试与代码评审 | ✅ 完成（2026-10-10） | 发现 2 个 P1（loadExcel/loadPptx 快速切换附件的过期竞态）已修复并由评审员复核清零；遗留 P2/nit 详见当次工作流报告 |
+| Phase 4 | 手动浏览器验收 | ✅ 完成（2026-10-10） | 用户真机手动验收通过（Word 整页缩放/Excel 整表缩放与表格样式/三格式渲染/文件类型徽标/附件组件紧凑化）。验收历程：Excel/PPT 验收通过。docx 两轮反馈修复（2026-10-10）：①首验窄面板内容双向裁切 → 容器宽度判定 + overflow-auto；②二验要求仿 PPT 整页缩放 → 终版为 CSS zoom 整页等比缩放（保留 A4 版式，上限 1 / 下限 0.3，resize 重算）。同轮新增 FileTypeIcon 统一文件类型徽标（word/excel/ppt/pdf/图片/md/txt/code/html/压缩包）。三轮验收（2026-10-10）：整页缩放未生效的根因是 docx-preview 缺省把 <style> 注入渲染容器、firstElementChild 命中 style 而非 wrapper——改为按类名定位；Excel 表格同模式整表缩放；FileTypeIcon 补齐输入框附件标签与面板顶部两处漏改入口。全量 511 项测试与构建门禁通过。四轮验收（2026-10-10）Excel 表格样式优化：列宽按内容自适应不拉伸（width: max-content）、内边距 px-3 py-1.5、表头底部分隔线、数据行隔行浅底 |
+
+性能实测（构建产物）：入口 chunk gzip 增量 ≈0 kB（33.69→33.71）；xlsx 懒加载 chunk 626.97 kB / gzip 322.75 kB；pptx 懒加载 chunk 313.66 kB / gzip 87.89 kB（echarts 已按 manualChunks 单独拆分）。
 
 ---
 
@@ -339,7 +352,7 @@ async function loadPptx() {
 
 | 类型 | 适配方式 |
 |------|---------|
-| Word | 窄屏（<768px）`renderAsync` 改传 `ignoreWidth: true`，文字按容器宽度自动重排；否则 A4 原始页宽（~794px）在手机上必横向溢出。桌面保持原页宽不变 |
+| Word | 整页缩放模式（仿 PPT，2026-10-10 二次验收修订：先按窗口宽度判定 ignoreWidth 重排，首验窄面板内容双向裁切；改按容器宽度重排后二验仍不满足，终版为整页缩放）——`ignoreWidth: false` 保留 A4 原始页宽与版式，渲染后读取 section 内联页宽，按容器内容宽度对 wrapper 设置 CSS `zoom` 等比缩放整页可见；上限 1（不放大），下限 0.3（触底退回横向滚动）；窗口 resize 防抖重算缩放，无需重新渲染 |
 | Excel | 表格容器 `overflow-auto` 横向滚动即可，这是表格的自然交互，无需特殊处理 |
 | PPT | `pptx-preview` 传 `slideScale` 按容器宽度等比缩放，整页可见，细节滚动查看 |
 
@@ -388,7 +401,7 @@ Vite 会自动将这些动态 import 拆分为独立的 chunk，不影响首屏�
 | Word (.docx) 预览 | 点击 AI 产出的 docx 文件，面板打开并正确渲染 |
 | Excel (.xlsx) 预览 | 点击 xlsx 文件，表格内容正确显示，多 Sheet 可切换 |
 | PPT (.pptx) 预览 | 点击 pptx 文件，幻灯片正确渲染 |
-| DownloadFileCard 图标 | docx/xlsx/pptx 文件显示对应的 emoji 图标和类型标签 |
+| 文件类型图标 | docx/xlsx/pptx/图片/pdf/md/txt 等显示各自独立的品牌色徽标图标（FileTypeIcon 组件，附件 chip 与文件卡片一致），一眼可辨（2026-10-10 验收反馈升级，替代原 emoji 方案） |
 | 不可预览文件降级 | .doc/.ppt 等旧格式文件显示"不支持预览" + 下载按钮 |
 | 移动端适配 | 手机全屏面板；docx 窄屏自动重排不横向溢出；pptx 按容器缩放整页可见；Excel 横向滚动 |
 | 大小与行数门槛 | 超限文件不打开预览并提示下载；>1000 行 sheet 截断渲染且顶部显示截断提示 |

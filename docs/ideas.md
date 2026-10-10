@@ -67,7 +67,6 @@
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
 | 20260922-1931 | 租户前台知识库「访问授权」矩阵 | 🔧 部分完成（开发完成，待部署验收） | 租户管理员在知识库页面右上角「访问授权」弹框中以矩阵（行=一级栏目、列=数字员工）自助查看/配置数字员工栏目授权，补齐管理后台按员工勾选视角下「未配置=全部允许」不可见的盲区。三态复选框（半选=未配置默认全允许）；首勾弹窗确认收窄；取消全部勾选恢复默认全允许；复用现有 /api/saas/tenant/subagent-knowledge 接口（后端零改动），保存时原样保留跨租户共享项。三态语义已同步到管理后台 TenantMgmt 知识库授权弹框（本租户栏目三态、共享栏目保持二态），前后台 UI 一致。 | — | — |
-| 20260602-0956 | 前端 Office 预览 | 📋 待开发 | 前端在线预览 Office 文档（Word/Excel/PPT） | [设计](research/frontend-office-preview-design.md) | — |
 | 20260714-1912 | Agent 跨平台桌面客户端 | 🔧 部分完成（H3待人工验收） | 共用 Runner 与 Runtime，UI竞态修复后的首期验收包已重建验证。 | [桌面设计 v3](system/desktop-agent-client-design.md) / [Runner 架构](system/agent-application-architecture-design.md) / [共同契约](system/runner-desktop-runtime-integration-contract.md) | [开发计划](plans/plan-desktop-agent-client.md) |
 | 20260720-1459 | 多会话后台流式 | 🔧 部分完成 | 2026-07-20 代码与单测完成，待真实环境 E2E 验收。 | [设计](system/multi-session-background-streaming-design.md) | [开发计划](plans/plan-multi-session-background-streaming.md) |
 

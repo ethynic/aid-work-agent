@@ -7,12 +7,7 @@
            w-full md:w-auto md:min-w-[240px] md:max-w-[320px]"
     @click="handleClick"
   >
-    <div
-      class="w-9 h-9 rounded flex items-center justify-center flex-shrink-0"
-      :class="iconBgClass"
-    >
-      <span class="text-lg">{{ iconEmoji }}</span>
-    </div>
+    <FileTypeIcon :kind="iconKind" class="w-9 h-9 flex-shrink-0" />
 
     <div class="flex-1 min-w-0">
       <div class="text-sm font-medium text-gray-800 truncate group-hover:text-info-700">
@@ -43,12 +38,7 @@
     :disabled="downloading"
     @click="handleDownload"
   >
-    <div
-      class="w-9 h-9 rounded flex items-center justify-center flex-shrink-0"
-      :class="iconBgClass"
-    >
-      <span class="text-lg">{{ iconEmoji }}</span>
-    </div>
+    <FileTypeIcon :kind="iconKind" class="w-9 h-9 flex-shrink-0" />
 
     <div class="flex-1 min-w-0">
       <div class="text-sm font-medium text-gray-800 truncate group-hover:text-info-700">
@@ -82,6 +72,9 @@ import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 import { resolveApiUrl, saveDownloadUrl } from '@/platform/urlResolver'
 import { getAuthHeader } from '@/api/auth'
 import { triggerNativeDownload } from '@/utils/download'
+import { detectOfficePreviewKind, officePreviewMaxBytes } from '@/utils/officePreview'
+import { detectFileIconKind, type FileIconKind } from '@/utils/file'
+import FileTypeIcon from './FileTypeIcon.vue'
 
 const props = defineProps<{ file: DownloadableFile }>()
 
@@ -116,13 +109,18 @@ const ext = computed(() => {
 
 const mime = computed(() => props.file.mime_type || '')
 
-// 判断是否可预览（HTML、PDF、图片、Markdown）
+// 判断是否可预览（HTML、PDF、图片、Markdown、Office 三格式）
 const isPreviewable = computed(() => {
   if (['html', 'htm'].includes(ext.value) || mime.value === 'text/html') return true
   if (ext.value === 'pdf' || mime.value === 'application/pdf') return true
   if (mime.value.startsWith('image/') || ['png', 'jpg', 'jpeg', 'gif'].includes(ext.value)) return true
   if (['md', 'markdown'].includes(ext.value)) return true
-  return false
+
+  // Office 预览（设计 §4.1/§5.2）：仅 OOXML 三格式且不超大小门槛（Excel 10MB、Word/PPT 20MB）；
+  // .doc/.ppt 旧格式与超限文件不放行，点击直接下载
+  const kind = detectOfficePreviewKind(mime.value, ext.value)
+  if (!kind) return false
+  return (props.file.file_size ?? 0) <= officePreviewMaxBytes(kind)
 })
 
 function handleClick() {
@@ -137,28 +135,7 @@ function handleClick() {
   openPreview(attachment)
 }
 
-const iconEmoji = computed(() => {
-  const name = props.file.file_name.toLowerCase()
-  if (mime.value.startsWith('image/')) return '🖼️'
-  if (['html', 'htm'].includes(ext.value)) return '🌐'
-  if (name.endsWith('.pdf')) return '📕'
-  if (name.endsWith('.doc') || name.endsWith('.docx')) return '📘'
-  if (name.endsWith('.xls') || name.endsWith('.xlsx')) return '📊'
-  if (name.endsWith('.ppt') || name.endsWith('.pptx')) return '📙'
-  if (name.endsWith('.zip')) return '🗜️'
-  if (name.endsWith('.txt') || name.endsWith('.csv')) return '📄'
-  return '📄'
-})
-
-const iconBgClass = computed(() => {
-  const name = props.file.file_name.toLowerCase()
-  if (['html', 'htm'].includes(ext.value)) return 'bg-orange-100'
-  if (name.endsWith('.pdf')) return 'bg-danger-100'
-  if (name.endsWith('.doc') || name.endsWith('.docx')) return 'bg-info-100'
-  if (name.endsWith('.xls') || name.endsWith('.xlsx')) return 'bg-success-100'
-  if (name.endsWith('.ppt') || name.endsWith('.pptx')) return 'bg-orange-100'
-  return 'bg-gray-100'
-})
+const iconKind = computed<FileIconKind>(() => detectFileIconKind(mime.value, props.file.file_name))
 
 const fileTypeLabel = computed(() => {
   const name = props.file.file_name.toLowerCase()
