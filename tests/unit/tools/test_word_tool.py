@@ -931,3 +931,336 @@ class TestWordRouter:
         result = await router.route("some context", None)
         assert result["task"] == ""
         assert "error" in result
+
+
+# =============================================================================
+# _merge_results 落盘闭环（Phase 6：word_to_md / diff 全文不再回塞）
+# 契约：docs/tools/tool-development-spec.md §1.3 —— 全文类 > 5000 字符
+# 必须调 spill_large_content 落盘，返回 preview + file_path + truncated + full_size
+# =============================================================================
+
+class TestWordToMdSpill:
+    """word_to_md 输出：≤5000 字原样返回零变化，>5000 落盘闭环"""
+
+    @staticmethod
+    def _merge(markdown):
+        from src.tools.word.word_process_tool import PipelineContext, WordProcessTool
+
+        tool = WordProcessTool()
+        ctx = PipelineContext()
+        ctx.results = [{
+            "operation": "word_to_md",
+            "success": True,
+            "markdown": markdown,
+            "file_path": "/tmp/src.docx",
+        }]
+        return tool._merge_results(ctx)
+
+    def test_small_markdown_returned_as_is(self):
+        merged = self._merge("# 标题\n\n短文档")
+
+        assert merged["markdown"] == "# 标题\n\n短文档"
+        for key in ("preview", "file_path", "truncated", "full_size"):
+            assert key not in merged
+
+    def test_boundary_exactly_5000_chars_not_spilled(self):
+        from src.tools._spill import PREVIEW_LIMIT
+
+        merged = self._merge("x" * PREVIEW_LIMIT)
+
+        assert merged["markdown"] == "x" * PREVIEW_LIMIT
+        assert "file_path" not in merged
+
+    def test_oversized_markdown_spilled(self):
+        from src.tools._spill import PREVIEW_LIMIT
+
+        big = "# 大文档\n" + "y" * (PREVIEW_LIMIT + 1000)
+        merged = self._merge(big)
+
+        assert merged["truncated"] is True
+        assert merged["full_size"] == len(big)
+        assert merged["preview"].startswith("# 大文档")
+        assert len(merged["preview"]) <= PREVIEW_LIMIT + 3  # preview(5000) + 截断后缀
+        assert "markdown" not in merged
+        # 落盘的是完整原文（可 read/grep 回读），suffix=.md
+        spilled = Path(merged["file_path"])
+        assert spilled.exists()
+        assert spilled.read_text(encoding="utf-8") == big
+        assert spilled.name.endswith(".md")
+
+
+class TestWordDiffSpill:
+    """diff 输出：≤5000 原样返回零变化，>5000 diff_text 落盘 + 元信息保留"""
+
+    @staticmethod
+    def _merge(diff_text, changes, summary):
+        from src.tools.word.word_process_tool import PipelineContext, WordProcessTool
+
+        tool = WordProcessTool()
+        ctx = PipelineContext()
+        ctx.results = [{
+            "operation": "diff",
+            "success": True,
+            "diff_text": diff_text,
+            "changes": changes,
+            "change_count": len(changes),
+            "summary": summary,
+        }]
+        return tool._merge_results(ctx)
+
+    def test_small_diff_zero_regression(self):
+        changes = [{"type": "modified", "location": "paragraph", "index": 1,
+                    "old_text": "旧", "new_text": "新"}]
+        diff_text = "第1段：\n  -「旧」\n  +「新」"
+
+        merged = self._merge(diff_text, changes, "共发现1处差异：1处修改")
+
+        assert merged["diff_text"] == diff_text
+        assert merged["changes"] == changes
+        assert merged["change_count"] == 1
+        assert merged["summary"] == "共发现1处差异：1处修改"
+        for key in ("preview", "file_path", "truncated", "full_size"):
+            assert key not in merged
+
+    def test_oversized_diff_spilled(self):
+        from src.tools._spill import PREVIEW_LIMIT
+
+        big_diff = "文档差异报告\n" + "z" * (PREVIEW_LIMIT + 500)
+        changes = [
+            {"type": "modified", "location": "paragraph", "index": i,
+             "old_text": "旧", "new_text": "新"}
+            for i in range(300)
+        ]
+
+        merged = self._merge(big_diff, changes, "共发现300处差异：300处修改")
+
+        assert merged["truncated"] is True
+        # 元信息保留
+        assert merged["change_count"] == 300
+        assert merged["summary"] == "共发现300处差异：300处修改"
+        # 超限时不再回塞 diff_text 与 changes 数组（明细随落盘文件回读，避免双份灌入）
+        assert "diff_text" not in merged
+        assert "changes" not in merged
+        # 落盘 = 完整 diff 报告 + 完整变更明细附录，suffix=.txt
+        spilled = Path(merged["file_path"])
+        assert spilled.exists()
+        spilled_text = spilled.read_text(encoding="utf-8")
+        assert spilled_text.startswith(big_diff)
+        assert "完整变更明细" in spilled_text
+        assert merged["full_size"] == len(spilled_text)
+        assert spilled.name.endswith(".txt")
+
+    def test_oversized_diff_spill_keeps_full_change_text(self):
+        """评审修复回归：报告每处文本截断 100 字，落盘附录补全原文（无信息损失）。
+
+        复现评审实证：变更文本 >100 字时，尾部标记被 word_differ._format_text
+        截出报告（模拟其 [:100] 行为），必须仍能在落盘文件中回读。
+        """
+        from src.tools._spill import PREVIEW_LIMIT
+
+        tail_marker = "探针尾巴XYZEND"
+        long_new_text = "头部长文本" + "填充" * 120 + tail_marker  # >100 字
+        # 模拟 word_differ 报告内的截断：只保留前 100 字，尾部标记不在报告中
+        report_view = long_new_text[:100]
+        assert len(long_new_text) > 100
+        assert tail_marker not in report_view
+
+        big_diff = "文档差异报告\n" + "z" * (PREVIEW_LIMIT + 500)
+        changes = [
+            {"type": "modified", "location": "paragraph", "index": 7,
+             "old_text": "旧段落原文", "new_text": long_new_text},
+        ]
+
+        merged = self._merge(big_diff, changes, "共发现1处差异：1处修改")
+
+        spilled_text = Path(merged["file_path"]).read_text(encoding="utf-8")
+        assert spilled_text.startswith(big_diff)
+        # 报告部分只有截断视图；附录部分含完整原文（含被截出的尾部标记）
+        assert report_view in spilled_text
+        assert tail_marker in spilled_text
+        # 位置表述与报告对齐（第N段）
+        assert "第7段" in spilled_text
+
+    def test_real_diff_spill_keeps_truncated_tails(self):
+        """评审实证复现（真实 word_differ 路径）：>5000 字 diff 落盘后，
+        报告中被 [:100] 截断的变更尾部必须仍可从落盘文件回读。"""
+        from src.tools._spill import PREVIEW_LIMIT
+        from src.tools.word.word_differ import diff
+        from src.tools.word.word_lib import WordFileHandler
+        from src.tools.word.word_process_tool import PipelineContext, WordProcessTool
+        from docx import Document
+
+        marker = "探针尾巴XYZEND"
+        doc1 = Document()
+        for i in range(30):
+            doc1.add_paragraph(f"旧段落{i}" + "乙" * 120)
+        save1 = WordFileHandler.save_temp(doc1, file_name="spill_old.docx")
+
+        doc2 = Document()
+        for i in range(30):
+            if i == 0:
+                doc2.add_paragraph(f"新段落{i}" + "甲" * 150 + marker)
+            else:
+                doc2.add_paragraph(f"新段落{i}" + "丙" * 120)
+        save2 = WordFileHandler.save_temp(doc2, file_name="spill_new.docx")
+
+        result = diff(save1["file_path"], save2["file_path"])
+        assert result["success"] is True
+        assert len(result["diff_text"]) > PREVIEW_LIMIT  # 触发落盘分支
+        assert marker not in result["diff_text"]  # 报告内是 [:100] 截断视图
+
+        tool = WordProcessTool()
+        ctx = PipelineContext()
+        ctx.results = [dict(result, operation="diff")]
+        merged = tool._merge_results(ctx)
+
+        assert merged["truncated"] is True
+        spilled_text = Path(merged["file_path"]).read_text(encoding="utf-8")
+        assert spilled_text.startswith(result["diff_text"])
+        assert marker in spilled_text  # 附录补全被截断的尾部，无信息损失
+
+
+class TestSpillEndToEndRetrieval:
+    """端到端验收（落盘计划 Phase D 证据）：大文档 → 落盘 → grep 定位 → read 精读"""
+
+    @pytest.mark.asyncio
+    async def test_large_word_to_md_spill_grep_read_loop(self):
+        from src.tools._spill import PREVIEW_LIMIT
+        from src.tools.file.grep_tool import GrepTool
+        from src.tools.file.read_tool import ReadTool
+        from src.tools.word.word_process_tool import PipelineContext, WordProcessTool
+
+        # 构造 >5000 字 markdown，关键信息藏在 5000 字预览窗口之外
+        filler = "背景填充行，用于把要点行推出预览窗口之外。\n"
+        needle = "关键结论：本季度营收同比增长 37.5%，出自第七节财务摘要。"
+        big = "# 季度报告\n" + (filler * 300) + needle + "\n" + (filler * 200)
+        assert len(big) > PREVIEW_LIMIT
+        assert needle not in big[:PREVIEW_LIMIT]
+
+        tool = WordProcessTool()
+        ctx = PipelineContext()
+        ctx.results = [{
+            "operation": "word_to_md",
+            "success": True,
+            "markdown": big,
+            "file_path": "/tmp/src.docx",
+        }]
+        merged = tool._merge_results(ctx)
+        assert merged["truncated"] is True
+        assert needle not in merged["preview"]
+
+        # ① grep 在落盘文件中定位关键词（拿到 1-based 行号）
+        grep_result = await GrepTool().execute(
+            pattern="关键结论", path=merged["file_path"], output_mode="content",
+        )
+        assert grep_result["success"] is True
+        assert grep_result["count"] == 1
+        match = grep_result["matches"][0]
+        assert match["line"] >= 1
+        assert "37.5%" in match["content"]
+
+        # ② read 按 grep 行号精读落盘文件（offset 1-based）
+        read_result = await ReadTool().execute(
+            file_path=merged["file_path"], offset=match["line"], limit=1,
+        )
+        assert isinstance(read_result, dict)
+        assert read_result["read_lines"] == 1
+        assert "37.5%" in read_result["content"]
+
+
+class TestSpillRealFileEndToEnd:
+    """真实 docx 文件直驱 pipeline handler（不经 LLM 路由）的落盘闭环 E2E。
+
+    与 TestSpillEndToEndRetrieval 的区别：前者手工构造 ctx.results，
+    本类走真实 _handle_word_to_md / _handle_diff（真实 markitdown / difflib 转换），
+    验证真实转换引擎产出的全文在落盘闭环中可 grep / read 消费。
+    """
+
+    @pytest.mark.asyncio
+    async def test_real_docx_word_to_md_spill_then_grep_read(self, tmp_path):
+        from docx import Document
+
+        from src.tools._spill import PREVIEW_LIMIT
+        from src.tools.file.grep_tool import GrepTool
+        from src.tools.file.read_tool import ReadTool
+        from src.tools.word.word_process_tool import PipelineContext, WordProcessTool
+
+        needle = "关键结论：本季度营收同比增长 37.5%，出自第七节财务摘要。"
+        filler = "背景填充行，用于把要点行推出预览窗口之外。"
+        docx_path = tmp_path / "big.docx"
+        doc = Document()
+        doc.add_heading("季度报告", level=1)
+        for _ in range(300):
+            doc.add_paragraph(filler)
+        doc.add_paragraph(needle)
+        for _ in range(200):
+            doc.add_paragraph(filler)
+        doc.save(str(docx_path))
+
+        tool = WordProcessTool()
+        ctx = PipelineContext(file_paths=[str(docx_path)])
+        step = await tool._handle_word_to_md(ctx, {})
+        assert step["success"] is True
+        assert len(step["markdown"]) > PREVIEW_LIMIT  # 真实转换确实超限
+
+        step["operation"] = "word_to_md"
+        ctx.results.append(step)
+        merged = tool._merge_results(ctx)
+
+        assert merged["truncated"] is True
+        assert needle not in merged["preview"]  # 关键信息确在预览窗口外
+        spilled = Path(merged["file_path"])
+        assert spilled.name.endswith(".md")
+        assert needle in spilled.read_text(encoding="utf-8")  # 落盘含预览窗外全文
+
+        g = await GrepTool().execute(
+            pattern="关键结论", path=merged["file_path"], output_mode="content",
+        )
+        assert g["success"] is True and g["count"] == 1
+        r = await ReadTool().execute(
+            file_path=merged["file_path"], offset=g["matches"][0]["line"], limit=1,
+        )
+        assert r["read_lines"] == 1 and "37.5%" in r["content"]
+
+    @pytest.mark.asyncio
+    async def test_real_docx_diff_spill_retains_meta_and_is_readable(self, tmp_path):
+        from docx import Document
+
+        from src.tools.word.word_process_tool import PipelineContext, WordProcessTool
+
+        old_path = tmp_path / "old.docx"
+        new_path = tmp_path / "new.docx"
+        Document().save(str(old_path))
+        doc = Document()
+        long_para = "这是一段很长的新增段落内容，用于把差异报告推向超过五千字符的规模。" * 5
+        for i in range(60):
+            doc.add_paragraph(f"{long_para}编号{i}")
+        doc.save(str(new_path))
+
+        tool = WordProcessTool()
+        ctx = PipelineContext(file_paths=[str(old_path), str(new_path)])
+        step = await tool._handle_diff(ctx, {})
+        assert step["success"] is True
+        assert len(step["diff_text"]) > 5000  # 真实差异报告确实超限
+
+        step["operation"] = "diff"
+        ctx.results.append(step)
+        merged = tool._merge_results(ctx)
+
+        # 落盘闭环 + 元信息保留 + 不回塞 diff_text / changes
+        assert merged["truncated"] is True
+        assert merged["change_count"] == step["change_count"]
+        assert merged["summary"] == step["summary"]
+        assert "diff_text" not in merged and "changes" not in merged
+        spilled_text = Path(merged["file_path"]).read_text(encoding="utf-8")
+        assert len(spilled_text) == merged["full_size"]
+        assert "新增" in spilled_text
+
+        # 落盘 diff 全文可 grep 消费（pattern 取变更文本前 100 字内，diff_text
+        # 对每处变更只保留前 100 字，见 word_differ._format_text 的 [:100]）
+        from src.tools.file.grep_tool import GrepTool
+
+        g = await GrepTool().execute(
+            pattern="这是一段很长的新增段落内容", path=merged["file_path"], output_mode="content",
+        )
+        assert g["success"] is True and g["count"] >= 1

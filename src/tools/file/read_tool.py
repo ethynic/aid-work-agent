@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from src.tools._spill import spill_large_content
 from src.tools.base import BaseTool
 from src.tools.file.word_reader import WordReader, is_word_document
 from src.tools.file.excel_reader import ExcelReader, is_excel_document
@@ -471,6 +472,36 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
     # Word / Excel / PPT 路由
     # ------------------------------------------------------------------
 
+    def _format_office_content(self, content: str) -> Dict[str, Any]:
+        """Office 转换文本 → 行号格式化结果（三条 office 路由共用）。
+
+        未超 2000 行：行为与文本文件路由一致，原样返回全部行。
+        超 2000 行：完整转换文本落盘（_spill 白名单目录，可 read/grep），
+        next_hint 指向落盘文件——office 路由不消费 offset，对原文档重传
+        offset 只会重读前 2000 行（死胡同），必须指路到落盘文件续读。
+        """
+        lines = content.splitlines()
+        total = len(lines)
+        read_lines = min(total, MAX_LINES)
+        selected = lines[:read_lines]
+
+        formatted = self._format_with_line_numbers(selected, 1)
+
+        ret: Dict[str, Any] = {
+            "content": formatted,
+            "total_lines": total,
+            "read_lines": read_lines,
+        }
+        if read_lines < total:
+            spill = spill_large_content(content, prefix="read_office_", suffix=".txt")
+            ret["file_path"] = spill["file_path"]
+            ret["next_hint"] = (
+                f"文档共 {total} 行，已读 1-{read_lines} 行，完整转换文本已落盘。"
+                f"续读: read(file_path=\"{spill['file_path']}\", offset={read_lines + 1})（行号 1-based）；"
+                f"或用 grep 在该文件中搜索关键词定位。"
+            )
+        return ret
+
     def _read_word_document(self, path: Path) -> Dict[str, Any]:
         """读取 Word 文档"""
         try:
@@ -478,25 +509,7 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
             if not result.get("success"):
                 return result.get("error", "读取 Word 文档失败")
 
-            content = result.get("content", "")
-            lines = content.splitlines()
-            total = len(lines)
-            read_lines = min(total, MAX_LINES)
-            selected = lines[:read_lines]
-
-            formatted = self._format_with_line_numbers(selected, 1)
-
-            ret: Dict[str, Any] = {
-                "content": formatted,
-                "total_lines": total,
-                "read_lines": read_lines,
-            }
-            if read_lines < total:
-                ret["next_hint"] = (
-                    f"文件共 {total} 行，已读 1-{read_lines} 行。"
-                    f"继续: offset={read_lines + 1}"
-                )
-            return ret
+            return self._format_office_content(result.get("content", ""))
 
         except Exception as e:
             logger.error(f"读取 Word 文档失败: {e}")
@@ -509,25 +522,7 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
             if not result.get("success"):
                 return result.get("error", "读取 Excel 文档失败")
 
-            content = result.get("content", "")
-            lines = content.splitlines()
-            total = len(lines)
-            read_lines = min(total, MAX_LINES)
-            selected = lines[:read_lines]
-
-            formatted = self._format_with_line_numbers(selected, 1)
-
-            ret: Dict[str, Any] = {
-                "content": formatted,
-                "total_lines": total,
-                "read_lines": read_lines,
-            }
-            if read_lines < total:
-                ret["next_hint"] = (
-                    f"文件共 {total} 行，已读 1-{read_lines} 行。"
-                    f"继续: offset={read_lines + 1}"
-                )
-            return ret
+            return self._format_office_content(result.get("content", ""))
 
         except Exception as e:
             logger.error(f"读取 Excel 文档失败: {e}")
@@ -540,25 +535,7 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
             if not result.get("success"):
                 return result.get("error", "读取 PPT 文档失败")
 
-            content = result.get("content", "")
-            lines = content.splitlines()
-            total = len(lines)
-            read_lines = min(total, MAX_LINES)
-            selected = lines[:read_lines]
-
-            formatted = self._format_with_line_numbers(selected, 1)
-
-            ret: Dict[str, Any] = {
-                "content": formatted,
-                "total_lines": total,
-                "read_lines": read_lines,
-            }
-            if read_lines < total:
-                ret["next_hint"] = (
-                    f"文件共 {total} 行，已读 1-{read_lines} 行。"
-                    f"继续: offset={read_lines + 1}"
-                )
-            return ret
+            return self._format_office_content(result.get("content", ""))
 
         except Exception as e:
             logger.error(f"读取 PPT 文档失败: {e}")

@@ -735,3 +735,181 @@ class TestFormatWithLineNumbers:
         assert output_lines[0] == " 9\tline9"
         assert output_lines[1] == "10\tline10"
         assert output_lines[2] == "11\tline11"
+
+
+# ---------------------------------------------------------------------------
+# Office 路由落盘闭环 + next_hint 指向落盘文件（P0 评审建议 2）
+# office 路由不消费 offset：转换结果超 2000 行时全文落盘，
+# next_hint 指向落盘文件（read 按行续读 / grep 定位），不再指原文档 offset 死胡同
+# ---------------------------------------------------------------------------
+
+class TestOfficeSpillNextHint:
+    """Office 转换结果超 MAX_LINES：落盘 + next_hint 指向真实可续读路径"""
+
+    @pytest.mark.asyncio
+    async def test_word_overflow_spills_and_hint_points_to_file(self):
+        """Word 转换文本 > 2000 行：全文落盘，hint 给出落盘路径 + 1-based 续读行号"""
+        from src.tools.file.read_tool import ReadTool, MAX_LINES
+
+        tool = ReadTool()
+        total = MAX_LINES + 100
+        content = "\n".join(f"第{i}行内容" for i in range(1, total + 1))
+
+        with patch.object(tool.word_reader, "read_word_document", return_value={
+            "success": True, "content": content, "total_lines": total,
+        }):
+            result = tool._read_word_document(Path("/tmp/fake.docx"))
+
+        assert result["read_lines"] == MAX_LINES
+        assert result["total_lines"] == total
+        # 落盘文件是完整转换文本（含未读部分）
+        spilled = Path(result["file_path"])
+        assert spilled.exists()
+        assert spilled.read_text(encoding="utf-8") == content
+        # next_hint 指向落盘文件，行号 1-based 续读 + grep 指引
+        assert str(spilled) in result["next_hint"]
+        assert f"offset={MAX_LINES + 1}" in result["next_hint"]
+        assert "grep" in result["next_hint"]
+
+        # 死胡同修复验证：按 hint 对落盘文件续读能拿到剩余行
+        cont = await ReadTool().execute(file_path=str(spilled), offset=MAX_LINES + 1)
+        assert cont["read_lines"] == 100
+        assert "第2010行内容" in cont["content"]
+
+    @pytest.mark.asyncio
+    async def test_excel_overflow_spills_and_hint_points_to_file(self):
+        from src.tools.file.read_tool import ReadTool, MAX_LINES
+
+        tool = ReadTool()
+        total = MAX_LINES + 1
+        content = "\n".join(f"row-{i}" for i in range(1, total + 1))
+
+        with patch.object(tool.excel_reader, "read_excel_document", return_value={
+            "success": True, "content": content,
+        }):
+            result = tool._read_excel_document(Path("/tmp/fake.xlsx"))
+
+        assert result["read_lines"] == MAX_LINES
+        spilled = Path(result["file_path"])
+        assert spilled.read_text(encoding="utf-8") == content
+        assert str(spilled) in result["next_hint"]
+        assert f"offset={MAX_LINES + 1}" in result["next_hint"]
+
+    @pytest.mark.asyncio
+    async def test_ppt_overflow_spills_and_hint_points_to_file(self):
+        from src.tools.file.read_tool import ReadTool, MAX_LINES
+
+        tool = ReadTool()
+        total = MAX_LINES + 5
+        content = "\n".join(f"slide-{i}" for i in range(1, total + 1))
+
+        with patch.object(tool.ppt_reader, "read_ppt_document", return_value={
+            "success": True, "content": content,
+        }):
+            result = tool._read_ppt_document(Path("/tmp/fake.pptx"))
+
+        assert result["read_lines"] == MAX_LINES
+        spilled = Path(result["file_path"])
+        assert spilled.read_text(encoding="utf-8") == content
+        assert str(spilled) in result["next_hint"]
+        assert f"offset={MAX_LINES + 1}" in result["next_hint"]
+
+    def test_word_within_limit_no_spill_zero_regression(self):
+        """转换文本 ≤ 2000 行：零回归——无 file_path / next_hint，行为与旧版一致"""
+        from src.tools.file.read_tool import ReadTool
+
+        tool = ReadTool()
+        content = "\n".join(f"line{i}" for i in range(1, 101))
+
+        with patch.object(tool.word_reader, "read_word_document", return_value={
+            "success": True, "content": content,
+        }):
+            result = tool._read_word_document(Path("/tmp/fake.docx"))
+
+        assert result["content"].splitlines()[0].endswith("\tline1")
+        assert result["total_lines"] == 100
+        assert result["read_lines"] == 100
+        assert "file_path" not in result
+        assert "next_hint" not in result
+
+    def test_boundary_exactly_max_lines_no_spill(self):
+        """恰好 2000 行（边界）：不截断、不落盘、无 next_hint"""
+        from src.tools.file.read_tool import ReadTool, MAX_LINES
+
+        tool = ReadTool()
+        content = "\n".join(f"line{i}" for i in range(1, MAX_LINES + 1))
+
+        with patch.object(tool.word_reader, "read_word_document", return_value={
+            "success": True, "content": content,
+        }):
+            result = tool._read_word_document(Path("/tmp/fake.docx"))
+
+        assert result["read_lines"] == MAX_LINES
+        assert "file_path" not in result
+        assert "next_hint" not in result
+
+
+class TestOfficeRouteRealFileEndToEnd:
+    """真实 docx 经公共 execute() 走 office 路由的落盘 + next_hint 续读 E2E。
+
+    与 TestOfficeSpillNextHint 的区别：前者 mock reader 调私有方法，
+    本类用真实 Word 文档走 execute() 全链路（is_word_document 路由 →
+    真实解析 → 截断落盘 → next_hint 指路），并实际跟随 hint 续读。
+    """
+
+    @pytest.mark.asyncio
+    async def test_real_docx_execute_route_overflow_follow_hint(self, tmp_path):
+        from docx import Document
+
+        from src.tools.file.grep_tool import GrepTool
+        from src.tools.file.read_tool import MAX_LINES, ReadTool
+
+        docx_path = tmp_path / "many_lines.docx"
+        doc = Document()
+        for i in range(1, 2101):
+            doc.add_paragraph(f"行内容{i:04d}")
+        doc.save(str(docx_path))
+
+        result = await ReadTool().execute(file_path=str(docx_path))
+        assert isinstance(result, dict)
+        assert result["read_lines"] == MAX_LINES
+        # 2100 段 + reader 头部行「=== 文档段落 ===」= 2101 行
+        assert result["total_lines"] == 2101
+
+        hint = result["next_hint"]
+        assert result["file_path"] in hint  # 指向落盘文件而非原文档
+        assert f"offset={MAX_LINES + 1}" in hint
+        assert "grep" in hint
+
+        # 死胡同修复核心：跟随 hint 对落盘文件 offset=2001 续读，拿到 2000 行之后的内容
+        cont = await ReadTool().execute(file_path=result["file_path"], offset=MAX_LINES + 1)
+        assert isinstance(cont, dict)
+        assert cont["read_lines"] == result["total_lines"] - MAX_LINES
+        assert "行内容2001" in cont["content"]
+        assert "行内容2100" in cont["content"]
+
+        # 落盘文件可 grep 定位
+        g = await GrepTool().execute(
+            pattern="行内容2099", path=result["file_path"], output_mode="content",
+        )
+        assert g["success"] is True and g["count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_real_docx_execute_route_small_no_spill(self, tmp_path):
+        """小 docx（≤2000 行）：行为与文本路由一致，无落盘、无 next_hint"""
+        from docx import Document
+
+        from src.tools.file.read_tool import ReadTool
+
+        docx_path = tmp_path / "few_lines.docx"
+        doc = Document()
+        for i in range(1, 51):
+            doc.add_paragraph(f"小文件行{i}")
+        doc.save(str(docx_path))
+
+        result = await ReadTool().execute(file_path=str(docx_path))
+        assert isinstance(result, dict)
+        assert set(result.keys()) == {"content", "total_lines", "read_lines"}
+        # 50 段 + reader 头部行 = 51 行，全部返回
+        assert result["read_lines"] == result["total_lines"] == 51
+        assert "小文件行50" in result["content"]

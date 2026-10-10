@@ -411,3 +411,115 @@ async def test_fill_template_routed_with_flat_data_heals_in_one_roundtrip(tmp_pa
     assert res["success"] is False
     assert res.get("needs_data") is True
     assert "modify" in res["error"] or "set_cell" in res["error"]
+
+
+# =============================================================================
+# to_md 落盘闭环（Phase 6：全文不再回塞）
+# 契约：docs/tools/tool-development-spec.md §1.3 —— 全文类 > 5000 字符
+# 必须调 spill_large_content 落盘，返回 preview + file_path + truncated + full_size
+# =============================================================================
+
+class TestExcelToMdSpill:
+    """excel to_md 输出：≤5000 字原样返回零变化，>5000 落盘闭环"""
+
+    @staticmethod
+    def _merge_to_md(markdown):
+        from src.tools.excel.excel_process_tool import PipelineContext, ExcelProcessTool
+
+        tool = ExcelProcessTool()
+        ctx = PipelineContext()
+        ctx.results = [{
+            "operation": "to_md",
+            "success": True,
+            "markdown": markdown,
+            "sheet_count": 1,
+            "total_rows": 10,
+            "truncated": False,
+        }]
+        return tool._merge_results(ctx)
+
+    def test_small_markdown_returned_as_is(self):
+        md = "| A | B |\n| --- | --- |\n| 1 | 2 |"
+
+        merged = self._merge_to_md(md)
+
+        assert merged["markdown"] == md
+        for key in ("preview", "file_path", "truncated", "full_size"):
+            assert key not in merged
+
+    def test_boundary_exactly_5000_chars_not_spilled(self):
+        from src.tools._spill import PREVIEW_LIMIT
+
+        merged = self._merge_to_md("x" * PREVIEW_LIMIT)
+
+        assert merged["markdown"] == "x" * PREVIEW_LIMIT
+        assert "file_path" not in merged
+
+    def test_oversized_markdown_spilled(self):
+        from src.tools._spill import PREVIEW_LIMIT
+
+        big = "## Sheet1\n| a | b |\n| --- | --- |\n" + ("| 数据 | 值 |\n" * 900)
+        assert len(big) > PREVIEW_LIMIT
+
+        merged = self._merge_to_md(big)
+
+        assert merged["truncated"] is True
+        assert merged["full_size"] == len(big)
+        assert merged["preview"].startswith("## Sheet1")
+        assert "markdown" not in merged
+        # 落盘的是完整原文（可 read/grep 回读），suffix=.md
+        spilled = Path(merged["file_path"])
+        assert spilled.exists()
+        assert spilled.read_text(encoding="utf-8") == big
+        assert spilled.name.endswith(".md")
+
+
+class TestExcelToMdRealFileSpill:
+    """真实 xlsx 直驱 _handle_to_md（真实 markitdown 转换）的落盘闭环 E2E。
+
+    markitdown 默认 100 行上限内制造 >5000 字（长单元格），
+    验证真实转换引擎产出的全文在落盘闭环中可 grep / read 消费。
+    """
+
+    @pytest.mark.asyncio
+    async def test_real_xlsx_to_md_spill_then_grep_read(self, tmp_path):
+        from src.tools._spill import PREVIEW_LIMIT
+        from src.tools.excel.excel_process_tool import PipelineContext, ExcelProcessTool
+        from src.tools.file.grep_tool import GrepTool
+        from src.tools.file.read_tool import ReadTool
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["项目", "数值", "备注"])
+        long_cell = "长内容单元格文本" * 12  # ~84 字/行 × 100 行 > 5000 字
+        for i in range(120):  # 超过 markitdown 100 行上限，前 100 行已 >5000 字
+            ws.append([f"条目{i:03d}", i * 3, long_cell])
+        xlsx_path = tmp_path / "big.xlsx"
+        wb.save(str(xlsx_path))
+
+        tool = ExcelProcessTool()
+        ctx = PipelineContext(file_paths=[str(xlsx_path)])
+        step = await tool._handle_to_md(ctx, {})
+        assert step["success"] is True
+        assert len(step["markdown"]) > PREVIEW_LIMIT  # 真实转换确实超限
+        # excel 原有 row 级 truncated 语义不受落盘改造影响
+        assert step["truncated"] is True
+
+        step["operation"] = "to_md"
+        ctx.results.append(step)
+        merged = tool._merge_results(ctx)
+
+        assert merged["truncated"] is True
+        assert "markdown" not in merged
+        spilled = Path(merged["file_path"])
+        assert spilled.name.endswith(".md")
+        assert spilled.read_text(encoding="utf-8") == step["markdown"]  # 落盘=转换全文
+
+        g = await GrepTool().execute(
+            pattern="条目099", path=merged["file_path"], output_mode="content",
+        )
+        assert g["success"] is True and g["count"] >= 1
+        r = await ReadTool().execute(
+            file_path=merged["file_path"], offset=g["matches"][0]["line"], limit=2,
+        )
+        assert isinstance(r, dict) and "条目099" in r["content"]

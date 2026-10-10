@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from src.tools._spill import PREVIEW_LIMIT, spill_large_content
 from src.tools.base import BaseTool
 
 
@@ -113,14 +114,9 @@ TOOL_DESCRIPTION = """Excel电子表格处理工具。处理Excel(.xlsx/.csv)文
 - 用户要求**生成图表**（柱状图、折线图、饼图等） → 调用 analyze_data 工具
 - 用户要求从多个数据源关联分析 → 调用 analyze_data 工具
 
-调用方式（重要）：
-- 推荐使用 instruction + content：instruction 放用户目的，content 放待导出的完整表格数据
-- 兼容旧调用：也可以将用户的原始需求描述和相关内容放在 context 中
-- 基于模板/样例附件生成 Excel 时，必须把待填数据构造为 data 参数（{title?, meta, rows, totals}）一并传入；尚不清楚模板结构时，可先以 instruction="读取该模板内容" 调用本工具查看模板，再带 data 重新调用
-- 如果需要将数据导出为Excel，content 或 context 中必须包含完整的 Markdown表格、CSV 或 JSON数组 数据
-- 如果当前对话中已有表格数据（由其他工具生成或用户提供），必须将其完整放入 content 中
-- output_name 可传入业务文件名
-- 如果还没有表格数据，Agent 应先通过其他方式准备好数据，再调用本工具
+调用要点（参数说明见各字段）：
+- 如果当前对话中已有表格数据（由其他工具生成或用户提供），必须将其完整放入 content 中；还没有数据时应先通过其他方式准备好再调用
+- 基于模板/样例附件生成 Excel 时，尚不清楚模板结构可先以 instruction="读取该模板内容" 调用本工具查看模板，再带 data 重新调用
 - file_paths 支持直接传 file_id（如 file_xxx，推荐，工具自动解析为真实路径）或文件相对路径，禁止自行拼接 storage/uploads 等目录路径
 工具会自动判断并执行合适的操作。
 
@@ -503,7 +499,17 @@ class ExcelProcessTool(BaseTool):
                     merged["sheets"] = r.get("sheets", [])
                     merged["active_sheet"] = r.get("active_sheet", "")
                 if r.get("markdown"):
-                    merged["markdown"] = r["markdown"]
+                    md_text = r["markdown"]
+                    if len(md_text) > PREVIEW_LIMIT:
+                        # 全文类超限 → 落盘闭环（spec §1.3）：preview + file_path，
+                        # 完整 markdown 可 read/grep 回读；≤5000 字原样返回零变化
+                        spill = spill_large_content(md_text, prefix="excel_to_md_", suffix=".md")
+                        merged["preview"] = spill["preview"]
+                        merged["truncated"] = spill["truncated"]
+                        merged["file_path"] = spill["file_path"]
+                        merged["full_size"] = spill["full_size"]
+                    else:
+                        merged["markdown"] = md_text
                 if r.get("content"):
                     merged["content"] = r["content"]
                     merged["total_lines"] = r.get("total_lines", 0)

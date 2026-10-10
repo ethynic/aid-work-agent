@@ -19,7 +19,7 @@
 | Phase 3d | write/cp token 去重 | ✅ 基本完成（被 026ca30b 吸收） | desc 已达标（write 80/cp 49 字符）；残留 cp resolved_source echo（cp_tool.py:538,557）并入小项清理 |
 | Phase 4 | content_generate | 🔧 部分残留（降级为小项） | usage_guide 已清（026ca30b）；残留 language echo（content_generate_tool.py:127,136）、prompt Field desc 教程化 |
 | Phase 5 | email 三件套 | 🔧 部分残留（降级为小项） | original_name 已移除 ✅；残留 email_read few-shot（email_tool.py:61-66）、email_send details echo（:258-260） |
-| Phase 6 | word/excel_process | 🔧 部分残留（仍有效） | desc 部分瘦身（776/634 字符，未达 80）；word_to_md/diff 仍回塞全文（word_process_tool.py:467-470）——建议改走 _spill 落盘闭环 |
+| Phase 6 | word/excel_process | ✅ 完成（2026-10-10） | word_to_md/diff、excel to_md 全文 >5000 字改走 _spill 落盘闭环（preview+file_path+truncated+full_size，≤5000 零回归）；diff 落盘附完整变更明细附录（报告每处文本截断 100 字，附录补全原文，评审修复）；read 工具 office 路由超 2000 行全文落盘、next_hint 指向落盘文件（修复 offset 死胡同，P0 评审建议 2）；desc 压缩（word 986→789、excel 1259→991 字符）；端到端验收补 Phase D 证据（test_word_tool.py::TestSpillEndToEndRetrieval） |
 | Phase 7 | attraction/hotel_search | 🔧 部分残留（降级为小项） | top_k=8 ✅、info[:500] 截断 ✅；残留 project_table/price_table 不截断 |
 | Phase 8 | analyze_data/upload_data_file 合规确认 | ✅ 完成（被后续演进吸收） | 两工具后续持续演进（产物复用 c36590bd 等），维持正面标杆 |
 | Phase 9 | create/manage_scheduled_task | 🔧 部分残留（降级为小项） | debug 字段仍在返回值（scheduled_task_tool.py:203-270，已加 sanitize+截断但违反规范「禁止 debug 字段」） |
@@ -31,7 +31,7 @@
 任务停滞于 2026-07-15（commit a17443d5）。2026-08-05 commit `026ca30b`（提示词压缩重构）**反转了本计划的核心机制**：usage_guide 独有内容被合并进 description 并清空，工具说明统一走 tools 参数 description 通道——原「desc ≤80 字符 + 教程迁 usage_guide」的迁移方案不再成立。由此：
 
 1. **规范修订（✅ 2026-10-09 完成）**：[tool-development-spec.md](./tool-development-spec.md) 已按新架构修订——description 唯一通道、usage_guide 停用、补齐大内容落盘闭环契约（含落盘计划 Phase D 的 spec 章节）。
-2. **仍有效开发项**：Phase 3c 已于 2026-10-10 完成（工作流三角色闭环，全量工具单测全绿）；剩余 Phase 6 的 word/excel to_md/diff 全文回塞改走 _spill 落盘闭环。
+2. **仍有效开发项**：Phase 3c 已于 2026-10-10 完成（工作流三角色闭环，全量工具单测全绿）；Phase 6 的 word/excel to_md/diff 全文回塞已于 2026-10-10 改走 _spill 落盘闭环（含 read 工具 office 路由 next_hint 死胡同修复），仅剩小项清理清单。
 3. **小项清理清单**（合并为一次清理即可）：cp resolved_source echo、ai_call 3 参数 echo + mock 标记、email_send details echo、content_generate language echo、email_read few-shot 文案、scheduled_task debug 字段、attraction/hotel table 截断。
 
 ## 排序原则

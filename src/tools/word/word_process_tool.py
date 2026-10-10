@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from src.tools._spill import PREVIEW_LIMIT, spill_large_content
 from src.tools.base import BaseTool
 
 
@@ -90,18 +91,13 @@ TOOL_DESCRIPTION = """Word文档处理工具。所有与Word文档(.docx)相关�
 - 用户要求生成、导出、创建Word文档
 - 用户要求读取、分析、修改、格式化、对比Word文件
 - 用户上传了.docx文件并要求处理
-不要自己生成文件内容，一律交给本工具。
+不要自己生成文件内容，一律交给本工具。工具会自动判断并执行合适的操作。
 
-调用方式：
-- 推荐使用 instruction + content：instruction 放用户目的，content 放待转换 Markdown 正文
-- 兼容旧调用：也可以将用户的原始需求描述和相关内容放在 context 中
-- 如果需要将对话内容转为Word，必须在 content 或 context 中包含完整的 Markdown 文本
-- output_name 可传入业务文件名；不传时工具会从 Markdown 标题推断
-- 用户上传的附件路径放在 file_paths 中
+调用要点（参数说明见各字段）：
 - 生成Word时无需指定模板路径：若用户上传了docx模板并要求按该模板的格式/样式生成，工具会自动将该附件作为格式参考；未提供模板时自动使用内置默认模板
+- output_name 不传时从 Markdown 标题推断文件名
 - 模板填充支持多占位符语法（{{变量}}、{变量}、【变量】、[变量]、%变量%）；variables 值可为字符串（普通替换）或数组（表格行循环填充，数组元素为对象、键为字段名）
 - 填充模板前可先用扫描查看模板里有哪些占位符（scan_placeholders，只读操作）
-工具会自动判断并执行合适的操作。
 
 📦 生成文件后必须用 cp 注册下载（重要）：
 当本工具产生新的 .docx 文件时（生成/修改/格式化/填充模板，返回结果中含 file_path），
@@ -451,6 +447,32 @@ class WordProcessTool(BaseTool):
             if result.get("file_path"):
                 ctx.file_paths = [result["file_path"]]
 
+    @staticmethod
+    def _format_full_changes(changes: List[Dict]) -> str:
+        """diff 落盘附录：完整变更明细（不截断原文）。
+
+        word_differ 生成的 diff 报告对每处变更的 old/new 文本只保留前 100 字，
+        本附录按报告同款位置表述输出全文，保证 diff_text 超限落盘后
+        每处变更超长部分仍可 read/grep 回读。changes 为空时返回空串。
+        """
+        if not changes:
+            return ""
+        lines = ["", "━━━ 完整变更明细（报告中每处文本截断至 100 字，以下为全文）━━━"]
+        for idx, c in enumerate(changes, 1):
+            location = c.get("location", "paragraph")
+            if location == "table_cell":
+                pos = f"表{c.get('table_index', 0) + 1} 第{c.get('row', 0) + 1}行第{c.get('col', 0) + 1}列"
+            elif location == "table":
+                pos = f"表{c.get('index', 0) + 1}"
+            else:
+                pos = f"第{c.get('index', 0)}段"
+            lines.append(f"[{idx}] {c.get('type', '')} | {location} | {pos}")
+            if c.get("old_text"):
+                lines.append(f"  - {c['old_text']}")
+            if c.get("new_text"):
+                lines.append(f"  + {c['new_text']}")
+        return "\n" + "\n".join(lines)
+
     def _merge_results(self, ctx: PipelineContext) -> Dict[str, Any]:
         """合并所有步骤的结果"""
         merged = {"success": True, "steps": len(ctx.results)}
@@ -465,12 +487,39 @@ class WordProcessTool(BaseTool):
             elif op == "analyze":
                 merged["structure"] = r.get("structure", {})
             elif op == "word_to_md":
-                merged["markdown"] = r.get("markdown", "")
+                md_text = r.get("markdown", "")
+                if len(md_text) > PREVIEW_LIMIT:
+                    # 全文类超限 → 落盘闭环（spec §1.3）：preview + file_path，
+                    # 完整 markdown 可 read/grep 回读；≤5000 字原样返回零变化
+                    spill = spill_large_content(md_text, prefix="word_to_md_", suffix=".md")
+                    merged["preview"] = spill["preview"]
+                    merged["truncated"] = spill["truncated"]
+                    merged["file_path"] = spill["file_path"]
+                    merged["full_size"] = spill["full_size"]
+                else:
+                    merged["markdown"] = md_text
             elif op == "diff":
-                merged["diff_text"] = r.get("diff_text", "")
-                merged["changes"] = r.get("changes", [])
+                diff_text = r.get("diff_text", "")
+                changes = r.get("changes", [])
                 merged["change_count"] = r.get("change_count", 0)
                 merged["summary"] = r.get("summary", "")
+                if len(diff_text) > PREVIEW_LIMIT:
+                    # diff 报告对每处变更文本截断至 100 字（word_differ._format_text），
+                    # 落盘内容 = 完整报告 + 完整变更明细附录（changes 原文不截断），
+                    # 超限路径无信息损失；changes 数组本身不再回塞，避免报告+数组
+                    # 双份灌入上下文（明细已随落盘文件可 read/grep 回读）
+                    spill = spill_large_content(
+                        diff_text + self._format_full_changes(changes),
+                        prefix="word_diff_",
+                        suffix=".txt",
+                    )
+                    merged["preview"] = spill["preview"]
+                    merged["truncated"] = spill["truncated"]
+                    merged["file_path"] = spill["file_path"]
+                    merged["full_size"] = spill["full_size"]
+                else:
+                    merged["diff_text"] = diff_text
+                    merged["changes"] = changes
             elif op in ("md_to_word", "modify", "format", "fill_template"):
                 merged["file_path"] = r.get("file_path", "")
                 merged["file_size"] = r.get("file_size", 0)
