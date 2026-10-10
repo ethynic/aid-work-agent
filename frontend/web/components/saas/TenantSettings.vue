@@ -16,7 +16,7 @@
 
       <div v-if="loading" class="text-center py-12 text-muted">加载中...</div>
 
-      <div v-else class="max-w-lg">
+      <div v-else class="max-w-lg space-y-6">
         <div class="bg-white rounded-xl shadow-sm border border-default p-6">
           <div class="space-y-4">
             <div>
@@ -53,6 +53,9 @@
             {{ saving ? '保存中...' : '保存设置' }}
           </button>
         </div>
+
+        <!-- 通知渠道（计费提醒 / 反滥用告警外发配置） -->
+        <NotificationChannelSettings />
       </div>
     </div>
   </div>
@@ -63,6 +66,7 @@ import { ref, computed, onMounted, inject } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import LogoUpload from '@/components/ui/LogoUpload.vue'
+import NotificationChannelSettings from '@/components/notifications/NotificationChannelSettings.vue'
 import { getTenantInfo, updateTenantInfo } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 

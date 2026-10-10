@@ -1,4 +1,5 @@
 """Short PostgreSQL transactions for notifications. No transport runs under locks."""
+import hashlib
 import json
 import random
 import uuid
@@ -11,7 +12,7 @@ from .authorization import assert_subject_in_tx, resource_in_tx
 from .contracts import NotificationError, Subject
 
 TABLE_COLUMNS = {
-    'notification_messages': 'notification_id notification_ref schema_version producer event_type event_key scope_key tenant_id recipient_user_id resource_ref template_key template_version parameters_encrypted occurred_at accepted_at expires_at category priority policy_key expansion_state route_snapshot created_at',
+    'notification_messages': 'notification_id notification_ref schema_version producer event_type event_key scope_key tenant_id recipient_user_id resource_ref template_key template_version parameters_encrypted occurred_at accepted_at expires_at category priority policy_key expansion_state route_snapshot read_at created_at',
     'notification_targets': 'target_id scope_key tenant_id recipient_user_id channel provider installation_ref identity_digest target_schema_version configuration_encrypted binding_version state enabled_since verified_at created_at updated_at',
     'notification_preferences': 'scope_key tenant_id recipient_user_id category channel provider enabled event_types enabled_since updated_at',
     'notification_deliveries': 'delivery_id notification_id target_id binding_version rendered_encrypted state attempts next_attempt_at owner lease_until claim_version error_class provider_acceptance_id accepted_at delivered_at displayed_at read_at created_at updated_at',
@@ -27,12 +28,24 @@ def unprotect(value):
 
 
 def public_target(row):
-    return {key:row[key] for key in ('target_id','installation_ref','binding_version','state','enabled_since')}
+    return {key:row[key] for key in ('target_id','installation_ref','binding_version','state','enabled_since',
+                                     'channel','provider')}
 
 
 def owned(row, subject):
     return bool(row and row['scope_key'] == subject.scope_key and row['recipient_user_id'] == subject.user_id
                 and row['tenant_id'] == subject.tenant_id)
+
+
+def tenant_owned(row, subject):
+    return bool(row and row['scope_key'] == subject.scope_key and row['tenant_id'] == subject.tenant_id
+                and row['recipient_user_id'] is None)
+
+
+def tenant_installation_ref(tenant_id):
+    # 租户+provider 维度确定性 installation_ref：配合 idx_notification_active_installation
+    # 的 (provider, installation_ref) WHERE state='active' 唯一索引，在 DB 层保证同租户同 provider 至多一个 active target。
+    return 'tenant_' + hashlib.sha256(('tenant_target:'+tenant_id).encode()).hexdigest()[:40]
 
 
 def lock_subject(cursor, subject):
@@ -50,6 +63,13 @@ class NotificationRepository:
 
     def guard(self, cursor, subject):
         assert_subject_in_tx(cursor, subject)
+        if not self.allowed(subject):
+            raise NotificationError('NOTIFICATION_TENANT_DISABLED', 403)
+
+    def guard_admin(self, cursor, subject):
+        user = assert_subject_in_tx(cursor, subject)
+        if user['role'] not in ('tenant_admin', 'platform_admin'):
+            raise NotificationError('NOTIFICATION_FORBIDDEN', 403)
         if not self.allowed(subject):
             raise NotificationError('NOTIFICATION_TENANT_DISABLED', 403)
 
@@ -171,6 +191,122 @@ class NotificationRepository:
             conn.commit()
             return result
 
+    def tenant_targets(self, subject):
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            self.guard_admin(cursor, subject)
+            cursor.execute('''SELECT * FROM notification_targets WHERE scope_key=%s
+                AND recipient_user_id IS NULL ORDER BY created_at DESC''', (subject.scope_key,))
+            return [public_target(row) for row in cursor.fetchall()]
+
+    def register_tenant_target(self, subject, body):
+        from .contracts import TENANT_CHANNEL_PROVIDERS
+        if body.provider not in TENANT_CHANNEL_PROVIDERS.get(body.channel, frozenset()):
+            raise NotificationError('NOTIFICATION_PROVIDER_UNAVAILABLE', 503)
+        adapter = self.registry.get(body.channel, body.provider)
+        if not adapter or not adapter.available():
+            raise NotificationError('NOTIFICATION_PROVIDER_UNAVAILABLE', 503)
+        configuration = body.configuration.model_dump()
+        digest = adapter.validate_target(configuration)  # DNS/validation outside DB transaction.
+        installation_ref = tenant_installation_ref(subject.tenant_id)
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            self.guard_admin(cursor, subject)
+            # Serialize both unique identities without lock ordering inversions.
+            for identity in sorted((installation_ref, digest)):
+                cursor.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
+                               ('notification:target:'+body.provider+':'+identity,))
+            cursor.execute('''SELECT * FROM notification_targets WHERE provider=%s AND identity_digest=%s FOR UPDATE''',
+                           (body.provider, digest))
+            endpoint = cursor.fetchone()
+            if endpoint and not tenant_owned(endpoint, subject):
+                raise NotificationError('NOTIFICATION_TARGET_OWNED', 409)
+            cursor.execute('''SELECT * FROM notification_targets WHERE provider=%s AND installation_ref=%s
+                AND state='active' FOR UPDATE''', (body.provider, installation_ref))
+            installation = cursor.fetchone()
+            if installation and endpoint and installation['target_id'] != endpoint['target_id']:
+                raise NotificationError('NOTIFICATION_BINDING_CONFLICT', 409)
+            # 复活已撤销的同配置行，否则改绑当前 active 行；都无则新建。
+            # 优先 active 行：同 installation_ref 的 active 行存在时改绑它，避免
+            # idx_notification_active_installation 唯一索引冲突。
+            row = installation or endpoint
+            if row:
+                active = row['state'] == 'active'
+                if body.expected_binding_version is not None and body.expected_binding_version != row['binding_version']:
+                    raise NotificationError('NOTIFICATION_BINDING_CHANGED', 409)
+                if active and body.expected_binding_version is None:
+                    raise NotificationError('NOTIFICATION_BINDING_CHANGED', 409)
+                old = unprotect(row['configuration_encrypted'])
+                changed = old != configuration or not active
+                cursor.execute('''UPDATE notification_targets SET configuration_encrypted=%s,
+                    identity_digest=%s,state='active',binding_version=binding_version+%s,
+                    enabled_since=CASE WHEN state='active' THEN enabled_since ELSE clock_timestamp() END,
+                    verified_at=clock_timestamp(),updated_at=clock_timestamp()
+                    WHERE target_id=%s RETURNING *''', (protected(configuration),digest,int(changed),row['target_id']))
+            else:
+                if body.expected_binding_version is not None:
+                    raise NotificationError('NOTIFICATION_BINDING_CHANGED', 409)
+                cursor.execute('''INSERT INTO notification_targets
+                    (target_id,scope_key,tenant_id,recipient_user_id,channel,provider,installation_ref,
+                     identity_digest,configuration_encrypted) VALUES (%s,%s,%s,NULL,%s,%s,%s,%s,%s) RETURNING *''',
+                    ('target_'+uuid.uuid4().hex,subject.scope_key,subject.tenant_id,
+                     body.channel,body.provider,installation_ref,digest,protected(configuration)))
+            result = public_target(cursor.fetchone())
+            conn.commit()
+            return result
+
+    def revoke_tenant_target(self, subject, target_id, version):
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            self.guard_admin(cursor, subject)
+            cursor.execute('SELECT * FROM notification_targets WHERE target_id=%s FOR UPDATE', (target_id,))
+            row = cursor.fetchone()
+            if not tenant_owned(row, subject):
+                raise NotificationError('NOTIFICATION_TARGET_NOT_FOUND', 404)
+            if row['binding_version'] != version:
+                if row['state'] == 'revoked' and row['binding_version'] == version + 1:
+                    conn.commit()
+                    return public_target(row)
+                raise NotificationError('NOTIFICATION_BINDING_CHANGED', 409)
+            cursor.execute('''UPDATE notification_targets SET state='revoked',binding_version=binding_version+1,
+                updated_at=clock_timestamp() WHERE target_id=%s RETURNING *''', (target_id,))
+            result = public_target(cursor.fetchone())
+            cursor.execute('''UPDATE notification_deliveries SET state='skipped',error_class='target_revoked',
+                owner=NULL,lease_until=NULL,updated_at=clock_timestamp()
+                WHERE target_id=%s AND state IN ('pending','sending')''', (target_id,))
+            conn.commit()
+            return result
+
+    def tenant_test(self, subject, body):
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            self.guard_admin(cursor, subject)
+            cursor.execute('SELECT * FROM notification_targets WHERE target_id=%s', (body.target_id,))
+            target = cursor.fetchone()
+            if (not tenant_owned(target, subject) or target['state'] != 'active'
+                    or target['binding_version'] != body.binding_version):
+                raise NotificationError('NOTIFICATION_BINDING_CHANGED', 409)
+            adapter = self.registry.get(target['channel'],target['provider'])
+            if not adapter or not adapter.available():
+                raise NotificationError('NOTIFICATION_PROVIDER_UNAVAILABLE', 503)
+            lock_subject(cursor, subject)
+            cursor.execute('''SELECT 1 FROM notification_messages WHERE scope_key=%s AND recipient_user_id=%s
+                AND event_type='notification.test' AND created_at>clock_timestamp()-interval '1 minute' LIMIT 1''',
+                (subject.scope_key,subject.user_id))
+            if cursor.fetchone():
+                raise NotificationError('NOTIFICATION_TEST_RATE_LIMITED', 429)
+            from .events import publish_in_tx
+            cursor.execute('SELECT clock_timestamp() AS now')
+            now = cursor.fetchone()['now']
+            ref = publish_in_tx(cursor,subject=subject,producer='notification_api',event_type='notification.test',
+                event_key='test:'+uuid.uuid4().hex,
+                resource_ref={'type':'notification_test','id':target['target_id'],'binding_version':body.binding_version},
+                parameters={'session_title':'浏览器通知测试','event_kind':'test'},
+                occurred_at=now,accepted_at=now,expires_at=now+timedelta(minutes=5),
+                policy_key='explicit_test_target')
+            conn.commit()
+            return ref
+
     def preferences(self, subject):
         with self.connection_factory() as conn:
             cursor = conn.cursor()
@@ -250,6 +386,49 @@ class NotificationRepository:
             resource = resource_in_tx(cursor, message)
             return {'notification_ref':ref,'event_type':message['event_type'],'resource':resource}
 
+    INBOX_EVENT_TYPES = ('billing.credit_low','billing.tenant_expiry','abuse.rule_triggered')
+
+    def inbox(self, subject, unread_only=False, limit=20):
+        from .events import render_inbox_text
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            self.guard(cursor, subject)
+            cursor.execute('''SELECT count(*) AS unread FROM notification_messages
+                WHERE scope_key=%s AND recipient_user_id=%s AND event_type=ANY(%s) AND read_at IS NULL''',
+                (subject.scope_key,subject.user_id,list(self.INBOX_EVENT_TYPES)))
+            unread = cursor.fetchone()['unread']
+            sql = '''SELECT notification_ref,event_type,category,priority,read_at,created_at,
+                parameters_encrypted FROM notification_messages
+                WHERE scope_key=%s AND recipient_user_id=%s AND event_type=ANY(%s)'''
+            if unread_only:
+                sql += ' AND read_at IS NULL'
+            sql += ' ORDER BY created_at DESC LIMIT %s'
+            cursor.execute(sql,(subject.scope_key,subject.user_id,list(self.INBOX_EVENT_TYPES),limit))
+            items = []
+            for row in cursor.fetchall():
+                try:
+                    title,body = render_inbox_text(row['event_type'],unprotect(row['parameters_encrypted']))
+                except Exception:
+                    title,body = row['event_type'],''
+                items.append({'notification_ref':row['notification_ref'],'event_type':row['event_type'],
+                    'category':row['category'],'priority':row['priority'],'title':title,'body':body,
+                    'read_at':row['read_at'],'created_at':row['created_at']})
+            return {'unread_count':unread,'items':items}
+
+    def mark_inbox_read(self, subject, ref):
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            self.guard(cursor, subject)
+            cursor.execute('''SELECT notification_ref FROM notification_messages
+                WHERE notification_ref=%s AND scope_key=%s AND recipient_user_id=%s''',
+                (ref,subject.scope_key,subject.user_id))
+            if not cursor.fetchone():
+                raise NotificationError('NOTIFICATION_NOT_FOUND', 404)
+            cursor.execute('''UPDATE notification_messages SET read_at=clock_timestamp()
+                WHERE notification_ref=%s AND read_at IS NULL''', (ref,))
+            conn.commit()
+            return {'notification_ref':ref,'success':True}
+
     def expand(self):
         with self.connection_factory() as conn:
             cursor = conn.cursor()
@@ -273,12 +452,15 @@ class NotificationRepository:
                     else:
                         lock_subject(cursor, subject)
                         message['parameters'] = unprotect(message['parameters_encrypted'])
+                        # 租户级事件与测试投递额外路由到租户级 target（recipient 为空）。
+                        include_tenant_targets = message['policy_key'] in ('tenant_admin_event', 'explicit_test_target')
                         cursor.execute('''SELECT t.*,p.enabled AS preference_enabled,p.enabled_since AS preference_since,
                                 p.event_types FROM notification_targets t LEFT JOIN notification_preferences p
                                 ON p.scope_key=t.scope_key AND p.recipient_user_id=t.recipient_user_id
                                 AND p.channel=t.channel AND p.provider=t.provider AND p.category=%s
-                            WHERE t.scope_key=%s AND t.recipient_user_id=%s AND t.state='active' ''',
-                            (message['category'],subject.scope_key,subject.user_id))
+                            WHERE t.scope_key=%s AND t.state='active' AND
+                                (t.recipient_user_id=%s OR (t.recipient_user_id IS NULL AND %s))''',
+                            (message['category'],subject.scope_key,subject.user_id,include_tenant_targets))
                         for target in cursor.fetchall():
                             adapter = self.registry.get(target['channel'],target['provider'])
                             if not adapter or not adapter.available() or message['schema_version'] not in adapter.capabilities.notification_schema_versions:
@@ -286,6 +468,10 @@ class NotificationRepository:
                             if message['policy_key'] == 'explicit_test_target':
                                 ref = message['resource_ref']
                                 eligible = target['target_id'] == ref['id'] and target['binding_version'] == ref['binding_version']
+                            elif target['recipient_user_id'] is None:
+                                # 租户级 target 无偏好行，不参与偏好门控。
+                                eligible = (message['policy_key'] == 'tenant_admin_event'
+                                    and target['enabled_since'] <= message['accepted_at'])
                             else:
                                 eligible = (target['preference_enabled'] and target['preference_since'] is not None
                                     and target['preference_since'] <= message['accepted_at']
@@ -293,6 +479,15 @@ class NotificationRepository:
                                     and message['event_type'] in target['event_types'])
                             if not eligible:
                                 continue
+                            if message['policy_key'] == 'tenant_admin_event' and target['recipient_user_id'] is None:
+                                # 租户级事件每个管理员各有一条 message，同一租户级 target
+                                # 只需投递一次：按 event_key 查已有投递，命中则跳过
+                                cursor.execute('''SELECT 1 FROM notification_deliveries d
+                                    JOIN notification_messages m ON m.notification_id=d.notification_id
+                                    WHERE d.target_id=%s AND m.event_key=%s LIMIT 1''',
+                                    (target['target_id'],message['event_key']))
+                                if cursor.fetchone():
+                                    continue
                             delivery_state,error = 'pending',None
                             try:
                                 payload = adapter.render(message, target)
@@ -360,11 +555,15 @@ class NotificationRepository:
                 try:
                     self.guard(cursor, subject)
                     resource_in_tx(cursor, message)
-                    if not owned(target, subject):
+                    if target['recipient_user_id'] is None:
+                        if not tenant_owned(target, subject):
+                            raise NotificationError('TARGET_SCOPE_MISMATCH')
+                    elif not owned(target, subject):
                         raise NotificationError('TARGET_SCOPE_MISMATCH')
                 except NotificationError:
                     reason = 'resource_revoked'
-                if not reason and message['policy_key'] != 'explicit_test_target':
+                if (not reason and target['recipient_user_id'] is not None
+                        and message['policy_key'] != 'explicit_test_target'):
                     cursor.execute('''SELECT * FROM notification_preferences WHERE scope_key=%s
                         AND recipient_user_id=%s AND category=%s AND channel=%s AND provider=%s''',
                         (subject.scope_key,subject.user_id,message['category'],target['channel'],target['provider']))

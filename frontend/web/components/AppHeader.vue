@@ -102,6 +102,7 @@
 
     <!-- Right Side - Actions -->
     <div v-if="isLoggedIn" class="flex items-center gap-3 flex-shrink-0">
+      <NotificationBell />
     </div>
   </header>
 </template>
@@ -109,6 +110,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import type { AgentItem } from '@/api/saasPermissions'
+import NotificationBell from '@/components/notifications/NotificationBell.vue'
 
 const props = withDefaults(defineProps<{
   title?: string

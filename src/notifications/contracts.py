@@ -6,7 +6,8 @@ import unicodedata
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
 SCHEMA_VERSION = 1
-EVENT_TYPES = frozenset({'task.completed', 'task.failed', 'notification.test'})
+EVENT_TYPES = frozenset({'task.completed', 'task.failed', 'notification.test',
+                         'billing.credit_low', 'billing.tenant_expiry', 'abuse.rule_triggered'})
 
 
 class NotificationError(Exception):
@@ -49,6 +50,27 @@ class PreferenceRequest(StrictDTO):
 class TestRequest(StrictDTO):
     target_id: str = Field(min_length=1, max_length=128)
     binding_version: StrictInt = Field(ge=1)
+
+
+class ImWebhookConfiguration(StrictDTO):
+    webhook_url: str = Field(min_length=1, max_length=2048)
+
+
+class EmailConfiguration(StrictDTO):
+    email_address: str = Field(min_length=3, max_length=254)
+
+
+TENANT_CHANNEL_PROVIDERS = {
+    'im_webhook': frozenset({'feishu_bot', 'dingtalk_bot', 'wecom_bot'}),
+    'email': frozenset({'smtp'}),
+}
+
+
+class TenantRegisterTarget(StrictDTO):
+    channel: Literal['im_webhook', 'email']
+    provider: Literal['feishu_bot', 'dingtalk_bot', 'wecom_bot', 'smtp']
+    expected_binding_version: StrictInt | None = Field(default=None, ge=1)
+    configuration: ImWebhookConfiguration | EmailConfiguration
 
 
 @dataclass(frozen=True)

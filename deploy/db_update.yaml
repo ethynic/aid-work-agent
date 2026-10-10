@@ -3739,3 +3739,9 @@
     COMMENT ON TABLE notification_targets IS 'AID_NOTIFICATION_SCHEMA_V1';
     COMMENT ON TABLE notification_preferences IS 'AID_NOTIFICATION_SCHEMA_V1';
     COMMENT ON TABLE notification_deliveries IS 'AID_NOTIFICATION_SCHEMA_V1';
+- datetime: "2026-10-10 22:25:00"
+  remark: "租户管理员通知：notification_messages 加 read_at 站内信已读列与收件箱未读部分索引"
+  statements: |
+    ALTER TABLE notification_messages ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ;
+    CREATE INDEX IF NOT EXISTS idx_notification_inbox_unread
+        ON notification_messages(recipient_user_id, created_at) WHERE read_at IS NULL;

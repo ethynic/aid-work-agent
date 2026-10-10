@@ -5317,6 +5317,7 @@ CREATE TABLE IF NOT EXISTS notification_messages (
     policy_key TEXT,
     expansion_state TEXT DEFAULT 'pending',
     route_snapshot JSONB DEFAULT '[]',
+    read_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
     CONSTRAINT notification_message_identity UNIQUE(scope_key,recipient_user_id,producer,event_key),
     CONSTRAINT notification_message_scope CHECK (
@@ -5328,6 +5329,8 @@ CREATE TABLE IF NOT EXISTS notification_messages (
 CREATE INDEX IF NOT EXISTS idx_notification_expansion ON notification_messages(priority DESC,created_at)
     WHERE expansion_state='pending';
 CREATE INDEX IF NOT EXISTS idx_notification_message_expiry ON notification_messages(expires_at);
+CREATE INDEX IF NOT EXISTS idx_notification_inbox_unread
+    ON notification_messages(recipient_user_id, created_at) WHERE read_at IS NULL;
 CREATE TABLE IF NOT EXISTS notification_targets (
     target_id TEXT PRIMARY KEY,
     scope_key TEXT,
@@ -5428,6 +5431,7 @@ BEGIN
         ('notification_messages','policy_key','text'),
         ('notification_messages','expansion_state','text'),
         ('notification_messages','route_snapshot','jsonb'),
+        ('notification_messages','read_at','timestamptz'),
         ('notification_messages','created_at','timestamptz'),
         ('notification_targets','target_id','text'),
         ('notification_targets','scope_key','text'),

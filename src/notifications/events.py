@@ -19,6 +19,27 @@ class TestParameters(StrictDTO):
     event_kind: Literal['test']
 
 
+class CreditLowParameters(StrictDTO):
+    tenant_name: str = Field(min_length=1, max_length=128)
+    daily_avg_credits: float = Field(ge=0, le=1e12)
+    estimated_days: int = Field(ge=0, le=3650)
+    remaining_credits: float = Field(ge=0, le=1e12)
+
+
+class TenantExpiryParameters(StrictDTO):
+    tenant_name: str = Field(min_length=1, max_length=128)
+    expire_date: str = Field(pattern=r'^\d{4}-\d{2}-\d{2}$')
+    days_left: int = Field(ge=0, le=3660)
+
+
+class AbuseParameters(StrictDTO):
+    rule_name: str = Field(min_length=1, max_length=128)
+    subject_label: str = Field(min_length=1, max_length=128)
+    window_credits: float = Field(ge=0, le=1e12)
+    threshold_credits: float = Field(ge=0, le=1e12)
+    observe_mode: bool
+
+
 @dataclass(frozen=True)
 class EventDefinition:
     template_key: str
@@ -48,6 +69,36 @@ EVENTS=EventRegistry()
 EVENTS.register('task.completed',EventDefinition('runner_terminal',TerminalParameters,'runner_result'))
 EVENTS.register('task.failed',EventDefinition('runner_terminal',TerminalParameters,'runner_result'))
 EVENTS.register('notification.test',EventDefinition('notification_test',TestParameters,'notification_test'))
+EVENTS.register('billing.credit_low',EventDefinition('billing_credit_low',CreditLowParameters,'tenant_credit'))
+EVENTS.register('billing.tenant_expiry',EventDefinition('billing_tenant_expiry',TenantExpiryParameters,'tenant_profile'))
+EVENTS.register('abuse.rule_triggered',EventDefinition('abuse_rule_triggered',AbuseParameters,'abuse_event'))
+
+
+def render_inbox_text(event_type, parameters):
+    """站内信标题与正文按事件模板渲染；仅做纯文本插值，参数已过严格模型。"""
+    if event_type == 'billing.credit_low':
+        return '积分即将耗尽提醒', (
+            f'「{parameters["tenant_name"]}」近 7 天日均消耗 {parameters["daily_avg_credits"]:.1f} 积分，'
+            f'当前剩余 {parameters["remaining_credits"]:.1f} 积分，'
+            f'预计 {parameters["estimated_days"]} 天内耗尽，请及时充值或续费。')
+    if event_type == 'billing.tenant_expiry':
+        return '租户有效期即将到期', (
+            f'「{parameters["tenant_name"]}」将于 {parameters["expire_date"]} 到期'
+            f'（剩余 {parameters["days_left"]} 天），请及时续费。')
+    if event_type == 'abuse.rule_triggered':
+        mode = '（观察模式，未拦截）' if parameters['observe_mode'] else ''
+        return '异常消耗告警', (
+            f'反滥用规则「{parameters["rule_name"]}」触发{mode}：'
+            f'{parameters["subject_label"]} 在统计窗口内消耗 {parameters["window_credits"]:.1f} 积分，'
+            f'阈值 {parameters["threshold_credits"]:.1f} 积分。')
+    raise ValueError('NOTIFICATION_EVENT_UNSUPPORTED')
+
+
+def render_message_text(event_type, parameters):
+    """外发渠道统一文本（标题, 正文）；测试事件也走此渲染。"""
+    if event_type == 'notification.test':
+        return '通知渠道测试', '这是一条测试通知，收到即表示外发渠道配置有效。'
+    return render_inbox_text(event_type, parameters)
 
 
 def publish_in_tx(cursor, *, subject, producer, event_type, event_key, resource_ref, parameters,

@@ -234,12 +234,16 @@ async def _run():
     from src.notifications.dispatcher import NotificationDispatcher
     _notification_dispatcher = NotificationDispatcher()
     await _notification_dispatcher.start()
+    from src.notifications.billing_producer import TenantBillingNotificationScheduler
+    _billing_scheduler = TenantBillingNotificationScheduler()
+    await _billing_scheduler.start()
     logger.info("background runner 就绪")
 
     await _stop.wait()
     logger.info("background runner 收到停止信号，开始优雅停机")
 
     await _notification_dispatcher.stop()
+    await _billing_scheduler.stop()
 
     # 停机：poller → wechat_mp scheduler → hongtao_shop scheduler → scheduler → DB 池
     try:

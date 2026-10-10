@@ -26,6 +26,9 @@ def resource_in_tx(cursor, message):
     ref = message['resource_ref']
     if ref['type'] == 'notification_test':
         return None
+    if ref['type'] in ('tenant_credit', 'tenant_profile', 'abuse_event'):
+        # 租户级事件：resource 即租户本身，可见性由接收人管理员身份与租户隔离校验保证。
+        return {'type': ref['type'], 'id': ref['id'], 'tenant_id': subject.tenant_id}
     if ref['type'] != 'runner_result':
         raise NotificationError('NOTIFICATION_RESOURCE_UNSUPPORTED', 403)
     cursor.execute('''SELECT r.runner_id,r.session_id,r.profile_id,s.subagent_id,s.instance_id,s.title

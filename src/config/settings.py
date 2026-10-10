@@ -705,6 +705,13 @@ class NotificationsConfig(BaseModel):
     batch_size: int = Field(default=50, ge=1, le=200)
     retention_days: int = Field(default=30, ge=1, le=365)
     allowed_tenants: List[str] | None = None  # None: all active tenants; []: none.
+    timeout_seconds: int = Field(default=10, ge=1, le=30)
+    # 租户管理员通知（计费提醒/反滥用告警）：总开关默认关，场景开关在总开关开启时生效。
+    tenant_events_enabled: bool = False
+    tenant_credit_low_enabled: bool = True
+    tenant_expiry_enabled: bool = True
+    tenant_credit_low_days: int = Field(default=7, ge=1, le=90)  # 预计耗尽日不足该天数才提醒
+    tenant_expiry_thresholds: List[int] = Field(default_factory=lambda: [30, 7, 1])
     web_push: WebPushConfig = Field(default_factory=WebPushConfig)
 
 
