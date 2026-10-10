@@ -27,6 +27,7 @@
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
 | 20261008-runtime-plugin-host | Runtime 执行环境、插件宿主与可视化客户端 | 🔧 部分完成 | A1～A3完成；隔离验收包已交付，待人工及正式发行，第三方暂不开发。 | [唯一架构](system/runtime-plugin-host-architecture-design.md) / [共同契约](system/runner-desktop-runtime-integration-contract.md) / [接口](../contracts/runtime-host/v1/README.md) | [统一计划](plans/plan-runtime-plugin-host.md) |
+| 20261010-1642 | 系统级防滥用与限额 | 📋 待开发 | 租户管理员按用户/渠道勾选防滥用规则（积分预算、请求次数、单请求输出预算、重复任务检测、禁生成文件、创作/批量遍历提示词约束），先观察后拦截；Phase 1 产出阈值校准数据。 | [设计](system/saas/anti-abuse-policy-design.md) | — |
 | 20260908-2229 | 外部系统入口（SSO 打开第三方系统） | 🔧 部分完成（Phase 1 开发完成，待真机联调） | 连接中心「外部系统」入口 + SSO 通用契约（direct_url/ticket_redirect/token_param）打开第三方系统；Phase 1 完成待真机联调。 | [方案](system/external-system-entry-design.md) | — |
 
 ## 数字员工 / 子智能体
