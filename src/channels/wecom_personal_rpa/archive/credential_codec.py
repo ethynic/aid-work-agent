@@ -78,9 +78,17 @@ def decrypt_sensitive_fields(encrypted_config: Dict[str, Any]) -> Dict[str, Any]
             try:
                 # secret_crypto.decrypt_secret 返回 bytes
                 result[key] = secret_crypto.decrypt_secret(val).decode("utf-8")
-            except Exception:
+            except Exception as e:
                 # 解密失败保留原值（上游会在使用时抛出更明确的错误）
-                # 不在此处吞掉异常的细节，但保证 list_by_tenant 等批量读取不会因单条失败崩
+                # 不在此处吞掉异常的细节，但保证 list_by_tenant 等批量读取不会因单条失败崩；
+                # 此处必须留痕（含字段名），否则只剩 secret_crypto 内部无上下文的 ERROR
+                from loguru import logger
+
+                logger.warning(
+                    "wecom_personal_rpa 配置凭证解密失败（主密钥不匹配或密文损坏），已置空: field={}",
+                    key,
+                )
+                logger.debug("wecom_personal_rpa 配置解密失败详情: field={} err={}", key, type(e).__name__)
                 result[key] = ""
     return result
 

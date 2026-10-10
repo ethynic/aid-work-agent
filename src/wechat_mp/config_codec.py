@@ -141,8 +141,14 @@ def decrypt_sensitive_fields(encrypted_config: Dict[str, Any]) -> Dict[str, Any]
         if isinstance(val, str) and val and secret_crypto.looks_like_ciphertext(val):
             try:
                 result[key] = secret_crypto.decrypt_secret(val).decode("utf-8")
-            except Exception:
-                # 解密失败置空（上游使用时给出更明确的错误），避免批量读取因单条失败崩
+            except Exception as e:
+                # 解密失败置空（上游使用时给出更明确的错误），避免批量读取因单条失败崩；
+                # 此处必须留痕（含字段名），否则只剩 secret_crypto 内部无上下文的 ERROR
+                logger.bind(module="wechat_mp").warning(
+                    "wechat_mp 配置敏感字段解密失败（主密钥不匹配或密文损坏），已置空: field={}",
+                    key,
+                )
+                logger.debug("wechat_mp 配置解密失败详情: field={} err={}", key, type(e).__name__)
                 result[key] = ""
     return result
 
