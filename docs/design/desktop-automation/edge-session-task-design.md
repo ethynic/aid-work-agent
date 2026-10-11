@@ -10,7 +10,7 @@
 
 版本：V1.1 · 2026-09-12 · 状态：✅ 已实现（C0–C5 + NL 建任务向导，2026-09-28 开发完成，待部署真机验收）。启动决策和冻结契约补充见 §13，与前文冲突处以 §13 为准；实现与验证记录见文末。
 
-关联：[中立执行底座](desktop-cli-automation-design.md)、[微信固定内容及 BOSS 场景](../weixin/weixin-marketing-automation-design.md)、[微信 P0–P5](../../plans/weixin/plan-weixin-marketing-automation.md)。登记入口：[ideas_finished.md](../../ideas_finished.md)。
+关联：[中立执行底座](desktop-cli-automation-design.md)、[微信固定内容场景](../weixin/weixin-marketing-automation-design.md)（P0–P5 已验收，实施计划已注销）。登记入口：[ideas_finished.md](../../ideas_finished.md)。
 
 ## 1. 决策、范围和文档优先级
 

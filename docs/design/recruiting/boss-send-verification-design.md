@@ -1,6 +1,6 @@
 # BOSS 写后验证设计（审核修订稿）
 
-> 2026-09-10；状态：设计已修订，未开发、未真机验收。审核基线：`05e237b3` 当前工作区。关联：[原生 CDP 设计 §10.6](boss-resume-assistant-native-cdp-design.md)、[BOSS P0′ 门禁](../weixin/weixin-marketing-automation-design.md#116-boss-自有-p0-门禁)、[开发计划](../../plans/recruiting/boss-send-verification-dev-plan.md)。原生 CDP 文档中的发送实现属于现状，本设计规定后续替换方案。
+> 2026-09-10；状态：设计已修订，未开发、未真机验收。审核基线：`05e237b3` 当前工作区。关联：[原生 CDP 设计 §10.6](boss-resume-assistant-native-cdp-design.md)、[BOSS P0′ 门禁](../desktop-automation/boss-edge-session-design.md#8-p0-门禁b0-拆两段写后证据双指标)、[开发计划](../../plans/recruiting/boss-send-verification-dev-plan.md)。原生 CDP 文档中的发送实现属于现状，本设计规定后续替换方案。
 
 ## 1. 审核结论与证据边界
 

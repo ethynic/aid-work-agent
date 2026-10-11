@@ -203,7 +203,7 @@ ImageRegistry 统一管理的非知识库图片资产，所有「工具生成 / 
 `dispatch.assets_cleanup_tick` 后台任务批量硬删（行+文件，`weixin_marketing.assets_cleanup_interval_seconds`
 间隔，默认 3600s，`enabled` 门控）；被引用素材受删除保护（409 ASSET_IN_USE）直到解引用。
 **调用方**：`src/weixin_marketing/assets.py`（上传/列表/详情/删除/清理/Runtime 下载校验链）
-**规范依据**：`docs/plans/weixin/plan-weixin-marketing-automation.md` §6.2
+**规范依据**：[微信场景设计 §6](../design/weixin/weixin-marketing-automation-design.md)（内容包与素材规则；实施计划已注销）
 
 ---
 

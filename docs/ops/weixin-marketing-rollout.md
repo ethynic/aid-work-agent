@@ -1,8 +1,8 @@
 # 微信营销自动化 灰度发布与回滚手册（P5）
 
 > 适用范围：`src/weixin_marketing/`（weixin.fixed_content.v1 场景）+ 底座 `src/desktop_automation/` 的发布准备、灰度开启、监控、回滚与故障应急。
-> 前置红线：**P0 真机门禁（账号/群身份验证、相同文字新增证据、图片 probe）未通过前，不开启无人值守真实发送**。本手册的全部操作在 `enabled=false` 时零行为变化。
-> 权威文档：[微信实施计划 §9/§10](../plans/weixin/plan-weixin-marketing-automation.md) / 阶段宪章 R59（旧文档已移除）。
+> 前置红线：**P0 真机门禁（账号/群身份验证、相同文字新增证据、图片 probe）未通过前，不开启无人值守真实发送**——P0 已随真机验收通过（2026-10-11 确认），红线转为日常发版纪律。本手册的全部操作在 `enabled=false` 时零行为变化。
+> 权威文档：[底座设计](../design/desktop-automation/desktop-cli-automation-design.md) / [微信场景设计](../design/weixin/weixin-marketing-automation-design.md)。原实施计划已注销，其 §9 监控指标口径与 §10 发布检查已固化为本手册 §1/§3。
 
 ---
 
@@ -67,7 +67,7 @@ python -c "from dotenv import load_dotenv; load_dotenv('.env'); \
 
 ---
 
-## 3. 监控指标清单（§9 口径）
+## 3. 监控指标清单
 
 无独立指标面板时以日志关键词 + SQL 抽查承载（标注 SQL 的项）；接入 obs 系统后按名称对齐。
 

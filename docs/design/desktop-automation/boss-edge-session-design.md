@@ -22,7 +22,7 @@
    gate 与 guard（binding_guard）必须同有同无，不一致 → SEND_GATE_CONFIG_INVALID。guard 职责=锁 binding/检查 automation_blocked/落库计数，并在锁内调用注入的纯计算 gate；guard 漏调 gate 的实现必然落入 malformed fail-closed。
 3. **settle_operation_result 结构化返回契约**：只允许 `None`（normal）或 `{"status": "anomaly_committed", "reason": <非空受控码>}`（补建/落账保留且调用方升级）；其他任何返回值按未知处理——ROLLBACK TO SAVEPOINT（撤销部分写入）并按结算异常升级。升级路径：脱敏审计（只落受控码与返回类型，不落原始 repr）+ block binding + 幂等控制请求 + 正常 ACK。**guard 缺失（无 binding 上下文）时 settle 异常/非法返回的升级语义**：无升级对象时抛受控错误、回滚主事务且不 ACK，由 Runtime outbox 重投——不得只审计后 ACK（微信 no-op 恒返回 None 不受影响）。
 
-关联：[端侧会话任务设计](edge-session-task-design.md)（权威协议，本文是其第二个场景适配，**不改变其任何冻结契约，包括 §10/§11 的 execution_links 唯一约束与幂等物化语义**）、[中立执行底座](desktop-cli-automation-design.md)、[原 BOSS 场景设计 §11](../weixin/weixin-marketing-automation-design.md#11-第二场景boss-直聘聊天自动化待独立立项)、[原实施衔接 §12](../../plans/weixin/plan-weixin-marketing-automation.md#12-boss-聊天自动化实施衔接-待独立立项)、[BOSS 发送验证设计](../recruiting/boss-send-verification-design.md)、[BOSS CLI 权威设计](../recruiting/boss-resume-assistant-native-cdp-design.md)。登记入口：[ideas.md](../../ideas.md)（20260908-1432 条目）。
+关联：[端侧会话任务设计](edge-session-task-design.md)（权威协议，本文是其第二个场景适配，**不改变其任何冻结契约，包括 §10/§11 的 execution_links 唯一约束与幂等物化语义**）、[中立执行底座](desktop-cli-automation-design.md)、原 weixin-marketing 场景设计 §11 与实施衔接 §12 已注销（约束由本文 §0 继承）、[BOSS 发送验证设计](../recruiting/boss-send-verification-design.md)、[BOSS CLI 权威设计](../recruiting/boss-resume-assistant-native-cdp-design.md)。登记入口：[ideas.md](../../ideas.md)（20260908-1432 条目）。
 
 ## 0. 对既有 BOSS 设计的继承与替代
 

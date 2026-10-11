@@ -1,10 +1,10 @@
 # 桌面 CLI 自动任务场景：微信营销首场景与 BOSS 聊天衔接
 
-> 2026-09-11 后续架构：P5 之后的长期会话能力单独定义于[端侧会话任务设计](../desktop-automation/edge-session-task-design.md)及[C0–C5 计划](../../plans/desktop-automation/plan-edge-session-task.md)。新会话的观察、等待、就绪调度以该设计的 Runtime 循环为准；本文 §11 的 BOSS 业务约束、话术范围及 P0′ 门禁继续有效，后续接入需单独更新适配计划。固定内容营销的现有路径和 P0–P5 不受此扩展影响。
+> P5 之后的长期会话能力单独定义于[端侧会话任务设计](../desktop-automation/edge-session-task-design.md)（C0–C5 开发与验证记录见其文末）；新会话的观察、等待、就绪调度以该设计的 Runtime 循环为准。第二场景 BOSS 已独立立项，业务约束由 [BOSS 端侧接入设计 §0](../desktop-automation/boss-edge-session-design.md) 继承并替代本文原 §11。
 
-版本：V1.1 · 日期：2026-09-08 · 状态：设计完成，待开发。
+版本：V1.2 · 2026-10-11 · 状态：✅ 已实现并真机验收（P0–P5 交付，2026-10-11 确认真机验证通过）。原实施计划与调研文档已注销。
 
-关联：[源码调研](../../research/weixin-cli/automation-readiness-2026-09-08.md) · [技术实现与开发计划](../../plans/weixin/plan-weixin-marketing-automation.md)。本文的新增行为均为设计，当前能力以调研矩阵为准。
+关联：[底座设计](../desktop-automation/desktop-cli-automation-design.md) · [灰度发布与回滚手册](../../ops/weixin-marketing-rollout.md)。
 
 ## 1. 产品定位与范围
 
@@ -103,7 +103,7 @@ stateDiagram-v2
 
 ## 7. 通用底座与微信适配
 
-通用架构已归入中立目录的[底座设计](../desktop-automation/desktop-cli-automation-design.md)与[实施计划](../../plans/desktop-automation/plan-desktop-cli-automation.md)。微信只在 src/weixin_marketing/ 持有任务/版本、触发配置、群与账号绑定、内容包和素材规则；通过 weixin.fixed_content.v1 将已发布内容编译为有序 operation。
+通用架构已归入中立目录的[底座设计](../desktop-automation/desktop-cli-automation-design.md)（协议与算法细节已并入该文）。微信只在 src/weixin_marketing/ 持有任务/版本、触发配置、群与账号绑定、内容包和素材规则；通过 weixin.fixed_content.v1 将已发布内容编译为有序 operation。
 
 LocalInvocationService、许可、journal/outbox、effect/phase、桌面锁、配额桶、事件接纳骨架均由底座提供，不在微信模块重复实现。底座调用方向不依赖微信。首个消费者 weixin_message_send_v2 与第二个契约采纳者 boss_send_to_v2 使用同一中立 target/operation/permit 协议；后者本轮仅设计。
 
@@ -178,71 +178,10 @@ LocalInvocationService、许可、journal/outbox、effect/phase、桌面锁、�
 - 默认在站内任务中心通知失败、结果不明、需人工操作；成功保留记录，可选摘要。仅在配置了具体外发渠道并获授权后通知外部，不向目标群发送技术错误。
 - 记录 task/revision/occurrence/run/delivery/invocation/attempt 关联、延迟、effect、耗时与计费；普通日志不含正文、群名、原始截图、token。
 
-## 10. 发布划分与开放问题
+## 10. 交付记录
 
-阶段 A：补强 Windows 目标与回执协议，文字/网址＋时间触发＋完整配置记录页面，内部灰度。
-阶段 B：图片、有序内容包、可靠内部事件/webhook，构成本次场景完整 MVP。
-阶段 C：按真实需求扩展微信消息观察、变量模板、其他 CLI 编排与 Mac driver。
+原阶段 A（文字/网址＋时间触发＋配置页面）、阶段 B（图片、有序内容包、内部事件/签名 webhook，完整 MVP）已随 P0–P5 全部交付并真机验收（2026-10-11 确认）。后续扩展方向（微信消息观察、变量模板、Mac driver）按真实需求另行立项。
 
-以下不阻止方案制定，但会影响实施排期：实际 Windows 执行设备、目标微信版本、可验证账号标识、首个业务事件源、最终发送配额。未指定时按单 Windows 设备、单群、Asia/Shanghai、固定内容、内部示例事件与签名 webhook 的保守范围开发；Mac 原生执行需单独选择实施分支。
+## 11. 第二场景：BOSS 直聘聊天自动化（已独立立项）
 
-## 11. 第二场景：BOSS 直聘聊天自动化（待独立立项）
-
-### 11.1 范围、入口与生命周期
-
-跟踪已打招呼且已绑定的候选人会话，按已发布话术完成简单回复；低置信、敏感话题、身份或观察证据不全时转人工，通知对应员工。首期不主动找新候选人、不自动打招呼、不作录用/薪资承诺、不自动邀约或拒绝候选人。微信范围不因此扩大。
-
-招聘后台增加“聊天自动化”，复用既有职位/话术/简历详情入口、Base* 与语义 token。配置包括设备账号、职位、已沟通候选人范围、话术策略、工作时段、采样/回复上限、负责员工及通知目的地。编辑→只读检查→预览规则命中与渲染样例→发布；配置检查不调用 send 或会残留输入的 dry_run。列表分别展示规则启用状态、会话观察状态、最后回复结果和待接管数。
-
-策略生命周期 draft→active↔paused→archived，版本不可变；会话 thread 为 observing→pending_decision→reply_queued→waiting_reply→observing，可从任一步进入 human_required/blocked/closed。发送 unknown 立即 human_required 并停止后续；人工接管撤销新许可，不撤回已提交动作。人工确认后显式恢复，复验绑定与水位，不自动补发接管期间积压。
-
-会话详情展示最后观察时间/覆盖范围、逐条输入证据、话术版本、决策理由码、渲染正文、delivery 状态、负责人和通知结果；提供“接管/暂停”“标记已处理”“重新核验后恢复”。加载/空/离线/权限/409/观察缺口/通知失败/unknown 都有独立状态，列表刷新不覆盖未保存编辑。
-
-### 11.2 Observer 规格与观测边界
-
-触发源为 boss_read_chat 返回的全量未读清单（指当前 DOM 快照可解析集合），再对已绑定目标执行 open_chat→read_chat。当前工具没有稳定消息 ID、游标或完整性标志；不得把既有短会话样本的“全量”当成长会话及所有列表规模保证。
-
-初始建议每 30 秒采样，空闲退避 60/120 秒，失败最多退避至 5 分钟；均为待 P0′ 调整的负载参数，不是平台安全阈值。低优先级持有桌面锁执行有界批次，工作时段外停观察；已打开会话未读可能消失，须对已绑定活跃会话做有界轮询复查，不能只盯总徽章。无法覆盖时暴露 coverage_gap 并停止对应会话自动回复。
-
-每次先持久快照与 observation_id，再提交逐会话水位和事件 outbox；任一步失败重读而不越过未持久消息。水位保存 binding_version、最近连续窗口指纹、最后已接纳本地序号和观察时间，不使用 DOM nodeIndex 或时间戳单独作游标。若页面将来证实稳定消息 ID 才采用其去重；当前拟以 binding/version + sender + 原文摘要 + 原始时间分组 + 相邻序列上下文 + 重复项序号进行窗口对齐，再分配本地 message_id。连续相同消息、时间省略或虚拟化导致对齐不唯一时标记 observation_gap，转人工，绝不仅凭正文 hash 去重或猜是新消息。
-
-只接纳 sender=them 的新消息；me/system 不触发，并与已知 delivery 证据对照。不能判断发送方则停。首次启用建立基线、不回复历史积压；重启用持久水位恢复，窗口不连续则人工核对。读取导致徽章减少不算消息已处理，message/event 接纳与 cursor 更新同事务。
-
-对方连续回复先聚合 10 秒静默窗口，最长等 60 秒；窗口内消息均保留，同一批只决策一次。建议最少 60 秒回复间隔，每会话 10 分钟最多 3 次、每天最多 10 次；连续命中再退避 2/5 分钟，达上限转人工。批次/回复额度持久化，重启不清零；每个入站批次最多一个自动回复 delivery。自发回声、重复通知、对方机器人循环均不得形成无界自激发送。
-
-### 11.3 身份与确定性决策
-
-绑定包含设备、经验证 BOSS 账号、姓名、沟通职位、绑定版本/到期时间、关联 resume_id 与简历指纹辅助证据。姓名+职位也不天然唯一，简历指纹不能单独充当稳定身份；同名候选人禁止自动发送，账号切换、候选人/职位/指纹变化或过期阻断，重新核验。当前 open_chat 有列表重名拦截，但 already/search 以姓名标题核验，尚不满足此门禁。
-
-动作链固定为 open_chat→read_chat→单一决策点→冻结回复→复验 target/水位→send→写后验证；LLM 无权决定工具序列或目标。其受限输出为 action=select_script/fill_slots/handoff，script_version_id 仅允许发布白名单，slots 仅允许该话术 schema 字段且每值有可信事实引用，handoff 必须稳定 reason_code；禁止自由正文、任意工具调用和新增承诺。服务端确定性渲染与校验；空缺、越界、多话术冲突、无证据或低置信直接转人工，不将模型自报置信度作为唯一依据。模型超时/错误不自动发送默认话术。
-
-一期可用关键词规则完全替代这个决策点，规则冲突/未命中也转人工。敏感主题（薪资谈判、录用承诺、投诉、隐私资料等）优先转人工；候选人内容只作数据，不能更改策略或工具授权。发出前若会话新增消息或用户已手动回复，丢弃旧决策，重新接纳或交给员工；每次最终正文冻结后重试不得重跑模型改变文本。
-
-### 11.4 发布预授权与既有话术体系
-
-未来发布界面明确授权设备/账号、已绑定候选人范围、话术版本、允许占位符证据源、有效期/工作时段、额度、人工转接及通知目的地。发布后可在此不可变范围内自动执行，不逐条要求用户过目；仅保存草稿不授权。新增候选人、话术变更、扩大范围必须重新发布，暂停/到期立即撤销新许可。
-
-继承职位管理话术与现有占位符证据规则：发布时按话术 ID/版本精确冻结，不执行模糊标题匹配。当前 subagents/recruiting-operator/SUBAGENT.md 及 SCRIPT_NEEDS_FILL 文案要求最终文案逐次确认；独立立项时须同步新增“已发布 boss.chat_reply.v1 范围内由服务端校验预授权”的例外，并修改专用配置工具提示。既有交互式 boss_send_to/send_current 保持逐次确认；不得仅改 prompt 就绕过授权服务。本轮不修改这些运行时资源，也没有实际发布授权。
-
-### 11.5 数据、留痕与转人工通知
-
-bs_boss_chat_* 均带非空 tenant_id/user_id/created_at、同租户复合约束与 ACL。拟建 policies/revisions（任务配置、话术与策略快照）、candidate_bindings（账号/职位/身份版本）、threads（binding、owner_employee_id、state、cursor_ref、last_observed_at）、messages（本地消息 ID、sender、正文受控存储、序列/证据、处理状态）、observations/cursors（快照覆盖与水位）、decisions（输入批次、动作枚举、话术版本、证据引用、冻结正文 hash）、handoffs（负责人、原因、状态、通知关联）、delivery_links（thread/message/decision 到底座 delivery 的同租户映射）。
-
-threads/messages 属 BOSS 场景；deliveries/attempts/runs、额度、事件/outbox 直接复用 desktop_automation_*，不另建第二套 bs_boss_chat_deliveries。本地 message_id 是观察记录标识，不宣称 BOSS 官方消息 ID。入站批次决策唯一键、decision→delivery 唯一关联防重复回复。
-
-现有 bs_recruiting_operator_resume_comm_logs 继续作为简历沟通时间线。源码 proxy_tool._writeback_send_to_comm_log 已在旧发送成功后按姓名尽力回写，服务文件头仍称“下一期”，属于注释滞后。新链路按已验证 binding.resume_id 通过 outbox 幂等投影：以 source_delivery_id/source_message_id 唯一关联新增记录，不按姓名盲匹配；失败只补投影不重发，unknown 保留自动任务账本，人工判定后再投影并标注来源。新链路不得同时走旧回写再重复落库；旧工具行为不动。
-
-复用 recruiting_notify_service 的群 webhook 配置、凭据加密、发送与留痕模式，新增 handoff 通知类型（现有服务是面试通知，不能把类型伪装成 pre/done）。通过明确授权的 thread.owner_employee_id→租户内员工通知标识映射定位对应员工，发送最小必要对话摘要、转接原因、建议动作及受 ACL 保护的详情链接；不发完整简历/原始截图。现有服务只有租户级 webhook/at_mobiles，逐会话路由与负责人接管回执均是待新增能力。群通知成功不等于员工已读或已接管。
-
-无通知配置/映射时保留站内待办并显示“未通知”，任务不继续自动回复；handoff_id+通知版本防重复创建，限次退避重试只重发通知。通知服务不具备 exactly-once 时展示可能重复风险，不能把通知失败变成 BOSS 重发。人工接管/关闭须服务端权限校验，写后 unknown 的核对与底座一致。
-
-### 11.6 BOSS 自有 P0′ 门禁
-
-| 项目 | 必须取得的证据 / 不通过处理 |
-|---|---|
-| 写后证据 | 新增自方气泡、正文/会话匹配、无失败标记和输入恢复；相同话术连续发送、超时/点击后崩溃必测，替代当前全 snapshot.strings 包含文本的 naive 校验；未知不重发 |
-| 候选人唯一性 | already/search/list 各路径、同名/同职位、账号切换、绑定变化/过期；不能唯一则禁止自动发送 |
-| 长会话虚拟化 | 多屏长历史、滚动裁剪、重开/重启、窗口重叠、连续相同正文；无可靠增量对齐则不启 observer 自动回复 |
-| 未读可靠性 | 大列表、视口外/折叠项、当前会话、读后徽章清零、漏读/重复、消息突发；覆盖不可证明则标缺口而非承诺实时全量 |
-
-本轮均未真机验证。P0′ 可与微信 P0 并行安排，需 BOSS 独立授权测试会话；微信“哈尼”群的试发授权不覆盖候选人。
+本节原文已注销：BOSS 业务约束（范围/生命周期、频控与去重、受限决策、发布预授权、P0′ 门禁）由 [BOSS 端侧接入设计](../desktop-automation/boss-edge-session-design.md) §0 逐项继承，执行架构由端侧会话任务引擎替代，阶段划分修订为 B0a–B5（同文 §9）。
