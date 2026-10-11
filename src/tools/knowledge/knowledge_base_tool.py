@@ -17,6 +17,7 @@ from src.knowledge.retriever.tenant_range import (
     load_shared_ranges,
     resolve_category_scope,
 )
+from src.core.image_asset import get_image_registry
 from src.db.database import get_db_connection
 from loguru import logger
 
@@ -59,7 +60,9 @@ class KnowledgeBaseTool(BaseTool):
         "结果分两部分：results 为命中片段（text/doc_id/score/chunk_index/metadata）；"
         "documents 按 doc_id 归并文档信息（title/file_path/summary/doc_metadata 等），"
         "同一文档命中多个片段时文档信息只出现一次，片段经 doc_id 关联所属文档；"
-        "doc_metadata 仅含 raw_payload（业务原始数据：图片链接/销量/库存等未写入正文的字段）。"
+        "doc_metadata 仅含 raw_payload（业务原始数据：价格表/项目表/图片 file_id/销量/库存等"
+        "未写入正文的字段，可据 file_id 写 ![图片](file_id:xxx) 嵌图）；"
+        "带封面的文档另含 cover_image（含 file_id 等图片引用信息，可用于行程图集/封面展示）。"
         "若已知文件名/文档标题、需要读取整个文件，先用 knowledge_file_search 定位拿到 file_path，再用 read 读取。"
     )
     display_name = "搜索知识库"
@@ -215,6 +218,21 @@ class KnowledgeBaseTool(BaseTool):
                         row["id"]: row["created_at"].isoformat() if row.get("created_at") else None
                         for row in rows
                     }
+                    # 封面 file_id 取自顶层 metadata.images（不入 doc_metadata 白名单，
+                    # 经 ImageRegistry 反解为 cover_image 随文档输出）；
+                    # cover 非 str 的脏数据不进 registry（防每次检索重复 WARNING）
+                    doc_cover_file_ids = {}
+                    for row in rows:
+                        meta_raw = row.get("metadata")
+                        if isinstance(meta_raw, str):
+                            try:
+                                meta_raw = json.loads(meta_raw)
+                            except (json.JSONDecodeError, TypeError):
+                                meta_raw = {}
+                        images = meta_raw.get("images") if isinstance(meta_raw, dict) else None
+                        cover_file_id = images.get("cover") if isinstance(images, dict) else None
+                        if isinstance(cover_file_id, str) and cover_file_id:
+                            doc_cover_file_ids[row["id"]] = cover_file_id
                 finally:
                     conn_cm.__exit__(None, None, None)
 
@@ -222,8 +240,9 @@ class KnowledgeBaseTool(BaseTool):
                 # doc_metadata（仅 raw_payload，上限 32KB）不随命中的每个片段
                 # 重复进 LLM 上下文；片段经 doc_id 引用所属文档
                 documents_out: Dict[str, Any] = {}
+                registry = get_image_registry() if doc_cover_file_ids else None
                 for doc_id in doc_ids:
-                    documents_out[str(doc_id)] = {
+                    entry = {
                         "title": doc_titles.get(doc_id, "未知文档"),
                         "file_path": doc_file_paths.get(doc_id, ""),
                         "source_type": doc_source_types.get(doc_id),
@@ -233,6 +252,20 @@ class KnowledgeBaseTool(BaseTool):
                         "summary": doc_summaries.get(doc_id),
                         "doc_metadata": doc_metas.get(doc_id),
                     }
+                    # 有封面的文档附 cover_image（ImageRef dict）；解析失败仅
+                    # warning 不阻断（图片链路既有容错），无封面不落键
+                    cover_file_id = doc_cover_file_ids.get(doc_id)
+                    if cover_file_id:
+                        try:
+                            cover_ref = await registry.get_ref_by_file_id(cover_file_id)
+                            if cover_ref:
+                                entry["cover_image"] = cover_ref.model_dump()
+                        except Exception as e:
+                            logger.warning(
+                                f"后端日志：知识库文档封面反解失败 doc_id={doc_id} "
+                                f"cover_file_id={cover_file_id}: {e}"
+                            )
+                    documents_out[str(doc_id)] = entry
 
                 # 片段级结果：chunk_index 为片段在文档中的 1-based 位置，
                 # 配合所属文档的 total_chunks 可判断片段是否被切断

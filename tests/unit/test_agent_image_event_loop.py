@@ -65,6 +65,21 @@ class TestExtractImageRefsFromToolResult:
         refs = _extract_image_refs_from_tool_result(result)
         assert [r["file_id"] for r in refs] == ["file_a", "file_b"]
 
+    def test_extract_images_from_documents_dict(self):
+        """knowledge_base_search 模式：documents dict（键为 doc_id）中嵌套
+        cover_image——有封面的文档提取，无封面/None 的跳过。"""
+        result = {
+            "success": True,
+            "documents": {
+                "7": {"title": "景点：黄果树", "cover_image": _make_ref("file_doc7")},
+                "8": {"title": "无封面文档"},
+                "9": {"title": "小七孔", "cover_image": _make_ref("file_doc9")},
+                "10": {"title": "封面解析失败", "cover_image": None},
+            },
+        }
+        refs = _extract_image_refs_from_tool_result(result)
+        assert [r["file_id"] for r in refs] == ["file_doc7", "file_doc9"]
+
     def test_extract_images_invalid_inputs_skipped(self):
         """``images`` 列表中的 None / 字符串 / 缺 file_id 项全部跳过。"""
         result = {

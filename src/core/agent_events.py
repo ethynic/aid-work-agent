@@ -253,7 +253,9 @@ def _extract_image_refs_from_tool_result(result: Any) -> List[Dict[str, Any]]:
     - ``result["images"]``：list[dict]，每个 dict 含 file_id（顶层批量图）
     - ``result["cover_image"]``：单个 dict 或 None（顶层封面图）
     - ``result["results"]``：list，遍历每项的 ``cover_image`` 字段
-      （attraction_search 这类返回列表的工具用此模式）
+      （返回列表的工具通用模式）
+    - ``result["documents"]``：dict，遍历每个值的 ``cover_image`` 字段
+      （knowledge_base_search 这类按 doc_id 归并文档的工具用此模式）
 
     Args:
         result: 工具 execute 返回值（通常是 dict，也可能是其他类型）
@@ -277,10 +279,20 @@ def _extract_image_refs_from_tool_result(result: Any) -> List[Dict[str, Any]]:
     if isinstance(cover, dict) and cover.get("file_id"):
         refs.append(cover)
 
-    # results 列表中的 cover_image（attraction_search 模式）
+    # results 列表中的 cover_image（返回列表的工具通用模式）
     results_val = result.get("results")
     if isinstance(results_val, list):
         for item in results_val:
+            if isinstance(item, dict):
+                nested_cover = item.get("cover_image")
+                if isinstance(nested_cover, dict) and nested_cover.get("file_id"):
+                    refs.append(nested_cover)
+
+    # documents 字典中的 cover_image（knowledge_base_search 模式，
+    # 键为 doc_id、值为文档级信息 dict）
+    documents_val = result.get("documents")
+    if isinstance(documents_val, dict):
+        for item in documents_val.values():
             if isinstance(item, dict):
                 nested_cover = item.get("cover_image")
                 if isinstance(nested_cover, dict) and nested_cover.get("file_id"):

@@ -506,3 +506,150 @@ async def test_kb_search_no_source_type_narrows_to_authorized():
     assert call_kwargs["source_type"] == ["数据分析"]
     # 收窄时共享侧不过滤栏目：load_shared_ranges 传 None
     assert call_kwargs["shared_ranges"] == []
+
+
+# ============================================================
+# cover_image 增强（Phase 3：聊天封面图从 attraction_search 专属
+# 泛化为知识库文档通用能力，设计 §4 D4）
+# ============================================================
+
+def _make_cover_ref(file_id="file_cover001"):
+    """构造合法 ImageRef（真实 Pydantic 实例，model_dump 序列化路径与产线一致）"""
+    from src.core.image_asset import ImageRef
+    return ImageRef(
+        file_id=file_id,
+        download_url=f"/api/files/{file_id}/download",
+        display_name="黄果树瀑布.jpg",
+        mime_type="image/jpeg",
+        size_bytes=12345,
+        source="knowledge_base",
+        usage="thumbnail",
+    )
+
+
+async def test_kb_search_cover_image_resolved_from_top_level_images():
+    """带封面文档：顶层 metadata.images.cover 经 ImageRegistry 反解为
+    cover_image（ImageRef dict）随文档输出"""
+    tool = _make_tool()
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve = AsyncMock(return_value=[
+        {"doc_id": 7, "text": "黄果树瀑布位于安顺市", "score": 0.9, "metadata": {}},
+    ])
+    tool._retriever = mock_retriever
+
+    mock_cm, _ = _mock_db([
+        {"id": 7, "title": "景点：黄果树瀑布", "file_path": "/x.xlsx",
+         "metadata": json.dumps({
+             "images": {"cover": "file_cover001"},
+             "raw_payload": {"ticket_table": "T", "images": {"cover": "file_cover001"}},
+         })},
+    ])
+    expected = _make_cover_ref()
+    with patch("src.tools.knowledge.knowledge_base_tool.get_db_connection", return_value=mock_cm), \
+         patch("src.tools.knowledge.knowledge_base_tool.get_image_registry",
+               return_value=MagicMock(get_ref_by_file_id=AsyncMock(return_value=expected))):
+        result = await tool.execute(query="黄果树", top_k=5)
+
+    assert result["success"] is True
+    cover = result["documents"]["7"]["cover_image"]
+    assert cover["file_id"] == "file_cover001"
+    assert cover["download_url"] == "/api/files/file_cover001/download"
+    assert cover["source"] == "knowledge_base"
+    # 白名单 doc_metadata 不受影响
+    assert result["documents"]["7"]["doc_metadata"] == {
+        "raw_payload": {"ticket_table": "T", "images": {"cover": "file_cover001"}}}
+    # 截断豁免标记与封面共存（echo guard 契约）
+    assert result["_no_truncate"] is True
+
+
+async def test_kb_search_no_cover_omits_key():
+    """无封面文档不落 cover_image 键（不给 LLM 上下文加 null 噪声）"""
+    tool = _make_tool()
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve = AsyncMock(return_value=[
+        {"doc_id": 8, "text": "酒店摘要", "score": 0.9, "metadata": {}},
+    ])
+    tool._retriever = mock_retriever
+
+    mock_cm, _ = _mock_db([
+        {"id": 8, "title": "酒店：某酒店", "file_path": "/x.xlsx",
+         "metadata": json.dumps({"region": "贵阳", "raw_payload": {"price_table": "P"}})},
+    ])
+    with patch("src.tools.knowledge.knowledge_base_tool.get_db_connection", return_value=mock_cm), \
+         patch("src.tools.knowledge.knowledge_base_tool.get_image_registry") as reg:
+        result = await tool.execute(query="酒店", top_k=5)
+
+    assert result["success"] is True
+    assert "cover_image" not in result["documents"]["8"]
+    reg.assert_not_called()  # 无封面文档不触发 registry
+
+
+async def test_kb_search_cover_resolve_failure_warns_not_blocks():
+    """封面反解失败（registry 抛错）：仅 warning，文档正常输出、无 cover_image"""
+    tool = _make_tool()
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve = AsyncMock(return_value=[
+        {"doc_id": 9, "text": "摘要", "score": 0.9, "metadata": {}},
+    ])
+    tool._retriever = mock_retriever
+
+    mock_cm, _ = _mock_db([
+        {"id": 9, "title": "景点：坏封面", "file_path": "/x.xlsx",
+         "metadata": json.dumps({"images": {"cover": "file_gone"}})},
+    ])
+    registry = MagicMock()
+    registry.get_ref_by_file_id = AsyncMock(side_effect=RuntimeError("redis down"))
+    with patch("src.tools.knowledge.knowledge_base_tool.get_db_connection", return_value=mock_cm), \
+         patch("src.tools.knowledge.knowledge_base_tool.get_image_registry",
+               return_value=registry):
+        result = await tool.execute(query="坏封面", top_k=5)
+
+    assert result["success"] is True
+    assert "cover_image" not in result["documents"]["9"]
+
+
+async def test_kb_search_cover_ref_not_found_omits_key():
+    """registry 查无 file_id 返回 None（Redis TTL 过期后的常态路径）：
+    静默不落键——与「无封面不加 null 噪声」同一设计目标"""
+    tool = _make_tool()
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve = AsyncMock(return_value=[
+        {"doc_id": 10, "text": "摘要", "score": 0.9, "metadata": {}},
+    ])
+    tool._retriever = mock_retriever
+
+    mock_cm, _ = _mock_db([
+        {"id": 10, "title": "景点：过期封面", "file_path": "/x.xlsx",
+         "metadata": json.dumps({"images": {"cover": "file_expired"}})},
+    ])
+    registry = MagicMock()
+    registry.get_ref_by_file_id = AsyncMock(return_value=None)
+    with patch("src.tools.knowledge.knowledge_base_tool.get_db_connection", return_value=mock_cm), \
+         patch("src.tools.knowledge.knowledge_base_tool.get_image_registry",
+               return_value=registry):
+        result = await tool.execute(query="过期封面", top_k=5)
+
+    assert result["success"] is True
+    assert "cover_image" not in result["documents"]["10"]
+
+
+async def test_kb_search_cover_dirty_value_skipped_silently():
+    """cover 为非 str 脏数据（int 等）：静默跳过，不进 registry（防每次检索重复 WARNING）"""
+    tool = _make_tool()
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve = AsyncMock(return_value=[
+        {"doc_id": 11, "text": "摘要", "score": 0.9, "metadata": {}},
+    ])
+    tool._retriever = mock_retriever
+
+    mock_cm, _ = _mock_db([
+        {"id": 11, "title": "景点：脏封面", "file_path": "/x.xlsx",
+         "metadata": json.dumps({"images": {"cover": 999}})},
+    ])
+    with patch("src.tools.knowledge.knowledge_base_tool.get_db_connection", return_value=mock_cm), \
+         patch("src.tools.knowledge.knowledge_base_tool.get_image_registry") as reg:
+        result = await tool.execute(query="脏封面", top_k=5)
+
+    assert result["success"] is True
+    assert "cover_image" not in result["documents"]["11"]
+    reg.assert_not_called()
