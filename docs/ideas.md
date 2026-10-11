@@ -35,6 +35,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261011-boss-screening | BOSS 简历数量选择与连续筛选 | 🔧 部分完成 | 用户选择总份数，续筛沿用条件并跳过已处理候选人。 | — | [开发计划](plans/desktop-automation/plan-boss-screening-continuation.md) |
 | 20260908-1431 | 桌面 CLI 无人值守自动任务底座＋微信营销首场景 | 🔧 部分完成 | 桌面 CLI 无人值守任务底座（调度/账本/许可/journal/桌面锁）＋微信营销首场景，与端侧会话任务（20260912-2313）共用底座。 | [底座设计](design/desktop-automation/desktop-cli-automation-design.md) / [场景设计](design/weixin/weixin-marketing-automation-design.md) | [底座计划](plans/desktop-automation/plan-desktop-cli-automation.md) / [微信实施与BOSS衔接](plans/weixin/plan-weixin-marketing-automation.md) |
 | 20260908-1432 | BOSS 直聘聊天自动化 | 🔧 部分完成 | B2 场景包（fake 端到端）十审通过入库；进入 B3 Runtime+Provider 真机接线。 | [场景设计 §11](design/weixin/weixin-marketing-automation-design.md#11-第二场景boss-直聘聊天自动化待独立立项) / [端侧接入设计](design/desktop-automation/boss-edge-session-design.md) / [底座设计](design/desktop-automation/desktop-cli-automation-design.md) | [BOSS 端侧接入计划](plans/desktop-automation/plan-boss-edge-session.md) / [BOSS 里程碑](plans/weixin/plan-weixin-marketing-automation.md#12-boss-聊天自动化实施衔接-待独立立项) / [底座计划](plans/desktop-automation/plan-desktop-cli-automation.md) / [VIP筛选+性能埋点](plans/desktop-automation/plan-boss-cli-vip-filter-perf.md) / [详情页打分即打招呼](plans/desktop-automation/plan-boss-detail-greet.md) |
 | 20260905-1753 | 营销 App 智能外呼代理 | 🔧 部分完成 | 2026-09-05 完成调研、详细设计与实施规划。 | [设计](design/marketing-call-agent-design.md) | [验证与计划](plans/marketing-call-agent-plan.md) / [GLM 实验执行手册](plans/marketing-call-agent-experiment-runbook.md) |
@@ -47,10 +48,11 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261011-0948 | 数据分析与智能体成本治理 | 📋 待开发 | 310积分事件已归因，设计批量加工、可靠复用及共用上下文，完整任务目标≤90积分。 | [设计](tools/data_analysis/analysis-cost-governance-design.md) / [复盘](incidents/analysis-agent-cost-310-credits-runner-incident.md) | [开发计划](plans/plan-analysis-cost-governance.md) |
 | 20260714-1911 | 浏览器混合执行、可视化与人工接管 | 🔧 部分完成 | Phase 0～1 已完成；Phase 2 已实现、待真实 Redis/PostgreSQL 门禁。 | [设计](tools/browser/browser_visualization_design.md) | [开发计划](tools/browser/browser_execution_dev_plan.md) |
 | 20260630-1733 | PDF reportlab 固定版式生成器 | 📋 待开发 | 暂不开发，未来如出现强固定版式需求再评估。 | [设计](tools/pdf/pdf_tool_design.md) | — |
 | 20260630-1734 | PDF 视觉回归样本集 | 💡 灵感 | 低优先级未来项。用于沉淀小型样例 PDF、渲染 PNG 或预期检查结果，后续在改动 PDF 生成器、渲染器、验证器时做回归校验，防止中文乱码、空白页、黑页、页数错误、表格溢出等质量退化。 | [设计](tools/pdf/pdf_tool_design.md) | — |
-| 20261010-1053 | 统一知识库检索工具替代 attraction/hotel_search | 🔧 部分完成 | 两工具由统一知识库工具替代；价格/项目表迁入文档 metadata（raw_payload 契约），替代固定 chunk 位次取表。Phase 1 迁移脚本、Phase 2 写读路径切换均已完成（各经独立测试/CR 多轮修复终审可合入）；Phase 3-5 待开发。 | [设计](system/knowledge-base/unified-kb-resource-table-metadata-design.md) | [开发计划](plans/plan-unified-kb-resource-metadata.md) |
+| 20261010-1053 | 统一知识库检索工具替代 attraction/hotel_search | 🔧 部分完成 | 两工具由统一知识库工具替代；价格/项目表迁入文档 metadata（raw_payload 契约），替代固定 chunk 位次取表。Phase 1-3 完成；Phase 4a 两工具已软下线（catalog=False，提示词切统一工具，待真机观察后 4b 删除）；Phase 5 真机迁移待逐次授权。 | [设计](system/knowledge-base/unified-kb-resource-table-metadata-design.md) | [开发计划](plans/plan-unified-kb-resource-metadata.md) |
 
 ## 渠道集成
 

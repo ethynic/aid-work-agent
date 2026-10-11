@@ -39,6 +39,12 @@ class HotelSearchTool(BaseTool):
         "返回匹配的酒店列表（含名称、区域、星级、信息摘要、价格明细表）。"
         "客户询问酒店或酒店价格（如“XX酒店多少钱”“贵阳有哪些酒店”）时使用此工具。"
     )
+    # Phase 4 软下线（2026-10-11）：catalog=False 退出自动发现，不再装配给任何
+    # 智能体；travel-consultant 已改用 knowledge_base_search（价格表走
+    # doc_metadata.raw_payload.price_table）。真机观察稳定后随 Phase 4b 整体
+    # 删除本文件（含过渡期取表回退）。回滚 = 去掉本标记，并恢复
+    # test_tool_discovery.py 黄金清单两项（GOLDEN_TOOLS 加回 / 排除集移除）。
+    catalog = False
     display_name = "搜索酒店"
     InputModel = HotelSearchInput
 

@@ -37,6 +37,11 @@ weixin_automation_prepare / weixin_automation_publish / weixin_automation_manage
 2026-09-15 追加公众号同步两工具（WP8，设计 §3/§14）：
 wechat_mp_sync / wechat_mp_sync_status，薄入口直调 src/wechat_mp/service.py，
 身份取可信工具执行上下文，经 Catalog 自动发现装配。
+
+2026-10-11 移除 attraction_search / hotel_search（Phase 4a 软下线，统一知识库
+工具 knowledge_base_search 替代，见 plan-unified-kb-resource-metadata.md）：
+两工具类标记 catalog=False 退出自动发现，转入 CATALOG_EXCLUDED_TOOLS；
+真机观察稳定后随 Phase 4b 删除工具文件并同步清理本清单。
 """
 
 import pytest
@@ -49,7 +54,6 @@ from src.tools.registry import ToolRegistry, discover_tool_classes
 GOLDEN_TOOLS = [
     "ai_call",
     "analyze_data",
-    "attraction_search",
     "browser_automation",
     "content_generate",
     "cp",
@@ -59,7 +63,6 @@ GOLDEN_TOOLS = [
     "excel_process",
     "get_channel_user_info",
     "grep",
-    "hotel_search",
     "http_api",
     "knowledge_base_search",
     "knowledge_file_search",
@@ -90,7 +93,10 @@ GOLDEN_TOOLS = [
 # 普通工具全部由 Catalog 自动发现（含 record_lead_capture）。
 SPECIAL_REGISTERED_TOOLS = set()
 
-# 显式 catalog = False、绝不进 _CATALOG 的工具名
+# 显式 catalog = False、绝不进 _CATALOG 的工具名。
+# attraction_search / hotel_search：2026-10-11 Phase 4 软下线（统一工具
+# knowledge_base_search 替代，见 plan-unified-kb-resource-metadata.md），
+# 真机观察稳定后随工具文件一并删除
 CATALOG_EXCLUDED_TOOLS = {
     "create_plan",
     "use_skill",
@@ -99,6 +105,8 @@ CATALOG_EXCLUDED_TOOLS = {
     "present_options",
     "delegate_to_subagent",
     "speech_to_text",
+    "attraction_search",
+    "hotel_search",
 }
 
 

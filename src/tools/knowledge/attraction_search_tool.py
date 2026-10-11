@@ -33,6 +33,13 @@ class AttractionSearchTool(BaseTool):
         "返回匹配的景点列表（含名称、区域、类型、信息摘要等）。"
         "搜索结果来自景点知识库，后续报价时可直接使用。"
     )
+    # Phase 4 软下线（2026-10-11）：catalog=False 退出自动发现，不再装配给任何
+    # 智能体；travel-consultant 已改用 knowledge_base_search（项目表走
+    # doc_metadata.raw_payload.project_table、封面走 documents[].cover_image）。
+    # 真机观察稳定后随 Phase 4b 整体删除本文件（含过渡期取表回退）。回滚 =
+    # 去掉本标记，并恢复 test_tool_discovery.py 黄金清单两项（GOLDEN_TOOLS
+    # 加回 / 排除集移除）。
+    catalog = False
     display_name = "搜索景点"
     InputModel = AttractionSearchInput
 
