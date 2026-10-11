@@ -109,7 +109,7 @@
 | 渠道适配 | 2 | 渠道会话、渠道消息 |
 | 知识库 | 5 | 分类、文档、文本块、向量、全文搜索 |
 | 数字员工实例 | 3 | 实例、队列、回复风格 |
-| SaaS 多租户 | 5 | 租户、订阅、支付、渠道配置、用户授权 |
+| SaaS 多租户 | 7 | 租户、订阅、支付、渠道配置、用户授权、防滥用绑定、防滥用事件 |
 | 定时任务 | 2 | 任务定义、执行日志 |
 | Prompt 版本管理 | 5 | 注册表、版本、标签、草稿、分段 |
 | 子智能体配置 | 4 | 环境变量、知识库关联、定义、Prompt 分段 |
@@ -444,6 +444,36 @@ chunks_vec（向量）      chunks_fts（全文搜索）
 **关系**：
 - `user_agent_permissions.user_id` → `users.user_id`
 - `user_agent_permissions.tenant_id` → `tenants.tenant_id`
+
+---
+
+### 7.6 `abuse_policies` — 防滥用规则绑定表
+
+租户管理员按作用域勾选防滥用规则（一个作用域一行，`policies` 空数组即等效停用）。设计见 [anti-abuse-policy-design.md](saas/anti-abuse-policy-design.md)。
+
+**关键字段**：
+- `scope_type` — 作用域（`tenant` 兜底 / `user` 内部用户 / `channel` 渠道配置）
+- `scope_id` — tenant_id（兜底行）/ users.user_id / tenant_channel_configs.config_id
+- `mode` — 行级模式（`observe` 只记事件 / `enforce` 真拦截），整绑定统一
+- `policies` — JSONB 数组 `[{rule_id, params}]`
+
+**约束**：`uq_abuse_policies_scope` — `(tenant_id, scope_type, scope_id)` 唯一。
+
+---
+
+### 7.7 `abuse_events` — 防滥用触发事件表
+
+观察与拦截都记录的触发事件，审计 + 阈值校准数据源。同键 `(tenant_id, user_id, rule_id, action)` 1 小时内去重写入（应用层保证），表只追加不更新，初期不清理。
+
+**关键字段**：
+- `user_id` — 触发用户（渠道绑定下为实际消耗的渠道用户；外部用户未映射为 NULL）
+- `rule_id` — 触发规则（Phase 1 仅 `credit_budget`）
+- `action` — `logged` | `warned` | `blocked` | `terminated`
+- `detail` — JSONB 触发时快照（阈值、实际值等）
+
+**索引**：`idx_abuse_events_tenant_time` / `idx_abuse_events_scope` / `idx_abuse_events_user`。
+
+**关系**：`abuse_policies.tenant_id` / `abuse_events.tenant_id` → `tenants.tenant_id`
 
 ---
 

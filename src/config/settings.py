@@ -716,6 +716,20 @@ class NotificationsConfig(BaseModel):
     web_push: WebPushConfig = Field(default_factory=WebPushConfig)
 
 
+class AntiAbuseTenantDefaultPolicy(BaseModel):
+    """租户兜底绑定的平台默认值：租户未保存自定义行时隐式生效（设计 §3.1）"""
+    mode: str = Field(default='observe', pattern=r'^(observe|enforce)$')
+    policies: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class AntiAbuseConfig(BaseModel):
+    # 防滥用策略 Phase 1（docs/system/saas/anti-abuse-policy-design.md）：观察闭环
+    scanner_enabled: bool = True
+    scanner_interval_seconds: int = Field(default=300, ge=60, le=3600)
+    # 阈值初值为宽松占位，观察期按 abuse_events 数据校准（设计 §3.1/§9）
+    tenant_default: AntiAbuseTenantDefaultPolicy = Field(default_factory=AntiAbuseTenantDefaultPolicy)
+
+
 class Settings(BaseModel):
     """全局配置"""
     app: AppConfig = Field(default_factory=AppConfig)
@@ -742,6 +756,7 @@ class Settings(BaseModel):
     desktop_agent: DesktopAgentConfig = Field(default_factory=DesktopAgentConfig)
     agent_runner: AgentRunnerConfig = Field(default_factory=AgentRunnerConfig)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
+    anti_abuse: AntiAbuseConfig = Field(default_factory=AntiAbuseConfig)
 
     # 认证相关配置（从环境变量加载）
     qb_token: str = ""  # 平台管理员超级token（明文，仅用于向后兼容，推荐使用 qb_token_hash）

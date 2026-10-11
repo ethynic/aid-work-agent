@@ -1818,6 +1818,7 @@ from src.saas.api import tenant_users, usage_reports, permissions, reply_styles,
 from src.saas.api import web_sessions
 from src.saas.api import context_compression_routes
 from src.saas.api import billing_recharges, billing_balance
+from src.saas.api.abuse import router as abuse_router
 from src.saas.api.knowledge_share import router as knowledge_share_router
 from src.saas.api.wecom_kf_account import router as wecom_kf_account_router
 from src.saas.api.wecom_personal_rpa_routes import router as wecom_personal_rpa_router
@@ -1843,6 +1844,7 @@ app.include_router(tenant_migration.router)
 app.include_router(context_compression_routes.router)
 app.include_router(billing_recharges.router)
 app.include_router(billing_balance.router)
+app.include_router(abuse_router)
 app.include_router(wecom_kf_account_router)
 app.include_router(knowledge_share_router)
 # 协会客户端（docs/tools/association-client-design.md）

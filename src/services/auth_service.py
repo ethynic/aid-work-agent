@@ -16,6 +16,7 @@ from src.core.cache_utils import CacheKeys, get_cached, set_cached, delete_cache
 from src.db.database import get_db_connection
 from src.db.models import UserDB, hash_password, verify_password
 from src.config.settings import settings
+from src.saas.models.enums import UserStatus
 
 
 def _verify_qb_token(password: str) -> bool:
@@ -167,12 +168,15 @@ def verify_token(token: str, auto_refresh: bool = True) -> Optional[str]:
             # 缓存数据异常，删除重建
             delete_cached(CacheKeys.TOKEN, token)
 
-    # 缓存未命中，查询数据库
+    # 缓存未命中，查询数据库（联查 users.status：停用用户即使 token 行仍在也立即拒绝，
+    # 配合停用接口的 token 缓存清理，实现 web 侧即时生效）
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT user_id, expires_at FROM tokens
-            WHERE token = %s
+            SELECT t.user_id, t.expires_at, u.status AS user_status
+            FROM tokens t
+            LEFT JOIN users u ON u.user_id = t.user_id
+            WHERE t.token = %s
         """, (token,))
         row = cursor.fetchone()
 
@@ -191,6 +195,12 @@ def verify_token(token: str, auto_refresh: bool = True) -> Optional[str]:
             return None
 
         user_id = row["user_id"]
+
+        # 停用用户拒绝且不回写缓存（重新启用后原 token 恢复有效）
+        if row.get("user_status") == UserStatus.SUSPENDED.value:
+            delete_cached(CacheKeys.TOKEN, token)
+            return None
+
         remaining_seconds = (expires_at - now).total_seconds()
 
         # 写入缓存（TTL 取剩余有效期和 7 天的较小值）

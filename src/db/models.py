@@ -215,9 +215,9 @@ class UserDB:
 
         Args:
             user_id: 用户ID
-            **kwargs: 可更新字段，支持 username, avatar_url, gender, role, tenant_id
+            **kwargs: 可更新字段，支持 username, avatar_url, gender, role, tenant_id, status
         """
-        allowed_fields = ["username", "avatar_url", "gender", "role", "tenant_id", "source", "nickname", "wx_openid", "wx_unionid", "phone"]
+        allowed_fields = ["username", "avatar_url", "gender", "role", "tenant_id", "source", "nickname", "wx_openid", "wx_unionid", "phone", "status"]
         updates = {k: v for k, v in kwargs.items() if k in allowed_fields}
 
         if not updates:
@@ -265,42 +265,50 @@ class UserDB:
     update = update_info
 
     @staticmethod
-    def list_users(page: int = 1, page_size: int = 20, tenant_id: str = None) -> dict:
+    def list_users(page: int = 1, page_size: int = 20, tenant_id: str = None,
+                   status: str = None, source: str = None) -> dict:
         """获取用户列表（分页）
 
-        只返回内部用户（source IS NULL），外部用户（如企业微信客服）由
-        /api/saas/external-customers 接口单独管理。
+        默认只返回内部用户（source IS NULL），外部用户（如企业微信客服）由
+        /api/saas/external-customers 接口单独管理；防滥用中心「禁用记录」需
+        覆盖渠道用户，传 source='all' 放开过滤（source='channel' 仅渠道用户）。
 
         Args:
             page: 页码，从1开始
             page_size: 每页数量
             tenant_id: 可选，按租户过滤
+            status: 可选，按状态过滤（如 suspended）
+            source: None/'internal'=仅内部用户（默认），'channel'=仅渠道用户，'all'=全部
 
         Returns:
             {"users": [...], "total": int, "page": int, "page_size": int}
         """
         offset = (page - 1) * page_size
+        conditions = []
+        params: list = []
+        if tenant_id:
+            conditions.append("tenant_id = %s")
+            params.append(tenant_id)
+        if source == "all":
+            pass  # 不加 source 过滤
+        elif source == "channel":
+            conditions.append("source IS NOT NULL")
+        else:  # None / 'internal'：保持默认口径（仅内部用户）
+            conditions.append("source IS NULL")
+        if status:
+            conditions.append("status = %s")
+            params.append(status)
+        where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            if tenant_id:
-                cursor.execute(
-                    "SELECT COUNT(*) as cnt FROM users WHERE tenant_id = %s AND source IS NULL",
-                    (tenant_id,),
-                )
-                total = cursor.fetchone()["cnt"]
-                cursor.execute(
-                    "SELECT * FROM users WHERE tenant_id = %s AND source IS NULL ORDER BY created_at DESC LIMIT %s OFFSET %s",
-                    (tenant_id, page_size, offset),
-                )
-            else:
-                cursor.execute(
-                    "SELECT COUNT(*) as cnt FROM users WHERE source IS NULL"
-                )
-                total = cursor.fetchone()["cnt"]
-                cursor.execute(
-                    "SELECT * FROM users WHERE source IS NULL ORDER BY created_at DESC LIMIT %s OFFSET %s",
-                    (page_size, offset),
-                )
+            cursor.execute(
+                f"SELECT COUNT(*) as cnt FROM users{where}", tuple(params),
+            )
+            total = cursor.fetchone()["cnt"]
+            cursor.execute(
+                f"SELECT * FROM users{where} ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                tuple(params + [page_size, offset]),
+            )
             users = [dict(row) for row in cursor.fetchall()]
             # 添加每个用户的数字员工授权数量
             for u in users:

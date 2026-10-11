@@ -1,0 +1,224 @@
+"""防滥用定时扫描任务（Phase 1 观察闭环驱动，设计 §5.2）。
+
+每轮：chat_records 聚合窗口内有消耗的用户 -> 解析生效绑定 -> 评估
+credit_budget -> 命中阈值写 abuse_events（1h 同键去重）+ 租户管理员通知
+（publish_in_tx 幂等键 + 24h TTL，IM/邮箱外发由既有 dispatcher 轮询完成）。
+
+Phase 1 不接执行链拦截点；warn 延迟为分钟级（扫描间隔），观察场景可接受。
+"""
+import asyncio
+from datetime import datetime, timedelta
+from typing import Any, Dict, List
+
+from loguru import logger
+
+from src.config.settings import settings
+from src.db.database import get_db_connection
+from src.saas.models.enums import UserStatus
+from src.notifications.contracts import Subject
+from src.notifications.events import publish_in_tx
+from src.notifications.service import notification_repository
+from .rules import SESSION_SOURCE_TYPES
+from .service import AntiAbuseService
+
+PRODUCER = "abuse_scanner"
+# 同一 (tenant, user, rule) 24h 内只通知一次（publish_in_tx 唯一约束 + TTL 幂等）
+NOTIFY_TTL_SECONDS = 86400
+NOTIFY_CATEGORY = "abuse"
+
+
+def _subject_label(user_row: Dict[str, Any], user_id: str) -> str:
+    for key in ("nickname", "username", "phone"):
+        value = user_row.get(key)
+        if value:
+            return str(value)[:128]
+    return user_id[:128]
+
+
+def _scan_candidates(cursor) -> List[Dict[str, Any]]:
+    """最大窗口（day）内有会话类消耗的 (tenant_id, user_id) 聚合"""
+    cursor.execute(
+        """SELECT tenant_id, user_id, SUM(credit_cost) AS total
+           FROM chat_records
+           WHERE created_at >= NOW() - interval '1 day'
+             AND credit_cost > 0 AND user_id IS NOT NULL AND tenant_id IS NOT NULL
+             AND source_type = ANY(%s)
+           GROUP BY tenant_id, user_id""",
+        (list(SESSION_SOURCE_TYPES),),
+    )
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def _load_users(cursor, user_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+    if not user_ids:
+        return {}
+    cursor.execute(
+        """SELECT user_id, username, nickname, phone, source, status
+           FROM users WHERE user_id = ANY(%s)""",
+        (user_ids,),
+    )
+    return {row["user_id"]: dict(row) for row in cursor.fetchall()}
+
+
+def _publish_admin_notifications(
+    cursor,
+    tenant_id: str,
+    admins: List[str],
+    *,
+    event_id: int,
+    user_id: str,
+    subject_label: str,
+    rule_name: str,
+    window_credits: float,
+    threshold_credits: float,
+    observe_mode: bool,
+) -> int:
+    """租户管理员逐人发布 abuse.rule_triggered（幂等键含 user，24h TTL）"""
+    cursor.execute("SELECT clock_timestamp() AS now")
+    now = cursor.fetchone()["now"]
+    published = 0
+    for admin_id in admins:
+        subject = Subject(user_id=admin_id, tenant_id=tenant_id)
+        ref = publish_in_tx(
+            cursor,
+            subject=subject,
+            producer=PRODUCER,
+            event_type="abuse.rule_triggered",
+            event_key=f"abuse:{tenant_id}:{user_id}:credit_budget",
+            resource_ref={"type": "abuse_event", "id": str(event_id)},
+            parameters={
+                "rule_name": rule_name[:128],
+                "subject_label": subject_label,
+                "window_credits": round(window_credits, 2),
+                "threshold_credits": round(threshold_credits, 2),
+                "observe_mode": observe_mode,
+            },
+            occurred_at=now,
+            accepted_at=now,
+            expires_at=now + timedelta(seconds=NOTIFY_TTL_SECONDS),
+            category=NOTIFY_CATEGORY,
+            priority=0,
+            policy_key="tenant_admin_event",
+        )
+        if ref:
+            published += 1
+    return published
+
+
+def run_abuse_scan_once(repository=None) -> Dict[str, int]:
+    """执行一轮扫描。同步函数，调用方负责线程化（APScheduler 回调线程）。"""
+    if repository is None:
+        repository = notification_repository()
+    stats = {"scanned": 0, "events": 0, "notified": 0}
+    aa_config = settings.anti_abuse
+    if not aa_config.scanner_enabled:
+        return stats
+    notify_enabled = bool(
+        repository.config.enabled and repository.config.tenant_events_enabled
+    )
+
+    with get_db_connection() as cursor:
+        candidates = _scan_candidates(cursor)
+        if not candidates:
+            return stats
+        users = _load_users(cursor, [c["user_id"] for c in candidates])
+        tenants = sorted({c["tenant_id"] for c in candidates})
+        for tenant_id in tenants:
+            try:
+                cursor.execute(
+                    """SELECT user_id FROM users
+                       WHERE tenant_id = %s AND role = 'tenant_admin' AND status = %s""",
+                    (tenant_id, UserStatus.ACTIVE.value),
+                )
+                admins = [row["user_id"] for row in cursor.fetchall()]
+                for candidate in candidates:
+                    if candidate["tenant_id"] != tenant_id:
+                        continue
+                    user_id = candidate["user_id"]
+                    user_row = users.get(user_id)
+                    # 已停用用户跳过（处置已生效，残余窗口消耗不再告警）；
+                    # users 表无此 user（未映射外部用户）也跳过——预算无法按用户累计
+                    if not user_row or user_row.get("status") != UserStatus.ACTIVE.value:
+                        continue
+                    binding = AntiAbuseService.resolve_binding(tenant_id, user_id,
+                                                               source=user_row.get("source"))
+                    budget = next(
+                        (p for p in (binding.get("policies") or [])
+                         if p.get("rule_id") == "credit_budget"),
+                        None,
+                    )
+                    if not budget:
+                        continue
+                    params = budget.get("params") or {}
+                    period = params.get("period", "day")
+                    warn_threshold = params.get("warn_threshold")
+                    hard_threshold = params.get("hard_threshold")
+                    if hard_threshold is None and warn_threshold is None:
+                        continue
+                    actual = AntiAbuseService.evaluate_credit_budget(tenant_id, user_id, period)
+                    stats["scanned"] += 1
+                    hit_hard = hard_threshold is not None and actual >= float(hard_threshold)
+                    hit_warn = warn_threshold is not None and actual >= float(warn_threshold)
+                    if not (hit_hard or hit_warn):
+                        continue
+                    mode = binding.get("mode", "observe")
+                    # Phase 1 全观察：任一阈值命中记 warned 事件（detail 标注 level）
+                    event_id = AntiAbuseService.record_event(
+                        cursor,
+                        tenant_id=tenant_id,
+                        scope_type=binding.get("scope_type", "tenant"),
+                        scope_id=binding.get("scope_id", tenant_id),
+                        rule_id="credit_budget",
+                        action="warned",
+                        user_id=user_id,
+                        channel_type=user_row.get("source"),
+                        detail={
+                            "period": period,
+                            "warn_threshold": warn_threshold,
+                            "hard_threshold": hard_threshold,
+                            "actual_credits": round(actual, 2),
+                            "level": "hard" if hit_hard else "warn",
+                            "mode": mode,
+                        },
+                    )
+                    if event_id is None:
+                        continue  # 1h 内已有同键事件，跳过重复通知
+                    pending_events = 1
+                    pending_notified = 0
+                    if notify_enabled and admins:
+                        pending_notified = _publish_admin_notifications(
+                            cursor,
+                            tenant_id,
+                            admins,
+                            event_id=event_id,
+                            user_id=user_id,
+                            subject_label=_subject_label(user_row, user_id),
+                            rule_name="时间窗积分预算",
+                            window_credits=actual,
+                            threshold_credits=float(
+                                hard_threshold if hit_hard else warn_threshold
+                            ),
+                            observe_mode=(mode == "observe"),
+                        )
+                    # 计数在 commit 成功后累加：publish 异常 rollback 时事件也随之回滚，不虚计
+                    cursor.commit()
+                    stats["events"] += pending_events
+                    stats["notified"] += pending_notified
+                # 无事件命中的租户也无需提交（只读查询）
+            except Exception:
+                cursor.rollback()
+                logger.opt(exception=True).error(
+                    f"后端日志：防滥用扫描租户 {tenant_id} 评估失败")
+    if stats["events"] or stats["notified"]:
+        logger.info(f"后端日志：防滥用扫描完成 {stats}")
+    return stats
+
+
+class AntiAbuseScanScheduler:
+    """挂 background_runner 生命周期入口的占位说明——实际注册在
+    ScheduledTaskManager._register_system_jobs（APScheduler IntervalTrigger），
+    此类仅保留异步包装供手动触发/测试使用。"""
+
+    @staticmethod
+    async def run_once() -> Dict[str, int]:
+        return await asyncio.to_thread(run_abuse_scan_once)

@@ -560,16 +560,23 @@ class TestDbUpdateYaml:
                     "path", "device_type", "device_info", "created_at"):
             assert col in sql, f"建表语句缺少列: {col}"
 
-    def test_behavior_log_entry_is_the_latest(self):
-        """新条目 datetime 必须大于文件中此前的最后一条（保证存量环境能执行到）"""
+    def test_behavior_log_entry_not_earlier_than_preceding(self):
+        """ubl 条目追加时晚于其紧邻前一条（保证存量环境能执行到）。
+
+        最初写作「ubl 必须是全文件最新条目」，但增量文件持续追加，
+        该断言会阻塞其后所有正常增量（全局有序性由
+        test_datetime_format_and_unique_and_strictly_increasing 保证）。
+        """
         data = self._load()
-        ubl = [i for i in data if "user_behavior_logs" in i["statements"]]
-        assert ubl
-        ubl_dt = datetime.strptime(ubl[-1]["datetime"], "%Y-%m-%d %H:%M:%S")
-        others = [datetime.strptime(i["datetime"], "%Y-%m-%d %H:%M:%S")
-                  for i in data if "user_behavior_logs" not in i["statements"]]
-        if others:
-            assert ubl_dt > max(others)
+        ubl_idx = next(
+            i for i, item in enumerate(data)
+            if "user_behavior_logs" in item["statements"]
+        )
+        ubl_dt = datetime.strptime(data[ubl_idx]["datetime"], "%Y-%m-%d %H:%M:%S")
+        if ubl_idx > 0:
+            prev_dt = datetime.strptime(
+                data[ubl_idx - 1]["datetime"], "%Y-%m-%d %H:%M:%S")
+            assert ubl_dt > prev_dt
 
 
 def _extract_ubl_create_table(sql_text: str) -> str:

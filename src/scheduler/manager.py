@@ -155,6 +155,24 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.error(f"后端日志：注册压缩扫描任务失败: {e}")
 
+        # 防滥用策略扫描（Phase 1 观察闭环，设计 §5.2）
+        try:
+            aa = settings.anti_abuse
+            if aa.scanner_enabled:
+                self._scheduler.add_job(
+                    self._run_abuse_scan,
+                    IntervalTrigger(seconds=aa.scanner_interval_seconds),
+                    id="job_system_abuse_scan",
+                    name="Anti-Abuse Policy Scan",
+                    max_instances=1,
+                    coalesce=True,
+                )
+                logger.info(
+                    f"后端日志：已注册防滥用策略扫描任务 (interval={aa.scanner_interval_seconds}s)"
+                )
+        except Exception as e:
+            logger.error(f"后端日志：注册防滥用策略扫描任务失败: {e}")
+
         # ===== D11：reconcile 对账（每 30s 扫 scheduled_tasks 同步 APScheduler）=====
         try:
             self._scheduler.add_job(
@@ -527,6 +545,16 @@ class ScheduledTaskManager:
                 loop.close()
             except Exception:
                 pass
+
+    def _run_abuse_scan(self):
+        """防滥用策略扫描（APScheduler 回调，同步 DB 操作直接执行）"""
+        try:
+            from src.services.anti_abuse.scanner import run_abuse_scan_once
+            stats = run_abuse_scan_once()
+            if stats.get("events") or stats.get("notified"):
+                logger.info(f"后端日志：防滥用策略扫描完成: {stats}")
+        except Exception as e:
+            logger.opt(exception=True).error(f"后端日志：防滥用策略扫描失败: {e}")
 
     # ===== D11：reconcile 对账（核心）=====
     def _reconcile(self):

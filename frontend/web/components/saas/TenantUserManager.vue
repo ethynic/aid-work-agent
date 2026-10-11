@@ -75,7 +75,17 @@
                     <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openEditDialog(row)">编辑</BaseButton>
                     <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleRemove(row.user_id)">删除</BaseButton>
                   </template>
-                  <span v-else class="text-xs text-muted">外部用户不可操作</span>
+                  <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openAbusePolicy(row)">防滥用设置</BaseButton>
+                  <BaseButton
+                    v-if="row.status !== 'suspended'"
+                    intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs"
+                    @click="handleToggleUserStatus(row, 'suspended')"
+                  >停用</BaseButton>
+                  <BaseButton
+                    v-else
+                    intent="ghost" size="sm" class="whitespace-nowrap text-xs"
+                    @click="handleToggleUserStatus(row, 'active')"
+                  >启用</BaseButton>
                 </div>
               </template>
             </BaseTable>
@@ -295,6 +305,16 @@
         <BaseButton :disabled="savingEdit" @click="handleSaveEdit">{{ savingEdit ? '保存中...' : '保存' }}</BaseButton>
       </template>
     </BaseModal>
+
+    <!-- 防滥用设置弹窗 -->
+    <BaseModal v-model="showAbusePolicy" :title="`防滥用设置 - ${abuseUser?.username || abuseUser?.nickname || abuseUser?.user_id || ''}`" size="lg">
+      <AbusePolicyEditor
+        v-if="showAbusePolicy && abuseUser"
+        scope-type="user"
+        :scope-id="abuseUser.user_id"
+        @saved="toast.success('用户防滥用策略已保存')"
+      />
+    </BaseModal>
 </template>
 
 <script setup lang="ts">
@@ -316,6 +336,8 @@ import BasePagination from '@/components/ui/BasePagination.vue'
 import { usePageContext } from '@/composables/usePageContext'
 import { useTableSelection } from '@/composables/useTableSelection'
 import { listTenantUsers, createTenantUser, batchImportUsers, removeTenantUser, updateTenantUser } from '@/api/saasTenant'
+import { updateUserStatus } from '@/api/abuse'
+import AbusePolicyEditor from '@/components/saas/AbusePolicyEditor.vue'
 import { getTenantAvailableUserAgents, getUserAgentPermissions, setUserAgentPermissions, type AgentItem } from '@/api/saasPermissions'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { getUserSourceInfo } from '@/api/enums'
@@ -372,7 +394,7 @@ const columns = [
   { key: 'department', label: '部门' },
   { key: 'role', label: '角色' },
   { key: 'agent_auth', label: '数字员工授权' },
-  { key: 'actions', label: '操作', width: '120px', thAlign: 'center' as const },
+  { key: 'actions', label: '操作', width: '240px', thAlign: 'center' as const },
 ]
 
 const loading = ref(true)
@@ -622,6 +644,30 @@ async function handleRemove(userId: string) {
     await loadUsers()
   } catch (e: any) {
     toast.error(e.message || '删除失败')
+  }
+}
+
+// 防滥用设置弹窗
+const showAbusePolicy = ref(false)
+const abuseUser = ref<any>(null)
+
+function openAbusePolicy(user: any) {
+  abuseUser.value = user
+  showAbusePolicy.value = true
+}
+
+async function handleToggleUserStatus(user: any, status: 'active' | 'suspended') {
+  const name = user.nickname || user.username || user.phone || user.user_id
+  const tip = status === 'suspended'
+    ? `确定停用用户「${name}」吗？停用后其 Web 与渠道侧均无法继续使用。`
+    : `确定启用用户「${name}」吗？`
+  if (!confirm(tip)) return
+  try {
+    await updateUserStatus(user.user_id, status)
+    toast.success(status === 'suspended' ? '用户已停用' : '用户已启用')
+    await loadUsers()
+  } catch (e: any) {
+    toast.error(e.message || '更新用户状态失败')
   }
 }
 

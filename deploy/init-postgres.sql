@@ -776,6 +776,45 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_channel_configs_wechat_mp_appid
     ON tenant_channel_configs(tenant_id, ((config::jsonb)->>'appid'))
     WHERE channel_type = 'wechat_mp';
 
+-- 防滥用规则绑定表（一个作用域一行：tenant 兜底 / user / channel）
+CREATE TABLE IF NOT EXISTS abuse_policies (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    scope_type TEXT NOT NULL,            -- tenant | user | channel
+    scope_id TEXT NOT NULL,              -- tenant_id（兜底行）/ users.user_id / tenant_channel_configs.config_id
+    mode TEXT DEFAULT 'observe',         -- observe | enforce（行级，整绑定统一）
+    policies JSONB DEFAULT '[]',         -- [{rule_id, params:{...}}]；空数组即等效停用
+    updated_by TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_abuse_policies_scope UNIQUE (tenant_id, scope_type, scope_id)
+);
+
+-- 防滥用触发事件表（观察与拦截都记录，审计 + 阈值校准数据源）
+CREATE TABLE IF NOT EXISTS abuse_events (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    scope_type TEXT NOT NULL,
+    scope_id TEXT NOT NULL,
+    user_id TEXT,                        -- 触发用户（渠道绑定下为实际消耗的渠道用户）
+    rule_id TEXT NOT NULL,
+    action TEXT NOT NULL,                -- logged | warned | blocked | terminated
+    session_id TEXT,
+    channel_type TEXT,                   -- wecom_kf / wecom / web / ...
+    detail JSONB,                        -- 触发时快照：阈值、实际值等
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_abuse_events_tenant_time
+    ON abuse_events(tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_abuse_events_scope
+    ON abuse_events(tenant_id, scope_type, scope_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_abuse_events_user
+    ON abuse_events(tenant_id, user_id, created_at DESC);
+
+-- 防滥用预算聚合索引（credit_budget 窗口消耗查询）
+CREATE INDEX IF NOT EXISTS idx_chat_records_tenant_user_time
+    ON chat_records(tenant_id, user_id, created_at DESC);
+
 -- 支付订单表
 CREATE TABLE IF NOT EXISTS payment_orders (
     id SERIAL PRIMARY KEY,

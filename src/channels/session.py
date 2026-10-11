@@ -953,6 +953,41 @@ class ChannelSessionManager:
         verbose_events: List[Dict[str, Any]] = []
         dispatcher: Optional[ChannelVerboseDispatcher] = None
 
+        # 用户停用硬阻断（防滥用处置闭环，设计 §3.4 配套依赖）：suspended 用户
+        # 直接回固定话术并跳过执行，禁用对渠道流量立即生效。查询失败 fail-open
+        # 放行（记 warning），限额失败不阻断业务。
+        try:
+            _suspended_user_id = getattr(agent_user, "user_id", None) if agent_user else None
+            if _suspended_user_id:
+                from src.db.models import UserDB as _UserDB
+                from src.saas.models.enums import UserStatus as _UserStatus
+                _user_row = _UserDB.get_by_id(_suspended_user_id)
+                if _user_row is not None and _user_row.get("status") == _UserStatus.SUSPENDED.value:
+                    logger.warning(
+                        f"后端日志：用户已停用，阻断渠道消息 session={session_id} "
+                        f"user_id={_suspended_user_id}"
+                    )
+                    if record_service is not None:
+                        record_service.skip_save = True
+                    try:
+                        await send_response(
+                            "您的账号已被暂停使用，如有疑问请联系管理员。",
+                            [],
+                        )
+                    except Exception as _send_err:
+                        logger.error(f"停用阻断提示发送失败 session={session_id}: {_send_err}")
+                    return {
+                        "status": "user_suspended",
+                        "response_text": "",
+                        "downloadable_files": [],
+                        "was_merged": False,
+                        "merged_input": "",
+                    }
+        except Exception as _status_err:
+            logger.warning(
+                f"渠道消息用户状态检查失败 session={session_id}: {_status_err}，放行继续处理"
+            )
+
         # 积分余额硬阻断：余额 ≤ 0 拒绝渠道消息处理（#37 Phase 4）
         # 命中时通过 send_response 发送提示并返回 status='no_credit'，避免调用 LLM 扣费
         # 同时标记 record_service 跳过 save，避免后续 end_record 写入空 chat_record 噪声

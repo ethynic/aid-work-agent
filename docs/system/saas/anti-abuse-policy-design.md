@@ -363,3 +363,9 @@ decision = await anti_abuse.check_request(
   - mode 定稿为行级（整绑定统一），修正 §3.2 图示；删除 `enabled` 列（空 policies 即停用）
   - 绑定 API 三种作用域合一、usage 汇总/明细两 API 合一
   - 放弃 `max_output_per_request`（单请求上限）：数据分析等智能体单请求合法消耗巨大且客户可接受，不设上限
+- **v0.3（2026-10-11，Phase 1 实施合入）**：
+  - Phase 1 观察闭环开发完成：`abuse_policies` / `abuse_events` 两表 + `idx_chat_records_tenant_user_time` 索引（db_update.yaml / init-postgres.sql / database_system_table.md 三处登记）；引擎模块落位 `src/services/anti_abuse/`（rules / service / scanner）；扫描任务挂 `src/scheduler/manager.py`（IntervalTrigger，默认 300s）
+  - 渠道绑定匹配决策：扫描器按 `users.source`（渠道类型）匹配该渠道类型的 channel 绑定行（`JOIN tenant_channel_configs`，多份配置取 `updated_at` 最新一份）；Phase 2 请求上下文再精确到 config_id。API 的 channel 作用域仍按 config_id 精确配置（Phase 2 扫描器匹配口径对齐）
+  - Runner 链路缺口登记（本 Phase 不实施）：wecom 应用等已接 Runner 的流量不经 `src/channels/session.py`，`users.status` 检查覆盖不到；Phase 2 统一拦截点解决
+  - `test_behavior_log` 守卫测试调整：原用例要求 `user_behavior_logs` 增量块永远是 `db_update.yaml` 最新条目，属一次性守卫被按字面永久执行，会阻塞一切后续正常增量登记；改为断言 `user_behavior_logs` 条目不早于其紧邻前一条（全局有序性由既有格式/唯一/严格递增用例保证）
+  - 通知外发复用既有 `publish_in_tx` + 通知 dispatcher 轮询，事件 `abuse.rule_triggered` 已注册（`src/notifications/events.py`）；TTL 24h，幂等键 `abuse:{tenant_id}:{user_id}:{rule_id}`

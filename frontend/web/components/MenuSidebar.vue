@@ -1005,6 +1005,8 @@ const adminSubMenuItems = computed(() => {
     { path: `${base}/reply-styles`, label: '回复风格', icon: 'M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z' },
     // 行为日志：清单/审计剪贴板
     { path: `${base}/behavior-logs`, label: '行为日志', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4' },
+    // 防滥用中心：盾牌+对勾
+    { path: `${base}/abuse-center`, label: '防滥用中心', icon: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10zM9 12l2 2 4-4' },
   ]
 })
 

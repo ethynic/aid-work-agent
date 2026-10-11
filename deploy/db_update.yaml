@@ -3745,3 +3745,39 @@
     ALTER TABLE notification_messages ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ;
     CREATE INDEX IF NOT EXISTS idx_notification_inbox_unread
         ON notification_messages(recipient_user_id, created_at) WHERE read_at IS NULL;
+- datetime: "2026-10-11 10:30:00"
+  remark: "防滥用策略 Phase 1：abuse_policies 规则绑定表 + abuse_events 触发事件表（含索引）+ chat_records 租户用户时间聚合索引"
+  statements: |
+    CREATE TABLE IF NOT EXISTS abuse_policies (
+        id SERIAL PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        scope_type TEXT NOT NULL,
+        scope_id TEXT NOT NULL,
+        mode TEXT DEFAULT 'observe',
+        policies JSONB DEFAULT '[]',
+        updated_by TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT uq_abuse_policies_scope UNIQUE (tenant_id, scope_type, scope_id)
+    );
+    CREATE TABLE IF NOT EXISTS abuse_events (
+        id SERIAL PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        scope_type TEXT NOT NULL,
+        scope_id TEXT NOT NULL,
+        user_id TEXT,
+        rule_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        session_id TEXT,
+        channel_type TEXT,
+        detail JSONB,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_abuse_events_tenant_time
+        ON abuse_events(tenant_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_abuse_events_scope
+        ON abuse_events(tenant_id, scope_type, scope_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_abuse_events_user
+        ON abuse_events(tenant_id, user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_chat_records_tenant_user_time
+        ON chat_records(tenant_id, user_id, created_at DESC);

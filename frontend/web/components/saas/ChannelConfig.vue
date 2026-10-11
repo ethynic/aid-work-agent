@@ -39,6 +39,7 @@
           <div class="flex items-center gap-2">
             <BaseButton intent="ghost" size="sm" @click="handleVerify(ch.config_id)">验证连接</BaseButton>
             <BaseButton intent="ghost" size="sm" @click="editChannel(ch)">编辑</BaseButton>
+            <BaseButton intent="ghost" size="sm" @click="openAbusePolicy(ch)">防滥用</BaseButton>
             <BaseButton intent="danger-ghost" size="sm" @click="handleDelete(ch.config_id)">删除</BaseButton>
           </div>
         </div>
@@ -717,6 +718,16 @@
         </div>
       </template>
     </BaseModal>
+
+    <!-- ==================== 防滥用策略弹窗（scope_type=channel） ==================== -->
+    <BaseModal v-model="showAbusePolicy" :title="`防滥用策略 - ${abuseChannel?.name || channelTypeLabel(abuseChannel?.channel_type || '') || ''}`" size="lg">
+      <AbusePolicyEditor
+        v-if="showAbusePolicy && abuseChannel"
+        scope-type="channel"
+        :scope-id="abuseChannel.config_id"
+        @saved="toast.success('渠道防滥用策略已保存')"
+      />
+    </BaseModal>
   </div>
 </template>
 
@@ -731,6 +742,7 @@ import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import { listChannels, createChannel, updateChannel, deleteChannel, verifyChannel, getAvailableSubagents, type SubagentOption, generateChannelKeypair, rotateWechatMpToken, listTenantUsers, listKfAccounts, createKfAccount, updateKfAccount, deleteKfAccount } from '@/api/saasTenant'
+import AbusePolicyEditor from '@/components/saas/AbusePolicyEditor.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const route = useRoute()
@@ -1707,6 +1719,15 @@ function editChannel(ch: any) {
   if (ch.channel_type === 'wechat_mp') {
     loadMpListSession()
   }
+}
+
+// 防滥用策略弹窗（scope_type=channel）
+const showAbusePolicy = ref(false)
+const abuseChannel = ref<any>(null)
+
+function openAbusePolicy(ch: any) {
+  abuseChannel.value = ch
+  showAbusePolicy.value = true
 }
 
 // 处理 RSA 私钥文件上传：读取 .pem 文件内容为文本存入 config

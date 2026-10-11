@@ -17,6 +17,8 @@ domains:
     label: 工作报表
   - id: weixin-marketing
     label: 微信营销
+  - id: tenant-management
+    label: 企业管理
 
 # icon 字段为统一的 SVG path 数据（24×24 viewBox，stroke 描边风格）
 # 由前端 MenuIcon 组件渲染
@@ -203,3 +205,10 @@ pages:
     route: /weixin-marketing/session-tasks/:taskId
     domain: weixin-marketing
     status: developing
+  - page_id: abuse-center
+    title: 防滥用中心
+    description: 企业防滥用治理页面，含用量监控（窗口内积分消耗 top 用户与逐条明细）、用户停用/启用处置、防滥用规则绑定（租户/用户/渠道作用域）与触发记录
+    route: /abuse-center
+    icon: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10zM9 12l2 2 4-4"
+    domain: tenant-management
+    status: published

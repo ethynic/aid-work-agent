@@ -20,7 +20,7 @@ from src.saas.api.tenant_auth import require_admin
 from src.saas.db.tenant_db import TenantDB
 from src.saas.db.permission_db import UserAgentPermissionDB
 from src.saas.db.subscription_db import SubscriptionDB
-from src.saas.models.enums import BehaviorAction, BehaviorResourceType
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType, UserStatus
 from src.services.behavior_log import audit_action
 from src.db.models import UserDB
 from src.db.database import get_db_connection
@@ -50,15 +50,21 @@ class UserListRequest(BaseModel):
 # ============== API 端点 ==============
 
 @router.get("")
-async def list_users(request: Request, page: int = 1, page_size: int = 20):
-    """列出企业用户（分页）"""
+async def list_users(request: Request, page: int = 1, page_size: int = 20,
+                     status: Optional[str] = None, source: Optional[str] = None):
+    """列出企业用户（分页）
+
+    status：按状态过滤（如 suspended，防滥用中心禁用记录用）
+    source：'all'=含渠道用户，'channel'=仅渠道用户，缺省=仅内部用户（默认口径）
+    """
     admin = require_admin(request)
     # 平台管理员带 X-Tenant-Id header 访问租户前台时，进行租户隔离
     if admin.get("tenant_id"):
-        result = UserDB.list_users(page=page, page_size=page_size, tenant_id=admin["tenant_id"])
+        result = UserDB.list_users(page=page, page_size=page_size,
+                                   tenant_id=admin["tenant_id"], status=status, source=source)
     else:
         # 平台管理员在平台后台查看所有租户的用户
-        result = UserDB.list_users(page=page, page_size=page_size)
+        result = UserDB.list_users(page=page, page_size=page_size, status=status, source=source)
     return {"success": True, **result}
 
 
@@ -273,6 +279,52 @@ async def update_user(user_id: str, request: Request, body: UserUpdateRequest):
         return {"success": False, "message": "角色值无效，仅支持 user 或 tenant_admin"}
 
     success = UserDB.update(user_id, **updates)
+    return {"success": success}
+
+
+class UserStatusUpdateRequest(BaseModel):
+    status: str = Field(..., description="目标状态：active=启用，suspended=停用")
+
+
+@router.put("/{user_id}/status")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.TENANT_USER, id_arg="user_id")
+async def update_user_status(user_id: str, request: Request, body: UserStatusUpdateRequest):
+    """停用/启用用户（防滥用处置：内部用户 + 渠道用户均可）
+
+    停用即时生效：web 侧清该用户 token 缓存（verify_token 缓存不含 status），
+    渠道侧由 process_and_persist 入口 status 检查拦截。
+    """
+    admin = require_admin(request)
+
+    user = UserDB.get_by_id(user_id)
+    if not user or user.get("tenant_id") != admin["tenant_id"]:
+        raise HTTPException(status_code=404, detail="用户不在此企业中")
+
+    if user.get("role") == "platform_admin":
+        return {"success": False, "message": "无法停用平台管理员"}
+
+    if body.status not in (UserStatus.ACTIVE.value, UserStatus.SUSPENDED.value):
+        return {"success": False, "message": "状态值无效，仅支持 active 或 suspended"}
+
+    success = UserDB.update_info(user_id, status=body.status)
+    if success:
+        # 清该用户全部 token 缓存：缓存命中路径不查 status，需清缓存使请求走 DB 兜底
+        # （兜底路径已联查 users.status，停用用户立即拒绝）
+        try:
+            with get_db_connection() as cursor:
+                cursor.execute("SELECT token FROM tokens WHERE user_id = %s", (user_id,))
+                tokens = [row["token"] for row in cursor.fetchall()]
+            from src.core.cache_utils import CacheKeys, delete_cached
+            for token in tokens:
+                delete_cached(CacheKeys.TOKEN, token)
+        except Exception as e:
+            # 缓存清理失败不阻断状态变更（token 缓存 TTL 内自然过期，渠道侧不依赖 token）
+            logger.warning(f"清理用户 token 缓存失败 user_id={user_id}: {e}")
+
+    logger.info(
+        f"后端日志：用户状态变更 tenant={admin['tenant_id']} user={user_id} "
+        f"status={body.status} by={admin.get('user_id')}"
+    )
     return {"success": success}
 
 

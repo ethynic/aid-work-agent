@@ -530,3 +530,17 @@ notifications:
       - updates.push.services.mozilla.com
       - web.push.apple.com
       - '*.notify.windows.com'
+
+# 防滥用策略 Phase 1 观察闭环（docs/system/saas/anti-abuse-policy-design.md）
+anti_abuse:
+  scanner_enabled: true
+  scanner_interval_seconds: 300
+  # 租户兜底绑定平台默认：租户未保存自定义行时隐式生效；阈值初值为宽松占位，观察期校准
+  tenant_default:
+    mode: observe
+    policies:
+      - rule_id: credit_budget
+        params:
+          period: day
+          warn_threshold: 400
+          hard_threshold: 800
