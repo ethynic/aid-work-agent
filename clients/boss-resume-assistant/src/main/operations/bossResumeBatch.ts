@@ -115,7 +115,7 @@ export function createBossResumeBatchOperation(
             message: `逐个打开简历并读取（借用真实鼠标滚动，请勿移动）0/${limit}`,
           })
           const reader = new ResumeBatchReader({
-            snapshot: session.snapshot,
+            snapshot: continuation ? () => session.snapshot({ includeDOMRects: true }) : session.snapshot,
             click: (point, viewport) => session.click(point, viewport),
             pressEscape: session.pressEscape,
             captureFullpage: session.captureFullpage,

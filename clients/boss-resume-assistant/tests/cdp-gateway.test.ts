@@ -141,3 +141,18 @@ test('captureScreenshot 传 format 与 captureBeyondViewport=false', async () =>
   assert.equal(shot?.params.captureBeyondViewport, false)
   await gw.close()
 })
+
+test('DOMRects 只读采集选项显式开启，后续普通快照恢复默认 false', async () => {
+  const { gw, socket } = makeGateway()
+  await gw.connect('http://127.0.0.1:9222')
+  await gw.attachToTarget('T1')
+  try {
+    await gw.captureDomSnapshot()
+    await gw.captureDomSnapshot({ includeDOMRects: true })
+    await gw.captureDomSnapshot()
+    assert.deepEqual(socket.sent.filter((s) => s.method === 'DOMSnapshot.captureSnapshot'),
+      [false, true, false].map((includeDOMRects, i) => ({ id: i + 2,
+        method: 'DOMSnapshot.captureSnapshot',
+        params: { computedStyles: [], includePaintOrder: false, includeDOMRects }, sessionId: 'sess-1' })))
+  } finally { await gw.close() }
+})

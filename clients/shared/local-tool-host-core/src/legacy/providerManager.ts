@@ -51,7 +51,13 @@ export interface ProviderOptions {
   env?: Record<string, string>
   nodeExecutable?: string
   baseEnv?: Record<string, string>
+  /** Trusted local receive budget; no Device/LLM argument can override it. */
+  stdioMaxBufferBytes?: number
 }
+
+/** Per-transport unread stdio budget; parsed objects and process RSS are not bounded by this. */
+export const MCP_STDIO_MAX_BUFFER_BYTES = 128 * 1024 * 1024
+const MCP_STDIO_MIN_BUFFER_BYTES = 1024 * 1024
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -78,6 +84,9 @@ export class ProviderManager {
   private readonly providerEnv: Record<string, string>
   private readonly nodeExecutable: string
   private readonly baseEnv: Record<string, string>
+  private readonly stdioMaxBufferBytes: number
+  private transportFailure: string | null = null
+  private transportGeneration = 0
 
   constructor(entry: string, opts: ProviderOptions = {}) {
     this.entry = entry
@@ -85,6 +94,12 @@ export class ProviderManager {
     this.providerEnv = opts.env ?? {}
     this.nodeExecutable = opts.nodeExecutable ?? process.execPath
     this.baseEnv = opts.baseEnv ?? process.env as Record<string, string>
+    this.stdioMaxBufferBytes = opts.stdioMaxBufferBytes ?? MCP_STDIO_MAX_BUFFER_BYTES
+    if (!Number.isInteger(this.stdioMaxBufferBytes)
+      || this.stdioMaxBufferBytes < MCP_STDIO_MIN_BUFFER_BYTES
+      || this.stdioMaxBufferBytes > MCP_STDIO_MAX_BUFFER_BYTES) {
+      throw new RangeError('stdioMaxBufferBytes 必须是 1–128MiB 范围内的整数字节数')
+    }
   }
 
   get childPid(): number | null {
@@ -110,14 +125,27 @@ export class ProviderManager {
       // SDK 默认仅透传白名单环境变量（PATH/HOME 等）——Provider 配置类变量
       // （如联测桩 STUB_HOME、后续 Provider 侧配置）会被剥掉；显式继承完整环境
       env: { ...this.baseEnv, ...this.providerEnv },
+      maxBufferSize: this.stdioMaxBufferBytes,
     })
     const client = new Client(
       { name: 'agent-tool-runtime', version: '0.1.0' },
       { capabilities: {} },
     )
     this.crashed = false
+    this.transportFailure = null
+    const generation = ++this.transportGeneration
+    client.onerror = (error) => {
+      // JSON parse errors may contain page content. Only log a fixed category and local budget.
+      if (generation !== this.transportGeneration || this.transportFailure !== null) return
+      const exceeded = error.message === `ReadBuffer exceeded maximum size of ${this.stdioMaxBufferBytes} bytes`
+      this.transportFailure = exceeded
+        ? `MCP stdio 接收超出预算（${this.stdioMaxBufferBytes} bytes）`
+        : 'MCP transport error'
+      logError(this.transportFailure)
+    }
     // 注意：不能设置 transport.onclose（会被 Protocol.connect 覆盖），用 client.onclose 观测断开
     client.onclose = () => {
+      if (generation !== this.transportGeneration) return
       this.crashed = true
       logInfo('Provider 进程已退出/stdio 断开')
     }
@@ -182,7 +210,7 @@ export class ProviderManager {
         })
       } catch (err) {
         if (this.crashed) {
-          throw new ProviderCrashError(`Provider 执行中崩溃: ${err instanceof Error ? err.message : String(err)}`)
+          throw new ProviderCrashError(`Provider 执行中崩溃: ${this.transportFailure ?? (err instanceof Error ? err.message : String(err))}`)
         }
         throw err
       }

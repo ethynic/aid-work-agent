@@ -1,5 +1,7 @@
 # Agent 桌面客户端 v3 开发计划
 
+2026-10-11 MCP 大结果回传检查点：共享 Runtime core 的唯一写入者为 [BOSS/Runtime 修复会话](desktop-automation/plan-boss-card-coordinate-precision.md)，文件为 `src/legacy/providerManager.ts` 及 Runtime 传输测试/fixture/helper。Desktop 继续消费同一 core，不另实现 stdio；有限预算与脱敏诊断详见链接计划 Phase 5。旧构造调用兼容；不改管理/Device wire、binding、许可、公共壳或 H4 新产物协议，契约 v2.0 / wire 候选0.3不变。
+
 2026-10-11 共同检查点：BOSS 续筛业务契约 v1 见[续筛计划](desktop-automation/plan-boss-screening-continuation.md)。共用核心注册的唯一写入者为该任务主控，仅改 `clients/shared/local-tool-host-core/src/legacy/providers.ts`、`providerManager.ts` 及对应测试，桌面端不另实现续筛。新增工具与旧 Provider 拒绝兼容，不改管理 wire、binding、许可或桌面对话循环。
 
 ## 开发进度

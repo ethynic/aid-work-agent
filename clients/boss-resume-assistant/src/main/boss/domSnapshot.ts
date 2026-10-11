@@ -4,10 +4,10 @@
  * - sparse: { index: number[], value: T[] }
  * - dense: T[]（Chrome 150）
  *
- * 坐标换算只累加嵌套 iframe owner 的可见 bounds。
+ * 坐标换算累加嵌套 iframe owner 的可见 bounds，并逐层扣除 owner 所在文档的滚动。
  * 注意：layout.bounds 是**文档绝对坐标**（真机 2026-08-05 实测：列表 iframe 滚动后 bounds 不变、
  * document.scrollOffsetY 变），需要屏幕坐标时必须再减 document.scrollOffsetX/Y（见 GreetExecutor）。
- * 主文档 scrollOffset 恒为 0，不减也不错；滚动过的 iframe 文档不减会点歪。
+ * 目标文档自身滚动由调用方扣一次；祖先滚动由 accumulateOwnerOffset 扣，不能混为同一层。
  */
 
 /** DOMSnapshot 顶层结构 */
@@ -35,6 +35,8 @@ export interface DomDocument {
   layout: {
     nodeIndex: number[]
     bounds: number[][] // [x, y, width, height]
+    /** includeDOMRects=true 时按 layout 索引返回的 CSS 客户端矩形/尺寸；勿作任意节点的全局坐标。 */
+    clientRects?: number[][]
   }
   /** 文档滚动偏移（device px）：BOSS 列表在 iframe 文档内滚动，到底判定用 */
   scrollOffsetX?: number
@@ -91,7 +93,7 @@ export function findNodesByString(
   return out
 }
 
-/** 计算某 documentIndex 的祖先 owner 偏移累加（视口坐标） */
+/** 祖先 owner 的视口偏移：每层 bounds 扣 owner 所在文档滚动；leaf 自身滚动由调用方扣一次。 */
 export function accumulateOwnerOffset(snapshot: DomSnapshot, documentIndex: number): { x: number; y: number } {
   let offsetX = 0
   let offsetY = 0
@@ -113,8 +115,8 @@ export function accumulateOwnerOffset(snapshot: DomSnapshot, documentIndex: numb
     const layoutIndex = owner.document.layout.nodeIndex.indexOf(owner.nodeIndex)
     if (layoutIndex < 0) throw new Error('owner frame has no visible layout bounds')
     const b = owner.document.layout.bounds[layoutIndex]!
-    offsetX += b[0]!
-    offsetY += b[1]!
+    offsetX += b[0]! - (owner.document.scrollOffsetX ?? 0)
+    offsetY += b[1]! - (owner.document.scrollOffsetY ?? 0)
     current = snapshot.documents.indexOf(owner.document)
   }
   return { x: offsetX, y: offsetY }

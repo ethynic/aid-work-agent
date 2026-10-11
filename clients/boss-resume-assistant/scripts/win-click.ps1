@@ -1,7 +1,7 @@
 ﻿# Win32 真实鼠标点击 + 可选真实键盘逐字输入（设计文档 §10.3 通道 2 / §17 踩坑 6~13）
 # 用法: powershell -File scripts/win-click.ps1 -X 904 -Y 700 [-CssW 1917] [-CssH 1905] [-Text "你好"]
 # 输入为 page 坐标（DOMSnapshot device px，与截图 PNG 同尺寸），脚本内部：
-#   1. GetWindowRect(Chrome_RenderWidgetHostHWND) 实时取渲染视口屏幕矩形（每次校准，不缓存）
+#   1. PMv2 线程上下文内 GetWindowRect 实时取物理屏幕矩形（失败即拒绝；finally 恢复上下文）
 #   2. scale = 视口宽 / CssW 换算屏幕坐标（自动覆盖 150% DPI 缩放）
 #   3. WindowFromPoint 落点守卫：目标点必须归属 Chrome_RenderWidgetHostHWND，
 #      否则 SetWindowPos 抬窗重试一次，仍不行 exit 2（fail-loud，不盲点）
@@ -18,11 +18,10 @@ param(
   [string]$TitleKeyword = "BOSS直聘 - Google Chrome"
 )
 
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-using System.Text;
+$ErrorActionPreference = 'Stop'
+$physicalInputSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'BossPhysicalInput.cs') -Raw
+Add-Type -TypeDefinition @"
+$physicalInputSource
 
 public class Win32 {
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
@@ -32,7 +31,6 @@ public class Win32 {
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder sb, int max);
     [DllImport("user32.dll", CharSet=CharSet.Ansi)] public static extern int GetClassName(IntPtr hWnd, StringBuilder sb, int max);
-    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
@@ -42,8 +40,6 @@ public class Win32 {
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
-    [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
-    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
     [DllImport("user32.dll", SetLastError = true)] public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
 
@@ -109,10 +105,9 @@ public class Win32 {
             var sb = new StringBuilder(256);
             GetClassName(h, sb, 256);
             if (sb.ToString() == "Chrome_RenderWidgetHostHWND") {
-                RECT r;
-                GetWindowRect(h, out r);
-                long area = (long)(r.Right - r.Left) * (long)(r.Bottom - r.Top);
                 if (IsWindowVisible(h)) {
+                    var r = BossPhysicalInput.ReadRect(h);
+                    long area = (long)(r.Right - r.Left) * (long)(r.Bottom - r.Top);
                     if (area > bestArea) { bestArea = area; found = h; }
                 } else if (firstHidden == IntPtr.Zero) {
                     firstHidden = h;
@@ -132,8 +127,7 @@ public class Win32 {
 "@
 
 function Get-ScreenPoint($rw, [double]$cssW, [double]$cssH, [int]$px, [int]$py) {
-  $r = New-Object Win32+RECT
-  [Win32]::GetWindowRect($rw, [ref]$r) | Out-Null
+  $r = [BossPhysicalInput]::ReadRect($rw)
   $vw = $r.Right - $r.Left
   $vh = $r.Bottom - $r.Top
   $sx = [int]($r.Left + $px * ($vw / $cssW))
@@ -142,16 +136,14 @@ function Get-ScreenPoint($rw, [double]$cssW, [double]$cssH, [int]$px, [int]$py) 
 }
 
 function Test-PointOnRenderWidget([int]$sx, [int]$sy, $rw) {
-  $pt = New-Object Win32+POINT
-  $pt.X = $sx; $pt.Y = $sy
-  $h = [Win32]::WindowFromPoint($pt)
-  if ($h -eq $rw) { return $true }
-  # WindowFromPoint 可能返回 render widget 的子孙/同族 Chrome 图层，类名一致也视为命中
-  return [Win32]::ClassNameOf($h) -eq "Chrome_RenderWidgetHostHWND"
+  return [BossPhysicalInput]::PointOnWidget($rw, $sx, $sy)
 }
 
+# A thread scope avoids process-global DPI changes. Failure never falls back to virtualized bounds.
+$physicalScope = [BossPhysicalInput]::Enter()
+try {
 $win = [Win32]::FindWindowByTitle($TitleKeyword)
-if ($win -eq [IntPtr]::Zero) { Write-Error "未找到标题含「$TitleKeyword」的窗口"; exit 1 }
+if ($win -eq [IntPtr]::Zero) { Write-Error "未找到标题含「$TitleKeyword」的窗口" -ErrorAction Continue; exit 1 }
 
 # Chrome 最小化时 render widget 被销毁（EnumChildWindows 枚举不到，真机 2026-08-17 实证：
 # 主窗口在但 0 子窗口）。必须先还原 + 前台化，再定位 render widget（与 cv-wheel.ps1 同款修复）
@@ -173,8 +165,8 @@ $thisThread = [Win32]::GetCurrentThreadId()
 Start-Sleep -Milliseconds 400
 
 $rw = [Win32]::FindRenderWidget($win)
-if ($rw -eq [IntPtr]::Zero) { Write-Error "未找到 Chrome 渲染子窗口（窗口已还原仍无渲染子窗口）"; exit 1 }
-if (-not [Win32]::IsWindowVisible($rw)) { Write-Error "渲染子窗口不可见：BOSS 标签页可能在后台，请切换到前台后重试"; exit 1 }
+if ($rw -eq [IntPtr]::Zero) { Write-Error "未找到 Chrome 渲染子窗口（窗口已还原仍无渲染子窗口）" -ErrorAction Continue; exit 1 }
+if (-not [Win32]::IsWindowVisible($rw)) { Write-Error "渲染子窗口不可见：BOSS 标签页可能在后台，请切换到前台后重试" -ErrorAction Continue; exit 1 }
 
 $pt = Get-ScreenPoint $rw $CssW $CssH $X $Y
 $sx = $pt[0]; $sy = $pt[1]
@@ -188,20 +180,23 @@ if (-not (Test-PointOnRenderWidget $sx $sy $rw)) {
   $pt = Get-ScreenPoint $rw $CssW $CssH $X $Y
   $sx = $pt[0]; $sy = $pt[1]
   if (-not (Test-PointOnRenderWidget $sx $sy $rw)) {
-    Write-Error "落点仍被遮挡（WindowFromPoint 校验失败），中止点击"
+    Write-Error "落点仍被遮挡（WindowFromPoint 校验失败），中止点击" -ErrorAction Continue
     exit 2
   }
 }
 
 # 拟人移动：从当前位置分 10 步移动过去
-$cur = [System.Windows.Forms.Cursor]::Position
+$cur = [BossPhysicalInput]::ReadCursor()
 for ($i = 1; $i -le 10; $i++) {
     $mx = [int]($cur.X + ($sx - $cur.X) * $i / 10)
     $my = [int]($cur.Y + ($sy - $cur.Y) * $i / 10)
-    [Win32]::SetCursorPos($mx, $my) | Out-Null
+    [BossPhysicalInput]::MoveCursor($mx, $my)
     Start-Sleep -Milliseconds 25
 }
 Start-Sleep -Milliseconds 500
+$expectedPoint = Get-ScreenPoint $rw $CssW $CssH $X $Y
+[BossPhysicalInput]::RequireCursorOnWidget($rw, $expectedPoint[0], $expectedPoint[1])
+$physicalScope.MarkInputStarted()
 [Win32]::mouse_event([Win32]::MOUSEEVENTF_LEFTDOWN, 0, 0, 0, [UIntPtr]::Zero)
 Start-Sleep -Milliseconds 70
 [Win32]::mouse_event([Win32]::MOUSEEVENTF_LEFTUP, 0, 0, 0, [UIntPtr]::Zero)
@@ -218,3 +213,12 @@ if ($Text.Length -gt 0) {
   Write-Output "已输入 $($Text.Length) 字"
 }
 exit 0
+} catch {
+  if ($physicalScope.InputStarted) {
+    Write-Error ("[BOSS_INPUT_UNKNOWN] " + $_.Exception.Message) -ErrorAction Continue
+    exit 1
+  }
+  throw
+} finally {
+  $physicalScope.Dispose()
+}

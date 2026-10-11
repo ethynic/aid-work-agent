@@ -1,4 +1,4 @@
-# Win32 mouse wheel scroll for canvas-rendered resume reading (design doc section 10.8).
+﻿# Win32 mouse wheel scroll for canvas-rendered resume reading (design doc section 10.8).
 # Usage: powershell -File scripts/cv-wheel.ps1 -X 531 -Y 658 -CssW 1249 -CssH 1277 [-DeltaY -120] [-Notches 6]
 #
 # Input X/Y are page coordinates (DOMSnapshot device px, same coordinate space as the
@@ -6,7 +6,7 @@
 #   1. FindWindowByTitle(TitleKeyword) -> top-level Chrome window
 #   2. FindRenderWidget -> the VISIBLE Chrome_RenderWidgetHostHWND child
 #      (Chrome keeps hidden render widgets for background tabs, must pick the visible one)
-#   3. SetForegroundWindow, then map page coords to screen coords:
+#   3. In a verified PMv2 thread context, map page coords to physical screen coords:
 #      sx = rect.Left + X * (viewportW / CssW)   (scale covers DPI zoom like win-click.ps1)
 #   4. SetCursorPos, then send Notches wheel ticks of DeltaY each (~150ms apart)
 #
@@ -27,17 +27,17 @@ param(
   [double]$CssH = 1277,
   [int]$DeltaY = -120,
   [int]$Notches = 6,
-  [string]$TitleKeyword = "Google Chrome"
+  [string]$TitleKeyword = "BOSS直聘 - Google Chrome"
 )
 
 if ($CssW -le 0 -or $CssH -le 0) { Write-Error "CssW/CssH must be positive (got ${CssW}x${CssH})"; exit 2 }
 if ($Notches -le 0) { Write-Error "Notches must be positive (got $Notches)"; exit 2 }
 if ($DeltaY -eq 0) { Write-Error "DeltaY must not be 0"; exit 2 }
 
+$ErrorActionPreference = 'Stop'
+$physicalInputSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'BossPhysicalInput.cs') -Raw
 Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-using System.Text;
+$physicalInputSource
 
 public class CvWin32 {
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
@@ -47,8 +47,8 @@ public class CvWin32 {
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder sb, int max);
     [DllImport("user32.dll", CharSet=CharSet.Ansi)] public static extern int GetClassName(IntPtr hWnd, StringBuilder sb, int max);
-    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, ref uint pid);
@@ -56,7 +56,6 @@ public class CvWin32 {
     [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
 
     public const uint MOUSEEVENTF_WHEEL = 0x0800;
@@ -78,14 +77,18 @@ public class CvWin32 {
     public static IntPtr FindRenderWidget(IntPtr parent) {
         IntPtr firstHidden = IntPtr.Zero;
         IntPtr found = IntPtr.Zero;
+        long bestArea = 0;
         EnumChildWindows(parent, (h, l) => {
             var sb = new StringBuilder(256);
             GetClassName(h, sb, 256);
             // Chrome keeps several render widgets (visible tab + hidden background tabs);
             // prefer the visible instance or coordinates calibrate against the wrong one.
             if (sb.ToString() == "Chrome_RenderWidgetHostHWND") {
-                if (IsWindowVisible(h)) { found = h; return false; }
-                if (firstHidden == IntPtr.Zero) firstHidden = h;
+                if (IsWindowVisible(h)) {
+                    var r = BossPhysicalInput.ReadRect(h);
+                    long area = (long)(r.Right - r.Left) * (long)(r.Bottom - r.Top);
+                    if (area > bestArea) { bestArea = area; found = h; }
+                } else if (firstHidden == IntPtr.Zero) firstHidden = h;
             }
             return true;
         }, IntPtr.Zero);
@@ -95,8 +98,7 @@ public class CvWin32 {
 "@
 
 function Get-ScreenPoint($rw, [double]$cssW, [double]$cssH, [int]$px, [int]$py) {
-  $r = New-Object CvWin32+RECT
-  [CvWin32]::GetWindowRect($rw, [ref]$r) | Out-Null
+  $r = [BossPhysicalInput]::ReadRect($rw)
   $vw = $r.Right - $r.Left
   $vh = $r.Bottom - $r.Top
   $sx = [int]($r.Left + $px * ($vw / $cssW))
@@ -104,8 +106,10 @@ function Get-ScreenPoint($rw, [double]$cssW, [double]$cssH, [int]$px, [int]$py) 
   return @($sx, $sy)
 }
 
+$physicalScope = [BossPhysicalInput]::Enter()
+try {
 $win = [CvWin32]::FindWindowByTitle($TitleKeyword)
-if ($win -eq [IntPtr]::Zero) { Write-Error "window not found by title keyword: $TitleKeyword"; exit 1 }
+if ($win -eq [IntPtr]::Zero) { Write-Error "window not found by title keyword: $TitleKeyword" -ErrorAction Continue; exit 1 }
 
 # Chrome minimized -> render widget is destroyed and EnumChildWindows yields nothing
 # (verified on device: main window found but 0 children). Restore + foreground FIRST,
@@ -127,13 +131,20 @@ $thisThread = [CvWin32]::GetCurrentThreadId()
 Start-Sleep -Milliseconds 400
 
 $rw = [CvWin32]::FindRenderWidget($win)
-if ($rw -eq [IntPtr]::Zero) { Write-Error "Chrome_RenderWidgetHostHWND not found: the BOSS Chrome window is suspended in background (its render child windows are destroyed). Click the Chrome window to bring it to the foreground, then retry."; exit 1 }
-if (-not [CvWin32]::IsWindowVisible($rw)) { Write-Error "render widget not visible (tab may be in background)"; exit 1 }
+if ($rw -eq [IntPtr]::Zero) { Write-Error "Chrome_RenderWidgetHostHWND not found: the BOSS Chrome window is suspended in background (its render child windows are destroyed). Click the Chrome window to bring it to the foreground, then retry." -ErrorAction Continue; exit 1 }
+if (-not [CvWin32]::IsWindowVisible($rw)) { Write-Error "render widget not visible (tab may be in background)" -ErrorAction Continue; exit 1 }
 
 $pt = Get-ScreenPoint $rw $CssW $CssH $X $Y
 $sx = $pt[0]; $sy = $pt[1]
+if (-not [BossPhysicalInput]::PointOnWidget($rw, $sx, $sy)) {
+  [void][CvWin32]::SetWindowPos($win, [IntPtr]::Zero, 0, 0, 0, 0, 3) # HWND_TOP, NOMOVE | NOSIZE
+  Start-Sleep -Milliseconds 300
+  $pt = Get-ScreenPoint $rw $CssW $CssH $X $Y
+  $sx = $pt[0]; $sy = $pt[1]
+  if (-not [BossPhysicalInput]::PointOnWidget($rw, $sx, $sy)) { throw 'Render-widget ownership check failed; wheel refused' }
+}
 Write-Output "screen point: ($sx, $sy)"
-[CvWin32]::SetCursorPos($sx, $sy) | Out-Null
+[BossPhysicalInput]::MoveCursor($sx, $sy)
 Start-Sleep -Milliseconds 200
 
 # mouse_event expects dwData as uint; a negative DeltaY must be wrapped into the unsigned
@@ -141,8 +152,20 @@ Start-Sleep -Milliseconds 200
 if ($DeltaY -ge 0) { $dwData = [uint32]$DeltaY } else { $dwData = [uint32]([double]$DeltaY + 4294967296) }
 
 for ($i = 1; $i -le $Notches; $i++) {
+  $expectedPoint = Get-ScreenPoint $rw $CssW $CssH $X $Y
+  [BossPhysicalInput]::RequireCursorOnWidget($rw, $expectedPoint[0], $expectedPoint[1])
+  $physicalScope.MarkInputStarted()
   [CvWin32]::mouse_event([CvWin32]::MOUSEEVENTF_WHEEL, 0, 0, $dwData, [UIntPtr]::Zero)
   if ($i -lt $Notches) { Start-Sleep -Milliseconds 150 }
 }
 Write-Output "wheeled $Notches tick(s) of $DeltaY at page ($X, $Y)"
 exit 0
+} catch {
+  if ($physicalScope.InputStarted) {
+    Write-Error ("[BOSS_INPUT_UNKNOWN] " + $_.Exception.Message) -ErrorAction Continue
+    exit 1
+  }
+  throw
+} finally {
+  $physicalScope.Dispose()
+}

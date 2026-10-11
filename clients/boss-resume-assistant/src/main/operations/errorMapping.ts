@@ -2,7 +2,7 @@
  * 既有 executor Error → 统一错误码（实施规格 m02 §3）。
  *
  * 消息匹配表集中在本文件，不散落到各 operation。匹配顺序即判定优先级：
- * 取消 > Chrome 连接 > 登录态 > 付费墙 > 参数类 > 写后校验失败 > 已知 executor Error > 兜底。
+ * 取消 > 可信输入后异常 > Chrome 连接 > 登录态 > 付费墙 > 参数类 > 写后校验失败 > 已知 executor Error > 兜底。
  */
 import { FilterSetError } from '../boss/FilterSetter.js'
 import { GreetError } from '../boss/GreetExecutor.js'
@@ -105,6 +105,13 @@ export function mapExecutorError(err: unknown): MappedError {
   }
   const message = err instanceof Error ? err.message : String(err)
 
+  // 原生输入已经可能发出，不能被异常中的环境关键词降级为可重试的无副作用失败。
+  if (err instanceof WinClickError && message.includes('[BOSS_INPUT_UNKNOWN]')) {
+    return {
+      code: 'EXECUTION_UNKNOWN',
+      message: `${message}（写动作已发出但结果无法确认，请人工查看页面后再决定下一步，系统不会自动重试）`,
+    }
+  }
   if (causeCode(err) === 'ECONNREFUSED' || CHROME_UNAVAILABLE_MARKERS.some((m) => message.includes(m))) {
     return {
       code: 'CHROME_UNAVAILABLE',

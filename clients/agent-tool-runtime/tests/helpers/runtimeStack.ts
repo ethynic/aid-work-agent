@@ -10,7 +10,7 @@ import { ApiClient } from '../../src/apiClient.js'
 import type { ProviderManifest } from '../../src/providers.js'
 import { deriveResourceKey } from '../../src/desktopLock.js'
 import { PollLoop } from '../../src/pollLoop.js'
-import { ProviderManager, ProviderSet } from '../../src/providerManager.js'
+import { ProviderManager, ProviderSet, type ProviderOptions } from '../../src/providerManager.js'
 import { ResultOutbox, resultOutboxDir } from '../../src/resultOutbox.js'
 import { FakeCloud } from './fakeCloud.js'
 
@@ -26,6 +26,8 @@ export function fakeV2ProviderEntry(): string {
 }
 
 export interface TestStackOptions {
+  /** Trusted local transport settings, used only by isolated transport regressions. */
+  providerOptions?: ProviderOptions
   heartbeatIntervalMs?: number
   claimWaitSeconds?: number
   backoffBaseMs?: number
@@ -81,7 +83,7 @@ export async function startTestStack(opts: TestStackOptions = {}): Promise<TestS
   const api = new ApiClient(cloud.baseUrl, token)
   const providers = new ProviderSet(
     { 'boss-recruiting': fakeProviderEntry(), ...opts.providerEntries },
-    { shutdownTimeoutMs: 3_000 },
+    { shutdownTimeoutMs: 3_000, ...opts.providerOptions },
   )
   const provider = providers.get('boss-recruiting')
   const dataDir = opts.runtimeDataDir ?? mkdtempSync(path.join(os.tmpdir(), 'aidwork-rt-test-'))

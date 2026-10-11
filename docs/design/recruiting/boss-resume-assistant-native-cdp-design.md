@@ -439,6 +439,18 @@ Win32 通道实现要点：
 - **list-jobs / select-job 设计**：用户传的 job_name 可能不精确（如「PHP」想切「PHP开发工程师」），匹配判断放调用方 AI：① `list-jobs`（只读）打开下拉→等待→解析返回职位列表（职位名/城市/薪资/点击坐标/`pending` 待开放标记），AI 据此选精确职位名并避开待开放职位；② `select-job`（写动作）精确名匹配（按 nodeIndex 排除职位框）→ pending 前置拒绝 → Win32 点击 → 轮询校验。AI 匹配不到时自然回复用户「职位在 BOSS 中不存在」+ 列出可用职位。
 - **坐标缓存可行性（记录，当前未实现）**：动态坐标并非都禁缓存——**可缓存的判断标准**：① 控件为固定布局（sticky/fixed，不随列表滚动而移动）；② 运行环境窗口几何不变（真实场景由系统自动操作，无人为缩放/拖动窗口）。两者都满足则坐标稳定、可缓存。**职位框/筛选栏属可缓存**：固定在推荐牛人页顶部，下方牛人列表滚动不影响其位置；系统自动操作窗口不变，坐标恒定。**不可缓存的反例**：随滚动/列表渲染变化的坐标（牛人卡片、滚动后才露出的元素）。**失效保护策略**（引入缓存时必备）：给缓存设 TTL；或点击缓存坐标后校验未达预期（如点职位框后下拉未展开/落点错位）则丢弃缓存、回退动态识别。CLI 内部不做模糊匹配（精确相等，判断交给 AI）。当前实现仍用动态定位 + iframe 重载轮询校验（无需维护缓存失效即稳健）；此条作为后续优化可行性记录，每次 list-jobs 仍重新打开下拉解析。
 
+### 10.7.1 推荐列表续筛的 CSS 输入桥接（2026-10-11）
+
+`boss_resume_next` 的列表滚动继续使用既有 CDP 通道。当前设备上的 Snapshot bounds/PNG 为2504×1474，而同快照根 HTML clientRect 为1252×737；Input.dispatchMouseEvent 的坐标与滚轮步长为主 frame viewport CSS px。直接把 bounds 中心(1252,737)传给 Input 落在 CSS 视口右下边界，列表不推进；按同节点实测比例换算到(626,368.5)、deltaY=368.5 后，单次滚轮使推荐文档偏移0→737。比例来自 fresh 几何，不来自 Windows DPI。[CDP Input 协议](https://raw.githubusercontent.com/ChromeDevTools/devtools-protocol/master/pdl/domains/Input.pdl)
+
+局部方案：只让续筛 Reader 的快照开启既有 `DOMSnapshot.captureSnapshot(includeDOMRects=true)`；测量主文档唯一根 HTML 同节点 bounds/clientRects，要求有效正尺寸、与当前视口一致、原点与主文档偏移为0且两轴比例一致。缺失或冲突立即拒绝滚动；每次确认重试重新采集、重算。其余快照默认不采 DOMRects，Win32 点击/详情滚轮及其他 CDP 输入不改；不新增方法、权限或共享 wire。两次延迟签名无变化仍为 `no_progress`，不宣称列表到底；30屏、取消与1000历史保护保留。实批滚动验收必须读到首屏以外的新候选人，不能仅统计 wheel 次数。[修复计划与验证](../../plans/desktop-automation/plan-boss-card-coordinate-precision.md)
+
+### 10.7.2 嵌套详情 iframe 的祖先滚动偏移（2026-10-11）
+
+续筛滚动修复后发现共享 `accumulateOwnerOffset` 仅累加父owner的文档绝对bounds，漏扣owner所在文档的滚动。真机推荐doc2 scrollY=2948、owner=(336,80)，嵌套详情doc3自身scrollY=0、CANVAS=(0,0,1468,1394)，旧累计offset=(336,3028)，导致可见画布误判为不在视口；父滚动737时旧裁剪起点817，还会产出裁短的有效PNG。当前批次图片不能作为完整简历验收，`bottomReached` 也不证明裁剪区域正确。
+
+修正公式：祖先offset逐层累加 `owner.bounds[0,1] − ownerDocument.scrollOffsetX/Y`；调用方再加leaf节点bounds并减leaf自己的滚动一次。祖先与leaf分别扣减、不重复；无祖先的主文档offset仍(0,0)。owner唯一性、祖先循环、缺可见layout检查保留，通道与阈值不变。回归覆盖多层双轴/小数/dense/sparse以及父偏移0/737/2948下同一完整画布区域，再独立测试及CR。[修复计划](../../plans/desktop-automation/plan-boss-card-coordinate-precision.md#phase-7嵌套-iframe-祖先滚动偏移)
+
 ### 10.9 沟通会话消息读取与未读清单（真机实验，2026-08-27，开发待做）
 
 > 历史 §10.8（简历读取章节）已随早期重构移除，源码注释中「§10.8」旧引用一律失效。

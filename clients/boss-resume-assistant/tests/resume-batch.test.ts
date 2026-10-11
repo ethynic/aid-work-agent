@@ -26,11 +26,14 @@ import {
 import { buildResumePayload } from '../src/main/operations/bossResumeDetail.js'
 import type { DeviceRect, ResumeReadResult } from '../src/main/boss/ResumeReader.js'
 import type { DomSnapshot, ClickPoint } from '../src/main/boss/domSnapshot.js'
+import { findButtonsByExactText, pairCardNameWithPoint } from '../src/main/boss/cardName.js'
+import { viewportOf, FilterSetError } from '../src/main/boss/FilterSetter.js'
 
 /** 卡片行定义：姓名（null = DOM 配对失败）+ 打招呼按钮中心 y */
 interface Row {
   name: string | null
   buttonY: number
+  nameDy?: number
 }
 const ROW1: Row = { name: '刘草威', buttonY: 146 }
 const ROW2: Row = { name: '张三丰', buttonY: 330 }
@@ -58,11 +61,11 @@ function buildSnap(
   rows: Row[],
   opts: { canvas?: boolean; extraCanvases?: Array<[number, number, number, number]> } = {},
 ): DomSnapshot {
-  const strings: string[] = ['']
+  const strings: string[] = ['', 'HTML']
   const nvIndex: number[] = [0]
   const nvValue: number[] = [0]
   const nameIndex: number[] = [0]
-  const nameValue: number[] = [0]
+  const nameValue: number[] = [1]
   const layoutNodeIndex: number[] = [0]
   const layoutBounds: Array<[number, number, number, number]> = [[0, 0, 1249, 1277]]
 
@@ -99,7 +102,7 @@ function buildSnap(
   addText('筛选', [1100, 50, 80, 24])
   for (const row of rows) {
     // 真机锚定：姓名(342,y-8) 与活跃状态(400,y-8) 同行，按钮中心 (1162,y)
-    if (row.name !== null) addText(row.name, [317, row.buttonY - 18, 50, 20]) // 中心 (342, y-8)
+    if (row.name !== null) addText(row.name, [317, row.buttonY - (row.nameDy ?? 8) - 10, 50, 20])
     addText('刚刚活跃', [370, row.buttonY - 18, 60, 20]) // 中心 (400, y-8)
     addText('本科', [317, row.buttonY + 30, 40, 20]) // 噪音：同行带外（y 差 38 > 8）
     addText(GREET_STRING, [1130, row.buttonY - 16, 64, 32]) // 中心 (1162, y)
@@ -116,7 +119,7 @@ function buildSnap(
           nodeName: { index: nameIndex, value: nameValue },
           contentDocumentIndex: { index: [], value: [] },
         },
-        layout: { nodeIndex: layoutNodeIndex, bounds: layoutBounds },
+        layout: { nodeIndex: layoutNodeIndex, bounds: layoutBounds, clientRects: layoutBounds.map((b) => [...b]) },
         scrollOffsetY: 0,
       },
     ],
@@ -156,7 +159,7 @@ function makeBatch(
   const scriptAt = (i: number): CardScript => scripts[i] ?? {}
   /** 点击点 y → 卡片行序（buttonY 唯一，姓名点 buttonY-8 可反查） */
   const rowOfPoint = (y: number): number => {
-    const hit = rows.findIndex((r) => Math.abs(r.buttonY + 70 - y) <= 2 || Math.abs(r.buttonY - 8 - y) <= 2)
+    const hit = rows.findIndex((r) => Math.abs(r.buttonY + 70 - y) <= 2 || Math.abs(r.buttonY - (r.nameDy ?? 8) - y) <= 2)
     return hit >= 0 ? hit : cardIdx
   }
   const deps: ResumeBatchDeps = {
@@ -212,6 +215,64 @@ function makeBatch(
 
 // ---------- locateCards：姓名锚定与视口过滤 ----------
 
+test('locateCards：原始小数几何与 doctor 配对一致，iframe owner 和滚动偏移不提前取整', () => {
+  const snap = buildSnap([{ name: '张三丰', buttonY: 211.5, nameDy: 15.5 }])
+  const list = snap.documents[0]!
+  // 真实边界：按钮 bounds y=196/h=31，ownerY=80 → 291.5；姓名中心=276。
+  list.layout.bounds[list.layout.bounds.length - 1] = [1130, 196, 64, 31]
+  snap.documents = [
+    { nodes: { nodeValue: [0, 0], contentDocumentIndex: { index: [1], value: [2] } },
+      layout: { nodeIndex: [0, 1], bounds: [[0, 0, 1249, 1277], [0, 80, 1249, 1197]] } },
+    { nodes: { nodeValue: [], contentDocumentIndex: [] }, layout: { nodeIndex: [], bounds: [] } },
+    list,
+  ]
+  for (const scroll of [0, 100.25]) {
+    list.scrollOffsetY = scroll
+    const buttons = findButtonsByExactText(snap, '打招呼')
+    const paired = pairCardNameWithPoint(snap, buttons[0]!, viewportOf(snap))
+    assert.deepEqual(paired, { name: '张三丰', point: { x: 342, y: 276 - scroll } })
+    assert.deepEqual(new ResumeBatchReader(makeBatch([]).deps).locateCards(snap), [
+      { name: paired.name, namePoint: paired.point, greetButtonY: 291.5 - scroll },
+    ])
+  }
+})
+
+test('姓名节点小数也使用原始几何：15.75 接受，16 及超界拒绝', () => {
+  for (const buttonY of [292, 291.5, 291.75]) {
+    for (const dy of [15.75, 16, 16.25, -15.75, -16, -16.25]) {
+      const snap = buildSnap([{ name: '张三丰', buttonY, nameDy: dy }])
+      const button = findButtonsByExactText(snap, '打招呼')[0]!
+      const paired = pairCardNameWithPoint(snap, button, viewportOf(snap))
+      const expected = Math.abs(dy) < 16 ? { name: '张三丰', point: { x: 342, y: buttonY - dy } }
+        : { name: null, point: null }
+      assert.deepEqual(paired, expected, `buttonY=${buttonY}, dy=${dy}`)
+      const [card] = new ResumeBatchReader(makeBatch([]).deps).locateCards(snap)
+      assert.deepEqual(card, { name: expected.name, namePoint: expected.point, greetButtonY: buttonY })
+    }
+  }
+})
+
+test('小数配对跨批累计排除，滚动重叠卡片不重复读取', async () => {
+  const rows: Row[] = [{ name: '刘草威', buttonY: 291.5, nameDy: 15.5 },
+    { name: '张三丰', buttonY: 475.5, nameDy: 15.5 }]
+  const { reader, deps, f } = makeBatch(rows)
+  const first = await reader().readBatch({ limit: 1 })
+  assert.deepEqual(first.resumes.map((r) => r.name), ['刘草威'])
+  let scrolls = 0
+  deps.scroll = async () => {
+    scrolls++
+    rows.splice(0, rows.length, rows[1]!, { name: '王小明', buttonY: 659.5, nameDy: 15.5 })
+  }
+  const next = await reader().readBatch({ limit: 2, excludeNames: first.processed_names, scanMore: true })
+  assert.deepEqual(next.resumes.map((r) => r.name), ['张三丰', '王小明'])
+  assert.deepEqual(next.processed_names, ['张三丰', '王小明'])
+  assert.deepEqual([...first.failures, ...next.failures], [])
+  assert.equal(first.attempted + next.attempted, 3)
+  assert.equal(next.stop_reason, 'limit_reached')
+  assert.equal(scrolls, 1)
+  assert.deepEqual(f.clicks.map((p) => p.y), [276, 460, 644])
+})
+
 test('续筛跳过上一批及重叠卡片，滚动后只读取新姓名', async () => {
   const rows = [ROW1, ROW2]
   const { reader, deps, f } = makeBatch(rows)
@@ -240,6 +301,116 @@ test('续筛没有进展：两次延迟确认后停止，不点击已处理者',
   assert.equal(f.clicks.length, 0)
 })
 
+test('续筛 CSS 滚轮使用同节点实测比例，覆盖真实2倍及非整数比例', async () => {
+  for (const scale of [1, 1.25, 1.5, 2, 2.5]) {
+    const { reader, deps, f } = makeBatch([ROW1])
+    const snapshot = deps.snapshot
+    deps.snapshot = async () => {
+      const snap = await snapshot()
+      // 复现本机真实 root HTML 几何；候选人坐标仍用原 bounds，不经过输入单位桥接。
+      snap.documents[0]!.layout.bounds[0] = [0, 0, 2504, 1474]
+      snap.documents[0]!.layout.clientRects![0] = [0, 0, 2504 / scale, 1474 / scale]
+      return snap
+    }
+    const scrolls: number[][] = []
+    deps.scroll = async (x, y, deltaY) => { scrolls.push([x, y, deltaY]) }
+    const result = await reader().readBatch({ limit: 1, excludeNames: [ROW1.name!], scanMore: true })
+    assert.equal(result.stop_reason, 'no_progress')
+    assert.deepEqual(scrolls, Array.from({ length: 2 }, () => [1252 / scale, 737 / scale, 737 / scale]))
+    assert.deepEqual(f.clicks, [])
+    assert.deepEqual(f.wheels, [])
+  }
+})
+
+test('续筛第二次确认使用 fresh 几何，不复用旧缩放与窗口尺寸', async () => {
+  const { reader, deps } = makeBatch([ROW1])
+  const snapshot = deps.snapshot
+  const scrolls: number[][] = []
+  deps.snapshot = async () => {
+    const snap = await snapshot()
+    snap.documents[0]!.layout.bounds[0] = scrolls.length ? [0, 0, 1800, 1000] : [0, 0, 2504, 1474]
+    snap.documents[0]!.layout.clientRects![0] = scrolls.length ? [0, 0, 1200, 2000 / 3] : [0, 0, 1252, 737]
+    return snap
+  }
+  deps.scroll = async (x, y, deltaY) => { scrolls.push([x, y, deltaY]) }
+  const result = await reader().readBatch({ limit: 1, excludeNames: [ROW1.name!], scanMore: true })
+  assert.equal(result.stop_reason, 'no_progress')
+  assert.deepEqual(scrolls, [[626, 368.5, 368.5], [600, 1000 / 3, 1000 / 3]])
+})
+
+test('续筛按根 HTML 节点对齐 layout，不把首项 #document 的空 clientRect 当比例', async () => {
+  for (const dense of [false, true]) {
+    const { reader, deps } = makeBatch([ROW1])
+    const snapshot = deps.snapshot
+    deps.snapshot = async () => {
+      const snap = await snapshot()
+      const root = snap.documents[0]!
+      root.layout.bounds[0] = [0, 0, 2504, 1474]
+      root.layout.clientRects![0] = [0, 0, 0, 0]
+      const htmlNode = 100
+      root.nodes.nodeName = dense ? Array.from({ length: 101 }, (_, i) => i === htmlNode ? 1 : 0)
+        : { index: [htmlNode], value: [1] }
+      root.layout.nodeIndex.push(htmlNode)
+      root.layout.bounds.push([0, 0, 2504, 1474])
+      root.layout.clientRects!.push([0, 0, 1252, 737])
+      return snap
+    }
+    const scrolls: number[][] = []
+    deps.scroll = async (x, y, deltaY) => { scrolls.push([x, y, deltaY]) }
+    const result = await reader().readBatch({ limit: 1, excludeNames: [ROW1.name!], scanMore: true })
+    assert.equal(result.stop_reason, 'no_progress')
+    assert.deepEqual(scrolls, [[626, 368.5, 368.5], [626, 368.5, 368.5]])
+    const htmlSnapshot = deps.snapshot
+    for (const dimension of [2, 3]) {
+      for (const invalid of [NaN, Infinity, undefined, 0, -1]) {
+        scrolls.length = 0
+        deps.snapshot = async () => {
+          const snap = await htmlSnapshot()
+          snap.documents[0]!.layout.bounds[0]![dimension] = invalid as number
+          return snap
+        }
+        await assert.rejects(reader().readBatch({ limit: 1, excludeNames: [ROW1.name!], scanMore: true }),
+          (e: unknown) => invalid === 0 || invalid === -1 ? e instanceof FilterSetError
+            : e instanceof ResumeBatchError && /CSS 几何/.test(e.message))
+        assert.deepEqual(scrolls, [])
+      }
+    }
+  }
+})
+
+test('续筛缺失或冲突 CSS 几何拒绝发滚轮；普通批量读取不要求 DOMRects', async () => {
+  const corruptions: Array<(snap: DomSnapshot) => void> = [
+    (s) => { delete s.documents[0]!.layout.clientRects },
+    (s) => { delete s.documents[0]!.nodes.nodeName },
+    (s) => { s.documents[0]!.layout.clientRects![0] = [0, 0, 0, 737] },
+    (s) => { s.documents[0]!.layout.clientRects![0] = [0, 0, NaN, 737] },
+    (s) => { s.documents[0]!.layout.clientRects![0] = [0, 0, Infinity, 737] },
+    (s) => { s.documents[0]!.layout.clientRects![0] = [0, 0, -10, 737] },
+    (s) => { s.documents[0]!.layout.clientRects![0] = [10, 0, 1249, 1277] },
+    (s) => { s.documents[0]!.layout.clientRects![0] = [0, 0, 1249, 638.5] },
+    (s) => { s.documents[0]!.layout.bounds[0]![1] = 12 },
+    (s) => { s.documents[0]!.scrollOffsetY = 20 },
+    (s) => { s.documents[0]!.nodes.nodeName = [1, 1] },
+  ]
+  for (const corrupt of corruptions) {
+    const { reader, deps, f } = makeBatch([ROW1])
+    const snapshot = deps.snapshot
+    deps.snapshot = async () => { const snap = await snapshot(); corrupt(snap); return snap }
+    let scrolls = 0
+    deps.scroll = async () => { scrolls++ }
+    await assert.rejects(reader().readBatch({ limit: 1, excludeNames: [ROW1.name!], scanMore: true }),
+      (e: unknown) => e instanceof ResumeBatchError && /CSS 几何/.test(e.message))
+    assert.equal(scrolls, 0)
+    assert.deepEqual(f.clicks, [])
+  }
+  const { reader, deps } = makeBatch([ROW1])
+  const snapshot = deps.snapshot
+  deps.snapshot = async () => { const snap = await snapshot(); delete snap.documents[0]!.layout.clientRects; return snap }
+  const result = await reader().readBatch({ limit: 1 })
+  assert.equal(result.resumes.length, 1)
+  assert.equal(result.stop_reason, 'limit_reached')
+})
+
 test('续筛匿名失败仅当前屏去重；到搜索上限停止', async () => {
   const rows: Row[] = [{ name: null, buttonY: 146 }]
   const { reader, deps } = makeBatch(rows)
@@ -247,7 +418,9 @@ test('续筛匿名失败仅当前屏去重；到搜索上限停止', async () =>
   const snapshot = deps.snapshot
   deps.snapshot = async () => {
     const snap = await snapshot()
-    snap.documents[0]!.scrollOffsetX = scrolls // 可见卡片y不变但列表确实推进
+    // 实际列表在 iframe 内滚动，主文档仍固定；可见卡片y不变但文档偏移推进。
+    snap.documents.push({ nodes: { nodeValue: [], contentDocumentIndex: [] },
+      layout: { nodeIndex: [], bounds: [] }, scrollOffsetY: scrolls })
     return snap
   }
   deps.scroll = async () => { scrolls++ }

@@ -1,14 +1,17 @@
 /**
- * Provider manifest 注册表：boss 18 工具逐项一致、digest 兼容锚点、weixin/wecom
+ * Provider manifest 注册表：boss 19 工具逐项一致、历史 digest 兼容锚点、weixin/wecom
  * 白名单与写集合（M11b：wecom 接入 6 工具，digest 独立计算）。
  */
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { test } from 'node:test'
 import { TRUSTED_MANIFEST, isToolAllowed, isWriteTool, manifestDigest } from '../src/manifestVerifier.js'
 import { getProviderManifest, isToolAllowedFor, isWriteToolFor, manifestDigestFor, TRUSTED_MANIFESTS } from '../src/providers.js'
 
 /** 多 Provider 改造前实测的 boss digest（云端核对锚点，逐字节不得漂移） */
 const BOSS_DIGEST_BASELINE = '322acbcb1a74724c54917c0ff88fe1fb106253077b176d234bc600d8bd71fe7e'
+/** 既有续筛注册增加 boss_resume_next 后的当前锚点；传输预算不改变此值。 */
+const BOSS_DIGEST_WITH_CONTINUATION = '9bef64b53e3ed2c35a903c96490553c3a0f705e35f4f6b2edf7c849dd958f216'
 
 const BOSS_TOOLS_EXPECTED = [
   'boss_filter',
@@ -25,6 +28,7 @@ const BOSS_TOOLS_EXPECTED = [
   'boss_select_job',
   'boss_resume_detail',
   'boss_resume_batch',
+  'boss_resume_next',
   'boss_read_chat',
   'boss_open_chat',
   'boss_overlay_inspect',
@@ -43,9 +47,10 @@ const BOSS_WRITE_TOOLS_EXPECTED = new Set([
   'boss_select_job',
   'boss_resume_detail',
   'boss_resume_batch',
+  'boss_resume_next',
 ])
 
-test('boss manifest：18 个工具与改造前逐项一致（顺序与集合）', () => {
+test('boss manifest：19 个工具包含既有续筛注册（顺序与集合）', () => {
   const boss = getProviderManifest('boss-recruiting')!
   assert.deepEqual([...boss.tools], BOSS_TOOLS_EXPECTED)
   assert.equal(boss.provider_id, 'ai.aidwork.boss-recruiting')
@@ -55,7 +60,7 @@ test('boss manifest：18 个工具与改造前逐项一致（顺序与集合）'
   assert.equal(TRUSTED_MANIFEST.provider_id, boss.provider_id)
 })
 
-test('boss 写集合：11 个写工具逐项一致，只读工具不在写集合', () => {
+test('boss 写集合：12 个保守写工具逐项一致，其余工具不在写集合', () => {
   const boss = getProviderManifest('boss-recruiting')!
   for (const tool of BOSS_TOOLS_EXPECTED) {
     const expected = BOSS_WRITE_TOOLS_EXPECTED.has(tool)
@@ -64,9 +69,13 @@ test('boss 写集合：11 个写工具逐项一致，只读工具不在写集合
   }
 })
 
-test('boss digest：与改造前基线逐字节一致（manifestVerifier 与注册表同源）', () => {
-  assert.equal(manifestDigest(), BOSS_DIGEST_BASELINE)
-  assert.equal(manifestDigestFor('boss-recruiting'), BOSS_DIGEST_BASELINE)
+test('boss digest：续筛后锚点固定，移除新增工具仍匹配历史基线', () => {
+  assert.equal(manifestDigest(), BOSS_DIGEST_WITH_CONTINUATION)
+  assert.equal(manifestDigestFor('boss-recruiting'), BOSS_DIGEST_WITH_CONTINUATION)
+  const boss = getProviderManifest('boss-recruiting')!
+  const legacy = JSON.stringify({ provider_id: boss.provider_id,
+    tools: boss.tools.filter((tool) => tool !== 'boss_resume_next').sort(), execution_target: boss.execution_target })
+  assert.equal(createHash('sha256').update(legacy).digest('hex'), BOSS_DIGEST_BASELINE)
 })
 
 test('weixin manifest：名称定位只读，默认仅 message_send 为写，v2需显式启用', () => {

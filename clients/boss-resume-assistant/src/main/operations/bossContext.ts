@@ -6,7 +6,7 @@
  *
  * 退出只断开 CDP 连接，绝不关闭用户的 Chrome。
  */
-import { CdpGateway } from '../cdp/CdpGateway.js'
+import { CdpGateway, type DomSnapshotOptions } from '../cdp/CdpGateway.js'
 import { DEFAULT_CDP_PORT } from '../chrome/ChromeAttacher.js'
 import { ensureDebugChrome } from '../chrome/ChromeLauncher.js'
 import { WinMouseClicker } from '../input/WinMouseClicker.js'
@@ -58,7 +58,7 @@ function logPerfLine(name: string, runId: string, ok: boolean, totalMs: number, 
 function instrumentSession(session: BossSession, perf: PerfCollector): BossSession {
   const { clearInput, pageNavigate } = session
   return {
-    snapshot: () => perf.time('snapshot', () => session.snapshot()),
+    snapshot: (opts) => perf.time('snapshot', () => session.snapshot(opts)),
     click: (point, viewport) => perf.time('win32:click', () => session.click(point, viewport)),
     clickBrowse: (point) => perf.time('cdp:clickBrowse', () => session.clickBrowse(point)),
     clickAndType: (point, viewport, text) => perf.time('win32:clickAndType', () => session.clickAndType(point, viewport, text)),
@@ -78,7 +78,7 @@ function instrumentSession(session: BossSession, perf: PerfCollector): BossSessi
  */
 export interface BossSession {
   /** 采集 fresh DOMSnapshot（页面动态变化，每次定位前重新采集） */
-  snapshot(): Promise<DomSnapshot>
+  snapshot(opts?: DomSnapshotOptions): Promise<DomSnapshot>
   /** Win32 真实鼠标点击（viewport 为页面截图尺寸，device px）。写动作按钮/筛选类控件专用：
    *  BOSS 反作弊 SDK 选择性拦截 CDP 合成点击，这类动作必须借真实光标 */
   click(point: ClickPoint, viewport: { width: number; height: number }): Promise<void>
@@ -155,7 +155,7 @@ export const defaultSessionFactory: BossSessionFactory = async (ctx) => {
     throw err
   }
   return {
-    snapshot: async () => (await gw.captureDomSnapshot()) as DomSnapshot,
+    snapshot: async (opts) => (await gw.captureDomSnapshot(opts)) as DomSnapshot,
     click: (point, viewport) => clicker.click(point, viewport),
     clickBrowse: async (point) => {
       // 浏览类点击（真机 2026-08-17 实证：牛人卡片 CDP 点击有效打开简历详情；写动作按钮走 Win32 click）

@@ -1,5 +1,7 @@
 # Runtime 执行环境、插件宿主与可视化客户端开发计划
 
+2026-10-11 MCP 大结果回传检查点：唯一写入者为 [BOSS/Runtime 修复会话](desktop-automation/plan-boss-card-coordinate-precision.md)，仅修改共享 core `src/legacy/providerManager.ts` 及 Runtime 传输测试/fixture/helper。SDK 1.30.0 的 10MiB 默认接收预算由有限 128MiB 替代，受信内部选项仅可收紧到 1–128MiB；增加脱敏超限诊断，超限关闭与 unknown 禁重放不变。旧构造调用兼容；不改 Device/管理 wire、binding、许可、公共壳、依赖或 H4 新产物协议。契约 v2.0 / wire 候选0.3不变；进度与验证以链接计划 Phase 5 为唯一来源。
+
 2026-10-11 共同检查点：BOSS 续筛业务契约 v1 见[续筛计划](desktop-automation/plan-boss-screening-continuation.md)。本任务主控独占 `clients/shared/local-tool-host-core/src/legacy/providers.ts`、`providerManager.ts` 的新工具注册、续筛能力前置门禁及对应测试；新增 `boss_resume_next`，原工具兼容，旧 Provider 明确拒绝新工具。不修改管理 wire、binding、许可、公共壳或本计划第二部分。
 
 ## 开发进度

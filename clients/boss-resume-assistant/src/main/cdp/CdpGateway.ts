@@ -30,6 +30,11 @@ export interface GatewayOptions {
   fetchImpl?: typeof fetch
 }
 
+export interface DomSnapshotOptions {
+  /** 仅需要实测 CSS 输入坐标的调用方开启；普通快照保持原采集成本。 */
+  includeDOMRects?: boolean
+}
+
 export class CdpGateway {
   private socket: CdpSocket
   private readonly fetchImpl: typeof fetch
@@ -144,10 +149,10 @@ export class CdpGateway {
     return result.data
   }
 
-  async captureDomSnapshot(): Promise<unknown> {
+  async captureDomSnapshot(opts: DomSnapshotOptions = {}): Promise<unknown> {
     return this.socket.send(
       'DOMSnapshot.captureSnapshot',
-      { computedStyles: [], includePaintOrder: false, includeDOMRects: false },
+      { computedStyles: [], includePaintOrder: false, includeDOMRects: opts.includeDOMRects ?? false },
       this.pageSessionId,
     )
   }

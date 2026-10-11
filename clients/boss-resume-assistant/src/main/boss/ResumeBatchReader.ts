@@ -38,6 +38,7 @@ import {
   findNodesByString,
   accumulateOwnerOffset,
   boundsCenter,
+  indexedValues,
 } from './domSnapshot.js'
 import { GREET_TEXT, pairCardNameWithPoint } from './cardName.js'
 import { viewportOf } from './FilterSetter.js'
@@ -71,7 +72,7 @@ export class ResumeBatchError extends Error {
 export interface BatchCard {
   /** DOM 配对出的候选人姓名（唯一来源）；配对失败为 null → 不点击直接记 failure（不入库，读了白读） */
   name: string | null
-  /** 配对姓名节点的中心点（视口 CSS px，与 CDP 点击同坐标系）。坐标跟 DOM 走，任何分辨率/
+  /** 配对姓名节点的中心点（Snapshot bounds 口径，由 Win32 适配器映射屏幕）。坐标跟 DOM 走，任何分辨率/
    *  缩放/窗口尺寸下恒在卡片行内——2026-09-10 客户机错位事故的修复：废除 2026-08-17 按开发机
    *  校准的绝对像素主体列点（x=600/y+70），该点在非参考布局落进行间空隙（点击无反应）或
    *  命中错误行（开错人详情）。name=null 时为 null（该卡不点击）。 */
@@ -118,7 +119,7 @@ export interface ResumeBatchDeps {
   onProgress?(done: number, total: number): void
   /** 可注入 sleep（测试） */
   sleep?(ms: number): Promise<void>
-  /** 推荐列表滚动；详情读取仍使用独立的 wheel 管线。 */
+  /** 推荐列表 CDP 滚动，参数为 CSS px；详情读取仍使用独立的 wheel 管线。 */
   scroll?(x: number, y: number, deltaY: number): Promise<void>
 }
 
@@ -142,6 +143,43 @@ export class ResumeBatchReader {
 
   constructor(private readonly deps: ResumeBatchDeps) {
     this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)))
+  }
+
+  /** 只桥接续筛列表输入；点击与截图保持原 bounds 口径。不能根据系统 DPI 猜倍率。 */
+  private listScrollEvent(snap: DomSnapshot): { x: number; y: number; deltaY: number } {
+    const root = snap.documents[0]
+    const invalid = (): never => { throw new ResumeBatchError('续筛列表缺少有效的根 HTML CSS 几何：未发送滚动') }
+    const validRect = (rect: number[] | undefined): rect is number[] => !!rect && rect.length === 4
+      && rect.every(Number.isFinite) && rect[2]! > 0 && rect[3]! > 0
+    // viewportOf 已拒绝缺失/非正尺寸；输入前补齐有限性与四元矩形校验。
+    if (!validRect(root?.layout.bounds[0])) return invalid()
+    const viewport = viewportOf(snap)
+    if (!Number.isFinite(viewport.width) || !Number.isFinite(viewport.height)
+      || viewport.width <= 0 || viewport.height <= 0) return invalid()
+    if (!root?.nodes.nodeName || !root.layout.clientRects) return invalid()
+    let htmlNodes: Array<[number, number]>
+    try {
+      htmlNodes = indexedValues(root.nodes.nodeName, 'nodeName')
+        .filter(([, value]) => snap.strings[value] === 'HTML')
+    } catch { return invalid() }
+    if (htmlNodes.length !== 1) return invalid()
+    const index = root.layout.nodeIndex.indexOf(htmlNodes[0]![0])
+    const bounds = root.layout.bounds[index]
+    const css = root.layout.clientRects[index]
+    if (!validRect(bounds) || !validRect(css)
+      || Math.abs(bounds[0]!) > 0.01 || Math.abs(bounds[1]!) > 0.01
+      || Math.abs(css[0]!) > 0.01 || Math.abs(css[1]!) > 0.01
+      || Math.abs(bounds[2]! - viewport.width) > 0.01 || Math.abs(bounds[3]! - viewport.height) > 0.01
+      || (root.scrollOffsetX ?? 0) !== 0 || (root.scrollOffsetY ?? 0) !== 0) return invalid()
+    const sx = bounds[2]! / css[2]!
+    const sy = bounds[3]! / css[3]!
+    if (!Number.isFinite(sx) || !Number.isFinite(sy) || sx <= 0 || sy <= 0
+      || Math.abs(sx - sy) > Math.max(sx, sy) * 0.001) return invalid()
+    return {
+      x: (viewport.width / 2) / sx,
+      y: (viewport.height / 2) / sy,
+      deltaY: Math.min(800, viewport.height / 2) / sy,
+    }
   }
 
   /**
@@ -168,7 +206,8 @@ export class ResumeBatchReader {
         const x = offset.x + c.x - (document.scrollOffsetX ?? 0)
         const y = offset.y + c.y - (document.scrollOffsetY ?? 0)
         if (x < 0 || y < 0 || x > viewport.width || y > viewport.height) continue
-        buttons.push({ point: { x: Math.round(x), y: Math.round(y) }, documentIndex })
+        // 配对前保留原始几何精度：291.5→292 会把有效的 15.5px 姓名行差推到拒绝边界 16px。
+        buttons.push({ point: { x, y }, documentIndex })
       }
     })
     buttons.sort((a, b) => a.point.y - b.point.y)
@@ -263,12 +302,15 @@ export class ResumeBatchReader {
           s.documents.map((d) => [d.scrollOffsetX ?? 0, d.scrollOffsetY ?? 0]),
         ])
         let moved = false
+        let scrollSnap = snap
         for (let retry = 0; retry < 2; retry++) {
-          await this.deps.scroll(Math.floor(viewport.width / 2), Math.floor(viewport.height / 2),
-            Math.min(800, Math.floor(viewport.height / 2)))
+          if (this.deps.signal?.aborted) throw new CancelledError('已取消：列表推进中止')
+          const event = this.listScrollEvent(scrollSnap)
+          await this.deps.scroll(event.x, event.y, event.deltaY)
           await this.sleep(retry === 0 ? 1200 : 1800)
           if (this.deps.signal?.aborted) throw new CancelledError('已取消：列表推进中止')
-          if (signature(await this.deps.snapshot()) !== signature(snap)) { moved = true; break }
+          scrollSnap = await this.deps.snapshot()
+          if (signature(scrollSnap) !== signature(snap)) { moved = true; break }
         }
         if (!moved) { stopReason = 'no_progress'; break }
         scrollRounds++

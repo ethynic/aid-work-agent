@@ -106,6 +106,28 @@ function greetSnap(buttons: Array<[number, number, number, number]>, extraTexts:
   }
 }
 
+test('Win32 输入后异常（含超时及登录关键词）回执 unknown，输入前拒绝保持 none，均不自动重试', async () => {
+  for (const failure of [
+    { message: 'Cannot enter per-monitor-v2 DPI context; input refused', afterInput: false },
+    { message: '[BOSS_INPUT_UNKNOWN] Cannot restore DPI context', afterInput: true },
+    { message: '[BOSS_INPUT_UNKNOWN] timed out after input', afterInput: true },
+    { message: '[BOSS_INPUT_UNKNOWN] no BOSS page target found after input', afterInput: true },
+  ]) {
+    const f = fakeFactory([greetSnap([[1690, 208, 64, 32]])])
+    let attempts = 0
+    f.session.click = async () => {
+      attempts++
+      throw new WinClickError(`win-click.ps1 执行失败(exit=1): ${failure.message}`, 1)
+    }
+    const result = await createBossGreetOperation(f.factory).execute({ limit: 1 }, silentCtx())
+    assert.equal(result.success, false)
+    assert.equal(result.code, failure.afterInput ? 'EXECUTION_UNKNOWN' : 'UI_CHANGED')
+    assert.equal(result.effect, failure.afterInput ? 'unknown' : 'none')
+    assert.equal(result.retryable, false)
+    assert.equal(attempts, 1)
+  }
+})
+
 /** resume-batch 用 snapshot：根 + 文本节点 + 大 CANVAS 元素（沟通页简历预览 / 推荐页残留详情弹层态） */
 function snapWithCanvas(texts: string[]): DomSnapshot {
   const canvasSi = texts.length + 1
@@ -332,6 +354,35 @@ test('boss_resume_next：排除列表必填，错页/职位变化时不点击', 
   const result = await createBossResumeBatchOperation(changed.factory, true).execute(args, silentCtx())
   assert.equal(result.code, 'JOB_CHANGED')
   assert.equal(changed.clicks.length, 0)
+})
+
+test('续筛开启 DOMRects 并经计时包装透传；缺失几何返回 none 且不发输入，batch 保持默认', async () => {
+  for (const continuation of [true, false]) {
+    const snap = snapWithTexts(['筛选', 'PHP开发 _ 上海 8-12K'])
+    snap.documents[0]!.layout.bounds[1] = [1000, 200, 60, 24]
+    snap.documents[0]!.layout.bounds[2] = [500, 200, 300, 24]
+    const f = fakeFactory([snap])
+    const requested: Array<unknown> = []
+    f.session.snapshot = async (opts) => { requested.push(opts); return snap }
+    let scrolls = 0
+    let closed = 0
+    f.session.mouseWheel = async () => { scrolls++ }
+    f.session.close = async () => { closed++ }
+    const result = await createBossResumeBatchOperation(f.factory, continuation).execute({
+      limit: 1, exclude_names: ['甲先生'], expected_job_name: 'PHP开发',
+    }, silentCtx())
+    assert.equal(result.code, 'UI_CHANGED')
+    assert.equal(result.effect, 'none')
+    assert.equal(result.retryable, false)
+    assert.equal(result.success, false)
+    assert.deepEqual(requested, continuation
+      ? [undefined, { includeDOMRects: true }, { includeDOMRects: true }]
+      : [undefined, undefined, undefined])
+    if (continuation) assert.match(result.message, /CSS 几何/)
+    assert.equal(scrolls, 0)
+    assert.equal(closed, 1)
+    assert.deepEqual(f.clicks, [])
+  }
 })
 
 test('connect 失败（ECONNREFUSED cause）→ CHROME_UNAVAILABLE，retryable=true', async () => {

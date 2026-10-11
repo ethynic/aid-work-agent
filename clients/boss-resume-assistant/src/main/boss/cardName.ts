@@ -57,7 +57,7 @@ export interface GreetButtonRef {
 }
 
 /**
- * 姓名配对：按钮同排窄带（|dy|<16）的姓名列区间（x<360）内取姓名模式节点（x 最小优先）。
+ * 姓名配对：按钮同排窄带（|dy|<16）的姓名列区间（x<按钮x×0.6）内取姓名模式节点（x 最小优先）。
  * 不依赖「活跃」等状态文本；配对失败返回 null。
  */
 export function pairCardName(
@@ -99,7 +99,8 @@ export function pairCardNameWithPoint(
     const x = offset.x + c.x - (doc.scrollOffsetX ?? 0)
     const y = offset.y + c.y - (doc.scrollOffsetY ?? 0)
     if (x <= 0 || x > viewport.width || y <= 0 || y > viewport.height) continue
-    texts.push({ t: t.trim(), x: Math.round(x), y: Math.round(y) })
+    // 姓名与按钮均使用未取整的中心点，避免在行带/相对列边界产生误拒或误配。
+    texts.push({ t: t.trim(), x, y })
   }
   // 按钮同排窄带的姓名区内取姓名模式节点（x 最小优先——姓名是该行最左元素）。
   // 不依赖任何状态文本；找不到返回 null（fail-safe，绝不拿学历/状态充当姓名）
