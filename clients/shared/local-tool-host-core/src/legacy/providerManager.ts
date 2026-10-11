@@ -74,6 +74,7 @@ export class ProviderManager {
   private crashed = false
   private busy = false
   private shuttingDown = false
+  private resumeNextSupported: boolean | undefined
   private readonly providerEnv: Record<string, string>
   private readonly nodeExecutable: string
   private readonly baseEnv: Record<string, string>
@@ -153,6 +154,22 @@ export class ProviderManager {
     try {
       await this.ensureStarted()
       const client = this.client!
+      // A new Runtime may still have an older BOSS CLI installed. Reject before
+      // callTool rather than turning an unknown-tool error into unknown effect.
+      if (name === 'boss_resume_next') {
+        if (this.resumeNextSupported === undefined) {
+          const listed = await client.listTools({}, { signal: opts.signal, timeout: opts.timeoutMs ?? 30_000 })
+          const schema = listed.tools.find((tool) => tool.name === name)?.inputSchema
+          const required = schema?.required ?? []
+          const properties = schema?.properties as Record<string, { type?: string }> | undefined
+          this.resumeNextSupported = required.includes('exclude_names') && required.includes('expected_job_name')
+            && properties?.['exclude_names']?.type === 'array' && properties?.['expected_job_name']?.type === 'string'
+        }
+        if (!this.resumeNextSupported) {
+          return { success: false, code: 'TOOL_NOT_ALLOWED', effect: 'none', retryable: false,
+            message: '当前 BOSS CLI 不支持安全续筛，请更新 BOSS 插件后恢复；未重新读取简历' }
+        }
+      }
       let result
       try {
         result = await client.callTool({ name, arguments: args }, undefined, {
@@ -188,6 +205,7 @@ export class ProviderManager {
   }
 
   private async disposeDead(): Promise<void> {
+    this.resumeNextSupported = undefined
     if (!this.client && !this.transport) return
     const pid = this.transport?.pid ?? null
     try {

@@ -58,7 +58,8 @@ async def run_base(proxy, operation, kwargs):
     progress = kwargs.get('_progress_queue')
     arguments = {key:value for key,value in kwargs.items() if not key.startswith('_')}
     original = await poll_operation(proxy,operation,arguments,tenant_id=tenant_id,user_id=user_id,
-        session_id=session_id,progress_queue=progress)
+        session_id=session_id,progress_queue=progress,
+        expected_device_id=kwargs.get('_resume_expected_device_id'))
     if original.get('success') or not requires_healing(proxy,original.get('code')):
         return original
     # A retry repeats the original requested action. Its error code does not

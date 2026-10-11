@@ -33,6 +33,7 @@ const COMMAND_FLAGS: Readonly<Record<string, readonly string[]>> = {
   'select-job': [],
   'resume-detail': ['name', 'save-image'],
   'resume-batch': ['limit', 'save-dir'],
+  'resume-next': ['limit', 'save-dir', 'exclude-names', 'job'],
   // 详情页打招呼三件套（2026-09-28 筛选主路径）：open/greet-detail 的姓名走位置参数（select-job 同款）
   'open-detail': [], // 无专属 flag（必带 1 个姓名位置参数；缺失/空白在 command 层 fail-loud）
   'greet-detail': ['dry-run'],

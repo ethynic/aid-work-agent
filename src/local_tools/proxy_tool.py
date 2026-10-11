@@ -261,6 +261,9 @@ class LocalToolProxyTool(BaseTool):
         if device is None:
             return {"success": False, "code": "DEVICE_UNAVAILABLE", "message": gate_error}
 
+        if kwargs.get('_resume_expected_device_id') is not None and str(device['id']) != kwargs['_resume_expected_device_id']:
+            return {'success': False, 'code': 'DEVICE_UNAVAILABLE', 'message': '原筛选设备已变更，未重新读取'}
+
         # 2. 计费预检（仅收费工具：SaaS 模式下余额 ≤0 阻断，不建 invocation、设备不出工）
         credit_price = self._tool_credit_price()
         if credit_price > 0:
@@ -295,16 +298,21 @@ class LocalToolProxyTool(BaseTool):
 
         from src.local_tools.lifecycle import current_local_operation
         operation = current_local_operation()
-        if operation is not None:
-            from src.local_tools.durable_flow import original_invocation
-            invocation = await original_invocation(self, operation, device, args)
-        else:
-            invocation = await asyncio.to_thread(
-                LocalInvocationService().enqueue,
-                tenant_id=tenant_id, user_id=user_id, device_id=str(device["id"]),
-                tool_name=self.name, arguments=args, session_id=session_id,
-                provider_key=self.invocation_provider_key,
-            )
+        try:
+            if operation is not None:
+                from src.local_tools.durable_flow import original_invocation
+                invocation = await original_invocation(self, operation, device, args)
+            else:
+                invocation = await asyncio.to_thread(
+                    LocalInvocationService().enqueue,
+                    tenant_id=tenant_id, user_id=user_id, device_id=str(device["id"]),
+                    tool_name=self.name, arguments=args, session_id=session_id,
+                    provider_key=self.invocation_provider_key,
+                )
+        except repository.ResumeContinuationConflict as conflict:
+            return {'success': False, 'code': 'STALE_CONTINUATION',
+                'message': '该筛选引用已有后续批次，请使用最新结果；原调用未完成时先等待，不重读',
+                'data': {'latest_invocation_id': conflict.invocation_id}, 'invocation_id': None}
         invocation_id = str(invocation["id"])
         logger.info(
             f"后端日志：本地工具 invocation 已创建 id={invocation_id} "
@@ -634,9 +642,9 @@ class LocalToolProxyTool(BaseTool):
 
 
 class BossFilterInput(BaseModel):
-    experience: Optional[str] = Field(None, description="经验要求，如「3-5年」")
-    educations: Optional[List[str]] = Field(None, description="学历要求列表，如 [\"本科\", \"硕士\"]")
-    salary: Optional[str] = Field(None, description="薪资范围，如「10-20K」")
+    experience: Optional[str] = Field(None, description="经验档位，如「3-5年」；省略会清空该维度")
+    educations: Optional[List[str]] = Field(None, description="学历档位列表，可多选，如 [\"本科\", \"硕士\"]；省略会清空该维度")
+    salary: Optional[str] = Field(None, description="薪资档位，如「10-20K」；省略会清空该维度")
 
 
 class BossFilterTool(LocalToolProxyTool):
@@ -644,6 +652,8 @@ class BossFilterTool(LocalToolProxyTool):
     display_name = "BOSS 筛选牛人"
     description = (
         "在用户本机 BOSS 直聘「推荐牛人」页设置筛选条件（经验/学历/薪资，至少一项）。"
+        "替换语义：先清除原筛选，再设置提供的维度，未提供的维度不保留。"
+        "可用档位由 boss_filter_options 查询；发生档位映射时返回 substitutions 说明实际档位。改变条件会改变候选列表。"
         "前置：已在推荐牛人页（不在时先 boss_goto recommend）。仅改变页面筛选，无外部副作用"
     )
     InputModel = BossFilterInput
@@ -918,6 +928,7 @@ class BossSelectJobTool(LocalToolProxyTool):
         "在用户本机 BOSS 直聘「推荐牛人」页把当前招聘职位切换为指定职位名（页面写动作，无对外消息副作用）。"
         "前置：已在推荐牛人页（不在时先 boss_goto recommend）。"
         "job_name 必须是 boss_list_jobs 返回的精确职位名（不做模糊匹配，0 个或多个匹配都报错）；"
+        "仅切换页面职位，不加载云端职位要求、不设置筛选条件；改变职位会改变候选列表。"
         "待开放（pending）职位会被拒绝（切到未发布职位会致页面异常）；切换后校验职位框已变更，未生效报错"
     )
     InputModel = BossSelectJobInput
@@ -1280,7 +1291,12 @@ class BossResumeBatchTool(LocalToolProxyTool):
     description = (
         "在用户本机 BOSS 直聘「推荐牛人」页逐个点开牛人卡片批量读取简历（滚动截图拼接，云端识别），"
         "结果逐份自动存入简历库，返回紧凑摘要列表（不含图片与简历全文）。"
-        "前置：已在推荐牛人页（不在时先 boss_goto recommend）"
+        "前置：已在推荐牛人页；不改变当前职位或筛选条件。只读取当前视口，没有历史排除，重复调用可能重读。"
+        "limit 是单批容量，不是用户任务总份数。返回 data.resumes（成功入库及评分摘要）、failures（失败项）、"
+        "attempted（卡片尝试数）、stop_reason（本批停止原因），以及 continuation。"
+        "continuation.available=true 时，tool 和 arguments 给出续筛调用；可按任务剩余数量指定下一批 limit。"
+        "available=false 表示本轮不能直接续筛，reason 给出原因；no_progress/search_limit 不代表全部候选人已读完。"
+        "每份约30秒，借用真实鼠标；识别按份计费，筛选不包含打招呼或发送消息。"
     )
 
     class InputModel(BaseModel):
@@ -1288,7 +1304,7 @@ class BossResumeBatchTool(LocalToolProxyTool):
             None,
             ge=1,
             le=3,
-            description="读取份数上限：默认 1，单次最多 3 份（授权上限，不可突破）",
+            description="本次调用最多读取的份数，1～3，省略为1；不是整项任务总量。返回成功数可能少于该值",
         )
 
     timeout_seconds = 600
@@ -1306,6 +1322,11 @@ class BossResumeBatchTool(LocalToolProxyTool):
         return await self._execute_legacy(**kwargs)
 
     async def _execute_legacy(self, **kwargs) -> Dict[str, Any]:
+        from .resume_continuation import prepare_next, batch_metadata, duplicate_failure
+        if self.name == 'boss_resume_next':
+            kwargs, failure = await prepare_next(kwargs)
+            if failure:
+                return failure
         tenant_id = kwargs.get("_trusted_tenant_id")
         user_id = kwargs.get("_trusted_user_id")
         session_id = kwargs.get("_session_id")
@@ -1314,10 +1335,14 @@ class BossResumeBatchTool(LocalToolProxyTool):
 
         # CLI 失败/非 success：message/code 透传，不落库；data 一律置 None（图片字节绝不进上下文）
         if not result.get("success"):
-            return {**result, "data": None}
+            return {**result, "data": result.get("data") if result.get("code") == "STALE_CONTINUATION" else None}
 
         data = result.get("data") or {}
+        metadata = batch_metadata(result, kwargs)
         resumes = data.get("resumes")
+        if resumes == [] and data.get('stop_reason') in ('no_progress', 'search_limit', 'viewport_complete') and not data.get('failures'):
+            return {**result, 'data': {**metadata, 'resumes': [], 'failures': []},
+                'message': '当前列表未找到更多未处理候选人；已停止，请检查列表或调整条件'}
         if not isinstance(resumes, list) or not resumes:
             # 无简历可入库：data.failures 是客户端逐卡失败现场（含画布等元信息的定位线索），
             # 必须随 message/data 透出给 LLM 与 trace——2026-09-10 客户现场排障时该分支把 data
@@ -1346,7 +1371,7 @@ class BossResumeBatchTool(LocalToolProxyTool):
                 "code": "RESUME_PAYLOAD_INVALID",
                 "message": f"CLI 批量结果缺少 resumes 数组或为空（未读取到任何简历，{tried}{first_note}）",
                 "effect": result.get("effect"),
-                "data": {"attempted": attempted, "failures": failure_summary},
+                "data": {**metadata, "failures": failure_summary},
                 "invocation_id": result.get("invocation_id"),
             }
         # CLI 侧单份失败（打开超时/读取失败等）与云端识别/入库失败合并到同一 failures 列表
@@ -1357,7 +1382,13 @@ class BossResumeBatchTool(LocalToolProxyTool):
         # 逐份串行「VL 评估→姓名门→扣费→入库→回写评分→进度」（v2 设计 §4.2，决策⑤）：
         # 单份任何环节失败捕获记录，不中断循环（尽量多收简历）
         summaries: List[Dict[str, Any]] = []
+        excluded = set(kwargs.get('exclude_names') or [])
+        seen = set()
         for idx, payload in enumerate(resumes):
+            duplicate = duplicate_failure(payload, excluded, seen, kwargs.get('expected_job_name'))
+            if duplicate:
+                failures.append(duplicate)
+                continue
             name = payload.get("candidate_name") if isinstance(payload, dict) else None
             evaluation: Optional[Dict[str, Any]] = None
             # 非 dict payload 不进 VL（放行给入库契约校验转 ResumePayloadError，原语义）
@@ -1428,7 +1459,7 @@ class BossResumeBatchTool(LocalToolProxyTool):
                 "code": "RESUME_STORE_FAILED",
                 "message": f"批量读取 {len(resumes)} 份简历但全部入库失败，请稍后重试或联系管理员",
                 "effect": result.get("effect"),
-                "data": None,
+                "data": {**metadata, "resumes": [], "failures": failures},
                 "invocation_id": result.get("invocation_id"),
             }
 
@@ -1442,7 +1473,32 @@ class BossResumeBatchTool(LocalToolProxyTool):
         # 基类在 effect=unknown 时已给 message 追加「实际效果未知」提示，覆写摘要时必须保留
         if UNKNOWN_EFFECT_NOTICE in (result.get("message") or ""):
             message = f"{message}；{UNKNOWN_EFFECT_NOTICE}"
-        return {**result, "data": {"resumes": summaries, "failures": failures}, "message": message}
+        return {**result, "data": {**metadata, "resumes": summaries, "failures": failures}, "message": message}
+
+
+class BossResumeNextTool(BossResumeBatchTool):
+    name = 'boss_resume_next'
+    display_name = 'BOSS 继续筛选简历'
+    description = (
+        '读取同一筛选链中未处理的候选人，当前视口耗尽后滚动列表，最多扫描30屏。'
+        '不切职位、不修改筛选；页面职位不符拒绝，筛选档位尚未硬校验。'
+        '从 continue_from 的可信历史累计排除已尝试姓名（含失败项），限定原用户、会话及设备；'
+        '按姓名去重，可能跳过同名不同人，不提供跨轮全局候选人去重。'
+        '引用串行消费，过期引用返回 STALE_CONTINUATION，不重复派发。'
+        'limit 是单批容量；输出与 boss_resume_batch 相同，每次 continuation.arguments 是下一批引用。'
+        'continuation.available=false 时停止推进，reason 表明原因；无进展不等于全列表读完。'
+        '读取并识别入库，不打招呼或发送消息；每份约30秒并按份计识别费。'
+    )
+
+    class InputModel(BaseModel):
+        continue_from: str = Field(..., min_length=36, max_length=36,
+            pattern=r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+            description='最新结果 continuation.arguments.continue_from（同 continuation_id）；UUID 引用，不接受自行提供的排除名单')
+        limit: int = Field(3, ge=1, le=3, description='本次最多读取1～3份，省略为3；不是用户任务总量，可按剩余份数设置')
+
+    # 一批可能扫描多屏；停止仍受 CLI 搜索上限约束。
+    timeout_seconds = 900
+    heal_eligible = False
 
 
 # ============== 详情页打招呼三件套（筛选主路径，2026-09-28，docs/plans/desktop-automation/plan-boss-detail-greet.md） ==============
@@ -2166,6 +2222,7 @@ LOCAL_PROXY_TOOL_CLASSES = (
     BossJobsListTool,
     BossResumeDetailTool,
     BossResumeBatchTool,
+    BossResumeNextTool,
     BossOpenDetailTool,
     BossGreetDetailTool,
     BossCloseDetailTool,

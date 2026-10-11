@@ -20,6 +20,12 @@ from src.local_tools.pricing import tool_credit_price
 TERMINAL_STATES = ("succeeded", "failed", "cancelled", "unknown", "expired")
 
 
+class ResumeContinuationConflict(ValueError):
+    def __init__(self, invocation_id):
+        super().__init__('STALE_CONTINUATION')
+        self.invocation_id = str(invocation_id)
+
+
 # ==================== 配对码 ====================
 
 
@@ -286,6 +292,33 @@ def create_invocation_in_tx(
     """
     if verify_binding and (not business_kind or not dedupe_key):
         raise ValueError("LOCAL_INVOCATION_BINDING_REQUIRES_DEDUPE")
+    if tool_name == 'boss_resume_next':
+        # Lock the parent in the same transaction as insertion. Competing calls
+        # cannot fork the cursor, without changing the Runner's own dedupe key.
+        cursor.execute("""SELECT id FROM local_tool_invocations
+            WHERE id=%s AND tenant_id=%s AND user_id=%s AND session_id=%s AND device_id=%s
+              AND tool_name IN ('boss_resume_batch','boss_resume_next')
+              AND state='succeeded' AND effect='none' FOR UPDATE""",
+            (arguments.get('continue_from'), tenant_id, user_id, session_id, device_id))
+        if cursor.fetchone() is None:
+            raise ValueError('INVALID_CONTINUATION')
+        cursor.execute("""SELECT id,business_kind,dedupe_key FROM local_tool_invocations
+            WHERE tenant_id=%s AND user_id=%s AND session_id=%s AND device_id=%s
+              AND tool_name='boss_resume_next' AND arguments_json->>'continue_from'=%s
+              AND (state='failed' AND effect='none'
+                AND COALESCE(error_code,result_json->>'code') IN
+                  ('TOOL_NOT_ALLOWED','TOOL_NOT_FOUND','UNKNOWN_TOOL','JOB_CHANGED',
+                   'WRONG_PAGE','INVALID_ARGUMENT','CHROME_UNAVAILABLE')
+                AND CASE WHEN jsonb_typeof(result_json->'data') = 'object'
+                  THEN (result_json->'data') - 'run_id' = '{}'::jsonb
+                  ELSE result_json->'data' IS NULL OR result_json->'data' = 'null'::jsonb
+                END) IS NOT TRUE
+            ORDER BY created_at DESC LIMIT 1""",
+            (tenant_id, user_id, session_id, device_id, arguments.get('continue_from')))
+        successor = cursor.fetchone()
+        if successor and not (business_kind is not None and dedupe_key is not None
+            and successor['business_kind'] == business_kind and successor['dedupe_key'] == dedupe_key):
+            raise ResumeContinuationConflict(successor['id'])
     conflict = """
         ON CONFLICT (tenant_id, business_kind, dedupe_key)
             WHERE business_kind IS NOT NULL AND dedupe_key IS NOT NULL

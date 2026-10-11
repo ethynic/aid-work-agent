@@ -53,6 +53,7 @@ export const OPERATIONS: Record<string, OperationEntry> = {
   boss_select_job: { operation: createBossSelectJobOperation(), cli: { write: true } },
   boss_resume_detail: { operation: createBossResumeDetailOperation(), cli: { write: false } },
   boss_resume_batch: { operation: createBossResumeBatchOperation(), cli: { write: false } },
+  boss_resume_next: { operation: createBossResumeBatchOperation(undefined, true), cli: { write: false } },
   // 详情页打招呼三件套（2026-09-28 筛选主路径，plan-boss-detail-greet）：open/close 借真实鼠标
   // 但无外部写副作用（与 resume-batch 同款 readonly 先例，USAGE 保留「期间勿动鼠标」提示）
   boss_open_detail: { operation: createBossOpenDetailOperation(), cli: { write: false } },

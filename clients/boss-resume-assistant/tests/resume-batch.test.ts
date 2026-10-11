@@ -212,6 +212,60 @@ function makeBatch(
 
 // ---------- locateCards：姓名锚定与视口过滤 ----------
 
+test('续筛跳过上一批及重叠卡片，滚动后只读取新姓名', async () => {
+  const rows = [ROW1, ROW2]
+  const { reader, deps, f } = makeBatch(rows)
+  let scrolls = 0
+  deps.scroll = async () => {
+    scrolls++
+    rows.splice(0, rows.length, ROW2, { name: '王小明', buttonY: 514 })
+  }
+  const result = await reader().readBatch({ limit: 2, excludeNames: ['刘草威'], scanMore: true })
+  assert.deepEqual(result.resumes.map((r) => r.name), ['张三丰', '王小明'])
+  assert.deepEqual(result.processed_names, ['张三丰', '王小明'])
+  assert.equal(result.stop_reason, 'limit_reached')
+  assert.equal(scrolls, 1)
+  assert.deepEqual(f.clicks.map((p) => p.y), [ROW2.buttonY - 8, 514 - 8])
+})
+
+test('续筛没有进展：两次延迟确认后停止，不点击已处理者', async () => {
+  const { reader, deps, f } = makeBatch([ROW1])
+  let scrolls = 0
+  deps.scroll = async () => { scrolls++ }
+  const result = await reader().readBatch({ limit: 3, excludeNames: ['刘草威'], scanMore: true })
+  assert.equal(result.stop_reason, 'no_progress')
+  assert.equal(scrolls, 2)
+  assert.deepEqual(result.resumes, [])
+  assert.deepEqual(result.processed_names, [])
+  assert.equal(f.clicks.length, 0)
+})
+
+test('续筛匿名失败仅当前屏去重；到搜索上限停止', async () => {
+  const rows: Row[] = [{ name: null, buttonY: 146 }]
+  const { reader, deps } = makeBatch(rows)
+  let scrolls = 0
+  const snapshot = deps.snapshot
+  deps.snapshot = async () => {
+    const snap = await snapshot()
+    snap.documents[0]!.scrollOffsetX = scrolls // 可见卡片y不变但列表确实推进
+    return snap
+  }
+  deps.scroll = async () => { scrolls++ }
+  const result = await reader().readBatch({ limit: 1, excludeNames: ['已处理'], scanMore: true })
+  assert.equal(result.stop_reason, 'search_limit')
+  assert.equal(scrolls, 30)
+  assert.equal(result.failures.length, 31)
+  assert.deepEqual(result.processed_names, [])
+})
+
+test('失败尝试姓名也进入排除历史，详情关不掉立即停止', async () => {
+  const { reader } = makeBatch([ROW1, ROW2], [{ readError: true, closeFail: true }])
+  const result = await reader().readBatch({ limit: 2, excludeNames: [], scanMore: true })
+  assert.deepEqual(result.processed_names, ['刘草威'])
+  assert.equal(result.stop_reason, 'detail_not_closed')
+  assert.equal(result.attempted, 1)
+})
+
 test('locateCards：姓名锚定（活跃状态左侧最近中文）+ 姓名节点中心为点击点 + 按 y 排序', () => {
   const { deps, f } = makeBatch([ROW1, ROW2])
   const cards = new ResumeBatchReader(deps).locateCards(buildSnap([ROW1, ROW2]))
@@ -462,6 +516,16 @@ test('⑨ save_dir：每份拼接图按姓名落盘（readResume 收到 saveImag
 })
 
 // ---------- 起点防残留（boss_resume_detail 读完不关详情的链路） ----------
+
+test('累计历史到1000即停止，余下卡片不读取', async () => {
+  const { reader, f } = makeBatch([ROW1, ROW2])
+  const result = await reader().readBatch({ limit: 3, scanMore: true,
+    excludeNames: Array.from({ length: 999 }, (_, index) => `已处理${index}`) })
+  assert.equal(result.stop_reason, 'history_limit')
+  assert.deepEqual(result.resumes.map((r) => r.name), [ROW1.name])
+  assert.equal(result.processed_names.length, 1)
+  assert.equal(f.clicks.length, 1)
+})
 
 test('⑩ 残留详情弹层：入口先 Escape 关闭再正常批量（残留简历绝不误记到卡片姓名下）', async () => {
   const { reader, f } = makeBatch([ROW1], [], { initialState: 'canvas' })

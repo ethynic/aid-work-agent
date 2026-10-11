@@ -15,7 +15,7 @@ import { createBossAcceptResumeOperation } from '../src/main/operations/bossAcce
 import { createBossRejectCurrentOperation } from '../src/main/operations/bossRejectCurrent.js'
 import { createBossInterviewDemoOperation } from '../src/main/operations/bossInterviewDemo.js'
 import { createBossResumeDetailOperation } from '../src/main/operations/bossResumeDetail.js'
-import { createBossResumeBatchOperation } from '../src/main/operations/bossResumeBatch.js'
+import { buildResumeContinuation, createBossResumeBatchOperation } from '../src/main/operations/bossResumeBatch.js'
 import type { BossSession } from '../src/main/operations/bossContext.js'
 import type { OpContext } from '../src/main/operations/types.js'
 import type { DomSnapshot, ClickPoint } from '../src/main/boss/domSnapshot.js'
@@ -134,6 +134,42 @@ function snapWithCanvas(texts: string[]): DomSnapshot {
 }
 
 // ---------- 参数校验 fail-fast（不连 Chrome） ----------
+
+test('续筛结果携带可执行的累计排除参数，下一批可单独选择数量', async () => {
+  const next = buildResumeContinuation(['乙先生', '丙先生'], ['甲先生', '乙先生'], 'PHP开发', 'limit_reached')
+  assert.equal(next.available, true)
+  assert.equal(next.tool, 'boss_resume_next')
+  assert.deepEqual(next.arguments, { exclude_names: ['甲先生', '乙先生', '丙先生'], expected_job_name: 'PHP开发' })
+  const f = fakeFactory([snapWithTexts(['筛选'])])
+  // Returned arguments pass validation; a changed page job is rejected before reading any candidate.
+  const result = await createBossResumeBatchOperation(f.factory, true).execute({ ...next.arguments!, limit: 2 }, silentCtx())
+  assert.equal(result.code, 'JOB_CHANGED')
+  assert.equal(f.calls.length, 1)
+  assert.equal(f.clicks.length, 0)
+})
+
+test('停止结果不提供续筛参数，当前视口结束不被误判成全列表结束', () => {
+  assert.equal(buildResumeContinuation(['甲先生'], [], 'PHP开发', 'viewport_complete').available, true)
+  for (const reason of ['no_progress', 'search_limit', 'detail_not_closed']) {
+    const next = buildResumeContinuation(['甲先生'], [], 'PHP开发', reason)
+    assert.equal(next.available, false)
+    assert.equal(next.reason, reason)
+    assert.equal(next.arguments, null)
+  }
+  assert.equal(buildResumeContinuation([], [], 'PHP开发', 'viewport_complete').reason, 'missing_context')
+  const full = Array.from({ length: 1000 }, (_, index) => `候选人${index}`)
+  assert.equal(buildResumeContinuation([], full, 'PHP开发', 'limit_reached').reason, 'history_limit')
+})
+
+test('累计1000人直接调用续筛被参数门禁拒绝，不连Chrome', async () => {
+  const f = fakeFactory([])
+  const result = await createBossResumeBatchOperation(f.factory, true).execute({
+    exclude_names: Array.from({ length: 1000 }, (_, index) => `候选人${index}`),
+    expected_job_name: 'PHP开发', limit: 3,
+  }, silentCtx())
+  assert.equal(result.code, 'INVALID_ARGUMENT')
+  assert.equal(f.calls.length, 0)
+})
 
 test('boss_filter：无筛选条件 → INVALID_ARGUMENT，且不触达 Chrome', async () => {
   const f = fakeFactory([])
@@ -280,6 +316,23 @@ test('boss_resume_batch：非推荐页但有简历 canvas（沟通页简历预�
 })
 
 // ---------- operation 执行期错误映射 ----------
+
+test('boss_resume_next：排除列表必填，错页/职位变化时不点击', async () => {
+  const missing = fakeFactory([])
+  const op = createBossResumeBatchOperation(missing.factory, true)
+  const invalid = await op.execute({ limit: 3 }, silentCtx())
+  assert.equal(invalid.code, 'INVALID_ARGUMENT')
+  assert.equal(missing.calls.length, 0)
+  const wrongPage = fakeFactory([snapWithTexts(['筛选'])], { url: 'https://www.zhipin.com/web/chat/index' })
+  const args = { exclude_names: ['甲先生'], expected_job_name: 'PHP开发' }
+  const wrong = await createBossResumeBatchOperation(wrongPage.factory, true).execute(args, silentCtx())
+  assert.equal(wrong.code, 'WRONG_PAGE')
+  assert.equal(wrongPage.clicks.length, 0)
+  const changed = fakeFactory([snapWithTexts(['筛选'])])
+  const result = await createBossResumeBatchOperation(changed.factory, true).execute(args, silentCtx())
+  assert.equal(result.code, 'JOB_CHANGED')
+  assert.equal(changed.clicks.length, 0)
+})
 
 test('connect 失败（ECONNREFUSED cause）→ CHROME_UNAVAILABLE，retryable=true', async () => {
   const err = new TypeError('fetch failed', { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) })

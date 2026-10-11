@@ -540,6 +540,7 @@ class BossToolBillingConfig(BaseModel):
         # 简历链路（截图免费，识别费另计：成功一份扣一份 resume_recognition_price）
         "boss_resume_detail": 0.0,
         "boss_resume_batch": 0.0,
+        "boss_resume_next": 0.0,
         # 详情页三件套的页面状态操作（找人开详情/收尾关闭，与 goto/open_chat 同类免费；
         # 写动作 boss_greet_detail 已按 1.0 收费，见上——筛选主路径 2026-09-28 切详情页）
         "boss_open_detail": 0.0,

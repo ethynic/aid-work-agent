@@ -17,6 +17,7 @@ export type ErrorCode =
   | 'CHROME_UNAVAILABLE'
   | 'NOT_LOGGED_IN'
   | 'WRONG_PAGE'
+  | 'JOB_CHANGED'
   | 'BUSY'
   | 'PAYWALL'
   | 'UI_CHANGED'

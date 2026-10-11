@@ -18,6 +18,12 @@ function v(argv: string[]) {
 
 // ---------- 未知 flag 拒绝 ----------
 
+test('resume-next 接受明确排除名单与职位，拒绝未知参数/位置姓名', () => {
+  assert.equal(v(['resume-next', '--exclude-names', '张三,李四', '--job', 'PHP开发', '--limit', '3']).ok, true)
+  assert.equal(v(['resume-next', '--exclude', '张三']).ok, false)
+  assert.equal(v(['resume-next', '张三']).ok, false)
+})
+
 test('未知 flag 拒绝：greet --verbose → 错误消息含「不认识的参数 --verbose」与用法提示', () => {
   const r = v(['greet', '--names', '冯修业', '--verbose'])
   assert.equal(r.ok, false)

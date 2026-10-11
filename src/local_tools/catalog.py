@@ -41,6 +41,7 @@ TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
             "boss_jobs_list",
             "boss_resume_detail",
             "boss_resume_batch",
+            "boss_resume_next",
             # 详情页打招呼三件套（筛选主路径，2026-09-28，plan-boss-detail-greet）：
             # boss_open_detail（按姓名开详情）→ boss_resume_detail（读取）→
             # boss_greet_detail（合格打招呼）/ boss_close_detail（不合格清理）

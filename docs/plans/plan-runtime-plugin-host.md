@@ -1,5 +1,7 @@
 # Runtime 执行环境、插件宿主与可视化客户端开发计划
 
+2026-10-11 共同检查点：BOSS 续筛业务契约 v1 见[续筛计划](desktop-automation/plan-boss-screening-continuation.md)。本任务主控独占 `clients/shared/local-tool-host-core/src/legacy/providers.ts`、`providerManager.ts` 的新工具注册、续筛能力前置门禁及对应测试；新增 `boss_resume_next`，原工具兼容，旧 Provider 明确拒绝新工具。不修改管理 wire、binding、许可、公共壳或本计划第二部分。
+
 ## 开发进度
 
 > **当前仅实施第一部分 A1～A4。本轮代码交付已完成并停止；第二部分 B1/B2 暂不开发，只保留设计、契约、schema 和 fixture。不能因“继续开发”“按计划开发”自动启动第二部分，必须由用户明确要求。**

@@ -8,9 +8,9 @@ from .durable_flow import LocalContinuationRequired
 
 
 def domain_classes():
-    from .proxy_tool import (BossResumeDetailTool, BossResumeBatchTool,
+    from .proxy_tool import (BossResumeDetailTool, BossResumeBatchTool, BossResumeNextTool,
         BossJobsListTool, BossSendToTool, BossSendCurrentTool, BossInterviewNotifyTool)
-    return (BossResumeDetailTool, BossResumeBatchTool, BossJobsListTool,
+    return (BossResumeDetailTool, BossResumeBatchTool, BossResumeNextTool, BossJobsListTool,
         BossSendToTool, BossSendCurrentTool, BossInterviewNotifyTool)
 
 
@@ -51,7 +51,7 @@ async def recover_owned_tool(proxy, operation, progress_queue, *, arguments):
 
 async def execute_domain(proxy, operation, kwargs):
     from .cloud_flow import read_original, send_message
-    from .proxy_tool import BossResumeDetailTool, BossResumeBatchTool, BossSendToTool, BossSendCurrentTool, BossInterviewNotifyTool
+    from .proxy_tool import BossResumeDetailTool, BossResumeBatchTool, BossResumeNextTool, BossSendToTool, BossSendCurrentTool, BossInterviewNotifyTool
     if type(proxy) is BossInterviewNotifyTool:
         return await notify_result(proxy,operation,kwargs)
     arguments = {key: value for key, value in kwargs.items() if not key.startswith('_')}
@@ -64,31 +64,46 @@ async def execute_domain(proxy, operation, kwargs):
             return {'success': False, 'code': 'INVALID_ARGS',
                 'message': '缺少 message（最终消息全文）；或改用 script_title 话术模式'}
         return await send_message(proxy, operation, kwargs, write_back=type(proxy) is BossSendToTool)
-    if type(proxy) not in (BossResumeDetailTool, BossResumeBatchTool):
+    if type(proxy) not in (BossResumeDetailTool, BossResumeBatchTool, BossResumeNextTool):
         raise LocalContinuationRequired('LOCAL_DOMAIN_CONTINUATION_REQUIRED')
-    return await resume_result(proxy, operation, kwargs, batch=type(proxy) is BossResumeBatchTool)
+    return await resume_result(proxy, operation, kwargs, batch=type(proxy) in (BossResumeBatchTool, BossResumeNextTool))
 
 
 async def resume_result(proxy, operation, kwargs, *, batch):
     from .overlay_flow import run_base
     from .resume_flow import process_item
     from src.tools.context import current_tool_execution_context
+    from .resume_continuation import prepare_next, batch_metadata, duplicate_failure
+    if proxy.name == 'boss_resume_next':
+        kwargs, failure = await prepare_next(kwargs, operation)
+        if failure:
+            return failure
     original = await run_base(proxy, operation, kwargs)
     if not original.get('success'):
-        return {**original, 'data': None}
+        return {**original, 'data': original.get('data') if original.get('code') == 'STALE_CONTINUATION' else None}
     ref = await operation.owner.saved_phase(branch=operation.branch, ordinal=operation.ordinal)
     context = current_tool_execution_context()
     data = original.get('data') or {}
+    metadata = batch_metadata(original, kwargs) if batch else {}
     payloads = data.get('resumes') if batch and isinstance(data, dict) else [data]
+    if batch and payloads == [] and data.get('stop_reason') in ('no_progress', 'search_limit', 'viewport_complete') and not data.get('failures'):
+        return {**original, 'data': {**metadata, 'resumes': [], 'failures': []},
+            'message': '当前列表未找到更多未处理候选人；已停止，请检查列表或调整条件'}
     if not isinstance(payloads, list) or not payloads:
         failures = [{'name': f.get('name'), 'error': str(f.get('error') or '')[:120]}
             for f in (data.get('failures') or []) if isinstance(f, dict)][:5]
         return {**original, 'success': False, 'code': 'RESUME_PAYLOAD_INVALID',
             'message': 'CLI 批量结果缺少 resumes 数组或为空（未读取到任何简历）',
-            'data': {'attempted': data.get('attempted'), 'failures': failures}}
+            'data': {**metadata, 'failures': failures}}
     failures = [dict(f) for f in (data.get('failures') or []) if isinstance(f, dict)] if batch else []
     summaries = []
+    excluded = set(kwargs.get('exclude_names') or [])
+    seen = set()
     for ordinal, payload in enumerate(payloads):
+        duplicate = duplicate_failure(payload, excluded, seen, kwargs.get('expected_job_name')) if batch else None
+        if duplicate:
+            failures.append(duplicate)
+            continue
         outcome = await process_item(operation.owner, tenant_id=context.tenant_id,
             execution_id=context.agent_execution_id, tool_call_id=context.tool_call_id,
             invocation_id=original['invocation_id'], device_id=ref['request']['device_id'],
@@ -106,13 +121,13 @@ async def resume_result(proxy, operation, kwargs, *, batch):
                 'invocation_id': original['invocation_id'],
                 'text': f"✅ 第 {ordinal + 1}/{len(payloads)} 份已入库：{summary['candidate_name']}"})
     if not summaries:
-        return {**original, 'success': False, 'code': 'RESUME_STORE_FAILED', 'data': None,
+        return {**original, 'success': False, 'code': 'RESUME_STORE_FAILED', 'data': {**metadata, 'resumes': [], 'failures': failures},
             'message': f'批量读取 {len(payloads)} 份简历但全部入库失败，请稍后重试或联系管理员'}
     if batch:
         message = f"已存入简历库 {len(summaries)} 份：" + '、'.join(s['candidate_name'] or '?' for s in summaries)
         if failures:
             message += f"；{len(failures)} 份失败（第一个：{failures[0].get('name') or '未知姓名'}—{failures[0].get('error')}）"
-        return {**original, 'data': {'resumes': summaries, 'failures': failures}, 'message': message}
+        return {**original, 'data': {**metadata, 'resumes': summaries, 'failures': failures}, 'message': message}
     summary = summaries[0]
     message = f"简历已存入简历库：{summary['candidate_name']}"
     if summary.get('job_name'):

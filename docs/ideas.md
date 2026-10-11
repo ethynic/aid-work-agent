@@ -35,7 +35,6 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20261011-boss-screening | BOSS 简历数量选择与连续筛选 | 🔧 部分完成 | 用户选择总份数，续筛沿用条件并跳过已处理候选人。 | — | [开发计划](plans/desktop-automation/plan-boss-screening-continuation.md) |
 | 20260908-1431 | 桌面 CLI 无人值守自动任务底座＋微信营销首场景 | 🔧 部分完成 | 桌面 CLI 无人值守任务底座（调度/账本/许可/journal/桌面锁）＋微信营销首场景，与端侧会话任务（20260912-2313）共用底座。 | [底座设计](design/desktop-automation/desktop-cli-automation-design.md) / [场景设计](design/weixin/weixin-marketing-automation-design.md) | [底座计划](plans/desktop-automation/plan-desktop-cli-automation.md) / [微信实施与BOSS衔接](plans/weixin/plan-weixin-marketing-automation.md) |
 | 20260908-1432 | BOSS 直聘聊天自动化 | 🔧 部分完成 | B2 场景包（fake 端到端）十审通过入库；进入 B3 Runtime+Provider 真机接线。 | [场景设计 §11](design/weixin/weixin-marketing-automation-design.md#11-第二场景boss-直聘聊天自动化待独立立项) / [端侧接入设计](design/desktop-automation/boss-edge-session-design.md) / [底座设计](design/desktop-automation/desktop-cli-automation-design.md) | [BOSS 端侧接入计划](plans/desktop-automation/plan-boss-edge-session.md) / [BOSS 里程碑](plans/weixin/plan-weixin-marketing-automation.md#12-boss-聊天自动化实施衔接-待独立立项) / [底座计划](plans/desktop-automation/plan-desktop-cli-automation.md) / [VIP筛选+性能埋点](plans/desktop-automation/plan-boss-cli-vip-filter-perf.md) / [详情页打分即打招呼](plans/desktop-automation/plan-boss-detail-greet.md) |
 | 20260905-1753 | 营销 App 智能外呼代理 | 🔧 部分完成 | 2026-09-05 完成调研、详细设计与实施规划。 | [设计](design/marketing-call-agent-design.md) | [验证与计划](plans/marketing-call-agent-plan.md) / [GLM 实验执行手册](plans/marketing-call-agent-experiment-runbook.md) |

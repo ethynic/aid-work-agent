@@ -21,6 +21,9 @@ export interface ResumeBatchCommandOptions {
   /** 拼接长图保存目录（每份存 <姓名>.png，可选） */
   saveDir?: string
   cdpPort?: number
+  continuation?: boolean
+  excludeNames?: string[]
+  expectedJobName?: string
 }
 
 interface ResumePayloadView {
@@ -31,7 +34,7 @@ interface ResumePayloadView {
 }
 
 export async function resumeBatchCommand(opts: ResumeBatchCommandOptions): Promise<number> {
-  const limit = opts.limit ?? 1
+  const limit = opts.limit ?? (opts.continuation ? 3 : 1)
   console.log(
     `批量读取简历：逐个点开当前视口牛人卡片（上限 ${limit} 份），滚动分段截图 → 拼接 → 关闭 → 下一份（文本在云端识别）。` +
       '只读操作，但滚动借用真实鼠标（约 30 秒/份），期间请勿移动鼠标、勿遮挡 Chrome 窗口。',
@@ -59,8 +62,9 @@ export async function resumeBatchCommand(opts: ResumeBatchCommandOptions): Promi
     if (opts.saveDir) console.log(`\n拼接长图已保存到目录：${opts.saveDir}`)
   }
   return runCliOperation(
-    OPERATIONS.boss_resume_batch!.operation,
-    { limit, ...(opts.saveDir ? { save_dir: opts.saveDir } : {}) },
+    OPERATIONS[opts.continuation ? 'boss_resume_next' : 'boss_resume_batch']!.operation,
+    { limit, ...(opts.saveDir ? { save_dir: opts.saveDir } : {}),
+      ...(opts.continuation ? { exclude_names: opts.excludeNames, expected_job_name: opts.expectedJobName } : {}) },
     { cdpPort: opts.cdpPort, onSuccess },
   )
 }

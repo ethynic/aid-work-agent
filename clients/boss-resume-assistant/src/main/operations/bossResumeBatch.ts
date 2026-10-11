@@ -29,21 +29,42 @@ export interface BossResumeBatchArgs {
   limit?: number
   /** 可选：拼接长图保存目录（每份存 `<姓名>.png`，目录自动创建） */
   save_dir?: string
+  exclude_names?: string[]
+  expected_job_name?: string
 }
 
 /** operation 层 limit 上限；MCP schema 用 maximum=3 收紧（每份约 30 秒滚动截图，设计 §14 同 greet） */
 const LIMIT_MAX = 10
 
+/** Capability result: arguments can be passed to the next operation, with limit chosen by the caller. */
+export function buildResumeContinuation(
+  processedNames: string[], excludedNames: string[], jobName: string | null, stopReason: string,
+) {
+  const names = [...new Set([...excludedNames, ...processedNames].map((name) => name.trim()).filter(Boolean))]
+  const reason = !names.length || !jobName ? 'missing_context' : names.length >= 1000 ? 'history_limit' : stopReason
+  const available = reason === 'limit_reached' || reason === 'viewport_complete'
+  return {
+    available, reason,
+    tool: available ? 'boss_resume_next' : null,
+    arguments: available ? { exclude_names: names, expected_job_name: jobName } : null,
+    processed_count: names.length,
+    deduplication: 'candidate_name',
+    filters_verified: false,
+  }
+}
+
 export function createBossResumeBatchOperation(
   sessionFactory: BossSessionFactory = defaultSessionFactory,
+  continuation = false,
 ): BossOperation<BossResumeBatchArgs> {
+  const operationName = continuation ? 'boss_resume_next' : 'boss_resume_batch'
   return {
-    name: 'boss_resume_batch',
+    name: operationName,
     execute(args: BossResumeBatchArgs, ctx: OpContext): Promise<OperationResult> {
-      const limit = args?.limit ?? 1
+      const limit = args?.limit ?? (continuation ? 3 : 1)
       const saveDir = (args?.save_dir ?? '').trim()
       return runBossOperation(
-        { kind: 'readonly', name: 'boss_resume_batch' },
+        { kind: 'readonly', name: operationName },
         ctx,
         sessionFactory,
         () => {
@@ -53,9 +74,17 @@ export function createBossResumeBatchOperation(
           if (args?.save_dir !== undefined && !saveDir) {
             return 'save_dir（拼接图保存目录）不能为空'
           }
+          if (continuation && (!Array.isArray(args.exclude_names) || !args.exclude_names.length
+            || args.exclude_names.length >= 1000 || args.exclude_names.some((n) => typeof n !== 'string' || !n.trim() || n.length > 30)
+            || typeof args.expected_job_name !== 'string' || !args.expected_job_name.trim() || args.expected_job_name.trim().length > 100)) {
+            return '续筛必须提供有效 exclude_names（1-999项）及 expected_job_name（1-100字）'
+          }
           return null
         },
         async (session) => {
+          if (continuation && !(await session.getUrl()).includes('/web/chat/recommend')) {
+            throw new CodedOperationError('WRONG_PAGE', '续筛必须在原推荐牛人列表页，请先恢复该页面')
+          }
           // 前置校验：必须在推荐牛人列表页（无「筛选」按钮即 WRONG_PAGE）。
           // 已知局限（坑 17）：仍用文案判定——沟通页 DOM 内嵌推荐 iframe 时文案同样命中、会误通过
           // （本 op 只读、无外部写副作用）；boss_greet 已于 2026-08-26 改 URL 判定（/web/chat/recommend），
@@ -72,6 +101,9 @@ export function createBossResumeBatchOperation(
           // job_name 一次取足：推荐页职位框当前职位（非推荐页为 null，契约可选）
           const jobBox = new JobSwitcher({ snapshot: session.snapshot, click: session.click }).locateJobBox(probe)
           const jobName = jobBox.name ?? null
+          if (continuation && jobName !== args.expected_job_name?.trim()) {
+            throw new CodedOperationError('JOB_CHANGED', '当前职位与上次筛选不一致，请恢复原职位或开始新一轮筛选')
+          }
 
           if (saveDir) {
             await fsp.mkdir(saveDir, { recursive: true })
@@ -90,6 +122,7 @@ export function createBossResumeBatchOperation(
             wheel: (rect, viewport, deltaY, notches) => wheelAt(rect, viewport, deltaY, notches),
             sameView: (a, b, rect) => sameViewAt(a, b, rect),
             stitch: stitchParts,
+            scroll: session.mouseWheel,
             signal: ctx.signal,
             onProgress: (done) => {
               ctx.progress({
@@ -100,7 +133,8 @@ export function createBossResumeBatchOperation(
               })
             },
           })
-          const result = await reader.readBatch({ limit, saveDir: saveDir || undefined })
+          const result = await reader.readBatch({ limit, saveDir: saveDir || undefined,
+            excludeNames: args.exclude_names?.map((n) => n.trim()), scanMore: continuation })
           const names = result.resumes.map((r) => r.name).join('、')
           let message: string
           if (result.resumes.length === 0 && result.failures.length > 0) {
@@ -125,6 +159,10 @@ export function createBossResumeBatchOperation(
               resumes: result.resumes.map((r) => buildResumePayload(r.name, jobName, r.readResult, 'dom')),
               failures: result.failures,
               attempted: result.attempted,
+              processed_names: result.processed_names,
+              stop_reason: result.stop_reason,
+              job_name: jobName,
+              continuation: buildResumeContinuation(result.processed_names, args.exclude_names ?? [], jobName, result.stop_reason),
             },
             effect: 'none',
           }

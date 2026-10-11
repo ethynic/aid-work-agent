@@ -41,6 +41,7 @@ const BOSS_TOOLS = [
   'boss_select_job',
   'boss_resume_detail',
   'boss_resume_batch',
+  'boss_resume_next',
   'boss_read_chat',
   'boss_open_chat',
   'boss_overlay_inspect',
@@ -60,6 +61,7 @@ const BOSS_WRITE_TOOLS: ReadonlySet<string> = new Set([
   'boss_select_job',
   'boss_resume_detail',
   'boss_resume_batch',
+  'boss_resume_next',
 ])
 
 // 与 weixin CLI 的 TOOL_DEFS（src/mcp/toolDefs.ts）保持同步；写集合按现 CLI：

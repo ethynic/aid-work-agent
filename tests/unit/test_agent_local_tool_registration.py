@@ -3,7 +3,7 @@
 覆盖（对应 m05-implementation-spec.md §7）：
 - master agent 注册表无 boss 工具
 - inherit=true 子智能体无 boss 工具
-- recruiting-operator 配置下 21 个 boss 工具齐全且只有这 21 个
+- recruiting-operator 配置下 22 个 boss 工具齐全且只有这 22 个
   （Phase 3 新增 boss_list_jobs / boss_select_job / boss_jobs_list；
   面试通知 Phase 1 新增 boss_interview_notify；
   boss-cli 0.2.4 新增沟通会话只读能力 boss_read_chat / boss_open_chat；
@@ -45,6 +45,7 @@ BOSS_TOOLS = {
     "boss_jobs_list",
     "boss_resume_detail",
     "boss_resume_batch",
+    "boss_resume_next",
     "boss_send_to",
     "boss_send_current",
     "boss_filter_options",
@@ -117,7 +118,7 @@ class TestLocalToolVisibility:
         assert not (set(agent.tool_registry._tools.keys()) & WECOM_TOOLS)
 
     def test_recruiting_operator_has_exactly_twenty_one_boss_tools(self):
-        """recruiting-operator 配置下：21 个 boss 工具 + 6 个 wecom 工具齐全且只有这 27 个
+        """recruiting-operator 配置下：22 个 boss 工具 + 6 个 wecom 工具齐全且只有这 28 个
 
         boss_jobs_list / boss_interview_notify 为混合模式（云端执行逻辑 + 代理注册），同样以 LOCAL_REQUIRED 注册；
         wecom 6 工具（M11c）与 boss 同面注册（BOSS—企业微信招聘协同）
@@ -136,6 +137,7 @@ class TestRecruitingSubagentMd:
         config = _load_recruiting_config()
         assert config.dir_name == "recruiting-operator"
         assert config.tools.get("inherit") is False
+        assert config.get_max_iterations() == 100  # 50份需要17批及页面准备，不能使用默认20轮
         assert set(config.get_allowed_tools()) == BOSS_TOOLS | WECOM_TOOLS
         assert config.system_prompt, "system_prompt 为空（body 未被采用）"
         assert "授权规则" in config.system_prompt

@@ -38,6 +38,7 @@ const EXPECTED_TOOLS = [
   'boss_filter_options',
   'boss_resume_detail',
   'boss_resume_batch',
+  'boss_resume_next',
   'boss_open_detail',
   'boss_greet_detail',
   'boss_close_detail',
@@ -89,7 +90,7 @@ test('initialize：serverInfo + instructions（含关键前提与写动作上限
   }
 })
 
-test('list_tools：21 个 tool，名称与 annotations 正确', async () => {
+test('list_tools：22 个 tool，名称与 annotations 正确', async () => {
   const client = await startClient([CLI, 'mcp', '--stdio', '--cdp-port', String(await freePort())])
   try {
     const { tools } = await client.listTools()

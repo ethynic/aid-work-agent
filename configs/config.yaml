@@ -361,6 +361,7 @@ boss_tool_billing:
     boss_reject_current: 0.5   # 标记不合适
     boss_resume_detail: 0.0    # 读取简历（截图免费，识别费另计：成功一份扣一份简历识别费）
     boss_resume_batch: 0.0     # 批量读取（同上，按份收简历识别费）
+    boss_resume_next: 0.0      # 续筛截图免费，仍逐份收简历识别费
     boss_select_job: 0.5       # 切换职位
     boss_filter: 0.5           # 设置筛选
     boss_open_detail: 0.0      # 找人开简历详情（页面状态操作，与 goto/open_chat 同类免费）

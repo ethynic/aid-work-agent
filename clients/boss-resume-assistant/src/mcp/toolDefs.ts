@@ -34,14 +34,14 @@ export const TOOL_DEFS: BossToolDef[] = [
     title: '设置筛选条件',
     description:
       '在 BOSS 直聘「推荐牛人」页设置筛选面板：经验要求/学历要求/薪资待遇（替换语义，先清除残留再选）。' +
-      '写动作：会改动页面上的筛选状态。至少提供一个条件。' +
+      '写动作：会改动页面上的筛选状态。至少提供一个条件，未提供的维度会清空，不保留原值。' +
       '数值档位（经验/薪资）自动保底映射：传了页面不存在的档位时按「保下限」规则映射到最接近的真实档位' +
       '（如要 15-30K 而页面只有 10-20K/20-50K 会选 20-50K），结果 substitutions 注明实际档位，务必向用户转述；' +
       '建议先用 boss_filter_options 查实际档位选更准；学历等非数值选项必须精确，传错报错并列出该行全部可选档位。',
     zodShape: {
-      experience: z.string().min(1).optional().describe('经验要求行选项，如 "5-10年"'),
-      educations: z.array(z.string().min(1)).optional().describe('学历要求行选项（多选），如 ["本科","硕士"]'),
-      salary: z.string().min(1).optional().describe('薪资待遇行选项（单选），如 "10-20K"'),
+      experience: z.string().min(1).optional().describe('经验档位，如 "5-10年"；省略会清空该维度'),
+      educations: z.array(z.string().min(1)).optional().describe('学历档位列表，可多选，如 ["本科","硕士"]；省略会清空该维度'),
+      salary: z.string().min(1).optional().describe('薪资档位，如 "10-20K"；省略会清空该维度'),
     },
     annotations: { title: '设置筛选条件', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
@@ -225,6 +225,7 @@ export const TOOL_DEFS: BossToolDef[] = [
     title: '切换当前招聘职位',
     description:
       '在 BOSS 直聘「推荐牛人」页切换当前招聘职位到指定职位名（精确匹配，外部写动作）。' +
+      '仅切职位，不加载云端职位要求、不设置筛选条件；改变职位会改变候选列表。' +
       'job_name 必须是 list-jobs 返回的精确职位名（CLI 内部不做模糊匹配，匹配 0 或多个都报错）。' +
       '若目标职位待开放（pending=true），点击前直接拒绝（切到未发布职位会致页面异常），请改选已开放职位。' +
       '前置要求：当前在推荐牛人页，否则返回 WRONG_PAGE。切换后会校验职位框文本已变更，未生效则报错。',
@@ -274,12 +275,30 @@ export const TOOL_DEFS: BossToolDef[] = [
       '含拼接长图 base64，云端识别文本后逐份存入简历库，只返回紧凑摘要）。' +
       '单份失败（打开超时/读取失败/姓名无法确定/云端姓名交叉校验不过）记入 failures 后继续下一份。' +
       '前置要求：当前在推荐牛人列表页，否则返回 WRONG_PAGE。' +
+      '只读当前视口，不排除历史，重复调用可能重读；不改变职位或筛选条件。limit为单批容量，不是任务总量。' +
+      'data.continuation包含available、reason、tool、arguments；available=true时arguments可传给tool续读，limit另行指定。' +
+      'processed_names包括失败尝试；stop_reason为本批停止原因，no_progress/search_limit不代表全列表读完。' +
       '只读：无外部写副作用；但每份简历滚动借用真实鼠标约 30 秒，操作期间勿动鼠标、勿遮挡 Chrome 窗口。',
     zodShape: {
-      limit: z.number().int().min(1).max(3).default(1).describe('读取份数上限：默认 1，单次最大 3（每份约 30 秒滚动截图）'),
+      limit: z.number().int().min(1).max(3).default(1).describe('本次调用最多读取1～3份，省略为1；不是整项任务总量，实际成功数可能更少'),
       save_dir: z.string().min(1).optional().describe('可选：拼接长图保存目录（每份存 <姓名>.png）；缺省不保留图片'),
     },
     annotations: { title: '批量读取牛人简历入库', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: 'boss_resume_next',
+    title: '继续读取未处理简历',
+    description: '在推荐牛人页排除已尝试姓名并读取新候选人，当前视口耗尽后自动滚动，最多扫描30屏。' +
+      '不切职位、不修改筛选；职位不符拒绝，筛选档位尚未硬校验。按姓名排除可能跳过同名不同人。' +
+      'limit为单批容量；返回结构与boss_resume_batch一致，data.continuation给出累计排除后的下一批参数。' +
+      'available=false表示不能直接续读，reason说明原因；无进展或搜索上限不等于全列表读完。旧版本拒绝新工具。',
+    zodShape: {
+      limit: z.number().int().min(1).max(3).default(3).describe('本次最多读取1～3份，省略为3；不是任务总量，按剩余份数设置'),
+      exclude_names: z.array(z.string().trim().min(1).max(30)).min(1).max(999).describe('本轮累计已尝试姓名，包含成功与失败项；来自上一批continuation.arguments，累计到1000停止'),
+      expected_job_name: z.string().trim().min(1).max(100).describe('原页面职位的精确名称；与当前页面不符时拒绝读取'),
+      continue_from: z.string().uuid().optional().describe('云端历史引用，仅用于可信历史关联'),
+    },
+    annotations: { title: '继续读取未处理简历', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   {
     name: 'boss_open_detail',

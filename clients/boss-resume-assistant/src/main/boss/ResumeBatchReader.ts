@@ -118,6 +118,8 @@ export interface ResumeBatchDeps {
   onProgress?(done: number, total: number): void
   /** 可注入 sleep（测试） */
   sleep?(ms: number): Promise<void>
+  /** 推荐列表滚动；详情读取仍使用独立的 wheel 管线。 */
+  scroll?(x: number, y: number, deltaY: number): Promise<void>
 }
 
 /** 点卡片后轮询等详情 canvas 出现的总超时（ms）。真机 ~600ms 出现，轮询容错 */
@@ -186,15 +188,21 @@ export class ResumeBatchReader {
    * 单张失败（打开超时/读取失败/姓名无法确定）记 failures 后继续；Escape 关不掉详情时 break
    * （弹层挡住列表没法点下一张）。signal 取消抛 CancelledError（已读的份数不返回，由调用方按 CANCELLED 处理）。
    */
-  async readBatch(opts: { limit: number; saveDir?: string }): Promise<{
+  async readBatch(opts: { limit: number; saveDir?: string; excludeNames?: string[]; scanMore?: boolean }): Promise<{
     resumes: BatchResumeResult[]
     failures: Array<{ name: string | null; error: string }>
     attempted: number
+    processed_names: string[]
+    stop_reason: string
   }> {
     const limit = opts.limit
     const resumes: BatchResumeResult[] = []
     const failures: Array<{ name: string | null; error: string }> = []
     const processedNames = new Set<string>()
+    const excluded = new Set(opts.excludeNames ?? [])
+    const anonymousRows = new Set<number>()
+    let scrollRounds = 0
+    let stopReason = 'viewport_complete'
     let attempted = 0
     let firstRound = true
     /** failures.push + 同步落一条诊断日志（logDetail 只进日志不进 error，云端契约文本不变） */
@@ -219,6 +227,7 @@ export class ResumeBatchReader {
 
     for (;;) {
       if (this.deps.signal?.aborted) throw new CancelledError(`已取消：已读取 ${resumes.length} 份简历后中止`)
+      if (excluded.size + processedNames.size >= 1000) { stopReason = 'history_limit'; break }
       // 拟人节奏：相邻卡片间留间隔（含失败重试路径），降低风控事件节流风险
       if (attempted > 0) await this.sleep(CARD_PACE_DELAY)
       const snap = await this.deps.snapshot()
@@ -233,7 +242,7 @@ export class ResumeBatchReader {
             (ys.length > 1 ? `，行距≈${ys[1]! - ys[0]!}px（参考机 184px）` : ''),
         )
       }
-      if (firstRound && cards.length === 0) {
+      if (firstRound && cards.length === 0 && !opts.scanMore) {
         throw new ResumeBatchError(
           '当前视口未找到任何牛人卡片（无「打招呼」按钮）：请确认已打开推荐牛人列表页且列表已加载，必要时先滚动让卡片进入视口',
         )
@@ -241,9 +250,33 @@ export class ResumeBatchReader {
       firstRound = false
       // key = name ?? `row@${按钮y}`：无名卡按行去重；同名牛人跳过（推荐流极少重复，重复时不重读同一人）。
       // 取卡即标记 key 已处理（含失败路径）——否则失败的卡会被下一轮重复选中，死循环
-      const card = cards.find((c) => !processedNames.has(c.name ?? `row@${c.greetButtonY}`))
-      if (!card) break
-      processedNames.add(card.name ?? `row@${card.greetButtonY}`)
+      const card = cards.find((c) => c.name
+        ? !processedNames.has(c.name) && !excluded.has(c.name)
+        : !anonymousRows.has(c.greetButtonY))
+      if (!card) {
+        if (!opts.scanMore) break
+        if (!this.deps.scroll) throw new ResumeBatchError('续筛缺少列表滚动能力')
+        if (scrollRounds >= 30) { stopReason = 'search_limit'; break }
+        // 两次延迟确认没有推进才停止；不能把加载迟缓或滚动失败宣称为读完全部。
+        const signature = (s: DomSnapshot): string => JSON.stringify([
+          this.locateCards(s).map((c) => [c.name, c.greetButtonY]),
+          s.documents.map((d) => [d.scrollOffsetX ?? 0, d.scrollOffsetY ?? 0]),
+        ])
+        let moved = false
+        for (let retry = 0; retry < 2; retry++) {
+          await this.deps.scroll(Math.floor(viewport.width / 2), Math.floor(viewport.height / 2),
+            Math.min(800, Math.floor(viewport.height / 2)))
+          await this.sleep(retry === 0 ? 1200 : 1800)
+          if (this.deps.signal?.aborted) throw new CancelledError('已取消：列表推进中止')
+          if (signature(await this.deps.snapshot()) !== signature(snap)) { moved = true; break }
+        }
+        if (!moved) { stopReason = 'no_progress'; break }
+        scrollRounds++
+        anonymousRows.clear()
+        continue
+      }
+      if (card.name) processedNames.add(card.name)
+      else anonymousRows.add(card.greetButtonY)
 
       // 0. 姓名配对前置闸（2026-09-10）：点击点=姓名节点中心，配不出姓名=没有可点点位——
       //    直接记 failure 跳过，绝不盲点（反正不入库，盲点白读还占 ~30 秒真实鼠标滚动）。
@@ -293,7 +326,7 @@ export class ResumeBatchReader {
         )
         // 详情可能实际已打开但画布判定未命中（真机 2026-08-18：572 高画布被阈值卡掉）——
         // 失败路径也必须尝试关闭，否则弹层挡住列表导致后续卡片连环点空
-        await this.tryCloseDetail().catch(() => false)
+        if (!await this.tryCloseDetail()) { stopReason = 'detail_not_closed'; break }
         continue
       }
 
@@ -318,6 +351,7 @@ export class ResumeBatchReader {
         const closed = await this.tryCloseDetail()
         const readErrMsg = err instanceof Error ? err.message : String(err)
         if (!closed) {
+          stopReason = 'detail_not_closed'
           pushFailure(
             card.name,
             `读取简历失败：${readErrMsg}；且 Escape 后简历详情未关闭，无法继续处理后续卡片`,
@@ -339,14 +373,15 @@ export class ResumeBatchReader {
       resumes.push({ name, readResult: result })
       processedNames.add(name)
       if (!closed) {
+        stopReason = 'detail_not_closed'
         pushFailure(name, 'Escape 后简历详情未关闭，无法继续处理后续卡片')
         break
       }
       this.deps.onProgress?.(resumes.length, limit)
-      if (resumes.length >= limit) break
+      if (resumes.length >= limit) { stopReason = 'limit_reached'; break }
     }
     batchLog(`批量结束：尝试 ${attempted} 张，成功 ${resumes.length} 份，失败 ${failures.length} 个`)
-    return { resumes, failures, attempted }
+    return { resumes, failures, attempted, processed_names: [...processedNames], stop_reason: stopReason }
   }
 
   /** Escape 关闭详情并轮询 canvas 消失；超时未消失返回 false（弹层挡住列表，调用方必须停止） */

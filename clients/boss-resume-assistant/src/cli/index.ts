@@ -57,6 +57,7 @@ const USAGE = `BOSS 招聘操作 CLI
   list-jobs                    列出当前招聘者的所有职位（打开职位下拉解析；只读，但借用真实鼠标点开下拉，期间勿动鼠标）
   select-job <职位名>          切换到指定职位（精确职位名，可用 list-jobs 查看；真实写动作，期间勿动鼠标）
   resume-detail --name <姓名> [--save-image <path>]   读取当前打开的候选人简历详情（canvas 截图拼接，文本在云端识别；--name 候选人姓名必传，缺省报错；前提先点开候选人详情；只读，但滚动借用真实鼠标，期间勿动鼠标）
+  resume-next --exclude-names <姓名,姓名> --job <原职位> [--limit N]   跳过已处理者并滚动继续读取（默认3，最多10）
   resume-batch [--limit N] [--save-dir <目录>]   批量打开推荐牛人卡片并读取简历（默认 1 份，最大 10；逐个点开→读取→关闭→下一份，文本在云端识别；只读，但滚动借用真实鼠标约 30 秒/份，期间勿动鼠标）
   open-detail <姓名>            打开指定姓名候选人的简历详情（推荐牛人页按姓名找人并点开，详情保持打开供 resume-detail 读取；当前屏没有自动滚动查找，找不到 fail-loud 列出当前屏可见姓名；点击/滚动借用真实鼠标，期间勿动鼠标）
   greet-detail <姓名> [--dry-run]   在当前打开的简历详情页点「打招呼」（校验详情属于指定候选人防止打错人；已打过幂等返回；打完自动关闭详情；--dry-run 只定位不点击；真实写动作，期间勿动鼠标）
@@ -269,6 +270,7 @@ async function main(): Promise<number> {
         cdpPort,
       })
     }
+    case 'resume-next':
     case 'resume-batch': {
       const limitRaw = flagString(args, 'limit')
       let limit: number | undefined
@@ -287,7 +289,14 @@ async function main(): Promise<number> {
       const cdpPort = parseCdpPort(args)
       if (cdpPort === 'invalid') return 2
       const { resumeBatchCommand } = await import('./commands/resumeBatch.js')
-      return resumeBatchCommand({ limit, saveDir, cdpPort })
+      const continuation = args.positional[0] === 'resume-next'
+      const excludeNames = flagString(args, 'exclude-names')?.split(/[,，]/).map((s) => s.trim()).filter(Boolean)
+      const expectedJobName = flagString(args, 'job')?.trim()
+      if (continuation && (!excludeNames?.length || !expectedJobName)) {
+        console.error('resume-next 必须传 --exclude-names 姓名列表及 --job 原职位名')
+        return 2
+      }
+      return resumeBatchCommand({ limit, saveDir, cdpPort, continuation, excludeNames, expectedJobName })
     }
     case 'open-detail': {
       const name = args.positional[1]

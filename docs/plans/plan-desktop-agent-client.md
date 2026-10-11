@@ -1,5 +1,7 @@
 # Agent 桌面客户端 v3 开发计划
 
+2026-10-11 共同检查点：BOSS 续筛业务契约 v1 见[续筛计划](desktop-automation/plan-boss-screening-continuation.md)。共用核心注册的唯一写入者为该任务主控，仅改 `clients/shared/local-tool-host-core/src/legacy/providers.ts`、`providerManager.ts` 及对应测试，桌面端不另实现续筛。新增工具与旧 Provider 拒绝兼容，不改管理 wire、binding、许可或桌面对话循环。
+
 ## 开发进度
 
 | 阶段 | 内容 | 状态 | 完成记录 |
