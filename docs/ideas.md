@@ -26,7 +26,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20261008-runtime-plugin-host | Runtime 执行环境、插件宿主与可视化客户端 | 🔧 部分完成 | A1～A3完成；隔离验收包已交付，待人工及正式发行，第三方暂不开发。 | [唯一架构](system/runtime-plugin-host-architecture-design.md) / [共同契约](system/runner-desktop-runtime-integration-contract.md) / [接口](../contracts/runtime-host/v1/README.md) | [统一计划](plans/plan-runtime-plugin-host.md) |
+| 20261008-runtime-plugin-host | Runtime 执行环境、插件宿主与可视化客户端 | 🔧 部分完成 | A1～A3完成；隔离验收包已交付，待人工及正式发行，第三方暂不开发；新增 v2 写路径泛化阶段（BOSS B3 依赖，待开发）。 | [唯一架构](system/runtime-plugin-host-architecture-design.md) / [共同契约](system/runner-desktop-runtime-integration-contract.md) / [接口](../contracts/runtime-host/v1/README.md) | [统一计划](plans/plan-runtime-plugin-host.md) |
 | 20261010-1642 | 系统级防滥用与限额 | 📋 待开发 | 租户管理员按 tenant 兜底/用户/渠道配置勾选防滥用规则（时间窗积分预算、禁生成文件；创作/批量遍历提示词约束为软规则），先观察后拦截；v0.2 评审定稿：Phase 1 定时扫描观察闭环（不接执行链拦截点）+ 防滥用中心页 + 人工禁用，Phase 2 入口预检 enforce，Phase 3 软规则注入。 | [设计](system/saas/anti-abuse-policy-design.md) | — |
 | 20261010-1930 | 租户管理员通知（计费提醒 / 反滥用告警） | 🔧 部分完成（Phase 1 开发完成，未部署） | 复用统一通知基础设施：站内信恒开兜底 + 外发渠道（飞书/企微/钉钉/邮件）四选一；三事件 billing.credit_low（7 天用量推算，月度幂等）/ billing.tenant_expiry（30/7/1 天档）/ abuse.rule_triggered（Phase 2 挂反滥用 warn_threshold）；管理员逐人展开 + 租户级外发目标（同事件多管理员仅投一次），不新建表。启用需 configs/config.yaml notifications.tenant_events_enabled=true。 | [设计](system/tenant-admin-notification-design.md) | — |
 | 20260908-2229 | 外部系统入口（SSO 打开第三方系统） | 🔧 部分完成（Phase 1 开发完成，待真机联调） | 连接中心「外部系统」入口 + SSO 通用契约（direct_url/ticket_redirect/token_param）打开第三方系统；Phase 1 完成待真机联调。 | [方案](system/external-system-entry-design.md) | — |
@@ -35,7 +35,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20260908-1432 | BOSS 直聘聊天自动化 | 🔧 部分完成 | B2 场景包（fake 端到端）十审通过入库；进入 B3 Runtime+Provider 真机接线。 | [BOSS 端侧接入设计](design/desktop-automation/boss-edge-session-design.md) / [底座设计](design/desktop-automation/desktop-cli-automation-design.md) | [BOSS 端侧接入计划](plans/desktop-automation/plan-boss-edge-session.md) / [VIP筛选+性能埋点](plans/desktop-automation/plan-boss-cli-vip-filter-perf.md) / [详情页打分即打招呼](plans/desktop-automation/plan-boss-detail-greet.md) |
+| 20260908-1432 | BOSS 直聘聊天自动化 | 🔧 部分完成 | B1/B2 完成入库（场景包默认关闭）；B3 起待开发，B0 测试账号授权阻塞中；旁支已交付（见 finished）。 | [BOSS 端侧接入设计](design/desktop-automation/boss-edge-session-design.md) / [底座设计](design/desktop-automation/desktop-cli-automation-design.md) | [BOSS 端侧接入计划](plans/desktop-automation/plan-boss-edge-session.md) |
 | 20260905-1753 | 营销 App 智能外呼代理 | 🔧 部分完成 | 2026-09-05 完成调研、详细设计与实施规划。 | [设计](design/marketing-call-agent-design.md) | [验证与计划](plans/marketing-call-agent-plan.md) / [GLM 实验执行手册](plans/marketing-call-agent-experiment-runbook.md) |
 | 20260817-1154 | 工程审计智能体（客户方案阶段） | ⏸️ 已搁置 | 面向工程管理咨询公司的「四库一平台三智能体」工程审计智能体商务方案（客户需求《工程审计智能体开发建设方案V1.0》）。 | 见 `docs/backups/engineering-audit-agent/`（git 忽略，仅本地） | — |
 | 20260729-1434 | AI 批量视频内容生产系统 | 🔧 部分完成 | AI 批量视频内容生产系统：抽卡式短视频批量生成，方案多轮迭代（v0.4 回归本质）。 | [调研](research/ai-video-production-research.md) / [PRD](system/content-production/ai-video-production-prd.md) / [MVP技术设计](system/content-production/mvp-design.md) / [MVP开发计划](plans/plan-video-gen-mvp.md) / [产品定位重新审视](system/content-production/video-agent-enterprise-positioning-design.md) / [Phase 1 开发计划](plans/plan-video-agent-phase1.md) | — |

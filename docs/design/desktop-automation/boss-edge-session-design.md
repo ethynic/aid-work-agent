@@ -2,7 +2,7 @@
 
 > 本文定义BOSS会话业务，B3场景接线不等于Runtime Host建设；复用[当前Runtime架构](../../system/runtime-plugin-host-architecture-design.md)及[共同契约](../../system/runner-desktop-runtime-integration-contract.md)，不复制插件宿主。业务开发状态以本领域计划为准。
 
-版本 V1.10 · 2026-09-18 · 设计交付（V1.8 基础上按 B1.2 实现复审冻结协议变更：控制请求幂等键升级五元、gate 契约升级严格判别联合与 UTC 要求、settlement 结构化返回与 guard 缺失升级语义），待开发。启动开发前须另立开发计划文档并登记。
+版本 V1.10 · 2026-09-18 · 设计交付（V1.8 基础上按 B1.2 实现复审冻结协议变更：控制请求幂等键升级五元、gate 契约升级严格判别联合与 UTC 要求、settlement 结构化返回与 guard 缺失升级语义）。B1–B2 已实现入库（2026-09-20 commit 57e12b3a，fake 端到端十审通过；场景包默认关闭 `boss_conversation.enabled=false`）；B3 起待开发，开发状态以[开发计划](../../plans/desktop-automation/plan-boss-edge-session.md)为准。
 
 ### V1.10 协议变更记录（2026-09-19，随 B2 实现复审冻结）
 
@@ -468,7 +468,7 @@ B0a=现有只读工具验证三项只读门禁；B0b=实验原型 verifier（非
 | B0b | 实验 verifier 可行性 + 至少30次授权样本原始计数/Wilson 95%区间 + 写后验证率下限冻结 | B0a；独立授权 |
 | B1 | §9.1 五步；微信零回归（含锁序矩阵死锁测试） | 无 |
 | B2 | 场景包全部+绑定表（触发计数列+同步阻断列）+话术版本表+**频控账本/异常队列完整 schema（§5.5.4）**+双闸门+effective_count/去重不变量测试+缺失 slot 补建仍升级异常测试+投影队列+fake 端到端 | B1.3 |
-| B3 | scenario_key/指纹端到端、send_deferred（server_now/deferred_until/retry_after_ms）事件协议与回放、BossBridge+桥密钥、v2 manifest、observe/send_v2、生产 verifier+提交证据 | B2 + B0a；B0b 冻结 |
+| B3 | scenario_key/指纹端到端、send_deferred（server_now/deferred_until/retry_after_ms）事件协议与回放、BossBridge+桥密钥、v2 manifest、observe/send_v2、生产 verifier+提交证据。2026-10-11 注记：runtime 侧通用机制（写门禁泛化、claim/meta v2、send_deferred、桥密钥）由 runtime 轨道交付、B3 消费（登记于 runtime 插件宿主计划），本阶段交付 boss 插件 Provider 与接线联调 | B2 + B0a；B0b 冻结 |
 | B4 | 工作台接入、绑定管理页、话术版本管理、handoff 通知、投影 job | B3 |
 | B5 | 单候选人连续验收（≥10 轮含突发/接管/重启/频控 deferred 重试）、双指标复测、旧 BOSS 回归、同桌面混用、发布/回滚手册 | B0 全门禁+B1–B4+独立测试/CR |
 

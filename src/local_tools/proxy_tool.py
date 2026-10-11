@@ -1501,7 +1501,7 @@ class BossResumeNextTool(BossResumeBatchTool):
     heal_eligible = False
 
 
-# ============== 详情页打招呼三件套（筛选主路径，2026-09-28，docs/plans/desktop-automation/plan-boss-detail-greet.md） ==============
+# ============== 详情页打招呼三件套（筛选主路径，2026-09-28，见 docs/ideas_finished.md 20261011-1456） ==============
 # 纯代理工具（无计费、无云端后处理）：云端 AI 编排筛选主流程，每候选人四步——
 # boss_open_detail（开详情）→ boss_resume_detail（既有，读取+VL 评估入库）→
 # 合格 boss_greet_detail（详情页打招呼）/ 不合格 boss_close_detail（清理关闭）。

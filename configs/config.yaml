@@ -379,7 +379,7 @@ boss_tool_billing:
   overlay_heal_price: 2.0
 
 # 简历云端 VL 识别（2026-09-17 去 OCR 化）：拼接长图切片后发多模态模型转写
-# POST /api/local-tools/runtime/resume/parse（设备 token 鉴权），识别成功按份扣简历识别费
+# POST /api/local-tools/runtime/resume/evaluate（设备 token 鉴权），识别成功按份扣简历识别费
 resume_vl:
   # 缺省识别模型（provider/model 语法）。GLM-5.3-Flash 原生多模态（输入 0.8/输出 2.8 元/M tokens）；
   # 主链路 provider 可能是纯文本模型，识别走 chat_direct 指定通道直连，不随主链路漂移

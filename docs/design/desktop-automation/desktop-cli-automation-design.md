@@ -50,9 +50,9 @@ target_ref 是云端持久 subject 引用，target_handle 是 Provider 在当前
 | 契约消费方 | operation | 场景输入到中立协议的映射 |
 |---|---|---|
 | 微信首个消费方 | weixin_message_send_v2 | group binding 经场景核验生成 target_handle；冻结 block 生成 payload_ref/hash |
-| BOSS 第二消费方（已接入） | boss_send_to_v2 | candidate binding 经场景核验生成 target_handle；受限话术渲染结果先持久冻结，再生成 payload_ref/hash |
+| BOSS 第二消费方（云端场景侧已接入，Provider 真机接线待 B3） | boss_send_to_v2 | candidate binding 经场景核验生成 target_handle；受限话术渲染结果先持久冻结，再生成 payload_ref/hash |
 
-两者都只能以本地已校验 permit handle 执行受控 operation；不能让 LLM 自填 permit、租户、原始 argv 或任意可执行路径。v2 采用显式 capability/protocol_version，旧 boss_send_to、boss_send_current 与既有 MCP schema、返回字段、BUSY 恢复语义保持原样。
+两者都只能以本地已校验 permit handle 执行受控 operation；不能让 LLM 自填 permit、租户、原始 argv 或任意可执行路径。v2 采用显式 capability/protocol_version，旧 boss_send_to、boss_send_current 与既有 MCP schema、返回字段、BUSY 恢复语义保持原样。表中 BOSS「已接入」指云端场景包（boss.chat_reply.v1）对中立协议的声明消费（B2）；Runtime Provider 侧 `boss_send_to_v2` 尚未接线（BOSS 计划 B3），端到端 v2 写路径暂不存在。
 
 ## 4. 触发接纳算法
 
