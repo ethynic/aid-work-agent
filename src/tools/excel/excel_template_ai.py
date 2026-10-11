@@ -3,7 +3,6 @@
 """Excel 智能模板填充（无状态）
 
 设计文档：docs/tools/excel/excel-template-ai-design.md
-开发计划：docs/plans/plan-excel-template-ai.md
 
 核心契约：
 - 无状态。调用方每次必传样例文件路径，工具读样例 → 数据感知分析结构 → 按样例版式填充数据。
@@ -1185,7 +1184,7 @@ def _default_llm(
 
 def _observed_skill_llm_request(api_url,payload,key,timeout,provider,model):
     import httpx
-    from src.llm.call_observer import observed_call_sync
+    from src.services.llm_model_call import model_call_sync
     def request():
         response = httpx.post(api_url,headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"},
                               json=payload,timeout=timeout)
@@ -1201,8 +1200,10 @@ def _observed_skill_llm_request(api_url,payload,key,timeout,provider,model):
             usage['cached_tokens'] = (details.get('cached_tokens',0) if isinstance(details,dict)
                                       else usage.get('prompt_cache_hit_tokens',0))
         return {"usage":usage,
+                "response_model":data.get('model'),
                 "request_id":data.get("id","")}
-    data = observed_call_sync(request,provider=provider,model=model,kwargs={},normalize=normalize,purpose="skill")
+    data = model_call_sync(request,provider=provider,model=model,kwargs={},normalize=normalize,purpose="skill",
+                           endpoint_url=api_url)
     if isinstance(data.get("usage"),dict) and data["usage"].get("_runner_receipt_id"):
         data["_runner_receipt_id"] = data["usage"]["_runner_receipt_id"]
     return data

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """verbose 统一反馈内核 Phase 1 测试（必测场景全覆盖）
 
-对应 docs/plans/plan-agent-intermediate-feedback.md「Phase 1：统一反馈内核」必测场景：
+对应架构文档 docs/system/agent-application-architecture-design.md §6.4 必测场景：
 1. 长任务 policy 事件在首个 tool_start 前；无策略的 turn（无论多慢）不产生任何
    verbose（2026-09-01 产品决策：system watchdog 已删除，无系统兜底）；
 2. 空 tool call 不触发（注：非法 JSON 参数在现行引擎中直接失败

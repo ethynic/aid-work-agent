@@ -5,7 +5,6 @@
  * Phase 2 将填充内置连接器相关接口（listBuiltinConnectors / saveConfig / testConnection 等）。
  *
  * 关联设计：docs/system/connection-center-design.md
- * 关联计划：docs/plans/plan-connection-center.md
  */
 
 // ==================== Phase 2 待填充 stubs ====================

@@ -2,7 +2,6 @@
 
 > **审计日期**：2026-08-14
 > **依据规范**：`.claude/rules/backend_dev.md`「租户附件存储规范」
-> **关联改造**：[plan-tenant-storage-migration.md](plan-tenant-storage-migration.md)（Phase 1~8 已完成）
 > **审计方法**：全项目扫描上传/保存文件调用点 + 逐点读函数上下文核对路径构造与 tenant_id 来源
 > **状态**：✅ 已修复并发生产、已验证（2026-08-14）
 

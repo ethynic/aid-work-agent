@@ -3,13 +3,12 @@
 > 版本: 2.0
 > 日期: 2026-06-01
 > 状态: 已开发
-> 前序文档: [回复风格系统设计 v1.0](design-reply-style.md)
 
 ## 1. 背景与目标
 
 ### 1.1 现状
 
-回复风格系统 v1.0 已完成开发（见 `docs/system/design-reply-style.md`），核心机制：
+回复风格系统 v1.0 已完成开发（设计已清理），核心机制：
 
 - 风格定义存储为 `src/prompts/styles/*.md` 磁盘文件
 - `StyleManager` 在 Agent 初始化时加载所有 `.md` 文件到内存

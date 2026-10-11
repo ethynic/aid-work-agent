@@ -1,6 +1,6 @@
 # 报价单生成支持指定酒店设计
 
-> 反向关联：[ideas.md 第 26 条](../../ideas.md) · [开发计划](../../plans/plan-generate-quote-hotel-override.md)
+> 反向关联：[ideas_finished.md](../../ideas_finished.md)（20260623-1323）
 
 ## 背景与动机
 

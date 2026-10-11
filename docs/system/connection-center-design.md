@@ -6,7 +6,6 @@
 > **触发场景**：现有「API 配置 + 环境变量」藏在管理后台「租户管理 - 编辑租户 - 数字员工授权」弹窗里，租户管理员要配 API Key 必须找平台管理员开权限进管理后台，体验割裂；同时缺少对标 Coze / Dify / n8n 的「连接器」抽象。
 > **关联规范**：[backend_dev.md](../../.claude/rules/backend_dev.md) / [database_dev.md](../../.claude/rules/database_dev.md) / [cache_usage.md](cache_usage.md) / [file_usage.md](file_usage.md)
 > **关联想法登记**：[ideas.md](../ideas.md) 系统功能 #48
-> **关联开发计划**：[plan-connection-center.md](../plans/plan-connection-center.md)
 
 ---
 

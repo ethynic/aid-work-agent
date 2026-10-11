@@ -1,8 +1,6 @@
 # Pandoc 安装与部署指南
 
 > `word_process` 工具的 `md_to_word` 操作（Markdown → Word）依赖 [Pandoc](https://pandoc.org/) 命令行工具。本文档说明各环境的安装与排查方式。
->
-> 关联设计文档：[md_to_word 重构计划：改用 Pandoc 引擎](./md_to_word_pandoc_plan.md)
 
 ---
 

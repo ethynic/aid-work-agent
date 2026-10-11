@@ -4,7 +4,6 @@
 
 设计：docs/system/agent-application-architecture-design.md §6.4
 （事件协议 / 唯一解析契约 / 内容安全与上下文隔离 / 每轮状态 / 配置 / 可观测性）
-开发计划：docs/plans/plan-agent-intermediate-feedback.md「Phase 1：统一反馈内核」
 
 本模块是 verbose 的唯一策略解析与事件包装入口，仅供编排层（Agent 主循环 /
 process_message_sync / Web 包装入口）调用。全部设施：

@@ -8,7 +8,7 @@
  * 已整体下线，客户端不再产出文本。
  * 只读（effect=none），但滚动借用真实鼠标约 1-2 秒，执行期间用户手不能碰鼠标。
  *
- * 输出契约（docs/plans/recruiting/resume-detail-cli-integration-handoff.md §2，与云端
+ * 输出契约（与云端
  * recruiting_resume_service.create_resume_record_from_tool_result 对齐）：
  * data = { candidate_name（必填）, name_source:'param'（云端观测字段：标注姓名来源非截图识别）,
  * job_name?, images:[{name,mime_type,base64}], …元信息 }（ocr_text 由云端识别后回填）。

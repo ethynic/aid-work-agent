@@ -24,9 +24,9 @@
 | 20260701-2009 | 三智能体开发流程规范 | 非平凡开发任务（新功能/Phase/多文件改动）的标准流程：开发智能体→测试智能体（独立测试+回归+启动安全检查）→CodeReview智能体（独立审查+修复必要问题）… | [规范](../.claude/rules/dev_workflow.md) | — |
 | 20260624-2005 | 会话内上下文压缩（中期记忆） | 解决单 session 长会话上下文爆 token 问题（web/微信客服/钉钉/飞书/RPA 全渠道通用）。 | [设计](infrastructure/memory/context_compression_design.md) / [调研](research/context_compression_research.md) | [开发计划](infrastructure/memory/context_compression_dev_plan.md) |
 | 20260608-1610 | 租户数据迁移 | 跨数据库租户数据迁移（知识库 + 业务表），UUID 稳定标识符 + replace/merge 模式 + Excel 导出导入。2026-06-08 | — | — |
-| 20260629-1354 | Gunicorn 多 Worker 定时任务单 Worker 执行 | Gunicorn 多 worker 部署下，scheduled_tasks 表内的定时任务会被每个 worker 重复触发。 | [设计](infrastructure/scheduled-tasks-single-worker-design.md) | — |
+| 20260629-1354 | Gunicorn 多 Worker 定时任务单 Worker 执行 | Gunicorn 多 worker 部署下，scheduled_tasks 表内的定时任务会被每个 worker 重复触发。 | — | — |
 | 20260602-1415 | ✅ Prompt 全生命周期管理 | 子智能体 Prompt 的版本化管理（编辑→提交版本→对比→回滚）+ 独立智能体管理页面 + 租户定制 Prompt（extra_md）DB 化。 | [设计](infrastructure/prompt-lifecycle-design.md) | [计划](infrastructure/prompt-lifecycle-dev-plan.md) |
-| 20260428-1639 | 租户附件存储路径规范改造 | 把全项目 `storage/uploads/{tenant}/{user}/` 旧路径统一改造为 `storage/tenants/{tenant_id}/{scene}/` 新规范（依据 `.cla… | [规范](../.claude/rules/backend_dev.md) | [计划](plans/plan-tenant-storage-migration.md) |
+| 20260428-1639 | 租户附件存储路径规范改造 | 把全项目 `storage/uploads/{tenant}/{user}/` 旧路径统一改造为 `storage/tenants/{tenant_id}/{scene}/` 新规范（依据 `.cla… | [规范](../.claude/rules/backend_dev.md) | — |
 | 20260829-0831 | ✅ Agent 运行时安全加固 | 已落地定时调度租户隔离、请求上下文并发隔离与恢复、敏感错误脱敏、知识库对象级租户保护、观测成本闭环、核心结构守卫及工具副作用审计。 | [设计](system/agent-runtime-safety-hardening-design.md) / [工具审计](system/enterprise-agent-platform/tool-effect-inventory.md) | — |
 | 20260831-1515 | ✅ Agent 运行时安全债收尾 | 2026-08-31 复核确认 `X-Tenant-Id` 验权（`d517e859`/`ec177152`）… | [核对与修复设计](system/agent-runtime-security-debt-closure-design.md) | [开发计划](plans/plan-agent-runtime-security-debt-closure.md) |
 | 20260813-1328 | skill_ws 临时工作目录清理机制 | ✅ 已完成开发。修复技能执行工作目录 `skill_ws_*` 创建后永不清理的临时文件泄漏（每月堆积，2026-08-13 迁移核对时发现）。 | — | — |
@@ -44,9 +44,9 @@
 | 20261010-1638 | 统一通知基础设施与 Web 推送 | ✅ 已完成开发：统一通知底座与Web推送通过内外部终审，真实到达待环境验收。 | [统一设计](system/notification-infrastructure-design.md) / [Web设计](system/web-task-push-notification-design.md) | [开发计划](plans/plan-web-task-push-notification.md) |
 | 20260918-2045 | Redis 夜间巡检任务（生产专用） | ✅ 已完成开发：background_runner 调度器每日 00:30 巡检 Redis——内存水位（600MB 警告/800MB 严重）、碎片率（仅 used>100MB 判）、AOF 写入/重写状态、键淘汰、连接数、无 TTL 键抽样（上限 1000，超 200 疑似泄漏），「[Redis巡检]」前缀进主日志（1 条 INFO 汇总 + 越界 WARNING/ERROR）；REDIS_INSPECTION_ENABLED 门控默认关。2026-10-10 agent2 容器内对腾讯云托管 Redis 实跑验证通过（INFO 汇总 + 告警格式正确，顺带发现测试 Redis evicted=4599 真实告警）；生产 .env 已开启待重启生效（属部署事项，不影响任务关闭）。 | — | — |
 | 20260930-1520 | 上下文压缩可观测性与计费改造 | ✅ 已完成开发：span usage/cost 透传 + 自适应摘要预算 + 50:1 经济性闸门（commit f947812f，2026-09-30）；2026-10-10 agent2 容器内全链路真机验证（check_threshold→compress_now→事件→TraceCollector）：压缩 LLM 真实用量透传 pt=24072/ct=175/cached=256，obs_spans.cost=3.66（tr_425af2359ea247a7，修复前恒 0），chat_records 独立计费 rec_713be10fa46f（background_llm，租户归属正确）。生产 agent1 部署 ≥f947812f 后生产 span 自然有值。 | — | — |
-| 20260831-1508 | Agent 用户可见中间消息（verbose） | ✅ 已完成开发（2026-10-09 收口）：长任务确定性等待提示（每轮一条、策略文案、渠道限流预留 final 额度）；2026-09-01 全局默认启用并随正式环境发布运行，旧 waiting_indicator 机制已移除；设计已并入 AgentRunner 架构 §6.4。 | [架构 §6.4](system/agent-application-architecture-design.md#64-用户可见中间消息verbose) | [计划](plans/plan-agent-intermediate-feedback.md) |
+| 20260831-1508 | Agent 用户可见中间消息（verbose） | ✅ 已完成开发（2026-10-09 收口）：长任务确定性等待提示（每轮一条、策略文案、渠道限流预留 final 额度）；2026-09-01 全局默认启用并随正式环境发布运行，旧 waiting_indicator 机制已移除；设计已并入 AgentRunner 架构 §6.4。 | [架构 §6.4](system/agent-application-architecture-design.md#64-用户可见中间消息verbose) | — |
 | 20261009-2100 | verbose 收口与 agent 过时文档二轮清理 | ✅ 已完成：verbose 条目收口移档；删除 9 份已实现/被超越的 agent 相关设计（verbose 设计与 runbook、master-subagent、chat-interrupt、scheduled-task、prompt 目录、提示词优化计划），有用部分并入 AgentRunner 架构 §3.2/§6.4；修正 plan-background-runner 失真状态。 | — | [清理记录](plans/plan-obsolete-architecture-doc-cleanup.md) |
-| 20260921-1100 | 宏陶商城产品知识库同步（hongtao_shop 专用模块） | ✅ 已完成开发：宏陶专用模块拉取产品/帖子 + VL 描述 + 结构化正文入知识库（raw_payload 存原始记录），2026-10-09 验收通过。 | [设计](system/hongtao-shop/hongtao-shop-kb-design.md) | [开发计划](plans/plan-hongtao-shop-kb.md) |
+| 20260921-1100 | 宏陶商城产品知识库同步（hongtao_shop 专用模块） | ✅ 已完成开发：宏陶专用模块拉取产品/帖子 + VL 描述 + 结构化正文入知识库（raw_payload 存原始记录），2026-10-09 验收通过。 | [设计](system/hongtao-shop/hongtao-shop-kb-design.md) | — |
 | 20261001-1849 | Agent/AgentRunner 重构及独立服务 | ✅ 已完成开发：内核与独立服务、Web 接入已完成；后续渠道接入另行跟踪。 | [设计](system/agent-application-architecture-design.md) | [计划](plans/plan-agent-runner-service.md) |
 | 20260918-2010 | 用户取消请求的 trace 标记与历史可见性 | ✅ 已完成开发（待部署）。触发：线上 tr_30005ad7dd284b3e 排查发现用户取消后 trace 落库 completed 且 output 为空、取消轮次消息不落库（历史页整轮消失）。改动：①agent 两条取消路径（cancel_check 命中 yield cancelled 事件 / CancelledError 穿透包装层）均标记 trace status=cancelled + termination_reason=user_cancelled；②Web SSE 取消轮次落库 user+assistant 消息并打 metadata.cancelled=true（不落 tool 序列防悬空 tool_calls）；③前端停止按钮加 confirm；④历史消息渲染"用户已取消本轮回复"徽章；⑤追踪页（TraceBrowser/TraceDetail/SessionTraces）状态文案改"用户取消"+warning 色。开发+单测（5 用例）+独立验证完成，待部署。 | — | — |
 | 20260901-1358 | 客户端计费统一接入（boss cli / 协会采集 / 未来客户端三模式） | ✅ 已完成开发。 | [设计](design/billing/client-billing-integration-design.md) | — |
@@ -60,7 +60,7 @@
 | 20260823-2057 | 租户间知识库共享 | ✅ 已完成开发。平台管理员两步配置实现知识库跨租户共享（A 租户知识库共享给 B 租户，B 数字员工检索时本租户+共享库合并检索）。 | [设计](system/knowledge-base/tenant-knowledge-sharing-design.md) | — |
 | 20260710-2043 | 图片资产全链路承载能力（Phase 0+1+2） | **系统级横切能力**：定义图片资产（Image Asset）从来源/注册/寻址/嵌入/渲染的统一规范。 | [设计](system/image-asset-pipeline-design.md) · [主计划](plans/plan-image-asset-pipeline.md) · [Phase 3 计划](plans/plan-image-asset-pipeline-phase3.md) | — |
 | 20260522-2147 | 记忆系统 | 短期记忆（滑动窗口）+ 长期记忆（摘要压缩），会话上下文管理 | [设计](memory/memory_design.md) | — |
-| 20260526-1904 | 回复风格系统 | 可配置回复风格，不同场景的语气和格式控制 | [设计](system/design-reply-style.md) | — |
+| 20260526-1904 | 回复风格系统 | 可配置回复风格，不同场景的语气和格式控制 | [设计 v2](system/design-reply-style-management.md) | — |
 | 20260526-1709 | 对话体验优化 | SSE 流式输出优化、消息渲染改进、交互体验提升 | [设计](system/design-chat-experience-optimization.md) | — |
 | 20260709-1230 | Skill 版本化触发重载 | 会话中已加载过的 skill，当 SKILL.md frontmatter `version` 提升后，强制 LLM 重新 `use_skill` 获取最新指南。 | — | — |
 | 20260706-1205 | Redis 缓存管理页 | 平台管理后台新增「Redis 缓存」页面，供平台管理员枚举、查看、搜索、删除 Redis 键值。 | [设计](system/design-redis-cache-admin.md) | — |
@@ -69,10 +69,10 @@
 | 20260729-1613 | 工作成果记录 | ✅ 已完成开发。沉淀子智能体产生的重要工作成果（生成文件、完成业务操作、给出决策建议）到 `work_outcomes` 表，租户前台新增"工作成果"菜单。 | [设计](system/work-outcome-record-design.md) | — |
 | 20260911-2042 | chat_lite 计费模型错配 | ✅ 已完成开发。11 处小任务调用点 chat_lite 与计费模型错配（多收租户）：交互型改走 chat_no_thinking 对齐实际消耗模型；已完成待部署。 | [已知问题记录](plans/chat-lite-billing-model-mismatch.md) | — |
 | 20260902-2228 | 彻底移除 demo 模式与 SAAS_ENABLED 开关 | ✅ 已完成开发。demo 模式（`DEMO_ENABLED`/`VITE_DEMO_ENABLED` 控制）已无人使用且与租户模式并存造成大量死分支；系统定位即 SaaS 平台。 | — | — |
-| 20260602-1417 | 知识库能力增强 | 🔧 已完成开发 | 知识库能力增强分期：文档级权限/检索日志（P1）、Rerank/改写/质量评估（P2）；分类树形化、批量移动、搜索跟随分类已上线。 | [设计](system/knowledge-base/knowledge-base-enhancement-design.md) | [计划](system/knowledge-base/knowledge-base-dev-plan.md) / [子级文档包含统一](plans/plan-knowledge-category-subtree-filter.md) |
+| 20260602-1417 | 知识库能力增强 | 🔧 已完成开发 | 知识库能力增强分期：文档级权限/检索日志（P1）、Rerank/改写/质量评估（P2）；分类树形化、批量移动、搜索跟随分类已上线。 | [设计](system/knowledge-base/knowledge-base-enhancement-design.md) | [计划](system/knowledge-base/knowledge-base-dev-plan.md) |
 | 20260908-1606 | 知识库 Excel 行级分块（表头注入 + 格式前置判定） | 🔧 已完成开发 | 上传 Excel 时按「一行数据 = 一个 chunk」分块，表头字段名注入每个数据行 chunk（键值对形式），使单个商品/记录可独立命中检索。 | [设计](system/knowledge-base/excel-row-chunking-design.md) | — |
 | 20260716-2107 | 租户积分充值与计费 | 🔧 已完成开发 | 预付费积分（credit）充值 + 对话消耗积分 + 余额报警 + 账单查询。 | [设计+计划](system/saas/tenant-credit-billing-design.md) / [LLM 计费接入设计](system/saas/llm-billing-integration-design.md) / [开发计划](plans/plan-llm-billing-integration.md) / [qwen3.7-flash 分段计价计划](plans/plan-qwen3-7-flash-tiered-pricing.md) / [qwen3.7-flash 平替计划](plans/plan-qwen3-7-flash-replacement.md) / [上下文缓存优化计划](plans/plan-qwen3-7-flash-context-cache-optimization.md) / [工具结果截断计划](plans/plan-tool-result-truncation.md) | — |
-| 20260730-1649 | 连接中心 | 🔧 已完成开发 | 租户前台新增「连接中心」一级菜单（`/t/:tenant_id/connections`），单页面 4 Tab：API 配置 / 环境变量 / 内置连接器 / 自定义连接器。 | [设计](system/connection-center-design.md) | [计划](plans/plan-connection-center.md) |
+| 20260730-1649 | 连接中心 | 🔧 已完成开发 | 租户前台新增「连接中心」一级菜单（`/t/:tenant_id/connections`），单页面 4 Tab：API 配置 / 环境变量 / 内置连接器 / 自定义连接器。 | [设计](system/connection-center-design.md) | — |
 
 ## 数字员工 / 子智能体
 
@@ -104,8 +104,8 @@
 | 20260623-0807 | 旅游报价价格解析性能优化 | ✅ 已完成开发。酒店、景点门票/项目、行程解析均已改为 DeepSeek V4 Pro 关闭推理；酒店用候选压缩短 prompt，景点保留 LLM 主路径并新增团队票优先后处理，行程解析补充无项目景点/活动名原样保留自检。 | [设计](system/design-travel-quote-price-parser-performance.md) | — |
 | 20260518-1544 | 酒店价格表六列格式升级 + 房型合并解析 | ✅ 已完成开发。 | [设计](subagent/travel-consultant/hotel_excel_to_kb_design.md) | — |
 | 20260827-1221 | 酒店报价房型自动解析 + 含早写入备注 | ✅ 已完成开发。 | — | — |
-| 20260622-0926 | 旅游报价酒店局部替换 | 客户换酒店时只重算住宿费用，其他 items 不变；按城市定位、生成新报价单。 | [设计](system/design-travel-quote-hotel-swap.md) | [计划](plans/plan-travel-quote-hotel-swap.md) |
-| 20260623-1323 | 报价单生成支持指定酒店 | ✅ 已完成开发 generate.py 新增可选参数 hotel_overrides，客户明确指定的酒店一开始就生效。 | [设计](subagent/travel-consultant/generate-quote-hotel-override-design.md) | [开发计划](plans/plan-generate-quote-hotel-override.md) |
+| 20260622-0926 | 旅游报价酒店局部替换 | 客户换酒店时只重算住宿费用，其他 items 不变；按城市定位、生成新报价单。 | [设计](system/design-travel-quote-hotel-swap.md) | — |
+| 20260623-1323 | 报价单生成支持指定酒店 | ✅ 已完成开发 generate.py 新增可选参数 hotel_overrides，客户明确指定的酒店一开始就生效。 | [设计](subagent/travel-consultant/generate-quote-hotel-override-design.md) | — |
 | 20260830-1400 | 旅游报价多人团动态车辆组合 | ✅ 已完成开发 车型推荐改为动态规划，按“最少车辆数 → 对应计价模式总单价最低 → 空座最少”选择组合；公里计价使用 per_km_rate 比较并按车型分别计价汇总，… | — | — |
 | 20260715-1816 | Markdown 中文 PDF 渲染修复 | ✅ 已完成开发 md_to_pdf 改为 Markdown→HTML 后优先使用 Playwright/Chromium 打印，fpdf2 仅作带告警降级；… | — | — |
 | 20260812-1500 | HTML 生成清洗与长文档预览修复 | ✅ 已完成开发 write 工具支持从“模型说明文字 + ```html 围栏 + 尾部说明”中准确提取完整 HTML，同时保留 Markdown 内普通代码块；… | — | — |
@@ -128,17 +128,17 @@
 | 20260811-1013 | weixin-cli 第一方微信操作 CLI / MCP Provider | ✅ 已完成开发：8 个 MCP 工具（probe/chat_search/name_resolve/message_send(+v2 Runtime 签名许可)/history_read/unread_list/session_observer）+ 服务端代理计费（moonshot/kimi-k3 白名单 + DPAPI 激活）+ C5 便携打包与插件 Host 交付；205 用例。原路线图文章/公众号域未产品化（转向会话观察族）。遗留：kimi-k3 价目部署、泄漏 key 轮换。 | [设计](design/weixin/weixin-cli-design.md) | — |
 | 20260806-1318 | 协会信息收集客户端（交付产品） | ✅ 已交付客户（2026-08-10）：Electron GUI（NSIS 安装包）+ 内嵌 PyInstaller CLI + 服务端代理计费/激活码（/api/client/v1/*），四步流水线（文心联网采集→官网 Playwright 采集→微信搜一搜搜姓名→手机号取证）产出 Excel；约 290 用例。交付后修复激活页地址与停止按钮；部署手册保留，前身内部工具（enrichment-cli/ui）过时文档已删。 | [设计](tools/association-client-design.md) / [部署手册](tools/association-client-deployment.md) | — |
 | 20260917-1422 | BOSS 简历识别去 OCR 化（GLM-5.3-Flash 多模态） | ✅ 已完成开发：客户端只交图，云端 VL 一次评估姓名/总结/评分/key_info（11s/份），姓名门防点错人、文本不可信防计费造假，识别费 1 积分/份成功即扣；commit 5d14e64d。 | [设计](design/desktop-automation/boss-resume-vl-recognition-design.md) | — |
-| 20260819-1724 | 邮件工具整体审查与整改 | ✅ 已完成开发：email_process 三合一（send/read/download_attachments 确定性分发）+ email_lib 拆分 + 异步包裹/超时/错误脱敏等规范修复；2026-10-09 验收通过。 | [审查](tools/email/email-tool-audit.md) | [开发计划](plans/plan-excel-etl-and-email.md) |
+| 20260819-1724 | 邮件工具整体审查与整改 | ✅ 已完成开发：email_process 三合一（send/read/download_attachments 确定性分发）+ email_lib 拆分 + 异步包裹/超时/错误脱敏等规范修复；2026-10-09 验收通过。 | [审查](tools/email/email-tool-audit.md) | — |
 | 20260630-1555 | PDF 工具质量验证增强 | ✅ 已完成开发：inspect/render_pages/validate 操作、结构化检查、生成后自动校验、页码语义统一、依赖探测、Playwright HTML 转 PDF、图片 inline 双入口；2026-10-09 验收通过。 | [设计](tools/pdf/pdf_tool_design.md) | — |
-| 20260819-1127 | 多源脏 Excel → 标准模板 LLM 抽取填充 | ✅ 已完成开发：excel-to-template skill 管线（render_llm_view 语义渲染+脱敏往返、LLM 抽取+确定性校验回喂修复、子进程 LLM 计量、文件/邮件双入口）；2026-10-09 验收通过。 | [调研+决议](tools/excel/excel-etl-gap-analysis.md) | [开发计划](plans/plan-excel-etl-and-email.md) |
-| 20260720-2104 | Excel 智能模板填充工具（样例 + 数据 → 按版式生成） | ✅ 已完成开发：无状态 fill_template（AI 数据感知结构分析+行数不匹配处理+样式位级保留），2026-09-23 补缺 data 首拍引导兜底；2026-10-09 验收通过。 | [设计](tools/excel/excel-template-ai-design.md) | [开发计划](plans/plan-excel-template-ai.md) |
+| 20260819-1127 | 多源脏 Excel → 标准模板 LLM 抽取填充 | ✅ 已完成开发：excel-to-template skill 管线（render_llm_view 语义渲染+脱敏往返、LLM 抽取+确定性校验回喂修复、子进程 LLM 计量、文件/邮件双入口）；2026-10-09 验收通过。 | [调研+决议](tools/excel/excel-etl-gap-analysis.md) | — |
+| 20260720-2104 | Excel 智能模板填充工具（样例 + 数据 → 按版式生成） | ✅ 已完成开发：无状态 fill_template（AI 数据感知结构分析+行数不匹配处理+样式位级保留），2026-09-23 补缺 data 首拍引导兜底；2026-10-09 验收通过。 | [设计](tools/excel/excel-template-ai-design.md) | — |
 | 20260819-1724 | 工具注册与 Agent 解耦 | ✅ 已完成开发。 | [设计](tools/tool-auto-discovery-design.md) / [总体设计](plans/plan-agent-registration-decoupling.md) | [开发计划](plans/plan-agent-registration-decoupling.md) |
 | 20260821-0835 | 普通工具特殊分支删除与统一执行链 | ✅ 已完成开发。 | [设计与开发计划](plans/plan-tool-outcome-presentation-decoupling.md) | [计划](plans/plan-tool-outcome-presentation-decoupling.md) |
-| 20260630-1713 | 文件生成类工具入参语义拆分与路由健壮性 | ✅ 已完成开发。Word/PDF/Excel/PPT 通用 `context` 同时承载"用户目的 + 待处理正文 + 隐含参数"导致内部 LLM 路由不稳定、转换正文被工具指令污染。 | [设计](tools/tool-input-contract-redesign.md) | [开发计划](tools/tool-input-contract-redesign-dev-plan.md) |
+| 20260630-1713 | 文件生成类工具入参语义拆分与路由健壮性 | ✅ 已完成开发。Word/PDF/Excel/PPT 通用 `context` 同时承载"用户目的 + 待处理正文 + 隐含参数"导致内部 LLM 路由不稳定、转换正文被工具指令污染。 | [设计](tools/tool-input-contract-redesign.md) | — |
 | 20260714-1911 | skill_complete 工具彻底删除 | ✅ 已完成开发。 | [设计](system/skill-complete-removal-design.md) | — |
-| 20260612-0940 | 文件工具四件套（read/write/edit/cp）v2 | ✅ 已完成开发。拆分旧 text_file_writer/file_reader/file_list 为四个原子工具，支持 SKILL.md `<SKILL_ROOT>` 占位符。 | [设计 v2](tools/text-file/file_tools_redesign_v2.md) | [开发计划 v2](tools/text-file/file_tools_redesign_v2_dev_plan.md) |
+| 20260612-0940 | 文件工具四件套（read/write/edit/cp）v2 | ✅ 已完成开发。拆分旧 text_file_writer/file_reader/file_list 为四个原子工具，支持 SKILL.md `<SKILL_ROOT>` 占位符。 | [设计 v2](tools/text-file/file_tools_redesign_v2.md) | — |
 | 20260518-2225 | 浏览器自动化工具 | 网页自动化操作、数据采集、Markdown 转换 | [设计](tools/browser/browser_automation_design.md) | — |
-| 20260602-1649 | 知识库检索租户隔离 | 知识库检索工具添加 tenant_id 过滤，修复跨租户数据泄露 + 分块 overlap 修复。2026-06-02 | [设计](tools/knowledge-base-search-tenant-isolation-design.md) | [计划](tools/knowledge-base-search-tenant-isolation-dev-plan.md) |
+| 20260602-1649 | 知识库检索租户隔离 | 知识库检索工具添加 tenant_id 过滤，修复跨租户数据泄露 + 分块 overlap 修复。2026-06-02 | — | — |
 | 20260512-1711 | PPT 生成工具（基础版） | ✅ 已完成开发；初始架构决策已并入现行整合版设计文档（2026-10-09 文档整合）。 | [设计（整合版）](tools/ppt/ppt_tool_design.md) | — |
 | 20260630-2158 | PPT 工具增强与 HTML 转 PPTX 导出 | ✅ 已完成开发（Phase 0-8，2026-07-01）；设计与开发计划已并入整合版设计文档（2026-10-09 文档整合）。 | [设计（整合版）](tools/ppt/ppt_tool_design.md) | — |
 | 20260518-2226 | Word 工具 | Word 文档读取与生成 | [设计](tools/word/word_tool_design.md) | — |
@@ -146,13 +146,13 @@
 | 20260509-1748 | Excel 工具 | Excel 文件读取与数据提取 | [设计](tools/excel/excel_tool_design.md) | — |
 | 20260609-1552 | Excel 工具重构 | ✅ 已完成开发 移除 analyze 和 chart 操作（由数据分析工具替代），增强 read 操作（复制 FileReaderTool 的文档级读取能力）。重构结果已并入总设计（重构专项文档 2026-10-09 清理）。 | [设计](tools/excel/excel_tool_design.md) | — |
 | 20260518-2227 | HTTP API 适配器 | 通用 HTTP API 调用适配器 | [设计](tools/http_api_adapter_design.md) | [指南](tools/http_api_skill_developer_guide.md) |
-| 20260519-1036 | 文本文件生成工具 | 文本/Markdown 文件生成与内容写入优化 | [设计](tools/text-file/text_file_generator_design.md) | — |
+| 20260519-1036 | 文本文件生成工具 | 文本/Markdown 文件生成与内容写入优化 | [设计 v2](tools/text-file/file_tools_redesign_v2.md) | — |
 | 20260622-1311 | Pandoc 安装与部署 | word_process 工具的 md_to_word 操作依赖 Pandoc 命令行工具。 | [安装部署指南](tools/md-to-word/pandoc-install-guide.md) | — |
-| 20260622-1416 | 酒店知识库搜索工具（hotel_search） | 仿 attraction_search 新增酒店专项搜索工具，名称优先+向量兜底检索 source_type='hotel_resource'，返回酒店信息+价格明细表（chunk_index=1，… | [设计](subagent/travel-consultant/hotel_search_tool_design.md) | [计划](plans/plan-hotel-search-tool.md) |
+| 20260622-1416 | 酒店知识库搜索工具（hotel_search） | 仿 attraction_search 新增酒店专项搜索工具，名称优先+向量兜底检索 source_type='hotel_resource'，返回酒店信息+价格明细表（chunk_index=1，… | [设计](subagent/travel-consultant/hotel_search_tool_design.md) | — |
 | 20260514-1212 | 景点知识库搜索工具（attraction_search） | 旅游顾问子智能体的景点专项搜索工具，纯向量检索 source_type='attraction_resource'。补登记（此前漏登）。2026-05-14 | [设计](subagent/travel-consultant/attraction_search_tool_design.md) | — |
 | 20260701-2001 | x-to-image 内容转图片服务 | 将文本/Markdown/HTML 渲染为一张尺寸可控的长图(PNG)，Playwright **headless** 全页截图 + Pillow 拼接/截断/体积控制；后续演进 HTML 图片 base64 内联（租户身份 + ImageRegistry）并被企微客服渠道长图复用（演进记录见设计 §13）。 | [设计](tools/x-to-image/x-to-image-design.md) | — |
-| 20260614-2003 | 研学报价技能 Prompt 稳定性优化（方案 A） | ① 同一行程多次报价金额漂移，通过固化 itinerary_parser 的 prompt 规则收敛方差，实测 5 次连续调用 hash 完全一致；② 重构 generate.py 返回结构：… | [设计](system/design-travel-quote-prompt-stability.md) | [计划](plans/plan-travel-quote-prompt-stability.md) |
-| 20260612-0941 | 文件操作工具集重新设计 v2 | ✅ 已完成开发。拆分为 read/write/edit/cp 四个工具（对齐 Claude Code 命名），删除 file_list 工具，edit 三种编辑模式（replace_string/replace_section/replace_lines）。 | [设计](tools/text-file/file_tools_redesign_v2.md) | [计划](tools/text-file/file_tools_redesign_v2_dev_plan.md) |
+| 20260614-2003 | 研学报价技能 Prompt 稳定性优化（方案 A） | ① 同一行程多次报价金额漂移，通过固化 itinerary_parser 的 prompt 规则收敛方差，实测 5 次连续调用 hash 完全一致；② 重构 generate.py 返回结构：… | [设计](system/design-travel-quote-prompt-stability.md) | — |
+| 20260612-0941 | 文件操作工具集重新设计 v2 | ✅ 已完成开发。拆分为 read/write/edit/cp 四个工具（对齐 Claude Code 命名），删除 file_list 工具，edit 三种编辑模式（replace_string/replace_section/replace_lines）。 | [设计](tools/text-file/file_tools_redesign_v2.md) | — |
 | 20260518-2228 | Word 客户模板格式参考生成 | ✅ 已完成开发（三智能体流程）。 | [设计](tools/word/word_tool_design.md) | — |
 | 20260518-2229 | Word 模板占位符填充增强（场景一） | ✅ 已完成开发（三智能体流程）。 | [设计](tools/word/word_tool_design.md) | — |
 
@@ -165,8 +165,8 @@
 | 20261009-1452 | 微信客服完整 Markdown 交付 | ✅ 已完成开发：默认原文前缀与原生完整 MD，仅正文图片考虑长图；待真机验收。 | [设计](channel/wecom_kf/wecom_kf_design.md#十四2026-10-09-长答复交付调整) | — |
 | 20261008-1340 | 微信客服原渠道恢复与 AgentRunner 接入 | ✅ 已完成开发：原渠道接入独立 Runner，误重构已移除，迁移历史保留；agent2 已发布并真机验收通过（文本/语音/合并/取代）。 | [设计](system/agent-application-architecture-design.md) | [计划](plans/plan-wecom-kf-channel-restore.md) |
 | 20260916-1830 | 公众号自有号清单源（历史文章导入，主通道） | ✅ 已完成开发：租户扫码绑定自有号，定期拉「发表记录」清单走既有 URL 直采入库（首次回填上限+增量重叠即停，r3 修生产超量回填事故）；2026-10-09 验收通过。 | [设计](system/wechat-mp/wechat-mp-list-source-design.md) | — |
-| 20260914-1901 | 微信公众号内容入知识库 | ✅ 已完成开发：回调/URL 直采/手动粘贴/freepublish 接口对账多通道入库，图片 VL 解析（门禁放开+r2 白描指令/200 张护栏）、content_md 组装、500 字总结、按 token 计费；WP0–WP13 全交付，2026-10-09 验收通过。 | [设计](system/wechat-mp/wechat-mp-knowledge-ingestion-design.md) | [计划](plans/plan-wechat-mp-knowledge-ingestion.md) |
-| 20260820-2131 | 微信客服处理超时等待提示 | ✅ 已完成开发（2026-08-20 开发+单测完成，已部署真机验证）。 | [计划](plans/plan-wecom-kf-waiting-indicator.md) | — |
+| 20260914-1901 | 微信公众号内容入知识库 | ✅ 已完成开发：回调/URL 直采/手动粘贴/freepublish 接口对账多通道入库，图片 VL 解析（门禁放开+r2 白描指令/200 张护栏）、content_md 组装、500 字总结、按 token 计费；WP0–WP13 全交付，2026-10-09 验收通过。 | [设计](system/wechat-mp/wechat-mp-knowledge-ingestion-design.md) | — |
+| 20260820-2131 | 微信客服处理超时等待提示 | ✅ 已完成开发（2026-08-20 开发+单测完成，已部署真机验证）。 | — | — |
 | 20260819-1322 | 微信客服回复长图化 + 废除渠道约束提示词 | ✅ 已完成开发（2026-08-19 开发+单测完成，已部署真机验证）。 | [配额方案（含 2026-08 变更）](channel/wecom_kf/reply_quota_control_plan.md) | — |
 | 20260822-1022 | wecom_kf 多媒体消息支持 | ✅ 已完成开发。 | — | — |
 | 20260619-2043 | 钉钉渠道接入 | ✅ 已完成开发。钉钉开放平台企业机器人接入，支持单聊/群聊消息收发、签名验证（HmacSHA256）、媒体文件处理、长消息拆分。 | 设计（旧文档已移除） / [接入手册](channel/dingtalk/onboarding_guide.md) | [计划](channel/dingtalk/implementation_plan.md) |
@@ -204,7 +204,7 @@
 |---|------|------|---------|---------|
 | 20260602-0956 | 前端 Office 预览 | ✅ 已完成开发：Word/Excel/PPT 三格式预览（整页/整表缩放、10MB/20MB/1000 行硬门槛、FileTypeIcon 类型徽标、懒加载分包），511 项单测与手动验收全过。 | [设计](research/frontend-office-preview-design.md) | — |
 | 20260922-1931 | 租户前台知识库「访问授权」矩阵 | ✅ 已完成开发：知识库页面「访问授权」矩阵弹框（行=一级栏目、列=数字员工）三态复选框自助配置栏目授权——半选=未配置默认全允许、首勾 confirm 收窄、取消全部勾选恢复默认、保存原样保留跨租户共享项（复用现有接口后端零改动）；三态语义同步管理后台 TenantMgmt「知识库关联」弹框（本租户栏目三态、共享栏目二态）。2026-10-10 agent2 全链路验证：矩阵渲染/首勾确认文案/半选→勾选流转/保存落库（own 项 owner_tenant_id=null）/共享项原样保留/取消勾选恢复未配置/后台三态一致；验证后租户配置已还原。 | — | — |
-| 20260720-1459 | 执行中任务切走不打断（后台继续执行 + 侧栏完成角标；原名「多会话后台流式」） | ✅ 已完成开发：会话后台执行不阻塞切换。2026-10-10 agent2 E2E 五步验证：长任务发出→侧栏 spinner；点新会话无 confirm 弹窗、后台任务继续执行并完成落库（assistant 回复持久化）；点回原会话显示完整回复、角标清除；新建会话携带所选数字员工无弹窗。「spinner→完成小点」瞬时视觉因截图缓存未独立留证，功能由后端落库与返回展示证实。 | [设计](system/multi-session-background-streaming-design.md) | [开发计划](plans/plan-multi-session-background-streaming.md) |
+| 20260720-1459 | 执行中任务切走不打断（后台继续执行 + 侧栏完成角标；原名「多会话后台流式」） | ✅ 已完成开发：会话后台执行不阻塞切换。2026-10-10 agent2 E2E 五步验证：长任务发出→侧栏 spinner；点新会话无 confirm 弹窗、后台任务继续执行并完成落库（assistant 回复持久化）；点回原会话显示完整回复、角标清除；新建会话携带所选数字员工无弹窗。「spinner→完成小点」瞬时视觉因截图缓存未独立留证，功能由后端落库与返回展示证实。 | [设计](system/multi-session-background-streaming-design.md) | — |
 | 20260526-1120 | 前端样式统一 | 统一 UI 组件库、语义化 Token、变体系统 | [设计](research/frontend/phase1-unify-foundation-design.md) | [计划](research/frontend/phase1-unify-foundation-plan.md) |
 | 20260602-1420 | 租户定制提示词前端入口（恢复 + 上线侧栏菜单） | ✅ 已完成开发。 | [设计](infrastructure/prompt-lifecycle-design.md) | — |
 | 20260602-1421 | 定制提示词页模板文件上传 | ✅ 已完成开发。 | [设计](infrastructure/prompt-lifecycle-design.md) | — |
