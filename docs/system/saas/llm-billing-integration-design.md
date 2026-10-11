@@ -1,7 +1,6 @@
 # LLM 计费接入改造设计
 
 > 状态：🔧 部分完成（Phase 1-3 代码完成，Phase 4 文档同步完成，待补集成测试）
-> 开发计划：[plan-llm-billing-integration.md](../../plans/plan-llm-billing-integration.md)
 > 关联文档：[tenant-credit-billing-design.md](./tenant-credit-billing-design.md)
 
 ## 1. 背景与目标

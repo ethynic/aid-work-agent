@@ -2,7 +2,6 @@
 
 > 状态：✅ 调研完成（2026-08-16）
 > 背景：deepseek-v4-flash 官方 API 价格上调至 3.0/9.0 元/百万 token（cached 0.1），需在百炼（DashScope）寻找平替模型
-> 关联开发计划：[plan-qwen3-7-flash-replacement.md](../plans/plan-qwen3-7-flash-replacement.md)
 
 ## 一、背景与需求约束
 
@@ -41,8 +40,7 @@ EXP-CALL3: cached_tokens=21808（命中）
 
 **重要修正**：早前判定「qwen3.7-flash 无缓存」是误判 —— 当时只测了**隐式**缓存（纯字符串 content、无 `cache_control`），而 qwen3.7-flash 只支持**显式**缓存。用 `cache_control` 严格重测后命中完美，与官方文档（qwen3.7-flash 在显式缓存支持列表）一致。
 
-**隐式缓存补充验证（2026-08-17）**：legacy 与 MaaS（`ws-hjp2aklyr0ramcne.cn-beijing.maas`）两条端点复测 25K 前缀，结论——隐式缓存**仅在默认思考模式下偶发命中（~30%）**，`enable_thinking=false` 下完全无命中（生产强制 false → 隐式对生产不可用）。显式末尾标记（cache_control 放消息数组最后一条）覆盖全数组、13/27 块均完整命中，为生产唯一可行全量缓存路径。详见[上下文缓存优化计划](../plans/plan-qwen3-7-flash-context-cache-optimization.md)。
-
+**隐式缓存补充验证（2026-08-17）**：legacy 与 MaaS（`ws-hjp2aklyr0ramcne.cn-beijing.maas`）两条端点复测 25K 前缀，结论——隐式缓存**仅在默认思考模式下偶发命中（~30%）**，`enable_thinking=false` 下完全无命中（生产强制 false → 隐式对生产不可用）。显式末尾标记（cache_control 放消息数组最后一条）覆盖全数组、13/27 块均完整命中，为生产唯一可行全量缓存路径。
 **缓存计费口径**（官方文档）：显式缓存 **创建按输入单价 125%、命中按 10%**；隐式缓存命中按 20%（不可关闭）。显式缓存有效期 5 分钟（命中后重置）。
 
 ## 三、思考模式问题（关键发现）
@@ -110,6 +108,4 @@ qwen3.5-flash / qwen3.6-flash / qwen3.5-plus / qwen3.7-flash 默认开启**思�
 ## 关联文档
 
 - [小米 MiMo-v2.5 平替可行性调研（扩展）](./mimo-v2.5-replacement-research.md)（2026-08-16：mimo-v2.5 满足三条硬约束升格为第二备选，qwen3.7-flash 维持首选）
-- [qwen3.7-flash 平替实施计划](../plans/plan-qwen3-7-flash-replacement.md)
-- [qwen3.7-flash 分段计价开发计划](../plans/plan-qwen3-7-flash-tiered-pricing.md)
 - [LLM 计费接入改造设计](../system/saas/llm-billing-integration-design.md)

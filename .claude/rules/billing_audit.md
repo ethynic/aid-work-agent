@@ -290,5 +290,4 @@ async def _call_aliyun_asr(self, ...):
 
 - [LLM 调用计费缺失审计](../../docs/plans/llm-billing-gap-audit.md) - 2026-08-14 审计报告（18 处缺口 + 7 条遗漏根因分析）
 - [LLM 计费接入改造设计](../../docs/system/saas/llm-billing-integration-design.md) - 上次改造设计文档
-- [LLM 计费接入改造开发计划](../../docs/plans/plan-llm-billing-integration.md) - 上次改造开发计划
 - [租户信用计费设计](../../docs/system/saas/tenant-credit-billing-design.md) - 整体计费架构

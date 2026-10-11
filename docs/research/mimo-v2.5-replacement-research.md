@@ -210,5 +210,3 @@ MiMo-v2.5 是**原生全模态**（text+image+audio+video→text），合理对�
 
 - [deepseek-v4-flash 平替模型调研](./deepseek-v4-flash-replacement-research.md)（主调研，已定案 qwen3.7-flash）
 - [小米 MiMo API 官方文档摘要](../../ext/mimo-mi-api-docs.md)（价格/缓存/API/限流/错误码速查）
-- [qwen3.7-flash 平替实施计划](../plans/plan-qwen3-7-flash-replacement.md)
-- [qwen3.7-flash 分段计价开发计划](../plans/plan-qwen3-7-flash-tiered-pricing.md)

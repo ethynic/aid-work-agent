@@ -71,7 +71,7 @@
 | 20260902-2228 | 彻底移除 demo 模式与 SAAS_ENABLED 开关 | ✅ 已完成开发。demo 模式（`DEMO_ENABLED`/`VITE_DEMO_ENABLED` 控制）已无人使用且与租户模式并存造成大量死分支；系统定位即 SaaS 平台。 | — | — |
 | 20260602-1417 | 知识库能力增强 | 🔧 已完成开发 | 知识库能力增强分期：文档级权限/检索日志（P1）、Rerank/改写/质量评估（P2）；分类树形化、批量移动、搜索跟随分类已上线。 | [设计](system/knowledge-base/knowledge-base-enhancement-design.md) | [计划](system/knowledge-base/knowledge-base-dev-plan.md) |
 | 20260908-1606 | 知识库 Excel 行级分块（表头注入 + 格式前置判定） | 🔧 已完成开发 | 上传 Excel 时按「一行数据 = 一个 chunk」分块，表头字段名注入每个数据行 chunk（键值对形式），使单个商品/记录可独立命中检索。 | [设计](system/knowledge-base/excel-row-chunking-design.md) | — |
-| 20260716-2107 | 租户积分充值与计费 | 🔧 已完成开发 | 预付费积分（credit）充值 + 对话消耗积分 + 余额报警 + 账单查询。 | [设计+计划](system/saas/tenant-credit-billing-design.md) / [LLM 计费接入设计](system/saas/llm-billing-integration-design.md) / [开发计划](plans/plan-llm-billing-integration.md) / [qwen3.7-flash 分段计价计划](plans/plan-qwen3-7-flash-tiered-pricing.md) / [qwen3.7-flash 平替计划](plans/plan-qwen3-7-flash-replacement.md) / [上下文缓存优化计划](plans/plan-qwen3-7-flash-context-cache-optimization.md) / [工具结果截断计划](plans/plan-tool-result-truncation.md) | — |
+| 20260716-2107 | 租户积分充值与计费 | 🔧 已完成开发 | 预付费积分（credit）充值 + 对话消耗积分 + 余额报警 + 账单查询。 | [设计+计划](system/saas/tenant-credit-billing-design.md) / [LLM 计费接入设计](system/saas/llm-billing-integration-design.md) | — |
 | 20260730-1649 | 连接中心 | 🔧 已完成开发 | 租户前台新增「连接中心」一级菜单（`/t/:tenant_id/connections`），单页面 4 Tab：API 配置 / 环境变量 / 内置连接器 / 自定义连接器。 | [设计](system/connection-center-design.md) | — |
 
 ## 数字员工 / 子智能体
@@ -175,7 +175,7 @@
 | 20260518-2230 | 企业微信集成 | 应用消息收发、回调处理 | [设计](channel/wecom/wecom-integration.md) | — |
 | 20260518-2216 | 飞书 / 钉钉集成 | 飞书和钉钉渠道适配器实现 | 设计（旧文档已移除） | — |
 | 20260619-1950 | 飞书渠道对接（完整实施） | 修复 FeishuAdapter 错误实现（AES 密钥、签名验证），补齐 crypto/media 子模块、连接池复用、长消息拆分、速率限制、欢迎消息，… | [方案](channel/feishu/implementation_plan.md) / [实施](channel/feishu/integration_guide.md) | — |
-| 20260629-2159 | 微信客服转人工工具优化（schema + 渠道隔离） | ✅ 已完成开发 优化 transfer_to_human：①reason 改为必填；②渠道隔离完全由工具 execute 段的 get_kf_context 判断，… | [设计](channel/wecom_kf/transfer_to_human_optimization.md) | [计划](channel/wecom_kf/transfer_to_human_optimization_plan.md) |
+| 20260629-2159 | 微信客服转人工工具优化（schema + 渠道隔离） | ✅ 已完成开发 优化 transfer_to_human：①reason 改为必填；②渠道隔离完全由工具 execute 段的 get_kf_context 判断，… | [设计](channel/wecom_kf/transfer_to_human_optimization.md) | — |
 | 20260820-1623 | 渠道上下文丢失修复（channel_messages 事务化 + 连续 user 兜底 + 合并写入时机 + send_response 统一封装） | 已通过用户手工测试。P0-1/P0-2/P0-3 全部落地，**一次改造全渠道复用**（wecom_kf/wecom/wecom_personal_rpa/dingtalk/feishu 共 6 个调用点统一走 `ChannelSessionManager.process_and_persist`）。 | [调研](incidents/wecom-kf-context-loss-research.md) | — |
 | 20260629-2200 | wecom_kf 用户撤回消息处理（同批次剔除 + 跨批次标记 + 后台可见） | 已完成：①撤回事件识别（origin=4，event_type=user_recall_msg，读 event.recall_msgid 而非 event.msgid）+ 事件去重；… | — | [开发计划](channel/wecom_kf/message_recall_plan.md) |
 | 20260820-1624 | 渠道/web 上下文重建两大病根修复（来源分流 + 窗口裁剪方向） | #33 的 P0 修复未覆盖的两个真因，均为读取侧 bug。 | [调研](incidents/wecom-kf-context-loss-research.md) §9~§10 | — |
@@ -196,7 +196,7 @@
 |---|------|------|---------|---------|
 | 20260518-2231 | 多租户 SaaS 架构 | 租户隔离、订阅计费、权限管理、管理后台 | [设计](system/saas/multi-tenant-saas-design.md) | — |
 | 20260518-2232 | 租户级 Skills | 每个租户维护自己的 Skills 文件夹，按需加载 | [设计](system/saas/tenant_skills_design.md) | — |
-| 20260518-2233 | 订阅权限合并 | 订阅计划与功能权限的统一管理 | [设计](system/saas/subscription_permission_merge_plan.md) | — |
+| 20260518-2233 | 订阅权限合并 | 订阅计划与功能权限的统一管理 | 设计（文档已清理） | — |
 | 20260924-2047 | ✅ 网页端会话页面 | 管理员查看 web 端聊天记录：三栏布局（用户列表+用户名搜索 / 会话列表+智能体名称搜索 / 消息记录），菜单入口在「办公软件会话」下，仅管理员可见。后端 /api/saas/web-sessions/*（chat_sessions/chat_messages，租户隔离）。 | — | — |
 
 ## 前端

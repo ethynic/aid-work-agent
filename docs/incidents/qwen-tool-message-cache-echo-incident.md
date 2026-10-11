@@ -4,7 +4,7 @@
 > 环境：测试环境 agent2.aidingyi.cn
 > 影响：after-sales 会话历史页显示智能体回复为一长段 JSON（tool_result 序列化），非自然语言
 > 根因：`src/llm/providers/base.py` 显式缓存"末尾标记"逻辑把 **tool 消息**的纯字符串 content 改写成多模态 content 数组，违反 OpenAI 兼容规范；qwen3.7-flash 对非法格式**概率性**按 Anthropic 语义回显工具结果
-> 关联文档：[plan-qwen3-7-flash-context-cache-optimization.md](../plans/plan-qwen3-7-flash-context-cache-optimization.md)、[deepseek-v4-flash-replacement-research.md](../research/deepseek-v4-flash-replacement-research.md)
+> 关联文档：[deepseek-v4-flash 平替模型调研](../research/deepseek-v4-flash-replacement-research.md)
 
 ---
 
@@ -119,7 +119,7 @@ api2 那 13 次"末尾 tool"调用的 usage 显示：`cached_tokens ≈ prompt_t
 
 **关键结论**：格式 A（bug 行为）实测 20+ 次正常却真实出过 1 次事故，证明**回显风险无法靠小样本排除**。qwen 官方文档（[ext/qwen-llm-context-cache.md](../../ext/qwen-llm-context-cache.md) §合并工具结果）虽然展示"块内 tool_call_id + cache_control"写法（格式 B），但同样无法排除风险。
 
-**决策**：按项目「稳定性和可预测性优先于创造力」设计原则，**正确性优先，不冒回显风险**——采用格式 D/C（tool 消息保持纯字符串），接受工具轮缓存相对退化（绝对成本 ~0.001 元/次）。后续如需进一步压成本，正确方向是 [plan-tool-result-truncation.md](../plans/plan-tool-result-truncation.md)（Phase 2 工具结果截断），而非冒险用非标准格式。
+**决策**：按项目「稳定性和可预测性优先于创造力」设计原则，**正确性优先，不冒回显风险**——采用格式 D/C（tool 消息保持纯字符串），接受工具轮缓存相对退化（绝对成本 ~0.001 元/次）。后续如需进一步压成本，正确方向是 Phase 2 工具结果截断，而非冒险用非标准格式。
 
 ### 5.3 测试结果
 
@@ -180,6 +180,5 @@ reviewer 直连 api2/api3 容器复核原始日志，确认：
 
 ## 八、关联文档
 
-- [qwen3.7-flash 上下文缓存优化方案](../plans/plan-qwen3-7-flash-context-cache-optimization.md)（引入"末尾标记"策略的原始方案，Phase 2 工具结果截断待做）
 - [deepseek-v4-flash 平替模型调研](../research/deepseek-v4-flash-replacement-research.md)（qwen3.7-flash 选型依据）
 - [qwen 官方上下文缓存文档快照](../../ext/qwen-llm-context-cache.md)（含"合并工具结果 + 块内 tool_call_id"官方写法）

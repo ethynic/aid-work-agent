@@ -1,6 +1,6 @@
 """qwen3.7-flash enable_thinking / 显式缓存开关单元测试
 
-覆盖（plan-qwen3-7-flash-context-cache-optimization.md 测试方案）：
+覆盖（qwen3.7-flash 显式缓存开关与末尾标记策略）：
 - _format_messages 缓存开：最后一条消息转数组 + cache_control，首条 system 保持字符串 content
 - _format_messages 缓存关：全部走原逻辑（字符串 content）
 - 仅最后一条消息被标记（末尾标记覆盖整个消息数组）
