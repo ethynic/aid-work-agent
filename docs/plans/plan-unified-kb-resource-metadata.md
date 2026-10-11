@@ -11,7 +11,7 @@
 | Phase 2 | 写读路径切 metadata（importer / PUT / PATCH / retrievers 兼容回退读）+ 单测 | ✅ 已完成 | 2026-10-10：kb_metadata 共享模块 + 两 importer/两 PUT/PATCH/retriever getter 全切换；独立测试（3 P1）+ 独立 CR（2 P1 + 2 P2）全部修复并终审可合入；工具回退正例、PUT 端点级、注入剥离、计费回归齐备；全量回归 2347 过（1 存量无关失败） |
 | Phase 3 | 统一工具 cover_image 增强 + agent_events documents 扫描 + 测试 | ✅ 已完成 | 2026-10-10：独立测试（0 P0-P2，3 P3）+ 独立 CR（可合入，1 P2 测试缺口）全部清零；封面反解 None/异常/脏数据三分支 + `_no_truncate` 共存断言齐备；相关 6 套件 79 过 |
 | Phase 4 | 工具下线（删类 / 黄金清单 / SUBAGENT.md 改写 / 测试清理） | 🔧 4a ✅，4b 待观察期 | 2026-10-11：4a 软下线经独立测试（0 代码缺陷 + 实证迁移时序 P1）与独立 CR（可合入，P2×3 + nit 已修）双重验证；4b 删除待真机观察期 |
-| Phase 5 | 真机迁移执行（--execute → verify → 观察 ≥1 周 → --drop-chunks，需用户部署授权） | 📋 待开发 | — |
+| Phase 5 | 真机迁移执行（--execute → verify → 观察 ≥1 周 → --drop-chunks，需用户部署授权） | 🔧 测试库演练完成 | 2026-10-11：agent2/3 共享测试库（本地 env 直连）--execute 286/286 零冲突 → verify 286 全一致（exit 0）→ 幂等重跑零变更；数据抽检表文本/镜像/封面全对 |
 
 ## Phase 1 — 迁移脚本
 
@@ -70,10 +70,21 @@
 
 ## Phase 5 — 真机迁移（需用户逐次明确授权）
 
-1. 测试库演练：dry-run → execute → verify，报告留档；
+1. ✅ 测试库演练（2026-10-11，agent2/3 共享测试库——本地 env 直连，用户确认无独立本地库）：
+   - dry-run：286 文档（148 景点/138 酒店）全部可迁移、零冲突零超限
+   - `--execute`：286/286 已迁移、冲突 0、超限 0、并发 0
+   - `--verify`：286 全一致（exit 0）；幂等重跑：将迁移 0 / 幂等跳过 286（零变更）
+   - 数据抽检：景点 ticket/project 表文本 + category/category_cn/region/source_sheet 镜像齐全；酒店 price_table + address/sub_region/diamond_level 镜像齐全（旧数据顶层无 region 键故不镜像，新导入才有——镜像现实语义）；唯一带封面的景点（天空之桥 doc=1307）raw_payload.images 正确镜像
+   - 报告留档：`log/temp/travel_metadata_migrate_agent23.log`
 2. 真机：dry-run 报告确认 → execute → verify；
 3. Phase 2 代码上线后观察 ≥1 周（报价回归、聊天封面、Word 嵌图）；
 4. `--drop-chunks` 清场 + verify 复查；回退读逻辑随后续清理任务移除；
+   - ✅ **测试库已提前清场**（2026-10-11，用户授权「排除旧数据干扰，强制 metadata 单源验证」）：
+     备份 434 行表 chunk（景点 148×2 + 酒店 138，`log/temp/chunks_backup_agent23_20261011.json`）→
+     `--drop-chunks --execute` 286/286 已删除、拒绝 0 → `--verify` exit 0；残留表 chunk 行 0、
+     total_chunks 全部 2/3→1、chunk 0（摘要+向量）286 完好、payload 表键覆盖 138/138 + 148/148；
+     真实 retriever 无 chunks 可回退时取表正常（酒店 81 字价格表 / 景点 192+1043 字门票项目表）。
+     ⚠️ 影响：agent2/3 服务端在部署 Phase 2-4a 代码前，旧代码取表断供——需尽快发布。
 5. **收尾清理**：真机全量迁移 + 清场 + verify 复查通过后，Phase 1 的一次性产物——
    `scripts/migrate_travel_resource_tables_to_metadata.py`、
    `tests/unit/test_migrate_travel_resource_tables.py`、
