@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
 import { ManagementError } from '@aid/local-tool-host-core'
+import { trustedSystemPowerShell } from './dpapi.js'
 
 /** Old CLI releases do not own a Host lease. Do not run beside an unverified claimant. */
 export async function assertNoLegacyRuntimeProcess(): Promise<void> {
@@ -16,8 +17,10 @@ export async function assertNoLegacyRuntimeProcess(): Promise<void> {
   }
   Write-Output $found`
   const count = await new Promise<number>((resolve, reject) => {
-    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
-      { windowsHide: true, timeout: 15_000, maxBuffer: 4096 }, (error, stdout) => {
+    let powershell: ReturnType<typeof trustedSystemPowerShell>
+    try { powershell = trustedSystemPowerShell() } catch { reject(new ManagementError(11, '系统进程检查不可用，旧Runtime进程停止事实无法核对')); return }
+    execFile(powershell.executable, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+      { cwd: powershell.cwd, env: powershell.env, windowsHide: true, timeout: 15_000, maxBuffer: 4096 }, (error, stdout) => {
         if (error || !/^\d+$/.test(stdout.trim())) reject(new ManagementError(11, '旧Runtime进程停止事实无法核对'))
         else resolve(Number(stdout.trim()))
       })

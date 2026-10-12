@@ -101,6 +101,7 @@ function build(f, name, { inner = false, callback = 'direct', checkpoint = false
   hook = hook.replace('    StrCpy $R9 2\n  InitPluginsDir', `    StrCpy $R9 2\n\${If} $INSTDIR == "${ns(target)}"\n${write('guard_target_match=1;mode=$installMode')}\${Else}\n${write('guard_target_match=0;mode=$installMode')}\${EndIf}\n  InitPluginsDir`);
   hook = hook.replace('        Pop $R1\n        ${If} $R0 == 0', `        Pop $R1\n${write('prepare_exit=$R0;code=$R1')}        \${If} $R0 == 0`);
   hook = hook.replace('            Pop $R1\n            ${If} $R0 == 0', `            Pop $R1\n${write('prepare_exit=$R0;code=$R1')}            \${If} $R0 == 0`);
+  hook = hook.replace('      Pop $R1\n      ${If} $R0 == 0', `      Pop $R1\n${write('prepare_exit=$R0;code=$R1')}      \${If} $R0 == 0`);
   // Prove Restore owns its payload even if the earlier guard's copy is unavailable.
   hook = hook.replace('!macro customInstall\n', '!macro customInstall\n  Delete "$PLUGINSDIR\\runtime-legacy-upgrade.ps1"\n');
   fs.writeFileSync(path.join(f.root, name + '-hook.nsh'), '\uFEFF' + hook);
@@ -234,6 +235,153 @@ function prepare(f, b) {
   assert.match(result, /PREPARED|REGISTERED/);
 }
 function runValue(f) { return registry(f.upgradeRegistry, `$r=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${f.upgradeRegistry}\\Run');if($r){[string]$r.GetValue('cn.aidingyi.agent.runtime.acceptance','ABSENT');$r.Dispose()}else{'ABSENT'}`); }
+function upgrade(f, mode, installer, target, script = legacyScript) {
+  const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-Mode', mode,
+    '-AppId', 'cn.aidingyi.agent.runtime.acceptance', '-InstallerPath', installer, '-InstallDirectory', target,
+    '-SupervisorPath', native, '-FixtureRegistryId', f.id];
+  try { return { code: 0, output: execFileSync(powershell, args, { env: f.env, encoding: 'utf8', timeout: 30000 }).trim() }; }
+  catch (error) { if (error.status === null) throw error; return { code: error.status, output: `${error.stdout ?? ''}${error.stderr ?? ''}`.trim() }; }
+}
+function treeHashes(root) {
+  const result = {};
+  if (!fs.existsSync(root)) return result;
+  for (const entry of fs.readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    const file = path.join(root, entry.name);
+    if (entry.isDirectory()) for (const [child, hash] of Object.entries(treeHashes(file))) result[path.join(entry.name, child)] = hash;
+    else result[entry.name] = digest(file);
+  }
+  return result;
+}
+function onceValue(f) { return registry(f.upgradeRegistry, `$r=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${f.upgradeRegistry}\\RunOnce');if($r){[string]$r.GetValue('cn.aidingyi.agent.runtime.acceptance.upgrade','ABSENT');$r.Dispose()}else{'ABSENT'}`); }
+function protectedSummary(f, file) {
+  // Decode only fixture-supplied control fields, never print protected payloads.
+  const command = `Add-Type -AssemblyName System.Security;$blob=[IO.File]::ReadAllText('${file}');$bytes=[Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String($blob),$null,[Security.Cryptography.DataProtectionScope]::CurrentUser);$s=[Text.Encoding]::UTF8.GetString($bytes)|ConvertFrom-Json;@{hash=$s.installerHash;originalRun=$s.originalRun.value}|ConvertTo-Json -Compress`;
+  return JSON.parse(execFileSync(powershell, ['-NoProfile', '-Command', command], { env: f.env, encoding: 'utf8', timeout: 30000 }));
+}
+
+test('real DPAPI cross-revision pending and restored-cache rollover preserves first Run and all execution facts', { skip: unavailable }, async () => {
+  for (const state of ['pending', 'restored']) {
+    const f = await fixture();
+    try {
+      const old = build(f, `old-${state}`); const newer = build(f, `new-${state}`); prepare(f, old);
+      for (const dir of ['journal', 'result-outbox', 'sessions']) { fs.mkdirSync(path.join(f.home, dir), { recursive: true }); fs.writeFileSync(path.join(f.home, dir, 'fact.bin'), 'synthetic preserved fact'); }
+      if (state === 'restored') assert.deepEqual(upgrade(f, 'Restore', old.exe, old.target), { code: 0, output: 'RESTORED' });
+      const oldPending = treeHashes(path.join(f.userData, 'upgrade-pending')); const facts = treeHashes(f.home);
+      const firstRun = '"isolated-original.exe" --aidwork-runtime-login';
+      assert.deepEqual(upgrade(f, 'Prepare', newer.exe, old.target), { code: 0, output: 'PREPARED' });
+      const history = fs.readdirSync(path.join(f.userData, 'upgrade-history'));
+      assert.equal(history.length, 1); assert.deepEqual(treeHashes(path.join(f.userData, 'upgrade-history', history[0])), oldPending);
+      assert.deepEqual(treeHashes(f.home), facts); assert.equal(runValue(f), 'ABSENT'); assert.match(onceValue(f), /installer\.exe.*force-run/);
+      const summary = protectedSummary(f, path.join(f.userData, 'upgrade-pending/state.bin'));
+      assert.equal(summary.hash, digest(newer.exe)); assert.equal(summary.originalRun, firstRun);
+      assert.deepEqual(upgrade(f, 'Cancel', newer.exe, old.target), { code: 0, output: 'CANCELLED' }); assert.equal(runValue(f), firstRun);
+      assert.deepEqual(treeHashes(f.home), facts);
+    } finally { await f.cleanup(); }
+  }
+});
+
+test('rollover rejects tampered cache, foreign RunOnce and unproved cache without changing existing facts or startup', { skip: unavailable }, async () => {
+  for (const invalid of ['tampered', 'foreign-once', 'unproved', 'archive-wrong-hash', 'archive-wrong-scope']) {
+    const f = await fixture();
+    try {
+      const old = build(f, `old-${invalid}`); const newer = build(f, `new-${invalid}`); prepare(f, old);
+      const pending = path.join(f.userData, 'upgrade-pending');
+      if (invalid === 'tampered') fs.appendFileSync(path.join(pending, 'installer.exe'), 'tampered fixture');
+      if (invalid === 'foreign-once') registry(f.upgradeRegistry, `$r=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('${f.upgradeRegistry}\\RunOnce');$r.SetValue('cn.aidingyi.agent.runtime.acceptance.upgrade','controlled foreign command');$r.Dispose()`);
+      if (invalid === 'unproved' || invalid.startsWith('archive-')) {
+        // Reach the orphan-cache proof gate: no active state and no fixture Once.
+        registry(f.upgradeRegistry, `$r=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('${f.upgradeRegistry}\\RunOnce');$r.DeleteValue('cn.aidingyi.agent.runtime.acceptance.upgrade',$false);$r.Dispose();$r=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('${f.upgradeRegistry}\\Run');$r.SetValue('cn.aidingyi.agent.runtime.acceptance','current isolated Run');$r.Dispose()`);
+        if (invalid === 'unproved') fs.renameSync(path.join(pending, 'state.bin'), path.join(f.root, 'unproved-state.bin'));
+        else {
+          const archive = path.join(pending, 'archive'); fs.mkdirSync(archive);
+          const proof = path.join(archive, `state-${randomUUID()}.bin`); fs.renameSync(path.join(pending, 'state.bin'), proof);
+          if (invalid === 'archive-wrong-hash') fs.appendFileSync(path.join(pending, 'installer.exe'), 'wrong cached hash');
+          else {
+            const command = `Add-Type -AssemblyName System.Security;$p='${proof}';$b=[Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String([IO.File]::ReadAllText($p)),$null,[Security.Cryptography.DataProtectionScope]::CurrentUser);$s=[Text.Encoding]::UTF8.GetString($b)|ConvertFrom-Json;$s.home='${path.join(f.root, 'foreign-home')}';$b=[Text.Encoding]::UTF8.GetBytes(($s|ConvertTo-Json -Compress));[IO.File]::WriteAllText($p,[Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)))`;
+            execFileSync(powershell, ['-NoProfile', '-Command', command], { env: f.env, stdio: 'pipe', timeout: 30000 });
+          }
+        }
+      }
+      const facts = treeHashes(f.appData); const runBefore = runValue(f); const onceBefore = onceValue(f);
+      const result = upgrade(f, 'Prepare', newer.exe, old.target);
+      const expected = invalid === 'foreign-once' ? /RUNONCE_CONFLICT/ : invalid === 'archive-wrong-scope' ? /PENDING_STATE_SCOPE_MISMATCH/ : /PENDING_INSTALLER_MISMATCH|DIRECTORY_MISSING/;
+      assert.equal(result.code, 1); assert.match(result.output, expected);
+      assert.deepEqual(treeHashes(f.appData), facts); assert.equal(runValue(f), runBefore); assert.equal(onceValue(f), onceBefore);
+    } finally { await f.cleanup(); }
+  }
+});
+
+test('NSIS cross-revision pending v1 rollover does not request old Main; conflicting proof refuses before files or maintenance', { skip: unavailable }, async () => {
+  for (const conflict of [false, true]) {
+    const f = await fixture();
+    try {
+      const b = build(f, conflict ? 'conflict' : 'rollover'); fs.mkdirSync(f.home, { recursive: true }); fs.mkdirSync(b.target, { recursive: true });
+      fs.writeFileSync(path.join(f.home, 'host-running.json'), JSON.stringify({ instance_id: randomUUID() }));
+      registry(f.upgradeRegistry, `$r=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('${f.upgradeRegistry}\\Run');$r.SetValue('cn.aidingyi.agent.runtime.acceptance','controlled original Run');$r.Dispose()`);
+      const oldInstaller = path.join(f.root, 'old-installer.exe'); fs.copyFileSync(f.timer, oldInstaller);
+      assert.deepEqual(upgrade(f, 'Prepare', oldInstaller, b.target), { code: 0, output: 'PREPARED' });
+      if (conflict) fs.appendFileSync(path.join(f.userData, 'upgrade-pending/installer.exe'), 'invalid fixture cache');
+      const before = treeHashes(f.appData); const owned = await timer(f, b, true);
+      assert.equal(await b.launch().done, conflict ? 2 : 3010); assert.equal(owned.child.exitCode, null);
+      assert.equal(fs.existsSync(path.join(b.target, 'fixture-requested.txt')), false); assert.equal(fs.existsSync(path.join(b.target, 'isolated-payload.txt')), false);
+      assert.doesNotMatch(b.text(), /section_completed/); assert.match(b.text(), conflict ? /prepare_exit=1;code=PENDING_INSTALLER_MISMATCH/ : /prepare_exit=0;code=PREPARED/);
+      if (conflict) assert.deepEqual(treeHashes(f.appData), before);
+      await owned.release();
+    } finally { await f.cleanup(); }
+  }
+});
+
+test('same-installer orphan cache is reusable; missing/modern marker exit2 causes no startup or fact changes', { skip: unavailable }, async () => {
+  const f = await fixture();
+  try {
+    const b = build(f, 'same-installer'); prepare(f, b);
+    const pending = path.join(f.userData, 'upgrade-pending'); const cacheBefore = digest(path.join(pending, 'installer.exe'));
+    fs.renameSync(path.join(pending, 'state.bin'), path.join(f.root, 'interrupted-state.bin'));
+    registry(f.upgradeRegistry, `$r=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('${f.upgradeRegistry}\\RunOnce');$r.DeleteValue('cn.aidingyi.agent.runtime.acceptance.upgrade',$false);$r.Dispose();$r=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('${f.upgradeRegistry}\\Run');$r.SetValue('cn.aidingyi.agent.runtime.acceptance','current isolated Run');$r.Dispose()`);
+    assert.deepEqual(upgrade(f, 'Prepare', b.exe, b.target), { code: 0, output: 'PREPARED' });
+    assert.equal(digest(path.join(pending, 'installer.exe')), cacheBefore);
+    assert.equal(fs.existsSync(path.join(f.userData, 'upgrade-history')), false);
+    assert.equal(protectedSummary(f, path.join(pending, 'state.bin')).originalRun, 'current isolated Run');
+  } finally { await f.cleanup(); }
+  for (const kind of ['missing', 'modern']) {
+    const m = await fixture();
+    try {
+      const b = build(m, kind); fs.mkdirSync(b.target, { recursive: true }); fs.mkdirSync(m.home, { recursive: true });
+      if (kind === 'modern') fs.writeFileSync(path.join(m.home, 'host-running.json'), JSON.stringify({ instance_id: randomUUID(), supervision: 'fixture-v2' }));
+      const facts = treeHashes(m.appData); const result = upgrade(m, 'Prepare', b.exe, b.target);
+      assert.equal(result.code, 2); assert.match(result.output, kind === 'missing' ? /NO_LEGACY_MARKER/ : /UNSUPPORTED_LEGACY_MARKER/);
+      assert.deepEqual(treeHashes(m.appData), facts); assert.equal(runValue(m), 'ABSENT'); assert.equal(onceValue(m), 'ABSENT');
+    } finally { await m.cleanup(); }
+  }
+});
+
+test('fixture-only archive faults restore a live old registration before Move or first Run without dangling Once after commit', { skip: unavailable }, async () => {
+  for (const phase of ['before', 'after']) {
+    const f = await fixture();
+    try {
+      const old = build(f, `old-${phase}`); const newer = build(f, `new-${phase}`); prepare(f, old);
+      const pending = path.join(f.userData, 'upgrade-pending'); const previousProof = treeHashes(pending); const facts = treeHashes(f.home);
+      const previousRun = runValue(f); const previousOnce = onceValue(f);
+      let script = fs.readFileSync(legacyScript, 'utf8').replaceAll('\r\n', '\n');
+      // The first matching boundary is the active state.bin branch exercised here.
+      const point = phase === 'before' ? '        Archive-PendingDirectory $pendingDirectory' : '        $archiveCommitted = $true';
+      assert.ok(script.includes(point), 'transaction injection boundary exists');
+      script = script.replace(point, phase === 'before' ? `        Fail 'FIXTURE_BEFORE_MOVE'\n${point}` : `${point}\n        Fail 'FIXTURE_AFTER_COMMIT'`);
+      const injected = path.join(f.root, 'fault-only.ps1'); fs.writeFileSync(injected, script);
+      const result = upgrade(f, 'Prepare', newer.exe, old.target, injected);
+      assert.equal(result.code, 1); assert.match(result.output, phase === 'before' ? /FIXTURE_BEFORE_MOVE/ : /FIXTURE_AFTER_COMMIT/);
+      assert.deepEqual(treeHashes(f.home), facts);
+      if (phase === 'before') {
+        assert.equal(runValue(f), previousRun); assert.equal(onceValue(f), previousOnce); assert.deepEqual(treeHashes(pending), previousProof);
+      } else {
+        assert.equal(runValue(f), '"isolated-original.exe" --aidwork-runtime-login'); assert.equal(onceValue(f), 'ABSENT');
+        assert.equal(fs.existsSync(pending), false);
+        const history = fs.readdirSync(path.join(f.userData, 'upgrade-history')); assert.equal(history.length, 1);
+        assert.deepEqual(treeHashes(path.join(f.userData, 'upgrade-history', history[0])), previousProof);
+      }
+    } finally { await f.cleanup(); }
+  }
+});
 
 test('real builder no-pending/invalid-home and pending self-contained Restore/Cancel', { skip: unavailable }, async () => {
   const f = await fixture();
@@ -271,7 +419,7 @@ test('direct-call PRE callback rechecks restarted legacy timer before writes; un
   } finally { await f.cleanup(); }
 });
 
-test('modern guard registers strictly v1 recovery after fifteen seconds, keeps v2 task drain and never kills the timer', { skip: unavailable }, async () => {
+test('modern guard prepares v1 before requesting old Main; v2 retains normal drain without killing the timer', { skip: unavailable }, async () => {
   for (const version of ['v1', 'v2']) {
     const f = await fixture(); let owned
     try {
@@ -280,12 +428,15 @@ test('modern guard registers strictly v1 recovery after fifteen seconds, keeps v
       fs.writeFileSync(path.join(f.home, 'host-running.json'), marker)
       owned = await timer(f, b, true); const startedAt = Date.now(); const installer = b.launch()
       if (version === 'v1') {
-        assert.equal(await installer.done, 3010); assert.ok(Date.now() - startedAt >= 15000); assert.equal(owned.child.exitCode, null)
-        assert.equal(fs.readFileSync(path.join(b.target, 'fixture-requested.txt'), 'utf8'), '--aidwork-exit-for-update')
+        assert.equal(await installer.done, 3010); assert.ok(Date.now() - startedAt < 15000); assert.equal(owned.child.exitCode, null)
+        assert.equal(fs.existsSync(path.join(b.target, 'fixture-requested.txt')), false)
         assert.match(b.text(), /prepare_exit=0;code=PREPARED/); assert.doesNotMatch(b.text(), /section_completed/)
         assert.equal(fs.existsSync(path.join(b.target, 'isolated-payload.txt')), false)
       } else {
         await until(() => b.text().includes('code=UNSUPPORTED_LEGACY_MARKER'), 'v2 preparation refused', 25000)
+        assert.match(b.text(), /prepare_exit=2;code=UNSUPPORTED_LEGACY_MARKER/)
+        await until(() => fs.existsSync(path.join(b.target, 'fixture-requested.txt')), 'normal maintenance request')
+        assert.equal(fs.readFileSync(path.join(b.target, 'fixture-requested.txt'), 'utf8'), '--aidwork-exit-for-update')
         assert.equal(owned.child.exitCode, null); assert.equal(installer.child.exitCode, null)
         assert.equal(fs.existsSync(path.join(f.userData, 'upgrade-pending/state.bin')), false)
         assert.equal(fs.existsSync(path.join(b.target, 'isolated-payload.txt')), false)

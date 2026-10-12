@@ -1,5 +1,9 @@
 # Agent 桌面客户端 v3 开发计划
 
+2026-10-12 r6共同检查点：[恢复计划Phase 8](plan-runtime-upgrade-recovery.md)Runtime主控维护core/组合层、平台角色维护DPAPI；Electron公共壳及H1不增加方法，失败时现有blocked状态可显示固定原因、私有退出仍只释放当前管理进程。完整Desktop默认启动语义不改。
+
+2026-10-12 r5 共同检查点：[恢复计划Phase 6](plan-runtime-upgrade-recovery.md)当前主控维护Runtime NSIS与旧版续装PS，完整Desktop不启用该钩子；补跨版本控制材料轮换及旧客户端告警规避，公共壳、H1与binding不变。
+
 2026-10-12 r4 共同检查点：[恢复计划Phase 4/5](plan-runtime-upgrade-recovery.md)由Runtime当前主控唯一维护NSIS及core/managed-entry/Supervisor/Main生命周期；完整Desktop不启用Runtime安装钩子。历史记录不阻止当前未拥有执行的管理进程退出，须确认直属Host实际退出；直属私有生命周期v1绑定实例与generation，H1、Device与binding不变。
 
 2026-10-12 升级退出检查点：[试用包Phase 5](plan-runtime-ui-boss-trial-bundle.md)由当前主控唯一写入公共NSIS钩子与诊断交付；Runtime窗口X仍仅隐藏到托盘，安全退出走既有stopAndExit。安装器运行检查只读拒绝，不默认终止进程，不改变共同wire或自行清旧运行事实。

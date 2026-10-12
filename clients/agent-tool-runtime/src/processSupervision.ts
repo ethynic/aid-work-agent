@@ -3,7 +3,7 @@ import { randomUUID, createHash } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { dpapiProtect, dpapiUnprotect } from './dpapi.js'
+import { dpapiProtect, dpapiUnprotect, trustedSystemPowerShell } from './dpapi.js'
 import { atomicWrite } from './pairingStore.js'
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -54,7 +54,8 @@ export class ProcessSupervision {
     const jobName = `AidWorkRuntime.${randomUUID()}`
     const work = this.queue.then(async () => { this.ledger!.jobs.push(jobName); await this.write(this.ledger!) })
     this.queue = work.catch(() => {}); await work
-    const ownerStart = await new Promise<string>((accept, reject) => execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `[Console]::Out.Write((Get-Process -Id ${process.pid}).StartTime.ToUniversalTime().Ticks)`], { windowsHide: true, timeout: 15000 }, (error, out) => error ? reject(new Error('owner identity unavailable')) : accept(out.trim())))
+    const powershell = trustedSystemPowerShell()
+    const ownerStart = await new Promise<string>((accept, reject) => execFile(powershell.executable, ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; [Console]::Out.Write((Get-Process -Id ${process.pid}).StartTime.ToUniversalTime().Ticks)`], { cwd: powershell.cwd, env: powershell.env, windowsHide: true, timeout: 15000 }, (error, out) => error ? reject(new Error('owner identity unavailable')) : accept(out.trim())))
     if (!/^\d{17,19}$/.test(ownerStart)) throw new Error('owner identity invalid')
     return { command: this.executable, args: ['run', '--job-name', jobName, '--node', this.node, '--entry', entry,
       '--owner-pid', String(process.pid), '--owner-start-time', ownerStart, '--receipt', join(this.directory(), `${jobName}.receipt.json`)] }

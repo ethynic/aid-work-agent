@@ -40,6 +40,34 @@ export interface HostAdapter {
 interface StoredOperation { digest: string; operation: ManagementOperation; prepared_import?: PreparedPluginImport }
 interface Request { request_id: string; method: string; params: Record<string, string> }
 
+function readOperations(file: string): Record<string, StoredOperation> {
+  const operations: Record<string, StoredOperation> = Object.create(null)
+  if (!existsSync(file)) return operations
+  let text: string
+  try { text = readFileSync(file, 'utf8') } catch { throw new ManagementError(11, '管理操作记录无法读取，原文件已保留') }
+  let saved: unknown
+  try { saved = JSON.parse(text.replace(/^\uFEFF/, '')) } catch { throw new ManagementError(11, '管理操作记录格式无法读取，原文件已保留') }
+  if (!saved || typeof saved !== 'object' || Array.isArray(saved)) throw new ManagementError(11, '管理操作记录格式无效，原文件已保留')
+  for (const [key, value] of Object.entries(saved)) {
+    const entry = value as StoredOperation
+    const op = entry?.operation
+    if (!key || !entry || typeof entry.digest !== 'string' || !/^[0-9a-f]{64}$/.test(entry.digest)
+      || !op || typeof op.operation_id !== 'string' || !op.operation_id
+      || !['start', 'stop', 'pair', 'import', 'enable', 'disable', 'uninstall'].includes(op.operation)
+      || !['running', 'succeeded', 'failed', 'reconciling'].includes(op.status)
+      || !Number.isSafeInteger(op.code) || typeof op.error !== 'string'
+      || Object.keys(op).some(field => !['operation_id', 'operation', 'status', 'code', 'error', 'message'].includes(field))
+      || (Object.hasOwn(op, 'message') && (typeof op.message !== 'string' || !op.message))
+      || (op.status === 'failed' ? op.code < 1 || !op.error : op.code !== 0 || op.error !== '')) throw new ManagementError(11, '管理操作记录字段无效，原文件已保留')
+    if (entry.prepared_import && (op.operation !== 'import' || !/^[0-9a-f-]{36}$/.test(entry.prepared_import.snapshot_id) || !/^[0-9a-f]{64}$/.test(entry.prepared_import.sha256))) throw new ManagementError(11, '旧插件安装快照记录无效，原文件已保留')
+    // Projection only. Opening a management connection must never require rewriting
+    // valid historical records or imply that an interrupted operation was completed.
+    if (op.status === 'running') op.status = 'reconciling'
+    operations[key] = entry
+  }
+  return operations
+}
+
 function atomicWrite(file: string, contents: string): void {
   const temporary = `${file}.${randomUUID()}.tmp`
   writeFileSync(temporary, contents, { mode: 0o600, flag: 'wx' })
@@ -85,61 +113,86 @@ export class RuntimeHost {
   private closing = false
   private ownsExecution = false
   private recovered = false
+  private operationsReadable = true
+  private recoveryDevice?: DeviceSummary
 
   private constructor(private lease: InstanceLease, private adapter: HostAdapter,
-    private secret: Buffer, private version: string, private supervisor: 'cli' | 'desktop' | 'runtime_app') {
+    private secret: Buffer, private version: string, private supervisor: 'cli' | 'desktop' | 'runtime_app', private startupFailure?: ManagementError) {
     this.operationsFile = join(lease.home, 'management-operations.json')
     this.markerFile = join(lease.home, 'host-running.json')
+    if (startupFailure) {
+      try {
+        const device = adapter.device()
+        if (device && typeof device.device_id === 'string' && device.device_id) this.recoveryDevice = { device_id: device.device_id, ...(typeof device.name === 'string' && device.name ? { name: device.name } : {}) }
+      } catch { /* Failed initialization cannot make the read-only view fail again. */ }
+      this.connection = this.recoveryDevice ? 'offline' : 'unpaired'
+      this.state = 'blocked'
+      try { this.operations = readOperations(this.operationsFile) } catch { this.operationsReadable = false }
+      return
+    }
     this.connection = adapter.device() ? 'offline' : 'unpaired'
     adapter.observePlugins?.(() => this.changed())
-    if (existsSync(this.operationsFile)) {
-      const saved: unknown = JSON.parse(readFileSync(this.operationsFile, 'utf8'))
-      if (!saved || typeof saved !== 'object' || Array.isArray(saved)) throw new Error('operation store invalid')
-      for (const [key, value] of Object.entries(saved)) {
-        const entry = value as StoredOperation
-        const op = entry?.operation
-        if (!key || !entry || typeof entry.digest !== 'string' || !/^[0-9a-f]{64}$/.test(entry.digest)
-          || !op || typeof op.operation_id !== 'string' || !op.operation_id
-          || !['start', 'stop', 'pair', 'import', 'enable', 'disable', 'uninstall'].includes(op.operation)
-          || !['running', 'succeeded', 'failed', 'reconciling'].includes(op.status)
-          || !Number.isInteger(op.code) || typeof op.error !== 'string'
-          || (op.status === 'failed' ? op.code < 1 || !op.error : op.code !== 0 || op.error !== '')) throw new Error('operation store invalid')
-        this.operations[key] = entry
-        if (entry.prepared_import && (op.operation !== 'import' || !/^[0-9a-f-]{36}$/.test(entry.prepared_import.snapshot_id) || !/^[0-9a-f]{64}$/.test(entry.prepared_import.sha256))) throw new Error('operation snapshot invalid')
-        if (entry.operation.status === 'running') entry.operation.status = 'reconciling'
-      }
-      this.persist()
-    }
+    this.operations = readOperations(this.operationsFile)
     if (existsSync(this.markerFile)) this.state = 'reconciling'
   }
 
-  static async open(options: { home: string; version: string; supervisor: 'cli' | 'desktop' | 'runtime_app'; adapter: HostAdapter }): Promise<RuntimeHost> {
+  static async open(options: { home: string; version: string; supervisor: 'cli' | 'desktop' | 'runtime_app'; adapter: HostAdapter; readOnlyOnFailure?: boolean }): Promise<RuntimeHost> {
     const lease = await acquireHostLease(options.home)
     if (!lease) throw new ManagementError(4, '已有Runtime实例使用此配置目录，请先停止原实例')
+    const recoveryAllowed = options.readOnlyOnFailure === true && options.supervisor === 'runtime_app'
+    let failureMessage = '本机执行环境初始化失败，设备和历史记录已保留'
     try {
-      await options.adapter.initialize?.()
+      let checkedSecret: Buffer | undefined
       const file = join(lease.home, 'management-secret.bin')
+      if (recoveryAllowed) {
+        // Diagnose management-only failures before pairing recovery or plugin
+        // initialization can write anything. The original files stay authoritative.
+        readOperations(join(lease.home, 'management-operations.json'))
+        if (existsSync(file)) {
+          failureMessage = '管理密钥无法读取或解密，设备和历史记录已保留'
+          const hex = await options.adapter.unprotect(readFileSync(file, 'utf8'))
+          if (!/^[0-9a-f]{64}$/.test(hex)) throw new ManagementError(11, '管理密钥格式无效，原密钥和历史记录已保留')
+          checkedSecret = Buffer.from(hex, 'hex')
+        } else if (existsSync(join(lease.home, 'management-operations.json'))) {
+          throw new ManagementError(11, '管理密钥缺失，旧管理记录已保留，未重置设备身份')
+        }
+      }
+      failureMessage = '本机执行环境初始化失败，设备和历史记录已保留'
+      await options.adapter.initialize?.()
       let secret: Buffer
-      if (existsSync(file)) {
+      if (checkedSecret) secret = checkedSecret
+      else if (existsSync(file)) {
+        failureMessage = '管理密钥无法读取或解密，设备和历史记录已保留'
         const hex = await options.adapter.unprotect(readFileSync(file, 'utf8'))
-        if (!/^[0-9a-f]{64}$/.test(hex)) throw new Error('invalid secret')
+        if (!/^[0-9a-f]{64}$/.test(hex)) throw new ManagementError(11, '管理密钥格式无效，原密钥和历史记录已保留')
         secret = Buffer.from(hex, 'hex')
         if (secret.length !== 32) throw new Error('invalid secret')
       } else {
-        if (existsSync(join(lease.home, 'management-operations.json'))) throw new Error('missing secret')
+        if (existsSync(join(lease.home, 'management-operations.json'))) throw new ManagementError(11, '管理密钥缺失，旧管理记录已保留，未重置设备身份')
+        failureMessage = 'Windows凭据保护暂不可用，设备和历史记录已保留'
         secret = randomBytes(32)
         atomicWrite(file, await options.adapter.protect(secret.toString('hex')))
       }
+      failureMessage = '本机设备状态无法读取，设备和历史记录已保留'
       const host = new RuntimeHost(lease, options.adapter, secret, options.version, options.supervisor)
-      if (existsSync(host.markerFile) && await options.adapter.recoverPreviousExecution?.(readFileSync(host.markerFile, 'utf8'))) {
+      if (recoveryAllowed && !options.adapter.device() && Object.values(host.operations).some(entry => ['pair', 'start'].includes(entry.operation.operation) && ['succeeded', 'reconciling'].includes(entry.operation.status))) {
+        host.startupFailure = new ManagementError(11, '设备配置无法读取，但旧配对或启动记录仍在；原身份和任务记录已保留。当前为只读管理，可正常退出或卸载')
+        host.state = 'blocked'
+      }
+      failureMessage = '旧执行的停止证明无法读取，原设备和任务记录已保留'
+      if (!host.startupFailure && existsSync(host.markerFile) && await options.adapter.recoverPreviousExecution?.(readFileSync(host.markerFile, 'utf8'))) {
         renameSync(host.markerFile, join(lease.home, `host-interrupted-${randomUUID()}.json`))
         host.state = 'stopped'; host.recovered = true
       }
       return host
     } catch (error) {
+      const failure = error instanceof ManagementError ? error : new ManagementError(11, failureMessage)
+      if (recoveryAllowed && failure.code === 11) {
+        return new RuntimeHost(lease, options.adapter, Buffer.alloc(0), options.version, options.supervisor,
+          new ManagementError(11, `${failure.message}。当前为只读管理，可正常退出或卸载`))
+      }
       await lease.release()
-      if (error instanceof ManagementError) throw error
-      throw new ManagementError(11, '本机管理记录或系统保护不可用，需核对后恢复')
+      throw failure
     }
   }
 
@@ -155,10 +208,10 @@ export class RuntimeHost {
     }
   }
   getState(): Record<string, unknown> {
-    const device = this.adapter.device()
+    const device = this.startupFailure ? this.recoveryDevice : this.adapter.device()
     return { instance_id: this.instanceId, revision: this.revision, supervisor: this.supervisor,
       state: this.state, connection: this.connection, ...(device ? { device } : {}),
-      ...(['reconciling', 'blocked'].includes(this.state) ? { blocked_reason: '旧版本异常退出。请正常重启 Windows，Runtime 将自动核对并恢复；配对与执行记录保留。' } : {}) }
+      ...(['reconciling', 'blocked'].includes(this.state) ? { blocked_reason: this.startupFailure?.message ?? '旧版本异常退出。请正常重启 Windows，Runtime 将自动核对并恢复；配对与执行记录保留。' } : {}) }
   }
   /** Local composition metadata; deliberately absent from strict H1 state schema. */
   get recoveredAfterInterruption(): boolean { return this.recovered }
@@ -173,19 +226,22 @@ export class RuntimeHost {
       if (this.closed || this.closing) throw new ManagementError(4, 'Runtime管理连接已关闭')
       let result: unknown
       switch (request.method) {
-        case 'describe': result = { api_major: 1, host_version: this.version, features: ['events', ...(this.adapter.mutatePlugin ? ['first_party_plugins'] : [])], instance_id: this.instanceId, revision: this.revision }; break
+        case 'describe': result = { api_major: 1, host_version: this.version, features: ['events', ...(!this.startupFailure && this.adapter.mutatePlugin ? ['first_party_plugins'] : [])], instance_id: this.instanceId, revision: this.revision }; break
         case 'getState': result = this.getState(); break
         case 'plugins.list': {
+          if (this.startupFailure) throw this.startupFailure
           await this.adapter.refreshPlugins?.()
           const plugins = this.adapter.plugins?.() ?? []
           result = { instance_id: this.instanceId, revision: this.revision, plugins }; break
         }
         case 'operations.get': {
+          if (!this.operationsReadable) throw this.startupFailure ?? new ManagementError(11, '管理操作记录无法读取，原文件已保留')
           const item = Object.values(this.operations).find(entry => entry.operation.operation_id === request.params.operation_id)
           if (!item) throw new ManagementError(1, '管理操作不存在')
           result = { ...item.operation }; break
         }
         default: {
+          if (this.startupFailure) throw this.startupFailure
           const key = request.params.request_key!
           const fields = Object.keys(request.params).filter(field => field !== 'request_key').sort().map(field => [field, request.params[field]])
           const digest = createHmac('sha256', this.secret).update(JSON.stringify([request.method, fields])).digest('hex')
@@ -244,6 +300,7 @@ export class RuntimeHost {
 
   /** Local CLI compatibility only; intentionally absent from the H1 management wire. */
   async runLocalIdentityChange(change: () => Promise<void> | void): Promise<void> {
+    if (this.startupFailure) throw this.startupFailure
     if (this.closed || this.closing) throw new ManagementError(4, 'Runtime管理连接已关闭')
     const work = this.queue.then(async () => {
       if (this.closed || this.state !== 'stopped' || !(await this.adapter.canReplaceIdentity())) {

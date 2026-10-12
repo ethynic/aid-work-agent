@@ -63,6 +63,24 @@
   ; Never delegate process termination to the default builder check.
   ${nsProcess::FindProcess} "${APP_EXECUTABLE_FILENAME}" $R0
   ${If} $R0 == 0
+    !ifndef BUILD_UNINSTALLER
+      ; A legacy marker cannot be drained by old Main. Prepare BEFORE requesting
+      ; its maintenance exit, so no misleading old "upgrade paused" dialog appears.
+      nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\runtime-legacy-upgrade.ps1" -Mode Prepare -AppId "${APP_ID}" -InstallerPath "$EXEPATH" -InstallDirectory "$INSTDIR" -SupervisorPath "$PLUGINSDIR\RuntimeProcessSupervisor.exe"'
+      Pop $R0
+      Pop $R1
+      ${If} $R0 == 0
+        MessageBox MB_OK|MB_ICONINFORMATION "旧客户端的恢复已登记。请正常重启 Windows；登录后会自动继续安装，配对和任务记录保留。" /SD IDOK
+        StrCpy $R9 3010
+        Return
+      ${ElseIf} $R0 != 2
+        ; Only a missing/v2 marker means normal drain. Never hide a preparation
+        ; error as an active task; raw PowerShell output can contain private paths.
+        MessageBox MB_OK|MB_ICONEXCLAMATION "升级恢复登记失败（错误码：$R0），此次安装未覆盖旧程序。设备和任务记录保留。" /SD IDOK
+        StrCpy $R9 2
+        Return
+      ${EndIf}
+    !endif
     ${If} ${FileExists} "$INSTDIR\resources\runtime\host\native\RuntimeProcessSupervisor.exe"
       !ifdef BUILD_UNINSTALLER
         ${StdUtils.ExecShellAsUser} $R1 "$INSTDIR\${APP_EXECUTABLE_FILENAME}" "open" "--aidwork-exit-for-uninstall"
@@ -78,23 +96,6 @@
           ${ExitDo}
         ${EndIf}
         IntOp $R2 $R2 + 1
-        !ifndef BUILD_UNINSTALLER
-          ${If} $R0 == 0
-          ${AndIf} $R2 == 30
-            ; r3 has the exit flag but cannot close an idle legacy-marker Host.
-            ; Only a strictly validated v1 marker can register this one-reboot fix.
-            nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\runtime-legacy-upgrade.ps1" -Mode Prepare -AppId "${APP_ID}" -InstallerPath "$EXEPATH" -InstallDirectory "$INSTDIR" -SupervisorPath "$PLUGINSDIR\RuntimeProcessSupervisor.exe"'
-            Pop $R0
-            Pop $R1
-            ${If} $R0 == 0
-              MessageBox MB_OK|MB_ICONINFORMATION "旧客户端的退出已被历史记录阻断。恢复已登记，请正常重启 Windows；登录后会自动继续安装，配对和任务记录保留。" /SD IDOK
-              StrCpy $R9 3010
-              Return
-            ${EndIf}
-            ; A current v2 execution keeps its original drain path and timeout.
-            StrCpy $R0 0
-          ${EndIf}
-        !endif
         ${If} $R0 != 0
         ${OrIf} $R2 >= 1240
           MessageBox MB_OK|MB_ICONEXCLAMATION "Runtime 任务仍在收尾或网络暂时不可用。此次安装已暂停，程序与执行记录保留；恢复网络后重新运行安装器即可。" /SD IDOK
@@ -108,16 +109,8 @@
         StrCpy $R9 2
         Return
       !else
-        nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\runtime-legacy-upgrade.ps1" -Mode Prepare -AppId "${APP_ID}" -InstallerPath "$EXEPATH" -InstallDirectory "$INSTDIR" -SupervisorPath "$PLUGINSDIR\RuntimeProcessSupervisor.exe"'
-        Pop $R0
-        Pop $R1
-        ${If} $R0 == 0
-          MessageBox MB_OK|MB_ICONINFORMATION "旧版异常退出的恢复已登记。请正常重启 Windows；登录后会自动继续安装并恢复原设备连接，无需卸载、重新配对或提供日志。此次未终止旧程序。" /SD IDOK
-          StrCpy $R9 3010
-        ${Else}
-          MessageBox MB_OK|MB_ICONEXCLAMATION "旧版仍在运行，无法登记自动恢复。请先从托盘选择退出，再运行安装器；此次未覆盖或终止旧程序。" /SD IDOK
-          StrCpy $R9 2
-        ${EndIf}
+        MessageBox MB_OK|MB_ICONEXCLAMATION "旧版仍在运行。请先从托盘选择退出，再运行安装器；此次未覆盖或终止旧程序。" /SD IDOK
+        StrCpy $R9 2
         Return
       !endif
     ${EndIf}

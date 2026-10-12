@@ -75,8 +75,8 @@ export function loadConfig(): RuntimeConfig | null {
   const file = configPath()
   if (!existsSync(file)) return null
   try {
-    const parsed = JSON.parse(readFileSync(file, 'utf8')) as RuntimeConfig
-    if (!parsed.server || !parsed.device_id) return null
+    const parsed = JSON.parse(readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) as RuntimeConfig
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || typeof parsed.server !== 'string' || !parsed.server || typeof parsed.device_id !== 'string' || !parsed.device_id) return null
     return parsed
   } catch {
     return null

@@ -108,9 +108,17 @@ function Read-Pending([string]$Path) {
     Valid-RunValue $state.originalRun
     return $state
 }
+function Archive-PendingDirectory([string]$Directory) {
+    $null = Safe-Path $Directory $true $true
+    $history = [IO.Path]::Combine($script:UserData, 'upgrade-history')
+    Ensure-Directory $history
+    $destination = Safe-Path ([IO.Path]::Combine($history, [Guid]::NewGuid().ToString('N')))
+    [IO.Directory]::Move($Directory, $destination)
+}
 
 $mutex = $null; $locked = $false; $run = $null; $runOnce = $null
 $registryTouched = $false; $newWitness = $false; $newState = $false; $newInstaller = $false
+$archiveCommitted = $false; $archiveRollbackRun = $null; $archiveRollbackOnce = $null
 $stateFile = $null; $witnessFile = $null; $pendingInstaller = $null
 try {
     Require (@('Prepare', 'Restore', 'Cancel') -ccontains $Mode) 'INVALID_MODE'
@@ -180,6 +188,9 @@ try {
     $boot = ($bootOutput -join '') | ConvertFrom-Json
     Require (@($boot.PSObject.Properties.Name).Count -eq 1 -and $boot.bootId -match $script:UuidPattern) 'BOOT_ID_INVALID'
     $markerFile = [IO.Path]::Combine($script:RuntimeHome, 'host-running.json')
+    try { $null = [IO.File]::GetAttributes($markerFile) }
+    catch [IO.FileNotFoundException] { Fail 'NO_LEGACY_MARKER' }
+    catch [IO.DirectoryNotFoundException] { Fail 'NO_LEGACY_MARKER' }
     $markerBytes = Read-Bytes $markerFile
     $markerRaw = $script:StrictUtf8.GetString($markerBytes)
     $markerPattern = '\A[ \t\r\n]*\{[ \t\r\n]*"instance_id"[ \t\r\n]*:[ \t\r\n]*"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"[ \t\r\n]*\}[ \t\r\n]*\z'
@@ -198,7 +209,48 @@ try {
     }
     Ensure-Directory $pendingDirectory
     $installerHash = Hash-File $InstallerPath
-    if ($null -ne $state) { Require ($state.installerHash -ceq $installerHash) 'PENDING_INSTALLER_MISMATCH' }
+    if ($null -ne $state -and $state.installerHash -cne $installerHash) {
+        # A failed/cancelled earlier revision may retain its protected restart proof.
+        # Validate it, restore the FIRST login choice, then archive the whole control
+        # directory before preparing the new revision. Business facts are untouched.
+        Require ([IO.File]::Exists($pendingInstaller) -and (Hash-File $pendingInstaller) -ceq $state.installerHash) 'PENDING_INSTALLER_MISMATCH'
+        $oldCommand = '"' + $pendingInstaller + '" /S --force-run /D=' + $InstallDirectory
+        Require (-not $beforeOnce.exists -or ($beforeOnce.kind -eq 1 -and $beforeOnce.value -ceq $oldCommand)) 'RUNONCE_CONFLICT'
+        $archiveRollbackRun = $state.originalRun
+        $archiveRollbackOnce = [pscustomobject]@{ exists = $false; kind = 0; value = $null }
+        $registryTouched = $true
+        Set-RunValue $run $AppId $archiveRollbackRun
+        $runOnce.DeleteValue($onceName, $false)
+        $run.Flush(); $runOnce.Flush()
+        Archive-PendingDirectory $pendingDirectory
+        $archiveCommitted = $true
+        # Any subsequent failure restores these values, never a moved/dead RunOnce.
+        $beforeRun = $archiveRollbackRun; $beforeOnce = $archiveRollbackOnce
+        $state = $null
+        Ensure-Directory $pendingDirectory
+    } elseif ($null -eq $state -and [IO.File]::Exists($pendingInstaller)) {
+        # Restore archived state.bin but left installer.exe in r3/r4. Only matching
+        # CurrentUser protected archive evidence can authorize retiring that cache.
+        Require (-not $beforeOnce.exists) 'RUNONCE_CONFLICT'
+        $cachedHash = Hash-File $pendingInstaller
+        if ($cachedHash -cne $installerHash) {
+            $archive = Safe-Path ([IO.Path]::Combine($pendingDirectory, 'archive')) $true $true
+            $proofs = [IO.Directory]::GetFiles($archive, 'state-*.bin')
+            Require ($proofs.Length -le 256) 'PENDING_ARCHIVE_TOO_LARGE'
+            $matched = $false
+            foreach ($proof in $proofs) {
+                $oldState = Read-Pending $proof
+                if ($oldState.installerHash -ceq $cachedHash) { $matched = $true; break }
+            }
+            Require $matched 'PENDING_INSTALLER_MISMATCH'
+            Archive-PendingDirectory $pendingDirectory
+            $archiveRollbackRun = $beforeRun; $archiveRollbackOnce = $beforeOnce
+            $archiveCommitted = $true
+            Ensure-Directory $pendingDirectory
+        }
+        # Matching the current explicit installer needs no archive: a crash after
+        # copy publication but before state publication must remain resumable.
+    }
     if ([IO.File]::Exists($pendingInstaller)) {
         Require ((Hash-File $pendingInstaller) -ceq $installerHash) 'PENDING_INSTALLER_MISMATCH'
     } else {
@@ -207,6 +259,8 @@ try {
         try {
             [IO.File]::Copy($InstallerPath, $copyTemp, $false)
             Require ((Hash-File $copyTemp) -ceq $installerHash -and (Hash-File $InstallerPath) -ceq $installerHash) 'INSTALLER_COPY_MISMATCH'
+            $copyStream = [IO.FileStream]::new($copyTemp, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None, 4096, [IO.FileOptions]::WriteThrough)
+            try { $copyStream.Flush($true) } finally { $copyStream.Dispose() }
             [IO.File]::Move($copyTemp, $pendingInstaller); $newInstaller = $true
         } finally { if ([IO.File]::Exists($copyTemp)) { [IO.File]::Delete($copyTemp) } }
     }
@@ -229,12 +283,17 @@ try {
 } catch {
     $failure = $script:FailureCode
     try {
-        if ($registryTouched) { Set-RunValue $run $AppId $beforeRun; Set-RunValue $runOnce $onceName $beforeOnce; $run.Flush(); $runOnce.Flush() }
+        if ($registryTouched) {
+            if ($archiveCommitted) { $beforeRun = $archiveRollbackRun; $beforeOnce = $archiveRollbackOnce }
+            Set-RunValue $run $AppId $beforeRun; Set-RunValue $runOnce $onceName $beforeOnce; $run.Flush(); $runOnce.Flush()
+        }
         if ($newState -and [IO.File]::Exists($stateFile)) { $null = Safe-Path $stateFile $true; [IO.File]::Delete($stateFile) }
         if ($newInstaller -and [IO.File]::Exists($pendingInstaller)) { $null = Safe-Path $pendingInstaller $true; [IO.File]::Delete($pendingInstaller) }
         if ($newWitness -and [IO.File]::Exists($witnessFile)) { $null = Safe-Path $witnessFile $true; [IO.File]::Delete($witnessFile) }
     } catch { $failure = 'UPGRADE_ROLLBACK_FAILED' }
-    [Console]::Error.WriteLine($failure); exit 1
+    [Console]::Error.WriteLine($failure)
+    if ($failure -in @('NO_LEGACY_MARKER', 'UNSUPPORTED_LEGACY_MARKER')) { exit 2 }
+    exit 1
 } finally {
     if ($null -ne $run) { $run.Dispose() }
     if ($null -ne $runOnce) { $runOnce.Dispose() }

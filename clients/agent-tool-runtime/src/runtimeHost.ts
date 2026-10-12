@@ -129,13 +129,16 @@ export class LegacyExecution implements HostAdapter {
   async initialize(): Promise<void> {
     configureRuntimeHome(this.home)
     await assertNoLegacyRuntimeProcess()
-    await recoverPairing()
+    try { await recoverPairing() } catch { throw new ManagementError(11, '设备配对资料未能恢复，原身份文件和待处理事务已保留') }
     if (this.pluginOptions) {
-      this.pluginStore = new PluginStore({ home: this.home, trust: this.pluginOptions.trust,
+      try { this.pluginStore = new PluginStore({ home: this.home, trust: this.pluginOptions.trust,
         platform: { platform: process.platform, arch: process.arch, node_version: process.versions.node, node_abi: process.versions.modules, runtime_version: RUNTIME_VERSION },
         probe: (root, manifest) => probePlugin(this.nodeExecutable, root, manifest, providerEnvironment()),
         onChanged: () => this.pluginsChanged?.() })
-      await this.pluginStore.initialize()
+      await this.pluginStore.initialize() } catch (error) {
+        if (error instanceof ManagementError) throw error
+        throw new ManagementError(11, '插件目录无法初始化，安装记录已保留')
+      }
     } else if (existsSync(join(this.home, 'plugins/inventory.json'))) {
       throw new ManagementError(9, '此配置目录含受管插件，需使用具备发布信任配置的Runtime产品')
     }
@@ -147,7 +150,7 @@ export class LegacyExecution implements HostAdapter {
   recoverPreviousExecution = (marker: string) => this.supervision.recover(marker)
   device() {
     const config = loadConfig()
-    return config ? { device_id: config.device_id, ...(config.name ? { name: config.name } : {}) } : undefined
+    return config ? { device_id: config.device_id, ...(typeof config.name === 'string' && config.name ? { name: config.name } : {}) } : undefined
   }
   async canReplaceIdentity(): Promise<boolean> {
     const home = runtimeHomeDir()
@@ -331,8 +334,11 @@ export async function openRuntimeHost(options: { home?: string; nodeExecutable?:
   compositionOpen = true
   const home = options.home ?? runtimeHomeDir()
   try {
+    // Core preflight may enter read-only mode before adapter.initialize runs.
+    // Its device snapshot must still read this composition's explicitly bound home.
+    configureRuntimeHome(home)
     const trust = options.trust ?? loadPackagedTrust(dirname(fileURLToPath(import.meta.url)))
-    return await RuntimeHost.open({ home, version: RUNTIME_VERSION, supervisor: options.supervisor ?? 'cli',
+    return await RuntimeHost.open({ home, version: RUNTIME_VERSION, supervisor: options.supervisor ?? 'cli', readOnlyOnFailure: options.supervisor === 'runtime_app',
       adapter: new LegacyExecution(options.nodeExecutable ?? process.execPath, home, trust ? { platform: options.platform, trust } : undefined) })
   } catch (error) {
     compositionOpen = false; configureRuntimeHome(undefined)
