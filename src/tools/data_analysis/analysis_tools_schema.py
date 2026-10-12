@@ -96,7 +96,7 @@ aggregate(source="all_data", group_by=["国家","月份"], aggregations=[{"colum
 ### 4.3 执行原则
 
 1. source 参数支持三种引用：table_id、output_var、文件路径
-2. 每次只调用一个工具
+2. 无依赖的工具调用应在同一轮批量发起（如多个维度的 aggregate、多组 describe、多张交付图表/表格的 to_chart/to_table）；有依赖的调用（需要用到上一步的 output_var）必须等前序结果返回后再发起。同一轮的多个调用按顺序执行，单个失败不影响其余调用
 3. 分析方法的结果会自动保存，后续通过 output_var 引用
 4. 输出最终结果时，**只要结果含可统计的数值/分类/时间维度，必须调用 to_chart 生成图表**（to_table 仅用于补充明细或单条查询）；然后停止调用工具，用文字总结
 5. 数据类型 → 图表类型决策：时间/日期×数值=line(趋势)；类别×单个数值=bar(对比,按值降序)；类别×多个数值并排=grouped_bar；占比构成=pie(类目≤6)或stacked_bar；两个数值的相关性=scatter；Top-N排名=bar(降序)

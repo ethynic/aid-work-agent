@@ -23,7 +23,7 @@ from src.tools.data_analysis.analysis_tools_schema import (
     ANALYSIS_TOOLS,
 )
 
-MAX_ITERATIONS = 50
+MAX_ITERATIONS = 100
 DATA_PROCESSING_METHODS = {"query", "aggregate", "merge", "append", "pivot", "calculate", "compare", "trend", "extract_hierarchy"}
 SEARCH_METHODS = {"search_data_tables", "list_data_tables"}
 # describe 结果瘦身上限（2026-10 追加改进 A）：每列 unique_values/top_values 最多返回条数。
@@ -390,7 +390,8 @@ class AnalysisAgent:
                 assistant_msg["reasoning_content"] = response["reasoning_content"]
             messages.append(assistant_msg)
 
-            # 执行每个工具调用
+            # 执行每个工具调用（一轮多个 tool_calls 顺序执行，逐个错误隔离：
+            # _dispatch_tool 内部捕获异常转为 {"success": False}，单工具失败不中断整轮）
             for tc in tool_calls:
                 tool_name = tc.get("name") or tc.get("function", {}).get("name", "")
                 raw_args = tc.get("arguments") or tc.get("function", {}).get("arguments", {})
