@@ -24,7 +24,7 @@ from src.tools.data_analysis.analysis_tools_schema import (
 )
 
 MAX_ITERATIONS = 50
-DATA_PROCESSING_METHODS = {"query", "aggregate", "merge", "pivot", "calculate", "compare", "trend", "extract_hierarchy"}
+DATA_PROCESSING_METHODS = {"query", "aggregate", "merge", "append", "pivot", "calculate", "compare", "trend", "extract_hierarchy"}
 SEARCH_METHODS = {"search_data_tables", "list_data_tables"}
 # 上下文压缩阈值：当 messages 的 JSON 超过此字节数时，压缩早期的工具结果
 CONTEXT_COMPRESS_THRESHOLD = 50000
@@ -124,6 +124,90 @@ def fetch_table_metadata_from_db(
         }
 
     return result
+
+
+def query_data_tables_list(
+    keyword: str = "",
+    tenant_id: Optional[str] = None,
+    subagent_id: Optional[str] = None,
+    loaded_table_ids: Optional[set] = None,
+) -> List[Dict]:
+    """查询租户范围内全部数据表列表（本租户 + 已启用共享来源租户 + 本租户内被移动的表）。
+
+    供 AnalysisAgent.list_data_tables 与 SmartDataAnalysisTool 开局批量选表复用：
+    后者在数据表数不超过全量阈值时据此一次性选中全部表预加载，免去内层模型
+    逐个 search/load_table（2026-10 改进1）。
+
+    移动兜底（2026-09-20 设计 §4.4）：用户在知识库界面移动 [数据表] 文档会覆盖
+    source_type，按标题前缀兜底纳入本租户被移动的表；共享侧不放宽（精确对约束）。
+    """
+    from src.db.database import get_db_connection
+
+    loaded = loaded_table_ids or set()
+    tenant_sql, tenant_params = _build_tenant_scope_params(tenant_id, subagent_id)
+    # ILIKE 模式必须参数化传值：带参执行时查询串里的字面 % 会被 psycopg2 当占位符解析
+    moved_sql = " OR (tenant_id = %s AND title ILIKE %s)" if tenant_id else ""
+    moved_params = [tenant_id, "[数据表] %"] if tenant_id else []
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if keyword:
+            cursor.execute(
+                f"""
+                SELECT id, title, summary, metadata
+                FROM documents
+                WHERE (source_type = 'data-analysis-metadata'{tenant_sql}{moved_sql})
+                  AND (title ILIKE %s OR summary ILIKE %s)
+                ORDER BY created_at DESC
+                """,
+                (*tenant_params, *moved_params, f"%{keyword}%", f"%{keyword}%"),
+            )
+        else:
+            cursor.execute(
+                f"""
+                SELECT id, title, summary, metadata
+                FROM documents
+                WHERE (source_type = 'data-analysis-metadata'{tenant_sql}{moved_sql})
+                ORDER BY created_at DESC
+                """,
+                (*tenant_params, *moved_params),
+            )
+
+        results = []
+        for row in cursor.fetchall():
+            r = dict(row)
+            meta = r.get("metadata", {})
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except (json.JSONDecodeError, TypeError):
+                    meta = {}
+            table_name = meta.get("table_name", r.get("title", "").replace("[数据表] ", ""))
+            table_id = str(r["id"])
+            results.append({
+                "table_id": table_id,
+                "table_name": table_name,
+                "description": r.get("summary", ""),
+                "columns_count": len(meta.get("columns", [])),
+                "loaded": table_id in loaded,
+            })
+        return results
+
+
+def create_data_tables_retriever():
+    """构建数据表语义检索器（HybridRetriever，向量维度 1024）。
+
+    供 AnalysisAgent._get_retriever 与 SmartDataAnalysisTool 开局语义选表复用。
+    """
+    from src.config.settings import get_embedding_api_key
+    from src.knowledge.vector_db.vector_db import get_vector_db
+    from src.knowledge.embedding.embedding_client import TextEmbeddingV3Client
+    from src.knowledge.retriever.hybrid_retriever import HybridRetriever
+
+    return HybridRetriever(
+        vector_db=get_vector_db(dimension=1024),
+        embedding_client=TextEmbeddingV3Client(api_key=get_embedding_api_key()),
+        conn=None,
+    )
 
 
 class AnalysisAgent:
@@ -333,7 +417,18 @@ class AnalysisAgent:
         return self._build_result(success=True, summary=summary, iterations=iterations, start_time=start_time)
 
     async def _execute_tool(self, method_name: str, params: Dict, iteration: int) -> Dict[str, Any]:
-        """执行单个工具调用，返回结果字典。"""
+        """执行单个工具调用，返回结果字典。
+
+        成功执行后输出 [AnalysisAgent][TOOL] 打点（改进1验证依赖）：重放日志据此
+        统计内层工具调用次数，对比改进前后的 load_table / search 探索轮数。
+        """
+        result = await self._dispatch_tool(method_name, params, iteration)
+        if result.get("success", False):
+            logger.info(f"[AnalysisAgent][TOOL] {method_name}")
+        return result
+
+    async def _dispatch_tool(self, method_name: str, params: Dict, iteration: int) -> Dict[str, Any]:
+        """按方法名分发执行（_execute_tool 主体，成功打点在其上层统一收口）。"""
         # 白名单校验
         if method_name not in ALLOWED_METHODS:
             return {"success": False, "error": f"不允许的方法: {method_name}"}
@@ -610,7 +705,17 @@ class AnalysisAgent:
         parts = [f"## 用户需求\n{requirement}"]
 
         if self._loaded_table_ids:
-            parts.append(f"## 已加载的数据表\n{self._build_tables_info()}")
+            # 改进1（2026-10）：表已由服务端预加载并附完整 schema，开局即明示禁止对
+            # 清单内的表重复 search/load（此前 36 张同构表被内层模型逐个 load_table
+            # 共 82 次，全量列定义永久滞留上下文拖垮成本）
+            table_count = len(self.tables_metadata)
+            parts.append(
+                "## 已加载的数据表（系统已预加载）\n"
+                f"以下 {table_count} 张表已由系统预加载完成并附完整字段结构"
+                "（表名/列名/类型/说明），直接开始分析；对清单内的表调用 load_table 或 "
+                "search_data_tables 属于错误，仅当确实需要清单外的表时才允许，属例外情况。\n"
+                f"{self._build_tables_info()}"
+            )
         else:
             parts.append(
                 "## 说明\n"
@@ -694,21 +799,25 @@ class AnalysisAgent:
                          f"size {total_size} -> {sum(len(json.dumps(m, ensure_ascii=False)) for m in messages)}")
 
     def _build_tables_info(self) -> str:
-        """构建表 Metadata 文本描述。"""
+        """构建表 Metadata 文本描述。
+
+        只渲染对模型有意义的白名单字段（表名/说明/行列数/列定义/非空枚举值）；
+        source 文件路径、connector_id 等内部字段一律不进给模型的消息。
+        """
         parts = []
         for meta in self.tables_metadata:
             table_id = meta.get("table_id", "unknown")
             table_name = meta.get("table_name", meta.get("name", "未命名"))
             description = meta.get("description", "")
+            columns = meta.get("columns", [])
             row_count = meta.get("row_count", "?")
-            col_count = meta.get("column_count", "?")
+            col_count = meta.get("column_count") or (len(columns) if columns else "?")
 
             info = f"### 表: {table_name} (table_id: {table_id})\n"
             if description:
                 info += f"说明: {description}\n"
             info += f"行数: {row_count}, 列数: {col_count}\n"
 
-            columns = meta.get("columns", [])
             if columns:
                 info += "字段:\n"
                 for col in columns:
@@ -718,6 +827,10 @@ class AnalysisAgent:
                     info += f"  - {col_name} ({col_type})"
                     if col_desc:
                         info += f": {col_desc}"
+                    # 列级过滤：仅非空 enum_values 参与渲染（与 schema_saver 口径一致，最多 10 个）
+                    enum_values = col.get("enum_values") or []
+                    if enum_values:
+                        info += ", 枚举值: " + ", ".join(str(v) for v in enum_values[:10])
                     info += "\n"
 
             parts.append(info)
@@ -810,6 +923,12 @@ class AnalysisAgent:
             how = params.get("how", "left")
             return f"{how} 关联 {params.get('left_ref', '?')} 和 {params.get('right_ref', '?')}"
 
+        if method_name == "append":
+            sources = params.get("sources", [])
+            labels = list((params.get("label_columns") or {}).keys())
+            label_note = f"，标签列: {', '.join(labels)}" if labels else ""
+            return f"纵向堆叠 {len(sources)} 张表{label_note}"
+
         if method_name == "pivot":
             return f"透视: {params.get('index', '?')} × {params.get('columns', '?')}"
 
@@ -839,19 +958,7 @@ class AnalysisAgent:
     def _get_retriever(self):
         """惰性初始化 HybridRetriever。"""
         if self._retriever is None:
-            from src.config.settings import get_embedding_api_key
-            from src.knowledge.vector_db.vector_db import get_vector_db
-            from src.knowledge.embedding.embedding_client import TextEmbeddingV3Client
-            from src.knowledge.retriever.hybrid_retriever import HybridRetriever
-
-            embedding_api_key = get_embedding_api_key()
-            vector_db = get_vector_db(dimension=1024)
-            embedding_client = TextEmbeddingV3Client(api_key=embedding_api_key)
-            self._retriever = HybridRetriever(
-                vector_db=vector_db,
-                embedding_client=embedding_client,
-                conn=None,
-            )
+            self._retriever = create_data_tables_retriever()
         return self._retriever
 
     def _load_shared_ranges(self) -> List[tuple]:
@@ -983,14 +1090,15 @@ class AnalysisAgent:
         if table_id in self._loaded_table_ids:
             for meta in self.tables_metadata:
                 if str(meta.get("table_id", meta.get("doc_id", ""))) == table_id:
+                    # 改进1：表已在开局由系统预加载，列定义已在初始消息清单里——
+                    # 再回吐全量 columns 只会重复膨胀上下文，这里只回精简确认
                     return {
                         "success": True,
                         "table_id": table_id,
                         "table_name": meta.get("table_name", ""),
-                        "message": "表已加载",
-                        "row_count": 0,
+                        "message": "该表已在开局由系统预加载完成，字段结构见初始消息清单，无需重复加载",
+                        "row_count": meta.get("row_count", 0),
                         "column_count": len(meta.get("columns", [])),
-                        "columns": meta.get("columns", []),
                     }
             return {"success": True, "table_id": table_id, "message": "表已加载"}
 
@@ -1183,60 +1291,10 @@ class AnalysisAgent:
             return result
 
     def _query_data_tables_list(self, keyword: str = "") -> List[Dict]:
-        """查询所有数据表列表（本租户 + 已启用共享来源租户 + 本租户内被移动的表）。
-
-        移动兜底（2026-09-20 设计 §4.4）：用户在知识库界面移动 [数据表] 文档会覆盖
-        source_type，按标题前缀兜底纳入本租户被移动的表；共享侧不放宽（精确对约束）。
-        """
-        from src.db.database import get_db_connection
-
-        tenant_sql, tenant_params = self._build_tenant_scope()
-        # ILIKE 模式必须参数化传值：带参执行时查询串里的字面 % 会被 psycopg2 当占位符解析
-        moved_sql = " OR (tenant_id = %s AND title ILIKE %s)" if self.tenant_id else ""
-        moved_params = [self.tenant_id, "[数据表] %"] if self.tenant_id else []
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            if keyword:
-                cursor.execute(
-                    f"""
-                    SELECT id, title, summary, metadata
-                    FROM documents
-                    WHERE (source_type = 'data-analysis-metadata'{tenant_sql}{moved_sql})
-                      AND (title ILIKE %s OR summary ILIKE %s)
-                    ORDER BY created_at DESC
-                    """,
-                    (*tenant_params, *moved_params, f"%{keyword}%", f"%{keyword}%"),
-                )
-            else:
-                cursor.execute(
-                    f"""
-                    SELECT id, title, summary, metadata
-                    FROM documents
-                    WHERE (source_type = 'data-analysis-metadata'{tenant_sql}{moved_sql})
-                    ORDER BY created_at DESC
-                    """,
-                    (*tenant_params, *moved_params),
-                )
-
-            results = []
-            for row in cursor.fetchall():
-                r = dict(row)
-                meta = r.get("metadata", {})
-                if isinstance(meta, str):
-                    try:
-                        meta = json.loads(meta)
-                    except (json.JSONDecodeError, TypeError):
-                        meta = {}
-                table_name = meta.get("table_name", r.get("title", "").replace("[数据表] ", ""))
-                table_id = str(r["id"])
-                results.append({
-                    "table_id": table_id,
-                    "table_name": table_name,
-                    "description": r.get("summary", ""),
-                    "columns_count": len(meta.get("columns", [])),
-                    "loaded": table_id in self._loaded_table_ids,
-                })
-            return results
+        """查询所有数据表列表（委托模块级 query_data_tables_list，供 SmartDataAnalysisTool 复用）。"""
+        return query_data_tables_list(
+            keyword, self.tenant_id, self.subagent_id, self._loaded_table_ids
+        )
 
     def _fetch_single_table_metadata(self, table_id: str) -> Optional[Dict]:
         """查询单个表的完整 metadata（本租户 + 已启用共享来源租户 + 本租户内被移动的表）。"""

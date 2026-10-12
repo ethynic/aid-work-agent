@@ -1,10 +1,10 @@
 """
 AnalysisAgent 工具 Schema 定义 + System Prompt
 
-15 个工具的 JSON Schema（OpenAI function calling 格式）：
+16 个工具的 JSON Schema（OpenAI function calling 格式）：
   检索: search_data_tables, list_data_tables
   加载: load_table, load_output（会话内产物复用）
-  分析: query, aggregate, merge, pivot, calculate, compare, trend
+  分析: query, aggregate, merge, append, pivot, calculate, compare, trend
   输出: to_table, to_chart
 """
 
@@ -83,6 +83,16 @@ aggregate(source=table_id, group_by=["品类","渠道"], aggregations=[{"column"
 pivot(source="long", index="品类", columns="渠道", values="毛利", output_var="wide")
 to_chart(source="wide", chart_type="grouped_bar", x_column="品类", y_columns=[各渠道列], title="各品类分渠道毛利对比")
 
+**模式G：多表堆叠汇总（N 张同构表，如 6国×3月×2类=36张）**
+多张结构相同的表要按行合并时，必须用 append 一次堆叠（UNION ALL 语义），并用 label_columns 在**同一次调用**中为每张表打来源标签，再一次 aggregate 汇总：
+append(sources=[全部 table_id 按顺序], label_columns={"国家": [每张表对应的国家], "月份": [每张表对应的月份]}) → aggregate(group_by=["国家","月份"], aggregations=[...]) → to_chart
+⚠️ label_columns 每个值列表的长度必须等于 sources 数量，按顺序一一对应。
+⚠️ 严禁逐表 calculate 打来源标签（N 张表 = N 次调用，浪费大量步骤）；
+⚠️ 严禁用 outer merge 冒充纵向堆叠——merge 是按关联键横向匹配，append 才是按行堆叠。
+示例：18 张月报（6国×3月）汇总
+append(sources=["t1","t2",...], label_columns={"国家": ["中国","美国","日本","德国","英国","法国","中国",...], "月份": ["1月","1月","1月","1月","1月","1月","2月",...]}, output_var="all_data")
+aggregate(source="all_data", group_by=["国家","月份"], aggregations=[{"column":"销售额","function":"sum"}], output_var="summary")
+
 ### 4.3 执行原则
 
 1. source 参数支持三种引用：table_id、output_var、文件路径
@@ -113,6 +123,7 @@ to_chart(source="wide", chart_type="grouped_bar", x_column="品类", y_columns=[
 - ⚠️ extract_hierarchy 内置 sort_by/sort_order 参数，聚合后可直接排序，不需要额外 query 排序
 - ⚠️ 禁止对同一个数据重复调用 to_table。如果已经输出过一次，不要换变量名再输出一次
 - ⚠️ 当需求涉及"按区间/档次/等级分组统计"时（如"按金额分档"、"按年龄段统计"），必须用 calculate 的 if 嵌套表达式一次性生成分组列，然后 aggregate 汇总。禁止对每个档位分别 query 再 merge，这会浪费大量步骤
+- ⚠️ 当需求涉及"多张同构表合并/堆叠汇总"时（如 36 张分国家分月度报表），必须用 append 一次堆叠并用 label_columns 打来源标签，再一次 aggregate。禁止逐表 calculate 打标签，禁止用 outer merge 冒充纵向堆叠
 
 ## 收尾规范（重要！）
 
@@ -386,6 +397,32 @@ ANALYSIS_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "append",
+            "description": "多表纵向堆叠（UNION ALL 语义）。将 N 张同构表按行拼接为一张表：列取并集，某表缺失的列补空值；不排序不去重，保持 sources 顺序。可用 label_columns 在同一次调用中按来源顺序为每张表插入来源标签列（如国家、月份）。多张结构相同的表合并汇总时必须用本工具，禁止用 outer merge 冒充堆叠、禁止逐表 calculate 打标签。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sources": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": f"要堆叠的数据源引用列表（按行拼接顺序）：{_REF_DESC}",
+                    },
+                    "label_columns": {
+                        "type": "object",
+                        "description": "（可选）来源标签列：键为新列名，值为与 sources 等长的列表，第 i 个值作为常量列插入第 i 张表的所有行。示例：{\"国家\": [\"中国\", \"美国\"], \"月份\": [\"1月\", \"2月\"]}",
+                    },
+                    "output_var": {
+                        "type": "string",
+                        "description": "输出变量名，供后续步骤引用",
+                    },
+                },
+                "required": ["sources"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "pivot",
             "description": "透视表（长表→宽表）。按行维度和列维度交叉汇总。",
             "parameters": {
@@ -627,7 +664,7 @@ ALLOWED_METHODS = {
     # 概览
     "describe",
     # 分析
-    "query", "aggregate", "merge", "pivot",
+    "query", "aggregate", "merge", "append", "pivot",
     "calculate", "compare", "trend", "extract_hierarchy",
     # 输出
     "to_table", "to_chart",

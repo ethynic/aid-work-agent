@@ -526,6 +526,80 @@ class TestMerge:
             analyzer.merge("left", "right", "id", "id", how="cross")
 
 
+# ==================== append（纵向堆叠，UNION ALL 语义） ====================
+
+
+class TestAppend:
+
+    def test_basic_append(self, analyzer):
+        """正常堆叠：行数相加，保持 sources 顺序，不排序不去重"""
+        analyzer._variables["a"] = pd.DataFrame({"region": ["华东"], "sales": [100]})
+        analyzer._variables["b"] = pd.DataFrame({"region": ["华北"], "sales": [200]})
+        result = analyzer.append(["a", "b"])
+        assert isinstance(result, pd.DataFrame)
+        assert len(result) == 2
+        assert list(result["region"]) == ["华东", "华北"]
+        assert list(result["sales"]) == [100, 200]
+
+    def test_append_column_union_fills_nan(self, analyzer):
+        """列集并集：某表缺失的列补 NaN"""
+        analyzer._variables["a"] = pd.DataFrame({"sales": [100], "cost": [60]})
+        analyzer._variables["b"] = pd.DataFrame({"sales": [200]})
+        result = analyzer.append(["a", "b"])
+        assert set(result.columns) == {"sales", "cost"}
+        assert result["cost"].iloc[0] == 60
+        assert pd.isna(result["cost"].iloc[1])
+
+    def test_append_label_columns(self, analyzer):
+        """label_columns 按 sources 顺序为每张表插入常量标签列"""
+        analyzer._variables["cn_1"] = pd.DataFrame({"v": [1]})
+        analyzer._variables["us_1"] = pd.DataFrame({"v": [2]})
+        result = analyzer.append(
+            ["cn_1", "us_1"],
+            label_columns={"国家": ["中国", "美国"], "月份": ["1月", "2月"]},
+        )
+        assert list(result["国家"]) == ["中国", "美国"]
+        assert list(result["月份"]) == ["1月", "2月"]
+
+    def test_append_label_length_mismatch_raises(self, analyzer):
+        """label_columns 值列表长度不等于 len(sources) 时抛 ValueError"""
+        analyzer._variables["a"] = pd.DataFrame({"v": [1]})
+        analyzer._variables["b"] = pd.DataFrame({"v": [2]})
+        with pytest.raises(ValueError, match="必须等于 sources 数量"):
+            analyzer.append(["a", "b"], label_columns={"国家": ["中国"]})
+
+    def test_append_source_not_found_raises(self, analyzer):
+        """任一 source 不存在时抛 ValueError"""
+        analyzer._variables["a"] = pd.DataFrame({"v": [1]})
+        with pytest.raises(ValueError, match="数据源不存在"):
+            analyzer.append(["a", "no_such_source"])
+
+    def test_append_empty_sources_raises(self, analyzer):
+        with pytest.raises(ValueError, match="sources 不能为空"):
+            analyzer.append([])
+
+    def test_append_then_aggregate(self, analyzer):
+        """模式G 回归：一次堆叠打标 → 一次 aggregate 按来源分组汇总"""
+        analyzer._variables["cn_1"] = pd.DataFrame({"销售额": [100, 150]})
+        analyzer._variables["us_1"] = pd.DataFrame({"销售额": [200, 250]})
+        analyzer._variables["cn_2"] = pd.DataFrame({"销售额": [120, 180]})
+        analyzer._store(
+            "all_data",
+            analyzer.append(
+                ["cn_1", "us_1", "cn_2"],
+                label_columns={"国家": ["中国", "美国", "中国"], "月份": ["1月", "1月", "2月"]},
+            ),
+        )
+        result = analyzer.aggregate(
+            "all_data",
+            group_by=["国家"],
+            aggregations=[{"column": "销售额", "function": "sum"}],
+        )
+        totals = dict(zip(result["国家"], result["销售额_sum"]))
+        assert totals["中国"] == 550  # 100+150+120+180
+        assert totals["美国"] == 450  # 200+250
+
+
 # ==================== pivot ====================
 
 

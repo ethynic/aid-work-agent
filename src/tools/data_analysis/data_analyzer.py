@@ -1,8 +1,8 @@
 """
 DataAnalyzer — pandas/numpy 数据分析执行引擎
 
-提供 query/aggregate/merge/pivot/calculate/compare/trend/to_table/to_chart 共 9 个分析方法，
-以及数据加载（load_table）和变量管理（_resolve_source/_store）。
+提供 query/aggregate/merge/append/pivot/calculate/compare/trend/to_table/to_chart
+等分析方法，以及数据加载（load_table）和变量管理（_resolve_source/_store）。
 """
 
 import json
@@ -503,6 +503,53 @@ class DataAnalyzer:
 
         result = pd.merge(left_df, right_df, left_on=left_on, right_on=right_on, how=how)
         return result.reset_index(drop=True)
+
+    def append(
+        self,
+        sources: List[str],
+        label_columns: Optional[Dict[str, List[Any]]] = None,
+    ) -> pd.DataFrame:
+        """
+        多表纵向堆叠（UNION ALL 语义）：pd.concat(ignore_index=True)。
+
+        列取所有来源的并集，某表缺失的列补 NaN；不排序不去重，保持 sources 顺序。
+        label_columns 可在一次调用中按来源顺序为每张表插入常量标签列（如国家、月份），
+        供后续 aggregate 分组汇总——替代"逐表 calculate 打标签 + 逐对 merge"的低效拼法。
+
+        Args:
+            sources: 数据源引用列表（变量名 / table_id / 文件路径）
+            label_columns: 可选标签列映射。键为新列名，值列表长度必须等于 len(sources)，
+                第 i 个元素作为常量插入第 i 个 source 的所有行
+
+        Raises:
+            ValueError: sources 为空、任一 source 不存在，或标签值列表长度不匹配
+        """
+        if not sources:
+            raise ValueError("sources 不能为空，必须提供至少一个数据源引用")
+
+        dfs: List[pd.DataFrame] = []
+        for src in sources:
+            df = self._resolve_source(src)
+            if df is None:
+                raise ValueError(f"数据源不存在: {src}")
+            dfs.append(df)
+
+        if label_columns:
+            for col_name, values in label_columns.items():
+                if len(values) != len(sources):
+                    raise ValueError(
+                        f"label_columns['{col_name}'] 长度 ({len(values)}) "
+                        f"必须等于 sources 数量 ({len(sources)})"
+                    )
+            labeled = []
+            for i, df in enumerate(dfs):
+                df = df.copy()
+                for col_name, values in label_columns.items():
+                    df[col_name] = values[i]
+                labeled.append(df)
+            dfs = labeled
+
+        return pd.concat(dfs, ignore_index=True)
 
     def pivot(
         self,

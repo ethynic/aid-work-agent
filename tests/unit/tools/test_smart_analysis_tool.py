@@ -406,3 +406,223 @@ class TestGatewaySelection:
 
             assert result["success"] is True
             assert MockAgent.call_args.kwargs["llm_gateway"] is master_llm
+
+
+class TestBatchSelectAndLoad:
+    """开局服务端批量选表加载（2026-10 改进1）：调用方未传表时由服务端选表并
+    批量预加载，模型开局即面对「已加载的表 + 完整 schema」，禁止内层模型逐个
+    search/load_table。"""
+
+    def _mock_result(self):
+        return {"success": True, "conclusion": "ok", "artifacts": [],
+                "analysis_meta": {"iterations": 1, "duration_ms": 10, "tokens_used": 10,
+                                  "tables_used": [], "trace_id": "t"}}
+
+    @pytest.mark.asyncio
+    async def test_execute_without_metadata_batch_loads_all_tables(self):
+        """表数 <= 阈值：全量选中，回查完整 metadata 批量加载后传入 AnalysisAgent"""
+        summaries = [
+            {"table_id": "11", "table_name": "销售", "description": "d1", "columns_count": 1, "loaded": False},
+            {"table_id": "12", "table_name": "库存", "description": "d2", "columns_count": 1, "loaded": False},
+        ]
+        meta_11 = {"table_id": "11", "table_name": "销售", "description": "d1",
+                   "columns": [{"name": "region", "data_type": "text", "description": "区域"}],
+                   "source": {"type": "database", "connector_id": "c1", "db_table_name": "sales"}}
+        meta_12 = {"table_id": "12", "table_name": "库存", "description": "d2",
+                   "columns": [{"name": "sku", "data_type": "text", "description": "编码"}],
+                   "source": {"type": "excel", "file_path": "inv.xlsx"}}
+
+        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer, \
+             patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
+             patch("src.tools.data_analysis.analysis_agent.query_data_tables_list") as mock_query, \
+             patch("src.tools.data_analysis.analysis_agent.fetch_table_metadata_from_db") as mock_fetch, \
+             patch("src.core.master_agent"):
+            mock_query.return_value = summaries
+            mock_fetch.side_effect = lambda tid, tenant, sub: {"11": meta_11, "12": meta_12}[tid]
+            mock_analyzer_instance = MockAnalyzer.return_value
+            mock_analyzer_instance.load_table = AsyncMock(return_value="ok")
+            mock_agent_instance = MockAgent.return_value
+            mock_agent_instance.run = AsyncMock(return_value=self._mock_result())
+
+            tool = SmartDataAnalysisTool()
+            from src.tools.context import ToolExecutionContext, tool_execution_scope
+            with tool_execution_scope(ToolExecutionContext(tenant_id="t1")):
+                result = await tool.execute(requirement="各区域销售情况")
+
+            assert result["success"] is True
+            # 完整 metadata 列表经 tables_metadata 参数传入 AnalysisAgent
+            assert MockAgent.call_args.kwargs["tables_metadata"] == [meta_11, meta_12]
+            assert mock_analyzer_instance.load_table.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_execute_with_metadata_skips_batch_select(self):
+        """调用方已传表：走既有预加载路径，不再触发服务端批量选表"""
+        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer, \
+             patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
+             patch("src.tools.data_analysis.analysis_agent.query_data_tables_list") as mock_query, \
+             patch("src.tools.data_analysis.analysis_agent.fetch_table_metadata_from_db") as mock_fetch, \
+             patch("src.core.master_agent"):
+            mock_fetch.return_value = {"table_id": "t1", "source": {"type": "excel", "file_path": "a.xlsx"}}
+            mock_analyzer_instance = MockAnalyzer.return_value
+            mock_analyzer_instance.load_table = AsyncMock(return_value="ok")
+            mock_agent_instance = MockAgent.return_value
+            mock_agent_instance.run = AsyncMock(return_value=self._mock_result())
+
+            tool = SmartDataAnalysisTool()
+            result = await tool.execute(
+                requirement="按区域统计销售额",
+                tables_metadata=[{"table_id": "t1", "source": {"type": "excel", "file_path": "a.xlsx"}}],
+            )
+
+            assert result["success"] is True
+            mock_query.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_execute_over_threshold_uses_semantic_select(self, monkeypatch):
+        """表数 > 阈值：按 requirement 语义检索 top N 选中，仅加载选中的表"""
+        from src.tools.data_analysis import smart_analysis_tool
+        monkeypatch.setattr(smart_analysis_tool, "FULL_LOAD_THRESHOLD", 1)
+
+        summaries = [
+            {"table_id": str(i), "table_name": f"表{i}", "description": "", "columns_count": 1, "loaded": False}
+            for i in (11, 12, 13)
+        ]
+        meta_12 = {"table_id": "12", "table_name": "表12",
+                   "columns": [{"name": "a", "data_type": "text"}],
+                   "source": {"type": "excel", "file_path": "a.xlsx"}}
+        meta_13 = {"table_id": "13", "table_name": "表13",
+                   "columns": [{"name": "b", "data_type": "text"}],
+                   "source": {"type": "excel", "file_path": "b.xlsx"}}
+
+        fake_retriever = MagicMock()
+        fake_retriever.retrieve = AsyncMock(return_value=[
+            {"doc_id": 12, "score": 0.9}, {"doc_id": 13, "score": 0.8},
+        ])
+
+        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer, \
+             patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
+             patch("src.tools.data_analysis.analysis_agent.query_data_tables_list") as mock_query, \
+             patch("src.tools.data_analysis.analysis_agent.create_data_tables_retriever", return_value=fake_retriever), \
+             patch("src.tools.data_analysis.analysis_agent.fetch_table_metadata_from_db") as mock_fetch, \
+             patch("src.core.master_agent"):
+            mock_query.return_value = summaries
+            mock_fetch.side_effect = lambda tid, tenant, sub: {"12": meta_12, "13": meta_13}[tid]
+            mock_analyzer_instance = MockAnalyzer.return_value
+            mock_analyzer_instance.load_table = AsyncMock(return_value="ok")
+            mock_agent_instance = MockAgent.return_value
+            mock_agent_instance.run = AsyncMock(return_value=self._mock_result())
+
+            tool = SmartDataAnalysisTool()
+            from src.tools.context import ToolExecutionContext, tool_execution_scope
+            with tool_execution_scope(ToolExecutionContext(tenant_id="t1")):
+                result = await tool.execute(requirement="各渠道销售对比")
+
+            assert result["success"] is True
+            # 按 requirement 语义检索，只加载选中的 2 张
+            fake_retriever.retrieve.assert_awaited_once()
+            kwargs = fake_retriever.retrieve.await_args.kwargs
+            assert kwargs["query"] == "各渠道销售对比"
+            assert kwargs["top_k"] == smart_analysis_tool.SEMANTIC_SELECT_TOP_K
+            assert kwargs["source_type"] == "data-analysis-metadata"
+            assert MockAgent.call_args.kwargs["tables_metadata"] == [meta_12, meta_13]
+
+    @pytest.mark.asyncio
+    async def test_batch_load_single_failure_skips_table(self):
+        """个别表加载失败（孤儿表）→ 跳过并继续，不阻断整体分析"""
+        summaries = [
+            {"table_id": "11", "table_name": "损坏表", "description": "", "columns_count": 1, "loaded": False},
+            {"table_id": "12", "table_name": "正常表", "description": "", "columns_count": 1, "loaded": False},
+        ]
+        meta_11 = {"table_id": "11", "table_name": "损坏表",
+                   "columns": [{"name": "a", "data_type": "text"}],
+                   "source": {"type": "excel", "file_path": "missing.xlsx"}}
+        meta_12 = {"table_id": "12", "table_name": "正常表",
+                   "columns": [{"name": "b", "data_type": "text"}],
+                   "source": {"type": "excel", "file_path": "ok.xlsx"}}
+
+        async def _load(meta):
+            if meta["table_id"] == "11":
+                raise ValueError("源数据不存在")
+            return meta["table_id"]
+
+        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer, \
+             patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
+             patch("src.tools.data_analysis.analysis_agent.query_data_tables_list") as mock_query, \
+             patch("src.tools.data_analysis.analysis_agent.fetch_table_metadata_from_db") as mock_fetch, \
+             patch("src.core.master_agent"):
+            mock_query.return_value = summaries
+            mock_fetch.side_effect = lambda tid, tenant, sub: {"11": meta_11, "12": meta_12}[tid]
+            mock_analyzer_instance = MockAnalyzer.return_value
+            mock_analyzer_instance.load_table = AsyncMock(side_effect=_load)
+            mock_agent_instance = MockAgent.return_value
+            mock_agent_instance.run = AsyncMock(return_value=self._mock_result())
+
+            tool = SmartDataAnalysisTool()
+            from src.tools.context import ToolExecutionContext, tool_execution_scope
+            with tool_execution_scope(ToolExecutionContext(tenant_id="t1")):
+                result = await tool.execute(requirement="销售分析")
+
+            assert result["success"] is True
+            assert MockAgent.call_args.kwargs["tables_metadata"] == [meta_12]
+
+    @pytest.mark.asyncio
+    async def test_batch_select_query_failure_degrades_to_search_mode(self):
+        """表列表查询失败 → 退回不预加载（AnalysisAgent 收到空表自行 search），不报错"""
+        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer, \
+             patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
+             patch("src.tools.data_analysis.analysis_agent.query_data_tables_list") as mock_query, \
+             patch("src.core.master_agent"):
+            mock_query.side_effect = Exception("DB down")
+            mock_analyzer_instance = MockAnalyzer.return_value
+            mock_analyzer_instance.load_table = AsyncMock()
+            mock_agent_instance = MockAgent.return_value
+            mock_agent_instance.run = AsyncMock(return_value=self._mock_result())
+
+            tool = SmartDataAnalysisTool()
+            from src.tools.context import ToolExecutionContext, tool_execution_scope
+            with tool_execution_scope(ToolExecutionContext(tenant_id="t1")):
+                result = await tool.execute(requirement="销售分析")
+
+            assert result["success"] is True
+            assert MockAgent.call_args.kwargs["tables_metadata"] == []
+
+    @pytest.mark.asyncio
+    async def test_batch_select_skipped_without_tenant(self):
+        """无租户上下文：不批量选表（避免列表查询放大为跨租户全局视图）"""
+        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer, \
+             patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
+             patch("src.tools.data_analysis.analysis_agent.query_data_tables_list") as mock_query, \
+             patch("src.core.master_agent"):
+            mock_analyzer_instance = MockAnalyzer.return_value
+            mock_analyzer_instance.load_table = AsyncMock()
+            mock_agent_instance = MockAgent.return_value
+            mock_agent_instance.run = AsyncMock(return_value=self._mock_result())
+
+            tool = SmartDataAnalysisTool()
+            result = await tool.execute(requirement="销售分析")
+
+            assert result["success"] is True
+            mock_query.assert_not_called()
+            assert MockAgent.call_args.kwargs["tables_metadata"] == []
+
+    @pytest.mark.asyncio
+    async def test_load_one_table_excel_runs_in_thread(self, tmp_path, monkeypatch):
+        """Excel 源经 asyncio.to_thread 线程加载，数据真正进入分析环境"""
+        from src.core import storage as storage_mod
+        monkeypatch.setattr(storage_mod, "_TENANTS_ROOT", str(tmp_path / "tenants"))
+
+        from src.tools.data_analysis.data_analyzer import DataAnalyzer
+        from src.tools.data_analysis.smart_analysis_tool import _load_one_table
+
+        csv_path = tmp_path / "inv.csv"
+        csv_path.write_text("sku,qty\nA,1\nB,2\n", encoding="utf-8")
+        analyzer = DataAnalyzer(session_id="s1")
+
+        table_id = await _load_one_table(analyzer, {
+            "table_id": "12",
+            "table_name": "库存",
+            "source": {"type": "excel", "file_path": str(csv_path)},
+        })
+
+        assert table_id == "12"
+        assert len(analyzer._tables["12"]) == 2

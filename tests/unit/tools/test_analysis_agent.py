@@ -618,10 +618,10 @@ class TestEmptySummaryFallback:
 
 class TestWhitelist:
     def test_allowed_methods(self):
-        """白名单包含全部 15 个方法"""
+        """白名单包含全部 16 个方法"""
         from src.tools.data_analysis.analysis_tools_schema import ALLOWED_METHODS
         expected = {"search_data_tables", "list_data_tables", "load_table", "load_output", "describe",
-                    "query", "aggregate", "merge", "pivot", "calculate",
+                    "query", "aggregate", "merge", "append", "pivot", "calculate",
                     "compare", "trend", "extract_hierarchy", "to_table", "to_chart"}
         assert expected == ALLOWED_METHODS
 
@@ -647,9 +647,9 @@ class TestWhitelist:
 
 class TestSchemaDefinition:
     def test_tools_count(self):
-        """工具定义数量为 15"""
+        """工具定义数量为 16"""
         from src.tools.data_analysis.analysis_tools_schema import ANALYSIS_TOOLS
-        assert len(ANALYSIS_TOOLS) == 15
+        assert len(ANALYSIS_TOOLS) == 16
 
     def test_all_tools_have_required_structure(self):
         """每个工具定义包含 name/description/parameters"""
@@ -665,7 +665,7 @@ class TestSchemaDefinition:
             assert "properties" in params
             names.add(func["name"])
         assert names == {"search_data_tables", "list_data_tables", "load_table", "load_output", "describe",
-                         "query", "aggregate", "merge", "pivot", "calculate",
+                         "query", "aggregate", "merge", "append", "pivot", "calculate",
                          "compare", "trend", "extract_hierarchy", "to_table", "to_chart"}
 
     def test_source_in_data_methods(self):
@@ -1009,3 +1009,77 @@ class TestMovedTableFallback:
             result = await agent._handle_search_data_tables("不存在的表")
         assert result["count"] == 0
         assert "未找到匹配的数据表" in result["hint"]
+
+
+# ============================================================
+# Tests: 开局预加载指令与 load_table 精简确认（2026-10 改进1）
+# ============================================================
+
+
+class TestPreloadInstructionAndSlimLoad:
+    """预加载表开局明示禁重复 search/load；已加载表 load_table 只回精简确认。"""
+
+    def test_build_user_message_preload_instruction(self, agent):
+        """已加载表清单前必须带明确指令：预加载完成、清单内 search/load 属于错误"""
+        msg = agent._build_user_message("按区域统计销售额")
+        assert "以下 1 张表已由系统预加载完成并附完整字段结构" in msg
+        assert "（表名/列名/类型/说明）" in msg
+        assert "对清单内的表调用 load_table 或 search_data_tables 属于错误" in msg
+        assert "仅当确实需要清单外的表时才允许" in msg
+
+    def test_build_tables_info_renders_nonempty_enum_only(self, mock_llm):
+        """列级过滤：非空 enum_values 渲染（最多 10 个），空枚举与内部字段不进消息"""
+        meta = [{
+            "table_id": "t9",
+            "table_name": "订单",
+            "description": "订单数据",
+            "columns": [
+                {"name": "status", "data_type": "text", "description": "状态",
+                 "enum_values": ["paid", "refunded", "closed"]},
+                {"name": "amount", "data_type": "number", "description": "金额",
+                 "enum_values": []},
+            ],
+            "source": {"type": "excel", "file_path": "/data/secret/orders.xlsx"},
+        }]
+        ag = AnalysisAgent(mock_llm, _loaded_analyzer(), "t_enum", tables_metadata=meta)
+
+        info = ag._build_tables_info()
+        assert "枚举值: paid, refunded, closed" in info
+        assert info.count("枚举值") == 1  # 空 enum_values 跳过
+        assert "orders.xlsx" not in info  # source 文件路径不带进消息
+
+    def test_build_tables_info_derives_column_count_when_missing(self, mock_llm):
+        """批量回查的 metadata 无 column_count 时按 columns 推导，不渲染 '?'"""
+        meta = [{
+            "table_id": "t10",
+            "table_name": "库存",
+            "columns": [{"name": "sku", "data_type": "text", "description": "编码"}],
+        }]
+        ag = AnalysisAgent(mock_llm, _loaded_analyzer(), "t_colcount", tables_metadata=meta)
+        info = ag._build_tables_info()
+        assert "列数: 1" in info
+
+    @pytest.mark.asyncio
+    async def test_load_table_already_loaded_returns_slim_confirm(self, agent):
+        """清单内已加载表再 load_table → 精简确认，不回吐全量 columns（列定义已在开局消息）"""
+        result = await agent._handle_load_table("tbl_sales")
+        assert result["success"] is True
+        assert "columns" not in result
+        assert "预加载" in result["message"]
+        assert result["column_count"] == 3
+
+    @pytest.mark.asyncio
+    async def test_load_table_new_table_returns_full_columns(self, agent):
+        """清单外的表（例外情况）加载 → 仍返回完整列定义并计入已加载"""
+        new_meta = {
+            "table_id": "tbl_new", "table_name": "新表", "description": "补充数据",
+            "columns": [{"name": "city", "data_type": "text", "description": "城市"}],
+        }
+        with patch.object(agent, "_fetch_single_table_metadata", return_value=new_meta), \
+             patch.object(agent.analyzer, "load_table", AsyncMock(return_value="tbl_new")):
+            agent.analyzer._tables["tbl_new"] = pd.DataFrame({"city": ["A"]})
+            result = await agent._handle_load_table("tbl_new")
+
+        assert result["success"] is True
+        assert result["columns"][0]["name"] == "city"
+        assert "tbl_new" in agent._loaded_table_ids
