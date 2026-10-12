@@ -642,12 +642,23 @@ const effectiveUser = computed(() => {
 })
 
 // 顶部 Tab 切换
-const tabs = [
+const allTabs = [
   { key: 'chat', label: '客户对话记录' },
   { key: 'stats', label: '引流统计' },
   { key: 'leads', label: '留资线索' },
 ]
+// 有外部系统入口（CRM 按钮来自 API 文档 sso 配置）时，留资线索 tab 与其功能重复，隐藏
+const tabs = computed(() =>
+  externalSystems.value.length > 0 ? allTabs.filter(t => t.key !== 'leads') : allTabs
+)
 const activeTab = ref<'chat' | 'stats' | 'leads'>('chat')
+
+// 外部系统按钮晚于用户点击加载完成时，若停在留资线索 tab 则回到对话记录
+watch(externalSystems, (list) => {
+  if (list.length > 0 && activeTab.value === 'leads') {
+    switchTab('chat')
+  }
+})
 
 // 引流统计（Tab2）
 const stats = ref<{ total_referrals: number; total_messages: number; referrers: any[] }>({ total_referrals: 0, total_messages: 0, referrers: [] })
