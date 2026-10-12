@@ -513,9 +513,10 @@ if (!hasSingleInstanceLock) {
       exitAllowed = true; app.quit()
     }).catch(async () => {
       quitting = false
+      const action = maintenanceRequested ? (updateRequested ? '升级' : '卸载') : '退出'
       maintenanceRequested = false; updateRequested = false
       if (mainWindow) revealWindow(mainWindow)
-      await dialog.showMessageBox({ type: 'warning', title: '执行仍需收尾', message: '本机任务仍在收尾，升级已暂停。程序和执行记录保留，请恢复网络后重新运行安装器；旧版本异常退出请正常重启 Windows。' })
+      await dialog.showMessageBox({ type: 'warning', title: '执行仍需收尾', message: `当前任务仍在收尾，${action}暂未完成。程序和任务记录保留，请恢复网络后重试。历史记录待核对不会阻止退出客户端。` })
     }).finally(() => { exitPending = false })
   })
 }

@@ -39,6 +39,73 @@ function controlledHost() {
 const description = { api_major: 1, host_version: 'fixture', features: ['events'], instance_id: 'fixture-instance', revision: 0 }
 const flush = () => new Promise<void>(resolve => setImmediate(resolve))
 
+function lifecycleHost(advert: 'valid' | 'malformed' | 'absent', proof: 'closed' | 'refused' | 'unbound') {
+  const f = controlledHost(); let state = 'reconciling'; let kills = 0, events = 0
+  f.child.kill = (() => { kills++; return false }) as ChildProcess['kill']
+  f.child.send = ((request: Record<string, unknown>, callback?: (error: Error | null) => void) => {
+    f.child.sent.push(request); callback?.(null)
+    queueMicrotask(() => {
+      if (request.kind === 'runtime_shutdown_request') {
+        const reply = { kind: 'runtime_shutdown_response', instance_id: 'fixture-instance', request_id: request.request_id, method: 'runtime.shutdown', code: 0, error: '', result: { closed: true } }
+        if (proof === 'unbound') {
+          f.child.emit('message', { ...reply, instance_id: 'previous-instance' })
+          f.child.emit('message', { ...reply, extra: true })
+          const { kind: _kind, instance_id: _instance, ...normalH1 } = reply
+          f.child.emit('message', normalH1)
+          f.child.disconnect() // Actual exit without the private proof is insufficient.
+        } else if (proof === 'refused') f.child.emit('message', { ...reply, code: 11, error: 'owned execution still active', result: null })
+        else { f.child.emit('message', reply); f.child.disconnect() }
+        return
+      }
+      let result: unknown
+      if (request.method === 'describe') {
+        if (advert !== 'absent') f.child.emit('message', { kind: 'runtime_lifecycle', instance_id: 'fixture-instance', idle_exit: true, version: 1, ...(advert === 'malformed' ? { extra: true } : {}) })
+        result = description
+      }
+      if (request.method === 'getState') result = { instance_id: 'fixture-instance', state }
+      if (request.method === 'stop') { state = 'stopped'; result = { operation_id: 'stop', operation: 'stop', status: 'succeeded', code: 0, error: '' } }
+      if (request.method === 'operations.get') result = { operation_id: 'stop', operation: 'stop', status: 'succeeded', code: 0, error: '' }
+      f.child.emit('message', { request_id: request.request_id, method: request.method, code: 0, error: '', result })
+    })
+    return true
+  }) as ChildProcess['send']
+  const supervisor = new RuntimeSupervisor({ nodeExecutable: process.execPath, hostEntry: 'isolated-lifecycle-fixture', home: os.tmpdir(), supervisor: 'runtime_app', spawnChild: () => f.child,
+    takeSelectedPackage: async () => { throw new Error('unused selection') }, onEvent: () => { events++ }, onDisconnect() {} })
+  return { ...f, supervisor, counts: () => ({ kills, events }) }
+}
+
+test('historical management close requires advertised private proof and never synthesizes a stop operation', async () => {
+  const f = lifecycleHost('valid', 'closed')
+  try {
+    await f.supervisor.request({ request_id: 'describe', method: 'describe', params: {} }); await f.supervisor.stopAndExit()
+    assert.equal(f.child.sent.filter(request => request.kind === 'runtime_shutdown_request').length, 1)
+    assert.equal(f.child.sent.some(request => request.method === 'stop'), false)
+    assert.deepEqual(f.counts(), { kills: 0, events: 0 })
+  } finally { if (f.child.connected) f.child.disconnect() }
+})
+
+test('unbound, extra-field or ordinary H1-shaped replies cannot prove private shutdown even when child exits', async () => {
+  const f = lifecycleHost('valid', 'unbound')
+  try {
+    await f.supervisor.request({ request_id: 'describe', method: 'describe', params: {} })
+    await assert.rejects(f.supervisor.stopAndExit(), /退出|断开|不兼容|未确认/)
+    assert.deepEqual(f.counts(), { kills: 0, events: 0 })
+  } finally { if (f.child.connected) f.child.disconnect() }
+})
+
+test('old Host without advert, malformed advert and owned refusal all retain the normal stop-and-drain path', async () => {
+  for (const [advert, proof] of [['absent', 'closed'], ['malformed', 'closed'], ['valid', 'refused']] as const) {
+    const f = lifecycleHost(advert, proof)
+    try {
+      await f.supervisor.request({ request_id: 'describe', method: 'describe', params: {} }); await f.supervisor.stopAndExit()
+      assert.equal(f.child.sent.filter(request => request.method === 'stop').length, 1)
+      assert.equal(f.child.sent.filter(request => request.kind === 'runtime_shutdown_request').length, advert === 'valid' ? 1 : 0)
+      assert.equal(f.counts().kills, 0)
+    } finally { if (f.child.connected) f.child.disconnect() }
+  }
+  assert.throws(() => parseRuntimeRequest({ request_id: 'renderer', method: 'runtime.shutdown', params: {} }), /无效/)
+})
+
 test('trusted supervisor handshakes through normal H1 and waits for stop plus actual exit', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'h3-supervisor-'))
   const entry = path.join(root, 'host.cjs'); await writeFile(entry, host)

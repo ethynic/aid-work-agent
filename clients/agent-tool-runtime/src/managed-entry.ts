@@ -4,18 +4,36 @@ import { ManagementError, type RuntimeHost, type RuntimePlatform, type RuntimePl
 import { openRuntimeHost } from './runtimeHost.js'
 
 export interface ManagementIpc {
-  send(message: Record<string, unknown>): void
+  send(message: Record<string, unknown>, delivered?: () => void): void
+  close?(): void
   onMessage(listener: (message: unknown) => void): void
   onDisconnect(listener: () => void): void
 }
 
 export function attachManagementIpc(host: RuntimeHost, channel: ManagementIpc): void {
   let disconnected = false
+  let closing = false
   const send = (message: Record<string, unknown>) => {
     if (!disconnected) channel.send(message)
   }
   const unsubscribe = host.observe(send)
   channel.onMessage(message => {
+    const frame = message as Record<string, unknown> | null
+    if (frame?.kind === 'runtime_shutdown_request') {
+      if (!frame || Object.keys(frame).sort().join(',') !== 'instance_id,kind,request_id'
+        || frame.instance_id !== host.instanceId || typeof frame.request_id !== 'string' || !frame.request_id || frame.request_id.length > 200) return
+      if (disconnected || closing) return
+      closing = true
+      void host.dispose().then(() => {
+        channel.send({ kind: 'runtime_shutdown_response', request_id: frame.request_id, instance_id: host.instanceId,
+          method: 'runtime.shutdown', code: 0, error: '', result: { closed: true } }, () => channel.close?.())
+      }).catch(() => {
+        closing = false
+        send({ kind: 'runtime_shutdown_response', request_id: frame.request_id, instance_id: host.instanceId,
+          method: 'runtime.shutdown', code: 11, error: '当前进程仍有执行需要收尾', result: null })
+      })
+      return
+    }
     if ((message as { kind?: unknown } | null)?.kind === 'runtime_platform_response') return
     if (!disconnected) void host.request(message).then(send).catch(() => {
       console.error('受管Runtime管理请求未完成，需核对')
@@ -41,7 +59,8 @@ async function main(): Promise<void> {
   const messages = new Set<(message: unknown) => void>()
   const disconnects = new Set<() => void>()
   const channel: ManagementIpc = {
-    send(message) { if (process.connected) process.send!(message, error => { if (error) console.error('Runtime管理IPC发送失败') }) },
+    send(message, delivered) { if (process.connected) process.send!(message, error => { if (error) console.error('Runtime管理IPC发送失败'); else delivered?.() }) },
+    close() { if (process.connected) process.disconnect() },
     onMessage(listener) { messages.add(listener) },
     onDisconnect(listener) { disconnects.add(listener) },
   }
@@ -74,6 +93,7 @@ async function main(): Promise<void> {
   try {
     host = await openRuntimeHost({ nodeExecutable: process.execPath, supervisor, platform })
     attachManagementIpc(host, channel)
+    channel.send({ kind: 'runtime_lifecycle', instance_id: host.instanceId, idle_exit: true, version: 1 })
     if (host.recoveredAfterInterruption) channel.send({ kind: 'runtime_recovery', instance_id: host.instanceId, processes_stopped: true })
     if (!connected) { await host.dispose(); return }
     for (const request of describes) for (const listener of messages) listener(request)

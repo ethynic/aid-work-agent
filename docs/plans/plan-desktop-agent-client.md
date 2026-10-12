@@ -1,5 +1,7 @@
 # Agent 桌面客户端 v3 开发计划
 
+2026-10-12 r4 共同检查点：[恢复计划Phase 4/5](plan-runtime-upgrade-recovery.md)由Runtime当前主控唯一维护NSIS及core/managed-entry/Supervisor/Main生命周期；完整Desktop不启用Runtime安装钩子。历史记录不阻止当前未拥有执行的管理进程退出，须确认直属Host实际退出；直属私有生命周期v1绑定实例与generation，H1、Device与binding不变。
+
 2026-10-12 升级退出检查点：[试用包Phase 5](plan-runtime-ui-boss-trial-bundle.md)由当前主控唯一写入公共NSIS钩子与诊断交付；Runtime窗口X仍仅隐藏到托盘，安全退出走既有stopAndExit。安装器运行检查只读拒绝，不默认终止进程，不改变共同wire或自行清旧运行事实。
 
 2026-10-12 BOSS 冷启动增量检查点：[试用包计划Phase 4](plan-runtime-ui-boss-trial-bundle.md)由当前主控修改Runtime共享store及Host组合层，Desktop继续消费同一Host，不另写Chrome启动或业务调用；UI ready诊断不变，wire/binding/许可保持。

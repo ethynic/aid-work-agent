@@ -19,7 +19,7 @@ export function parseRuntimeRequest(value: unknown): Request {
   if (Object.keys(value.params).length !== fields.length || fields.some(key => typeof (value.params as Record<string, unknown>)[key] !== 'string' || !(value.params as Record<string, string>)[key] || (value.params as Record<string, string>)[key]!.length > 4096)) throw new Error('Runtime管理参数无效')
   return value as unknown as Request
 }
-interface Pending { method: string; resolve(reply: Reply): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }
+interface Pending { method: string; shutdownInstance?: string; resolve(reply: Reply): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }
 export interface RuntimeSupervisorOptions {
   nodeExecutable: string; hostEntry: string; home: string; supervisor: 'desktop' | 'runtime_app'
   takeSelectedPackage(request: RuntimePlatformRequest['params']): Promise<SelectedPackageSnapshot>
@@ -41,6 +41,7 @@ export class RuntimeSupervisor {
   private accepting = true
   instanceId = ''
   private recoveredInstanceId = ''
+  private lifecycleInstanceId = ''
   get recoveredAfterInterruption(): boolean { return !!this.instanceId && this.recoveredInstanceId === this.instanceId }
   constructor(private options: RuntimeSupervisorOptions) {}
 
@@ -48,7 +49,7 @@ export class RuntimeSupervisor {
     if (this.ready) return this.ready
     if (this.child && !this.childExited) return this.handshake(this.generation)
     const generation = ++this.generation
-    this.childExited = false; this.instanceId = ''; this.stopOperation = undefined; this.recoveredInstanceId = ''
+    this.childExited = false; this.instanceId = ''; this.stopOperation = undefined; this.recoveredInstanceId = ''; this.lifecycleInstanceId = ''
     const env: NodeJS.ProcessEnv = {}
     for (const key of ['PATH', 'Path', 'SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'USERNAME', 'SESSIONNAME', 'PROCESSOR_ARCHITECTURE']) if (process.env[key] !== undefined) env[key] = process.env[key]
     env.AIDWORK_RUNTIME_HOME = this.options.home
@@ -75,6 +76,10 @@ export class RuntimeSupervisor {
     })
     child.on('message', message => {
       if (generation !== this.generation || this.childExited) return
+      if (object(message) && message.kind === 'runtime_lifecycle') {
+        if (Object.keys(message).sort().join(',') === 'idle_exit,instance_id,kind,version' && message.idle_exit === true && message.version === 1 && typeof message.instance_id === 'string' && message.instance_id) this.lifecycleInstanceId = message.instance_id
+        return
+      }
       if (object(message) && message.kind === 'runtime_recovery') {
         if (Object.keys(message).sort().join(',') === 'instance_id,kind,processes_stopped' && typeof message.instance_id === 'string' && message.instance_id && message.processes_stopped === true) this.recoveredInstanceId = message.instance_id
         return
@@ -84,6 +89,11 @@ export class RuntimeSupervisor {
       if (!object(message) || typeof message.request_id !== 'string') return
       const pending = this.pending.get(message.request_id)
       if (!pending) return
+      if (pending.shutdownInstance !== undefined) {
+        if (message.kind !== 'runtime_shutdown_response' || Object.keys(message).sort().join(',') !== 'code,error,instance_id,kind,method,request_id,result'
+          || message.instance_id !== pending.shutdownInstance || message.method !== 'runtime.shutdown'
+          || (message.code === 0 && (!object(message.result) || Object.keys(message.result).join(',') !== 'closed' || message.result.closed !== true))) return
+      } else if (message.kind === 'runtime_shutdown_response') return
       this.pending.delete(message.request_id); clearTimeout(pending.timer)
       if (message.method !== pending.method || !Number.isSafeInteger(message.code) || Number(message.code) < 0 || typeof message.error !== 'string' || !Object.hasOwn(message, 'result')
         || (message.code === 0 ? message.error !== '' : !message.error || message.result !== null)) { pending.reject(new Error('Runtime管理回复格式不兼容')); return }
@@ -103,14 +113,14 @@ export class RuntimeSupervisor {
     return this.ready
   }
 
-  private send(method: string, params: Record<string, string>): Promise<Reply> {
+  private send(method: string, params: Record<string, string>, shutdown = false): Promise<Reply> {
     const child = this.child
     if (!child?.connected || this.childExited) return Promise.reject(new Error('Runtime管理连接不可用'))
     const id = randomUUID()
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('Runtime管理请求超时，操作结果尚未确认')) }, this.options.requestTimeoutMs ?? 120_000)
-      this.pending.set(id, { method, resolve, reject, timer })
-      child.send({ request_id: id, method, params }, error => {
+      this.pending.set(id, { method, ...(shutdown ? { shutdownInstance: this.instanceId } : {}), resolve, reject, timer })
+      child.send(shutdown ? { kind: 'runtime_shutdown_request', request_id: id, instance_id: this.instanceId } : { request_id: id, method, params }, error => {
         if (!error) return
         const item = this.pending.get(id)
         if (item) { clearTimeout(item.timer); this.pending.delete(id); item.reject(new Error('Runtime管理连接已断开')) }
@@ -158,32 +168,40 @@ export class RuntimeSupervisor {
       if (!this.child || this.childExited) { await beforeStop?.({ state: 'stopped' }); confirmed = true; return }
       const startup = await this.ready
       if (startup?.code === 0) {
-        if (beforeStop) {
+        let idleClosed = false
+        if (beforeStop || this.lifecycleInstanceId === this.instanceId) {
           const snapshot = await this.send('getState', {})
           if (snapshot.code !== 0 || !object(snapshot.result) || snapshot.result.instance_id !== this.instanceId) throw new Error('Runtime升级状态未确认')
-          await beforeStop(snapshot.result)
-        }
-        if (!this.stopOperation) {
-          const stop = await this.send('stop', { request_key: randomUUID() })
-          if (stop.code !== 0 || !object(stop.result) || typeof stop.result.operation_id !== 'string') throw new Error('Runtime停止请求未确认')
-          this.stopOperation = stop.result.operation_id
-        }
-        const deadline = Date.now() + (drainTimeoutMs ?? this.options.drainTimeoutMs ?? 30_000)
-        for (;;) {
-          const operation = await this.send('operations.get', { operation_id: this.stopOperation })
-          if (operation.code !== 0 || !object(operation.result)) throw new Error('Runtime停止结果未确认')
-          if (operation.result.status === 'succeeded') break
-          if (operation.result.status !== 'running') {
-            // Terminal operations remain historical facts; a later explicit exit may request a fresh stop check.
-            this.stopOperation = undefined
-            throw new Error('Runtime仍在收尾或需要核对，暂不能退出或更新')
+          await beforeStop?.(snapshot.result)
+          if (this.lifecycleInstanceId === this.instanceId && ['stopped', 'reconciling', 'blocked'].includes(String(snapshot.result.state))) {
+            const closed = await this.send('runtime.shutdown', {}, true)
+            if (closed.code === 0 && object(closed.result) && closed.result.closed === true) idleClosed = true
+            else if (closed.code !== 11) throw new Error('Runtime退出结果未确认')
           }
-          if (Date.now() >= deadline) throw new Error('Runtime仍在收尾或需要核对，暂不能退出或更新')
-          await new Promise(resolve => setTimeout(resolve, 100))
         }
-        const state = await this.send('getState', {})
-        if (state.code !== 0 || !object(state.result) || state.result.instance_id !== this.instanceId || state.result.state !== 'stopped') throw new Error('Runtime尚未安全停止')
-        if (this.child.connected) this.child.disconnect()
+        if (!idleClosed) {
+          if (!this.stopOperation) {
+            const stop = await this.send('stop', { request_key: randomUUID() })
+            if (stop.code !== 0 || !object(stop.result) || typeof stop.result.operation_id !== 'string') throw new Error('Runtime停止请求未确认')
+            this.stopOperation = stop.result.operation_id
+          }
+          const deadline = Date.now() + (drainTimeoutMs ?? this.options.drainTimeoutMs ?? 30_000)
+          for (;;) {
+            const operation = await this.send('operations.get', { operation_id: this.stopOperation })
+            if (operation.code !== 0 || !object(operation.result)) throw new Error('Runtime停止结果未确认')
+            if (operation.result.status === 'succeeded') break
+            if (operation.result.status !== 'running') {
+              // Terminal operations remain historical facts; a later explicit exit may request a fresh stop check.
+              this.stopOperation = undefined
+              throw new Error('Runtime仍在收尾或需要核对，暂不能退出或更新')
+            }
+            if (Date.now() >= deadline) throw new Error('Runtime仍在收尾或需要核对，暂不能退出或更新')
+            await new Promise(resolve => setTimeout(resolve, 100))
+          }
+          const state = await this.send('getState', {})
+          if (state.code !== 0 || !object(state.result) || state.result.instance_id !== this.instanceId || state.result.state !== 'stopped') throw new Error('Runtime尚未安全停止')
+          if (this.child.connected) this.child.disconnect()
+        }
       }
       let timer: ReturnType<typeof setTimeout> | undefined
       try {

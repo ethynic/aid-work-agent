@@ -31,6 +31,7 @@ async function open(t, a = adapter(), home = mkdtempSync(join(tmpdir(), 'aid-cor
 }
 let sequence = 0
 function request(host, method, params = {}) { return host.request({ request_id: `r-${++sequence}`, method, params }) }
+function lifecycleDeferred() { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
 async function done(host, response) {
   assert.equal(response.code, 0)
   let op = response.result
@@ -41,6 +42,66 @@ async function done(host, response) {
   assert.notEqual(op.status, 'running', 'management operation must settle')
   return op
 }
+
+test('passive historical Host dispose releases its OS lease without settling or rewriting old execution facts', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'aid-core-history-exit-'))
+  const marker = JSON.stringify({ instance_id: '8dd360ac-bcda-4d25-9280-b9659e91cd65' })
+  writeFileSync(join(home, 'host-running.json'), marker)
+  const a = adapter(); const { host } = await open(t, a, home)
+  assert.equal(host.getState().state, 'reconciling')
+  assert.equal((await done(host, await request(host, 'stop', { request_key: 'historical-stop' }))).status, 'reconciling')
+  const files = [join(home, 'host-running.json'), join(home, 'management-operations.json')]
+  for (const directory of ['journal', 'result-outbox', 'session-tasks']) {
+    mkdirSync(join(home, directory)); const file = join(home, directory, 'old-fact.bin'); writeFileSync(file, `untouched historical ${directory}`); files.push(file)
+  }
+  const before = files.map(file => readFileSync(file))
+  await host.dispose()
+  assert.equal(a.starts, 0); assert.equal(a.stops, 0)
+  for (let i = 0; i < files.length; i++) assert.deepEqual(readFileSync(files[i]), before[i])
+  const { acquireHostLease } = await import('../dist/instanceLease.js')
+  const lease = await acquireHostLease(home); assert.ok(lease); await lease.release()
+  assert.equal((await request(host, 'start', { request_key: 'after-close' })).code, 4)
+})
+
+test('dispose waits an already accepted start and refuses owned running or reconciling execution until normal stop', async t => {
+  const a = adapter(); a.identity = { device_id: 'isolated-device' }
+  const started = lifecycleDeferred(); const stopped = lifecycleDeferred(); let ended
+  a.start = async (_connection, executionEnded) => { a.starts++; ended = executionEnded; await started.promise }
+  a.stop = async () => { a.stops++; await stopped.promise }
+  const home = mkdtempSync(join(tmpdir(), 'aid-core-owned-exit-'))
+  const host = await RuntimeHost.open({ home, version: 'test', supervisor: 'cli', adapter: a })
+  t.after(async () => { started.resolve(); stopped.resolve(); await request(host, 'stop', { request_key: 'cleanup-stop' }); await host.dispose(); rmSync(home, { recursive: true, force: true }) })
+  const accepted = await request(host, 'start', { request_key: 'owned-start' })
+  let settled = false; const closing = assert.rejects(host.dispose(), /尚未安全停止/).then(() => { settled = true })
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(settled, false)
+  assert.equal((await request(host, 'start', { request_key: 'late-start' })).code, 4)
+  const { acquireHostLease } = await import('../dist/instanceLease.js')
+  assert.equal(await acquireHostLease(home), null)
+  started.resolve(); await closing; assert.equal((await done(host, accepted)).status, 'succeeded'); assert.equal(a.starts, 1)
+  ended(); assert.equal(host.getState().state, 'reconciling'); await assert.rejects(host.dispose(), /尚未安全停止/)
+  assert.ok(readFileSync(join(home, 'host-running.json')).length)
+  const stop = await request(host, 'stop', { request_key: 'owned-stop' })
+  const final = host.dispose(); await new Promise(resolve => setImmediate(resolve)); assert.equal(await acquireHostLease(home), null)
+  stopped.resolve(); await final; assert.equal(a.stops, 1)
+  const lease = await acquireHostLease(home); assert.ok(lease); await lease.release()
+  assert.equal(JSON.parse(readFileSync(join(home, 'management-operations.json'), 'utf8'))['owned-stop'].operation.operation_id, stop.result.operation_id)
+})
+
+test('dispose closes admission while accepted plugin snapshot preparation drains without a late mutation', async t => {
+  const a = adapter(); const prepared = lifecycleDeferred(); let mutated = 0
+  a.preparePluginImport = () => prepared.promise
+  a.mutatePlugin = async () => { mutated++ }
+  const home = mkdtempSync(join(tmpdir(), 'aid-core-preparing-exit-'))
+  const host = await RuntimeHost.open({ home, version: 'test', supervisor: 'cli', adapter: a })
+  t.after(async () => { prepared.resolve({ snapshot_id: '00000000-0000-0000-0000-000000000000', sha256: 'a'.repeat(64) }); await request(host, 'stop', { request_key: 'cleanup-stop' }); await host.dispose(); rmSync(home, { recursive: true, force: true }) })
+  const imported = request(host, 'plugins.import', { request_key: 'preparing', selection_ref: 'isolated-ref' })
+  let settled = false; const closed = host.dispose().then(() => { settled = true })
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(settled, false)
+  const { acquireHostLease } = await import('../dist/instanceLease.js'); assert.equal(await acquireHostLease(home), null)
+  prepared.resolve({ snapshot_id: '00000000-0000-0000-0000-000000000000', sha256: 'a'.repeat(64) })
+  assert.equal((await imported).code, 4); await closed; assert.equal(mutated, 0)
+  const lease = await acquireHostLease(home); assert.ok(lease); await lease.release()
+})
 
 test('compiled empty Host shares instance/revision across actual consumer snapshots', async t => {
   const { host } = await open(t)

@@ -1,5 +1,7 @@
 # Runtime 执行环境、插件宿主与可视化客户端开发计划
 
+2026-10-12 r4 共同检查点：[恢复计划Phase 4/5](plan-runtime-upgrade-recovery.md)由当前主控唯一维护NSIS、core.dispose、managed-entry和Supervisor/Main；补恢复步骤自足性、无pending免调用、最终目录退出核验及历史记录下空闲管理进程退出。直属Main/Host私有生命周期v1绑定实例与generation；H1、Device、binding和业务结果语义不变，UAC恢复保持原DPAPI/HKCU归属。
+
 2026-10-12 升级退出检查点：[试用包Phase 5](plan-runtime-ui-boss-trial-bundle.md)当前主控唯一维护公共NSIS退出检查和只读诊断；X保留托盘常驻语义，不再允许安装器默认终止旧进程。旧运行marker恢复仍按原停止/未知事实边界，需要现场核验，不改Host/Device wire、许可或自动重放。
 
 2026-10-12 BOSS 冷启动增量检查点：[试用包计划Phase 4](plan-runtime-ui-boss-trial-bundle.md)登记当前主控唯一写入共享store入口选择及Runtime组合层；可选bootstrapKeys默认兼容，仅BOSS已验签manifest保留冷启动入口，不把doctor未登录当未安装。Device/H1 wire、binding、许可和版本保持。

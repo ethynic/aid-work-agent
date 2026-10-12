@@ -331,7 +331,9 @@ export class RuntimeHost {
     this.closing = true
     await Promise.allSettled([...this.accepting.values()].map(item => item.promise))
     await this.queue
-    if (this.state !== 'stopped') {
+    // Closing this management process does not settle an older execution. A Host
+    // that never started work may release its lease while retaining old evidence.
+    if (this.ownsExecution || !['stopped', 'reconciling', 'blocked'].includes(this.state)) {
       this.closing = false
       throw new ManagementError(11, 'Runtime尚未安全停止，保留实例保护')
     }
