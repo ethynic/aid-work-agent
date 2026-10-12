@@ -87,6 +87,7 @@ def apply_message_names(names: dict, tenant_id, stats, sample, execute: bool) ->
             existing = None
         if existing is not None and not is_stored_name_degraded(existing.get("name")):
             continue
+        stats["msg_pending"] += 1
         if len(sample) < SAMPLE_LIMIT:
             sample.append(("msg", tenant_id, fid, name))
         if execute:
@@ -171,8 +172,8 @@ def main() -> int:
     mode = "EXECUTE" if args.execute else "DRY-RUN"
     print(f"[backfill] mode={mode}")
 
-    stats = {"disk_scanned": 0, "disk_upserted": 0,
-             "msg_rows_read": 0, "msg_names": 0, "msg_fixed": 0,
+    stats = {"disk_scanned": 0, "disk_upserted": 0, "disk_pending": 0,
+             "msg_rows_read": 0, "msg_names": 0, "msg_fixed": 0, "msg_pending": 0,
              "bad_json_rows": 0}
     sample = []
 
@@ -185,6 +186,7 @@ def main() -> int:
             existing = None
         if existing is not None and not is_stored_name_degraded(existing.get("name")):
             continue
+        stats["disk_pending"] += 1
         if len(sample) < SAMPLE_LIMIT:
             sample.append(("disk", tenant_id, file_id, path.name))
         if args.execute:
@@ -203,7 +205,8 @@ def main() -> int:
             )
             stats["disk_upserted"] += 1
     print(f"[backfill] 磁盘扫描: {stats['disk_scanned']} 个存储名文件, "
-          f"待补录/已补录 {stats['disk_upserted'] if args.execute else sum(1 for s in sample if s[0] == 'disk')} 个")
+          f"待补录 {stats['disk_pending']} 个"
+          + (f", 已补录 {stats['disk_upserted']} 个" if args.execute else ""))
 
     # 2. 消息表原始名（最后写入，优先级最高——upsert 保护已修复的磁盘名，
     #    消息名只会覆盖"空名/存储名形态"，不会被磁盘名顶掉）
@@ -261,8 +264,10 @@ def main() -> int:
         traceback.print_exc()
 
     print(f"[backfill] 消息表: 读 {stats['msg_rows_read']} 行, "
-          f"提取 {stats['msg_names']} 个文件名, 修复 {stats['msg_fixed']} 个, "
-          f"坏行/无文件名 {stats['bad_json_rows']} 行")
+          f"提取 {stats['msg_names']} 个文件名, "
+          f"待补录 {stats['msg_pending']} 个"
+          + (f", 已补录 {stats['msg_fixed']} 个" if args.execute else "")
+          + f", 坏行/无文件名 {stats['bad_json_rows']} 行")
     print(f"[backfill] 样例（前 {SAMPLE_LIMIT}）:")
     for kind, tenant_id, fid, name in sample:
         print(f"  [{kind}] {tenant_id} {fid} -> {name}")
