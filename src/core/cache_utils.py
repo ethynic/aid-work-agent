@@ -70,6 +70,8 @@ class CacheKeys:
     UPLOADED_FILE = "uploaded_file"        # uploaded_file:{file_id}（文件/图片元数据）
     SUBAGENT_GREETING = "subagent_greeting"  # subagent_greeting:{agent_id}（数字员工空态摘要+快捷按钮，LLM 生成后缓存）
     WECOM_KF = "wecom_kf"                  # wecom_kf:{corp_id}:{key}（企微客服，key 必须带企业维度）
+    WECOM_KF_PULL_LOCK = "wecom_kf_pull_lock"          # wecom_kf_pull_lock:{tenant_id}:{open_kfid}（拉取任务互斥锁，防并发 sync_msg 撞微信 45009 限频）
+    WECOM_KF_PULL_PENDING = "wecom_kf_pull_pending"    # wecom_kf_pull_pending:{tenant_id}:{open_kfid}（任务运行中新回调到达标记，任务完成后补偿拉取）
     WECOM_KF_SERVICER_NAME = "wecom_kf_servicer_name"  # wecom_kf_servicer_name:{tenant_id}:{userid}（企微员工姓名反查，TTL 1 天）
     STANDALONE_AGENT = "standalone_agent"  # standalone_agent:{session_id}:{agent_id}
     # 外部系统委托登录 client_token：external_login_token:{tenant_id}:{subagent}:{mobile}

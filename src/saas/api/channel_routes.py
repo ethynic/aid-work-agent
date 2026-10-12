@@ -53,6 +53,96 @@ def _kf_tlog(message: str, **kwargs) -> None:
         pass
 
 
+# ===== wecom_kf 拉取任务去重与限频重试（2026-10-11 演示 45009 事故修复） =====
+# 事故：约 20 用户同时进入时每个回调各起一个拉取任务，并发 sync_msg 撞微信限频
+# errcode=45009，且失败后不重试，消息积压 47 秒 + 串行排空致首批用户等 1-3 分钟。
+_KF_PULL_LOCK_TTL = 900        # 拉取任务互斥锁 TTL（任务含逐条 LLM 处理，大积压可达数分钟；仅 worker 崩溃时靠超时自动释放）
+_KF_PULL_PENDING_TTL = 900     # 任务运行中新回调到达标记 TTL（须 >= 锁 TTL：任务实际时长可能接近锁上限，过期会让补偿拉取静默丢失）
+_KF_SYNC_RETRYABLE_ERRCODES = {45009, 45011}  # 微信接口频率限制类错误码
+_KF_SYNC_MAX_RETRIES = 3       # 限频重试次数，退避 2s/4s/8s
+
+
+def _kf_pull_lock_key(tenant_id: str, open_kfid: str) -> str:
+    return redis_client.make_key(CacheKeys.WECOM_KF_PULL_LOCK, f"{tenant_id}:{open_kfid}")
+
+
+def _kf_pull_pending_key(tenant_id: str, open_kfid: str) -> str:
+    return redis_client.make_key(CacheKeys.WECOM_KF_PULL_PENDING, f"{tenant_id}:{open_kfid}")
+
+
+async def _kf_pull_task_wrapper(
+    tenant_id: str, config_id: str, open_kfid: str, adapter, lock_token: str
+) -> None:
+    """拉取任务包装：结束后释放锁；运行期间有新回调到达（pending 标记）则补偿拉取一次"""
+    try:
+        await _process_tenant_wecom_kf_messages(tenant_id, config_id, open_kfid, adapter)
+    except Exception as e:
+        logger.opt(exception=True).error(f"[wecom_kf] 拉取任务异常: tenant={tenant_id}, open_kfid={open_kfid}, error={e}")
+    finally:
+        redis_client.release_lock(_kf_pull_lock_key(tenant_id, open_kfid), lock_token)
+        try:
+            if redis_client.getdel(_kf_pull_pending_key(tenant_id, open_kfid)):
+                _kf_tlog(
+                    "任务结束后检测到pending新回调，补偿拉取: tenant={tenant}, open_kfid={open_kfid}",
+                    tenant=tenant_id,
+                    open_kfid=open_kfid,
+                )
+                await _compensate_kf_pull(tenant_id, open_kfid)
+        except Exception as e:
+            logger.warning(f"[wecom_kf] 补偿拉取调度失败: tenant={tenant_id}, open_kfid={open_kfid}, error={e}")
+
+
+async def _compensate_kf_pull(tenant_id: str, open_kfid: str) -> None:
+    """补偿拉取：按 open_kfid 反查 config_id 并重建 adapter，重新走锁竞争启动任务"""
+    config_id = None
+    try:
+        for cfg in ChannelConfigDB.list_by_tenant(tenant_id, "wecom_kf"):
+            for kf in (cfg.get("config", {}).get("kf_account") or []):
+                if kf.get("open_kfid") == open_kfid:
+                    config_id = cfg["config_id"]
+                    break
+            if config_id:
+                break
+    except Exception as e:
+        logger.opt(exception=True).error(f"[wecom_kf] 补偿拉取反查config失败: tenant={tenant_id}, open_kfid={open_kfid}, error={e}")
+        return
+    if not config_id:
+        logger.warning(f"[wecom_kf] 补偿拉取未找到open_kfid对应配置: tenant={tenant_id}, open_kfid={open_kfid}")
+        _kf_tlog(
+            "补偿拉取未找到配置: tenant={tenant}, open_kfid={open_kfid}",
+            tenant=tenant_id,
+            open_kfid=open_kfid,
+            level="WARNING",
+        )
+        return
+    adapter, cfg_id, _ = await ChannelFactory.create_from_tenant_config(
+        tenant_id, "wecom_kf", config_id=config_id
+    )
+    if adapter:
+        _try_start_kf_pull_task(tenant_id, cfg_id, open_kfid, adapter)
+
+
+def _try_start_kf_pull_task(tenant_id: str, config_id: str, open_kfid: str, adapter) -> None:
+    """同一 open_kfid 已有拉取任务在跑时不重复起任务（跨 worker Redis 锁）；
+    新回调到达只置 pending 标记，由在跑任务结束后补偿拉取，避免并发 sync_msg 撞 45009"""
+    import uuid
+
+    lock_key = _kf_pull_lock_key(tenant_id, open_kfid)
+    lock_token = uuid.uuid4().hex
+    if not redis_client.acquire_lock(lock_key, lock_token, ex=_KF_PULL_LOCK_TTL):
+        redis_client.set(_kf_pull_pending_key(tenant_id, open_kfid), True, ex=_KF_PULL_PENDING_TTL)
+        logger.info(f"[wecom_kf] 拉取任务进行中，本次回调仅置pending标记: open_kfid={open_kfid}")
+        _kf_tlog(
+            "拉取任务进行中跳过新任务: tenant={tenant}, open_kfid={open_kfid}",
+            tenant=tenant_id,
+            open_kfid=open_kfid,
+        )
+        return
+    # 拿到锁即全量拉取，清掉可能残留的 pending 标记
+    redis_client.delete(_kf_pull_pending_key(tenant_id, open_kfid))
+    asyncio.create_task(_kf_pull_task_wrapper(tenant_id, config_id, open_kfid, adapter, lock_token))
+
+
 def _has_successful_transfer_to_human(tool_messages: list) -> bool:
     """检查本轮 tool 消息序列中是否包含成功的 transfer_to_human 调用。
 
@@ -1406,18 +1496,10 @@ async def tenant_wecom_kf_callback_post(tenant_id: str, config_id: str, request:
         #     xml=decrypted_xml,
         # )
 
-        # 消息事件 → 后台异步拉取并处理
+        # 消息事件 → 后台异步拉取并处理（同一 open_kfid 去重，进行中仅置 pending 标记）
         if event == "kf_msg_or_event":
             logger.info(f"[Tenant WeCom KF] 创建后台任务拉取消息: open_kfid={open_kfid}")
-            _kf_tlog(
-                "事件分发→创建后台任务: tenant={tenant}, event={event}, open_kfid={open_kfid}",
-                tenant=tenant_id,
-                event=event,
-                open_kfid=open_kfid,
-            )
-            asyncio.create_task(
-                _process_tenant_wecom_kf_messages(tenant_id, config_id, open_kfid, adapter)
-            )
+            _try_start_kf_pull_task(tenant_id, config_id, open_kfid, adapter)
         # 会话状态变更 → 更新本地状态
         elif event == "change_type" and change_type == "session_status_change":
             logger.info(f"[Tenant WeCom KF] 会话状态变更事件: open_kfid={open_kfid}")
@@ -1746,15 +1828,51 @@ async def _process_tenant_wecom_kf_messages(
         has_more = True
         total_messages = 0
         processed_messages = 0
+        sync_retry = 0  # 微信限频（45009/45011）连续重试计数，成功一次即清零
 
         while has_more:
             logger.info(f"[wecom_kf] sync_msg调用: cursor={cursor[:20]}..., open_kfid={open_kfid}")
             result = await adapter.api_client.sync_msg(open_kfid=open_kfid, cursor=cursor, limit=100, voice_format=1)
             errcode = result.get("errcode", 0)
             errmsg = result.get("errmsg", "")
-            has_more = result.get("has_more", 0) == 1
-            cursor = result.get("next_cursor", "")
             msg_count = len(result.get("msg_list", []))
+
+            if errcode != 0:
+                # 微信限频类错误：任务内指数退避重试，不依赖下一个回调（2026-10-11 45009 事故修复）
+                if errcode in _KF_SYNC_RETRYABLE_ERRCODES and sync_retry < _KF_SYNC_MAX_RETRIES:
+                    sync_retry += 1
+                    delay = 2 ** sync_retry  # 2s / 4s / 8s
+                    logger.warning(
+                        f"[wecom_kf] sync_msg 微信限频: errcode={errcode}, "
+                        f"{delay}s后重试({sync_retry}/{_KF_SYNC_MAX_RETRIES}), "
+                        f"open_kfid={open_kfid}, cursor={cursor[:20]}..."
+                    )
+                    _kf_tlog(
+                        "sync_msg限频重试: tenant={tenant}, open_kfid={open_kfid}, errcode={errcode}, "
+                        "delay={delay}, retry={retry}, cursor={cursor}",
+                        tenant=tenant_id,
+                        open_kfid=open_kfid,
+                        errcode=errcode,
+                        delay=delay,
+                        retry=sync_retry,
+                        cursor=cursor[:30] if cursor else "",
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                logger.error(f"[wecom_kf] sync_msg 失败: errcode={result.get('errcode')}")
+                _kf_tlog(
+                    "sync_msg失败: tenant={tenant}, errcode={errcode}, errmsg={errmsg}",
+                    tenant=tenant_id,
+                    errcode=errcode,
+                    errmsg=errmsg,
+                    level="ERROR",
+                )
+                return
+
+            # 分页状态仅在成功响应后更新：限频/错误响应不含 has_more/next_cursor 字段，
+            # 提前赋值会把 cursor 清空（空 cursor = 3 天窗口全量重放）、把 has_more 误置 False 提前退出循环
+            has_more = result.get("has_more", 0) == 1
+            next_cursor = result.get("next_cursor", "")
             total_messages += msg_count
             logger.info(
                 f"[wecom_kf] sync_msg返回: errcode={errcode}, errmsg={errmsg}, "
@@ -1770,18 +1888,12 @@ async def _process_tenant_wecom_kf_messages(
                 errmsg=errmsg,
                 msg_count=msg_count,
                 has_more=has_more,
-                next_cursor=cursor[:30] if cursor else "",
+                next_cursor=next_cursor[:30] if next_cursor else "",
             )
-            if result.get("errcode", 0) != 0:
-                logger.error(f"[wecom_kf] sync_msg 失败: errcode={result.get('errcode')}")
-                _kf_tlog(
-                    "sync_msg失败: tenant={tenant}, errcode={errcode}, errmsg={errmsg}",
-                    tenant=tenant_id,
-                    errcode=errcode,
-                    errmsg=errmsg,
-                    level="ERROR",
-                )
-                return
+            cursor = next_cursor
+
+            # 拉取成功，清零限频重试计数
+            sync_retry = 0
 
             # 预处理：过滤非客户消息 + 去重，得到有效消息列表
             valid_msgs = []

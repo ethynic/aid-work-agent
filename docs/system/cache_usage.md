@@ -334,6 +334,15 @@ ImageRegistry 管理的图片资产元信息（复用 cp 的 `uploaded_file:{fil
 **关键约束**：键带租户维度（不同租户对应不同企业微信通讯录）。仅缓存查询成功（errcode=0 且 name 非空）的结果，失败不缓存、下次消息重查
 **源文件**：`src/saas/api/channel_routes.py`（`_resolve_kf_servicer_name`）
 
+### 7.4.1.2 企微客服拉取任务互斥锁与 pending 标记（45009 限频修复，2026-10-12）
+
+**存储**：Redis + 内存降级（锁经 `acquire_lock`/`release_lock`，pending 经 set/getdel）
+**键模式**：`wecom_kf_pull_lock:{tenant_id}:{open_kfid}`、`wecom_kf_pull_pending:{tenant_id}:{open_kfid}`
+**TTL**：锁 900s（单任务最长执行时间兜底，worker 崩溃时靠超时自动释放）；pending 900s（须 >= 锁 TTL：任务实际时长可能接近锁上限，过期会让补偿拉取静默丢失）
+**失效时机**：拉取任务结束时主动 `release_lock` + `getdel` 消费 pending；TTL 自动过期兜底
+**关键约束**：防止同一 `open_kfid` 并发起多个 `sync_msg` 拉取任务撞微信 45009 限频（2026-10-11 演示事故）。新回调在任务进行中只置 pending，任务结束后补偿拉取一次。Redis 不可用时降级为进程内锁（仅单 worker 去重）
+**源文件**：`src/saas/api/channel_routes.py`（`_try_start_kf_pull_task` / `_kf_pull_task_wrapper`）
+
 ### 7.4.2 独立会话状态
 
 **存储**：Redis + 内存降级
