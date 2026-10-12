@@ -49,6 +49,10 @@ class CacheKeys:
     RECALL_PENDING = "recall_pending"     # recall_pending:{session_id}（SET，缓存"处理中被撤回的 msgid"，落库时补打 is_recalled）
     COMPRESSION_METRICS = "comp_metrics"  # comp_metrics:{kind} 上下文压缩指标（Phase 7 §7.2）
     SCHEDULER_LOCK = "sched_task_lock"    # sched_task_lock:manager（全局分布式锁，多 worker 唯一启动调度器）
+    # 单副本调度器驱动锁：{prefix}（无 identifier 维度；TTL 300s 周期续期，失锁按 LOCK_RETRY_SECONDS
+    # 空转重试；多副本部署时只允许一个副本驱动任务循环，其余副本空转等待）
+    WECHAT_MP_SCHEDULER_LOCK = "wechat_mp_scheduler_lock"        # 公众号内容调度器驱动锁（src/wechat_mp/scheduler.py）
+    HONGTAO_SHOP_SCHEDULER_LOCK = "hongtao_shop_scheduler_lock"  # hongtao_shop 调度器驱动锁（src/tenant_custom/hongtao_shop/scheduler.py）
     WECOM_RPA_SELF_ECHO_ESCAPE = "wecom_rpa:self_echo_escape"  # :{tenant_id}:{account_id}（ZSET，危险 echo 五分钟窗口）
     BROWSER_RUN = "browser_run"              # browser_run:{tenant_id}:{run_id}
     BROWSER_OWNER = "browser_owner"          # browser_owner:{tenant_id}:{run_id}

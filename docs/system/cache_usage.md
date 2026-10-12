@@ -433,6 +433,21 @@ ImageRegistry 管理的图片资产元信息（复用 cp 的 `uploaded_file:{fil
 **失效时机**：调度器 `shutdown()` 时主动释放；TTL 自动过期兜底（worker 异常退出时）
 **源文件**：`src/scheduler/manager.py`
 
+### 7.6 单副本调度器驱动锁
+
+多副本/多 worker 部署时，确保任务循环（领取、tick 生成、stale 回收）只由单个副本驱动，其余副本抢锁失败后空转等待。
+
+**存储**：Redis + 内存降级
+**键模式**：
+- `wechat_mp_scheduler_lock`（公众号内容调度器，`src/wechat_mp/scheduler.py`）
+- `hongtao_shop_scheduler_lock`（宏陶商城调度器，`src/tenant_custom/hongtao_shop/scheduler.py`）
+
+两键均全局唯一、无 identifier 维度；hongtao_shop 为租户定制模块，仅启用 `tenant_custom_modules` 含该模块的部署（如 agent2）出现。
+
+**TTL**：300s（5 分钟租约），驱动循环内周期续期（远短于租约）
+**失效时机**：驱动协程退出时释放；TTL 自动过期兜底（副本异常退出时），失锁后按 `LOCK_RETRY_SECONDS`（30s）空转重抢
+**源文件**：`src/wechat_mp/scheduler.py`、`src/tenant_custom/hongtao_shop/scheduler.py`（前缀注册：`src/core/cache_utils.py`）
+
 ---
 
 ## 8. 去重缓存（PostgreSQL）
