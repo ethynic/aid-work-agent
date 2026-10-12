@@ -41,6 +41,9 @@ https://myhongtao.aidingyi.cn/*  ->  https://myhongtao.oss-cn-shenzhen.aliyuncs.
 
 - `proxy_set_header Host myhongtao.oss-cn-shenzhen.aliyuncs.com` -- OSS 依赖 Host 头命中 bucket，必须改写
 - `proxy_ssl_server_name on` -- 上游 HTTPS 需要 SNI
+- `proxy_hide_header Content-Disposition` + `proxy_hide_header x-oss-force-download` -- 部分存量对象上传时元数据带
+  `Content-Disposition: attachment`（OSS 附带 `x-oss-force-download: true`），透传会导致微信浏览器不显示图片、
+  弹「下载：(null)」框（2026-10-12 修复）；隐藏后按 `Content-Type: image/jpeg` 正常内联渲染
 - `limit_rate 128k` + `limit_rate_after 1m` -- 限速保护 5Mbps 出带宽：前 1MB 全速（小图无感，实测 350KB 图 0.25s 加载完），超过后单连接约 1Mbps
 - **不加 `limit_conn`** -- 微信消息内多图并发加载，并发限制会导致第 3 张图起 503（同 inline 预览例外，见 backend_dev.md 下载限速规范）
 - `expires 7d` -- 静态图片允许浏览器缓存
@@ -61,6 +64,14 @@ curl -sk -o /dev/null -w '%{http_code}\n' https://myhongtao.aidingyi.cn/up-load/
 - 80 端口 301 跳转 HTTPS 正常
 - 代理请求已转发到 OSS，链路通
 - ✅ 用户已用真实图片 URL 验证通过：`https://myhongtao.aidingyi.cn/upload/1/1e090d10_1752718922_9637.jpg` 可正常访问
+
+## 修复记录：微信内弹下载框（2026-10-12）
+
+- 现象：图片 URL 在微信浏览器中不显示，弹「下载：(null)」框（文件大小正常）
+- 根因：OSS 存量对象元数据带 `Content-Disposition: attachment`（无 filename），
+  nginx 反代原样透传，微信内置浏览器按强制下载处理
+- 修复：location 中新增 `proxy_hide_header Content-Disposition` + `proxy_hide_header x-oss-force-download`，
+  已发布 254 并 reload，`curl -sI` 复核两响应头已消失、`Content-Type: image/jpeg` 保留
 
 ## 后续
 
