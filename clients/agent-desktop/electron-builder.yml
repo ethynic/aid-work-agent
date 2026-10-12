@@ -18,6 +18,8 @@ files:
   - dist/electron/productConfiguration.js
   - dist/electron/runtimeSupervisor.js
   - dist/electron/runtimeSelection.js
+  - dist/electron/runtimeStartup.js
+  - dist/electron/runtimeUpdate.js
   - dist/renderer/**/*
   - package.json
   - "!**/*.map"

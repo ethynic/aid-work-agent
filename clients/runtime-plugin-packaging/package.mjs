@@ -64,6 +64,7 @@ async function buildProvider(name, options, signer) {
   const definition = definitions[name]
   if (!definition) throw new Error('Unknown first-party Provider')
   const source = join(clients, definition.directory)
+  if (name === 'boss' && !existsSync(join(source, 'scripts/BossPhysicalInput.cs'))) throw new Error('BOSS physical input dependency missing')
   if (!existsSync(join(source, 'dist/src/cli/index.js'))) throw new Error('Build Provider before packaging')
   const stage = mkdtempSync(join(tmpdir(), 'aid-provider-package-'))
   try {
@@ -72,7 +73,7 @@ async function buildProvider(name, options, signer) {
       // BOSS needs approved PowerShell drivers, not developer live probes.
       if (assets === 'scripts') {
         mkdirSync(join(stage, assets))
-        for (const file of readdirSync(join(source, assets)).filter(file => file.endsWith('.ps1'))) cpSync(join(source, assets, file), join(stage, assets, file))
+        for (const file of readdirSync(join(source, assets)).filter(file => file.endsWith('.ps1') || (name === 'boss' && file === 'BossPhysicalInput.cs'))) cpSync(join(source, assets, file), join(stage, assets, file))
       } else cpSync(join(source, assets), join(stage, assets), { recursive: true })
     }
     if (definition.ocr) {
@@ -127,7 +128,7 @@ export async function main(argv) {
   for (let index = 0; index < argv.length; index++) {
     const key = argv[index]
     if (key === '--test') { options.test = true; continue }
-    const allowed = { '--provider': 'provider', '--node': 'node', '--npm-cli': 'npm_cli', '--ocr': 'ocr', '--output': 'output', '--signer': 'signer', '--release-id': 'release_id', '--created-at': 'created_at' }
+    const allowed = { '--provider': 'provider', '--node': 'node', '--npm-cli': 'npm_cli', '--ocr': 'ocr', '--output': 'output', '--signer': 'signer', '--release-id': 'release_id', '--created-at': 'created_at', '--test-key-id': 'test_key_id' }
     if (!Object.hasOwn(allowed, key) || !argv[index + 1]) throw new Error('Invalid packaging arguments')
     options[allowed[key]] = argv[++index]
   }
@@ -137,7 +138,8 @@ export async function main(argv) {
   let signer
   if (options.test && !options.signer) {
     const pair = generateKeyPairSync('ed25519')
-    signer = { key_id: 'aid-isolated-dev-only', private_key: pair.privateKey.export({ format: 'pem', type: 'pkcs8' }) }
+    if (options.test_key_id && !/^aid-isolated-[a-z0-9-]{1,80}$/.test(options.test_key_id)) throw new Error('Invalid isolated test key id')
+    signer = { key_id: options.test_key_id ?? 'aid-isolated-dev-only', private_key: pair.privateKey.export({ format: 'pem', type: 'pkcs8' }) }
     const output = resolve(options.output ?? join(root, 'release'))
     mkdirSync(output, { recursive: true })
     writeFileSync(join(output, 'ISOLATED-TEST-TRUST-ROOT.json'), JSON.stringify({ schemaVersion: 1, profile: 'acceptance', roots: [{ test_only: true, key_id: signer.key_id, public_key: pair.publicKey.export({ format: 'pem', type: 'spki' }), providers: ['ai.aidwork.boss-recruiting', 'ai.aidwork.weixin', 'ai.aidwork.wecom'] }] }, null, 2) + '\n', { flag: 'wx' })

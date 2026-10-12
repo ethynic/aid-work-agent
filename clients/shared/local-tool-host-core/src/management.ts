@@ -20,6 +20,8 @@ export class ManagementError extends Error {
 export interface PreparedPluginImport { snapshot_id: string; sha256: string }
 export interface HostAdapter {
   initialize?(): Promise<void> | void
+  executionMarker?(instanceId: string): Promise<Record<string, unknown>>
+  recoverPreviousExecution?(marker: string): Promise<boolean>
   onDisposed?(): void
   device(): DeviceSummary | undefined
   protect(value: string): Promise<string>
@@ -32,7 +34,7 @@ export interface HostAdapter {
   refreshPlugins?(): Promise<void>
   observePlugins?(listener: () => void): void
   preparePluginImport?(params: Record<string, string>, context: { instance_id: string }): Promise<PreparedPluginImport>
-  canChangePlugins?(): Promise<boolean>
+  canChangePlugins?(method?: string): Promise<boolean>
   mutatePlugin?(method: string, params: Record<string, string>, context: { instance_id: string; prepared_import?: PreparedPluginImport }): Promise<void>
 }
 interface StoredOperation { digest: string; operation: ManagementOperation; prepared_import?: PreparedPluginImport }
@@ -82,6 +84,7 @@ export class RuntimeHost {
   private closed = false
   private closing = false
   private ownsExecution = false
+  private recovered = false
 
   private constructor(private lease: InstanceLease, private adapter: HostAdapter,
     private secret: Buffer, private version: string, private supervisor: 'cli' | 'desktop' | 'runtime_app') {
@@ -127,7 +130,12 @@ export class RuntimeHost {
         secret = randomBytes(32)
         atomicWrite(file, await options.adapter.protect(secret.toString('hex')))
       }
-      return new RuntimeHost(lease, options.adapter, secret, options.version, options.supervisor)
+      const host = new RuntimeHost(lease, options.adapter, secret, options.version, options.supervisor)
+      if (existsSync(host.markerFile) && await options.adapter.recoverPreviousExecution?.(readFileSync(host.markerFile, 'utf8'))) {
+        renameSync(host.markerFile, join(lease.home, `host-interrupted-${randomUUID()}.json`))
+        host.state = 'stopped'; host.recovered = true
+      }
+      return host
     } catch (error) {
       await lease.release()
       if (error instanceof ManagementError) throw error
@@ -150,8 +158,10 @@ export class RuntimeHost {
     const device = this.adapter.device()
     return { instance_id: this.instanceId, revision: this.revision, supervisor: this.supervisor,
       state: this.state, connection: this.connection, ...(device ? { device } : {}),
-      ...(['reconciling', 'blocked'].includes(this.state) ? { blocked_reason: '旧执行停止事实尚需核对' } : {}) }
+      ...(['reconciling', 'blocked'].includes(this.state) ? { blocked_reason: '旧版本异常退出。请正常重启 Windows，Runtime 将自动核对并恢复；配对与执行记录保留。' } : {}) }
   }
+  /** Local composition metadata; deliberately absent from strict H1 state schema. */
+  get recoveredAfterInterruption(): boolean { return this.recovered }
   private persist(): void { atomicWrite(this.operationsFile, JSON.stringify(this.operations)) }
 
   async request(input: unknown): Promise<Record<string, unknown>> {
@@ -252,7 +262,7 @@ export class RuntimeHost {
       if (!['running', 'stopped'].includes(this.state)) throw new ManagementError(11, 'Runtime执行事实尚需核对')
       const restart = this.state === 'running'
       if (restart) await this.mutate({ ...request, method: 'stop' })
-      if (this.adapter.canChangePlugins && !(await this.adapter.canChangePlugins())) {
+      if (this.adapter.canChangePlugins && !(await this.adapter.canChangePlugins(request.method))) {
         if (restart) await this.mutate({ ...request, method: 'start' })
         throw new ManagementError(11, '旧插件执行或会话任务尚未结案，请先完成原任务核对')
       }
@@ -273,7 +283,7 @@ export class RuntimeHost {
         if (this.state === 'running') return
         if (this.state !== 'stopped') throw new ManagementError(11, 'Runtime尚未安全停止')
         if (!this.adapter.device()) throw new ManagementError(5, '请先配对设备')
-        atomicWrite(this.markerFile, JSON.stringify({ instance_id: this.instanceId }))
+        atomicWrite(this.markerFile, JSON.stringify({ instance_id: this.instanceId, ...await this.adapter.executionMarker?.(this.instanceId) }))
         this.state = 'starting'; this.connection = 'connecting'; this.changed()
         this.ownsExecution = true
         try {

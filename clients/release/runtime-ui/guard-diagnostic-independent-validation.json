@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-12",
+  "role": "independent-test",
+  "result": "PASS_WITH_RELEASE_ACCEPTANCE_GAPS",
+  "testedInstallerIncludeSha256": "f54d4144a3964bd20459ee8b224931f09f2925162e0177cab9d5e7250e44a9d9",
+  "testedDiagnosticSha256": "d5c495e9aaecb551be41c74ee25875b62a01359ce8ccc6de3632027d208e15c1",
+  "checks": [
+    {
+      "name": "real-unicode-nsis-installer-and-uninstaller-guard",
+      "command": "makensis.exe /V3 <system-temp>/guard.nsi; guard.exe /S; guard-uninstall.exe /S _?=<system-temp>/nsis-guard",
+      "compileExitCode": 0,
+      "runningInstallerExitCode": 2,
+      "runningUninstallerExitCode": 2,
+      "fixtureAliveAfterBoth": true,
+      "absentInstallerExitCode": 0,
+      "absentUninstallerExitCode": 0,
+      "fixture": "Dedicated copy of fixed node.exe named AID Work Runtime 验收版.exe, running only setInterval timer",
+      "fixtureStoppedOnlyByTestCleanup": true,
+      "realRuntimeProcessesTouched": false,
+      "realInstallationExecuted": false,
+      "defaultKillBranch": "Not expanded: actual builder CHECK_APP_RUNNING chooses customCheckAppRunning; custom macro contains only FindProcess. NSIS preprocessor-only mode itself cannot load nsProcess plugin, so full actual compile and live no-kill results are evidence."
+    },
+    {
+      "name": "windows-powershell-51-parse-and-isolated-real-script",
+      "command": "WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File <system-temp>/validate-diagnostic.ps1",
+      "exitCode": 0,
+      "parseErrors": 0,
+      "utf8Bom": true,
+      "nativeDesktopAndAppDataIsolated": true,
+      "runtimeFixtureHashesUnchanged": true,
+      "privateContentSentinelOmitted": true,
+      "serverOriginSanitized": true,
+      "directoryAndOperationCountersAccurate": true,
+      "outputFieldWhitelistCount": 12,
+      "legacyCliRegexMatched": true,
+      "processInventoryScopeIncluded": true
+    },
+    {
+      "name": "actual-chinese-bat-launcher",
+      "command": "cmd.exe /c clients/release/runtime-ui/采集诊断摘要.bat (isolated USERPROFILE/APPDATA, stdin EOF for pause)",
+      "exitCode": 0,
+      "contentAscii": true
+    }
+  ],
+  "windowSemantics": {
+    "source": "clients/agent-desktop/electron/main.ts:324",
+    "behavior": "Runtime close while not quitting/smoke prevents close and hides window; it leaves Host running. Tray exit is required before update."
+  },
+  "limitations": [
+    "Full release installer not built/installed in this increment",
+    "Customer blocked/reconciling recovery not authorized or exercised; no marker removed",
+    "No production or real cloud access",
+    "Nonzero FindProcess errors other than 603 were checked in source, not induced in real OS plugin",
+    "Real process discovery for unknown descendants is expressly incomplete; summary is not full stop proof"
+  ]
+}

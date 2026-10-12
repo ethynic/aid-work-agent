@@ -74,6 +74,7 @@ async function main(): Promise<void> {
   try {
     host = await openRuntimeHost({ nodeExecutable: process.execPath, supervisor, platform })
     attachManagementIpc(host, channel)
+    if (host.recoveredAfterInterruption) channel.send({ kind: 'runtime_recovery', instance_id: host.instanceId, processes_stopped: true })
     if (!connected) { await host.dispose(); return }
     for (const request of describes) for (const listener of messages) listener(request)
   } catch (error) {

@@ -1,5 +1,11 @@
 # Agent 桌面客户端 v3 开发计划
 
+2026-10-12 升级退出检查点：[试用包Phase 5](plan-runtime-ui-boss-trial-bundle.md)由当前主控唯一写入公共NSIS钩子与诊断交付；Runtime窗口X仍仅隐藏到托盘，安全退出走既有stopAndExit。安装器运行检查只读拒绝，不默认终止进程，不改变共同wire或自行清旧运行事实。
+
+2026-10-12 BOSS 冷启动增量检查点：[试用包计划Phase 4](plan-runtime-ui-boss-trial-bundle.md)由当前主控修改Runtime共享store及Host组合层，Desktop继续消费同一Host，不另写Chrome启动或业务调用；UI ready诊断不变，wire/binding/许可保持。
+
+2026-10-12 共同检查点：[老用户试用组合包](plan-runtime-ui-boss-trial-bundle.md)由当前主控唯一写入公共 Electron main、自启适配/测试及打包白名单/NSIS钩子；仅安装的独立Runtime产品启用登录自启，完整Desktop不启用。复用正常Host管理start，不改H1/H2/Device schema，v2.0与候选0.3保持。
+
 2026-10-11 MCP 大结果回传检查点：共享 Runtime core 的唯一写入者为 [BOSS/Runtime 修复会话](desktop-automation/plan-boss-card-coordinate-precision.md)，文件为 `src/legacy/providerManager.ts` 及 Runtime 传输测试/fixture/helper。Desktop 继续消费同一 core，不另实现 stdio；有限预算与脱敏诊断详见链接计划 Phase 5。旧构造调用兼容；不改管理/Device wire、binding、许可、公共壳或 H4 新产物协议，契约 v2.0 / wire 候选0.3不变。
 
 2026-10-11 共同检查点：BOSS 续筛业务契约 v1 见[续筛计划](desktop-automation/plan-boss-screening-continuation.md)。共用核心注册的唯一写入者为该任务主控，仅改 `clients/shared/local-tool-host-core/src/legacy/providers.ts`、`providerManager.ts` 及对应测试，桌面端不另实现续筛。新增工具与旧 Provider 拒绝兼容，不改管理 wire、binding、许可或桌面对话循环。
@@ -407,3 +413,6 @@ Runtime唯一写入者完成controller/controller.test最小修复：describe未
 主控启动新win-unpacked EXE复用本工作流此前创建的未配对空验收profile，实际包身份/包内资源/独立目录、未配对禁止启动、真实Host管理、关窗隐藏/重开、无pageerror及实际exit0共12断言再次通过；CIM无该包进程残留，已查看新截图。未执行NSIS安装、原生选框或真实业务配对，也未重做与本次Renderer增量无关的三实包安装测试，前次22断言保留其原覆盖范围。
 
 旧a8b0包的暂停状态已关闭，当前人工验收使用68b855及新manifest，旧摘要仅作历史。手册12与Desktop索引行同步新交付。Runtime计划10.4及用户条件提交授权、限定暂存/提交/推送由Runtime主控维护；本工作流未执行Git提交/推送或部署，且不会替其宣称提交成功。B1/B2、H2/H4新链路与共同wire冻结均不扩大。
+# 2026-10-12 升级恢复共同检查点
+
+已登记[覆盖升级与自动恢复](plan-runtime-upgrade-recovery.md)：Runtime安装器协调退出与原运行意图恢复，共用core停止证明，不实现第二执行引擎；主控唯一写入Electron/NSIS，Device授权不变，实施前检查点完成。

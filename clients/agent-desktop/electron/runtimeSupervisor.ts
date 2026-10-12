@@ -40,13 +40,15 @@ export class RuntimeSupervisor {
   private stopOperation?: string
   private accepting = true
   instanceId = ''
+  private recoveredInstanceId = ''
+  get recoveredAfterInterruption(): boolean { return !!this.instanceId && this.recoveredInstanceId === this.instanceId }
   constructor(private options: RuntimeSupervisorOptions) {}
 
   private ensure(): Promise<Reply> {
     if (this.ready) return this.ready
     if (this.child && !this.childExited) return this.handshake(this.generation)
     const generation = ++this.generation
-    this.childExited = false; this.instanceId = ''; this.stopOperation = undefined
+    this.childExited = false; this.instanceId = ''; this.stopOperation = undefined; this.recoveredInstanceId = ''
     const env: NodeJS.ProcessEnv = {}
     for (const key of ['PATH', 'Path', 'SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'USERNAME', 'SESSIONNAME', 'PROCESSOR_ARCHITECTURE']) if (process.env[key] !== undefined) env[key] = process.env[key]
     env.AIDWORK_RUNTIME_HOME = this.options.home
@@ -73,6 +75,10 @@ export class RuntimeSupervisor {
     })
     child.on('message', message => {
       if (generation !== this.generation || this.childExited) return
+      if (object(message) && message.kind === 'runtime_recovery') {
+        if (Object.keys(message).sort().join(',') === 'instance_id,kind,processes_stopped' && typeof message.instance_id === 'string' && message.instance_id && message.processes_stopped === true) this.recoveredInstanceId = message.instance_id
+        return
+      }
       if (object(message) && message.kind === 'runtime_platform_request') { void this.platformRequest(message, child, generation); return }
       if (object(message) && message.event === 'state_changed') { this.options.onEvent(message); return }
       if (!object(message) || typeof message.request_id !== 'string') return
@@ -116,6 +122,7 @@ export class RuntimeSupervisor {
     const request = parseRuntimeRequest(value)
     if (!this.accepting) throw new Error('Runtime正在退出，请等待执行收尾')
     const startup = await this.ensure()
+    if (!this.accepting) throw new Error('Runtime正在退出，请等待执行收尾')
     if (startup.code !== 0) return { ...startup, request_id: request.request_id, method: request.method }
     const reply = await this.send(request.method, request.params)
     if (request.method === 'start' && reply.code === 0) this.stopOperation = undefined
@@ -144,19 +151,24 @@ export class RuntimeSupervisor {
     this.pending.clear()
   }
 
-  async stopAndExit(): Promise<void> {
+  async stopAndExit(drainTimeoutMs?: number, beforeStop?: (state: Record<string, unknown>) => Promise<void>): Promise<void> {
     this.accepting = false
     let confirmed = false
     try {
-      if (!this.child || this.childExited) { confirmed = true; return }
+      if (!this.child || this.childExited) { await beforeStop?.({ state: 'stopped' }); confirmed = true; return }
       const startup = await this.ready
       if (startup?.code === 0) {
+        if (beforeStop) {
+          const snapshot = await this.send('getState', {})
+          if (snapshot.code !== 0 || !object(snapshot.result) || snapshot.result.instance_id !== this.instanceId) throw new Error('Runtime升级状态未确认')
+          await beforeStop(snapshot.result)
+        }
         if (!this.stopOperation) {
           const stop = await this.send('stop', { request_key: randomUUID() })
           if (stop.code !== 0 || !object(stop.result) || typeof stop.result.operation_id !== 'string') throw new Error('Runtime停止请求未确认')
           this.stopOperation = stop.result.operation_id
         }
-        const deadline = Date.now() + (this.options.drainTimeoutMs ?? 30_000)
+        const deadline = Date.now() + (drainTimeoutMs ?? this.options.drainTimeoutMs ?? 30_000)
         for (;;) {
           const operation = await this.send('operations.get', { operation_id: this.stopOperation })
           if (operation.code !== 0 || !object(operation.result)) throw new Error('Runtime停止结果未确认')

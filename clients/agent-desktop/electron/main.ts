@@ -12,6 +12,8 @@ import { resolveUpdateConfiguration } from './updateConfiguration.js'
 import { resolveProductConfiguration } from './productConfiguration.js'
 import { RuntimeSupervisor } from './runtimeSupervisor.js'
 import { RuntimeSelections } from './runtimeSelection.js'
+import { RuntimeStartup, runtimeLoginLaunch, resumeRuntimeAtLogin } from './runtimeStartup.js'
+import { RuntimeUpdateIntent, runtimeUpdateExit, RUNTIME_UPDATE_EXIT_ARGUMENT, shouldResumeRuntime } from './runtimeUpdate.js'
 import { applicationMenuTemplate, resolvePlatformWindowOptions, shouldQuitWhenAllWindowsClosed } from './platform.js'
 import { normalizeDownloadUrl, normalizeExternalUrl, readDownloadBody, safeSuggestedName } from './systemCapabilities.js'
 import {
@@ -57,6 +59,20 @@ app.setName(product.productName)
 app.setPath('userData', product.userDataPath ?? legacyUserDataPath)
 if (process.platform === 'win32') app.setAppUserModelId(product.appId)
 const smokeMode = process.env.AID_AGENT_DESKTOP_SMOKE === '1'
+const loginLaunch = runtimeLoginLaunch({ kind: product.kind, packaged: app.isPackaged, platform: process.platform, smoke: smokeMode, argv: process.argv })
+const maintenanceLaunch = runtimeUpdateExit({ kind: product.kind, packaged: app.isPackaged, platform: process.platform, smoke: smokeMode, argv: process.argv })
+let updateRequested = false
+let maintenanceRequested = false
+let updateIntent: RuntimeUpdateIntent | null = null
+if (product.kind === 'runtime' && product.runtimeHome && product.hostEntry && !smokeMode) {
+  // Reuse Runtime's CurrentUser DPAPI adapter. This record must survive app exit
+  // without depending on Electron's asynchronously persisted Local State key.
+  const protectionModule = () => import(pathToFileURL(path.join(path.dirname(product.hostEntry!), 'dpapi.js')).href)
+  updateIntent = new RuntimeUpdateIntent(app.getPath('userData'), product.appId, product.runtimeHome, {
+    protect: async value => (await protectionModule()).dpapiProtect(value),
+    unprotect: async value => (await protectionModule()).dpapiUnprotect(value),
+  })
+}
 if (smokeMode && product.kind === 'desktop' && process.env.AID_AGENT_DESKTOP_SMOKE_USER_DATA) {
   app.setPath('userData', path.resolve(process.env.AID_AGENT_DESKTOP_SMOKE_USER_DATA))
 }
@@ -72,6 +88,11 @@ let runtimeTray: Tray | null = null
 let quitting = false
 let exitAllowed = false
 let exitPending = false
+
+function revealWindow(window: BrowserWindow): void {
+  window.show()
+  focusExistingWindow(window)
+}
 
 function navigateDeepLink(argumentsList: readonly string[]): void {
   if (product.kind !== 'desktop') return
@@ -135,10 +156,15 @@ function registerDesktopIpc(): void {
       throw new Error('desktop IPC sender rejected')
     }
   }
-  ipcMain.handle('desktop:runtime:request', (event, request: unknown) => {
+  ipcMain.handle('desktop:runtime:request', async (event, request: unknown) => {
     assertTrustedSender(event)
     if (!runtimeSupervisor) throw new Error('当前产品没有本机Runtime管理能力')
-    return runtimeSupervisor.request(request)
+    const reply = await runtimeSupervisor.request(request)
+    if (!maintenanceRequested && reply.code === 0 && ['start', 'stop'].includes((request as { method: string }).method)) {
+      // A new explicit user intent supersedes a cancelled upgrade's resume intent.
+      try { await updateIntent?.clear() } catch { logLifecycle('runtime-update-intent-clear-failed') }
+    }
+    return reply
   })
   ipcMain.handle('desktop:runtime:choose-package', async (event, input: unknown) => {
     assertTrustedSender(event)
@@ -291,7 +317,7 @@ async function createWindow(): Promise<BrowserWindow> {
     ...state.bounds,
     minWidth: 720,
     minHeight: 500,
-    show: !smokeMode,
+    show: !smokeMode && !loginLaunch,
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#111827' : '#ffffff',
     ...resolvePlatformWindowOptions(process.platform),
     webPreferences: {
@@ -308,7 +334,7 @@ async function createWindow(): Promise<BrowserWindow> {
   })
   mainWindow = window
   const runtimeOwner = window.webContents.id
-  if (state.maximized) window.maximize()
+  if (state.maximized && !loginLaunch) window.maximize()
 
   installSecurityHandlers(window)
   installZoomShortcuts(window)
@@ -365,11 +391,19 @@ if (!hasSingleInstanceLock) {
 } else {
   if (!smokeMode && product.kind === 'desktop') app.setAsDefaultProtocolClient(DESKTOP_SCHEME)
   app.on('second-instance', (_event, argv) => {
+    if (runtimeUpdateExit({ kind: product.kind, packaged: app.isPackaged, platform: process.platform, smoke: smokeMode, argv })) {
+      maintenanceRequested = true
+      if (mainWindow) revealWindow(mainWindow)
+      updateRequested = argv.includes(RUNTIME_UPDATE_EXIT_ARGUMENT)
+      app.quit(); return
+    }
     if (parseAgentDeepLink(argv)) navigateDeepLink(argv)
-    else if (mainWindow) focusExistingWindow(mainWindow)
+    else if (mainWindow) revealWindow(mainWindow)
   })
 
   app.whenReady().then(async () => {
+    // Installer rendezvous with no existing instance must not start a new Host.
+    if (maintenanceLaunch) { exitAllowed = true; app.quit(); return }
     let configuration
     try {
       configuration = product.kind === 'runtime' ? { apiBaseUrl: 'https://runtime.invalid', source: 'runtime-local' } : resolveApiConfiguration({
@@ -407,13 +441,38 @@ if (!hasSingleInstanceLock) {
     await registerRendererProtocol()
     await createWindow()
     if (product.kind === 'runtime' && !smokeMode) {
+      const startup = app.isPackaged && process.platform === 'win32'
+        ? new RuntimeStartup(app, app.getPath('userData'), process.execPath, product.appId) : null
+      try { startup?.initialize() } catch { logLifecycle('runtime-login-registration-failed') }
       runtimeTray = new Tray(await app.getFileIcon(process.execPath))
       runtimeTray.setToolTip(product.productName)
-      runtimeTray.setContextMenu(Menu.buildFromTemplate([
-        { label: '打开执行节点', click: () => { if (mainWindow) focusExistingWindow(mainWindow) } },
+      const refreshTrayMenu = () => runtimeTray!.setContextMenu(Menu.buildFromTemplate([
+        { label: '打开执行节点', click: () => { if (mainWindow) revealWindow(mainWindow) } },
+        ...(startup ? [{ label: '登录 Windows 后自动启动', type: 'checkbox' as const, checked: startup.enabled(), click: (item: Electron.MenuItem) => {
+          try { startup.setEnabled(item.checked) } catch { logLifecycle('runtime-login-registration-failed'); if (mainWindow) revealWindow(mainWindow) }
+          refreshTrayMenu()
+        } }] : []),
         { type: 'separator' }, { label: '退出', click: () => app.quit() },
       ]))
-      runtimeTray.on('double-click', () => { if (mainWindow) focusExistingWindow(mainWindow) })
+      refreshTrayMenu()
+      runtimeTray.on('double-click', () => { if (mainWindow) revealWindow(mainWindow) })
+      if (runtimeSupervisor) {
+        void (async () => {
+          const intent = await updateIntent?.read()
+          if (maintenanceRequested) return
+          const reply = await runtimeSupervisor!.request({ request_id: randomUUID(), method: 'getState', params: {} })
+          if (reply.code !== 0) throw new Error('RuntimeStartupStateRejected')
+          const recovered = runtimeSupervisor!.recoveredAfterInterruption
+          if (!maintenanceRequested && shouldResumeRuntime({ intent, recovered, login: loginLaunch })) await resumeRuntimeAtLogin(value => {
+            if (maintenanceRequested) throw new Error('RuntimeMaintenanceInProgress')
+            return runtimeSupervisor!.request(value)
+          })
+          if (intent !== undefined && !maintenanceRequested) await updateIntent?.clear()
+        })().catch(() => {
+          logLifecycle('runtime-login-resume-failed')
+          if (mainWindow) revealWindow(mainWindow)
+        })
+      }
     }
     if (pendingDeepLink) {
       const deepLink = pendingDeepLink
@@ -443,13 +502,20 @@ if (!hasSingleInstanceLock) {
     event.preventDefault(); quitting = true
     if (exitPending) return
     exitPending = true
-    void runtimeSupervisor.stopAndExit().then(async () => {
+    void (async () => {
+      await runtimeSupervisor!.stopAndExit(maintenanceRequested ? 600_000 : undefined, maintenanceRequested || updateIntent ? async state => {
+        if (updateRequested && updateIntent && ['running', 'starting', 'stopped', 'draining'].includes(String(state.state))) {
+          if (await updateIntent.read() === undefined) await updateIntent.save(['running', 'starting'].includes(String(state.state)))
+        } else if (!updateRequested) await updateIntent?.clear()
+      } : undefined)
+    })().then(async () => {
       await runtimeSelections?.invalidate()
       exitAllowed = true; app.quit()
     }).catch(async () => {
       quitting = false
-      if (mainWindow) focusExistingWindow(mainWindow)
-      await dialog.showMessageBox({ type: 'warning', title: '执行仍需收尾', message: '本机执行尚未确认安全停止。请保留当前进程和执行记录，完成收尾或核对后再退出。' })
+      maintenanceRequested = false; updateRequested = false
+      if (mainWindow) revealWindow(mainWindow)
+      await dialog.showMessageBox({ type: 'warning', title: '执行仍需收尾', message: '本机任务仍在收尾，升级已暂停。程序和执行记录保留，请恢复网络后重新运行安装器；旧版本异常退出请正常重启 Windows。' })
     }).finally(() => { exitPending = false })
   })
 }

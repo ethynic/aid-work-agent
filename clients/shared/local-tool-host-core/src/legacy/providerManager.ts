@@ -47,6 +47,8 @@ export interface ProviderCallOptions {
 }
 
 export interface ProviderOptions {
+  /** Trusted composition only; containment intent must be durable before launch. */
+  prepareLaunch?: (entry: string) => Promise<{ command: string; args: string[] }>
   shutdownTimeoutMs?: number
   env?: Record<string, string>
   nodeExecutable?: string
@@ -87,9 +89,11 @@ export class ProviderManager {
   private readonly stdioMaxBufferBytes: number
   private transportFailure: string | null = null
   private transportGeneration = 0
+  private readonly prepareLaunch: ProviderOptions['prepareLaunch']
 
   constructor(entry: string, opts: ProviderOptions = {}) {
     this.entry = entry
+    this.prepareLaunch = opts.prepareLaunch
     this.shutdownTimeoutMs = opts.shutdownTimeoutMs ?? 5_000
     this.providerEnv = opts.env ?? {}
     this.nodeExecutable = opts.nodeExecutable ?? process.execPath
@@ -116,9 +120,10 @@ export class ProviderManager {
     if (this.client && !this.crashed) return
     await this.disposeDead()
 
+    const launch = await this.prepareLaunch?.(this.entry)
     const transport = new StdioClientTransport({
-      command: this.nodeExecutable,
-      args: [this.entry, 'mcp', '--stdio'],
+      command: launch?.command ?? this.nodeExecutable,
+      args: launch?.args ?? [this.entry, 'mcp', '--stdio'],
       // pipe 而非 inherit：[boss-mcp] 工具调用行经 logProviderChunk 转发（控制台 + 文件落盘），
       // 脱离 start_runtime.bat 重定向启动时排障证据不再丢失（2026-09-01）
       stderr: 'pipe',

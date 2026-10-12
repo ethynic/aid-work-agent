@@ -34,6 +34,8 @@ const expectedFiles = [...resourceManifest.files].sort((left, right) => left.pat
 if (JSON.stringify(allFiles) !== JSON.stringify(expectedFiles) || resourceManifest.hostPackageSha256 !== manifest.hostPackageSha256 || resourceManifest.profile !== manifest.profile) throw new Error('Packaged Runtime resources incomplete or changed')
 const asar = path.join(resources, 'app.asar')
 const entries = listPackage(asar).map(file => file.replaceAll('\\', '/'))
+if (!entries.includes('/dist/electron/runtimeStartup.js')) throw new Error('Runtime login startup adapter missing from packaged app')
+if (!entries.includes('/dist/electron/runtimeUpdate.js') || !existsSync(path.join(path.dirname(product.hostEntry), 'native/RuntimeProcessSupervisor.exe'))) throw new Error('Runtime upgrade recovery assets missing')
 for (const required of ['/dist/electron/main.js', '/dist/electron/preload.cjs', '/dist/electron/productConfiguration.js', '/dist/electron/runtimeSupervisor.js', '/dist/electron/runtimeSelection.js', '/dist/renderer/index.html']) {
   if (!entries.includes(required)) throw new Error(`Runtime app.asar missing ${required}`)
 }

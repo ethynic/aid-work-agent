@@ -7,10 +7,11 @@ import { test } from 'node:test'
 import yazl from 'yazl'
 import { PluginStore } from '../dist/plugins/store.js'
 import { canonicalJson, sha256 } from '../dist/plugins/package.js'
+import { deviceCapabilities } from '../dist/legacy/config.js'
 
 const keys = generateKeyPairSync('ed25519')
 const platform = { platform: 'win32', arch: 'x64', node_version: '22.23.3', node_abi: '127', runtime_version: '0.2.14' }
-const trust = [{ key_id: 'isolated-store-test', public_key: keys.publicKey.export({ type: 'spki', format: 'pem' }), providers: ['ai.aidwork.weixin', 'ai.aidwork.wecom'] }]
+const trust = [{ key_id: 'isolated-store-test', public_key: keys.publicKey.export({ type: 'spki', format: 'pem' }), providers: ['ai.aidwork.weixin', 'ai.aidwork.wecom', 'ai.aidwork.boss-recruiting'] }]
 const zip = entries => new Promise((resolve, reject) => {
   const file = new yazl.ZipFile(); const chunks = []
   file.outputStream.on('data', value => chunks.push(value)); file.outputStream.on('end', () => resolve(Buffer.concat(chunks))); file.outputStream.on('error', reject)
@@ -44,6 +45,40 @@ test('new install is enabled but app readiness is independent and can recover on
   ready = true; await store.refresh()
   assert.equal(store.list()[0].ready, true); assert.ok(store.resolveEntries({}).weixin.endsWith('dist\\cli.js') || store.resolveEntries({}).weixin.endsWith('dist/cli.js'))
   assert.equal(changed, 2, 'Installation and readiness each publish one synchronized fact change')
+})
+
+test('trusted BOSS bootstrap preserves availability while app readiness remains false', async t => {
+  const { store, options } = fixture(t, async () => ({ ready: false, reason: '调试 Chrome 尚未启动' }))
+  await store.initialize(); await store.import(await pack({ provider: 'ai.aidwork.boss-recruiting' }))
+  assert.equal(store.list()[0].ready, false)
+  assert.deepEqual(store.resolveEntries({}), {})
+  const entries = store.resolveEntries({}, ['boss-recruiting'])
+  assert.ok(entries['boss-recruiting'])
+  assert.deepEqual(deviceCapabilities({ providers: { 'boss-recruiting': { entry: entries['boss-recruiting'] } } }).providers, ['boss-recruiting'])
+  const reopened = new PluginStore(options); await reopened.initialize()
+  assert.equal(reopened.resolveEntries({}, ['boss-recruiting'])['boss-recruiting'], entries['boss-recruiting'])
+  await reopened.disable(reopened.list()[0].installation_id)
+  assert.deepEqual(reopened.resolveEntries({ 'boss-recruiting': 'legacy' }, ['boss-recruiting']), {})
+  await reopened.enable(reopened.list()[0].installation_id)
+  await reopened.uninstall(reopened.list()[0].installation_id)
+  assert.deepEqual(reopened.resolveEntries({ 'boss-recruiting': 'legacy' }, ['boss-recruiting']), {})
+})
+
+test('bootstrap never admits tampered or failed-diagnostic releases or unrelated unready providers', async t => {
+  const { store, home, options } = fixture(t, async () => ({ ready: false }))
+  await store.initialize()
+  await store.import(await pack({ provider: 'ai.aidwork.boss-recruiting' }))
+  await store.import(await pack({ provider: 'ai.aidwork.weixin' }))
+  await store.import(await pack({ provider: 'ai.aidwork.wecom' }))
+  assert.deepEqual(Object.keys(store.resolveEntries({}, ['boss-recruiting'])), ['boss-recruiting'])
+  const entry = store.resolveEntries({}, ['boss-recruiting'])['boss-recruiting']
+  writeFileSync(entry, 'tampered')
+  await store.refresh()
+  assert.deepEqual(store.resolveEntries({ 'boss-recruiting': 'legacy' }, ['boss-recruiting']), {})
+  const { store: failedStore } = fixture(t, async () => { throw new Error('version mismatch') })
+  await failedStore.initialize()
+  await assert.rejects(failedStore.import(await pack({ provider: 'ai.aidwork.boss-recruiting' })))
+  assert.deepEqual(failedStore.resolveEntries({}, ['boss-recruiting']), {})
 })
 
 test('refresh checks large releases serially and publishes one complete readiness snapshot', async t => {

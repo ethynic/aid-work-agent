@@ -41,6 +41,7 @@ import { probePlugin } from './pluginProbe.js'
 import { loadPackagedTrust } from './productTrust.js'
 import { hasJournalCompletionProof } from '@aid/local-tool-host-core/legacy/completionProof'
 import { hasSessionCompletion } from './sessionTasks/completionProof.js'
+import { ProcessSupervision } from './processSupervision.js'
 
 function providerEnvironment(): Record<string, string> {
   const env: Record<string, string> = {}
@@ -62,7 +63,9 @@ export class LegacyExecution implements HostAdapter {
   private runPromise: Promise<void> | null = null
   private runFailure: unknown = null
   private stopping = false
+  private supervision: ProcessSupervision
   constructor(private nodeExecutable: string, private home: string = runtimeHomeDir(), private pluginOptions?: { trust: PublisherTrust[]; platform?: RuntimePlatform }) {
+    this.supervision = new ProcessSupervision(home, nodeExecutable)
     if (pluginOptions?.platform) {
       this.preparePluginImport = async (params, context) => {
         const snapshot = await pluginOptions.platform!.takeSelectedPackage({ selection_ref: params.selection_ref!, request_key: params.request_key!, instance_id: context.instance_id })
@@ -111,7 +114,11 @@ export class LegacyExecution implements HostAdapter {
   observePlugins(listener: () => void): void { this.pluginsChanged = listener }
   plugins() { return this.pluginStore?.list() ?? [] }
   async refreshPlugins() { await this.pluginStore?.refresh() }
-  async canChangePlugins(): Promise<boolean> {
+  async canChangePlugins(method?: string): Promise<boolean> {
+    // Import verifies a higher release and retains the old immutable directory.
+    // It cannot replay an old invocation or clear the identity fence. Destructive
+    // changes remain blocked, as do any unresolved durable v2/session facts below.
+    if (existsSync(join(this.home, 'identity-reconciliation.bin')) && method !== 'plugins.import') return false
     for (const name of ['journal', 'session-tasks']) {
       const directory = join(this.home, name); const files = existsSync(directory) ? readdirSync(directory) : []
       if (name === 'journal' && !files.every(file => hasJournalCompletionProof(this.home, file))) return false
@@ -136,12 +143,15 @@ export class LegacyExecution implements HostAdapter {
   onDisposed(): void { compositionOpen = false; configureRuntimeHome(undefined) }
   protect = dpapiProtect
   unprotect = dpapiUnprotect
+  executionMarker = (instanceId: string) => this.supervision.marker(instanceId)
+  recoverPreviousExecution = (marker: string) => this.supervision.recover(marker)
   device() {
     const config = loadConfig()
     return config ? { device_id: config.device_id, ...(config.name ? { name: config.name } : {}) } : undefined
   }
   async canReplaceIdentity(): Promise<boolean> {
     const home = runtimeHomeDir()
+    if (existsSync(join(home, 'identity-reconciliation.bin'))) throw new ManagementError(11, '旧任务结果待核对；原设备可以继续连接，暂不能更换配对身份')
     if (existsSync(join(home, 'pairing.pending.json'))) return false
     // Historical records without original ACK evidence stay blocked. New known-effect
     // journals can settle only through the proof written before outbox deletion.
@@ -191,6 +201,7 @@ export class LegacyExecution implements HostAdapter {
     }
     // Each Provider gets its own approved credentials, never the Host/device environment.
     const providers = new ProviderSet(entries, { nodeExecutable: this.nodeExecutable, baseEnv: providerEnvironment(),
+      ...(this.supervision.enabled ? { prepareLaunch: (entry: string) => this.supervision.prepareLaunch(entry) } : {}),
       providerEnv: { weixin: { AIDWORK_WEIXIN_BRIDGE_KEY: bridgeKey }, wecom: wecomEnv } })
     this.providers = providers
     this.runFailure = null
@@ -302,7 +313,12 @@ export class LegacyExecution implements HostAdapter {
     await this.sessionGuard?.release()
     this.loop = null; this.providers = null; this.engine = null; this.sessionGuard = null; this.runPromise = null
   }
-  private resolveEntries(config: RuntimeConfig | null): Record<string, string> { const entries = resolveProviderEntries(config); return this.pluginStore?.resolveEntries(entries) ?? entries }
+  private resolveEntries(config: RuntimeConfig | null): Record<string, string> {
+    const entries = resolveProviderEntries(config)
+    // BOSS operations already ensureDebugChrome and enforce their own page/login
+    // gates. Removing the verified entry before Chrome opens deadlocks boss_goto.
+    return this.pluginStore?.resolveEntries(entries, ['boss-recruiting']) ?? entries
+  }
   private effectiveConfig(config: RuntimeConfig | null, entries = this.resolveEntries(config)): RuntimeConfig {
     return { ...(config ?? { server: '', device_id: '' }), bossCliEntry: undefined, providers: Object.fromEntries(Object.entries(entries).map(([key, entry]) => [key, { ...config?.providers?.[key], entry }])) }
   }

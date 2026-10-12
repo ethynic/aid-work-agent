@@ -115,14 +115,16 @@ export class PluginStore {
     })
   }
 
-  resolveEntries(legacy: Record<string, string>): Record<string, string> {
+  resolveEntries(legacy: Record<string, string>, bootstrapKeys: readonly string[] = []): Record<string, string> {
     this.assertAvailable()
     const entries = { ...legacy }
     for (const record of this.records) {
       const key = LEGACY_KEYS[record.plugin_id]!
       delete entries[key]
       const state = this.states.get(record.installation_id)
-      if (!record.uninstalled && record.enabled && state?.ready && state.manifest) {
+      // Trusted composition can permit a verified Provider to bootstrap its app.
+      // Readiness stays diagnostic; integrity/version failure never has a manifest.
+      if (!record.uninstalled && record.enabled && state?.manifest && (state.ready || bootstrapKeys.includes(key))) {
         entries[key] = join(this.releases, record.directory, 'payload', state.manifest.entrypoint[0]!)
       }
     }

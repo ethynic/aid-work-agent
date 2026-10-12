@@ -32,7 +32,7 @@ function runPowerShell(script: string, stdinBase64: string): Promise<string> {
     const child = execFile(
       'powershell.exe',
       ['-NoProfile', '-NonInteractive', '-Command', script],
-      { timeout: 30_000, maxBuffer: 4 * 1024 * 1024 },
+      { timeout: 30_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true },
       (err, stdout) => {
         if (err) {
           reject(new Error(`DPAPI PowerShell 调用失败: ${err.message}`))
