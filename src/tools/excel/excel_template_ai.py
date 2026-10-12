@@ -1184,7 +1184,11 @@ def _default_llm(
 
 def _observed_skill_llm_request(api_url,payload,key,timeout,provider,model):
     import httpx
-    from src.services.llm_model_call import model_call_sync
+    # 2026-10-12 回退 791d1bcd 的半落地改造：其引用的 src.services.llm_model_call
+    # 模块从未入库，import 即 ModuleNotFoundError（4 个单元测试失败）。
+    # 恢复既有 src.llm.call_observer.observed_call_sync 链路，待 llm_model_call
+    # 服务真正落地后再迁移（含 endpoint_url/response_model 观测字段）
+    from src.llm.call_observer import observed_call_sync
     def request():
         response = httpx.post(api_url,headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"},
                               json=payload,timeout=timeout)
@@ -1200,10 +1204,8 @@ def _observed_skill_llm_request(api_url,payload,key,timeout,provider,model):
             usage['cached_tokens'] = (details.get('cached_tokens',0) if isinstance(details,dict)
                                       else usage.get('prompt_cache_hit_tokens',0))
         return {"usage":usage,
-                "response_model":data.get('model'),
                 "request_id":data.get("id","")}
-    data = model_call_sync(request,provider=provider,model=model,kwargs={},normalize=normalize,purpose="skill",
-                           endpoint_url=api_url)
+    data = observed_call_sync(request,provider=provider,model=model,kwargs={},normalize=normalize,purpose="skill")
     if isinstance(data.get("usage"),dict) and data["usage"].get("_runner_receipt_id"):
         data["_runner_receipt_id"] = data["usage"]["_runner_receipt_id"]
     return data
