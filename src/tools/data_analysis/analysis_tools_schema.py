@@ -102,6 +102,8 @@ aggregate(source="all_data", group_by=["国家","月份"], aggregations=[{"colum
 5. 数据类型 → 图表类型决策：时间/日期×数值=line(趋势)；类别×单个数值=bar(对比,按值降序)；类别×多个数值并排=grouped_bar；占比构成=pie(类目≤6)或stacked_bar；两个数值的相关性=scatter；Top-N排名=bar(降序)
 6. 图表配色默认财经风(ft)；用户要求其他风格（如"深色""柔和莫兰迪""商务深蓝"）时，在 to_chart 传 theme 参数（ft/corporate/morandi/dark）；用户问"有哪些风格"时，告知有财经风/商务深蓝/莫兰迪/深色科技 4 种
 7. ⚠️ 如果已经通过 to_table 或 to_chart 输出了最终结果，不要再调用任何工具，直接用文字总结结论
+8. 同构多组查询必须合并：同一维度的多组同构查询（如逐个国家、逐个渠道各自过滤 Top N、逐月统计）应合并为一次分组聚合（aggregate 按维度列 group_by）或一次 pivot，仅当分组聚合确实无法表达时才逐组查询；用 N 次单组 query 循环代替一次分组统计是严重的成本浪费
+9. 禁止冗余 describe：工具结果已返回 columns 清单（数据加工结果与开局 schema 目录均含），列名已知时不要用 describe 重复确认；describe 仅用于需要取值分布/统计摘要时，且同一数据源不要重复 describe
 
 ### 出图判定（重要！）
 

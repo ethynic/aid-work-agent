@@ -1083,3 +1083,194 @@ class TestPreloadInstructionAndSlimLoad:
         assert result["success"] is True
         assert result["columns"][0]["name"] == "city"
         assert "tbl_new" in agent._loaded_table_ids
+
+
+# ============================================================
+# Tests: 成本优化（2026-10 改进点 4 + 追加改进 A/B）
+# ============================================================
+
+
+class TestReasoningContentPassthrough:
+    """DeepSeek 思考模式：thinking 轮响应的 reasoning_content 必须随历史回传。
+
+    2026-10-12 真实 API 实测：DeepSeek 服务端新增校验，开思考请求的历史
+    assistant 消息缺 rc 键 -> 400 "must be passed back"，failover 到 qwen
+    既污染计费又毁成本对照。机械轮关思考分级也因此撤回（混用开/关思考
+    会被该校验不稳定击穿），全场统一开思考后真值回传是唯一防线。
+    """
+
+    def _make_agent(self, mock_llm):
+        return AnalysisAgent(
+            llm_gateway=mock_llm, analyzer=_loaded_analyzer(),
+            analysis_id="t_tier", tables_metadata=_sample_metadata(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_reasoning_content_passed_back_in_history(self, mock_llm):
+        """thinking 轮的 rc 挂到历史 assistant 消息，下一轮请求原样携带"""
+        resp1 = _make_llm_response(tool_calls=[
+            _make_tool_call("query", {"source": "tbl_sales", "output_var": "q1"}),
+        ])
+        resp1["reasoning_content"] = "先查询区域销售额"
+        mock_llm.chat_with_tools.side_effect = [
+            resp1,
+            _make_llm_response(content="完成"),
+        ]
+        agent = self._make_agent(mock_llm)
+        result = await agent.run("按区域统计")
+
+        assert result["success"] is True
+        second_messages = mock_llm.chat_with_tools.call_args_list[1].kwargs["messages"]
+        asst_msgs = [m for m in second_messages if m.get("role") == "assistant"]
+        assert len(asst_msgs) == 1
+        assert asst_msgs[0].get("reasoning_content") == "先查询区域销售额"
+
+    @pytest.mark.asyncio
+    async def test_response_without_rc_leaves_history_clean(self, mock_llm):
+        """响应无 rc（qwen failover 轮）-> 不伪造空串键，历史保持干净
+
+        混合思考模式已撤回，空串占位失去了服务对象；伪造键在 DeepSeek
+        校验口径未定时反而引入新风险（run3 空串补齐仍 400），宁缺勿假。
+        """
+        resp1 = _make_llm_response(tool_calls=[
+            _make_tool_call("query", {"source": "tbl_sales", "output_var": "q1"}),
+        ])
+        assert "reasoning_content" not in resp1
+        mock_llm.chat_with_tools.side_effect = [
+            resp1,
+            _make_llm_response(content="完成"),
+        ]
+        agent = self._make_agent(mock_llm)
+        result = await agent.run("按区域统计")
+
+        assert result["success"] is True
+        second_messages = mock_llm.chat_with_tools.call_args_list[1].kwargs["messages"]
+        asst_msgs = [m for m in second_messages if m.get("role") == "assistant"]
+        assert len(asst_msgs) == 1
+        assert "reasoning_content" not in asst_msgs[0]
+
+
+class TestDescribeSlimming:
+    """追加改进 A：describe 结果截断（20->8）+ memo 缓存与失效。
+
+    为什么重要：describe 每列 20 个唯一值使主分析 27 次 ≈150k 新发 prompt（新发
+    最大单一来源）；但缓存过期（源数据被改写后仍返回旧结构）是正确性风险，
+    「非 describe 工具成功后清缓存」的失效策略必须被测试钉住。
+    """
+
+    def _make_agent(self, mock_llm, wide=False):
+        if wide:
+            analyzer = DataAnalyzer(session_id="test_session")
+            df = pd.DataFrame({
+                "region": [f"区域{i}" for i in range(12)] * 2,  # 12 个唯一值 > CAP
+                "amount": range(24),
+            })
+            analyzer._tables["tbl_wide"] = df
+        else:
+            analyzer = _loaded_analyzer()
+        return AnalysisAgent(
+            llm_gateway=mock_llm, analyzer=analyzer,
+            analysis_id="t_describe", tables_metadata=[],
+        )
+
+    def test_describe_truncates_unique_values(self, mock_llm):
+        """12 个唯一值列 -> unique_values 截断到 8 条，unique_count 标量保留，附提示"""
+        agent = self._make_agent(mock_llm, wide=True)
+        result = agent._handle_describe({"source": "tbl_wide"}, 0)
+
+        assert result["success"] is True
+        stat = next(s for s in result["columns_summary"] if s["column"] == "region")
+        assert stat["unique_count"] == 12
+        assert len(stat["unique_values"]) == 8
+        assert "values_hint" in result
+
+    def test_describe_within_cap_no_truncation(self, mock_llm):
+        """唯一值数不超过上限 -> 原样返回，不加提示（不误伤小基数列）"""
+        agent = self._make_agent(mock_llm)
+        result = agent._handle_describe({"source": "tbl_sales"}, 0)
+
+        stat = next(s for s in result["columns_summary"] if s["column"] == "region")
+        assert stat["unique_values"] == ["华东", "华南", "华北"]
+        assert "values_hint" not in result
+
+    def test_describe_memo_cache_hit(self, mock_llm):
+        """同参数重复 describe -> 第二次命中缓存（analyzer.describe 只算一次）"""
+        agent = self._make_agent(mock_llm)
+        calls = []
+        real_describe = agent.analyzer.describe
+
+        def spy(**kwargs):
+            calls.append(kwargs)
+            return real_describe(**kwargs)
+
+        agent.analyzer.describe = spy
+        r1 = agent._handle_describe({"source": "tbl_sales"}, 0)
+        r2 = agent._handle_describe({"source": "tbl_sales"}, 1)
+
+        assert len(calls) == 1
+        assert r2.get("cached") is True
+        assert r2["row_count"] == r1["row_count"]
+        assert r2["columns_summary"] == r1["columns_summary"]
+
+    @pytest.mark.asyncio
+    async def test_cache_invalidated_after_successful_data_method(self, mock_llm):
+        """成功的 data_method 改变数据面 -> 缓存清空，再次 describe 重新计算"""
+        agent = self._make_agent(mock_llm)
+        calls = []
+        real_describe = agent.analyzer.describe
+
+        def spy(**kwargs):
+            calls.append(kwargs)
+            return real_describe(**kwargs)
+
+        agent.analyzer.describe = spy
+        agent._handle_describe({"source": "tbl_sales"}, 0)
+
+        res = await agent._execute_tool(
+            "query", {"source": "tbl_sales", "columns": ["region"], "output_var": "q1"}, 1
+        )
+        assert res["success"] is True
+
+        r3 = agent._handle_describe({"source": "tbl_sales"}, 2)
+        assert len(calls) == 2
+        assert r3.get("cached") is None
+
+    @pytest.mark.asyncio
+    async def test_cache_kept_after_failed_tool(self, mock_llm):
+        """失败的工具（数据面未变）-> 缓存保留（避免无谓重算）"""
+        agent = self._make_agent(mock_llm)
+        calls = []
+        real_describe = agent.analyzer.describe
+
+        def spy(**kwargs):
+            calls.append(kwargs)
+            return real_describe(**kwargs)
+
+        agent.analyzer.describe = spy
+        agent._handle_describe({"source": "tbl_sales"}, 0)
+
+        res = await agent._execute_tool(
+            "query", {"source": "不存在的表", "output_var": "q1"}, 1
+        )
+        assert res["success"] is False
+
+        r2 = agent._handle_describe({"source": "tbl_sales"}, 1)
+        assert len(calls) == 1
+        assert r2.get("cached") is True
+
+
+class TestPromptCostPrinciples:
+    """追加改进 B：执行原则提示——同构多组查询合并 + 禁止冗余 describe。
+
+    为什么重要：六国×维度切片 18 次同构 query 均可用一次分组聚合表达；
+    提示词是行为改动的唯一载体（无代码强制），存在性测试防止提示被误删。
+    """
+
+    def test_system_prompt_has_merge_principle(self):
+        from src.tools.data_analysis.analysis_tools_schema import ANALYSIS_SYSTEM_PROMPT
+        assert "同构多组查询必须合并" in ANALYSIS_SYSTEM_PROMPT
+        assert "group_by" in ANALYSIS_SYSTEM_PROMPT
+
+    def test_system_prompt_has_describe_discipline(self):
+        from src.tools.data_analysis.analysis_tools_schema import ANALYSIS_SYSTEM_PROMPT
+        assert "禁止冗余 describe" in ANALYSIS_SYSTEM_PROMPT

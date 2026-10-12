@@ -9,7 +9,7 @@ CSV 丢失条目过滤 / load_output 正常加载与安全拒绝 / user message 
 import json
 import os
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
 
@@ -18,6 +18,7 @@ from src.tools.data_analysis.analysis_artifacts import (
     INJECT_LIMIT,
     REGISTRY_LIMIT,
     artifact_csv_path,
+    find_equivalent_artifacts,
     is_valid_var_name,
     load_artifacts,
     record_artifact,
@@ -124,10 +125,12 @@ class TestRegistry:
         assert entries[0]["description"] == "新"
 
     def test_limit_caps_entries(self):
+        """limit 参数截断注入条目数（INJECT_LIMIT 已提升为 50 与注册表上限对齐，
+        截断机制本身用显式 limit 验证，避免测试随常量调整而失效）"""
         for i in range(15):
             _record(f"v{i}")
-        entries = load_artifacts(TENANT, SESSION, limit=INJECT_LIMIT)
-        assert len(entries) == INJECT_LIMIT
+        entries = load_artifacts(TENANT, SESSION, limit=10)
+        assert len(entries) == 10
         # 最近注册的在前
         assert entries[0]["var"] == "v14"
 
@@ -325,3 +328,165 @@ class TestAgentIntegration:
             ], f, ensure_ascii=False)
         entries = load_artifacts(TENANT, SESSION)
         assert [e["var"] for e in entries] == ["ok_var"]
+
+
+# ============================================================
+# Tests: 改进3 — lineage 记录与等价产物判定（2026-10）
+# ============================================================
+
+
+def _record_with_upstream(var, upstreams, rows=10, session=SESSION, tenant=TENANT, description="加工产物"):
+    """注册带 lineage 上游的产物（先落 CSV，满足读取侧的文件存在过滤）"""
+    csv_path = artifact_csv_path(tenant, var)
+    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+    pd.DataFrame({"placeholder": [0]}).to_csv(csv_path, index=False)
+    return record_artifact(
+        tenant, session, var,
+        description=description, method="merge", rows=rows,
+        columns=["市场", "销售额"], upstreams=upstreams,
+    )
+
+
+class TestLineageRecording:
+    def test_upstreams_roundtrip(self):
+        """业务意图：产物必须记住自己由哪些原始表/上游产物加工而来，否则拦截无从判定"""
+        assert _record_with_upstream("wide_a", ["9078", "9079"])
+        entries = {e["var"]: e for e in load_artifacts(TENANT, SESSION)}
+        assert entries["wide_a"]["upstreams"] == ["9078", "9079"]
+
+    def test_upstreams_overwrite_on_same_var(self):
+        """同 var 覆盖时 lineage 随之更新（旧上游不能残留误导拦截判定）"""
+        _record_with_upstream("wide_a", ["9078"])
+        _record_with_upstream("wide_a", ["9099"])
+        entries = {e["var"]: e for e in load_artifacts(TENANT, SESSION)}
+        assert entries["wide_a"]["upstreams"] == ["9099"]
+
+    def test_upstreams_truncated_to_limit(self):
+        from src.tools.data_analysis.analysis_artifacts import UPSTREAM_LIMIT
+        _record_with_upstream("wide_a", [f"t{i}" for i in range(UPSTREAM_LIMIT + 5)])
+        entries = {e["var"]: e for e in load_artifacts(TENANT, SESSION)}
+        assert len(entries["wide_a"]["upstreams"]) == UPSTREAM_LIMIT
+
+    def test_extract_source_refs_per_method(self):
+        """参数提取与 DataAnalyzer._resolve_source 的三种引用方式一一对应"""
+        assert AnalysisAgent._extract_source_refs(
+            "merge", {"left_ref": "t1", "right_ref": "v2"}
+        ) == ["t1", "v2"]
+        assert AnalysisAgent._extract_source_refs(
+            "append", {"sources": ["t1", "v2", "t3"]}
+        ) == ["t1", "v2", "t3"]
+        assert AnalysisAgent._extract_source_refs("query", {"source": "t1"}) == ["t1"]
+        assert AnalysisAgent._extract_source_refs("query", {}) == []
+
+    def test_data_method_registers_upstreams(self):
+        """_handle_data_method 注册产物时必须带上本步的 source 引用"""
+        csv_path = artifact_csv_path(TENANT, "wide_x")
+        os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+        pd.DataFrame({"placeholder": [0]}).to_csv(csv_path, index=False)
+        agent = _make_agent()
+        agent._register_artifact(
+            "wide_x", "aggregate", "按市场汇总", 5, ["市场", "销售额"],
+            upstreams=["9078"],
+        )
+        entries = {e["var"]: e for e in load_artifacts(TENANT, SESSION)}
+        assert entries["wide_x"]["upstreams"] == ["9078"]
+
+
+class TestFindEquivalentArtifacts:
+    def test_direct_hit(self):
+        """业务意图：load_table 拦截的直接依据——产物直接引用该原始表"""
+        _record_with_upstream("wide_a", ["9078"])
+        found = find_equivalent_artifacts(TENANT, SESSION, "9078")
+        assert [e["var"] for e in found] == ["wide_a"]
+
+    def test_transitive_hit_via_upstream_artifact(self):
+        """B 由 A 加工、A 来自表 X：B 也是 X 的等价产物（沿 lineage 传递）"""
+        _record_with_upstream("step1", ["9078"])
+        _record_with_upstream("step2", ["step1"])
+        found = {e["var"] for e in find_equivalent_artifacts(TENANT, SESSION, "9078")}
+        assert found == {"step1", "step2"}
+
+    def test_no_hit_for_unrelated_table(self):
+        _record_with_upstream("wide_a", ["9078"])
+        assert find_equivalent_artifacts(TENANT, SESSION, "9999") == []
+
+    def test_cycle_safe(self):
+        """注册表出现环形 lineage（异常数据）时不死循环、不误报"""
+        _record_with_upstream("var_a", ["var_b"])
+        _record_with_upstream("var_b", ["var_a"])
+        assert find_equivalent_artifacts(TENANT, SESSION, "9999") == []
+
+    def test_empty_registry_or_missing_table_id(self):
+        assert find_equivalent_artifacts(TENANT, SESSION, "9078") == []
+        _record_with_upstream("wide_a", ["9078"])
+        assert find_equivalent_artifacts(TENANT, SESSION, "") == []
+
+
+class TestLoadTableIntercept:
+    @pytest.mark.asyncio
+    async def test_first_load_intercepted_guides_load_output(self):
+        """业务意图：该表已有等价产物时，首次 load_table 不执行加载，改为引导复用——
+        阻断 392 积分事故的「重新加载-清洗-合并」链路"""
+        agent = _make_agent()
+        _record_with_upstream("merged_wide", ["9078"])
+        result = await agent._handle_load_table("9078")
+        assert result["success"] is False
+        assert result["intercepted"] is True
+        assert "load_output" in result["error"]
+        assert result["equivalent_outputs"][0]["output_var"] == "merged_wide"
+        assert "9078" not in agent._loaded_table_ids  # 未真正加载
+        assert "9078" in agent._lineage_intercepted
+
+    @pytest.mark.asyncio
+    async def test_second_call_passes_through(self):
+        """业务意图：软拦截不死拦——模型第二次坚持视为确需原始明细，放行加载"""
+        agent = _make_agent()
+        _record_with_upstream("merged_wide", ["9078"])
+        await agent._handle_load_table("9078")  # 第一次：拦截
+
+        mock_meta = {
+            "table_id": "9078", "table_name": "订单表", "description": "",
+            "columns": [{"name": "a", "data_type": "text", "description": ""}],
+            "source": {"type": "excel", "file_path": "x.xlsx"},
+        }
+        agent.analyzer._tables = {"9078": pd.DataFrame({"a": [1]})}
+        with patch.object(agent, "_fetch_single_table_metadata", return_value=mock_meta), \
+             patch.object(agent.analyzer, "load_table", new=AsyncMock(return_value="9078")):
+            result = await agent._handle_load_table("9078")  # 第二次：放行
+        assert result["success"] is True
+        assert "9078" in agent._loaded_table_ids
+
+    @pytest.mark.asyncio
+    async def test_table_without_equivalents_loads_normally(self):
+        """无产物的新表不受拦截影响（拦截只作用于「确有等价产物」的表）"""
+        agent = _make_agent()
+        _record_with_upstream("merged_wide", ["9078"])
+        mock_meta = {
+            "table_id": "9999", "table_name": "新表", "description": "",
+            "columns": [{"name": "a", "data_type": "text", "description": ""}],
+            "source": {"type": "excel", "file_path": "x.xlsx"},
+        }
+        agent.analyzer._tables = {"9999": pd.DataFrame({"a": [1]})}
+        with patch.object(agent, "_fetch_single_table_metadata", return_value=mock_meta), \
+             patch.object(agent.analyzer, "load_table", new=AsyncMock(return_value="9999")):
+            result = await agent._handle_load_table("9999")
+        assert result["success"] is True
+        assert "intercepted" not in result
+
+
+class TestExportModeUserMessage:
+    def test_export_mode_message_guides_reuse(self):
+        """业务意图：导出模式下无预加载表，开局消息必须明示「有意不预加载、复用优先」，
+        防止内层模型回落到「search -> load 原始表重加工」的旧路径"""
+        agent = _make_agent()
+        agent.export_only_mode = True
+        msg = agent._build_user_message("把已有汇总表导出为 Excel")
+        assert "有意未预加载" in msg
+        assert "本会话已有分析产物" in msg
+
+    def test_normal_mode_without_tables_keeps_search_guidance(self):
+        """非导出模式且无预加载：维持既有「先 search 再 load」引导，行为不回归"""
+        agent = _make_agent()
+        msg = agent._build_user_message("分析各市场增长")
+        assert "有意未预加载" not in msg
+        assert "search_data_tables" in msg

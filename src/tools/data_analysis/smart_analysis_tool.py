@@ -8,6 +8,7 @@ FULL_LOAD_THRESHOLD 全量预加载，超过则按需求语义检索 top SEMANTI
 """
 
 import asyncio
+import re
 import uuid
 from typing import Dict, List, Optional
 
@@ -21,6 +22,18 @@ from src.tools.base import BaseTool
 FULL_LOAD_THRESHOLD = 50
 # 超过全量阈值时按需求语义检索选中的表数量（可调）
 SEMANTIC_SELECT_TOP_K = 30
+
+# 改进3（2026-10）导出/整理类需求识别：命中导出标记且不含分析意图词时，视为导出类任务。
+# 导出应基于本会话已有产物（load_output）完成，跳过 49 表批量预加载与 schema 目录注入。
+# 两类词表都是保守匹配：漏判 -> 走正常预加载路径（行为不变），误判 -> 内层仍可
+# search/load_table 兜底，两侧均 fail-soft。
+_EXPORT_MARKER_RE = re.compile(
+    r"导出|另存|整理|保存为|汇总成|生成.{0,8}(?:文件|表格|excel|xlsx|ppt)|输出.{0,8}(?:excel|表格|文件)"
+)
+_ANALYSIS_WORD_RE = re.compile(
+    r"分析|对比|排名|趋势|原因|预测|建议|透视|占比|环比|同比|异常|根因|归因|统计"
+)
+_NEGATED_RE = re.compile(r"(?:不要|无需|不必|禁止|不用|不做|不再|别)[^，。；！？]{0,12}")
 
 
 async def _load_one_table(analyzer, meta: dict) -> str:
@@ -123,13 +136,29 @@ class SmartDataAnalysisTool(BaseTool):
                     logger.opt(exception=True).error(f"[SmartDataAnalysisTool] 加载表失败: {e}")
                     return {"success": False, "error": f"加载数据表失败: {e}"}
             tables_metadata = enriched_tables
+            export_only_mode = False
         else:
-            # 改进1（2026-10）：调用方未指定表时，服务端一次性完成选表和批量加载，
-            # 模型开局即面对「已加载的表 + 完整 schema」，禁止逐个 search/load_table
-            #（此前 36 张同构表被内层模型逐个 load_table 共 82 次，列定义永久滞留上下文）
-            tables_metadata = await self._batch_select_and_load(
-                analyzer, requirement, tenant_id, subagent_id
+            # 改进3（2026-10）：导出/整理类需求且会话已有产物时，跳过开局批量预加载
+            #（导出应基于已有产物而非重新加载原始数据；此前同会话连续 4 次导出类调用
+            # 每次都重付 49 表预加载 + schema 目录注入，实测单次多耗 20-40 积分）
+            export_only_mode = (
+                SmartDataAnalysisTool._is_export_only_requirement(requirement)
+                and bool(session_id)
+                and self._session_has_artifacts(tenant_id, session_id)
             )
+            if export_only_mode:
+                tables_metadata = []
+                logger.info(
+                    f"[SmartDataAnalysisTool] 导出/整理类需求，跳过开局批量预加载，"
+                    f"引导复用会话产物 (session={session_id})"
+                )
+            else:
+                # 改进1（2026-10）：调用方未指定表时，服务端一次性完成选表和批量加载，
+                # 模型开局即面对「已加载的表 + 完整 schema」，禁止逐个 search/load_table
+                #（此前 36 张同构表被内层模型逐个 load_table 共 82 次，列定义永久滞留上下文）
+                tables_metadata = await self._batch_select_and_load(
+                    analyzer, requirement, tenant_id, subagent_id
+                )
 
         # 4. 运行 AnalysisAgent
         try:
@@ -148,6 +177,7 @@ class SmartDataAnalysisTool(BaseTool):
                 tenant_id=tenant_id,
                 subagent_id=subagent_id,
                 session_id=session_id,
+                export_only_mode=export_only_mode,
             )
             result = await agent.run(requirement)
         except Exception as e:
@@ -163,6 +193,29 @@ class SmartDataAnalysisTool(BaseTool):
             result["conclusion"] = result["error"]
 
         return result
+
+    @staticmethod
+    def _is_export_only_requirement(requirement: str) -> bool:
+        """判定需求是否为导出/整理类（命中导出标记且无分析意图词）。
+
+        先剔除「不要/无需...」否定短语再判分析词：同会话实测导出任务常见
+        「不要重新分析原始数据」表述，不剔除会误判回正常路径（fail-soft 但丢收益）。
+        """
+        if not requirement:
+            return False
+        text = _NEGATED_RE.sub("", requirement)
+        return bool(_EXPORT_MARKER_RE.search(text)) and not _ANALYSIS_WORD_RE.search(text)
+
+    @staticmethod
+    def _session_has_artifacts(tenant_id: Optional[str], session_id: Optional[str]) -> bool:
+        """会话产物注册表是否非空（导出短路的前提：无产物无可复用，走正常路径）。"""
+        try:
+            from src.tools.data_analysis.analysis_artifacts import load_artifacts
+
+            return bool(load_artifacts(tenant_id or "", session_id or "", limit=1))
+        except Exception as e:
+            logger.warning(f"[SmartDataAnalysisTool] 会话产物查询失败（走正常路径）: {e}")
+            return False
 
     @staticmethod
     async def _batch_select_and_load(

@@ -27,8 +27,12 @@ from loguru import logger
 
 # 单会话注册表条目上限（FIFO 淘汰最早条目）
 REGISTRY_LIMIT = 50
-# 注入子代理 user message 的最大条目数
-INJECT_LIMIT = 10
+# 注入子代理 user message 的最大条目数（2026-10 改进3：10 -> 50，与 REGISTRY_LIMIT
+# 对齐——导出/后续调用需看到全部产物才能复用，此前 10 条上限导致后续调用看不到
+# 早期宽表产物而重新 load_table + 逐表加工）
+INJECT_LIMIT = 50
+# 单条目记录的直接上游引用数上限（控制 lineage 体积）
+UPSTREAM_LIMIT = 20
 # 列名清单截断长度（控制注入消息体积）
 COLUMNS_PREVIEW_LIMIT = 15
 # 合法产物变量名：字母/数字/下划线/中文/连字符（排除 . / \ 等路径成分，防穿越）
@@ -90,8 +94,14 @@ def record_artifact(
     method: str = "",
     rows: int = 0,
     columns: Optional[List[str]] = None,
+    upstreams: Optional[List[str]] = None,
 ) -> bool:
-    """写入/更新一条产物记录（同 var 覆盖）。失败仅告警，返回 False。"""
+    """写入/更新一条产物记录（同 var 覆盖）。失败仅告警，返回 False。
+
+    upstreams（改进3 lineage，2026-10）：本产物直接引用的数据源（原始表 table_id /
+    上游产物 var / 文件路径），用于判定「某原始表的等价加工产物已存在」——
+    load_table 拦截与产物清单溯源都以它为输入。
+    """
     path = _registry_path(tenant_id, session_id)
     if not path or not is_valid_var_name(var):
         return False
@@ -110,6 +120,7 @@ def record_artifact(
             "method": str(method or ""),
             "rows": int(rows or 0),
             "columns": [str(c) for c in (columns or [])][:COLUMNS_PREVIEW_LIMIT],
+            "upstreams": [str(u)[:64] for u in (upstreams or []) if u][:UPSTREAM_LIMIT],
         }
         # 同 var 覆盖更新，保持原位置；新条目追加到末尾（时间序）
         entries = [e for e in entries if e.get("var") != var]
@@ -154,4 +165,38 @@ def load_artifacts(
         return list(reversed(entries[-limit:])) if limit else list(reversed(entries))
     except Exception as e:
         logger.warning(f"[analysis_artifacts] 注册表读取失败（不影响分析）: {e}")
+        return []
+
+
+def find_equivalent_artifacts(
+    tenant_id: str, session_id: str, table_id: str
+) -> List[Dict]:
+    """返回上游闭包包含 table_id 的产物条目（时间倒序）。
+
+    改进3（2026-10）load_table 拦截的判定入口：产物直接引用 table_id 算命中；
+    引用上游产物 var 则沿 lineage 传递（B 由 A 加工而来、A 来自表 X，则 B 的
+    闭包含 X）。任何异常都返回空列表（拦截是优化不是正确性依赖，失败放行）。
+    """
+    entries = load_artifacts(tenant_id, session_id, limit=0)
+    if not entries or not table_id:
+        return []
+
+    by_var = {e["var"]: e for e in entries}
+
+    def _closure_contains(entry: Dict, seen: set) -> bool:
+        if entry["var"] in seen:
+            return False
+        seen.add(entry["var"])
+        for ref in entry.get("upstreams") or []:
+            if str(ref) == str(table_id):
+                return True
+            upstream_entry = by_var.get(str(ref))
+            if upstream_entry and _closure_contains(upstream_entry, seen):
+                return True
+        return False
+
+    try:
+        return [e for e in entries if _closure_contains(e, set())]
+    except Exception as e:
+        logger.warning(f"[analysis_artifacts] 等价产物查询失败（放行不拦截）: {e}")
         return []

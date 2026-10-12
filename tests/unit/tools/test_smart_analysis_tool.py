@@ -626,3 +626,129 @@ class TestBatchSelectAndLoad:
 
         assert table_id == "12"
         assert len(analyzer._tables["12"]) == 2
+
+
+# ============================================================
+# 改进3（2026-10）：导出/整理类需求识别与会话产物短路
+# ============================================================
+
+
+class TestExportOnlyDetection:
+    """导出意图识别：保守匹配，漏判走正常路径（行为不变），误判内层可兜底"""
+
+    def test_export_only_positive(self):
+        # 同会话实测出现过的导出任务表述（agent1 第5场 4 次导出调用原文变体）
+        assert SmartDataAnalysisTool._is_export_only_requirement(
+            "只做导出动作，不要重新分析原始数据，全部用现有汇总结果"
+        )
+        assert SmartDataAnalysisTool._is_export_only_requirement(
+            "仅执行导出：用 pandas Excel 保存全部汇总表"
+        )
+        assert SmartDataAnalysisTool._is_export_only_requirement(
+            "把结果整理成表格文件"
+        )
+
+    def test_negative_phrase_not_treated_as_analysis(self):
+        """「不要重新分析」中的分析词已剔除，仍识别为导出（实测导出任务常见表述）"""
+        assert SmartDataAnalysisTool._is_export_only_requirement(
+            "不要做任何数据分析或计算。仅执行一个导出"
+        )
+
+    def test_analysis_requirement_not_export_only(self):
+        # 主分析需求原文（含「输出分析总表」）绝不能被短路
+        assert not SmartDataAnalysisTool._is_export_only_requirement(
+            "请帮我整体汇总和分析六个国家4-6月份的狗粮出口销售和订单数据，"
+            "重点分析第二季度整体销售业绩情况以及每个月的销售业绩对比，"
+            "找到每个国家的优势渠道和劣势渠道，进行销售人员排名，"
+            "并为我下个月的销售提供建议。请输出分析总表、透视图和汇报文件。"
+        )
+
+    def test_mixed_export_and_analysis_not_export_only(self):
+        """「导出并分析趋势」混合意图不短路（分析需求占主导，走正常预加载路径）"""
+        assert not SmartDataAnalysisTool._is_export_only_requirement(
+            "导出数据并分析各渠道的趋势和排名"
+        )
+
+    def test_reuse_artifact_export_is_export_only(self):
+        """「复用已有产物仅做格式整理后导出」应短路——这正是收益场景"""
+        assert SmartDataAnalysisTool._is_export_only_requirement(
+            "复用本会话已产出的汇总表（output_summary），仅做格式整理后导出为 Excel 文件"
+        )
+
+    def test_empty_requirement(self):
+        assert not SmartDataAnalysisTool._is_export_only_requirement("")
+        assert not SmartDataAnalysisTool._is_export_only_requirement(None)
+
+
+class TestExportModeExecute:
+    """导出短路执行路径：跳过 49 表批量预加载，export_only_mode 传入 AnalysisAgent"""
+
+    @pytest.mark.asyncio
+    async def test_export_only_with_artifacts_skips_preload(self):
+        """业务意图：导出类调用不应重付 49 表预加载（同会话实测每次多耗 20-40 积分）"""
+        mock_result = {
+            "success": True, "conclusion": "导出完成", "artifacts": [],
+            "analysis_meta": {"iterations": 2, "duration_ms": 10, "tokens_used": 10,
+                              "tables_used": [], "trace_id": "t"},
+        }
+        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer"), \
+             patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
+             patch("src.tools.data_analysis.analysis_artifacts.load_artifacts",
+                   return_value=[{"var": "wide_existing"}]), \
+             patch.object(SmartDataAnalysisTool, "_batch_select_and_load",
+                          new=AsyncMock()) as mock_batch:
+            MockAgent.return_value.run = AsyncMock(return_value=mock_result)
+            tool = SmartDataAnalysisTool()
+            result = await tool.execute(
+                requirement="仅执行导出：把已有汇总表保存为 Excel 文件",
+                session_id="session_s1",
+            )
+            assert result["success"] is True
+            mock_batch.assert_not_awaited()  # 未触发批量预加载
+            kwargs = MockAgent.call_args.kwargs
+            assert kwargs["export_only_mode"] is True
+            assert kwargs["tables_metadata"] == []  # 零预加载
+            assert kwargs["session_id"] == "session_s1"  # 产物注册表作用域正确
+
+    @pytest.mark.asyncio
+    async def test_export_only_without_artifacts_keeps_preload(self):
+        """无产物可复用时导出需求走正常预加载路径（fail-soft 兜底）"""
+        mock_result = {
+            "success": True, "conclusion": "完成", "artifacts": [],
+            "analysis_meta": {"iterations": 1, "duration_ms": 10, "tokens_used": 10,
+                              "tables_used": ["t1"], "trace_id": "t"},
+        }
+        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer"), \
+             patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
+             patch("src.tools.data_analysis.analysis_artifacts.load_artifacts",
+                   return_value=[]), \
+             patch.object(SmartDataAnalysisTool, "_batch_select_and_load",
+                          new=AsyncMock(return_value=[])) as mock_batch:
+            MockAgent.return_value.run = AsyncMock(return_value=mock_result)
+            tool = SmartDataAnalysisTool()
+            await tool.execute(requirement="仅执行导出：保存为 Excel", session_id="session_s1")
+            mock_batch.assert_awaited_once()
+            assert MockAgent.call_args.kwargs["export_only_mode"] is False
+
+    @pytest.mark.asyncio
+    async def test_analysis_requirement_never_short_circuits(self):
+        """业务意图：主分析需求即使带「输出表格」字样也必须走预加载——
+        短路误伤主分析会直接丢分析能力，这是本优化的安全红线"""
+        mock_result = {
+            "success": True, "conclusion": "完成", "artifacts": [],
+            "analysis_meta": {"iterations": 1, "duration_ms": 10, "tokens_used": 10,
+                              "tables_used": ["t1"], "trace_id": "t"},
+        }
+        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer"), \
+             patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
+             patch("src.tools.data_analysis.analysis_artifacts.load_artifacts",
+                   return_value=[{"var": "wide_existing"}]), \
+             patch.object(SmartDataAnalysisTool, "_batch_select_and_load",
+                          new=AsyncMock(return_value=[])) as mock_batch:
+            MockAgent.return_value.run = AsyncMock(return_value=mock_result)
+            tool = SmartDataAnalysisTool()
+            await tool.execute(
+                requirement="分析各渠道销售额并输出对比表格", session_id="session_s1",
+            )
+            mock_batch.assert_awaited_once()
+            assert MockAgent.call_args.kwargs["export_only_mode"] is False

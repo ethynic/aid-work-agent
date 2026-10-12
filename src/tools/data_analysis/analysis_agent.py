@@ -26,6 +26,10 @@ from src.tools.data_analysis.analysis_tools_schema import (
 MAX_ITERATIONS = 50
 DATA_PROCESSING_METHODS = {"query", "aggregate", "merge", "append", "pivot", "calculate", "compare", "trend", "extract_hierarchy"}
 SEARCH_METHODS = {"search_data_tables", "list_data_tables"}
+# describe 结果瘦身上限（2026-10 追加改进 A）：每列 unique_values/top_values 最多返回条数。
+# 实测主分析 27 次 describe ≈150k 新发 prompt token（单次 30 列 4-6k），为新发 prompt
+# 最大单一来源；8 条足以感知取值分布，完整清单/精确计数属于取数需求（应改用 query/aggregate）
+DESCRIBE_VALUE_CAP = 8
 # 上下文压缩阈值：当 messages 的 JSON 超过此字节数时，压缩早期的工具结果
 CONTEXT_COMPRESS_THRESHOLD = 50000
 
@@ -222,6 +226,7 @@ class AnalysisAgent:
         tenant_id: Optional[str] = None,
         subagent_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        export_only_mode: bool = False,
     ):
         self.llm = llm_gateway
         self.analyzer = analyzer
@@ -231,10 +236,16 @@ class AnalysisAgent:
         self.subagent_id = subagent_id
         # 会话 ID：分析产物注册表的作用域（同会话多次 analyze_data 复用中间产物）
         self.session_id = session_id or getattr(analyzer, "session_id", None) or None
+        # 改进3（2026-10）：导出/整理类调用不预加载原始表（见 SmartDataAnalysisTool），
+        # 开局消息改为引导复用已有产物；误判时内层仍可 search/load_table 兜底，fail-soft
+        self.export_only_mode = export_only_mode
 
         self._loaded_table_ids: set = set()
         self._search_count: int = 0
         self._retriever = None
+        # 改进3 lineage 拦截：已拦截过的表记入此处，同表二次 load_table 放行
+        #（一次提示引导复用，模型坚持视为确需原始明细，不做死拦截）
+        self._lineage_intercepted: set = set()
 
         self._total_usage: Dict[str, int] = {
             "prompt_tokens": 0,
@@ -254,6 +265,9 @@ class AnalysisAgent:
         self._empty_summary_retried: bool = False
         # 空总结重试时关闭思考（思考烧穿输出预算的修复：重试只为拿结论，无需再推理）
         self._disable_thinking_next: bool = False
+        # describe memo 缓存（2026-10 追加改进 A）：键为 describe 参数 JSON，
+        # 任何非 describe 工具成功执行后清空（_execute_tool 收口），杜绝过期结构
+        self._describe_cache: Dict[str, Dict] = {}
         self._last_table_df = None
 
         # 如果传入了预加载的表，标记为已加载
@@ -365,7 +379,16 @@ class AnalysisAgent:
                 break
 
             # 将 assistant 消息（含 tool_calls）加入对话
-            messages.append({"role": "assistant", "content": content, "tool_calls": tool_calls})
+            assistant_msg: Dict[str, Any] = {"role": "assistant", "content": content, "tool_calls": tool_calls}
+            # DeepSeek 思考模式官方契约：thinking 轮响应的 reasoning_content 须随历史回传，
+            # 否则开思考请求 400 "must be passed back"（2026-10-12 服务端新增校验）。
+            # 注意：同一会话混合开/关思考轮会被该校验不稳定击穿（关思考轮响应无 rc，
+            # 空串占位也防不住，run2/run3 双双 400），故思考模式必须全场统一——
+            # 机械轮关思考分级已撤回，本挂载仅在全开思考模式下回传真值。
+            # 其他 provider 的 _format_messages 不转发 rc，行为不变
+            if response.get("reasoning_content"):
+                assistant_msg["reasoning_content"] = response["reasoning_content"]
+            messages.append(assistant_msg)
 
             # 执行每个工具调用
             for tc in tool_calls:
@@ -407,6 +430,10 @@ class AnalysisAgent:
                     "content": json.dumps(result, ensure_ascii=False),
                 })
 
+            # 思考分级（2026-10 改进点 4）已撤回（2026-10-12）：DeepSeek 服务端对
+            # 混合开/关思考历史的 rc 校验不可预测（空串占位仍 400，run3 六连），
+            # 同一会话必须全程统一思考模式，故保留全场开思考。
+
             # 上下文压缩：当 messages 过大时，压缩早期的工具结果为摘要
             self._compress_messages(messages)
         else:
@@ -425,6 +452,11 @@ class AnalysisAgent:
         result = await self._dispatch_tool(method_name, params, iteration)
         if result.get("success", False):
             logger.info(f"[AnalysisAgent][TOOL] {method_name}")
+            # describe memo 缓存失效（追加改进 A）：任何非 describe 工具成功执行都可能
+            # 改变可描述的数据面（data_method 改写/新增产物、load_table/load_output 换源），
+            # 统一在此清空，保证缓存绝不返回过期结构（过宽失效只是多算一次，成本可忽略）
+            if method_name != "describe" and self._describe_cache:
+                self._describe_cache.clear()
         return result
 
     async def _dispatch_tool(self, method_name: str, params: Dict, iteration: int) -> Dict[str, Any]:
@@ -503,8 +535,12 @@ class AnalysisAgent:
         description = self._describe_step(method_name, params)
 
         # 注册到会话产物注册表：同会话后续 analyze_data 可 load_output 复用，
-        # 免去重复「加载原始表 → 加工 → 合并」（392 积分事故主因）
-        self._register_artifact(output_var, method_name, description, rows, columns)
+        # 免去重复「加载原始表 → 加工 → 合并」（392 积分事故主因）。
+        # 改进3（2026-10）：同时记录 lineage 直接上游，供 load_table 拦截与产物溯源
+        self._register_artifact(
+            output_var, method_name, description, rows, columns,
+            upstreams=self._extract_source_refs(method_name, params),
+        )
 
         step = {
             "step": len(self._steps) + 1,
@@ -716,6 +752,16 @@ class AnalysisAgent:
                 "search_data_tables 属于错误，仅当确实需要清单外的表时才允许，属例外情况。\n"
                 f"{self._build_tables_info()}"
             )
+        elif self.export_only_mode:
+            # 改进3（2026-10）：导出/整理类任务跳过了 49 表批量预加载（导出应基于已有
+            # 产物而非重新加载原始数据），开局明示复用优先，杜绝重新加工链路
+            parts.append(
+                "## 说明（导出/整理任务模式）\n"
+                "本需求为导出/整理类任务，系统**有意未预加载原始数据表**：导出应基于本会话"
+                "已有分析产物（见下方产物清单）完成，禁止重新加载原始表再加工一遍。"
+                "请直接 load_output 加载所需产物后完成导出/格式化；"
+                "仅当产物清单确实无法覆盖所需数据时，才允许 search_data_tables / load_table 加载原始表（属例外情况）。"
+            )
         else:
             parts.append(
                 "## 说明\n"
@@ -731,10 +777,15 @@ class AnalysisAgent:
         return "\n\n".join(parts)
 
     def _build_artifacts_info(self) -> str:
-        """构建本会话历史分析产物清单（供 load_output 复用）；无产物返回空串。"""
+        """构建本会话历史分析产物清单（供 load_output 复用）；无产物返回空串。
+
+        改进3（2026-10）：条目附 lineage 来源（原始表/上游产物），让模型能判断
+        「某表的加工产物已存在」，从源头压掉重新 load_table -> 清洗 -> 合并链路。
+        """
         entries = self._session_artifacts()
         if not entries:
             return ""
+        known_vars = {e["var"] for e in entries}
         lines = [
             "## 本会话已有分析产物（优先复用！）",
             "以下产物是本会话此前分析已生成的中间数据，**若其中已覆盖当前需求所需的数据"
@@ -744,8 +795,13 @@ class AnalysisAgent:
         for e in entries:
             cols = ", ".join(e.get("columns", [])[:8])
             col_note = f"（列: {cols}）" if cols else ""
+            # lineage 来源标注：原始表引用原样展示，指向清单内上游产物的引用折叠为「上游产物 var」
+            sources = []
+            for ref in e.get("upstreams") or []:
+                sources.append("上游产物" if str(ref) in known_vars else str(ref))
+            src_note = f"；来源: {'、'.join(sources[:5])}" if sources else ""
             lines.append(
-                f"- `{e['var']}`: {e.get('rows', 0)} 行{col_note} — {e.get('description', '')}"
+                f"- `{e['var']}`: {e.get('rows', 0)} 行{col_note} — {e.get('description', '')}{src_note}"
             )
         lines.append("若清单中没有所需数据，再按正常流程 search/load 原始表。")
         return "\n".join(lines)
@@ -1087,6 +1143,48 @@ class AnalysisAgent:
         if not table_id:
             return {"success": False, "error": "table_id 不能为空"}
 
+        # 改进3（2026-10）lineage 拦截：该表的等价加工产物已存在时，首次调用不执行
+        # 加载，返回提示引导 load_output 复用，阻断「重新加载-清洗-合并」链路
+        #（392 积分事故主因）。软拦截：同表二次调用放行——模型坚持视为确需原始明细。
+        if (
+            table_id not in self._loaded_table_ids
+            and table_id not in self._lineage_intercepted
+        ):
+            equivalents = []
+            try:
+                from src.tools.data_analysis.analysis_artifacts import (
+                    find_equivalent_artifacts,
+                )
+
+                equivalents = find_equivalent_artifacts(
+                    self.tenant_id or "", self.session_id or "", table_id
+                )
+            except Exception as e:
+                logger.warning(f"[AnalysisAgent] lineage 拦截查询失败（放行）: {e}")
+            if equivalents:
+                self._lineage_intercepted.add(table_id)
+                logger.info(
+                    f"[AnalysisAgent] load_table 拦截: 表 {table_id} 已有 "
+                    f"{len(equivalents)} 个等价产物，引导复用"
+                )
+                return {
+                    "success": False,
+                    "intercepted": True,
+                    "error": (
+                        f"表 {table_id} 的等价加工产物已存在，禁止重新加载原始表再做一遍"
+                        "相同的加载、清洗和合并。请直接 load_output 复用以下产物；"
+                        "若这些产物确实不满足需求，再次调用 load_table(本表) 将放行。"
+                    ),
+                    "equivalent_outputs": [
+                        {
+                            "output_var": e["var"],
+                            "description": e.get("description", ""),
+                            "rows": e.get("rows", 0),
+                        }
+                        for e in equivalents[:10]
+                    ],
+                }
+
         if table_id in self._loaded_table_ids:
             for meta in self.tables_metadata:
                 if str(meta.get("table_id", meta.get("doc_id", ""))) == table_id:
@@ -1200,8 +1298,26 @@ class AnalysisAgent:
             "hint": f"已复用本会话历史产物，后续可直接用 output_var '{output_var}' 作为 source 参数",
         }
 
+    @staticmethod
+    def _extract_source_refs(method_name: str, params: Dict) -> List[str]:
+        """提取本步工具直接引用的数据源（原始表 table_id / 上游产物 var / 文件路径）。
+
+        与 DataAnalyzer._resolve_source 的三种引用方式对应；按方法取参：
+        merge 为 left_ref/right_ref，append 为 sources 列表，其余为 source 单引用。
+        """
+        refs: List[str] = []
+        if method_name == "merge":
+            refs = [params.get("left_ref"), params.get("right_ref")]
+        elif method_name == "append":
+            sources = params.get("sources") or []
+            refs = list(sources) if isinstance(sources, list) else []
+        else:
+            refs = [params.get("source")]
+        return [str(r) for r in refs if r]
+
     def _register_artifact(
-        self, output_var: str, method_name: str, description: str, rows: int, columns: List[str]
+        self, output_var: str, method_name: str, description: str, rows: int, columns: List[str],
+        upstreams: Optional[List[str]] = None,
     ) -> None:
         """中间产物写入会话注册表（容错：失败不影响分析）。"""
         try:
@@ -1215,6 +1331,7 @@ class AnalysisAgent:
                 method=method_name,
                 rows=rows,
                 columns=columns,
+                upstreams=upstreams,
             ):
                 self._new_artifacts.append({
                     "output_var": output_var,
@@ -1233,14 +1350,47 @@ class AnalysisAgent:
         except Exception:
             return []
 
+    @staticmethod
+    def _slim_describe_result(result: Dict[str, Any]) -> Dict[str, Any]:
+        """瘦身 describe 结果：每列 unique_values/top_values 截断到 DESCRIBE_VALUE_CAP 条。
+
+        实测主分析 27 次 describe ≈150k 新发 prompt token（新发最大单一来源）；
+        标量统计（dtype/non_null/unique_count/numeric_summary）全保留，模型仍知道
+        完整基数，只砍取值清单体积。describe() 每次新建 dict，就地截断无副作用。
+        """
+        truncated = False
+        for stat in result.get("columns_summary") or []:
+            if not isinstance(stat, dict):
+                continue
+            for key in ("unique_values", "top_values"):
+                values = stat.get(key)
+                if isinstance(values, list) and len(values) > DESCRIBE_VALUE_CAP:
+                    stat[key] = values[:DESCRIBE_VALUE_CAP]
+                    truncated = True
+        if truncated:
+            result["values_hint"] = (
+                f"每列取值/高频值最多展示 {DESCRIBE_VALUE_CAP} 条（unique_count 为完整基数）；"
+                "需要完整取值清单或精确计数请用 query/aggregate 取数"
+            )
+        return result
+
     def _handle_describe(self, params: Dict, iteration: int) -> Dict[str, Any]:
-        """处理 describe 工具：返回数据概览统计。"""
+        """处理 describe 工具：返回数据概览统计（memo 缓存 + 取值截断，追加改进 A）。
+
+        缓存键只含参数；失效策略见 _execute_tool——任何非 describe 工具成功执行后
+        整体清空，保证不返回过期结构。
+        """
         try:
+            cache_key = json.dumps(params, ensure_ascii=False, sort_keys=True, default=str)
+            cached = self._describe_cache.get(cache_key)
+            if cached is not None:
+                return dict(cached, cached=True)
+
             method = getattr(self.analyzer, "describe", None)
             if method is None:
                 return {"success": False, "error": "方法不存在: describe"}
 
-            result = method(**params)
+            result = self._slim_describe_result(method(**params))
 
             # 记录步骤
             step = {
@@ -1251,7 +1401,9 @@ class AnalysisAgent:
             }
             self._steps.append(step)
 
-            return {"success": True, **result}
+            payload = {"success": True, **result}
+            self._describe_cache[cache_key] = payload
+            return dict(payload)
 
         except Exception as e:
             logger.error(f"describe failed: {e}")
