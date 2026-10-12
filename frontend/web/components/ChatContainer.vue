@@ -374,7 +374,7 @@ watch(currentSubagentType, async (type) => {
   } catch (e) {
     console.error('前端日志：获取数字员工空态摘要失败', e)
   }
-})
+}, { immediate: true })
 
 // 判断是否为租户模式
 const isTenantMode = computed(() => route.path.startsWith('/t/'))
