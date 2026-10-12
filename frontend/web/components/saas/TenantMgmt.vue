@@ -36,7 +36,7 @@
 
       <!-- 表格 -->
       <div class="table-scroll-wrapper flex-1 min-h-0">
-        <BaseTable :columns="columns" :data="displayTenants" row-key="tenant_id">
+        <BaseTable :columns="columns" :data="displayTenants" row-key="tenant_id" table-fixed>
           <template #seq="{ index }">
             {{ seqNumber(index) }}
           </template>

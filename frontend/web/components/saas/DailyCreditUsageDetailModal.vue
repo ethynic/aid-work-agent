@@ -10,7 +10,7 @@
     <template v-else>
       <div class="flex flex-col h-[calc(90vh-6rem)]">
         <div class="flex-1 min-h-0 mb-4 table-scroll-wrapper">
-          <BaseTable :columns="columns" :data="data" row-key="record_id">
+          <BaseTable :columns="columns" :data="data" row-key="record_id" table-fixed>
             <template #index="{ index }">
               {{ (currentPage - 1) * pageSize + index + 1 }}
             </template>

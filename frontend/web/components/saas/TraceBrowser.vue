@@ -82,6 +82,7 @@
               :columns="columns"
               :data="sessions"
               row-key="session_id"
+              table-fixed
               :on-row-click="(row: any) => goToSession(row.session_id)"
             >
               <template #seq="{ index }">

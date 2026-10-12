@@ -17,7 +17,7 @@
     <div v-else-if="codes.length === 0" class="text-center py-8 text-muted text-sm border border-dashed border-default rounded-lg">
       暂无激活码，点击右上角「生成激活码」
     </div>
-    <BaseTable v-else :columns="columns" :data="codes" row-key="id">
+    <BaseTable v-else :columns="columns" :data="codes" row-key="id" table-fixed>
       <template #code="{ row }">
         <div class="flex items-center gap-1">
           <span class="font-mono text-sm text-default">{{ row.code }}</span>

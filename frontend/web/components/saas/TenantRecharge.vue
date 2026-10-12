@@ -46,7 +46,7 @@
 
       <!-- 表格 -->
       <div class="table-scroll-wrapper flex-1 min-h-0">
-        <BaseTable :columns="columns" :data="items" row-key="id">
+        <BaseTable :columns="columns" :data="items" row-key="id" table-fixed>
           <template #seq="{ index }">
             {{ seqNumber(index) }}
           </template>

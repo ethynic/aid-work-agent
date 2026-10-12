@@ -56,7 +56,7 @@
 
     <!-- 表格 -->
     <div class="table-scroll-wrapper">
-      <BaseTable :columns="columns" :data="summaries" row-key="summary_id">
+      <BaseTable :columns="columns" :data="summaries" row-key="summary_id" table-fixed>
         <template #index="{ index }">{{ seqNumber(index) }}</template>
         <template #created_at="{ row }">{{ formatDateTime(row.created_at) }}</template>
         <template #session_id="{ row }">
