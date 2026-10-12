@@ -41,7 +41,7 @@
             {{ seqNumber(index) }}
           </template>
           <template #tenant_id="{ row }">
-            <span class="font-mono text-sm text-muted" :title="row.tenant_id">{{ row.tenant_id }}</span>
+            <span class="font-mono text-xs text-muted break-all whitespace-normal" :title="row.tenant_id">{{ row.tenant_id }}</span>
           </template>
           <template #tenant_code="{ row }">
             <a href="javascript:void(0)" @click="openEditDialog(row)" class="text-primary-600 hover:text-primary-700 hover:underline font-mono text-sm">

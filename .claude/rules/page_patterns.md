@@ -129,7 +129,7 @@ focus:ring-primary-500
 | 单元格内边距 | `px-4 py-3` |
 | 空状态 | `text-center text-muted py-12` |
 
-> **列宽陷阱**：单元格含 `line-clamp`/长文本的表格，Chrome 自动布局下列宽会被内容撑爆；启用 `BaseTable` 的 `table-fixed`（`table-layout: fixed`）。列最小宽度 60px（约 2 个汉字）已由 `BaseTable` 内置兜底，未设 `width` 的列自动受保护；内容明确的列仍建议显式设 `width`。屏幕不够时出横向滚动条。详见 [list-page-convention.md](./list-page-convention.md)「固定表格布局（tableFixed）与列宽要求」。
+> **列宽陷阱**：单元格含 `line-clamp`/长文本的表格，Chrome 自动布局下列宽会被内容撑爆；启用 `BaseTable` 的 `table-fixed`（`table-layout: fixed`）。列最小宽度 60px（约 2 个汉字）已由 `BaseTable` 内置兜底，未设 `width` 的列自动受保护；内容明确的列仍建议显式设 `width`。屏幕不够时出横向滚动条。**长无空格字符串（租户 ID、UUID 等）在 `table-fixed` 下会溢出压到相邻列**，处理方式见 [list-page-convention.md](./list-page-convention.md)「固定表格布局（tableFixed）与列宽要求」。
 
 ### 1.8 分页器规范
 
@@ -156,65 +156,12 @@ focus:ring-primary-500
 
 ## 2. 列表页规范
 
-> 本节为要点速查。列表页的详细实现规范（CSS 公共类名、`usePageContext` Composable、布局模式、搜索区/表格/分页器完整规范等）见 [list-page-convention.md](./list-page-convention.md)。
+> 列表页的**唯一详细规范**见 [list-page-convention.md](./list-page-convention.md)（布局三模式、CSS 公共类名、`usePageContext` / `useTableSelection` Composable、搜索区/表格列宽/序号列/操作列、手机端累积加载、分页器固定底部布局链等），本文件不重复维护。要点速记：
 
-### 2.1 布局
-
-列表页必须遵循标准页面布局（见 `frontend_dev.md`）：
-- 使用 `AppHeader` 作为顶部标题栏
-- 支持三种布局模式：独立页面、PortalLayout 子页面、BaseBusinessLayout 子页面
-- **禁止**自行实现标题栏替代 `AppHeader`
-
-### 2.2 表格
-
-使用 `BaseTable` 组件：
-
-```vue
-<BaseTable :columns="columns" :data="tableData" row-key="id">
-  <template #actions="{ row }">
-    <BaseButton intent="ghost" size="sm" @click="openEdit(row)">编辑</BaseButton>
-    <BaseButton intent="ghost" size="sm" @click="handleDelete(row)">删除</BaseButton>
-  </template>
-  <template #empty>暂无数据</template>
-</BaseTable>
-```
-
-**禁止**自行定义 `.data-table` 等 CSS 类，统一使用 `BaseTable`。
-
-### 2.3 序号列
-
-| 规则 | 说明 |
-|------|------|
-| 位置 | 表格第一列，表头为"序号" |
-| 计算 | 无分页：`{{ index + 1 }}`；有分页：`{{ (currentPage - 1) * pageSize + index + 1 }}` |
-| 宽度 | 固定窄列（如 `width: '60px'`） |
-
-### 2.4 筛选/搜索
-
-- 搜索区位于页面内容区顶部，在表格上方
-- 使用 `BaseInput`（`size="sm"`，宽度 `300px`），支持回车触发搜索
-- 搜索区避免超过 3 个筛选字段
-- 所有颜色使用语义 token（`border-default`、`text-muted` 等）
-
-### 2.5 操作按钮
-
-- 新增按钮放在搜索区右侧，使用 `BaseButton`（`primary`，`md`）
-- 行内操作按钮放在表格最后一列"操作"列，统一使用 `ghost` + `sm`
-- 操作按钮使用文字标签，不使用图标
-- 按钮组间距 `gap-2`
-
-### 2.6 分页
-
-- 数据量超过一页时使用 `BasePagination` 组件
-- 分页控件放在表格下方
-
-```vue
-<BasePagination
-  :total="total"
-  v-model:current-page="currentPage"
-  :page-size="pageSize"
-/>
-```
+- 必须使用 `AppHeader` 标题栏（禁止自行实现），布局支持：独立页面 / PortalLayout 子页面 / BaseBusinessLayout 子页面
+- 必须使用 `BaseTable` + `BasePagination`，禁止自行定义 `.data-table` 等表格 CSS 类
+- 新增按钮 `primary + md` 放搜索区右侧；行内操作 `ghost + sm` 放最后一列，删除用 `danger-ghost`
+- 序号列固定 `60px`，分页页码公式：`(currentPage - 1) * pageSize + index + 1`（手机端累积加载用 `index + 1`）
 
 ---
 

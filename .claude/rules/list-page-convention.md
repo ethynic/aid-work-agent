@@ -110,6 +110,8 @@
 4. 屏幕不够宽时表格整体撑开（整表 `min-width` 兜底）、由 `table-scroll-wrapper` 出横向滚动条——这是预期行为，不要为了让表格塞进视口而压缩列宽
 5. 长文本列配合 `truncate`（flex 子元素加 `min-w-0`）实现单行省略，完整内容靠单元格 `title` 悬停提示（`BaseTable` 内置）或列定义的 `tooltip` 字段
 
+6. **长 ID 溢出陷阱**：`table-fixed` 列宽固定后，单元格中的长无空格字符串（租户 ID、会话 ID、UUID 等下划线/连字符串，默认 `overflow-wrap: normal` 不可断行）会**溢出压到相邻列**而非出现省略号。此类单元格内容必须加 `break-all whitespace-normal` 使其自动断行（如 `<span class="font-mono text-xs text-muted break-all whitespace-normal">`），完整内容靠 `title` 悬停查看；参考 `TenantMgmt.vue` 租户 ID 列、`TraceBrowser.vue` 会话 ID 列
+
 **经验来源**：`KnowledgeBase.vue` 列定义 + `BaseTable.vue` 的 `tableFixed` prop 与 60px 最小列宽兜底（提交 f856656c、6f037dde）。
 
 ### 表格列规范
