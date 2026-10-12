@@ -14,7 +14,7 @@
           <BaseInput
             v-model="searchInput"
             size="sm"
-            placeholder="搜索企业名称、租户代码、手机号"
+            placeholder="搜索租户ID、企业名称、租户代码、手机号"
             class="w-80"
             @keyup.enter="clientHandleSearch(searchInput)"
           />
@@ -39,6 +39,9 @@
         <BaseTable :columns="columns" :data="displayTenants" row-key="tenant_id">
           <template #seq="{ index }">
             {{ seqNumber(index) }}
+          </template>
+          <template #tenant_id="{ row }">
+            <span class="font-mono text-sm text-muted" :title="row.tenant_id">{{ row.tenant_id }}</span>
           </template>
           <template #tenant_code="{ row }">
             <a href="javascript:void(0)" @click="openEditDialog(row)" class="text-primary-600 hover:text-primary-700 hover:underline font-mono text-sm">
@@ -638,6 +641,7 @@ function handleToggleSidebar() {
 // 表格列定义
 const columns: TableColumn[] = [
   { key: 'seq', label: '序号', width: '60px', thAlign: 'center' },
+  { key: 'tenant_id', label: '租户ID', width: '170px' },
   { key: 'tenant_code', label: '租户代码', width: '140px' },
   { key: 'company_name', label: '企业名称', width: '180px' },
   { key: 'tenant_type', label: '类型', width: '90px' },
@@ -820,6 +824,7 @@ function applyFilterAndPagination() {
   const kw = searchInput.value.trim().toLowerCase()
   if (kw) {
     filtered = allTenants.value.filter(t =>
+      (t.tenant_id && t.tenant_id.toLowerCase().includes(kw)) ||
       (t.company_name && t.company_name.toLowerCase().includes(kw)) ||
       (t.tenant_code && t.tenant_code.toLowerCase().includes(kw)) ||
       (t.initial_admin_phone && t.initial_admin_phone.includes(kw))
