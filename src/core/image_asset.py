@@ -264,6 +264,27 @@ class ImageRegistry:
         if effective_ttl and effective_ttl > 0:
             self._redis.expire(key, effective_ttl)
 
+        # 持久化元数据（Redis 仅缓存；图片原始名/宽高等不能随 TTL 丢失）
+        try:
+            from src.services.files.asset_store import upsert_file_asset
+            upsert_file_asset(
+                redis_fields,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                source=source,
+                extra={
+                    "usage": usage,
+                    "source_ref": source_ref or "",
+                    "linked_doc_id": linked_doc_id,
+                    "linked_chunk_id": linked_chunk_id,
+                    "width": width,
+                    "height": height,
+                    "registered_at": redis_fields["registered_at"],
+                },
+            )
+        except Exception as e:
+            logger.opt(exception=True).warning(f"[ImageRegistry] 图片元数据持久化失败（不影响主流程）: {e}")
+
         # 9. 构造并返回 ImageRef
         download_url = f"/api/files/{file_id}/download"
         ref = ImageRef(
@@ -562,8 +583,16 @@ class ImageRegistry:
                             f"path={path_str}: {e}"
                         )
 
-                # 删除 Redis 键
+                # 删除 Redis 键与持久化元数据
                 self._redis.delete(key)
+                try:
+                    from src.services.files.asset_store import delete_file_asset
+                    delete_file_asset(data.get("file_id") or key.rsplit(":", 1)[-1])
+                except Exception as e:
+                    logger.warning(
+                        f"[ImageRegistry] cleanup_temp 删除持久化元数据失败: "
+                        f"{_sanitize_error_info(str(e))}"
+                    )
                 cleaned += 1
             except Exception as e:
                 logger.warning(

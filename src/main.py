@@ -996,6 +996,19 @@ async def upload_file(file: UploadFile = File(...)):
             redis_client.hset(key, field, value)
         redis_client.expire(key, 86400)
 
+        # 持久化元数据（Redis 仅 24h 缓存；原始文件名不能因 TTL 过期丢失）
+        try:
+            from src.saas.context import get_current_tenant_id, get_current_user_id
+            from src.services.files.asset_store import upsert_file_asset
+            upsert_file_asset(
+                file_info,
+                tenant_id=get_current_tenant_id(),
+                user_id=get_current_user_id(),
+                source="upload",
+            )
+        except Exception:
+            logger.opt(exception=True).warning("文件元数据持久化异常（不影响上传主流程）")
+
         logger.info(f"文件上传成功: {file.filename}, file_id: {file_id}, size: {file_size}")
 
         return JSONResponse({
@@ -1056,6 +1069,12 @@ async def delete_uploaded_file(file_id: str):
         # Also remove from Redis if present
         key = redis_client.make_key("uploaded_file", file_id)
         redis_client.delete(key)
+        # 同步删除持久化元数据
+        try:
+            from src.services.files.asset_store import delete_file_asset
+            delete_file_asset(file_id)
+        except Exception as e:
+            logger.warning(f"文件持久化元数据删除失败（不影响主流程）: {e}")
 
         return JSONResponse({
             "success": True,
@@ -1072,12 +1091,29 @@ async def delete_uploaded_file(file_id: str):
 
 def _get_file_info(file_id: str) -> dict | None:
     """
-    获取文件信息：优先从 Redis 获取，若不存在则尝试从磁盘恢复。
-    服务重启后 Redis 中仍有数据（TTL=86400s），但文件也可能仍在磁盘上。
+    获取文件信息：优先从 Redis 获取，缓存过期后查 file_assets 持久化元数据，
+    都不存在则尝试从磁盘恢复。原始文件名以 Redis/file_assets 为准（磁盘自愈
+    只能拿到存储名 file_xxx.ext，无法恢复用户上传时的原始名）。
     """
     # 优先从 Redis 获取
     key = redis_client.make_key("uploaded_file", file_id)
     cached = redis_client.hgetall(key)
+    if not cached:
+        # Redis 缓存过期 -> 查持久化元数据并回写缓存
+        try:
+            from src.services.files.asset_store import get_file_asset
+            persisted = get_file_asset(file_id)
+        except Exception as e:
+            logger.opt(exception=True).warning(f"文件持久化元数据读取失败（降级磁盘恢复）: {e}")
+            persisted = None
+        if persisted:
+            cached = persisted
+            try:
+                for field, value in persisted.items():
+                    redis_client.hset(key, field, value)
+                redis_client.expire(key, 86400)
+            except Exception as e:
+                logger.warning(f"文件元数据缓存回写失败（不影响读取）: {e}")
     if cached:
         # 转换数值类型
         if "size" in cached:

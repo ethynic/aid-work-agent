@@ -3781,3 +3781,23 @@
         ON abuse_events(tenant_id, user_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_chat_records_tenant_user_time
         ON chat_records(tenant_id, user_id, created_at DESC);
+- datetime: "2026-10-12 11:30:00"
+  remark: "文件元数据持久化：新增 file_assets 表（含租户/大小索引），Redis uploaded_file 元数据降级为 24h 缓存，原始文件名不再因 TTL 过期丢失；size 列为文件存储计费预留"
+  statements: |
+    CREATE TABLE IF NOT EXISTS file_assets (
+        id SERIAL PRIMARY KEY,
+        file_id TEXT UNIQUE NOT NULL,
+        tenant_id TEXT,
+        user_id TEXT,
+        name TEXT,
+        path TEXT,
+        size BIGINT,
+        mime_type TEXT,
+        type TEXT,
+        source TEXT,
+        extra JSONB DEFAULT '{}',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_file_assets_tenant ON file_assets(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_file_assets_tenant_size ON file_assets(tenant_id, size);

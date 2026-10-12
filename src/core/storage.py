@@ -291,8 +291,33 @@ def resolve_delivery_file_info(file_id: str, metadata=None) -> Optional[dict]:
     if get_current_user_id() is not None:
         return resolve_scoped_uploaded_file(file_id, get_current_tenant_id(), metadata=metadata)
     if metadata:
+        # 匿名（无工具/用户上下文）分支：元数据 path 仍须落在共享存储根内，
+        # 防止持久化行异常时把任意路径暴露给无认证下载（DB 行长期有效，窗口不再受 24h TTL 限制）
+        path_str = metadata.get("path")
+        if path_str:
+            try:
+                if not Path(path_str).resolve().is_relative_to(configured_storage_root()):
+                    return find_uploaded_file_on_disk(file_id)
+            except (OSError, RuntimeError, ValueError):
+                return find_uploaded_file_on_disk(file_id)
         return dict(metadata)
     return find_uploaded_file_on_disk(file_id)
+
+
+def _current_heal_tenant_id() -> Optional[str]:
+    """磁盘自愈持久化时的租户归属：工具/请求上下文里能拿到就带上。
+
+    拿不到（纯后台线程）传 None，由 upsert 的 COALESCE 保留行内已有归属。
+    """
+    try:
+        from src.tools.context import current_tool_execution_context
+        ctx = current_tool_execution_context()
+        if ctx is not None:
+            return ctx.tenant_id
+        from src.saas.context import get_current_tenant_id
+        return get_current_tenant_id()
+    except Exception:
+        return None
 
 
 def find_uploaded_file_on_disk(file_id: str, register_to_redis: bool = True) -> Optional[dict]:
@@ -366,6 +391,14 @@ def find_uploaded_file_on_disk(file_id: str, register_to_redis: bool = True) -> 
                             redis_client.expire(key, 86400)
                         except Exception as e:
                             logger.warning(f"[storage] file_id 磁盘自愈回写 Redis 失败: {e}")
+                        # 同步持久化（name 保护见 asset_store：已有用户可见名不被磁盘名冲掉）
+                        try:
+                            from src.services.files.asset_store import upsert_file_asset
+                            upsert_file_asset(
+                                info, tenant_id=_current_heal_tenant_id(), source="disk_heal",
+                            )
+                        except Exception as e:
+                            logger.warning(f"[storage] file_id 磁盘自愈持久化失败: {e}")
                     return info
         return None
     except Exception as e:

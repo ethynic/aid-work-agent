@@ -9,7 +9,7 @@
 import shutil
 import uuid
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from loguru import logger
@@ -46,7 +46,7 @@ def _templates_dir(tenant_id: str) -> Path:
     return Path(ensure_tenant_storage_dir(tenant_id, "templates")).absolute()
 
 
-def _persist_file_meta(file_id: str, name: str, path: Path, size: int, mime_type: str) -> None:
+def _persist_file_meta(file_id: str, name: str, path: Path, size: int, mime_type: str, tenant_id: Optional[str] = None) -> None:
     """写永久 Redis 元数据（uploaded_file:{file_id}，不 expire）。
 
     复用 /api/upload 与 /api/files/{file_id}/download 的元数据契约，
@@ -64,6 +64,12 @@ def _persist_file_meta(file_id: str, name: str, path: Path, size: int, mime_type
     for field, value in info.items():
         redis_client.hset(key, field, value)
     # 不调 expire = 永久（与 tenant logo 一致）
+    # 持久化元数据（Redis 仅缓存；模板文件名不能随缓存失效丢失）
+    try:
+        from src.services.files.asset_store import upsert_file_asset
+        upsert_file_asset(info, tenant_id=tenant_id, source="subagent_template")
+    except Exception as e:
+        logger.opt(exception=True).warning(f"模板文件元数据持久化失败（不影响主流程）: {e}")
 
 
 @router.get("/{subagent_name}")
@@ -132,7 +138,7 @@ async def upload_template(
     mime_type = _ALLOWED_EXTS[suffix]
 
     # 永久 Redis 元数据（供 /api/files/{file_id}/download 与文档工具读取）
-    _persist_file_meta(file_id, file.filename or display_name, file_path, size, mime_type)
+    _persist_file_meta(file_id, file.filename or display_name, file_path, size, mime_type, tenant_id=tenant_id)
 
     # DB 追加（读取现有列表 -> 追加 -> 全量覆盖）
     files: List[dict] = SubagentTemplateFileDB.get(tenant_id, subagent_name)

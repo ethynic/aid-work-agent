@@ -4,6 +4,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from loguru import logger
+
 # 上传/注册系统的落盘存储名形态（file_{12位hex}），如 file_fc9f09e93a9f.pdf
 STORAGE_FILE_NAME_RE = re.compile(r"^file_[0-9a-f]{12}$")
 
@@ -68,6 +70,29 @@ def register_download_metadata(
     for field, value in metadata.items():
         redis_client.hset(key, field, value)
     expires = redis_client.expire(key, 86400)
+    # 持久化元数据（Redis 仅 24h 缓存；cp 交付等场景的原始文件名不能随 TTL 丢失）
+    try:
+        from src.services.files.asset_store import upsert_file_asset
+        identity = identity or {}
+        tenant_id = identity.get("tenant_id")
+        user_id = identity.get("user_id")
+        if tenant_id is None:
+            # cp 等工具调用不传 identity，从工具/请求上下文兜底取租户归属
+            from src.tools.context import current_tool_execution_context
+            ctx = current_tool_execution_context()
+            if ctx is not None:
+                tenant_id, user_id = ctx.tenant_id, (user_id or getattr(ctx, "user_id", None))
+            else:
+                from src.saas.context import get_current_tenant_id, get_current_user_id
+                tenant_id, user_id = get_current_tenant_id(), (user_id or get_current_user_id())
+        upsert_file_asset(
+            metadata,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            source="delivery",
+        )
+    except Exception as e:
+        logger.opt(exception=True).warning(f"交付文件元数据持久化失败（不影响主流程）: {e}")
     # The wrapper intentionally swallows Redis write errors. Channel-created
     # attachments must verify registration before claiming a file is available.
     if verify and (not expires or redis_client.hgetall(key) != metadata):

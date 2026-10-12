@@ -5532,3 +5532,26 @@ COMMENT ON TABLE notification_messages IS 'AID_NOTIFICATION_SCHEMA_V1';
 COMMENT ON TABLE notification_targets IS 'AID_NOTIFICATION_SCHEMA_V1';
 COMMENT ON TABLE notification_preferences IS 'AID_NOTIFICATION_SCHEMA_V1';
 COMMENT ON TABLE notification_deliveries IS 'AID_NOTIFICATION_SCHEMA_V1';
+
+-- ==================== 文件元数据持久化（file_assets） ====================
+-- 上传/交付/生成文件的持久元数据；Redis uploaded_file:{file_id} 仅作 24h 缓存，
+-- 过期后由本表恢复原始文件名（下载 Content-Disposition 依赖 name）。
+-- size 列为后续文件存储计费预留。
+CREATE TABLE IF NOT EXISTS file_assets (
+    id SERIAL PRIMARY KEY,
+    file_id TEXT UNIQUE NOT NULL,
+    tenant_id TEXT,
+    user_id TEXT,
+    name TEXT,
+    path TEXT,
+    size BIGINT,
+    mime_type TEXT,
+    type TEXT,
+    source TEXT,
+    extra JSONB DEFAULT '{}',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_assets_tenant ON file_assets(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_file_assets_tenant_size ON file_assets(tenant_id, size);
