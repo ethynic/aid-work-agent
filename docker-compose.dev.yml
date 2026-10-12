@@ -32,6 +32,10 @@ services:
       - DEBUG=${DEBUG:-false}
       # 其他配置
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # 本环境与测试环境共用 aid_work_agent2 库，跳过 db_update.yaml 增量应用与水位推进；
+      # 开发分支的增量块由测试环境（agent2）部署时应用，避免提前推进共享水位导致其被跳过。
+      # 注意：将来若新增会调 init_database() 的服务（如 background/runner worker），必须同样加此变量
+      - DB_UPDATE_SKIP=1
 
     # Volume 挂载 - 实现代码热更新
     volumes:

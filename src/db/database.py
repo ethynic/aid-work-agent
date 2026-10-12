@@ -744,8 +744,17 @@ def _apply_db_updates(conn, update_file=None):
     """
     执行 deploy/db_update.yaml 中的增量更新
     只执行 datetime 晚于 _db_update_applied.last_datetime 的块，文件可无限累积无需清理
+
+    DB_UPDATE_SKIP=1 时完全跳过（不执行块、不推进水位）。用于与测试环境共用
+    数据库的在线开发环境（agent3）：开发分支可能携带未定版的增量块，提前应用
+    会推进共享水位，导致测试环境后续部署的同名块被判定"已应用"而永久跳过。
     """
     import time
+
+    _skip_flag = os.environ.get("DB_UPDATE_SKIP", "").strip().lower()
+    if _skip_flag in ("1", "true"):
+        logger.info("DB_UPDATE_SKIP=1，跳过数据库增量更新（在线开发环境共用测试库，不应用块、不推进水位）")
+        return
 
     project_root = Path(__file__).parent.parent.parent
     if update_file is None:

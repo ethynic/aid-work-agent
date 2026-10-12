@@ -169,6 +169,29 @@ class TestApplyDbUpdates:
         conn, _ = _run(cursor, tmp_path, update_file=tmp_path / "not_exist.yaml")
         assert conn._cursor.calls == []
 
+    def test_env_skip_no_sql_no_watermark(self, tmp_path, monkeypatch):
+        # DB_UPDATE_SKIP=1：完全跳过（agent3 共用测试库场景），连元数据查询都不发
+        monkeypatch.setenv("DB_UPDATE_SKIP", "1")
+        cursor = FakeCursor()
+        conn, _ = _run(cursor, tmp_path)
+        assert conn._cursor.calls == []
+        assert not _last_datetime_upserted(cursor)
+
+    def test_env_skip_even_invalid_yaml(self, tmp_path, monkeypatch):
+        # 开关优先于 YAML 校验：开发分支 yaml 损坏也不阻塞该环境启动
+        monkeypatch.setenv("DB_UPDATE_SKIP", "1")
+        cursor = FakeCursor()
+        conn, _ = _run(cursor, tmp_path, yaml_text="not: [valid")
+        assert conn._cursor.calls == []
+
+    def test_env_flag_other_value_not_skip(self, tmp_path, monkeypatch):
+        # 非 "1" 值不生效，走正常增量执行
+        monkeypatch.setenv("DB_UPDATE_SKIP", "0")
+        cursor = FakeCursor()
+        conn, _ = _run(cursor, tmp_path)
+        assert _data_exec_count(cursor, "ALTER TABLE tenants") == 1
+        assert _last_datetime_upserted(cursor)
+
     def test_no_lock_skip(self, tmp_path):
         cursor = FakeCursor(lock_available=False)
         conn, _ = _run(cursor, tmp_path)
