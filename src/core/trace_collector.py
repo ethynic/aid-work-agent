@@ -93,7 +93,7 @@ class TraceCollector:
         )
         self._active_spans: Dict[str, SpanRecord] = {}
         self._tool_name_counter: Dict[str, int] = {}
-        self._last_llm_span: Optional[SpanRecord] = None  # 只保留最后一次 LLM 调用
+        self._last_llm_span: Optional[SpanRecord] = None  # 记录上一个 generation span，供新事件到达时精简
 
     @property
     def trace_id(self) -> str:
@@ -160,6 +160,42 @@ class TraceCollector:
         self.trace.error_message = error
         self.trace.tags.append("error")
 
+    def on_llm_failure(self, fact: dict):
+        """失败的 LLM 调用补记失败 generation span（异常路径不发 llm_call 事件）。
+
+        fact 为 engine 挂在异常对象上的 model_call_fact；start_ts/end_ts 缺省时
+        按 now-duration 反推窗口。整体 best-effort，任何异常吞掉不影响业务流。
+        """
+        try:
+            if not fact:
+                return
+            duration_ms = int(fact.get("duration_ms") or 0)
+            start_ts = fact.get("start_ts")
+            end_ts = fact.get("end_ts")
+            if start_ts is None or end_ts is None:
+                now = time.time()
+                start_ts = now - duration_ms / 1000.0
+                end_ts = now
+            summary = {
+                "error_code": fact.get("error_code") or "LLM_CALL_FAILED",
+                "call_id": fact.get("call_id"),
+                "execution_id": fact.get("execution_id"),
+                "iteration": fact.get("iteration"),
+            }
+            self.trace.spans.append(SpanRecord(
+                span_id=f"sp_{uuid.uuid4().hex[:16]}",
+                name="llm_call",
+                start_time=start_ts,
+                end_time=end_ts,
+                span_type='generation',
+                result=json.dumps(summary, ensure_ascii=False),
+                duration_ms=duration_ms,
+                success=False,
+            ))
+            self.trace.tags.append("llm_error")
+        except Exception as e:
+            logger.debug(f"on_llm_failure failed (trace_id={self.trace.trace_id}): {e}")
+
     def on_complete(self, record_service=None, *, persist_sync=False):
         """
         请求完成时调用。从 SessionRecordService 获取 LLM 调用数据，
@@ -175,16 +211,13 @@ class TraceCollector:
             self.trace.provider = record_service.provider
             self.trace.agent_iterations = record_service.agent_iterations
 
-        # 关闭所有未完成的 span
+        # 兜底关闭未闭合 span：generation/context_compressed 创建时已带完整窗口，
+        # 正常路径这里只会关掉异常中断遗留的工具 span（tool_start 后无 tool_result）
         now = time.time()
         for span in self.trace.spans:
             if span.end_time is None:
                 span.end_time = now
                 span.duration_ms = int((now - span.start_time) * 1000)
-
-        # 最后一次 LLM 调用已在 _handle_llm_call 中按事件顺序落列，这里只补齐结束时间
-        if self._last_llm_span:
-            self._last_llm_span.end_time = self._last_llm_span.start_time + self._last_llm_span.duration_ms / 1000.0
 
         # 异步持久化
         try:
@@ -200,6 +233,7 @@ class TraceCollector:
     def _handle_tool_start(self, event: dict):
         tool_name = event.get("toolName", "unknown")
         tool_args = event.get("toolArgs", {})
+        started_ts = event.get("started_ts")
 
         count = self._tool_name_counter.get(tool_name, 0) + 1
         self._tool_name_counter[tool_name] = count
@@ -208,7 +242,9 @@ class TraceCollector:
         span = SpanRecord(
             span_id=span_id,
             name=f"tool:{tool_name}",
-            start_time=time.time(),
+            # 优先用引擎侧开始时刻，把 checkpoint 落库等消费端时延排除在 span 外；
+            # 字段缺省（旧事件/其他生产者）回退消费端时钟
+            start_time=started_ts if started_ts is not None else time.time(),
             tool_args=json.dumps(tool_args, ensure_ascii=False),
         )
         self._active_spans[f"{tool_name}_{count}"] = span
@@ -223,14 +259,38 @@ class TraceCollector:
         key = f"{tool_name}_{count}"
         span = self._active_spans.get(key)
 
-        if span:
-            span.end_time = time.time()
-            span.duration_ms = int((span.end_time - span.start_time) * 1000)
-            span.result = json.dumps(result, ensure_ascii=False)
-            span.success = success
+        if not span:
+            # 断点恢复场景：恢复路径直接从 fact 构造结果，无配对 tool_start。
+            # 用事件数据补一个已完成 span，避免恢复执行丢 span；计时字段缺省
+            # 时 ended=now、duration=0（零宽兜底）。
+            ended_ts = event.get("ended_ts")
+            if ended_ts is None:
+                ended_ts = time.time()
+            duration_ms = event.get("duration_ms")
+            span = SpanRecord(
+                span_id=f"sp_{uuid.uuid4().hex[:16]}",
+                name=f"tool:{tool_name}",
+                start_time=ended_ts - (duration_ms or 0) / 1000.0,
+                end_time=ended_ts,
+                result=json.dumps(result, ensure_ascii=False),
+                success=success,
+                duration_ms=int(duration_ms or 0),
+            )
+            self.trace.spans.append(span)
             if not success:
                 self.trace.tags.append("tool_error")
-            del self._active_spans[key]
+            return
+
+        ended_ts = event.get("ended_ts")
+        span.end_time = ended_ts if ended_ts is not None else time.time()
+        duration_ms = event.get("duration_ms")
+        span.duration_ms = (int(duration_ms) if duration_ms is not None
+                            else int((span.end_time - span.start_time) * 1000))
+        span.result = json.dumps(result, ensure_ascii=False)
+        span.success = success
+        if not success:
+            self.trace.tags.append("tool_error")
+        del self._active_spans[key]
 
     def _handle_llm_call(self, event: dict):
         """处理 LLM 调用事件。
@@ -244,6 +304,18 @@ class TraceCollector:
         system_prompt = event.get("system_prompt", "")
         response_content = event.get("response_content", "")
         usage = event.get("usage", {})
+        # or 0 兜底键存在但值为 None 的情况：下游 now - duration/1000 不允许 None
+        duration_ms = int(event.get("duration_ms") or 0)
+
+        # 事件到达时调用已结束，到达时刻不是真实起点：优先用引擎侧墙钟起止
+        # （start_ts/end_ts），缺省（旧事件/其他生产者）按 now-duration/now 反推；
+        # duration_ms 恒取事件值，on_complete 不得覆盖。
+        start_ts = event.get("start_ts")
+        end_ts = event.get("end_ts")
+        if start_ts is None or end_ts is None:
+            now = time.time()
+            start_ts = now - duration_ms / 1000.0
+            end_ts = now
 
         # 构造完整的 LLM 输入（system_prompt + messages + tools）
         llm_input = {
@@ -256,11 +328,12 @@ class TraceCollector:
         span = SpanRecord(
             span_id=f"sp_{uuid.uuid4().hex[:16]}",
             name="llm_call",
-            start_time=time.time(),
+            start_time=start_ts,
+            end_time=end_ts,
             span_type='generation',
             tool_args=json.dumps(llm_input, ensure_ascii=False),
             result=response_content,
-            duration_ms=event.get("duration_ms", 0),
+            duration_ms=duration_ms,
             success=True,
             model=event.get("model"),
             provider=event.get("provider"),
@@ -328,6 +401,8 @@ class TraceCollector:
             span_id=f"sp_{uuid.uuid4().hex[:16]}",
             name="context_compressed",
             start_time=start_time,
+            # 创建时即闭合，避免被兜底循环拖延到 trace 结束
+            end_time=now,
             span_type='context_compressed',
             tool_args=json.dumps(
                 {"trigger_reason": info["trigger_reason"]},

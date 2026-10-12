@@ -255,6 +255,13 @@ class Agent:
         except Exception as e:
             if trace_collector:
                 try:
+                    # _model 失败路径不发 llm_call 事件，从异常属性补记失败 span
+                    fact = getattr(e, "model_call_fact", None)
+                    if fact:
+                        trace_collector.on_llm_failure(fact)
+                except Exception as le:
+                    logger.debug(f"Trace llm failure mark failed: {le}")
+                try:
                     trace_collector.on_error(str(e))
                 except Exception as ce:
                     logger.debug(f"Trace on_error failed: {ce}")

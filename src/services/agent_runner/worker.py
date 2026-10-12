@@ -535,6 +535,15 @@ class RunnerWorker:
         except Exception as error:
             control.interrupt()
             had_active_children = await self._drain_children(runtime,control)
+            if collector is not None:
+                # _model 失败路径不发 llm_call 事件，从异常属性补记失败 span；
+                # 落库靠 finally 的 _persist_trace。on_llm_failure 内部吞异常。
+                try:
+                    fact = getattr(error,'model_call_fact',None)
+                    if fact:
+                        collector.on_llm_failure(fact)
+                except Exception as trace_error:
+                    logger.debug('AgentRunner llm failure span skipped kind={}',type(trace_error).__name__)
             # Storage/transport failures preserve the most recent committed facts;
             # a finalizing row retries its transaction and never reenters the Loop.
             try:

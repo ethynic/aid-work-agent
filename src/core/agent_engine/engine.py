@@ -125,9 +125,16 @@ class AgentEngine:
         state.model_calls.append(fact)
         await control.save(state, "before_model")
         started = time.monotonic()
+        started_wall = time.time()  # 观测用墙钟起点（epoch 秒），供 trace span 落真实窗口
         try:
             response = await model.complete(state, call_id, tools.definitions())
         except Exception as error:
+            # 失败事实挂异常属性供 collector 补记失败 span；仅进程内传递，
+            # 不入 checkpoint/事件流，不改异常类型与控制流。
+            error.model_call_fact = {"call_id": call_id, "execution_id": state.execution_id,
+                "iteration": state.iteration, "error_code": type(error).__name__,
+                "start_ts": started_wall, "end_ts": time.time(),
+                "duration_ms": int((time.monotonic() - started) * 1000)}
             if getattr(error, "authoritative_storage_failure", False):
                 raise
             # Identify provider I/O separately from authoritative checkpoint and
@@ -136,10 +143,12 @@ class AgentEngine:
             await control.save(state, "model_failed")
             error.model_io_failure = True
             raise
+        ended_wall = time.time()
         fact.update(phase="completed", request_id=response.get("request_id", ""),
                     usage=response.get("usage", {}) or {}, model=response.get("model", ""),
                     provider=response.get("provider", ""),
-                    duration_ms=int((time.monotonic() - started) * 1000))
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                    start_ts=started_wall, end_ts=ended_wall)
         # A checkpoint after provider IO but before message application must keep
         # the actual response. Recovery must not make a second physical call.
         fact['response'] = response
@@ -266,6 +275,7 @@ class AgentEngine:
                     call = state.pending[0]
                     fact = state.tools[call.id]
                     result = None
+                    started_ts = None  # 本次 dispatch 墙钟起点；恢复路径未经 dispatch，不带计时字段
                     if fact.phase == "completed":
                         result = DispatchResult(fact.result, success=fact.success,
                             preserve_content=fact.preserve_content, images=tuple(fact.images), final_output=fact.final_output, terminal_directive=fact.terminal_directive)
@@ -275,9 +285,10 @@ class AgentEngine:
                         # Persist dispatch intent BEFORE any external side effect.
                         fact.phase = "dispatching"
                         await control.save(state, "before_tool")
+                        started_ts = time.time()
                         yield await observed(make_event("tool_start", toolName=call.name,
                             toolCallId=call.id, toolArgs=mask_tool_args(call.arguments),
-                            displayName=tools.display_name(call)))
+                            displayName=tools.display_name(call), started_ts=started_ts))
                         async for item in tools.dispatch(state, call):
                             if result is not None:
                                 raise RuntimeError("TOOL_PROTOCOL_MULTIPLE_TERMINALS")
@@ -289,6 +300,7 @@ class AgentEngine:
                                 raise RuntimeError("TOOL_PROTOCOL_INVALID_EVENT")
                     if not isinstance(result, DispatchResult):
                         raise RuntimeError("TOOL_PROTOCOL_MISSING_TERMINAL")
+                    ended_ts = time.time() if started_ts is not None else None
                     if result.wait:
                         state.outcome = Outcome.WAITING
                         state.waiting = result.wait
@@ -319,7 +331,9 @@ class AgentEngine:
                     await control.save(state, "tool_completed")
                     yield await observed(make_event("tool_result", toolName=call.name,
                         toolCallId=call.id, displayName=tools.display_name(call),
-                        result=result.content, success=result.success))
+                        result=result.content, success=result.success,
+                        **({'ended_ts': ended_ts, 'duration_ms': int((ended_ts - started_ts) * 1000)}
+                           if ended_ts is not None else {})))
                     if result.images:
                         yield await observed(make_image_event(list(result.images), placement="after_text"))
                     if self._directive(state):

@@ -41,6 +41,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |------|------|------|---------|---------|
+| 20261012-1544 | trace 观测 span 计时精确化 | ✅ 已完成开发（提交与部署待授权）：span 改用引擎侧墙钟计时并立即闭合，失败 LLM 与恢复路径补 span；历史数据不回填。 | — | [开发计划](plans/traceobs-timing-precision.md) |
 | 20261010-1638 | 统一通知基础设施与 Web 推送 | ✅ 已完成开发：统一通知底座与Web推送通过内外部终审，真实到达待环境验收。 | [统一设计](system/notification-infrastructure-design.md) / [Web设计](system/web-task-push-notification-design.md) | [开发计划](plans/plan-web-task-push-notification.md) |
 | 20260918-2045 | Redis 夜间巡检任务（生产专用） | ✅ 已完成开发：background_runner 调度器每日 00:30 巡检 Redis——内存水位（600MB 警告/800MB 严重）、碎片率（仅 used>100MB 判）、AOF 写入/重写状态、键淘汰、连接数、无 TTL 键抽样（上限 1000，超 200 疑似泄漏），「[Redis巡检]」前缀进主日志（1 条 INFO 汇总 + 越界 WARNING/ERROR）；REDIS_INSPECTION_ENABLED 门控默认关。2026-10-10 agent2 容器内对腾讯云托管 Redis 实跑验证通过（INFO 汇总 + 告警格式正确，顺带发现测试 Redis evicted=4599 真实告警）；生产 .env 已开启待重启生效（属部署事项，不影响任务关闭）。 | — | — |
 | 20260930-1520 | 上下文压缩可观测性与计费改造 | ✅ 已完成开发：span usage/cost 透传 + 自适应摘要预算 + 50:1 经济性闸门（commit f947812f，2026-09-30）；2026-10-10 agent2 容器内全链路真机验证（check_threshold→compress_now→事件→TraceCollector）：压缩 LLM 真实用量透传 pt=24072/ct=175/cached=256，obs_spans.cost=3.66（tr_425af2359ea247a7，修复前恒 0），chat_records 独立计费 rec_713be10fa46f（background_llm，租户归属正确）。生产 agent1 部署 ≥f947812f 后生产 span 自然有值。 | — | — |
