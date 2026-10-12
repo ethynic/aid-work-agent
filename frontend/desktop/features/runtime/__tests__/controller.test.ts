@@ -24,6 +24,39 @@ function create(port: RuntimeManagementPort, timeout = 1000) { const controller 
 afterEach(() => { controllers.forEach((controller) => controller.dispose()); controllers.length = 0; vi.useRealTimers() })
 
 describe('Runtime production consumer', () => {
+  it('does not let a terminal historical operation block an explicit stop of the current Host', async () => {
+    const { port } = makePort(); const controller = create(port)
+    await controller.connect()
+    controller.view.operation = { operation_id: 'old-start', operation: 'start', status: 'reconciling', code: 0, error: '', message: 'original execution ended' }
+    await controller.mutate('stop')
+    expect(vi.mocked(port.request).mock.calls.filter(([request]) => request.method === 'stop')).toHaveLength(1)
+    expect(controller.view.operation?.status).toBe('succeeded')
+  })
+  it('uses the current stopped state after reconnect rather than permanently locking on a historical operation', async () => {
+    const { port } = makePort(); const controller = create(port)
+    await controller.connect()
+    const historical = { operation_id: 'old-start', operation: 'start' as const, status: 'reconciling' as const, code: 0, error: '', message: 'old execution ended' }
+    controller.view.operation = historical
+    const normal = vi.mocked(port.request).getMockImplementation()!
+    vi.mocked(port.request).mockImplementation(request => request.method === 'operations.get' ? Promise.resolve(reply(request, historical)) : normal(request))
+    await controller.connect()
+    expect(controller.view.state?.state).toBe('stopped')
+    expect(controller.view.operation?.status).toBe('reconciling')
+    await controller.mutate('start')
+    expect(vi.mocked(port.request).mock.calls.filter(([request]) => request.method === 'start')).toHaveLength(1)
+    expect(historical.status).toBe('reconciling')
+  })
+  it('allows verified import selection after a historical reconciliation without replaying the old intent', async () => {
+    const { port } = makePort(); const controller = create(port)
+    await controller.connect()
+    const historical = { operation_id: 'old-start', operation: 'start' as const, status: 'reconciling' as const, code: 0, error: '', message: 'old execution ended' }
+    controller.view.operation = historical
+    await controller.importPackage()
+    expect(port.choosePackage).toHaveBeenCalledOnce()
+    expect(vi.mocked(port.request).mock.calls.filter(([request]) => request.method === 'plugins.import')).toHaveLength(1)
+    expect(vi.mocked(port.request).mock.calls.some(([request]) => ['start', 'pair'].includes(request.method))).toBe(false)
+    expect(historical.status).toBe('reconciling')
+  })
   it('preserves matching handshake notifications when describe and both initial snapshots arrive late', async () => {
     vi.useFakeTimers()
     const { port, emit } = makePort(); const controller = create(port)

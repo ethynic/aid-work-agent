@@ -1,9 +1,11 @@
 import { reactive } from 'vue'
-import { decodeResponse, decodeSelection, isDescription, isHostEvent, isHostState, isOperation, isPluginList, type Description, type HostState, type ManagementMethod, type ManagementOperation, type PluginList, type RuntimeManagementPort } from './contracts'
+import { decodeResponse, decodeSelection, decodeConnectionDiagnosis, decodeConnectionRecoveryResult, isDescription, isHostEvent, isHostState, isOperation, isPluginList, type ConnectionDiagnosis, type ConnectionRecoveryInput, type Description, type HostState, type ManagementMethod, type ManagementOperation, type PluginList, type RuntimeManagementPort } from './contracts'
 
 class RejectedManagementRequest extends Error {}
 
 export class RuntimeController {
+  readonly recovery = reactive({ busy: false, diagnosis: null as ConnectionDiagnosis | null, error: '', newDevice: false })
+  private recoverySequence = 0
   readonly view = reactive({ connected: false, connecting: false, state: null as HostState | null, plugins: null as PluginList | null, description: null as Description | null, stateDirty: true, pluginsDirty: true, error: '', operation: null as ManagementOperation | null, busy: false, retryAvailable: false, selectionLabel: '' })
   private generation = 0
   private instance = ''
@@ -30,7 +32,39 @@ export class RuntimeController {
   // Signed offline OCR packages require full integrity scans, including on reconnect.
   constructor(private port: RuntimeManagementPort, private readonly timeoutMs = 120_000) {}
   get supportsPlugins() { return this.view.description?.features.includes('first_party_plugins') === true }
-  async connect(port = this.port) {
+  get supportsRecovery() { return typeof this.port.diagnoseConnection === 'function' && typeof this.port.reconfigureConnection === 'function' }
+  private async recoveryRequest<T>(request: Promise<T>): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try { return await Promise.race([request, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('连接恢复结果尚未确认')), Math.max(this.timeoutMs, 300_000)) })]) }
+    finally { clearTimeout(timer) }
+  }
+  async diagnoseConnection() {
+    if (!this.supportsRecovery || this.recovery.busy || this.view.busy || this.disposed) return
+    const sequence = ++this.recoverySequence
+    this.recovery.busy = true; this.recovery.error = ''
+    try {
+      const value = await this.recoveryRequest(this.port.diagnoseConnection!())
+      if (sequence === this.recoverySequence && !this.disposed) this.recovery.diagnosis = decodeConnectionDiagnosis(value)
+    } catch { if (sequence === this.recoverySequence) this.recovery.error = '连接检查未完成。请检查旧Runtime是否已退出、当前Windows用户与安装文件，再检查连接。' }
+    finally { if (sequence === this.recoverySequence) this.recovery.busy = false }
+  }
+  async reconfigureConnection(input: ConnectionRecoveryInput) {
+    if (!this.supportsRecovery || this.recovery.busy || this.view.busy || this.disposed) return
+    const sequence = ++this.recoverySequence
+    this.recovery.busy = true; this.recovery.error = ''
+    try {
+      const raw = await this.recoveryRequest(this.port.reconfigureConnection!(input))
+      if (sequence !== this.recoverySequence || this.disposed) return
+      const result = decodeConnectionRecoveryResult(raw)
+      this.recovery.diagnosis = result.diagnosis; this.recovery.newDevice = result.new_device
+      this.resetConnection(true)
+      await this.connect(this.port, true)
+    } catch { if (sequence === this.recoverySequence) this.recovery.error = '恢复请求的结果尚未确认。重新打开客户端会继续本机恢复；点击检查连接，不要自动重复配对。' }
+    finally { if (sequence === this.recoverySequence) this.recovery.busy = false }
+  }
+  async connect(port = this.port, recovering = false) {
+    if (this.recovery.busy && !recovering) return
+    if (!recovering) this.recovery.diagnosis = null
     this.resetConnection()
     this.disposed = false
     this.port = port
@@ -48,7 +82,7 @@ export class RuntimeController {
         else this.handshakeOverflow = true
         return
       }
-      if (event.instance_id !== this.instance) { void this.connect().catch(() => {}); return }
+      if (event.instance_id !== this.instance) { if (!this.recovery.busy) void this.connect().catch(() => {}); return }
       this.advance(event.revision)
       this.scheduleRefresh()
     })
@@ -94,7 +128,7 @@ export class RuntimeController {
     if (clearIntent) { this.intent = undefined; this.knownInstance = ''; this.view.operation = null; this.view.selectionLabel = '' }
     Object.assign(this.view, { connected: false, connecting: false, state: null, plugins: null, description: null, stateDirty: true, pluginsDirty: true, busy: false, retryAvailable: false })
   }
-  dispose() { this.disposed = true; this.resetConnection(true) }
+  dispose() { this.disposed = true; ++this.recoverySequence; this.recovery.busy = false; this.resetConnection(true) }
   private message(error: unknown) { return error instanceof Error ? error.message : 'Runtime 管理操作失败' }
   private query(method: ManagementMethod, params: Record<string, string> = {}) {
     const request = { request_id: crypto.randomUUID(), method, params }
@@ -162,13 +196,14 @@ export class RuntimeController {
     this.refreshTimer = setTimeout(() => { this.refreshTimer = undefined; void this.refresh() }, 100)
   }
   async mutate(method: Exclude<ManagementMethod, 'describe' | 'getState' | 'plugins.list' | 'operations.get'>, params: Record<string, string> = {}, requestKey = crypto.randomUUID()) {
-    if (!this.view.connected || this.view.busy || this.intent || this.view.operation?.status === 'running' || this.view.operation?.status === 'reconciling') return
+    if (!this.view.connected || this.view.busy || this.recovery.busy || this.intent || this.view.operation?.status === 'running') return
     if (method.startsWith('plugins.') && !this.supportsPlugins) { this.view.error = '此 Runtime 尚不支持第一方插件管理'; return }
+    this.recovery.diagnosis = null
     this.intent = { method, params: { ...params, request_key: requestKey }, instance: this.instance }
     await this.retry()
   }
   async retry() {
-    if (!this.intent || this.view.busy || this.intent.instance !== this.instance || !this.view.connected) return
+    if (!this.intent || this.view.busy || this.recovery.busy || this.intent.instance !== this.instance || !this.view.connected) return
     const intent = this.intent
     const generation = this.generation
     this.view.busy = true; this.view.retryAvailable = false; this.view.error = ''
@@ -189,7 +224,7 @@ export class RuntimeController {
     } finally { if (generation === this.generation) this.view.busy = false }
   }
   async importPackage() {
-    if (!this.supportsPlugins || !this.view.connected || this.view.busy || this.intent || this.view.operation?.status === 'running' || this.view.operation?.status === 'reconciling') return
+    if (!this.supportsPlugins || !this.view.connected || this.view.busy || this.recovery.busy || this.intent || this.view.operation?.status === 'running') return
     const generation = this.generation
     const instance = this.instance
     const requestKey = crypto.randomUUID()

@@ -38,6 +38,10 @@ Host/plugin可见状态变化共用Host revision，每次提交增加水位；de
 
 ## H1：管理消息
 
+Runtime 客户端可选 H3 bridge3 增加 `diagnoseConnection / reconfigureConnection`，采用 [connection-recovery schema](schemas/connection-recovery.schema.json)。这不是 H1 方法或状态扩展；Desktop 普通产品不暴露该端口。Main 是恢复事务唯一写入者，直属 Host 私有 IPC v1 校验固定 action、当前 instance、request id 与 generation；renderer 不提供 home、可执行文件、凭据、归档路径或旧请求键。
+
+`service_verified` 仅表示固定配置中的凭据收到真实服务器心跳响应，检查 POST heartbeat `{}`，不领取任务、不改能力。现有心跳不返回设备编号，不能据此校对编号与 token 的远端归属。`can_preserve` 指当前原配置与凭据可保留；新配对编号以配对响应为准。原身份修复仅归档管理控制文件，业务历史保持生效；新设备恢复先证明资源停止、实际退出 Host 并取得同 home OS lease，再原子归档旧 home。恢复中断由 CurrentUser 保护事务续办，不自动重新消费配对码；无法确认资源时登记绑定 boot/session 的重启核验，不能假造业务 ACK。
+
 请求固定`request_id / method / params`。request_id关联当前连接回复；变更操作另带request_key，Host持久查回同一operation，同键不同意图拒绝。传输重发可换request_id，但沿用request_key，不重复安装或执行依赖。查询不带request_key。
 
 方法：`describe / getState / start / stop / pair / plugins.list / plugins.import / plugins.enable / plugins.disable / plugins.uninstall / operations.get`。变更返回operation，客户端查询状态。无invokeTool、spawn、任意shell或通用文件读取；grants方法等待H2类型。

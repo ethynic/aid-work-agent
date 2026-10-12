@@ -57,6 +57,10 @@ const updates = Object.freeze({
 const runtimeHost = readArgument('aidagent-runtime-enabled') === '1' ? Object.freeze({
   request: (request: unknown) => ipcRenderer.invoke('desktop:runtime:request', request) as Promise<unknown>,
   choosePackage: (input: unknown) => ipcRenderer.invoke('desktop:runtime:choose-package', input) as Promise<unknown>,
+  ...(runtime.productKind === 'runtime' ? {
+    diagnoseConnection: () => ipcRenderer.invoke('desktop:runtime:diagnose-connection') as Promise<unknown>,
+    reconfigureConnection: (input: unknown) => ipcRenderer.invoke('desktop:runtime:reconfigure-connection', input) as Promise<unknown>,
+  } : {}),
   observe: (callback: (event: unknown) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, event: unknown) => callback(event)
     ipcRenderer.on('desktop:runtime:event', listener)

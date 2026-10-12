@@ -17,6 +17,7 @@ files:
   - dist/electron/platform.js
   - dist/electron/productConfiguration.js
   - dist/electron/runtimeSupervisor.js
+  - dist/electron/runtimeConnectionRecovery.js
   - dist/electron/runtimeSelection.js
   - dist/electron/runtimeStartup.js
   - dist/electron/runtimeUpdate.js

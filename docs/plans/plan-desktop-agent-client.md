@@ -1,5 +1,7 @@
 # Agent 桌面客户端 v3 开发计划
 
+2026-10-12 r7共同检查点：[恢复计划Phase10](plan-runtime-upgrade-recovery.md#phase10-最终交付与服务端状态复核2026-10-12)已交付自助诊断/管理修复/归档新配对；主控维护Core/Runtime/Main和UI，资源角色仅维护资源helper，独立角色只读验证。H1/Device/binding不变，Runtime-only H3可选端口与私有connection v1、续装控制保持单一写入者；实际包和独立验证通过，未部署服务器。
+
 2026-10-12 r6共同检查点：[恢复计划Phase 8](plan-runtime-upgrade-recovery.md)Runtime主控维护core/组合层、平台角色维护DPAPI；Electron公共壳及H1不增加方法，失败时现有blocked状态可显示固定原因、私有退出仍只释放当前管理进程。完整Desktop默认启动语义不改。
 
 2026-10-12 r5 共同检查点：[恢复计划Phase 6](plan-runtime-upgrade-recovery.md)当前主控维护Runtime NSIS与旧版续装PS，完整Desktop不启用该钩子；补跨版本控制材料轮换及旧客户端告警规避，公共壳、H1与binding不变。
@@ -420,5 +422,7 @@ Runtime唯一写入者完成controller/controller.test最小修复：describe未
 
 旧a8b0包的暂停状态已关闭，当前人工验收使用68b855及新manifest，旧摘要仅作历史。手册12与Desktop索引行同步新交付。Runtime计划10.4及用户条件提交授权、限定暂存/提交/推送由Runtime主控维护；本工作流未执行Git提交/推送或部署，且不会替其宣称提交成功。B1/B2、H2/H4新链路与共同wire冻结均不扩大。
 # 2026-10-12 升级恢复共同检查点
+
+Phase9连接恢复复核见[Runtime恢复计划](plan-runtime-upgrade-recovery.md#phase9连接失效与恢复路径的确定行为)：Runtime页面将本机管理重连与云端心跳/重新配对区分，终态历史operation不再顶替当前Host安全状态；明确stop仍走既有Host所有权校验，保持候选0.3字段与直属生命周期v1。主控唯一维护本批局部UI/Controller，独立角色验证真实producer/consumer。原身份修复及永久历史标记解除未实施，完整自助恢复进入后续阶段；不将局部页面补漏当作现场恢复完成。
 
 已登记[覆盖升级与自动恢复](plan-runtime-upgrade-recovery.md)：Runtime安装器协调退出与原运行意图恢复，共用core停止证明，不实现第二执行引擎；主控唯一写入Electron/NSIS，Device授权不变，实施前检查点完成。

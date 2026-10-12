@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import type { RuntimePlatformRequest, RuntimePlatformResponse, SelectedPackageSnapshot } from '@aid/local-tool-host-core'
+import { validRecoveryInspection, type RecoveryInspection } from './runtimeConnectionRecovery.js'
 
 interface Request { request_id: string; method: string; params: Record<string, string> }
 interface Reply { request_id: string; method: string; code: number; error: string; result: unknown }
@@ -19,7 +20,7 @@ export function parseRuntimeRequest(value: unknown): Request {
   if (Object.keys(value.params).length !== fields.length || fields.some(key => typeof (value.params as Record<string, unknown>)[key] !== 'string' || !(value.params as Record<string, string>)[key] || (value.params as Record<string, string>)[key]!.length > 4096)) throw new Error('Runtime管理参数无效')
   return value as unknown as Request
 }
-interface Pending { method: string; shutdownInstance?: string; resolve(reply: Reply): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }
+interface Pending { method: string; shutdownInstance?: string; connectionInstance?: string; resolve(reply: Reply): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }
 export interface RuntimeSupervisorOptions {
   nodeExecutable: string; hostEntry: string; home: string; supervisor: 'desktop' | 'runtime_app'
   takeSelectedPackage(request: RuntimePlatformRequest['params']): Promise<SelectedPackageSnapshot>
@@ -93,7 +94,10 @@ export class RuntimeSupervisor {
         if (message.kind !== 'runtime_shutdown_response' || Object.keys(message).sort().join(',') !== 'code,error,instance_id,kind,method,request_id,result'
           || message.instance_id !== pending.shutdownInstance || message.method !== 'runtime.shutdown'
           || (message.code === 0 && (!object(message.result) || Object.keys(message.result).join(',') !== 'closed' || message.result.closed !== true))) return
-      } else if (message.kind === 'runtime_shutdown_response') return
+      } else if (pending.connectionInstance !== undefined) {
+        if (message.kind !== 'runtime_connection_response' || message.version !== 1 || Object.keys(message).sort().join(',') !== 'code,error,instance_id,kind,method,request_id,result,version'
+          || message.instance_id !== pending.connectionInstance || message.method !== 'runtime.connection' || message.code === 0 && !validRecoveryInspection(message.result)) return
+      } else if (message.kind === 'runtime_shutdown_response' || message.kind === 'runtime_connection_response') return
       this.pending.delete(message.request_id); clearTimeout(pending.timer)
       if (message.method !== pending.method || !Number.isSafeInteger(message.code) || Number(message.code) < 0 || typeof message.error !== 'string' || !Object.hasOwn(message, 'result')
         || (message.code === 0 ? message.error !== '' : !message.error || message.result !== null)) { pending.reject(new Error('Runtime管理回复格式不兼容')); return }
@@ -159,6 +163,40 @@ export class RuntimeSupervisor {
   private failPending(message: string): void {
     for (const item of this.pending.values()) { clearTimeout(item.timer); item.reject(new Error(message)) }
     this.pending.clear()
+  }
+
+  suspend(value: boolean): void { this.accepting = !value }
+  async recoveryManagementRequest(method: string, params: Record<string, string>): Promise<Reply> {
+    const request = parseRuntimeRequest({ request_id: randomUUID(), method, params })
+    const ready = await this.ensure()
+    return ready.code === 0 ? this.send(request.method, request.params) : ready
+  }
+  async connectionInspection(action: 'diagnose' | 'prepare_preserve' | 'prepare_new' | 'prepare_reboot'): Promise<RecoveryInspection> {
+    if (typeof action !== 'string' || !['diagnose', 'prepare_preserve', 'prepare_new', 'prepare_reboot'].includes(action)) throw new Error('连接恢复操作无效')
+    if (this.options.supervisor !== 'runtime_app') throw new Error('当前产品不支持连接恢复')
+    const ready = await this.ensure()
+    if (ready.code !== 0 || !this.instanceId || !this.child?.connected || this.childExited) throw new Error('管理连接未建立')
+    const id = randomUUID(); const instance = this.instanceId
+    const reply = await new Promise<Reply>((resolve, reject) => {
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('连接检查未完成')) }, 120_000)
+      this.pending.set(id, { method: 'runtime.connection', connectionInstance: instance, resolve, reject, timer })
+      this.child!.send({ kind: 'runtime_connection_request', version: 1, request_id: id, instance_id: instance, action }, error => {
+        if (!error) return
+        const pending = this.pending.get(id); if (pending) { clearTimeout(pending.timer); this.pending.delete(id); reject(new Error('管理连接已断开')) }
+      })
+    })
+    if (reply.code !== 0 || !validRecoveryInspection(reply.result)) throw new Error('连接检查被拒绝，请按当前执行状态处理')
+    return reply.result
+  }
+  async closeForConnectionRecovery(): Promise<void> {
+    if (!this.instanceId || this.lifecycleInstanceId !== this.instanceId) throw new Error('当前实例不支持安全连接恢复')
+    const closed = await this.send('runtime.shutdown', {}, true)
+    if (closed.code !== 0 || !object(closed.result) || closed.result.closed !== true) throw new Error('当前实例尚未安全退出')
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const exit = await Promise.race([this.exited, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('当前实例退出未确认')), 15000) })])
+      if (exit !== 0 || !this.childExited) throw new Error('当前实例退出未确认')
+    } finally { clearTimeout(timer) }
   }
 
   async stopAndExit(drainTimeoutMs?: number, beforeStop?: (state: Record<string, unknown>) => Promise<void>): Promise<void> {

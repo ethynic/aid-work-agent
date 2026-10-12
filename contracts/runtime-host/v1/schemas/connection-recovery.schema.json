@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aidwork.local/contracts/runtime-host/v1/connection-recovery.schema.json",
+  "title": "Runtime-only H3 connection recovery v1; not an H1 method",
+  "$defs": {
+    "diagnosis": {
+      "type": "object", "additionalProperties": false,
+      "required": ["version", "category", "summary", "steps", "service_verified", "can_preserve", "can_reconfigure", "requires_reboot"],
+      "properties": {
+        "version": {"const": 1}, "category": {"type": "string", "pattern": "^[A-Z0-9_]{1,80}$"},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "steps": {"type": "array", "maxItems": 12, "items": {"type": "string", "minLength": 1, "maxLength": 2000}},
+        "service_verified": {"type": "boolean"}, "can_preserve": {"type": "boolean"},
+        "can_reconfigure": {"type": "boolean"}, "requires_reboot": {"type": "boolean"}
+      }
+    },
+    "inspection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["diagnosis", "resources_safe", "identity_digest"],
+      "properties": {"diagnosis": {"$ref": "#/$defs/diagnosis"}, "resources_safe": {"type": "boolean"}, "identity_digest": {"oneOf": [{"type": "null"}, {"type": "string", "pattern": "^[0-9a-f]{64}$"}]}}
+    },
+    "privateRequest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "version", "request_id", "instance_id", "action"],
+      "properties": {
+        "kind": {"const": "runtime_connection_request"}, "version": {"const": 1},
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 200}, "instance_id": {"type": "string", "minLength": 1},
+        "action": {"enum": ["diagnose", "prepare_preserve", "prepare_new", "prepare_reboot"]}
+      }
+    },
+    "recoveryInput": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["mode", "confirmed"], "properties": {"mode": {"enum": ["preserve", "prepare_reboot"]}, "confirmed": {"const": true}}},
+        {"type": "object", "additionalProperties": false, "required": ["mode", "confirmed", "server", "device_name", "pairing_code"], "properties": {"mode": {"const": "new_device"}, "confirmed": {"const": true}, "server": {"type": "string", "minLength": 1, "maxLength": 4096}, "device_name": {"type": "string", "minLength": 1, "maxLength": 100}, "pairing_code": {"type": "string", "minLength": 1, "maxLength": 128}}}
+      ]
+    },
+    "recoveryResult": {
+      "type": "object", "additionalProperties": false, "required": ["version", "status", "diagnosis", "new_device"],
+      "properties": {"version": {"const": 1}, "status": {"enum": ["complete", "action_required"]}, "diagnosis": {"$ref": "#/$defs/diagnosis"}, "new_device": {"type": "boolean"}}
+    }
+  },
+  "$ref": "#/$defs/diagnosis"
+}

@@ -13,7 +13,7 @@ export function recordOperationAck(home: string, invocationId: string, payload: 
   if (!existsSync(journal)) return // Read-only/non-started work has no write journal to settle.
   let identity: { server: string; device_id: string } | undefined
   try {
-    const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'))
+    const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8').replace(/^\uFEFF/, ''))
     const url = new URL(config.server)
     if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && typeof config.device_id === 'string' && config.device_id) identity = { server: config.server, device_id: config.device_id }
   } catch { /* No provable original identity: retain an unresolved receipt. */ }

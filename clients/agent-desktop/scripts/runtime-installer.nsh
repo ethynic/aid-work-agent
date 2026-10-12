@@ -97,8 +97,14 @@
         ${EndIf}
         IntOp $R2 $R2 + 1
         ${If} $R0 != 0
-        ${OrIf} $R2 >= 1240
-          MessageBox MB_OK|MB_ICONEXCLAMATION "Runtime 任务仍在收尾或网络暂时不可用。此次安装已暂停，程序与执行记录保留；恢复网络后重新运行安装器即可。" /SD IDOK
+        ${OrIf} $R2 >= 60
+          !ifndef BUILD_UNINSTALLER
+            Call runtimeScheduleDeferredInstall
+            ${If} $R9 == 3010
+              Return
+            ${EndIf}
+          !endif
+          MessageBox MB_OK|MB_ICONEXCLAMATION "旧 Runtime 未能在 30 秒内退出，此次未覆盖程序。请正常重启 Windows，登录后先不要启动旧客户端，立即重新运行本安装包。原配对和任务记录保留。安装后使用“连接检查与恢复”按具体提示恢复连接；不要反复覆盖、卸载或结束所有 Node 进程。" /SD IDOK
           StrCpy $R9 2
           Return
         ${EndIf}
@@ -109,7 +115,11 @@
         StrCpy $R9 2
         Return
       !else
-        MessageBox MB_OK|MB_ICONEXCLAMATION "旧版仍在运行。请先从托盘选择退出，再运行安装器；此次未覆盖或终止旧程序。" /SD IDOK
+        Call runtimeScheduleDeferredInstall
+        ${If} $R9 == 3010
+          Return
+        ${EndIf}
+        MessageBox MB_OK|MB_ICONEXCLAMATION "旧版仍在运行。请从托盘退出后重新安装；若旧版拒绝退出，请正常重启 Windows，登录后先不要启动旧版，立即重新运行本安装包。配对和任务记录保留，此次未覆盖旧程序。" /SD IDOK
         StrCpy $R9 2
         Return
       !endif
@@ -123,6 +133,19 @@
   FunctionEnd
 
   !ifndef BUILD_UNINSTALLER
+    Function runtimeScheduleDeferredInstall
+      nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\runtime-legacy-upgrade.ps1" -Mode PrepareDeferred -AppId "${APP_ID}" -InstallerPath "$EXEPATH" -InstallDirectory "$INSTDIR" -SupervisorPath "$PLUGINSDIR\RuntimeProcessSupervisor.exe"'
+      Pop $R0
+      Pop $R1
+      ${If} $R0 == 0
+        MessageBox MB_OK|MB_ICONINFORMATION "旧客户端未能退出，重启续装已登记。请正常重启 Windows；已暂时关闭本产品旧版开机启动，登录后会自动继续安装。配对和任务记录保留。安装完成后在“连接检查与恢复”中按具体提示处理；若旧资源资料无法核验，页面会另行指导登记重启恢复。" /SD IDOK
+        StrCpy $R9 3010
+      ${Else}
+        MessageBox MB_OK|MB_ICONEXCLAMATION "重启续装登记失败（错误码：$R0）。旧程序和任务资料未覆盖。请确认原 Windows 用户、目录权限、系统 PowerShell 与凭据保护正常后重试；也可正常重启并立即重跑本安装包。" /SD IDOK
+        StrCpy $R9 2
+      ${EndIf}
+    FunctionEnd
+
     Function runtimePendingUpgrade
       StrCpy $R0 1004
       ReadEnvStr $R8 "APPDATA"

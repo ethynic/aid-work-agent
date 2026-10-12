@@ -6,7 +6,15 @@ export interface RuntimeManagementPort {
   observe(listener: (event: unknown) => void): () => void
   onDisconnect?(listener: () => void): () => void
   choosePackage(input: { instance_id: string; request_key: string }): Promise<unknown>
+  diagnoseConnection?(): Promise<unknown>
+  reconfigureConnection?(input: ConnectionRecoveryInput): Promise<unknown>
 }
+export interface ConnectionRecoveryInput { mode: 'preserve' | 'new_device' | 'prepare_reboot'; confirmed: true; server?: string; device_name?: string; pairing_code?: string }
+export interface ConnectionDiagnosis {
+  version: 1; category: string; summary: string; steps: string[]
+  service_verified: boolean; can_preserve: boolean; can_reconfigure: boolean; requires_reboot: boolean
+}
+export interface ConnectionRecoveryResult { version: 1; status: 'complete' | 'action_required'; diagnosis: ConnectionDiagnosis; new_device: boolean }
 export interface HostState {
   instance_id: string; revision: number; supervisor: 'cli' | 'desktop' | 'runtime_app'
   state: 'stopped' | 'starting' | 'running' | 'draining' | 'reconciling' | 'blocked'
@@ -26,6 +34,17 @@ const integer = (value: unknown): value is number => Number.isSafeInteger(value)
 const keys = (value: Record<string, unknown>, required: string[], optional: string[] = []) => required.every((key) => Object.prototype.hasOwnProperty.call(value, key)) && Object.keys(value).every((key) => required.includes(key) || optional.includes(key))
 const member = (value: unknown, allowed: readonly string[]) => typeof value === 'string' && allowed.includes(value)
 const revision = (value: Record<string, unknown>) => text(value.instance_id) && integer(value.revision)
+export function decodeConnectionDiagnosis(value: unknown): ConnectionDiagnosis {
+  if (!object(value) || !keys(value, ['version', 'category', 'summary', 'steps', 'service_verified', 'can_preserve', 'can_reconfigure', 'requires_reboot'])
+    || value.version !== 1 || !text(value.category) || !/^[A-Z0-9_]{1,80}$/.test(value.category) || !text(value.summary) || value.summary.length > 2000
+    || !Array.isArray(value.steps) || value.steps.length > 12 || !value.steps.every(step => text(step) && step.length <= 2000)
+    || !['service_verified', 'can_preserve', 'can_reconfigure', 'requires_reboot'].every(key => typeof value[key] === 'boolean')) throw new Error('连接检查回复不兼容，请重新安装本批客户端')
+  return value as unknown as ConnectionDiagnosis
+}
+export function decodeConnectionRecoveryResult(value: unknown): ConnectionRecoveryResult {
+  if (!object(value) || !keys(value, ['version', 'status', 'diagnosis', 'new_device']) || value.version !== 1 || !member(value.status, ['complete', 'action_required']) || typeof value.new_device !== 'boolean') throw new Error('连接恢复回复不兼容，原请求未自动重复')
+  return { version: 1, status: value.status as ConnectionRecoveryResult['status'], diagnosis: decodeConnectionDiagnosis(value.diagnosis), new_device: value.new_device }
+}
 export function isHostState(value: unknown): value is HostState {
   if (!object(value) || !keys(value, ['instance_id', 'revision', 'supervisor', 'state', 'connection'], ['device', 'blocked_reason']) || !revision(value)) return false
   if (!member(value.supervisor, ['cli', 'desktop', 'runtime_app']) || !member(value.state, ['stopped', 'starting', 'running', 'draining', 'reconciling', 'blocked']) || !member(value.connection, ['unpaired', 'connecting', 'online', 'offline', 'revoked'])) return false

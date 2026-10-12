@@ -5,7 +5,7 @@ import type { ManagementRequest, RuntimeManagementPort } from '../contracts'
 
 const wrappers: VueWrapper[] = []
 afterEach(() => { wrappers.forEach((wrapper) => wrapper.unmount()); wrappers.length = 0; localStorage.clear(); document.body.innerHTML = '' })
-function mountPage(options: { features?: string[]; state?: string; ready?: boolean; version?: string; pairReject?: boolean } = {}) {
+function mountPage(options: { features?: string[]; state?: string; ready?: boolean; version?: string; pairReject?: boolean; recovery?: boolean } = {}) {
   const requests: ManagementRequest[] = []
   const port: RuntimeManagementPort = {
     request: vi.fn(async (request) => {
@@ -20,6 +20,10 @@ function mountPage(options: { features?: string[]; state?: string; ready?: boole
     observe: vi.fn(() => vi.fn()),
     choosePackage: vi.fn(async () => ({ selection_ref: 'selection-one', label: '微信离线包.zip' })),
   }
+  if (options.recovery) {
+    port.diagnoseConnection = vi.fn(async () => ({ version: 1, category: 'CONFIG_INVALID', summary: '原连接配置格式损坏', steps: ['重新配置并使用新配对码。', '完成后在网页选定新设备。'], service_verified: false, can_preserve: false, can_reconfigure: true, requires_reboot: false }))
+    port.reconfigureConnection = vi.fn(async () => ({ version: 1, status: 'action_required', new_device: false, diagnosis: { version: 1, category: 'NETWORK_FAILED', summary: '无法连接企业服务', steps: ['检查网络与服务地址，恢复后检查连接。'], service_verified: false, can_preserve: false, can_reconfigure: true, requires_reboot: false } }))
+  }
   const wrapper = mount(RuntimeManagementPage, { props: { port }, attachTo: document.body })
   wrappers.push(wrapper)
   return { wrapper, port, requests }
@@ -27,6 +31,33 @@ function mountPage(options: { features?: string[]; state?: string; ready?: boole
 function button(wrapper: VueWrapper, text: string) { const found = wrapper.findAll('button').find((element) => element.text() === text); if (!found) throw new Error(`Missing button ${text}`); return found }
 
 describe('Runtime management page', () => {
+  it('offers explicit recovery independently of blocked normal pairing and shows concrete instructions', async () => {
+    const { wrapper, port } = mountPage({ state: 'blocked', recovery: true }); await flushPromises()
+    expect(port.diagnoseConnection).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('原连接配置格式损坏')
+    expect(wrapper.text()).toContain('完成后在网页选定新设备')
+    expect(wrapper.get('#runtime-pairing-code').attributes()).toHaveProperty('disabled')
+    expect(button(wrapper, '重新配置连接').attributes()).not.toHaveProperty('disabled')
+    expect(wrapper.text()).not.toContain('已收到服务器心跳响应')
+  })
+  it('requires confirmation, clears recovery code immediately, and does not replay a failed request', async () => {
+    const { wrapper, port } = mountPage({ state: 'blocked', recovery: true }); await flushPromises()
+    let finish!: (value: unknown) => void
+    port.reconfigureConnection = vi.fn(() => new Promise(resolve => { finish = resolve }))
+    await button(wrapper, '重新配置连接').trigger('click')
+    await wrapper.get('#recovery-server').setValue('https://service.example')
+    await wrapper.get('#recovery-name').setValue('原设备名称')
+    await wrapper.get('#recovery-code').setValue('recovery-otp-test')
+    expect(button(wrapper, '确认处理').attributes()).toHaveProperty('disabled')
+    await wrapper.get('.runtime-confirm input').setValue(true)
+    await wrapper.findAll('form')[1]!.trigger('submit')
+    await flushPromises()
+    expect(port.reconfigureConnection).toHaveBeenCalledWith({ mode: 'new_device', confirmed: true, server: 'https://service.example', device_name: '原设备名称', pairing_code: 'recovery-otp-test' })
+    expect(wrapper.find('#recovery-code').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('recovery-otp-test'); expect(localStorage.length).toBe(0)
+    finish({ version: 1, status: 'action_required', new_device: true, diagnosis: { version: 1, category: 'PAIRING_CODE_INVALID', summary: '配对码已过期', steps: ['生成新配对码再提交。'], service_verified: false, can_preserve: false, can_reconfigure: true, requires_reboot: false } })
+    await flushPromises(); expect(wrapper.text()).toContain('生成新配对码再提交'); expect(port.reconfigureConnection).toHaveBeenCalledTimes(1)
+  })
   it('distinguishes enabled from ready and never derives version from release identifier', async () => {
     const { wrapper } = mountPage(); await flushPromises()
     expect(wrapper.text()).toContain('已启用')
@@ -61,6 +92,16 @@ describe('Runtime management page', () => {
     expect(button(wrapper, '启动执行').attributes()).toHaveProperty('disabled')
     expect(button(wrapper, '停止执行').attributes()).toHaveProperty('disabled')
     expect(wrapper.get('#runtime-pairing-code').attributes()).toHaveProperty('disabled')
+  })
+  it('offers the existing stop check while reconciling without allowing start or identity replacement', async () => {
+    const { wrapper, requests } = mountPage({ state: 'reconciling' }); await flushPromises()
+    expect(button(wrapper, '启动执行').attributes()).toHaveProperty('disabled')
+    expect(wrapper.get('#runtime-pairing-code').attributes()).toHaveProperty('disabled')
+    expect(button(wrapper, '停止执行').attributes()).not.toHaveProperty('disabled')
+    await button(wrapper, '停止执行').trigger('click'); await flushPromises()
+    expect(requests.some(request => request.method === 'stop')).toBe(true)
+    expect(requests.some(request => request.method === 'start' || request.method === 'pair')).toBe(false)
+    expect(button(wrapper, '重新连接管理服务').exists()).toBe(true)
   })
   it('removes installation controls when the producer has not negotiated the capability', async () => {
     const { wrapper } = mountPage({ features: ['events'] }); await flushPromises()

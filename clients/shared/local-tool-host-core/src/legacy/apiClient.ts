@@ -7,7 +7,7 @@
  */
 
 export class NetworkError extends Error {
-  constructor(message: string) {
+  constructor(message: string, readonly failureKind: 'dns' | 'tls' | 'network' = 'network') {
     super(message)
     this.name = 'NetworkError'
   }
@@ -196,7 +196,10 @@ export class ApiClient {
     } catch (err) {
       if (opts.signal?.aborted) throw new AbortLoopError('请求被中止（Runtime 关闭）')
       const detail = err instanceof Error ? err.message : String(err)
-      throw new NetworkError(`网络请求失败: ${detail}`)
+      const cause = (err as { cause?: { code?: unknown } } | null)?.cause?.code
+      const kind = ['ENOTFOUND', 'EAI_AGAIN'].includes(String(cause)) ? 'dns'
+        : /CERT|TLS|SSL/.test(String(cause)) || ['UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'UNABLE_TO_GET_ISSUER_CERT', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN'].includes(String(cause)) ? 'tls' : 'network'
+      throw new NetworkError(`网络请求失败: ${detail}`, kind)
     }
     let parsed: Record<string, unknown> = {}
     try {
@@ -258,7 +261,7 @@ export class ApiClient {
     const res = (await this.post('/api/local-tools/runtime/pair', req, { auth: false })) as Record<string, unknown>
     const deviceId = res['device_id']
     const deviceToken = res['device_token']
-    if (typeof deviceId !== 'string' || typeof deviceToken !== 'string' || !deviceToken) {
+    if (res.success === false || typeof deviceId !== 'string' || !deviceId || typeof deviceToken !== 'string' || !deviceToken) {
       throw new ApiError(500, '配对响应缺少 device_id/device_token')
     }
     return { device_id: deviceId, device_token: deviceToken }
@@ -267,6 +270,13 @@ export class ApiClient {
   async heartbeat(req: { runtime_version: string; capabilities: Record<string, unknown>; manifest_digest: string }, signal?: AbortSignal): Promise<HeartbeatResponse> {
     const res = (await this.post('/api/local-tools/runtime/heartbeat', req, { signal })) as Record<string, unknown>
     return { selected: Boolean(res['selected']), server_time: res['server_time'] as string | undefined }
+  }
+
+  /** Existing heartbeat with optional metadata omitted: no claim or capability overwrite. */
+  async checkConnection(): Promise<HeartbeatResponse> {
+    const res = await this.post('/api/local-tools/runtime/heartbeat', {}) as Record<string, unknown>
+    if (!res || typeof res !== 'object' || Array.isArray(res) || res.success !== true || typeof res.selected !== 'boolean') throw new ApiError(502, 'Runtime连接验证响应不兼容')
+    return { selected: res.selected }
   }
 
   /** 长轮询领取 invocation（服务端最长 wait 秒；超时返回 null） */

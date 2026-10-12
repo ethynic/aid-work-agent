@@ -49,7 +49,11 @@ test('passive historical Host dispose releases its OS lease without settling or 
   writeFileSync(join(home, 'host-running.json'), marker)
   const a = adapter(); const { host } = await open(t, a, home)
   assert.equal(host.getState().state, 'reconciling')
-  assert.equal((await done(host, await request(host, 'stop', { request_key: 'historical-stop' }))).status, 'reconciling')
+  const stop = await done(host, await request(host, 'stop', { request_key: 'historical-stop' }))
+  assert.equal(stop.status, 'reconciling')
+  assert.equal(stop.code, 0)
+  assert.equal(stop.error, '')
+  assert.equal(stop.message, '旧执行停止事实尚需核对（代码 11）')
   const files = [join(home, 'host-running.json'), join(home, 'management-operations.json')]
   for (const directory of ['journal', 'result-outbox', 'session-tasks']) {
     mkdirSync(join(home, directory)); const file = join(home, directory, 'old-fact.bin'); writeFileSync(file, `untouched historical ${directory}`); files.push(file)
@@ -60,6 +64,15 @@ test('passive historical Host dispose releases its OS lease without settling or 
   for (let i = 0; i < files.length; i++) assert.deepEqual(readFileSync(files[i]), before[i])
   const { acquireHostLease } = await import('../dist/instanceLease.js')
   const lease = await acquireHostLease(home); assert.ok(lease); await lease.release()
+  const reopened = await RuntimeHost.open({ home, version: 'test', supervisor: 'cli', adapter: adapter() })
+  try {
+    const query = { request_id: 'reopened-stop', method: 'operations.get', params: { operation_id: stop.operation_id } }
+    const consumer = createManagementConsumer(); consumer.expect(query)
+    const response = await reopened.request(query)
+    assert.equal(response.code, 0)
+    assert.equal(consumer.receive(response).ignored, undefined)
+    assert.deepEqual(response.result, stop)
+  } finally { await reopened.dispose() }
   assert.equal((await request(host, 'start', { request_key: 'after-close' })).code, 4)
 })
 

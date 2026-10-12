@@ -1,5 +1,5 @@
-import { createHmac, randomBytes, randomUUID } from 'node:crypto'
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto'
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { acquireHostLease, type InstanceLease } from './instanceLease.js'
 
@@ -19,6 +19,8 @@ export class ManagementError extends Error {
 }
 export interface PreparedPluginImport { snapshot_id: string; sha256: string }
 export interface HostAdapter {
+  beforeManagementInit?(): Promise<void>
+  pauseForConnectionRecovery?(): void
   initialize?(): Promise<void> | void
   executionMarker?(instanceId: string): Promise<Record<string, unknown>>
   recoverPreviousExecution?(marker: string): Promise<boolean>
@@ -75,6 +77,16 @@ function atomicWrite(file: string, contents: string): void {
   try { fsyncSync(fd) } finally { closeSync(fd) }
   try { renameSync(temporary, file) } finally { rmSync(temporary, { force: true }) }
 }
+async function readRetiredKeys(file: string, adapter: HostAdapter): Promise<Set<string>> {
+  if (!existsSync(file)) return new Set()
+  try {
+    const metadata = lstatSync(file)
+    if (metadata.isSymbolicLink() || !metadata.isFile() || metadata.size > 4 * 1024 * 1024) throw new Error('invalid')
+    const retired = JSON.parse(await adapter.unprotect(readFileSync(file, 'utf8')))
+    if (!retired || typeof retired !== 'object' || Object.keys(retired).sort().join(',') !== 'keys,version' || retired.version !== 1 || !Array.isArray(retired.keys) || retired.keys.length > 100000 || retired.keys.some((key: unknown) => typeof key !== 'string' || !/^[0-9a-f]{64}$/.test(key))) throw new Error('invalid')
+    return new Set(retired.keys)
+  } catch { throw new ManagementError(11, '已归档操作保护记录无法读取，请使用连接恢复处理') }
+}
 function parseRequest(input: unknown): Request {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new ManagementError(1, '管理请求格式无效')
   const request = input as Record<string, unknown>
@@ -115,6 +127,8 @@ export class RuntimeHost {
   private recovered = false
   private operationsReadable = true
   private recoveryDevice?: DeviceSummary
+  private retiredKeys = new Set<string>()
+  private recoveryRegistered = false
 
   private constructor(private lease: InstanceLease, private adapter: HostAdapter,
     private secret: Buffer, private version: string, private supervisor: 'cli' | 'desktop' | 'runtime_app', private startupFailure?: ManagementError) {
@@ -142,6 +156,8 @@ export class RuntimeHost {
     const recoveryAllowed = options.readOnlyOnFailure === true && options.supervisor === 'runtime_app'
     let failureMessage = '本机执行环境初始化失败，设备和历史记录已保留'
     try {
+      await options.adapter.beforeManagementInit?.()
+      const checkedRetiredKeys = await readRetiredKeys(join(lease.home, 'management-retired-request-keys.bin'), options.adapter)
       let checkedSecret: Buffer | undefined
       const file = join(lease.home, 'management-secret.bin')
       if (recoveryAllowed) {
@@ -175,6 +191,7 @@ export class RuntimeHost {
       }
       failureMessage = '本机设备状态无法读取，设备和历史记录已保留'
       const host = new RuntimeHost(lease, options.adapter, secret, options.version, options.supervisor)
+      host.retiredKeys = checkedRetiredKeys
       if (recoveryAllowed && !options.adapter.device() && Object.values(host.operations).some(entry => ['pair', 'start'].includes(entry.operation.operation) && ['succeeded', 'reconciling'].includes(entry.operation.status))) {
         host.startupFailure = new ManagementError(11, '设备配置无法读取，但旧配对或启动记录仍在；原身份和任务记录已保留。当前为只读管理，可正常退出或卸载')
         host.state = 'blocked'
@@ -243,6 +260,7 @@ export class RuntimeHost {
         default: {
           if (this.startupFailure) throw this.startupFailure
           const key = request.params.request_key!
+          if (this.retiredKeys.has(createHash('sha256').update(key).digest('hex'))) throw new ManagementError(10, '该请求已随旧管理资料归档，请明确发起新的操作')
           const fields = Object.keys(request.params).filter(field => field !== 'request_key').sort().map(field => [field, request.params[field]])
           const digest = createHmac('sha256', this.secret).update(JSON.stringify([request.method, fields])).digest('hex')
           const previous = this.operations[key]
@@ -250,6 +268,7 @@ export class RuntimeHost {
             if (previous.digest !== digest) throw new ManagementError(10, '同一请求键对应不同管理意图')
             result = { ...previous.operation }; break
           }
+          if (this.recoveryRegistered && request.method !== 'stop') throw new ManagementError(11, '重启恢复已登记，已停止接受新执行与身份变更；请正常重启Windows后继续恢复')
           if (request.method.startsWith('plugins.') && !this.adapter.mutatePlugin) throw new ManagementError(3, '第一方插件安装管理尚未就绪')
           const pending = this.accepting.get(key)
           if (pending) {
@@ -283,11 +302,17 @@ export class RuntimeHost {
     this.queue = this.queue.then(async () => {
       try {
         if (this.closed) throw new ManagementError(4, 'Runtime管理连接已关闭')
+        if (this.recoveryRegistered && request.method !== 'stop') throw new ManagementError(11, '重启恢复已登记，此操作未执行；请正常重启Windows后继续恢复')
         await this.mutate(request, preparedImport)
         operation.status = 'succeeded'
       } catch (error) {
         if (this.state === 'reconciling' || this.state === 'blocked') {
-          operation.status = 'reconciling'; operation.message = '执行停止事实尚需核对'
+          operation.status = 'reconciling'
+          // H1 reconciling operations retain code0/error-empty; the original
+          // diagnosis belongs in message so existing consumers and reopen agree.
+          operation.message = error instanceof ManagementError
+            ? `${error.message}（代码 ${error.code}）`
+            : '管理操作未完成，需核对本机状态（代码 11）'
         } else {
           operation.status = 'failed'; operation.code = error instanceof ManagementError ? error.code : 11
           operation.error = error instanceof ManagementError ? error.message : '管理操作未完成，需核对本机状态'
@@ -315,6 +340,7 @@ export class RuntimeHost {
   }
 
   private async mutate(request: Request, preparedImport?: PreparedPluginImport): Promise<void> {
+    if (this.recoveryRegistered && request.method !== 'stop') throw new ManagementError(11, '重启恢复已登记，已停止接受新执行；请正常重启Windows后继续恢复')
     if (request.method.startsWith('plugins.')) {
       if (!['running', 'stopped'].includes(this.state)) throw new ManagementError(11, 'Runtime执行事实尚需核对')
       const restart = this.state === 'running'
@@ -398,5 +424,24 @@ export class RuntimeHost {
     this.listeners.clear()
     await this.lease.release()
     this.adapter.onDisposed?.()
+  }
+
+  /** Direct Main/Host coordination only; deliberately absent from H1 methods. */
+  async inspectConnectionRecovery<T>(inspect: (ownsExecution: boolean) => Promise<T>, pause = false, registrationOnly = false): Promise<T> {
+    if (this.supervisor !== 'runtime_app' || this.closed) throw new ManagementError(4, '连接恢复只支持当前Runtime客户端')
+    // Registration freezes admission and records evidence only. It never needs a
+    // network-dependent drain, and cannot archive files or release ownership.
+    if (registrationOnly) { this.recoveryRegistered = true; this.adapter.pauseForConnectionRecovery?.(); return inspect(this.ownsExecution) }
+    if (this.closing) throw new ManagementError(4, '本机管理操作仍在收尾，请登记重启恢复')
+    this.closing = true
+    try {
+      if (pause) this.adapter.pauseForConnectionRecovery?.()
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        await Promise.race([Promise.allSettled([...this.accepting.values()].map(item => item.promise)).then(() => this.queue),
+          new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new ManagementError(11, '停止执行尚未确认，请登记重启恢复后正常重启Windows')), 10_000) })])
+      } finally { clearTimeout(timer) }
+      return await inspect(this.ownsExecution)
+    } finally { if (!this.closed) this.closing = false }
   }
 }

@@ -11,7 +11,9 @@
 | Phase 5 | 历史待核对状态下退出与卸载 | ✅ 完成（2026-10-12） | 最终包内EXE历史状态卸载维护/退出/锁释放/记录保留通过；独立测试与CR通过 |
 | Phase 6 | 跨版本续装材料轮换与旧客户端告警 | ✅ 完成（2026-10-12） | r5独立10组/最终包启动/CR通过，ZIP交付；真实客户重启续装仍待验收 |
 | Phase 7 | 重装后Host代码11启动诊断 | ✅ 完成（2026-10-12） | 只读工具29例及CR通过；用户拒绝追加资料，转自主复现，不再要求客户运行 |
-| Phase 8 | 自主复现及Host启动健壮性修复 | 🔧 进行中 | 自主matrix验证，移除启动写记录并保留失败时只读管理连接 |
+| Phase 8 | 自主复现及Host启动健壮性修复 | ✅ 完成（2026-10-12） | 37场景及实际包启动/只读退出通过，r6 ZIP交付；旧故障接管退出码缺口保留 |
+| Phase 9 | 连接失效与重新配对恢复路径审计 | ✅ 完成（2026-10-12） | r6九例确定路径；新源码独立8例、CR通过，UI/BOM补漏；完整修复仍待Phase10 |
+| Phase 10 | 完整自助连接修复与发行验收 | ✅ 完成（2026-10-12） | r7诊断/恢复、独立故障验证与实际包启动通过；现场UAC/重启待验收 |
 
 ## 共同检查点与版本登记（2026-10-12）
 
@@ -27,6 +29,8 @@
 - r5增量共同检查点：当前主控仅写NSIS与legacy-upgrade.ps1，独立测试角色写安装器回归；schema仍为本机upgrade-pending v1，严格校验原SID/APPID/home/目录/载荷摘要/RunOnce后归档旧控制目录，恢复首次登录选择再登记新版续装。旧witness及业务记录不变；Main/core/H1/Device/binding无改动。真实UAC与重启续装仍须验收，不把隔离结果当客户安装通过。
 - r6增量共同检查点：主控唯一写core management及Runtime组合层/对应测试，Windows平台角色唯一写共享legacy/dpapi及其定向测试；独立测试/CR只读产品。新增可选仅Runtime_app的启动失败只读管理模式，H1仍用已有blocked/blocked_reason及code11、现有私有生命周期v1，不加wire字段或方法、不重建密钥、不结案或重放历史、不自动换身份。CLI默认抛错兼容；启动时旧ops仅校验/内存投影，实际mutation才写。标准CurrentUser DPAPI方案不变。实施后登记模块/矩阵验证，不再要求客户运行诊断或提供更多日志。
 - r6发行识别：当前主控唯一更新Desktop、Host和core的package/lock版本元数据为UI0.0.3、Host/core0.2.15，依赖版本不升级；避免r1～r5同名0.0.2安装器混用。H1候选0.3和私有生命周期v1仍兼容。共享系统PowerShell配置同步用于LegacyCIM与Job ownerStart，不依赖PATH中的同名程序。
+- Phase9实施前登记：主控唯一写Runtime supervision/config ACK读取、core管理操作错误投影、Runtime页面/Controller及其定向测试；独立角色只读产品。H1方法、字段、operation状态及Device/binding均不变，允许UI发起已有stop检查，Host仍校验当前执行所有权；不引入新身份重置、自动清fence或历史业务结案。BOM读取兼容补齐其他既有消费者，CLI兼容身份门缺口先据实登记。本批源修复不回写已交付r6 ZIP。
+- Phase10实施前共同检查点：主控唯一写Core本地受信恢复检查、Runtime诊断/事务与共用startup gate、Main/Supervisor/preload恢复协调、可选RuntimeManagementPort恢复方法及UI/测试；Windows角色唯一写connectionRecoveryResources及测试。H1候选0.3方法/回复/state不扩字段，Device API/binding不变；新增直属Main↔Host私有connection v1，严格instance/generation/request/action绑定。H3 bridge3增加可选Runtime-only diagnose/reconfigure能力，旧port隐藏新动作。保留原身份仅归档管理secret/ops，业务/session/plugin/fence留执行原位置；新身份整home同父原子归档，不迁移或重放旧device任务。固定同父DPAPI保护事务先fsync，再变更，CLI与Host启动先恢复同一事务，不自动再消费配对码。心跳探针不启动claim，实际Host退出及Main重新取得lease后重验资源。原设备换新ID需Web选定；异常需要明确action。未知业务不伪造ACK，不删除旧证据。实施后必须真实producer/consumer及资源/崩溃/配对失败验证，才发行下一未签名包。
 
 ## 验证与限制
 
@@ -113,4 +117,120 @@ NSIS检测程序在运行时先Prepare；旧v1可直接提示重启登记，不�
 
 最终只读工具真实Windows PowerShell5.1独立29例PASS/exit0，包括密钥缺失/损坏/合法CurrentUserDPAPI、JSON/BOM/字段类型及大小写、prepared_import数组真值、配对事务、oversize未评估与隐私sentinel。各隔离home文件和结构前后完全一致，仅独立输出目录生成JSON；未触碰客户home、真实Desktop、自启或业务。最终CR无P0/P1/P2；BAT仅静态检查，PS5.1实际执行/解析/BOM及BAT ASCII验证通过。
 
-工具ZIP `clients/release/Runtime-启动检查-20261012.zip`，8741字节、6文件，CRC及全部文件复读一致；SHA256 `fe5e34f3d677837760f16f6b31ff5c59ddeb5d8c63f56dc9e8d121161c23641d`。PS SHA256 `16a17d57fb6f6456fd87fe37d0a4f54487c85715e597421ef682cb16c1277223`。包含英文BAT/PS、中文TXT说明、独立验证与摘要清单。本轮只交付诊断，不宣称客户启动已恢复，等待新的安全摘要；不推荐r5代替Host根因修复，未提交或部署。
+工具ZIP `clients/release/Runtime-启动检查-20261012.zip`，8741字节、6文件，CRC及全部文件复读一致；SHA256 `fe5e34f3d677837760f16f6b31ff5c59ddeb5d8c63f56dc9e8d121161c23641d`。PS SHA256 `16a17d57fb6f6456fd87fe37d0a4f54487c85715e597421ef682cb16c1277223`。包含英文BAT/PS、中文TXT说明、独立验证与摘要清单。此为Phase7历史记录；用户明确拒绝客户继续协助，Phase8改为完全自主复现，不再等待或请求新摘要。
+
+## r6 自主复现与修复（2026-10-12）
+
+在隔离目录运行实际旧包，23场景独立复现：只读operations文件会因构造器无条件persist而使管理握手代码11；坏管理密钥、操作记录或配对事务也导致管理面不可打开。PATH中的同名PowerShell可使旧进程检查失败。单纯缺失/坏JSON配置进入未配对，不能归因该通用错误；PS7模块污染测试未复现，不将其说成客户根因。
+
+r6取消启动时持久化旧操作，仅校验与内存投影；实际mutation仍要求合法密钥与可写账本。读取配置/操作兼容单个UTF8 BOM，严格校验字段，拒绝额外载荷和非法身份类型。CurrentUser DPAPI仍使用原格式，解保护兼容原ASCII折行；DPAPI、LegacyCIM、Job ownerStart共用固定绝对系统PowerShell及受控进程环境，不依赖PATH中的替代程序。
+
+Runtime_app在代码11时可保留管理lease、H1只读状态和现有私有退出协议；既有文件/密钥/marker/业务事实不清空，CLI仍保持严格失败。初始化前设置显式home作用域，防止读取默认设备；无配置但有旧pair/start的succeeded/running/reconciling记录时保持原身份待核对。只读管理不是自动重建身份，也不宣称云端已连通。
+
+主控core management/startup/DPAPI 40例、Runtime lifecycle/host/process cleanup 17例、Desktop supervisor/startup/update 25例通过，相关TypeScript检查通过。独立新版37场景包括真实managed-entry、实际H1消费者、坏密钥/记录、BOM、隔离home、CLI严格兼容及只读退出。正常有效配对的本机假云端start/heartbeat/模拟MCP调用/stop/exit，实际Windows Job回收及lease释放通过；原18条历史保留。真实BOSS账号/客户云端未调用。
+
+独立最终CR无剩余P0/P1/P2。UI0.0.3、Host/core0.2.15，依赖未升级；Runtime源码已由外部操作提交为`1d67fa42`，本会话未执行新增提交或部署。最终12个包内模块与独立验证字节匹配；实际EXE smoke及坏密钥下历史只读维护退出均PASS/exit0，5个自有子进程退出、lease释放，旧secret/ops/业务事实与真实Run原样。NSIS/PS摘要与r5十组证据一致，明确复用。
+
+旧r5管理失败接管探针仅部分通过：实际Section日志为Prepare2/NO_LEGACY→maintenance_sent→Restore0→section_completed；Main退出码两次有界等待未确认，自有路径进程最终核对0。测试以同SID隔离ExecWait代替ExecShellAsUser，真实UAC/Explorer传递未测，不将Section完成日志当完整覆盖安装或客户恢复保证。客户精确资料故障、原身份恢复与真实云端连接仍未证明，不再向客户索取材料。源开发及隔离发行验证完成，与现场恢复结论区分。
+
+## r6 最终交付
+
+- ZIP：`clients/release/AID-Work-Runtime-UI-BOSS-20261012-trial-r6.zip`，131032987字节、17文件；CRC及全部文件SHA256复读通过。
+- ZIP SHA256：`81a5d5a0fa42997de715eeb1f9a450c192f1cb25cdf40d1f3dfc024bd8dc3e38`。
+- 安装器：`AID-Work-Runtime-0.0.3-win-x64-acceptance-unsigned.exe`，126285801字节，SHA256 `6305e8f8f87714338776716e946b7b834e877dfbb698e4aacfb06ed46c1b1263`；Windows NotSigned。
+- Host0.2.15 TGZ SHA256 `e29a4ae62b1ae38dc41cab924170c2c0b4f8c92155e5b7055e1768a4bedf3c4d`；BOSS0.3.1保持22工具、签名物理输入依赖及原发布者根。Host/Node已内嵌，不要求客户安装TGZ/npm。
+- 包含HTML/MD配置迁移说明、版本与文件摘要、独立37场景/实际包/CR、旧包复现与旧r5部分接管报告；旧r1～r5交付ZIP保留。未部署服务器，交付说明更新未新增提交。
+
+## Phase9：连接失效与恢复路径的确定行为
+
+本节来自客户端/服务端代码及隔离验证，描述当前实现，不要求客户尝试命令、删文件或补日志。r6的37场景证明管理可读和退出，不证明下列资料损坏有自助恢复；此前将这两者混称“恢复”的口径撤回。
+
+### 三种不同操作与设备名
+
+- 页面顶部按钮调用`RuntimeController.connect`，仅建立本机Main→Host管理连接、describe/getState/plugins.list；不会调用start、云端心跳、续期token或pair。本次源码改名「重新连接管理服务」。
+- 原设备网络重连由运行中的PollLoop用原server/device token重试，退避1～30秒。手动已停止/升级保留停止意图时需正常启动；离线本身不要求换设备。
+- pair使用服务地址、一次性码和名称。`src/local_tools/pairing.py`每次调用`repository.create_device`，`repository.py`执行INSERT，不按名字或machine_fingerprint续用旧device_id。名称可沿用，但新pair创建新编号，必须在云端选定新设备；原任务不会搬过去。旧凭据缺失/被撤销没有原device token续期接口，不能称作“改回名字恢复旧连接”。
+
+### 状态矩阵：当前有什么出口
+
+| 触发条件 | 当前确定行为 | 已实现的恢复路径 | 缺口/本批处置 |
+|---|---|---|---|
+| 同Windows用户、同UI profile/home，config与credentials有效 | 安装器保留身份文件，Host显示原device；未开始时offline | 正常启动后以原token心跳；升级运行意图或登录自启按既有选择恢复 | 正常路径不要求重新pair |
+| 普通网络/超时/HTTP非401错误且执行循环还在运行 | heartbeat显示offline并有界退避重试 | 网络恢复后自动以原身份重连 | 管理重连按钮不代替此过程；非401拒绝也不自动判断为token有效 |
+| config结构合法但服务地址错误、TLS/DNS/接口404或403持续失败 | 非401仍投影offline，循环可能持续重试 | 正确的原服务网络/接口恢复后才可同身份连接 | UI目前没有保留原device/token的服务地址修复动作；只能输入新pair不能算原连接修复 |
+| runtime已手动停止，管理状态stopped/offline | 没有heartbeat循环 | 点击已有start；不重新pair | 属执行停止，不应指引用户更名 |
+| credentials缺失/无法解密，config仍有效 | start报9；已初始化资源清理成功后回stopped | 无旧fence/未结案事实时可用新码pair；会创建新device | 同用户DPAPI环境需合法，不能替用户恢复不存在的旧token |
+| heartbeat/claim收到401 | connection=revoked；循环shutdown；当前owned执行进入reconciling | 正常stop成功回stopped后，允许条件满足时新pair | 旧UI禁用reconciling stop，本批补回；不保证存在历史未结案时也能pair |
+| 待核对属于当前owned执行，stop本身能成功 | core本来允许stop/drain，清当前marker回stopped | 用户发起已有stop检查 | UI/Controller过去受历史operation/reconciling锁住；本批修复，不改历史op成功状态 |
+| 旧最后operation为reconciling，新Host实际已经stopped | backend按当前state/身份事实校验新请求 | 新明确start/stop/pair，仍按Host门禁 | 原Controller重连保留旧operation造成永久UI锁，本批移除此错误门 |
+| 仅旧running marker、当前Host未owned | 状态reconciling，stop返回11 | 下次Host open经ProcessSupervision核验同boot Job/同session或真实boot变化后归档marker | 资源恢复不等于业务结案；下面的fence仍存在 |
+| config缺失/坏JSON/不可读，且旧pair/start succeeded或reconciling（running投影） | r6 Runtime_app直接blocked只读，拒绝所有mutation | 目前只有退出；再次管理重连、重启或重装仍读同一条件 | 无自助修复入口。已确认产品死路，r6不能用作此类配对恢复方案 |
+| management-secret缺失但operations存在、secret解保护/格式错，operations坏schema | r6管理只读；坏ops不伪装为空历史 | 管理查看/退出 | 无管理资料修复入口；密钥与设备token是两个文件，不能把管理坏密钥当作服务器token撤销 |
+| pairing.pending合法事务且CurrentUser解保护成功 | initialize恢复写credentials/config后删除pending | 原事务自动完成，不再次消费码 | 不会自动提交另一台设备 |
+| pairing.pending坏JSON/结构/密文/写入失败 | initialize报11只读；原事务保留 | 目前只读/退出 | 没有安全撤销/恢复事务入口，重新pair也被阻断 |
+| identity-reconciliation.bin存在 | canReplaceIdentity第一项即拒绝；enable/disable/uninstall也拒绝，import例外 | 原config/token正常时允许同device start | 全部非测试源码只有写入，没有清除/归档/核对完成入口。即使其余proof全合法仍拒绝pair；重启/卸载重装不解除 |
+| result-outbox非空 | 拒绝pair/unpair | 原身份start重投原结果；2xx ACK先写原证明再删除条目 | 不重放原业务动作；5次启动尝试未成功条目仍在 |
+| outbox gave_up/坏JSON/临时残余；原token已失效 | 仍非空阻pair；gave_up跳过、坏条目保留 | 当前无自助解决入口 | “恢复网络再试”不能解决确定性4xx拒绝或原token已失效 |
+| journal有记录却无合法原ACK proof，或effect=unknown | 拒绝pair；不能推断为空outbox即成功 | 尚有原待传结果时原身份ACK可生成合法proof | 旧无proof或已ACK unknown没有追补/人工确认入口；仅重启不解除 |
+| session任务为completed/stopped且全seq ACK、控制epoch合法 | engine drain写CurrentUser保护proof | 原身份会话引擎正常恢复/停止后可生成证明 | 已实现正向路径；原fence仍会先拒绝pair |
+| session旧终态无proof/未ACK/blocked/坏目录 | 拒绝pair，即使当前sessionTasks未启用 | 启用原身份引擎且满足终态/ACK条件才有正向路径 | 不满足条件时无显式对账/归档入口，不能叫用户重复配对 |
+| 相同home的另一Host仍持有lease | open报4，不会抢占 | 原实例正常退出后新管理连接；X仅隐藏托盘 | 管理重连不能强关另一实例；不能凭屏幕关闭推断进程退出 |
+| 旧CLI同用户进程仍在、插件目录/原生资源/系统保护初始化不可用 | Host初始化拒绝或进入只读，具体分支由既有错误码/阶段消息确定 | 原实例正常停止、可信安装资源和CurrentUser保护环境正常后重开管理 | 尚无应用内修复资源/ACL/系统DPAPI的动作，不能笼统用新配对覆盖本机故障 |
+| 旧CLI→acceptance UI、不同Windows用户或不同profile | 新home不自动读取原身份，跨用户DPAPI不能解密原密文 | 按既有隔离迁移方案新pair | 是不同身份目录，不能承诺保留原连接，不能用设备名称判断同一设备 |
+| 本实例runFailure非空、stop已释放部分资源后仍抛11 | owned执行停留reconciling；连续stop仍拒绝 | 当前只有Windows资源恢复流程，缺正常本实例故障退出闭环 | 不在本次局部UI修复中冒称已解决 |
+
+### 已确认缺陷的源码修复与剩余恢复工程
+
+本次补齐ProcessSupervision.marker、recordOperationAck的单UTF8 BOM读取。旧r6仅loadConfig兼容，Windows marker实际JSON读取仍失败；原ACK取不到身份会生成resolved=false。测试区分单BOM与doubleBOM/unknown，不能把未知业务变已完成。
+
+管理operation在reconciling时经message保留原固定错误及编号，不再用统一“执行停止事实”遮掉具体原因；保持已有H1规定的code0/error空，真实消费者与退出重开共同验证。UI终态历史op不再成为永久操作锁；可发起新明确stop或当前状态允许的动作，仍由Host当前执行所有权/身份门决定是否放行。运行中/接单中、连接不确定或状态未刷新仍保持原限制，未自动重放旧请求。该源码修复不覆盖已发r6 ZIP、不新增服务器部署或提交。
+
+完整自助恢复尚未实施，应作为下一阶段独立工程：先输出机器可判定的阻断类别和允许动作；把管理控制资料修复与设备身份重建分开。原身份能恢复则验证原server/device/token；原身份不能恢复时提供明确确认的新设备配置流程，保存原证据、证明旧执行资源停止、旧任务固定旧device且不重放。只有历史缺证明时应提供有授权与审计的核对/归档出口，不能由installer清记录、凭空生成业务ACK，也不能把永久fence当恢复机制。需要同时更新并验证Host与UI消费者，不能再只验证启动/退出后交客户。
+
+本批主控core管理/ACK读取20例、真实Windows native+DPAPI BOM marker1例、前端Page/Controller28例通过；core及Runtime TypeScript检查通过，Web与最终Desktop生产构建通过。审查曾发现reconciling非零code/error违反H1的P1，以及importPackage历史门和网络重试文案P2，均已修正并最终复核无P0/P1/P2。独立r6固定旧包九例恢复矩阵明确验证正常路径与持续死路，报告位于`clients/agent-desktop/build/runtime-recovery-closure-20261012/r6-recovery-path-independent-validation.json`，不将其算本次新源码的复测。新源码闭环独立验证另登记，不重新发行r6，不部署、不提交。
+
+最终新源码独立8场景通过，报告`clients/agent-desktop/build/runtime-recovery-closure-20261012/directional-fix-independent-validation.json`，5个compiled/native模块与隔离测试快照摘要一致。后端5场景：真实Windows/DPAPI BOM config start→heartbeat→stop、BOM原ACK证明、owned reconciling stop/pair及H1重开、真实FakeCloud401撤销后stop/pair、passive stop仍拒绝并保留原事实。前端3场景：实际H1历史回复消费后的新start、验签导入入口选择、新stop及仍由server guard拒绝pair。均exit0。未实际安装新补丁/新发行，也未宣称缺身份/fence可自助修复；像素布局未另验，DOM交互与构建已验证。
+
+CLI在config缺失+旧pair/start记录时没有同等Runtime_app只读身份门，属于共同入口兼容缺口；不得建议客户借CLI绕过UI。本节记录当前事实，未改变CLI行为或冒称其已修复。
+
+## Phase10 最终交付与服务端状态复核（2026-10-12）
+
+当前交付r7：UI0.0.4、Host/core0.2.16、BOSS0.3.1、Node22.23.3 win-x64 ABI127，Windows未签名验收包。H1候选0.3、Device/binding不变；H3 bridge3增加Runtime-only可选恢复端口，直属connection v1严格绑定instance/request/generation，普通Desktop不暴露。
+
+- 固定原配置/凭据的真实heartbeat `{}`探针，严格success=true/selected boolean，不启动claim、不改能力。DNS/TLS链/网络/401/403/404/5xx/坏shape分类给步骤；selected=false提示网页选设备，心跳不冒充远端ID匹配。
+- 保留原配对仅归档管理secret/ops/retired，业务/session/plugin/fence保持作用。marker留到completed受保护intent、原identity/anchor及资源独立核验成功，再交既有Core归档；known retired keys不截断，缺文件由completed intent恢复，坏文件在initializer前只读。
+- 新设备恢复先实际退出旧Host并重新取得同home OS lease、二次资源复核，再同父整home原子归档，新epoch不迁移旧业务。CurrentUser保护sidecar/fsync/anchor让CLI与Host续办同一次事务，不自动重用OTP，不伪造ACK。
+- 网络drain卡住仍可仅登记重启证明，登记后拒绝排队/新start、pair和插件变化，保留stop。仅清理同home/generation/boot/session已登记Job；未知资源正常Windows重启。Main恢复与退出/维护/选包互斥，迟到回执不清停止意图；第一屏错误可跳到步骤，确认与OTP即时清除。
+- 安装器30秒有界等待；PrepareDeferred仅登记同产品/SID/scope/hash的受保护续装控制、备份Run并临时关闭本产品旧自启，不创建resource witness或ACK。重启后续装，未知资源仍需客户端独立核验；不承诺所有情况只重启一次，UAC原用户/HKCU归属不变。
+- Windows Electron appData忽略APPDATA覆盖；显式SMOKE=1且SMOKE_USER_DATA时才采用隔离目录，正常路径不变。实际包在新临时home启动，epoch+mgsecret生成，Main退出0，Host lease释放，真实Run/RunOnce不变。
+
+### 服务端标记的精确边界
+
+| 状态 | 心跳 / 新配对影响 | 处理 |
+|---|---|---|
+| device非active、旧token无效/已撤销 | active token_hash鉴权返回401；重装不恢复旧token | 新有效码建立新active设备 |
+| selected=false | 不拒心跳，业务selected/online/catalog门受限 | 网页选定本次配对设备，名称相同不代表原编号 |
+| 配对码过期/已用/新码作废旧码 | 五分钟、单次原子消费 | 使用最新码，不自动重复不确定请求 |
+| invocation unknown、会话blocked、binding automation_blocked | 对应业务准入阻断，不在心跳鉴权路径 | 按业务恢复流程处理，重装不清业务事实 |
+| 机器指纹/名称 | create_device无旧撤销封禁查询；DB仅token_hash唯一 | 可新建active设备，不自动转移原任务/binding |
+
+已核对API、pairing、repository、device_policy、DB初始化SQL及会话/绑定调用链；未核验或修改客户实际数据库状态，未部署服务器。
+
+### 验证证据与限制
+
+独立HTTP/TLS/伪造IPC/归档结果、Main并发与smoke目录、UI确认/入口验证通过；20坏home及11真实子进程rename/crash/多轮tombstone有可核验原实现字节相等与依赖SHA复用证据。资源作者自身22单元测试、Root自测未冒充独立角色。安装器9行为场景/8测试覆盖登记、重复、轮换、Restore及失败回滚，原业务/resource witness字节不变；真实builder另21例通过。
+
+Root core23、资源/BOM23、Desktop生命周期25、Frontend基线58及最终独立UI8、schema7测试/63fixture、web/desktop build通过。CR无P0/P1/P2，绑定28源码SHA，8个换行等价例外明确登记。最终实际EXE/asar与独立编译、installer/manifest匹配；临时home、退出与lease、真实Run/RunOnce验证通过。
+
+报告在 `clients/agent-desktop/build/runtime-recovery-phase10-20261012/`，并收入ZIP。真实UAC、客户重启、RunOnce登录与BOSS业务仍属现场验收，不把模拟boot或隔离测试当客户已连接。当前Runtime修复未提交，外部无关data-analysis提交改变HEAD已登记。
+
+最终ZIP：`clients/release/AID-Work-Runtime-UI-BOSS-20261012-trial-r7.zip`，131048505字节、16文件，SHA256 `370402410e04efcabe82a31d6295cbb4e117d0463c3fef27871742e4012498d9`。安装器SHA256 `6c85a82cf0195adf133967464ae6dab824a085b399154db3714358aba457f3b1`。
+
+
+## r7 提交前 agent2 实际状态复核（2026-10-12 23:37，Asia/Shanghai）
+
+用户授权只读查询 agent2，已通过 SSH 检查实际业务库、观测库及 Nginx 访问日志；未部署或修改服务器数据。给定 trace 与用户、租户和设备记录一致。笔记本与办公电脑均为 active、未撤销；笔记本为 selected，最后心跳 13:33:07，办公电脑最后心跳 10:26:31。该用户未结束 invocation 为零、session_tasks 与 BOSS conversation binding 均无记录；办公电脑三条历史 unknown 已有 finished_at，不构成笔记本连接锁。
+
+13:07 的 boss_goto trace 返回 DEVICE_UNAVAILABLE，明确原因是选定设备未上报 BOSS 能力；当前笔记本 providers 和 provider_manifests 都为空。13:24 心跳曾出现短暂 502，随后恢复 200 至 13:33；之后没有新成功配对或设备心跳。18:09 客户诊断为 config-unreadable、deviceId/server 为空，与本地管理初始化失败一致；不能据此认定具体 DPAPI 失败原因。当前实际证据不支持服务端撤销或永久锁定，不需清除服务端标记。
+
+提交核对：fetch 后当前 master 与 origin/master 一致；当前源码摘要与独立测试、CR记录一致，实际安装包启动/退出验证可复用，r7 ZIP 摘要保持不变。仅提交本次 Runtime 修复、测试、契约、版本及发行说明；无关 plans/session_replay 文件保留，不暂存。

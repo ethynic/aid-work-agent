@@ -2,6 +2,8 @@
 import { randomUUID } from 'node:crypto'
 import { ManagementError, type RuntimeHost, type RuntimePlatform, type RuntimePlatformResponse } from '@aid/local-tool-host-core'
 import { openRuntimeHost } from './runtimeHost.js'
+import { runtimeHomeDir } from './config.js'
+import { inspectConnectionRecovery, type RecoveryAction } from './connectionRecoveryInspection.js'
 
 export interface ManagementIpc {
   send(message: Record<string, unknown>, delivered?: () => void): void
@@ -19,6 +21,18 @@ export function attachManagementIpc(host: RuntimeHost, channel: ManagementIpc): 
   const unsubscribe = host.observe(send)
   channel.onMessage(message => {
     const frame = message as Record<string, unknown> | null
+    if (frame?.kind === 'runtime_connection_request') {
+      if (frame.version !== 1 || Object.keys(frame).sort().join(',') !== 'action,instance_id,kind,request_id,version'
+        || frame.instance_id !== host.instanceId || typeof frame.request_id !== 'string' || !frame.request_id || frame.request_id.length > 200
+        || typeof frame.action !== 'string' || !['diagnose', 'prepare_preserve', 'prepare_new', 'prepare_reboot'].includes(frame.action) || disconnected || closing) return
+      closing = true
+      void inspectConnectionRecovery(host, runtimeHomeDir(), process.execPath, frame.action as RecoveryAction).then(result => {
+        send({ kind: 'runtime_connection_response', version: 1, request_id: frame.request_id, instance_id: host.instanceId, method: 'runtime.connection', code: 0, error: '', result })
+      }).catch(() => {
+        send({ kind: 'runtime_connection_response', version: 1, request_id: frame.request_id, instance_id: host.instanceId, method: 'runtime.connection', code: 11, error: '连接检查未完成，请停止当前执行或按系统提示修复后重试', result: null })
+      }).finally(() => { closing = false })
+      return
+    }
     if (frame?.kind === 'runtime_shutdown_request') {
       if (!frame || Object.keys(frame).sort().join(',') !== 'instance_id,kind,request_id'
         || frame.instance_id !== host.instanceId || typeof frame.request_id !== 'string' || !frame.request_id || frame.request_id.length > 200) return

@@ -1,0 +1,6 @@
+[
+  {"name":"connection_verified_not_selected","schema":"connection-recovery.schema.json","valid":true,"value":{"version":1,"category":"DEVICE_NOT_SELECTED","summary":"心跳成功但未选定设备","steps":["在网页选定本次配对的设备"],"service_verified":true,"can_preserve":true,"can_reconfigure":true,"requires_reboot":false}},
+  {"name":"connection_rejects_credential_field","schema":"connection-recovery.schema.json","valid":false,"value":{"version":1,"category":"CONFIG_MISSING","summary":"重新配置","steps":[],"service_verified":false,"can_preserve":false,"can_reconfigure":true,"requires_reboot":false,"token":"fixture-only-never-allowed"}},
+  {"name":"connection_requires_action_steps","schema":"connection-recovery.schema.json","valid":false,"value":{"version":1,"category":"CONFIG_MISSING","summary":"重新配置","service_verified":false,"can_preserve":false,"can_reconfigure":true,"requires_reboot":false}},
+  {"name":"connection_rejects_raw_category","schema":"connection-recovery.schema.json","valid":false,"value":{"version":1,"category":"raw private path","summary":"重新配置","steps":[],"service_verified":false,"can_preserve":false,"can_reconfigure":true,"requires_reboot":false}}
+]

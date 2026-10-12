@@ -11,6 +11,7 @@ import { DesktopUpdater, type UpdateAdapter } from './desktopUpdater.js'
 import { resolveUpdateConfiguration } from './updateConfiguration.js'
 import { resolveProductConfiguration } from './productConfiguration.js'
 import { RuntimeSupervisor } from './runtimeSupervisor.js'
+import { RuntimeConnectionRecovery } from './runtimeConnectionRecovery.js'
 import { RuntimeSelections } from './runtimeSelection.js'
 import { RuntimeStartup, runtimeLoginLaunch, resumeRuntimeAtLogin } from './runtimeStartup.js'
 import { RuntimeUpdateIntent, runtimeUpdateExit, RUNTIME_UPDATE_EXIT_ARGUMENT, shouldResumeRuntime } from './runtimeUpdate.js'
@@ -53,12 +54,16 @@ const dirname = path.dirname(fileURLToPath(import.meta.url))
 const rendererRoot = path.resolve(dirname, '../renderer')
 const preloadPath = path.resolve(dirname, 'preload.cjs')
 const runtimeResources = app.isPackaged ? process.resourcesPath : path.resolve(dirname, '../../build/runtime-resources')
-const product = resolveProductConfiguration({ resourcesPath: runtimeResources, isPackaged: app.isPackaged, appDataPath: app.getPath('appData') })
+const smokeMode = process.env.AID_AGENT_DESKTOP_SMOKE === '1'
+// Electron appData ignores APPDATA overrides on Windows. Explicit smoke mode
+// must isolate Runtime identity and Host facts as well as renderer userData.
+const productAppData = smokeMode && process.env.AID_AGENT_DESKTOP_SMOKE_USER_DATA
+  ? path.resolve(process.env.AID_AGENT_DESKTOP_SMOKE_USER_DATA) : app.getPath('appData')
+const product = resolveProductConfiguration({ resourcesPath: runtimeResources, isPackaged: app.isPackaged, appDataPath: productAppData })
 const legacyUserDataPath = app.getPath('userData')
 app.setName(product.productName)
 app.setPath('userData', product.userDataPath ?? legacyUserDataPath)
 if (process.platform === 'win32') app.setAppUserModelId(product.appId)
-const smokeMode = process.env.AID_AGENT_DESKTOP_SMOKE === '1'
 const loginLaunch = runtimeLoginLaunch({ kind: product.kind, packaged: app.isPackaged, platform: process.platform, smoke: smokeMode, argv: process.argv })
 const maintenanceLaunch = runtimeUpdateExit({ kind: product.kind, packaged: app.isPackaged, platform: process.platform, smoke: smokeMode, argv: process.argv })
 let updateRequested = false
@@ -83,6 +88,7 @@ let credentialStore: EncryptedCredentialStore | null = null
 let desktopUpdater: DesktopUpdater | null = null
 let pendingDeepLink: string | null = null
 let runtimeSupervisor: RuntimeSupervisor | null = null
+let runtimeConnectionRecovery: RuntimeConnectionRecovery | null = null
 let runtimeSelections: RuntimeSelections | null = null
 let runtimeTray: Tray | null = null
 let quitting = false
@@ -159,15 +165,27 @@ function registerDesktopIpc(): void {
   ipcMain.handle('desktop:runtime:request', async (event, request: unknown) => {
     assertTrustedSender(event)
     if (!runtimeSupervisor) throw new Error('当前产品没有本机Runtime管理能力')
+    if (runtimeConnectionRecovery?.busy) throw new Error('连接恢复正在进行，请等待处理完成')
     const reply = await runtimeSupervisor.request(request)
-    if (!maintenanceRequested && reply.code === 0 && ['start', 'stop'].includes((request as { method: string }).method)) {
+    if (!maintenanceRequested && !runtimeConnectionRecovery?.busy && reply.code === 0 && ['start', 'stop'].includes((request as { method: string }).method)) {
       // A new explicit user intent supersedes a cancelled upgrade's resume intent.
       try { await updateIntent?.clear() } catch { logLifecycle('runtime-update-intent-clear-failed') }
     }
     return reply
   })
+  ipcMain.handle('desktop:runtime:diagnose-connection', async event => {
+    assertTrustedSender(event)
+    if (product.kind !== 'runtime' || !runtimeConnectionRecovery || maintenanceRequested || exitPending) throw new Error('当前状态不能检查连接，请等待退出或更新完成')
+    return runtimeConnectionRecovery.diagnose()
+  })
+  ipcMain.handle('desktop:runtime:reconfigure-connection', async (event, input: unknown) => {
+    assertTrustedSender(event)
+    if (product.kind !== 'runtime' || !runtimeConnectionRecovery || maintenanceRequested || exitPending) throw new Error('当前状态不能恢复连接，请等待退出或更新完成')
+    return runtimeConnectionRecovery.reconfigure(input)
+  })
   ipcMain.handle('desktop:runtime:choose-package', async (event, input: unknown) => {
     assertTrustedSender(event)
+    if (runtimeConnectionRecovery?.busy || maintenanceRequested || exitPending) throw new Error('连接恢复或退出正在进行，请等待处理完成')
     if (!runtimeSelections || !runtimeSupervisor?.instanceId || !input || typeof input !== 'object' || Array.isArray(input)) throw new Error('选包请求无效')
     const request = input as Record<string, unknown>
     if (Object.keys(request).sort().join(',') !== 'instance_id,request_key' || request.instance_id !== runtimeSupervisor.instanceId || typeof request.request_key !== 'string' || !request.request_key || request.request_key.length > 200) throw new Error('选包实例或请求键无效')
@@ -176,7 +194,7 @@ function registerDesktopIpc(): void {
     const selection = await dialog.showOpenDialog(window, { title: '选择第一方离线插件包', properties: ['openFile'], filters: [{ name: '第一方离线插件包', extensions: ['zip'] }] })
     if (selection.canceled || !selection.filePaths[0]) return null
     assertTrustedSender(event)
-    if (runtimeSupervisor.instanceId !== instance || window.isDestroyed()) throw new Error('Runtime连接已变更，请重新选择')
+    if (runtimeConnectionRecovery?.busy || runtimeSupervisor.instanceId !== instance || window.isDestroyed()) throw new Error('Runtime连接已变更，请重新选择')
     return runtimeSelections.choose(selection.filePaths[0], event.sender.id, instance, request.request_key)
   })
   ipcMain.handle('desktop:startup:get-state', (event) => {
@@ -392,6 +410,7 @@ if (!hasSingleInstanceLock) {
   if (!smokeMode && product.kind === 'desktop') app.setAsDefaultProtocolClient(DESKTOP_SCHEME)
   app.on('second-instance', (_event, argv) => {
     if (runtimeUpdateExit({ kind: product.kind, packaged: app.isPackaged, platform: process.platform, smoke: smokeMode, argv })) {
+      if (runtimeConnectionRecovery?.busy) { if (mainWindow) revealWindow(mainWindow); return }
       maintenanceRequested = true
       if (mainWindow) revealWindow(mainWindow)
       updateRequested = argv.includes(RUNTIME_UPDATE_EXIT_ARGUMENT)
@@ -436,6 +455,9 @@ if (!hasSingleInstanceLock) {
           if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('desktop:runtime:disconnected')
         },
       })
+      if (product.kind === 'runtime') runtimeConnectionRecovery = new RuntimeConnectionRecovery({ home: product.runtimeHome,
+        node: product.nodeExecutable, hostEntry: product.hostEntry, supervisor: runtimeSupervisor,
+        onBeforeRecovery: async () => { await runtimeSelections?.invalidate(); await updateIntent?.save(false) } })
     }
     registerDesktopIpc()
     await registerRendererProtocol()
@@ -459,15 +481,15 @@ if (!hasSingleInstanceLock) {
       if (runtimeSupervisor) {
         void (async () => {
           const intent = await updateIntent?.read()
-          if (maintenanceRequested) return
+          if (maintenanceRequested || runtimeConnectionRecovery?.busy) return
           const reply = await runtimeSupervisor!.request({ request_id: randomUUID(), method: 'getState', params: {} })
           if (reply.code !== 0) throw new Error('RuntimeStartupStateRejected')
           const recovered = runtimeSupervisor!.recoveredAfterInterruption
-          if (!maintenanceRequested && shouldResumeRuntime({ intent, recovered, login: loginLaunch })) await resumeRuntimeAtLogin(value => {
-            if (maintenanceRequested) throw new Error('RuntimeMaintenanceInProgress')
+          if (!maintenanceRequested && !runtimeConnectionRecovery?.busy && shouldResumeRuntime({ intent, recovered, login: loginLaunch })) await resumeRuntimeAtLogin(value => {
+            if (maintenanceRequested || runtimeConnectionRecovery?.busy) throw new Error('RuntimeMaintenanceInProgress')
             return runtimeSupervisor!.request(value)
           })
-          if (intent !== undefined && !maintenanceRequested) await updateIntent?.clear()
+          if (intent !== undefined && !maintenanceRequested && !runtimeConnectionRecovery?.busy) await updateIntent?.clear()
         })().catch(() => {
           logLifecycle('runtime-login-resume-failed')
           if (mainWindow) revealWindow(mainWindow)
@@ -499,11 +521,12 @@ if (!hasSingleInstanceLock) {
   app.on('before-quit', (event) => {
     desktopUpdater?.stop()
     if (!runtimeSupervisor || exitAllowed) { runtimeTray?.destroy(); return }
+    if (runtimeConnectionRecovery?.busy) { event.preventDefault(); if (mainWindow) revealWindow(mainWindow); return }
     event.preventDefault(); quitting = true
     if (exitPending) return
     exitPending = true
     void (async () => {
-      await runtimeSupervisor!.stopAndExit(maintenanceRequested ? 600_000 : undefined, maintenanceRequested || updateIntent ? async state => {
+      await runtimeSupervisor!.stopAndExit(undefined, maintenanceRequested || updateIntent ? async state => {
         if (updateRequested && updateIntent && ['running', 'starting', 'stopped', 'draining'].includes(String(state.state))) {
           if (await updateIntent.read() === undefined) await updateIntent.save(['running', 'starting'].includes(String(state.state)))
         } else if (!updateRequested) await updateIntent?.clear()
@@ -516,7 +539,7 @@ if (!hasSingleInstanceLock) {
       const action = maintenanceRequested ? (updateRequested ? '升级' : '卸载') : '退出'
       maintenanceRequested = false; updateRequested = false
       if (mainWindow) revealWindow(mainWindow)
-      await dialog.showMessageBox({ type: 'warning', title: '执行仍需收尾', message: `当前任务仍在收尾，${action}暂未完成。程序和任务记录保留，请恢复网络后重试。历史记录待核对不会阻止退出客户端。` })
+      await dialog.showMessageBox({ type: 'warning', title: '执行仍需收尾', message: `当前任务仍在收尾，${action}暂未完成。程序和任务记录保留。请在“连接检查与恢复”中检查并恢复网络；停止仍失败时点击“登记重启恢复”，登记成功后正常重启Windows，再继续恢复或安装。历史记录待核对不会阻止退出客户端。` })
     }).finally(() => { exitPending = false })
   })
 }

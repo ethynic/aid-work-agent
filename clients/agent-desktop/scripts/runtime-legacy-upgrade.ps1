@@ -121,7 +121,7 @@ $registryTouched = $false; $newWitness = $false; $newState = $false; $newInstall
 $archiveCommitted = $false; $archiveRollbackRun = $null; $archiveRollbackOnce = $null
 $stateFile = $null; $witnessFile = $null; $pendingInstaller = $null
 try {
-    Require (@('Prepare', 'Restore', 'Cancel') -ccontains $Mode) 'INVALID_MODE'
+    Require (@('Prepare', 'PrepareDeferred', 'Restore', 'Cancel') -ccontains $Mode) 'INVALID_MODE'
     $identities = @{
         'cn.aidingyi.agent.runtime' = @{ home = 'aidwork-tool-runtime'; userData = 'aidwork-runtime-app' }
         'cn.aidingyi.agent.runtime.acceptance' = @{ home = 'aidwork-tool-runtime-acceptance'; userData = 'aidwork-runtime-app-acceptance' }
@@ -135,7 +135,7 @@ try {
     $appData = Safe-Path $env:APPDATA $true $true
     $script:RuntimeHome = Safe-Path ([IO.Path]::Combine($appData, $identities[$AppId].home))
     $script:UserData = Safe-Path ([IO.Path]::Combine($appData, $identities[$AppId].userData))
-    if ($Mode -ceq 'Prepare') { $InstallDirectory = Safe-Path $InstallDirectory $true $true }
+    if ($Mode -in @('Prepare', 'PrepareDeferred')) { $InstallDirectory = Safe-Path $InstallDirectory $true $true }
     $mutexName = 'Local\AidWorkRuntimeUpgrade.' + $script:Sid.Value + '.' + $AppId
     if ($FixtureRegistryId) { $mutexName += '.' + $FixtureRegistryId }
     $mutex = [Threading.Mutex]::new($false, $mutexName)
@@ -149,7 +149,7 @@ try {
         $InstallDirectory = Safe-Path $InstallDirectory $true $true
         $state = Read-Pending $stateFile
     }
-    if ($Mode -cne 'Prepare' -and $null -eq $state) { [Console]::Out.WriteLine('NO_PENDING'); exit 0 }
+    if ($Mode -notin @('Prepare', 'PrepareDeferred') -and $null -eq $state) { [Console]::Out.WriteLine('NO_PENDING'); exit 0 }
     $base = 'Software\Microsoft\Windows\CurrentVersion'
     if ($FixtureRegistryId) { $base = 'Software\AidWorkRuntimeUpgradeFixtures\' + $FixtureRegistryId }
     $run = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($base + '\Run')
@@ -187,6 +187,9 @@ try {
     Require ($LASTEXITCODE -eq 0) 'BOOT_ID_UNAVAILABLE'
     $boot = ($bootOutput -join '') | ConvertFrom-Json
     Require (@($boot.PSObject.Properties.Name).Count -eq 1 -and $boot.bootId -match $script:UuidPattern) 'BOOT_ID_INVALID'
+    # Deferred scheduling owns startup/installer control only. It never treats a
+    # missing/corrupt/v2 marker as a stopped resource or creates a business ACK.
+    if ($Mode -ceq 'Prepare') {
     $markerFile = [IO.Path]::Combine($script:RuntimeHome, 'host-running.json')
     try { $null = [IO.File]::GetAttributes($markerFile) }
     catch [IO.FileNotFoundException] { Fail 'NO_LEGACY_MARKER' }
@@ -206,6 +209,7 @@ try {
     } else {
         Write-NewProtected $witnessFile @{ home = $script:RuntimeHome; digest = $digest; bootId = $boot.bootId }
         $newWitness = $true
+    }
     }
     Ensure-Directory $pendingDirectory
     $installerHash = Hash-File $InstallerPath

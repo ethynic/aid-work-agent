@@ -1,5 +1,7 @@
 # Runtime 执行环境、插件宿主与可视化客户端开发计划
 
+2026-10-12 r7共同检查点：[恢复计划Phase10](plan-runtime-upgrade-recovery.md#phase10-最终交付与服务端状态复核2026-10-12)已交付自助诊断/管理修复/归档新配对；主控维护Core/Runtime/Main和UI，资源角色仅维护资源helper，独立角色只读验证。H1/Device/binding不变，Runtime-only H3可选端口与私有connection v1、续装控制保持单一写入者；实际包和独立验证通过，未部署服务器。
+
 2026-10-12 r6共同检查点：[恢复计划Phase 8](plan-runtime-upgrade-recovery.md)主控维护core management/Runtime组合层，Windows平台角色维护legacy DPAPI调用，其他角色独立验证；仅Runtime_app启用失败时只读管理，沿用H1 blocked/code11和私有退出v1，不重置身份/密钥/历史。不再要求客户补日志。
 
 2026-10-12 r5 共同检查点：[恢复计划Phase 6](plan-runtime-upgrade-recovery.md)当前主控仅维护Runtime NSIS与旧版续装PS，严格校验后归档旧控制材料再登记新版，保留原自启选择；core/Main/H1/Device/binding无变化，独立测试角色维护安装器回归。
@@ -175,5 +177,7 @@ manifest版本0.3.0/0.1.0/0.1.0；完整MCP工具21/8/10，Host子集不扩大�
 
 文档核对：43个Runtime相关本地链接/锚点、索引唯一性与B1/B2状态检查通过；删除文件的旧引用已清除。源码/测试/配置仅修注释指针，15个Python文件排除docstring后的AST与HEAD一致，TypeScript去注释和YAML非注释内容在替换前后相同；定向git diff --check通过。纯文档工作未重跑业务测试，工作区其他任务修改保留。
 # 2026-10-12 升级恢复共同检查点
+
+Phase9连接恢复审计及源码补漏以[恢复计划的状态矩阵](plan-runtime-upgrade-recovery.md#phase9连接失效与恢复路径的确定行为)为准：H1仍为候选0.3，reconciling原原因使用已有message字段；当前state/执行所有权/身份门保持，修复历史operation锁住明确新操作及BOM启动/ACK读取。主控唯一写入，独立测试/CR只读产品。原身份资料损坏、永久身份标记和旧未结案证明目前没有完整自助出口，不把r6管理/退出成功算作连接恢复；新身份reset及对应wire尚未实施。
 
 已登记[覆盖升级与自动恢复](plan-runtime-upgrade-recovery.md)：core内可选适配钩子、本机v2 marker/DPAPI监督记录及受信Node→Main私有恢复IPC；H1 getState/schema保持不变，唯一写入者和兼容方案见该计划，Device/wire授权不变，实施前检查点完成。

@@ -42,7 +42,7 @@ export class ProcessSupervision {
   async marker(instanceId: string): Promise<Record<string, unknown>> {
     if (process.platform !== 'win32') return {}
     if (!this.enabled) throw new Error('required process supervisor missing')
-    const config = JSON.parse(readFileSync(join(this.home, 'config.json'), 'utf8'))
+    const config = JSON.parse(readFileSync(join(this.home, 'config.json'), 'utf8').replace(/^\uFEFF/, ''))
     // External Python skill executors have not joined the Provider Job boundary.
     const rebootOnly = Boolean(config.skills?.python)
     this.ledger = { schemaVersion: 1, generation: instanceId, home: resolve(this.home), bootId: await this.bootId(), sessionId: await this.sessionId(), ownerPid: process.pid, jobs: [] }

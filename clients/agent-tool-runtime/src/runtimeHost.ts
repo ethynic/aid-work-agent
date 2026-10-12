@@ -33,7 +33,7 @@ import { ManagementError, RuntimeHost, PACKAGE_LIMITS, sha256, type ConnectionSt
 import { PluginStore } from '@aid/local-tool-host-core/plugins/store'
 import { configureRuntimeHome, type RuntimeConfig } from './config.js'
 import { join } from 'node:path'
-import { dirname } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { atomicWrite, recoverPairing } from './pairingStore.js'
 import { assertNoLegacyRuntimeProcess } from './legacyProcessCheck.js'
@@ -42,6 +42,9 @@ import { loadPackagedTrust } from './productTrust.js'
 import { hasJournalCompletionProof } from '@aid/local-tool-host-core/legacy/completionProof'
 import { hasSessionCompletion } from './sessionTasks/completionProof.js'
 import { ProcessSupervision } from './processSupervision.js'
+import { resumeConnectionRecovery, recoverManagementRepairExecution } from './connectionRecoveryStore.js'
+import { connectionFailure } from './connectionDiagnosis.js'
+import { recordFreshConnectionEpoch } from './connectionRecoveryResources.js'
 
 function providerEnvironment(): Record<string, string> {
   const env: Record<string, string> = {}
@@ -112,6 +115,15 @@ export class LegacyExecution implements HostAdapter {
     }
   }
   observePlugins(listener: () => void): void { this.pluginsChanged = listener }
+  beforeManagementInit = async () => {
+    await resumeConnectionRecovery(this.home, this.nodeExecutable)
+    if (process.platform === 'win32' && readdirSync(this.home).length === 0) await recordFreshConnectionEpoch(this.home, this.nodeExecutable)
+  }
+  pauseForConnectionRecovery(): void {
+    this.loop?.stopClaiming()
+    this.engine?.shutdown()
+    this.providers?.stopAdmission()
+  }
   plugins() { return this.pluginStore?.list() ?? [] }
   async refreshPlugins() { await this.pluginStore?.refresh() }
   async canChangePlugins(method?: string): Promise<boolean> {
@@ -147,7 +159,7 @@ export class LegacyExecution implements HostAdapter {
   protect = dpapiProtect
   unprotect = dpapiUnprotect
   executionMarker = (instanceId: string) => this.supervision.marker(instanceId)
-  recoverPreviousExecution = (marker: string) => this.supervision.recover(marker)
+  recoverPreviousExecution = async (marker: string) => await this.supervision.recover(marker) || await recoverManagementRepairExecution(this.home, this.nodeExecutable)
   device() {
     const config = loadConfig()
     return config ? { device_id: config.device_id, ...(typeof config.name === 'string' && config.name ? { name: config.name } : {}) } : undefined
@@ -180,8 +192,14 @@ export class LegacyExecution implements HostAdapter {
     try { url = new URL(params.server) } catch { throw new ManagementError(1, '服务地址无效') }
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new ManagementError(1, '服务地址无效')
     const config = loadConfig()
-    const result = await new ApiClient(params.server).pair({ code: params.pairing_code.trim(), name: params.device_name,
-      platform: PLATFORM, runtime_version: RUNTIME_VERSION, capabilities: deviceCapabilities(this.effectiveConfig(config)), machine_fingerprint: machineFingerprint() })
+    let result
+    try {
+      result = await new ApiClient(params.server).pair({ code: params.pairing_code.trim(), name: params.device_name,
+        platform: PLATFORM, runtime_version: RUNTIME_VERSION, capabilities: deviceCapabilities(this.effectiveConfig(config)), machine_fingerprint: machineFingerprint() })
+    } catch (error) {
+      const failure = connectionFailure(error, true)
+      throw new ManagementError(failure.category === 'PAIRING_CODE_INVALID' ? 1 : 11, [failure.summary, ...failure.steps].join('。'))
+    }
     const next: RuntimeConfig = { ...config, server: params.server, device_id: result.device_id, name: params.device_name }
     const pending = join(runtimeHomeDir(), 'pairing.pending.json')
     atomicWrite(pending, JSON.stringify({ config: next, encrypted_token: await dpapiProtect(result.device_token) }))
@@ -312,9 +330,11 @@ export class LegacyExecution implements HostAdapter {
     this.providers?.stopAdmission()
     await this.providers?.waitForIdle()
     await this.providers?.shutdownAll()
-    if (this.runFailure) throw new ManagementError(11, '执行循环异常，停止事实需要核对')
     await this.sessionGuard?.release()
     this.loop = null; this.providers = null; this.engine = null; this.sessionGuard = null; this.runPromise = null
+    // A loop error is not proof of an active process after every execution lane
+    // and provider has drained. Business journals/outbox remain unchanged.
+    this.runFailure = null
   }
   private resolveEntries(config: RuntimeConfig | null): Record<string, string> {
     const entries = resolveProviderEntries(config)
@@ -332,7 +352,7 @@ export async function openRuntimeHost(options: { home?: string; nodeExecutable?:
   // Legacy helpers have process-wide home state; a Node child owns one composition.
   if (compositionOpen) throw new ManagementError(4, '本进程已有Runtime Host')
   compositionOpen = true
-  const home = options.home ?? runtimeHomeDir()
+  const home = resolve(options.home ?? runtimeHomeDir())
   try {
     // Core preflight may enter read-only mode before adapter.initialize runs.
     // Its device snapshot must still read this composition's explicitly bound home.
