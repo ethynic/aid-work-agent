@@ -6,13 +6,51 @@ from uuid import UUID
 from . import repository
 from .durable_flow import LocalContinuationRequired
 
+FILTER_TERMINAL_REASONS = ('no_matching_candidates', 'recommendations_boundary')
+
+
+def filter_stop_message(reason):
+    if reason == 'no_matching_candidates':
+        return '当前筛选条件下没有匹配候选人；下方为补充推荐，已排除，请告知用户并等待调整条件'
+    if reason == 'recommendations_boundary':
+        return '已到达补充推荐区域，没有更多匹配候选人；已排除推荐项并停止续筛'
+    return ''
+
+
+def filter_terminal_result(result, metadata):
+    """Explicit empty matches are a normal stop, never a recognition/store request."""
+    data = result.get('data') or {}
+    reason = data.get('stop_reason')
+    if reason not in FILTER_TERMINAL_REASONS:
+        return None
+    if result.get('effect') != 'none':
+        return {**result, 'success': False, 'code': 'EXECUTION_UNKNOWN',
+            'message': '执行效果未知，无法确认筛选结果状态；已停止识别和入库，请人工核对页面',
+            'data': {**metadata, 'resumes': [], 'failures': []}}
+    # A no-match receipt cannot also contain resumes or failed card attempts.
+    # Fail closed before VL/fee/store if a faulty Provider mixes recommendations in.
+    if reason == 'no_matching_candidates' and (
+        data.get('resumes') != [] or data.get('failures')
+        or type(data.get('attempted')) is not int or data['attempted'] != 0
+    ):
+        return {**result, 'success': False, 'code': 'RESUME_PAYLOAD_INVALID',
+            'message': '客户端无匹配结果与卡片读取回执矛盾，已停止识别和入库',
+            'data': {**metadata, 'resumes': [], 'failures': []}}
+    if data.get('resumes') == [] and not data.get('failures'):
+        return {**result, 'data': {**metadata, 'resumes': [], 'failures': []},
+            'message': filter_stop_message(reason)}
+    return None
+
 
 def _names(data, arguments):
-    values = list(arguments.get('exclude_names') or []) + list(data.get('processed_names') or [])
-    for item in data.get('resumes') or []:
+    names = data.get('processed_names')
+    values = list(arguments.get('exclude_names') or []) + (names if isinstance(names, list) else [])
+    resumes = data.get('resumes')
+    for item in resumes if isinstance(resumes, list) else []:
         if isinstance(item, dict):
             values.append(item.get('candidate_name'))
-    for item in data.get('failures') or []:
+    failures = data.get('failures')
+    for item in failures if isinstance(failures, list) else []:
         if isinstance(item, dict):
             values.append(item.get('name'))
     return list(dict.fromkeys(value.strip() for value in values
@@ -32,6 +70,8 @@ def batch_metadata(result, arguments=None):
         reference = None
     if result.get('success') is not True or result.get('effect') != 'none':
         reason = 'unsafe_result'
+    elif reason in FILTER_TERMINAL_REASONS:
+        pass  # Terminal page evidence remains useful even without any processed name.
     elif (not reference or not cumulative or not isinstance(data.get('job_name'), str)
         or not data['job_name'].strip() or len(data['job_name'].strip()) > 100):
         reason = 'missing_context'

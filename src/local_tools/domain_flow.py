@@ -73,7 +73,8 @@ async def resume_result(proxy, operation, kwargs, *, batch):
     from .overlay_flow import run_base
     from .resume_flow import process_item
     from src.tools.context import current_tool_execution_context
-    from .resume_continuation import prepare_next, batch_metadata, duplicate_failure
+    from .resume_continuation import (prepare_next, batch_metadata, duplicate_failure,
+        filter_terminal_result, filter_stop_message)
     if proxy.name == 'boss_resume_next':
         kwargs, failure = await prepare_next(kwargs, operation)
         if failure:
@@ -86,6 +87,10 @@ async def resume_result(proxy, operation, kwargs, *, batch):
     data = original.get('data') or {}
     metadata = batch_metadata(original, kwargs) if batch else {}
     payloads = data.get('resumes') if batch and isinstance(data, dict) else [data]
+    if batch:
+        terminal = filter_terminal_result(original, metadata)
+        if terminal is not None:
+            return terminal
     if batch and payloads == [] and data.get('stop_reason') in ('no_progress', 'search_limit', 'viewport_complete') and not data.get('failures'):
         return {**original, 'data': {**metadata, 'resumes': [], 'failures': []},
             'message': '当前列表未找到更多未处理候选人；已停止，请检查列表或调整条件'}
@@ -125,6 +130,8 @@ async def resume_result(proxy, operation, kwargs, *, batch):
             'message': f'批量读取 {len(payloads)} 份简历但全部入库失败，请稍后重试或联系管理员'}
     if batch:
         message = f"已存入简历库 {len(summaries)} 份：" + '、'.join(s['candidate_name'] or '?' for s in summaries)
+        if stop_note := filter_stop_message(data.get('stop_reason')):
+            message += f"；{stop_note}"
         if failures:
             message += f"；{len(failures)} 份失败（第一个：{failures[0].get('name') or '未知姓名'}—{failures[0].get('error')}）"
         return {**original, 'data': {**metadata, 'resumes': summaries, 'failures': failures}, 'message': message}

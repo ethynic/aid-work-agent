@@ -40,7 +40,8 @@ import {
   boundsCenter,
   indexedValues,
 } from './domSnapshot.js'
-import { GREET_TEXT, pairCardNameWithPoint } from './cardName.js'
+import { GREET_TEXT, pairCardNameWithPoint, findButtonsByExactText } from './cardName.js'
+import { excludedRecommendationName, inspectRecommendationResults } from './RecommendationResultBoundary.js'
 import { viewportOf } from './FilterSetter.js'
 import { CancelledError } from '../operations/types.js'
 import {
@@ -189,28 +190,7 @@ export class ResumeBatchReader {
    */
   locateCards(snap: DomSnapshot): BatchCard[] {
     const viewport = viewportOf(snap)
-    const stringIndex = snap.strings.findIndex((s) => s.trim() === GREET_TEXT)
-    if (stringIndex < 0) return []
-    const buttons: Array<{ point: ClickPoint; documentIndex: number }> = []
-    snap.documents.forEach((document, documentIndex) => {
-      let offset: { x: number; y: number }
-      try {
-        offset = accumulateOwnerOffset(snap, documentIndex)
-      } catch {
-        return // 隐藏 iframe owner 无可见 bounds（后台标签页），跳过
-      }
-      for (const { bounds } of findNodesByString(document, stringIndex)) {
-        if (bounds[2] <= 0 || bounds[3] <= 0) continue
-        // bounds 是文档绝对坐标，屏幕坐标 = owner 偏移 + bounds 中心 − 文档滚动偏移；只收视口内的
-        const c = boundsCenter(bounds)
-        const x = offset.x + c.x - (document.scrollOffsetX ?? 0)
-        const y = offset.y + c.y - (document.scrollOffsetY ?? 0)
-        if (x < 0 || y < 0 || x > viewport.width || y > viewport.height) continue
-        // 配对前保留原始几何精度：291.5→292 会把有效的 15.5px 姓名行差推到拒绝边界 16px。
-        buttons.push({ point: { x, y }, documentIndex })
-      }
-    })
-    buttons.sort((a, b) => a.point.y - b.point.y)
+    const buttons = findButtonsByExactText(snap, GREET_TEXT)
     return buttons.map((btn) => {
       const paired = pairCardNameWithPoint(snap, btn, viewport)
       return {
@@ -255,7 +235,10 @@ export class ResumeBatchReader {
     // 先 Escape 关闭残留弹层；关不掉 fail-loud，绝不带弹层盲点。
     if (this.deps.signal?.aborted) throw new CancelledError('已取消：批量读取尚未开始')
     batchLog(`批量开始 limit=${limit}`)
-    if (locateResumeCanvas(await this.deps.snapshot())) {
+    const initial = await this.deps.snapshot()
+    const initialState = inspectRecommendationResults(initial)
+    if (initialState.stopReason === 'no_matching_candidates') return { resumes, failures, attempted, processed_names: [], stop_reason: initialState.stopReason }
+    if (locateResumeCanvas(initial)) {
       const closed = await this.tryCloseDetail()
       if (!closed) {
         throw new ResumeBatchError(
@@ -264,7 +247,7 @@ export class ResumeBatchReader {
       }
     }
 
-    for (;;) {
+    batchLoop: for (;;) {
       if (this.deps.signal?.aborted) throw new CancelledError(`已取消：已读取 ${resumes.length} 份简历后中止`)
       if (excluded.size + processedNames.size >= 1000) { stopReason = 'history_limit'; break }
       // 拟人节奏：相邻卡片间留间隔（含失败重试路径），降低风控事件节流风险
@@ -272,6 +255,8 @@ export class ResumeBatchReader {
       const snap = await this.deps.snapshot()
       const viewport = viewportOf(snap)
       const cards = this.locateCards(snap)
+      const resultState = inspectRecommendationResults(snap)
+      if (resultState.stopReason === 'no_matching_candidates') { stopReason = attempted === 0 ? resultState.stopReason : 'recommendations_boundary'; break }
       if (firstRound) {
         // 布局现场（2026-09-10 客户机错位排查）：视口尺寸 + 按钮行距与参考机（184px）的漂移
         // 一眼可见——行距变了，绝对像素兜底点（y+70）就可能出行。
@@ -281,7 +266,7 @@ export class ResumeBatchReader {
             (ys.length > 1 ? `，行距≈${ys[1]! - ys[0]!}px（参考机 184px）` : ''),
         )
       }
-      if (firstRound && cards.length === 0 && !opts.scanMore) {
+      if (firstRound && cards.length === 0 && !opts.scanMore && !resultState.stopReason) {
         throw new ResumeBatchError(
           '当前视口未找到任何牛人卡片（无「打招呼」按钮）：请确认已打开推荐牛人列表页且列表已加载，必要时先滚动让卡片进入视口',
         )
@@ -293,6 +278,7 @@ export class ResumeBatchReader {
         ? !processedNames.has(c.name) && !excluded.has(c.name)
         : !anonymousRows.has(c.greetButtonY))
       if (!card) {
+        if (resultState.stopReason) { stopReason = resultState.stopReason; break }
         if (!opts.scanMore) break
         if (!this.deps.scroll) throw new ResumeBatchError('续筛缺少列表滚动能力')
         if (scrollRounds >= 30) { stopReason = 'search_limit'; break }
@@ -340,9 +326,22 @@ export class ResumeBatchReader {
       const openAttempts = Math.max(1, Math.ceil(OPEN_POLL_TIMEOUT / OPEN_POLL_INTERVAL))
       for (let i = 0; i < openAttempts && !rect; i++) {
         if (i % OPEN_RECLICK_AFTER === 0 && i / OPEN_RECLICK_AFTER < OPEN_CLICK_ATTEMPTS) {
-          const pt = card.namePoint
+          let pt = card.namePoint
+          let clickViewport = viewport
+          if (i > 0) {
+            const retrySnap = await this.deps.snapshot()
+            if (inspectRecommendationResults(retrySnap).stopReason === 'no_matching_candidates' || excludedRecommendationName(retrySnap, card.name)) {
+              stopReason = 'recommendations_boundary'; break batchLoop
+            }
+            lastSnap = retrySnap; rect = locateResumeCanvas(retrySnap)
+            if (rect) break
+            const freshCard = this.locateCards(retrySnap).find((candidate) => candidate.name === card.name)
+            if (!freshCard?.namePoint) throw new ResumeBatchError('重击前无法重新确认原候选人卡片及来源，已停止，禁止使用旧坐标')
+            pt = freshCard.namePoint
+            clickViewport = viewportOf(retrySnap)
+          }
           clickSequence.push(`(${pt.x},${pt.y})姓名点`)
-          await this.deps.click(pt, viewport)
+          await this.deps.click(pt, clickViewport)
         }
         await this.sleep(OPEN_POLL_INTERVAL)
         if (this.deps.signal?.aborted) throw new CancelledError(`已取消：已读取 ${resumes.length} 份简历后中止`)
@@ -372,11 +371,16 @@ export class ResumeBatchReader {
         continue
       }
 
+      if (lastSnap && (inspectRecommendationResults(lastSnap).stopReason === 'no_matching_candidates' || excludedRecommendationName(lastSnap, card.name))) {
+        stopReason = 'recommendations_boundary'; break
+      }
+
       // 2. 复用单份读取管线（滚动点 = canvas 中心，viewport 固定取点卡片前那份）
+      const readViewport = lastSnap ? viewportOf(lastSnap) : viewport
       const reader = new ResumeReader({
         snapshot: this.deps.snapshot,
         captureFullpage: this.deps.captureFullpage,
-        wheel: (deltaY, notches) => this.deps.wheel(rect!, viewport, deltaY, notches),
+        wheel: (deltaY, notches) => this.deps.wheel(rect!, readViewport, deltaY, notches),
         sameView: (a, b) => this.deps.sameView(a, b, rect!),
         stitch: this.deps.stitch,
         signal: this.deps.signal,

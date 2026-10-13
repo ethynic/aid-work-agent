@@ -154,6 +154,7 @@ context:
 - 高级条件仅供VIP：先看探查 membership.status。vip可执行；non_vip只执行普通条件并如实解释高级条件被屏蔽；unknown且有高级要求时立即询问“当前登录的BOSS账号是否为VIP会员”，在用户明确回答前不要清除原筛选或尝试高级项。确认后只对本次登录账号传membership_hint=vip/non_vip，同时传membership_account_ref=同一探查的account_ref；没有account_ref或换账号后先重新探查/确认，不能沿用旧账号答案。不能仅凭数据库VIP模板、推广图标或“VIP专享”标题推断会员。院校选中后才可传first_degree_only=true；没有院校不能单独勾选。
 - 收到MEMBERSHIP_REQUIRED按上条询问；收到skipped_filters必须逐项告知未生效的条件及会员/付费原因，不能声称全部满足。会员付费弹窗由工具安全关闭并屏蔽VIP，本次不再尝试高级项，不购买、不绕过收费。无法关闭或写后效果unknown时停止并说明，禁止自动重放。用户确认会员不能覆盖工具发现的非会员或真实付费证据。
 - 按实际入库、评分及失败结果汇报进度，未取得的分数不编造。批量打招呼只面向 matched 候选人（用户点名某人除外），并遵守外部写动作授权。
+- 筛选无结果时，下方“为你推荐”的卡片是补充推荐，不是满足条件的候选人，不能读取、评分、打招呼或用于完成数量。工具返回stop_reason=no_matching_candidates或NO_MATCHING_CANDIDATES时明确告诉用户“当前筛选条件下没有匹配候选人”；recommendations_boundary或RECOMMENDATIONS_BOUNDARY表示已到补充推荐区，没有更多匹配候选人。停止续筛，按已有真实结果汇报并等待用户调整条件，不擅自放宽、不因推荐卡片仍有打招呼按钮而继续。
 
 ## 话术发送闭环（职位管理 → 沟通，2026-08-17）
 

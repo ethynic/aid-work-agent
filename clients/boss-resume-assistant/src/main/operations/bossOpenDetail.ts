@@ -13,6 +13,7 @@
  * 但无外部写副作用），effect=none；执行期间用户勿动鼠标（Win32 真实点击 + 滚动）。
  */
 import { DetailGreetExecutor } from '../boss/DetailGreetExecutor.js'
+import { FILTER_SNAPSHOT_OPTIONS } from '../boss/FilterSetter.js'
 import {
   defaultSessionFactory,
   runBossOperation,
@@ -58,7 +59,7 @@ export function createBossOpenDetailOperation(
             message: `在推荐牛人列表中查找「${name}」并打开简历详情（点击/滚动借用真实鼠标，请勿移动）`,
           })
           const executor = new DetailGreetExecutor({
-            snapshot: session.snapshot,
+            snapshot: () => session.snapshot(FILTER_SNAPSHOT_OPTIONS),
             click: session.click,
             pressEscape: session.pressEscape,
             scroll: (x, y, deltaY) => session.mouseWheel(x, y, deltaY),
@@ -78,8 +79,11 @@ export function createBossOpenDetailOperation(
             },
           })
           return {
-            message: `已打开「${result.name}」的简历详情（保持打开，供 boss_resume_detail 读取）`,
-            data: { opened: true, name: result.name },
+            message: result.stopReason ? (result.stopReason === 'no_matching_candidates'
+              ? '当前筛选条件没有符合的牛人，已停止，未打开下方推荐卡片'
+              : '目标属于下方推荐内容或已到达推荐边界，已停止，未打开推荐卡片')
+              : `已打开「${result.name}」的简历详情（保持打开，供 boss_resume_detail 读取）`,
+            data: { opened: !result.stopReason, name: result.name, ...(result.stopReason ? { stop_reason: result.stopReason } : {}) },
             effect: 'none',
           }
         },

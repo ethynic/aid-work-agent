@@ -35,7 +35,8 @@ import {
   type ResumeReadResult,
 } from '../boss/ResumeReader.js'
 import { JobSwitcher } from '../boss/JobSwitcher.js'
-import { viewportOf } from '../boss/FilterSetter.js'
+import { viewportOf, FILTER_SNAPSHOT_OPTIONS } from '../boss/FilterSetter.js'
+import { excludedRecommendationName } from '../boss/RecommendationResultBoundary.js'
 import { WinClickError } from '../input/WinMouseClicker.js'
 import {
   defaultSessionFactory,
@@ -255,7 +256,9 @@ export function createBossResumeDetailOperation(
         },
         async (session) => {
           // 前置校验：必须已打开候选人简历详情（存在大尺寸 CANVAS）
-          const probe = await session.snapshot()
+          const probe = await session.snapshot(FILTER_SNAPSHOT_OPTIONS)
+          const stopReason = excludedRecommendationName(probe, nameParam)
+          if (stopReason) throw new CodedOperationError(stopReason === 'no_matching_candidates' ? 'NO_MATCHING_CANDIDATES' : 'RECOMMENDATIONS_BOUNDARY', '当前详情已证明属于筛选结果之外的补充推荐，已停止读取，未采图或提交简历')
           const rect = locateResumeCanvas(probe)
           if (!rect) {
             throw new CodedOperationError(

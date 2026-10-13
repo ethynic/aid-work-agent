@@ -12,7 +12,7 @@
  * （宁可不打，不能打错）；结果按实际打过的人返回（greeted_names/missing_names）。
  */
 import { GreetExecutor } from '../boss/GreetExecutor.js'
-import { viewportOf } from '../boss/FilterSetter.js'
+import { viewportOf, FILTER_SNAPSHOT_OPTIONS } from '../boss/FilterSetter.js'
 import {
   defaultSessionFactory,
   runBossOperation,
@@ -85,7 +85,7 @@ export function createBossGreetOperation(
           const effectiveLimit = targetNames ? Math.max(limit, targetNames.length) : limit
           const total = targetNames ? targetNames.length : limit
           const executor = new GreetExecutor({
-            snapshot: session.snapshot,
+            snapshot: () => session.snapshot(FILTER_SNAPSHOT_OPTIONS),
             click: session.click,
             scroll: (deltaY) => session.mouseWheel(scrollPoint.x, scrollPoint.y, deltaY),
             signal: ctx.signal,
@@ -105,6 +105,13 @@ export function createBossGreetOperation(
               : undefined,
           })
           const result = await executor.greetVisible({ limit: effectiveLimit, names: targetNames })
+          if (result.stopReason) return {
+            message: result.stopReason === 'no_matching_candidates'
+              ? '当前筛选条件没有符合的牛人，已停止；未向下方推荐卡片打招呼'
+              : `已向 ${result.greeted} 位筛选结果牛人打招呼，到达推荐内容边界，已停止`,
+            data: { greeted: result.greeted, reached_end: true, stop_reason: result.stopReason,
+              ...(targetNames ? { greeted_names: result.greetedNames ?? [], missing_names: result.missingNames ?? [], stopped_by_limit: false } : {}) },
+          }
           if (targetNames) {
             const greeted = result.greetedNames ?? []
             const missing = result.missingNames ?? []

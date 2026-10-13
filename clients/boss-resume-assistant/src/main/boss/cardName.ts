@@ -29,6 +29,8 @@ import {
   indexedValues,
 } from './domSnapshot.js'
 import { viewportOf } from './FilterSetter.js'
+import { excludedRecommendationNode } from './RecommendationResultBoundary.js'
+import { snapshotNodeVisible } from './SnapshotVisibility.js'
 
 /** 「打招呼」按钮文本（DOM 抓取的原始文本 trim 后精确相等） */
 export const GREET_TEXT = '打招呼'
@@ -128,11 +130,13 @@ export function findButtonsByExactText(snap: DomSnapshot, text: string): GreetBu
   snap.strings.forEach((s, stringIndex) => {
     if (s.trim() !== text) return
     snap.documents.forEach((document, documentIndex) => {
-      for (const { bounds } of findNodesByString(document, stringIndex)) {
+      for (const { nodeIndex, bounds } of findNodesByString(document, stringIndex)) {
         if (bounds[2] <= 0 || bounds[3] <= 0) continue
+        if (!snapshotNodeVisible(snap, documentIndex, nodeIndex) || excludedRecommendationNode(snap, documentIndex, nodeIndex)) continue
         // bounds 是文档绝对坐标（不随滚动变化，真机实测：滚动后 bounds 不动、scrollOffsetY 变），
         // 屏幕坐标 = owner 偏移 + bounds - 文档滚动偏移；只收视口内的：视口外的按钮 Win32 点不到
-        const offset = accumulateOwnerOffset(snap, documentIndex)
+        let offset: { x: number; y: number }
+        try { offset = accumulateOwnerOffset(snap, documentIndex) } catch { continue }
         const c = boundsCenter(bounds)
         const x = offset.x + c.x - (document.scrollOffsetX ?? 0)
         const y = offset.y + c.y - (document.scrollOffsetY ?? 0)

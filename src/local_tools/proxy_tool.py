@@ -1555,6 +1555,8 @@ class BossResumeBatchTool(LocalToolProxyTool):
         "前置：已在推荐牛人页；不改变当前职位或筛选条件。只读取当前视口，没有历史排除，重复调用可能重读。"
         "limit 是单批容量，不是用户任务总份数。返回 data.resumes（成功入库及评分摘要）、failures（失败项）、"
         "attempted（卡片尝试数）、stop_reason（本批停止原因），以及 continuation。"
+        "no_matching_candidates表示当前条件无匹配，recommendations_boundary表示已到补充推荐区；"
+        "下方推荐不作为筛选结果，不读取不入库，此时停止并告知用户。"
         "continuation.available=true 时，tool 和 arguments 给出续筛调用；可按任务剩余数量指定下一批 limit。"
         "available=false 表示本轮不能直接续筛，reason 给出原因；no_progress/search_limit 不代表全部候选人已读完。"
         "每份约30秒，借用真实鼠标；识别按份计费，筛选不包含打招呼或发送消息。"
@@ -1583,7 +1585,8 @@ class BossResumeBatchTool(LocalToolProxyTool):
         return await self._execute_legacy(**kwargs)
 
     async def _execute_legacy(self, **kwargs) -> Dict[str, Any]:
-        from .resume_continuation import prepare_next, batch_metadata, duplicate_failure
+        from .resume_continuation import (prepare_next, batch_metadata, duplicate_failure,
+            filter_terminal_result, filter_stop_message)
         if self.name == 'boss_resume_next':
             kwargs, failure = await prepare_next(kwargs)
             if failure:
@@ -1601,6 +1604,9 @@ class BossResumeBatchTool(LocalToolProxyTool):
         data = result.get("data") or {}
         metadata = batch_metadata(result, kwargs)
         resumes = data.get("resumes")
+        terminal = filter_terminal_result(result, metadata)
+        if terminal is not None:
+            return terminal
         if resumes == [] and data.get('stop_reason') in ('no_progress', 'search_limit', 'viewport_complete') and not data.get('failures'):
             return {**result, 'data': {**metadata, 'resumes': [], 'failures': []},
                 'message': '当前列表未找到更多未处理候选人；已停止，请检查列表或调整条件'}
@@ -1728,6 +1734,8 @@ class BossResumeBatchTool(LocalToolProxyTool):
         # recruiting-operator 上下文预算仅 8000 token，完整内容到简历库页面看）
         names = "、".join(s["candidate_name"] or "?" for s in summaries)
         message = f"已存入简历库 {len(summaries)} 份：{names}"
+        if stop_note := filter_stop_message(data.get('stop_reason')):
+            message += f"；{stop_note}"
         if failures:
             first = failures[0]
             message += f"；{len(failures)} 份失败（第一个：{first.get('name') or '未知姓名'}—{first.get('error')}）"
@@ -1748,6 +1756,7 @@ class BossResumeNextTool(BossResumeBatchTool):
         '引用串行消费，过期引用返回 STALE_CONTINUATION，不重复派发。'
         'limit 是单批容量；输出与 boss_resume_batch 相同，每次 continuation.arguments 是下一批引用。'
         'continuation.available=false 时停止推进，reason 表明原因；无进展不等于全列表读完。'
+        'no_matching_candidates为当前条件无匹配；recommendations_boundary为无更多匹配，补充推荐不读取。'
         '读取并识别入库，不打招呼或发送消息；每份约30秒并按份计识别费。'
     )
 

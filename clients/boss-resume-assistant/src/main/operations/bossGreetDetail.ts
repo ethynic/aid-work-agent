@@ -12,6 +12,7 @@
  * dry_run 只定位不点击（详情保持打开）。点击后未翻转 → fail-loud（unknown，不要重试）。
  */
 import { DetailGreetExecutor } from '../boss/DetailGreetExecutor.js'
+import { FILTER_SNAPSHOT_OPTIONS } from '../boss/FilterSetter.js'
 import {
   defaultSessionFactory,
   runBossOperation,
@@ -51,7 +52,7 @@ export function createBossGreetDetailOperation(
               : `校验详情归属并向「${name}」发送打招呼（真实写动作，借用真实鼠标，请勿移动）`,
           })
           const executor = new DetailGreetExecutor({
-            snapshot: session.snapshot,
+            snapshot: () => session.snapshot(FILTER_SNAPSHOT_OPTIONS),
             click: session.click,
             pressEscape: session.pressEscape,
             signal: ctx.signal,
@@ -60,6 +61,10 @@ export function createBossGreetDetailOperation(
             step: <T>(stepName: string, fn: () => Promise<T>) => perf.time(`detail:${stepName}`, fn),
           })
           const outcome = await executor.greet({ name, dryRun })
+          if (outcome.stopReason) return {
+            message: '当前详情已证明属于筛选结果之外的推荐内容，已停止，未打招呼',
+            data: { name, greeted: false, stop_reason: outcome.stopReason }, effect: 'none',
+          }
           if (outcome.greeted) tracker.completed = 1
           const data: Record<string, unknown> = { name, greeted: outcome.greeted }
           if (outcome.already) data.already = true

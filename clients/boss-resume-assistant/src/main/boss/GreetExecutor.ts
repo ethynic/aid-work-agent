@@ -27,6 +27,7 @@ import { type DomSnapshot, type ClickPoint, findNodesByString } from './domSnaps
 import { GREET_TEXT, CONTINUE_TEXT, pairCardName, findButtonsByExactText, type GreetButtonRef } from './cardName.js'
 import { viewportOf } from './FilterSetter.js'
 import { CancelledError } from '../operations/types.js'
+import { inspectRecommendationResults, type RecommendationStopReason } from './RecommendationResultBoundary.js'
 
 export class GreetError extends Error {
   constructor(message: string) {
@@ -66,6 +67,7 @@ export interface GreetOutcome {
   missingNames?: string[]
   /** 定向模式滚动查找达到 MAX_SCROLL_ROUNDS 上限而停止（未滚到底）。提示用户目标可能不在当前筛选结果中 */
   stoppedByLimit?: boolean
+  stopReason?: RecommendationStopReason
 }
 
 /** 单次滚动距离：远小于视口高（1905），保证相邻两屏有重叠不漏人 */
@@ -127,8 +129,13 @@ export class GreetExecutor {
         if (pending !== null && pending.size === 0) return outcome(greeted, false, names, greetedNames)
         if (greeted >= limit) return outcome(greeted, false, names, greetedNames)
         const snap = await this.deps.snapshot()
+        const resultState = inspectRecommendationResults(snap)
+        if (resultState.stopReason === 'no_matching_candidates') return outcome(greeted, true, names, greetedNames, false, greeted === 0 ? resultState.stopReason : 'recommendations_boundary')
         const buttons = this.findGreetButtons(snap)
-        if (buttons.length === 0) break
+        if (buttons.length === 0) {
+          if (resultState.stopReason) return outcome(greeted, true, names, greetedNames, false, resultState.stopReason)
+          break
+        }
 
         // 定向模式：从上往下找第一个「配对姓名 ∈ 名单」的按钮；配对失败/不在名单的按钮跳过不点
         let target: GreetButtonRef | null = buttons[0]!
@@ -145,7 +152,10 @@ export class GreetExecutor {
             }
           }
           // 视口内没有目标：退出内层循环去滚动加载继续找
-          if (target === null) break
+          if (target === null) {
+            if (resultState.stopReason) return outcome(greeted, true, names, greetedNames, false, resultState.stopReason)
+            break
+          }
         }
 
         await this.deps.click(target.point, viewportOf(snap))
@@ -237,11 +247,12 @@ function outcome(
   names: string[] | undefined,
   greetedNames: string[],
   stoppedByLimit = false,
+  stopReason?: RecommendationStopReason,
 ) {
-  if (names === undefined) return { greeted, reachedEnd }
+  if (names === undefined) return { greeted, reachedEnd, ...(stopReason ? { stopReason } : {}) }
   const greetedSet = new Set(greetedNames)
   const missingNames = [...new Set(names.map((n) => n.trim()))].filter((n) => !greetedSet.has(n))
-  return { greeted, reachedEnd, greetedNames: [...greetedNames], missingNames, stoppedByLimit }
+  return { greeted, reachedEnd, greetedNames: [...greetedNames], missingNames, stoppedByLimit, ...(stopReason ? { stopReason } : {}) }
 }
 
 /** 列表滚动位置：打招呼按钮所在文档的 scrollOffsetY；无按钮时取各文档最大值（列表是唯一滚动文档） */

@@ -33,6 +33,7 @@ import { GREET_TEXT, CONTINUE_TEXT, pairCardNameWithPoint, findButtonsByExactTex
 import { viewportOf } from './FilterSetter.js'
 import { locateResumeCanvas } from './ResumeReader.js'
 import { CancelledError } from '../operations/types.js'
+import { excludedRecommendationName, inspectRecommendationResults, type RecommendationStopReason } from './RecommendationResultBoundary.js'
 
 export class DetailGreetError extends Error {
   constructor(message: string) {
@@ -68,6 +69,7 @@ export interface DetailGreetOutcome {
   dryRun?: boolean
   /** dry-run 定位到的「打招呼」按钮点击点（视口 device px） */
   point?: ClickPoint
+  stopReason?: RecommendationStopReason
 }
 
 /** 操作列容器定位结果（document + 容器节点 + 容器 bounds 供几何回退） */
@@ -326,6 +328,8 @@ export class DetailGreetExecutor {
     if (this.deps.signal?.aborted) throw new CancelledError('已取消：详情页打招呼尚未开始')
     const name = opts.name.trim()
     const snap = await this.deps.snapshot()
+    const excluded = excludedRecommendationName(snap, name)
+    if (excluded) return { greeted: false, stopReason: excluded }
     DetailGreetExecutor.verifyDetailName(snap, name)
     const bar = DetailGreetExecutor.locateActionBar(snap)
     const state = DetailGreetExecutor.locateGreetState(snap, bar)
@@ -397,12 +401,14 @@ export class DetailGreetExecutor {
    * 找不到人 fail-loud 并列出当前屏可见姓名。入口先关闭残留详情弹层（ResumeBatchReader 同源防错配）。
    * 成功后详情保持打开（供 boss_resume_detail 读取），本方法不读取不关闭。
    */
-  async openDetail(opts: { name: string; onSearchProgress?: (screens: number) => void }): Promise<{ name: string }> {
+  async openDetail(opts: { name: string; onSearchProgress?: (screens: number) => void }): Promise<{ name: string; opened?: false; stopReason?: RecommendationStopReason }> {
     if (this.deps.signal?.aborted) throw new CancelledError('已取消：打开简历详情尚未开始')
     const target = opts.name.trim()
     // 起点防残留（ResumeBatchReader 同源）：带着已打开的详情弹层点卡片，弹层挡住列表且打开
     // 轮询会立刻命中残留 canvas——可能把别人的简历当成目标打开。先 Escape 关闭残留，关不掉 fail-loud
     const initial = await this.deps.snapshot()
+    const initialState = inspectRecommendationResults(initial)
+    if (initialState.stopReason === 'no_matching_candidates' || excludedRecommendationName(initial, target)) return { name: target, opened: false, stopReason: initialState.stopReason ?? 'recommendations_boundary' }
     if (locateResumeCanvas(initial)) {
       const closed = await this.step('detail:close-residual', () => this.tryCloseDetail())
       if (!closed) {
@@ -413,6 +419,8 @@ export class DetailGreetExecutor {
     for (;;) {
       if (this.deps.signal?.aborted) throw new CancelledError('已取消：打开简历详情阶段中止')
       const snap = await this.deps.snapshot()
+      const resultState = inspectRecommendationResults(snap)
+      if (resultState.stopReason === 'no_matching_candidates' || excludedRecommendationName(snap, target)) return { name: target, opened: false, stopReason: resultState.stopReason ?? 'recommendations_boundary' }
       const viewport = viewportOf(snap)
       const buttons = findButtonsByExactText(snap, GREET_TEXT)
       // 当前屏找姓名精确匹配的卡片（cardName 真机锚定配对；配对失败/不同名的按钮一律不点）
@@ -431,7 +439,17 @@ export class DetailGreetExecutor {
         let rect: ReturnType<typeof locateResumeCanvas> = null
         let lastSnap: DomSnapshot | null = null
         for (let i = 0; i < attempts && !rect; i++) {
-          if (i === OPEN_RECLICK_AT_INDEX) await this.deps.click(targetPoint, viewport)
+          if (i === OPEN_RECLICK_AT_INDEX) {
+            const retry = await this.deps.snapshot()
+            const retryState = inspectRecommendationResults(retry)
+            if (retryState.stopReason === 'no_matching_candidates' || excludedRecommendationName(retry, target)) return { name: target, opened: false, stopReason: 'recommendations_boundary' }
+            lastSnap = retry; rect = locateResumeCanvas(retry)
+            if (rect) break
+            const freshPoint = findButtonsByExactText(retry, GREET_TEXT).map((button) => pairCardNameWithPoint(retry, button, viewportOf(retry)))
+              .filter((candidate) => candidate.name === target && candidate.point)
+            if (freshPoint.length !== 1) throw new DetailGreetError('重击前原候选人卡片不唯一或不可确认，已停止，禁止使用缓存坐标')
+            await this.deps.click(freshPoint[0]!.point!, viewportOf(retry))
+          }
           await this.sleep(OPEN_POLL_INTERVAL)
           if (this.deps.signal?.aborted) {
             throw new CancelledError('已取消：等待简历详情打开阶段中止（点击是否生效请人工查看页面）')
@@ -439,6 +457,7 @@ export class DetailGreetExecutor {
           lastSnap = await this.step('detail:open-poll', () => this.deps.snapshot())
           rect = locateResumeCanvas(lastSnap)
         }
+        if (lastSnap && (inspectRecommendationResults(lastSnap).stopReason === 'no_matching_candidates' || excludedRecommendationName(lastSnap, target))) return { name: target, opened: false, stopReason: 'recommendations_boundary' }
         if (!rect || !lastSnap) {
           throw new DetailGreetError(
             `点击「${target}」的卡片后 ${OPEN_POLL_TIMEOUT}ms 内未检出简历画布：` +
@@ -450,6 +469,7 @@ export class DetailGreetExecutor {
         return { name: target }
       }
       // 当前屏没有目标 → 滚动加载继续找（滚动/到底判定与 GreetExecutor 定向模式同源）
+      if (resultState.stopReason) return { name: target, opened: false, stopReason: resultState.stopReason }
       if (!this.deps.scroll) {
         throw new DetailGreetError(
           `在推荐牛人列表当前屏未找到「${target}」（且未注入滚动能力）：当前屏可见姓名：${visibleNamesOf(snap)}`,

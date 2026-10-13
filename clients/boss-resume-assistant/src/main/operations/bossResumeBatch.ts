@@ -15,7 +15,7 @@
 import fsp from 'node:fs/promises'
 import { ResumeBatchReader } from '../boss/ResumeBatchReader.js'
 import { JobSwitcher, FILTER_BUTTON_PATTERN } from '../boss/JobSwitcher.js'
-import { viewportOf } from '../boss/FilterSetter.js'
+import { viewportOf, FILTER_SNAPSHOT_OPTIONS } from '../boss/FilterSetter.js'
 import { buildResumePayload, wheelAt, sameViewAt, stitchParts } from './bossResumeDetail.js'
 import {
   defaultSessionFactory,
@@ -41,7 +41,8 @@ export function buildResumeContinuation(
   processedNames: string[], excludedNames: string[], jobName: string | null, stopReason: string,
 ) {
   const names = [...new Set([...excludedNames, ...processedNames].map((name) => name.trim()).filter(Boolean))]
-  const reason = !names.length || !jobName ? 'missing_context' : names.length >= 1000 ? 'history_limit' : stopReason
+  const reason = ['no_matching_candidates', 'recommendations_boundary'].includes(stopReason) ? stopReason
+    : !names.length || !jobName ? 'missing_context' : names.length >= 1000 ? 'history_limit' : stopReason
   const available = reason === 'limit_reached' || reason === 'viewport_complete'
   return {
     available, reason,
@@ -115,7 +116,7 @@ export function createBossResumeBatchOperation(
             message: `逐个打开简历并读取（借用真实鼠标滚动，请勿移动）0/${limit}`,
           })
           const reader = new ResumeBatchReader({
-            snapshot: continuation ? () => session.snapshot({ includeDOMRects: true }) : session.snapshot,
+            snapshot: () => session.snapshot(FILTER_SNAPSHOT_OPTIONS),
             click: (point, viewport) => session.click(point, viewport),
             pressEscape: session.pressEscape,
             captureFullpage: session.captureFullpage,
@@ -137,7 +138,11 @@ export function createBossResumeBatchOperation(
             excludeNames: args.exclude_names?.map((n) => n.trim()), scanMore: continuation })
           const names = result.resumes.map((r) => r.name).join('、')
           let message: string
-          if (result.resumes.length === 0 && result.failures.length > 0) {
+          if (result.stop_reason === 'no_matching_candidates') {
+            message = '当前筛选条件没有符合的牛人，已停止读取；下方为推荐内容，未读取或打开推荐卡片'
+          } else if (result.stop_reason === 'recommendations_boundary') {
+            message = `已读取 ${result.resumes.length} 份筛选结果简历，到达推荐内容边界，已停止继续读取`
+          } else if (result.resumes.length === 0 && result.failures.length > 0) {
             const first = result.failures[0]!
             message = `完成：未能读取任何简历（尝试 ${result.attempted} 张卡片全部失败，第一个失败：${first.name ?? '未知姓名'}—${first.error}）`
           } else {
