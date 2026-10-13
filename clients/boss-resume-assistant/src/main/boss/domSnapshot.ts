@@ -130,14 +130,20 @@ export function boundsCenter(bounds: [number, number, number, number]): ClickPoi
   return { x: x + w / 2, y: y + h / 2 }
 }
 
+// CDP快照在读取后不可变；同一parentIndex表被大量祖先查询复用，避免每次重建全表。
+const parentMapCache = new WeakMap<object, Map<number, number>>()
+
 /** 构建 nodeIndex → parentIndex 映射；快照缺 parentIndex 字段时返回 null */
 export function parentMapOf(document: DomDocument): Map<number, number> | null {
   const field = document.nodes.parentIndex
   if (!field) return null
+  const cached = parentMapCache.get(field)
+  if (cached) return cached
   const map = new Map<number, number>()
   for (const [nodeIndex, parent] of indexedValues(field, 'parentIndex')) {
     map.set(nodeIndex, parent)
   }
+  parentMapCache.set(field, map)
   return map
 }
 

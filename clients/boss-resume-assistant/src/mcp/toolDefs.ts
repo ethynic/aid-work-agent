@@ -35,10 +35,11 @@ export const TOOL_DEFS: BossToolDef[] = [
     description:
       '在 BOSS 直聘「推荐牛人」页设置筛选面板：旧经验/学历/薪资或当前页面动态filters行及age范围（替换语义，先清除残留再选）。' +
       '写动作：会改动页面上的筛选状态。至少提供一个条件，未提供的维度会清空，不保留原值。' +
-      '数值档位（经验/薪资）自动保底映射：传了页面不存在的档位时按「保下限」规则映射到最接近的真实档位' +
+      '数值档位（经验/薪资）自动保底映射：双端或下限请求按「保下限」，只有上限的请求按「不扩大上限」映射到真实档位' +
       '（如要 15-30K 而页面只有 10-20K/20-50K 会选 20-50K），结果 substitutions 注明实际档位，务必向用户转述；' +
       '先用 boss_filter_options 查实际行与档位，将职位默认要求与用户当轮补充条件合并，不回写职位库；新增行使用精确filters，年龄使用age。' +
-      '扩展行不做模糊映射，不能静默漏条件；能力/探查不完整不能声称页面不存在该条件。',
+      '扩展行不做模糊映射。经验/学历/求职状态可在filters中多选；先查membership/groups，未知会员有高级请求须先询问用户，再传membership_hint。' +
+      '真实非VIP或确定付费证据优先于提示；只执行普通项并明确回报skipped_filters。院校附属第一学历用first_degree_only。不能静默漏条件或把探查不完整当不存在。',
     zodShape: {
       experience: z.string().min(1).optional().describe('经验档位，如 "5-10年"；省略会清空该维度'),
       educations: z.array(z.string().min(1)).optional().describe('学历档位列表，可多选，如 ["本科","硕士"]；省略会清空该维度'),
@@ -48,6 +49,9 @@ export const TOOL_DEFS: BossToolDef[] = [
       options_ref: z.string().min(1).optional().describe('云端能力探查引用，Provider接受但不消费；保持调用与恢复意图一致'),
       age: z.object({ min: z.number().int().min(16).max(45).optional(), max: z.number().int().min(16).max(45).nullable().optional() }).strict().optional()
         .describe('真实双端年龄范围，16至45岁；如25岁以上传{min:25,max:null}，null代表页面不限。不能将超出45岁的下限映成不限'),
+      membership_hint: z.enum(['vip', 'non_vip']).optional().describe('仅在头像无法可靠判断会员时使用用户本次明确回答；不能覆盖真实非VIP或付费证据，不能跨账号沿用'),
+      membership_account_ref: z.string().regex(/^[a-f0-9]{64}$/).optional().describe('使用未知会员的用户提示时必传最近boss_filter_options返回的account_ref；当前账号不匹配则动作前停止'),
+      first_degree_only: z.boolean().optional().describe('院校筛选附属的只看第一学历；true必须同时选择院校，需VIP权益，结果回显实际勾选值'),
     },
     annotations: { title: '设置筛选条件', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
@@ -244,7 +248,7 @@ export const TOOL_DEFS: BossToolDef[] = [
     name: 'boss_filter_options',
     title: '查询筛选可选档位',
     description:
-      '只读探查 BOSS 直聘「推荐牛人」页筛选面板的完整行与控件（含会员扩展行、单选标记与真实年龄范围），' +
+      '只读探查 BOSS 直聘「推荐牛人」页会员三态、普通/VIP分组及当前可见行与控件（含多选标记与真实年龄范围）；推广VIP标记不是会员证明，非VIP不展开高级区。' +
       '读完后自动收起面板还原页面。用于把用户口语化的筛选要求（如 15k-20k、5年以上、本科及以上）' +
       '映射成页面实际存在的精确档位，再调 boss_filter。前置要求：当前在推荐牛人页，否则返回 WRONG_PAGE。' +
       '开/收面板借用真实鼠标约 2 秒，期间勿动鼠标。',

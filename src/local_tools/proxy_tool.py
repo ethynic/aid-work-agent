@@ -667,6 +667,59 @@ class BossAgeRangeInput(BaseModel):
         return self
 
 
+def _filter_label(label: str) -> str:
+    return label.replace("[单选]", "").strip()
+
+
+def _is_vip_filter(label: str) -> bool:
+    # 未知动态行按高级处理，避免旧设备静默忽略会员门禁。
+    return _filter_label(label) not in {"经验要求", "学历要求", "求职状态", "薪资待遇"}
+
+
+def _vip_filter_args(args: Dict[str, Any]) -> bool:
+    return bool(args.get("age") or args.get("membership_account_ref")) or args.get("first_degree_only") is not None or any(_is_vip_filter(row["label"]) for row in args.get("filters") or [])
+
+
+def _extended_filter_args(args: Dict[str, Any]) -> bool:
+    return bool(args.get("filters") or args.get("age") or args.get("membership_hint") or args.get("membership_account_ref")) or args.get("first_degree_only") is not None
+
+
+def _verify_core_filter_rows(args: Dict[str, Any], data: Dict[str, Any]) -> bool:
+    """高级项跳过时，普通核心条件仍须由真实逐行回执证明生效。"""
+    rows = data.get("applied_rows")
+    if not isinstance(rows, list):
+        return False
+    substitutions = data.get("substitutions", [])
+    if not isinstance(substitutions, list):
+        return False
+    for key, label in (("experience", "经验要求"), ("educations", "学历要求"), ("salary", "薪资待遇")):
+        raw = args.get(key)
+        if not raw:
+            continue
+        values = raw if isinstance(raw, list) else [raw]
+        expected = []
+        for requested in values:
+            requested = requested.strip()
+            changes = [s for s in substitutions if isinstance(s, dict) and isinstance(s.get("row"), str)
+                       and _filter_label(s["row"]) == label and s.get("requested") == requested]
+            if len(changes) > 1 or (changes and (not isinstance(changes[0].get("matched"), str) or not changes[0]["matched"].strip())):
+                return False
+            matched = changes[0]["matched"].strip() if changes else requested
+            if matched != "不限":
+                expected.append(matched)
+        matches = [r for r in rows if isinstance(r, dict) and isinstance(r.get("label"), str) and _filter_label(r["label"]) == label]
+        if len(matches) != 1 or not isinstance(matches[0].get("options"), list):
+            return False
+        actual = matches[0]["options"]
+        if any(not isinstance(option, str) for option in actual):
+            return False
+        # 旧education支持“中专/中技”与页面“中专/中技”等空白变体；范围映射必须有substitutions。
+        normalize = lambda value: "".join(value.split()).replace("K", "").replace("k", "").upper()
+        if [normalize(s) for s in actual] != [normalize(s) for s in expected]:
+            return False
+    return True
+
+
 class BossFilterInput(BaseModel):
     experience: Optional[str] = Field(None, description="经验档位，如「3-5年」；省略会清空该维度")
     educations: Optional[List[str]] = Field(None, description="学历档位列表，可多选，如 [\"本科\", \"硕士\"]；省略会清空该维度")
@@ -674,6 +727,9 @@ class BossFilterInput(BaseModel):
     filters: Optional[List[Annotated[Dict[str, Any], WithJsonSchema(BossFilterRowInput.model_json_schema())]]] = Field(None, description="用户当轮补充的页面精确行筛选；与职位默认条件合并，不回写数据库")
     options_ref: Optional[str] = Field(None, description="扩展条件必填：本次 boss_filter_options 成功结果的 invocation_id，用于确认同设备支持扩展参数")
     age: Optional[Annotated[Dict[str, Any], WithJsonSchema(BossAgeRangeInput.model_json_schema())]] = Field(None, description="真实年龄范围，如25岁以上传{min:25,max:null}；页面精确整数16至45岁，范围外拒绝，需options_ref")
+    first_degree_only: Optional[bool] = Field(None, strict=True, description="院校筛选附加的只看第一学历；需先选院校，属于VIP条件")
+    membership_hint: Optional[Literal["vip", "non_vip"]] = Field(None, description="仅用户明确确认当前登录账号会员状态后传入；只在页面身份未知时使用，不覆盖非VIP或付费弹窗证据")
+    membership_account_ref: Optional[str] = Field(None, min_length=64, max_length=64, pattern=r"^[a-f0-9]{64}$", description="使用会员提示必填：同一次boss_filter_options返回的account_ref；绑定用户确认的登录账号，换账号失效")
 
     @field_validator("filters")
     @classmethod
@@ -695,20 +751,24 @@ class BossFilterTool(LocalToolProxyTool):
         "先用 boss_filter_options 查询当前账号页面，将职位默认条件与聊天补充条件合并，用户当轮要求优先；"
         "性别、活跃度、求职状态等用 filters 精确行设置，无需先入库。扩展条件须传查询结果 invocation_id 为 options_ref。"
         "发生档位映射时返回 substitutions，必须说明实际档位；不能漏掉条件或把工具不支持说成页面不存在。"
+        "普通条件为经验、学历、求职状态、薪资；其他高级条件需VIP。会员未知且请求高级条件时先询问用户，"
+        "用户确认后用membership_hint；非VIP或付费弹窗会屏蔽高级项并返回skipped_filters，必须告知哪些未执行。"
         "前置：已在推荐牛人页（不在时先 boss_goto recommend）。仅改变页面筛选，无外部副作用"
     )
     InputModel = BossFilterInput
 
     def _validate_args(self, args: Dict[str, Any]) -> Optional[str]:
-        if set(args) - {"experience", "educations", "salary", "filters", "options_ref", "age"}:
+        if set(args) - {"experience", "educations", "salary", "filters", "options_ref", "age", "first_degree_only", "membership_hint", "membership_account_ref"}:
             return "不支持的筛选参数"
         try:
             BossFilterInput(**args)
         except Exception:
             return "筛选参数格式无效，请使用真实行标签与非空精确选项"
-        if not any(args.get(k) for k in ("experience", "educations", "salary", "filters", "age")):
+        if args.get("membership_hint") and not args.get("membership_account_ref"):
+            return "会员提示必须绑定本次探查的account_ref，请重新查询当前登录账号"
+        if not any(args.get(k) for k in ("experience", "educations", "salary", "filters", "age")) and args.get("first_degree_only") is not True:
             return "请至少提供一个筛选条件（经验、学历、薪资或页面动态行）"
-        if (args.get("filters") or args.get("age")) and not args.get("options_ref"):
+        if _extended_filter_args(args) and not args.get("options_ref"):
             return "扩展筛选需先调用 boss_filter_options 并传 options_ref=查询结果 invocation_id"
         if args.get("options_ref"):
             from uuid import UUID
@@ -720,7 +780,7 @@ class BossFilterTool(LocalToolProxyTool):
 
     async def _dispatch_and_wait(self, tenant_id, user_id, session_id, device, args, progress_queue):
         # 两条执行入口共用此处：旧 Provider 可能静默丢弃未知字段，必须在派发前核验同设备探查结果。
-        if args.get("filters") or args.get("age"):
+        if _extended_filter_args(args):
             try:
                 probe = await asyncio.to_thread(repository.get_invocation, args.get("options_ref"), tenant_id)
             except Exception:
@@ -734,11 +794,18 @@ class BossFilterTool(LocalToolProxyTool):
                     or str(probe.get("device_id")) != str(device["id"])
                     or probe.get("session_id") != session_id or probe.get("tool_name") != "boss_filter_options"
                     or probe.get("state") != "succeeded" or not recent
-                    or not isinstance(data, dict) or data.get("filter_schema_version") != 2
+                    or not isinstance(data, dict) or type(data.get("filter_schema_version")) is not int
+                    or data.get("filter_schema_version") not in (2, 3)
+                    or data.get("filter_schema_version", 0) < (3 if _vip_filter_args(args) or args.get("membership_hint") else 2)
                     or data.get("probe_complete") is not True
                     or not isinstance(data.get("supported_fields"), list)
                     or (args.get("filters") and "filters" not in data.get("supported_fields", []))
-                    or (args.get("age") and "age" not in data.get("supported_fields", []))):
+                    or (args.get("age") and "age" not in data.get("supported_fields", []))
+                    or (args.get("first_degree_only") is not None and "first_degree_only" not in data.get("supported_fields", []))
+                    or (args.get("membership_hint") and "membership_hint" not in data.get("supported_fields", []))
+                    or (args.get("membership_account_ref") and "membership_account_ref" not in data.get("supported_fields", []))
+                    or (args.get("membership_hint") and not args.get("membership_account_ref"))
+                    or (args.get("membership_account_ref") and data.get("account_ref") != args.get("membership_account_ref"))):
                 return {"success": False, "code": "FILTER_CAPABILITY_REQUIRED", "effect": "none",
                         "message": "当前设备尚未确认支持完整扩展筛选；请更新 BOSS CLI 后重新调用 boss_filter_options，原筛选未改动"}
         # 保留引用字段在原始 intent / durable request / replay 中一致；Provider 接受但不使用此云端引用。
@@ -747,10 +814,37 @@ class BossFilterTool(LocalToolProxyTool):
     def _map_terminal(self, invocation):
         result = super()._map_terminal(invocation)
         args = invocation.get("arguments_json") or {}
-        if result.get("success") and (args.get("filters") or args.get("age")):
-            data = result.get("data")
-            valid = isinstance(data, dict) and data.get("filter_schema_version") == 2
+        terminal_data = result.get("data") if isinstance(result.get("data"), dict) else {}
+        if result.get("success") and (_extended_filter_args(args) or terminal_data.get("filter_schema_version") is not None):
+            data = result.get("data") if isinstance(result.get("data"), dict) else {}
+            version = data.get("filter_schema_version") if isinstance(data, dict) else None
+            valid = type(version) is int and version in (2, 3) and version >= (3 if _vip_filter_args(args) or args.get("membership_hint") else 2)
             rows = data.get("applied_rows") if isinstance(data, dict) else None
+            skipped = data.get("skipped_filters", []) if isinstance(data, dict) else []
+            member = data.get("membership", {}) if isinstance(data, dict) else {}
+            member_status = member.get("status") if isinstance(member, dict) else None
+            if args.get("membership_account_ref"):
+                valid = valid and data.get("account_ref") == args.get("membership_account_ref")
+            valid = valid and isinstance(skipped, list)
+            if not isinstance(skipped, list):
+                skipped = []
+            skip_labels = [_filter_label(s["label"]) for s in skipped if isinstance(s, dict) and isinstance(s.get("label"), str) and s["label"].strip()]
+            skip_by_label = {_filter_label(s["label"]): s for s in skipped if isinstance(s, dict) and isinstance(s.get("label"), str) and s["label"].strip()}
+            requested_vip = {_filter_label(r["label"]) for r in args.get("filters") or [] if _is_vip_filter(r["label"])}
+            if args.get("age"):
+                requested_vip.add("年龄")
+            if args.get("first_degree_only") is True:
+                requested_vip.add("只看第一学历")
+            valid = valid and len(skip_labels) == len(skipped) == len(set(skip_labels)) and set(skip_labels) <= requested_vip
+            valid = valid and all(s.get("reason") in ("non_vip", "paywall") for s in skipped if isinstance(s, dict))
+            if skip_labels:
+                valid = valid and member_status == "non_vip"
+            if requested_vip - set(skip_labels):
+                valid = valid and member_status == "vip"
+            for requested in args.get("filters") or []:
+                if _filter_label(requested["label"]) in skip_labels:
+                    matched_skip = skip_by_label[_filter_label(requested["label"])]
+                    valid = valid and matched_skip.get("options") == [option.strip() for option in requested["options"]]
             if args.get("filters"):
                 valid = valid and isinstance(rows, list)
                 verified_rows = rows if isinstance(rows, list) else []
@@ -758,10 +852,21 @@ class BossFilterTool(LocalToolProxyTool):
                     label = requested["label"].replace("[单选]", "").strip()
                     matches = [row for row in verified_rows if isinstance(row, dict) and str(row.get("label", "")).replace("[单选]", "").strip() == label]
                     expected = [option.strip() for option in requested["options"] if option.strip() != "不限"]
-                    valid = valid and len(matches) == 1 and matches[0].get("options") == expected
+                    if label in skip_labels:
+                        valid = valid and not matches
+                    else:
+                        valid = valid and len(matches) == 1 and matches[0].get("options") == expected
+            if version == 3:
+                valid = valid and _verify_core_filter_rows(args, data)
             if args.get("age"):
                 expected = {"min": args["age"].get("min", 16), "max": args["age"].get("max")}
-                valid = valid and data.get("age") == expected
+                valid = valid and (data.get("age") is None if "年龄" in skip_labels else data.get("age") == expected)
+                if "年龄" in skip_labels:
+                    valid = valid and skip_by_label["年龄"].get("range") == args["age"]
+            if args.get("first_degree_only") is not None:
+                valid = valid and (data.get("first_degree_only") is False if "只看第一学历" in skip_labels else data.get("first_degree_only") is args["first_degree_only"])
+                if "只看第一学历" in skip_labels:
+                    valid = valid and skip_by_label["只看第一学历"].get("options") == ["true"]
             if not valid:
                 return {**result, "success": False, "code": "EXECUTION_UNKNOWN", "effect": "unknown",
                         "message": "设备未返回完整扩展筛选的逐行校验结果，实际筛选效果未知，禁止自动重试，请核对页面"}
@@ -1049,17 +1154,65 @@ def _job_option_description(job: Dict[str, Any], resume_count: int, matched_coun
     """
     reqs = job.get("job_requirements") or {}
     dims = []
-    experience = (reqs.get("experience") or "").strip()
+    experience = "、".join(reqs.get("experiences") or []) or (reqs.get("experience") or "").strip()
     if experience:
         dims.append(experience)
     educations = [e.strip() for e in (reqs.get("educations") or []) if (e or "").strip()]
     if educations:
         dims.append("、".join(educations))
-    salary = (reqs.get("salary") or "").strip()
+    salary_range = reqs.get("salary_range") or {}
+    salary = _salary_range_text(salary_range) if salary_range else (reqs.get("salary") or "").strip()
     if salary:
         dims.append(salary)
+    if reqs.get("job_statuses"):
+        dims.append("、".join(reqs["job_statuses"]))
+    if any(value not in (None, "", False, [], {}) for value in (reqs.get("vip_filters") or {}).values()):
+        dims.append("含VIP专享条件")
     req_part = f"要求 {'/'.join(dims)}" if dims else "要求未配置"
     return f"{req_part} · 简历 {resume_count} · 匹配 {matched_count}"
+
+
+def _salary_range_text(value: Dict[str, Any]) -> str:
+    low, high = value.get("min"), value.get("max")
+    number = str
+    if low is not None and high is not None:
+        return f"{number(low)}-{number(high)}K"
+    if low is not None:
+        return f"{number(low)}K以上"
+    return f"{number(high)}K以下" if high is not None else ""
+
+
+def _job_filter_defaults(reqs: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """仅投影执行默认值；页面能力和会员资格仍由当次探查决定。"""
+    reqs = reqs or {}
+    ordinary: Dict[str, Any] = {}
+    rows = []
+    experience = reqs.get("experiences") or ([reqs["experience"]] if reqs.get("experience") else [])
+    for label, values in (("经验要求", experience), ("求职状态", reqs.get("job_statuses"))):
+        if values:
+            rows.append({"label": label, "options": values})
+    if rows:
+        ordinary["filters"] = rows
+    if reqs.get("educations"):
+        ordinary["educations"] = reqs["educations"]
+    if reqs.get("salary_range") or reqs.get("salary"):
+        ordinary["salary"] = _salary_range_text(reqs["salary_range"]) if reqs.get("salary_range") else reqs["salary"]
+    vip_req = reqs.get("vip_filters") or {}
+    vip: Dict[str, Any] = {}
+    labels = {"activity": "活跃度[单选]", "gender": "性别", "not_viewed": "近期没有看过", "not_exchanged": "是否与同事交换简历", "job_hopping": "跳槽频率[单选]", "schools": "院校", "boss_keywords": "牛人关键词"}
+    vip_rows = []
+    for key, label in labels.items():
+        value = vip_req.get(key)
+        if value and value != "不限":
+            options = value if isinstance(value, list) else [value]
+            vip_rows.append({"label": label, "options": options})
+    if vip_rows:
+        vip["filters"] = vip_rows
+    if vip_req.get("age"):
+        vip["age"] = vip_req["age"]
+    if vip_req.get("first_degree_only"):
+        vip["first_degree_only"] = True
+    return {"ordinary": ordinary, "vip": vip}
 
 
 class BossJobsListTool(LocalToolProxyTool):
@@ -1079,8 +1232,10 @@ class BossJobsListTool(LocalToolProxyTool):
     display_name = "BOSS 查询职位库"
     description = (
         "查询云端「职位管理」里的在招职位（status=active，暂停职位不返回）：每个职位返回 "
-        "job_id/job_name/match_threshold/job_requirements（经验/学历/薪资三档位，可直接作为 "
-        "boss_filter 入参）/resume_count/matched_count（该职位简历数与匹配数），"
+        "job_id/job_name/match_threshold/job_requirements（普通/VIP完整配置）及filter_defaults（ordinary/vip分组执行默认值），"
+        "resume_count/matched_count（该职位简历数与匹配数）。先查boss_filter_options确认当前账号权益与精确选项，"
+        "将默认值和聊天覆盖合并，同维度只传一次；salary手填范围只能映射页面档位时须汇报实际范围。"
+        "模板中的VIP条件不证明当前账号有会员；身份未知则询问用户，非VIP跳过高级条件并告知。"
         "并附与 jobs 同序的 data.options（key=job_id/label=job_name/description=要求与统计摘要）"
         "——data.options 可直接用于向用户渲染编号选择列表。"
         "「筛选简历」入口先用它确认职位与要求；查 BOSS 页面职位请用 boss_list_jobs，两者区分"
@@ -1120,6 +1275,7 @@ class BossJobsListTool(LocalToolProxyTool):
                 "status": job["status"],
                 "match_threshold": job.get("match_threshold"),
                 "job_requirements": job.get("job_requirements"),
+                "filter_defaults": _job_filter_defaults(job.get("job_requirements")),
                 "resume_count": job.get("resume_count", 0),
                 "matched_count": job.get("matched_count", 0),
             }

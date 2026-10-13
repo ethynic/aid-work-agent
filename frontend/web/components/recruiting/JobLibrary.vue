@@ -62,6 +62,7 @@ import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
+import { requirementGroups } from './jobRequirementsForm'
 import JobFormModal from './JobFormModal.vue'
 import { listJobs, type JobListItem } from '@/api/recruitingOperator'
 import { jobDetailPath, formatDate } from './recruitingDisplay'
@@ -102,15 +103,10 @@ const filteredJobs = computed(() => {
   })
 })
 
-// 要求摘要一行（与 boss_jobs_list options.description 拼法一致：经验/学历/薪资 join）
+// 普通与 VIP 筛选摘要；评分字段留在详情中。
 function requirementsSummary(job: JobListItem): string {
-  const reqs = job.job_requirements
-  if (!reqs) return '未配置'
-  const dims: string[] = []
-  if (reqs.experience) dims.push(reqs.experience)
-  if (reqs.educations?.length) dims.push(reqs.educations.join('、'))
-  if (reqs.salary) dims.push(reqs.salary)
-  return dims.length ? dims.join(' / ') : '未配置'
+  const groups = requirementGroups(job.job_requirements || {}).filter(group => group.title !== '评分补充')
+  return groups.length ? groups.map(group => `${group.title}：${group.entries.map(([label, value]) => `${label} ${value}`).join('、')}`).join(' / ') : '未配置'
 }
 
 const columns = [

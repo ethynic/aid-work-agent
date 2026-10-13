@@ -14,7 +14,7 @@ ARGS = {"experience": "1年以内", "filters": [{"label": "性别", "options": [
 def probe(**changes):
     value = {"tenant_id": "t", "user_id": "u", "device_id": "d", "session_id": "s", "tool_name": "boss_filter_options",
              "state": "succeeded", "created_at": datetime.now(), "result_json": {"data": {
-                 "filter_schema_version": 2, "probe_complete": True, "supported_fields": ["filters", "age"]}}}
+                 "filter_schema_version": 3, "probe_complete": True, "supported_fields": ["filters", "age"]}}}
     value.update(changes)
     return value
 
@@ -46,7 +46,7 @@ def test_filter_keeps_owned_device_and_original_invocation_registration():
     {"user_id": "other"}, {"device_id": "other"}, {"session_id": "other"},
     {"tool_name": "boss_list_jobs"}, {"state": "failed"}, {"created_at": datetime.now() - timedelta(minutes=11)},
     {"result_json": {"data": {"rows": []}}},
-    {"result_json": {"data": {"filter_schema_version": 2, "probe_complete": False, "supported_fields": ["filters"]}}},
+    {"result_json": {"data": {"filter_schema_version": 3, "probe_complete": False, "supported_fields": ["filters"]}}},
 ])
 async def test_old_incomplete_or_wrong_identity_probe_never_dispatches(changes):
     with patch("src.local_tools.proxy_tool.repository.get_invocation", return_value=probe(**changes)) as get, \
@@ -70,7 +70,7 @@ async def test_same_device_probe_preserves_reference_in_durable_intent_and_repla
 @pytest.mark.asyncio
 async def test_age_requires_age_capability_and_query_failure_does_not_dispatch():
     args = {"age": {"min": 25, "max": None}, "options_ref": REF}
-    for side_effect, value in [(None, probe(result_json={"data": {"filter_schema_version": 2, "probe_complete": True, "supported_fields": ["filters"]}})),
+    for side_effect, value in [(None, probe(result_json={"data": {"filter_schema_version": 3, "probe_complete": True, "supported_fields": ["filters"]}})),
                                (RuntimeError("db unavailable"), None)]:
         with patch("src.local_tools.proxy_tool.repository.get_invocation", return_value=value, side_effect=side_effect), \
                 patch.object(LocalToolProxyTool, "_dispatch_and_wait", new=AsyncMock()) as dispatch:
@@ -101,14 +101,14 @@ async def test_tool_executor_nested_models_are_json_before_legacy_or_durable_int
 def test_provider_extended_success_requires_version_and_actual_rows_not_only_badge_count():
     tool = BossFilterTool()
     invocation = {"id": REF, "state": "succeeded", "effect": "applied", "arguments_json": ARGS,
-                  "result_json": {"data": {"filter_count": 4, "filter_schema_version": 2,
-                      "applied_rows": [{"label": "性别", "options": ["男"]}]}}}
+                  "result_json": {"data": {"filter_count": 4, "filter_schema_version": 3,
+                      "membership": {"status": "vip"}, "applied_rows": [{"label": "性别", "options": ["男"]}, {"label": "经验要求", "options": ["1年以内"]}]}}}
     assert tool._map_terminal(invocation)["success"] is True
-    for data in [{"filter_count": 4}, {"filter_schema_version": 2, "applied_rows": [{"label": "性别", "options": ["女"]}]},
-                 {"filter_schema_version": 2, "applied_rows": 1}, {"filter_schema_version": 2, "applied_rows": "bad"}]:
+    for data in [{"filter_count": 4}, {"filter_schema_version": 3, "applied_rows": [{"label": "性别", "options": ["女"]}]},
+                 {"filter_schema_version": 3, "applied_rows": 1}, {"filter_schema_version": 3, "applied_rows": "bad"}]:
         failed = tool._map_terminal({**invocation, "result_json": {"data": data}})
         assert failed["code"] == "EXECUTION_UNKNOWN"
         assert failed["effect"] == "unknown"
     age = {"age": {"min": 25, "max": None}, "options_ref": REF}
-    data = {"filter_schema_version": 2, "age": {"min": 25, "max": None}}
+    data = {"filter_schema_version": 3, "membership": {"status": "vip"}, "applied_rows": [], "age": {"min": 25, "max": None}}
     assert tool._map_terminal({**invocation, "arguments_json": age, "result_json": {"data": data}})["success"] is True

@@ -16,6 +16,7 @@ export type ErrorCode =
   | 'INVALID_ARGUMENT'
   | 'CHROME_UNAVAILABLE'
   | 'NOT_LOGGED_IN'
+  | 'MEMBERSHIP_REQUIRED'
   | 'WRONG_PAGE'
   | 'JOB_CHANGED'
   | 'BUSY'

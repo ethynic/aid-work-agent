@@ -58,11 +58,15 @@
             </div>
             <div class="pt-3 border-t border-default">
               <div class="text-sm font-medium text-default mb-2">职位要求</div>
-              <div v-if="requirementEntries.length" class="space-y-1.5">
-                <div v-for="[label, value] in requirementEntries" :key="label" class="flex text-sm">
-                  <span class="text-muted w-24 flex-shrink-0">{{ label }}</span>
-                  <span class="text-default break-all">{{ value }}</span>
-                </div>
+              <div v-if="requirementsGroups.length" class="space-y-4">
+                <section v-for="group in requirementsGroups" :key="group.title" class="space-y-1.5">
+                  <h5 class="text-sm font-medium text-default">{{ group.title }}</h5>
+                  <p v-if="group.title === 'VIP 专享筛选'" class="text-xs text-warning-700">执行取决于当前 BOSS 账号会员权益；非会员会跳过高级条件。</p>
+                  <div v-for="[label, value] in group.entries" :key="label" class="flex flex-col sm:flex-row gap-1 text-sm">
+                    <span class="text-muted sm:w-28 flex-shrink-0">{{ label }}</span>
+                    <span class="text-default break-words min-w-0">{{ value }}</span>
+                  </div>
+                </section>
               </div>
               <div v-else class="text-muted text-sm">未配置</div>
             </div>
@@ -195,6 +199,7 @@ import BaseModal from '@/components/ui/BaseModal.vue'
 import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
+import { requirementGroups } from './jobRequirementsForm'
 import JobFormModal from './JobFormModal.vue'
 import {
   getJob,
@@ -292,17 +297,7 @@ const tabs = computed<Array<{ key: TabKey; label: string }>>(() => [
 // ============== 基本信息 tab ==============
 
 // 要求明细行（未配置的维度不出现；全部未配置显示「未配置」）
-const requirementEntries = computed<[string, string][]>(() => {
-  const reqs = job.value?.job_requirements
-  if (!reqs) return []
-  const entries: [string, string][] = []
-  if (reqs.experience) entries.push(['经验', reqs.experience])
-  if (reqs.educations?.length) entries.push(['学历', reqs.educations.join('、')])
-  if (reqs.salary) entries.push(['薪资', reqs.salary])
-  if (reqs.keywords?.length) entries.push(['加分关键词', reqs.keywords.join('、')])
-  if (reqs.notes) entries.push(['要求备注', reqs.notes])
-  return entries
-})
+const requirementsGroups = computed(() => requirementGroups(job.value?.job_requirements || {}))
 
 // ============== 状态切换 / 删除 ==============
 

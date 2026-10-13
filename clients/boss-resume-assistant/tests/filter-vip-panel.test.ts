@@ -2,11 +2,13 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
 import { FilterSetter } from '../src/main/boss/FilterSetter.js'
+import { withAccount } from './filterFixture.js'
+import { membershipAccountKey } from '../src/main/boss/MembershipInspector.js'
 import type { DomSnapshot, ClickPoint } from '../src/main/boss/domSnapshot.js'
 
 // 2026-10-13 会员真机 DOMSnapshot，仅保留面板/祖先；无候选人、Cookie或凭据。
-const top: DomSnapshot = JSON.parse(fs.readFileSync(new URL('../../tests/fixtures/boss-vip-panel-top.json', import.meta.url), 'utf8'))
-const down: DomSnapshot = JSON.parse(fs.readFileSync(new URL('../../tests/fixtures/boss-vip-panel-down.json', import.meta.url), 'utf8'))
+const top: DomSnapshot = withAccount(JSON.parse(fs.readFileSync(new URL('../../tests/fixtures/boss-vip-panel-top.json', import.meta.url), 'utf8')))
+const down: DomSnapshot = withAccount(JSON.parse(fs.readFileSync(new URL('../../tests/fixtures/boss-vip-panel-down.json', import.meta.url), 'utf8')))
 function selected(snap: DomSnapshot, texts: string[]): DomSnapshot {
   const copy = structuredClone(snap)
   copy.strings.push('class', 'option active')
@@ -21,7 +23,7 @@ function selected(snap: DomSnapshot, texts: string[]): DomSnapshot {
   return copy
 }
 function done(count: number): DomSnapshot {
-  return { strings: ['', `筛选·${count}`], documents: [{ nodes: { nodeValue: [0, 1], contentDocumentIndex: [] }, layout: { nodeIndex: [0, 1], bounds: [[0, 0, 2506, 1476], [2200, 24, 60, 31]] } }] }
+  return withAccount({ strings: ['', `筛选·${count}`], documents: [{ nodes: { nodeValue: [0, 1], contentDocumentIndex: [] }, layout: { nodeIndex: [0, 1], bounds: [[0, 0, 2506, 1476], [2200, 24, 60, 31]] } }] })
 }
 function setup(snaps: DomSnapshot[], drag?: (from: ClickPoint, to: ClickPoint) => Promise<void>) {
   let index = 0
@@ -57,7 +59,7 @@ test('真实顶部薪资：使用真实overflow scrollport和实测2倍CSS坐标
 
 test('真实下滚后设置性别：先反向滚动，扩展行不被三维LCA排除', async () => {
   const f = setup([down, down, top, selected(top, ['男']), done(1)])
-  const result = await f.setter.apply({ filters: [{ label: '性别', options: ['男'] }] })
+  const result = await f.setter.apply({ membership_hint: 'vip', membership_account_ref: membershipAccountKey(top)!, filters: [{ label: '性别', options: ['男'] }] })
   assert.equal(result.filterCount, 1)
   assert.equal(f.wheels.length, 1)
   assert.ok(f.wheels[0]!.deltaY < 0)
@@ -66,7 +68,7 @@ test('真实下滚后设置性别：先反向滚动，扩展行不被三维LCA�
 test('未知条件、范围伪装与单选多项均在清除前拒绝', async () => {
   for (const filters of [[{ label: '不存在的行', options: ['选项'] }], [{ label: '年龄', options: ['25岁以上'] }], [{ label: '活跃度[单选]', options: ['今日活跃', '3日内活跃'] }]]) {
     const f = setup([top])
-    await assert.rejects(f.setter.apply({ filters }))
+    await assert.rejects(f.setter.apply({ membership_hint: 'vip', membership_account_ref: membershipAccountKey(top)!, filters }))
     assert.equal(f.clicks.length, 0)
   }
 })
@@ -91,7 +93,7 @@ test('年龄25以上：必须拖动且读取真实tooltip精确25/不限才提�
   age25.strings = age25.strings.map((s) => s === '16' ? '25' : s)
   const drags: Array<{ from: ClickPoint; to: ClickPoint }> = []
   const f = setup([top, top, age25, age25, done(1)], async (from, to) => { drags.push({ from, to }) })
-  const result = await f.setter.apply({ age: { min: 25, max: null } })
+  const result = await f.setter.apply({ membership_hint: 'vip', membership_account_ref: membershipAccountKey(top)!, age: { min: 25, max: null } })
   assert.deepEqual(result.age, { min: 25, max: null })
   assert.equal(result.filterCount, 1)
   assert.equal(drags.length, 1)
@@ -102,7 +104,7 @@ test('年龄25以上：必须拖动且读取真实tooltip精确25/不限才提�
 test('年龄拖动未改变tooltip：有限重试后拒绝确认，不能只按落点声称精确值', async () => {
   let drags = 0
   const f = setup([top], async () => { drags++ })
-  await assert.rejects(f.setter.apply({ age: { min: 25, max: null } }), /未达到精确值/)
+  await assert.rejects(f.setter.apply({ membership_hint: 'vip', membership_account_ref: membershipAccountKey(top)!, age: { min: 25, max: null } }), /未达到精确值/)
   assert.equal(drags, 7)
   assert.equal(f.clicks.length, 1)
 })
@@ -118,7 +120,7 @@ test('真机偏档轨迹26→24→25：基于输入x与真实反馈收敛，不�
   }
   const inputs: number[] = []
   const f = setup([top, top, ageAt(26), ageAt(24), ageAt(25), ageAt(25), done(1)], async (_from, to) => { inputs.push(to.x) })
-  assert.deepEqual((await f.setter.apply({ age: { min: 25, max: null } })).age, { min: 25, max: null })
+  assert.deepEqual((await f.setter.apply({ membership_hint: 'vip', membership_account_ref: membershipAccountKey(top)!, age: { min: 25, max: null } })).age, { min: 25, max: null })
   assert.equal(inputs.length, 3)
   assert.ok(inputs[1]! < inputs[0]!)
   assert.ok(inputs[2]! > inputs[1]! && inputs[2]! < inputs[0]!)
@@ -127,20 +129,20 @@ test('真机偏档轨迹26→24→25：基于输入x与真实反馈收敛，不�
 test('超出实测年龄范围或缺少拖动能力：清除之前拒绝', async () => {
   for (const age of [{ min: 46 }, { min: 25 }]) {
     const f = setup([top])
-    await assert.rejects(f.setter.apply({ age }))
+    await assert.rejects(f.setter.apply({ membership_hint: 'vip', membership_account_ref: membershipAccountKey(top)!, age }))
     assert.equal(f.clicks.length, 0)
   }
 })
 
 test('徽章数量不能替代行勾选状态核验，未激活选项不确认', async () => {
   const f = setup([top])
-  await assert.rejects(f.setter.apply({ filters: [{ label: '性别', options: ['男'] }] }), /实际已选值校验失败/)
+  await assert.rejects(f.setter.apply({ membership_hint: 'vip', membership_account_ref: membershipAccountKey(top)!, filters: [{ label: '性别', options: ['男'] }] }), /实际已选值校验失败/)
   assert.equal(f.clicks.length, 2) // 清除+选项，尚未确认。
 })
 
 test('曾解析到真实结构，提交前结构消失不能回退跳过已选值校验', async () => {
   const f = setup([top, top, done(1)])
-  await assert.rejects(f.setter.apply({ filters: [{ label: '性别', options: ['男'] }] }), /结构在校验前丢失/)
+  await assert.rejects(f.setter.apply({ membership_hint: 'vip', membership_account_ref: membershipAccountKey(top)!, filters: [{ label: '性别', options: ['男'] }] }), /结构在校验前丢失/)
   assert.equal(f.clicks.length, 2)
 })
 
@@ -148,6 +150,6 @@ test('年龄曾精确到25，提交前被页面重置也必须拒绝', async () 
   const age25 = structuredClone(top)
   age25.strings = age25.strings.map((s) => s === '16' ? '25' : s)
   const f = setup([top, top, age25, top], async () => {})
-  await assert.rejects(f.setter.apply({ age: { min: 25, max: null } }), /提交前年龄范围已变化/)
+  await assert.rejects(f.setter.apply({ membership_hint: 'vip', membership_account_ref: membershipAccountKey(top)!, age: { min: 25, max: null } }), /提交前年龄范围已变化/)
   assert.equal(f.clicks.length, 1)
 })

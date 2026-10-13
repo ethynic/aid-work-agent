@@ -19,7 +19,7 @@ export type ValidateResult = { ok: true } | { ok: false; message: string }
 /** 各子命令允许的专属 flag（不含全局 flag）。新增命令/flag 必须在此登记，否则一律拒绝 */
 const COMMAND_FLAGS: Readonly<Record<string, readonly string[]>> = {
   'filter-options': [],
-  filter: ['experience', 'education', 'salary', 'filters', 'age', 'clear'],
+  filter: ['experience', 'education', 'salary', 'filters', 'age', 'membership-hint', 'membership-account-ref', 'first-degree-only', 'clear'],
   greet: ['limit', 'names', 'all'],
   goto: [], // 无专属 flag（只带 1 个位置参数）
   accept: ['limit', 'no-preview'],
@@ -118,7 +118,10 @@ export function validateCommandArgs(command: string | undefined, args: ParsedArg
   // 3) greet 显式意图门禁（防误触发真实写动作）
   if (command === 'greet') return validateGreetIntent(args)
   if (command === 'filter') {
-    if (args.flags.has('clear') && ['experience', 'education', 'salary', 'filters', 'age'].some((k) => args.flags.has(k))) return { ok: false, message: '--clear 与筛选条件互斥' }
+    if (args.flags.has('clear') && ['experience', 'education', 'salary', 'filters', 'age', 'membership-hint', 'membership-account-ref', 'first-degree-only'].some((k) => args.flags.has(k))) return { ok: false, message: '--clear 与筛选条件互斥' }
+    if (args.flags.has('membership-account-ref') && !/^[a-f0-9]{64}$/.test(String(args.flags.get('membership-account-ref')))) return { ok: false, message: '--membership-account-ref需要探查返回的64位账号引用' }
+    if (args.flags.has('membership-hint') && !['vip', 'non_vip'].includes(String(args.flags.get('membership-hint')))) return { ok: false, message: '--membership-hint需要vip或non_vip' }
+    if (args.flags.has('first-degree-only') && !['true', 'false'].includes(String(args.flags.get('first-degree-only')))) return { ok: false, message: '--first-degree-only需要true或false' }
     for (const key of ['experience', 'education', 'salary', 'filters', 'age']) {
       if (args.flags.has(key) && (typeof args.flags.get(key) !== 'string' || !String(args.flags.get(key)).trim())) return { ok: false, message: `--${key} 需要非空值` }
     }

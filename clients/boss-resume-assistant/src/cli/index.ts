@@ -45,6 +45,8 @@ const USAGE = `BOSS 招聘操作 CLI
   filter [--experience 5-10年] [--education 本科,硕士,博士] [--salary 10-20K]   自动设置筛选面板（Win32 真实鼠标，期间勿动鼠标）
   filter --clear              清除全部筛选（开面板 → 清除 → 确定，期间勿动鼠标）
   filter --filters '[{"label":"性别","options":["男"]}]' --age '{"min":25,"max":null}'  页面动态行与年龄范围（需精确值）
+  filter --filters '[{"label":"院校","options":["985"]}]' --first-degree-only true --membership-hint vip
+                                 会员未知时使用本次用户确认并传 --membership-account-ref <探查account_ref>；真实证据优先
   greet --names <姓名>[,<姓名2>,<姓名3>] [--limit N]   定向打招呼：只打姓名精确匹配的人（1-3 人，半角/全角逗号分隔；配对失败一律跳过——宁可不打，不能打错；真实写动作，期间勿动鼠标）
   greet --all [--limit N]       全量打招呼：从推荐列表顶部逐个点击（默认 10 上限，最大 100；当前屏点完自动滚动，到底结束；必须显式 --all 确认全量意图；真实写动作，期间勿动鼠标）
   goto recommend|chat         点击左侧菜单跳转页面：recommend=推荐牛人，chat=沟通（看打招呼回复）；已在目标页自动跳过
@@ -133,6 +135,9 @@ async function main(): Promise<number> {
         salary: flagString(args, 'salary'),
         filters: args.flags.has('filters') ? JSON.parse(flagString(args, 'filters')!) : undefined,
         age: args.flags.has('age') ? JSON.parse(flagString(args, 'age')!) : undefined,
+        membership_hint: flagString(args, 'membership-hint') as 'vip' | 'non_vip' | undefined,
+        membership_account_ref: flagString(args, 'membership-account-ref'),
+        first_degree_only: args.flags.has('first-degree-only') ? String(args.flags.get('first-degree-only')) === 'true' : undefined,
         cdpPort,
         clear: hasFlag(args, 'clear'),
       })

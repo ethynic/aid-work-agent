@@ -18,6 +18,9 @@ export interface FilterCommandOptions {
   salary?: string
   filters?: FilterSpec['filters']
   age?: FilterSpec['age']
+  membership_hint?: FilterSpec['membership_hint']
+  membership_account_ref?: string
+  first_degree_only?: boolean
   cdpPort?: number
   /** 清除模式：开面板 → 清除 → 确定，清空全部筛选条件 */
   clear?: boolean
@@ -29,11 +32,11 @@ export async function filterCommand(opts: FilterCommandOptions): Promise<number>
     console.log('⚠️ 即将通过 Win32 真实鼠标操作筛选面板：请勿移动鼠标，勿遮挡 BOSS 窗口。')
     return runCliOperation(OPERATIONS.boss_clear_filter!.operation, {}, { cdpPort: opts.cdpPort })
   }
-  console.log('筛选条件:', JSON.stringify({ experience: opts.experience, educations: opts.educations, salary: opts.salary, filters: opts.filters, age: opts.age }))
+  console.log('筛选条件:', JSON.stringify({ experience: opts.experience, educations: opts.educations, salary: opts.salary, filters: opts.filters, age: opts.age, membership_hint: opts.membership_hint, first_degree_only: opts.first_degree_only }))
   console.log('⚠️ 即将通过 Win32 真实鼠标操作筛选面板：请勿移动鼠标，勿遮挡 BOSS 窗口。')
   return runCliOperation(
     OPERATIONS.boss_filter!.operation,
-    { experience: opts.experience, educations: opts.educations, salary: opts.salary, filters: opts.filters, age: opts.age },
+    { experience: opts.experience, educations: opts.educations, salary: opts.salary, filters: opts.filters, age: opts.age, membership_hint: opts.membership_hint, membership_account_ref: opts.membership_account_ref, first_degree_only: opts.first_degree_only },
     { cdpPort: opts.cdpPort },
   )
 }

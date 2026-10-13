@@ -136,6 +136,7 @@ class TestBossJobsListCloudMode:
         assert result["data"]["jobs"] == [
             {"job_id": "job-1", "job_name": "PHP开发工程师（Laravel）", "status": "active",
              "match_threshold": 70, "job_requirements": {"experience": "3-5年"},
+             "filter_defaults": {"ordinary": {"filters": [{"label": "经验要求", "options": ["3-5年"]}]}, "vip": {}},
              "resume_count": 3, "matched_count": 1},
         ]
         assert "PHP开发工程师（Laravel）" in result["message"]

@@ -215,13 +215,29 @@ export const JOB_SCRIPT_CATEGORIES = ['初次开场', '了解摸底', '追问细
 
 export type JobScriptCategory = (typeof JOB_SCRIPT_CATEGORIES)[number]
 
-/** 结构化职位要求（= BOSS 筛选项，值须为档位文本；字段可缺省，见设计 §2.1） */
+/** 职位筛选模板；旧 experience/salary 兼容，VIP 配置不代表账号权益。 */
 export interface JobRequirements {
   experience?: string | null
+  experiences?: string[]
   educations?: string[]
+  job_statuses?: string[]
   salary?: string | null
+  salary_range?: { min?: number; max?: number }
+  vip_filters?: JobVipFilters
   keywords?: string[]
   notes?: string | null
+}
+
+export interface JobVipFilters {
+  age?: { min?: number; max?: number | null }
+  activity?: string
+  gender?: string
+  not_viewed?: string
+  not_exchanged?: string
+  schools?: string[]
+  first_degree_only?: boolean
+  job_hopping?: string
+  boss_keywords?: string[]
 }
 
 /** 职位要求档位候选（静态下拉候选；真值档位由 boss_filter_options 运行时校准兜底） */
@@ -229,6 +245,9 @@ export interface JobRequirementOptions {
   experience: string[]
   educations: string[]
   salary: string[]
+  experiences?: string[]
+  job_statuses?: string[]
+  vip_filters?: Record<'activity' | 'gender' | 'not_viewed' | 'not_exchanged' | 'schools' | 'job_hopping' | 'boss_keywords', string[]>
 }
 
 /** 职位公共字段（列表与详情响应都保证的字段） */
@@ -314,7 +333,7 @@ export async function listJobs(): Promise<{ success: boolean; data?: { items: Jo
   return res.json()
 }
 
-/** 职位要求档位候选（静态：experience/educations/salary 下拉候选） */
+/** 普通及 VIP 筛选候选；保留旧 experience/salary 键。 */
 export async function getRequirementOptions(): Promise<{ success: boolean; data?: JobRequirementOptions; error?: string }> {
   const res = await fetch(`${API_BASE}/recruiting-operator/jobs/requirement-options`, {
     headers: { ...getAuthHeader() },
