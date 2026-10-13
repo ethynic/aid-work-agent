@@ -7,6 +7,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261013-1155 | agent_runners queue_order 序列自愈 | ✅ 已完成开发（待部署验收）：submit 入口捕获 queue_order 唯一约束冲突后 setval 对齐序列并重试一次，根治 SQL 直插污染 BIGSERIAL 序列导致的连续 500（2026-10-13 agent1 事故）；隔离库回归 145 passed、CR 无 P0/P1，commit 62a082b2。 | [复盘](incidents/analysis-agent-runner-submit-500-uniqueviolation-incident.md) | [开发计划](plans/plan-runner-queue-order-sequence-selfheal.md) |
 | 20261010-1448 | 测试有效性审计与清理 | ✅ 已完成开发：清理失效、自证及重复测试，保留关键行为契约并完成三轮独立验证。 | — | [计划](plans/plan-test-suite-cleanup-20261010.md) |
 | 20260828-1421 | zhipu 默认模型切 GLM-5.3-Flash + 价目表多模态标识 | ✅ 已完成开发：zhipu 缺省切 GLM-5.3-Flash，token_cost_prices 增 is_multimodal 并标记存量多模态模型（预留图片路由）；commit 7f7e3235，缓存价修正 c1cd3915。 | [设计（已并入 weixin-cli 设计 §5）](design/weixin/weixin-cli-design.md) | — |
 | 20261008-1633 | 过时架构文档与入口引用清理 | ✅ 已完成开发：删除失效执行/协作方案，修正架构规则并清理旧入口链接。 | — | [清理记录](plans/plan-obsolete-architecture-doc-cleanup.md) |
@@ -121,9 +122,12 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261011-0948 | 数据分析与智能体成本治理 | ✅ 已完成开发：310.77 积分仿真 trace 归因 analyze_data 内层循环，6 点优化计划全部完成并三场复验（run5/6/7 含外层全口径均值 80.92，2/3 场落入 ≤90 目标）；报告生成模板化、交付节制为后续候选项未纳入。 | [复盘](incidents/analysis-agent-cost-392-credits-incident.md) | [开发计划](plans/plan-data-analysis-cost-optimization.md) |
+| 20261010-1053 | 统一知识库检索工具替代 attraction/hotel_search | ✅ 已完成开发（收尾待观察期/授权）：两工具由统一知识库工具替代，价格/项目表迁入文档 metadata（raw_payload 契约）替代固定 chunk 位次取表；Phase 1-3 完成、4a 软下线（catalog=False），4b 物理删除与真机迁移 --drop-chunks 待观察期后逐次授权。 | [设计](system/knowledge-base/unified-kb-resource-table-metadata-design.md) | [开发计划](plans/plan-unified-kb-resource-metadata.md) |
 | 20261011-1236 | BOSS 坐标桥接与 Runtime MCP 大结果回传修复 | ✅ 已完成开发（真机验收通过） | [设计](design/recruiting/boss-resume-assistant-native-cdp-design.md) | [开发计划](plans/desktop-automation/plan-boss-card-coordinate-precision.md) |
 | 20260702-1250 | 工具总体优化梳理 | ✅ 已完成开发：跨工具 token 治理全收口（2026-07 起，2026-10-10 完成全部开发项）——规范修订（description 唯一通道、usage_guide 停用、落盘闭环契约）、read/edit offset 1-based + replace_all、word/excel/office 路由大内容落盘闭环、P2 echo/debug/文案/file_path 键位清理；三批次均走工作流三角色闭环（开发/独立测试/CR），tests/unit/tools 全量回归全绿。attraction/hotel 后续归统一知识库工具任务（20261010-1053）；待部署验证。 | [总体设计](tools/tool-overall-optimization-design.md) / [落盘闭环+grep](tools/large-content-retrieval-design.md) / [文件工具对齐](tools/file-tools-claude-code-parity-design.md) | [开发计划](tools/tool-overall-optimization-dev-plan.md) / [落盘闭环计划](tools/large-content-retrieval-dev-plan.md) |
 | 20260920-1554 | 知识库文件搜索工具（knowledge_file_search） | ✅ 已完成开发：按 documents.title 模糊/精确定位知识库文档，返回 file_path 供 read 分页读取，解决提示词按文件名引用文档时 LLM 拿标题当路径连败；模式 A 共享范围 + 栏目授权收口，纯 DB 元数据查询无计费点。2026-10-10 agent2 全场景验证通过：模糊/精确/0 命中引导/跨租户隔离/栏目授权收窄（subagent 上下文收窄为授权栏目 list）/带物理文件命中返回 file_path + read_hint（无物理文件的 DB-only 文档不返回路径，行为正确）。 | — | [开发计划](plans/plan-knowledge-file-search.md) |
+| 20260920-2100 | 子智能体知识库栏目授权硬隔离 + 数据表移动兜底 | ✅ 已完成开发（2026-09-21，待部署） | 2026-09-20 双案例驱动：①数据表 `[数据表]` 文档被知识库移动后 source_type 被覆盖，数据分析智能体 search/list/load 三处按 `data-analysis-metadata` 过滤搜到 0 张表（tenant_c148f4efb4dc 生产案例）；②数字员工授权栏目仅 system prompt 软引导，LLM 不传 source_type 即读本租户全部分类（tenant_e9b2fab93a2f 测试反馈）。方案：授权语义确认为「自有栏目为空=允许全部（默认），勾选≥1=仅允许勾选栏目」；tenant_range 新增 load_authorized_source_types，knowledge_base_search / knowledge_file_search 收口（未传收窄为授权集合、传未授权拒绝返回可用清单）；analysis_agent 表发现/加载按 `[数据表]` 前缀 + metadata 判定放宽（豁免栏目授权，共享侧维持精确对）；schema_saver 去重放宽；system prompt 与授权弹框文案同步。零 schema 变更。 | [设计](system/knowledge-base/subagent-kb-category-authorization-design.md) | — |
 | 20260923-2340 | PPT 图片资产接入（分析图表嵌入） | ✅ 已完成开发：ppt_process 新增 images 结构化入参（path+title+caption，≤20 张）+ 租户根域校验 + planner 资源注入与确定性 reconcile + python-pptx 兜底图片页渲染；开发+测试+CR 完成（2026-09-23，ppt 套件 98 passed）。 | [设计（整合版）](tools/ppt/ppt_tool_design.md) | — |
 | 20260923-1142 | 数据分析产物复用（analyze_data 跨调用） | ✅ 已完成开发：会话级产物注册表 + load_output 工具 + 子代理清单注入 + 主代理 reusable_outputs 引导；P0 session_id 路径穿越已修（PoC 闭合）、254 定向测试通过（2026-09-23）。 | [设计](tools/data_analysis/analysis-artifact-reuse-design.md) / [事故复盘](incidents/analysis-agent-cost-392-credits-incident.md) | — |
 | 20260831-1509 | wecom-cli 第一方企业微信操作 CLI / MCP Provider | ✅ 已完成开发：M1–M12 + E5 全落地，13 命令真机验证通过（M12 网络查找直达路线）；read_session 双通道（服务端 /session-history ×100 积分 + 本地 OCR 兜底 + 直连静态 token）、target_name 智能分发、Runtime productTrust 注册；209 用例。遗留：常驻 OCR 迁移、协议壳对接（RPA C# 壳清退）、side 判定启发式。 | [设计](design/wecom/wecom-cli-design.md) | — |
@@ -158,11 +162,11 @@
 | 20260518-2228 | Word 客户模板格式参考生成 | ✅ 已完成开发（三智能体流程）。 | [设计](tools/word/word_tool_design.md) | — |
 | 20260518-2229 | Word 模板占位符填充增强（场景一） | ✅ 已完成开发（三智能体流程）。 | [设计](tools/word/word_tool_design.md) | — |
 
-| 20260920-2100 | 子智能体知识库栏目授权硬隔离 + 数据表移动兜底 | ✅ 已完成开发（2026-09-21，待部署） | 2026-09-20 双案例驱动：①数据表 `[数据表]` 文档被知识库移动后 source_type 被覆盖，数据分析智能体 search/list/load 三处按 `data-analysis-metadata` 过滤搜到 0 张表（tenant_c148f4efb4dc 生产案例）；②数字员工授权栏目仅 system prompt 软引导，LLM 不传 source_type 即读本租户全部分类（tenant_e9b2fab93a2f 测试反馈）。方案：授权语义确认为「自有栏目为空=允许全部（默认），勾选≥1=仅允许勾选栏目」；tenant_range 新增 load_authorized_source_types，knowledge_base_search / knowledge_file_search 收口（未传收窄为授权集合、传未授权拒绝返回可用清单）；analysis_agent 表发现/加载按 `[数据表]` 前缀 + metadata 判定放宽（豁免栏目授权，共享侧维持精确对）；schema_saver 去重放宽；system prompt 与授权弹框文案同步。零 schema 变更。 | [设计](system/knowledge-base/subagent-kb-category-authorization-design.md) | — |
 ## 渠道集成
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261008-1603 | 飞书、钉钉对话服务接入 AgentRunner | ✅ 已完成开发（待部署真机验收）：保留原渠道业务，仅接入独立 Runner 并传递可信渠道来源；两轮审核修复完成。 | [接入边界](system/agent-application-architecture-design.md#81-后续接入的固定边界) | [飞书](channel/feishu/implementation_plan.md#agentrunner-接入后续独立事项) / [钉钉](channel/dingtalk/implementation_plan.md#agentrunner-接入后续独立事项) / [审核](reviews/feishu-dingtalk-agentrunner-review-2026-10-09.md) |
 | 20261010-wecom-runner | 企业微信应用渠道接入 AgentRunner | ✅ 已完成开发，保留原渠道流程；待部署及真机验收。 | [接入设计](plans/plan-wecom-agent-runner-integration.md#2-接入设计) / [共同契约](system/runner-desktop-runtime-integration-contract.md) | [开发计划](plans/plan-wecom-agent-runner-integration.md) |
 | 20261009-1452 | 微信客服完整 Markdown 交付 | ✅ 已完成开发：默认原文前缀与原生完整 MD，仅正文图片考虑长图；待真机验收。 | [设计](channel/wecom_kf/wecom_kf_design.md#十四2026-10-09-长答复交付调整) | — |
 | 20261008-1340 | 微信客服原渠道恢复与 AgentRunner 接入 | ✅ 已完成开发：原渠道接入独立 Runner，误重构已移除，迁移历史保留；agent2 已发布并真机验收通过（文本/语音/合并/取代）。 | [设计](system/agent-application-architecture-design.md) | [计划](plans/plan-wecom-kf-channel-restore.md) |

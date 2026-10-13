@@ -24,13 +24,13 @@
 | 20260917-1201 | 生产 243 仿真环境（staging） | 🔧 部分完成 | 代码层完成（a7394c1a）：SIMULATION_MODE 门控（SMTP/通知 dry-run、附件删除跳过、启动横幅）+ 同步脚本 + sim compose + nginx conf；243 服务器侧已上线（2026-09-17）：建库建账号 + schema 初始化（属主移交 aid_sim_user）+ 代码 rsync + cherry-pick + nginx 白名单上线（白名单放 snippets/ 避免 http 层污染生产的踩坑已回写文档）+ aid-agent-api1 healthy、启动横幅生效、表 149 张自动补齐；2026-09-17 更新脚本落地：sim.sh 默认附带代码同步（rsync 生产工作区 + sim-base 基准重放仿真增量，--skip-code 可跳过）+ 新增 agent1_update.sh 验证模式（git 拉取指定版本 + 前端构建，与复现模式互斥）；待 P1 验收（办公 IP 访问 + 同步真实租户联调）。 | [设计](system/simulation-env-design.md) | — |
 | 20261012-1230 | file_assets 历史文件名补录 | ✅ agent2 已补录，生产待执行 | commit 8825d880 上线 file_assets 表持久化文件元数据（根治下载文件名退化）后，存量历史文件名需跑补录脚本恢复（磁盘 + 消息表原始名优先，幂等）。agent2 已执行（磁盘 1241 + 消息 769，共 1457 行）；生产 243 发布后需同样执行。 | — | —（执行步骤见 [生产发布备忘](../deploy/生产发布备忘.md)） |
 | 20261012-2130 | docs 文档清理（3 个月前失效文档） | 📋 待执行 | 115 个创建早于 2026-07-12 的文档经 7 组并行审计逐一对码核对：41 个删除（D 级历史记录 37 + C 级严重失真 4）、1 个待定（wecom-integration.md 建议改写）、38 个 B 级保留待小修。删除动作由人工执行，执行时按清单 §3 同步清理 research_index.md 与活跃文件引用。 | [清理计划](plans/plan-docs-cleanup-20261012.md) | — |
-| 20261013-1155 | agent_runners queue_order 序列自愈 | 🔧 部分完成（代码+测试完成，待部署验收） | 提交入口捕获 queue_order 唯一约束冲突后 setval 对齐序列并重试一次，根治 SQL 直插污染 BIGSERIAL 序列导致的连续 500（2026-10-13 agent1 事故）。 | [复盘](incidents/analysis-agent1-runner-submit-500-uniqueviolation-incident.md) | [开发计划](plans/plan-runner-queue-order-sequence-selfheal.md) |
 | 20261013-1330 | 日志统一改造（标准库 logging 收口到 loguru） | 📋 待执行 | backend_dev.md 已禁止标准库 logging，但存量 src/ 有 14 个文件仍在用，且项目未接 InterceptHandler——这些日志及第三方库（uvicorn/apscheduler 等）的 WARNING+ 只进 docker stderr，INFO 全丢，不进 loguru 错误文件与 log_error 表（防滥用中心 500 不进错误日志排查中发现，同根因）。方案：Phase 1 root logger 挂 InterceptHandler 一处兜底；Phase 2 存量 14 文件迁移（9 个有调用 + 5 个仅删 import）。 | — | [改造计划](plans/plan-logging-unification-20261013.md) |
 
 ## 系统功能
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261013-1434 | 结构化提问交互（ask_user 提问卡片） | 📋 待开发 | Web 富提问卡片（多选/自由文本/忽略提交/多题分页）+ 渠道编号文本降级；AskForm/AskAnswer 协议先行，复用 clarify 等待管道，root 等待为功能缺口。 | [设计](system/design-ask-user-interactive-question.md) | — |
 | 20261008-runtime-plugin-host | Runtime 执行环境、插件宿主与可视化客户端 | 🔧 部分完成 | A1～A3完成；隔离验收包已交付，待人工及正式发行，第三方暂不开发；新增 v2 写路径泛化阶段（BOSS B3 依赖，待开发）。 | [唯一架构](system/runtime-plugin-host-architecture-design.md) / [共同契约](system/runner-desktop-runtime-integration-contract.md) / [接口](../contracts/runtime-host/v1/README.md) | [统一计划](plans/plan-runtime-plugin-host.md) |
 | 20261010-1642 | 系统级防滥用与限额 | 🔧 部分完成（Phase 1 开发完成，未部署） | Phase 1 观察闭环已完成：abuse_policies/abuse_events 两表、引擎 src/services/anti_abuse/（绑定匹配 user > channel（按 users.source 渠道类型） > tenant 兜底 > 平台默认）、定时扫描（300s）+ 事件 1h 去重 + 站内信通知（abuse.rule_triggered）、渠道入口 users.status 停用拦截（fail-open）、防滥用中心页（用量监控/禁用记录/触发记录 + 策略编辑）、用户停用/启用接口。Runner 链路 status 检查缺口登记 Phase 2 统一拦截点解决。 | [设计](system/saas/anti-abuse-policy-design.md) | — |
 | 20261010-1930 | 租户管理员通知（计费提醒 / 反滥用告警） | 🔧 部分完成（Phase 1 开发完成，未部署） | 复用统一通知基础设施：站内信恒开兜底 + 外发渠道（飞书/企微/钉钉/邮件）四选一；三事件 billing.credit_low（7 天用量推算，月度幂等）/ billing.tenant_expiry（30/7/1 天档）/ abuse.rule_triggered（Phase 2 挂反滥用 warn_threshold）；管理员逐人展开 + 租户级外发目标（同事件多管理员仅投一次），不新建表。启用需 configs/config.yaml notifications.tenant_events_enabled=true。 | [设计](system/tenant-admin-notification-design.md) | — |
@@ -50,11 +50,9 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20261011-0948 | 数据分析与智能体成本治理 | 🔧 部分完成 | 310.77 积分仿真 trace 归因 analyze_data 内层循环；6 点优化计划全部完成并三场复验（run5/6/7 含外层全口径 85.64 / 57.97 / 99.14，均值 80.92，2/3 场落入 ≤90 目标）；候选项：报告生成模板化、交付节制。 | [复盘](incidents/analysis-agent-cost-392-credits-incident.md) | [开发计划](plans/plan-data-analysis-cost-optimization.md) |
 | 20260714-1911 | 浏览器混合执行、可视化与人工接管 | 🔧 部分完成 | Phase 0～1 已完成；Phase 2 已实现、待真实 Redis/PostgreSQL 门禁。 | [设计](tools/browser/browser_visualization_design.md) | [开发计划](tools/browser/browser_execution_dev_plan.md) |
 | 20260630-1733 | PDF reportlab 固定版式生成器 | 📋 待开发 | 暂不开发，未来如出现强固定版式需求再评估。 | [设计](tools/pdf/pdf_tool_design.md) | — |
 | 20260630-1734 | PDF 视觉回归样本集 | 💡 灵感 | 低优先级未来项。用于沉淀小型样例 PDF、渲染 PNG 或预期检查结果，后续在改动 PDF 生成器、渲染器、验证器时做回归校验，防止中文乱码、空白页、黑页、页数错误、表格溢出等质量退化。 | [设计](tools/pdf/pdf_tool_design.md) | — |
-| 20261010-1053 | 统一知识库检索工具替代 attraction/hotel_search | 🔧 部分完成 | 两工具由统一知识库工具替代；价格/项目表迁入文档 metadata（raw_payload 契约），替代固定 chunk 位次取表。Phase 1-3 完成；Phase 4a 两工具已软下线（catalog=False，提示词切统一工具，待真机观察后 4b 删除）；Phase 5 真机迁移待逐次授权。 | [设计](system/knowledge-base/unified-kb-resource-table-metadata-design.md) | [开发计划](plans/plan-unified-kb-resource-metadata.md) |
 
 ## 渠道集成
 
@@ -62,7 +60,6 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20261008-1603 | 飞书、钉钉对话服务接入 AgentRunner | 🔧 部分完成（开发完成，待部署验收） | 保留原渠道业务，仅接入独立 Runner 并传递可信渠道来源。 | [接入边界](system/agent-application-architecture-design.md#81-后续接入的固定边界) | [飞书](channel/feishu/implementation_plan.md#agentrunner-接入后续独立事项) / [钉钉](channel/dingtalk/implementation_plan.md#agentrunner-接入后续独立事项) / [审核](reviews/feishu-dingtalk-agentrunner-review-2026-10-09.md) |
 | 20260910-1259 | 留资线索动态刷新（lead_refresh：意向度 + 需求分条 + 人工归属） | 🔧 部分完成 | **Phase 1 开发+单测完成（2026-09-16），待部署真机验证；Phase 2 §9.5 人工期对话推送（external_push_human：节流推送 + 转人工字段 + 跟进汇总摘要同步 + 不要求留资）开发+单测完成（2026-09-16）**。触发：2026-09-10 产品需求——留资后客户继续交流（智能体轮次 + 转人工期）仅落 `channel_messages`，线索行不再更新，运营页看不到最新客户状态。 | [设计](subagent/pre-sales/lead-capture-refresh-design.md) | — |
 | 20261012-1200 | wecom_kf 并发限频修复（sync_msg 45009 重试 + 拉取去重） | 🔧 部分完成（开发+单测完成，待部署） | 2026-10-11 演示事故修复：约 20 用户同时进入触发微信 sync_msg 限频 47 秒全失败，积压 31 条串行排空，首批用户端到端等 1-3 分钟。修复：45009 指数退避重试 + 同一 open_kfid 拉取任务去重合并。 | [事故复盘](incidents/wecom-kf-sync-msg-45009-incident.md) | — |
 
