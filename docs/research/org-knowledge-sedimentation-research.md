@@ -3,9 +3,7 @@
 > 关联文档：
 > - [ideas.md §调研报告索引](../ideas.md)
 > - [AI 智能体行业产品体验提升调研与「工作日报」方案设计](./ai-agent-experience-daily-report-research.md)
-> - [企业级智能体平台调研](./enterprise-agent-platform-research.md)
 > - [企业知识库 RAG 技术调研](./enterprise-knowledge-base-rag-research.md)
-> - [会话内上下文压缩业界方案调研](./context_compression_research.md)
 > - [Prompt 版本管理调研](./prompt-version-management-research.md)
 >
 > 文档索引：[ideas.md §调研报告索引](../ideas.md)

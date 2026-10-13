@@ -2,7 +2,7 @@
 
 > 状态：✅ 调研完成（2026-09-29）。本文回答一个课题：**agent 生成的 PPT 如何达到「样式可以接受、可以交付」的水平**。
 > 触发事件：agent2 连续三轮实测（tr_69650ee91a1b4886 / tr_ceaf2fe01b4f49a5 / tr_e690b1fb76734938）产出的 PPT 均被用户判定为「毫无美感 / 完全不合格」。
-> 关联文档：[PPT 工具设计](../tools/ppt/ppt_tool_design.md)（现行架构，整合版）、[HTML 转 PPTX 技术调研](html-to-pptx-conversion-research.md)（前次调研）。
+> 关联文档：[PPT 工具设计](../tools/ppt/ppt_tool_design.md)（现行架构，整合版）。
 
 ## 目录
 
@@ -91,7 +91,7 @@
 ### 3.5 html2pptx（Anthropic 旧版/社区维护）——设计自由度与可编辑性兼顾
 
 - **受控 HTML DSL**（只允许 p/h1-h6/ul/ol，禁裸文本/禁渐变/禁非 web-safe 字体，body 精确匹配版式尺寸）→ Playwright 渲染量坐标 → **逐元素映射**为原生 pptx 对象（文本框/形状/图片/原生图表），非截图。
-- 适合「设计要求高的新 deck」；我们的 [前次调研](html-to-pptx-conversion-research.md) 已验证过其映射保真度。代价：DSL 约束 + Playwright 依赖（镜像已有）。
+- 适合「设计要求高的新 deck」；前次调研已验证过其映射保真度。代价：DSL 约束 + Playwright 依赖（镜像已有）。
 
 ### 3.6 模板解析路线的业界定论
 

@@ -6,7 +6,7 @@
 - sanitize_error：错误返回统一脱敏（白名单机制，杜绝 str(e)/traceback/kwargs 泄漏）
 - 工具执行上下文 ContextVar：session_id / channel / subagent_id / chat_record_id
 
-设计依据：docs/tools/tool-overall-optimization-design.md #2 统一规范。
+设计依据：docs/tools/tool-development-spec.md 统一规范。
 脱敏白名单模式参照 src/tools/ppt/ppt_process_tool.py::_format_user_error。
 
 本模块只依赖标准库 + src.saas.context（轻量级，仅含 ContextVar，不拉起 db/config/agent 链），

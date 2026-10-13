@@ -2,7 +2,7 @@
 
 > ideas 编号：20261010-1053（工具分区）
 > 开发计划：[docs/plans/plan-unified-kb-resource-metadata.md](../../../docs/plans/plan-unified-kb-resource-metadata.md)
-> 前置结论：工具总体优化 Phase 7 收口时决定两工具不再单独优化，另立本任务（docs/tools/tool-overall-optimization-dev-plan.md）
+> 前置结论：工具总体优化 Phase 7 收口时决定两工具不再单独优化，另立本任务
 
 ## 1. 背景与目标
 

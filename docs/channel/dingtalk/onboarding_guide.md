@@ -23,7 +23,7 @@
 
 - **协议**：HTTPS（自签证书不行，需要可公开验证的证书）
 - **端口**：必须是 `443`（钉钉不允许自定义端口）
-- **路径**：`/t/{tenant_id}/dingtalk/callback/{config_id}/{config_id}`
+- **路径**：`/t/{tenant_id}/dingtalk/callback/{config_id}`
 
 完整回调 URL 示例：
 ```
@@ -122,7 +122,7 @@ https://your-domain.com/t/{tenant_id}/saas/channels
 
 1. **消息接收地址**：粘贴步骤 3.2 复制的回调 URL
 2. 点击「保存」
-3. 钉钉会**立即向该地址发起一次测试请求**，本系统的 GET `/t/{tenant_id}/dingtalk/callback/{config_id}/{config_id}` 会返回 `200 OK`
+3. 钉钉会**立即向该地址发起一次测试请求**，本系统的 GET `/t/{tenant_id}/dingtalk/callback/{config_id}` 会返回 `200 OK`
 
 如果保存失败，钉钉会提示错误码：
 - `URL 不可访问` → 检查 HTTPS 证书、域名解析、防火墙
@@ -343,8 +343,8 @@ DingTalkAdapter(
 | 回调路由 | `src/saas/api/channel_routes.py:838-1080` |
 | 工厂注册 | `src/saas/services/channel_factory.py:26` |
 | 配置字段定义 | `src/saas/api/channel_config.py:49-54` |
-| 前端配置页 | `frontend/src/components/saas/ChannelConfig.vue` |
+| 前端配置页 | `frontend/web/components/saas/ChannelConfig.vue` |
 | 单元测试 | `tests/unit/channels/test_dingtalk_*.py` |
 | 集成测试 | `tests/integration/test_dingtalk_routes.py` |
-| 设计文档 | `docs/channel/dingtalk/integration_guide.md` |
+| 接入手册 | `docs/channel/dingtalk/onboarding_guide.md`（即本文档） |
 | 实施计划 | `docs/channel/dingtalk/implementation_plan.md` |

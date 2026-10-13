@@ -2,7 +2,6 @@
 
 > 对应设计文档：[智能数据分析工具设计](./smart-data-analysis-tool-design.md)
 > 关联功能索引：[docs/ideas_finished.md](../../ideas_finished.md) 数字员工 / 子智能体 #9
-> 关联开发计划：[数据源导入功能开发计划](./data-source-import-dev-plan.md)（9a）
 > 创建日期：2026-06-05（2026-07-20 按规范补登记）
 > 状态：✅ 已完成开发
 
@@ -30,7 +29,7 @@
 ## 关键设计变更（相对原设计）
 
 - `tables_metadata` 由必填改为可选：不传时由 AnalysisAgent 内部 `list_data_tables` / `search_data_tables` 自动检索匹配数据表，主智能体只需传自然语言需求。
-- 工具返回结构采用 `conclusion + artifacts + analysis_meta` 三层结构（详见 9c [返回结构优化设计](./data-analysis-tool-result-redesign.md)）。
+- 工具返回结构采用 `conclusion + artifacts + analysis_meta` 三层结构（9c 返回结构优化，原文档已删除）。
 
 ## 验收标准
 

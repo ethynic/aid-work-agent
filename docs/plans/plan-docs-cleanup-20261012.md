@@ -4,7 +4,7 @@
 >
 > **判定口径**：A=仍与代码一致（现役）；B=部分过时（核心机制在，细节有出入，保留但建议修正）；C=严重过时/与现有代码明显不符；D=纯历史记录（已完成计划/一次性调研，无现役参考价值）。删除候选 = C + D。
 >
-> **执行状态**：📋 待执行（本清单已评审落盘，删除动作由人工执行）。
+> **执行状态**：✅ 已执行（2026-10-13）。41 个删除项已 `git rm`；待定文件 wecom-integration.md 摘取「加解密说明 + 消息处理架构 + 故障排查」至 [wecom-crypto-troubleshooting.md](../channel/wecom/wecom-crypto-troubleshooting.md)（回调路由按现行 `/t/{tid}/wecom/callback/{config_id}` 修正）后删除；§3.1 research_index 8 条目已删；§3.2 悬空引用已全部清理（含表外补充：wecom-personal-rpa-design/protocol/plan-wecom-personal-rpa、douyin-lifeservice 调研、context_compression_design 剩余 4 处 research 引用）；§4 重点项 6 处已修（2 个部署文档凭证已脱敏、context_compression_design 补记 v3.3 2026-09-30 改造、llm-failover 改链式启用方式说明、RPA 协议版本 1.2.0、image-asset 状态头、dingtalk onboarding 回调路径 + frontend/web 路径），其余 B 级小修仍待后续。
 
 ## 1. 删除清单（41 个）
 

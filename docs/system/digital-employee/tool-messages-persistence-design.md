@@ -4,7 +4,6 @@
 >
 > **关联**：
 > - 父功能：[数据分析智能体](../../ideas.md) #9，本设计是其上下文失效问题的根因修复
-> - 上游设计：[数据分析工具返回结构优化](data-analysis-tool-result-redesign.md)
 >
 > **状态**：✅ 已完成开发
 > **创建日期**：2026-06-12
@@ -31,7 +30,7 @@
 
 ### 1.4 为什么 P0 改造没解决
 
-`data-analysis-tool-result-redesign.md` 改的是「工具返回什么结构」（conclusion + artifacts），但**没解决「工具返回能否被下一轮 LLM 看到」**。结构再好，跨 worker 丢了等于白搭。
+上游的「工具返回结构优化」改的是「工具返回什么结构」（conclusion + artifacts），但**没解决「工具返回能否被下一轮 LLM 看到」**。结构再好，跨 worker 丢了等于白搭。
 
 ---
 

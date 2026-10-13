@@ -8,19 +8,11 @@
 |---------|------|---------|
 | Codex、DeepSeek Harness、Hermes 桌面执行架构对比 | [调研](research/desktop-agent-harness-architecture-research.md) | 桌面 Agent：共用云端 Runner、本机文件/程序与批处理执行边界。 |
 | Desktop 本地与服务端工具执行分工调研 | [调研](research/desktop-agent-local-vs-server-tool-execution-research.md) | 桌面客户端 v3 / Runtime 插件宿主：本地/服务端双文件执行器、DeviceFileRef 与路由边界；结论已被桌面 v3 设计（§8）与 Phase 2/3 计划吸收，旧 Coordinator 路线作废。 |
-| 企业级智能体平台调研 | [enterprise-agent-platform-research.md](research/enterprise-agent-platform-research.md) | 可观测性、Prompt 管理、知识库 |
 | 基础设施差距分析 | [enterprise-agent-infrastructure-gap-analysis.md](research/enterprise-agent-infrastructure-gap-analysis.md) | 整体规划 |
 | Prompt 版本管理调研 | [prompt-version-management-research.md](research/prompt-version-management-research.md) | Prompt 全生命周期管理 |
 | AI Agent 可观测性调研 | [observability-design-research.md](research/observability-design-research.md) | 可观测性与质量保障 |
 | 知识库 RAG 技术调研 | [enterprise-knowledge-base-rag-research.md](research/enterprise-knowledge-base-rag-research.md) | 知识库能力增强 |
 | 知识库行业产品调研与低改动快速增强建议 | [enterprise-knowledge-base-quick-wins.md](research/enterprise-knowledge-base-quick-wins.md) | 知识库能力增强（补充 Phase 1-2 之外的快速增强点） |
-| Text-to-SQL 调研 | [text-to-sql-data-analysis-agent-research.md](research/text-to-sql-data-analysis-agent-research.md) | 数据分析智能体 |
-| 企微客服 AI 绑定调研 | [wecom-kf-ai-chatbot-binding-research.md](research/wecom-kf-ai-chatbot-binding-research.md) | 企业微信客服 AI 绑定 |
-| 前端样式调研 | [frontend-style-research.md](research/frontend/frontend-style-research.md) | 前端样式统一 |
-| 前端 Office 预览调研 | [frontend-office-preview-research.md](research/frontend-office-preview-research.md) | 前端 Office 预览 |
-| HTML 转 PPTX 技术调研 | [html-to-pptx-conversion-research.md](research/html-to-pptx-conversion-research.md) | PPT 技能 PPTX 导出 |
-| 企业微信个人账号 RPA 生产级客户端技术方案调研 | [wecom-personal-rpa-client-implementation-research.md](research/wecom-personal-rpa-client-implementation-research.md) | 企业微信个人账号 RPA 接入 |
-| 会话内上下文压缩业界方案调研 | [context_compression_research.md](research/context_compression_research.md) | 会话内上下文压缩（中期记忆） |
 | 社媒内容运营智能体与聚合平台可行性调研 | [social-media-operations-agent-platform-research.md](research/social-media-operations-agent-platform-research.md) | 社媒内容运营智能体与聚合平台 |
 | 微信桌面版 RPA 自动化技术方案调研 | [wechat-desktop-rpa-technical-research.md](research/wechat-desktop-rpa-technical-research.md) | 微信搜一搜 RPA（协会采集）；影刀失败后改自研「图像+OCR+键鼠」Python 方案，4 轮 PowerShell 真机验证通过 |
 | 微信搜一搜 RPA 命令行工具 | [设计](tools/wechat-souyisou-rpa-design.md) / [连续查询会话交接记录](tools/wechat-rpa-session-handoff.md) | 🔧 部分完成：正式 `collect` 已接入 HWND 会话状态机、10 分钟预算和 Per-Monitor V2；输入采用可信键盘导航与精确回读，… |

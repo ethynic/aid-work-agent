@@ -2,7 +2,6 @@
 
 > 关联文档：
 > - [ideas.md §调研报告索引](../ideas.md)
-> - [企业级智能体平台调研](./enterprise-agent-platform-research.md)
 > - [AI Agent 可观测性调研](./observability-design-research.md)
 > - [租户积分充值与计费设计](../system/saas/tenant-credit-billing-design.md)
 >

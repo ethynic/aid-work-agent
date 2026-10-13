@@ -1,7 +1,7 @@
 # 图片资产全链路架构设计
 
 > **文档类型**：架构设计（系统级横切关注点）
-> **状态**：📋 待开发
+> **状态**：✅ 已实现（ImageRegistry / ImageRef 已上线，见 `src/core/image_asset.py`）
 > **创建日期**：2026-07-10
 > **触发场景**：旅游顾问行程 Word 缺少景点图片 → 抽象为系统级「图片资产承载能力」
 > **关联规范**：[file_usage.md](file_usage.md) / [cache_usage.md](cache_usage.md) / [backend_dev.md](../../.claude/rules/backend_dev.md)

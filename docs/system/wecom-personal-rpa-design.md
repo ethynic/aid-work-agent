@@ -10,7 +10,6 @@
 > - 协议：[wecom-personal-rpa-protocol.md](./wecom-personal-rpa-protocol.md)
 > - 绑定管理 Tab：[wecom-personal-rpa-portal-binding-design.md](./wecom-personal-rpa-portal-binding-design.md)
 > - 开发计划：[plan-wecom-personal-rpa.md](../plans/plan-wecom-personal-rpa.md) + [plan-wecom-personal-rpa-client.md](../plans/plan-wecom-personal-rpa-client.md)
-> - 关联调研：[wecom-personal-account-rpa-research.md](../research/wecom-personal-account-rpa-research.md)、[wecom-personal-rpa-client-implementation-research.md](../research/wecom-personal-rpa-client-implementation-research.md)
 >
 > 创建日期：2026-06-16
 > 更新日期：2026-06-26

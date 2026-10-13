@@ -64,16 +64,15 @@ class CircuitBreaker:
 
 ### 2.4 配置设计
 
-在 `configs/config.yaml` 的 `llm` 段增加 failover 配置：
+> **现行启用方式（2026-10 更新）**：是否启用 failover 由 `LLM_PROVIDER` 的 **a/b/c 链式写法自推导**，无独立 `failover.enabled` 手动开关——单一 provider = 不启用；链式写法 = 启用。`src/config/settings.py` 加载期拆链：首段写入 `llm.provider`（恒为单一 provider 名，下游消费方无需感知链式格式），其余段写入 `failover.providers` 并自动置 `enabled=true`。
+
+`LLM_PROVIDER=zhipu/deepseek/qwen` 即配置「主 zhipu，备用依次 deepseek、qwen」。failover 细节参数仍在 `configs/config.yaml` 的 `llm.failover` 段：
 
 ```yaml
 llm:
-  provider: zhipu                    # 主 provider
+  provider: zhipu                    # 主 provider（由 LLM_PROVIDER 链式写法首段拆出）
   failover:
-    enabled: true                     # 是否启用 failover
-    providers:                        # failover 优先级链（不含主 provider）
-      - deepseek
-      - qwen
+    # enabled / providers 由 LLM_PROVIDER 链式写法自动推导写入，无需手动配置
     retry:
       max_retries: 2                  # 同一 provider 内重试次数（含首次调用）
       retry_delay: 1.0               # 重试间隔（秒），指数退避基数

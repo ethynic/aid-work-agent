@@ -1,7 +1,6 @@
 # 追踪查看页面整合 channel_sessions — 方案设计文档
 
 > 关联设计：[可观测性与质量保障设计](./observability-design.md)
-> 关联开发计划：[可观测性与质量保障开发计划](./observability-dev-plan.md)
 > 关联调研：渠道集成设计（旧文档已移除）、[微信客服设计](../channel/wecom_kf/wecom_kf_design.md)
 > 设计日期：2026-06-15
 > 状态：✅ 已落地（A/B/C/E 阶段完成，D 阶段端到端验证待补，2026-07-07）
@@ -416,7 +415,7 @@ if trace.source_type in ('wecom', 'wecom_kf', 'dingtalk', 'feishu'):
 
 ## 八、开发计划
 
-> 关联：[observability-dev-plan.md](./observability-dev-plan.md) Phase 1 的延伸
+> 关联：可观测性与质量保障设计 Phase 1 的延伸
 
 | # | 任务 | 文件 | 预估 | 状态 |
 |---|------|------|------|------|

@@ -824,7 +824,6 @@ class RetrievalPipeline:
 ### 3.6 结构化数据问答 Text-to-SQL（P2）
 
 > **已独立设计**：此模块复杂度高，已单独进行深度调研和详细设计。
-> - 技术调研：[Text-to-SQL 与数据分析智能体技术调研](../../research/text-to-sql-data-analysis-agent-research.md)
 > - 详细设计：[数据分析智能体设计文档](../digital-employee/data-analysis-subagent-design.md)
 
 ---

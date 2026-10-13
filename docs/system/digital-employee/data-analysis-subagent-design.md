@@ -1,6 +1,5 @@
 # 数据分析智能体设计文档
 
-> 前序调研：[Text-to-SQL 与数据分析智能体技术调研](../../research/text-to-sql-data-analysis-agent-research.md)
 > 关联设计：[知识库能力增强方案](../knowledge-base/knowledge-base-enhancement-design.md) §3.6
 > 关联规范：[系统架构](../../../.claude/rules/architecture.md)、[数据库开发规范](../../../.claude/rules/database_dev.md)
 > 创建日期：2026-05-29

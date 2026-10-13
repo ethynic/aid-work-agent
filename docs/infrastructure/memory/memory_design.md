@@ -267,7 +267,7 @@ memory:
 
 #### 2.2 中期记忆 — 会话内上下文压缩 🔧 部分完成（同步路径已实现，定时任务待开发）
 
-> **方案已细化**：完整设计见 [context_compression_design.md](./context_compression_design.md)，开发计划见 [context_compression_dev_plan.md](./context_compression_dev_plan.md)，业界调研见 [context_compression_research.md](../../research/context_compression_research.md)。
+> **方案已细化**：完整设计见 [context_compression_design.md](./context_compression_design.md)。
 >
 > 下方为早期占位草案，已被上述文档取代，仅保留作为决策对照。
 

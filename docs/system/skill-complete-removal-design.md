@@ -221,7 +221,7 @@ if tool_name == "skill_complete":
 
 ### 5.3 对后续工作的 paving
 
-- `docs/memory/memory_design.md` 和 `docs/infrastructure/memory/memory_design.md` 中关于 `_compress_skill_context` 的设计段落需标记为废弃
+- `docs/infrastructure/memory/memory_design.md` 中关于 `_compress_skill_context` 的设计段落需标记为废弃
 - `docs/infrastructure/memory/context_compression_design.md` 中「Skill 完成后压缩技能段」描述需更新
 - `docs/system/master-subagent/design_master_subagent.md` 中 `_active_skill_sessions` / `SkillSession` 相关字段描述需删除
 
@@ -261,8 +261,7 @@ if tool_name == "skill_complete":
 | 文档 | 同步内容 |
 |------|---------|
 | `docs/system/master-subagent/design_master_subagent.md` | 删除 `_active_skill_sessions` / `SkillSession` / `_handle_use_skill` 创建 session / skill_complete 排队延迟压缩 相关字段和流程描述 |
-| `docs/memory/memory_design.md` | 标记 `_compress_skill_context` / SkillCompleteTool 段落为已废弃 |
-| `docs/infrastructure/memory/memory_design.md` | 同上（这是 memory_design.md 的另一份副本） |
+| `docs/infrastructure/memory/memory_design.md` | 同上 |
 | `docs/infrastructure/memory/context_compression_design.md` | 删除「Skill 完成后压缩技能段」横向压缩描述 |
 | `docs/system/digital-employee/tool-messages-persistence-design.md` | 检查是否引用 skill_complete 压缩机制 |
 | `docs/tools/http_api_adapter_design.md` | 删除「Skill 完成（skill_complete）」流程描述 |

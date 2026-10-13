@@ -1,6 +1,6 @@
 # 会话内上下文压缩设计方案（Mid-Term Memory）
 
-> 版本: v3.0 | 创建: 2026-06-23 | 最后更新: 2026-06-29 | 状态: 设计完成；同步路径已实现，后台定时任务待开发
+> 版本: v3.0 | 创建: 2026-06-23 | 最后更新: 2026-09-30 | 状态: 设计完成；同步路径已实现，后台定时任务待开发
 >
 > **v3.0 变更**（相对 v2.0 的架构回归 + 补漏机制）：
 > - **触发方式从「异步 fire-and-forget」回归「同步 await」**：v2.0 曾选择异步（fire-and-forget + Redis SETNX 锁 + fail_count 连续失败降级链路），实践证明工程链路过重、竞态防护复杂。v3.0 回归业界共识的**同步压缩**——主流程在重建 memory 后、追加 user 消息前同步完成压缩，本轮 LLM 调用即享受压缩后上下文。
@@ -10,9 +10,9 @@
 > - **失败兜底简化**：摘要 LLM 失败不再走跨请求的 fail_count，而是**同一次调用内**重试 M 次 → 仍失败 → 立即走 `_fallback_truncate` 硬截断降级（无 LLM 调用 < 200ms）。
 > - 保留 v2.0 的：触发阈值 70%、TAIL 30 条、「50 条上下文」含所有消息口径。
 > - **v3.2.2 阈值简化**：消息数软阈值 150 → 200；删除 `_PRECISE_CHECK_MSG_THRESHOLD` 精确检查（缓存=0 时直接跳过 token 判断等下一轮，不再全量 count_tokens）。
+> - **v3.3 2026-09-30 经济性与可观测性改造**：① 摘要输出预算改为自适应——`clamp(压缩前上下文 token ÷ 50, 1500, 4096)`，长上下文按比例放大预算，摘要 LLM 输出被截断时自动续写拼接，保证摘要完整；② span 层透传压缩调用的 usage/cost，可观测性覆盖摘要 LLM 消耗；③ 新增 **50:1 经济性闸门**——压缩收益比（压缩前 token ÷ 压缩后 token）低于 50:1 时判定为不经济，放弃本次压缩，避免「花更多 token 换更少上下文」。
 >
 > 反向关联：本方案是 [memory_design.md](./memory_design.md) Phase 2.2「中期记忆 — 会话内上下文压缩」的细化实现。
-> 业界调研依据：[context_compression_research.md](../../research/context_compression_research.md)
 
 ---
 
@@ -55,7 +55,6 @@
 
 ## 1. 业界共识摘要（决策依据）
 
-详细调研见 [context_compression_research.md](../../research/context_compression_research.md)。
 
 | 决策点 | 业界主流 | 本方案采纳 | 备注 |
 |--------|---------|-----------|------|
@@ -71,7 +70,7 @@
 
 ### 1.1 关于「同步 vs 异步」的设计选择
 
-**业界共识**：同步压缩——异步会引入「压缩未完成时用户已发新消息」的竞态（详见 [context_compression_research.md](../../research/context_compression_research.md) 「同步 vs 异步」节）。
+**业界共识**：同步压缩——异步会引入「压缩未完成时用户已发新消息」的竞态。
 
 **版本演进**：
 - **v1.0**：同步压缩（早期草案）
@@ -813,7 +812,6 @@ class ContextCompressedEvent:
 
 ## 9. 分阶段开发计划
 
-> 详细开发任务见 [context_compression_dev_plan.md](./context_compression_dev_plan.md)
 
 | 阶段 | 内容 | 工期 | 验收 | 状态 |
 |------|------|------|------|------|
@@ -867,4 +865,4 @@ class ContextCompressedEvent:
 
 ## 附录 B：参考链接
 
-完整参考见调研报告 [context_compression_research.md](../../research/context_compression_research.md) 第 4 节。
+完整参考链接见原业界方案调研报告（已删除，2026-10-12 文档清理）。

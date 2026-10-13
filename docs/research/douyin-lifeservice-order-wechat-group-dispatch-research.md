@@ -153,5 +153,5 @@
 
 - `docs/research/weixin-cli/`（个人微信 PC 端 RPA 探针：消息发送/群搜索/UIA 观察）
 - `docs/research/wechat-desktop-rpa-technical-research.md`（微信桌面版 RPA 技术方案）
-- `docs/research/wecom-personal-rpa-client-implementation-research.md` 及 `clients/wecom-cli/`（企微客户端自动化工程经验）
+- `clients/wecom-cli/`（企微客户端自动化工程经验）
 - 项目侧 Fernet 加密、多租户表结构、渠道配置（`tenant_channel_configs`）可复用

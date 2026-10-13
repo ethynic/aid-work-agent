@@ -1,6 +1,5 @@
 # 工具开发规范（Tool Development Spec）
 
-> 配套设计文档：[`tool-overall-optimization-design.md`](./tool-overall-optimization-design.md) #2 统一规范。
 >
 > 本文档是**可执行的开发规范**，既是新工具开发的 checklist，也是旧工具重构的判定依据。后续所有工具改造和新工具开发**必须遵循**。
 >
@@ -241,4 +240,4 @@ def require_content_or_file(self):
 
 ## 5. 旧工具重构判定
 
-按本规范 §1 六条契约逐条核对，凡违反即为待修项；剩余待修项的范围与优先级见[开发计划 2026-10 复核结论](./tool-overall-optimization-dev-plan.md)。重构必须复用 §3 公共 helper，不得各写一套。
+按本规范 §1 六条契约逐条核对，凡违反即为待修项。重构必须复用 §3 公共 helper，不得各写一套。

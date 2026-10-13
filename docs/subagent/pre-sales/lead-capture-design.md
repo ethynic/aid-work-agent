@@ -1,7 +1,6 @@
 ---
 关联想法: wecom_kf 售前咨询客户留资（手机号 / 顾问微信二维码）
 关联设计: docs/channel/wecom_kf/wecom_kf_design.md
-关联设计(上游): docs/channel/wecom_kf/transfer_to_human_optimization.md
 状态: ✅ 已确认（产品方案，v2.1 评审修订）
 创建日期: 2026-08-21
 ---
@@ -9,7 +8,7 @@
 # 客户留资（售前咨询）设计
 
 > 版本: v2.1 | 创建: 2026-08-21 | 状态: 已确认（含 v2.1 评审修订，见第十五节）
-> 关联文档: [wecom_kf_design.md](../../channel/wecom_kf/wecom_kf_design.md) / [transfer_to_human_optimization.md](../../channel/wecom_kf/transfer_to_human_optimization.md) / [kf-account-referral-plan.md](../../channel/wecom_kf/kf-account-referral-plan.md) / [lead-capture-dev-plan.md](lead-capture-dev-plan.md)
+> 关联文档: [wecom_kf_design.md](../../channel/wecom_kf/wecom_kf_design.md) / [kf-account-referral-plan.md](../../channel/wecom_kf/kf-account-referral-plan.md) / [lead-capture-dev-plan.md](lead-capture-dev-plan.md)
 
 > **v2.0 重构说明（2026-08-21）**：客户留资从「wecom_kf 渠道能力」调整为「**技能 + 智能体能力**」——
 > 1. wecom_kf 渠道回归**纯对话通道**，不实现留资业务逻辑；

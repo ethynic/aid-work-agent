@@ -71,9 +71,9 @@
 
 | 凭证 | 位置 | 格式示例 |
 |------|------|----------|
-| **CorpID** | 「我的企业」→「企业信息」 | `ww2ed7298c926e081c` | 
+| **CorpID** | 「我的企业」→「企业信息」 | `（已脱敏）` | 
 | **AgentId** | 应用详情页 | `1000008` |
-| **Secret** | 应用详情页 → 点击「查看」 | XFR3mTosWzyYbH1m_Lr5BeP6CA_DeWmmgGzQvKv_0Bs |
+| **Secret** | 应用详情页 → 点击「查看」 | （已脱敏） |
 
 > **注意**：微信客服场景下，**不需要** AgentId，Secret 使用的是步骤 2 中创建的**自建应用的 Secret**。在步骤 3 中，该自建应用会被设置为「可调用接口的应用」，从而获得微信客服 API 的调用权限。
 
@@ -131,10 +131,10 @@
 
 | 字段 | 说明 | 获取位置 |
 |------|------|----------|
-| **corp_id** | 企业 ID | 企微后台「我的企业」 | ww2ed7298c926e081c 1000005
-| **secret** | 自建应用 Secret | 企微后台「自建应用」→「Secret」 | TAvsg5z0vFX5kCesjQUkQN0plhtT7zb6PkD5TOeuKJY
-| **token** | 回调 Token | 步骤 5 中设置的 Token | YT3ln8iWl2J1GmikjtrPUwEfuLP
-| **encoding_aes_key** | 回调加密密钥 | 步骤 5 中设置的 43 位 Key | IInKz1vCBGkybcyepYfHrgsAcliMPqIQVgCWRwzl8V9
+| **corp_id** | 企业 ID | 企微后台「我的企业」 | （已脱敏） 1000005
+| **secret** | 自建应用 Secret | 企微后台「自建应用」→「Secret」 | （已脱敏）
+| **token** | 回调 Token | 步骤 5 中设置的 Token | （已脱敏）
+| **encoding_aes_key** | 回调加密密钥 | 步骤 5 中设置的 43 位 Key | （已脱敏）
 
 ### 4.3 配置客服账号
 
@@ -420,7 +420,7 @@ sudo nginx -t && sudo nginx -s reload
 
 | 参数 | 在哪里找 | 示例值 |
 |------|---------|--------|
-| CorpID | 「我的企业」→「企业信息」 | `ww4bc16c5c2e154d95` |
+| CorpID | 「我的企业」→「企业信息」 | `（已脱敏）` |
 | 微信客服 Secret | 自建应用的 Secret（步骤 2 中获取） | 32 字符字符串 |
 | Token | 回调配置中自行设置 | 自定义字符串 |
 | EncodingAESKey | 回调配置中随机获取 | 43 位 Base64 字符串 |
@@ -454,14 +454,4 @@ sudo nginx -t && sudo nginx -s reload
 | 回复限制 | 无 | 48 小时 + 5 条/次 |
 | 文件发送 | 原生文件消息 | 图文链接卡片（初期） |
 
-appid: 1000006
-secret: m2xD-CgtYrWopJM3eUDmqiqa1vnjNU4j5YVgneHpE2g
-corpid: ww2ed7298c926e081c
-token: KAkzLCcWsRiiHPKzWu7hbkJyAW5iF
-EncodingAESKey: VLbBVkTKkAtfmyfW4TAaX5olkXm5aTixvB5q2PfVHCR
-
-旅游咨询
-1000007
-1v65X2mz9g_B7wcYuByelYzdwj-hg-7g8p9JlLM3lmE
-4S8PeJC9HrlgHO5ryNjLHhY4cqO8htI
-u5P4opVRXsVYUcuslMVdr1Q371FxLpNc8E2ZUdTjWlM
+（此处原为真实客服账号凭证清单，2026-10-12 文档清理时已脱敏删除，实际凭证以企业微信管理后台 / 租户渠道配置为准）

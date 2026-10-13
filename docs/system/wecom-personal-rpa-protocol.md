@@ -4,9 +4,8 @@
 > 所有下游 agent 在编码前必须 Read 本文件。
 > Pydantic 权威模型见 `src/channels/wecom_personal_rpa/schemas.py`；表结构见 `deploy/init-postgres.sql` 与 `deploy/db_update.sql`。
 > 创建日期：2026-06-22
-> 协议版本：`PROTOCOL_VERSION = "1.0.0"`（见 `schemas.py`）
+> 协议版本：`PROTOCOL_VERSION = "1.2.0"`（见 `schemas.py`，以代码为准）
 > 关联设计：[wecom-personal-rpa-design.md](./wecom-personal-rpa-design.md)
-> 关联调研：[../research/wecom-personal-rpa-client-implementation-research.md](../research/wecom-personal-rpa-client-implementation-research.md)
 
 ---
 

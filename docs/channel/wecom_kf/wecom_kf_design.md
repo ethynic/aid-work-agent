@@ -603,7 +603,7 @@ class ChannelType(str, Enum):
 
 新增一个内置工具 `transfer_to_human`，供 Agent 调用。
 
-> **2026-06-23 更新**：详见 [transfer_to_human_optimization.md](./transfer_to_human_optimization.md)。要点：
+> **2026-06-23 更新**（原 transfer_to_human_optimization.md 已删除，结论并入本文）：要点：
 > - `reason` 字段必填，用于审计与会话元信息记录
 > - **渠道隔离完全由 execute 段的 `get_kf_context()` 判断**——LLM 推理时拿不到渠道信息，因此 description/usage_guide 不再约束 LLM "仅在微信客服渠道调用"（这种约束无效）
 > - 非微信客服渠道调用时返回友好失败提示 `"当前渠道未提供人工客服"`，LLM 收到后改为直接用文字回复用户
@@ -1189,7 +1189,7 @@ async def _process_kf_messages(tenant_id, config_id, open_kfid, adapter):
 
 ## 十四、2026-10-09 长答复交付调整
 
-关联：[既有配额方案](reply_quota_control_plan.md)。本节更新既有渠道交付设计，2026-10-09 开发完成并通过自动化验证与独立 CodeReview；开发前调研快照与开发计划等过程文档已删除，有效内容并入本节（实现与验证记录见 §14.8），真机验收待部署后执行。
+本节更新既有渠道交付设计，2026-10-09 开发完成并通过自动化验证与独立 CodeReview；开发前调研快照与开发计划等过程文档已删除，有效内容并入本节（实现与验证记录见 §14.8），真机验收待部署后执行。
 
 ### 14.1 用户决策与适用范围
 

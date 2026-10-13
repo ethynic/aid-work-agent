@@ -1,7 +1,6 @@
 # 开发计划：企业微信个人账号 RPA 生产级独立客户端
 
 > 关联设计：[docs/system/wecom-personal-rpa-design.md](../system/wecom-personal-rpa-design.md)
-> 关联调研：[docs/research/wecom-personal-rpa-client-implementation-research.md](../research/wecom-personal-rpa-client-implementation-research.md)
 > 登记：[docs/ideas.md](../ideas.md) 渠道集成分区
 > 创建日期：2026-06-16
 > 更新日期：2026-06-23

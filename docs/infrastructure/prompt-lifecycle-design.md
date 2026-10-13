@@ -1489,7 +1489,6 @@ CREATE TABLE IF NOT EXISTS prompt_eval_results (
 
 ## 十一、实施计划
 
-> 详细开发计划见 [prompt-lifecycle-dev-plan.md](./prompt-lifecycle-dev-plan.md)
 
 ### 阶段一：Prompt 内容优化 + 版本管理基础（2 周）
 

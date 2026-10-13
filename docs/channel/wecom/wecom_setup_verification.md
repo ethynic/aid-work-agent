@@ -1,7 +1,7 @@
 # 企业微信自建应用配置与验证手册
 
 > 本文档面向运维人员，聚焦「从零配置到验证通过」的最短路径。
-> 详细技术说明见 [wecom-integration.md](./wecom-integration.md)。
+> 详细技术说明见 [wecom-crypto-troubleshooting.md](./wecom-crypto-troubleshooting.md)。
 
 ---
 
@@ -27,9 +27,9 @@
 
 | 凭证 | 获取位置 | 格式示例 |
 |------|----------|----------|
-| **CorpID** | 「我的企业」→「企业信息」顶部 | `ww2ed7298c926e081c` |
+| **CorpID** | 「我的企业」→「企业信息」顶部 | `（已脱敏）` |
 | **AgentId** | 应用详情页 → 「AgentId」 | `1000003` |
-| **Secret** | 应用详情页 → 点击「查看」| snAMwJwIWJ4n7kBFDhIXvWLCoxWW2aJTrHPKbjVjdiw |
+| **Secret** | 应用详情页 → 点击「查看」| （已脱敏） |
 
 **安全**: Secret 只能查看一次，建议立即复制到密码管理器或环境变量中。
 
@@ -39,9 +39,9 @@
 
 1. 在应用详情页，找到「接收消息」→「设置 API 接收」
 2. 填写:
-   - **URL**: `https://your-domain.com/t/{tenant_id}/wecom/callback/{config_id}`，例如 https://agent2.aidingyi.cn/t/tenant_1dc997a1806b/wecom/callback/chan_a1b2c3d4e5f6（config_id 在渠道配置页面创建后显示）
-   - **Token**: 点击「随机获取」（或自行输入 16+ 字符） JgYuzLoE42tD3MUCtnZPysh5lmd
-   - **EncodingAESKey**: 点击「随机获取」（43 字符 Base64） hUHJd3LTJDb3q9RlDIQ7GdjGlUQmDe73OgIaS9CHt3y
+   - **URL**: `https://your-domain.com/t/{tenant_id}/wecom/callback/{config_id}`，例如 https://agent2.aidingyi.cn/t/（已脱敏）/wecom/callback/chan_a1b2c3d4e5f6（config_id 在渠道配置页面创建后显示）
+   - **Token**: 点击「随机获取」（或自行输入 16+ 字符） （已脱敏）
+   - **EncodingAESKey**: 点击「随机获取」（43 字符 Base64） （已脱敏）
 3. **顺序很重要**: 先在服务器配好环境变量并启动服务，再点「保存」。企业微信会立即发 GET 请求验证。
 
 ---

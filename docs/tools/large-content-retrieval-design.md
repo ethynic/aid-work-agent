@@ -1,6 +1,5 @@
 # 大内容落盘检索闭环 + grep 工具设计
 
-> 配套：[`tool-overall-optimization-design.md`](./tool-overall-optimization-design.md) #2、[`file-tools-claude-code-parity-design.md`](./file-tools-claude-code-parity-design.md)
 >
 > 解决问题：工具（http_api/pdf/ocr）截断大内容后**完整内容永久丢失**，agent 无法回读被截断部分，形成「信息黑洞」。本设计建立「截断 → 落盘 → read/grep 回读」闭环，对齐 Claude Code harness 模式。
 
