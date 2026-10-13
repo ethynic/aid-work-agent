@@ -17,6 +17,8 @@ import {
   officePreviewMaxBytes,
   truncateSheetRange,
   previewFitScale,
+  previewFitPageScale,
+  parseInlineSizeToPx,
 } from '@/utils/officePreview'
 
 const MB = 1024 * 1024
@@ -144,5 +146,56 @@ describe('previewFitScale（整页/整表缩放，仿 PPT 模式）', () => {
     expect(previewFitScale(458, 0)).toBe(1)
     expect(previewFitScale(0, 794)).toBe(1)
     expect(previewFitScale(-32, 794)).toBe(1) // jsdom 默认 clientWidth 0
+  })
+})
+
+describe('parseInlineSizeToPx（docx-preview 内联尺寸单位解析）', () => {
+  it('pt 按 96dpi 换算为像素', () => {
+    expect(parseInlineSizeToPx('612pt')).toBe(816)
+    expect(parseInlineSizeToPx('792pt')).toBe(1056)
+    expect(parseInlineSizeToPx('72.5pt')).toBeCloseTo(96.667, 2)
+  })
+
+  it('px 与无单位按像素原值返回', () => {
+    expect(parseInlineSizeToPx('794px')).toBe(794)
+    expect(parseInlineSizeToPx('1123')).toBe(1123)
+  })
+
+  it('空串与非数值返回 0（调用方走兜底）', () => {
+    expect(parseInlineSizeToPx('')).toBe(0)
+    expect(parseInlineSizeToPx('auto')).toBe(0)
+  })
+})
+
+describe('previewFitPageScale（docx 整页适配：宽/高取更紧约束）', () => {
+  it('宽度约束更紧（窄面板/手机竖屏）时按宽度缩放', () => {
+    // availW=458/794=0.577 更紧于 availH=668/1123=0.595
+    expect(previewFitPageScale(458, 668, 794, 1123)).toBe(0.577)
+  })
+
+  it('高度约束更紧（宽屏矮面板）时按高度缩放，一页完整可见', () => {
+    // availH=468/1123=0.417 更紧于 availW=1068/794>1
+    expect(previewFitPageScale(1068, 468, 794, 1123)).toBe(0.417)
+  })
+
+  it('两维都不紧时保持 1（恰好整页等于容器）', () => {
+    expect(previewFitPageScale(794, 1123, 794, 1123)).toBe(1)
+  })
+
+  it('高度不可测（jsdom/未渲染）时退回仅宽度约束', () => {
+    expect(previewFitPageScale(458, 0, 794, 1123)).toBe(0.577)
+    expect(previewFitPageScale(458, -32, 794, 1123)).toBe(0.577) // clientHeight 0 - 内边距
+  })
+
+  it('页高不可测时退回仅宽度约束（宽容器不缩放）', () => {
+    expect(previewFitPageScale(1068, 468, 794, 0)).toBe(1)
+  })
+
+  it('两维都不可测时不缩放', () => {
+    expect(previewFitPageScale(0, 0, 0, 0)).toBe(1)
+  })
+
+  it('极小容器不再继续缩小（下限 0.3，退回滚动）', () => {
+    expect(previewFitPageScale(150, 150, 794, 1123)).toBe(0.3)
   })
 })

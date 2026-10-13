@@ -122,8 +122,9 @@
         <pre v-else class="bg-gray-900 text-gray-100 rounded-lg p-4 text-sm overflow-x-auto"><code :class="`hljs language-${textLanguage}`">{{ textContent }}</code></pre>
       </div>
 
-      <!-- DOCX Preview：整页缩放模式，渲染后按容器宽度设置 CSS zoom；overflow-auto 为缩放触底时兜底 -->
-      <div v-if="previewType === 'docx'" ref="docxContainer" class="p-4 min-h-full overflow-auto"></div>
+      <!-- DOCX Preview：整页缩放模式，按容器宽/高中更紧的约束设置 CSS zoom，保证一页完整可见；
+           h-full 有界容器 + overflow-auto：多页文档在面板内垂直滚动逐页查看，缩放触底时兜底 -->
+      <div v-if="previewType === 'docx'" ref="docxContainer" class="p-4 h-full overflow-auto"></div>
 
       <!-- Excel Preview（设计 §4.2：多 Sheet Tab + 表格容器横向滚动） -->
       <div v-if="previewType === 'excel'" class="flex flex-col h-full">
@@ -229,7 +230,10 @@ import {
   officePreviewMaxBytes,
   truncateSheetRange,
   previewFitScale,
+  previewFitPageScale,
+  parseInlineSizeToPx,
   DOCX_DEFAULT_PAGE_WIDTH,
+  DOCX_DEFAULT_PAGE_HEIGHT,
 } from '@/utils/officePreview'
 import { detectFileIconKind, type FileIconKind } from '@/utils/file'
 import FileTypeIcon from './FileTypeIcon.vue'
@@ -288,6 +292,9 @@ let attachmentEpoch = 0
 
 const panelStyle = computed(() => ({
   width: `${panelWidth.value}px`,
+  // 移动端外壳是 w-full 包裹，但内联 width 会覆盖 w-full 类导致面板比屏宽还宽（右侧关闭按钮出屏）；
+  // 桌面 md:w-auto 包裹不受影响。浏览器实测（2026-10-13）补充的防护
+  maxWidth: '100vw',
   minWidth: '320px',
   borderLeft: '1px solid #e5e7eb',
 }))
@@ -303,6 +310,9 @@ function startResize(e: MouseEvent) {
     const delta = startX - ev.clientX
     const newWidth = Math.min(Math.max(startWidth + delta, 320), window.innerWidth * 0.8)
     panelWidth.value = newWidth
+    // 面板宽度即 docx 整页缩放的约束维度之一，拖拽时同步重算
+    // （window resize 的防抖路径管不到这里；Excel 的整表缩放按 sheet 重渲染，不走此函数）
+    if (previewType.value === 'docx') applyDocxZoom()
   }
 
   function onMouseUp() {
@@ -405,11 +415,14 @@ async function loadTextContent() {
 }
 
 // 加载 DOCX
-// 最近一次渲染的 docx 页宽（取自 section 内联宽度）：窗口 resize 时只需重算缩放，无需重新渲染
+// 最近一次渲染的 docx 页宽/页高（取自首个 section 内联样式的单位感知解析）：
+// 窗口 resize 时只需重算缩放，无需重新渲染
 let lastDocxPageWidth = 0
+let lastDocxPageHeight = 0
 
 /**
- * 按容器内容宽度对 docx wrapper 设置整页缩放（仿 PPT 模式）。
+ * 按容器可用宽高对 docx wrapper 设置整页缩放：宽、高哪个约束更紧按哪个缩放，
+ * 保证一页在面板内完整可见（宽屏矮面板按高度缩、窄面板按宽度缩），多页垂直滚动逐页查看。
  * 注意：docx-preview 未传 styleContainer 时会把 <style> 注入到渲染容器内，
  * 必须按类名定位 wrapper（className 'docx-preview' → wrapper 类名 .docx-preview-wrapper），
  * 不能用 firstElementChild（那会命中 <style>，缩放不生效）。
@@ -419,7 +432,25 @@ function applyDocxZoom() {
   const el = docxContainer.value
   const wrapper = el?.querySelector('.docx-preview-wrapper') as HTMLElement | null
   if (!el || !wrapper) return
-  wrapper.style.zoom = String(previewFitScale(el.clientWidth - 32 /* p-4 内边距，与 pptx 测宽口径一致 */, lastDocxPageWidth))
+  wrapper.style.zoom = String(previewFitPageScale(
+    el.clientWidth - 32 /* p-4 内边距，与 pptx 测宽口径一致 */,
+    el.clientHeight - 32,
+    lastDocxPageWidth,
+    lastDocxPageHeight,
+  ))
+}
+
+/** 读取渲染后首页的声明页宽/页高（内联样式，pt 按 96dpi 换算）；页高缺失时退回实测最高 section */
+function measureDocxPageSize(el: HTMLDivElement) {
+  const first = el.querySelector('section') as HTMLElement | null
+  lastDocxPageWidth = parseInlineSizeToPx(first?.style.width ?? '') || DOCX_DEFAULT_PAGE_WIDTH
+  let measuredHeight = 0
+  el.querySelectorAll('section').forEach((s) => {
+    measuredHeight = Math.max(measuredHeight, (s as HTMLElement).offsetHeight)
+  })
+  // ignoreHeight: false 时 section 带 min-height（声明整页高）；个别内容超页的 section
+  // 会高于声明值，此时以声明页高为适配基准（超页内容在页内滚动，符合"一屏一页"语义）
+  lastDocxPageHeight = parseInlineSizeToPx(first?.style.minHeight ?? '') || measuredHeight || DOCX_DEFAULT_PAGE_HEIGHT
 }
 
 async function renderDocxContent(blob: Blob, el: HTMLDivElement) {
@@ -428,15 +459,17 @@ async function renderDocxContent(blob: Blob, el: HTMLDivElement) {
   await renderAsync(blob, el, undefined, {
     className: 'docx-preview',
     inWrapper: true,
-    // 整页缩放模式（仿 PPT，2026-10-10 验收反馈）：保留原始页宽与版式，
-    // 渲染后由 applyDocxZoom 按容器宽度 CSS zoom 等比缩放整页可见，不做 ignoreWidth 重排
+    // 整页缩放模式（仿 PPT）：保留原始页宽与版式，渲染后由 applyDocxZoom
+    // 按容器宽/高中更紧的约束做 CSS zoom 等比缩放，一页完整可见，不做 ignoreWidth 重排。
+    // ignoreHeight: false 让每个 section 取文档声明的整页高——一屏一页、滚动逐页查看
     ignoreWidth: false,
-    ignoreHeight: true,
+    ignoreHeight: false,
     ignoreFonts: false,
     breakPages: true,
   })
-  // docx-preview 给每个 section 写内联页宽（px）；缺失时按 A4 纵向兜底
-  lastDocxPageWidth = parseFloat(el.querySelector('section')?.style.width || '') || DOCX_DEFAULT_PAGE_WIDTH
+  // docx-preview 给每个 section 写内联页宽与 min-height（ignoreHeight: false 时为声明整页高）；
+  // 含 pt 单位需换算为像素，缺失时在 measureDocxPageSize 内按 A4 兜底
+  measureDocxPageSize(el)
   applyDocxZoom()
 }
 

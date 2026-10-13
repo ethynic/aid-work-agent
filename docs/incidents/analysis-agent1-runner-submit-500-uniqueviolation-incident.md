@@ -21,7 +21,9 @@
 | 直插残留行 | `queue_order` 34–50 共 **17 行**，`accepted_at` 均为 2026-10-12（2026-10-13 复核仍可查到） | 表内值越过序列 |
 | created 事件 | 上述 17 行中带 `agent_runner_events` `kind='created'` 事件的为 **0 行**；正常提交路径 `submit_in_tx` 必写 created 事件 | 绕过应用写入 |
 | 请求日志 | nginx / 应用日志均无对应这 17 行的任何 HTTP 请求 | 非 API 路径产生 |
-| 测试脚本排除 | `scripts/e2e_dogfood_replay.py` 为进程内直驱老链路、不插 `agent_runners` 行 | 肇事脚本非它；**肇事脚本本体至今未找到** |
+| 污染行内容指纹（2026-10-13 复核定位） | 17 行 `input.text` 与 `scripts/e2e_dogfood_replay.py` 硬编码提示词逐字一致；checkpoint 含 `"role": "standalone"`；17 个不同 session、时间分布 10-12 00:43–12:28、状态 cancelled/interrupted | 重放工具**早期版本**（10-12 白天在 agent1 上迭代执行）直插 |
+| 排除提交版脚本 | b7153a2b（10-12 19:19）提交的 `e2e_dogfood_replay.py` / `_local.sh` 全文无 `agent_runners` 写入（进程内直驱，`session_replay_<ts>` 前缀会话） | 定稿版干净，无需修改 |
+| 排除生产还原/日志库拷贝 | 生产库 `aid_work_agent` 与日志库 `aid_work_logs1` 均无 `agent_runners` 表（Runner 未上生产） | 无整库还原路径 |
 
 ## 3. 根因（已实锤）
 
@@ -52,4 +54,4 @@
    ```sql
    SELECT setval('agent_runners_queue_order_seq', (SELECT COALESCE(max(queue_order),0) FROM agent_runners));
    ```
-4. **肇事脚本**：若后续找到（特征：能连仿真库、显式写 `queue_order`、2026-10-12 执行过），按上述约定改造。
+4. **肇事脚本**：已定位为 10-12 白天在 agent1 上迭代执行的重放工具**早期版本**（证据见 §2「污染行内容指纹」）；19:19 定稿提交版（b7153a2b）已不写 runner 行，无需修改。早期版本若仍留存于本地或 agent1 容器，按上述约定改造或删除，避免再次执行。

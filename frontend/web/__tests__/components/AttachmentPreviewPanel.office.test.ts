@@ -412,12 +412,14 @@ describe('AttachmentPreviewPanel —— 切到不可预览类型时 loading 遮�
   })
 })
 
-describe('AttachmentPreviewPanel —— docx 整页缩放（仿 PPT，按容器内容宽度缩放整页可见）', () => {
+describe('AttachmentPreviewPanel —— docx 整页缩放（宽/高取更紧约束，一页完整可见）', () => {
   beforeEach(() => {
     vi.mocked(renderAsync).mockReset()
     // 模拟 docx-preview 的真实 DOM 结构：先注入 <style>（styleContainer 缺省即渲染容器本身），
-    // 再追加 wrapper（类名 {className}-wrapper）+ 带内联页宽的 section。
-    // 真实库会把 <style> 放在容器首位——缩放定位必须按类名而非 firstElementChild（回归防护）
+    // 再追加 wrapper（类名 {className}-wrapper）+ 带内联页宽/页高的 section。
+    // 真实库会把 <style> 放在容器首位——缩放定位必须按类名而非 firstElementChild（回归防护）。
+    // 内联尺寸带 pt 单位（Letter：612pt×792pt → 816×1056px），需单位感知解析。
+    // jsdom 测不出 clientHeight，容器高约束被忽略（退回单维宽度约束）
     vi.mocked(renderAsync).mockImplementation(async (_data, container) => {
       const style = document.createElement('style')
       style.textContent = '.docx-preview-wrapper {}'
@@ -425,39 +427,57 @@ describe('AttachmentPreviewPanel —— docx 整页缩放（仿 PPT，按容器�
       const wrapper = document.createElement('div')
       wrapper.className = 'docx-preview-wrapper'
       const section = document.createElement('section')
-      section.style.width = '794px'
+      section.style.width = '612pt'
+      section.style.minHeight = '792pt'
       wrapper.appendChild(section)
       ;(container as HTMLElement).appendChild(wrapper)
     })
   })
 
-  let originalDescriptor: PropertyDescriptor | undefined
+  let originalWidthDescriptor: PropertyDescriptor | undefined
+  let originalHeightDescriptor: PropertyDescriptor | undefined
 
-  /** stub 所有元素的 clientWidth（docx 容器内容宽度 = clientWidth - 32 p-4 内边距） */
-  function setContainerClientWidth(width: number) {
-    originalDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
+  /** stub 所有元素的 clientWidth/clientHeight（docx 容器内容区 = clientXxx - 32 p-4 内边距） */
+  function setContainerClientSize(width: number, height?: number) {
+    originalWidthDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
     Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
       configurable: true,
       get: () => width,
     })
+    if (height !== undefined) {
+      originalHeightDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
+      Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+        configurable: true,
+        get: () => height,
+      })
+    }
   }
 
   afterEach(() => {
-    if (originalDescriptor) {
-      Object.defineProperty(HTMLElement.prototype, 'clientWidth', originalDescriptor)
+    if (originalWidthDescriptor) {
+      Object.defineProperty(HTMLElement.prototype, 'clientWidth', originalWidthDescriptor)
     } else {
       delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth
     }
-    originalDescriptor = undefined
+    originalWidthDescriptor = undefined
+    if (originalHeightDescriptor) {
+      Object.defineProperty(HTMLElement.prototype, 'clientHeight', originalHeightDescriptor)
+    } else {
+      delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight
+    }
+    originalHeightDescriptor = undefined
   })
 
   it.each([
-    { clientWidth: 490, zoom: '0.577', label: '窄面板（桌面窗口但面板 <A4 页宽）整页等比缩放，内容完整可见' },
-    { clientWidth: 375, zoom: '0.432', label: '手机宽度面板整页缩放' },
-    { clientWidth: 1100, zoom: '1', label: '宽容器不放大，保持原始页宽' },
-  ])('$label', async ({ clientWidth, zoom }) => {
+    { clientWidth: 490, clientHeight: undefined, zoom: '0.561', label: '窄面板（高度不可测）按宽度整页等比缩放' },
+    { clientWidth: 375, clientHeight: undefined, zoom: '0.42', label: '手机宽度面板整页缩放' },
+    { clientWidth: 1100, clientHeight: undefined, zoom: '1', label: '宽容器不放大，保持原始页宽' },
+    { clientWidth: 375, clientHeight: 800, zoom: '0.42', label: '手机竖屏：宽度约束更紧，行为与纯宽度一致' },
+    { clientWidth: 1100, clientHeight: 500, zoom: '0.443', label: '宽屏矮面板：高度约束更紧，按高度缩放保证一页完整可见' },
+    { clientWidth: 490, clientHeight: 500, zoom: '0.443', label: '又窄又矮：两维都紧时取更紧者（高度）' },
+  ])('$label', async ({ clientWidth, clientHeight, zoom }) => {
     serveFile('file_docx', SAMPLE_DOCX)
-    setContainerClientWidth(clientWidth)
+    setContainerClientSize(clientWidth, clientHeight)
     const wrapper = mountPanel(makeAttachment({
       file_id: 'file_docx',
       name: '报告.docx',
@@ -471,6 +491,12 @@ describe('AttachmentPreviewPanel —— docx 整页缩放（仿 PPT，按容器�
     expect(options?.ignoreWidth).toBe(false)
     const zoomed = wrapper.element.querySelector('.docx-preview-wrapper') as HTMLElement | null
     expect(zoomed?.style.zoom).toBe(zoom)
+    // 容器必须是有界滚动容器（h-full）：多页文档在面板内垂直滚动逐页查看（回归防护，
+    // 曾经的 min-h-full 会让高度随内容增长、超出后被外层 overflow-hidden 裁切，无法滚动）。
+    // 注意用 classList token 级匹配——子串匹配防不住 min-h-full 回归（'min-h-full'.includes('h-full') 为真）
+    const container = zoomed?.parentElement
+    expect(container?.classList.contains('h-full')).toBe(true)
+    expect(container?.classList.contains('overflow-auto')).toBe(true)
     expect(wrapper.text()).not.toContain('文档预览加载失败')
   })
 })

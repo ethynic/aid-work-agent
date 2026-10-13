@@ -22,19 +22,57 @@ export const EXCEL_MAX_RENDER_ROWS = 1000
 /** docx 整页缩放兜底页宽：A4 纵向（约 794px），section 内联宽度缺失时使用 */
 export const DOCX_DEFAULT_PAGE_WIDTH = 794
 
+/** docx 整页缩放兜底页高：A4 纵向（约 1123px），section 声明页高与实测高度都缺失时使用 */
+export const DOCX_DEFAULT_PAGE_HEIGHT = 1123
+
+/**
+ * 解析 docx-preview 写入 section 的内联尺寸（如 "612pt"）为像素：
+ * pt 按 96dpi 换算（×4/3），无单位/px 视为像素，无法解析返回 0。
+ * 直接 parseFloat 会把 612pt 当 612px 用（真实渲染宽 816px），缩放会偏大导致溢出。
+ */
+export function parseInlineSizeToPx(value: string): number {
+  const m = /^\s*([\d.]+)\s*(pt|px)?\s*$/i.exec(value)
+  if (!m) return 0
+  const n = parseFloat(m[1])
+  if (!Number.isFinite(n)) return 0
+  return (m[2] ?? 'px').toLowerCase() === 'pt' ? (n * 4) / 3 : n
+}
+
 /** 预览整页/整表缩放下限：容器极窄时不再继续缩小（缩到不可读），退回横向滚动 */
 export const PREVIEW_FIT_SCALE_FLOOR = 0.3
 
+/** 缩放比收口：上限 1（容器比内容大时不放大）、下限 PREVIEW_FIT_SCALE_FLOOR，千分位取整去掉浮点尾巴 */
+function clampFitScale(raw: number): number {
+  return Math.round(Math.min(1, Math.max(PREVIEW_FIT_SCALE_FLOOR, raw)) * 1000) / 1000
+}
+
 /**
- * 预览内容整页适配缩放比（docx 页面 / Excel 表格共用，仿 PPT 模式）：
- * 保留内容原始尺寸与版式，按容器内容宽度等比缩放到整页（整表）可见。
- * 上限 1（容器比内容宽时不放大），下限 PREVIEW_FIT_SCALE_FLOOR；
+ * 预览内容整表缩放比（Excel 表格用，宽度单约束，仿 PPT 模式）：
+ * 保留内容原始尺寸与版式，按容器内容宽度等比缩放到整表可见。
  * 内容或容器宽度不可测（≤0，如测试环境）时不缩放。
  */
 export function previewFitScale(containerContentWidth: number, contentWidth: number): number {
   if (contentWidth <= 0 || containerContentWidth <= 0) return 1
-  const raw = containerContentWidth / contentWidth
-  return Math.round(Math.min(1, Math.max(PREVIEW_FIT_SCALE_FLOOR, raw)) * 1000) / 1000
+  return clampFitScale(containerContentWidth / contentWidth)
+}
+
+/**
+ * docx 整页适配缩放比：宽、高哪个约束更紧就按哪个缩放（两维比值取 min），
+ * 保证一页在预览面板内完整可见——宽屏矮面板按高度缩，窄面板按宽度缩；
+ * 多页文档由容器垂直滚动逐页查看。
+ * 某一维不可测（≤0，如 jsdom 测不出 clientHeight）时忽略该约束退回单维，
+ * 两维都不可测时不缩放。上限/下限与 previewFitScale 一致。
+ */
+export function previewFitPageScale(
+  containerContentWidth: number,
+  containerContentHeight: number,
+  pageWidth: number,
+  pageHeight: number,
+): number {
+  const widthRaw = pageWidth > 0 && containerContentWidth > 0 ? containerContentWidth / pageWidth : Number.POSITIVE_INFINITY
+  const heightRaw = pageHeight > 0 && containerContentHeight > 0 ? containerContentHeight / pageHeight : Number.POSITIVE_INFINITY
+  if (widthRaw === Number.POSITIVE_INFINITY && heightRaw === Number.POSITIVE_INFINITY) return 1
+  return clampFitScale(Math.min(widthRaw, heightRaw))
 }
 
 /** Office 预览类型（与面板 previewType 的 office 分支取值一致） */
