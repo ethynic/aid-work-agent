@@ -27,12 +27,25 @@ NOTIFY_TTL_SECONDS = 86400
 NOTIFY_CATEGORY = "abuse"
 
 
+# users.source -> 通知中的用户类型前缀（未映射/空 = 内部用户）
+SOURCE_TYPE_LABELS = {
+    "wecom_kf": "微信用户",
+    "wecom": "企微用户",
+    "wecom_personal_rpa": "企微用户",
+    "dingtalk": "钉钉用户",
+    "feishu": "飞书用户",
+}
+
+_PERIOD_INTERVALS = {"hour": "1 hour", "day": "1 day"}
+
+
 def _subject_label(user_row: Dict[str, Any], user_id: str) -> str:
+    prefix = SOURCE_TYPE_LABELS.get(user_row.get("source") or "", "内部用户")
     for key in ("nickname", "username", "phone"):
         value = user_row.get(key)
         if value:
-            return str(value)[:128]
-    return user_id[:128]
+            return f"{prefix} {str(value)[:120]}"[:128]
+    return f"{prefix} {user_id[:120]}"[:128]
 
 
 def _tenant_name(cursor, tenant_id: str) -> str:
@@ -80,6 +93,7 @@ def _publish_admin_notifications(
     window_credits: float,
     threshold_credits: float,
     observe_mode: bool,
+    period: str = "day",
 ) -> int:
     """租户管理员 + 平台管理员逐人发布 abuse.rule_triggered（幂等键含 user，24h TTL）。
 
@@ -91,19 +105,28 @@ def _publish_admin_notifications(
     # event_key 按小时分桶：唯一约束行在 retention 清理前长期存在，
     # 不分桶会让同键后续告警命中旧行被静默吞掉（与 abuse_events 的 1h 去重对齐）
     event_key = f"abuse:{tenant_id}:{user_id}:credit_budget:{now:%Y%m%d%H}"
-    parameters = {
+    window_hours = 1 if period == "hour" else 24
+    window_start = (now - timedelta(hours=window_hours)).strftime("%Y-%m-%d %H:%M")
+    base_parameters = {
+        "tenant_id": tenant_id,
         "tenant_name": tenant_name,
         "rule_name": rule_name[:128],
         "subject_label": subject_label,
+        "user_id": user_id,
+        "period": period if period in _PERIOD_INTERVALS else "day",
+        "window_start": window_start,
+        "window_end": now.strftime("%Y-%m-%d %H:%M"),
         "window_credits": round(window_credits, 2),
         "threshold_credits": round(threshold_credits, 2),
         "observe_mode": observe_mode,
     }
     published = 0
-    # (admin_id, tenant scope)；平台管理员 tenant_id=None -> scope 'global'，
-    # 站内信可达；个人 web_push 外发需 category='abuse' 偏好行（当前偏好仅开放 task，暂不可达）
-    for admin_id, admin_tenant in (
-        [(a, tenant_id) for a in admins] + [(a, None) for a in platform_admins]
+    # (admin_id, tenant scope, parameters)；平台管理员 tenant_id=None -> scope 'global'，
+    # 站内信可达；个人 web_push 外发需 category='abuse' 偏好行（当前偏好仅开放 task，暂不可达）。
+    # 平台管理员无租户上下文，通知中保留租户名；租户管理员即当前租户，不显示
+    for admin_id, admin_tenant, parameters in (
+        [(a, tenant_id, base_parameters) for a in admins]
+        + [(a, None, {**base_parameters, "show_tenant": True}) for a in platform_admins]
     ):
         subject = Subject(user_id=admin_id, tenant_id=admin_tenant)
         ref = publish_in_tx(
@@ -227,6 +250,7 @@ def run_abuse_scan_once(repository=None) -> Dict[str, int]:
                                 hard_threshold if hit_hard else warn_threshold
                             ),
                             observe_mode=(mode == "observe"),
+                            period=period,
                         )
                     # 计数在 commit 成功后累加：publish 异常 rollback 时事件也随之回滚，不虚计
                     cursor.commit()

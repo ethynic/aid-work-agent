@@ -481,8 +481,30 @@ function formatTime(t: string): string {
   return new Date(t).toLocaleString('zh-CN', { hour12: false })
 }
 
-onMounted(() => {
-  loadUsageSummary()
+onMounted(async () => {
   loadRuleNames()
+  // 站内信深链：?focus_user=xxx&window=hour|day -> 加载后直接展开该用户明细弹框
+  const focusUser = route.query.focus_user as string
+  const focusWindow = route.query.window as string
+  if (focusWindow === 'hour' || focusWindow === 'day') usageWindow.value = focusWindow
+  await loadUsageSummary()
+  if (focusUser) {
+    const row = usageItems.value.find(i => i.user_id === focusUser)
+    if (row) {
+      await openDetail(row)
+    } else {
+      // 汇总列表中无此用户（如窗口刚切换），仍直接打开明细弹框
+      await openDetail({
+        user_id: focusUser,
+        username: '',
+        nickname: '',
+        channel_source: null,
+        user_status: 'active',
+        total_credits: 0,
+        request_count: 0,
+        last_request_at: '',
+      })
+    }
+  }
 })
 </script>

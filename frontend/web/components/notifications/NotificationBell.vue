@@ -56,8 +56,10 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { notificationsAPI, type InboxItem } from '@/api/notifications'
 
+const router = useRouter()
 const panelOpen = ref(false)
 const loading = ref(false)
 const items = ref<InboxItem[]>([])
@@ -101,13 +103,18 @@ function togglePanel() {
 }
 
 async function handleRead(item: InboxItem) {
-  if (item.read_at) return
-  try {
-    await notificationsAPI.markRead(item.notification_ref)
-    item.read_at = new Date().toISOString()
-    unreadCount.value = Math.max(0, unreadCount.value - 1)
-  } catch (e) {
-    console.error('标记已读失败:', e)
+  if (!item.read_at) {
+    try {
+      await notificationsAPI.markRead(item.notification_ref)
+      item.read_at = new Date().toISOString()
+      unreadCount.value = Math.max(0, unreadCount.value - 1)
+    } catch (e) {
+      console.error('标记已读失败:', e)
+    }
+  }
+  if (item.link) {
+    panelOpen.value = false
+    router.push(item.link)
   }
 }
 
