@@ -220,7 +220,7 @@ async def usage(request: Request, window: str = "day", user_id: Optional[str] = 
             return {"success": True, "window": window, "items": items}
         # 单用户明细
         cursor.execute(
-            f"""SELECT id, session_id, user_message, response_message, credit_cost,
+            f"""SELECT id, session_id, user_message, assistant_message, credit_cost,
                        model, source_type, created_at
                 FROM chat_records
                 WHERE tenant_id = %s AND user_id = %s AND credit_cost > 0

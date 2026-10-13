@@ -658,6 +658,30 @@ app.add_middleware(TenantContextMiddleware)
 logger.info("SaaS tenant context middleware enabled")
 
 
+# ==================== 全局兜底异常处理 ====================
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """未捕获异常统一记入 loguru 错误日志（含堆栈），并返回带 debug 字段的 500。
+
+    背景：路由内未 try/except 的异常原本只走 Starlette ServerErrorMiddleware，
+    经标准 logging 输出到 uvicorn stderr，不进 loguru 错误文件和 log_error 表，
+    导致「错误日志」页面查不到 500 的根因。
+    """
+    from src.utils import sanitize_error_info
+    logger.opt(exception=True).error(
+        f"未捕获异常 {request.method} {request.url.path}: {exc}"
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "success": False,
+            "error": "服务器内部错误，请稍后重试",
+            "debug": sanitize_error_info(str(exc)),
+        },
+    )
+
+
 # ==================== Health Check ====================
 
 @app.get("/health")

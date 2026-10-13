@@ -76,7 +76,7 @@ export interface AbuseUsageDetail {
   id: number
   session_id: string
   user_message: string
-  response_message: string | null
+  assistant_message: string | null
   credit_cost: number
   model: string | null
   source_type: string
