@@ -10,7 +10,17 @@
 
     <div class="page-content p-6 gap-4 overflow-y-auto">
       <!-- 租户默认策略 -->
-      <BaseCard title="租户默认策略">
+      <BaseCard>
+        <template #header>
+          <div class="flex items-center justify-between">
+            <h3 class="text-lg font-semibold text-default">租户默认策略</h3>
+            <button
+              type="button"
+              class="text-xs text-primary-600 hover:text-primary-700 hover:underline whitespace-nowrap"
+              @click="goNotificationChannels"
+            >通知渠道 &gt;</button>
+          </div>
+        </template>
         <p class="text-xs text-muted mb-3">
           本租户未单独配置的用户与渠道，按此默认策略评估（user 级 > channel 级 > 本默认 > 平台默认）。
         </p>
@@ -267,6 +277,10 @@ function switchTab(key: TabKey) {
 
 function onPolicySaved() {
   toast.success('租户默认策略已保存')
+}
+
+function goNotificationChannels() {
+  router.push(`/t/${tenantId.value}/settings#notification-channels`)
 }
 
 // ============== 用量监控 ==============

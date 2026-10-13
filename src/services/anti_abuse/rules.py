@@ -23,8 +23,8 @@ RULE_CATALOG: List[Dict[str, Any]] = [
         "name": "时间窗积分预算",
         "type": "hard",
         "description": (
-            "按滚动窗口统计用户的会话积分消耗，达到告警线记事件并通知租户管理员，"
-            "达到硬限线后（拦截模式）请求入口直接拦截。具体阈值建议先用观察模式跑真实数据校准。"
+            "按滚动窗口统计用户的会话积分消耗，达到告警线记事件并通知租户管理员；"
+            "达到阈值后可在用量监控中停用用户闭环处置。具体阈值建议先用真实数据校准。"
         ),
         "params_schema": [
             {
@@ -41,14 +41,16 @@ RULE_CATALOG: List[Dict[str, Any]] = [
                 "type": "number",
                 "min": 0,
                 "required": False,
-                "description": "达到该值记事件并通知；不填则只看硬限线",
+                "description": "达到该值记事件并通知租户管理员",
             },
             {
                 "key": "hard_threshold",
                 "label": "硬限线（积分）",
                 "type": "number",
                 "min": 0,
-                "required": True,
+                "required": False,
+                # Phase 2 预留（拦截模式），编辑器隐藏该参数
+                "phase": 2,
                 "description": "拦截模式下达到该值拦截请求",
             },
         ],

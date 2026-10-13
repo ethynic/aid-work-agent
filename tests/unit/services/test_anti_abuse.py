@@ -28,8 +28,11 @@ class TestValidatePolicyParams:
         assert not ok and "未知规则" in err
 
     def test_missing_required(self):
+        # Phase 1 仅观察模式：hard_threshold 降为非必填，仅 period 必填
         ok, err = validate_policy_params("credit_budget", {"period": "day"})
-        assert not ok and "hard_threshold" in err
+        assert ok and err == ""
+        ok, err = validate_policy_params("credit_budget", {})
+        assert not ok and "period" in err
 
     def test_invalid_enum(self):
         ok, err = validate_policy_params("credit_budget", {"period": "week", "hard_threshold": 10})
@@ -295,7 +298,7 @@ class TestRunAbuseScanOnce:
         assert params["window_credits"] == 850.0
         assert params["threshold_credits"] == 800.0  # 硬限命中取硬限阈值
         assert params["observe_mode"] is True
-        assert params["subject_label"] == "小明"
+        assert params["subject_label"] == "内部用户 小明"
         # 事件详情标注 level=hard
         detail = fake_svc.record_event.call_args.kwargs["detail"]
         assert detail["level"] == "hard" and detail["mode"] == "observe"
