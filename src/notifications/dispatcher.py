@@ -19,7 +19,7 @@ class NotificationDispatcher:
         self._next_send = 0.0
 
     async def start(self):
-        if not self.config.enabled or self._task is not None:
+        if self._task is not None:
             return
         await asyncio.to_thread(self.repository.assert_schema)
         self._stop.clear()
@@ -68,8 +68,7 @@ class NotificationDispatcher:
     async def _run(self):
         while not self._stop.is_set():
             try:
-                if self.config.enabled:
-                    await self.tick()
+                await self.tick()
             except Exception as error:
                 logger.error('notification dispatcher failure class={}',type(error).__name__)
             try:

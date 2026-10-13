@@ -10,7 +10,7 @@ from src.notifications.repository import tenant_installation_ref, tenant_owned
 CREDIT_LOW = {'tenant_name': '宏陶', 'daily_avg_credits': 5.0,
               'estimated_days': 2, 'remaining_credits': 10.0}
 TENANT_EXPIRY = {'tenant_name': '宏陶', 'expire_date': '2026-11-09', 'days_left': 30}
-ABUSE = {'rule_name': '单用户高频调用', 'subject_label': 'user_001',
+ABUSE = {'tenant_name': '测试租户', 'rule_name': '单用户高频调用', 'subject_label': 'user_001',
          'window_credits': 900.0, 'threshold_credits': 500.0, 'observe_mode': False}
 
 
@@ -28,6 +28,7 @@ class TestRenderInboxText:
     def test_abuse_triggered(self):
         title, body = render_inbox_text('abuse.rule_triggered', ABUSE)
         assert title == '异常消耗告警'
+        assert '「测试租户」' in body
         assert '「单用户高频调用」' in body
         assert '（观察模式，未拦截）' not in body
 

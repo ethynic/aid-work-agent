@@ -17,7 +17,7 @@ from src.notifications.repository import (
 
 def make_repo():
     repo = NotificationRepository.__new__(NotificationRepository)
-    repo.config = NotificationsConfig(enabled=True)
+    repo.config = NotificationsConfig()
     return repo
 
 
@@ -84,7 +84,7 @@ class TestExpandTenantDedupe:
     def _run_expand(self, messages, dedupe_hits):
         """dedupe_hits: 去重查询依次返回的假值列表（None=无已有投递）。"""
         repo = NotificationRepository.__new__(NotificationRepository)
-        repo.config = NotificationsConfig(enabled=True, batch_size=10)
+        repo.config = NotificationsConfig(batch_size=10)
         registry = MagicMock()
         registry.get.return_value = StubAdapter()
         repo.registry = registry
@@ -133,3 +133,59 @@ class TestExpandTenantDedupe:
         count, state = self._run_expand([billing_message('admin1', key)], dedupe_hits=[None])
         assert count == 1
         assert state['inserted'] == 1
+
+
+def inbox_repo(user_row):
+    """构造 guard 走真 DB mock、SQL 可捕获的 repository"""
+    repo = NotificationRepository.__new__(NotificationRepository)
+    repo.config = NotificationsConfig()
+
+    cursor = MagicMock()
+    captured = {}
+    state = {'unread': [{'unread': 0}], 'items': []}
+
+    def execute_dispatch(sql, params=None):
+        if 'FROM users' in sql:
+            cursor.fetchone = lambda: user_row
+        elif "FROM tenants WHERE tenant_id=%s AND status='active'" in sql:
+            cursor.fetchone = lambda: {'ok': 1}
+        elif 'count(*) AS unread' in sql:
+            captured['count_sql'] = sql
+            cursor.fetchone = lambda: next(iter(state['unread']))
+        elif 'ORDER BY created_at DESC' in sql:
+            captured['list_sql'] = sql
+            cursor.fetchall = lambda: state['items']
+
+    cursor.execute.side_effect = execute_dispatch
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+
+    @contextmanager
+    def factory():
+        yield conn
+
+    repo.connection_factory = factory
+    return repo, captured
+
+
+class TestInboxPlatformScope:
+    def test_platform_admin_inbox_includes_global_scope(self):
+        repo, captured = inbox_repo({'user_id': 'p1', 'tenant_id': None,
+                                     'role': 'platform_admin', 'status': 'active'})
+        result = repo.inbox(Subject('p1', None))
+        assert "scope_key='global'" in captured['count_sql']
+        assert "scope_key='global'" in captured['list_sql']
+        assert result['unread_count'] == 0
+
+    def test_platform_admin_in_tenant_context_also_sees_global(self):
+        repo, captured = inbox_repo({'user_id': 'p1', 'tenant_id': None,
+                                     'role': 'platform_admin', 'status': 'active'})
+        repo.inbox(Subject('p1', 't1'))
+        assert "(scope_key=%s OR scope_key='global')" in captured['list_sql']
+
+    def test_tenant_user_inbox_strict_scope(self):
+        repo, captured = inbox_repo({'user_id': 'u1', 'tenant_id': 't1',
+                                     'role': 'tenant_admin', 'status': 'active'})
+        repo.inbox(Subject('u1', 't1'))
+        assert "OR scope_key='global'" not in captured['count_sql']
+        assert "OR scope_key='global'" not in captured['list_sql']

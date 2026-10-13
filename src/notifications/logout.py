@@ -5,11 +5,8 @@ from .contracts import NotificationError, Subject
 from .repository import NotificationRepository
 
 
-def revoke_browser_logout_in_tx(cursor, user_id, headers, config=None):
-    if config is None:
-        from src.config.settings import settings
-        config = settings.notifications
-    if not config.enabled or not user_id:
+def revoke_browser_logout_in_tx(cursor, user_id, headers):
+    if not user_id:
         return
     target_id = headers.get('X-Notification-Target-Id', '')
     version = headers.get('X-Notification-Binding-Version', '')

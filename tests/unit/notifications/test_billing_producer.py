@@ -16,7 +16,7 @@ TODAY = date(2026, 10, 10)
 
 def make_repo(**config_kw):
     repo = MagicMock()
-    repo.config = NotificationsConfig(enabled=True, tenant_events_enabled=True, **config_kw)
+    repo.config = NotificationsConfig(tenant_events_enabled=True, **config_kw)
     conn = MagicMock()
     repo.connection_factory.return_value.__enter__.return_value = conn
     return repo, conn
@@ -50,13 +50,7 @@ def set_cursor_sequence(cursor, tenants, totals, admins, now=None):
 class TestSwitches:
     def test_disabled_returns_zero_without_connection(self):
         repo, _ = make_repo()
-        repo.config = NotificationsConfig(enabled=True)  # tenant_events_enabled 默认 False
-        assert run_billing_notifications_once(repo, today=TODAY) == 0
-        repo.connection_factory.assert_not_called()
-
-    def test_notification_core_disabled_returns_zero(self):
-        repo, _ = make_repo()
-        repo.config = NotificationsConfig(tenant_events_enabled=True)  # enabled 默认 False
+        repo.config = NotificationsConfig(tenant_events_enabled=False)
         assert run_billing_notifications_once(repo, today=TODAY) == 0
         repo.connection_factory.assert_not_called()
 

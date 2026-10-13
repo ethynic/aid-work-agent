@@ -61,20 +61,16 @@ def create_router(config=None, repository=None, user_loader=None):
         return Subject(user['user_id'],tenant)
 
     def enabled():
-        if not config.enabled:
-            raise NotificationError('NOTIFICATION_DISABLED', 503)
         repository.assert_schema()
 
     @router.get('/capabilities')
     def capabilities(current: Subject = Depends(subject)):
-        # Authorize subject even with the core off, without touching its tables.
         with repository.connection_factory() as connection:
             repository.guard(connection.cursor(),current)
+        repository.assert_schema()
         adapter = repository.registry.get('web_push','web_push')
-        available = bool(config.enabled and adapter and adapter.available())
-        if config.enabled:
-            repository.assert_schema()
-        return {'schema_version':1,'enabled':config.enabled,
+        available = bool(adapter and adapter.available())
+        return {'schema_version':1,'enabled':True,
                 'web_push':{'enabled':available,'public_key':config.web_push.public_key if available else None,
                             'key_id':config.web_push.key_id if available else None}}
 

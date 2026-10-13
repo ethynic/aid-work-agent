@@ -24,7 +24,7 @@ async def test_dispatch_tick_failure_isolated_and_cleanup_still_runs():
                 raise RuntimeError('external transport failure')
             return SendResult('accepted')
     repo = MagicMock(spec=NotificationRepository)
-    repo.config = NotificationsConfig(enabled=True, concurrency=2, rate_per_second=100)
+    repo.config = NotificationsConfig(concurrency=2, rate_per_second=100)
     claims = [dict(delivery_id=str(i)) for i in range(2)]
     repo.claim.return_value = claims
     repo.prepare_send.side_effect = lambda claim: (Adapter(claim['delivery_id'] == '0'), {}, {}, 20)
@@ -37,17 +37,20 @@ async def test_dispatch_tick_failure_isolated_and_cleanup_still_runs():
 
 
 @pytest.mark.asyncio
-async def test_disabled_start_has_no_schema_or_worker_side_effect():
+async def test_start_asserts_schema_and_spawns_worker():
     repo = MagicMock(spec=NotificationRepository); repo.config = NotificationsConfig()
     dispatcher = NotificationDispatcher(repo)
-    await dispatcher.start()
-    assert dispatcher._task is None
-    repo.assert_schema.assert_not_called()
+    try:
+        await dispatcher.start()
+        repo.assert_schema.assert_called_once()
+        assert dispatcher._task is not None
+    finally:
+        await dispatcher.stop()
 
 
 @pytest.mark.asyncio
 async def test_schema_failure_prevents_dispatcher_worker_start():
-    repo = MagicMock(spec=NotificationRepository); repo.config = NotificationsConfig(enabled=True)
+    repo = MagicMock(spec=NotificationRepository); repo.config = NotificationsConfig()
     repo.assert_schema.side_effect = RuntimeError('schema incompatible')
     dispatcher = NotificationDispatcher(repo)
     with pytest.raises(RuntimeError, match='schema incompatible'):
@@ -58,7 +61,7 @@ async def test_schema_failure_prevents_dispatcher_worker_start():
 
 @pytest.mark.asyncio
 async def test_start_stop_reuses_one_worker_and_can_restart():
-    repo = MagicMock(spec=NotificationRepository); repo.config = NotificationsConfig(enabled=True)
+    repo = MagicMock(spec=NotificationRepository); repo.config = NotificationsConfig()
     dispatcher = NotificationDispatcher(repo)
     entered = asyncio.Event()
     async def run():

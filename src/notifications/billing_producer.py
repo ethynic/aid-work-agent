@@ -39,7 +39,7 @@ def run_billing_notifications_once(repository=None, today=None):
     if repository is None:
         repository = notification_repository()
     config = repository.config
-    if not (config.enabled and config.tenant_events_enabled):
+    if not config.tenant_events_enabled:
         return 0
     today = today or date.today()
     thresholds = sorted(config.tenant_expiry_thresholds, reverse=True)
@@ -118,7 +118,7 @@ class TenantBillingNotificationScheduler:
 
     async def start(self):
         config = self.repository.config
-        if not (config.enabled and config.tenant_events_enabled) or self._task is not None:
+        if not config.tenant_events_enabled or self._task is not None:
             return
         await asyncio.to_thread(self.repository.assert_schema)
         self._stop.clear()

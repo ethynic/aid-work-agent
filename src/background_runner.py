@@ -231,19 +231,28 @@ async def _run():
             f"background runner: 可选模块调度加载失败（不影响 runner）: {e}",
         )
     # User notifications use this dedicated lifecycle, never request workers.
-    from src.notifications.dispatcher import NotificationDispatcher
-    _notification_dispatcher = NotificationDispatcher()
-    await _notification_dispatcher.start()
-    from src.notifications.billing_producer import TenantBillingNotificationScheduler
-    _billing_scheduler = TenantBillingNotificationScheduler()
-    await _billing_scheduler.start()
+    _notification_dispatcher = None
+    _billing_scheduler = None
+    try:
+        from src.notifications.dispatcher import NotificationDispatcher
+        _notification_dispatcher = NotificationDispatcher()
+        await _notification_dispatcher.start()
+        from src.notifications.billing_producer import TenantBillingNotificationScheduler
+        _billing_scheduler = TenantBillingNotificationScheduler()
+        await _billing_scheduler.start()
+    except Exception as e:
+        logger.opt(exception=True).error(
+            f"background runner: 通知调度器启动失败（不影响 runner 主流程）: {e}",
+        )
     logger.info("background runner 就绪")
 
     await _stop.wait()
     logger.info("background runner 收到停止信号，开始优雅停机")
 
-    await _notification_dispatcher.stop()
-    await _billing_scheduler.stop()
+    if _notification_dispatcher is not None:
+        await _notification_dispatcher.stop()
+    if _billing_scheduler is not None:
+        await _billing_scheduler.stop()
 
     # 停机：poller → wechat_mp scheduler → hongtao_shop scheduler → scheduler → DB 池
     try:

@@ -33,6 +33,7 @@ class TenantExpiryParameters(StrictDTO):
 
 
 class AbuseParameters(StrictDTO):
+    tenant_name: str = Field(min_length=1, max_length=128)
     rule_name: str = Field(min_length=1, max_length=128)
     subject_label: str = Field(min_length=1, max_length=128)
     window_credits: float = Field(ge=0, le=1e12)
@@ -88,7 +89,7 @@ def render_inbox_text(event_type, parameters):
     if event_type == 'abuse.rule_triggered':
         mode = '（观察模式，未拦截）' if parameters['observe_mode'] else ''
         return '异常消耗告警', (
-            f'反滥用规则「{parameters["rule_name"]}」触发{mode}：'
+            f'租户「{parameters["tenant_name"]}」的反滥用规则「{parameters["rule_name"]}」触发{mode}：'
             f'{parameters["subject_label"]} 在统计窗口内消耗 {parameters["window_credits"]:.1f} 积分，'
             f'阈值 {parameters["threshold_credits"]:.1f} 积分。')
     raise ValueError('NOTIFICATION_EVENT_UNSUPPORTED')

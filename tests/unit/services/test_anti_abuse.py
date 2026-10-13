@@ -199,16 +199,16 @@ class TestRecordEvent:
 NOW = datetime(2026, 10, 11, 12, 0, 0)
 
 
-def make_repo(enabled=True, tenant_events=True):
+def make_repo(tenant_events=True):
     from src.config.settings import NotificationsConfig
     repo = MagicMock()
-    repo.config = NotificationsConfig(enabled=enabled, tenant_events_enabled=tenant_events)
+    repo.config = NotificationsConfig(tenant_events_enabled=tenant_events)
     return repo
 
 
-def make_cursor(candidates, users, admins):
+def make_cursor(candidates, users, admins, platform_admins=None):
     cur = MagicMock()
-    state = {"admins": admins}
+    state = {"admins": admins, "platform_admins": platform_admins or []}
 
     def execute(sql, params=None):
         if "GROUP BY tenant_id, user_id" in sql:
@@ -217,6 +217,10 @@ def make_cursor(candidates, users, admins):
             cur.fetchall = lambda: users
         elif "role = 'tenant_admin'" in sql:
             cur.fetchall = lambda: state["admins"]
+        elif "role = 'platform_admin'" in sql:
+            cur.fetchall = lambda: state["platform_admins"]
+        elif "FROM tenants" in sql:
+            cur.fetchone = lambda: {"company_name": "测试租户"}
         elif "clock_timestamp" in sql:
             cur.fetchone = lambda: {"now": NOW}
 
@@ -280,13 +284,14 @@ class TestRunAbuseScanOnce:
         assert stats["scanned"] == 1 and stats["events"] == 1 and stats["notified"] == 1
         event = published[0]
         assert event["event_type"] == "abuse.rule_triggered"
-        assert event["event_key"] == "abuse:t1:u1:credit_budget"
+        assert event["event_key"] == f"abuse:t1:u1:credit_budget:{NOW:%Y%m%d%H}"
         assert event["resource_ref"] == {"type": "abuse_event", "id": "42"}
         assert event["policy_key"] == "tenant_admin_event"
         assert event["category"] == "abuse"
         assert event["producer"] == abuse_scanner.PRODUCER
         assert event["expires_at"] == NOW + timedelta(seconds=86400)
         params = event["parameters"]
+        assert params["tenant_name"] == "测试租户"
         assert params["window_credits"] == 850.0
         assert params["threshold_credits"] == 800.0  # 硬限命中取硬限阈值
         assert params["observe_mode"] is True
@@ -351,7 +356,7 @@ class TestRunAbuseScanOnce:
         container, published, _ = scanner_env
         monkeypatch.setattr(
             abuse_scanner, "notification_repository",
-            lambda: make_repo(enabled=False),
+            lambda: make_repo(tenant_events=False),
         )
         container["cursor"] = make_cursor(
             [_candidate()], [_user_row()], [{"user_id": "admin1"}])
@@ -367,4 +372,27 @@ class TestRunAbuseScanOnce:
             [{"user_id": "admin1"}])
         run_abuse_scan_once()
         keys = {p["event_key"] for p in published}
-        assert keys == {"abuse:t1:u1:credit_budget", "abuse:t2:u2:credit_budget"}
+        bucket = f"{NOW:%Y%m%d%H}"
+        assert keys == {f"abuse:t1:u1:credit_budget:{bucket}",
+                        f"abuse:t2:u2:credit_budget:{bucket}"}
+
+    def test_platform_admins_notified_with_global_scope(self, scanner_env):
+        # 租户管理员按租户 scope、平台管理员按 global scope，各发一条
+        container, published, _ = scanner_env
+        container["cursor"] = make_cursor(
+            [_candidate()], [_user_row()], [{"user_id": "admin1"}],
+            platform_admins=[{"user_id": "padmin1"}, {"user_id": "padmin2"}])
+        stats = run_abuse_scan_once()
+        assert stats["notified"] == 3
+        by_subject = {(p["subject"].user_id, p["subject"].tenant_id) for p in published}
+        assert by_subject == {("admin1", "t1"), ("padmin1", None), ("padmin2", None)}
+
+    def test_platform_admin_only_no_tenant_admin(self, scanner_env):
+        # 租户无 tenant_admin 时平台管理员仍收到告警
+        container, published, _ = scanner_env
+        container["cursor"] = make_cursor(
+            [_candidate()], [_user_row()], [],
+            platform_admins=[{"user_id": "padmin1"}])
+        stats = run_abuse_scan_once()
+        assert stats["events"] == 1 and stats["notified"] == 1
+        assert published[0]["subject"].tenant_id is None

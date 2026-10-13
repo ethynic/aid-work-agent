@@ -25,10 +25,8 @@ class RunnerRepository:
                 if not cursor.fetchone()["name"]:
                     raise RuntimeError("AGENT_RUNNER_SCHEMA_REQUIRED")
             cursor.execute('SELECT event_seq,event_floor_seq FROM agent_runners LIMIT 0')
-            from src.config.settings import settings
-            if settings.notifications.enabled:
-                from src.notifications.repository import NotificationRepository
-                NotificationRepository.assert_schema_in_tx(cursor)
+            from src.notifications.repository import NotificationRepository
+            NotificationRepository.assert_schema_in_tx(cursor)
 
     def submit(self, principal, request, profile_fingerprint, *, resolved_profile_id=None, execution_context=None):
         with self.connection_factory() as conn:

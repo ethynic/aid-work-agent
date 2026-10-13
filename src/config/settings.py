@@ -697,7 +697,6 @@ class WebPushConfig(BaseModel):
 
 class NotificationsConfig(BaseModel):
     rate_per_second: int = Field(default=5, ge=1, le=100)
-    enabled: bool = False
     ttl_seconds: int = Field(default=86400, ge=60, le=604800)
     max_attempts: int = Field(default=6, ge=1, le=20)
     concurrency: int = Field(default=4, ge=1, le=16)
@@ -707,8 +706,8 @@ class NotificationsConfig(BaseModel):
     retention_days: int = Field(default=30, ge=1, le=365)
     allowed_tenants: List[str] | None = None  # None: all active tenants; []: none.
     timeout_seconds: int = Field(default=10, ge=1, le=30)
-    # 租户管理员通知（计费提醒/反滥用告警）：总开关默认关，场景开关在总开关开启时生效。
-    tenant_events_enabled: bool = False
+    # 租户管理员通知（计费提醒/反滥用告警）场景开关；通知基础设施本身常开（无总开关）。
+    tenant_events_enabled: bool = True
     tenant_credit_low_enabled: bool = True
     tenant_expiry_enabled: bool = True
     tenant_credit_low_days: int = Field(default=7, ge=1, le=90)  # 预计耗尽日不足该天数才提醒
@@ -935,9 +934,6 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
 
     notification_cfg = yaml_config.setdefault('notifications', {})
     push_cfg = notification_cfg.setdefault('web_push', {})
-    for name, field in (('NOTIFICATIONS_ENABLED', 'enabled'),):
-        if os.getenv(name) is not None:
-            notification_cfg[field] = os.environ[name].lower() in ('true', '1', 'yes')
     if os.getenv('WEB_PUSH_ENABLED') is not None:
         push_cfg['enabled'] = os.environ['WEB_PUSH_ENABLED'].lower() in ('true', '1', 'yes')
     for name, field in (('WEB_PUSH_VAPID_PUBLIC_KEY', 'public_key'),

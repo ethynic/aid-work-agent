@@ -62,9 +62,10 @@ class NotificationRepository:
                 or subject.tenant_id in self.config.allowed_tenants)
 
     def guard(self, cursor, subject):
-        assert_subject_in_tx(cursor, subject)
+        user = assert_subject_in_tx(cursor, subject)
         if not self.allowed(subject):
             raise NotificationError('NOTIFICATION_TENANT_DISABLED', 403)
+        return user
 
     def guard_admin(self, cursor, subject):
         user = assert_subject_in_tx(cursor, subject)
@@ -103,9 +104,8 @@ class NotificationRepository:
             raise RuntimeError('NOTIFICATION_SCHEMA_CONSTRAINTS_REQUIRED')
 
     def assert_schema(self):
-        if self.config.enabled:
-            with self.connection_factory() as conn:
-                self.assert_schema_in_tx(conn.cursor())
+        with self.connection_factory() as conn:
+            self.assert_schema_in_tx(conn.cursor())
 
     def targets(self, subject):
         with self.connection_factory() as conn:
@@ -377,9 +377,16 @@ class NotificationRepository:
     def resolve(self, subject, ref):
         with self.connection_factory() as conn:
             cursor = conn.cursor()
-            cursor.execute('''SELECT * FROM notification_messages WHERE notification_ref=%s
-                AND scope_key=%s AND recipient_user_id=%s AND tenant_id IS NOT DISTINCT FROM %s''',
-                (ref,subject.scope_key,subject.user_id,subject.tenant_id))
+            user = self.guard(cursor, subject)
+            if user['role'] == 'platform_admin':
+                # 平台管理员在任意上下文都能看到发给自己的全局消息
+                cursor.execute('''SELECT * FROM notification_messages WHERE notification_ref=%s
+                    AND recipient_user_id=%s AND (scope_key=%s OR scope_key='global')''',
+                    (ref,subject.user_id,subject.scope_key))
+            else:
+                cursor.execute('''SELECT * FROM notification_messages WHERE notification_ref=%s
+                    AND scope_key=%s AND recipient_user_id=%s AND tenant_id IS NOT DISTINCT FROM %s''',
+                    (ref,subject.scope_key,subject.user_id,subject.tenant_id))
             message = cursor.fetchone()
             if not message:
                 raise NotificationError('NOTIFICATION_NOT_FOUND', 404)
@@ -392,14 +399,17 @@ class NotificationRepository:
         from .events import render_inbox_text
         with self.connection_factory() as conn:
             cursor = conn.cursor()
-            self.guard(cursor, subject)
-            cursor.execute('''SELECT count(*) AS unread FROM notification_messages
-                WHERE scope_key=%s AND recipient_user_id=%s AND event_type=ANY(%s) AND read_at IS NULL''',
+            user = self.guard(cursor, subject)
+            # 平台管理员在任意上下文都能看到发给自己的全局消息
+            scope_sql = "(scope_key=%s OR scope_key='global')" if user['role'] == 'platform_admin' \
+                else 'scope_key=%s'
+            cursor.execute(f'''SELECT count(*) AS unread FROM notification_messages
+                WHERE {scope_sql} AND recipient_user_id=%s AND event_type=ANY(%s) AND read_at IS NULL''',
                 (subject.scope_key,subject.user_id,list(self.INBOX_EVENT_TYPES)))
             unread = cursor.fetchone()['unread']
-            sql = '''SELECT notification_ref,event_type,category,priority,read_at,created_at,
+            sql = f'''SELECT notification_ref,event_type,category,priority,read_at,created_at,
                 parameters_encrypted FROM notification_messages
-                WHERE scope_key=%s AND recipient_user_id=%s AND event_type=ANY(%s)'''
+                WHERE {scope_sql} AND recipient_user_id=%s AND event_type=ANY(%s)'''
             if unread_only:
                 sql += ' AND read_at IS NULL'
             sql += ' ORDER BY created_at DESC LIMIT %s'
@@ -418,9 +428,11 @@ class NotificationRepository:
     def mark_inbox_read(self, subject, ref):
         with self.connection_factory() as conn:
             cursor = conn.cursor()
-            self.guard(cursor, subject)
-            cursor.execute('''SELECT notification_ref FROM notification_messages
-                WHERE notification_ref=%s AND scope_key=%s AND recipient_user_id=%s''',
+            user = self.guard(cursor, subject)
+            scope_sql = "(scope_key=%s OR scope_key='global')" if user['role'] == 'platform_admin' \
+                else 'scope_key=%s'
+            cursor.execute(f'''SELECT notification_ref FROM notification_messages
+                WHERE notification_ref=%s AND {scope_sql} AND recipient_user_id=%s''',
                 (ref,subject.scope_key,subject.user_id))
             if not cursor.fetchone():
                 raise NotificationError('NOTIFICATION_NOT_FOUND', 404)
@@ -574,7 +586,7 @@ class NotificationRepository:
                             or message['event_type'] not in pref['event_types']):
                         reason = 'preference_changed'
                 adapter = self.registry.get(target['channel'], target['provider'])
-                if not reason and (not adapter or not adapter.available() or not self.config.enabled):
+                if not reason and (not adapter or not adapter.available()):
                     reason = 'provider_disabled'
             if reason:
                 cursor.execute('''UPDATE notification_deliveries SET state=%s,error_class=%s,

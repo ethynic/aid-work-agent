@@ -98,14 +98,14 @@
 | 检查点 | 行为 |
 |--------|------|
 | 入口预检拦截（预算） | 请求不进入 LLM 执行；渠道侧回复一条固定礼貌话术（可按租户配置），web 侧返回结构化错误；写 `abuse_events` |
-| 告警线（预算 warn_threshold） | 不拦截，写 `abuse_events`（action=warned）并通知租户管理员（§3.4） |
+| 告警线（预算 warn_threshold） | 不拦截，写 `abuse_events`（action=warned）并通知租户管理员与平台管理员（§3.4） |
 | 观察模式 | 一切放行，写 `abuse_events`（action=logged）；预算命中阈值时同样触发通知（§3.4） |
 
 ### 3.4 观察模式闭环：通知 + 防滥用中心 + 禁用用户
 
 即使不开 enforce，观察模式也能形成完整的管理闭环：
 
-1. **触发通知**：`credit_budget` 命中 warn_threshold 或 hard_threshold（observe 下不拦截，仅记 `abuse_events`）时——Phase 1 由定时扫描任务发现（§5.2，分钟级延迟，观察场景可接受），Phase 2 起入口预检实时发现——通过租户管理员通知基础设施（`src/notifications/`）发 `abuse.rule_triggered` 事件（事件类型已在通知 Phase 1 预定义）。站内信 + 已配置的 IM/邮箱四渠道外发；同一 `(tenant_id, user_id, rule_id)` 24h 内只通知一次（event_key 幂等去重），避免刷屏。
+1. **触发通知**：`credit_budget` 命中 warn_threshold 或 hard_threshold（observe 下不拦截，仅记 `abuse_events`）时——Phase 1 由定时扫描任务发现（§5.2，分钟级延迟，观察场景可接受），Phase 2 起入口预检实时发现——通过租户管理员通知基础设施（`src/notifications/`）发 `abuse.rule_triggered` 事件（事件类型已在通知 Phase 1 预定义）。站内信 + 已配置的 IM/邮箱四渠道外发；同一 `(tenant_id, user_id, rule_id)` 每小时最多通知一次（event_key 按小时分桶幂等去重），避免刷屏；通知对象为租户管理员（租户 scope）+ 平台管理员（global scope，站内信）。
 2. **防滥用中心·用量监控**（`AbuseCenter.vue`，§8.2）：通知内链接跳转（携带 user_id 定位），按用户展示观察期内的积分消耗明细：
    - 哪个用户、什么时间段、共消耗多少积分（`chat_records` 聚合，窗口内 `SUM(credit_cost)`）
    - 逐条请求明细：时间、问题/任务内容（`chat_records.user_message`）、单条积分

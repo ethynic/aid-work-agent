@@ -1,8 +1,8 @@
 """防滥用定时扫描任务（Phase 1 观察闭环驱动，设计 §5.2）。
 
 每轮：chat_records 聚合窗口内有消耗的用户 -> 解析生效绑定 -> 评估
-credit_budget -> 命中阈值写 abuse_events（1h 同键去重）+ 租户管理员通知
-（publish_in_tx 幂等键 + 24h TTL，IM/邮箱外发由既有 dispatcher 轮询完成）。
+credit_budget -> 命中阈值写 abuse_events（1h 同键去重）+ 租户管理员与平台管理员
+通知（publish_in_tx 幂等键 + 24h TTL，IM/邮箱外发由既有 dispatcher 轮询完成）。
 
 Phase 1 不接执行链拦截点；warn 延迟为分钟级（扫描间隔），观察场景可接受。
 """
@@ -35,6 +35,12 @@ def _subject_label(user_row: Dict[str, Any], user_id: str) -> str:
     return user_id[:128]
 
 
+def _tenant_name(cursor, tenant_id: str) -> str:
+    cursor.execute("SELECT company_name FROM tenants WHERE tenant_id = %s", (tenant_id,))
+    row = cursor.fetchone()
+    return (row["company_name"] or tenant_id)[:128] if row else tenant_id[:128]
+
+
 def _scan_candidates(cursor) -> List[Dict[str, Any]]:
     """最大窗口（day）内有会话类消耗的 (tenant_id, user_id) 聚合"""
     cursor.execute(
@@ -63,7 +69,9 @@ def _load_users(cursor, user_ids: List[str]) -> Dict[str, Dict[str, Any]]:
 def _publish_admin_notifications(
     cursor,
     tenant_id: str,
+    tenant_name: str,
     admins: List[str],
+    platform_admins: List[str],
     *,
     event_id: int,
     user_id: str,
@@ -73,26 +81,39 @@ def _publish_admin_notifications(
     threshold_credits: float,
     observe_mode: bool,
 ) -> int:
-    """租户管理员逐人发布 abuse.rule_triggered（幂等键含 user，24h TTL）"""
+    """租户管理员 + 平台管理员逐人发布 abuse.rule_triggered（幂等键含 user，24h TTL）。
+
+    租户管理员按租户 scope 投递（走租户级外发 target）；平台管理员无租户属性，
+    按 global scope 投递（仅站内信/个人 web_push，不触发租户级 IM 外发）。
+    """
     cursor.execute("SELECT clock_timestamp() AS now")
     now = cursor.fetchone()["now"]
+    # event_key 按小时分桶：唯一约束行在 retention 清理前长期存在，
+    # 不分桶会让同键后续告警命中旧行被静默吞掉（与 abuse_events 的 1h 去重对齐）
+    event_key = f"abuse:{tenant_id}:{user_id}:credit_budget:{now:%Y%m%d%H}"
+    parameters = {
+        "tenant_name": tenant_name,
+        "rule_name": rule_name[:128],
+        "subject_label": subject_label,
+        "window_credits": round(window_credits, 2),
+        "threshold_credits": round(threshold_credits, 2),
+        "observe_mode": observe_mode,
+    }
     published = 0
-    for admin_id in admins:
-        subject = Subject(user_id=admin_id, tenant_id=tenant_id)
+    # (admin_id, tenant scope)；平台管理员 tenant_id=None -> scope 'global'，
+    # 站内信可达；个人 web_push 外发需 category='abuse' 偏好行（当前偏好仅开放 task，暂不可达）
+    for admin_id, admin_tenant in (
+        [(a, tenant_id) for a in admins] + [(a, None) for a in platform_admins]
+    ):
+        subject = Subject(user_id=admin_id, tenant_id=admin_tenant)
         ref = publish_in_tx(
             cursor,
             subject=subject,
             producer=PRODUCER,
             event_type="abuse.rule_triggered",
-            event_key=f"abuse:{tenant_id}:{user_id}:credit_budget",
+            event_key=event_key,
             resource_ref={"type": "abuse_event", "id": str(event_id)},
-            parameters={
-                "rule_name": rule_name[:128],
-                "subject_label": subject_label,
-                "window_credits": round(window_credits, 2),
-                "threshold_credits": round(threshold_credits, 2),
-                "observe_mode": observe_mode,
-            },
+            parameters=parameters,
             occurred_at=now,
             accepted_at=now,
             expires_at=now + timedelta(seconds=NOTIFY_TTL_SECONDS),
@@ -113,9 +134,7 @@ def run_abuse_scan_once(repository=None) -> Dict[str, int]:
     aa_config = settings.anti_abuse
     if not aa_config.scanner_enabled:
         return stats
-    notify_enabled = bool(
-        repository.config.enabled and repository.config.tenant_events_enabled
-    )
+    notify_enabled = bool(repository.config.tenant_events_enabled)
 
     with get_db_connection() as cursor:
         candidates = _scan_candidates(cursor)
@@ -123,6 +142,12 @@ def run_abuse_scan_once(repository=None) -> Dict[str, int]:
             return stats
         users = _load_users(cursor, [c["user_id"] for c in candidates])
         tenants = sorted({c["tenant_id"] for c in candidates})
+        cursor.execute(
+            """SELECT user_id FROM users
+               WHERE role = 'platform_admin' AND status = %s""",
+            (UserStatus.ACTIVE.value,),
+        )
+        platform_admins = [row["user_id"] for row in cursor.fetchall()]
         for tenant_id in tenants:
             try:
                 cursor.execute(
@@ -131,6 +156,7 @@ def run_abuse_scan_once(repository=None) -> Dict[str, int]:
                     (tenant_id, UserStatus.ACTIVE.value),
                 )
                 admins = [row["user_id"] for row in cursor.fetchall()]
+                tenant_name = _tenant_name(cursor, tenant_id)
                 for candidate in candidates:
                     if candidate["tenant_id"] != tenant_id:
                         continue
@@ -185,11 +211,13 @@ def run_abuse_scan_once(repository=None) -> Dict[str, int]:
                         continue  # 1h 内已有同键事件，跳过重复通知
                     pending_events = 1
                     pending_notified = 0
-                    if notify_enabled and admins:
+                    if notify_enabled and (admins or platform_admins):
                         pending_notified = _publish_admin_notifications(
                             cursor,
                             tenant_id,
+                            tenant_name,
                             admins,
+                            platform_admins,
                             event_id=event_id,
                             user_id=user_id,
                             subject_label=_subject_label(user_row, user_id),

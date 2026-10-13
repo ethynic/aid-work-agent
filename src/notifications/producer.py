@@ -8,8 +8,6 @@ def publish_runner_terminal_in_tx(cursor, runner, config=None):
     if config is None:
         from src.config.settings import settings
         config = settings.notifications
-    if not config.enabled:
-        return  # Disabled installations never touch notification tables.
     if (runner['source'] != 'chat' or runner['session_kind'] != 'web'
             or runner['status'] not in ('completed', 'failed') or runner['actor_kind'] != 'user'
             or not runner.get('user_id') or runner['actor_id'] != runner['user_id']):

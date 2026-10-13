@@ -509,9 +509,8 @@ agent_runner:
     # Caller plaintext stays solely in AGENT_RUNNER_BROWSER_GATEWAY_TOKEN.
     gateway_peers: {}
 
-# 通用用户通知：默认关闭；VAPID 密钥和 subject 由环境注入。
+# 通用用户通知（常开，无总开关）；VAPID 密钥和 subject 由环境注入。
 notifications:
-  enabled: false
   ttl_seconds: 86400
   max_attempts: 6
   concurrency: 4
