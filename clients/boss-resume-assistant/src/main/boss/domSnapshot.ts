@@ -37,6 +37,8 @@ export interface DomDocument {
     bounds: number[][] // [x, y, width, height]
     /** includeDOMRects=true 时按 layout 索引返回的 CSS 客户端矩形/尺寸；勿作任意节点的全局坐标。 */
     clientRects?: number[][]
+    /** 按调用方 computedStyles 顺序，值指向 strings。 */
+    styles?: number[][]
   }
   /** 文档滚动偏移（device px）：BOSS 列表在 iframe 文档内滚动，到底判定用 */
   scrollOffsetX?: number

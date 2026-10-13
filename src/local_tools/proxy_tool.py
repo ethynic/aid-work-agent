@@ -34,10 +34,10 @@ settings.boss_tool_billing.resume_recognition_price；客户端文本不可信�
 import asyncio
 import json
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple
 
 from loguru import logger
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, WithJsonSchema, field_validator, model_validator
 
 from src.config.settings import settings
 from src.db.client_binding_db import ClientUsageLogDB
@@ -641,27 +641,131 @@ class LocalToolProxyTool(BaseTool):
 # ==================== 8 个 BOSS 工具 ====================
 
 
+class BossFilterRowInput(BaseModel):
+    model_config = {"extra": "forbid"}
+    label: str = Field(..., min_length=1, description="boss_filter_options 返回的真实行标签")
+    options: List[str] = Field(..., min_length=1, description="该行真实精确选项；不支持模糊值或范围控件")
+
+    @field_validator("label", "options")
+    @classmethod
+    def nonblank(cls, value):
+        values = value if isinstance(value, list) else [value]
+        if any(not item.strip() for item in values):
+            raise ValueError("筛选标签与选项不得为空白")
+        return value
+
+
+class BossAgeRangeInput(BaseModel):
+    model_config = {"extra": "forbid"}
+    min: Optional[int] = Field(None, ge=16, le=45, strict=True)
+    max: Optional[int] = Field(None, ge=16, le=45, strict=True, description="null代表页面不限，不是46岁")
+
+    @model_validator(mode="after")
+    def valid_range(self):
+        if not self.model_fields_set or ("min" in self.model_fields_set and self.min is None) or (self.max is not None and self.max < (self.min or 16)):
+            raise ValueError("年龄范围至少提供一端，且下限不得大于上限")
+        return self
+
+
 class BossFilterInput(BaseModel):
     experience: Optional[str] = Field(None, description="经验档位，如「3-5年」；省略会清空该维度")
     educations: Optional[List[str]] = Field(None, description="学历档位列表，可多选，如 [\"本科\", \"硕士\"]；省略会清空该维度")
     salary: Optional[str] = Field(None, description="薪资档位，如「10-20K」；省略会清空该维度")
+    filters: Optional[List[Annotated[Dict[str, Any], WithJsonSchema(BossFilterRowInput.model_json_schema())]]] = Field(None, description="用户当轮补充的页面精确行筛选；与职位默认条件合并，不回写数据库")
+    options_ref: Optional[str] = Field(None, description="扩展条件必填：本次 boss_filter_options 成功结果的 invocation_id，用于确认同设备支持扩展参数")
+    age: Optional[Annotated[Dict[str, Any], WithJsonSchema(BossAgeRangeInput.model_json_schema())]] = Field(None, description="真实年龄范围，如25岁以上传{min:25,max:null}；页面精确整数16至45岁，范围外拒绝，需options_ref")
+
+    @field_validator("filters")
+    @classmethod
+    def json_rows(cls, value):
+        return [BossFilterRowInput(**item).model_dump(exclude_unset=True) for item in value] if value is not None else None
+
+    @field_validator("age")
+    @classmethod
+    def json_age(cls, value):
+        return BossAgeRangeInput(**value).model_dump(exclude_unset=True) if value is not None else None
 
 
 class BossFilterTool(LocalToolProxyTool):
     name = "boss_filter"
     display_name = "BOSS 筛选牛人"
     description = (
-        "在用户本机 BOSS 直聘「推荐牛人」页设置筛选条件（经验/学历/薪资，至少一项）。"
+        "在用户本机 BOSS 直聘「推荐牛人」页设置筛选条件（旧三维或页面动态行，至少一项）。"
         "替换语义：先清除原筛选，再设置提供的维度，未提供的维度不保留。"
-        "可用档位由 boss_filter_options 查询；发生档位映射时返回 substitutions 说明实际档位。改变条件会改变候选列表。"
+        "先用 boss_filter_options 查询当前账号页面，将职位默认条件与聊天补充条件合并，用户当轮要求优先；"
+        "性别、活跃度、求职状态等用 filters 精确行设置，无需先入库。扩展条件须传查询结果 invocation_id 为 options_ref。"
+        "发生档位映射时返回 substitutions，必须说明实际档位；不能漏掉条件或把工具不支持说成页面不存在。"
         "前置：已在推荐牛人页（不在时先 boss_goto recommend）。仅改变页面筛选，无外部副作用"
     )
     InputModel = BossFilterInput
 
     def _validate_args(self, args: Dict[str, Any]) -> Optional[str]:
-        if not any(args.get(k) for k in ("experience", "educations", "salary")):
-            return "请至少提供一个筛选条件（经验、学历或薪资）"
+        if set(args) - {"experience", "educations", "salary", "filters", "options_ref", "age"}:
+            return "不支持的筛选参数"
+        try:
+            BossFilterInput(**args)
+        except Exception:
+            return "筛选参数格式无效，请使用真实行标签与非空精确选项"
+        if not any(args.get(k) for k in ("experience", "educations", "salary", "filters", "age")):
+            return "请至少提供一个筛选条件（经验、学历、薪资或页面动态行）"
+        if (args.get("filters") or args.get("age")) and not args.get("options_ref"):
+            return "扩展筛选需先调用 boss_filter_options 并传 options_ref=查询结果 invocation_id"
+        if args.get("options_ref"):
+            from uuid import UUID
+            try:
+                UUID(args["options_ref"])
+            except (ValueError, TypeError, AttributeError):
+                return "options_ref 必须是本次成功查询的 invocation_id"
         return None
+
+    async def _dispatch_and_wait(self, tenant_id, user_id, session_id, device, args, progress_queue):
+        # 两条执行入口共用此处：旧 Provider 可能静默丢弃未知字段，必须在派发前核验同设备探查结果。
+        if args.get("filters") or args.get("age"):
+            try:
+                probe = await asyncio.to_thread(repository.get_invocation, args.get("options_ref"), tenant_id)
+            except Exception:
+                logger.error("后端日志：扩展筛选能力探查引用查询失败")
+                return {"success": False, "code": "FILTER_CAPABILITY_REQUIRED", "effect": "none", "message": "无法核验设备扩展筛选能力，原筛选未改动，请重新查询后再试"}
+            result = (probe or {}).get("result_json") or {}
+            data = result.get("data") if isinstance(result, dict) else None
+            created = (probe or {}).get("created_at")
+            recent = isinstance(created, datetime) and 0 <= (datetime.now(created.tzinfo) - created).total_seconds() <= 600
+            if (not probe or str(probe.get("tenant_id")) != str(tenant_id) or str(probe.get("user_id")) != str(user_id)
+                    or str(probe.get("device_id")) != str(device["id"])
+                    or probe.get("session_id") != session_id or probe.get("tool_name") != "boss_filter_options"
+                    or probe.get("state") != "succeeded" or not recent
+                    or not isinstance(data, dict) or data.get("filter_schema_version") != 2
+                    or data.get("probe_complete") is not True
+                    or not isinstance(data.get("supported_fields"), list)
+                    or (args.get("filters") and "filters" not in data.get("supported_fields", []))
+                    or (args.get("age") and "age" not in data.get("supported_fields", []))):
+                return {"success": False, "code": "FILTER_CAPABILITY_REQUIRED", "effect": "none",
+                        "message": "当前设备尚未确认支持完整扩展筛选；请更新 BOSS CLI 后重新调用 boss_filter_options，原筛选未改动"}
+        # 保留引用字段在原始 intent / durable request / replay 中一致；Provider 接受但不使用此云端引用。
+        return await super()._dispatch_and_wait(tenant_id, user_id, session_id, device, args, progress_queue)
+
+    def _map_terminal(self, invocation):
+        result = super()._map_terminal(invocation)
+        args = invocation.get("arguments_json") or {}
+        if result.get("success") and (args.get("filters") or args.get("age")):
+            data = result.get("data")
+            valid = isinstance(data, dict) and data.get("filter_schema_version") == 2
+            rows = data.get("applied_rows") if isinstance(data, dict) else None
+            if args.get("filters"):
+                valid = valid and isinstance(rows, list)
+                verified_rows = rows if isinstance(rows, list) else []
+                for requested in args["filters"]:
+                    label = requested["label"].replace("[单选]", "").strip()
+                    matches = [row for row in verified_rows if isinstance(row, dict) and str(row.get("label", "")).replace("[单选]", "").strip() == label]
+                    expected = [option.strip() for option in requested["options"] if option.strip() != "不限"]
+                    valid = valid and len(matches) == 1 and matches[0].get("options") == expected
+            if args.get("age"):
+                expected = {"min": args["age"].get("min", 16), "max": args["age"].get("max")}
+                valid = valid and data.get("age") == expected
+            if not valid:
+                return {**result, "success": False, "code": "EXECUTION_UNKNOWN", "effect": "unknown",
+                        "message": "设备未返回完整扩展筛选的逐行校验结果，实际筛选效果未知，禁止自动重试，请核对页面"}
+        return result
 
 
 class BossClearFilterTool(LocalToolProxyTool):
@@ -687,8 +791,9 @@ class BossFilterOptionsTool(LocalToolProxyTool):
     display_name = "BOSS 查询筛选可选档位"
     description = (
         "在用户本机 BOSS 直聘「推荐牛人」页只读探查筛选面板的全部可选档位"
-        "（经验/学历/薪资各行选项），读完自动收起面板。用于把用户口语化筛选要求"
+        "（含会员动态行与控件类型），读完自动收起面板。用于把用户口语化筛选要求"
         "（如 15k-20k、5年以上、本科及以上）映射成页面实际存在的精确档位后再调 boss_filter。"
+        "扩展筛选使用本工具成功结果的 invocation_id 作为 boss_filter.options_ref；缺少或不完整探查不能认定页面不存在该条件。"
         "前置：已在推荐牛人页（不在时先 boss_goto recommend）"
     )
 

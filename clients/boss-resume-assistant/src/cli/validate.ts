@@ -19,7 +19,7 @@ export type ValidateResult = { ok: true } | { ok: false; message: string }
 /** 各子命令允许的专属 flag（不含全局 flag）。新增命令/flag 必须在此登记，否则一律拒绝 */
 const COMMAND_FLAGS: Readonly<Record<string, readonly string[]>> = {
   'filter-options': [],
-  filter: ['experience', 'education', 'salary', 'clear'],
+  filter: ['experience', 'education', 'salary', 'filters', 'age', 'clear'],
   greet: ['limit', 'names', 'all'],
   goto: [], // 无专属 flag（只带 1 个位置参数）
   accept: ['limit', 'no-preview'],
@@ -117,6 +117,24 @@ export function validateCommandArgs(command: string | undefined, args: ParsedArg
 
   // 3) greet 显式意图门禁（防误触发真实写动作）
   if (command === 'greet') return validateGreetIntent(args)
+  if (command === 'filter') {
+    if (args.flags.has('clear') && ['experience', 'education', 'salary', 'filters', 'age'].some((k) => args.flags.has(k))) return { ok: false, message: '--clear 与筛选条件互斥' }
+    for (const key of ['experience', 'education', 'salary', 'filters', 'age']) {
+      if (args.flags.has(key) && (typeof args.flags.get(key) !== 'string' || !String(args.flags.get(key)).trim())) return { ok: false, message: `--${key} 需要非空值` }
+    }
+    if (args.flags.has('age')) {
+      try {
+        const value: unknown = JSON.parse(String(args.flags.get('age')))
+        if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error()
+      } catch { return { ok: false, message: '--age 必须是 JSON 范围对象，如 {"min":25,"max":null}' } }
+    }
+    if (args.flags.has('filters')) {
+      try {
+        const value: unknown = JSON.parse(String(args.flags.get('filters')))
+        if (!Array.isArray(value)) throw new Error()
+      } catch { return { ok: false, message: '--filters 必须是 JSON 行数组，如 [{"label":"性别","options":["男"]}]' } }
+    }
+  }
   return { ok: true }
 }
 

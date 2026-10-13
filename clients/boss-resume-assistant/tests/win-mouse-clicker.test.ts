@@ -4,6 +4,17 @@ import { WinMouseClicker, WinClickError } from '../src/main/input/WinMouseClicke
 
 const VP = { width: 1917, height: 1905 }
 
+test('真实拖动同进程传入两端坐标，终点越屏时不启动脚本', async () => {
+  const calls: string[][] = []
+  const clicker = new WinMouseClicker({ execFileImpl: async (_file, args) => { calls.push(args); return { stdout: '', stderr: '' } } })
+  await clicker.drag({ x: 996, y: 392 }, { x: 1208.8, y: 392 }, VP)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0]![calls[0]!.indexOf('-DragX') + 1], '1209')
+  assert.equal(calls[0]![calls[0]!.indexOf('-DragY') + 1], '392')
+  await assert.rejects(clicker.drag({ x: 996, y: 392 }, { x: 9999, y: 392 }, VP), WinClickError)
+  assert.equal(calls.length, 1)
+})
+
 test('调用 powershell 传参正确：坐标取整 + CssW/CssH 视口尺寸', async () => {
   const calls: Array<{ file: string; args: string[] }> = []
   const clicker = new WinMouseClicker({
