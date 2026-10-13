@@ -10,10 +10,6 @@ DDL 以设计 docs/system/wechat-mp/wechat-mp-knowledge-ingestion-design.md §7.
 """
 from __future__ import annotations
 
-import logging
-
-logger = logging.getLogger("wechat_mp.db")
-
 DDL_STATEMENTS = (
     # ---- documents 系统表加 4 列（设计 §7.1；默认值即等价现状，存量数据无需回填）----
     # external_id 用 TEXT：设计 §7.1 草稿为 VARCHAR(128) 并注明"超限改 TEXT"；

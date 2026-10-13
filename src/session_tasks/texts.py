@@ -9,13 +9,12 @@ settings.app.secret_key → RPA_SECRET_KEY，缺失抛错、不降级明文）�
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any, Dict, Optional
 from uuid import UUID, uuid4
 
-from .constants import ERR_CRYPTO_UNAVAILABLE, TEXT_PURPOSES, SessionTaskError
+from loguru import logger
 
-logger = logging.getLogger("session_tasks.texts")
+from .constants import ERR_CRYPTO_UNAVAILABLE, TEXT_PURPOSES, SessionTaskError
 
 
 def _crypto():
@@ -69,7 +68,7 @@ def load_text(conn, tenant_id: str, task_id, text_id: UUID, *, expected_purpose:
     try:
         raw = decrypt_secret(encrypted).decode("utf-8")
     except Exception as exc:  # noqa: BLE001 密文损坏/主密钥轮换：blocked，不返回明文猜测
-        logger.warning("受控文本解密失败 tenant=%s task=%s text=%s", tenant_id, task_id, text_id)
+        logger.warning(f"受控文本解密失败 tenant={tenant_id} task={task_id} text={text_id}")
         raise SessionTaskError("受控文本解密失败（密文损坏或密钥不匹配）", ERR_CRYPTO_UNAVAILABLE, 503) from exc
     return json.loads(raw)
 

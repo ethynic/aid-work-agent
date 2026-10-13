@@ -5,7 +5,6 @@ PostgreSQL + pgvector
 
 import json
 from typing import List, Tuple, Optional
-import logging
 
 from loguru import logger
 
@@ -15,8 +14,6 @@ from src.knowledge.retriever.tenant_range import (
     build_tenant_range_conditions,
 )
 import psycopg2.extras
-
-logger = logging.getLogger(__name__)
 
 
 class VectorDatabase:

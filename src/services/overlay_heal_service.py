@@ -10,14 +10,13 @@ chat_no_thinking 关思考结构化选择。
 """
 
 import json
-import logging
 import re
 from typing import Any, Dict, List, Optional
 
+from loguru import logger
+
 from src.llm.gateway import llm_gateway
 from src.services.session_record import record_background_llm_usage
-
-logger = logging.getLogger(__name__)
 
 BILLING_SOURCE = "boss_overlay_heal"
 

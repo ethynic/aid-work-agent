@@ -17,10 +17,7 @@ created_at 规范列；无外键/触发器，引用完整性在 Python 层校验
 """
 from __future__ import annotations
 
-import logging
 from typing import Tuple
-
-logger = logging.getLogger("boss_conversation.init")
 
 BINDINGS_DDL = """
 CREATE TABLE IF NOT EXISTS bs_boss_conversation_bindings (

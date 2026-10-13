@@ -6,10 +6,6 @@
 
 from __future__ import annotations
 
-import logging
-
-logger = logging.getLogger("content_sync.db")
-
 DDL_STATEMENTS = (
     # ---- 源配置：谁在定时跑由配置行决定（module 区分数据源，租户×源一行）----
     """

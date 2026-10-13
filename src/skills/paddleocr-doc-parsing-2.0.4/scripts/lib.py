@@ -19,15 +19,13 @@ Simple document parsing API wrapper for PaddleOCR.
 """
 
 import base64
-import logging
 import os
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse, unquote
 
 import httpx
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 # =============================================================================
 # Constants

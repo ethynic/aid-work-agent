@@ -17,7 +17,6 @@ import argparse
 import asyncio
 import base64
 import json
-import logging
 import os
 import re
 import tempfile
@@ -25,6 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse, unquote
 
 import httpx
+from loguru import logger
 
 try:
     import fitz  # PyMuPDF
@@ -40,8 +40,6 @@ try:
         load_dotenv(_env_file, override=True)
 except ImportError:
     pass
-
-logger = logging.getLogger(__name__)
 
 # =============================================================================
 # PaddleOCR 配置
@@ -566,7 +564,7 @@ def parse_contract_pdf(file_path: str, debug: bool = False) -> Dict[str, Any]:
         file_b64 = _load_file_as_base64(actual_file_path)
         ocr_result = _call_paddleocr(file_b64, file_type=0)
     except (FileNotFoundError, RuntimeError) as e:
-        logger.error(f"后端日志：OCR解析失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：OCR解析失败: {e}")
         return {"success": False, "error": "OCR解析失败", "debug": sanitize_error_info(str(e))}
     finally:
         # 清理临时文件
@@ -617,7 +615,7 @@ def parse_contract_pdf(file_path: str, debug: bool = False) -> Dict[str, Any]:
         llm_analysis = _call_llm_analyze(pages_text_for_llm)
         logger.info(f"后端日志：LLM合同分析完成: {json.dumps(llm_analysis, ensure_ascii=False)[:500]}")
     except Exception as e:
-        logger.error(f"后端日志：LLM分析失败: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"后端日志：LLM分析失败: {e}")
         llm_analysis = {"parse_error": f"LLM调用失败: {sanitize_error_info(str(e))}"}
 
     # 5. 汇总全局骑缝章检测：任一页有骑缝章即为有

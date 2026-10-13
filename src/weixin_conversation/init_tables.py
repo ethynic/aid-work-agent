@@ -7,10 +7,6 @@ bs_ 业务表：模块自建、不进 db_update.yaml（沿 weixin_marketing 范�
 """
 from __future__ import annotations
 
-import logging
-
-logger = logging.getLogger("weixin_conversation.init")
-
 DDL_STATEMENTS = (
     """
     CREATE TABLE IF NOT EXISTS bs_weixin_conversation_bindings (

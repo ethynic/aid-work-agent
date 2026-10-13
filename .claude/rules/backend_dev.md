@@ -21,6 +21,8 @@ logger.opt(exception=True).error(f'后端日志：数据库连接失败: {e}')
 logger.debug(f'临时调试：请求参数 {params}')
 ```
 
+**`import logging` 清零（2026-10-13 起）**：`src/` 内禁止 `import logging`，唯一例外 `src/config/logging.py` 的 InterceptHandler（把标准库 logging 含第三方库统一转发进 loguru，在 `setup_logging()` 注册）。第三方库（uvicorn/apscheduler/psycopg2 等）的日志由拦截器兜底，业务代码不得再引入标准库 logging。
+
 ### 临时主题日志（tlog）
 
 主日志文件单日可达数千上万条，针对某个具体问题（如「语音合并」「会话取消」）排查时，在主日志中筛选非常低效。**调试某一主题时，使用 `tlog` 把日志单独写到独立文件**，与主日志完全隔离。

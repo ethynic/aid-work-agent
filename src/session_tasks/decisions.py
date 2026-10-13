@@ -17,11 +17,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID, uuid4
+
+from loguru import logger
 
 from .config import get_session_tasks_config, tenant_allowed
 from .constants import (
@@ -42,8 +43,6 @@ from .constants import (
 from .scenario_hooks import require_hooks
 from .service import _conn, _lock_task_subject, _now, _tz, task_spend
 from .texts import load_text, store_text
-
-logger = logging.getLogger("session_tasks.decisions")
 
 DECISION_STATUS_TERMINAL = ("ready", "superseded", "failed")
 _LANE_SESSION_TASK = "session_task"
@@ -320,7 +319,7 @@ def run_decision_tick(*, now: Optional[datetime] = None, model_call=None,
     try:
         _recover_pending_billing()
     except Exception as exc:  # noqa: BLE001 补偿属收敛性动作：本轮失败不中断 tick，下轮/手动重试
-        logger.warning("计费补偿本轮异常（下轮重试）: %s", exc)
+        logger.warning(f"计费补偿本轮异常（下轮重试）: {exc}")
     from .scenario_hooks import registered_hook_keys
 
     for decision in claim_pending_decisions(
@@ -335,7 +334,7 @@ def run_decision_tick(*, now: Optional[datetime] = None, model_call=None,
             stats["processed"] += 1  # 状态迁移已内联完成
         except Exception as exc:  # noqa: BLE001 单条隔离
             stats["errors"] += 1
-            logger.warning("决策处理异常 tenant=%s decision=%s: %s", decision["tenant_id"], decision["id"], exc)
+            logger.warning(f"决策处理异常 tenant={decision['tenant_id']} decision={decision['id']}: {exc}")
     stats["evaluated"] = evaluate_tasks(now=now)
     return stats
 
@@ -673,7 +672,7 @@ def _finalize_decision(
                     conn, tenant_id, task_id, _row["model_call_ref"], bool(_row["model_call_pending"])
                 )
                 if released:
-                    logger.info("终结补偿释放未启动预留 tenant=%s task=%s rows=%s", tenant_id, task_id, released)
+                    logger.info(f"终结补偿释放未启动预留 tenant={tenant_id} task={task_id} rows={released}")
         conn.commit()
     return True
 
@@ -1212,7 +1211,7 @@ def _price_attempt(attempt: Dict[str, Any]) -> Optional[Decimal]:
             attempt.get("model"), cached_input_tokens=int(usage.get("cached_tokens") or 0),
         )
     except Exception as exc:  # noqa: BLE001 计价失败：可恢复状态（usage 已持久化）
-        logger.warning("决策计价失败（补偿将以持久化用量重试）ref=%s: %s", attempt["attempt_ref"], exc)
+        logger.warning(f"决策计价失败（补偿将以持久化用量重试）ref={attempt['attempt_ref']}: {exc}")
         return None
     with _conn() as conn:
         cursor = conn.cursor()
@@ -1451,7 +1450,7 @@ def _process_reply(tenant_id: str, task: Dict[str, Any], spec: Dict[str, Any], d
                     decision_status="failed", failure_code=terminal_reason,
                     transition=(STATUS_HUMAN_REQUIRED, terminal_reason),
                 ):
-                    logger.info("终局决策已失效，跳过任务转人工 tenant=%s decision=%s", tenant_id, decision_id)
+                    logger.info(f"终局决策已失效，跳过任务转人工 tenant={tenant_id} decision={decision_id}")
                 return
             feedback = str(exc)
             validated = None
@@ -1461,7 +1460,7 @@ def _process_reply(tenant_id: str, task: Dict[str, Any], spec: Dict[str, Any], d
             decision_status="failed", failure_code="invalid_model_output",
             transition=(STATUS_HUMAN_REQUIRED, "decision_output_invalid"),
         ):
-            logger.info("非法输出决策已失效，跳过任务转人工 tenant=%s decision=%s", tenant_id, decision_id)
+            logger.info(f"非法输出决策已失效，跳过任务转人工 tenant={tenant_id} decision={decision_id}")
         return
 
     action = validated["action"]
@@ -1473,11 +1472,11 @@ def _process_reply(tenant_id: str, task: Dict[str, Any], spec: Dict[str, Any], d
     if action == "reply":
         if not _finalize_decision(tenant_id, task_id, decision_id, lease_owner, status="ready",
                                   action="reply", reply_text=validated["reply_text"], evidence=evidence):
-            logger.info("reply 决策已失效，丢弃结果 tenant=%s decision=%s", tenant_id, decision_id)
+            logger.info(f"reply 决策已失效，丢弃结果 tenant={tenant_id} decision={decision_id}")
         return
     if action == "wait":
         if not _finalize_decision(tenant_id, task_id, decision_id, lease_owner, status="ready", action="wait", evidence=evidence):
-            logger.info("wait 决策已失效，丢弃结果 tenant=%s decision=%s", tenant_id, decision_id)
+            logger.info(f"wait 决策已失效，丢弃结果 tenant={tenant_id} decision={decision_id}")
         return
     if action == "handoff":
         # D2：决策落库与任务迁移同事务原子完成——落库成功即迁移，落库失败即整体
@@ -1487,7 +1486,7 @@ def _process_reply(tenant_id: str, task: Dict[str, Any], spec: Dict[str, Any], d
             decision_status="ready", action="handoff", evidence=evidence,
             transition=(STATUS_HUMAN_REQUIRED, f"model_handoff:{validated.get('reason_code', '')}"),
         ):
-            logger.info("handoff 决策已失效，跳过任务转人工 tenant=%s decision=%s", tenant_id, decision_id)
+            logger.info(f"handoff 决策已失效，跳过任务转人工 tenant={tenant_id} decision={decision_id}")
         return
     # action == done
     mode = (spec.get("completion_rule") or {}).get("mode")
@@ -1503,7 +1502,7 @@ def _process_reply(tenant_id: str, task: Dict[str, Any], spec: Dict[str, Any], d
                 decision_status="ready", action="handoff", evidence=evidence,
                 transition=(STATUS_HUMAN_REQUIRED, "peer_confirmation_contradicted"),
             ):
-                logger.info("矛盾 handoff 决策已失效，跳过迁移 tenant=%s decision=%s", tenant_id, decision_id)
+                logger.info(f"矛盾 handoff 决策已失效，跳过迁移 tenant={tenant_id} decision={decision_id}")
             return
         try:
             hooks.validate_peer_confirmation(
@@ -1540,7 +1539,7 @@ def _process_reply(tenant_id: str, task: Dict[str, Any], spec: Dict[str, Any], d
         decision_status="ready", action="done", evidence=evidence,
         create_review_for_batch=decision["batch_id"], review_input_version=input_version,
     ):
-        logger.info("done 提议决策已失效，跳过审核创建 tenant=%s decision=%s", tenant_id, decision_id)
+        logger.info(f"done 提议决策已失效，跳过审核创建 tenant={tenant_id} decision={decision_id}")
 
 
 def _process_completion_review(tenant_id: str, task: Dict[str, Any], spec: Dict[str, Any], decision: Dict[str, Any],
@@ -1608,7 +1607,7 @@ def _process_completion_review(tenant_id: str, task: Dict[str, Any], spec: Dict[
             decision_status="failed", failure_code="invalid_review_output",
             transition=(STATUS_HUMAN_REQUIRED, "review_output_invalid"),
         ):
-            logger.info("审核输出决策已失效，跳过迁移 tenant=%s decision=%s", tenant_id, decision_id)
+            logger.info(f"审核输出决策已失效，跳过迁移 tenant={tenant_id} decision={decision_id}")
         return
     evidence = {"kind": DECISION_KIND_COMPLETION_REVIEW, "review": review}
     if review.get("agree"):
@@ -1616,14 +1615,14 @@ def _process_completion_review(tenant_id: str, task: Dict[str, Any], spec: Dict[
             tenant_id, task_id, decision_id, lease_owner,
             decision_status="ready", action="done", evidence=evidence,
         ):
-            logger.info("审核同意决策已失效，丢弃 tenant=%s decision=%s", tenant_id, decision_id)
+            logger.info(f"审核同意决策已失效，丢弃 tenant={tenant_id} decision={decision_id}")
     else:
         if not _finalize_and_transition(
             tenant_id, task_id, decision_id, lease_owner,
             decision_status="ready", action="handoff", evidence=evidence,
             transition=(STATUS_HUMAN_REQUIRED, "completion_review_rejected"),
         ):
-            logger.info("审核拒绝决策已失效，跳过迁移 tenant=%s decision=%s", tenant_id, decision_id)
+            logger.info(f"审核拒绝决策已失效，跳过迁移 tenant={tenant_id} decision={decision_id}")
 
 
 # ---------------------------------------------------------------------------
@@ -1668,7 +1667,7 @@ def supersede_decisions_on_batch(conn, tenant_id: str, task_id, new_input_versio
                 if repository.request_cancel(str(link["invocation_id"]), tenant_id):
                     cancelled += 1
             except Exception:  # noqa: BLE001 取消失败不阻断事实接纳
-                logger.warning("supersede 取消 invocation 失败 inv=%s", link["invocation_id"])
+                logger.warning(f"supersede 取消 invocation 失败 inv={link['invocation_id']}")
     return {"superseded": len(decision_ids), "cancelled_invocations": cancelled}
 
 
@@ -2356,7 +2355,7 @@ def evaluate_tasks(*, now: Optional[datetime] = None, limit: int = 50) -> int:
             if evaluate_task(cand["tenant_id"], cand["id"], now=now):
                 evaluated += 1
         except Exception as exc:  # noqa: BLE001 单任务隔离
-            logger.warning("完成评估异常 tenant=%s task=%s: %s", cand["tenant_id"], cand["id"], exc)
+            logger.warning(f"完成评估异常 tenant={cand['tenant_id']} task={cand['id']}: {exc}")
     return evaluated
 
 
@@ -2412,7 +2411,7 @@ def evaluate_task(tenant_id: str, task_id, *, now: datetime) -> bool:  # noqa: A
         if unknown:
             conn.rollback()
             if _transition_task_standalone(tenant_id, task_id, STATUS_BLOCKED, "unknown_send_result"):
-                logger.warning("任务因未知发送结果阻断 tenant=%s task=%s", tenant_id, task_id)
+                logger.warning(f"任务因未知发送结果阻断 tenant={tenant_id} task={task_id}")
             return True
         # 最新 done-提议证据 / 审核结论 / 最后 peer 活动 / 未决决策数
         cursor.execute(
@@ -2489,5 +2488,5 @@ def evaluate_task(tenant_id: str, task_id, *, now: datetime) -> bool:  # noqa: A
         migrated = _apply_task_transition(conn, tenant_id, task_id, target, reason, expected_status=STATUS_ACTIVE)
         conn.commit()
         if migrated:
-            logger.info("任务终态迁移 tenant=%s task=%s → %s(%s)", tenant_id, task_id, target, reason)
+            logger.info(f"任务终态迁移 tenant={tenant_id} task={task_id} → {target}({reason})")
         return migrated

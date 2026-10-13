@@ -1,7 +1,7 @@
 # 日志统一改造计划：标准库 logging 收口到 loguru
 
 > 创建：2026-10-13
-> 状态：📋 待执行
+> 状态：✅ 已执行（Phase 1/2 完成，待部署观察主日志量变化）
 > 来源：防滥用中心 `/api/saas/abuse/usage` 500 排查（2026-10-13）中发现的日志盲区问题
 
 ## 1. 背景与问题
@@ -73,6 +73,8 @@ def _install_intercept_handler() -> None:
 - `depth` 回溯：让 `{name}:{function}:{line}` 显示真实调用点而不是 logging 内部帧
 
 **降噪考虑**：uvicorn access log 已在 nginx 层关闭，但 uvicorn/gunicorn 的 INFO 启动横幅、apscheduler 调度日志会因此进主日志。如噪音过大，在 InterceptHandler 内对个别 logger 名（如 `uvicorn.access`、`apscheduler.executors.default`）做降级或过滤，先上线观察再定。
+
+> 执行补充（2026-10-13，CodeReview P1 采纳）：httpx/openai 每次出站请求都打 INFO（项目 LLM 网关/渠道调用密集，噪音可预见），已在 `_install_intercept_handler` 内预置降噪——`httpx` / `httpcore` / `openai` / `urllib3` / `apscheduler.executors.default` 五个库 logger 压到 WARNING，其余库保持 level=0 放行观察。
 
 **注册位置**：`setup_logging()` 末尾（`register_error_log_sink()` 之后），`src/main.py` 与 `src/background_runner.py` 两个入口都会自动生效，无需改入口代码。
 

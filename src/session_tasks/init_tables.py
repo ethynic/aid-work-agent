@@ -14,10 +14,7 @@ src/weixin_conversation/init_tables.py），不进 db_update.yaml。
 """
 from __future__ import annotations
 
-import logging
 from typing import Tuple
-
-logger = logging.getLogger("session_tasks.init")
 
 DDL_STATEMENTS: Tuple[str, ...] = (
     """

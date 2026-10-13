@@ -15,6 +15,7 @@ skill_execute / llm_invoke_logs 等按日期命名的 jsonl 日志一致。
 启动时清理一次，运行中每天日期切换时触发一次惰性清理。
 """
 
+import logging
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +23,40 @@ from pathlib import Path
 from loguru import logger
 
 from src.core.log_retention import cleanup_old_logs
+
+
+class InterceptHandler(logging.Handler):
+    """
+    标准 logging 拦截器：把标准库 logging（含第三方库 uvicorn/apscheduler/psycopg2 等）
+    的日志统一转发进 loguru，避免无 handler 时 INFO/DEBUG 被丢弃、WARNING+ 散落到 stderr。
+
+    本文件是 src/ 内唯一允许 import logging 的位置。
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            level = logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno
+        # 深度回溯到标准 logging 的真实调用帧，绕过 logging 内部帧，
+        # 让 {name}:{function}:{line} 显示真实调用点
+        frame, depth = logging.currentframe(), 0
+        while frame and (depth == 0 or frame.f_code.co_filename == logging.__file__):
+            frame = frame.f_back
+            depth += 1
+        logger.opt(depth=depth, exception=record.exc_info).log(
+            level, record.getMessage()
+        )
+
+
+def _install_intercept_handler() -> None:
+    # force=True 清掉 root 上可能存在的旧 handler，幂等可重复调用；
+    # level=0 全量接收，由 loguru 侧各 sink 的 level 过滤决定去留
+    logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
+    # 高频第三方库降噪：httpx/openai 每次出站请求都打 INFO（项目 LLM 网关/渠道
+    # 调用密集，会显著放大主日志量），在库 logger 层提前压到 WARNING
+    for name in ("httpx", "httpcore", "openai", "urllib3", "apscheduler.executors.default"):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 class _DatedFileSink:
@@ -185,6 +220,12 @@ def setup_logging(
     except Exception as e:
         # sink 注册失败不影响主程序
         logger.warning(f"错误日志数据库 sink 注册失败: {e}")
+
+    # 拦截标准库 logging（含第三方库），统一转发进 loguru
+    try:
+        _install_intercept_handler()
+    except Exception as e:
+        logger.warning(f"标准 logging 拦截器注册失败: {e}")
 
     logger.info(f"日志系统初始化完成，日志级别: {log_level}")
 

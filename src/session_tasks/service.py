@@ -11,11 +11,12 @@ task/assignment 行锁事务内完成。UUID 全部由服务端生成，客户�
 from __future__ import annotations
 
 import json
-import logging
 from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID, uuid4
+
+from loguru import logger
 
 from . import confirmations as confirmations_mod
 from .config import get_session_tasks_config, tenant_allowed
@@ -50,8 +51,6 @@ from .models import (
     validate_task_spec,
 )
 from .texts import digest_payload, load_text, spec_digest, store_text
-
-logger = logging.getLogger("session_tasks.service")
 
 _CONTROL_TRANSITIONS = {
     # blocked 不允许 pause/resume（须经修复确认，设计 §4），防止 blocked→paused/handoff→active 绕过
@@ -1368,7 +1367,7 @@ def list_tasks(tenant_id: str, user_id: str, *, limit: int = 20, offset: int = 0
             item["goal_summary"] = spec.get("goal", "")[:120]
             item.update({k: spec.get("limits", {}).get(k) for k in ("max_replies", "max_cost_units", "expires_at")})
         except SessionTaskError as exc:
-            logger.warning("session_task 列表投影降级 tenant=%s task=%s code=%s", tenant_id, item["id"], exc.code)
+            logger.warning(f"session_task 列表投影降级 tenant={tenant_id} task={item['id']} code={exc.code}")
             item.update({"projection_degraded": True, "goal_summary": "历史数据不可读", "phase": None})
     return {"total": total, "items": items}
 

@@ -17,14 +17,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any, List, Optional, Tuple
 
 import httpx
-
-logger = logging.getLogger("hongtao_shop.fetcher")
+from loguru import logger
 
 BASE_URL = "https://hongtaoshop.gzfenxiao.com/"
 PRODUCT_ENDPOINT = "/ApiExternal/getShopProduct"

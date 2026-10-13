@@ -17,7 +17,6 @@
 
 import argparse
 import json
-import logging
 import os
 import re
 import shutil
@@ -28,8 +27,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import httpx
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 # =============================================================================
 # 配置
