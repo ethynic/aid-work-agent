@@ -286,3 +286,30 @@ def test_cancel_only_intent_survives_sweeper_crash_before_result_is_staged(stora
         execution.stage_finalization(attempt(retry), retry["revision"], {}, {"status": "completed"}, {})
     staged = execution.stage_finalization(attempt(retry), retry["revision"], retry["checkpoint"], {"status": "cancelled"}, {})
     assert staged["checkpoint"]["pending_finalization"]["status"] == "cancelled"
+
+
+def test_submit_realigns_lagged_sequence_after_direct_insert_pollution(storage, actors, service_database):
+    """事故复刻（2026-10-13 agent1）：绕过应用的 SQL 直插占用下一个 queue_order
+    但不推进 BIGSERIAL 序列；正常提交必须当场自愈对齐并一次成功，而不是持续
+    UniqueViolation(agent_runners_queue_order_key) 导致提交 500。直插行刻意不带
+    created 事件，与事故现场的取证特征一致。"""
+    repository, execution, submit = storage
+    suffix = uuid.uuid4().hex
+    normal, _ = submit(actors["a"])
+    lagged = service_database.rows("SELECT last_value AS value FROM agent_runners_queue_order_seq")[0]["value"]
+    service_database.rows("""INSERT INTO agent_runners (runner_id, tenant_id, scope_key, session_kind,
+        session_id, actor_kind, actor_id, user_id, service_id, source, client_request_id, input_digest,
+        input, profile_id, profile_fingerprint, record_id, queue_order)
+        SELECT %s, tenant_id, scope_key, session_kind, session_id,
+        actor_kind, actor_id, user_id, service_id, source, %s, input_digest, input, profile_id,
+        profile_fingerprint, %s, %s FROM agent_runners WHERE runner_id=%s""",
+        ("runner_direct_insert_pollution_" + suffix, "direct_insert_" + suffix,
+         "record_direct_insert_pollution_" + suffix, lagged + 1, normal["runner_id"]))
+    healed, created = submit(actors["a"])
+    assert created and healed["queue_order"] == lagged + 2
+    aligned = service_database.rows("SELECT last_value AS value FROM agent_runners_queue_order_seq")[0]["value"]
+    maximum = service_database.rows("SELECT max(queue_order) AS value FROM agent_runners")[0]["value"]
+    assert aligned >= maximum
+    # 序列已对齐后，后续提交不再依赖自愈路径
+    followup, _ = submit(actors["a"])
+    assert followup["queue_order"] == lagged + 3

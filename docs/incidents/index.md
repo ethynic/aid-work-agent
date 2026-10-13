@@ -13,6 +13,7 @@
 | 数据分析智能体单次 392 积分消耗复盘 | [analysis-agent-cost-392-credits-incident.md](analysis-agent-cost-392-credits-incident.md) | 2026-09-20 生产：重分析任务 6 次 analyze_data 内层 200+ 调用致 1319 万 prompt token（95% 在内层循环）；压缩只摘 preview 压不住、tool_calls 参数不压缩；含 create_plan TypeError 崩溃（已修 fc24dfa9 待部署）与内层成本优化细化方案 |
 | 用户取消会话计费缺失复盘 | [user-cancel-billing-gap-incident.md](user-cancel-billing-gap-incident.md) | 2026-09-22：web 手动取消的轮次 chat_records 无落账（392 积分事故第 1 次尝试同因未落账）；根因 = 前端先断连后 POST /cancel + main.py CancelledError except 内先 yield 后落账（anyio cancel scope 内 send 再抛 CancelledError 致落账不可达）；修复 = 后端先落账再 yield + 前端先 cancel 后 disconnect；含「菜单切换取消」历史行为澄清（2026-07-20 多会话后台流式后已不存在） |
 | 企微客服 20 用户并发演示 sync_msg 限频（45009） | [wecom-kf-sync-msg-45009-incident.md](wecom-kf-sync-msg-45009-incident.md) | 2026-10-11 生产：约 20 用户同时进入致微信 sync_msg 限频 47 秒全失败，积压 31 条串行排空，首批用户端到端等 1-3 分钟；根因 = 回调并发拉取无去重 + 45009 无重试，非 DeepSeek/服务器；修复 = 指数退避重试 + per-open_kfid 拉取去重 |
+| agent1 提交连续 500：queue_order 序列被 SQL 直插污染 | [analysis-agent1-runner-submit-500-uniqueviolation-incident.md](analysis-agent1-runner-submit-500-uniqueviolation-incident.md) | 2026-10-13 仿真：10-12 测试脚本直插 agent_runners 17 行显式写 queue_order=34~50 但 BIGSERIAL 序列停在 33，正常提交持续撞 agent_runners_queue_order_key 致 /api/chat/runners 连续 17 次 500 约 4.5 分钟，前端重试烧号到 51 偶然自愈；修复 = 提交入口捕获该约束冲突后 setval 对齐 GREATEST(max,last_value) 重试一次 |
 
 ## 经验速查与关联调研
 

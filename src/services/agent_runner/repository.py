@@ -3,6 +3,9 @@
 import json
 import uuid
 
+import psycopg2
+from loguru import logger
+
 from src.db.database import get_db_connection
 from .contracts import RunnerError, RunnerStatus, scope_key
 
@@ -10,6 +13,13 @@ from .contracts import RunnerError, RunnerStatus, scope_key
 from .persistence_limits import capped_checkpoint_dumps, capped_snapshot_dumps
 from .public_view import decoded, public_runner
 from .event_repository import EventRepository
+
+# 绕过应用的 SQL 直插可以占用 queue_order 却不推进 BIGSERIAL 序列，此后正常
+# 领号将持续撞 agent_runners_queue_order_key（2026-10-13 agent1 事故根因）。
+# 对齐只取 GREATEST(max(queue_order), last_value)，保证序列只前进不回退。
+QUEUE_ORDER_REALIGN_SQL = """SELECT setval('agent_runners_queue_order_seq',
+    GREATEST((SELECT COALESCE(max(queue_order), 0) FROM agent_runners),
+             (SELECT last_value FROM agent_runners_queue_order_seq)))"""
 
 
 class RunnerRepository:
@@ -30,8 +40,24 @@ class RunnerRepository:
 
     def submit(self, principal, request, profile_fingerprint, *, resolved_profile_id=None, execution_context=None):
         with self.connection_factory() as conn:
-            row,created=self.submit_in_tx(conn.cursor(),principal,request,profile_fingerprint,
-                resolved_profile_id=resolved_profile_id,execution_context=execution_context)
+            try:
+                row,created=self.submit_in_tx(conn.cursor(),principal,request,profile_fingerprint,
+                    resolved_profile_id=resolved_profile_id,execution_context=execution_context)
+            except psycopg2.errors.UniqueViolation as error:
+                # 仅自愈 queue_order 序列滞后；幂等键等其余唯一冲突照常抛出，
+                # 幂等/所有权语义不变。
+                if error.diag.constraint_name != 'agent_runners_queue_order_key':
+                    raise
+                conn.rollback()
+                cursor = conn.cursor()
+                cursor.execute(QUEUE_ORDER_REALIGN_SQL)
+                realigned = cursor.fetchone()["setval"]
+                conn.commit()
+                logger.warning('AgentRunner queue_order sequence lagged behind direct-inserted rows; '
+                               'realigned sequence to {} scope={} actor={}', realigned,
+                               principal.scope_key, principal.actor_id)
+                row,created=self.submit_in_tx(conn.cursor(),principal,request,profile_fingerprint,
+                    resolved_profile_id=resolved_profile_id,execution_context=execution_context)
             conn.commit()
             return row,created
 
