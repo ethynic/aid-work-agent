@@ -52,7 +52,7 @@
                       size="sm"
                       @update:model-value="(v: string) => setParam(rule.rule_id, field.key, v)"
                     >
-                      <option v-for="opt in field.options || []" :key="opt" :value="opt">{{ opt }}</option>
+                      <option v-for="opt in field.options || []" :key="opt" :value="opt">{{ enumOptionLabel(field.key, opt) }}</option>
                     </BaseSelect>
                     <BaseInput
                       v-else
@@ -111,6 +111,15 @@ const form = ref<{ mode: 'observe' | 'enforce'; policies: AbusePolicyEntry[] }>(
   policies: [],
 })
 const isPlatformDefault = ref(false)
+
+// 枚举参数选项中文显示；未映射的枚举键/值回退原始值
+const ENUM_OPTION_LABELS: Record<string, Record<string, string>> = {
+  period: { hour: '每小时', day: '每天' },
+}
+
+function enumOptionLabel(fieldKey: string, opt: string): string {
+  return ENUM_OPTION_LABELS[fieldKey]?.[opt] ?? opt
+}
 
 function isChecked(ruleId: string): boolean {
   return form.value.policies.some((p) => p.rule_id === ruleId)
