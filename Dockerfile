@@ -165,11 +165,10 @@ ENV HOME=/home/appuser
 WORKDIR /app
 
 # 从构建阶段复制虚拟环境
-COPY --from=builder /opt/venv /opt/venv
+# 复制时用 --chown 直接指定属主（builder 阶段是 root，运行阶段是 appuser），
+# 不用单独的 RUN chown -R：那会在 overlay 中把 venv 再完整复制一层（约 876MB）
+COPY --from=builder --chown=appuser:appgroup /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-
-# 修复虚拟环境所有权（builder 阶段是 root，运行阶段是 appuser）
-RUN chown -R appuser:appgroup /opt/venv
 
 # 安装 Playwright Chromium 浏览器（表格渲染为图片）
 # 重要：此步骤必须在 `COPY . .` 之前执行，否则任何项目代码改动都会让本层缓存失效，

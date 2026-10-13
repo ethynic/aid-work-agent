@@ -99,6 +99,10 @@ plans/
 docs/
 ext/
 
+# 桌面客户端/RPA 项目（含 node_modules、build/release/publish 产物，约 6.7GB）
+# 运行时由 .:/app 挂载提供，源码中仅 association_enrichment_providers.py 经挂载路径读取，不进镜像
+clients/
+
 # 子智能体/技能 markdown（运行时由 volumes 挂载）
 subagents/*.md
 src/skills/
