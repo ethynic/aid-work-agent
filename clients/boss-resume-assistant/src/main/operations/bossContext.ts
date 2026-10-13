@@ -60,6 +60,7 @@ function instrumentSession(session: BossSession, perf: PerfCollector): BossSessi
   return {
     snapshot: (opts) => perf.time('snapshot', () => session.snapshot(opts)),
     click: (point, viewport) => perf.time('win32:click', () => session.click(point, viewport)),
+    ...(session.drag ? { drag: (from: ClickPoint, to: ClickPoint, viewport: { width: number; height: number }) => perf.time('win32:drag', () => session.drag!(from, to, viewport)) } : {}),
     clickBrowse: (point) => perf.time('cdp:clickBrowse', () => session.clickBrowse(point)),
     clickAndType: (point, viewport, text) => perf.time('win32:clickAndType', () => session.clickAndType(point, viewport, text)),
     mouseWheel: (x, y, deltaY) => perf.time('cdp:mouseWheel', () => session.mouseWheel(x, y, deltaY)),
@@ -82,6 +83,8 @@ export interface BossSession {
   /** Win32 真实鼠标点击（viewport 为页面截图尺寸，device px）。写动作按钮/筛选类控件专用：
    *  BOSS 反作弊 SDK 选择性拦截 CDP 合成点击，这类动作必须借真实光标 */
   click(point: ClickPoint, viewport: { width: number; height: number }): Promise<void>
+  /** 可选的真实鼠标拖动，范围控件使用；旧测试/会话可不提供。 */
+  drag?(from: ClickPoint, to: ClickPoint, viewport: { width: number; height: number }): Promise<void>
   /** CDP 浏览类点击（mousePressed+mouseReleased，device px）。与 Win32 click 的区别：
    *  浏览动作（点牛人卡片打开简历详情等）真机实证 CDP 有效且不被拦、不占用真实鼠标；
    *  写动作/筛选类控件仍必须走 click（Win32），不得混用 */
@@ -157,6 +160,7 @@ export const defaultSessionFactory: BossSessionFactory = async (ctx) => {
   return {
     snapshot: async (opts) => (await gw.captureDomSnapshot(opts)) as DomSnapshot,
     click: (point, viewport) => clicker.click(point, viewport),
+    drag: (from, to, viewport) => clicker.drag(from, to, viewport),
     clickBrowse: async (point) => {
       // 浏览类点击（真机 2026-08-17 实证：牛人卡片 CDP 点击有效打开简历详情；写动作按钮走 Win32 click）
       await gw.dispatchMouse({ type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 })

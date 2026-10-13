@@ -94,6 +94,18 @@ export class WinMouseClicker {
     )
   }
 
+  /** 同进程真实拖动；脚本复用窗口、遮挡、光标守卫并 finally 释放左键。 */
+  async drag(from: ClickPoint, to: ClickPoint, viewport: { width: number; height: number }): Promise<void> {
+    this.assertClickable(from, viewport)
+    this.assertClickable(to, viewport)
+    await this.execFileImpl('powershell.exe', [
+      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', this.scriptPath,
+      '-X', String(Math.round(from.x)), '-Y', String(Math.round(from.y)),
+      '-CssW', String(viewport.width), '-CssH', String(viewport.height),
+      '-DragX', String(Math.round(to.x)), '-DragY', String(Math.round(to.y)),
+    ], { timeout: 20000 })
+  }
+
   /**
    * Win32 原子「点击聚焦 + 真实键盘逐字输入」：同一次 ps1 调用内先拟人点击目标点，
    * 紧接着 SendInput KEYEVENTF_UNICODE 逐字键入 text（200ms/字）——拆成两次调用会在

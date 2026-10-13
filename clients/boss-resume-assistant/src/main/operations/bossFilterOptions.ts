@@ -8,7 +8,7 @@
  * 前置：必须在推荐牛人列表页（有「筛选」按钮）→ 否则 WRONG_PAGE。
  * 只读（effect=none）；开/收面板走 Win32 点击，借用真实鼠标约 2 秒。
  */
-import { FilterSetter, FILTER_BUTTON_PATTERN } from '../boss/FilterSetter.js'
+import { FilterSetter, FILTER_BUTTON_PATTERN, FILTER_SNAPSHOT_OPTIONS } from '../boss/FilterSetter.js'
 import {
   defaultSessionFactory,
   runBossOperation,
@@ -28,6 +28,14 @@ export function createBossFilterOptionsOperation(
         sessionFactory,
         () => null,
         async (session, _tracker, perf) => {
+          const currentUrl = await session.getUrl()
+          let onRecommend = false
+          try {
+            const page = new URL(currentUrl)
+            onRecommend = page.protocol === 'https:' && ['www.zhipin.com', 'zhipin.com'].includes(page.hostname)
+              && page.pathname === '/web/chat/recommend'
+          } catch { /* 非法URL按错误页面拒绝，不能根据后台iframe文案放行。 */ }
+          if (!onRecommend) throw new CodedOperationError('WRONG_PAGE', '当前不在 BOSS 推荐牛人页面，请先用 boss_goto recommend；后台筛选文案不构成页面前置条件')
           // 前置校验：必须在推荐牛人列表页（有「筛选」按钮，与 bossGreet 同源判定）
           const probe = await session.snapshot()
           if (!probe.strings.some((s) => FILTER_BUTTON_PATTERN.test(s.trim()))) {
@@ -37,7 +45,7 @@ export function createBossFilterOptionsOperation(
             )
           }
           const setter = new FilterSetter({
-            snapshot: session.snapshot,
+            snapshot: () => session.snapshot(FILTER_SNAPSHOT_OPTIONS),
             click: session.click,
             signal: ctx.signal,
             // 性能埋点：固定 sleep 与关键阶段耗时进 collector（只记名称与毫秒）
@@ -48,15 +56,21 @@ export function createBossFilterOptionsOperation(
           })
           ctx.progress({ stage: 'execute', message: '打开筛选面板读取可选档位（借用真实鼠标，请勿移动）' })
           const rows = await setter.probeOptions()
-          const lines = rows.map((r) => `${r.label}：${r.options.map((o) => o.text).join('、')}`)
+          const lines = rows.map((r) => `${r.label}：${r.range ? `整数范围${r.range.min}–${r.range.max}岁，上限可设不限（age.max=null）` : r.options.map((o) => o.text).join('、')}`)
           return {
             message: `完成：读取到 ${rows.length} 行筛选条件可选档位`,
             data: {
+              filter_schema_version: 2,
+              supported_fields: ['experience', 'educations', 'salary', 'filters', ...(rows.some((r) => r.control === 'range') ? ['age'] : [])],
+              probe_complete: rows.every((r) => !!r.control),
               rows: rows.map((r) => ({
                 label: r.label,
                 options: r.options.map((o) => o.text),
+                ...(r.selection ? { selection: r.selection } : {}),
+                ...(r.control ? { control: r.control } : {}),
+                ...(r.range ? { range: r.range } : {}),
               })),
-              hint: '把用户的筛选要求映射到以上档位后，用精确档位值调用 boss_filter（如用户要 15-20K 而只有 15-25K，选 15-25K 并向用户说明）',
+              hint: '将职位默认要求与用户当轮补充条件合并；扩展维度用 filters=[{label:页面行标签,options:[精确选项]}]。范围控件不能作为离散选项。未解析的维度不能据此声称页面不存在。',
               readable_lines: lines,
             },
             effect: 'none',

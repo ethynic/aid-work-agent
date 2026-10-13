@@ -33,12 +33,18 @@ class TenantExpiryParameters(StrictDTO):
 
 
 class AbuseParameters(StrictDTO):
+    tenant_id: str = Field(min_length=1, max_length=64)
     tenant_name: str = Field(min_length=1, max_length=128)
     rule_name: str = Field(min_length=1, max_length=128)
     subject_label: str = Field(min_length=1, max_length=128)
+    user_id: str = Field(min_length=1, max_length=128)
+    period: Literal['hour', 'day']
+    window_start: str = Field(pattern=r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$')
+    window_end: str = Field(pattern=r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$')
     window_credits: float = Field(ge=0, le=1e12)
     threshold_credits: float = Field(ge=0, le=1e12)
     observe_mode: bool
+    show_tenant: bool = False  # 仅平台管理员投递时置 True（租户管理员即当前租户，无需显示）
 
 
 @dataclass(frozen=True)
@@ -87,10 +93,14 @@ def render_inbox_text(event_type, parameters):
             f'「{parameters["tenant_name"]}」将于 {parameters["expire_date"]} 到期'
             f'（剩余 {parameters["days_left"]} 天），请及时续费。')
     if event_type == 'abuse.rule_triggered':
-        mode = '（观察模式，未拦截）' if parameters['observe_mode'] else ''
+        mode = '（观察模式，未拦截）' if parameters.get('observe_mode') else ''
+        # .get 兜底：存量通知的 parameters 缺少新增字段时不让渲染整体失败
+        tenant_prefix = f'租户「{parameters["tenant_name"]}」的' if parameters.get('show_tenant') else ''
+        window_start, window_end = parameters.get('window_start') or '', parameters.get('window_end') or ''
+        window_txt = f'（{window_start} ~ {window_end}）' if window_start and window_end else ''
         return '异常消耗告警', (
-            f'租户「{parameters["tenant_name"]}」的反滥用规则「{parameters["rule_name"]}」触发{mode}：'
-            f'{parameters["subject_label"]} 在统计窗口内消耗 {parameters["window_credits"]:.1f} 积分，'
+            f'{tenant_prefix}反滥用规则「{parameters["rule_name"]}」触发{mode}：'
+            f'{parameters["subject_label"]} 在统计窗口{window_txt}内消耗 {parameters["window_credits"]:.1f} 积分，'
             f'阈值 {parameters["threshold_credits"]:.1f} 积分。')
     raise ValueError('NOTIFICATION_EVENT_UNSUPPORTED')
 

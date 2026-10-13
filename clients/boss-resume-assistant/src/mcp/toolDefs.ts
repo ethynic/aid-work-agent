@@ -33,15 +33,21 @@ export const TOOL_DEFS: BossToolDef[] = [
     name: 'boss_filter',
     title: '设置筛选条件',
     description:
-      '在 BOSS 直聘「推荐牛人」页设置筛选面板：经验要求/学历要求/薪资待遇（替换语义，先清除残留再选）。' +
+      '在 BOSS 直聘「推荐牛人」页设置筛选面板：旧经验/学历/薪资或当前页面动态filters行及age范围（替换语义，先清除残留再选）。' +
       '写动作：会改动页面上的筛选状态。至少提供一个条件，未提供的维度会清空，不保留原值。' +
       '数值档位（经验/薪资）自动保底映射：传了页面不存在的档位时按「保下限」规则映射到最接近的真实档位' +
       '（如要 15-30K 而页面只有 10-20K/20-50K 会选 20-50K），结果 substitutions 注明实际档位，务必向用户转述；' +
-      '建议先用 boss_filter_options 查实际档位选更准；学历等非数值选项必须精确，传错报错并列出该行全部可选档位。',
+      '先用 boss_filter_options 查实际行与档位，将职位默认要求与用户当轮补充条件合并，不回写职位库；新增行使用精确filters，年龄使用age。' +
+      '扩展行不做模糊映射，不能静默漏条件；能力/探查不完整不能声称页面不存在该条件。',
     zodShape: {
       experience: z.string().min(1).optional().describe('经验档位，如 "5-10年"；省略会清空该维度'),
       educations: z.array(z.string().min(1)).optional().describe('学历档位列表，可多选，如 ["本科","硕士"]；省略会清空该维度'),
       salary: z.string().min(1).optional().describe('薪资档位，如 "10-20K"；省略会清空该维度'),
+      filters: z.array(z.object({ label: z.string().min(1), options: z.array(z.string().min(1)).min(1) }).strict()).optional()
+        .describe('当轮扩展条件，使用 boss_filter_options 返回的实际行标签和精确选项；如 [{label:"性别",options:["男"]}]。与职位默认条件合并，同一行只传一次，不回写职位库'),
+      options_ref: z.string().min(1).optional().describe('云端能力探查引用，Provider接受但不消费；保持调用与恢复意图一致'),
+      age: z.object({ min: z.number().int().min(16).max(45).optional(), max: z.number().int().min(16).max(45).nullable().optional() }).strict().optional()
+        .describe('真实双端年龄范围，16至45岁；如25岁以上传{min:25,max:null}，null代表页面不限。不能将超出45岁的下限映成不限'),
     },
     annotations: { title: '设置筛选条件', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
@@ -238,7 +244,7 @@ export const TOOL_DEFS: BossToolDef[] = [
     name: 'boss_filter_options',
     title: '查询筛选可选档位',
     description:
-      '只读探查 BOSS 直聘「推荐牛人」页筛选面板的全部可选档位（经验要求/学历要求/薪资待遇各行选项），' +
+      '只读探查 BOSS 直聘「推荐牛人」页筛选面板的完整行与控件（含会员扩展行、单选标记与真实年龄范围），' +
       '读完后自动收起面板还原页面。用于把用户口语化的筛选要求（如 15k-20k、5年以上、本科及以上）' +
       '映射成页面实际存在的精确档位，再调 boss_filter。前置要求：当前在推荐牛人页，否则返回 WRONG_PAGE。' +
       '开/收面板借用真实鼠标约 2 秒，期间勿动鼠标。',

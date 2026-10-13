@@ -15,6 +15,8 @@ param(
   [double]$CssW = 1917,
   [double]$CssH = 1905,
   [string]$Text = "",
+  [int]$DragX = -1,
+  [int]$DragY = -1,
   [string]$TitleKeyword = "BOSS直聘 - Google Chrome"
 )
 
@@ -197,10 +199,36 @@ Start-Sleep -Milliseconds 500
 $expectedPoint = Get-ScreenPoint $rw $CssW $CssH $X $Y
 [BossPhysicalInput]::RequireCursorOnWidget($rw, $expectedPoint[0], $expectedPoint[1])
 $physicalScope.MarkInputStarted()
-[Win32]::mouse_event([Win32]::MOUSEEVENTF_LEFTDOWN, 0, 0, 0, [UIntPtr]::Zero)
-Start-Sleep -Milliseconds 70
-[Win32]::mouse_event([Win32]::MOUSEEVENTF_LEFTUP, 0, 0, 0, [UIntPtr]::Zero)
-Write-Output "已点击"
+$leftHeld = $false
+try {
+  if (($DragX -ge 0) -ne ($DragY -ge 0)) { throw "拖动终点必须同时提供 X/Y" }
+  if ($DragX -ge 0) {
+    if ($Text.Length -gt 0 -or $DragX -gt $CssW -or $DragY -gt $CssH) { throw "非法拖动参数" }
+    $dragEnd = Get-ScreenPoint $rw $CssW $CssH $DragX $DragY
+    if (-not [BossPhysicalInput]::PointOnWidget($rw, $dragEnd[0], $dragEnd[1])) { throw "拖动终点被遮挡" }
+  }
+  $leftHeld = $true
+  [Win32]::mouse_event([Win32]::MOUSEEVENTF_LEFTDOWN, 0, 0, 0, [UIntPtr]::Zero)
+  Start-Sleep -Milliseconds 70
+  if ($DragX -ge 0) {
+    $lastX = $sx; $lastY = $sy
+    for ($step = 1; $step -le 16; $step++) {
+      [BossPhysicalInput]::RequireCursorOnWidget($rw, $lastX, $lastY)
+      $liveStart = Get-ScreenPoint $rw $CssW $CssH $X $Y
+      $liveEnd = Get-ScreenPoint $rw $CssW $CssH $DragX $DragY
+      if ($liveStart[0] -ne $sx -or $liveStart[1] -ne $sy -or $liveEnd[0] -ne $dragEnd[0] -or $liveEnd[1] -ne $dragEnd[1]) { throw "拖动期间窗口几何变化" }
+      $lastX = [int]($sx + ($dragEnd[0] - $sx) * $step / 16)
+      $lastY = [int]($sy + ($dragEnd[1] - $sy) * $step / 16)
+      if (-not [BossPhysicalInput]::PointOnWidget($rw, $lastX, $lastY)) { throw "拖动路径被遮挡" }
+      [BossPhysicalInput]::MoveCursor($lastX, $lastY)
+      Start-Sleep -Milliseconds 25
+    }
+    [BossPhysicalInput]::RequireCursorOnWidget($rw, $lastX, $lastY)
+    Write-Output "已拖动"
+  } else { Write-Output "已点击" }
+} finally {
+  if ($leftHeld) { [Win32]::mouse_event([Win32]::MOUSEEVENTF_LEFTUP, 0, 0, 0, [UIntPtr]::Zero) }
+}
 
 # 点击后真实键盘逐字输入（-Text 非空时）。点完立即在同一进程键入：此刻 Chrome 刚被前台化
 # 且落点守卫刚通过，焦点必在目标输入框——拆成两次进程调用会在间隙被抢焦点

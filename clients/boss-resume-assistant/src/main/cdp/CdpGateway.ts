@@ -33,6 +33,8 @@ export interface GatewayOptions {
 export interface DomSnapshotOptions {
   /** 仅需要实测 CSS 输入坐标的调用方开启；普通快照保持原采集成本。 */
   includeDOMRects?: boolean
+  /** 原生快照计算样式；仅需要真实裁剪/控件结构的调用方按需请求。 */
+  computedStyles?: string[]
 }
 
 export class CdpGateway {
@@ -152,7 +154,7 @@ export class CdpGateway {
   async captureDomSnapshot(opts: DomSnapshotOptions = {}): Promise<unknown> {
     return this.socket.send(
       'DOMSnapshot.captureSnapshot',
-      { computedStyles: [], includePaintOrder: false, includeDOMRects: opts.includeDOMRects ?? false },
+      { computedStyles: opts.computedStyles ?? [], includePaintOrder: false, includeDOMRects: opts.includeDOMRects ?? false },
       this.pageSessionId,
     )
   }

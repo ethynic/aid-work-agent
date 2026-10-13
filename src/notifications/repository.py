@@ -4,6 +4,7 @@ import json
 import random
 import uuid
 from datetime import timedelta
+from urllib.parse import quote
 
 from src.db.database import get_db_connection
 from src.db.encryption import encryption_manager
@@ -395,6 +396,19 @@ class NotificationRepository:
 
     INBOX_EVENT_TYPES = ('billing.credit_low','billing.tenant_expiry','abuse.rule_triggered')
 
+    @staticmethod
+    def _inbox_link(event_type, params, subject):
+        """点击站内信的跳转地址；abuse 告警跳防滥用中心并定位到该用户明细。"""
+        if event_type != 'abuse.rule_triggered':
+            return None
+        tenant_id = params.get('tenant_id') or subject.tenant_id
+        user_id = params.get('user_id')
+        if not tenant_id or not user_id:
+            return None
+        window = params.get('period') if params.get('period') in ('hour', 'day') else 'day'
+        return (f"/t/{quote(str(tenant_id), safe='')}/abuse-center"
+                f"?focus_user={quote(str(user_id), safe='')}&window={window}")
+
     def inbox(self, subject, unread_only=False, limit=20):
         from .events import render_inbox_text
         with self.connection_factory() as conn:
@@ -417,12 +431,15 @@ class NotificationRepository:
             items = []
             for row in cursor.fetchall():
                 try:
-                    title,body = render_inbox_text(row['event_type'],unprotect(row['parameters_encrypted']))
+                    params = unprotect(row['parameters_encrypted'])
+                    title,body = render_inbox_text(row['event_type'],params)
                 except Exception:
+                    params = {}
                     title,body = row['event_type'],''
                 items.append({'notification_ref':row['notification_ref'],'event_type':row['event_type'],
                     'category':row['category'],'priority':row['priority'],'title':title,'body':body,
-                    'read_at':row['read_at'],'created_at':row['created_at']})
+                    'link':self._inbox_link(row['event_type'],params,subject),'read_at':row['read_at'],
+                    'created_at':row['created_at']})
             return {'unread_count':unread,'items':items}
 
     def mark_inbox_read(self, subject, ref):
