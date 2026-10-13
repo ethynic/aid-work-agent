@@ -450,9 +450,12 @@ def _extract_business_error(data: Any) -> Optional[str]:
     """识别外部系统业务错误。
 
     第三方 ERP 等系统用 HTTP 200 承载业务失败，响应体形如
-    {"Code": -1, "Error": "非空内容"}。仅当响应体为 dict 且含 Code 字段、
-    且值不在 (0, 200, "0", "200") 时才判定为业务错误，避免误伤不使用
-    Code 约定的第三方系统。识别到返回描述串，否则返回 None。
+    {"Code": -1, "Error": "非空内容"}。部分系统（如 erp.module）失败时
+    把描述放在 Response.msg（成功时 Response 是 ID/列表，失败时才是 dict），
+    如 {"Code": -1, "Response": {"msg": "Data too long for column ..."}}。
+    仅当响应体为 dict 且含 Code 字段、且值不在 (0, 200, "0", "200") 时才
+    判定为业务错误，避免误伤不使用 Code 约定的第三方系统。
+    识别到返回描述串，否则返回 None。
     """
     if not isinstance(data, dict):
         return None
@@ -461,11 +464,16 @@ def _extract_business_error(data: Any) -> Optional[str]:
         return None
     if code in (0, 200, "0", "200"):
         return None
+    response_field = data.get("Response")
+    response_msg = (
+        response_field.get("msg") if isinstance(response_field, dict) else None
+    )
     error_text = (
         data.get("Error")
         or data.get("error")
         or data.get("Message")
         or data.get("message")
+        or response_msg
         or ""
     )
     return f"Code={code}: {error_text}"

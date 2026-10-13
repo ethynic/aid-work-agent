@@ -494,6 +494,28 @@ class TestBusinessErrorHelpers:
 
         assert _extract_business_error({"Code": -99}) == "Code=-99: "
 
+    def test_extract_msg_from_response_dict(self):
+        """erp.module 类系统失败时描述在 Response.msg（成功时 Response 是 ID）。"""
+        from src.tools.network.http_api import _extract_business_error
+
+        assert _extract_business_error(
+            {"Code": -1, "Error": "", "Response": {"msg": "Data too long for column 'neirong'"}, "Slow": [], "Trace": ""}
+        ) == "Code=-1: Data too long for column 'neirong'"
+
+    def test_extract_prefers_error_over_response_msg(self):
+        from src.tools.network.http_api import _extract_business_error
+
+        assert _extract_business_error(
+            {"Code": -1, "Error": "直接错误", "Response": {"msg": "嵌套错误"}}
+        ) == "Code=-1: 直接错误"
+
+    def test_extract_response_non_dict_ignored(self):
+        """成功形态 Response 为 ID/列表，Code 非零但 Response 非 dict 时不取 msg。"""
+        from src.tools.network.http_api import _extract_business_error
+
+        assert _extract_business_error({"Code": -1, "Response": 176}) == "Code=-1: "
+        assert _extract_business_error({"Code": -1, "Response": []}) == "Code=-1: "
+
     def test_correlation_suffix_empty_without_tool_context(self):
         """无工具执行上下文（测试环境/独立调用）时返回空串，不干扰日志。"""
         from src.tools.network.http_api import _correlation_suffix
