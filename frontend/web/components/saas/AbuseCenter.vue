@@ -8,7 +8,7 @@
       @logout="handleLogout"
     />
 
-    <div class="page-content p-6 gap-4">
+    <div class="page-content p-6 gap-4 overflow-y-auto">
       <!-- 租户默认策略 -->
       <BaseCard title="租户默认策略">
         <p class="text-xs text-muted mb-3">
@@ -59,7 +59,7 @@
               </template>
               <template #actions="{ row }">
                 <div class="flex gap-2">
-                  <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="toggleDetail(row)">查看明细</BaseButton>
+                  <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openDetail(row)">查看明细</BaseButton>
                   <BaseButton
                     v-if="row.user_status !== 'suspended'"
                     intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs"
@@ -74,15 +74,13 @@
             </BaseTable>
           </div>
 
-          <!-- 单用户明细展开区 -->
-          <div v-if="detailUser" class="border border-default rounded-lg p-4">
-            <div class="flex items-center justify-between mb-2">
-              <div class="text-sm font-medium text-default">
-                {{ detailUser.nickname || detailUser.username || detailUser.user_id }} 的请求明细
-                <span class="text-xs text-muted ml-2">窗口合计 {{ formatCredits(detailTotalCredits) }} 积分</span>
-              </div>
-              <BaseButton intent="secondary" size="sm" @click="detailUser = null">收起</BaseButton>
-            </div>
+          <!-- 单用户明细弹框 -->
+          <BaseModal
+            v-model="showDetailModal"
+            :title="detailUser ? `${detailUser.nickname || detailUser.username || detailUser.user_id} 的请求明细` : '请求明细'"
+            size="lgx"
+          >
+            <div class="text-xs text-muted mb-2">窗口合计 {{ formatCredits(detailTotalCredits) }} 积分</div>
             <div v-if="detailLoading" class="text-center py-6 text-muted text-sm">加载中...</div>
             <template v-else-if="detailItems.length > 0">
               <div class="table-scroll-wrapper">
@@ -96,7 +94,10 @@
               </div>
             </template>
             <div v-else class="text-center py-6 text-muted text-sm">窗口内暂无会话消耗记录</div>
-          </div>
+            <template #footer>
+              <BaseButton intent="secondary" @click="showDetailModal = false">关闭</BaseButton>
+            </template>
+          </BaseModal>
         </template>
         <div v-else class="text-center py-12 text-muted">窗口内暂无会话积分消耗</div>
       </div>
@@ -190,6 +191,7 @@ import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseTable from '@/components/ui/BaseTable.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
+import BaseModal from '@/components/ui/BaseModal.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import AbusePolicyEditor from '@/components/saas/AbusePolicyEditor.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
@@ -274,6 +276,7 @@ const usageWindow = ref<'hour' | 'day'>('day')
 const usageLoading = ref(false)
 const usageItems = ref<AbuseUsageSummary[]>([])
 const detailUser = ref<AbuseUsageSummary | null>(null)
+const showDetailModal = ref(false)
 const detailLoading = ref(false)
 const detailItems = ref<AbuseUsageDetail[]>([])
 const detailTotalCredits = ref(0)
@@ -292,13 +295,13 @@ const detailColumns = [
   { key: 'created_at', label: '时间', width: '170px' },
   { key: 'user_message', label: '用户消息' },
   { key: 'credit_cost', label: '积分', width: '90px' },
-  { key: 'model', label: '模型', width: '140px' },
   { key: 'source_type', label: '来源', width: '140px' },
 ]
 
 async function loadUsageSummary() {
   usageLoading.value = true
   detailUser.value = null
+  showDetailModal.value = false
   try {
     const res = await getAbuseUsageSummary(usageWindow.value)
     usageItems.value = res.items || []
@@ -309,18 +312,10 @@ async function loadUsageSummary() {
   }
 }
 
-async function toggleDetail(row: any) {
-  if (detailUser.value?.user_id === row.user_id) {
-    detailUser.value = null
-    return
-  }
-  await openDetail(row)
-}
-
-// 无同用户守卫的展开：禁用记录「查看消耗」跳转时 detailUser 已被预先设置，
-// 复用 toggleDetail 会命中收起分支导致明细永不加载
+// 禁用记录「查看消耗」跳转时复用此函数打开明细弹框
 async function openDetail(row: any) {
   detailUser.value = row
+  showDetailModal.value = true
   detailLoading.value = true
   try {
     const res = await getAbuseUsageDetail(usageWindow.value, row.user_id)
