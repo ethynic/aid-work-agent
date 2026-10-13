@@ -41,7 +41,7 @@ class NonWebAdapter:
 
 @pytest.fixture
 def notifications(service_database,actors,monkeypatch):
-    config=NotificationsConfig(enabled=True)
+    config=NotificationsConfig()
     monkeypatch.setattr(settings,'notifications',config)
     repo=NotificationRepository(config,AdapterRegistry([NonWebAdapter()]),service_database.connect)
     repo.assert_schema()
