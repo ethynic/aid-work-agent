@@ -2010,17 +2010,15 @@ class WeChatMPSyncService:
         body_text = nodes_to_text(extracted.nodes)
         content_hash = self._content_hash(title, extracted.nodes)
 
-        # check 类 item 豁免 processing_status=='success' 条件（WP7 CR 遗留 A）：
         # content_hash 只在成功入库事务内与 documents 内容原子写入，hash 相同+
-        # pipeline 相同即证明页面内容就是已入库版本，当前 processing_status 只反映
-        # 其后的瞬时状态（retry 受理置 pending / 其后 sync_failed、deferred），
-        # 不改变「无需重建」的事实——不豁免会把复核打到付费重建产生冗余计费。
+        # pipeline 相同即证明页面内容就是已入库版本，无需重建；processing_status
+        # 只反映入库后的瞬时状态（retry 受理置 pending / 其后 sync_failed、
+        # deferred），不作为重建依据——按它豁免会让风控拦截后的 retry 对内容
+        # 零变更文章重新总结/向量化/图片 VL，产生冗余计费。
         # doc 行缺失（doc_state=None）与 pipeline 变更仍自然落到重建分支。
-        is_check_item = (item.get("action") or "new") == "check"
         if (
             article["content_hash"] == content_hash
             and article["pipeline_version"] == PIPELINE_VERSION
-            and (is_check_item or article["processing_status"] == "success")
         ):
             doc_state = self._get_doc_state(tenant_id, article["doc_id"])
             if doc_state == "active":
@@ -2190,13 +2188,28 @@ class WeChatMPSyncService:
             self._handle_deleted(tenant_id, item, article)
             return None
         if fetch.status != STATUS_OK:
+            reason = fetch.error or fetch.status
+            if fetch.status == "risk_blocked" and (item.get("action") or "new") == "check":
+                # 复核被风控拦截属瞬时现象：公众号复核轮转是 DB 驱动（按
+                # last_checked_at 轮询全部 active 文章，不依赖清单时间窗），文章
+                # processing_status 不动（success/deferred），由下一轮复核自然重
+                # 查；item 记 skipped 非技术失败（同「内容为空」口径），不进失败
+                # 退避，运行账本不为瞬时风控报失败。new/update 保持 failed+退避
+                # （清单时间窗老化后靠 retry 兜底）。
+                self._mark_item_skipped(
+                    tenant_id, item["id"], ERR_RISK_BLOCKED, f"抓取未成功: {reason}"
+                )
+                # 本轮复核已消费：仅推进 last_checked_at（同「内容为空」口径）。
+                # 不推进则文章仍满足复核到期条件（last_checked_at 超 24h），
+                # 30min tick 会循环重建 recheck item 重查，违背 24h 轮转语义，
+                # 且多篇被风控时会占满每 tick 复核配额饿死正常复核。
+                self._touch_article_checked(
+                    tenant_id, article["id"], processing_status=None
+                )
+                return None
             code = ERR_RISK_BLOCKED if fetch.status == "risk_blocked" else ERR_FETCH_FAILED
-            self._mark_item_failed(
-                tenant_id, item, code, f"抓取未成功: {fetch.error or fetch.status}"
-            )
-            self._mark_article_retry(
-                tenant_id, article["id"], f"fetch:{fetch.error or fetch.status}"
-            )
+            self._mark_item_failed(tenant_id, item, code, f"抓取未成功: {reason}")
+            self._mark_article_retry(tenant_id, article["id"], f"fetch:{reason}")
             return None
 
         # 正文提取

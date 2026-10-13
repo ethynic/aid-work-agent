@@ -29,6 +29,7 @@ from src.wechat_mp.fetcher import (
     STATUS_DELETED,
     STATUS_FETCH_FAILED,
     STATUS_OK,
+    STATUS_RISK_BLOCKED,
     FetchResult,
 )
 from src.wechat_mp.identity import normalize_url
@@ -36,6 +37,7 @@ from src.wechat_mp.service import (
     CATEGORY_SOURCE_TYPE,
     ERR_ALIAS_DUPLICATE,
     ERR_NO_CREDIT,
+    ERR_RISK_BLOCKED,
     PIPELINE_VERSION,
     SUB_CATEGORY_SOURCE_TYPE,
     WeChatMPSyncService,
@@ -565,6 +567,69 @@ class TestIdempotentRecheck:
             "SELECT record_id FROM chat_records WHERE tenant_id = %s", (tenant_id,))
         assert len(records_after) == len(records_before)
 
+    async def test_retry_item_hash_unchanged_skips_rebuild(self, tenant_id):
+        """retry 条目（action=NULL）重抓后 hash 未变：零计费跳过并归位文章状态。
+
+        场景还原审计漏洞：check 复核遇瞬时抓取失败（网络类）→ 文章 sync_failed
+        退避建 retry run；retry 抓取成功且内容与已入库版本一致时不得付费重建
+        （重新总结/embedding/图片 VL），按 skip 处理。
+        """
+        _create_tenant(tenant_id)
+        summarizer = FakeSummarizer()
+        embedding = FakeEmbeddingClient()
+        fetcher = StubFetcher()
+        fetcher.set_page(
+            SHORT_URL,
+            [ok_result(make_article_html("春季活动", BODY_V1)),
+             FetchResult(status=STATUS_FETCH_FAILED, http_status=502,
+                         error="http_error"),
+             ok_result(make_article_html("春季活动", BODY_V1))],
+        )
+        svc = _make_service(fetcher, embedding=embedding, summarizer=summarizer)
+
+        _, row_ids, _, _ = _enqueue(tenant_id, [SHORT_URL])
+        await svc.claim_and_run(tenant_id)
+        # 复核遇瞬时抓取失败：文章 sync_failed + 退避（retry run 的前提）
+        _enqueue(tenant_id, [SHORT_URL], trigger="recheck", action="check")
+        await svc.claim_and_run(tenant_id)
+        article = _query_one(
+            "SELECT processing_status, next_retry_at FROM bs_wechat_mp_articles "
+            "WHERE id = %s", (row_ids[0],))
+        assert article["processing_status"] == "sync_failed"
+        assert article["next_retry_at"] is not None
+
+        records_before = _query_all(
+            "SELECT record_id FROM chat_records WHERE tenant_id = %s", (tenant_id,))
+        balance_before = _tenant_balance(tenant_id)
+        embed_calls_before = embedding.embed_batch_calls
+        summary_calls_before = len(summarizer.calls)
+
+        # 调度器 retry run 的 item action=NULL（worker 视为 new）
+        _, _, retry_item_ids, _ = _enqueue(tenant_id, [SHORT_URL],
+                                           trigger="retry", action=None)
+        result = await svc.claim_and_run(tenant_id)
+        assert result["executed"] is True
+
+        item = _query_one(
+            "SELECT * FROM bs_wechat_mp_sync_items WHERE id = %s",
+            (retry_item_ids[0],))
+        assert item["status"] == "success" and item["action"] == "check"
+        assert item["billing_status"] == "not_required"
+        assert float(item["credits_charged"]) == 0.0
+        # 文章状态被归位：processing_status='success'、退避清空
+        article = _query_one(
+            "SELECT processing_status, next_retry_at FROM bs_wechat_mp_articles "
+            "WHERE id = %s", (row_ids[0],))
+        assert article["processing_status"] == "success"
+        assert article["next_retry_at"] is None
+        # 零计费：无新总结/embedding 调用、无新计费记录、余额不变
+        assert len(summarizer.calls) == summary_calls_before
+        assert embedding.embed_batch_calls == embed_calls_before
+        assert len(_query_all(
+            "SELECT record_id FROM chat_records WHERE tenant_id = %s",
+            (tenant_id,))) == len(records_before)
+        assert _tenant_balance(tenant_id) == balance_before
+
     async def test_update_replaces_old_chunks(self, tenant_id):
         """内容更新：doc_id 快路径重建 chunks，旧文本不可检索。"""
         _create_tenant(tenant_id)
@@ -607,6 +672,80 @@ class TestIdempotentRecheck:
         doc_ids, results = await _retrieve_doc_ids(tenant_id, "春季活动")
         assert doc_id in doc_ids
         assert all("八折优惠" not in r["text"] for r in results)
+
+
+class TestRiskBlockedFetch:
+    async def test_check_risk_blocked_skipped_without_article_retry(self, tenant_id):
+        """check 复核被风控拦截：item 终态 skipped（非技术失败），processing_status
+        不动、不进失败退避，但 last_checked_at 推进——由复核轮转 24h 后自然重查。"""
+        _create_tenant(tenant_id)
+        fetcher = StubFetcher()
+        fetcher.set_page(
+            SHORT_URL,
+            [ok_result(make_article_html("春季活动", BODY_V1)),
+             FetchResult(status=STATUS_RISK_BLOCKED, http_status=200)],
+        )
+        svc = _make_service(fetcher)
+        _, row_ids, _, _ = _enqueue(tenant_id, [SHORT_URL])
+        await svc.claim_and_run(tenant_id)
+
+        # 复核触发前提（生产中 _RECHECK_DUE_SQL 的到期条件）：last_checked_at 超 24h
+        from src.db.database import get_db_connection
+
+        stale_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=25)
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE bs_wechat_mp_articles SET last_checked_at = %s WHERE id = %s",
+                (stale_at, row_ids[0]),
+            )
+            conn.commit()
+
+        _, _, item_ids, _ = _enqueue(tenant_id, [SHORT_URL], trigger="recheck",
+                                     action="check")
+        result = await svc.claim_and_run(tenant_id)
+        assert result["executed"] is True
+
+        item = _query_one(
+            "SELECT status, error_code, error_message, billing_status, "
+            "credits_charged FROM bs_wechat_mp_sync_items WHERE id = %s",
+            (item_ids[0],))
+        assert item["status"] == "skipped"
+        assert item["error_code"] == ERR_RISK_BLOCKED
+        assert "抓取未成功" in (item["error_message"] or "")
+        assert item["billing_status"] == "not_required"
+        assert float(item["credits_charged"]) == 0.0
+        # 文章未被标记 sync_failed：processing_status 保持 success，不进失败退避
+        article = _query_one(
+            "SELECT processing_status, next_retry_at, last_checked_at "
+            "FROM bs_wechat_mp_articles WHERE id = %s", (row_ids[0],))
+        assert article["processing_status"] == "success"
+        assert article["next_retry_at"] is None
+        # 复核轮转已推进：last_checked_at 被刷新（否则 30min tick 会循环重查）
+        assert article["last_checked_at"] > stale_at
+        assert (datetime.now(timezone.utc).replace(tzinfo=None)
+                - article["last_checked_at"]) < timedelta(hours=24)
+
+    async def test_new_risk_blocked_failed_with_backoff(self, tenant_id):
+        """new 条目被风控拦截：维持 failed + 退避重试（清单时间窗老化后兜底）。"""
+        _create_tenant(tenant_id)
+        fetcher = StubFetcher()
+        fetcher.set_page(
+            SHORT_URL, FetchResult(status=STATUS_RISK_BLOCKED, http_status=200))
+        svc = _make_service(fetcher)
+        _, row_ids, item_ids, _ = _enqueue(tenant_id, [SHORT_URL])
+        await svc.claim_and_run(tenant_id)
+
+        item = _query_one(
+            "SELECT status, error_code FROM bs_wechat_mp_sync_items WHERE id = %s",
+            (item_ids[0],))
+        assert item["status"] == "failed"
+        assert item["error_code"] == ERR_RISK_BLOCKED
+        article = _query_one(
+            "SELECT processing_status, next_retry_at FROM bs_wechat_mp_articles "
+            "WHERE id = %s", (row_ids[0],))
+        assert article["processing_status"] == "sync_failed"
+        assert article["next_retry_at"] is not None  # 退避兜底保留
 
 
 class TestSoftDelete:
