@@ -16,7 +16,8 @@
 | Phase 10 | 完整自助连接修复与发行验收 | ✅ 完成（2026-10-12） | r7诊断/恢复、独立故障验证与实际包启动通过；现场UAC/重启待验收 |
 | Phase 11 | 只读故障状态下可见、可点击的连接处理入口 | ✅ 完成（2026-10-13） | r7实际包两缺陷复现；r8实际UI5场景、在线启停退出及CR通过，ZIP交付 |
 | Phase 12 | r8混合历史故障的重新配置阻断与提示覆盖 | ✅ 完成（2026-10-13） | 最终实际包两混合故障pair各一次；检查/重连/重开保留步骤，旧资源未证不激活或注销 |
-| Phase 13 | 失效连接新注册与指定旧设备替换注销 | ✅ 完成（2026-10-13） | 独立源码/后端/Web及CR通过；实际包注册激活/同home启停退出通过，首次查询未归因保留；未部署 |
+| Phase 13 | 失效连接新注册与指定旧设备替换注销 | ✅ 完成（2026-10-13） | 独立源码/后端/Web及CR通过；实际包注册激活/同home启停退出通过；首停止脚本误判已由Phase14归因，未部署 |
+| Phase 14 | 客户交付门逐项验证 | 🔧 进行中 | 1/5/6/7隔离发行检查完成；2/3待自愿现场，4由用户手动部署后联调 |
 
 ## 共同检查点与版本登记（2026-10-12）
 
@@ -369,7 +370,7 @@ H3仍version1，新增可选registrationStatus本机只读能力；仅存在该�
 
 | 顺序 | 工作 | 放行条件 |
 |---|---|---|
-| 1 | 定位首次停止后的getState查询异常，保留完整脱敏错误和生命周期时序；区分测试脚本与产品，有产品问题则修复及回归 | 原异常有可核验的归因；相关停止/重连/恢复时序可预测，UI不永久busy、退出不被假执行状态卡住，不能以重试成功销账 |
+| 1 | 定位首激活后停止操作的异常，保留完整脱敏错误和生命周期时序；区分测试脚本与产品，有产品问题则修复及回归 | 原异常有可核验的归因；相关停止/重连/恢复时序可预测，UI不永久busy、退出不被假执行状态卡住，不能以重试成功销账 |
 | 2 | 在独立Windows测试环境运行实际安装器，覆盖全新安装、有效旧连接覆盖、客户旧故障等价资料覆盖、正在执行时升级、卸载与重装；覆盖实际提供的安装模式和支持系统 | 无调试/跳过安装路径；旧实例自动协调、等待有界并给可完成动作；有效配置保留，损坏配置可重新注册；正常退出和卸载确实结束本产品进程，不影响其他程序 |
 | 3 | 真正Windows重启验证登录自启、续装及混合旧资料的登记重启→完成连接配置 | 自动启动尊重用户选择；显式停止不被恢复成业务执行；新凭据跨重启保留，无需重复输入已消费码；旧资源真停止后可激活，提示不循环。模拟boot和当前Run不变检查不能替代此项 |
 | 4 | 用户明确部署授权后发布agent2数据库迁移、API和Web，再用内部账号做完整新配对与指定旧设备替换 | 客户端请求实际到agent2并加密保存，真实心跳成功；网页选定新设备，指定旧设备准确撤销，其他设备和旧任务保留；旧客户端普通配对仍可用，网络失败及重复完成按预期处理 |
@@ -382,3 +383,45 @@ H3仍version1，新增可选registrationStatus本机只读能力；仅存在该�
 ### Phase13 提交核对（2026-10-13）
 
 用户当场授权提交。确认master上游为origin/master，fetch后快进至`b981e64d`；远程网页/通知/微信等17个文件与本任务产品改动无重叠，未stash或覆盖其他任务改动。26产品源码、11审查测试及4安全依赖摘要与独立CR仍一致，既有Desktop/Host启动与定向验证可复用；远程Web变更后补跑前端build通过，263源边界及1124包模块发行检查通过。只暂存本轮Runtime/共享core、设备替换API/迁移/Web、测试及对应文档，ideas仅暂存本任务索引行。内部安装器保持原摘要，不将当前旧候选冒称为最终提交重新构建的客户包；此次提交不部署服务器。
+
+### Phase14 串行执行记录（2026-10-13）
+
+当前代码已提交并推送`4192da65`。用户授权依次完成客户交付门，未授权服务器部署或后续自动提交。本轮复用项目开发流程；有产品修复时由主控开发、独立测试及独立CR，纯测试定位/文档登记不虚构产品修复。
+
+| 项目 | 状态 | 完成记录 |
+|---|---|---|
+| 1 停止相关异常归因 | ✅ 完成（2026-10-13） | 实际首激活完整复现Error: button disabled，未发送stop；约0.1秒后UI自然ready，实际点击停止/退出/lease通过，产品未改 |
+| 2 真实安装/升级/卸载 | 🔧 进行中 | 用户明确暂缓内部安装验收，由已同意协助的客户试装；Sandbox需重启但不继续操作 |
+| 3 真实重启/登录自启/恢复 | 🔧 进行中 | 复用已验启动选择/恢复逻辑，整理现场步骤；真实Windows启动效果仍待现场 |
+| 4 agent2配套部署与联调 | 🔧 进行中 | 用户明确自行手动部署；配套4192da65已推送，真实联调待部署后，助手不部署 |
+| 5 BOSS插件与能力业务链路 | ✅ 完成（2026-10-13） | 最终0.3.5实际UI导入/ready/HB能力和Device→Runtime→MCP只读调用ACK通过；真实agent2业务待现场 |
+| 6 故障提示与处理闭环 | ✅ 完成（2026-10-13） | 独立新增4个保护记录损坏+1实际UI场景通过；pair各1次、503/401步骤保留，正常退出/lease及启动项通过 |
+| 7 最终提交构建与客户ZIP | ✅ 完成（2026-10-13） | r9未签名候选ZIP/摘要/CRC/最终启动与独立导入/CR通过；安装/真实boot/agent2明确现场待验 |
+
+第1项证据更正：原`registration-final-ui-safe.mjs`第34行1091列精确指向`await active.click('停止执行')`，原栈仅evalJS和顶层帧，没有getState轮询回调帧。click helper会在按钮不存在或disabled时主动抛错，旧evalJS把具体exceptionDetails压成RENDERER_EXCEPTION。保留原safe报告explicit-start-online显示界面运行中但连接中、设备状态未完整读取，不能将手工H1在线判断等同UI stop已可点击。失败后的finally会执行正常退出并请求stop，因此原safe的stop succeeded/marker删除不能单独证明原UI stop点击成功；后来samehome启停有独立实际点击证明，保持有效。归因仍以本轮完整捕获为准，不通过删历史失败或重试成功放行。
+
+第1项独立验证完成：一轮原始首注册→重开→首次激活→start强H1轮询，精确复现`Error: button disabled at <anonymous>:1:151`，完整exceptionDetails指向click helper、发生在b.click之前；当时只有start成功记录，没有stop。UI自然刷新约0.1秒后变为在线且停止按钮启用，再实际点击stop，H1/操作成功、marker删除，所有getState无IPC异常；两次Main0/两次真实lease释放、pair1/complete1、Run/RunOnce前后摘要相同、结束owned产品进程0。fixture改为等真实按钮ready并保留完整异常，不以后台state先到冒称UI已ready；没有产品源码修改或第二轮重复。报告`clients/agent-desktop/build/runtime-release-readiness-20261013/item1/independent-validation.json`，`PASS_ORIGINAL_EXCEPTION_ATTRIBUTED`，SHA256 `a69f2a8d3fd83adb32f5ce3c9fb3c4803d206433f10adb34822e311791d2f994`，最终EXE/asar仍对应原r9。此段关闭此前误分类的未归因异常，不代表后续安装/重启/客户业务已验收。
+
+第2项准备：当前开发机Windows11专业版10.0.26200、64位、约32GB内存，Hyper-V相关服务运行；当前token非管理员，Get-VM被Windows权限拒绝，Sandbox特性状态2（未启用），无Sandbox可执行文件。已检查Downloads/Public Documents/repos下现成ISO/虚拟磁盘，无可复用验收镜像。用户明确授权启用Windows Sandbox，准备脚本`.tmp/enable-runtime-validation-sandbox.ps1`仅启用系统特性、记录结果且使用-NoRestart；通过管理员授权启动，绝不自动重启当前开发机。此操作只准备本机测试环境，不部署agent2，不触碰客户配置；真实安装尚未开始。
+
+启用回读结果`ENABLED_RESTART_REQUIRED`：feature由Disabled变Enabled，RestartNeeded=true，automaticRestart=false。当前开发机没有自动重启；已询问用户保存工作后自行重启或明确授权重启，等待决定，不绕过系统重启条件。guest材料已备妥：原r9安装器a2ff37...、从不可变r8 ZIP提取的原安装器087bcec...、实际打包Node22.23.3（SHA256 `9c9245166b4a8e182e0b797da9c20136117ff24368eaff1fec8343a123c8db0e`）、稳定BOSS0.3.1插件；均逐文件校验，仅映射输入目录只读和报告目录可写，未映射仓库或客户配置。`.wsb` XML校验通过，Networking Disable、6GB；guest bootstrap/driver由有界角色准备，但guest未启动，没有安装器执行证据，不将准备结果标成通过。此环境目前仅Win11，silent真实安装亦不能冒称MUI交互或真实UAC跨SID已验收。
+
+重启后续接入口：`clients/agent-desktop/build/runtime-release-readiness-20261013/item2/runtime-install-validation.wsb`。root已补manifest的guestOnly及driver/bootstrap摘要，6份输入复读校验通过；driver Node22语法与bootstrap WindowsPowerShell5.1 AST通过，只对固定WDAGUtilityAccount来宾执行。脚本依次覆盖currentuser/allusers的全新安装、有效r8覆盖、运行中升级、readonly故障覆盖、运行/readonly卸载和保留资料重装，每个安装器180秒、全套40分钟上界；live-progress/report写映射输出。旧故障样本18操作为synthetic，0claim/0业务；3010记录等待真实重启且停止，不冒充成功。准备报告`item2/preparation-validation.json`和交接说明`item2/preparation-handoff.md`均明确尚未执行；尚缺交互MUI/真实UAC切换证据需后续另行验证。用户重启开发机或明确授权后先重新检查系统特性和可执行文件，再启动该入口；不跳到第3项，不自动部署或提交。
+
+用户调整顺序（2026-10-13）：r8已在原故障客户机覆盖成功，客户明确同意协助后续试装；用户要求暂跳第2项并先完成第3–7项。主控不重启当前开发机，不启动Sandbox；准备材料保留但不算安装通过。第3项可复用源码/模拟验证并给现场步骤，真实登录自启与跨boot恢复仍不可标为实测。第4项已另询当场agent2部署授权，未授权前只读核验及准备。第5项固定已提交ef5ad8d0/BOSS0.3.4隔离快照，避免混入其他任务正在修改的0.3.5。
+
+部署决定（2026-10-13）：用户明确agent2由其手动部署，并授权本轮相关改动提交；主控不运行更新脚本或重建服务。管理员发布与现场验收说明加入组合包，明确提交4192da65/插件冻结ef5ad8d0、数据库/API/Web配套、内部账号普通注册及指定替换验收；服务器尚未发布的能力不能标PASS。
+
+第5项最终版本调整：准备期间另一BOSS任务完成独立40项、额外8反例、CR和连续3次真机只读会员识别，并提交推送b8124834/0.3.5。为满足最新CLI要求，本轮最后固定该已验证提交；不追后续工作区变化。0.3.4包及实际UI导入/就绪/能力/退出证据保留prior，最终0.3.5按新签名根重新包内核验及独立导入，不将旧插件证据直接当新版导入成功。
+
+第6项独立故障闭环：`item6/failure-matrix-independent-validation.json`结果PASS_WITH_EXPLICIT_ACCEPTANCE_GAPS，26源码与原CR相同。真实CurrentUser DPAPI+loopback四组invalid blob/解保护后坏JSON/foreign home/oversized，显式新码各pair一次、旧bytes备份、encrypted stage保存；实际旧r9 EXE混合home（缺config/secret+18旧op+badstage）首次可导航，新pair1、真实protected重启见证登记；503/401检查、纯管理重连、重开保留requires_reboot/action，不重复pair/complete/claim。旧facts不改且不归档，两次Main0/真实leasefree，Run/RunOnce不变，owned产品进程0。最终重包Main/renderer asar仍f90945...，Host/Core13模块摘要相同；权限或系统DPAPI自身故障仍需修复对应系统条件，不绕过保护。安装器、真实Windows boot、agent2与业务验收未测，独立报告明确限定。
+
+## r9 候选组合ZIP（2026-10-13）
+
+- ZIP：`clients/release/AID-Work-Runtime-UI-BOSS-20261013-trial-r9.zip`，131212947字节、26文件，CRC及逐文件SHA256复读通过；未覆盖r8或以前的ZIP。
+- ZIP SHA256：`bc9a8ec9cfd2d8d023251876cad82aa7a325cc3c4e952df655274ed8b9f165a7`。
+- UI0.0.6、Host0.2.18/Core0.2.17（代码4192da65）、BOSS0.3.5（冻结b8124834）、固定Node22.23.3 win-x64 ABI127。安装器NotSigned，SHA256 `b953ef67ee808183bf84b1dd9f167c60c1f78832fd4bc7b23f5c8771c7e9cb9e`；插件SHA256 `9cf4ca8ac93ba79b44b517f6370df6c64173dda89563f6e3fda2b2324561914b`。
+- 最终Main/renderer asar与item1/item6原r9逐字节同为f90945...，13个Host/Core关键模块及26源/11测试/4依赖绑定通过；追加的新public trial root与签名者一致，旧两根逐字段保留。新安装器包验、实际EXE启动/正常退出/真实Host lease通过，最终独立发行审查无新阻断。
+- 最终BOSS0.3.5独立实际UI导入（仅OS选文件边界由fixture返回固定路径）、Main私有IPC→Host真实签名/安装/probe；UI版本0.3.5、enabled/ready为true。现Chrome9222只读doctor后，UI启动真实loopback HB上报boss能力；Device claim一次boss_list_jobs→Runtime→签名MCP→started1/progress6/resultACK1，success/codeOK/effectnone，仅记录count2和shape，不保存岗位内容。未选岗、筛选或发送，仅只读工具展开职位下拉；stop成功、marker删除、Main0/leasefree、Run/RunOnce不变，owned进程0。
+- 包内客户简明HTML/MD、完整配置迁移及错误处理表、管理员发布/现场步骤、版本/摘要和分项报告。phase13原未归因报告原样保留，与item1归因修正及最终validation-report同时提供，不删除失败历史。
+- 本次可交自愿客户试用的未签名候选，不列正式发布或完整现场验收PASS。用户明确暂缓内部安装/开发机重启；真实登录自启/跨boot恢复尚待现场。agent2只读最后HEAD仍b981e64d，用户自行部署后才能验证替换和真实业务；助手没有部署或修改客户设备。普通新配对兼容旧服务端，未发布替换功能不得承诺可用。
