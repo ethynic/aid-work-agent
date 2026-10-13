@@ -740,6 +740,16 @@ run + pending items，worker 按租户串行领取（事务内 queued→running�
 
 ---
 
+### 11.9 本地工具指定设备替换（2026-10-13）
+
+- `local_tool_pairing_tickets.replacement_device_id UUID NULL`：登录用户明确选定的旧设备；普通配对码为 NULL。签发时校验 tenant/user 归属，重生成同目标使用单个事务作废旧码并创建新码。仅 `pairing_protocol: 2` 能消费替换票据。
+- `local_tool_devices.replacement_device_id UUID NULL`：仅由服务端从已锁定票据写入的新设备→旧设备关系；设备名、指纹及客户端请求不能授予替换权限。
+- `local_tool_devices.replacement_completed_at TIMESTAMP NULL`：新设备完成替换的幂等记录。普通配对、新设备刚注册时均为 NULL。
+- `local_tool_devices.replaced_by_device_id UUID NULL`：旧设备的明确替换胜者。与撤销旧设备、清除旧 selected、写入新设备完成时间同一事务；旧设备已被手工撤销且无胜者仍可完成替换。两个新设备竞争同一旧设备时仅一个完成，另一个返回固定冲突，不能把手工撤销误当另一替换成功。
+- 票据消费、新设备 INSERT 和关系登记一次 commit；异常全部 rollback。完成接口由新设备 token 鉴权，锁定并重验同 tenant/user 的新旧设备；不接收目标 id，不更新任务、执行事实或同账号其他设备，不自动选定新设备。
+- 配对重生成、完成替换、手工撤销及选定操作共用按 tenant/user 的事务级 advisory lock，避免与全用户单选 UPDATE 的锁顺序冲突；配对消费另以票据行锁保证一次性。
+- 新部署字段在 `deploy/init-postgres.sql`；现有环境由初始化的 `deploy/db_update.yaml` 增量块幂等添加。
+
 ## 12. 核心表关系图
 
 ```

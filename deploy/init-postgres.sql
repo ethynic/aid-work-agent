@@ -1255,6 +1255,9 @@ CREATE TABLE IF NOT EXISTS local_tool_devices (
     manifest_digest TEXT,
     selected BOOLEAN DEFAULT false,
     status TEXT DEFAULT 'active' NOT NULL,
+    replacement_device_id UUID,
+    replacement_completed_at TIMESTAMP,
+    replaced_by_device_id UUID,
     last_seen_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1270,6 +1273,7 @@ CREATE TABLE IF NOT EXISTS local_tool_pairing_tickets (
     code_hash TEXT NOT NULL,
     expires_at TIMESTAMP NOT NULL,
     used_at TIMESTAMP,
+    replacement_device_id UUID,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (code_hash),
     PRIMARY KEY (id)

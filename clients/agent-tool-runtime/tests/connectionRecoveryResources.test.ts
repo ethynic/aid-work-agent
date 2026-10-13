@@ -19,7 +19,7 @@ function fixture(t: TestContext) {
   const home = mkdtempSync(join(tmpdir(), 'connection-resources-'))
   const originalStat = fs.lstatSync
   const state = { boot: randomUUID(), session: 7, legacy: 0, protection: true, supervisor: true, cliAvailable: true,
-    commands: [] as string[][], jobs: new Map<string, number>(), failStop: false, cimChecks: 0 }
+    commands: [] as string[][], jobs: new Map<string, number>(), failStop: false, cimChecks: 0, ledgerDecryptions: 0 }
   t.mock.method(fs, 'lstatSync', ((path: fs.PathLike, ...args: unknown[]) => {
     if (String(path).endsWith('native\\RuntimeProcessSupervisor.exe') || String(path).endsWith('native/RuntimeProcessSupervisor.exe')) {
       if (state.supervisor) return originalStat(process.execPath)
@@ -54,6 +54,7 @@ function fixture(t: TestContext) {
         if (script.includes(']::Protect(')) callback(null, seal(Buffer.from(input, 'base64').toString('utf8')), '')
         else {
           const decoded = Buffer.from(input, 'base64').toString('utf8')
+          if (decoded.includes('"ownerPid"')) state.ledgerDecryptions++
           if (!decoded.startsWith('fixture-seal:')) callback(new Error('fixture protected blob invalid'), '', '')
           else callback(null, Buffer.from(decoded.slice(13)).toString('base64'), '')
         }
@@ -93,6 +94,24 @@ test('connection instructions do not scan old execution resources even when nati
   assert.equal(checked.identity_digest, null)
   assert.equal(f.state.commands.length, 0); assert.equal(f.state.cimChecks, 0)
   assert.equal(fs.existsSync(join(f.home, 'connection-recovery-witness.bin')), false)
+})
+
+test('whole inspection timeout exposes reboot registration, and a bound real boot change skips historical decryptions', windows, async t => {
+  const f = fixture(t); f.metadata()
+  for (let i = 0; i < 32; i++) f.ledger({ marker: false })
+  await register(f.home, process.execPath)
+  const now = Date.now(); let calls = 0
+  const clock = t.mock.method(Date, 'now', () => now + (++calls > 14 ? 60_000 : 0))
+  const expired = await f.run()
+  clock.mock.restore()
+  assert.equal(expired.safe, false); assert.equal(expired.needs_reboot, true)
+  assert.equal(expired.category, 'CONNECTION_RESOURCE_CHECK_TIMEOUT')
+  assert.equal((await f.run()).safe, false)
+  const reads = f.state.ledgerDecryptions
+  f.state.boot = randomUUID()
+  assert.deepEqual(await f.run(), { safe: true, needs_reboot: false, category: 'CONNECTION_RESOURCE_REBOOT_CONFIRMED' })
+  assert.equal(f.state.ledgerDecryptions, reads)
+  assert.equal(fs.readdirSync(join(f.home, 'process-supervision')).length, 32)
 })
 
 test('explicit new-device preparation still proves resources and refuses unknown execution history', windows, async t => {

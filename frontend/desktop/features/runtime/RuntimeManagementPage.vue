@@ -29,12 +29,13 @@
         <div class="runtime-actions">
           <button v-if="recovery.diagnosis.can_preserve" type="button" class="runtime-secondary" :disabled="recovery.busy || view.busy" @click="recoveryMode = 'preserve'; recoveryConfirmed = false">保留原配对，修复管理连接</button>
           <button v-if="recovery.diagnosis.can_reconfigure" type="button" class="runtime-secondary" :disabled="recovery.busy || view.busy" @click="recoveryMode = 'new_device'; recoveryConfirmed = false">重新配置连接</button>
+          <button v-if="controller.supportsRegistration && recovery.registered" type="button" class="primary-button runtime-primary" :disabled="recovery.busy || view.busy" @click="controller.reconfigureConnection({ mode: 'continue_registration', confirmed: true })">完成连接配置</button>
           <button v-if="recovery.diagnosis.requires_reboot || recovery.diagnosis.category === 'EXECUTION_ACTIVE'" type="button" class="runtime-secondary" :disabled="recovery.busy || view.busy" @click="recoveryMode = 'prepare_reboot'; recoveryConfirmed = false">登记重启恢复</button>
         </div>
       </template>
       <form v-if="recoveryMode" class="runtime-pair-form runtime-recovery-form" @submit.prevent="recoverConnection">
         <h3>{{ recoveryMode === 'preserve' ? '修复原设备' : recoveryMode === 'new_device' ? '建立新设备连接' : '登记重启恢复' }}</h3>
-        <p class="runtime-muted">{{ recoveryMode === 'preserve' ? '保留设备编号、配对和插件，仅归档异常管理记录。旧任务记录保留，未确认的旧任务仍需核对。' : recoveryMode === 'new_device' ? '旧资料完整归档，不会清空。使用新配对码建立新设备编号，名称可以沿用；随后在网页选定新设备，并重新安装ZIP中的BOSS插件。旧任务不会转移到新设备。' : '登记旧执行资源的重启核验信息，保留任务记录。完成登记后，请正常重启Windows；重新打开客户端并检查连接，再继续恢复。' }}</p>
+        <p class="runtime-muted">{{ recoveryMode === 'preserve' ? '保留设备编号、配对和插件，仅归档异常管理记录。旧任务记录保留，未确认的旧任务仍需核对。' : recoveryMode === 'new_device' ? '使用新配对码注册新设备，名称可以沿用。旧资料保留，无需查找密钥或备份；网页选择更换旧设备生成的码，可在新连接完成后注销指定旧设备。旧任务不会转移。' : '登记旧执行资源的重启核验信息，保留任务记录和已经保存的新凭据。完成登记后，请正常重启Windows；重新打开客户端，继续完成连接配置，无需再次输入配对码。' }}</p>
         <template v-if="recoveryMode === 'new_device'">
           <div class="field"><label for="recovery-server">企业服务地址</label><input id="recovery-server" v-model.trim="recoveryForm.server" type="url" required autocomplete="url" placeholder="https://企业服务地址" :disabled="recovery.busy"></div>
           <div class="field"><label for="recovery-name">设备名称</label><input id="recovery-name" v-model.trim="recoveryForm.device_name" required maxlength="100" autocomplete="off" :disabled="recovery.busy"></div>
@@ -135,7 +136,8 @@ async function pair() {
   if (!canPair.value) return
   const params = { ...form }
   form.pairing_code = ''
-  await controller.mutate('pair', params)
+  if (controller.supportsRegistration) await controller.reconfigureConnection({ mode: 'register_new', confirmed: true, ...params })
+  else await controller.mutate('pair', params)
 }
 async function uninstall(installationId: string) {
   confirmRemoval.value = ''
@@ -144,7 +146,7 @@ async function uninstall(installationId: string) {
 async function recoverConnection() {
   if (!recoveryMode.value || !recoveryConfirmed.value || recovery.busy || view.busy) return
   const mode = recoveryMode.value
-  const input: ConnectionRecoveryInput = mode === 'new_device' ? { mode, confirmed: true, ...recoveryForm } : { mode, confirmed: true }
+  const input: ConnectionRecoveryInput = mode === 'new_device' ? { mode: controller.supportsRegistration ? 'register_new' : 'new_device', confirmed: true, ...recoveryForm } : { mode, confirmed: true }
   recoveryForm.pairing_code = ''; recoveryMode.value = ''; recoveryConfirmed.value = false
   await controller.reconfigureConnection(input)
 }

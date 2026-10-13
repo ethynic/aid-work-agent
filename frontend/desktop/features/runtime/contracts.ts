@@ -7,9 +7,10 @@ export interface RuntimeManagementPort {
   onDisconnect?(listener: () => void): () => void
   choosePackage(input: { instance_id: string; request_key: string }): Promise<unknown>
   diagnoseConnection?(): Promise<unknown>
+  registrationStatus?(): Promise<unknown>
   reconfigureConnection?(input: ConnectionRecoveryInput): Promise<unknown>
 }
-export interface ConnectionRecoveryInput { mode: 'preserve' | 'new_device' | 'prepare_reboot'; confirmed: true; server?: string; device_name?: string; pairing_code?: string }
+export interface ConnectionRecoveryInput { mode: 'preserve' | 'new_device' | 'register_new' | 'prepare_reboot' | 'continue_registration'; confirmed: true; server?: string; device_name?: string; pairing_code?: string }
 export interface ConnectionDiagnosis {
   version: 1; category: string; summary: string; steps: string[]
   service_verified: boolean; can_preserve: boolean; can_reconfigure: boolean; requires_reboot: boolean

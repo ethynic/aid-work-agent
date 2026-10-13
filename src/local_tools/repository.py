@@ -5,6 +5,7 @@
 """
 
 import math
+import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -15,6 +16,7 @@ from src.core.cache_utils import invalidate_tenant_cache
 from src.db.client_binding_db import ClientUsageLogDB
 from src.db.database import get_db_connection
 from src.local_tools.pricing import tool_credit_price
+from src.local_tools.security import sha256_hex
 
 # 终态：写 result 时遇到终态直接幂等返回
 TERMINAL_STATES = ("succeeded", "failed", "cancelled", "unknown", "expired")
@@ -24,6 +26,166 @@ class ResumeContinuationConflict(ValueError):
     def __init__(self, invocation_id):
         super().__init__('STALE_CONTINUATION')
         self.invocation_id = str(invocation_id)
+
+
+class DeviceReplacementError(ValueError):
+    """Fixed public error code; never carries a ticket, token or SQL parameters."""
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+def _lock_pairing_user(cursor, tenant_id: str, user_id: str) -> None:
+    digest = sha256_hex(json.dumps(["local-tools-pairing", tenant_id, user_id]))
+    key = int(digest[:16], 16)
+    if key >= 2 ** 63:
+        key -= 2 ** 64
+    cursor.execute("SELECT pg_advisory_xact_lock(%s)", (key,))
+
+
+def issue_pairing_ticket(
+    tenant_id: str, user_id: str, code_hash: str, expires_at: datetime,
+    replacement_device_id: Optional[str] = None,
+) -> str:
+    """Invalidate old codes and issue the bound code in one transaction."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        _lock_pairing_user(cursor, tenant_id, user_id)
+        if replacement_device_id is not None:
+            cursor.execute(
+                """SELECT id FROM local_tool_devices
+                   WHERE id = %s AND tenant_id = %s AND user_id = %s
+                     AND status IN ('active', 'revoked') FOR SHARE""",
+                (replacement_device_id, tenant_id, user_id),
+            )
+            if not cursor.fetchone():
+                raise DeviceReplacementError("REPLACEMENT_TARGET_NOT_FOUND")
+        cursor.execute(
+            """UPDATE local_tool_pairing_tickets SET used_at = NOW()
+               WHERE tenant_id = %s AND user_id = %s AND used_at IS NULL""",
+            (tenant_id, user_id),
+        )
+        cursor.execute(
+            """INSERT INTO local_tool_pairing_tickets
+               (tenant_id, user_id, code_hash, expires_at, replacement_device_id)
+               VALUES (%s, %s, %s, %s, %s) RETURNING id""",
+            (tenant_id, user_id, code_hash, expires_at, replacement_device_id),
+        )
+        ticket_id = str(cursor.fetchone()["id"])
+        conn.commit()
+        return ticket_id
+
+
+def pair_device_from_ticket(
+    code_hash: str, token_hash: str, name: Optional[str] = None,
+    platform: Optional[str] = None, runtime_version: Optional[str] = None,
+    capabilities: Optional[Dict[str, Any]] = None,
+    machine_fingerprint_hash: Optional[str] = None,
+    pairing_protocol: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    """Atomically validate/consume a ticket, create a device and bind replacement.
+
+    A lost response never revokes the old device. Its relation can only be
+    completed later using the authenticated new device token.
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT id, tenant_id, user_id, replacement_device_id
+               FROM local_tool_pairing_tickets
+               WHERE code_hash = %s AND used_at IS NULL AND expires_at > NOW()
+               FOR UPDATE""", (code_hash,),
+        )
+        ticket = cursor.fetchone()
+        if not ticket:
+            return None
+        target = ticket.get("replacement_device_id")
+        if target is not None:
+            if type(pairing_protocol) is not int or pairing_protocol != 2:
+                raise DeviceReplacementError("PAIRING_PROTOCOL_REQUIRED")
+            cursor.execute(
+                """SELECT id FROM local_tool_devices
+                   WHERE id = %s AND tenant_id = %s AND user_id = %s
+                     AND status IN ('active', 'revoked') FOR SHARE""",
+                (target, ticket["tenant_id"], ticket["user_id"]),
+            )
+            if not cursor.fetchone():
+                raise DeviceReplacementError("REPLACEMENT_TARGET_NOT_FOUND")
+        cursor.execute(
+            """INSERT INTO local_tool_devices
+               (tenant_id, user_id, name, platform, runtime_version, token_hash,
+                machine_fingerprint_hash, capabilities_json, last_seen_at,
+                replacement_device_id)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
+               RETURNING id, tenant_id, user_id, name, platform, runtime_version,
+                         capabilities_json, selected, status, last_seen_at, created_at,
+                         replacement_device_id""",
+            (ticket["tenant_id"], ticket["user_id"], name, platform, runtime_version,
+             token_hash, machine_fingerprint_hash,
+             Json(capabilities) if capabilities is not None else None, target),
+        )
+        device = dict(cursor.fetchone())
+        cursor.execute(
+            """UPDATE local_tool_pairing_tickets SET used_at = NOW()
+               WHERE id = %s AND tenant_id = %s AND user_id = %s""",
+            (ticket["id"], ticket["tenant_id"], ticket["user_id"]),
+        )
+        conn.commit()
+        return device
+
+
+def complete_device_replacement(tenant_id: str, user_id: str, device_id: str) -> bool:
+    """Only the authenticated new device can revoke its server-bound old device.
+
+    The old row's durable winner arbitrates concurrent replacements. No task,
+    fact or other device changes; new devices are never automatically selected.
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        _lock_pairing_user(cursor, tenant_id, user_id)
+        cursor.execute(
+            """SELECT id, replacement_device_id, replacement_completed_at
+               FROM local_tool_devices
+               WHERE id = %s AND tenant_id = %s AND user_id = %s AND status = 'active'
+               FOR UPDATE""", (device_id, tenant_id, user_id),
+        )
+        device = cursor.fetchone()
+        if not device:
+            raise DeviceReplacementError("REPLACEMENT_DEVICE_REVOKED")
+        target = device.get("replacement_device_id")
+        if target is None:
+            return False
+        if str(target) == str(device_id):
+            raise DeviceReplacementError("REPLACEMENT_TARGET_NOT_FOUND")
+        if device.get("replacement_completed_at") is not None:
+            return True
+        cursor.execute(
+            """SELECT id, status, replaced_by_device_id FROM local_tool_devices
+               WHERE id = %s AND tenant_id = %s AND user_id = %s
+               FOR UPDATE""", (target, tenant_id, user_id),
+        )
+        old = cursor.fetchone()
+        if not old or old["status"] not in ("active", "revoked"):
+            raise DeviceReplacementError("REPLACEMENT_TARGET_NOT_FOUND")
+        winner = old.get("replaced_by_device_id")
+        if winner is not None and str(winner) != str(device_id):
+            raise DeviceReplacementError("REPLACEMENT_ALREADY_COMPLETED")
+        cursor.execute(
+            """UPDATE local_tool_devices
+               SET status = 'revoked', selected = FALSE, replaced_by_device_id = %s,
+                   updated_at = NOW()
+               WHERE id = %s AND tenant_id = %s AND user_id = %s""",
+            (device_id, target, tenant_id, user_id),
+        )
+        cursor.execute(
+            """UPDATE local_tool_devices
+               SET replacement_completed_at = NOW(), updated_at = NOW()
+               WHERE id = %s AND tenant_id = %s AND user_id = %s""",
+            (device_id, tenant_id, user_id),
+        )
+        conn.commit()
+        return True
 
 
 # ==================== 配对码 ====================
@@ -72,6 +234,7 @@ def consume_ticket(code_hash: str) -> Optional[Dict[str, Any]]:
             UPDATE local_tool_pairing_tickets
             SET used_at = NOW()
             WHERE code_hash = %s AND used_at IS NULL AND expires_at > NOW()
+              AND replacement_device_id IS NULL
             RETURNING id, tenant_id, user_id, expires_at, used_at, created_at
             """,
             (code_hash,),
@@ -160,6 +323,7 @@ def revoke_device(tenant_id: str, user_id: str, device_id: str) -> bool:
     """撤销设备（status=revoked，selected 清除），返回是否命中"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        _lock_pairing_user(cursor, tenant_id, user_id)
         cursor.execute(
             """
             UPDATE local_tool_devices
@@ -209,6 +373,7 @@ def select_device(tenant_id: str, user_id: str, device_id: str) -> bool:
     """选定设备（单选）：事务内先清后设，目标设备必须归属该用户且 active"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        _lock_pairing_user(cursor, tenant_id, user_id)
         cursor.execute(
             "UPDATE local_tool_devices SET selected = FALSE WHERE tenant_id = %s AND user_id = %s",
             (tenant_id, user_id),

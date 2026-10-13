@@ -116,6 +116,8 @@ artifact_ref是受权登记的引用，device_id/invocation_id保留归属，nam
 
 ## 校验与Desktop接收
 
+连接注册增量修订1：Runtime-only H3可选`registrationStatus()`返回受保护的本机待办（ConnectionDiagnosis v1或null），没有该端口时不得发送新增`register_new`及`continue_registration` mode；前者携带地址/名称/配对码，后者只有`confirmed:true`。旧renderer的`new_device`在新Main中消费码/改状态前明确返回`CLIENT_UPDATE_REQUIRED`，不静默进入stage；新renderer旧preload保持原`new_device`调用。其他v1 DTO字段不变，暂存身份不作为H1当前设备。Device `pairing_protocol:2`仅用于指定替换票据；普通旧配对仍兼容，服务端绑定的旧设备仅在新身份安装并验证连接后注销。共同检查点见[契约8.2](../../../docs/system/runner-desktop-runtime-integration-contract.md#82-连接注册与设备替换增量2026-10-13实施中)。
+
 仓库根执行：
 
 ```powershell

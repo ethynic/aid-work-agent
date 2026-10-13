@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import RuntimeManagementPage from '../RuntimeManagementPage.vue'
-import type { ManagementRequest, RuntimeManagementPort } from '../contracts'
+import type { ConnectionDiagnosis, ManagementRequest, RuntimeManagementPort } from '../contracts'
 
 const wrappers: VueWrapper[] = []
 afterEach(() => { wrappers.forEach((wrapper) => wrapper.unmount()); wrappers.length = 0; localStorage.clear(); document.body.innerHTML = '' })
-function mountPage(options: { features?: string[]; state?: string; ready?: boolean; version?: string; pairReject?: boolean; recovery?: boolean } = {}) {
+function mountPage(options: { features?: string[]; state?: string; ready?: boolean; version?: string; pairReject?: boolean; recovery?: boolean; registration?: ConnectionDiagnosis | null } = {}) {
   const requests: ManagementRequest[] = []
   const port: RuntimeManagementPort = {
     request: vi.fn(async (request) => {
@@ -24,6 +24,7 @@ function mountPage(options: { features?: string[]; state?: string; ready?: boole
     port.diagnoseConnection = vi.fn(async () => ({ version: 1, category: 'CONFIG_INVALID', summary: '原连接配置格式损坏', steps: ['重新配置并使用新配对码。', '完成后在网页选定新设备。'], service_verified: false, can_preserve: false, can_reconfigure: true, requires_reboot: false }))
     port.reconfigureConnection = vi.fn(async () => ({ version: 1, status: 'action_required', new_device: false, diagnosis: { version: 1, category: 'NETWORK_FAILED', summary: '无法连接企业服务', steps: ['检查网络与服务地址，恢复后检查连接。'], service_verified: false, can_preserve: false, can_reconfigure: true, requires_reboot: false } }))
   }
+  if ('registration' in options) port.registrationStatus = vi.fn(async () => options.registration ?? null)
   const wrapper = mount(RuntimeManagementPage, { props: { port }, attachTo: document.body })
   wrappers.push(wrapper)
   return { wrapper, port, requests }
@@ -31,6 +32,31 @@ function mountPage(options: { features?: string[]; state?: string; ready?: boole
 function button(wrapper: VueWrapper, text: string) { const found = wrapper.findAll('button').find((element) => element.text() === text); if (!found) throw new Error(`Missing button ${text}`); return found }
 
 describe('Runtime management page', () => {
+  it('uses explicit register_new only when the staged registration capability is present', async () => {
+    const { wrapper, port } = mountPage({ state: 'blocked', recovery: true, registration: null }); await flushPromises()
+    await button(wrapper, '检查连接并给出处理方式').trigger('click'); await flushPromises()
+    await button(wrapper, '重新配置连接').trigger('click')
+    await wrapper.find('#recovery-server').setValue('https://service.example')
+    await wrapper.find('#recovery-name').setValue('新设备')
+    await wrapper.find('#recovery-code').setValue('fixture-new-code')
+    await wrapper.find('.runtime-recovery-form input[type="checkbox"]').setValue(true)
+    await wrapper.find('.runtime-recovery-form').trigger('submit'); await flushPromises()
+    expect(port.reconfigureConnection).toHaveBeenCalledWith({ mode: 'register_new', confirmed: true, server: 'https://service.example', device_name: '新设备', pairing_code: 'fixture-new-code' })
+  })
+  it('shows persisted pending registration and continues without asking for another code, including network errors', async () => {
+    const pending: ConnectionDiagnosis = { version: 1, category: 'REGISTRATION_PENDING', summary: '新设备凭据已保存', steps: ['正常重启Windows后继续。'], service_verified: false, can_preserve: false, can_reconfigure: false, requires_reboot: true }
+    const { wrapper, port } = mountPage({ state: 'blocked', recovery: true, registration: pending }); await flushPromises()
+    expect(wrapper.text()).toContain('新设备凭据已保存')
+    expect(wrapper.text()).not.toContain('已收到服务器心跳响应')
+    expect(button(wrapper, '完成连接配置').attributes()).not.toHaveProperty('disabled')
+    port.diagnoseConnection = vi.fn(async () => ({ ...pending, category: 'NETWORK_FAILED', summary: '网络暂不可用' }))
+    await button(wrapper, '检查连接并给出处理方式').trigger('click'); await flushPromises()
+    expect(button(wrapper, '完成连接配置').exists()).toBe(true)
+    expect(button(wrapper, '登记重启恢复').exists()).toBe(true)
+    await button(wrapper, '完成连接配置').trigger('click'); await flushPromises()
+    expect(port.reconfigureConnection).toHaveBeenCalledWith({ mode: 'continue_registration', confirmed: true })
+    expect(wrapper.find('#recovery-code').exists()).toBe(false)
+  })
   it('offers explicit recovery independently of blocked normal pairing and shows concrete instructions', async () => {
     const { wrapper, port } = mountPage({ state: 'blocked', recovery: true }); await flushPromises()
     expect(port.diagnoseConnection).not.toHaveBeenCalled()

@@ -2,6 +2,7 @@
  * This never settles a business result, replays a task, or changes a marker/fence.
  */
 import { execFile } from 'node:child_process'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
 import { lstatSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
@@ -30,6 +31,12 @@ interface Epoch extends Kernel { schemaVersion: 1; home: string }
 interface Ledger extends Kernel { schemaVersion: 1; home: string; generation: string; ownerPid: number; jobs: string[] }
 interface Snapshot { digest: string; entries: string[]; marker?: string; markerUnreadable: boolean; files: Map<string, string | null>; supervisionEntries: string[] }
 class ResourceFailure extends Error { constructor(readonly category: string) { super(category) } }
+const inspectionDeadline = new AsyncLocalStorage<number>()
+function remaining(): number {
+  const milliseconds = (inspectionDeadline.getStore() ?? Infinity) - Date.now()
+  if (milliseconds <= 0) throw new ResourceFailure('CONNECTION_RESOURCE_CHECK_TIMEOUT')
+  return milliseconds
+}
 function requireResource(valid: unknown, category = 'CONNECTION_RESOURCE_EVIDENCE_INVALID'): asserts valid {
   if (!valid) throw new ResourceFailure(category)
 }
@@ -123,15 +130,17 @@ function snapshot(home: string): Snapshot {
   return { digest: hash.digest('hex'), entries, marker, markerUnreadable, files, supervisionEntries }
 }
 async function protectionAvailable(): Promise<void> {
+  remaining()
   try {
     const probe = 'AID.connection-resource-proof.v1'
     requireResource(await dpapiUnprotect(await dpapiProtect(probe)) === probe)
   } catch { throw new ResourceFailure('CONNECTION_RESOURCE_PROTECTION_UNAVAILABLE') }
+  remaining()
 }
 async function command(executable: string, args: string[]): Promise<Record<string, unknown>> {
   requireResource(stat(executable)?.isFile(), 'CONNECTION_RESOURCE_SUPERVISOR_UNAVAILABLE')
   return new Promise((accept, reject) => execFile(executable, args,
-    { windowsHide: true, timeout: 20000, maxBuffer: 65536 }, (error, stdout, stderr) => {
+    { windowsHide: true, timeout: Math.min(20000, remaining()), maxBuffer: 65536 }, (error, stdout, stderr) => {
       if (error || stderr) { reject(new ResourceFailure('CONNECTION_RESOURCE_SUPERVISOR_UNAVAILABLE')); return }
       try { const parsed: unknown = JSON.parse(stdout); requireResource(record(parsed)); accept(parsed) }
       catch { reject(new ResourceFailure('CONNECTION_RESOURCE_SUPERVISOR_UNAVAILABLE')) }
@@ -144,6 +153,7 @@ async function kernel(executable: string): Promise<Kernel> {
   return { bootId: boot.bootId, sessionId: login.sessionId }
 }
 async function protectedRecord(raw: string): Promise<Record<string, unknown>> {
+  remaining()
   try { const value: unknown = JSON.parse(await dpapiUnprotect(raw)); requireResource(record(value)); return value }
   catch { throw new ResourceFailure('CONNECTION_RESOURCE_EVIDENCE_UNREADABLE') }
 }
@@ -231,6 +241,12 @@ export async function recordFreshConnectionEpoch(home: string, nodeExecutable: s
 
 export async function checkConnectionRecoveryResources(home: string, nodeExecutable: string,
   options: { prepareReboot: boolean }): Promise<ConnectionRecoveryResourceResult> {
+  // Every child helper has its own timeout. Stop starting further ledger probes
+  // once the whole inspection expires, before Main's 120s IPC deadline.
+  return inspectionDeadline.run(Date.now() + 55_000, () => checkResources(home, nodeExecutable, options))
+}
+async function checkResources(home: string, nodeExecutable: string,
+  options: { prepareReboot: boolean }): Promise<ConnectionRecoveryResourceResult> {
   try {
     requireResource(process.platform === 'win32', 'CONNECTION_RESOURCE_PLATFORM_UNSUPPORTED')
     requireResource(options && typeof options.prepareReboot === 'boolean', 'CONNECTION_RESOURCE_INPUT_INVALID')
@@ -255,6 +271,18 @@ export async function checkConnectionRecoveryResources(home: string, nodeExecuta
     try { prior = await witness(home) } catch { return blocked('CONNECTION_RESOURCE_WITNESS_INVALID') }
     if (prior && prior.resourcesDigest !== resources.digest) return blocked('CONNECTION_RESOURCE_EVIDENCE_CHANGED')
     const rebootProved = !!prior && !sameBoot(prior.bootId, now.bootId)
+    if (rebootProved) {
+      // The protected witness binds every old execution file to a real earlier
+      // kernel boot. A reboot stops those processes even if an old ledger cannot
+      // decrypt. Do not repeatedly decrypt old ledgers to rediscover that fact.
+      remaining()
+      try { await assertNoLegacyRuntimeProcess() } catch (error) {
+        if (record(error) && error.code === 4) return blocked('CONNECTION_RESOURCE_LEGACY_ACTIVE')
+        throw new ResourceFailure('CONNECTION_RESOURCE_LEGACY_CHECK_UNAVAILABLE')
+      }
+      if (snapshot(home).digest !== resources.digest) return blocked('CONNECTION_RESOURCE_EVIDENCE_CHANGED')
+      return result(true, false, 'CONNECTION_RESOURCE_REBOOT_CONFIRMED')
+    }
     let incomplete: string | undefined = resources.markerUnreadable ? 'CONNECTION_RESOURCE_EVIDENCE_UNREADABLE' : undefined
     let currentBootUnproved = false
     let markerProof: Record<string, unknown> | undefined
@@ -318,10 +346,11 @@ export async function checkConnectionRecoveryResources(home: string, nodeExecuta
           const state = await command(executable, [options.prepareReboot ? 'terminate' : 'probe', '--job-name', job])
           requireResource(typeof state.exists === 'boolean' && Number.isSafeInteger(state.activeProcesses) && Number(state.activeProcesses) >= 0)
           if (state.activeProcesses !== 0) return blocked('CONNECTION_RESOURCE_ACTIVE')
-        } catch { return blocked('CONNECTION_RESOURCE_STOP_UNCONFIRMED') }
+        } catch { remaining(); return blocked('CONNECTION_RESOURCE_STOP_UNCONFIRMED') }
       }
     }
     if (snapshot(home).digest !== resources.digest) return blocked('CONNECTION_RESOURCE_EVIDENCE_CHANGED')
+    remaining()
     try { await assertNoLegacyRuntimeProcess() } catch (error) {
       if (record(error) && error.code === 4) return blocked('CONNECTION_RESOURCE_LEGACY_ACTIVE')
       throw new ResourceFailure('CONNECTION_RESOURCE_LEGACY_CHECK_UNAVAILABLE')
@@ -336,5 +365,5 @@ export async function checkConnectionRecoveryResources(home: string, nodeExecuta
     if (legacyMarker && legacyBootProof && incomplete === 'CONNECTION_RESOURCE_REBOOT_REQUIRED') return result(true, false, 'CONNECTION_RESOURCE_REBOOT_CONFIRMED')
     if (!incomplete && markerProof) return result(true, false, 'CONNECTION_RESOURCE_SUPERVISED_STOPPED')
     return blocked(incomplete ?? 'CONNECTION_RESOURCE_REBOOT_REQUIRED')
-  } catch (error) { return result(false, error instanceof ResourceFailure && error.category === 'CONNECTION_RESOURCE_EVIDENCE_CHANGED', error instanceof ResourceFailure ? error.category : 'CONNECTION_RESOURCE_EVIDENCE_UNREADABLE') }
+  } catch (error) { return result(false, error instanceof ResourceFailure && ['CONNECTION_RESOURCE_EVIDENCE_CHANGED', 'CONNECTION_RESOURCE_CHECK_TIMEOUT'].includes(error.category), error instanceof ResourceFailure ? error.category : 'CONNECTION_RESOURCE_EVIDENCE_UNREADABLE') }
 }

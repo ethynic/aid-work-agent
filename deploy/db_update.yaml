@@ -3801,3 +3801,10 @@
     );
     CREATE INDEX IF NOT EXISTS idx_file_assets_tenant ON file_assets(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_file_assets_tenant_size ON file_assets(tenant_id, size);
+- datetime: "2026-10-13 17:00:00"
+  remark: "本地工具指定设备替换：票据绑定目标，新设备持久关系与完成时间，旧设备记录唯一替换胜者；配对不提前撤销"
+  statements: |
+    ALTER TABLE local_tool_pairing_tickets ADD COLUMN IF NOT EXISTS replacement_device_id UUID;
+    ALTER TABLE local_tool_devices ADD COLUMN IF NOT EXISTS replacement_device_id UUID;
+    ALTER TABLE local_tool_devices ADD COLUMN IF NOT EXISTS replacement_completed_at TIMESTAMP;
+    ALTER TABLE local_tool_devices ADD COLUMN IF NOT EXISTS replaced_by_device_id UUID;

@@ -44,6 +44,7 @@ export class AbortLoopError extends Error {
 export interface PairResponse {
   device_id: string
   device_token: string
+  replacement_pending?: boolean
 }
 
 export interface HeartbeatResponse {
@@ -189,6 +190,7 @@ export class ApiClient {
     try {
       response = await fetch(`${this.baseUrl}${path}`, {
         method: 'POST',
+        redirect: 'error',
         headers,
         body: JSON.stringify(body ?? {}),
         signal,
@@ -257,6 +259,7 @@ export class ApiClient {
     runtime_version: string
     capabilities: Record<string, unknown>
     machine_fingerprint: string
+    pairing_protocol?: 2
   }): Promise<PairResponse> {
     const res = (await this.post('/api/local-tools/runtime/pair', req, { auth: false })) as Record<string, unknown>
     const deviceId = res['device_id']
@@ -264,7 +267,13 @@ export class ApiClient {
     if (res.success === false || typeof deviceId !== 'string' || !deviceId || typeof deviceToken !== 'string' || !deviceToken) {
       throw new ApiError(500, '配对响应缺少 device_id/device_token')
     }
-    return { device_id: deviceId, device_token: deviceToken }
+    if (res.replacement_pending !== undefined && typeof res.replacement_pending !== 'boolean') throw new ApiError(502, '设备替换响应不兼容')
+    return { device_id: deviceId, device_token: deviceToken, ...(res.replacement_pending === undefined ? {} : { replacement_pending: res.replacement_pending as boolean }) }
+  }
+
+  async completeReplacement(): Promise<void> {
+    const res = await this.post('/api/local-tools/runtime/replacement/complete', {}) as Record<string, unknown>
+    if (res.success !== true || res.replacement_completed !== true) throw new ApiError(502, '旧设备注销尚未确认')
   }
 
   async heartbeat(req: { runtime_version: string; capabilities: Record<string, unknown>; manifest_digest: string }, signal?: AbortSignal): Promise<HeartbeatResponse> {
