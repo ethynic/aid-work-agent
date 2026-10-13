@@ -40,7 +40,7 @@ class BoundaryWebAdapter:
 
 @pytest.fixture
 def boundary_repo(service_database, actors, monkeypatch):
-    config = NotificationsConfig(enabled=True)
+    config = NotificationsConfig()
     adapter = BoundaryWebAdapter()
     repo = NotificationRepository(config, AdapterRegistry([adapter]), service_database.connect)
     monkeypatch.setattr(settings, 'notifications', config)
