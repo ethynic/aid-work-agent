@@ -548,7 +548,12 @@
           </div>
           <div class="col-span-4">
             <label class="text-sm text-muted mb-1 block">欢迎语</label>
-            <BaseInput v-model="kfForm.welcome_message" placeholder="您好，请问有什么可以帮您？" />
+            <textarea
+              v-model="kfForm.welcome_message"
+              rows="3"
+              placeholder="您好，请问有什么可以帮您？"
+              class="w-full rounded-lg border border-default bg-white px-3 py-2 text-sm text-default placeholder:text-muted transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500 resize-y"
+            ></textarea>
           </div>
           <div>
             <label class="text-sm text-muted mb-1 block">人工接待人员（企微 userid）</label>
@@ -1041,7 +1046,8 @@ async function handleKfSubmit() {
     name,
     tenant_user_id: kfForm.value.tenant_user_id,
     subagent_type: kfForm.value.subagent_type || undefined,
-    welcome_message: kfForm.value.welcome_message || undefined,
+    // 始终传字符串：空串表示清空欢迎语，undefined 会被 JSON 丢弃导致后端视为"未传"不修改
+    welcome_message: kfForm.value.welcome_message ?? '',
     allow_agent_transfer: kfForm.value.allow_agent_transfer,
     expire_at: kfForm.value.expire_at || null,
     credit_limit: kfForm.value.credit_limit === '' ? 0 : Number(kfForm.value.credit_limit) || 0,
