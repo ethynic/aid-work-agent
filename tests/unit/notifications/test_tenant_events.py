@@ -10,8 +10,10 @@ from src.notifications.repository import tenant_installation_ref, tenant_owned
 CREDIT_LOW = {'tenant_name': '宏陶', 'daily_avg_credits': 5.0,
               'estimated_days': 2, 'remaining_credits': 10.0}
 TENANT_EXPIRY = {'tenant_name': '宏陶', 'expire_date': '2026-11-09', 'days_left': 30}
-ABUSE = {'tenant_name': '测试租户', 'rule_name': '单用户高频调用', 'subject_label': 'user_001',
-         'window_credits': 900.0, 'threshold_credits': 500.0, 'observe_mode': False}
+ABUSE = {'tenant_id': 't1', 'tenant_name': '测试租户', 'rule_name': '单用户高频调用', 'subject_label': 'user_001',
+         'user_id': 'user_001', 'period': 'day', 'window_start': '2026-10-13 00:00',
+         'window_end': '2026-10-13 01:00', 'window_credits': 900.0, 'threshold_credits': 500.0,
+         'observe_mode': False}
 
 
 class TestRenderInboxText:
@@ -26,11 +28,16 @@ class TestRenderInboxText:
         assert '2026-11-09' in body and '剩余 30 天' in body
 
     def test_abuse_triggered(self):
-        title, body = render_inbox_text('abuse.rule_triggered', ABUSE)
+        # show_tenant=True 仅平台管理员投递时携带（租户名前缀）；租户管理员副本不显示
+        title, body = render_inbox_text('abuse.rule_triggered', dict(ABUSE, show_tenant=True))
         assert title == '异常消耗告警'
-        assert '「测试租户」' in body
+        assert '「测试租户」的' in body
         assert '「单用户高频调用」' in body
         assert '（观察模式，未拦截）' not in body
+
+    def test_abuse_triggered_tenant_copy_no_prefix(self):
+        _, body = render_inbox_text('abuse.rule_triggered', ABUSE)
+        assert not body.startswith('租户「')
 
     def test_abuse_observe_mode_noted(self):
         params = dict(ABUSE, observe_mode=True)

@@ -129,13 +129,18 @@ def _publish_admin_notifications(
         + [(a, None, {**base_parameters, "show_tenant": True}) for a in platform_admins]
     ):
         subject = Subject(user_id=admin_id, tenant_id=admin_tenant)
+        # 平台副本无租户 scope，用 about_tenant 标注告警所属租户：
+        # 平台管理员代管租户时 inbox 按此隔离，只见本租户相关的 global 副本
+        resource_ref = {"type": "abuse_event", "id": str(event_id)}
+        if admin_tenant is None:
+            resource_ref["about_tenant"] = tenant_id
         ref = publish_in_tx(
             cursor,
             subject=subject,
             producer=PRODUCER,
             event_type="abuse.rule_triggered",
             event_key=event_key,
-            resource_ref={"type": "abuse_event", "id": str(event_id)},
+            resource_ref=resource_ref,
             parameters=parameters,
             occurred_at=now,
             accepted_at=now,

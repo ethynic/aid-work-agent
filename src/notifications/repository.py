@@ -4,7 +4,7 @@ import json
 import random
 import uuid
 from datetime import timedelta
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from src.db.database import get_db_connection
 from src.db.encryption import encryption_manager
@@ -28,9 +28,36 @@ def unprotect(value):
     return json.loads(encryption_manager.decrypt(value))
 
 
+def mask_tenant_configuration(channel, configuration):
+    """租户渠道配置回显：webhook 属凭证脱敏（保留 scheme://host + 末4位）；
+    邮箱非机密信息，完整回显。"""
+    if not isinstance(configuration, dict):
+        return None
+    if channel == 'im_webhook':
+        parts = urlsplit(str(configuration.get('webhook_url') or ''))
+        if not parts.scheme or not parts.netloc:
+            return '****'
+        # netloc 剥离 userinfo，避免回显 URL 内嵌凭证
+        host = parts.netloc.rsplit('@', 1)[-1]
+        tail = ((parts.path or '') + (('?' + parts.query) if parts.query else ''))[-4:]
+        return f'{parts.scheme}://{host}/****{tail}'
+    if channel == 'email':
+        address = str(configuration.get('email_address') or '')
+        return address or None
+    return None
+
+
 def public_target(row):
-    return {key:row[key] for key in ('target_id','installation_ref','binding_version','state','enabled_since',
-                                     'channel','provider')}
+    target = {key:row[key] for key in ('target_id','installation_ref','binding_version','state','enabled_since',
+                                       'channel','provider')}
+    if row.get('configuration_encrypted'):
+        try:
+            display = mask_tenant_configuration(row['channel'], unprotect(row['configuration_encrypted']))
+        except Exception:
+            display = None
+        if display is not None:
+            target['configuration_display'] = display
+    return target
 
 
 def owned(row, subject):
@@ -204,6 +231,10 @@ class NotificationRepository:
         from .contracts import TENANT_CHANNEL_PROVIDERS
         if body.provider not in TENANT_CHANNEL_PROVIDERS.get(body.channel, frozenset()):
             raise NotificationError('NOTIFICATION_PROVIDER_UNAVAILABLE', 503)
+        # 租户级 target 必须归属具体租户；platform_admin 需经 X-Tenant-Id 代管上下文注册，
+        # 无租户上下文的 global "租户级" target 无事件归属，永不外发。
+        if subject.tenant_id is None:
+            raise NotificationError('NOTIFICATION_TENANT_REQUIRED', 400)
         adapter = self.registry.get(body.channel, body.provider)
         if not adapter or not adapter.available():
             raise NotificationError('NOTIFICATION_PROVIDER_UNAVAILABLE', 503)
@@ -380,10 +411,11 @@ class NotificationRepository:
             cursor = conn.cursor()
             user = self.guard(cursor, subject)
             if user['role'] == 'platform_admin':
-                # 平台管理员在任意上下文都能看到发给自己的全局消息
-                cursor.execute('''SELECT * FROM notification_messages WHERE notification_ref=%s
-                    AND recipient_user_id=%s AND (scope_key=%s OR scope_key='global')''',
-                    (ref,subject.user_id,subject.scope_key))
+                # 与 inbox 同口径：portal 看全部 global，代管租户时 about_tenant 隔离
+                scope_sql, scope_params = self._platform_scope_clause(user, subject)
+                cursor.execute(f'''SELECT * FROM notification_messages WHERE notification_ref=%s
+                    AND recipient_user_id=%s AND {scope_sql}''',
+                    (ref,subject.user_id,*scope_params))
             else:
                 cursor.execute('''SELECT * FROM notification_messages WHERE notification_ref=%s
                     AND scope_key=%s AND recipient_user_id=%s AND tenant_id IS NOT DISTINCT FROM %s''',
@@ -409,17 +441,40 @@ class NotificationRepository:
         return (f"/t/{quote(str(tenant_id), safe='')}/abuse-center"
                 f"?focus_user={quote(str(user_id), safe='')}&window={window}")
 
+    @staticmethod
+    def _event_tenant(message):
+        """租户级事件副本的归属租户：resource_ref.about_tenant（平台兜底副本打标）
+        或 parameters.tenant_id（abuse 参数模型自带）。取不到返回 None。"""
+        tenant = (message.get('resource_ref') or {}).get('about_tenant')
+        if tenant:
+            return tenant
+        try:
+            params = unprotect(message.get('parameters_encrypted'))
+        except Exception:
+            return None
+        return params.get('tenant_id') if isinstance(params, dict) else None
+
+    @staticmethod
+    def _platform_scope_clause(user, subject):
+        """平台管理员 global 消息可见范围：portal（无租户上下文）看全部 global 副本；
+        代管租户时按 resource_ref.about_tenant 隔离，仅本租户 scope + 本租户相关 global
+        副本，防止跨租户告警互见（about_tenant 由生产者对无租户 scope 的副本打标）。"""
+        if user['role'] != 'platform_admin':
+            return 'scope_key=%s', (subject.scope_key,)
+        if subject.tenant_id is None:
+            return "scope_key='global'", ()
+        return ("(scope_key=%s OR (scope_key='global' AND resource_ref->>'about_tenant'=%s))",
+                (subject.scope_key, subject.tenant_id))
+
     def inbox(self, subject, unread_only=False, limit=20):
         from .events import render_inbox_text
         with self.connection_factory() as conn:
             cursor = conn.cursor()
             user = self.guard(cursor, subject)
-            # 平台管理员在任意上下文都能看到发给自己的全局消息
-            scope_sql = "(scope_key=%s OR scope_key='global')" if user['role'] == 'platform_admin' \
-                else 'scope_key=%s'
+            scope_sql, scope_params = self._platform_scope_clause(user, subject)
             cursor.execute(f'''SELECT count(*) AS unread FROM notification_messages
                 WHERE {scope_sql} AND recipient_user_id=%s AND event_type=ANY(%s) AND read_at IS NULL''',
-                (subject.scope_key,subject.user_id,list(self.INBOX_EVENT_TYPES)))
+                (*scope_params,subject.user_id,list(self.INBOX_EVENT_TYPES)))
             unread = cursor.fetchone()['unread']
             sql = f'''SELECT notification_ref,event_type,category,priority,read_at,created_at,
                 parameters_encrypted FROM notification_messages
@@ -427,7 +482,7 @@ class NotificationRepository:
             if unread_only:
                 sql += ' AND read_at IS NULL'
             sql += ' ORDER BY created_at DESC LIMIT %s'
-            cursor.execute(sql,(subject.scope_key,subject.user_id,list(self.INBOX_EVENT_TYPES),limit))
+            cursor.execute(sql,(*scope_params,subject.user_id,list(self.INBOX_EVENT_TYPES),limit))
             items = []
             for row in cursor.fetchall():
                 try:
@@ -446,11 +501,10 @@ class NotificationRepository:
         with self.connection_factory() as conn:
             cursor = conn.cursor()
             user = self.guard(cursor, subject)
-            scope_sql = "(scope_key=%s OR scope_key='global')" if user['role'] == 'platform_admin' \
-                else 'scope_key=%s'
+            scope_sql, scope_params = self._platform_scope_clause(user, subject)
             cursor.execute(f'''SELECT notification_ref FROM notification_messages
                 WHERE notification_ref=%s AND {scope_sql} AND recipient_user_id=%s''',
-                (ref,subject.scope_key,subject.user_id))
+                (ref,*scope_params,subject.user_id))
             if not cursor.fetchone():
                 raise NotificationError('NOTIFICATION_NOT_FOUND', 404)
             cursor.execute('''UPDATE notification_messages SET read_at=clock_timestamp()
@@ -483,13 +537,19 @@ class NotificationRepository:
                         message['parameters'] = unprotect(message['parameters_encrypted'])
                         # 租户级事件与测试投递额外路由到租户级 target（recipient 为空）。
                         include_tenant_targets = message['policy_key'] in ('tenant_admin_event', 'explicit_test_target')
+                        # 租户级事件按事件归属租户兜底匹配：租户无 tenant_admin 时消息只有
+                        # 平台管理员 global 副本（scope_key='global'），仅按 scope_key 匹配不到
+                        # 租户级 IM target，webhook 将永不外发；event_key 去重保证同事件只投一次。
+                        params_tenant = self._event_tenant(message) \
+                            if message['policy_key'] == 'tenant_admin_event' else None
                         cursor.execute('''SELECT t.*,p.enabled AS preference_enabled,p.enabled_since AS preference_since,
                                 p.event_types FROM notification_targets t LEFT JOIN notification_preferences p
                                 ON p.scope_key=t.scope_key AND p.recipient_user_id=t.recipient_user_id
                                 AND p.channel=t.channel AND p.provider=t.provider AND p.category=%s
-                            WHERE t.scope_key=%s AND t.state='active' AND
-                                (t.recipient_user_id=%s OR (t.recipient_user_id IS NULL AND %s))''',
-                            (message['category'],subject.scope_key,subject.user_id,include_tenant_targets))
+                            WHERE t.state='active' AND (
+                                (t.scope_key=%s AND (t.recipient_user_id=%s OR (t.recipient_user_id IS NULL AND t.tenant_id IS NOT NULL AND %s)))
+                                OR (t.recipient_user_id IS NULL AND t.tenant_id=%s))''',
+                            (message['category'],subject.scope_key,subject.user_id,include_tenant_targets,params_tenant))
                         for target in cursor.fetchall():
                             adapter = self.registry.get(target['channel'],target['provider'])
                             if not adapter or not adapter.available() or message['schema_version'] not in adapter.capabilities.notification_schema_versions:
@@ -585,7 +645,14 @@ class NotificationRepository:
                     self.guard(cursor, subject)
                     resource_in_tx(cursor, message)
                     if target['recipient_user_id'] is None:
-                        if not tenant_owned(target, subject):
+                        # 租户级 target：正常路径要求与消息同 scope；平台管理员 global
+                        # 兜底副本按事件归属租户放行（与 expand 兜底路由同一边界，
+                        # 归属不符或无法判定一律拒绝，fail-closed）。
+                        about_tenant = self._event_tenant(message)
+                        if subject.tenant_id is None and about_tenant:
+                            if target['tenant_id'] != about_tenant:
+                                raise NotificationError('TARGET_SCOPE_MISMATCH')
+                        elif not tenant_owned(target, subject):
                             raise NotificationError('TARGET_SCOPE_MISMATCH')
                     elif not owned(target, subject):
                         raise NotificationError('TARGET_SCOPE_MISMATCH')

@@ -10,6 +10,8 @@ export interface TenantTarget {
   enabled_since: string | null
   channel: string
   provider: string
+  /** 配置回显（webhook 脱敏如 https://open.feishu.cn/****ab12；邮箱完整），解密失败时缺省 */
+  configuration_display?: string
 }
 
 export interface InboxItem {
