@@ -6,7 +6,7 @@ class RejectedManagementRequest extends Error {}
 export class RuntimeController {
   readonly recovery = reactive({ busy: false, diagnosis: null as ConnectionDiagnosis | null, error: '', newDevice: false })
   private recoverySequence = 0
-  readonly view = reactive({ connected: false, connecting: false, state: null as HostState | null, plugins: null as PluginList | null, description: null as Description | null, stateDirty: true, pluginsDirty: true, error: '', operation: null as ManagementOperation | null, busy: false, retryAvailable: false, selectionLabel: '' })
+  readonly view = reactive({ connected: false, connecting: false, refreshing: false, state: null as HostState | null, plugins: null as PluginList | null, description: null as Description | null, stateDirty: true, pluginsDirty: true, error: '', operation: null as ManagementOperation | null, busy: false, retryAvailable: false, selectionLabel: '' })
   private generation = 0
   private instance = ''
   private knownInstance = ''
@@ -126,7 +126,7 @@ export class RuntimeController {
     this.stateFailed = false; this.listFailed = false
     this.operationQuery = 0; this.appliedOperationQuery = 0
     if (clearIntent) { this.intent = undefined; this.knownInstance = ''; this.view.operation = null; this.view.selectionLabel = '' }
-    Object.assign(this.view, { connected: false, connecting: false, state: null, plugins: null, description: null, stateDirty: true, pluginsDirty: true, busy: false, retryAvailable: false })
+    Object.assign(this.view, { connected: false, connecting: false, refreshing: false, state: null, plugins: null, description: null, stateDirty: true, pluginsDirty: true, busy: false, retryAvailable: false })
   }
   dispose() { this.disposed = true; ++this.recoverySequence; this.recovery.busy = false; this.resetConnection(true) }
   private message(error: unknown) { return error instanceof Error ? error.message : 'Runtime 管理操作失败' }
@@ -157,7 +157,7 @@ export class RuntimeController {
   private advance(revision: number) {
     this.watermark = Math.max(this.watermark, revision)
     this.view.stateDirty = this.stateFailed || !this.view.state || this.view.state.revision < this.watermark
-    this.view.pluginsDirty = this.listFailed || !this.view.plugins || this.view.plugins.revision < this.watermark
+    this.view.pluginsDirty = this.supportsPlugins && (this.listFailed || !this.view.plugins || this.view.plugins.revision < this.watermark)
   }
   async refreshState() {
     const sequence = ++this.sequence
@@ -169,6 +169,7 @@ export class RuntimeController {
     this.view.state = state; this.appliedState = sequence; this.stateFailed = false; this.advance(state.revision)
   }
   async refreshPlugins() {
+    if (!this.supportsPlugins) { this.view.plugins = null; this.listFailed = false; this.view.pluginsDirty = false; return }
     const sequence = ++this.sequence
     const generation = this.generation
     const list = await this.query('plugins.list').catch((error) => { if (generation === this.generation) { this.listFailed = true; this.view.pluginsDirty = true }; throw error })
@@ -181,13 +182,14 @@ export class RuntimeController {
     if (!this.view.connected) return Promise.resolve()
     if (this.refreshPromise) return this.refreshPromise
     const generation = this.generation
+    this.view.refreshing = true
     const current = Promise.allSettled([this.refreshState(), this.refreshPlugins()]).then((results) => {
       if (generation !== this.generation) return
       const error = results.find((result) => result.status === 'rejected')
       this.view.error = error?.status === 'rejected' ? this.message(error.reason) : ''
       // Stale replies are not successful refreshes; preserve dirty and repair the other snapshot.
       if (!error && (this.view.stateDirty || this.view.pluginsDirty)) this.scheduleRefresh()
-    }).finally(() => { if (this.refreshPromise === current) this.refreshPromise = undefined })
+    }).finally(() => { if (this.refreshPromise === current) { this.refreshPromise = undefined; this.view.refreshing = false } })
     this.refreshPromise = current
     return current
   }

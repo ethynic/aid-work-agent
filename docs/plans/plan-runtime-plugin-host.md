@@ -181,3 +181,8 @@ manifest版本0.3.0/0.1.0/0.1.0；完整MCP工具21/8/10，Host子集不扩大�
 Phase9连接恢复审计及源码补漏以[恢复计划的状态矩阵](plan-runtime-upgrade-recovery.md#phase9连接失效与恢复路径的确定行为)为准：H1仍为候选0.3，reconciling原原因使用已有message字段；当前state/执行所有权/身份门保持，修复历史operation锁住明确新操作及BOM启动/ACK读取。主控唯一写入，独立测试/CR只读产品。原身份资料损坏、永久身份标记和旧未结案证明目前没有完整自助出口，不把r6管理/退出成功算作连接恢复；新身份reset及对应wire尚未实施。
 
 已登记[覆盖升级与自动恢复](plan-runtime-upgrade-recovery.md)：core内可选适配钩子、本机v2 marker/DPAPI监督记录及受信Node→Main私有恢复IPC；H1 getState/schema保持不变，唯一写入者和兼容方案见该计划，Device/wire授权不变，实施前检查点完成。
+
+
+### 2026-10-13 Runtime r8 只读故障入口检查点
+
+主控唯一修改Runtime页面/Controller及测试、Desktop版本元数据和交付说明；H1/H3/Device及恢复事务语义不变。不支持插件时不误查询、不假刷新，恢复步骤首屏可见且不受检查忙碌禁用；详见[恢复计划Phase11](plan-runtime-upgrade-recovery.md#phase11-实施前共同检查点2026-10-13)。独立真实包故障/恢复交互与审查待完成。

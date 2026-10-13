@@ -24,6 +24,56 @@ function create(port: RuntimeManagementPort, timeout = 1000) { const controller 
 afterEach(() => { controllers.forEach((controller) => controller.dispose()); controllers.length = 0; vi.useRealTimers() })
 
 describe('Runtime production consumer', () => {
+  it('reads a readonly Host without calling an unsupported plugin endpoint or leaving a false dirty state', async () => {
+    const { port, emit } = makePort(['events']); const controller = create(port)
+    let revision = 1
+    const normal = vi.mocked(port.request).getMockImplementation()!
+    vi.mocked(port.request).mockImplementation(request => request.method === 'getState'
+      ? Promise.resolve(reply(request, { instance_id: 'host-one', revision, supervisor: 'runtime_app', state: 'blocked', connection: 'unpaired', blocked_reason: '管理密钥缺失，当前只读管理' }))
+      : request.method === 'plugins.list' ? Promise.resolve({ request_id: request.request_id, method: request.method, code: 11, error: '管理密钥缺失', result: null }) : normal(request))
+    await controller.connect()
+    expect(controller.view.state?.state).toBe('blocked')
+    expect(controller.view.error).toBe('')
+    expect(controller.view.stateDirty).toBe(false)
+    expect(controller.view.pluginsDirty).toBe(false)
+    expect(controller.view.refreshing).toBe(false)
+    revision = 2; emit({ event: 'state_changed', instance_id: 'host-one', revision })
+    await controller.refresh()
+    expect(controller.view.state?.revision).toBe(2)
+    expect(controller.view.pluginsDirty).toBe(false)
+    expect(vi.mocked(port.request).mock.calls.some(([request]) => request.method === 'plugins.list')).toBe(false)
+  })
+  it('projects real refresh progress and leaves a failed state dirty without pretending to keep refreshing', async () => {
+    const { port } = makePort(['events']); const controller = create(port)
+    await controller.connect()
+    const pending = deferred(); let request!: ManagementRequest
+    vi.mocked(port.request).mockImplementation(input => { request = input; return pending.promise })
+    const refresh = controller.refresh(); await flushPromises()
+    expect(controller.view.refreshing).toBe(true)
+    pending.resolve({ request_id: request.request_id, method: request.method, code: 11, error: '状态无法读取', result: null })
+    await refresh
+    expect(controller.view.refreshing).toBe(false)
+    expect(controller.view.stateDirty).toBe(true)
+    expect(controller.view.error).toContain('状态无法读取')
+  })
+  it('does not clear a new generation refresh when the cancelled old refresh settles', async () => {
+    const first = makePort(['events']); const controller = create(first.port); await controller.connect()
+    const old = deferred()
+    vi.mocked(first.port.request).mockImplementation(() => old.promise)
+    const stale = controller.refresh(); await flushPromises()
+    const second = makePort(['events']); const current = deferred(); let stateRequest!: ManagementRequest
+    const normal = vi.mocked(second.port.request).getMockImplementation()!
+    vi.mocked(second.port.request).mockImplementation(request => {
+      if (request.method === 'getState') { stateRequest = request; return current.promise }
+      return normal(request)
+    })
+    const reconnect = controller.connect(second.port); await flushPromises(); await stale
+    expect(controller.view.refreshing).toBe(true)
+    current.resolve(reply(stateRequest, state())); await reconnect
+    expect(controller.view.refreshing).toBe(false)
+    old.resolve(null); await flushPromises()
+    expect(controller.view.error).toBe('')
+  })
   it('does not let a terminal historical operation block an explicit stop of the current Host', async () => {
     const { port } = makePort(); const controller = create(port)
     await controller.connect()
@@ -69,7 +119,7 @@ describe('Runtime production consumer', () => {
     const connect = controller.connect(); await flushPromises()
     emit({ event: 'state_changed', instance_id: 'host-one', revision: 5 })
     emit({ event: 'state_changed', instance_id: 'host-one', revision: 3 })
-    handshake.resolve(reply(describeRequest, { api_major: 1, host_version: 'test', features: ['events'], instance_id: 'host-one', revision: 1 }))
+    handshake.resolve(reply(describeRequest, { api_major: 1, host_version: 'test', features: ['events', 'first_party_plugins'], instance_id: 'host-one', revision: 1 }))
     await connect
     expect(controller.view.stateDirty).toBe(true)
     expect(controller.view.pluginsDirty).toBe(true)
@@ -92,7 +142,7 @@ describe('Runtime production consumer', () => {
     })
     const connect = controller.connect(); await flushPromises()
     emit({ event: 'state_changed', instance_id: 'other-host', revision: 99 })
-    handshake.resolve(reply(describeRequest, { api_major: 1, host_version: 'test', features: ['events'], instance_id: 'host-one', revision: 1 }))
+    handshake.resolve(reply(describeRequest, { api_major: 1, host_version: 'test', features: ['events', 'first_party_plugins'], instance_id: 'host-one', revision: 1 }))
     await connect
     expect(controller.view.state?.revision).toBe(1)
     expect(controller.view.plugins?.revision).toBe(1)
@@ -105,7 +155,7 @@ describe('Runtime production consumer', () => {
     vi.mocked(port.request).mockImplementation((request) => { describeRequest = request; return handshake.promise })
     const connect = controller.connect(); await flushPromises()
     for (let index = 0; index < 9; index++) emit({ event: 'state_changed', instance_id: `other-host-${index}`, revision: 5 })
-    handshake.resolve(reply(describeRequest, { api_major: 1, host_version: 'test', features: ['events'], instance_id: 'host-one', revision: 1 }))
+    handshake.resolve(reply(describeRequest, { api_major: 1, host_version: 'test', features: ['events', 'first_party_plugins'], instance_id: 'host-one', revision: 1 }))
     await connect
     expect(controller.view.connected).toBe(false)
     expect(controller.view.stateDirty).toBe(true)
@@ -128,7 +178,7 @@ describe('Runtime production consumer', () => {
     vi.mocked(port.request).mockImplementation(normal)
     await controller.connect()
     oldListener({ event: 'state_changed', instance_id: 'host-one', revision: 99 })
-    handshake.resolve(reply(describeRequest, { api_major: 1, host_version: 'test', features: ['events'], instance_id: 'host-one', revision: 8 }))
+    handshake.resolve(reply(describeRequest, { api_major: 1, host_version: 'test', features: ['events', 'first_party_plugins'], instance_id: 'host-one', revision: 8 }))
     await flushPromises()
     expect(controller.view.state?.revision).toBe(1)
     expect(controller.view.plugins?.revision).toBe(1)
@@ -212,7 +262,7 @@ describe('Runtime production consumer', () => {
     vi.mocked(port.request).mockImplementation((next) => { request = next; return stale.promise })
     const pending = controller.refreshPlugins().catch((error: Error) => error.message); await flushPromises()
     const replacement = makePort()
-    vi.mocked(replacement.port.request).mockImplementation(async (next) => reply(next, next.method === 'describe' ? { api_major: 1, host_version: '0.2.14', features: [], instance_id: 'host-two', revision: 1 } : next.method === 'getState' ? state(1, 'host-two') : list(1, 'host-two')))
+    vi.mocked(replacement.port.request).mockImplementation(async (next) => reply(next, next.method === 'describe' ? { api_major: 1, host_version: '0.2.14', features: ['events', 'first_party_plugins'], instance_id: 'host-two', revision: 1 } : next.method === 'getState' ? state(1, 'host-two') : list(1, 'host-two')))
     await controller.connect(replacement.port)
     expect(await pending).toContain('连接已变更')
     stale.resolve(reply(request, list(100))); await flushPromises()

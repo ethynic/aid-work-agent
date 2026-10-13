@@ -8,6 +8,8 @@ import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { randomUUID } from 'node:crypto'
 import test, { type TestContext } from 'node:test'
+import type { RuntimeHost } from '@aid/local-tool-host-core'
+import { inspectConnectionRecovery } from '../src/connectionRecoveryInspection.js'
 import { checkConnectionRecoveryResources as check, registerConnectionRecoveryReboot as register,
   recordFreshConnectionEpoch as fresh } from '../src/connectionRecoveryResources.js'
 
@@ -17,7 +19,7 @@ function fixture(t: TestContext) {
   const home = mkdtempSync(join(tmpdir(), 'connection-resources-'))
   const originalStat = fs.lstatSync
   const state = { boot: randomUUID(), session: 7, legacy: 0, protection: true, supervisor: true, cliAvailable: true,
-    commands: [] as string[][], jobs: new Map<string, number>(), failStop: false }
+    commands: [] as string[][], jobs: new Map<string, number>(), failStop: false, cimChecks: 0 }
   t.mock.method(fs, 'lstatSync', ((path: fs.PathLike, ...args: unknown[]) => {
     if (String(path).endsWith('native\\RuntimeProcessSupervisor.exe') || String(path).endsWith('native/RuntimeProcessSupervisor.exe')) {
       if (state.supervisor) return originalStat(process.execPath)
@@ -42,6 +44,7 @@ function fixture(t: TestContext) {
         }
       })
     } else if (args.includes('-EncodedCommand')) {
+      state.cimChecks++
       queueMicrotask(() => state.cliAvailable ? callback(null, String(state.legacy), '') : callback(new Error('fixture CIM failure'), '', ''))
     } else {
       let input = ''; child.stdin.on('data', chunk => { input += chunk.toString() })
@@ -74,6 +77,34 @@ function fixture(t: TestContext) {
   const run = (prepareReboot = false) => check(home, process.execPath, { prepareReboot })
   return { home, state, file, metadata, ledger, run }
 }
+
+function readonlyHost(ownsExecution = false): RuntimeHost {
+  return { getState: () => ({ state: 'blocked', blocked_reason: '管理密钥缺失，当前只读管理' }),
+    inspectConnectionRecovery: (inspect: (owns: boolean) => Promise<unknown>) => inspect(ownsExecution) } as unknown as RuntimeHost
+}
+
+test('connection instructions do not scan old execution resources even when native inspection is unavailable', windows, async t => {
+  const f = fixture(t); f.metadata(); f.state.supervisor = false
+  for (let i = 0; i < 32; i++) f.ledger({ marker: false })
+  const checked = await inspectConnectionRecovery(readonlyHost(), f.home, process.execPath, 'diagnose')
+  assert.equal(checked.diagnosis.category, 'CONFIG_INVALID')
+  assert.equal(checked.diagnosis.can_reconfigure, true)
+  assert.equal(checked.resources_safe, false)
+  assert.equal(checked.identity_digest, null)
+  assert.equal(f.state.commands.length, 0); assert.equal(f.state.cimChecks, 0)
+  assert.equal(fs.existsSync(join(f.home, 'connection-recovery-witness.bin')), false)
+})
+
+test('explicit new-device preparation still proves resources and refuses unknown execution history', windows, async t => {
+  const f = fixture(t); f.metadata(); f.ledger({ marker: false })
+  const original = readFileSync(join(f.home, 'credentials.bin'))
+  const checked = await inspectConnectionRecovery(readonlyHost(), f.home, process.execPath, 'prepare_new')
+  assert.equal(checked.resources_safe, false)
+  assert.equal(checked.diagnosis.requires_reboot, true)
+  assert.equal(checked.diagnosis.category, 'CONNECTION_RESOURCE_REBOOT_PREPARED')
+  assert.ok(f.state.commands.length > 0); assert.ok(f.state.cimChecks > 0)
+  assert.deepEqual(readFileSync(join(f.home, 'credentials.bin')), original)
+})
 
 test('fresh empty home is safe and diagnostics write no recovery control files', windows, async t => {
   const f = fixture(t)

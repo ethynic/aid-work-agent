@@ -14,6 +14,7 @@
 | Phase 8 | 自主复现及Host启动健壮性修复 | ✅ 完成（2026-10-12） | 37场景及实际包启动/只读退出通过，r6 ZIP交付；旧故障接管退出码缺口保留 |
 | Phase 9 | 连接失效与重新配对恢复路径审计 | ✅ 完成（2026-10-12） | r6九例确定路径；新源码独立8例、CR通过，UI/BOM补漏；完整修复仍待Phase10 |
 | Phase 10 | 完整自助连接修复与发行验收 | ✅ 完成（2026-10-12） | r7诊断/恢复、独立故障验证与实际包启动通过；现场UAC/重启待验收 |
+| Phase 11 | 只读故障状态下可见、可点击的连接处理入口 | ✅ 完成（2026-10-13） | r7实际包两缺陷复现；r8实际UI5场景、在线启停退出及CR通过，ZIP交付 |
 
 ## 共同检查点与版本登记（2026-10-12）
 
@@ -234,3 +235,31 @@ Root core23、资源/BOM23、Desktop生命周期25、Frontend基线58及最终�
 13:07 的 boss_goto trace 返回 DEVICE_UNAVAILABLE，明确原因是选定设备未上报 BOSS 能力；当前笔记本 providers 和 provider_manifests 都为空。13:24 心跳曾出现短暂 502，随后恢复 200 至 13:33；之后没有新成功配对或设备心跳。18:09 客户诊断为 config-unreadable、deviceId/server 为空，与本地管理初始化失败一致；不能据此认定具体 DPAPI 失败原因。当前实际证据不支持服务端撤销或永久锁定，不需清除服务端标记。
 
 提交核对：fetch 后当前 master 与 origin/master 一致；当前源码摘要与独立测试、CR记录一致，实际安装包启动/退出验证可复用，r7 ZIP 摘要保持不变。仅提交本次 Runtime 修复、测试、契约、版本及发行说明；无关 plans/session_replay 文件保留，不暂存。
+
+## Phase11 实施前共同检查点（2026-10-13）
+
+主控唯一修改 Runtime 页面/Controller及定向测试、Desktop package/lock发行版本和配置说明；独立测试与审查只读产品代码。H1候选0.3、H3 bridge3/connection v1、Device API、身份和业务恢复事务均不变；只读 describe 未协商 first_party_plugins 时不查询插件列表，不把稳定故障显示为持续刷新。页面处理入口不受诊断busy禁用，故障步骤在首屏直接展示，取消启动时自动诊断，显式检查才进入忙碌。用户旧配对未知时不误导其已丢失；修复管理资料与新设备配对仍经已有资源/事务验证。UI版本规划0.0.5、Host/core继续0.2.16；必须复现旧包并验证新包故障点击、保留/新配对恢复和连接步骤后才交付r8，现场Windows登录与UAC限制如实保留。
+
+Phase11范围补充：独立真实32个历史监督账本诊断耗时56.754秒，确认读取历史资源与配置/服务器检查耦合。主控唯一修改connectionRecoveryInspection，将diagnose限定配置/凭据/服务器检查，resources_safe固定false；资源证明仍在明确恢复确认的prepare动作与Main持锁二次复核中完成，不降低归档门。Host版本升为0.2.17、Core继续0.2.16，UI0.0.5；connection v1字段不变。历史账本较多的prepare操作整轮超时/协作取消仍是已发现遗留，本批不以诊断成功冒称资源安全。
+
+### Phase11 已完成源码与构建核对
+
+独立r7实际EXE复现：只读state已读取但未协商插件列表仍被查询，pluginsDirty导致假刷新；两枚步骤按钮在自动诊断期间真实disabled=true，检查后恢复enabled且实际滚动成功，说明交付包保留了忙碌禁导航缺陷。客户管理secret缺失的起因仍未证明，不将自造fixture当客户事实。
+
+本批取消自动诊断、导航只负责展开/滚动/聚焦且永可点击；故障静态步骤置于错误下方，原配对信息不可读时不冒称已失效；只在协商插件能力时刷新列表，refreshing跟随真实pending并绑定generation。62前端用例包含旧刷新结束不清新刷新竞态；Windows managed/resource26例通过（新增2例持久回归）；Web构建、最终Desktop构建、Host0.2.17构建通过。独立CurrentUser/假云压力32ledger诊断由56.754秒减至4.767秒，历史读取/CIM/native/Job动作全部为零，resources_safe仍false；显式prepare安全门继续拒未知资源，未归档或改原凭据。
+
+原builder下载等待中止，仅终止本任务已确认PID/父PID的builder进程。使用已安装Electron43.1.0分发包，75文件逐一与固定npmchecksums ZIP摘要a07dc1e3d5e589593d37e3b19d1b373e02bb58270e2eb0d6633eee0198ad09f0一致；ignored包装脚本仅调整import定位及electronDist，原发布验证保留，独立CR额外绑定包装脚本/分发proof。r8候选安装器0.0.5验包NotSigned通过，126391574字节、SHA256087bcec42b6a31f63a318d23d236556af16edd8ccb83b3f8552a3d9fee180c71；最终包显式隔离smoke退出0、Host lease释放。所有证据在build/runtime-recovery-phase11-20261013，实际UI恢复独立验证待完成。
+
+Host发行包0.2.17、共享Core0.2.16，H1及常规心跳上报继续使用Core版本0.2.16；UI安装器0.0.5与Host包摘要区分本次交付。未改版本读取协议，不将两者混为同一版本。历史资源大量积累时显式prepare可持续约一分钟，原整轮超时/协作取消仍是遗留；本批不声称真实客户重启/UAC/agent2配对/BOSS业务已验收。
+
+### Phase11 最终交付（2026-10-13）
+
+独立实际r8 EXE的renderer/preload/Main/Host恢复5组全通过：缺密钥导航/focus与显式诊断、保留原设备编号和凭据的管理修复、新配对仅一次并验证新编号/心跳、18条历史start未知资源仅登记真实保护的重启见证且不归档，以及两个恢复后home的UI启动→真实running/online常规心跳→停止→marker移除→正常退出。三个基础场景与两个执行场景均Main退出0、实际home OS lease释放；原身份/既存账本保留，真实Run/RunOnce摘要不变，0claim/0业务调用。9个包内程序模块、6个包内renderer资源与当前编译相等，16个源摘要绑定。
+
+报告`clients/agent-desktop/build/runtime-recovery-phase11-20261013/independent-validation.json`包含真实case与失败尝试边界；首次r7仅APPDATA探针未证隔离且debugger退出未算成功，r8均先暂停确认fixture appData再运行并正常退出，不把这些缺口隐去。源码CR无遗留P0/P1/P2，最终源码/测试/安全依赖摘要与当前字节一致。未做真实UAC/Windows重启/客户agent2配对或BOSS业务。
+
+ZIP：`clients/release/AID-Work-Runtime-UI-BOSS-20261013-trial-r8.zip`，131135565字节、17文件；CRC和逐文件SHA256复读通过。SHA256 `127f9193c2130055af2a82706f6f998694658a715e8d8338fd1c0eeb4f9475ee`。包含UI0.0.5未签名安装器、Host0.2.17/Core0.2.16、BOSS0.3.1、HTML/MD安装配置及处理步骤、VERSION、清单与验证记录。未覆盖旧r7 ZIP；本批未提交或部署。
+
+### r8 提交核对（2026-10-13）
+
+用户明确要求提交。fetch后远程新增HTTP错误识别与通知路由两个无客户端重叠提交；仅临时保存configs/config.yaml及src/config/settings.py的搜索任务改动，快进至e792ee29后还原，其新增/删除行逐项一致，无冲突，其余搜索任务文件和索引保留。Runtime源码与独立CR/实际包验证摘要一致，最终构建、真实EXE关键启动及五组交互结果可复用，不重复无关检查；r8 ZIP字节和SHA保持不变。本提交仅Runtime相关17个文件，不包含搜索任务、运行配置或会话回放。服务器未部署。

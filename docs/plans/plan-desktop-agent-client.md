@@ -426,3 +426,8 @@ Runtime唯一写入者完成controller/controller.test最小修复：describe未
 Phase9连接恢复复核见[Runtime恢复计划](plan-runtime-upgrade-recovery.md#phase9连接失效与恢复路径的确定行为)：Runtime页面将本机管理重连与云端心跳/重新配对区分，终态历史operation不再顶替当前Host安全状态；明确stop仍走既有Host所有权校验，保持候选0.3字段与直属生命周期v1。主控唯一维护本批局部UI/Controller，独立角色验证真实producer/consumer。原身份修复及永久历史标记解除未实施，完整自助恢复进入后续阶段；不将局部页面补漏当作现场恢复完成。
 
 已登记[覆盖升级与自动恢复](plan-runtime-upgrade-recovery.md)：Runtime安装器协调退出与原运行意图恢复，共用core停止证明，不实现第二执行引擎；主控唯一写入Electron/NSIS，Device授权不变，实施前检查点完成。
+
+
+### 2026-10-13 Runtime r8 只读故障入口检查点
+
+主控唯一修改Runtime页面/Controller及测试、Desktop版本元数据和交付说明；H1/H3/Device及恢复事务语义不变。不支持插件时不误查询、不假刷新，恢复步骤首屏可见且不受检查忙碌禁用；详见[恢复计划Phase11](plan-runtime-upgrade-recovery.md#phase11-实施前共同检查点2026-10-13)。独立真实包故障/恢复交互与审查待完成。

@@ -21,13 +21,16 @@ export async function inspectConnectionRecovery(host: RuntimeHost, home: string,
       const managementFailure = reason.includes('管理') || reason.includes('旧执行')
       if (!managementFailure) result = diagnosis('LOCAL_RUNTIME_STATE', '服务器验证通过，但本机插件或恢复资料仍异常', ['选择重新配置，原资料归档保留。', '连接恢复后从交付ZIP安装BOSS插件；旧任务仍归属原设备。'], { service_verified: true, can_reconfigure: true })
     }
-    if (!result.can_reconfigure) return { diagnosis: result, resources_safe: false, identity_digest: null }
+    // Looking up connection instructions must not scan/decrypt historical Job
+    // ledgers or hold the management process while probing execution resources.
+    // The explicit prepare action and Main's second check still prove stop.
+    if (action === 'diagnose' || !result.can_reconfigure) return { diagnosis: result, resources_safe: false, identity_digest: result.can_preserve ? identityDigest(home) : null }
     const resource = action === 'prepare_reboot' ? await registerConnectionRecoveryReboot(home, node)
-      : await checkConnectionRecoveryResources(home, node, { prepareReboot: action !== 'diagnose' })
+      : await checkConnectionRecoveryResources(home, node, { prepareReboot: true })
     if (!resource.safe) {
       result = { ...result, requires_reboot: resource.needs_reboot,
         steps: [...result.steps, resource.needs_reboot ? '需要确认旧执行资源停止：登记重启恢复后正常重启Windows，再继续。' : '请先正常退出旧Runtime实例；系统或目录异常请管理员修复后再检查。'] }
-      if (action !== 'diagnose') result = diagnosis(resource.category, resource.needs_reboot ? (resource.category === 'CONNECTION_RESOURCE_REBOOT_PREPARED' ? '恢复已登记，需要一次正常Windows重启' : '旧执行资源尚需登记重启恢复') : '当前执行资源尚不能安全恢复',
+      result = diagnosis(resource.category, resource.needs_reboot ? (resource.category === 'CONNECTION_RESOURCE_REBOOT_PREPARED' ? '恢复已登记，需要一次正常Windows重启' : '旧执行资源尚需登记重启恢复') : '当前执行资源尚不能安全恢复',
         resource.needs_reboot ? [resource.category === 'CONNECTION_RESOURCE_REBOOT_PREPARED' ? '正常重启Windows后重新打开本客户端。' : '点击登记重启恢复，登记成功后正常重启Windows；资料变化后需要重新登记。', '点击检查连接后继续原设备修复或重新配置。'] : ['正常停止其他Runtime/旧CLI实例。', '使用原Windows用户，请管理员修复系统PowerShell、凭据保护、安装文件及配置目录权限后重新检查。'], { requires_reboot: resource.needs_reboot, can_reconfigure: true })
     }
     if (action === 'prepare_preserve' && !result.can_preserve && resource.safe) result = { ...result, steps: [...result.steps, '原身份尚不能保留，请选择重新配置连接。'] }
