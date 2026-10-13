@@ -36,7 +36,7 @@ const COMMAND_FLAGS: Readonly<Record<string, readonly string[]>> = {
   'resume-next': ['limit', 'save-dir', 'exclude-names', 'job'],
   // 详情页打招呼三件套（2026-09-28 筛选主路径）：open/greet-detail 的姓名走位置参数（select-job 同款）
   'open-detail': [], // 无专属 flag（必带 1 个姓名位置参数；缺失/空白在 command 层 fail-loud）
-  'greet-detail': ['dry-run'],
+  'greet-detail': ['dry-run', 'greet-in-detail'],
   'close-detail': [],
   mcp: ['stdio'],
   doctor: ['json'],
@@ -117,6 +117,9 @@ export function validateCommandArgs(command: string | undefined, args: ParsedArg
 
   // 3) greet 显式意图门禁（防误触发真实写动作）
   if (command === 'greet') return validateGreetIntent(args)
+  if (command === 'greet-detail' && args.flags.get('greet-in-detail') !== true) {
+    return { ok: false, message: '详情页打招呼默认关闭；用户明确选择本轮直接打招呼后加裸flag --greet-in-detail，不接受字符串值' }
+  }
   if (command === 'filter') {
     if (args.flags.has('clear') && ['experience', 'education', 'salary', 'filters', 'age', 'membership-hint', 'membership-account-ref', 'first-degree-only'].some((k) => args.flags.has(k))) return { ok: false, message: '--clear 与筛选条件互斥' }
     if (args.flags.has('membership-account-ref') && !/^[a-f0-9]{64}$/.test(String(args.flags.get('membership-account-ref')))) return { ok: false, message: '--membership-account-ref需要探查返回的64位账号引用' }

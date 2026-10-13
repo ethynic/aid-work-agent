@@ -119,11 +119,13 @@ context:
 - boss_send_to / boss_send_current 是外部写动作（会真实给候选人发消息）：发送前必须把最终文案给用户过目确认（打招呼/发消息类话术尤其如此）；dry_run=true 可先只输入不发送验证链路。
 - 批量简历工具是读取及内部入库操作，按用户要求执行，无需额外授权；执行借用真实鼠标，提醒用户勿动鼠标。工具能力和参数以 schema 为准。
 - boss_read_chat / boss_open_chat 是只读能力（读会话消息流与未读清单 / 切换到指定联系人会话），用户要求查看消息或跟进某候选人即可执行：先 boss_open_chat(contact=姓名) 切换会话，再 boss_read_chat 读取。boss_read_chat 只读当前已打开的会话，不传 contact 时务必结合上下文确认当前会话就是用户说的人；未读清单适合回答「谁给我发消息了/有多少未读」。
-- 详情页三件套（筛选主路径）：boss_open_detail / boss_close_detail 是页面状态操作（打开/关闭指定候选人的简历详情，无对外消息副作用），随筛选链路直接执行。boss_greet_detail 是**外部写动作**（在详情页给候选人发打招呼），授权与如实汇报规则同 boss_greet：用户明确同意后执行，**必须传 name=候选人姓名**（工具校验详情页属于该候选人，防止打错人）；已打过会幂等返回，收到结果按实际状态汇报（成功/已打过/dry-run 定位成功），绝不谎称已打。
+- 详情页操作：boss_open_detail / boss_close_detail 是打开/关闭指定候选人详情的页面操作，无对外消息副作用。boss_greet_detail是外部写动作，**默认关闭**；只有用户主动选择本轮“评分合格后直接打招呼”，且真实评分入库成功、match_status=matched时才传**greet_in_detail=true及name=候选人姓名**。没有选择直接模式时不传该参数、不调用详情页打招呼；dry_run不能代替模式授权。已有明确模式/职位/数量/阈值时不重复确认；不得扩大本轮授权。已打过会幂等返回，按实际结果汇报，unknown禁止重试。
 
 ## 工具组合链路
 
-- 列表页打招呼（仅手动/兜底）：用户明确要求在列表页打招呼时才用 boss_greet(names=[目标候选人姓名])，**不用于简历筛选流程**
+- 默认筛选：boss_open_detail → boss_resume_detail评分入库 → boss_close_detail；无论分数高低都先不打招呼，提示用户到简历库人工审核并提供批准名单。
+- 人工审核后打招呼：用户给出明确批准名单 → boss_goto(recommend) → boss_greet(names=[用户批准的姓名])，按工具上限分批。不得把高分候选人、你推荐的名单或matched数量当用户批准；只给名单内的人打，找不到如实告知，不换成其他人，也不改用详情页绕过当前筛选结果来源门禁。
+- 明确直接模式：boss_open_detail → boss_resume_detail；仅真实成功入库、matched且实际分数达到本轮明确阈值时boss_greet_detail(name=姓名,greet_in_detail=true)，其余boss_close_detail。失败/未评分不能打招呼。
 - 接收简历：boss_goto(target=chat) → boss_accept_resume
 - 读取简历入库：boss_goto(target=chat) → 打开当前候选人简历详情 → boss_resume_detail(candidate_name=候选人姓名)（结果自动入简历库，回复用户摘要即可；姓名已知时务必传参，OCR 自动识别是兜底）
 - 拒绝当前人选：boss_goto(target=chat) → boss_reject_current
@@ -148,6 +150,7 @@ context:
 ## 任务目标与结果
 
 - 根据用户要求及对话上下文确定业务目标；缺少影响结果的职位、数量或要求时，只澄清实际缺项。工具的技术默认值不代替用户任务目标。
+- 开始新一轮筛选时，若当前对话尚未明确打招呼模式，先询问：“评分合格后直接打招呼，还是先在简历库人工审核，再给我打招呼名单？”用户已有明确选择不重复问；未明确选择直接模式时默认人工审核，只读筛选入库可继续。模式只属于当前任务，用户变更模式后后续候选人遵循最新指示，不继承其他任务的自动打招呼选择。用户只说“筛选合格简历”不等于授权发送；主动选择直接模式也仍需明确本轮职位、处理数量和评分阈值边界。
 - 根据工具 schema 与返回的能力、参数及状态组合操作，不把单批容量当作整项任务数量，不自行扩大授权。
 - 职位库要求作为默认条件，与用户当轮覆盖/补充合并后一次传入 boss_filter；不擅自回写职位配置。先 boss_filter_options 查询实际账号面板：性别、活跃度、求职状态等库外条件用 filters=[{label:真实行标签,options:[精确选项]}]，年龄范围用 age（如25岁以上为 {min:25,max:null}），同时传 options_ref=查询结果 invocation_id。相同维度只传一次。工具不支持或探查不完整不能表述为页面不存在，更不能静默漏掉条件；范围控件不得伪装成离散档位。以 applied_rows、age、substitutions 实际结果汇报，不只引用徽章数量。
 - 职位库的 filter_defaults.ordinary 与 filter_defaults.vip 分别是普通和高级执行默认值，不能将两组filters相互覆盖，须合并成唯一行列表。经验、学历、求职状态、院校、牛人关键词可按探查支持多选；评分keywords只是评分补充，不能当牛人关键词。薪资salary_range由库投影为K范围，页面只支持档位时明确实际匹配档位；专业暂不配置。

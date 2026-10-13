@@ -25,7 +25,7 @@
  *   node dist/src/cli/index.js resume-detail [--name <姓名>] [--save-image <path>]
  *   node dist/src/cli/index.js resume-batch [--limit N] [--save-dir <目录>]
  *   node dist/src/cli/index.js open-detail <姓名>
- *   node dist/src/cli/index.js greet-detail <姓名> [--dry-run]
+ *   node dist/src/cli/index.js greet-detail <姓名> --greet-in-detail [--dry-run]
  *   node dist/src/cli/index.js close-detail
  *   node dist/src/cli/index.js mcp --stdio
  *   node dist/src/cli/index.js doctor
@@ -63,7 +63,7 @@ const USAGE = `BOSS 招聘操作 CLI
   resume-next --exclude-names <姓名,姓名> --job <原职位> [--limit N]   跳过已处理者并滚动继续读取（默认3，最多10）
   resume-batch [--limit N] [--save-dir <目录>]   批量打开推荐牛人卡片并读取简历（默认 1 份，最大 10；逐个点开→读取→关闭→下一份，文本在云端识别；只读，但滚动借用真实鼠标约 30 秒/份，期间勿动鼠标）
   open-detail <姓名>            打开指定姓名候选人的简历详情（推荐牛人页按姓名找人并点开，详情保持打开供 resume-detail 读取；当前屏没有自动滚动查找，找不到 fail-loud 列出当前屏可见姓名；点击/滚动借用真实鼠标，期间勿动鼠标）
-  greet-detail <姓名> [--dry-run]   在当前打开的简历详情页点「打招呼」（校验详情属于指定候选人防止打错人；已打过幂等返回；打完自动关闭详情；--dry-run 只定位不点击；真实写动作，期间勿动鼠标）
+  greet-detail <姓名> --greet-in-detail [--dry-run]   详情页打招呼默认关闭，仅明确选择直接模式后启用（校验归属；已打过幂等；打完关闭；--dry-run只定位不点击）
   close-detail                  关闭当前打开的简历详情弹层（筛选不合格时的清理步，无业务副作用，详情未打开时幂等成功；期间勿动鼠标键盘）
 
 Provider 命令：
@@ -320,13 +320,13 @@ async function main(): Promise<number> {
     case 'greet-detail': {
       const name = args.positional[1]
       if (!name || !name.trim()) {
-        console.error('greet-detail 缺少候选人姓名：greet-detail <姓名> [--dry-run]（详情归属校验依赖该姓名）')
+        console.error('greet-detail 缺少候选人姓名：greet-detail <姓名> --greet-in-detail [--dry-run]（详情归属校验依赖该姓名）')
         return 2
       }
       const cdpPort = parseCdpPort(args)
       if (cdpPort === 'invalid') return 2
       const { greetDetailCommand } = await import('./commands/greetDetail.js')
-      return greetDetailCommand({ name: name.trim(), dryRun: hasFlag(args, 'dry-run'), cdpPort })
+      return greetDetailCommand({ name: name.trim(), dryRun: hasFlag(args, 'dry-run'), greetInDetail: args.flags.get('greet-in-detail') === true, cdpPort })
     }
     case 'close-detail': {
       const cdpPort = parseCdpPort(args)

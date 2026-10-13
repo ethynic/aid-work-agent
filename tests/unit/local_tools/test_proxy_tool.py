@@ -246,11 +246,11 @@ class TestAuthCaps:
         model = BossGreetTool.InputModel(names=[" 刘草威 ", "张三丰", "刘草威"])
         assert model.names == ["刘草威", "张三丰"]
 
-    def test_greet_description_marks_detail_path(self):
-        """boss_greet 描述已改标「筛选主流程走详情页三件套，本工具仅手动/兜底」（2026-09-28）"""
-        assert "boss_open_detail" in BossGreetTool.description
+    def test_greet_description_marks_manual_review_and_optional_detail_path(self):
+        """默认人工审核后按批准名单列表打招呼，详情直接模式可选。"""
+        assert "人工审核" in BossGreetTool.description
         assert "boss_greet_detail" in BossGreetTool.description
-        assert "兜底" in BossGreetTool.description
+        assert "greet_in_detail=true" in BossGreetTool.description
 
     def test_accept_resume_limit_hard_cap(self):
         """accept 单次上限 1：limit=2 Pydantic 拒绝"""

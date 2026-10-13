@@ -254,9 +254,12 @@ test('open-detail 多余位置参数拒绝：open-detail 张三 李四 → 拒�
   if (!r.ok) assert.match(r.message, /李四/)
 })
 
-test('greet-detail 带姓名（± --dry-run）→ ok', () => {
-  assert.equal(v(['greet-detail', '刘草威']).ok, true)
-  assert.equal(v(['greet-detail', '刘草威', '--dry-run']).ok, true)
+test('greet-detail 显式启用（± --dry-run）→ ok，默认关闭', () => {
+  assert.equal(v(['greet-detail', '刘草威', '--greet-in-detail']).ok, true)
+  assert.equal(v(['greet-detail', '刘草威', '--greet-in-detail', '--dry-run']).ok, true)
+  assert.equal(v(['greet-detail', '刘草威']).ok, false)
+  assert.equal(v(['greet-detail', '刘草威', '--dry-run']).ok, false)
+  for (const value of ['false', 'true', '1', '0', '']) assert.equal(v(['greet-detail', '刘草威', '--greet-in-detail', value]).ok, false)
 })
 
 test('greet-detail 未知 flag 拒绝：--dry（拼写错误）→ 拒绝而非静默忽略', () => {

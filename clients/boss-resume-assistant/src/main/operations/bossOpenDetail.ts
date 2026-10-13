@@ -2,8 +2,8 @@
  * boss_open_detail operation：推荐牛人页按姓名找卡片 → Win32 点姓名节点打开简历详情 →
  * 校验详情画布 + 顶部区姓名==name（防打错人）。详情保持打开（供 boss_resume_detail 读取）。
  *
- * 筛选主流程第一步：boss_open_detail → boss_resume_detail → 合格则 boss_greet_detail /
- * 不合格则 boss_close_detail（docs/plans/desktop-automation/plan-boss-detail-greet.md）。
+ * 默认boss_open_detail → boss_resume_detail → boss_close_detail，评分入库后等待人工审核。
+ * 只有用户主动选择直接模式，合格后才启用boss_greet_detail。
  *
  * 前置校验：必须在推荐牛人列表页（URL 判定，与 bossGreet 同源防坑 17：沟通页 DOM 内嵌
  * 推荐 iframe 时文案判定会误通过）。当前屏没有目标时滚动加载继续找（GreetExecutor 定向

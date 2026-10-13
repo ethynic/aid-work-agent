@@ -317,7 +317,7 @@ export const TOOL_DEFS: BossToolDef[] = [
       '在 BOSS 直聘「推荐牛人」页按姓名找到候选人卡片并点开其在线简历详情（详情保持打开，供 boss_resume_detail 读取）。' +
       '当前屏没有目标时自动滚动查找（上限 30 屏），找不到会报错并列出当前屏可见姓名。' +
       '打开后校验详情画布顶部区候选人姓名与预期一致（防打错人）。' +
-      '筛选主流程第一步：boss_open_detail → boss_resume_detail → 合格则 boss_greet_detail、不合格则 boss_close_detail。' +
+      '默认boss_open_detail → boss_resume_detail评分入库 → boss_close_detail，等待人工审核名单；用户明确选择直接打招呼才启用boss_greet_detail。' +
       '前置：已在推荐牛人页（不在时先 boss_goto recommend）。点击与找人滚动借用真实鼠标，期间勿动鼠标。',
     zodShape: {
       name: z.string().min(1).max(30).describe('候选人姓名（精确，与推荐列表卡片姓名 trim 全等）'),
@@ -329,10 +329,11 @@ export const TOOL_DEFS: BossToolDef[] = [
     title: '详情页打招呼',
     description:
       '在当前打开的简历详情页点「打招呼」（校验详情属于指定姓名候选人，防止打错人；已打过则幂等返回；打完自动关闭详情）。' +
-      '筛选主流程的打招呼路径——列表页 boss_greet 仅作手动兜底，不用于筛选流程。' +
-      'dry_run=true 只定位不点击（详情保持打开）。写动作，期间勿动鼠标。',
+      'greet_in_detail默认false，缺少显式true不执行；仅用户主动选择本轮评分合格后直接打招呼且已matched时传true。' +
+      '默认人工审核后给出名单，在列表页用boss_greet；dry_run=true只定位不点击，不代替启用参数。写动作，期间勿动鼠标。',
     zodShape: {
       name: z.string().min(1).max(30).describe('候选人姓名（校验当前打开的详情属于该候选人，防止打错人）'),
+      greet_in_detail: z.boolean().optional().default(false).describe('默认关闭；仅用户明确选择本轮合格后直接打招呼才传true'),
       // 键名必须与 operation 入参一致（boss_send_to 同款 snake_case）：MCP SDK 用 zodShape 解析
       // 输入后原样传给 operation.execute，此前误写 dryRun 会被 zod strip 掉且 operation 读
       // dry_run → dry-run 请求静默变真实点击（安全缺陷，测试智能体 2026-09-28 修正）
@@ -344,7 +345,7 @@ export const TOOL_DEFS: BossToolDef[] = [
     name: 'boss_close_detail',
     title: '关闭简历详情',
     description:
-      '关闭当前打开的简历详情弹层（筛选不合格时的清理步，无业务副作用；详情未打开时幂等成功）。' +
+      '关闭当前打开的简历详情弹层（默认评分入库后关闭并等待人工审核，无业务副作用；详情未打开时幂等成功）。' +
       'Escape 借用键盘事件，期间勿动鼠标键盘。',
     zodShape: {},
     annotations: { title: '关闭简历详情', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },

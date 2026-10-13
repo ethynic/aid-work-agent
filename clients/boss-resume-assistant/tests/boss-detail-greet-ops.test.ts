@@ -110,7 +110,7 @@ test('greet-detail：缺 name → INVALID_ARGUMENT，不连 Chrome（防打错�
 
 test('greet-detail：dry-run → 定位成功不点击，effect=none，详情保持打开', async () => {
   const f = fakeFactory(RECOMMEND_URL, [detailSnap({ name: NAME, state: 'greet' })])
-  const r = await createBossGreetDetailOperation(f.factory).execute({ name: NAME, dry_run: true }, silentCtx())
+  const r = await createBossGreetDetailOperation(f.factory).execute({ name: NAME, dry_run: true, greet_in_detail: true }, silentCtx())
   assert.equal(r.success, true)
   assert.equal(r.effect, 'none')
   assert.equal(r.data.greeted, false)
@@ -122,7 +122,7 @@ test('greet-detail：dry-run → 定位成功不点击，effect=none，详情保
 
 test('greet-detail：已打过（按钮=继续沟通）→ 幂等成功，effect=none，不重复点击', async () => {
   const f = fakeFactory(RECOMMEND_URL, [detailSnap({ name: NAME, state: 'continue' }), closedListSnap()])
-  const r = await createBossGreetDetailOperation(f.factory).execute({ name: NAME }, silentCtx())
+  const r = await createBossGreetDetailOperation(f.factory).execute({ name: NAME, greet_in_detail: true }, silentCtx())
   assert.equal(r.success, true)
   assert.equal(r.effect, 'none')
   assert.equal(r.data.greeted, false)
@@ -138,7 +138,7 @@ test('greet-detail：真打成功 → effect=applied，消息注明按钮翻转�
     detailSnap({ name: NAME, state: 'continue' }),
     closedListSnap(),
   ])
-  const r = await createBossGreetDetailOperation(f.factory).execute({ name: NAME }, silentCtx())
+  const r = await createBossGreetDetailOperation(f.factory).execute({ name: NAME, greet_in_detail: true }, silentCtx())
   assert.equal(r.success, true)
   assert.equal(r.effect, 'applied')
   assert.equal(r.data.greeted, true)
@@ -148,7 +148,7 @@ test('greet-detail：真打成功 → effect=applied，消息注明按钮翻转�
 
 test('greet-detail：详情属于别人（姓名不符）→ WRONG_PAGE 可重试，effect=none，零点击', async () => {
   const f = fakeFactory(RECOMMEND_URL, [detailSnap({ name: '李四', state: 'greet' })])
-  const r = await createBossGreetDetailOperation(f.factory).execute({ name: NAME }, silentCtx())
+  const r = await createBossGreetDetailOperation(f.factory).execute({ name: NAME, greet_in_detail: true }, silentCtx())
   assert.equal(r.success, false)
   assert.equal(r.code, 'WRONG_PAGE')
   assert.equal(r.retryable, true)

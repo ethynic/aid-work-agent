@@ -39,7 +39,7 @@ test('正式operations空态零输入，关闭session，typed回执停筛且请�
       : kind === 'next' ? await createBossResumeBatchOperation(factory, true).execute({ limit: 3, exclude_names: ['钱测试'], expected_job_name: '测试职位' }, ctx)
       : kind === 'open' ? await createBossOpenDetailOperation(factory).execute({ name: '李样例' }, ctx)
       : kind === 'greet' ? await createBossGreetOperation(factory).execute({ names: ['李样例'] }, ctx)
-      : kind === 'greet-detail' ? await createBossGreetDetailOperation(factory).execute({ name: '李样例' }, ctx)
+      : kind === 'greet-detail' ? await createBossGreetDetailOperation(factory).execute({ name: '李样例', greet_in_detail: true }, ctx)
       : await createBossResumeDetailOperation(factory).execute({ candidate_name: '李样例' }, ctx)
     assert.equal(result.effect, 'none')
     assert.equal(closed, 1)

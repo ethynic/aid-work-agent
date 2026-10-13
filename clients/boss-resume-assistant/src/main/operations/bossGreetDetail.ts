@@ -1,8 +1,7 @@
 /**
  * boss_greet_detail operation：在当前打开的简历详情页点「打招呼」（写动作）。
  *
- * 筛选主流程的打招呼路径（列表页 boss_greet 仅作手动/兜底，不进筛选流程）：
- * boss_open_detail → boss_resume_detail → 合格则本工具 / 不合格则 boss_close_detail。
+ * 默认只评分入库后关闭详情等待人工审核；用户明确选择直接打招呼后显式启用本工具。
  *
  * 链路（DetailGreetExecutor.greet，真机探查结论见
  * docs/plans/desktop-automation/plan-boss-detail-greet.md 2026-09-28 两轮实证）：
@@ -25,6 +24,8 @@ export interface BossGreetDetailArgs {
   name?: string
   /** 只定位不点击（测试链路，默认 false 真实点击） */
   dry_run?: boolean
+  /** 默认关闭；只在用户明确选择本轮直接打招呼后启用。 */
+  greet_in_detail?: boolean
 }
 
 export function createBossGreetDetailOperation(
@@ -40,10 +41,11 @@ export function createBossGreetDetailOperation(
         ctx,
         sessionFactory,
         // 参数前置校验（connect Chrome 之前 fail-fast）：姓名必传——防打错人是本工具的核心约束
-        () =>
-          name
-            ? null
-            : '未传 name：请显式传候选人姓名（boss_greet_detail --name <姓名> / greet-detail <姓名>）后重试（详情归属校验依赖该姓名）',
+        () => {
+          if (!name) return '未传 name：请显式传候选人姓名后重试（详情归属校验依赖该姓名）'
+          if (args?.greet_in_detail !== true) return '详情页打招呼默认关闭；仅用户明确选择合格后直接打招呼时传greet_in_detail=true（CLI: --greet-in-detail）'
+          return null
+        },
         async (session, tracker, perf) => {
           ctx.progress({
             stage: 'execute',
