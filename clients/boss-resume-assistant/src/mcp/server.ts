@@ -22,7 +22,7 @@ import { failResult, type OperationResult } from '../main/operations/types.js'
 const INSTRUCTIONS =
   'BOSS 直聘招聘操作 Provider。前提：仅 Windows；需要已登录 BOSS 直聘的 Chrome 以调试端口（默认 9222）运行；' +
   '需要未锁屏的交互桌面，操作期间借用真实鼠标，请勿移动鼠标、勿遮挡 BOSS 窗口。' +
-  '外部写副作用与单次硬上限：boss_greet 打招呼（最大 3 人）、boss_accept_resume 同意接收附件简历（最大 1 人）、' +
+  '外部写副作用与单次硬上限：boss_greet 打招呼（最大 3 人）、boss_greet_selected 选定卡片打招呼（固定 1 人）、boss_accept_resume 同意接收附件简历（最大 1 人）、' +
   'boss_reject_current 标记不合适（固定 1 人）；boss_filter/boss_clear_filter 只改页面筛选状态；' +
   'boss_interview_demo 只填表单不发送（演示）。' +
   '结果约定：structuredContent 含 success/code/effect/data/retryable/run_id；' +

@@ -7,6 +7,8 @@ capabilities:
   - boss_filter
   - boss_filter_options
   - boss_greet
+  - boss_lookup_candidates
+  - boss_greet_selected
   - boss_accept_resume
   - boss_reject_current
   - boss_interview_demo
@@ -52,6 +54,8 @@ tools:
     - boss_clear_filter
     - boss_goto
     - boss_greet
+    - boss_lookup_candidates
+    - boss_greet_selected
     - boss_accept_resume
     - boss_reject_current
     - boss_interview_demo
@@ -124,7 +128,9 @@ context:
 ## 工具组合链路
 
 - 默认筛选：boss_open_detail → boss_resume_detail评分入库 → boss_close_detail；无论分数高低都先不打招呼，提示用户到简历库人工审核并提供批准名单。
-- 人工审核后打招呼：用户给出明确批准名单 → boss_goto(recommend) → boss_greet(names=[用户批准的姓名])，按工具上限分批。不得把高分候选人、你推荐的名单或matched数量当用户批准；只给名单内的人打，找不到如实告知，不换成其他人，也不改用详情页绕过当前筛选结果来源门禁。
+- 人工审核后打招呼：用户给出明确批准名单 → boss_goto(recommend) → boss_greet(names=[用户批准的姓名])，按工具上限分批。已在推荐牛人页时直接调用boss_greet，保留当前已加载列表；工具从全列表实时定位，可直接向上或向下跳转至已加载目标，无需智能体逐屏找人或提供坐标。同名无法区分、未找到或定位失败按真实回执告知用户。不得把高分候选人、你推荐的名单或matched数量当用户批准；只给名单内的人打，找不到如实告知，不换成其他人，也不改用详情页绕过当前筛选结果来源门禁。
+- 姓名清单异常处理：初始只需用户给姓名，不要求优势。boss_greet返回ambiguous_names时，该重名已跳过；missing_names为未找到/卡片变化而跳过的姓名。先按工具上限处理完整批准名单中的其他唯一目标，再集中汇报greeted_names、重名和未找到项，不因一个重名就停下整份清单。重名时展示ambiguous_names中每张卡片的编号和card_info摘要（年龄、学历、经历等可见区别，优势只是其中一种），询问用户指的是哪位；不自动选取、不编造优势、不重复按同名调用碰运气。未找到提示可能姓名输入有误或页面已刷新移除，不声称已打招呼。
+- 重名澄清后：用户可以口语回答“年轻的那个”“本科那个”“第二个”等，不要求复述卡片原文或提供优势。结合之前展示的编号与card_info语义理解；只有能唯一对应用户明确选定对象时，才把该卡片原回执的name与candidate_ref传给boss_greet_selected（单人）。无法唯一对应继续询问，禁止猜选或编造引用，禁止重复boss_greet(name-only)或greet-detail绕过。同名卡片即使优势相同也按完整卡片信息辨别；信息不足时如实说明。引用过期/失效时用只读boss_lookup_candidates刷新，重新展示或对应当前卡片；无法证明仍是用户所选者须再次确认，不能用旧编号当永久身份。unknown禁止重试。
 - 明确直接模式：boss_open_detail → boss_resume_detail；仅真实成功入库、matched且实际分数达到本轮明确阈值时boss_greet_detail(name=姓名,greet_in_detail=true)，其余boss_close_detail。失败/未评分不能打招呼。
 - 接收简历：boss_goto(target=chat) → boss_accept_resume
 - 读取简历入库：boss_goto(target=chat) → 打开当前候选人简历详情 → boss_resume_detail(candidate_name=候选人姓名)（结果自动入简历库，回复用户摘要即可；姓名已知时务必传参，OCR 自动识别是兜底）

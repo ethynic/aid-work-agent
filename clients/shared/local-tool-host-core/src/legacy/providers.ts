@@ -5,7 +5,7 @@
  *   protocol_version / shared_lock_capable；claim 到的 tool_name 必须 ∈ 对应 manifest
  *   的 tools，否则直接回 TOOL_NOT_ALLOWED。
  * - manifest digest 按 Provider 独立计算（输入只含 provider_id/tools/execution_target，
- *   与历史算法逐字节一致——boss 的 digest 值不变，云端核对不受多 Provider 改造影响）。
+ *   与历史算法逐字节一致；新增工具随发布变更 digest，旧工具集摘要保留兼容锚点）。
  * - protocol_version=1 且 shared_lock_capable=false 表示该 Provider 尚未交付 v2 受控
  *   操作协议：v2 invocation 在能力门禁处拒绝（PROTOCOL_NOT_SUPPORTED），不降级旧发送。
  */
@@ -32,6 +32,8 @@ const BOSS_TOOLS = [
   'boss_filter_options',
   'boss_goto',
   'boss_greet',
+  'boss_lookup_candidates',
+  'boss_greet_selected',
   'boss_accept_resume',
   'boss_reject_current',
   'boss_interview_demo',
@@ -53,6 +55,7 @@ const BOSS_WRITE_TOOLS: ReadonlySet<string> = new Set([
   'boss_filter',
   'boss_clear_filter',
   'boss_greet',
+  'boss_greet_selected',
   'boss_accept_resume',
   'boss_reject_current',
   'boss_interview_demo',
@@ -208,7 +211,7 @@ export function isWriteToolFor(manifest: ProviderManifest, toolName: string): bo
   return manifest.write_tools.has(toolName)
 }
 
-/** 单 Provider manifest digest：输入只含 provider_id/tools(排序)/execution_target（历史算法，boss 值不变） */
+/** 单 Provider manifest digest：输入只含 provider_id/tools(排序)/execution_target（历史算法，工具集合变化会改变摘要） */
 export function manifestDigestFor(key: string): string {
   const manifest = TRUSTED_MANIFESTS[key]
   if (!manifest) throw new Error(`未知 provider key: ${key}`)

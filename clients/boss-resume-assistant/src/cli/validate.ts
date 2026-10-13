@@ -21,6 +21,8 @@ const COMMAND_FLAGS: Readonly<Record<string, readonly string[]>> = {
   'filter-options': [],
   filter: ['experience', 'education', 'salary', 'filters', 'age', 'membership-hint', 'membership-account-ref', 'first-degree-only', 'clear'],
   greet: ['limit', 'names', 'all'],
+  'lookup-candidates': ['names'],
+  'greet-selected': ['candidate-ref'],
   goto: [], // 无专属 flag（只带 1 个位置参数）
   accept: ['limit', 'no-preview'],
   reject: [],
@@ -48,6 +50,7 @@ const GLOBAL_FLAGS: readonly string[] = ['cdp-port', 'help', 'h']
 
 /** 各命令允许的额外位置参数个数（命令名本身是 positional[0]，不计入；未登记的命令默认 0） */
 const COMMAND_POSITIONALS: Readonly<Record<string, number>> = {
+  'greet-selected': 1,
   goto: 1, // goto recommend|chat
   'send-to': 1, // send-to <姓名>
   'select-job': 1, // select-job <职位名>
@@ -117,6 +120,19 @@ export function validateCommandArgs(command: string | undefined, args: ParsedArg
 
   // 3) greet 显式意图门禁（防误触发真实写动作）
   if (command === 'greet') return validateGreetIntent(args)
+  if (command === 'lookup-candidates') {
+    const raw = args.flags.get('names')
+    if (typeof raw !== 'string') return { ok: false, message: 'lookup-candidates 需要 --names 姓名列表（1-3 人）' }
+    const parsed = parseGreetNames(raw)
+    if (!parsed.ok) return parsed
+    if (parsed.names.some((name) => name.length > 30)) return { ok: false, message: '每个姓名最多 30 字' }
+  }
+  if (command === 'greet-selected') {
+    const name = args.positional[1]
+    if (!name?.trim() || name.length > 30) return { ok: false, message: 'greet-selected 需要非空姓名（最多 30 字）' }
+    const ref = args.flags.get('candidate-ref')
+    if (typeof ref !== 'string' || ref.length !== 91 || !/^boss-card-v1:\d{13}:[a-f0-9]{64}$/.test(ref)) return { ok: false, message: 'greet-selected 需要工具返回的 --candidate-ref；不可按姓名猜选' }
+  }
   if (command === 'greet-detail' && args.flags.get('greet-in-detail') !== true) {
     return { ok: false, message: '详情页打招呼默认关闭；用户明确选择本轮直接打招呼后加裸flag --greet-in-detail，不接受字符串值' }
   }

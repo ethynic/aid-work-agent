@@ -81,7 +81,8 @@ export const TOOL_DEFS: BossToolDef[] = [
       '当前屏点完自动向下滚动，到底或达到 limit 结束；触发付费墙（职位无开聊权益）会立即停止并返回 PAYWALL。' +
       '定向模式：传 names 姓名清单时先配对卡片姓名再点击，只向姓名精确匹配（trim 相等）的候选人打招呼，' +
       '配对失败的卡片一律跳过（宁可不打，不能打错）；结果返回 greeted_names（实际打过的人）与' +
-      ' missing_names（滚到底也没找到的人），汇报时必须以此为准、绝不声称给未打的人打过招呼。' +
+      ' missing_names（当前已加载列表未找到或卡片变化后无法定位的人），汇报时必须以此为准、绝不声称给未打的人打过招呼。' +
+      '已加载列表支持直接上下定位；重名和未找到项跳过，先完成其他唯一目标。ambiguous_names包含各卡片的编号、card_info摘要、优势与candidate_ref；用户澄清后用boss_greet_selected精确选择，用于事后请用户确认；不要求初始名单带优势。' +
       '前置要求：当前在推荐牛人列表页，否则返回 WRONG_PAGE。',
     zodShape: {
       limit: z
@@ -103,6 +104,23 @@ export const TOOL_DEFS: BossToolDef[] = [
         ),
     },
     annotations: { title: '打招呼', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  },
+  {
+    name: 'boss_lookup_candidates',
+    title: '查询同名候选人卡片',
+    description: '只读查询推荐牛人页已加载的指定姓名（1-3 个），返回卡片摘要、编号、优势及candidate_ref。初始名单仍用boss_greet先处理唯一目标；引用过期用本工具刷新并重新对应。不会滚动或打招呼，不包含非筛选结果推荐。',
+    zodShape: { names: z.array(z.string().trim().min(1).max(30)).min(1).max(3).describe('待澄清的姓名，初始不要求用户提供优势') },
+    annotations: { title: '查询同名候选人卡片', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: 'boss_greet_selected',
+    title: '向选定卡片打招呼',
+    description: '仅向用户明确选定的单个同名候选人打招呼（外部写动作）。Agent根据用户口语与之前展示的编号/card_info唯一对应，将原工具回执的name和candidate_ref原样传入。不得编造引用、猜选、退回姓名-only或详情页绕过；无法唯一对应继续询问。引用过期先boss_lookup_candidates刷新并重新确认对象。effect=unknown禁止重试。',
+    zodShape: {
+      name: z.string().trim().min(1).max(30).describe('用户选定的卡片姓名'),
+      candidate_ref: z.string().length(91).regex(/^boss-card-v1:\d{13}:[a-f0-9]{64}$/).describe('原卡片工具回执中的精确引用，用户不必输入该引用'),
+    },
+    annotations: { title: '向选定卡片打招呼', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
   {
     name: 'boss_accept_resume',

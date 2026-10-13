@@ -48,6 +48,8 @@ const USAGE = `BOSS 招聘操作 CLI
   filter --filters '[{"label":"院校","options":["985"]}]' --first-degree-only true --membership-hint vip
                                  会员未知时使用本次用户确认并传 --membership-account-ref <探查account_ref>；真实证据优先
   greet --names <姓名>[,<姓名2>,<姓名3>] [--limit N]   定向打招呼：只打姓名精确匹配的人（1-3 人，半角/全角逗号分隔；配对失败一律跳过——宁可不打，不能打错；真实写动作，期间勿动鼠标）
+  lookup-candidates --names <姓名>[,<姓名2>,<姓名3>]  只读列出已加载卡片摘要、编号与 candidate_ref（1-3 人）
+  greet-selected <姓名> --candidate-ref <引用>  仅向用户明确选定的卡片打招呼（单人，真实写动作，期间勿动鼠标）
   greet --all [--limit N]       全量打招呼：从推荐列表顶部逐个点击（默认 10 上限，最大 100；当前屏点完自动滚动，到底结束；必须显式 --all 确认全量意图；真实写动作，期间勿动鼠标）
   goto recommend|chat         点击左侧菜单跳转页面：recommend=推荐牛人，chat=沟通（看打招呼回复）；已在目标页自动跳过
   accept [--limit N] [--no-preview]   逐个打开「对方想发送附件简历」的会话并点「同意」接收简历，同意后自动点开预览再关闭（默认 20 上限，最大 100；不在沟通页自动先跳转）
@@ -168,6 +170,20 @@ async function main(): Promise<number> {
       if (cdpPort === 'invalid') return 2
       const { greetCommand } = await import('./commands/greet.js')
       return greetCommand({ limit, names, all: hasFlag(args, 'all'), cdpPort })
+    }
+    case 'lookup-candidates': {
+      const parsed = parseGreetNames(flagString(args, 'names')!)
+      if (!parsed.ok) { console.error(parsed.message); return 2 }
+      const cdpPort = parseCdpPort(args)
+      if (cdpPort === 'invalid') return 2
+      const { lookupCandidatesCommand } = await import('./commands/candidateSelection.js')
+      return lookupCandidatesCommand({ names: parsed.names, cdpPort })
+    }
+    case 'greet-selected': {
+      const cdpPort = parseCdpPort(args)
+      if (cdpPort === 'invalid') return 2
+      const { greetSelectedCommand } = await import('./commands/candidateSelection.js')
+      return greetSelectedCommand({ name: args.positional[1]!, candidate_ref: flagString(args, 'candidate-ref')!, cdpPort })
     }
     case 'goto': {
       const target = args.positional[1]

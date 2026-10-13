@@ -20,6 +20,8 @@ TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
             "boss_clear_filter",
             "boss_goto",
             "boss_greet",
+            "boss_lookup_candidates",
+            "boss_greet_selected",
             "boss_accept_resume",
             "boss_reject_current",
             "boss_interview_demo",

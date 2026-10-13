@@ -954,12 +954,82 @@ class BossGreetTool(LocalToolProxyTool):
         "外部可见写动作，单次最多 3 人，需用户在对话中明确授权数量。"
         "定向模式：传 names 候选人姓名清单时先匹配卡片姓名再点击，"
         "只向名单内的人打招呼（配对失败的卡片跳过），打给谁以返回的 greeted_names 为准，"
-        "missing_names 是滚到底也没找到的人。"
+        "missing_names 是当前已加载列表未找到或卡片变化后无法定位的人。"
         "默认筛选只评分入库并等待人工审核；用户提供批准的打招呼名单后，用本工具在列表页定向打招呼。"
         "用户明确选择合格后立即打招呼时，才走详情页boss_greet_detail(greet_in_detail=true)。"
+        "初始只需姓名；重名和未找到项跳过，先完成其他唯一目标。结果ambiguous_names附各卡片编号、card_info摘要、优势和candidate_ref用于事后确认，missing_names提示可能输入有误或页面已刷新移除。"
     )
     InputModel = BossGreetInput
     timeout_seconds = 600
+
+
+class BossLookupCandidatesInput(BaseModel):
+    model_config = {"extra": "forbid", "strict": True}
+    names: List[str] = Field(..., min_length=1, max_length=3,
+        description="待澄清姓名（1-3 个）；只读返回每张卡片的编号、摘要与精确引用")
+
+    @field_validator("names")
+    @classmethod
+    def valid_names(cls, value):
+        if any(not name.strip() or len(name) > 30 for name in value):
+            raise ValueError("每个姓名须非空且最多30字")
+        return value
+
+
+class BossLookupCandidatesTool(LocalToolProxyTool):
+    name = "boss_lookup_candidates"
+    display_name = "BOSS 查询同名卡片"
+    description = (
+        "只读查询推荐牛人页已加载指定姓名的卡片，返回编号、card_info摘要、优势和candidate_ref。"
+        "初始只需姓名，仍用boss_greet先完成唯一目标；本工具用于重名澄清或刷新过期引用，"
+        "不滚动、不打招呼，不含非筛选结果推荐。用户不需要提供优势或精确原文。"
+    )
+    InputModel = BossLookupCandidatesInput
+    heal_eligible = False
+
+    def _validate_args(self, args: Dict[str, Any]) -> Optional[str]:
+        try:
+            self.InputModel.model_validate(args)
+        except ValueError:
+            return "names须为1-3个非空姓名（每个最多30字），不接受其他参数"
+        return None
+
+
+class BossGreetSelectedInput(BaseModel):
+    model_config = {"extra": "forbid", "strict": True}
+    name: str = Field(..., min_length=1, max_length=30,
+        description="用户明确选定卡片的姓名（原工具回执）")
+    candidate_ref: str = Field(..., min_length=91, max_length=91, pattern=r"^boss-card-v1:\d{13}:[a-f0-9]{64}$",
+        description="工具回执对应卡片的精确引用；由Agent传入，用户不必提供")
+
+    @field_validator("name")
+    @classmethod
+    def nonblank_name(cls, value):
+        if not value.strip():
+            raise ValueError("姓名不得为空白")
+        return value
+
+
+class BossGreetSelectedTool(LocalToolProxyTool):
+    name = "boss_greet_selected"
+    display_name = "BOSS 向选定卡片打招呼"
+    description = (
+        "向用户明确选定的单张同名卡片打招呼（外部写动作，单次固定1人）。"
+        "Agent将用户口语选择结合已展示编号/card_info唯一对应，传原卡片name及candidate_ref，"
+        "不要求用户精确复述信息。无法唯一对应则继续询问，禁止猜选、编造引用、"
+        "退回name-only或greet-detail绕过。引用过期用boss_lookup_candidates只读刷新后重新对应；"
+        "不能证明仍是原选定对象则再确认。effect=unknown禁止重试。"
+    )
+    InputModel = BossGreetSelectedInput
+    timeout_seconds = 600
+    heal_eligible = False
+
+    def _validate_args(self, args: Dict[str, Any]) -> Optional[str]:
+        try:
+            self.InputModel.model_validate(args)
+        except ValueError:
+            return "需要非空name（最多30字）及原工具返回的candidate_ref，不接受其他参数或按姓名猜选"
+        return None
 
 
 class BossAcceptResumeInput(BaseModel):
@@ -2492,6 +2562,8 @@ LOCAL_PROXY_TOOL_CLASSES = (
     BossFilterOptionsTool,
     BossGotoTool,
     BossGreetTool,
+    BossLookupCandidatesTool,
+    BossGreetSelectedTool,
     BossAcceptResumeTool,
     BossRejectCurrentTool,
     BossInterviewDemoTool,

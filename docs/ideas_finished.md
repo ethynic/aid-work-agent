@@ -85,6 +85,7 @@
 | 20261013-1918 | BOSS筛选结果与推荐边界 | ✅ 已完成开发；排除补充推荐并返回无匹配，独立验证及真机只读验收通过。 | — | [计划](plans/desktop-automation/plan-boss-filter-result-boundary.md) |
 | 20261013-2023 | BOSS头像下方VIP徽标识别 | ✅ 已完成开发；跨iframe徽标自动识别，独立验证及真机VIP只读验收通过。 | — | [计划](plans/desktop-automation/plan-boss-avatar-vip-marker.md) |
 | 20261013-2113 | BOSS筛选打招呼模式选择 | ✅ 已完成开发；默认人工审核名单，详情即时打招呼需显式启用，独立验证通过。 | — | [计划](plans/desktop-automation/plan-boss-greet-mode-opt-in.md) |
+| 20261013-2308 | BOSS已加载候选人直接定位 | ✅ 已完成开发；定位、发送与幂等真机通过，用户豁免重名真机验收，未部署。 | — | [计划](plans/desktop-automation/plan-boss-loaded-candidate-navigation.md) |
 | 20260908-1431 | 桌面 CLI 无人值守自动任务底座＋微信营销首场景 | ✅ 已完成开发并真机验收（P0–P5 交付；2026-10-11 确认真机验证通过）：中立底座（调度/账本/许可/journal/桌面锁/effect/phase）+ 微信固定内容场景（工作台/触发/素材/webhook）；P0–P5 过程记录已注销，协议与算法细节并入底座设计。与端侧会话任务（20260912-2313）共用底座。 | [底座设计](design/desktop-automation/desktop-cli-automation-design.md) / [场景设计](design/weixin/weixin-marketing-automation-design.md) | [灰度发布与回滚手册](ops/weixin-marketing-rollout.md) |
 | 20261011-boss-screening | BOSS 简历数量选择与连续筛选 | ✅ 已完成开发（Windows真机验收通过） | — | [开发计划](plans/desktop-automation/plan-boss-screening-continuation.md) |
 | 20261011-1456 | BOSS 筛选面板适配与详情页打分即打招呼 | ✅ 已完成开发 | VIP 弹窗滚动适配+操作性能埋点（2026-09-28 交付）与详情页三件套 boss_open_detail/boss_greet_detail/boss_close_detail 主路径切换（2026-09-28 真机闭环）；两份过程计划已注销，遗留 VIP 真机验证与详情页两项加固转入[续筛计划](plans/desktop-automation/plan-boss-screening-continuation.md) | — | — |
