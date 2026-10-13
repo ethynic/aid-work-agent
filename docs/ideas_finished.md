@@ -36,6 +36,7 @@
 | 20260602-1416 | 可观测性与质量保障 | 🔧 部分完成 | 分布式追踪 + LLM 质量评估 + 实时监控 + 结构化告警。 | [设计](infrastructure/observability-design.md) / [延伸设计](infrastructure/observability-channel-sessions-design.md) | [计划](infrastructure/observability-dev-plan.md) |
 | 20260901-1430 | 数据库增量升级脚本 YAML 化 | 🔧 部分完成 | 将 deploy/db_update.sql 全量哈希重跑机制改为 deploy/db_update.yaml + datetime 增量执行（last_datetime），免手动清理、… | [设计](system/database-db-update-incremental-design.md) | — |
 | 20260905-1907 | 租户附件存储规范整改（第二阶段） | 🔧 部分完成 | 主上传链路整改后仍有 7 处违规写入；存量迁移已完成（测试 09-05 / 生产 09-07），遗留归档保留 30 天。 | — | [迁移方案](plans/plan-storage-legacy-migration.md) |
+| 20261013-1330 | ✅ 日志统一改造（标准库 logging 收口到 loguru） | ✅ 已完成开发 | Phase 1：src/config/logging.py 新增 InterceptHandler，root logger 统一转发标准库 logging（含第三方库），WARNING+ 堆栈进错误文件与 log_error 表；httpx/openai/urllib3/httpcore/apscheduler 高频库预置 WARNING 降噪。Phase 2：src/ 存量 14 文件全部迁移 loguru（9 个有调用含 18 处 %s 改 f-string、2 处 exc_info 改 opt(exception=True)，5 个仅删 import），import logging 清零。单测 6 项 + 容器内启动/拦截实测通过，session_tasks 回归失败经 HEAD 基线对照确认为存量 flaky。待部署后观察主日志量变化。 | — | [改造计划](plans/plan-logging-unification-20261013.md) |
 
 
 ## 系统功能

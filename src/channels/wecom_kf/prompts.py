@@ -4,8 +4,6 @@
 约束），2026-08 废除——实测它会干扰 agent 工具失败后的恢复路径（fill_template
 报错后模型倾向绕过模板直接 markdown 一次性生成），且 5 条回复上限的风险改由
 发送侧长图化承接（adapter 将含表格/图片或超长的回复整段渲染为 1 张长图）。
-
-详见：docs/channel/wecom_kf/reply_quota_control_plan.md
 """
 
 # ============ 客服账号到期/积分拦截固定话术 ============
