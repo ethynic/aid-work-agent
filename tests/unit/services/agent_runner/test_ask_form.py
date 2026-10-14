@@ -122,6 +122,19 @@ class TestJudgementTableStructure:
                             [answer("q1", ["q1o1"]), answer("q2", ["q2o1"], text="补充")])
         assert codes(details) == [("q2", "FORM_ANSWER_INVALID")]
 
+    def test_custom_text_rejected_when_merged_from_duplicate(self):
+        # 评审 P2-3 复现场景：首项 text 为空、重复项携带文本——合并采纳的
+        # 文本同样必须过 allow_custom_text 业务校验，不能进 canonical。
+        questions = form()["questions"]
+        questions[0]["allow_custom_text"] = False
+        details = errors_of(form(questions=questions),
+                            [answer("q1", ["q1o1"]),
+                             answer("q1", ["q1o1"], text="改为其他处理")])
+        assert codes(details) == [("q1", "FORM_ANSWER_INVALID")]
+        # 对照：重复项不带文本时合并仍是无害的（保留 P2-2 行为）。
+        assert errors_of(form(questions=questions),
+                         [answer("q1", ["q1o1"]), answer("q1", ["q1o1"])]) == []
+
     def test_single_question_rejects_two_keys(self):
         details = errors_of(form(), [answer("q1", ["q1o1"]), answer("q2", ["q2o1", "q2o2"])])
         assert details[0]["message"] == "该题为单选，最多选择一项"

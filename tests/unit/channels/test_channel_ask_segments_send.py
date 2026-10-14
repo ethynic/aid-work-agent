@@ -1,13 +1,14 @@
-"""make_send_response 结构化提问分段发送接线测试（WP5，设计 §7.2 / 计划 §WP5 P1-2）。
+"""make_send_response 结构化提问发送接线测试（WP5，设计 §7.2 / 计划 §WP5 P1-2）。
 
 覆盖：
-- 分段→发送：逐段调用渠道对应发送方法（wecom=markdown / dingtalk=sampleMarkdown /
-  RPA 兜底=send_message），分段信息经 UnifiedResponse 之外的 ask_segments 载荷
-  传入，发送事实在实际发送确认处记录（成功一段记一段，失败停止并记原因）；
-- 渠道配置覆盖：按 adapter 现有 max_bytes 重排分段；
-- wecom_kf 预算核算：N×A（提问轮次不为 final 预留），N>A 紧凑重算，仍不足
-  只发前段并附事实提示（不静默截断）；
-- ask_delivery 发送事实：metadata 读改写保留其他键（fake manager 承载）。
+- 分段渠道（wecom=markdown / dingtalk=sampleMarkdown / RPA 兜底=send_message）：
+  逐段调用渠道对应发送方法，发送事实在实际发送确认处记录（成功一段记一段，
+  失败停止并记原因）；渠道配置覆盖按 adapter 现有 max_bytes 重排分段；
+- 单条渠道（kf/RPA，评审修正 §7.2）：一表单合并为一条消息，kf 预算核算 N=1
+  （零预算登记事实不发送，预算恢复后可整条重发），超单条硬限走渠道既有长文本
+  兜底（kf 截断+Web 端提示；RPA send_message 既有超长分段）；
+- ask_delivery 发送事实：分段/单条两种粒度，metadata 读改写保留其他键
+  （fake manager 承载）。
 """
 
 from unittest.mock import AsyncMock, MagicMock
@@ -35,10 +36,10 @@ def _form(option_count=2, description="这是一段较长的选项描述用于�
 
 
 def _payload(segments, *, resend=False, form=None, limit=4000, wait_id="wait_1",
-             session_id="s-1"):
+             session_id="s-1", single=False):
     return {
         "session_id": session_id, "wait_id": wait_id, "resend": resend,
-        "form": form, "limit_bytes": limit,
+        "single": single, "form": form, "limit_bytes": limit,
         "segments": [{"index": i, "text": t} for i, t in enumerate(segments)],
     }
 
@@ -48,7 +49,8 @@ def _manager():
 
 
 def _facts_stub(monkeypatch):
-    calls = {"init": [], "sent": [], "failed": [], "resend": 0}
+    calls = {"init": [], "sent": [], "failed": [], "resend": 0,
+             "init_single": [], "single_sent": [], "single_failed": []}
 
     monkeypatch.setattr("src.channels.ask_delivery.init_facts",
                         lambda sid, wid, segs: calls["init"].append(list(segs)))
@@ -58,6 +60,12 @@ def _facts_stub(monkeypatch):
                         lambda sid, wid, idx, reason: calls["failed"].append(idx))
     monkeypatch.setattr("src.channels.ask_delivery.record_resend",
                         lambda sid, wid: calls.__setitem__("resend", calls["resend"] + 1))
+    monkeypatch.setattr("src.channels.ask_delivery.init_single_facts",
+                        lambda sid, wid, text: calls["init_single"].append(text))
+    monkeypatch.setattr("src.channels.ask_delivery.record_single_sent",
+                        lambda sid, wid: calls["single_sent"].append(True))
+    monkeypatch.setattr("src.channels.ask_delivery.record_single_failure",
+                        lambda sid, wid, reason: calls["single_failed"].append(reason))
     return calls
 
 
@@ -162,7 +170,9 @@ async def test_dingtalk_dispatch_passes_conversation_type(monkeypatch):
     adapter.send_long_message.assert_awaited_once_with("seg-a", "cid-1", "2")
 
 
-async def test_rpa_fallback_uses_send_message_with_per_segment_context(monkeypatch):
+async def test_rpa_per_segment_fallback_uses_send_message(monkeypatch):
+    # 分段分发机制兜底：仅有 send_message 的 adapter 按段构造 UnifiedResponse，
+    # 每段独立 delivery id（幂等键分离，后段不被 outbox 去重吞掉）
     _facts_stub(monkeypatch)
     adapter = MagicMock(spec=["send_message", "channel_type"])
     adapter.send_message = AsyncMock(return_value=True)
@@ -174,31 +184,65 @@ async def test_rpa_fallback_uses_send_message_with_per_segment_context(monkeypat
     await send(ChannelAskResponse("x", ask_segments=_payload(["s0", "s1"])), [])
 
     assert adapter.send_message.await_count == 2
-    # 每段独立 delivery id（幂等键分离），且正文逐段传递
     assert pre_send_ids == ["evt-1:final:seg0", "evt-1:final:seg1"]
     contents = [call.args[0].content for call in adapter.send_message.await_args_list]
     assert [c["text"] for c in contents] == ["s0", "s1"]
 
 
-# ==================== wecom_kf 预算核算 ====================
+async def test_rpa_single_message_keeps_full_text_for_adapter_split(monkeypatch):
+    # RPA 单条路径（评审修正 §7.2）：一表单一条 send_message；超过 2000 字的
+    # 超长兜底由 RPA adapter 既有 _segment_text 自动分段 actions 完成，
+    # session 侧不预截断（内容不丢）
+    calls = _facts_stub(monkeypatch)
+    adapter = MagicMock(spec=["send_message", "channel_type"])
+    adapter.send_message = AsyncMock(return_value=True)
+    pre_send_ids = []
+
+    send = _manager().make_send_response(
+        adapter=adapter, message_id="evt-1", reply_to="user-1",
+        pre_send=lambda delivery_id=None: pre_send_ids.append(delivery_id))
+    long_text = "表单内容" * 600  # 2400 字符 > 2000 字符单条上限
+    ok = await send(ChannelAskResponse(long_text, ask_segments=_payload(
+        [long_text], limit=2000, single=True)), [])
+
+    assert ok is True
+    assert adapter.send_message.await_count == 1
+    assert pre_send_ids == ["evt-1:final:seg0"]
+    sent_text = adapter.send_message.await_args.args[0].content["text"]
+    assert sent_text == long_text  # 不预截断
+    assert calls["init_single"] == [long_text] and calls["single_sent"] == [True]
+
+
+# ==================== wecom_kf 单条发送与预算核算（N=1，评审修正 §7.2） ====================
 
 
 class _KfStub:
-    """绑定真实 WeComKfAdapter.send_ask_segment 的最小桩（预算扣减逻辑真实执行）。"""
+    """绑定真实 WeComKfAdapter 方法的最小桩（预算扣减/截断逻辑真实执行）。"""
 
-    send_ask_segment = __import__("src.channels.wecom_kf.adapter", fromlist=["WeComKfAdapter"]).WeComKfAdapter.send_ask_segment
+    _adapter_cls = __import__("src.channels.wecom_kf.adapter", fromlist=["WeComKfAdapter"]).WeComKfAdapter
+    send_ask_segment = _adapter_cls.send_ask_segment
 
     def __init__(self):
         self.api_client = MagicMock()
         self.api_client.send_msg = AsyncMock(return_value={"errcode": 0})
         self.current_open_kfid = "kf-1"
+        self._max_bytes = 2048
+
+    def _truncate_to_single_message(self, text_content: str) -> str:
+        # 委托真实实现（超长单条截断 + 「请在 Web 端查看」提示）
+        return self._adapter_cls._truncate_to_single_message(self, text_content)
 
 
 def _kf_adapter():
     return _KfStub()
 
 
-async def test_kf_segments_use_plain_text_within_budget(monkeypatch):
+def _kf_sent_texts(adapter):
+    return [call.kwargs["content"]["content"]
+            for call in adapter.api_client.send_msg.await_args_list]
+
+
+async def test_kf_single_message_one_send_within_budget(monkeypatch):
     calls = _facts_stub(monkeypatch)
     adapter = _kf_adapter()
     budget = WeComKfReplyBudget(total=5)
@@ -206,66 +250,46 @@ async def test_kf_segments_use_plain_text_within_budget(monkeypatch):
 
     send = _manager().make_send_response(adapter=adapter, message_id="m1",
                                          reply_to="wx-1", reply_budget=budget)
-    segments = ["段一", "段二", "段三"]
-    ok = await send(ChannelAskResponse("x", ask_segments=_payload(segments)), [])
+    form = _form(option_count=2)
+    ok = await send(ChannelAskResponse("x", ask_segments=_payload(
+        ["占位"], form=form, limit=2048, single=True)), [])
 
     assert ok is True
-    sent = [call.kwargs["content"]["content"]
-            for call in adapter.api_client.send_msg.await_args_list]
-    assert sent == segments
-    assert [call.kwargs["msgtype"] for call in adapter.api_client.send_msg.await_args_list] == ["text"] * 3
-    # 提问轮次不为 final 预留：3 段正好扣 3，预算 4→1
-    assert budget.remaining == 1
-    assert calls["sent"] == [0, 1, 2]
+    # 一表单一条消息（不按题拆多条），预算 N=1：只扣 1（4→3）
+    sent = _kf_sent_texts(adapter)
+    assert len(sent) == 1
+    assert sent[0].startswith("【归档范围】除成本治理外")  # 完整渲染未触发精简
+    assert "Q1【归档范围】" in sent[0] and "回复编号或文字作答" in sent[0]
+    assert budget.remaining == 3
+    assert calls["init_single"] == [sent[0]] and calls["single_sent"] == [True]
 
 
-async def test_kf_compact_rerender_fits_budget(monkeypatch):
+async def test_kf_single_message_compacts_when_over_hard_limit(monkeypatch):
     calls = _facts_stub(monkeypatch)
     adapter = _kf_adapter()
     budget = WeComKfReplyBudget(total=5)
-    budget.consume(3)  # 可用 2
 
     send = _manager().make_send_response(adapter=adapter, message_id="m1",
                                          reply_to="wx-1", reply_budget=budget)
-    # 完整渲染含长 description 超出可用额度，紧凑模式（省 description）后可容纳
+    # 长 description 撑爆 2048B → 依次精简后单条仍完整承载问题/选项/编号
+    form = _form(option_count=3, description="长" * 400)
     ok = await send(ChannelAskResponse("x", ask_segments=_payload(
-        ["占位"], form=_form(option_count=1, description="长" * 1800))), [])
+        ["占位"], form=form, limit=2048, single=True)), [])
 
     assert ok is True
-    sent = [call.kwargs["content"]["content"]
-            for call in adapter.api_client.send_msg.await_args_list]
-    assert len(sent) <= 2
-    assert all("这是一段较长的选项描述" not in t and "长长长" not in t for t in sent)
-    # 事实记录的是紧凑后的实际分段
-    assert calls["init"] == [sent]
+    sent = _kf_sent_texts(adapter)
+    assert len(sent) == 1
+    text = sent[0]
+    assert len(text.encode("utf-8")) <= 2048
+    assert "这是一段较长的选项描述" not in text  # description 已精简
+    assert "除成本治理外" not in text  # intro 已精简
+    assert "Q1【归档范围】以下哪些任务移入" in text  # 问题与编号保留
+    assert "1. 任务 1" in text and "3. 任务 3" in text
+    assert "回复编号或文字作答" in text
+    assert calls["init_single"] == [text] and calls["single_sent"] == [True]
 
 
-async def test_kf_budget_insufficient_sends_prefix_with_hint(monkeypatch):
-    calls = _facts_stub(monkeypatch)
-    adapter = _kf_adapter()
-    budget = WeComKfReplyBudget(total=5)
-    budget.consume(4)  # 可用 1
-
-    send = _manager().make_send_response(adapter=adapter, message_id="m1",
-                                         reply_to="wx-1", reply_budget=budget)
-    # 长题干：紧凑渲染仍 >1 段 → available-1=0 段正文，只发 1 条事实提示占最后额度
-    long_prompt_form = _form(option_count=1)
-    long_prompt_form["questions"][0]["prompt"] = "超长题干" + "内容继续" * 400
-    ok = await send(ChannelAskResponse("x", ask_segments=_payload(
-        ["占位"], form=long_prompt_form)), [])
-
-    assert ok is True
-    sent = [call.kwargs["content"]["content"]
-            for call in adapter.api_client.send_msg.await_args_list]
-    assert len(sent) == 1  # available-1=0 段正文 + 1 条提示
-    assert "剩余部分未发送" in sent[0] and "重发" in sent[0]
-    assert budget.remaining == 0
-    # 事实登记完整分段全文（截断只影响本轮发送，剩余段可经「重发」续传）
-    from src.channels import ask_render
-    assert calls["init"] == [ask_render.render_segments(long_prompt_form, 4000)]
-
-
-async def test_kf_budget_exhausted_sends_nothing(monkeypatch):
+async def test_kf_zero_budget_registers_facts_and_resend_after_recovery(monkeypatch):
     calls = _facts_stub(monkeypatch)
     adapter = _kf_adapter()
     budget = WeComKfReplyBudget(total=5)
@@ -274,10 +298,47 @@ async def test_kf_budget_exhausted_sends_nothing(monkeypatch):
     send = _manager().make_send_response(adapter=adapter, message_id="m1",
                                          reply_to="wx-1", reply_budget=budget)
     ok = await send(ChannelAskResponse("x", ask_segments=_payload(
-        ["占位"], form=_form())), [])
+        ["占位"], form=_form(option_count=1), limit=2048, single=True)), [])
 
+    # 零预算不发送，但事实已登记（sent=否 + 失败原因），预算恢复后可整条重发
     assert ok is False
     adapter.api_client.send_msg.assert_not_awaited()
+    assert len(calls["init_single"]) == 1
+    assert calls["single_failed"] == ["reply budget exhausted"]
+
+    # 预算恢复后「重发」：整条重发一次成功
+    text = calls["init_single"][0]
+    recovered = WeComKfReplyBudget(total=5)
+    send = _manager().make_send_response(adapter=adapter, message_id="m2",
+                                         reply_to="wx-1", reply_budget=recovered)
+    ok = await send(ChannelAskResponse(text, ask_segments=_payload(
+        [text], resend=True, limit=2048, single=True)), [])
+
+    assert ok is True
+    assert _kf_sent_texts(adapter) == [text]
+    assert recovered.remaining == 4
+    assert calls["resend"] == 1 and calls["single_sent"] == [True]
+
+
+async def test_kf_over_hard_limit_falls_back_to_truncation(monkeypatch):
+    # 全部精简后仍超单条硬限：走 kf 现有长文本兜底（截断单条 + Web 端查看提示）
+    calls = _facts_stub(monkeypatch)
+    adapter = _kf_adapter()
+    budget = WeComKfReplyBudget(total=5)
+
+    send = _manager().make_send_response(adapter=adapter, message_id="m1",
+                                         reply_to="wx-1", reply_budget=budget)
+    form = _form(option_count=1)
+    form["questions"][0]["prompt"] = "超长题干" + "内容继续" * 400
+    ok = await send(ChannelAskResponse("x", ask_segments=_payload(
+        ["占位"], form=form, limit=2048, single=True)), [])
+
+    assert ok is True
+    sent = _kf_sent_texts(adapter)
+    assert len(sent) == 1
+    assert len(sent[0].encode("utf-8")) <= 2048
+    assert sent[0].endswith("（内容较长，请在 Web 端查看）")
+    assert calls["single_sent"] == [True]
 
 
 # ==================== ask_delivery 发送事实（fake manager 承载 DB） ====================
@@ -327,6 +388,33 @@ def test_ask_delivery_facts_roundtrip_preserves_other_metadata(fake_db):
 
     ask_delivery.clear_facts("s-1", "wait_1")
     assert ask_delivery.load_facts("s-1", "wait_1") is None
+    assert fake_db.rows["s-1"]["metadata"]["service_state"] == {"q": 1}
+
+
+def test_ask_delivery_single_facts_roundtrip(fake_db):
+    from src.channels import ask_delivery
+
+    # 单条粒度（kf/RPA）：sent 是/否 + 失败原因，重发=整条重发
+    ask_delivery.init_single_facts("s-1", "wait_2", "整条表单文本")
+    ask_delivery.init_single_facts("s-1", "wait_2", "重跑不覆盖")
+    assert ask_delivery.load_facts("s-1", "wait_2")["message"] == "整条表单文本"
+    assert ask_delivery.load_facts("s-1", "wait_2")["sent"] is False
+
+    ask_delivery.record_single_failure("s-1", "wait_2", "reply budget exhausted")
+    facts = ask_delivery.load_facts("s-1", "wait_2")
+    assert facts["sent"] is False and facts["last_error"] == "reply budget exhausted"
+    assert ask_delivery.single_message(facts) == "整条表单文本"
+
+    ask_delivery.record_single_sent("s-1", "wait_2")
+    facts = ask_delivery.load_facts("s-1", "wait_2")
+    assert facts["sent"] is True and facts["last_error"] is None
+
+    # 分段事实（segments 形状）不被 single_message 误读
+    assert ask_delivery.single_message({"segments": ["a"], "sent": [0]}) is None
+    assert ask_delivery.single_message(None) is None
+
+    ask_delivery.clear_facts("s-1", "wait_2")
+    assert ask_delivery.load_facts("s-1", "wait_2") is None
     assert fake_db.rows["s-1"]["metadata"]["service_state"] == {"q": 1}
 
 

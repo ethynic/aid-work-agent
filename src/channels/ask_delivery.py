@@ -1,9 +1,12 @@
 """结构化提问的发送事实记录（设计 §7.2 投递记录收敛口径：只存发送事实）。
 
-按 wait_id 记录：本次表单的分段全文、已确认发送的段、最近失败原因、重投次数
-与在途提交（reply control id）。存放于 ``channel_sessions.metadata`` 的
-``ask_send_facts`` 键——渠道入站与发送路径可能落在不同进程，DB 是
-runner_agent 与 session 发送封装共同可达的最小持久位置。
+按 wait_id 记录，两种粒度（评审修正 §7.2）：
+- 分段渠道（wecom/dingtalk/feishu）：分段全文、已确认发送的段、最近失败原因；
+- 单条渠道（wecom_kf/RPA 等按条数计费渠道）：整条全文、sent 是/否、最近失败
+  原因——重发=整条重发，不再用逐段 facts。
+两种粒度共有的：重投次数与在途提交（reply control id）。存放于
+``channel_sessions.metadata`` 的 ``ask_send_facts`` 键——渠道入站与发送路径
+可能落在不同进程，DB 是 runner_agent 与 session 发送封装共同可达的最小持久位置。
 
 用途边界（评审固化）：
 - 仅用于「重发」续传去重、受理未应用期间暂停补发、应用成功后清理；
@@ -164,6 +167,71 @@ def missing_segments(facts: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     sent = set(facts.get('sent') or [])
     return [{'index': index, 'text': text}
             for index, text in enumerate(facts['segments']) if index not in sent]
+
+
+# ==================== 单条粒度（wecom_kf/RPA 等按条数计费渠道） ====================
+
+
+def init_single_facts(session_id: str, wait_id: str, text: str) -> None:
+    """单条渠道首次投递前登记整条全文（sent=False，失败/零预算可整条重发）。"""
+    if not session_id or not wait_id:
+        return
+    try:
+        metadata = _load_metadata(session_id)
+        facts = _facts(metadata)
+        if wait_id in facts:
+            return  # 重跑/重试不覆盖既有事实
+        facts[wait_id] = {'message': str(text or ''), 'sent': False, 'last_error': None,
+                          'retries': 0, 'submitted': None}
+        metadata[_METADATA_KEY] = facts
+        _save_metadata(session_id, metadata)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[ask_delivery] 登记单条发送事实失败 session={session_id} wait={wait_id}: {e}")
+
+
+def record_single_sent(session_id: str, wait_id: str) -> None:
+    """单条发送成功确认（sent 置是）。"""
+    if not session_id or not wait_id:
+        return
+    try:
+        metadata = _load_metadata(session_id)
+        facts = _facts(metadata)
+        entry = facts.get(wait_id)
+        if not isinstance(entry, dict):
+            return
+        entry['sent'] = True
+        entry['last_error'] = None
+        metadata[_METADATA_KEY] = facts
+        _save_metadata(session_id, metadata)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[ask_delivery] 记录单条已发送失败 session={session_id} wait={wait_id}: {e}")
+
+
+def record_single_failure(session_id: str, wait_id: str, reason: str) -> None:
+    """单条发送失败/未发送：记录最近失败原因（重发提示事实），不承担答案准入。"""
+    if not session_id or not wait_id:
+        return
+    try:
+        metadata = _load_metadata(session_id)
+        facts = _facts(metadata)
+        entry = facts.get(wait_id)
+        if not isinstance(entry, dict):
+            return
+        entry['sent'] = False
+        entry['last_error'] = str(reason or 'send failed')[:300]
+        metadata[_METADATA_KEY] = facts
+        _save_metadata(session_id, metadata)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[ask_delivery] 记录单条发送失败事实失败 session={session_id} wait={wait_id}: {e}")
+
+
+def single_message(facts: Optional[Dict[str, Any]]) -> Optional[str]:
+    """单条粒度事实的整条全文；非单条形状（分段事实/无记录）返回 None。"""
+    if isinstance(facts, dict):
+        message = facts.get('message')
+        if isinstance(message, str) and message:
+            return message
+    return None
 
 
 def clear_facts(session_id: str, wait_id: str) -> None:

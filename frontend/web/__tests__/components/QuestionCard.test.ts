@@ -5,9 +5,10 @@ import QuestionCard from '@/components/chat/QuestionCard.vue'
 import type { AskForm } from '@/types'
 import type { AskSubmissionState } from '@/composables/useAgent'
 
-/** useAgent mock：提交记录 + 响应式提交状态（模拟 askSubmissions 注册表） */
+/** useAgent mock：提交记录 + 响应式提交状态（模拟 askSubmissions 注册表与 controlViews 观察） */
 const holder = vi.hoisted(() => ({
   map: undefined as unknown as Map<string, AskSubmissionState>,
+  controls: undefined as unknown as Map<string, { status: string; error_code?: string | null }>,
   submit: undefined as unknown as ReturnType<typeof vi.fn>,
 }))
 vi.mock('@/composables/useAgent', () => ({
@@ -18,6 +19,7 @@ vi.mock('@/composables/useAgent', () => ({
       for (const item of holder.map?.values() || []) if (item.controlId === controlId) return item
       return undefined
     }),
+    askControlView: (controlId: string) => computed(() => holder.controls?.get(controlId)),
   }),
 }))
 
@@ -47,6 +49,7 @@ function mountCard(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   holder.map = reactive(new Map())
+  holder.controls = reactive(new Map())
   holder.submit = vi.fn().mockResolvedValue('accepted')
 })
 
@@ -209,12 +212,18 @@ describe('QuestionCard state machine (设计 §5.7)', () => {
     expect(wrapper.find('[data-test="custom-input"]').attributes('disabled')).toBeDefined()
   })
 
-  it('RUNNER_RESUME_PENDING blocks resubmission with a pending-acceptance notice', async () => {
+  it('RUNNER_RESUME_PENDING blocks resubmission until the snapshot clears the conflict', async () => {
     const wrapper = mountCard()
     holder.map.set('runner-A:wait-1', { status: 'error', errorCode: 'RUNNER_RESUME_PENDING' })
     await wrapper.vm.$nextTick()
     expect(wrapper.find('[data-test="error-banner"]').text()).toContain('已有提交正在等待应用')
     expect((wrapper.find('[data-test="submit-btn"]').element as HTMLButtonElement).disabled).toBe(true)
+    // 快照事实解除冲突（评审 P2）：wait 仍有效且无在途受理 control → 恢复可编辑
+    holder.map.set('runner-A:wait-1', { status: 'error', errorCode: 'RUNNER_RESUME_PENDING', conflictCleared: true })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-test="error-banner"]').text()).toContain('另一端提交未生效')
+    expect((wrapper.find('[data-test="submit-btn"]').element as HTMLButtonElement).disabled).toBe(false)
+    expect((wrapper.find('[data-test="option-q1o1"]').element as HTMLInputElement).disabled).toBe(false)
   })
 })
 
@@ -230,9 +239,22 @@ describe('QuestionCard read-only answered echo (设计 §7.1 历史投影)', () 
     expect(wrapper.text()).toContain('Q1【归档范围】以下哪些任务移入 ideas_finished.md？')
     expect(wrapper.text()).toContain('自定义：自定义说明')
     expect(wrapper.text()).toContain('（未回答）') // q2 未答
-    expect(wrapper.find('[data-test="answered-status"]').text()).toBe('已应用')
+    // 终态而无 control 事实不得推定已应用（评审 P2）
+    expect(wrapper.find('[data-test="answered-status"]').text()).toBe('已提交（任务已结束）')
     expect(wrapper.text()).toMatch(/\d{2}-\d{2} \d{2}:\d{2}:\d{2}/) // 答复时间
     expect(wrapper.find('[data-test="submit-btn"]').exists()).toBe(false)
+  })
+
+  it('labels terminal cards from the queried control fact: consumed=已应用, rejected=未应用', async () => {
+    holder.controls.set('control-1', { status: 'consumed' })
+    const applied = mount(QuestionCard, { props: { answered } })
+    expect(applied.find('[data-test="answered-status"]').text()).toBe('已应用')
+    holder.controls.set('control-1', { status: 'rejected', error_code: 'CONTROL_WAIT_STALE' })
+    const rejected = mount(QuestionCard, { props: { answered } })
+    expect(rejected.find('[data-test="answered-status"]').text()).toBe('已提交（未应用）')
+    holder.controls.set('control-1', { status: 'accepted' })
+    const submitted = mount(QuestionCard, { props: { answered: { ...answered, terminal: false } } })
+    expect(submitted.find('[data-test="answered-status"]').text()).toBe('已提交')
   })
 
   it('distinguishes submitted vs applied via the observed control fact', async () => {

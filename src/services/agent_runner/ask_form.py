@@ -105,6 +105,11 @@ def validate_answers(form, answers, *, skip=False):
             if not same_selection or (prev_text and this_text and prev_text != this_text):
                 errors.append(_error(qid, FORM_ANSWER_INVALID, '同一问题重复提交且答案矛盾'))
                 continue
+            # 评审 P2-3：合并进来的文本同样要过业务校验——首项 text 为空时
+            # allow_custom_text=false 的表单会采纳次项文本，不能绕过该门。
+            if this_text and question.get('allow_custom_text') is False:
+                errors.append(_error(qid, FORM_ANSWER_INVALID, '该题不允许自定义输入'))
+                continue
             seen[qid] = _merge_duplicate(previous, item)
             continue
         seen[qid] = item

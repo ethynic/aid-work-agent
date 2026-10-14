@@ -1,15 +1,21 @@
 """结构化提问（AskForm）渠道文字渲染与入站解析（设计 §7.2，纯渲染层）。
 
 职责边界：
-- ``render_segments``：按**实际渲染 UTF-8 字节**把 AskForm 分段为渠道消息列表。
-  逻辑行优先（intro 行 / 题头行 / 选项行）；单逻辑行自身超限时在**合法字符边界**
-  继续拆分跨消息（不破坏多字节序列），续段保留题号/选项号前缀（如 ``Q1（续）``）；
-  紧凑模式（省 description）作为压缩手段。题干与选项内容**永不丢失**——
-  「不截断」指不丢内容，允许一行跨消息（设计 v6 口径）。
+- ``render_segments``：按**实际渲染 UTF-8 字节**把 AskForm 分段为渠道消息列表
+  （wecom/dingtalk/feishu 等无条数限制、只有单条字节限的渠道）。逻辑行优先
+  （intro 行 / 题头行 / 选项行）；单逻辑行自身超限时在**合法字符边界**继续
+  拆分跨消息（不破坏多字节序列），续段保留题号/选项号前缀（选项行续段如
+  ``Q1 选项2（续）``，题头行续段为 ``Q1（续）``）；紧凑模式（省 description）
+  作为压缩手段。题干与选项内容**永不丢失**——「不截断」指不丢内容，允许
+  一行跨消息（设计 v6 口径）。
+- ``render_single_message``：**按条数计费/限制**的渠道（wecom_kf / RPA，见
+  ``SINGLE_MESSAGE_SOURCES``）把 AskForm 合并为**一条消息**整体发送，超长时
+  依次精简 intro、题头重复操作提示、选项 description（评审修正 §7.2）。
 - ``parse_reply``：入站单管线的解析半边（三分法）：
   * 无编号协议特征 → 自然语言，返回 ``None``（调用方沿既有 reply 路径透传）；
-  * 明确使用协议（出现题号）但含无法解释项（未知题号、越界选项、text 题带
-    选择、同题矛盾等）→ 协议错误，返回错误标记 + 纠正文案（一次，不计数）；
+  * 明确使用协议（出现题号）但含无法解释项（未知题号、越界选项、同题矛盾等）
+    → 协议错误，返回错误标记 + 纠正文案（一次，不计数）；text 题冒号后内容
+    一律作为该题文本（不以「纯数字」推断携带选项，text 题本无选项）；
   * 可解析 → ``{"ok": True, "answers": [...]}``，选项序号→key、题号→question_id
     的映射在本层完成，selected_keys 为服务端选项 key。
 - 精确指令识别：``is_skip_reply`` / ``is_resend_reply``。
@@ -36,6 +42,11 @@ _SOURCE_SEGMENT_LIMITS = {
 def source_segment_limit(source: str) -> int:
     """渠道默认分段字节上限；未知渠道按最保守的 2048 处理。"""
     return _SOURCE_SEGMENT_LIMITS.get(source or '', 2048)
+
+
+# 按条数计费/限制回复条数的渠道：AskForm 整体渲染为一条消息发送（评审修正 §7.2），
+# 不按题拆段、不为多段维护续传/额度管理。
+SINGLE_MESSAGE_SOURCES = frozenset({'wecom_kf', 'wecom_personal_rpa'})
 
 
 def _blen(text: str) -> int:
@@ -91,13 +102,15 @@ def is_resend_reply(text: str) -> bool:
 
 
 class _Line:
-    """逻辑行：文本 + 归属题号（None=intro/footer 等全局行）+ 是否题头行。"""
+    """逻辑行：文本 + 归属题号（None=intro/footer 等全局行）+ 选项号 + 是否题头行。"""
 
-    __slots__ = ('text', 'qnum', 'is_header')
+    __slots__ = ('text', 'qnum', 'onum', 'is_header')
 
-    def __init__(self, text: str, qnum: Optional[int] = None, is_header: bool = False):
+    def __init__(self, text: str, qnum: Optional[int] = None, onum: Optional[int] = None,
+                 is_header: bool = False):
         self.text = text
         self.qnum = qnum
+        self.onum = onum
         self.is_header = is_header
 
 
@@ -126,12 +139,17 @@ def _question_number(question: Dict[str, Any], position: int) -> int:
     return int(match.group(1)) if match else position + 1
 
 
-def _logical_lines(form: Dict[str, Any], compact: bool) -> List[_Line]:
-    """AskForm → 逻辑行序列（intro 行、题头行、选项行）。"""
+def _logical_lines(form: Dict[str, Any], compact: bool, include_intro: bool = True,
+                   include_hints: bool = True) -> List[_Line]:
+    """AskForm → 逻辑行序列（intro 行、题头行、选项行）。
+
+    ``include_intro``/``include_hints`` 供单条合并（``render_single_message``）
+    的渐进精简使用：分别省略 intro 行与题头重复操作提示（type hint）。
+    """
     lines: List[_Line] = []
     title = str(form.get('title') or '').strip()
     intro = str(form.get('intro') or '').strip()
-    if title or intro:
+    if include_intro and (title or intro):
         lines.append(_Line(f'【{title}】{intro}' if title and intro else (title or intro)))
     for position, question in enumerate(form.get('questions') or []):
         if not isinstance(question, dict):
@@ -139,8 +157,8 @@ def _logical_lines(form: Dict[str, Any], compact: bool) -> List[_Line]:
         qnum = _question_number(question, position)
         tag = str(question.get('tag') or '').strip()
         prompt = str(question.get('prompt') or '').strip()
-        header = f'Q{qnum}【{tag}】{prompt}{_type_hint(question)}' if tag else \
-            f'Q{qnum}{prompt}{_type_hint(question)}'
+        hint = _type_hint(question) if include_hints else ''
+        header = f'Q{qnum}【{tag}】{prompt}{hint}' if tag else f'Q{qnum}{prompt}{hint}'
         lines.append(_Line(header, qnum=qnum, is_header=True))
         for index, option in enumerate(question.get('options') or [], start=1):
             if not isinstance(option, dict):
@@ -150,7 +168,7 @@ def _logical_lines(form: Dict[str, Any], compact: bool) -> List[_Line]:
                 description = str(option.get('description') or '').strip()
                 if description:
                     row += f' — {description}'
-            lines.append(_Line(row, qnum=qnum))
+            lines.append(_Line(row, qnum=qnum, onum=index))
     return lines
 
 
@@ -168,13 +186,24 @@ def _fit_chunk(text: str, max_bytes: int) -> Tuple[str, str]:
     return text[:low], text[low:]
 
 
+def _continuation_prefix(line: _Line) -> str:
+    """跨消息续段前缀：选项行携带所属选项号（如 ``Q1 选项2（续）``），
+    题头行续段为 ``Q1（续）``；无题号全局行为 ``（续）``。"""
+    if line.qnum is None:
+        return '（续）'
+    if line.onum is not None and not line.is_header:
+        return f'Q{line.qnum} 选项{line.onum}（续）'
+    return f'Q{line.qnum}（续）'
+
+
 def render_segments(form: Dict[str, Any], limit_bytes: int, compact: bool = False) -> List[str]:
     """AskForm → 渠道文字消息分段列表（设计 §7.2）。
 
     - 逻辑行优先：intro / 题头 / 选项行整体积累，按实际渲染字节分段；
     - 单行自身超限：行内按合法字符边界继续拆分（不破坏多字节序列），
-      续块加题号前缀（``Q1（续）``；无题号行如超长 intro 用 ``（续）``）；
-    - 段间断点落在同一题的选项/续行上时，新段以 ``Q1（续）`` 开头；
+      续块加题号/选项号前缀（``Q1（续）`` / ``Q1 选项2（续）``；无题号行如
+      超长 intro 用 ``（续）``）；
+    - 段间断点落在同一题的选项/续行上时，新段以对应续段前缀开头；
     - 紧凑模式省略 description；末段附操作提示（allow_skip=false 时改为
       「需明确答复」口径）；题干与选项内容永不丢失。
     """
@@ -198,32 +227,67 @@ def render_segments(form: Dict[str, Any], limit_bytes: int, compact: bool = Fals
         buf, buf_bytes = [], 0
 
     for line in lines:
-        text, qnum, is_header = line.text, line.qnum, line.is_header
+        text = line.text
         # 1) 尝试放入当前段
         cost = _blen(text) + (1 if buf else 0)
         if buf_bytes + cost <= limit:
             buf.append(text)
             buf_bytes += cost
-            open_qnum = qnum if qnum is not None else open_qnum
+            open_qnum = line.qnum if line.qnum is not None else open_qnum
             continue
-        # 2) 需要换段：同题续行带「Qn（续）」前缀；题头行/全局行不带
+        # 2) 需要换段：同题续行带题号/选项号前缀；题头行/全局行不带
         flush()
-        break_prefix = f'Q{qnum}（续）' if (qnum is not None and not is_header) else None
+        break_prefix = _continuation_prefix(line) if (line.qnum is not None and not line.is_header) else None
         # 3) 行仍超限（含前缀开销）→ 行内字符边界切分跨消息
         budget = limit - ((break_prefix and _blen(break_prefix) + 1) or 0)
         chunk, rest = _fit_chunk(text, budget)
         buf.append((break_prefix + '\n' if break_prefix else '') + chunk)
         buf_bytes = _blen(buf[0])
         flush()
-        cont_prefix = f'Q{qnum}（续）' if qnum is not None else '（续）'
+        cont_prefix = _continuation_prefix(line)
         while rest:
             chunk, rest = _fit_chunk(rest, limit - _blen(cont_prefix) - 1)
             buf.append(cont_prefix + '\n' + chunk)
             buf_bytes = _blen(buf[0])
             flush()
-        open_qnum = qnum if qnum is not None else open_qnum
+        open_qnum = line.qnum if line.qnum is not None else open_qnum
     flush()
     return segments
+
+
+# 单条合并（render_single_message）的渐进精简阶段（评审修正 §7.2）：
+# 依次精简 intro → 题头重复操作提示（type hint）→ 选项 description；
+# 题干、选项 label、清晰编号与末尾操作提示在各阶段保留。
+_SINGLE_STAGES = (
+    {'compact': False, 'intro': True, 'hints': True},
+    {'compact': False, 'intro': False, 'hints': True},
+    {'compact': False, 'intro': False, 'hints': False},
+    {'compact': True, 'intro': False, 'hints': False},
+)
+
+
+def render_single_message(form: Dict[str, Any], limit_bytes: int) -> str:
+    """AskForm → 单条合并文本（wecom_kf/RPA 等按条数计费渠道，评审修正 §7.2）。
+
+    一表单渲染为一条消息整体发送，不按题拆多条。超长时依次精简 intro、
+    题头重复操作提示、选项 description（保留问题、必要选项与清晰编号）；
+    全部阶段后仍超 limit_bytes 时返回最简文本，由 session 发送侧按渠道
+    既有长文本方式兜底（kf 截断单条、RPA 既有超长分段）。
+    """
+    limit = int(limit_bytes)
+    if limit < 64:
+        raise ValueError(f'ask_render 单条字节上限过小: {limit}')
+    if not (form.get('questions') or []):
+        return ''
+    text = ''
+    for stage in _SINGLE_STAGES:
+        lines = _logical_lines(form, compact=stage['compact'],
+                               include_intro=stage['intro'], include_hints=stage['hints'])
+        lines.append(_footer_line(form))
+        text = '\n'.join(line.text for line in lines)
+        if _blen(text) <= limit:
+            break
+    return text
 
 
 # ==================== 入站解析：parse_reply ====================
@@ -243,9 +307,9 @@ def _parse_answer_body(rest: str, question: Dict[str, Any], qnum: int) -> Tuple[
     body = _normalize(rest_stripped)
 
     if qtype == 'text':
-        # text 题带选择（纯编号语法）→ 协议错误；混合内容视为自由文本
-        if body and _PURE_NUMBER_RE.match(body):
-            return _entry(qid), [f'Q{qnum} 是自由文本题，请直接回复文字，不要回复选项编号']
+        # text 题本无选项：冒号后内容一律作为该题文本，不以「纯数字」推断
+        # 携带选项（评审修正：金额/年份等合法数字答案不再被误拒）；服务端
+        # selected_keys 非空的结构校验（ask_form）继续保留。
         if not body:
             return _entry(qid), [f'Q{qnum} 未包含答案内容']
         return _entry(qid, text=rest_stripped), []

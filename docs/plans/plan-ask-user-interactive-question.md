@@ -128,7 +128,7 @@
 
 - **发布顺序**：后端（Runner API + Web BFF 同部署单元）全实例健康确认后，再放开前端结构化提交（feature flag）；滚动期以"capabilities 未确认支持 = 文本路径"为基准，不做逐次探测。
 - **回滚**：回滚目标版本需保留 ask 受理能力（处理在途 form wait），或回滚前取消在途 ask 任务。
-- **遗留 P2（登记不阻断，后续顺手收敛）**：重发计数 runner_agent/session 双记（纯观测字段）；结构化提交（skip/answers）不带附件——"图片+跳过"场景图片丢弃；旧 form 发送事实在 metadata 的残留（轮询间隔内的连续两轮提问）；capabilities 静态标志在前后端混合版本窗口不实。
+- **遗留 P2（登记不阻断，后续顺手收敛）**：capabilities 静态标志在前后端混合版本窗口不实；channel_sessions.metadata 读改写无跨进程锁（单会话串行兜底，模块已声明取舍）；"Q1…" 开头的自然语言会被当作 q1 文字答案（协议模式的显式取舍）。二轮复审已收敛：重发计数双记、结构化提交丢附件、旧 form 发送事实残留、text 题数字误拒、kf/RPA 合并为单条发送。
 - **测试装置已知问题**：`test_channel_config_update_wecom_kf` 导入时 pop `DATABASE_URL`，与其他集成文件同批混跑互相干扰——集成测试必须逐文件跑。
 
 ## 4. Phase 2：同源待答可达性（验证角色按实际风险确定）

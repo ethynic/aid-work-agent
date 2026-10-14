@@ -132,7 +132,8 @@ class ChannelRunnerAgent:
                     # 结构化提问入站单管线（设计 §7.2，与投递状态无关）：
                     # 精确指令 / Q 编号解析 / 自然语言三分法。隐藏命令已在
                     # channel_routes 更早拦截，此处不重复。
-                    outcome = await self._handle_ask_inbound(waiting, wait, reply_form, user_input)
+                    outcome = await self._handle_ask_inbound(waiting, wait, reply_form,
+                                                             user_input, refs)
                     if outcome is not None:
                         kind, value = outcome
                         if kind == 'response':
@@ -221,6 +222,12 @@ class ChannelRunnerAgent:
                     return AgentResponse(result.get('output') or '', result.get('images') or snapshot.get('images') or [])
                 if row['status']=='waiting':
                     wait = _clarification_wait(snapshot.get('waiting')) or {}
+                    if reply_wait_id and wait.get('wait_id') != reply_wait_id:
+                        # 连续两轮提问（新问题未经可见 running 状态直接出现，
+                        # 原 wait 已消失）：先清理旧表单发送记录再登记新表单
+                        # （评审修正：不要求观察到中间 running 状态）。
+                        ask_delivery.clear_facts(self.session_id, reply_wait_id)
+                        reply_wait_id = None
                     # 新 reply 尚待应用时，不能把原问题再次当作本次回复。
                     if reply_wait_id and wait.get('wait_id') == reply_wait_id:
                         control = (await self._request('GET', f'/v1/runners/{runner_id}/controls/{reply_control_id}'))['control']
@@ -244,7 +251,7 @@ class ChannelRunnerAgent:
 
     # ==================== 结构化提问（WP5，设计 §7.2） ====================
 
-    async def _handle_ask_inbound(self, waiting, wait, form, user_input):
+    async def _handle_ask_inbound(self, waiting, wait, form, user_input, attachments=None):
         """结构化提问入站单管线（三分法 + 精确指令，与投递状态无关）。
 
         返回：
@@ -252,14 +259,16 @@ class ChannelRunnerAgent:
         - ``('response', AgentResponse)``：直接回复（纠正提示 / 重发分段），
           不提交、wait 不消费；
         - ``('submit', body)``：结构化提交（skip=true / answers），answer 置空，
-          canonical 由服务端生成。
+          canonical 由服务端生成。skip/answers 与自然语言路径一致携带附件 refs
+          （沿用既有附件处理链路，评审修正：编号作答附件不静默丢失）。
         """
         text = (user_input or '').strip()
         wait_id, target = wait['wait_id'], wait['target_execution_id']
         if ask_render.is_skip_reply(text):
             # 跳过唯一入口 = 显式 skip；allow_skip=false 由服务端权威拒绝（422）。
             return ('submit', {'action':'reply', 'client_request_id':uuid.uuid4().hex,
-                'answer':'', 'skip':True, 'wait_id':wait_id, 'target_execution_id':target})
+                'answer':'', 'skip':True, 'attachments':attachments, 'wait_id':wait_id,
+                'target_execution_id':target})
         if ask_render.is_resend_reply(text):
             return ('response', await self._build_resend_response(waiting, wait, form))
         parsed = ask_render.parse_reply(text, form)
@@ -269,15 +278,17 @@ class ChannelRunnerAgent:
             # 协议错误：纠正一次、不计数，不提交也不消费 wait。
             return ('response', AgentResponse(parsed['correction']))
         return ('submit', {'action':'reply', 'client_request_id':uuid.uuid4().hex,
-            'answer':'', 'answers':parsed['answers'], 'wait_id':wait_id,
-            'target_execution_id':target})
+            'answer':'', 'answers':parsed['answers'], 'attachments':attachments,
+            'wait_id':wait_id, 'target_execution_id':target})
 
     async def _build_resend_response(self, waiting, wait, form):
-        """「重发/简化」：按发送事实续传缺段（只发缺的，不重复已发），该条不作答案。
+        """「重发/简化」：按发送事实续传缺段（分段渠道只发缺的；单条渠道整条重发），
+        该条不作答案。
 
         受理/应用边界（设计 v6）：control 已受理未应用期间不执行重发（答案可能
         即将应用）；被拒且 wait 仍有效可再重发；应用成功后剩余记录已由轮询清理。
         全程读既有 control 状态与发送事实，不新增状态机。
+        重投次数由 session 实际发送处记录（record_resend），此处不双记。
         """
         session_id, wait_id = self.session_id, wait['wait_id']
         facts = ask_delivery.load_facts(session_id, wait_id)
@@ -296,20 +307,28 @@ class ChannelRunnerAgent:
                 return AgentResponse('该提问已完成作答并生效，无需重发。')
             # rejected / 状态不可读且 wait 仍有效：清除在途标记，允许重发。
             ask_delivery.clear_submission(session_id, wait_id)
-        if not facts or not isinstance(facts.get('segments'), list) or not facts['segments']:
-            return AgentResponse('当前提问没有可重发的未发送内容。')
-        missing = ask_delivery.missing_segments(facts)
-        if not missing:
-            return AgentResponse('提问内容此前均已发送；如仍需查看，请直接回复文字说明具体问题。')
-        ask_delivery.record_resend(session_id, wait_id)
+        single_text = ask_delivery.single_message(facts)
+        if single_text is not None:
+            # 单条粒度（kf/RPA）：整条重发，无逐段 facts
+            if facts.get('sent'):
+                return AgentResponse('提问内容此前均已发送；如仍需查看，请直接回复文字说明具体问题。')
+            missing = [{'index': 0, 'text': single_text}]
+        else:
+            if not facts or not isinstance(facts.get('segments'), list) or not facts['segments']:
+                return AgentResponse('当前提问没有可重发的未发送内容。')
+            missing = ask_delivery.missing_segments(facts)
+            if not missing:
+                return AgentResponse('提问内容此前均已发送；如仍需查看，请直接回复文字说明具体问题。')
         return ChannelAskResponse('\n\n'.join(item['text'] for item in missing), ask_segments={
             'session_id': session_id, 'wait_id': wait_id, 'resend': True,
+            'single': single_text is not None,
             'segments': missing, 'limit_bytes': ask_render.source_segment_limit(self.source)})
 
     def _ask_wait_response(self, wait):
-        """提问等待的出站响应：form → 分段结构（不预判送达）；无 form 退回 question。
+        """提问等待的出站响应：form → 发送结构（不预判送达）；无 form 退回 question。
 
-        旧 runner 兼容：wait 无 form（旧 clarify）时行为与历史逐字节一致。
+        按条数计费渠道（kf/RPA）：一表单合并为一条消息（single 载荷）；分段渠道
+        按字节分段。旧 runner 兼容：wait 无 form（旧 clarify）时行为与历史逐字节一致。
         """
         question = wait.get('question') or ''
         form = wait.get('form')
@@ -317,6 +336,12 @@ class ChannelRunnerAgent:
         if not (isinstance(form, dict) and form.get('questions') and wait_id):
             return AgentResponse(question)
         limit = ask_render.source_segment_limit(self.source)
+        if self.source in ask_render.SINGLE_MESSAGE_SOURCES:
+            text = ask_render.render_single_message(form, limit)
+            return ChannelAskResponse(text, ask_segments={
+                'session_id': self.session_id, 'wait_id': wait_id, 'resend': False,
+                'single': True, 'form': form, 'limit_bytes': limit,
+                'segments': [{'index': 0, 'text': text}]})
         segments = ask_render.render_segments(form, limit) or [question or '（收到提问）']
         return ChannelAskResponse('\n\n'.join(segments), ask_segments={
             'session_id': self.session_id, 'wait_id': wait_id, 'resend': False,

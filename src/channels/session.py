@@ -1664,13 +1664,13 @@ class ChannelSessionManager:
             return bool(await adapter.send_message(response))
 
         async def _send_ask_segments(payload: Dict[str, Any]) -> bool:
-            """逐段发送结构化提问（分段→发送→事实记录的实际接线）。
+            """结构化提问发送（分段/单条 → 发送 → 事实记录的实际接线）。
 
-            - 首次投递：按 adapter 现有配置重排分段（runner_agent 渲染用渠道默认
-              上限，配置覆盖时以 adapter 为准），wecom_kf 按当前入站 owner 预算
-              核算 N×A（提问轮次不为 final 预留），N>A 紧凑重算，仍不足只发前段并
-              附事实提示；随后初始化发送事实。
-            - 重发（resend=True）：只发缺段（index 对齐首次分段），不再重排。
+            - 单条渠道（kf/RPA，payload.single=True）：一表单一条消息，预算核算
+              N=1，事实为单条粒度（sent 是/否 + 失败原因；重发=整条重发）；
+            - 分段渠道（wecom/dingtalk/feishu）：首次投递按 adapter 现有配置重排
+              分段（runner_agent 渲染用渠道默认上限，配置覆盖时以 adapter 为准），
+              随后初始化逐段发送事实；重发（resend=True）：只发缺段，不再重排。
             - 失败停止并记失败原因；不新增渠道队列/投递服务/outbox。
             """
             from src.channels import ask_delivery, ask_render
@@ -1683,8 +1683,9 @@ class ChannelSessionManager:
                 logger.warning(f"{log_tag} 提问分段载荷为空，跳过发送")
                 return False
 
-            truncated_hint: Optional[str] = None
-            full_segments: Optional[list] = None
+            if payload.get("single"):
+                return await _send_ask_single(payload, items, wait_id, session_id)
+
             if not payload.get("resend"):
                 # 1) 按渠道现有配置重排（确定性渲染，内容不丢失）
                 form = payload.get("form")
@@ -1696,34 +1697,11 @@ class ChannelSessionManager:
                             items = [{"index": i, "text": t} for i, t in enumerate(rendered)]
                     except Exception as e:  # noqa: BLE001 - 重排失败按原分段发送
                         logger.warning(f"{log_tag} 提问分段按渠道配置重排失败: {e}")
-                # 2) wecom_kf 预算核算：段数 N × 可用额度 A（owner 级 5 次回复预算，
-                #    提问轮次不为 final 预留——表单即本轮 final 呈现）
-                if hasattr(adapter, "send_ask_segment") and reply_budget is not None:
-                    available = int(reply_budget.remaining)
-                    if len(items) > max(available, 0):
-                        compact = None
-                        if isinstance(form, dict) and form.get("questions") and limit:
-                            try:
-                                compact = ask_render.render_segments(form, int(limit), compact=True)
-                            except Exception as e:  # noqa: BLE001
-                                logger.warning(f"{log_tag} 提问紧凑分段渲染失败: {e}")
-                        if compact and len(compact) <= available:
-                            items = [{"index": i, "text": t} for i, t in enumerate(compact)]
-                        elif available <= 0:
-                            logger.warning(f"{log_tag} 提问分段预算不足（remaining=0），本轮不发送")
-                            return False
-                        else:
-                            # 只发能完整容纳的前段（预留 1 条发事实提示），不静默截断
-                            full_segments = [item["text"] for item in items]
-                            items = list(items[:max(available - 1, 0)])
-                            truncated_hint = (
-                                "提问内容较长，剩余部分未发送；可回复\"重发\"获取剩余内容。"
-                            )
-                # 3) 事实初始化：登记完整分段全文（sent 为空，失败/截断可经「重发」
-                #    续传缺段）；非截断场景即为将尝试的分段本身
+                # 2) 事实初始化：登记完整分段全文（sent 为空，失败可经「重发」
+                #    续传缺段）
                 if wait_id and session_id:
                     ask_delivery.init_facts(
-                        session_id, wait_id, full_segments or [item["text"] for item in items])
+                        session_id, wait_id, [item["text"] for item in items])
             elif wait_id and session_id:
                 ask_delivery.record_resend(session_id, wait_id)
 
@@ -1743,17 +1721,65 @@ class ChannelSessionManager:
                     # 失败停止：只保留已确认段事实，剩余由用户明确「重发」续传
                     logger.warning(f"{log_tag} 提问分段发送失败 seg={index}，停止后续段")
                     return False
-            if truncated_hint:
-                # 事实提示本身占用 1 条预算；失败仅记日志（已发前段不受影响）
-                try:
-                    await _dispatch_ask_segment(truncated_hint, len(items))
-                except Exception as e:  # noqa: BLE001
-                    logger.warning(f"{log_tag} 提问剩余未发提示发送失败: {e}")
             logger.info(
-                f"{log_tag} 提问分段发送完成: wait_id={wait_id or '-'}, "
-                f"segments={len(items)}, truncated={truncated_hint is not None}"
-            )
+                f"{log_tag} 提问分段发送完成: wait_id={wait_id or '-'}, segments={len(items)}")
             return True
+
+        async def _send_ask_single(payload: Dict[str, Any], items: List[Dict[str, Any]],
+                                   wait_id: str, session_id: str) -> bool:
+            """单条渠道（kf/RPA）发送：一表单一条消息（评审修正 §7.2）。
+
+            - 首次投递：按 adapter 现有上限重排单条合并文本（超长依次精简
+              intro/重复操作提示/选项 description），先登记单条事实（零预算场景
+              也登记，预算恢复后可整条重发）；kf 预算核算 N=1（提问轮次不为
+              final 预留），remaining=0 不发送并记失败原因。
+            - 重发：整条重发（不再重排），重投次数记一次。
+            - 仍超渠道单条硬限：kf 走其现有长文本兜底（截断单条 + Web 端查看
+              提示，即渲染关闭时正文的既有降级）；RPA 沿用 send_message 既有
+              超 2000 字自动分段 actions，不在此预截断。
+            """
+            from src.channels import ask_delivery, ask_render
+
+            text = items[0]["text"]
+            limit = _ask_adapter_limit() or payload.get("limit_bytes")
+            if not payload.get("resend"):
+                form = payload.get("form")
+                if isinstance(form, dict) and form.get("questions") and limit:
+                    try:
+                        text = ask_render.render_single_message(form, int(limit))
+                    except Exception as e:  # noqa: BLE001 - 重排失败按原文本发送
+                        logger.warning(f"{log_tag} 提问单条合并重排失败: {e}")
+                if wait_id and session_id:
+                    ask_delivery.init_single_facts(session_id, wait_id, text)
+            elif wait_id and session_id:
+                ask_delivery.record_resend(session_id, wait_id)
+
+            # kf 预算核算（N=1）：无可用额度不发送，事实保持未发送供「重发」续传
+            if (hasattr(adapter, "send_ask_segment") and reply_budget is not None
+                    and int(reply_budget.remaining) <= 0):
+                logger.warning(f"{log_tag} 提问单条发送预算不足（remaining=0），本轮不发送")
+                if wait_id and session_id:
+                    ask_delivery.record_single_failure(session_id, wait_id, "reply budget exhausted")
+                return False
+
+            if limit and len(text.encode("utf-8")) > int(limit):
+                truncate = getattr(adapter, "_truncate_to_single_message", None)
+                if callable(truncate):
+                    # kf 现有长文本兜底：截断单条并附「内容较长，请在 Web 端查看」
+                    text = truncate(text)
+            try:
+                ok = await _dispatch_ask_segment(text, 0)
+            except Exception as e:  # noqa: BLE001 - 单条异常收敛为失败
+                logger.error(f"{log_tag} 提问单条发送异常: {e}")
+                ok = False
+            if wait_id and session_id:
+                if ok:
+                    ask_delivery.record_single_sent(session_id, wait_id)
+                else:
+                    ask_delivery.record_single_failure(session_id, wait_id, "adapter send failed")
+            logger.info(
+                f"{log_tag} 提问单条发送完成: wait_id={wait_id or '-'}, sent={ok}")
+            return bool(ok)
 
         return _send_response
 

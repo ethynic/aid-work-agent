@@ -129,6 +129,34 @@ describe('useAgent structured ask submission (WP4 提交链路)', () => {
     expect(agent.askSubmissionFor('runner-A', 'wait-1').value).toMatchObject({ status: 'accepted' })
   })
 
+  it('a snapshot-confirmed acceptance binds the control so a later rejection restores the card', async () => {
+    await discoverParked(true)
+    const pending = agent.submitAskAnswers(askInput)
+    await flush()
+    const posted = request('/runners/runner-A/controls', 'POST')
+    const key = JSON.parse(posted.body!).client_request_id
+    posted.reject(new TypeError('fictional lost response'))
+    expect(await pending).toBe('retrying')
+    // 观察快照先确认受理：supplementalInputs 出现本端键 → 绑定 control_id 并停止重试
+    request('/runners/runner-A').respond({ success: true, runner: runnerView({ status: 'waiting', resume_requested: true,
+      view_revision: 2, snapshot: {
+        waiting: { kind: 'clarification', wait_id: 'wait-1', target_execution_id: 'exec-1', question: '需要澄清', form },
+        clarificationQuestions: questions,
+        supplementalInputs: [{ control_id: 'ask-control', client_request_id: key, message_id: 'ask-control:user',
+          text: 'Q1【归档范围】任务一', wait_id: 'wait-1', accepted_at: '2026-10-14T10:01:00Z', form, answers }] } }) })
+    await flush()
+    expect(agent.askSubmissionFor('runner-A', 'wait-1').value).toMatchObject({ status: 'accepted', controlId: 'ask-control' })
+    await vi.advanceTimersByTimeAsync(2000)
+    // 受理已被快照确认：不再重发 POST（原键幂等安全由服务端兜底）
+    expect(postCount('/runners/runner-A/controls')).toBe(1)
+    // 该 control 随后被拒（受理后拒绝）→ 卡片回到可修正重提并携带拒绝原因
+    request('/runners/runner-A/controls/ask-control').respond({ success: true, control: {
+      control_id: 'ask-control', runner_id: 'runner-A', action: 'reply', client_request_id: key,
+      status: 'rejected', error_code: 'CONTROL_WAIT_STALE' } })
+    await flush()
+    expect(agent.askSubmissionFor('runner-A', 'wait-1').value).toMatchObject({ status: 'error', errorCode: 'CONTROL_WAIT_STALE' })
+  })
+
   it('422 form errors surface per-question for correction and the resubmit mints a new key', async () => {
     await discoverParked(true)
     const pending = agent.submitAskAnswers(askInput)
@@ -176,6 +204,46 @@ describe('useAgent structured ask submission (WP4 提交链路)', () => {
     request('/runners/runner-A/controls', 'POST').respond({ code: 'CONTROL_EXECUTION_CLOSED', error: 'CONTROL_EXECUTION_CLOSED' }, 409)
     expect(await closed).toBe('closed')
     expect(postCount('/runners/runner-A/controls')).toBe(2)
+  })
+
+  it('a rejected conflicting control and a live wait clear the resume-pending conflict for resubmission', async () => {
+    await discoverParked(true)
+    const pending = agent.submitAskAnswers(askInput)
+    await flush()
+    request('/runners/runner-A/controls', 'POST').respond({ code: 'RUNNER_RESUME_PENDING', error: 'RUNNER_RESUME_PENDING' }, 409)
+    expect(await pending).toBe('resume-pending')
+    const conflicted = () => agent.askSubmissionFor('runner-A', 'wait-1').value
+    expect(conflicted()).toMatchObject({ status: 'error', errorCode: 'RUNNER_RESUME_PENDING' })
+    // 另一端 control 受理在途：快照含该 wait 的条目且未观察到拒绝 → 冲突成立，维持禁用
+    const theirRow = (view_revision: number) => runnerView({ status: 'waiting', view_revision, snapshot: {
+      waiting: { kind: 'clarification', wait_id: 'wait-1', target_execution_id: 'exec-1', question: '需要澄清', form },
+      clarificationQuestions: questions,
+      supplementalInputs: [{ control_id: 'control-other', client_request_id: 'other-key', message_id: 'control-other:user',
+        text: '另一端的回答', wait_id: 'wait-1', accepted_at: '2026-10-14T10:01:00Z' }] } })
+    request('/runners/runner-A').respond({ success: true, runner: theirRow(2) })
+    await flush()
+    request('/runners/runner-A').respond({ success: true, runner: theirRow(2) })
+    await flush()
+    expect(conflicted()?.conflictCleared).toBeUndefined()
+    // 观察到该 control 被拒（受理后拒绝，快照条目仍残留）→ 原 wait 恢复有效
+    request('/runners/runner-A/controls/control-other').respond({ success: true, control: {
+      control_id: 'control-other', runner_id: 'runner-A', action: 'reply', client_request_id: 'other-key',
+      status: 'rejected', error_code: 'CONTROL_WAIT_STALE' } })
+    await flush()
+    // 下一次快照刷新按当前事实重算：wait 仍在 waiting 且无在途受理 → 冲突解除
+    await vi.advanceTimersByTimeAsync(1000)
+    request('/runners/runner-A').respond({ success: true, runner: theirRow(3) })
+    await flush()
+    expect(conflicted()).toMatchObject({ errorCode: 'RUNNER_RESUME_PENDING', conflictCleared: true })
+    // 原 wait 恢复可重提：新键新 POST，不再被冲突码挡住
+    const second = agent.submitAskAnswers(askInput)
+    await flush()
+    const retry = request('/runners/runner-A/controls', 'POST')
+    expect(JSON.parse(retry.body!).client_request_id).not.toBe('other-key')
+    retry.respond({ success: true, created: true, control: { control_id: 'ask-control-2', runner_id: 'runner-A',
+      action: 'reply', client_request_id: JSON.parse(retry.body!).client_request_id, status: 'accepted' },
+      runner: theirRow(4) }, 202)
+    expect(await second).toBe('accepted')
   })
 
   it('a submitting card blocks duplicate submissions until the in-flight control settles', async () => {

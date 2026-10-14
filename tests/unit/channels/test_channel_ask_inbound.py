@@ -92,8 +92,8 @@ class FakeRunnerClient:
     _active = []
 
 
-def _make_agent(client):
-    return ChannelRunnerAgent(source="wecom", session_id="s-1", channel_user_id="u-1",
+def _make_agent(client, source="wecom"):
+    return ChannelRunnerAgent(source=source, session_id="s-1", channel_user_id="u-1",
                               channel_chat_id=None, client=client)
 
 
@@ -156,6 +156,37 @@ async def test_numbered_reply_submits_mapped_answers(facts):
     assert body["answers"] == [
         {"question_id": "q1", "selected_keys": ["q1o1", "q1o3"], "text": None},
     ]
+
+
+async def test_numbered_reply_keeps_attachments(facts):
+    # 评审修正：编号作答携带的附件不静默丢失（沿用自然语言路径的附件 refs）
+    client = FakeRunnerClient().with_waiting(_waiting_row())
+    await _make_agent(client).process_message_sync(
+        user_input="Q1：1", session_id="s-1",
+        attachments=[{"file_id": "f-1", "name": "发票.jpg", "type": "image",
+                      "mime_type": "image/jpeg", "size": 123, "content": "base64xx"}])
+
+    body = next(call[2] for call in client.calls
+                if call[0] == "POST" and "/controls" in call[1])
+    assert body["attachments"] == [{"file_id": "f-1", "name": "发票.jpg", "type": "image",
+                                    "mime_type": "image/jpeg", "size": 123}]
+    assert body["answers"] == [
+        {"question_id": "q1", "selected_keys": ["q1o1"], "text": None},
+    ]
+
+
+async def test_skip_reply_keeps_attachments(facts):
+    client = FakeRunnerClient().with_waiting(_waiting_row())
+    await _make_agent(client).process_message_sync(
+        user_input="跳过", session_id="s-1",
+        attachments=[{"file_id": "f-2", "name": "说明.pdf", "type": "file",
+                      "mime_type": "application/pdf", "size": 456}])
+
+    body = next(call[2] for call in client.calls
+                if call[0] == "POST" and "/controls" in call[1])
+    assert body["skip"] is True
+    assert body["attachments"] == [{"file_id": "f-2", "name": "说明.pdf", "type": "file",
+                                    "mime_type": "application/pdf", "size": 456}]
 
 
 async def test_protocol_error_corrects_once_without_submitting(facts):
@@ -239,7 +270,29 @@ async def test_resend_sends_only_missing_segments(facts):
     assert payload["resend"] is True and payload["wait_id"] == "wait_1"
     assert [item["index"] for item in payload["segments"]] == [1, 2]
     assert "seg-0" not in str(response) and "seg-1" in str(response)
-    assert facts["resends"] == 1
+    # 收敛：重投次数由 session 实际发送处记录（record_resend），此处不双记
+    assert facts["resends"] == 0
+
+
+async def test_resend_single_granularity_resends_whole_message(facts):
+    # 单条粒度（kf/RPA）：sent=否 → 整条重发；sent=是 → 提示已发送
+    facts["facts"] = {"message": "整条表单文本", "sent": False,
+                      "last_error": "reply budget exhausted", "retries": 0, "submitted": None}
+    client = FakeRunnerClient().with_waiting(_waiting_row())
+    response = await _make_agent(client).process_message_sync(
+        user_input="重发", session_id="s-1")
+
+    assert isinstance(response, ChannelAskResponse)
+    payload = response.ask_segments
+    assert payload["resend"] is True and payload["single"] is True
+    assert payload["segments"] == [{"index": 0, "text": "整条表单文本"}]
+    assert facts["resends"] == 0  # session 发送处记录
+
+    facts["facts"] = {"message": "整条表单文本", "sent": True,
+                      "last_error": None, "retries": 0, "submitted": None}
+    response = await _make_agent(client).process_message_sync(
+        user_input="重发", session_id="s-1")
+    assert "此前均已发送" in str(response)
 
 
 async def test_resend_paused_while_control_accepted_not_applied(facts):
@@ -303,6 +356,59 @@ async def test_new_question_during_poll_renders_segments(facts):
     assert payload["form"]["form_id"] == "frm_1"
     assert payload["segments"] and all(item["text"] for item in payload["segments"])
     assert "Q1【归档范围】" in str(response)
+
+
+async def test_consecutive_waits_clear_previous_facts_without_running_state(facts):
+    # 评审修正：轮询从 wait1（答案已受理、仍 waiting）直接看到 wait2（新问题），
+    # 未经可见 running 状态 → 旧表单发送记录（segments/submitted）必须先清理
+    facts["facts"] = {"segments": ["seg-0"], "sent": [0], "last_error": None,
+                      "retries": 0, "submitted": {"control_id": "c-1"}}
+    client = FakeRunnerClient().with_waiting(_waiting_row())
+    client.control_result = {
+        "runner": {"runner_id": "r-1", "status": "waiting",
+                   "snapshot": {"waiting": _waiting_row()["snapshot"]["waiting"]}},
+        "control": {"control_id": "c-1", "status": "accepted"},
+    }
+    new_wait = {
+        "kind": "clarification", "question": "第二轮", "wait_id": "wait_2",
+        "target_execution_id": "exec_2", "form": _form(),
+    }
+    client.runner_pages = [
+        {"runner": {"runner_id": "r-1", "status": "waiting",
+                    "snapshot": {"waiting": new_wait}}},
+    ]
+    response = await _make_agent(client).process_message_sync(
+        user_input="Q1：1", session_id="s-1")
+
+    # 旧 wait 的发送记录已清理，随后登记新表单（新问题正常渲染出站）
+    assert facts["cleared_facts"] == ["wait_1"]
+    assert facts["submissions"] == [("s-1", "wait_1", "c-1")]
+    assert isinstance(response, ChannelAskResponse)
+    assert response.ask_segments["wait_id"] == "wait_2"
+
+
+async def test_kf_wait_renders_single_merged_message(facts):
+    # 按条数计费渠道（kf）：一表单合并为一条消息出站（single 载荷），不按题拆段
+    client = FakeRunnerClient().with_waiting(_waiting_row())
+    new_wait = {
+        "kind": "clarification", "question": "第二轮", "wait_id": "wait_2",
+        "target_execution_id": "exec_2", "form": _form(),
+    }
+    client.runner_pages = [
+        {"runner": {"runner_id": "r-1", "status": "waiting",
+                    "snapshot": {"waiting": new_wait}}},
+    ]
+    response = await _make_agent(client, source="wecom_kf").process_message_sync(
+        user_input="好的", session_id="s-1")
+
+    assert isinstance(response, ChannelAskResponse)
+    payload = response.ask_segments
+    assert payload["single"] is True and payload["resend"] is False
+    assert payload["wait_id"] == "wait_2"
+    assert [item["index"] for item in payload["segments"]] == [0]
+    text = payload["segments"][0]["text"]
+    assert "Q1【归档范围】" in text and "回复编号或文字作答" in text
+    assert str(response) == text
 
 
 async def test_wait_without_form_falls_back_to_question_text(facts):

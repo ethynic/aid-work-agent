@@ -74,6 +74,9 @@ export interface AskSubmissionState {
   errorMessage?: string
   /** 422 逐题错误明细（question_id='form' 为表单级，设计 §5.7） */
   errors?: AskFormErrorItem[]
+  /** 双端冲突（RUNNER_RESUME_PENDING）已被快照事实解除（评审 P2）：wait 仍在
+   *  waiting 且无已受理在途 control，卡片恢复可修正重提；不覆盖原 errorCode 事实。 */
+  conflictCleared?: boolean
 }
 
 const askSubmissions = shallowReactive(new Map<string, AskSubmissionState>())
@@ -253,15 +256,27 @@ export function useAgent() {
       state.submitFailures = 0
       clearTimeout(state.submitTimer)
     }
-    if (state.pendingControl?.runnerId === row.runner_id && row.snapshot.supplementalInputs?.some(
-      item => item.client_request_id === state.pendingControl?.body.client_request_id)) {
-      state.pendingControl = undefined
-      state.submitFailures = 0
-      clearTimeout(state.submitTimer)
+    if (state.pendingControl?.runnerId === row.runner_id) {
+      // 快照确认受理（POST 已落库但响应丢失的场景）：supplementalInputs 出现本端键。
+      // 除停掉重试外，还必须把 control_id 绑回提交上下文——否则该 control 随后被拒时
+      // observeControl 找不到关联条目，卡片会永远停在 submitting 无法修正重提（评审 P2）。
+      const confirmed = row.snapshot.supplementalInputs?.find(
+        item => item.client_request_id === state.pendingControl?.body.client_request_id)
+      if (confirmed) {
+        state.pendingControl = undefined
+        state.submitFailures = 0
+        clearTimeout(state.submitTimer)
+        for (const [key, item] of Array.from(askSubmissions.entries())) {
+          if (item.status === 'submitting' && item.clientRequestId === confirmed.client_request_id) {
+            askSubmissions.set(key, { ...item, status: 'accepted', controlId: confirmed.control_id })
+          }
+        }
+      }
     }
     if (!state.controlIssue && row.status !== 'failed' && row.session.session_id === sessionId.value && error.value === state.runnerIssue) error.value = null
     if (!state.controlIssue) state.runnerIssue = undefined
     state.runnerViews.set(row.runner_id, row)
+    reconcileAskConflicts(state, row)
     state.messages.value = mergeRunnerMessages(state.messages.value, Array.from(state.runnerViews.values()))
     const active = Array.from(state.runnerViews.values()).filter(item => !runnerTerminal(item.status))
     state.isProcessing.value = state.submitSelecting || !!state.pendingRunner || !!state.pendingControl
@@ -281,6 +296,25 @@ export function useAgent() {
     }
     if (row.status === 'failed') runnerError(row.session.session_id,
       new Error(row.result?.error_code || 'RUNNER_EXECUTION_FAILED'), notify && previous?.status !== 'failed')
+  }
+
+  /** 快照事实重算双端冲突（评审 P2：RUNNER_RESUME_PENDING 不再永久缓存禁用）。
+   *  受理在途以事实判定：该 wait 的 supplementalInputs 条目在 control 被拒后仍残留
+   *  （服务端只改 control 行），须结合 controlViews 的观察结果排除已拒 control；
+   *  观察未到达前按在途保守处理（维持禁用）。wait 已消费时卡片随投影消失，
+   *  「已应用」走 answered 卡片与 control 事实（§7.1），此处只解除仍有效的冲突。 */
+  function reconcileAskConflicts(state: SessionStreamState, row: RunnerView) {
+    if (runnerTerminal(row.status)) return
+    const live = clarificationLeaf(row.snapshot.waiting)
+    for (const [key, item] of Array.from(askSubmissions.entries())) {
+      if (item.status !== 'error' || item.errorCode !== 'RUNNER_RESUME_PENDING' || item.conflictCleared) continue
+      if (!key.startsWith(row.runner_id + ':') || live?.wait_id !== key.slice(row.runner_id.length + 1)) continue
+      const waitId = key.slice(row.runner_id.length + 1)
+      const pending = (row.snapshot.supplementalInputs || []).some(input => input.wait_id === waitId
+        && state.controlViews.get(input.control_id)?.status !== 'rejected')
+      if (pending) continue
+      askSubmissions.set(key, { ...item, conflictCleared: true })
+    }
   }
 
   function observeRunner(state: SessionStreamState, row: RunnerView, headers: Record<string, string>, restoring = false) {
@@ -611,6 +645,13 @@ export function useAgent() {
       }
       return undefined
     })
+  }
+
+  /** 已查询到的 control 观察事实（复用 controlViews，不新增轮询）：本端无提交上下文
+   *  （如刷新后 askSubmissions 为空）时，历史只读卡片按它区分已应用/被拒/仅提交（§7.1）。 */
+  function askControlView(controlId: string) {
+    return computed<RunnerControlView | undefined>(() =>
+      getStreamState(sessionId.value).controlViews.get(controlId))
   }
 
 
@@ -1308,6 +1349,7 @@ export function useAgent() {
     submitAskAnswers,
     askSubmissionFor,
     askSubmissionForControl,
+    askControlView,
     // "正在输入"提示
     inputHintState,
     isWaitingHuman

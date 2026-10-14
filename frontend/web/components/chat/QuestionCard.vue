@@ -209,16 +209,24 @@ interface Props {
 }
 const props = withDefaults(defineProps<Props>(), { authHeaders: () => ({}) })
 
-const { submitAskAnswers, askSubmissionFor, askSubmissionForControl } = useAgent()
+const { submitAskAnswers, askSubmissionFor, askSubmissionForControl, askControlView } = useAgent()
 
 // ---- 历史只读回显（本端无上下文时以快照重建，§5.7：不依赖本地内存）----
 const answeredSubmission = computed(() =>
   props.answered ? askSubmissionForControl(props.answered.controlId).value : undefined)
+const answeredControl = computed(() =>
+  props.answered ? askControlView(props.answered.controlId).value : undefined)
 const answeredStatusLabel = computed(() => {
   if (!props.answered) return ''
+  // 本端提交上下文优先（§7.1）；刷新后无上下文时用已查询到的 control 状态
+  // （consumed=已应用 / rejected=被拒），不把「任务已结束」推定成已应用（评审 P2）。
   if (answeredSubmission.value?.status === 'error') return '已提交（未应用）'
   if (answeredSubmission.value?.applied) return '已应用'
-  return props.answered.terminal ? '已应用' : '已提交'
+  const status = answeredControl.value?.status
+  if (status === 'consumed') return '已应用'
+  if (status === 'rejected') return '已提交（未应用）'
+  if (status) return '已提交'
+  return props.answered.terminal ? '已提交（任务已结束）' : '已提交'
 })
 const answeredTime = computed(() => {
   const value = props.answered?.acceptedAt
@@ -248,7 +256,9 @@ const phase = computed<Phase>(() => {
   if (state.status === 'submitting') return 'submitting'
   if (state.status === 'accepted') return 'accepted'
   if (state.errorCode === 'CONTROL_EXECUTION_CLOSED') return 'closed'
-  if (state.errorCode === 'RUNNER_RESUME_PENDING') return 'resume-pending'
+  // 双端冲突以快照事实重算（评审 P2）：快照确认冲突已解除（wait 仍有效且无在途
+  // 受理 control）→ 按过期态恢复可编辑，不再永久禁用。
+  if (state.errorCode === 'RUNNER_RESUME_PENDING') return state.conflictCleared ? 'stale' : 'resume-pending'
   if (state.errorCode && STALE_CODES.includes(state.errorCode)) return 'stale'
   // 422 表单校验失败与受理后被拒 control：可修正重试
   return 'validation'
@@ -274,7 +284,11 @@ const banner = computed(() => {
     return props.card?.terminal ? '任务已结束，问题已关闭，以下内容仅作回显。' : '任务已关闭，无法继续作答。'
   }
   if (phase.value === 'resume-pending') return '已有提交正在等待应用，请稍候；如需修改请等待本轮处理完成后再试。'
-  if (phase.value === 'stale') return `该问题状态已更新（${state?.errorCode || '已过期'}），已刷新最新状态；若问题仍有效可直接重试。`
+  if (phase.value === 'stale') {
+    return state?.conflictCleared
+      ? '另一端提交未生效，该问题已恢复有效，可重新作答。'
+      : `该问题状态已更新（${state?.errorCode || '已过期'}），已刷新最新状态；若问题仍有效可直接重试。`
+  }
   if (!state || state.status !== 'error') return ''
   // 表单级错误（question_id='form'，如 FORM_SKIP_NOT_ALLOWED）作卡片级提示
   const formLevel = (state.errors || []).find(item => item.question_id.toLowerCase() === 'form')
