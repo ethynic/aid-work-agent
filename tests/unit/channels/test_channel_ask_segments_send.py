@@ -320,10 +320,18 @@ async def test_kf_zero_budget_registers_facts_and_resend_after_recovery(monkeypa
     assert calls["resend"] == 1 and calls["single_sent"] == [True]
 
 
-async def test_kf_over_hard_limit_falls_back_to_truncation(monkeypatch):
-    # 全部精简后仍超单条硬限：走 kf 现有长文本兜底（截断单条 + Web 端查看提示）
+async def test_kf_over_hard_limit_sends_full_image_not_truncation(monkeypatch):
+    # 评审修正：合并精简后仍超单条硬限 → 复用 kf 既有完整展示（长图，题号/
+    # 选项完整到达），不截断正文、不提示 Web 端；成功记 sent 并扣预算。
     calls = _facts_stub(monkeypatch)
     adapter = _kf_adapter()
+    image_calls = []
+
+    async def _full_image(markdown_text, user_id):
+        image_calls.append(markdown_text)
+        return True
+
+    adapter._send_full_text_as_image = _full_image
     budget = WeComKfReplyBudget(total=5)
 
     send = _manager().make_send_response(adapter=adapter, message_id="m1",
@@ -334,11 +342,53 @@ async def test_kf_over_hard_limit_falls_back_to_truncation(monkeypatch):
         ["占位"], form=form, limit=2048, single=True)), [])
 
     assert ok is True
-    sent = _kf_sent_texts(adapter)
-    assert len(sent) == 1
-    assert len(sent[0].encode("utf-8")) <= 2048
-    assert sent[0].endswith("（内容较长，请在 Web 端查看）")
+    assert len(image_calls) == 1
+    # 完整内容交给长图（不截断、无 Web 端提示）；不走文本截断直发。
+    assert len(image_calls[0].encode("utf-8")) > 2048
+    assert "（内容较长，请在 Web 端查看）" not in image_calls[0]
+    adapter.api_client.send_msg.assert_not_awaited()
+    assert budget.remaining == 4
     assert calls["single_sent"] == [True]
+
+
+async def test_kf_over_hard_limit_image_failure_records_failure(monkeypatch):
+    # 长图渲染/发送失败：如实记失败事实（可「重发」重试），不扣预算、不记成功。
+    calls = _facts_stub(monkeypatch)
+    adapter = _kf_adapter()
+
+    async def _fail_image(markdown_text, user_id):
+        return False
+
+    adapter._send_full_text_as_image = _fail_image
+    budget = WeComKfReplyBudget(total=5)
+    send = _manager().make_send_response(adapter=adapter, message_id="m1",
+                                         reply_to="wx-1", reply_budget=budget)
+    form = _form(option_count=1)
+    form["questions"][0]["prompt"] = "超长题干" + "内容继续" * 400
+    ok = await send(ChannelAskResponse("x", ask_segments=_payload(
+        ["占位"], form=form, limit=2048, single=True)), [])
+
+    assert ok is False
+    assert budget.remaining == 5
+    assert calls["single_sent"] == []
+    assert calls["single_failed"] == ["long image render/send failed"]
+
+
+async def test_kf_over_hard_limit_without_image_fallback_records_failure(monkeypatch):
+    # 无长图能力：不发送、不截断冒充完整，事实记失败允许「重发」重试。
+    calls = _facts_stub(monkeypatch)
+    adapter = _kf_adapter()  # 未提供 _send_full_text_as_image
+    budget = WeComKfReplyBudget(total=5)
+    send = _manager().make_send_response(adapter=adapter, message_id="m1",
+                                         reply_to="wx-1", reply_budget=budget)
+    form = _form(option_count=1)
+    form["questions"][0]["prompt"] = "超长题干" + "内容继续" * 400
+    ok = await send(ChannelAskResponse("x", ask_segments=_payload(
+        ["占位"], form=form, limit=2048, single=True)), [])
+
+    assert ok is False
+    adapter.api_client.send_msg.assert_not_awaited()
+    assert calls["single_failed"] == ["over channel limit and no full-content fallback"]
 
 
 # ==================== ask_delivery 发送事实（fake manager 承载 DB） ====================

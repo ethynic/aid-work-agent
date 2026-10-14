@@ -130,7 +130,9 @@ function getStreamState(sid: string): SessionStreamState {
       cancelledByUser: false,
       runnerClient: new RunnerClient(),
       runnerViews: new Map(),
-      controlViews: new Map(),
+      // shallowReactive：control 回执（consumed/rejected）到达时 set() 必须触发
+      // askControlView 的 computed 重算，历史卡片才能随事实更新（评审 P2）。
+      controlViews: shallowReactive(new Map<string, RunnerControlView>()),
       liveControlKeys: new Set(),
       runnerGeneration: 0,
       submitFailures: 0,

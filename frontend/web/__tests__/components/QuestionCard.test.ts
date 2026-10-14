@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { computed, reactive } from 'vue'
+import { computed, reactive, shallowReactive } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import QuestionCard from '@/components/chat/QuestionCard.vue'
 import type { AskForm } from '@/types'
@@ -49,7 +49,8 @@ function mountCard(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   holder.map = reactive(new Map())
-  holder.controls = reactive(new Map())
+  // 与生产一致：controlViews 为 shallowReactive（回执 set() 触发 computed 重算）
+  holder.controls = shallowReactive(new Map())
   holder.submit = vi.fn().mockResolvedValue('accepted')
 })
 
@@ -245,16 +246,20 @@ describe('QuestionCard read-only answered echo (设计 §7.1 历史投影)', () 
     expect(wrapper.find('[data-test="submit-btn"]').exists()).toBe(false)
   })
 
-  it('labels terminal cards from the queried control fact: consumed=已应用, rejected=未应用', async () => {
+  it('labels terminal cards from the queried control fact, updating in place when the receipt arrives', async () => {
+    // 评审 P2：同一挂载实例下 control 回执到达必须即时更新（生产 controlViews
+    // 为 shallowReactive；不得用"先写状态再重挂载"掩盖非响应式实现）。
+    const wrapper = mount(QuestionCard, { props: { answered } })
+    expect(wrapper.find('[data-test="answered-status"]').text()).toBe('已提交（任务已结束）')
     holder.controls.set('control-1', { status: 'consumed' })
-    const applied = mount(QuestionCard, { props: { answered } })
-    expect(applied.find('[data-test="answered-status"]').text()).toBe('已应用')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-test="answered-status"]').text()).toBe('已应用')
     holder.controls.set('control-1', { status: 'rejected', error_code: 'CONTROL_WAIT_STALE' })
-    const rejected = mount(QuestionCard, { props: { answered } })
-    expect(rejected.find('[data-test="answered-status"]').text()).toBe('已提交（未应用）')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-test="answered-status"]').text()).toBe('已提交（未应用）')
     holder.controls.set('control-1', { status: 'accepted' })
-    const submitted = mount(QuestionCard, { props: { answered: { ...answered, terminal: false } } })
-    expect(submitted.find('[data-test="answered-status"]').text()).toBe('已提交')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-test="answered-status"]').text()).toBe('已提交')
   })
 
   it('distinguishes submitted vs applied via the observed control fact', async () => {

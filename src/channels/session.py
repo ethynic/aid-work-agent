@@ -1734,9 +1734,10 @@ class ChannelSessionManager:
               也登记，预算恢复后可整条重发）；kf 预算核算 N=1（提问轮次不为
               final 预留），remaining=0 不发送并记失败原因。
             - 重发：整条重发（不再重排），重投次数记一次。
-            - 仍超渠道单条硬限：kf 走其现有长文本兜底（截断单条 + Web 端查看
-              提示，即渲染关闭时正文的既有降级）；RPA 沿用 send_message 既有
-              超 2000 字自动分段 actions，不在此预截断。
+            - 仍超渠道单条硬限：kf 复用其既有完整展示方式（整段渲染长图，
+              题号/选项完整到达；失败如实记失败事实允许重发，不截断冒充
+              完整、不提示 Web 端）；RPA 沿用 send_message 既有超 2000 字
+              自动分段 actions，不在此预截断。
             """
             from src.channels import ask_delivery, ask_render
 
@@ -1762,11 +1763,40 @@ class ChannelSessionManager:
                     ask_delivery.record_single_failure(session_id, wait_id, "reply budget exhausted")
                 return False
 
-            if limit and len(text.encode("utf-8")) > int(limit):
-                truncate = getattr(adapter, "_truncate_to_single_message", None)
-                if callable(truncate):
-                    # kf 现有长文本兜底：截断单条并附「内容较长，请在 Web 端查看」
-                    text = truncate(text)
+            over_limit = bool(limit) and len(text.encode("utf-8")) > int(limit)
+            kf_channel = hasattr(adapter, "send_ask_segment")
+            if over_limit and kf_channel:
+                # 评审修正：合并精简后仍超 kf 单条硬限时，复用本渠道既有的完整
+                # 展示方式（整段渲染长图，题号/选项完整到达），不截断正文冒充
+                # 完整发送、不提示不存在的 Web 端；渲染/发送失败如实记失败事实，
+                # 用户可「重发」重试（重发走同一路径重新渲染，存的是未截断全文）。
+                # 长图成功由 _send_full_text_as_image 的调用方扣减预算（此处）。
+                render_and_send = getattr(adapter, "_send_full_text_as_image", None)
+                if callable(render_and_send):
+                    try:
+                        ok = bool(await render_and_send(text, reply_to))
+                    except Exception as e:  # noqa: BLE001 - 长图链路异常收敛为失败
+                        logger.error(f"{log_tag} 提问长图渲染/发送异常: {e}")
+                        ok = False
+                    if ok and reply_budget is not None:
+                        reply_budget.consume(1)
+                    if wait_id and session_id:
+                        if ok:
+                            ask_delivery.record_single_sent(session_id, wait_id)
+                        else:
+                            ask_delivery.record_single_failure(
+                                session_id, wait_id, "long image render/send failed")
+                    logger.info(
+                        f"{log_tag} 提问长图发送完成: wait_id={wait_id or '-'}, sent={ok}")
+                    return ok
+                # 无长图能力的形态：不截断冒充完整，如实记失败允许「重发」重试。
+                if wait_id and session_id:
+                    ask_delivery.record_single_failure(
+                        session_id, wait_id, "over channel limit and no full-content fallback")
+                logger.error(f"{log_tag} 提问超渠道单条上限且无完整展示能力，不发送")
+                return False
+            # RPA 等无条数配额的渠道超限时，沿用其 adapter 既有的自动分段兜底
+            # （单条长度限制按实际渠道处理，内容不丢）。
             try:
                 ok = await _dispatch_ask_segment(text, 0)
             except Exception as e:  # noqa: BLE001 - 单条异常收敛为失败
