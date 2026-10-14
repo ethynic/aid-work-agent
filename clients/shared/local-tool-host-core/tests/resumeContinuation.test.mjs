@@ -10,7 +10,9 @@ function stub(tools) {
   let lists = 0, calls = 0
   return { client: {
     listTools: async () => { lists++; return { tools } },
-    callTool: async () => { calls++; return { structuredContent: { success: true } } },
+    callTool: async () => { calls++; return { structuredContent: {
+      success: true, code: 'OK', effect: 'none', message: 'done', data: {}, retryable: false, run_id: 'test-run',
+    } } },
     close: async () => {},
   }, counts: () => ({ lists, calls }) }
 }

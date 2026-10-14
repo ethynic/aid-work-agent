@@ -58,9 +58,13 @@ export function historyMessages(records: ChatMessageRecord[]): ChatMessage[] {
 
 export function runnerMessages(row: RunnerView): ChatMessage[] {
   const accepted = time(row.accepted_at, Date.now())
-  const finished = time(row.finished_at || row.updated_at, accepted)
   const snapshot = row.snapshot
   const display = { ...(row.result?.assistant_metadata || {}), ...snapshot }
+  // Control acceptance/rejection updates the runner, not the old assistant reply.
+  // Legacy snapshots without event times retain the accepted time while parked.
+  const parked = ['waiting', 'paused', 'interrupted'].includes(row.status)
+  const lastProgress = Math.max(accepted, ...(display.progressMessages || []).map(item => time(item.timestamp, accepted)))
+  const finished = time(row.finished_at, parked ? lastProgress : time(row.updated_at, accepted))
   const images: ImageRef[] = (row.result?.images || snapshot.images || []).map(image => ({ ...image,
     placement: image.placement || snapshot.imagesPlacement || 'after_text' }))
   const common = { runnerId: row.runner_id, clientRequestId: row.client_request_id, queueOrder: row.queue_order }
@@ -74,6 +78,13 @@ export function runnerMessages(row: RunnerView): ChatMessage[] {
   if (!['completed', 'failed', 'cancelled'].includes(row.status)
       && wait?.kind === 'verification' && typeof wait.question === 'string') {
     details.waitingNotice = wait.question
+  }
+  if (!details.waitingNotice && wait?.kind === 'verification'
+      && !['completed', 'failed', 'cancelled'].includes(row.status)) {
+    details.waitingNotice = '任务已暂停，当前操作结果需要核对。请先检查页面和实际结果，再决定如何继续；系统不会自动重复操作。'
+  }
+  if (!details.waitingNotice && row.status === 'interrupted') {
+    details.waitingNotice = '任务已中断，尚未完成。已保留执行记录；下方进度仅表示已执行的步骤，不能作为最终结果。可尝试继续，若仍无法恢复请联系管理员。'
   }
   if (['completed', 'failed', 'cancelled'].includes(row.status) && !details.progressMessages?.some(item => ['complete', 'error'].includes(item.type))) {
     details.progressMessages?.push({ type: row.status === 'completed' ? 'complete' : 'error', timestamp: finished,

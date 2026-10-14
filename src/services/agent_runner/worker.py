@@ -539,6 +539,7 @@ class RunnerWorker:
                 # _model 失败路径不发 llm_call 事件，从异常属性补记失败 span；
                 # 落库靠 finally 的 _persist_trace。on_llm_failure 内部吞异常。
                 try:
+                    collector.on_execution_error(error)
                     fact = getattr(error,'model_call_fact',None)
                     if fact:
                         collector.on_llm_failure(fact)

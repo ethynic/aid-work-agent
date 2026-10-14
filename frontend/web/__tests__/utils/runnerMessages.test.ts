@@ -3,6 +3,31 @@ import { historyMessages, mergeRunnerMessages, runnerMessages } from '@/utils/ru
 import { runnerView } from '../mocks/runnerView'
 
 describe('Runner display merges durable facts with existing messages', () => {
+  it('interrupted resume screening shows an explanation and preserves the last execution time after rejected resume', () => {
+    const row = runnerView({ status: 'interrupted', updated_at: '2026-10-14T06:21:18Z',
+      snapshot: { output: '', progressMessages: [{ type: 'progress', data: '本地读取已完成', timestamp: Date.parse('2026-10-14T06:21:17Z') }] } })
+    const before = runnerMessages(row).slice(-1)[0]!
+    const after = runnerMessages({ ...row, updated_at: '2026-10-14T06:26:17Z',
+      snapshot: { ...row.snapshot, supplementalInputs: [{ control_id: 'ctrl', client_request_id: 'retry',
+        message_id: 'retry:user', text: '继续筛选', accepted_at: '2026-10-14T06:26:17Z' }] } }).slice(-1)[0]!
+    expect(before.waitingNotice).toContain('任务已中断')
+    expect(before.waitingNotice).toContain('不能作为最终结果')
+    expect(after.timestamp).toBe(before.timestamp)
+    expect(after.content).toBe('')
+    expect(after.progressMessages?.some(item => item.type === 'complete')).toBe(false)
+  })
+
+  it('old verification waits with no question still explain that uncertain effects are not replayed', () => {
+    const row = runnerView({ status: 'waiting', snapshot: { waiting: { kind: 'verification' }, output: '' } })
+    expect(runnerMessages(row).slice(-1)[0]?.waitingNotice).toContain('不会自动重复操作')
+    expect(runnerMessages({ ...row, updated_at: '2026-10-14T06:26:17Z' }).slice(-1)[0]?.timestamp)
+      .toBe(Date.parse(row.accepted_at))
+    expect(runnerMessages({ ...row, snapshot: { waiting: { kind: 'verification', question: '核对原页面' } } }).slice(-1)[0]?.waitingNotice)
+      .toBe('核对原页面')
+    expect(runnerMessages({ ...row, status: 'completed', finished_at: '2026-10-14T06:27:17Z' }).slice(-1)[0]?.waitingNotice).toBeUndefined()
+    expect(runnerMessages({ ...row, status: 'running', snapshot: { output: '' } }).slice(-1)[0]?.waitingNotice).toBeUndefined()
+  })
+
   it('queue order preserves complete turns even when second accepted time is earlier than first assistant finish', () => {
     const first = runnerView({ status: 'completed', finished_at: '2026-10-01T12:00:10Z', result: { status: 'completed', output: 'first result' } })
     const second = runnerView({ runner_id: 'runner-B', client_request_id: 'request-B', queue_order: 2,

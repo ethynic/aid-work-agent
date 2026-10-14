@@ -109,6 +109,9 @@ async def resume_result(proxy, operation, kwargs, *, batch):
         if duplicate:
             failures.append(duplicate)
             continue
+        proxy._push_progress(kwargs.get('_progress_queue'), {'type': 'progress',
+            'invocation_id': original['invocation_id'],
+            'text': f'本地读取已完成，正在云端识别、评分并入库：第 {ordinal + 1}/{len(payloads)} 份；整轮任务尚未完成'})
         outcome = await process_item(operation.owner, tenant_id=context.tenant_id,
             execution_id=context.agent_execution_id, tool_call_id=context.tool_call_id,
             invocation_id=original['invocation_id'], device_id=ref['request']['device_id'],

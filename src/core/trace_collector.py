@@ -24,6 +24,7 @@ class SpanRecord:
     end_time: Optional[float] = None
     result: Optional[str] = None
     success: bool = True
+    status: Optional[str] = None  # Incomplete/parked spans are not successful completions.
     duration_ms: int = 0
     # LLM 调用专用字段（仅 generation span 使用）
     model: Optional[str] = None
@@ -160,6 +161,35 @@ class TraceCollector:
         self.trace.error_message = error
         self.trace.tags.append("error")
 
+    def on_execution_error(self, error: Exception):
+        """Record a stopped execution without exposing raw provider/DB exceptions.
+
+        Runner persistence remains authoritative for failed vs interrupted status.
+        Only known internal codes are copied; all other errors retain their class.
+        """
+        known = {
+            'COVERED_USAGE_OWNER_REQUIRED', 'DOMAIN_USAGE_OWNER_MISMATCH',
+            'DOMAIN_MODEL_PHASE_NOT_STARTED', 'DOMAIN_MODEL_PURPOSE_INVALID',
+            'LOCAL_PHASE_INTENT_CHANGED', 'LOCAL_RESUME_ITEM_OWNER_MISMATCH',
+            'LOCAL_MODEL_RECEIPT_VERIFICATION_REQUIRED', 'LOCAL_MODEL_RECEIPT_OWNER_MISMATCH',
+            'LOCAL_INVOCATION_OWNER_VERIFICATION_REQUIRED',
+            'LOCAL_RESUME_CONTINUATION_PROOF_INVALID',
+        }
+        raw_code = error.args[0] if error.args else None
+        code = raw_code if isinstance(raw_code, str) and raw_code in known else 'EXECUTION_INTERRUPTED'
+        self.trace.error_message = code
+        self.trace.metadata['execution_error_kind'] = type(error).__name__
+        if 'error' not in self.trace.tags:
+            self.trace.tags.append('error')
+        now = time.time()
+        for span in self._active_spans.values():
+            span.end_time = now
+            span.duration_ms = max(0, int((now - span.start_time) * 1000))
+            span.success = False
+            span.status = 'failed'
+            span.result = json.dumps({'error_code': code, 'execution_stopped': True})
+        self._active_spans.clear()
+
     def on_llm_failure(self, fact: dict):
         """失败的 LLM 调用补记失败 generation span（异常路径不发 llm_call 事件）。
 
@@ -218,6 +248,12 @@ class TraceCollector:
             if span.end_time is None:
                 span.end_time = now
                 span.duration_ms = int((now - span.start_time) * 1000)
+                span.success = False
+                span.status = self.trace.status if self.trace.status in {
+                    'waiting', 'paused', 'interrupted', 'cancelled'} else 'failed'
+                if span.result is None:
+                    span.result = json.dumps({'execution_stopped': True, 'status': span.status})
+        self._active_spans.clear()
 
         # 异步持久化
         try:

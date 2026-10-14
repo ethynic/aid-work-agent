@@ -96,8 +96,15 @@ class LocalRecoveryProof:
         ref = refs.get(phase.key(row['runner_id']))
         if ref is None:
             return False
-        from src.tools.executor import normalize_provided_parameters
-        if (ref.get('request') or {}).get('arguments')!=normalize_provided_parameters(cls,fact.call.arguments):
+        from src.local_tools.proxy_tool import BossResumeNextTool
+        if cls is BossResumeNextTool:
+            from .resume_next_proof import continuation_arguments
+            try:
+                arguments = continuation_arguments(row,state.checkpoint(),fact.call.id,arguments,
+                    lambda parent_id: repository.get_invocation(parent_id,row['tenant_id']))
+            except CheckpointFailure as error:
+                raise RunnerError('LOCAL_RESUME_CONTINUATION_PROOF_INVALID',409) from error
+        if (ref.get('request') or {}).get('arguments')!=arguments:
             raise RunnerError('LOCAL_PHASE_INTENT_CHANGED',409)
         original_device = ref['request']['device_id']
         from src.local_tools.proxy_tool import BossOverlayInspectTool,BossOverlayDismissTool
@@ -111,7 +118,7 @@ class LocalRecoveryProof:
             if (key!=phase.key(row['runner_id']) or ref['ordinal']!=0
                     or request.get('tool_name')!=allowed.get(ref['branch'])
                     or request.get('device_id')!=original_device
-                    or ref['branch'] in {'main','heal.retry'} and request.get('arguments')!=normalize_provided_parameters(cls,fact.call.arguments)
+                    or ref['branch'] in {'main','heal.retry'} and request.get('arguments')!=arguments
                     or ref['branch']=='heal.inspect' and request.get('arguments')!={}):
                 raise RunnerError('LOCAL_INVOCATION_OWNER_VERIFICATION_REQUIRED',409)
             invocation = repository.get_invocation(ref['invocation_id'],row['tenant_id'])

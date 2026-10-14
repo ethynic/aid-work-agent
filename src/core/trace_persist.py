@@ -87,8 +87,10 @@ def update_completion(trace_id, *, status, output, duration_ms):
         from src.db.database import get_logs_connection
         with get_logs_connection() as cursor:
             cursor.execute('''UPDATE obs_traces SET status=%s,output=%s,
-                duration_ms=%s,updated_at=NOW() WHERE trace_id=%s''',
-                (status,output,duration_ms,trace_id))
+                duration_ms=%s,
+                error_message=CASE WHEN %s IN ('completed','cancelled') THEN NULL ELSE error_message END,
+                updated_at=NOW() WHERE trace_id=%s''',
+                (status,output,duration_ms,status,trace_id))
             updated = bool(cursor.rowcount)
             cursor.commit()
             return updated
@@ -242,7 +244,7 @@ def _do_persist(trace):
                     _compute_span_cost(span.model, span.usage or {}),
                     span.start_time, span.end_time,
                     span.duration_ms,
-                    'completed' if span.success else 'failed',
+                    span.status or ('completed' if span.success else 'failed'),
                 ))
 
             if runner_summary:

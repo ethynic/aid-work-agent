@@ -10,6 +10,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { logError, logInfo, logProviderChunk } from './log.js'
+import { decodeProviderResult } from './providerResult.js'
 
 export class ProviderCrashError extends Error {
   constructor(message: string) {
@@ -219,19 +220,9 @@ export class ProviderManager {
         }
         throw err
       }
-      const structured = (result as { structuredContent?: Record<string, unknown> }).structuredContent
-      if (structured && typeof structured === 'object') return structured
-      // 兜底：解析 text content 中的 JSON
-      const content = (result as { content?: Array<{ type: string; text?: string }> }).content
-      const text = content?.find((c) => c.type === 'text')?.text
-      if (text) {
-        try {
-          return JSON.parse(text) as Record<string, unknown>
-        } catch {
-          // fallthrough
-        }
-      }
-      return { success: false, code: 'INTERNAL_ERROR', message: 'Provider 返回无法解析', effect: 'unknown' }
+      const decoded = decodeProviderResult(result)
+      if (decoded.diagnostic) logError(`Provider result rejected ${JSON.stringify(decoded.diagnostic)}`)
+      return decoded.result
     } finally {
       this.busy = false
     }
