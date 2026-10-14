@@ -182,6 +182,8 @@ export async function main(argv) {
     mkdirSync(nodeFolder, { recursive: true })
     cpSync(node.node, path.join(nodeFolder, 'node.exe'))
     cpSync(node.license, path.join(nodeFolder, 'LICENSE'))
+    cpSync(path.join(desktopRoot, 'scripts/runtime-clean-install.ps1'), path.join(resources, 'runtime/runtime-clean-install.ps1'))
+    cpSync(path.join(desktopRoot, 'scripts/runtime-installation-check.mjs'), path.join(resources, 'runtime/runtime-installation-check.mjs'))
     writeFileSync(path.join(resources, 'runtime/trust-roots.json'), trustBytes, { flag: 'wx' })
     mkdirSync(path.join(resources, 'config'), { recursive: true })
     writeFileSync(path.join(resources, 'config/runtime-product.json'), JSON.stringify({ schemaVersion: 1, productKind: 'runtime', profile: options.profile }, null, 2) + '\n')

@@ -1,5 +1,9 @@
 # Agent 桌面客户端 v3 开发计划
 
+2026-10-14共同检查点：独立Runtime按[干净安装计划](plan-runtime-clean-install.md)与共同契约2.1改造安装代际及自动连接。安装角色唯一维护productConfiguration/installer与新installation模块，主控唯一维护Main/H3消费，服务端角色唯一维护Device协议3；完整Desktop现有协议保持兼容。
+
+同日追加安装确认：Runtime主控接管NSIS/PowerShell唯一写入，安装前只读检测旧运行，确定才自动退出并安装，取消保持旧运行；不改完整Desktop/H3/wire。增量验证统一见干净安装计划Phase5。
+
 2026-10-12 r7共同检查点：[恢复计划Phase10](plan-runtime-upgrade-recovery.md#phase10-最终交付与服务端状态复核2026-10-12)已交付自助诊断/管理修复/归档新配对；主控维护Core/Runtime/Main和UI，资源角色仅维护资源helper，独立角色只读验证。H1/Device/binding不变，Runtime-only H3可选端口与私有connection v1、续装控制保持单一写入者；实际包和独立验证通过，未部署服务器。
 
 2026-10-12 r6共同检查点：[恢复计划Phase 8](plan-runtime-upgrade-recovery.md)Runtime主控维护core/组合层、平台角色维护DPAPI；Electron公共壳及H1不增加方法，失败时现有blocked状态可显示固定原因、私有退出仍只释放当前管理进程。完整Desktop默认启动语义不改。

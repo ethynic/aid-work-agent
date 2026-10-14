@@ -1,4 +1,5 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { RuntimePlatformRequest, RuntimePlatformResponse, SelectedPackageSnapshot } from '@aid/local-tool-host-core'
 import { validRecoveryInspection, type RecoveryInspection } from './runtimeConnectionRecovery.js'
@@ -54,6 +55,7 @@ export class RuntimeSupervisor {
     const env: NodeJS.ProcessEnv = {}
     for (const key of ['PATH', 'Path', 'SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'USERNAME', 'SESSIONNAME', 'PROCESSOR_ARCHITECTURE']) if (process.env[key] !== undefined) env[key] = process.env[key]
     env.AIDWORK_RUNTIME_HOME = this.options.home
+    if (this.options.supervisor === 'runtime_app') env.AIDWORK_RUNTIME_CLEAN_GENERATION = '1'
     const child = (this.options.spawnChild ?? spawn)(this.options.nodeExecutable, [this.options.hostEntry, `--supervisor=${this.options.supervisor}`], { env, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] })
     this.child = child
     // Consume diagnostics without retaining package paths, pairing data or arbitrary logs.
@@ -197,6 +199,30 @@ export class RuntimeSupervisor {
       const exit = await Promise.race([this.exited, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('当前实例退出未确认')), 15000) })])
       if (exit !== 0 || !this.childExited) throw new Error('当前实例退出未确认')
     } finally { clearTimeout(timer) }
+  }
+
+  /** Explicit clean replacement only; this exact child was launched by this supervisor.
+   * Historical journals never decide whether a new identity can be installed. */
+  async exitForReplacement(): Promise<void> {
+    this.accepting = false
+    if (!this.child || this.childExited) return
+    const child = this.child
+    if (process.platform === 'win32') {
+      if (!child.pid || !process.env.SystemRoot) throw new Error('无法确认本产品执行进程，请检查系统进程权限')
+      const executable = path.join(process.env.SystemRoot, 'System32', 'taskkill.exe')
+      await new Promise<void>((resolve, reject) => execFile(executable, ['/PID', String(child.pid), '/T', '/F'],
+        { windowsHide: true, timeout: 15_000 }, error => {
+          if (error && !this.childExited) reject(new Error('本产品旧执行进程无法停止，请检查当前用户进程权限'))
+          else resolve()
+        }))
+    } else child.kill('SIGKILL')
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([this.exited, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('本产品旧执行进程退出未确认')), 15_000)
+      })])
+    } finally { clearTimeout(timer) }
+    if (!this.childExited) throw new Error('本产品旧执行进程退出未确认')
   }
 
   async stopAndExit(drainTimeoutMs?: number, beforeStop?: (state: Record<string, unknown>) => Promise<void>): Promise<void> {

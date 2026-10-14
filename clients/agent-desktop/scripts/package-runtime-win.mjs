@@ -28,7 +28,7 @@ rmSync(output, { recursive: true, force: true })
 mkdirSync(output, { recursive: true })
 const buildConfiguration = path.join(output, 'builder-config.json')
 const installerInclude = path.join(output, 'runtime-installer-generated.nsh')
-writeFileSync(installerInclude, `!define RUNTIME_SUPERVISOR_SOURCE "${path.join(path.dirname(product.hostEntry), 'native/RuntimeProcessSupervisor.exe')}"\n!define RUNTIME_LEGACY_UPGRADE_SOURCE "${path.join(desktopRoot, 'scripts/runtime-legacy-upgrade.ps1')}"\n!include "${path.join(desktopRoot, 'scripts/runtime-installer.nsh')}"\n`)
+writeFileSync(installerInclude, `!define RUNTIME_CLEAN_INSTALL_SOURCE "${path.join(desktopRoot, 'scripts/runtime-clean-install.ps1')}"\n!include "${path.join(desktopRoot, 'scripts/runtime-installer.nsh')}"\n`)
 const artifactName = `AID-Work-Runtime-${pkg.version}-win-x64-${profile}${profile === 'acceptance' ? '-unsigned' : ''}.exe`
 writeFileSync(buildConfiguration, JSON.stringify({
   extends: path.join(desktopRoot, 'electron-builder.yml'), appId: product.appId, productName: product.productName,
@@ -42,7 +42,7 @@ writeFileSync(buildConfiguration, JSON.stringify({
 }, null, 2) + '\n')
 const inputs = [...filesUnder(resourcesRoot).map(file => ({ path: `resources/${file.path}`, sha256: file.sha256 })),
   ...filesUnder(path.join(desktopRoot, 'dist')).filter(file => !file.path.startsWith('tests/')).map(file => ({ path: `dist/${file.path}`, sha256: file.sha256 })),
-  ...['package.json', 'package-lock.json', 'electron-builder.yml', 'scripts/prepare-runtime.mjs', 'scripts/runtime-node-resources.json', 'scripts/package-runtime-win.mjs', 'scripts/verify-runtime-package.mjs', 'scripts/runtime-installer.nsh', 'scripts/runtime-legacy-upgrade.ps1'].map(file => ({ path: file, sha256: createHash('sha256').update(readFileSync(file)).digest('hex') })),
+  ...['package.json', 'package-lock.json', 'electron-builder.yml', 'scripts/prepare-runtime.mjs', 'scripts/runtime-node-resources.json', 'scripts/package-runtime-win.mjs', 'scripts/verify-runtime-package.mjs', 'scripts/runtime-installer.nsh', 'scripts/runtime-clean-install.ps1', 'scripts/runtime-installation-check.mjs'].map(file => ({ path: file, sha256: createHash('sha256').update(readFileSync(file)).digest('hex') })),
 ]
 const buildInputSha256 = createHash('sha256').update(JSON.stringify(inputs)).digest('hex')
 const whitelist = loadYaml(readFileSync('electron-builder.yml', 'utf8')).files

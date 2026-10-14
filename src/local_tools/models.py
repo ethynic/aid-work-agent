@@ -8,13 +8,16 @@ from pydantic import BaseModel, Field, ConfigDict
 class PairRequest(BaseModel):
     """Runtime 配对请求：用一次性配对码换设备 token"""
 
-    code: str = Field(..., description="8 位配对码（明文）")
+    code: Optional[str] = Field(None, description="首次注册需配对码；协议3恢复请求可省略")
     name: Optional[str] = Field(None, description="设备名称")
     platform: Optional[str] = Field(None, description="平台，如 windows")
     runtime_version: Optional[str] = Field(None, description="Runtime 版本")
     capabilities: Optional[Dict[str, Any]] = Field(None, description="设备能力（含 provider_id）")
     machine_fingerprint: Optional[str] = Field(None, description="机器指纹（服务端只存哈希）")
-    pairing_protocol: Optional[int] = Field(None, strict=True, ge=1, le=2, description="替换配对需协议2；普通配对兼容省略")
+    pairing_protocol: Optional[int] = Field(None, strict=True, ge=1, le=3, description="协议3自动替换与幂等注册；旧配对兼容省略")
+    registration_id: Optional[str] = None
+    registration_token: Optional[str] = Field(None, repr=False)
+    previous_device_token: Optional[str] = Field(None, repr=False)
 
 
 class ReplacementCompleteRequest(BaseModel):

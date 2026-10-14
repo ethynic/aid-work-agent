@@ -6,6 +6,7 @@
 
 import math
 import json
+import hmac
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -42,6 +43,19 @@ def _lock_pairing_user(cursor, tenant_id: str, user_id: str) -> None:
     if key >= 2 ** 63:
         key -= 2 ** 64
     cursor.execute("SELECT pg_advisory_xact_lock(%s)", (key,))
+
+
+def lock_active_device(cursor, tenant_id: str, device_id: str) -> bool:
+    """Take before invocation/subject locks; serialize new authority with revoke.
+
+    Device replacement/revocation never takes task locks. FOR SHARE blocks the
+    status update through transaction end; a waiter sees the committed status.
+    """
+    cursor.execute(
+        "SELECT id FROM local_tool_devices WHERE id = %s AND tenant_id = %s AND status = 'active' FOR SHARE",
+        (device_id, tenant_id),
+    )
+    return cursor.fetchone() is not None
 
 
 def issue_pairing_ticket(
@@ -132,6 +146,108 @@ def pair_device_from_ticket(
             (ticket["id"], ticket["tenant_id"], ticket["user_id"]),
         )
         conn.commit()
+        return device
+
+
+def register_device_from_ticket(
+    code_hash: Optional[str], token_hash: str, registration_id: str, request_hash: str,
+    previous_token_hash: Optional[str] = None, name: Optional[str] = None,
+    platform: Optional[str] = None, runtime_version: Optional[str] = None,
+    capabilities: Optional[Dict[str, Any]] = None,
+    machine_fingerprint_hash: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Protocol 3: durable request identity, authorized replacement and selection.
+
+    Recovery needs only the client-protected token and immutable intent, never
+    the OTP. Retries cannot select, revoke or revive a device a second time.
+    All locks follow registration -> user -> ticket/device order.
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        _lock_pairing_user(cursor, "registration-v3", registration_id)
+        cursor.execute("SELECT * FROM local_tool_devices WHERE registration_id = %s", (registration_id,))
+        existing = cursor.fetchone()
+        if existing:
+            if not (hmac.compare_digest(existing["token_hash"], token_hash)
+                    and hmac.compare_digest(existing["registration_request_hash"], request_hash)
+                    and (code_hash is None or hmac.compare_digest(existing["registration_code_hash"], code_hash))):
+                raise DeviceReplacementError("REGISTRATION_CONFLICT")
+            _lock_pairing_user(cursor, existing["tenant_id"], existing["user_id"])
+            cursor.execute(
+                """SELECT * FROM local_tool_devices
+                   WHERE registration_id = %s AND tenant_id = %s AND user_id = %s FOR UPDATE""",
+                (registration_id, existing["tenant_id"], existing["user_id"]),
+            )
+            existing = cursor.fetchone()
+            if not existing or existing["status"] != "active":
+                raise DeviceReplacementError("REGISTRATION_REVOKED")
+            conn.commit()
+            return dict(existing)
+        if code_hash is None:
+            raise DeviceReplacementError("PAIRING_CODE_REQUIRED")
+        # Discover ownership without a ticket lock: issuing a code takes the
+        # user lock first, so locking the ticket here would invert that order.
+        cursor.execute("SELECT tenant_id, user_id FROM local_tool_pairing_tickets WHERE code_hash = %s", (code_hash,))
+        owner = cursor.fetchone()
+        if not owner:
+            return None
+        tenant, user = owner["tenant_id"], owner["user_id"]
+        _lock_pairing_user(cursor, tenant, user)
+        cursor.execute(
+            """SELECT id, replacement_device_id FROM local_tool_pairing_tickets
+               WHERE code_hash = %s AND tenant_id = %s AND user_id = %s
+                 AND used_at IS NULL AND expires_at > NOW() FOR UPDATE""", (code_hash, tenant, user),
+        )
+        ticket = cursor.fetchone()
+        if not ticket:
+            return None
+        target = ticket.get("replacement_device_id")
+        if previous_token_hash:
+            # Token itself is an ownership proof. Unknown/malformed or revoked
+            # legacy credentials never block a clean registration.
+            cursor.execute("SELECT id, tenant_id, user_id, status FROM local_tool_devices WHERE token_hash = %s", (previous_token_hash,))
+            previous = cursor.fetchone()
+            if (previous and previous["tenant_id"] == tenant and previous["user_id"] == user
+                    and target is None and previous["status"] == "active"):
+                target = previous["id"]
+            # Changing account on the same computer is a valid clean pair. A
+            # credential from the former account is ignored, never revoked.
+        if target is not None:
+            cursor.execute(
+                """SELECT id, status, replaced_by_device_id FROM local_tool_devices
+                   WHERE id = %s AND tenant_id = %s AND user_id = %s FOR UPDATE""", (target, tenant, user),
+            )
+            old = cursor.fetchone()
+            if not old or old["status"] not in ("active", "revoked"):
+                raise DeviceReplacementError("REPLACEMENT_TARGET_NOT_FOUND")
+            if old.get("replaced_by_device_id") is not None:
+                raise DeviceReplacementError("REPLACEMENT_ALREADY_COMPLETED")
+        cursor.execute(
+            """INSERT INTO local_tool_devices
+               (tenant_id, user_id, name, platform, runtime_version, token_hash,
+                machine_fingerprint_hash, capabilities_json, last_seen_at,
+                replacement_device_id, replacement_completed_at,
+                registration_id, registration_request_hash, registration_code_hash)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s,
+                       CASE WHEN %s IS NOT NULL THEN NOW() END, %s, %s, %s)
+               RETURNING *""",
+            (tenant, user, name, platform, runtime_version, token_hash,
+             machine_fingerprint_hash, Json(capabilities) if capabilities is not None else None,
+             target, str(target) if target is not None else None, registration_id, request_hash, code_hash),
+        )
+        device = dict(cursor.fetchone())
+        if target is not None:
+            cursor.execute(
+                """UPDATE local_tool_devices SET status = 'revoked', selected = FALSE,
+                   replaced_by_device_id = %s, updated_at = NOW()
+                   WHERE id = %s AND tenant_id = %s AND user_id = %s""",
+                (device["id"], target, tenant, user),
+            )
+        cursor.execute("UPDATE local_tool_devices SET selected = FALSE WHERE tenant_id = %s AND user_id = %s", (tenant, user))
+        cursor.execute("UPDATE local_tool_devices SET selected = TRUE, updated_at = NOW() WHERE id = %s AND tenant_id = %s AND user_id = %s", (device["id"], tenant, user))
+        cursor.execute("UPDATE local_tool_pairing_tickets SET used_at = NOW() WHERE id = %s AND tenant_id = %s AND user_id = %s", (ticket["id"], tenant, user))
+        conn.commit()
+        device["selected"] = True
         return device
 
 
@@ -374,6 +490,12 @@ def select_device(tenant_id: str, user_id: str, device_id: str) -> bool:
     with get_db_connection() as conn:
         cursor = conn.cursor()
         _lock_pairing_user(cursor, tenant_id, user_id)
+        cursor.execute(
+            "SELECT id FROM local_tool_devices WHERE id = %s AND tenant_id = %s AND user_id = %s AND status = 'active' FOR UPDATE",
+            (device_id, tenant_id, user_id),
+        )
+        if not cursor.fetchone():
+            return False
         cursor.execute(
             "UPDATE local_tool_devices SET selected = FALSE WHERE tenant_id = %s AND user_id = %s",
             (tenant_id, user_id),
@@ -644,6 +766,8 @@ def claim_next(
         params.append(list(provider_keys))
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        if not lock_active_device(cursor, tenant_id, device_id):
+            return None
         cursor.execute(
             f"""
             SELECT id FROM local_tool_invocations
@@ -725,6 +849,13 @@ def append_event(
     """
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        cursor.execute(
+            "SELECT device_id FROM local_tool_invocations WHERE id = %s AND tenant_id = %s AND claim_token_hash = %s",
+            (invocation_id, tenant_id, claim_token_hash),
+        )
+        owner = cursor.fetchone()
+        if not owner or not lock_active_device(cursor, tenant_id, str(owner["device_id"])):
+            return None
         cursor.execute(
             """
             SELECT state FROM local_tool_invocations

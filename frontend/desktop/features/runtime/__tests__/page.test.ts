@@ -32,6 +32,28 @@ function mountPage(options: { features?: string[]; state?: string; ready?: boole
 function button(wrapper: VueWrapper, text: string) { const found = wrapper.findAll('button').find((element) => element.text() === text); if (!found) throw new Error(`Missing button ${text}`); return found }
 
 describe('Runtime management page', () => {
+  it('automatic connection offers one pair action even when legacy state was blocked', async () => {
+    const { wrapper, port } = mountPage({ state: 'blocked', recovery: true, registration: null })
+    // Re-mount with the trusted new-preload capability; old-preload tests retain their legacy flow.
+    wrapper.unmount()
+    Object.defineProperty(port, 'automaticConnection', { value: true })
+    port.reconfigureConnection = vi.fn(async () => ({ version: 1, status: 'complete', new_device: true,
+      diagnosis: { version: 1, category: 'VERIFIED', summary: '新设备已连接', steps: [], service_verified: true,
+        can_preserve: false, can_reconfigure: true, requires_reboot: false } }))
+    const automatic = mount(RuntimeManagementPage, { props: { port }, attachTo: document.body }); wrappers.push(automatic)
+    await flushPromises()
+    expect(automatic.text()).not.toContain('完成连接配置')
+    expect(automatic.text()).not.toContain('登记重启恢复')
+    await automatic.get('#runtime-server').setValue('https://service.example')
+    await automatic.get('#runtime-device-name').setValue('新设备')
+    await automatic.get('#runtime-pairing-code').setValue('new-pair-code')
+    await automatic.get('.runtime-pair-form').trigger('submit'); await flushPromises()
+    expect(port.reconfigureConnection).toHaveBeenCalledOnce()
+    expect(port.reconfigureConnection).toHaveBeenCalledWith({ mode: 'register_new', confirmed: true,
+      server: 'https://service.example', device_name: '新设备', pairing_code: 'new-pair-code' })
+    expect(automatic.get('#runtime-pairing-code').element).toHaveProperty('value', '')
+    expect(automatic.text()).toContain('新设备已连接')
+  })
   it('uses explicit register_new only when the staged registration capability is present', async () => {
     const { wrapper, port } = mountPage({ state: 'blocked', recovery: true, registration: null }); await flushPromises()
     await button(wrapper, '检查连接并给出处理方式').trigger('click'); await flushPromises()

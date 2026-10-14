@@ -105,7 +105,8 @@ async function main(): Promise<void> {
   })
   process.once('disconnect', () => { connected = false; for (const listener of disconnects) listener() })
   try {
-    host = await openRuntimeHost({ nodeExecutable: process.execPath, supervisor, platform })
+    host = await openRuntimeHost({ nodeExecutable: process.execPath, supervisor, platform,
+      cleanGeneration: supervisor === 'runtime_app' && process.env.AIDWORK_RUNTIME_CLEAN_GENERATION === '1' })
     attachManagementIpc(host, channel)
     channel.send({ kind: 'runtime_lifecycle', instance_id: host.instanceId, idle_exit: true, version: 1 })
     if (host.recoveredAfterInterruption) channel.send({ kind: 'runtime_recovery', instance_id: host.instanceId, processes_stopped: true })

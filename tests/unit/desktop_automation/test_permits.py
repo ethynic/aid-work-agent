@@ -99,7 +99,7 @@ class TestDenyPaths:
         """R8：旧 invocation（business_kind NULL）调用 write-authorize 返回 409"""
         from src.local_tools.service import LocalInvocationService
 
-        device_id = str(uuid.uuid4())
+        device_id = str(repository.create_device(tenant_id, "owner-1", sha256_hex(uuid.uuid4().hex))["id"])
         invocation = LocalInvocationService().enqueue(
             tenant_id=tenant_id, user_id="owner-1", device_id=device_id,
             tool_name="boss_goto", arguments={"url": "x"},

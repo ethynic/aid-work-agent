@@ -83,7 +83,7 @@ def build_running_v2_invocation(
         expires_at=expires_at or (utcnow() + timedelta(hours=1)),
     )
     assert trigger["created"] is True
-    device_id = str(uuid.uuid4())
+    device_id = str(repository.create_device(tenant_id, "owner-1", sha256_hex(generate_claim_token()))["id"])
     prepared = executor.claim_and_prepare_run(
         revision_config={}, device_id=device_id, tenant_id=tenant_id, lease_seconds=300,
     )

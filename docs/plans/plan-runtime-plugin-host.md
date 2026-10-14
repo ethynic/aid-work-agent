@@ -1,5 +1,9 @@
 # Runtime 执行环境、插件宿主与可视化客户端开发计划
 
+2026-10-14共同检查点：用户批准[干净安装计划](plan-runtime-clean-install.md)，共同契约2.1。安装角色负责安装代际与进程清理，服务端角色负责协议3及数据库，主控负责Main/H3自动激活与renderer。替代新版历史资源恢复门，旧协议1/2不变；验证以该计划为准。
+
+同日追加安装确认：主控接管NSIS/PowerShell唯一写入，旧客户端运行时确定才退出安装，取消保持旧运行；不改H3/wire/Device。增量验证统一见干净安装计划Phase5。
+
 2026-10-12 r7共同检查点：[恢复计划Phase10](plan-runtime-upgrade-recovery.md#phase10-最终交付与服务端状态复核2026-10-12)已交付自助诊断/管理修复/归档新配对；主控维护Core/Runtime/Main和UI，资源角色仅维护资源helper，独立角色只读验证。H1/Device/binding不变，Runtime-only H3可选端口与私有connection v1、续装控制保持单一写入者；实际包和独立验证通过，未部署服务器。
 
 2026-10-12 r6共同检查点：[恢复计划Phase 8](plan-runtime-upgrade-recovery.md)主控维护core management/Runtime组合层，Windows平台角色维护legacy DPAPI调用，其他角色独立验证；仅Runtime_app启用失败时只读管理，沿用H1 blocked/code11和私有退出v1，不重置身份/密钥/历史。不再要求客户补日志。

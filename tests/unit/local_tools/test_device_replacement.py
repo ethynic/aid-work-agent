@@ -148,7 +148,7 @@ def test_old_protocol_http_error_is_explicit_without_consumption(client):
     assert "新版" in response.json()["detail"]["error"]
 
 
-@pytest.mark.parametrize("protocol", [True, "2", 2.0, 3])
+@pytest.mark.parametrize("protocol", [True, "2", 2.0, 4])
 def test_protocol_schema_is_strict(client, protocol):
     with patch("src.local_tools.pairing.pair") as pair:
         assert client.post("/api/local-tools/runtime/pair", json={"code": "ABCD2345", "pairing_protocol": protocol}).status_code == 422

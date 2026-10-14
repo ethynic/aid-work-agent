@@ -4,7 +4,8 @@
 计费的权威；本层实现任务生命周期 CAS、会话占用唯一、assignment/fence/租约、
 events 连续前缀 ACK、决策记录幂等与预算预留接口（C3 接真实账务）。
 
-并发与锁序（设计 §10）：任务控制写统一先锁 session_tasks 行（FOR UPDATE），
+并发与锁序（设计 §10）：Runtime claim/renew先锁active设备，与撤销互斥；
+任务控制写统一先锁 session_tasks 行（FOR UPDATE），
 再写 assignment/spec/decision 等子行，不反向加锁；claim/renew/events 同一
 task/assignment 行锁事务内完成。UUID 全部由服务端生成，客户端自报 ID 不采信。
 """
@@ -81,6 +82,14 @@ def _conn():  # noqa: ANN202
     from src.db.database import get_db_connection
 
     return get_db_connection()
+
+
+def _lock_runtime_device(conn, tenant_id: str, device_id) -> None:  # noqa: ANN001
+    """Runtime authority precedes subject/task locks and survives through commit."""
+    from src.local_tools.repository import lock_active_device
+
+    if not lock_active_device(conn.cursor(), tenant_id, str(device_id)):
+        raise SessionTaskError("设备已失效，请重新配对", "DEVICE_REVOKED", 401)
 
 
 # ---------------------------------------------------------------------------
@@ -579,6 +588,7 @@ def claim_task(device: Dict[str, Any], runtime_instance_id: str) -> Optional[Dic
     cfg = get_session_tasks_config()
     with _conn() as conn:
         # 通用能力前置检查（场景发送能力在候选任务定位后按场景检查，九处 #1）
+        _lock_runtime_device(conn, tenant_id, device["id"])
         _check_device_capabilities(conn, tenant_id, device["id"])
         cursor = conn.cursor()
         cursor.execute(
@@ -660,6 +670,9 @@ def _claim_one(conn, tenant_id: str, device: Dict[str, Any], runtime_instance_id
     """
     # 锁序 subject→task（评审 P1-1）：先无锁定位（拿 scenario_key/conversation_binding_id），
     # 再锁 subject，最后锁 task 行并在锁内复验 active 与绑定有效性（评审 P1-4）
+    # A skipped candidate rolls the transaction back. Reacquire the device gate
+    # for every candidate so the next allocation cannot bypass a concurrent revoke.
+    _lock_runtime_device(conn, tenant_id, device["id"])
     cursor = conn.cursor()
     cursor.execute(
         """
@@ -756,6 +769,7 @@ def renew_assignment(tenant_id: str, device_id: UUID, assignment_id: UUID, fence
     """
     cfg = get_session_tasks_config()
     with _conn() as conn:
+        _lock_runtime_device(conn, tenant_id, device_id)
         # 锁序 subject→assignment（评审 P1-1）：先定位 task_id，锁 subject 再锁 assignment
         task_id_loc = _assignment_task_id(conn, tenant_id, device_id, assignment_id)
         if task_id_loc is None:

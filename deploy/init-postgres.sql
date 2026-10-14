@@ -1258,6 +1258,9 @@ CREATE TABLE IF NOT EXISTS local_tool_devices (
     replacement_device_id UUID,
     replacement_completed_at TIMESTAMP,
     replaced_by_device_id UUID,
+    registration_id UUID,
+    registration_request_hash TEXT,
+    registration_code_hash TEXT,
     last_seen_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1265,6 +1268,7 @@ CREATE TABLE IF NOT EXISTS local_tool_devices (
     UNIQUE (token_hash)
 );
 CREATE INDEX IF NOT EXISTS idx_lt_devices_tenant_user ON local_tool_devices USING btree (tenant_id, user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_lt_devices_registration ON local_tool_devices(registration_id) WHERE registration_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS local_tool_pairing_tickets (
     id UUID DEFAULT gen_random_uuid() NOT NULL,
