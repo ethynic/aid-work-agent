@@ -1,6 +1,6 @@
 # 结构化提问交互（ask_user 提问卡片）实施计划
 
-> 创建：2026-10-14；修订：2026-10-14（v2，按计划评审补齐接线责任与验证分工）
+> 创建：2026-10-14；修订：2026-10-14（v2 接线责任与验证分工；v3 执行口径澄清：幂等用例按层分配、WP0 结果不复用、Phase 2 验证角色按风险定）
 > 状态：📋 待开发（设计 v6 已过架构评审）
 > 设计文档：[design-ask-user-interactive-question.md](../system/design-ask-user-interactive-question.md)
 > ideas 条目：20261013-1434
@@ -61,16 +61,16 @@
 - 目的：验证设计前提——root 执行产生 clarification wait 后与 final_answer 流、`task_record`、cancel/pause、防滥用拦截点的交互是否成立。
 - 最小实现：`controls.py` 临时放开 root 分支 + 现有 `clarify` 工具即可，**不依赖 WP1/WP2**；用例与结论直接复用于 WP3，不另建临时测试框架。
 - 产出：结论回写设计 §11.1；若前提不成立，先回设计评审再继续。
-- 注：WP0 的临时改动由 WP3 的正式实现替代收敛，不直接遗留。
+- 注：WP0 的临时改动由 WP3 的正式实现替代收敛，不直接遗留；**WP0 的通过结果不直接复用到正式实现**——正式 ask_user 替换临时 root clarify 分支后，**重跑受影响的等待/恢复用例**（只重跑受影响部分，不扩大为全量回归）。
 
 ### WP1 契约与 schema（共享契约唯一写入者）
 
-1. 契约清单：`AnswerItem`/`answers`/`skip`（`control_contracts.py` 入口模型修订）；`contracts/runtime-host/v1/` 下 ask-form 与 errors DTO schema（**可并入既有 schema 文件结构，不强制分别建文件**）+ 正反 fixture + **幂等四例**（升级前后 digest 逐字节一致、同键重试命中、已受理后同键改答案拒绝、缺省序列化不变）。
+1. 契约清单：`AnswerItem`/`answers`/`skip`（`control_contracts.py` 入口模型修订）；`contracts/runtime-host/v1/` 下 ask-form 与 errors DTO schema（**可并入既有 schema 文件结构，不强制分别建文件**）+ 正反 fixture + **摘要兼容 fixture**（升级前后 digest 逐字节一致、缺省序列化不变）。**幂等用例按层分配**：WP1 只验请求形状/序列化/摘要兼容；"同键命中已受理控制""已受理后同键改答案拒绝"由 WP2 真实数据库链路验证，不重复实现。
 2. 入口校验修订：reply 合法条件扩展、`answers`×非空 answer 互斥、`skip`×`answers` 互斥、非 reply 禁带、旧 clarify 空回复仍 `CONTROL_REPLY_REQUIRED`；`intent()` 对新字段"未提供即不含键"（禁全局 exclude）。
 3. **错误映射**：入口模型校验错误**不透传含原始输入的通用报文**，统一映射为定义错误码（422）。
 4. capabilities 增加 `ask_structured_answers`。
 
-验收（模型层）：严格解析器过全部 fixture；幂等四例；旧形状请求 digest 不变。
+验收（模型层）：严格解析器过全部 fixture；摘要兼容 fixture 通过；旧形状请求 digest 逐字节不变（受理类幂等用例归 WP2）。
 
 **唯一写入者**：`contracts/runtime-host/v1/*` 与 `control_contracts.py` 由本 WP 唯一写入，后续 WP 只消费不修改。
 
@@ -82,7 +82,7 @@
 4. 受理 payload 附 form 快照；supplementalInputs 投影扩展（canonical/control_id/答案摘要/form 快照）；`public_view.py` 白名单（`form`、supplementalInputs 扩展）；`durable_control.py` clarificationQuestions 带表单元数据。
 5. `recovery.py`：验证 canonical 经既有 `answer` 键回注为 tool result 的完整链路（预期小改或不改；差异记录并最小修改）。
 
-验收（受理/恢复层，数据库真实链路）：**一条合法结构化答案实际恢复并进入工具结果**；**一条错误题的 `errors` 贯穿 API→client→BFF→前端**；判定表全组合；幂等命中与 `IDEMPOTENCY_INPUT_MISMATCH`；旧 clarify 全路径回归。
+验收（受理/恢复层，数据库真实链路）：**一条合法结构化答案实际恢复并进入工具结果**；**一条错误题的 `errors` 贯穿 API→client→BFF→前端**；判定表全组合；**同键重试命中已受理控制、已受理后同键改答案 `IDEMPOTENCY_INPUT_MISMATCH`**（自 WP1 分配至本层的两个受理幂等用例）；旧 clarify 全路径回归。
 
 ### WP3 ask_user 工具与 root 等待完整实现
 
@@ -124,11 +124,13 @@
 1. **跨模块组合与未覆盖项**：前后端发布顺序（后端全实例就绪 → 前端 feature flag）、回滚注意（保留 ask 受理能力或先取消在途 ask）写入部署备忘；按设计 §9 Phase 1 验收清单逐项确认。**复用同一最终代码状态的有效结果，不机械重跑各 WP 用例**。
 2. 文档收尾：更新设计 §11 开放问题结论、本计划进度区、ideas 索引。
 
-## 4. Phase 2：同源待答可达性（风险中，三角色一轮）
+## 4. Phase 2：同源待答可达性（验证角色按实际风险确定）
 
 1. `runner_waiting_input` 通知生产者：**沿用现有通知生产机制**（runner park 事务尾登记），**以原 wait 标识去重**——同一 wait 的重复 park 不重复生产通知；**不新增频控子系统**（跨任务频控如后续确有需要，按设计 §7.3 另立）。
 2. 站内信兜底 + Web Push（已开启浏览器通知的用户）；点击回跳原会话（复用既有点击解析）。
 3. 会话列表「待回答」标识：Web 同源任务的 runner waiting 查询（轻量端点或并入会话列表接口，实施时定）。
+
+**验证安排**：若实现仅为复用通知机制与列表展示，按仓库常规流程由**一名独立验证者**承担测试与审查；若涉及高风险事务、授权或恢复行为，再保留独立测试与独立 CR。
 
 ## 5. Phase 3：增强项（按需，另立排期）
 
@@ -146,7 +148,7 @@
 
 ## 7. 验证与流程约定
 
-- **三角色一轮贯穿**：Phase 1 开发、独立测试、独立 CR 各一轮（CR 重点 WP2/WP3 受理与恢复回归），不为每个 WP 重建完整三角色流程；Phase 2 同样一轮。
+- **三角色一轮贯穿**：Phase 1 开发、独立测试、独立 CR 各一轮（CR 重点 WP2/WP3 受理与恢复回归），不为每个 WP 重建流程——指**角色与交接不重复搭建**，代码修复后仍须重跑受影响用例；Phase 2 验证角色按实际风险确定（§4）。
 - **验证分层**：模型层（WP1）/ 受理恢复层（WP0、WP2、WP3）/ 交互与发送链路（WP4、WP5）/ 跨模块组合（WP6）；schema fixture 不替代数据库幂等受理验证；WP6 复用同一最终代码状态的有效结果，不机械重跑。
 - 聚焦实际改动（评审口径）：正常提交、跳过、幂等、必要非法输入、长行分段、发送失败、历史恢复；无实际故障或业务依据不增加检查项。
 - 每阶段完成：先更新本计划「开发进度」区，再同步 `docs/ideas.md` 索引行（规范见 AGENTS.md）。
