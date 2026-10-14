@@ -143,11 +143,13 @@ async def parked_root_clarify(storage, actor):
     async for _ in AgentEngine().run(state, model, Port(wp0_adapter()), recording, recording):
         pass
     assert state.outcome == Outcome.WAITING
+    snapshot = {"revision": 1, "public_snapshot": {}, "cancel_requested": False,
+                "status": "running"}
+    # 生产链路：decorate 写入的 clarificationQuestions 随同一快照对象持久化。
     DurableControl(SimpleNamespace(), SimpleNamespace(runner_id=row["runner_id"]),
-                   {"revision": 1, "public_snapshot": {}, "cancel_requested": False,
-                    "status": "running"}).decorate_wait(state)
+                   snapshot).decorate_wait(state)
     parked = execution.park(attempt(owned), owned["revision"], "waiting",
-                            {"execution": state.checkpoint()}, {})
+                            {"execution": state.checkpoint()}, snapshot)
     return repository, execution, parked, principal
 
 
@@ -299,16 +301,18 @@ async def parked_root_ask(storage, actor):
     async for _ in AgentEngine().run(state, model, Port(wp0_adapter()), recording, recording):
         pass
     assert state.outcome == Outcome.WAITING
+    snapshot = {"revision": 1, "public_snapshot": {}, "cancel_requested": False,
+                "status": "running"}
+    # 生产链路：decorate 写入的 clarificationQuestions 随同一快照对象持久化。
     DurableControl(SimpleNamespace(), SimpleNamespace(runner_id=row["runner_id"]),
-                   {"revision": 1, "public_snapshot": {}, "cancel_requested": False,
-                    "status": "running"}).decorate_wait(state)
+                   snapshot).decorate_wait(state)
     waiting = state.waiting
     # form.wait_id 由 decorate_wait 注入（工具生成时不携带等待身份）
     assert waiting["kind"] == "clarification"
     assert waiting["form"]["form_id"].startswith("frm_")
     assert waiting["form"]["wait_id"] == waiting["wait_id"]
     parked = execution.park(attempt(owned), owned["revision"], "waiting",
-                            {"execution": state.checkpoint()}, {})
+                            {"execution": state.checkpoint()}, snapshot)
     return repository, parked, principal
 
 
@@ -372,6 +376,7 @@ async def test_root_ask_user_form_wait_accepts_structured_reply_and_resumes(
     assert len(ask_logs) == 1
     assert ask_logs[0][1] == waiting["wait_id"] and ask_logs[0][2] is False
     assert ask_logs[0][3] is not None  # recover_ms（DB 时钟，恢复处理延迟）
+    # recover_ms=恢复处理延迟（DB 时钟）；respond_ms=提问→受理（近似响应时长）
 
 
 async def test_ask_skip_submission_logs_skipped_metric(
@@ -402,6 +407,7 @@ async def test_ask_skip_submission_logs_skipped_metric(
     assert len(ask_logs) == 1
     assert ask_logs[0][1] == waiting["wait_id"] and ask_logs[0][2] is True
     assert ask_logs[0][3] is not None  # recover_ms（DB 时钟，恢复处理延迟）
+    # recover_ms=恢复处理延迟（DB 时钟）；respond_ms=提问→受理（近似响应时长）
 
 
 async def test_ask_plain_text_reply_still_counts_metric(
@@ -432,6 +438,7 @@ async def test_ask_plain_text_reply_still_counts_metric(
     assert len(ask_logs) == 1
     assert ask_logs[0][1] == waiting["wait_id"] and ask_logs[0][2] is False
     assert ask_logs[0][3] is not None  # recover_ms（DB 时钟，恢复处理延迟）
+    # recover_ms=恢复处理延迟（DB 时钟）；respond_ms=提问→受理（近似响应时长）
 
 
 async def test_park_waiting_notification_failure_isolated_by_savepoint(

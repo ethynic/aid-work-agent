@@ -121,14 +121,14 @@ class RecoveryRepository:
                 unavailable.public_verification='恢复执行许可尚待核对，任务与原命令已保留。'
                 raise unavailable from error
             connection.commit()
-            # 提问生命周期埋点（八轮评审修正 + 九轮评审口径）：控制消费事务
+            # 提问生命周期埋点（八轮评审修正 + 十轮评审口径）：控制消费事务
             # 提交成功后记录。是否 AskForm 按消费前原 wait 判定（叶节点含
             # 表单即统计——结构化与文字兼容作答都算；legacy clarify 无表单
             # 排除），不按作答载体决定。skipped 用 payload.skip 事实而非答案
-            # 文案推断；recover_ms=受理→认领（恢复处理延迟）；respond_ms=
-            # 提问时间（既有 clarificationQuestions.created_at）→受理（近似
-            # 用户响应时长的起点未持久化，暂不记录（九轮评审兜底口径）。埋点
-            # 失败不影响认领结果。
+            # 文案推断。recover_ms=受理→消费（恢复处理延迟，纯 DB 时钟）；
+            # 用户响应时长（提问→受理）的起点（clarificationQuestions.created_at）
+            # 属读取时展示投影、受理会重写公共快照，认领侧不可稳定取得——该
+            # 指标暂不输出。埋点失败不影响认领结果。
             try:
                 from src.notifications.producer import _clarification_leaf
                 waiting_leaf = _clarification_leaf(
@@ -137,10 +137,6 @@ class RecoveryRepository:
                     payload = control.get('payload') or {}
                     wait_id = payload.get('wait_id') or waiting_leaf.get('wait_id')
                     accepted_at = control.get('accepted_at')
-                    # recover_ms=受理→消费（恢复处理延迟，纯 DB 时钟无偏差）。
-                    # 用户响应时长（提问→受理）的起点未持久化（clarification
-                    # Questions 为读取时实时投影，claim 处不可见）——按九轮评审
-                    # 兜底口径暂不记录该指标，待产品确认是否持久化提问时间。
                     recover_ms = (int((consumed_at - accepted_at).total_seconds() * 1000)
                                   if accepted_at else None)
                     logger.info('[ask] consumed wait_id={} skipped={} recover_ms={}',
