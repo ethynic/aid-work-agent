@@ -888,7 +888,8 @@ class SessionDB:
                 if session_ids:
                     marks = ",".join(placeholder for _ in session_ids)
                     cursor.execute(f"""
-                        SELECT session_id, public_snapshot FROM agent_runners
+                        SELECT session_id, public_snapshot->'waiting' AS waiting
+                        FROM agent_runners
                         WHERE user_id = {placeholder} AND session_id IN ({marks})
                           AND status = 'waiting' AND source = 'chat'
                           AND session_kind = 'web' AND actor_kind = 'user'

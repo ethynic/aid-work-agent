@@ -368,5 +368,6 @@ async def test_park_waiting_notification_failure_isolated_by_savepoint(
     committed = repository.get(runner_id)
     assert committed["status"] == "waiting" and committed["finished_at"] is None
     assert service_database.rows(
-        "SELECT count(*) AS cnt FROM notification_messages WHERE producer='runner'")[
+        "SELECT count(*) AS cnt FROM notification_messages "
+        "WHERE producer='runner' AND resource_ref->>'id'=%s", (runner_id,))[
         0]["cnt"] == 0

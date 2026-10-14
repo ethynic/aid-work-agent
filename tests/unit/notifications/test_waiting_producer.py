@@ -147,15 +147,21 @@ def test_effective_event_types_backfills_waiting_for_legacy_default():
     assert _effective_event_types(None) == ()
 
 
-def test_inbox_link_for_waiting_uses_notification_entry():
-    # 五轮评审 P2-4：站内信复用既有通知解析入口 /notification?ref=——入口完成
-    # 认证与 resource 解析后按原数字员工路由回会话，不自行拼 chat 路径。
+def test_inbox_link_for_waiting_uses_notification_entry_with_tenant():
+    # 六轮评审 P2-1：站内信复用既有通知解析入口 /notification?ref=，且必须
+    # 携带 tenant 查询参数——入口（NotificationEntry）按 tenant 选择
+    # saas_token_{tenant}，缺失时租户用户落在 portal 登录页（真实入口复现）。
     from src.notifications.contracts import Subject
     from src.notifications.repository import NotificationRepository
     link = NotificationRepository._inbox_link(
         'task.waiting_input', {'session_id': 'session-1'},
         Subject('user', 'tenant'), notification_ref='abc123')
-    assert link == '/notification?ref=abc123'
+    assert link == '/notification?ref=abc123&tenant=tenant'
+    # portal 用户（无租户）不带 tenant 参数，入口读 portal_token。
+    portal = NotificationRepository._inbox_link(
+        'task.waiting_input', {'session_id': 'session-1'},
+        Subject('user', None), notification_ref='abc123')
+    assert portal == '/notification?ref=abc123'
     assert NotificationRepository._inbox_link(
         'task.waiting_input', {'session_id': 'session-1'},
         Subject('user', 'tenant'), notification_ref=None) is None

@@ -450,7 +450,14 @@ class NotificationRepository:
         resource 解析后带 _load_session/数字员工路由回原会话（五轮评审 P2-4：
         不自行拼 chat 路径，避免遗漏非默认数字员工路由）。"""
         if event_type == 'task.waiting_input':
-            return f'/notification?ref={notification_ref}' if notification_ref else None
+            # 入口（NotificationEntry）以 tenant 查询参数选择 saas_token_{tenant}：
+            # 租户站内信必须携带 tenant，否则租户用户落在 portal 登录页
+            # （六轮评审 P2-1）；tenant 为空（portal 用户）时不带参数。
+            ref = f'/notification?ref={notification_ref}' if notification_ref else None
+            if not ref:
+                return None
+            return (f'{ref}&tenant={quote(str(subject.tenant_id), safe="")}'
+                    if subject.tenant_id else ref)
         if event_type != 'abuse.rule_triggered':
             return None
         tenant_id = params.get('tenant_id') or subject.tenant_id
