@@ -89,7 +89,7 @@ async function retiredKeys(home: string, mode: Mode, inherited: string[] = []): 
   return [...result]
 }
 /** Preflight is repeated after actual old Host exit and acquisition of the Main lease. */
-export async function beginConnectionRecovery(home: string, node: string, mode: Mode): Promise<void> {
+export async function beginConnectionRecovery(home: string, node: string, mode: Mode, registrationId?: string): Promise<void> {
   if (typeof mode !== 'string' || !['preserve', 'new_device'].includes(mode)) throw new ManagementError(1, '连接恢复模式无效，未修改任何资料')
   const p = paths(home)
   let inherited: string[] = []
@@ -97,6 +97,9 @@ export async function beginConnectionRecovery(home: string, node: string, mode: 
   catch { if (mode === 'preserve') throw new ManagementError(11, '原恢复记录损坏，不能保留原管理身份；请重新配置并保留旧资料') }
   const resources = await checkConnectionRecoveryResources(home, node, { prepareReboot: true })
   if (!resources.safe) throw new ManagementError(11, resources.needs_reboot ? '旧执行资源尚需确认，请按页面登记并正常重启Windows后继续' : '执行资源或系统保护尚未恢复，请按连接检查步骤处理')
+  // Writing the archive anchor makes an empty home nonempty. Preserve the
+  // proved-empty scope before that write so the second check remains truthful.
+  if (resources.category === 'CONNECTION_RESOURCE_NEW_HOME') await recordFreshConnectionEpoch(home, node)
   const identity = mode === 'preserve' ? await diagnoseConnection(home) : null
   if (mode === 'preserve' && !identity?.can_preserve) throw new ManagementError(11, '原身份尚未通过服务器验证，请选择重新配置或先恢复原服务')
   const retired = await retiredKeys(home, mode, inherited)
@@ -108,7 +111,8 @@ export async function beginConnectionRecovery(home: string, node: string, mode: 
     // disk write must never turn an incomplete transaction into normal startup.
     atomicWrite(join(p.history, `previous-${randomUUID()}.bin`), readFileSync(p.state, 'utf8'))
   }
-  const epoch = randomUUID()
+  if (registrationId !== undefined && !uuid.test(registrationId)) throw new ManagementError(11, '新注册事务标识无效')
+  const epoch = registrationId ?? randomUUID()
   const anchor = await dpapiProtect(JSON.stringify({ version: 1, home, epoch, mode }))
   atomicWrite(join(home, '.connection-recovery-anchor.bin'), anchor)
   const controls = mode === 'preserve' ? controlNames.filter(name => existsSync(join(home, name))) : []
@@ -116,6 +120,20 @@ export async function beginConnectionRecovery(home: string, node: string, mode: 
     controls, control_hashes: Object.fromEntries(controls.map(name => [name, fingerprint(join(home, name))])), retired_keys: retired, anchor_sha256: hash(anchor) }
   await save(home, intent)
   await resumeConnectionRecovery(home, node)
+}
+
+/** A registration always resumes its own archive; never supersedes another unfinished recovery. */
+export async function archiveForRegistration(home: string, node: string, registrationId: string): Promise<void> {
+  if (!uuid.test(registrationId)) throw new ManagementError(11, '新注册事务标识无效')
+  const intent = await load(home)
+  if (intent?.epoch === registrationId) {
+    if (intent.mode !== 'new_device') throw new ManagementError(11, '新注册与恢复记录不匹配')
+    await resumeConnectionRecovery(home, node)
+    if (!await hasArchivedConnectionRecovery(home)) throw new ManagementError(11, '新注册归档尚未确认')
+    return
+  }
+  if (intent && intent.stage !== 'complete') throw new ManagementError(11, '另一恢复事务尚未完成，请先完成原恢复')
+  await beginConnectionRecovery(home, node, 'new_device', registrationId)
 }
 /** Common CLI and managed Host startup gate; never consumes pairing codes. */
 export async function resumeConnectionRecovery(home: string, node: string): Promise<void> {

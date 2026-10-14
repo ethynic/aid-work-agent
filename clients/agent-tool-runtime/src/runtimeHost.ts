@@ -1,6 +1,7 @@
 import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from 'node:fs'
 import { randomUUID, randomBytes } from 'node:crypto'
 import { ApiClient } from './apiClient.js'
+import { registrationBlocksExecution } from './connectionRegistration.js'
 import {
   defaultSkillsDir,
   deviceCapabilities,
@@ -188,6 +189,7 @@ export class LegacyExecution implements HostAdapter {
     return true
   }
   async pair(params: { server: string; device_name: string; pairing_code: string }): Promise<void> {
+    if (await registrationBlocksExecution(runtimeHomeDir())) throw new ManagementError(11, '新注册尚未完成，请在客户端完成连接配置，不要重复配对')
     let url: URL
     try { url = new URL(params.server) } catch { throw new ManagementError(1, '服务地址无效') }
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new ManagementError(1, '服务地址无效')
@@ -206,6 +208,7 @@ export class LegacyExecution implements HostAdapter {
     await recoverPairing()
   }
   async start(connection: (value: ConnectionStatus) => void, executionEnded: () => void): Promise<void> {
+    if (await registrationBlocksExecution(runtimeHomeDir())) throw new ManagementError(11, '新注册尚未完成，请在客户端完成连接配置；可正常退出')
     await recoverPairing()
     const config = loadConfig()
     if (!config) throw new ManagementError(5, '请先配对设备')

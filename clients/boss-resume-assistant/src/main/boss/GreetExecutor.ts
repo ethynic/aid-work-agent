@@ -27,6 +27,9 @@ import { type DomSnapshot, type ClickPoint, findNodesByString } from './domSnaps
 import { GREET_TEXT, CONTINUE_TEXT, pairCardName, findButtonsByExactText, type GreetButtonRef } from './cardName.js'
 import { viewportOf } from './FilterSetter.js'
 import { CancelledError } from '../operations/types.js'
+import { inspectRecommendationResults, type RecommendationStopReason } from './RecommendationResultBoundary.js'
+import { candidateButtonVisible, loadedCandidates, hasLoadedRecommendationList, candidateOption, resolveCandidateReference } from './LoadedCandidateNavigation.js'
+import { locateResumeCanvas } from './ResumeReader.js'
 
 export class GreetError extends Error {
   constructor(message: string) {
@@ -40,13 +43,13 @@ export interface GreetDeps {
   snapshot(): Promise<DomSnapshot>
   /** Win32 真实鼠标点击（viewport 为页面截图尺寸，device px） */
   click(point: ClickPoint, viewport: { width: number; height: number }): Promise<void>
-  /** CDP mouseWheel 向下滚动（deltaY>0，device px）；缺省时无可滚动，视口点完即结束 */
-  scroll?(deltaY: number): Promise<void>
+  /** 列表滚动距离为 device px（负值向上）；适配层用这份 fresh snapshot 换算 CDP CSS 输入。 */
+  scroll?(deltaY: number, snapshot: DomSnapshot): Promise<void>
   /** 协作式取消信号：每轮循环顶部检查，触发即抛 CancelledError */
   signal?: AbortSignal
   /** 每成功打完 1 人回调一次（done 为累计成功数） */
   onProgress?(done: number): void
-  /** 定向模式滚动查找时每滚一屏回调一次（screens 为累计屏数）。
+  /** 定向模式滚动定位后回调一次（参数为累计滚动次数）。
    *  2026-09-01 真机事故：定向找人滚动期间零进度事件，用户只看到鼠标疯滚几分钟
    *  （服务端心跳一直停在上一个 stage），误以为出问题手动关掉 Chrome → CDP 断连 */
   onSearchProgress?(screens: number): void
@@ -64,8 +67,10 @@ export interface GreetOutcome {
   greetedNames?: string[]
   /** 定向模式时返回：names 中滚到底也没找到（或被 limit 截断）的姓名 */
   missingNames?: string[]
+  ambiguousNames?: Array<{ name: string; candidates: Array<ReturnType<typeof candidateOption>> }>
   /** 定向模式滚动查找达到 MAX_SCROLL_ROUNDS 上限而停止（未滚到底）。提示用户目标可能不在当前筛选结果中 */
   stoppedByLimit?: boolean
+  stopReason?: RecommendationStopReason
 }
 
 /** 单次滚动距离：远小于视口高（1905），保证相邻两屏有重叠不漏人 */
@@ -107,8 +112,9 @@ export class GreetExecutor {
    *   limit 缺省取 names.length，作为总上限保险（显式传更小值时截断，剩余进 missingNames）。
    * 返回成功数与是否到底；定向模式额外返回 greetedNames / missingNames（谁打了、谁没找到）。
    */
-  async greetVisible(opts: { limit?: number; names?: string[] } = {}): Promise<GreetOutcome> {
+  async greetVisible(opts: { limit?: number; names?: string[]; selection?: { name: string; candidate_ref: string } } = {}): Promise<GreetOutcome> {
     const names = opts.names
+    if (opts.selection && (names?.length !== 1 || names[0]?.trim() !== opts.selection.name)) throw new GreetError('候选引用必须绑定唯一批准姓名')
     if (names !== undefined && names.length === 0) {
       throw new GreetError('names 不能是空数组：定向打招呼必须提供至少 1 个姓名')
     }
@@ -116,27 +122,87 @@ export class GreetExecutor {
     // 定向待打名单（trim 后精确匹配）；非定向为 null（走历史路径）
     const pending = names ? new Set(names.map((n) => n.trim())) : null
     const greetedNames: string[] = []
+    const ambiguousNames: NonNullable<GreetOutcome['ambiguousNames']> = []
     let greeted = 0
-    // 定向模式滚动查找计数（屏）；到 MAX_SCROLL_ROUNDS 停止（防无限滚）
+    const finish = (end: boolean, limited = false, reason?: RecommendationStopReason): GreetOutcome =>
+      outcome(greeted,end,names,greetedNames,limited,reason,ambiguousNames)
+    // 定向模式滚动次数；未加载目标的后续加载搜索仍有总上限。
     let scrollRounds = 0
     let stoppedByLimit = false
+    const seekAttempts = new Map<string, number>()
+    let seekingName: string | null = null
+    let seekingIdentity: string | null = null
+    const identity = (c: ReturnType<typeof loadedCandidates>[number]): string => JSON.stringify([c.identityDigest,c.cardInfo])
     for (;;) {
       // 1. 点完当前视口内所有可见按钮（定向时只点姓名 ∈ names 的）
       for (;;) {
         if (this.deps.signal?.aborted) throw new CancelledError(`已取消：成功打招呼 ${greeted} 人后中止`)
-        if (pending !== null && pending.size === 0) return outcome(greeted, false, names, greetedNames)
-        if (greeted >= limit) return outcome(greeted, false, names, greetedNames)
+        if (pending !== null && pending.size === 0) return finish(false)
+        if (greeted >= limit) return finish(false)
         const snap = await this.deps.snapshot()
+        if (opts.selection && locateResumeCanvas(snap)) throw new GreetError('选定发送前出现简历详情，请先关闭后重新查询候选卡片')
+        const resultState = inspectRecommendationResults(snap)
+        if (resultState.stopReason === 'no_matching_candidates') return finish(true,false,greeted === 0 ? resultState.stopReason : 'recommendations_boundary')
         const buttons = this.findGreetButtons(snap)
-        if (buttons.length === 0) break
+        const loaded = pending ? loadedCandidates(snap) : []
+        const indexedList = pending !== null && hasLoadedRecommendationList(snap)
+        const selected = opts.selection ? resolveCandidateReference(snap,opts.selection.name,opts.selection.candidate_ref) : null
+        if (opts.selection && !selected) throw new GreetError('候选引用已过期或卡片、账号、职位已变化，已停止；请重新查询候选人，不回退姓名发送')
+        if (opts.selection && selected?.buttonText !== GREET_TEXT) throw new GreetError('指定候选人当前没有可用打招呼按钮，已停止，请重新查询状态')
+        if (pending) for (const name of pending) {
+          const matches = loaded.filter((c) => c.name === name && (!selected || c.identityDigest === selected.identityDigest))
+          if (matches.length > 1) {
+            ambiguousNames.push({name,candidates:matches.map((c,i)=>candidateOption(c,i+1))})
+            pending.delete(name)
+            if (seekingName === name) { seekingName = null; seekingIdentity = null }
+          } else if (indexedList && matches.length === 0) {
+            // A named historical target must be present in the full loaded DOM. Do not scan screens for a typo.
+            pending.delete(name)
+            if (seekingName === name) { seekingName = null; seekingIdentity = null }
+          }
+        }
+        if (pending && pending.size === 0) return finish(false)
+        if (seekingName !== null && !loaded.some((c) => c.name === seekingName && identity(c) === seekingIdentity && !c.excluded && c.buttonText === GREET_TEXT && c.point)) {
+          // The same name now refers to a changed card: skip it rather than select a replacement.
+          pending!.delete(seekingName); seekingName = null; seekingIdentity = null
+          continue
+        }
+        // Full-DOM identity index precedes the viewport/boundary test: a matching card may be ABOVE a visible fallback boundary.
+        const indexedTarget = pending ? loaded.filter((c) => pending.has(c.name)
+          && (!selected || c.identityDigest === selected.identityDigest)
+          && (!seekingName || (c.name === seekingName && identity(c) === seekingIdentity)) && !c.excluded && c.buttonText === GREET_TEXT && c.point)
+          .sort((a, b) => Number(candidateButtonVisible(b)) - Number(candidateButtonVisible(a))
+            || Math.abs(a.point!.y - (a.top + a.bottom) / 2) - Math.abs(b.point!.y - (b.top + b.bottom) / 2))[0] : undefined
+        if (indexedTarget && !candidateButtonVisible(indexedTarget)) {
+          if (!this.deps.scroll) return finish(false)
+          const attempts = seekAttempts.get(indexedTarget.name) ?? 0
+          if (attempts >= 3 || indexedTarget.bottom <= indexedTarget.top || indexedTarget.point!.x <= indexedTarget.left
+            || indexedTarget.point!.x >= indexedTarget.right) throw new GreetError('已加载目标无法进入可操作视窗，已停止，禁止使用旧坐标点击')
+          const delta = indexedTarget.point!.y - (indexedTarget.top + indexedTarget.bottom) / 2
+          if (!Number.isFinite(delta) || Math.abs(delta) < 1) throw new GreetError('目标滚动距离无效，已停止')
+          if (this.deps.signal?.aborted) throw new CancelledError('已取消：目标定位中止')
+          await this.deps.scroll(delta, snap)
+          seekingName = indexedTarget.name
+          seekingIdentity = identity(indexedTarget)
+          seekAttempts.set(indexedTarget.name, attempts + 1)
+          scrollRounds++
+          this.deps.onSearchProgress?.(scrollRounds)
+          await this.sleep(1200)
+          continue // always re-index and verify before a click; never reuse this point
+        }
+        if (buttons.length === 0 && !indexedTarget) {
+          if (resultState.stopReason) return finish(true,false,resultState.stopReason)
+          break
+        }
 
-        // 定向模式：从上往下找第一个「配对姓名 ∈ 名单」的按钮；配对失败/不在名单的按钮跳过不点
-        let target: GreetButtonRef | null = buttons[0]!
+        // 可靠结构优先精确匹配同卡片按钮；旧无结构快照保持原可见按钮配对路径。
+        let target: GreetButtonRef | null = indexedTarget ? { point: indexedTarget.point!, documentIndex: indexedTarget.documentIndex } : buttons[0]!
         let targetName: string | null = null
         if (pending !== null) {
-          target = null
+          target = indexedTarget ? target : null
+          targetName = indexedTarget?.name ?? null
           const viewport = viewportOf(snap)
-          for (const btn of buttons) {
+          for (const btn of indexedList ? [] : buttons) {
             const name = pairCardName(snap, btn, viewport)
             if (name !== null && pending.has(name)) {
               target = btn
@@ -145,13 +211,21 @@ export class GreetExecutor {
             }
           }
           // 视口内没有目标：退出内层循环去滚动加载继续找
-          if (target === null) break
+          if (target === null) {
+            if (resultState.stopReason) return finish(true,false,resultState.stopReason)
+            break
+          }
         }
 
+        if (this.deps.signal?.aborted) throw new CancelledError('已取消：打招呼点击前中止')
         await this.deps.click(target.point, viewportOf(snap))
         await this.sleep(1500)
 
-        const after = await this.deps.snapshot()
+        let after: DomSnapshot
+        try { after = await this.deps.snapshot() } catch (error) {
+          if (opts.selection) throw new GreetError('点击后无法确认选定候选人发送结果，已停止，请人工核对，不自动重试')
+          throw error
+        }
         if (PAYWALL_MARKERS.some((m) => after.strings.some((s) => s.includes(m)))) {
           throw new GreetError(
             `第 ${greeted + 1} 个打招呼触发付费墙：当前职位无开聊权益（BOSS 弹出购买弹层），已停止。` +
@@ -161,17 +235,23 @@ export class GreetExecutor {
         // 点击后校验（2026-08-27 真机事故修复）：滚动懒加载/「为你推荐」区块插入都会新增按钮，
         // 「全局总数必须减少」必然误报。定向模式按目标验证，非定向放宽为「位置证据 | 计数证据」任一。
         if (targetName !== null) {
-          // 定向模式：彻底放弃计数校验——只要没有任何可见「打招呼」按钮再配对出目标姓名即成功，
-          // 推荐区块/懒加载新增的无关按钮与验证无关
-          const afterViewport = viewportOf(after)
-          const targetStillVisible = this.findGreetButtons(after).some(
-            (btn) => pairCardName(after, btn, afterViewport) === targetName,
-          )
-          if (targetStillVisible) {
-            throw new GreetError(
-              `第 ${greeted + 1} 个打招呼点击后目标「${targetName}」的按钮仍在页面上：` +
-                '可能出现确认弹层或点击被拦截（若「为你推荐」区块出现同名卡片也会触发此判定），已停止，请人工查看页面',
+          if (indexedTarget) {
+            const confirmed = loadedCandidates(after).filter((c) => c.name === targetName && identity(c) === identity(indexedTarget))
+            if (confirmed.length !== 1 || confirmed[0]!.excluded || confirmed[0]!.buttonText !== CONTINUE_TEXT) {
+              throw new GreetError('点击后无法确认原候选人翻转为继续沟通，已停止，请人工确认结果')
+            }
+          } else {
+            // Legacy snapshots without trusted card structure retain target-specific viewport verification.
+            const afterViewport = viewportOf(after)
+            const targetStillVisible = this.findGreetButtons(after).some(
+              (btn) => pairCardName(after, btn, afterViewport) === targetName,
             )
+            if (targetStillVisible) {
+              throw new GreetError(
+                `第 ${greeted + 1} 个打招呼点击后目标「${targetName}」的按钮仍在页面上：` +
+                  '可能出现确认弹层或点击被拦截（若「为你推荐」区块出现同名卡片也会触发此判定），已停止，请人工查看页面',
+              )
+            }
           }
         } else {
           // 非定向模式：计数证据（原规则，保留）或位置证据（点击点附近出现「继续沟通」）任一满足即成功
@@ -193,6 +273,8 @@ export class GreetExecutor {
         if (targetName !== null) {
           greetedNames.push(targetName)
           pending!.delete(targetName)
+          seekingName = null
+          seekingIdentity = null
         }
         this.deps.onProgress?.(greeted)
       }
@@ -201,21 +283,22 @@ export class GreetExecutor {
       // 到底判定：比较滚动前后列表文档的 scrollOffsetY（不能比 strings——
       // strings 是全量已加载文本表，在已加载内容内滚动时不变，会误判到底）。
       // 滚不动时多试一次：列表底部可能异步加载更多。
-      if (!this.deps.scroll) return outcome(greeted, true, names, greetedNames)
+      if (!this.deps.scroll) return finish(true)
       if (pending !== null && scrollRounds >= MAX_SCROLL_ROUNDS) {
         // 定向查找滚动上限：再滚下去只会让用户盯着疯滚的鼠标更久（真机事故见 MAX_SCROLL_ROUNDS 注释）
         stoppedByLimit = true
-        return outcome(greeted, false, names, greetedNames, stoppedByLimit)
+        return finish(false,stoppedByLimit)
       }
       for (let attempt = 0; attempt < 2; attempt++) {
         const before = await this.deps.snapshot()
         // 真机实测实际滚动距离约为 deltaY 的 1.5 倍，且窗口可能只有 1270 高：取 min(800, 视口半高) 保证重叠
         const delta = Math.min(SCROLL_DELTA, Math.floor(viewportOf(before).height / 2))
-        await this.deps.scroll(delta)
+        if (this.deps.signal?.aborted) throw new CancelledError('已取消：列表加载中止')
+        await this.deps.scroll(delta, before)
         await this.sleep(attempt === 0 ? 1200 : 1800)
         const after = await this.deps.snapshot()
         if (scrollOffsetOf(before) !== scrollOffsetOf(after)) break
-        if (attempt === 1) return outcome(greeted, true, names, greetedNames)
+        if (attempt === 1) return finish(true)
       }
       if (pending !== null) {
         scrollRounds++
@@ -237,11 +320,14 @@ function outcome(
   names: string[] | undefined,
   greetedNames: string[],
   stoppedByLimit = false,
+  stopReason?: RecommendationStopReason,
+  ambiguousNames: NonNullable<GreetOutcome['ambiguousNames']> = [],
 ) {
-  if (names === undefined) return { greeted, reachedEnd }
+  if (names === undefined) return { greeted, reachedEnd, ...(stopReason ? { stopReason } : {}) }
   const greetedSet = new Set(greetedNames)
-  const missingNames = [...new Set(names.map((n) => n.trim()))].filter((n) => !greetedSet.has(n))
-  return { greeted, reachedEnd, greetedNames: [...greetedNames], missingNames, stoppedByLimit }
+  const ambiguousSet = new Set(ambiguousNames.map(c=>c.name))
+  const missingNames = [...new Set(names.map((n) => n.trim()))].filter((n) => !greetedSet.has(n) && !ambiguousSet.has(n))
+  return { greeted, reachedEnd, greetedNames: [...greetedNames], missingNames, ambiguousNames, stoppedByLimit, ...(stopReason ? { stopReason } : {}) }
 }
 
 /** 列表滚动位置：打招呼按钮所在文档的 scrollOffsetY；无按钮时取各文档最大值（列表是唯一滚动文档） */

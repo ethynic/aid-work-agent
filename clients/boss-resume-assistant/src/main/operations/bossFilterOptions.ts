@@ -60,8 +60,14 @@ export function createBossFilterOptionsOperation(
           return {
             message: `完成：读取到 ${rows.length} 行筛选条件可选档位`,
             data: {
-              filter_schema_version: 2,
-              supported_fields: ['experience', 'educations', 'salary', 'filters', ...(rows.some((r) => r.control === 'range') ? ['age'] : [])],
+              filter_schema_version: 3,
+              supported_fields: ['experience', 'educations', 'salary', 'filters', 'age', 'membership_hint', 'membership_account_ref', 'first_degree_only'],
+              membership: setter.membership,
+              account_ref: setter.accountRef,
+              groups: {
+                ordinary: { labels: rows.filter((r) => r.group === 'ordinary').map((r) => r.label), available: true },
+                vip: { labels: rows.filter((r) => r.group === 'vip').map((r) => r.label), available: setter.membership.status === 'vip', visible: rows.some((r) => r.group === 'vip') },
+              },
               probe_complete: rows.every((r) => !!r.control),
               rows: rows.map((r) => ({
                 label: r.label,
@@ -69,8 +75,9 @@ export function createBossFilterOptionsOperation(
                 ...(r.selection ? { selection: r.selection } : {}),
                 ...(r.control ? { control: r.control } : {}),
                 ...(r.range ? { range: r.range } : {}),
+                ...(r.group ? { group: r.group } : {}),
               })),
-              hint: '将职位默认要求与用户当轮补充条件合并；扩展维度用 filters=[{label:页面行标签,options:[精确选项]}]。范围控件不能作为离散选项。未解析的维度不能据此声称页面不存在。',
+              hint: '将职位默认要求与用户当轮补充条件合并；经验/学历/求职状态支持filters多选，年龄用age。membership未知时先询问用户再传membership_hint；推广VIP徽标不是会员证明。非VIP高级条件只跳过，按skipped_filters报告。院校附属第一学历用first_degree_only。',
               readable_lines: lines,
             },
             effect: 'none',

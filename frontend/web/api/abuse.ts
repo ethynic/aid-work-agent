@@ -17,6 +17,8 @@ export interface AbuseRuleParamField {
   default?: string | number | null
   required?: boolean
   min?: number
+  /** 大于 1 表示未来阶段的预留参数，编辑器不展示 */
+  phase?: number
   description?: string
 }
 

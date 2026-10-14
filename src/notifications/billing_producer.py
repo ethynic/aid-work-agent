@@ -18,15 +18,21 @@ PRODUCER = 'billing_daily'
 RUN_AT = time(hour=3, minute=10)
 
 
-def _publish_events(cursor, admins, tenant, events, now, ttl_seconds):
+def _publish_events(cursor, recipients, tenant, events, now, ttl_seconds):
+    """recipients: [(user_id, tenant_id 或 None)]。租户管理员逐人租户 scope；
+    平台管理员兜底副本为 global scope，resource_ref 打 about_tenant 供
+    expand 租户级 webhook 兜底路由（群机器人按租户配置，不依赖管理员存在）。"""
     tenant_id = tenant['tenant_id']
     published = 0
-    for user_id in admins:
-        subject = Subject(user_id, tenant_id)
+    for user_id, recipient_tenant in recipients:
+        subject = Subject(user_id, recipient_tenant)
         for event in events:
+            resource_ref = dict(event['resource_ref'])
+            if recipient_tenant is None:
+                resource_ref['about_tenant'] = tenant_id
             ref = publish_in_tx(cursor, subject=subject, producer=PRODUCER,
                 event_type=event['event_type'], event_key=event['event_key'],
-                resource_ref=event['resource_ref'], parameters=event['parameters'],
+                resource_ref=resource_ref, parameters=event['parameters'],
                 occurred_at=now, accepted_at=now, expires_at=now+timedelta(seconds=ttl_seconds),
                 category='billing', priority=0, policy_key='tenant_admin_event')
             if ref:
@@ -94,12 +100,20 @@ def run_billing_notifications_once(repository=None, today=None):
                 cursor.execute('''SELECT user_id FROM users
                     WHERE tenant_id=%s AND role='tenant_admin' AND status='active' ''', (tenant_id,))
                 admins = [row['user_id'] for row in cursor.fetchall()]
-                if not admins:
-                    logger.warning('billing_daily: 租户 {} 无可用管理员，跳过通知', tenant_id)
+                if admins:
+                    recipients = [(admin_id, tenant_id) for admin_id in admins]
+                else:
+                    # 租户无管理员：以平台管理员为兜底收件人（global 副本），保证租户级
+                    # webhook 照常外发且平台侧可见；租户级 target 只投一次（event_key 去重）
+                    cursor.execute('''SELECT user_id FROM users
+                        WHERE role='platform_admin' AND status='active' ''')
+                    recipients = [(row['user_id'], None) for row in cursor.fetchall()]
+                if not recipients:
+                    logger.warning('billing_daily: 租户 {} 无可用收件人，跳过通知', tenant_id)
                     continue
                 cursor.execute('SELECT clock_timestamp() AS now')
                 now = cursor.fetchone()['now']
-                published += _publish_events(cursor, admins, tenant, events, now, config.ttl_seconds)
+                published += _publish_events(cursor, recipients, tenant, events, now, config.ttl_seconds)
                 conn.commit()
             except Exception:
                 conn.rollback()

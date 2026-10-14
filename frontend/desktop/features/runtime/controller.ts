@@ -4,7 +4,7 @@ import { decodeResponse, decodeSelection, decodeConnectionDiagnosis, decodeConne
 class RejectedManagementRequest extends Error {}
 
 export class RuntimeController {
-  readonly recovery = reactive({ busy: false, diagnosis: null as ConnectionDiagnosis | null, error: '', newDevice: false })
+  readonly recovery = reactive({ busy: false, diagnosis: null as ConnectionDiagnosis | null, error: '', newDevice: false, registered: false })
   private recoverySequence = 0
   readonly view = reactive({ connected: false, connecting: false, refreshing: false, state: null as HostState | null, plugins: null as PluginList | null, description: null as Description | null, stateDirty: true, pluginsDirty: true, error: '', operation: null as ManagementOperation | null, busy: false, retryAvailable: false, selectionLabel: '' })
   private generation = 0
@@ -33,6 +33,7 @@ export class RuntimeController {
   constructor(private port: RuntimeManagementPort, private readonly timeoutMs = 120_000) {}
   get supportsPlugins() { return this.view.description?.features.includes('first_party_plugins') === true }
   get supportsRecovery() { return typeof this.port.diagnoseConnection === 'function' && typeof this.port.reconfigureConnection === 'function' }
+  get supportsRegistration() { return typeof this.port.registrationStatus === 'function' }
   private async recoveryRequest<T>(request: Promise<T>): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined
     try { return await Promise.race([request, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('连接恢复结果尚未确认')), Math.max(this.timeoutMs, 300_000)) })]) }
@@ -57,6 +58,11 @@ export class RuntimeController {
       if (sequence !== this.recoverySequence || this.disposed) return
       const result = decodeConnectionRecoveryResult(raw)
       this.recovery.diagnosis = result.diagnosis; this.recovery.newDevice = result.new_device
+      if (this.supportsRegistration) {
+        const pending = await this.port.registrationStatus!()
+        if (sequence !== this.recoverySequence || this.disposed) return
+        this.recovery.registered = pending !== null && ['REGISTRATION_PENDING', 'REGISTRATION_CLEANUP_PENDING'].includes(decodeConnectionDiagnosis(pending).category)
+      }
       this.resetConnection(true)
       await this.connect(this.port, true)
     } catch { if (sequence === this.recoverySequence) this.recovery.error = '恢复请求的结果尚未确认。重新打开客户端会继续本机恢复；点击检查连接，不要自动重复配对。' }
@@ -64,7 +70,7 @@ export class RuntimeController {
   }
   async connect(port = this.port, recovering = false) {
     if (this.recovery.busy && !recovering) return
-    if (!recovering) this.recovery.diagnosis = null
+    if (!recovering && !this.supportsRegistration) this.recovery.diagnosis = null
     this.resetConnection()
     this.disposed = false
     this.port = port
@@ -92,6 +98,14 @@ export class RuntimeController {
       this.view.error = 'Runtime 管理连接已断开，请重新连接。'
     })
     try {
+      // Pending registration is independent of the old Host handshake/lease.
+      // This reads no server or historic execution resource and survives faults.
+      if (!recovering && this.supportsRegistration) {
+        const pending = await this.port.registrationStatus!()
+        if (generation !== this.generation || this.disposed) return
+        this.recovery.diagnosis = pending === null ? null : decodeConnectionDiagnosis(pending)
+        this.recovery.registered = !!this.recovery.diagnosis && ['REGISTRATION_PENDING', 'REGISTRATION_CLEANUP_PENDING'].includes(this.recovery.diagnosis.category)
+      }
       const result = await this.query('describe')
       if (!isDescription(result) || generation !== this.generation) return
       if (this.handshakeOverflow) throw new Error('Runtime 握手期间出现过多实例通知，请重新连接核对。')

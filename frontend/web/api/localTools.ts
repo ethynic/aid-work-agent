@@ -5,6 +5,7 @@
  *   POST   /api/local-tools/pairing-tickets        生成一次性配对码（5 分钟有效）
  *   GET    /api/local-tools/devices                当前用户设备列表
  *   POST   /api/local-tools/devices/{id}/select    选定当前设备（单选）
+ *   POST   /api/local-tools/devices/{id}/replacement-ticket 指定旧设备替换配对码
  *   DELETE /api/local-tools/devices/{id}           撤销设备
  *
  * 错误处理：后端错误响应为 HTTP 状态码 + FastAPI detail（{detail: {error, debug}}），
@@ -35,6 +36,7 @@ export interface LocalToolDevice {
 export interface PairingTicket {
   code: string
   expires_at: string
+  replacement_device_id?: string
 }
 
 /**
@@ -94,6 +96,25 @@ export async function createPairingTicket(): Promise<PairingTicket> {
   })
   const body = await ensureSuccess(res, '创建配对码失败，请稍后重试')
   return { code: body.code, expires_at: body.expires_at }
+}
+
+/** Logged-in user authorizes one specific old device; no device token exposed. */
+export async function createReplacementPairingTicket(deviceId: string): Promise<PairingTicket> {
+  const res = await fetch(`${API_BASE}/devices/${encodeURIComponent(deviceId)}/replacement-ticket`, {
+    method: 'POST', headers: { ...getAuthHeader() }
+  })
+  if (res.status === 404) {
+    let code: unknown
+    try { code = (await res.clone().json())?.detail?.code } catch { /* Fixed fallback. */ }
+    if (code !== 'REPLACEMENT_TARGET_NOT_FOUND') throw new Error('服务端暂不支持设备替换，请管理员更新服务后重试；普通配对仍可使用')
+  }
+  const body = await ensureSuccess(res, '创建设备替换配对码失败，请稍后重试')
+  if (body?.success !== true || body.replacement_device_id !== deviceId
+    || typeof body.code !== 'string' || !/^[A-Z2-9]{8}$/.test(body.code)
+    || typeof body.expires_at !== 'string' || !Number.isFinite(Date.parse(body.expires_at))) {
+    throw new Error('设备替换配对码响应无法核验，请更新服务后重试')
+  }
+  return { code: body.code, expires_at: body.expires_at, replacement_device_id: deviceId }
 }
 
 /**

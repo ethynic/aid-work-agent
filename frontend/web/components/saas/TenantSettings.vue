@@ -55,14 +55,16 @@
         </div>
 
         <!-- 通知渠道（计费提醒 / 反滥用告警外发配置） -->
-        <NotificationChannelSettings />
+        <div id="notification-channels" class="scroll-mt-4">
+          <NotificationChannelSettings />
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, inject } from 'vue'
+import { ref, computed, onMounted, inject, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import LogoUpload from '@/components/ui/LogoUpload.vue'
@@ -163,5 +165,12 @@ async function handleSave() {
   }
 }
 
-onMounted(() => loadSettings())
+onMounted(async () => {
+  await loadSettings()
+  // 支持深链锚点（如防滥用中心「通知渠道」入口跳转）
+  if (route.hash === '#notification-channels') {
+    await nextTick()
+    document.getElementById('notification-channels')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+})
 </script>

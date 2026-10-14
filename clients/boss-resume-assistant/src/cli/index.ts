@@ -25,7 +25,7 @@
  *   node dist/src/cli/index.js resume-detail [--name <姓名>] [--save-image <path>]
  *   node dist/src/cli/index.js resume-batch [--limit N] [--save-dir <目录>]
  *   node dist/src/cli/index.js open-detail <姓名>
- *   node dist/src/cli/index.js greet-detail <姓名> [--dry-run]
+ *   node dist/src/cli/index.js greet-detail <姓名> --greet-in-detail [--dry-run]
  *   node dist/src/cli/index.js close-detail
  *   node dist/src/cli/index.js mcp --stdio
  *   node dist/src/cli/index.js doctor
@@ -45,7 +45,11 @@ const USAGE = `BOSS 招聘操作 CLI
   filter [--experience 5-10年] [--education 本科,硕士,博士] [--salary 10-20K]   自动设置筛选面板（Win32 真实鼠标，期间勿动鼠标）
   filter --clear              清除全部筛选（开面板 → 清除 → 确定，期间勿动鼠标）
   filter --filters '[{"label":"性别","options":["男"]}]' --age '{"min":25,"max":null}'  页面动态行与年龄范围（需精确值）
+  filter --filters '[{"label":"院校","options":["985"]}]' --first-degree-only true --membership-hint vip
+                                 会员未知时使用本次用户确认并传 --membership-account-ref <探查account_ref>；真实证据优先
   greet --names <姓名>[,<姓名2>,<姓名3>] [--limit N]   定向打招呼：只打姓名精确匹配的人（1-3 人，半角/全角逗号分隔；配对失败一律跳过——宁可不打，不能打错；真实写动作，期间勿动鼠标）
+  lookup-candidates --names <姓名>[,<姓名2>,<姓名3>]  只读列出已加载卡片摘要、编号与 candidate_ref（1-3 人）
+  greet-selected <姓名> --candidate-ref <引用>  仅向用户明确选定的卡片打招呼（单人，真实写动作，期间勿动鼠标）
   greet --all [--limit N]       全量打招呼：从推荐列表顶部逐个点击（默认 10 上限，最大 100；当前屏点完自动滚动，到底结束；必须显式 --all 确认全量意图；真实写动作，期间勿动鼠标）
   goto recommend|chat         点击左侧菜单跳转页面：recommend=推荐牛人，chat=沟通（看打招呼回复）；已在目标页自动跳过
   accept [--limit N] [--no-preview]   逐个打开「对方想发送附件简历」的会话并点「同意」接收简历，同意后自动点开预览再关闭（默认 20 上限，最大 100；不在沟通页自动先跳转）
@@ -61,7 +65,7 @@ const USAGE = `BOSS 招聘操作 CLI
   resume-next --exclude-names <姓名,姓名> --job <原职位> [--limit N]   跳过已处理者并滚动继续读取（默认3，最多10）
   resume-batch [--limit N] [--save-dir <目录>]   批量打开推荐牛人卡片并读取简历（默认 1 份，最大 10；逐个点开→读取→关闭→下一份，文本在云端识别；只读，但滚动借用真实鼠标约 30 秒/份，期间勿动鼠标）
   open-detail <姓名>            打开指定姓名候选人的简历详情（推荐牛人页按姓名找人并点开，详情保持打开供 resume-detail 读取；当前屏没有自动滚动查找，找不到 fail-loud 列出当前屏可见姓名；点击/滚动借用真实鼠标，期间勿动鼠标）
-  greet-detail <姓名> [--dry-run]   在当前打开的简历详情页点「打招呼」（校验详情属于指定候选人防止打错人；已打过幂等返回；打完自动关闭详情；--dry-run 只定位不点击；真实写动作，期间勿动鼠标）
+  greet-detail <姓名> --greet-in-detail [--dry-run]   详情页打招呼默认关闭，仅明确选择直接模式后启用（校验归属；已打过幂等；打完关闭；--dry-run只定位不点击）
   close-detail                  关闭当前打开的简历详情弹层（筛选不合格时的清理步，无业务副作用，详情未打开时幂等成功；期间勿动鼠标键盘）
 
 Provider 命令：
@@ -133,6 +137,9 @@ async function main(): Promise<number> {
         salary: flagString(args, 'salary'),
         filters: args.flags.has('filters') ? JSON.parse(flagString(args, 'filters')!) : undefined,
         age: args.flags.has('age') ? JSON.parse(flagString(args, 'age')!) : undefined,
+        membership_hint: flagString(args, 'membership-hint') as 'vip' | 'non_vip' | undefined,
+        membership_account_ref: flagString(args, 'membership-account-ref'),
+        first_degree_only: args.flags.has('first-degree-only') ? String(args.flags.get('first-degree-only')) === 'true' : undefined,
         cdpPort,
         clear: hasFlag(args, 'clear'),
       })
@@ -163,6 +170,20 @@ async function main(): Promise<number> {
       if (cdpPort === 'invalid') return 2
       const { greetCommand } = await import('./commands/greet.js')
       return greetCommand({ limit, names, all: hasFlag(args, 'all'), cdpPort })
+    }
+    case 'lookup-candidates': {
+      const parsed = parseGreetNames(flagString(args, 'names')!)
+      if (!parsed.ok) { console.error(parsed.message); return 2 }
+      const cdpPort = parseCdpPort(args)
+      if (cdpPort === 'invalid') return 2
+      const { lookupCandidatesCommand } = await import('./commands/candidateSelection.js')
+      return lookupCandidatesCommand({ names: parsed.names, cdpPort })
+    }
+    case 'greet-selected': {
+      const cdpPort = parseCdpPort(args)
+      if (cdpPort === 'invalid') return 2
+      const { greetSelectedCommand } = await import('./commands/candidateSelection.js')
+      return greetSelectedCommand({ name: args.positional[1]!, candidate_ref: flagString(args, 'candidate-ref')!, cdpPort })
     }
     case 'goto': {
       const target = args.positional[1]
@@ -315,13 +336,13 @@ async function main(): Promise<number> {
     case 'greet-detail': {
       const name = args.positional[1]
       if (!name || !name.trim()) {
-        console.error('greet-detail 缺少候选人姓名：greet-detail <姓名> [--dry-run]（详情归属校验依赖该姓名）')
+        console.error('greet-detail 缺少候选人姓名：greet-detail <姓名> --greet-in-detail [--dry-run]（详情归属校验依赖该姓名）')
         return 2
       }
       const cdpPort = parseCdpPort(args)
       if (cdpPort === 'invalid') return 2
       const { greetDetailCommand } = await import('./commands/greetDetail.js')
-      return greetDetailCommand({ name: name.trim(), dryRun: hasFlag(args, 'dry-run'), cdpPort })
+      return greetDetailCommand({ name: name.trim(), dryRun: hasFlag(args, 'dry-run'), greetInDetail: args.flags.get('greet-in-detail') === true, cdpPort })
     }
     case 'close-detail': {
       const cdpPort = parseCdpPort(args)

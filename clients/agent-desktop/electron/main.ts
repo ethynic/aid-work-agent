@@ -166,6 +166,7 @@ function registerDesktopIpc(): void {
     assertTrustedSender(event)
     if (!runtimeSupervisor) throw new Error('当前产品没有本机Runtime管理能力')
     if (runtimeConnectionRecovery?.busy) throw new Error('连接恢复正在进行，请等待处理完成')
+    if (['start', 'pair'].includes((request as { method?: string })?.method ?? '') && await runtimeConnectionRecovery?.registrationBlocksExecution()) throw new Error('新设备注册尚待完成，请按连接处理步骤继续；可停止执行或退出')
     const reply = await runtimeSupervisor.request(request)
     if (!maintenanceRequested && !runtimeConnectionRecovery?.busy && reply.code === 0 && ['start', 'stop'].includes((request as { method: string }).method)) {
       // A new explicit user intent supersedes a cancelled upgrade's resume intent.
@@ -177,6 +178,11 @@ function registerDesktopIpc(): void {
     assertTrustedSender(event)
     if (product.kind !== 'runtime' || !runtimeConnectionRecovery || maintenanceRequested || exitPending) throw new Error('当前状态不能检查连接，请等待退出或更新完成')
     return runtimeConnectionRecovery.diagnose()
+  })
+  ipcMain.handle('desktop:runtime:registration-status', async event => {
+    assertTrustedSender(event)
+    if (product.kind !== 'runtime' || !runtimeConnectionRecovery || maintenanceRequested || exitPending) throw new Error('当前状态不能读取注册进度')
+    return runtimeConnectionRecovery.registrationStatus()
   })
   ipcMain.handle('desktop:runtime:reconfigure-connection', async (event, input: unknown) => {
     assertTrustedSender(event)
@@ -481,7 +487,7 @@ if (!hasSingleInstanceLock) {
       if (runtimeSupervisor) {
         void (async () => {
           const intent = await updateIntent?.read()
-          if (maintenanceRequested || runtimeConnectionRecovery?.busy) return
+          if (maintenanceRequested || runtimeConnectionRecovery?.busy || await runtimeConnectionRecovery?.registrationBlocksExecution()) return
           const reply = await runtimeSupervisor!.request({ request_id: randomUUID(), method: 'getState', params: {} })
           if (reply.code !== 0) throw new Error('RuntimeStartupStateRejected')
           const recovered = runtimeSupervisor!.recoveredAfterInterruption

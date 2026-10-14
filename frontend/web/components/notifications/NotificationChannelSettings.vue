@@ -14,9 +14,12 @@
     <template v-else>
       <!-- 当前已启用渠道 -->
       <div v-if="activeTarget" class="mb-4 p-3 rounded-lg bg-success-50 border border-success-200 flex items-center justify-between">
-        <div class="text-sm text-success-700">
+        <div class="text-sm text-success-700 min-w-0">
           已启用「{{ providerLabel(activeTarget.provider) }}」
-          <span class="text-xs text-success-600 block mt-0.5">
+          <span v-if="activeTarget.configuration_display" class="text-xs text-success-600 block mt-0.5 break-all">
+            当前配置：{{ activeTarget.configuration_display }}（更新请在下方重新填写并保存，切换渠道会自动停用当前渠道）
+          </span>
+          <span v-else class="text-xs text-success-600 block mt-0.5">
             配置内容不回显；更新请在下方重新填写并保存，切换渠道会自动停用当前渠道
           </span>
         </div>

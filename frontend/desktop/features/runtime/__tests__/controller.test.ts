@@ -24,6 +24,35 @@ function create(port: RuntimeManagementPort, timeout = 1000) { const controller 
 afterEach(() => { controllers.forEach((controller) => controller.dispose()); controllers.length = 0; vi.useRealTimers() })
 
 describe('Runtime production consumer', () => {
+  it('loads persisted registration steps on reconnect without HTTP diagnosis or pairing', async () => {
+    const { port } = makePort(); const controller = create(port)
+    const pending = { version: 1, category: 'REGISTRATION_PENDING', summary: '新凭据已保存', steps: ['正常重启Windows后继续完成配置。'], service_verified: false, can_preserve: false, can_reconfigure: false, requires_reboot: true }
+    port.registrationStatus = vi.fn(async () => pending)
+    port.diagnoseConnection = vi.fn(async () => pending)
+    port.reconfigureConnection = vi.fn(async () => ({ version: 1, status: 'action_required', diagnosis: pending, new_device: false }))
+    await controller.connect(); await controller.connect()
+    expect(controller.supportsRegistration).toBe(true)
+    expect(controller.recovery.registered).toBe(true)
+    expect(controller.recovery.diagnosis?.requires_reboot).toBe(true)
+    expect(controller.recovery.diagnosis?.service_verified).toBe(false)
+    expect(port.diagnoseConnection).not.toHaveBeenCalled()
+    expect(port.reconfigureConnection).not.toHaveBeenCalled()
+    expect(vi.mocked(port.request).mock.calls.some(([r]) => r.method === 'pair')).toBe(false)
+  })
+  it('does not resurrect a disposed page while registration status is pending after recovery', async () => {
+    const { port } = makePort(); const controller = create(port)
+    port.registrationStatus = vi.fn(async () => null)
+    port.diagnoseConnection = vi.fn()
+    const result = { version: 1, status: 'action_required', new_device: false, diagnosis: { version: 1, category: 'REGISTRATION_PENDING', summary: '新凭据已保存', steps: ['继续配置。'], service_verified: false, can_preserve: false, can_reconfigure: false, requires_reboot: false } }
+    port.reconfigureConnection = vi.fn(async () => result)
+    await controller.connect()
+    const status = deferred(); vi.mocked(port.registrationStatus).mockReturnValue(status.promise)
+    const pending = controller.reconfigureConnection({ mode: 'continue_registration', confirmed: true })
+    await flushPromises(); const count = vi.mocked(port.request).mock.calls.length
+    controller.dispose(); status.resolve(result.diagnosis); await pending
+    expect(port.request).toHaveBeenCalledTimes(count)
+    expect(controller.view.connected).toBe(false)
+  })
   it('reads a readonly Host without calling an unsupported plugin endpoint or leaving a false dirty state', async () => {
     const { port, emit } = makePort(['events']); const controller = create(port)
     let revision = 1

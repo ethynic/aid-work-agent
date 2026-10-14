@@ -2,22 +2,6 @@
   <div class="space-y-4">
     <div v-if="loading" class="text-center py-6 text-muted text-sm">加载中...</div>
     <template v-else>
-      <!-- 生效模式 -->
-      <div>
-        <label class="text-sm text-muted mb-1 block">生效模式</label>
-        <div class="flex gap-4">
-          <label class="flex items-center cursor-pointer text-sm text-default">
-            <input type="radio" value="observe" v-model="form.mode" class="text-primary-600 focus:ring-primary-500" />
-            <span class="ml-2">观察模式（仅记录与通知，不拦截）</span>
-          </label>
-          <label class="flex items-center cursor-pointer text-sm text-default">
-            <input type="radio" value="enforce" v-model="form.mode" class="text-primary-600 focus:ring-primary-500" />
-            <span class="ml-2">强制模式（达到阈值拦截）</span>
-          </label>
-        </div>
-        <p class="text-xs text-muted mt-1">当前 Phase 1 仅支持观察模式，强制模式阈值达到后才会实际拦截。</p>
-      </div>
-
       <!-- 规则勾选 -->
       <div>
         <label class="text-sm text-muted mb-1 block">启用规则</label>
@@ -41,8 +25,8 @@
                 <div v-if="rule.description" class="text-xs text-muted mt-0.5">{{ rule.description }}</div>
 
                 <!-- 参数编辑（勾选后展开） -->
-                <div v-if="isChecked(rule.rule_id) && rule.params_schema.length > 0" class="mt-3 grid gap-3" :style="{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }">
-                  <div v-for="field in rule.params_schema" :key="field.key">
+                <div v-if="isChecked(rule.rule_id) && visibleParams(rule).length > 0" class="mt-3 grid gap-3" :style="{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }">
+                  <div v-for="field in visibleParams(rule)" :key="field.key">
                     <label class="text-xs text-muted mb-1 block">
                       {{ field.label }}<span v-if="field.required" class="text-danger-500">*</span>
                     </label>
@@ -112,6 +96,11 @@ const form = ref<{ mode: 'observe' | 'enforce'; policies: AbusePolicyEntry[] }>(
 })
 const isPlatformDefault = ref(false)
 
+// Phase 2 预留参数（如硬限线）不在编辑器展示
+function visibleParams(rule: AbuseRule): AbuseRule['params_schema'] {
+  return rule.params_schema.filter((f) => !f.phase || f.phase < 2)
+}
+
 // 枚举参数选项中文显示；未映射的枚举键/值回退原始值
 const ENUM_OPTION_LABELS: Record<string, Record<string, string>> = {
   period: { hour: '每小时', day: '每天' },
@@ -156,7 +145,8 @@ async function loadData() {
     ])
     rules.value = presetsRes.rules || []
     form.value = {
-      mode: (policiesRes.mode as 'observe' | 'enforce') || 'observe',
+      // Phase 1 仅观察模式：忽略已存的 enforce，避免编辑器隐藏模式项后静默保存旧值
+      mode: 'observe',
       policies: (policiesRes.policies || []).map((p: AbusePolicyEntry) => ({
         rule_id: p.rule_id,
         params: { ...(p.params || {}) },

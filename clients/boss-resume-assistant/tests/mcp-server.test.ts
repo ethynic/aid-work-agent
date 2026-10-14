@@ -24,6 +24,8 @@ const EXPECTED_TOOLS = [
   'boss_clear_filter',
   'boss_goto',
   'boss_greet',
+  'boss_lookup_candidates',
+  'boss_greet_selected',
   'boss_accept_resume',
   'boss_reject_current',
   'boss_interview_demo',
@@ -60,7 +62,7 @@ async function startClient(args: string[]): Promise<Client> {
     stderr: 'pipe',
     // SDK Windows 下默认只继承 12 个白名单 env（防注入），AID_BOSS_AUTO_CHROME 测试开关
     // 不在其中——不显式透传则 MCP 子进程会真拉起 Chrome，破坏测试隔离
-    env: Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined)),
+    env: { ...Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined)), AID_BOSS_AUTO_CHROME: '0' },
   })
   transport.stderr?.on('data', () => {}) // 丢弃 server stderr 日志
   const client = new Client({ name: 'mcp-server-test', version: '0.1.0' }, { capabilities: {} })
@@ -76,6 +78,23 @@ function structuredOf(result: unknown): Record<string, unknown> {
   return JSON.parse(text!) as Record<string, unknown>
 }
 
+test('详情打招呼MCP缺省/false不能连接Chrome，schema显式暴露默认关闭参数', async () => {
+  const client = await startClient([CLI, 'mcp', '--stdio', '--cdp-port', String(await freePort())])
+  try {
+    const tools = await client.listTools()
+    const detail = tools.tools.find((tool) => tool.name === 'boss_greet_detail')!
+    const property = detail.inputSchema.properties?.greet_in_detail as { type?: string; default?: unknown }
+    assert.equal(property.type, 'boolean')
+    assert.equal(property.default, false)
+    for (const args of [{ name: '张测试' }, { name: '张测试', greet_in_detail: false }, { name: '张测试', dry_run: true }, { name: '张测试', greetInDetail: true }]) {
+      const result = structuredOf(await client.callTool({ name: 'boss_greet_detail', arguments: args }))
+      assert.equal(result.code, 'INVALID_ARGUMENT')
+      assert.equal(result.effect, 'none')
+      assert.equal(result.success, false)
+    }
+  } finally { await client.close() }
+})
+
 test('initialize：serverInfo + instructions（含关键前提与写动作上限）', async () => {
   const client = await startClient([CLI, 'mcp', '--stdio', '--cdp-port', String(await freePort())])
   try {
@@ -90,7 +109,7 @@ test('initialize：serverInfo + instructions（含关键前提与写动作上限
   }
 })
 
-test('list_tools：22 个 tool，名称与 annotations 正确', async () => {
+test('list_tools：24 个 tool，名称与 annotations 正确', async () => {
   const client = await startClient([CLI, 'mcp', '--stdio', '--cdp-port', String(await freePort())])
   try {
     const { tools } = await client.listTools()
@@ -195,6 +214,7 @@ test('stdout 零污染：原始 spawn 下 stdout 只出现 JSON-RPC 帧，stdin 
   const port = await freePort()
   const child = spawn(process.execPath, [CLI, 'mcp', '--stdio', '--cdp-port', String(port)], {
     stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env, AID_BOSS_AUTO_CHROME: '0' },
   })
   let stdoutBuf = ''
   child.stdout.on('data', (d) => (stdoutBuf += d))

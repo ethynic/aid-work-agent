@@ -19,7 +19,7 @@ import { buildResumeContinuation, createBossResumeBatchOperation } from '../src/
 import type { BossSession } from '../src/main/operations/bossContext.js'
 import type { OpContext } from '../src/main/operations/types.js'
 import type { DomSnapshot, ClickPoint } from '../src/main/boss/domSnapshot.js'
-import { FilterSetError } from '../src/main/boss/FilterSetter.js'
+import { FilterSetError, FILTER_SNAPSHOT_OPTIONS } from '../src/main/boss/FilterSetter.js'
 import { GreetError } from '../src/main/boss/GreetExecutor.js'
 import { ConsentError } from '../src/main/boss/ResumeConsentExecutor.js'
 import { NavError } from '../src/main/boss/PageNavigator.js'
@@ -356,7 +356,7 @@ test('boss_resume_next：排除列表必填，错页/职位变化时不点击', 
   assert.equal(changed.clicks.length, 0)
 })
 
-test('续筛开启 DOMRects 并经计时包装透传；缺失几何返回 none 且不发输入，batch 保持默认', async () => {
+test('批量与续筛透传 DOMRects/可见性样式；缺失几何返回 none 且不发输入', async () => {
   for (const continuation of [true, false]) {
     const snap = snapWithTexts(['筛选', 'PHP开发 _ 上海 8-12K'])
     snap.documents[0]!.layout.bounds[1] = [1000, 200, 60, 24]
@@ -375,9 +375,7 @@ test('续筛开启 DOMRects 并经计时包装透传；缺失几何返回 none �
     assert.equal(result.effect, 'none')
     assert.equal(result.retryable, false)
     assert.equal(result.success, false)
-    assert.deepEqual(requested, continuation
-      ? [undefined, { includeDOMRects: true }, { includeDOMRects: true }]
-      : [undefined, undefined, undefined])
+    assert.deepEqual(requested, [undefined, FILTER_SNAPSHOT_OPTIONS, FILTER_SNAPSHOT_OPTIONS])
     if (continuation) assert.match(result.message, /CSS 几何/)
     assert.equal(scrolls, 0)
     assert.equal(closed, 1)

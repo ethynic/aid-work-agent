@@ -21,7 +21,7 @@
             <li>点击下方「生成配对码」按钮获取配对码。</li>
             <li>在 Runtime 中输入配对码完成绑定，然后在设备列表中「选定」该设备。</li>
           </ol>
-          <div class="mt-4 space-y-2">
+          <div v-if="!replacementTarget" class="mt-4 space-y-2">
             <div class="flex items-center gap-2">
               <code class="flex-1 px-3 py-2 bg-gray-100 rounded-lg text-xs font-mono text-default truncate">agent-tool-runtime pair --code {{ pairCommandCode }}</code>
               <BaseButton intent="secondary" size="sm" @click="copyText(`agent-tool-runtime pair --code ${pairCommandCode}`)">复制</BaseButton>
@@ -35,6 +35,12 @@
 
         <!-- 配对码区 -->
         <BaseCard title="设备配对">
+          <div v-if="replacementTarget" class="mb-4 text-sm space-y-2">
+            <p class="font-semibold text-default">更换设备：{{ replacementTarget.name || '未命名设备' }}</p>
+            <p class="text-muted break-all">旧设备编号：{{ replacementTarget.device_id }}</p>
+            <p class="text-muted">此码仅供支持设备替换的新版 Runtime 使用。新设备安全保存配对并验证连接、完成旧执行资源交接后，才撤销这台旧设备；其他电脑和旧任务记录保留。完成后请在网页选定新设备。</p>
+            <BaseButton intent="ghost" size="sm" :disabled="generatingTicket" @click="resetReplacement">改为添加普通设备</BaseButton>
+          </div>
           <div v-if="!ticket" class="flex items-center gap-4">
             <BaseButton :disabled="generatingTicket" @click="handleGenerateTicket">
               {{ generatingTicket ? '生成中...' : '生成配对码' }}
@@ -80,8 +86,8 @@
               <template #name="{ row }">{{ row.name || '-' }}</template>
               <template #platform="{ row }">{{ row.platform || '-' }}</template>
               <template #online="{ row }">
-                <BaseBadge :intent="row.online ? 'success' : 'neutral'" size="sm">
-                  {{ row.online ? '在线' : '离线' }}
+                <BaseBadge :intent="row.status === 'revoked' ? 'danger' : row.online ? 'success' : 'neutral'" size="sm">
+                  {{ row.status === 'revoked' ? '已撤销' : row.online ? '在线' : '离线' }}
                 </BaseBadge>
               </template>
               <template #selected="{ row }">
@@ -94,9 +100,11 @@
                 <div class="flex gap-2 justify-center">
                   <BaseButton
                     intent="ghost" size="sm" class="whitespace-nowrap text-xs"
-                    :disabled="row.selected || !row.online"
+                    :disabled="row.selected || !row.online || row.status !== 'active'"
                     @click="handleSelect(row)"
                   >选定</BaseButton>
+                  <BaseButton intent="secondary" size="sm" class="whitespace-nowrap text-xs"
+                    :disabled="generatingTicket" @click="handleReplace(row)">更换此设备</BaseButton>
                   <BaseButton
                     intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs"
                     @click="handleRevoke(row)"
@@ -125,6 +133,7 @@ import { useTenantAuth } from '@/composables/useTenantAuth'
 import {
   listDevices,
   createPairingTicket,
+  createReplacementPairingTicket,
   selectDevice,
   revokeDevice,
   type LocalToolDevice,
@@ -190,7 +199,7 @@ const columns: TableColumn[] = [
   { key: 'selected', label: '当前设备', width: '90px' },
   { key: 'last_seen_at', label: '最近在线时间', width: '170px', tooltip: (row) => formatTime(row.last_seen_at) },
   { key: 'runtime_version', label: '版本', width: '100px' },
-  { key: 'actions', label: '操作', width: '130px', thAlign: 'center', tooltip: () => undefined },
+  { key: 'actions', label: '操作', width: '230px', thAlign: 'center', tooltip: () => undefined },
 ]
 
 async function loadDevices() {
@@ -238,6 +247,7 @@ function formatTime(value: string | null): string {
 // ==================== 配对码 ====================
 
 const ticket = ref<PairingTicket | null>(null)
+const replacementTarget = ref<LocalToolDevice | null>(null)
 const generatingTicket = ref(false)
 const nowTs = ref(Date.now())
 let countdownTimer: ReturnType<typeof setInterval> | null = null
@@ -261,15 +271,33 @@ const countdownText = computed(() => {
 })
 
 async function handleGenerateTicket() {
+  if (generatingTicket.value) return
   generatingTicket.value = true
+  ticket.value = null
   try {
-    ticket.value = await createPairingTicket()
+    ticket.value = replacementTarget.value
+      ? await createReplacementPairingTicket(replacementTarget.value.device_id)
+      : await createPairingTicket()
     nowTs.value = Date.now()
   } catch (e: any) {
     alert(e?.message || '创建配对码失败，请稍后重试')
   } finally {
     generatingTicket.value = false
   }
+}
+
+async function handleReplace(row: Record<string, any>) {
+  if (generatingTicket.value) return
+  const device = row as LocalToolDevice
+  if (!confirm(`确认更换「${device.name || '未命名设备'}」？\n旧设备编号：${device.device_id}\n只更换这台设备。新设备配对、连接验证和旧执行资源交接完成后才撤销旧设备；旧任务不会转移，其他电脑不受影响。请使用支持替换的新版 Runtime。`)) return
+  replacementTarget.value = { ...device }
+  await handleGenerateTicket()
+}
+
+function resetReplacement() {
+  if (generatingTicket.value) return
+  replacementTarget.value = null
+  ticket.value = null
 }
 
 // ==================== 复制 ====================
@@ -292,6 +320,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  ticket.value = null
+  replacementTarget.value = null
   if (countdownTimer) {
     clearInterval(countdownTimer)
     countdownTimer = null

@@ -14,6 +14,7 @@ import { server } from '../mocks/server'
 import {
   listDevices,
   createPairingTicket,
+  createReplacementPairingTicket,
   selectDevice,
   revokeDevice,
 } from '@/api/localTools'
@@ -109,6 +110,33 @@ describe('localTools API', () => {
     expect(devices[0].device_id).toBe('dev-1')
     expect(devices[0].online).toBe(true)
     expect(devices[0].selected).toBe(true)
+  })
+
+  it('replacement ticket binds URL target and preserves user/tenant auth without revoke', async () => {
+    let received: Request | undefined
+    server.use(http.post('/api/local-tools/devices/:id/replacement-ticket', ({ request, params }) => {
+      received = request
+      return HttpResponse.json({ success: true, code: 'ABCD2345', expires_at: '2099-01-01T00:00:00', replacement_device_id: params.id })
+    }))
+    const ticket = await createReplacementPairingTicket('old-owned')
+    expect(ticket.replacement_device_id).toBe('old-owned'); expect(received!.method).toBe('POST')
+    expect(received!.headers.get('Authorization')).toBe('Bearer test_lt_token')
+    expect(received!.headers.get('X-Tenant-Id')).toBe(TENANT_ID)
+  })
+
+  it('old server route404 has explicit server-update guidance', async () => {
+    server.use(http.post('/api/local-tools/devices/:id/replacement-ticket', () => HttpResponse.json({ detail: 'Not Found' }, { status: 404 })))
+    await expect(createReplacementPairingTicket('old-owned')).rejects.toThrow('请管理员更新服务')
+  })
+
+  it('scoped target404 is not mistaken for missing route', async () => {
+    server.use(http.post('/api/local-tools/devices/:id/replacement-ticket', () => HttpResponse.json({ detail: { code: 'REPLACEMENT_TARGET_NOT_FOUND', error: '目标设备不存在或不属于当前账号' } }, { status: 404 })))
+    await expect(createReplacementPairingTicket('old-owned')).rejects.toThrow('目标设备不存在')
+  })
+
+  it('mismatched bound target is rejected rather than displayed as authorization', async () => {
+    server.use(http.post('/api/local-tools/devices/:id/replacement-ticket', () => HttpResponse.json({ success: true, code: 'ABCD2345', expires_at: '2099-01-01T00:00:00', replacement_device_id: 'foreign' })))
+    await expect(createReplacementPairingTicket('old-owned')).rejects.toThrow('无法核验')
   })
 
   it('createPairingTicket：POST /pairing-tickets，返回 code 与 expires_at', async () => {

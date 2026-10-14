@@ -507,7 +507,7 @@ class CreateJobRequest(BaseModel):
     match_threshold: Optional[int] = Field(None, description="匹配及格线 0-100（默认 70，服务层校验取值范围）")
     job_requirements: Optional[Dict[str, Any]] = Field(
         None,
-        description="结构化职位要求：{experience(str), educations(list[str]), salary(str), keywords(list[str]), notes(str)}，全部可缺省，值须为 BOSS 档位文本",
+        description="职位筛选模板：experiences/educations/job_statuses 多选、salary_range 手填 K 范围、vip_filters 高级筛选；兼容旧 experience/salary。keywords 为评分关键词，不是 BOSS 牛人关键词",
     )
 
 
@@ -553,15 +553,15 @@ async def list_jobs(request: Request):
 
 # 职位要求档位候选（简历-职位匹配 Phase 5，前端职位弹框下拉用）。
 # 静态常量（无状态数据）：参考 BOSS 常见档位给出候选，真值档位由 CLI boss_filter_options
-# 在筛选链路运行时校准 + 既有保底映射兜底（见设计 §2.1/§4.4），故此处不做硬校验数据源。
-REQUIREMENT_EXPERIENCE_OPTIONS: List[str] = ["1年以内", "1-3年", "3-5年", "5-10年", "10年以上"]
-REQUIREMENT_EDUCATION_OPTIONS: List[str] = ["大专", "本科", "硕士", "博士"]
+# 在筛选链路运行时校准。普通历史档位保持兼容；新 VIP 模板按已观测选项校验。
+REQUIREMENT_EXPERIENCE_OPTIONS = job_service.REQUIREMENT_EXPERIENCE_OPTIONS
+REQUIREMENT_EDUCATION_OPTIONS = job_service.REQUIREMENT_EDUCATION_OPTIONS
 REQUIREMENT_SALARY_OPTIONS: List[str] = ["3-5K", "5-10K", "10-15K", "15-25K", "25-50K", "50K以上"]
 
 
 @router.get("/jobs/requirement-options")
 async def get_requirement_options(request: Request):
-    """职位要求档位候选（experience 单选 / educations 多选 / salary 单选，静态数据）。
+    """普通/VIP 筛选模板候选，旧 experience/salary 候选键保留兼容。
 
     注意：本路由须声明在 /jobs/{job_id} 之前，避免 "requirement-options" 被当作 job_id 匹配。
     """
@@ -571,6 +571,9 @@ async def get_requirement_options(request: Request):
             "experience": REQUIREMENT_EXPERIENCE_OPTIONS,
             "educations": REQUIREMENT_EDUCATION_OPTIONS,
             "salary": REQUIREMENT_SALARY_OPTIONS,
+            "experiences": REQUIREMENT_EXPERIENCE_OPTIONS,
+            "job_statuses": job_service.REQUIREMENT_JOB_STATUS_OPTIONS,
+            "vip_filters": job_service.VIP_FILTER_OPTIONS,
         },
     }
 

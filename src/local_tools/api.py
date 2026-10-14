@@ -13,7 +13,7 @@ import uuid as _uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 from loguru import logger
 
 from src.api.auth import get_current_user
@@ -26,6 +26,7 @@ from src.local_tools.models import (
     HeartbeatRequest,
     OperationResultRequest,
     PairRequest,
+    ReplacementCompleteRequest,
     ProgressRequest,
     ResultRequest,
     ResumeEvaluateRequest,
@@ -137,6 +138,35 @@ async def list_devices(request: Request):
         raise _http_error(500, "查询设备列表失败，请稍后重试", e)
 
 
+def _replacement_error(error: repository.DeviceReplacementError) -> HTTPException:
+    messages = {
+        "PAIRING_PROTOCOL_REQUIRED": (400, "此码用于更换设备，请安装支持设备替换的新版Runtime"),
+        "REPLACEMENT_TARGET_NOT_FOUND": (404, "目标设备不存在或不属于当前账号"),
+        "REPLACEMENT_DEVICE_REVOKED": (401, "新设备已撤销，无法完成替换"),
+        "REPLACEMENT_ALREADY_COMPLETED": (409, "旧设备已由另一次替换完成，新设备连接仍保留，请在网页确认选定设备"),
+    }
+    status, message = messages[error.code]
+    return HTTPException(status_code=status, detail={"error": message, "code": error.code, "debug": ""})
+
+
+@router.post("/devices/{device_id}/replacement-ticket")
+async def create_replacement_ticket(device_id: str, request: Request):
+    """Logged-in user explicitly authorizes replacement of one owned old device."""
+    user, tenant_id = await _current_user_and_tenant(request)
+    if not _valid_uuid(device_id):
+        raise _replacement_error(repository.DeviceReplacementError("REPLACEMENT_TARGET_NOT_FOUND"))
+    try:
+        result = await asyncio.to_thread(pairing.create_pairing_ticket, tenant_id, user["user_id"], device_id)
+        return {"success": True, "code": result["code"], "expires_at": _iso(result["expires_at"]),
+                "replacement_device_id": result["replacement_device_id"]}
+    except repository.DeviceReplacementError as error:
+        raise _replacement_error(error)
+    except Exception:
+        # Fixed diagnostics: database exceptions can include token/ticket hashes.
+        logger.opt(exception=RuntimeError("REPLACEMENT_TICKET_TRANSACTION_FAILED")).error("后端日志：设备替换配对码创建失败")
+        raise HTTPException(status_code=500, detail={"error": "设备替换配对码创建失败，请稍后重试", "debug": ""})
+
+
 @router.post("/devices/{device_id}/select")
 async def select_device(device_id: str, request: Request):
     """选定当前设备（单选，校验归属与 active）"""
@@ -189,15 +219,41 @@ async def runtime_pair(body: PairRequest):
             body.runtime_version,
             body.capabilities,
             body.machine_fingerprint,
+            body.pairing_protocol,
         )
         if not result:
             raise _http_error(400, "配对码无效、已过期或已被使用")
         return {"success": True, **result}
+    except repository.DeviceReplacementError as error:
+        raise _replacement_error(error)
     except HTTPException:
         raise
-    except Exception as e:
-        logger.opt(exception=True).error(f"后端日志：设备配对失败: {e}")
-        raise _http_error(500, "设备配对失败，请稍后重试", e)
+    except Exception:
+        logger.opt(exception=RuntimeError("PAIRING_TRANSACTION_FAILED")).error("后端日志：设备配对失败，事务未提交")
+        raise HTTPException(status_code=500, detail={"error": "设备配对失败，请稍后重试", "debug": ""})
+
+
+@router.post("/runtime/replacement/complete")
+async def runtime_complete_replacement(
+    body: ReplacementCompleteRequest = Body(default=ReplacementCompleteRequest()),
+    device: Dict = Depends(_require_device),
+):
+    """Client calls only after durable identity/HB and safe resource handover.
+
+    Authentication and target ownership are rechecked under transaction locks.
+    No old device id, user or tenant is accepted in this request.
+    """
+    try:
+        completed = await asyncio.to_thread(repository.complete_device_replacement,
+                                            device["tenant_id"], device["user_id"], str(device["id"]))
+        return {"success": True, "replacement_completed": completed}
+    except repository.DeviceReplacementError as error:
+        if error.code == "REPLACEMENT_TARGET_NOT_FOUND":
+            raise HTTPException(status_code=409, detail={"error": "旧设备替换关系无法核验，新设备连接已保留", "code": error.code, "debug": ""})
+        raise _replacement_error(error)
+    except Exception:
+        logger.opt(exception=RuntimeError("REPLACEMENT_COMPLETE_TRANSACTION_FAILED")).error("后端日志：设备替换完成事务失败")
+        raise HTTPException(status_code=500, detail={"error": "设备替换尚未完成，新设备连接保留，请稍后重试", "debug": ""})
 
 
 @router.post("/runtime/heartbeat")

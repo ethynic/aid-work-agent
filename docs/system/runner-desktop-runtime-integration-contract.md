@@ -254,6 +254,21 @@ Provider 的 Node executable、进程监管、凭证后端由平台 adapter注�
 
 候选0.1/0.2未上线或冻结，当前由0.3替代；目录v1、api_major/schema_version=1保持，不能把架构2.0当成API major。旧候选回复需显式迁移/重新验证，严格schema拒绝旧形状；已有生产Device协议不改。首期签名规范化、真实Host/Desktop管理接线、进程监管及隔离验收包已有实现证据，但共同wire尚未登记冻结，H2/H4新登记与产物链仍未完成。当前实现及限制统一见[Runtime架构](runtime-plugin-host-architecture-design.md)和[Runtime计划](../plans/plan-runtime-plugin-host.md)，不沿用历史候选的待开发状态。
 
+### 8.2 连接注册与设备替换增量（2026-10-13，实施中）
+
+共同检查点由Runtime主控登记，保持架构2.0/H1候选0.3不变，新增注册能力修订1与Device pairing_protocol=2；不是已部署能力。唯一写入者：Runtime主控维护注册暂存/core/Main/preload及H3消费，服务端开发角色维护票据/替换持久关系和Web；独立测试与CR共同核对生产消费端。详见[恢复计划Phase13](../plans/plan-runtime-upgrade-recovery.md)。
+
+| 接口/记录 | 本批冻结规则与兼容 |
+|---|---|
+| Web POST /api/local-tools/devices/{old_device_id}/replacement-ticket | 登录tenant/user校验旧设备归属，返回code/expires_at/replacement_device_id；普通票据接口不变。名称/机器指纹不创造撤销权限。 |
+| POST /api/local-tools/runtime/pair | 可选pairing_protocol严格整数2；普通码旧客户端不变；替换码旧客户端明确拒绝且不消费。替换响应可选replacement_pending:true；只创建新设备/绑定，不撤销旧设备。 |
+| POST /api/local-tools/runtime/replacement/complete | 新设备token鉴权，空请求/{}，只完成自身服务器绑定关系；success/replacement_completed，幂等且竞争替换不能多赢家。不得接纳请求指定oldID/租户/用户。保留旧任务事实，不自动改selected。 |
+| H3可选registrationStatus() | ConnectionDiagnosis v1或null，仅投影受保护本机注册步骤，无凭据/路径，无HTTP/历史资源扫描；存在此端口才启用continue_registration。旧renderer忽略新端口，旧preload下新renderer不发新mode。 |
+| H3 reconfigureConnection | v1新增register_new（地址/名称/配对码）和continue_registration+confirmed:true（不带码），仅registrationStatus能力存在时使用。旧renderer调用new_device时新Main在消费码/改状态前明确CLIENT_UPDATE_REQUIRED，不能静默改为stage；新renderer旧preload仍交旧Main处理原new_device。其余DTO字段不变，结果new_device只在活动home安装后为true。 |
+| 注册修订1 | 固定home旁CurrentUser DPAPI事务/独占lease；requested无OTP，未知不自动重发；paired无claim，activation绑定同UUID/归档epoch。旧资源门用于安装/执行；active待注销失败仅重试complete，不再次pair或归档。 |
+
+C09～C11不变：旧任务固定旧设备，不迁移/重放旧结果；停止证明与业务结案不同。pending注册阻止本产品自动/普通start和pair，stop/退出仍可用；真正旧CLI停止需资源证明。注册和凭据写入成功且资源交接后才撤销旧身份；服务不可用、身份无效、保护/权限/并发失败须明确可操作阶段，未知HTTP不能显示成功。旧服务器不支持替换接口时明确升级服务端，不降级误撤。
+
 ## 9. 兼容验收矩阵
 
 | 情形 | 共同预期 |

@@ -35,10 +35,11 @@ export const TOOL_DEFS: BossToolDef[] = [
     description:
       '在 BOSS 直聘「推荐牛人」页设置筛选面板：旧经验/学历/薪资或当前页面动态filters行及age范围（替换语义，先清除残留再选）。' +
       '写动作：会改动页面上的筛选状态。至少提供一个条件，未提供的维度会清空，不保留原值。' +
-      '数值档位（经验/薪资）自动保底映射：传了页面不存在的档位时按「保下限」规则映射到最接近的真实档位' +
+      '数值档位（经验/薪资）自动保底映射：双端或下限请求按「保下限」，只有上限的请求按「不扩大上限」映射到真实档位' +
       '（如要 15-30K 而页面只有 10-20K/20-50K 会选 20-50K），结果 substitutions 注明实际档位，务必向用户转述；' +
       '先用 boss_filter_options 查实际行与档位，将职位默认要求与用户当轮补充条件合并，不回写职位库；新增行使用精确filters，年龄使用age。' +
-      '扩展行不做模糊映射，不能静默漏条件；能力/探查不完整不能声称页面不存在该条件。',
+      '扩展行不做模糊映射。经验/学历/求职状态可在filters中多选；先查membership/groups，未知会员有高级请求须先询问用户，再传membership_hint。' +
+      '真实非VIP或确定付费证据优先于提示；只执行普通项并明确回报skipped_filters。院校附属第一学历用first_degree_only。不能静默漏条件或把探查不完整当不存在。',
     zodShape: {
       experience: z.string().min(1).optional().describe('经验档位，如 "5-10年"；省略会清空该维度'),
       educations: z.array(z.string().min(1)).optional().describe('学历档位列表，可多选，如 ["本科","硕士"]；省略会清空该维度'),
@@ -48,6 +49,9 @@ export const TOOL_DEFS: BossToolDef[] = [
       options_ref: z.string().min(1).optional().describe('云端能力探查引用，Provider接受但不消费；保持调用与恢复意图一致'),
       age: z.object({ min: z.number().int().min(16).max(45).optional(), max: z.number().int().min(16).max(45).nullable().optional() }).strict().optional()
         .describe('真实双端年龄范围，16至45岁；如25岁以上传{min:25,max:null}，null代表页面不限。不能将超出45岁的下限映成不限'),
+      membership_hint: z.enum(['vip', 'non_vip']).optional().describe('仅在头像无法可靠判断会员时使用用户本次明确回答；不能覆盖真实非VIP或付费证据，不能跨账号沿用'),
+      membership_account_ref: z.string().regex(/^[a-f0-9]{64}$/).optional().describe('使用未知会员的用户提示时必传最近boss_filter_options返回的account_ref；当前账号不匹配则动作前停止'),
+      first_degree_only: z.boolean().optional().describe('院校筛选附属的只看第一学历；true必须同时选择院校，需VIP权益，结果回显实际勾选值'),
     },
     annotations: { title: '设置筛选条件', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
@@ -77,7 +81,8 @@ export const TOOL_DEFS: BossToolDef[] = [
       '当前屏点完自动向下滚动，到底或达到 limit 结束；触发付费墙（职位无开聊权益）会立即停止并返回 PAYWALL。' +
       '定向模式：传 names 姓名清单时先配对卡片姓名再点击，只向姓名精确匹配（trim 相等）的候选人打招呼，' +
       '配对失败的卡片一律跳过（宁可不打，不能打错）；结果返回 greeted_names（实际打过的人）与' +
-      ' missing_names（滚到底也没找到的人），汇报时必须以此为准、绝不声称给未打的人打过招呼。' +
+      ' missing_names（当前已加载列表未找到或卡片变化后无法定位的人），汇报时必须以此为准、绝不声称给未打的人打过招呼。' +
+      '已加载列表支持直接上下定位；重名和未找到项跳过，先完成其他唯一目标。ambiguous_names包含各卡片的编号、card_info摘要、优势与candidate_ref；用户澄清后用boss_greet_selected精确选择，用于事后请用户确认；不要求初始名单带优势。' +
       '前置要求：当前在推荐牛人列表页，否则返回 WRONG_PAGE。',
     zodShape: {
       limit: z
@@ -99,6 +104,23 @@ export const TOOL_DEFS: BossToolDef[] = [
         ),
     },
     annotations: { title: '打招呼', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  },
+  {
+    name: 'boss_lookup_candidates',
+    title: '查询同名候选人卡片',
+    description: '只读查询推荐牛人页已加载的指定姓名（1-3 个），返回卡片摘要、编号、优势及candidate_ref。初始名单仍用boss_greet先处理唯一目标；引用过期用本工具刷新并重新对应。不会滚动或打招呼，不包含非筛选结果推荐。',
+    zodShape: { names: z.array(z.string().trim().min(1).max(30)).min(1).max(3).describe('待澄清的姓名，初始不要求用户提供优势') },
+    annotations: { title: '查询同名候选人卡片', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: 'boss_greet_selected',
+    title: '向选定卡片打招呼',
+    description: '仅向用户明确选定的单个同名候选人打招呼（外部写动作）。Agent根据用户口语与之前展示的编号/card_info唯一对应，将原工具回执的name和candidate_ref原样传入。不得编造引用、猜选、退回姓名-only或详情页绕过；无法唯一对应继续询问。引用过期先boss_lookup_candidates刷新并重新确认对象。effect=unknown禁止重试。',
+    zodShape: {
+      name: z.string().trim().min(1).max(30).describe('用户选定的卡片姓名'),
+      candidate_ref: z.string().length(91).regex(/^boss-card-v1:\d{13}:[a-f0-9]{64}$/).describe('原卡片工具回执中的精确引用，用户不必输入该引用'),
+    },
+    annotations: { title: '向选定卡片打招呼', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
   {
     name: 'boss_accept_resume',
@@ -244,7 +266,7 @@ export const TOOL_DEFS: BossToolDef[] = [
     name: 'boss_filter_options',
     title: '查询筛选可选档位',
     description:
-      '只读探查 BOSS 直聘「推荐牛人」页筛选面板的完整行与控件（含会员扩展行、单选标记与真实年龄范围），' +
+      '只读探查 BOSS 直聘「推荐牛人」页会员三态、普通/VIP分组及当前可见行与控件（含多选标记与真实年龄范围）；推广VIP标记不是会员证明，非VIP不展开高级区。' +
       '读完后自动收起面板还原页面。用于把用户口语化的筛选要求（如 15k-20k、5年以上、本科及以上）' +
       '映射成页面实际存在的精确档位，再调 boss_filter。前置要求：当前在推荐牛人页，否则返回 WRONG_PAGE。' +
       '开/收面板借用真实鼠标约 2 秒，期间勿动鼠标。',
@@ -313,7 +335,7 @@ export const TOOL_DEFS: BossToolDef[] = [
       '在 BOSS 直聘「推荐牛人」页按姓名找到候选人卡片并点开其在线简历详情（详情保持打开，供 boss_resume_detail 读取）。' +
       '当前屏没有目标时自动滚动查找（上限 30 屏），找不到会报错并列出当前屏可见姓名。' +
       '打开后校验详情画布顶部区候选人姓名与预期一致（防打错人）。' +
-      '筛选主流程第一步：boss_open_detail → boss_resume_detail → 合格则 boss_greet_detail、不合格则 boss_close_detail。' +
+      '默认boss_open_detail → boss_resume_detail评分入库 → boss_close_detail，等待人工审核名单；用户明确选择直接打招呼才启用boss_greet_detail。' +
       '前置：已在推荐牛人页（不在时先 boss_goto recommend）。点击与找人滚动借用真实鼠标，期间勿动鼠标。',
     zodShape: {
       name: z.string().min(1).max(30).describe('候选人姓名（精确，与推荐列表卡片姓名 trim 全等）'),
@@ -325,10 +347,11 @@ export const TOOL_DEFS: BossToolDef[] = [
     title: '详情页打招呼',
     description:
       '在当前打开的简历详情页点「打招呼」（校验详情属于指定姓名候选人，防止打错人；已打过则幂等返回；打完自动关闭详情）。' +
-      '筛选主流程的打招呼路径——列表页 boss_greet 仅作手动兜底，不用于筛选流程。' +
-      'dry_run=true 只定位不点击（详情保持打开）。写动作，期间勿动鼠标。',
+      'greet_in_detail默认false，缺少显式true不执行；仅用户主动选择本轮评分合格后直接打招呼且已matched时传true。' +
+      '默认人工审核后给出名单，在列表页用boss_greet；dry_run=true只定位不点击，不代替启用参数。写动作，期间勿动鼠标。',
     zodShape: {
       name: z.string().min(1).max(30).describe('候选人姓名（校验当前打开的详情属于该候选人，防止打错人）'),
+      greet_in_detail: z.boolean().optional().default(false).describe('默认关闭；仅用户明确选择本轮合格后直接打招呼才传true'),
       // 键名必须与 operation 入参一致（boss_send_to 同款 snake_case）：MCP SDK 用 zodShape 解析
       // 输入后原样传给 operation.execute，此前误写 dryRun 会被 zod strip 掉且 operation 读
       // dry_run → dry-run 请求静默变真实点击（安全缺陷，测试智能体 2026-09-28 修正）
@@ -340,7 +363,7 @@ export const TOOL_DEFS: BossToolDef[] = [
     name: 'boss_close_detail',
     title: '关闭简历详情',
     description:
-      '关闭当前打开的简历详情弹层（筛选不合格时的清理步，无业务副作用；详情未打开时幂等成功）。' +
+      '关闭当前打开的简历详情弹层（默认评分入库后关闭并等待人工审核，无业务副作用；详情未打开时幂等成功）。' +
       'Escape 借用键盘事件，期间勿动鼠标键盘。',
     zodShape: {},
     annotations: { title: '关闭简历详情', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },

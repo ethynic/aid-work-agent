@@ -27,20 +27,27 @@ def tenant_row(tenant_id='t1', balance=10.0, expire_at=None, company='宏陶'):
             'credit_balance': balance, 'expire_at': expire_at}
 
 
-def set_cursor_sequence(cursor, tenants, totals, admins, now=None):
-    """按 SQL 文本分发结果：租户列表 / 消耗合计 / 管理员列表 / 时钟 各取各的迭代器。"""
+def set_cursor_sequence(cursor, tenants, totals, admins, platform_admins=None, now=None):
+    """按 SQL 文本分发结果：租户列表 / 消耗合计 / 管理员列表 / 平台管理员列表 / 时钟。
+
+    platform_admins 缺省时复用 admins 迭代器（仅当用例触发平台兜底查询时需要显式给出）。
+    """
     now_list = [now] if now is not None else [datetime(2026, 10, 10, 3, 10)] * sum(
         len(batch) for batch in tenants)
     state = {'tenants': iter(tenants), 'totals': iter(totals),
-             'admins': iter(admins), 'clock': iter(now_list)}
+             'admins': iter(admins),
+             'platform_admins': iter(platform_admins if platform_admins is not None else admins),
+             'clock': iter(now_list)}
 
     def execute_dispatch(sql, params=None):
         if 'FROM tenants' in sql:
             cursor.fetchall = lambda: next(state['tenants'])
         elif 'FROM chat_records' in sql:
             cursor.fetchone = lambda: {'total': next(state['totals'])}
-        elif 'FROM users' in sql:
+        elif 'FROM users' in sql and 'tenant_admin' in sql:
             cursor.fetchall = lambda: next(state['admins'])
+        elif 'FROM users' in sql and 'platform_admin' in sql:
+            cursor.fetchall = lambda: next(state['platform_admins'])
         elif 'clock_timestamp' in sql:
             cursor.fetchone = lambda: {'now': next(state['clock'])}
 
@@ -153,10 +160,25 @@ class TestEventPublishing:
         assert recipients == {('admin1', 'billing.credit_low'), ('admin1', 'billing.tenant_expiry'),
                               ('admin2', 'billing.credit_low'), ('admin2', 'billing.tenant_expiry')}
 
-    def test_no_admins_skips_without_error(self, captured):
+    def test_no_admins_falls_back_to_platform_admins(self, captured):
+        """租户无管理员：发平台管理员 global 兜底副本（about_tenant 打标），
+        保证租户级 webhook 照常外发。"""
         repo, conn = make_repo()
         set_cursor_sequence(conn.cursor.return_value,
-                            tenants=[[tenant_row(balance=10.0)]], totals=[35.0], admins=[[]])
+                            tenants=[[tenant_row(balance=10.0)]], totals=[35.0], admins=[[]],
+                            platform_admins=[[{'user_id': 'p1'}, {'user_id': 'p2'}]])
+        published = run_billing_notifications_once(repo, today=TODAY)
+        assert published == 2
+        event = captured[0]
+        assert event['subject'].tenant_id is None
+        assert event['resource_ref'] == {'type': 'tenant_credit', 'id': 't1', 'about_tenant': 't1'}
+        assert {kw['subject'].user_id for kw in captured} == {'p1', 'p2'}
+
+    def test_no_recipients_at_all_skips(self, captured):
+        repo, conn = make_repo()
+        set_cursor_sequence(conn.cursor.return_value,
+                            tenants=[[tenant_row(balance=10.0)]], totals=[35.0], admins=[[]],
+                            platform_admins=[[]])
         assert run_billing_notifications_once(repo, today=TODAY) == 0
         assert captured == []
 

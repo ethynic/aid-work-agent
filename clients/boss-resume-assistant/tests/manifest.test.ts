@@ -52,6 +52,8 @@ test('manifest 字段完整（标准 §6）', () => {
       'boss_filter',
       'boss_goto',
       'boss_greet',
+      'boss_lookup_candidates',
+      'boss_greet_selected',
       'boss_interview_demo',
       'boss_list_jobs',
       'boss_read_chat',
@@ -71,7 +73,7 @@ test('manifest 字段完整（标准 §6）', () => {
       'boss_close_detail',
     ].sort(),
   )
-  assert.equal(m.tools.length, 22)
+  assert.equal(m.tools.length, 24)
   for (const tool of m.tools) {
     assert.ok(tool.title.length > 0 && tool.description.length > 0)
     assert.equal(tool.inputSchema.type, 'object')
@@ -91,7 +93,7 @@ test('写动作硬上限进入 schema（设计 §14）：greet 最大 3 / accept
   assert.equal(acceptProps.limit!.default, 1)
   const reject = tools.find((t) => t.name === 'boss_reject_current')!
   assert.deepEqual(reject.inputSchema.properties, {})
-  assert.equal(TOOL_NAMES.length, 22)
+  assert.equal(TOOL_NAMES.length, 24)
 })
 
 test('version --json 输出与 buildManifest/computeSchemaDigest 同源', () => {
@@ -100,5 +102,5 @@ test('version --json 输出与 buildManifest/computeSchemaDigest 同源', () => 
   const parsed = JSON.parse(out)
   assert.equal(parsed.schema_digest, computeSchemaDigest())
   assert.equal(parsed.provider_id, 'ai.aidwork.boss-recruiting')
-  assert.equal(parsed.tools.length, 22)
+  assert.equal(parsed.tools.length, 24)
 })

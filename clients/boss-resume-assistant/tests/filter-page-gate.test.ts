@@ -42,7 +42,7 @@ test('筛选及探查在错误页看到完整后台会员面板也必须零输�
 
 test('推荐页允许query，参数错误仍发生于动作前而不是误报WRONG_PAGE', async () => {
   const f = sessionAt('https://www.zhipin.com/web/chat/recommend?source=test')
-  const result = await createBossFilterOperation(f.factory).execute({ filters: [{ label: '页面没有的条件', options: ['值'] }] }, context())
+  const result = await createBossFilterOperation(f.factory).execute({ filters: [{ label: '求职状态', options: ['页面没有的档位'] }] }, context())
   assert.equal(result.code, 'UI_CHANGED')
   assert.equal(result.effect, 'none')
   assert.equal(f.calls.snapshot, 1)

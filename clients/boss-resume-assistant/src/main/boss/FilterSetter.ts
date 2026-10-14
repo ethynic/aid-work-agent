@@ -20,7 +20,9 @@ import {
   indexedValues,
   classOf,
 } from './domSnapshot.js'
-import { CancelledError } from '../operations/types.js'
+import { CancelledError, CodedOperationError } from '../operations/types.js'
+import { effectiveMembership, filterGroup, inspectMembership, membershipAccountKey, type MembershipHint, type MembershipObservation } from './MembershipInspector.js'
+import { closeFilterPaywall, inspectFilterPaywall } from './FilterPaywall.js'
 
 export class FilterSetError extends Error {
   constructor(message: string) {
@@ -50,6 +52,9 @@ export interface FilterSpec {
   /** 页面实际行标签与精确选项；支持职位库未配置的当轮条件。 */
   filters?: Array<{ label: string; options: string[] }>
   age?: { min?: number; max?: number | null }
+  membership_hint?: MembershipHint
+  membership_account_ref?: string
+  first_degree_only?: boolean
 }
 
 export interface FilterSetterDeps {
@@ -93,12 +98,13 @@ export interface PanelRowInfo {
   selection?: 'single' | 'multiple' | 'unknown'
   control?: 'options' | 'range'
   range?: { min: number; max: number; unlimited: boolean }
+  group?: 'ordinary' | 'vip'
 }
 
 /** 与真实取证 fixture 相同顺序，不引入 Runtime/evaluate。 */
 export const FILTER_SNAPSHOT_OPTIONS = {
   includeDOMRects: true,
-  computedStyles: ['overflow-x', 'overflow-y', 'display', 'position', 'height'],
+  computedStyles: ['overflow-x', 'overflow-y', 'display', 'position', 'height', 'visibility', 'opacity'],
 }
 
 interface StructuralRow {
@@ -107,9 +113,31 @@ interface StructuralRow {
   options: VisibleHit[]
 }
 
+export interface SkippedFilter {
+  label: string
+  options?: string[]
+  range?: { min?: number; max?: number | null }
+  reason: 'non_vip' | 'paywall'
+}
+
+export interface FilterApplyResult {
+  filterCount: number
+  substitutions: Array<{ row: string; requested: string; matched: string }>
+  appliedRows: Array<{ label: string; options: string[] }>
+  age?: { min: number; max: number | null }
+  firstDegreeOnly: boolean
+  membership: MembershipObservation
+  skippedFilters: SkippedFilter[]
+  applied: boolean
+}
+
+class VipUnavailable extends Error {
+  constructor(readonly membership: MembershipObservation) { super('当前筛选VIP权益不可用') }
+}
+
 /** 行配置：条件字段 → 行标签匹配（前缀匹配，兼容「薪资待遇[单选]」等后缀变体） */
 const ROW_DEFS: Array<{ key: 'experience' | 'educations' | 'salary'; labelPrefix: string; multi: boolean }> = [
-  { key: 'experience', labelPrefix: '经验要求', multi: false },
+  { key: 'experience', labelPrefix: '经验要求', multi: true },
   { key: 'educations', labelPrefix: '学历要求', multi: true },
   { key: 'salary', labelPrefix: '薪资待遇', multi: false },
 ]
@@ -130,6 +158,8 @@ function parseNumericRange(text: string): { min: number; max: number } | null {
   if (m) return { min: Number(m[1]), max: Number(m[2]) }
   m = /^(\d+(?:\.\d+)?)年?以上/.exec(t) // 「5年以上」：数字与「以上」之间带「年」
   if (m) return { min: Number(m[1]), max: 99999 }
+  m = /^(\d+(?:\.\d+)?)(?:年|岁)?(?:以下|以内)$/.exec(t)
+  if (m) return { min: 0, max: Number(m[1]) }
   return null
 }
 
@@ -149,6 +179,12 @@ export function pickClosestOption(requested: string, available: string[]): strin
   if (cands.length === 0) return null
   const overlap = (c: { min: number; max: number }) =>
     Math.max(0, Math.min(rq.max, c.max) - Math.max(rq.min, c.min))
+  if (/^\d+(?:\.\d+)?(?:年|岁)?(?:以下|以内)$/.test(requested.replace(/[\sKk]/g, ''))) {
+    // 单端上限不能沿用保下限排序或扩大范围；只能挑最大值不超过请求上限的实际档位。
+    const upperEligible = cands.filter((c) => c.r.max <= rq.max + 1e-9)
+    upperEligible.sort((a, b) => b.r.max - a.r.max || overlap(b.r) - overlap(a.r))
+    return upperEligible[0]?.opt ?? null
+  }
   const eligible = cands.filter((c) => c.r.min >= rq.min - 1e-9)
   if (eligible.length > 0) {
     eligible.sort((a, b) => a.r.min - b.r.min || overlap(b.r) - overlap(a.r))
@@ -164,6 +200,12 @@ const EXTRA_ROW_LABEL_PREFIXES = ['年龄', '活跃度', '性别', '近期没有
 export class FilterSetter {
   private readonly sleep: (ms: number) => Promise<void>
   private readonly step: <T>(name: string, fn: () => Promise<T>) => Promise<T>
+  private observedMembership: MembershipObservation = { status: 'unknown', source: 'unknown', evidence: ['尚未探查头像'] }
+  private membershipOverride?: MembershipObservation
+  private accountKey?: string | null
+
+  get membership(): MembershipObservation { return this.observedMembership }
+  get accountRef(): string | null { return this.accountKey ?? null }
 
   constructor(private readonly deps: FilterSetterDeps) {
     this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)))
@@ -215,7 +257,19 @@ export class FilterSetter {
    * 再 apply → 5 项全被点掉，徽章校验失败）。先清除保证从空白态开始，幂等。
    * 任一步失败抛 FilterSetError。
    */
-  async apply(spec: FilterSpec): Promise<{ filterCount: number; substitutions: Array<{ row: string; requested: string; matched: string }>; appliedRows: Array<{ label: string; options: string[] }>; age?: { min: number; max: number | null } }> {
+  async apply(spec: FilterSpec): Promise<FilterApplyResult> {
+    this.membershipOverride = undefined
+    this.accountKey = undefined
+    try { return await this.applyOnce(spec) } catch (error) {
+      if (!(error instanceof VipUnavailable)) throw error
+      if (error.membership.source === 'paywall') await closeFilterPaywall(this.deps)
+      this.membershipOverride = error.membership
+      // 仅确定的付费/会员负证据允许本次丢弃VIP后重设普通条件；第二次失败直接停止，不无限重放。
+      return this.applyOnce(spec, true)
+    }
+  }
+
+  private async applyOnce(spec: FilterSpec, resetAfterVipFailure = false): Promise<FilterApplyResult> {
     if (this.deps.signal?.aborted) throw new CancelledError()
     const rows: Array<{ labelPrefix: string; options: string[] }> = []
     for (const def of ROW_DEFS) {
@@ -239,8 +293,38 @@ export class FilterSetter {
       throw new FilterSetError('未提供任何筛选条件')
     }
 
+    const initial = await this.deps.snapshot()
+    const account = membershipAccountKey(initial)
+    if (this.accountKey === undefined) this.accountKey = account
+    else this.requireSameAccount(initial)
+    if ((spec.membership_hint || spec.membership_account_ref) && (!account || spec.membership_account_ref !== account)) throw new CodedOperationError('MEMBERSHIP_REQUIRED', '会员提示或账号绑定缺少当前账号的有效membership_account_ref，请重新查询boss_filter_options并核对账号，原筛选未清除')
+    const paywall = inspectFilterPaywall(initial)
+    if (paywall) throw new VipUnavailable({ status: 'non_vip', source: 'paywall', evidence: ['已确认当前筛选的会员购买/开通弹窗'] })
+    const observed = this.membershipOverride ?? inspectMembership(initial)
+    const effective = effectiveMembership(observed, spec.membership_hint)
+    this.observedMembership = observed.status === 'unknown' && effective !== 'unknown'
+      ? { status: effective, source: 'user_hint', observed_status: 'unknown', evidence: ['本次用户明确提供会员状态提示；未以推广徽标或标题证明会员'] }
+      : observed
+    const vipRequested = rows.some((r) => filterGroup(r.labelPrefix) === 'vip') || spec.age !== undefined || spec.first_degree_only === true
+    if (vipRequested && effective === 'unknown') throw new CodedOperationError('MEMBERSHIP_REQUIRED', '未可靠识别当前BOSS账号是否为VIP，请先询问用户会员状态并传membership_hint；原筛选未清除')
+    if (vipRequested && effective === 'vip' && !this.accountKey) throw new CodedOperationError('MEMBERSHIP_REQUIRED', '无法把本次会员状态绑定到可核验的导航头像账号，原筛选未清除，请恢复账号页面后确认')
+    const skippedFilters: SkippedFilter[] = []
+    if (effective === 'non_vip') {
+      const reason = observed.source === 'paywall' ? 'paywall' as const : 'non_vip' as const
+      const vipRows = rows.filter((r) => filterGroup(r.labelPrefix) === 'vip')
+      skippedFilters.push(...vipRows.map((r) => ({ label: r.labelPrefix, options: r.options, reason })))
+      rows.splice(0, rows.length, ...rows.filter((r) => filterGroup(r.labelPrefix) === 'ordinary'))
+      if (spec.age) skippedFilters.push({ label: '年龄', range: spec.age, reason })
+      if (spec.first_degree_only) skippedFilters.push({ label: '只看第一学历', options: ['true'], reason })
+      spec = { ...spec, age: undefined, first_degree_only: spec.first_degree_only === undefined ? undefined : false }
+      if (rows.length === 0 && !resetAfterVipFailure) {
+        const badge = initial.strings.map((s) => FILTER_BADGE_PATTERN.exec(s.trim())).find((m) => m !== null)
+        return { filterCount: badge ? Number(badge[1]) : 0, substitutions: [], appliedRows: [], firstDegreeOnly: false, membership: this.observedMembership, skippedFilters, applied: false }
+      }
+    }
+
     // 1. 开面板（已打开则跳过——面板开着时再点「筛选」会把它关掉）
-    let snap = await this.ensurePanelOpen()
+    let snap = await this.ensurePanelOpen(initial)
 
     // 所有条件先验证再清除：不支持的新增维度不能把已有筛选清空后才失败。
     const substitutions: Array<{ row: string; requested: string; matched: string }> = []
@@ -274,11 +358,15 @@ export class FilterSetter {
           return closest
         }
       }).filter((option) => option !== '不限')
+      if (new Set(row.options).size !== row.options.length) throw new FilterSetError(`筛选行「${row.labelPrefix}」多个请求映射到同一个实际选项，请合并后再试，原筛选尚未清除`)
     }
+
     if (this.deps.signal?.aborted) throw new CancelledError()
 
     // 2. 先清除残留选择（反选防护，见方法注释）
     snap = await this.ensureButtonVisible(snap, '清除')
+    this.requireSameAccount(snap)
+    if (rows.some((r) => filterGroup(r.labelPrefix) === 'vip') || spec.age || spec.first_degree_only) this.requireVip(snap, spec.membership_hint)
     await this.step('panel:clear', async () => {
       const clearBtn = this.locateUniqueText(snap, (s) => s === '清除', '清除按钮')
       this.deps.onMutation?.()
@@ -287,7 +375,7 @@ export class FilterSetter {
     })
 
     let appliedAge: { min: number; max: number | null } | undefined
-    if (spec.age) appliedAge = await this.setAge(spec.age)
+    if (spec.age) appliedAge = await this.setAge(spec.age, spec.membership_hint)
 
     // 3. 逐项行锚定点击（每项 fresh snapshot，页面可能重排；VIP 面板目标行可能在滚动区
     //    下方，点击前先 ensureRowVisible 滚入可视区）。
@@ -296,7 +384,10 @@ export class FilterSetter {
       for (const option of row.options) {
         if (this.deps.signal?.aborted) throw new CancelledError()
         snap = await this.deps.snapshot()
+        if (inspectFilterPaywall(snap)) throw new VipUnavailable({ status: 'non_vip', source: 'paywall', evidence: ['筛选过程中出现已确认的会员购买/开通弹窗'] })
+        if (filterGroup(row.labelPrefix) === 'vip') this.requireVip(snap, spec.membership_hint)
         snap = await this.ensureRowVisible(snap, row.labelPrefix, option)
+        if (filterGroup(row.labelPrefix) === 'vip') this.requireVip(snap, spec.membership_hint)
         const point = this.locateRowOption(snap, row.labelPrefix, option)
         const clickSnap = snap
         await this.step('panel:option', async () => {
@@ -306,14 +397,21 @@ export class FilterSetter {
       }
     }
 
+    const firstDegreeOnly = spec.first_degree_only === undefined ? false : await this.setFirstDegree(spec.first_degree_only, spec.membership_hint)
     // 4. 确定
     snap = await this.deps.snapshot()
+    this.requireSameAccount(snap)
+    if (inspectFilterPaywall(snap)) throw new VipUnavailable({ status: 'non_vip', source: 'paywall', evidence: ['提交前出现已确认的会员购买/开通弹窗'] })
+    if (rows.some((r) => filterGroup(r.labelPrefix) === 'vip' && r.options.length > 0) || appliedAge || firstDegreeOnly) this.requireVip(snap, spec.membership_hint)
     this.verifySelectedRows(snap, rows, requiresStructure)
     if (appliedAge) {
       const current = this.ageSlider(snap).handles
       if (current[0]!.value !== appliedAge.min || current[1]!.value !== appliedAge.max) throw new FilterSetError('提交前年龄范围已变化，拒绝确认')
     }
+    if ((this.firstDegreeControl(snap)?.checked ?? false) !== firstDegreeOnly) throw new FilterSetError('提交前第一学历勾选状态已变化，拒绝确认')
     snap = await this.ensureButtonVisible(snap, '确定')
+    this.requireSameAccount(snap)
+    if (rows.some((r) => filterGroup(r.labelPrefix) === 'vip' && r.options.length > 0) || appliedAge || firstDegreeOnly) this.requireVip(snap, spec.membership_hint)
     await this.step('panel:confirm', async () => {
       const confirm = this.locateUniqueText(snap, (s) => s === '确定', '确定按钮')
       await this.deps.click(confirm, viewportOf(snap))
@@ -321,7 +419,7 @@ export class FilterSetter {
     })
 
     // 5. 徽章计数校验（筛选·N）
-    const expected = rows.reduce((n, r) => n + r.options.length, 0) + (appliedAge && (appliedAge.min !== 16 || appliedAge.max !== null) ? 1 : 0)
+    const expected = rows.reduce((n, r) => n + r.options.length, 0) + (appliedAge && (appliedAge.min !== 16 || appliedAge.max !== null) ? 1 : 0) + (firstDegreeOnly ? 1 : 0)
     const count = await this.step('panel:verify', async () => {
       const verifySnap = await this.deps.snapshot()
       const badge = verifySnap.strings.map((s) => FILTER_BADGE_PATTERN.exec(s.trim())).find((m) => m !== null)
@@ -332,19 +430,34 @@ export class FilterSetter {
         `筛选结果校验失败：期望「筛选·${expected}」，实际 ${count === null ? '未找到徽章（面板可能未提交）' : `筛选·${count}`}`,
       )
     }
-    return { filterCount: count, substitutions, appliedRows: rows.map((r) => ({ label: r.labelPrefix, options: r.options })), ...(appliedAge ? { age: appliedAge } : {}) }
+    return { filterCount: count, substitutions, appliedRows: rows.map((r) => ({ label: r.labelPrefix, options: r.options })), ...(appliedAge ? { age: appliedAge } : {}), firstDegreeOnly, membership: this.observedMembership, skippedFilters, applied: true }
+  }
+
+  private requireVip(snap: DomSnapshot, hint?: MembershipHint): void {
+    if (inspectFilterPaywall(snap)) throw new VipUnavailable({ status: 'non_vip', source: 'paywall', evidence: ['已确认会员购买/开通弹窗，用户提示不能覆盖付费证据'] })
+    this.requireSameAccount(snap)
+    const observed = inspectMembership(snap)
+    if (observed.status === 'non_vip') throw new VipUnavailable(observed)
+    if (effectiveMembership(observed, hint) !== 'vip') throw new CodedOperationError('MEMBERSHIP_REQUIRED', '执行VIP条件前无法继续确认会员状态，请重新核对账号；禁止猜测继续点击')
+    this.observedMembership = observed.status === 'unknown'
+      ? { status: 'vip', source: 'user_hint', observed_status: 'unknown', evidence: ['本次用户明确提供会员状态提示；账号已复核一致'] }
+      : observed
+  }
+
+  private requireSameAccount(snap: DomSnapshot): void {
+    if (this.accountKey && membershipAccountKey(snap) !== this.accountKey) throw new CodedOperationError('MEMBERSHIP_REQUIRED', '本次BOSS导航账号已变化或不可核验，不能将原账号会员提示沿用到新账号，请重新确认')
   }
 
   /**
    * 确保面板打开并返回打开后的 fresh snapshot（已打开则跳过，不做任何点击）。
    * 供 apply() 与探针模式共用。
    */
-  async ensurePanelOpen(): Promise<DomSnapshot> {
-    return this.step('panel:open', () => this.openPanel())
+  async ensurePanelOpen(initial?: DomSnapshot): Promise<DomSnapshot> {
+    return this.step('panel:open', () => this.openPanel(initial))
   }
 
-  private async openPanel(): Promise<DomSnapshot> {
-    let snap = await this.deps.snapshot()
+  private async openPanel(initial?: DomSnapshot): Promise<DomSnapshot> {
+    let snap = initial ?? await this.deps.snapshot()
     if (this.visibleHits(snap, (s) => s === '经验要求').length === 1) return snap
     const button = this.locateUniqueText(snap, (s) => FILTER_BUTTON_PATTERN.test(s), '筛选按钮')
     await this.deps.click(button, viewportOf(snap))
@@ -363,6 +476,8 @@ export class FilterSetter {
   async probeOptions(): Promise<PanelRowInfo[]> {
     if (this.deps.signal?.aborted) throw new CancelledError()
     const snap = await this.ensurePanelOpen()
+    this.accountKey = membershipAccountKey(snap)
+    this.observedMembership = inspectMembership(snap)
     // describePanel 只读结构（全量行都要读，不点击）——无需滚动适配
     const rows = await this.step('probe:describe', async () => this.describePanel(snap))
     if (rows.some((r) => r.control === 'range')) this.ageSlider(snap)
@@ -372,6 +487,7 @@ export class FilterSetter {
     }
     // 收起面板还原页面（面板开着时点「筛选」= 关闭；不触发任何筛选变更）
     const closeSnap = await this.deps.snapshot()
+    this.requireSameAccount(closeSnap)
     const button = this.locateUniqueText(closeSnap, (s) => FILTER_BUTTON_PATTERN.test(s), '筛选按钮')
     await this.deps.click(button, viewportOf(closeSnap))
     await this.sleep(800)
@@ -425,7 +541,7 @@ export class FilterSetter {
           && h.bounds[0] >= label.bounds[0] + label.bounds[2]
           && isDescendantOf(doc, h.nodeIndex, current!))
         if (options.length > 0) {
-          rows.push({ label, root: current, options: options.filter((o) => o.text !== '修改筛选专业') })
+          rows.push({ label, root: current, options: options.filter((o) => o.text !== '修改筛选专业' && !o.text.startsWith('只看第一学历')) })
           break
         }
         current = parents.get(current)
@@ -436,9 +552,60 @@ export class FilterSetter {
   }
 
   private selectionOf(label: string): 'single' | 'multiple' | 'unknown' {
-    if (label.includes('[单选]') || label === '性别' || label.startsWith('经验要求')) return 'single'
-    if (label.startsWith('学历要求')) return 'multiple'
+    if (label.includes('[单选]') || ['性别', '近期没有看过', '是否与同事交换简历'].includes(label)) return 'single'
+    if (['经验要求', '学历要求', '求职状态', '院校', '牛人关键词'].includes(label)) return 'multiple'
     return 'unknown'
+  }
+
+  /** 真机：选院校后才出现DIV.first-degree-wrap / SPAN.check-box及checked token。 */
+  private firstDegreeControl(snap: DomSnapshot): { hit: VisibleHit; checked: boolean } | null {
+    const labels = this.visibleHits(snap, (s) => s === '只看第一学历（第一学历为全日制本科）')
+    if (labels.length === 0) return null
+    if (labels.length !== 1) throw new FilterSetError('第一学历控件标签不唯一，拒绝勾选')
+    const label = labels[0]!, doc = snap.documents[label.documentIndex]!, parents = parentMapOf(doc)
+    let cur: number | undefined = label.nodeIndex
+    const seen = new Set<number>()
+    let wrap: number | undefined
+    while (cur !== undefined && !seen.has(cur)) {
+      seen.add(cur)
+      if ((classOf(snap, label.documentIndex, cur) ?? '').split(/\s+/).includes('first-degree-wrap')) { wrap = cur; break }
+      cur = parents?.get(cur)
+    }
+    const school = this.structuralRows(snap)?.find((r) => r.label.text === '院校')
+    if (wrap === undefined || !school || isDescendantOf(doc, wrap, school.root) !== true) throw new FilterSetError('第一学历控件不在已确认的院校行结构内')
+    const controls = doc.layout.nodeIndex.filter((node) => parents?.get(node) === wrap
+      && (classOf(snap, label.documentIndex, node) ?? '').split(/\s+/).includes('check-box'))
+    if (controls.length !== 1) throw new FilterSetError('第一学历勾选控件不唯一')
+    const node = controls[0]!, b = doc.layout.bounds[doc.layout.nodeIndex.indexOf(node)]
+    if (!b || b.length !== 4 || b[2]! <= 0 || b[3]! <= 0) throw new FilterSetError('第一学历勾选控件不可见')
+    return { hit: { documentIndex: label.documentIndex, nodeIndex: node, bounds: b as [number, number, number, number], text: label.text }, checked: (classOf(snap, label.documentIndex, node) ?? '').split(/\s+/).includes('checked') }
+  }
+
+  private async setFirstDegree(target: boolean, hint?: MembershipHint): Promise<boolean> {
+    let snap = await this.deps.snapshot()
+    if (target) this.requireVip(snap, hint)
+    else if (inspectFilterPaywall(snap)) throw new VipUnavailable({ status: 'non_vip', source: 'paywall', evidence: ['第一学历校验时出现会员付费弹窗'] })
+    const initial = this.firstDegreeControl(snap)
+    if (!initial) {
+      if (target) throw new FilterSetError('选择院校后未出现第一学历控件，拒绝声称已勾选')
+      return false
+    }
+    if (initial.checked === target) return target
+    snap = await this.ensureHitVisible(snap, (s) => {
+      const control = this.firstDegreeControl(s)
+      if (!control) throw new FilterSetError('第一学历控件在点击前消失')
+      return control.hit
+    }, (s, h) => this.toGlobalPoint(s, h).x, '只看第一学历', 'panel', initial.hit.bounds[3] / 2)
+    if (target) this.requireVip(snap, hint)
+    const control = this.firstDegreeControl(snap)!
+    await this.deps.click(this.toGlobalPoint(snap, control.hit), viewportOf(snap))
+    await this.sleep(500)
+    const afterSnap = await this.deps.snapshot()
+    if (inspectFilterPaywall(afterSnap)) throw new VipUnavailable({ status: 'non_vip', source: 'paywall', evidence: ['第一学历操作后出现已确认会员付费弹窗'] })
+    this.requireSameAccount(afterSnap)
+    const after = this.firstDegreeControl(afterSnap)
+    if (!after || after.checked !== target) throw new FilterSetError('第一学历勾选后状态未达到请求值，拒绝确认')
+    return target
   }
 
   private verifySelectedRows(snap: DomSnapshot, requested: Array<{ labelPrefix: string; options: string[] }>, requiresStructure: boolean): void {
@@ -493,15 +660,17 @@ export class FilterSetter {
     return candidates[0]!
   }
 
-  private async setAge(age: { min?: number; max?: number | null }): Promise<{ min: number; max: number | null }> {
+  private async setAge(age: { min?: number; max?: number | null }, hint?: MembershipHint): Promise<{ min: number; max: number | null }> {
     const requested = { min: age.min ?? 16, max: age.max ?? null }
     let snap = await this.deps.snapshot()
+    this.requireVip(snap, hint)
     for (const side of [0, 1] as const) {
       snap = await this.ensureHitVisible(snap, (s) => this.ageSlider(s).handles[side]!.hit, (s) => this.toGlobalPoint(s, this.ageSlider(s).label).x, '年龄句柄', 'panel', 24)
       const target = side === 0 ? requested.min : requested.max
       const observations: Array<{ step: number; x: number }> = []
       for (let attempt = 0; ; attempt++) {
         if (this.deps.signal?.aborted) throw new CancelledError()
+        this.requireVip(snap, hint)
         const slider = this.ageSlider(snap), handle = slider.handles[side]!
         if (handle.value === target) break
         if (attempt >= 7) throw new FilterSetError(`年龄${side === 0 ? '下限' : '上限'}拖动后未达到精确值，实际${handle.value ?? '不限'}`)
@@ -525,6 +694,7 @@ export class FilterSetter {
         await this.step('panel:age:drag', () => this.deps.drag!(handle.point, { x, y: handle.point.y }, viewportOf(snap)))
         await this.sleep(650)
         snap = await this.deps.snapshot()
+        this.requireVip(snap, hint)
         const observed = this.ageSlider(snap).handles[side]!.value
         observations.push({ step: observed === null ? 30 : observed - 16, x })
       }
@@ -540,6 +710,7 @@ export class FilterSetter {
       label: row.label.text,
       control: row.label.text === '年龄' ? 'range' : 'options',
       selection: this.selectionOf(row.label.text),
+      group: filterGroup(row.label.text),
       ...(row.label.text === '年龄' ? { range: { min: 16, max: 45, unlimited: true } } : {}),
       options: row.label.text === '年龄' ? [] : row.options.map((h) => ({ text: h.text, point: this.toGlobalPoint(snap, h) })),
     }))

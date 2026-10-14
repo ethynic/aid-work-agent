@@ -30,8 +30,8 @@
     },
     "recoveryInput": {
       "oneOf": [
-        {"type": "object", "additionalProperties": false, "required": ["mode", "confirmed"], "properties": {"mode": {"enum": ["preserve", "prepare_reboot"]}, "confirmed": {"const": true}}},
-        {"type": "object", "additionalProperties": false, "required": ["mode", "confirmed", "server", "device_name", "pairing_code"], "properties": {"mode": {"const": "new_device"}, "confirmed": {"const": true}, "server": {"type": "string", "minLength": 1, "maxLength": 4096}, "device_name": {"type": "string", "minLength": 1, "maxLength": 100}, "pairing_code": {"type": "string", "minLength": 1, "maxLength": 128}}}
+        {"type": "object", "additionalProperties": false, "required": ["mode", "confirmed"], "properties": {"mode": {"enum": ["preserve", "prepare_reboot", "continue_registration"]}, "confirmed": {"const": true}}},
+        {"type": "object", "additionalProperties": false, "required": ["mode", "confirmed", "server", "device_name", "pairing_code"], "properties": {"mode": {"enum": ["new_device", "register_new"]}, "confirmed": {"const": true}, "server": {"type": "string", "minLength": 1, "maxLength": 4096}, "device_name": {"type": "string", "minLength": 1, "maxLength": 100}, "pairing_code": {"type": "string", "minLength": 1, "maxLength": 128}}}
       ]
     },
     "recoveryResult": {

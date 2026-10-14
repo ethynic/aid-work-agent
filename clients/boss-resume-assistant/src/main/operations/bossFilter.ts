@@ -22,11 +22,17 @@ export interface BossFilterArgs {
   filters?: FilterSpec['filters']
   options_ref?: string
   age?: FilterSpec['age']
+  membership_hint?: FilterSpec['membership_hint']
+  membership_account_ref?: string
+  first_degree_only?: boolean
 }
 
 function validateFilterArgs(args: BossFilterArgs): string | null {
   if (args === null || typeof args !== 'object') return '参数必须是对象'
-  if (Object.keys(args).some((k) => !['experience', 'educations', 'salary', 'filters', 'options_ref', 'age'].includes(k))) return '不支持的筛选参数'
+  if (Object.keys(args).some((k) => !['experience', 'educations', 'salary', 'filters', 'options_ref', 'age', 'membership_hint', 'membership_account_ref', 'first_degree_only'].includes(k))) return '不支持的筛选参数'
+  if (args.membership_account_ref !== undefined && (typeof args.membership_account_ref !== 'string' || !/^[a-f0-9]{64}$/.test(args.membership_account_ref))) return 'membership_account_ref必须是当前筛选探查返回的64位账号引用'
+  if (args.membership_hint !== undefined && !['vip', 'non_vip'].includes(args.membership_hint)) return 'membership_hint仅允许vip或non_vip，且不能覆盖真实会员/付费证据'
+  if (args.first_degree_only !== undefined && typeof args.first_degree_only !== 'boolean') return 'first_degree_only必须为布尔值'
   if (args.options_ref !== undefined && (typeof args.options_ref !== 'string' || !args.options_ref.trim())) return 'options_ref 必须是非空引用'
   const { experience, educations, salary } = args
   if (experience !== undefined && (typeof experience !== 'string' || !experience.trim())) {
@@ -50,6 +56,7 @@ function validateFilterArgs(args: BossFilterArgs): string | null {
       || (age.min !== undefined && (!Number.isInteger(age.min) || age.min < 16 || age.min > 45))
       || (age.max !== undefined && age.max !== null && (!Number.isInteger(age.max) || age.max < (age.min ?? 16) || age.max > 45))) return 'age需16至45岁整数范围，最大不限用null，至少提供一端'
   }
+  if (args.first_degree_only === true && !args.filters?.some((r) => r.label.trim() === '院校' && r.options.some((o) => o.trim() !== '不限'))) return '只看第一学历必须依附至少一个院校筛选条件'
   if (!experience?.trim() && !(educations && educations.length > 0) && !salary?.trim() && !args.filters?.length && !args.age) {
     return '至少需要一个筛选条件：experience / educations / salary / filters'
   }
@@ -96,6 +103,9 @@ export function createBossFilterOperation(
             salary: args.salary?.trim(),
             filters: args.filters,
             age: args.age,
+            membership_hint: args.membership_hint,
+            membership_account_ref: args.membership_account_ref,
+            first_degree_only: args.first_degree_only,
           }
           let result: Awaited<ReturnType<FilterSetter['apply']>>
           try { result = await setter.apply(spec) } catch (error) {
@@ -106,18 +116,23 @@ export function createBossFilterOperation(
           const subNote = result.substitutions
             .map((s) => `${s.row}「${s.requested}」无该档位，已按最接近的「${s.matched}」设置`)
             .join('；')
+          const skippedNote = result.skippedFilters.length > 0 ? `；已跳过VIP条件：${result.skippedFilters.map((s) => s.label).join('、')}（${result.membership.source === 'paywall' ? '当前页面付费拦截已安全关闭' : '本次账号按非VIP处理'}）` : ''
           return {
             message:
-              `筛选已应用并校验通过：筛选·${result.filterCount}` + (subNote ? `；${subNote}` : ''),
+              (result.applied ? `筛选已应用并校验通过：筛选·${result.filterCount}` : '本次没有可应用的普通条件，原筛选保留') + (subNote ? `；${subNote}` : '') + skippedNote,
             data: {
-              filter_schema_version: 2,
+              filter_schema_version: 3,
               filter_count: result.filterCount,
-              applied: true,
+              applied: result.applied,
               applied_rows: result.appliedRows,
               ...(result.age ? { age: result.age } : {}),
+              membership: result.membership,
+              account_ref: setter.accountRef,
+              skipped_filters: result.skippedFilters,
+              first_degree_only: result.firstDegreeOnly,
               ...(result.substitutions.length > 0 ? { substitutions: result.substitutions } : {}),
             },
-            effect: 'applied' as const,
+            effect: result.applied ? 'applied' as const : 'none' as const,
           }
         },
       )

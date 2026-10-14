@@ -37,7 +37,7 @@ from datetime import datetime
 from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple
 
 from loguru import logger
-from pydantic import BaseModel, Field, WithJsonSchema, field_validator, model_validator
+from pydantic import BaseModel, Field, StrictBool, WithJsonSchema, field_validator, model_validator
 
 from src.config.settings import settings
 from src.db.client_binding_db import ClientUsageLogDB
@@ -667,6 +667,59 @@ class BossAgeRangeInput(BaseModel):
         return self
 
 
+def _filter_label(label: str) -> str:
+    return label.replace("[单选]", "").strip()
+
+
+def _is_vip_filter(label: str) -> bool:
+    # 未知动态行按高级处理，避免旧设备静默忽略会员门禁。
+    return _filter_label(label) not in {"经验要求", "学历要求", "求职状态", "薪资待遇"}
+
+
+def _vip_filter_args(args: Dict[str, Any]) -> bool:
+    return bool(args.get("age") or args.get("membership_account_ref")) or args.get("first_degree_only") is not None or any(_is_vip_filter(row["label"]) for row in args.get("filters") or [])
+
+
+def _extended_filter_args(args: Dict[str, Any]) -> bool:
+    return bool(args.get("filters") or args.get("age") or args.get("membership_hint") or args.get("membership_account_ref")) or args.get("first_degree_only") is not None
+
+
+def _verify_core_filter_rows(args: Dict[str, Any], data: Dict[str, Any]) -> bool:
+    """高级项跳过时，普通核心条件仍须由真实逐行回执证明生效。"""
+    rows = data.get("applied_rows")
+    if not isinstance(rows, list):
+        return False
+    substitutions = data.get("substitutions", [])
+    if not isinstance(substitutions, list):
+        return False
+    for key, label in (("experience", "经验要求"), ("educations", "学历要求"), ("salary", "薪资待遇")):
+        raw = args.get(key)
+        if not raw:
+            continue
+        values = raw if isinstance(raw, list) else [raw]
+        expected = []
+        for requested in values:
+            requested = requested.strip()
+            changes = [s for s in substitutions if isinstance(s, dict) and isinstance(s.get("row"), str)
+                       and _filter_label(s["row"]) == label and s.get("requested") == requested]
+            if len(changes) > 1 or (changes and (not isinstance(changes[0].get("matched"), str) or not changes[0]["matched"].strip())):
+                return False
+            matched = changes[0]["matched"].strip() if changes else requested
+            if matched != "不限":
+                expected.append(matched)
+        matches = [r for r in rows if isinstance(r, dict) and isinstance(r.get("label"), str) and _filter_label(r["label"]) == label]
+        if len(matches) != 1 or not isinstance(matches[0].get("options"), list):
+            return False
+        actual = matches[0]["options"]
+        if any(not isinstance(option, str) for option in actual):
+            return False
+        # 旧education支持“中专/中技”与页面“中专/中技”等空白变体；范围映射必须有substitutions。
+        normalize = lambda value: "".join(value.split()).replace("K", "").replace("k", "").upper()
+        if [normalize(s) for s in actual] != [normalize(s) for s in expected]:
+            return False
+    return True
+
+
 class BossFilterInput(BaseModel):
     experience: Optional[str] = Field(None, description="经验档位，如「3-5年」；省略会清空该维度")
     educations: Optional[List[str]] = Field(None, description="学历档位列表，可多选，如 [\"本科\", \"硕士\"]；省略会清空该维度")
@@ -674,6 +727,9 @@ class BossFilterInput(BaseModel):
     filters: Optional[List[Annotated[Dict[str, Any], WithJsonSchema(BossFilterRowInput.model_json_schema())]]] = Field(None, description="用户当轮补充的页面精确行筛选；与职位默认条件合并，不回写数据库")
     options_ref: Optional[str] = Field(None, description="扩展条件必填：本次 boss_filter_options 成功结果的 invocation_id，用于确认同设备支持扩展参数")
     age: Optional[Annotated[Dict[str, Any], WithJsonSchema(BossAgeRangeInput.model_json_schema())]] = Field(None, description="真实年龄范围，如25岁以上传{min:25,max:null}；页面精确整数16至45岁，范围外拒绝，需options_ref")
+    first_degree_only: Optional[bool] = Field(None, strict=True, description="院校筛选附加的只看第一学历；需先选院校，属于VIP条件")
+    membership_hint: Optional[Literal["vip", "non_vip"]] = Field(None, description="仅用户明确确认当前登录账号会员状态后传入；只在页面身份未知时使用，不覆盖非VIP或付费弹窗证据")
+    membership_account_ref: Optional[str] = Field(None, min_length=64, max_length=64, pattern=r"^[a-f0-9]{64}$", description="使用会员提示必填：同一次boss_filter_options返回的account_ref；绑定用户确认的登录账号，换账号失效")
 
     @field_validator("filters")
     @classmethod
@@ -695,20 +751,24 @@ class BossFilterTool(LocalToolProxyTool):
         "先用 boss_filter_options 查询当前账号页面，将职位默认条件与聊天补充条件合并，用户当轮要求优先；"
         "性别、活跃度、求职状态等用 filters 精确行设置，无需先入库。扩展条件须传查询结果 invocation_id 为 options_ref。"
         "发生档位映射时返回 substitutions，必须说明实际档位；不能漏掉条件或把工具不支持说成页面不存在。"
+        "普通条件为经验、学历、求职状态、薪资；其他高级条件需VIP。会员未知且请求高级条件时先询问用户，"
+        "用户确认后用membership_hint；非VIP或付费弹窗会屏蔽高级项并返回skipped_filters，必须告知哪些未执行。"
         "前置：已在推荐牛人页（不在时先 boss_goto recommend）。仅改变页面筛选，无外部副作用"
     )
     InputModel = BossFilterInput
 
     def _validate_args(self, args: Dict[str, Any]) -> Optional[str]:
-        if set(args) - {"experience", "educations", "salary", "filters", "options_ref", "age"}:
+        if set(args) - {"experience", "educations", "salary", "filters", "options_ref", "age", "first_degree_only", "membership_hint", "membership_account_ref"}:
             return "不支持的筛选参数"
         try:
             BossFilterInput(**args)
         except Exception:
             return "筛选参数格式无效，请使用真实行标签与非空精确选项"
-        if not any(args.get(k) for k in ("experience", "educations", "salary", "filters", "age")):
+        if args.get("membership_hint") and not args.get("membership_account_ref"):
+            return "会员提示必须绑定本次探查的account_ref，请重新查询当前登录账号"
+        if not any(args.get(k) for k in ("experience", "educations", "salary", "filters", "age")) and args.get("first_degree_only") is not True:
             return "请至少提供一个筛选条件（经验、学历、薪资或页面动态行）"
-        if (args.get("filters") or args.get("age")) and not args.get("options_ref"):
+        if _extended_filter_args(args) and not args.get("options_ref"):
             return "扩展筛选需先调用 boss_filter_options 并传 options_ref=查询结果 invocation_id"
         if args.get("options_ref"):
             from uuid import UUID
@@ -720,7 +780,7 @@ class BossFilterTool(LocalToolProxyTool):
 
     async def _dispatch_and_wait(self, tenant_id, user_id, session_id, device, args, progress_queue):
         # 两条执行入口共用此处：旧 Provider 可能静默丢弃未知字段，必须在派发前核验同设备探查结果。
-        if args.get("filters") or args.get("age"):
+        if _extended_filter_args(args):
             try:
                 probe = await asyncio.to_thread(repository.get_invocation, args.get("options_ref"), tenant_id)
             except Exception:
@@ -734,11 +794,18 @@ class BossFilterTool(LocalToolProxyTool):
                     or str(probe.get("device_id")) != str(device["id"])
                     or probe.get("session_id") != session_id or probe.get("tool_name") != "boss_filter_options"
                     or probe.get("state") != "succeeded" or not recent
-                    or not isinstance(data, dict) or data.get("filter_schema_version") != 2
+                    or not isinstance(data, dict) or type(data.get("filter_schema_version")) is not int
+                    or data.get("filter_schema_version") not in (2, 3)
+                    or data.get("filter_schema_version", 0) < (3 if _vip_filter_args(args) or args.get("membership_hint") else 2)
                     or data.get("probe_complete") is not True
                     or not isinstance(data.get("supported_fields"), list)
                     or (args.get("filters") and "filters" not in data.get("supported_fields", []))
-                    or (args.get("age") and "age" not in data.get("supported_fields", []))):
+                    or (args.get("age") and "age" not in data.get("supported_fields", []))
+                    or (args.get("first_degree_only") is not None and "first_degree_only" not in data.get("supported_fields", []))
+                    or (args.get("membership_hint") and "membership_hint" not in data.get("supported_fields", []))
+                    or (args.get("membership_account_ref") and "membership_account_ref" not in data.get("supported_fields", []))
+                    or (args.get("membership_hint") and not args.get("membership_account_ref"))
+                    or (args.get("membership_account_ref") and data.get("account_ref") != args.get("membership_account_ref"))):
                 return {"success": False, "code": "FILTER_CAPABILITY_REQUIRED", "effect": "none",
                         "message": "当前设备尚未确认支持完整扩展筛选；请更新 BOSS CLI 后重新调用 boss_filter_options，原筛选未改动"}
         # 保留引用字段在原始 intent / durable request / replay 中一致；Provider 接受但不使用此云端引用。
@@ -747,10 +814,37 @@ class BossFilterTool(LocalToolProxyTool):
     def _map_terminal(self, invocation):
         result = super()._map_terminal(invocation)
         args = invocation.get("arguments_json") or {}
-        if result.get("success") and (args.get("filters") or args.get("age")):
-            data = result.get("data")
-            valid = isinstance(data, dict) and data.get("filter_schema_version") == 2
+        terminal_data = result.get("data") if isinstance(result.get("data"), dict) else {}
+        if result.get("success") and (_extended_filter_args(args) or terminal_data.get("filter_schema_version") is not None):
+            data = result.get("data") if isinstance(result.get("data"), dict) else {}
+            version = data.get("filter_schema_version") if isinstance(data, dict) else None
+            valid = type(version) is int and version in (2, 3) and version >= (3 if _vip_filter_args(args) or args.get("membership_hint") else 2)
             rows = data.get("applied_rows") if isinstance(data, dict) else None
+            skipped = data.get("skipped_filters", []) if isinstance(data, dict) else []
+            member = data.get("membership", {}) if isinstance(data, dict) else {}
+            member_status = member.get("status") if isinstance(member, dict) else None
+            if args.get("membership_account_ref"):
+                valid = valid and data.get("account_ref") == args.get("membership_account_ref")
+            valid = valid and isinstance(skipped, list)
+            if not isinstance(skipped, list):
+                skipped = []
+            skip_labels = [_filter_label(s["label"]) for s in skipped if isinstance(s, dict) and isinstance(s.get("label"), str) and s["label"].strip()]
+            skip_by_label = {_filter_label(s["label"]): s for s in skipped if isinstance(s, dict) and isinstance(s.get("label"), str) and s["label"].strip()}
+            requested_vip = {_filter_label(r["label"]) for r in args.get("filters") or [] if _is_vip_filter(r["label"])}
+            if args.get("age"):
+                requested_vip.add("年龄")
+            if args.get("first_degree_only") is True:
+                requested_vip.add("只看第一学历")
+            valid = valid and len(skip_labels) == len(skipped) == len(set(skip_labels)) and set(skip_labels) <= requested_vip
+            valid = valid and all(s.get("reason") in ("non_vip", "paywall") for s in skipped if isinstance(s, dict))
+            if skip_labels:
+                valid = valid and member_status == "non_vip"
+            if requested_vip - set(skip_labels):
+                valid = valid and member_status == "vip"
+            for requested in args.get("filters") or []:
+                if _filter_label(requested["label"]) in skip_labels:
+                    matched_skip = skip_by_label[_filter_label(requested["label"])]
+                    valid = valid and matched_skip.get("options") == [option.strip() for option in requested["options"]]
             if args.get("filters"):
                 valid = valid and isinstance(rows, list)
                 verified_rows = rows if isinstance(rows, list) else []
@@ -758,10 +852,21 @@ class BossFilterTool(LocalToolProxyTool):
                     label = requested["label"].replace("[单选]", "").strip()
                     matches = [row for row in verified_rows if isinstance(row, dict) and str(row.get("label", "")).replace("[单选]", "").strip() == label]
                     expected = [option.strip() for option in requested["options"] if option.strip() != "不限"]
-                    valid = valid and len(matches) == 1 and matches[0].get("options") == expected
+                    if label in skip_labels:
+                        valid = valid and not matches
+                    else:
+                        valid = valid and len(matches) == 1 and matches[0].get("options") == expected
+            if version == 3:
+                valid = valid and _verify_core_filter_rows(args, data)
             if args.get("age"):
                 expected = {"min": args["age"].get("min", 16), "max": args["age"].get("max")}
-                valid = valid and data.get("age") == expected
+                valid = valid and (data.get("age") is None if "年龄" in skip_labels else data.get("age") == expected)
+                if "年龄" in skip_labels:
+                    valid = valid and skip_by_label["年龄"].get("range") == args["age"]
+            if args.get("first_degree_only") is not None:
+                valid = valid and (data.get("first_degree_only") is False if "只看第一学历" in skip_labels else data.get("first_degree_only") is args["first_degree_only"])
+                if "只看第一学历" in skip_labels:
+                    valid = valid and skip_by_label["只看第一学历"].get("options") == ["true"]
             if not valid:
                 return {**result, "success": False, "code": "EXECUTION_UNKNOWN", "effect": "unknown",
                         "message": "设备未返回完整扩展筛选的逐行校验结果，实际筛选效果未知，禁止自动重试，请核对页面"}
@@ -849,13 +954,82 @@ class BossGreetTool(LocalToolProxyTool):
         "外部可见写动作，单次最多 3 人，需用户在对话中明确授权数量。"
         "定向模式：传 names 候选人姓名清单时先匹配卡片姓名再点击，"
         "只向名单内的人打招呼（配对失败的卡片跳过），打给谁以返回的 greeted_names 为准，"
-        "missing_names 是滚到底也没找到的人。"
-        "注意：简历筛选主流程的打招呼请走详情页路径"
-        "（boss_open_detail → boss_resume_detail → boss_greet_detail）；"
-        "本工具保留用于用户明确要求在列表页打招呼的手动/兜底场景"
+        "missing_names 是当前已加载列表未找到或卡片变化后无法定位的人。"
+        "默认筛选只评分入库并等待人工审核；用户提供批准的打招呼名单后，用本工具在列表页定向打招呼。"
+        "用户明确选择合格后立即打招呼时，才走详情页boss_greet_detail(greet_in_detail=true)。"
+        "初始只需姓名；重名和未找到项跳过，先完成其他唯一目标。结果ambiguous_names附各卡片编号、card_info摘要、优势和candidate_ref用于事后确认，missing_names提示可能输入有误或页面已刷新移除。"
     )
     InputModel = BossGreetInput
     timeout_seconds = 600
+
+
+class BossLookupCandidatesInput(BaseModel):
+    model_config = {"extra": "forbid", "strict": True}
+    names: List[str] = Field(..., min_length=1, max_length=3,
+        description="待澄清姓名（1-3 个）；只读返回每张卡片的编号、摘要与精确引用")
+
+    @field_validator("names")
+    @classmethod
+    def valid_names(cls, value):
+        if any(not name.strip() or len(name) > 30 for name in value):
+            raise ValueError("每个姓名须非空且最多30字")
+        return value
+
+
+class BossLookupCandidatesTool(LocalToolProxyTool):
+    name = "boss_lookup_candidates"
+    display_name = "BOSS 查询同名卡片"
+    description = (
+        "只读查询推荐牛人页已加载指定姓名的卡片，返回编号、card_info摘要、优势和candidate_ref。"
+        "初始只需姓名，仍用boss_greet先完成唯一目标；本工具用于重名澄清或刷新过期引用，"
+        "不滚动、不打招呼，不含非筛选结果推荐。用户不需要提供优势或精确原文。"
+    )
+    InputModel = BossLookupCandidatesInput
+    heal_eligible = False
+
+    def _validate_args(self, args: Dict[str, Any]) -> Optional[str]:
+        try:
+            self.InputModel.model_validate(args)
+        except ValueError:
+            return "names须为1-3个非空姓名（每个最多30字），不接受其他参数"
+        return None
+
+
+class BossGreetSelectedInput(BaseModel):
+    model_config = {"extra": "forbid", "strict": True}
+    name: str = Field(..., min_length=1, max_length=30,
+        description="用户明确选定卡片的姓名（原工具回执）")
+    candidate_ref: str = Field(..., min_length=91, max_length=91, pattern=r"^boss-card-v1:\d{13}:[a-f0-9]{64}$",
+        description="工具回执对应卡片的精确引用；由Agent传入，用户不必提供")
+
+    @field_validator("name")
+    @classmethod
+    def nonblank_name(cls, value):
+        if not value.strip():
+            raise ValueError("姓名不得为空白")
+        return value
+
+
+class BossGreetSelectedTool(LocalToolProxyTool):
+    name = "boss_greet_selected"
+    display_name = "BOSS 向选定卡片打招呼"
+    description = (
+        "向用户明确选定的单张同名卡片打招呼（外部写动作，单次固定1人）。"
+        "Agent将用户口语选择结合已展示编号/card_info唯一对应，传原卡片name及candidate_ref，"
+        "不要求用户精确复述信息。无法唯一对应则继续询问，禁止猜选、编造引用、"
+        "退回name-only或greet-detail绕过。引用过期用boss_lookup_candidates只读刷新后重新对应；"
+        "不能证明仍是原选定对象则再确认。effect=unknown禁止重试。"
+    )
+    InputModel = BossGreetSelectedInput
+    timeout_seconds = 600
+    heal_eligible = False
+
+    def _validate_args(self, args: Dict[str, Any]) -> Optional[str]:
+        try:
+            self.InputModel.model_validate(args)
+        except ValueError:
+            return "需要非空name（最多30字）及原工具返回的candidate_ref，不接受其他参数或按姓名猜选"
+        return None
 
 
 class BossAcceptResumeInput(BaseModel):
@@ -1049,17 +1223,65 @@ def _job_option_description(job: Dict[str, Any], resume_count: int, matched_coun
     """
     reqs = job.get("job_requirements") or {}
     dims = []
-    experience = (reqs.get("experience") or "").strip()
+    experience = "、".join(reqs.get("experiences") or []) or (reqs.get("experience") or "").strip()
     if experience:
         dims.append(experience)
     educations = [e.strip() for e in (reqs.get("educations") or []) if (e or "").strip()]
     if educations:
         dims.append("、".join(educations))
-    salary = (reqs.get("salary") or "").strip()
+    salary_range = reqs.get("salary_range") or {}
+    salary = _salary_range_text(salary_range) if salary_range else (reqs.get("salary") or "").strip()
     if salary:
         dims.append(salary)
+    if reqs.get("job_statuses"):
+        dims.append("、".join(reqs["job_statuses"]))
+    if any(value not in (None, "", False, [], {}) for value in (reqs.get("vip_filters") or {}).values()):
+        dims.append("含VIP专享条件")
     req_part = f"要求 {'/'.join(dims)}" if dims else "要求未配置"
     return f"{req_part} · 简历 {resume_count} · 匹配 {matched_count}"
+
+
+def _salary_range_text(value: Dict[str, Any]) -> str:
+    low, high = value.get("min"), value.get("max")
+    number = str
+    if low is not None and high is not None:
+        return f"{number(low)}-{number(high)}K"
+    if low is not None:
+        return f"{number(low)}K以上"
+    return f"{number(high)}K以下" if high is not None else ""
+
+
+def _job_filter_defaults(reqs: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """仅投影执行默认值；页面能力和会员资格仍由当次探查决定。"""
+    reqs = reqs or {}
+    ordinary: Dict[str, Any] = {}
+    rows = []
+    experience = reqs.get("experiences") or ([reqs["experience"]] if reqs.get("experience") else [])
+    for label, values in (("经验要求", experience), ("求职状态", reqs.get("job_statuses"))):
+        if values:
+            rows.append({"label": label, "options": values})
+    if rows:
+        ordinary["filters"] = rows
+    if reqs.get("educations"):
+        ordinary["educations"] = reqs["educations"]
+    if reqs.get("salary_range") or reqs.get("salary"):
+        ordinary["salary"] = _salary_range_text(reqs["salary_range"]) if reqs.get("salary_range") else reqs["salary"]
+    vip_req = reqs.get("vip_filters") or {}
+    vip: Dict[str, Any] = {}
+    labels = {"activity": "活跃度[单选]", "gender": "性别", "not_viewed": "近期没有看过", "not_exchanged": "是否与同事交换简历", "job_hopping": "跳槽频率[单选]", "schools": "院校", "boss_keywords": "牛人关键词"}
+    vip_rows = []
+    for key, label in labels.items():
+        value = vip_req.get(key)
+        if value and value != "不限":
+            options = value if isinstance(value, list) else [value]
+            vip_rows.append({"label": label, "options": options})
+    if vip_rows:
+        vip["filters"] = vip_rows
+    if vip_req.get("age"):
+        vip["age"] = vip_req["age"]
+    if vip_req.get("first_degree_only"):
+        vip["first_degree_only"] = True
+    return {"ordinary": ordinary, "vip": vip}
 
 
 class BossJobsListTool(LocalToolProxyTool):
@@ -1079,8 +1301,10 @@ class BossJobsListTool(LocalToolProxyTool):
     display_name = "BOSS 查询职位库"
     description = (
         "查询云端「职位管理」里的在招职位（status=active，暂停职位不返回）：每个职位返回 "
-        "job_id/job_name/match_threshold/job_requirements（经验/学历/薪资三档位，可直接作为 "
-        "boss_filter 入参）/resume_count/matched_count（该职位简历数与匹配数），"
+        "job_id/job_name/match_threshold/job_requirements（普通/VIP完整配置）及filter_defaults（ordinary/vip分组执行默认值），"
+        "resume_count/matched_count（该职位简历数与匹配数）。先查boss_filter_options确认当前账号权益与精确选项，"
+        "将默认值和聊天覆盖合并，同维度只传一次；salary手填范围只能映射页面档位时须汇报实际范围。"
+        "模板中的VIP条件不证明当前账号有会员；身份未知则询问用户，非VIP跳过高级条件并告知。"
         "并附与 jobs 同序的 data.options（key=job_id/label=job_name/description=要求与统计摘要）"
         "——data.options 可直接用于向用户渲染编号选择列表。"
         "「筛选简历」入口先用它确认职位与要求；查 BOSS 页面职位请用 boss_list_jobs，两者区分"
@@ -1120,6 +1344,7 @@ class BossJobsListTool(LocalToolProxyTool):
                 "status": job["status"],
                 "match_threshold": job.get("match_threshold"),
                 "job_requirements": job.get("job_requirements"),
+                "filter_defaults": _job_filter_defaults(job.get("job_requirements")),
                 "resume_count": job.get("resume_count", 0),
                 "matched_count": job.get("matched_count", 0),
             }
@@ -1399,6 +1624,8 @@ class BossResumeBatchTool(LocalToolProxyTool):
         "前置：已在推荐牛人页；不改变当前职位或筛选条件。只读取当前视口，没有历史排除，重复调用可能重读。"
         "limit 是单批容量，不是用户任务总份数。返回 data.resumes（成功入库及评分摘要）、failures（失败项）、"
         "attempted（卡片尝试数）、stop_reason（本批停止原因），以及 continuation。"
+        "no_matching_candidates表示当前条件无匹配，recommendations_boundary表示已到补充推荐区；"
+        "下方推荐不作为筛选结果，不读取不入库，此时停止并告知用户。"
         "continuation.available=true 时，tool 和 arguments 给出续筛调用；可按任务剩余数量指定下一批 limit。"
         "available=false 表示本轮不能直接续筛，reason 给出原因；no_progress/search_limit 不代表全部候选人已读完。"
         "每份约30秒，借用真实鼠标；识别按份计费，筛选不包含打招呼或发送消息。"
@@ -1427,7 +1654,8 @@ class BossResumeBatchTool(LocalToolProxyTool):
         return await self._execute_legacy(**kwargs)
 
     async def _execute_legacy(self, **kwargs) -> Dict[str, Any]:
-        from .resume_continuation import prepare_next, batch_metadata, duplicate_failure
+        from .resume_continuation import (prepare_next, batch_metadata, duplicate_failure,
+            filter_terminal_result, filter_stop_message)
         if self.name == 'boss_resume_next':
             kwargs, failure = await prepare_next(kwargs)
             if failure:
@@ -1445,6 +1673,9 @@ class BossResumeBatchTool(LocalToolProxyTool):
         data = result.get("data") or {}
         metadata = batch_metadata(result, kwargs)
         resumes = data.get("resumes")
+        terminal = filter_terminal_result(result, metadata)
+        if terminal is not None:
+            return terminal
         if resumes == [] and data.get('stop_reason') in ('no_progress', 'search_limit', 'viewport_complete') and not data.get('failures'):
             return {**result, 'data': {**metadata, 'resumes': [], 'failures': []},
                 'message': '当前列表未找到更多未处理候选人；已停止，请检查列表或调整条件'}
@@ -1572,6 +1803,8 @@ class BossResumeBatchTool(LocalToolProxyTool):
         # recruiting-operator 上下文预算仅 8000 token，完整内容到简历库页面看）
         names = "、".join(s["candidate_name"] or "?" for s in summaries)
         message = f"已存入简历库 {len(summaries)} 份：{names}"
+        if stop_note := filter_stop_message(data.get('stop_reason')):
+            message += f"；{stop_note}"
         if failures:
             first = failures[0]
             message += f"；{len(failures)} 份失败（第一个：{first.get('name') or '未知姓名'}—{first.get('error')}）"
@@ -1592,6 +1825,7 @@ class BossResumeNextTool(BossResumeBatchTool):
         '引用串行消费，过期引用返回 STALE_CONTINUATION，不重复派发。'
         'limit 是单批容量；输出与 boss_resume_batch 相同，每次 continuation.arguments 是下一批引用。'
         'continuation.available=false 时停止推进，reason 表明原因；无进展不等于全列表读完。'
+        'no_matching_candidates为当前条件无匹配；recommendations_boundary为无更多匹配，补充推荐不读取。'
         '读取并识别入库，不打招呼或发送消息；每份约30秒并按份计识别费。'
     )
 
@@ -1609,7 +1843,7 @@ class BossResumeNextTool(BossResumeBatchTool):
 # ============== 详情页打招呼三件套（筛选主路径，2026-09-28，见 docs/ideas_finished.md 20261011-1456） ==============
 # 纯代理工具（无计费、无云端后处理）：云端 AI 编排筛选主流程，每候选人四步——
 # boss_open_detail（开详情）→ boss_resume_detail（既有，读取+VL 评估入库）→
-# 合格 boss_greet_detail（详情页打招呼）/ 不合格 boss_close_detail（清理关闭）。
+# 默认 boss_close_detail（评分入库后等人工审核）；明确直接模式才启用boss_greet_detail。
 
 
 class BossOpenDetailInput(BaseModel):
@@ -1626,7 +1860,8 @@ class BossOpenDetailTool(LocalToolProxyTool):
     display_name = "BOSS 打开简历详情"
     description = (
         "打开指定姓名候选人的简历详情（推荐牛人页按姓名找人并点开，保持详情打开）。"
-        "筛选主流程第一步：boss_open_detail → boss_resume_detail → 合格则 boss_greet_detail。"
+        "默认流程：boss_open_detail → boss_resume_detail评分入库 → boss_close_detail，等待人工审核。"
+        "只有用户明确选择评分合格后立即打招呼，才调boss_greet_detail(greet_in_detail=true)。"
         "前置：已在推荐牛人页。打开借用真实鼠标，期间勿动鼠标"
     )
     InputModel = BossOpenDetailInput
@@ -1641,6 +1876,8 @@ class BossGreetDetailInput(BaseModel):
     dry_run: bool = Field(
         False, description="只定位不点击（测试链路，默认 false 真实点击）",
     )
+    greet_in_detail: StrictBool = Field(False,
+        description="默认关闭；仅用户明确选择本轮评分合格后直接打招呼时传true，人工审核模式不传")
 
 
 class BossGreetDetailTool(LocalToolProxyTool):
@@ -1650,11 +1887,18 @@ class BossGreetDetailTool(LocalToolProxyTool):
     display_name = "BOSS 详情页打招呼"
     description = (
         "在当前打开的简历详情页点「打招呼」（校验详情属于指定姓名候选人，防止打错人；"
-        "已打过则幂等返回；打完自动关闭详情）。筛选主流程的打招呼路径——列表页 boss_greet "
-        "仅作手动兜底，不用于筛选流程。dry_run=true 只定位不点击。写动作，期间勿动鼠标"
+        "已打过则幂等返回；打完自动关闭详情）。greet_in_detail默认false，未显式true不执行。"
+        "仅用户主动选择本轮合格后直接打招呼且评分已matched时传true；"
+        "默认人工审核后给出名单，用列表页boss_greet。dry_run=true只定位，不代替显式启用。"
+        "写动作，期间勿动鼠标"
     )
     InputModel = BossGreetDetailInput
     timeout_seconds = 600
+
+    def _validate_args(self, args: Dict[str, Any]) -> Optional[str]:
+        if args.get('greet_in_detail') is not True:
+            return '详情页打招呼默认关闭；仅用户明确选择评分合格后直接打招呼时传greet_in_detail=true。默认评分入库后等待人工审核名单'
+        return None
 
 
 class BossCloseDetailTool(LocalToolProxyTool):
@@ -1663,7 +1907,7 @@ class BossCloseDetailTool(LocalToolProxyTool):
     name = "boss_close_detail"
     display_name = "BOSS 关闭简历详情"
     description = (
-        "关闭当前打开的简历详情弹层（筛选不合格时的清理步，无业务副作用）"
+        "关闭当前打开的简历详情弹层（默认评分入库后关闭并等待人工审核，无业务副作用）"
     )
 
     class InputModel(BaseModel):
@@ -2318,6 +2562,8 @@ LOCAL_PROXY_TOOL_CLASSES = (
     BossFilterOptionsTool,
     BossGotoTool,
     BossGreetTool,
+    BossLookupCandidatesTool,
+    BossGreetSelectedTool,
     BossAcceptResumeTool,
     BossRejectCurrentTool,
     BossInterviewDemoTool,

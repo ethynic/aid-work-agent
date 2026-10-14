@@ -19,8 +19,10 @@ export type ValidateResult = { ok: true } | { ok: false; message: string }
 /** 各子命令允许的专属 flag（不含全局 flag）。新增命令/flag 必须在此登记，否则一律拒绝 */
 const COMMAND_FLAGS: Readonly<Record<string, readonly string[]>> = {
   'filter-options': [],
-  filter: ['experience', 'education', 'salary', 'filters', 'age', 'clear'],
+  filter: ['experience', 'education', 'salary', 'filters', 'age', 'membership-hint', 'membership-account-ref', 'first-degree-only', 'clear'],
   greet: ['limit', 'names', 'all'],
+  'lookup-candidates': ['names'],
+  'greet-selected': ['candidate-ref'],
   goto: [], // 无专属 flag（只带 1 个位置参数）
   accept: ['limit', 'no-preview'],
   reject: [],
@@ -36,7 +38,7 @@ const COMMAND_FLAGS: Readonly<Record<string, readonly string[]>> = {
   'resume-next': ['limit', 'save-dir', 'exclude-names', 'job'],
   // 详情页打招呼三件套（2026-09-28 筛选主路径）：open/greet-detail 的姓名走位置参数（select-job 同款）
   'open-detail': [], // 无专属 flag（必带 1 个姓名位置参数；缺失/空白在 command 层 fail-loud）
-  'greet-detail': ['dry-run'],
+  'greet-detail': ['dry-run', 'greet-in-detail'],
   'close-detail': [],
   mcp: ['stdio'],
   doctor: ['json'],
@@ -48,6 +50,7 @@ const GLOBAL_FLAGS: readonly string[] = ['cdp-port', 'help', 'h']
 
 /** 各命令允许的额外位置参数个数（命令名本身是 positional[0]，不计入；未登记的命令默认 0） */
 const COMMAND_POSITIONALS: Readonly<Record<string, number>> = {
+  'greet-selected': 1,
   goto: 1, // goto recommend|chat
   'send-to': 1, // send-to <姓名>
   'select-job': 1, // select-job <职位名>
@@ -117,8 +120,27 @@ export function validateCommandArgs(command: string | undefined, args: ParsedArg
 
   // 3) greet 显式意图门禁（防误触发真实写动作）
   if (command === 'greet') return validateGreetIntent(args)
+  if (command === 'lookup-candidates') {
+    const raw = args.flags.get('names')
+    if (typeof raw !== 'string') return { ok: false, message: 'lookup-candidates 需要 --names 姓名列表（1-3 人）' }
+    const parsed = parseGreetNames(raw)
+    if (!parsed.ok) return parsed
+    if (parsed.names.some((name) => name.length > 30)) return { ok: false, message: '每个姓名最多 30 字' }
+  }
+  if (command === 'greet-selected') {
+    const name = args.positional[1]
+    if (!name?.trim() || name.length > 30) return { ok: false, message: 'greet-selected 需要非空姓名（最多 30 字）' }
+    const ref = args.flags.get('candidate-ref')
+    if (typeof ref !== 'string' || ref.length !== 91 || !/^boss-card-v1:\d{13}:[a-f0-9]{64}$/.test(ref)) return { ok: false, message: 'greet-selected 需要工具返回的 --candidate-ref；不可按姓名猜选' }
+  }
+  if (command === 'greet-detail' && args.flags.get('greet-in-detail') !== true) {
+    return { ok: false, message: '详情页打招呼默认关闭；用户明确选择本轮直接打招呼后加裸flag --greet-in-detail，不接受字符串值' }
+  }
   if (command === 'filter') {
-    if (args.flags.has('clear') && ['experience', 'education', 'salary', 'filters', 'age'].some((k) => args.flags.has(k))) return { ok: false, message: '--clear 与筛选条件互斥' }
+    if (args.flags.has('clear') && ['experience', 'education', 'salary', 'filters', 'age', 'membership-hint', 'membership-account-ref', 'first-degree-only'].some((k) => args.flags.has(k))) return { ok: false, message: '--clear 与筛选条件互斥' }
+    if (args.flags.has('membership-account-ref') && !/^[a-f0-9]{64}$/.test(String(args.flags.get('membership-account-ref')))) return { ok: false, message: '--membership-account-ref需要探查返回的64位账号引用' }
+    if (args.flags.has('membership-hint') && !['vip', 'non_vip'].includes(String(args.flags.get('membership-hint')))) return { ok: false, message: '--membership-hint需要vip或non_vip' }
+    if (args.flags.has('first-degree-only') && !['true', 'false'].includes(String(args.flags.get('first-degree-only')))) return { ok: false, message: '--first-degree-only需要true或false' }
     for (const key of ['experience', 'education', 'salary', 'filters', 'age']) {
       if (args.flags.has(key) && (typeof args.flags.get(key) !== 'string' || !String(args.flags.get(key)).trim())) return { ok: false, message: `--${key} 需要非空值` }
     }

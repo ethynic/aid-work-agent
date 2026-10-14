@@ -88,4 +88,16 @@ describe('JobDetail 挂载冒烟', () => {
     expect(wrapper.text()).toContain('张三')
     expect(wrapper.text()).not.toContain('该职位暂无关联简历')
   })
+
+  it('基本信息显示普通、VIP 与评分三组完整条件', async () => {
+    getJobMock.mockResolvedValue({ success: true, data: { ...JOB_FIXTURE, job_requirements: {
+      experiences: ['26年毕业', '1年以内'], educations: ['本科'], job_statuses: ['离职-随时到岗'], salary_range: { min: 15, max: 25 },
+      vip_filters: { age: { min: 25, max: null }, activity: '今日活跃', gender: '男', not_viewed: '近14天没有', not_exchanged: '近一个月没有', schools: ['985', 'QS 100'], first_degree_only: true, job_hopping: '5年少于3份', boss_keywords: ['HTML'] },
+      keywords: ['Vue'], notes: '评分说明',
+    } } })
+    const wrapper = mount(JobDetail)
+    await flushPromises()
+    for (const text of ['普通筛选', 'VIP 专享筛选', '评分补充', '26年毕业、1年以内', '15–25K', '25–不限岁', '今日活跃', '近14天没有', '近一个月没有', '985、QS 100', '只看第一学历', '5年少于3份', 'HTML', '评分说明']) expect(wrapper.text()).toContain(text)
+    wrapper.unmount()
+  })
 })

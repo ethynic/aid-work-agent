@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import math
 import uuid as uuid_module
 from typing import Any, Dict, List, Optional
 
@@ -38,7 +39,20 @@ DEFAULT_MATCH_THRESHOLD = 70
 # job_requirements 允许的键（结构校验用；档位值不做硬校验，BOSS 档位动态，
 # Phase 3 由 boss_filter_options 校准兜底，见设计 §2.1）
 _REQUIREMENTS_STR_KEYS = ("experience", "salary", "notes")
-_REQUIREMENTS_LIST_KEYS = ("educations", "keywords")
+_REQUIREMENTS_LIST_KEYS = ("experiences", "educations", "job_statuses", "keywords")
+
+REQUIREMENT_EXPERIENCE_OPTIONS = ["在校/应届", "26年毕业", "27年毕业", "27年后毕业", "1年以内", "1-3年", "3-5年", "5-10年", "10年以上"]
+REQUIREMENT_EDUCATION_OPTIONS = ["初中及以下", "中专/中技", "高中", "大专", "本科", "硕士", "博士"]
+REQUIREMENT_JOB_STATUS_OPTIONS = ["离职-随时到岗", "在职-暂不考虑", "在职-考虑机会", "在职-月内到岗"]
+VIP_FILTER_OPTIONS = {
+    "activity": ["刚刚活跃", "今日活跃", "3日内活跃", "本周活跃", "本月活跃"],
+    "gender": ["男", "女"],
+    "not_viewed": ["近14天没有"],
+    "not_exchanged": ["近一个月没有"],
+    "schools": ["985", "211", "双一流院校", "留学", "公办本科", "QS 100", "QS 500"],
+    "job_hopping": ["5年少于3份", "平均每份工作大于1年"],
+    "boss_keywords": ["HTML", "CSS", "MYSQL", "GIT", "性能优化", "数据库设计", "REDIS", "AJAX", "高并发"],
+}
 
 
 class JobServiceError(ValueError):
@@ -170,13 +184,92 @@ def _validate_match_threshold(value: Optional[int]) -> Optional[int]:
     return value
 
 
-def _validate_job_requirements(value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """job_requirements 结构校验（仅键白名单 + 类型；档位值不硬校验，见设计 §2.1）。
+def _validate_range(value: Any, field: str, *, age: bool = False) -> Dict[str, Any]:
+    """范围采用至少一个有效端点；bool、非有限数及反向范围一律拒绝。"""
+    if not isinstance(value, dict) or set(value) - {"min", "max"}:
+        raise JobServiceError(f"{field} 必须为 min/max 范围对象")
+    result = {}
+    for bound, number in value.items():
+        if number is None:
+            if age and bound == "max":
+                result[bound] = None
+            continue
+        valid_type = isinstance(number, int) if age else isinstance(number, (int, float))
+        finite = False
+        if valid_type and not isinstance(number, bool):
+            try:
+                finite = math.isfinite(number)
+            except OverflowError:
+                pass
+        if isinstance(number, bool) or not valid_type or not finite:
+            raise JobServiceError(f"{field}.{bound} 必须为{'整数' if age else '有限数值'}")
+        if age and not 16 <= number <= 45:
+            raise JobServiceError(f"{field}.{bound} 必须在 16-45 岁之间，上限不限请传 null")
+        if not age and number <= 0:
+            raise JobServiceError(f"{field}.{bound} 必须大于 0（单位 K）")
+        result[bound] = number
+    if not any(number is not None for number in result.values()):
+        raise JobServiceError(f"{field} 至少填写一个端点")
+    if result.get("min") is not None and result.get("max") is not None and result["min"] > result["max"]:
+        raise JobServiceError(f"{field} 下限不能大于上限")
+    return result
 
-    允许键：experience(str) / educations(list[str]) / salary(str) / keywords(list[str]) /
-    notes(str)，全部可缺省；类型不符或未知键抛 JobServiceError。
-    返回清洗后的 dict（空字符串/null 项剔除，可为 {}），由调用方决定存 None 还是 {}。
-    """
+
+def _validate_string_list(value: Any, field: str, *, unlimited: bool = True) -> List[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(i, str) and i.strip() for i in value):
+        raise JobServiceError(f"{field} 必须为非空字符串数组")
+    values = list(dict.fromkeys(i.strip() for i in value))
+    if unlimited and "不限" in values:
+        if len(values) != 1:
+            raise JobServiceError(f"{field} 不限不能与其他条件同时选择")
+        return []
+    return values
+
+
+def _validate_vip_filters(value: Any) -> Dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise JobServiceError("job_requirements.vip_filters 必须为对象")
+    result = {}
+    for key, val in value.items():
+        field = f"job_requirements.vip_filters.{key}"
+        if key == "age":
+            if val is not None:
+                result[key] = _validate_range(val, field, age=True)
+        elif key == "first_degree_only":
+            if not isinstance(val, bool):
+                raise JobServiceError(f"{field} 必须为布尔值")
+            if val:
+                result[key] = True
+        elif key in ("schools", "boss_keywords"):
+            values = _validate_string_list(val, field)
+            if any(v not in VIP_FILTER_OPTIONS[key] for v in values):
+                raise JobServiceError(f"{field} 包含不支持的选项")
+            if values:
+                result[key] = values
+        elif key in VIP_FILTER_OPTIONS:
+            if val is None or val == "":
+                continue
+            if not isinstance(val, str):
+                raise JobServiceError(f"{field} 必须为字符串")
+            option = val.strip()
+            if not option or option == "不限":
+                continue
+            if option not in VIP_FILTER_OPTIONS[key]:
+                raise JobServiceError(f"{field} 包含不支持的选项")
+            result[key] = option
+        else:
+            raise JobServiceError(f"不支持的 VIP 筛选字段: {key}")
+    if result.get("first_degree_only") and not result.get("schools"):
+        raise JobServiceError("只看第一学历必须先选择院校条件")
+    return result
+
+
+def _validate_job_requirements(value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """兼容旧 experience/salary，清洗新版普通及 VIP 模板；模板不代表账号权益。"""
     if value is None:
         return None
     if not isinstance(value, dict):
@@ -190,17 +283,28 @@ def _validate_job_requirements(value: Optional[Dict[str, Any]]) -> Optional[Dict
                 raise JobServiceError(f"job_requirements.{key} 必须为字符串，当前为 {type(val).__name__}")
             cleaned[key] = val.strip()
         elif key in _REQUIREMENTS_LIST_KEYS:
-            if val is None or (isinstance(val, list) and not val):
-                continue
-            if not isinstance(val, list) or not all(
-                isinstance(i, str) and i.strip() for i in val
-            ):
-                raise JobServiceError(f"job_requirements.{key} 必须为字符串数组，当前为 {val!r}")
-            cleaned[key] = [i.strip() for i in val]
+            values = _validate_string_list(val, f"job_requirements.{key}", unlimited=key != "keywords")
+            if key == "job_statuses" and any(v not in REQUIREMENT_JOB_STATUS_OPTIONS for v in values):
+                raise JobServiceError("job_requirements.job_statuses 包含不支持的选项")
+            if values:
+                cleaned[key] = values
+        elif key == "salary_range":
+            if val is not None:
+                cleaned[key] = _validate_range(val, "job_requirements.salary_range")
+        elif key == "vip_filters":
+            vip = _validate_vip_filters(val)
+            if vip:
+                cleaned[key] = vip
         else:
             raise JobServiceError(
-                f"job_requirements 不支持的字段: {key}（允许：experience/educations/salary/keywords/notes）"
+                f"job_requirements 不支持的字段: {key}"
             )
+    if "experiences" in value:
+        if cleaned.get("experience") and cleaned.get("experiences", []) != [cleaned["experience"]]:
+            raise JobServiceError("experience 与 experiences 冲突，请只使用 experiences")
+        cleaned.pop("experience", None)
+    if cleaned.get("salary") and cleaned.get("salary_range"):
+        raise JobServiceError("salary 与 salary_range 不能同时设置，请使用一种薪资表达")
     return cleaned
 
 

@@ -8,6 +8,7 @@ import { createBossFilterOperation, createBossClearFilterOperation } from './bos
 import { createBossFilterOptionsOperation } from './bossFilterOptions.js'
 import { createBossGotoOperation } from './bossGoto.js'
 import { createBossGreetOperation } from './bossGreet.js'
+import { createBossLookupCandidatesOperation, createBossGreetSelectedOperation } from './bossCandidateSelection.js'
 import { createBossAcceptResumeOperation } from './bossAcceptResume.js'
 import { createBossRejectCurrentOperation } from './bossRejectCurrent.js'
 import { createBossInterviewDemoOperation } from './bossInterviewDemo.js'
@@ -41,6 +42,8 @@ export const OPERATIONS: Record<string, OperationEntry> = {
   boss_filter_options: { operation: createBossFilterOptionsOperation(), cli: { write: false } },
   boss_clear_filter: { operation: createBossClearFilterOperation(), cli: { write: true } },
   boss_goto: { operation: createBossGotoOperation(), cli: { write: false } },
+  boss_lookup_candidates: { operation: createBossLookupCandidatesOperation(), cli: { write: false } },
+  boss_greet_selected: { operation: createBossGreetSelectedOperation(), cli: { write: true } },
   boss_greet: { operation: createBossGreetOperation(), cli: { write: true } },
   boss_accept_resume: { operation: createBossAcceptResumeOperation(), cli: { write: true } },
   boss_reject_current: { operation: createBossRejectCurrentOperation(), cli: { write: true } },

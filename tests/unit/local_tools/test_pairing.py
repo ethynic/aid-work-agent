@@ -17,11 +17,10 @@ pytestmark = pytest.mark.unit
 
 class TestPair:
     def test_expired_or_used_code_returns_none(self):
-        """consume_ticket 返回 None（过期/已用/不存在）→ pair 返回 None，不建设备"""
-        with patch("src.local_tools.repository.consume_ticket", return_value=None), \
-             patch("src.local_tools.repository.create_device") as mock_create:
+        """Atomic ticket+device transaction rejects invalid code."""
+        with patch("src.local_tools.repository.pair_device_from_ticket", return_value=None) as mock_pair:
             assert pairing.pair("ABCD2345") is None
-            mock_create.assert_not_called()
+            mock_pair.assert_called_once()
 
     def test_pair_success_returns_token_once(self):
         """配对成功：返回 device_id + 64 位 token 明文；落库的是 token hash"""
@@ -30,10 +29,9 @@ class TestPair:
 
         def fake_create_device(**kwargs):
             created_hashes.update(kwargs)
-            return {"id": "dev-1"}
+            return {"id": "dev-1", "tenant_id": "tenant_t", "user_id": "user_t"}
 
-        with patch("src.local_tools.repository.consume_ticket", return_value=ticket), \
-             patch("src.local_tools.repository.create_device", side_effect=fake_create_device):
+        with patch("src.local_tools.repository.pair_device_from_ticket", side_effect=fake_create_device):
             result = pairing.pair("abcd2345", name="测试机", platform="windows")
 
         assert result["device_id"] == "dev-1"
@@ -41,7 +39,8 @@ class TestPair:
         # 落库的是 hash，不是明文
         assert created_hashes["token_hash"] != result["device_token"]
         assert len(created_hashes["token_hash"]) == 64
-        assert created_hashes["tenant_id"] == "tenant_t"
+        assert len(created_hashes["code_hash"]) == 64
+        assert "replacement_pending" not in result
 
     def test_fingerprint_stored_as_hash(self):
         """机器指纹只存哈希"""
@@ -50,10 +49,9 @@ class TestPair:
 
         def fake_create_device(**kwargs):
             captured.update(kwargs)
-            return {"id": "dev-2"}
+            return {"id": "dev-2", "tenant_id": "t", "user_id": "u"}
 
-        with patch("src.local_tools.repository.consume_ticket", return_value=ticket), \
-             patch("src.local_tools.repository.create_device", side_effect=fake_create_device):
+        with patch("src.local_tools.repository.pair_device_from_ticket", side_effect=fake_create_device):
             pairing.pair("ABCD2345", machine_fingerprint="raw-fingerprint")
 
         assert captured["machine_fingerprint_hash"] != "raw-fingerprint"
@@ -63,11 +61,9 @@ class TestPair:
 class TestCreatePairingTicket:
     def test_invalidates_old_tickets(self):
         """创建新配对码前作废同一用户所有未使用旧码"""
-        with patch("src.local_tools.repository.invalidate_unused_tickets") as mock_invalidate, \
-             patch("src.local_tools.repository.create_ticket", return_value="ticket-1") as mock_create:
+        with patch("src.local_tools.repository.issue_pairing_ticket", return_value="ticket-1") as mock_create:
             result = pairing.create_pairing_ticket("tenant_t", "user_t")
 
-        mock_invalidate.assert_called_once_with("tenant_t", "user_t")
         mock_create.assert_called_once()
         # create_ticket 收到的是 code hash 而非明文
         code_hash_arg = mock_create.call_args[0][2]
@@ -75,3 +71,19 @@ class TestCreatePairingTicket:
         assert len(code_hash_arg) == 64
         assert len(result["code"]) == 8
         assert result["expires_at"] is not None
+
+    def test_replacement_regeneration_keeps_target(self):
+        with patch("src.local_tools.repository.issue_pairing_ticket", return_value="ticket") as issue:
+            result = pairing.create_pairing_ticket("t", "u", "old-owned-id")
+        assert issue.call_args[0][4] == "old-owned-id"
+        assert result["replacement_device_id"] == "old-owned-id"
+
+
+def test_replacement_pair_returns_pending_without_revoking():
+    device = {"id": "new", "tenant_id": "t", "user_id": "u", "replacement_device_id": "old"}
+    with patch("src.local_tools.repository.pair_device_from_ticket", return_value=device) as atomic, \
+         patch("src.local_tools.repository.revoke_device") as revoke:
+        result = pairing.pair("CODE2345", pairing_protocol=2)
+    assert result["replacement_pending"] is True
+    assert atomic.call_args.kwargs["pairing_protocol"] == 2
+    revoke.assert_not_called()

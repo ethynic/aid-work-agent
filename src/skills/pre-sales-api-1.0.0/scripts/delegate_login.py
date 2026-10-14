@@ -1,5 +1,5 @@
 """
-外部系统委托登录脚本（pre-sales-api 技能）。
+外部系统委托登录脚本（pre-sales-api 技能，form-filling-api 技能复用）。
 
 带 Redis 缓存的委托登录：优先返回缓存的 client_token，未命中（或 force_refresh）
 时调用登录接口获取并写缓存。避免每轮问答都执行「登录 -> 业务接口 -> 登出」全套，
@@ -8,17 +8,26 @@ token 由缓存 TTL 自然过期，无需主动登出。
 适用「委托登录」类外部系统（如 10605 双 Token 模式）。登录地址等租户差异信息
 由接口文档提供，脚本不硬编码。
 
+除按 mobile 维度的缓存外，脚本同时写**会话级缓存**
+（external_login_token_session:{tenant}:{subagent}:{session_id}，读 AID_SESSION_ID），
+供 http_api 工具解析 header 中的 ${client_token} 占位符，使 client_token
+不进入 LLM 上下文（自动填表智能体的主对话写入场景）。
+
 用法: python scripts/delegate_login.py
 输入: stdin JSON
   {
     "login_url": "https://xxx/api/v1/erp.delegate/login",  # 必填，来自接口文档
     "mobile": "归属员工手机号",                              # 必填，委托人手机号
     "name": "归属员工姓名",                                  # 可选，手机号不存在触发自动建号时使用
-    "force_refresh": false                                   # 可选，Code=-99 时强制重新登录
+    "force_refresh": false,                                  # 可选，Code=-99 时强制重新登录
+    "hold_token": false                                      # 可选，true 时输出不含明文 client_token
+                                                             # （token 已托管到会话级缓存，http_api
+                                                             # 经 ${client_token} 占位符自动解析）
   }
 输出: stdout JSON
   成功: {"success": true, "client_token": str, "cached": bool, "record_id": int,
          "display_name": str, "agent_name": str, "created": bool}
+         hold_token=true 时无 client_token 字段，改为 "token_held": true
   失败: {"success": false, "error": str, "hint": str}
 """
 
@@ -104,6 +113,26 @@ def _write_cache(tenant_id, subagent_id, mobile, token_payload):
               file=sys.stderr)
 
 
+def _write_session_cache(tenant_id, subagent_id, token_payload):
+    """写会话级缓存的 client_token（凭证托管，供 http_api/load_form_schema 读取）。
+
+    无 AID_SESSION_ID（非技能子进程场景）时跳过。失败不阻断流程。
+    """
+    session_id = os.environ.get("AID_SESSION_ID", "").strip()
+    if not session_id:
+        return
+    try:
+        from src.core.cache_utils import CacheKeys, set_cached
+
+        set_cached(
+            CacheKeys.EXTERNAL_LOGIN_TOKEN_SESSION, tenant_id, subagent_id, session_id,
+            value=token_payload, ttl=_CACHE_TTL_SECONDS,
+        )
+    except Exception as e:
+        print(json.dumps({"_cache_write_error": str(e)}, ensure_ascii=False),
+              file=sys.stderr)
+
+
 def _call_login_api(login_url, mobile, name=None):
     """调用委托登录接口，返回 (ok, data_or_error)"""
     agent_token = os.environ.get("AGENT_TOKEN", "")
@@ -155,6 +184,7 @@ def delegate_login():
     mobile = (data.get("mobile") or "").strip()
     name = (data.get("name") or "").strip()
     force_refresh = bool(data.get("force_refresh"))
+    hold_token = bool(data.get("hold_token"))
 
     if not login_url:
         _emit({"success": False, "error": "缺少 login_url 参数",
@@ -181,7 +211,8 @@ def delegate_login():
     if not force_refresh:
         cached = _read_cache(tenant_id, subagent_id, mobile, login_url)
         if cached:
-            _emit({**cached, "success": True, "cached": True})
+            _write_session_cache(tenant_id, subagent_id, cached)
+            _emit({**_mask_output(cached, hold_token), "success": True, "cached": True})
             return
 
     # 2. 调登录接口
@@ -201,7 +232,17 @@ def delegate_login():
     }
     if token_payload["client_token"]:
         _write_cache(tenant_id, subagent_id, mobile, token_payload)
-    _emit({**token_payload, "success": True, "cached": False})
+        _write_session_cache(tenant_id, subagent_id, token_payload)
+    _emit({**_mask_output(token_payload, hold_token), "success": True, "cached": False})
+
+
+def _mask_output(payload, hold_token):
+    """hold_token=true 时从输出中剥离明文 client_token（token 已托管到会话级缓存）"""
+    if not hold_token:
+        return payload
+    masked = {k: v for k, v in payload.items() if k != "client_token"}
+    masked["token_held"] = True
+    return masked
 
 
 if __name__ == "__main__":

@@ -12,7 +12,8 @@
  * （宁可不打，不能打错）；结果按实际打过的人返回（greeted_names/missing_names）。
  */
 import { GreetExecutor } from '../boss/GreetExecutor.js'
-import { viewportOf } from '../boss/FilterSetter.js'
+import { viewportOf, FILTER_SNAPSHOT_OPTIONS } from '../boss/FilterSetter.js'
+import { candidateScrollEvent } from '../boss/LoadedCandidateNavigation.js'
 import {
   defaultSessionFactory,
   runBossOperation,
@@ -72,10 +73,8 @@ export function createBossGreetOperation(
               `当前页面不是推荐牛人列表页（当前 URL: ${url || '未识别'}），请先用 goto recommend（或 boss_goto）切换到「推荐牛人」页再打招呼`,
             )
           }
-          const probe = await session.snapshot()
-          // 滚动点取实际视口中心（不能硬编码：窗口矮时落点出视口，滚轮不生效会误判到底）
-          const vp = viewportOf(probe)
-          const scrollPoint = { x: Math.floor(vp.width / 2), y: Math.floor(vp.height / 2) }
+          // Preserve the entry geometry check; every actual wheel uses its own fresh snapshot.
+          viewportOf(await session.snapshot(FILTER_SNAPSHOT_OPTIONS))
           // 定向名单去重（trim 后精确匹配）
           const targetNames = names ? [...new Set(names.map((n) => n.trim()))] : undefined
           // 定向模式 limit 钳到 ≥ 名单人数：names 是意图（打全名单），limit 只是安全上限。
@@ -85,9 +84,12 @@ export function createBossGreetOperation(
           const effectiveLimit = targetNames ? Math.max(limit, targetNames.length) : limit
           const total = targetNames ? targetNames.length : limit
           const executor = new GreetExecutor({
-            snapshot: session.snapshot,
+            snapshot: () => session.snapshot(FILTER_SNAPSHOT_OPTIONS),
             click: session.click,
-            scroll: (deltaY) => session.mouseWheel(scrollPoint.x, scrollPoint.y, deltaY),
+            scroll: (deltaY, snapshot) => {
+              const event = candidateScrollEvent(snapshot, deltaY)
+              return session.mouseWheel(event.x, event.y, event.deltaY)
+            },
             signal: ctx.signal,
             onProgress: (done) => {
               tracker.completed = done
@@ -99,18 +101,28 @@ export function createBossGreetOperation(
               ? (screens) => {
                   ctx.progress({
                     stage: 'execute',
-                    message: `正在列表中查找「${targetNames.join('、')}」…已滚动 ${screens} 屏`,
+                    message: `正在列表中定位「${targetNames.join('、')}」…已滚动 ${screens} 次`,
                   })
                 }
               : undefined,
           })
           const result = await executor.greetVisible({ limit: effectiveLimit, names: targetNames })
+          if (result.stopReason && !targetNames) return {
+            message: result.stopReason === 'no_matching_candidates'
+              ? '当前筛选条件没有符合的牛人，已停止；未向下方推荐卡片打招呼'
+              : `已向 ${result.greeted} 位筛选结果牛人打招呼，到达推荐内容边界，已停止`,
+            data: { greeted: result.greeted, reached_end: true, stop_reason: result.stopReason,
+            },
+          }
           if (targetNames) {
             const greeted = result.greetedNames ?? []
             const missing = result.missingNames ?? []
+            const ambiguous = result.ambiguousNames ?? []
             const parts = [
               `完成：定向打招呼成功 ${greeted.length} 人${greeted.length > 0 ? `（${greeted.join('、')}）` : ''}`,
             ]
+            if (result.stopReason === 'no_matching_candidates') parts[0] = '当前筛选条件没有符合的牛人，已停止；未向下方推荐卡片打招呼'
+            else if (result.stopReason === 'recommendations_boundary') parts[0] = `已向 ${result.greeted} 位筛选结果牛人打招呼，到达推荐内容边界，已停止`
             if (missing.length > 0) {
               // 滚动上限而停：明确提示目标大概率不在当前筛选结果里，建议换筛选条件而非干等
               const stopNote = result.stoppedByLimit
@@ -118,8 +130,9 @@ export function createBossGreetOperation(
                 : result.reachedEnd
                   ? '，已滚到底'
                   : ''
-              parts.push(`未找到 ${missing.length} 人（${missing.join('、')}）${stopNote}`)
+              parts.push(`未找到 ${missing.length} 人（${missing.join('、')}），已跳过；可能姓名输入有误或页面已刷新移除${stopNote}`)
             }
+            if (ambiguous.length > 0) parts.push(`重名 ${ambiguous.length} 个（${ambiguous.map(c=>c.name).join('、')}），已跳过，请根据返回的各人优势确认对象`)
             return {
               message: parts.join('；'),
               data: {
@@ -127,7 +140,9 @@ export function createBossGreetOperation(
                 reached_end: result.reachedEnd,
                 greeted_names: greeted,
                 missing_names: missing,
+                ambiguous_names: ambiguous,
                 stopped_by_limit: result.stoppedByLimit ?? false,
+                ...(result.stopReason ? { stop_reason: result.stopReason } : {}),
               },
             }
           }

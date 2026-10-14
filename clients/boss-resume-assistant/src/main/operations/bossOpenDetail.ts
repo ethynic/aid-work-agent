@@ -2,8 +2,8 @@
  * boss_open_detail operation：推荐牛人页按姓名找卡片 → Win32 点姓名节点打开简历详情 →
  * 校验详情画布 + 顶部区姓名==name（防打错人）。详情保持打开（供 boss_resume_detail 读取）。
  *
- * 筛选主流程第一步：boss_open_detail → boss_resume_detail → 合格则 boss_greet_detail /
- * 不合格则 boss_close_detail（docs/plans/desktop-automation/plan-boss-detail-greet.md）。
+ * 默认boss_open_detail → boss_resume_detail → boss_close_detail，评分入库后等待人工审核。
+ * 只有用户主动选择直接模式，合格后才启用boss_greet_detail。
  *
  * 前置校验：必须在推荐牛人列表页（URL 判定，与 bossGreet 同源防坑 17：沟通页 DOM 内嵌
  * 推荐 iframe 时文案判定会误通过）。当前屏没有目标时滚动加载继续找（GreetExecutor 定向
@@ -13,6 +13,7 @@
  * 但无外部写副作用），effect=none；执行期间用户勿动鼠标（Win32 真实点击 + 滚动）。
  */
 import { DetailGreetExecutor } from '../boss/DetailGreetExecutor.js'
+import { FILTER_SNAPSHOT_OPTIONS } from '../boss/FilterSetter.js'
 import {
   defaultSessionFactory,
   runBossOperation,
@@ -58,7 +59,7 @@ export function createBossOpenDetailOperation(
             message: `在推荐牛人列表中查找「${name}」并打开简历详情（点击/滚动借用真实鼠标，请勿移动）`,
           })
           const executor = new DetailGreetExecutor({
-            snapshot: session.snapshot,
+            snapshot: () => session.snapshot(FILTER_SNAPSHOT_OPTIONS),
             click: session.click,
             pressEscape: session.pressEscape,
             scroll: (x, y, deltaY) => session.mouseWheel(x, y, deltaY),
@@ -78,8 +79,11 @@ export function createBossOpenDetailOperation(
             },
           })
           return {
-            message: `已打开「${result.name}」的简历详情（保持打开，供 boss_resume_detail 读取）`,
-            data: { opened: true, name: result.name },
+            message: result.stopReason ? (result.stopReason === 'no_matching_candidates'
+              ? '当前筛选条件没有符合的牛人，已停止，未打开下方推荐卡片'
+              : '目标属于下方推荐内容或已到达推荐边界，已停止，未打开推荐卡片')
+              : `已打开「${result.name}」的简历详情（保持打开，供 boss_resume_detail 读取）`,
+            data: { opened: !result.stopReason, name: result.name, ...(result.stopReason ? { stop_reason: result.stopReason } : {}) },
             effect: 'none',
           }
         },

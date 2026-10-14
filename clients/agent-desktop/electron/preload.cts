@@ -59,6 +59,7 @@ const runtimeHost = readArgument('aidagent-runtime-enabled') === '1' ? Object.fr
   choosePackage: (input: unknown) => ipcRenderer.invoke('desktop:runtime:choose-package', input) as Promise<unknown>,
   ...(runtime.productKind === 'runtime' ? {
     diagnoseConnection: () => ipcRenderer.invoke('desktop:runtime:diagnose-connection') as Promise<unknown>,
+    registrationStatus: () => ipcRenderer.invoke('desktop:runtime:registration-status') as Promise<unknown>,
     reconfigureConnection: (input: unknown) => ipcRenderer.invoke('desktop:runtime:reconfigure-connection', input) as Promise<unknown>,
   } : {}),
   observe: (callback: (event: unknown) => void) => {

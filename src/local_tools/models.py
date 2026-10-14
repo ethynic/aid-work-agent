@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class PairRequest(BaseModel):
@@ -14,6 +14,12 @@ class PairRequest(BaseModel):
     runtime_version: Optional[str] = Field(None, description="Runtime 版本")
     capabilities: Optional[Dict[str, Any]] = Field(None, description="设备能力（含 provider_id）")
     machine_fingerprint: Optional[str] = Field(None, description="机器指纹（服务端只存哈希）")
+    pairing_protocol: Optional[int] = Field(None, strict=True, ge=1, le=2, description="替换配对需协议2；普通配对兼容省略")
+
+
+class ReplacementCompleteRequest(BaseModel):
+    """The server owns the target relation; no caller-supplied target accepted."""
+    model_config = ConfigDict(extra="forbid")
 
 
 class HeartbeatRequest(BaseModel):

@@ -81,6 +81,11 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261013-1618 | 职位VIP筛选与BOSS权益识别 | ✅ 已完成开发；配置分组、权益门禁与18项VIP组合真机验收通过。 | — | [开发计划](plans/desktop-automation/plan-boss-job-vip-entitlements.md) |
+| 20261013-1918 | BOSS筛选结果与推荐边界 | ✅ 已完成开发；排除补充推荐并返回无匹配，独立验证及真机只读验收通过。 | — | [计划](plans/desktop-automation/plan-boss-filter-result-boundary.md) |
+| 20261013-2023 | BOSS头像下方VIP徽标识别 | ✅ 已完成开发；跨iframe徽标自动识别，独立验证及真机VIP只读验收通过。 | — | [计划](plans/desktop-automation/plan-boss-avatar-vip-marker.md) |
+| 20261013-2113 | BOSS筛选打招呼模式选择 | ✅ 已完成开发；默认人工审核名单，详情即时打招呼需显式启用，独立验证通过。 | — | [计划](plans/desktop-automation/plan-boss-greet-mode-opt-in.md) |
+| 20261013-2308 | BOSS已加载候选人直接定位 | ✅ 已完成开发；定位、发送与幂等真机通过，用户豁免重名真机验收，未部署。 | — | [计划](plans/desktop-automation/plan-boss-loaded-candidate-navigation.md) |
 | 20260908-1431 | 桌面 CLI 无人值守自动任务底座＋微信营销首场景 | ✅ 已完成开发并真机验收（P0–P5 交付；2026-10-11 确认真机验证通过）：中立底座（调度/账本/许可/journal/桌面锁/effect/phase）+ 微信固定内容场景（工作台/触发/素材/webhook）；P0–P5 过程记录已注销，协议与算法细节并入底座设计。与端侧会话任务（20260912-2313）共用底座。 | [底座设计](design/desktop-automation/desktop-cli-automation-design.md) / [场景设计](design/weixin/weixin-marketing-automation-design.md) | [灰度发布与回滚手册](ops/weixin-marketing-rollout.md) |
 | 20261011-boss-screening | BOSS 简历数量选择与连续筛选 | ✅ 已完成开发（Windows真机验收通过） | — | [开发计划](plans/desktop-automation/plan-boss-screening-continuation.md) |
 | 20261011-1456 | BOSS 筛选面板适配与详情页打分即打招呼 | ✅ 已完成开发 | VIP 弹窗滚动适配+操作性能埋点（2026-09-28 交付）与详情页三件套 boss_open_detail/boss_greet_detail/boss_close_detail 主路径切换（2026-09-28 真机闭环）；两份过程计划已注销，遗留 VIP 真机验证与详情页两项加固转入[续筛计划](plans/desktop-automation/plan-boss-screening-continuation.md) | — | — |
@@ -95,7 +100,7 @@
 | 20260518-2222 | 竞品调研智能体 | 竞品信息收集、HTML 预览、数据结构化输出 | [设计](subagent/competitor-research/competitor_research_subagent_design.md) | — |
 | 20260518-2223 | 售后处理智能体 | 售后工单处理、退款退货流程自动化 | [设计](subagent/after-sales/after_sales_subagent_design.md) | — |
 | 20260525-1709 | 投诉处理智能体 | 投诉分类、处理建议、升级流程 | [设计](subagent/complaint-handling/complaint-agent-design.md) | [计划](subagent/complaint-handling/complaint-agent-dev-plan.md) |
-| 20260525-1713 | 客户跟进智能体 | 客户跟进任务管理、提醒、执行 | [设计](subagent/customer-followup/customer_followup_design.md) | — |
+| 20260525-1713 | 客户跟进智能体 | ⏸️ 已下线（2026-10-14 由自动填表智能体取代）。内置文件级智能体，下线方式为 git rm `subagents/customer-followup/`（历史可恢复）；业务页面/数据表/技能保留不删。原功能：客户跟进任务管理、提醒、执行 | [设计](subagent/customer-followup/customer_followup_design.md) | — |
 | 20260610-1314 | 业务页面元数据注册表 | ✅ 已完成开发。 | [设计](system/digital-employee/page-metadata-registry-design.md) | [开发计划](system/digital-employee/page-metadata-registry-dev-plan.md) |
 | 20260602-1418 | 数据分析智能体 | ✅ 已完成开发。 | [设计](system/digital-employee/data-analysis-subagent-design.md) / [工具设计](system/digital-employee/smart-data-analysis-tool-design.md) | [工具开发计划](system/digital-employee/smart-data-analysis-tool-dev-plan.md) |
 | 20260602-1419 | 数据源导入功能 | ✅ 已完成开发。通用知识库扩展：上传 Excel/CSV → 解析 Sheet → LLM 推理 Schema → 用户审核 → 入库；连接外部数据库导入；管理已导入表 Schema 与关联。 | [设计§三~§五](system/digital-employee/data-analysis-subagent-design.md) | [计划](system/digital-employee/data-source-import-dev-plan.md) |

@@ -82,6 +82,15 @@ class CacheKeys:
     # （外部系统委托人 token，按子智能体隔离不同智能体对接的系统，value 带 login_url
     # 防串号；有效期 1 天，缓存 TTL 23h 留 buffer；Code=-99 时 force_refresh 强刷）
     EXTERNAL_LOGIN_TOKEN = "external_login_token"
+    # 外部系统委托登录 client_token 会话级托管：external_login_token_session:{tenant_id}:{subagent}:{session_id}
+    # （delegate_login.py 写入，value 同 mobile 版 payload；供 http_api 解析 header 中的
+    # ${client_token} 占位符与 load_form_schema.py 读取，使 token 不进 LLM 上下文；
+    # TTL 23h 与 mobile 版一致，force_refresh 时覆盖）
+    EXTERNAL_LOGIN_TOKEN_SESSION = "external_login_token_session"
+    # 表单 schema 元数据缓存：form_schema:{tenant_id}:{subagent}:{module}
+    # （load_form_schema.py 拉取第三方 module_schema 接口后缓存，TTL 1h，
+    # key 按租户+子智能体隔离不同第三方系统）
+    FORM_SCHEMA = "form_schema"
     # recap 任务幂等：recap_task:{tenant_id}:{task_name}:{round_message_id}
     # （每轮问答结束后的沉淀任务防重入/防回调重放，TTL 24h；docs/subagent/recap-mechanism-design.md）
     RECAP_TASK_DEDUP = "recap_task"

@@ -20,7 +20,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20261012-1120 | Runtime UI 与 BOSS 老用户试用组合包 | 🔧 部分完成 | r8混合历史故障已复现，重启步骤覆盖与配对前阻断待修。 | [共同契约](system/runner-desktop-runtime-integration-contract.md) | [组合包计划](plans/plan-runtime-ui-boss-trial-bundle.md)、[恢复计划](plans/plan-runtime-upgrade-recovery.md) |
+| 20261012-1120 | Runtime UI 与 BOSS 老用户试用组合包 | 🔧 部分完成 | r9候选包与最新BOSS链路通过；安装、真实重启及agent2联调待现场。 | [共同契约](system/runner-desktop-runtime-integration-contract.md) | [组合包计划](plans/plan-runtime-ui-boss-trial-bundle.md)、[恢复计划](plans/plan-runtime-upgrade-recovery.md) |
 | 20260917-1201 | 生产 243 仿真环境（staging） | 🔧 部分完成 | 代码层完成（a7394c1a）：SIMULATION_MODE 门控（SMTP/通知 dry-run、附件删除跳过、启动横幅）+ 同步脚本 + sim compose + nginx conf；243 服务器侧已上线（2026-09-17）：建库建账号 + schema 初始化（属主移交 aid_sim_user）+ 代码 rsync + cherry-pick + nginx 白名单上线（白名单放 snippets/ 避免 http 层污染生产的踩坑已回写文档）+ aid-agent-api1 healthy、启动横幅生效、表 149 张自动补齐；2026-09-17 更新脚本落地：sim.sh 默认附带代码同步（rsync 生产工作区 + sim-base 基准重放仿真增量，--skip-code 可跳过）+ 新增 agent1_update.sh 验证模式（git 拉取指定版本 + 前端构建，与复现模式互斥）；待 P1 验收（办公 IP 访问 + 同步真实租户联调）。 | [设计](system/simulation-env-design.md) | — |
 | 20261012-1230 | file_assets 历史文件名补录 | ✅ agent2 已补录，生产待执行 | commit 8825d880 上线 file_assets 表持久化文件元数据（根治下载文件名退化）后，存量历史文件名需跑补录脚本恢复（磁盘 + 消息表原始名优先，幂等）。agent2 已执行（磁盘 1241 + 消息 769，共 1457 行）；生产 243 发布后需同样执行。 | — | —（执行步骤见 [生产发布备忘](../deploy/生产发布备忘.md)） |
 | 20261012-2130 | docs 文档清理（3 个月前失效文档） | ✅ 已执行（2026-10-13） | 41 个删除项已 git rm；待定 wecom-integration.md 摘取有效章节至 wecom-crypto-troubleshooting.md 后删除；research_index 8 条目 + 全部悬空引用已清理；B 级重点项 6 处已修（含 2 个部署文档凭证脱敏），其余 32 个 B 级小修待后续顺手处理。 | [清理计划](plans/plan-docs-cleanup-20261012.md) | — |
@@ -39,6 +39,8 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261013-2102 | 自动填表智能体 | 🔧 部分完成（P0 核心链路 + 短信计费开发完成，待 wecom_kf 真机验证） | 内部员工在微信/企微/钉钉/飞书中用文字或语音，由智能体通过第三方系统 API 代填表单（首期 10605 客户信息+跟进记录）。手机号身份验证（渠道自带/users.phone/短信验证三档）+ 用户级委托登录 + 回显确认回执 + 表单 schema 接口通用化。已交付：form-filling-api 技能（load_api_config/get_user_phone/load_form_schema + delegate_login hold_token 托管扩展）、auto-form-filler 子智能体、通用接口文档模板、短信计费（每条 1 积分，AID_* env 计费身份 fail-closed）。待部署验证：wecom_kf 通道真机全流程（手机号验证、回显确认渲染）。配套：customer-followup 智能体已下线（git rm `subagents/customer-followup/`，业务页面/数据表/技能保留）。 | [设计](system/digital-employee/auto-form-filling-agent-design.md) | — |
+| 20261013-1700 | GLM多模态桌面阻碍诊断 | 📋 待开发 | 动作受阻时诊断截图，区分广告、VIP付费及必需付费阻断。 | [需求记录](plans/desktop-automation/plan-boss-job-vip-entitlements.md#glm-obstacle-recovery) | — |
 | 20260908-1432 | BOSS 直聘聊天自动化 | 🔧 部分完成 | B1/B2 完成入库（场景包默认关闭）；B3 起待开发，B0 测试账号授权阻塞中；旁支已交付（见 finished）。 | [BOSS 端侧接入设计](design/desktop-automation/boss-edge-session-design.md) / [底座设计](design/desktop-automation/desktop-cli-automation-design.md) | [BOSS 端侧接入计划](plans/desktop-automation/plan-boss-edge-session.md) |
 | 20260905-1753 | 营销 App 智能外呼代理 | 🔧 部分完成 | 2026-09-05 完成调研、详细设计与实施规划。 | [设计](design/marketing-call-agent-design.md) | [验证与计划](plans/marketing-call-agent-plan.md) / [GLM 实验执行手册](plans/marketing-call-agent-experiment-runbook.md) |
 | 20260817-1154 | 工程审计智能体（客户方案阶段） | ⏸️ 已搁置 | 面向工程管理咨询公司的「四库一平台三智能体」工程审计智能体商务方案（客户需求《工程审计智能体开发建设方案V1.0》）。 | 见 `docs/backups/engineering-audit-agent/`（git 忽略，仅本地） | — |
