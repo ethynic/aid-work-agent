@@ -5,8 +5,8 @@
   逐段调用渠道对应发送方法，发送事实在实际发送确认处记录（成功一段记一段，
   失败停止并记原因）；渠道配置覆盖按 adapter 现有 max_bytes 重排分段；
 - 单条渠道（kf/RPA，评审修正 §7.2）：一表单合并为一条消息，kf 预算核算 N=1
-  （零预算登记事实不发送，预算恢复后可整条重发），超单条硬限走渠道既有长文本
-  兜底（kf 截断+Web 端提示；RPA send_message 既有超长分段）；
+  （零预算登记事实不发送，预算恢复后可整条重发），超单条硬限生成 Markdown
+  文件以 file 消息完整发送（不截断；RPA send_message 既有超长分段）；
 - ask_delivery 发送事实：分段/单条两种粒度，metadata 读改写保留其他键
   （fake manager 承载）。
 """
@@ -228,6 +228,9 @@ class _KfStub:
         self.api_client.send_msg = AsyncMock(return_value={"errcode": 0})
         self.current_open_kfid = "kf-1"
         self._max_bytes = 2048
+        # 生产经 set_tenant_id 注入；单元桩留空走系统临时目录回退分支
+        # （租户 temp 目录路径由 src/core/storage 既有测试覆盖）。
+        self._tenant_id = ""
 
     def _truncate_to_single_message(self, text_content: str) -> str:
         # 委托真实实现（超长单条截断 + 「请在 Web 端查看」提示）

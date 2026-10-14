@@ -272,7 +272,8 @@ def render_single_message(form: Dict[str, Any], limit_bytes: int) -> str:
     一表单渲染为一条消息整体发送，不按题拆多条。超长时依次精简 intro、
     题头重复操作提示、选项 description（保留问题、必要选项与清晰编号）；
     全部阶段后仍超 limit_bytes 时返回最简文本，由 session 发送侧按渠道
-    既有长文本方式兜底（kf 截断单条、RPA 既有超长分段）。
+    既有完整展示方式兜底（kf 生成 Markdown 文件以 file 消息完整发送、
+    RPA 既有超长自动分段）。
     """
     limit = int(limit_bytes)
     if limit < 64:

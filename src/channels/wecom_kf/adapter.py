@@ -570,8 +570,16 @@ class WeComKfAdapter(ChannelAdapter):
         if not text_content or not text_content.strip():
             return True
         import tempfile
+
+        from src.core.storage import ensure_tenant_storage_dir
+        # 租户附件存储规范（backend_dev.md §租户附件存储规范）：临时文件入
+        # storage/tenants/{tenant_id}/temp/，finally 中清理；未注入租户时才
+        # 回退进程临时目录。
+        tenant_dir = (ensure_tenant_storage_dir(self._tenant_id, "temp")
+                      if self._tenant_id else None)
         handle = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", prefix="ask_", delete=False, encoding="utf-8")
+            mode="w", suffix=".md", prefix="ask_", delete=False,
+            encoding="utf-8", dir=tenant_dir)
         file_path = handle.name
         try:
             with handle:

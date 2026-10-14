@@ -1734,10 +1734,10 @@ class ChannelSessionManager:
               也登记，预算恢复后可整条重发）；kf 预算核算 N=1（提问轮次不为
               final 预留），remaining=0 不发送并记失败原因。
             - 重发：整条重发（不再重排），重投次数记一次。
-            - 仍超渠道单条硬限：kf 复用其既有完整展示方式（整段渲染长图，
-              题号/选项完整到达；失败如实记失败事实允许重发，不截断冒充
-              完整、不提示 Web 端）；RPA 沿用 send_message 既有超 2000 字
-              自动分段 actions，不在此预截断。
+            - 仍超渠道单条硬限：kf 生成 Markdown 文件（提问确认单.md）以
+              既有 file 消息完整发送（题号/选项完整；临时文件入租户 temp
+              目录即删；失败如实记失败事实允许重发）；RPA 沿用 send_message
+              既有超 2000 字自动分段 actions，不在此预截断。
             """
             from src.channels import ask_delivery, ask_render
 

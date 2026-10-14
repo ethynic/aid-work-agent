@@ -108,8 +108,8 @@
 
 ### WP5 渠道层（五渠道文字问答）
 
-1. **渲染到发送的接线责任（P1-2）**：`runner_agent.py` 渲染分段结构后**不自行承诺送达**——分段信息经**既有会话回复封装**（`session.py` 的 `make_send_response` 构造 UnifiedResponse）传到 adapter **逐段发送**；**发送事实在实际发送确认处记录**（以逐段发送结果为准），`runner_agent` 不提前认定已送达；表单分段**绕过** wecom_kf `renderer.py` 的长图合成与普通正文截断流程，走纯文本逐段。
-2. **预算接线**：wecom_kf 核算使用**当前入站 owner 的 `WeComKfReplyBudget` 对象**（段数 × 可用额度，提问轮次不为 final 预留——实施时与 `reserve_for_final` 现状核对，结论回写设计 §11.2）。
+1. **渲染到发送的接线责任（P1-2，实施后口径）**：`runner_agent.py` 渲染提问结构后**不自行承诺送达**——经**既有会话回复封装**（`session.py` 的 `make_send_response` 构造 UnifiedResponse）传到 adapter 发送；**发送事实在实际发送确认处记录**。wecom/dingtalk/feishu 按字节分段逐段发送；kf/RPA 一表单合并为**单条消息**（分段渠道的逐段事实仅适用前者），kf 精简后仍超单条硬限时生成 Markdown 文件（提问确认单.md，临时文件入租户 temp 目录即删）以 file 消息完整发送——**不截断正文冒充完整发送**。
+2. **预算接线**：wecom_kf 核算使用**当前入站 owner 的 `WeComKfReplyBudget` 对象**（单条方案 N=1，提问轮次不为 final 预留——已核实 `reserve_for_final` 仅存在于 verbose 路径，结论回写设计 §11.2）。
 3. `ask_render.py` 分段规则（按实际字节、逻辑行优先、单行字符边界跨消息、续段保留题号/选项号、description 优先省略）。
 4. 入站单管线（所有渠道一致，不分投递状态）：隐藏命令 → 精确"跳过"（skip=true）→ Q 编号解析（三分法 + 归一化，协议错误纠正一次）→ 精确"重发/简化"（按发送事实记录续传缺段）→ **其余一律沿现有 reply 路径**。
 5. 受理/应用边界（设计 v6 口径）：受理后暂停旧表单补发；control `consumed` 且快照无 wait → 清理剩余发送记录；被拒且 wait 有效 → 可修正重发。读既有 control 状态 + waiting 快照，无新状态机。
