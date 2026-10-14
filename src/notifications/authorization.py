@@ -29,13 +29,19 @@ def resource_in_tx(cursor, message):
     if ref['type'] in ('tenant_credit', 'tenant_profile', 'abuse_event'):
         # 租户级事件：resource 即租户本身，可见性由接收人管理员身份与租户隔离校验保证。
         return {'type': ref['type'], 'id': ref['id'], 'tenant_id': subject.tenant_id}
-    if ref['type'] != 'runner_result':
+    if ref['type'] == 'runner_waiting':
+        # 提问等待通知（Phase 2，设计 §5.6/§7.1）：runner 仍处于 waiting 且
+        # 归属/入口一致；点击解析后前端带 _load_session 回到会话即可见待答卡片。
+        status_clause = "r.status = 'waiting'"
+    elif ref['type'] == 'runner_result':
+        status_clause = "r.status IN ('completed','failed')"
+    else:
         raise NotificationError('NOTIFICATION_RESOURCE_UNSUPPORTED', 403)
-    cursor.execute('''SELECT r.runner_id,r.session_id,r.profile_id,s.subagent_id,s.instance_id,s.title
+    cursor.execute(f'''SELECT r.runner_id,r.session_id,r.profile_id,s.subagent_id,s.instance_id,s.title
         FROM agent_runners r JOIN chat_sessions s ON s.session_id=r.session_id
         WHERE r.runner_id=%s AND r.scope_key=%s AND r.tenant_id IS NOT DISTINCT FROM %s
         AND r.user_id=%s AND r.actor_kind='user' AND r.actor_id=%s
-        AND r.source='chat' AND r.session_kind='web' AND r.status IN ('completed','failed')
+        AND r.source='chat' AND r.session_kind='web' AND {status_clause}
         AND s.user_id=%s AND s.tenant_id IS NOT DISTINCT FROM %s''',
         (ref['id'], subject.scope_key, subject.tenant_id, subject.user_id, subject.user_id,
          subject.user_id, subject.tenant_id))

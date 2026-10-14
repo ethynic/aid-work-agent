@@ -1,4 +1,5 @@
 """Logical claims and renewable execution attempts are separate durable owners."""
+from loguru import logger
 
 from src.db.database import get_db_connection
 from .ownership import Attempt, LeaseLost, lock_runner
@@ -219,6 +220,17 @@ class ExecutionRepository:
             result = decoded(cursor.fetchone())
             result = sync_public_display(cursor,result,advance_view=False)
             result = EventRepository.notify_in_tx(cursor,row,after=result)
+            if result['status'] == 'waiting':
+                # 提问等待通知（Phase 2，设计 §5.6）：chat/web 用户自有 runner
+                # 进入 waiting(form) 时在事务尾生产通知，event_key 按 runner+wait
+                # 去重（同 wait 重复 park 不重发通知）。失败不阻断 park——待答
+                # 事实仍可经快照/徽标消费。
+                try:
+                    from src.notifications.producer import publish_runner_waiting_in_tx
+                    publish_runner_waiting_in_tx(cursor, result)
+                except Exception as error:  # noqa: BLE001 - 通知生产不阻断执行生命周期
+                    logger.warning('runner waiting notification production failed '
+                                   'runner_id={} class={}', result['runner_id'], type(error).__name__)
             conn.commit()
             return result
 

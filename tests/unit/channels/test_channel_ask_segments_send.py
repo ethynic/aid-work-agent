@@ -385,10 +385,9 @@ async def test_kf_over_hard_limit_file_failure_records_failure(monkeypatch):
 
 
 async def test_kf_over_hard_limit_without_file_fallback_records_failure(monkeypatch):
-    # 无文件发送能力：不发送、不截断冒充完整，事实记失败允许「重发」重试。
-    calls = _facts_stub(monkeypatch)
     # 无文件发送能力的 kf 形态（防御分支，真实 adapter 恒有 send_ask_file）：
     # 不发送、不截断冒充完整，事实记失败允许「重发」重试。
+    calls = _facts_stub(monkeypatch)
     adapter = MagicMock(spec=["send_ask_segment", "channel_type", "_max_bytes"])
     adapter.send_ask_segment = AsyncMock(return_value=True)
     adapter._max_bytes = 2048
@@ -403,6 +402,39 @@ async def test_kf_over_hard_limit_without_file_fallback_records_failure(monkeypa
     assert ok is False
     adapter.send_ask_segment.assert_not_awaited()
     assert calls["single_failed"] == ["over channel limit and no file fallback"]
+
+
+async def test_kf_over_hard_limit_temp_file_in_tenant_dir(monkeypatch, tmp_path):
+    # 评审同步项：租户注入时临时文件入 storage 工具返回的租户 temp 目录
+    # （存储工具 mock 指向 tmp_path，断言落盘位置与 finally 清理）。
+    calls = _facts_stub(monkeypatch)
+    tenant_dir = tmp_path / "temp"
+    tenant_dir.mkdir(parents=True)
+    monkeypatch.setattr("src.core.storage.ensure_tenant_storage_dir",
+                        lambda tid, scene: str(tenant_dir))
+    adapter = _kf_adapter()
+    adapter._tenant_id = "tenant_x"
+    uploads = []
+
+    async def _upload(file_path, media_type, **kwargs):
+        with open(file_path, encoding="utf-8") as f:
+            uploads.append((file_path, f.read()))
+        return {"errcode": 0, "media_id": "MEDIA_FILE"}
+
+    adapter.api_client.upload_media = _upload
+    budget = WeComKfReplyBudget(total=5)
+    send = _manager().make_send_response(adapter=adapter, message_id="m1",
+                                         reply_to="wx-1", reply_budget=budget)
+    form = _form(option_count=1)
+    form["questions"][0]["prompt"] = "超长题干" + "内容继续" * 400  # 精简后仍超 2048B
+    ok = await send(ChannelAskResponse("x", ask_segments=_payload(
+        ["占位"], form=form, limit=2048, single=True)), [])
+
+    assert ok is True
+    assert uploads and uploads[0][0].startswith(str(tenant_dir))
+    assert uploads[0][1]  # 全文写入租户目录下的临时文件
+    import os
+    assert not os.path.exists(uploads[0][0])  # finally 清理无残留
 
 
 # ==================== ask_delivery 发送事实（fake manager 承载 DB） ====================

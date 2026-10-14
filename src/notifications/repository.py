@@ -426,11 +426,20 @@ class NotificationRepository:
             resource = resource_in_tx(cursor, message)
             return {'notification_ref':ref,'event_type':message['event_type'],'resource':resource}
 
-    INBOX_EVENT_TYPES = ('billing.credit_low','billing.tenant_expiry','abuse.rule_triggered')
+    INBOX_EVENT_TYPES = ('billing.credit_low','billing.tenant_expiry','abuse.rule_triggered',
+                         'task.waiting_input')
 
     @staticmethod
     def _inbox_link(event_type, params, subject):
-        """点击站内信的跳转地址；abuse 告警跳防滥用中心并定位到该用户明细。"""
+        """点击站内信的跳转地址；abuse 告警跳防滥用中心并定位到该用户明细；
+        提问等待通知跳回原会话（_load_session 打开即见待答卡片）。"""
+        if event_type == 'task.waiting_input':
+            tenant_id = subject.tenant_id
+            session_id = params.get('session_id')
+            if not tenant_id or not session_id:
+                return None
+            return (f"/t/{quote(str(tenant_id), safe='')}/chat"
+                    f"?_load_session={quote(str(session_id), safe='')}")
         if event_type != 'abuse.rule_triggered':
             return None
         tenant_id = params.get('tenant_id') or subject.tenant_id

@@ -14,6 +14,19 @@ class TerminalParameters(StrictDTO):
     event_kind: Literal['completed','failed']
 
 
+class WaitingInputParameters(StrictDTO):
+    """Runner 进入 waiting(form) 的提问通知参数（Phase 2，设计 §5.6/§7.1）。
+
+    session_title/event_kind 与 TerminalParameters 同形（Web Push 渲染复用
+    同一模板字段），question_title 供站内信正文与徽标提示；session_id 供
+    站内信跳转链接构造（resource_ref 仍以 runner 为准）。
+    """
+    session_title: str = Field(min_length=1,max_length=80)
+    event_kind: Literal['waiting_input']
+    question_title: str = Field(min_length=1,max_length=120)
+    session_id: str = Field(min_length=1,max_length=64)
+
+
 class TestParameters(StrictDTO):
     session_title: Literal['浏览器通知测试']
     event_kind: Literal['test']
@@ -75,6 +88,7 @@ class EventRegistry:
 EVENTS=EventRegistry()
 EVENTS.register('task.completed',EventDefinition('runner_terminal',TerminalParameters,'runner_result'))
 EVENTS.register('task.failed',EventDefinition('runner_terminal',TerminalParameters,'runner_result'))
+EVENTS.register('task.waiting_input',EventDefinition('runner_waiting_input',WaitingInputParameters,'runner_waiting'))
 EVENTS.register('notification.test',EventDefinition('notification_test',TestParameters,'notification_test'))
 EVENTS.register('billing.credit_low',EventDefinition('billing_credit_low',CreditLowParameters,'tenant_credit'))
 EVENTS.register('billing.tenant_expiry',EventDefinition('billing_tenant_expiry',TenantExpiryParameters,'tenant_profile'))
@@ -83,6 +97,10 @@ EVENTS.register('abuse.rule_triggered',EventDefinition('abuse_rule_triggered',Ab
 
 def render_inbox_text(event_type, parameters):
     """站内信标题与正文按事件模板渲染；仅做纯文本插值，参数已过严格模型。"""
+    if event_type == 'task.waiting_input':
+        return '等待你的回答', (
+            f'「{parameters["session_title"]}」中的提问「{parameters["question_title"]}」'
+            f'正在等待你的回答，请前往该会话处理。')
     if event_type == 'billing.credit_low':
         return '积分即将耗尽提醒', (
             f'「{parameters["tenant_name"]}」近 7 天日均消耗 {parameters["daily_avg_credits"]:.1f} 积分，'

@@ -10,7 +10,7 @@
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
 | Phase 1 | 协议 + 权威校验 + Web 提问卡片 + 渠道文字全渠道 | ✅ 开发完成（2026-10-14） | WP0-WP5 全部完成、三角色两轮流程走完（commit 56105660/d36f9ea3 + 本轮提交）。WP0 root 等待 spike 通过（§11.1）；WP1 契约/入口校验/摘要兼容；WP2 判定表受理/canonical 权威生成/422 错误链路/BFF 条件透传；WP3 ask_user 正式工具 + spike 收敛（root/SUBAGENT/legacy 行为矩阵内核级用例锁定）；WP4 Web QuestionCard（§5.7 状态机/绑定原 wait/capabilities 降级）；WP5 渠道文字五端（字节分段/预算核算/入站单管线/发送事实）。独立测试修复 3 缺陷：claim_resume 重建阻塞、kf 截断后重发承诺矛盾、多位数题号误解析；CR 修复 2 个 P1：无 form 等待结构化提交静默受理、多位数题号消费 wait。单元 3401 过（7 先存环境）+ 集成 33 过 + 契约 85 fixture + 前端 ask 37/全量 639 过（8 先存）。待：用户统一评审 + 真机渠道验收 |
-| Phase 2 | 同源待答可达性（提问通知 + 会话待答标识） | 📋 待开发 | — |
+| Phase 2 | 同源待答可达性（提问通知 + 会话待答标识） | ✅ 开发完成（2026-10-14） | `task.waiting_input` 通知生产者挂 park 事务尾（chat/web 用户自有 runner 且 waiting(form) 才通知；event_key=runner:wait 去重，同 wait 重复 park 不重发）；`resource_in_tx` 增 `runner_waiting` 分支（点击解析回原会话带 `_load_session`）；站内信 INBOX 纳入该事件（渲染+跳转链接）；SW 白名单/文案更新；会话列表 `waiting_input` 徽标（查询异常降级无徽标，列表缓存 TTL 30s 内）。验证：notifications 单元 138 过（含 9 例 waiting 生产者新用例；web_push 8 例为先存环境）、后端 3417+集成 33、前端 642 与基线一致。主控单角色自验（子智能体额度冻结期）；真机验收待统一评审后 |
 | Phase 3 | 增强项（按需） | 📋 待开发 | — |
 
 ## 1. 范围边界（评审固化，实施中不得扩张）
@@ -110,12 +110,12 @@
 
 1. **渲染到发送的接线责任（P1-2，实施后口径）**：`runner_agent.py` 渲染提问结构后**不自行承诺送达**——经**既有会话回复封装**（`session.py` 的 `make_send_response` 构造 UnifiedResponse）传到 adapter 发送；**发送事实在实际发送确认处记录**。wecom/dingtalk/feishu 按字节分段逐段发送；kf/RPA 一表单合并为**单条消息**（分段渠道的逐段事实仅适用前者），kf 精简后仍超单条硬限时生成 Markdown 文件（提问确认单.md，临时文件入租户 temp 目录即删）以 file 消息完整发送——**不截断正文冒充完整发送**。
 2. **预算接线**：wecom_kf 核算使用**当前入站 owner 的 `WeComKfReplyBudget` 对象**（单条方案 N=1，提问轮次不为 final 预留——已核实 `reserve_for_final` 仅存在于 verbose 路径，结论回写设计 §11.2）。
-3. `ask_render.py` 分段规则（按实际字节、逻辑行优先、单行字符边界跨消息、续段保留题号/选项号、description 优先省略）。
+3. `ask_render.py` 渲染规则（**仅适用于分段渠道 wecom/dingtalk/feishu**；kf/RPA 走 `render_single_message` 单条合并）：按实际字节、逻辑行优先、单行字符边界跨消息、续段保留题号/选项号、description 优先省略。kf 精简后仍超单条硬限时由 session 侧生成 Markdown 文件（提问确认单.md，临时文件入租户 temp 目录即删，已登记 file_usage.md）以 file 消息完整发送。
 4. 入站单管线（所有渠道一致，不分投递状态）：隐藏命令 → 精确"跳过"（skip=true）→ Q 编号解析（三分法 + 归一化，协议错误纠正一次）→ 精确"重发/简化"（按发送事实记录续传缺段）→ **其余一律沿现有 reply 路径**。
 5. 受理/应用边界（设计 v6 口径）：受理后暂停旧表单补发；control `consumed` 且快照无 wait → 清理剩余发送记录；被拒且 wait 有效 → 可修正重发。读既有 control 状态 + waiting 快照，无新状态机。
 6. **不新增**渠道队列、独立投递服务或第二套 outbox。
 
-验收（实际发送链路）：**多段提问实际按文本逐段发送**；**中途失败只记录已确认段，重发只续传缺段**；wecom_kf 预算核算端到端；五渠道各一例端到端。
+验收（实际发送链路）：**多段提问实际按文本逐段发送（wecom/dingtalk/feishu）**；**kf/RPA 一表单单条到达，kf 超硬限走 Markdown 文件完整发送**；**中途失败只记录已确认段（分段渠道）/单条失败事实（kf/RPA），重发分别续传缺段或整条重发**；wecom_kf 预算核算端到端；五渠道各一例端到端。
 
 **唯一写入者**：`ask_render.py`、`runner_agent.py` 改动、`session.py` 发送封装接线、wecom_kf renderer/budget 接线归 WP5。
 

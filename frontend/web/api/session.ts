@@ -51,6 +51,8 @@ export interface ChatSession {
   context_data?: Record<string, any>
   created_at: string
   updated_at: string
+  /** 会话中存在等待用户回答的结构化提问（Phase 2 待答徽标） */
+  waiting_input?: boolean
 }
 
 export interface ChatMessageRecord {

@@ -73,6 +73,13 @@
                         <h3 class="text-sm font-medium text-gray-800 truncate">
                           {{ session.title || '新会话' }}
                         </h3>
+                        <span
+                          v-if="session.waiting_input"
+                          data-test="waiting-badge"
+                          class="flex-shrink-0 px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-300 text-[10px] font-medium"
+                        >
+                          待回答
+                        </span>
                         <span class="text-xs text-gray-400">
                           · {{ session.context_data?.subagent ? session.context_data.subagent : 'CEO智能体' }}
                         </span>
@@ -217,17 +224,25 @@
             <span class="text-xs text-gray-400 w-5 text-right flex-shrink-0">
               {{ seqNumber(index) }}
             </span>
-            <div class="flex-1 min-w-0">
-              <div class="flex items-center justify-between">
-                <div class="flex items-center gap-2 truncate">
-                  <h3 class="text-sm font-medium text-gray-800 truncate">
-                    {{ session.title || '新会话' }}
-                  </h3>
-                  <span class="text-xs text-gray-400">
-                    · {{ session.context_data?.subagent ? session.context_data.subagent : 'CEO智能体' }}
-                  </span>
-                </div>
-                <div class="flex items-center gap-1 ml-3">
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-2 truncate">
+                      <h3 class="text-sm font-medium text-gray-800 truncate">
+                        {{ session.title || '新会话' }}
+                      </h3>
+                      <span
+                        v-if="session.waiting_input"
+                        data-test="waiting-badge"
+                        class="flex-shrink-0 px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-300 text-[10px] font-medium"
+                      >
+                        待回答
+                      </span>
+                      <span class="text-xs text-gray-400">
+                        · {{ session.context_data?.subagent ? session.context_data.subagent : 'CEO智能体' }}
+                      </span>
+                    </div>
+                    <div class="flex items-center gap-1 ml-3">
+
                   <span class="text-xs text-gray-400">
                     {{ formatTime(session.updated_at) }}
                   </span>

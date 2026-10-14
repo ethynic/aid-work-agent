@@ -879,6 +879,26 @@ class SessionDB:
                 if result.get("context_data"):
                     result["context_data"] = json.loads(result["context_data"])
                 sessions.append(result)
+            # 会话列表「待回答」徽标（Phase 2）：该用户在列表会话中存在 waiting
+            # 且携带表单的 chat/web runner 时标记；失败不阻断列表（降级无徽标）。
+            try:
+                session_ids = [s.get("session_id") for s in sessions if s.get("session_id")]
+                waiting_ids = set()
+                if session_ids:
+                    marks = ",".join(placeholder for _ in session_ids)
+                    cursor.execute(f"""
+                        SELECT DISTINCT session_id FROM agent_runners
+                        WHERE user_id = {placeholder} AND session_id IN ({marks})
+                          AND status = 'waiting' AND source = 'chat'
+                          AND session_kind = 'web' AND actor_kind = 'user'
+                          AND public_snapshot->'waiting'->'form' IS NOT NULL
+                    """, (user_id, *session_ids))
+                    waiting_ids = {row["session_id"] for row in cursor.fetchall()}
+                for s in sessions:
+                    s["waiting_input"] = s.get("session_id") in waiting_ids
+            except Exception:
+                for s in sessions:
+                    s["waiting_input"] = False
             paginated = {
                 "sessions": sessions,
                 "total": total,
