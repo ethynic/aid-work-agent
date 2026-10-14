@@ -221,6 +221,7 @@ class _KfStub:
 
     _adapter_cls = __import__("src.channels.wecom_kf.adapter", fromlist=["WeComKfAdapter"]).WeComKfAdapter
     send_ask_segment = _adapter_cls.send_ask_segment
+    send_ask_file = _adapter_cls.send_ask_file
 
     def __init__(self):
         self.api_client = MagicMock()
@@ -320,18 +321,19 @@ async def test_kf_zero_budget_registers_facts_and_resend_after_recovery(monkeypa
     assert calls["resend"] == 1 and calls["single_sent"] == [True]
 
 
-async def test_kf_over_hard_limit_sends_full_image_not_truncation(monkeypatch):
-    # 评审修正：合并精简后仍超单条硬限 → 复用 kf 既有完整展示（长图，题号/
-    # 选项完整到达），不截断正文、不提示 Web 端；成功记 sent 并扣预算。
+async def test_kf_over_hard_limit_sends_full_content_as_file(monkeypatch):
+    # 三轮评审修正：合并精简后仍超单条硬限 → 生成 Markdown 文件以 file 消息
+    # 发送（内容不受单条文本/长图高度限制，题号/选项完整）；成功记 sent 扣预算。
     calls = _facts_stub(monkeypatch)
     adapter = _kf_adapter()
-    image_calls = []
+    uploads = []
 
-    async def _full_image(markdown_text, user_id):
-        image_calls.append(markdown_text)
-        return True
+    async def _upload(file_path, media_type, **kwargs):
+        with open(file_path, encoding="utf-8") as f:
+            uploads.append((f.read(), media_type, kwargs.get("display_name")))
+        return {"errcode": 0, "media_id": "MEDIA_FILE"}
 
-    adapter._send_full_text_as_image = _full_image
+    adapter.api_client.upload_media = _upload
     budget = WeComKfReplyBudget(total=5)
 
     send = _manager().make_send_response(adapter=adapter, message_id="m1",
@@ -342,24 +344,29 @@ async def test_kf_over_hard_limit_sends_full_image_not_truncation(monkeypatch):
         ["占位"], form=form, limit=2048, single=True)), [])
 
     assert ok is True
-    assert len(image_calls) == 1
-    # 完整内容交给长图（不截断、无 Web 端提示）；不走文本截断直发。
-    assert len(image_calls[0].encode("utf-8")) > 2048
-    assert "（内容较长，请在 Web 端查看）" not in image_calls[0]
-    adapter.api_client.send_msg.assert_not_awaited()
+    # 上传的是完整未截断全文（>2048 字节），file 类型 + 客户可见文件名。
+    assert len(uploads) == 1
+    uploaded_text, media_type, display_name = uploads[0]
+    assert len(uploaded_text.encode("utf-8")) > 2048
+    assert "（内容较长，请在 Web 端查看）" not in uploaded_text
+    assert media_type == "file" and display_name == "提问确认单.md"
+    sent_files = [call.kwargs["content"]["media_id"]
+                  for call in adapter.api_client.send_msg.await_args_list
+                  if call.kwargs.get("msgtype") == "file"]
+    assert sent_files == ["MEDIA_FILE"]
     assert budget.remaining == 4
     assert calls["single_sent"] == [True]
 
 
-async def test_kf_over_hard_limit_image_failure_records_failure(monkeypatch):
-    # 长图渲染/发送失败：如实记失败事实（可「重发」重试），不扣预算、不记成功。
+async def test_kf_over_hard_limit_file_failure_records_failure(monkeypatch):
+    # 文件上传/发送失败：如实记失败事实（可「重发」重试），不扣预算、不记成功。
     calls = _facts_stub(monkeypatch)
     adapter = _kf_adapter()
 
-    async def _fail_image(markdown_text, user_id):
-        return False
+    async def _upload_fail(file_path, media_type, **kwargs):
+        return {"errcode": 40029}
 
-    adapter._send_full_text_as_image = _fail_image
+    adapter.api_client.upload_media = _upload_fail
     budget = WeComKfReplyBudget(total=5)
     send = _manager().make_send_response(adapter=adapter, message_id="m1",
                                          reply_to="wx-1", reply_budget=budget)
@@ -371,13 +378,17 @@ async def test_kf_over_hard_limit_image_failure_records_failure(monkeypatch):
     assert ok is False
     assert budget.remaining == 5
     assert calls["single_sent"] == []
-    assert calls["single_failed"] == ["long image render/send failed"]
+    assert calls["single_failed"] == ["ask file upload/send failed"]
 
 
-async def test_kf_over_hard_limit_without_image_fallback_records_failure(monkeypatch):
-    # 无长图能力：不发送、不截断冒充完整，事实记失败允许「重发」重试。
+async def test_kf_over_hard_limit_without_file_fallback_records_failure(monkeypatch):
+    # 无文件发送能力：不发送、不截断冒充完整，事实记失败允许「重发」重试。
     calls = _facts_stub(monkeypatch)
-    adapter = _kf_adapter()  # 未提供 _send_full_text_as_image
+    # 无文件发送能力的 kf 形态（防御分支，真实 adapter 恒有 send_ask_file）：
+    # 不发送、不截断冒充完整，事实记失败允许「重发」重试。
+    adapter = MagicMock(spec=["send_ask_segment", "channel_type", "_max_bytes"])
+    adapter.send_ask_segment = AsyncMock(return_value=True)
+    adapter._max_bytes = 2048
     budget = WeComKfReplyBudget(total=5)
     send = _manager().make_send_response(adapter=adapter, message_id="m1",
                                          reply_to="wx-1", reply_budget=budget)
@@ -387,8 +398,8 @@ async def test_kf_over_hard_limit_without_image_fallback_records_failure(monkeyp
         ["占位"], form=form, limit=2048, single=True)), [])
 
     assert ok is False
-    adapter.api_client.send_msg.assert_not_awaited()
-    assert calls["single_failed"] == ["over channel limit and no full-content fallback"]
+    adapter.send_ask_segment.assert_not_awaited()
+    assert calls["single_failed"] == ["over channel limit and no file fallback"]
 
 
 # ==================== ask_delivery 发送事实（fake manager 承载 DB） ====================

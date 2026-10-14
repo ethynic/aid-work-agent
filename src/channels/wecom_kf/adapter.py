@@ -556,6 +556,47 @@ class WeComKfAdapter(ChannelAdapter):
             budget.consume(1)
         return ok
 
+    async def send_ask_file(self, text_content: str, user_id: str,
+                            budget: Optional[WeComKfReplyBudget] = None) -> bool:
+        """AskForm 超长完整展示（三轮评审修正 §7.2）：生成 Markdown 文件以
+        file 消息发送。
+
+        合并精简后仍超单条文本硬限的提问，生成 .md 文件走既有 file 消息通道
+        ——文件内容不受单条文本/长图高度限制，题号与选项完整到达（长图后处理
+        超 20000px 会裁切且 truncated 曾被误记完整发送，本方法替代该路径）。
+        成功扣 1 条回复额度（先发送后扣减，失败不扣），与 send_ask_segment
+        约定一致。
+        """
+        if not text_content or not text_content.strip():
+            return True
+        import tempfile
+        handle = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", prefix="ask_", delete=False, encoding="utf-8")
+        file_path = handle.name
+        try:
+            with handle:
+                handle.write(text_content)
+            upload = await self.api_client.upload_media(
+                file_path, "file", display_name="提问确认单.md", mime_type="text/markdown")
+            media_id = upload.get("media_id")
+            if not media_id:
+                return False
+            result = await self.api_client.send_msg(
+                touser=user_id,
+                open_kfid=self.current_open_kfid,
+                msgtype="file",
+                content={"media_id": media_id},
+            )
+            ok = result.get("errcode", 0) == 0
+            if ok and budget is not None:
+                budget.consume(1)
+            return ok
+        finally:
+            try:
+                os.remove(file_path)
+            except OSError:
+                pass
+
     async def _send_text_single(self, text_content: str, user_id: str) -> bool:
         """单条 text 消息直发（不拆分），供预算正文路径使用。"""
         if not text_content or not text_content.strip():

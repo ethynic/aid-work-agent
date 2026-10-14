@@ -1766,34 +1766,33 @@ class ChannelSessionManager:
             over_limit = bool(limit) and len(text.encode("utf-8")) > int(limit)
             kf_channel = hasattr(adapter, "send_ask_segment")
             if over_limit and kf_channel:
-                # 评审修正：合并精简后仍超 kf 单条硬限时，复用本渠道既有的完整
-                # 展示方式（整段渲染长图，题号/选项完整到达），不截断正文冒充
-                # 完整发送、不提示不存在的 Web 端；渲染/发送失败如实记失败事实，
-                # 用户可「重发」重试（重发走同一路径重新渲染，存的是未截断全文）。
-                # 长图成功由 _send_full_text_as_image 的调用方扣减预算（此处）。
-                render_and_send = getattr(adapter, "_send_full_text_as_image", None)
-                if callable(render_and_send):
+                # 三轮评审修正：合并精简后仍超 kf 单条硬限时，生成 Markdown
+                # 文件以既有 file 消息发送——文件内容不受单条文本/长图高度
+                # 限制，题号与选项完整到达（长图后处理超 20000px 会裁切且
+                # truncated 曾被误记完整发送，本路径替代长图方案）。发送成功
+                # 扣 1 预算记 sent；失败如实记失败事实，用户可「重发」重试
+                # （重发走同一路径重新生成文件，存的是未截断全文）。
+                send_file = getattr(adapter, "send_ask_file", None)
+                if callable(send_file):
                     try:
-                        ok = bool(await render_and_send(text, reply_to))
-                    except Exception as e:  # noqa: BLE001 - 长图链路异常收敛为失败
-                        logger.error(f"{log_tag} 提问长图渲染/发送异常: {e}")
+                        ok = bool(await send_file(text, reply_to, reply_budget))
+                    except Exception as e:  # noqa: BLE001 - 文件链路异常收敛为失败
+                        logger.error(f"{log_tag} 提问文件生成/发送异常: {e}")
                         ok = False
-                    if ok and reply_budget is not None:
-                        reply_budget.consume(1)
                     if wait_id and session_id:
                         if ok:
                             ask_delivery.record_single_sent(session_id, wait_id)
                         else:
                             ask_delivery.record_single_failure(
-                                session_id, wait_id, "long image render/send failed")
+                                session_id, wait_id, "ask file upload/send failed")
                     logger.info(
-                        f"{log_tag} 提问长图发送完成: wait_id={wait_id or '-'}, sent={ok}")
+                        f"{log_tag} 提问文件发送完成: wait_id={wait_id or '-'}, sent={ok}")
                     return ok
-                # 无长图能力的形态：不截断冒充完整，如实记失败允许「重发」重试。
+                # 无文件能力的形态：不截断冒充完整，如实记失败允许「重发」重试。
                 if wait_id and session_id:
                     ask_delivery.record_single_failure(
-                        session_id, wait_id, "over channel limit and no full-content fallback")
-                logger.error(f"{log_tag} 提问超渠道单条上限且无完整展示能力，不发送")
+                        session_id, wait_id, "over channel limit and no file fallback")
+                logger.error(f"{log_tag} 提问超渠道单条上限且无文件发送能力，不发送")
                 return False
             # RPA 等无条数配额的渠道超限时，沿用其 adapter 既有的自动分段兜底
             # （单条长度限制按实际渠道处理，内容不丢）。
