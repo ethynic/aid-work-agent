@@ -719,9 +719,12 @@ async def test_real_recovery_reply_on_fresh_schema_uses_generic_control_without_
     row.update(status='waiting', attempt=0, lease_valid=False, resume_control_id=control['control_id'])
     control.update(status='accepted', client_request_id='reply-request')
     resumed = {**row, 'status': 'running', 'attempt': 1, 'checkpoint': recovered.checkpoint}
+    from datetime import datetime, timezone
     cursor, connection = MagicMock(), MagicMock()
     connection.__enter__.return_value.cursor.return_value = cursor
-    cursor.fetchone.side_effect = [{'owner_runner_id': row['runner_id']}, control, resumed]
+    # claim_resume 的控制消费 UPDATE 返回 consumed_at（DB 时钟，供埋点双时长）
+    cursor.fetchone.side_effect = [{'owner_runner_id': row['runner_id']}, control,
+                                   {'consumed_at': datetime.now(timezone.utc)}, resumed]
     with patch('src.services.agent_runner.recovery_repository.lock_runner', return_value=row) as fence, \
             patch('src.services.agent_runner.recovery_repository.ControlRepository', StoredControls), \
             patch('src.services.agent_runner.recovery_repository.sync_public_display', side_effect=lambda cursor, row, **kwargs: row), \

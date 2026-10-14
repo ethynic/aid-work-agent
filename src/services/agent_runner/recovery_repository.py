@@ -93,7 +93,9 @@ class RecoveryRepository:
                 recovery_port.assert_claim_in_tx(cursor,row,control,worker_id=worker_id)
             number = row['attempt'] + 1
             cursor.execute('''UPDATE agent_runner_controls SET status='consumed',consumed_attempt=%s,
-                consumed_at=clock_timestamp() WHERE control_id=%s AND status='accepted' ''',(number,control_id))
+                consumed_at=clock_timestamp() WHERE control_id=%s AND status='accepted'
+                RETURNING consumed_at''',(number,control_id))
+            consumed_at = (cursor.fetchone() or {}).get('consumed_at')
             cursor.execute('''UPDATE agent_runners SET status='running',attempt=%s,worker_id=%s,
                 lease_until=clock_timestamp()+(%s*INTERVAL '1 second'),checkpoint=%s::jsonb,
                 pause_requested=FALSE,resume_control_id=NULL,revision=revision+1,
@@ -119,28 +121,32 @@ class RecoveryRepository:
                 unavailable.public_verification='恢复执行许可尚待核对，任务与原命令已保留。'
                 raise unavailable from error
             connection.commit()
-            # 提问生命周期埋点（八轮评审修正）：控制消费事务提交成功后记录，
-            # prepare 内存阶段的失败/重复不再虚增成功数；仅限真实 AskForm——
-            # 受理 payload 带 form/answers/skip 结构化键，legacy clarify 纯文本
-            # payload 不产生埋点。skipped 用 payload.skip 事实而非答案文案推断；
-            # recover_ms=受理→认领的恢复处理延迟，respond_ms=runner.updated_at
-            # （≈提问落库）→受理的近似用户响应时长。埋点失败不影响认领结果。
+            # 提问生命周期埋点（八轮评审修正 + 九轮评审口径）：控制消费事务
+            # 提交成功后记录。是否 AskForm 按消费前原 wait 判定（叶节点含
+            # 表单即统计——结构化与文字兼容作答都算；legacy clarify 无表单
+            # 排除），不按作答载体决定。skipped 用 payload.skip 事实而非答案
+            # 文案推断；recover_ms=受理→认领（恢复处理延迟）；respond_ms=
+            # 提问时间（既有 clarificationQuestions.created_at）→受理（近似
+            # 用户响应时长的起点未持久化，暂不记录（九轮评审兜底口径）。埋点
+            # 失败不影响认领结果。
             try:
-                payload = control.get('payload') or {}
-                if payload.get('form') is not None or payload.get('answers') is not None \
-                        or payload.get('skip') is True:
-                    from datetime import datetime, timezone
+                from src.notifications.producer import _clarification_leaf
+                waiting_leaf = _clarification_leaf(
+                    ((row.get('checkpoint') or {}).get('execution') or {}).get('waiting'))
+                if waiting_leaf is not None:
+                    payload = control.get('payload') or {}
+                    wait_id = payload.get('wait_id') or waiting_leaf.get('wait_id')
                     accepted_at = control.get('accepted_at')
-                    recover_ms = (int((datetime.now(timezone.utc) - accepted_at)
-                                      .total_seconds() * 1000) if accepted_at else None)
-                    parked_at = row.get('updated_at')
-                    respond_ms = (int((accepted_at - parked_at).total_seconds() * 1000)
-                                  if accepted_at and parked_at else None)
-                    logger.info('[ask] consumed wait_id={} skipped={} recover_ms={} respond_ms={}',
-                                payload.get('wait_id'), payload.get('skip') is True,
-                                recover_ms, respond_ms)
-            except Exception as error:  # noqa: BLE001 - 埋点失败不影响认领结果
-                print(f'[ask-metrics-error] {error!r}')
+                    # recover_ms=受理→消费（恢复处理延迟，纯 DB 时钟无偏差）。
+                    # 用户响应时长（提问→受理）的起点未持久化（clarification
+                    # Questions 为读取时实时投影，claim 处不可见）——按九轮评审
+                    # 兜底口径暂不记录该指标，待产品确认是否持久化提问时间。
+                    recover_ms = (int((consumed_at - accepted_at).total_seconds() * 1000)
+                                  if accepted_at else None)
+                    logger.info('[ask] consumed wait_id={} skipped={} recover_ms={}',
+                                wait_id, payload.get('skip') is True, recover_ms)
+            except Exception:  # noqa: BLE001 - 埋点失败不影响认领结果
+                pass
             return result
 
     def hold_resume(self, runner_id, *, revision, control_id, public_verification=None):

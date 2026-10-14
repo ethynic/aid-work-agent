@@ -371,7 +371,7 @@ async def test_root_ask_user_form_wait_accepts_structured_reply_and_resumes(
     ask_logs = [a for a in claim_logs if a and a[0].startswith('[ask] consumed')]
     assert len(ask_logs) == 1
     assert ask_logs[0][1] == waiting["wait_id"] and ask_logs[0][2] is False
-    assert ask_logs[0][3] is not None and ask_logs[0][4] is not None
+    assert ask_logs[0][3] is not None  # recover_ms（DB 时钟，恢复处理延迟）
 
 
 async def test_ask_skip_submission_logs_skipped_metric(
@@ -401,7 +401,37 @@ async def test_ask_skip_submission_logs_skipped_metric(
     ask_logs = [a for a in claim_logs if a and a[0].startswith('[ask] consumed')]
     assert len(ask_logs) == 1
     assert ask_logs[0][1] == waiting["wait_id"] and ask_logs[0][2] is True
-    assert ask_logs[0][3] is not None and ask_logs[0][4] is not None
+    assert ask_logs[0][3] is not None  # recover_ms（DB 时钟，恢复处理延迟）
+
+
+async def test_ask_plain_text_reply_still_counts_metric(
+        storage, controls, actors, monkeypatch):
+    # 九轮评审 P2-1：文字兼容作答同样统计——是否 AskForm 按消费前原 wait 判定，
+    # 不按作答载体（结构化/文字）决定。
+    import src.services.agent_runner.recovery_repository as rr_module
+    claim_logs = []
+    monkeypatch.setattr(rr_module, 'logger',
+                        SimpleNamespace(info=lambda *a, **k: claim_logs.append(a)))
+    repository, parked, principal = await parked_root_ask(storage, actors["a"])
+    runner_id = parked["runner_id"]
+    waiting = parked["checkpoint"]["execution"]["waiting"]
+    request = RunnerControl(client_request_id=uuid.uuid4().hex, action="reply",
+                            target_execution_id=runner_id, wait_id=waiting["wait_id"],
+                            answer="q1 选前三项，其余观察")
+    accepted, created = controls.submit(principal, runner_id, request)
+    assert created and accepted["status"] == "accepted"
+    prepared = recovery_for(principal, repository.get(runner_id)).prepare(
+        repository.get(runner_id),
+        controls.get(principal, runner_id, accepted["control_id"]))
+    claim = RecoveryRepository().claim_resume(
+        runner_id, "wp0-text-worker", 30,
+        revision=repository.get(runner_id)["revision"],
+        control_id=accepted["control_id"], checkpoint=prepared.checkpoint)
+    assert claim is not None and claim["status"] == "running"
+    ask_logs = [a for a in claim_logs if a and a[0].startswith('[ask] consumed')]
+    assert len(ask_logs) == 1
+    assert ask_logs[0][1] == waiting["wait_id"] and ask_logs[0][2] is False
+    assert ask_logs[0][3] is not None  # recover_ms（DB 时钟，恢复处理延迟）
 
 
 async def test_park_waiting_notification_failure_isolated_by_savepoint(
