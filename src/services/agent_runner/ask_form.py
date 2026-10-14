@@ -60,6 +60,17 @@ def normalize_answers(answers):
              'text': _field(item, 'text')} for item in answers or []]
 
 
+def _text_of(item):
+    return (_field(item, 'text') or '').strip()
+
+
+def _merge_duplicate(previous, item):
+    """同题一致重复的合并：非空文本优先（另一项空白视为未补充），否则保留先前项。"""
+    if _text_of(item) and not _text_of(previous):
+        return item
+    return previous
+
+
 def validate_answers(form, answers, *, skip=False):
     """提交判定表（§5.4，顺序即优先级）。返回逐题错误明细列表，空列表=通过。
 
@@ -86,10 +97,15 @@ def validate_answers(form, answers, *, skip=False):
             continue
         previous = seen.get(qid)
         if previous is not None:
-            # 同题重复：完全相同的重复项按一次计；答案矛盾即无法确定解释。
-            if (previous['selected_keys'] != item['selected_keys']
-                    or previous['text'] != item['text']):
+            # 同题重复（评审 P2-2）：选项集合相同（与提交顺序无关）且文本不
+            # 矛盾（至少一段为空白或两段一致）时按一次计；集合不同或两段
+            # 非空白文本不同才是无法确定解释的矛盾。
+            same_selection = set(previous['selected_keys']) == set(item['selected_keys'])
+            prev_text, this_text = _text_of(previous), _text_of(item)
+            if not same_selection or (prev_text and this_text and prev_text != this_text):
                 errors.append(_error(qid, FORM_ANSWER_INVALID, '同一问题重复提交且答案矛盾'))
+                continue
+            seen[qid] = _merge_duplicate(previous, item)
             continue
         seen[qid] = item
         errors.extend(_structural_errors(question, item))
@@ -143,7 +159,11 @@ def canonical_text(form, answers, *, skip=False):
     """
     if skip:
         return SKIP_TEXT
-    by_qid = {item['question_id']: item for item in answers or []}
+    by_qid = {}
+    for item in answers or []:
+        key = item['question_id']
+        # 同题重复与 validate_answers 的合并规则同源（非空文本优先）。
+        by_qid[key] = _merge_duplicate(by_qid[key], item) if key in by_qid else item
     lines = []
     for qid, question in _questions(form).items():
         parts = [_option_label(question, key) for key in by_qid.get(qid, {}).get('selected_keys') or []]

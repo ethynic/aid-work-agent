@@ -9,8 +9,10 @@ docs/system/design-ask-user-interactive-question.md §4.2/§5.4：
 """
 
 import pytest
+from pydantic import ValidationError
 
 from src.services.agent_runner import ask_form
+from src.services.agent_runner.control_contracts import AnswerItem, RunnerControl
 
 pytestmark = pytest.mark.unit
 
@@ -69,6 +71,19 @@ class TestNormalize:
             [AnswerItem(question_id="Q3", selected_keys=["q3o1"], text=" 说明 ")])
         assert normalized == [{"question_id": "q3", "selected_keys": ["q3o1"], "text": " 说明 "}]
         assert ask_form.normalize_answers(None) == []
+
+    def test_entry_model_strips_question_id_before_acceptance(self):
+        # 评审 P2-1：归一化测试必须经过真实入口模型（RunnerControl），不得绕过——
+        # 入口先剥离无害空白再验格式，" Q1 " 可受理；未知形状在入口即被拒绝。
+        control = RunnerControl(
+            client_request_id="k", action="reply", target_execution_id="runner-1",
+            wait_id="wait-1",
+            answers=[AnswerItem(question_id=" Q1 ", selected_keys=["q1o1"], text=None)])
+        normalized = ask_form.normalize_answers(control.answers)
+        assert normalized[0]["question_id"] == "q1"
+        assert ask_form.validate_answers(form(), normalized) == []
+        with pytest.raises(ValidationError):
+            AnswerItem(question_id=" question-1 ", selected_keys=[], text=None)
 
 
 class TestJudgementTableSkip:
@@ -130,6 +145,27 @@ class TestJudgementTableStructure:
         # 归一化（qid 小写、key 去重）后完全相同的重复项按一次计。
         assert errors_of(form(), [answer("q1", ["q1o1"]),
                                   answer("q2", ["q2o1"]), answer("Q2", ["q2o1", "q2o1"])]) == []
+
+    def test_same_selection_in_different_order_is_not_contradictory(self):
+        # 评审 P2-2：相同多选集合仅顺序不同，不要求用户纠正；非空文本优先保留。
+        assert errors_of(form(), [answer("q1", ["q1o1", "q1o2"]),
+                                  answer("q1", ["q1o2", "q1o1"])]) == []
+        assert errors_of(form(), [answer("q1", ["q1o1"]), answer("q1", ["q1o1"], "补充说明")]) == []
+
+    def test_duplicate_with_different_selections_or_conflicting_text_is_contradictory(self):
+        # 集合不同、或两段非空白文本不同，才是真正无法解释的矛盾。
+        details = errors_of(form(), [answer("q1", ["q1o1"]),
+                                     answer("q1", ["q1o1", "q1o2"], "x")])
+        assert codes(details) == [("q1", "FORM_ANSWER_INVALID")]
+        details = errors_of(form(), [answer("q3", [], "先做第一项"),
+                                     answer("q3", [], "不要继续")])
+        assert codes(details) == [("q3", "FORM_ANSWER_INVALID")]
+
+    def test_canonical_and_validation_merge_duplicates_identically(self):
+        merged = [answer("q1", ["q1o1"]), answer("q1", ["q1o1"], "自定义内容")]
+        assert errors_of(form(), merged) == []
+        text = ask_form.canonical_text(form(), ask_form.normalize_answers(merged))
+        assert "自定义内容" in text  # 非空文本不被空白项覆盖（canonical 与判定表同源合并）
 
     def test_multiple_structural_violations_reported_per_question(self):
         details = errors_of(form(), [answer("q9"), answer("q3", ["q3o1"]),

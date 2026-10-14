@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aidwork.local/contracts/runtime-host/v1/ask-answer.schema.json",
   "title": "AskReplyControl",
-  "description": "Wire shape of a reply control request carrying structured answers (or an explicit skip) for an ask_user form. The authoritative entry validation is the server-side RunnerControl model; this schema documents the same boundaries for consumers. The answer/answers conflict test approximates the model's strip() semantics with minLength on the raw string. Form-relative answer rules (unknown question_id against the form, keys outside that question's options, a text question answered with selected_keys) are decided at the acceptance layer against the immutable form, not here.",
+  "description": "Wire shape of a reply control request carrying structured answers (or an explicit skip) for an ask_user form. The authoritative entry validation is the server-side RunnerControl model; this schema documents the same boundaries for consumers. A meaningful free-text answer is one containing at least one non-whitespace character (pattern \\S, matching the model's strip() semantics — minLength is NOT equivalent). Form-relative answer rules (unknown question_id against the form, keys outside that question's options, a text question answered with selected_keys) are decided at the acceptance layer against the immutable form, not here.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -94,7 +94,8 @@
       "if": {
         "properties": {
           "answer": {
-            "minLength": 1
+            "type": "string",
+            "pattern": "\\S"
           }
         },
         "required": [
@@ -148,7 +149,8 @@
     {
       "properties": {
         "answer": {
-          "minLength": 1
+          "type": "string",
+          "pattern": "\\S"
         }
       },
       "required": [
@@ -177,9 +179,9 @@
       ],
       "properties": {
         "question_id": {
-          "description": "Case-insensitive; the acceptance layer normalizes to lowercase.",
+          "description": "Harmless leading/trailing whitespace is stripped at entry before the shape check; the acceptance layer normalizes to lowercase.",
           "type": "string",
-          "pattern": "^[qQ][1-9]$"
+          "pattern": "^\\s*[qQ][1-9]\\s*$"
         },
         "selected_keys": {
           "description": "Server-generated lowercase keys; duplicated keys are deduplicated at acceptance, and single/multi bounds are enforced there.",

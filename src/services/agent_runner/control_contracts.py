@@ -3,7 +3,7 @@
 import hashlib
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .contracts import AttachmentRef, canonical_json
 
@@ -14,6 +14,13 @@ class AnswerItem(BaseModel):
     question_id: str = Field(pattern='^[qQ][1-9]$')  # case-insensitive; lowercased at acceptance
     selected_keys: list[str]  # subset of that question's options, enforced at acceptance
     text: str | None
+
+    @field_validator('question_id', mode='before')
+    @classmethod
+    def _strip_question_id(cls, value):
+        # 无害首尾空白在格式校验前剥离（评审 P2-1）：" Q1 " 是合法题号；
+        # 剥离后才进入 pattern 校验，未知题号仍被既有规则拒绝。
+        return value.strip() if isinstance(value, str) else value
 
     class Config:
         extra = 'forbid'

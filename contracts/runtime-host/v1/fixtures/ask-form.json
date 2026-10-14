@@ -319,5 +319,44 @@
     "value": {
       "errors": []
     }
+  },
+  {
+    "name": "ask_reply_whitespace_only_answer_rejected",
+    "schema": "ask-answer.schema.json",
+    "valid": false,
+    "value": {
+      "client_request_id": "ask-bad-6",
+      "action": "reply",
+      "target_execution_id": "runner-1",
+      "wait_id": "wait_example-1",
+      "answer": "   "
+    }
+  },
+  {
+    "name": "ask_reply_blank_answer_with_empty_answers_accepted",
+    "schema": "ask-answer.schema.json",
+    "valid": true,
+    "value": {
+      "client_request_id": "ask-key-2",
+      "action": "reply",
+      "target_execution_id": "runner-1",
+      "wait_id": "wait_example-1",
+      "answer": " ",
+      "answers": []
+    }
+  },
+  {
+    "name": "ask_reply_question_id_with_surrounding_whitespace",
+    "schema": "ask-answer.schema.json",
+    "valid": true,
+    "value": {
+      "client_request_id": "ask-key-3",
+      "action": "reply",
+      "target_execution_id": "runner-1",
+      "wait_id": "wait_example-1",
+      "answers": [
+        {"question_id": " Q1 ", "selected_keys": ["q1o1"], "text": null}
+      ]
+    }
   }
 ]

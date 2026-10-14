@@ -7,7 +7,6 @@ docs/plans/plan-ask-user-interactive-question.md §WP1：
 受理层幂等（同键命中/改答案拒绝）归 WP2 数据库链路，不在此重复。
 """
 
-import hashlib
 import json
 
 import pytest
@@ -45,9 +44,10 @@ class TestAnswerItemShape:
             with pytest.raises(ValidationError):
                 structured(question_id=bad)
 
-    def test_question_id_is_case_insensitive_at_entry(self):
-        # 归一化为小写发生在 WP2 受理层，入口只验格式。
-        assert structured(question_id="Q2").question_id == "Q2"
+    def test_question_id_strips_whitespace_and_keeps_case_at_entry(self):
+        # 评审 P2-1：入口先剥离无害首尾空白再验格式（" Q1 " 合法）；
+        # 大小写归一发生在 WP2 受理层，入口保留原大小写。
+        assert structured(question_id=" Q2 ").question_id == "Q2"
 
     def test_selected_keys_and_text_are_structural_only(self):
         # 选项范围/题型匹配归受理层；入口只要求 list[str] 与可空 text。
@@ -173,11 +173,6 @@ class TestLegacyIntentCompatibility:
             assert "answers" not in control.intent()
             assert "skip" not in control.intent()
 
-    def test_baselines_match_independent_sha256_of_canonical(self):
-        # 基线自洽：digest 确为 canonical 串的 sha256，防硬编码抄写错误。
-        assert REPLY_TEXT_DIGEST == hashlib.sha256(
-            REPLY_TEXT_BASELINE.encode("utf-8")).hexdigest()
-
 
 class TestStructuredIntentSerialization:
     def test_answers_key_appears_only_when_supplied(self):
@@ -194,9 +189,18 @@ class TestStructuredIntentSerialization:
         assert intent["skip"] is True
         assert "answers" not in intent
 
-    def test_structured_digest_differs_from_plain_text_shape(self):
-        assert reply(answers=[]).digest() != REPLY_TEXT_DIGEST
-        assert reply(skip=True).digest() != REPLY_TEXT_DIGEST
+    def test_answers_value_changes_digest_with_identical_base_fields(self):
+        # 评审：摘要差异断言必须隔离待验证字段——其余字段完全一致、只变 answers
+        # 内容时摘要必须变化，才能证明 answers 计入摘要（与纯文本基线对照证明不了）。
+        first = reply(answers=[structured()])
+        second = reply(answers=[structured(selected_keys=["q1o2"])])
+        assert first.digest() != second.digest()
+        assert first.digest() == first.digest()  # 同内容稳定（幂等重试前提）
+
+    def test_skip_submission_digest_differs_from_answers_submission(self):
+        # skip 与 answers 互斥、无法只翻转 skip；键存在断言（上两例）+ 本断言
+        # 共同证明结构化字段整体计入摘要。
+        assert reply(skip=True).digest() != reply(answers=[]).digest()
 
     def test_same_structured_intent_is_stable_for_idempotent_retry(self):
         first = reply(client_request_id="retry", answers=[structured()])

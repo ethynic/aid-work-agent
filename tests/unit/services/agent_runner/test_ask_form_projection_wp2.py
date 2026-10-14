@@ -72,35 +72,40 @@ class TestWaitingFormProjection:
 
 class TestSupplementalInputsProjection:
     def structured_entry(self):
+        # errors 等额外键是真实可能存在的输入（HTTP 错误通道与快照分离的前提），
+        # 白名单投影必须不输出它们——泄露条件在本用例内构造（评审：无 errors 的
+        # "未出现"断言检不出泄露）。
         return {'control_id': 'control-1', 'client_request_id': 'key-1',
                 'message_id': 'control-1:user', 'text': 'Q1【归档范围】wecom_kf 限频修复',
                 'wait_id': 'wait_wp2-1', 'target_execution_id': 'runner-1',
                 'accepted_at': '2026-10-14T00:00:00', 'attachments': [],
                 'form': FORM,
-                'answers': [{'question_id': 'q1', 'selected_keys': ['q1o2'], 'text': None}]}
+                'answers': [{'question_id': 'q1', 'selected_keys': ['q1o2'], 'text': None}],
+                'errors': [{'question_id': 'q1', 'code': 'FORM_ANSWER_INVALID',
+                            'message': '该题为必答'}]}
 
     def test_structured_acceptance_projects_form_and_answers(self):
-        inputs = projected({'supplementalInputs': [self.structured_entry()]})['supplementalInputs']
+        result = projected({'supplementalInputs': [self.structured_entry()]})
+        inputs = result['supplementalInputs']
         assert inputs[0]['text'] == 'Q1【归档范围】wecom_kf 限频修复'
         assert inputs[0]['form']['form_id'] == 'frm_wp2-1'
         assert inputs[0]['answers'] == [{'question_id': 'q1', 'selected_keys': ['q1o2'],
                                          'text': None}]
+        # errors 只属于 HTTP 响应，快照投影不输出（真实泄露条件已构造）。
+        assert 'errors' not in result
+        assert 'errors' not in inputs[0]
 
     def test_plain_text_history_projection_unchanged(self):
         entry = {'control_id': 'control-2', 'client_request_id': 'key-2',
                  'message_id': 'control-2:user', 'text': '直接文字回答',
                  'wait_id': 'wait-1', 'target_execution_id': 'runner-1',
-                 'accepted_at': '2026-10-14T00:00:00', 'attachments': []}
+                 'accepted_at': '2026-10-14T00:00:00', 'attachments': [],
+                 'errors': [{'question_id': 'q1', 'code': 'X', 'message': 'x'}]}
         assert projected({'supplementalInputs': [entry]})['supplementalInputs'] == [{
             'control_id': 'control-2', 'client_request_id': 'key-2',
             'message_id': 'control-2:user', 'text': '直接文字回答', 'wait_id': 'wait-1',
             'target_execution_id': 'runner-1', 'accepted_at': '2026-10-14T00:00:00',
             'attachments': []}]
-
-    def test_validation_errors_never_appear_in_snapshot(self):
-        result = projected({'supplementalInputs': [self.structured_entry()]})
-        assert 'errors' not in result
-        assert 'errors' not in result['supplementalInputs'][0]
 
 
 def decorate(waiting):
