@@ -33,6 +33,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from src.llm.gateway import DEFAULT_MAX_TOKENS
+
 from src.core.temp_logger import tlog
 from src.services.recap.runner import RecapPayload
 from src.tools.base import BaseTool
@@ -1057,6 +1059,9 @@ async def _run_push_loop(
                 tools=tools,
                 tool_choice="auto",
                 temperature=0.1,
+                # 单轮输出只是工具调用 JSON 或简短报告，8192 足够；防模型
+                # 退化独白按模型上限烧 token（2026-10-12 事故 177 积分）
+                max_tokens=8192,
             )
         except ValueError:
             # lite 链路不可用（lite_model 未配置或缺少 lite provider key）时回退主模型
@@ -1067,6 +1072,9 @@ async def _run_push_loop(
                 tools=tools,
                 tool_choice="auto",
                 temperature=0.1,
+                # 回退主模型同样不查模型能力上限表（思考 + 工具调用 JSON，
+                # 16384 为项目默认单次生成上限）
+                max_tokens=DEFAULT_MAX_TOKENS,
             )
         # 计费：每轮 LLM 调用独立落库（billing_audit.md §3.5 条件 A）。
         # provider 响应不含 model 键，按实际链路显式解析模型名，保证单价归属正确

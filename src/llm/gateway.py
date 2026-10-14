@@ -390,6 +390,13 @@ class LLMGateway:
         # kwargs 中若有调用方误传的 model，丢弃（模型由 lite_model 决定）
         kwargs.pop("model", None)
 
+        # lite 链路已关思考，输出为短摘要/工具调用 JSON，未显式指定时用
+        # DEFAULT_MAX_TOKENS 兜底，不查 llm.model_max_tokens 能力上限表：
+        # 表中是模型极限值（如 deepseek-flash 393216），模型退化独白时会
+        # 按上限全额烧掉（2026-10-12 事故：单次调用耗 177 积分）
+        if max_tokens is None:
+            max_tokens = DEFAULT_MAX_TOKENS
+
         if lite_provider == self.provider_name:
             # 当前 provider：走完整链路（含 failover）
             for k, v in _lite_thinking_off_params(lite_provider).items():
