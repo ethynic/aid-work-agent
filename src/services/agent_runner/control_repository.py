@@ -1,9 +1,11 @@
 """Idempotent control acceptance under the original runner's ownership lock."""
 
+import copy
 import json
 import uuid
 
 from src.db.database import get_db_connection
+from . import ask_form
 from .contracts import RunnerError
 from .ownership import lock_runner, LeaseLost
 from .persistence_limits import capped_snapshot_dumps
@@ -57,14 +59,49 @@ class ControlRepository:
         self.browser_completions = browser_completions
 
     @staticmethod
-    def assert_wait(row, request):
+    def waiting_for(row, request):
+        """已通过 assert_wait 后定位目标等待本体（含 ask form），找不到返回 None。"""
         for execution_id, waiting in execution_waits(row.get('checkpoint')):
             if execution_id == request.target_execution_id and isinstance(waiting,dict) and waiting.get('wait_id') == request.wait_id:
-                expected = 'clarification' if request.action == 'reply' else 'human_assistance'
-                if waiting.get('kind') != expected:
-                    raise RunnerError('CONTROL_WAIT_KIND_MISMATCH',409)
-                return
-        raise RunnerError('CONTROL_WAIT_STALE',409)
+                return waiting
+        return None
+
+    @staticmethod
+    def assert_wait(row, request):
+        waiting = ControlRepository.waiting_for(row, request)
+        if waiting is None:
+            raise RunnerError('CONTROL_WAIT_STALE',409)
+        expected = 'clarification' if request.action == 'reply' else 'human_assistance'
+        if waiting.get('kind') != expected:
+            raise RunnerError('CONTROL_WAIT_KIND_MISMATCH',409)
+
+    def _accept_ask_form(self, row, request):
+        """结构化提交的判定表校验与 canonical 生成（设计 §4.2/§5.4）。
+
+        仅 wait 含 form 的结构化提交（answers 或 skip）进入本路径；校验失败同步
+        422 + errors 逐题明细，不创建 control、不消费 wait、不写任何持久状态。
+        wait 无 form（旧 clarify）上的结构化提交同样 422 拒绝：原路径只认
+        非空 answer 文本，按空 reply 静默受理会丢弃结构化答案且消费 wait，
+        客户端失去用原键重提的机会。
+        """
+        waiting = self.waiting_for(row, request) or {}
+        form = waiting.get('form')
+        if not isinstance(form, dict):
+            if request.skip:
+                raise RunnerError('FORM_SKIP_NOT_ALLOWED', 422, errors=[
+                    {'question_id': ask_form.FORM_LEVEL_ID,
+                     'code': 'FORM_SKIP_NOT_ALLOWED',
+                     'message': '当前等待不包含提问表单，不能整体跳过'}])
+            raise RunnerError('FORM_ANSWER_INVALID', 422, errors=[
+                {'question_id': ask_form.FORM_LEVEL_ID,
+                 'code': 'FORM_ANSWER_INVALID',
+                 'message': '当前等待不包含提问表单，不能提交结构化答案'}])
+        normalized = ask_form.normalize_answers(request.answers)
+        errors = ask_form.validate_answers(form, normalized, skip=request.skip)
+        if errors:
+            raise RunnerError(errors[0]['code'], 422, errors=errors)
+        return {'text': ask_form.canonical_text(form, normalized, skip=request.skip),
+                'answers': normalized, 'form': copy.deepcopy(form)}
 
     def accept_completion_in_tx(self, cursor, row, request):
         """Internal Browser fact bridge under an already locked original owner.
@@ -132,6 +169,7 @@ class ControlRepository:
             raise RunnerError('CHECKPOINT_REVISION_CHANGED',409)
         if row['cancel_requested'] or row['status'] in ('finalizing','completed','cancelled','failed'):
             raise RunnerError('CONTROL_EXECUTION_CLOSED',409)
+        structured = None
         if request.action != 'pause':
             if row['status'] not in ('paused','waiting','interrupted'):
                 raise RunnerError('RUNNER_NOT_PARKED',409)
@@ -145,6 +183,11 @@ class ControlRepository:
                     (runner_id, request.wait_id, request.target_execution_id))
                 if cursor.fetchone():
                     raise RunnerError('CONTROL_WAIT_CONSUMED',409)
+                # 结构化提问受理（设计 §5.4）：失败同步 422 + errors，不落库；
+                # 成功生成 canonical 与 form 快照。旧 clarify 原路径不受影响。
+                structured = (self._accept_ask_form(row, request)
+                              if request.action == 'reply'
+                              and (request.answers is not None or request.skip) else None)
             if request.action == 'browser_complete':
                 if self.browser_completions is None:
                     raise RunnerError('CONTROL_COMPLETION_FORBIDDEN',403)
@@ -152,12 +195,19 @@ class ControlRepository:
         control_id = 'control_' + uuid.uuid4().hex
         acknowledged_pause = request.action == 'pause' and row['status'] in ('paused','waiting','interrupted')
         status = 'consumed' if acknowledged_pause else 'accepted'
+        payload = request.intent()
+        if structured is not None:
+            # canonical 写入既有 answer 键（recovery._apply_reply 读该键回注为
+            # tool result）；form 快照与结构化答案仅供审计/历史，不参与 digest
+            # （digest 基于客户端原始请求，已由 request.digest() 冻结）。
+            payload['answer'] = structured['text']
+            payload['form'] = structured['form']
         cursor.execute('''INSERT INTO agent_runner_controls
             (control_id,runner_id,tenant_id,scope_key,action,client_request_id,intent_digest,payload,
              status,consumed_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,
              CASE WHEN %s THEN clock_timestamp() ELSE NULL END) RETURNING *''',
             (control_id,runner_id,row['tenant_id'],row['scope_key'],request.action,request.client_request_id,
-             request.digest(),json.dumps(request.intent(),ensure_ascii=False),status,acknowledged_pause))
+             request.digest(),json.dumps(payload,ensure_ascii=False),status,acknowledged_pause))
         control = dict(cursor.fetchone())
         if request.action == 'pause':
             # A later explicit pause supersedes a not-yet-consumed resume. It
@@ -172,7 +222,7 @@ class ControlRepository:
         else:
             snapshot = dict(row.get('public_snapshot') or {})
             if request.action == 'reply' or (request.action=='resume' and (request.answer.strip() or request.attachments)):
-                snapshot.setdefault('supplementalInputs',[]).append({
+                entry = {
                     'control_id':control_id,'message_id':control_id+':user','text':request.answer,
                     'client_request_id':request.client_request_id,
                     'wait_id':request.wait_id if request.action=='reply' else None,
@@ -180,7 +230,14 @@ class ControlRepository:
                     'accepted_at':control['accepted_at'].isoformat(),
                     'attachments':[{key:item.model_dump(mode='json')[key]
                                     for key in ('file_id','name','type','mime_type','size')}
-                                   for item in request.attachments]})
+                                   for item in request.attachments]}
+                if structured is not None:
+                    # 结构化受理：text 保持 canonical（与 tool result 同源），另附
+                    # 归一化答案与 form 快照供历史只读卡片渲染（设计 §7.1）。
+                    entry['text'] = structured['text']
+                    entry['answers'] = structured['answers']
+                    entry['form'] = structured['form']
+                snapshot.setdefault('supplementalInputs',[]).append(entry)
             cursor.execute('''UPDATE agent_runners SET resume_control_id=%s,
                 public_snapshot=%s::jsonb,
                 control_revision=control_revision+1,view_revision=view_revision+1,

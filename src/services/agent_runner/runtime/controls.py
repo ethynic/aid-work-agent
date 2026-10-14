@@ -76,9 +76,15 @@ class ControlToolAdapter:
         elif name == "clarify":
             question = result.get("question", "")
             yield make_event("progress", data=f"❓ 需要澄清: {question[:50]}...")
-            if state.role == AgentMode.SUBAGENT:
-                if self.task_record:
-                    self.task_record.request_clarification(question)
+            # WP0 spike（docs/plans/plan-ask-user-interactive-question.md §WP0）：
+            # 临时放开 root 执行（MASTER/STANDALONE）的 clarification 等待，验证
+            # 设计前提；task_record 仅属于子执行，root 不写澄清任务状态。
+            # 仅 durable（Runner worker）链路放开：legacy 进程内链路没有 reply
+            # 恢复消费方，root clarify 保持原「继续模型」行为不变。
+            # 正式实现归 WP3，本临时分支届时一并收敛替换。
+            if state.role == AgentMode.SUBAGENT and self.task_record:
+                self.task_record.request_clarification(question)
+            if self.durable_owner or state.role == AgentMode.SUBAGENT:
                 yield DispatchResult(result, wait={"kind": "clarification", "question": question,
                     "missing_info": args.get("missing_info", []), "tool_call_id": call.id})
                 return

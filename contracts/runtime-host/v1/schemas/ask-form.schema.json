@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aidwork.local/contracts/runtime-host/v1/ask-form.schema.json",
+  "title": "AskForm",
+  "description": "Server-generated question form attached to a runner wait by the ask_user tool. Field lengths (title/tag/prompt/label/description/placeholder) are generation/display suggestions, never rejection gates; this schema constrains structure and enums only. Cross-field business rules (required, max_select bounds, payload size) are hard-validated at the tool and acceptance layers.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "form_id",
+    "wait_id",
+    "questions",
+    "allow_skip",
+    "expires_at"
+  ],
+  "properties": {
+    "form_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "wait_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "title": {
+      "type": "string"
+    },
+    "intro": {
+      "type": "string"
+    },
+    "questions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5,
+      "items": {
+        "$ref": "#/$defs/question"
+      }
+    },
+    "allow_skip": {
+      "type": "boolean",
+      "description": "Whether an explicit whole-form skip is accepted for this form."
+    },
+    "expires_at": {
+      "description": "Reserved; always null in phase 1.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "$defs": {
+    "question": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "prompt",
+        "type"
+      ],
+      "properties": {
+        "id": {
+          "description": "Server-generated per form, in question order.",
+          "type": "string",
+          "pattern": "^q[1-9]$"
+        },
+        "tag": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "description": "single: at most one option; multi: bounded by max_select; text: free input, no options.",
+          "enum": [
+            "single",
+            "multi",
+            "text"
+          ]
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "options": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/option"
+          }
+        },
+        "allow_custom_text": {
+          "type": "boolean"
+        },
+        "custom_placeholder": {
+          "type": "string"
+        },
+        "placeholder": {
+          "type": "string"
+        },
+        "max_select": {
+          "description": "multi upper bound, default = option count; single is always 1.",
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "text"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "options": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "single",
+                  "multi"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "options"
+            ]
+          }
+        }
+      ]
+    },
+    "option": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "label"
+      ],
+      "properties": {
+        "key": {
+          "description": "Server-generated per question, in option order.",
+          "type": "string",
+          "pattern": "^q[1-9]o[1-9]$"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

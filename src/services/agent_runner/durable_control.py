@@ -105,9 +105,15 @@ class DurableControl:
         if state.waiting and state.waiting.get('kind')=='clarification':
             questions = self.snapshot.setdefault('clarificationQuestions',[])
             if not any(item['wait_id']==state.waiting['wait_id'] for item in questions):
-                questions.append({'message_id':state.waiting['wait_id']+':assistant',
+                item = {'message_id':state.waiting['wait_id']+':assistant',
                     'wait_id':state.waiting['wait_id'],'text':state.waiting.get('question',''),
-                    'created_at':datetime.now(timezone.utc).isoformat()})
+                    'created_at':datetime.now(timezone.utc).isoformat()}
+                form = state.waiting.get('form')
+                if isinstance(form,dict) and isinstance(form.get('form_id'),str) and form['form_id']:
+                    # 表单引用：问题文本沿用既有结构，历史/通知经 form_id 定位
+                    # 同一 wait 的表单元数据（wait.form 本体走快照白名单投影）。
+                    item['form_id'] = form['form_id']
+                questions.append(item)
 
     async def _save_locked(self, state, boundary):
         self._check_usage()

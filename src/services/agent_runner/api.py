@@ -77,8 +77,11 @@ def create_app(*, config=None, manager=None):
 
     @app.exception_handler(RunnerError)
     async def runner_error(_request, error):
-        return JSONResponse(status_code=error.status,
-                            content={"success": False, "error": error.code, "debug": error.code})
+        content = {"success": False, "error": error.code, "debug": error.code}
+        if error.errors:
+            # 受理前表单校验失败的逐题明细（§5.7）原样返回，不并入通用错误报文。
+            content["errors"] = error.errors
+        return JSONResponse(status_code=error.status, content=content)
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(_request, _error):

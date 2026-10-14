@@ -361,7 +361,7 @@ wait 含 form 时，受理事务内按**且只按**下表判定（先归一化�
 
 ## 11. 开放问题
 
-1. root 执行 ask_user 等待与 final_answer 流、`task_record` 语义交互（Phase 1 首个验证项）；
+1. root 执行 ask_user 等待与 final_answer 流、`task_record` 语义交互——**已验证（WP0 spike，2026-10-14，分支 feature/ask-user-question-card）**：root（MASTER/STANDALONE）durable 链路的 clarification 等待与子执行契约一致——park、reply 受理（幂等/stale 拒绝）、恢复应用（tool result `{"success":true,"answer":...}`）、续跑至 final_answer 全部通过（单元 7 例 + 集成 4 例，一次性隔离 PG）；waiting 态 cancel 产生 cancel-only claim、pause 冻结至 reply 应用后清除、纯 resume 被拒且 wait 保留；legacy 非 durable 链路 root clarify 保持继续模型不变；`task_record` 仅属子执行不受影响。spike 临时分支由 WP3 正式实现替代收敛，用例已沉淀（`test_root_clarify_wait_wp0.py`、`test_root_clarify_wait_recovery_wp0.py`）；
 2. wecom_kf 预算核算与 `WeComKfReplyBudget`/`reserve_for_final` 现状核对（提问轮次 final 预留规则）；
 3. 恢复链路对撤权/设备/插件事实的重验覆盖面核对（复用既有执行边界）；
 4. 渠道用户长期只回自由文本时 `required` 无法强制的体验补偿（Phase 2 通知/badge 是否缓解）；

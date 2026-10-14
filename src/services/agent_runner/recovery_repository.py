@@ -1,6 +1,7 @@
 """Resume the original logical claim; never enqueue a replacement runner."""
 
 import copy
+from types import SimpleNamespace
 
 from src.db.database import get_db_connection
 from .contracts import RunnerError
@@ -8,7 +9,6 @@ from .ownership import Attempt, lock_runner, LeaseLost, StopRequested
 from .execution_repository import release_proof
 from .persistence_limits import capped_checkpoint_dumps, capped_snapshot_dumps
 from .repository import decoded
-from .control_contracts import RunnerControl
 from .control_repository import ControlRepository
 from .control_projection import merge_control_projection
 from .event_repository import EventRepository
@@ -76,7 +76,14 @@ class RecoveryRepository:
             if not control or control['status'] != 'accepted' or control['action'] not in ('resume','reply','browser_complete'):
                 raise RunnerError('RECOVERY_CONTROL_STALE',409)
             if control['action'] in ('reply','browser_complete'):
-                request = RunnerControl(client_request_id=control['client_request_id'], **control['payload'])
+                # 受理后的 payload 是服务端权威存储：结构化受理把 canonical 写入
+                # answer 键并附 form/answers 审计键，不再是原始客户端形状，不能也
+                # 不必重过入口模型校验（extra='forbid'、answer×answers 互斥）。
+                # 认领只复核等待定位三元组。
+                payload = control['payload'] or {}
+                request = SimpleNamespace(action=control['action'],
+                                          wait_id=payload.get('wait_id'),
+                                          target_execution_id=payload.get('target_execution_id'))
                 ControlRepository.assert_wait(row, request)
             if row['checkpoint'] and row['checkpoint'].get('pending_finalization'):
                 raise RunnerError('RECOVERY_FINALIZATION_PENDING',409)

@@ -1,0 +1,323 @@
+[
+  {
+    "name": "ask_form_full_mixed_question_types",
+    "schema": "ask-form.schema.json",
+    "valid": true,
+    "value": {
+      "form_id": "frm_example-1",
+      "wait_id": "wait_example-1",
+      "title": "归档范围",
+      "intro": "除成本治理外，以下开发已完成，请确认归档范围。",
+      "questions": [
+        {
+          "id": "q1",
+          "tag": "归档范围",
+          "prompt": "以下哪些任务移入 ideas_finished.md？",
+          "type": "multi",
+          "required": true,
+          "options": [
+            {"key": "q1o1", "label": "queue_order 序列自愈", "description": "代码+测试+CR 完成"},
+            {"key": "q1o2", "label": "wecom_kf 限频修复", "description": "已验证"},
+            {"key": "q1o3", "label": "file_assets 观察项", "description": "建议再观察一周"}
+          ],
+          "allow_custom_text": true,
+          "custom_placeholder": "输入自定义内容…",
+          "max_select": 3
+        },
+        {
+          "id": "q2",
+          "tag": "后续独立事项",
+          "prompt": "哪个事项需要单独立任务？",
+          "type": "single",
+          "required": false,
+          "options": [
+            {"key": "q2o1", "label": "飞书钉钉接入 AgentRunner"},
+            {"key": "q2o2", "label": "暂无"}
+          ]
+        },
+        {
+          "id": "q3",
+          "tag": "补充说明",
+          "prompt": "还有什么需要补充？",
+          "type": "text",
+          "required": false,
+          "placeholder": "输入你的回答…"
+        }
+      ],
+      "allow_skip": true,
+      "expires_at": null
+    }
+  },
+  {
+    "name": "ask_form_minimal_single_text_question",
+    "schema": "ask-form.schema.json",
+    "valid": true,
+    "value": {
+      "form_id": "frm_example-2",
+      "wait_id": "wait_example-2",
+      "questions": [
+        {"id": "q1", "prompt": "还要补充什么？", "type": "text"}
+      ],
+      "allow_skip": false,
+      "expires_at": null
+    }
+  },
+  {
+    "name": "ask_form_text_question_cannot_carry_options",
+    "schema": "ask-form.schema.json",
+    "valid": false,
+    "value": {
+      "form_id": "frm_bad-1",
+      "wait_id": "wait_bad-1",
+      "questions": [
+        {
+          "id": "q1",
+          "prompt": "还要补充什么？",
+          "type": "text",
+          "options": [
+            {"key": "q1o1", "label": "没有了"},
+            {"key": "q1o2", "label": "还有"}
+          ]
+        }
+      ],
+      "allow_skip": true,
+      "expires_at": null
+    }
+  },
+  {
+    "name": "ask_form_single_question_requires_options",
+    "schema": "ask-form.schema.json",
+    "valid": false,
+    "value": {
+      "form_id": "frm_bad-2",
+      "wait_id": "wait_bad-2",
+      "questions": [
+        {"id": "q1", "prompt": "选一个", "type": "single"}
+      ],
+      "allow_skip": true,
+      "expires_at": null
+    }
+  },
+  {
+    "name": "ask_form_question_id_out_of_pattern",
+    "schema": "ask-form.schema.json",
+    "valid": false,
+    "value": {
+      "form_id": "frm_bad-3",
+      "wait_id": "wait_bad-3",
+      "questions": [
+        {"id": "q10", "prompt": "超出一位数题号", "type": "text"}
+      ],
+      "allow_skip": true,
+      "expires_at": null
+    }
+  },
+  {
+    "name": "ask_form_option_key_out_of_pattern",
+    "schema": "ask-form.schema.json",
+    "valid": false,
+    "value": {
+      "form_id": "frm_bad-4",
+      "wait_id": "wait_bad-4",
+      "questions": [
+        {
+          "id": "q1",
+          "prompt": "选一个",
+          "type": "single",
+          "options": [
+            {"key": "q1o10", "label": "选项号超出一位数"},
+            {"key": "q1o2", "label": "正常"}
+          ]
+        }
+      ],
+      "allow_skip": true,
+      "expires_at": null
+    }
+  },
+  {
+    "name": "ask_form_question_type_outside_enum",
+    "schema": "ask-form.schema.json",
+    "valid": false,
+    "value": {
+      "form_id": "frm_bad-5",
+      "wait_id": "wait_bad-5",
+      "questions": [
+        {
+          "id": "q1",
+          "prompt": "选一个",
+          "type": "checkbox",
+          "options": [
+            {"key": "q1o1", "label": "甲"},
+            {"key": "q1o2", "label": "乙"}
+          ]
+        }
+      ],
+      "allow_skip": true,
+      "expires_at": null
+    }
+  },
+  {
+    "name": "ask_reply_structured_answers",
+    "schema": "ask-answer.schema.json",
+    "valid": true,
+    "value": {
+      "client_request_id": "ask-key-1",
+      "action": "reply",
+      "target_execution_id": "runner-1",
+      "wait_id": "wait_example-1",
+      "answer": "",
+      "attachments": [],
+      "answers": [
+        {"question_id": "q1", "selected_keys": ["q1o1", "q1o2"], "text": "file_assets 建议观察一周再归档"},
+        {"question_id": "q2", "selected_keys": ["q2o1"], "text": null},
+        {"question_id": "q3", "selected_keys": [], "text": "没有其他补充"}
+      ],
+      "skip": false
+    }
+  },
+  {
+    "name": "ask_reply_answers_empty_array_is_all_unanswered",
+    "schema": "ask-answer.schema.json",
+    "valid": true,
+    "value": {
+      "client_request_id": "ask-key-2",
+      "action": "reply",
+      "target_execution_id": "runner-1",
+      "wait_id": "wait_example-1",
+      "answers": []
+    }
+  },
+  {
+    "name": "ask_reply_explicit_skip",
+    "schema": "ask-answer.schema.json",
+    "valid": true,
+    "value": {
+      "client_request_id": "ask-key-3",
+      "action": "reply",
+      "target_execution_id": "runner-1",
+      "wait_id": "wait_example-1",
+      "skip": true
+    }
+  },
+  {
+    "name": "ask_reply_question_id_case_insensitive_at_entry",
+    "schema": "ask-answer.schema.json",
+    "valid": true,
+    "value": {
+      "client_request_id": "ask-key-4",
+      "action": "reply",
+      "target_execution_id": "runner-1",
+      "wait_id": "wait_example-1",
+      "answers": [
+        {"question_id": "Q1", "selected_keys": [], "text": null}
+      ]
+    }
+  },
+  {
+    "name": "ask_reply_unknown_question_id_shape",
+    "schema": "ask-answer.schema.json",
+    "valid": false,
+    "value": {
+      "client_request_id": "ask-bad-1",
+      "action": "reply",
+      "target_execution_id": "runner-1",
+      "wait_id": "wait_example-1",
+      "answers": [
+        {"question_id": "question-1", "selected_keys": [], "text": null}
+      ]
+    }
+  },
+  {
+    "name": "ask_reply_selected_key_out_of_pattern",
+    "schema": "ask-answer.schema.json",
+    "valid": false,
+    "value": {
+      "client_request_id": "ask-bad-2",
+      "action": "reply",
+      "target_execution_id": "runner-1",
+      "wait_id": "wait_example-1",
+      "answers": [
+        {"question_id": "q1", "selected_keys": ["q1o99"], "text": null}
+      ]
+    }
+  },
+  {
+    "name": "ask_reply_answers_conflict_with_nonempty_answer",
+    "schema": "ask-answer.schema.json",
+    "valid": false,
+    "value": {
+      "client_request_id": "ask-bad-3",
+      "action": "reply",
+      "target_execution_id": "runner-1",
+      "wait_id": "wait_example-1",
+      "answer": "直接文字回答",
+      "answers": [
+        {"question_id": "q1", "selected_keys": ["q1o1"], "text": null}
+      ]
+    }
+  },
+  {
+    "name": "ask_reply_skip_conflicts_with_answers",
+    "schema": "ask-answer.schema.json",
+    "valid": false,
+    "value": {
+      "client_request_id": "ask-bad-4",
+      "action": "reply",
+      "target_execution_id": "runner-1",
+      "wait_id": "wait_example-1",
+      "answers": [
+        {"question_id": "q1", "selected_keys": ["q1o1"], "text": null}
+      ],
+      "skip": true
+    }
+  },
+  {
+    "name": "ask_reply_empty_submission_rejected",
+    "schema": "ask-answer.schema.json",
+    "valid": false,
+    "value": {
+      "client_request_id": "ask-bad-5",
+      "action": "reply",
+      "target_execution_id": "runner-1",
+      "wait_id": "wait_example-1"
+    }
+  },
+  {
+    "name": "ask_reply_more_than_five_answer_items",
+    "schema": "ask-answer.schema.json",
+    "valid": false,
+    "value": {
+      "client_request_id": "ask-bad-6",
+      "action": "reply",
+      "target_execution_id": "runner-1",
+      "wait_id": "wait_example-1",
+      "answers": [
+        {"question_id": "q1", "selected_keys": [], "text": null},
+        {"question_id": "q2", "selected_keys": [], "text": null},
+        {"question_id": "q3", "selected_keys": [], "text": null},
+        {"question_id": "q4", "selected_keys": [], "text": null},
+        {"question_id": "q5", "selected_keys": [], "text": null},
+        {"question_id": "q6", "selected_keys": [], "text": null}
+      ]
+    }
+  },
+  {
+    "name": "ask_form_errors_per_question_detail",
+    "schema": "ask-form-errors.schema.json",
+    "valid": true,
+    "value": {
+      "errors": [
+        {"question_id": "q1", "code": "FORM_ANSWER_INVALID", "message": "选择的选项不属于该题"},
+        {"question_id": "q2", "code": "FORM_ANSWER_INVALID", "message": "该题为必答"}
+      ]
+    }
+  },
+  {
+    "name": "ask_form_errors_cannot_be_empty",
+    "schema": "ask-form-errors.schema.json",
+    "valid": false,
+    "value": {
+      "errors": []
+    }
+  }
+]
