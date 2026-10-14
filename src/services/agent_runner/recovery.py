@@ -8,8 +8,6 @@ import copy
 from dataclasses import dataclass
 from pathlib import Path
 
-from loguru import logger
-
 from src.core.agent_engine.contracts import AgentMode, ExecutionState, Outcome
 from .adapter_contract import adapter_contract_mismatch
 from .contracts import RunnerError
@@ -249,20 +247,6 @@ class RecoveryCoordinator:
                        'wait_id':payload['wait_id']}
         fact.preserve_content = True
         target.waiting = None
-        # 提问生命周期埋点（Phase 3，设计 §9）：answered/skipped 与响应时长
-        # （受理→应用），结构化键便于按 wait_id 关联统计提问率/跳过率/响应
-        # 时长；埋点失败不影响恢复。
-        try:
-            from datetime import datetime, timezone
-            from .ask_form import SKIP_TEXT
-            accepted_at = control.get('accepted_at')
-            elapsed_ms = (int((datetime.now(timezone.utc) - accepted_at).total_seconds() * 1000)
-                          if accepted_at else None)
-            logger.info('[ask] applied wait_id={} skipped={} elapsed_ms={}',
-                        payload.get('wait_id'),
-                        payload.get('answer') == SKIP_TEXT, elapsed_ms)
-        except Exception:  # noqa: BLE001 - 埋点失败不影响恢复
-            pass
         # The application records the supplemental input once. The kernel only
         # exposes it after every sibling tool_call has a paired result.
         message = {'role':'user','content':payload['answer'],

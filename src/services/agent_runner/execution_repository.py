@@ -235,7 +235,7 @@ class ExecutionRepository:
                 except Exception as error:  # noqa: BLE001 - 通知失败回滚至 savepoint，保留 park 更新
                     cursor.execute('ROLLBACK TO SAVEPOINT runner_waiting_notify')
                     logger.warning('runner waiting notification production failed '
-                                   'runner_id={} class={}', result['runner_id'], type(error).__name__)
+                                   'runner_id={} error={!r}', result['runner_id'], error)
             conn.commit()
             return result
 

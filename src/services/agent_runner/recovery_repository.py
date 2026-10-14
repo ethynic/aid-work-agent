@@ -3,6 +3,8 @@
 import copy
 from types import SimpleNamespace
 
+from loguru import logger
+
 from src.db.database import get_db_connection
 from .contracts import RunnerError
 from .ownership import Attempt, lock_runner, LeaseLost, StopRequested
@@ -117,6 +119,28 @@ class RecoveryRepository:
                 unavailable.public_verification='恢复执行许可尚待核对，任务与原命令已保留。'
                 raise unavailable from error
             connection.commit()
+            # 提问生命周期埋点（八轮评审修正）：控制消费事务提交成功后记录，
+            # prepare 内存阶段的失败/重复不再虚增成功数；仅限真实 AskForm——
+            # 受理 payload 带 form/answers/skip 结构化键，legacy clarify 纯文本
+            # payload 不产生埋点。skipped 用 payload.skip 事实而非答案文案推断；
+            # recover_ms=受理→认领的恢复处理延迟，respond_ms=runner.updated_at
+            # （≈提问落库）→受理的近似用户响应时长。埋点失败不影响认领结果。
+            try:
+                payload = control.get('payload') or {}
+                if payload.get('form') is not None or payload.get('answers') is not None \
+                        or payload.get('skip') is True:
+                    from datetime import datetime, timezone
+                    accepted_at = control.get('accepted_at')
+                    recover_ms = (int((datetime.now(timezone.utc) - accepted_at)
+                                      .total_seconds() * 1000) if accepted_at else None)
+                    parked_at = row.get('updated_at')
+                    respond_ms = (int((accepted_at - parked_at).total_seconds() * 1000)
+                                  if accepted_at and parked_at else None)
+                    logger.info('[ask] consumed wait_id={} skipped={} recover_ms={} respond_ms={}',
+                                payload.get('wait_id'), payload.get('skip') is True,
+                                recover_ms, respond_ms)
+            except Exception as error:  # noqa: BLE001 - 埋点失败不影响认领结果
+                print(f'[ask-metrics-error] {error!r}')
             return result
 
     def hold_resume(self, runner_id, *, revision, control_id, public_verification=None):
