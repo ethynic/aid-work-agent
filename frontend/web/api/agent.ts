@@ -1,4 +1,4 @@
-import type { MessageStreamEvent, VerboseMessage } from '@/types'
+import type { AskForm, MessageStreamEvent, VerboseMessage } from '@/types'
 
 // 上传文件接口
 export interface UploadedFile {
@@ -108,7 +108,7 @@ export class SSEManager {
     onToolStart?: (toolName: string, toolArgs: object, displayName?: string, toolCallId?: string) => void,
     onToolResult?: (toolName: string, result: any, success: boolean, displayName?: string, toolCallId?: string) => void,
     onThinking?: (data: string) => void,
-    onClarification?: (subagentName: string, question: string) => void,
+    onClarification?: (subagentName: string, question: string, form?: AskForm) => void,
     onImages?: (images: any[], placement: string) => void,
     onBrowserHumanRequired?: (event: Extract<MessageStreamEvent, { type: 'browser_human_required' }>) => void,
     onVerbose?: (message: VerboseMessage) => void,
@@ -222,7 +222,7 @@ export class SSEManager {
       onToolStart?: (toolName: string, toolArgs: object, displayName?: string, toolCallId?: string) => void
       onToolResult?: (toolName: string, result: any, success: boolean, displayName?: string, toolCallId?: string) => void
       onThinking?: (data: string) => void
-      onClarification?: (subagentName: string, question: string) => void
+      onClarification?: (subagentName: string, question: string, form?: AskForm) => void
       onImages?: (images: any[], placement: string) => void
       onBrowserHumanRequired?: (event: Extract<MessageStreamEvent, { type: 'browser_human_required' }>) => void
       onVerbose?: (message: VerboseMessage) => void
@@ -280,7 +280,7 @@ export class SSEManager {
             })
             break
           case 'clarification':
-            callbacks.onClarification?.(event.subagentName, event.question)
+            callbacks.onClarification?.(event.subagentName, event.question, event.form)
             break
           case 'images':
             // Phase 2 P2.5：Agent 推送的图片资产事件

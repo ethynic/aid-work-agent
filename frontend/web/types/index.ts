@@ -218,7 +218,7 @@ export type MessageStreamEvent =
   | { type: 'tool_result'; toolName: string; displayName?: string; toolCallId?: string; result: any; success: boolean; timestamp: number }
   | { type: 'thinking'; data: string; timestamp: number }
   | { type: 'verbose'; eventId: string; data: string; source: 'policy' | 'system'; timestamp: number }
-  | { type: 'clarification'; subagentName: string; question: string; timestamp: number }
+  | { type: 'clarification'; subagentName: string; question: string; form?: AskForm; timestamp: number }
   | { type: 'busy'; flag: string; message: string; instance_id: string; is_same_user: boolean; current_user_name: string }
   | { type: 'images'; images: ImageRef[]; placement: 'after_text' | 'before_text' | 'inline'; timestamp: number }
   | { type: 'cancelled'; timestamp: number }

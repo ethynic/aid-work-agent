@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from loguru import logger
 from src.core.agent_engine.contracts import AgentMode, DispatchResult
 from src.core.agent_events import make_event
 from src.core.agent_logger import log_skill_execute
@@ -101,6 +102,11 @@ class ControlToolAdapter:
                 if state.role == AgentMode.SUBAGENT and self.task_record:
                     self.task_record.request_clarification(question)
                 if self.durable_owner or state.role == AgentMode.SUBAGENT:
+                    # 提问生命周期埋点（Phase 3，设计 §9）：produced。
+                    logger.info('[ask] produced form_id={} session={} role={}',
+                                form.get('form_id'),
+                                getattr(state, 'identity', None) and state.identity.session_id,
+                                state.role)
                     yield DispatchResult(result, wait={"kind": "clarification",
                         "question": question, "form": form, "tool_call_id": call.id})
                     return
@@ -121,12 +127,19 @@ class ControlToolAdapter:
                         "execution_id": execution_id or "", "task_description": args.get("task_description", ""),
                         "question": question,
                     })
-                yield make_event("clarification", subagentName=args.get("subagent_name", ""), question=question)
+                child_form = (result.get("waiting") or {}).get("form") \
+                    if isinstance(result.get("waiting"), dict) else None
+                # Phase 3 form 透传：子执行 ask_user 的结构化表单随 clarification
+                # 事件与 child_clarification wait 一并上抛（legacy SSE 帧据此携带
+                # 表单数据；作答方式不变）。
+                yield make_event("clarification", subagentName=args.get("subagent_name", ""),
+                                 question=question, form=child_form)
                 yield make_event("response", data=f"\n❓ **{args.get('subagent_name', '')}** 需要补充信息：{question}\n请提供以上信息，系统将自动继续执行任务。")
                 from .history_projection import waiting_messages
                 yield make_event("tool_messages", messages=waiting_messages(state))
                 yield DispatchResult(result, success=False, wait={"kind": "child_clarification",
-                    "tool_call_id": call.id, "execution_id": execution_id, "question": question})
+                    "tool_call_id": call.id, "execution_id": execution_id, "question": question,
+                    "form": child_form})
                 return
             else:
                 preview = (result.get("summary") or result.get("error") or "")[:100]

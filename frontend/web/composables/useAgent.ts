@@ -1078,9 +1078,11 @@ export function useAgent() {
           addProgress(state, `🤔 ${data}`, 'thinking')
           state.inputHintState.value = 'thinking'
         },
-        // onClarification - 子智能体需要用户补充信息
-        (subagentName, question) => {
-          addProgress(state, `❓ ${subagentName}需要补充信息: ${question}`, 'tool_start', 'clarification')
+        // onClarification - 子智能体需要用户补充信息（form 为 Phase 3 透传的
+        // 结构化表单数据，随帧携带供消费方使用；作答方式不变）
+        (subagentName, question, form?: AskForm) => {
+          addProgress(state, `❓ ${subagentName}需要补充信息: ${question}`, 'tool_start',
+            'clarification', undefined, { form })
         },
         // onImages - Agent 推送的图片资产（Phase 2 P2.5）
         (images, placement) => {

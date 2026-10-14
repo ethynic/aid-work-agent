@@ -11,7 +11,7 @@
 |------|------|------|---------|
 | Phase 1 | 协议 + 权威校验 + Web 提问卡片 + 渠道文字全渠道 | ✅ 开发完成（2026-10-14） | WP0-WP5 全部完成、三角色两轮流程走完（commit 56105660/d36f9ea3 + 本轮提交）。WP0 root 等待 spike 通过（§11.1）；WP1 契约/入口校验/摘要兼容；WP2 判定表受理/canonical 权威生成/422 错误链路/BFF 条件透传；WP3 ask_user 正式工具 + spike 收敛（root/SUBAGENT/legacy 行为矩阵内核级用例锁定）；WP4 Web QuestionCard（§5.7 状态机/绑定原 wait/capabilities 降级）；WP5 渠道文字五端（字节分段/预算核算/入站单管线/发送事实）。独立测试修复 3 缺陷：claim_resume 重建阻塞、kf 截断后重发承诺矛盾、多位数题号误解析；CR 修复 2 个 P1：无 form 等待结构化提交静默受理、多位数题号消费 wait。单元 3401 过（7 先存环境）+ 集成 33 过 + 契约 85 fixture + 前端 ask 37/全量 639 过（8 先存）。待：用户统一评审 + 真机渠道验收 |
 | Phase 2 | 同源待答可达性（提问通知 + 会话待答标识） | ✅ 开发完成（2026-10-14） | `task.waiting_input` 通知生产者挂 park 事务尾（chat/web 用户自有 runner 且 waiting(form) 才通知；event_key=runner:wait 去重，同 wait 重复 park 不重发）；`resource_in_tx` 增 `runner_waiting` 分支（点击解析回原会话带 `_load_session`）；站内信 INBOX 纳入该事件（渲染+跳转链接）；SW 白名单/文案更新；会话列表 `waiting_input` 徽标（查询异常降级无徽标，列表缓存 TTL 30s 内）。验证：notifications 单元 138 过（含 9 例 waiting 生产者新用例；web_push 8 例为先存环境）、后端 3417+集成 33、前端 642 与基线一致。主控单角色自验（子智能体额度冻结期）；真机验收待统一评审后 |
-| Phase 3 | 增强项（按需） | 📋 待开发 | — |
+| Phase 3 | 增强项（按需） | ✅ 开发完成（2026-10-14） | legacy SSE form 透传（clarification 帧携带 form，旧页面作答方式不变）；生命周期埋点 MVP（[ask] produced/applied 结构化日志：提问率/跳过率/响应时长可由日志+DB 关联统计）；capabilities 已由 Phase 1 ask_structured_answers 覆盖（无多维度协商需求，无遗留）；expires_at 超时语义**暂缓**——需先冻结监管/取消/计费产品口径（设计 §5.5），未实现任何自动超时 |
 
 ## 1. 范围边界（评审固化，实施中不得扩张）
 
@@ -139,9 +139,13 @@
 
 **验证安排**：若实现仅为复用通知机制与列表展示，按仓库常规流程由**一名独立验证者**承担测试与审查；若涉及高风险事务、授权或恢复行为，再保留独立测试与独立 CR。
 
-## 5. Phase 3：增强项（按需，另立排期）
+## 5. Phase 3：增强项（开发完成 2026-10-14，含两项按计划暂缓）
 
-`expires_at` 超时语义冻结（先冻结监管/取消/计费口径）；capabilities 正式协商扩展；legacy SSE form 透传；埋点（提问率/跳过率/响应时长）。
+- **legacy SSE form 透传（已完成）**：clarification 帧/child_clarification wait 携带 form（旧页面无卡片渲染能力，仅数据透传，作答方式不变）；桥帧有单测锁定向后兼容（无 form 无键）。
+- **埋点 MVP（已完成）**：`[ask] produced`（controls.py 生产点）与 `[ask] applied wait_id/skipped/elapsed_ms`（recovery.py 应用点）结构化日志——提问率/跳过率/响应时长可由日志与 DB 关联统计，未新增表或上报通道。
+- **capabilities 协商（无遗留）**：Phase 1 已交付 `ask_structured_answers` 能力字段 + 前端缓存降级；无多维度协商需求。
+- **expires_at 超时语义（暂缓）**：需先冻结监管/取消/计费产品口径（如超时自动跳过或转取消、时限默认值），属产品决策——设计 §5.5 明确不引入未冻结口径的自动超时；字段与解析已预留，口径定后实施。
+
 
 ## 6. 先行验证与风险清单
 
