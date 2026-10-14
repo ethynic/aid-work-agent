@@ -7,6 +7,7 @@
 
 | 故障主题 | 文档 | 摘要 |
 |---------|------|------|
+| Runtime协议3配对持续500：存量迁移水位跳过注册字段 | [runtime-registration-migration-watermark-incident.md](runtime-registration-migration-watermark-incident.md) | 2026-10-14：agent2水位18:00高于新增17:00迁移，字段未建；追加22:45幂等补偿。 |
 | Runtime安装向导点击安装后直接退出 | [runtime-installer-missing-fixture-env-incident.md](runtime-installer-missing-fixture-env-incident.md) | 2026-10-14：可选测试变量缺失留下NSIS错误标志，正常安装误判失败；隔离测试环境掩盖问题。 |
 | qwen3.7-flash 工具结果缓存数组化回显故障复盘 | [qwen-tool-message-cache-echo-incident.md](qwen-tool-message-cache-echo-incident.md) | 2026-08-19 线上故障：显式缓存"末尾标记"把 tool 消息 content 数组化（违反 OpenAI 兼容规范），qwen3.7-flash 概率性(~7%)… |
 | 数据分析智能体 max_tokens 截断致空结论误判"无数据" | [analysis-agent-empty-conclusion-incident.md](analysis-agent-empty-conclusion-incident.md) | 2026-08-26 生产故障：AnalysisAgent 硬编码 max_tokens=4000，deepseek-v4-pro 推理模型烧穿预算返回空结论（completion 恰达上限 + co… |

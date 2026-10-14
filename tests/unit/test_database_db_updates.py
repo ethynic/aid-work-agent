@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import yaml
 
 from src.db.database import (
     _apply_db_updates,
@@ -136,7 +137,36 @@ def _data_exec_count(cursor, substr):
     return sum(1 for sql, _ in cursor.calls if sql.startswith(substr))
 
 
+def _registration_repair_yaml():
+    source = Path(__file__).resolve().parents[2] / 'deploy' / 'db_update.yaml'
+    selected = [block for block in _load_db_update_blocks(source)
+                if block['datetime'] in ('2026-10-14 17:00:00', '2026-10-14 22:45:00')]
+    assert len(selected) == 2
+    return yaml.safe_dump(selected, allow_unicode=True)
+
+
 class TestApplyDbUpdates:
+    def test_registration_repair_runs_past_observed_existing_watermark(self, tmp_path):
+        """Existing agent2 watermark must not skip the appended protocol3 repair."""
+        cursor = FakeCursor(last_datetime='2026-10-14 18:00:00')
+        _run(cursor, tmp_path, yaml_text=_registration_repair_yaml())
+        statements = [sql for sql, _ in cursor.calls if cursor._classify(sql) == 'DATA']
+        assert len(statements) == 4
+        assert all('local_tool_devices' in sql for sql in statements)
+        assert sum('ADD COLUMN IF NOT EXISTS registration_id UUID' in sql for sql in statements) == 1
+        assert sum('ADD COLUMN IF NOT EXISTS registration_request_hash TEXT' in sql for sql in statements) == 1
+        assert sum('ADD COLUMN IF NOT EXISTS registration_code_hash TEXT' in sql for sql in statements) == 1
+        assert sum('CREATE UNIQUE INDEX IF NOT EXISTS uq_lt_devices_registration' in sql for sql in statements) == 1
+        writes = [(sql, args) for sql, args in cursor.calls if 'INSERT INTO _db_update_applied' in sql]
+        assert len(writes) == 1
+        assert '2026-10-14 22:45:00' in writes[0][1][0]
+
+    def test_registration_repair_is_skipped_after_its_watermark(self, tmp_path):
+        cursor = FakeCursor(last_datetime='2026-10-14 22:45:00')
+        _run(cursor, tmp_path, yaml_text=_registration_repair_yaml())
+        assert not [sql for sql, _ in cursor.calls if cursor._classify(sql) == 'DATA']
+        assert not _last_datetime_upserted(cursor)
+
     def test_all_success_updates_last_datetime(self, tmp_path):
         cursor = FakeCursor()
         conn, _ = _run(cursor, tmp_path)

@@ -3815,3 +3815,10 @@
     ALTER TABLE local_tool_devices ADD COLUMN IF NOT EXISTS registration_request_hash TEXT;
     ALTER TABLE local_tool_devices ADD COLUMN IF NOT EXISTS registration_code_hash TEXT;
     CREATE UNIQUE INDEX IF NOT EXISTS uq_lt_devices_registration ON local_tool_devices(registration_id) WHERE registration_id IS NOT NULL;
+- datetime: "2026-10-14 22:45:00"
+  remark: "补偿Runtime协议3注册结构：存量库水位18:00已超过原17:00块，追加幂等迁移避免漏列"
+  statements: |
+    ALTER TABLE local_tool_devices ADD COLUMN IF NOT EXISTS registration_id UUID;
+    ALTER TABLE local_tool_devices ADD COLUMN IF NOT EXISTS registration_request_hash TEXT;
+    ALTER TABLE local_tool_devices ADD COLUMN IF NOT EXISTS registration_code_hash TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_lt_devices_registration ON local_tool_devices(registration_id) WHERE registration_id IS NOT NULL;
