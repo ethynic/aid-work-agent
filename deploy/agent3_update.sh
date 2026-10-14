@@ -19,6 +19,11 @@
 #      默认 master），用于开发分支在线真机验收；也可 ./agent3_update.sh <远程分支名>
 #      直接指定跳过菜单；checkout -f -B 切换/重建本地分支并对齐 origin/<分支>，
 #      替代固定 reset --hard origin/master
+#   9. 新增 git 凭据自愈：.git-credentials 两次被 root 身份的 git/写文件操作
+#      覆盖属主为 root（600），ubuntu 读不到导致 git fetch 交互索要密码、
+#      脚本 set -e 直接失败（2026-10-14 事故）。fetch 前检测属主/可读性异常
+#      即从 /root/.git-credentials.bak（root:root 600 备份件，防连带被改）
+#      恢复内容并 chown 回 ubuntu；凭据本体不入 git 仓库
 # ==============================================================================
 
 set -e
@@ -52,6 +57,30 @@ BUILD_LOG="/var/www/agent3/log/frontend-build.log"
 
 # 配置 Git 安全目录（避免所有权检查错误）
 git config --global --add safe.directory /var/www/agent3 2>/dev/null || true
+
+# 0. 自愈 git 凭据（见变更记录 9）
+CREDS_FILE="/home/ubuntu/.git-credentials"
+CREDS_BAK="/root/.git-credentials.bak"
+if ! sudo test -f "$CREDS_BAK"; then
+    sudo install -m 600 -o root -g root /dev/null "$CREDS_BAK" 2>/dev/null || true
+fi
+if [ ! -r "$CREDS_FILE" ] || [ "$(stat -c %U "$CREDS_FILE" 2>/dev/null)" != "ubuntu" ]; then
+    echo "[0] 检测到 git 凭据文件属主/权限异常（$(stat -c '%U:%G %a' "$CREDS_FILE" 2>/dev/null || echo '不可读')），自愈修复..."
+    # 备份件有内容时恢复，避免凭据内容也被覆盖；空备份件（首次自举）则保留现有内容仅修属主
+    if sudo test -s "$CREDS_BAK"; then
+        sudo cp "$CREDS_BAK" "$CREDS_FILE"
+    else
+        sudo cp "$CREDS_FILE" "$CREDS_BAK"
+    fi
+    sudo chown ubuntu:ubuntu "$CREDS_FILE"
+    sudo chmod 600 "$CREDS_FILE"
+    echo "    已恢复属主 ubuntu:ubuntu（600）"
+fi
+if ! grep -q 'codeup.aliyun.com' "$CREDS_FILE" 2>/dev/null; then
+    echo "错误：$CREDS_FILE 缺少 codeup.aliyun.com 凭据且备份件为空，无法自愈。"
+    echo "  请手工修复凭据文件后，执行：sudo install -m 600 -o root -g root $CREDS_FILE $CREDS_BAK"
+    exit 1
+fi
 
 # ─── 交互选择发布分支：↑/↓ 移动或输入序号，回车确认；默认 master；q 取消 ───
 # 选中结果写入全局 TARGET_BRANCH；菜单阶段脚本尚未做任何变更，取消直接退出。

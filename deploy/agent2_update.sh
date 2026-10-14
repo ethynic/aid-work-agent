@@ -18,6 +18,11 @@
 #      gitignore 覆盖的 untracked 构建产物（git reset --hard 不会删除），用
 #      node:22-alpine 侧车容器 npm ci + tsc 构建，产物留在宿主机挂载目录，
 #      容器内 node 直接执行；dist 比 package-lock 新且依赖齐全时跳过构建
+#   8. 新增 git 凭据自愈：.git-credentials 两次被 root 身份的 git/写文件操作
+#      覆盖属主为 root（600），ubuntu 读不到导致 git fetch 交互索要密码、
+#      脚本 set -e 直接失败（2026-10-14 事故）。fetch 前检测属主/可读性异常
+#      即从 /root/.git-credentials.bak（root:root 600 备份件，防连带被改）
+#      恢复内容并 chown 回 ubuntu；凭据本体不入 git 仓库
 # ==============================================================================
 
 set -e
@@ -35,6 +40,30 @@ PPT_RENDERER_DIR="/var/www/agent2/src/tools/ppt/renderer-node"
 
 # 配置 Git 安全目录（避免所有权检查错误）
 git config --global --add safe.directory /var/www/agent2 2>/dev/null || true
+
+# 0. 自愈 git 凭据（见变更记录 8）
+CREDS_FILE="/home/ubuntu/.git-credentials"
+CREDS_BAK="/root/.git-credentials.bak"
+if ! sudo test -f "$CREDS_BAK"; then
+    sudo install -m 600 -o root -g root /dev/null "$CREDS_BAK" 2>/dev/null || true
+fi
+if [ ! -r "$CREDS_FILE" ] || [ "$(stat -c %U "$CREDS_FILE" 2>/dev/null)" != "ubuntu" ]; then
+    echo "[0] 检测到 git 凭据文件属主/权限异常（$(stat -c '%U:%G %a' "$CREDS_FILE" 2>/dev/null || echo '不可读')），自愈修复..."
+    # 备份件有内容时恢复，避免凭据内容也被覆盖；空备份件（首次自举）则保留现有内容仅修属主
+    if sudo test -s "$CREDS_BAK"; then
+        sudo cp "$CREDS_BAK" "$CREDS_FILE"
+    else
+        sudo cp "$CREDS_FILE" "$CREDS_BAK"
+    fi
+    sudo chown ubuntu:ubuntu "$CREDS_FILE"
+    sudo chmod 600 "$CREDS_FILE"
+    echo "    已恢复属主 ubuntu:ubuntu（600）"
+fi
+if ! grep -q 'codeup.aliyun.com' "$CREDS_FILE" 2>/dev/null; then
+    echo "错误：$CREDS_FILE 缺少 codeup.aliyun.com 凭据且备份件为空，无法自愈。"
+    echo "  请手工修复凭据文件后，执行：sudo install -m 600 -o root -g root $CREDS_FILE $CREDS_BAK"
+    exit 1
+fi
 
 # 1. 拉取代码
 echo "[1] 拉取最新代码..."
