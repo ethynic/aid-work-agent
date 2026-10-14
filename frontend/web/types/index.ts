@@ -74,6 +74,10 @@ export interface ChatMessage {
   runnerActive?: boolean
   /** 提交失败态（纯内存，不持久化）：runner POST 失败时挂乐观 assistant 消息 */
   submitFailure?: SubmitFailureState
+  /** 结构化提问卡片（ask_user，WP4）：runnerMessages 将快照 waiting.form 投影到问题 assistant 消息 */
+  questionCard?: QuestionCardBinding
+  /** 历史只读已答表单卡片：投影自 supplementalInputs 扩展（form+answers，设计 §7.1） */
+  answeredForm?: AnsweredFormBinding
 }
 
 /** 编号选择元数据（设计 §5.1 选择交互）：工具结果 data.options，前端渲染编号按钮 */
@@ -81,6 +85,78 @@ export interface QuickOption {
   key: string
   label: string
   description?: string
+}
+
+// ---- 结构化提问交互（ask_user / AskForm，设计 §4.1；wire 见 runner 快照 waiting.form）----
+
+export interface AskFormOption {
+  key: string
+  label: string
+  description?: string
+}
+
+export interface AskFormQuestion {
+  id: string
+  tag?: string
+  prompt?: string
+  /** single=radio（最多 1 项）/ multi=checkbox（受 max_select 约束）/ text=纯自由文本 */
+  type: 'single' | 'multi' | 'text'
+  required?: boolean
+  options?: AskFormOption[]
+  /** single/multi 默认 true（选项下方自由输入行）；text 恒有输入框 */
+  allow_custom_text?: boolean
+  custom_placeholder?: string
+  placeholder?: string
+  max_select?: number
+}
+
+/** AskForm dict（服务端工具层生成，随 wait 写入 checkpoint，等待期间不可变） */
+export interface AskForm {
+  form_id?: string
+  wait_id?: string
+  title?: string
+  intro?: string
+  questions: AskFormQuestion[]
+  /** 是否允许整体跳过（仅约束显式 skip，设计 §5.4） */
+  allow_skip?: boolean
+  /** 预留字段，一期恒为 null（§5.5） */
+  expires_at?: string | null
+}
+
+/** 结构化答案项（设计 §4.2 AnswerItem）：text 题不携带选项 key；未提供 text 为 null */
+export interface RunnerAnswerItem {
+  question_id: string
+  selected_keys: string[]
+  text?: string | null
+}
+
+/** 422 表单校验逐题错误明细（设计 §5.7 错误契约）；question_id='form' 为表单级错误 */
+export interface AskFormErrorItem {
+  question_id: string
+  code: string
+  message?: string
+}
+
+/** 提问卡片绑定（评审 P1）：渲染时从快照定格自己的 runner/wait/execution 身份，
+ *  提交与重试始终携带这组值，不追“当前最新 wait”；过期由服务端 409 拒绝后刷新。 */
+export interface QuestionCardBinding {
+  runnerId: string
+  waitId: string
+  targetExecutionId?: string
+  form: AskForm
+  /** runner 已终态 → 卡片只读 + 终态标注（§5.7 任务关闭） */
+  terminal: boolean
+}
+
+/** 历史只读已答卡片（设计 §7.1）：来自受理 control 的 supplementalInputs 扩展投影
+ *  （canonical text 为消息正文，此处附 form 快照与归一化答案供回显） */
+export interface AnsweredFormBinding {
+  controlId: string
+  clientRequestId?: string
+  acceptedAt?: string
+  form: AskForm
+  answers: RunnerAnswerItem[]
+  terminal: boolean
 }
 
 export interface BrowserHumanAssistance {

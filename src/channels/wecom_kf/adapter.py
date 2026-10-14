@@ -568,6 +568,29 @@ class WeComKfAdapter(ChannelAdapter):
         )
         return result.get("errcode", 0) == 0
 
+    async def send_ask_segment(self, text_content: str, user_id: str,
+                               budget: Optional[WeComKfReplyBudget] = None) -> bool:
+        """结构化提问分段纯文本直发（WP5，设计 §7.2）。
+
+        提问表单分段必须绕过 renderer.py 的长图合成与 markdown_to_plain_text
+        （后者会把「1. 选项」有序列表改写为「- 选项」，破坏选项编号协议），
+        因此原文直发 msgtype=text。调用方保证单段已按字节预算分段，这里不拆分。
+        预算语义：提问轮次不为 final 预留（表单即本轮 final 呈现），成功一段扣
+        1 次平台回复额度（先发送后扣减，失败不扣），与 budget.py 约定一致。
+        """
+        if not text_content or not text_content.strip():
+            return True
+        result = await self.api_client.send_msg(
+            touser=user_id,
+            open_kfid=self.current_open_kfid,
+            msgtype="text",
+            content={"content": text_content},
+        )
+        ok = result.get("errcode", 0) == 0
+        if ok and budget is not None:
+            budget.consume(1)
+        return ok
+
     def _truncate_to_single_message(self, text: str) -> str:
         """把正文截断为单条可发送文本并附「内容较长，请在 Web 端查看」提示。
 

@@ -1,11 +1,14 @@
 import { RunnerEventDecoder, RunnerEventProtocolError, RUNNER_EVENT_FRAME_BYTES, type RunnerEventFrame, type RunnerEventStatus } from './runnerEventStream'
 import type { UploadedFile } from './agent'
-import type { BrowserHumanAssistance, DownloadableFile, ImageRef, QuickOption, VerboseMessage } from '@/types'
+import type { AskForm, AskFormErrorItem, BrowserHumanAssistance, DownloadableFile, ImageRef, QuickOption, RunnerAnswerItem, VerboseMessage } from '@/types'
+
+// 结构化提问交互（WP4）的 wire 类型以 @/types 为单一来源，此处按契约命名再导出。
+export type { AskForm, AskFormErrorItem, RunnerAnswerItem } from '@/types'
 
 export type RunnerStatus = RunnerEventStatus
-export interface RunnerWait { kind: string; wait_id?: string; target_execution_id?: string; question?: string; child_wait?: RunnerWait }
-export interface RunnerSupplementalInput { control_id: string; client_request_id: string; message_id: string; text: string; wait_id?: string | null; accepted_at: string; attachments?: UploadedFile[] }
-export interface RunnerControlIntent { client_request_id: string; action: 'pause' | 'resume' | 'reply'; target_execution_id?: string; wait_id?: string; answer?: string; attachments?: UploadedFile[] }
+export interface RunnerWait { kind: string; wait_id?: string; target_execution_id?: string; question?: string; form?: AskForm; child_wait?: RunnerWait }
+export interface RunnerSupplementalInput { control_id: string; client_request_id: string; message_id: string; text: string; wait_id?: string | null; accepted_at: string; attachments?: UploadedFile[]; form?: AskForm; answers?: RunnerAnswerItem[] }
+export interface RunnerControlIntent { client_request_id: string; action: 'pause' | 'resume' | 'reply'; target_execution_id?: string; wait_id?: string; answer?: string; attachments?: UploadedFile[]; answers?: RunnerAnswerItem[]; skip?: boolean }
 export interface RunnerControlView { control_id: string; runner_id: string; client_request_id: string;
   action: 'pause' | 'resume' | 'reply'; status: 'accepted' | 'claimed' | 'consumed' | 'rejected'; error_code?: string | null }
 export interface RunnerPresentation {
@@ -47,10 +50,24 @@ export interface RunnerSubmission {
   instance_id?: string | null
   video_params?: Record<string, unknown> | null
 }
-export interface RunnerCapabilities { web_enabled: boolean; observe_existing?: boolean; contract_version: number; transport: string; events_supported?: boolean }
+export interface RunnerCapabilities { web_enabled: boolean; observe_existing?: boolean; contract_version: number; transport: string; events_supported?: boolean; ask_structured_answers?: boolean }
 export interface RunnerPage { runners: RunnerView[]; active_runners: RunnerView[]; has_more: boolean; next_cursor: string | null }
 export class RunnerRequestError extends Error {
-  constructor(public code: string, public status: number, message = code) { super(message) }
+  /** 422 表单校验的逐题明细（设计 §5.7），经 BFF 原样透传；其余错误为 undefined */
+  constructor(public code: string, public status: number, message = code, public errors?: AskFormErrorItem[]) { super(message) }
+}
+
+/** 仅接受 {question_id,code,message} 形状的逐题错误；畸形项整体丢弃不降级为字符串 */
+function formErrors(value: unknown): AskFormErrorItem[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const items: AskFormErrorItem[] = []
+  for (const entry of value) {
+    const item = entry as Record<string, unknown>
+    if (!item || typeof item.question_id !== 'string' || typeof item.code !== 'string') continue
+    items.push({ question_id: item.question_id, code: item.code,
+      message: typeof item.message === 'string' ? item.message : undefined })
+  }
+  return items.length ? items : undefined
 }
 
 const apiBase = () => `${import.meta.env.VITE_API_BASE_URL || '/api'}/chat`
@@ -61,8 +78,12 @@ export const runnerTerminal = (status: RunnerStatus) => ['completed', 'failed', 
 export class RunnerClient {
   private controllers = new Set<AbortController>()
   private eventsSupported = false
+  /** capabilities 声明的结构化答案支持（设计 §8 能力发现）；未确认支持 = 文本路径 */
+  private structuredAnswersSupported = false
   private observers = new Map<string, { stopped: boolean; timer?: ReturnType<typeof setTimeout>;
     stop?: () => void; transportChanged?: () => void }>()
+
+  get askStructuredSupported() { return this.structuredAnswersSupported }
 
   private async request<T>(path: string, headers: Record<string, string>, body?: unknown): Promise<T> {
     const controller = new AbortController()
@@ -75,7 +96,7 @@ export class RunnerClient {
         body: body === undefined ? undefined : JSON.stringify(body),
       })
       const value = await response.json().catch(() => null)
-      if (!response.ok) throw new RunnerRequestError(value?.code || 'RUNNER_REQUEST_FAILED', response.status, value?.error)
+      if (!response.ok) throw new RunnerRequestError(value?.code || 'RUNNER_REQUEST_FAILED', response.status, value?.error, formErrors(value?.errors))
       if (!value || typeof value !== 'object') throw new RunnerRequestError('RUNNER_SERVICE_INVALID_RESPONSE', 502)
       return value as T
     } finally { clearTimeout(timeout); this.controllers.delete(controller) }
@@ -93,6 +114,9 @@ export class RunnerClient {
     if (value.contract_version !== 1 || value.transport !== 'runner_poll'
         || (value.events_supported !== undefined && typeof value.events_supported !== 'boolean'))
       throw new RunnerRequestError('RUNNER_SERVICE_INVALID_RESPONSE', 502)
+    // 结构化能力只在会话启动发现时确认一次（不做提交时探测）；字段缺失视为不支持，
+    // 提交链路保持客户端 canonical 文本路径（灰度/回滚窗口专用，设计 §8）。
+    this.structuredAnswersSupported = value.ask_structured_answers === true
     const enabled = value.events_supported === true
     if (enabled === this.eventsSupported) return
     this.eventsSupported = enabled

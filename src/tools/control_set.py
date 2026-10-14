@@ -20,6 +20,7 @@ class ControlToolDependencies:
 
 class ToolControlSet:
     def __init__(self, dependencies: ControlToolDependencies):
+        from src.tools.agent.ask_user_tool import AskUserTool
         from src.tools.agent.clarify_tool import ClarifyTool
         from src.tools.agent.present_options_tool import PresentOptionsTool
         from src.tools.plan.create_plan_tool import CreatePlanTool
@@ -39,6 +40,7 @@ class ToolControlSet:
             CreatePlanTool(dependencies.plan_manager, dependencies.skill_registry,
                            dependencies.subagent_registry, dependencies.tool_registry),
             ClarifyTool(),
+            AskUserTool(),
             PresentOptionsTool(),
             UseSkillTool(dependencies.skill_registry),
         )
@@ -64,7 +66,7 @@ class ToolControlSet:
     def definitions(self, *, available_subagents: Optional[Sequence[str]]) -> list[dict]:
         definitions = [
             self._tools[name].to_tool_definition()
-            for name in ("skill_execute", "create_plan", "clarify", "present_options")
+            for name in ("skill_execute", "create_plan", "clarify", "ask_user", "present_options")
         ]
         definitions.append(self._dependencies.skill_registry.get_skill_tool_definition())
         if self._delegate is not None:
@@ -79,7 +81,7 @@ class ToolControlSet:
         self, *, subagent_descriptions: str = "", include_delegate: bool = False
     ) -> str:
         guides = []
-        for name in ("skill_execute", "create_plan", "clarify", "present_options"):
+        for name in ("skill_execute", "create_plan", "clarify", "ask_user", "present_options"):
             guide = self._tools[name].get_usage_guide()
             if guide:
                 guides.append(f"### {name}\n{guide}")

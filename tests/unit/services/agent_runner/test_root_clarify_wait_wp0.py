@@ -1,18 +1,19 @@
-"""WP0 spike：root 执行（MASTER/STANDALONE）clarify 直接进入等待的内核级验证。
+"""root 执行（MASTER/STANDALONE）clarification 等待的内核级行为用例。
 
-docs/plans/plan-ask-user-interactive-question.md §WP0 的临时用例：验证
-controls.py root 分支（WP0 临时放开）产出的等待能走通
-引擎 WAITING → wait 身份装饰 → reply 恢复应用 → 引擎续跑至 final_answer。
-正式 ask_user 实现归 WP3，届时本文件用例随正式分支收敛重跑。
+docs/system/design-ask-user-interactive-question.md §11.1（WP0 已验证结论）的
+正式行为用例（WP3 正式实现，文件名沿用 WP0 沉淀）：controls.py 的 clarify 与
+ask_user 分支产出的等待能走通引擎 WAITING → wait 身份装饰（含 form.wait_id
+注入）→ reply 恢复应用 → 引擎续跑至 final_answer。
 
 真实/假件边界：
-- 真实：AgentEngine 循环、ControlToolAdapter（WP0 修改的分支）、
-  ToolControlSet 装配的真实 ClarifyTool、DurableControl.decorate_wait
-  （wait_id/target_execution_id/公开问题投影）、RecoveryCoordinator.prepare
+- 真实：AgentEngine 循环、ControlToolAdapter、ToolControlSet 装配的真实
+  ClarifyTool/AskUserTool、DurableControl.decorate_wait（wait_id/
+  target_execution_id/form.wait_id/公开问题投影）、RecoveryCoordinator.prepare
   （reply 校验与应用）、ExecutionState checkpoint/restore。
 - 假件：模型端口（罐头响应）、引擎 control/observer 端口（记录型）、
-  ControlToolAdapter 的 skills/registry 等未涉分支依赖（clarify 路径不触达）、
-  RecoveryCoordinator 的 authorizer/profiles（授权与 DB 边界由集成层覆盖）。
+  ControlToolAdapter 的 skills/registry 等未涉分支依赖（clarify/ask_user 路径
+  不触达）、RecoveryCoordinator 的 authorizer/profiles（授权与 DB 边界由集成层
+  test_root_clarify_wait_recovery_wp0 覆盖）。
 """
 
 import json
@@ -20,6 +21,7 @@ from types import SimpleNamespace
 
 from src.core.agent_engine import AgentEngine, AgentMode, DispatchResult, ExecutionState, Outcome
 from src.core.agent_engine.contracts import Identity
+from src.services.agent_runner import ask_form
 from src.services.agent_runner.durable_control import DurableControl
 from src.services.agent_runner.recovery import RecoveryCoordinator
 from src.services.agent_runner.runtime.controls import ControlToolAdapter
@@ -28,6 +30,27 @@ from src.tools.control_set import ControlToolDependencies, ToolControlSet
 
 RUNNER_ID = "runner-wp0"
 ANSWER = "Fictional city Shanghai"
+CLARIFY_CALL = "root-wp0-clarify"
+ASK_CALL = "root-wp0-ask"
+
+ASK_ARGUMENTS = {
+    "title": "归档范围",
+    "intro": "请确认归档范围。",
+    "questions": [
+        {"prompt": "以下哪些任务移入 ideas_finished.md？", "type": "multi",
+         "required": True, "max_select": 2,
+         "options": [{"label": "queue_order 序列自愈", "description": "代码+测试+CR 完成"},
+                     {"label": "wecom_kf 限频修复"},
+                     {"label": "file_assets 观察项"}],
+         "allow_custom_text": True},
+        {"prompt": "还有什么需要补充？", "type": "text", "placeholder": "输入你的回答…"},
+    ],
+    "allow_skip": True,
+}
+ASK_ANSWERS = [
+    {"question_id": "q1", "selected_keys": ["q1o2"],
+     "text": "file_assets 建议观察一周再归档"},
+]
 
 
 def completion(text="", calls=None):
@@ -179,6 +202,76 @@ async def test_legacy_non_durable_root_clarify_keeps_continuing_model():
     assert len(model.requests) == 2
 
 
+def ask_call(call_id=ASK_CALL):
+    return {"id": call_id, "type": "function",
+            "function": {"name": "ask_user", "arguments": json.dumps(ASK_ARGUMENTS)}}
+
+
+async def run_ask_turn(state, adapter):
+    model = Model(completion("", [ask_call()]))
+    recording = Recording()
+    async for _ in AgentEngine().run(state, model, Port(adapter), recording, recording):
+        pass
+    return model
+
+
+async def test_root_ask_user_enters_waiting_with_generated_form():
+    """a) root（MASTER）ask_user 产生 clarification wait 且 wait 附服务端生成的 form。"""
+    state = root_state(role=AgentMode.MASTER)
+    model = await run_ask_turn(state, wp0_adapter())
+    assert state.outcome == Outcome.WAITING
+    waiting = state.waiting
+    # 等待问题取 title（缺省取首题 prompt），截断到 50 字
+    assert waiting["question"] == "归档范围"
+    assert waiting["tool_call_id"] == ASK_CALL
+    form = waiting["form"]
+    assert form["form_id"].startswith("frm_")
+    assert [question["id"] for question in form["questions"]] == ["q1", "q2"]
+    assert [option["key"] for option in form["questions"][0]["options"]] == ["q1o1", "q1o2", "q1o3"]
+    assert form["allow_skip"] is True and form["expires_at"] is None
+    assert len(model.requests) == 1
+    # 工具结果携带同一 form；阻塞等待语义由 controls.py 赋予
+    fact = state.tools[ASK_CALL]
+    assert fact.phase == "waiting" and fact.success is True
+    assert fact.result["form"]["form_id"] == form["form_id"]
+
+
+async def test_root_ask_user_does_not_touch_task_record():
+    """a) root ask_user 不写子执行澄清任务状态（与 clarify root 语义一致，§11.1）。"""
+    clarifications = []
+    record = SimpleNamespace(request_clarification=clarifications.append)
+    state = root_state(role=AgentMode.MASTER)
+    await run_ask_turn(state, wp0_adapter(role=AgentMode.MASTER, task_record=record))
+    assert state.outcome == Outcome.WAITING
+    assert clarifications == []
+
+
+async def test_subagent_ask_user_waits_and_records_task_clarification():
+    """a) 子执行 ask_user 同样等待并附 form；task_record.request_clarification 照常调用。"""
+    clarifications = []
+    record = SimpleNamespace(request_clarification=clarifications.append)
+    state = root_state(role=AgentMode.SUBAGENT)
+    await run_ask_turn(state, wp0_adapter(role=AgentMode.SUBAGENT, task_record=record))
+    assert state.outcome == Outcome.WAITING
+    assert state.waiting["form"]["form_id"].startswith("frm_")
+    assert clarifications == ["归档范围"]
+
+
+async def test_legacy_non_durable_root_ask_user_keeps_continuing_model():
+    """a) legacy 非 durable 链路没有 reply 恢复消费方，root ask_user 保持「继续模型」。"""
+    state = root_state(role=AgentMode.MASTER)
+    adapter = wp0_adapter(role=AgentMode.MASTER)
+    adapter.durable_owner = False
+    model = Model(completion("", [ask_call()]), completion("legacy-root-answers-ask-directly"))
+    recording = Recording()
+    async for _ in AgentEngine().run(state, model, Port(adapter), recording, recording):
+        pass
+    assert state.outcome == Outcome.COMPLETED
+    assert state.waiting is None
+    assert state.output == "legacy-root-answers-ask-directly"
+    assert len(model.requests) == 2
+
+
 def decorated_control():
     return DurableControl(SimpleNamespace(), SimpleNamespace(runner_id=RUNNER_ID),
                           {"revision": 1, "public_snapshot": {}, "cancel_requested": False,
@@ -198,6 +291,22 @@ async def test_durable_wait_identity_and_public_question_apply_to_root():
     assert len(questions) == 1
     assert questions[0]["wait_id"] == waiting["wait_id"]
     assert questions[0]["text"] == "Which fictional city?"
+
+
+async def test_decorate_injects_wait_id_into_root_ask_form():
+    """a) form.wait_id 由 decorate_wait 统一注入；无 form 的旧 clarify 零变化。"""
+    state = root_state()
+    await run_ask_turn(state, wp0_adapter())
+    control = decorated_control()
+    control.decorate_wait(state)
+    waiting = state.waiting
+    assert waiting["form"]["wait_id"] == waiting["wait_id"]
+    assert control.snapshot["clarificationQuestions"][0]["form_id"] == waiting["form"]["form_id"]
+    state = root_state()
+    await run_clarify_turn(state, wp0_adapter())
+    control = decorated_control()
+    control.decorate_wait(state)
+    assert "form" not in state.waiting
 
 
 async def recovered_state():
@@ -256,3 +365,68 @@ async def test_root_resumes_to_final_answer_after_reply():
     payload = json.loads(tool_messages[0]["content"])
     assert payload == {"success": True, "answer": ANSWER, "attachments": [], "wait_id": payload["wait_id"]}
     assert any(m.get("role") == "user" and m.get("content") == ANSWER for m in messages)
+
+
+async def recovered_ask_state():
+    """b) ask_user 引擎产出 → 装饰（含 form.wait_id）→ 受理后 canonical 回注。
+
+    返回（准备结果, wait_id, canonical）。canonical 由 ask_form 权威生成——与
+    真实受理层（control_repository）写入 reply 载荷 answer 键的文本同源。
+    """
+    state = root_state()
+    await run_ask_turn(state, wp0_adapter())
+    control = decorated_control()
+    control.decorate_wait(state)
+    form = state.waiting["form"]
+    wait_id = state.waiting["wait_id"]
+    # 生产 durable_owner 路径在派发前落 configuration_fingerprint，恢复校验依赖它。
+    from src.services.agent_runner.runtime_manifest import configuration_fingerprint
+    state.resources["configuration_fingerprint"] = configuration_fingerprint("fingerprint")
+    checkpoint = {"execution": state.checkpoint()}
+    row = {"runner_id": RUNNER_ID, "profile_id": "main", "profile_fingerprint": "fingerprint",
+           "checkpoint": checkpoint}
+    canonical = ask_form.canonical_text(form, ask_form.normalize_answers(ASK_ANSWERS))
+    reply_control = {"control_id": "reply-control", "action": "reply", "accepted_at": "2026-10-14",
+                     "payload": {"action": "reply", "answer": canonical, "attachments": [],
+                                 "wait_id": wait_id, "target_execution_id": RUNNER_ID}}
+    principal = SimpleNamespace(identity=state.identity)
+    authorizer = SimpleNamespace(authorize_persisted=lambda row, **kwargs: principal,
+                                 assert_credit=lambda principal: None)
+    coordinator = RecoveryCoordinator(authorizer, SimpleNamespace(
+        resolve=lambda profile: (None, "fingerprint")))
+    prepared = coordinator.prepare(row, reply_control)
+    return prepared, wait_id, canonical
+
+
+async def test_structured_reply_applies_canonical_to_ask_user_result():
+    """b) 结构化受理生成的 canonical 经 reply 载荷 answer 键回注为 ask_user 工具结果。"""
+    prepared, wait_id, canonical = await recovered_ask_state()
+    root = prepared.states[RUNNER_ID]
+    assert root.outcome == Outcome.RUNNING and root.waiting is None
+    fact = root.tools[ASK_CALL]
+    assert fact.phase == "completed" and fact.success is True
+    assert fact.result == {"success": True, "answer": canonical, "attachments": [],
+                           "wait_id": wait_id}
+    assert root.followup_messages[0]["content"] == canonical
+    assert prepared.checkpoint["applied_control_id"] == "reply-control"
+    assert prepared.checkpoint["supplemental_inputs"][0]["text"] == canonical
+
+
+async def test_root_resumes_to_final_answer_after_structured_ask_reply():
+    """b)+d) 续跑至完成：ask_user 工具结果为 canonical，final_answer 输出不受影响。"""
+    prepared, _, canonical = await recovered_ask_state()
+    resumed = ExecutionState.restore(prepared.checkpoint["execution"])
+    model = Model(completion("root-final-after-ask"))
+    recording = Recording()
+    async for _ in AgentEngine().run(resumed, model, Port(wp0_adapter()), recording, recording):
+        pass
+    assert resumed.outcome == Outcome.COMPLETED
+    assert resumed.output == "root-final-after-ask"
+    assert len(model.requests) == 1
+    messages = model.requests[0][0]["messages"]
+    tool_messages = [m for m in messages if m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    payload = json.loads(tool_messages[0]["content"])
+    assert payload == {"success": True, "answer": canonical, "attachments": [],
+                       "wait_id": payload["wait_id"]}
+    assert any(m.get("role") == "user" and m.get("content") == canonical for m in messages)

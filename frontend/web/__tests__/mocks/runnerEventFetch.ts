@@ -20,14 +20,20 @@ export function controlledRunnerEventFetch() {
   }> = []
 
   const fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const request = new Request(input instanceof Request ? input : new URL(String(input), 'http://localhost'), init)
+    // The caller's AbortSignal may come from a different realm than undici's
+    // Request (jsdom vs Node), which rejects RequestInit outright. The
+    // controlled fetch never reaches a real transport, so the signal is
+    // observed through an explicit listener instead of RequestInit.
+    const signal = init?.signal
+    const request = new Request(input instanceof Request ? input : new URL(String(input), 'http://localhost'),
+      { ...init, signal: undefined })
     const target = new URL(request.url)
     if (target.origin !== 'http://localhost' || !target.pathname.startsWith('/api/')) {
       return Promise.reject(new Error('Unexpected external test target; no real fetch fallback'))
     }
     return new Promise<Response>((resolve, reject) => {
       let controller: ReadableStreamDefaultController<Uint8Array> | null = null
-      const removeAbort = () => request.signal.removeEventListener('abort', aborted)
+      const removeAbort = () => signal?.removeEventListener('abort', aborted)
       const observed = {
         url: request.url, method: request.method,
         body: typeof init?.body === 'string' ? init.body : null,
@@ -78,8 +84,8 @@ export function controlledRunnerEventFetch() {
         observed.fail(new DOMException('Observation detached', 'AbortError'))
       }
       requests.push(observed)
-      if (request.signal.aborted) aborted()
-      else request.signal.addEventListener('abort', aborted, { once: true })
+      if (signal?.aborted) aborted()
+      else signal?.addEventListener('abort', aborted, { once: true })
     })
   })
   return {

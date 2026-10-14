@@ -103,6 +103,12 @@ class DurableControl:
             wait['wait_id'] = owned_wait_id(self.attempt.runner_id, state.execution_id, wait)
             wait['target_execution_id'] = state.execution_id
         if state.waiting and state.waiting.get('kind')=='clarification':
+            # AskForm 关联 wait_id（设计 §4.4）：form 由 ask_user 工具生成时不携带
+            # 等待身份，在此统一补齐；无 form 的旧 clarify 零变化。
+            form = state.waiting.get('form')
+            if (isinstance(form, dict) and state.waiting.get('wait_id')
+                    and not form.get('wait_id')):
+                form['wait_id'] = state.waiting['wait_id']
             questions = self.snapshot.setdefault('clarificationQuestions',[])
             if not any(item['wait_id']==state.waiting['wait_id'] for item in questions):
                 item = {'message_id':state.waiting['wait_id']+':assistant',
