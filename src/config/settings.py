@@ -8,7 +8,7 @@ import os
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import yaml
 from pydantic import SecretStr, BaseModel, Field, validator
@@ -203,10 +203,16 @@ class OCRToolConfig(BaseModel):
 
 class SearchToolConfig(BaseModel):
     """搜索工具配置"""
+    provider: Literal["tavily", "zhipu", "baidu"] = "tavily"
     tavily_api_key: str = ""
+    baidu_api_key: str = ""  # 独立搜索凭据；配置密钥不会自动启用百度
     max_results: int = 5  # 控制上下文长度
     include_answer: bool = True  # 返回 AI 生成的答案摘要
     search_depth: str = "basic"  # basic | advanced
+    zhipu_search_engine: Literal[
+        "search_std", "search_pro", "search_pro_sogou", "search_pro_quark"
+    ] = "search_pro"
+    timeout_seconds: float = Field(30.0, gt=0, le=120)
 
 
 class BrowserToolConfig(BaseModel):
@@ -1007,6 +1013,12 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
     # 搜索工具配置
     if os.getenv("TAVILY_API_KEY"):
         yaml_config.setdefault("tools", {}).setdefault("search", {})["tavily_api_key"] = os.getenv("TAVILY_API_KEY")
+    if os.getenv("BAIDU_API_KEY"):
+        yaml_config.setdefault("tools", {}).setdefault("search", {})["baidu_api_key"] = os.getenv("BAIDU_API_KEY")
+    if os.getenv("SEARCH_PROVIDER"):
+        yaml_config.setdefault("tools", {}).setdefault("search", {})["provider"] = os.getenv("SEARCH_PROVIDER")
+    if os.getenv("ZHIPU_SEARCH_ENGINE"):
+        yaml_config.setdefault("tools", {}).setdefault("search", {})["zhipu_search_engine"] = os.getenv("ZHIPU_SEARCH_ENGINE")
 
     # 语音转文字工具配置（阿里云 ASR）
     if os.getenv("ALIYUN_ASR_ACCESS_KEY_ID"):

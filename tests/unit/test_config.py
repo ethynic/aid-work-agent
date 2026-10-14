@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.config.settings import BillingConfig, create_settings
+from src.config.settings import BillingConfig, SearchToolConfig, create_settings
 
 
 def test_billing_video_gen_usage_factor_default():
@@ -11,6 +11,31 @@ def test_billing_video_gen_usage_factor_default():
     assert cfg.video_gen_usage_factor == 33
     # 主业务 usage_factor 保持原值
     assert cfg.usage_factor == 100
+
+
+def test_search_config_without_provider_keeps_tavily():
+    assert SearchToolConfig().provider == "tavily"
+
+
+def test_zhipu_search_uses_existing_llm_key_config(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("tools:\n  search:\n    provider: tavily\n", encoding="utf-8")
+    monkeypatch.setenv("SEARCH_PROVIDER", "zhipu")
+    monkeypatch.setenv("ZHIPU_SEARCH_ENGINE", "search_pro_sogou")
+    monkeypatch.setenv("ZHIPU_API_KEYS", "unit-key-a,unit-key-b")
+    cfg = create_settings(config_path)
+    assert cfg.tools.search.provider == "zhipu"
+    assert cfg.tools.search.zhipu_search_engine == "search_pro_sogou"
+    assert cfg.llm.zhipu.get_effective_keys() == ["unit-key-a", "unit-key-b"]
+
+
+@pytest.mark.parametrize("values", [
+    {"provider": "unknown"}, {"zhipu_search_engine": "unknown"},
+    {"timeout_seconds": 0}, {"timeout_seconds": 121},
+])
+def test_search_config_rejects_invalid_values(values):
+    with pytest.raises(ValueError):
+        SearchToolConfig(**values)
 
 
 def test_billing_video_gen_usage_factor_env_override(monkeypatch):

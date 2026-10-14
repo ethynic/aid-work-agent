@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 from src.tools.search.search_tool import WebSearchTool
+from src.config.settings import SearchToolConfig
 
 
 class TestWebSearchToolDefinition:
@@ -60,7 +61,8 @@ class TestWebSearchToolExecution:
         }
 
         mock_tavily_cls = MagicMock(return_value=mock_client)
-        fake_settings = SimpleNamespace(tools=SimpleNamespace(search=SimpleNamespace(
+        fake_settings = SimpleNamespace(tools=SimpleNamespace(search=SearchToolConfig(
+            provider="tavily",
             tavily_api_key="test-search-key", max_results=5,
             include_answer=True, search_depth="basic",
         )))
@@ -80,4 +82,44 @@ class TestWebSearchToolExecution:
         mock_client.search.assert_called_once_with(
             query="test query", max_results=3, include_answer=True,
             search_depth="basic", topic="general",
+            timeout=30.0,
         )
+
+    @pytest.mark.asyncio
+    async def test_tavily_timeout_retry_keeps_filters(self):
+        from tavily.errors import TimeoutError as TavilyTimeoutError
+
+        client = MagicMock()
+        client.search.side_effect = [TavilyTimeoutError(30), {"results": []}]
+        fake_settings = SimpleNamespace(tools=SimpleNamespace(search=SearchToolConfig(
+            provider="tavily", tavily_api_key="test-search-key",
+        )))
+        with patch("src.tools.search.search_tool.settings", fake_settings), patch.dict(
+            "sys.modules", {"tavily": SimpleNamespace(TavilyClient=MagicMock(return_value=client))},
+        ):
+            result = await WebSearchTool().execute(
+                keyword="公告", search_depth="advanced", include_domains=["example.com"],
+                exclude_domains=["spam.example.com"], time_range="week", limit=3,
+            )
+        assert result["success"] is True
+        first, second = [call.kwargs for call in client.search.call_args_list]
+        assert second == {**first, "search_depth": "basic"}
+        assert second["include_domains"] == ["example.com"]
+        assert second["exclude_domains"] == ["spam.example.com"]
+        assert second["time_range"] == "week"
+        assert second["max_results"] == 3
+
+    @pytest.mark.asyncio
+    async def test_tavily_auth_error_does_not_retry_or_echo_secret(self):
+        client = MagicMock()
+        client.search.side_effect = RuntimeError("unit-sensitive-key")
+        fake_settings = SimpleNamespace(tools=SimpleNamespace(search=SearchToolConfig(
+            provider="tavily", tavily_api_key="unit-sensitive-key",
+        )))
+        with patch("src.tools.search.search_tool.settings", fake_settings), patch.dict(
+            "sys.modules", {"tavily": SimpleNamespace(TavilyClient=MagicMock(return_value=client))},
+        ):
+            result = await WebSearchTool().execute(keyword="公告", search_depth="advanced")
+        assert not result["success"]
+        assert "unit-sensitive-key" not in str(result)
+        assert client.search.call_count == 1
