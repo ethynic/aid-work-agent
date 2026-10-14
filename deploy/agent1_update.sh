@@ -90,7 +90,7 @@ FRONTEND_PID=$!
 # 5. 重启仿真后端（up 会拉起未运行的容器；--force-recreate 保证 .env 最新）
 # compose 文件以仓库 deploy/ 版本为准（env_file: .env 相对路径要求部署在仿真根目录）
 # runner overlay（docker-compose.agent-runner.sim.yml）存在于根级时一并叠加，
-# 统一重建 runner-api/runner-worker（代码经 .:/app 挂载，重建保证进程加载新代码）
+# 统一重建 runner-api-sim/runner-worker-sim（代码经 .:/app 挂载，重建保证进程加载新代码）
 cp -f "$SIM_DIR/deploy/docker-compose.sim.yml" "$SIM_DIR/docker-compose.sim.yml"
 COMPOSE_ARGS=(-f "$SIM_DIR/docker-compose.sim.yml")
 if [[ -f "$SIM_DIR/deploy/docker-compose.agent-runner.sim.yml" ]]; then
