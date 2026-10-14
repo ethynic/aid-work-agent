@@ -26,6 +26,10 @@
           </div>
         </div>
       </div>
+      <!-- 历史只读已答卡片（supplementalInputs 扩展投影，设计 §7.1）：挂在结构化答案消息下 -->
+      <div v-if="message.role === 'user' && message.answeredForm" class="w-full">
+        <QuestionCard :answered="message.answeredForm" :auth-headers="authHeaders" />
+      </div>
       <!-- 时间戳 - 用户消息右下 -->
       <div v-if="formattedTime" class="text-xs text-muted mt-1 mr-2">
         {{ formattedTime }}
@@ -143,6 +147,15 @@
         @continuation="handleContinuation"
       />
 
+      <!-- 结构化提问卡片（ask_user，WP4）：waiting.form 投影到问题消息时可作答，
+           与下方 quickOptions（非阻塞编号按钮）视觉区分（卡片有边框与标题区） -->
+      <QuestionCard
+        v-if="message.questionCard"
+        :key="message.questionCard.runnerId + ':' + message.questionCard.waitId"
+        :card="message.questionCard"
+        :auth-headers="authHeaders"
+      />
+
       <!-- 编号选择按钮（设计 §5.1 选择交互）：点击即发送序号，与手动回复数字等效；
            点击一次后整组置灰（选择已发出，避免重复回复） -->
       <div v-if="quickOptions.length" class="mt-3 flex flex-wrap gap-2">
@@ -228,6 +241,7 @@ import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 import { renderMarkdown } from '@/utils/markdown'
 import { useDebugMode } from '@/composables/useDebugMode'
 import HumanAssistanceCard from './browser/HumanAssistanceCard.vue'
+import QuestionCard from './chat/QuestionCard.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAgent } from '@/composables/useAgent'
 

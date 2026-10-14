@@ -28,6 +28,20 @@ def unprotect(value):
     return json.loads(encryption_manager.decrypt(value))
 
 
+# task.* 用户任务事件的默认/兼容事件集合（五轮评审 P1-2）：存量偏好行的
+# event_types 为旧默认（仅 completed/failed）时，读取按等效集合兼容扩展
+# task.waiting_input；显式自定义集合不受影响，不回写行、不改开关事实。
+LEGACY_TASK_EVENT_TYPES = ('task.completed', 'task.failed')
+TASK_EVENT_TYPES = ('task.completed', 'task.failed', 'task.waiting_input')
+
+
+def _effective_event_types(stored):
+    stored = tuple(stored or ())
+    if set(stored) == set(LEGACY_TASK_EVENT_TYPES):
+        return TASK_EVENT_TYPES
+    return stored
+
+
 def mask_tenant_configuration(channel, configuration):
     """租户渠道配置回显：webhook 属凭证脱敏（保留 scheme://host + 末4位）；
     邮箱非机密信息，完整回显。"""
@@ -426,11 +440,24 @@ class NotificationRepository:
             resource = resource_in_tx(cursor, message)
             return {'notification_ref':ref,'event_type':message['event_type'],'resource':resource}
 
-    INBOX_EVENT_TYPES = ('billing.credit_low','billing.tenant_expiry','abuse.rule_triggered')
+    INBOX_EVENT_TYPES = ('billing.credit_low','billing.tenant_expiry','abuse.rule_triggered',
+                         'task.waiting_input')
 
     @staticmethod
-    def _inbox_link(event_type, params, subject):
-        """点击站内信的跳转地址；abuse 告警跳防滥用中心并定位到该用户明细。"""
+    def _inbox_link(event_type, params, subject, notification_ref=None):
+        """点击站内信的跳转地址；abuse 告警跳防滥用中心并定位到该用户明细；
+        提问等待通知复用既有通知解析入口 /notification?ref=——入口完成认证与
+        resource 解析后带 _load_session/数字员工路由回原会话（五轮评审 P2-4：
+        不自行拼 chat 路径，避免遗漏非默认数字员工路由）。"""
+        if event_type == 'task.waiting_input':
+            # 入口（NotificationEntry）以 tenant 查询参数选择 saas_token_{tenant}：
+            # 租户站内信必须携带 tenant，否则租户用户落在 portal 登录页
+            # （六轮评审 P2-1）；tenant 为空（portal 用户）时不带参数。
+            ref = f'/notification?ref={notification_ref}' if notification_ref else None
+            if not ref:
+                return None
+            return (f'{ref}&tenant={quote(str(subject.tenant_id), safe="")}'
+                    if subject.tenant_id else ref)
         if event_type != 'abuse.rule_triggered':
             return None
         tenant_id = params.get('tenant_id') or subject.tenant_id
@@ -493,8 +520,9 @@ class NotificationRepository:
                     title,body = row['event_type'],''
                 items.append({'notification_ref':row['notification_ref'],'event_type':row['event_type'],
                     'category':row['category'],'priority':row['priority'],'title':title,'body':body,
-                    'link':self._inbox_link(row['event_type'],params,subject),'read_at':row['read_at'],
-                    'created_at':row['created_at']})
+                    'link':self._inbox_link(row['event_type'],params,subject,
+                                            notification_ref=row['notification_ref']),
+                    'read_at':row['read_at'],'created_at':row['created_at']})
             return {'unread_count':unread,'items':items}
 
     def mark_inbox_read(self, subject, ref):
@@ -565,7 +593,7 @@ class NotificationRepository:
                                 eligible = (target['preference_enabled'] and target['preference_since'] is not None
                                     and target['preference_since'] <= message['accepted_at']
                                     and target['enabled_since'] <= message['accepted_at']
-                                    and message['event_type'] in target['event_types'])
+                                    and message['event_type'] in _effective_event_types(target['event_types']))
                             if not eligible:
                                 continue
                             if message['policy_key'] == 'tenant_admin_event' and target['recipient_user_id'] is None:
@@ -667,7 +695,7 @@ class NotificationRepository:
                     if (not pref or not pref['enabled'] or not pref['enabled_since']
                             or pref['enabled_since'] > message['accepted_at']
                             or target['enabled_since'] > message['accepted_at']
-                            or message['event_type'] not in pref['event_types']):
+                            or message['event_type'] not in _effective_event_types(pref['event_types'])):
                         reason = 'preference_changed'
                 adapter = self.registry.get(target['channel'], target['provider'])
                 if not reason and (not adapter or not adapter.available()):

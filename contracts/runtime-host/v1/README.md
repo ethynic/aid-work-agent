@@ -33,8 +33,18 @@ Host/plugin可见状态变化共用Host revision，每次提交增加水位；de
 | [plugin-contract](schemas/plugin-contract.schema.json) | 原始手册/skill入口/代码地图，或MCP工具描述 |
 | [plugin-inventory](schemas/plugin-inventory.schema.json) | 安装、版本、启用与就绪清单 |
 | [tool-output](schemas/tool-output.schema.json) | 执行结果内容、效果、完整性及产物引用 |
+| [ask-form](schemas/ask-form.schema.json) / [ask-form-errors](schemas/ask-form-errors.schema.json) | ask_user 提问表单载荷与 422 逐题错误明细 DTO |
+| [ask-answer](schemas/ask-answer.schema.json) | reply 控制请求的结构化答案/整体跳过提交形状 |
 
-[management.json](fixtures/management.json)覆盖空插件、安装就绪、缺依赖、错误与停止核对；[plugins.json](fixtures/plugins.json)覆盖skill/MCP、手册型skill、空清单、同名异身份及停用；[outputs.json](fixtures/outputs.json)覆盖截图、unknown和截断；[invalid.json](fixtures/invalid.json)覆盖越界路径、非法混用、旧形状及错误码矛盾。设备、摘要和配对码均为测试占位值，不代表真实安装或授权。
+[management.json](fixtures/management.json)覆盖空插件、安装就绪、缺依赖、错误与停止核对；[plugins.json](fixtures/plugins.json)覆盖skill/MCP、手册型skill、空清单、同名异身份及停用；[outputs.json](fixtures/outputs.json)覆盖截图、unknown和截断；[invalid.json](fixtures/invalid.json)覆盖越界路径、非法混用、旧形状及错误码矛盾；[ask-form.json](fixtures/ask-form.json)覆盖合法表单/结构化提交、题型与选项错配、题号/选项号越界形状、answers×非空answer与skip×answers互斥、空提交及逐题错误DTO。
+
+## ask_user 结构化提问（AgentRunner 控制契约登记）
+
+AskForm/AnswerItem/errors DTO 按[结构化提问交互设计](../../../docs/system/design-ask-user-interactive-question.md)§4.5 在本目录登记；权威入口校验在服务端 `RunnerControl` 模型，schema 只约束结构与枚举。边界口径：
+
+- 长度上限（title/tag/prompt/label/description/placeholder）是生成/展示建议，schema 不做拒绝门；题型/选项匹配、required/max_select、总载荷 8KB 由工具层与受理层硬校验。
+- answer 题号 `^[qQ][1-9]$` 入口大小写不敏感、受理时归一小写；选项 key 恒小写。表单相对规则（未知题号、越界 key、text 题携带 selected_keys）依 form 判定，归受理层，schema 只表达形状。
+- `answers` 缺省请求的意图摘要与升级前逐字节一致（缺省字段不进摘要）；`answers`/`skip` 提供时才含对应键。schema 对 answer×answers 互斥用 minLength 近似模型 strip 语义，权威判定在入口模型。设备、摘要和配对码均为测试占位值，不代表真实安装或授权。
 
 ## H1：管理消息
 

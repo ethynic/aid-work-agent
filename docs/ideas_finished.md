@@ -44,6 +44,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |------|------|------|---------|---------|
+| 20261013-1434 | 结构化提问交互（ask_user 提问卡片） | ✅ 已完成开发：提问卡片、渠道问答、待答通知与徽标、legacy 透传及埋点；待真机验收。 | [设计](system/design-ask-user-interactive-question.md) | [实施计划](plans/plan-ask-user-interactive-question.md) |
 | 20261014-boss-resume-recovery | BOSS 续筛评分与故障恢复 | ✅ 已完成开发：补齐续筛证明、中断提示和回执诊断，待部署验收。 | — | [计划](plans/plan-boss-resume-next-recovery-fix.md) |
 | 20261012-1544 | trace 观测 span 计时精确化 | ✅ 已完成开发（提交与部署待授权）：span 改用引擎侧墙钟计时并立即闭合，失败 LLM 与恢复路径补 span；历史数据不回填。 | — | [开发计划](plans/traceobs-timing-precision.md) |
 | 20261010-1638 | 统一通知基础设施与 Web 推送 | ✅ 已完成开发：统一通知底座与Web推送通过内外部终审，真实到达待环境验收。 | [统一设计](system/notification-infrastructure-design.md) / [Web设计](system/web-task-push-notification-design.md) | [开发计划](plans/plan-web-task-push-notification.md) |

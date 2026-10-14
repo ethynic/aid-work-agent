@@ -196,8 +196,12 @@ class _LegacyFrameState:
             marker = waiting.get('wait_id') or waiting.get('tool_call_id')
             if marker and marker != self.clarification:
                 self.clarification = marker
+                # Phase 3 form 透传（设计 §7.1）：旧页面无卡片渲染能力，仅随帧
+                # 携带结构化表单数据供消费方使用；作答方式不变（下一条消息）。
+                form_frame = ({'form': waiting['form']}
+                              if isinstance(waiting.get('form'), dict) else {})
                 frames.append({'type': 'clarification', 'subagentName': '',
-                               'question': waiting.get('question') or ''})
+                               'question': waiting.get('question') or '', **form_frame})
                 # The legacy turn ends with the question; the old page sends the
                 # answer as its next message. The Runner stays parked on its own
                 # claim and any follow-up submit is serialized by that claim.

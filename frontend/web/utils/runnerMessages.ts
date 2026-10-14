@@ -1,6 +1,6 @@
 import type { ChatMessage, ProgressMessage, DownloadableFile, ImageRef } from '@/types'
 import type { ChatMessageRecord } from '@/api/session'
-import type { RunnerView, RunnerPresentation } from '@/api/runner'
+import type { RunnerSupplementalInput, RunnerView, RunnerPresentation } from '@/api/runner'
 import { extractQuickOptions } from './quickOptions'
 
 const time = (value: unknown, fallback: number) => {
@@ -92,19 +92,33 @@ export function runnerMessages(row: RunnerView): ChatMessage[] {
   }
   const inputs = snapshot.supplementalInputs || []
   const additions: ChatMessage[] = []
+  // 结构化提问卡片投影（WP4，设计 §7.1）：仅未终态 runner 的 clarification leaf wait
+  // 带 form 时，把卡片绑定（评审 P1：定格自己的 runner/wait/execution 身份）挂到对应
+  // 问题 assistant 消息；wait 消费或终态后卡片自然消失，只读回显走 supplementalInputs。
+  const terminal = ['completed', 'failed', 'cancelled'].includes(row.status)
+  const liveForm = !terminal && wait?.kind === 'clarification' && wait.form && wait.wait_id ? wait : undefined
+  // 受理 control 携带 form 快照与归一化答案时，用户答案消息附带只读已答卡片（§7.1）；
+  // 纯文本历史（无 form）保持既有形状，不新增键。
+  const inputMessage = (input: RunnerSupplementalInput): ChatMessage => ({
+    ...common, role: 'user', messageId: input.message_id, clientRequestId: input.client_request_id,
+    content: input.text, attachments: input.attachments, timestamp: time(input.accepted_at, accepted),
+    ...(input.form ? { answeredForm: { controlId: input.control_id, clientRequestId: input.client_request_id,
+      acceptedAt: input.accepted_at, form: input.form, answers: input.answers || [], terminal } } : {}),
+  })
   for (const question of snapshot.clarificationQuestions || []) {
-    additions.push({ ...common,role:'assistant',messageId:question.message_id,
-      content:question.text,timestamp:time(question.created_at,accepted) })
+    const card = liveForm && question.wait_id === liveForm.wait_id
+      ? { runnerId: row.runner_id, waitId: liveForm.wait_id!, targetExecutionId: liveForm.target_execution_id,
+          form: liveForm.form!, terminal: false }
+      : undefined
+    additions.push({ ...common, role:'assistant',messageId:question.message_id,
+      content:question.text,timestamp:time(question.created_at,accepted),
+      ...(card ? { questionCard: card } : {}) })
     for (const input of inputs.filter(item => item.wait_id===question.wait_id)) {
-      additions.push({ ...common,role:'user',messageId:input.message_id,
-        clientRequestId:input.client_request_id,content:input.text,attachments:input.attachments,
-        timestamp:time(input.accepted_at,accepted) })
+      additions.push(inputMessage(input))
     }
   }
   for (const input of inputs) {
-    if (!additions.some(item => item.messageId===input.message_id)) additions.push({ ...common,role:'user',
-      messageId:input.message_id,clientRequestId:input.client_request_id,content:input.text,
-      attachments:input.attachments,timestamp:time(input.accepted_at,accepted) })
+    if (!additions.some(item => item.messageId===input.message_id)) additions.push(inputMessage(input))
   }
   return [
     { ...common, role: 'user', messageId: snapshot.input?.message_id || row.runner_id + ':user',

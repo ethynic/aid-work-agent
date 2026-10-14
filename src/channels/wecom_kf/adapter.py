@@ -556,6 +556,55 @@ class WeComKfAdapter(ChannelAdapter):
             budget.consume(1)
         return ok
 
+    async def send_ask_file(self, text_content: str, user_id: str,
+                            budget: Optional[WeComKfReplyBudget] = None) -> bool:
+        """AskForm 超长完整展示（三轮评审修正 §7.2）：生成 Markdown 文件以
+        file 消息发送。
+
+        合并精简后仍超单条文本硬限的提问，生成 .md 文件走既有 file 消息通道
+        ——文件内容不受单条文本/长图高度限制，题号与选项完整到达（长图后处理
+        超 20000px 会裁切且 truncated 曾被误记完整发送，本方法替代该路径）。
+        成功扣 1 条回复额度（先发送后扣减，失败不扣），与 send_ask_segment
+        约定一致。
+        """
+        if not text_content or not text_content.strip():
+            return True
+        import tempfile
+
+        from src.core.storage import ensure_tenant_storage_dir
+        # 租户附件存储规范（backend_dev.md §租户附件存储规范）：临时文件入
+        # storage/tenants/{tenant_id}/temp/，finally 中清理；未注入租户时才
+        # 回退进程临时目录。
+        tenant_dir = (ensure_tenant_storage_dir(self._tenant_id, "temp")
+                      if self._tenant_id else None)
+        handle = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", prefix="ask_", delete=False,
+            encoding="utf-8", dir=tenant_dir)
+        file_path = handle.name
+        try:
+            with handle:
+                handle.write(text_content)
+            upload = await self.api_client.upload_media(
+                file_path, "file", display_name="提问确认单.md", mime_type="text/markdown")
+            media_id = upload.get("media_id")
+            if not media_id:
+                return False
+            result = await self.api_client.send_msg(
+                touser=user_id,
+                open_kfid=self.current_open_kfid,
+                msgtype="file",
+                content={"media_id": media_id},
+            )
+            ok = result.get("errcode", 0) == 0
+            if ok and budget is not None:
+                budget.consume(1)
+            return ok
+        finally:
+            try:
+                os.remove(file_path)
+            except OSError:
+                pass
+
     async def _send_text_single(self, text_content: str, user_id: str) -> bool:
         """单条 text 消息直发（不拆分），供预算正文路径使用。"""
         if not text_content or not text_content.strip():
@@ -567,6 +616,29 @@ class WeComKfAdapter(ChannelAdapter):
             content={"content": text_content},
         )
         return result.get("errcode", 0) == 0
+
+    async def send_ask_segment(self, text_content: str, user_id: str,
+                               budget: Optional[WeComKfReplyBudget] = None) -> bool:
+        """结构化提问分段纯文本直发（WP5，设计 §7.2）。
+
+        提问表单分段必须绕过 renderer.py 的长图合成与 markdown_to_plain_text
+        （后者会把「1. 选项」有序列表改写为「- 选项」，破坏选项编号协议），
+        因此原文直发 msgtype=text。调用方保证单段已按字节预算分段，这里不拆分。
+        预算语义：提问轮次不为 final 预留（表单即本轮 final 呈现），成功一段扣
+        1 次平台回复额度（先发送后扣减，失败不扣），与 budget.py 约定一致。
+        """
+        if not text_content or not text_content.strip():
+            return True
+        result = await self.api_client.send_msg(
+            touser=user_id,
+            open_kfid=self.current_open_kfid,
+            msgtype="text",
+            content={"content": text_content},
+        )
+        ok = result.get("errcode", 0) == 0
+        if ok and budget is not None:
+            budget.consume(1)
+        return ok
 
     def _truncate_to_single_message(self, text: str) -> str:
         """把正文截断为单条可发送文本并附「内容较长，请在 Web 端查看」提示。

@@ -45,6 +45,35 @@ def _public_presentation(value):
     return result
 
 
+def _public_form(value):
+    """AskForm 白名单投影（结构化提问卡片数据源）；畸形字段直接丢弃。"""
+    result = _display_fields(value, ('form_id', 'wait_id', 'title', 'intro',
+                                     'allow_skip', 'expires_at'))
+    questions = []
+    for question in value.get('questions') or []:
+        if not isinstance(question, dict):
+            continue
+        item = _display_fields(question, ('id', 'tag', 'prompt', 'type', 'required',
+            'allow_custom_text', 'custom_placeholder', 'placeholder', 'max_select'))
+        item['options'] = _display_items(question.get('options'), ('key', 'label', 'description'))
+        questions.append(item)
+    result['questions'] = questions
+    return result
+
+
+def _public_answers(values):
+    """结构化答案摘要投影（历史只读卡片），仅 question_id/selected_keys/text。"""
+    result = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        entry = _display_fields(item, ('question_id', 'text'))
+        if isinstance(item.get('selected_keys'), list):
+            entry['selected_keys'] = [key for key in item['selected_keys'] if isinstance(key, str)]
+        result.append(entry)
+    return result
+
+
 def _public_waiting(value):
     if not isinstance(value, dict):
         return None
@@ -52,6 +81,8 @@ def _public_waiting(value):
         'invocation_id', 'assistance_id', 'child_status','wait_id','target_execution_id'))
     if isinstance(value.get('missing_info'), list):
         result['missing_info'] = [item for item in value['missing_info'] if isinstance(item, str)]
+    if isinstance(value.get('form'), dict):
+        result['form'] = _public_form(value['form'])
     if isinstance(value.get('child_wait'), dict):
         result['child_wait'] = _public_waiting(value['child_wait'])
     return result
@@ -80,10 +111,15 @@ def _public_snapshot(value):
             projected = _display_fields(item,('control_id','client_request_id','message_id','text','wait_id','target_execution_id','accepted_at'))
             projected['attachments'] = _display_items(item.get('attachments') if isinstance(item,dict) else None,
                 ('file_id','name','type','mime_type','size'))
+            if isinstance(item.get('form'),dict):
+                # 结构化受理的扩展投影（§7.1 历史只读卡片）；纯文本历史不新增键。
+                projected['form'] = _public_form(item['form'])
+            if isinstance(item.get('answers'),list):
+                projected['answers'] = _public_answers(item['answers'])
             result['supplementalInputs'].append(projected)
     if isinstance(value.get('clarificationQuestions'),list):
         result['clarificationQuestions'] = _display_items(value['clarificationQuestions'],
-            ('message_id','wait_id','text','created_at'))
+            ('message_id','wait_id','text','created_at','form_id'))
     return result
 
 

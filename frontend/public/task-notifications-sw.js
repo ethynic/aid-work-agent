@@ -28,13 +28,17 @@ self.addEventListener('push', event => {
     let payload
     try { payload = event.data?.json() } catch { return }
     if (!payload || payload.schema_version !== 1 || !/^[a-zA-Z0-9_-]{1,160}$/.test(payload.notification_ref || '') ||
-      !['completed', 'failed', 'test'].includes(payload.event_kind) || !Number.isFinite(payload.expiry) || payload.expiry <= Date.now() / 1000) return
+      !['completed', 'failed', 'test', 'waiting_input'].includes(payload.event_kind) || !Number.isFinite(payload.expiry) || payload.expiry <= Date.now() / 1000) return
     const binding = await bindingStore(false)
     if (!binding || binding.installation_ref !== payload.installation_ref || binding.binding_version !== payload.binding_version) return
     const sessionTitle = String(payload.session_title || '').replace(/[\u0000-\u001f\u007f-\u009f]/g, '').trim().slice(0, 80) || '未命名会话'
-    const title = payload.event_kind === 'test' ? '浏览器通知测试' : `${sessionTitle}相关任务${payload.event_kind === 'completed' ? '已完成' : '执行失败'}`
+    const title = payload.event_kind === 'test' ? '浏览器通知测试'
+      : payload.event_kind === 'waiting_input' ? `${sessionTitle}等待你的回答`
+      : `${sessionTitle}相关任务${payload.event_kind === 'completed' ? '已完成' : '执行失败'}`
     await self.registration.showNotification(title, {
-      body: payload.event_kind === 'test' ? '本浏览器已可以接收任务提醒。' : '点击查看结果或详情',
+      body: payload.event_kind === 'test' ? '本浏览器已可以接收任务提醒。'
+        : payload.event_kind === 'waiting_input' ? '点击查看待回答的问题'
+        : '点击查看结果或详情',
       icon: '/favicon.ico', tag: payload.notification_ref, renotify: false,
       data: { ref: payload.notification_ref, tenant: binding.tenant_id },
     })

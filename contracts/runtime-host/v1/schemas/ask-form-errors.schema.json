@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aidwork.local/contracts/runtime-host/v1/ask-form-errors.schema.json",
+  "title": "AskFormErrors",
+  "description": "Per-question detail body of the synchronous 422 returned when a structured answer fails form validation before acceptance. Such failures create no control and consume no wait, so the client may resubmit with the original client_request_id. Codes follow the acceptance layer (FORM_ANSWER_INVALID, FORM_SKIP_NOT_ALLOWED); this schema constrains structure only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "errors"
+  ],
+  "properties": {
+    "errors": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "question_id",
+          "code",
+          "message"
+        ],
+        "properties": {
+          "question_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "code": {
+            "type": "string",
+            "minLength": 1
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,6 +1,9 @@
 """Resume the original logical claim; never enqueue a replacement runner."""
 
 import copy
+from types import SimpleNamespace
+
+from loguru import logger
 
 from src.db.database import get_db_connection
 from .contracts import RunnerError
@@ -8,7 +11,6 @@ from .ownership import Attempt, lock_runner, LeaseLost, StopRequested
 from .execution_repository import release_proof
 from .persistence_limits import capped_checkpoint_dumps, capped_snapshot_dumps
 from .repository import decoded
-from .control_contracts import RunnerControl
 from .control_repository import ControlRepository
 from .control_projection import merge_control_projection
 from .event_repository import EventRepository
@@ -76,7 +78,14 @@ class RecoveryRepository:
             if not control or control['status'] != 'accepted' or control['action'] not in ('resume','reply','browser_complete'):
                 raise RunnerError('RECOVERY_CONTROL_STALE',409)
             if control['action'] in ('reply','browser_complete'):
-                request = RunnerControl(client_request_id=control['client_request_id'], **control['payload'])
+                # 受理后的 payload 是服务端权威存储：结构化受理把 canonical 写入
+                # answer 键并附 form/answers 审计键，不再是原始客户端形状，不能也
+                # 不必重过入口模型校验（extra='forbid'、answer×answers 互斥）。
+                # 认领只复核等待定位三元组。
+                payload = control['payload'] or {}
+                request = SimpleNamespace(action=control['action'],
+                                          wait_id=payload.get('wait_id'),
+                                          target_execution_id=payload.get('target_execution_id'))
                 ControlRepository.assert_wait(row, request)
             if row['checkpoint'] and row['checkpoint'].get('pending_finalization'):
                 raise RunnerError('RECOVERY_FINALIZATION_PENDING',409)
@@ -84,7 +93,9 @@ class RecoveryRepository:
                 recovery_port.assert_claim_in_tx(cursor,row,control,worker_id=worker_id)
             number = row['attempt'] + 1
             cursor.execute('''UPDATE agent_runner_controls SET status='consumed',consumed_attempt=%s,
-                consumed_at=clock_timestamp() WHERE control_id=%s AND status='accepted' ''',(number,control_id))
+                consumed_at=clock_timestamp() WHERE control_id=%s AND status='accepted'
+                RETURNING consumed_at''',(number,control_id))
+            consumed_at = (cursor.fetchone() or {}).get('consumed_at')
             cursor.execute('''UPDATE agent_runners SET status='running',attempt=%s,worker_id=%s,
                 lease_until=clock_timestamp()+(%s*INTERVAL '1 second'),checkpoint=%s::jsonb,
                 pause_requested=FALSE,resume_control_id=NULL,revision=revision+1,
@@ -110,6 +121,28 @@ class RecoveryRepository:
                 unavailable.public_verification='恢复执行许可尚待核对，任务与原命令已保留。'
                 raise unavailable from error
             connection.commit()
+            # 提问生命周期埋点（八轮评审修正 + 十轮评审口径）：控制消费事务
+            # 提交成功后记录。是否 AskForm 按消费前原 wait 判定（叶节点含
+            # 表单即统计——结构化与文字兼容作答都算；legacy clarify 无表单
+            # 排除），不按作答载体决定。skipped 用 payload.skip 事实而非答案
+            # 文案推断。recover_ms=受理→消费（恢复处理延迟，纯 DB 时钟）；
+            # 用户响应时长（提问→受理）的起点（clarificationQuestions.created_at）
+            # 属读取时展示投影、受理会重写公共快照，认领侧不可稳定取得——该
+            # 指标暂不输出。埋点失败不影响认领结果。
+            try:
+                from src.notifications.producer import _clarification_leaf
+                waiting_leaf = _clarification_leaf(
+                    ((row.get('checkpoint') or {}).get('execution') or {}).get('waiting'))
+                if waiting_leaf is not None:
+                    payload = control.get('payload') or {}
+                    wait_id = payload.get('wait_id') or waiting_leaf.get('wait_id')
+                    accepted_at = control.get('accepted_at')
+                    recover_ms = (int((consumed_at - accepted_at).total_seconds() * 1000)
+                                  if accepted_at else None)
+                    logger.info('[ask] consumed wait_id={} skipped={} recover_ms={}',
+                                wait_id, payload.get('skip') is True, recover_ms)
+            except Exception:  # noqa: BLE001 - 埋点失败不影响认领结果
+                pass
             return result
 
     def hold_resume(self, runner_id, *, revision, control_id, public_verification=None):

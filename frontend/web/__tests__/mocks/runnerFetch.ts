@@ -19,7 +19,14 @@ export function controlledRunnerFetch() {
   let maximumPending = 0
 
   const fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const request = new Request(input instanceof Request ? input : new URL(String(input), 'http://localhost'), init)
+    // In some Node/jsdom combinations the caller's AbortSignal comes from a
+    // different realm than undici's Request, which rejects it outright
+    // ("Expected signal ... to be an instance of AbortSignal"). The controlled
+    // fetch never hands the request to a real transport, so the signal is
+    // observed through an explicit listener instead of RequestInit.
+    const signal = init?.signal
+    const request = new Request(input instanceof Request ? input : new URL(String(input), 'http://localhost'),
+      { ...init, signal: undefined })
     const url = new URL(request.url)
     if (url.origin !== 'http://localhost' || !url.pathname.startsWith('/api/')) {
       return Promise.reject(new Error('Unexpected test network target; no real fetch fallback'))
@@ -49,12 +56,12 @@ export function controlledRunnerFetch() {
       }
       complete = () => {
         observed.settled = true
-        request.signal.removeEventListener('abort', aborted)
+        signal?.removeEventListener('abort', aborted)
       }
       requests.push(observed)
       maximumPending = Math.max(maximumPending, requests.filter(item => !item.settled).length)
-      if (request.signal.aborted) aborted()
-      else request.signal.addEventListener('abort', aborted, { once: true })
+      if (signal?.aborted) aborted()
+      else signal?.addEventListener('abort', aborted, { once: true })
     })
   })
 

@@ -1,10 +1,12 @@
 import { ref, computed, shallowReactive, type Ref } from 'vue'
 import type { ChatMessage, InputHintState, ProgressMessage, VerboseMessage } from '@/types'
+import type { AskForm, AskFormErrorItem, RunnerAnswerItem } from '@/api/runner'
 import { SSEManager, uploadFile, type UploadedFile } from '@/api/agent'
 import { getSessionMessages } from '@/api/session'
 import { RunnerClient, RunnerRequestError, runnerTerminal, runnerObservationComplete, type RunnerCapabilities, type RunnerControlIntent, type RunnerControlView, type RunnerSubmission, type RunnerView, type RunnerWait } from '@/api/runner'
 import { historyMessages, mergeRunnerMessages } from '@/utils/runnerMessages'
 import { extractQuickOptions } from '@/utils/quickOptions'
+import { clientCanonicalText } from '@/utils/askForm'
 import { useToast } from 'vue-toastification'
 import { useTenantAuth } from './useTenantAuth'
 import { useCreditCheck } from './useCreditCheck'
@@ -57,6 +59,42 @@ interface SessionStreamState {
 const sessionStreams = shallowReactive(new Map<string, SessionStreamState>())
 let runnerSubject = ''
 
+/**
+ * 提问卡片提交状态（WP4，设计 §5.7 卡片状态机的本端上下文）。
+ * 键为 runnerId:waitId（runner_id 全局唯一）；卡片状态以「快照 + 本表」重建，
+ * 本表仅承载在途提交/受理回执，不复制快照权威状态（§5.7 双端冲突以服务端为准）。
+ */
+export interface AskSubmissionState {
+  status: 'submitting' | 'accepted' | 'error'
+  /** control consumed（答案已应用）；仅 accepted 态可能出现 */
+  applied?: boolean
+  clientRequestId?: string
+  controlId?: string
+  errorCode?: string
+  errorMessage?: string
+  /** 422 逐题错误明细（question_id='form' 为表单级，设计 §5.7） */
+  errors?: AskFormErrorItem[]
+  /** 双端冲突（RUNNER_RESUME_PENDING）已被快照事实解除（评审 P2）：wait 仍在
+   *  waiting 且无已受理在途 control，卡片恢复可修正重提；不覆盖原 errorCode 事实。 */
+  conflictCleared?: boolean
+}
+
+const askSubmissions = shallowReactive(new Map<string, AskSubmissionState>())
+const askSubmissionKey = (runnerId: string, waitId: string) => runnerId + ':' + waitId
+
+export interface AskSubmitInput {
+  runnerId: string
+  /** 卡片绑定的原 wait（评审 P1）：提交与重试始终携带，不使用“当前最新 wait” */
+  waitId: string
+  targetExecutionId?: string
+  form: AskForm
+  answers?: RunnerAnswerItem[]
+  skip?: boolean
+}
+
+export type AskSubmitOutcome = 'accepted' | 'validation' | 'stale' | 'resume-pending' | 'closed'
+  | 'failed' | 'busy' | 'retrying' | 'context-lost'
+
 // 当前查看的会话 ID
 const sessionId = ref<string>(generateSessionId())
 
@@ -92,7 +130,9 @@ function getStreamState(sid: string): SessionStreamState {
       cancelledByUser: false,
       runnerClient: new RunnerClient(),
       runnerViews: new Map(),
-      controlViews: new Map(),
+      // shallowReactive：control 回执（consumed/rejected）到达时 set() 必须触发
+      // askControlView 的 computed 重算，历史卡片才能随事实更新（评审 P2）。
+      controlViews: shallowReactive(new Map<string, RunnerControlView>()),
       liveControlKeys: new Set(),
       runnerGeneration: 0,
       submitFailures: 0,
@@ -156,6 +196,12 @@ export function useAgent() {
     clearTimeout(state.submitTimer)
     state.pendingRunner = undefined
     state.pendingControl = undefined
+    // 提问卡片的本端提交上下文随会话观察 detach 一并清理，不跨认证主体残留。
+    for (const runnerId of state.runnerViews.keys()) {
+      for (const key of Array.from(askSubmissions.keys())) {
+        if (key.startsWith(runnerId + ':')) askSubmissions.delete(key)
+      }
+    }
   }
 
   function checkRunnerSubject(headers: Record<string, string>) {
@@ -212,15 +258,27 @@ export function useAgent() {
       state.submitFailures = 0
       clearTimeout(state.submitTimer)
     }
-    if (state.pendingControl?.runnerId === row.runner_id && row.snapshot.supplementalInputs?.some(
-      item => item.client_request_id === state.pendingControl?.body.client_request_id)) {
-      state.pendingControl = undefined
-      state.submitFailures = 0
-      clearTimeout(state.submitTimer)
+    if (state.pendingControl?.runnerId === row.runner_id) {
+      // 快照确认受理（POST 已落库但响应丢失的场景）：supplementalInputs 出现本端键。
+      // 除停掉重试外，还必须把 control_id 绑回提交上下文——否则该 control 随后被拒时
+      // observeControl 找不到关联条目，卡片会永远停在 submitting 无法修正重提（评审 P2）。
+      const confirmed = row.snapshot.supplementalInputs?.find(
+        item => item.client_request_id === state.pendingControl?.body.client_request_id)
+      if (confirmed) {
+        state.pendingControl = undefined
+        state.submitFailures = 0
+        clearTimeout(state.submitTimer)
+        for (const [key, item] of Array.from(askSubmissions.entries())) {
+          if (item.status === 'submitting' && item.clientRequestId === confirmed.client_request_id) {
+            askSubmissions.set(key, { ...item, status: 'accepted', controlId: confirmed.control_id })
+          }
+        }
+      }
     }
     if (!state.controlIssue && row.status !== 'failed' && row.session.session_id === sessionId.value && error.value === state.runnerIssue) error.value = null
     if (!state.controlIssue) state.runnerIssue = undefined
     state.runnerViews.set(row.runner_id, row)
+    reconcileAskConflicts(state, row)
     state.messages.value = mergeRunnerMessages(state.messages.value, Array.from(state.runnerViews.values()))
     const active = Array.from(state.runnerViews.values()).filter(item => !runnerTerminal(item.status))
     state.isProcessing.value = state.submitSelecting || !!state.pendingRunner || !!state.pendingControl
@@ -240,6 +298,25 @@ export function useAgent() {
     }
     if (row.status === 'failed') runnerError(row.session.session_id,
       new Error(row.result?.error_code || 'RUNNER_EXECUTION_FAILED'), notify && previous?.status !== 'failed')
+  }
+
+  /** 快照事实重算双端冲突（评审 P2：RUNNER_RESUME_PENDING 不再永久缓存禁用）。
+   *  受理在途以事实判定：该 wait 的 supplementalInputs 条目在 control 被拒后仍残留
+   *  （服务端只改 control 行），须结合 controlViews 的观察结果排除已拒 control；
+   *  观察未到达前按在途保守处理（维持禁用）。wait 已消费时卡片随投影消失，
+   *  「已应用」走 answered 卡片与 control 事实（§7.1），此处只解除仍有效的冲突。 */
+  function reconcileAskConflicts(state: SessionStreamState, row: RunnerView) {
+    if (runnerTerminal(row.status)) return
+    const live = clarificationLeaf(row.snapshot.waiting)
+    for (const [key, item] of Array.from(askSubmissions.entries())) {
+      if (item.status !== 'error' || item.errorCode !== 'RUNNER_RESUME_PENDING' || item.conflictCleared) continue
+      if (!key.startsWith(row.runner_id + ':') || live?.wait_id !== key.slice(row.runner_id.length + 1)) continue
+      const waitId = key.slice(row.runner_id.length + 1)
+      const pending = (row.snapshot.supplementalInputs || []).some(input => input.wait_id === waitId
+        && state.controlViews.get(input.control_id)?.status !== 'rejected')
+      if (pending) continue
+      askSubmissions.set(key, { ...item, conflictCleared: true })
+    }
   }
 
   function observeRunner(state: SessionStreamState, row: RunnerView, headers: Record<string, string>, restoring = false) {
@@ -286,6 +363,14 @@ export function useAgent() {
       if (!currentRunnerContext(state,sid,generation,headers)) return
       const previous = state.controlViews.get(controlId)
       state.controlViews.set(controlId,control)
+      // 提问卡片提交上下文跟随 control 事实推进（已应用/被拒），供历史只读
+      // 卡片区分「已提交/已应用」（设计 §7.1）；不新增权威状态。
+      for (const [key, item] of Array.from(askSubmissions.entries())) {
+        if (item.controlId !== controlId) continue
+        askSubmissions.set(key, control.status === 'rejected'
+          ? { ...item, status: 'error', errorCode: control.error_code || 'CONTROL_REJECTED' }
+          : { ...item, status: 'accepted', applied: control.status === 'consumed' })
+      }
       if (control.status==='rejected') {
         state.controlIssue = '任务暂时无法继续，补充消息和附件已保留，但尚未应用。'
         runnerError(sid,new Error(state.controlIssue),
@@ -443,6 +528,134 @@ export function useAgent() {
     const d = new Date()
     return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(3, '0')}.${d.getMilliseconds().toString().padStart(3, '0')}`
   }
+
+  // ---- 结构化提问提交（WP4，设计 §4.2/§5.7/§7.1/§8）----
+
+  /** 组装提问卡片控制请求：结构化 answers/skip（answer 留空，canonical 服务端生成）；
+   *  capabilities 未声明 ask_structured_answers 时降级为客户端 canonical 文本路径
+   *  （灰度/回滚窗口专用，服务端权威校验在该窗口不生效，设计 §8，不做提交时探测）。 */
+  function askControlBody(state: SessionStreamState, input: AskSubmitInput): RunnerControlIntent {
+    const base = { client_request_id: generateSessionId(), action: 'reply' as const,
+      wait_id: input.waitId, target_execution_id: input.targetExecutionId }
+    if (!state.runnerClient.askStructuredSupported) {
+      return { ...base, answer: clientCanonicalText(input.form, input.answers || [], input.skip === true) }
+    }
+    if (input.skip) return { ...base, skip: true }
+    // 显式 []（全部未答）也是合法普通提交（设计 §5.4 判定表）
+    return { ...base, answers: input.answers || [] }
+  }
+
+  /** 提问卡片的终局落定（受理前的同步结果，全部停掉在途 guard 与会话处理态） */
+  function settleAskRejection(state: SessionStreamState, key: string, body: RunnerControlIntent,
+    errorCode: string, errorMessage: string | undefined, errors?: AskFormErrorItem[]) {
+    askSubmissions.set(key, { status: 'error', errorCode, errorMessage, errors,
+      clientRequestId: body.client_request_id, controlId: askSubmissions.get(key)?.controlId })
+    state.liveControlKeys.delete(body.client_request_id)
+    state.pendingControl = undefined
+    state.isProcessing.value = false
+    state.inputHintState.value = 'idle'
+  }
+
+  async function postAskControl(state: SessionStreamState, key: string, runnerId: string,
+      body: RunnerControlIntent, headers: Record<string, string>): Promise<AskSubmitOutcome> {
+    const sid = state.runnerViews.get(runnerId)?.session.session_id
+    const generation = state.runnerGeneration
+    if (!sid || !currentRunnerContext(state, sid, generation, headers)) return 'context-lost'
+    // 网络结果不明时保留原键证明（与 submitControl 同一机制）。
+    state.liveControlKeys.add(body.client_request_id)
+    try {
+      const result = await state.runnerClient.control(runnerId, body, headers)
+      if (!currentRunnerContext(state, sid, generation, headers)) return 'context-lost'
+      state.pendingControl = undefined
+      state.submitFailures = 0
+      observeRunner(state, result.runner, headers)
+      state.controlViews.set(result.control.control_id, result.control)
+      if (result.control.status === 'rejected') {
+        state.liveControlKeys.delete(body.client_request_id)
+        askSubmissions.set(key, { status: 'error', errorCode: result.control.error_code || 'CONTROL_REJECTED',
+          clientRequestId: body.client_request_id, controlId: result.control.control_id })
+        state.isProcessing.value = false
+        state.inputHintState.value = 'idle'
+        return 'failed'
+      }
+      askSubmissions.set(key, { status: 'accepted', clientRequestId: body.client_request_id,
+        controlId: result.control.control_id })
+      state.controlIssue = undefined
+      observeControl(state, runnerId, result.control.control_id, headers)
+      return 'accepted'
+    } catch (issue) {
+      if (!currentRunnerContext(state, sid, generation, headers)) return 'context-lost'
+      const error = issue as RunnerRequestError
+      if (error instanceof RunnerRequestError && error.status === 422) {
+        // 表单校验失败（设计 §5.7）：同步 422 + errors，未落库未消费 wait；
+        // 卡片逐题高亮后直接修正重提即可（无专门键管理）。
+        settleAskRejection(state, key, body, error.code, error.message, error.errors)
+        return 'validation'
+      }
+      if (error instanceof RunnerRequestError && error.status === 409) {
+        // 过期/冲突（CONTROL_WAIT_STALE、CONTROL_WAIT_CONSUMED、RUNNER_RESUME_PENDING、
+        // CONTROL_EXECUTION_CLOSED 等）：提示并刷新快照，不改投最新问题（评审 P1）。
+        settleAskRejection(state, key, body, error.code, error.message)
+        // 尽力而为刷新：观察通道已在推送快照，遥测失败（含 detach 中止）不另起错误面。
+        void refreshRunner(runnerId, headers).catch(() => {})
+        if (error.code === 'RUNNER_RESUME_PENDING') return 'resume-pending'
+        if (error.code === 'CONTROL_EXECUTION_CLOSED') return 'closed'
+        return 'stale'
+      }
+      if (error instanceof RunnerRequestError && error.status < 500) {
+        settleAskRejection(state, key, body, error.code, error.message)
+        return 'failed'
+      }
+      // 网络结果不明：不降级为文本路径，沿用原意图与原键重试（幂等安全，设计 §5.7）。
+      runnerError(sid, new Error('补充消息暂时无法确认接收，请稍后重试。'))
+      state.submitFailures++
+      state.submitTimer = setTimeout(() => void postAskControl(state, key, runnerId, body, headers),
+        Math.min(30000, 1000 * 2 ** Math.min(state.submitFailures, 5)))
+      return 'retrying'
+    }
+  }
+
+  /** 提问卡片驱动的结构化提交入口：防重复复用 pendingControl/submitting 状态；
+   *  受理后用户修改再提交由卡片发起新调用、自动换新 client_request_id
+   *  （已受理后同键改答案会被服务端 IDEMPOTENCY_INPUT_MISMATCH 拒绝，设计 §5.7）。 */
+  async function submitAskAnswers(input: AskSubmitInput): Promise<AskSubmitOutcome> {
+    const headers = getEffectiveAuthHeader()
+    const state = getStreamState(sessionId.value)
+    const row = state.runnerViews.get(input.runnerId)
+    if (!row || runnerTerminal(row.status)) return 'closed'
+    const key = askSubmissionKey(input.runnerId, input.waitId)
+    if (askSubmissions.get(key)?.status === 'submitting') return 'busy'
+    if (state.submitSelecting || state.pendingRunner || state.pendingControl) return 'busy'
+    const body = askControlBody(state, input)
+    askSubmissions.set(key, { status: 'submitting', clientRequestId: body.client_request_id })
+    state.pendingControl = { runnerId: input.runnerId, body }
+    state.isProcessing.value = true
+    state.inputHintState.value = 'thinking'
+    return postAskControl(state, key, input.runnerId, body, headers)
+  }
+
+  /** 提问卡片状态机读取（响应式）：卡片按「快照绑定 + 本端上下文」渲染 §5.7 状态。 */
+  function askSubmissionFor(runnerId: string, waitId: string) {
+    return computed(() => askSubmissions.get(askSubmissionKey(runnerId, waitId)))
+  }
+
+  /** 历史只读已答卡片按 control_id 反查提交事实（区分已提交/已应用，§7.1）。 */
+  function askSubmissionForControl(controlId: string) {
+    return computed(() => {
+      for (const item of askSubmissions.values()) {
+        if (item.controlId === controlId) return item
+      }
+      return undefined
+    })
+  }
+
+  /** 已查询到的 control 观察事实（复用 controlViews，不新增轮询）：本端无提交上下文
+   *  （如刷新后 askSubmissions 为空）时，历史只读卡片按它区分已应用/被拒/仅提交（§7.1）。 */
+  function askControlView(controlId: string) {
+    return computed<RunnerControlView | undefined>(() =>
+      getStreamState(sessionId.value).controlViews.get(controlId))
+  }
+
 
   async function discoverSession(state: SessionStreamState, sid: string, headers: Record<string,string>) {
     const generation = state.runnerGeneration
@@ -865,9 +1078,11 @@ export function useAgent() {
           addProgress(state, `🤔 ${data}`, 'thinking')
           state.inputHintState.value = 'thinking'
         },
-        // onClarification - 子智能体需要用户补充信息
-        (subagentName, question) => {
-          addProgress(state, `❓ ${subagentName}需要补充信息: ${question}`, 'tool_start', 'clarification')
+        // onClarification - 子智能体需要用户补充信息（form 为 Phase 3 透传的
+        // 结构化表单数据，随帧携带供消费方使用；作答方式不变）
+        (subagentName, question, form?: AskForm) => {
+          addProgress(state, `❓ ${subagentName}需要补充信息: ${question}`, 'tool_start',
+            'clarification', undefined, { form })
         },
         // onImages - Agent 推送的图片资产（Phase 2 P2.5）
         (images, placement) => {
@@ -1134,6 +1349,11 @@ export function useAgent() {
     removeStreamState,
     isSessionRunning,
     hasSessionUnreadCompletion,
+    // 结构化提问卡片（WP4）：提交入口与 §5.7 状态机上下文
+    submitAskAnswers,
+    askSubmissionFor,
+    askSubmissionForControl,
+    askControlView,
     // "正在输入"提示
     inputHintState,
     isWaitingHuman

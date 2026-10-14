@@ -1225,10 +1225,16 @@ class ChannelSessionManager:
             }
 
         # ===== status == "success" =====
-        # 净化 LLM 输出（意外引用包裹等不合规 markdown）：后续持久化与渠道发送
-        # 共用此文本，提前净化可避免渠道表格检测失败（如 wecom_kf 收到原始 `>`/`|`
-        # 文本而非长图，线上案例 tr_45b66335492c4540）
+        # 结构化提问分段载荷（WP5，设计 §7.2）：净化前先摘下——sanitize 返回纯
+        # str 会丢附加属性；分段文本由 ask_render 确定性渲染，无需净化。
+        _ask_segments = getattr(result.response_text, "ask_segments", None)
         response_text = sanitize_llm_markdown(result.response_text or "")
+        if _ask_segments is not None:
+            # 净化返回了新纯 str 对象时重新挂载分段载荷（惰性导入避免循环依赖）
+            from src.channels.runner_agent import ChannelAskResponse
+
+            if getattr(response_text, "ask_segments", None) is None:
+                response_text = ChannelAskResponse(str(response_text), ask_segments=_ask_segments)
         lease_token = result.lease_token
         async with _hold_prepared_delivery(
             session_queue, session_id, lease_token, prepare_response is not None,
@@ -1288,7 +1294,9 @@ class ChannelSessionManager:
 
             delivery_metadata: Dict[str, Any] = {}
             delivery_preparation_failed = False
-            if prepare_response is not None:
+            if prepare_response is not None and _ask_segments is None:
+                # 结构化提问分段轮次跳过渠道交付准备（WP5）：wecom_kf 的长图合成
+                # /完整 MD 文件准备对表单分段无意义，分段走纯文本逐段直发。
                 try:
                     delivery_metadata = await prepare_response(response_text, downloadable_files) or {}
                 except asyncio.CancelledError:
@@ -1583,6 +1591,11 @@ class ChannelSessionManager:
                 f"images_count={len(images) if images else 0}"
             )
             try:
+                # 结构化提问分段（WP5，设计 §7.2）：response_text 携带 ask_segments
+                # 载荷时逐段发送，发送事实在逐段结果确认处记录（成功一段记一段）。
+                _ask_payload = getattr(response_text, "ask_segments", None)
+                if isinstance(_ask_payload, dict) and _ask_payload.get("segments"):
+                    return await _send_ask_segments(_ask_payload)
                 if pre_send is not None:
                     _invoke_pre_send(pre_send, final_delivery_id(message_id))
                 content: Dict[str, Any] = {"text": response_text}
@@ -1611,6 +1624,191 @@ class ChannelSessionManager:
             except Exception as e:
                 logger.error(f"{log_tag} send_response 异常: {e}")
                 return False
+
+        # ==================== 结构化提问分段发送（WP5，设计 §7.2） ====================
+
+        def _ask_adapter_limit() -> Optional[int]:
+            """渠道单条消息字节上限，取 adapter 现有配置（设计 §2.3）；未知返回 None。"""
+            cfg = getattr(adapter, "_msg_config", None)
+            if isinstance(cfg, dict) and isinstance(cfg.get("max_bytes"), int) and cfg["max_bytes"] > 0:
+                return cfg["max_bytes"]
+            value = getattr(adapter, "_max_bytes", None)
+            return value if isinstance(value, int) and value > 0 else None
+
+        async def _dispatch_ask_segment(text: str, index: int) -> bool:
+            """单段按渠道对应发送方法投递（wecom=markdown、dingtalk=sampleMarkdown、
+            feishu=post、wecom_kf/RPA=text）。改动收口在本层，不进各 adapter 分支。"""
+            if pre_send is not None:
+                # RPA 等按段注入投递上下文：每段独立 delivery id（幂等键分离，
+                # 后段不会被 outbox 去重吞掉）。
+                _invoke_pre_send(pre_send, f"{message_id}:final:seg{index}")
+            if hasattr(adapter, "send_ask_segment"):
+                # wecom_kf：纯文本直发（绕过 renderer 长图合成），成功一段扣 1 预算。
+                return bool(await adapter.send_ask_segment(text, reply_to, reply_budget))
+            if hasattr(adapter, "send_markdown"):
+                return bool(await adapter.send_markdown(text, reply_to))
+            conversation_type = (extra_content or {}).get("conversation_type")
+            if conversation_type is not None and hasattr(adapter, "send_long_message"):
+                return bool(await adapter.send_long_message(text, reply_to, str(conversation_type)))
+            if hasattr(adapter, "send_long_message"):
+                # 飞书：markdown 经 builder 自动转 post（拆分逻辑复用既有实现）。
+                return bool(await adapter.send_long_message(text, reply_to))
+            # 兜底（RPA 等仅有 send_message 的渠道）：单段构造 UnifiedResponse。
+            content: Dict[str, Any] = {"text": text}
+            for key, value in (extra_content or {}).items():
+                if not str(key).startswith("_"):
+                    content[key] = value
+            response = UnifiedResponse(
+                message_id=f"resp_{message_id}_seg{index}", reply_to=reply_to, content=content,
+            )
+            return bool(await adapter.send_message(response))
+
+        async def _send_ask_segments(payload: Dict[str, Any]) -> bool:
+            """结构化提问发送（分段/单条 → 发送 → 事实记录的实际接线）。
+
+            - 单条渠道（kf/RPA，payload.single=True）：一表单一条消息，预算核算
+              N=1，事实为单条粒度（sent 是/否 + 失败原因；重发=整条重发）；
+            - 分段渠道（wecom/dingtalk/feishu）：首次投递按 adapter 现有配置重排
+              分段（runner_agent 渲染用渠道默认上限，配置覆盖时以 adapter 为准），
+              随后初始化逐段发送事实；重发（resend=True）：只发缺段，不再重排。
+            - 失败停止并记失败原因；不新增渠道队列/投递服务/outbox。
+            """
+            from src.channels import ask_delivery, ask_render
+
+            wait_id = str(payload.get("wait_id") or "")
+            session_id = str(payload.get("session_id") or "")
+            items = [dict(item) for item in payload.get("segments") or []
+                     if isinstance(item, dict) and item.get("text")]
+            if not items:
+                logger.warning(f"{log_tag} 提问分段载荷为空，跳过发送")
+                return False
+
+            if payload.get("single"):
+                return await _send_ask_single(payload, items, wait_id, session_id)
+
+            if not payload.get("resend"):
+                # 1) 按渠道现有配置重排（确定性渲染，内容不丢失）
+                form = payload.get("form")
+                limit = _ask_adapter_limit() or payload.get("limit_bytes")
+                if isinstance(form, dict) and form.get("questions") and limit:
+                    try:
+                        rendered = ask_render.render_segments(form, int(limit))
+                        if rendered:
+                            items = [{"index": i, "text": t} for i, t in enumerate(rendered)]
+                    except Exception as e:  # noqa: BLE001 - 重排失败按原分段发送
+                        logger.warning(f"{log_tag} 提问分段按渠道配置重排失败: {e}")
+                # 2) 事实初始化：登记完整分段全文（sent 为空，失败可经「重发」
+                #    续传缺段）
+                if wait_id and session_id:
+                    ask_delivery.init_facts(
+                        session_id, wait_id, [item["text"] for item in items])
+            elif wait_id and session_id:
+                ask_delivery.record_resend(session_id, wait_id)
+
+            for item in items:
+                index = int(item.get("index") or 0)
+                try:
+                    ok = await _dispatch_ask_segment(item["text"], index)
+                except Exception as e:  # noqa: BLE001 - 单段异常收敛为失败并停止
+                    logger.error(f"{log_tag} 提问分段发送异常 seg={index}: {e}")
+                    ok = False
+                if wait_id and session_id:
+                    if ok:
+                        ask_delivery.record_sent(session_id, wait_id, index)
+                    else:
+                        ask_delivery.record_failure(session_id, wait_id, index, "adapter send failed")
+                if not ok:
+                    # 失败停止：只保留已确认段事实，剩余由用户明确「重发」续传
+                    logger.warning(f"{log_tag} 提问分段发送失败 seg={index}，停止后续段")
+                    return False
+            logger.info(
+                f"{log_tag} 提问分段发送完成: wait_id={wait_id or '-'}, segments={len(items)}")
+            return True
+
+        async def _send_ask_single(payload: Dict[str, Any], items: List[Dict[str, Any]],
+                                   wait_id: str, session_id: str) -> bool:
+            """单条渠道（kf/RPA）发送：一表单一条消息（评审修正 §7.2）。
+
+            - 首次投递：按 adapter 现有上限重排单条合并文本（超长依次精简
+              intro/重复操作提示/选项 description），先登记单条事实（零预算场景
+              也登记，预算恢复后可整条重发）；kf 预算核算 N=1（提问轮次不为
+              final 预留），remaining=0 不发送并记失败原因。
+            - 重发：整条重发（不再重排），重投次数记一次。
+            - 仍超渠道单条硬限：kf 生成 Markdown 文件（提问确认单.md）以
+              既有 file 消息完整发送（题号/选项完整；临时文件入租户 temp
+              目录即删；失败如实记失败事实允许重发）；RPA 沿用 send_message
+              既有超 2000 字自动分段 actions，不在此预截断。
+            """
+            from src.channels import ask_delivery, ask_render
+
+            text = items[0]["text"]
+            limit = _ask_adapter_limit() or payload.get("limit_bytes")
+            if not payload.get("resend"):
+                form = payload.get("form")
+                if isinstance(form, dict) and form.get("questions") and limit:
+                    try:
+                        text = ask_render.render_single_message(form, int(limit))
+                    except Exception as e:  # noqa: BLE001 - 重排失败按原文本发送
+                        logger.warning(f"{log_tag} 提问单条合并重排失败: {e}")
+                if wait_id and session_id:
+                    ask_delivery.init_single_facts(session_id, wait_id, text)
+            elif wait_id and session_id:
+                ask_delivery.record_resend(session_id, wait_id)
+
+            # kf 预算核算（N=1）：无可用额度不发送，事实保持未发送供「重发」续传
+            if (hasattr(adapter, "send_ask_segment") and reply_budget is not None
+                    and int(reply_budget.remaining) <= 0):
+                logger.warning(f"{log_tag} 提问单条发送预算不足（remaining=0），本轮不发送")
+                if wait_id and session_id:
+                    ask_delivery.record_single_failure(session_id, wait_id, "reply budget exhausted")
+                return False
+
+            over_limit = bool(limit) and len(text.encode("utf-8")) > int(limit)
+            kf_channel = hasattr(adapter, "send_ask_segment")
+            if over_limit and kf_channel:
+                # 三轮评审修正：合并精简后仍超 kf 单条硬限时，生成 Markdown
+                # 文件以既有 file 消息发送——文件内容不受单条文本/长图高度
+                # 限制，题号与选项完整到达（长图后处理超 20000px 会裁切且
+                # truncated 曾被误记完整发送，本路径替代长图方案）。发送成功
+                # 扣 1 预算记 sent；失败如实记失败事实，用户可「重发」重试
+                # （重发走同一路径重新生成文件，存的是未截断全文）。
+                send_file = getattr(adapter, "send_ask_file", None)
+                if callable(send_file):
+                    try:
+                        ok = bool(await send_file(text, reply_to, reply_budget))
+                    except Exception as e:  # noqa: BLE001 - 文件链路异常收敛为失败
+                        logger.error(f"{log_tag} 提问文件生成/发送异常: {e}")
+                        ok = False
+                    if wait_id and session_id:
+                        if ok:
+                            ask_delivery.record_single_sent(session_id, wait_id)
+                        else:
+                            ask_delivery.record_single_failure(
+                                session_id, wait_id, "ask file upload/send failed")
+                    logger.info(
+                        f"{log_tag} 提问文件发送完成: wait_id={wait_id or '-'}, sent={ok}")
+                    return ok
+                # 无文件能力的形态：不截断冒充完整，如实记失败允许「重发」重试。
+                if wait_id and session_id:
+                    ask_delivery.record_single_failure(
+                        session_id, wait_id, "over channel limit and no file fallback")
+                logger.error(f"{log_tag} 提问超渠道单条上限且无文件发送能力，不发送")
+                return False
+            # RPA 等无条数配额的渠道超限时，沿用其 adapter 既有的自动分段兜底
+            # （单条长度限制按实际渠道处理，内容不丢）。
+            try:
+                ok = await _dispatch_ask_segment(text, 0)
+            except Exception as e:  # noqa: BLE001 - 单条异常收敛为失败
+                logger.error(f"{log_tag} 提问单条发送异常: {e}")
+                ok = False
+            if wait_id and session_id:
+                if ok:
+                    ask_delivery.record_single_sent(session_id, wait_id)
+                else:
+                    ask_delivery.record_single_failure(session_id, wait_id, "adapter send failed")
+            logger.info(
+                f"{log_tag} 提问单条发送完成: wait_id={wait_id or '-'}, sent={ok}")
+            return bool(ok)
 
         return _send_response
 

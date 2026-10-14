@@ -93,6 +93,23 @@ def validate_response(value, path):
         raise RunnerError('RUNNER_SERVICE_INVALID_RESPONSE', 502)
 
 
+def form_error_details(value):
+    """结构合法的逐题错误明细才跨边界（§5.7），整体不合法时丢弃且绝不降级为字符串。
+
+    只保留 question_id/code/message 三个字段，与 ask-form-errors.schema.json 对齐。
+    """
+    if not isinstance(value, list) or not value:
+        return None
+    details = []
+    for item in value:
+        if (not isinstance(item, dict) or not all(
+                isinstance(item.get(key), str) and item.get(key)
+                for key in ('question_id', 'code', 'message'))):
+            return None
+        details.append({key: item[key] for key in ('question_id', 'code', 'message')})
+    return details
+
+
 class RunnerServiceClient:
     def __init__(self, config, *, token=None):
         self.config = config
@@ -129,7 +146,8 @@ class RunnerServiceClient:
             code = value.get('error')
             # Only stable error codes from the trusted service cross this boundary.
             code = code if isinstance(code, str) and code.replace('_','').isalnum() and len(code)<=128 else 'RUNNER_SERVICE_ERROR'
-            raise RunnerError(code, response.status_code)
+            # 受理前表单校验的逐题明细原样透传（§5.7），不降级为通用错误字符串。
+            raise RunnerError(code, response.status_code, errors=form_error_details(value.get('errors')))
         validate_response(value, path)
         return value
 

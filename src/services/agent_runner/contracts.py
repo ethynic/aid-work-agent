@@ -113,6 +113,10 @@ class Principal:
 
 
 class RunnerError(Exception):
-    def __init__(self, code, status=400):
+    def __init__(self, code, status=400, errors=None):
         super().__init__(code)
         self.code, self.status = code, status
+        # 受理前表单校验失败的逐题明细（{question_id,code,message}，见
+        # contracts/runtime-host/v1 ask-form-errors.schema.json）。仅在 422
+        # 响应中输出，一般错误为 None；任何一层不得降级为通用错误字符串。
+        self.errors = errors

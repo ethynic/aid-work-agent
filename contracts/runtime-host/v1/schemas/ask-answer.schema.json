@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aidwork.local/contracts/runtime-host/v1/ask-answer.schema.json",
+  "title": "AskReplyControl",
+  "description": "Wire shape of a reply control request carrying structured answers (or an explicit skip) for an ask_user form. The authoritative entry validation is the server-side RunnerControl model; this schema documents the same boundaries for consumers. A meaningful free-text answer is one containing at least one non-whitespace character (pattern \\S, matching the model's strip() semantics — minLength is NOT equivalent). Form-relative answer rules (unknown question_id against the form, keys outside that question's options, a text question answered with selected_keys) are decided at the acceptance layer against the immutable form, not here.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "client_request_id",
+    "action",
+    "target_execution_id",
+    "wait_id"
+  ],
+  "properties": {
+    "client_request_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "action": {
+      "const": "reply"
+    },
+    "target_execution_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "wait_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "answer": {
+      "description": "Legacy free-text answer; mutually exclusive with a structured answers submission.",
+      "type": "string",
+      "maxLength": 1000000
+    },
+    "attachments": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "file_id": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "type": {
+            "enum": [
+              "file",
+              "image"
+            ]
+          },
+          "mime_type": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "content": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "answers": {
+      "description": "Absent = not supplied; an explicit [] is a legitimate all-unanswered submission. At most one item per form question.",
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "$ref": "#/$defs/answerItem"
+      }
+    },
+    "skip": {
+      "description": "Explicit whole-form skip; accepted only when the form allows it.",
+      "type": "boolean"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "answer": {
+            "type": "string",
+            "pattern": "\\S"
+          }
+        },
+        "required": [
+          "answer"
+        ]
+      },
+      "then": {
+        "not": {
+          "required": [
+            "answers"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "skip": {
+            "const": true
+          }
+        },
+        "required": [
+          "skip"
+        ]
+      },
+      "then": {
+        "not": {
+          "required": [
+            "answers"
+          ]
+        }
+      }
+    }
+  ],
+  "anyOf": [
+    {
+      "required": [
+        "answers"
+      ]
+    },
+    {
+      "properties": {
+        "skip": {
+          "const": true
+        }
+      },
+      "required": [
+        "skip"
+      ]
+    },
+    {
+      "properties": {
+        "answer": {
+          "type": "string",
+          "pattern": "\\S"
+        }
+      },
+      "required": [
+        "answer"
+      ]
+    },
+    {
+      "properties": {
+        "attachments": {
+          "minItems": 1
+        }
+      },
+      "required": [
+        "attachments"
+      ]
+    }
+  ],
+  "$defs": {
+    "answerItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "question_id",
+        "selected_keys",
+        "text"
+      ],
+      "properties": {
+        "question_id": {
+          "description": "Harmless leading/trailing whitespace is stripped at entry before the shape check; the acceptance layer normalizes to lowercase.",
+          "type": "string",
+          "pattern": "^\\s*[qQ][1-9]\\s*$"
+        },
+        "selected_keys": {
+          "description": "Server-generated lowercase keys; duplicated keys are deduplicated at acceptance, and single/multi bounds are enforced there.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^q[1-9]o[1-9]$"
+          }
+        },
+        "text": {
+          "description": "Free-text line alongside options, or the whole answer for text questions; must be null when the form disallows custom text.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

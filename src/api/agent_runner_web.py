@@ -44,7 +44,11 @@ def error_response(error):
     if code == 'CREDIT_BLOCKED':
         return JSONResponse(status_code=403, content={'success':False, 'code':'NO_CREDIT',
             'error':'积分余额已耗尽，数字员工无法工作', 'debug':code})
-    return JSONResponse(status_code=status, content={'success':False, 'code':code, 'error':code, 'debug':code})
+    content = {'success':False, 'code':code, 'error':code, 'debug':code}
+    if getattr(error, 'errors', None):
+        # 受理前表单校验的逐题明细（§5.7）原样透传前端，不降级为通用错误字符串。
+        content['errors'] = error.errors
+    return JSONResponse(status_code=status, content=content)
 
 
 def authorize_capabilities(authorization):
@@ -63,6 +67,21 @@ class RunnerWebRoute(APIRoute):
             except RunnerError as error:
                 return error_response(error)
         return safe_handler
+
+
+def control_body(body):
+    """与 RunnerControl.intent() 相同口径的条件序列化（保留 client_request_id）。
+
+    新增字段"未提供即不含键"：滚动窗口内新 BFF → 旧 runner service（旧模型
+    extra='forbid'）不会因恒带 answers:null/skip:false 而对全部控制报 422，
+    旧形状请求的上游字节与升级前逐字节一致。
+    """
+    value = body.model_dump(mode='json')
+    if body.answers is None:
+        value.pop('answers')
+    if not body.skip:
+        value.pop('skip')
+    return value
 
 
 def create_router(config=None, client=None):
@@ -88,6 +107,7 @@ def create_router(config=None, client=None):
         return {'web_enabled':config.web_enabled,
                 'observe_existing':bool(config.api_url and client.token),
                 'events_supported':bool(config.api_url and client.token),
+                'ask_structured_answers':True,
                 'contract_version':1, 'transport':'runner_poll'}
 
     @router.post('/runners', status_code=202)
@@ -138,7 +158,7 @@ def create_router(config=None, client=None):
         if body.action not in {'pause','resume','reply'}:
             raise RunnerError('CONTROL_COMPLETION_FORBIDDEN',403)
         return await forward(request,'POST','/v1/runners/'+quote(runner_id,safe='')+'/controls',
-                             body=body.model_dump(mode='json'))
+                             body=control_body(body))
 
     @router.get('/runners/{runner_id}/controls/{control_id}')
     async def get_control(runner_id: str,control_id: str,request: Request):
