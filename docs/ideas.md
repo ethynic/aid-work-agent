@@ -39,7 +39,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20261013-2102 | 自动填表智能体 | 📋 待开发 | 内部员工在微信/企微/钉钉/飞书中用文字或语音，由智能体通过第三方系统 API 代填表单（首期 10605 客户信息+跟进记录）。手机号身份验证（渠道自带/users.phone/短信验证三档）+ 用户级委托登录 + 回显确认回执 + 表单 schema 接口通用化。配套：customer-followup 智能体下线。 | [设计](system/digital-employee/auto-form-filling-agent-design.md) | — |
+| 20261013-2102 | 自动填表智能体 | 🔧 部分完成（P0 核心链路 + 短信计费开发完成，待 wecom_kf 真机验证） | 内部员工在微信/企微/钉钉/飞书中用文字或语音，由智能体通过第三方系统 API 代填表单（首期 10605 客户信息+跟进记录）。手机号身份验证（渠道自带/users.phone/短信验证三档）+ 用户级委托登录 + 回显确认回执 + 表单 schema 接口通用化。已交付：form-filling-api 技能（load_api_config/get_user_phone/load_form_schema + delegate_login hold_token 托管扩展）、auto-form-filler 子智能体、通用接口文档模板、短信计费（每条 1 积分，AID_* env 计费身份 fail-closed）。待部署验证：wecom_kf 通道真机全流程（手机号验证、回显确认渲染）。配套：customer-followup 智能体已下线（git rm `subagents/customer-followup/`，业务页面/数据表/技能保留）。 | [设计](system/digital-employee/auto-form-filling-agent-design.md) | — |
 | 20261013-1700 | GLM多模态桌面阻碍诊断 | 📋 待开发 | 动作受阻时诊断截图，区分广告、VIP付费及必需付费阻断。 | [需求记录](plans/desktop-automation/plan-boss-job-vip-entitlements.md#glm-obstacle-recovery) | — |
 | 20260908-1432 | BOSS 直聘聊天自动化 | 🔧 部分完成 | B1/B2 完成入库（场景包默认关闭）；B3 起待开发，B0 测试账号授权阻塞中；旁支已交付（见 finished）。 | [BOSS 端侧接入设计](design/desktop-automation/boss-edge-session-design.md) / [底座设计](design/desktop-automation/desktop-cli-automation-design.md) | [BOSS 端侧接入计划](plans/desktop-automation/plan-boss-edge-session.md) |
 | 20260905-1753 | 营销 App 智能外呼代理 | 🔧 部分完成 | 2026-09-05 完成调研、详细设计与实施规划。 | [设计](design/marketing-call-agent-design.md) | [验证与计划](plans/marketing-call-agent-plan.md) / [GLM 实验执行手册](plans/marketing-call-agent-experiment-runbook.md) |

@@ -31,6 +31,7 @@ _TOKEN_PAYLOAD = {
     "display_name": "覃姗测试",
     "agent_name": "客户管理智能体",
     "created": False,
+    "login_url": _LOGIN_URL,
 }
 
 

@@ -355,6 +355,29 @@ def _get_tenant_env_vars() -> Dict[str, str]:
     return {}
 
 
+def _get_session_held_client_token() -> Optional[str]:
+    """读取会话级托管的委托登录 client_token（delegate_login.py 写入）。
+
+    使 LLM 可在 header 中写 ${client_token} 占位符而不接触明文 token
+    （自动填表智能体的主对话写入场景）。无工具上下文或缓存未命中返回 None。
+    """
+    try:
+        from src.tools.context import current_tool_execution_context
+        ctx = current_tool_execution_context()
+        if ctx is None or not (ctx.tenant_id and ctx.session_id):
+            return None
+        from src.core.cache_utils import CacheKeys, get_cached
+        cached = get_cached(
+            CacheKeys.EXTERNAL_LOGIN_TOKEN_SESSION,
+            ctx.tenant_id, ctx.subagent_id or "", ctx.session_id,
+        )
+        if isinstance(cached, dict) and cached.get("client_token"):
+            return cached["client_token"]
+    except Exception as e:
+        logger.warning(f"读取会话级托管 client_token 失败: {e}")
+    return None
+
+
 def _substitute_env_vars(text: str) -> str:
     """替换字符串中的 ${ENV_VAR}，优先取租户级环境变量，兜底进程环境变量"""
     tenant_env = _get_tenant_env_vars()
@@ -364,6 +387,10 @@ def _substitute_env_vars(text: str) -> str:
         value = tenant_env.get(var_name)
         if value is None:
             value = os.environ.get(var_name)
+        if value is None and var_name == "client_token":
+            # 委托登录 client_token 由 delegate_login 脚本托管在会话级缓存，
+            # 不经租户/进程环境变量分发（防明文凭证进 LLM 上下文）
+            value = _get_session_held_client_token()
         if value is None:
             logger.warning(f"环境变量 {var_name} 未设置（租户级环境变量与进程环境均未找到）。")
             return match.group(0)

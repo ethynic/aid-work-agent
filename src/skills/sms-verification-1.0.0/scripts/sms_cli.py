@@ -8,7 +8,8 @@
 - verify: 校验用户输入的验证码
 
 复用 src.db.models.send_sms_code / verify_sms_code 底层能力，复用 sms_codes 表
-（TTL 15 分钟，qb_sms_code bypass）。
+（TTL 15 分钟）。qb_sms_code bypass 仅存在于 verify 校验侧（send_sms_code
+始终真实发信），因此 send 成功即真实发信、必扣费。
 
 频控（脚本层）：
 - 60s 内同一手机号只能发送 1 次（防秒刷）
@@ -22,6 +23,7 @@
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -198,6 +200,104 @@ def _record_send(mobile: str) -> None:
         logger.warning(f"短信验证码 24h 计数记录失败: {e}")
 
 
+# ============== 短信计费（每条真实发送扣 1 积分） ==============
+
+SMS_CREDIT_COST = 1.0
+
+
+def _mask_mobile(mobile: str) -> str:
+    """手机号脱敏：138****0000（用于日志与计费落库描述）"""
+    if mobile and len(mobile) >= 7:
+        return f"{mobile[:3]}****{mobile[-4:]}"
+    return "***"
+
+
+def _resolve_billing_identity() -> Dict[str, Optional[str]]:
+    """计费身份：仅取 skill_executor 注入的 AID_* 环境变量，不信任 LLM 传参（fail-closed）。
+
+    取不到租户身份时调用方必须拒绝发送，防止计费落空。
+    """
+    return {
+        "tenant_id": (os.environ.get("AID_TENANT_ID") or "").strip() or None,
+        "user_id": (os.environ.get("AID_USER_ID") or "").strip() or None,
+        "session_id": (os.environ.get("AID_SESSION_ID") or "").strip() or None,
+    }
+
+
+def _check_credit_balance(tenant_id: str) -> Optional[Dict[str, Any]]:
+    """发送前余额预检：credit_balance 不足 1 积分时拒绝发送。
+
+    预检与最终扣减非同一事务（竞态窗口极小可接受），保证"余额不足时短信不发出"。
+
+    Returns:
+        None 表示通过；Dict 表示拦截（含 error/reason）
+    """
+    try:
+        from src.db.database import get_db_connection
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT credit_balance FROM tenants WHERE tenant_id = %s",
+                (tenant_id,),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            logger.warning(f"短信计费预检：租户不存在 tenant_id={tenant_id}")
+            return {
+                "success": False,
+                "error": "无法确认租户信息，短信发送被拒绝",
+                "reason": "tenant_not_found",
+            }
+        balance = row["credit_balance"] if isinstance(row, dict) else row[0]
+        if balance is None or float(balance) < SMS_CREDIT_COST:
+            logger.warning(
+                f"短信计费预检：积分余额不足 tenant_id={tenant_id}, balance={balance}"
+            )
+            return {
+                "success": False,
+                "error": "积分余额不足，无法发送短信验证码，请联系管理员充值",
+                "reason": "insufficient_credit",
+            }
+    except Exception as e:
+        # 预检异常不阻断发送，落账阶段兜底（发送成功后扣费失败会记错误日志）
+        logger.opt(exception=True).warning(f"短信计费余额预检异常（降级放行）: {e}")
+    return None
+
+
+def _record_sms_billing(mobile: str, identity: Dict[str, Optional[str]]) -> None:
+    """真实发送成功后落账：chat_records 审计记录 + 同事务扣减 tenants.credit_balance。
+
+    短信已实际发出，落账失败只记错误日志，不向用户报错（无法撤回短信）。
+    send_sms_code 无 bypass（bypass 仅在 verify 校验侧），返回 True 即真实发信。
+    """
+    tenant_id = identity.get("tenant_id")
+    if not tenant_id:
+        logger.error("短信计费落账失败：缺少租户身份（不应到达此分支，发送前已 fail-closed）")
+        return
+    try:
+        from src.db.models import ChatRecordDB
+
+        session_ref = identity.get("session_id") or f"sms_{_mask_mobile(mobile)}"
+        ChatRecordDB.create(
+            session_id=f"sms_{session_ref}",
+            tenant_id=tenant_id,
+            user_id=identity.get("user_id"),
+            user_message=f"[短信验证码] 发送至 {_mask_mobile(mobile)}",
+            source_type="sms_verification",
+            credit_cost=SMS_CREDIT_COST,
+        )
+        logger.info(
+            f"短信计费落账成功 tenant_id={tenant_id}, mobile={_mask_mobile(mobile)}, "
+            f"credit_cost={SMS_CREDIT_COST}"
+        )
+    except Exception as e:
+        logger.opt(exception=True).error(
+            f"短信计费落账失败（短信已发送） tenant_id={tenant_id}, "
+            f"mobile={_mask_mobile(mobile)}: {e}"
+        )
+
+
 # ============== 核心逻辑 ==============
 
 def _validate_mobile(mobile: str) -> bool:
@@ -217,13 +317,15 @@ def send_sms(
     1. 校验手机号
     2. 检查短信通道可用性
     3. 频控检查（60s + 24h 上限）
-    4. 调用底层 send_sms_code（含 qb_sms_code bypass、15 分钟 TTL）
-    5. 成功后记录频控计数
-    6. 返回 JSON（不含 code）
+    4. 计费准入：租户身份（AID_TENANT_ID env，fail-closed）+ 余额预检
+    5. 调用底层 send_sms_code（真实发信，验证码入库 15 分钟 TTL）
+    6. 成功后记录频控计数并落账扣费（每条 1 积分，ChatRecordDB 同事务扣减）
+    7. 返回 JSON（不含 code）
 
     Args:
         mobile: 手机号
-        tenant_id: 租户 ID（仅用于日志追踪）
+        tenant_id: 租户 ID（仅用于日志追踪；计费身份以 AID_TENANT_ID env 为准，
+                   不信任本传参）
         user_id: 用户 ID（仅用于日志追踪）
         session_id: 会话 ID（仅用于日志追踪）
 
@@ -263,6 +365,22 @@ def send_sms(
     if blocked:
         return blocked
 
+    # 3.5 计费准入：租户身份 fail-closed + 余额预检（每条真实发送扣 1 积分）
+    identity = _resolve_billing_identity()
+    if not identity["tenant_id"]:
+        logger.warning(
+            f"短信验证码发送被拒绝：无法确认租户身份 mobile={mobile}, "
+            f"tenant={tenant_id}, user={user_id}, session={session_id}"
+        )
+        return {
+            "success": False,
+            "error": "无法确认租户身份，短信发送被拒绝，请联系管理员",
+            "reason": "billing_identity_missing",
+        }
+    blocked = _check_credit_balance(identity["tenant_id"])
+    if blocked:
+        return blocked
+
     # 4. 调用底层发送
     _ensure_db_pool()
     try:
@@ -287,6 +405,9 @@ def send_sms(
 
     # 5. 记录频控计数（仅成功后）
     _record_send(mobile)
+
+    # 6. 计费落账（send_sms_code 无 bypass，返回 True 即真实发信必扣费）
+    _record_sms_billing(mobile, identity)
 
     logger.info(
         f"短信验证码发送成功 mobile={mobile}, "

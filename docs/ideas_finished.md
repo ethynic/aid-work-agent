@@ -100,7 +100,7 @@
 | 20260518-2222 | 竞品调研智能体 | 竞品信息收集、HTML 预览、数据结构化输出 | [设计](subagent/competitor-research/competitor_research_subagent_design.md) | — |
 | 20260518-2223 | 售后处理智能体 | 售后工单处理、退款退货流程自动化 | [设计](subagent/after-sales/after_sales_subagent_design.md) | — |
 | 20260525-1709 | 投诉处理智能体 | 投诉分类、处理建议、升级流程 | [设计](subagent/complaint-handling/complaint-agent-design.md) | [计划](subagent/complaint-handling/complaint-agent-dev-plan.md) |
-| 20260525-1713 | 客户跟进智能体 | 客户跟进任务管理、提醒、执行 | [设计](subagent/customer-followup/customer_followup_design.md) | — |
+| 20260525-1713 | 客户跟进智能体 | ⏸️ 已下线（2026-10-14 由自动填表智能体取代）。内置文件级智能体，下线方式为 git rm `subagents/customer-followup/`（历史可恢复）；业务页面/数据表/技能保留不删。原功能：客户跟进任务管理、提醒、执行 | [设计](subagent/customer-followup/customer_followup_design.md) | — |
 | 20260610-1314 | 业务页面元数据注册表 | ✅ 已完成开发。 | [设计](system/digital-employee/page-metadata-registry-design.md) | [开发计划](system/digital-employee/page-metadata-registry-dev-plan.md) |
 | 20260602-1418 | 数据分析智能体 | ✅ 已完成开发。 | [设计](system/digital-employee/data-analysis-subagent-design.md) / [工具设计](system/digital-employee/smart-data-analysis-tool-design.md) | [工具开发计划](system/digital-employee/smart-data-analysis-tool-dev-plan.md) |
 | 20260602-1419 | 数据源导入功能 | ✅ 已完成开发。通用知识库扩展：上传 Excel/CSV → 解析 Sheet → LLM 推理 Schema → 用户审核 → 入库；连接外部数据库导入；管理已导入表 Schema 与关联。 | [设计§三~§五](system/digital-employee/data-analysis-subagent-design.md) | [计划](system/digital-employee/data-source-import-dev-plan.md) |

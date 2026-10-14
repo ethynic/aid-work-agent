@@ -370,6 +370,26 @@ ImageRegistry 管理的图片资产元信息（复用 cp 的 `uploaded_file:{fil
 **关键约束**：委托人 token 按租户 + 子智能体 + 手机号隔离（子智能体维度隔离同一租户内不同智能体对接的不同外部系统）；缓存值带 `login_url`，读取时校验不一致按未命中处理（防跨系统串号）；缓存值不含 `success` 字段，命中返回时由脚本补加。旧键 `pre_sales_client_token:{tenant_id}:{mobile}` 已废弃，靠 TTL 自然过期
 **源文件**：`src/skills/pre-sales-api-1.0.0/scripts/delegate_login.py` + `src/services/recap/tasks/external_push.py`（前缀注册：`src/core/cache_utils.py`）
 
+### 7.4.4.1 会话级委托登录 client_token（凭证托管）
+
+**存储**：Redis + 内存降级
+**键模式**：`external_login_token_session:{tenant_id}:{subagent_id}:{session_id}`
+**TTL**：82800s（23h，与 7.4.4 mobile 版对齐）
+**写入方**：`delegate_login.py`（登录成功路径与 mobile 缓存命中路径均补写；无 `AID_SESSION_ID` 的非技能子进程场景跳过）
+**读取方**：`http_api` 工具解析 header 中的 `${client_token}` 占位符、`load_form_schema.py` 读取 client_token
+**失效时机**：业务接口返回 `Code=-99` 时由 Agent 带 `force_refresh` 重新执行 `delegate_login.py` 覆盖；TTL 自动过期兜底
+**关键约束**：自动填表智能体（主对话写入场景）的凭证托管——`client_token` 只存本缓存，脚本输出 `hold_token: true` 时不回显明文，LLM 仅在 header 写 `${client_token}` 占位符由 http_api 每次请求时解析，防明文凭证进 LLM 上下文
+**源文件**：`src/skills/pre-sales-api-1.0.0/scripts/delegate_login.py`、`src/tools/network/http_api.py`（前缀注册：`src/core/cache_utils.py`）
+
+### 7.4.4.2 第三方表单 schema 元数据
+
+**存储**：Redis + 内存降级
+**键模式**：`form_schema:{tenant_id}:{subagent_id}:{module}`
+**TTL**：3600s（1h，元数据变更频率低）
+**失效时机**：无主动失效；TTL 自动过期兜底；怀疑元数据过期时脚本入参 `force_refresh: true` 跳过缓存强拉
+**关键约束**：自动填表智能体按租户 + 子智能体 + module 隔离的第三方系统字段元数据（字段英文名/中文名/必填/枚举），供写入前字段补全与回显确认；输出精简 attrs 且声明 `_no_truncate` 豁免工具结果截断
+**源文件**：`src/skills/form-filling-api-1.0.0/scripts/load_form_schema.py`（前缀注册：`src/core/cache_utils.py`）
+
 ### 7.4.5 recap 任务幂等键
 
 **存储**：Redis + 内存降级
@@ -529,6 +549,8 @@ PostgreSQL（持久化，权威数据源）
 ├── image_fetch_url:{sha256(url)}    # Web 图片抓取去重
 ├── subagent_greeting:{agent_id}     # 数字员工空态摘要（LLM 生成缓存）
 ├── external_login_token:{tenant_id}:{subagent}:{mobile}  # 外部系统委托登录 token（23h）
+├── external_login_token_session:{tenant_id}:{subagent}:{session_id}  # 会话级委托登录 token 凭证托管（23h）
+├── form_schema:{tenant_id}:{subagent}:{module}           # 第三方表单 schema 元数据（1h）
 ├── recap_task:{tenant_id}:{task_name}:{round_message_id}  # recap 任务幂等（24h）
 ├── recap_task_queue                                       # recap 任务队列（FIFO，无 TTL，消费即出队）
 └── sched_task_lock:manager          # 定时任务调度器启动锁
