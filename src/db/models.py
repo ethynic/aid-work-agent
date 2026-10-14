@@ -782,6 +782,31 @@ class UserDB:
 
 # ============== 会话数据库访问 ==============
 
+
+def _waiting_form_leaf_has_ask_form(node, depth=0):
+    """waiting 子对象是否存在 clarification/form 叶（含 child_wait 嵌套下钻，
+    与通知生产者 _clarification_leaf 同语义；Phase 2 待答徽标）。"""
+    while isinstance(node, dict) and depth < 64:
+        if (node.get("kind") == "clarification"
+                and isinstance(node.get("form"), dict)):
+            return True
+        node = node.get("child_wait")
+        depth += 1
+    return False
+
+
+def _waiting_ask_form_hit(waiting):
+    """按 SQL 列 `public_snapshot->'waiting' AS waiting` 的返回值判定待答命中
+    （七轮评审修正：消费读取必须与查询列名一致）；兼容 jsonb 自动解码为
+    dict 或仍为 JSON 字符串的驱动行为。"""
+    if isinstance(waiting, str):
+        try:
+            waiting = json.loads(waiting)
+        except Exception:
+            return False
+    return _waiting_form_leaf_has_ask_form(waiting)
+
+
 class SessionDB:
     """会话数据库访问类"""
 
@@ -896,20 +921,9 @@ class SessionDB:
                           AND public_snapshot -> 'waiting' IS NOT NULL
                     """, (user_id, *session_ids))
 
-                    def _has_ask_form(node, depth=0):
-                        while isinstance(node, dict) and depth < 64:
-                            if (node.get("kind") == "clarification"
-                                    and isinstance(node.get("form"), dict)):
-                                return True
-                            node = node.get("child_wait")
-                            depth += 1
-                        return False
-
                     for row in cursor.fetchall():
-                        snapshot = row.get("public_snapshot")
-                        if isinstance(snapshot, str):
-                            snapshot = json.loads(snapshot)
-                        if _has_ask_form((snapshot or {}).get("waiting")):
+                        # 列别名即 waiting（七轮评审修正：读取与查询列名一致）。
+                        if _waiting_ask_form_hit(row.get("waiting")):
                             waiting_ids.add(row["session_id"])
                 for s in sessions:
                     s["waiting_input"] = s.get("session_id") in waiting_ids
