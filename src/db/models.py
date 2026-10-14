@@ -880,20 +880,36 @@ class SessionDB:
                     result["context_data"] = json.loads(result["context_data"])
                 sessions.append(result)
             # 会话列表「待回答」徽标（Phase 2）：该用户在列表会话中存在 waiting
-            # 且携带表单的 chat/web runner 时标记；失败不阻断列表（降级无徽标）。
+            # 且携带表单的 chat/web runner 时标记（含子执行嵌套 child_wait 叶
+            # 节点，与通知生产者同一下钻语义）；失败不阻断列表（降级无徽标）。
             try:
                 session_ids = [s.get("session_id") for s in sessions if s.get("session_id")]
                 waiting_ids = set()
                 if session_ids:
                     marks = ",".join(placeholder for _ in session_ids)
                     cursor.execute(f"""
-                        SELECT DISTINCT session_id FROM agent_runners
+                        SELECT session_id, public_snapshot FROM agent_runners
                         WHERE user_id = {placeholder} AND session_id IN ({marks})
                           AND status = 'waiting' AND source = 'chat'
                           AND session_kind = 'web' AND actor_kind = 'user'
-                          AND public_snapshot->'waiting'->'form' IS NOT NULL
+                          AND public_snapshot -> 'waiting' IS NOT NULL
                     """, (user_id, *session_ids))
-                    waiting_ids = {row["session_id"] for row in cursor.fetchall()}
+
+                    def _has_ask_form(node, depth=0):
+                        while isinstance(node, dict) and depth < 64:
+                            if (node.get("kind") == "clarification"
+                                    and isinstance(node.get("form"), dict)):
+                                return True
+                            node = node.get("child_wait")
+                            depth += 1
+                        return False
+
+                    for row in cursor.fetchall():
+                        snapshot = row.get("public_snapshot")
+                        if isinstance(snapshot, str):
+                            snapshot = json.loads(snapshot)
+                        if _has_ask_form((snapshot or {}).get("waiting")):
+                            waiting_ids.add(row["session_id"])
                 for s in sessions:
                     s["waiting_input"] = s.get("session_id") in waiting_ids
             except Exception:

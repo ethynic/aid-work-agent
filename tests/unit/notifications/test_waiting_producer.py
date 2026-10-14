@@ -117,3 +117,45 @@ def test_deleted_session_does_not_notify():
     publish_runner_waiting_in_tx(cursor, waiting_runner(), NotificationsConfig())
     # 会话查不到（已删除）时不进入 publish（execute 仅会话查询一次）。
     assert cursor.execute.call_count == 1
+
+
+def test_nested_child_wait_leaf_notifies_with_leaf_wait_id():
+    # 五轮评审 P2-3：子执行嵌套链（child_wait → clarification/form）必须经叶
+    # 节点解析通知，event_key 按叶节点真实 wait_id 去重。
+    cursor, statements = capturing_cursor()
+    nested = waiting_runner(waiting_kw={
+        'kind': 'child_wait',
+        'child_wait': {'kind': 'child_wait',
+                       'child_wait': {'kind': 'clarification',
+                                      'form': form(wait_id='wait-leaf')}},
+    })
+    publish_runner_waiting_in_tx(cursor, nested, NotificationsConfig())
+    insert_sql, args = _inserts(statements)[0]
+    assert args[5] == 'waiting:runner:wait-leaf'
+    assert json.loads(args[9]) == {'type': 'runner_waiting', 'id': 'runner'}
+
+
+def test_effective_event_types_backfills_waiting_for_legacy_default():
+    # 五轮评审 P1-2：存量旧默认偏好读取时兼容扩展 waiting_input；
+    # 显式自定义集合与空集合不受影响。
+    from src.notifications.repository import (
+        TASK_EVENT_TYPES, _effective_event_types)
+    assert _effective_event_types(['task.completed', 'task.failed']) == TASK_EVENT_TYPES
+    custom = ('task.completed', 'task.waiting_input', 'billing.credit_low')
+    assert _effective_event_types(custom) == custom
+    assert _effective_event_types([]) == ()
+    assert _effective_event_types(None) == ()
+
+
+def test_inbox_link_for_waiting_uses_notification_entry():
+    # 五轮评审 P2-4：站内信复用既有通知解析入口 /notification?ref=——入口完成
+    # 认证与 resource 解析后按原数字员工路由回会话，不自行拼 chat 路径。
+    from src.notifications.contracts import Subject
+    from src.notifications.repository import NotificationRepository
+    link = NotificationRepository._inbox_link(
+        'task.waiting_input', {'session_id': 'session-1'},
+        Subject('user', 'tenant'), notification_ref='abc123')
+    assert link == '/notification?ref=abc123'
+    assert NotificationRepository._inbox_link(
+        'task.waiting_input', {'session_id': 'session-1'},
+        Subject('user', 'tenant'), notification_ref=None) is None

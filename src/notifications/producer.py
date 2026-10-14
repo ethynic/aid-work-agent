@@ -35,24 +35,37 @@ def publish_runner_terminal_in_tx(cursor, runner, config=None):
         expires_at=occurred+timedelta(seconds=config.ttl_seconds))
 
 
+def _clarification_leaf(waiting):
+    """等待叶节点解析（子执行委派链：child_wait 逐层下钻至 clarification，
+    有界 64 层，与 agent_runner 内既有下钻模式一致）。返回带 form 的叶节点
+    或 None——顶层与嵌套子执行提问都走这一条解析（五轮评审 P2-3）。"""
+    node = waiting
+    for _ in range(64):
+        if not isinstance(node, dict):
+            return None
+        if node.get('kind') == 'clarification' and isinstance(node.get('form'), dict):
+            return node
+        node = node.get('child_wait')
+    return None
+
+
 def publish_runner_waiting_in_tx(cursor, runner, config=None):
     """提问等待通知（Phase 2，设计 §5.6）：park 事务尾调用。
 
-    仅 chat/web 用户自有 runner 进入 waiting 且携带结构化表单（ask_user）时
-    通知；legacy clarify（无 form）不通知。event_key 按 runner+wait 去重——
-    同一 wait 的重复 park 不会重复生产（ON CONFLICT DO NOTHING），下一轮
-    ask_user 产生新 wait_id 即新通知。
+    仅 chat/web 用户自有 runner 进入 waiting 且携带结构化表单（ask_user，含
+    子执行嵌套链）时通知；legacy clarify（无 form）不通知。event_key 按
+    叶节点真实 runner+wait 去重——同一 wait 的重复 park 不会重复生产
+    （ON CONFLICT DO NOTHING），下一轮 ask_user 产生新 wait_id 即新通知。
     """
     if config is None:
         from src.config.settings import settings
         config = settings.notifications
     if runner['status'] != 'waiting' or not _user_owned_web_runner(runner):
         return
-    waiting = (runner.get('public_snapshot') or {}).get('waiting') or {}
-    form = waiting.get('form')
-    if (waiting.get('kind') != 'clarification' or not isinstance(form, dict)
-            or not form.get('questions')):
+    waiting = _clarification_leaf((runner.get('public_snapshot') or {}).get('waiting'))
+    if waiting is None:
         return
+    form = waiting['form']
     wait_id = form.get('wait_id') or waiting.get('wait_id')
     if not isinstance(wait_id, str) or not wait_id:
         return

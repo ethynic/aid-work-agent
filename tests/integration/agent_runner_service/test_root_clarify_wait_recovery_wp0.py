@@ -348,3 +348,25 @@ async def test_root_ask_user_form_wait_accepts_structured_reply_and_resumes(
     payload = json.loads(tool_messages[0]["content"])
     assert payload == {"success": True, "answer": canonical, "attachments": [],
                        "wait_id": payload["wait_id"]}
+
+
+async def test_park_waiting_notification_failure_isolated_by_savepoint(
+        storage, controls, actors, service_database, monkeypatch):
+    """五轮评审 P1-1：通知与 park 共用事务——通知 SQL 失败使 PG 事务进入中止
+    态，savepoint 必须回滚该失败并保留 park 更新正常提交；不得出现「返回
+    waiting 而持久状态仍为 running」，也不得残留通知行。"""
+    import src.notifications.producer as producer_module
+
+    def broken_producer(cursor, runner_row, config=None):
+        cursor.execute('THIS_IS_NOT_VALID_SQL')  # 令 PG 事务进入中止态
+        raise RuntimeError('notification boom')
+
+    monkeypatch.setattr(producer_module, 'publish_runner_waiting_in_tx', broken_producer)
+    repository, execution, parked, principal = await parked_root_clarify(storage, actors["a"])
+    runner_id = parked["runner_id"]
+    assert parked["status"] == "waiting"
+    committed = repository.get(runner_id)
+    assert committed["status"] == "waiting" and committed["finished_at"] is None
+    assert service_database.rows(
+        "SELECT count(*) AS cnt FROM notification_messages WHERE producer='runner'")[
+        0]["cnt"] == 0

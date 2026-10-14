@@ -5410,7 +5410,7 @@ CREATE TABLE IF NOT EXISTS notification_preferences (
     channel TEXT,
     provider TEXT,
     enabled BOOLEAN DEFAULT FALSE,
-    event_types JSONB DEFAULT '["task.completed","task.failed"]',
+    event_types JSONB DEFAULT '["task.completed","task.failed","task.waiting_input"]',
     enabled_since TIMESTAMPTZ,
     updated_at TIMESTAMPTZ DEFAULT clock_timestamp(),
     PRIMARY KEY(scope_key,recipient_user_id,category,channel,provider),

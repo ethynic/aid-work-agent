@@ -223,12 +223,17 @@ class ExecutionRepository:
             if result['status'] == 'waiting':
                 # 提问等待通知（Phase 2，设计 §5.6）：chat/web 用户自有 runner
                 # 进入 waiting(form) 时在事务尾生产通知，event_key 按 runner+wait
-                # 去重（同 wait 重复 park 不重发通知）。失败不阻断 park——待答
-                # 事实仍可经快照/徽标消费。
+                # 去重（同 wait 重复 park 不重发通知）。
+                # 通知写入与 park 更新共用事务（五轮评审 P1-1）：SAVEPOINT 隔离——
+                # 通知 SQL 失败会使 PG 事务进入中止态，直接 commit 会连 park 更新
+                # 一起丢失；失败时回滚至 savepoint 保留 park 更新再提交。
+                cursor.execute('SAVEPOINT runner_waiting_notify')
                 try:
                     from src.notifications.producer import publish_runner_waiting_in_tx
                     publish_runner_waiting_in_tx(cursor, result)
-                except Exception as error:  # noqa: BLE001 - 通知生产不阻断执行生命周期
+                    cursor.execute('RELEASE SAVEPOINT runner_waiting_notify')
+                except Exception as error:  # noqa: BLE001 - 通知失败回滚至 savepoint，保留 park 更新
+                    cursor.execute('ROLLBACK TO SAVEPOINT runner_waiting_notify')
                     logger.warning('runner waiting notification production failed '
                                    'runner_id={} class={}', result['runner_id'], type(error).__name__)
             conn.commit()

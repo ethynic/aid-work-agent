@@ -577,6 +577,8 @@ onMounted(async () => {
     await initTenantAuth()
   }
   await loadAvailableSubagents()
-  await loadSessions(1)
+  // 进入列表强制刷新：待答徽标需反映最新 waiting 事实（前端内存缓存与
+  // 后端 30s TTL 都会滞后，评审 P2-5；不做周期轮询）。
+  await loadSessions(1, true)
 })
 </script>
