@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 import canonicalize from 'canonicalize'
-import { createOfflinePackage, filesUnder, sha256, zipBytes } from '../package.mjs'
+import { createOfflinePackage, filesUnder, sha256, zipBytes, main } from '../package.mjs'
 
 test('release signature binds inner payload and full canonical manifest, with no self hash', async () => {
   const pair = generateKeyPairSync('ed25519')
@@ -22,6 +22,12 @@ test('release signature binds inner payload and full canonical manifest, with no
   assert.equal(verify(null, Buffer.from(canonicalize(unsigned)), pair.publicKey, Buffer.from(signature.slice(7), 'base64')), true)
   unsigned.package_digest = 'sha256:' + '0'.repeat(64)
   assert.equal(verify(null, Buffer.from(canonicalize(unsigned)), pair.publicKey, Buffer.from(signature.slice(7), 'base64')), false)
+})
+
+test('test packaging refuses known key ids before generating a random signer or touching output', async () => {
+  for (const args of [[], ['--test-key-id', 'aid-isolated-boss-ps-20261015-r15']]) {
+    await assert.rejects(main(['--test', ...args]), /already registered; use a unique --test-key-id/)
+  }
 })
 
 test('required files describes actual relocated payload bytes and rejects directory links', () => {

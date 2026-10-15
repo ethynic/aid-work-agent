@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "roots": [
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-dev-only",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA6qcYU9/4HL55MqiIhGjS8aPZTlDzqPxd3UlhidPRqCY=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.boss-recruiting",
+        "ai.aidwork.weixin",
+        "ai.aidwork.wecom"
+      ]
+    },
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-runtime-trial-r3-final",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAiq/R7//YmjYq1WuMJQg5baXdBLZbJvnzoc07KYAkfSA=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.boss-recruiting",
+        "ai.aidwork.weixin",
+        "ai.aidwork.wecom"
+      ]
+    },
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-runtime-trial-r9-final-v035",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA4Ko686XZ6rSqFLaqeSIG8gjBzf032iwUb7IhNpsChtc=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.boss-recruiting",
+        "ai.aidwork.weixin",
+        "ai.aidwork.wecom"
+      ]
+    },
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-boss-ps-20261015-r15",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAZ4Cqyn6W+4gtViA0sQt7h0zIKaH5bEfAokyuviRKgXw=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.boss-recruiting"
+      ]
+    }
+  ],
+  "profile": "acceptance"
+}

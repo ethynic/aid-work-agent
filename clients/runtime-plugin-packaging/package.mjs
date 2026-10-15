@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import canonicalize from 'canonicalize'
 import yazl from 'yazl'
+import { assertUnusedAcceptanceTestKeyId } from '../agent-desktop/scripts/prepare-runtime.mjs'
 
 const root = dirname(fileURLToPath(import.meta.url))
 const clients = resolve(root, '..')
@@ -132,14 +133,18 @@ export async function main(argv) {
     if (!Object.hasOwn(allowed, key) || !argv[index + 1]) throw new Error('Invalid packaging arguments')
     options[allowed[key]] = argv[++index]
   }
+  let testKeyId
+  if (options.test && !options.signer) {
+    if (options.test_key_id && !/^aid-isolated-[a-z0-9-]{1,80}$/.test(options.test_key_id)) throw new Error('Invalid isolated test key id')
+    testKeyId = assertUnusedAcceptanceTestKeyId(options.test_key_id ?? 'aid-isolated-dev-only')
+  }
   if (!options.node || !existsSync(options.node)) throw new Error('Pass the approved fixed Node executable with --node')
   const nodeFacts = JSON.parse(execFileSync(options.node, ['-p', 'JSON.stringify({version:process.versions.node,abi:process.versions.modules,platform:process.platform,arch:process.arch})'], { encoding: 'utf8' }))
   if (nodeFacts.version !== '22.23.3' || nodeFacts.abi !== '127' || nodeFacts.platform !== 'win32' || nodeFacts.arch !== 'x64') throw new Error('Packaging requires approved Node 22.23.3 win32-x64 ABI127')
   let signer
   if (options.test && !options.signer) {
     const pair = generateKeyPairSync('ed25519')
-    if (options.test_key_id && !/^aid-isolated-[a-z0-9-]{1,80}$/.test(options.test_key_id)) throw new Error('Invalid isolated test key id')
-    signer = { key_id: options.test_key_id ?? 'aid-isolated-dev-only', private_key: pair.privateKey.export({ format: 'pem', type: 'pkcs8' }) }
+    signer = { key_id: testKeyId, private_key: pair.privateKey.export({ format: 'pem', type: 'pkcs8' }) }
     const output = resolve(options.output ?? join(root, 'release'))
     mkdirSync(output, { recursive: true })
     writeFileSync(join(output, 'ISOLATED-TEST-TRUST-ROOT.json'), JSON.stringify({ schemaVersion: 1, profile: 'acceptance', roots: [{ test_only: true, key_id: signer.key_id, public_key: pair.publicKey.export({ format: 'pem', type: 'spki' }), providers: ['ai.aidwork.boss-recruiting', 'ai.aidwork.weixin', 'ai.aidwork.wecom'] }] }, null, 2) + '\n', { flag: 'wx' })

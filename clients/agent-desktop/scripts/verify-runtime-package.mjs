@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node
 import os from 'node:os'
 import path from 'node:path'
 import { extractAll, listPackage } from '@electron/asar'
-import { desktopRoot, filesUnder, nodeFacts, normalizeTrust, assertNoSensitiveAssets, validateReleaseInputs, verifyHostDependencyGraph, authenticodeStatus } from './prepare-runtime.mjs'
+import { desktopRoot, filesUnder, nodeFacts, assertRegisteredPublisherTrust, assertNoSensitiveAssets, validateReleaseInputs, verifyHostDependencyGraph, authenticodeStatus } from './prepare-runtime.mjs'
 import { resolveProductConfiguration } from '../dist/electron/productConfiguration.js'
 
 const output = path.resolve(process.argv[2] ?? path.join(desktopRoot, 'build/runtime-release/acceptance'))
@@ -21,7 +21,7 @@ const resources = path.join(output, 'win-unpacked/resources')
 assertNoSensitiveAssets(resources)
 const product = resolveProductConfiguration({ resourcesPath: resources, isPackaged: true, appDataPath: path.resolve(output, 'identity-validation') })
 if (product.kind !== 'runtime' || product.profile !== manifest.profile || product.appId !== manifest.appId || product.productName !== manifest.productName) throw new Error('Packaged Runtime identity/profile mismatch')
-normalizeTrust(JSON.parse(readFileSync(product.trustRootsPath, 'utf8')), product.profile)
+assertRegisteredPublisherTrust(JSON.parse(readFileSync(product.trustRootsPath, 'utf8')), product.profile)
 const facts = nodeFacts(product.nodeExecutable)
 const resourceManifest = JSON.parse(readFileSync(path.join(resources, 'runtime/resource-manifest.json'), 'utf8'))
 const runtimeFiles = filesUnder(path.join(resources, 'runtime'), 'runtime/').filter(file => file.path !== 'runtime/resource-manifest.json')

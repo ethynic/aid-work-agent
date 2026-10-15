@@ -8,6 +8,10 @@ export const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.u
 export const resourcesRoot = path.join(desktopRoot, 'build/runtime-resources')
 export const nodeSpecification = JSON.parse(readFileSync(path.join(desktopRoot, 'scripts/runtime-node-resources.json'), 'utf8'))
 export const digest = bytes => createHash('sha256').update(bytes).digest('hex')
+export const acceptanceTrustRegistryPath = path.resolve(desktopRoot, '../runtime-plugin-packaging/trust/acceptance-roots.json')
+export const runtimeR15TrustSnapshotPath = path.resolve(desktopRoot, '../runtime-plugin-packaging/trust/history/runtime-r15.json')
+// User-restored original r15 trust file; a truncated snapshot cannot redefine history.
+export const runtimeR15TrustSnapshotSha256 = 'bc1bdb8f0b949ec54f941821f1470207d913f6c2fef64c82646b356104d7f328'
 // app-builder-lib uses endsWith, not glob matching. Exclude this exact Windows
 // resource suffix while retaining its default application/installer signing.
 export const runtimeNodeSignExclusion = '!\\runtime\\node\\win-x64\\node.exe'
@@ -63,11 +67,62 @@ export function normalizeTrust(input, profile) {
         || typeof root.public_key !== 'string' || !/^-----BEGIN PUBLIC KEY-----\r?\n(?:[A-Za-z0-9+/]{1,64}={0,2}\r?\n)+-----END PUBLIC KEY-----\r?\n?$/.test(root.public_key)
         || !Array.isArray(root.providers) || !root.providers.length
         || root.providers.some(provider => typeof provider !== 'string' || !provider.trim())
+        || [root.key_id, ...root.providers].some(value => /-----BEGIN (?:RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----/.test(value))
         || createPublicKey(root.public_key).asymmetricKeyType !== 'ed25519') throw new Error('Invalid publisher trust')
     if (profile === 'production' && root.test_only) throw new Error('Production build cannot contain test publisher trust')
     keys.add(root.key_id)
   }
   return trust
+}
+
+function publisherRootIdentity(root) {
+  return JSON.stringify([
+    createPublicKey(root.public_key).export({ type: 'spki', format: 'der' }).toString('base64'),
+    [...new Set(root.providers)].sort(), root.test_only,
+  ])
+}
+
+/** Shared by exact build checks and append-only registration; key_id stays bound to key and scope. */
+export function assertHistoricalTrustCoverage(registry, historical) {
+  normalizeTrust(registry, 'acceptance')
+  normalizeTrust(historical, 'acceptance')
+  const registered = new Map(registry.roots.map(root => [root.key_id, publisherRootIdentity(root)]))
+  if (historical.roots.some(root => registered.get(root.key_id) !== publisherRootIdentity(root))) {
+    throw new Error('Acceptance publisher registry omits or changes a historical root, key, scope or test_only flag')
+  }
+  return registry
+}
+
+export function loadAcceptanceTrustRegistry(registryPath = acceptanceTrustRegistryPath, snapshotPath = runtimeR15TrustSnapshotPath, historyDirectory = path.dirname(snapshotPath)) {
+  const snapshot = readFileSync(snapshotPath)
+  if (digest(snapshot) !== runtimeR15TrustSnapshotSha256) throw new Error('Historical r15 publisher trust snapshot SHA-256 mismatch')
+  const registry = assertHistoricalTrustCoverage(JSON.parse(readFileSync(registryPath, 'utf8')), JSON.parse(snapshot.toString('utf8')))
+  // Every delivered release joins the compatibility baseline, including roots added after r15.
+  for (const name of readdirSync(historyDirectory).filter(name => name.endsWith('.roots.json')).sort()) {
+    const file = path.join(historyDirectory, name)
+    const stat = lstatSync(file)
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Historical publisher trust snapshot must be a regular file')
+    let published
+    try { published = JSON.parse(readFileSync(file, 'utf8')) } catch { throw new Error('Invalid historical publisher trust snapshot JSON') }
+    assertHistoricalTrustCoverage(registry, published)
+  }
+  return registry
+}
+
+export function assertRegisteredPublisherTrust(input, profile, registry) {
+  const trust = normalizeTrust(input, profile)
+  // Production continues to use only its explicit trust input, never acceptance roots.
+  if (profile !== 'acceptance') return trust
+  const expected = registry ?? loadAcceptanceTrustRegistry()
+  assertHistoricalTrustCoverage(trust, expected)
+  if (trust.roots.length !== expected.roots.length) throw new Error('Acceptance publisher trust contains unregistered roots; register new roots explicitly first')
+  return trust
+}
+
+export function assertUnusedAcceptanceTestKeyId(keyId, registry = loadAcceptanceTrustRegistry()) {
+  normalizeTrust(registry, 'acceptance')
+  if (registry.roots.some(root => root.key_id === keyId)) throw new Error('Test publisher key_id is already registered; use a unique --test-key-id to avoid replacing an existing signing key')
+  return keyId
 }
 
 function safeRemoveBuild(file) {
@@ -167,7 +222,7 @@ export async function main(argv) {
     hostBytes = readFileSync(path.resolve(options['host-package']))
     if (digest(hostBytes) !== options['host-sha256']) throw new Error('Host package SHA-256 mismatch')
     trustBytes = readFileSync(path.resolve(options['trust-roots']))
-    normalizeTrust(JSON.parse(trustBytes.toString('utf8')), options.profile)
+    assertRegisteredPublisherTrust(JSON.parse(trustBytes.toString('utf8')), options.profile)
   }
   const node = await prepareNode(options)
   if (options['node-only']) { console.log(JSON.stringify({ node: node.node, facts: nodeFacts(node.node), archiveSha256: nodeSpecification.sha256 })); return }

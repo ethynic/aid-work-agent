@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { desktopRoot, resourcesRoot, filesUnder, nodeFacts, normalizeTrust, assertNoSensitiveAssets, verifyHostDependencyGraph, runtimeNodeSignExclusion, authenticodeStatus } from './prepare-runtime.mjs'
+import { desktopRoot, resourcesRoot, filesUnder, nodeFacts, assertRegisteredPublisherTrust, assertNoSensitiveAssets, verifyHostDependencyGraph, runtimeNodeSignExclusion, authenticodeStatus } from './prepare-runtime.mjs'
 import { load as loadYaml } from 'js-yaml'
 import { resolveProductConfiguration } from '../dist/electron/productConfiguration.js'
 import { assertReleaseSigning } from '../dist/electron/releasePolicy.js'
@@ -13,7 +13,7 @@ process.chdir(desktopRoot)
 const source = JSON.parse(readFileSync(path.join(resourcesRoot, 'config/runtime-product.json'), 'utf8'))
 if (source.productKind !== 'runtime' || source.profile !== profile) throw new Error('Prepared Runtime product/profile does not match packaging invocation')
 const product = resolveProductConfiguration({ resourcesPath: resourcesRoot, isPackaged: true, appDataPath: path.resolve('build/identity-validation') })
-normalizeTrust(JSON.parse(readFileSync(product.trustRootsPath, 'utf8')), profile)
+assertRegisteredPublisherTrust(JSON.parse(readFileSync(product.trustRootsPath, 'utf8')), profile)
 assertNoSensitiveAssets(resourcesRoot)
 nodeFacts(product.nodeExecutable)
 assertReleaseSigning(profile === 'production' ? 'release' : 'dev', process.env)
