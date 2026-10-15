@@ -198,6 +198,14 @@ flowchart TB
 
 微信客服保留原渠道合并、锁及回发边界，发送后由原渠道释放队列占有；Runner 共用通用执行 claim，终态由 finalizer 释放，不将 claim 转为 KF 投递 gate。恢复核验原 claim 并取得新 attempt/lease；原队列取消重跑须先确认原 Runner 终态与 claim 释放，不绕过尚未确认的执行或未知外部效果。飞书与钉钉在各自接入时核对原边界，并用并发、取消重跑和发送失败用例验证。
 
+### 5.5 执行任务取消与worker生命周期隔离（2026-10-15）
+
+执行attempt因心跳/租约失败取消时，execute仍须完成原有中断、子树drain及trace/资源收尾，并向任务边界传播CancelledError。调度器只在执行Task已经done且cancelled时回收该attempt，不将它解释为worker关闭；同一worker其他任务继续执行，释放的并发位可以接收后续任务。该attempt计入max_tasks已处理次数，不自动重放原业务。
+
+调度器对非取消Task使用result()提取终态；意外异常继续暴露，不通过广泛捕获BaseException静默隐藏。常驻模式与--once遵守相同规则，--once无任务返回0，有取消任务收尾后返回1。调度主协程自身被cancel时继续传播，显式stop/SIGTERM仍取消并等待所有owned任务，然后关闭共享资源。
+
+本次只修复worker进程内的Task回收边界，不改变持久状态、租约/恢复授权、计费、Device API、wire schema和渠道文案；丢失执行权的旧attempt不得继续调用模型或工具。验收必须证明双任务隔离、后续接单、取消收尾等待和主动服务关闭，不能只断言“未抛异常”。实施记录见[取消隔离修复计划](../plans/plan-runner-task-cancellation-isolation.md)，起因见[故障分析](../incidents/wecom-kf-excel-read-runner-interrupted-20261015.md)。
+
 ## 6. 查询基础、事件订阅与结果
 
 首个 Web 闭环通过主动查询获得状态、公开进度和结果；活跃页面有限频查询，终态停止，网络错误退避，页面卸载只停止观察。实时 SSE 随后增强，任何通知缺失都通过查询纠正。公开快照包含 revision，消费者对齐累计输出，不能反复追加全文。

@@ -684,12 +684,18 @@ class RunnerWorker:
                     if once:
                         break
                 if once:
-                    await asyncio.gather(*tasks)
+                    if tasks:
+                        await asyncio.wait(tasks)
+                    for task in tasks:
+                        if not task.cancelled():
+                            task.result()
                     return len(tasks)
                 if tasks:
                     done, tasks = await asyncio.wait(tasks,timeout=self.config.poll_seconds,return_when=asyncio.FIRST_COMPLETED)
                     for task in done:
-                        await task
+                        # 单attempt取消不能终止worker；其他异常仍由result()暴露。
+                        if not task.cancelled():
+                            task.result()
                     completed += len(done)
                 else:
                     try:
