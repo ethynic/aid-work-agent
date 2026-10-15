@@ -12,9 +12,10 @@
  *     仍并列以 msg_id（入库序）稳定兜底。入库序（py 返回序）与展示序在此分离——游标推进
  *     只依据 py 的 next_cursor_id（返回集最大 message_id），与本组件展示排序无关（评审
  *     v4 #40：迟到回退消息按时间排前，但不把游标推进到未返回记录）。
- *  3. 游标编解码：'v1|<account>|<conversationId>|<lastMessageId>'，account/conversationId
+ *  3. 游标编解码：'v2|<account>|<conversationId>|<generation>|<anchor>|<lastMessageId>'，account/conversationId
  *     经 encodeURIComponent 转义（'|' 等保留字符安全，字段内不可能引入分隔符）；绑定
- *     {account, conversationId} 校验供 2.2 的 CURSOR_UNSUPPORTED 判定。
+ *     {account, conversationId, generation} 校验供 2.2 的 CURSOR_UNSUPPORTED 判定；
+ *     非零水位携带消息稳定字段摘要，检测同文件重建后的水位复用。
  *
  * 防御语义（对 py 输出不信任的显式边界）：
  * - side：sender_id 与 selfUserId 严格字符串相等（不 trim；大小写敏感），非字符串一律 'peer'。
@@ -35,7 +36,7 @@ export const CONFIRMED_SYSTEM_TYPES: readonly number[] = [1017, 38, 31]
 export const NON_TEXT_PLACEHOLDER = '[非文本消息]'
 
 /** 游标格式版本前缀（绑定格式版本；语义变更须升版本） */
-export const CURSOR_VERSION = 'v1'
+export const CURSOR_VERSION = 'v2'
 
 /** py query task=messages 的行契约（drivers/py/wecom_localdb.py _message_row） */
 export interface RawMessageRow {
@@ -133,7 +134,13 @@ export function normalizeMessages(
     if (a.time !== b.time) return a.time < b.time ? -1 : 1 // 'YYYY-MM-DD HH:MM:SS' 字典序=时序
     const sa = a.server_id ?? ''
     const sb = b.server_id ?? ''
-    if (sa !== sb) return sa < sb ? -1 : 1
+    if (sa !== sb) {
+      if (/^\d+$/.test(sa) && /^\d+$/.test(sb)) {
+        const left = BigInt(sa)
+        const right = BigInt(sb)
+        if (left !== right) return left < right ? -1 : 1
+      } else return sa < sb ? -1 : 1
+    }
     return a.msg_id - b.msg_id
   })
   return out
@@ -146,14 +153,16 @@ export interface ReadCursor {
   account: string
   conversationId: string
   lastMessageId: number
+  generation: string
+  anchor: string
 }
 
 export type CursorDecodeResult =
-  | { ok: true; account: string; conversationId: string; lastMessageId: number }
+  | ({ ok: true } & ReadCursor)
   | { ok: false; reason: 'malformed' }
 
 /**
- * 编码游标：'v1|<account>|<conversationId>|<lastMessageId>'（字段 encodeURIComponent 转义，
+ * 编码游标：'v2|<account>|<conversationId>|<generation>|<anchor>|<lastMessageId>'（字段 encodeURIComponent 转义，
  * 保留字符含 '|' 均安全）。入参非法（空 account/conversationId、非安全整数 lastMessageId）
  * 抛 TypeError——属调用方编程错误而非数据错误；数据侧合法性由 decodeCursor 判定。
  */
@@ -167,10 +176,16 @@ export function encodeCursor(cursor: ReadCursor): string {
   if (!isSafeInt(cursor.lastMessageId) || cursor.lastMessageId < 0) {
     throw new TypeError('encodeCursor: lastMessageId 必须为非负安全整数')
   }
+  if (!/^[0-9a-f]{64}$/.test(cursor.generation) ||
+      !(cursor.lastMessageId === 0 ? cursor.anchor === '' : /^[0-9a-f]{64}$/.test(cursor.anchor))) {
+    throw new TypeError('encodeCursor: 数据库代际或水位锚点非法')
+  }
   return [
     CURSOR_VERSION,
     encodeURIComponent(cursor.account),
     encodeURIComponent(cursor.conversationId),
+    cursor.generation,
+    cursor.anchor,
     String(cursor.lastMessageId),
   ].join('|')
 }
@@ -179,8 +194,8 @@ export function encodeCursor(cursor: ReadCursor): string {
 export function decodeCursor(s: string): CursorDecodeResult {
   if (typeof s !== 'string') return { ok: false, reason: 'malformed' }
   const parts = s.split('|')
-  if (parts.length !== 4) return { ok: false, reason: 'malformed' }
-  const [version, accountEnc, convEnc, idRaw] = parts as [string, string, string, string]
+  if (parts.length !== 6) return { ok: false, reason: 'malformed' }
+  const [version, accountEnc, convEnc, generation, anchor, idRaw] = parts as [string, string, string, string, string, string]
   if (version !== CURSOR_VERSION) return { ok: false, reason: 'malformed' }
   if (accountEnc.length === 0 || convEnc.length === 0) return { ok: false, reason: 'malformed' }
   let account: string
@@ -193,13 +208,15 @@ export function decodeCursor(s: string): CursorDecodeResult {
   }
   if (!/^\d+$/.test(idRaw)) return { ok: false, reason: 'malformed' }
   const lastMessageId = Number(idRaw)
-  if (!Number.isSafeInteger(lastMessageId)) return { ok: false, reason: 'malformed' }
-  return { ok: true, account, conversationId, lastMessageId }
+  if (!Number.isSafeInteger(lastMessageId) || !/^[0-9a-f]{64}$/.test(generation) ||
+      !(lastMessageId === 0 ? anchor === '' : /^[0-9a-f]{64}$/.test(anchor))) return { ok: false, reason: 'malformed' }
+  if (!account || !conversationId) return { ok: false, reason: 'malformed' }
+  return { ok: true, account, conversationId, lastMessageId, generation, anchor }
 }
 
 export type CursorMatchResult =
   | { ok: true }
-  | { ok: false; reason: 'format-mismatch' | 'account-mismatch' | 'conversation-mismatch' }
+  | { ok: false; reason: 'format-mismatch' | 'account-mismatch' | 'conversation-mismatch' | 'generation-mismatch' }
 
 /**
  * 游标绑定校验（供 2.2 的 CURSOR_UNSUPPORTED 判定）：格式坏 → 'format-mismatch'；
@@ -208,13 +225,16 @@ export type CursorMatchResult =
  */
 export function ensureCursorMatches(
   cursor: string,
-  bound: { account: string; conversationId: string },
+  bound: { account: string; conversationId: string; generation?: string },
 ): CursorMatchResult {
   const decoded = decodeCursor(cursor)
   if (!decoded.ok) return { ok: false, reason: 'format-mismatch' }
   if (decoded.account !== bound.account) return { ok: false, reason: 'account-mismatch' }
   if (decoded.conversationId !== bound.conversationId) {
     return { ok: false, reason: 'conversation-mismatch' }
+  }
+  if (bound.generation !== undefined && decoded.generation !== bound.generation) {
+    return { ok: false, reason: 'generation-mismatch' }
   }
   return { ok: true }
 }

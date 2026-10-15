@@ -42,11 +42,11 @@
 #   query --workdir <dir> --task <t> [参数]
 #       C8 读库查询（任务 1.8）：对 workdir 内【已解密明文库】做只读 SQL（uri ro，不写不改）。
 #       message.db.dec.db 必需（兼容 decrypt 自然产物命名 message.dec.db）；user.db.dec.db /
-#       session.db.dec.db 仅 resolve 需要（缺失 → 该来源标 unavailable，不报错）。
+#       session.db.dec.db 用于 resolve；context 还需要 user 库确认本人 ID 映射。
 #       任务：
-#         messages --conv <id> [--after-id N] [--limit N] [--since <秒>]
-#           conversation_id 匹配且 message_id > after-id（缺省 0），按 message_id 升序
-#           （=水位入库序）取 limit 条（缺省 100）；since 为 send_time（秒）可选过滤。
+#         messages --conv <id> [--after-id N] [--anchor <摘要>] [--limit N] [--since <秒>]
+#           未传 after-id 取最近 limit 条；显式 after-id（含 0）按 message_id 升序取
+#           大于该水位的 limit 条（缺省 100）；since 为 send_time（秒）可选过滤。
 #           每行输出 message_id/server_id/sequence/sender_id/conversation_id/content_type/
 #           send_time/flag/text/trusted——text/trusted 由 extract_content 就地提取（非文本
 #           text=null）。附 next_cursor_id = 本批次实际返回行的最大 message_id（空批次
@@ -61,13 +61,15 @@
 #           CONFIRMED_SYSTEM_TYPES 排除表；--exclude-types 为【追加】语义，不缩减基础表）。
 #           供待回复判定（TS 侧按 sender_id 判断方向）；排除表只影响本任务，不影响
 #           messages 任务返回。全是系统消息 → last_participating=null。
-#         resolve --name <名称>
+#         context --account <目录账号>
+#           user_table.id 必须唯一命中目录账号；返回字符串 self_user_id 与 schema_version。
+#         resolve --name <名称> [--account <已核实本人ID>]
 #           先查 session 库 conversation_table（R: 群名精确匹配，多候选全返回——name 无
 #           唯一索引需防重），再查 user 库 user_table（name/别名/备注列精确匹配；列名经
 #           PRAGMA table_info 运行时确认，不猜）。输出 {candidates: [{source,
 #           conversation_id, name, …}], ambiguous, sources}；列名无法确认 → 该来源
-#           schema-unknown。user 候选附 user_id，conversation_id 置 null——单聊会话 id
-#           （S:<from>_<to>）需结合本人账号组合，py 侧无法单独决定方向，由 TS 消费侧完成。
+#           schema-unknown。未传 account 时 user 候选 conversation_id 为 null；传入已核实
+#           本人 ID 时只返回 message/session 中实际存在的 S 会话，未建会话的同名候选仍保留。
 #       库缺失/SQL 错误 → {ok:false, error,…} 不抛；缺表/缺列（schema 不兼容）→ 稳定错误码
 #       SCHEMA_UNSUPPORTED（评审 v6，doctor 归 compat）。本模式无密钥参与，输出不走 32-hex
 #       兜底脱敏（业务文本不得被破坏，见 emit redact 参数）。
@@ -863,6 +865,9 @@ def _table_columns(conn, table):
 def _message_row(row):
     """message_table 行 → C8 契约投影（content 就地提取为 text/trusted，不输出原始 bytes）。"""
     rec = dict(zip(QUERY_MESSAGE_COLUMNS, row))
+    for key in ('server_id', 'sender_id', 'conversation_id'):
+        if rec[key] is not None:
+            rec[key] = str(rec[key])  # SQLite INTEGER 可能超出 JS 安全整数，身份字段不经 Number。
     extracted = extract_content(rec.get('content'), rec.get('content_type'))
     rec['text'] = extracted['text']
     rec['trusted'] = extracted['trusted']
@@ -872,22 +877,36 @@ def _message_row(row):
     return {k: rec.get(k) for k in order}
 
 
-def _query_messages(conn, conv, after_id, limit, since):
-    """messages 任务：conversation_id 匹配 ∧ message_id > after-id（∧ send_time ≥ since），
-    按 message_id 升序（入库序=水位序）取 limit 条。next_cursor_id 只认返回集末端
-    （评审 v5：展示排序不推进游标），空批次 = after-id 原值。排除表不影响本任务。"""
+def _message_anchor(row):
+    # 服务端确认可能补齐 server_id/sequence；包装字段不是稳定消息身份。
+    fields = [row.get(k) for k in ('message_id', 'sender_id', 'conversation_id', 'send_time', 'text')]
+    return hashlib.sha256(json.dumps(fields, separators=(',', ':')).encode('utf-8')).hexdigest()
+
+
+def _query_messages(conn, conv, after_id, limit, since, anchor=None):
+    """首次取最近 limit 条；显式 after-id（含 0）取水位之后最早 limit 条。
+    返回集按入库序，next_cursor_id 只认返回集末端；空批次保留原水位/锚点。
+    since 可选过滤，排除表不影响本任务。"""
     sql = ('SELECT %s FROM message_table WHERE conversation_id = ? AND message_id > ?'
            % ', '.join(QUERY_MESSAGE_COLUMNS))
-    params = [conv, after_id]
+    params = [conv, after_id if after_id is not None else 0]
+    if after_id is not None and after_id > 0 and anchor is not None:
+        previous = conn.execute('SELECT %s FROM message_table WHERE message_id=? AND conversation_id=?'
+                                % ', '.join(QUERY_MESSAGE_COLUMNS), (after_id, conv)).fetchone()
+        if previous is None or anchor != _message_anchor(_message_row(previous)):
+            return {'ok': False, 'error': 'CURSOR_STALE'}
     if since is not None:
         sql += ' AND send_time >= ?'
         params.append(since)
-    sql += ' ORDER BY message_id ASC LIMIT ?'
+    sql += ' ORDER BY message_id %s LIMIT ?' % ('DESC' if after_id is None else 'ASC')
     params.append(limit)
     messages = [_message_row(r) for r in conn.execute(sql, params).fetchall()]
-    next_cursor_id = messages[-1]['message_id'] if messages else after_id
+    if after_id is None:
+        messages.reverse()
+    next_cursor_id = messages[-1]['message_id'] if messages else (after_id or 0)
     return {'ok': True, 'task': 'messages', 'conversation_id': conv,
-            'count': len(messages), 'next_cursor_id': next_cursor_id, 'messages': messages}
+            'count': len(messages), 'next_cursor_id': next_cursor_id, 'messages': messages,
+            'next_anchor': _message_anchor(messages[-1]) if messages else (anchor or '')}
 
 
 def _query_conversations(conn):
@@ -971,7 +990,7 @@ def _resolve_conversation_table(conn, name):
         return 'schema-unknown', []
     rows = conn.execute('SELECT %s, %s FROM conversation_table WHERE %s = ?'
                         % (_qi(id_col), _qi('name'), _qi('name')), (name,)).fetchall()
-    candidates = [{'source': 'conversation_table', 'conversation_id': r[0], 'name': r[1],
+    candidates = [{'source': 'conversation_table', 'conversation_id': str(r[0]), 'name': r[1],
                    'matched_column': 'name'} for r in rows]
     return 'ok', candidates
 
@@ -1000,15 +1019,33 @@ def _resolve_user_table(conn, name):
             seen.add(r[0])
             candidates.append({
                 'source': 'user_table',
-                'conversation_id': r[1] if conv_col else None,
-                'user_id': r[0],
+                'conversation_id': str(r[1]) if conv_col and r[1] is not None else None,
+                'user_id': str(r[0]),
                 'name': r[2] if conv_col else r[1],
                 'matched_column': col,
             })
     return 'ok', candidates
 
 
-def _query_resolve(workdir, name):
+def _query_context(workdir, conn, account):
+    """只支持有直接 id 对应证据的本人映射；不猜 wid/公司 id 等其他字段。"""
+    path = _resolve_dec_db(workdir, 'user')
+    if path is None:
+        return {'ok': False, 'error': 'DB_UNREADABLE'}
+    user = _open_ro(path)
+    try:
+        if 'id' not in _table_columns(user, 'user_table'):
+            return {'ok': False, 'error': 'SCHEMA_UNSUPPORTED'}
+        rows = user.execute('SELECT CAST(id AS TEXT) FROM user_table WHERE CAST(id AS TEXT)=?', (account,)).fetchall()
+        if len(rows) != 1:
+            return {'ok': False, 'error': 'IDENTITY_UNCONFIRMED'}
+        return {'ok': True, 'self_user_id': rows[0][0],
+                'schema_version': conn.execute('PRAGMA schema_version').fetchone()[0]}
+    finally:
+        user.close()
+
+
+def _query_resolve(workdir, name, account=None):
     """resolve 任务：群名经 session 库、人名经 user 库。对应 .dec.db 缺失 → 该来源标
     unavailable（不报错）；零候选 → ambiguous=false 空列表；多候选 → ambiguous=true 全返回。
     message 解密库在位仍为 workdir 契约（缺失已在 cmd_query 报 DB_UNREADABLE）。"""
@@ -1027,6 +1064,34 @@ def _query_resolve(workdir, name):
             conn.close()
         sources[source] = status
         candidates.extend(found)
+    if account is not None:
+        # 只选实际存在的 S: 会话；不因知道两端用户 id 就虚构一个 conversation_id。
+        msg = _open_ro(_resolve_dec_db(workdir, 'message'))
+        session_path = _resolve_dec_db(workdir, 'session')
+        session = _open_ro(session_path) if session_path else None
+        resolved = []
+        try:
+            id_col = (_find_conversation_id_column(session, 'conversation_table',
+                       _table_columns(session, 'conversation_table')) if session else None)
+            for item in candidates:
+                if item['source'] != 'user_table':
+                    resolved.append(item)
+                    continue
+                ids = ('S:%s_%s' % (account, item['user_id']), 'S:%s_%s' % (item['user_id'], account))
+                existing = {str(r[0]) for r in msg.execute(
+                    'SELECT DISTINCT conversation_id FROM message_table WHERE conversation_id IN (?,?)', ids)}
+                if session and id_col:
+                    existing.update(str(r[0]) for r in session.execute(
+                        'SELECT %s FROM conversation_table WHERE %s IN (?,?)' % (_qi(id_col), _qi(id_col)), ids))
+                if existing:
+                    resolved.extend({**item, 'conversation_id': cid} for cid in sorted(existing))
+                else:
+                    resolved.append({**item, 'conversation_id': None})  # 同名但无历史者仍须参与身份消歧。
+            candidates = resolved
+        finally:
+            msg.close()
+            if session:
+                session.close()
     return {'ok': True, 'task': 'resolve', 'name': name, 'candidates': candidates,
             'ambiguous': len(candidates) > 1, 'sources': sources}
 
@@ -1037,14 +1102,16 @@ def _parse_query_args(args):
     task = None
     conv = None
     name = None
-    after_id = 0
+    after_id = None  # None=首次最近N；显式0仍是增量，不能把空会话游标当首次。
+    account = None
+    anchor = None
     limit = DEFAULT_QUERY_LIMIT
     since = None
     exclude_types = []
     i = 0
     while i < len(args):
         arg = args[i]
-        if arg in ('--workdir', '--task', '--conv', '--name') and i + 1 < len(args):
+        if arg in ('--workdir', '--task', '--conv', '--name', '--account', '--anchor') and i + 1 < len(args):
             value = args[i + 1]
             if arg == '--workdir':
                 workdir = value
@@ -1052,6 +1119,10 @@ def _parse_query_args(args):
                 task = value
             elif arg == '--conv':
                 conv = value
+            elif arg == '--account':
+                account = value
+            elif arg == '--anchor':
+                anchor = value
             else:
                 name = value
             i += 2
@@ -1091,13 +1162,15 @@ def _parse_query_args(args):
             return None
     if not workdir or not task:
         return None
-    if task not in ('messages', 'conversations', 'last-per-conv', 'resolve'):
+    if task not in ('messages', 'conversations', 'last-per-conv', 'resolve', 'context'):
         return None
     if task == 'messages' and not conv:
         return None
     if task == 'resolve' and not name:
         return None
-    return task, workdir, conv, after_id, limit, since, exclude_types, name
+    if task == 'context' and not account:
+        return None
+    return task, workdir, conv, after_id, limit, since, exclude_types, name, account, anchor
 
 
 def cmd_query(args):
@@ -1108,7 +1181,7 @@ def cmd_query(args):
     parsed = _parse_query_args(args)
     if parsed is None:
         return {'ok': False, 'error': 'BAD_ARGS', 'message': QUERY_USAGE}
-    task, workdir, conv, after_id, limit, since, exclude_extra, name = parsed
+    task, workdir, conv, after_id, limit, since, exclude_extra, name, account, anchor = parsed
     msg_db = _resolve_dec_db(workdir, 'message')
     if msg_db is None:
         return {'ok': False, 'error': 'DB_UNREADABLE',
@@ -1120,12 +1193,14 @@ def cmd_query(args):
         return {'ok': False, 'error': 'DB_UNREADABLE', 'detail': '解密库只读打开失败：%s' % e}
     try:
         if task == 'messages':
-            return _query_messages(conn, conv, after_id, limit, since)
+            return _query_messages(conn, conv, after_id, limit, since, anchor)
+        if task == 'context':
+            return _query_context(workdir, conn, account)
         if task == 'conversations':
             return _query_conversations(conn)
         if task == 'last-per-conv':
             return _query_last_per_conv(conn, exclude_extra)
-        return _query_resolve(workdir, name)  # task == 'resolve'（参数解析已保证）
+        return _query_resolve(workdir, name, account)  # task == 'resolve'（参数解析已保证）
     except sqlite3.OperationalError as e:
         # 缺表/缺列（sqlite3.OperationalError "no such table/column"）= 真实 schema 不支持：
         # 返回稳定错误码 SCHEMA_UNSUPPORTED（评审 v6），detail 保留原始消息（sqlite 消息

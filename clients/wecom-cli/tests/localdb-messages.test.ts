@@ -103,7 +103,7 @@ test('kind 映射：0/2 → text + 正文；其余类型占位 + kind 省略（v
 
 test('排除表：CONFIRMED_SYSTEM_TYPES 冻结值、isParticipating、system 标注', () => {
   assert.deepEqual([...CONFIRMED_SYSTEM_TYPES], [1017, 38, 31])
-  assert.equal(CURSOR_VERSION, 'v1')
+  assert.equal(CURSOR_VERSION, 'v2')
   for (const ct of [1017, 38, 31]) {
     assert.equal(isParticipating(ct), false, String(ct))
   }
@@ -174,37 +174,31 @@ test('防御：非对象行 / 无有效 message_id 的行丢弃，不抛出', ()
   assert.equal(normalizeMessages([], SELF).length, 0)
 })
 
+const CURSOR_FIELDS = { generation: 'a'.repeat(64), anchor: 'b'.repeat(64) }
+
 test('cursor roundtrip：普通值 / 含 | 与中文的 account/conversationId / message_id=0', () => {
   const cases = [
     { account: SELF, conversationId: 'S:1_2', lastMessageId: 42 },
     { account: 'a|b', conversationId: 'R:wrTdK群|名', lastMessageId: 0 },
     { account: '陆伟账号', conversationId: 'R:项目群', lastMessageId: 197 },
-  ]
+  ].map(c => ({ ...CURSOR_FIELDS, ...c, anchor: c.lastMessageId === 0 ? '' : CURSOR_FIELDS.anchor }))
   for (const c of cases) {
     const encoded = encodeCursor(c)
     assert.ok(encoded.startsWith(`${CURSOR_VERSION}|`), encoded)
-    assert.equal(encoded.split('|').length, 4, '转义后不得引入分隔符')
+    assert.equal(encoded.split('|').length, 6, '转义后不得引入分隔符')
     assert.deepEqual(decodeCursor(encoded), { ok: true, ...c })
   }
 })
 
 test('decodeCursor：malformed 全形态（版本/段数/空字段/非数字/负数/溢出/坏转义/垃圾串）', () => {
-  const good = encodeCursor({ account: 'a', conversationId: 'c', lastMessageId: 1 })
+  const good = encodeCursor({ ...CURSOR_FIELDS, account: 'a', conversationId: 'c', lastMessageId: 1 })
   assert.equal(decodeCursor(good).ok, true)
+  const parts = good.split('|')
+  const changed = (index: number, value: string) => parts.map((part, i) => i === index ? value : part).join('|')
   const malformed = [
-    '',
-    'garbage',
-    'v2|a|c|1', // 版本不符
-    'v1|a|c', // 段数不足
-    'v1|a|c|1|extra', // 段数超出
-    'v1||c|1', // 空 account
-    'v1|a||1', // 空 conversationId
-    'v1|a|c|x', // 非数字
-    'v1|a|c|-1', // 负数
-    'v1|a|c|1.5', // 小数
-    'v1|a|c|9007199254740993', // 超出安全整数
-    'v1|%zz|c|1', // 坏转义序列
-    `${good} `, // 尾随空白（严格形态，不宽容）
+    '', 'garbage', 'v1|a|c|1', parts.slice(1).join('|'), `${good}|extra`,
+    changed(1, ''), changed(2, ''), changed(1, '%zz'), changed(3, 'no-generation'),
+    changed(4, ''), changed(5, '-1'), changed(5, '1.5'), changed(5, '9007199254740993'), `${good} `,
   ]
   for (const s of malformed) {
     const r = decodeCursor(s)
@@ -213,33 +207,33 @@ test('decodeCursor：malformed 全形态（版本/段数/空字段/非数字/负
 })
 
 test('encodeCursor：非法入参抛 TypeError（编程错误），不影响 decode 侧容错', () => {
-  assert.throws(() => encodeCursor({ account: '', conversationId: 'c', lastMessageId: 1 }), TypeError)
-  assert.throws(() => encodeCursor({ account: 'a', conversationId: '', lastMessageId: 1 }), TypeError)
-  assert.throws(() => encodeCursor({ account: 'a', conversationId: 'c', lastMessageId: -1 }), TypeError)
+  assert.throws(() => encodeCursor({ ...CURSOR_FIELDS, account: '', conversationId: 'c', lastMessageId: 1 }), TypeError)
+  assert.throws(() => encodeCursor({ ...CURSOR_FIELDS, account: 'a', conversationId: '', lastMessageId: 1 }), TypeError)
+  assert.throws(() => encodeCursor({ ...CURSOR_FIELDS, account: 'a', conversationId: 'c', lastMessageId: -1 }), TypeError)
   assert.throws(
-    () => encodeCursor({ account: 'a', conversationId: 'c', lastMessageId: 1.5 }),
+    () => encodeCursor({ ...CURSOR_FIELDS, account: 'a', conversationId: 'c', lastMessageId: 1.5 }),
     TypeError,
   )
 })
 
 test('ensureCursorMatches：format/account/conversation 三类失配 + 命中', () => {
   const bound = { account: SELF, conversationId: 'S:1_2' }
-  assert.deepEqual(ensureCursorMatches(encodeCursor({ ...bound, lastMessageId: 7 }), bound), { ok: true })
+  assert.deepEqual(ensureCursorMatches(encodeCursor({ ...CURSOR_FIELDS, ...bound, lastMessageId: 7 }), bound), { ok: true })
   assert.deepEqual(
     ensureCursorMatches('garbage', bound),
     { ok: false, reason: 'format-mismatch' },
   )
   assert.deepEqual(
-    ensureCursorMatches(encodeCursor({ account: '999', conversationId: 'S:1_2', lastMessageId: 7 }), bound),
+    ensureCursorMatches(encodeCursor({ ...CURSOR_FIELDS, account: '999', conversationId: 'S:1_2', lastMessageId: 7 }), bound),
     { ok: false, reason: 'account-mismatch' },
   )
   assert.deepEqual(
-    ensureCursorMatches(encodeCursor({ account: SELF, conversationId: 'R:other', lastMessageId: 7 }), bound),
+    ensureCursorMatches(encodeCursor({ ...CURSOR_FIELDS, account: SELF, conversationId: 'R:other', lastMessageId: 7 }), bound),
     { ok: false, reason: 'conversation-mismatch' },
   )
   // 账号与会话都不符：按判定顺序只报首个失配维度（账号）
   assert.deepEqual(
-    ensureCursorMatches(encodeCursor({ account: '999', conversationId: 'R:other', lastMessageId: 7 }), bound),
+    ensureCursorMatches(encodeCursor({ ...CURSOR_FIELDS, account: '999', conversationId: 'R:other', lastMessageId: 7 }), bound),
     { ok: false, reason: 'account-mismatch' },
   )
 })

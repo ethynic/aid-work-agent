@@ -37,6 +37,7 @@ function makeSearchOp(
   const dir = mkdtempSync(join(tmpdir(), 'wecom-chat-search-test-'))
   tempDirs.push(dir)
   return createWecomChatSearchOperation({
+    accountFn: async () => null,
     runDriverFn,
     createRefFn: createRefFn ?? ((name, type, subtitle) => `ref:${type}:${name}:${subtitle ?? ''}`),
     artifactDirFn: () => dir,

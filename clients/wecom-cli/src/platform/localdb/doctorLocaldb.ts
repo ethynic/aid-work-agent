@@ -32,7 +32,7 @@
  *
  * deps 全组件可注入（每一步失败组合可模拟，测试零真实进程/文件依赖）。
  */
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { detectInstall, type InstallInfo, type DetectInstallDeps } from './version.js'
 import { detectRunning, type RunningInfo } from './running.js'
@@ -51,7 +51,7 @@ import { captureSnapshot, type CaptureSnapshotResult } from './snapshot.js'
 import { clearKey, loadKey, saveKey, type KeyBinding, type StoredKey } from './keystore.js'
 import { probeLoginState, type LoginProbeResult } from './login.js'
 import { logLocaldbEvent, type LocaldbLogEvent } from './log.js'
-import { localdbArtifactsDir, sweepArtifacts, OWNER_FILE_NAME } from './cleanup.js'
+import { sweepArtifacts, createLocaldbWorkDir, type LocaldbWorkDir } from './cleanup.js'
 import { runLocaldbPy, type LocaldbPyResult, type RunLocaldbPyOpts } from './driver.js'
 import { probeEnvironment, type EnvironmentProbe } from '../environment.js'
 
@@ -102,63 +102,11 @@ export interface LocaldbDoctorReport {
   guidance?: string[]
 }
 
-/** 深检临时工作目录（§7：finally 清理；owner.json 兼容 1.13 sweepArtifacts） */
-export interface DoctorWorkDir {
-  dir: string
-  run_id: string
-  /** 删除整个 run 目录；true=已删除或本就不存在，false=清理失败（调用方记日志） */
-  cleanup(): boolean
-}
-
+/** 保留 doctor 的原有注入接口；创建协议复用 cleanup 中的单一实现。 */
+export type DoctorWorkDir = LocaldbWorkDir
 export type CreateWorkDirFn = () => DoctorWorkDir | null
-
-/**
- * 默认工作目录实现（评审 v7 两段发布）：<workBaseDir?>/doctor_<ts>_<pid>/，内写 owner.json
- * {pid, started_at}（1.13 sweepArtifacts 的存活判定依据——本进程存活期间另一调用的清扫会
- * 跳过本目录）。发布协议：先建暂存目录 <final名>.creating-<pid>-<ts> 并在其中写 owner.json，
- * 再原子 rename 为最终名——最终名目录自出现起 owner 恒在，并行清扫的「owner ENOENT=从未
- * 有主即删」不会撞上 mkdir 与写 owner 之间的空窗（旧实现两步分离可被并行清扫误删活动目录，
- * 评审 v7）；残留暂存目录由 sweepArtifacts 按名字内嵌 pid 死活清扫（cleanup.ts）。
- * workBaseDir 三态：undefined → localdbArtifactsDir()（环境变量定位）；null → 不可用（返回
- * null，深检步骤 7 按 transient 失败）；字符串 → 显式注入根（测试/定制布局）。
- */
 export function defaultCreateWorkDir(workBaseDir?: string | null): DoctorWorkDir | null {
-  const base = workBaseDir === undefined ? localdbArtifactsDir() : workBaseDir
-  if (!base) return null
-  const nowMs = Date.now()
-  const runId = `doctor_${nowMs}_${process.pid}`
-  const dir = join(base, runId)
-  const staging = `${dir}.creating-${process.pid}-${nowMs}`
-  try {
-    mkdirSync(staging, { recursive: true })
-    writeFileSync(
-      join(staging, OWNER_FILE_NAME),
-      `${JSON.stringify({ pid: process.pid, started_at: new Date(nowMs).toISOString() }, null, 2)}\n`,
-      'utf8',
-    )
-    renameSync(staging, dir) // 原子发布：最终名出现时 owner.json 必已完整
-  } catch {
-    // 发布失败：清掉暂存目录（best-effort），不留半成品；清理失败可忽略——暂存目录带本
-    // 存活 pid 标记，后续清扫按 pid 死活兜底
-    try {
-      rmSync(staging, { recursive: true, force: true })
-    } catch {
-      // 忽略（见上）
-    }
-    return null
-  }
-  return {
-    dir,
-    run_id: runId,
-    cleanup(): boolean {
-      try {
-        rmSync(dir, { recursive: true, force: true })
-        return true
-      } catch {
-        return false
-      }
-    },
-  }
+  return createLocaldbWorkDir('doctor', workBaseDir)
 }
 
 export interface LocaldbDoctorOptions {

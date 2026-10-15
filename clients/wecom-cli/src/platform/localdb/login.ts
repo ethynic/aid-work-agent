@@ -37,6 +37,7 @@ export interface LoginProbeResult {
 }
 
 export interface ProbeLoginStateDeps {
+  signal?: AbortSignal
   /** 驱动执行器注入（缺省 runPowerShellDriver；测试 mock，零 PowerShell 依赖） */
   runDriverFn?: RunPowerShellDriverFn
   /** 驱动脚本路径覆盖（测试用；缺省包根 drivers/ps1/localdb-login.ps1） */
@@ -56,7 +57,7 @@ export async function probeLoginState(deps: ProbeLoginStateDeps = {}): Promise<L
   let windowPid: number | null = null
   let windowError: string | undefined
   try {
-    const raw = await runDriverFn({ script: driverPath })
+    const raw = await runDriverFn({ script: driverPath, signal: deps.signal })
     const nested = raw.data
     const value =
       typeof raw.login_state === 'string'

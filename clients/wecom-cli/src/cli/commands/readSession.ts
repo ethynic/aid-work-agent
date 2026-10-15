@@ -28,6 +28,9 @@ export interface ReadSessionCommandOptions {
   targetName?: string
   maxPages?: string
   sinceDays?: string
+  channel?: string
+  limit?: string
+  cursor?: string
   /** true 时 stdout 最后一行输出 OperationResult JSON */
   json?: boolean
 }
@@ -39,7 +42,10 @@ export async function readSessionCommand(opts: ReadSessionCommandOptions): Promi
     ...(opts.targetName !== undefined ? { target_name: opts.targetName } : {}),
     max_pages: opts.maxPages === undefined ? undefined : Number(opts.maxPages),
     since_days: opts.sinceDays === undefined ? undefined : Number(opts.sinceDays),
+    ...(opts.channel !== undefined ? { channel: opts.channel as WecomReadSessionArgs['channel'] } : {}),
+    ...(opts.limit !== undefined ? { limit: Number(opts.limit) } : {}),
+    ...(opts.cursor !== undefined ? { cursor: opts.cursor } : {}),
   }
-  console.error('ℹ️ 注意：进入会话会清除该会话未读角标（只读消息内容，无其它副作用）')
+  console.error('ℹ️ 若使用 UI 通道，进入会话会清除未读角标；本地库读取不切换会话')
   return runCliOperation(getOperationEntry('wecom_read_session').operation, args, { exclusive: true, json: opts.json })
 }

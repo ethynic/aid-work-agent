@@ -33,7 +33,7 @@ aid-wecom send-file (--target-ref <ref> | --target-name <会话名>) --file <本
                                             # 写动作：向目标发送 1 个文件（扩展名不限
                                             # ≤100MB；文件契约见 send-file 章节；--target-name 同 M11a 直达模式）
 aid-wecom unread [--name <名>] [--json]     # 未读会话快照（只读，不开会话不清角标）
-aid-wecom read-session (--target-ref <ref> | --target-name <会话名>) [--max-pages N] [--since-days N] [--json]
+aid-wecom read-session (--target-ref <ref> | --target-name <会话名>) [--channel local-db|ui] [--limit N] [--cursor <cursor>] [--max-pages N] [--since-days N] [--json]
                                             # 读会话消息（只读内容；进入会话会清除该会话未读角标；
                                             # 智能分发进会话 + 滚动截屏；M10b 双通道解析：配置
                                             # AID_WECOM_SERVER_URL+TOKEN 时走服务端模型通道（按次
@@ -71,6 +71,14 @@ aid-wecom version [--json]                  # 版本 + provider manifest（含 s
 - **待真机复验**：本机开发态已登录，need_login 分支（登出/断网凭据失效场景）未真机实测，
   代码按 wecom-personal-rpa `wecom-ops.ps1` get_login_state 先例实现（小窗判定 +
   CopyFromScreen 截图 base64）；上线前需登出企微复验二维码可见性与 hint 判定。
+
+## 本地库读取（P1b）
+
+运行 `aid-wecom doctor --localdb` 确认版本与账号后，`read-session` 优先读取本地库，首次默认最近 100 条，后续将返回的 `data.cursor` 原样传入 `--cursor` 续读；`--limit` 控制每批条数。游标绑定当前账号、会话及数据库代际，不能交给 UI 通道或跨账号复用。
+
+`--channel local-db` 强制本地库且失败不回退，`--channel ui` 使用既有 UI 链路。未初始化仍可走 UI；普通首读的通道故障可回退 UI并显示原因，取消、参数、账号或目标错误不回退。带账号的 ref 必须与当前账号一致；旧 ref 继续用于 UI，本地库要求新 ref 或 `--target-name`。本地库不切会话、不清角标，非文本仅占位。
+
+本地库输出 `channel=local-db`、精确时间、`msg_id/parse_trusted/cursor`；UI继续输出 `model/ocr`，由 `--max-pages` 控制翻屏，其时间和方向可能近似，没有数据库游标，且可能清除角标。模型收费与余额/配置错误不降级规则保持。当前正式矩阵仅含已验证版本；未验证版本不扫描，真实切号、退出登录、锁屏与同会话UI对比仍待验收。
 
 ## 新消息跟踪（M3：unread / read-session / watch；M9 read 改名 + 智能分发；M10b 双通道）
 

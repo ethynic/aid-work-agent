@@ -10,7 +10,7 @@
 |------|------|------|---------|
 | P0 | 前置调查（schema / 打包 / 登录证据） | ✅ 完成（2026-10-14，子智能体真机执行） | 水位基元=message_id；send_time=秒；无发送状态字段；群解析经 conversation_table 可行；WAL 旧代尾帧实观命中（4/6 帧）；DPAPI 单文件移植 + pycryptodome 打包仅 1 条 lock 条目 |
 | P1a | 组件 C1-C9 + doctor 深检（正确性优先序） | 🔧 进行中 | 组件已实现；本轮身份修复独立测试与 CR 通过（Node 419/419、Python 97 通过/1 跳过）；1.14 真实退出登录、同 PID 切号、锁屏待用户配合 |
-| P1b | read-session 本地库通道组合 + 真机读取冒烟 | 📋 待开发 | |
+| P1b | read-session 本地库通道组合 + 真机读取冒烟 | 🔧 进行中 | 2.1–2.4 与合成整链独立验证、最终 CR 通过；全量 431/431 对应名称来源修复前版本，最终修复定向复验通过；真实 2.5 及 P1a 三态待验 |
 | P2 | 待回复检测 + 发送本地库核验 | 📋 待开发 | |
 | P3 | content_type 扩展 + validate + runbook 文档 | 📋 待开发 | |
 
@@ -41,7 +41,7 @@
 | 1.10 | ✅ | 登录探针复用操作主窗面积选择与并列歧义，返回 window_pid；独立测试与 CR 通过；真实登录态只读核对，三态仍留 1.14 |
 | 1.11 | ✅ | 接入主窗 PID 的 active-account 与定向版本核验；未确认不得进入密钥/快照；缓存复用不探测其他候选；独立测试与 CR 通过 |
 | 1.12 | ✅ | log.ts 五类事件 JSONL/轮转/整行脱敏 11 用例；真机 localdb.log 实测 mode_decided/keyscan_result 记录正常 |
-| 1.13 | ✅ | cleanup.ts sweepArtifacts 9 用例（owner 存活/陈旧挂名/删除失败收集不中断）+ doctor 启动清扫接线 2 条（收尾批次）；真机 artifacts/localdb 全程无残留；取消路径「先终止 py 子进程再删目录」仍留组合任务接线 |
+| 1.13 | ✅ | cleanup.ts sweepArtifacts 9 用例（owner 存活/陈旧挂名/删除失败收集不中断）+ doctor 启动清扫接线 2 条（收尾批次）；真机 artifacts/localdb 全程无残留；P1b 已接取消路径「等待 py close 后删目录」，合成回归通过 |
 | 1.14 | 🔧 部分 | 自动化项完成：全量三链全绿 + doctor 真机 + keyscan 直测×2（见上/下）；未登录/登录/锁屏三态 + 登录证据三态（进程在已登出、同 PID 切号、锁屏）+ 锁屏本地库只读可用性实证待用户配合 |
 
 **真机实测（2026-10-15，登录态，只读边界遵守）**
@@ -59,7 +59,7 @@
 |---|---|
 | 1 可信快照生产规则 | ✅ 已冻结（批次场景表全过：正常含旧代尾帧截断/坏校验和链/撕裂截断/未提交尾帧/错钥等，失败场景均不返回半解密产物、不推进水位） |
 | 2 P0 结论（水位基元/发送核验语义） | ✅ 已冻结（2026-10-14，见「P0 结论摘要」） |
-| 3 P1b 错误分流表 | 📋 待 P1b 任务 2.1 开发前评审冻结 |
+| 3 P1b 错误分流表 | ✅ 已冻结（2026-10-15，实施方案经主控评审通过；见设计 §2 冻结点 3） |
 | 4 P2 关注集合 schema | 📋 待 P2 任务 3.1 开发前评审冻结 |
 | 5 登录判定规则 | 🔧 1.10 原语已交付（四值判定 + 登录态真机冒烟），**三态验证待用户配合后冻结** |
 
@@ -70,7 +70,7 @@
    - ② 同 PID 切换账号：验证 keystore binding 失效重扫 + datadir 定位切换到新账号目录；
    - ③ 锁屏三态：登录态探测在锁屏下的表现 + **锁屏下本地库只读可用性实证**（设计 §9.6 理论收益验证）。
 2. **矩阵是否加入 5.0.12.6018 条目**：证据已齐（指纹匹配 + keyscan 命中 + 全链解密 integrity ok；批次 4b 临时注入 doctor 全链绿灯），等用户拍板后写入 version-matrix.json 并登记 verified_date，随后重跑 doctor --localdb 复核 mode=db。
-3. **提交与分支决定**：当前 `feature/ask-user-question-card` 分支承载全部 localdb 未提交改动，远程 master 已前移；需决定提交拆分与远程整合策略（本收尾任务不提交不 push）。
+3. **提交记录**：P1a 已按用户授权提交 `8a1f3b1f`，当前分支 `feature/ask-user-question-card` 已推送 Codeup；GitHub 镜像 TLS 失败待处理。P1b 已获本轮提交授权，仅提交已评审范围；后续开发由原开发者继续，主控恢复评审角色。
 
 **已知限制与 P2 备案汇总**（随批次发现累积，长期有效）
 
@@ -132,22 +132,34 @@
 | 1.6 | C6：keyscan（去 psutil、对齐预筛+回退） | ✅ 完成（2026-10-15） | test_keyscan 13 用例三层（独立向量先知/对齐预筛+回退纯函数/合成进程端到端命中）；**接线验证点真机实证（收尾批次）**：持钥进程恰为 CIM 首选 PID（对齐命中 2.72s/11.26MB 两轮稳定），非持钥 UI 进程回退全量 153.4s 未命中——doctor 以 detectRunning 全列表为候选正确覆盖实际密钥位置 |
 | 1.7 | C6：DPAPI keystore + 生命周期（设计 §3.4） | ✅ 完成（2026-10-15） | keystore.ts：DPAPI(CurrentUser) 存储 {binding 三元组, key_blob, saved_at}，binding 不匹配顺带清除；**仅页 1 核验明确失败才删密钥**（doctor 编排侧）；7 用例 + scripts/smoke-dpapi.mjs 真机冒烟（手动）；批次 4b doctor 全链 keystore 复用命中 |
 | 1.8 | C8：读库查询（conversations/messages/last-per-conv/resolve） | ✅ 完成（2026-10-15） | py query 只读 SQL（uri ro），契约按 0.1 结论冻结（水位=last_message_id 行、cursor 只认返回集）；合成明文库 50 用例（含迟到同步、同刻排序、排除表双向语义、同名消歧、来源库缺失降级） |
-| 1.9 | C9a/C9b：内容提取（带 trusted 标注）+ 契约归一 | ✅ 完成（2026-10-15） | C9a extract_content 严格解析+递归兜底标 trusted=false（py 场景表）；C9b messages.ts 契约归一（P0 最小类型集、非文本占位 kind 省略）+ 游标编解码 v1（encodeURIComponent 转义、绑定 account/conv 校验），12 用例（对 py 输出不信任的显式边界） |
+| 1.9 | C9a/C9b：内容提取（带 trusted 标注）+ 契约归一 | ✅ 完成（2026-10-15） | C9a extract_content 严格解析+递归兜底标 trusted=false（py 场景表）；C9b messages.ts 契约归一（P0 最小类型集、非文本占位 kind 省略）+ 游标编解码（P1a v1；P1b 升级 v2，绑定 account/conv/源库代际与非零水位锚点），12 用例（对 py 输出不信任的显式边界） |
 | 1.10 | 轻量登录探测原语（从 probe 抽取登录判定核心，不带交互桌面门禁） | ✅ 完成（2026-10-15，本轮独立测试与 CR 通过） | 原有只读登录谓词保持，主窗口 PID 按操作定位面积最大规则选择，最大并列不给 PID；无新增交互门禁，托盘隐藏限制与三态验收仍未关闭 |
 | 1.11 | doctor 深检（随组件增量点亮，设计 §5） | ✅ 完成（2026-10-15，本轮独立测试与 CR 通过） | 步骤 3 查询主窗 PID 唯一账号库；步骤 4 定向探测同一 PID 的实际版本；需要扫描时才验证额外候选同版本。任一身份失败禁止密钥与快照，开发自测 doctor/login/version/datadir 共 83 项通过 |
 | 1.12 | 结构化日志 logs/localdb.log + redaction 接入 | ✅ 完成（2026-10-15） | log.ts logLocaldbEvent（五类事件 JSONL/ISO UTC/未知 type 拒写）+ >5MB 轮转保留 .1 一个历史（轮转失败不阻断写入）+ 整行 redactSensitive；redaction.ts 扩展 32-hex 密钥样式串兜底（设计 §8，先于手机号规则防 hex 内数字段被改写）；deps 注入 fs/clock/dir；11 用例 |
-| 1.13 | 遗留产物清扫（owner 存活校验）+ 删除失败报告 | ✅ 完成（2026-10-15） | cleanup.ts sweepArtifacts：owner.json 缺失/坏 JSON/pid 非法或死亡 → 删；存活未超时 → 跳过；存活但 started_at >24h → 删（陈旧挂名）；存活但时间不可判 → 保守跳过；删除失败收集 {dir,error} 不抛不中断；只动 base 直接子目录；9 用例；取消路径的「先终止 py 子进程再删目录」顺序由组合任务按 driver.ts kill 语义接线；**收尾批次接线：doctor 启动清扫已接（步骤 1 前调用，失败只记 db_fallback(cleanup/sweep_failed) 日志不阻断），2 用例** |
+| 1.13 | 遗留产物清扫（owner 存活校验）+ 删除失败报告 | ✅ 完成（2026-10-15） | cleanup.ts sweepArtifacts：owner.json 缺失/坏 JSON/pid 非法或死亡 → 删；存活且启动时刻一致 → 跳过（不按在线时长删除）；PID 已复用 → 删；存活但启动时刻不可判 → 保守跳过；删除失败收集 {dir,error} 不抛不中断；只动 base 直接子目录；9 用例；P1b 组合任务已按 driver.ts 语义等待子进程 close 后清理目录（合成取消回归通过）；**收尾批次接线：doctor 启动清扫已接（步骤 1 前调用，失败只记 db_fallback(cleanup/sweep_failed) 日志不阻断），2 用例** |
 | 1.14 | P1a 验收：doctor 全链真机绿灯 | 🔧 部分（2026-10-15，自动化项完成） | 全量三链实跑全绿（typecheck / npm test 387/387 / test:py 91 含 1 平台跳过）+ doctor 真机止于步骤 4 ui(compat)（5.0.12.6018 不在矩阵，正确行为）+ keyscan 直测×2 稳定命中 ~2.7s（详见「P1a 验收记录（2026-10-15）」）；未登录/登录/锁屏三态 + 登录证据三态（进程在已登出、同 PID 切号、锁屏）+ 锁屏下本地库只读可用性实证待用户配合 |
 
 ## P1b：read-session 本地库通道组合
 
+### P1b 验收记录（2026-10-15，独立验证与最终 CR 通过，真机项待验）
+
+- 已实现 2.1–2.4：专用只读执行器复用身份/版本/密钥/快照/清理原语；CLI/MCP 增量参数同源，保留 UI `model/ocr` 语义；未修改 Runtime wire、设备 binding、发送或 P2。
+- v2 cursor 绑定源文件稳定身份与 schema_version，非零水位锚点使用消息稳定字段摘要，排除可后补的 server_id/sequence；空会话水位 0 续读按最早新 ID 分批，不重走最近 N 条。目录账号须在 user_table.id 唯一匹配后才用于 sender 域比较，ID 全程字符串。
+- 合成整链采用独立参考加密器生成三库，真实执行捕获/解密/只读查询；覆盖 64 位 ID、最近 100 条、ACK 元数据补齐、源库替换/水位复用、空群/空 contact、来源缺失/坏 schema、可选 session 损坏、同名无历史联系人消歧、模式提升、强制通道、账号绑定优先、搜索前后切号、跨进程扫描负缓存、取消等待 close 与清理失败回报。平台自测为 Windows，无平台跳过。
+- 验证：`npm run typecheck` / `npm run build:main` exit 0；13 文件定向 Node 203/203、0 跳过，exit 0；`python -m unittest discover -s tests/py -p test_localdb_query.py -q` 55/55，exit 0；最后补入搜索账号探针成功时取消的断言后，typecheck/build 与相关 3 文件 27/27 再次通过。源码与测试保持冻结，主控全程仅评审和验证；本阶段全包回归由独立测试统一执行。
+- 最终 CR 修复：P1b 候选消费只接受 user_table 的 S 联系人命名与 conversation_table 的 R 群命名，拒绝用 session 的旧 S 缓存标题替代联系人名称；session 的 S 仍可证明 user 命中后的实际空会话。新增真实合成 user 改名/session 保留旧名回归，旧名在名称读取与绑定 contact ref 均 TARGET_NOT_FOUND，新名正常读取；已有空 contact 水位 0/续读回归继续通过。修复后 typecheck/build exit 0，定向 2 文件 24/24、0 跳过，exit 0；源码再次冻结；独立真实签名 ref 与名称读取复验均确认旧名拒绝/新名成功，空 contact 水位 0 续读通过，主控最终 CR 通过、无剩余阻断项。
+- 独立回归边界：包级 Node 431/431 通过对应最后名称来源修复之前的代码状态，未受影响部分复用该结果；最终状态通过上述 typecheck/build、2 文件 24/24 及独立名称/ref/空 contact 定向复验，未声称最终状态重新全量。另用 6 个新 Node 进程确认 db/unset 模式扫描负缓存跨进程保留、doctor epoch 变化后重试。独立测试未重跑 Python 全量，复用开发查询 55/55；CLI/MCP 参数另经静态核对，最终结论无阻断交付问题。
+- 合成测试产物残留：独立测试者清理 3 个仅含合成数据的临时根被自动审批拒绝（blocked by policy，未提供具体原因），当前未删除、未代删；边界已校验的递归删除仅返回拒绝后已停止尝试，不宣称全程无残留。路径：`C:\Users\PC\AppData\Local\Temp\p1b-independent-2e6b2a1057354ea994735b1c69d0c3ae`、`C:\Users\PC\AppData\Local\Temp\p1b-cache-independent-75bf1ff2157842f5bfe9fe279111beaa`、`C:\Users\PC\AppData\Local\Temp\p1b-cache-independent-b1c0727d1e6c46e5aded9cfc9d38368b`。
+- 2.5 实机同会话 UI 对比、手机端实时同步、CPU/磁盘/工程化整链性能未验：当前实际版本 5.0.12.6018 仍不在矩阵，未添加条目、未写真实 state/keystore、未读取真实聊天或操作 UI。P1a 1.14 退出登录/同 PID 切号/锁屏仍待验，P1a/P1b 整阶段均未标完成。
+
+
 | # | 任务 | 状态 | 说明 |
 |---|------|------|------|
-| 2.1 | read-session operation 接入本地库通道（channel 值域 + fallback_reason + 安全网预检） | ☐ 未开始 | 按 §2 状态转移表与**错误分流表**实现（分流表为冻结点 3：本任务前评审冻结）；取消/参数/游标/账号/目标歧义不兜底；SNAPSHOT_UNSTABLE retryable 映射 |
-| 2.2 | 游标增量（limit=100 默认 + cursor 绑定） | ☐ 未开始 | 按 0.1 冻结的水位基元实现；limit 只推进到已返回消息；CURSOR_UNSUPPORTED 结构化失败 |
-| 2.3 | target_name/target_ref → conversation_id 解析 + 同名消歧 + ref 账号绑定 | ☐ 未开始 | TARGET_AMBIGUOUS 附候选；新签发 ref 携带账号；**legacy ref 在 DB 路径一律 TARGET_REF_STALE 不执行读取**（评审 v4 #35）；既有 UI 路径保留 legacy 兼容 |
-| 2.4 | mode=unset / ui(compat/transient) / db 行为接线 + hint | ☐ 未开始 | unset 不阻断 UI 能力 + 引导 hint；ui(transient) 负缓存到期单次探测与运行时提升；契约增量（msg_id/parse_trusted/cursor）；**评审 v6 追加：ui(transient) 运行时提升 db 前必须要求 identity_confirmed=true（reason=identity-unconfirmed 期间禁止提升）** |
-| 2.5 | 真机读取冒烟 + 整链实测 | ☐ 未开始 | 与 UI 通道结果比对（同会话同消息）；耗时/CPU/磁盘实测（回填设计 §9）。**前置基线已测（2026-10-15，见「性能实测」节）：热路径端到端 27.26ms（11 条会话），P1b 验收时对比工程化实现与 UI 通道** |
+| 2.1 | read-session operation 接入本地库通道（channel 值域 + fallback_reason + 安全网预检） | ✅ 完成（2026-10-15） | 按 §2 状态转移表与**错误分流表**实现（分流表为冻结点 3：本任务前评审冻结）；取消/参数/游标/账号/目标歧义不兜底；SNAPSHOT_UNSTABLE retryable 映射 |
+| 2.2 | 游标增量（limit=100 默认 + cursor 绑定） | ✅ 完成（2026-10-15） | 按 0.1 冻结的水位基元实现；limit 只推进到已返回消息；CURSOR_UNSUPPORTED 结构化失败 |
+| 2.3 | target_name/target_ref → conversation_id 解析 + 同名消歧 + ref 账号绑定 | ✅ 完成（2026-10-15） | TARGET_AMBIGUOUS 附候选；新签发 ref 携带账号；**legacy ref 在 DB 路径一律 TARGET_REF_STALE 不执行读取**（评审 v4 #35）；既有 UI 路径保留 legacy 兼容 |
+| 2.4 | mode=unset / ui(compat/transient) / db 行为接线 + hint | ✅ 完成（2026-10-15） | unset 不阻断 UI 能力 + 引导 hint；ui(transient) 负缓存到期单次探测与运行时提升；契约增量（msg_id/parse_trusted/cursor）；**评审 v6 追加：ui(transient) 运行时提升 db 前必须要求 identity_confirmed=true（reason=identity-unconfirmed 期间禁止提升）** |
+| 2.5 | 真机读取冒烟 + 整链实测 | 🔧 合成独立验收通过，真机待验 | 与 UI 通道结果比对（同会话同消息）；耗时/CPU/磁盘实测（回填设计 §9）。**前置基线已测（2026-10-15，见「性能实测」节）：热路径端到端 27.26ms（11 条会话），P1b 验收时对比工程化实现与 UI 通道** |
 
 ## P2：待回复检测 + 发送本地库核验
 

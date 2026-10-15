@@ -18,10 +18,12 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runWecomOperation } from './context.js'
-import { CodedOperationError, type OperationResult, type OpContext, type WecomOperation } from './types.js'
+import { CancelledError, CodedOperationError, type OperationResult, type OpContext, type WecomOperation } from './types.js'
 import { runPowerShellDriver, type RunPowerShellDriverFn } from '../platform/powershell.js'
 import { createTargetRef, type CreateTargetRefFn, type TargetRefCoords } from '../platform/targetRef.js'
 import { artifactDir } from '../platform/environment.js'
+import { probeCurrentAccount, checkCancelled } from '../platform/localdb/identity.js'
+import { probeLoginState } from '../platform/localdb/login.js'
 
 /** dist/src/operations → 包根 drivers/ps1 */
 const DRIVER_PATH = fileURLToPath(new URL('../../../drivers/ps1/chat-search.ps1', import.meta.url))
@@ -132,13 +134,31 @@ interface ParsedItem {
 }
 
 export function createWecomChatSearchOperation(
-  deps: { runDriverFn?: RunPowerShellDriverFn; createRefFn?: CreateTargetRefFn; artifactDirFn?: () => string | null } = {},
+  deps: {
+    runDriverFn?: RunPowerShellDriverFn
+    createRefFn?: CreateTargetRefFn
+    artifactDirFn?: () => string | null
+    /** 只增强 ref，失败不取消既有 UI 搜索能力。 */
+    accountFn?: (ctx: OpContext) => Promise<string | null>
+  } = {},
 ): WecomOperation<WecomChatSearchArgs> {
   const runDriverFn = deps.runDriverFn ?? runPowerShellDriver
   // 默认签发适配：CreateTargetRefFn 的第 4 参是裸坐标，createTargetRef 的坐标在 opts 内
   const createRefFn: CreateTargetRefFn =
-    deps.createRefFn ?? ((name, type, subtitle, coords) => createTargetRef(name, type, subtitle, { coords }))
+    deps.createRefFn ?? ((name, type, subtitle, coords, account) => createTargetRef(name, type, subtitle, { coords, account }))
   const artifactDirFn = deps.artifactDirFn ?? (() => artifactDir())
+  const probeAccount = async (ctx: OpContext): Promise<string | null> => {
+    try {
+      const account = await (deps.accountFn ?? (async context => (await probeCurrentAccount(context, {
+        probeLoginStateFn: signal => probeLoginState({ runDriverFn, signal }),
+      })).account))(ctx)
+      checkCancelled(ctx.signal)
+      return account
+    } catch (err) {
+      if (err instanceof CancelledError || ctx.signal.aborted) throw new CancelledError()
+      return null
+    }
+  }
   return {
     name: 'wecom_chat_search',
     execute(args: WecomChatSearchArgs, ctx: OpContext): Promise<OperationResult> {
@@ -174,12 +194,14 @@ export function createWecomChatSearchOperation(
           const dir = join(root, `search-${new Date().toISOString().replace(/[:.]/g, '-')}`)
           mkdirSync(dir, { recursive: true })
 
+          const beforeAccount = await probeAccount(ctx)
           ctx.progress({ stage: 'execute', message: `搜索「${args.query}」（type=${type}）` })
           const data = await runDriverFn({
             script: DRIVER_PATH,
             args: ['-Query', args.query.trim(), '-ArtifactDir', dir],
             signal: ctx.signal,
           })
+          checkCancelled(ctx.signal)
           // PS 5.1 ConvertTo-Json 对单元素数组有解包怪癖，TS 侧防御性归一
           const rawItems = Array.isArray(data.items) ? data.items : data.items != null ? [data.items] : []
           const parsedItems: ParsedItem[] = rawItems.map((raw, i) => {
@@ -241,6 +263,8 @@ export function createWecomChatSearchOperation(
             }
           }
 
+          const afterAccount = await probeAccount(ctx)
+          const account = beforeAccount !== null && beforeAccount === afterAccount ? beforeAccount : null
           const coordsOf = (it: ParsedItem): TargetRefCoords => ({ x: it.x, y: it.y })
           const items: ChatSearchItem[] = filtered.map((it) => ({
             name: it.name,
@@ -249,7 +273,7 @@ export function createWecomChatSearchOperation(
             x: it.x,
             y: it.y,
             probability: it.probability,
-            target_ref: createRefFn(it.name, sectionToTargetType(it.section), it.subtitle, coordsOf(it)),
+            target_ref: createRefFn(it.name, sectionToTargetType(it.section), it.subtitle, coordsOf(it), account ?? undefined),
           }))
           const bestIdx = filtered.indexOf(bestSrc)
           const bestBase = items[bestIdx]!
@@ -265,7 +289,8 @@ export function createWecomChatSearchOperation(
           }
           return {
             message: `搜索「${args.query}」完成：${items.length} 个结果${jev.used ? `，Jev 最优「${best.name}」` : ''}`,
-            data: { query: args.query, search_successful: true, best, items, jev, timing_ms: timingMs },
+            data: { query: args.query, search_successful: true, best, items, jev, timing_ms: timingMs,
+              target_ref_account_bound: account !== null },
           }
         },
       )

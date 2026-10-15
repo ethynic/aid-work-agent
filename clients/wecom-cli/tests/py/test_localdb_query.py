@@ -290,7 +290,7 @@ class QueryMessagesTest(unittest.TestCase):
 
     def test_same_second_keeps_insertion_order(self):
         """同秒三条按 message_id（入库序）返回，不因同秒乱序；sequence 递增可见。"""
-        payload = self.fx.query(['--task', 'messages', '--conv', CONV_S, '--limit', '3'])
+        payload = self.fx.query(['--task', 'messages', '--conv', CONV_S, '--after-id', '0', '--limit', '3'])
         ids = self.rows_of(payload)
         self.assertEqual(ids, sorted(ids))
         self.assertEqual(len({m['send_time'] for m in payload['messages']}), 1)

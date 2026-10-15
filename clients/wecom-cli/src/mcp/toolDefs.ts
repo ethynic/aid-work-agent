@@ -177,22 +177,20 @@ export const TOOL_DEFS: WecomToolDef[] = [
     name: 'wecom_read_session',
     title: '企业微信读取会话消息',
     description:
-      '读取与目标联系人/群聊的当前会话消息（只读消息内容，无出站消息；当前不在目标会话时自动搜索切换后读取，读毕滚回底部）。' +
-      '目标二选一：target_ref（wecom_chat_search 返回的句柄，有效期 5 分钟）或 target_name 直达模式' +
-      '（按会话名内部自动 search 定位 + 身份校验，同名多候选无法消歧返回 TARGET_AMBIGUOUS，data 附 resolved_target；两个都传/都不传 INVALID_ARGUMENT）。' +
-      '解析双通道（M10b）：本机已配置 AID_WECOM_SERVER_URL 时走服务端模型主通道——' +
-      'messages 带 side/kind/time（GLM 多模态判定，质量优于 OCR），**按次计积分**（data.billing.credits_charged），' +
-      '402 余额不足/配置错误不降级直接报错；未配置或模型通道不可用（网络/超时/5xx）时走本地 OCR 兜底（免费，side 为启发式判定）。' +
-      'data.channel 标记实际通道（model/ocr）。返回 data.messages=[{side:self|peer|timeline, kind?, text, time?}]' +
-      '（kind=text/image/file/timeline 仅模型通道；time 为最近时间分割线原文的近似时间，首条分割线前无 time），' +
-      '另有 channel/pages_read/title/navigated。' +
-      '副作用：进入会话会清除该会话未读角标（企微客户端固有行为）并切换主窗口会话视图——' +
-      '适合低频按需读取（如配合 wecom_unread_list 有未读再读），不适合高频轮询（长循环请用 CLI watch 动词）。',
+      '读取目标会话消息，effect=none，无出站消息。target_ref（搜索返回、有效5分钟）与target_name二选一，同名无法消歧返回TARGET_AMBIGUOUS。' +
+      'doctor已启用时优先本地库，默认最近100条；精确时间、消息ID和增量cursor，不切换会话或清角标，非文本占位。' +
+      '可指定channel=local-db强制本地库（失败不回退）或ui；cursor绑定账号/会话/数据库代际，UI不能执行cursor。旧ref可用于UI，本地库要求账号绑定ref或target_name。' +
+      '本地库不可用的普通首读可回退UI，返回原因与能力差异；取消、参数、账号/目标错误不回退。未初始化走UI并提示doctor。' +
+      'UI保留model/ocr两种输出channel：配置服务端时模型解析按次计积分，余额不足或配置错误不降级；未配置或模型暂不可用走本地OCR。' +
+      'UI按max_pages翻屏，可能自动搜索/切换会话并清除角标，时间/方向可能近似；数据含messages、channel及相应通道元数据。',
     zodShape: {
       target_ref: z.string().min(1).optional().describe('目标句柄（wecom_chat_search 返回的 target_ref；与 target_name 二选一）'),
-      target_name: z.string().min(1).max(100).optional().describe('直达模式：按会话名（联系人/群名，可含 @微信 后缀）定位目标，内部自动 search 并做身份校验（同名多候选无法消歧返回 TARGET_AMBIGUOUS）；与 target_ref 二选一'),
+      target_name: z.string().min(1).max(100).optional().describe('按会话名定位（可含@微信后缀）；本地库精确匹配并消歧，UI必要时内部search，歧义返回TARGET_AMBIGUOUS；与target_ref二选一'),
+      channel: z.enum(['local-db', 'ui']).optional().describe('显式通道；缺省按doctor状态，本地库强制模式失败不回退'),
+      limit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional().describe('本地库最多返回条数，默认100；UI仍由max_pages控制，不承诺数据库分页'),
+      cursor: z.string().min(1).optional().describe('上次本地库返回的增量游标；绑定账号、会话和代际，UI不支持'),
       max_pages: z.number().int().min(1).max(10).optional().describe('最多向上翻几屏（含底部当前屏，默认 1，上限 10）'),
-      since_days: z.number().int().min(1).optional().describe('只读最近 N 天：某屏最早时间分割线超龄即停止上翻（仅 OCR 通道生效；模型通道抓满 max_pages，调用方按返回 time 自行过滤）'),
+      since_days: z.number().int().min(1).optional().describe('本地库按精确发送时间过滤最近N天；UI仅OCR按分割线超龄早停，模型通道仍抓max_pages'),
     },
     annotations: { title: '企业微信读取会话消息', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },

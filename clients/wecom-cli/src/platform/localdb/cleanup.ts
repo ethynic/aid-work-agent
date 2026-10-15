@@ -24,7 +24,7 @@
  * deps 注入 isAlive/removeFn（对齐 localdb 组件注入式替身模式）；baseDir 缺省按
  * 环境变量定位，显式 null → 空结果（模拟 LOCALAPPDATA 缺失）。
  */
-import { readdirSync, readFileSync, rmSync } from 'node:fs'
+import { readdirSync, readFileSync, rmSync, mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 /** 目录内 owner 标记文件名（{pid, started_at}，由产物创建方写入） */
@@ -93,7 +93,6 @@ const defaultIsAlive = (pid: number): boolean => {
     return (err as NodeJS.ErrnoException).code === 'EPERM'
   }
 }
-
 /** 缺省删除：递归删目录；force 只容忍已消失，EBUSY 等真实失败仍抛出（由调用方收集） */
 const defaultRemove = (dir: string): void => {
   rmSync(dir, { recursive: true, force: true })
@@ -166,4 +165,51 @@ export function sweepArtifacts(baseDir?: string | null, deps: SweepArtifactsDeps
     }
   }
   return result
+}
+
+/** 单次调用拥有的产物目录，发布与遗留清扫使用同一 owner 协议。 */
+export interface LocaldbWorkDir {
+  dir: string
+  run_id: string
+  cleanup(): boolean
+}
+
+/** owner 就绪后原子发布；先等待调用的所有子进程退出，再调用 cleanup。 */
+export function createLocaldbWorkDir(prefix: 'doctor' | 'read-session', workBaseDir?: string | null): LocaldbWorkDir | null {
+  const base = workBaseDir === undefined ? localdbArtifactsDir() : workBaseDir
+  if (!base) return null
+  const nowMs = Date.now()
+  const runId = `${prefix}_${nowMs}_${process.pid}`
+  const dir = join(base, runId)
+  const staging = `${dir}.creating-${process.pid}-${nowMs}`
+  try {
+    mkdirSync(staging, { recursive: true })
+    writeFileSync(
+      join(staging, OWNER_FILE_NAME),
+      `${JSON.stringify({ pid: process.pid, started_at: new Date(nowMs).toISOString() }, null, 2)}\n`,
+      'utf8',
+    )
+    renameSync(staging, dir) // 原子发布：最终名出现时 owner.json 必已完整
+  } catch {
+    // 发布失败：清掉暂存目录（best-effort），不留半成品；清理失败可忽略——暂存目录带本
+    // 存活 pid 标记，后续清扫按 pid 死活兜底
+    try {
+      rmSync(staging, { recursive: true, force: true })
+    } catch {
+      // 忽略（见上）
+    }
+    return null
+  }
+  return {
+    dir,
+    run_id: runId,
+    cleanup(): boolean {
+      try {
+        rmSync(dir, { recursive: true, force: true })
+        return true
+      } catch {
+        return false
+      }
+    },
+  }
 }

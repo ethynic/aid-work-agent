@@ -121,7 +121,8 @@ function makeOp(kind: OpKind, keyDir: string, root: string, mock: DriverMock): A
       return createWecomSendFileOperation(shared)
     case 'read-session':
       // env 不配置 SERVER_URL → OCR 通道直连（不触网），聚焦 target-name 定位语义
-      return createWecomReadSessionOperation({ ...shared, env: {} as NodeJS.ProcessEnv })
+      return createWecomReadSessionOperation({
+    localdb: { readStateFn: () => null }, ...shared, env: {} as NodeJS.ProcessEnv })
   }
 }
 

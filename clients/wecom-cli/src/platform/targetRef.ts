@@ -34,6 +34,8 @@ export interface TargetRefIdentity {
   /** 搜索结果条目在 overlay 图像内的相对坐标（M4 起可选；老 ref 签发时无此对字段） */
   x?: number
   y?: number
+  /** 当前账号直接证据确认时签发；缺失为 legacy，仅 UI 兼容。 */
+  account?: string
 }
 
 interface TargetRefPayload {
@@ -44,6 +46,7 @@ interface TargetRefPayload {
   x?: number
   y?: number
   exp: number
+  account?: string
 }
 
 export interface TargetRefOptions {
@@ -56,6 +59,7 @@ export interface TargetRefOptions {
 /** createTargetRef 专用选项：在 TargetRefOptions 基础上可携带条目 overlay 相对坐标 */
 export interface CreateTargetRefOptions extends TargetRefOptions {
   coords?: TargetRefCoords
+  account?: string
 }
 
 export type CreateTargetRefFn = (
@@ -64,6 +68,7 @@ export type CreateTargetRefFn = (
   subtitle?: string,
   /** 条目 overlay 相对坐标（M4 起；缺省签发的 payload 不含 x/y，向后兼容） */
   coords?: TargetRefCoords,
+  account?: string,
 ) => string
 export type VerifyTargetRefFn = (ref: string) => TargetRefIdentity
 
@@ -104,6 +109,10 @@ function sign(body: string, key: Buffer): string {
 export function createTargetRef(name: string, type: string, subtitle = '', opts: CreateTargetRefOptions = {}): string {
   const now = opts.now ?? Math.floor(Date.now() / 1000)
   const payload: TargetRefPayload = { v: 1, name, type, subtitle, exp: now + TARGET_REF_TTL_SECONDS }
+  if (opts.account !== undefined) {
+    if (typeof opts.account !== 'string' || !opts.account) throw new CodedOperationError('INVALID_ARGUMENT', 'target_ref account 必须是非空字符串')
+    payload.account = opts.account
+  }
   // 坐标成对写入（undefined 字段 JSON.stringify 自动省略，老格式 ref 完全兼容）
   if (opts.coords) {
     payload.x = opts.coords.x
@@ -152,6 +161,12 @@ export function verifyTargetRef(ref: string, opts: TargetRefOptions = {}): Targe
     throw new CodedOperationError('TARGET_REF_STALE', 'target_ref 已过期（有效期 5 分钟），请重新搜索获取')
   }
   const identity: TargetRefIdentity = { name: payload.name, type: payload.type, subtitle: payload.subtitle }
+  if (payload.account !== undefined) {
+    if (typeof payload.account !== 'string' || payload.account.length === 0) {
+      throw new CodedOperationError('INVALID_ARGUMENT', 'target_ref account 字段非法')
+    }
+    identity.account = payload.account
+  }
   // 坐标可选：成对出现且均为数字才透出（老 ref 无此对字段；未知字段不导致失败）
   if (typeof payload.x === 'number' && typeof payload.y === 'number') {
     identity.x = payload.x

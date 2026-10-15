@@ -21,7 +21,7 @@
  *   node dist/src/cli/index.js send-image (--target-ref <ref> | --target-name <会话名>) --image <本地绝对路径> [--json]
  *   node dist/src/cli/index.js send-file (--target-ref <ref> | --target-name <会话名>) --file <本地绝对路径> [--json]
  *   node dist/src/cli/index.js unread [--name <名>] [--json]
- *   node dist/src/cli/index.js read-session (--target-ref <ref> | --target-name <会话名>) [--max-pages N] [--since-days N] [--json]
+ *   node dist/src/cli/index.js read-session (--target-ref <ref> | --target-name <会话名>) [--channel local-db|ui] [--limit N] [--cursor <cursor>] [--max-pages N] [--since-days N] [--json]
  *   node dist/src/cli/index.js watch [--interval 秒] [--once]
  *   node dist/src/cli/index.js add-customer --phone <11位手机号> --yes [--json]
  *   node dist/src/cli/index.js mcp --stdio
@@ -64,7 +64,7 @@ const USAGE = `aid-wecom — 企业微信操作 CLI / MCP Provider（M1）
   unread [--name <名>] [--json]
                             未读会话快照（只读，不开会话不清角标）：
                             [{name, preview, unread_count}]，可选 --name 子串过滤
-  read-session (--target-ref <ref> | --target-name <会话名>) [--max-pages N] [--since-days N] [--json]
+  read-session (--target-ref <ref> | --target-name <会话名>) [--channel local-db|ui] [--limit N] [--cursor <cursor>] [--max-pages N] [--since-days N] [--json]
                             读会话消息（只读内容；进入会话会清除其未读角标）：
                             智能分发进会话（当前会话对→直读；不对→自动 search+select
                             切换后读）→ 滚动截屏 OCR + 页间去重，返回
@@ -151,6 +151,9 @@ async function main(): Promise<number> {
         targetName: flagString(args, 'target-name'),
         maxPages: flagString(args, 'max-pages'),
         sinceDays: flagString(args, 'since-days'),
+        channel: flagString(args, 'channel'),
+        limit: flagString(args, 'limit'),
+        cursor: flagString(args, 'cursor'),
         json: hasFlag(args, 'json'),
       })
     }

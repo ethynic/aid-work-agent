@@ -130,6 +130,7 @@ function makeReadOp(
 ) {
   const dir = tempDir('wecom-read-session-test-')
   return createWecomReadSessionOperation({
+    localdb: { readStateFn: () => null },
     runDriverFn,
     verifyRefFn: extra.verifyRefFn ?? (() => TARGET),
     createRefFn: extra.createRefFn,
