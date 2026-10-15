@@ -101,6 +101,11 @@ export interface PanelRowInfo {
   group?: 'ordinary' | 'vip'
 }
 
+export interface UnreadablePanelRow {
+  label: string
+  reason: string
+}
+
 /** 与真实取证 fixture 相同顺序，不引入 Runtime/evaluate。 */
 export const FILTER_SNAPSHOT_OPTIONS = {
   includeDOMRects: true,
@@ -203,9 +208,11 @@ export class FilterSetter {
   private observedMembership: MembershipObservation = { status: 'unknown', source: 'unknown', evidence: ['尚未探查头像'] }
   private membershipOverride?: MembershipObservation
   private accountKey?: string | null
+  private unreadablePanelRows: UnreadablePanelRow[] = []
 
   get membership(): MembershipObservation { return this.observedMembership }
   get accountRef(): string | null { return this.accountKey ?? null }
+  get unreadableRows(): UnreadablePanelRow[] { return this.unreadablePanelRows.map((row) => ({ ...row })) }
 
   constructor(private readonly deps: FilterSetterDeps) {
     this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)))
@@ -249,8 +256,8 @@ export class FilterSetter {
    *
    * 档位匹配策略（2026-08-17 用户定调：判断交 AI，CLI 只精确执行）：先按原文定位，0 命中时按
    * 归一化精确匹配兜底（15k-20k ≡ 15-20K）；仍不中则报错并列出该行全部可选档位——调用方
-   * （LLM）应先用 boss_filter_options/probeOptions 读可选档位，把用户口语化要求映射成最接近
-   * 的档位再传精确值，绝不让用户看页面。
+   * （LLM）应先用 boss_filter_options/probeOptions 读可选档位，只提交已确认且可匹配的子集，
+   * 未匹配条件跳过并告知，全部未匹配时不调用空筛选或清除。
    *
    * 进面板后先点「清除」再选选项：选项是切换式控件，上次运行残留的已选状态下
    * 直接点同名选项会变成反选（2026-08-06 chat 演示实测：筛选·5 残留 + 同 spec
@@ -468,10 +475,10 @@ export class FilterSetter {
   }
 
   /**
-   * 探查筛选面板全部可选档位（boss_filter_options 工具，2026-08-17 用户定调「判断交 AI」）：
+   * 探查筛选面板可确认的档位（boss_filter_options 工具，判断交 AI）：
    * 开面板 → describePanel 读各行选项 → 点「筛选」把面板收起还原页面。
    * 返回的选项交给调用方（LLM），由它把用户口语化要求（如 15k-20k / 5年以上 / 本科及以上）
-   * 映射成最接近的精确档位后再调 apply。0 行可读 → FilterSetError（页面结构异常）。
+   * 匹配到真实档位后再调 apply，不可读行单独报告且不阻塞其余行。0 行可读 → FilterSetError。
    */
   async probeOptions(): Promise<PanelRowInfo[]> {
     if (this.deps.signal?.aborted) throw new CancelledError()
@@ -480,8 +487,20 @@ export class FilterSetter {
     this.observedMembership = inspectMembership(snap)
     // describePanel 只读结构（全量行都要读，不点击）——无需滚动适配
     const rows = await this.step('probe:describe', async () => this.describePanel(snap))
-    if (rows.some((r) => r.control === 'range')) this.ageSlider(snap)
-    const readable = rows.filter((r) => r.options.length > 0 || r.control === 'range')
+    const unreadable = this.unreadableRows
+    const readable = rows.filter((row) => {
+      if (row.control === 'range') {
+        try { this.ageSlider(snap); return true } catch (err) {
+          if (!(err instanceof FilterSetError)) throw err
+          unreadable.push({ label: row.label, reason: err.message })
+          return false
+        }
+      }
+      if (row.options.length > 0) return true
+      unreadable.push({ label: row.label, reason: '未解析到可选档位' })
+      return false
+    })
+    this.unreadablePanelRows = unreadable
     if (readable.length === 0) {
       throw new FilterSetError('筛选面板未解析到任何可选档位（面板可能未打开或页面结构已变），请人工查看')
     }
@@ -511,6 +530,7 @@ export class FilterSetter {
 
   /** 以真实标签列发现行，再取只包含该标签与选项的最近祖先，兼容会员新增行与折行。 */
   private structuralRows(snap: DomSnapshot): StructuralRow[] | null {
+    this.unreadablePanelRows = []
     const anchors = ROW_DEFS.flatMap((d) => this.visibleHits(snap, (s) => s.startsWith(d.labelPrefix)))
     if (anchors.length < 2 || !snap.documents[anchors[0]!.documentIndex]?.layout.styles?.length) return null
     const di = anchors[0]!.documentIndex
@@ -532,6 +552,7 @@ export class FilterSetter {
       && (footerRoot === null || !isDescendantOf(doc, h.nodeIndex, footerRoot)))
     const rows: StructuralRow[] = []
     for (const label of labels) {
+      let parsed = false
       let current = parents.get(label.nodeIndex)
       const visited = new Set<number>()
       while (current !== undefined && current !== panel && !visited.has(current)) {
@@ -540,14 +561,16 @@ export class FilterSetter {
         const options = all.filter((h) => h.nodeIndex !== label.nodeIndex
           && h.bounds[0] >= label.bounds[0] + label.bounds[2]
           && isDescendantOf(doc, h.nodeIndex, current!))
-        if (options.length > 0) {
-          rows.push({ label, root: current, options: options.filter((o) => o.text !== '修改筛选专业' && !o.text.startsWith('只看第一学历')) })
+        const usableOptions = options.filter((o) => o.text !== '修改筛选专业' && !o.text.startsWith('只看第一学历'))
+        if (usableOptions.length > 0) {
+          rows.push({ label, root: current, options: usableOptions })
+          parsed = true
           break
         }
         current = parents.get(current)
       }
+      if (!parsed) this.unreadablePanelRows.push({ label: label.text, reason: '未完整解析出该行控件或可选档位' })
     }
-    if (rows.length !== labels.length) throw new FilterSetError('部分筛选行未完整解析出控件，拒绝报告完整面板')
     return rows
   }
 

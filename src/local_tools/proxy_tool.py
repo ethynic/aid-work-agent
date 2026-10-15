@@ -684,6 +684,61 @@ def _extended_filter_args(args: Dict[str, Any]) -> bool:
     return bool(args.get("filters") or args.get("age") or args.get("membership_hint") or args.get("membership_account_ref")) or args.get("first_degree_only") is not None
 
 
+def _filter_probe_covers_request(data: Dict[str, Any], args: Dict[str, Any]) -> bool:
+    """部分探查仅证明已读行可用；未读行不能阻塞已确认的筛选子集。"""
+    if data.get("probe_complete") is True:
+        return True
+    if data.get("probe_complete") is not False or not isinstance(data.get("rows"), list) or not data["rows"]:
+        return False
+    unreadable = data.get("unreadable_rows", [])
+    if not isinstance(unreadable, list):
+        return False
+
+    def readable_row(label):
+        if any(isinstance(row, dict) and isinstance(row.get("label"), str)
+               and _filter_label(row["label"]) == _filter_label(label)
+               for row in unreadable):
+            return None
+        matches = [row for row in data["rows"] if isinstance(row, dict)
+                   and isinstance(row.get("label"), str) and _filter_label(row["label"]) == _filter_label(label)]
+        return matches[0] if len(matches) == 1 else None
+
+    requested = list(args.get("filters") or [])
+    for key, label in (("experience", "经验要求"), ("educations", "学历要求"), ("salary", "薪资待遇")):
+        value = args.get(key)
+        if value:
+            requested.append({"label": label, "options": value if isinstance(value, list) else [value]})
+    for item in requested:
+        row = readable_row(item["label"])
+        if not row or row.get("control") != "options" or not isinstance(row.get("options"), list):
+            return False
+        if not all(isinstance(option, str) and option.strip() in row["options"] for option in item["options"]):
+            return False
+        if len(item["options"]) > 1 and row.get("selection") != "multiple":
+            return False
+    if args.get("age"):
+        row = readable_row("年龄")
+        limits = row.get("range") if row else None
+        if not row or row.get("control") != "range" or not isinstance(limits, dict):
+            return False
+        if type(limits.get("min")) is not int or type(limits.get("max")) is not int:
+            return False
+        age = args["age"]
+        minimum, maximum = age.get("min", 16), age.get("max")
+        if not limits["min"] <= minimum <= limits["max"]:
+            return False
+        if maximum is None:
+            if limits.get("unlimited") is not True:
+                return False
+        elif not minimum <= maximum <= limits["max"]:
+            return False
+    if args.get("first_degree_only") is not None:
+        school = readable_row("院校")
+        if not school or school.get("control") != "options":
+            return False
+    return True
+
+
 def _verify_core_filter_rows(args: Dict[str, Any], data: Dict[str, Any]) -> bool:
     """高级项跳过时，普通核心条件仍须由真实逐行回执证明生效。"""
     rows = data.get("applied_rows")
@@ -750,7 +805,9 @@ class BossFilterTool(LocalToolProxyTool):
         "替换语义：先清除原筛选，再设置提供的维度，未提供的维度不保留。"
         "先用 boss_filter_options 查询当前账号页面，将职位默认条件与聊天补充条件合并，用户当轮要求优先；"
         "性别、活跃度、求职状态等用 filters 精确行设置，无需先入库。扩展条件须传查询结果 invocation_id 为 options_ref。"
-        "发生档位映射时返回 substitutions，必须说明实际档位；不能漏掉条件或把工具不支持说成页面不存在。"
+        "仅提交探查中可匹配的行与精确选项；未匹配或不可读的条件跳过，简要告知后继续简历筛选，无需确认忽略。"
+        "全部条件未匹配时不调用本工具或清除原筛选，按当前页面结果继续并说明；跳过条件仍保留在原有职位评分要求中。"
+        "发生档位映射时返回 substitutions，必须说明实际档位；不可把未解析说成页面不存在。"
         "普通条件为经验、学历、求职状态、薪资；其他高级条件需VIP。会员未知且请求高级条件时先询问用户，"
         "用户确认后用membership_hint；非VIP或付费弹窗会屏蔽高级项并返回skipped_filters，必须告知哪些未执行。"
         "前置：已在推荐牛人页（不在时先 boss_goto recommend）。仅改变页面筛选，无外部副作用"
@@ -780,7 +837,7 @@ class BossFilterTool(LocalToolProxyTool):
 
     async def _dispatch_and_wait(self, tenant_id, user_id, session_id, device, args, progress_queue):
         # 两条执行入口共用此处：旧 Provider 可能静默丢弃未知字段，必须在派发前核验同设备探查结果。
-        if _extended_filter_args(args):
+        if _extended_filter_args(args) or args.get("options_ref"):
             try:
                 probe = await asyncio.to_thread(repository.get_invocation, args.get("options_ref"), tenant_id)
             except Exception:
@@ -797,7 +854,7 @@ class BossFilterTool(LocalToolProxyTool):
                     or not isinstance(data, dict) or type(data.get("filter_schema_version")) is not int
                     or data.get("filter_schema_version") not in (2, 3)
                     or data.get("filter_schema_version", 0) < (3 if _vip_filter_args(args) or args.get("membership_hint") else 2)
-                    or data.get("probe_complete") is not True
+                    or not _filter_probe_covers_request(data, args)
                     or not isinstance(data.get("supported_fields"), list)
                     or (args.get("filters") and "filters" not in data.get("supported_fields", []))
                     or (args.get("age") and "age" not in data.get("supported_fields", []))
@@ -807,7 +864,7 @@ class BossFilterTool(LocalToolProxyTool):
                     or (args.get("membership_hint") and not args.get("membership_account_ref"))
                     or (args.get("membership_account_ref") and data.get("account_ref") != args.get("membership_account_ref"))):
                 return {"success": False, "code": "FILTER_CAPABILITY_REQUIRED", "effect": "none",
-                        "message": "当前设备尚未确认支持完整扩展筛选；请更新 BOSS CLI 后重新调用 boss_filter_options，原筛选未改动"}
+                        "message": "当前探查尚未确认请求中的筛选条件；请只提交已识别行与精确选项，跳过未匹配条件，原筛选未改动"}
         # 保留引用字段在原始 intent / durable request / replay 中一致；Provider 接受但不使用此云端引用。
         return await super()._dispatch_and_wait(tenant_id, user_id, session_id, device, args, progress_queue)
 
@@ -815,7 +872,7 @@ class BossFilterTool(LocalToolProxyTool):
         result = super()._map_terminal(invocation)
         args = invocation.get("arguments_json") or {}
         terminal_data = result.get("data") if isinstance(result.get("data"), dict) else {}
-        if result.get("success") and (_extended_filter_args(args) or terminal_data.get("filter_schema_version") is not None):
+        if result.get("success") and (_extended_filter_args(args) or args.get("options_ref") or terminal_data.get("filter_schema_version") is not None):
             data = result.get("data") if isinstance(result.get("data"), dict) else {}
             version = data.get("filter_schema_version") if isinstance(data, dict) else None
             valid = type(version) is int and version in (2, 3) and version >= (3 if _vip_filter_args(args) or args.get("membership_hint") else 2)
@@ -895,10 +952,12 @@ class BossFilterOptionsTool(LocalToolProxyTool):
     name = "boss_filter_options"
     display_name = "BOSS 查询筛选可选档位"
     description = (
-        "在用户本机 BOSS 直聘「推荐牛人」页只读探查筛选面板的全部可选档位"
+        "在用户本机 BOSS 直聘「推荐牛人」页只读探查筛选面板可识别的档位"
         "（含会员动态行与控件类型），读完自动收起面板。用于把用户口语化筛选要求"
         "（如 15k-20k、5年以上、本科及以上）映射成页面实际存在的精确档位后再调 boss_filter。"
-        "扩展筛选使用本工具成功结果的 invocation_id 作为 boss_filter.options_ref；缺少或不完整探查不能认定页面不存在该条件。"
+        "部分行不可读时返回已识别rows及unreadable_rows，probe_complete=false不阻塞已识别条件；"
+        "只提交rows中可匹配的条件，未匹配项跳过并继续任务，不要求用户刷新或确认忽略，不编造不可读行的数量、名称或原因。"
+        "扩展筛选使用本工具成功结果的 invocation_id 作为 boss_filter.options_ref；未解析不等于页面不存在。"
         "前置：已在推荐牛人页（不在时先 boss_goto recommend）"
     )
 

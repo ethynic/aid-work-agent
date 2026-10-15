@@ -1,7 +1,7 @@
 /**
  * boss_filter_options operation（设计 §10.2 补充，2026-08-17 用户定调「档位判断交 AI」）：
- * 只读探查推荐牛人页筛选面板的全部可选档位（经验/学历/薪资各行选项），供调用方（LLM）
- * 把用户口语化要求（如 15k-20k / 5年以上 / 本科及以上）映射成最接近的精确档位后再调
+ * 只读探查推荐牛人页筛选面板可确认的档位，局部不可读行单独报告，供调用方（LLM）
+ * 把用户要求匹配到真实可选档位，忽略未匹配条件后再调
  * boss_filter——CLI 内部不做模糊匹配（与 list-jobs → select-job 同一模式）。
  *
  * 链路：ensurePanelOpen → describePanel（两道消歧）→ 点「筛选」收起面板还原页面。
@@ -68,7 +68,8 @@ export function createBossFilterOptionsOperation(
                 ordinary: { labels: rows.filter((r) => r.group === 'ordinary').map((r) => r.label), available: true },
                 vip: { labels: rows.filter((r) => r.group === 'vip').map((r) => r.label), available: setter.membership.status === 'vip', visible: rows.some((r) => r.group === 'vip') },
               },
-              probe_complete: rows.every((r) => !!r.control),
+              probe_complete: setter.unreadableRows.length === 0 && rows.every((r) => !!r.control),
+              unreadable_rows: setter.unreadableRows,
               rows: rows.map((r) => ({
                 label: r.label,
                 options: r.options.map((o) => o.text),
@@ -77,7 +78,7 @@ export function createBossFilterOptionsOperation(
                 ...(r.range ? { range: r.range } : {}),
                 ...(r.group ? { group: r.group } : {}),
               })),
-              hint: '将职位默认要求与用户当轮补充条件合并；经验/学历/求职状态支持filters多选，年龄用age。membership未知时先询问用户再传membership_hint；推广VIP徽标不是会员证明。非VIP高级条件只跳过，按skipped_filters报告。院校附属第一学历用first_degree_only。',
+              hint: '将职位默认要求与用户当轮补充条件合并；只提交rows中已确认且可匹配的行与选项，匹配不到或unreadable_rows中的条件忽略，简要告知并继续其余筛选，不声称全部条件已满足；全部未匹配时不调用空筛选或清除。经验/学历/求职状态支持filters多选，年龄用age。membership未知时先询问用户再传membership_hint；推广VIP徽标不是会员证明。非VIP高级条件只跳过，按skipped_filters报告。院校附属第一学历用first_degree_only。',
               readable_lines: lines,
             },
             effect: 'none',

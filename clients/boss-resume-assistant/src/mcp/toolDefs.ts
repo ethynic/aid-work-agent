@@ -35,11 +35,11 @@ export const TOOL_DEFS: BossToolDef[] = [
     description:
       '在 BOSS 直聘「推荐牛人」页设置筛选面板：旧经验/学历/薪资或当前页面动态filters行及age范围（替换语义，先清除残留再选）。' +
       '写动作：会改动页面上的筛选状态。至少提供一个条件，未提供的维度会清空，不保留原值。' +
-      '数值档位（经验/薪资）自动保底映射：双端或下限请求按「保下限」，只有上限的请求按「不扩大上限」映射到真实档位' +
-      '（如要 15-30K 而页面只有 10-20K/20-50K 会选 20-50K），结果 substitutions 注明实际档位，务必向用户转述；' +
       '先用 boss_filter_options 查实际行与档位，将职位默认要求与用户当轮补充条件合并，不回写职位库；新增行使用精确filters，年龄使用age。' +
+      '只提交探查中已确认且可匹配的条件；未匹配或不可读的条件跳过，简要告知并继续其余筛选，不声称全部满足。全部未匹配时不调用空筛选或清除。' +
+      '结果 substitutions 如有档位替换，须向用户转述实际档位；' +
       '扩展行不做模糊映射。经验/学历/求职状态可在filters中多选；先查membership/groups，未知会员有高级请求须先询问用户，再传membership_hint。' +
-      '真实非VIP或确定付费证据优先于提示；只执行普通项并明确回报skipped_filters。院校附属第一学历用first_degree_only。不能静默漏条件或把探查不完整当不存在。',
+      '真实非VIP或确定付费证据优先于提示；只执行普通项并明确回报skipped_filters。院校附属第一学历用first_degree_only。',
     zodShape: {
       experience: z.string().min(1).optional().describe('经验档位，如 "5-10年"；省略会清空该维度'),
       educations: z.array(z.string().min(1)).optional().describe('学历档位列表，可多选，如 ["本科","硕士"]；省略会清空该维度'),
@@ -269,6 +269,7 @@ export const TOOL_DEFS: BossToolDef[] = [
       '只读探查 BOSS 直聘「推荐牛人」页会员三态、普通/VIP分组及当前可见行与控件（含多选标记与真实年龄范围）；推广VIP标记不是会员证明，非VIP不展开高级区。' +
       '读完后自动收起面板还原页面。用于把用户口语化的筛选要求（如 15k-20k、5年以上、本科及以上）' +
       '映射成页面实际存在的精确档位，再调 boss_filter。前置要求：当前在推荐牛人页，否则返回 WRONG_PAGE。' +
+      '局部不可读时返回probe_complete=false与unreadable_rows，rows中的已确认条件仍可继续使用；只提交可匹配子集，未匹配跳过并简要告知，不声称全部满足。全部未匹配时不调用空筛选或清除。' +
       '开/收面板借用真实鼠标约 2 秒，期间勿动鼠标。',
     zodShape: {},
     annotations: { title: '查询筛选可选档位', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },

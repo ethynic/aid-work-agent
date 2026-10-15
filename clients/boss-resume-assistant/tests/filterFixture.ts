@@ -1,4 +1,25 @@
 import type { DomSnapshot } from '../src/main/boss/domSnapshot.js'
+import { isDescendantOf } from '../src/main/boss/domSnapshot.js'
+
+/** 保留真机行标签与面板边界，仅移除该行选项的可见布局，模拟局部控件尚未渲染。 */
+export function withoutRowOptions(snapshot: DomSnapshot, labels: string[]): DomSnapshot {
+  const snap = structuredClone(snapshot)
+  for (const doc of snap.documents) {
+    const values = doc.nodes.nodeValue as number[], parents = doc.nodes.parentIndex as number[]
+    for (let node = 0; node < values.length; node++) {
+      if (!labels.includes(snap.strings[values[node]!] ?? '')) continue
+      const label = doc.layout.bounds[doc.layout.nodeIndex.indexOf(node)]!
+      const row = parents[parents[node]!]!
+      doc.layout.nodeIndex.forEach((child, index) => {
+        const bounds = doc.layout.bounds[index]!
+        if (child !== node && isDescendantOf(doc, child, row) && bounds[0]! >= label[0]! + label[2]!) {
+          doc.layout.bounds[index] = [0, 0, 0, 0]
+        }
+      })
+    }
+  }
+  return snap
+}
 
 /** 虚构账号的导航头像，给脱敏面板fixture补可核验身份；无真实姓名/头像URL。 */
 export function withAccount(snapshot: DomSnapshot, account = 'account-a', membership: 'vip' | 'non_vip' | 'unknown' = 'unknown'): DomSnapshot {

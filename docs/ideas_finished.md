@@ -134,6 +134,7 @@
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
 | 20261015-1457 | Excel读取性能与正式库KB补迁 | ✅ 已完成开发；正式库240份已补迁，Excel修复独验96通过，代码未部署。 | [设计](tools/excel-read-performance-design.md) | [计划](plans/plan-excel-read-performance.md) |
+| 20261015-1516 | BOSS部分筛选项不可读时继续执行 | ✅ 已完成开发：跳过未匹配条件，独立测试与CR通过，待部署验收。 | [设计](design/recruiting/resume-job-matching-design.md) | [计划](plans/desktop-automation/plan-boss-partial-filter-discovery.md) |
 | 20261013-1410 | BOSS 会员筛选与聊天补充条件 | ✅ 已完成开发；会员滚动和聊天补充条件已通过真机验证。 | [设计](design/recruiting/resume-job-matching-design.md) | [开发计划](plans/desktop-automation/plan-boss-vip-dynamic-filters.md) |
 | 20261011-0948 | 数据分析与智能体成本治理 | ✅ 已完成开发：310.77 积分仿真 trace 归因 analyze_data 内层循环，6 点优化计划全部完成并三场复验（run5/6/7 含外层全口径均值 80.92，2/3 场落入 ≤90 目标）；报告生成模板化、交付节制为后续候选项未纳入。 | [复盘](incidents/analysis-agent-cost-392-credits-incident.md) | [开发计划](plans/plan-data-analysis-cost-optimization.md) |
 | 20261010-1053 | 统一知识库检索工具替代 attraction/hotel_search | ✅ 已完成开发；正式库240份metadata已补迁，旧chunks待观察期后清场。 | [设计](system/knowledge-base/unified-kb-resource-table-metadata-design.md) | [开发计划](plans/plan-unified-kb-resource-metadata.md) |
