@@ -15,6 +15,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 import httpx
 from loguru import logger
 
+from .errors import ProviderHTTPError
 from .key_pool import KeyPool
 from .llm_call_logger import generate_request_id, log_llm_invoke
 
@@ -45,13 +46,15 @@ PRIMARY_ONLY_KWARGS = ("thinking", "enable_thinking", "reasoning_effort")
 def is_retryable_error(error: Exception) -> bool:
     """判断错误是否值得尝试其他 provider
 
-    Provider 层（deepseek/qwen/zhipu）会将 httpx.HTTPStatusError 包成 RuntimeError，
-    错误消息里包含 response body 但不含状态码。因此需要对 RuntimeError 做更宽泛的匹配。
+    ProviderHTTPError 保留的状态码优先，避免正文中的关键词或请求 ID 误导分类。
+    旧式无结构状态码的 RuntimeError 继续使用关键词规则以兼容已有调用。
     """
     if isinstance(error, asyncio.TimeoutError):
         return True
     if isinstance(error, httpx.ConnectError):
         return True
+    if isinstance(error, ProviderHTTPError):
+        return error.status_code >= 500 or error.status_code == 429
     if isinstance(error, httpx.HTTPStatusError):
         code = error.response.status_code
         return code >= 500 or code == 429
@@ -500,6 +503,7 @@ class FailoverGateway:
 
         for i, slot in enumerate(chain):
             start = time.monotonic()
+            stream_started = False
             try:
                 slot_kwargs = dict(kwargs)
                 if slot.provider_name == self._primary_name:
@@ -516,6 +520,7 @@ class FailoverGateway:
                 slot.circuit_breaker.record_success()
 
                 # 返回生成器：先 yield 第一个 chunk，再继续流
+                stream_started = True
                 yield first_chunk
                 async for chunk in stream_iter:
                     yield chunk
@@ -526,6 +531,9 @@ class FailoverGateway:
                 slot.circuit_breaker.record_success()
                 return
             except Exception as e:
+                # 已输出的回复不能撤回；切换模型会拼接另一份回复。
+                if stream_started:
+                    raise
                 duration_ms = (time.monotonic() - start) * 1000
                 error_msg = f"{type(e).__name__}: {e}"
                 errors.append({

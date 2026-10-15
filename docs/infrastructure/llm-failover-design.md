@@ -89,7 +89,7 @@ src/llm/
 ├── failover.py             # 新增：FailoverGateway + CircuitBreaker
 ├── key_pool.py             # 不变
 ├── llm_call_logger.py      # 不变
-└── providers/              # 不变
+└── providers/              # 2026-10-15：HTTP 异常状态码透传及流式错误正文读取
 ```
 
 #### `failover.py` 核心类
@@ -172,9 +172,17 @@ async def _stream_with_failover(self, fn_name, **kwargs):
 
 ### 2.7 错误分类
 
+**2026-10-15 修订（HTTP 状态码透传）**：Provider 将 `HTTPStatusError` 转为仅含正文的 `RuntimeError` 会丢失状态码；生产 DeepSeek 的 503 正文只有 `service_unavailable_error`，无法命中旧的字符串规则，导致备用模型及熔断均未触发。实现计划见 [HTTP 故障转移修复计划](../plans/plan-llm-http-failover-fix.md)。
+
+DeepSeek、Qwen（含继承实现的子类）、GLM 的普通调用及流式建连使用 `ProviderHTTPError(RuntimeError)` 保存 `status_code`。结构化状态码优先于响应文本：5xx 与 429 尝试备用 Provider，其他 HTTP 状态直接抛出；旧式、无结构状态码的 RuntimeError 继续使用既有兼容规则。异常不额外持有请求头或凭据，公开调用签名不变。
+
+流式错误正文必须在响应上下文关闭前读取，避免 `ResponseNotRead` 覆盖真实错误。正文读取遇到 `httpx.RequestError` 时，仍按已收到的 HTTP 状态构造 `ProviderHTTPError`，诊断正文退化为读取异常类型；不能因正文读取失败而丢失状态。流式开始输出后不再切换模型（§2.6）；失败计数与切换只适用于尚未输出的失败。
+
 ```python
 def _is_retryable_error(error: Exception) -> bool:
     """判断错误是否值得尝试其他 provider"""
+    if isinstance(error, ProviderHTTPError):
+        return error.status_code >= 500 or error.status_code == 429
     if isinstance(error, asyncio.TimeoutError):
         return True
     if isinstance(error, httpx.ConnectError):
@@ -183,7 +191,7 @@ def _is_retryable_error(error: Exception) -> bool:
         code = error.response.status_code
         return code >= 500 or code == 429
     if isinstance(error, RuntimeError):
-        # Provider 层将 HTTPStatusError 包装为 RuntimeError
+        # 仅兼容旧式、无结构状态码的 RuntimeError；现行 Provider 使用 ProviderHTTPError
         msg = str(error).lower()
         if any(kw in msg for kw in ["500", "502", "503", "429", "timeout"]):
             return True
@@ -227,7 +235,7 @@ class LLMGateway:
 
 **Failover 完全复用此机制**，无需新增日志文件。因为：
 
-1. **Provider 层不变**：每个 provider（`ZhipuProvider`、`DeepSeekProvider`）内部已经调用 `log_llm_invoke()` 记录每次 API 调用
+1. **Provider 层保留调用日志**：每个 provider（`ZhipuProvider`、`DeepSeekProvider`）内部调用 `log_llm_invoke()` 记录每次 API 调用；2026-10-15 修订仅新增 HTTP 状态码异常契约及流式错误正文读取
 2. **Failover 只是多调用了一次**：主 provider 失败时，备用 provider 的调用同样经过 Provider 层，自动产生一条日志记录，`provider` 字段不同
 3. **Failover 事件本身额外记录一条**：在 FailoverGateway 中，每次触发 failover 切换时调用 `log_llm_invoke()` 记录切换事件，标记 `type: "failover"`，便于事后分析
 
@@ -388,7 +396,7 @@ class FailoverGateway:
 
 ### 4.3 不改造的范围
 
-- **Provider 层**（`qwen.py`、`zhipu.py`、`deepseek.py`）不改动
+- **Provider 成功响应处理**不改动；`qwen.py`、`zhipu.py`、`deepseek.py` 的 HTTP 异常包装与流式错误正文读取按 §2.7 修订
 - **`KeyPool`** 不改动
 - **Agent 层**（`agent.py`）不改动
 - **配置结构**只做增量，不破坏现有配置
@@ -398,6 +406,8 @@ class FailoverGateway:
 | 文件 | 改动类型 | 说明 |
 |------|---------|------|
 | `src/llm/failover.py` | **新增** | `CircuitBreaker` + `ProviderSlot` + `FailoverGateway` + 告警逻辑 |
+| `src/llm/errors.py` | **新增（2026-10-15）** | 兼容 RuntimeError 的 ProviderHTTPError，保留结构化 HTTP 状态码 |
+| `src/llm/providers/{deepseek,qwen,zhipu}.py` | **修改（2026-10-15）** | 普通/流式调用统一透传 HTTP 状态，流式错误正文在响应关闭前读取 |
 | `src/llm/gateway.py` | **修改** | `LLMGateway` 内部集成 failover，公共接口不变 |
 | `src/llm/llm_call_logger.py` | **不变** | Failover 复用现有日志，通过 Provider 层自动记录 |
 | `src/services/notification_service.py` | **不变** | 复用现有通知服务发送告警 |
