@@ -6,6 +6,7 @@
 Word/Excel/PPT 文档自动走专用解析器。
 """
 
+import asyncio
 import os
 import tempfile
 from pathlib import Path
@@ -144,7 +145,8 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
             if is_word_document(str(path)):
                 return self._read_word_document(path)
             if is_excel_document(str(path)):
-                return self._read_excel_document(path)
+                # 同步 Excel 解析可能耗时，不能阻塞同一事件循环的 Runner 心跳。
+                return await asyncio.to_thread(self._read_excel_document, path)
             if is_ppt_document(str(path)):
                 return self._read_ppt_document(path)
 
