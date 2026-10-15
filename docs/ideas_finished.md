@@ -7,6 +7,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261015-1544 | Runtime跨电脑打包升级兼容 | ✅ 已完成开发：历史五根已固化，0.3.9升级及最终包启动通过，组合包完成。 | [设计](system/runtime-plugin-host-architecture-design.md#7-runtime-ui-与产品壳) | [计划](plans/plan-runtime-ui-boss-trial-bundle.md#phase17-跨电脑打包与直接升级2026-10-15) |
 | 20261015-1052 | 对话失败提示与重试 | ✅ 已完成开发：成功重试清理、手动删除、灰色图标与紧凑气泡，待手动部署。 | [设计](system/agent-application-architecture-design.md#61-一份执行事实多种呈现) | [计划](plans/plan-chat-runner-failure-ui.md) |
 | 20261012-1120 | Runtime UI 与 BOSS 老用户试用组合包 | ✅ 已完成开发：r15长路径修复实装及插件导入通过，待客户筛选验收。 | [共同契约](system/runner-desktop-runtime-integration-contract.md)、[安装复盘](incidents/runtime-installer-missing-fixture-env-incident.md)、[迁移复盘](incidents/runtime-registration-migration-watermark-incident.md) | [组合包计划](plans/plan-runtime-ui-boss-trial-bundle.md)、[恢复计划](plans/plan-runtime-upgrade-recovery.md)、[干净安装计划](plans/plan-runtime-clean-install.md) |
 | 20261015-1023 | LLM HTTP 故障转移修复 | ✅ 已完成开发：保留 HTTP 状态码，修复 503 未切备用模型、错误正文读取中断及流式回复拼接。 | [设计](infrastructure/llm-failover-design.md#27-错误分类) | [计划](plans/plan-llm-http-failover-fix.md) |

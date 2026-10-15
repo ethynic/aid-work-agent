@@ -1,8 +1,12 @@
 {
   "schemaVersion": 1,
-  "source": "user-provided from previous build computer",
+  "source": "previous build computer; original archive and embedded installer trust verified locally",
   "archive": "AID-Work-Runtime-UI-BOSS-20261015-trial-r15.zip",
   "archiveSha256": "b884100a25f390aac1abaa42f546579f9df1223e003080344d71e63ecdaaf91d",
+  "archiveBytes": 130966136,
+  "archiveVerifiedLocally": true,
+  "embeddedTrustVerifiedLocally": true,
+  "verificationReport": "clients/release/runtime-0.0.12-r15-source-verification.json",
   "trustFileBytes": 1425,
   "trustFileSha256": "bc1bdb8f0b949ec54f941821f1470207d913f6c2fef64c82646b356104d7f328",
   "restoredTrustFileSha256": "bc1bdb8f0b949ec54f941821f1470207d913f6c2fef64c82646b356104d7f328"
