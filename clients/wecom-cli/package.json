@@ -8,10 +8,11 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.main.json",
-    "build:main": "tsc -p tsconfig.main.json",
+    "build": "tsc -p tsconfig.main.json && node scripts/copy-matrix.mjs",
+    "build:main": "tsc -p tsconfig.main.json && node scripts/copy-matrix.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.main.json",
     "test": "npm run build:main && node scripts/run-tests.mjs",
+    "test:py": "..\\..\\venv\\Scripts\\python.exe -m unittest discover -s tests/py -v",
     "cli": "npm run build:main && node dist/src/cli/index.js"
   },
   "dependencies": {

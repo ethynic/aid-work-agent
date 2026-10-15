@@ -25,7 +25,7 @@
  *   node dist/src/cli/index.js watch [--interval 秒] [--once]
  *   node dist/src/cli/index.js add-customer --phone <11位手机号> --yes [--json]
  *   node dist/src/cli/index.js mcp --stdio
- *   node dist/src/cli/index.js doctor [--json]
+ *   node dist/src/cli/index.js doctor [--json] [--localdb]
  *   node dist/src/cli/index.js version [--json]
  */
 import { flagString, parseArgs, hasFlag } from './args.js'
@@ -76,7 +76,9 @@ const USAGE = `aid-wecom — 企业微信操作 CLI / MCP Provider（M1）
 
 Provider 命令：
   mcp --stdio               启动标准本地 MCP server（stdout 只承载协议，供 agent Host 使用）
-  doctor [--json]           只读环境检查（平台 / 交互会话 / PowerShell / artifact 目录），任一失败退出码 1
+  doctor [--json] [--localdb]
+                          只读环境检查（平台 / 交互会话 / PowerShell / artifact 目录），任一失败退出码 1；
+                          --localdb 追加本地库深检段（结论写 localdb-state.json）
   version [--json]          版本信息；--json 输出机器可读 manifest（含 schema_digest）
 
 命名约定：所有命令以动词开头；不存在按对象命名的子命令。
@@ -173,7 +175,7 @@ async function main(): Promise<number> {
     }
     case 'doctor': {
       const { doctorCommand } = await import('./commands/doctor.js')
-      return doctorCommand({ json: hasFlag(args, 'json') })
+      return doctorCommand({ json: hasFlag(args, 'json'), localdb: hasFlag(args, 'localdb') })
     }
     case 'version': {
       const { versionCommand } = await import('./commands/version.js')

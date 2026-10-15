@@ -1,0 +1,1299 @@
+# drivers/py/wecom_localdb.py — 本地库驱动：可信快照判定 + 解密（设计 §3.3，任务 1.4）
+# 对齐 chat_ocr.py 单脚本多模式先例：argv 模式分发、stdout 最后一行单行 JSON、
+# \u 转义中文（ensure_ascii，规避控制台编码）、任何错误（含用法/环境缺失）也输出 JSON 且退出码 0。
+#
+# 模式（argv 分发）：
+#   snapshot-verify <wal快照路径>
+#       对【密文】快照 WAL 做设计 §3.3 步骤 4-6 判定（有效前缀规则与 SQLite 自身读 WAL 语义一致）：
+#       ① 头判定：magic ∈ {0x377f0682, 0x377f0683}、页大小合法（512-65536 的 2 的幂）、头校验和；
+#       ② 从 WAL 头校验和起链，对「帧头前 8B + 帧页密文」复算累计校验和（SQLite 标准算法，
+#          字节序由 magic 决定：…82=小端、…83=大端；存储值一律大端），且帧 salt == 头 salt；
+#       ③ 首个链断裂或 salt 不匹配的帧 = 有效前缀终点——WAL 重用保留的旧代尾帧按此自然截断，
+#          属正常现象不是错误、不据此判 reset（评审 v3 #24：reset 判定只在 TS 捕获侧 H0/H1 头比较）；
+#       ④ 有效前缀内统计提交帧（帧头 bytes[4:8] dbsize>0）。
+#       → {ok, total_frames, valid_prefix_frames, commit_frames, stale_tail_frames,
+#          wal_magic_ok, page_size, detail}
+#   decrypt <db快照路径> <wal快照路径|-> <输出目录>
+#       先内联执行 snapshot-verify 语义（不可信 → {ok:false,error:'SNAPSHOT_UNSTABLE'}，【不产生
+#       任何输出文件】——失败场景不返回半解密结果，§3.3 步骤 8）；再逐页解密主库（页 1 校验 =
+#       密钥先知快速失败）→ 按「有效前缀 + 提交边界」重建明文 WAL：帧页按帧头 pgno 解密，明文
+#       校验和【重算】（原校验和是对密文的；实验 decrypt_wxaes128.decrypt_wal 不重算的逻辑不可
+#       照搬，正确算法参考 decrypt_full）；最后 sqlite3 PRAGMA integrity_check 验收（可写打开让
+#       WAL 回放，只读打开会跳过 WAL——decrypt_full 注释）。密钥从 stdin 读 hex（评审定稿：
+#       不进 argv/日志/JSON 输出）。
+#       → {ok, pages, wal_frames, stale_tail_frames, integrity, out_db, out_wal?}
+#       wal_frames = 有效前缀内、最后一个提交帧边界内的帧数（实际重建写入数）；有效前缀内提交
+#       边界之后未提交的帧不入库（snapshot-verify 的 valid/commit 计数可看出该差值）。
+#       integrity_check 的可写连接关闭时 checkpoint：回放内容落库、-wal 被消费删除，成功后
+#       out_db 自包含——out_wal 仅在文件仍存在时才出现在输出（实践中通常已被消费）。
+#   keyscan --pids <pid[,pid…]> --db <页1源库副本> [--max-region-bytes N] [--aligned-first|--full]
+#       C6 内存密钥提取（Windows-only，只读观察：OpenProcess(PROCESS_VM_READ|QUERY_INFORMATION)
+#       + ReadProcessMemory，无注入/无写/无提权）。从 --db 读页 1 构造验证先知（对齐实验
+#       find_key6.py：C0=[8:16]‖[24:32]、TARGET=[16:24]、aes128 页密钥=MD5(k‖1‖sAlT)、
+#       aes256=SHA256、IV=gen_iv(1)——复用本文件既有纯函数，单一实现）。逐 pid 扫描
+#       MEM_COMMIT/MEM_PRIVATE/PAGE_READWRITE 且 ≤max-region-bytes 的区域；先 16 字节对齐
+#       偏移预筛（假设：EVP 上下文堆分配 16 对齐，P1a 真机验证点 §9.5），miss 再同进程
+#       全量步长 1（正确性不依赖对齐假设）；每 16/32B 窗口零字节计数预筛沿用实验（>半数
+#       零字节跳过）。命中即返回（先到先得，多 pid 顺序尝试）。
+#       → {ok:true, kind:'aes128'|'aes256', key_hex, pid, scanned_bytes, elapsed_ms}
+#         或 {ok:false, error:'KEY_NOT_FOUND'|'OPEN_FAILED'|'WINDOWS_REQUIRED', pids_tried?, elapsed_ms}
+#       key_hex 只出现在该 JSON（emit 豁免该字段的 32-hex 脱敏，供 TS 内存接收），绝不出现
+#       在任何日志/异常消息；其余字段仍逐字段脱敏兜底。
+#   query --workdir <dir> --task <t> [参数]
+#       C8 读库查询（任务 1.8）：对 workdir 内【已解密明文库】做只读 SQL（uri ro，不写不改）。
+#       message.db.dec.db 必需（兼容 decrypt 自然产物命名 message.dec.db）；user.db.dec.db /
+#       session.db.dec.db 仅 resolve 需要（缺失 → 该来源标 unavailable，不报错）。
+#       任务：
+#         messages --conv <id> [--after-id N] [--limit N] [--since <秒>]
+#           conversation_id 匹配且 message_id > after-id（缺省 0），按 message_id 升序
+#           （=水位入库序）取 limit 条（缺省 100）；since 为 send_time（秒）可选过滤。
+#           每行输出 message_id/server_id/sequence/sender_id/conversation_id/content_type/
+#           send_time/flag/text/trusted——text/trusted 由 extract_content 就地提取（非文本
+#           text=null）。附 next_cursor_id = 本批次实际返回行的最大 message_id（空批次
+#           = after-id 原值）——游标只认返回集，展示排序不推进游标（评审 v5 规则）。
+#         conversations
+#           全表按 conversation_id 聚合 → [{conversation_id, count, last_send_time,
+#           last_message_id}] 按 last_message_id 降序。last_send_time 取水位行（最大
+#           message_id）那一行的 send_time——迟到同步下与 MAX(send_time) 可能不同，语义
+#           按"水位末端那条"（与 cursor 同一基元）。
+#         last-per-conv [--exclude-types <t[,t…]>]
+#           每会话输出 last_message（无条件最后一条）与 last_participating（跳过
+#           CONFIRMED_SYSTEM_TYPES 排除表；--exclude-types 为【追加】语义，不缩减基础表）。
+#           供待回复判定（TS 侧按 sender_id 判断方向）；排除表只影响本任务，不影响
+#           messages 任务返回。全是系统消息 → last_participating=null。
+#         resolve --name <名称>
+#           先查 session 库 conversation_table（R: 群名精确匹配，多候选全返回——name 无
+#           唯一索引需防重），再查 user 库 user_table（name/别名/备注列精确匹配；列名经
+#           PRAGMA table_info 运行时确认，不猜）。输出 {candidates: [{source,
+#           conversation_id, name, …}], ambiguous, sources}；列名无法确认 → 该来源
+#           schema-unknown。user 候选附 user_id，conversation_id 置 null——单聊会话 id
+#           （S:<from>_<to>）需结合本人账号组合，py 侧无法单独决定方向，由 TS 消费侧完成。
+#       库缺失/SQL 错误 → {ok:false, error,…} 不抛；缺表/缺列（schema 不兼容）→ 稳定错误码
+#       SCHEMA_UNSUPPORTED（评审 v6，doctor 归 compat）。本模式无密钥参与，输出不走 32-hex
+#       兜底脱敏（业务文本不得被破坏，见 emit redact 参数）。
+#   active-account <操作主窗口PID>
+#       只查询该 WXWork 进程的磁盘句柄路径；唯一普通本地 Data/message.db → {ok,pid,message_db}。
+#       无匹配/多账号/枚举不完整均失败，不读进程内存或数据库内容。
+#
+# 依赖：标准库 hashlib/struct/sqlite3/json/os/re/sys/time/urllib.parse；pycryptodome 仅
+# decrypt/keyscan 用到（venv 依赖，延迟导入——snapshot-verify/query 模式零第三方依赖）；
+# ctypes 仅 keyscan 的 Windows 分支延迟导入（非 win32 直接 WINDOWS_REQUIRED）。算法来源：
+# 实验 decrypt_wxaes128.py（本机 5.0.11.6029 全链路验证通过）；判定规则以设计 §3.3 为准。
+# v1 快照/库整读入内存（生产 WAL checkpoint 后很小、P0 实测库+WAL 合计 1.28MB；超大文件
+# 整读为已知限制）。
+import hashlib
+import json
+import os
+import re
+import sqlite3
+import struct
+import sys
+import time
+import urllib.parse
+
+SALT = bytes([0x73, 0x41, 0x6C, 0x54])  # "sAlT"（页密钥派生 MD5 输入盐）
+PAGE = 4096
+WAL_HEADER_SIZE = 32
+FRAME_HEADER_SIZE = 24
+WAL_MAGICS = (0x377F0682, 0x377F0683)  # 大端存储；…82=校验和按小端机序计算，…83=按大端
+
+# 输出脱敏兜底（§8 redaction 层）：32-hex 样式串一律遮蔽——密钥本就不进 payload，此为防御性兜底
+_HEX32_RE = re.compile(r'[0-9a-fA-F]{32}')
+
+
+def emit(payload, keep_hex_fields=(), redact=True):
+    r"""协议出口：stdout 最后一行 LOCALDB_JSON: {...}（单行 JSON、\u 转义中文、32-hex 脱敏）。
+
+    keep_hex_fields：豁免整行脱敏的字段名集合（仅 keyscan 的 key_hex——密钥 hex 是该模式
+    JSON 的协议载荷本身，供 TS 内存接收；豁免时其余字符串字段仍逐一脱敏兜底，密钥依旧
+    不进任何日志/异常消息）。
+    redact=False：整行明文输出——仅 query 模式使用（该模式全程无密钥参与，message 正文等
+    业务载荷不得被 32-hex 兜底脱敏破坏；密钥防线仍在 decrypt 的 stdin 与 keyscan 的
+    受控字段，不因本豁免弱化）。"""
+    if not redact:
+        print('LOCALDB_JSON: ' + json.dumps(payload, ensure_ascii=True))
+        return
+    if not keep_hex_fields:
+        line = json.dumps(payload, ensure_ascii=True)
+        print('LOCALDB_JSON: ' + _HEX32_RE.sub('[REDACTED-HEX]', line))
+        return
+    out = {}
+    for k, v in payload.items():
+        if isinstance(v, str) and k not in keep_hex_fields:
+            v = _HEX32_RE.sub('[REDACTED-HEX]', v)
+        out[k] = v
+    print('LOCALDB_JSON: ' + json.dumps(out, ensure_ascii=True))
+
+
+# ---------- 页加密原语（纯函数，供 decrypt 与合成 WAL fixture 复用同一实现） ----------
+
+def page_key(mkey, pgno):
+    """页密钥 = MD5(mkey[16] ‖ pgno 小端 u32 ‖ "sAlT")（实验 decrypt_wxaes128.page_key 同源）。"""
+    return hashlib.md5(mkey + struct.pack('<I', pgno) + SALT).digest()
+
+
+def gen_iv(seed):
+    """IV = MD5(LCG(seed+1) 展开 16B)；LCG 为 wxaes128 方案绑定的 Lehmer 变体。"""
+    z = (seed + 1) & 0xFFFFFFFF
+    init = bytearray(16)
+    for j in range(4):
+        q = z // 52774
+        z = 40692 * (z - 52774 * q) - 3791 * q
+        if z < 0:
+            z += 2147483399
+        init[4 * j:4 * j + 4] = struct.pack('<I', z & 0xFFFFFFFF)
+    return hashlib.md5(bytes(init)).digest()
+
+
+def _cipher(mkey, pgno):
+    from Crypto.Cipher import AES  # 延迟导入：snapshot-verify 模式零第三方依赖
+    return AES.new(page_key(mkey, pgno), AES.MODE_CBC, gen_iv(pgno))
+
+
+def decrypt_page(mkey, pgno, page):
+    """解密单页（密文 4096B → 明文 4096B）；页 1 明文页头校验失败（错钥/方案不符）→ None。
+
+    页 1 特殊布局（P0 实测）：密文页 [8:16] 存放被搬移的页头密文、[16:24] 为明文页头副本；
+    解密时先把密文归位 [16:24]，解 [16:4096] 与 [0:16]，校验解密结果 [16:24] 与落盘明文页头
+    一致后，[0:16] 写回 "SQLite format 3\\0"。"""
+    out = bytearray(page)
+    if pgno == 1:
+        db_header = bytes(page[16:24])
+        out[16:24] = page[8:16]  # 还原被搬移的页头密文
+        out[16:PAGE] = _cipher(mkey, 1).decrypt(bytes(out[16:PAGE]))
+        out[0:16] = _cipher(mkey, 1).decrypt(bytes(page[0:16]))
+        if out[16:24] != db_header:
+            return None  # 密钥错误或方案不符（页 1 先知校验）
+        out[0:16] = b"SQLite format 3\x00"
+    else:
+        out[0:PAGE] = _cipher(mkey, pgno).decrypt(bytes(page[0:PAGE]))
+    return bytes(out)
+
+
+# ---------- WAL 校验/判定（纯函数，供 snapshot-verify、decrypt 内联与 py 单测导入） ----------
+
+def wal_cksum(data, s0, s1, big_endian):
+    """SQLite 标准 WAL 累计校验和：数据按 8 字节一组拆两个 u32（读取字节序由 magic 决定），
+    s0' = s0 + x[i] + s1；s1' = s1 + x[i+1] + s0'（模 2^32）。存储值一律大端（由调用方 pack）。
+    长度非 8 倍数时截齐（WAL 头 24B 参与计算、帧头前 8B + 4096 页均整倍，不会触发截断）。"""
+    fmt = '>II' if big_endian else '<II'
+    end = len(data) - (len(data) % 8)
+    for i in range(0, end, 8):
+        a, b = struct.unpack_from(fmt, data, i)
+        s0 = (s0 + a + s1) & 0xFFFFFFFF
+        s1 = (s1 + b + s0) & 0xFFFFFFFF
+    return s0, s1
+
+
+def parse_wal_header(raw):
+    """WAL 头判定。返回 (info, error_detail)：
+    - 0 字节 = 合法空 WAL（SQLite 语义，无帧）→ ({'empty': True}, None)；
+    - <32B / 魔数非法 / 页大小非法 / 头校验和不匹配 → (None 或含 wal_magic_ok 的局部 info, 原因)；
+    - 合法 → 完整 info（page_size/salt/big_endian/cksum）。"""
+    if len(raw) == 0:
+        return {'empty': True}, None
+    if len(raw) < WAL_HEADER_SIZE:
+        return None, 'WAL 头不完整（%d 字节 < 32B）' % len(raw)
+    magic, _version, page_size, ckptseq = struct.unpack('>IIII', raw[0:16])
+    info = {
+        'empty': False,
+        'wal_magic_ok': magic in WAL_MAGICS,
+        'page_size': page_size,
+        'ckptseq': ckptseq,
+        'salt': raw[16:24],
+        'big_endian': magic == WAL_MAGICS[1],
+        'cksum': struct.unpack('>II', raw[24:32]),
+    }
+    if not info['wal_magic_ok']:
+        return info, 'WAL 魔数非法：0x%08x' % magic
+    if page_size < 512 or page_size > 65536 or (page_size & (page_size - 1)) != 0:
+        return info, 'WAL 页大小非法：%d' % page_size
+    if wal_cksum(raw[0:24], 0, 0, info['big_endian']) != info['cksum']:
+        return info, 'WAL 头校验和不匹配'
+    return info, None
+
+
+def verify_wal_frames(raw, with_frames=False):
+    """§3.3 步骤 4-6 对密文 WAL 的有效前缀判定（纯函数）。
+
+    返回 dict：{ok, total_frames, valid_prefix_frames, commit_frames, stale_tail_frames,
+    wal_magic_ok, page_size, detail}。with_frames=True 时附 '_frames'（有效前缀帧明细，
+    供 decrypt 进程内重建复用；含 bytes 不可 JSON 序列化，emit 前不得带出）。
+    注意：ok=True 只代表「头部合法 + 前缀判定完成」；valid_prefix_frames < total_frames
+    是旧代尾帧/断链/撕裂的自然截断，不是错误（评审 v3 #24）。"""
+    base = {
+        'ok': False,
+        'total_frames': 0,
+        'valid_prefix_frames': 0,
+        'commit_frames': 0,
+        'stale_tail_frames': 0,
+        'wal_magic_ok': False,
+        'page_size': None,
+        'detail': '',
+    }
+    info, err = parse_wal_header(raw)
+    if info is not None and info.get('empty'):
+        out = dict(base, ok=True, detail='空 WAL（0 字节，无帧）')
+        if with_frames:
+            out['_frames'] = []
+        return out
+    out = dict(base)
+    if info is not None:
+        out['wal_magic_ok'] = bool(info['wal_magic_ok'])
+        out['page_size'] = info['page_size']
+    if err is not None:
+        out['detail'] = err
+        return out
+
+    ps = info['page_size']
+    frame_size = FRAME_HEADER_SIZE + ps
+    salt = info['salt']
+    big = info['big_endian']
+    s0, s1 = info['cksum']  # 链起点 = WAL 头校验和（覆盖头前 24B，SQLite 规范）
+    # total = 文件内几何完整帧数（与 P0 表述"6 帧中 4 帧旧代"同口径）；断点之后的帧虽几何完整、
+    # 但 SQLite 读 WAL 语义下不可达（首个断点即终点），一并计入 stale_tail。
+    total = max(0, len(raw) - WAL_HEADER_SIZE) // frame_size
+    valid = 0
+    commits = 0
+    frames = []
+    off = WAL_HEADER_SIZE
+    while off + frame_size <= len(raw):
+        fh = raw[off:off + FRAME_HEADER_SIZE]
+        pgno, dbsize = struct.unpack('>II', fh[0:8])
+        content = raw[off + FRAME_HEADER_SIZE:off + frame_size]
+        c0, c1 = wal_cksum(fh[0:8] + content, s0, s1, big)
+        if fh[8:16] != salt or (c0, c1) != struct.unpack('>II', fh[16:24]):
+            break  # 首个断点 = 有效前缀终点（旧代尾帧/salt 不匹配/校验和断链/撕裂帧自然截断）
+        s0, s1 = c0, c1
+        valid += 1
+        if dbsize > 0:
+            commits += 1
+        frames.append({'pgno': pgno, 'dbsize': dbsize, 'content': content, 'fh': bytes(fh)})
+        off += frame_size
+    out.update(
+        ok=True,
+        total_frames=total,
+        valid_prefix_frames=valid,
+        commit_frames=commits,
+        stale_tail_frames=total - valid,
+        detail='有效前缀 %d 帧（含 %d 个提交帧），其后 %d 帧不可信（旧代尾帧/断链/撕裂，自然截断）'
+               % (valid, commits, total - valid),
+    )
+    if with_frames:
+        out['_frames'] = frames
+    return out
+
+
+def _verify_summary(vr):
+    """verify 结果中可 JSON 序列化的公开字段（剥离 '_frames' 等内部键）。"""
+    return {k: v for k, v in vr.items() if not k.startswith('_')}
+
+
+def cmd_snapshot_verify(wal_path):
+    """snapshot-verify 模式：读快照 WAL 文件 → 有效前缀判定 → 结果 JSON。"""
+    try:
+        with open(wal_path, 'rb') as f:
+            raw = f.read()
+    except OSError as e:
+        return {'ok': False, 'error': 'WAL_UNREADABLE', 'detail': 'WAL 快照不可读：%s' % e}
+    return _verify_summary(verify_wal_frames(raw))
+
+
+# ---------- decrypt 模式（先验证后解密，不产生半解密产物） ----------
+
+def cmd_decrypt(db_path, wal_path, outdir, mkey):
+    """§3.3 步骤 4-8：内联验证 → 整库解密 → 有效前缀+提交边界重建明文 WAL → integrity 验收。"""
+    # ① WAL 内联验证（不可信 → 不产生任何输出文件）
+    raw_wal = None
+    vr = None
+    if wal_path is not None:
+        try:
+            with open(wal_path, 'rb') as f:
+                raw_wal = f.read()
+        except OSError as e:
+            return {'ok': False, 'error': 'SNAPSHOT_UNSTABLE', 'stage': 'wal-verify',
+                    'detail': 'WAL 快照不可读：%s' % e}
+        vr = verify_wal_frames(raw_wal, with_frames=True)
+        if not vr['ok']:
+            return {'ok': False, 'error': 'SNAPSHOT_UNSTABLE', 'stage': 'wal-verify',
+                    'detail': vr['detail'], 'wal': _verify_summary(vr)}
+        # 算法绑定页大小（矩阵 page_size=4096）；空 WAL（page_size=None）放行走空回放
+        if vr['page_size'] is not None and vr['page_size'] != PAGE:
+            return {'ok': False, 'error': 'SNAPSHOT_UNSTABLE', 'stage': 'wal-verify',
+                    'detail': 'WAL 页大小 %s 与算法常量 %d 不符' % (vr['page_size'], PAGE)}
+
+    # ② 解密主库（页 1 校验 = 密钥先知快速失败）
+    try:
+        with open(db_path, 'rb') as f:
+            raw_db = f.read()
+    except OSError as e:
+        return {'ok': False, 'error': 'DB_UNREADABLE', 'detail': '主库快照不可读：%s' % e}
+    if len(raw_db) == 0 or len(raw_db) % PAGE != 0:
+        return {'ok': False, 'error': 'SNAPSHOT_UNSTABLE', 'stage': 'db-size',
+                'detail': '主库快照大小非法：%d 字节（应为 %d 整数倍）' % (len(raw_db), PAGE)}
+    pages = len(raw_db) // PAGE
+    plain_db = bytearray()
+    for pgno in range(1, pages + 1):
+        page = raw_db[(pgno - 1) * PAGE: pgno * PAGE]
+        dec = decrypt_page(mkey, pgno, page)
+        if dec is None:
+            return {'ok': False, 'error': 'KEY_VERIFY_FAILED', 'stage': 'page-1',
+                    'detail': '页 1 明文页头校验失败（密钥错误或算法不符）'}
+        plain_db += dec
+
+    # ③ 有效前缀 + 提交边界 → 重建明文 WAL（帧页按帧头 pgno 解密；明文校验和重算）
+    out_wal_path = None
+    wal_frames = 0
+    stale_tail = 0
+    plain_wal = None
+    if wal_path is not None:
+        frames = vr['_frames']
+        last_commit = -1
+        for i, f in enumerate(frames):
+            if f['dbsize'] > 0:
+                last_commit = i
+        replay = frames[:last_commit + 1]  # 有效前缀内只回放到最后一个提交帧（§3.3 步骤 6）
+        # 头部原样保留（其校验和仅覆盖前 24B，不受帧过滤影响，SQLite 仍认可）；字节序重新从头部推导
+        info, _hdr_err = parse_wal_header(raw_wal)
+        big = bool(info['big_endian']) if info is not None and not info.get('empty') else False
+        # 链起点 = 头校验和（空 WAL 无头，回放集为空，占位值不参与计算）
+        s0, s1 = struct.unpack('>II', raw_wal[24:32]) if len(raw_wal) >= WAL_HEADER_SIZE else (0, 0)
+        out = bytearray(raw_wal[:WAL_HEADER_SIZE])
+        for f in replay:
+            plain = decrypt_page(mkey, f['pgno'], f['content'])
+            if plain is None:
+                return {'ok': False, 'error': 'KEY_VERIFY_FAILED', 'stage': 'wal-page',
+                        'detail': 'WAL 帧（页 %d）解密页头校验失败' % f['pgno']}
+            s0, s1 = wal_cksum(f['fh'][0:8] + plain, s0, s1, big)
+            out += f['fh'][0:16] + struct.pack('>II', s0, s1) + plain
+        wal_frames = len(replay)
+        stale_tail = vr['stale_tail_frames']
+        plain_wal = bytes(out)  # 无提交帧时为仅头 WAL（SQLite 视为空），仍与主库配对
+
+    # ④ 写明文库 + integrity_check（可写打开让 WAL 回放；只读 URI 会跳过 WAL）。
+    # out_wal 命名必须是 <out_db>-wal：SQLite 按 '<库路径>-wal' 定位 WAL，命名错会静默跳过回放。
+    os.makedirs(outdir, exist_ok=True)
+    out_db = os.path.join(outdir, _out_base(db_path) + '.db')
+    with open(out_db, 'wb') as f:
+        f.write(bytes(plain_db))
+    if plain_wal is not None:
+        out_wal_path = out_db + '-wal'
+        with open(out_wal_path, 'wb') as f:
+            f.write(plain_wal)
+    integrity = 'unknown'
+    try:
+        conn = sqlite3.connect(out_db)
+        try:
+            rows = conn.execute('PRAGMA integrity_check').fetchall()
+            integrity = ';'.join(str(r[0]) for r in rows) if rows else 'unknown'
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        integrity = 'sqlite3 error: %s' % e
+    # integrity_check 的可写连接关闭时会对 WAL checkpoint（回放内容落库、-wal 被消费删除），
+    # 成功后 out_db 自包含；out_wal 仅在文件仍存在时报告（实践中通常已被 checkpoint 消费）。
+    if out_wal_path is not None and not os.path.exists(out_wal_path):
+        out_wal_path = None
+    ok = integrity == 'ok'
+    payload = {
+        'ok': ok,
+        'pages': pages,
+        'wal_frames': wal_frames,
+        'stale_tail_frames': stale_tail,
+        'integrity': integrity,
+        'out_db': out_db,
+    }
+    if out_wal_path is not None:
+        payload['out_wal'] = out_wal_path
+    if not ok:
+        payload['error'] = 'INTEGRITY_FAILED'
+    return payload
+
+
+def _out_base(db_path):
+    """输出产物基名：message.db → message.dec（dec.db / dec.db-wal）。"""
+    return os.path.splitext(os.path.basename(db_path))[0] + '.dec'
+
+
+# ---------- keyscan 模式（C6 内存密钥提取；Windows-only，只读观察：无注入/无写/无提权） ----------
+
+# Windows 常量（数值仅定义，ctypes 在 Windows 分支才导入）
+PROCESS_QUERY_INFORMATION = 0x0400
+PROCESS_VM_READ = 0x0010
+MEM_COMMIT = 0x1000
+MEM_PRIVATE = 0x20000
+PAGE_READWRITE = 0x04
+_MAX_USER_ADDR = 0x7FFFFFFEFFFF
+# 默认单区域上限（对齐实验 find_key6 的 419MB：绕开超大保留段，覆盖 WXWork 堆主区域）
+DEFAULT_MAX_REGION_BYTES = 419 * 1024 * 1024
+
+
+def build_oracle(page1):
+    """从加密库页 1 构造密钥验证先知（对齐实验 find_key6.py，真机验证过的布局）。
+
+    页 1 非遗留落盘布局：[0:8]=首段密文、[8:16]=第二段首密文块前半（被搬移）、
+    [16:24]=明文页头副本、[24:32]=第二段首密文块后半。第一个完整密文块须重组：
+    C0 = file[8:16] ‖ file[24:32]（不是 file[8:24]）。验证式：
+    AES_dec-ECB(pagekey(k), C0) ⊕ IV(1) 前 8B == TARGET=file[16:24]。"""
+    if len(page1) < PAGE:
+        return None
+    return {
+        'c0': bytes(page1[8:16]) + bytes(page1[24:32]),
+        'target': bytes(page1[16:24]),
+        'iv': gen_iv(1),
+        't1': struct.pack('<I', 1) + SALT,
+    }
+
+
+def verify_key(oracle, key):
+    """候选密钥验证：16B → aes128（页密钥 = MD5(k‖pgno‖sAlT)，即 page_key(k,1)）；
+    32B → aes256（SHA256 同构派生）。命中返回方案名，未命中 None。"""
+    from Crypto.Cipher import AES  # 延迟导入：snapshot-verify 模式零第三方依赖
+    if len(key) == 16:
+        pagekey = hashlib.md5(key + oracle['t1']).digest()
+        kind = 'aes128'
+    elif len(key) == 32:
+        pagekey = hashlib.sha256(key + oracle['t1']).digest()
+        kind = 'aes256'
+    else:
+        return None
+    # 单块 ECB ⊕ IV == CBC 首块解密（不建 CBC 上下文，热路径省开销；与 decrypt 语义一致）
+    p0 = AES.new(pagekey, AES.MODE_ECB).decrypt(oracle['c0'])
+    if bytes(x ^ y for x, y in zip(p0[:8], oracle['iv'][:8])) == oracle['target']:
+        return kind
+    return None
+
+
+def scan_buffer(data, oracle, full_stride=False):
+    """单内存块密钥扫描（纯函数，可脱离 Windows 单测）。
+
+    full_stride=False：只试 16 字节对齐偏移（预筛假设：EVP 上下文堆分配 16 对齐，
+    P1a 真机验证点 §9.5——miss 由调用方回退全量，正确性不依赖该假设）；
+    full_stride=True：全量步长 1。每窗口先做零字节计数预筛（>半数零字节跳过，
+    沿用实验 find_key6 的廉价筛——全零堆页占多数时显著省 MD5/SHA+AES 调用）。
+    命中 → (kind, key 字节)；未命中 None。"""
+    n = len(data)
+    end = max(0, n - 15)  # 保证 16B 窗口完整（32B 窗口单独判界）
+    offsets = range(0, end) if full_stride else range(0, end, 16)
+    for off in offsets:
+        k16 = data[off:off + 16]
+        if k16.count(0) <= 8:
+            kind = verify_key(oracle, k16)
+            if kind is not None:
+                return kind, k16
+        if off + 32 > n:
+            continue
+        k32 = data[off:off + 32]
+        if k32.count(0) <= 16:
+            kind = verify_key(oracle, k32)
+            if kind is not None:
+                return kind, k32
+    return None
+
+
+def _winapi():
+    """Windows API 装配（仅 Windows 分支调用；非 win32 不会走到这里）。"""
+    import ctypes
+    import ctypes.wintypes as wt
+
+    kernel32 = ctypes.windll.kernel32
+
+    class MBI(ctypes.Structure):
+        _fields_ = [
+            ('BaseAddress', ctypes.c_void_p),
+            ('AllocationBase', ctypes.c_void_p),
+            ('AllocationProtect', wt.DWORD),
+            ('RegionSize', ctypes.c_size_t),
+            ('State', wt.DWORD),
+            ('Protect', wt.DWORD),
+            ('Type', wt.DWORD),
+        ]
+
+    return kernel32, MBI
+
+
+def _readable_regions(kernel32, mbi_type, hp, max_region_bytes):
+    """VirtualQueryEx 枚举 MEM_COMMIT / MEM_PRIVATE / PAGE_READWRITE 且 ≤ 上限的区域
+    （超大保留段跳过——WXWork 堆主区域远小于上限，跳过项非密钥驻留形态）。"""
+    import ctypes
+    addr = 0
+    while addr < _MAX_USER_ADDR:
+        mbi = mbi_type()
+        if not kernel32.VirtualQueryEx(hp, ctypes.c_void_p(addr), ctypes.byref(mbi), ctypes.sizeof(mbi)):
+            break
+        base = mbi.BaseAddress or 0
+        size = mbi.RegionSize or 0
+        if size == 0:
+            break
+        if (mbi.State == MEM_COMMIT and mbi.Type == MEM_PRIVATE
+                and mbi.Protect == PAGE_READWRITE and size <= max_region_bytes):
+            yield base, size
+        addr = base + size
+
+
+def _read_region(kernel32, hp, base, size):
+    """ReadProcessMemory 读整区域（只读；失败 → None 跳过该区域）。"""
+    import ctypes
+    buf = ctypes.create_string_buffer(size)
+    got = ctypes.c_size_t(0)
+    if not kernel32.ReadProcessMemory(hp, ctypes.c_void_p(base), buf,
+                                      ctypes.c_size_t(size), ctypes.byref(got)):
+        return None
+    return buf.raw[:got.value]
+
+
+def scan_pid(pid, oracle, max_region_bytes, full_stride=False):
+    """扫描单进程。返回 (status, hit, scanned_bytes)：
+    status='OPENED'/'OPEN_FAILED'；hit=(kind, key) 或 None；scanned_bytes 为两段式
+    累计读取量（回退段重读同区域按重复计）。两段式：先全部区域 16B 对齐预筛，miss
+    再同进程全量步长 1（回退语义按进程而非按区域——对齐假设成立时全程免全量）。"""
+    kernel32, mbi_type = _winapi()
+    hp = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, int(pid))
+    if not hp:
+        return 'OPEN_FAILED', None, 0
+    scanned = 0
+    try:
+        # 两段式：对齐段先行（EVP 上下文 16 对齐假设），miss 再全量段回退；
+        # full_stride=True 时跳过对齐段直入全量（False=全量段，True=对齐段）。
+        for aligned in ((True, False) if not full_stride else (False,)):
+            for base, size in _readable_regions(kernel32, mbi_type, hp, max_region_bytes):
+                data = _read_region(kernel32, hp, base, size)
+                if not data:
+                    continue
+                scanned += size
+                hit = scan_buffer(data, oracle, full_stride=not aligned)
+                if hit is not None:
+                    return 'OPENED', hit, scanned
+        return 'OPENED', None, scanned
+    finally:
+        kernel32.CloseHandle(hp)
+
+
+def cmd_keyscan(pids, db_path, max_region_bytes, full_stride):
+    """keyscan 模式：页 1 先知构造 → 逐 pid 扫描 → 命中即返回（key_hex 仅进 JSON）。"""
+    if sys.platform != 'win32':
+        return {'ok': False, 'error': 'WINDOWS_REQUIRED', 'pids_tried': 0, 'elapsed_ms': 0}
+    try:
+        with open(db_path, 'rb') as f:
+            page1 = f.read(PAGE)
+    except OSError as e:
+        return {'ok': False, 'error': 'DB_UNREADABLE', 'detail': '页 1 源库不可读：%s' % e}
+    oracle = build_oracle(page1)
+    if oracle is None:
+        return {'ok': False, 'error': 'DB_UNREADABLE',
+                'detail': '页 1 源库不足 %d 字节，无法构造先知' % PAGE}
+    t0 = time.time()
+    opened_any = False
+    for pid in pids:
+        status, hit, scanned = scan_pid(pid, oracle, max_region_bytes, full_stride)
+        if status != 'OPENED':
+            continue
+        opened_any = True
+        if hit is not None:
+            kind, key = hit
+            return {'ok': True, 'kind': kind, 'key_hex': key.hex(), 'pid': int(pid),
+                    'scanned_bytes': scanned,
+                    'elapsed_ms': int((time.time() - t0) * 1000)}
+    elapsed_ms = int((time.time() - t0) * 1000)
+    if not opened_any:
+        return {'ok': False, 'error': 'OPEN_FAILED', 'pids_tried': len(pids), 'elapsed_ms': elapsed_ms}
+    return {'ok': False, 'error': 'KEY_NOT_FOUND', 'pids_tried': len(pids), 'elapsed_ms': elapsed_ms}
+
+
+def _parse_keyscan_args(args):
+    """keyscan 参数解析：--pids <pid[,pid…]> --db <path> [--max-region-bytes N]
+    [--aligned-first|--full]（--aligned-first 为默认，显式可写）。非法 → None（BAD_ARGS）。"""
+    pids_raw = None
+    db = None
+    max_region = DEFAULT_MAX_REGION_BYTES
+    full = False
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == '--pids' and i + 1 < len(args):
+            pids_raw = args[i + 1]
+            i += 2
+        elif arg == '--db' and i + 1 < len(args):
+            db = args[i + 1]
+            i += 2
+        elif arg == '--max-region-bytes' and i + 1 < len(args):
+            try:
+                max_region = int(args[i + 1])
+            except ValueError:
+                return None
+            if max_region <= 0:
+                return None
+            i += 2
+        elif arg == '--aligned-first':
+            full = False
+            i += 1
+        elif arg == '--full':
+            full = True
+            i += 1
+        else:
+            return None
+    if pids_raw is None or db is None:
+        return None
+    try:
+        pids = [int(p) for p in pids_raw.split(',') if p.strip()]
+    except ValueError:
+        return None
+    if not pids or any(p <= 0 for p in pids):
+        return None
+    return pids, db, max_region, full
+
+
+# ---------- C9a 内容提取（extract_content 纯函数；query 就地使用，任务 1.9a） ----------
+
+# P0 观察确认的系统/控制类 content_type 最小排除表（不参与待回复判定；P3 全量表再扩）。
+# 只影响 last-per-conv 任务与 TS 待回复判定，不影响 messages 任务返回。
+CONFIRMED_SYSTEM_TYPES = (1017, 38, 31)
+
+# P0 冻结的文本类型：type=2 文本 protobuf 包装、type=0 顶层单字段；其余类型语义未确认
+# （1011/1017/38/31 等仅确认存在），不参与文本提取（占位语义由 TS C9b 决定）。
+_TEXT_CONTENT_TYPES = (0, 2)
+
+
+def _read_varint(b, i):
+    """严格 varint 读取：越界/超 10 字节 → None；成功返回 (value, 下一位置)。"""
+    v = 0
+    for n in range(10):
+        if i >= len(b):
+            return None
+        x = b[i]
+        i += 1
+        v |= (x & 0x7F) << (7 * n)
+        if not x & 0x80:
+            return v, i
+    return None
+
+
+def _is_printable_text(s):
+    """可打印判定（对齐实验 parse_messages：可见字符 + 换行/回车/制表放行；空串不算文本）。"""
+    return bool(s) and all(ch.isprintable() or ch in '\n\r\t' for ch in s)
+
+
+def _pb_fields(b):
+    """宽松遍历 protobuf 字段，返回 [(field_no, wire_type, value_bytes)]。
+
+    对齐实验 parse_messages.pb_fields 的容错语义：非法结构即停（不抛、不猜）；
+    varint 读取用本文件的严格实现（越界即停，等效于原实现的异常中断路径）。"""
+    out = []
+    i = 0
+    n = len(b)
+    while i < n:
+        key = b[i]
+        f = key >> 3
+        wt = key & 7
+        i += 1
+        if wt == 2:
+            r = _read_varint(b, i)
+            if r is None:
+                break
+            ln, i = r
+            if i + ln > n:
+                break
+            out.append((f, 2, b[i:i + ln]))
+            i += ln
+        elif wt == 0:
+            r = _read_varint(b, i)
+            if r is None:
+                break
+            _, i = r
+        elif wt == 5:
+            if i + 4 > n:
+                break
+            i += 4
+        elif wt == 1:
+            if i + 8 > n:
+                break
+            i += 8
+        else:
+            break
+    return out
+
+
+def _strict_extract(data, content_type):
+    """严格解析已知包装（结构与长度精确覆盖校验，越界/不匹配 → None）：
+    type=2：0a<len1>( 08<varint> 12<len2>( 0a<len3> <utf8> ) )，各级字段须恰好覆盖本级
+    （P0 实测形态，EVIDENCE.md：0a<len> 08 00 12 <len> 0a <len> <UTF-8文本>）；
+    type=0：顶层单字段 0a<len> <utf8>，须恰好覆盖整段。成功返回文本，失败 None。"""
+    if not data or data[0] != 0x0A:
+        return None
+    r = _read_varint(data, 1)
+    if r is None:
+        return None
+    ln1, i = r
+    if ln1 <= 0 or i + ln1 != len(data):
+        return None
+    payload = data[i:i + ln1]
+    try:
+        if content_type == 0:
+            text = payload.decode('utf-8')
+            return text if _is_printable_text(text) else None
+        # type=2：payload = 08<varint> 12<len2>( 0a<len3> <utf8> )
+        if not payload or payload[0] != 0x08:
+            return None
+        r = _read_varint(payload, 1)
+        if r is None:
+            return None
+        _v, j = r  # 08 字段的 varint 值（内部状态）不参与文本判定
+        if j >= len(payload) or payload[j] != 0x12:
+            return None
+        r = _read_varint(payload, j + 1)
+        if r is None:
+            return None
+        ln2, j = r
+        if ln2 <= 0 or j + ln2 != len(payload):
+            return None
+        wrap = payload[j:j + ln2]
+        if not wrap or wrap[0] != 0x0A:
+            return None
+        r = _read_varint(wrap, 1)
+        if r is None:
+            return None
+        ln3, k = r
+        if ln3 <= 0 or k + ln3 != len(wrap):
+            return None
+        text = wrap[k:k + ln3].decode('utf-8')
+        return text if _is_printable_text(text) else None
+    except UnicodeDecodeError:
+        return None
+
+
+def _recursive_text(data):
+    """递归找可打印 UTF-8 文本，取最深层、最长者（对齐实验 parse_messages.extract_text 思路）。"""
+    texts = []
+
+    def rec(b, depth):
+        for _f, wt, v in _pb_fields(b):
+            if wt != 2:
+                continue
+            try:
+                s = v.decode('utf-8')
+            except UnicodeDecodeError:
+                rec(v, depth + 1)
+                continue
+            if _is_printable_text(s):
+                texts.append((depth, len(s), s))
+            else:
+                rec(v, depth + 1)
+
+    rec(data, 0)
+    if not texts:
+        return None
+    return max(texts, key=lambda t: (t[0], t[1]))[2]
+
+
+def extract_content(content, content_type):
+    """C9a：content blob → {text, trusted}（任务 1.9a；query 的 messages 行就地使用）。
+
+    - type 0/2：先严格解析已知包装（_strict_extract，长度精确覆盖校验）→ {text, trusted:True}；
+      严格失败 → 递归找可打印 UTF-8（_recursive_text）→ {text, trusted:False}；
+      仍无 → {None, False}。
+    - 非 0/2 类型 → {None, False}（占位与 kind 语义由 TS C9b 决定）。
+    - content 兼容 bytes/bytearray/memoryview/str（str 按 UTF-8 编码后同路径）/None。"""
+    if isinstance(content, str):
+        content = content.encode('utf-8')
+    elif isinstance(content, memoryview):
+        content = content.tobytes()
+    if not isinstance(content, (bytes, bytearray)) or not content:
+        return {'text': None, 'trusted': False}
+    try:
+        ct = int(content_type)
+    except (TypeError, ValueError):
+        return {'text': None, 'trusted': False}
+    if ct not in _TEXT_CONTENT_TYPES:
+        return {'text': None, 'trusted': False}
+    data = bytes(content)
+    strict = _strict_extract(data, ct)
+    if strict is not None:
+        return {'text': strict, 'trusted': True}
+    fallback = _recursive_text(data)
+    if fallback is not None:
+        return {'text': fallback, 'trusted': False}
+    return {'text': None, 'trusted': False}
+
+
+# ---------- query 模式（C8 读库查询；对 workdir 内已解密明文库做只读 SQL，任务 1.8） ----------
+
+DEFAULT_QUERY_LIMIT = 100
+# message_table 查询投影列（P0 冻结 18 列中与 C8 契约相关的 9 列；content 仅就地提取为
+# text/trusted，不原样输出）。其余列（devinfo/from_app_id/extra_content 等为已知列名、
+# 尚有 4 列未建模）不进查询契约。
+QUERY_MESSAGE_COLUMNS = ('message_id', 'server_id', 'sequence', 'sender_id', 'conversation_id',
+                         'content_type', 'send_time', 'flag', 'content')
+
+QUERY_USAGE = ('用法：wecom_localdb.py query --workdir <dir> '
+               '--task messages|conversations|last-per-conv|resolve '
+               '[--conv <会话id>] [--after-id N] [--limit N] [--since <秒>] '
+               '[--exclude-types <t[,t…]>] [--name <名称>]')
+
+# workdir 内解密库定位名：优先任务契约名 <logical>.db.dec.db，兼容 decrypt 自然产物名
+# <logical>.dec.db（_out_base 产物）。两命名都是显式约定，运行时确认存在才用。
+_DEC_DB_NAME_PATTERNS = ('%s.db.dec.db', '%s.dec.db')
+
+
+def _resolve_dec_db(workdir, logical):
+    """定位 workdir 内某逻辑库的解密文件；都不在 → None（调用方按缺失语义处理）。"""
+    for pattern in _DEC_DB_NAME_PATTERNS:
+        path = os.path.join(workdir, pattern % logical)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def _open_ro(path):
+    """只读打开 SQLite（uri ro；不创建文件、不写不改——§8 本地库原文永不修改）。"""
+    uri = 'file:' + urllib.parse.quote(path.replace('\\', '/'), safe='/') + '?mode=ro'
+    return sqlite3.connect(uri, uri=True)
+
+
+def _qi(ident):
+    """SQL 标识符引用（列名来自 PRAGMA table_info，仍做转义兜底；表名为代码内常量）。"""
+    return '"%s"' % ident.replace('"', '""')
+
+
+def _table_columns(conn, table):
+    """表列名（PRAGMA table_info 运行时确认——user/conversation 表列名只有部分经 P0 实证，
+    缺失列不猜不查）。"""
+    return [r[1] for r in conn.execute('PRAGMA table_info(%s)' % table).fetchall()]
+
+
+def _message_row(row):
+    """message_table 行 → C8 契约投影（content 就地提取为 text/trusted，不输出原始 bytes）。"""
+    rec = dict(zip(QUERY_MESSAGE_COLUMNS, row))
+    extracted = extract_content(rec.get('content'), rec.get('content_type'))
+    rec['text'] = extracted['text']
+    rec['trusted'] = extracted['trusted']
+    del rec['content']
+    order = ('message_id', 'server_id', 'sequence', 'sender_id', 'conversation_id',
+             'content_type', 'send_time', 'flag', 'text', 'trusted')
+    return {k: rec.get(k) for k in order}
+
+
+def _query_messages(conn, conv, after_id, limit, since):
+    """messages 任务：conversation_id 匹配 ∧ message_id > after-id（∧ send_time ≥ since），
+    按 message_id 升序（入库序=水位序）取 limit 条。next_cursor_id 只认返回集末端
+    （评审 v5：展示排序不推进游标），空批次 = after-id 原值。排除表不影响本任务。"""
+    sql = ('SELECT %s FROM message_table WHERE conversation_id = ? AND message_id > ?'
+           % ', '.join(QUERY_MESSAGE_COLUMNS))
+    params = [conv, after_id]
+    if since is not None:
+        sql += ' AND send_time >= ?'
+        params.append(since)
+    sql += ' ORDER BY message_id ASC LIMIT ?'
+    params.append(limit)
+    messages = [_message_row(r) for r in conn.execute(sql, params).fetchall()]
+    next_cursor_id = messages[-1]['message_id'] if messages else after_id
+    return {'ok': True, 'task': 'messages', 'conversation_id': conv,
+            'count': len(messages), 'next_cursor_id': next_cursor_id, 'messages': messages}
+
+
+def _query_conversations(conn):
+    """conversations 任务：全表按 conversation_id 聚合，按 last_message_id 降序。
+    last_send_time 取水位行（最大 message_id）的 send_time——迟到同步（更大 message_id、
+    更小 send_time）下与 MAX(send_time) 不同，语义与 cursor 同基元（水位末端那条）。"""
+    rows = conn.execute(
+        'SELECT m.conversation_id, a.cnt, m.send_time, a.max_id '
+        'FROM (SELECT conversation_id, COUNT(*) AS cnt, MAX(message_id) AS max_id '
+        '      FROM message_table GROUP BY conversation_id) AS a '
+        'JOIN message_table AS m ON m.message_id = a.max_id '
+        'ORDER BY a.max_id DESC').fetchall()
+    conversations = [{'conversation_id': r[0], 'count': r[1], 'last_send_time': r[2],
+                      'last_message_id': r[3]} for r in rows]
+    return {'ok': True, 'task': 'conversations', 'conversations': conversations}
+
+
+def _query_last_per_conv(conn, exclude_extra):
+    """last-per-conv 任务：每会话输出 last_message（无条件最后一条）与 last_participating
+    （跳过排除表）。排除表 = CONFIRMED_SYSTEM_TYPES + --exclude-types（追加语义，只扩不缩）；
+    全是系统消息 → last_participating=null。方向判定（sender_id 比对本人）在 TS 侧。"""
+    exclude = tuple(sorted(set(CONFIRMED_SYSTEM_TYPES) | set(exclude_extra)))
+    cols = ', '.join(QUERY_MESSAGE_COLUMNS)
+    last_rows = conn.execute(
+        'SELECT %s FROM message_table WHERE message_id IN '
+        '(SELECT MAX(message_id) FROM message_table GROUP BY conversation_id) '
+        'ORDER BY message_id DESC' % cols).fetchall()
+    ph = ','.join('?' * len(exclude))
+    part_rows = conn.execute(
+        'SELECT %s FROM message_table WHERE content_type NOT IN (%s) AND message_id IN '
+        '(SELECT MAX(message_id) FROM message_table WHERE content_type NOT IN (%s) '
+        ' GROUP BY conversation_id) ORDER BY message_id DESC' % (cols, ph, ph),
+        list(exclude) + list(exclude)).fetchall()
+    participating = {}
+    for r in part_rows:
+        row = _message_row(r)
+        participating[row['conversation_id']] = row
+    conversations = []
+    for r in last_rows:
+        row = _message_row(r)
+        conversations.append({
+            'conversation_id': row['conversation_id'],
+            'last_message': row,
+            'last_participating': participating.get(row['conversation_id']),
+        })
+    return {'ok': True, 'task': 'last-per-conv', 'exclude_types': list(exclude),
+            'conversations': conversations}
+
+
+# conversation_table 的 id 列发现：① 字面候选列名优先（PRAGMA 确认存在才用）；
+# ② 值形态证据——采样文本列，全部非空样本呈 conversation_id 形态（R:/S:/Y: 前缀）→ 认定。
+# 都失败 → None（调用方 schema-unknown 降级）。id 列真实列名未经 P0 文档化，不硬编码猜测。
+_CONV_ID_NAME_CANDIDATES = ('conversation_id', 'conv_id')
+_CONV_ID_VALUE_PREFIXES = ('R:', 'S:', 'Y:')
+# user_table 的名字/别名/备注列候选（与 PRAGMA 结果取交集；P0 只实证 id + name）。
+_USER_NAME_COLUMN_CANDIDATES = ('name', 'alias', 'nick_name', 'nickname', 'remark', 'remark_name',
+                                'display_name', 'display')
+
+
+def _find_conversation_id_column(conn, table, columns):
+    for cand in _CONV_ID_NAME_CANDIDATES:
+        if cand in columns:
+            return cand
+    for col in columns:
+        sql = 'SELECT %s FROM %s WHERE %s IS NOT NULL LIMIT 20' % (_qi(col), table, _qi(col))
+        values = [r[0] for r in conn.execute(sql).fetchall()]
+        if values and all(isinstance(v, str) and v.startswith(_CONV_ID_VALUE_PREFIXES)
+                          for v in values):
+            return col
+    return None
+
+
+def _resolve_conversation_table(conn, name):
+    """R: 群名 → conversation_table 精确匹配。name 无唯一索引（P0）：多候选全返回由调用方
+    判 ambiguous。列名无法确认 → ('schema-unknown', [])。"""
+    columns = _table_columns(conn, 'conversation_table')
+    if 'name' not in columns:
+        return 'schema-unknown', []
+    id_col = _find_conversation_id_column(conn, 'conversation_table', columns)
+    if id_col is None:
+        return 'schema-unknown', []
+    rows = conn.execute('SELECT %s, %s FROM conversation_table WHERE %s = ?'
+                        % (_qi(id_col), _qi('name'), _qi('name')), (name,)).fetchall()
+    candidates = [{'source': 'conversation_table', 'conversation_id': r[0], 'name': r[1],
+                   'matched_column': 'name'} for r in rows]
+    return 'ok', candidates
+
+
+def _resolve_user_table(conn, name):
+    """人名 → user_table 精确匹配（name/别名/备注列运行时交集）。候选附 user_id（P0 实证
+    列 id=消息 sender_id 域）；conversation_id 仅在表内有字面 conversation_id 列时给出，
+    否则置 null——单聊会话 id（S:<from>_<to>）需结合本人账号组合，py 侧无法单独决定方向，
+    由 TS 消费侧完成（设计 §4.1 定位与消歧）。"""
+    columns = _table_columns(conn, 'user_table')
+    if 'id' not in columns:
+        return 'schema-unknown', []
+    match_cols = [c for c in _USER_NAME_COLUMN_CANDIDATES if c in columns]
+    if not match_cols:
+        return 'schema-unknown', []
+    conv_col = 'conversation_id' if 'conversation_id' in columns else None
+    seen = set()
+    candidates = []
+    for col in match_cols:
+        select_cols = [_qi('id')] + ([_qi(conv_col)] if conv_col else []) + [_qi(col)]
+        rows = conn.execute('SELECT %s FROM user_table WHERE %s = ?' % (', '.join(select_cols), _qi(col)),
+                            (name,)).fetchall()
+        for r in rows:
+            if r[0] in seen:
+                continue  # 同一行命中多个名字列只出一个候选（按行去重）
+            seen.add(r[0])
+            candidates.append({
+                'source': 'user_table',
+                'conversation_id': r[1] if conv_col else None,
+                'user_id': r[0],
+                'name': r[2] if conv_col else r[1],
+                'matched_column': col,
+            })
+    return 'ok', candidates
+
+
+def _query_resolve(workdir, name):
+    """resolve 任务：群名经 session 库、人名经 user 库。对应 .dec.db 缺失 → 该来源标
+    unavailable（不报错）；零候选 → ambiguous=false 空列表；多候选 → ambiguous=true 全返回。
+    message 解密库在位仍为 workdir 契约（缺失已在 cmd_query 报 DB_UNREADABLE）。"""
+    candidates = []
+    sources = {}
+    for source, logical, resolver in (('conversation_table', 'session', _resolve_conversation_table),
+                                      ('user_table', 'user', _resolve_user_table)):
+        db_path = _resolve_dec_db(workdir, logical)
+        if db_path is None:
+            sources[source] = 'unavailable'
+            continue
+        conn = _open_ro(db_path)
+        try:
+            status, found = resolver(conn, name)
+        finally:
+            conn.close()
+        sources[source] = status
+        candidates.extend(found)
+    return {'ok': True, 'task': 'resolve', 'name': name, 'candidates': candidates,
+            'ambiguous': len(candidates) > 1, 'sources': sources}
+
+
+def _parse_query_args(args):
+    """query 参数解析（--workdir/--task 必需；任务相关参数按任务校验）。非法 → None（BAD_ARGS）。"""
+    workdir = None
+    task = None
+    conv = None
+    name = None
+    after_id = 0
+    limit = DEFAULT_QUERY_LIMIT
+    since = None
+    exclude_types = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ('--workdir', '--task', '--conv', '--name') and i + 1 < len(args):
+            value = args[i + 1]
+            if arg == '--workdir':
+                workdir = value
+            elif arg == '--task':
+                task = value
+            elif arg == '--conv':
+                conv = value
+            else:
+                name = value
+            i += 2
+        elif arg == '--after-id' and i + 1 < len(args):
+            try:
+                after_id = int(args[i + 1])
+            except ValueError:
+                return None
+            if after_id < 0:
+                return None
+            i += 2
+        elif arg == '--limit' and i + 1 < len(args):
+            try:
+                limit = int(args[i + 1])
+            except ValueError:
+                return None
+            if limit <= 0:
+                return None
+            i += 2
+        elif arg == '--since' and i + 1 < len(args):
+            try:
+                since = int(args[i + 1])
+            except ValueError:
+                return None
+            if since < 0:
+                return None  # 负秒数大概率是单位（ms）误传，显式拒绝
+            i += 2
+        elif arg == '--exclude-types' and i + 1 < len(args):
+            try:
+                exclude_types = [int(t) for t in args[i + 1].split(',') if t.strip()]
+            except ValueError:
+                return None
+            if not exclude_types or any(t < 0 for t in exclude_types):
+                return None
+            i += 2
+        else:
+            return None
+    if not workdir or not task:
+        return None
+    if task not in ('messages', 'conversations', 'last-per-conv', 'resolve'):
+        return None
+    if task == 'messages' and not conv:
+        return None
+    if task == 'resolve' and not name:
+        return None
+    return task, workdir, conv, after_id, limit, since, exclude_types, name
+
+
+def cmd_query(args):
+    """query 模式（C8）：参数解析 → 只读打开解密库 → 任务分发 → 结果 JSON。
+    库缺失/打开失败 → DB_UNREADABLE；缺表/缺列（schema 不兼容）→ SCHEMA_UNSUPPORTED
+    （稳定分类，评审 v6：doctor 据此归 compat，不混入 SQL_ERROR 的 transient 语义）；
+    其他 SQL 错误 → SQL_ERROR；均不抛（协议契约）。"""
+    parsed = _parse_query_args(args)
+    if parsed is None:
+        return {'ok': False, 'error': 'BAD_ARGS', 'message': QUERY_USAGE}
+    task, workdir, conv, after_id, limit, since, exclude_extra, name = parsed
+    msg_db = _resolve_dec_db(workdir, 'message')
+    if msg_db is None:
+        return {'ok': False, 'error': 'DB_UNREADABLE',
+                'detail': 'workdir 内未找到 message 解密库（message.db.dec.db 或 message.dec.db）：%s'
+                          % workdir}
+    try:
+        conn = _open_ro(msg_db)
+    except sqlite3.Error as e:
+        return {'ok': False, 'error': 'DB_UNREADABLE', 'detail': '解密库只读打开失败：%s' % e}
+    try:
+        if task == 'messages':
+            return _query_messages(conn, conv, after_id, limit, since)
+        if task == 'conversations':
+            return _query_conversations(conn)
+        if task == 'last-per-conv':
+            return _query_last_per_conv(conn, exclude_extra)
+        return _query_resolve(workdir, name)  # task == 'resolve'（参数解析已保证）
+    except sqlite3.OperationalError as e:
+        # 缺表/缺列（sqlite3.OperationalError "no such table/column"）= 真实 schema 不支持：
+        # 返回稳定错误码 SCHEMA_UNSUPPORTED（评审 v6），detail 保留原始消息（sqlite 消息
+        # 自带缺失表/列名，如 "no such table: message_table"）
+        msg = str(e)
+        if 'no such table' in msg or 'no such column' in msg:
+            return {'ok': False, 'error': 'SCHEMA_UNSUPPORTED',
+                    'detail': '解密库 schema 缺少查询所需表/列：%s' % e}
+        return {'ok': False, 'error': 'SQL_ERROR', 'detail': '%s: %s' % (type(e).__name__, e)}
+    except sqlite3.Error as e:
+        return {'ok': False, 'error': 'SQL_ERROR', 'detail': '%s: %s' % (type(e).__name__, e)}
+    finally:
+        conn.close()
+
+
+def _account_from_message_paths(pid, paths):
+    """只接受目标进程当前打开的唯一消息主库；历史目录和其他库不构成身份证据。"""
+    import ntpath
+    candidates = [p for p in paths if re.search(r'\\\d+\\Data\\message\.db$', p, re.IGNORECASE)]
+    if any(not re.match(r'^[A-Za-z]:\\', p) for p in candidates):
+        return {'ok': False, 'error': 'ACCOUNT_UNAVAILABLE'}
+    matches = {ntpath.normcase(ntpath.normpath(p)): p for p in candidates}
+    if len(matches) != 1:
+        return {'ok': False, 'error': 'ACCOUNT_AMBIGUOUS' if matches else 'ACCOUNT_UNAVAILABLE'}
+    return {'ok': True, 'pid': pid, 'message_db': next(iter(matches.values()))}
+
+
+def cmd_active_account(pid):
+    """只查询操作主窗口所属 WXWork 的磁盘句柄路径，不读库内容/进程内存，不提权。
+    持有进程句柄直到枚举结束；任一文件路径无法确认或进程已退出均不返回部分证据。
+    ProcessHandleInformation (51) 避免扫描系统全部进程的句柄。
+    """
+    if sys.platform != 'win32':
+        return {'ok': False, 'error': 'WINDOWS_REQUIRED'}
+    import ctypes as c
+    import msvcrt
+    from ctypes import wintypes as w
+    k = c.WinDLL('kernel32', use_last_error=True)
+    nt = c.WinDLL('ntdll')
+    class Entry(c.Structure):
+        _fields_ = [('handle', w.HANDLE), ('handles', c.c_size_t), ('pointers', c.c_size_t),
+                    ('access', w.ULONG), ('type', w.ULONG), ('attrs', w.ULONG), ('reserved', w.ULONG)]
+    k.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+    k.OpenProcess.restype = w.HANDLE
+    k.CloseHandle.argtypes = [w.HANDLE]
+    k.GetCurrentProcess.restype = w.HANDLE
+    k.DuplicateHandle.argtypes = [w.HANDLE, w.HANDLE, w.HANDLE, c.POINTER(w.HANDLE), w.DWORD, w.BOOL, w.DWORD]
+    k.GetFileType.argtypes = [w.HANDLE]
+    k.GetFinalPathNameByHandleW.argtypes = [w.HANDLE, w.LPWSTR, w.DWORD, w.DWORD]
+    k.QueryFullProcessImageNameW.argtypes = [w.HANDLE, w.DWORD, w.LPWSTR, c.POINTER(w.DWORD)]
+    k.GetExitCodeProcess.argtypes = [w.HANDLE, c.POINTER(w.DWORD)]
+    nt.NtQueryInformationProcess.argtypes = [w.HANDLE, w.ULONG, c.c_void_p, w.ULONG, c.POINTER(w.ULONG)]
+    proc = k.OpenProcess(0x440, False, pid)  # QUERY_INFORMATION | DUP_HANDLE
+    if not proc:
+        return {'ok': False, 'error': 'HANDLE_QUERY_FAILED'}
+    try:
+        image = c.create_unicode_buffer(32768)
+        length = w.DWORD(len(image))
+        if not k.QueryFullProcessImageNameW(proc, 0, image, c.byref(length)) or os.path.basename(image.value).lower() != 'wxwork.exe':
+            return {'ok': False, 'error': 'PROCESS_MISMATCH'}
+        def snapshot(process_handle):
+            size = 65536
+            while size <= 64 * 1024 * 1024:
+                buf = c.create_string_buffer(size)
+                needed = w.ULONG()
+                status = nt.NtQueryInformationProcess(process_handle, 51, buf, size, c.byref(needed))
+                if status == 0:
+                    count = c.c_size_t.from_buffer(buf).value
+                    offset = 2 * c.sizeof(c.c_size_t)
+                    if offset + count * c.sizeof(Entry) > size:
+                        break
+                    return [Entry.from_buffer_copy(buf, offset + i * c.sizeof(Entry)) for i in range(count)]
+                if status not in (-1073741820, -1073741789):
+                    break
+                size = max(size * 2, needed.value)
+            raise OSError('HANDLE_QUERY_FAILED')
+        # 对象类型索引由本机运行态取得，不硬编码；非文件对象有些不能 DuplicateHandle。
+        with open(__file__, 'rb') as own_file:
+            own_handle = msvcrt.get_osfhandle(own_file.fileno())
+            file_type = next(e.type for e in snapshot(k.GetCurrentProcess()) if e.handle == own_handle)
+        paths = []
+        for entry in snapshot(proc):
+            if entry.type != file_type:
+                continue
+            handle = w.HANDLE()
+            if not k.DuplicateHandle(proc, entry.handle, k.GetCurrentProcess(), c.byref(handle), 0, False, 2):
+                return {'ok': False, 'error': 'HANDLE_QUERY_FAILED'}
+            try:
+                c.set_last_error(0)
+                file_kind = k.GetFileType(handle)
+                if file_kind == 0 and c.get_last_error() != 0:
+                    return {'ok': False, 'error': 'HANDLE_QUERY_FAILED'}
+                if file_kind != 1:  # FILE_TYPE_DISK；跳过管道，避免路径查询阻塞
+                    continue
+                path = c.create_unicode_buffer(32768)
+                n = k.GetFinalPathNameByHandleW(handle, path, len(path), 0)
+                if not n or n >= len(path):
+                    return {'ok': False, 'error': 'HANDLE_QUERY_FAILED'}
+                value = path.value
+                if value.startswith('\\\\?\\UNC\\'):
+                    value = '\\\\' + value[8:]
+                elif value.startswith('\\\\?\\'):
+                    value = value[4:]
+                if re.search(r'\\\d+\\Data\\message\.db$', value, re.IGNORECASE) and not os.path.isfile(value):
+                    return {'ok': False, 'error': 'HANDLE_QUERY_FAILED'}
+                paths.append(value)
+            finally:
+                k.CloseHandle(handle)
+        exit_code = w.DWORD()
+        if not k.GetExitCodeProcess(proc, c.byref(exit_code)) or exit_code.value != 259:
+            return {'ok': False, 'error': 'PROCESS_EXITED'}
+        return _account_from_message_paths(pid, paths)
+    finally:
+        k.CloseHandle(proc)
+
+
+# ---------- 入口（argv 分发；任何错误也输出 JSON 且退出码 0） ----------
+
+def main():
+    args = sys.argv[1:]
+    if len(args) == 2 and args[0] == 'active-account' and args[1].isdigit() and int(args[1]) > 0:
+        emit(cmd_active_account(int(args[1])))
+        return
+    if len(args) == 2 and args[0] == 'snapshot-verify':
+        emit(cmd_snapshot_verify(args[1]))
+        return
+    if args and args[0] == 'query':
+        emit(cmd_query(args[1:]), redact=False)  # query 无密钥参与，业务文本不走兜底脱敏
+        return
+    if args and args[0] == 'keyscan':
+        parsed = _parse_keyscan_args(args[1:])
+        if parsed is None:
+            emit({'ok': False, 'error': 'BAD_ARGS',
+                  'message': '用法：wecom_localdb.py keyscan --pids <pid[,pid…]> --db <页1源库副本> '
+                             '[--max-region-bytes N] [--aligned-first|--full]'})
+            return
+        pid_list, db, max_region, full = parsed
+        emit(cmd_keyscan(pid_list, db, max_region, full), keep_hex_fields=('key_hex',))
+        return
+    if len(args) == 4 and args[0] == 'decrypt':
+        db_path, wal_arg, outdir = args[1], args[2], args[3]
+        wal_path = None if wal_arg in ('-', '') else wal_arg
+        key_text = sys.stdin.read()
+        try:
+            mkey = bytes.fromhex(''.join(key_text.split()))
+        except ValueError:
+            emit({'ok': False, 'error': 'BAD_KEY', 'detail': 'stdin 密钥不是合法 hex'})
+            return
+        if len(mkey) != 16:
+            emit({'ok': False, 'error': 'BAD_KEY',
+                  'detail': '密钥长度须为 16 字节（wxaes128 主密钥），实际 %d 字节' % len(mkey)})
+            return
+        emit(cmd_decrypt(db_path, wal_path, outdir, mkey))
+        return
+    emit({'ok': False, 'error': 'BAD_ARGS',
+          'message': '用法：wecom_localdb.py snapshot-verify <wal> | decrypt <db> <wal|-> <outdir>'
+                     '（密钥经 stdin 传 hex） | keyscan --pids <pid[,pid…]> --db <页1源库副本>'
+                     ' [--max-region-bytes N] [--aligned-first|--full]'
+                     ' | query --workdir <dir> --task messages|conversations|last-per-conv|resolve'
+                     ' [参数见 QUERY_USAGE]'})
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception as e:  # noqa: BLE001 — 协议兜底：任何未预期异常也按 JSON 协议输出（退出码 0）
+        try:
+            emit({'ok': False, 'error': 'INTERNAL_ERROR',
+                  'message': '%s: %s' % (type(e).__name__, e)})
+        except Exception:
+            pass

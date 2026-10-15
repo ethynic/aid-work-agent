@@ -357,6 +357,11 @@ test('M8 驱动超时（RESULT_TIMEOUT）→ EXECUTION_UNKNOWN + effect=unknown�
 const DIST_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const CLI = path.join(DIST_ROOT, 'src', 'cli', 'index.js')
 
+// 测试密闭性（评审附带项，与 SESSIONNAME 注入同族）：并行测试文件的 exclusive CLI 子进程
+// （send/send-image/send-file）共用默认 session 命名管道时互相 BUSY（exit 1 ≠ 预期退出码）。
+// namedMutex.ts 的 AID_WECOM_MUTEX_SCOPE env 覆盖即为此设计；子进程继承本进程 env，按文件隔离。
+process.env.AID_WECOM_MUTEX_SCOPE = 'test-send-file'
+
 function runCli(args: string[]): { status: number | null; stdout: string } {
   const r = spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8', timeout: 30000 })
   return { status: r.status, stdout: r.stdout ?? '' }

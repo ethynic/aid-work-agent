@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-10-14",
+  "entries": {
+    "5.0.11.6029": {
+      "status": "validated",
+      "verified_date": "2026-10-14",
+      "algorithm": "wxaes128cbc-nonlegacy",
+      "page_size": 4096,
+      "db_magic": "b3df88da44b8102f",
+      "key_form": "raw16-in-private-rw",
+      "scan_strategy": "dual-md5-sha256-oracle",
+      "data_dir_pattern": "{documents}/WXWork/{user_id}",
+      "schema_profile": "wecom-5.0.x",
+      "notes": "密钥登录时经 GetPcLocalEncryptKeyRsp 下发，DbKeyVerKey=2；页1明文页头[16:24]；WAL帧校验和为密文；证据：docs/research/wecom-local-db-decrypt-research.md"
+    }
+  }
+}
