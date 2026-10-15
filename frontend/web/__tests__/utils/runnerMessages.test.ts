@@ -3,6 +3,39 @@ import { historyMessages, mergeRunnerMessages, runnerMessages } from '@/utils/ru
 import { runnerView } from '../mocks/runnerView'
 
 describe('Runner display merges durable facts with existing messages', () => {
+  it('failed model calls show failure on the user input and never produce an empty final assistant', () => {
+    const first = runnerView({ status: 'failed', result: { status: 'failed', output: '', error_code: 'EXECUTION_FAILED' } })
+    const second = runnerView({ ...first, runner_id: 'runner-B', client_request_id: 'request-B', queue_order: 2,
+      snapshot: { input: { message_id: 'runner-B:user', text: '上海的', attachments: [] } } })
+    const restored = historyMessages([{ message_id: 'runner-A:assistant', session_id: 'A', role: 'assistant',
+      content: '', created_at: first.accepted_at, metadata: { runner_id: 'runner-A' } }])
+    const messages = mergeRunnerMessages(restored, [first, second])
+    expect(messages.map(message => message.role)).toEqual(['user', 'user'])
+    expect(messages.every(message => message.runnerFailure?.message.includes('请稍后重试'))).toBe(true)
+    expect(messages.some(message => message.content.includes('EXECUTION_FAILED'))).toBe(false)
+  })
+
+  it('failed tasks retain partial replies and downloadable artifacts instead of discarding real results', () => {
+    const row = runnerView({ status: 'failed', result: { status: 'failed', output: '已完成部分分析' },
+      snapshot: { downloadableFiles: [{ file_id: 'report', file_name: 'report.txt', file_size: 1, download_url: '/report' }] } })
+    const messages = runnerMessages(row)
+    expect(messages[0].runnerFailure).toBeDefined()
+    expect(messages[1].content).toBe('已完成部分分析')
+    expect(messages[1].downloadableFiles?.[0].file_id).toBe('report')
+  })
+
+  it('failure belongs to the latest supplemental input while clarification history remains visible', () => {
+    const messages = runnerMessages(runnerView({ status: 'failed', snapshot: {
+      input: { message_id: 'runner-A:user', text: '安排出行', attachments: [] },
+      clarificationQuestions: [{ message_id: 'wait-1:assistant', wait_id: 'wait-1', text: '去哪里？', created_at: '2026-10-01T12:00:00Z' }],
+      supplementalInputs: [{ control_id: 'c1', client_request_id: 'answer-1', message_id: 'answer-1:user', text: '上海',
+        wait_id: 'wait-1', accepted_at: '2026-10-01T12:00:01Z' }],
+    } }))
+    expect(messages[0].runnerFailure).toBeUndefined()
+    expect(messages[1].content).toBe('去哪里？')
+    expect(messages[2].runnerFailure).toBeDefined()
+    expect(messages).toHaveLength(3)
+  })
   it('interrupted resume screening shows an explanation and preserves the last execution time after rejected resume', () => {
     const row = runnerView({ status: 'interrupted', updated_at: '2026-10-14T06:21:18Z',
       snapshot: { output: '', progressMessages: [{ type: 'progress', data: '本地读取已完成', timestamp: Date.parse('2026-10-14T06:21:17Z') }] } })

@@ -7,6 +7,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261015-1052 | 对话失败提示与重试 | ✅ 已完成开发：失败提示附在用户消息旁，支持重试并移除空白失败回复框。 | [设计](system/agent-application-architecture-design.md#61-一份执行事实多种呈现) | [计划](plans/plan-chat-runner-failure-ui.md) |
 | 20261012-1120 | Runtime UI 与 BOSS 老用户试用组合包 | ✅ 已完成开发：r13及补偿通过，agent2结构已恢复；正式发布待配对验收。 | [共同契约](system/runner-desktop-runtime-integration-contract.md)、[安装复盘](incidents/runtime-installer-missing-fixture-env-incident.md)、[迁移复盘](incidents/runtime-registration-migration-watermark-incident.md) | [组合包计划](plans/plan-runtime-ui-boss-trial-bundle.md)、[恢复计划](plans/plan-runtime-upgrade-recovery.md)、[干净安装计划](plans/plan-runtime-clean-install.md) |
 | 20261015-1023 | LLM HTTP 故障转移修复 | ✅ 已完成开发：保留 HTTP 状态码，修复 503 未切备用模型、错误正文读取中断及流式回复拼接。 | [设计](infrastructure/llm-failover-design.md#27-错误分类) | [计划](plans/plan-llm-http-failover-fix.md) |
 | 20261013-1155 | agent_runners queue_order 序列自愈 | ✅ 已完成开发（待部署验收）：submit 入口捕获 queue_order 唯一约束冲突后 setval 对齐序列并重试一次，根治 SQL 直插污染 BIGSERIAL 序列导致的连续 500（2026-10-13 agent1 事故）；隔离库回归 145 passed、CR 无 P0/P1，commit 62a082b2。 | [复盘](incidents/analysis-agent-runner-submit-500-uniqueviolation-incident.md) | [开发计划](plans/plan-runner-queue-order-sequence-selfheal.md) |

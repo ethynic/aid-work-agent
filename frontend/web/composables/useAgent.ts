@@ -2,7 +2,7 @@ import { ref, computed, shallowReactive, type Ref } from 'vue'
 import type { ChatMessage, InputHintState, ProgressMessage, VerboseMessage } from '@/types'
 import type { AskForm, AskFormErrorItem, RunnerAnswerItem } from '@/api/runner'
 import { SSEManager, uploadFile, type UploadedFile } from '@/api/agent'
-import { getSessionMessages } from '@/api/session'
+import { getSession, getSessionMessages } from '@/api/session'
 import { RunnerClient, RunnerRequestError, runnerTerminal, runnerObservationComplete, type RunnerCapabilities, type RunnerControlIntent, type RunnerControlView, type RunnerSubmission, type RunnerView, type RunnerWait } from '@/api/runner'
 import { historyMessages, mergeRunnerMessages } from '@/utils/runnerMessages'
 import { extractQuickOptions } from '@/utils/quickOptions'
@@ -39,6 +39,7 @@ interface SessionStreamState {
   cancelledByUser: boolean
   runnerClient: RunnerClient
   runnerViews: Map<string, RunnerView>
+  retryingRunners: Set<string>
   pendingRunner?: RunnerSubmission
   pendingControl?: { runnerId: string; body: RunnerControlIntent }
   controlViews: Map<string, RunnerControlView>
@@ -130,6 +131,7 @@ function getStreamState(sid: string): SessionStreamState {
       cancelledByUser: false,
       runnerClient: new RunnerClient(),
       runnerViews: new Map(),
+      retryingRunners: new Set(),
       // shallowReactive：control 回执（consumed/rejected）到达时 set() 必须触发
       // askControlView 的 computed 重算，历史卡片才能随事实更新（评审 P2）。
       controlViews: shallowReactive(new Map<string, RunnerControlView>()),
@@ -280,6 +282,13 @@ export function useAgent() {
     state.runnerViews.set(row.runner_id, row)
     reconcileAskConflicts(state, row)
     state.messages.value = mergeRunnerMessages(state.messages.value, Array.from(state.runnerViews.values()))
+    const generation = state.runnerGeneration
+    const headers = getEffectiveAuthHeader()
+    for (const message of state.messages.value) {
+      if (!message.runnerFailure || !message.runnerId) continue
+      message.runnerFailure.retrying = state.retryingRunners.has(message.runnerId)
+      message.runnerFailure.retry = () => void retryFailedRunner(state, message, generation, headers)
+    }
     const active = Array.from(state.runnerViews.values()).filter(item => !runnerTerminal(item.status))
     state.isProcessing.value = state.submitSelecting || !!state.pendingRunner || !!state.pendingControl
       || active.some(item => item.resume_requested || ['queued', 'running', 'finalizing'].includes(item.status))
@@ -412,6 +421,8 @@ export function useAgent() {
       attempts: definitive ? 0 : state.submitFailures,
       retry: () => retryRunnerSubmit(state, body, generation),
     }
+    const input = state.messages.value.find(item => item.role === 'user' && item.clientRequestId === body.client_request_id)
+    if (input) input.submitFailure = message.submitFailure
     replaceSendProgress(state, message, definitive
       ? `❌ 发送失败：${message.submitFailure.message}`
       : `⏳ 发送不稳定，正在自动重试（第 ${state.submitFailures} 次）...`,
@@ -440,9 +451,40 @@ export function useAgent() {
     const message = optimisticAssistant(state, body.client_request_id)
     if (message) {
       message.submitFailure = undefined
+      const input = state.messages.value.find(item => item.role === 'user' && item.clientRequestId === body.client_request_id)
+      if (input) input.submitFailure = undefined
       replaceSendProgress(state, message, '🚀 正在发送请求...', 'progress')
     }
     void submitRunner(state, body, headers)
+  }
+
+  /** 明确执行失败的手动重试是新任务；未知接单仍由 submitRunner 同键重放。 */
+  async function retryFailedRunner(state: SessionStreamState, message: ChatMessage,
+    generation: number, headers: Record<string, string>) {
+    const sid = sessionId.value
+    const row = message.runnerId ? state.runnerViews.get(message.runnerId) : undefined
+    const available = () => row?.status === 'failed' && row.session.session_id === sid && sessionId.value === sid
+      && currentRunnerContext(state, sid, generation, headers)
+      && !state.isProcessing.value && !state.submitSelecting && !state.pendingRunner && !state.pendingControl
+      && ![...state.runnerViews.values()].some(view => !runnerTerminal(view.status))
+    if (!row || !available() || state.retryingRunners.has(row.runner_id)) return
+    state.retryingRunners.add(row.runner_id)
+    if (message.runnerFailure) message.runnerFailure.retrying = true
+    try {
+      const session = await getSession(sid)
+      if (!available()) return
+      if (session.session_id !== sid) throw new Error('RUNNER_SESSION_MISMATCH')
+      const profile = row.profile_id || session.subagent_id
+      await sendMessage(message.content, profile === 'main' ? null : profile,
+        sid, session.instance_id, message.attachments || [])
+    } catch (issue) {
+      if (currentRunnerContext(state, sid, generation, headers)) runnerError(sid, issue as Error)
+    } finally {
+      state.retryingRunners.delete(row.runner_id)
+      for (const input of state.messages.value) {
+        if (input.runnerId === row.runner_id && input.runnerFailure) input.runnerFailure.retrying = false
+      }
+    }
   }
 
   async function submitRunner(state: SessionStreamState, body: RunnerSubmission, headers: Record<string, string>): Promise<'definitive' | undefined> {
@@ -765,19 +807,34 @@ export function useAgent() {
     currentFiles.value = []
   }
 
-  async function sendMessage(content: string, subagent?: string | null, overrideSessionId?: string, instanceId?: string | null) {
+  async function sendMessage(content: string, subagent?: string | null, overrideSessionId?: string, instanceId?: string | null,
+    retryFiles?: UploadedFile[]) {
     if (!content.trim()) return
     const headers = getEffectiveAuthHeader()
     checkRunnerSubject(headers)
     const effectiveSessionId = overrideSessionId || sessionId.value
     const state = getStreamState(effectiveSessionId)
     const generation = state.runnerGeneration
+    let ownsSelection = false
+    const currentSendContext = () => {
+      if (!currentRunnerContext(state, effectiveSessionId, generation, headers)) return false
+      if (!retryFiles || sessionId.value === effectiveSessionId) return true
+      // 手动重试尚未发出请求就离开会话：释放自己的选择占位，不能留下假忙态。
+      if (ownsSelection) {
+        ownsSelection = false
+        state.submitSelecting = false
+        state.isProcessing.value = !!state.pendingRunner || !!state.pendingControl
+          || [...state.runnerViews.values()].some(view => view.resume_requested || ['queued', 'running', 'finalizing'].includes(view.status))
+        state.inputHintState.value = state.isProcessing.value ? 'thinking' : 'idle'
+      }
+      return false
+    }
 
     // 余额检查：余额 ≤ 0 阻断发送（仅在租户前台模式下生效）
     if (window.location.pathname.startsWith('/t/')) {
       const { checkCreditBeforeAction } = useCreditCheck()
       const creditCheck = await checkCreditBeforeAction('sendMessage')
-      if (!currentRunnerContext(state, effectiveSessionId, generation, headers)) return
+      if (!currentSendContext()) return
       if (!creditCheck.allowed) {
         return
       }
@@ -793,21 +850,26 @@ export function useAgent() {
     if (!state.runnerDiscoveryLoaded) {
       const wasProcessing = state.isProcessing.value
       state.submitSelecting = true
+      ownsSelection = true
       state.isProcessing.value = true
       try {
         discovered = await discoverSession(state,effectiveSessionId,headers)
-        if (!currentRunnerContext(state,effectiveSessionId,generation,headers)) return
+        if (!currentSendContext()) return
       } catch (issue) {
-        if (!currentRunnerContext(state,effectiveSessionId,generation,headers)) return
+        if (!currentSendContext()) return
         state.submitSelecting = false
+        ownsSelection = false
         state.isProcessing.value = false
         runnerError(effectiveSessionId,new Error('暂时无法确认原任务状态，本次消息和附件已保留。'))
         return { restoreInput:true,canRestore:() => currentRunnerContext(state,effectiveSessionId,generation,headers) }
       }
       state.submitSelecting = false
+      ownsSelection = false
       state.isProcessing.value = (wasProcessing && !state.runnerViews.size)
         || [...state.runnerViews.values()].some(row => row.resume_requested || ['queued','running','finalizing'].includes(row.status))
     }
+
+    if (!currentSendContext() || (retryFiles && [...state.runnerViews.values()].some(view => !runnerTerminal(view.status)))) return
 
     // 按会话 guard：仅当目标会话正在处理时才拒绝，不阻塞其他会话发消息
     const parked = [...state.runnerViews.values()].sort((a,b) => a.queue_order-b.queue_order)
@@ -853,25 +915,34 @@ export function useAgent() {
     // guard while checking so two sends cannot create concurrent optimistic turns.
     state.isProcessing.value = true
     state.submitSelecting = true
+    ownsSelection = true
     let runnerTransport: boolean
     try {
       const capabilities = discovered || await state.runnerClient.capabilities(headers)
-      if (!currentRunnerContext(state, effectiveSessionId, generation, headers)) return
+      if (!currentSendContext()) return
       state.runnerClient.installCapabilities(capabilities)
       runnerTransport = capabilities.web_enabled
     } catch (issue) {
-      if (!currentRunnerContext(state, effectiveSessionId, generation, headers)) return
+      if (!currentSendContext()) return
       state.submitSelecting = false
+      ownsSelection = false
       state.isProcessing.value = false
       runnerError(effectiveSessionId, issue as Error)
       return
     }
     const requestId = runnerTransport ? crypto.randomUUID() : undefined
+    if (retryFiles && !runnerTransport) {
+      state.submitSelecting = false
+      ownsSelection = false
+      state.isProcessing.value = false
+      runnerError(effectiveSessionId, new Error('RUNNER_SERVICE_UNAVAILABLE'))
+      return
+    }
 
     state.dbLoaded = true
 
     // 构建用户消息内容（含附件信息）；防御性过滤上传中的占位（正常情况下发送按钮已禁用）
-    const readyFiles = currentFiles.value.filter(f => f.file_id)
+    const readyFiles = (retryFiles || currentFiles.value).filter(f => f.file_id)
     let userContent = content.trim()
     if (readyFiles.length > 0) {
       const fileNames = readyFiles.map(f => f.name).join(', ')
@@ -917,7 +988,7 @@ export function useAgent() {
     // 在这里清空附件输入区，确保用户看到自己消息出现的同时附件框立即清空，
     // 避免 ChatContainer.handleSend 在某些 return 分支下漏清空导致附件残留。
     const filesToSend = readyFiles.length > 0 ? [...readyFiles] : undefined
-    currentFiles.value = []
+    if (!retryFiles) currentFiles.value = []
 
     if (runnerTransport) {
       const body: RunnerSubmission = JSON.parse(JSON.stringify({
@@ -927,11 +998,12 @@ export function useAgent() {
       }))
       state.pendingRunner = body
       state.submitSelecting = false
+      ownsSelection = false
       const failed = await submitRunner(state, body, headers)
       // definitive 失败（403 NO_CREDIT 等 4xx）：本次输入回填草稿与附件，
       // 与 control/parked 分支同一 restoreInput disposition，由 ChatContainer.handleSend 消费
       if (failed === 'definitive' && currentRunnerContext(state, effectiveSessionId, generation, headers)) {
-        if (sessionId.value === effectiveSessionId && !currentFiles.value.length && filesToSend?.length) {
+        if (!retryFiles && sessionId.value === effectiveSessionId && !currentFiles.value.length && filesToSend?.length) {
           currentFiles.value = filesToSend
         }
         return { restoreInput: true, canRestore: () => currentRunnerContext(state, effectiveSessionId, generation, headers) }
@@ -939,6 +1011,7 @@ export function useAgent() {
       return
     }
     state.submitSelecting = false
+    ownsSelection = false
 
     // 流结束时若是后台会话（用户正在查看其他会话），标记完成小点
     const markUnreadIfBackground = () => {

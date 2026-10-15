@@ -2,7 +2,7 @@
  * MessageItem 提交失败态渲染测试（docs/plans/plan-agent-runner-service.md M7 待办①）
  *
  * 业务承诺：
- * - POST /api/chat/runners 失败时，乐观 assistant 消息原地渲染明确错误态与重试入口，
+ * - POST /api/chat/runners 失败时，用户消息旁渲染明确错误态与重试入口，
  *   替换永远停留的「🚀 正在发送请求...」乐观消息
  * - definitive：错误文案 + 「重试」按钮；retrying：自动重试次数 + 「立即重试」按钮
  * - 失败渲染块不受 runnerActive/debug 门控（普通用户可见）
@@ -31,8 +31,8 @@ function mountFailed(failure: SubmitFailureState, extra: Record<string, unknown>
     timestamp: Date.now(),
   }]
   const message = reactive({
-    role: 'assistant' as const,
-    content: '',
+    role: 'user' as const,
+    content: '上海的',
     timestamp: Date.now(),
     progressMessages: progress,
     submitFailure: failure,
@@ -52,7 +52,8 @@ describe('MessageItem 提交失败态渲染', () => {
   it('definitive 失败渲染错误文案与重试按钮，点击触发幂等重试闭包', async () => {
     const retry = vi.fn()
     const { wrapper } = mountFailed({ kind: 'definitive', message: '积分不足，请充值后重试。', attempts: 0, retry })
-    expect(wrapper.find('[role="alert"]').text()).toContain('发送失败：积分不足，请充值后重试。')
+    expect(wrapper.find('[role="alert"]').text()).toContain('消息未发送成功')
+    expect(wrapper.find('[role="alert"]').text()).toContain('积分不足，请充值后重试。')
     const button = wrapper.find('[role="alert"] button')
     expect(button.text()).toBe('重试')
     await button.trigger('click')
@@ -100,6 +101,29 @@ describe('MessageItem 提交失败态渲染', () => {
       props: { message: { role: 'assistant' as const, content: '正常回复', timestamp: Date.now() }, isProcessing: false },
     })
     expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('提交失败的内部助手占位不渲染白框或时间戳', () => {
+    const { wrapper } = mountFailed({ kind: 'definitive', message: '服务暂时不可用。', attempts: 0, retry: vi.fn() },
+      { role: 'assistant', content: '' })
+    expect(wrapper.find('.message-ai-wrapper').exists()).toBe(false)
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('执行失败即使关闭 debug 也在用户消息旁显示重试，重试中禁用按钮', async () => {
+    const retry = vi.fn()
+    const message = reactive({ role: 'user' as const, content: '上海的', timestamp: Date.now(),
+      runnerFailure: { message: '服务暂时不可用，请稍后重试。', retry, retrying: false } })
+    const wrapper = mount(MessageItem, { props: { message } })
+    expect(wrapper.find('[role="alert"]').text()).toContain('消息未发送成功')
+    expect(wrapper.find('.message-ai-wrapper').exists()).toBe(false)
+    await wrapper.find('[role="alert"] button').trigger('click')
+    expect(retry).toHaveBeenCalledTimes(1)
+    message.runnerFailure.retrying = true
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[role="alert"] button').attributes('disabled')).toBeDefined()
     wrapper.unmount()
   })
 })

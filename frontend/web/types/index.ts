@@ -35,7 +35,7 @@ export interface ImageRef {
 }
 
 /** 提交失败态（纯内存，不持久化；失败轮次本就未落库，刷新即失）。
- *  POST /api/chat/runners 失败时挂到乐观 assistant 占位消息上，
+ *  POST /api/chat/runners 失败时附在用户消息上，assistant 仅保留内部占位，
  *  提交被接受后随乐观组一起被 runner 视图替换而消失。 */
 export interface SubmitFailureState {
   /** definitive：4xx 已放弃自动重试；retrying：网络/5xx 仍在指数退避自动重试 */
@@ -46,6 +46,13 @@ export interface SubmitFailureState {
   attempts: number
   /** 手动重试：复用原 client_request_id 与原 body 幂等重放（函数字段，不进序列化路径） */
   retry: () => void
+}
+
+/** 已受理任务的执行失败；由 Runner 状态恢复，点击后显式发起新任务。 */
+export interface RunnerFailureState {
+  message: string
+  retrying?: boolean
+  retry?: () => void
 }
 
 export interface ChatMessage {
@@ -72,8 +79,9 @@ export interface ChatMessage {
   /** 所属 runner 仍在执行（queued/running/finalizing）：执行中在气泡下展示最近
    *  工具活动作为过程反馈，终态后收起（完整执行详情仍仅 debug 模式展开） */
   runnerActive?: boolean
-  /** 提交失败态（纯内存，不持久化）：runner POST 失败时挂乐观 assistant 消息 */
+  /** 提交失败态：用户消息展示，乐观 assistant 仅保留内部提交占位。 */
   submitFailure?: SubmitFailureState
+  runnerFailure?: RunnerFailureState
   /** 结构化提问卡片（ask_user，WP4）：runnerMessages 将快照 waiting.form 投影到问题 assistant 消息 */
   questionCard?: QuestionCardBinding
   /** 历史只读已答表单卡片：投影自 supplementalInputs 扩展（form+answers，设计 §7.1） */

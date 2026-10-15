@@ -34,12 +34,27 @@
       <div v-if="formattedTime" class="text-xs text-muted mt-1 mr-2">
         {{ formattedTime }}
       </div>
+      <div v-if="submitFailure || message.runnerFailure" class="mt-1 flex max-w-full flex-wrap items-center justify-end gap-x-2 gap-y-1" role="alert">
+        <span :class="['text-xs', submitFailure?.kind === 'retrying' ? 'text-warning-700' : 'text-danger-600']">
+          {{ submitFailure?.kind === 'retrying'
+            ? `消息发送不稳定，已自动重试 ${submitFailure.attempts} 次`
+            : '消息未发送成功' }}
+        </span>
+        <span v-if="submitFailure?.kind !== 'retrying'" class="text-xs text-muted">
+          {{ submitFailure?.message || message.runnerFailure?.message }}
+        </span>
+        <BaseButton type="button" intent="danger-ghost" size="sm"
+          :disabled="message.runnerFailure?.retrying || !(submitFailure?.retry || message.runnerFailure?.retry)"
+          @click="retryFailure">
+          {{ message.runnerFailure?.retrying ? '正在重试…' : submitFailure?.kind === 'retrying' ? '立即重试' : '重试' }}
+        </BaseButton>
+      </div>
     </div>
   </div>
 
   <!-- AI消息：全宽，无头像，无缩进 -->
   <div
-    v-else
+    v-else-if="!submitFailure"
     class="message-enter-active message-ai-wrapper"
   >
     <div class="message-ai-content">
@@ -61,33 +76,6 @@
         <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-warning-100 text-warning-700">
           用户已取消本轮回复
         </span>
-      </div>
-
-      <!-- 提交失败态（纯内存标记）：不受 runnerActive/debug 门控，
-           definitive 显示错误文案+重试；retrying 显示自动重试次数+立即重试 -->
-      <div v-if="submitFailure" class="mb-1" role="alert">
-        <div class="flex items-center gap-2 flex-wrap">
-          <span
-            :class="['inline-flex items-center px-2 py-0.5 rounded text-xs font-medium',
-                     submitFailure.kind === 'definitive'
-                       ? 'bg-danger-100 text-danger-700'
-                       : 'bg-warning-100 text-warning-700']"
-          >
-            {{ submitFailure.kind === 'definitive'
-              ? `发送失败：${submitFailure.message}`
-              : `发送不稳定，已自动重试 ${submitFailure.attempts} 次` }}
-          </span>
-          <button
-            type="button"
-            :class="['px-3 py-1 bg-white border rounded-full text-xs transition-colors',
-                     submitFailure.kind === 'definitive'
-                       ? 'border-danger-200 text-danger-600 hover:border-danger-400'
-                       : 'border-warning-200 text-warning-700 hover:border-warning-400']"
-            @click="submitFailure.retry()"
-          >
-            {{ submitFailure.kind === 'definitive' ? '重试' : '立即重试' }}
-          </button>
-        </div>
       </div>
 
       <div
@@ -244,6 +232,7 @@ import HumanAssistanceCard from './browser/HumanAssistanceCard.vue'
 import QuestionCard from './chat/QuestionCard.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAgent } from '@/composables/useAgent'
+import BaseButton from './ui/BaseButton.vue'
 
 interface Props {
   message: ChatMessage
@@ -319,9 +308,12 @@ const showInputHint = computed(() => {
   )
 })
 
-// 提交失败态（纯内存，乐观 assistant 消息专用）：失败时原地展示错误/重试，
-// 不落入「对方正在输入中」占位
+// 失败提示显示在用户消息旁；乐观 assistant 只作为内部提交占位，不渲染空框。
 const submitFailure = computed(() => props.message.submitFailure)
+function retryFailure() {
+  const retry = submitFailure.value?.retry || props.message.runnerFailure?.retry
+  retry?.()
+}
 
 // 用户取消的轮次（历史加载）：assistant metadata.cancelled，渲染明确标记避免误解
 const isCancelledRound = computed(() => {

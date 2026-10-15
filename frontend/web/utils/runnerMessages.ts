@@ -120,15 +120,23 @@ export function runnerMessages(row: RunnerView): ChatMessage[] {
   for (const input of inputs) {
     if (!additions.some(item => item.messageId===input.message_id)) additions.push(inputMessage(input))
   }
-  return [
+  const messages: ChatMessage[] = [
     { ...common, role: 'user', messageId: snapshot.input?.message_id || row.runner_id + ':user',
       content: snapshot.input?.text || '', attachments: snapshot.input?.attachments, timestamp: accepted },
     ...additions,
-    { ...common, role: 'assistant', messageId: row.runner_id + ':assistant',
+  ]
+  if (row.status === 'failed') {
+    const input = [...messages].reverse().find(message => message.role === 'user')
+    if (input) input.runnerFailure = { message: '服务暂时不可用，请稍后重试。' }
+  }
+  const assistant: ChatMessage = { ...common, role: 'assistant', messageId: row.runner_id + ':assistant',
       content: row.result?.output ?? snapshot.output ?? '', timestamp: finished,
       ...details, images, cancelled: row.status === 'cancelled',
-      runnerActive: !['completed', 'failed', 'cancelled'].includes(row.status) },
-  ]
+      runnerActive: !['completed', 'failed', 'cancelled'].includes(row.status) }
+  // 失败详情归到用户消息；已有回复/产物仍保留，不制造空白最终回复框。
+  if (row.status !== 'failed' || assistant.content.trim() || images.length
+      || details.downloadableFiles?.length || details.browserAssistance) messages.push(assistant)
+  return messages
 }
 
 /** Display times never reorder a turn. Stable runner IDs replace optimistic/history copies. */
