@@ -5563,3 +5563,29 @@ CREATE TABLE IF NOT EXISTS file_assets (
 
 CREATE INDEX IF NOT EXISTS idx_file_assets_tenant ON file_assets(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_file_assets_tenant_size ON file_assets(tenant_id, size);
+
+-- ==================== 租户数字员工实例（tenant_agent_instances） ====================
+-- 统一模型：直定制行 agent_id = base_agent_id（租户对基础员工的直接定制）；
+-- 副本行 agent_id != base_agent_id（复制产生，全局唯一，纯连字符）。
+-- 副本 system_prompt/工具/技能/模型运行时实时取自父定义，本表只存覆盖项。
+CREATE TABLE IF NOT EXISTS tenant_agent_instances (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    base_agent_id TEXT NOT NULL,
+    base_source TEXT,
+    display_name TEXT,
+    description TEXT,
+    extra_prompt TEXT,
+    greeting_summary TEXT,
+    greeting_prompts JSONB,
+    status TEXT DEFAULT 'active',
+    created_by TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_tenant_agent_inst UNIQUE (tenant_id, agent_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_agent_inst_copy ON tenant_agent_instances(agent_id) WHERE agent_id <> base_agent_id;
+CREATE INDEX IF NOT EXISTS idx_tenant_agent_inst_tenant ON tenant_agent_instances(tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_tenant_agent_inst_base ON tenant_agent_instances(tenant_id, base_agent_id);

@@ -355,10 +355,10 @@ ImageRegistry 管理的图片资产元信息（复用 cp 的 `uploaded_file:{fil
 ### 7.4.3 数字员工空态摘要
 
 **存储**：Redis + 内存降级
-**键模式**：`subagent_greeting:{agent_id}`
+**键模式**：`subagent_greeting:{agent_id}`；租户上下文为 `subagent_greeting:{tenant_id}:{agent_id}`
 **TTL**：604800s（7 天）
 **失效时机**：管理后台更新/删除数字员工时主动 `delete_cached`（`src/api/admin_subagent.py`）；TTL 自动过期兜底
-**关键约束**：LLM（lite_model 小模型）按需生成、缓存复用，避免重复计费；全局缓存（不含租户维度），智能体能力变更频率极低。前端静态配置（`frontend/web/utils/sessionGreetings.ts`）优先于本缓存，仅未配置的智能体走此接口
+**关键约束**：LLM（lite_model 小模型）按需生成、缓存复用，避免重复计费；租户上下文下键带租户维度——直定制行 agent_id=基础名全局共享，无租户维度会跨租户污染。租户实例覆盖项（greeting_summary/prompts）不走缓存即时返回，清除覆盖后回落本缓存。前端静态配置（`frontend/web/utils/sessionGreetings.ts`）优先于本缓存，仅未配置的智能体走此接口
 **源文件**：`src/api/subagent.py`
 
 ### 7.4.4 外部系统委托登录 client_token
@@ -547,7 +547,7 @@ PostgreSQL（持久化，权威数据源）
 ├── instance_status:{instance_id}    # 实例状态
 ├── uploaded_file:file_{uuid12}      # 图片/文件资产元信息（Hash，与 cp 共用）
 ├── image_fetch_url:{sha256(url)}    # Web 图片抓取去重
-├── subagent_greeting:{agent_id}     # 数字员工空态摘要（LLM 生成缓存）
+├── subagent_greeting:{agent_id}     # 数字员工空态摘要（LLM 生成缓存）；租户上下文 subagent_greeting:{tenant_id}:{agent_id}
 ├── external_login_token:{tenant_id}:{subagent}:{mobile}  # 外部系统委托登录 token（23h）
 ├── external_login_token_session:{tenant_id}:{subagent}:{session_id}  # 会话级委托登录 token 凭证托管（23h）
 ├── form_schema:{tenant_id}:{subagent}:{module}           # 第三方表单 schema 元数据（1h）

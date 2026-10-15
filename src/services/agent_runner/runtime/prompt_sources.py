@@ -258,10 +258,11 @@ class PromptSources:
         return template
 
     def _load_extra_md(self) -> Optional[str]:
-        """加载租户定制的 extra.md（Phase 4 起从数据库加载）
+        """加载租户定制扩展提示词
 
-        从 prompt_versions 表读取 scope='tenant_extra' 的 production 版本。
-        数据库无记录时返回 None（等价于"该租户未配置定制内容"）。
+        优先读 tenant_agent_instances 实例行 extra_prompt（租户数字员工实例，
+        含直定制行与副本行）；未命中时回退 prompt_versions 表 scope='tenant_extra'
+        （存量过渡双读，迁移完成后旧数据清理）。
         """
         if not self.subagent_config:
             return None
@@ -272,17 +273,37 @@ class PromptSources:
         if not tenant_id or not self.subagent_config.dir_name:
             return None
 
+        dir_name = self.subagent_config.dir_name
+
+        # 租户数字员工实例：直定制行 / 副本行的 extra_prompt 存于实例表
+        try:
+            from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
+            row = TenantAgentInstanceDB.get(tenant_id, dir_name)
+            if row:
+                content = (row.get("extra_prompt") or "").strip()
+                if content:
+                    logger.debug(
+                        f"Loaded extra prompt (tenant instance) for tenant {tenant_id}, "
+                        f"subagent {dir_name}"
+                    )
+                    return content
+                # 实例行存在但 extra_prompt 为空：副本行无旧数据可回退，直接返回
+                if row.get("agent_id") != row.get("base_agent_id"):
+                    return None
+        except Exception as e:
+            logger.warning(f"Failed to load extra prompt from tenant instance: {e}")
+
         try:
             from src.prompts.prompt_resolver import prompt_resolver
             content = prompt_resolver.resolve(
                 scope="tenant_extra",
-                scope_id=f"extra:{self.subagent_config.dir_name}:{tenant_id}",
+                scope_id=f"extra:{dir_name}:{tenant_id}",
                 tenant_id=tenant_id,
             )
             if content:
                 logger.debug(
                     f"Loaded extra.md (DB) for tenant {tenant_id}, "
-                    f"subagent {self.subagent_config.dir_name}"
+                    f"subagent {dir_name}"
                 )
                 return content.strip()
         except Exception as e:

@@ -88,8 +88,11 @@ def check_agent_access(agent_id: str, user: dict) -> bool:
     if not tenant_id:
         return False
 
-    # 第一层：检查租户级订阅
-    has_access, _ = get_agent_quota(tenant_id, agent_id)
+    # 租户副本 → 订阅继承映射到父定义；普通用户级授权按实例或父定义任一命中
+    base_agent_id = get_tenant_instance_base(tenant_id, agent_id)
+
+    # 第一层：检查租户级订阅（副本按父定义订阅判定）
+    has_access, _ = get_agent_quota(tenant_id, base_agent_id or agent_id)
     if not has_access:
         return False
 
@@ -103,7 +106,49 @@ def check_agent_access(agent_id: str, user: dict) -> bool:
         return False
 
     with get_db_connection() as conn:
-        return UserAgentPermissionDB.has_permission(conn, user_id, agent_id)
+        if UserAgentPermissionDB.has_permission(conn, user_id, agent_id):
+            return True
+        if base_agent_id:
+            return UserAgentPermissionDB.has_permission(conn, user_id, base_agent_id)
+        return False
+
+
+def get_tenant_instance_base(tenant_id: str, agent_id: str) -> Optional[str]:
+    """租户副本 agent_id -> 父定义 agent_id（订阅继承映射）；非实例返回 None"""
+    if not tenant_id or not agent_id:
+        return None
+    try:
+        from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
+        row = TenantAgentInstanceDB.get(tenant_id, agent_id)
+    except Exception:
+        return None
+    if row and row.get("agent_id") != row.get("base_agent_id"):
+        return row["base_agent_id"]
+    return None
+
+
+def expand_with_tenant_instances(tenant_id: Optional[str], allowed_ids: List[str]) -> List[str]:
+    """把本租户数字员工副本（base 在订阅/允许集合内）附加到允许列表。
+
+    直定制行（agent_id == base_agent_id）不产生新 ID，仅副本行附加。
+    """
+    if not tenant_id or not allowed_ids:
+        return allowed_ids
+    try:
+        from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
+        rows = TenantAgentInstanceDB.list_by_tenant(tenant_id)
+    except Exception:
+        return allowed_ids
+    allowed_set = set(allowed_ids)
+    extra = [
+        r["agent_id"]
+        for r in rows
+        if r.get("status") == "active"
+        and r.get("agent_id") != r.get("base_agent_id")
+        and r.get("base_agent_id") in allowed_set
+        and r["agent_id"] not in allowed_set
+    ]
+    return allowed_ids + extra
 
 
 def _all_subagent_dir_names() -> List[str]:
@@ -151,7 +196,9 @@ def get_allowed_agent_ids_for_user(
                   AND starts_at <= CURRENT_TIMESTAMP
                   AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
             """, (tenant_id,))
-            return [row["subagent_type"] for row in cursor.fetchall()]
+            return expand_with_tenant_instances(
+                tenant_id, [row["subagent_type"] for row in cursor.fetchall()]
+            )
 
     # 普通用户 / 租户管理员
     tenant_id = target_tenant_id or (get_tenant_id_from_user(user) if user else None)
@@ -163,11 +210,12 @@ def get_allowed_agent_ids_for_user(
     # 缓存 key 拼接 target_tenant_id，避免 platform_admin/普通用户跨租户代管时缓存互相污染
     cache_key_id = f"{user_id}:{tenant_id}"
 
-    # 普通用户：优先从缓存获取（租户管理员不走缓存）
+    # 普通用户：优先从缓存获取（租户管理员不走缓存）。
+    # 缓存只存基础员工列表；租户副本在读取侧追加，副本增删即时生效
     if user and not is_tenant_admin(user):
         cached = get_cached(CacheKeys.USER_AGENTS, cache_key_id)
         if cached is not None:
-            return cached
+            return expand_with_tenant_instances(tenant_id, cached)
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -186,7 +234,7 @@ def get_allowed_agent_ids_for_user(
 
         # 租户管理员 → 返回租户允许的全部
         if user and is_tenant_admin(user):
-            return tenant_allowed
+            return expand_with_tenant_instances(tenant_id, tenant_allowed)
 
         # 普通用户 → 取交集（用户允许且租户有订阅）
         user_allowed = set(UserAgentPermissionDB.get_allowed_agents(conn, user_id))
@@ -194,7 +242,7 @@ def get_allowed_agent_ids_for_user(
 
         # 写入缓存
         set_cached(CacheKeys.USER_AGENTS, cache_key_id, value=result, ttl=300)
-        return result
+        return expand_with_tenant_instances(tenant_id, result)
 
 
 def count_tenant_subscribed_agents(tenant_id: str) -> int:

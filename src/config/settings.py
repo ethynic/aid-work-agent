@@ -409,6 +409,8 @@ class AgentConfig(BaseModel):
     """
     reply_style: str = ""  # 默认回复风格 ID，对应 src/prompts/styles/{style_id}.md；空表示不注入
     verbose_feedback: AgentVerboseFeedbackConfig = Field(default_factory=AgentVerboseFeedbackConfig)
+    # 租户数字员工副本（tenant_agent_instances 副本行）数量上限，防滥用
+    tenant_instance_max: int = 20
 
 
 class AppConfig(BaseModel):

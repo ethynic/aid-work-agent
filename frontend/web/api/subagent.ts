@@ -26,7 +26,7 @@ export interface SubagentListItem {
   agent_id: string
   name: string
   description: string
-  type: 'builtin' | 'custom'
+  type: 'builtin' | 'custom' | 'tenant_instance'
   business_pages?: BusinessPage[]
   // 实例相关字段（租户模式下返回实例时包含）
   instance_id?: string      // 实例ID，租户模式下必填

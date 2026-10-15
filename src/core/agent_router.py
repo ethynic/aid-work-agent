@@ -29,9 +29,11 @@ class AgentRouter:
     """
 
     # 自定义智能体（subagent_definitions DB 定义，from_db=True）的运行时字段，用于检测配置是否被修改
+    # name/description：平台改名或租户实例覆盖项（display_name/description）变更时重建实例
     _CONFIG_CHANGE_FIELDS = (
         "llm_provider", "llm_model_codes", "tools", "skills",
         "context", "reply_style", "chat_toolbar", "upload_accept",
+        "name", "description",
     )
 
     def __init__(self):
@@ -66,7 +68,9 @@ class AgentRouter:
         if not registry:
             return False
         from src.subagents.factory import AgentFactory
-        latest = AgentFactory.get_runtime_config(registry, subagent_name)
+        latest = AgentFactory.get_runtime_config(
+            registry, subagent_name, tenant_id=getattr(cached, "_default_tenant_id", None)
+        )
         if latest is None:
             # DB 无定义（已删除/无 system_prompt）时复用旧实例，避免中断进行中的会话
             return False

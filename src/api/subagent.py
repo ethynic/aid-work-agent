@@ -29,6 +29,44 @@ _GREETING_MAX_PROMPTS = 2
 
 # ============== API 接口（只读） ==============
 
+def _build_tenant_instance_items(tenant_id: str, allowed_ids: set) -> List[Dict[str, Any]]:
+    """构建本租户数字员工副本列表项（active 副本，base 在允许集合内）。
+
+    name/description 用租户覆盖值，business_pages/chat_toolbar/upload_accept
+    继承父定义（副本不可改工具与页面配置）。
+    """
+    try:
+        from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
+        rows = TenantAgentInstanceDB.list_by_tenant(tenant_id)
+    except Exception as e:
+        logger.opt(exception=True).error(f"查询租户数字员工实例失败: {e}")
+        return []
+
+    registry = master_agent.subagent_registry
+    items = []
+    for row in rows:
+        if row.get("status") != "active":
+            continue
+        if row.get("agent_id") == row.get("base_agent_id"):
+            continue  # 直定制行不产生新列表项
+        if row["base_agent_id"] not in allowed_ids:
+            continue
+        base_cfg = registry.get(row["base_agent_id"]) if registry else None
+        item = {
+            "agent_id": row["agent_id"],
+            "name": row.get("display_name") or (base_cfg.name if base_cfg else row["agent_id"]),
+            "description": row.get("description") or (base_cfg.description if base_cfg else ""),
+            "type": "tenant_instance",
+            "base_agent_id": row["base_agent_id"],
+            "business_pages": (base_cfg.business_pages if base_cfg else None) or [],
+        }
+        if base_cfg is not None and base_cfg.chat_toolbar:
+            item["chat_toolbar"] = base_cfg.chat_toolbar
+        if base_cfg is not None and base_cfg.upload_accept:
+            item["upload_accept"] = base_cfg.upload_accept
+        items.append(item)
+    return items
+
 @router.get("")
 async def list_subagents(request: Request):
     """列出所有数字员工（内置+定制，标记类型）"""
@@ -51,8 +89,10 @@ async def list_subagents(request: Request):
             if user:
                 # 传递 tenant_id 作为 target_tenant_id，确保平台管理员代管租户时
                 # 按目标租户的订阅过滤，而不是 fallback 到 user["tenant_id"]（平台管理员为 NULL）
+                # allowed_ids 已由 checker 展开附加本租户副本（订阅继承）
                 allowed_ids = set(get_allowed_agent_ids_for_user(user, target_tenant_id=tenant_id))
                 items = [item for item in items if item["agent_id"] in allowed_ids]
+                items.extend(_build_tenant_instance_items(tenant_id, allowed_ids))
                 # 如果主智能体在允许列表中，添加到结果中
                 if "main" in allowed_ids:
                     items.append({
@@ -150,17 +190,49 @@ def _build_greeting_input(config) -> Dict[str, Any]:
     }
 
 
+def _get_instance_greeting_override(tenant_id: str, agent_id: str) -> Optional[Dict[str, Any]]:
+    """读租户实例行的简介/快捷按钮覆盖；无覆盖或 archived 返回 None（走默认链路）"""
+    try:
+        from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
+        row = TenantAgentInstanceDB.get(tenant_id, agent_id)
+    except Exception as e:
+        logger.opt(exception=True).error(f"查询租户数字员工实例失败 agent={agent_id}: {e}")
+        return None
+    if not row or row.get("status") != "active":
+        return None
+    summary = (row.get("greeting_summary") or "").strip()
+    prompts = row.get("greeting_prompts") if isinstance(row.get("greeting_prompts"), list) else None
+    if not summary and not prompts:
+        return None
+    return {
+        "summary": summary or "输入您的问题或任务，AI助手将为您处理。",
+        "prompts": prompts or [
+            {"label": "帮我写一份周报", "message": "帮我写一份周报"},
+            {"label": "分析上传的文件", "message": "分析上传的文件"},
+        ],
+    }
+
+
 @router.get("/{agent_id}/greeting")
 async def get_subagent_greeting(request: Request, agent_id: str):
     """获取数字员工「新会话空态」摘要与快捷操作按钮
 
-    缓存优先（subagent_greeting:{agent_id}，TTL 7 天）；未命中时用
+    租户实例覆盖项优先（即时生效，不走缓存）；否则缓存优先
+    （subagent_greeting:{agent_id}，租户上下文为 subagent_greeting:{tenant_id}:{agent_id}，TTL 7 天）；未命中时用
     description + tools/skills 调用小模型（lite_model）生成，并把计费
     归属到当前访问的租户用户；LLM 失败/解析失败时降级为 description + 通用按钮。
     """
     try:
-        # 缓存命中直接返回
-        cached = get_cached(CacheKeys.SUBAGENT_GREETING, agent_id)
+        # 租户实例覆盖：简介/快捷按钮手动配置优先于缓存与 LLM 生成
+        tenant_id = get_current_tenant_id()
+        if tenant_id:
+            override = _get_instance_greeting_override(tenant_id, agent_id)
+            if override is not None:
+                return {"success": True, "data": override, "source": "override"}
+
+        # 缓存命中直接返回（租户上下文下键带租户维度：直定制行 agent_id=基础名全局共享，防跨租户污染）
+        cache_parts = (tenant_id, agent_id) if tenant_id else (agent_id,)
+        cached = get_cached(CacheKeys.SUBAGENT_GREETING, *cache_parts)
         if cached is not None:
             return {"success": True, "data": cached, "source": "cache"}
 
@@ -177,7 +249,16 @@ async def get_subagent_greeting(request: Request, agent_id: str):
             return {"success": False, "error": "子智能体注册表未初始化", "debug": "subagent_registry is None"}
 
         registry.load_from_db()
-        config = registry.get(agent_id)
+        # 租户实例优先走运行时解析（实例不进全局 registry）；非实例回退 registry.get
+        config = None
+        if tenant_id:
+            try:
+                from src.subagents.factory import AgentFactory
+                config = AgentFactory.get_runtime_config(registry, agent_id, tenant_id=tenant_id)
+            except Exception as e:
+                logger.opt(exception=True).error(f"解析租户实例配置失败 agent={agent_id}: {e}")
+        if config is None:
+            config = registry.get(agent_id)
         if not config:
             # 不存在的智能体直接兜底，避免缓存无效项
             return {"success": False, "error": f"数字员工不存在: {agent_id}", "debug": f"agent_id={agent_id} not found"}
@@ -229,7 +310,7 @@ async def get_subagent_greeting(request: Request, agent_id: str):
 
         # 生成成功：写缓存
         if data:
-            set_cached(CacheKeys.SUBAGENT_GREETING, agent_id, value=data, ttl=_GREETING_TTL)
+            set_cached(CacheKeys.SUBAGENT_GREETING, *cache_parts, value=data, ttl=_GREETING_TTL)
             return {"success": True, "data": data, "source": "llm"}
 
         # 兜底：description + 通用按钮，不阻塞 UI

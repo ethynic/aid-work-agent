@@ -44,6 +44,29 @@ def _resolve_user_id(request: Request) -> Optional[str]:
     return None
 
 
+def _sync_instance_extra_prompt(
+    tenant_id: str, subagent_name: str, content: Optional[str], user_id: Optional[str]
+) -> None:
+    """把 extra_prompt 同步写入租户实例表（迁移过渡期双写，失败不阻塞主流程）。
+
+    content=None 表示清除覆盖（恢复继承）。实例行按需补建（直定制行）。
+    """
+    try:
+        from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
+        from src.saas.services.tenant_agent_instance_service import create_direct_customization
+
+        create_direct_customization(tenant_id, subagent_name)
+        if content is not None and not content.strip():
+            content = None
+        TenantAgentInstanceDB.update_overrides(
+            tenant_id, subagent_name, {"extra_prompt": content}
+        )
+    except Exception as e:
+        logger.opt(exception=True).error(
+            f"双写实例表 extra_prompt 失败 tenant={tenant_id} subagent={subagent_name}: {e}"
+        )
+
+
 def _get_or_create_prompt(subagent_name: str, tenant_id: str, user_id: Optional[str] = None) -> Optional[dict]:
     """获取或创建 tenant_extra prompt 注册记录"""
     scope_id = f"extra:{subagent_name}:{tenant_id}"
@@ -127,6 +150,10 @@ async def save_extra_md(subagent_name: str, body: ExtraMdRequest, request: Reque
             created_by=user_id,
         )
 
+        # 4. 双写租户实例表 extra_prompt（tenant_agent_instances 迁移过渡期双写，
+        #    运行时 _load_extra_md 优先读实例行）
+        _sync_instance_extra_prompt(tenant_id, subagent_name, body.content, user_id)
+
         logger.info(
             f"保存 extra.md (DB): tenant={tenant_id}, subagent={subagent_name}, "
             f"version={version_num}, dedup={commit_result.get('dedup', False)}"
@@ -156,6 +183,9 @@ async def delete_extra_md(subagent_name: str, request: Request):
         ok = PromptRegistryService.delete_prompt(str(registry["id"]))
         if not ok:
             raise HTTPException(status_code=500, detail="删除失败")
+
+        # 双写：同步清除实例表 extra_prompt（恢复继承父定义）
+        _sync_instance_extra_prompt(tenant_id, subagent_name, None, None)
 
         logger.info(f"删除 extra.md (DB): tenant={tenant_id}, subagent={subagent_name}")
         return {"success": True, "message": "已恢复默认配置"}
