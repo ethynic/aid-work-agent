@@ -46,6 +46,8 @@ export interface SubmitFailureState {
   attempts: number
   /** 手动重试：复用原 client_request_id 与原 body 幂等重放（函数字段，不进序列化路径） */
   retry: () => void
+  /** Only definitive rejection can be safely dismissed before acceptance. */
+  remove?: () => void
 }
 
 /** 已受理任务的执行失败；由 Runner 状态恢复，点击后显式发起新任务。 */
@@ -53,6 +55,8 @@ export interface RunnerFailureState {
   message: string
   retrying?: boolean
   retry?: () => void
+  deleting?: boolean
+  remove?: () => void
 }
 
 export interface ChatMessage {

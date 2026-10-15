@@ -15,10 +15,10 @@
 """
 
 import asyncio
-from typing import Optional, List
+from typing import Literal, Optional, List
 
-from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Path, Request
+from pydantic import BaseModel, Field
 from loguru import logger
 
 from src.api.auth import get_current_user
@@ -48,6 +48,14 @@ class CreateMessageRequest(BaseModel):
     role: str
     content: str
     metadata: Optional[dict] = None
+
+
+class FailedMessageAction(BaseModel):
+    action: Literal['hide', 'retry']
+    client_request_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+
+    class Config:
+        extra = 'forbid'
 
 
 class SessionResponse(BaseModel):
@@ -198,11 +206,25 @@ async def get_session(request: Request, session_id: str):
 async def list_messages(request: Request, session_id: str, limit: int = 100):
     """获取会话的所有消息"""
     from src.api.web_subject import owned_web_session
-    await asyncio.to_thread(owned_web_session, request.headers.get('Authorization',''),
+    session = await asyncio.to_thread(owned_web_session, request.headers.get('Authorization',''),
                             request.headers.get('X-Tenant-Id'), session_id)
     messages = await asyncio.to_thread(MessageDB.list_by_session, session_id, limit)
     from src.api.message_projection import public_conversation_messages
-    return {"messages": public_conversation_messages(messages)}
+    from src.services.chat_failed_messages import failed_message_ui
+    return {"messages": public_conversation_messages(messages), "failed_message_ui": failed_message_ui(session)}
+
+
+@router.post('/{session_id}/failed-messages/{runner_id}')
+async def failed_message_action(request: Request, session_id: str, body: FailedMessageAction,
+                                runner_id: str = Path(min_length=1, max_length=128)):
+    from src.api.web_subject import owned_web_session
+    from src.services.chat_failed_messages import update_failed_message_ui
+    if (body.action == 'retry') != (body.client_request_id is not None):
+        raise HTTPException(422, 'INVALID_FAILED_MESSAGE_ACTION')
+    session = await asyncio.to_thread(owned_web_session, request.headers.get('Authorization', ''),
+                                      request.headers.get('X-Tenant-Id'), session_id)
+    await asyncio.to_thread(update_failed_message_ui, session, runner_id, body.action, body.client_request_id)
+    return {'success': True}
 
 
 @router.post("/{session_id}/messages")

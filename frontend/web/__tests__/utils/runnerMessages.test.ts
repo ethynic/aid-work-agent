@@ -1,8 +1,42 @@
 import { describe, expect, it } from 'vitest'
-import { historyMessages, mergeRunnerMessages, runnerMessages } from '@/utils/runnerMessages'
+import { historyMessages, mergeRunnerMessages, runnerMessages, visibleFailedMessages } from '@/utils/runnerMessages'
 import { runnerView } from '../mocks/runnerView'
 
 describe('Runner display merges durable facts with existing messages', () => {
+  it.each(['running', 'failed', 'cancelled'] as const)('retry %s does not remove the failed source before success', status => {
+    const source = runnerView({ status: 'failed' })
+    const retry = runnerView({ runner_id: 'retry', client_request_id: 'retry-key', status, queue_order: 2 })
+    const rows = [source, retry]
+    const visible = visibleFailedMessages(mergeRunnerMessages([], rows), rows, { retry_sources: { 'retry-key': source.runner_id } })
+    expect(visible.some(message => message.runnerId === source.runner_id && message.runnerFailure)).toBe(true)
+  })
+
+  it('successful linked retry cleans failed ancestors, while identical unrelated input and partial output remain', () => {
+    const source = runnerView({ status: 'failed', result: { status: 'failed', output: '部分结果' } })
+    const retry = runnerView({ runner_id: 'retry', client_request_id: 'retry-key', status: 'failed', queue_order: 2 })
+    const success = runnerView({ runner_id: 'success', client_request_id: 'success-key', status: 'completed', queue_order: 3 })
+    const unrelated = runnerView({ runner_id: 'unrelated', client_request_id: 'unrelated-key', status: 'failed', queue_order: 4 })
+    const rows = [source, retry, success, unrelated]
+    const visible = visibleFailedMessages(mergeRunnerMessages([], rows), rows,
+      { retry_sources: { 'retry-key': source.runner_id, 'success-key': retry.runner_id } })
+    expect(visible.filter(message => message.runnerFailure).map(message => message.runnerId)).toEqual(['unrelated'])
+    expect(visible.some(message => message.content === '部分结果')).toBe(true)
+  })
+
+  it('manual hide cannot remove normal messages or partial artifacts and does not imply retry success', () => {
+    const source = runnerView({ status: 'failed' })
+    const retry = runnerView({ runner_id: 'retry', client_request_id: 'retry-key', status: 'failed', queue_order: 2,
+      result: { status: 'failed', output: '保留文件', assistant_metadata: { downloadableFiles: [
+        { file_id: 'f', file_name: 'f.txt', file_size: 1, download_url: '/f' }] } } })
+    const running = runnerView({ runner_id: 'active', client_request_id: 'active-key', queue_order: 3 })
+    const rows = [source, retry, running]
+    const visible = visibleFailedMessages(mergeRunnerMessages([], rows), rows, {
+      hidden_failed: { retry: true, active: true }, retry_sources: { 'retry-key': source.runner_id },
+    })
+    expect(visible.filter(message => message.runnerFailure).map(message => message.runnerId)).toEqual(['runner-A'])
+    expect(visible.some(message => message.runnerId === 'active' && message.role === 'user')).toBe(true)
+    expect(visible.find(message => message.content === '保留文件')?.downloadableFiles).toHaveLength(1)
+  })
   it('failed model calls show failure on the user input and never produce an empty final assistant', () => {
     const first = runnerView({ status: 'failed', result: { status: 'failed', output: '', error_code: 'EXECUTION_FAILED' } })
     const second = runnerView({ ...first, runner_id: 'runner-B', client_request_id: 'request-B', queue_order: 2,

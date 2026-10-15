@@ -4,7 +4,7 @@
  * 业务承诺：
  * - POST /api/chat/runners 失败时，用户消息旁渲染明确错误态与重试入口，
  *   替换永远停留的「🚀 正在发送请求...」乐观消息
- * - definitive：错误文案 + 「重试」按钮；retrying：自动重试次数 + 「立即重试」按钮
+ * - 灰色简短错误提示，气泡旁的图标可用键盘重试或删除；未知受理不能删除
  * - 失败渲染块不受 runnerActive/debug 门控（普通用户可见）
  * - submitFailure 存在时不落入「对方正在输入中」输入占位
  */
@@ -53,20 +53,22 @@ describe('MessageItem 提交失败态渲染', () => {
     const retry = vi.fn()
     const { wrapper } = mountFailed({ kind: 'definitive', message: '积分不足，请充值后重试。', attempts: 0, retry })
     expect(wrapper.find('[role="alert"]').text()).toContain('消息未发送成功')
-    expect(wrapper.find('[role="alert"]').text()).toContain('积分不足，请充值后重试。')
-    const button = wrapper.find('[role="alert"] button')
-    expect(button.text()).toBe('重试')
+    expect(wrapper.find('[role="alert"]').text()).toBe('消息未发送成功')
+    expect(wrapper.find('[role="alert"]').classes()).toContain('text-muted')
+    const button = wrapper.find('button[aria-label="重试消息"]')
+    expect(button.text()).toBe('')
+    expect(button.attributes('title')).toBe('重试消息')
     await button.trigger('click')
     expect(retry).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 
-  it('retrying 失败渲染自动重试次数与立即重试按钮', async () => {
+  it('未知受理保留准确的确认提示和重试图标，不提供删除', async () => {
     const retry = vi.fn()
     const { wrapper } = mountFailed({ kind: 'retrying', message: '任务暂时无法继续，请稍后重试。', attempts: 2, retry })
-    expect(wrapper.find('[role="alert"]').text()).toContain('已自动重试 2 次')
-    const button = wrapper.find('[role="alert"] button')
-    expect(button.text()).toBe('立即重试')
+    expect(wrapper.find('[role="alert"]').text()).toBe('发送状态确认中，正在自动重试')
+    expect(wrapper.find('button[aria-label="删除失败消息"]').exists()).toBe(false)
+    const button = wrapper.find('button[aria-label="重试消息"]')
     await button.trigger('click')
     expect(retry).toHaveBeenCalledTimes(1)
     wrapper.unmount()
@@ -115,15 +117,28 @@ describe('MessageItem 提交失败态渲染', () => {
   it('执行失败即使关闭 debug 也在用户消息旁显示重试，重试中禁用按钮', async () => {
     const retry = vi.fn()
     const message = reactive({ role: 'user' as const, content: '上海的', timestamp: Date.now(),
-      runnerFailure: { message: '服务暂时不可用，请稍后重试。', retry, retrying: false } })
+      runnerFailure: { message: '服务暂时不可用，请稍后重试。', retry, retrying: false, remove: vi.fn() } })
     const wrapper = mount(MessageItem, { props: { message } })
     expect(wrapper.find('[role="alert"]').text()).toContain('消息未发送成功')
     expect(wrapper.find('.message-ai-wrapper').exists()).toBe(false)
-    await wrapper.find('[role="alert"] button').trigger('click')
+    await wrapper.find('button[aria-label="重试消息"]').trigger('click')
     expect(retry).toHaveBeenCalledTimes(1)
     message.runnerFailure.retrying = true
     await wrapper.vm.$nextTick()
-    expect(wrapper.find('[role="alert"] button').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('button[aria-label="正在处理失败消息"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('button[aria-label="删除失败消息"]').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('删除使用气泡旁的灰色图标，提供名称并调用原消息动作', async () => {
+    const remove = vi.fn()
+    const { wrapper } = mountFailed({ kind: 'definitive', message: '失败详情', attempts: 0, retry: vi.fn(), remove })
+    const button = wrapper.find('button[aria-label="删除失败消息"]')
+    expect(button.text()).toBe('')
+    expect(button.classes().join(' ')).not.toContain('danger')
+    expect(wrapper.text()).not.toContain('失败详情')
+    await button.trigger('click')
+    expect(remove).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 })

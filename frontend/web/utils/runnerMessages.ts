@@ -1,5 +1,5 @@
 import type { ChatMessage, ProgressMessage, DownloadableFile, ImageRef } from '@/types'
-import type { ChatMessageRecord } from '@/api/session'
+import type { ChatMessageRecord, FailedMessageUI } from '@/api/session'
 import type { RunnerSupplementalInput, RunnerView, RunnerPresentation } from '@/api/runner'
 import { extractQuickOptions } from './quickOptions'
 
@@ -137,6 +137,27 @@ export function runnerMessages(row: RunnerView): ChatMessage[] {
   if (row.status !== 'failed' || assistant.content.trim() || images.length
       || details.downloadableFiles?.length || details.browserAssistance) messages.push(assistant)
   return messages
+}
+
+/** Only explicit retry links and completed facts can retire a failed input. */
+export function visibleFailedMessages(messages: ChatMessage[], rows: RunnerView[], preferences: FailedMessageUI): ChatMessage[] {
+  const succeeded = new Set(rows.filter(row => row.status === 'completed').map(row => row.client_request_id))
+  const replaced = new Set<string>()
+  const sources = new Map(rows.filter(row => row.status === 'failed').map(row => [row.runner_id, row]))
+  // Propagate success through a chain of failed retries; identical text is never identity.
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const [requestId, sourceId] of Object.entries(preferences.retry_sources || {})) {
+      const source = sources.get(sourceId)
+      if (!source || replaced.has(sourceId) || !succeeded.has(requestId)) continue
+      replaced.add(sourceId)
+      succeeded.add(source.client_request_id)
+      changed = true
+    }
+  }
+  return messages.filter(message => !message.runnerFailure || !message.runnerId
+    || !(preferences.hidden_failed?.[message.runnerId] || replaced.has(message.runnerId)))
 }
 
 /** Display times never reorder a turn. Stable runner IDs replace optimistic/history copies. */
