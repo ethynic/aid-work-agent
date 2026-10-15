@@ -209,9 +209,10 @@ def make_repo(tenant_events=True):
     return repo
 
 
-def make_cursor(candidates, users, admins, platform_admins=None):
+def make_cursor(candidates, users, admins, platform_admins=None, prior_notifications=None):
     cur = MagicMock()
-    state = {"admins": admins, "platform_admins": platform_admins or []}
+    state = {"admins": admins, "platform_admins": platform_admins or [],
+             "prior": prior_notifications or []}
 
     def execute(sql, params=None):
         if "GROUP BY tenant_id, user_id" in sql:
@@ -222,6 +223,9 @@ def make_cursor(candidates, users, admins, platform_admins=None):
             cur.fetchall = lambda: state["admins"]
         elif "role = 'platform_admin'" in sql:
             cur.fetchall = lambda: state["platform_admins"]
+        elif "notification_messages" in sql:
+            state["throttle_params"] = params
+            cur.fetchall = lambda: state["prior"]
         elif "FROM tenants" in sql:
             cur.fetchone = lambda: {"company_name": "测试租户"}
         elif "clock_timestamp" in sql:
@@ -399,3 +403,53 @@ class TestRunAbuseScanOnce:
         stats = run_abuse_scan_once()
         assert stats["events"] == 1 and stats["notified"] == 1
         assert published[0]["subject"].tenant_id is None
+
+
+class TestNotifyThrottle:
+    """24h 通知节流预检：同前缀未过期通知按 (scope_key, recipient) 跳过"""
+
+    def test_prior_unexpired_notification_throttles(self, scanner_env):
+        container, published, _ = scanner_env
+        container["cursor"] = make_cursor(
+            [_candidate()], [_user_row()], [{"user_id": "admin1"}],
+            prior_notifications=[{"scope_key": "tenant:t1",
+                                  "recipient_user_id": "admin1"}])
+        stats = run_abuse_scan_once()
+        # 事件仍落库（审计每小时一条），但不再重复通知
+        assert stats["events"] == 1 and stats["notified"] == 0 and published == []
+
+    def test_prior_for_other_recipient_still_notifies(self, scanner_env):
+        # 已通知的是平台管理员副本，租户管理员不在节流集合内，正常通知
+        container, published, _ = scanner_env
+        container["cursor"] = make_cursor(
+            [_candidate()], [_user_row()], [{"user_id": "admin1"}],
+            prior_notifications=[{"scope_key": "global",
+                                  "recipient_user_id": "padmin1"}])
+        stats = run_abuse_scan_once()
+        assert stats["notified"] == 1
+        assert published[0]["subject"].user_id == "admin1"
+
+    def test_expired_notification_does_not_throttle(self, scanner_env):
+        # expires_at 判重由 SQL 过滤（测试里 prior 即查询结果），空结果 = 可再通知
+        container, published, _ = scanner_env
+        container["cursor"] = make_cursor(
+            [_candidate()], [_user_row()], [{"user_id": "admin1"}],
+            prior_notifications=[])
+        stats = run_abuse_scan_once()
+        assert stats["notified"] == 1
+
+    def test_throttle_like_pattern_escapes_wildcards(self, scanner_env):
+        # 租户/用户 ID 含 LIKE 通配符时转义，防止前缀匹配扩散到其他告警
+        container, published, _ = scanner_env
+        container["cursor"] = make_cursor(
+            [_candidate("t1", "u%1")], [_user_row("u%1")],
+            [{"user_id": "admin1"}], prior_notifications=[])
+        run_abuse_scan_once()
+        # 预检查询的 LIKE 参数已转义通配符
+        calls = [c for c in container["cursor"].execute.call_args_list
+                 if "notification_messages" in c[0][0]]
+        assert len(calls) == 1
+        producer, pattern, now = calls[0][0][1]
+        assert producer == abuse_scanner.PRODUCER
+        assert pattern == r"abuse:t1:u\%1:credit\_budget:%"
+        assert now == NOW
