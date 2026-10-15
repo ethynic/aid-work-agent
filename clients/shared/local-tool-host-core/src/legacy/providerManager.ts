@@ -133,6 +133,9 @@ export class ProviderManager {
       env: { ...this.baseEnv, ...this.providerEnv },
       maxBufferSize: this.stdioMaxBufferBytes,
     })
+    // SDK exposes this PassThrough before spawn. Subscribe before the MCP handshake:
+    // a launcher/module failure can close stdio before connect ever succeeds.
+    transport.stderr?.on('data', (chunk: Buffer) => logProviderChunk(chunk.toString()))
     const client = new Client(
       { name: 'agent-tool-runtime', version: '0.1.0' },
       { capabilities: {} },
@@ -170,9 +173,6 @@ export class ProviderManager {
     }
     this.client = client
     this.transport = transport
-    // provider stderr（[boss-mcp] 启动/工具行）转发：控制台 + 日志文件（PassThrough 缓冲，
-    // spawn 早于 connect 的行 attach 后仍可收到）
-    transport.stderr?.on('data', (chunk: Buffer) => logProviderChunk(chunk.toString()))
     logInfo(`Provider 已启动 pid=${transport.pid ?? '?'} entry=${this.entry}`)
   }
 

@@ -11,6 +11,50 @@
 | Phase 5 | 安装前运行检测与确认/取消 | ✅ 完成（2026-10-14） | 独立增量5场景通过；实际NSIS确认/取消及r12实际安装/静默取消/载荷比对通过，CR无P0/P1 |
 | Phase 6 | 无测试环境的正常交互安装退出修复 | ✅ 完成（2026-10-14） | r12正常本地向导退出2复现；r13正常用户非静默完整安装到完成页并退出0，注册版本0.0.9；独立回归/CR通过 |
 | Phase 7 | 存量数据库迁移水位补偿 | ✅ 完成（2026-10-14） | 31单测/独立4迁移+3配对及CR通过；agent2结构已恢复且接口无码400正常，正式库待发布验收 |
+| Phase 8 | Windows 长路径监管与启动诊断 | ✅ 完成（2026-10-15） | 主控21项/独立5项及CR通过；r14正常用户实装退出0，安装后真实BOSS两类目录握手通过 |
+| Phase 9 | BOSS PowerShell 脚本短路径执行 | ✅ 完成（2026-10-15） | 定向9项/独立5场景及CR通过；r15实装退出0，真实Host导入0.3.9并列24工具；全量5既有失败已核 |
+
+## 提交交接（2026-10-15）
+
+用户明确授权提交本批r14/r15长路径修复、诊断、版本、回归测试及交付摘要，目标为当前`master`的`origin/master`。提交前fetch后快进同步远程29个提交至`70756b50`，仅完成索引有相邻条目冲突，已保留远程新增事项和本任务更新；客户端产品代码/依赖没有被远程改动。没有暂存无关旧发行摘要删除或`plans/`目录。Git凭据管理器的本机globalization启动问题通过仅本次Git进程的环境设置解决，未修改系统或仓库认证配置、未输出凭据。
+
+同步后主控重新执行桌面完整构建，TypeScript/renderer/43模块产物检查通过；与实际安装ASAR比对，桌面入口、manifest、JS/CSS等8个renderer文件字节相同，额外复制的`task-notifications-sw.js`因远程Web通知功能更新而不同，未将整个renderer称为字节相等。长路径产品实现及回归证据对应的源码保持不变，复用上述定向、独立测试和实际安装/导入结果。下文及组合包内“未提交”属于候选包生成时状态，最终提交/推送以Git记录为准；没有重新构建EXE/插件/组合ZIP，没有部署服务器，r15交付包不冒称包含此次远程Web功能更新。5项既有BOSS全量测试失败与真实客户筛选待验收的限制继续有效。
+
+## Phase 9 实施检查点（2026-10-15）
+
+用户授权修复正式trace `tr_runner_1be27f28d2954ff7993a234b3df816a9` 的筛选故障。设备正常在线，页面读取成功；两次筛选选项、一次筛选及三次overlay dismiss均在`win-click.ps1`加载前失败，退出4294770688，脚本路径260字符。用户无遮挡重试仍失败。本机现代PowerShell通过；在仅属于诊断的临时副本中关闭longPathAware后，240字符脚本正常、260字符脚本真实存在但报不存在，退出码完全一致。原系统程序与注册表未修改。
+
+主控唯一修改BOSS PowerShell调用适配及相关回归/版本/交付材料；独立测试和CR不修改产品。共享契约2.1、Device/MCP wire、权限和副作用规则保持；不改云端/数据库、不重配、不自动重试业务。点击/拖动/输入仍复用既有Win32脚本及守卫，滚轮/拼接/像素差异使用同一短路径执行层。每次调用只将当前可信插件脚本及其固定依赖复制到本用户临时nonce目录，验证普通文件且拒绝链接、控制路径长度、不拼shell参数，执行退出后仅清理本次目录；不持久缓存，不沿用旧版本代码。启动/准备故障不得伪装成页面遮挡。
+
+实现：固定四脚本白名单及点击/滚轮的C#依赖，原字节复制前将nonce目录ACL收紧为CurrentUser+SYSTEM；PowerShell固定系统绝对路径、模块搜索路径和可执行搜索路径，使用参数数组保留中文、引号及特殊字面量，不改变脚本坐标/窗口守卫。先检查最终暂存路径<240字符，退出/超时后仅删除自己的临时目录。启动及准备错误映射既有INTERNAL_ERROR，避免页面修复器自动重复操作；原BOSS_INPUT_UNKNOWN仍优先映射EXECUTION_UNKNOWN。中文stderr按UTF-8/GB18030解码，不把Node包含完整命令/输入文本的error.message带入错误。
+
+验证：最终BOSS源码TypeScript检查退出0，主控定向9/9；独立5个新行为场景有效通过，首轮4项及修正最小旧实现探针后受影响边界1项分别留证，并未宣称最终整批5/5。真实禁longPathAware临时PowerShell副本直接加载240字符脚本退出0，260/500字符脚本退出4294770688；新执行层均从108字符路径成功运行，原字节、私有ACL、特殊参数及新版本新nonce验证通过。四个实际PS脚本和两项图像导出已验证；点击/滚轮只运行至不存在测试窗口的守卫，图像用合成数据，无招聘业务操作。
+
+全量编译后BOSS测试549项：544通过、5失败、0跳过。独立隔离HEAD旧版三个调用实现及原package/shared conformance复跑相关两suite，36通过、同名5失败：2项工具数仍断言22（HEAD实际24），3项greet fixture缺失当前根HTML/CSS几何要求。没有新增失败，本轮不扩展修改无关业务或夹具，不能将全量报告称为全绿。原始TAP、HEAD对照及冻结源码摘要见`clients/agent-desktop/build/boss-powershell-independent/boss-powershell-independent-report.json`和`build/boss-powershell-20261015-r15/`。
+
+最终BOSS 0.3.9验收插件包4491937字节，SHA256 `c9204c1f9504549d688bf19623146efff09cd8f410e2b63d969bc189f4bbfd6b`；独立实际展开3614项payload，包内helper/四PS/C#六项与已测源码摘要一致。直接从实际包导入helper，在538字符脚本路径上对照真实禁长路径副本：旧直载4294770688，新执行层正常加载并编译C#后到不存在窗口的守卫（退出1、无PREPARE/LAUNCH故障），没有真实输入且无临时残留。CR另核包内四编译实现与五依赖字节，最终无未关闭P0/P1/P2。
+
+r15安装器UI0.0.11沿用已测Host0.2.20/Core0.2.19/Node22.23.3，新增仅限BOSS的验收公钥并保留原三根，私钥只在打包进程内生成、未写盘。Windows验收版未签名；EXE126314368字节，SHA256 `487a552ca8965036f37fd07dd78642ecfad3de6e8cba75c8a09d8912ee8af8da`，buildInput `3a8710da7ce65b1e7b0649db7534607e3e7060a52899fdc7062c203d95938e33`，Host tgz摘要沿用Phase8。构建及3695资源验证通过。需要覆盖安装0.0.11后导入BOSS0.3.9；只安装UI会按升级规则保留原插件，不能自动获得本轮BOSS脚本修复。本轮无需服务器/数据库变更，不要求主动解绑重配，真实客户筛选仍待现场验收。
+
+最终安装角色在正常CurrentUser、无fixture环境实跑同一r15 EXE `/S`，104.920秒退出0；安装前Detect为PROCESS_CLEAR、未终止活动用户客户端。12关键载荷及全部3695资源摘要一致，版本/stamp/new generation一致且新home为空，未启动GUI或连接服务器。随后真正安装的Host通过真实`plugins.import`及平台文件选择IPC，在隔离home导入0.3.9，保留旧信任根且新BOSS签名通过；实际安装的Node/原生监管完成initialize/tools/list 24工具、私有回执及进程树归零。无招聘工具调用；隔离环境未启动调试Chrome/登录BOSS，插件ready=false并提示先登录属于预期，不把这次握手称为业务ready或完整筛选成功。实际UAC/per-machine及本轮完整交互向导未重跑。正式报告为`build/boss-powershell-20261015-r15/install/normal-install-report.json`及`plugin-import-report.json`；此前Phase6交互修复证据仅复用，不冒称本轮再验。本轮未提交/推送/部署服务器。
+
+最终交付`clients/release/AID-Work-Runtime-UI-BOSS-20261015-trial-r15.zip`，130966136字节、22文件，SHA256 `b884100a25f390aac1abaa42f546579f9df1223e003080344d71e63ecdaaf91d`，CRC及全部文件摘要复读通过，旁附`.sha256`。包内计划快照先于最终ZIP摘要固定；实际安装/导入验证后未重建EXE或插件。归档含两步安装说明、完整既有失败说明、独立报告、最终包验证及实际安装/Host导入报告。
+
+## Phase 8 实施检查点（2026-10-15）
+
+主控唯一维护原生 `RuntimeProcessSupervisor.cs`、共享 core Provider 启动日志和相应回归；独立测试及CodeReview仅验证。沿用共同契约2.1、现有监管回执/marker/ledger格式及DPAPI、Job边界，不改Device/H1/H3、配对、授权、任务事实或重放语义，不需服务器部署。既有已完成阶段不因本轮启动缺陷失效。
+
+本地实际r13 BOSS0.3.5、Node22.23.3对照：短路径直接及监管启动均成功；模拟客户259字符入口直接启动成功，260字符监管回执导致`PathTooLongException`（`AbsoluteFile(receipt)`）；仅缩短回执后成功。实施覆盖原生长路径校验、入口/工作目录、回执及临时文件读写，握手前stderr脱敏落盘。验证包含更长路径/中文/空格、DPAPI回执及进程退出、启动失败日志和现有崩溃/unknown回归；最终客户端资源另做真实BOSS握手验证。只读握手/listTools不执行招聘业务。
+
+实现兼容：仅进程内启用现代.NET路径处理，内部IO使用extended路径，不改客户Windows全局策略；回执原名称/结构不变，临时文件改固定长度sibling。Windows/Node本身不能使用>=260字符工作目录，故短目录保持原cwd，原先不可启动的深目录选择最近<260字符祖先并记录固定`PROVIDER_CWD_PARENT`。没有注入Node preload或改变argv/main/execArgv，没有依赖8.3短文件名或创建junction。第一方插件入口/manifest按module路径或绝对配置定位资源；这不承诺任意第三方插件相对cwd透明兼容，后续PowerShell/原生业务动作的长路径仍需真实业务验收。
+
+最终验证：主控native/MCP/日志/崩溃/进程清理/BOM定向14项、stdio大结果/取消/断线7项通过，最终`tsc --noEmit`退出0；独立5/5通过且0跳过，覆盖529字符中文空格入口、645字符回执、CurrentUser DPAPI和CurrentUser+SYSTEM私有ACL、owner死亡Job全树归零且无关canary保留、10组非法路径/身份拒绝、启动stderr脱敏及真实BOSS0.3.5的554字符入口/22工具/0业务调用。独立测试driver的首轮路径规范化、清理深Unicode目录原生AV等失败证据保留，最终显式extended逐层清理且不跟随junction后整批退出0，未当作产品故障或跳过。最终CR无未关闭P0/P1/P2。
+
+r14 UI0.0.10/Host0.2.20/Core0.2.19/Node22.23.3，BOSS签名包沿用0.3.5；Windows验收版未签名。最终EXE为126314296字节，SHA256 `619cc8f115bca00e4a7307231549d59fca8b2d755e25edb141e232d6daa54ea3`，Host tgz SHA256 `3937038895ed62e4743b90333c9e476e55868ff53f2e89d312e15a95cd98ee65`，构建输入SHA256 `f1e2608d367fd82cca94f06d7a14d8b63c4b65f0b8df2c038f1d2ad2f8f6dba0`。构建与3695资源验包通过后未重建EXE；本机正常CurrentUser、无fixture实际`/S`安装103.711秒退出0，UI/Host/Core版本、12关键载荷与3695资源摘要、stamp/current代际一致且无运行实例残留。之后主控再用实际安装的Node与监管程序，在普通86字符入口和客户259字符入口/260字符回执上分别完成真实BOSS握手、22工具与回执写入，无招聘业务调用。
+
+证据目录`clients/agent-desktop/build/runtime-longpaths-20261015-r14/`（定向TAP、包日志、安装报告、安装后BOSS探针），独立报告`build/supervision-longpaths-independent/supervision-longpaths-independent-report.json`及`independent-final-complete.tap`。本轮只需客户端升级，已具备协议3的agent2无需再次发布；正式环境首次升级仍须此前协议3 API/数据库补偿。未提交/推送/部署服务器；客户机、真实招聘及全部后续PowerShell/原生动作仍待现场验收。
+
+最终交付`clients/release/AID-Work-Runtime-UI-BOSS-20261015-trial-r14.zip`，130894218字节、17文件，SHA256 `33ddf9ff5ef4f7c366dfb6cdc908a51d929bb457c930fc26b5e99c47193e7490`，CRC及全部文件摘要复读通过，旁附`.sha256`。包内计划快照先于最终ZIP摘要固定；安装器在实际安装/探针验证后未重建。
 
 ## 提交交接（2026-10-14）
 

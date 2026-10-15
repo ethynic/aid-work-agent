@@ -22,7 +22,7 @@
  * 前置校验：当前页面必须已打开候选人简历详情（存在大尺寸 CANVAS）→ 否则 WRONG_PAGE。
  * 详见 src/main/boss/ResumeReader.ts 头注释（坐标系/滚轮/到底检测的真机结论）。
  */
-import { execFile } from 'node:child_process'
+import { execPowerShellScript, PowerShellScriptError } from '../input/powerShell.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -62,20 +62,9 @@ function runPs(
   label: string,
   ErrorCtor: PsErrorCtor,
 ): Promise<{ stdout: string }> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      'powershell.exe',
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...args],
-      { timeout: timeoutMs },
-      (error, stdout, stderr) => {
-        if (error) {
-          const code = typeof error.code === 'number' ? error.code : undefined
-          reject(new ErrorCtor(`${label} 执行失败(exit=${code ?? 'unknown'}): ${stderr || error.message}`, code))
-        } else {
-          resolve({ stdout: String(stdout) })
-        }
-      },
-    )
+  return execPowerShellScript(scriptPath, args, { timeout: timeoutMs }).catch(error => {
+    const code = error instanceof PowerShellScriptError ? error.exitCode : undefined
+    throw new ErrorCtor(`${label} 执行失败(exit=${code ?? 'unknown'}): ${error instanceof Error ? error.message : 'PowerShell 执行失败'}`, code)
   })
 }
 

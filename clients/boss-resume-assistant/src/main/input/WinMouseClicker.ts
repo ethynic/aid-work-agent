@@ -7,7 +7,7 @@
  * 用途：BOSS 反作弊 SDK 选择性拦截 CDP 合成点击的控件（筛选按钮/面板选项等，§16 决策 8）。
  * 注意：借用真实光标，点击期间（约 1s）用户手不能碰鼠标，CLI 调用前必须提示。
  */
-import { execFile } from 'node:child_process'
+import { execPowerShellScript, PowerShellScriptError } from './powerShell.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -30,18 +30,14 @@ type ExecFileLike = (
 ) => Promise<{ stdout: string; stderr: string }>
 
 /** 默认实现：promisify 手动包（execFile 的 promisify 类型在 node:test 注入时不便） */
-const defaultExecFile: ExecFileLike = (file, args, opts) =>
-  new Promise((resolve, reject) => {
-    execFile(file, args, opts, (error, stdout, stderr) => {
-      if (error) {
-        const code = typeof error.code === 'number' ? error.code : undefined
-        const err = new WinClickError(`win-click.ps1 执行失败(exit=${code ?? 'unknown'}): ${stderr || error.message}`, code)
-        reject(err)
-      } else {
-        resolve({ stdout: String(stdout), stderr: String(stderr) })
-      }
-    })
-  })
+const defaultExecFile: ExecFileLike = async (_file, args, opts) => {
+  const index = args.indexOf('-File')
+  try { return await execPowerShellScript(args[index + 1]!, args.slice(index + 2), opts) }
+  catch (error) {
+    const code = error instanceof PowerShellScriptError ? error.exitCode : undefined
+    throw new WinClickError(`win-click.ps1 执行失败(exit=${code ?? 'unknown'}): ${error instanceof Error ? error.message : 'PowerShell 执行失败'}`, code)
+  }
+}
 
 /**
  * scripts/win-click.ps1 绝对路径。

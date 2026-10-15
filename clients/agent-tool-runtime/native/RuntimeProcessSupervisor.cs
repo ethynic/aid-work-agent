@@ -29,6 +29,10 @@ internal static class RuntimeProcessSupervisor
     {
         try
         {
+            // The Framework 4.x compiler otherwise selects legacy MAX_PATH handling.
+            // Local opt-in only: do not require a machine-wide registry/policy change.
+            AppContext.SetSwitch("Switch.System.IO.UseLegacyPathHandling", false);
+            AppContext.SetSwitch("Switch.System.IO.BlockLongPaths", false);
             if (args.Length == 1 && args[0] == "session-id")
             {
                 Console.WriteLine("{\"sessionId\":" + Process.GetCurrentProcess().SessionId + "}"); return 0;
@@ -67,12 +71,15 @@ internal static class RuntimeProcessSupervisor
             long ownerStart;
             Need(Int32.TryParse(ownerText, out owner) && owner > 0 && owner != Process.GetCurrentProcess().Id, "INVALID_OWNER");
             Need(Int64.TryParse(ownerStartText, out ownerStart) && ownerStart > 0, "INVALID_OWNER_START_TIME");
-            Need(AbsoluteFile(node) && File.Exists(node) && String.Equals(Path.GetFileName(node), "node.exe", StringComparison.OrdinalIgnoreCase), "INVALID_NODE");
-            Need(AbsoluteFile(entry) && File.Exists(entry), "INVALID_ENTRY");
-            Need(AbsoluteFile(receipt) && Directory.Exists(Path.GetDirectoryName(receipt)) && !File.Exists(receipt), "INVALID_RECEIPT");
+            Need(AbsoluteFile(node) && File.Exists(IoPath(node)) && String.Equals(Path.GetFileName(node), "node.exe", StringComparison.OrdinalIgnoreCase), "INVALID_NODE");
+            Need(AbsoluteFile(entry) && File.Exists(IoPath(entry)), "INVALID_ENTRY");
+            Need(AbsoluteFile(receipt) && Directory.Exists(IoPath(Path.GetDirectoryName(receipt))) && !File.Exists(IoPath(receipt)), "INVALID_RECEIPT");
             return Run(name, node, entry, owner, ownerStart, receipt, preserve);
         }
         catch (Failure f) { Console.Error.WriteLine("{\"error\":\"" + f.Code + "\"}"); return 1; }
+        catch (PathTooLongException) { Console.Error.WriteLine("{\"error\":\"SUPERVISOR_PATH_TOO_LONG\"}"); return 1; }
+        catch (UnauthorizedAccessException) { Console.Error.WriteLine("{\"error\":\"SUPERVISOR_ACCESS_DENIED\"}"); return 1; }
+        catch (IOException) { Console.Error.WriteLine("{\"error\":\"SUPERVISOR_IO_FAILED\"}"); return 1; }
         catch { Console.Error.WriteLine("{\"error\":\"SUPERVISOR_FAILED\"}"); return 1; }
     }
     static bool AbsoluteFile(string path)
@@ -80,6 +87,22 @@ internal static class RuntimeProcessSupervisor
         return !String.IsNullOrEmpty(path) && Path.IsPathRooted(path) && !path.StartsWith(@"\\", StringComparison.Ordinal)
             && path.Length > 3 && path[1] == ':' && (path[2] == '\\' || path[2] == '/')
             && String.Equals(Path.GetFullPath(path), path, StringComparison.OrdinalIgnoreCase);
+    }
+    // Only used after AbsoluteFile validated the canonical local-drive input.
+    // Extended paths also work when Windows LongPathsEnabled is disabled.
+    static string IoPath(string path) { return @"\\?\" + path; }
+    static string WorkingDirectory(string entry)
+    {
+        string directory = Path.GetDirectoryName(entry);
+        // Windows and Node cannot use a >= MAX_PATH current directory. Main module
+        // loading still supports extended paths. Keep the existing cwd when valid;
+        // for previously unsupported deep entries use their closest valid ancestor.
+        if (directory.Length >= 260)
+        {
+            do { directory = Path.GetDirectoryName(directory); } while (directory.Length >= 260);
+            Console.Error.WriteLine("{\"warning\":\"PROVIDER_CWD_PARENT\"}");
+        }
+        return directory;
     }
     static int Inspect(string name, bool terminate)
     {
@@ -253,8 +276,8 @@ internal static class RuntimeProcessSupervisor
             startup.lpAttributeList = attributeList;
             PROCESS_INFORMATION child;
             var command = new StringBuilder(Quote(node) + " " + Quote(entry) + " mcp --stdio");
-            Need(CreateProcess(node, command, IntPtr.Zero, IntPtr.Zero, true,
-                CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, IntPtr.Zero, Path.GetDirectoryName(entry), ref startup, out child), "CHILD_CREATE_FAILED");
+            Need(CreateProcess(IoPath(node), command, IntPtr.Zero, IntPtr.Zero, true,
+                CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, IntPtr.Zero, WorkingDirectory(entry), ref startup, out child), "CHILD_CREATE_FAILED");
             return child;
         }
         finally
@@ -282,18 +305,19 @@ internal static class RuntimeProcessSupervisor
             + ",\"nodePid\":" + node + ",\"processStopped\":true,\"remainingBusinessApps\":" + remaining + ",\"exitReason\":\"" + reason + "\"}";
         byte[] protectedBytes = ProtectedData.Protect(Encoding.UTF8.GetBytes(payload), null, DataProtectionScope.CurrentUser);
         byte[] data = Encoding.UTF8.GetBytes("{\"schemaVersion\":1,\"protectedData\":\"" + Convert.ToBase64String(protectedBytes) + "\"}");
-        string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        // A fixed-size sibling avoids extending an already long receipt filename.
+        string temp = Path.Combine(Path.GetDirectoryName(path), Guid.NewGuid().ToString("N") + ".tmp");
         try
         {
             var security = new FileSecurity(); security.SetAccessRuleProtection(true, false);
             security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(sid), FileSystemRights.FullControl, AccessControlType.Allow));
             security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), FileSystemRights.FullControl, AccessControlType.Allow));
-            using (var stream = new FileStream(temp, FileMode.CreateNew, FileSystemRights.Write, FileShare.None, 4096, FileOptions.WriteThrough, security))
+            using (var stream = new FileStream(IoPath(temp), FileMode.CreateNew, FileSystemRights.Write, FileShare.None, 4096, FileOptions.WriteThrough, security))
             { stream.Write(data, 0, data.Length); stream.Flush(true); }
             // Never overwrite an existing receipt: each job/run owns a fresh scoped path.
-            Need(MoveFileEx(temp, path, 8), "RECEIPT_PUBLISH_FAILED");
+            Need(MoveFileEx(IoPath(temp), IoPath(path), 8), "RECEIPT_PUBLISH_FAILED");
         }
-        finally { if (File.Exists(temp)) File.Delete(temp); }
+        finally { if (File.Exists(IoPath(temp))) File.Delete(IoPath(temp)); }
     }
 
     [StructLayout(LayoutKind.Sequential)] struct SECURITY_ATTRIBUTES { public int nLength; public IntPtr lpSecurityDescriptor; [MarshalAs(UnmanagedType.Bool)] public bool bInheritHandle; }

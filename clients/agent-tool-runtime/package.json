@@ -1,6 +1,6 @@
 {
   "name": "agent-tool-runtime",
-  "version": "0.2.19",
+  "version": "0.2.20",
   "engines": {
     "node": ">=22"
   },

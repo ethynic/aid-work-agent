@@ -1,6 +1,6 @@
 {
   "name": "aid-agent-desktop",
-  "version": "0.0.9",
+  "version": "0.0.11",
   "private": true,
   "type": "module",
   "main": "dist/electron/main.js",
