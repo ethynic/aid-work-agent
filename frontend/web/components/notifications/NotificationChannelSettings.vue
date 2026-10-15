@@ -42,7 +42,7 @@
               v-for="p in PROVIDERS"
               :key="p.value"
               type="button"
-              @click="selectedProvider = p.value"
+              @click="selectProvider(p.value)"
               :class="[
                 'px-3 py-2 rounded-lg border text-sm transition-colors text-left',
                 selectedProvider === p.value
@@ -63,6 +63,9 @@
             :placeholder="selectedProvider === 'smtp' ? 'name@example.com' : 'https://...'"
             size="md"
           />
+          <p v-if="isEchoValue" class="text-xs text-muted mt-1">
+            当前为脱敏回显（仅末 4 位可见）；如需更新，请重新填写完整地址
+          </p>
         </div>
 
         <div v-if="message" class="p-3 rounded-lg text-sm"
@@ -78,7 +81,7 @@
             class="text-xs text-primary-600 hover:text-primary-700 underline"
           >如何获取 webhook？</button>
           <span v-else></span>
-          <BaseButton :disabled="saving || !selectedProvider || !configValue.trim()" @click="handleSave">
+          <BaseButton :disabled="saving || !selectedProvider || !configValue.trim() || isEchoValue" @click="handleSave">
             {{ saving ? '保存中...' : activeTarget ? '保存更新' : '保存启用' }}
           </BaseButton>
         </div>
@@ -118,7 +121,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
@@ -139,10 +142,24 @@ const messageType = ref<'success' | 'error'>('success')
 const helpOpen = ref(false)
 const selectedProvider = ref<string>('')
 const configValue = ref('')
+const lastSavedDisplay = ref('')
 const activeTarget = ref<TenantTarget | null>(null)
+
+// 输入框当前值是保存后的脱敏回显（未重新填写），禁用保存防止把脱敏值当新配置提交
+const isEchoValue = computed(() =>
+  lastSavedDisplay.value !== '' && configValue.value.trim() === lastSavedDisplay.value
+)
 
 function providerLabel(provider: string): string {
   return PROVIDERS.find((p) => p.value === provider)?.label || provider
+}
+
+function selectProvider(value: string) {
+  if (selectedProvider.value === value) return
+  selectedProvider.value = value
+  // 换渠道后清空上一渠道的回显值，避免误导性残留
+  configValue.value = ''
+  lastSavedDisplay.value = ''
 }
 
 function showError(e: any) {
@@ -205,7 +222,10 @@ async function handleSave() {
       body.expected_binding_version = activeTarget.value.binding_version
     }
     activeTarget.value = await notificationsAPI.registerTenantTarget(body)
-    configValue.value = ''
+    // 保存成功后把脱敏回显填入输入框，方便确认存的是哪个地址；webhook 脱敏值不可直接再提交
+    const display = activeTarget.value?.configuration_display || ''
+    configValue.value = display
+    lastSavedDisplay.value = display
     message.value = '保存成功'
     messageType.value = 'success'
   } catch (e) {
@@ -226,6 +246,8 @@ async function handleRevoke() {
       activeTarget.value.binding_version,
     )
     activeTarget.value = null
+    lastSavedDisplay.value = ''
+    configValue.value = ''
     message.value = '已停用'
     messageType.value = 'success'
   } catch (e) {

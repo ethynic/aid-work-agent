@@ -3815,6 +3815,15 @@
     ALTER TABLE local_tool_devices ADD COLUMN IF NOT EXISTS registration_request_hash TEXT;
     ALTER TABLE local_tool_devices ADD COLUMN IF NOT EXISTS registration_code_hash TEXT;
     CREATE UNIQUE INDEX IF NOT EXISTS uq_lt_devices_registration ON local_tool_devices(registration_id) WHERE registration_id IS NOT NULL;
+- datetime: "2026-10-14 17:20:00"
+  remark: "notification_targets 端点唯一约束放宽为 (provider, identity_digest, scope_key)：允许平台管理员用同一个群机器人 Webhook 接收多个租户的告警（同租户内仍唯一）"
+  statements: |
+    ALTER TABLE notification_targets DROP CONSTRAINT IF EXISTS notification_target_identity;
+    DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'notification_target_identity') THEN
+            ALTER TABLE notification_targets ADD CONSTRAINT notification_target_identity UNIQUE(provider, identity_digest, scope_key);
+        END IF;
+    END $$;
 - datetime: "2026-10-14 18:00:00"
   remark: "通知偏好默认 event_types 增加 task.waiting_input：结构化提问等待通知（Phase 2）对新建/默认偏好生效；存量行由读取时等效集合兼容（_effective_event_types），不回写"
   statements: |
