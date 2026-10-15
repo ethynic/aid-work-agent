@@ -12,6 +12,7 @@ import httpx
 from loguru import logger
 
 from .base import BaseLLMProvider
+from ..errors import ProviderHTTPError, read_error_body
 from ..error_detail import describe_exception
 from ..llm_call_logger import generate_request_id, log_llm_invoke
 
@@ -129,7 +130,9 @@ class DeepSeekProvider(BaseLLMProvider):
                 duration_ms=round(duration_ms, 2),
             )
             logger.error("DeepSeek API请求失败: {}", describe_exception(e))
-            raise RuntimeError(f"DeepSeek API请求失败: {e.response.text}") from None
+            raise ProviderHTTPError(
+                f"DeepSeek API请求失败: {e.response.text}", status_code=e.response.status_code,
+            ) from None
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
             log_llm_invoke(
@@ -181,6 +184,7 @@ class DeepSeekProvider(BaseLLMProvider):
                     headers=self.headers,
                     json=request_body,
                 ) as response:
+                    await read_error_body(response)
                     response.raise_for_status()
                     async for line in response.aiter_lines():
                         if line.startswith("data:"):
@@ -218,7 +222,9 @@ class DeepSeekProvider(BaseLLMProvider):
                 duration_ms=round(duration_ms, 2),
             )
             logger.error("DeepSeek 流式API请求失败: {}", describe_exception(e))
-            raise RuntimeError(f"DeepSeek 流式API请求失败: {e.response.text}") from None
+            raise ProviderHTTPError(
+                f"DeepSeek 流式API请求失败: {e.response.text}", status_code=e.response.status_code,
+            ) from None
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
             log_llm_invoke(

@@ -7,6 +7,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261015-1023 | LLM HTTP 故障转移修复 | ✅ 已完成开发：保留 HTTP 状态码，修复 503 未切备用模型、错误正文读取中断及流式回复拼接。 | [设计](infrastructure/llm-failover-design.md#27-错误分类) | [计划](plans/plan-llm-http-failover-fix.md) |
 | 20261013-1155 | agent_runners queue_order 序列自愈 | ✅ 已完成开发（待部署验收）：submit 入口捕获 queue_order 唯一约束冲突后 setval 对齐序列并重试一次，根治 SQL 直插污染 BIGSERIAL 序列导致的连续 500（2026-10-13 agent1 事故）；隔离库回归 145 passed、CR 无 P0/P1，commit 62a082b2。 | [复盘](incidents/analysis-agent-runner-submit-500-uniqueviolation-incident.md) | [开发计划](plans/plan-runner-queue-order-sequence-selfheal.md) |
 | 20261010-1448 | 测试有效性审计与清理 | ✅ 已完成开发：清理失效、自证及重复测试，保留关键行为契约并完成三轮独立验证。 | — | [计划](plans/plan-test-suite-cleanup-20261010.md) |
 | 20260828-1421 | zhipu 默认模型切 GLM-5.3-Flash + 价目表多模态标识 | ✅ 已完成开发：zhipu 缺省切 GLM-5.3-Flash，token_cost_prices 增 is_multimodal 并标记存量多模态模型（预留图片路由）；commit 7f7e3235，缓存价修正 c1cd3915。 | [设计（已并入 weixin-cli 设计 §5）](design/weixin/weixin-cli-design.md) | — |
