@@ -67,6 +67,38 @@ def _build_tenant_instance_items(tenant_id: str, allowed_ids: set) -> List[Dict[
         items.append(item)
     return items
 
+
+def _apply_direct_customization_overrides(tenant_id: str, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """把直定制行（agent_id == base_agent_id）的显示名/简介覆盖合并进基础员工列表项。
+
+    直定制行不产生新列表项，但覆盖项需体现到对应基础条目，
+    否则「我的数字员工」卡片保存后仍显示父定义名称/简介。
+    """
+    try:
+        from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
+        rows = TenantAgentInstanceDB.list_by_tenant(tenant_id)
+    except Exception as e:
+        logger.opt(exception=True).error(f"查询租户数字员工实例失败: {e}")
+        return items
+
+    overrides = {
+        r["agent_id"]: r
+        for r in rows
+        if r.get("status") == "active" and r.get("agent_id") == r.get("base_agent_id")
+    }
+    if not overrides:
+        return items
+    for item in items:
+        row = overrides.get(item.get("agent_id"))
+        if not row:
+            continue
+        if row.get("display_name"):
+            item["name"] = row["display_name"]
+            item["display_name"] = row["display_name"]
+        if row.get("description"):
+            item["description"] = row["description"]
+    return items
+
 @router.get("")
 async def list_subagents(request: Request):
     """列出所有数字员工（内置+定制，标记类型）"""
@@ -93,6 +125,7 @@ async def list_subagents(request: Request):
                 allowed_ids = set(get_allowed_agent_ids_for_user(user, target_tenant_id=tenant_id))
                 items = [item for item in items if item["agent_id"] in allowed_ids]
                 items.extend(_build_tenant_instance_items(tenant_id, allowed_ids))
+                items = _apply_direct_customization_overrides(tenant_id, items)
                 # 如果主智能体在允许列表中，添加到结果中
                 if "main" in allowed_ids:
                     items.append({

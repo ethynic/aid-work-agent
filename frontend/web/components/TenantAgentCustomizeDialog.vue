@@ -1,5 +1,5 @@
 <template>
-  <BaseModal v-model="visible" :title="`定制 - ${displayName}`" size="lg">
+  <BaseModal v-model="visible" :title="`定制 - ${displayName}`" size="lgx">
     <div class="space-y-5">
       <!-- 基础信息 -->
       <section>
@@ -35,35 +35,11 @@
       <section>
         <h4 class="text-sm font-semibold text-default mb-2">知识库栏目</h4>
         <p class="text-xs text-muted mb-2 leading-relaxed">
-          勾选该数字员工可检索的本租户知识库栏目；不勾选任何栏目时默认可检索全部。
-          共享来源由「知识库接入」统一控制，此处只读展示。
+          该数字员工可检索的知识库栏目与共享来源，统一在知识库页面维护。
         </p>
-        <div v-if="kbLoading" class="text-xs text-muted py-2">加载中...</div>
-        <template v-else>
-          <div v-if="kbCategories.length > 0" class="flex flex-wrap gap-x-5 gap-y-2">
-            <label
-              v-for="cat in kbCategories"
-              :key="cat.source_type"
-              class="flex items-center gap-2 text-sm text-default cursor-pointer"
-            >
-              <input
-                v-model="kbChecked"
-                type="checkbox"
-                :value="cat.source_type"
-                class="w-3.5 h-3.5 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
-                :disabled="saving"
-              />
-              {{ cat.display_name || cat.source_type }}
-            </label>
-          </div>
-          <div v-else class="text-xs text-muted py-1">本租户暂无知识库栏目</div>
-          <div v-if="kbShared.length > 0" class="mt-2 flex flex-wrap items-center gap-2">
-            <span class="text-xs text-muted">共享栏目：</span>
-            <BaseBadge v-for="s in kbShared" :key="s.source_type" intent="info">
-              {{ s.display_name || s.source_type }}
-            </BaseBadge>
-          </div>
-        </template>
+        <BaseButton intent="secondary" size="sm" @click="openKnowledgePage">
+          跳转知识库
+        </BaseButton>
       </section>
 
       <!-- 空态简介与快捷按钮 -->
@@ -125,10 +101,10 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
-import BaseBadge from '@/components/ui/BaseBadge.vue'
 import {
   getTenantAgentInstanceOrDefault,
   updateTenantAgentInstance,
@@ -137,12 +113,6 @@ import {
   type TenantAgentInstance,
   type GreetingPrompt,
 } from '@/api/tenantAgentInstances'
-import {
-  getSubagentKnowledgeSources,
-  setSubagentKnowledgeSources,
-  listTenantKnowledgeCategories,
-  type KnowledgeSourceItem,
-} from '@/api/saasPermissions'
 
 const props = defineProps<{
   modelValue: boolean
@@ -183,12 +153,12 @@ const greetingPrompts = ref<GreetingPrompt[]>([
 ])
 const copyName = ref('')
 
-// 知识库栏目
-const kbLoading = ref(false)
-const kbCategories = ref<{ source_type: string; display_name: string | null }[]>([])
-const kbChecked = ref<string[]>([])
-const kbInitialChecked = ref<string[]>([])
-const kbShared = ref<KnowledgeSourceItem[]>([])
+const router = useRouter()
+
+function openKnowledgePage() {
+  const { href } = router.resolve(`/t/${props.tenantId}/knowledge`)
+  window.open(href, '_blank')
+}
 
 async function loadInstance() {
   errorMsg.value = ''
@@ -215,46 +185,11 @@ function isLikelyCopy(): boolean {
   return props.agentId !== props.agentName && /-[a-z0-9-]{2,}$/.test(props.agentId)
 }
 
-async function loadKnowledge() {
-  kbLoading.value = true
-  try {
-    const [catsRes, srcRes] = await Promise.all([
-      listTenantKnowledgeCategories(props.tenantId).catch(() => ({ items: [] })),
-      getSubagentKnowledgeSources(props.tenantId, props.agentId).catch(() => ({ success: false, data: [] })),
-    ])
-    kbCategories.value = (catsRes.items || []).map((c: any) => ({
-      source_type: c.source_type,
-      display_name: c.display_name,
-    }))
-    const sources: KnowledgeSourceItem[] = srcRes.data || []
-    kbShared.value = sources.filter(s => s.owner_tenant_id)
-    const ownChecked = sources
-      .filter(s => !s.owner_tenant_id && s.source_type)
-      .map(s => s.source_type)
-    kbInitialChecked.value = ownChecked
-    kbChecked.value = ownChecked
-  } finally {
-    kbLoading.value = false
-  }
-}
-
 async function handleSave() {
   if (saving.value) return
   saving.value = true
   errorMsg.value = ''
   try {
-    // 知识库栏目单独保存（全量覆盖 own 项，共享项原样保留）
-    const ownItems: KnowledgeSourceItem[] = kbChecked.value.map(st => ({
-      source_type: st,
-      display_name: kbCategories.value.find(c => c.source_type === st)?.display_name || st,
-      owner_tenant_id: null,
-    }))
-    const kbChanged =
-      JSON.stringify([...kbChecked.value].sort()) !== JSON.stringify([...kbInitialChecked.value].sort())
-    if (kbChanged) {
-      await setSubagentKnowledgeSources(props.tenantId, props.agentId, [...ownItems, ...kbShared.value])
-    }
-
     const prompts: GreetingPrompt[] = greetingPrompts.value
       .map(p => ({ label: p.label.trim(), message: p.message.trim() }))
       .filter(p => p.label && p.message)
@@ -318,7 +253,6 @@ watch(visible, (v) => {
   if (v) {
     copyName.value = ''
     loadInstance()
-    loadKnowledge()
   }
 })
 </script>
