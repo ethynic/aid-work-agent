@@ -24,12 +24,16 @@ def crypto():
 class _FakeDedupCursor:
     def __init__(self, conn):
         self._conn = conn
+        self.rowcount = 0
 
     def execute(self, sql, params=None):
         if sql.strip().upper().startswith("DELETE"):
             self._conn._pending_delete = True
         else:
-            self._conn._pending_insert = params
+            # 模拟 ON CONFLICT DO NOTHING：已存在则 rowcount=0，否则 rowcount=1
+            message_id = params[0] if params else None
+            self._conn._pending_insert = message_id
+            self.rowcount = 0 if message_id in self._conn.rows else 1
 
     def close(self):
         pass
@@ -52,11 +56,8 @@ class _FakeDedupConnection:
             self.rows.clear()
             self._pending_delete = False
         if self._pending_insert is not None:
-            message_id, _created_at = self._pending_insert
+            self.rows.add(self._pending_insert)
             self._pending_insert = None
-            if message_id in self.rows:
-                raise psycopg2.IntegrityError()
-            self.rows.add(message_id)
 
     def rollback(self):
         self._pending_insert = None
