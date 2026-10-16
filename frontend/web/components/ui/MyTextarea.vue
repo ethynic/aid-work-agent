@@ -1,7 +1,7 @@
 <template>
   <div :class="['flex flex-col relative', containerClass]">
-    <!-- 顶部工具栏：标签 + busy + 字数 + 额外 slot + 全屏按钮 -->
-    <div v-if="label || showCharCount || showFullscreen || $slots.extra || busy"
+    <!-- 顶部工具栏：标签 + busy + 额外 slot -->
+    <div v-if="label || $slots.extra || busy"
       class="flex items-center justify-between mb-1 gap-2">
       <div v-if="label || busy" class="text-xs truncate flex-1 min-w-0 flex items-center gap-1.5">
         <span v-if="busy" class="inline-flex items-center text-info-600">
@@ -18,25 +18,6 @@
       <div v-else class="flex-1" />
       <div class="flex items-center gap-2 flex-shrink-0">
         <slot name="extra" />
-        <span v-if="showCharCount" class="text-[10px] text-gray-400 tabular-nums">
-          {{ charCount }}{{ maxLength ? ` / ${maxLength}` : '' }}
-        </span>
-        <button
-          v-if="showFullscreen"
-          type="button"
-          class="text-gray-400 hover:text-primary-600 p-0.5 rounded transition-colors"
-          :title="isFullscreen ? '退出全屏' : '最大化编辑'"
-          @click="openFullscreen"
-        >
-          <svg v-if="!isFullscreen" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-              d="M4 8V4m0 0h4M4 4l5 5m11-5h-4m4 0v4m0-4l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-          </svg>
-          <svg v-else class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-              d="M9 9V5a2 2 0 00-2-2H4M9 9H5a2 2 0 00-2 2v2M9 9l-5 5m11-5h4a2 2 0 012 2v2m0 0v4a2 2 0 01-2 2h-2m2-6l-5 5" />
-          </svg>
-        </button>
       </div>
     </div>
 
@@ -101,9 +82,10 @@
       />
     </div>
 
-    <!-- 预览模式切换（编辑 / 双栏 / 预览） -->
-    <div v-if="enablePreview" class="flex items-center justify-end mt-1">
-      <div class="inline-flex rounded-md border border-gray-200 text-[10px] overflow-hidden">
+    <!-- 底部工具行：预览模式切换（编辑 / 双栏 / 预览）+ 字数 + 全屏按钮 -->
+    <div v-if="enablePreview || showCharCount || showFullscreen"
+      class="flex items-center justify-end gap-2 mt-1">
+      <div v-if="enablePreview" class="inline-flex rounded-md border border-gray-200 text-[10px] overflow-hidden">
         <button type="button"
           :class="['px-2 py-0.5 transition-colors', effectiveMode === 'off' ? 'bg-primary-50 text-primary-700' : 'bg-white text-gray-500 hover:bg-gray-50']"
           @click="setMode('off')">编辑</button>
@@ -114,6 +96,25 @@
           :class="['px-2 py-0.5 transition-colors', effectiveMode === 'preview' ? 'bg-primary-50 text-primary-700' : 'bg-white text-gray-500 hover:bg-gray-50']"
           @click="setMode('preview')">预览</button>
       </div>
+      <span v-if="showCharCount" class="text-[10px] text-gray-400 tabular-nums">
+        {{ charCount }}{{ maxLength ? ` / ${maxLength}` : '' }}
+      </span>
+      <button
+        v-if="showFullscreen"
+        type="button"
+        class="text-gray-400 hover:text-primary-600 p-0.5 rounded transition-colors"
+        :title="isFullscreen ? '退出全屏' : '最大化编辑'"
+        @click="openFullscreen"
+      >
+        <svg v-if="!isFullscreen" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M4 8V4m0 0h4M4 4l5 5m11-5h-4m4 0v4m0-4l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+        </svg>
+        <svg v-else class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M9 9V5a2 2 0 00-2-2H4M9 9H5a2 2 0 00-2 2v2M9 9l-5 5m11-5h4a2 2 0 012 2v2m0 0v4a2 2 0 01-2 2h-2m2-6l-5 5" />
+        </svg>
+      </button>
     </div>
 
     <!-- 全屏编辑器（Teleport 到 body，避免父级 overflow 裁剪） -->
