@@ -105,6 +105,39 @@ def _error(error: str, status_code: int = 400) -> JSONResponse:
     return JSONResponse({"success": False, "error": error}, status_code=status_code)
 
 
+def _validate_recap_config(recap: Optional[Dict[str, Any]]) -> None:
+    """保存前校验 recap 任务配置：任务名必须在注册表、when 必须在白名单
+
+    运行期 runner 对非法项是静默跳过，保存时不拦会导致配置看起来生效实际不执行。
+    技能带入的条目（apply_skill_requirements 合并）不在本次校验范围，由 SKILL.md 声明保证。
+    """
+    if not recap or not isinstance(recap, dict):
+        return
+    raw_tasks = recap.get("tasks")
+    if raw_tasks in (None, []):
+        return
+    if not isinstance(raw_tasks, list):
+        raise HTTPException(status_code=400, detail="recap.tasks 必须是数组")
+
+    from src.services.recap.runner import VALID_WHEN
+    from src.services.recap.tasks import RECAP_TASK_ADAPTERS
+
+    for raw in raw_tasks:
+        if not isinstance(raw, dict):
+            raise HTTPException(status_code=400, detail="recap.tasks 中存在非法任务项（必须为对象）")
+        name = str(raw.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="recap.tasks 中存在缺少 name 的任务项")
+        if name not in RECAP_TASK_ADAPTERS:
+            valid = ", ".join(sorted(RECAP_TASK_ADAPTERS.keys()))
+            raise HTTPException(status_code=400, detail=f"recap 任务 {name} 不存在（可选：{valid}）")
+        when = str(raw.get("when") or "every_round").strip()
+        if when not in VALID_WHEN:
+            raise HTTPException(
+                status_code=400, detail=f"recap 任务 {name} 的触发时机 {when} 不支持（仅 {'/'.join(VALID_WHEN)}）"
+            )
+
+
 def _require_admin(request: Request):
     """平台管理员权限校验"""
     auth_header = request.headers.get("Authorization", "")
@@ -158,6 +191,8 @@ async def create_definition(request: Request, body: CreateDefinitionRequest):
         existing = SubagentDefinitionService.get_definition(body.agent_id)
         if existing:
             return _error(f"智能体 {body.agent_id} 已存在")
+
+        _validate_recap_config(body.recap)
 
         tools, recap, auto_completed = SubagentDefinitionService.apply_skill_requirements(
             body.tools, body.skills, body.recap,
@@ -350,6 +385,8 @@ async def update_definition(request: Request, agent_id: str, body: UpdateDefinit
 
         # 技能依赖自动补全：tools/recap 未显式传入时读现有定义，避免整列覆盖丢失
         auto_completed: list = []
+        if "recap" in updates:
+            _validate_recap_config(updates.get("recap"))
         skills_upd = updates.get("skills")
         if isinstance(skills_upd, dict) and skills_upd.get("allowed"):
             current: Dict[str, Any] = {}
