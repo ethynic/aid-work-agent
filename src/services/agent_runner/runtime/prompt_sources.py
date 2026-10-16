@@ -260,9 +260,10 @@ class PromptSources:
     def _load_extra_md(self) -> Optional[str]:
         """加载租户定制扩展提示词
 
-        优先读 tenant_agent_instances 实例行 extra_prompt（租户数字员工实例，
-        含直定制行与副本行）；未命中时回退 prompt_versions 表 scope='tenant_extra'
-        （存量过渡双读，迁移完成后旧数据清理）。
+        实例行权威：tenant_agent_instances 存在该 (tenant, agent) 行时，一律以
+        其 extra_prompt 为准（空 = 租户已清空定制，不再回退旧内容）；仅当无实例
+        行时才回退 prompt_versions 表 scope='tenant_extra'（存量过渡双读，覆盖
+        实例行未落库的环境，迁移完成后旧数据清理）。
         """
         if not self.subagent_config:
             return None
@@ -286,10 +287,7 @@ class PromptSources:
                         f"Loaded extra prompt (tenant instance) for tenant {tenant_id}, "
                         f"subagent {dir_name}"
                     )
-                    return content
-                # 实例行存在但 extra_prompt 为空：副本行无旧数据可回退，直接返回
-                if row.get("agent_id") != row.get("base_agent_id"):
-                    return None
+                return content or None
         except Exception as e:
             logger.warning(f"Failed to load extra prompt from tenant instance: {e}")
 

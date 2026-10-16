@@ -3891,3 +3891,68 @@
     ALTER TABLE local_tool_devices ADD COLUMN IF NOT EXISTS registration_request_hash TEXT;
     ALTER TABLE local_tool_devices ADD COLUMN IF NOT EXISTS registration_code_hash TEXT;
     CREATE UNIQUE INDEX IF NOT EXISTS uq_lt_devices_registration ON local_tool_devices(registration_id) WHERE registration_id IS NOT NULL;
+- datetime: "2026-10-16 18:30:00"
+  remark: "修复 tenant_agent_instances 草稿版残留：2026-10-14 16:47:01 块曾以草稿形态落库（表带 agent_id 全局唯一约束、直定制行 agent_id/base_agent_id 误用 tenant_id 每租户仅一行），该块原地改写后 datetime 未变，水位已过 22:45:00 的库不再重跑。本块纠偏结构（去 agent_id 全局唯一、补 (tenant_id, agent_id) 唯一与副本部分唯一索引）并删除错键行后按 prompt_registry scope=tenant_extra 回填正确 (tenant_id, agent_id=sub_name) 行；生产等已跑正确版的库 DROP 无命中、INSERT 冲突跳过，幂等无副作用"
+  statements: |
+    DO $$
+    DECLARE cname text;
+    BEGIN
+        SELECT c.conname INTO cname
+        FROM pg_constraint c
+        WHERE c.conrelid = 'tenant_agent_instances'::regclass
+          AND c.contype = 'u'
+          AND c.conkey = ARRAY[
+              (SELECT a.attnum FROM pg_attribute a
+               WHERE a.attrelid = 'tenant_agent_instances'::regclass
+                 AND a.attname = 'agent_id')
+          ]::smallint[];
+        IF cname IS NOT NULL THEN
+            EXECUTE format('ALTER TABLE tenant_agent_instances DROP CONSTRAINT %I', cname);
+        END IF;
+    END $$;
+    DELETE FROM tenant_agent_instances
+    WHERE agent_id = tenant_id AND base_agent_id = tenant_id;
+    DO $$ BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint
+            WHERE conname = 'uq_tenant_agent_inst'
+              AND conrelid = 'tenant_agent_instances'::regclass
+        ) THEN
+            ALTER TABLE tenant_agent_instances
+                ADD CONSTRAINT uq_tenant_agent_inst UNIQUE (tenant_id, agent_id);
+        END IF;
+    END $$;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_agent_inst_copy ON tenant_agent_instances(agent_id) WHERE agent_id <> base_agent_id;
+    INSERT INTO tenant_agent_instances (tenant_id, agent_id, base_agent_id, extra_prompt, created_by)
+    SELECT
+        v.tenant_id,
+        v.sub_name,
+        v.sub_name,
+        pv.content,
+        'migration_20261014'
+    FROM (
+        SELECT
+            pr.id AS registry_id,
+            pr.tenant_id,
+            substring(pr.scope_id from '^extra:([^:]+):') AS sub_name
+        FROM prompt_registry pr
+        WHERE pr.scope = 'tenant_extra'
+          AND pr.tenant_id IS NOT NULL
+          AND pr.tenant_id <> ''
+    ) v
+    JOIN LATERAL (
+        SELECT pv.content
+        FROM prompt_versions pv
+        WHERE pv.prompt_id = v.registry_id
+        ORDER BY
+            CASE WHEN EXISTS (
+                SELECT 1 FROM prompt_labels pl
+                WHERE pl.prompt_id = pv.prompt_id
+                  AND pl.version_id = pv.id
+                  AND pl.label = 'production'
+            ) THEN 0 ELSE 1 END,
+            pv.version DESC
+        LIMIT 1
+    ) pv ON TRUE
+    WHERE v.sub_name <> ''
+    ON CONFLICT (tenant_id, agent_id) DO NOTHING;
