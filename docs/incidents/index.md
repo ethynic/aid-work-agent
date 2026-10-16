@@ -7,6 +7,7 @@
 
 | 故障主题 | 文档 | 摘要 |
 |---------|------|------|
+| Web 会话 subagent_id 为空显示「主智能体」 | [web-session-subagent-display-mislabel-incident.md](web-session-subagent-display-mislabel-incident.md) | 2026-09-07 生产：隐式建会话不写 subagent_id 致显示错标，实际执行/计费均正确（after-sales）；2026-10-16 复核问题已不存在，残余风险=隐式建会话路径仍不回写，新增聊天入口需检查 |
 | 微信客服读取异常宽表导致 Runner 中断 | [wecom-kf-excel-read-runner-interrupted-20261015.md](wecom-kf-excel-read-runner-interrupted-20261015.md) | 2026-10-15生产：Excel重复维度扫描阻塞222秒，旧KB数据未迁metadata；补迁与修复见关联计划。 |
 | Runtime协议3配对持续500：存量迁移水位跳过注册字段 | [runtime-registration-migration-watermark-incident.md](runtime-registration-migration-watermark-incident.md) | 2026-10-14：agent2水位18:00高于新增17:00迁移，字段未建；追加22:45幂等补偿。 |
 | Runtime安装向导点击安装后直接退出 | [runtime-installer-missing-fixture-env-incident.md](runtime-installer-missing-fixture-env-incident.md) | 2026-10-14：可选测试变量缺失留下NSIS错误标志，正常安装误判失败；隔离测试环境掩盖问题。 |
