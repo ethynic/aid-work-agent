@@ -316,8 +316,8 @@ class TestGetWebSessionMessages:
         assert resp["total"] == 2
         roles = [m["role"] for m in resp["messages"]]
         assert "tool" not in roles
-        # 按时间正序
-        assert roles == ["user", "assistant"]
+        # 按时间倒序（最新在前，与微信一致）
+        assert roles == ["assistant", "user"]
 
     def test_cross_tenant_session_403(self, temp_tenant_for_web):
         """访问他租户会话返回 403"""
