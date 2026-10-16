@@ -91,7 +91,7 @@
             <button
               v-if="isTenantAdmin"
               class="flex-1 h-9 rounded-lg border border-default text-sm font-medium text-muted hover:border-primary-300 hover:text-primary-600 transition-colors"
-              title="重命名、扩展提示词、知识栏目、简介快捷按钮与复制副本"
+              title="重命名、扩展提示词、模板文件、知识栏目、简介快捷按钮与复制副本"
               @click.stop="handleCustomize(agent)"
             >
               定制
@@ -102,7 +102,7 @@
       </div>
     </div>
 
-    <!-- 定制弹框（重命名/扩展提示词/知识栏目/简介快捷按钮/复制副本） -->
+    <!-- 定制弹框（重命名/扩展提示词/模板文件/知识栏目/简介快捷按钮/复制副本） -->
     <TenantAgentCustomizeDialog
       v-model="showCustomize"
       :tenant-id="String(route.params.tenant_id || '')"

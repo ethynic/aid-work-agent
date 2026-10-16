@@ -22,13 +22,114 @@
         <p class="text-xs text-muted mb-2 leading-relaxed">
           追加到该数字员工系统提示词末尾的本租户定制需求，留空使用默认配置。
         </p>
-        <textarea
+        <MyTextarea
           v-model="form.extra_prompt"
-          rows="5"
-          placeholder="例如：&#10;- 回复中必须使用「贵司」而非「你」&#10;- 所有报价保留两位小数"
-          class="w-full px-3 py-2 rounded-lg border border-default bg-surface text-sm text-default font-mono focus:border-primary-400 focus:ring-1 focus:ring-primary-400 outline-none resize-y"
+          :rows="6"
+          :min-height="'140px'"
+          :auto-resize="false"
+          monospace
+          show-char-count
+          enable-preview
           :disabled="saving"
+          placeholder="例如：&#10;- 回复中必须使用「贵司」而非「你」&#10;- 所有报价保留两位小数"
         />
+      </section>
+
+      <!-- 模板文件 -->
+      <section>
+        <div class="flex items-start justify-between gap-3 mb-2">
+          <div class="min-w-0">
+            <h4 class="text-sm font-semibold text-default">模板文件</h4>
+            <p class="text-xs text-muted mt-1 leading-relaxed">
+              上传后系统会在提示词末尾自动追加「相关模板位置信息」，数字员工可按 file_id 调用文档工具套用模板；点击模板名称可下载。
+            </p>
+          </div>
+          <BaseButton
+            intent="secondary"
+            size="sm"
+            class="flex-shrink-0"
+            :disabled="templateUploading"
+            @click="showAddTemplate = !showAddTemplate"
+          >
+            {{ showAddTemplate ? '取消' : '+ 添加模板' }}
+          </BaseButton>
+        </div>
+
+        <!-- 添加模板表单 -->
+        <div v-if="showAddTemplate" class="mb-3 p-3 bg-canvas rounded-lg border border-default space-y-3">
+          <div>
+            <label class="text-sm text-muted mb-1 block">模板名称 <span class="text-danger-500">*</span></label>
+            <BaseInput v-model="newTemplateName" placeholder="如：标准报价单" :disabled="templateUploading" />
+          </div>
+          <div>
+            <label class="text-sm text-muted mb-1 block">模板文件 <span class="text-danger-500">*</span></label>
+            <div class="flex gap-2">
+              <button
+                type="button"
+                class="flex-1 h-10 px-3 rounded-lg border border-dashed border-default text-sm text-muted hover:border-primary-300 hover:text-primary-600 transition-colors flex items-center justify-center gap-2 min-w-0 disabled:opacity-50"
+                :disabled="templateUploading"
+                @click="templateFileInput?.click()"
+              >
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M12 4v12m0-12l-4 4m4-4l4 4" />
+                </svg>
+                <span class="truncate">{{ selectedFile ? selectedFile.name : '选择模板文件' }}</span>
+              </button>
+              <BaseButton
+                :disabled="templateUploading || !newTemplateName.trim() || !selectedFile"
+                @click="handleUploadTemplate"
+              >
+                {{ templateUploading ? '上传中...' : '上传' }}
+              </BaseButton>
+            </div>
+            <p class="text-xs text-muted mt-1">名称与文件均为必填；支持 .docx / .xlsx / .pptx / .pdf / .md / .txt / .csv</p>
+            <input
+              ref="templateFileInput"
+              type="file"
+              accept=".docx,.xlsx,.pptx,.pdf,.md,.txt,.csv"
+              class="hidden"
+              @change="handleFileSelect"
+            />
+          </div>
+        </div>
+
+        <!-- 模板列表 -->
+        <div v-if="templatesLoading" class="py-3 text-center text-xs text-muted">加载中...</div>
+        <div v-else-if="templates.length === 0" class="py-3 text-center text-xs text-muted">暂无模板文件，点击右上角「+ 添加模板」上传</div>
+        <div v-else class="space-y-2">
+          <div
+            v-for="t in templates"
+            :key="t.file_id"
+            class="flex items-center gap-3 p-2.5 rounded-lg border border-default bg-canvas"
+          >
+            <svg class="w-5 h-5 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            <div class="flex-1 min-w-0">
+              <button
+                type="button"
+                class="block max-w-full text-sm text-primary-600 hover:text-primary-700 hover:underline truncate text-left disabled:opacity-50 disabled:no-underline"
+                :title="`下载 ${t.original_name || t.name}`"
+                :disabled="!!downloadingId"
+                @click="handleDownloadTemplate(t)"
+              >
+                {{ downloadingId === t.file_id ? '下载中...' : t.name }}
+              </button>
+              <p class="text-xs text-muted truncate">
+                {{ t.original_name || '-' }} · {{ formatSize(t.size_bytes) }} · {{ t.file_id }}
+              </p>
+            </div>
+            <BaseButton
+              intent="danger-ghost"
+              size="sm"
+              class="flex-shrink-0"
+              :disabled="templateUploading"
+              @click="handleDeleteTemplate(t.file_id)"
+            >
+              删除
+            </BaseButton>
+          </div>
+        </div>
       </section>
 
       <!-- 知识库栏目 -->
@@ -105,6 +206,7 @@ import { useRouter } from 'vue-router'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
+import MyTextarea from '@/components/ui/MyTextarea.vue'
 import {
   getTenantAgentInstanceOrDefault,
   updateTenantAgentInstance,
@@ -113,6 +215,16 @@ import {
   type TenantAgentInstance,
   type GreetingPrompt,
 } from '@/api/tenantAgentInstances'
+import {
+  listTemplates,
+  uploadTemplate,
+  deleteTemplate,
+  getTemplateDownloadUrl,
+  type TemplateFile,
+} from '@/api/subagentTemplates'
+import { resolveApiUrl, saveDownloadUrl } from '@/platform/urlResolver'
+import { getAuthHeader } from '@/api/auth'
+import { triggerNativeDownload } from '@/utils/download'
 
 const props = defineProps<{
   modelValue: boolean
@@ -153,6 +265,18 @@ const greetingPrompts = ref<GreetingPrompt[]>([
 ])
 const copyName = ref('')
 
+// ============== 模板文件状态 ==============
+const templates = ref<TemplateFile[]>([])
+const templatesLoading = ref(false)
+const templateUploading = ref(false)
+const showAddTemplate = ref(false)
+const newTemplateName = ref('')
+const selectedFile = ref<File | null>(null)
+const templateFileInput = ref<HTMLInputElement | null>(null)
+const downloadingId = ref('')
+
+const ALLOWED_TEMPLATE_EXTS = ['.docx', '.xlsx', '.pptx', '.pdf', '.md', '.txt', '.csv']
+
 const router = useRouter()
 
 function openKnowledgePage() {
@@ -183,6 +307,98 @@ async function loadInstance() {
 // 后端权威判定以保存后返回为准
 function isLikelyCopy(): boolean {
   return props.agentId !== props.agentName && /-[a-z0-9-]{2,}$/.test(props.agentId)
+}
+
+// ============== 模板文件 加载/上传/删除/下载 ==============
+function formatSize(bytes?: number): string {
+  if (!bytes) return '-'
+  if (bytes < 1024) return bytes + 'B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'KB'
+  return (bytes / 1024 / 1024).toFixed(1) + 'MB'
+}
+
+async function loadTemplates() {
+  templatesLoading.value = true
+  try {
+    const res = await listTemplates(props.agentId)
+    templates.value = res.data || []
+  } catch {
+    // 静默失败，不阻塞定制表单
+    templates.value = []
+  } finally {
+    templatesLoading.value = false
+  }
+}
+
+function handleFileSelect(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  // 重置 input value 允许重复选择同一文件
+  input.value = ''
+  if (!file) return
+  const dotIdx = file.name.lastIndexOf('.')
+  const ext = dotIdx >= 0 ? file.name.slice(dotIdx).toLowerCase() : ''
+  if (!ALLOWED_TEMPLATE_EXTS.includes(ext)) {
+    errorMsg.value = `不支持的文件格式（仅支持 ${ALLOWED_TEMPLATE_EXTS.join(' / ')}）`
+    return
+  }
+  selectedFile.value = file
+}
+
+async function handleUploadTemplate() {
+  const name = newTemplateName.value.trim()
+  if (!name || !selectedFile.value || templateUploading.value) return
+  templateUploading.value = true
+  errorMsg.value = ''
+  try {
+    const res = await uploadTemplate(props.agentId, name, selectedFile.value)
+    if (res.success) {
+      templates.value = res.data || []
+      newTemplateName.value = ''
+      selectedFile.value = null
+      showAddTemplate.value = false
+    } else {
+      errorMsg.value = res.error || '上传失败'
+    }
+  } catch (e: any) {
+    errorMsg.value = e.message || '上传失败'
+  } finally {
+    templateUploading.value = false
+  }
+}
+
+async function handleDeleteTemplate(fileId: string) {
+  if (!confirm('确定删除该模板？')) return
+  errorMsg.value = ''
+  try {
+    const res = await deleteTemplate(props.agentId, fileId)
+    if (res.success) {
+      templates.value = res.data || []
+    } else {
+      errorMsg.value = res.error || '删除失败'
+    }
+  } catch (e: any) {
+    errorMsg.value = e.message || '删除失败'
+  }
+}
+
+// 点击模板名称下载：桌面端走受控保存，Web 端直链原生下载
+async function handleDownloadTemplate(t: TemplateFile) {
+  if (downloadingId.value) return
+  downloadingId.value = t.file_id
+  try {
+    const url = resolveApiUrl(getTemplateDownloadUrl(t.file_id))
+    const fileName = t.original_name || t.name
+    if (window.agentDesktop) {
+      await saveDownloadUrl(url, fileName, getAuthHeader())
+      return
+    }
+    triggerNativeDownload(url, fileName)
+  } catch (e: any) {
+    errorMsg.value = e.message || '模板下载失败'
+  } finally {
+    downloadingId.value = ''
+  }
 }
 
 async function handleSave() {
@@ -252,7 +468,13 @@ function handleClose() {
 watch(visible, (v) => {
   if (v) {
     copyName.value = ''
+    errorMsg.value = ''
+    showAddTemplate.value = false
+    newTemplateName.value = ''
+    selectedFile.value = null
+    templates.value = []
     loadInstance()
+    loadTemplates()
   }
 })
 </script>
