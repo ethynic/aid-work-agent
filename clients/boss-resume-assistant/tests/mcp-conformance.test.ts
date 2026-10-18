@@ -37,12 +37,12 @@ test('mcp-conformance 套件全项通过', async () => {
   const { runConformance } = (await import(suiteUrl.href)) as {
     runConformance: (opts: {
       requireBase?: string
-      spawn: { command: string; args: string[] }
+      spawn: { command: string; args: string[]; env?: Record<string, string> }
       expectTools?: string[]
       callProbe: { name: string; arguments: Record<string, unknown> }
       invalidProbe: { name: string; arguments: Record<string, unknown> }
       busyProbe?: {
-        makeSpawn: (port: number) => { command: string; args: string[] }
+        makeSpawn: (port: number) => { command: string; args: string[]; env?: Record<string, string> }
         tool: { name: string; arguments: Record<string, unknown> }
       }
     }) => Promise<ConformanceReport>
@@ -51,12 +51,14 @@ test('mcp-conformance 套件全项通过', async () => {
   const baseArgs = [CLI, 'mcp', '--stdio', '--cdp-port', String(await freePort())]
   const report = await runConformance({
     requireBase: import.meta.url,
-    spawn: { command: process.execPath, args: baseArgs },
+    spawn: { command: process.execPath, args: baseArgs, env: { ...process.env, AID_BOSS_AUTO_CHROME: '0' } as Record<string, string> },
     expectTools: [
       'boss_filter',
       'boss_clear_filter',
       'boss_goto',
       'boss_greet',
+      'boss_lookup_candidates',
+      'boss_greet_selected',
       'boss_accept_resume',
       'boss_reject_current',
       'boss_interview_demo',
@@ -84,6 +86,7 @@ test('mcp-conformance 套件全项通过', async () => {
       makeSpawn: (port) => ({
         command: process.execPath,
         args: [CLI, 'mcp', '--stdio', '--cdp-port', String(port)],
+        env: { ...process.env, AID_BOSS_AUTO_CHROME: '0' } as Record<string, string>,
       }),
       tool: { name: 'boss_goto', arguments: { target: 'chat' } },
     },
@@ -108,7 +111,7 @@ test('mcp-conformance 套件 CLI 模式可独立运行', async () => {
       '--require-base',
       path.join(DIST_ROOT, '..', 'package.json'),
       '--expect-tools',
-      'boss_filter,boss_clear_filter,boss_goto,boss_greet,boss_accept_resume,boss_reject_current,boss_interview_demo,boss_send_to,boss_send_current,boss_read_chat,boss_open_chat,boss_overlay_inspect,boss_overlay_dismiss,boss_list_jobs,boss_select_job,boss_filter_options,boss_resume_detail,boss_resume_batch,boss_resume_next,boss_open_detail,boss_greet_detail,boss_close_detail',
+      'boss_filter,boss_clear_filter,boss_goto,boss_greet,boss_lookup_candidates,boss_greet_selected,boss_accept_resume,boss_reject_current,boss_interview_demo,boss_send_to,boss_send_current,boss_read_chat,boss_open_chat,boss_overlay_inspect,boss_overlay_dismiss,boss_list_jobs,boss_select_job,boss_filter_options,boss_resume_detail,boss_resume_batch,boss_resume_next,boss_open_detail,boss_greet_detail,boss_close_detail',
       '--call',
       'boss_goto:{"target":"chat"}',
       '--invalid',
@@ -121,7 +124,7 @@ test('mcp-conformance 套件 CLI 模式可独立运行', async () => {
       '--cdp-port',
       String(port),
     ],
-    { stdio: 'pipe' },
+    { stdio: 'pipe', env: { ...process.env, AID_BOSS_AUTO_CHROME: '0' } },
   )
   // exit code 0 = 全部通过（execFileSync 非零会 throw）
 })

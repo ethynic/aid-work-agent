@@ -228,6 +228,8 @@ class LocalToolProxyTool(BaseTool):
     timeout_seconds = 180  # 默认 3 分钟；写动作（greet/accept）子类改为 10 分钟
     # 弹层自愈主体标记：False 的工具失败后不再触发自愈（overlay 原语自身防递归）
     heal_eligible = True
+    # Server-owned adapter policy; CLI facts and model output cannot grant replay.
+    visual_recovery_policy: Optional[str] = None
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         from src.local_tools.lifecycle import current_local_operation
@@ -274,6 +276,19 @@ class LocalToolProxyTool(BaseTool):
 
         # 3. 下发 + 轮询终态
         result = await self._dispatch_and_wait(tenant_id, user_id, session_id, device, args, progress_queue)
+
+        from .boss_visual_recovery import cli_owns_recovery, is_visual_failure, recover_operation, recovery_arguments
+        if cli_owns_recovery(result):
+            return result
+        if is_visual_failure(self, result):
+            async def dispatch(name, branch, visual_args):
+                tool = self if name == self.name else BossOverlayInspectTool() if name == 'boss_overlay_inspect' else BossOverlayDismissTool()
+                return await tool._dispatch_and_wait(tenant_id, user_id, session_id, device,
+                    recovery_arguments(result, args, visual_args), progress_queue)
+            return await recover_operation(self, result, dispatch)
+
+        if isinstance(result.get('data'), dict) and 'operation_recovery' in result['data']:
+            return result  # Invalid/new facts never downgrade into legacy text recovery/replay.
 
         # 4. 弹层自愈：失败且为可自愈码（UI_CHANGED/BUSY，弹层遮挡的典型症状）→ 关闭弹层后重试一次
         if not result.get("success") and result.get("code") in HEALABLE_ERROR_CODES and self.heal_eligible:
@@ -798,6 +813,7 @@ class BossFilterInput(BaseModel):
 
 
 class BossFilterTool(LocalToolProxyTool):
+    visual_recovery_policy = "page_state"
     name = "boss_filter"
     display_name = "BOSS 筛选牛人"
     description = (
@@ -931,6 +947,7 @@ class BossFilterTool(LocalToolProxyTool):
 
 
 class BossClearFilterTool(LocalToolProxyTool):
+    visual_recovery_policy = "page_state"
     name = "boss_clear_filter"
     display_name = "BOSS 清空筛选"
     description = (
@@ -950,6 +967,7 @@ class BossGotoInput(BaseModel):
 
 class BossFilterOptionsTool(LocalToolProxyTool):
     name = "boss_filter_options"
+    visual_recovery_policy = "readonly"
     display_name = "BOSS 查询筛选可选档位"
     description = (
         "在用户本机 BOSS 直聘「推荐牛人」页只读探查筛选面板可识别的档位"
@@ -967,6 +985,7 @@ class BossFilterOptionsTool(LocalToolProxyTool):
 
 class BossGotoTool(LocalToolProxyTool):
     name = "boss_goto"
+    visual_recovery_policy = "page_state"
     display_name = "BOSS 切换页面"
     description = (
         "切换用户本机 BOSS 直聘页面（recommend 推荐牛人页 / chat 沟通聊天页）。"
@@ -1006,6 +1025,7 @@ class BossGreetInput(BaseModel):
 
 class BossGreetTool(LocalToolProxyTool):
     name = "boss_greet"
+    visual_recovery_policy = "observe_only"
     display_name = "BOSS 打招呼"
     description = (
         "在用户本机 BOSS 直聘「推荐牛人」页向牛人发起打招呼。"
@@ -1037,6 +1057,7 @@ class BossLookupCandidatesInput(BaseModel):
 
 class BossLookupCandidatesTool(LocalToolProxyTool):
     name = "boss_lookup_candidates"
+    visual_recovery_policy = "readonly"
     display_name = "BOSS 查询同名卡片"
     description = (
         "只读查询推荐牛人页已加载指定姓名的卡片，返回编号、card_info摘要、优势和candidate_ref。"
@@ -1044,7 +1065,7 @@ class BossLookupCandidatesTool(LocalToolProxyTool):
         "不滚动、不打招呼，不含非筛选结果推荐。用户不需要提供优势或精确原文。"
     )
     InputModel = BossLookupCandidatesInput
-    heal_eligible = False
+    heal_eligible = True
 
     def _validate_args(self, args: Dict[str, Any]) -> Optional[str]:
         try:
@@ -1071,6 +1092,7 @@ class BossGreetSelectedInput(BaseModel):
 
 class BossGreetSelectedTool(LocalToolProxyTool):
     name = "boss_greet_selected"
+    visual_recovery_policy = "observe_only"
     display_name = "BOSS 向选定卡片打招呼"
     description = (
         "向用户明确选定的单张同名卡片打招呼（外部写动作，单次固定1人）。"
@@ -1081,7 +1103,7 @@ class BossGreetSelectedTool(LocalToolProxyTool):
     )
     InputModel = BossGreetSelectedInput
     timeout_seconds = 600
-    heal_eligible = False
+    heal_eligible = True
 
     def _validate_args(self, args: Dict[str, Any]) -> Optional[str]:
         try:
@@ -1098,6 +1120,7 @@ class BossAcceptResumeInput(BaseModel):
 
 class BossAcceptResumeTool(LocalToolProxyTool):
     name = "boss_accept_resume"
+    visual_recovery_policy = "observe_only"
     display_name = "BOSS 接收简历"
     description = "在用户本机 BOSS 直聘「沟通」页接收当前候选人简历。外部可见写动作，单次固定 1 份，需用户明确授权"
     InputModel = BossAcceptResumeInput
@@ -1106,6 +1129,7 @@ class BossAcceptResumeTool(LocalToolProxyTool):
 
 class BossRejectCurrentTool(LocalToolProxyTool):
     name = "boss_reject_current"
+    visual_recovery_policy = "observe_only"
     display_name = "BOSS 标记不合适"
     description = "在用户本机 BOSS 直聘「沟通」页将当前候选人标记为不合适。外部可见写动作，每次固定当前 1 人，需用户明确授权"
 
@@ -1119,6 +1143,7 @@ class BossInterviewDemoInput(BaseModel):
 
 class BossInterviewDemoTool(LocalToolProxyTool):
     name = "boss_interview_demo"
+    visual_recovery_policy = "page_state"
     display_name = "BOSS 约面试演示"
     description = "在用户本机 BOSS 直聘「沟通」页演示填写约面试信息。只填写不发送，不属于外部写动作"
     InputModel = BossInterviewDemoInput
@@ -1239,6 +1264,7 @@ class BossInterviewNotifyTool(LocalToolProxyTool):
 
 class BossListJobsTool(LocalToolProxyTool):
     name = "boss_list_jobs"
+    visual_recovery_policy = "readonly"
     display_name = "BOSS 列出页面职位"
     description = (
         "在用户本机 BOSS 直聘「推荐牛人」页点开职位下拉，列出当前招聘者在 BOSS 页面上的全部职位"
@@ -1261,6 +1287,7 @@ class BossSelectJobInput(BaseModel):
 
 class BossSelectJobTool(LocalToolProxyTool):
     name = "boss_select_job"
+    visual_recovery_policy = "page_state"
     display_name = "BOSS 切换招聘职位"
     description = (
         "在用户本机 BOSS 直聘「推荐牛人」页把当前招聘职位切换为指定职位名（页面写动作，无对外消息副作用）。"
@@ -1516,6 +1543,7 @@ class BossResumeDetailTool(LocalToolProxyTool):
     禁止把每次调用的状态存 self；tenant/user 一律从 kwargs 的 _trusted_* 取。
     """
     name = "boss_resume_detail"
+    visual_recovery_policy = "readonly"
     display_name = "BOSS 读取简历入库"
     description = (
         "在用户本机 BOSS 直聘「沟通」页读取当前候选人简历详情（滚动截图拼接，云端识别），"
@@ -1551,12 +1579,14 @@ class BossResumeDetailTool(LocalToolProxyTool):
         user_id = kwargs.get("_trusted_user_id")
         session_id = kwargs.get("_session_id")
         result = await super().execute(**kwargs)
+        from .boss_visual_recovery import public_recovery_metadata
+        recovery = public_recovery_metadata(result)
 
         # CLI 失败/非 success：message/code 透传（message 已带失败原因），不落库。
         # data 一律置 None：CLI 失败结果 data 形状未约定（可能夹带部分截图 base64），
         # 「图片字节绝不进 LLM 上下文」的保证必须覆盖所有返回路径
         if not result.get("success"):
-            return {**result, "data": None}
+            return {**result, "data": recovery or None}
 
         # 成功：结果 payload（invocation result_json.data）云端 VL 评估（姓名+总结+评分，
         # v2 合并调用）再落库。契约外形状（非 dict）归空：回填/日志不碰 payload 字段，
@@ -1573,7 +1603,7 @@ class BossResumeDetailTool(LocalToolProxyTool):
                 "code": "RESUME_PAYLOAD_INVALID",
                 "message": "payload 缺 candidate_name：姓名唯一来源=非截图识别，缺省不评估不入库",
                 "effect": result.get("effect"),
-                "data": None,
+                "data": recovery or None,
                 "invocation_id": result.get("invocation_id"),
             }
         error_code, error_message, evaluation = await _evaluate_resume_via_vl(
@@ -1592,7 +1622,7 @@ class BossResumeDetailTool(LocalToolProxyTool):
                 "code": error_code,
                 "message": error_message,
                 "effect": result.get("effect"),
-                "data": None,
+                "data": recovery or None,
                 "invocation_id": result.get("invocation_id"),
             }
         # 姓名门通过 → 按份扣简历识别费（v2：评分成功=服务交付，其后入库失败不退）
@@ -1612,7 +1642,7 @@ class BossResumeDetailTool(LocalToolProxyTool):
                 "code": "RESUME_PAYLOAD_INVALID",
                 "message": f"{e}",
                 "effect": result.get("effect"),
-                "data": None,
+                "data": recovery or None,
                 "invocation_id": result.get("invocation_id"),
             }
         except Exception as e:
@@ -1622,7 +1652,7 @@ class BossResumeDetailTool(LocalToolProxyTool):
                 "code": "RESUME_STORE_FAILED",
                 "message": "简历读取成功但入库失败，请稍后重试或联系管理员",
                 "effect": result.get("effect"),
-                "data": None,
+                "data": recovery or None,
                 "invocation_id": result.get("invocation_id"),
             }
         # 入库成功留痕（2026-09-10 排障整改：「存没存进库」服务端日志可直接回答；
@@ -1660,7 +1690,7 @@ class BossResumeDetailTool(LocalToolProxyTool):
         # 基类在 effect=unknown 时已给 message 追加「实际效果未知」提示，覆写摘要时必须保留
         if UNKNOWN_EFFECT_NOTICE in (result.get("message") or ""):
             message = f"{message}；{UNKNOWN_EFFECT_NOTICE}"
-        return {**result, "data": summary, "message": message}
+        return {**result, "data": {**recovery, **summary}, "message": message}
 
 
 class BossResumeBatchTool(LocalToolProxyTool):
@@ -1676,6 +1706,7 @@ class BossResumeBatchTool(LocalToolProxyTool):
     禁止把每次调用的状态存 self；tenant/user 一律从 kwargs 的 _trusted_* 取。
     """
     name = "boss_resume_batch"
+    visual_recovery_policy = "readonly"
     display_name = "BOSS 批量读取简历入库"
     description = (
         "在用户本机 BOSS 直聘「推荐牛人」页逐个点开牛人卡片批量读取简历（滚动截图拼接，云端识别），"
@@ -1724,10 +1755,11 @@ class BossResumeBatchTool(LocalToolProxyTool):
         session_id = kwargs.get("_session_id")
         progress_queue = kwargs.get("_progress_queue")
         result = await super().execute(**kwargs)
+        from .boss_visual_recovery import public_recovery_metadata
 
         # CLI 失败/非 success：message/code 透传，不落库；data 一律置 None（图片字节绝不进上下文）
         if not result.get("success"):
-            return {**result, "data": result.get("data") if result.get("code") == "STALE_CONTINUATION" else None}
+            return {**result, "data": result.get("data") if result.get("code") == "STALE_CONTINUATION" else public_recovery_metadata(result) or None}
 
         data = result.get("data") or {}
         metadata = batch_metadata(result, kwargs)
@@ -1896,7 +1928,7 @@ class BossResumeNextTool(BossResumeBatchTool):
 
     # 一批可能扫描多屏；停止仍受 CLI 搜索上限约束。
     timeout_seconds = 900
-    heal_eligible = False
+    heal_eligible = True  # Typed recovery keeps the original cursor, job and exclusion history.
 
 
 # ============== 详情页打招呼三件套（筛选主路径，2026-09-28，见 docs/ideas_finished.md 20261011-1456） ==============
@@ -1915,6 +1947,7 @@ class BossOpenDetailInput(BaseModel):
 class BossOpenDetailTool(LocalToolProxyTool):
     """打开指定候选人的简历详情（纯代理：本机 Runtime 执行，无云端后处理、无计费）。"""
 
+    visual_recovery_policy = "page_state"
     name = "boss_open_detail"
     display_name = "BOSS 打开简历详情"
     description = (
@@ -1943,6 +1976,7 @@ class BossGreetDetailTool(LocalToolProxyTool):
     """在当前打开的简历详情页点「打招呼」（纯代理：本机 Runtime 执行，无云端后处理、无计费）。"""
 
     name = "boss_greet_detail"
+    visual_recovery_policy = "observe_only"
     display_name = "BOSS 详情页打招呼"
     description = (
         "在当前打开的简历详情页点「打招呼」（校验详情属于指定姓名候选人，防止打错人；"
@@ -1964,6 +1998,7 @@ class BossCloseDetailTool(LocalToolProxyTool):
     """关闭当前打开的简历详情弹层（纯代理：本机 Runtime 执行，无业务副作用）。"""
 
     name = "boss_close_detail"
+    visual_recovery_policy = "page_state"
     display_name = "BOSS 关闭简历详情"
     description = (
         "关闭当前打开的简历详情弹层（默认评分入库后关闭并等待人工审核，无业务副作用）"
@@ -2144,6 +2179,7 @@ class BossSendToTool(LocalToolProxyTool):
     返回话术原文 + 该候选人简历摘录（SCRIPT_NEEDS_FILL），LLM 填好 {{占位符}} 后带 message 重调完成发送。"""
 
     name = "boss_send_to"
+    visual_recovery_policy = "observe_only"
     display_name = "BOSS 向联系人发消息"
     description = (
         "在用户本机 BOSS 直聘「沟通」页打开指定联系人的会话（统一会话切换：已在目标会话零点击/"
@@ -2238,6 +2274,7 @@ class BossSendCurrentTool(LocalToolProxyTool):
     """
 
     name = "boss_send_current"
+    visual_recovery_policy = "observe_only"
     display_name = "BOSS 向当前会话发消息"
     description = (
         "在用户本机 BOSS 直聘「沟通」页向当前已选会话逐字输入消息并发送（外部写动作；dry_run 只输入不发送）。"
@@ -2308,6 +2345,7 @@ class BossReadChatTool(LocalToolProxyTool):
     """读取当前会话消息流 + 全部未读会话清单（只读，设备执行单次快照）。"""
 
     name = "boss_read_chat"
+    visual_recovery_policy = "readonly"
     display_name = "BOSS 读取会话消息"
     description = (
         "读取用户本机 BOSS 直聘「沟通」页当前会话的消息流（谁发了什么：me/them/system + 正文 + 时间 + 我方已读状态）"
@@ -2328,6 +2366,7 @@ class BossOpenChatTool(LocalToolProxyTool):
     """切换到指定联系人会话（无外部写副作用）：already 零点击 / search 搜索优先 / list 会话列表兜底。"""
 
     name = "boss_open_chat"
+    visual_recovery_policy = "page_state"
     display_name = "BOSS 打开会话"
     description = (
         "在用户本机 BOSS 直聘「沟通」页切换到指定联系人的会话（不发消息，无外部写副作用）。"
@@ -2353,14 +2392,18 @@ class BossOverlayInspectTool(LocalToolProxyTool):
     heal_eligible = False  # overlay 原语自身失败不再递归自愈
 
     class InputModel(BaseModel):
-        pass
+        request_id: Optional[str] = None
+        visual_context: Optional[Dict[str, Any]] = None
+        retrieve_only: Optional[bool] = None
+        observation_mode: Optional[Literal["page", "window"]] = None
 
 
 class BossOverlayDismissInput(BaseModel):
-    text: str = Field(
-        ..., min_length=1, max_length=20,
+    text: Optional[str] = Field(
+        None, min_length=1, max_length=20,
         description="关闭控件的精确文本（必须在关闭语义白名单内，与页面文本 trim 全等）",
     )
+    recovery_ref: Optional[str] = None
 
 
 class BossOverlayDismissTool(LocalToolProxyTool):

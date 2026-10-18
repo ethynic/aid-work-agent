@@ -48,6 +48,9 @@ const BOSS_TOOLS = [
   'boss_open_chat',
   'boss_overlay_inspect',
   'boss_overlay_dismiss',
+  'boss_open_detail',
+  'boss_greet_detail',
+  'boss_close_detail',
 ] as const
 
 // 与 boss CLI OPERATIONS 的 cli.write 同步 + interview_demo 沿用历史归类
@@ -56,6 +59,7 @@ const BOSS_WRITE_TOOLS: ReadonlySet<string> = new Set([
   'boss_clear_filter',
   'boss_greet',
   'boss_greet_selected',
+  'boss_greet_detail',
   'boss_accept_resume',
   'boss_reject_current',
   'boss_interview_demo',

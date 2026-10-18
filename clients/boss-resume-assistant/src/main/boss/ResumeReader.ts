@@ -226,6 +226,7 @@ export function canvasCandidates(snap: DomSnapshot): Array<{ w: number; h: numbe
 }
 
 export class ResumeReader {
+  private activeRect?: DeviceRect
   private readonly sleep: (ms: number) => Promise<void>
 
   constructor(private readonly deps: ResumeReadDeps) {
@@ -251,6 +252,7 @@ export class ResumeReader {
         '未找到简历详情画布（页面中无大尺寸 CANVAS）：请先在推荐牛人页点开一个候选人的在线简历详情，再执行读取',
       )
     }
+    this.activeRect = rect
 
     const tmpDir = path.join(os.tmpdir(), `boss-cv-${randomUUID()}`)
     await fs.mkdir(tmpDir, { recursive: true })
@@ -348,6 +350,11 @@ export class ResumeReader {
     tmpDir: string,
     index: number,
   ): Promise<{ buf: Buffer; file: string }> {
+    const current = locateResumeCanvas(await this.deps.snapshot())
+    if (!current || !this.activeRect || Object.keys(this.activeRect).some((key) =>
+      current[key as keyof DeviceRect] !== this.activeRect![key as keyof DeviceRect])) {
+      throw new ResumeReadError('分段采图前原简历画布消失或几何已变化，未继续采集其他页面')
+    }
     const buf = await this.deps.captureFullpage()
     const file = path.join(tmpDir, `part-raw-${index}.png`)
     await fs.writeFile(file, buf)

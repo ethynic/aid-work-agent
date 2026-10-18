@@ -1,0 +1,10 @@
+import { buildChatSnapshot, type FixtureNode } from './chatReadFixture.js'
+export const text = (value:string, x:number, y:number, w=100,h=20):FixtureNode => ({tag:'#text',text:value,bounds:[x,y,w,h]})
+export interface ActionSnapshotOptions { contact?:string; demographic?:string; status?:string; editor?:string|null; outgoing?:string[]; friend?:string; list?:string[]; noList?:boolean; hidden?:string; extra?:FixtureNode[]; send?:boolean }
+export function actionSnapshot(opts:ActionSnapshotOptions={}) {
+ const header:FixtureNode={tag:'DIV',cls:'base-info-single-container',bounds:[548,110,680,60],children:[text(opts.contact??'合成甲',578,120,70),text(opts.demographic??'28岁',700,120,40),text('本科',760,120,40),...(opts.status?[text(opts.status,820,120)]:[])]}
+ const list:FixtureNode={tag:'DIV',cls:'user-list',bounds:[188,250,359,850],children:(opts.list??['合成甲','合成乙']).map((name,i)=>({tag:'DIV',cls:'geek-item',bounds:[188,300+i*80,359,74],children:opts.hidden===name?[]:[text(name,264,310+i*80,70)]}))}
+ const messages:FixtureNode={tag:'DIV',cls:'conversation-message',bounds:[548,277,680,812],children:[{tag:'DIV',cls:'message-item',bounds:[578,300,620,50],children:[{tag:'DIV',cls:'item-friend',bounds:[578,320,620,30],children:[{tag:'SPAN',cls:'text-content',bounds:[626,326,120,16],children:[text(opts.friend??'你好',626,326,120,16)]}]}]},...(opts.outgoing??[]).map((message,i)=>({tag:'DIV',cls:'message-item',bounds:[578,380+i*60,620,50] as [number,number,number,number],children:[{tag:'DIV',cls:'item-myself',bounds:[578,400+i*60,620,30] as [number,number,number,number],children:[{tag:'SPAN',cls:'text-content',bounds:[900,406+i*60,200,16] as [number,number,number,number],children:[text(message,900,406+i*60,200,16)]}]}]}))]}
+ const editor:FixtureNode={tag:'DIV',attrs:{contenteditable:'true'},bounds:[548,1120,650,80],children:opts.editor?[text(opts.editor,600,1140,500,20)]:[]}
+ return buildChatSnapshot([header,...(opts.noList?[]:[list]),messages,...(opts.editor===null?[]:[editor]),...(opts.send===false?[]:[text('发送',1086,1215,120,36)]),...(opts.extra??[])])
+}

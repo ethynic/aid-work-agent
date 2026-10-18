@@ -1,3 +1,4 @@
+import { BusinessOperationState, withBusinessRecovery } from '../boss/BusinessOperationState.js'
 /**
  * boss_greet operation（设计 §10.2）：推荐牛人页逐个点击「打招呼」（写动作）。
  *
@@ -63,6 +64,9 @@ export function createBossGreetOperation(
           return null
         },
         async (session, tracker) => {
+          const state = new BusinessOperationState()
+          const intent = { name: 'boss_greet', goal: '按原授权名单在推荐页打招呼', expected: '同一目标卡片翻转为继续沟通', operationClass: 'external_effect' as const }
+          return withBusinessRecovery(state, intent, async () => {
           // 前置校验：必须在推荐牛人列表页（URL 判定，坑 17）。
           // 不用「筛选」按钮文案判定：沟通页 DOM 内嵌推荐 iframe 时文案同样命中、误通过，
           // 结果 0 人成功还报「完成」；URL 不受 iframe 影响（goto 已实证两页 URL 可区分）
@@ -83,7 +87,7 @@ export function createBossGreetOperation(
           // names ≤ 3 已校验，钳后不突破单次 3 人授权上限。
           const effectiveLimit = targetNames ? Math.max(limit, targetNames.length) : limit
           const total = targetNames ? targetNames.length : limit
-          const executor = new GreetExecutor({
+          const executor = new GreetExecutor({ state,
             snapshot: () => session.snapshot(FILTER_SNAPSHOT_OPTIONS),
             click: session.click,
             scroll: (deltaY, snapshot) => {
@@ -150,6 +154,7 @@ export function createBossGreetOperation(
             message: `完成：成功打招呼 ${result.greeted} 人（${result.reachedEnd ? '已滚到底' : '达到上限'}）`,
             data: { greeted: result.greeted, reached_end: result.reachedEnd },
           }
+          })
         },
       )
     },

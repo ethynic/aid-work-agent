@@ -53,10 +53,19 @@ test('推荐页允许query，参数错误仍发生于动作前而不是误报WRO
 
 test('局部探查成功明确报告不可读行，完整探查不遗留不可读标记', async () => {
   const complete = withAccount(fixture)
+  // The saved panel fixture has a filter string but no visible toolbar text node.
+  // Cleanup now verifies that actual toolbar and must never click a strings-table-only match.
+  const doc = complete.documents[0]!, node = (doc.nodes.nodeValue as number[]).length
+  complete.strings.push('筛选', '#text')
+  ;(doc.nodes.nodeValue as number[]).push(complete.strings.length - 2)
+  ;(doc.nodes.nodeName as number[]).push(complete.strings.length - 1)
+  ;(doc.nodes.parentIndex as number[]).push(0)
+  ;(doc.nodes.attributes as number[][]).push([])
+  doc.layout.nodeIndex.push(node); doc.layout.bounds.push([2200, 24, 60, 31])
   const closed = withAccount({ strings: ['', '筛选'], documents: [{ nodes: { nodeValue: [0, 1], contentDocumentIndex: [] }, layout: { nodeIndex: [0, 1], bounds: [[0, 0, 2506, 1476], [2200, 24, 60, 31]] } }] })
   for (const partial of [true, false]) {
     const panel = partial ? withoutRowOptions(complete, ['性别']) : complete
-    const f = sessionAt('https://www.zhipin.com/web/chat/recommend', [panel, panel, closed])
+    const f = sessionAt('https://www.zhipin.com/web/chat/recommend', [panel, panel, panel, closed])
     const result = await createBossFilterOptionsOperation(f.factory).execute({}, context())
     assert.equal(result.success, true)
     assert.equal(result.effect, 'none')

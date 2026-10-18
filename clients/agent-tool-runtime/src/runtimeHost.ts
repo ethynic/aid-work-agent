@@ -229,10 +229,14 @@ export class LegacyExecution implements HostAdapter {
     for (const key of ['AID_WECOM_SERVER_URL', 'AID_WECOM_SERVER_TOKEN']) {
       if (process.env[key] !== undefined) wecomEnv[key] = process.env[key]!
     }
+    const bossEnv: Record<string, string> = {}
+    for (const key of ['AID_BOSS_SERVER_URL', 'AID_BOSS_SERVER_TOKEN']) {
+      if (process.env[key] !== undefined) bossEnv[key] = process.env[key]!
+    }
     // Each Provider gets its own approved credentials, never the Host/device environment.
     const providers = new ProviderSet(entries, { nodeExecutable: this.nodeExecutable, baseEnv: providerEnvironment(),
       ...(this.supervision.enabled ? { prepareLaunch: (entry: string) => this.supervision.prepareLaunch(entry) } : {}),
-      providerEnv: { weixin: { AIDWORK_WEIXIN_BRIDGE_KEY: bridgeKey }, wecom: wecomEnv } })
+      providerEnv: { weixin: { AIDWORK_WEIXIN_BRIDGE_KEY: bridgeKey }, wecom: wecomEnv, 'boss-recruiting': bossEnv } })
     this.providers = providers
     this.runFailure = null
     this.stopping = false

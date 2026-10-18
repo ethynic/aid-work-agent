@@ -20,10 +20,13 @@ import {
   findNodesByString,
   accumulateOwnerOffset,
   boundsCenter,
+  indexedValues, type SparseOrDense,
 } from './domSnapshot.js'
 import { viewportOf } from './FilterSetter.js'
 import { listMaxX } from './ResumeConsentExecutor.js'
 import { CancelledError } from '../operations/types.js'
+import { BusinessOperationState } from './BusinessOperationState.js'
+import { PagePostconditionError } from '../operations/pageOperation.js'
 
 export class InterviewDemoError extends Error {
   constructor(message: string) {
@@ -33,6 +36,7 @@ export class InterviewDemoError extends Error {
 }
 
 export interface InterviewDemoDeps {
+  state?: BusinessOperationState
   snapshot(): Promise<DomSnapshot>
   /** Win32 真实鼠标点击 */
   click(point: ClickPoint, viewport: { width: number; height: number }): Promise<void>
@@ -54,19 +58,38 @@ const DEFAULT_REMARK = '请带好身份证和简历准时面试'
 
 export class InterviewDemoExecutor {
   private readonly sleep: (ms: number) => Promise<void>
+  readonly state: BusinessOperationState
 
   constructor(private readonly deps: InterviewDemoDeps) {
+    this.state = deps.state ?? new BusinessOperationState()
     this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)))
   }
 
   /** 填表单演示；返回填入的备注与日期。任何一步异常抛 InterviewDemoError（表单状态需人工确认） */
-  async run(opts: { remark?: string } = {}): Promise<{ remark: string; date: string }> {
+  async run(opts: { remark?: string; expectedContactRef?: string } = {}): Promise<{ remark: string; date: string }> {
+    for (;;) {
+      try { return await this.runOnce(opts) } catch (error) {
+        if (!(error instanceof PagePostconditionError) || error.verification.status !== 'unmet' || !this.state.retry()) throw error
+        const fresh = await this.deps.snapshot()
+        if (this.formOpen(fresh)) {
+          const cancel = this.uniqueText(fresh, CANCEL_TEXT)
+          if (!cancel) throw new InterviewDemoError('重试前无法安全定位取消按钮，表单未发送')
+          await this.state.input(() => this.deps.click(cancel, viewportOf(fresh)))
+          await this.sleep(800)
+          if (this.formOpen(await this.deps.snapshot())) throw new InterviewDemoError('重试前表单未关闭，表单未发送')
+        }
+      }
+    }
+  }
+
+  private async runOnce(opts: { remark?: string; expectedContactRef?: string }): Promise<{ remark: string; date: string }> {
     if (this.deps.signal?.aborted) throw new CancelledError()
     const remark = opts.remark ?? DEFAULT_REMARK
     if (!remark.trim()) throw new InterviewDemoError('备注内容不能为空')
 
     // 0. 前置：表单不能已打开（已打开说明上次异常残留，人工确认后再来）
     const snap0 = await this.deps.snapshot()
+    this.state.bindContact(snap0, opts.expectedContactRef)
     if (this.formOpen(snap0)) {
       throw new InterviewDemoError('面试邀请表单已处于打开状态，请先人工关闭（避免在残留表单上操作）')
     }
@@ -74,27 +97,29 @@ export class InterviewDemoExecutor {
     // 1. 定位并点击「约面试」（右侧面板唯一）
     const btn = this.uniqueText(snap0, INVITE_BUTTON, (x) => x > listMaxX(viewportOf(snap0).width))
     if (!btn) throw new InterviewDemoError('未找到唯一的「约面试」按钮：请先在沟通页打开一个会话')
-    await this.deps.click(btn, viewportOf(snap0))
+    await this.state.input(() => this.deps.click(btn, viewportOf(snap0)))
     await this.sleep(1500)
 
     // 2. 校验表单打开 + 定位备注计数器
     const snap1 = await this.deps.snapshot()
     if (!this.formOpen(snap1)) {
-      throw new InterviewDemoError('点击「约面试」后表单未打开：点击可能被拦截，请人工查看页面')
+      throw new PagePostconditionError('点击约面试后没有打开表单', { status: this.uniqueText(snap1, INVITE_BUTTON) ? 'unmet' : 'inconclusive', evidence: ['fresh表单标题未出现，同时核对原入口是否仍可读'] })
     }
     const counter = this.uniqueText(snap1, REMARK_COUNTER)
     if (!counter) throw new InterviewDemoError('表单已打开但未找到备注「/140」计数器，表单结构可能已变')
 
     // 3. 聚焦备注 textarea 并逐字输入（Win32 原子：点击聚焦后紧接真实键盘逐字）
     if (this.deps.signal?.aborted) throw new CancelledError()
-    await this.deps.clickAndType({ x: counter.x - 300, y: counter.y - 40 }, viewportOf(snap1), remark)
+    this.state.bindContact(snap1)
+    const remarkPoint = { x: counter.x - 300, y: counter.y - 40 }
+    await this.state.input(() => this.deps.clickAndType(remarkPoint, viewportOf(snap1), remark))
 
-    // 4. 校验字数（textarea 内容不在 DOM 文本节点里，用计数器数字验证输入落地）
+    // 4. textarea 当前值在 DOMSnapshot textValue；全文和计数都要符合原意图。
     const snap2 = await this.deps.snapshot()
-    if (!this.countMatches(snap2, remark.length)) {
-      throw new InterviewDemoError(
-        `备注逐字输入后字数计数器未显示 ${remark.length}：输入未完整落地，已停止，请人工查看表单`,
-      )
+    const remarkValue = this.fieldValueAt(snap2, 'TEXTAREA', remarkPoint)
+    if (!this.countMatches(snap2, remark.length) || remarkValue !== remark) {
+      throw new PagePostconditionError('备注文本或计数未满足原意图，表单未发送', {
+        status: remarkValue === null ? 'inconclusive' : 'unmet', evidence: ['仅在表单备注字段读取原值，不以同长度其他文本当成功'] })
     }
 
     // 5. 面试时间：打开日期面板选明天（跨月先点下月箭头）
@@ -102,11 +127,15 @@ export class InterviewDemoExecutor {
     if (!label) throw new InterviewDemoError('未找到「面试时间」标签，表单结构可能已变')
     const tomorrow = new Date((this.deps.now ?? Date.now)() + 86400000)
     const dateStr = formatDate(tomorrow)
-    await this.deps.click({ x: label.x + 230, y: label.y }, viewportOf(snap2))
+    const datePoint = { x: label.x + 230, y: label.y }
+    await this.state.input(() => this.deps.click(datePoint, viewportOf(snap2)))
     await this.sleep(1200)
     if (tomorrow.getDate() === 1) {
       // 跨月：当前面板是本月，先点右上角下月箭头（锚定：标签右 455 / 下 85）
-      await this.deps.click({ x: label.x + 455, y: label.y + 85 }, viewportOf(snap2))
+      const monthSnap = await this.deps.snapshot()
+      const freshLabel = this.uniqueText(monthSnap, TIME_LABEL)
+      if (!freshLabel) throw new InterviewDemoError('换月前面试时间标签无法定位')
+      await this.state.input(() => this.deps.click({ x: freshLabel.x + 455, y: freshLabel.y + 85 }, viewportOf(monthSnap)))
       await this.sleep(1000)
     }
     const snap3 = await this.deps.snapshot()
@@ -114,27 +143,61 @@ export class InterviewDemoExecutor {
     if (!day) {
       throw new InterviewDemoError(`日历面板中未找到唯一日期「${tomorrow.getDate()}」，已停止，请人工查看（表单未提交）`)
     }
-    await this.deps.click(day, viewportOf(snap3))
+    await this.state.input(() => this.deps.click(day, viewportOf(snap3)))
     await this.sleep(800)
 
     // 6. 校验日期填入 + 定位「取消」
-    // 注意：日期框是 input，选中值进 strings 表但无布局文本节点（真机 2026-08-06 实证，
-    // 与 placeholder 同机制），只能查 strings 存在性，不能查可见坐标
+    // 同排还有开始时间 INPUT，只核验本次日期点击点所在字段的 inputValue。
     const snap4 = await this.deps.snapshot()
-    if (!snap4.strings.some((s) => s.trim() === dateStr)) {
-      throw new InterviewDemoError(`点击日期后日期框未显示 ${dateStr}：日期未选中，已停止，请人工查看（表单未提交）`)
+    const dateValue = this.fieldValueAt(snap4, 'INPUT', datePoint)
+    if (dateValue !== dateStr) {
+      throw new PagePostconditionError('面试日期字段与原日期不符，表单未发送', {
+        status: dateValue === null ? 'inconclusive' : 'unmet', evidence: ['读取原日期点击点所在唯一INPUT的真实值，不查全局strings或相邻开始时间'] })
     }
     const cancel = this.uniqueText(snap4, CANCEL_TEXT)
     if (!cancel) throw new InterviewDemoError('未找到唯一的「取消」按钮，请人工关闭表单（切勿点发送）')
 
     // 7. 取消关闭（本执行器没有任何点击「发送」的路径）
-    await this.deps.click(cancel, viewportOf(snap4))
+    this.state.bindContact(snap4)
+    await this.state.input(() => this.deps.click(cancel, viewportOf(snap4)))
     await this.sleep(800)
-    const snap5 = await this.deps.snapshot()
-    if (this.formOpen(snap5)) {
-      throw new InterviewDemoError('点击「取消」后表单仍未关闭，请人工查看页面（表单未提交）')
+    let snap5 = await this.deps.snapshot()
+    if (this.formOpen(snap5) && this.state.retry()) {
+      const freshCancel = this.uniqueText(snap5, CANCEL_TEXT)
+      if (!freshCancel) throw new InterviewDemoError('取消重试前无法唯一定位取消按钮，表单未发送')
+      await this.state.input(() => this.deps.click(freshCancel, viewportOf(snap5)))
+      await this.sleep(800)
+      snap5 = await this.deps.snapshot()
     }
+    if (this.formOpen(snap5)) {
+      throw new PagePostconditionError('取消后面试表单仍打开，未发送', { status: 'unmet', evidence: ['fresh表单标题仍可见'] })
+    }
+    this.state.execution.stage = 'postcheck'
+    this.state.execution.verification = { status: 'met', evidence: ['备注字段全文、字数及日期字段已核验，取消后表单标题消失，未发送'] }
     return { remark, date: dateStr }
+  }
+
+  private fieldValueAt(snap: DomSnapshot, tag: 'TEXTAREA' | 'INPUT', point: ClickPoint): string | null {
+    const values: Array<string | null> = []
+    snap.documents.forEach((doc, di) => {
+      if (!doc.nodes.nodeName) return
+      let offset: ClickPoint
+      try { offset = accumulateOwnerOffset(snap, di) } catch { return }
+      const valueKey = tag === 'TEXTAREA' ? 'textValue' : 'inputValue'
+      const fieldValues = (doc.nodes as typeof doc.nodes & { inputValue?: SparseOrDense<number>; textValue?: SparseOrDense<number> })[valueKey]
+      const valueByNode = new Map(fieldValues ? indexedValues(fieldValues, valueKey) : [])
+      for (const [ni, si] of indexedValues(doc.nodes.nodeName, 'nodeName')) {
+        if (snap.strings[si] !== tag) continue
+        const b = doc.layout.bounds[doc.layout.nodeIndex.indexOf(ni)]
+        if (!b || b[2]! <= 0 || b[3]! <= 0) continue
+        const x = offset.x + b[0]! - (doc.scrollOffsetX ?? 0)
+        const y = offset.y + b[1]! - (doc.scrollOffsetY ?? 0)
+        if (point.x < x || point.x > x + b[2]! || point.y < y || point.y > y + b[3]!) continue
+        const value = valueByNode.get(ni)
+        values.push(value === undefined ? null : snap.strings[value] ?? null)
+      }
+    })
+    return values.length === 1 ? values[0]! : null
   }
 
   /** 表单是否打开：面试邀请标题有可见布局节点 */

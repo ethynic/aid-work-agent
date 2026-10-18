@@ -10,6 +10,7 @@ import { createBossGreetOperation } from '../src/main/operations/bossGreet.js'
 import { createBossAcceptResumeOperation } from '../src/main/operations/bossAcceptResume.js'
 import type { BossSession } from '../src/main/operations/bossContext.js'
 import type { OpContext, ProgressEvent } from '../src/main/operations/types.js'
+import { actionSnapshot, text } from './chatActionFixture.js'
 import type { DomSnapshot, ClickPoint } from '../src/main/boss/domSnapshot.js'
 
 /** 依调用序返回 snapshot 队列，用完后重复最后一个。
@@ -34,53 +35,22 @@ function fakeSession(snaps: DomSnapshot[], opts: { url?: string } = {}) {
   return { session, clicks }
 }
 
-/** greet snapshot：根 + 「筛选」+ N 个「打招呼」按钮 */
-function greetSnap(buttons: Array<[number, number, number, number]>): DomSnapshot {
-  const nodeCount = 2 + buttons.length
-  const idx = Array.from({ length: nodeCount }, (_, i) => i)
-  return {
-    strings: ['', '筛选', '打招呼'],
-    documents: [
-      {
-        nodes: {
-          nodeValue: { index: idx, value: [0, 1, ...buttons.map(() => 2)] },
-          contentDocumentIndex: { index: [], value: [] },
-        },
-        layout: { nodeIndex: idx, bounds: [[0, 0, 1917, 1905], [100, 100, 50, 20], ...buttons] },
-      },
-    ],
+/** Same candidate cards stay visible after each verified greeting. */
+function greetSnap(buttons: Array<[number, number, number, number]>, continued: Array<[number, number, number, number]> = []): DomSnapshot {
+  const texts = ['筛选'], boxes: Array<[number, number, number, number]> = [[100,100,50,20]]
+  for (const [bounds, label] of [...buttons.map(b => [b, '打招呼'] as const), ...continued.map(b => [b, '继续沟通'] as const)]) {
+    const y = bounds[1] + bounds[3] / 2
+    texts.push(bounds[1] < 300 ? '张三丰' : bounds[1] < 600 ? '李四海' : '王五平', '刚刚活跃', label)
+    boxes.push([300,y-18,70,20], [390,y-18,70,20], bounds)
   }
+  const ids=Array.from({length:texts.length+1},(_,i)=>i), bounds: Array<[number, number, number, number]> = [[0,0,1917,1905],...boxes]
+  return {strings:['',...texts,'HTML'],documents:[{nodes:{nodeValue:{index:ids,value:ids},nodeName:{index:[0],value:[texts.length+1]},contentDocumentIndex:{index:[],value:[]}},layout:{nodeIndex:ids,bounds,clientRects:bounds}}]}
 }
-
-const BTN1: [number, number, number, number] = [1690, 208, 64, 32]
-const BTN2: [number, number, number, number] = [1690, 484, 64, 32]
-const BTN3: [number, number, number, number] = [1690, 760, 64, 32]
-
-/** accept snapshot：文案项构造（与 resume-consent.test.ts 同范式） */
-type Item = { text: string; bounds: [number, number, number, number] }
-function consentSnap(items: Item[]): DomSnapshot {
-  const idx = [0, ...items.map((_, i) => i + 1)]
-  const uniqTexts = items.map((it) => it.text).filter((t, i, arr) => arr.indexOf(t) === i)
-  const stringIds = items.map((it) => 1 + uniqTexts.indexOf(it.text))
-  return {
-    strings: ['', ...uniqTexts],
-    documents: [
-      {
-        nodes: {
-          nodeValue: { index: idx, value: [0, ...stringIds] },
-          contentDocumentIndex: { index: [], value: [] },
-        },
-        layout: { nodeIndex: idx, bounds: [[0, 0, 1917, 1905], ...items.map((it) => it.bounds)] },
-      },
-    ],
-  }
-}
+const BTN1: [number, number, number, number] = [1690,208,64,32]
+const BTN2: [number, number, number, number] = [1690,484,64,32]
+const BTN3: [number, number, number, number] = [1690,760,64,32]
 const MARKER = '对方想发送附件简历给您，您是否同意'
-const listItem = (y: number): Item => ({ text: MARKER, bounds: [400, y - 16, 298, 32] })
-const banner = (y: number): Item[] => [
-  { text: MARKER, bounds: [900, y - 16, 226, 32] },
-  { text: '同意', bounds: [1295, y - 20, 80, 40] },
-]
+const request=text(MARKER,240,500,290,25), prompt=text(MARKER,650,1000,300,25), agree=text('同意',1050,1000,60,25)
 
 test('greet：onProgress 逐人回调，current/total 逐人推进', async () => {
   const events: ProgressEvent[] = []
@@ -91,12 +61,12 @@ test('greet：onProgress 逐人回调，current/total 逐人推进', async () =>
     [
       greetSnap([BTN1, BTN2, BTN3]),
       greetSnap([BTN1, BTN2, BTN3]),
-      greetSnap([BTN2, BTN3]),
-      greetSnap([BTN2, BTN3]),
-      greetSnap([BTN3]),
-      greetSnap([BTN3]),
-      greetSnap([]),
-      greetSnap([]),
+      greetSnap([BTN2, BTN3], [BTN1]),
+      greetSnap([BTN2, BTN3], [BTN1]),
+      greetSnap([BTN3], [BTN1, BTN2]),
+      greetSnap([BTN3], [BTN1, BTN2]),
+      greetSnap([], [BTN1, BTN2, BTN3]),
+      greetSnap([], [BTN1, BTN2, BTN3]),
     ],
     { url: 'https://www.zhipin.com/web/chat/recommend' },
   )
@@ -128,11 +98,11 @@ test('greet：打完 2 人后 abort → CANCELLED + partial + completed=2', asyn
     [
       greetSnap([BTN1, BTN2, BTN3]),
       greetSnap([BTN1, BTN2, BTN3]),
-      greetSnap([BTN2, BTN3]),
-      greetSnap([BTN2, BTN3]),
-      greetSnap([BTN3]),
-      greetSnap([BTN3]),
-      greetSnap([]),
+      greetSnap([BTN2, BTN3], [BTN1]),
+      greetSnap([BTN2, BTN3], [BTN1]),
+      greetSnap([BTN3], [BTN1, BTN2]),
+      greetSnap([BTN3], [BTN1, BTN2]),
+      greetSnap([], [BTN1, BTN2, BTN3]),
     ],
     { url: 'https://www.zhipin.com/web/chat/recommend' },
   )
@@ -143,6 +113,7 @@ test('greet：打完 2 人后 abort → CANCELLED + partial + completed=2', asyn
   assert.equal(r.effect, 'partial')
   assert.equal(r.retryable, false)
   assert.equal(r.data.completed, 2)
+  assert.equal((r.data.confirmed_items as unknown[]).length, 2)
 })
 
 test('accept：onProgress 逐人回调，1 人后 abort → CANCELLED + partial', async () => {
@@ -157,10 +128,10 @@ test('accept：onProgress 逐人回调，1 人后 abort → CANCELLED + partial'
   }
   // 定位[左列1个] → 打开后[处理条] → 点完校验[无同意] → （下一轮循环顶部 abort）
   const { session } = fakeSession([
-    consentSnap([listItem(1307)]),
-    consentSnap([listItem(1307), ...banner(1557)]),
-    consentSnap([listItem(1307)]),
-    consentSnap([]),
+    actionSnapshot({ extra: [request] }),
+    actionSnapshot({ extra: [request, prompt, agree] }),
+    actionSnapshot({ extra: [text('点击预览附件简历',700,800,180,25)] }),
+    actionSnapshot({ extra: [text('点击预览附件简历',700,800,180,25)] }),
   ])
   const op = createBossAcceptResumeOperation(async () => session)
   const r = await op.execute({ limit: 5, preview: false }, ctx)
@@ -168,6 +139,7 @@ test('accept：onProgress 逐人回调，1 人后 abort → CANCELLED + partial'
   assert.equal(r.code, 'CANCELLED')
   assert.equal(r.effect, 'partial')
   assert.equal(r.data.completed, 1)
+  assert.equal((r.data.confirmed_items as unknown[]).length, 1)
   const progressEvents = events.filter((e) => e.stage === 'execute' && e.current !== undefined)
   assert.deepEqual(
     progressEvents.map((e) => [e.current, e.total]),

@@ -1,272 +1,182 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { ResumeConsentExecutor, ConsentError } from '../src/main/boss/ResumeConsentExecutor.js'
-import type { DomSnapshot, ClickPoint } from '../src/main/boss/domSnapshot.js'
-
-/**
- * 构造单文档 snapshot（视口 1917x1905）。相同文案共享 string 下标（真实 interning）。
- * 真机参考（2026-08-06 沟通页实测）：
- * - 左列会话预览文案 cx≈549~567（x<850 才算目标）
- * - 右侧处理条：文案 (1013,1557) + 「同意」(1335,1557) 同行；消息卡片按钮在文案下方 ~95px（灰化，不能点）
- */
-type Item = { text: string; bounds: [number, number, number, number] }
-
-function consentSnap(items: Item[]): DomSnapshot {
-  const idx = [0, ...items.map((_, i) => i + 1)]
-  const uniqTexts = items.map((it) => it.text).filter((t, i, arr) => arr.indexOf(t) === i)
-  const stringIds = items.map((it) => 1 + uniqTexts.indexOf(it.text))
-  return {
-    strings: ['', ...uniqTexts],
-    documents: [
-      {
-        nodes: {
-          nodeValue: { index: idx, value: [0, ...stringIds] },
-          contentDocumentIndex: { index: [], value: [] },
-        },
-        layout: {
-          nodeIndex: idx,
-          bounds: [[0, 0, 1917, 1905], ...items.map((it) => it.bounds)],
-        },
-      },
-    ],
-  }
+import { ResumeConsentExecutor, attachmentPreviewState } from '../src/main/boss/ResumeConsentExecutor.js'
+import { chatContactRef } from '../src/main/boss/BusinessOperationState.js'
+import { WinClickError } from '../src/main/input/WinMouseClicker.js'
+import { actionSnapshot, text } from './chatActionFixture.js'
+import { buildChatSnapshot } from './chatReadFixture.js'
+const MARKER='对方想发送附件简历给您，您是否同意'
+const request=text(MARKER,240,500,290,25),prompt=text(MARKER,650,1000,300,25),agree=text('同意',1050,1000,60,25),preview=text('点击预览附件简历',700,800,180,25)
+function harness(opts:{unchanged?:boolean;previewFail?:boolean;switchContact?:boolean;encrypted?:boolean;loadingPolls?:number;loadingForever?:boolean;keepPreviewAfterEscape?:boolean}={}) {
+ let phase=0, clicks=0,escapes=0,loadingReads=0
+ const deps={snapshot:async()=>{
+  if(phase===0)return actionSnapshot({extra:[opts.encrypted?{...request,text:MARKER.replace('附件','加密附件')}:request]})
+  if(phase===1)return actionSnapshot({extra:[request,prompt,agree]})
+  if(opts.unchanged)return actionSnapshot({extra:[request,prompt,agree]})
+  if(phase===2)return actionSnapshot({contact:opts.switchContact?'合成乙':'合成甲',extra:[preview]})
+  if(opts.previewFail)return actionSnapshot({extra:[preview]})
+  if(phase===3)return pdfPreviewSnapshot({loading:opts.loadingForever || loadingReads++ < (opts.loadingPolls??0)})
+  return opts.keepPreviewAfterEscape?pdfPreviewSnapshot():actionSnapshot({extra:[preview,text('个人优势',700,400),text('工作经历',700,450)]})
+ },click:async()=>{clicks++;phase++},pressEscape:async()=>{escapes++;phase=4},sleep:async()=>{}}
+ return {deps,counts:()=>({clicks,escapes})}
 }
 
-const MARKER = '对方想发送附件简历给您，您是否同意'
-const MARKER_ENC = '对方想发送加密附件简历给您，您是否同意'
-/** 左列会话预览（cx=549, cy 可变） */
-const listItem = (y: number, text = MARKER): Item => ({ text, bounds: [400, y - 16, 298, 32] })
-/** 右侧处理条：文案 + 同行「同意」 */
-const banner = (y: number): Item[] => [
-  { text: MARKER, bounds: [900, y - 16, 226, 32] }, // cx=1013
-  { text: '同意', bounds: [1295, y - 20, 80, 40] }, // cx=1335 同行
-]
-/** 消息卡片：文案 + 下方 95px 的「同意」（灰化诱饵） */
-const cardAgree = (y: number): Item[] => [
-  { text: MARKER, bounds: [1055, y - 16, 226, 32] }, // cx=1168
-  { text: '同意', bounds: [1147, y + 75, 80, 40] }, // cy=文案+95
-]
+function pdfPreviewSnapshot(opts:{loading?:boolean;hidden?:boolean;offscreen?:boolean;ordinaryFrame?:boolean;unboundCanvas?:boolean;sections?:boolean;backgroundCanvas?:boolean;canvasOutside?:boolean}={}) {
+ const cls=opts.ordinaryFrame?'recommend-iframe':'attachment-box attachment-iframe'
+ const snap=actionSnapshot({extra:[preview,{tag:'DIV',cls:'resume-detail resume-detail-chat',children:[{tag:'DIV',cls:'attachment-view',children:[
+  {tag:'IFRAME',cls,...(opts.hidden?{}:{bounds:[opts.offscreen?2000:248,50,765,894] as [number,number,number,number]})},
+ ]}]},text('个人优势',700,400),text('工作经历',700,450),...(opts.backgroundCanvas?[{tag:'CANVAS',bounds:[10,50,1000,1200] as [number,number,number,number]}]:[])]})
+ const child=buildChatSnapshot([{tag:'DIV',cls:'bzl-office-pdf',children:[{tag:'DIV',cls:'bzl-office-pdf-wrapper pdfViewer',children:
+  opts.loading?[]:opts.sections?[text('个人优势',100,200),text('工作经历',100,300)]:[{tag:'DIV',cls:'page',children:[{tag:'DIV',cls:'canvasWrapper',children:[
+   {tag:'CANVAS',attrs:{role:'presentation'},bounds:[opts.canvasOutside?900:0,0,749,1059]},
+  ]}]}],
+ }]}])
+ const indexes=child.strings.map(value=>{let index=snap.strings.indexOf(value);if(index<0){index=snap.strings.length;snap.strings.push(value)}return index})
+ const doc=child.documents[0]!,nodes=doc.nodes
+ nodes.nodeValue=(nodes.nodeValue as number[]).map(index=>index<0?index:indexes[index]!)
+ nodes.nodeName=(nodes.nodeName as number[]).map(index=>indexes[index]!)
+ nodes.attributes=(nodes.attributes as number[][]).map(pairs=>pairs.map(index=>indexes[index]!))
+ const main=snap.documents[0]!,frame=(main.nodes.nodeName as number[]).findIndex(index=>snap.strings[index]==='IFRAME')
+ main.nodes.contentDocumentIndex={index:[frame],value:[1]}
+ snap.documents.push(doc)
+ if(opts.unboundCanvas){main.nodes.contentDocumentIndex={index:[],value:[]}}
+ return snap
+}
+test('accept same conversation only after processing banner removed and new attachment appears',async()=>{
+ const h=harness(),executor=new ResumeConsentExecutor(h.deps),r=await executor.acceptAll({limit:1})
+ assert.equal(r.accepted,1);assert.deepEqual(h.counts(),{clicks:2,escapes:0});assert.equal(executor.state.businessEffect.completed_count,1)
+})
+test('encrypted request uses the same explicit acceptance postcondition',async()=>{
+ const h=harness({encrypted:true});assert.equal((await new ResumeConsentExecutor(h.deps).acceptAll({limit:1})).accepted,1)
+})
+test('accept preview verifies open and closed states after confirmed business effect',async()=>{
+ const h=harness(),r=await new ResumeConsentExecutor(h.deps).acceptAll({limit:1,preview:true})
+ assert.equal(r.accepted,1);assert.equal(r.previewed,1);assert.deepEqual(h.counts(),{clicks:3,escapes:1})
+})
+test('preview failure never erases an already confirmed acceptance',async()=>{
+ const h=harness({previewFail:true}),executor=new ResumeConsentExecutor(h.deps)
+ await assert.rejects(executor.acceptAll({limit:1,preview:true}),/预览/)
+ assert.equal(executor.state.businessEffect.completed_count,1);assert.equal(executor.state.businessEffect.status,'confirmed');assert.equal(executor.state.confirmedItems[0]?.accepted,true)
+})
+test('unchanged banner is unknown and never clicks agree twice',async()=>{
+ const h=harness({unchanged:true}),executor=new ResumeConsentExecutor(h.deps)
+ await assert.rejects(executor.acceptAll({limit:1}),/无法确认/);assert.equal(h.counts().clicks,2);assert.equal(executor.state.businessEffect.status,'unknown')
+})
+test('attachment appearing in a different conversation does not prove acceptance',async()=>{
+ const h=harness({switchContact:true}),executor=new ResumeConsentExecutor(h.deps)
+ await assert.rejects(executor.acceptAll({limit:1}),/身份/);assert.equal(executor.state.businessEffect.status,'unknown')
+})
+test('no pending left-list request means no action, even with a right-panel agree marker',async()=>{
+ let clicks=0;const r=await new ResumeConsentExecutor({snapshot:async()=>actionSnapshot({extra:[prompt,agree]}),click:async()=>{clicks++},sleep:async()=>{}}).acceptAll()
+ assert.equal(r.accepted,0);assert.equal(clicks,0)
+})
+test('missing processing banner only polls read-only, without submitting an arbitrary agree',async()=>{
+ let clicks=0;const executor=new ResumeConsentExecutor({snapshot:async()=>actionSnapshot({extra:[request]}),click:async()=>{clicks++},sleep:async()=>{}})
+ await assert.rejects(executor.acceptAll(),/未找到/);assert.equal(clicks,1);assert.equal(executor.state.businessEffect.status,'not_started')
+})
+test('direct native agree error does not retry and preserves final unknown',async()=>{
+ const h=harness(),click=h.deps.click;let inputs=0;h.deps.click=async()=>{inputs++;if(inputs===2)throw new WinClickError('[BOSS_INPUT_UNKNOWN] input may be sent');await click()}
+ const executor=new ResumeConsentExecutor(h.deps);await assert.rejects(executor.acceptAll());assert.equal(inputs,2);assert.equal(executor.state.businessEffect.status,'unknown');assert.equal(executor.state.execution.ordinaryRetriesUsed,0)
+})
 
-function recorder(snaps: DomSnapshot[]) {
-  let i = 0
-  const clicks: ClickPoint[] = []
-  return {
-    clicks,
-    deps: {
-      snapshot: async () => snaps[Math.min(i++, snaps.length - 1)]!,
-      click: async (p: ClickPoint) => {
-        clicks.push(p)
-      },
-      sleep: async () => {},
-    },
-  }
+
+test('recovery binds acceptance to the original contact before final agree', async()=>{
+ const h=harness(), expectedContactRef=chatContactRef(actionSnapshot({contact:'合成乙'}))!
+ await assert.rejects(new ResumeConsentExecutor(h.deps).acceptAll({limit:1,expectedContactRef}),/绑定不一致/)
+ assert.equal(h.counts().clicks,1)
+})
+
+test('unchanged historical acceptance notice cannot confirm a new request', async()=>{
+ let phase=0,clicks=0
+ const oldNotice=text('已同意接收附件简历',700,700,200,25)
+ const executor=new ResumeConsentExecutor({snapshot:async()=>actionSnapshot({extra:phase===0?[request,oldNotice]:phase===1?[request,prompt,agree,oldNotice]:[oldNotice]}),
+ click:async()=>{phase++;clicks++},sleep:async()=>{}})
+ await assert.rejects(executor.acceptAll({limit:1}),/无法确认/)
+ assert.equal(clicks,2);assert.equal(executor.state.businessEffect.status,'unknown')
+})
+
+const historicalPrompt=text(MARKER,695,342,168,36),historicalAgree=text('同意',805,415,26,15)
+
+function historicalCardHarness(opts:{keepProcessingBar?:boolean;oldPreviewOnly?:boolean;messageCardOnly?:boolean;removeMessageCard?:boolean}={}) {
+ let phase=0,clicks=0
+ const card=[historicalPrompt,historicalAgree]
+ const before=[request,...card,...(opts.messageCardOnly?[]:[prompt,agree]),...(opts.oldPreviewOnly?[preview]:[])]
+ const after=[...(opts.removeMessageCard?[]:card),...(opts.keepProcessingBar?[prompt,agree]:[]),preview]
+ const executor=new ResumeConsentExecutor({snapshot:async()=>actionSnapshot({extra:phase===0?[request]:phase===1?before:after}),
+ click:async()=>{clicks++;phase++},sleep:async()=>{}})
+ return {executor,clicks:()=>clicks}
 }
 
-test('打开会话 → 点处理条「同意」（同行配对，不点消息卡片的灰化按钮）→ 校验消失', async () => {
-  // 调用序：定位[左列1个] → 打开后[处理条+卡片诱饵] → 点完校验[无同意] → 定位[无目标] → 滚动前探测
-  const r = recorder([
-    consentSnap([listItem(1307)]),
-    consentSnap([listItem(1307), ...banner(1557), ...cardAgree(921)]),
-    consentSnap([listItem(1307)]),
-    consentSnap([]),
-    consentSnap([]),
-  ])
-  const executor = new ResumeConsentExecutor(r.deps)
-  const result = await executor.acceptAll()
-  assert.equal(result.accepted, 1)
-  // 第一次点左列会话 (549,1307)，第二次必须点处理条「同意」(1335,1557) 而不是卡片按钮 (1187,1016)
-  assert.deepEqual(r.clicks, [
-    { x: 549, y: 1307 },
-    { x: 1335, y: 1557 },
-  ])
+test('processing bar acceptance tolerates the historical grey agree remaining beside the new attachment',async()=>{
+ const h=historicalCardHarness()
+ assert.equal((await h.executor.acceptAll({limit:1})).accepted,1)
+ assert.equal(h.clicks(),2);assert.equal(h.executor.state.businessEffect.status,'confirmed')
 })
 
-test('右侧面板的同文案不算目标（x≥850 排除），只有左列才打开', async () => {
-  const r = recorder([
-    consentSnap([...banner(1557)]), // 只有右侧处理条，左列无目标
-    consentSnap([]),
-    consentSnap([]),
-  ])
-  const executor = new ResumeConsentExecutor(r.deps)
-  const result = await executor.acceptAll()
-  assert.equal(result.accepted, 0)
-  assert.equal(r.clicks.length, 0)
+test('new attachment does not confirm acceptance while the original processing bar remains',async()=>{
+ const h=historicalCardHarness({keepProcessingBar:true})
+ await assert.rejects(h.executor.acceptAll({limit:1}),/无法确认/)
+ assert.equal(h.clicks(),2);assert.equal(h.executor.state.businessEffect.status,'unknown')
 })
 
-test('加密附件同样识别', async () => {
-  const r = recorder([
-    consentSnap([listItem(1424, MARKER_ENC)]),
-    consentSnap([listItem(1424, MARKER_ENC), ...banner(1557)]),
-    consentSnap([]),
-    consentSnap([]),
-    consentSnap([]),
-  ])
-  const executor = new ResumeConsentExecutor(r.deps)
-  const result = await executor.acceptAll()
-  assert.equal(result.accepted, 1)
-  assert.deepEqual(r.clicks[0], { x: 549, y: 1424 })
+test('a historical preview cannot confirm processing bar acceptance even when the bar disappears',async()=>{
+ const h=historicalCardHarness({oldPreviewOnly:true})
+ await assert.rejects(h.executor.acceptAll({limit:1}),/无法确认/)
+ assert.equal(h.clicks(),2);assert.equal(h.executor.state.businessEffect.status,'unknown')
 })
 
-test('打开会话后找不到「同意」处理条 → fail-loud 停止，不再处理下一个', async () => {
-  const r = recorder([
-    consentSnap([listItem(1307), listItem(1658, MARKER_ENC)]),
-    consentSnap([listItem(1307), listItem(1658, MARKER_ENC)]), // 打开后无处理条
-    consentSnap([listItem(1307), listItem(1658, MARKER_ENC)]), // 重试仍无
-  ])
-  const executor = new ResumeConsentExecutor(r.deps)
-  await assert.rejects(executor.acceptAll(), (e: unknown) => {
-    assert.ok(e instanceof ConsentError)
-    assert.match(e.message, /未找到「同意」处理条/)
-    return true
-  })
-  assert.equal(r.clicks.length, 1) // 只打开了会话，没乱点
+test('message card fallback still requires its own agree control to disappear',async()=>{
+ const h=historicalCardHarness({messageCardOnly:true})
+ await assert.rejects(h.executor.acceptAll({limit:1}),/无法确认/)
+ assert.equal(h.clicks(),2);assert.equal(h.executor.state.businessEffect.status,'unknown')
 })
 
-test('点「同意」后按钮未消失（二次确认/被拦截）→ fail-loud', async () => {
-  const r = recorder([
-    consentSnap([listItem(1307)]),
-    consentSnap([listItem(1307), ...banner(1557)]),
-    consentSnap([listItem(1307), ...banner(1557)]), // 点完「同意」还在
-  ])
-  const executor = new ResumeConsentExecutor(r.deps)
-  await assert.rejects(executor.acceptAll(), (e: unknown) => {
-    assert.ok(e instanceof ConsentError)
-    assert.match(e.message, /未消失/)
-    return true
-  })
-  assert.equal(r.clicks.length, 2)
+test('message card fallback still accepts disappearance accompanied by a new attachment',async()=>{
+ const h=historicalCardHarness({messageCardOnly:true,removeMessageCard:true})
+ assert.equal((await h.executor.acceptAll({limit:1})).accepted,1)
+ assert.equal(h.clicks(),2);assert.equal(h.executor.state.businessEffect.status,'confirmed')
 })
 
-test('--limit 限制处理数量（reachedEnd=false）', async () => {
-  const r = recorder([
-    consentSnap([listItem(1307), listItem(1658, MARKER_ENC)]),
-    consentSnap([listItem(1307), listItem(1658, MARKER_ENC), ...banner(1557)]),
-    consentSnap([listItem(1658, MARKER_ENC)]), // 第 1 个处理完，剩 1 个
-  ])
-  const executor = new ResumeConsentExecutor(r.deps)
-  const result = await executor.acceptAll({ limit: 1 })
-  assert.equal(result.accepted, 1)
-  assert.equal(result.reachedEnd, false)
+test('PDF preview readiness comes from its associated visible canvas without any section text',()=>{
+ const snap=pdfPreviewSnapshot()
+ snap.strings=snap.strings.map(value=>value==='个人优势'||value==='工作经历'?'背景标签':value)
+ assert.equal(attachmentPreviewState(snap),'ready')
 })
 
-test('可见处理完自动滚动左列：签名变化继续，签名不变（含一次重试）到底', async () => {
-  // 调用序：定位 → 打开 → 校验 → 定位(空) → 滚动前 → 滚动后(签名变，出现新目标)
-  //   → 定位 → 打开 → 校验 → 定位(空) → 滚动前 → 滚动后(不变) → 滚动前 → 滚动后(不变)=到底
-  const r = recorder([
-    consentSnap([listItem(1307)]), // 定位：1 个目标
-    consentSnap([listItem(1307), ...banner(1557)]),
-    consentSnap([]), // 点完校验：同意消失
-    consentSnap([]), // 定位：无目标 → 滚动
-    consentSnap([]), // 滚动前
-    consentSnap([listItem(300)]), // 滚动后：签名变化（出现新目标）→ 回内层
-    consentSnap([listItem(300)]), // 定位：找到新目标
-    consentSnap([listItem(300), ...banner(1557)]), // 打开后
-    consentSnap([]), // 点完校验
-    consentSnap([]), // 定位：无目标 → 滚动
-    consentSnap([]), // 滚动前
-    consentSnap([]), // 滚动后签名不变（重试 1）
-    consentSnap([]), // 滚动前
-    consentSnap([]), // 滚动后签名不变 → 到底
-  ])
-  const scrolls: number[] = []
-  const executor = new ResumeConsentExecutor({
-    ...r.deps,
-    scroll: async (d) => {
-      scrolls.push(d)
-    },
-  })
-  const result = await executor.acceptAll()
-  assert.equal(result.accepted, 2)
-  assert.equal(result.reachedEnd, true)
-  assert.equal(scrolls.length, 3)
+test('preview sections are useful only inside the visible attachment document',()=>{
+ assert.equal(attachmentPreviewState(pdfPreviewSnapshot({sections:true})),'ready')
+ assert.equal(attachmentPreviewState(pdfPreviewSnapshot({loading:true})),'loading')
+ assert.equal(attachmentPreviewState(actionSnapshot({extra:[text('个人优势',700,400),text('工作经历',700,450)]})),'closed')
 })
 
-/** 右侧附件卡片「点击预览附件简历」按钮 */
-const previewBtn = (y: number): Item => ({ text: '点击预览附件简历', bounds: [1050, y - 16, 168, 32] }) // cx=1134
-/** 预览弹层打开时的标志文案（弹层里成组出现） */
-const modalMarkers = (): Item[] => [
-  { text: '个人优势', bounds: [500, 300, 100, 30] },
-  { text: '工作经历', bounds: [500, 550, 100, 30] },
-]
-
-test('preview 全流程：同意后点最下方预览按钮 → 弹层打开校验 → Escape 关闭', async () => {
-  const escapes: number[] = []
-  // 调用序：定位 → 打开(处理条) → 校验(同意消失) → 找预览按钮(含旧附件诱饵) → 点击前快照 → 弹层开 → Escape 后关
-  const r = recorder([
-    consentSnap([listItem(1307)]),
-    consentSnap([listItem(1307), ...banner(1557)]),
-    consentSnap([]),
-    consentSnap([previewBtn(800), previewBtn(1286)]), // 历史旧附件 + 最新送达（必须点最下方）
-    consentSnap([previewBtn(800), previewBtn(1286)]),
-    consentSnap([...modalMarkers()]), // 弹层打开
-    consentSnap([]), // Escape 后关闭
-  ])
-  const executor = new ResumeConsentExecutor({
-    ...r.deps,
-    pressEscape: async () => {
-      escapes.push(1)
-    },
-  })
-  const result = await executor.acceptAll({ preview: true })
-  assert.equal(result.accepted, 1)
-  assert.equal(result.previewed, 1)
-  assert.deepEqual(r.clicks, [
-    { x: 549, y: 1307 }, // 打开会话
-    { x: 1335, y: 1557 }, // 处理条「同意」
-    { x: 1134, y: 1286 }, // 最下方的预览按钮（不是 800 的旧附件）
-  ])
-  assert.equal(escapes.length, 1)
+test('hidden and offscreen attachment frames cannot expose their canvas as a ready preview',()=>{
+ assert.equal(attachmentPreviewState(pdfPreviewSnapshot({hidden:true})),'closed')
+ assert.equal(attachmentPreviewState(pdfPreviewSnapshot({offscreen:true})),'closed')
 })
 
-test('同意后等不到预览按钮（附件未送达）→ fail-loud', async () => {
-  const r = recorder([
-    consentSnap([listItem(1307)]),
-    consentSnap([listItem(1307), ...banner(1557)]),
-    consentSnap([]),
-    consentSnap([]), // 3 次都找不到预览按钮
-    consentSnap([]),
-    consentSnap([]),
-  ])
-  const executor = new ResumeConsentExecutor({ ...r.deps, pressEscape: async () => {} })
-  await assert.rejects(executor.acceptAll({ preview: true }), (e: unknown) => {
-    assert.ok(e instanceof ConsentError)
-    assert.match(e.message, /未出现「点击预览附件简历」/)
-    return true
-  })
+test('ordinary recommendation frames and unattached canvases cannot prove attachment readiness',()=>{
+ assert.equal(attachmentPreviewState(pdfPreviewSnapshot({ordinaryFrame:true})),'closed')
+ assert.equal(attachmentPreviewState(pdfPreviewSnapshot({unboundCanvas:true})),'loading')
+ assert.equal(attachmentPreviewState(pdfPreviewSnapshot({loading:true,backgroundCanvas:true})),'loading')
+ assert.equal(attachmentPreviewState(pdfPreviewSnapshot({canvasOutside:true})),'loading')
 })
 
-test('点预览后弹层未打开 → fail-loud；Escape 后未关闭 → fail-loud', async () => {
-  // 弹层未打开
-  const r1 = recorder([
-    consentSnap([listItem(1307)]),
-    consentSnap([listItem(1307), ...banner(1557)]),
-    consentSnap([]),
-    consentSnap([previewBtn(1286)]),
-    consentSnap([previewBtn(1286)]),
-    consentSnap([]), // 点完弹层标志 <2
-  ])
-  const executor1 = new ResumeConsentExecutor({ ...r1.deps, pressEscape: async () => {} })
-  await assert.rejects(executor1.acceptAll({ preview: true }), /弹层未打开/)
-
-  // Escape 后未关闭
-  const r2 = recorder([
-    consentSnap([listItem(1307)]),
-    consentSnap([listItem(1307), ...banner(1557)]),
-    consentSnap([]),
-    consentSnap([previewBtn(1286)]),
-    consentSnap([previewBtn(1286)]),
-    consentSnap([...modalMarkers()]),
-    consentSnap([...modalMarkers()]), // Escape 后标志仍 ≥2
-  ])
-  const executor2 = new ResumeConsentExecutor({ ...r2.deps, pressEscape: async () => {} })
-  await assert.rejects(executor2.acceptAll({ preview: true }), /未关闭/)
+test('a loading PDF only polls for its canvas, then Escape verifies the frame closes',async()=>{
+ const h=harness({loadingPolls:2}),executor=new ResumeConsentExecutor(h.deps)
+ const result=await executor.acceptAll({limit:1,preview:true})
+ assert.equal(result.previewed,1);assert.deepEqual(h.counts(),{clicks:3,escapes:1})
+ assert.equal(executor.state.execution.ordinaryRetriesUsed,0)
 })
 
-test('页面没有目标会话 → 0 人到底，不报错', async () => {
-  const r = recorder([consentSnap([])])
-  const executor = new ResumeConsentExecutor(r.deps)
-  const result = await executor.acceptAll()
-  assert.equal(result.accepted, 0)
-  assert.equal(result.reachedEnd, true)
-  assert.equal(r.clicks.length, 0)
+test('a PDF that remains loading is never clicked again and preserves confirmed acceptance',async()=>{
+ const h=harness({loadingForever:true}),executor=new ResumeConsentExecutor(h.deps)
+ await assert.rejects(executor.acceptAll({limit:1,preview:true}),/画布已加载/)
+ assert.deepEqual(h.counts(),{clicks:3,escapes:0});assert.equal(executor.state.businessEffect.status,'confirmed')
+ assert.equal(executor.state.execution.ordinaryRetriesUsed,0)
+})
+
+test('Escape that leaves the actual PDF frame open is not reported as closed',async()=>{
+ const h=harness({keepPreviewAfterEscape:true}),executor=new ResumeConsentExecutor(h.deps)
+ await assert.rejects(executor.acceptAll({limit:1,preview:true}),/Escape 后未关闭/)
+ assert.deepEqual(h.counts(),{clicks:3,escapes:2});assert.equal(executor.state.businessEffect.status,'confirmed')
 })

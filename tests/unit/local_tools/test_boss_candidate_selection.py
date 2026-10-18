@@ -22,7 +22,8 @@ def test_tool_registration_and_strict_schema():
         assert tool.name in LOCAL_PROXY_TOOL_NAMES
         assert tool.name in catalog.TRUSTED_PROVIDERS['boss-recruiting']['tools']
         assert type(tool).execute is LocalToolProxyTool.execute
-        assert tool.heal_eligible is False
+        assert tool.heal_eligible is True
+        assert tool.visual_recovery_policy == ('readonly' if tool_class is BossLookupCandidatesTool else 'observe_only')
     assert BossGreetSelectedTool.InputModel(name='张测试', candidate_ref=REF).candidate_ref == REF
     for args in [{'name': '张测试'}, {'name': '张测试', 'candidate_ref': REF + '\n'},
                  {'name': ['张测试'], 'candidate_ref': REF}, {'name': ' ', 'candidate_ref': REF},
@@ -62,17 +63,37 @@ async def test_invalid_selected_never_selects_device_or_creates_invocation(monke
     (BossGreetSelectedTool, {'name': '张测试', 'candidate_ref': REF}),
 ])
 @pytest.mark.asyncio
-async def test_exact_arguments_forwarded_without_automatic_healing(monkeypatch, tool_class, args):
+async def test_exact_reference_and_arguments_survive_shared_recovery_without_legacy_healing(monkeypatch, tool_class, args):
+    from src.config.settings import settings
+    monkeypatch.setattr(settings.boss_tool_billing, 'overlay_heal_enabled', True)
     tool = tool_class()
     monkeypatch.setattr(tool, '_find_ready_device', AsyncMock(return_value=({'id': 'device'}, None)))
     monkeypatch.setattr(tool, '_tool_credit_price', lambda: 0)
-    dispatch = AsyncMock(return_value={'success': False, 'code': 'UI_CHANGED', 'effect': 'none'})
+    external = tool_class is BossGreetSelectedTool
+    facts = {'schema_version': 1, 'operation_class': 'external_effect' if external else 'readonly',
+        'operation': {'name': tool.name, 'goal': '原始精确候选意图', 'expected': '原精确卡片的稳定后验',
+            'result_kind': 'business_result' if external else 'page_state'},
+        'execution': {'stage': 'prepared', 'input_status': 'not_started', 'attempts_used': 1, 'ordinary_retries_used': 0},
+        'verification': {'status': 'inconclusive', 'evidence': ['准备页面受阻，未提交']}}
+    if external:
+        facts['business_effect'] = {'status': 'not_started', 'completed_count': 0}
+    source = {'success': False, 'code': 'UI_CHANGED', 'effect': 'none', 'invocation_id': 'original-reference-call',
+        'data': {'operation_recovery': facts}}
+    obstructed = {'success': True, 'data': {'recovery_ref': 'stored-close', 'visual': {
+        'http_status': 200, 'state': 'completed', 'diagnosis': {'obstruction': 'present',
+            'goal_state': 'not_satisfied', 'proposed_action': {'kind': 'dismiss_click'}}}}}
+    restored = {'success': True, 'data': {'visual': {'http_status': 200, 'state': 'completed',
+        'diagnosis': {'obstruction': 'absent', 'goal_state': 'satisfied', 'proposed_action': None}}}}
+    dispatch = AsyncMock(side_effect=[source, obstructed, {'success': True}, restored,
+        {'success': True, 'data': {'original_target_verified': True}}])
     heal = AsyncMock()
-    monkeypatch.setattr(tool, '_dispatch_and_wait', dispatch)
-    monkeypatch.setattr(tool, '_heal_overlay', heal)
+    monkeypatch.setattr(LocalToolProxyTool, '_dispatch_and_wait', dispatch)
+    monkeypatch.setattr(LocalToolProxyTool, '_heal_overlay', heal)
     result = await tool.execute(**args, _trusted_tenant_id='tenant', _trusted_user_id='user')
-    assert result['code'] == 'UI_CHANGED'
-    assert dispatch.call_args.args[4] == args
+    assert result['success'] and result['data']['original_target_verified']
+    assert dispatch.await_args_list[0].args[4] == args
+    assert dispatch.await_args_list[-1].args[4] == args
+    assert dispatch.await_args_list[1].args[4]['visual_context']['operation']['name'] == tool.name
     heal.assert_not_called()
 
 

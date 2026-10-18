@@ -380,9 +380,11 @@ boss_tool_billing:
   # 识别成功且入库成功后按份扣（台账 tool_name=boss_resume_recognition）；设 0 停扣
   resume_recognition_price: 1.0
   # 弹层自愈：工具失败（疑似弹层遮挡）时云端自动「识别弹层→关闭→重试一次」，
-  # 用了 LLM 故费用高于单次调用；仅在自愈真正救回操作（重试成功）时收取
+  # 旧文本链专项费保留兼容；新视觉链仅API按实际用量×20，不叠专项费
   overlay_heal_enabled: true
   overlay_heal_price: 2.0
+  # 单步关闭后仍有遮挡/旧观察失效时重新诊断；不叠加普通重试或旧自愈费
+  visual_recovery_max_steps: 3
 
 # 简历云端 VL 识别（2026-09-17 去 OCR 化）：拼接长图切片后发多模态模型转写
 # POST /api/local-tools/runtime/resume/evaluate（设备 token 鉴权），识别成功按份扣简历识别费
@@ -549,3 +551,8 @@ anti_abuse:
           period: day
           warn_threshold: 400
           hard_threshold: 800
+# BOSS 单图视觉诊断实验入口；新调用实际模型 token 成本 ×20，由后端预约时冻结；历史回执及在途费率保留。
+# 不包含恢复编排、桌面动作或最低积分，客户端不能覆盖模型与费率。
+boss_visual:
+  model: zhipu/GLM-5.3-Flash
+  timeout_seconds: 120

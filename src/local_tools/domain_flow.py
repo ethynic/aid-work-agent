@@ -72,6 +72,7 @@ async def execute_domain(proxy, operation, kwargs):
 async def resume_result(proxy, operation, kwargs, *, batch):
     from .overlay_flow import run_base
     from .resume_flow import process_item
+    from .boss_visual_recovery import public_recovery_metadata
     from src.tools.context import current_tool_execution_context
     from .resume_continuation import (prepare_next, batch_metadata, duplicate_failure,
         filter_terminal_result, filter_stop_message)
@@ -81,11 +82,11 @@ async def resume_result(proxy, operation, kwargs, *, batch):
             return failure
     original = await run_base(proxy, operation, kwargs)
     if not original.get('success'):
-        return {**original, 'data': original.get('data') if original.get('code') == 'STALE_CONTINUATION' else None}
+        return {**original, 'data': original.get('data') if original.get('code') == 'STALE_CONTINUATION' else public_recovery_metadata(original) or None}
     ref = await operation.owner.saved_phase(branch=operation.branch, ordinal=operation.ordinal)
     context = current_tool_execution_context()
     data = original.get('data') or {}
-    metadata = batch_metadata(original, kwargs) if batch else {}
+    metadata = batch_metadata(original, kwargs) if batch else public_recovery_metadata(original)
     payloads = data.get('resumes') if batch and isinstance(data, dict) else [data]
     if batch:
         terminal = filter_terminal_result(original, metadata)
@@ -118,7 +119,7 @@ async def resume_result(proxy, operation, kwargs, *, batch):
             item_ordinal=ordinal, payload=payload)
         if not outcome['success']:
             if not batch:
-                return {**original, **outcome, 'data': None}
+                return {**original, **outcome, 'data': metadata or None}
             failures.append({'name': payload.get('candidate_name') if isinstance(payload, dict) else None,
                 'error': outcome['message']})
             continue
@@ -145,7 +146,7 @@ async def resume_result(proxy, operation, kwargs, *, batch):
     message += f" · {summary['image_count']} 张截图"
     if summary.get('warning'):
         message += '；' + summary['warning']
-    return {**original, 'data': summary, 'message': message}
+    return {**original, 'data': {**metadata, **summary}, 'message': message}
 
 
 async def notify_result(proxy,operation,kwargs):

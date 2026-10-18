@@ -1,221 +1,95 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { InterviewDemoExecutor, InterviewDemoError } from '../src/main/boss/InterviewDemoExecutor.js'
-import type { DomSnapshot, ClickPoint } from '../src/main/boss/domSnapshot.js'
-
-/** 构造 snapshot：根节点视口 1917x1905，items 为任意文本及其 bounds（相同文案共享 string 下标） */
-function snap(items: Array<{ text: string; bounds: [number, number, number, number] }>): DomSnapshot {
-  const strings: string[] = ['']
-  const idx: number[] = [0]
-  const values: number[] = [0]
-  const bounds: [number, number, number, number][] = [[0, 0, 1917, 1905]]
-  for (const item of items) {
-    let si = strings.indexOf(item.text)
-    if (si < 0) {
-      strings.push(item.text)
-      si = strings.length - 1
-    }
-    idx.push(idx.length)
-    values.push(si)
-    bounds.push(item.bounds)
+import { InterviewDemoExecutor } from '../src/main/boss/InterviewDemoExecutor.js'
+import { WinClickError } from '../src/main/input/WinMouseClicker.js'
+import { indexedValues, type DomSnapshot } from '../src/main/boss/domSnapshot.js'
+import { actionSnapshot, text } from './chatActionFixture.js'
+const REMARK='请带好简历',NOW=Date.parse('2026-10-18T12:00:00+08:00'),DATE='2026-10-19'
+function harness(opts:{badRemark?:boolean;badDate?:boolean;cancelBlocked?:boolean;blockedOnce?:boolean;crossMonth?:boolean;denseValues?:boolean}={}) {
+ let phase=0,typed='',date='',cancelClicks=0,typeCalls=0,clickCalls=0
+ const inputs:Array<{x:number;y:number}>=[]
+ const dateValue=opts.crossMonth?'2026-11-01':DATE
+ const snapshot=async():Promise<DomSnapshot>=>{
+  const extra=[text('约面试',1100,1000,70,30)]
+  if(phase>0&&phase<5)extra.push(text('线下面试邀请',600,500,180,30),text('/140',1150,900,40,20),text(String(typed.length),1110,900,30,20),text('面试时间',600,1000,80,20),text('取消',1050,1150,80,30))
+  if(phase===3)extra.push(text(opts.crossMonth?'1':'19',900,1100,20,20))
+  const s=actionSnapshot({extra})
+  if(phase>0&&phase<5){
+   // Snapshot properties are distinct from strings: a stale unrelated date cannot satisfy this.
+   const doc=s.documents[0]!,nodes=doc.nodes as typeof doc.nodes&{inputValue:{index:number[];value:number[]}|number[];textValue:{index:number[];value:number[]}|number[]}
+   const values=nodes.nodeValue as number[],tags=nodes.nodeName as number[],parents=nodes.parentIndex as number[],attrs=nodes.attributes as number[][]
+   const str=(value:string)=>{let i=s.strings.indexOf(value);if(i<0){i=s.strings.length;s.strings.push(value)}return i}
+   nodes.inputValue=opts.denseValues?Array(values.length).fill(-1):{index:[],value:[]}
+   nodes.textValue=opts.denseValues?Array(values.length).fill(-1):{index:[],value:[]}
+   // TEXTAREA uses textValue in the real snapshot. The adjacent start-time INPUT must not make the date ambiguous.
+   for(const [tag,value,b] of [['TEXTAREA',typed,[650,850,400,70]],['INPUT',date,[750,990,300,30]],['INPUT','10:00',[1062,990,180,30]]] as const){
+    const ni=values.length;values.push(-1);tags.push(str(tag));parents.push(0);attrs.push([]);doc.layout.nodeIndex.push(ni);doc.layout.bounds.push([...b])
+    for(const field of [nodes.textValue,nodes.inputValue])if(Array.isArray(field))field.push(-1)
+    const field=tag==='TEXTAREA'?nodes.textValue:nodes.inputValue
+    if(Array.isArray(field))field[ni]=str(value);else{field.index.push(ni);field.value.push(str(value))}
+   }
   }
-  return {
-    strings,
-    documents: [
-      {
-        nodes: {
-          nodeValue: { index: idx, value: values },
-          contentDocumentIndex: { index: [], value: [] },
-        },
-        layout: { nodeIndex: idx, bounds },
-        scrollOffsetY: 0,
-      },
-    ],
-  }
+  return s
+ }
+ const deps={snapshot,click:async(p:{x:number;y:number})=>{
+  inputs.push(p);clickCalls++
+  if((phase===0||phase===5)&&p.y<1100){phase=1;return}
+  if(p.y>1140){cancelClicks++;if(!opts.cancelBlocked)phase=5;return}
+  if(phase===2){phase=3;return}
+  if(phase===3&&p.y>1100){phase=4;date=opts.badDate?'2026-10-20':dateValue;return}
+ },clickAndType:async(_p:unknown,_v:unknown,value:string)=>{typeCalls++;typed=opts.badRemark?'错误备注':value;phase=2},sleep:async()=>{},now:()=>opts.crossMonth?Date.parse('2026-10-31T12:00:00+08:00'):NOW}
+ return {deps,inputs,counts:()=>({cancelClicks,typeCalls,clickCalls}),setPhase:(n:number)=>{phase=n},setRemark:(s:string)=>{typed=s}}
 }
-
-function snapshotQueue(snaps: DomSnapshot[]): () => Promise<DomSnapshot> {
-  let i = 0
-  return async () => snaps[Math.min(i++, snaps.length - 1)]!
-}
-
-function recorder() {
-  const clicks: ClickPoint[] = []
-  const clickAndTypes: Array<{ point: ClickPoint; text: string }> = []
-  return {
-    clicks,
-    clickAndTypes,
-    click: async (p: ClickPoint) => {
-      clicks.push(p)
-    },
-    clickAndType: async (p: ClickPoint, _viewport: { width: number; height: number }, text: string) => {
-      clickAndTypes.push({ point: p, text })
-    },
-    sleep: async () => {},
-  }
-}
-
-// 真机校准坐标（2026-08-06）
-const INVITE: [number, number, number, number] = [1468, 1597, 76, 36] // 约面试 (1506,1615)
-const TITLE: [number, number, number, number] = [580, 595, 160, 30] // 线下面试邀请 (660,610)
-const COUNTER: [number, number, number, number] = [1297, 988, 35, 20] // /140 (1314.5,998)
-const TIME_LABEL: [number, number, number, number] = [570, 1072, 84, 23] // 面试时间 (612,1083.5)
-const CANCEL: [number, number, number, number] = [1121, 1272, 84, 36] // 取消 (1163,1290)
-
-const REMARK = '请带好身份证和简历准时面试' // 13 字
-const COUNT_NODE: [number, number, number, number] = [1273, 988, 24, 20] // 「13」计数 (1285,998)，计数器左侧同行
-
-function dateStr(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
-/** 明天日期单元格 bounds：放在日历区域内（标签 +60~+540 / +40~+520） */
-function dayCell(day: number): { text: string; bounds: [number, number, number, number] } {
-  return { text: String(day), bounds: [996, 1328, 20, 19] } // (1006,1337.5)
-}
-
-/** 完整 happy path 的 6 帧快照 */
-function happySnaps(tomorrow: Date): DomSnapshot[] {
-  const dateText = dateStr(tomorrow)
-  return [
-    snap([{ text: '约面试', bounds: INVITE }]), // s0 前置+定位
-    snap([
-      { text: '线下面试邀请', bounds: TITLE },
-      { text: '/140', bounds: COUNTER },
-    ]), // s1 表单已开+计数器
-    snap([
-      { text: '线下面试邀请', bounds: TITLE },
-      { text: '/140', bounds: COUNTER },
-      { text: String(REMARK.length), bounds: COUNT_NODE },
-      { text: '面试时间', bounds: TIME_LABEL },
-    ]), // s2 字数校验+时间标签
-    snap([
-      { text: '线下面试邀请', bounds: TITLE },
-      { text: '面试时间', bounds: TIME_LABEL },
-      dayCell(tomorrow.getDate()),
-    ]), // s3 日历面板
-    snap([
-      { text: '线下面试邀请', bounds: TITLE },
-      { text: dateText, bounds: [700, 1072, 100, 20] },
-      { text: '取消', bounds: CANCEL },
-    ]), // s4 日期已填+取消
-    snap([{ text: '约面试', bounds: INVITE }]), // s5 表单已关
-  ]
-}
-
-test('完整流程：开表单→逐字填备注→选明天→取消关闭，绝不点发送', async () => {
-  // 固定 now 使明天为月中 11 号：真实时钟落在月末时（明天=1号）会走跨月路径，
-  // 该路径已由下一条用例单独覆盖，本用例只验证常规选日
-  const tomorrow = new Date('2026-09-11T12:00:00')
-  const r = recorder()
-  const executor = new InterviewDemoExecutor({
-    snapshot: snapshotQueue(happySnaps(tomorrow)),
-    ...r,
-    now: () => new Date('2026-09-10T12:00:00').getTime(),
-  })
-  const result = await executor.run()
-  assert.deepEqual(result, { remark: REMARK, date: dateStr(tomorrow) })
-  // 逐字输入 13 字
-  assert.equal(r.clickAndTypes.length === 1 && r.clickAndTypes[0]!.text, REMARK)
-  // 点击序列：约面试 → 日期下拉 → 日期单元格 → 取消（无发送）；备注聚焦+输入走 clickAndType
-  const clicks = r.clicks.map((p) => `${Math.round(p.x)},${Math.round(p.y)}`)
-  assert.deepEqual(clicks, ['1506,1615', '842,1084', '1006,1338', '1163,1290'])
+test('demo verifies actual remark and date values, cancels and never clicks send',async()=>{
+ const h=harness(),executor=new InterviewDemoExecutor(h.deps),r=await executor.run({remark:REMARK})
+ assert.deepEqual(r,{remark:REMARK,date:DATE});assert.equal(h.counts().cancelClicks,1);assert.equal(executor.state.execution.verification.status,'met');assert.equal(executor.state.businessEffect.completed_count,0)
+ assert.ok(h.inputs.every(p=>p.y!==1233))
 })
-
-test('跨月：明天是 1 号时先点下月箭头再选「1」', async () => {
-  // 2026-08-31 的明天是 2026-09-01
-  const r = recorder()
-  const executor = new InterviewDemoExecutor({
-    snapshot: snapshotQueue(happySnaps(new Date('2026-09-01T12:00:00'))),
-    ...r,
-    now: () => new Date('2026-08-31T12:00:00').getTime(),
-  })
-  const result = await executor.run()
-  assert.equal(result.date, '2026-09-01')
-  const clicks = r.clicks.map((p) => `${Math.round(p.x)},${Math.round(p.y)}`)
-  // 第 3 个点是下月箭头（标签 +455/+85），第 4 个是日期「1」（聚焦点已并入 clickAndType）
-  assert.equal(clicks[2], '1067,1169')
-  assert.equal(clicks[3], '1006,1338')
+test('cross-month date uses fresh next-month snapshot and verifies first day actual value',async()=>{
+ const h=harness({crossMonth:true}),r=await new InterviewDemoExecutor(h.deps).run({remark:REMARK});assert.equal(r.date,'2026-11-01')
 })
-
-test('表单已打开（残留状态）：报错不动作', async () => {
-  const r = recorder()
-  const executor = new InterviewDemoExecutor({
-    snapshot: snapshotQueue([snap([{ text: '线下面试邀请', bounds: TITLE }])]),
-    ...r,
-  })
-  await assert.rejects(executor.run(), (e: Error) => {
-    assert.ok(e instanceof InterviewDemoError)
-    assert.match(e.message, /已处于打开状态/)
-    return true
-  })
-  assert.equal(r.clicks.length, 0)
-  assert.equal(r.clickAndTypes.length, 0)
+test('dense textValue and inputValue verify only the field containing the actual input point',async()=>{
+ const h=harness({denseValues:true}),r=await new InterviewDemoExecutor(h.deps).run({remark:REMARK})
+ assert.deepEqual(r,{remark:REMARK,date:DATE});assert.equal(h.counts().typeCalls,1)
 })
-
-test('找不到「约面试」（未打开会话）：报错不动作', async () => {
-  const r = recorder()
-  const executor = new InterviewDemoExecutor({ snapshot: snapshotQueue([snap([])]), ...r })
-  await assert.rejects(executor.run(), /未找到唯一的「约面试」/)
-  assert.equal(r.clicks.length, 0)
+test('normal cancel with persistent form is retried exactly once, then remains a definite failure',async()=>{
+ const h=harness({cancelBlocked:true}),executor=new InterviewDemoExecutor(h.deps)
+ await assert.rejects(executor.run({remark:REMARK}),/仍打开/);assert.equal(h.counts().cancelClicks,2);assert.equal(executor.state.execution.ordinaryRetriesUsed,1)
 })
-
-test('点击约面试后表单未打开：报错（点击可能被拦截）', async () => {
-  const r = recorder()
-  const executor = new InterviewDemoExecutor({
-    snapshot: snapshotQueue([snap([{ text: '约面试', bounds: INVITE }]), snap([])]),
-    ...r,
-  })
-  await assert.rejects(executor.run(), /表单未打开/)
-  assert.equal(r.clicks.length, 1)
-  assert.equal(r.clickAndTypes.length, 0)
+test('direct input error has zero ordinary retries and never clicks send',async()=>{
+ const h=harness();h.deps.clickAndType=async()=>{throw new WinClickError('guard refused',2)}
+ const executor=new InterviewDemoExecutor(h.deps);await assert.rejects(executor.run({remark:REMARK}));assert.equal(executor.state.execution.ordinaryRetriesUsed,0);assert.equal(h.counts().cancelClicks,0)
 })
-
-test('逐字输入后字数不符：报错（输入未完整落地）', async () => {
-  const r = recorder()
-  const snaps = happySnaps(new Date(Date.now() + 86400000))
-  // s2 里的计数改成「9」（如丢了 4 个字）
-  snaps[2] = snap([
-    { text: '线下面试邀请', bounds: TITLE },
-    { text: '/140', bounds: COUNTER },
-    { text: '9', bounds: COUNT_NODE },
-    { text: '面试时间', bounds: TIME_LABEL },
-  ])
-  const executor = new InterviewDemoExecutor({ snapshot: snapshotQueue(snaps), ...r })
-  await assert.rejects(executor.run(), /输入未完整落地/)
-  assert.equal(r.clickAndTypes.length === 1 && r.clickAndTypes[0]!.text, REMARK) // 字都敲了但页面没接收全
-  assert.equal(r.clicks.length, 1) // 约面试；聚焦+输入走 clickAndType，不继续点日期
+test('same-length incorrect remark cannot satisfy the counter; one retry remains bounded',async()=>{
+ const h=harness({badRemark:true}),executor=new InterviewDemoExecutor(h.deps)
+ await assert.rejects(executor.run({remark:'正确备注'}),/备注文本/);assert.equal(h.counts().typeCalls,2);assert.equal(executor.state.execution.ordinaryRetriesUsed,1)
 })
-
-test('日历里找不到日期单元格：报错且绝不点发送', async () => {
-  const tomorrow = new Date(Date.now() + 86400000)
-  const r = recorder()
-  const snaps = happySnaps(tomorrow)
-  snaps[3] = snap([
-    { text: '线下面试邀请', bounds: TITLE },
-    { text: '面试时间', bounds: TIME_LABEL },
-  ]) // 日历没开/无该日期
-  const executor = new InterviewDemoExecutor({ snapshot: snapshotQueue(snaps), ...r })
-  await assert.rejects(executor.run(), /未找到唯一日期/)
+test('unrelated full strings date does not substitute for real input field value',async()=>{
+ const h=harness({badDate:true}),snapshot=h.deps.snapshot
+ h.deps.snapshot=async()=>{const s=await snapshot();s.strings.push(DATE);return s}
+ await assert.rejects(new InterviewDemoExecutor(h.deps).run({remark:REMARK}),/日期字段/)
 })
-
-test('点完日期但日期框未填入：报错', async () => {
-  const tomorrow = new Date(Date.now() + 86400000)
-  const r = recorder()
-  const snaps = happySnaps(tomorrow)
-  snaps[4] = snap([
-    { text: '线下面试邀请', bounds: TITLE },
-    { text: '取消', bounds: CANCEL },
-  ]) // 无日期文本
-  const executor = new InterviewDemoExecutor({ snapshot: snapshotQueue(snaps), ...r })
-  await assert.rejects(executor.run(), /日期未选中/)
+test('unreadable actual field value is inconclusive and not retried as a definite mismatch',async()=>{
+ const h=harness(),snapshot=h.deps.snapshot;h.deps.snapshot=async()=>{const s=await snapshot();delete (s.documents[0]!.nodes as {textValue?:unknown}).textValue;return s}
+ const executor=new InterviewDemoExecutor(h.deps);await assert.rejects(executor.run({remark:REMARK}),/备注文本/);assert.equal(executor.state.execution.ordinaryRetriesUsed,0)
 })
-
-test('取消后表单仍未关闭：报错请人工查看', async () => {
-  const tomorrow = new Date(Date.now() + 86400000)
-  const r = recorder()
-  const snaps = happySnaps(tomorrow)
-  snaps[5] = snap([{ text: '线下面试邀请', bounds: TITLE }]) // 表单还在
-  const executor = new InterviewDemoExecutor({ snapshot: snapshotQueue(snaps), ...r })
-  await assert.rejects(executor.run(), /仍未关闭/)
+test('a matching neighboring start-time value cannot satisfy a wrong date field',async()=>{
+ const h=harness({badDate:true}),snapshot=h.deps.snapshot
+ h.deps.snapshot=async()=>{const s=await snapshot(),nodes=s.documents[0]!.nodes as typeof s.documents[0]['nodes']&{inputValue:{index:number[];value:number[]}}
+  const last=nodes.inputValue?.value.length-1
+  if(last>=0)nodes.inputValue.value[last]=s.strings.push(DATE)-1
+  return s}
+ await assert.rejects(new InterviewDemoExecutor(h.deps).run({remark:REMARK}),/日期字段/)
+})
+test('overlapping textarea fields remain ambiguous even when only one exposes a readable value',async()=>{
+ const h=harness(),snapshot=h.deps.snapshot
+ h.deps.snapshot=async()=>{const s=await snapshot(),doc=s.documents[0]!,nodes=doc.nodes
+  const ni=(nodes.nodeValue as number[]).length
+  ;(nodes.nodeValue as number[]).push(-1);(nodes.nodeName as number[]).push(s.strings.indexOf('TEXTAREA'))
+  doc.layout.nodeIndex.push(ni);doc.layout.bounds.push([650,850,400,70]);return s}
+ const executor=new InterviewDemoExecutor(h.deps)
+ await assert.rejects(executor.run({remark:REMARK}),/备注文本/);assert.equal(executor.state.execution.ordinaryRetriesUsed,0)
+})
+test('an already-open form is not silently overwritten',async()=>{
+ const h=harness();h.setPhase(1);await assert.rejects(new InterviewDemoExecutor(h.deps).run({remark:REMARK}),/已处于打开/);assert.equal(h.counts().clickCalls,0)
 })

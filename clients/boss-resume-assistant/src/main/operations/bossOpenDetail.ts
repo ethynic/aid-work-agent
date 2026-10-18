@@ -1,6 +1,6 @@
 /**
  * boss_open_detail operation：推荐牛人页按姓名找卡片 → Win32 点姓名节点打开简历详情 →
- * 校验详情画布 + 顶部区姓名==name（防打错人）。详情保持打开（供 boss_resume_detail 读取）。
+ * 校验详情画布 + 右侧打招呼/继续沟通按钮及经历概览。详情保持打开（供 boss_resume_detail 读取）。
  *
  * 默认boss_open_detail → boss_resume_detail → boss_close_detail，评分入库后等待人工审核。
  * 只有用户主动选择直接模式，合格后才启用boss_greet_detail。
@@ -20,6 +20,8 @@ import {
   type BossSessionFactory,
 } from './bossContext.js'
 import { CodedOperationError, type BossOperation, type OperationResult, type OpContext } from './types.js'
+import { CancelledError } from './types.js'
+import { pageFacts, pageFailure } from './pageOperation.js'
 
 export interface BossOpenDetailArgs {
   /** 候选人姓名（必传：与推荐列表卡片姓名 trim 精确相等） */
@@ -68,7 +70,9 @@ export function createBossOpenDetailOperation(
             sleep: (ms) => perf.time(`sleep:${ms}`, () => new Promise<void>((r) => setTimeout(r, ms))),
             step: <T>(stepName: string, fn: () => Promise<T>) => perf.time(`detail:${stepName}`, fn),
           })
-          const result = await executor.openDetail({
+          const goal = `打开候选人「${name}」的简历详情`
+          const expected = '同一目标卡片点击后，简历画布、右侧打招呼/继续沟通按钮及经历概览同时可见'
+          const open = () => executor.openDetail({
             name,
             // 滚动查找进度（2026-09-01 真机事故教训：定向找人滚动期间必须有进度事件，防用户恐慌关窗）
             onSearchProgress: (screens) => {
@@ -78,12 +82,25 @@ export function createBossOpenDetailOperation(
               })
             },
           })
+          let result: Awaited<ReturnType<typeof open>>
+          try { result = await open() }
+          catch (error) {
+            if (error instanceof CancelledError) throw error
+            let verified = executor.openDetailExecution.verification
+            try { verified = await executor.verifyOpenDetail() } catch { /* Keep unknown distinct from a negative postcondition. */ }
+            if (verified.status === 'met') result = { name }
+            else pageFailure(error, pageFacts('boss_open_detail', goal, expected,
+              { ...executor.openDetailExecution, verification: verified }, name))
+          }
           return {
             message: result.stopReason ? (result.stopReason === 'no_matching_candidates'
               ? '当前筛选条件没有符合的牛人，已停止，未打开下方推荐卡片'
               : '目标属于下方推荐内容或已到达推荐边界，已停止，未打开推荐卡片')
               : `已打开「${result.name}」的简历详情（保持打开，供 boss_resume_detail 读取）`,
-            data: { opened: !result.stopReason, name: result.name, ...(result.stopReason ? { stop_reason: result.stopReason } : {}) },
+            data: { opened: !result.stopReason, name: result.name,
+              operation_recovery: pageFacts('boss_open_detail', goal, expected, executor.openDetailExecution, name),
+              page_operation: pageFacts('boss_open_detail', goal, expected, executor.openDetailExecution, name),
+              ...(result.stopReason ? { stop_reason: result.stopReason } : {}) },
             effect: 'none',
           }
         },

@@ -34,7 +34,8 @@ import {
   indexedValues,
 } from './domSnapshot.js'
 import { viewportOf } from './FilterSetter.js'
-import { CancelledError } from '../operations/types.js'
+import { CancelledError, CodedOperationError } from '../operations/types.js'
+import { PagePostconditionError } from '../operations/pageOperation.js'
 
 export class JobSwitchError extends Error {
   constructor(message: string) {
@@ -106,7 +107,8 @@ export class JobSwitcher {
   async listJobs(): Promise<JobItem[]> {
     if (this.deps.signal?.aborted) throw new CancelledError()
     const snap = await this.openJobDropdown()
-    const all = this.parseJobItems(snap)
+    const box = this.locateJobBox(snap)
+    const all = this.parseJobItems(snap).filter((item) => item.nodeIndex !== box.nodeIndex)
     // 按 name 去重（同名保留首个有 bounds 的）
     const seen = new Set<string>()
     const items = all.filter((it) => {
@@ -115,12 +117,31 @@ export class JobSwitcher {
       return true
     })
     if (items.length === 0) {
-      throw new JobSwitchError(
-        '打开职位下拉后未解析到任何职位项（项无 layout bounds 可能是等待不足，或下拉未打开/页面结构已变），请人工查看',
-      )
+      throw new PagePostconditionError('打开职位下拉后未解析到任何职位项', {
+        status: box.point ? 'unmet' : 'inconclusive', evidence: [box.point ? '当前职位框仍可读，但展开后没有任何非trigger职位项' : '职位框与列表均不可读'],
+      })
     }
     return items
   }
+
+  private dropdownClosure(snap: DomSnapshot): { status: 'met' | 'unmet' | 'inconclusive'; evidence: string[] } {
+    const box = this.locateJobBox(snap)
+    const items = this.parseJobItems(snap).filter((item) => item.nodeIndex !== box.nodeIndex)
+    return { status: !box.point ? 'inconclusive' : items.length > 0 ? 'unmet' : 'met',
+      evidence: [!box.point ? '当前职位框不可读，不能确认下拉已收起' : items.length > 0 ? '当前职位框可读且非trigger下拉项仍可见' : '当前职位框可读且非trigger下拉项已消失'] }
+  }
+
+  async closeDropdown(): Promise<void> {
+    const snap = await this.deps.snapshot()
+    const before = this.dropdownClosure(snap)
+    if (before.status === 'met') return
+    if (before.status === 'inconclusive') throw new CodedOperationError('UI_CHANGED', before.evidence.join('；'))
+    const box = this.locateJobBox(snap)
+    await this.deps.click(box.point!, viewportOf(snap))
+    await this.sleep(800)
+  }
+
+  async verifyDropdownClosed() { return this.dropdownClosure(await this.deps.snapshot()) }
 
   /**
    * 切换到指定职位名（精确匹配）：打开职位下拉 → 唯一定位目标项 → 点击 → 校验职位框文本已变更。
@@ -130,6 +151,7 @@ export class JobSwitcher {
     if (this.deps.signal?.aborted) throw new CancelledError()
     const jobName = opts.jobName
     if (!jobName) throw new JobSwitchError('职位名不能为空')
+
 
     const snap = await this.openJobDropdown()
     // 打开态职位框 trigger 仍带 bounds 显示当前职位（与下拉项里的当前职位高亮项同名），
@@ -181,13 +203,15 @@ export class JobSwitcher {
       const box = this.locateJobBox(snap)
       lastPoint = box.point
       lastName = box.name
-      if (box.point && box.name === jobName) return // iframe 重载完，职位框已显示目标职位
+      if (box.point && box.name === jobName && this.parseJobItems(snap).length === 1) return
     }
     // 超时 fail-loud：消息含「未生效」或「无法确认」→ errorMapping 判 EXECUTION_UNKNOWN（写动作已发出）
-    throw new JobSwitchError(
+    throw new PagePostconditionError(
       lastPoint
         ? `点击职位项后切换未生效（职位框仍为「${lastName ?? '未知'}」，期望「${jobName}」），请人工查看页面`
         : `点击职位项后职位框在推荐列表重载后未重新出现（等待约 ${VERIFY_TIMEOUT}ms），切换结果无法确认，请人工查看页面`,
+      { status: lastPoint && lastName ? 'unmet' : 'inconclusive',
+        evidence: [lastPoint && lastName ? `当前职位框为「${lastName}」，目标为「${jobName}」` : '重载后职位框不可读，不能证明未切换'] },
     )
   }
 

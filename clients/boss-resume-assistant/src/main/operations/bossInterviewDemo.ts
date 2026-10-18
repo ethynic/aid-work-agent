@@ -12,6 +12,7 @@ import {
   type BossSessionFactory,
 } from './bossContext.js'
 import type { BossOperation, OperationResult, OpContext } from './types.js'
+import { BusinessOperationState, withBusinessRecovery } from '../boss/BusinessOperationState.js'
 
 export interface BossInterviewDemoArgs {
   /** 备注内容（缺省用默认文案）；表单上限 140 字 */
@@ -36,19 +37,24 @@ export function createBossInterviewDemoOperation(
           return null
         },
         async (session) => {
+          const state = new BusinessOperationState()
+          return withBusinessRecovery(state, { name: 'boss_interview_demo', goal: '在原当前会话演示填写面试表单并取消',
+            expected: '备注和日期值核验且取消后表单消失，未发送', operationClass: 'page_state' }, async () => {
           await ensureChatPage(session, ctx)
           const executor = new InterviewDemoExecutor({
+            state,
             snapshot: session.snapshot,
             click: session.click,
             clickAndType: session.clickAndType,
             signal: ctx.signal,
           })
           ctx.progress({ stage: 'execute', message: '填备注 + 选明天日期（只填不发送）' })
-          const result = await executor.run({ remark: args?.remark })
+          const result = await executor.run({ remark: args?.remark, expectedContactRef: ctx.expectedContactRef })
           return {
             message: `完成：备注「${result.remark}」+ 日期 ${result.date} 已填入并取消关闭（未发送）`,
             data: { remark: result.remark, date: result.date, sent: false },
           }
+          })
         },
       )
     },

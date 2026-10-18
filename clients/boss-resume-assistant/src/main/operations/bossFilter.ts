@@ -4,7 +4,10 @@
  * 推荐牛人页筛选面板：设置经验/学历/薪资（替换语义，先清除再选）或一键清空。
  * 全部走 Win32 真实鼠标通道；写动作，徽章计数校验通过才算成功。
  */
-import { FilterSetter, FILTER_SNAPSHOT_OPTIONS, type FilterSpec } from '../boss/FilterSetter.js'
+import { FilterSetter, FilterPostconditionError, FILTER_SNAPSHOT_OPTIONS, type FilterSpec, type FilterPostcondition } from '../boss/FilterSetter.js'
+import { WinClickError } from '../input/WinMouseClicker.js'
+import { CancelledError } from './types.js'
+import { pageFacts, pageFailure, type PageExecution } from './pageOperation.js'
 import {
   defaultSessionFactory,
   runBossOperation,
@@ -25,6 +28,66 @@ export interface BossFilterArgs {
   membership_hint?: FilterSpec['membership_hint']
   membership_account_ref?: string
   first_degree_only?: boolean
+}
+
+function verification(value: FilterPostcondition): PageExecution['verification'] {
+  return { status: value.status, evidence: [`filter_button_count=${value.observedCount ?? 'unreadable'}; expected=${value.expectedCount ?? 'unknown'}; panel_open=${value.panelOpen}`] }
+}
+
+async function verifiedFilter<T>(setter: FilterSetter, invoke: () => Promise<T>, execution: PageExecution,
+  name: string, goal: string, expected: string, progress: OpContext['progress']): Promise<T> {
+  for (;;) {
+    execution.attemptsUsed++
+    try {
+      const result = await invoke()
+      execution.stage = 'postcheck'
+      execution.verification = { status: 'met', evidence: ['executor已核验实际按钮计数、选项与面板关闭；不可应用条件保留skipped结果'] }
+      return result
+    } catch (error) {
+      if (error instanceof CancelledError) throw error
+      let observed: FilterPostcondition | undefined
+      if (execution.inputStatus !== 'not_started' || error instanceof FilterPostconditionError) {
+        try { observed = await setter.verifyLastPostcondition() } catch (verifyError) {
+          if (verifyError instanceof CodedOperationError || verifyError instanceof CancelledError) throw verifyError
+          // Preserve the original failure; a failed read is not success.
+        }
+      }
+      execution.verification = observed ? verification(observed) : { status: 'inconclusive', evidence: ['fresh filter postcheck unavailable'] }
+      if (observed?.status === 'met' && (name === 'boss_clear_filter' || observed.result)) {
+        execution.stage = 'postcheck'
+        return observed.result as T
+      }
+      if (error instanceof FilterPostconditionError) {
+        execution.stage = 'postcheck'
+        // A typed row/slider/checkbox mismatch is already a definite negative read,
+        // even if the final toolbar has not been submitted yet.
+        execution.verification = { status: 'unmet', evidence: [error.message.slice(0, 500)] }
+        if (execution.ordinaryRetriesUsed === 0) {
+          execution.ordinaryRetriesUsed++
+          progress({ stage: 'execute', message: '筛选后态未满足，重新定位后重试一次' })
+          continue
+        }
+      }
+      pageFailure(error, pageFacts(name, goal, expected, execution))
+    }
+  }
+}
+
+function filterExecution(): PageExecution {
+  return { attemptsUsed: 0, ordinaryRetriesUsed: 0, inputStatus: 'not_started', stage: 'prepared',
+    verification: { status: 'inconclusive', evidence: [] } }
+}
+
+function trackedClick(click: import('./bossContext.js').BossSession['click'], execution: PageExecution): typeof click {
+  return async (point, viewport) => {
+    const previous = execution.inputStatus
+    execution.stage = 'input'; execution.inputStatus = 'unknown'
+    try { await click(point, viewport); execution.inputStatus = 'attempted' }
+    catch (error) {
+      if (error instanceof WinClickError && error.exitCode === 2) execution.inputStatus = previous
+      throw error
+    }
+  }
 }
 
 function validateFilterArgs(args: BossFilterArgs): string | null {
@@ -84,10 +147,12 @@ export function createBossFilterOperation(
           } catch { /* 非法URL按错误页面拒绝，不能根据后台iframe文案放行。 */ }
           if (!onRecommend) throw new CodedOperationError('WRONG_PAGE', '当前不在 BOSS 推荐牛人页面，请先用 boss_goto recommend；后台筛选文案不构成页面前置条件')
           ctx.progress({ stage: 'execute', message: '设置筛选面板' })
-          let mutated = false
+          const execution = filterExecution()
+          const goal = `设置候选人筛选条件：${JSON.stringify(args).slice(0, 850)}`
+          const expected = '筛选面板已关闭；实际筛选按钮数字等于已应用条件数，选中条件与请求匹配'
           const setter = new FilterSetter({
             snapshot: () => session.snapshot(FILTER_SNAPSHOT_OPTIONS),
-            click: session.click,
+            click: trackedClick(session.click, execution),
             signal: ctx.signal,
             // 性能埋点：固定 sleep 与关键阶段耗时进 collector（只记名称与毫秒）
             sleep: (ms) => perf.time(`sleep:${ms}`, () => new Promise<void>((r) => setTimeout(r, ms))),
@@ -95,7 +160,6 @@ export function createBossFilterOperation(
             // VIP 面板滚动适配：CDP 浏览类滚动（不占真实鼠标）
             mouseWheel: session.mouseWheel,
             drag: session.drag,
-            onMutation: () => { mutated = true },
           })
           const spec: FilterSpec = {
             experience: args.experience?.trim(),
@@ -108,10 +172,7 @@ export function createBossFilterOperation(
             first_degree_only: args.first_degree_only,
           }
           let result: Awaited<ReturnType<FilterSetter['apply']>>
-          try { result = await setter.apply(spec) } catch (error) {
-            if (mutated) throw new CodedOperationError('EXECUTION_UNKNOWN', `筛选状态已开始改变但未完成校验，禁止自动重试：${error instanceof Error ? error.message : String(error)}`)
-            throw error
-          }
+          result = await verifiedFilter(setter, () => setter.apply(spec), execution, 'boss_filter', goal, expected, ctx.progress)
           // 保底映射说明：LLM/用户传的档位页面上不存在时已自动映射到最接近的真实档位，必须转述
           const subNote = result.substitutions
             .map((s) => `${s.row}「${s.requested}」无该档位，已按最接近的「${s.matched}」设置`)
@@ -122,6 +183,8 @@ export function createBossFilterOperation(
               (result.applied ? `筛选已应用并校验通过：筛选·${result.filterCount}` : '本次没有可应用的普通条件，原筛选保留') + (subNote ? `；${subNote}` : '') + skippedNote,
             data: {
               filter_schema_version: 3,
+              operation_recovery: pageFacts('boss_filter', goal, expected, execution),
+              page_operation: pageFacts('boss_filter', goal, expected, execution),
               filter_count: result.filterCount,
               applied: result.applied,
               applied_rows: result.appliedRows,
@@ -161,23 +224,23 @@ export function createBossClearFilterOperation(
           } catch { /* 非法URL按错误页面拒绝，不能根据后台iframe文案放行。 */ }
           if (!onRecommend) throw new CodedOperationError('WRONG_PAGE', '当前不在 BOSS 推荐牛人页面，请先用 boss_goto recommend；后台筛选文案不构成页面前置条件')
           ctx.progress({ stage: 'execute', message: '打开面板 → 清除 → 确定' })
-          let mutated = false
+          const execution = filterExecution()
+          const goal = '清除当前候选人筛选条件'
+          const expected = '筛选面板已关闭；实际可见筛选按钮不带数字（0个条件）'
           const setter = new FilterSetter({
             snapshot: () => session.snapshot(FILTER_SNAPSHOT_OPTIONS),
-            click: session.click,
+            click: trackedClick(session.click, execution),
             signal: ctx.signal,
             sleep: (ms) => perf.time(`sleep:${ms}`, () => new Promise<void>((r) => setTimeout(r, ms))),
             step: <T>(name: string, fn: () => Promise<T>) => perf.time(`filter:${name}`, fn),
             mouseWheel: session.mouseWheel,
-            onMutation: () => { mutated = true },
           })
-          try { await setter.clear() } catch (error) {
-            if (mutated) throw new CodedOperationError('EXECUTION_UNKNOWN', `筛选清除效果未完成校验，禁止自动重试：${error instanceof Error ? error.message : String(error)}`)
-            throw error
-          }
+          await verifiedFilter(setter, () => setter.clear(), execution, 'boss_clear_filter', goal, expected, ctx.progress)
           return {
             message: '筛选已清除（徽章无计数）',
-            data: { filter_count: 0, applied: true },
+            data: { filter_count: 0, applied: true,
+              operation_recovery: pageFacts('boss_clear_filter', goal, expected, execution),
+              page_operation: pageFacts('boss_clear_filter', goal, expected, execution) },
             effect: 'applied' as const,
           }
         },

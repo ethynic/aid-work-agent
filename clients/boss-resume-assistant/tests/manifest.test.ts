@@ -92,7 +92,12 @@ test('写动作硬上限进入 schema（设计 §14）：greet 最大 3 / accept
   assert.equal(acceptProps.limit!.maximum, 1)
   assert.equal(acceptProps.limit!.default, 1)
   const reject = tools.find((t) => t.name === 'boss_reject_current')!
-  assert.deepEqual(reject.inputSchema.properties, {})
+  const { _boss_target_ref: binding, _boss_expected_contact_ref: contactBinding, ...rejectBusinessProps } = reject.inputSchema.properties as Record<string, { type?: string }>
+  assert.deepEqual(rejectBusinessProps, {})
+  assert.equal(binding?.type, 'string')
+  assert.equal(contactBinding?.type, 'string')
+  assert.equal((reject.inputSchema.required as string[] | undefined)?.includes('_boss_expected_contact_ref') ?? false, false)
+  assert.equal((reject.inputSchema.required as string[] | undefined)?.includes('_boss_target_ref') ?? false, false)
   assert.equal(TOOL_NAMES.length, 24)
 })
 

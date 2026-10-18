@@ -8,7 +8,7 @@
  *    再读一次头部做**身份校验**（2026-08-27 CR 补）：openContact 只证明「进入了某个对话」
  *    （发送按钮唯一+浮层关闭），不证明就是目标联系人——头部 ≠ 目标（错开卡片/结构漂移）时
  *    视同搜索失败，进列表兜底，绝不静默报成功；
- * 3) list 兜底：搜索失败（ChatSearchError / 头部身份不符）不立即报错，先 pressEscape 清场
+ * 3) list：只读预探无搜索入口直接用列表；搜索正常返回但明确进入错会话才消费一次重试切列表。先 pressEscape 清场
  *    （搜索失败时浮层常残留，会话列表被搜索浮层替换或遮挡——直接按列表坐标点击会点在浮层上，
  *    可能误开别人的会话），再重新 snapshot 在 doc[0] 会话列表列（x∈[188,548)）找目标姓名文本
  *    （trim 全等）：唯一命中 → Win32 点击（姓名中心 x+60，2026-08-27 真机探针验证点击行可切换
@@ -24,9 +24,10 @@ import {
   indexedValues,
 } from './domSnapshot.js'
 import { viewportOf } from './FilterSetter.js'
-import { ChatSearchExecutor, ChatSearchError } from './ChatSearchExecutor.js'
+import { ChatSearchExecutor } from './ChatSearchExecutor.js'
 import { headerContactOf, conversationListNamesOf } from './ChatReadExecutor.js'
 import { CancelledError } from '../operations/types.js'
+import { PagePostconditionError } from '../operations/pageOperation.js'
 
 export class ChatOpenError extends Error {
   constructor(message: string) {
@@ -52,6 +53,7 @@ export interface ChatOpenDeps {
   signal?: AbortSignal
   /** 可注入 sleep（测试） */
   sleep?(ms: number): Promise<void>
+  ordinaryRetry?(): boolean
 }
 
 export interface ChatOpenResult {
@@ -108,7 +110,11 @@ export class ChatOpenExecutor {
         pressEscape: this.deps.pressEscape,
         signal: this.deps.signal,
         sleep: this.sleep,
+        ordinaryRetry: this.deps.ordinaryRetry,
       })
+      if (searcher.locateSearchEntry(snap0).count === 0) {
+        searchError = '页面未展示搜索入口，直接使用会话列表'
+      } else {
       await searcher.openContact({ name: contact })
       // 身份校验（2026-08-27 CR 补）：openContact 只证明「进入了某个对话」（发送按钮唯一+浮层关闭），
       // 不证明进入的就是目标联系人——结果卡片按公司名点击，错卡会进错会话。fresh snapshot 读头部：
@@ -117,9 +123,13 @@ export class ChatOpenExecutor {
       if (header === contact) {
         return { contact, via: 'search' }
       }
-      searchError = `搜索进入的会话头部为「${header || '(未读到)'}」≠ 目标「${contact}」`
+      throw new PagePostconditionError(`搜索进入的会话头部为「${header || '(未读到)'}」≠ 目标「${contact}」`, {
+        status: header ? 'unmet' : 'inconclusive', evidence: [header ? `当前会话为${header}，目标${contact}` : '当前会话头部不可读'],
+      })
+      }
     } catch (err) {
-      if (!(err instanceof ChatSearchError)) throw err // CancelledError / CDP 断连 / Win32 失败等原样上抛
+      if (!(err instanceof PagePostconditionError) || err.verification.status !== 'unmet'
+        || !(this.deps.ordinaryRetry?.() ?? true)) throw err
       searchError = err.message
     }
     const note = `（搜索路径失败：${searchError}）`
@@ -174,16 +184,19 @@ export class ChatOpenExecutor {
     await this.deps.click({ x: target.x + LIST_CLICK_DX, y: target.y }, viewport)
 
     // 校验：轮询头部切换为 contact（点击已发出的「写后校验」，超时 fail-loud 请人工查看）
+    let lastHeader = ''
     for (let i = 0; i < HEADER_POLL_ROUNDS; i++) {
       await this.sleep(HEADER_POLL_INTERVAL)
       if (this.deps.signal?.aborted) throw new CancelledError('已取消：等待会话切换时中止')
       const snapAfter = await this.deps.snapshot()
-      if (headerContactOf(snapAfter) === contact) {
+      lastHeader = headerContactOf(snapAfter)
+      if (lastHeader === contact) {
         return { contact, via: 'list' }
       }
     }
-    throw new ChatOpenError(
+    throw new PagePostconditionError(
       `点击会话项后头部未切换为「${contact}」（轮询 ${HEADER_POLL_ROUNDS} 次）：点击可能落空或页面结构已变化，请人工查看${note}`,
+      { status: lastHeader ? 'unmet' : 'inconclusive', evidence: [lastHeader ? `当前会话头部${lastHeader}，目标${contact}` : '会话头部不可读，不能认定切换失败'] },
     )
   }
 

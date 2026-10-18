@@ -56,8 +56,13 @@ function defaultScriptPath(): string {
 export class WinMouseClicker {
   private readonly scriptPath: string
   private readonly execFileImpl: ExecFileLike
+  private readonly cdpPort?: number
+  private readonly beforeInput?: () => Promise<void>
 
-  constructor(opts: { scriptPath?: string; execFileImpl?: ExecFileLike } = {}) {
+  constructor(opts: { scriptPath?: string; execFileImpl?: ExecFileLike; cdpPort?: number; beforeInput?: () => Promise<void> } = {}) {
+    if (opts.cdpPort !== undefined && (!Number.isInteger(opts.cdpPort) || opts.cdpPort < 1 || opts.cdpPort > 65535 || !opts.beforeInput)) throw new WinClickError('绑定真实输入需要合法调试端口与标签激活方法', 2)
+    this.cdpPort = opts.cdpPort
+    this.beforeInput = opts.beforeInput
     this.scriptPath = opts.scriptPath ?? defaultScriptPath()
     this.execFileImpl = opts.execFileImpl ?? defaultExecFile
   }
@@ -69,6 +74,7 @@ export class WinMouseClicker {
   async click(point: ClickPoint, viewport: { width: number; height: number }): Promise<void> {
     const { x, y } = point
     this.assertClickable(point, viewport)
+    await this.activateBoundTarget()
     await this.execFileImpl(
       'powershell.exe',
       [
@@ -77,6 +83,7 @@ export class WinMouseClicker {
         'Bypass',
         '-File',
         this.scriptPath,
+        ...this.bindingArgs(),
         '-X',
         String(Math.round(x)),
         '-Y',
@@ -94,8 +101,9 @@ export class WinMouseClicker {
   async drag(from: ClickPoint, to: ClickPoint, viewport: { width: number; height: number }): Promise<void> {
     this.assertClickable(from, viewport)
     this.assertClickable(to, viewport)
+    await this.activateBoundTarget()
     await this.execFileImpl('powershell.exe', [
-      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', this.scriptPath,
+      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', this.scriptPath, ...this.bindingArgs(),
       '-X', String(Math.round(from.x)), '-Y', String(Math.round(from.y)),
       '-CssW', String(viewport.width), '-CssH', String(viewport.height),
       '-DragX', String(Math.round(to.x)), '-DragY', String(Math.round(to.y)),
@@ -116,6 +124,7 @@ export class WinMouseClicker {
     if (typeof text !== 'string' || text.length === 0) {
       throw new WinClickError('clickAndType 输入文本不能为空')
     }
+    await this.activateBoundTarget()
     await this.execFileImpl(
       'powershell.exe',
       [
@@ -124,6 +133,7 @@ export class WinMouseClicker {
         'Bypass',
         '-File',
         this.scriptPath,
+        ...this.bindingArgs(),
         '-X',
         String(Math.round(point.x)),
         '-Y',
@@ -138,6 +148,13 @@ export class WinMouseClicker {
       // 点击 ~5s + 聚焦 0.5s + 每字 0.2s，留足余量防长消息误超时
       { timeout: 30000 + text.length * 500 },
     )
+  }
+
+  private bindingArgs(): string[] { return this.cdpPort ? ['-CdpPort', String(this.cdpPort)] : [] }
+  private async activateBoundTarget(): Promise<void> {
+    if (!this.beforeInput) return
+    try { await this.beforeInput() }
+    catch { throw new WinClickError('STALE_OBSERVATION: 无法激活原 BOSS 标签，未投递物理输入', 2) }
   }
 
   /** 坐标/视口合法性校验（click 与 clickAndType 共用），非法即抛 WinClickError，绝不盲点 */

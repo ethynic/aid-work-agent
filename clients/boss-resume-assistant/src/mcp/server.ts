@@ -79,10 +79,13 @@ export async function startMcpServer(opts: McpServerOptions = {}): Promise<void>
       },
       async (args, extra) => {
         const operation = OPERATIONS[def.name]!.operation
+        const { _boss_target_ref: browserTargetRef, _boss_expected_contact_ref: expectedContactRef, ...operationArgs } = args ?? {}
         const startedAt = Date.now()
         const progressToken = extra._meta?.progressToken
         const result = await runSingleFlight(running, def.name, () =>
-          operation.execute(args ?? {}, {
+          operation.execute(operationArgs, {
+            ...(typeof browserTargetRef === 'string' ? { browserTargetRef } : {}),
+            ...(typeof expectedContactRef === 'string' ? { expectedContactRef } : {}),
             signal: extra.signal,
             cdpPort: opts.cdpPort,
             progress: (p) => {

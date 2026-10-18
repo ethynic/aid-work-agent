@@ -1,3 +1,4 @@
+import { withDetailControls } from './detailGreetFixture.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import fs from 'node:fs/promises'
@@ -105,7 +106,7 @@ test('祖先滚动后读取管线把完整画布区域传给wheel、像素确认
       snapshot: async () => {
         const snap = nestedSnapshot(scrollY)
         if (!detail) snap.documents[2]!.nodes.nodeName = [0, 0, 0, 0]
-        return snap
+        return detail ? withDetailControls(snap) : snap
       },
       click: async () => { detail = true }, pressEscape: async () => { detail = false },
       captureFullpage: async () => Buffer.alloc(1000),

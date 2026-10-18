@@ -6,6 +6,7 @@
 
 | 调研主题 | 文档 | 关联功能 |
 |---------|------|---------|
+| BOSS CLI 视觉识别与恢复真机实验 | [实验记录](research/boss-visual-recovery-machine-experiments.md) | 累计78次实调；CLI本地恢复两分流已验，后台视觉按20倍。 |
 | ZCode / DeepSeek Harness 搜索工具与中文检索增强 | [调研](research/agent-web-search-harness-research.md) | Agent 公网搜索：国内源、批量查询、时效过滤与正文核验。 |
 | Codex、DeepSeek Harness、Hermes 桌面执行架构对比 | [调研](research/desktop-agent-harness-architecture-research.md) | 桌面 Agent：共用云端 Runner、本机文件/程序与批处理执行边界。 |
 | Desktop 本地与服务端工具执行分工调研 | [调研](research/desktop-agent-local-vs-server-tool-execution-research.md) | 桌面客户端 v3 / Runtime 插件宿主：本地/服务端双文件执行器、DeviceFileRef 与路由边界；结论已被桌面 v3 设计（§8）与 Phase 2/3 计划吸收，旧 Coordinator 路线作废。 |

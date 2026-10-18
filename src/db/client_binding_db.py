@@ -22,7 +22,7 @@ from loguru import logger
 from src.config.settings import settings
 from src.core.cache_utils import CacheKeys, delete_cached, get_cached, invalidate_tenant_cache, set_cached
 from src.db.database import get_db_connection
-from src.services.billing import calculate_credit_cost
+from src.services.billing import BOSS_VISUAL_BILLING_FACTOR, calculate_credit_cost, get_boss_visual_billing_factor
 
 
 def _client_credit_multiplier() -> float:
@@ -351,6 +351,198 @@ def _build_tool_usage_detail(
         },
         ensure_ascii=False,
     )
+
+
+class BossVisualConflictError(ValueError):
+    """同一视觉请求的正文或状态与原台账冲突。"""
+
+
+class BossVisualInsufficientCreditError(ValueError):
+    """尚未派发的视觉请求没有可用余额。"""
+
+
+class BossVisualUsageDB:
+    """视觉 API 的单行预约/结算；模型 I/O 必须在这些短事务之外。
+
+    复用租户内 client_ref_id 唯一索引，不走客户端默认倍率。调用方计算
+    实际成本和冻结费率对应的最终积分，本层复核费率并原子结算一次。
+    """
+
+    @staticmethod
+    def _read(cursor, tenant_id: str, request_id: str, *, lock: bool = False):
+        cursor.execute(
+            "SELECT id, binding_id, status, detail, provider, model FROM client_usage_logs "
+            "WHERE tenant_id = %s AND client_ref_id = %s"
+            + (" FOR UPDATE" if lock else ""),
+            (tenant_id, f"boss.visual:{request_id}"),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        detail = result.get("detail")
+        result["detail"] = json.loads(detail) if isinstance(detail, str) else detail
+        if not isinstance(result["detail"], dict):
+            raise RuntimeError("视觉用量台账 detail 非法")
+        return result
+
+    @staticmethod
+    def _check_binding(row, binding_id: str) -> None:
+        if not row:
+            raise RuntimeError("视觉用量台账不存在")
+        if row["binding_id"] != binding_id:
+            raise PermissionError("视觉请求不属于当前客户端绑定")
+
+    @staticmethod
+    def _check_balance(cursor, tenant_id: str) -> None:
+        cursor.execute("SELECT credit_balance FROM tenants WHERE tenant_id = %s", (tenant_id,))
+        tenant = cursor.fetchone()
+        if not tenant:
+            raise RuntimeError("视觉计费租户不存在")
+        if tenant["credit_balance"] is None or tenant["credit_balance"] <= 0:
+            raise BossVisualInsufficientCreditError("视觉诊断余额不足")
+
+    @staticmethod
+    def get(tenant_id: str, request_id: str) -> Optional[dict[str, Any]]:
+        """只读取回，不做余额准入；服务层须核对返回行的 binding_id。"""
+        with get_db_connection() as conn:
+            return BossVisualUsageDB._read(conn.cursor(), tenant_id, request_id)
+
+    @staticmethod
+    def reserve(
+        tenant_id: str, binding_id: str, request_id: str, input_digest: str,
+        provider: str, model: str, price_snapshot: dict[str, Any],
+    ) -> dict[str, Any]:
+        """新请求余额准入并预约；并发同 ID 回读冻结行，不覆盖模型/价格。"""
+        detail = {"input_digest": input_digest, "price_snapshot": price_snapshot,
+                  "billing_factor": BOSS_VISUAL_BILLING_FACTOR}
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            row = BossVisualUsageDB._read(cursor, tenant_id, request_id)
+            if not row:
+                BossVisualUsageDB._check_balance(cursor, tenant_id)
+                cursor.execute(
+                    """INSERT INTO client_usage_logs
+                       (tenant_id, binding_id, client_name, client_ref_id, stage,
+                        status, provider, model, detail, raw_credit_cost, credit_cost)
+                       VALUES (%s, %s, 'boss-cli', %s, 'boss_visual', 'reserved', %s, %s, %s, 0, 0)
+                       ON CONFLICT (tenant_id, client_ref_id) WHERE client_ref_id IS NOT NULL
+                       DO NOTHING RETURNING id, binding_id, status, detail, provider, model""",
+                    (tenant_id, binding_id, f"boss.visual:{request_id}", provider, model,
+                     json.dumps(detail, ensure_ascii=False)),
+                )
+                inserted = cursor.fetchone()
+                if inserted:
+                    row = dict(inserted)
+                    row["detail"] = json.loads(row["detail"]) if isinstance(row["detail"], str) else row["detail"]
+                else:
+                    row = BossVisualUsageDB._read(cursor, tenant_id, request_id)
+            BossVisualUsageDB._check_binding(row, binding_id)
+            if row["detail"].get("input_digest") != input_digest:
+                raise BossVisualConflictError("视觉请求 ID 的输入摘要不一致")
+            conn.commit()
+            return row
+
+    @staticmethod
+    def dispatch(tenant_id: str, binding_id: str, request_id: str) -> bool:
+        """竞争派发权；reserved 崩溃后可续接，已派发请求绝不重放模型。"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            row = BossVisualUsageDB._read(cursor, tenant_id, request_id, lock=True)
+            BossVisualUsageDB._check_binding(row, binding_id)
+            if row["status"] != "reserved":
+                return False
+            BossVisualUsageDB._check_balance(cursor, tenant_id)
+            detail = row["detail"]
+            detail["billing_factor"] = get_boss_visual_billing_factor(detail)
+            cursor.execute(
+                """UPDATE client_usage_logs SET status = 'dispatched', detail = %s
+                   WHERE id = %s AND tenant_id = %s AND binding_id = %s AND status = 'reserved'
+                   RETURNING id""",
+                (json.dumps(detail, ensure_ascii=False), row["id"], tenant_id, binding_id),
+            )
+            won = cursor.fetchone() is not None
+            conn.commit()
+            return won
+
+    @staticmethod
+    def mark_unknown(tenant_id: str, binding_id: str, request_id: str) -> None:
+        """未知模型结果不退回 reserved，避免自动重复推理。"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            row = BossVisualUsageDB._read(cursor, tenant_id, request_id, lock=True)
+            BossVisualUsageDB._check_binding(row, binding_id)
+            cursor.execute(
+                """UPDATE client_usage_logs SET status = 'model_unknown'
+                   WHERE id = %s AND tenant_id = %s AND binding_id = %s AND status = 'dispatched'""",
+                (row["id"], tenant_id, binding_id),
+            )
+            conn.commit()
+
+    @staticmethod
+    def settle(
+        tenant_id: str, binding_id: str, request_id: str, usage: dict[str, int],
+        token_cost_yuan: Decimal, credit_cost: Decimal, response: dict[str, Any],
+    ) -> dict[str, Any]:
+        """锁原行、扣余额并存回执一次；重复结算返回首次完整响应。"""
+        if (not isinstance(token_cost_yuan, Decimal) or not token_cost_yuan.is_finite()
+                or token_cost_yuan < 0 or not isinstance(credit_cost, Decimal)
+                or not credit_cost.is_finite() or credit_cost < 0
+                or credit_cost != credit_cost.quantize(Decimal("0.01"))):
+            raise ValueError("视觉费用须为有限、非负 Decimal，积分须已取整到分")
+        prompt = int(usage.get("prompt_tokens") or 0)
+        completion = int(usage.get("completion_tokens") or 0)
+        cached = int(usage.get("cached_tokens") or usage.get("cached_input_tokens") or 0)
+        total = int(usage.get("total_tokens") or (prompt + completion))
+        if min(prompt, completion, cached, total) < 0:
+            raise ValueError("视觉 token 用量不得为负")
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            row = BossVisualUsageDB._read(cursor, tenant_id, request_id, lock=True)
+            BossVisualUsageDB._check_binding(row, binding_id)
+            detail = row["detail"]
+            if row["status"] == "completed":
+                return detail["response"]
+            if row["status"] != "dispatched":
+                raise BossVisualConflictError("视觉请求不在可结算状态")
+            factor = get_boss_visual_billing_factor(detail)
+            expected_credit = (token_cost_yuan * factor).quantize(Decimal("0.01"), rounding=ROUND_CEILING)
+            if credit_cost != expected_credit:
+                raise ValueError("视觉积分与已冻结费率不一致，结算已拒绝")
+            cursor.execute(
+                "UPDATE tenants SET credit_balance = credit_balance - %s WHERE tenant_id = %s "
+                "RETURNING credit_balance",
+                (credit_cost, tenant_id),
+            )
+            tenant = cursor.fetchone()
+            if not tenant or tenant["credit_balance"] is None:
+                raise RuntimeError("视觉计费租户不存在或余额为空，结算已回滚")
+            result = json.loads(json.dumps(response, ensure_ascii=False))
+            result["receipt"] = {
+                **(result.get("receipt") or {}),
+                "ref": f"boss.visual:{row['id']}", "usage_ref": str(row["id"]),
+                "input_digest": detail["input_digest"], "billing_state": "settled",
+                "token_cost_yuan": str(token_cost_yuan), "factor": factor,
+                "credit_cost": format(credit_cost, ".2f"),
+                "balance_after": str(tenant["credit_balance"]),
+            }
+            detail.update({"usage": usage, "billing_factor": factor, "token_cost_yuan": str(token_cost_yuan),
+                           "credit_cost": format(credit_cost, ".2f"), "response": result})
+            cursor.execute(
+                """UPDATE client_usage_logs SET status = 'completed', prompt_tokens = %s,
+                   completion_tokens = %s, cached_tokens = %s, total_tokens = %s,
+                   raw_credit_cost = %s, credit_cost = %s, detail = %s
+                   WHERE id = %s AND tenant_id = %s AND binding_id = %s AND status = 'dispatched'""",
+                (prompt, completion, cached, total, token_cost_yuan, credit_cost,
+                 json.dumps(detail, ensure_ascii=False), row["id"], tenant_id, binding_id),
+            )
+            conn.commit()
+        if credit_cost > 0:
+            try:
+                invalidate_tenant_cache(tenant_id)
+            except Exception as e:
+                logger.warning(f"BOSS视觉扣费后失效租户缓存失败 tenant={tenant_id}: {e}")
+        return result
 
 
 class ClientUsageLogDB:

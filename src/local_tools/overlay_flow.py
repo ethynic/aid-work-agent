@@ -7,14 +7,20 @@ from .durable_flow import LocalContinuationRequired, requires_healing, healing_r
 from .lifecycle import local_operation_scope
 
 
-def _known(result):
+def _known(result, proxy=None):
+    from .boss_visual_recovery import cli_owns_recovery
+    if cli_owns_recovery(result):
+        return result  # Preserve unknown as unknown; local recovery has already finished.
     if result.get('code')=='EXECUTION_UNKNOWN' or result.get('effect')=='unknown':
+        from .boss_visual_recovery import is_visual_failure
+        if proxy is not None and is_visual_failure(proxy, result):
+            return result
         raise LocalContinuationRequired('LOCAL_EFFECT_VERIFICATION_REQUIRED',result.get('invocation_id'))
     return result
 
 
 async def poll_operation(proxy, operation, arguments, *, tenant_id, user_id, session_id, progress_queue,
-                         expected_device_id=None):
+                         expected_device_id=None, allow_visual_input_unknown=False):
     """Only a new original phase selects a device; saved phases poll their old ID."""
     original = await operation.owner.saved_phase(branch=operation.branch,ordinal=operation.ordinal)
     if original is not None:
@@ -24,11 +30,15 @@ async def poll_operation(proxy, operation, arguments, *, tenant_id, user_id, ses
             raise LocalContinuationRequired('LOCAL_PHASE_INTENT_CHANGED',str(invocation['id']))
         proxy._push_progress(progress_queue,{'type':'started','invocation_id':str(invocation['id']),
             'text':f'⏳ 正在等待原本机操作：{proxy.display_name}'})
-        return _known(await proxy._poll_invocation(invocation,tenant_id,progress_queue,
-            durable_deadline=invocation['deadline_at']))
+        result = await proxy._poll_invocation(invocation,tenant_id,progress_queue,
+            durable_deadline=invocation['deadline_at'])
+        if allow_visual_input_unknown and proxy.name == 'boss_overlay_dismiss' and arguments.get('recovery_ref'):
+            return result
+        return _known(result, proxy)
     if not tenant_id or not user_id:
         return {'success':False,'code':'NO_IDENTITY','message':'无法确定用户身份，请重新登录后再试'}
-    error = proxy._validate_args(arguments)
+    # Recovery metadata is validated/bound by the CLI, not a domain input field.
+    error = proxy._validate_args({key: value for key, value in arguments.items() if key not in {'_boss_target_ref', '_boss_expected_contact_ref'}})
     if error:
         return {'success':False,'code':'INVALID_ARGS','message':error}
     device, error = await proxy._find_ready_device(tenant_id,user_id)
@@ -41,7 +51,10 @@ async def poll_operation(proxy, operation, arguments, *, tenant_id, user_id, ses
         if error:
             return {'success':False,'code':'NO_CREDIT','message':error,'effect':None,'data':None,'invocation_id':None}
     with local_operation_scope(operation.owner,branch=operation.branch,ordinal=operation.ordinal):
-        return _known(await proxy._dispatch_and_wait(tenant_id,user_id,session_id,device,arguments,progress_queue))
+        result = await proxy._dispatch_and_wait(tenant_id,user_id,session_id,device,arguments,progress_queue)
+        if allow_visual_input_unknown and proxy.name == 'boss_overlay_dismiss' and arguments.get('recovery_ref'):
+            return result
+        return _known(result, proxy)
 
 
 async def observed_model(owner, branch, ordinal, *, intent, invoke):
@@ -60,6 +73,21 @@ async def run_base(proxy, operation, kwargs):
     original = await poll_operation(proxy,operation,arguments,tenant_id=tenant_id,user_id=user_id,
         session_id=session_id,progress_queue=progress,
         expected_device_id=kwargs.get('_resume_expected_device_id'))
+    from .boss_visual_recovery import cli_owns_recovery, is_visual_failure, recover_operation, recovery_arguments
+    if cli_owns_recovery(original):
+        return original
+    if is_visual_failure(proxy, original):
+        saved = await operation.owner.saved_phase(branch=operation.branch, ordinal=operation.ordinal)
+        device_id = saved['request']['device_id']
+        async def dispatch(name, branch, args):
+            tool = proxy if name == proxy.name else BossOverlayInspectTool() if name == 'boss_overlay_inspect' else BossOverlayDismissTool()
+            return await poll_operation(tool, LocalOperationScope(operation.owner, f'heal.visual.{branch}', operation.ordinal),
+                recovery_arguments(original, arguments, args), tenant_id=tenant_id,user_id=user_id,
+                session_id=session_id,progress_queue=progress,expected_device_id=device_id,
+                allow_visual_input_unknown=name == 'boss_overlay_dismiss')
+        return await recover_operation(proxy, original, dispatch)
+    if isinstance(original.get('data'), dict) and 'operation_recovery' in original['data']:
+        return original
     if original.get('success') or not requires_healing(proxy,original.get('code')):
         return original
     # A retry repeats the original requested action. Its error code does not

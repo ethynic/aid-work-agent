@@ -9,6 +9,7 @@ class MockSocket extends EventEmitter {
   readyState = 1
   CLOSED = 3
   sent: Record<string, unknown>[] = []
+  metrics: Record<string, unknown> = {}
   constructor(private readonly targetInfos: CdpTargetInfo[] = []) {
     super()
     // 用宏任务延迟 open，确保 connect 在 await fetch 之后注册的 once('open') 能收到
@@ -26,6 +27,10 @@ class MockSocket extends EventEmitter {
       queueMicrotask(() =>
         this.emit('message', Buffer.from(JSON.stringify({ id: msg.id, result: { sessionId: 'sess-1' } }))),
       )
+    } else if (msg.method === 'Target.activateTarget') {
+      queueMicrotask(() => this.emit('message', Buffer.from(JSON.stringify({ id: msg.id, result: {} }))))
+    } else if (msg.method === 'Page.getLayoutMetrics') {
+      queueMicrotask(() => this.emit('message', Buffer.from(JSON.stringify({ id: msg.id, result: this.metrics, sessionId: 'sess-1' }))))
     } else {
       queueMicrotask(() => this.emit('message', Buffer.from(JSON.stringify({ id: msg.id, result: {}, sessionId: 'sess-1' }))))
     }
@@ -71,6 +76,53 @@ test('connect 从 /json/version 拿 wsDebuggerUrl 并连 socket', async () => {
   assert.equal(gw.isConnected, true)
   assert.equal(socket.sent.length, 0) // connect 不发 CDP
   await gw.close()
+})
+
+test('visual geometry uses CSS viewport and the bound CDP target, not PNG device pixels', async () => {
+  const { gw, socket } = makeGateway()
+  await gw.connect('http://127.0.0.1:9222')
+  await gw.attachToTarget('correct-tab')
+  try {
+    socket.metrics = { cssVisualViewport: { clientWidth: 800, clientHeight: 600, scale: 1 },
+      visualViewport: { clientWidth: 1600, clientHeight: 1200 } }
+    assert.equal(gw.getTargetId(), 'correct-tab')
+    assert.deepEqual(await gw.getPageMetrics(), { width: 800, height: 600 })
+    assert.equal(socket.sent.at(-1)?.sessionId, 'sess-1')
+  } finally { await gw.close() }
+})
+
+test('missing or ambiguous visual geometry fails before a coordinate can be used', async () => {
+  const { gw, socket } = makeGateway()
+  await gw.connect('http://127.0.0.1:9222')
+  await gw.attachToTarget('correct-tab')
+  try {
+    for (const viewport of [undefined, { clientWidth: 0, clientHeight: 600, scale: 1 },
+      { clientWidth: 800, clientHeight: 600, scale: 2 }]) {
+      socket.metrics = { cssVisualViewport: viewport }
+      await assert.rejects(gw.getPageMetrics(), /CSS视口几何/)
+    }
+    assert.equal(socket.sent.filter(m => m.method === 'Input.dispatchMouseEvent').length, 0)
+  } finally { await gw.close() }
+})
+
+test('attach reuses the existing recommendation tab ahead of a newly opened home tab', async () => {
+  const { gw } = makeGateway([
+    { targetId: 'home', type: 'page', url: 'https://www.zhipin.com/', title: 'home' },
+    { targetId: 'lookalike', type: 'page', url: 'https://www.zhipin.com.evil.example/web/chat/recommend', title: 'other' },
+    { targetId: 'original', type: 'page', url: 'https://www.zhipin.com/web/chat/recommend?source=original', title: 'BOSS' },
+  ])
+  await gw.connect('http://127.0.0.1:9222')
+  try { assert.equal((await gw.attachToRecommendPage()).targetId, 'original') } finally { await gw.close() }
+})
+
+test('home-tab fallback does not reorder existing chat and recommendation business tabs', async () => {
+  const { gw } = makeGateway([
+    { targetId: 'home', type: 'page', url: 'https://www.zhipin.com/', title: 'home' },
+    { targetId: 'chat', type: 'page', url: 'https://www.zhipin.com/web/chat/index', title: 'chat' },
+    { targetId: 'recommend', type: 'page', url: 'https://www.zhipin.com/web/chat/recommend', title: 'BOSS' },
+  ])
+  await gw.connect('http://127.0.0.1:9222')
+  try { assert.equal((await gw.attachToRecommendPage()).targetId, 'chat') } finally { await gw.close() }
 })
 
 test('attachToTarget 建立 session，后续方法带 sessionId', async () => {
@@ -155,4 +207,34 @@ test('DOMRects 只读采集选项显式开启，后续普通快照恢复默认 f
         method: 'DOMSnapshot.captureSnapshot',
         params: { computedStyles: [], includePaintOrder: false, includeDOMRects }, sessionId: 'sess-1' })))
   } finally { await gw.close() }
+})
+
+
+test('bound target activation uses only browser-level CDP and never a Page/DOM method', async () => {
+  const { gw, socket } = makeGateway()
+  await gw.connect('http://127.0.0.1:9222')
+  await assert.rejects(gw.activateTarget(), /No bound/)
+  await gw.attachToTarget('existing-business-tab')
+  socket.sent.length = 0
+  await gw.activateTarget()
+  assert.deepEqual(socket.sent.map(m => ({ method: m.method, params: m.params, sessionId: m.sessionId })), [{ method: 'Target.activateTarget', params: { targetId: 'existing-business-tab' }, sessionId: undefined }])
+  await gw.close()
+})
+
+
+test('recovery attaches the original target among multiple business tabs and refuses a closed or foreign target', async () => {
+  const targets = [
+    { targetId: 'first-business-tab', type: 'page', url: 'https://www.zhipin.com/web/chat/recommend', title: 'BOSS first' },
+    { targetId: 'original-failed-tab', type: 'page', url: 'https://www.zhipin.com/web/chat/index', title: 'BOSS original' },
+    { targetId: 'foreign-tab', type: 'page', url: 'https://example.com/', title: 'foreign' },
+  ]
+  const { gw, socket } = makeGateway(targets)
+  await gw.connect('http://127.0.0.1:9222')
+  await gw.attachToBoundBossTarget('original-failed-tab')
+  assert.equal(gw.getTargetId(), 'original-failed-tab')
+  assert.deepEqual(socket.sent.filter(m => m.method === 'Target.attachToTarget').map(m => m.params), [{ targetId: 'original-failed-tab', flatten: true }])
+  socket.sent.length = 0
+  for (const target of ['closed-original-tab', 'foreign-tab']) await assert.rejects(gw.attachToBoundBossTarget(target), /BOUND_BOSS_TARGET_UNAVAILABLE/)
+  assert.equal(socket.sent.some(m => m.method === 'Target.attachToTarget'), false)
+  await gw.close()
 })

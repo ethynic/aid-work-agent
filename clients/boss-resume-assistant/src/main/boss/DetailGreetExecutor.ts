@@ -9,11 +9,12 @@
  *   （第一行列表按钮与详情按钮 cy 仅差 13px）。**可靠区分 = DOM 结构**：
  *   用 LCA(收藏,举报,不合适) 得操作列容器，再 isDescendantOf 判定哪个「打招呼」在容器内；
  *   容器外的命中一律视为列表诱饵。
- * - 详情页头部候选人为 DOM 文本（canvas 顶部区）——canvas 顶区精确匹配预期姓名，防打错人。
+ * - 开详情后验使用右侧操作按钮与“经历概览”；姓名可能只在canvas内，不作打开成功的DOM靶点。
  * - Escape 关闭详情可靠；点击后按钮原地翻转「继续沟通」（与列表按钮同状态机）。
  *
  * 安全设计（fail-loud，绝不盲点）：
- * - 打招呼前强校验：canvas 存在 + 顶部区姓名==预期 + 操作列容器内按钮状态二选一恰好 1 个；
+ * - 打招呼前确认详情归属：实际画布文档顶部目标姓名唯一；姓名仅在canvas时，本调用清残留后
+ *   唯一点原姓名卡片重开并核验完整详情；操作列容器内按钮状态二选一恰好 1 个。
  *  任一不满足立即抛 DetailGreetError，零点击。
  * - 点击后轮询按钮翻转「继续沟通」，仍可点 → EXECUTION_UNKNOWN 语义（不要重试），绝不重点。
  * - 已是「继续沟通」→ 幂等返回（不点击，正常关闭详情）。
@@ -25,6 +26,7 @@ import {
   accumulateOwnerOffset,
   boundsCenter,
   findNodesByString,
+  indexedValues,
   isDescendantOf,
   lowestCommonAncestor,
   parentMapOf,
@@ -33,7 +35,11 @@ import { GREET_TEXT, CONTINUE_TEXT, pairCardNameWithPoint, findButtonsByExactTex
 import { viewportOf } from './FilterSetter.js'
 import { locateResumeCanvas } from './ResumeReader.js'
 import { CancelledError } from '../operations/types.js'
+import { PagePostconditionError } from '../operations/pageOperation.js'
 import { excludedRecommendationName, inspectRecommendationResults, type RecommendationStopReason } from './RecommendationResultBoundary.js'
+import { WinClickError } from '../input/WinMouseClicker.js'
+import { BusinessOperationState } from './BusinessOperationState.js'
+import { loadedCandidates, candidateButtonVisible, candidateScrollEvent } from './LoadedCandidateNavigation.js'
 
 export class DetailGreetError extends Error {
   constructor(message: string) {
@@ -42,14 +48,32 @@ export class DetailGreetError extends Error {
   }
 }
 
+export class DetailOpenPostconditionError extends DetailGreetError {
+  constructor(message: string) { super(message); this.name = 'DetailOpenPostconditionError' }
+}
+
+export interface DetailOpenVerification {
+  status: 'met' | 'unmet' | 'inconclusive'
+  evidence: string[]
+}
+
+export interface DetailOpenExecution {
+  attemptsUsed: number
+  ordinaryRetriesUsed: number
+  inputStatus: 'not_started' | 'attempted' | 'unknown'
+  stage: 'prepared' | 'input' | 'postcheck'
+  verification: DetailOpenVerification
+}
+
 export interface DetailGreetDeps {
+  state?: BusinessOperationState
   /** 采集 fresh DOMSnapshot（每次定位/校验前重新采集，禁止复用旧坐标） */
   snapshot(): Promise<DomSnapshot>
   /** Win32 真实鼠标点击（viewport 为页面截图尺寸，device px）。写动作按钮/点卡片开详情专用 */
   click(point: ClickPoint, viewport: { width: number; height: number }): Promise<void>
   /** CDP dispatchKey Escape（关闭简历详情弹层） */
   pressEscape(): Promise<void>
-  /** CDP mouseWheel 向下滚动（deltaY>0，device px）。open_detail 滚动找人用；缺省时当前屏找不到即 fail-loud */
+  /** CDP mouseWheel（CSS px，支持双向）。open_detail 滚动找人用；缺省时当前屏找不到即 fail-loud */
   scroll?(x: number, y: number, deltaY: number): Promise<void>
   /** 协作式取消信号：各阶段入口/轮询中检查，触发即抛 CancelledError */
   signal?: AbortSignal
@@ -65,7 +89,7 @@ export interface DetailGreetOutcome {
   greeted: boolean
   /** 已打过招呼（详情按钮已是「继续沟通」）：未点击，幂等 */
   already?: boolean
-  /** dry-run：只定位未点击，详情保持打开 */
+  /** dry-run：未点击打招呼，必要时重开详情确认归属，详情保持打开 */
   dryRun?: boolean
   /** dry-run 定位到的「打招呼」按钮点击点（视口 device px） */
   point?: ClickPoint
@@ -95,7 +119,7 @@ const CLOSE_POLL_TIMEOUT = 5000
 /** 点卡片后轮询 canvas 出现（与 ResumeBatchReader OPEN_* 同源，总超时 5s） */
 const OPEN_POLL_INTERVAL = 500
 const OPEN_POLL_TIMEOUT = 5000
-/** 打开轮询中第 N 次同点重击一次卡片（真机 2026-08-17 实证首击偶发被吞、重击即开；只重击一次防风控） */
+/** 无画布时第 N 次等待后fresh重试一次（共享唯一普通重试预算）。 */
 const OPEN_RECLICK_AT_INDEX = 5
 
 /** open_detail 滚动找人：单屏滚动距离与滚动上限屏数（与 GreetExecutor 定向模式同源） */
@@ -168,12 +192,36 @@ function visibleNamesOf(snap: DomSnapshot): string {
 }
 
 export class DetailGreetExecutor {
+  readonly state: BusinessOperationState
   private readonly sleep: (ms: number) => Promise<void>
   private readonly step: <T>(name: string, fn: () => Promise<T>) => Promise<T>
+  private openExecution: DetailOpenExecution = { attemptsUsed: 0, ordinaryRetriesUsed: 0, inputStatus: 'not_started', stage: 'prepared', verification: { status: 'inconclusive', evidence: ['尚未开始打开详情'] } }
+  private clickedName?: string
+  private residualCleared = false
+  private rebuildingIdentity = false
+
+  get openDetailExecution(): DetailOpenExecution { return structuredClone(this.openExecution) }
 
   constructor(private readonly deps: DetailGreetDeps) {
+    this.state = deps.state ?? new BusinessOperationState()
     this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)))
     this.step = deps.step ?? ((_name, fn) => fn())
+  }
+
+  /** 打开状态只读详情结构；canvas内姓名无法由DOM读取，不作为此步骤的后态。 */
+  static detailReady(snap: DomSnapshot): boolean {
+    const canvas = locateResumeCanvas(snap)
+    if (!canvas) return false
+    try {
+      const bar = DetailGreetExecutor.locateActionBar(snap)
+      DetailGreetExecutor.locateGreetState(snap, bar)
+      return findVisibleTexts(snap, '经历概览').filter(
+        (hit) => hit.documentIndex === bar.documentIndex && hit.point.x >= canvas.x + canvas.w,
+      ).length === 1
+    } catch (error) {
+      if (error instanceof DetailGreetError) return false
+      throw error
+    }
   }
 
   /**
@@ -285,25 +333,39 @@ export class DetailGreetExecutor {
   }
 
   /**
-   * 校验详情页候选人姓名（静态方法，open/greet 共用）：locateResumeCanvas 必须命中
+   * 详情发送沿用的姓名校验（打开状态不调用此方法）：locateResumeCanvas 必须命中
    * （否则 fail-loud「详情未打开」）；canvas 顶部区（y∈[canvas.y, canvas.y+300]，x∈canvas 列）
    * 内找与 name 精确相等的可见文本节点，必须恰好 1 个；找不到 → 防打错人 fail-loud。
    */
-  static verifyDetailName(snap: DomSnapshot, name: string): void {
+  private static detailNameHits(snap: DomSnapshot, name: string): TextHit[] {
     const canvas = locateResumeCanvas(snap)
     if (!canvas) {
       throw new DetailGreetError(
         '详情未打开：页面未找到简历详情画布（大尺寸 CANVAS），请先执行 boss_open_detail 打开候选人详情',
       )
     }
-    const regionBottom = canvas.y + DETAIL_NAME_REGION_HEIGHT
-    const hits = findVisibleTexts(snap, name.trim()).filter(
+    // Reuse the existing canvas locator to identify its owning document. A background list in
+    // another iframe may overlap the canvas on screen and is never a detail identity source.
+    const owners = snap.documents.flatMap((document, documentIndex) => {
+      if (!indexedValues(document.nodes.nodeName ?? [], 'nodeName').some(([, si]) => snap.strings[si] === 'CANVAS')) return []
+      const isolated = { ...snap, documents: snap.documents.map((doc, di) => di === documentIndex ? doc : { ...doc, nodes: { ...doc.nodes, nodeName: [] } }) }
+      const rect = locateResumeCanvas(isolated)
+      return rect && rect.x === canvas.x && rect.y === canvas.y && rect.w === canvas.w && rect.h === canvas.h ? [documentIndex] : []
+    })
+    if (owners.length !== 1) throw new DetailGreetError('详情画布所属文档不唯一，无法确认详情身份，已停止')
+    const documentIndex = owners[0]!
+    return findVisibleTexts(snap, name.trim()).filter(
       (h) =>
+        h.documentIndex === documentIndex &&
         h.point.x >= canvas.x &&
         h.point.x <= canvas.x + canvas.w &&
         h.point.y >= canvas.y &&
-        h.point.y <= regionBottom,
+        h.point.y <= canvas.y + DETAIL_NAME_REGION_HEIGHT,
     )
+  }
+
+  static verifyDetailName(snap: DomSnapshot, name: string): void {
+    const hits = DetailGreetExecutor.detailNameHits(snap, name)
     if (hits.length === 1) return
     if (hits.length === 0) {
       throw new DetailGreetError(
@@ -318,19 +380,41 @@ export class DetailGreetExecutor {
 
   /**
    * 在当前打开的简历详情页点「打招呼」：
-   * snapshot → verifyDetailName（防打错人）→ locateActionBar + locateGreetState（容器消歧）→
+   * snapshot → 可信详情姓名或本调用原卡片重开因果 → locateActionBar + locateGreetState（容器消歧）→
    * Win32 click → 轮询按钮翻转「继续沟通」→ Escape 关闭并确认。
    * - alreadyGreeted → {greeted:false, already:true}（不点击，正常关闭，幂等）；
-   * - dryRun → {greeted:false, dryRun:true, point}（不点击，详情保持打开）；
+   * - dryRun → {greeted:false, dryRun:true, point}（不点击打招呼，详情保持打开）；
    * - 点击后未翻转 → DetailGreetError（unknown，不要重试）；关不掉详情 → DetailGreetError。
    */
   async greet(opts: { name: string; dryRun?: boolean }): Promise<DetailGreetOutcome> {
     if (this.deps.signal?.aborted) throw new CancelledError('已取消：详情页打招呼尚未开始')
+    if (this.state.businessEffect.status === 'unknown') throw new DetailGreetError('上次详情打招呼结果未知，禁止重新打开或再次发送')
     const name = opts.name.trim()
-    const snap = await this.deps.snapshot()
+    let snap = await this.deps.snapshot()
     const excluded = excludedRecommendationName(snap, name)
     if (excluded) return { greeted: false, stopReason: excluded }
-    DetailGreetExecutor.verifyDetailName(snap, name)
+    const nameHits = DetailGreetExecutor.detailNameHits(snap, name)
+    if (nameHits.length > 1) DetailGreetExecutor.verifyDetailName(snap, name)
+    if (nameHits.length === 0) {
+      // Canvas text is not a DOM identity. Establish this call's target by reopening the unique
+      // original card instead of trusting a name in the background list or guessing other text.
+      this.rebuildingIdentity = true
+      try {
+        const opened = await this.openDetail({ name })
+        if (opened.stopReason) return { greeted: false, stopReason: opened.stopReason }
+        const verified = await this.verifyOpenDetail()
+        if (verified.status !== 'met') throw new PagePostconditionError('重新打开原候选人详情后无法确认完整后态，未打招呼', verified)
+        snap = await this.deps.snapshot()
+        if (!DetailGreetExecutor.detailReady(snap)) throw new PagePostconditionError('原候选人详情准备后已变化，未打招呼', {
+          status: 'inconclusive', evidence: ['本次原目标打开成功后fresh完整详情不再可确认'] })
+        if (DetailGreetExecutor.detailNameHits(snap, name).length > 1) DetailGreetExecutor.verifyDetailName(snap, name)
+        this.state.execution.stage = 'postcheck'
+        this.state.execution.verification = verified
+      } catch (error) {
+        if (error instanceof DetailOpenPostconditionError) throw new PagePostconditionError(error.message, this.openExecution.verification)
+        throw error
+      } finally { this.rebuildingIdentity = false }
+    }
     const bar = DetailGreetExecutor.locateActionBar(snap)
     const state = DetailGreetExecutor.locateGreetState(snap, bar)
     if (state.alreadyGreeted) {
@@ -339,9 +423,10 @@ export class DetailGreetExecutor {
       return { greeted: false, already: true }
     }
     if (opts.dryRun) {
+      this.state.execution.verification = { status: 'met', evidence: ['原目标详情归属已确认，右侧唯一打招呼按钮已定位，未点击打招呼'] }
       return { greeted: false, dryRun: true, point: state.point }
     }
-    await this.deps.click(state.point!, viewportOf(snap))
+    await this.state.input(() => this.deps.click(state.point!, viewportOf(snap)), true)
     // 点击后校验：轮询按钮翻转为「继续沟通」（与列表按钮同状态机）
     let flipped = false
     for (let i = 0; i < FLIP_POLL_ROUNDS; i++) {
@@ -368,11 +453,13 @@ export class DetailGreetExecutor {
       }
     }
     if (!flipped) {
+      this.state.unconfirmed('当前详情操作列尚无继续沟通肯定证据，发送结果未知')
       throw new DetailGreetError(
         `点击「打招呼」后按钮未翻转为「继续沟通」（轮询 ${FLIP_POLL_ROUNDS} 次未取得翻转证据）：` +
           '打招呼可能未生效（unknown，不要重试），请人工查看页面',
       )
     }
+    this.state.confirmed({ name, greeted: true }, '当前详情操作列明确翻转为继续沟通')
     await this.step('detail:close', () => this.closeDetailAfterGreet())
     return { greeted: true }
   }
@@ -387,7 +474,9 @@ export class DetailGreetExecutor {
     if (!locateResumeCanvas(snap)) return { wasOpen: false }
     const closed = await this.step('detail:close', () => this.tryCloseDetail())
     if (!closed) {
-      throw new DetailGreetError('Escape 未能关闭当前打开的简历详情：请人工按 Escape 关闭后重试')
+      throw new PagePostconditionError('Escape 后当前简历详情画布仍存在', {
+        status: 'unmet', evidence: ['Escape正常返回，轮询期间仍检出原简历画布'],
+      })
     }
     return { wasOpen: true }
   }
@@ -396,12 +485,22 @@ export class DetailGreetExecutor {
    * 推荐牛人页按姓名打开候选人简历详情（boss_open_detail 用）：
    * fresh snapshot → findButtonsByExactText + pairCardNameWithPoint 找姓名精确匹配的卡片 →
    * Win32 点姓名节点中心（ResumeBatchReader 同源：BOSS SDK 拦截 CDP 合成点击）→
-   * 轮询 locateResumeCanvas 命中（≤5s，中途同点重击一次）→ verifyDetailName 校验==name。
+   * 每次输入后轮询画布与右侧详情锚点；共享一次普通重试，已存在画布时必须先关闭残留。
    * 当前屏没有目标时滚动加载继续找（GreetExecutor 定向模式同源：30 屏上限 + 到底判定）；
    * 找不到人 fail-loud 并列出当前屏可见姓名。入口先关闭残留详情弹层（ResumeBatchReader 同源防错配）。
    * 成功后详情保持打开（供 boss_resume_detail 读取），本方法不读取不关闭。
    */
   async openDetail(opts: { name: string; onSearchProgress?: (screens: number) => void }): Promise<{ name: string; opened?: false; stopReason?: RecommendationStopReason }> {
+    this.openExecution = { attemptsUsed: 0, ordinaryRetriesUsed: 0, inputStatus: 'not_started', stage: 'prepared', verification: { status: 'inconclusive', evidence: ['尚未点击目标卡片'] } }
+    this.clickedName = undefined
+    this.residualCleared = false
+    try { return await this.openDetailImpl(opts) } catch (error) {
+      if (!(error instanceof DetailOpenPostconditionError)) this.openExecution.verification = { status: 'inconclusive', evidence: ['打开详情流程未取得确定后验；直接错误保持原样，不自动重放输入'] }
+      throw error
+    }
+  }
+
+  private async openDetailImpl(opts: { name: string; onSearchProgress?: (screens: number) => void }): Promise<{ name: string; opened?: false; stopReason?: RecommendationStopReason }> {
     if (this.deps.signal?.aborted) throw new CancelledError('已取消：打开简历详情尚未开始')
     const target = opts.name.trim()
     // 起点防残留（ResumeBatchReader 同源）：带着已打开的详情弹层点卡片，弹层挡住列表且打开
@@ -415,58 +514,53 @@ export class DetailGreetExecutor {
         throw new DetailGreetError('启动前检测到已打开的简历详情弹层，且 Escape 后未能关闭：请人工按 Escape 关闭详情后重试')
       }
     }
+    this.residualCleared = true
     let scrollRounds = 0
+    let loadedSeekAttempts = 0
+    let seekingIdentity: string | undefined
     for (;;) {
       if (this.deps.signal?.aborted) throw new CancelledError('已取消：打开简历详情阶段中止')
       const snap = await this.deps.snapshot()
+      if (this.deps.signal?.aborted) throw new CancelledError('已取消：打开简历详情定位阶段中止')
       const resultState = inspectRecommendationResults(snap)
       if (resultState.stopReason === 'no_matching_candidates' || excludedRecommendationName(snap, target)) return { name: target, opened: false, stopReason: resultState.stopReason ?? 'recommendations_boundary' }
-      const viewport = viewportOf(snap)
-      const buttons = findButtonsByExactText(snap, GREET_TEXT)
-      // 当前屏找姓名精确匹配的卡片（cardName 真机锚定配对；配对失败/不同名的按钮一律不点）
-      let targetPoint: ClickPoint | null = null
-      for (const btn of buttons) {
-        const paired = pairCardNameWithPoint(snap, btn, viewport)
-        if (paired.name === target && paired.point) {
-          targetPoint = paired.point
-          break
+      if (locateResumeCanvas(snap)) throw new DetailGreetError('查找目标卡片前出现了新的详情弹层，未向背景卡片输入')
+      // Reuse the full loaded-card index before scanning down: the original card may be above us.
+      const loaded = loadedCandidates(snap).filter(card => card.name === target && !card.excluded)
+      if (loaded.length > 1) throw new DetailGreetError('原候选人卡片姓名不唯一，未点击任何候选人')
+      const indexed = loaded[0]
+      const identity = indexed ? JSON.stringify([indexed.identityDigest, indexed.cardInfo]) : undefined
+      if (seekingIdentity && identity !== seekingIdentity) throw new DetailGreetError('滚动后原候选人卡片已变化，未使用旧坐标打开详情')
+      if (indexed?.point && !candidateButtonVisible(indexed)) {
+        if (!this.deps.scroll) throw new DetailGreetError('已加载原候选人在视口外，当前没有列表滚动能力')
+        if (loadedSeekAttempts >= 3 || indexed.bottom <= indexed.top || indexed.point.x <= indexed.left || indexed.point.x >= indexed.right) {
+          throw new DetailGreetError('已加载原候选人无法进入可操作视窗，未使用旧坐标打开详情')
         }
+        const delta = indexed.point.y - (indexed.top + indexed.bottom) / 2
+        if (!Number.isFinite(delta) || Math.abs(delta) < 1) throw new DetailGreetError('原候选人滚动距离无效，未发送输入')
+        const event = candidateScrollEvent(snap, delta)
+        const prior = this.openExecution.inputStatus
+        this.openExecution.stage = 'input'; this.openExecution.inputStatus = 'unknown'
+        try {
+          await this.preparationInput(() => this.deps.scroll!(event.x, event.y, event.deltaY))
+          this.openExecution.inputStatus = 'attempted'
+        } catch (error) {
+          if (error instanceof WinClickError && error.exitCode === 2 && !error.message.includes('[BOSS_INPUT_UNKNOWN]')) this.openExecution.inputStatus = prior
+          throw error
+        }
+        seekingIdentity = identity
+        loadedSeekAttempts++; scrollRounds++
+        opts.onSearchProgress?.(scrollRounds)
+        await this.sleep(1200)
+        continue // Re-index the original identity and obtain fresh name coordinates before clicking.
       }
+      // 当前屏找姓名精确匹配的卡片（cardName 真机锚定配对；配对失败/不同名的按钮一律不点）
+      const points = this.targetCardPoints(snap, target)
+      if (points.length > 1) throw new DetailGreetError('原候选人卡片姓名不唯一，未点击任何候选人')
+      const targetPoint = points[0]?.point
       if (targetPoint) {
-        await this.deps.click(targetPoint, viewport)
-        // 轮询 canvas 出现（真机 ~600ms；首击偶发被吞 → 第 5 次轮询时同点重击一次）
-        const attempts = Math.max(1, Math.ceil(OPEN_POLL_TIMEOUT / OPEN_POLL_INTERVAL))
-        let rect: ReturnType<typeof locateResumeCanvas> = null
-        let lastSnap: DomSnapshot | null = null
-        for (let i = 0; i < attempts && !rect; i++) {
-          if (i === OPEN_RECLICK_AT_INDEX) {
-            const retry = await this.deps.snapshot()
-            const retryState = inspectRecommendationResults(retry)
-            if (retryState.stopReason === 'no_matching_candidates' || excludedRecommendationName(retry, target)) return { name: target, opened: false, stopReason: 'recommendations_boundary' }
-            lastSnap = retry; rect = locateResumeCanvas(retry)
-            if (rect) break
-            const freshPoint = findButtonsByExactText(retry, GREET_TEXT).map((button) => pairCardNameWithPoint(retry, button, viewportOf(retry)))
-              .filter((candidate) => candidate.name === target && candidate.point)
-            if (freshPoint.length !== 1) throw new DetailGreetError('重击前原候选人卡片不唯一或不可确认，已停止，禁止使用缓存坐标')
-            await this.deps.click(freshPoint[0]!.point!, viewportOf(retry))
-          }
-          await this.sleep(OPEN_POLL_INTERVAL)
-          if (this.deps.signal?.aborted) {
-            throw new CancelledError('已取消：等待简历详情打开阶段中止（点击是否生效请人工查看页面）')
-          }
-          lastSnap = await this.step('detail:open-poll', () => this.deps.snapshot())
-          rect = locateResumeCanvas(lastSnap)
-        }
-        if (lastSnap && (inspectRecommendationResults(lastSnap).stopReason === 'no_matching_candidates' || excludedRecommendationName(lastSnap, target))) return { name: target, opened: false, stopReason: 'recommendations_boundary' }
-        if (!rect || !lastSnap) {
-          throw new DetailGreetError(
-            `点击「${target}」的卡片后 ${OPEN_POLL_TIMEOUT}ms 内未检出简历画布：` +
-              '可能点击被吞或该候选人无在线简历（附件简历型），请人工查看后重试',
-          )
-        }
-        // 打开的详情必须属于目标本人（canvas 顶部区姓名强校验，防打错人）
-        DetailGreetExecutor.verifyDetailName(lastSnap, target)
-        return { name: target }
+        const stopReason = await this.openTargetDetail(target, targetPoint, snap)
+        return stopReason ? { name: target, opened: false, stopReason } : { name: target }
       }
       // 当前屏没有目标 → 滚动加载继续找（滚动/到底判定与 GreetExecutor 定向模式同源）
       if (resultState.stopReason) return { name: target, opened: false, stopReason: resultState.stopReason }
@@ -486,7 +580,7 @@ export class DetailGreetExecutor {
         // 滚动点取实际视口中心（不能硬编码：窗口矮时落点出视口，滚轮不生效会误判到底）
         const vp = viewportOf(before)
         const delta = Math.min(SCROLL_DELTA, Math.floor(vp.height / 2))
-        await this.deps.scroll(Math.floor(vp.width / 2), Math.floor(vp.height / 2), delta)
+        await this.preparationInput(() => this.deps.scroll!(Math.floor(vp.width / 2), Math.floor(vp.height / 2), delta))
         await this.sleep(attempt === 0 ? 1200 : 1800)
         const after = await this.deps.snapshot()
         if (scrollOffsetOf(before) !== scrollOffsetOf(after)) break
@@ -501,6 +595,95 @@ export class DetailGreetExecutor {
     }
   }
 
+  /** 只读核验须有本次「清除残留→同名卡片点击」因果，不能认领任意已开详情。 */
+  async verifyOpenDetail(): Promise<DetailOpenVerification> {
+    try { return this.observeOpenDetail(await this.deps.snapshot()) } catch (error) {
+      this.openExecution.verification = { status: 'inconclusive', evidence: ['详情只读核验未取得有效快照'] }
+      throw error
+    }
+  }
+
+  private observeOpenDetail(snap: DomSnapshot): DetailOpenVerification {
+    const verification: DetailOpenVerification = !this.residualCleared || !this.clickedName
+      ? { status: 'inconclusive', evidence: ['没有本次清除残留后点击原目标卡片的证据'] }
+      : DetailGreetExecutor.detailReady(snap)
+        ? { status: 'met', evidence: [`本次已点击「${this.clickedName}」卡片，画布、右侧操作列与经历概览均已出现`] }
+        : { status: 'unmet', evidence: ['本次点击后的完整详情后验未满足（画布、右侧操作列、经历概览）'] }
+    this.openExecution.verification = verification
+    return structuredClone(verification)
+  }
+
+  private async openTargetDetail(target: string, point: ClickPoint, initial: DomSnapshot): Promise<RecommendationStopReason | null> {
+    let snap = initial
+    for (;;) {
+      if (this.deps.signal?.aborted) throw new CancelledError('已取消：打开简历详情输入尚未开始')
+      const viewport = viewportOf(snap)
+      const priorInputStatus = this.openExecution.inputStatus
+      this.openExecution.stage = 'input'
+      this.openExecution.attemptsUsed++
+      this.openExecution.inputStatus = 'unknown'
+      this.clickedName = target
+      try { await this.preparationInput(() => this.deps.click(point, viewport)) } catch (error) {
+        if (error instanceof WinClickError && error.exitCode === 2 && !error.message.includes('[BOSS_INPUT_UNKNOWN]')) {
+          this.openExecution.inputStatus = priorInputStatus
+          this.clickedName = undefined
+        }
+        throw error
+      }
+      this.openExecution.inputStatus = 'attempted'
+      this.openExecution.stage = 'postcheck'
+      const rounds = Math.max(1, Math.ceil(OPEN_POLL_TIMEOUT / OPEN_POLL_INTERVAL))
+      for (let i = 0; i < rounds; i++) {
+        if (i === OPEN_RECLICK_AT_INDEX && this.openExecution.ordinaryRetriesUsed === 0) {
+          snap = await this.deps.snapshot()
+          if (inspectRecommendationResults(snap).stopReason === 'no_matching_candidates' || excludedRecommendationName(snap, target)) return 'recommendations_boundary'
+          if (this.observeOpenDetail(snap).status === 'met') return null
+          // 既有无画布2.5秒重击，占用同一普通重试；有画布时先等待右栏完整渲染。
+          if (!locateResumeCanvas(snap)) break
+        }
+        await this.sleep(OPEN_POLL_INTERVAL)
+        if (this.deps.signal?.aborted) throw new CancelledError('已取消：等待简历详情打开阶段中止（点击是否生效请人工查看页面）')
+        snap = await this.step('detail:open-poll', () => this.deps.snapshot())
+        const resultState = inspectRecommendationResults(snap)
+        if (resultState.stopReason === 'no_matching_candidates' || excludedRecommendationName(snap, target)) return 'recommendations_boundary'
+        if (this.observeOpenDetail(snap).status === 'met') return null
+      }
+      if (this.openExecution.ordinaryRetriesUsed >= 1 || this.rebuildingIdentity && this.state.execution.ordinaryRetriesUsed >= 1) {
+        throw new DetailOpenPostconditionError(`点击「${target}」的卡片后 ${OPEN_POLL_TIMEOUT}ms 内未检出完整简历详情（画布、右侧打招呼/继续沟通及经历概览）；一次普通重试已用尽`)
+      }
+      // 不能向不完整详情背后的列表输入，先确认残留已消失，再fresh寻找同一目标。
+      snap = await this.deps.snapshot()
+      if (inspectRecommendationResults(snap).stopReason === 'no_matching_candidates' || excludedRecommendationName(snap, target)) return 'recommendations_boundary'
+      if (this.observeOpenDetail(snap).status === 'met') return null
+      this.openExecution.stage = 'prepared'
+      this.clickedName = undefined
+      this.residualCleared = false
+      if (locateResumeCanvas(snap) && !await this.step('detail:close-residual', () => this.tryCloseDetail())) {
+        throw new DetailGreetError('未检出完整简历详情，且重试前残留简历详情未能关闭，未向背景卡片输入')
+      }
+      snap = await this.deps.snapshot()
+      if (locateResumeCanvas(snap)) throw new DetailGreetError('重试前仍存在详情弹层，未向背景卡片输入')
+      this.residualCleared = true
+      const resultState = inspectRecommendationResults(snap)
+      if (resultState.stopReason === 'no_matching_candidates' || excludedRecommendationName(snap, target)) return 'recommendations_boundary'
+      const points = this.targetCardPoints(snap, target)
+      if (points.length !== 1) throw new DetailGreetError('重击前原候选人卡片不唯一或不可确认，已停止，禁止使用缓存坐标')
+      if (this.rebuildingIdentity && !this.state.retry()) throw new DetailOpenPostconditionError('原候选人详情准备的一次普通重试已用尽')
+      this.openExecution.ordinaryRetriesUsed = 1
+      point = points[0]!.point!
+    }
+  }
+
+  private targetCardPoints(snap: DomSnapshot, target: string) {
+    return [GREET_TEXT, CONTINUE_TEXT].flatMap((text) => findButtonsByExactText(snap, text))
+      .map((button) => pairCardNameWithPoint(snap, button, viewportOf(snap)))
+      .filter((candidate) => candidate.name === target && candidate.point)
+  }
+
+  private preparationInput<T>(action: () => Promise<T>): Promise<T> {
+    return this.rebuildingIdentity ? this.state.input(action) : action()
+  }
+
   /** 打招呼生效后的关闭：失败时报错必须注明打招呼已生效（按钮已翻转），避免被当成打招呼未生效 */
   private async closeDetailAfterGreet(): Promise<void> {
     const closed = await this.tryCloseDetail()
@@ -513,7 +696,7 @@ export class DetailGreetExecutor {
 
   /** Escape 关闭详情并轮询 canvas 消失（范式同 ResumeBatchReader.tryCloseDetail）；超时未消失返回 false */
   private async tryCloseDetail(): Promise<boolean> {
-    await this.deps.pressEscape()
+    await this.preparationInput(() => this.deps.pressEscape())
     const attempts = Math.max(1, Math.ceil(CLOSE_POLL_TIMEOUT / CLOSE_POLL_INTERVAL))
     for (let i = 0; i < attempts; i++) {
       await this.sleep(CLOSE_POLL_INTERVAL)

@@ -18,6 +18,7 @@
 """
 
 import math
+from decimal import Decimal, ROUND_CEILING
 from typing import Optional, Dict, Any
 
 from loguru import logger
@@ -28,6 +29,50 @@ from src.db.models import TokenCostPriceDB
 # 模型未配置单价时的兜底计价模型（负责人定版 2026-09-15：匹配不到按
 # deepseek v4 flash 的价格计算，不再落 0——部署主模型名可能不在价目表）
 BILLING_FALLBACK_MODEL = "deepseek-flash"
+
+
+BOSS_VISUAL_BILLING_FACTOR = 20
+
+
+def get_boss_visual_billing_factor(detail: dict) -> int:
+    """Rows written before factor snapshots belong to the immutable legacy ×50 policy."""
+    factor = detail.get("billing_factor", 50)
+    if type(factor) is not int or factor not in (20, 50):
+        raise ValueError("Invalid BOSS visual billing factor snapshot")
+    return factor
+
+
+def calculate_token_cost_decimal(
+    usage: dict, price_snapshot: dict, *, billing_factor: int = BOSS_VISUAL_BILLING_FACTOR,
+) -> tuple[Decimal, Decimal]:
+    """BOSS visual actual token cost × frozen server factor; round only the final fee."""
+    factor = get_boss_visual_billing_factor({"billing_factor": billing_factor})
+    def count(name: str, *, required: bool = False) -> int:
+        if name not in usage:
+            if required:
+                raise ValueError("Missing actual token usage")
+            return 0
+        value = usage[name]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError("Token usage must be a non-negative integer")
+        return value
+
+    prompt = count("prompt_tokens", required=True)
+    completion = count("completion_tokens", required=True)
+    cached = count("cached_tokens") or count("cached_input_tokens")
+    creation = count("cache_creation_tokens")
+    if min(prompt, completion, cached, creation) < 0 or cached + creation > prompt:
+        raise ValueError("Invalid token usage")
+    input_price, output_price, has_cached, cache_price = _resolve_unit_prices(price_snapshot, prompt)
+    if input_price <= 0 or output_price <= 0:
+        raise ValueError("Actual model price is required")
+    p_in, p_out, p_cache = map(lambda value: Decimal(str(value)), (input_price, output_price, cache_price))
+    if has_cached:
+        cost = ((prompt - cached - creation) * p_in + cached * p_cache
+                + creation * p_in * Decimal("1.25") + completion * p_out) / Decimal(1_000_000)
+    else:
+        cost = (prompt * p_in + completion * p_out) / Decimal(1_000_000)
+    return cost, (cost * factor).quantize(Decimal("0.01"), rounding=ROUND_CEILING)
 
 
 def calculate_credit_cost(

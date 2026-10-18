@@ -33,6 +33,7 @@ import {
 import { viewportOf } from './FilterSetter.js'
 import { locateSendButton } from './ChatSendExecutor.js'
 import { CancelledError } from '../operations/types.js'
+import { PagePostconditionError } from '../operations/pageOperation.js'
 
 export class ChatSearchError extends Error {
   constructor(message: string) {
@@ -58,6 +59,7 @@ export interface ChatSearchDeps {
   signal?: AbortSignal
   /** 可注入 sleep（测试） */
   sleep?(ms: number): Promise<void>
+  ordinaryRetry?(): boolean
 }
 
 /** 搜索框尺寸下限（视口宽比例，替代原绝对 w>200）：搜索框是左栏主体宽度的输入条 */
@@ -119,7 +121,7 @@ export class ChatSearchExecutor {
    *    与右上全局搜索 svg cx>940）。
    * fail-loud：无锚点/候选歧义 → 报 count，绝不盲点。
    */
-  private locateSearchEntry(snap: DomSnapshot): { point: ClickPoint | null; count: number } {
+  locateSearchEntry(snap: DomSnapshot): { point: ClickPoint | null; count: number } {
     const viewport = viewportOf(snap)
     interface NodeHit { cx: number; cy: number; x: number; y: number; w: number; h: number; kind: string }
     const smallIcons: NodeHit[] = []
@@ -223,8 +225,11 @@ export class ChatSearchExecutor {
     // 2. 定位搜索框：直接识别 INPUT 形态（2026-08-27 范式变更，见 findSearchField 注释）；
     //    未命中时重试一次点击再找（弹层偶发不响应首击，重试安全——首击只开弹层无写效应）
     let box = this.findSearchField(await this.deps.snapshot(), entry.point!)
-    if (!box.point && box.count === 0) {
-      await this.deps.click(entry.point!, viewportOf(snap0))
+    if (!box.point && box.count === 0 && (this.deps.ordinaryRetry?.() ?? true)) {
+      const retrySnap = await this.deps.snapshot()
+      const freshEntry = this.locateSearchEntry(retrySnap)
+      if (!freshEntry.point || freshEntry.count !== 1) throw new ChatSearchError('重试前无法重新唯一定位搜索入口，未使用旧坐标')
+      await this.deps.click(freshEntry.point, viewportOf(retrySnap))
       await this.sleep(SEARCH_OPEN_DELAY)
       box = this.findSearchField(await this.deps.snapshot(), entry.point!)
     }
@@ -261,10 +266,12 @@ export class ChatSearchExecutor {
     const { count } = locateSendButton(snap3)
     const searchLayerOpen = this.contactsLabelCenter(snap3) !== null
     if (count !== 1 || searchLayerOpen) {
-      throw new ChatSearchError(
+      throw new PagePostconditionError(
         count !== 1
           ? `点击结果卡片后未进入对话（发送按钮 ${count} 个）：搜索结果「${name}」可能不存在或点击未生效，请人工查看`
           : `点击结果卡片后搜索浮层未关闭、对话未切换到「${name}」（结果点击未生效），请人工查看`,
+        { status: searchLayerOpen ? 'unmet' : 'inconclusive',
+          evidence: [searchLayerOpen ? '点击正常返回但搜索浮层仍可见' : `搜索浮层已消失，但发送按钮数量${count}，不能确认进入会话`] },
       )
     }
   }
@@ -343,7 +350,7 @@ export class ChatSearchExecutor {
     let missing = this.missingCharsOf(snapTyped, name)
     if (missing.length === 0) return snapTyped
 
-    if (!this.deps.clearInput) {
+    if (!this.deps.clearInput || !(this.deps.ordinaryRetry?.() ?? true)) {
       throw new ChatSearchError(
         `搜索姓名「${name}」未落地（页面未见输入字符 ${JSON.stringify(missing)}）：搜索框未聚焦或输入被拦，已停止，请人工查看`,
       )

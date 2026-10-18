@@ -28,7 +28,7 @@ export interface BossToolDef {
   }
 }
 
-export const TOOL_DEFS: BossToolDef[] = [
+const TOOL_DEFINITIONS: BossToolDef[] = [
   {
     name: 'boss_filter',
     title: '设置筛选条件',
@@ -220,8 +220,15 @@ export const TOOL_DEFS: BossToolDef[] = [
     description:
       '采集当前页面主文档全部文本节点（text + 坐标 + class），供上层判断是否存在遮挡弹层' +
       '（广告/功能引导弹窗）并定位关闭控件。纯只读单次快照，不点击、不输入、不滚屏，无页面前置。' +
-      '弹层盖顶导致其它工具失败（UI_CHANGED/BUSY）时，先调本工具导出候选再决定关闭动作。',
-    zodShape: {},
+      '弹层盖顶导致其它工具失败（UI_CHANGED/BUSY）时，先调本工具导出候选再决定关闭动作。' +
+      '传 request_id 与 visual_context 时通过后台 API 诊断网页截图并按后台费率计费；返回页面判断、独立动作错误及单次 recovery_ref。' +
+      '视觉模式复用同一恢复原语，是否可重做原业务由服务端策略决定；同请求回执未知时用原 request_id 取回。',
+    zodShape: {
+      request_id: z.string().uuid().optional().describe('视觉请求 UUID；取回时必须复用同一值'),
+      visual_context: z.record(z.string(), z.unknown()).optional().describe('视觉 API v2 的操作事实与可用关闭/Escape能力；后态验证不可建议动作'),
+      observation_mode: z.enum(['page', 'window']).optional().describe('默认网页截图；window 激活绑定 BOSS 标签后观察其 Chrome 窗口，同请求不能换观察空间'),
+      retrieve_only: z.boolean().optional().describe('只取回同一请求回执，不重新截图或调用模型'),
+    },
     annotations: { title: '导出弹层识别候选清单', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
@@ -231,9 +238,11 @@ export const TOOL_DEFS: BossToolDef[] = [
       '点击关闭当前页面最上层的弹窗/引导弹层：按传入的关闭控件文本定位并真实鼠标点击，' +
       '点击后校验弹层已消失。⚠️ 仅接受关闭语义白名单文案（关闭/知道了/我知道了/以后再说/下次再说/' +
       '暂不/取消/跳过/不再提醒/残忍拒绝/稍后再说/× 等），非白名单文本直接拒绝——' +
-      '绝不点击「领取/立即打开/开通」类按钮，不产生任何业务副作用。',
+      '绝不点击「领取/立即打开/开通」类按钮，不产生任何业务副作用。' +
+      '也可仅传 inspect 返回的 recovery_ref：按后台已校验的关闭点击或 Escape 建议核验绑定观察后消费一次；只返回输入已投递，必须再做视觉后态验证。',
     zodShape: {
-      text: z.string().min(1).max(20).describe('关闭控件的精确文本（必须在关闭语义白名单内，与页面文本 trim 全等）'),
+      text: z.string().min(1).max(20).optional().describe('关闭控件的精确文本（与 recovery_ref 互斥）'),
+      recovery_ref: z.string().uuid().optional().describe('inspect 返回的本机单次视觉关闭引用；不能传任意坐标'),
     },
     annotations: { title: '关闭页面弹层', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
@@ -349,14 +358,14 @@ export const TOOL_DEFS: BossToolDef[] = [
     description:
       '在当前打开的简历详情页点「打招呼」（校验详情属于指定姓名候选人，防止打错人；已打过则幂等返回；打完自动关闭详情）。' +
       'greet_in_detail默认false，缺少显式true不执行；仅用户主动选择本轮评分合格后直接打招呼且已matched时传true。' +
-      '默认人工审核后给出名单，在列表页用boss_greet；dry_run=true只定位不点击，不代替启用参数。写动作，期间勿动鼠标。',
+      '默认人工审核后给出名单，在列表页用boss_greet；dry_run=true只核验不发送，必要时关闭重开详情，不代替启用参数。写动作，期间勿动鼠标。',
     zodShape: {
       name: z.string().min(1).max(30).describe('候选人姓名（校验当前打开的详情属于该候选人，防止打错人）'),
       greet_in_detail: z.boolean().optional().default(false).describe('默认关闭；仅用户明确选择本轮合格后直接打招呼才传true'),
       // 键名必须与 operation 入参一致（boss_send_to 同款 snake_case）：MCP SDK 用 zodShape 解析
       // 输入后原样传给 operation.execute，此前误写 dryRun 会被 zod strip 掉且 operation 读
       // dry_run → dry-run 请求静默变真实点击（安全缺陷，测试智能体 2026-09-28 修正）
-      dry_run: z.boolean().optional().describe('只定位不点击（测试链路，默认不传即真实点击）'),
+      dry_run: z.boolean().optional().describe('只核验不发送，必要时关闭重开详情（默认不传即真实打招呼）'),
     },
     annotations: { title: '详情页打招呼', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
@@ -370,5 +379,12 @@ export const TOOL_DEFS: BossToolDef[] = [
     annotations: { title: '关闭简历详情', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
 ]
+
+// One transport field for all operations; stripped before business argument validation.
+export const TOOL_DEFS: BossToolDef[] = TOOL_DEFINITIONS.map(def => ({ ...def, zodShape: {
+  ...def.zodShape,
+  _boss_target_ref: z.string().uuid().optional().describe('内部恢复绑定：只沿用先前结果的 opaque 引用，不传标签ID或另选页面'),
+  _boss_expected_contact_ref: z.string().regex(/^[a-f0-9]{64}$/).optional().describe('内部恢复绑定：沿用原当前会话身份摘要，不得改换联系人'),
+} }))
 
 export const TOOL_NAMES = TOOL_DEFS.map((t) => t.name)

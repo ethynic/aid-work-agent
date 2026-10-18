@@ -1,3 +1,4 @@
+import { BusinessOperationState, withBusinessRecovery } from '../boss/BusinessOperationState.js'
 /**
  * boss_send_current operation（设计 §10.6）：沟通页向当前已选会话发送消息（写动作）。
  *
@@ -38,6 +39,9 @@ export function createBossSendCurrentOperation(
           return null
         },
         async (session, tracker) => {
+          const state = new BusinessOperationState()
+          const intent = { name: 'boss_send_current', goal: '向原当前会话发送原消息', expected: '原会话编辑区清空且新增同文出站消息', operationClass: 'external_effect' as const }
+          return withBusinessRecovery(state, intent, async () => {
           await ensureChatPage(session, ctx)
           // 前置：必须已选中会话（有发送按钮），否则提示先选会话
           const probe = await session.snapshot()
@@ -48,7 +52,7 @@ export function createBossSendCurrentOperation(
               '当前沟通页未选中会话（未找到发送按钮）：请先在左侧会话列表选择一个会话后再发送',
             )
           }
-          const sender = new ChatSendExecutor({
+          const sender = new ChatSendExecutor({ state,
             snapshot: session.snapshot,
             click: session.click,
             clickAndType: session.clickAndType,
@@ -58,13 +62,14 @@ export function createBossSendCurrentOperation(
             stage: 'execute',
             message: dryRun ? '输入消息（dry-run 不发送）' : '输入并发送消息',
           })
-          const r = await sender.sendMessage({ message, dryRun })
+          const r = await sender.sendMessage({ message, dryRun, expectedContactRef: ctx.expectedContactRef })
           tracker.completed = r.sent ? 1 : 0
           return {
             message: dryRun ? '完成：已向当前会话输入消息（dry-run 未发送）' : '完成：已向当前会话发送消息',
             data: { sent: r.sent, dry_run: dryRun },
             effect: r.sent ? ('applied' as const) : ('none' as const),
           }
+          })
         },
       )
     },

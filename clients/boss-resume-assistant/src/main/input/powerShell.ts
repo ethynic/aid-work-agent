@@ -8,6 +8,8 @@ const dependencies: Readonly<Record<string, readonly string[]>> = {
   'cv-wheel.ps1': ['BossPhysicalInput.cs'],
   'cv-stitch.ps1': [],
   'cv-segdiff.ps1': [],
+  'window-experiment.ps1': ['BossPhysicalInput.cs', 'BossWindowExperiment.cs'],
+  'visual-region-compare.ps1': [],
 }
 
 export class PowerShellScriptError extends Error {
@@ -94,7 +96,7 @@ export async function execPowerShellScript(script: string, args: string[], optio
     const name = path.basename(script)
     if (!Object.hasOwn(dependencies, name) || !localAbsolute(script)) throw new Error('POWERSHELL_SCRIPT_NOT_ALLOWED')
     ordinaryPath(path.dirname(script), true)
-    const files = [name, ...dependencies[name]!]
+    const files = [name, ...dependencies[name]!, ...(name === 'win-click.ps1' && args.includes('-CdpPort') ? ['BossWindowExperiment.cs'] : [])]
     // Read verified source bytes before creating the stage. No source link or
     // missing sibling can fall back to an older installed copy.
     const sources = files.map(file => {

@@ -61,7 +61,7 @@ test('真实结构增加无控件行：探查保留13个已确认行并报告局
   assert.equal(rows.length, 13)
   assert.deepEqual(f.setter.unreadableRows.map((row) => row.label), ['未加载条件'])
   assert.match(f.setter.unreadableRows[0]!.reason, /未完整解析/)
-  assert.equal(f.clicks.length, 1) // 只收起面板，不修改筛选。
+  assert.equal(f.clicks.length, 0) // fresh后验已确认面板收起，不能把工具栏再点开。
 })
 
 test('真实结构部分行无选项：继续探查其余行，下一次完整探查清除旧诊断', async () => {
@@ -203,7 +203,9 @@ test('超出实测年龄范围或缺少拖动能力：清除之前拒绝', async
 })
 
 test('徽章数量不能替代行勾选状态核验，未激活选项不确认', async () => {
-  const f = setup([top])
+  const inactive = selected(top, ['男'])
+  inactive.strings = inactive.strings.map(value => value === 'option active' ? 'option' : value)
+  const f = setup([inactive])
   await assert.rejects(f.setter.apply({ membership_hint: 'vip', membership_account_ref: membershipAccountKey(top)!, filters: [{ label: '性别', options: ['男'] }] }), /实际已选值校验失败/)
   assert.equal(f.clicks.length, 2) // 清除+选项，尚未确认。
 })

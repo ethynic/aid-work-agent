@@ -29,6 +29,7 @@ import { JobSwitchError } from '../src/main/boss/JobSwitcher.js'
 import { ResumeReadError } from '../src/main/boss/ResumeReader.js'
 import { ResumeBatchError } from '../src/main/boss/ResumeBatchReader.js'
 import { DetailGreetError } from '../src/main/boss/DetailGreetExecutor.js'
+import { actionSnapshot, text } from './chatActionFixture.js'
 import { WinClickError } from '../src/main/input/WinMouseClicker.js'
 
 function silentCtx(): OpContext {
@@ -82,28 +83,22 @@ function snapWithTexts(texts: string[]): DomSnapshot {
 }
 
 /** greet 用 snapshot：根 + 「筛选」+ N 个「打招呼」按钮 + 附加文案（相同文案共享 string 下标） */
-function greetSnap(buttons: Array<[number, number, number, number]>, extraTexts: string[] = []): DomSnapshot {
-  const nodeCount = 2 + buttons.length + extraTexts.length
-  const idx = Array.from({ length: nodeCount }, (_, i) => i)
-  const values = [0, 1, ...buttons.map(() => 2), ...extraTexts.map((_, i) => 3 + i)]
-  const bounds: Array<[number, number, number, number]> = [
-    [0, 0, 1917, 1905],
-    [100, 100, 50, 20],
-    ...buttons,
-    ...extraTexts.map((): [number, number, number, number] => [100, 300, 50, 20]),
-  ]
-  return {
-    strings: ['', '筛选', '打招呼', ...extraTexts],
-    documents: [
-      {
-        nodes: {
-          nodeValue: { index: idx, value: values },
-          contentDocumentIndex: { index: [], value: [] },
-        },
-        layout: { nodeIndex: idx, bounds },
-      },
-    ],
+function greetSnap(buttons: Array<[number, number, number, number]>, extraTexts: string[] = [],
+  continued: Array<[number, number, number, number]> = []): DomSnapshot {
+  const texts: string[] = ['筛选']
+  const boxes: Array<[number, number, number, number]> = [[100, 100, 50, 20]]
+  for (const [bounds, state] of [...buttons.map(b => [b, '打招呼'] as const), ...continued.map(b => [b, '继续沟通'] as const)]) {
+    const y = bounds[1] + bounds[3] / 2
+    texts.push(bounds[1] < 300 ? '张三丰' : '李四海', '刚刚活跃', state)
+    boxes.push([300, y - 18, 70, 20], [390, y - 18, 70, 20], bounds)
   }
+  for (const text of extraTexts) { texts.push(text); boxes.push([100, 300, 150, 20]) }
+  const ids = Array.from({ length: texts.length + 1 }, (_, i) => i)
+  const bounds: Array<[number, number, number, number]> = [[0, 0, 1917, 1905], ...boxes]
+  return { strings: ['', ...texts, 'HTML'], documents: [{ nodes: {
+    nodeValue: { index: ids, value: ids }, nodeName: { index: [0], value: [texts.length + 1] },
+    contentDocumentIndex: { index: [], value: [] } },
+    layout: { nodeIndex: ids, bounds, clientRects: bounds } }] }
 }
 
 test('Win32 输入后异常（含超时及登录关键词）回执 unknown，输入前拒绝保持 none，均不自动重试', async () => {
@@ -117,7 +112,7 @@ test('Win32 输入后异常（含超时及登录关键词）回执 unknown，输
     let attempts = 0
     f.session.click = async () => {
       attempts++
-      throw new WinClickError(`win-click.ps1 执行失败(exit=1): ${failure.message}`, 1)
+      throw new WinClickError(`win-click.ps1 执行失败(exit=${failure.afterInput ? 1 : 2}): ${failure.message}`, failure.afterInput ? 1 : 2)
     }
     const result = await createBossGreetOperation(f.factory).execute({ limit: 1 }, silentCtx())
     assert.equal(result.success, false)
@@ -412,7 +407,7 @@ test('greet 前置校验：URL 是推荐页 → 通过 URL 判定正常执行', 
   const BTN: [number, number, number, number] = [1690, 208, 64, 32]
   // probe → locate(1btn) → 点完无按钮 → 滚动探测(2 次签名不变=到底)
   const f = fakeFactory(
-    [greetSnap([BTN]), greetSnap([BTN]), greetSnap([]), greetSnap([]), greetSnap([])],
+    [greetSnap([BTN]), greetSnap([BTN]), greetSnap([], [], [BTN]), greetSnap([], [], [BTN]), greetSnap([], [], [BTN])],
     { url: 'https://www.zhipin.com/web/chat/recommend' },
   )
   const r = await createBossGreetOperation(f.factory).execute({ limit: 5 }, silentCtx())
@@ -444,9 +439,9 @@ test('greet 付费墙（已成功 1 人后触发）→ PAYWALL，effect=partial'
   const f = fakeFactory([
     greetSnap([BTN1, BTN2]),
     greetSnap([BTN1, BTN2]),
-    greetSnap([BTN2]),
-    greetSnap([BTN2]),
-    greetSnap([BTN2], ['该职位无开聊权益']),
+    greetSnap([BTN2], [], [BTN1]),
+    greetSnap([BTN2], [], [BTN1]),
+    greetSnap([BTN2], ['该职位无开聊权益'], [BTN1]),
   ])
   const r = await createBossGreetOperation(f.factory).execute({ limit: 3 }, silentCtx())
   assert.equal(r.success, false)
@@ -462,9 +457,9 @@ test('greet 成功路径：effect=applied，data 含 greeted/reached_end', async
   const f = fakeFactory([
     greetSnap([BTN1]),
     greetSnap([BTN1]),
-    greetSnap([]),
-    greetSnap([]),
-    greetSnap([]),
+    greetSnap([], [], [BTN1]),
+    greetSnap([], [], [BTN1]),
+    greetSnap([], [], [BTN1]),
   ])
   const r = await createBossGreetOperation(f.factory).execute({ limit: 5 }, silentCtx())
   assert.equal(r.success, true)
@@ -476,7 +471,7 @@ test('greet 成功路径：effect=applied，data 含 greeted/reached_end', async
 })
 
 /** 定向 greet 用 snapshot：根视口 1917x1905 + 「筛选」+ 卡片行（姓名/活跃状态/按钮，真机锚定坐标） */
-function greetNamedSnap(rows: Array<{ name: string | null; buttonY: number }>): DomSnapshot {
+function greetNamedSnap(rows: Array<{ name: string | null; buttonY: number; continued?: boolean }>): DomSnapshot {
   // node 0 根 / node 1 = 「筛选」（probe 前置校验用），其余为卡片行文本节点
   const strings: string[] = ['', '筛选']
   const nvIndex: number[] = [0, 1]
@@ -503,17 +498,19 @@ function greetNamedSnap(rows: Array<{ name: string | null; buttonY: number }>): 
     if (row.name !== null) addText(row.name, [317, row.buttonY - 18, 50, 20]) // 中心 (342, y-8)
     addText('刚刚活跃', [370, row.buttonY - 18, 60, 20]) // 中心 (400, y-8)
     addText('本科', [317, row.buttonY + 30, 40, 20]) // 噪音
-    addText('\n                  打招呼', [1130, row.buttonY - 16, 64, 32]) // 中心 (1162, y)
+    addText(row.continued ? '继续沟通' : '\n                  打招呼', [1130, row.buttonY - 16, 64, 32]) // 中心 (1162, y)
   }
+  const htmlIndex = intern('HTML')
   return {
     strings,
     documents: [
       {
         nodes: {
           nodeValue: { index: nvIndex, value: nvValue },
+          nodeName: { index: [0], value: [htmlIndex] },
           contentDocumentIndex: { index: [], value: [] },
         },
-        layout: { nodeIndex: layoutNodeIndex, bounds: layoutBounds },
+        layout: { nodeIndex: layoutNodeIndex, bounds: layoutBounds, clientRects: layoutBounds },
       },
     ],
   }
@@ -532,7 +529,7 @@ test('greet 定向成功：names=[张三丰] 只点张三丰的按钮，data 含
   const A = { name: '刘草威', buttonY: 146 }
   const B = { name: '张三丰', buttonY: 330 }
   // probe（含筛选）→ 定位[A,B]（只点 B）→ 校验[A]（B 变继续沟通）→ 名单完成
-  const f = fakeFactory([greetNamedSnap([A, B]), greetNamedSnap([A, B]), greetNamedSnap([A])])
+  const f = fakeFactory([greetNamedSnap([A, B]), greetNamedSnap([A, B]), greetNamedSnap([A, {...B, continued: true}])])
   const r = await createBossGreetOperation(f.factory).execute({ names: ['张三丰'] }, silentCtx())
   assert.equal(r.success, true)
   assert.equal(r.effect, 'applied')
@@ -553,9 +550,9 @@ test('greet 定向：MCP 默认 limit=1 不截断名单（operation 钳到 ≥ n
   const f = fakeFactory([
     greetNamedSnap([A, B]),
     greetNamedSnap([A, B]),
-    greetNamedSnap([B]),
-    greetNamedSnap([B]),
-    greetNamedSnap([]),
+    greetNamedSnap([{...A, continued: true}, B]),
+    greetNamedSnap([{...A, continued: true}, B]),
+    greetNamedSnap([{...A, continued: true}, {...B, continued: true}]),
   ])
   const r = await createBossGreetOperation(f.factory).execute({ limit: 1, names: ['刘草威', '张三丰'] }, silentCtx())
   assert.equal(r.success, true)
@@ -701,4 +698,15 @@ test('写动作未预期异常（INTERNAL_ERROR）→ effect=unknown（规格 §
   assert.equal(r.code, 'INTERNAL_ERROR')
   assert.equal(r.effect, 'unknown')
   assert.equal(r.retryable, false)
+})
+
+
+test('confirmed acceptance survives a later preview failure as partial effect with receipt', async()=>{
+ const marker='对方想发送附件简历给您，您是否同意'
+ const request=text(marker,240,500,290,25),prompt=text(marker,650,1000,300,25),agree=text('同意',1050,1000,60,25),preview=text('点击预览附件简历',700,800,180,25)
+ const f=fakeFactory([actionSnapshot({extra:[request]}),actionSnapshot({extra:[request,prompt,agree]}),actionSnapshot({extra:[preview]})],{url:'https://www.zhipin.com/web/chat/index'})
+ const r=await createBossAcceptResumeOperation(f.factory).execute({limit:1,preview:true},silentCtx())
+ assert.equal(r.success,false);assert.equal(r.effect,'partial');assert.equal(r.data.completed,1)
+ assert.equal((r.data.confirmed_items as Array<{accepted:boolean}>)[0]?.accepted,true)
+ assert.equal(((r.data.operation_recovery as Record<string,unknown>).business_effect as {status:string}).status,'confirmed')
 })

@@ -1,23 +1,6 @@
-/**
- * 沟通页「不合适」标记执行器（设计文档 §10.4，CLI reject 子命令 / chat 对话模式）。
- *
- * 沟通页当前会话右侧面板底部有「不合适」按钮，点击将当前沟通的候选人标记为不合适。
- * 手动触发的单发写动作：不写 ActionStore、不滚动、不批量，一次只标当前会话。
- *
- * 流程（fail-loud，任何歧义都停止请人工查看，绝不盲点）：
- * 1. fresh snapshot 定位右侧面板（cx > 850，同 ResumeConsentExecutor 分界）唯一「不合适」按钮；
- *    0 个（未打开会话/已标记）或多个 → 报错
- * 2. Win32 真实鼠标点击（写动作按钮被风控拦截，见设计文档 §10.3 / §17）
- * 3. 点击后分支：
- *    - 「不合适」直接消失 → 成功
- *    - 出现唯一「确定」按钮（确认弹层）→ 再点「确定」，然后校验「不合适」消失
- *    - 出现不合适原因选项（REJECT_REASON_OPTIONS 文案）→ 报错请人工选择：
- *      手动触发场景没有评估理由可映射，绝不乱选原因
- * 4. 结果确认（满足其一即成功）：
- *    - 右侧区域「不合适」消失
- *    - 右侧面板头部候选人姓名已变（真机 2026-08-06：标记成功后 BOSS 自动切换到
- *      下一个会话，新会话也有「不合适」按钮，只查按钮会误报失败）
- *    两者都不满足 = 点击被拦截/弹层未处理，报错
+/** Mark the original current conversation unsuitable.
+ * Stable success: its unique full-list entry disappears/is hidden while the loaded list remains readable;
+ * a new explicit rejection result is another positive. Header changes or a missing button alone are unknown.
  */
 import {
   type DomSnapshot,
@@ -26,11 +9,14 @@ import {
   accumulateOwnerOffset,
   boundsCenter,
   indexedValues,
+  classOf, isDescendantOf,
 } from './domSnapshot.js'
 import { viewportOf } from './FilterSetter.js'
 import { REJECT_REASON_OPTIONS } from '../actions/reasonMapping.js'
 import { listMaxX } from './ResumeConsentExecutor.js'
 import { CancelledError } from '../operations/types.js'
+import { BusinessOperationState } from './BusinessOperationState.js'
+import { conversationListNamesOf, headerContactOf } from './ChatReadExecutor.js'
 
 export class ChatRejectError extends Error {
   constructor(message: string) {
@@ -40,6 +26,7 @@ export class ChatRejectError extends Error {
 }
 
 export interface ChatRejectDeps {
+  state?: BusinessOperationState
   /** 采集 fresh DOMSnapshot（每次点击前后重新采集，禁止复用旧坐标） */
   snapshot(): Promise<DomSnapshot>
   /** Win32 真实鼠标点击（viewport 为页面截图尺寸，device px） */
@@ -58,15 +45,18 @@ const HEADER_MAX_Y = 400
 
 export class ChatRejectExecutor {
   private readonly sleep: (ms: number) => Promise<void>
+  readonly state: BusinessOperationState
 
   constructor(private readonly deps: ChatRejectDeps) {
+    this.state = deps.state ?? new BusinessOperationState()
     this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)))
   }
 
   /** 把当前会话的候选人标记为不合适；成功返回，任何异常/歧义抛 ChatRejectError */
-  async rejectCurrent(): Promise<void> {
+  async rejectCurrent(opts: { expectedContactRef?: string } = {}): Promise<void> {
     if (this.deps.signal?.aborted) throw new CancelledError()
     const snap = await this.deps.snapshot()
+    this.state.bindContact(snap, opts.expectedContactRef)
     const button = this.locateRejectButton(snap)
     if (!button) {
       const count = this.countRejectButtons(snap)
@@ -80,11 +70,11 @@ export class ChatRejectExecutor {
     // 点击前记录面板头部姓名：标记成功后 BOSS 自动切会话，靠它区分「成功切走」和「点击没生效」
     const nameBefore = this.panelHeaderName(snap)
 
-    await this.deps.click(button, viewportOf(snap))
+    await this.state.input(() => this.deps.click(button, viewportOf(snap)), true)
     await this.sleep(1200)
 
     let after = await this.deps.snapshot()
-    if (this.markSucceeded(after, nameBefore)) return
+    if (this.markSucceeded(after, snap)) { this.state.confirmed({ rejected: true, contact: nameBefore }, '原目标会话已从可读列表中移除或隐藏，或出现新的明确标记结果'); return }
 
     // 原因选择层：没有评估理由可映射，绝不乱选
     const reasonHit = REJECT_REASON_OPTIONS.find((o) => after.strings.some((s) => s.trim() === o))
@@ -98,30 +88,60 @@ export class ChatRejectExecutor {
     // 确认弹层：唯一「确定」则点，歧义/找不到则停止
     const confirm = this.locateConfirmButton(after)
     if (!confirm) {
+      this.state.unconfirmed('按钮或会话变化均不能单独证明标记完成')
       throw new ChatRejectError(
         '点击「不合适」后按钮仍在（会话未切换），且未找到确认弹层的「确定」按钮：' +
           '点击可能被拦截或弹层结构变化，已停止，请人工查看页面',
       )
     }
-    await this.deps.click(confirm, viewportOf(after))
+    // Confirm belongs to the original open conversation. A changed header is not a success signal.
+    this.state.bindContact(after)
+    this.state.businessEffect.status = 'not_started'
+    await this.state.input(() => this.deps.click(confirm, viewportOf(after)), true)
     await this.sleep(1200)
 
     after = await this.deps.snapshot()
-    if (!this.markSucceeded(after, nameBefore)) {
+    if (!this.markSucceeded(after, snap)) {
+      this.state.unconfirmed('缺少明确已标记不合适的结果，未凭按钮消失或会话切换报成功')
       throw new ChatRejectError(
         '确认后「不合适」按钮仍存在且会话未切换：标记结果无法确认，已停止，请人工查看页面',
       )
     }
+    this.state.confirmed({ rejected: true, contact: nameBefore }, '确认后原目标会话已从可读列表中移除或隐藏，或出现新的明确标记结果')
   }
 
   /**
-   * 标记成功判定（真机 2026-08-06 校准）：「不合适」消失，或面板头部姓名已变。
-   * BOSS 标记成功后会自动切到下一个会话（新会话也有「不合适」按钮），只查按钮会误报失败。
+   * The original loaded list entry must be removed/hidden; a panel switch alone is not sufficient.
    */
-  private markSucceeded(snap: DomSnapshot, nameBefore: string | null): boolean {
-    if (this.countRejectButtons(snap) === 0) return true
-    const nameNow = this.panelHeaderName(snap)
-    return nameBefore !== null && nameNow !== null && nameNow !== nameBefore
+  private markSucceeded(snap: DomSnapshot, before: DomSnapshot): boolean {
+    if (['已标记为不合适', '已标记不合适'].some(text =>
+      !before.strings.some(s => s.trim() === text) && this.findPanelText(snap, text).length === 1)) return true
+    const contact = headerContactOf(before)
+    const prior = this.listState(before, contact), next = this.listState(snap, contact)
+    if (!prior || !next || prior.targetItems !== 1 || next.targetItems !== 0) return false
+    // BOSS fills the list tail after removing a conversation. Keep every original survivor;
+    // when new rows arrive, those survivors must form the unchanged prefix before the new tail.
+    const survivors = prior.names.filter(n => n !== contact)
+    if (prior.scroll !== next.scroll || survivors.some(name => !next.names.includes(name))) return false
+    if (next.names.some(name => !prior.names.includes(name))
+      && survivors.some((name, index) => next.names[index] !== name)) return false
+    return survivors.length > 0
+      || ['暂无沟通记录', '暂无沟通会话'].some(t => snap.strings.includes(t))
+  }
+
+  private listState(snapshot: DomSnapshot, contact: string): { names: string[]; targetItems: number; scroll: string } | null {
+    const doc = snapshot.documents[0]
+    if (!doc?.nodes.attributes || !doc.nodes.parentIndex || !contact) return null
+    const roots = indexedValues(doc.nodes.attributes, 'attributes').filter(([ni]) =>
+      (classOf(snapshot, 0, ni) ?? '').split(/\s+/).includes('user-list')).map(([ni]) => ni)
+    if (roots.length !== 1 || /加载中|正在加载/.test(snapshot.strings.join('\n'))) return null
+    const targetItems = indexedValues(doc.nodes.attributes, 'attributes').filter(([ni]) =>
+      (classOf(snapshot, 0, ni) ?? '').split(/\s+/).includes('geek-item')
+      && isDescendantOf(doc, ni, roots[0]!) === true).filter(([item]) =>
+      indexedValues(doc.nodes.nodeValue, 'nodeValue').some(([ni, si]) => snapshot.strings[si]?.trim() === contact
+        && isDescendantOf(doc, ni, item) === true && doc.layout.nodeIndex.includes(ni))).length
+    return { names: conversationListNamesOf(snapshot), targetItems,
+      scroll: JSON.stringify(snapshot.documents.map(d => [d.scrollOffsetX ?? 0, d.scrollOffsetY ?? 0])) }
   }
 
   /** 右侧面板头部候选人姓名：识别带（cx>LIST_MAX_X, 130≤y≤400）内最上再最左的可见文本 */

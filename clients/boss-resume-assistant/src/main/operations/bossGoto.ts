@@ -1,3 +1,4 @@
+import { runVerifiedPageOperation } from './pageOperation.js'
 /**
  * boss_goto operation（设计 §10.2）：点击左侧导航菜单跳转页面（推荐牛人 / 沟通）。
  *
@@ -35,21 +36,26 @@ export function createBossGotoOperation(
           return null
         },
         async (session) => {
-          const navigator = new PageNavigator({
-            snapshot: session.snapshot,
-            click: session.click,
-            getUrl: session.getUrl,
-            pageNavigate: session.pageNavigate,
-            signal: ctx.signal,
+          const verified = await runVerifiedPageOperation({ name: 'boss_goto', goal: '跳转目标页面', expected: '当前BOSS标签URL匹配目标页面', operationClass: 'page_state', target: args.target }, async (attempt) => {
+            const navigator = new PageNavigator({
+              snapshot: session.snapshot,
+              click: (...args) => attempt.input(() => session.click(...args)),
+              getUrl: session.getUrl,
+              pageNavigate: session.pageNavigate ? (...args) => attempt.input(() => session.pageNavigate!(...args)) : undefined,
+              onRetry: () => { attempt.execution.ordinaryRetriesUsed = 1; attempt.execution.attemptsUsed = 2 },
+              signal: ctx.signal,
+            })
+            ctx.progress({ stage: 'navigate', message: `跳转「${args.target === 'recommend' ? '推荐牛人' : '沟通'}」` })
+            const result = await navigator.navigate(args.target)
+            attempt.verified({status: 'met', evidence: [`URL已确认目标页面${args.target}，路径${result.via}`]})
+            // via=url-jump 表示菜单点击未生效、走了 URL 直跳兜底（2026-09-18），透出便于云端/用户排障
+            const viaNote = result.via === 'url-jump' ? '（菜单点击未生效，URL 直跳兜底）' : ''
+            return {
+              message: result.clicked ? `已跳转${viaNote}` : '已在目标页面，无需跳转',
+              data: { target: args.target, navigated: result.clicked, via: result.via },
+            }
           })
-          ctx.progress({ stage: 'navigate', message: `跳转「${args.target === 'recommend' ? '推荐牛人' : '沟通'}」` })
-          const result = await navigator.navigate(args.target)
-          // via=url-jump 表示菜单点击未生效、走了 URL 直跳兜底（2026-09-18），透出便于云端/用户排障
-          const viaNote = result.via === 'url-jump' ? '（菜单点击未生效，URL 直跳兜底）' : ''
-          return {
-            message: result.clicked ? `已跳转${viaNote}` : '已在目标页面，无需跳转',
-            data: { target: args.target, navigated: result.clicked, via: result.via },
-          }
+          return { ...verified.value, data: { ...verified.value.data, operation_recovery: verified.facts } }
         },
       )
     },

@@ -17,11 +17,17 @@ param(
   [string]$Text = "",
   [int]$DragX = -1,
   [int]$DragY = -1,
+  [int]$CdpPort = 0,
   [string]$TitleKeyword = "BOSS直聘 - Google Chrome"
 )
 
 $ErrorActionPreference = 'Stop'
 $physicalInputSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'BossPhysicalInput.cs') -Raw
+if ($CdpPort -gt 0) {
+$windowSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'BossWindowExperiment.cs') -Raw
+$windowSource = $windowSource -replace '(?m)^using [^;]+;\r?\n', ''
+$physicalInputSource = "using System.Collections.Generic;`n" + $physicalInputSource + "`n" + $windowSource
+}
 Add-Type -TypeDefinition @"
 $physicalInputSource
 
@@ -144,9 +150,23 @@ function Test-PointOnRenderWidget([int]$sx, [int]$sy, $rw) {
 # A thread scope avoids process-global DPI changes. Failure never falls back to virtualized bounds.
 $physicalScope = [BossPhysicalInput]::Enter()
 try {
-$win = [Win32]::FindWindowByTitle($TitleKeyword)
+if ($CdpPort -gt 0) {
+  $portPattern = '(?:^|\s)--remote-debugging-port(?:=|\s+)' + $CdpPort + '(?:\s|$)'
+  $processes = @(Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe'" | Where-Object { $_.CommandLine -match $portPattern -and $_.CommandLine -notmatch '(?:^|\s)--type=' })
+  if ($processes.Count -ne 1) { throw 'STALE_OBSERVATION: debug Chrome process is ambiguous; input refused' }
+  $win = [BossWindowExperiment]::Find([int]$processes[0].ProcessId)
+  # Browser-level target activation does not necessarily grant OS foreground.
+  # The unique independent BOSS window above proves which window may be raised.
+  [BossWindowExperiment]::Foreground($win)
+  Start-Sleep -Milliseconds 400
+  [BossWindowExperiment]::RequireForeground($win)
+} else { $win = [Win32]::FindWindowByTitle($TitleKeyword) }
+function Assert-BoundForeground {
+  if ($CdpPort -gt 0) { [BossWindowExperiment]::RequireForeground($win) }
+}
 if ($win -eq [IntPtr]::Zero) { Write-Error "未找到标题含「$TitleKeyword」的窗口" -ErrorAction Continue; exit 1 }
 
+if ($CdpPort -le 0) {
 # Chrome 最小化时 render widget 被销毁（EnumChildWindows 枚举不到，真机 2026-08-17 实证：
 # 主窗口在但 0 子窗口）。必须先还原 + 前台化，再定位 render widget（与 cv-wheel.ps1 同款修复）
 if ([Win32]::IsIconic($win)) {
@@ -166,9 +186,11 @@ $thisThread = [Win32]::GetCurrentThreadId()
 [void][Win32]::AttachThreadInput($thisThread, $fgThread, $false)
 Start-Sleep -Milliseconds 400
 
+}
+Assert-BoundForeground
 $rw = [Win32]::FindRenderWidget($win)
-if ($rw -eq [IntPtr]::Zero) { Write-Error "未找到 Chrome 渲染子窗口（窗口已还原仍无渲染子窗口）" -ErrorAction Continue; exit 1 }
-if (-not [Win32]::IsWindowVisible($rw)) { Write-Error "渲染子窗口不可见：BOSS 标签页可能在后台，请切换到前台后重试" -ErrorAction Continue; exit 1 }
+if ($rw -eq [IntPtr]::Zero) { if ($CdpPort -gt 0) { throw 'STALE_OBSERVATION: render widget unavailable; input refused' }; Write-Error "未找到 Chrome 渲染子窗口（窗口已还原仍无渲染子窗口）" -ErrorAction Continue; exit 1 }
+if (-not [Win32]::IsWindowVisible($rw)) { if ($CdpPort -gt 0) { throw 'STALE_OBSERVATION: render widget hidden; input refused' }; Write-Error "渲染子窗口不可见：BOSS 标签页可能在后台，请切换到前台后重试" -ErrorAction Continue; exit 1 }
 
 $pt = Get-ScreenPoint $rw $CssW $CssH $X $Y
 $sx = $pt[0]; $sy = $pt[1]
@@ -177,6 +199,7 @@ Write-Output "目标屏幕坐标: ($sx, $sy)"
 if (-not (Test-PointOnRenderWidget $sx $sy $rw)) {
   # 落点被遮挡（会话终端/QQ 等窗口压住目标点会吃点击）：抬窗重试一次，重算坐标
   Write-Output "落点被其他窗口遮挡，抬窗重试"
+  Assert-BoundForeground
   [Win32]::SetWindowPos($win, [Win32]::HWND_TOP, 0, 0, 0, 0, [Win32]::SWP_NOMOVE -bor [Win32]::SWP_NOSIZE) | Out-Null
   Start-Sleep -Milliseconds 300
   $pt = Get-ScreenPoint $rw $CssW $CssH $X $Y
@@ -198,6 +221,7 @@ for ($i = 1; $i -le 10; $i++) {
 Start-Sleep -Milliseconds 500
 $expectedPoint = Get-ScreenPoint $rw $CssW $CssH $X $Y
 [BossPhysicalInput]::RequireCursorOnWidget($rw, $expectedPoint[0], $expectedPoint[1])
+Assert-BoundForeground
 $physicalScope.MarkInputStarted()
 $leftHeld = $false
 try {
@@ -213,6 +237,7 @@ try {
   if ($DragX -ge 0) {
     $lastX = $sx; $lastY = $sy
     for ($step = 1; $step -le 16; $step++) {
+      Assert-BoundForeground
       [BossPhysicalInput]::RequireCursorOnWidget($rw, $lastX, $lastY)
       $liveStart = Get-ScreenPoint $rw $CssW $CssH $X $Y
       $liveEnd = Get-ScreenPoint $rw $CssW $CssH $DragX $DragY
@@ -235,6 +260,7 @@ try {
 if ($Text.Length -gt 0) {
   Start-Sleep -Milliseconds 500   # 等点击聚焦稳定（与原 FOCUS_DELAY 一致）
   foreach ($ch in $Text.ToCharArray()) {
+    Assert-BoundForeground
     [Win32]::TypeUnicode($ch)
     Start-Sleep -Milliseconds 200 # 拟人逐字节奏（与 CDP typeChar 时代一致）
   }
@@ -245,6 +271,10 @@ exit 0
   if ($physicalScope.InputStarted) {
     Write-Error ("[BOSS_INPUT_UNKNOWN] " + $_.Exception.Message) -ErrorAction Continue
     exit 1
+  }
+  if ($CdpPort -gt 0) {
+    Write-Error ('STALE_OBSERVATION: ' + $_.Exception.Message) -ErrorAction Continue
+    exit 2
   }
   throw
 } finally {

@@ -9,6 +9,7 @@
 /** 允许的 CDP method 白名单 */
 export const ALLOWED_METHODS = new Set<string>([
   'Target.getTargets',
+  'Target.activateTarget', // Bound tab activation before native window observation; no page script.
   'Target.attachToTarget',
   'Target.detachFromTarget',
   'Page.enable',
@@ -18,6 +19,7 @@ export const ALLOWED_METHODS = new Set<string>([
   // 用 Page.navigate 直跳目标页。2026-08-19 真机实证：/web/chat 区内导航不被拦
   'Page.navigate',
   'Page.captureScreenshot',
+  'Page.getLayoutMetrics', // read-only CSS viewport for image-pixel to CDP input mapping
   'Network.enable',
   'Network.disable',
   'Network.getResponseBody',

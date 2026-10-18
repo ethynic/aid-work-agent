@@ -14,6 +14,7 @@ import type { DomSnapshot, ClickPoint } from '../boss/domSnapshot.js'
 import { randomUUID } from 'node:crypto'
 import {
   CancelledError,
+  CodedOperationError,
   failResult,
   okResult,
   writeEffect,
@@ -22,6 +23,7 @@ import {
   type OpContext,
 } from './types.js'
 import { mapExecutorError } from './errorMapping.js'
+import { rememberBrowserTarget, resolveBrowserTarget, targetBindingStale } from '../boss/browserTargetBinding.js'
 import { PerfCollector } from '../perf.js'
 
 /**
@@ -58,6 +60,8 @@ function logPerfLine(name: string, runId: string, ok: boolean, totalMs: number, 
 function instrumentSession(session: BossSession, perf: PerfCollector): BossSession {
   const { clearInput, pageNavigate } = session
   return {
+    ...(session.browserTargetRef ? { browserTargetRef: session.browserTargetRef } : {}),
+    ...(session.cdpPort ? { cdpPort: session.cdpPort } : {}),
     snapshot: (opts) => perf.time('snapshot', () => session.snapshot(opts)),
     click: (point, viewport) => perf.time('win32:click', () => session.click(point, viewport)),
     ...(session.drag ? { drag: (from: ClickPoint, to: ClickPoint, viewport: { width: number; height: number }) => perf.time('win32:drag', () => session.drag!(from, to, viewport)) } : {}),
@@ -67,6 +71,9 @@ function instrumentSession(session: BossSession, perf: PerfCollector): BossSessi
     pressEscape: () => perf.time('cdp:escape', () => session.pressEscape()),
     captureFullpage: () => perf.time('cdp:screenshot', () => session.captureFullpage()),
     getUrl: () => perf.time('cdp:getUrl', () => session.getUrl()),
+    ...(session.activateTarget ? { activateTarget: () => perf.time('cdp:activateTarget', () => session.activateTarget!()) } : {}),
+    ...(session.getTargetId ? { getTargetId: () => session.getTargetId!() } : {}),
+    ...(session.getPageMetrics ? { getPageMetrics: () => session.getPageMetrics!() } : {}),
     ...(clearInput ? { clearInput: () => perf.time('cdp:clearInput', () => clearInput()) } : {}),
     ...(pageNavigate ? { pageNavigate: (url: string) => perf.time('cdp:navigate', () => pageNavigate(url)) } : {}),
     close: () => session.close(),
@@ -105,6 +112,13 @@ export interface BossSession {
   captureFullpage(): Promise<Buffer>
   /** 当前 BOSS 标签页 URL（Target.getTargets 实时取） */
   getUrl(): Promise<string>
+  /** Bound CDP target and CSS viewport; real sessions always provide these. */
+  getTargetId?(): Promise<string>
+  /** Browser-level target activation; does not require a responsive Page/DOM. */
+  activateTarget?(): Promise<void>
+  cdpPort?: number
+  browserTargetRef?: string
+  getPageMetrics?(): Promise<{ width: number; height: number }>
   /** CDP 页内导航（Page.navigate）。goto 幂等兜底专用：点击菜单未触发 SPA 路由变化时，
    *  在 /web/chat 区内直跳目标页（不动鼠标键盘）。可选成员——旧测试替身可不提供，
    *  PageNavigator 缺省时点击未生效仍走原有 fail-loud 报错 */
@@ -139,18 +153,22 @@ export function withAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<
 export const defaultSessionFactory: BossSessionFactory = async (ctx) => {
   const endpoint = `http://127.0.0.1:${ctx.cdpPort ?? DEFAULT_CDP_PORT}`
   const gw = new CdpGateway({ timeoutMs: 10000 })
-  const clicker = new WinMouseClicker()
+  const clicker = new WinMouseClicker({ cdpPort: ctx.cdpPort ?? DEFAULT_CDP_PORT, beforeInput: () => gw.activateTarget() })
+  const binding = ctx.browserTargetRef ? await resolveBrowserTarget(ctx.browserTargetRef, ctx.cdpPort ?? DEFAULT_CDP_PORT) : undefined
   ctx.progress({ stage: 'connect', message: `连接 Chrome 调试端口（${endpoint}）` })
   try {
     // 端口不通时自动拉起固定 profile 调试实例（fail-open，拉不起则由下方 connect 报原有错误；
     // 包 withAbort 使拉起等待期间用户取消依然立即生效）
-    const launched = await withAbort(ensureDebugChrome(ctx.cdpPort ?? DEFAULT_CDP_PORT), ctx.signal)
+    const launched = binding ? false : await withAbort(ensureDebugChrome(ctx.cdpPort ?? DEFAULT_CDP_PORT), ctx.signal)
     if (launched) {
       ctx.progress({ stage: 'connect', message: '已自动拉起调试 Chrome 并打开 BOSS 直聘；首次使用请在该窗口登录一次' })
     }
     await withAbort(gw.connect(endpoint), ctx.signal)
     ctx.progress({ stage: 'attach', message: 'attach BOSS 页面' })
-    await withAbort(gw.attachToRecommendPage(), ctx.signal)
+    if (binding) {
+      try { await withAbort(gw.attachToBoundBossTarget(binding.target_id), ctx.signal) }
+      catch (error) { if (error instanceof CancelledError) throw error; throw targetBindingStale() }
+    } else await withAbort(gw.attachToRecommendPage(), ctx.signal)
   } catch (err) {
     // connect/attach 失败时 gw 不会进入 BossSession，runBossOperation 的 finally 关不到它；
     // 必须在此关闭已建立的 CDP socket，否则事件循环被挂起的 WS 拖住导致进程不退出
@@ -185,8 +203,12 @@ export const defaultSessionFactory: BossSessionFactory = async (ctx) => {
     captureFullpage: async () => Buffer.from(await gw.captureScreenshot({ format: 'png' }), 'base64'),
     getUrl: async () => {
       const targets = await gw.getTargets()
-      return targets.find((t) => t.type === 'page' && t.url.includes('zhipin.com'))?.url ?? ''
+      return targets.find((t) => t.targetId === gw.getTargetId())?.url ?? ''
     },
+    getTargetId: async () => gw.getTargetId() ?? '',
+    activateTarget: () => gw.activateTarget(),
+    cdpPort: ctx.cdpPort ?? DEFAULT_CDP_PORT,
+    getPageMetrics: () => gw.getPageMetrics(),
     pageNavigate: async (url) => {
       await gw.pageEnable()
       await gw.pageNavigate(url)
@@ -236,21 +258,45 @@ export async function runBossOperation(
   const tracker: CompletedTracker = { completed: 0 }
   let session: BossSession | undefined
   let ok = false
+  let browserTargetRef = ctx.browserTargetRef
+  const boundData = (data: Record<string, unknown>): Record<string, unknown> => {
+    if (!browserTargetRef) return data
+    const result: Record<string, unknown> = { ...data, browser_target_ref: browserTargetRef }
+    for (const key of ['operation_recovery', 'page_operation']) {
+      const value = result[key]
+      if (value && typeof value === 'object' && !Array.isArray(value)) result[key] = { ...value, browser_target_ref: browserTargetRef }
+    }
+    return result
+  }
   try {
     if (ctx.signal.aborted) throw new CancelledError()
     session = await perf.time('connect', () => sessionFactory(ctx))
+    const targetId = await session.getTargetId?.()
+    if (browserTargetRef) {
+      const expected = await resolveBrowserTarget(browserTargetRef, ctx.cdpPort ?? DEFAULT_CDP_PORT)
+      if (targetId !== expected.target_id) throw targetBindingStale()
+    } else if (targetId) browserTargetRef = await rememberBrowserTarget(targetId, ctx.cdpPort ?? DEFAULT_CDP_PORT)
+    if (browserTargetRef) session.browserTargetRef = browserTargetRef
     const outcome = await perf.time('body', () => body(instrumentSession(session!, perf), tracker, perf))
     const effect = outcome.effect ?? (spec.kind === 'readonly' ? 'none' : writeEffect(true, 'OK', tracker.completed))
     ctx.progress({ stage: 'done', message: outcome.message })
     ok = true
-    return okResult(runId, outcome.message, effect, outcome.data ?? {})
+    return okResult(runId, outcome.message, effect, boundData(outcome.data ?? {}))
   } catch (err) {
     const mapped = mapExecutorError(err)
     logOpFailure(runId, mapped.code, mapped.message)
-    const effect = spec.kind === 'readonly' ? 'none' : writeEffect(false, mapped.code, tracker.completed)
-    const data: Record<string, unknown> = {}
-    if (spec.kind === 'write' && tracker.completed > 0) data.completed = tracker.completed
-    return failResult(runId, mapped.code, mapped.message, effect, data)
+    const data: Record<string, unknown> = err instanceof CodedOperationError ? { ...err.data } : {}
+    const facts = data.operation_recovery as Record<string, unknown> | undefined
+    const business = facts?.business_effect as { status?: string; completed_count?: number } | undefined
+    // Preserve confirmed work when a later preview or close fails.
+    const confirmed = facts?.operation_class === 'external_effect' && Number.isInteger(business?.completed_count)
+      && business!.completed_count! > 0 && Array.isArray(data.confirmed_items)
+      && data.confirmed_items.length >= business!.completed_count!
+    const completed = confirmed ? Math.max(tracker.completed, business!.completed_count!) : tracker.completed
+    const effect = spec.kind === 'readonly' ? 'none' : confirmed && business?.status === 'confirmed'
+      ? 'partial' : writeEffect(false, mapped.code, completed)
+    if (spec.kind === 'write' && completed > 0) data.completed = completed
+    return failResult(runId, mapped.code, mapped.message, effect, boundData(data))
   } finally {
     // close 计时后统一输出 [boss-perf]（成功/失败都输出；ok 由上方分支标记）
     if (session) await perf.time('close', () => session!.close())

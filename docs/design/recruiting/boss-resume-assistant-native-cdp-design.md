@@ -6,6 +6,10 @@
 > 关联调研：[BOSS 直聘智能招聘 Agent 可行性调研](../../research/boss-recruiting-agent-research.md)  
 > 开发计划：[原生 CDP 开发计划](../../plans/recruiting/boss-resume-assistant-native-cdp-dev-plan.md)
 
+## 当前恢复控制边界（2026-10-18纠正）
+
+22个页面业务命令在CLI/MCP共用注册入口完成本地恢复闭环：领域执行与成功核验、必要的一次普通重试后，CLI调用既有后台视觉API获取处理建议，在本地执行/核验并在允许时继续原操作。提示词、GLM调用和20倍计费仅在后台API，CLI不直连厂商；服务器工具调度不接手新CLI故障。新回执明确owner=cli、公开领域事实v2，防止二次恢复；旧客户端服务端兼容保留。此流程是原受权设备动作内部恢复，不新增本地任务Agent或权限入口。两分流真机及独立验证已通过，详见[恢复设计U](boss-overlay-heal-design.md)及[计划17](../../plans/desktop-automation/plan-boss-operation-verification-visual-recovery.md#17-cli本地闭环纠正2026-10-18)。
+
 ## 1. 结论
 
 新建 CLI 工具 `clients/boss-resume-assistant/`，与现有 Agent、租户、渠道、服务端 Browser Runtime 和服务端数据库完全解耦。用户自己用日常 Chrome 带 `--remote-debugging-port=9222` 启动并扫码登录、关闭弹窗、进入推荐牛人页面；CLI attach 调试端点并在终端回车确认后，才通过 Chrome DevTools Protocol 的 browser WebSocket 建立连接（attach-only，程序绝不 spawn/kill 用户 Chrome，见 §16 决策 7）。
@@ -231,6 +235,10 @@ Chrome 150 真机快照确认 `DOMSnapshot.layout.bounds` 已是各文档视口�
 指纹只用于本地去重，不能作为跨账号全局身份。
 
 ### 7.3 打开详情
+
+2026-10-18真机校准：详情打招呼同样不能把canvas姓名当DOM前置。无法读取可信详情姓名时，复用本调用“清残留→唯一原目标卡片点击→完整三锚点”重建归属；背景列表姓名不充当身份，准备与打开共用一次普通重试，最终外发unknown不重开或重发。PDF附件预览按可见附件frame及所属文档画布/可见内容核验，loading只轮询；表单TEXTAREA读取textValue，日期读取实际点击点所属INPUT。仅显式screenshot --snapshot-output导出本机取证，不新增浏览器控制通道。打开详情优先复用已加载卡片双向定位及fresh身份核对，避免只向下漏找上方目标；标记不合适后允许其他原条目保持的列表尾部补位，原unknown不重放。验收与内部滚动可证范围见操作验证计划16及恢复设计T.1。详见[操作验证计划第15节](../../plans/desktop-automation/plan-boss-operation-verification-visual-recovery.md#15-剩余命令真机验收与发现修正2026-10-18进行中)。
+
+2026-10-16局部修正：`boss_open_detail`的打开成功后态采用简历画布、详情操作列内“打招呼/继续沟通”和画布右侧“经历概览”共同确认；姓名位于canvas，DOM找不到姓名不等于未打开或姓名不符。复用操作列结构排除列表同名按钮，画布已出现但侧栏未完成时继续轮询。此处只判断详情打开状态，不替代发送前身份验证；当前默认点击通道沿用§16决策9的Win32。实施/真机记录见[操作验证计划](../../plans/desktop-automation/plan-boss-operation-verification-visual-recovery.md)。以下保留原始阶段方案。
 
 1. 从 DOMSnapshot 布局得到卡片内部安全点击点。
 2. 使用 `Input.dispatchMouseEvent(mousePressed/mouseReleased)` 发送真实坐标点击。
