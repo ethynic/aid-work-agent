@@ -1,4 +1,15 @@
 #!/usr/bin/env bash
+
+# 禁止以 root/sudo 运行（2026-10-19 事故防护）：
+# sudo 会保留 HOME=/home/ubuntu，root 身份的 git/写文件操作还会把仓库 .git 内部
+# 文件改成 root 属主，导致 ubuntu 后续免密 fetch 失败、git 反复索要密码。
+# 本脚本设计为以 ubuntu 用户直接运行（需要提权处已自带 sudo，ubuntu 已配 NOPASSWD）。
+if [ "$(id -u)" -eq 0 ]; then
+    echo "错误：请勿用 sudo/root 运行本脚本（会污染 git 凭据与仓库属主）。" >&2
+    echo "      请直接以 ubuntu 用户执行，不要加 sudo：bash $0" >&2
+    exit 1
+fi
+
 # ============================================================================
 # 一键同步：生产租户数据 -> 仿真环境（严格单向，无任何反向路径）
 #
