@@ -1,5 +1,5 @@
 <template>
-  <BaseModal v-model="visible" :title="`定制 - ${displayName}`" size="lgx">
+  <BaseModal v-model="visible" :title="`定制 - ${displayName}`" size="xl">
     <div class="space-y-5">
       <!-- 基础信息 -->
       <section>
@@ -465,6 +465,20 @@ function handleClose() {
   visible.value = false
 }
 
+/** 清空表单：关闭弹框时调用，避免下次打开先闪一下上一个员工的覆盖项 */
+function resetForm() {
+  form.value = {
+    display_name: '',
+    description: '',
+    extra_prompt: '',
+    greeting_summary: '',
+  }
+  greetingPrompts.value = [
+    { label: '', message: '' },
+    { label: '', message: '' },
+  ]
+}
+
 watch(visible, (v) => {
   if (v) {
     copyName.value = ''
@@ -475,6 +489,8 @@ watch(visible, (v) => {
     templates.value = []
     loadInstance()
     loadTemplates()
+  } else {
+    resetForm()
   }
 })
 </script>
