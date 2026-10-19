@@ -197,9 +197,14 @@ def _subagent_allowed_skills(subagent_name: str) -> List[str]:
     except Exception as e:
         logger.debug(f"[tenant_api_doc] 读取 DB 智能体技能白名单失败 agent={subagent_name}: {e}")
     try:
-        from src.subagents.registry import subagent_registry
+        # 用 cached_builtin_subagent_registry（带目录构造 + 进程级缓存），不要用
+        # src.subagents.registry.subagent_registry 全局单例——后者无参构造不加载，
+        # 在 skill 脚本子进程（create_subprocess_shell 起的独立解释器）里恒为空，
+        # 导致内置子智能体（如 auto-form-filler）的技能白名单读不到、兜底模板失效
+        from src.services.agent_runner.runtime.resource_cache import cached_builtin_subagent_registry
 
-        cfg = subagent_registry.get(subagent_name)
+        builtins_dir = Path(__file__).resolve().parents[2] / "subagents"
+        cfg = cached_builtin_subagent_registry(builtins_dir).get(subagent_name)
         if cfg:
             return [str(s) for s in (cfg.get_allowed_skills() or [])]
     except Exception as e:
@@ -227,6 +232,19 @@ def resolve_doc_text(tenant_id: str, subagent_name: str) -> Optional[str]:
     return None
 
 
+def db_tenant_id(tenant_id: str) -> str:
+    """把租户 ID 规范化到 DB 口径（`subagent_env_vars` 等表存带 `tenant_` 前缀的 ID）
+
+    调用方口径不一：skill 脚本（load_api_config.py）为存储路径剥离了 `tenant_`
+    前缀后透传，external_push 则直接传带前缀的 payload.tenant_id。查环境变量前
+    统一补齐前缀，否则无前缀 ID 查不到配置、模板 ${APP_ID} 等占位符不渲染。
+    以 `_` 开头的匿名占位（如 `_anonymous`）不是真实租户，原样返回。
+    """
+    if tenant_id and not tenant_id.startswith(("tenant_", "_")):
+        return f"tenant_{tenant_id}"
+    return tenant_id
+
+
 def render_doc_placeholders(doc_text: str, tenant_id: str, subagent_name: str) -> str:
     """文档加载期渲染 ${VAR}（如 ${APP_ID}），租户环境变量 -> 进程环境变量兜底
 
@@ -241,15 +259,16 @@ def render_doc_placeholders(doc_text: str, tenant_id: str, subagent_name: str) -
 
     # 租户级环境变量（subagent_env_vars）：子智能体精确 -> 租户任意智能体兜底。
     # recap 等后台任务无请求上下文（env_vars 不注入 os.environ），必须按 tenant 显式查库
+    db_tid = db_tenant_id(tenant_id)
     env_vars: Dict[str, str] = {}
     try:
         from src.db.subagent_env_var import SubagentEnvVarDB
 
         if subagent_name:
-            for var in SubagentEnvVarDB.get_vars(tenant_id, subagent_name):
+            for var in SubagentEnvVarDB.get_vars(db_tid, subagent_name):
                 if var.get("var_name") and var.get("var_value"):
                     env_vars[var["var_name"]] = var["var_value"]
-        for var in SubagentEnvVarDB.get_all_vars_for_tenant(tenant_id):
+        for var in SubagentEnvVarDB.get_all_vars_for_tenant(db_tid):
             name = var.get("var_name")
             if name and var.get("var_value") and name not in env_vars:
                 env_vars[name] = var["var_value"]

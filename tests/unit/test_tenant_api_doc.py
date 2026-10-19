@@ -15,6 +15,7 @@ from src.services.tenant_api_doc import (
     resolve_doc_text,
     render_doc_placeholders,
     find_unresolved_placeholders,
+    db_tenant_id,
 )
 
 pytestmark = [pytest.mark.unit, pytest.mark.api]
@@ -261,15 +262,31 @@ class TestSubagentAllowedSkills:
         mock_db.get_by_agent_id.return_value = {"skills": {"allowed": []}}
         cfg = MagicMock()
         cfg.get_allowed_skills.return_value = ["pre-sales-api"]
+        mock_registry = MagicMock()
+        mock_registry.get.return_value = cfg
         with patch("src.db.subagent_definition_db.SubagentDefinitionDB", mock_db), \
-             patch("src.subagents.registry.subagent_registry") as mock_registry:
-            mock_registry.get.return_value = cfg
+             patch("src.services.agent_runner.runtime.resource_cache.cached_builtin_subagent_registry",
+                   return_value=mock_registry):
             assert tenant_api_doc._subagent_allowed_skills("pre-sales") == ["pre-sales-api"]
+
+    def test_builtin_registry_loaded_without_manual_init(self):
+        """回归：不依赖全局单例手动加载，也能读到内置子智能体技能白名单
+
+        缺陷背景：旧实现用 src.subagents.registry.subagent_registry 全局单例，
+        该单例无参构造不加载；skill 脚本子进程（create_subprocess_shell 起的独立
+        解释器）里恒为空，导致 auto-form-filler 等内置智能体读不到白名单、兜底
+        模板失效。
+        """
+        mock_db = MagicMock()
+        mock_db.get_by_agent_id.return_value = None  # DB 无该定义
+        with patch("src.db.subagent_definition_db.SubagentDefinitionDB", mock_db):
+            skills = tenant_api_doc._subagent_allowed_skills("pre-sales")
+        assert "pre-sales-api" in skills
 
     def test_both_sources_failed_returns_empty(self):
         with patch("src.db.subagent_definition_db.SubagentDefinitionDB",
                    side_effect=RuntimeError("no db")), \
-             patch("src.subagents.registry.subagent_registry",
+             patch("src.services.agent_runner.runtime.resource_cache.cached_builtin_subagent_registry",
                    side_effect=RuntimeError("no registry")):
             assert tenant_api_doc._subagent_allowed_skills("pre-sales") == []
 
@@ -311,6 +328,36 @@ class TestRenderDocPlaceholders:
     def test_plain_doc_untouched(self):
         doc = "# 普通文档，无占位符"
         assert render_doc_placeholders(doc, "tenant_x", "pre-sales") == doc
+
+    def test_unprefixed_tenant_id_normalized_for_env_db(self):
+        """回归：skill 脚本剥离 `tenant_` 前缀后传入，DB 查询须补齐前缀
+
+        缺陷背景：load_api_config.py 为存储路径剥离前缀后调 load_rendered_doc，
+        而 subagent_env_vars 存带前缀 ID，前缀不匹配导致 ${APP_ID} 读不到、模板
+        渲染残留占位符、被误判为「未配置」。
+        """
+        mock_db = MagicMock()
+        mock_db.get_vars.return_value = [{"var_name": "APP_ID", "var_value": "10607"}]
+        mock_db.get_all_vars_for_tenant.return_value = []
+        with patch("src.db.subagent_env_var.SubagentEnvVarDB", mock_db):
+            rendered = render_doc_placeholders(_TEMPLATE, "abc123", "pre-sales")
+        assert mock_db.get_vars.call_args[0][0] == "tenant_abc123"
+        assert "erp10607.aidingyi.cn" in rendered
+        assert find_unresolved_placeholders(rendered) == []
+
+
+class TestDbTenantId:
+    def test_adds_missing_prefix(self):
+        assert db_tenant_id("abc123") == "tenant_abc123"
+
+    def test_keeps_existing_prefix(self):
+        assert db_tenant_id("tenant_abc123") == "tenant_abc123"
+
+    def test_anonymous_placeholder_untouched(self):
+        assert db_tenant_id("_anonymous") == "_anonymous"
+
+    def test_empty_returns_empty(self):
+        assert db_tenant_id("") == ""
 
 
 class TestFindUnresolvedPlaceholders:
