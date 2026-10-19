@@ -45,7 +45,7 @@
             disabled ? 'bg-gray-100 cursor-not-allowed' : 'bg-white',
             textareaClass,
           ]"
-          :style="autoResize === false ? { minHeight: minHeight } : null"
+          :style="textareaStyle"
           @input="onInput"
           @blur="$emit('blur', $event)"
           @focus="$emit('focus', $event)"
@@ -75,7 +75,7 @@
           disabled ? 'bg-gray-100 cursor-not-allowed' : 'bg-white',
           textareaClass,
         ]"
-        :style="autoResize === false ? { minHeight: minHeight } : null"
+        :style="textareaStyle"
         @input="onInput"
         @blur="$emit('blur', $event)"
         @focus="$emit('focus', $event)"
@@ -253,8 +253,13 @@ watch(
 
 const charCount = computed(() => (props.modelValue || '').length)
 
+/** 关闭自动撑高时以 min-height 固定初始高度（开启时高度由撑高逻辑决定） */
+const textareaStyle = computed(() =>
+  props.autoResize === false ? { minHeight: props.minHeight } : null,
+)
+
 /** 自动撑高 */
-function autoResize() {
+function autoGrow() {
   const el = textareaEl.value
   if (!el) return
   el.style.height = 'auto'
@@ -266,7 +271,7 @@ function onInput(event: Event) {
   emit('update:modelValue', target.value)
   emit('input', event)
   if (props.autoResize) {
-    nextTick(autoResize)
+    nextTick(autoGrow)
   }
 }
 
@@ -274,16 +279,16 @@ function onInput(event: Event) {
 watch(
   () => props.modelValue,
   () => {
-    if (props.autoResize) nextTick(autoResize)
+    if (props.autoResize) nextTick(autoGrow)
   },
 )
 
-// 初始挂载后撑高一次
-nextTick(autoResize)
+// 初始挂载后撑高一次；auto-resize 关闭时挂载即带内容也不撑高
+if (props.autoResize) nextTick(autoGrow)
 
 /** 暴露给父组件手动触发撑高（兼容旧 watch 链路） */
 defineExpose({
-  resize: autoResize,
+  resize: autoGrow,
   focus: () => textareaEl.value?.focus(),
 })
 
