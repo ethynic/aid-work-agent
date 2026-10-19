@@ -228,6 +228,14 @@ def update_overrides(tenant_id: str, agent_id: str, overrides: Dict[str, Any]) -
     ok = TenantAgentInstanceDB.update_overrides(tenant_id, agent_id, filtered)
     if not ok:
         raise TenantAgentInstanceError("更新失败")
+    # 名称/简介参与空态摘要的 LLM 生成输入；不失效缓存会继续展示旧摘要（TTL 7 天）
+    if {"display_name", "description"} & set(filtered):
+        try:
+            from src.core.cache_utils import CacheKeys, delete_cached
+
+            delete_cached(CacheKeys.SUBAGENT_GREETING, tenant_id, agent_id)
+        except Exception as e:
+            logger.opt(exception=True).warning(f"失效空态摘要缓存失败 agent={agent_id}: {e}")
     updated = TenantAgentInstanceDB.get(tenant_id, agent_id)
     return updated or row
 
@@ -255,6 +263,41 @@ def delete_copy(tenant_id: str, agent_id: str) -> bool:
         raise TenantAgentInstanceError("删除失败")
     logger.info(f"后端日志：租户 {tenant_id} 删除数字员工副本 {agent_id}")
     return True
+
+
+def apply_direct_customization_overrides(
+    tenant_id: str, items: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """把直定制行（agent_id == base_agent_id）的显示名/简介覆盖合并进基础员工列表项。
+
+    直定制行不产生新列表项，但覆盖项需体现到对应基础条目，否则列表接口
+    （我的数字员工、新会话可用列表、用户授权列表）仍显示父定义名称/简介。
+    """
+    if not tenant_id or not items:
+        return items
+    try:
+        rows = TenantAgentInstanceDB.list_by_tenant(tenant_id)
+    except Exception as e:
+        logger.opt(exception=True).error(f"查询租户数字员工实例失败: {e}")
+        return items
+
+    overrides = {
+        r["agent_id"]: r
+        for r in rows
+        if r.get("status") == "active" and r.get("agent_id") == r.get("base_agent_id")
+    }
+    if not overrides:
+        return items
+    for item in items:
+        row = overrides.get(item.get("agent_id"))
+        if not row:
+            continue
+        if row.get("display_name"):
+            item["name"] = row["display_name"]
+            item["display_name"] = row["display_name"]
+        if row.get("description"):
+            item["description"] = row["description"]
+    return items
 
 
 def build_tenant_instance_items(tenant_id: str, allowed_ids: Any) -> List[Dict[str, Any]]:

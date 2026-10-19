@@ -205,6 +205,23 @@ class TestUpdateOverrides:
             with pytest.raises(TenantAgentInstanceError, match="无可更新"):
                 update_overrides("t1", "sales", {"hacker_field": "x"})
 
+    def test_description_change_invalidates_greeting_cache(self):
+        with patch.object(svc, "TenantAgentInstanceDB") as db, \
+             patch("src.core.cache_utils.delete_cached") as delete_cached:
+            db.get.return_value = _row("sales", "sales")
+            db.update_overrides.return_value = True
+            update_overrides("t1", "sales", {"description": "新简介"})
+        delete_cached.assert_called_once()
+        assert delete_cached.call_args[0][1:] == ("t1", "sales")
+
+    def test_extra_prompt_change_keeps_greeting_cache(self):
+        with patch.object(svc, "TenantAgentInstanceDB") as db, \
+             patch("src.core.cache_utils.delete_cached") as delete_cached:
+            db.get.return_value = _row("sales", "sales")
+            db.update_overrides.return_value = True
+            update_overrides("t1", "sales", {"extra_prompt": "追加要求"})
+        delete_cached.assert_not_called()
+
 
 # ============== delete_copy ==============
 
@@ -267,3 +284,51 @@ class TestBuildTenantInstanceItems:
 
     def test_empty_tenant_returns_empty(self):
         assert svc.build_tenant_instance_items("", {"sales"}) == []
+
+
+# ============== apply_direct_customization_overrides ==============
+
+class TestApplyDirectCustomizationOverrides:
+    def test_merges_direct_row_name_and_description(self):
+        rows = [
+            _row("sales", "sales", display_name="销售助手-小曦", description="定制简介"),
+            _row("sales-t1-ab12", "sales", display_name="副本名"),  # 副本行不参与基础项覆盖
+        ]
+        items = [
+            {"agent_id": "sales", "name": "销售助手", "description": "父定义简介"},
+            {"agent_id": "sales-t1-ab12", "name": "副本名", "description": "副本简介"},
+        ]
+        with patch.object(svc.TenantAgentInstanceDB, "list_by_tenant", return_value=rows):
+            result = svc.apply_direct_customization_overrides("t1", items)
+        assert result[0]["name"] == "销售助手-小曦"
+        assert result[0]["display_name"] == "销售助手-小曦"
+        assert result[0]["description"] == "定制简介"
+        # 副本项保持自身覆盖值
+        assert result[1]["name"] == "副本名"
+
+    def test_archived_direct_row_ignored(self):
+        rows = [_row("sales", "sales", display_name="已归档名", status="archived")]
+        items = [{"agent_id": "sales", "name": "销售助手", "description": "父定义简介"}]
+        with patch.object(svc.TenantAgentInstanceDB, "list_by_tenant", return_value=rows):
+            result = svc.apply_direct_customization_overrides("t1", items)
+        assert result[0]["name"] == "销售助手"
+        assert result[0]["description"] == "父定义简介"
+
+    def test_empty_values_keep_parent(self):
+        rows = [_row("sales", "sales", display_name=None, description="")]
+        items = [{"agent_id": "sales", "name": "销售助手", "description": "父定义简介"}]
+        with patch.object(svc.TenantAgentInstanceDB, "list_by_tenant", return_value=rows):
+            result = svc.apply_direct_customization_overrides("t1", items)
+        assert result[0]["name"] == "销售助手"
+        assert result[0]["description"] == "父定义简介"
+
+    def test_db_error_returns_items_unchanged(self):
+        items = [{"agent_id": "sales", "name": "销售助手"}]
+        with patch.object(svc.TenantAgentInstanceDB, "list_by_tenant",
+                          side_effect=RuntimeError("db down")):
+            result = svc.apply_direct_customization_overrides("t1", items)
+        assert result == items
+
+    def test_empty_tenant_returns_items(self):
+        items = [{"agent_id": "sales", "name": "销售助手"}]
+        assert svc.apply_direct_customization_overrides("", items) == items

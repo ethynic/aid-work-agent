@@ -116,7 +116,7 @@
       :tenant-id="String(route.params.tenant_id || '')"
       :agent-id="customizeAgent?.agent_id || ''"
       :agent-name="customizeAgent ? getDisplayName(customizeAgent) : ''"
-      @changed="loadAgents"
+      @changed="handleAgentChanged"
     />
   </div>
 </template>
@@ -130,11 +130,14 @@ import TenantAgentCustomizeDialog from '@/components/TenantAgentCustomizeDialog.
 import { listSubagents, type SubagentListItem } from '@/api/subagent'
 import { deleteTenantAgentInstance } from '@/api/tenantAgentInstances'
 import { useTenantAuth } from '@/composables/useTenantAuth'
+import { useSubagentList } from '@/composables/useSubagentList'
 
 const router = useRouter()
 const route = useRoute()
 
 const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, logout: tenantLogout } = useTenantAuth()
+// 新会话页/菜单栏共用的模块级列表缓存，定制变更后必须强制刷新
+const { loadAvailableSubagents } = useSubagentList()
 
 // 管理员（租户管理员 / 平台管理员）可见定制提示词与 API配置 入口
 const isTenantAdmin = computed(() =>
@@ -200,6 +203,12 @@ async function loadAgents() {
   }
 }
 
+// 定制保存/复制/删除成功后：强制刷新共享列表，再刷新本页列表
+async function handleAgentChanged() {
+  await loadAvailableSubagents(true, true)
+  await loadAgents()
+}
+
 // 跳转到与该数字员工对话
 function handleUseAgent(agent: SubagentListItem) {
   const tid = route.params.tenant_id
@@ -224,7 +233,7 @@ async function handleDeleteCopy(agent: SubagentListItem) {
   if (!confirm('确定删除该副本？删除后新会话无法继续使用。')) return
   try {
     await deleteTenantAgentInstance(agent.agent_id)
-    await loadAgents()
+    await handleAgentChanged()
   } catch (e: any) {
     console.error('删除副本失败:', e)
     alert(e?.message || '删除失败')

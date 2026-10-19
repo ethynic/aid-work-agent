@@ -23,7 +23,10 @@ from src.saas.permissions.checker import (
 from src.services.behavior_log import audit_action
 from src.db.database import get_db_connection
 from src.core.agent import master_agent
-from src.saas.services.tenant_agent_instance_service import build_tenant_instance_items
+from src.saas.services.tenant_agent_instance_service import (
+    apply_direct_customization_overrides,
+    build_tenant_instance_items,
+)
 
 
 router = APIRouter(prefix="/api/saas/permissions", tags=["SaaS 数字员工授权"])
@@ -237,6 +240,8 @@ def get_tenant_available_user_agents(request: Request):
 
     # 追加本租户副本列表项（副本是运行时实例，不在 registry，须显式补入才可选授权）
     result.extend(build_tenant_instance_items(tenant_id, tenant_allowed))
+    # 直定制行不产生新条目，但显示名/简介覆盖需反映到对应基础员工
+    result = apply_direct_customization_overrides(tenant_id, result)
 
     # 如果租户有主智能体授权，添加到列表中
     if "main" in tenant_allowed:
@@ -303,6 +308,9 @@ def get_my_allowed_agents(request: Request):
     # 追加本租户副本列表项（副本是运行时实例，不在 registry，须显式补入，
     # 否则新会话页看不到已复制/已授权的副本）
     result.extend(build_tenant_instance_items(user.get("tenant_id"), allowed_ids))
+    # 直定制行不产生新条目，但显示名/简介覆盖需反映到对应基础员工，
+    # 否则新会话页仍显示父定义名称/简介
+    result = apply_direct_customization_overrides(user.get("tenant_id"), result)
 
     # 如果主智能体在允许列表中，添加到结果中
     if "main" in allowed_ids:
