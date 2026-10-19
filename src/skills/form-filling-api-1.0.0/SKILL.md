@@ -70,13 +70,24 @@ echo '{"login_url": "登录接口地址（以文档为准）", "mobile": "用户
 - 返回 `cached=true` 表示命中缓存；业务接口返回 `Code=-99`（鉴权失效）时，带 `"force_refresh": true` 重新执行脚本
 - 登录成功后无需调用登出接口，token 由缓存过期自然失效
 
-### 第四步：拉取表单 schema（字段元数据）
+### 第四步：获取开放模块列表（open_modules）
+
+```bash
+echo '{"base_url": "Base URL（以文档为准）"}' | python scripts/load_open_modules.py
+```
+
+脚本调用 `open_modules` 接口，返回当前**可填写的模块清单**（模块名 + 中文名 + 主表）。委托登录已完成时脚本自动带上 client_token，返回结果与用户实际可写权限一致。脚本带短缓存（默认 10 分钟，`FORM_FILLING_CACHE_TTL` 可调）；需强制刷新时加 `"force_refresh": true`。
+
+- **以返回的模块清单为准**向用户呈现可填表单，不要依据文档第 8 节硬编码模块（不同租户/代理人开放的模块不同）
+- 返回 `modules: []` 时告知用户当前无可填表单
+
+### 第五步：拉取表单 schema（字段元数据）
 
 ```bash
 echo '{"module": "模块名（如 kehuxinxi）", "base_url": "Base URL（以文档为准）"}' | python scripts/load_form_schema.py
 ```
 
-脚本返回该模块的字段元数据（英文名/中文名/控件类型/必填/枚举/填写说明）。**字段细节一律以此为准**，不要凭记忆硬编码字段名。脚本带 1 小时缓存；需强制刷新时加 `"force_refresh": true`。
+脚本返回该模块的字段元数据（英文名/中文名/控件类型/必填/枚举/填写说明）。**字段细节一律以此为准**，不要凭记忆硬编码字段名。脚本带短缓存（默认 10 分钟，与 open_modules 共用 `FORM_FILLING_CACHE_TTL`）；需强制刷新时加 `"force_refresh": true`。
 
 schema 关键字段语义：
 - `required: true` 的字段缺失时必须向用户补问
@@ -86,7 +97,7 @@ schema 关键字段语义：
 - `edit_hidden: true`：修改场景不可改
 - `component` 决定值格式（date 为 YYYY-MM-DD、datetime 为 YYYY-MM-DD HH:mm:ss、integer/number 为数字等，详见 API 文档）
 
-### 第五步：查重与写入（http_api 工具）
+### 第六步：查重与写入（http_api 工具）
 
 所有业务接口为 POST + JSON，headers 必须携带：
 
