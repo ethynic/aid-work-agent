@@ -145,7 +145,8 @@ if [[ -f "$SIM_DIR/deploy/docker-compose.agent-runner.sim.yml" ]]; then
   COMPOSE_ARGS+=(-f "$SIM_DIR/docker-compose.agent-runner.sim.yml")
 fi
 echo "[5] 重启仿真后端 aid-agent-api1（及已启用的 runner 容器）..."
-docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate --wait
+# --remove-orphans：overlay 服务名变更后，旧容器占用同名 container_name 会导致建容器冲突
+docker compose "${COMPOSE_ARGS[@]}" up -d --remove-orphans --force-recreate --wait
 
 # 6. 等待前端编译完成
 echo "[6] 等待前端编译完成..."

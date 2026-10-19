@@ -526,7 +526,9 @@ fi
 # ---------- 启动仿真容器（渠道配置就绪后再拉起；up -d 幂等） ----------
 if [[ $FULL_MODE -eq 1 ]]; then
   log "启动仿真容器（aid-agent-api1 及已启用的 runner 容器）..."
-  sim_compose up -d
+  # --remove-orphans：overlay 服务名变更后（如 runner-api -> runner-api-sim），
+  # 旧容器仍占用相同 container_name，不清理会报 "name is already in use"
+  sim_compose up -d --remove-orphans
   HEALTH_OK=0
   for i in $(seq 1 24); do
     curl -sf http://localhost:8010/health >/dev/null 2>&1 && { HEALTH_OK=1; break; }
