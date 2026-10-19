@@ -13,7 +13,7 @@
   模块清单或业务规则有差异的租户仍可单独上传
 -->
 
-<!-- api-meta：系统代码解析的机器可读约定块，请勿删除本块或改键名（login_url 必填；user_token_name 缺省默认 client_token；user_token_header / agent_token_header 可选，缺省分别为 Client-Authorize-Token / Api-Authorize-Token；delegate_auto_create 为 true 时委托登录遇到「用户不存在」自动建号，本系统要求 false——手机号无账号必须提示联系管理员） -->
+<!-- api-meta：系统代码解析的机器可读约定块，请勿删除本块或改键名（login_url 必填；user_token_name 缺省默认 client_token；user_token_header / agent_token_header 可选，缺省分别为 Client-Authorize-Token / Api-Authorize-Token；delegate_auto_create 为 true 时委托登录遇到「用户不存在」自动建号，本系统要求 false——手机号无账号必须提示联系管理员；sso_* 可选，声明「外部系统」页面的跳转入口，无 SSO 能力的系统只填 sso_enabled + sso_url） -->
 ```api-meta
 login_url: https://erp${APP_ID}.aidingyi.cn/api/v1/erp.delegate/login
 auth_mode: delegate_login
@@ -21,6 +21,14 @@ user_token_name: client_token
 agent_token_header: Api-Authorize-Token
 http_method: POST
 delegate_auto_create: false
+sso_enabled: true
+sso_system_name: CRM 客户信息
+sso_mode: ticket_redirect
+sso_url: https://erp${APP_ID}.aidingyi.cn/pages/list?id=13&path=kehuxinxi
+sso_ticket_param: sso_ticket
+sso_grant_url: https://erp${APP_ID}.aidingyi.cn/api/v1/erp.delegate/sso_grant
+sso_login_url: https://erp${APP_ID}.aidingyi.cn/api/v1/erp.delegate/sso_login
+sso_fallback_url: https://erp${APP_ID}.aidingyi.cn/
 ```
 
 本系统采用**用户委托登录**：智能体（代理人）持 `agent_token` 代表终端用户（委托人）访问。全部接口为 `POST`，Body 为 `application/json`。
