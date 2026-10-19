@@ -368,7 +368,7 @@ POST https://erp${APP_ID}.aidingyi.cn/api/v1/erp.module/module_data_update
 `genjinhuizongzhaiyao`（跟进汇总摘要）用于沉淀客户跟进状态的累计摘要，新建客户时无需填写（`create_hidden: true`），由填写跟进记录后归纳更新：
 
 1. 每次填写跟进记录后，判断该客户**最新的客户状态** `zhuangtai`（取值见 `module_schema` 返回的 options）
-2. 结合本次跟进记录与历史跟进情况，归纳最新的跟进汇总摘要 `genjinhuizongzhaiyao`（建议控制在 200 字以内）；**保留历史摘要条目**，按天分条追加，条与条之间用 CRLF（`\r\n\r\n`）分隔
+2. 结合本次跟进记录与历史跟进情况，归纳最新的跟进汇总摘要 `genjinhuizongzhaiyao`（建议控制在 200 字以内）。摘要必须**结论导向**：只写「客户需求/关注点 + 已确认的关键事实 + 下一步待办」，禁止逐轮复述「客户问…，AI 介绍…」的对话过程，禁止罗列产品清单或照抄本轮对话预摘要；能一句话说清就只写一句。**保留历史摘要条目**，按天分条追加，条与条之间用 CRLF（`\r\n\r\n`）分隔
 3. 调用修改接口（第 6 节），同时更新 `zhuangtai`、`genjinhuizongzhaiyao` 两个字段
 4. 若本次跟进**没有重要信息**，客户状态与摘要均无变化，可跳过修改
 

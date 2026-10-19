@@ -90,6 +90,21 @@ class TestSystemPromptSelfCheck:
         assert "同一日期在整个摘要中只能出现一条" in prompt
         assert "严禁在已有当天条目的情况下再追加同日期新条目" in prompt
 
+    def test_conclusion_oriented_clause_present(self):
+        """摘要必须结论导向：禁止逐轮复述对话过程与照抄预摘要"""
+        from src.services.recap.tasks.external_push import _build_system_prompt
+
+        prompt = _build_system_prompt("doc", {
+            "user_token_name": "client_token",
+            "external_userid_field": "unionid",
+            "user_token_header": "Client-Authorize-Token",
+            "agent_token_header": "Api-Authorize-Token",
+        })
+        assert "严禁逐轮复述过程" in prompt
+        assert "客户想了解高校研学" in prompt
+        assert "错误写法" in prompt
+        assert "不得照抄用户消息中的「本轮对话预摘要」" in prompt
+
 
 # ============== _run_push_loop 摘要提醒注入 ==============
 
@@ -149,6 +164,7 @@ class TestPushLoopSummaryInjection:
         assert len(reminders) == 1
         assert "2026-9-18, 想了解价格" in reminders[0]["content"]
         assert "同一日期" in reminders[0]["content"]
+        assert "禁止逐轮复述" in reminders[0]["content"]
 
     @pytest.mark.asyncio
     async def test_today_entry_warning_injected(self):
