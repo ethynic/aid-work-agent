@@ -281,6 +281,100 @@ class TestGetUserWebSessions:
         assert resp_other["success"] is True
         assert resp_other["agents"] == []
 
+    def test_builtin_agent_name_from_registry(self, temp_tenant_for_web):
+        """内置数字员工（仅存在于 subagents/ 注册表，subagent_definitions 无行）也应显示中文名"""
+        from src.core.agent import master_agent
+        from src.db.database import get_db_connection
+        from src.saas.api import web_sessions
+
+        registry = master_agent.subagent_registry
+        if not registry:
+            pytest.skip("子智能体注册表未初始化")
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT agent_id FROM subagent_definitions")
+            db_agent_ids = {r["agent_id"] for r in cursor.fetchall()}
+
+        # 取一个只在注册表（内置）里、且名称不同于 agent_id 的数字员工
+        builtin = next(
+            (
+                aid for aid, cfg in registry
+                if not getattr(cfg, "from_db", False)
+                and aid not in db_agent_ids
+                and cfg.name
+                and cfg.name != aid
+            ),
+            None,
+        )
+        if not builtin:
+            pytest.skip("无可用内置数字员工（注册表为空或全部已在 subagent_definitions）")
+
+        expected = registry.get(builtin).name
+        tenant_id = temp_tenant_for_web
+        user_a = _insert_user(tenant_id, f"webtest_{uuid.uuid4().hex[:6]}", username="员工A")
+        sess = _insert_chat_session(f"wsess_{uuid.uuid4().hex[:8]}", user_a, tenant_id,
+                                    subagent_id=builtin, title="内置智能体会话")
+
+        with patch("src.saas.api.web_sessions.require_admin", _fake_admin(tenant_id)):
+            resp_agents = _call(web_sessions.list_user_web_session_agents, FakeRequest(), user_id=user_a)
+            resp_sessions = _call(web_sessions.get_user_web_sessions, FakeRequest(), user_id=user_a)
+
+        agents = {a["agent_id"]: a for a in resp_agents["agents"]}
+        assert agents[builtin]["agent_name"] == expected
+        assert resp_sessions["sessions"][0]["subagent_name"] == expected
+
+    def test_tenant_instance_display_name_overrides_base(self, temp_tenant_for_web):
+        """租户直定制改名后，会话筛选项/会话列表显示租户自定义名称"""
+        from src.core.agent import master_agent
+        from src.db.database import get_db_connection
+        from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
+        from src.saas.api import web_sessions
+
+        registry = master_agent.subagent_registry
+        if not registry:
+            pytest.skip("子智能体注册表未初始化")
+
+        base = next(
+            (aid for aid, cfg in registry if not getattr(cfg, "from_db", False) and cfg.name),
+            None,
+        )
+        if not base:
+            pytest.skip("无可用内置数字员工")
+
+        tenant_id = temp_tenant_for_web
+        custom_name = f"租户改名-{uuid.uuid4().hex[:4]}"
+        try:
+            TenantAgentInstanceDB.create(
+                tenant_id=tenant_id,
+                agent_id=base,
+                base_agent_id=base,
+                base_source="builtin",
+                display_name=custom_name,
+            )
+        except Exception as e:
+            pytest.skip(f"无法创建租户实例（DB 不可用）: {e}")
+
+        user_a = _insert_user(tenant_id, f"webtest_{uuid.uuid4().hex[:6]}", username="员工A")
+        _insert_chat_session(f"wsess_{uuid.uuid4().hex[:8]}", user_a, tenant_id,
+                             subagent_id=base, title="定制智能体会话")
+
+        with patch("src.saas.api.web_sessions.require_admin", _fake_admin(tenant_id)):
+            resp_agents = _call(web_sessions.list_user_web_session_agents, FakeRequest(), user_id=user_a)
+            resp_sessions = _call(web_sessions.get_user_web_sessions, FakeRequest(), user_id=user_a)
+
+        agents = {a["agent_id"]: a for a in resp_agents["agents"]}
+        assert agents[base]["agent_name"] == custom_name
+        assert resp_sessions["sessions"][0]["subagent_name"] == custom_name
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM tenant_agent_instances WHERE tenant_id = %s AND agent_id = %s",
+                (tenant_id, base),
+            )
+            conn.commit()
+
     def test_user_tenant_check(self, temp_tenant_for_web):
         """用户不属于当前租户时 404"""
         from fastapi import HTTPException

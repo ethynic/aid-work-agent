@@ -16,7 +16,7 @@ from loguru import logger
 
 from src.saas.api.tenant_auth import require_admin
 from src.db.models import SessionDB, UserDB
-from src.db.subagent_definition_db import SubagentDefinitionDB
+from src.saas.services.agent_name_resolver import resolve_agent_names
 
 router = APIRouter(prefix="/api/saas/web-sessions", tags=["网页端会话"])
 
@@ -76,7 +76,7 @@ async def list_user_web_session_agents(request: Request, user_id: str):
     try:
         rows = UserDB.get_user_session_agent_counts(user_id=user_id, tenant_id=tenant_id)
         agent_ids = [r["subagent_id"] for r in rows if r["subagent_id"]]
-        name_map = SubagentDefinitionDB.get_name_map(agent_ids) if agent_ids else {}
+        name_map = resolve_agent_names(tenant_id, agent_ids)
 
         agents = []
         for r in rows:
@@ -147,12 +147,12 @@ async def get_user_web_sessions(
             page_size=page_size,
         )
 
-        # 批量反查智能体名称
+        # 批量反查智能体名称（查不到时回退 agent_id，避免前端误显示为「主智能体」）
         agent_ids = [s["subagent_id"] for s in result["sessions"] if s.get("subagent_id")]
-        name_map = SubagentDefinitionDB.get_name_map(list(set(agent_ids))) if agent_ids else {}
+        name_map = resolve_agent_names(tenant_id, agent_ids)
         for s in result["sessions"]:
             if s.get("subagent_id"):
-                s["subagent_name"] = name_map.get(s["subagent_id"])
+                s["subagent_name"] = name_map.get(s["subagent_id"], s["subagent_id"])
 
         return {"success": True, **result}
     except HTTPException:
