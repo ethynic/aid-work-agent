@@ -123,7 +123,10 @@ class HtmlExporter:
         try:
             with sync_playwright() as playwright:
                 try:
-                    browser = playwright.chromium.launch(headless=True)
+                    browser = playwright.chromium.launch(
+                        headless=True,
+                        args=["--disable-dev-shm-usage"],
+                    )
                 except PlaywrightError as exc:
                     raise HtmlExportDependencyError(
                         "Playwright Chromium 未安装或不可用"

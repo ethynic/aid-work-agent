@@ -49,7 +49,9 @@ services:
       - /var/www/qb3_upload/agent_uploads:/app/uploads
     tmpfs:
       - /tmp:size=200m,mode=1777     # Playwright/Chromium 需要可写 /tmp
+      - /home/appuser/tmp:size=1g,mode=1777   # TMPDIR 内存盘：转换类任务不写 overlay 磁盘
     mem_limit: 4g
+    shm_size: 512m                   # PPT 导出 Chromium 共享内存
     cpus: 1.5
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]

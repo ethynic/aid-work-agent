@@ -24,14 +24,14 @@ services:
       # 生产优化参数
       # 最大连接数（50用户场景，80足够；保留余量给后台管理/迁移等）
       POSTGRES_MAX_CONNECTIONS: 80
-      # 共享缓冲区（8G内存推荐值512MB，约1/16）
-      POSTGRES_SHARED_BUFFERS: 512MB
-      # 有效缓存大小（告知PG可用OS缓存大小）
-      POSTGRES_EFFECTIVE_CACHE_SIZE: 4096MB
+      # 共享缓冲区（16G宿主机推荐1GB，约1/16）
+      POSTGRES_SHARED_BUFFERS: 1GB
+      # 有效缓存大小（告知PG可用OS缓存大小；宿主机 buff/cache 约9G）
+      POSTGRES_EFFECTIVE_CACHE_SIZE: 8192MB
       # 工作内存（每个排序/哈希操作，50用户并发时需要适中内存）
-      POSTGRES_WORK_MEM: 8MB
+      POSTGRES_WORK_MEM: 16MB
       # 维护工作内存（索引重建、VACUUM更快）
-      POSTGRES_MAINTENANCE_WORK_MEM: 256MB
+      POSTGRES_MAINTENANCE_WORK_MEM: 512MB
       # WAL 配置（无需复制，使用 minimal 减少 WAL 开销）
       POSTGRES_WAL_LEVEL: minimal
       POSTGRES_MAX_WAL_SIZE: 1GB
@@ -59,13 +59,17 @@ services:
       - "-c"
       - "max_connections=80"
       - "-c"
-      - "shared_buffers=512MB"
+      - "shared_buffers=1GB"
       - "-c"
-      - "effective_cache_size=4096MB"
+      - "effective_cache_size=8192MB"
       - "-c"
-      - "work_mem=8MB"
+      - "work_mem=16MB"
       - "-c"
-      - "maintenance_work_mem=256MB"
+      - "maintenance_work_mem=512MB"
+      # 临时文件（排序/哈希溢出、临时表）写入下方 /pg_temp tmpfs，避免磁盘 IO。
+      # 注意：必须与实际挂载路径一致，否则该 tmpfs 完全闲置（2026-10-19 前即为闲置状态）。
+      - "-c"
+      - "temp_tablespaces=/pg_temp"
       - "-c"
       - "wal_level=minimal"
       # 禁用 WAL 发送者（minimal 模式不支持复制，必须设为0）
@@ -123,19 +127,20 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
-    # 生产环境资源限制（50用户场景）
+    # 生产环境资源限制（50用户场景；16G 宿主机，6G 含 shared_buffers 增量与窗口）
     deploy:
       resources:
         limits:
-          memory: 4G
+          memory: 6G
           cpus: "2.0"
         reservations:
           memory: 2G
           cpus: "1.0"
     shm_size: 1g
-    # tmpfs 内存盘：PostgreSQL 临时文件（排序/哈希/临时表）写入内存，避免磁盘 IO
+    # tmpfs 内存盘：PostgreSQL 临时文件（排序/哈希/临时表）写入内存，避免磁盘 IO。
+    # 需配合 temp_tablespaces=/pg_temp 才生效；容量不足会报 "could not write to file"。
     tmpfs:
-      - /pg_temp:mode=1777,size=1024m,uid=999,gid=999
+      - /pg_temp:mode=1777,size=2048m,uid=999,gid=999
       # 修复 timescaledb 镜像 mktemp 权限问题：tmpfs /tmp 必须显式声明 uid/gid=999(postgres)
       # 否则 entrypoint 切到 postgres 用户后 mktemp /tmp/passwd.XXXXXX 会 Permission denied
       - /tmp:mode=1777,size=200m,uid=999,gid=999

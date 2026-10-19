@@ -47,6 +47,7 @@ services:
     container_name: aid-runner-api1
     restart: "no"                    # 仿真按需启停，不随机自启
     mem_limit: 1g
+    shm_size: 128m
     env_file:
       - .env
     environment:
@@ -75,6 +76,7 @@ services:
       - /var/www/qb3_upload/agent_storage:/app/storage
     tmpfs:
       - /tmp:size=200m,mode=1777
+      - /home/appuser/tmp:size=128m,mode=1777
     networks:
       - aid-prod-net
     # /health 仅报告进程与 enabled 状态，不代表 DB/lease 健康（清单 §4）
@@ -97,6 +99,7 @@ services:
     container_name: aid-runner-worker1
     restart: "no"
     mem_limit: 4g
+    shm_size: 512m
     # 先起独立 API（schema 断言/接单面就绪）再起 worker；只为启动顺序确定性，
     # 不构成运行时耦合（worker 只访问 DB，不调用 API）
     depends_on:
@@ -121,6 +124,7 @@ services:
       - /var/www/qb3_upload/agent_storage:/app/storage
     tmpfs:
       - /tmp:size=200m,mode=1777     # worker 执行 Browser 工具（Playwright/Chromium）需要可写 /tmp
+      - /home/appuser/tmp:size=2g,mode=1777   # TMPDIR 内存盘：转换/渲染类任务主执行者
     networks:
       - aid-prod-net
     # worker 无 HTTP/心跳端点，只能 pgrep 进程判活（[.] 防自匹配）；

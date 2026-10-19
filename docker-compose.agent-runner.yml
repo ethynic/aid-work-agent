@@ -29,6 +29,7 @@ services:
     restart: unless-stopped
     # 轻量 FastAPI 面（不加载 Agent 运行时），1G 上限留足余量
     mem_limit: 1g
+    shm_size: 128m
     env_file:
       - .env
     environment:
@@ -64,6 +65,12 @@ services:
         tmpfs:
           mode: 1777
           size: 200m
+      # TMPDIR 内存盘（本服务不执行任务，仅极小临时文件）
+      - type: tmpfs
+        target: /home/appuser/tmp
+        tmpfs:
+          mode: 1777
+          size: 128m
     networks:
       - ${AGENT_RUNNER_NETWORK:-aid-network}
     # 独立 API 自带 /health（api.py health 端点）
@@ -81,6 +88,7 @@ services:
 
   # AgentRunner 执行 worker：认领/心跳/执行/恢复，全部经共享数据库，不监听 HTTP。
   # 内存口径对齐 aid-agent-background（加载整套 Agent 运行时）。
+  # 6G：主要工具执行者，LibreOffice/Chromium/ffmpeg 并发时峰值高于 background。
   runner-worker:
     build:
       context: .
@@ -88,7 +96,8 @@ services:
     image: aid-agent-api:latest
     container_name: aid-runner-worker
     restart: unless-stopped
-    mem_limit: 4g
+    mem_limit: 6g
+    shm_size: 512m
     # 先起独立 API（schema 断言/接单面就绪）再起 worker；worker 自身也会 assert_schema，
     # 该依赖只为启动顺序确定性，不构成运行时耦合（worker 只访问 DB，不调用 API）。
     depends_on:
@@ -118,6 +127,12 @@ services:
         tmpfs:
           mode: 1777
           size: 200m
+      # TMPDIR 内存盘：PDF/PPT/Office/视频转码的主要执行者，2g 覆盖峰值
+      - type: tmpfs
+        target: /home/appuser/tmp
+        tmpfs:
+          mode: 1777
+          size: 2g
     networks:
       - ${AGENT_RUNNER_NETWORK:-aid-network}
     # worker 无 HTTP/心跳文件端点（background_runner 的 .bg_runner_alive 机制不在此进程），

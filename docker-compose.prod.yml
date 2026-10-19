@@ -14,6 +14,10 @@ services:
     # 内存上限：新服务器 4核16G。API 6 workers，每 worker 实测 200-400MB
     # （加载全部工具/skills 后），8G 上限留足余量且不会挤占 postgres/背景 runner
     mem_limit: 8g
+    # /dev/shm：Docker 默认仅 64M，PPT 高保真导出会启动 Chromium，
+    # 大页面导出可能因共享内存不足崩溃。已在该入口补 --disable-dev-shm-usage，
+    # 此处再放宽 shm 双保险；shm 只按实际使用页计入内存，不预占。
+    shm_size: 512m
 
     # 等 Redis 健康后再启动 worker：worker 首连 Redis 失败会降级进进程内存，
     # 造成跨 worker 状态漂移（2026-09-18 实证：Redis 容器重建后 api 先于其就绪
@@ -67,6 +71,15 @@ services:
           mode: 1777
           size: 200m
 
+      # 应用临时目录（TMPDIR=/home/appuser/tmp）落内存盘：LibreOffice/Pandoc/
+      # PDF 渲染/PPT 导出/Excel 转换不再写 overlay 磁盘。上限 1g，达到上限时报
+      # ENOSPC（任务失败）而不是撑爆宿主机；tmpfs 用量计入 mem_limit。
+      - type: tmpfs
+        target: /home/appuser/tmp
+        tmpfs:
+          mode: 1777
+          size: 1g
+
       # 上传附件目录
       - /var/www/qb3_upload/agent_uploads:/app/uploads
       - /var/www/qb3_upload/agent_storage:/app/storage
@@ -105,6 +118,7 @@ services:
     # 内存上限：背景 runner 加载整套 Agent + 调度器 + recap 消费，
     # 4G 上限防止异常膨胀拖垮宿主机（超过后容器被 OOM kill 并由 restart 拉起）
     mem_limit: 4g
+    shm_size: 512m
 
     # 与 aid-agent-api 同理：等 Redis 健康后再启动（recap 队列/poller 锁均依赖 Redis）
     depends_on:
@@ -128,6 +142,18 @@ services:
       # 共享业务存储（心跳文件 + master_agent 文件状态 + poller 锁状态）
       - /var/www/qb3_upload/agent_uploads:/app/uploads
       - /var/www/qb3_upload/agent_storage:/app/storage
+      # /tmp 权限兜底（同 aid-agent-api）
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          mode: 1777
+          size: 200m
+      # 应用临时目录（TMPDIR）落内存盘，避免转换类任务写 overlay 磁盘
+      - type: tmpfs
+        target: /home/appuser/tmp
+        tmpfs:
+          mode: 1777
+          size: 1g
     networks:
       - aid-network
     # 心跳文件法判活：runner 每 30s 写 storage/.bg_runner_alive，2 分钟内有更新即健康
