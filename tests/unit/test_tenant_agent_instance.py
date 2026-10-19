@@ -177,7 +177,7 @@ class TestUpdateOverrides:
         assert called == {"display_name": "新名"}
 
     def test_auto_creates_direct_customization_row(self):
-        """基础员工首次定制：自动补建直定制行"""
+        """基础员工首次定制：自动补建直用实例行"""
         with patch.object(svc, "TenantAgentInstanceDB") as db, \
              patch.object(svc, "_resolve_base_config", return_value={"base_source": "builtin"}):
             db.get.side_effect = [None, _row("sales", "sales", display_name="新名"), _row("sales", "sales", display_name="新名")]
@@ -267,7 +267,7 @@ class TestDeleteCopy:
 class TestBuildTenantInstanceItems:
     def test_only_active_copies_with_allowed_base(self):
         rows = [
-            _row("sales", "sales"),                      # 直定制行，不产生列表项
+            _row("sales", "sales"),                      # 直用实例行，不产生列表项
             _row("sales-t1-ab12", "sales"),              # 允许的副本
             _row("hr-t1-zz99", "hr"),                    # base 不在允许集合
             _row("sales-t1-cd34", "sales", status="archived"),  # 已归档
@@ -292,7 +292,7 @@ class TestApplyDirectCustomizationOverrides:
     def test_merges_direct_row_name_and_description(self):
         rows = [
             _row("sales", "sales", display_name="销售助手-小曦", description="定制简介"),
-            _row("sales-t1-ab12", "sales", display_name="副本名"),  # 副本行不参与基础项覆盖
+            _row("sales-t1-ab12", "sales", display_name="副本名"),  # 副本实例行不参与基础项覆盖
         ]
         items = [
             {"agent_id": "sales", "name": "销售助手", "description": "父定义简介"},

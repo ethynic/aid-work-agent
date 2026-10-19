@@ -4,9 +4,9 @@
 租户数字员工实例解析器。
 
 把 tenant_agent_instances 行与父定义合并为运行时 SubagentConfig：
-- 副本行（agent_id != base_agent_id）：父定义的 system_prompt/工具/技能/模型
+- 副本实例行（agent_id != base_agent_id）：父定义的 system_prompt/工具/技能/模型
   + 租户覆盖项（display_name/description）
-- 直定制行（agent_id == base_agent_id）：父定义 + 租户覆盖项（不改 agent_id）
+- 直用实例行（agent_id == base_agent_id）：父定义 + 租户覆盖项（不改 agent_id）
 - archived 行：降级返回父定义（覆盖项剥离），保历史会话可用；新会话在 API 层拒绝
 
 实例不进全局 registry（registry 无租户上下文）；合并配置每次实时读 DB，
@@ -66,7 +66,7 @@ def resolve_tenant_config(registry, tenant_id: Optional[str], agent_id: str) -> 
     merged = base.model_copy(update={
         "name": display_name or base.name,
         "description": description or base.description,
-        # 直定制行 agent_id == base_agent_id，dir_name 保持不变；副本行切换为实例 id，
+        # 直用实例行 agent_id == base_agent_id，dir_name 保持不变；副本实例行切换为实例 id，
         # 使 extra.md/知识栏目/模板按实例 agent_id 隔离
         "dir_name": row["agent_id"],
         # from_db=True 使 agent_router._should_rebuild 进入实时比对路径（覆盖项变更即时重建）

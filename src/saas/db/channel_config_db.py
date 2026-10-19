@@ -625,7 +625,7 @@ class ChannelConfigDB:
 
     @staticmethod
     def is_subagent_used(tenant_id: str, subagent_type: str) -> bool:
-        """检查某租户是否有渠道配置引用指定数字员工实例（副本删除守卫用）。"""
+        """检查某租户是否有渠道配置引用指定数字员工实例（副本实例删除守卫用）。"""
         if not tenant_id or not subagent_type:
             return False
         with get_db_connection() as conn:

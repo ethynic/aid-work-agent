@@ -325,7 +325,7 @@ class TestGetUserWebSessions:
         assert resp_sessions["sessions"][0]["subagent_name"] == expected
 
     def test_tenant_instance_display_name_overrides_base(self, temp_tenant_for_web):
-        """租户直定制改名后，会话筛选项/会话列表显示租户自定义名称"""
+        """租户直用实例改名后，会话筛选项/会话列表显示租户自定义名称"""
         from src.core.agent import master_agent
         from src.db.database import get_db_connection
         from src.db.tenant_agent_instance_db import TenantAgentInstanceDB

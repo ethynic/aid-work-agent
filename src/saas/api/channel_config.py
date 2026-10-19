@@ -697,7 +697,7 @@ def _validate_channel_subagent(tenant_id: str, subagent_type: Optional[str]) -> 
 
 @router.get("/available-subagents")
 async def get_available_subagents(request: Request):
-    """获取当前租户可用的数字员工列表（用于渠道配置关联，含本租户副本）"""
+    """获取当前租户可用的数字员工列表（用于渠道配置关联，含本租户副本实例）"""
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 
@@ -718,7 +718,7 @@ async def get_available_subagents(request: Request):
             for t in subagent_types
         ]
 
-        # 附加本租户数字员工副本（base 在订阅内才可见，订阅继承）
+        # 附加本租户数字员工副本实例（base 在订阅内才可见，订阅继承）
         try:
             from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
             allowed_set = set(subagent_types)

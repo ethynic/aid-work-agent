@@ -9,24 +9,24 @@
 只读核查测试库：
 
 - `tenant_agent_instances` 中该租户只有一行，`agent_id = base_agent_id = tenant_e9b2fab93a2f`（`created_by = migration_20261014`），`extra_prompt` 有内容。全库 6 行均为「`agent_id` = `tenant_id`、每租户一行」形态。
-- `prompt_registry` 中 `scope = 'tenant_extra'` 有 8 条注册记录，`scope_id` 形如 `extra:{subagent}:{tenant_id}`（如 `extra:sales-assistant:tenant_e9b2fab93a2f`），即应有 8 行直定制行。
-- 该表结构也是草稿版：只有 `agent_id` 单列全局唯一约束（`tenant_agent_instances_agent_id_key`），缺 `uq_tenant_agent_inst UNIQUE (tenant_id, agent_id)` 与副本部分唯一索引 `uq_tenant_agent_inst_copy`；生产库两者齐全。
+- `prompt_registry` 中 `scope = 'tenant_extra'` 有 8 条注册记录，`scope_id` 形如 `extra:{subagent}:{tenant_id}`（如 `extra:sales-assistant:tenant_e9b2fab93a2f`），即应有 8 行直用实例行。
+- 该表结构也是草稿版：只有 `agent_id` 单列全局唯一约束（`tenant_agent_instances_agent_id_key`），缺 `uq_tenant_agent_inst UNIQUE (tenant_id, agent_id)` 与副本实例部分唯一索引 `uq_tenant_agent_inst_copy`；生产库两者齐全。
 
-定制弹框按卡片 `agent_id`（真实目录名 `sales-assistant`）查实例行，`/api/subagents` 的直定制覆盖项合并（`_apply_direct_customization_overrides`）同样按真实 agent_id 匹配，二者都命不中错键行，故回显为空、卡片也不显示覆盖的显示名/简介。
+定制弹框按卡片 `agent_id`（真实目录名 `sales-assistant`）查实例行，`/api/subagents` 的直用实例覆盖项合并（`_apply_direct_customization_overrides`）同样按真实 agent_id 匹配，二者都命不中错键行，故回显为空、卡片也不显示覆盖的显示名/简介。
 
 ## 原因
 
-`2026-10-14 16:47:01` 的实例表迁移块曾以草稿形态落库（表带 `agent_id` 全局唯一、直定制行 `agent_id`/`base_agent_id` 误用 `tenant_id`）。其后该块被原地改写为按 `substring(scope_id from '^extra:([^:]+):')` 建键，**但 datetime 未变**（仍为 16:47:01）。测试库水位已推进到 `2026-10-14 22:45:00`，改写后的正确版不再进入 pending，草稿数据与结构永久残留。生产 10-15 才部署，直接执行的是正确版（13 行键与约束均正确）。
+`2026-10-14 16:47:01` 的实例表迁移块曾以草稿形态落库（表带 `agent_id` 全局唯一、直用实例行 `agent_id`/`base_agent_id` 误用 `tenant_id`）。其后该块被原地改写为按 `substring(scope_id from '^extra:([^:]+):')` 建键，**但 datetime 未变**（仍为 16:47:01）。测试库水位已推进到 `2026-10-14 22:45:00`，改写后的正确版不再进入 pending，草稿数据与结构永久残留。生产 10-15 才部署，直接执行的是正确版（13 行键与约束均正确）。
 
 运行时 `_load_extra_md` 在实例行未命中时会回退 `prompt_registry` 的 `tenant_extra`，因此提示词仍被加载、智能体行为正常，掩盖了数据错键——故障只从弹框回显这一个口子暴露出来。
 
 ## 影响
 
-测试库 6 个租户的直定制行不可达：定制弹框的扩展提示词/显示名/简介回显为空（保存会把空值写回实例行，但运行时仍走 registry 回退，实际未丢失）；`/api/subagents` 覆盖项合并失效。`agent_id` 全局唯一还会让第二个租户对同名基础员工创建直定制行时直接撞唯一约束。生产库不受影响。
+测试库 6 个租户的直用实例行不可达：定制弹框的扩展提示词/显示名/简介回显为空（保存会把空值写回实例行，但运行时仍走 registry 回退，实际未丢失）；`/api/subagents` 覆盖项合并失效。`agent_id` 全局唯一还会让第二个租户对同名基础员工创建直用实例行时直接撞唯一约束。生产库不受影响。
 
 ## 修复
 
-1. `deploy/db_update.yaml` 追加 `2026-10-16 18:30:00` 幂等补偿块：动态删除 `agent_id` 单列唯一约束（按 `pg_constraint` 查列构成，不依赖约束名）→ 删除 `agent_id = base_agent_id = tenant_id` 的错键行 → 补 `(tenant_id, agent_id)` 唯一约束与副本部分唯一索引 → 按 `prompt_registry` 的 `tenant_extra` 回填正确直定制行（`ON CONFLICT DO NOTHING`）。生产等已跑正确版的库 DROP 无命中、INSERT 冲突跳过，无副作用。
+1. `deploy/db_update.yaml` 追加 `2026-10-16 18:30:00` 幂等补偿块：动态删除 `agent_id` 单列唯一约束（按 `pg_constraint` 查列构成，不依赖约束名）→ 删除 `agent_id = base_agent_id = tenant_id` 的错键行 → 补 `(tenant_id, agent_id)` 唯一约束与副本实例部分唯一索引 → 按 `prompt_registry` 的 `tenant_extra` 回填正确直用实例行（`ON CONFLICT DO NOTHING`）。生产等已跑正确版的库 DROP 无命中、INSERT 冲突跳过，无副作用。
 2. 运行时语义收敛（`prompt_sources._load_extra_md`）：实例行存在时一律以其 `extra_prompt` 为准，空即租户已清空定制；仅当无实例行时才回退 `prompt_registry`。修掉「弹框清空扩展提示词后运行时仍生效」。
 
 ## 验证

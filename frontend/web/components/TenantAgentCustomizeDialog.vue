@@ -176,7 +176,7 @@
 
     <template #footer>
       <div class="w-full flex items-center gap-2">
-        <!-- 副本操作：复制来源可为基础员工或本租户实例（克隆其覆盖项） -->
+        <!-- 副本实例操作：复制来源可为基础员工或本租户实例（克隆其覆盖项） -->
         <BaseButton intent="secondary" size="sm" :disabled="copying" @click="handleCopy">
           {{ copying ? '复制中...' : '复制为副本' }}
         </BaseButton>
@@ -303,7 +303,7 @@ async function loadInstance() {
   }))
 }
 
-// 实例行未落库时（基础员工未定制过）按 id 猜测副本标记仅作展示兜底；
+// 实例行未落库时（基础员工未定制过）按 id 猜测副本实例标记仅作展示兜底；
 // 后端权威判定以保存后返回为准
 function isLikelyCopy(): boolean {
   return props.agentId !== props.agentName && /-[a-z0-9-]{2,}$/.test(props.agentId)

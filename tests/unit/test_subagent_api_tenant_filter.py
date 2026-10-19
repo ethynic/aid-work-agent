@@ -111,7 +111,7 @@ async def test_list_subagents_no_tenant_context_returns_all_unfiltered():
 
 @pytest.mark.asyncio
 async def test_list_subagents_applies_direct_customization_overrides():
-    """直定制行（agent_id == base_agent_id）的显示名/简介覆盖应合并进基础员工列表项"""
+    """直用实例行（agent_id == base_agent_id）的显示名/简介覆盖应合并进基础员工列表项"""
     all_items = [
         _make_item("data-analysis", "数据分析"),
         _make_item("travel-consultant", "旅游咨询顾问"),
@@ -124,7 +124,7 @@ async def test_list_subagents_applies_direct_customization_overrides():
             "description": "本租户定制简介",
             "status": "active",
         },
-        # 副本行由 _build_tenant_instance_items 处理，此处不参与合并
+        # 副本实例行由 _build_tenant_instance_items 处理，此处不参与合并
         {
             "agent_id": "data-analysis-copy1",
             "base_agent_id": "data-analysis",

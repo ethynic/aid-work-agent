@@ -2,10 +2,10 @@
 租户数字员工实例 DB 访问。
 
 统一模型：
-- 直定制行：agent_id = base_agent_id（租户对基础员工的直接定制，无新 ID）
-- 副本行：agent_id != base_agent_id（复制产生，全局唯一，纯连字符）
+- 直用实例行：agent_id = base_agent_id（租户直接使用基础员工，可能未经任何定制，无新 ID）
+- 副本实例行：agent_id != base_agent_id（租户管理员复制产生，全局唯一，纯连字符）
 
-副本 system_prompt/工具/技能/模型运行时实时取自父定义，本表只存覆盖项。
+副本实例 system_prompt/工具/技能/模型运行时实时取自父定义，本表只存覆盖项。
 """
 
 from typing import Any, Dict, List, Optional
@@ -89,7 +89,7 @@ class TenantAgentInstanceDB:
         greeting_prompts: Optional[List[Dict[str, str]]] = None,
         created_by: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        """创建实例行。直定制行按 (tenant_id, agent_id) 复合唯一；副本行按部分唯一索引全局唯一，撞名抛异常由调用方转 400"""
+        """创建实例行。直用实例行按 (tenant_id, agent_id) 复合唯一；副本实例行按部分唯一索引全局唯一，撞名抛异常由调用方转 400"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
             try:
@@ -146,7 +146,7 @@ class TenantAgentInstanceDB:
 
     @staticmethod
     def soft_delete(tenant_id: str, agent_id: str) -> bool:
-        """软删（archived）。直定制行（agent_id=base_agent_id）不允许删除"""
+        """软删（archived）。直用实例行（agent_id=base_agent_id）不允许删除"""
         row = TenantAgentInstanceDB.get(tenant_id, agent_id)
         if not row:
             return False
@@ -169,7 +169,7 @@ class TenantAgentInstanceDB:
 
     @staticmethod
     def count_active(tenant_id: str) -> int:
-        """active 副本数（不含直定制行，用于副本上限）"""
+        """active 副本实例数（不含直用实例行，用于副本实例上限）"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -182,7 +182,7 @@ class TenantAgentInstanceDB:
 
     @staticmethod
     def exists_any(agent_id: str) -> bool:
-        """agent_id 是否已被副本行占用（全局查重；直定制行 agent_id=base 名不占位）"""
+        """agent_id 是否已被副本实例行占用（全局查重；直用实例行 agent_id=base 名不占位）"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(

@@ -358,7 +358,7 @@ ImageRegistry 管理的图片资产元信息（复用 cp 的 `uploaded_file:{fil
 **键模式**：`subagent_greeting:{agent_id}`；租户上下文为 `subagent_greeting:{tenant_id}:{agent_id}`
 **TTL**：604800s（7 天）
 **失效时机**：管理后台更新/删除数字员工时主动 `delete_cached`（`src/api/admin_subagent.py`）；TTL 自动过期兜底
-**关键约束**：LLM（lite_model 小模型）按需生成、缓存复用，避免重复计费；租户上下文下键带租户维度——直定制行 agent_id=基础名全局共享，无租户维度会跨租户污染。租户实例覆盖项（greeting_summary/prompts）不走缓存即时返回，清除覆盖后回落本缓存。前端静态配置（`frontend/web/utils/sessionGreetings.ts`）优先于本缓存，仅未配置的智能体走此接口
+**关键约束**：LLM（lite_model 小模型）按需生成、缓存复用，避免重复计费；租户上下文下键带租户维度——直用实例行 agent_id=基础名全局共享，无租户维度会跨租户污染。租户实例覆盖项（greeting_summary/prompts）不走缓存即时返回，清除覆盖后回落本缓存。前端静态配置（`frontend/web/utils/sessionGreetings.ts`）优先于本缓存，仅未配置的智能体走此接口
 **源文件**：`src/api/subagent.py`
 
 ### 7.4.4 外部系统委托登录 client_token

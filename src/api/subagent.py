@@ -29,7 +29,7 @@ _GREETING_MAX_PROMPTS = 2
 
 # ============== API 接口（只读） ==============
 
-# 副本列表项与直定制覆盖合并统一由 src/saas/services/tenant_agent_instance_service.py 提供
+# 副本实例列表项与直用实例覆盖合并统一由 src/saas/services/tenant_agent_instance_service.py 提供
 # （/api/subagents 列表、新会话页允许列表、用户管理授权列表共用同一实现）
 from src.saas.services.tenant_agent_instance_service import (
     apply_direct_customization_overrides,
@@ -59,7 +59,7 @@ async def list_subagents(request: Request):
             if user:
                 # 传递 tenant_id 作为 target_tenant_id，确保平台管理员代管租户时
                 # 按目标租户的订阅过滤，而不是 fallback 到 user["tenant_id"]（平台管理员为 NULL）
-                # allowed_ids 已由 checker 展开附加本租户副本（订阅继承）
+                # allowed_ids 已由 checker 展开附加本租户副本实例（订阅继承）
                 allowed_ids = set(get_allowed_agent_ids_for_user(user, target_tenant_id=tenant_id))
                 items = [item for item in items if item["agent_id"] in allowed_ids]
                 items.extend(build_tenant_instance_items(tenant_id, allowed_ids))
@@ -201,7 +201,7 @@ async def get_subagent_greeting(request: Request, agent_id: str):
             if override is not None:
                 return {"success": True, "data": override, "source": "override"}
 
-        # 缓存命中直接返回（租户上下文下键带租户维度：直定制行 agent_id=基础名全局共享，防跨租户污染）
+        # 缓存命中直接返回（租户上下文下键带租户维度：直用实例行 agent_id=基础名全局共享，防跨租户污染）
         cache_parts = (tenant_id, agent_id) if tenant_id else (agent_id,)
         cached = get_cached(CacheKeys.SUBAGENT_GREETING, *cache_parts)
         if cached is not None:

@@ -1,11 +1,11 @@
 """租户数字员工资产共享逻辑：模板文件落盘/元数据 + 资产克隆。
 
 模板文件与知识栏目均为 per-(tenant, subagent) 关联，运行时按 subagent_config.dir_name
-读取（副本 = 实例 agent_id）。复制副本时需把源员工的模板文件（含磁盘副本）与知识栏目
-克隆到新实例 id，否则副本会丢失模板与栏目。
+读取（副本实例 = 实例 agent_id）。复制副本实例时需把源员工的模板文件（含磁盘副本）与知识栏目
+克隆到新实例 id，否则副本实例会丢失模板与栏目。
 
 供 src/api/subagent_template_file.py（上传/删除）与
-src/saas/services/tenant_agent_instance_service.py（复制副本）共用，避免重复实现。
+src/saas/services/tenant_agent_instance_service.py（复制副本实例）共用，避免重复实现。
 """
 
 import shutil
@@ -64,7 +64,7 @@ def persist_template_meta(
 def copy_template_files(tenant_id: str, src_agent_id: str, dst_agent_id: str) -> int:
     """克隆源员工的模板文件到目标实例（磁盘复制 + 新 file_id + 永久元数据）。
 
-    每条模板复制为独立的磁盘文件与新 file_id，避免删除源模板时影响副本。
+    每条模板复制为独立的磁盘文件与新 file_id，避免删除源模板时影响副本实例。
     Returns: 成功复制的模板数量（源为空或异常返回 0，best-effort 不抛错）。
     """
     if not tenant_id or not src_agent_id or not dst_agent_id or src_agent_id == dst_agent_id:

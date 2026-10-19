@@ -35,7 +35,7 @@ class TestExpandWithTenantInstances:
         assert result == ["sales", "hr", "sales-t1-ab12"]
 
     def test_no_duplicate_ids(self):
-        rows = [_row("sales", "sales")]  # 直定制行不产生新 ID
+        rows = [_row("sales", "sales")]  # 直用实例行不产生新 ID
         with patch("src.db.tenant_agent_instance_db.TenantAgentInstanceDB.list_by_tenant", return_value=rows):
             assert expand_with_tenant_instances("t1", ["sales"]) == ["sales"]
 

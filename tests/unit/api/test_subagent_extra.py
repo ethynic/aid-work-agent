@@ -350,8 +350,8 @@ class TestLoadExtraMdContract:
         resolve.assert_not_called()
 
     @pytest.mark.parametrize("agent_id, base_agent_id", [
-        ("travel-consultant", "travel-consultant"),          # 直定制行
-        ("travel-consultant-abc123", "travel-consultant"),   # 副本行
+        ("travel-consultant", "travel-consultant"),          # 直用实例行
+        ("travel-consultant-abc123", "travel-consultant"),   # 副本实例行
     ])
     def test_instance_row_without_prompt_clears_customization(self, agent, agent_id, base_agent_id):
         """实例行存在但 extra_prompt 为空：视为已清空定制，不回退 registry"""

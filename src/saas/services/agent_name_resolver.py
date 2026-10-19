@@ -1,9 +1,9 @@
 """智能体显示名解析。
 
-会话表只存 subagent_id（dir_name / 租户副本 id），展示前需反查中文名。
+会话表只存 subagent_id（dir_name / 副本实例 id），展示前需反查中文名。
 名称来源优先级（高 -> 低）：
 
-1. 租户实例覆盖 `tenant_agent_instances.display_name`（含直定制改名、租户副本）
+1. 租户实例覆盖 `tenant_agent_instances.display_name`（含直用实例改名、副本实例）
 2. 子智能体注册表：内置 `subagents/*/SUBAGENT.md` + DB 自定义定义
 3. `subagent_definitions.name`（注册表未加载或该定义已不在注册表时的兜底）
 4. 原样返回 agent_id
@@ -36,7 +36,7 @@ def resolve_agent_names(
 
     names: Dict[str, str] = {}
 
-    # 1) 租户实例覆盖（直定制行 + 副本行；archived 行不覆盖）
+    # 1) 租户实例覆盖（直用实例行 + 副本实例行；archived 行不覆盖）
     if tenant_id:
         try:
             from src.db.tenant_agent_instance_db import TenantAgentInstanceDB

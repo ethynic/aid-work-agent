@@ -49,7 +49,7 @@ def _sync_instance_extra_prompt(
 ) -> None:
     """把 extra_prompt 同步写入租户实例表（迁移过渡期双写，失败不阻塞主流程）。
 
-    content=None 表示清除覆盖（恢复继承）。实例行按需补建（直定制行）。
+    content=None 表示清除覆盖（恢复继承）。实例行按需补建（直用实例行）。
     """
     try:
         from src.db.tenant_agent_instance_db import TenantAgentInstanceDB

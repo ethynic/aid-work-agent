@@ -2,11 +2,11 @@
 租户数字员工实例服务。
 
 职责：
-- create_copy：复制基础员工为租户副本（继承语义，父定义运行时实时合并）
+- create_copy：复制基础员工为租户副本实例（继承语义，父定义运行时实时合并）
 - update_overrides：更新覆盖项（display_name/description/extra_prompt/greeting_*）
-- create_direct_customization：确保租户对基础员工的直定制行存在
-- delete：软删副本（直定制行不可删）
-- 副本 agent_id 生成：{base}-{租户串}-{4位随机}，纯小写连字符，禁止下划线
+- create_direct_customization：确保租户对基础员工的直用实例行存在
+- delete：软删副本实例（直用实例行不可删）
+- 副本实例 agent_id 生成：{base}-{租户串}-{4位随机}，纯小写连字符，禁止下划线
   （渠道 session_id 末段按 _ 提取 subagent，见 src/services/recap/runner.py）
 """
 
@@ -28,7 +28,7 @@ class TenantAgentInstanceError(Exception):
         self.message = message
 
 
-# 副本 agent_id 合法字符：小写字母/数字/连字符（禁止下划线，防 session_id 末段提取破坏）
+# 副本实例 agent_id 合法字符：小写字母/数字/连字符（禁止下划线，防 session_id 末段提取破坏）
 _INSTANCE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 
@@ -78,7 +78,7 @@ def _is_id_taken(candidate: str) -> bool:
 
 
 def get_tenant_subscribed_agent_ids(tenant_id: str) -> List[str]:
-    """租户当前有效订阅的基础员工 agent_id 列表（副本订阅继承判定用）"""
+    """租户当前有效订阅的基础员工 agent_id 列表（副本实例订阅继承判定用）"""
     from src.db.database import get_db_connection
     from src.saas.db.subscription_db import SubscriptionDB
 
@@ -87,7 +87,7 @@ def get_tenant_subscribed_agent_ids(tenant_id: str) -> List[str]:
 
 
 def generate_instance_id(base_agent_id: str, tenant_id: str) -> str:
-    """生成全局唯一副本 agent_id，最多尝试 20 次"""
+    """生成全局唯一副本实例 agent_id，最多尝试 20 次"""
     slug = _tenant_slug(tenant_id)
     for _ in range(20):
         candidate = f"{base_agent_id}-{slug}-{_random_suffix()}"
@@ -113,10 +113,10 @@ def create_copy(
     display_name: str,
     created_by: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """复制数字员工为本租户副本（仅存覆盖项，父定义运行时合并）。
+    """复制数字员工为本租户副本实例（仅存覆盖项，父定义运行时合并）。
 
     复制来源可以是：基础员工（内置/平台自定义，需订阅），或本租户已有的
-    实例行（直定制行或副本行，方案 A：根父定义保持一层继承 + 克隆覆盖项）。
+    实例行（直用实例行或副本实例行，方案 A：根父定义保持一层继承 + 克隆覆盖项）。
     """
     if not tenant_id:
         raise TenantAgentInstanceError("缺少租户上下文")
@@ -124,7 +124,7 @@ def create_copy(
         raise TenantAgentInstanceError("副本显示名不能为空")
     display_name = display_name.strip()[:100]
 
-    # 来源解析：本租户实例行（含直定制行）优先，克隆其覆盖项到新副本
+    # 来源解析：本租户实例行（含直用实例行）优先，克隆其覆盖项到新副本实例
     source_row = TenantAgentInstanceDB.get(tenant_id, base_agent_id)
     inherited: Dict[str, Any] = {}
     if source_row and source_row.get("status") == "active":
@@ -144,7 +144,7 @@ def create_copy(
     if actual_base not in subscribed:
         raise TenantAgentInstanceError(f"当前租户未订阅数字员工: {actual_base}")
 
-    # 上限（仅副本行计数，直定制行不计入）
+    # 上限（仅副本实例行计数，直用实例行不计入）
     max_instances = _get_max_instances()
     count = TenantAgentInstanceDB.count_active(tenant_id)
     if count >= max_instances:
@@ -170,7 +170,7 @@ def create_copy(
 
     # 克隆 per-(tenant, subagent) 资产：模板文件（磁盘+元数据）与知识库栏目。
     # 来源为被点击的 agent_id（可能是基础员工，也可能是本租户已有实例行），
-    # 运行时这两者按实例 dir_name 读取，不克隆则副本会丢失。best-effort，不阻断复制。
+    # 运行时这两者按实例 dir_name 读取，不克隆则副本实例会丢失。best-effort，不阻断复制。
     tpl_count = ks_count = 0
     try:
         from src.services.subagent_assets import copy_template_files, copy_knowledge_sources
@@ -192,7 +192,7 @@ def create_copy(
 def create_direct_customization(
     tenant_id: str, base_agent_id: str, base_source: Optional[str] = None
 ) -> Dict[str, Any]:
-    """确保租户对基础员工的直定制行存在（幂等；agent_id = base_agent_id）"""
+    """确保租户对基础员工的直用实例行存在（幂等；agent_id = base_agent_id）"""
     existing = TenantAgentInstanceDB.get(tenant_id, base_agent_id)
     if existing:
         return existing
@@ -205,10 +205,10 @@ def create_direct_customization(
 
 
 def update_overrides(tenant_id: str, agent_id: str, overrides: Dict[str, Any]) -> Dict[str, Any]:
-    """更新覆盖项（白名单过滤）；基础员工无直定制行时自动补建后再更新"""
+    """更新覆盖项（白名单过滤）；基础员工无直用实例行时自动补建后再更新"""
     row = TenantAgentInstanceDB.get(tenant_id, agent_id)
     if not row:
-        # 基础员工（内置/平台自定义）首次定制：补建直定制行；
+        # 基础员工（内置/平台自定义）首次定制：补建直用实例行；
         # 仅当 agent_id 确为存在的父定义时才允许，防伪造 agent_id 写入
         if _resolve_base_config(agent_id):
             create_direct_customization(tenant_id, agent_id, base_source=_resolve_base_config(agent_id)["base_source"])
@@ -241,13 +241,13 @@ def update_overrides(tenant_id: str, agent_id: str, overrides: Dict[str, Any]) -
 
 
 def delete_copy(tenant_id: str, agent_id: str) -> bool:
-    """软删副本；直定制行与不存在均拒绝"""
+    """软删副本实例；直用实例行与不存在均拒绝"""
     row = TenantAgentInstanceDB.get(tenant_id, agent_id)
     if not row:
         raise TenantAgentInstanceError(f"数字员工实例不存在: {agent_id}")
     if row["agent_id"] == row["base_agent_id"]:
         raise TenantAgentInstanceError("基础员工的租户定制不可删除")
-    # 渠道占用保护：副本被渠道配置引用时直接拒绝删除，需先解除渠道绑定
+    # 渠道占用保护：副本实例被渠道配置引用时直接拒绝删除，需先解除渠道绑定
     try:
         from src.saas.db.channel_config_db import ChannelConfigDB
         if ChannelConfigDB.is_subagent_used(tenant_id, agent_id):
@@ -268,9 +268,9 @@ def delete_copy(tenant_id: str, agent_id: str) -> bool:
 def apply_direct_customization_overrides(
     tenant_id: str, items: List[Dict[str, Any]]
 ) -> List[Dict[str, Any]]:
-    """把直定制行（agent_id == base_agent_id）的显示名/简介覆盖合并进基础员工列表项。
+    """把直用实例行（agent_id == base_agent_id）的显示名/简介覆盖合并进基础员工列表项。
 
-    直定制行不产生新列表项，但覆盖项需体现到对应基础条目，否则列表接口
+    直用实例行不产生新列表项，但覆盖项需体现到对应基础条目，否则列表接口
     （我的数字员工、新会话可用列表、用户授权列表）仍显示父定义名称/简介。
     """
     if not tenant_id or not items:
@@ -301,12 +301,12 @@ def apply_direct_customization_overrides(
 
 
 def build_tenant_instance_items(tenant_id: str, allowed_ids: Any) -> List[Dict[str, Any]]:
-    """构建本租户数字员工副本列表项（active 副本，base 在允许集合内）。
+    """构建本租户数字员工副本实例列表项（active 副本实例，base 在允许集合内）。
 
     name/description 用租户覆盖值，business_pages/chat_toolbar/upload_accept
-    继承父定义（副本不可改工具与页面配置）。供 /api/subagents 列表、新会话页
-    允许列表、用户管理授权列表共用，副本是运行时实例（不进 registry），
-    必须由此显式补入，否则相关页面看不到副本。
+    继承父定义（副本实例不可改工具与页面配置）。供 /api/subagents 列表、新会话页
+    允许列表、用户管理授权列表共用，副本实例是运行时实例（不进 registry），
+    必须由此显式补入，否则相关页面看不到副本实例。
     """
     if not tenant_id:
         return []
@@ -327,7 +327,7 @@ def build_tenant_instance_items(tenant_id: str, allowed_ids: Any) -> List[Dict[s
         if row.get("status") != "active":
             continue
         if row.get("agent_id") == row.get("base_agent_id"):
-            continue  # 直定制行不产生新列表项
+            continue  # 直用实例行不产生新列表项
         if row["base_agent_id"] not in allowed:
             continue
         base_cfg = registry.get(row["base_agent_id"]) if registry else None

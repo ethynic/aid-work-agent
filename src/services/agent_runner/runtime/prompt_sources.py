@@ -276,7 +276,7 @@ class PromptSources:
 
         dir_name = self.subagent_config.dir_name
 
-        # 租户数字员工实例：直定制行 / 副本行的 extra_prompt 存于实例表
+        # 租户数字员工实例：直用实例行 / 副本实例行的 extra_prompt 存于实例表
         try:
             from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
             row = TenantAgentInstanceDB.get(tenant_id, dir_name)

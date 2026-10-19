@@ -5565,9 +5565,9 @@ CREATE INDEX IF NOT EXISTS idx_file_assets_tenant ON file_assets(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_file_assets_tenant_size ON file_assets(tenant_id, size);
 
 -- ==================== 租户数字员工实例（tenant_agent_instances） ====================
--- 统一模型：直定制行 agent_id = base_agent_id（租户对基础员工的直接定制）；
--- 副本行 agent_id != base_agent_id（复制产生，全局唯一，纯连字符）。
--- 副本 system_prompt/工具/技能/模型运行时实时取自父定义，本表只存覆盖项。
+-- 统一模型：直用实例行 agent_id = base_agent_id（租户直接使用基础员工，可能未经任何定制）；
+-- 副本实例行 agent_id != base_agent_id（租户管理员复制产生，全局唯一，纯连字符）。
+-- 副本实例 system_prompt/工具/技能/模型运行时实时取自父定义，本表只存覆盖项。
 CREATE TABLE IF NOT EXISTS tenant_agent_instances (
     id SERIAL PRIMARY KEY,
     tenant_id TEXT NOT NULL,

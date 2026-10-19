@@ -228,7 +228,7 @@ function handleCustomize(agent: SubagentListItem) {
   showCustomize.value = true
 }
 
-// 删除副本：被渠道配置占用时后端拒绝，前端提示需先解除渠道绑定
+// 删除副本实例：被渠道配置占用时后端拒绝，前端提示需先解除渠道绑定
 async function handleDeleteCopy(agent: SubagentListItem) {
   if (!confirm('确定删除该副本？删除后新会话无法继续使用。')) return
   try {

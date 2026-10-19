@@ -1,7 +1,7 @@
 """租户数字员工实例 API。
 
-提供租户对数字员工的实例管理：副本列表、复制、覆盖项更新（重命名/简介/
-快捷按钮/扩展提示词）、副本删除（软删）。
+提供租户对数字员工的实例管理：副本实例列表、复制、覆盖项更新（重命名/简介/
+快捷按钮/扩展提示词）、副本实例删除（软删）；直用实例不可删除。
 
 鉴权复用 src/saas/api/tenant_auth.py 的 require_admin（支持平台管理员
 X-Tenant-Id 代管理）；租户隔离由 DB 层 fail-closed 保证。
@@ -24,7 +24,7 @@ router = APIRouter(prefix="/api/saas/tenant/agent-instances", tags=["tenant-agen
 
 class CreateCopyRequest(BaseModel):
     base_agent_id: str = Field(..., min_length=1, max_length=128, description="父定义 agent_id")
-    display_name: str = Field(..., min_length=1, max_length=100, description="副本显示名")
+    display_name: str = Field(..., min_length=1, max_length=100, description="副本实例显示名")
 
 
 class UpdateInstanceRequest(BaseModel):
@@ -79,7 +79,7 @@ def _row_to_item(row: Dict[str, Any]) -> Dict[str, Any]:
 
 @router.get("")
 async def list_instances(admin: dict = Depends(require_admin)):
-    """本租户实例列表（active 行，直定制行 + 副本行）"""
+    """本租户实例列表（active 行，直用实例行 + 副本实例行）"""
     try:
         tenant_id = admin["tenant_id"]
         rows = TenantAgentInstanceDB.list_by_tenant(tenant_id)
@@ -91,7 +91,7 @@ async def list_instances(admin: dict = Depends(require_admin)):
 
 @router.post("")
 async def create_copy(body: CreateCopyRequest, admin: dict = Depends(require_admin)):
-    """复制基础数字员工为本租户副本（继承语义）"""
+    """复制基础数字员工为本租户副本实例（继承语义）"""
     try:
         row = svc.create_copy(
             tenant_id=admin["tenant_id"],
@@ -109,7 +109,7 @@ async def create_copy(body: CreateCopyRequest, admin: dict = Depends(require_adm
 
 @router.put("/{agent_id}")
 async def update_instance(agent_id: str, body: UpdateInstanceRequest, admin: dict = Depends(require_admin)):
-    """更新实例覆盖项（直定制行与副本行共用）"""
+    """更新实例覆盖项（直用实例行与副本实例行共用）"""
     try:
         overrides: Dict[str, Any] = {}
         if body.display_name is not None:
@@ -149,7 +149,7 @@ async def update_instance(agent_id: str, body: UpdateInstanceRequest, admin: dic
 
 @router.delete("/{agent_id}")
 async def delete_instance(agent_id: str, admin: dict = Depends(require_admin)):
-    """删除副本（软删归档）；直定制行拒绝"""
+    """删除副本实例（软删归档）；直用实例行拒绝"""
     try:
         svc.delete_copy(admin["tenant_id"], agent_id)
         return {"success": True, "message": "已删除"}
