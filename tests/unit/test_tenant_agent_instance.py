@@ -85,13 +85,33 @@ class TestCreateCopy:
              patch.object(svc, "get_tenant_subscribed_agent_ids", return_value=["sales"]), \
              patch.object(svc, "TenantAgentInstanceDB") as db, \
              patch.object(svc, "generate_instance_id", return_value="sales-t1-ab12"), \
-             patch.object(svc, "_get_max_instances", return_value=20):
+             patch.object(svc, "_get_max_instances", return_value=20), \
+             patch("src.services.subagent_assets.copy_template_files", return_value=0) as cp_tpl, \
+             patch("src.services.subagent_assets.copy_knowledge_sources", return_value=0) as cp_ks:
             db.count_active.return_value = 0
             db.create.side_effect = fake_create
             row = create_copy("t1", "sales", "南京销售助手", created_by="u1")
         assert row["agent_id"] == "sales-t1-ab12"
         assert created["base_agent_id"] == "sales"
         assert created["display_name"] == "南京销售助手"
+        # 克隆来源为被点击的 agent_id，目标为新副本 id
+        cp_tpl.assert_called_once_with("t1", "sales", "sales-t1-ab12")
+        cp_ks.assert_called_once_with("t1", "sales", "sales-t1-ab12")
+
+    def test_from_base_clone_failure_does_not_block(self):
+        """资产克隆异常不得阻断复制（best-effort）"""
+        def fake_create(**kw):
+            return _row(kw["agent_id"], kw["base_agent_id"], display_name=kw["display_name"])
+        with patch.object(svc, "_resolve_base_config", return_value={"base_source": "builtin"}), \
+             patch.object(svc, "get_tenant_subscribed_agent_ids", return_value=["sales"]), \
+             patch.object(svc, "TenantAgentInstanceDB") as db, \
+             patch.object(svc, "generate_instance_id", return_value="sales-t1-ab12"), \
+             patch.object(svc, "_get_max_instances", return_value=20), \
+             patch("src.services.subagent_assets.copy_template_files", side_effect=RuntimeError("boom")):
+            db.count_active.return_value = 0
+            db.create.side_effect = fake_create
+            row = create_copy("t1", "sales", "x")
+        assert row["agent_id"] == "sales-t1-ab12"
 
     def test_from_instance_clones_overrides_and_root_base(self):
         """实例来源：根父定义继承 + 覆盖项克隆（方案 A）"""
@@ -107,11 +127,15 @@ class TestCreateCopy:
              patch.object(svc, "get_tenant_subscribed_agent_ids", return_value=["sales"]), \
              patch.object(svc, "TenantAgentInstanceDB") as db, \
              patch.object(svc, "generate_instance_id", return_value="sales-t1-cd34"), \
-             patch.object(svc, "_get_max_instances", return_value=20):
+             patch.object(svc, "_get_max_instances", return_value=20), \
+             patch("src.services.subagent_assets.copy_template_files", return_value=0) as cp_tpl, \
+             patch("src.services.subagent_assets.copy_knowledge_sources", return_value=0):
             db.get.return_value = source
             db.count_active.return_value = 0
             db.create.side_effect = fake_create
             create_copy("t1", "sales-t1-ab12", "北京销售助手")
+        # 资产克隆来源为被点击的实例 id（含其 per-instance 模板/栏目）
+        cp_tpl.assert_called_once_with("t1", "sales-t1-ab12", "sales-t1-cd34")
         # 根父定义保持一层继承；覆盖项克隆
         assert created["base_agent_id"] == "sales"
         assert created["description"] == "源描述"
@@ -192,7 +216,24 @@ class TestDeleteCopy:
                 delete_copy("t1", "sales")
 
     def test_copy_soft_deleted(self):
-        with patch.object(svc, "TenantAgentInstanceDB") as db:
+        with patch.object(svc, "TenantAgentInstanceDB") as db, \
+             patch("src.saas.db.channel_config_db.ChannelConfigDB.is_subagent_used", return_value=False):
+            db.get.return_value = _row("sales-t1-ab12", "sales")
+            db.soft_delete.return_value = True
+            assert delete_copy("t1", "sales-t1-ab12") is True
+
+    def test_copy_used_by_channel_rejected(self):
+        with patch.object(svc, "TenantAgentInstanceDB") as db, \
+             patch("src.saas.db.channel_config_db.ChannelConfigDB.is_subagent_used", return_value=True):
+            db.get.return_value = _row("sales-t1-ab12", "sales")
+            with pytest.raises(TenantAgentInstanceError, match="渠道配置"):
+                delete_copy("t1", "sales-t1-ab12")
+            db.soft_delete.assert_not_called()
+
+    def test_channel_check_error_does_not_block(self):
+        """渠道占用校验异常时放行删除（不影响主流程）"""
+        with patch.object(svc, "TenantAgentInstanceDB") as db, \
+             patch("src.saas.db.channel_config_db.ChannelConfigDB.is_subagent_used", side_effect=RuntimeError("db down")):
             db.get.return_value = _row("sales-t1-ab12", "sales")
             db.soft_delete.return_value = True
             assert delete_copy("t1", "sales-t1-ab12") is True
@@ -202,3 +243,27 @@ class TestDeleteCopy:
             db.get.return_value = None
             with pytest.raises(TenantAgentInstanceError, match="不存在"):
                 delete_copy("t1", "ghost")
+
+
+# ============== build_tenant_instance_items ==============
+
+class TestBuildTenantInstanceItems:
+    def test_only_active_copies_with_allowed_base(self):
+        rows = [
+            _row("sales", "sales"),                      # 直定制行，不产生列表项
+            _row("sales-t1-ab12", "sales"),              # 允许的副本
+            _row("hr-t1-zz99", "hr"),                    # base 不在允许集合
+            _row("sales-t1-cd34", "sales", status="archived"),  # 已归档
+        ]
+        fake_agent = type("A", (), {})()
+        fake_agent.subagent_registry = type("R", (), {})()
+        fake_agent.subagent_registry.get = lambda _id: None
+        with patch.object(svc.TenantAgentInstanceDB, "list_by_tenant", return_value=rows), \
+             patch("src.core.agent.get_master_agent", return_value=fake_agent):
+            items = svc.build_tenant_instance_items("t1", {"sales"})
+        assert [i["agent_id"] for i in items] == ["sales-t1-ab12"]
+        assert items[0]["type"] == "tenant_instance"
+        assert items[0]["base_agent_id"] == "sales"
+
+    def test_empty_tenant_returns_empty(self):
+        assert svc.build_tenant_instance_items("", {"sales"}) == []

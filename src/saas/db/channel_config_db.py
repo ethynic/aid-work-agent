@@ -624,6 +624,20 @@ class ChannelConfigDB:
             return cursor.rowcount > 0
 
     @staticmethod
+    def is_subagent_used(tenant_id: str, subagent_type: str) -> bool:
+        """检查某租户是否有渠道配置引用指定数字员工实例（副本删除守卫用）。"""
+        if not tenant_id or not subagent_type:
+            return False
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT 1 FROM tenant_channel_configs "
+                "WHERE tenant_id = %s AND subagent_type = %s LIMIT 1",
+                (tenant_id, subagent_type),
+            )
+            return cursor.fetchone() is not None
+
+    @staticmethod
     def update_config_field(
         config_id: str, field_name: str, field_value: Any
     ) -> bool:

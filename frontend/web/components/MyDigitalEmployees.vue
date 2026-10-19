@@ -96,6 +96,14 @@
             >
               定制
             </button>
+            <button
+              v-if="isTenantAdmin && agent.type === 'tenant_instance'"
+              class="h-9 px-3 flex-shrink-0 rounded-lg border border-danger-200 text-sm font-medium text-danger-600 hover:bg-danger-50 transition-colors"
+              title="删除该副本"
+              @click.stop="handleDeleteCopy(agent)"
+            >
+              删除
+            </button>
           </div>
         </div>
         </div>
@@ -120,6 +128,7 @@ import AppHeader from '@/components/AppHeader.vue'
 import AgentIcon from '@/components/ui/AgentIcon.vue'
 import TenantAgentCustomizeDialog from '@/components/TenantAgentCustomizeDialog.vue'
 import { listSubagents, type SubagentListItem } from '@/api/subagent'
+import { deleteTenantAgentInstance } from '@/api/tenantAgentInstances'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const router = useRouter()
@@ -208,6 +217,18 @@ const customizeAgent = ref<SubagentListItem | null>(null)
 function handleCustomize(agent: SubagentListItem) {
   customizeAgent.value = agent
   showCustomize.value = true
+}
+
+// 删除副本：被渠道配置占用时后端拒绝，前端提示需先解除渠道绑定
+async function handleDeleteCopy(agent: SubagentListItem) {
+  if (!confirm('确定删除该副本？删除后新会话无法继续使用。')) return
+  try {
+    await deleteTenantAgentInstance(agent.agent_id)
+    await loadAgents()
+  } catch (e: any) {
+    console.error('删除副本失败:', e)
+    alert(e?.message || '删除失败')
+  }
 }
 
 // 跳转到 API配置（连接中心）

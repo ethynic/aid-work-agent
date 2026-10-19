@@ -9,7 +9,7 @@
 import shutil
 import uuid
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from loguru import logger
@@ -19,6 +19,9 @@ from src.core.redis_client import redis_client
 from src.db.subagent_template_file_db import SubagentTemplateFileDB
 from src.saas.api.tenant_auth import require_admin
 from src.saas.context import get_current_tenant_id
+# 模板落盘目录与永久元数据写入统一由 src/services/subagent_assets.py 提供
+# （与「复制副本」克隆模板文件共用同一实现，避免重复）
+from src.services.subagent_assets import templates_dir, persist_template_meta
 
 
 router = APIRouter(prefix="/api/saas/tenant/subagent-templates", tags=["subagent-templates"])
@@ -34,42 +37,6 @@ _ALLOWED_EXTS: dict = {
     '.txt': 'text/plain',
     '.csv': 'text/csv',
 }
-
-
-def _templates_dir(tenant_id: str) -> Path:
-    """模板文件落盘目录：storage/tenants/{tenant_id}/templates/（新规范）
-
-    统一走 ensure_tenant_storage_dir，符合租户附件存储规范；
-    Redis 元数据存绝对路径，供 /api/files/{file_id}/download 与文档工具读取。
-    """
-    from src.core.storage import ensure_tenant_storage_dir
-    return Path(ensure_tenant_storage_dir(tenant_id, "templates")).absolute()
-
-
-def _persist_file_meta(file_id: str, name: str, path: Path, size: int, mime_type: str, tenant_id: Optional[str] = None) -> None:
-    """写永久 Redis 元数据（uploaded_file:{file_id}，不 expire）。
-
-    复用 /api/upload 与 /api/files/{file_id}/download 的元数据契约，
-    使文档工具按 file_id 读取、下载端点都能正常工作。
-    """
-    key = redis_client.make_key("uploaded_file", file_id)
-    info = {
-        "file_id": file_id,
-        "name": name,
-        "path": str(path.absolute()),
-        "size": size,
-        "mime_type": mime_type,
-        "type": "image" if mime_type.startswith("image/") else "file",
-    }
-    for field, value in info.items():
-        redis_client.hset(key, field, value)
-    # 不调 expire = 永久（与 tenant logo 一致）
-    # 持久化元数据（Redis 仅缓存；模板文件名不能随缓存失效丢失）
-    try:
-        from src.services.files.asset_store import upsert_file_asset
-        upsert_file_asset(info, tenant_id=tenant_id, source="subagent_template")
-    except Exception as e:
-        logger.opt(exception=True).warning(f"模板文件元数据持久化失败（不影响主流程）: {e}")
 
 
 @router.get("/{subagent_name}")
@@ -124,8 +91,8 @@ async def upload_template(
         )
 
     file_id = f"file_{uuid.uuid4().hex[:12]}"
-    templates_dir = _templates_dir(tenant_id)
-    file_path = templates_dir / f"{file_id}{suffix}"
+    tpl_dir = templates_dir(tenant_id)
+    file_path = tpl_dir / f"{file_id}{suffix}"
 
     try:
         with open(file_path, "wb") as buf:
@@ -138,7 +105,7 @@ async def upload_template(
     mime_type = _ALLOWED_EXTS[suffix]
 
     # 永久 Redis 元数据（供 /api/files/{file_id}/download 与文档工具读取）
-    _persist_file_meta(file_id, file.filename or display_name, file_path, size, mime_type, tenant_id=tenant_id)
+    persist_template_meta(file_id, file.filename or display_name, file_path, size, mime_type, tenant_id=tenant_id)
 
     # DB 追加（读取现有列表 -> 追加 -> 全量覆盖）
     files: List[dict] = SubagentTemplateFileDB.get(tenant_id, subagent_name)
@@ -176,7 +143,7 @@ async def delete_template(
 
     # 删磁盘文件（按 file_id 前缀 glob，避免依赖 ext 反推）
     try:
-        for p in _templates_dir(tenant_id).glob(f"{file_id}*"):
+        for p in templates_dir(tenant_id).glob(f"{file_id}*"):
             p.unlink(missing_ok=True)
     except Exception as e:
         logger.warning(f"删除模板磁盘文件失败 file_id={file_id}: {e}")

@@ -47,7 +47,7 @@
 |---|---|
 | display_name / description | SubagentConfig 合并（列表、greeting、会话展示自动生效） |
 | extra_prompt | `prompt_sources._load_extra_md` 优先读实例行，回退 prompt_resolver tenant_extra（过渡双读） |
-| 知识栏目 / 模板文件 | 现有 `subagent_knowledge_sources` / `subagent_template_files` 按 (tenant_id, subagent_name) 隔离，副本用自己的 agent_id 天然复用，无需改动 |
+| 知识栏目 / 模板文件 | 现有 `subagent_knowledge_sources` / `subagent_template_files` 按 (tenant_id, subagent_name) 隔离，运行时按实例 `dir_name`（= 副本 agent_id）读取。副本是**新** agent_id，无既有行，故复制时必须克隆：`subagent_assets.copy_template_files`（磁盘复制 + 新 file_id + 永久元数据）与 `copy_knowledge_sources`（原样复制栏目项，含共享来源）。克隆来源为被点击的 agent_id（基础员工或本租户实例行），best-effort 不阻断复制 |
 | greeting_summary / greeting_prompts | `/api/subagents/{agent_id}/greeting` 先查实例行，非空直接返回（缓存键加租户维度）；否则按原 LLM 生成链路 |
 
 ## 4. 数据模型
@@ -84,13 +84,20 @@ CREATE TABLE IF NOT EXISTS tenant_agent_instances (
 | GET | `/` | 本租户实例列表 |
 | POST | `/` | 复制 `{base_agent_id, display_name}` -> 新 agent_id |
 | PUT | `/{agent_id}` | 更新覆盖项（display_name/description/extra_prompt/greeting_summary/greeting_prompts） |
-| DELETE | `/{agent_id}` | 软删 archived |
+| DELETE | `/{agent_id}` | 软删 archived；被渠道配置引用时直接拒绝（`ChannelConfigDB.is_subagent_used` 校验，需先解除渠道绑定） |
 
 extra 写路径（`subagent_extra.py` / `prompt_management.py`）过渡期双写实例表。
 
+**副本可见性**：副本是运行时实例，不进全局 registry，因此以下三处必须显式补入（`build_tenant_instance_items`）：
+- `/api/subagents` 列表（「我的数字员工」卡片）
+- `/api/saas/permissions/my/allowed-agents`（新会话页可选数字员工）
+- `/api/saas/permissions/tenant/available-user-agents`（用户管理-数字员工授权 Tab 可选列表）
+
+`set_user_agent_permissions` 保存前先 `expand_with_tenant_instances` 展开租户允许集合，避免用户勾选的副本被当越权过滤掉。
+
 ## 6. 前端
 
-`/t/:tid/my-agents`（MyDigitalEmployees.vue）「定制」弹框（新组件 TenantAgentCustomizeDialog.vue）：重命名、扩展提示词、知识栏目（内嵌复用 KnowledgeAuthMatrix.vue，传实例 agent_id）、简介+快捷按钮覆盖、复制副本（输入新显示名，基础员工与副本卡片均可复制）。副本卡片带「副本」徽标。TenantPromptEditor 旧路由保留跳转弹框。greeting 前端链路不变自动生效。
+`/t/:tid/my-agents`（MyDigitalEmployees.vue）「定制」弹框（新组件 TenantAgentCustomizeDialog.vue）：重命名、扩展提示词、知识栏目（内嵌复用 KnowledgeAuthMatrix.vue，传实例 agent_id）、简介+快捷按钮覆盖、复制副本（输入新显示名，基础员工与副本卡片均可复制）。副本卡片带「副本」徽标，并带「删除」按钮（`type === 'tenant_instance'` 且租户管理员可见，确认后调 DELETE；被渠道占用时后端拒绝并提示）。TenantPromptEditor 旧路由保留跳转弹框。greeting 前端链路不变自动生效。
 
 ## 7. 渠道支持
 
@@ -108,4 +115,4 @@ extra 写路径（`subagent_extra.py` / `prompt_management.py`）过渡期双写
 
 ## 9. 测试要点
 
-实例 CRUD、id 生成唯一性/连字符约束、resolver 合并（内置父/DB 父/覆盖项/父更新同步/archived 降级）、权限展开（未订阅 base 不可见）、greeting 覆盖优先于 LLM 且缓存键租户隔离、迁移 SQL 幂等、跨租户读写 403/404。
+实例 CRUD、id 生成唯一性/连字符约束、resolver 合并（内置父/DB 父/覆盖项/父更新同步/archived 降级）、权限展开（未订阅 base 不可见）、greeting 覆盖优先于 LLM 且缓存键租户隔离、迁移 SQL 幂等、跨租户读写 403/404、复制时克隆模板文件与知识栏目（best-effort 不阻断）、副本可见性补入（`build_tenant_instance_items`）、删除副本的渠道占用守卫（被引用拒绝、校验异常放行）。

@@ -29,43 +29,9 @@ _GREETING_MAX_PROMPTS = 2
 
 # ============== API 接口（只读） ==============
 
-def _build_tenant_instance_items(tenant_id: str, allowed_ids: set) -> List[Dict[str, Any]]:
-    """构建本租户数字员工副本列表项（active 副本，base 在允许集合内）。
-
-    name/description 用租户覆盖值，business_pages/chat_toolbar/upload_accept
-    继承父定义（副本不可改工具与页面配置）。
-    """
-    try:
-        from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
-        rows = TenantAgentInstanceDB.list_by_tenant(tenant_id)
-    except Exception as e:
-        logger.opt(exception=True).error(f"查询租户数字员工实例失败: {e}")
-        return []
-
-    registry = master_agent.subagent_registry
-    items = []
-    for row in rows:
-        if row.get("status") != "active":
-            continue
-        if row.get("agent_id") == row.get("base_agent_id"):
-            continue  # 直定制行不产生新列表项
-        if row["base_agent_id"] not in allowed_ids:
-            continue
-        base_cfg = registry.get(row["base_agent_id"]) if registry else None
-        item = {
-            "agent_id": row["agent_id"],
-            "name": row.get("display_name") or (base_cfg.name if base_cfg else row["agent_id"]),
-            "description": row.get("description") or (base_cfg.description if base_cfg else ""),
-            "type": "tenant_instance",
-            "base_agent_id": row["base_agent_id"],
-            "business_pages": (base_cfg.business_pages if base_cfg else None) or [],
-        }
-        if base_cfg is not None and base_cfg.chat_toolbar:
-            item["chat_toolbar"] = base_cfg.chat_toolbar
-        if base_cfg is not None and base_cfg.upload_accept:
-            item["upload_accept"] = base_cfg.upload_accept
-        items.append(item)
-    return items
+# 副本列表项构建统一由 src/saas/services/tenant_agent_instance_service.py 提供
+# （/api/subagents 列表、新会话页允许列表、用户管理授权列表共用同一实现）
+from src.saas.services.tenant_agent_instance_service import build_tenant_instance_items
 
 
 def _apply_direct_customization_overrides(tenant_id: str, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -124,7 +90,7 @@ async def list_subagents(request: Request):
                 # allowed_ids 已由 checker 展开附加本租户副本（订阅继承）
                 allowed_ids = set(get_allowed_agent_ids_for_user(user, target_tenant_id=tenant_id))
                 items = [item for item in items if item["agent_id"] in allowed_ids]
-                items.extend(_build_tenant_instance_items(tenant_id, allowed_ids))
+                items.extend(build_tenant_instance_items(tenant_id, allowed_ids))
                 items = _apply_direct_customization_overrides(tenant_id, items)
                 # 如果主智能体在允许列表中，添加到结果中
                 if "main" in allowed_ids:

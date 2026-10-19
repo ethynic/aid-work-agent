@@ -167,9 +167,24 @@ def create_copy(
         greeting_prompts=inherited.get("greeting_prompts"),
         created_by=created_by,
     )
+
+    # 克隆 per-(tenant, subagent) 资产：模板文件（磁盘+元数据）与知识库栏目。
+    # 来源为被点击的 agent_id（可能是基础员工，也可能是本租户已有实例行），
+    # 运行时这两者按实例 dir_name 读取，不克隆则副本会丢失。best-effort，不阻断复制。
+    tpl_count = ks_count = 0
+    try:
+        from src.services.subagent_assets import copy_template_files, copy_knowledge_sources
+        tpl_count = copy_template_files(tenant_id, base_agent_id, agent_id)
+        ks_count = copy_knowledge_sources(tenant_id, base_agent_id, agent_id)
+    except Exception as e:
+        logger.opt(exception=True).error(
+            f"复制副本资产克隆异常 tenant={tenant_id}, src={base_agent_id}, dst={agent_id}: {e}"
+        )
+
     logger.info(
         f"后端日志：租户 {tenant_id} 复制数字员工 {base_agent_id} -> {agent_id}（{display_name}，"
-        f"根父定义 {actual_base}，克隆覆盖项: {list(inherited.keys()) or '无'}）"
+        f"根父定义 {actual_base}，克隆覆盖项: {list(inherited.keys()) or '无'}，"
+        f"模板 {tpl_count} 个，知识栏目 {ks_count} 项）"
     )
     return row
 
@@ -224,11 +239,69 @@ def delete_copy(tenant_id: str, agent_id: str) -> bool:
         raise TenantAgentInstanceError(f"数字员工实例不存在: {agent_id}")
     if row["agent_id"] == row["base_agent_id"]:
         raise TenantAgentInstanceError("基础员工的租户定制不可删除")
+    # 渠道占用保护：副本被渠道配置引用时直接拒绝删除，需先解除渠道绑定
+    try:
+        from src.saas.db.channel_config_db import ChannelConfigDB
+        if ChannelConfigDB.is_subagent_used(tenant_id, agent_id):
+            raise TenantAgentInstanceError("该副本已被渠道配置使用，请先解除渠道绑定后再删除")
+    except TenantAgentInstanceError:
+        raise
+    except Exception as e:
+        logger.opt(exception=True).warning(
+            f"渠道占用校验失败（放行删除） tenant={tenant_id}, agent={agent_id}: {e}"
+        )
     ok = TenantAgentInstanceDB.soft_delete(tenant_id, agent_id)
     if not ok:
         raise TenantAgentInstanceError("删除失败")
     logger.info(f"后端日志：租户 {tenant_id} 删除数字员工副本 {agent_id}")
     return True
+
+
+def build_tenant_instance_items(tenant_id: str, allowed_ids: Any) -> List[Dict[str, Any]]:
+    """构建本租户数字员工副本列表项（active 副本，base 在允许集合内）。
+
+    name/description 用租户覆盖值，business_pages/chat_toolbar/upload_accept
+    继承父定义（副本不可改工具与页面配置）。供 /api/subagents 列表、新会话页
+    允许列表、用户管理授权列表共用，副本是运行时实例（不进 registry），
+    必须由此显式补入，否则相关页面看不到副本。
+    """
+    if not tenant_id:
+        return []
+    allowed = set(allowed_ids or [])
+    try:
+        from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
+        rows = TenantAgentInstanceDB.list_by_tenant(tenant_id)
+    except Exception as e:
+        logger.opt(exception=True).error(f"查询租户数字员工实例失败: {e}")
+        return []
+
+    # 延迟导入，避免服务层 import 触发 Agent 构造副作用
+    from src.core.agent import master_agent
+    registry = master_agent.subagent_registry
+
+    items = []
+    for row in rows:
+        if row.get("status") != "active":
+            continue
+        if row.get("agent_id") == row.get("base_agent_id"):
+            continue  # 直定制行不产生新列表项
+        if row["base_agent_id"] not in allowed:
+            continue
+        base_cfg = registry.get(row["base_agent_id"]) if registry else None
+        item = {
+            "agent_id": row["agent_id"],
+            "name": row.get("display_name") or (base_cfg.name if base_cfg else row["agent_id"]),
+            "description": row.get("description") or (base_cfg.description if base_cfg else ""),
+            "type": "tenant_instance",
+            "base_agent_id": row["base_agent_id"],
+            "business_pages": (base_cfg.business_pages if base_cfg else None) or [],
+        }
+        if base_cfg is not None and base_cfg.chat_toolbar:
+            item["chat_toolbar"] = base_cfg.chat_toolbar
+        if base_cfg is not None and base_cfg.upload_accept:
+            item["upload_accept"] = base_cfg.upload_accept
+        items.append(item)
+    return items
 
 
 def _get_max_instances() -> int:
