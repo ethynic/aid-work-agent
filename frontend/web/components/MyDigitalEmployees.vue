@@ -116,6 +116,7 @@
       :tenant-id="String(route.params.tenant_id || '')"
       :agent-id="customizeAgent?.agent_id || ''"
       :agent-name="customizeAgent ? getDisplayName(customizeAgent) : ''"
+      :is-copy-instance="customizeAgent?.type === 'tenant_instance'"
       @changed="handleAgentChanged"
     />
   </div>

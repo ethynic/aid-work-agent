@@ -233,6 +233,8 @@ const props = defineProps<{
   agentId: string
   /** 卡片展示名（无覆盖时即父定义名） */
   agentName: string
+  /** 列表接口判定的副本实例标记，实例行未落库时作为兜底 */
+  isCopyInstance?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -286,10 +288,11 @@ function openKnowledgePage() {
 
 async function loadInstance() {
   errorMsg.value = ''
+  isCopy.value = !!props.isCopyInstance
   const inst: TenantAgentInstance | null = await getTenantAgentInstanceOrDefault(
     props.tenantId, props.agentId,
   )
-  isCopy.value = inst ? inst.is_copy : isLikelyCopy()
+  isCopy.value = inst ? inst.is_copy : !!props.isCopyInstance
   form.value = {
     display_name: inst?.display_name || '',
     description: inst?.description || '',
@@ -301,12 +304,6 @@ async function loadInstance() {
     label: gp?.[i]?.label || '',
     message: gp?.[i]?.message || '',
   }))
-}
-
-// 实例行未落库时（基础员工未定制过）按 id 猜测副本实例标记仅作展示兜底；
-// 后端权威判定以保存后返回为准
-function isLikelyCopy(): boolean {
-  return props.agentId !== props.agentName && /-[a-z0-9-]{2,}$/.test(props.agentId)
 }
 
 // ============== 模板文件 加载/上传/删除/下载 ==============
