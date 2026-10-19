@@ -8,7 +8,7 @@ vi.mock('@/api/monitor', () => ({ getTraceDetail: vi.fn() }))
 
 describe('Trace timeline status rendering', () => {
   it.each([
-    ['interrupted', '已中断'], ['waiting', '等待中'], ['paused', '已暂停'], ['cancelled', '已取消'],
+    ['interrupted', '已中断'], ['waiting', '等待用户回复'], ['paused', '已暂停'], ['cancelled', '已取消'],
   ])('never shows an unfinished %s tool as a green successful span', async (status, label) => {
     vi.mocked(getTraceDetail).mockResolvedValue({ success: true,
       trace: { trace_id: 'fixture', status, tags: [], total_tokens: 0, duration_ms: 1 } as any,

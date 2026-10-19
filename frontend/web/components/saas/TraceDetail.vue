@@ -386,7 +386,7 @@ function statusClass(status: string): string {
 
 function statusLabel(status: string): string {
   const map: Record<string, string> = { completed: '已完成', failed: '失败', cancelled: '已取消', running: '运行中',
-    interrupted: '已中断', waiting: '等待中', paused: '已暂停' }
+    interrupted: '已中断', waiting: '等待用户回复', paused: '已暂停' }
   return map[status] || status
 }
 
