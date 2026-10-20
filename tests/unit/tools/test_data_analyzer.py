@@ -9,6 +9,7 @@ import os
 import numpy as np
 import pandas as pd
 import pytest
+from unittest.mock import MagicMock, patch
 
 from src.tools.data_analysis.data_analyzer import (
     AGG_FUNC_WHITELIST,
@@ -147,6 +148,90 @@ class TestLoadTable:
             })
         assert "db1" not in analyzer._tables
 
+    @pytest.mark.asyncio
+    async def test_load_database_connector_tenant_mismatch_raises(self):
+        """连接器租户 ≠ 表来源租户（owner_tenant_id）→ 显式拒绝，不折叠成源数据不存在"""
+        connector_row = {
+            "db_type": "postgresql", "host": "h", "port": 5432,
+            "database_name": "db", "username": "u", "password_encrypted": "x",
+            "tenant_id": "t_other_connector",
+        }
+
+        class _Cur:
+            def execute(self, sql, params=None):
+                pass
+
+            def fetchone(self):
+                return connector_row
+
+        class _Conn:
+            def cursor(self, *a, **k):
+                return _Cur()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        analyzer = DataAnalyzer(session_id="s")
+        with patch("src.db.database.get_db_connection", return_value=_Conn()):
+            with pytest.raises(ValueError, match="来源租户与连接器"):
+                await analyzer.load_table({
+                    "table_id": "db1",
+                    "source": {
+                        "type": "database", "connector_id": "c1",
+                        "db_table_name": "orders",
+                        "owner_tenant_id": "t_src",
+                    },
+                })
+        assert "db1" not in analyzer._tables
+
+    @pytest.mark.asyncio
+    async def test_load_database_shared_source_uses_owner_tenant(self):
+        """跨租户共享表：连接器租户 = 来源租户（owner_tenant_id）时放行读取"""
+        connector_row = {
+            "db_type": "postgresql", "host": "h", "port": 5432,
+            "database_name": "db", "username": "u", "password_encrypted": "x",
+            "tenant_id": "t_src",
+        }
+
+        class _Cur:
+            def execute(self, sql, params=None):
+                pass
+
+            def fetchone(self):
+                return connector_row
+
+        class _Conn:
+            def cursor(self, *a, **k):
+                return _Cur()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        analyzer = DataAnalyzer(session_id="s")
+        fake_engine = MagicMock()
+        fake_engine.dispose = MagicMock()
+        df = pd.DataFrame({"a": [1, 2]})
+        with patch("src.db.database.get_db_connection", return_value=_Conn()), \
+             patch("src.tools.data_analysis.data_analyzer.decrypt_password", return_value="pw"), \
+             patch("sqlalchemy.create_engine", return_value=fake_engine), \
+             patch("pandas.read_sql", return_value=df):
+            table_id = await analyzer.load_table({
+                "table_id": "db1",
+                "source": {
+                    "type": "database", "connector_id": "c1",
+                    "db_table_name": "orders",
+                    "owner_tenant_id": "t_src",
+                },
+            })
+        assert table_id == "db1"
+        assert len(analyzer._tables["db1"]) == 2
+
 
 # ==================== 变量管理：_resolve_source / _store ====================
 
@@ -175,12 +260,22 @@ class TestVariableManagement:
         result = analyzer._resolve_source("x")
         assert result["val"].iloc[0] == 1
 
-    def test_resolve_from_csv_file(self, analyzer, tmp_path):
+    def test_resolve_from_csv_file_with_escape_enabled(self, tmp_path):
+        """低层逃生开关显式开启时：文件路径 source 可读（离线/低层测试兼容语义）"""
         csv_path = str(tmp_path / "data.csv")
         pd.DataFrame({"col": [42]}).to_csv(csv_path, index=False)
+        analyzer = DataAnalyzer(session_id="s", allow_arbitrary_path_source=True)
         result = analyzer._resolve_source(csv_path)
         assert result is not None
         assert result["col"].iloc[0] == 42
+
+    def test_resolve_from_csv_file_blocked_by_default(self, tmp_path):
+        """生产语义：默认关闭任意路径逃生——文件路径 source 返回 None（显式入参绕过面）"""
+        csv_path = str(tmp_path / "data.csv")
+        pd.DataFrame({"col": [42]}).to_csv(csv_path, index=False)
+        analyzer = DataAnalyzer(session_id="s")
+        assert analyzer.allow_arbitrary_path_source is False
+        assert analyzer._resolve_source(csv_path) is None
 
     def test_resolve_nonexistent_returns_none(self, analyzer):
         assert analyzer._resolve_source("no_such_var") is None
@@ -191,7 +286,8 @@ class TestVariableManagement:
     def test_store_returns_path(self, analyzer):
         df = pd.DataFrame({"a": [1, 2, 3]})
         path = analyzer._store("my_var", df)
-        assert path.endswith("my_var.csv")
+        assert os.path.basename(path).startswith("analysis_output_")
+        assert analyzer._artifact_paths["my_var"] == path
         assert os.path.exists(path)
 
     def test_store_preserves_data(self, analyzer, tmp_path):

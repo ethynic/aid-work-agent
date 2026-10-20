@@ -13,6 +13,7 @@ from src.knowledge.retriever.tenant_range import (
     build_active_document_condition,
     build_tenant_range_conditions,
 )
+from src.services.data_analysis.access_scope import agent_scope_document_filter_sql
 import psycopg2.extras
 
 
@@ -165,7 +166,8 @@ class VectorDBPostgreSQL(VectorDatabase):
         source_type: Optional[str] = None,
         sub_categories: Optional[List[str]] = None,
         shared_ranges: Optional[List[Tuple[str, str]]] = None,
-        global_view: bool = False
+        global_view: bool = False,
+        agent_id: Optional[str] = None
     ) -> List[Tuple[int, float]]:
         """向量相似度搜索（使用余弦相似度）"""
         conn = self._get_connection()
@@ -180,7 +182,10 @@ class VectorDBPostgreSQL(VectorDatabase):
                 range_sql, range_params = build_tenant_range_conditions(
                     tenant_id, source_type, shared_ranges,
                 )
-                params = [vector_str] + range_params
+                # 数据表名单过滤（排名/LIMIT 前生效）：cast 只落在数据表形态行，
+                # 普通知识文档经 NOT 分支放行，避免损坏 JSON metadata 拖垮整个检索
+                scope_sql, scope_params = agent_scope_document_filter_sql(agent_id, tenant_id, alias="d")
+                params = [vector_str] + range_params + scope_params
                 sub_cat_sql = ""
                 if sub_categories:
                     sub_cat_sql = " AND d.sub_category = ANY(%s)"
@@ -193,7 +198,8 @@ class VectorDBPostgreSQL(VectorDatabase):
                     FROM chunks_vec cv
                     JOIN chunks c ON cv.chunk_id = c.id
                     JOIN documents d ON c.doc_id = d.id
-                    WHERE ({range_sql}){sub_cat_sql}
+                    WHERE ({range_sql})
+                      AND {scope_sql}{sub_cat_sql}
                       AND {build_active_document_condition("d")}
                     ORDER BY distance
                     LIMIT %s

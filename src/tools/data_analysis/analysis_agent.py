@@ -37,7 +37,7 @@ CONTEXT_COMPRESS_THRESHOLD = 50000
 def _build_tenant_scope_params(tenant_id: Optional[str], subagent_id: Optional[str]) -> tuple:
     """构建租户范围 SQL 与参数：本租户 + 已启用共享来源租户。subagent_id 为空时退化为本租户。"""
     if not tenant_id:
-        return "", []
+        return "AND FALSE", []
     if not subagent_id:
         return "AND tenant_id = %s", [tenant_id]
     from src.knowledge.retriever.tenant_range import load_shared_ranges
@@ -49,8 +49,24 @@ def _build_tenant_scope_params(tenant_id: Optional[str], subagent_id: Optional[s
     return "AND tenant_id = ANY(%s)", [tenant_ids]
 
 
+def _build_agent_scope_condition(
+    agent_id: Optional[str], tenant_id: Optional[str]
+) -> tuple:
+    """构建名单可见性 SQL 条件（在完整租户/共享范围括号外 AND，防 OR 分支绕过）。
+
+    agent_id=None（身份未知）→ 仅共享表（片段内实现，不放宽既有共享分类）；
+    异常名单配置对任何身份均不可见（fail-closed，不当共享）。
+    """
+    from src.services.data_analysis.access_scope import agent_scope_visible_sql
+
+    return agent_scope_visible_sql(agent_id, tenant_id)
+
+
 def fetch_table_metadata_from_db(
-    table_id: str, tenant_id: Optional[str], subagent_id: Optional[str]
+    table_id: str,
+    tenant_id: Optional[str],
+    subagent_id: Optional[str],
+    agent_id: Optional[str] = None,
 ) -> Optional[Dict]:
     """按 doc_id 回查 documents 表完整 metadata，构造 DataAnalyzer 所需格式。
 
@@ -58,18 +74,26 @@ def fetch_table_metadata_from_db(
     search_data_tables 的简化结构（仅 table_id/table_name/description，无 source），
     必须回查补全后才能加载数据。非数字 table_id 返回 None（调用方按"未找到"处理）。
 
+    agent_id 为可信执行身份（ToolExecutionContext 映射，None=身份未知仅共享），
+    名单条件 AND 在完整 `(原范围 OR 本租户移动兜底)` 括号外侧——限定表不能经
+    共享来源租户或移动兜底分支绕过；来源租户的限定表对其他租户恒不可用
+    （片段内绑定当前租户，跨租户同名 agent_id 不放行）。
+
     移动兜底（2026-09-20 设计 §4.4）：被移动出 data-analysis-metadata 的 [数据表]
     按标题前缀兜底加载；经移动分支命中的文档必须带完整 table_name/columns metadata，
     缺失则视为普通同名文档排除。
     """
     from src.db.database import get_db_connection
 
+    if not tenant_id:
+        return None
     try:
         numeric_id = int(table_id)
     except (TypeError, ValueError):
         return None
 
     tenant_sql, tenant_params = _build_tenant_scope_params(tenant_id, subagent_id)
+    scope_sql, scope_params = _build_agent_scope_condition(agent_id, tenant_id)
     # ILIKE 模式必须参数化传值：带参执行时查询串里的字面 % 会被 psycopg2 当占位符解析
     moved_sql = " OR (tenant_id = %s AND title ILIKE %s)" if tenant_id else ""
     moved_params = [tenant_id, "[数据表] %"] if tenant_id else []
@@ -77,12 +101,13 @@ def fetch_table_metadata_from_db(
         cursor = conn.cursor()
         cursor.execute(
             f"""
-            SELECT id, title, summary, metadata, source_type
+            SELECT id, title, summary, metadata, source_type, tenant_id
             FROM documents
             WHERE id = %s
               AND (source_type = 'data-analysis-metadata'{tenant_sql}{moved_sql})
+              AND {scope_sql}
             """,
-            (numeric_id, *tenant_params, *moved_params),
+            (numeric_id, *tenant_params, *moved_params, *scope_params),
         )
         row = cursor.fetchone()
 
@@ -110,7 +135,10 @@ def fetch_table_metadata_from_db(
         "columns": meta.get("columns", []),
     }
 
-    # 构造 source 对象
+    # 构造 source 对象；owner_tenant_id 为内部字段（文档归属租户），数据库分支
+    # 取连接器时按「连接器租户 = 表来源租户」校验——跨租户共享表使用来源租户的
+    # 连接器，而非调用租户；该字段不得暴露给 LLM 入参构造的 metadata
+    owner_tenant_id = r.get("tenant_id")
     source = meta.get("source")
     if source:
         result["source"] = source
@@ -126,6 +154,8 @@ def fetch_table_metadata_from_db(
             "type": "excel",
             "file_path": meta["source_info"],
         }
+    if isinstance(result.get("source"), dict) and owner_tenant_id:
+        result["source"]["owner_tenant_id"] = str(owner_tenant_id)
 
     return result
 
@@ -135,20 +165,27 @@ def query_data_tables_list(
     tenant_id: Optional[str] = None,
     subagent_id: Optional[str] = None,
     loaded_table_ids: Optional[set] = None,
+    agent_id: Optional[str] = None,
 ) -> List[Dict]:
     """查询租户范围内全部数据表列表（本租户 + 已启用共享来源租户 + 本租户内被移动的表）。
 
     供 AnalysisAgent.list_data_tables 与 SmartDataAnalysisTool 开局批量选表复用：
     后者在数据表数不超过全量阈值时据此一次性选中全部表预加载，免去内层模型
-    逐个 search/load_table（2026-10 改进1）。
+    逐个 search/load_table（2026-10 改进1）。名单条件 AND 在完整范围括号外侧，
+    自动列表先按范围过滤、再由调用方以过滤后计数走 50/30 阈值原策略。
+
+    agent_id 为可信执行身份（None=身份未知仅共享，不映射 main）。
 
     移动兜底（2026-09-20 设计 §4.4）：用户在知识库界面移动 [数据表] 文档会覆盖
     source_type，按标题前缀兜底纳入本租户被移动的表；共享侧不放宽（精确对约束）。
     """
     from src.db.database import get_db_connection
 
+    if not tenant_id:
+        return []
     loaded = loaded_table_ids or set()
     tenant_sql, tenant_params = _build_tenant_scope_params(tenant_id, subagent_id)
+    scope_sql, scope_params = _build_agent_scope_condition(agent_id, tenant_id)
     # ILIKE 模式必须参数化传值：带参执行时查询串里的字面 % 会被 psycopg2 当占位符解析
     moved_sql = " OR (tenant_id = %s AND title ILIKE %s)" if tenant_id else ""
     moved_params = [tenant_id, "[数据表] %"] if tenant_id else []
@@ -157,23 +194,25 @@ def query_data_tables_list(
         if keyword:
             cursor.execute(
                 f"""
-                SELECT id, title, summary, metadata
+                SELECT id, title, summary, metadata, source_type
                 FROM documents
                 WHERE (source_type = 'data-analysis-metadata'{tenant_sql}{moved_sql})
+                  AND {scope_sql}
                   AND (title ILIKE %s OR summary ILIKE %s)
                 ORDER BY created_at DESC
                 """,
-                (*tenant_params, *moved_params, f"%{keyword}%", f"%{keyword}%"),
+                (*tenant_params, *moved_params, *scope_params, f"%{keyword}%", f"%{keyword}%"),
             )
         else:
             cursor.execute(
                 f"""
-                SELECT id, title, summary, metadata
+                SELECT id, title, summary, metadata, source_type
                 FROM documents
                 WHERE (source_type = 'data-analysis-metadata'{tenant_sql}{moved_sql})
+                  AND {scope_sql}
                 ORDER BY created_at DESC
                 """,
-                (*tenant_params, *moved_params),
+                (*tenant_params, *moved_params, *scope_params),
             )
 
         results = []
@@ -186,6 +225,13 @@ def query_data_tables_list(
                 except (json.JSONDecodeError, TypeError):
                     meta = {}
             table_name = meta.get("table_name", r.get("title", "").replace("[数据表] ", ""))
+            # 移动兜底命中（source_type 已被移动覆盖）：结构有效性校验（设计 §18.6
+            # 「移动分支同时检查结构有效性」，与 fetch_table_metadata_from_db 的
+            # Python 判定同口径）——仅同名前缀的普通知识文档不纳入列表与阈值计数
+            if r.get("source_type") != "data-analysis-metadata" and not (
+                meta.get("table_name") and meta.get("columns")
+            ):
+                continue
             table_id = str(r["id"])
             results.append({
                 "table_id": table_id,
@@ -214,6 +260,91 @@ def create_data_tables_retriever():
     )
 
 
+def filter_available_table_ids(
+    table_ids,
+    tenant_id: Optional[str],
+    subagent_id: Optional[str],
+    agent_id: Optional[str],
+) -> set:
+    """批量判断表 doc_id 在当前身份可见范围内是否可用（去重后单次查询）。
+
+    产物复用过滤共用入口：范围 = 原 source_type 分支（本租户 + 已启用共享来源
+    租户）+ 本租户移动兜底（移动分支同时要求结构有效性，防止同名前缀普通文档
+    被当表），并在整体括号外 AND 名单条件；身份未知仅共享。缺租户返回空集
+    （与列表/回查口径一致，不查询全表）。DB 异常向上抛出：权限读取失败必须
+    明确暴露，不得当成「全部不可用」或「全部可用」静默处理。
+    """
+    from src.db.database import get_db_connection
+
+    if not tenant_id or not table_ids:
+        return set()
+    numeric_ids: List[int] = []
+    for tid in table_ids:
+        try:
+            numeric_ids.append(int(str(tid)))
+        except (TypeError, ValueError):
+            continue
+    if not numeric_ids:
+        return set()
+    # 排序去重：参数顺序确定（日志/测试可复现）， ANY 集合语义不受顺序影响
+    numeric_ids = sorted(set(numeric_ids))
+
+    tenant_sql, tenant_params = _build_tenant_scope_params(tenant_id, subagent_id)
+    # 移动兜底分支同时校验结构有效性（与 fetch_table_metadata_from_db 的
+    # Python 判定同口径），并整体括号后再 AND 名单条件
+    moved_sql = (
+        " OR (tenant_id = %s AND title ILIKE %s"
+        " AND jsonb_typeof(metadata::jsonb->'table_name') = 'string'"
+        " AND length(btrim(metadata::jsonb->>'table_name')) > 0"
+        " AND jsonb_typeof(metadata::jsonb->'columns') = 'array')"
+    )
+    moved_params = [tenant_id, "[数据表] %"]
+    scope_sql, scope_params = _build_agent_scope_condition(agent_id, tenant_id)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+            SELECT id FROM documents
+            WHERE id = ANY(%s)
+              AND (source_type = 'data-analysis-metadata'{tenant_sql}{moved_sql})
+              AND {scope_sql}
+            """,
+            (numeric_ids, *tenant_params, *moved_params, *scope_params),
+        )
+        return {str(row["id"]) for row in cursor.fetchall()}
+
+
+def filter_reusable_artifact_entries(
+    entries: List[Dict],
+    tenant_id: Optional[str],
+    subagent_id: Optional[str],
+    agent_id: Optional[str],
+) -> List[Dict]:
+    """按「本会话已登记 + 每张来源表当前均可用」过滤可复用产物条目。
+
+    - source_table_ids 缺失/null（旧条目或来源不全）→ 不复用，提示重算；
+    - 全部条目的来源表 ID 去重后一次查询判可用，不做逐产物逐表循环查库；
+    - 范围查询失败向上抛出（调用方决定暴露方式），不降级成「无可复用」。
+    """
+    if not entries:
+        return []
+    with_sources: List[Dict] = []
+    needed: set = set()
+    for e in entries:
+        src = e.get("source_table_ids") if isinstance(e, dict) else None
+        if isinstance(src, list) and src:
+            with_sources.append(e)
+            needed.update(str(t) for t in src)
+    if not with_sources:
+        return []
+    available = filter_available_table_ids(needed, tenant_id, subagent_id, agent_id)
+    return [
+        e
+        for e in with_sources
+        if all(str(t) in available for t in (e.get("source_table_ids") or []))
+    ]
+
+
 class AnalysisAgent:
     """迷你 Agent 循环，LLM 通过 function calling 完成数据表检索、加载和分析。"""
 
@@ -227,6 +358,7 @@ class AnalysisAgent:
         subagent_id: Optional[str] = None,
         session_id: Optional[str] = None,
         export_only_mode: bool = False,
+        agent_id: Optional[str] = None,
     ):
         self.llm = llm_gateway
         self.analyzer = analyzer
@@ -234,6 +366,10 @@ class AnalysisAgent:
         self.tables_metadata = tables_metadata or []
         self.tenant_id = tenant_id
         self.subagent_id = subagent_id
+        # 数据表名单执行身份：由可信 ToolExecutionContext 映射后传入
+        #（subagent_id 非空即该子智能体，为空映射 main）；None=身份未知仅共享，
+        # 不在此处自行映射 main（无上下文 ≠ 主智能体，见设计 §18.4）
+        self.agent_id = agent_id
         # 会话 ID：分析产物注册表的作用域（同会话多次 analyze_data 复用中间产物）
         self.session_id = session_id or getattr(analyzer, "session_id", None) or None
         # 改进3（2026-10）：导出/整理类调用不预加载原始表（见 SmartDataAnalysisTool），
@@ -246,6 +382,9 @@ class AnalysisAgent:
         # 改进3 lineage 拦截：已拦截过的表记入此处，同表二次 load_table 放行
         #（一次提示引导复用，模型坚持视为确需原始明细，不做死拦截）
         self._lineage_intercepted: set = set()
+        # 变量 → 原始表来源集合（None=来源不全/未知）：跟随产物注册传播，
+        # 决定新产物 source_table_ids；None 一旦出现持续传播不恢复
+        self._var_sources: Dict[str, Optional[set]] = {}
 
         self._total_usage: Dict[str, int] = {
             "prompt_tokens": 0,
@@ -280,7 +419,13 @@ class AnalysisAgent:
         """执行分析任务，返回结果字典。"""
         start_time = time.time()
 
-        messages = [{"role": "user", "content": self._build_user_message(requirement)}]
+        # 产物清单复用资格含来源表可用性 DB 回查：async 入口先 to_thread 预取，
+        # 不在事件循环上做同步 DB 调用（与 _handle_load_table 同口径）；
+        # _build_user_message 保持同步签名，低层/测试直调走同步兜底
+        reusable_entries = await asyncio.to_thread(self._reusable_artifacts)
+        messages = [
+            {"role": "user", "content": self._build_user_message(requirement, reusable_entries)}
+        ]
 
         summary = ""
         iterations = 0
@@ -480,7 +625,11 @@ class AnalysisAgent:
         if method_name == "load_table":
             return await self._handle_load_table(params.get("table_id", ""))
         if method_name == "load_output":
-            return self._handle_load_output(params.get("output_var", ""))
+            # 复用资格校验含来源表可用性 DB 回查：async 分发路径 to_thread 包裹，
+            # 不在事件循环上做同步 DB 调用（与 _handle_load_table 同口径）
+            return await asyncio.to_thread(
+                self._handle_load_output, params.get("output_var", "")
+            )
 
         # 概览工具（返回 dict，不走 DATA_PROCESSING_METHODS 路径）
         if method_name == "describe":
@@ -535,12 +684,18 @@ class AnalysisAgent:
         # 构建步骤描述
         description = self._describe_step(method_name, params)
 
+        # 数据表来源集合传播（设计 §18.7）：原始表操作得 {table_id}；沿用输入变量
+        # 集合；merge/append 取并集；任一输入来源未知或并集超上限 → None 持续传播
+        source_table_ids = self._propagate_source_table_ids(output_var, method_name, params)
+
         # 注册到会话产物注册表：同会话后续 analyze_data 可 load_output 复用，
         # 免去重复「加载原始表 → 加工 → 合并」（392 积分事故主因）。
-        # 改进3（2026-10）：同时记录 lineage 直接上游，供 load_table 拦截与产物溯源
+        # 改进3（2026-10）：同时记录 lineage 直接上游，供产物溯源；
+        # 复用资格以 source_table_ids（完整原始表集合）为准，upstreams 仅是提示
         self._register_artifact(
             output_var, method_name, description, rows, columns,
             upstreams=self._extract_source_refs(method_name, params),
+            source_table_ids=source_table_ids,
         )
 
         step = {
@@ -737,8 +892,10 @@ class AnalysisAgent:
             logger.debug(f"[AnalysisAgent] _is_chartable 判断异常: {e}")
             return False
 
-    def _build_user_message(self, requirement: str) -> str:
-        """构建初始用户消息。"""
+    def _build_user_message(
+        self, requirement: str, reusable_entries: Optional[List[Dict]] = None
+    ) -> str:
+        """构建初始用户消息。reusable_entries 可传预取的可复用产物条目（async 入口）。"""
         parts = [f"## 用户需求\n{requirement}"]
 
         if self._loaded_table_ids:
@@ -771,19 +928,24 @@ class AnalysisAgent:
                 "然后用 load_table 加载需要的表进行分析。"
             )
 
-        artifacts_info = self._build_artifacts_info()
+        artifacts_info = self._build_artifacts_info(reusable_entries)
         if artifacts_info:
             parts.append(artifacts_info)
 
         return "\n\n".join(parts)
 
-    def _build_artifacts_info(self) -> str:
-        """构建本会话历史分析产物清单（供 load_output 复用）；无产物返回空串。
+    def _build_artifacts_info(self, entries: Optional[List[Dict]] = None) -> str:
+        """构建本会话可复用分析产物清单（供 load_output 复用）；无可复用产物返回空串。
 
         改进3（2026-10）：条目附 lineage 来源（原始表/上游产物），让模型能判断
         「某表的加工产物已存在」，从源头压掉重新 load_table -> 清洗 -> 合并链路。
+        复用资格：本会话已登记 + 每张来源表当前均可用（批量去重回查一次）；
+        旧条目/来源不全的产物不注入清单（提示重新分析，见 load_output）。
+        entries=None 时同步兜底自查（含 DB 回查，供低层/测试直调）；
+        async 入口（run）应先 to_thread 预取后传入，避免阻塞事件循环。
         """
-        entries = self._session_artifacts()
+        if entries is None:
+            entries = self._reusable_artifacts()
         if not entries:
             return ""
         known_vars = {e["var"] for e in entries}
@@ -806,6 +968,54 @@ class AnalysisAgent:
             )
         lines.append("若清单中没有所需数据，再按正常流程 search/load 原始表。")
         return "\n".join(lines)
+
+    def _reusable_artifacts(self) -> List[Dict]:
+        """本会话当前可复用的产物条目（已登记 + 来源表当前均可用）。
+
+        范围查询失败降级为空清单并告警：清单注入/拦截是优化提示，缺失只会让
+        模型重新加工（多耗成本），不得让整次分析因优化路径异常而中断；
+        load_output 的校验失败不在此降级（那里必须显式报错）。
+        """
+        try:
+            return filter_reusable_artifact_entries(
+                self._session_artifacts(),
+                self.tenant_id,
+                self.subagent_id,
+                self.agent_id,
+            )
+        except Exception as e:
+            logger.warning(f"[AnalysisAgent] 产物来源可用性检查失败（本次不复用）: {e}")
+            return []
+
+    def _propagate_source_table_ids(
+        self, output_var: str, method_name: str, params: Dict
+    ) -> Optional[List[str]]:
+        """计算本产物应登记的原始表来源集合，并维护 var→来源映射。
+
+        输入引用解析：内存变量沿用其集合（None=未知传播）；已加载原始表得
+        {table_id}；其余引用（文件路径等）视为来源未知 → None。merge/append
+        取输入并集，其余方法取单输入集合；并集超 SOURCE_TABLE_IDS_LIMIT 或
+        任一输入未知 → None（不保存截断集合，None 不得回退为已知）。
+        """
+        from src.tools.data_analysis.analysis_artifacts import SOURCE_TABLE_IDS_LIMIT
+
+        refs = self._extract_source_refs(method_name, params)
+        merged: Optional[set] = set()
+        for ref in refs:
+            if ref in self._var_sources:
+                src = self._var_sources[ref]
+            elif ref in self._loaded_table_ids or ref in self.analyzer._tables:
+                src = {ref}
+            else:
+                src = None
+            if src is None:
+                merged = None
+                break
+            merged.update(src)
+        if merged is not None and len(merged) > SOURCE_TABLE_IDS_LIMIT:
+            merged = None
+        self._var_sources[output_var] = merged
+        return sorted(merged) if merged is not None else None
 
     def _compress_messages(self, messages: List[Dict]) -> None:
         """当 messages 过大时，将早期工具结果压缩为摘要，保留最近几轮的详细信息。"""
@@ -1045,6 +1255,7 @@ class AnalysisAgent:
                 tenant_id=self.tenant_id,
                 source_type="data-analysis-metadata",
                 shared_ranges=shared_ranges,
+                agent_id=self.agent_id,
             )
 
             if not results:
@@ -1140,17 +1351,47 @@ class AnalysisAgent:
             return {"success": False, "error": str(e), "tables": [], "count": 0}
 
     async def _handle_load_table(self, table_id: str) -> Dict[str, Any]:
-        """加载指定表到分析环境。"""
+        """加载指定表到分析环境。
+
+        顺序约束（设计 §18.7 生效口径）：已加载的表不撤回（直接确认）；
+        尚未加载的表先按当前名单回查范围——不可用统一拒绝（不区分不存在/无权，
+        也不在此步返回等价产物信息，避免向已失去访问权的身份泄露产物存在性）；
+        通过后再做等价产物拦截，最后才物理加载。检查与读取之间名单变化不做
+        长事务锁定，已通过本次检查的读取按既定步骤完成。
+        """
         if not table_id:
             return {"success": False, "error": "table_id 不能为空"}
 
-        # 改进3（2026-10）lineage 拦截：该表的等价加工产物已存在时，首次调用不执行
-        # 加载，返回提示引导 load_output 复用，阻断「重新加载-清洗-合并」链路
-        #（392 积分事故主因）。软拦截：同表二次调用放行——模型坚持视为确需原始明细。
-        if (
-            table_id not in self._loaded_table_ids
-            and table_id not in self._lineage_intercepted
-        ):
+        if table_id in self._loaded_table_ids:
+            for meta in self.tables_metadata:
+                if str(meta.get("table_id", meta.get("doc_id", ""))) == table_id:
+                    # 改进1：表已在开局由系统预加载，列定义已在初始消息清单里——
+                    # 再回吐全量 columns 只会重复膨胀上下文，这里只回精简确认
+                    return {
+                        "success": True,
+                        "table_id": table_id,
+                        "table_name": meta.get("table_name", ""),
+                        "message": "该表已在开局由系统预加载完成，字段结构见初始消息清单，无需重复加载",
+                        "row_count": meta.get("row_count", 0),
+                        "column_count": len(meta.get("columns", [])),
+                    }
+            return {"success": True, "table_id": table_id, "message": "表已加载"}
+
+        # 先回查当前范围（含名单）：未命中说明表不存在或当前身份不可用，
+        # 统一拒绝，不区分原因、不返回该表的任何产物信息
+        table_meta = await asyncio.to_thread(self._fetch_single_table_metadata, table_id)
+        if not table_meta:
+            return {
+                "success": False,
+                "error": f"数据表 {table_id} 当前不可用（不存在或未开放给当前调用身份），"
+                         "请用 search_data_tables / list_data_tables 选择可用数据表",
+            }
+
+        # 改进3（2026-10）lineage 拦截：该表的等价加工产物已存在（且仍可复用）时，
+        # 首次调用不执行加载，返回提示引导 load_output 复用，阻断「重新加载-清洗-
+        # 合并」链路（392 积分事故主因）。软拦截：同表二次调用放行——模型坚持视为
+        # 确需原始明细。等价产物只在可复用集合内判断（已登记 + 来源表均可用）。
+        if table_id not in self._lineage_intercepted:
             equivalents = []
             try:
                 from src.tools.data_analysis.analysis_artifacts import (
@@ -1158,7 +1399,11 @@ class AnalysisAgent:
                 )
 
                 equivalents = find_equivalent_artifacts(
-                    self.tenant_id or "", self.session_id or "", table_id
+                    self.tenant_id or "",
+                    self.session_id or "",
+                    table_id,
+                    # 可复用集合含来源表可用性 DB 回查：async 路径沿用 to_thread 模式
+                    entries=await asyncio.to_thread(self._reusable_artifacts),
                 )
             except Exception as e:
                 logger.warning(f"[AnalysisAgent] lineage 拦截查询失败（放行）: {e}")
@@ -1186,32 +1431,12 @@ class AnalysisAgent:
                     ],
                 }
 
-        if table_id in self._loaded_table_ids:
-            for meta in self.tables_metadata:
-                if str(meta.get("table_id", meta.get("doc_id", ""))) == table_id:
-                    # 改进1：表已在开局由系统预加载，列定义已在初始消息清单里——
-                    # 再回吐全量 columns 只会重复膨胀上下文，这里只回精简确认
-                    return {
-                        "success": True,
-                        "table_id": table_id,
-                        "table_name": meta.get("table_name", ""),
-                        "message": "该表已在开局由系统预加载完成，字段结构见初始消息清单，无需重复加载",
-                        "row_count": meta.get("row_count", 0),
-                        "column_count": len(meta.get("columns", [])),
-                    }
-            return {"success": True, "table_id": table_id, "message": "表已加载"}
-
         try:
-            # 从 documents 表获取完整 metadata
-            table_meta = await asyncio.to_thread(self._fetch_single_table_metadata, table_id)
-
-            if not table_meta:
-                return {"success": False, "error": f"未找到数据表: {table_id}"}
-
             # 加载到 DataAnalyzer
             loaded_id = await self.analyzer.load_table(table_meta)
 
             self._loaded_table_ids.add(table_id)
+            self._var_sources[table_id] = {table_id}
             self.tables_metadata.append(table_meta)
 
             # 获取实际行数
@@ -1244,7 +1469,13 @@ class AnalysisAgent:
             return {"success": False, "error": str(e)}
 
     def _handle_load_output(self, output_var: str) -> Dict[str, Any]:
-        """加载本会话此前 analyze_data 的中间产物（租户 temp 目录 {var}.csv）。"""
+        """加载本会话此前 analyze_data 的中间产物（读取登记绑定的唯一 CSV）。
+
+        复用资格按当前名单重查：本会话已登记 + 每张来源表当前均可用。未登记
+        变量即使租户 temp 目录恰好存在同名 CSV 也不可读（猜到变量名不能读未
+        登记产物）；旧条目缺完整来源集合不复用，提示重新分析；名单修改后此处
+        按新规则执行，已在内存的产物不撤回。
+        """
         from src.tools.data_analysis.analysis_artifacts import (
             artifact_csv_path,
             is_valid_var_name,
@@ -1257,7 +1488,36 @@ class AnalysisAgent:
         if not self.tenant_id:
             return {"success": False, "error": "缺少租户上下文，无法复用历史产物"}
 
-        csv_path = artifact_csv_path(self.tenant_id, output_var)
+        # 复用资格校验（含来源表批量可用性检查）；范围查询失败显式报错，
+        # 不得当成「无可复用产物」静默放行或静默拒绝
+        try:
+            reusable = {
+                e["var"]: e
+                for e in filter_reusable_artifact_entries(
+                    self._session_artifacts(),
+                    self.tenant_id,
+                    self.subagent_id,
+                    self.agent_id,
+                )
+            }
+        except Exception as e:
+            logger.error(f"[AnalysisAgent] load_output 来源范围校验失败: {e}")
+            return {"success": False, "error": f"产物来源范围校验失败，请稍后重试: {e}"}
+
+        entry = reusable.get(output_var)
+        if entry is None:
+            available = [v for v in reusable if v != output_var]
+            hint = f"，当前可复用: {available}" if available else ""
+            return {
+                "success": False,
+                "error": (
+                    f"产物 {output_var} 不可复用（未在本会话登记，或来源数据表当前"
+                    f"不可用/来源记录不完整；旧产物请重新分析生成）{hint}。"
+                    "若清单中无所需数据，请 load_table 原始表"
+                ),
+            }
+
+        csv_path = artifact_csv_path(self.tenant_id, entry.get("csv_file"))
         # 路径穿越防线：解析后必须仍位于本租户 temp 目录内
         from src.core.storage import get_tenant_storage_dir
 
@@ -1265,9 +1525,7 @@ class AnalysisAgent:
         if not csv_path or not os.path.realpath(csv_path).startswith(temp_dir + os.sep):
             return {"success": False, "error": f"非法的产物路径: {output_var}"}
         if not os.path.exists(csv_path):
-            available = [
-                e["var"] for e in self._session_artifacts() if e["var"] != output_var
-            ]
+            available = [v for v in reusable if v != output_var]
             hint = f"，当前可用: {available}" if available else ""
             return {
                 "success": False,
@@ -1281,8 +1539,13 @@ class AnalysisAgent:
         except Exception as e:
             return {"success": False, "error": f"产物文件读取失败: {e}"}
 
-        # 装入分析环境：后续 merge/aggregate 等可直接以 var 引用
+        # 装入分析环境：后续 merge/aggregate 等可直接以 var 引用；来源集合随
+        # 登记恢复，供后续以其为输入的产物继续传播
         self.analyzer._variables[output_var] = df
+        src = entry.get("source_table_ids")
+        self._var_sources[output_var] = (
+            {str(t) for t in src} if isinstance(src, list) and src else None
+        )
         columns = list(df.columns)
         rows = len(df)
         logger.info(
@@ -1319,8 +1582,13 @@ class AnalysisAgent:
     def _register_artifact(
         self, output_var: str, method_name: str, description: str, rows: int, columns: List[str],
         upstreams: Optional[List[str]] = None,
+        source_table_ids: Optional[List[str]] = None,
     ) -> None:
-        """中间产物写入会话注册表（容错：失败不影响分析）。"""
+        """中间产物写入会话注册表（容错：失败不影响分析）。
+
+        source_table_ids 为完整原始表 doc_id 集合（None=来源不全/未知），是跨调用
+        复用资格的判定依据；upstreams 仅作 lineage 展示，职责独立。
+        """
         try:
             from src.tools.data_analysis.analysis_artifacts import record_artifact
 
@@ -1328,11 +1596,13 @@ class AnalysisAgent:
                 self.tenant_id or "",
                 self.session_id or "",
                 output_var,
+                csv_file=os.path.basename(self.analyzer._artifact_paths.get(output_var, "")),
                 description=description,
                 method=method_name,
                 rows=rows,
                 columns=columns,
                 upstreams=upstreams,
+                source_table_ids=source_table_ids,
             ):
                 self._new_artifacts.append({
                     "output_var": output_var,
@@ -1413,9 +1683,22 @@ class AnalysisAgent:
     # ==================== DB 查询辅助方法 ====================
 
     def _fetch_documents_metadata(self, doc_ids: List[int]) -> Dict[int, Dict]:
-        """批量查询 documents 表获取 metadata。"""
+        """批量查询 documents 表获取 metadata（同 search 可见范围：租户/共享 + 名单）。
+
+        检索结果已按同一范围过滤，此处按 ID 回查仍叠加范围与名单条件兜底，
+        防上游口径漂移导致受限表 schema 经批量回查泄漏。
+        """
         from src.db.database import get_db_connection
 
+        if not doc_ids or not self.tenant_id:
+            # 无租户上下文不回查（与列表口径一致，不放大为全局视图）
+            return {}
+
+        doc_ids = list({int(d) for d in doc_ids})
+        tenant_sql, tenant_params = _build_tenant_scope_params(self.tenant_id, self.subagent_id)
+        # 回查对象为检索命中的数据表行（source_type 已在范围分支收窄），
+        # 名单 cast 只作用于这些行
+        scope_sql, scope_params = _build_agent_scope_condition(self.agent_id, self.tenant_id)
         with get_db_connection() as conn:
             cursor = conn.cursor()
             placeholders = ",".join(["%s"] * len(doc_ids))
@@ -1424,8 +1707,10 @@ class AnalysisAgent:
                 SELECT id, title, summary, metadata
                 FROM documents
                 WHERE id IN ({placeholders})
+                  AND (source_type = 'data-analysis-metadata'{tenant_sql})
+                  AND {scope_sql}
                 """,
-                doc_ids,
+                (*doc_ids, *tenant_params, *scope_params),
             )
             result = {}
             for row in cursor.fetchall():
@@ -1446,12 +1731,15 @@ class AnalysisAgent:
     def _query_data_tables_list(self, keyword: str = "") -> List[Dict]:
         """查询所有数据表列表（委托模块级 query_data_tables_list，供 SmartDataAnalysisTool 复用）。"""
         return query_data_tables_list(
-            keyword, self.tenant_id, self.subagent_id, self._loaded_table_ids
+            keyword, self.tenant_id, self.subagent_id, self._loaded_table_ids,
+            self.agent_id,
         )
 
     def _fetch_single_table_metadata(self, table_id: str) -> Optional[Dict]:
-        """查询单个表的完整 metadata（本租户 + 已启用共享来源租户 + 本租户内被移动的表）。"""
-        return fetch_table_metadata_from_db(table_id, self.tenant_id, self.subagent_id)
+        """查询单个表的完整 metadata（本租户 + 已启用共享来源租户 + 本租户内被移动的表 + 名单）。"""
+        return fetch_table_metadata_from_db(
+            table_id, self.tenant_id, self.subagent_id, self.agent_id
+        )
 
     @staticmethod
     def _df_to_native_rows(df) -> List[List]:

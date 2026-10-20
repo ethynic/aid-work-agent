@@ -13,6 +13,7 @@ from src.knowledge.retriever.tenant_range import (
     build_active_document_condition,
     build_tenant_range_conditions,
 )
+from src.services.data_analysis.access_scope import agent_scope_document_filter_sql
 import psycopg2.extras
 
 
@@ -87,7 +88,8 @@ class HybridRetriever:
         source_type: Optional[str] = None,
         sub_categories: Optional[List[str]] = None,
         shared_ranges: Optional[List[Tuple[str, str]]] = None,
-        global_view: bool = False
+        global_view: bool = False,
+        agent_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         混合检索（加权 RRF 融合 + 向量相似度阈值 + 相关度截断）
@@ -102,6 +104,10 @@ class HybridRetriever:
             shared_ranges: 已启用共享分类的精确 (from_tenant_id, source_type) 对
             global_view: 认证 platform_admin 全局视图；True 且 tenant_id 为 None 时
                 向量/全文两路均不携带租户收窄条件（跨租户检索）。
+            agent_id: 可信执行身份（ToolExecutionContext 映射）。非 None 时在
+                租户范围条件外 AND 数据表名单条件，排名/LIMIT 前过滤（受限表
+                占前排不会挤掉可用表候选）；None 只排除非空名单记录，普通文档
+                行为不变。global_view 不受该条件影响。
 
         Returns:
             检索结果列表
@@ -125,7 +131,7 @@ class HybridRetriever:
             query_embedding, top_k=top_k * 3,
             tenant_id=tenant_id, source_type=source_type,
             sub_categories=sub_categories, shared_ranges=shared_ranges,
-            global_view=global_view,
+            global_view=global_view, agent_id=agent_id,
         )
 
         # 后端日志：输出原始向量检索结果（调优用）
@@ -169,7 +175,7 @@ class HybridRetriever:
             fts_query, top_k=top_k * 3,
             tenant_id=tenant_id, source_type=source_type,
             sub_categories=sub_categories, shared_ranges=shared_ranges,
-            global_view=global_view,
+            global_view=global_view, agent_id=agent_id,
         )
 
         # 后端日志：步骤3-FTS5全文检索详情
@@ -284,16 +290,16 @@ class HybridRetriever:
         # 用 OR 连接关键词（FTS5 语法：匹配任一关键词即可）
         return " OR ".join(keywords)
 
-    def _fts_search(self, query: str, top_k: int, tenant_id: Optional[str] = None, source_type: Optional[str] = None, sub_categories: Optional[List[str]] = None, shared_ranges: Optional[List[Tuple[str, str]]] = None, global_view: bool = False) -> List[Tuple[int, float]]:
+    def _fts_search(self, query: str, top_k: int, tenant_id: Optional[str] = None, source_type: Optional[str] = None, sub_categories: Optional[List[str]] = None, shared_ranges: Optional[List[Tuple[str, str]]] = None, global_view: bool = False, agent_id: Optional[str] = None) -> List[Tuple[int, float]]:
         """全文检索（PostgreSQL tsvector）"""
         return self._postgres_fts_search(
             query, top_k,
             tenant_id=tenant_id, source_type=source_type,
             sub_categories=sub_categories, shared_ranges=shared_ranges,
-            global_view=global_view,
+            global_view=global_view, agent_id=agent_id,
         )
 
-    def _postgres_fts_search(self, query: str, top_k: int, tenant_id: Optional[str] = None, source_type: Optional[str] = None, sub_categories: Optional[List[str]] = None, shared_ranges: Optional[List[Tuple[str, str]]] = None, global_view: bool = False) -> List[Tuple[int, float]]:
+    def _postgres_fts_search(self, query: str, top_k: int, tenant_id: Optional[str] = None, source_type: Optional[str] = None, sub_categories: Optional[List[str]] = None, shared_ranges: Optional[List[Tuple[str, str]]] = None, global_view: bool = False, agent_id: Optional[str] = None) -> List[Tuple[int, float]]:
         """PostgreSQL 全文检索（使用 tsvector + tsquery）"""
         conn = self._get_connection()
         try:
@@ -307,7 +313,10 @@ class HybridRetriever:
                 range_sql, range_params = build_tenant_range_conditions(
                     tenant_id, source_type, shared_ranges,
                 )
-                params = [processed_query, processed_query] + range_params
+                # 数据表名单过滤（排名/LIMIT 前生效）：cast 只落在数据表形态行，
+                # 普通知识文档经 NOT 分支放行，避免损坏 JSON metadata 拖垮整个检索
+                scope_sql, scope_params = agent_scope_document_filter_sql(agent_id, tenant_id, alias="d")
+                params = [processed_query, processed_query] + range_params + scope_params
                 sub_cat_sql = ""
                 if sub_categories:
                     sub_cat_sql = " AND d.sub_category = ANY(%s)"
@@ -320,7 +329,8 @@ class HybridRetriever:
                     FROM chunks c
                     JOIN documents d ON c.doc_id = d.id
                     WHERE c.text_vec @@ plainto_tsquery(%s)
-                      AND ({range_sql}){sub_cat_sql}
+                      AND ({range_sql})
+                      AND {scope_sql}{sub_cat_sql}
                       AND {build_active_document_condition("d")}
                     ORDER BY score DESC
                     LIMIT %s

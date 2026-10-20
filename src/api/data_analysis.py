@@ -25,6 +25,13 @@ from src.core.text_sanitizer import sanitize_text, sanitize_value
 from src.knowledge.embedding.embedding_client import TextEmbeddingV3Client
 from src.knowledge.vector_db.vector_db import get_vector_db
 from src.saas.context import get_current_tenant_id
+from src.services.data_analysis.access_scope import (
+    ALLOWED_AGENT_IDS_FIELD,
+    normalize_agent_scope_ids,
+    standardize_display_ids,
+    valid_data_table_condition,
+    validate_agent_ids_against_catalog,
+)
 from src.services.data_analysis.crypto import decrypt_password, encrypt_password
 from src.services.data_analysis.db_connector import DatabaseConnector
 from src.services.data_analysis.schema_extractor import SchemaExtractor
@@ -76,6 +83,62 @@ def _error_response(error: str, debug: str = "", status_code: int = 500) -> JSON
     )
 
 
+def _ensure_scope_admin(request: Request, tenant_id: Optional[str]) -> Optional[JSONResponse]:
+    """可用智能体名单写入的身份校验（含旧接口名单字段保护），通过返回 None。
+
+    认证与代管切换复用现有 require_admin：未登录 401；platform_admin 的
+    X-Tenant-Id 目标租户由其校验存在并把 admin["tenant_id"] 切到目标租户。
+    但 get_current_admin 对 role=user 的普通用户同样返回 dict，不能只凭调用
+    require_admin 认定已是管理员，因此取得 admin 后必须显式校验角色集合
+    （tenant_admin/platform_admin）与目标租户：名单写入恒需已验证的目标租户，
+    禁止无租户的平台全局配置。角色判定与前端 useTenantAuth().admin.role 同口径。
+    """
+    from src.saas.api.tenant_auth import require_admin
+    from src.saas.permissions.checker import is_tenant_admin
+
+    admin = require_admin(request)
+    if not admin:
+        # 正常情况下 require_admin 内部已抛 401；此处防御统一认证语义
+        raise HTTPException(status_code=401, detail="未登录或登录已过期")
+    if (
+        not tenant_id
+        or not is_tenant_admin(admin)
+        or not admin.get("tenant_id")
+        or admin["tenant_id"] != tenant_id
+    ):
+        return _error_response(
+            "仅租户管理员或代管当前租户的平台管理员可修改可用智能体名单",
+            status_code=403,
+        )
+    return None
+
+
+def _normalize_scope_ids(allowed_agent_ids: Any) -> tuple:
+    """标准化名单形态（去重/类型校验），不做租户目录校验。
+
+    Returns:
+        (ids, error)：error 非 None 时为 422 错误响应。
+    """
+    try:
+        return normalize_agent_scope_ids(allowed_agent_ids), None
+    except ValueError as e:
+        return [], _error_response(str(e), status_code=422)
+
+
+def _validate_scope_ids_against_catalog(
+    ids: List[str], tenant_id: Optional[str], existing_ids: Optional[List[str]] = None
+) -> tuple:
+    """管理员名单的租户目录校验（仅约束本次新提交的 ID）。
+
+    Returns:
+        (ids, error)：error 非 None 时为 422 错误响应。
+    """
+    try:
+        return validate_agent_ids_against_catalog(ids, tenant_id, existing_ids), None
+    except ValueError as e:
+        return [], _error_response(str(e), status_code=422)
+
+
 # ============== Pydantic Models ==============
 
 
@@ -105,6 +168,21 @@ class SchemaSave(BaseModel):
     columns: List[Dict[str, Any]] = Field(..., description="列定义列表")
     connector_id: Optional[str] = None
     source: Optional[dict] = Field(None, description="数据源定位信息，如 {type:'excel', file_path:'...', sheet_name:'...'} 或 {type:'database', connector_id:'...', db_table_name:'...'}")
+    allowed_agent_ids: Optional[List[str]] = Field(
+        None,
+        description="可用智能体名单（可选）：未传/null/[] 按本租户共享创建；"
+        "非空名单仅租户管理员/代管平台管理员可设置",
+    )
+
+
+class AgentScopeUpdate(BaseModel):
+    """PUT /schemas/{doc_id}/agent-scope 请求体：字段必传（缺失 422），
+    显式 null 或 [] 表示恢复本租户全部智能体共享。"""
+
+    allowed_agent_ids: Optional[List[str]] = Field(
+        ...,
+        description="可用智能体名单（必传）；null 或 [] 表示恢复共享",
+    )
 
 
 class RelationItem(BaseModel):
@@ -632,8 +710,24 @@ async def save_schema(req: SchemaSave, request: Request):
     """
     保存确认的 schema 到知识库（documents + chunks + 向量）。
     这是用户确认后的最终步骤。
+
+    名单权限矩阵：普通用户可不传名单或传 null/[]（按共享创建），
+    提交非空名单恒需管理员（403）；管理员非空名单须属于目标租户可用目录（422）。
     """
     tenant_id = get_current_tenant_id()
+
+    # 校验顺序：形态 422 → 权限 403 → 目录 422；
+    # 普通用户提交任意非空名单都以 403 拒绝，不触发目录查询
+    scope_ids, scope_err = _normalize_scope_ids(req.allowed_agent_ids)
+    if scope_err is not None:
+        return scope_err
+    if scope_ids:
+        err = _ensure_scope_admin(request, tenant_id)
+        if err:
+            return err
+        scope_ids, scope_err = _validate_scope_ids_against_catalog(scope_ids, tenant_id)
+        if scope_err is not None:
+            return scope_err
 
     result = await save_schema_to_knowledge(
         tenant_id=tenant_id,
@@ -643,6 +737,7 @@ async def save_schema(req: SchemaSave, request: Request):
         source_info=req.source_info or "",
         connector_id=req.connector_id,
         source=req.source,
+        allowed_agent_ids=scope_ids or None,
     )
 
     if not result["success"]:
@@ -702,8 +797,12 @@ async def list_schemas(
             cursor.execute("SELECT id FROM data_connectors WHERE tenant_id = %s", (tenant_id,))
             valid_connector_ids = {str(dict(row)["id"]) for row in cursor.fetchall()}
 
-            where_sql = "tenant_id = %s AND source_type = 'data-analysis-metadata'"
-            params: list = [tenant_id]
+            # 有效数据表识别：原 source_type 或本租户 [数据表] 前缀移动兜底
+            # （要求结构性 metadata），排除仅标题前缀相同的普通文档；
+            # 列表与计数共用同一条件，已移动的表仍可在本页管理
+            valid_sql, valid_params = valid_data_table_condition(tenant_id)
+            where_sql = f"tenant_id = %s AND {valid_sql}"
+            params: list = [tenant_id, *valid_params]
             if keyword:
                 where_sql += " AND title ILIKE %s"
                 params.append(f"%{keyword}%")
@@ -733,15 +832,36 @@ async def list_schemas(
                         meta = json.loads(meta)
                     except json.JSONDecodeError:
                         meta = {}
+                # 名单只在顶层标准化返回，不在 metadata 里嵌套；
+                # 异常配置按共享展示为 []，原始值保留待管理员排查
+                r["allowed_agent_ids"] = standardize_display_ids(meta)
+                meta.pop(ALLOWED_AGENT_IDS_FIELD, None)
                 r["metadata"] = meta
                 # 标注源数据是否仍可用（防止孤儿元数据误导用户和分析智能体）
                 r["source_status"] = _resolve_schema_source_status(meta, valid_connector_ids)
                 results.append(r)
-            return results, total
+
+            # 租户级出向知识共享布尔值（from_tenant_id=当前租户=共享方）：
+            # 同一连接内一次 EXISTS，仅用于前端条件文案，
+            # 不逐表查询外部租户、不返回外部租户名单/计数
+            cursor.execute(
+                "SELECT EXISTS(SELECT 1 FROM tenant_knowledge_shares "
+                "WHERE from_tenant_id = %s) AS has_share",
+                (tenant_id,),
+            )
+            has_outbound_share = bool(dict(cursor.fetchone())["has_share"])
+            return results, total, has_outbound_share
 
     try:
-        schemas, total = await asyncio.to_thread(_list)
-        return {"success": True, "schemas": schemas, "total": total, "page": page, "page_size": page_size}
+        schemas, total, has_outbound_share = await asyncio.to_thread(_list)
+        return {
+            "success": True,
+            "schemas": schemas,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "has_outbound_knowledge_share": has_outbound_share,
+        }
     except Exception as e:
         logger.opt(exception=True).error(f"获取 schema 列表失败: {e}")
         return _error_response("获取 schema 列表失败", debug=str(e))
@@ -749,8 +869,28 @@ async def list_schemas(
 
 @router.put("/schemas/{doc_id}")
 async def update_schema(doc_id: int, req: SchemaSave, request: Request):
-    """更新 schema（重新生成嵌入）"""
+    """更新 schema（重新生成嵌入）。
+
+    名单权限矩阵：普通用户未提交名单字段 → 保留原值不变；显式提交名单字段
+    （含 null/[]）恒需管理员（403，防止借 Schema 编辑改变名单）；管理员显式
+    null/[] 恢复共享、显式非空替换（须属目标租户可用目录）、未提交保留原值。
+    """
     tenant_id = get_current_tenant_id()
+
+    # 用 model_fields_set 区分「未提交」与「显式提交（含 null）」：
+    # 未提交绝不能覆盖原名单（包括并发保存的名单）
+    submitted_fields = set(req.model_fields_set)
+    scope_submitted = "allowed_agent_ids" in submitted_fields
+    scope_ids: Optional[List[str]] = None
+    if scope_submitted:
+        scope_ids, scope_err = _normalize_scope_ids(req.allowed_agent_ids)
+        if scope_err is not None:
+            return scope_err
+        # 显式提交（含 null/[] 恢复共享）恒需管理员，普通用户不得借 Schema
+        # 编辑改变名单；管理员非空名单再按目标租户可用目录校验
+        err = _ensure_scope_admin(request, tenant_id)
+        if err:
+            return err
 
     # 请求体可能携带孤立代理字符，写库/向量化前统一清洗
     req.table_name = sanitize_text(req.table_name, source="data_analysis_api")
@@ -779,24 +919,41 @@ async def update_schema(doc_id: int, req: SchemaSave, request: Request):
             except Exception:
                 logger.opt(exception=True).debug("Failed to record schema embedding usage")
 
-        metadata = {
-            "connector_id": req.connector_id,
-            "source_info": req.source_info,
-            "table_name": req.table_name,
-            "columns": req.columns,
-        }
-        if req.source:
-            metadata["source"] = req.source
-
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            # 验证归属
+            # 短事务：FOR UPDATE 锁定行并读取最新 metadata，合并本次修改后写回。
+            # 名单由 agent-scope 接口并发原子写入，必须读锁内最新值合并，
+            # 不能把并发保存的名单覆盖掉；同一名单并发修改按最后提交生效
+            valid_sql, valid_params = valid_data_table_condition(tenant_id)
             cursor.execute(
-                "SELECT id FROM documents WHERE id = %s AND tenant_id = %s AND source_type = 'data-analysis-metadata'",
-                (doc_id, tenant_id),
+                f"SELECT id, metadata FROM documents WHERE id = %s AND {valid_sql} FOR UPDATE",
+                (doc_id, *valid_params),
             )
-            if not cursor.fetchone():
+            current_row = cursor.fetchone()
+            if not current_row:
                 return _error_response("Schema 不存在或无权限", status_code=404)
+            latest_meta = current_row.get("metadata")
+            if isinstance(latest_meta, str):
+                try:
+                    latest_meta = json.loads(latest_meta)
+                except (json.JSONDecodeError, TypeError):
+                    latest_meta = {}
+            if not isinstance(latest_meta, dict):
+                latest_meta = {}
+
+            # 仅合并明确提交的字段；源定位及并发名单来自锁内最新记录。
+            metadata = dict(latest_meta)
+            for field in ("connector_id", "source_info", "table_name", "columns", "source"):
+                if field in submitted_fields:
+                    metadata[field] = getattr(req, field)
+            if scope_submitted:
+                existing_ids = standardize_display_ids(latest_meta)
+                scope_ids, scope_err = _validate_scope_ids_against_catalog(
+                    scope_ids, tenant_id, existing_ids
+                )
+                if scope_err is not None:
+                    return scope_err
+                metadata[ALLOWED_AGENT_IDS_FIELD] = scope_ids
 
             # 更新文档
             cursor.execute(
@@ -843,16 +1000,22 @@ async def update_schema(doc_id: int, req: SchemaSave, request: Request):
 
 @router.delete("/schemas/{doc_id}")
 async def delete_schema(doc_id: int, request: Request):
-    """删除 schema 及其 chunks 和向量"""
+    """删除 schema 及其 chunks 和向量。
+
+    删除不设名单门槛、仍可删除已限定名单的表：沿用既有数据管理权限的
+    明确取舍（本次区分的是「改变名单」而非数据编辑/删除 ACL）。
+    定位改用有效数据表识别条件，使移动后的表仍可删除。
+    """
     tenant_id = get_current_tenant_id()
 
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            # 验证归属
+            # 验证归属（有效数据表条件兼容已移动表）
+            valid_sql, valid_params = valid_data_table_condition(tenant_id)
             cursor.execute(
-                "SELECT id FROM documents WHERE id = %s AND tenant_id = %s AND source_type = 'data-analysis-metadata'",
-                (doc_id, tenant_id),
+                f"SELECT id FROM documents WHERE id = %s AND {valid_sql}",
+                (doc_id, *valid_params),
             )
             if not cursor.fetchone():
                 return _error_response("Schema 不存在或无权限", status_code=404)
@@ -871,6 +1034,73 @@ async def delete_schema(doc_id: int, request: Request):
     except Exception as e:
         logger.opt(exception=True).error(f"删除 schema 失败: {e}")
         return _error_response("删除 schema 失败", debug=str(e))
+
+
+@router.put("/schemas/{doc_id}/agent-scope")
+async def update_schema_agent_scope(doc_id: int, req: AgentScopeUpdate, request: Request):
+    """仅更新数据表可用智能体名单（恒需租户管理员/代管平台管理员）。
+
+    - 请求体 allowed_agent_ids 必传（缺失 422）；显式 null 或 [] 恢复本租户共享；
+    - 只改名单，不重新生成描述/chunks/向量；
+    - 单条 UPDATE 经 jsonb_set 原子写名单并保留其余 metadata 字段，
+      与普通 Schema 编辑（短事务合并）交错时名单均不丢失；
+    - 按当前解析租户 + 有效数据表条件定位行，404 不区分不存在/其他租户；
+    - 新增 ID 须属目标租户可用目录（422），已保存的失效 ID 原样保留。
+    """
+    tenant_id = get_current_tenant_id()
+
+    err = _ensure_scope_admin(request, tenant_id)
+    if err:
+        return err
+    scope_ids, scope_err = _normalize_scope_ids(req.allowed_agent_ids)
+    if scope_err is not None:
+        return scope_err
+
+    try:
+        def _update():
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                valid_sql, valid_params = valid_data_table_condition(tenant_id)
+                cursor.execute(
+                    f"SELECT id, metadata FROM documents WHERE id = %s AND {valid_sql} FOR UPDATE",
+                    (doc_id, *valid_params),
+                )
+                current = cursor.fetchone()
+                if not current:
+                    return _error_response("Schema 不存在或无权限", status_code=404)
+                metadata = current.get("metadata") or {}
+                if isinstance(metadata, str):
+                    metadata = json.loads(metadata)
+                _, scope_error = _validate_scope_ids_against_catalog(
+                    scope_ids, tenant_id, standardize_display_ids(metadata)
+                )
+                if scope_error is not None:
+                    return scope_error
+                cursor.execute(
+                    f"""
+                    UPDATE documents
+                    SET metadata = jsonb_set(
+                        metadata::jsonb,
+                        '{{{ALLOWED_AGENT_IDS_FIELD}}}',
+                        %s::jsonb
+                    )::text
+                    WHERE id = %s AND {valid_sql}
+                    """,
+                    (json.dumps(scope_ids, ensure_ascii=False), doc_id, *valid_params),
+                )
+                conn.commit()
+                return True
+
+        updated = await asyncio.to_thread(_update)
+        if isinstance(updated, JSONResponse):
+            return updated
+        if not updated:
+            return _error_response("Schema 不存在或无权限", status_code=404)
+        return {"success": True, "doc_id": doc_id, "allowed_agent_ids": scope_ids}
+
+    except Exception as e:
+        logger.opt(exception=True).error(f"更新数据表可用智能体名单失败: {e}")
+        return _error_response("更新数据表可用智能体名单失败", debug=str(e))
 
 
 # ============== Relations ==============

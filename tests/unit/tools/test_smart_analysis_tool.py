@@ -123,7 +123,8 @@ class TestExecuteWithMock:
 
     @pytest.mark.asyncio
     async def test_execute_success(self):
-        """mock AnalysisAgent 返回成功结果"""
+        """mock AnalysisAgent 返回成功结果；显式入参无论是否带 source 一律回查，
+        物理加载使用服务端记录的 source（调用方 source 不参与）"""
         mock_result = {
             "success": True,
             "conclusion": "分析完成：共统计5个区域",
@@ -138,12 +139,19 @@ class TestExecuteWithMock:
                 "trace_id": "analysis_test",
             },
         }
+        server_meta = {
+            "table_id": "t1", "table_name": "销售",
+            "columns": [{"name": "region", "data_type": "text"}],
+            "source": {"type": "excel", "file_path": "/srv/real.xlsx"},
+        }
 
         mock_gateway = MagicMock()
 
         with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer, \
              patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
+             patch("src.tools.data_analysis.analysis_agent.fetch_table_metadata_from_db") as mock_fetch, \
              patch("src.core.master_agent") as mock_master:
+            mock_fetch.return_value = server_meta
             mock_master.llm_gateway = mock_gateway
             mock_analyzer_instance = MockAnalyzer.return_value
             mock_analyzer_instance.load_table = AsyncMock()
@@ -161,6 +169,8 @@ class TestExecuteWithMock:
             assert result["conclusion"] == "分析完成：共统计5个区域"
             assert len(result["artifacts"]) == 1
             assert result["analysis_meta"]["iterations"] == 3
+            # 传入的 source 是伪造面：加载与传给 Agent 的都是服务端记录
+            mock_analyzer_instance.load_table.assert_awaited_once_with(server_meta)
 
     @pytest.mark.asyncio
     async def test_execute_load_table_failure(self):
@@ -215,16 +225,17 @@ class TestExecuteWithMock:
             )
 
             assert result["success"] is True
-            # 回查用的是 table_id + 租户上下文
-            mock_fetch.assert_called_once_with("9078", None, None)
+            # 回查用的是 table_id + 租户上下文 + 可信身份（无上下文 → None 不映射 main）
+            mock_fetch.assert_called_once_with("9078", None, None, None)
             # 预加载用的是补全后的完整 metadata（带 source）
             mock_analyzer_instance.load_table.assert_awaited_once_with(full_meta)
             # AnalysisAgent 收到的也是完整 metadata
             assert MockAgent.call_args.kwargs["tables_metadata"] == [full_meta]
 
     @pytest.mark.asyncio
-    async def test_execute_enrich_miss_falls_back_to_original(self):
-        """回查未命中（表不可见/非数字 id）时保留原 metadata，加载报显式错误"""
+    async def test_execute_enrich_miss_fails_explicitly(self):
+        """回查未命中（表不可见/无权/非数字 id）→ 整体显式失败：
+        不回退传入 source、不用原始请求 metadata、不做部分加载、不启动分析"""
         mock_result = {
             "success": True,
             "conclusion": "分析完成",
@@ -239,22 +250,24 @@ class TestExecuteWithMock:
             mock_fetch.return_value = None
             mock_master.llm = MagicMock()
             mock_analyzer_instance = MockAnalyzer.return_value
-            mock_analyzer_instance.load_table = AsyncMock(side_effect=ValueError(
-                "加载数据表 not_a_number 失败：源数据不存在或无法读取，请检查源文件/数据库连接器是否仍存在"
-            ))
+            mock_analyzer_instance.load_table = AsyncMock()
             mock_agent_instance = MockAgent.return_value
             mock_agent_instance.run = AsyncMock(return_value=mock_result)
 
             tool = SmartDataAnalysisTool()
             result = await tool.execute(
                 requirement="分析数据",
-                tables_metadata=[{"table_id": "not_a_number"}],
+                tables_metadata=[{
+                    "table_id": "not_a_number",
+                    "source": {"type": "excel", "file_path": "fake.xlsx"},
+                }],
             )
 
-            # 回查未命中 → 用原 metadata 加载 → DataAnalyzer 显式报"源数据不存在"
-            mock_analyzer_instance.load_table.assert_awaited_once_with({"table_id": "not_a_number"})
+            # 回查未命中 → 显式失败（错误不区分不存在/无权），原始请求 metadata 弃用
             assert result["success"] is False
-            assert "源数据不存在" in result["error"]
+            assert "不可用" in result["error"]
+            mock_analyzer_instance.load_table.assert_not_awaited()
+            MockAgent.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_execute_agent_failure(self):
@@ -438,7 +451,7 @@ class TestBatchSelectAndLoad:
              patch("src.tools.data_analysis.analysis_agent.fetch_table_metadata_from_db") as mock_fetch, \
              patch("src.core.master_agent"):
             mock_query.return_value = summaries
-            mock_fetch.side_effect = lambda tid, tenant, sub: {"11": meta_11, "12": meta_12}[tid]
+            mock_fetch.side_effect = lambda tid, tenant, sub, aid: {"11": meta_11, "12": meta_12}[tid]
             mock_analyzer_instance = MockAnalyzer.return_value
             mock_analyzer_instance.load_table = AsyncMock(return_value="ok")
             mock_agent_instance = MockAgent.return_value
@@ -453,6 +466,8 @@ class TestBatchSelectAndLoad:
             # 完整 metadata 列表经 tables_metadata 参数传入 AnalysisAgent
             assert MockAgent.call_args.kwargs["tables_metadata"] == [meta_11, meta_12]
             assert mock_analyzer_instance.load_table.await_count == 2
+            # 列表查询先按名单过滤（身份 main 来自可信上下文），过滤后计数决定阈值
+            mock_query.assert_called_once_with("", "t1", None, None, "main")
 
     @pytest.mark.asyncio
     async def test_execute_with_metadata_skips_batch_select(self):
@@ -506,7 +521,7 @@ class TestBatchSelectAndLoad:
              patch("src.tools.data_analysis.analysis_agent.fetch_table_metadata_from_db") as mock_fetch, \
              patch("src.core.master_agent"):
             mock_query.return_value = summaries
-            mock_fetch.side_effect = lambda tid, tenant, sub: {"12": meta_12, "13": meta_13}[tid]
+            mock_fetch.side_effect = lambda tid, tenant, sub, aid: {"12": meta_12, "13": meta_13}[tid]
             mock_analyzer_instance = MockAnalyzer.return_value
             mock_analyzer_instance.load_table = AsyncMock(return_value="ok")
             mock_agent_instance = MockAgent.return_value
@@ -524,6 +539,8 @@ class TestBatchSelectAndLoad:
             assert kwargs["query"] == "各渠道销售对比"
             assert kwargs["top_k"] == smart_analysis_tool.SEMANTIC_SELECT_TOP_K
             assert kwargs["source_type"] == "data-analysis-metadata"
+            # 可信上下文存在且 subagent_id 为空 → 名单身份映射 main
+            assert kwargs["agent_id"] == "main"
             assert MockAgent.call_args.kwargs["tables_metadata"] == [meta_12, meta_13]
 
     @pytest.mark.asyncio
@@ -551,7 +568,7 @@ class TestBatchSelectAndLoad:
              patch("src.tools.data_analysis.analysis_agent.fetch_table_metadata_from_db") as mock_fetch, \
              patch("src.core.master_agent"):
             mock_query.return_value = summaries
-            mock_fetch.side_effect = lambda tid, tenant, sub: {"11": meta_11, "12": meta_12}[tid]
+            mock_fetch.side_effect = lambda tid, tenant, sub, aid: {"11": meta_11, "12": meta_12}[tid]
             mock_analyzer_instance = MockAnalyzer.return_value
             mock_analyzer_instance.load_table = AsyncMock(side_effect=_load)
             mock_agent_instance = MockAgent.return_value
@@ -694,7 +711,9 @@ class TestExportModeExecute:
         with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer"), \
              patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
              patch("src.tools.data_analysis.analysis_artifacts.load_artifacts",
-                   return_value=[{"var": "wide_existing"}]), \
+                   return_value=[{"var": "wide_existing", "source_table_ids": ["9078"]}]), \
+             patch("src.tools.data_analysis.analysis_agent.filter_available_table_ids",
+                   return_value={"9078"}), \
              patch.object(SmartDataAnalysisTool, "_batch_select_and_load",
                           new=AsyncMock()) as mock_batch:
             MockAgent.return_value.run = AsyncMock(return_value=mock_result)
@@ -742,7 +761,9 @@ class TestExportModeExecute:
         with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer"), \
              patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
              patch("src.tools.data_analysis.analysis_artifacts.load_artifacts",
-                   return_value=[{"var": "wide_existing"}]), \
+                   return_value=[{"var": "wide_existing", "source_table_ids": ["9078"]}]), \
+             patch("src.tools.data_analysis.analysis_agent.filter_available_table_ids",
+                   return_value={"9078"}), \
              patch.object(SmartDataAnalysisTool, "_batch_select_and_load",
                           new=AsyncMock(return_value=[])) as mock_batch:
             MockAgent.return_value.run = AsyncMock(return_value=mock_result)
@@ -752,3 +773,208 @@ class TestExportModeExecute:
             )
             mock_batch.assert_awaited_once()
             assert MockAgent.call_args.kwargs["export_only_mode"] is False
+
+
+# ============================================================
+# Phase 2（数据表按智能体配置）：可信身份解析与显式入参绕过封堵
+# ============================================================
+
+
+def _agent_scope_mocks(mock_result, fetch_meta):
+    """构造 Phase 2 身份/绕过测试的公共 mock 上下文。"""
+    return (
+        patch("src.tools.data_analysis.data_analyzer.DataAnalyzer"),
+        patch("src.tools.data_analysis.analysis_agent.AnalysisAgent"),
+        patch("src.tools.data_analysis.analysis_agent.fetch_table_metadata_from_db"),
+        patch("src.core.master_agent"),
+    )
+
+
+class TestAgentScopeIdentity:
+    """身份语义：可信上下文映射 main/子智能体；无上下文不映射 main 且附诊断提示；
+    租户冲突以 ToolExecutionContext 为准。"""
+
+    def _mock_result(self):
+        return {"success": True, "conclusion": "ok", "artifacts": [],
+                "analysis_meta": {"iterations": 1, "duration_ms": 10, "tokens_used": 10,
+                                  "tables_used": [], "trace_id": "t"}}
+
+    @pytest.mark.asyncio
+    async def test_context_without_subagent_maps_main(self):
+        """可信上下文存在且 subagent_id 为空 → 名单身份为 main（可信上下文内转换）"""
+        summaries = [{"table_id": "11", "table_name": "销售", "description": "",
+                      "columns_count": 1, "loaded": False}]
+        meta = {"table_id": "11", "table_name": "销售",
+                "columns": [{"name": "a", "data_type": "text"}],
+                "source": {"type": "excel", "file_path": "a.xlsx"}}
+        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer"), \
+             patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
+             patch("src.tools.data_analysis.analysis_agent.query_data_tables_list") as mock_query, \
+             patch("src.tools.data_analysis.analysis_agent.fetch_table_metadata_from_db") as mock_fetch, \
+             patch("src.core.master_agent"):
+            mock_query.return_value = summaries
+            mock_fetch.return_value = meta
+            MockAgent.return_value.run = AsyncMock(return_value=self._mock_result())
+
+            tool = SmartDataAnalysisTool()
+            from src.tools.context import ToolExecutionContext, tool_execution_scope
+            with tool_execution_scope(ToolExecutionContext(tenant_id="t1")):
+                result = await tool.execute(requirement="销售分析")
+
+            assert result["success"] is True
+            # subagent_id（共享范围）仍为 None，agent_id（名单）映射 main
+            mock_query.assert_called_once_with("", "t1", None, None, "main")
+            assert "identity_notice" not in result
+
+    @pytest.mark.asyncio
+    async def test_context_with_subagent_uses_it_as_identity(self):
+        """可信上下文 subagent_id 非空 → 名单身份为该子智能体"""
+        summaries = [{"table_id": "11", "table_name": "销售", "description": "",
+                      "columns_count": 1, "loaded": False}]
+        meta = {"table_id": "11", "table_name": "销售",
+                "columns": [{"name": "a", "data_type": "text"}],
+                "source": {"type": "excel", "file_path": "a.xlsx"}}
+        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer"), \
+             patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
+             patch("src.tools.data_analysis.analysis_agent.query_data_tables_list") as mock_query, \
+             patch("src.tools.data_analysis.analysis_agent.fetch_table_metadata_from_db") as mock_fetch, \
+             patch("src.core.master_agent"):
+            mock_query.return_value = summaries
+            mock_fetch.return_value = meta
+            MockAgent.return_value.run = AsyncMock(return_value=self._mock_result())
+
+            tool = SmartDataAnalysisTool()
+            from src.tools.context import ToolExecutionContext, tool_execution_scope
+            with tool_execution_scope(ToolExecutionContext(tenant_id="t1", subagent_id="travel-quote")):
+                result = await tool.execute(requirement="销售分析")
+
+            assert result["success"] is True
+            mock_query.assert_called_once_with("", "t1", "travel-quote", None, "travel-quote")
+
+    @pytest.mark.asyncio
+    async def test_no_context_keeps_unknown_identity_with_notice(self):
+        """无 ToolExecutionContext ≠ main：有租户仅共享，返回信息附诊断提示"""
+        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer, \
+             patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
+             patch("src.tools.data_analysis.analysis_agent.query_data_tables_list") as mock_query, \
+             patch("src.saas.context.get_current_tenant_id", return_value="t1"), \
+             patch("src.core.master_agent"):
+            mock_query.return_value = []
+            MockAgent.return_value.run = AsyncMock(return_value=self._mock_result())
+
+            tool = SmartDataAnalysisTool()
+            result = await tool.execute(requirement="销售分析")
+
+            assert result["success"] is True
+            # 身份未知（None，不映射 main）+ 诊断提示（不含数据内容）
+            mock_query.assert_called_once_with("", "t1", None, None, None)
+            assert result["identity_notice"] == "调用身份未确定，本次仅使用共享数据表"
+
+    @pytest.mark.asyncio
+    async def test_tenant_conflict_prefers_trusted_context(self):
+        """进程级租户变量与 ToolExecutionContext 冲突时以可信上下文为准"""
+        summaries = []
+        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer"), \
+             patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
+             patch("src.tools.data_analysis.analysis_agent.query_data_tables_list") as mock_query, \
+             patch("src.saas.context.get_current_tenant_id", return_value="t_saas_var"), \
+             patch("src.core.master_agent"):
+            mock_query.return_value = summaries
+            MockAgent.return_value.run = AsyncMock(return_value=self._mock_result())
+
+            tool = SmartDataAnalysisTool()
+            from src.tools.context import ToolExecutionContext, tool_execution_scope
+            with tool_execution_scope(ToolExecutionContext(tenant_id="t_ctx")):
+                await tool.execute(requirement="销售分析")
+
+            mock_query.assert_called_once_with("", "t_ctx", None, None, "main")
+
+
+class TestExplicitBypassBlocked:
+    """显式入参绕过封堵：source/ID 组合形态均不能绕过服务端回查"""
+
+    def _mock_result(self):
+        return {"success": True, "conclusion": "ok", "artifacts": [],
+                "analysis_meta": {"iterations": 1, "duration_ms": 10, "tokens_used": 10,
+                                  "tables_used": [], "trace_id": "t"}}
+
+    @pytest.mark.asyncio
+    async def test_source_without_table_id_rejected(self):
+        """只有 source 没有 table_id/doc_id → 不作为选择依据，整体失败"""
+        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer, \
+             patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
+             patch("src.core.master_agent"):
+            MockAnalyzer.return_value.load_table = AsyncMock()
+            MockAgent.return_value.run = AsyncMock(return_value=self._mock_result())
+
+            tool = SmartDataAnalysisTool()
+            result = await tool.execute(
+                requirement="分析",
+                tables_metadata=[{"source": {"type": "excel", "file_path": "secret.xlsx"}}],
+            )
+
+            assert result["success"] is False
+            assert "table_id" in result["error"]
+            MockAnalyzer.return_value.load_table.assert_not_awaited()
+            MockAgent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_other_tenant_table_id_rejected_without_source_fallback(self):
+        """其他租户表 ID（回查 None）→ 失败且不回退调用方伪造 source"""
+        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer,              patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent,              patch("src.tools.data_analysis.analysis_agent.fetch_table_metadata_from_db") as mock_fetch,              patch("src.core.master_agent"):
+            mock_fetch.return_value = None
+            MockAnalyzer.return_value.load_table = AsyncMock()
+            MockAgent.return_value.run = AsyncMock(return_value=self._mock_result())
+
+            tool = SmartDataAnalysisTool()
+            result = await tool.execute(
+                requirement="分析",
+                tables_metadata=[{
+                    "table_id": "8888",
+                    "source": {"type": "excel", "file_path": "C:/other_tenant/data.xlsx"},
+                }],
+            )
+
+            assert result["success"] is False
+            assert "不可用" in result["error"]
+            # 伪造 source 未被读取（无加载、无分析启动），错误不区分不存在/无权
+            MockAnalyzer.return_value.load_table.assert_not_awaited()
+            MockAgent.assert_not_called()
+            assert "无权" not in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_fetch_error_fails_explicitly(self):
+        """回查 DB 异常 → 显式失败（权限读取失败要暴露，不当成表不存在继续）"""
+        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer,              patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent,              patch("src.tools.data_analysis.analysis_agent.fetch_table_metadata_from_db") as mock_fetch,              patch("src.core.master_agent"):
+            mock_fetch.side_effect = Exception("DB down")
+            MockAnalyzer.return_value.load_table = AsyncMock()
+            MockAgent.return_value.run = AsyncMock(return_value=self._mock_result())
+
+            tool = SmartDataAnalysisTool()
+            result = await tool.execute(
+                requirement="分析",
+                tables_metadata=[{"table_id": "11"}],
+            )
+
+            assert result["success"] is False
+            MockAgent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_partial_availability_no_partial_load(self):
+        """两张指定表一张不可用 → 整体失败，可用表也不做部分加载"""
+        good = {"table_id": "11", "table_name": "可用表",
+                "columns": [{"name": "a", "data_type": "text"}],
+                "source": {"type": "excel", "file_path": "a.xlsx"}}
+        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer,              patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent,              patch("src.tools.data_analysis.analysis_agent.fetch_table_metadata_from_db") as mock_fetch,              patch("src.core.master_agent"):
+            mock_fetch.side_effect = lambda tid, tenant, sub, aid: good if tid == "11" else None
+            MockAnalyzer.return_value.load_table = AsyncMock()
+            MockAgent.return_value.run = AsyncMock(return_value=self._mock_result())
+
+            tool = SmartDataAnalysisTool()
+            result = await tool.execute(
+                requirement="分析",
+                tables_metadata=[{"table_id": "11"}, {"table_id": "12"}],
+            )
+
+            assert result["success"] is False
+            MockAnalyzer.return_value.load_table.assert_not_awaited()

@@ -44,8 +44,16 @@
 - 收口统一走 `resolve_category_scope(tenant_id, subagent_id, requested_source_type)`：传参未授权 → 拒绝并返回各授权栏目文档数（帮助 LLM 自纠）；未传参 → 收窄为授权集合（list），`build_tenant_range_conditions` 对 list 生成 `source_type = ANY(%s)`。
 - 仅子智能体 + 租户模式生效；主智能体 / 无租户上下文不受限（返回 None）。
 - 共享侧不受自有授权影响，恒为 `load_shared_ranges` 精确对。**注意**：source_type 为收窄 list 时调 `load_shared_ranges` 必须传 None（其 source_type 参数仅支持 str 等值过滤；精确对本身已约束共享侧）。
-- 已收口入口：`knowledge_base_search` / `knowledge_file_search`。豁免：`analysis_agent` 数据表发现/加载（`[数据表]` 标题前缀移动兜底，见 [栏目授权设计](../../docs/system/knowledge-base/subagent-kb-category-authorization-design.md) §4.4）。
+- 已收口入口：`knowledge_base_search` / `knowledge_file_search`。豁免：`analysis_agent` 数据表发现/加载（`[数据表]` 标题前缀移动兜底，见 [栏目授权设计](../../docs/system/knowledge-base/subagent-kb-category-authorization-design.md) §4.4）。**栏目豁免不豁免表级名单**：数据分析相关入口仍受 §4.1 的 `allowed_agent_ids` 约束。
 - schema_saver 去重不限定 source_type（`title = '[数据表] ' || table_name` + table_name/source_info 判重），表文档被移动后不重复注册。
+
+## 4.1 数据表表级名单（2026-10-20）
+
+- 权威模块：`src/services/data_analysis/access_scope.py`——名单标准化（`read_stored_agent_scope`/`normalize_agent_scope_ids`）、单表判断、SQL 条件（`agent_scope_visible_sql`、`agent_scope_document_filter_sql`）、有效数据表识别（`valid_data_table_condition`）。字段为数据表 metadata 保留键 `allowed_agent_ids`：缺失/null/`[]` = 本租户全部智能体共享；非空数组 = 仅名单内**本租户**智能体可用；异常形态 fail-closed（不当成共享）。
+- 跨租户关系：限定表必须 `tenant_id` = 当前租户，即使两个租户存在同名 agent_id 也不放行；跨租户共享仅对**空名单**表保留原有行为。身份未知（有租户、无可信工具身份）只可见共享表，不得映射 main；身份一律取 `ToolExecutionContext`（`subagent_id` 空且上下文存在 → main），不取 LLM/前端参数。
+- **cast 安全**：`metadata::jsonb` 只允许作用于已识别为数据表形态的行（source_type 判等或 `[数据表] ` 标题前缀先收窄）；普通知识文档行不得进入 cast 路径，否则单行损坏 JSON 会使整个检索 500。
+- 检索透传：`HybridRetriever.retrieve` / `VectorDatabase.search` / FTS / `search_documents_by_title` 均有可选 `agent_id`，名单条件在租户范围 OR 括号外 AND、排名/LIMIT 前过滤；不传时仅排除非空名单记录，其余文档行为不变。分析产物复用按 `source_table_ids` 完整来源集合判定（超限/未知 → null 不复用），见 analysis_artifacts/analysis_agent。
+- 管理端写入口径（角色、显式清空/省略、重复注册保持）见数据表按智能体配置设计与计划，不在此重复。
 
 ## 5. 检查清单（新增/修改检索入口必查）
 
@@ -57,15 +65,16 @@
 - [ ] 共享侧是否按 `source_type` 精确过滤？
 - [ ] 检索 SQL 是否带 `source_type` 硬过滤（模式 B 缺它会把来源租户全部分类搜进来）？
 - [ ] 本租户栏目授权是否经 `resolve_category_scope` 收口（传未授权栏目拒绝、未传参收窄为授权集合）？
+- [ ] 涉及数据表可见性的入口是否叠加 §4.1 表级名单（`agent_id` 从可信上下文取、cast 只落数据表行、限定分支绑定当前租户）？
 - [ ] 新增单测覆盖共享路径（subagent 命中共享 / 无 subagent 退化本租户）与栏目授权路径（拒绝 / 收窄 / 未配置透传）
 
 ## 6. 已实现入口（参考）
 
 | 入口 | 模式 |
 |------|------|
-| `knowledge_base_tool.py`（knowledge_base_search，内容语义检索） | A |
-| `knowledge_file_search_tool.py`（knowledge_file_search，按文件名定位文档，底层 `KnowledgeService.search_documents_by_title`） | A |
-| `analysis_agent.py`（search_data_tables / list_data_tables / load_table） | A + SQL 租户范围 |
+| `knowledge_base_tool.py`（knowledge_base_search，内容语义检索） | A + §4.1 表级名单 |
+| `knowledge_file_search_tool.py`（knowledge_file_search，按文件名定位文档，底层 `KnowledgeService.search_documents_by_title`） | A + §4.1 表级名单 |
+| `analysis_agent.py`（search_data_tables / list_data_tables / load_table） | A + SQL 租户范围 + §4.1 表级名单 |
 | `attraction_search_tool.py` / `hotel_search_tool.py` | B |
 | travel_quote 独立 API + hotel/attraction retriever | C |
 
