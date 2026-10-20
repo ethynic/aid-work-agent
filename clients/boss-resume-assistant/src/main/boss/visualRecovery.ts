@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { captureWindow, clickWindow, escapeWindow, type WindowObservation } from '../input/windowExperiment.js'
+import { captureWindow, clickWindow, type WindowObservation } from '../input/windowExperiment.js'
 import { execPowerShellScript } from '../input/powerShell.js'
 import { CancelledError, CodedOperationError } from '../operations/types.js'
 import type { BossSession } from '../operations/bossContext.js'
@@ -16,8 +16,7 @@ import { visualDiagnose, VisualDiagnoseError } from './visualDiagnoseClient.js'
 export type VisualContext = Record<string, unknown>
 export interface VisualInspectArgs { request_id?: string; visual_context?: VisualContext; retrieve_only?: boolean; observation_mode?: 'page' | 'window' }
 interface DismissAction { kind: 'dismiss'; space: 'page_image_px' | 'window_image_px'; point: { x: number; y: number }; target_box: { x: number; y: number; width: number; height: number }; target_label: string }
-interface EscapeAction { kind: 'press_escape'; target_label: string }
-type Action = DismissAction | EscapeAction
+type Action = DismissAction
 interface PageMetrics { width: number; height: number }
 interface RecordData { request_id: string; recovery_ref: string; url: string; captured_at: string; context: VisualContext; image?: { width: number; height: number }; observation_mode?: 'page' | 'window'; window_observation?: WindowObservation; browser_target_ref?: string; target_id?: string; page_metrics?: PageMetrics; response?: { status: number; body: unknown } }
 export interface VisualRecoveryDeps {
@@ -28,7 +27,6 @@ export interface VisualRecoveryDeps {
   settleMs?: number
   captureWindow?: typeof captureWindow
   clickWindow?: typeof clickWindow
-  escapeWindow?: typeof escapeWindow
 }
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i
 const OPERATION_NAME = /^boss_[a-z][a-z0-9_]{0,99}$/
@@ -44,7 +42,7 @@ export function validateVisualArgs(args: VisualInspectArgs): string | null {
   if (!object(c) || Object.keys(c).some(k => !['purpose', 'operation', 'execution', 'error', 'verification', 'available_actions'].includes(k))) return 'visual_context 字段无效'
   if (!['diagnose', 'verify'].includes(String(c.purpose)) || !object(c.operation) || !OPERATION_NAME.test(String(c.operation.name)) || !['page_state', 'business_result'].includes(String(c.operation.result_kind))) return '需要安全的 boss_* 操作名及 page_state/business_result 结果类型'
   if (!object(c.execution) || !Number.isInteger(c.execution.attempts_used) || Number(c.execution.attempts_used) < 1) return 'execution.attempts_used 需要正整数'
-  if (!Array.isArray(c.available_actions) || c.available_actions.some(a => a !== 'dismiss_click' && a !== 'press_escape') || c.available_actions.length > 2 || new Set(c.available_actions).size !== c.available_actions.length || c.purpose === 'verify' && c.available_actions.length) return '恢复仅支持 dismiss_click/press_escape；后态验证不能建议动作'
+  if (!Array.isArray(c.available_actions) || c.available_actions.some(a => a !== 'dismiss_click' && a !== 'press_escape') || c.available_actions.length > 2 || new Set(c.available_actions).size !== c.available_actions.length || c.purpose === 'verify' && c.available_actions.length) return '恢复仅执行 dismiss_click（旧 press_escape 声明仅兼容读取）；后态验证不能建议动作'
   if (Buffer.byteLength(JSON.stringify(c)) > 64 * 1024) return '视觉上下文不能超过 64 KiB'
   return null
 }
@@ -63,7 +61,6 @@ function actionOf(record: RecordData, image?: Buffer): Action | undefined {
   if (!object(body) || body.api_version !== 2 || body.request_id !== record.request_id || body.state !== 'completed' || body.action_error || body.diagnosis_error || !object(body.diagnosis)) return
   const a = body.diagnosis.proposed_action
   if (!object(a) || typeof a.target_label !== 'string' || !a.target_label.trim() || record.context.purpose !== 'diagnose' || !Array.isArray(record.context.available_actions)) return
-  if (a.kind === 'press_escape') return record.context.available_actions.includes('press_escape') ? a as unknown as EscapeAction : undefined
   const space = record.observation_mode === 'window' ? 'window_image_px' : 'page_image_px'
   if (a.kind !== 'dismiss' || a.space !== space || !object(a.point) || !object(a.target_box) || !record.context.available_actions.includes('dismiss_click')) return
   const p = a.point, b = a.target_box, m = record.image ?? (image ? pngMetadata(image) : undefined)
@@ -215,7 +212,10 @@ export class VisualRecovery {
           const ref = join(this.root, `${record.recovery_ref}.ref`)
           try { await writeFile(ref, id, { flag: 'wx', mode: 0o600 }) } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e }
           result.recovery_ref = record.recovery_ref
-        } else if (object(response.body) && response.body.state === 'completed') await this.removeImages(directory)
+        } else if (object(response.body) && response.body.state === 'completed') {
+          if (object(body.diagnosis) && object(body.diagnosis.proposed_action) && body.diagnosis.proposed_action.kind === 'press_escape') result.recovery_action_error = 'UNSUPPORTED_ACTION'
+          await this.removeImages(directory)
+        }
       }
       return result
     })
@@ -234,7 +234,7 @@ export class VisualRecovery {
       let original: Buffer
       try { original = await readFile(join(directory, 'page.png')) } catch { throw stale('原观察图片已清理，请重新诊断') }
       const action = actionOf(record, original)
-      if (!action) throw new CodedOperationError('UI_CHANGED', '保存的诊断没有可执行的关闭或 Escape 建议', { recovery_action_error: 'NO_VALID_ACTION', input_status: 'not_started' })
+      if (!action) throw new CodedOperationError('UI_CHANGED', '保存的诊断没有可执行的鼠标关闭建议', { recovery_action_error: 'NO_VALID_ACTION', input_status: 'not_started' })
       const url = await session.getUrl()
       if (url !== record.url) throw stale('页面已切换，未执行输入')
       const targetId = await session.getTargetId?.()
@@ -252,7 +252,7 @@ export class VisualRecovery {
           const before = record.window_observation, after = freshWindow
           if (before.cdp_port !== after.cdp_port || !sameWindow(before, after)) throw stale('窗口身份或几何已改变，未执行输入')
           // clickWindow repeats its local-pixel/ownership guard immediately before DOWN.
-          if (action.kind === 'dismiss') inputPoint = { x: Math.floor(action.point.x), y: Math.floor(action.point.y) }
+          inputPoint = { x: Math.floor(action.point.x), y: Math.floor(action.point.y) }
         } else {
           metrics = await metricsOf(session)
           if (!sameMetrics(metrics, record.page_metrics)) throw stale('标签页或 CSS 视口已改变，未执行输入')
@@ -275,10 +275,7 @@ export class VisualRecovery {
       try { await writeFile(join(directory, 'consumed'), '', { flag: 'wx', mode: 0o600 }) }
       catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new CodedOperationError('UI_CHANGED', '视觉恢复引用已消费，不重复输入', { recovery_action_error: 'ALREADY_CONSUMED', input_status: 'not_started' }); throw error }
       try {
-        if (mode === 'window') {
-          if (action.kind === 'press_escape') await (this.deps.escapeWindow ?? escapeWindow)(join(directory, 'page.png.json'))
-          else await (this.deps.clickWindow ?? clickWindow)(join(directory, 'page.png.json'), inputPoint!.x, inputPoint!.y)
-        } else if (action.kind === 'press_escape') await session.pressEscape()
+        if (mode === 'window') await (this.deps.clickWindow ?? clickWindow)(join(directory, 'page.png.json'), inputPoint!.x, inputPoint!.y)
         else await session.clickBrowse(inputPoint!)
       } catch (error) {
         const message = error instanceof Error ? error.message : ''
@@ -286,7 +283,7 @@ export class VisualRecovery {
         throw new CodedOperationError('EXECUTION_UNKNOWN', '关闭输入结果未知；引用已消费，请重新观察，勿重放', { input_status: 'unknown', recovery_action_error: 'INPUT_UNKNOWN', recovery_ref: ref, request_id: id })
       } finally { await this.removeImages(directory) }
       try { await sleep(this.deps.settleMs ?? 800, undefined, { signal }) } catch { throw new CodedOperationError('CANCELLED', '关闭输入已投递，等待渲染期间取消；请重新观察', { input_status: 'attempted', recovery_ref: ref, request_id: id }) }
-      return { recovery_ref: ref, request_id: id, input_status: 'attempted', action_kind: action.kind, space: mode === 'window' ? 'window_image_px' : 'page_image_px', input_space: mode === 'window' ? 'window_image_px' : action.kind === 'dismiss' ? 'cdp_css_px' : 'cdp_key', ...(inputPoint ? { input_point: inputPoint } : {}), target_label: action.target_label }
+      return { recovery_ref: ref, request_id: id, input_status: 'attempted', action_kind: action.kind, space: mode === 'window' ? 'window_image_px' : 'page_image_px', input_space: mode === 'window' ? 'window_image_px' : 'cdp_css_px', ...(inputPoint ? { input_point: inputPoint } : {}), target_label: action.target_label }
     })
   }
 }

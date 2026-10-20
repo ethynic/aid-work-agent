@@ -222,10 +222,10 @@ const TOOL_DEFINITIONS: BossToolDef[] = [
       '（广告/功能引导弹窗）并定位关闭控件。纯只读单次快照，不点击、不输入、不滚屏，无页面前置。' +
       '弹层盖顶导致其它工具失败（UI_CHANGED/BUSY）时，先调本工具导出候选再决定关闭动作。' +
       '传 request_id 与 visual_context 时通过后台 API 诊断网页截图并按后台费率计费；返回页面判断、独立动作错误及单次 recovery_ref。' +
-      '视觉模式复用同一恢复原语，是否可重做原业务由服务端策略决定；同请求回执未知时用原 request_id 取回。',
+      '视觉模式复用同一恢复原语，是否可重做原业务由 CLI 本地策略决定；同请求回执未知时用原 request_id 取回。',
     zodShape: {
       request_id: z.string().uuid().optional().describe('视觉请求 UUID；取回时必须复用同一值'),
-      visual_context: z.record(z.string(), z.unknown()).optional().describe('视觉 API v2 的操作事实与可用关闭/Escape能力；后态验证不可建议动作'),
+      visual_context: z.record(z.string(), z.unknown()).optional().describe('视觉 API v2 的操作事实与可用鼠标关闭能力；后态验证不可建议动作'),
       observation_mode: z.enum(['page', 'window']).optional().describe('默认网页截图；window 激活绑定 BOSS 标签后观察其 Chrome 窗口，同请求不能换观察空间'),
       retrieve_only: z.boolean().optional().describe('只取回同一请求回执，不重新截图或调用模型'),
     },
@@ -239,7 +239,7 @@ const TOOL_DEFINITIONS: BossToolDef[] = [
       '点击后校验弹层已消失。⚠️ 仅接受关闭语义白名单文案（关闭/知道了/我知道了/以后再说/下次再说/' +
       '暂不/取消/跳过/不再提醒/残忍拒绝/稍后再说/× 等），非白名单文本直接拒绝——' +
       '绝不点击「领取/立即打开/开通」类按钮，不产生任何业务副作用。' +
-      '也可仅传 inspect 返回的 recovery_ref：按后台已校验的关闭点击或 Escape 建议核验绑定观察后消费一次；只返回输入已投递，必须再做视觉后态验证。',
+      '也可仅传 inspect 返回的 recovery_ref：按后台已校验的关闭点击建议核验绑定观察后消费一次；只返回输入已投递，必须再做视觉后态验证。',
     zodShape: {
       text: z.string().min(1).max(20).optional().describe('关闭控件的精确文本（与 recovery_ref 互斥）'),
       recovery_ref: z.string().uuid().optional().describe('inspect 返回的本机单次视觉关闭引用；不能传任意坐标'),
@@ -374,7 +374,7 @@ const TOOL_DEFINITIONS: BossToolDef[] = [
     title: '关闭简历详情',
     description:
       '关闭当前打开的简历详情弹层（默认评分入库后关闭并等待人工审核，无业务副作用；详情未打开时幂等成功）。' +
-      'Escape 借用键盘事件，期间勿动鼠标键盘。',
+      '优先点击详情自身关闭按钮，缺少唯一可见控件时沿用原业务Escape，期间勿动鼠标键盘。',
     zodShape: {},
     annotations: { title: '关闭简历详情', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },

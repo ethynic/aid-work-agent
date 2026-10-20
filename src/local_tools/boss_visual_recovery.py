@@ -222,7 +222,7 @@ async def recover_operation(proxy, original, dispatch):
     for index in range(max_steps):
         prefix = f'step{index}.' if modern else ''
         diagnose_context = {**context, 'purpose': 'diagnose',
-            'available_actions': ['dismiss_click', 'press_escape'] if modern else ['dismiss_click']}
+            'available_actions': ['dismiss_click']}
         diagnosis, data, visual, inspection = await observe(f'{prefix}diagnose', diagnose_context, mode)
         # Business unknown and current page readiness are independent facts.
         if modern and policy == 'observe_only' and diagnosis is not None and diagnosis.get('obstruction') == 'absent' and (mode == 'window' or context['execution']['stage'] != 'input'):
@@ -243,7 +243,8 @@ async def recover_operation(proxy, original, dispatch):
         if modern and diagnosis.get('obstruction') == 'absent' and diagnosis.get('goal_state') == 'satisfied':
             return await resume()
         action = diagnosis.get('proposed_action')
-        if not data.get('recovery_ref') or not action or diagnosis.get('obstruction') != 'present':
+        if (not data.get('recovery_ref') or not isinstance(action, dict)
+                or action.get('kind') != 'dismiss' or diagnosis.get('obstruction') != 'present'):
             return finish(original, 'no_supported_action')
         dismissed = await dispatch('boss_overlay_dismiss', f'{prefix}dismiss', {'recovery_ref': data['recovery_ref']})
         reason = (dismissed.get('data') or {}).get('recovery_action_error')

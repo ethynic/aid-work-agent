@@ -135,3 +135,59 @@ test('mismatched original tab binding does not inspect any page or pay for visio
   const h = harness([]), r = await h.wrapped.execute({}, { ...ctx(), browserTargetRef: '22222222-2222-4222-8222-222222222222' })
   assert.equal(meta(r).state, 'not_eligible'); assert.equal(h.seen.length, 0)
 })
+
+
+const contactTools = ['boss_accept_resume', 'boss_send_current', 'boss_reject_current']
+const lockedContact = 'a'.repeat(64), otherContact = 'b'.repeat(64)
+function contactHarness(name: string) {
+  const h = harness([visual('absent')], name)
+  const f = h.initial.data.operation_recovery as Dict
+  f.operation_class = 'external_effect'; (f.operation as Dict).result_kind = 'business_result'
+  f.execution = { stage: 'prepared', input_status: 'not_started', attempts_used: 1, ordinary_retries_used: 0 }
+  f.business_effect = { status: 'not_started', completed_count: 0 }
+  return { ...h, facts: f }
+}
+
+for (const [label, recorded, expected, canResume] of [
+  ['already locked context with absent preparation receipt', undefined, lockedContact, true],
+  ['canonical facts without prior context binding', lockedContact, undefined, true],
+  ['matching context and facts', lockedContact, lockedContact, true],
+  ['no trusted contact binding', undefined, undefined, false],
+  ['invalid facts cannot fall back to valid context', 'bad', lockedContact, false],
+  ['invalid context alone', undefined, 'bad', false],
+  ['conflicting valid bindings', lockedContact, otherContact, false],
+  ['explicit null facts are invalid rather than absent', null, lockedContact, false],
+  ['valid facts cannot override invalid caller binding', lockedContact, 'bad', false],
+] as Array<[string, unknown, string | undefined, boolean]>) {
+  test(`contact recovery: ${label}`, async () => {
+    for (const name of contactTools) {
+      const h = contactHarness(name)
+      if (recorded !== undefined) h.facts.recovery_contact_ref = recorded
+      const context = { ...ctx(), ...(expected !== undefined ? { expectedContactRef: expected } : {}) }
+      const result = await h.wrapped.execute({ limit: 1 }, context)
+      assert.equal(h.calls.length, canResume ? 2 : 1, name)
+      assert.equal(meta(result).resumed === true, canResume, name)
+      if (canResume) {
+        assert.equal(h.calls[1]!.ctx.expectedContactRef, recorded ?? expected, name)
+        assert.equal(h.calls[1]!.ctx.browserTargetRef, target, name)
+        assert.deepEqual(h.calls[1]!.args, { limit: 1 })
+      }
+      assert.equal(context.expectedContactRef, expected)
+    }
+  })
+}
+
+for (const state of ['unknown', 'confirmed', 'execution_unknown'] as const) {
+  test(`contact recovery: ${state} never becomes permission to replay even with an original caller lock`, async () => {
+    for (const name of contactTools) {
+      const h = contactHarness(name)
+      h.facts.business_effect = { status: state === 'execution_unknown' ? 'not_started' : state, completed_count: state === 'confirmed' ? 1 : 0 }
+      if (state === 'execution_unknown') h.initial.code = 'EXECUTION_UNKNOWN'
+      if (state === 'confirmed') h.initial.effect = 'applied'
+      const result = await h.wrapped.execute({}, { ...ctx(), expectedContactRef: lockedContact })
+      assert.equal(h.calls.length, 1, name)
+      assert.equal(meta(result).resumed, undefined)
+      assert.equal(meta(result).state, state === 'confirmed' ? 'page_restored_business_preserved' : 'page_restored_business_unconfirmed')
+    }
+  })
+}

@@ -2,6 +2,20 @@
 
 ## 开发进度
 
+最新交付授权（2026-10-20）：用户要求提交代码并打包Runtime供同事安装测试，目标agent2；按项目规则提交后推送当前upstream，不部署服务器。交付Runtime UI0.0.13+BOSS0.3.11验收包，保留原验收产品身份/历史信任根，不将此前10/19不提交说明当作本轮限制；本轮仍不执行新的BOSS外发。
+
+本轮收尾（2026-10-19）：用户明确本轮不发消息、先不标记不合适，send-to/send-current/reject-current的新增真实故障验收按其选择延期，不继续请求本轮外发授权。霍新附件已接收1/预览1/关闭，权限已消费；保持现状，不新增BOSS操作、视觉调用、提交、推送或部署。
+
+最新接收授权（2026-10-19）：用户本轮不发消息；仅允许接收霍子腾当前这一条新附件简历并预览。陈的新消息两条均不执行，其他接收/不合适未获新授权。霍仅一次、原contact ref绑定、独立exclusive marker；只经boss cli和后台API×20，不提交推送部署。见21.11。
+
+最新补发授权（2026-10-19）：用户人工确认陈建羽上轮未发出，明确允许同一人补发一次。只在已恢复的干净页面经boss_greet_selected继续，原unknown回执/一次marker保留，新授权单独exclusive marker；不重新人为遮挡，不把人工确认续做说成原调用自动恢复成功。见21.10。
+
+最新续验授权（2026-10-19）：继续剩余命令真机故障恢复；仅boss cli与后台API×20，不提交/推送/部署。用户另已明确允许PHP职位王佳鹏27岁/greet、陈建羽24岁/greet-selected、霍子腾27岁/greet-detail各一次真实平台招呼；旧授权不复用，结果未知不重投。见第21节。
+
+本轮续验授权（2026-10-18）：用户已手工完成安全验证，并允许接受李常东一条新简历一次；该接收已执行并确认，授权已消费。原限制：仅公共boss cli、后台视觉API×20、不提交/推送/部署。最新结果见第20节。
+
+最新验收授权（2026-10-18）：补CLI本地闭环窗口兜底及其他命令故障恢复；用户撤销恢复Escape，仅鼠标关闭；所有BOSS操作仅公共boss cli、视觉仅后台API×20，真实外发另行具体确认。本轮不提交、不推送、不部署；下方Git授权为已完成的历史记录。
+
 本轮Git授权（2026-10-18）：用户已澄清“提交并推送，然后列清单；不部署”。此授权仅覆盖本任务代码、测试及文档，优先于下方历史“不提交”记录。
 
 最新纠正（2026-10-18）：用户要求CLI本地恢复闭环；此前服务器编排不符合调用边界。按设计U迁移，普通CLI与MCP自动恢复均在本地，服务器仅视觉API/20倍计费；新回执阻止服务器二次恢复。不提交或部署。
@@ -12,6 +26,13 @@
 
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
+| 同事测试包构建 | 同步master、修发行资产/配置透传、增版签名及静态验包 | ✅ 完成（2026-10-20） | 第22节；独立TEST/CR通过，随本次提交交付；agent2未部署、端到端待同事验收 |
+| 霍附件故障真机验收 | 新授权一条接收/预览/关闭，原身份不变 | ✅ 完成（2026-10-19） | 21.11 ctx绑定复用、独立145及CR、原场景仅霍接收1/预览1/关闭通过；消息未发 |
+| 关闭详情鼠标补齐 | 自属唯一关闭×与原业务Escape兼容 | ✅ 完成（2026-10-19） | 新18+关联87、build/typecheck、独立CR及21.6完整故障真机通过 |
+| 模型响应附加字段容错 | 保留合法诊断/动作，忽略未知顶层备注 | ✅ 完成（2026-10-19） | 独立133及CR通过，21.6新调用恢复成功；旧回执不改写 |
+| 详情关闭能力复用 | open/greet清理和收尾共用自属×及原Escape兜底 | ✅ 完成（2026-10-19） | CLI全842、API133、build/typecheck、独立CR及21.7霍真实故障招呼一次通过 |
+| 读取遮挡误判修复 | 采集区域被客服覆盖仍误报完整简历的最小修正 | ✅ 完成（2026-10-19） | 25独立+101关联、build/typecheck、独立CR及21.3原场景真机通过；未提交部署 |
+| 本地窗口及其余命令故障验收 | 窗口鼠标兜底、移除恢复Escape、其他命令故障矩阵 | 🔧 进行中 | 第19节；不复用旧服务器编排样本冒充本地闭环，不重投未知外发 |
 | CLI本地闭环纠正 | 本地恢复装配、后台停止二次恢复、独立测试与真机 | ✅ 完成（2026-10-18） | 789全CLI/206后台跨层、独立TEST/CR及两分流真机通过；见17 |
 | Phase 0 | 现状核对、统一设计、开发拆分 | ✅ 完成（2026-10-16） | master 5138bbde；设计确定CLI→我方后台API→GLM、成本×50；后续实验成果见下 |
 | 实验切片 | CLI网页截图/单次视觉API/×50账务与真实GLM | ✅ 完成（2026-10-16） | 后端114/CLI51通过、独立CR通过；6次实调含1次超时，v2样本定位命中；未做坐标点击/整套恢复 |
@@ -502,3 +523,300 @@ Runner proof/平台新增测试路径在实现后明确加入命令；当前未�
 用户明确授权本任务提交并推送master，不部署。git fetch后，原HEAD 5138bbde快进同步origin/master的10个提交至7f153f02；只暂存docs/ideas.md单文件以合并索引，成功恢复并移除该临时stash，其他原有改动保留。无关Runtime锁文件及发行包产物不纳入本任务。
 
 同步后主控后台API/用量/恢复/兼容/跨层及真实独立PostgreSQL账务测试347/347、0跳过；Runtime构建与providers/凭据隔离9/9、0跳过；CLI typecheck通过，未改变的CLI业务逻辑复用789/789全量证据。新增测试文件末尾空白已清理，暂存diff --check通过。日志precommit-backend-final.log、precommit-runtime-build.log、precommit-runtime-tests.log。仅既有Pydantic/npm配置警告，无失败。提交不是部署，现场实验与待验边界不因此改变。
+
+## 19. CLI本地窗口及其他命令故障验收（2026-10-18，进行中）
+
+基线c8e0c3b1，用户要求先窗口兜底及Escape，再其他命令故障恢复。仅公共boss cli/MCP操作BOSS和Chrome，视觉仅后台API×20；单次业务调用的恢复由CLI自身完成，私有驱动只建隔离API/账务租户、发起一次原调用并取回原账单。新增真实外发须先确认具体目标及动作；何庆宇和三条招呼的旧授权已消费，不重投。此次不提交、不推送、不部署。
+
+| 场景 | 验收标准 | 状态 |
+|---|---|---|
+| 窗口兜底 | 普通原命令失败→网页无法解释→绑定窗口看到打印→取消→fresh核验→原命令领域成功 | ✅ 完成（2026-10-18），filter打印样本 |
+| Escape | 打印反例未通过，用户明确撤销故障恢复按键；普通业务Escape保留 | ⛔ 已取消，恢复仅鼠标关闭 |
+| 其他无外发命令 | 稳定成功信号、普通重试及本地恢复事实分列；未复现阻挡则不算故障链通过 | 📋 窗口完成后逐项进行 |
+| 真实外发及接收/标记 | 先指定目标和动作确认，unknown不重发；缺新样本明确保留缺口 | 📋 待具体授权或样本 |
+
+若实验发现实现缺陷，先保存CLI前后快照/结构化回执定位，再最小修复并按项目流程做独立TEST/CR；不为凑真机样本重写浏览器控制或直接从CLI调用厂商模型。
+
+### 19.1 本地窗口兜底默认链
+
+用户在原BOSS调试Chrome手工打开打印，CLI窗口截图确认。实验只发起一次boss_filter(experience=5-10年,educations=[本科])，原输入返回但筛选面板未打开→UI_CHANGED、input/attempted/1次/0普通重试。网页模型判断absent/not_satisfied，CLI未执行其“筛选”建议，转绑定窗口诊断；GLM识别打印预览，建议窗口取消按钮(1073,700)，CLI执行后窗口后态absent/satisfied，原筛选重做成功，按钮计数2、面板收起。最终run c3855136-3d3c-4c6e-85c7-025ef5fcee51，owner=cli/state=recovered。
+
+3次真实GLM各已结算×20，共0.22实验积分；原ID取回不重复扣费。新增账务在一次性本机PostgreSQL租户，结束已销毁；私有证据run-local-native-print-01。累计81次实调、77次已知usage、9.13已知积分，历史4次未知保持。没有真实外发或新建BOSS tab。
+
+Escape验收使用仅本机实验API适配器将diagnose.available_actions收窄为press_escape；仍走正式client router、模型提示词及20倍计费，CLI保留正式默认能力与本地编排，不修改模型响应或替CLI投递按键。该样本验证Escape执行/后态分支，不声称默认模型一定优先选择Escape。
+
+### 19.2 Escape反例与排查（未通过）
+
+原打印再次打开后，只发起一次boss_clear_filter，API实验仅允许Escape建议。CLI自动page→window；两个fresh窗口诊断分别建议Escape，两次原生按键都返回attempted，但第一次后态仍明确打印present/not_satisfied，未重复消费旧ref。第二次后态API返回HTTP502、无确定诊断，CLI以postcheck_inconclusive保留原UI_CHANGED，未重做清筛选。run f80ca28f-eaf7-4517-a1f5-b8522b123b3d，原筛选数字仍2。
+
+对照：恢复链结束后，仅用公共CLI window截图→window-escape→window截图再次投递单次Escape，截图仍显示打印预览。故不能只凭sent=true认定关闭，亦不能先认定是本地编排问题；已请用户直接手按一次Esc辨别Chrome行为与CLI输入。对照不计作本地闭环通过。
+
+本组真实5次请求，4次已知usage并逐笔×20结算0.29实验积分；第5次postcheck请求3b33ecd5-2ffe-41f0-8fb5-c812c43cac8d为model_unknown（账面0不等于厂商无消耗），不以新ID重投。累计86次实调、81次已知usage、9.42已知积分、5次历史/本次未知消耗。原ID取回无重复扣费；一次性实验DB已销毁、ledger-snapshot私有保留。该失败样本不得删账或标通过。
+
+### 19.3 用户确认：只删除故障恢复Escape
+
+用户明确普通业务的Escape均已由其试过可用，继续保留。删除故障恢复默认/实验声明与输入、window-escape原语；API只生成鼠标动作，旧动作/缓存引用零输入拒绝但保留正确判断与计费。旧capability输入只为digest和历史取回保留，模型上下文不暴露为可执行能力。设计V为最新范围，不再以此前Escape扩展为待验门。独立TEST/CR及鼠标默认链回归进行中，随后继续其他无外发命令故障验收。
+
+独立验证：CLI全量792/792、0跳过；最新帮助/工具说明后build、typecheck及契约66/66通过。后台相关437通过，真实独立PostgreSQL账务补跑5/5，最终无剩余跳过。新增独立CLI6/Python10包含在上述计数中，不累加。独立CR无遗留P0/P1/P2，先前遗留恢复Escape帮助说明已修复；普通业务pressEscape未动。日志click-only-independent-*私有保留。
+
+### 19.4 移除恢复Escape后的默认鼠标窗口链（通过）
+
+保留原打印现场，单次boss_clear_filter触发原UI_CHANGED（input/attempted/1次/0普通重试），CLI网页诊断未见阻挡并确认筛选2未清，自动转绑定窗口。v8真实GLM建议取消(1074,700)，CLI鼠标输入后fresh窗口核验absent/satisfied，再raw清筛选，filter_count=0且面板关闭；公共CLI新截图也确认筛选按钮无数字。最终run 7944cf5c-86a1-4302-b09f-746c2edb949d，owner=cli/state=recovered，恢复后1次/0普通重试，全程无恢复键盘。
+
+3次真实GLM、3已知usage，成本0.0102148元、×20逐笔0.22实验积分；原ID取回仍仅3笔。累计89次实调、84次已知usage、9.64已知积分、5未知样本不变。一次性DB/API已结束，私有run-local-click-only-print-01。准备下组时，旧截图page-click因STALE_OBSERVATION零输入拒绝；重新公共CLI截图后点击客服开关成功，未绕过图像守卫。
+
+### 19.5 其他命令增量故障验收
+
+| 命令 | 当前本地真机证据 | 结论 |
+|---|---|---|
+| boss_list_jobs | 客服持续遮罩；两次打开均未达成，original postcheck/attempted/2次/1普通重试；CLI诊断点击(1060,177)、fresh无障碍后读取2职位并核验下拉收起；run 1e7d6078-3246-48f2-8b01-dc17b034aec9 | recovered，原和恢复后执行事实分列 |
+| boss_goto chat | 客服持续遮罩；既有普通重试用url-jump，URL核验chat；2次/1普通重试，run a84ea6ec-828e-400a-b04c-899747dc2786 | not_needed，0模型；不能算视觉恢复样本 |
+
+list-jobs新增2次真实GLM/2已知usage，成本0.0063376元、×20共0.14实验积分；累计91次实调、86已知usage、9.78已知积分、5未知不变。原ID取回无重复扣费，两组隔离API/DB均已结束，私有run-local-click-only-jobs-01及goto-01。沟通列表发现李常东新附件请求，接收另问具体授权，未擅自接受。
+
+### 19.6 open-chat故障样本与现场安全验证（原目标未通过）
+
+原沟通页仅公共CLI点击客服开关，再只发起一次boss_open_chat(contact=冯修业)。原UI_CHANGED（input/attempted/2次/1普通重试），CLI真实GLM识别客服遮罩，鼠标点(1060,177)后fresh核验absent/satisfied；原raw继续后搜索输入未落地/输入框消失，再次UI_CHANGED，最终original_goal_unconfirmed/page_restored=true，未进入第二层恢复。run 5307cacc-5715-4509-9089-1a60dd3dea20；不能将客服关闭算成打开会话成功。随后公共CLI截图显示BOSS安全验证页，只能确认当时现场，不能据此断言触发原因。已停止全部页面操作并请用户手工完成验证，未点击或尝试绕过验证。
+
+本组2真实GLM/2已知usage，成本0.0064388元、×20逐笔0.14实验积分；累计93次实调、88已知usage、9.92已知积分、5未知消耗不变。原ID取回不重复扣费，一次性API/DB已销毁，私有run-local-click-only-open-chat-01保留失败回执和账单。
+
+### 19.7 本轮交接与剩余边界
+
+| 范围 | 状态/下一步 |
+|---|---|
+| 故障恢复Escape移除 | 开发、独立TEST/CR完成；普通业务Escape保留，重新加入恢复按键须用户实际认证 |
+| CLI本地窗口鼠标默认链 | filter旧默认、clear-filter新版默认均通过，不再使用Escape |
+| 其他命令本地视觉故障链 | filter-options/open-detail既有两分流通过；list-jobs本轮通过；open-chat客服已关闭但原目标未完成，安全验证解除后再验 |
+| goto/lookup/read-chat | goto本轮一次普通重试成功，lookup打印期间只读成功；能穿透遮罩读取的结果不冒充视觉故障成功；read-chat故障样本待验 |
+| select-job/resume-detail/batch/next/close-detail/interview-demo | 既有正常样本/独立测试与本轮本地故障真机分开；不同可用职位切换、新页面故障样本待验 |
+| greet/selected/detail/send-to/current/accept-resume/reject-current | 本轮未新增外发；普通链历史授权样本保留；本地恢复新版逐入口真实写链需新目标具体授权，未知不重投 |
+| 新附件接收整链 | 何庆宇已接收样本不重复；本轮发现李常东新请求，已问接受一次授权，收到前不操作 |
+| 更多Chrome异常退出/气泡/JS、多窗口/DPI、线上Runtime队列 | 缺真实样本/部署授权，未验；不以打印样本代表全部 |
+
+所有真机观察/输入仅公共boss cli；无新tab，无新增消息/招呼/接收/标记。本次代码及文档未提交、推送或部署；无关Runtime锁文件/发行产物保持。当前安全验证需用户手工完成，后续页面验收等待该外部状态，不把未完成项标完成。
+
+## 20. 人工验证后续验与李常东新附件（2026-10-18）
+
+用户明确已手工处理安全验证，并授权只接收李常东一条新简历一次。公共CLI新图确认原tab回到沟通页且该请求仍在；所有实验继续公共CLI/MCP，后台API实际usage×20，未提交或部署。无新产品源码变更，复用上轮792/442及独立CR证据。
+
+### 20.1 open-chat本地故障链通过
+
+导航往返仍保留李常东当前会话，客服弹窗开启后open-chat(李常东)走already零点击/not_needed，不能记为故障恢复通过（私有open-chat-02，0GLM）。保持同弹窗，改用王晓阳做无外发的会话切换：原搜索入口受阻UI_CHANGED，input/attempted/2次/1普通重试；CLI诊断客服、鼠标关闭、fresh后态absent/satisfied后raw原调用1次/0普通重试，fresh会话头部王晓阳。run f617c0bb-88e9-4700-bde0-df82e3aa5ba7，owner=cli/recovered。不能把当前成功改写前轮冯修业失败样本。
+
+本组2次真实GLM/2已知usage，成本0.0063156元、逐笔×20共0.14实验积分；累计95次实调、90已知usage、10.06已知积分、5未知不变。同ID取回未重复扣费，一次性API/DB已销毁，私有run-local-click-only-open-chat-03。独立CR已核对两张账单factor20及完整恢复回执。
+
+### 20.2 李常东接收→预览→关闭整链通过
+
+仅一次公共boss_accept_resume(limit=1,preview=true)，沿用原tab及从公共CLI保存DOM经既有chatContactRef离线解析的李常东身份引用；执行器在最终同意前fresh核对。实验脚本对本用户授权做精确目标/hash/四参数例外，并在调用前exclusive一次marker，不能因未知重跑。该约束仅私有实验驱动，不新增产品授权流程。
+
+run d5378699-82b0-45df-ba18-254ddb2210bc，success/applied，accepted=1、previewed=1；confirmed_items仅李常东，business_effect=confirmed/completed_count=1，普通重试0。执行器确认同一会话处理条消失及新附件，预览画布已加载并关闭；新公共CLI截图显示新PDF卡片和预览入口、无处理条、仍为李常东。普通业务已认证的Escape用于预览收尾，恢复Escape仍不存在。该样本是原生整链通过，不是“接收命令自身触发视觉恢复”样本；恢复是在此前独立open-chat调用中完成，不能混写为单次接收恢复闭环。
+
+视觉state=not_needed、模型/账单均0；独立CR确认一次调用和授权消费，独立TEST继续离线核对前后DOM，不重做业务。何庆宇旧样本不再冒充新版全链；本次李常东新请求已覆盖该正常整链缺口。接收授权已消费，不再次接受、发送消息或标记不合适。现场私有accept-lichangdong-before/selected/after及run-local-accept-lichangdong-01，隔离API/DB已结束。
+
+独立TEST离线增量复核：生产headerContactOf/chatContactRef确认李常东前后身份一致；生产定位器processing_bar→null、previewCount 0→1、after attachmentPreviewState=closed；接收回执仅该人，marker/唯一业务调用/0账务一致。预览中间ready由严格执行器成功回执证明，未另留中间DOM截图，不能声称有完整视频或逐帧证据。
+
+### 20.3 read-chat及interview-demo
+
+同一李常东会话开客服遮罩后，boss_read_chat(contact=李常东)仍可从DOM正确读取同身份9条消息，not_needed、0输入、0模型；run e690ff20-168a-49b7-a256-a2b445ae37b2，不是视觉恢复样本。保持该遮罩，单次boss_interview_demo(remark=功能验收，仅填写并取消)，原两次后验未见表单（postcheck/attempted/2次/1普通重试）→CLI诊断点击关闭客服→fresh后态无障碍→raw原调用核验备注全文/字数及日期2026-10-19，再取消表单消失，sent=false。run 73150452-2df7-49a9-b2e5-6e0a79e05888，owner=cli/recovered；没有实际面试邀请。
+
+interview-demo本组2真实GLM/2已知usage，成本0.0064176元、×20共0.14实验积分；累计97次实调、92已知usage、10.20已知积分、5未知不变。同ID取回不重计费，一次性API/DB结束，私有read-chat-01/interview-demo-01。
+
+### 20.4 select-job同职位路径恢复通过
+
+原推荐页PHP职位，开客服持续遮罩后单次boss_select_job(job_name=PHP 开发工程师)，打开下拉直接UI_CHANGED（input/attempted/1次/0普通重试），CLI诊断/鼠标关闭/fresh后态无障碍后raw选择，职位框精确PHP 开发工程师且下拉收起。run f587bd68-5501-4cec-85d1-282f8c9e4204，recovered，恢复后1次/0普通重试。此样本覆盖select-job实际打开/选择/收起及故障恢复，但选择的是当前已开放职位；另一项为待开放，未强行切换，不能声称不同已开放职位互切通过。
+
+2真实GLM/2已知usage，成本0.006372元，×20共0.14实验积分；累计99次实调、94已知usage、10.34已知积分、5未知不变。同ID取回不重扣，隔离API/DB结束。随后准备resume-batch遮罩时page-click因STALE_OBSERVATION零输入拒绝，原脚本仍发起了安全的只读批次，故该批必须按实际普通链记录，不能按预期布景冒充故障链。
+
+### 20.5 resume-batch普通读取及续读布景
+
+客服打开准备被STALE_OBSERVATION零输入拒绝后，安全的只读boss_resume_batch(limit1)正常完成：run 49415e78-6e8a-4c00-aa5f-64ff4ac831bb，1份/0失败/1尝试，7段、743×5002、bottom_reached=true、suspect_seams=[]，continuation可用，not_needed/0模型。本样本仅验证CLI采集拼接图与续读契约，未走云端简历识别入库，也未触发故障恢复。
+
+准备next遮罩再次被旧图变化拒绝后，立即重截fresh图点击客服成功，只有准备点击明确success后才发起下一调用；不绕过原图守卫。next参数直接沿用前批continuation、limit1及原tab，排除上批1人，保持PHP职位及原筛选。
+
+### 20.6 resume-next本地故障链通过及独立复核
+
+next原两个姓名点击均返回但详情后验未达（postcheck/attempted/2次/1普通重试），CLI诊断点击客服关闭→fresh无障碍→原raw1次/0普通重试；读取另一人1份、5段743×1974、bottom_reached=true、suspect_seams=[]，失败0，processed_names与前批无交集；严格沿用前批continuation参数排除1人，下一continuation累计2。run 9d5523e6-4c5e-44dc-bfba-06301096f543，owner=cli/recovered，未丢已处理排除项、未改职位/筛选。仅CLI拼接图，不包含云端识别入库验收。
+
+本组2真实GLM/2已知usage，成本0.0063004元、×20共0.14实验积分；本轮open-chat/demo/select/next共8次已知usage、0.56实验积分，正常路径0模型。累计101次实调、96已知usage、10.48已知积分、5历史未知不变；同ID取回不重复计费，所有隔离API/DB已结束。
+
+独立TEST离线核对read-chat、demo、select、batch、next全部真实保存回执/账务，batch/next PNG有效尺寸与元信息一致；接收前后DOM亦已复核。独立CR确认李常东一次授权/精确身份/一次marker，open-chat恢复2账单×20。无产品源码变更，不重复已有CLI792/后台442测试；私有复核记录local-click-only-followup-independent-review.json。非阻断局限：next后态GLM reason把原操作误称“打招呼”，结构化判断只判关闭障碍且实际为只读续读；未据该措辞判业务成功、未发送招呼，登记待优化，不扩改代码。
+
+### 20.7 最新验收矩阵及本轮交接
+
+| 命令组 | 当前可证明范围 | 仍缺 |
+|---|---|---|
+| filter/clear-filter/filter-options/open-detail/list-jobs/open-chat/interview-demo/select-job/resume-next | 已有CLI本地故障恢复真机；直接错误和一次普通重试耗尽两分流均有样本，恢复仅鼠标 | 不把有限样本代表所有弹窗/页面变体；select-job不同已开放职位互切待样本 |
+| goto/lookup/read-chat/resume-batch | 既有普通重试/正常读取可完成，实际不需GLM；本轮batch正常采集新1份 | 独立的实际故障恢复样本未覆盖，不强制把可读状态制造成错误 |
+| resume-detail/close-detail | 既有正常/独立测试证据保留，共用Reader及关闭被批次实际使用 | 两个独立命令的新版本本地故障真机待专门样本，不能用批次使用等同入口通过 |
+| accept-resume | 李常东新请求单次接收→预览→关闭完整正常链通过、0模型；授权已消费 | 接收命令自身受阻触发视觉恢复/确认后只修收尾仍待新的请求及具体授权 |
+| greet/greet-selected/greet-detail/send-to/send-current/reject-current | 已有正常真实授权样本保留；独立测试覆盖本地unknown不重放 | 新版本各入口真实故障链须新具体目标/内容授权，旧何庆宇/三条招呼不复用 |
+| 原生Chrome窗口 | 打印取消默认鼠标链通过；恢复Escape已取消，普通业务Escape保留 | 异常退出气泡、JS阻塞、多窗口/DPI、线上Runtime队列仍未验；部署未授权 |
+
+本轮所有观察/截图/输入均公共boss cli/MCP，无新tab；真实业务仅李常东简历接受一次，无新增消息/招呼/拒绝/真实邀请。结束现场由CLI截图确认原推荐列表、无客服/详情层。设计、计划、索引和待优化文档已更新；未提交、推送或部署，无关Runtime锁文件及发行产物保持。
+
+## 21. 剩余命令故障真机续验（2026-10-19）
+
+沿用设计V的仅鼠标恢复，普通已认证业务Escape保留。当前原推荐tab绑定不变；只读先测resume-batch实际遮罩、resume-detail/close-detail可复现样本。用户确认三人各一次真实招呼：王佳鹏27岁用greet，陈建羽24岁用greet-selected，霍子腾27岁用greet-detail。使用新公共CLI快照/引用核对原身份与年龄，私有脚本每入口精确参数和exclusive一次marker，不能以旧授权再次操作何庆宇/李常东/历史三人。
+
+独立只读CR在实验前确认分支：greet/selected最终点击若被网页遮罩吞掉，原生HWND守卫未必拒绝，通常为unknown；共用流程可关闭障碍但不得重发。detail从列表无详情起始，先原唯一卡片打开归属，若准备阶段受阻且not_started才允许恢复后真实发送；不能把unknown算作业务成功。此轮不伪造浏览器错误、截图、模型响应或成功回执。
+
+### 21.1 resume-batch实际故障链补齐
+
+公共CLI确认客服开关点击success后只调用一次boss_resume_batch(limit1)，两次原姓名点击未打开完整详情（postcheck/attempted/2次/1普通重试），CLI诊断关闭客服→fresh后态无障碍→原raw1次/0普通重试，成功读取1份7段、到底、0可疑接缝/0失败。run ef528439-202f-4bf5-89e7-5cdfb9caa28f，owner=cli/recovered。与前轮布景失败的普通batch样本分开，不改写旧证据。
+
+本组2真实GLM/2已知usage，成本0.0062724元、×20逐笔0.13实验积分；累计103次实调、98已知usage、10.61已知积分、5未知不变。同ID取回不重扣，隔离API/DB结束。
+
+### 21.2 resume-detail读取遮挡误判（失败，优先修复）
+
+只用公共CLI打开王佳鹏详情，再点击顶部客服开关，确认点击success；单次boss_resume_detail(candidate_name=王佳鹏)返回success/not_needed，3段743×2498、bottom_reached=true、0可疑接缝、0模型。run c974156a-53b6-407b-a315-3e91cb2cff76。从CLI结果原base64解码并查看原始PNG，内容是遮住简历的客服窗口被重复拼接，故这是严重成功误判，不能标作正常简历或恢复通过。未调用云端识别入库，错误结果只存本机忽略目录。
+
+修复成功标准：复用共享Reader及现有DOM/可见性/目标矩形能力，在已能证明采集区域被其他可见上层浮层挡住时抛既有可恢复失败，由原CLI本地恢复调用后台API/鼠标关闭/fresh核验后读取原目标；不能仅凭画布存在、PNG非空或滚动图不变确认读取成功/到底。应覆盖采集开始及后续采集，不能拼入遮挡图；不因详情自身、角落广告、隐藏或不相交面板误拒。不增第二恢复循环、模型直连、恢复Escape或通用桌面脚本，API/20倍账务及Runtime wire不变。旧数据字段/策略若需最小扩展，先明示兼容影响。
+
+按项目高风险dev-workflow：独立开发者只改CLI相关Reader/operation/tests；主控维护设计/计划并独占真机；独立TEST与独立CR分开。先保存真实反例及干净对照，方案收敛后开发，自测/独立验证后原现场单次公共CLI复验。当前三条greet授权均尚未消费，先不让错误资料进入后续真实外发。原失败样本与0模型账务保留，修后不改写历史回执。私有证据oct19-resume-detail-result.png、oct19-detail-blocked-after.dom.json/png、oct19-read-detail-open.dom.json/png。
+
+方案收敛及本地接口登记：CLI共享Reader采图前后检查ROI实际被可见外部对话层覆盖。仅CdpGateway.snapshot追加可选includePaintOrder（默认false）、layout追加可选paintOrders；只detail/batch/next读取开启，既有样式/可见性规则复用，跨frame投影同document绘制锚点，缺字段不造证明。此为本地快照扩展，API v2/Device wire/Runtime core、20倍计费不变；唯一CLI开发角色维护相关生产端/消费端，主控维护文档。修后需真机证生产快照确有paintOrders并实际触发原CLI恢复，不能只靠合成fixture通过。
+
+独立验证第一轮已通过Reader/Gateway/本地恢复等相关122项（计数有重叠/分命令，非新增全量数字）及build/typecheck。独立CR指出BatchReader可能吞掉共享Reader的遮挡错误，按普通单份失败继续；此P2必须修复后再真机。使用内部typed遮挡错误区分普通单份读取失败：未读成果时交原恢复后继续，已有成果时保留资料只修页面，不整批重放；旧普通单份失败继续语义不改。alertdialog标准语义漏判已纳入独立回归。独立TEST追加完整批次接线与保留成果断言，修后重跑受影响范围并由CR复核。
+
+### 21.3 读取遮挡修复及原场景复验通过
+
+新增共享ResumeReader校验与内部ResumeObstructedError，detail/batch/next仅读取快照请求paintOrders；进入读取及每段截图前后验证外部语义modal/alertdialog、可见性、同document绘制锚点和实际ROI交集，排除详情自身、隐藏/后层/不相交及overflow祖先裁剪外元素。不存在中心点或10%面积放行阈值。受污染截图不落盘/不拼接，原临时目录finally清理。批次只对typed遮挡走既有recovery出口，旧普通单份图像错误仍继续；有前项资料则preserve_result不整批重读。
+
+最终独立25/25与最新关联101/101、0跳过，build/typecheck通过；独立CR无遗留P0/P1/P2。对首份遮挡触发恢复、已有1份保留原字节且只修页面、普通图像失败继续等用真实operation→BatchReader→本地wrapper的隔离测试验证，未将mock测试说成真机中途弹窗样本。后台API/计费无改动，不重跑同一旧全量。
+
+原现场保持详情+客服罩层，只发一次boss_resume_detail：新原执行236ms即在采图/滚动前报告UI_CHANGED，prepared/not_started/1次/0普通重试，实际证明读取快照paint层序接线生效；旧截图缺paint时不会凭空抛此错误。CLI自动后台诊断→鼠标关闭客服→fresh后态无障碍→原raw读取1次/0普通重试，结果7段743×5002、到底、0可疑接缝。解码CLI原结果PNG查看为干净完整候选人简历，旧3段客服拼接图保持失败反例。run fb386879-c000-4e90-8787-43e7b33437e1，owner=cli/recovered。
+
+本组2真实GLM/2已知usage，成本0.0062908元、×20共0.14实验积分；累计105次实调、100已知usage、10.75已知积分、5未知不变。原ID取回不重扣，隔离API/DB结束。私有run-local-oct19-resume-detail-02及oct19-resume-detail-fixed-result.png。标准DOM modal以外任意原生遮挡、弹窗恰在前后快照间瞬态出现并消失仍是未保证边界，不冒充通用像素内容识别。
+
+### 21.4 close-detail恢复后业务Escape仍无效（失败，最小补齐）
+
+在同一王佳鹏详情打开客服遮罩后，单次boss_close_detail原两轮业务Escape均正常返回但画布仍在。CLI现有鼠标恢复第1步建议(1032,177)，fresh后态仍present/not_satisfied，未当成功；重新诊断新图建议(1060,178)才消除客服，后态absent/satisfied。raw原关闭再执行两轮业务Escape仍未关，最终UI_CHANGED/original_goal_unconfirmed，run f10d10fa-6646-4e3b-9acc-cd78e81332d9。实际新CLI图/DOM显示客服已无、详情画布及右上自属×仍在，因此恢复页面与原目标未完成必须分开，不能登记全链通过。
+
+本组4真实GLM/4已知usage，成本0.0125916元、逐笔×20共0.27实验积分；累计109次实调、104已知usage、11.02已知积分、5未知不变。同ID取回未重扣，隔离API/DB结束，失败账单保留。原/恢复后执行均postcheck/attempted/2次/1普通重试；这4个业务Escape属于用户保留的普通命令动作，并非视觉恢复输入。
+
+最小方案：仅boss_close_detail普通路径，以fresh原canvas的所属文档/详情容器和既有操作栏LCA锁定唯一可见关闭×（真实close-btn位于lib-standard-resume），沿用已有offset/visibility及canvas消失后验；有可靠自属×优先鼠标，无唯一可见按钮保留原普通Escape路径。每轮最多一次关闭输入，仍只用原外层一次普通重试，不新增内部循环、策略参数、工具或API。greet/open已验证的业务Escape先不改，故障恢复仍仅鼠标。复用现有resumeCanvasOf只读定位结果，局部export不改变wire。通用页面全部close图标不能代替归属判断，歧义不猜点。
+
+开发者独占相关DetailGreet/operation/tests，主控维护文档并独占真机，独立TEST/CR分开，验证预算上限和广告/客服/推荐卡的其他×不会误选。业务成功/错误证据文案需反映实际“关闭操作”而非一概写Escape。当前三greet授权仍未消费。
+
+源码稳定后独立测试新增18/18、相关旧87/87、0跳过，build/typecheck通过；保存真实DOM由生产定位器独立算出唯一自属点1243,58。覆盖无画布零输入、直接输入报错不追加Escape/重试、最多2次输入/1普通重试、重取坐标、广告/卡片/嵌套客服关闭控件排除、缺失/歧义/隐藏/超出所属iframe保留原业务Escape。此前日志104含新增17，最终追加iframe边界后新增18；不把两次重叠结果相加。待独立CR及原现场真机复验。
+
+### 21.5 模型响应额外备注导致整份合法诊断被丢弃
+
+关闭详情切片独立CR通过，无遗留P0/P1/P2。原现场再单次boss_close_detail确为自属关闭按钮两次正常返回后canvas未消失，进入CLI本地视觉API；模型合法识别客服阻挡并建议1060,178，但额外附带missing_evidence_note空串，严格assessment解析将整份诊断拒绝，最终diagnosis_unavailable，未发任何恢复输入、未恢复原命令。run aaaf8eea-fed8-4880-a2dc-a71fa7befc84，私有run-local-oct19-close-detail-02。不能归为关闭按钮失败或成功；保留原失败和账单。
+
+本组1真实GLM/1已知usage，成本0.0032904元、×20扣0.07实验积分，累计110次实调/105已知usage/11.09已知积分/5未知。原ID取回不重扣，隔离API/DB结束。最小修复仅v2模型响应顶层assessment白名单取值，未知字段忽略且不进入输出；必填/枚举/动作/坐标/客户端能力及HTTP请求校验不放宽，提示词schema和既有回执/20倍计费不变，不加模型重试。由独立开发/TEST/CR后原现场再验；三greet授权尚未消费。
+
+最小解析修复独立TEST按项目dev_test.sh在宿主Python3.12.6运行133/133、0跳过（新增24、既有API99、click-only10）；生产parse离线重放本次原content，返回6个标准字段与1060,178合法动作。未知嵌套字段不能注入动作/进入输出，非法动作仍只丢动作，已知assessment缺失/错值照拒，HTTP请求各层extra仍422且不发模型，v1 strict保留，20倍same-ID/取回只调用模型一次。独立CR无P0/P1/P2；CLI主构建通过。旧已结算失败回执不改写、不重调；原场景新单次CLI调用另记新run。
+
+耗时期间通过公共lookup/screenshot刷新三人卡片：生产loadedCandidates核对旧/新DOM各唯一、identityDigest及完整cardInfo完全相同、年龄27/24/27；仅selected引用更新，生产resolve有效。冻结调用摘要/逐项参数及3个once marker未消费经独立CR复核，同一用户授权身份不变。
+
+### 21.6 关闭详情完整故障链复验通过
+
+保持原详情+客服现场，新单次公共boss_close_detail原自属×两次正常返回但画布仍在（postcheck/attempted/2次/1普通重试），CLI诊断/鼠标输入/fresh核验首次仍present、第二次才absent，raw原关闭再以自属×一次完成，最终recovered/satisfied，canvas消失。最终公共CLI新截图/DOM用生产locator独立确认为无详情，列表及原职位保持；未将GLM判页面可用等同业务完成。run e58ebf39-8125-4e90-971f-edce787476fd，私有run-local-oct19-close-detail-03及oct19-close-fixed-list.*。故障恢复无Escape，普通业务fallback保留。
+
+本组4真实GLM/4已知usage，成本0.0128944元、×20逐笔0.28实验积分；累计114次实调/109已知usage/11.37已知积分/5未知。同ID取回无重复扣款，隔离API/DB结束。原两个失败样本保留，不用成功新样本覆盖模型格式/业务Escape无效的历史。
+
+### 21.7 三个授权打招呼入口续验
+
+第一次greet-detail实验前置准备有误：列表无canvas时直接调用，detailNameHits先拒绝WRONG_PAGE，尚未进入重开归属分支。run cd9bed0e-668b-47a4-a3db-5b32f1010ac1，0模型/0账单/not_eligible。独立CR用保存真实DOM及生产executor离线复现：click/scroll/Escape均0、business not_started/0。因此实际招呼授权未消费，仅实验调用marker被占；旧marker按失败run-id归档留证，仍以同一批准参数一次调用，不对unknown推广重新武装。
+
+主控先通过公共boss_open_detail成功打开霍子腾，画布/右侧按钮/经历概览均满足，再用CLI打开客服遮挡后继续greet-detail；未直接构造CDP、原生输入或更改业务工具前置语义。先前“从无canvas列表会自动重开”的实验预期已纠正，不能登记为故障恢复失败或成功。
+
+正确准备后的单次greet-detail也定位到真实缺口：原准备阶段Escape关闭旧详情不成功，CLI视觉鼠标关闭客服并fresh确认页面可用，再raw原命令仍因相同私有Escape未关而失败。run 4db17969-6eee-4e5b-b595-29f5ea5d3883，original_goal_unconfirmed，business明确not_started/0（最终打招呼边界未进入），不是发送unknown；原/重做均只有一个准备输入，没有普通重试。2GLM/2已知usage、成本0.0063380元、×20共0.14，累计116/111已知usage/11.51已知积分/5未知，同ID不重扣，隔离DB/API结束。
+
+最小复用：同一个DetailGreetExecutor.tryCloseDetail承接已经验过的fresh自属唯一×优先/缺或歧义回原Escape/轮询canvas消失，public close和private open/greet清理、confirmed后的收尾共用；每调用仅一个输入、原外层重试预算不变，不另造关闭器或扩改BatchReader。保留业务not_started/confirmed/unknown边界及既有鼠标守卫，故障恢复仍无键盘。错误文案反映“关闭操作”，开发/独立TEST/CR后原现场单次复验。此not_started可继续同一人的未用真实招呼授权，但旧两失败marker都保留；不允许对unknown再武装。
+
+共用关闭源码及独立CR通过，新独立24项涵盖准备关闭错误/超时保持not_started、canvas姓名不可读时重开原唯一人、最终招呼只一次、confirmed收尾错误/超时仍confirmed/不重发；缺唯一×保留业务Escape。首次CLI全量840/842、2失败/0跳过为Reader快照新增paint参数的旧精确opts断言未同步；只按实际路径修正两旧测试，保持完整deepEqual及零输入/错误断言，定向41项通过。最终独立全CLI842/842、0跳过，build/typecheck通过；API133对应源码未变结果复用，不机械重复。原失败日志与最终日志均保留，独立CR确认未降低断言。
+
+修后保持霍详情+客服，新的单次greet-detail原准备关闭1次受阻，business仍not_started；CLI鼠标关闭客服/fresh确认后继续raw，同人重新归属核验，最终详情按钮翻转“继续沟通”、business confirmed/1、confirmed_items仅霍一人，详情收尾关闭，recovered/applied。run 9985d26a-196e-4c7b-9435-3714d4eb2120；公共CLI新截图/DOM列表霍卡为继续沟通、原canvas无。用户霍一次招呼授权现已消费，禁止再发；01/02前置失败marker归档保留，不作为unknown重放通例。
+
+本组2真实GLM/2已知usage，成本0.0064072元、×20逐笔0.14，累计118次实调/113已知usage/11.65已知积分/5未知不变。同ID取回不重扣，隔离API/DB结束，全部输入仍公共boss cli、视觉仅后台API；未提交推送部署。王与陈两个入口随后各一次另记。
+
+### 21.8 列表greet成功与selected未知不重发
+
+王佳鹏位于当前视口上方，公共CLI布置客服后单次boss_greet精确原批准名单/limit1。原3次目标定位wheel仍无法进入可操作窗口，最终业务尚未开始；CLI诊断/鼠标关闭客服/fresh确认后raw重寻同一卡片，最终按钮翻转继续沟通、business confirmed/1、confirmed_items仅王佳鹏，recovered/applied。run 9be555d2-0e4d-442b-9e82-fbfcbb60550a。2真实GLM/2已知usage、成本0.006238元、×20共0.14，累计120/115已知usage/11.79已知积分/5历史费用未知。王真实一次授权已消费。
+
+陈建羽selected保持原身份、有效候选引用（已由生产resolve在fresh CLI DOM复核），客服遮挡下单次最终点击后不能确认翻转，原EXECUTION_UNKNOWN/effect unknown、business unknown/0。CLI仍自动鼠标关闭客服并fresh确认absent，但不重发原操作，resume_execution=null、confirmed_items=[]，最终page_restored_business_unconfirmed。run 281d46de-cb9a-49ae-a037-b40bf0a507f9。2真实GLM/2已知usage、成本0.0063824元、×20共0.14，累计122次实调/117已知usage/11.93已知积分/5历史费用未知。没有新增模型费用未知，不能与本次业务结果未知混同。两组同ID取回均不重扣，隔离API/DB结束。
+
+新公共CLI截图/DOM确认王/霍各唯一卡片为继续沟通，陈仍打招呼；该按钮仍在不是明确未发证明，未重武装陈的unknown marker、未重试。已请求人核对实际结果；只有人确认未发并授权同一人补发一次后才继续，已发则不发，未确认则保持未知。该样本证明自动修页面与未知不重发，通过范围不含selected恢复后确认发送。真实所有外发只涉及三名批准人，王/霍各确认1、陈尝试1未确认；何庆宇/李常东旧授权未复用。
+
+### 21.9 当前完整验收清单
+
+| 范围 | 真实结论 | 尚待 |
+|---|---|---|
+| filter/clear-filter/filter-options/open-detail/list-jobs/open-chat/interview-demo/select-job/resume-next | 已有CLI本地鼠标故障恢复真机；直接错误与一次普通重试耗尽均有覆盖 | 不同已开放职位互切、其他页面变体须样本 |
+| resume-batch/resume-detail/close-detail | 本轮独立入口实际故障链通过；Reader遮挡误判、关闭按钮及格式问题均修后原场景复验 | 读取中途才出现浮层、非DOM原生遮挡采集等边界仍未保证 |
+| greet/greet-detail | 王/霍原批准身份各确认一次，自动鼠标恢复后完成，收尾核验通过 | 不代表所有外发/弹窗组合覆盖 |
+| greet-selected | 陈未知时自动修页面且零重发；人确认未发后新授权续做成功1次 | 原unknown回执不变；不是同一次调用自动恢复发送成功，见21.10 |
+| goto/lookup/read-chat | 导航一次普通重试或正常读取已真实完成；可读资料不因有浮层强制报错/付费看图 | 若遇真实不可读原因再补，非人为制造每个只读命令必调模型的门槛 |
+| accept-resume | 霍新请求CLI本地实际故障恢复后接收1/预览1/关闭通过，见21.11 | 已消费一次权限；更多附件/预览变体另需样本 |
+| send-to/send-current/reject-current | 正常链既有样本和独立测试保留；22入口CLI自动装配完成 | 新增真实故障验收按用户选择本轮延期；不发消息、不标记，不复用旧已消费授权 |
+| Chrome窗口 | CLI本地打印取消鼠标兜底已验，故障Escape已删除 | 异常退出气泡、JS阻塞、多窗口/DPI、线上Runtime队列仍未验；不含人为展开菜单专项 |
+
+非阻断事实记录：王原错误perf显示3次CDP wheel，但GreetExecutor准备滚动未纳入BusinessOperationState.input，公开execution仍prepared/not_started；“尚未实际发送”由独立business not_started/0正确表达，现有安全重放依赖该业务边界。执行阶段遥测应后续补准确，已登记待优化，不在本轮扩写业务计数逻辑或假称完全零输入。
+
+独立TEST离线按request_id逐笔核账、取回、原target及fresh DOM；独立CR确认各一次marker/01—02失败归档证明及陈unknown未重新武装。王/霍各confirmed1，陈无resumed/resume_execution；selected原引用按签发时刻在setup/after生产resolve均对应同一唯一identityDigest。原newCLI图无canvas。滚动事实不准由CR评为非阻断P2，已登记，未掩盖为零输入。没有未处理的本轮阻断CR项。
+
+主控最终核对11个10/19隔离run：新增21次模型实调，全部已知usage/completed/20倍、1.45实验积分、模型成本0.0667052元；所有request_ref唯一，同ID取回次数与原回执相符。累计122次实调、117已知usage、11.93已知积分、5历史费用未知，本轮新增费用未知0。原Reader错误success保持误判反例，不因账务核验成功改写业务结论。当前保持原推荐tab、无客服/详情，王/霍继续沟通、陈仍打招呼待人核对；未新增tab、未提交推送部署。最终git diff --check通过，无关Runtime锁文件/发行物未处理。
+
+### 21.10 人工确认陈未发后的新授权补发
+
+用户明确回复“确认未发出，允许补发一次”。旧selected-01的EXECUTION_UNKNOWN、未知保护和账单保留；不会依据卡片按钮自行把旧unknown回执改成not_started或成功。通过公共CLI lookup和新截图/DOM再核原PHP职位、唯一陈建羽24岁、完整cardInfo/identityDigest与上轮一致，新引用生产resolve有效，当前无客服/详情。实验仅新增精确授权ID及独立supplement-once exclusive marker，旧selected-01 marker不删除/不重武装、王霍权限不变。独立审查后在干净已恢复页面调用一次selected；没有新障碍时零模型是正确路径，若有视觉请求仍由后台API实际usage×20，不直连模型，不重复发送未知结果。
+
+独立CR核对新引用/身份及专用once护栏通过后，单次公共boss_greet_selected成功：run abff7757-7338-4c94-8d33-f6b76d29e9b7，not_needed/applied、business confirmed/1、confirmed_items仅陈，1次/0普通重试，原卡片明确翻转继续沟通。新CLI前后DOM独立TEST用生产locator核对同一唯一identityDigest、新引用按签发时刻在前后均有效；三人最新卡片均继续沟通。原unknown marker及旧失败回执保持，新supplement marker仅此run，补发权限已消费，不再发。
+
+本次0模型/0receipt/0ledger，隔离余额100未扣、API/DB结束；累计仍122模型实调/117已知usage/11.93已知积分/5历史费用未知。未改生产源码，复用同一代码的CLI842/后台相关133、build/typecheck及独立CR结果，不重复运行。旧unknown样本验证的是未知保护，本次验证人工核实后的新授权继续及正常发送，二者不合并成自动恢复成功。
+
+随后只经公共CLI goto chat/open-chat/read-chat正常完成：先确认陈会话已建立，再打开霍会话核实新附件请求（27岁、PHP职位、同意按钮尚未点）。已向用户请求陈“简历发一下”与“谢谢。”各一次的新消息授权，以及霍这一条简历接受/预览/关闭授权；均待回复，未发送这些消息、未点击同意或不合适。已按原目标/联系人ref保存精确待批准参数，未启用实验执行白名单。当前保持原BOSS tab的霍会话、新简历请求待处理，无新增tab/提交/推送/部署。
+
+### 21.11 霍子腾新附件接收故障续验
+
+用户回复本轮不发消息，仅允许接收霍当前新请求一条并预览。公共CLI新read-chat及截图/DOM确认霍27岁/PHP职位、原contact ref一致、两处同意入口对应同一请求未处理。私有实验只增加精确霍contact ref/原target/limit1/preview true的授权ID及独立exclusive marker；陈消息参数保持拒绝，不启用send工具执行白名单。旧李接收、三人招呼及陈补发权限不复用。
+
+为验证准备失败后恢复继续且避免在遮挡下直接尝试“同意”，先只用CLI切换到没有附件处理条的陈会话，再打开客服遮罩。一次boss_accept_resume仍锁霍contact ref：若会话切换受阻、未发现同意处理条，明确business not_started后由原CLI本地恢复；排障后raw仍只允许原霍身份接收一条。若实际进入最终同意后缺肯定证据，则保持unknown、不再次接受；已确认接收后预览/收尾失败也只修收尾、不重复同意。独立审查前置/授权后执行，实际分支以回执为准，不强称预期分支发生。
+
+实验布景两次被page-click全图hash变化拒绝、零输入，第3次fresh后成功打开客服；尚未调用接收/消耗霍一次权限。独立CR提前指出现有local恢复safe gate只认facts.recovery_contact_ref：上述准备失败尚未bindContact，虽原ctx.expectedContactRef明确锁霍，仍会只修页面后保守停止。最小修正复用原ctx ref作为缺失回执绑定的后备；两者都有则必须相同，非法/冲突或没有任一绑定不续做，unknown/confirmed仍不重放。原raw执行器继续fresh身份核验，不能把当前陈当成目标。仅CLI本地既有字段消费，不增shared wire/API或新绑定类型；按开发/独立TEST/CR后在现有真实场景单次验收。
+
+源码最小修复稳定：local resume只解析一次contact，facts严格undefined才用原boundCtx.expectedContactRef；两个都有须相同，resolved严格64位小写hex，同一结果用于原CONTACT_TOOLS三个命令的safe门与resumeCtx。null/非法facts不被valid ctx掩盖，not_started0/effectnone/非EXECUTION_UNKNOWN原门不变。开发build及23定向通过，独立CR无阻断项；独立TEST待完成。新保存CLI blocked DOM确认陈无处理条、霍原请求仍在列表，接受尚未实际执行。没有ctx又没有facts的原目标未绑定情况仍不自动续做，不把本次补齐泛称所有缺绑定调用已解决。
+
+最终独立TEST新增45项包含于受影响回归145/145、0跳过，build/typecheck通过；独立CR复核稳定源码及新tests无阻断项。生产ConsentExecutor+state+local wrapper合成链实际验证陈准备失败→ctx原霍绑定保留→repair→霍同意1/预览1/普通业务关闭1；修后仍陈则同意0，GLM伪ref不覆盖原绑定、3工具缺失/冲突/非法及unknown/confirmed门均覆盖。另将当前真实blocked DOM离线喂生产executor，准备click为mock、无真设备输入，准确复现business not_started/0且facts无ref；不将合成测试冒充真机。后台API未改，不重跑同状态API133，先前全CLI842为上一源码状态，当前相关145为本次有效结果。
+
+单次公共boss_accept_resume真机通过：原准备点霍列表行被客服拦截、仍陈会话无同意处理条，原run 30e92471未触最终接受，business not_started/0、facts无ref；原ctx锁霍得以在CLI续做保留。CLI诊断/鼠标排障第1步后仍present/not_satisfied，第2步后才absent/satisfied；随后raw原操作重新打开霍、fresh身份核验、同意1次、预览1次、普通业务Escape关闭预览，最终recovered/applied、business confirmed/1、confirmed_items仅霍。run f6f28895-d46c-48dc-86b0-55dfe29e1e17，私有run-local-oct19-accept-huo-01。
+
+公共CLI fresh before/after DOM由生产locator核验：header仍霍、原contact ref不变、处理条消失、新附件previewCount0→1、attachmentPreviewState=closed。独立CR复核原perf准备click1、raw click3（切霍/同意/预览）及普通业务关闭1，接受授权仅消费一次；本轮消息工具始终未启用/未调用，不合适未操作。
+
+本组4真实GLM/4已知usage，成本0.0127124元、×20逐笔0.27实验积分，同ID4次取回不重扣；隔离API/DB结束。累计126次实调/121已知usage/12.20已知积分/5历史费用未知，本轮新增费用未知0。当前霍会话已接收且预览关闭，无客服；没有新增tab、提交、推送或部署。剩余send-to/send-current实际故障样本本轮按用户选择不做；已另问是否允许霍一次标记不合适并准备打印预览，待新确认，尚未执行。
+
+用户随后选择“本轮先不标记”。本轮新增消息与标记不合适的真实故障验收均明确延期，不再保持待批准状态；没有执行reject，也没有为了该样本打开/关闭打印预览。保留现有普通链与独立测试证据，不能把未做真机项标为已验收。霍会话及已接收附件保持，CLI/API实调与账务累计不变；本次只同步文档和私有授权记录，无新增页面操作或模型调用，未提交推送部署。
+
+## 22. Runtime同事测试包与提交（2026-10-20）
+
+用户授权提交并打包，明确同事配对agent2。先fetch origin、确认master/upstream后，将远端16个提交快进到64c527ff；仅docs/ideas.md与本任务重叠，按单路径暂存/恢复无冲突，不stash全部改动、不覆盖无关Runtime锁文件或旧发行物。合并后独立BOSS899/899、后台相关472/472、0跳过及typecheck通过；含API/计费/本地跨层与隔离PG账务。没有新增真实BOSS操作、GLM请求或部署。
+
+发行版本：Runtime UI0.0.13、BOSS插件0.3.11，Host包0.2.20、Core/报告版本0.2.19保留。BOSS使用固定Node22.23.3、新驻内存Ed25519验收签名；新增仅授权BOSS的公开根aid-isolated-boss-20261020-0311，保留全部5个历史根，并登记runtime-0.0.13.roots.json完整6根快照。新插件包/新安装器不覆盖旧交付；不保存私钥、用户配对令牌、实验凭据或截图到包/提交中。
+
+打包检查发现两处必须修正的实际交付缺口：
+
+- 离线BOSS资产白名单漏BossWindowExperiment.cs，而win-click.ps1/window-experiment.ps1均依赖它，会同时破坏普通输入和窗口恢复。仅显式加入这份C#，与既有BossPhysicalInput.cs共同作为必需资产；缺任一则构建拒绝，其他provider/未批准脚本策略不变。新增真实资产复制及required_files/hash测试，独立7/7及CR通过，真archive仍需复核。
+- Desktop的RuntimeSupervisor会过滤掉既有AID_BOSS_SERVER_URL/TOKEN，使Host虽然支持BOSS专用注入但实际拿不到配置。仅允许这两项可信主进程环境变量到Host，继续禁止广泛环境、厂商key、设备密钥或renderer/IPC注入；由开发、独立TEST及CR后重新生成安装器。沿现有BOSS两环境变量契约补缺，不修改Device/API/wire或本地Agent架构。
+
+同事安装器沿原acceptance产品身份cn.aidingyi.agent.runtime.acceptance，保留原用户目录与配对；BOSS插件通过随包离线文件手动导入。验收安装器Windows签名为NotSigned，非production签名发行；其边界与摘要随交付明确。必须使用本次实际源码重建Host依赖，不能复用10/15旧tgz冒充新Core工具清单。
+
+视觉恢复前置：agent2须具备本任务后台API/20倍计费实现，Runtime进程需配置该租户合法ClientBinding的AID_BOSS_SERVER_TOKEN及AID_BOSS_SERVER_URL=https://agent2.aidingyi.cn；设备配对令牌不等于该API令牌，不能替代或打入安装包。本轮不部署、不修改agent2配置，不宣称仅安装/配对即可完整视觉恢复；正常CLI/插件测试与恢复API前置分开说明。新消息及不合适真实故障样本仍按用户选择延期。
+
+实际BOSS 0.3.11签名归档独立验证通过：3623个required_files摘要、24工具及两C#与源码一致；固定Node22.23.3搬迁后version与MCP initialize/tools/list通过，零tools/call、doctor或浏览器探测。临时生产PluginStore导入旧0.3.10再升级0.3.11，启用/禁用两状态、installation_id与同包幂等保留，降级拒绝；旧信任集不能接受新签名，故同事须安装新Runtime再手动导入新插件。
+
+Supervisor仅2个env透传修正独立17/17、0跳过及CR通过，真实spawn覆盖desktop/runtime_app、配置/未配置四组合、其他敏感环境剥离、产品HOME/clean受控和renderer注入拒绝。另复用同源码Desktop/Host升级边界28项；发行脚本20项及Host依赖搬迁导入1项通过。首轮并发prepare解压曾导致该导入测试ENOENT，cache稳定后原测试重跑通过，未靠源码改动绕过；最终打包不再并发改写cache/编译产物。首次安装包不含env修正，不交付；最终安装器在修正后重新完整构建。
+
+最终安装器构建及独立静态验包均为RUNTIME_VERIFY_PASS：Runtime UI0.0.13/Host0.2.20/Core0.2.19/Node22.23.3 ABI127 x64，3695资源文件，实际app.asar的Supervisor与独立17项测试的编译字节一致；包内Host实际加载6根并由包内Core验签新BOSS成功。静态验证没有运行安装器、写HKCU、浏览器/业务调用或模型请求；本机及同事新安装、agent2配对/队列/视觉闭环仍待现场验收。
+
+发行文件摘要（外部交付ZIP另附全部文件SHA256SUMS及实际提交号，避免提交号自引用）：
+
+| 文件 | SHA256 |
+|---|---|
+| AID-Work-Runtime-0.0.13-win-x64-acceptance-unsigned.exe（126314798字节） | b2020efaa40ffe6cea860240b70a5bca19f47d6c69baa6f032608934bd88fa99 |
+| boss-0.3.11-dev.aidplugin.zip（交付名boss-0.3.11.aidplugin.zip） | df3dbe69128bbefdd4a2c236c7788b4b1177b319df948dd91d40593c61fae693 |
+| 新建Host0.2.20 tgz | 39f43116a4fb835c11c955257fbc5e3a6756ce3b6a58f758dd62ec46bbee309e |
+| runtime-0.0.13.roots.json | 7a7c991e75fa7be7582f9b93d680e21a2ef346764a0b9d6e49c327a0f44cb18a |
+
+交付顺序：退出旧Runtime托盘→原用户/目录安装0.0.13→显式导入0.3.11→核版本/启用及agent2在线；视觉需管理员另配API/ClientBinding两env，并完全退出再启动以继承配置。随包先读我、版本信息、公开信任公钥、静态验证报告及校验文件，不含候选人资料/实验截图/模型key/配对或API令牌。完整源码提交及推送后才生成交付ZIP，版本信息以该次真实HEAD登记，不拿合并基线64c527ff冒充实现提交。

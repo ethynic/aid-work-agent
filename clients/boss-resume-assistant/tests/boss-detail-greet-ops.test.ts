@@ -123,7 +123,7 @@ test('greet-detail：dry-run → 定位成功不点击，effect=none，详情保
 })
 
 test('greet-detail：已打过（按钮=继续沟通）→ 幂等成功，effect=none，不重复点击', async () => {
-  const f = fakeFactory(RECOMMEND_URL, [detailSnap({ name: NAME, state: 'continue' }), closedListSnap()])
+  const f = fakeFactory(RECOMMEND_URL, [detailSnap({ name: NAME, state: 'continue' }), detailSnap({ name: NAME, state: 'continue' }), closedListSnap()])
   const r = await createBossGreetDetailOperation(f.factory).execute({ name: NAME, greet_in_detail: true }, silentCtx())
   assert.equal(r.success, true)
   assert.equal(r.effect, 'none')
@@ -131,12 +131,13 @@ test('greet-detail：已打过（按钮=继续沟通）→ 幂等成功，effect
   assert.equal(r.data.already, true)
   assert.match(r.message, /已打过/)
   assert.match(r.message, /未重复点击/)
-  assert.deepEqual(f.calls, ['snapshot', 'escape', 'snapshot', 'close'])
+  assert.deepEqual(f.calls, ['snapshot', 'snapshot', 'escape', 'snapshot', 'close'])
 })
 
 test('greet-detail：真打成功 → effect=applied，消息注明按钮翻转与详情关闭', async () => {
   const f = fakeFactory(RECOMMEND_URL, [
     detailSnap({ name: NAME, state: 'greet' }),
+    detailSnap({ name: NAME, state: 'continue' }),
     detailSnap({ name: NAME, state: 'continue' }),
     closedListSnap(),
   ])

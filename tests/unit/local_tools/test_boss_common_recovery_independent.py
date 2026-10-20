@@ -204,17 +204,17 @@ async def test_external_unknown_does_not_claim_page_restored_from_a_native_blind
     assert dispatch.await_args_list[-1].args[2]['observation_mode'] == 'window'
 
 
-async def test_next_diagnosis_explains_the_actual_prior_escape_and_unknown_input_instead_of_replaying_it():
+async def test_next_diagnosis_explains_the_actual_prior_click_and_unknown_input_instead_of_replaying_it():
     proxy = FutureReadAdapter(); source = failure(proxy)
-    first = observation(receipt='escape')
-    first['data']['visual']['diagnosis']['proposed_action'] = {'kind': 'press_escape'}
+    first = observation(receipt='click')
+    first['data']['visual']['diagnosis']['proposed_action'] = {'kind': 'dismiss'}
     dispatch = AsyncMock(side_effect=[first, {'success': False, 'code': 'EXECUTION_UNKNOWN'},
         observation(action=False, receipt='still-present'), observation(receipt='cancel'),
         {'success': True}, restored(), {'success': True}])
     result = await recover_operation(proxy, source, dispatch)
     assert result['success']
     second_context = dispatch.await_args_list[3].args[2]['visual_context']
-    assert any('press_escape' in text and 'unknown' in text for text in second_context['verification']['evidence'])
+    assert any('dismiss' in text and 'unknown' in text for text in second_context['verification']['evidence'])
     assert dispatch.await_args_list[4].args[2]['recovery_ref'] == 'ref-cancel'
 
 

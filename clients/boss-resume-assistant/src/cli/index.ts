@@ -72,12 +72,10 @@ const USAGE = `BOSS 招聘操作 CLI
                                  实验：核对窗口归属、原图新鲜性和落点后单次真实点击，期间勿动鼠标
   page-click --image <网页PNG> --x <像素X> --y <像素Y> [--max-age-seconds 120] [--json]
                                  实验：复用网页浏览点击；核对当前网页原图一致后单击，不代表目标完成
-  window-escape --observation <截图PNG.json> [--max-age-seconds 120] [--json]
-                                 实验：向绑定的调试Chrome单次发送Escape；回执不代表弹窗已关闭
   visual-diagnose --image <PNG路径> [--observation <截图PNG.json>] --request-id <UUID> [--goal <文本>] [--json]
                                  实验：调用 Agent 后台视觉 API，按实际模型成本 20 倍计费，只诊断不点击
   visual-diagnose --image <PNG路径> --context-file <JSON路径> --request-id <UUID> [--observation <截图PNG.json>] [--json]
-                                 v2实验：操作上下文、可见后态核验与Escape建议；page采集时间采用文件mtime
+                                 v2实验：操作上下文、可见后态核验与鼠标关闭建议；page采集时间采用文件mtime
   visual-diagnose --request-id <UUID> --retrieve-only [--api-version 1|2] [--json]   取回同一诊断回执，不重复推理
                                  配置 AID_BOSS_SERVER_URL（后台根地址）与 AID_BOSS_SERVER_TOKEN；CLI 不含模型密钥
 
@@ -146,11 +144,6 @@ async function main(): Promise<number> {
     case 'window-click': {
       const { windowClickCommand } = await import('./commands/visualExperiment.js')
       return windowClickCommand({ observation: flagString(args, 'observation')!, x: Number(flagString(args, 'x')), y: Number(flagString(args, 'y')),
-        maxAgeSeconds: args.flags.has('max-age-seconds') ? Number(flagString(args, 'max-age-seconds')) : undefined, json: hasFlag(args, 'json') })
-    }
-    case 'window-escape': {
-      const { windowEscapeCommand } = await import('./commands/visualExperiment.js')
-      return windowEscapeCommand({ observation: flagString(args, 'observation')!,
         maxAgeSeconds: args.flags.has('max-age-seconds') ? Number(flagString(args, 'max-age-seconds')) : undefined, json: hasFlag(args, 'json') })
     }
     case 'visual-diagnose': {

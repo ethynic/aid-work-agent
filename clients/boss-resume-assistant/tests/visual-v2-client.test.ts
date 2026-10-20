@@ -80,7 +80,7 @@ test('CLI rejects incomplete v2 and arbitrary keyboard commands without side eff
   }
   assert.equal(validate([...base, '--context-file', 'c.json']), true)
   assert.equal(validate(['visual-diagnose', '--request-id', requestId, '--retrieve-only', '--api-version', '2']), true)
-  assert.equal(validate(['window-escape', '--observation', 'a.png.json']), true)
+  assert.equal(validate(['window-escape', '--observation', 'a.png.json']), false)
   for (const tail of [[], ['--observation'], ['--observation', 'a.json', '--key', 'Enter'], ['--observation', 'a.json', '--max-age-seconds', '0'], ['--observation', 'a.json', '--json', 'false']]) {
     assert.equal(validate(['window-escape', ...tail]), false)
   }

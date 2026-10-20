@@ -63,25 +63,3 @@ export async function clickWindow(observationPath: string, x: number, y: number,
   const result = await run(scriptPath(), ['-Action', 'click', '-CdpPort', String(observation.cdp_port), '-Observation', resolve(observationPath), '-X', String(x), '-Y', String(y), '-MaxAgeSeconds', String(maxAgeSeconds)], { timeout: 30_000 })
   return JSON.parse(result.stdout)
 }
-
-
-export interface WindowEscapeResult {
-  key: 'Escape'
-  sent: true
-  input_status: 'attempted'
-  hwnd: string
-}
-
-/** One fixed Escape; callers must observe the page again to verify its effect. */
-export async function escapeWindow(observationPath: string, maxAgeSeconds = 120, run: WindowScriptRunner = execPowerShellScript): Promise<WindowEscapeResult> {
-  const observation = await loadWindowObservation(observationPath)
-  if (!Number.isInteger(maxAgeSeconds) || maxAgeSeconds < 1 || maxAgeSeconds > 600) throw new Error('max-age-seconds 必须为 1-600 秒')
-  const age = Date.now() - Date.parse(observation.captured_at)
-  if (age < 0 || age > maxAgeSeconds * 1000) throw new Error('窗口观察已过期，请重新截图')
-  const result = await run(scriptPath(), ['-Action', 'escape', '-CdpPort', String(observation.cdp_port), '-Observation', resolve(observationPath), '-MaxAgeSeconds', String(maxAgeSeconds)], { timeout: 30_000 })
-  let receipt: WindowEscapeResult
-  try { receipt = JSON.parse(result.stdout) as WindowEscapeResult }
-  catch { throw new Error('[BOSS_INPUT_UNKNOWN] Escape 输入回执无法解析，需重新观察') }
-  if (!receipt || receipt.key !== 'Escape' || receipt.sent !== true || receipt.input_status !== 'attempted' || receipt.hwnd !== observation.window.hwnd) throw new Error('[BOSS_INPUT_UNKNOWN] Escape 输入回执不完整，需重新观察')
-  return receipt
-}

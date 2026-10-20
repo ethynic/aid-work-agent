@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import time
+from copy import deepcopy
 from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
@@ -45,7 +46,7 @@ SYSTEM_PROMPT = """你是网页及Chrome浏览器窗口的视觉诊断器，只�
 可以建议可见的取消、关闭或安全的纯告知对话框关闭按钮；不要默认确认发送、购买、
 授予权限、退出导致丢失内容等操作。没有安全可见的消除阻碍方式就返回null说明原因。
 诊断出阻挡，不代表已找到能安全点击的关闭控件。Chrome菜单、右键菜单等没有明确
-关闭控件时，proposed_action必须为null，可在reason说明需要Escape收起；不要猜菜单内落点。
+关闭控件时，proposed_action必须为null，不要猜菜单内落点或建议键盘操作。
 删除浏览数据、设置、退出等菜单项不能用于关闭菜单。不得把整个菜单或弹层容器作为
 target_box来包住任意点；框必须只包含可识别的关闭/取消控件或已确认能收起该层的开关，point必须落在该控件上。
 只有明确确认某个可见开关能收起当前菜单时，才可把该开关作为dismiss控件。
@@ -159,6 +160,7 @@ class BossVisualRequestV2(_StrictModel):
     execution: VisualExecutionV2 | None = None
     error: VisualErrorV2 | None = None
     verification: VisualVerificationV2 | None = None
+    # Legacy Escape declarations remain readable for request-id compatibility, never executable permission.
     available_actions: list[Literal["dismiss_click", "press_escape"]] | None = Field(default=None, max_length=2)
     observation: VisualObservationV2 | None = None
 
@@ -225,11 +227,6 @@ class VisualDismissV2(VisualAction):
     target_label: str = Field(min_length=1, max_length=200)
 
 
-class VisualEscapeV2(_StrictModel):
-    kind: Literal["press_escape"]
-    target_label: str = Field(min_length=1, max_length=200)
-
-
 class VisualAssessmentV2(_StrictModel):
     page_summary: str = Field(max_length=500)
     goal_state: Literal["satisfied", "not_satisfied", "inconclusive"]
@@ -239,10 +236,10 @@ class VisualAssessmentV2(_StrictModel):
 
 
 class VisualDiagnosisV2(VisualAssessmentV2):
-    proposed_action: Annotated[VisualDismissV2 | VisualEscapeV2, Field(discriminator="kind")] | None
+    proposed_action: VisualDismissV2 | None
 
 
-PROMPT_VERSION_V2 = "boss-visual-v7-experiment-1"
+PROMPT_VERSION_V2 = "boss-visual-v8-click-only"
 SYSTEM_PROMPT_V2 = """你是BOSS网页及Chrome窗口的视觉诊断与页面状态核验器。
 根据purpose、原操作目标、预期后态、执行事实和当前截图，回答：目标是否可确认达成、
 当前是否有阻挡该目标的可见UI、是否存在一个有依据且客户端可执行的排障动作。
@@ -266,13 +263,13 @@ purpose=diagnose时优先解释当前失败。两种purpose都区分goal_state�
 普通固定侧栏、角落广告和提示条只有确实遮住目标区域时才构成该操作的阻挡。
 当前图没有可见阻挡就如实返回absent；不能把过去发生过的遮挡说成现在仍存在。
 截图解释不了输入失败时，返回缺失证据，例如实际落点、命中归属或窗口几何，不编造根因。
-最多建议一个动作。动作限客户端available_actions支持、且不改变原业务意图的安全关闭、
-能力名dismiss_click对应输出动作kind="dismiss"（不能输出kind="dismiss_click"）；press_escape对应kind="press_escape"。
-取消或收起；不能用发送、下载、购买、删除浏览数据、授予权限或关闭整个Chrome代替排障。
+最多建议一个鼠标点击动作，限客户端available_actions支持、且不改变原业务意图的安全关闭、取消或收起。
+能力名dismiss_click对应输出动作kind="dismiss"（不能输出kind="dismiss_click"）。
+禁止建议Escape、其他按键或组合键：它们可能同时改变底层网页，故障恢复仅允许鼠标点击。
+不能用发送、下载、购买、删除浏览数据、授予权限或关闭整个Chrome代替排障。
 没有可靠可执行动作时返回null并解释原因，诊断仍然可以成立。
 available_actions为空数组时，proposed_action必须为null；可以描述仍有阻挡，不需要为诊断硬给动作。
-对于可见的展开菜单，可建议客户端支持的press_escape，或已确认能收起该层的可见开关。
-Escape可能同时影响底层网页，不保证仅关闭最上层；动作投递后仍须分别检查障碍和原目标。
+对于可见的展开菜单，只能建议已确认能收起该层的可见开关；没有可见关闭控件则返回null。
 不要把整个菜单或弹窗作为按钮框，也不要在菜单内部随意选择一个点。
 点击建议必须描述具体target_label，并给出紧贴该控件的target_box和落在控件上的point。
 坐标为输入原图像素，左上角(0,0)，x向右、y向下；space原样返回。
@@ -283,7 +280,7 @@ Escape可能同时影响底层网页，不保证仅关闭最上层；动作投�
 没有动作时proposed_action必须为null，没有缺失证据时missing_evidence必须为空数组。
 点击动作形状为{"kind":"dismiss","target_label":"具体控件","space":"输入space",
 "point":{"x":数值,"y":数值},"target_box":{"x":数值,"y":数值,"width":数值,"height":数值}}。
-point必须是含x和y的对象，不能输出数组；Escape动作只含kind="press_escape"与target_label。
+point必须是含x和y的对象，不能输出数组。
 不输出凭据、费用、身份授权结论，不声称自己已经执行或修复。
 """
 
@@ -291,12 +288,12 @@ point必须是含x和y的对象，不能输出数组；Escape动作只含kind="p
 def render_prompt_v2(req: BossVisualRequestV2) -> str:
     schema = VisualDiagnosisV2.model_json_schema()
     actions = [{"type": "null"}]
-    for capability, definition in (("dismiss_click", "VisualDismissV2"), ("press_escape", "VisualEscapeV2")):
-        if capability in req.available_actions:
-            actions.append({"$ref": "#/$defs/" + definition})
+    supported = [capability for capability in req.available_actions if capability == "dismiss_click"]
+    if "dismiss_click" in supported:
+        actions.append({"$ref": "#/$defs/VisualDismissV2"})
     schema["properties"]["proposed_action"] = {"anyOf": actions} if len(actions) > 1 else actions[0]
     return SYSTEM_PROMPT_V2 + "\n输入坐标空间：" + req.observation.space + "\n客户端能力：" + json.dumps(
-        req.available_actions, ensure_ascii=False,
+        supported, ensure_ascii=False,
     ) + "\n输出JSON schema：" + json.dumps(schema, ensure_ascii=False, sort_keys=True)
 
 
@@ -347,8 +344,7 @@ def parse_diagnosis(content: str, width: int, height: int, space: str = "page_im
     diagnosis = schema.model_validate(json.loads(text))
     action = diagnosis.proposed_action
     if action and available_actions is not None:
-        capability = "dismiss_click" if action.kind == "dismiss" else "press_escape"
-        if capability not in available_actions:
+        if "dismiss_click" not in available_actions:
             raise ValueError("action is not supported by client")
     if action and action.kind == "dismiss":
         if action.space != space:
@@ -370,8 +366,8 @@ def parse_diagnosis_v2(content: str, width: int, height: int, space: str,
     raw = json.loads(text)
     if not isinstance(raw, dict):
         raise ValueError("diagnosis must be an object")
-    fields = dict(raw)
-    action = fields.pop("proposed_action", None)
+    fields = {key: raw[key] for key in VisualAssessmentV2.model_fields if key in raw}
+    action = raw.get("proposed_action")
     assessment = VisualAssessmentV2.model_validate(fields).model_dump()
     diagnosis = {**assessment, "proposed_action": None}
     normalizations = []
@@ -404,7 +400,15 @@ def _existing(row: dict, binding: Any, digest: str | None = None) -> dict | None
     if digest is not None and detail["input_digest"] != digest:
         raise _error(409, "REQUEST_ID_CONFLICT")
     if row["status"] == "completed":
-        return detail["response"]
+        response = detail["response"]
+        diagnosis = response.get("diagnosis") if isinstance(response, dict) else None
+        action = diagnosis.get("proposed_action") if isinstance(diagnosis, dict) else None
+        if isinstance(action, dict) and action.get("kind") == "press_escape":
+            # Preserve immutable historical usage/assessment while withdrawing the unsafe action.
+            response = deepcopy(response)
+            response["diagnosis"]["proposed_action"] = None
+            response["action_error"] = "INVALID_MODEL_ACTION"
+        return response
     if row["status"] == "model_unknown":
         raise _error(409, "MODEL_UNKNOWN")
     return None
@@ -480,6 +484,9 @@ async def diagnose_visual(req: BossVisualRequest | BossVisualRequestV2, binding:
         model_context = req.model_dump(mode="json", exclude={
             "api_version", "request_id", "retrieve_only", "observation", "context",
         })
+        model_context["available_actions"] = [
+            action for action in (req.available_actions or []) if action == "dismiss_click"
+        ]
         model_context["observation"] = observation.model_dump(mode="json", exclude={"image_base64", "image_sha256"})
     else:
         prompt_version = PROMPT_VERSION

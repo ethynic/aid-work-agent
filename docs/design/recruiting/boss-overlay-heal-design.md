@@ -1,5 +1,37 @@
 # BOSS 操作后验证与视觉异常恢复设计
 
+## V. 故障恢复仅鼠标关闭（2026-10-18，用户明确纠正）
+
+2026-10-20交付接线补齐：原Desktop→Host受信环境白名单须显式保留既有AID_BOSS_SERVER_URL/TOKEN，Host再按已定义规则只给BOSS Provider；不得让renderer/IPC提供令牌、广泛继承环境或借用设备token。仅修既有环境契约遗漏，不新增API/wire/身份格式。发行包必须包含PS驱动引用的BossPhysicalInput.cs及BossWindowExperiment.cs并由required_files签名覆盖。Runtime UI0.0.13/BOSS0.3.11同事验收包及后台前置见计划22。
+
+2026-10-19实调补齐：模型多出未声明的空备注字段时，不能丢掉已完整且合法的页面判断和关闭建议。仅v2模型响应解析按既有assessment字段白名单取值；未知顶层字段忽略且不返回客户端，不改变提示词schema、HTTP请求严格校验、已定义字段/动作/坐标/能力验证。缺字段、非法枚举仍失败，非法动作仍只丢动作；原ID回执与实际usage×20账务不改，不新增自动模型重试。关闭详情反例及原场景复验见计划21.5。
+
+未知业务结果禁止在当前自动恢复调用中重发；人实际核对未发并明确授予一次新动作后，可在重新确认原身份/页面的前提下发起新执行。旧unknown回执及费用保留，新授权只消费一次，不把它伪装成旧调用自动恢复成功，也不要求正常新调用额外付费看图。陈selected的人工确认后续做真机见计划21.10。
+
+接收等会话动作的准备阶段可能在执行器bindContact之前失败。对原恢复策略要求contact绑定的send-current/accept-resume/reject-current，CLI原调用已携带expectedContactRef时，明确business not_started/0且effect none后，可以复用该既有身份约束作为恢复续做绑定；不要求失败回执必须再重复提供相同ref。若回执ref与原调用ref同时存在则必须相同，缺失/非法/冲突均不续做；原raw执行器须fresh核验该身份后才能最终提交。未知/已确认业务仍不重发，不从GLM、当前其他会话或姓名推造ref，不改Device/API/wire或增加恢复循环。唯一写入者仍CLI localOperationRecovery，复用原OpContext/BusinessOperationState；没有原ctx也没有facts绑定的准备失败仍不自动续做，方案及验证见计划21.11。
+
+本节覆盖此前所有故障恢复Escape设计。打印预览实测按键返回attempted仍未关闭，且Escape可能同时改变底层BOSS页面；用户明确删除故障恢复Escape，仅保留已由其验证过的普通业务命令关闭详情/预览等Escape。以后恢复键盘能力必须再次取得用户实际认证，本轮不继续按键实验。
+
+复用既有网页主路径、绑定Chrome窗口兜底及鼠标取消/关闭：诊断只声明dismiss_click，模型只输出dismiss或null；输入后仍fresh截图核验，再核验原业务目标。无可用点击时诚实返回未知/无支持动作，不能退回Escape。普通业务Executor及Session.pressEscape保持。window-escape实验入口及其专用原生实现移除。
+
+兼容检查点：API仍v2，不增工具或Device wire。为旧请求原ID取回及digest稳定，入参可读取旧press_escape声明但仅作历史数据；system/schema/user context均不授予键盘能力。模型新输出、历史已计费回执及本地旧ref里的Escape均不可执行，保留页面判断、usage和原费用，返回INVALID_MODEL_ACTION/NO_VALID_ACTION。后台提示词版本boss-visual-v8-click-only；既有计费链实际usage×20不变，无新模型直连、恢复状态机或权限系统。CLI与API唯一写入者沿U；独立TEST及独立CR后仅通过公共boss cli真机验收，未授权提交或部署。
+
+续验见计划第20节：人工完成安全验证后，open-chat、interview-demo、select-job均有仅鼠标本地故障恢复真机；李常东新附件接收/预览/关闭正常整链另行通过，不混成单次接收恢复样本。普通成功/可直接读到的页面状态零模型。
+
+### V.1 读取区域被遮挡时不得确认采集成功（2026-10-19）
+
+真实反例：resume-detail在详情已打开但客服覆盖时，把客服窗口拼成3段图仍返回success/bottom_reached=true，因没有失败未进入恢复。画布结构存在及图像非空只能证明采集完成，不能证明取得目标简历。修复纳入共享Reader验证：用现有fresh DOM可见性/归属及原采集矩形判断明确覆盖读取区域的上层浮层，采集开始和后续片段都不能混入遮挡图；遇此状态返回既有可恢复失败，由CLI原流程诊断/鼠标处理/后态核验/恢复原目标。详情自身及不相交、隐藏、在后的元素不是阻挡。按最小改动实现，不新增恢复编排、全局弹窗禁用、模型直连或Runtime权限。无可靠证据时如实保留边界，不声称能识别所有原生窗/任意像素遮挡；具体方案与独立TEST/CR见计划21.2。
+
+本地接口检查点（实现前登记）：在CLI既有CdpGateway.snapshot可选项增加includePaintOrder（默认false），DomDocument.layout.paintOrders为可选数组；仅detail/batch/next读取快照按需开启并沿用现有样式顺序/可见性工具。唯一写入者为CLI开发角色，主控维护本设计/计划，独立TEST与CR验证生产接线。该字段仅本地CDP快照，不进入Device wire、API v2或数据库，不改变共用Runtime core契约；旧快照缺字段可读，不能凭空编造层级证明。跨frame先映射同一document的owner/祖先绘制锚点，不依赖未核验的跨上下文数字排序。使用既有DOMSnapshot.captureSnapshot能力，无新Runtime.*或输入路径。协议依据：[Chrome官方DOMSnapshot](https://chromedevtools.github.io/devtools-protocol/tot/DOMSnapshot/)。
+
+批次接线同样必须保留失败语义：Reader证明读取被上层modal遮挡时，以内部typed遮挡错误交现有批次recovery出口，不混同普通单份内容读取失败。尚无有效成果允许恢复后原调用继续，已有有效资料则只修页面并保留原成果，不整批重读；普通单份读取失败的逐项继续策略不变。此内部错误不新增API/Runtime公共schema。
+
+### V.2 普通close-detail保留Escape并支持自属鼠标关闭（2026-10-19）
+
+真实反例见计划21.4：客服经视觉鼠标关闭后，普通close-detail仍可能因Escape无效而无法完成原目标。复用原canvas定位/文档归属及操作栏LCA，fresh寻找当前详情容器内唯一可见关闭×；有此肯定目标时鼠标关闭，无唯一控件时保留原已认证Escape。每轮最多一次输入、外层原一次普通重试保持，不添加额外循环/通用关闭所有弹窗或新按键恢复。局部导出现有只读canvas定位结果供复用，不增Device/API字段。
+
+计划21.7又实证greet-detail准备阶段及恢复后都被同一私有Escape关闭旧详情卡住，business明确not_started/0。因而由同一DetailGreetExecutor.tryCloseDetail复用上述按钮选择及消失后验：public close、open/greet旧详情清理和已确认招呼后收尾共用，缺少唯一按钮仍保留原业务Escape，每调用只一个关闭输入，不新增重试。错误证据统一写关闭操作，不能伪称一定用Escape；已confirmed外发收尾失败仍不重发。此为普通业务关闭路径复用，不是向视觉恢复重新引入Escape；BatchReader现有路径不因未复现而扩改。独立TEST/CR后原场景再验。
+
 ## U. CLI 本地恢复闭环（2026-10-18，按用户纠正实施）
 
 本节优先于S/T中的“Runner唯一恢复编排”。用户要求普通CLI命令自身在直接操作错误、或正常执行但一次普通重试后仍未达成时触发恢复；不依赖服务器工具调度器或Agent模型再次调用。CLI/MCP共用同一operation注册入口的本地恢复装配，领域执行器保留稳定后验与一次普通重试，视觉原语不递归恢复。后台仅接收既有视觉API请求，继续唯一维护提示词、GLM调用、用量和20倍计费。

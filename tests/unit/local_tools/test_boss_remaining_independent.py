@@ -54,7 +54,7 @@ def visual(*, present=True, goal=None, reference='stored-action'):
         'http_status': 200, 'state': 'completed', 'receipt': {'factor': 20},
         'diagnosis': {'obstruction': 'present' if present else 'absent',
             'goal_state': goal or ('not_satisfied' if present else 'satisfied'),
-            'proposed_action': {'kind': 'dismiss_click'} if present else None}}}}
+            'proposed_action': {'kind': 'dismiss'} if present else None}}}}
 
 
 @pytest.mark.parametrize('durable', [False, True])

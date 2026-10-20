@@ -25,31 +25,6 @@ public static class BossWindowExperiment
     [DllImport("user32.dll")] private static extern void mouse_event(uint flags, uint x, uint y, uint data, UIntPtr extra);
     [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(IntPtr window, uint attribute, out BossPhysicalInput.Rect rect, int size);
 
-    [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int virtualKey);
-    [DllImport("user32.dll", SetLastError = true)] private static extern uint SendInput(uint count, Input[] inputs, int size);
-    [StructLayout(LayoutKind.Sequential)] private struct KeyboardInput
-    {
-        public ushort VirtualKey, Scan;
-        public uint Flags, Time;
-        public UIntPtr ExtraInfo;
-    }
-    [StructLayout(LayoutKind.Sequential)] private struct MouseInput
-    {
-        public int X, Y;
-        public uint MouseData, Flags, Time;
-        public UIntPtr ExtraInfo;
-    }
-    [StructLayout(LayoutKind.Explicit)] private struct InputUnion
-    {
-        [FieldOffset(0)] public KeyboardInput Keyboard;
-        [FieldOffset(0)] public MouseInput Mouse;
-    }
-    [StructLayout(LayoutKind.Sequential)] private struct Input
-    {
-        public uint Type;
-        public InputUnion Data;
-    }
-
     public static uint ProcessId(IntPtr window) { uint id; GetWindowThreadProcessId(window, out id); return id; }
     public static string Title(IntPtr window) { var text = new StringBuilder(1024); GetWindowText(window, text, text.Capacity); return text.ToString(); }
     public static string ClassName(IntPtr window) { var text = new StringBuilder(256); GetClassName(window, text, text.Capacity); return text.ToString(); }
@@ -150,34 +125,6 @@ public static class BossWindowExperiment
         scope.MarkInputStarted();
         try { mouse_event(2, 0, 0, 0, UIntPtr.Zero); System.Threading.Thread.Sleep(70); }
         finally { mouse_event(4, 0, 0, 0, UIntPtr.Zero); }
-    }
-    public static void Escape(IntPtr browser, int left, int top, int width, int height, BossPhysicalInput.Scope scope)
-    {
-        RequireGeometry(browser, left, top, width, height);
-        RequireForeground(browser);
-        // Never release the user's keys or turn Escape into Ctrl/Alt/Shift/Win+Escape.
-        foreach (int key in new int[] { 0x10, 0x11, 0x12, 0x5B, 0x5C })
-            if ((GetAsyncKeyState(key) & 0x8000) != 0)
-                throw new InvalidOperationException("Modifier key is pressed; Escape input refused");
-        var down = new Input { Type = 1, Data = new InputUnion { Keyboard = new KeyboardInput { VirtualKey = 0x1B } } };
-        var up = new Input { Type = 1, Data = new InputUnion { Keyboard = new KeyboardInput { VirtualKey = 0x1B, Flags = 2 } } };
-        RequireForeground(browser);
-        scope.MarkInputStarted();
-        try
-        {
-            uint accepted = SendInput(2, new Input[] { down, up }, Marshal.SizeOf(typeof(Input)));
-            if (accepted != 2)
-            {
-                int error = Marshal.GetLastWin32Error();
-                // A partially accepted pair may leave Escape down: release only, never repeat DOWN.
-                if (accepted == 1) SendInput(1, new Input[] { up }, Marshal.SizeOf(typeof(Input)));
-                throw new InvalidOperationException("Escape SendInput accepted=" + accepted + "; win32_error=" + error);
-            }
-        }
-        catch (Exception failure)
-        {
-            throw new InvalidOperationException("[BOSS_INPUT_UNKNOWN] " + failure.Message, failure);
-        }
     }
 
 }

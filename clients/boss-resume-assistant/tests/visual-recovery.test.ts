@@ -227,22 +227,23 @@ test('DPR 2 image coordinates map to CDP CSS coordinates and changed targets or 
 })
 
 
-test('page Escape needs an explicit model suggestion and rechecks the binding without a whole-image guard', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'boss-recovery-'))
-  try {
-    const s = session(); let escapes = 0, capturesAfter = 0
-    s.session.getTargetId = async () => 'same-target'
-    s.session.getPageMetrics = async () => ({ width: 1, height: 1 })
-    s.session.pressEscape = async () => { escapes++ }
-    const escapeContext = { ...context, available_actions: ['press_escape'] }
-    const recovery = new VisualRecovery({ root, settleMs: 0, diagnose: async () => response({ diagnosis: { ...response().body.diagnosis, proposed_action: { kind: 'press_escape', target_label: '取消当前阻挡' } } }), compare: async () => { throw new Error('Escape cannot depend on pixel equality') } })
-    const result = await recovery.inspect({ request_id: id, visual_context: escapeContext }, s.session, signal)
-    s.session.captureFullpage = async () => { capturesAfter++; throw new Error('No screenshot after suggestion required for fixed key') }
-    const action = await recovery.dismiss(String(result.recovery_ref), s.session, signal)
-    assert.equal(action.action_kind, 'press_escape'); assert.equal(action.input_status, 'attempted')
-    assert.equal(escapes, 1); assert.equal(capturesAfter, 0); assert.equal(s.clicks, 0)
-    await assert.rejects(recovery.dismiss(String(result.recovery_ref), s.session, signal), /已消费/)
-  } finally { await rm(root, { recursive: true, force: true }) }
+test('page and window Escape suggestions preserve diagnosis but never create an executable reference', async () => {
+  for (const mode of ['page', 'window'] as const) {
+    const root = await mkdtemp(join(tmpdir(), 'boss-recovery-'))
+    try {
+      const s = mode === 'window' ? windowSession() : session(); let escapes = 0, nativeClicks = 0
+      s.session.pressEscape = async () => { escapes++ }
+      const escapeContext = { ...context, available_actions: ['dismiss_click', 'press_escape'] }
+      const recovery = new VisualRecovery({ root, settleMs: 0, captureWindow: windowCapture(),
+        clickWindow: async () => { nativeClicks++; return {} },
+        diagnose: async () => response({ diagnosis: { ...response().body.diagnosis, proposed_action: { kind: 'press_escape', target_label: '取消当前阻挡' } } }) })
+      const result = await recovery.inspect({ request_id: id, observation_mode: mode, visual_context: escapeContext }, s.session, signal)
+      assert.equal(result.recovery_ref, undefined)
+      assert.equal(result.recovery_action_error, 'UNSUPPORTED_ACTION')
+      assert.equal(((result.visual as Record<string, unknown>).diagnosis as Record<string, unknown>).obstruction, 'present')
+      assert.equal(escapes, 0); assert.equal(nativeClicks, 0); assert.equal(s.clicks, 0)
+    } finally { await rm(root, { recursive: true, force: true }) }
+  }
 })
 
 function windowSession() {
@@ -315,8 +316,8 @@ test('window identity, creation time, geometry and native zero-input guards repo
       const s = windowSession(); let nativeCalls = 0
       const recovery = new VisualRecovery({ root, settleMs: 0, captureWindow: windowCapture((o, count) => {
         if (count > 1 && change !== 'native') (o.window as unknown as Record<string, unknown>)[change] = change === 'process_started_at' ? '2026-10-16T00:00:00Z' : change === 'hwnd' ? '999' : 999
-      }), diagnose: async () => response({ diagnosis: { ...response().body.diagnosis, proposed_action: { kind: 'press_escape', target_label: '取消' } } }), escapeWindow: async () => { nativeCalls++; throw new Error('[BOSS_WINDOW_REFUSED] stale geometry; input refused') } })
-      const result = await recovery.inspect({ request_id: id, observation_mode: 'window', visual_context: { ...context, available_actions: ['press_escape'] } }, s.session, signal)
+      }), diagnose: async () => response({ diagnosis: { ...response().body.diagnosis, proposed_action: { ...response().body.diagnosis.proposed_action, space: 'window_image_px' } } }), clickWindow: async () => { nativeCalls++; throw new Error('[BOSS_WINDOW_REFUSED] stale geometry; input refused') } })
+      const result = await recovery.inspect({ request_id: id, observation_mode: 'window', visual_context: context }, s.session, signal)
       await assert.rejects(recovery.dismiss(String(result.recovery_ref), s.session, signal), (error: unknown) => error instanceof CodedOperationError && error.code === 'UI_CHANGED' && error.data?.recovery_action_error === 'STALE_OBSERVATION' && error.data.input_status === 'not_started')
       assert.equal(nativeCalls, change === 'native' ? 1 : 0)
     } finally { await rm(root, { recursive: true, force: true }) }
@@ -327,9 +328,9 @@ test('unknown window input remains consumed and exposes unknown facts through th
   const root = await mkdtemp(join(tmpdir(), 'boss-recovery-'))
   try {
     const s = windowSession(); let inputs = 0
-    const deps = { root, settleMs: 0, captureWindow: windowCapture(), diagnose: async () => response({ diagnosis: { ...response().body.diagnosis, proposed_action: { kind: 'press_escape', target_label: '取消' } } }), escapeWindow: async () => { inputs++; throw new Error('[BOSS_INPUT_UNKNOWN] partial SendInput') } }
+    const deps = { root, settleMs: 0, captureWindow: windowCapture(), diagnose: async () => response({ diagnosis: { ...response().body.diagnosis, proposed_action: { ...response().body.diagnosis.proposed_action, space: 'window_image_px' } } }), clickWindow: async () => { inputs++; throw new Error('[BOSS_INPUT_UNKNOWN] partial click') } }
     const recovery = new VisualRecovery(deps)
-    const inspected = await recovery.inspect({ request_id: id, observation_mode: 'window', visual_context: { ...context, available_actions: ['press_escape'] } }, s.session, signal)
+    const inspected = await recovery.inspect({ request_id: id, observation_mode: 'window', visual_context: context }, s.session, signal)
     const op = createBossOverlayDismissOperation(async () => ({ ...s.session, close: async () => {} }), deps)
     const result = await op.execute({ recovery_ref: String(inspected.recovery_ref) }, { signal, progress: () => {} })
     assert.equal(result.success, false); assert.equal(result.code, 'EXECUTION_UNKNOWN')

@@ -51,7 +51,7 @@ export function resolveCandidateReference(s: DomSnapshot, name: string, ref: str
 
 
 /** A child document's size is not its visible owner size. Intersect every owner and overflow clip. */
-function frameViewport(s: DomSnapshot, documentIndex: number): { left: number; right: number; top: number; bottom: number } {
+export function frameViewport(s: DomSnapshot, documentIndex: number): { left: number; right: number; top: number; bottom: number } {
   const vp = viewportOf(s), area = { left: 0, right: vp.width, top: 0, bottom: vp.height }, seen = new Set<number>()
   let current = documentIndex
   const invalid = () => ({ left: 0, right: 0, top: 0, bottom: 0 })

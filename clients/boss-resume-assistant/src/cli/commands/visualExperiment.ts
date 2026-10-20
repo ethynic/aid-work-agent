@@ -1,7 +1,7 @@
 import { createBossScreenshotOperation } from '../../main/operations/bossScreenshot.js'
 import { visualDiagnose, VisualDiagnoseError, type VisualDiagnoseOptions } from '../../main/boss/visualDiagnoseClient.js'
 import { runCliOperation } from '../render.js'
-import { captureWindow, clickWindow, escapeWindow } from '../../main/input/windowExperiment.js'
+import { captureWindow, clickWindow } from '../../main/input/windowExperiment.js'
 import { createPageClickExperiment, type PageClickExperimentArgs } from '../../main/operations/bossPageClickExperiment.js'
 
 export async function pageClickCommand(opts: PageClickExperimentArgs & { cdpPort?: number; json?: boolean }): Promise<number> {
@@ -49,18 +49,6 @@ export async function windowClickCommand(opts: { observation: string; x: number;
     return 0
   } catch (error) {
     console.error(`window-click: ${error instanceof Error ? error.message : '点击未确认'}`)
-    return 1
-  }
-}
-
-export async function windowEscapeCommand(opts: { observation: string; maxAgeSeconds?: number; json?: boolean }): Promise<number> {
-  console.error('window-escape 将向调试Chrome发送一次Escape，请勿切换窗口或按住修饰键。')
-  try {
-    const data = await escapeWindow(opts.observation, opts.maxAgeSeconds)
-    console.log(JSON.stringify({ success: true, data }, null, opts.json ? undefined : 2))
-    return 0
-  } catch (error) {
-    console.error(`window-escape: ${error instanceof Error ? error.message : '按键未确认'}`)
     return 1
   }
 }

@@ -1,3 +1,4 @@
+import { RESUME_SNAPSHOT_OPTIONS } from '../boss/ResumeReader.js'
 import { isBossPage } from '../boss/PageNavigator.js'
 import { operationRecoveryFacts, operationRecoveryFailure } from './pageOperation.js'
 /**
@@ -17,7 +18,7 @@ import { operationRecoveryFacts, operationRecoveryFailure } from './pageOperatio
 import fsp from 'node:fs/promises'
 import { ResumeBatchReader } from '../boss/ResumeBatchReader.js'
 import { JobSwitcher, FILTER_BUTTON_PATTERN } from '../boss/JobSwitcher.js'
-import { viewportOf, FILTER_SNAPSHOT_OPTIONS } from '../boss/FilterSetter.js'
+import { viewportOf } from '../boss/FilterSetter.js'
 import { buildResumePayload, wheelAt, sameViewAt, stitchParts } from './bossResumeDetail.js'
 import {
   defaultSessionFactory,
@@ -119,7 +120,7 @@ export function createBossResumeBatchOperation(
               message: `逐个打开简历并读取（借用真实鼠标滚动，请勿移动）0/${limit}`,
             })
             const reader = new ResumeBatchReader({
-              snapshot: () => session.snapshot(FILTER_SNAPSHOT_OPTIONS),
+              snapshot: () => session.snapshot(RESUME_SNAPSHOT_OPTIONS),
               click: (point, viewport) => session.click(point, viewport),
               pressEscape: session.pressEscape,
               captureFullpage: session.captureFullpage,

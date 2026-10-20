@@ -56,7 +56,7 @@ function admit(name: string, result: OperationResult): Admitted | undefined {
   if (retained) dict(context.operation).result_kind = 'page_state'
   // Apply the same API context validation used by the actual observation primitive before any paid request.
   if (validateVisualArgs({ request_id: '00000000-0000-4000-8000-000000000000',
-    visual_context: { ...context, purpose: 'diagnose', available_actions: ['dismiss_click', 'press_escape'] } })) return
+    visual_context: { ...context, purpose: 'diagnose', available_actions: ['dismiss_click'] } })) return
   return { facts: f, context, policy: retained ? 'preserve_result' : policy, target }
 }
 
@@ -114,15 +114,18 @@ export function withLocalRecovery<Args>(operation: BossOperation<Args>, deps: Lo
       if (policy === 'preserve_result') return finish(original, 'page_restored_result_preserved', { page_restored: true })
       const op = dict(context.operation)
       if (policy === 'readonly' && operation.name === 'boss_read_chat' && !op.target_label) return finish(original, 'page_restored_target_unbound', { page_restored: true })
+      const recordedContact = admitted.facts.recovery_contact_ref, expectedContact = boundCtx.expectedContactRef
+      const contact = recordedContact === undefined ? expectedContact : recordedContact
+      const contactBound = typeof contact === 'string' && /^[a-f0-9]{64}$/.test(contact)
+        && (recordedContact === undefined || expectedContact === undefined || recordedContact === expectedContact)
       if (policy === 'observe_only') {
-        const business = dict(admitted.facts.business_effect), contact = admitted.facts.recovery_contact_ref
+        const business = dict(admitted.facts.business_effect)
         const safe = business.status === 'not_started' && business.completed_count === 0 && original.effect === 'none'
-          && original.code !== 'EXECUTION_UNKNOWN' && (!CONTACT_TOOLS.has(operation.name) || typeof contact === 'string' && /^[a-f0-9]{64}$/.test(contact))
+          && original.code !== 'EXECUTION_UNKNOWN' && (!CONTACT_TOOLS.has(operation.name) || contactBound)
         if (!safe) return finish(original, business.status === 'confirmed' ? 'page_restored_business_preserved' : 'page_restored_business_unconfirmed', { page_restored: true })
       }
       const resumeArgs = operation.name === 'boss_read_chat' && !dict(args).contact && op.target_label
         ? { ...args, contact: op.target_label } : { ...args }
-      const contact = admitted.facts.recovery_contact_ref
       const resumeCtx = { ...boundCtx, ...(typeof contact === 'string' ? { expectedContactRef: contact } : {}) }
       // Raw operation only: do not enter another recovery cycle after the original goal is resumed.
       let result: OperationResult
@@ -143,7 +146,7 @@ export function withLocalRecovery<Args>(operation: BossOperation<Args>, deps: Lo
     let lastState = 'diagnosis_unavailable'
     try {
       for (let index = 0; index < 3; index++) {
-        const diagnoseContext = { ...context, purpose: 'diagnose', available_actions: ['dismiss_click', 'press_escape'] }
+        const diagnoseContext = { ...context, purpose: 'diagnose', available_actions: ['dismiss_click'] }
         let a = await observe(`step${index}.diagnose`, diagnoseContext, mode)
         if (policy === 'observe_only' && a.diagnosis?.obstruction === 'absent' && (mode === 'window' || dict(context.execution).stage !== 'input')) return await resume()
         const captureFailed = !Object.keys(a.visual).length && ['CHROME_UNAVAILABLE', 'UI_CHANGED', 'INTERNAL_ERROR'].includes(a.result.code)
@@ -154,7 +157,7 @@ export function withLocalRecovery<Args>(operation: BossOperation<Args>, deps: Lo
         if (!a.diagnosis) return finish(original, 'diagnosis_unavailable')
         if (a.diagnosis.obstruction === 'absent' && (policy === 'observe_only' || a.diagnosis.goal_state === 'satisfied')) return await resume()
         const action = dict(a.diagnosis.proposed_action)
-        if (typeof a.data.recovery_ref !== 'string' || !Object.keys(action).length || a.diagnosis.obstruction !== 'present') return finish(original, 'no_supported_action')
+        if (typeof a.data.recovery_ref !== 'string' || action.kind !== 'dismiss' || a.diagnosis.obstruction !== 'present') return finish(original, 'no_supported_action')
         abort()
         const closed = await dismiss.execute({ recovery_ref: a.data.recovery_ref }, boundCtx)
         const reason = closed.data.recovery_action_error

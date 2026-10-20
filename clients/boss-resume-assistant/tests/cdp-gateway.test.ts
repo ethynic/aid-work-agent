@@ -238,3 +238,18 @@ test('recovery attaches the original target among multiple business tabs and ref
   assert.equal(socket.sent.some(m => m.method === 'Target.attachToTarget'), false)
   await gw.close()
 })
+
+
+test('resume paint-order collection is read-only, opt-in and cannot change later default snapshots', async () => {
+  const { gw, socket } = makeGateway()
+  await gw.connect('http://127.0.0.1:9222')
+  await gw.attachToTarget('T1')
+  try {
+    await gw.captureDomSnapshot({ includePaintOrder: true, computedStyles: ['visibility', 'opacity'] })
+    await gw.captureDomSnapshot()
+    assert.deepEqual(socket.sent.filter(s => s.method === 'DOMSnapshot.captureSnapshot').map(s => s.params), [
+      { includePaintOrder: true, computedStyles: ['visibility', 'opacity'], includeDOMRects: false },
+      { includePaintOrder: false, computedStyles: [], includeDOMRects: false },
+    ])
+  } finally { await gw.close() }
+})

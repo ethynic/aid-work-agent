@@ -10,7 +10,7 @@
  *   用 LCA(收藏,举报,不合适) 得操作列容器，再 isDescendantOf 判定哪个「打招呼」在容器内；
  *   容器外的命中一律视为列表诱饵。
  * - 开详情后验使用右侧操作按钮与“经历概览”；姓名可能只在canvas内，不作打开成功的DOM靶点。
- * - Escape 关闭详情可靠；点击后按钮原地翻转「继续沟通」（与列表按钮同状态机）。
+ * - 关闭优先使用详情自属×，缺少唯一可见控件时沿用业务Escape；招呼后按钮翻转为「继续沟通」。
  *
  * 安全设计（fail-loud，绝不盲点）：
  * - 打招呼前确认详情归属：实际画布文档顶部目标姓名唯一；姓名仅在canvas时，本调用清残留后
@@ -30,16 +30,19 @@ import {
   isDescendantOf,
   lowestCommonAncestor,
   parentMapOf,
+  classOf,
 } from './domSnapshot.js'
 import { GREET_TEXT, CONTINUE_TEXT, pairCardNameWithPoint, findButtonsByExactText } from './cardName.js'
 import { viewportOf } from './FilterSetter.js'
-import { locateResumeCanvas } from './ResumeReader.js'
+import { locateResumeCanvas, resumeCanvasOf } from './ResumeReader.js'
+import { snapshotNodeVisible } from './SnapshotVisibility.js'
+import { ICON_CLOSE_HINT } from './OverlayInspector.js'
 import { CancelledError } from '../operations/types.js'
 import { PagePostconditionError } from '../operations/pageOperation.js'
 import { excludedRecommendationName, inspectRecommendationResults, type RecommendationStopReason } from './RecommendationResultBoundary.js'
 import { WinClickError } from '../input/WinMouseClicker.js'
 import { BusinessOperationState } from './BusinessOperationState.js'
-import { loadedCandidates, candidateButtonVisible, candidateScrollEvent } from './LoadedCandidateNavigation.js'
+import { loadedCandidates, candidateButtonVisible, candidateScrollEvent, frameViewport } from './LoadedCandidateNavigation.js'
 
 export class DetailGreetError extends Error {
   constructor(message: string) {
@@ -112,7 +115,7 @@ const DETAIL_NAME_REGION_HEIGHT = 300
 const FLIP_POLL_INTERVAL = 800
 const FLIP_POLL_ROUNDS = 3
 
-/** Escape 后轮询 canvas 消失（与 ResumeBatchReader CLOSE_* 同源，总超时 5s） */
+/** 关闭输入后轮询 canvas 消失（与 ResumeBatchReader CLOSE_* 同源，总超时 5s） */
 const CLOSE_POLL_INTERVAL = 500
 const CLOSE_POLL_TIMEOUT = 5000
 
@@ -381,7 +384,7 @@ export class DetailGreetExecutor {
   /**
    * 在当前打开的简历详情页点「打招呼」：
    * snapshot → 可信详情姓名或本调用原卡片重开因果 → locateActionBar + locateGreetState（容器消歧）→
-   * Win32 click → 轮询按钮翻转「继续沟通」→ Escape 关闭并确认。
+   * Win32 click → 轮询按钮翻转「继续沟通」→ 关闭详情并确认。
    * - alreadyGreeted → {greeted:false, already:true}（不点击，正常关闭，幂等）；
    * - dryRun → {greeted:false, dryRun:true, point}（不点击打招呼，详情保持打开）；
    * - 点击后未翻转 → DetailGreetError（unknown，不要重试）；关不掉详情 → DetailGreetError。
@@ -466,19 +469,59 @@ export class DetailGreetExecutor {
 
   /**
    * 关闭当前打开的简历详情弹层（boss_close_detail 用，也供筛选流程清理）：
-   * 详情本来就没开 → 幂等成功返回 {wasOpen:false}；Escape 后轮询 canvas 消失，关不掉 fail-loud。
+   * 详情本来就没开 → 幂等成功返回 {wasOpen:false}；优先自属×，缺少唯一控件时沿用Escape，轮询canvas消失。
    */
   async close(): Promise<{ wasOpen: boolean }> {
     if (this.deps.signal?.aborted) throw new CancelledError('已取消：关闭简历详情尚未开始')
     const snap = await this.deps.snapshot()
     if (!locateResumeCanvas(snap)) return { wasOpen: false }
-    const closed = await this.step('detail:close', () => this.tryCloseDetail())
+    const closed = await this.step('detail:close', () => this.tryCloseDetail(snap))
     if (!closed) {
-      throw new PagePostconditionError('Escape 后当前简历详情画布仍存在', {
-        status: 'unmet', evidence: ['Escape正常返回，轮询期间仍检出原简历画布'],
+      throw new PagePostconditionError('关闭操作后当前简历详情画布仍存在', {
+        status: 'unmet', evidence: ['关闭操作正常返回，轮询期间仍检出原简历画布'],
       })
     }
     return { wasOpen: true }
+  }
+
+  /** Only the resume component owning both the original canvas and its action bar may supply its close control. */
+  static locateDetailClose(snap: DomSnapshot): ClickPoint | null {
+    const canvas = resumeCanvasOf(snap)
+    if (!canvas) return null
+    let bar: ActionBar
+    try { bar = DetailGreetExecutor.locateActionBar(snap) } catch { return null }
+    let di = canvas.di, ni = canvas.ni
+    const visited = new Set<number>()
+    while (di !== bar.documentIndex) {
+      if (visited.has(di)) return null
+      visited.add(di)
+      const owners = snap.documents.flatMap((document, documentIndex) => indexedValues(document.nodes.contentDocumentIndex, 'contentDocumentIndex')
+        .filter(([, child]) => child === di).map(([node]) => ({ di: documentIndex, ni: node })))
+      if (owners.length !== 1) return null
+      di = owners[0]!.di; ni = owners[0]!.ni
+    }
+    const document = snap.documents[di]!, parents = parentMapOf(document)
+    let container: number | undefined = lowestCommonAncestor(document, [ni, bar.containerIndex]) ?? undefined
+    const ancestors = new Set<number>()
+    while (container !== undefined && !ancestors.has(container)) {
+      ancestors.add(container)
+      if ((classOf(snap, di, container) ?? '').split(/\s+/).includes('lib-standard-resume')) break
+      container = parents?.get(container)
+    }
+    if (container === undefined || !(classOf(snap, di, container) ?? '').split(/\s+/).includes('lib-standard-resume')) return null
+    let offset: { x: number; y: number }, clip: ReturnType<typeof frameViewport>
+    try { offset = accumulateOwnerOffset(snap, di); clip = frameViewport(snap, di) } catch { return null }
+    const points: ClickPoint[] = []
+    for (let i = 0; i < document.layout.nodeIndex.length; i++) {
+      const node = document.layout.nodeIndex[i]!, bounds = document.layout.bounds[i]
+      if (parents?.get(node) !== container || !ICON_CLOSE_HINT.test(classOf(snap, di, node) ?? '') || !snapshotNodeVisible(snap, di, node)) continue
+      if (!bounds || bounds.length !== 4 || !bounds.every(Number.isFinite) || bounds[2]! <= 0 || bounds[3]! <= 0) continue
+      const center = boundsCenter(bounds as [number, number, number, number])
+      const point = { x: center.x + offset.x - (document.scrollOffsetX ?? 0), y: center.y + offset.y - (document.scrollOffsetY ?? 0) }
+      if (point.x < clip.left || point.y < clip.top || point.x >= clip.right || point.y >= clip.bottom) continue
+      points.push(point)
+    }
+    return points.length === 1 ? points[0]! : null
   }
 
   /**
@@ -504,14 +547,14 @@ export class DetailGreetExecutor {
     if (this.deps.signal?.aborted) throw new CancelledError('已取消：打开简历详情尚未开始')
     const target = opts.name.trim()
     // 起点防残留（ResumeBatchReader 同源）：带着已打开的详情弹层点卡片，弹层挡住列表且打开
-    // 轮询会立刻命中残留 canvas——可能把别人的简历当成目标打开。先 Escape 关闭残留，关不掉 fail-loud
+    // 轮询会立刻命中残留 canvas——可能把别人的简历当成目标打开。先关闭残留，关不掉 fail-loud
     const initial = await this.deps.snapshot()
     const initialState = inspectRecommendationResults(initial)
     if (initialState.stopReason === 'no_matching_candidates' || excludedRecommendationName(initial, target)) return { name: target, opened: false, stopReason: initialState.stopReason ?? 'recommendations_boundary' }
     if (locateResumeCanvas(initial)) {
-      const closed = await this.step('detail:close-residual', () => this.tryCloseDetail())
+      const closed = await this.step('detail:close-residual', () => this.tryCloseDetail(initial))
       if (!closed) {
-        throw new DetailGreetError('启动前检测到已打开的简历详情弹层，且 Escape 后未能关闭：请人工按 Escape 关闭详情后重试')
+        throw new DetailGreetError('启动前检测到已打开的简历详情弹层，但关闭操作未能关闭原画布，需先恢复详情关闭状态')
       }
     }
     this.residualCleared = true
@@ -658,7 +701,7 @@ export class DetailGreetExecutor {
       this.openExecution.stage = 'prepared'
       this.clickedName = undefined
       this.residualCleared = false
-      if (locateResumeCanvas(snap) && !await this.step('detail:close-residual', () => this.tryCloseDetail())) {
+      if (locateResumeCanvas(snap) && !await this.step('detail:close-residual', () => this.tryCloseDetail(snap))) {
         throw new DetailGreetError('未检出完整简历详情，且重试前残留简历详情未能关闭，未向背景卡片输入')
       }
       snap = await this.deps.snapshot()
@@ -689,14 +732,22 @@ export class DetailGreetExecutor {
     const closed = await this.tryCloseDetail()
     if (!closed) {
       throw new DetailGreetError(
-        '打招呼已生效（按钮已翻转为「继续沟通」），但 Escape 未能关闭简历详情：请人工按 Escape 关闭详情后再继续',
+        '打招呼已生效（按钮已翻转为「继续沟通」），但关闭操作未能关闭简历详情；需恢复页面收尾，不重复打招呼',
       )
     }
   }
 
-  /** Escape 关闭详情并轮询 canvas 消失（范式同 ResumeBatchReader.tryCloseDetail）；超时未消失返回 false */
-  private async tryCloseDetail(): Promise<boolean> {
-    await this.preparationInput(() => this.deps.pressEscape())
+  /** One owned close click, or the established business Escape when no unique visible control exists. */
+  private async tryCloseDetail(snapshot?: DomSnapshot): Promise<boolean> {
+    if (this.deps.signal?.aborted) throw new CancelledError('已取消：关闭简历详情尚未开始')
+    const snap = snapshot ?? await this.deps.snapshot()
+    if (!locateResumeCanvas(snap)) return true
+    const point = DetailGreetExecutor.locateDetailClose(snap)
+    await this.preparationInput(() => point ? this.deps.click(point, viewportOf(snap)) : this.deps.pressEscape())
+    return this.waitUntilDetailClosed()
+  }
+
+  private async waitUntilDetailClosed(): Promise<boolean> {
     const attempts = Math.max(1, Math.ceil(CLOSE_POLL_TIMEOUT / CLOSE_POLL_INTERVAL))
     for (let i = 0; i < attempts; i++) {
       await this.sleep(CLOSE_POLL_INTERVAL)

@@ -50,6 +50,7 @@ import { viewportOf } from './FilterSetter.js'
 import { CancelledError } from '../operations/types.js'
 import {
   ResumeReader,
+  ResumeObstructedError,
   locateResumeCanvas,
   canvasCandidates,
   canvasMinSize,
@@ -436,7 +437,7 @@ export class ResumeBatchReader {
           saveImageTo: opts.saveDir ? path.join(opts.saveDir, `${card.name ?? '无名'}.png`) : undefined,
         })
       } catch (err) {
-        if (err instanceof CancelledError) throw err
+        if (err instanceof CancelledError || err instanceof ResumeObstructedError) throw err
         // 读取失败也必须先尝试关闭详情，否则弹层挡住列表没法点下一张
         const closed = await this.tryCloseDetail()
         const readErrMsg = err instanceof Error ? err.message : String(err)

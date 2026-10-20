@@ -40,7 +40,7 @@ async def test_fourth_adapter_uses_the_same_flow_without_adding_a_tool_name_to_i
     assert result['success'] and result['data']['messages'] == []
     assert dispatch.await_args_list[-1].args == ('boss_read_chat', 'resume', None)
     assert dispatch.await_args_list[0].args[2]['observation_mode'] == 'page'
-    assert dispatch.await_args_list[0].args[2]['visual_context']['available_actions'] == ['dismiss_click', 'press_escape']
+    assert dispatch.await_args_list[0].args[2]['visual_context']['available_actions'] == ['dismiss_click']
 
 
 async def test_external_unknown_can_repair_the_page_without_replaying_the_business_action():
@@ -61,11 +61,11 @@ async def test_external_unknown_can_repair_the_page_without_replaying_the_busine
 async def test_two_obstructions_are_rediagnosed_with_fresh_references_before_resuming():
     proxy, original = source()
     dispatch = AsyncMock(side_effect=[vision(), {'success': True}, vision(action=None),
-        vision(action='press_escape', ref='22222222-2222-4222-8222-222222222222'), {'success': True}, clear(), {'success': True}])
+        vision(action='dismiss', ref='22222222-2222-4222-8222-222222222222'), {'success': True}, clear(), {'success': True}])
     result = await recover_operation(proxy, original, dispatch)
     assert result['success']
     steps = result['data']['visual_recovery']['steps']
-    assert [step['action_kind'] for step in steps] == ['dismiss', 'press_escape']
+    assert [step['action_kind'] for step in steps] == ['dismiss', 'dismiss']
     close = [call.args[2]['recovery_ref'] for call in dispatch.await_args_list if call.args[0] == 'boss_overlay_dismiss']
     assert len(set(close)) == 2
     assert len(result['data']['visual_recovery']['receipts']) == 4

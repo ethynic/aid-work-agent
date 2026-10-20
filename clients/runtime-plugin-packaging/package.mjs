@@ -61,11 +61,18 @@ export async function createOfflinePackage(payload, manifest, metadata, privateK
   return { envelope, archive }
 }
 
+/** Copy approved script assets and require the BOSS native dependencies before staging any files. */
+export function copyProviderScriptAssets(name, source, target) {
+  const dependencies = name === 'boss' ? ['BossPhysicalInput.cs', 'BossWindowExperiment.cs'] : []
+  for (const file of dependencies) if (!existsSync(join(source, file))) throw new Error(`BOSS input dependency missing: ${file}`)
+  mkdirSync(target)
+  for (const file of readdirSync(source).filter(file => file.endsWith('.ps1') || dependencies.includes(file))) cpSync(join(source, file), join(target, file))
+}
+
 async function buildProvider(name, options, signer) {
   const definition = definitions[name]
   if (!definition) throw new Error('Unknown first-party Provider')
   const source = join(clients, definition.directory)
-  if (name === 'boss' && !existsSync(join(source, 'scripts/BossPhysicalInput.cs'))) throw new Error('BOSS physical input dependency missing')
   if (!existsSync(join(source, 'dist/src/cli/index.js'))) throw new Error('Build Provider before packaging')
   const stage = mkdtempSync(join(tmpdir(), 'aid-provider-package-'))
   try {
@@ -73,8 +80,7 @@ async function buildProvider(name, options, signer) {
     for (const assets of definition.assets) {
       // BOSS needs approved PowerShell drivers, not developer live probes.
       if (assets === 'scripts') {
-        mkdirSync(join(stage, assets))
-        for (const file of readdirSync(join(source, assets)).filter(file => file.endsWith('.ps1') || (name === 'boss' && file === 'BossPhysicalInput.cs'))) cpSync(join(source, assets, file), join(stage, assets, file))
+        copyProviderScriptAssets(name, join(source, assets), join(stage, assets))
       } else cpSync(join(source, assets), join(stage, assets), { recursive: true })
     }
     if (definition.ocr) {

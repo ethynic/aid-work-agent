@@ -10,6 +10,8 @@
 
 22个页面业务命令在CLI/MCP共用注册入口完成本地恢复闭环：领域执行与成功核验、必要的一次普通重试后，CLI调用既有后台视觉API获取处理建议，在本地执行/核验并在允许时继续原操作。提示词、GLM调用和20倍计费仅在后台API，CLI不直连厂商；服务器工具调度不接手新CLI故障。新回执明确owner=cli、公开领域事实v2，防止二次恢复；旧客户端服务端兼容保留。此流程是原受权设备动作内部恢复，不新增本地任务Agent或权限入口。两分流真机及独立验证已通过，详见[恢复设计U](boss-overlay-heal-design.md)及[计划17](../../plans/desktop-automation/plan-boss-operation-verification-visual-recovery.md#17-cli本地闭环纠正2026-10-18)。
 
+故障恢复现仅允许网页/绑定窗口的鼠标关闭，Escape建议、输入和window-escape实验入口删除；此前已验证的普通关闭详情/附件等业务Escape保留。旧恢复按键声明/回执只可读、不可执行，详见[恢复设计V](boss-overlay-heal-design.md)。
+
 ## 1. 结论
 
 新建 CLI 工具 `clients/boss-resume-assistant/`，与现有 Agent、租户、渠道、服务端 Browser Runtime 和服务端数据库完全解耦。用户自己用日常 Chrome 带 `--remote-debugging-port=9222` 启动并扫码登录、关闭弹窗、进入推荐牛人页面；CLI attach 调试端点并在终端回车确认后，才通过 Chrome DevTools Protocol 的 browser WebSocket 建立连接（attach-only，程序绝不 spawn/kill 用户 Chrome，见 §16 决策 7）。

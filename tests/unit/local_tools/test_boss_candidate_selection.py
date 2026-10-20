@@ -81,7 +81,7 @@ async def test_exact_reference_and_arguments_survive_shared_recovery_without_leg
         'data': {'operation_recovery': facts}}
     obstructed = {'success': True, 'data': {'recovery_ref': 'stored-close', 'visual': {
         'http_status': 200, 'state': 'completed', 'diagnosis': {'obstruction': 'present',
-            'goal_state': 'not_satisfied', 'proposed_action': {'kind': 'dismiss_click'}}}}}
+            'goal_state': 'not_satisfied', 'proposed_action': {'kind': 'dismiss'}}}}}
     restored = {'success': True, 'data': {'visual': {'http_status': 200, 'state': 'completed',
         'diagnosis': {'obstruction': 'absent', 'goal_state': 'satisfied', 'proposed_action': None}}}}
     dispatch = AsyncMock(side_effect=[source, obstructed, {'success': True}, restored,

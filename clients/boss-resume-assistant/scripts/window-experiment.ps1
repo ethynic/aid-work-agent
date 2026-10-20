@@ -1,5 +1,5 @@
 ﻿param(
-  [ValidateSet('capture','click','escape')][string]$Action = 'capture',
+  [ValidateSet('capture','click')][string]$Action = 'capture',
   [int]$CdpPort = 9222,
   [string]$Output = '',
   [string]$Observation = '',
@@ -33,12 +33,8 @@ try {
     if ($age -lt 0 -or $age -gt $MaxAgeSeconds) { throw 'Observation expired; capture again' }
     [BossWindowExperiment]::RequireGeometry($window, $meta.window.left, $meta.window.top, $meta.window.width, $meta.window.height)
   }
-  if ($Action -eq 'escape') {
-    [BossWindowExperiment]::RequireForeground($window)
-  } else {
-    [BossWindowExperiment]::Foreground($window)
-    Start-Sleep -Milliseconds 400
-  }
+  [BossWindowExperiment]::Foreground($window)
+  Start-Sleep -Milliseconds 400
   [BossWindowExperiment]::RequireForeground($window)
   $rect = [BossWindowExperiment]::ReadCaptureRect($window)
   $width = $rect.Right - $rect.Left
@@ -69,18 +65,6 @@ try {
     } finally { $graphics.Dispose(); $fresh.Dispose(); $original.Dispose() }
     [BossWindowExperiment]::Click($window, $meta.window.left, $meta.window.top, $meta.window.width, $meta.window.height, $X, $Y, $scope)
     @{ clicked = $true; x = $X; y = $Y; space = 'window_image_px'; hwnd = $window.ToInt64().ToString() } | ConvertTo-Json -Compress
-  } elseif ($Action -eq 'escape') {
-    if ($meta.cdp_port -ne $CdpPort -or $meta.width -ne $width -or $meta.height -ne $height) { throw 'Observation image/port mismatch; input refused' }
-    $actualHash = (Get-FileHash -LiteralPath $meta.output -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($actualHash -ne $meta.sha256) { throw 'Original observation image changed; input refused' }
-    $original = [System.Drawing.Bitmap]::FromFile($meta.output)
-    try {
-      if ($original.Width -ne $width -or $original.Height -ne $height) { throw 'Original observation dimensions changed; input refused' }
-    } finally { $original.Dispose() }
-    $age = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($meta.captured_at)).TotalSeconds
-    if ($age -lt 0 -or $age -gt $MaxAgeSeconds) { throw 'Observation expired; capture again' }
-    [BossWindowExperiment]::Escape($window, $meta.window.left, $meta.window.top, $meta.window.width, $meta.window.height, $scope)
-    @{ key = 'Escape'; sent = $true; input_status = 'attempted'; hwnd = $window.ToInt64().ToString() } | ConvertTo-Json -Compress
   } else {
     $screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
     if ($rect.Left -lt $screen.Left -or $rect.Top -lt $screen.Top -or $rect.Right -gt $screen.Right -or $rect.Bottom -gt $screen.Bottom) { throw 'Browser window extends outside visible screen; capture refused' }

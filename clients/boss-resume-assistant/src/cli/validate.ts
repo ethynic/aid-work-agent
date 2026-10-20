@@ -43,7 +43,6 @@ const COMMAND_FLAGS: Readonly<Record<string, readonly string[]>> = {
   screenshot: ['output', 'scope', 'snapshot-output', 'json'],
   'window-click': ['observation', 'x', 'y', 'max-age-seconds', 'json'],
   'page-click': ['image', 'x', 'y', 'max-age-seconds', 'json'],
-  'window-escape': ['observation', 'max-age-seconds', 'json'],
   'visual-diagnose': ['image', 'observation', 'request-id', 'goal', 'context-file', 'api-version', 'retrieve-only', 'json'],
   mcp: ['stdio'],
   doctor: ['json'],
@@ -58,7 +57,6 @@ const COMMAND_POSITIONALS: Readonly<Record<string, number>> = {
   screenshot: 0,
   'window-click': 0,
   'page-click': 0,
-  'window-escape': 0,
   'visual-diagnose': 0,
   'greet-selected': 1,
   goto: 1, // goto recommend|chat
@@ -93,6 +91,7 @@ export function validateCommandArgs(command: string | undefined, args: ParsedArg
   // 未登记的子命令（含无参数时的 undefined、help）不在本层报错：
   // 交回 main() 的 switch default 分支，保持既有「未知子命令」文案
   if (command === undefined) return { ok: true }
+  if (command === 'window-escape') return { ok: false, message: 'window-escape 已移除；故障恢复仅允许鼠标点击关闭' }
   const cmdFlags = ownEntry(COMMAND_FLAGS, command)
   if (cmdFlags === undefined) return { ok: true }
 
@@ -129,10 +128,10 @@ export function validateCommandArgs(command: string | undefined, args: ParsedArg
   }
 
   // 3) greet 显式意图门禁（防误触发真实写动作）
-  if (command === 'window-click' || command === 'window-escape' || command === 'page-click') {
+  if (command === 'window-click' || command === 'page-click') {
     if (command === 'page-click' && args.flags.has('cdp-port') && typeof args.flags.get('cdp-port') !== 'string') return { ok: false, message: '--cdp-port 需要端口值' }
-    for (const key of command === 'page-click' ? ['image', 'x', 'y'] : command === 'window-click' ? ['observation', 'x', 'y'] : ['observation']) if (typeof args.flags.get(key) !== 'string' || !String(args.flags.get(key)).trim()) return { ok: false, message: `${command} 需要 --${key}` }
-    if (command !== 'window-escape') for (const key of ['x', 'y']) if (!Number.isInteger(Number(args.flags.get(key))) || Number(args.flags.get(key)) < 0) return { ok: false, message: `--${key} 需要非负整数像素` }
+    for (const key of command === 'page-click' ? ['image', 'x', 'y'] : ['observation', 'x', 'y']) if (typeof args.flags.get(key) !== 'string' || !String(args.flags.get(key)).trim()) return { ok: false, message: `${command} 需要 --${key}` }
+    for (const key of ['x', 'y']) if (!Number.isInteger(Number(args.flags.get(key))) || Number(args.flags.get(key)) < 0) return { ok: false, message: `--${key} 需要非负整数像素` }
     if (args.flags.has('max-age-seconds') && (typeof args.flags.get('max-age-seconds') !== 'string' || !Number.isInteger(Number(args.flags.get('max-age-seconds'))) || Number(args.flags.get('max-age-seconds')) < 1 || Number(args.flags.get('max-age-seconds')) > 600)) return { ok: false, message: '--max-age-seconds 需要1-600整数秒' }
     if (args.flags.has('json') && args.flags.get('json') !== true) return { ok: false, message: '--json 不接受值' }
   }

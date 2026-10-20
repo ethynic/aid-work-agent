@@ -261,7 +261,7 @@ def test_v2_visible_postcondition_is_not_rejected_by_v1_blanket_rule(api):
     result = response.json()
     assert result["api_version"] == 2
     assert result["diagnosis"] == diagnosis_v2()
-    assert result["prompt_version"] == "boss-visual-v7-experiment-1"
+    assert result["prompt_version"] == "boss-visual-v8-click-only"
     assert result["receipt"]["credit_cost"] == "0.20"
     messages = api[2].call_args.kwargs["messages"]
     assert result["prompt_digest"] == hashlib.sha256(messages[0]["content"].encode()).hexdigest()
@@ -279,14 +279,18 @@ def test_v2_visible_postcondition_is_not_rejected_by_v1_blanket_rule(api):
     api[2].assert_awaited_once()
 
 
-def test_v2_escape_preserves_single_safe_action_without_coordinates(api):
+def test_v2_escape_is_discarded_without_losing_correct_assessment_or_billing(api):
     body = payload_v2()
     body["purpose"] = "diagnose"
     body["error"] = {"code": "INPUT_REJECTED", "source": "input_guard", "summary": "输入开始前被守卫拒绝"}
     action = {"kind": "press_escape", "target_label": "收起Chrome菜单"}
     api[2].return_value["content"] = json.dumps(diagnosis_v2(action, "not_satisfied", "present"))
     result = post(api, body).json()
-    assert result["diagnosis"]["proposed_action"] == action
+    assert result["diagnosis"] == diagnosis_v2(None, "not_satisfied", "present")
+    assert result["action_error"] == "INVALID_MODEL_ACTION"
+    assert result["receipt"]["credit_cost"] == "0.20"
+    assert post(api, body).json() == result
+    api[2].assert_awaited_once()
     assert json.loads(api[2].call_args.kwargs["messages"][1]["content"][0]["text"])["error"] == body["error"]
 
 
@@ -590,4 +594,34 @@ def test_invalid_persisted_factor_fails_before_dispatch_or_model(api):
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "VISUAL_BILLING_SNAPSHOT_INVALID"
     assert api[1][api[3].tenant_id, body["request_id"]]["status"] == "reserved"
+    api[2].assert_not_called()
+
+
+@pytest.mark.parametrize("action,action_error", [(None, None), ({"kind": "press_escape", "target_label": "取消"}, "INVALID_MODEL_ACTION")])
+def test_v2_extra_model_note_does_not_discard_page_assessment_or_bypass_action_validation(api, action, action_error):
+    # Observed model shape: all six contracted fields plus an unrequested empty note.
+    expected = diagnosis_v2(None, "not_satisfied", "present")
+    api[2].return_value["content"] = json.dumps({**expected, "proposed_action": action, "missing_evidence_note": ""})
+    body = payload_v2()
+    result = post(api, body).json()
+    assert result["diagnosis"] == expected
+    assert result["diagnosis_error"] is None and result["action_error"] == action_error
+    assert "missing_evidence_note" not in json.dumps(result)
+    assert result["receipt"]["credit_cost"] == "0.20"
+    assert post(api, {"api_version": 2, "request_id": body["request_id"], "retrieve_only": True}).json() == result
+    api[2].assert_awaited_once()
+
+
+@pytest.mark.parametrize("field,value", [("goal_state", "failed"), ("reason", None), ("missing_evidence", "unknown")])
+def test_v2_ignoring_model_extra_fields_does_not_relax_known_assessment_types(api, field, value):
+    api[2].return_value["content"] = json.dumps({**diagnosis_v2(), field: value, "missing_evidence_note": ""})
+    result = post(api, payload_v2()).json()
+    assert result["diagnosis"] is None and result["diagnosis_error"] == "INVALID_MODEL_DIAGNOSIS"
+    api[2].assert_awaited_once()
+
+
+def test_v2_model_field_tolerance_does_not_accept_extra_http_request_fields(api):
+    body = payload_v2()
+    body["missing_evidence_note"] = ""
+    assert post(api, body).status_code == 422
     api[2].assert_not_called()

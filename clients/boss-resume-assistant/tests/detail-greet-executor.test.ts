@@ -94,7 +94,7 @@ function causalDeps(opts: { duplicate?: boolean; noFlip?: boolean; blockOpen?: b
 
 test('正常链路：姓名校验 → 容器内定位 → 点击 → 翻转 → Escape 关闭；点击点是容器内按钮中心而非列表诱饵', async () => {
   // 快照序列：打开态（容器内=打招呼 + 2 个容器外诱饵）→ 点击后翻转（容器内=继续沟通）→ Escape 后列表态
-  const r = makeDeps([detailSnap({ name: NAME, state: 'greet' }), detailSnap({ name: NAME, state: 'continue' }), closedListSnap()])
+  const r = makeDeps([detailSnap({ name: NAME, state: 'greet' }), detailSnap({ name: NAME, state: 'continue' }), detailSnap({ name: NAME, state: 'continue' }), closedListSnap()])
   const executor = new DetailGreetExecutor(r.deps)
   const out = await executor.greet({ name: NAME })
   assert.deepEqual(out, { greeted: true })
@@ -115,6 +115,7 @@ test('列表诱饵在容器外不误点：诱饵再多也只认容器内的「�
   const r = makeDeps([
     detailSnap({ name: NAME, state: 'greet', decoyRows: decoys }),
     detailSnap({ name: NAME, state: 'continue', decoyRows: decoys }),
+    detailSnap({ name: NAME, state: 'continue', decoyRows: decoys }),
     closedListSnap(),
   ])
   const out = await new DetailGreetExecutor(r.deps).greet({ name: NAME })
@@ -123,7 +124,7 @@ test('列表诱饵在容器外不误点：诱饵再多也只认容器内的「�
 })
 
 test('alreadyGreeted 幂等：容器内已是「继续沟通」→ 不点击直接关闭', async () => {
-  const r = makeDeps([detailSnap({ name: NAME, state: 'continue' }), closedListSnap()])
+  const r = makeDeps([detailSnap({ name: NAME, state: 'continue' }), detailSnap({ name: NAME, state: 'continue' }), closedListSnap()])
   const out = await new DetailGreetExecutor(r.deps).greet({ name: NAME })
   assert.deepEqual(out, { greeted: false, already: true })
   assert.equal(r.clicks.length, 0)
@@ -254,6 +255,7 @@ test('翻转轮询容忍单轮定位失败：第 1 轮操作列缺失（弹层�
   const r = makeDeps([
     detailSnap({ name: NAME, state: 'greet' }),
     transient,
+    detailSnap({ name: NAME, state: 'continue' }),
     detailSnap({ name: NAME, state: 'continue' }),
     closedListSnap(),
   ])

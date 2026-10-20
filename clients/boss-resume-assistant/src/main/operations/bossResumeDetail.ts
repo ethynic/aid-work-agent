@@ -30,6 +30,7 @@ import { fileURLToPath } from 'node:url'
 import {
   MAX_SEGMENTS,
   ResumeReader,
+  RESUME_SNAPSHOT_OPTIONS,
   ResumeReadError,
   locateResumeCanvas,
   type DeviceRect,
@@ -262,7 +263,7 @@ export function createBossResumeDetailOperation(
             const jobBox = new JobSwitcher({ snapshot: session.snapshot, click: session.click }).locateJobBox(probe)
             const viewport = viewportOf(probe)
             const reader = new ResumeReader({
-              snapshot: session.snapshot,
+              snapshot: () => session.snapshot(RESUME_SNAPSHOT_OPTIONS),
               captureFullpage: session.captureFullpage,
               wheel: (deltaY, notches) => attempt.input(() => wheelAt(rect, viewport, deltaY, notches)),
               sameView: (a, b) => sameViewAt(a, b, rect),
