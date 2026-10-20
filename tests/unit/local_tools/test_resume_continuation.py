@@ -41,6 +41,18 @@ async def test_cumulative_history_not_model_supplied_names(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_late_completed_parent_retains_original_cursor_and_device(monkeypatch):
+    original = parent()
+    original.update(state='unknown', effect='unknown', result_json={'_late_result': {
+        **original['result_json'], 'effect':'none', 'stopped':True}})
+    monkeypatch.setattr(repository, 'get_invocation', lambda *args: original)
+    result, failure = await continuation.prepare_next(kwargs())
+    assert failure is None and result['_resume_expected_device_id'] == 'device'
+    assert result['exclude_names'] == ['甲先生','乙先生','丙先生']
+    assert original['state'] == 'unknown'
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('change', [
     {'tenant_id': 'other'}, {'user_id': 'other'}, {'session_id': 'other'},
     {'tool_name': 'boss_greet'}, {'state': 'running'}, {'effect': 'unknown'},
@@ -145,18 +157,20 @@ async def test_durable_gate_and_empty_batch_preserve_cursor(monkeypatch):
 
 def test_atomic_stale_guard_does_not_insert_and_keeps_runner_dedupe():
     cursor = MagicMock()
-    cursor.fetchone.side_effect = [{'id': PARENT}, {'id': 'already-next', 'business_kind': 'agent_runner', 'dedupe_key': 'other-call'}]
+    cursor.fetchone.side_effect = [{'id':'device'}, None, parent()]
+    cursor.fetchall.side_effect = [[], [{'id': 'already-next', 'business_kind': 'agent_runner', 'dedupe_key': 'other-call'}]]
     with pytest.raises(repository.ResumeContinuationConflict) as caught:
         repository.create_invocation_in_tx(cursor, 'tenant', 'user', 'device', 'boss_resume_next',
             {'continue_from': PARENT}, 'session', business_kind='agent_runner', dedupe_key='current-call')
     assert caught.value.invocation_id == 'already-next'
-    assert 'FOR UPDATE' in cursor.execute.call_args_list[0].args[0]
+    assert any('FOR UPDATE' in call.args[0] for call in cursor.execute.call_args_list)
     assert all('INSERT' not in c.args[0] for c in cursor.execute.call_args_list)
 
 
 def test_durable_same_request_can_rebind_original_invocation():
     cursor = MagicMock()
-    cursor.fetchone.side_effect = [{'id': PARENT}, {'id': 'already-next', 'business_kind': 'agent_runner', 'dedupe_key': 'same-call'}, {'id': 'already-next'}]
+    cursor.fetchone.side_effect = [{'id':'device'}, None, parent(), {'id': 'already-next'}]
+    cursor.fetchall.side_effect = [[], [{'id': 'already-next', 'business_kind': 'agent_runner', 'dedupe_key': 'same-call'}]]
     actual = repository.create_invocation_in_tx(cursor, 'tenant', 'user', 'device', 'boss_resume_next',
         {'continue_from': PARENT}, 'session', business_kind='agent_runner', dedupe_key='same-call')
     assert actual == 'already-next'

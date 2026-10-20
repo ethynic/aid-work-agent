@@ -28,7 +28,7 @@ const FRESH_METADATA = new Set(['config.json', 'credentials.bin', 'pairing.pendi
 interface Kernel { bootId: string; sessionId: number }
 interface Witness extends Kernel { schemaVersion: 1; home: string; resourcesDigest: string }
 interface Epoch extends Kernel { schemaVersion: 1; home: string }
-interface Ledger extends Kernel { schemaVersion: 1; home: string; generation: string; ownerPid: number; jobs: string[] }
+interface Ledger extends Kernel { schemaVersion: 1; home: string; generation: string; ownerPid: number; jobs: string[]; business_started?: boolean }
 interface Snapshot { digest: string; entries: string[]; marker?: string; markerUnreadable: boolean; files: Map<string, string | null>; supervisionEntries: string[] }
 class ResourceFailure extends Error { constructor(readonly category: string) { super(category) } }
 const inspectionDeadline = new AsyncLocalStorage<number>()
@@ -320,7 +320,8 @@ async function checkResources(home: string, nodeExecutable: string,
           continue
         }
         requireResource(UUID.test(name.slice(0, -4)) && name.endsWith('.bin')
-          && exact(value, ['schemaVersion', 'generation', 'home', 'bootId', 'sessionId', 'ownerPid', 'jobs'])
+          && exact(value, ['schemaVersion', 'generation', 'home', 'bootId', 'sessionId', 'ownerPid', 'jobs', ...(Object.hasOwn(value, 'business_started') ? ['business_started'] : [])])
+          && (!Object.hasOwn(value, 'business_started') || typeof value.business_started === 'boolean')
           && value.schemaVersion === 1 && value.home === home && uuid(value.generation) && name.toLowerCase() === `${value.generation}.bin`.toLowerCase()
           && uuid(value.bootId) && session(value.sessionId) && Number.isSafeInteger(value.ownerPid) && Number(value.ownerPid) > 0
           && Array.isArray(value.jobs) && value.jobs.length <= 10000 && value.jobs.every(job => typeof job === 'string' && job.startsWith('AidWorkRuntime.') && UUID.test(job.slice(15))))

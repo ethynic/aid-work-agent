@@ -14,6 +14,7 @@ from src.config.settings import settings
 from src.services.agent_runner.contracts import AttachmentRef, RunnerError, RunnerSubmit, SessionRef
 from src.services.agent_runner.web_client import RunnerServiceClient, close_event_transport
 from src.services.agent_runner.control_contracts import RunnerControl
+from src.services.agent_runner.api import EndWaitingRequest, VerifyLocalRequest
 from src.services.agent_runner.event_stream import ObserverAdmission, parse_cursor
 from src.services.agent_runner.web_event_stream import WebEventResponse
 
@@ -159,6 +160,14 @@ def create_router(config=None, client=None):
             raise RunnerError('CONTROL_COMPLETION_FORBIDDEN',403)
         return await forward(request,'POST','/v1/runners/'+quote(runner_id,safe='')+'/controls',
                              body=control_body(body))
+
+    @router.post('/runners/{runner_id}/verify-local')
+    async def verify_local(runner_id: str, body: VerifyLocalRequest, request: Request):
+        return await forward(request, 'POST', '/v1/runners/'+quote(runner_id,safe='')+'/verify-local', body=body.model_dump())
+
+    @router.post('/runners/{runner_id}/end-waiting')
+    async def end_waiting(runner_id: str, body: EndWaitingRequest, request: Request):
+        return await forward(request, 'POST', '/v1/runners/'+quote(runner_id,safe='')+'/end-waiting', body={})
 
     @router.get('/runners/{runner_id}/controls/{control_id}')
     async def get_control(runner_id: str,control_id: str,request: Request):

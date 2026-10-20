@@ -339,7 +339,8 @@ class RunnerWorker:
         facts = await collect(not control.envelope.get('cancel_completion_requested',False))
         until = time.monotonic()+5.0
         while True:
-            ready, issue = cancel_completion_status(facts)
+            ready, issue = cancel_completion_status(facts,
+                detached_local_wait=control.envelope.get('detached_local_wait') is True)
             if ready:
                 return True
             if issue != 'LOCAL_CANCEL_ACK_PENDING' or time.monotonic() >= until:
@@ -397,6 +398,8 @@ class RunnerWorker:
                     state = control.envelope.get('execution')
                     state = ExecutionState.restore(state) if state else None
                     result = execution_result(state,'cancelled')
+                    if control.envelope.get('detached_local_wait') is True:
+                        result['output'] = '已结束原任务的云端等待，可以继续对话。原本机操作结果仍待核对；确认停止前，该设备的新操作会被阻止。'
                     result['duration_ms'] = int((time.monotonic()-started)*1000)
                     await control.stage(state,result)
                 scope.check()

@@ -8,6 +8,8 @@ schema_digest 强校验留 M0.5 接 LLM schema 时实现。
 from typing import Any, Dict, List, Optional
 
 TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
+    "runtime-recovery": {"provider_id":"ai.aidwork.runtime-recovery", "min_provider_version":"1.0.0",
+        "execution_target":"local_required", "tools":["runtime_recovery_observe"]},
     "boss-recruiting": {
         "provider_id": "ai.aidwork.boss-recruiting",
         "min_provider_version": "1.0.0",

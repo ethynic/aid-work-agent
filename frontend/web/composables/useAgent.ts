@@ -107,6 +107,25 @@ const error = ref<string | null>(null)
 // a session's history/error state must not replay a toast from another view.
 const runnerFeedback = ref<{ message: string; canPresent: () => boolean } | null>(null)
 
+const LOCAL_RECOVERY_MESSAGES = {
+  stopBusy: '原设备还有正在执行的任务，本次未停止。请等该任务结束后重试，仍可只读观察页面。',
+  verification: '原本机操作结果尚未核对，不能重复执行。请保持原 Runtime 连接，使用“核对并继续”；也可结束等待后继续对话。补充消息和附件已保留，但尚未应用。',
+  instruction: '原本机操作需要核对。请使用“核对并继续”或“结束等待，继续对话”；本次输入和附件已保留。',
+  ending: '正在结束原任务，请稍候再发送。本次输入和附件已保留。',
+  cancelBlocked: '原任务取消后仍有本机结果待核对，可选择“结束等待，继续对话”；本次输入和附件已保留。',
+  upgrade: '当前服务端尚不支持结束等待，请联系管理员更新服务端。原任务、消息和附件已保留。',
+  verifyUpgrade: '原设备 Runtime 不支持安全只读核验，请更新 Runtime 后重试。旧操作结果仍保留未知。',
+  verifyActive: '原本机调用仍在排队或执行，暂不能只读核验。请等待原结果，或先选择结束等待；核验不会自动取消原操作。',
+  verifyUnavailable: '本机只读核验暂不可用，请确认原 Runtime 连接后重试；原操作不会重新执行。',
+  unavailable: '原操作暂不能结束等待。请保持原 Runtime 连接以回传结果，再核对原操作；补充消息和附件仍保留。',
+} as const
+
+function recoveryControlMessage(code?: string | null) {
+  if (code === 'RECOVERY_TOOL_VERIFICATION_REQUIRED' || code === 'LOCAL_DEADLINE_VERIFICATION_REQUIRED')
+    return LOCAL_RECOVERY_MESSAGES.verification
+  return '任务暂时无法继续，补充消息和附件已保留，但尚未应用。'
+}
+
 // 当前附件列表（输入框草稿，跨会话共享，与现状一致）
 const currentFiles = ref<UploadedFile[]>([])
 
@@ -170,6 +189,77 @@ const inputHintState = computed<InputHintState>({
 })
 
 export function useAgent() {
+  const localRecovery = computed(() => {
+    const state = getStreamState(sessionId.value)
+    void state.messages.value
+    void state.isProcessing.value
+    if (state.pendingControl) return undefined
+    const rows = [...state.runnerViews.values()].sort((a,b) => b.queue_order-a.queue_order)
+    return rows.find(row => (row.local_recovery || row.local_verification_available) && !row.resume_requested)
+      || (rows[0]?.local_verification?.resource_stopped ? rows[0] : undefined)
+  })
+  const localVerificationMessage = computed(() => {
+    const value = localRecovery.value?.local_verification
+    if (!value) return ''
+    if (value.resource_stopped && value.page_observed === false) return value.waiting_ended
+      ? '旧执行已停稳，但原页面未核对；原等待已结束。请明确提出当前页的新意图，未知发送不会重发。'
+      : '旧执行已停稳，但原页面未核对。请结束等待，再明确提出当前页的新意图，未知发送不会重发。'
+    if (value.resource_stopped && value.waiting_ended) return '旧执行已停稳，已只读观察页面。原等待已结束，请明确提出新的页面意图；未知发送不会重发。'
+    if (value.resource_stopped) return value.target_relation === 'original'
+      ? '旧执行已停稳，已只读观察原页面。请结束等待，再明确提出新的页面操作；未知发送不会重发。'
+      : '旧执行已停稳，已只读观察当前页面，但无法核对原目标。请结束等待，再明确提出当前页的新意图；未知发送不会重发。'
+    if (value.state === 'queued' || value.state === 'running' || value.state === 'claimed') return '正在等待原 Runtime 处理核验请求，不会重新执行原操作。'
+    const stopIssue = value.stop_error_code
+    if (stopIssue === 'LOCAL_RECOVERY_BUSY') return '原设备还有正在执行的任务，本次未回收受管进程。请等该任务结束后重试；只读观察仍可使用。'
+    if (stopIssue === 'LOCAL_RECOVERY_LEGACY_UNMANAGED') return '检测到未受管的旧 Runtime 实例。请先结束该旧实例，再停止旧执行并解锁设备；无需重启 Windows。'
+    if (stopIssue === 'LOCAL_RECOVERY_PROCESS_CHECK_UNAVAILABLE') return '查询系统进程失败，未能确认旧执行已停止；请检查 Runtime 诊断后重试，仍可只读观察页面。'
+    if (stopIssue === 'LOCAL_RECOVERY_OTHER_SESSION') return '旧执行仍属于另一个 Windows 登录会话。请退出该会话的旧 Runtime 并等待停止回执，或注销该登录会话后重试；无需重启 Windows。'
+    if (stopIssue === 'LOCAL_RECOVERY_NO_EXECUTION_EVIDENCE') return '当前 Runtime 缺少原受管业务记录，不能据此解除历史设备占用；请连接原设备的原 Runtime 配置。只读观察仍可使用。'
+    if (value.page_observed) {
+      const result = value.page_summary?.result
+      const detail = result === 'match' ? '当前页面事实与期望匹配' : result === 'mismatch' ? '当前页面事实与期望不匹配' : '原操作结果仍无法确认'
+      return `已只读观察${value.target_relation === 'original' ? '原' : '当前'}页面；${detail}。旧执行是否停止仍未知，原调用不会自动重发。`
+    }
+    return '未取得停止及页面核验证据。请检查原 Runtime、已有 Chrome 和原标签；不会切换标签或重新执行原操作。'
+  })
+  const localRecoveryBusy = ref(false)
+  async function resolveLocalRecovery(action: 'resume' | 'end' | 'verify' | 'stop') {
+    const row = localRecovery.value
+    if (!row || localRecoveryBusy.value || action === 'resume' && row.cancel_requested) return
+    const sid = sessionId.value
+    const state = getStreamState(sid)
+    const generation = state.runnerGeneration
+    const headers = getEffectiveAuthHeader()
+    localRecoveryBusy.value = true
+    try {
+      if (action === 'verify' || action === 'stop') {
+        const updated = await state.runnerClient.verifyLocal(row.runner_id, crypto.randomUUID(), headers, action === 'stop')
+        if (!currentRunnerContext(state,sid,generation,headers)) return
+        observeRunner(state,updated,headers)
+      } else if (action === 'resume') {
+        const body: RunnerControlIntent = { client_request_id:crypto.randomUUID(), action:'resume' }
+        state.pendingControl = { runnerId:row.runner_id, body }
+        state.isProcessing.value = true
+        await submitControl(state, row.runner_id, body, headers)
+      } else {
+        const updated = await state.runnerClient.endWaiting(row.runner_id, headers)
+        if (!currentRunnerContext(state,sid,generation,headers)) return
+        state.controlIssue = undefined
+        observeRunner(state,updated,headers)
+      }
+    } catch (issue) {
+      if (currentRunnerContext(state,sid,generation,headers)) runnerError(sid,
+        new Error(action === 'verify' || action === 'stop'
+          ? issue instanceof RunnerRequestError && issue.code === 'LOCAL_RECOVERY_BUSY'
+            ? LOCAL_RECOVERY_MESSAGES.stopBusy
+            : issue instanceof RunnerRequestError && issue.code === 'LOCAL_VERIFICATION_ORIGINAL_ACTIVE'
+            ? LOCAL_RECOVERY_MESSAGES.verifyActive
+            : issue instanceof RunnerRequestError && (issue.status === 404 || issue.code === 'LOCAL_VERIFICATION_RUNTIME_UPGRADE_REQUIRED')
+            ? LOCAL_RECOVERY_MESSAGES.verifyUpgrade : LOCAL_RECOVERY_MESSAGES.verifyUnavailable
+          : issue instanceof RunnerRequestError && issue.status === 404
+            ? LOCAL_RECOVERY_MESSAGES.upgrade : LOCAL_RECOVERY_MESSAGES.unavailable))
+    } finally { localRecoveryBusy.value = false }
+  }
   const canStop = computed(() => {
     const state = getStreamState(sessionId.value)
     return state.isProcessing.value || state.messages.value.some(message => {
@@ -230,6 +320,7 @@ export function useAgent() {
   /** runner 错误文案归约：control 保留文案 / NO_CREDIT 积分提示 / 通用兜底 */
   function runnerIssueText(issue: Error): string {
     const safeMessages = new Set([
+      ...Object.values(LOCAL_RECOVERY_MESSAGES),
       '消息操作未成功，请稍后重试。',
       '任务暂时无法继续，补充消息和附件已保留，但尚未应用。',
       '暂时无法确认原任务状态，本次消息和附件已保留。',
@@ -394,7 +485,7 @@ export function useAgent() {
           : { ...item, status: 'accepted', applied: control.status === 'consumed' })
       }
       if (control.status==='rejected') {
-        state.controlIssue = '任务暂时无法继续，补充消息和附件已保留，但尚未应用。'
+        state.controlIssue = recoveryControlMessage(control.error_code)
         runnerError(sid,new Error(state.controlIssue),
           (!!previous && previous.status !== 'rejected') || state.liveControlKeys.has(control.client_request_id))
       }
@@ -589,7 +680,7 @@ export function useAgent() {
       observeRunner(state,result.runner,headers)
       state.controlViews.set(result.control.control_id,result.control)
       if (result.control.status==='rejected') {
-        state.controlIssue = '任务暂时无法继续，补充消息和附件已保留，但尚未应用。'
+        state.controlIssue = recoveryControlMessage(result.control.error_code)
         runnerError(sid,new Error(state.controlIssue))
         state.liveControlKeys.delete(body.client_request_id)
         return false
@@ -926,12 +1017,21 @@ export function useAgent() {
       .find(row => ['waiting','paused','interrupted'].includes(row.status))
     const leaf = clarificationLeaf(parked?.snapshot.waiting)
     const canReply = !!(leaf?.wait_id && leaf.target_execution_id)
+    if (parked?.cancel_requested) {
+      runnerError(effectiveSessionId,new Error(parked.local_recovery
+        ? LOCAL_RECOVERY_MESSAGES.cancelBlocked : LOCAL_RECOVERY_MESSAGES.ending))
+      return { restoreInput:true, canRestore:() => currentRunnerContext(state,effectiveSessionId,generation,headers) }
+    }
     let resumeWait = parked?.snapshot.waiting
     let waitDepth = 64
     while (resumeWait?.kind === 'child_wait' && waitDepth-- > 0) resumeWait = resumeWait.child_wait
     const canResume = !!parked && ['paused','interrupted'].includes(parked.status)
       && !resumeWait
     if (parked && (canReply || canResume) && !parked.resume_requested) {
+      if (parked.local_recovery && !canReply) {
+        runnerError(effectiveSessionId,new Error(LOCAL_RECOVERY_MESSAGES.instruction))
+        return { restoreInput:true, canRestore:() => currentRunnerContext(state,effectiveSessionId,generation,headers) }
+      }
       if (state.submitSelecting || state.pendingRunner || state.pendingControl) return
       const files = currentFiles.value.filter(file => file.file_id)
       const body: RunnerControlIntent = JSON.parse(JSON.stringify({ client_request_id:generateSessionId(),
@@ -1471,6 +1571,10 @@ export function useAgent() {
     liveVerbose,
     error,
     runnerFeedback,
+    localRecovery,
+    localRecoveryBusy,
+    localVerificationMessage,
+    resolveLocalRecovery,
     sessionId,
     currentFiles,
     sendMessage,

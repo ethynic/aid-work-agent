@@ -20,6 +20,9 @@ export interface RunnerPresentation {
   imagesPlacement?: ImageRef['placement']
 }
 export interface RunnerView {
+  local_recovery?: boolean
+  local_verification_available?: boolean
+  local_verification?: { invocation_id: string; state: string; resource_stopped?: boolean; page_observed?: boolean; target_relation?: string | null; waiting_ended?: boolean; error_code?: string | null; stop_error_code?: string | null; page_summary?: { observed: boolean; page_kind: string; result?: 'match' | 'mismatch' | 'unknown'; filter_count?: number | null; panel_open?: boolean; count_result?: string } }
   runner_id: string
   client_request_id: string
   /** 服务端已公开的实际执行配置身份；旧版本响应可以省略。 */
@@ -73,7 +76,7 @@ function formErrors(value: unknown): AskFormErrorItem[] | undefined {
 }
 
 const apiBase = () => `${import.meta.env.VITE_API_BASE_URL || '/api'}/chat`
-export const runnerObservationComplete = (row: RunnerView) => runnerTerminal(row.status) && row.settlement_status === 'settled'
+export const runnerObservationComplete = (row: RunnerView) => runnerTerminal(row.status) && row.settlement_status === 'settled' && !['queued','claimed','running'].includes(row.local_verification?.state || '')
 export const runnerTerminal = (status: RunnerStatus) => ['completed', 'failed', 'cancelled'].includes(status)
 
 /** Requests are observers. Aborting them never sends a control request. */
@@ -132,6 +135,12 @@ export class RunnerClient {
   }
   async cancel(id: string, headers: Record<string, string>) {
     return (await this.request<{ success: boolean; runner: RunnerView }>('/runners/' + encodeURIComponent(id) + '/cancel', headers, {})).runner
+  }
+  async verifyLocal(id: string, requestId: string, headers: Record<string, string>, stopResources = false) {
+    return (await this.request<{ success: boolean; runner: RunnerView }>('/runners/' + encodeURIComponent(id) + '/verify-local', headers, { client_request_id: requestId, ...(stopResources ? { stop_resources: true } : {}) })).runner
+  }
+  async endWaiting(id: string, headers: Record<string, string>) {
+    return (await this.request<{ success: boolean; runner: RunnerView }>('/runners/' + encodeURIComponent(id) + '/end-waiting', headers, {})).runner
   }
   async control(id: string, body: RunnerControlIntent, headers: Record<string, string>) {
     const result = await this.request<{ success: boolean; runner: RunnerView; control: RunnerControlView }>(

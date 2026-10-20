@@ -465,12 +465,18 @@ export class FilterSetter {
   /** 只读 fresh 核验，不打开面板、不点击；快照 I/O 错误原样传播。 */
   async verifyLastPostcondition(): Promise<FilterPostcondition> {
     const snap = await this.deps.snapshot()
+    const observed = this.observePostcondition(snap, this.expectedCount)
+    return { ...observed, ...(observed.status === 'met' && this.pendingResult ? { result: structuredClone(this.pendingResult) } : {}) }
+  }
+
+  /** Pure snapshot reader shared by recovery; never opens or changes the panel. */
+  observePostcondition(snap: DomSnapshot, expectedCount: number | null = null): FilterPostcondition {
     this.requireSameAccount(snap)
     const observedCount = this.readToolbarCount(snap)
     const panelOpen = this.visibleHits(snap, (text) => text === '经验要求' || text === '筛选条件').some((hit) => this.hitInViewport(snap, hit))
-    const status = this.expectedCount === null || observedCount === null ? 'inconclusive'
-      : !panelOpen && observedCount === this.expectedCount ? 'met' : 'unmet'
-    return { status, expectedCount: this.expectedCount, observedCount, panelOpen, ...(status === 'met' && this.pendingResult ? { result: structuredClone(this.pendingResult) } : {}) }
+    const status = expectedCount === null || observedCount === null ? 'inconclusive'
+      : !panelOpen && observedCount === expectedCount ? 'met' : 'unmet'
+    return { status, expectedCount, observedCount, panelOpen }
   }
 
   /** Probe cleanup uses the same visible toolbar/panel rules without inventing a filter count. */

@@ -101,6 +101,8 @@ class LocalInvocationRepository:
                     or fact.get('phase') not in {'dispatching', 'waiting'}):
                 raise LeaseLost('LOCAL_TOOL_NOT_DISPATCHED')
 
+            from src.local_tools.repository import lock_operation_admission
+            lock_operation_admission(cursor, row['tenant_id'])
             cursor.execute("""SELECT * FROM local_tool_devices WHERE id=%s
                 AND tenant_id=%s AND user_id=%s AND status='active' FOR UPDATE""",
                 (device_id, row['tenant_id'], row['user_id']))

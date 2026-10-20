@@ -95,6 +95,16 @@ def test_continuation_accepts_derived_arguments_for_covered_usage_and_recovery(p
     assert LocalRecoveryProof().can_restore(proof.row, proof.state, proof.state.tools['call'])
 
 
+def test_late_original_parent_and_item_keep_model_authorization_and_repeated_recovery(proof):
+    for invocation in (proof.parent, proof.invocation):
+        original = invocation['result_json']
+        invocation.update(state='unknown', effect='unknown', result_json={'_late_result': {
+            **original, 'effect':'none', 'stopped':True}})
+    assert authorize(proof).endswith(':resume_recognition_covered')
+    assert LocalRecoveryProof().can_restore(proof.row, proof.state, proof.state.tools['call'])
+    assert proof.parent['state'] == proof.invocation['state'] == 'unknown'
+
+
 @pytest.mark.parametrize('field,value', [
     ('tenant_id', 'foreign'), ('user_id', 'foreign'), ('session_id', 'foreign'),
     ('device_id', 'foreign'), ('effect', 'unknown'), ('state', 'running'),

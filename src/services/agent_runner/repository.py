@@ -11,7 +11,7 @@ from .contracts import RunnerError, RunnerStatus, scope_key
 
 
 from .persistence_limits import capped_checkpoint_dumps, capped_snapshot_dumps
-from .public_view import decoded, public_runner
+from .public_view import decoded, public_runner, with_local_operation_facts
 from .event_repository import EventRepository
 
 # 绕过应用的 SQL 直插可以占用 queue_order 却不推进 BIGSERIAL 序列，此后正常
@@ -107,7 +107,7 @@ class RunnerRepository:
             row = decoded(cursor.fetchone())
             if row is None:
                 raise RunnerError("RUNNER_NOT_FOUND", 404)
-            return row
+            return with_local_operation_facts(cursor, row)
 
     def find_request(self, principal, request):
         with self.connection_factory() as conn:
@@ -121,7 +121,7 @@ class RunnerRepository:
                 raise RunnerError("IDEMPOTENCY_INPUT_MISMATCH", 409)
             if row:
                 self.assert_owner(principal, row)
-            return row
+            return with_local_operation_facts(cursor, row)
 
     def list_session(self, principal, limit=100, before_runner_id=None):
         identity = principal.identity
@@ -151,6 +151,8 @@ class RunnerRepository:
             cursor.execute("SELECT * FROM agent_runners WHERE " + where + """ AND status IN
                 ('running','waiting','paused','interrupted','finalizing') ORDER BY queue_order DESC""", parameters)
             active = [decoded(row) for row in cursor.fetchall()]
+            page = [with_local_operation_facts(cursor, row) for row in page]
+            active = [with_local_operation_facts(cursor, row) for row in active]
             return {"rows": page, "active": active, "has_more": has_more,
                     "next_cursor": page[-1]["runner_id"] if has_more else None}
 

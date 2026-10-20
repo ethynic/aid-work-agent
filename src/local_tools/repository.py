@@ -29,6 +29,138 @@ class ResumeContinuationConflict(ValueError):
         self.invocation_id = str(invocation_id)
 
 
+class DeviceOperationUnresolved(ValueError):
+    """A detached cloud wait grants no permission to reuse an unsettled desktop."""
+
+
+PREEXECUTION_RESULT_CODES = ('NOT_LOGGED_IN', 'TOOL_NOT_ALLOWED', 'PROVIDER_NOT_AVAILABLE',
+    'PROTOCOL_NOT_SUPPORTED', 'DESKTOP_NOT_INTERACTIVE', 'DESKTOP_RESOURCE_BUSY')
+COMPLETED_NONE_RESULT_CODES = (*PREEXECUTION_RESULT_CODES, 'INVALID_ARGUMENT', 'CHROME_UNAVAILABLE',
+    'MEMBERSHIP_REQUIRED', 'NO_MATCHING_CANDIDATES', 'RECOMMENDATIONS_BOUNDARY',
+    'WRONG_PAGE', 'JOB_CHANGED', 'BUSY', 'PAYWALL', 'UI_CHANGED', 'TOOL_NOT_FOUND', 'UNKNOWN_TOOL')
+
+
+def result_proves_completion(success, code, effect):
+    # Abort/timeout/ProviderCrash can return while a child is still running.
+    return success is True and effect in {'none', 'applied'} or (
+        success is False and effect == 'none' and code in COMPLETED_NONE_RESULT_CODES)
+
+
+def owned_invocation_ids(execution):
+    """References identify ownership; receipts separately prove resource completion."""
+    pending, identifiers = [execution], set()
+    while pending:
+        node = pending.pop()
+        if not isinstance(node, dict):
+            continue
+        for ref in (node.get('resources', {}).get('local_invocations') or {}).values():
+            tool = node.get('tools', {}).get(ref.get('tool_call_id')) or {}
+            if (ref.get('execution_id') == node.get('execution_id')
+                    and (tool.get('call') or {}).get('id') == ref.get('tool_call_id')):
+                identifiers.add(ref['invocation_id'])
+        pending.extend(child.get('checkpoint') for child in node.get('children', {}).values())
+    return identifiers
+
+
+def operation_completion_known(invocation):
+    if invocation.get('state') == 'cancelled' and invocation.get('claimed_at') is None:
+        return True
+    observed = observed_invocation(invocation)
+    result = observed.get('result_json') or {}
+    return result_proves_completion(result.get('success'),
+        observed.get('error_code') or result.get('code'), observed.get('effect'))
+
+
+def lock_operation_admission(cursor, tenant_id):
+    """Short transaction fence shared by detachment and all new device IO."""
+    cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+        ('local-operation-admission:' + tenant_id,))
+
+
+def assert_device_stop_available(cursor, tenant_id, device_id, *, exclude=None, stop_only=False):
+    """Short admission fence; queued recovery blocks new business, actual live work blocks stop."""
+    cursor.execute("""SELECT i.id FROM local_tool_invocations i
+        JOIN local_tool_devices original ON original.id=i.device_id
+        JOIN local_tool_devices target ON target.id=%s AND target.tenant_id=i.tenant_id AND target.user_id=i.user_id
+        WHERE i.tenant_id=%s AND (%s IS NULL OR i.id::text<>%s)
+          AND (i.device_id=target.id OR original.machine_fingerprint_hash IS NOT NULL
+            AND original.machine_fingerprint_hash<>'' AND target.machine_fingerprint_hash=original.machine_fingerprint_hash)
+          AND ((i.business_kind='agent_runner_recovery' AND i.business_ref->>'version'='3'
+                AND i.state IN ('queued','claimed','running') AND i.deadline_at>NOW())
+            OR (NOT %s AND i.state IN ('claimed','running','cancel_requested')))
+        LIMIT 1""", (device_id, tenant_id, exclude, exclude, stop_only))
+    if cursor.fetchone():
+        raise DeviceOperationUnresolved('LOCAL_RECOVERY_BUSY')
+
+
+def assert_device_operations_settled(cursor, tenant_id, device_id, *, observation=None):
+    if observation is not None:
+        if observation.get('version') == 3:
+            assert_device_stop_available(cursor, tenant_id, device_id, exclude=observation.get('invocation_id'))
+        # Only observation_scope has validated this server-created Host request.
+        # Its strict producer only reads CDP; it never grants a write or
+        # claims the original unknown operation stopped.
+        return
+    assert_device_stop_available(cursor, tenant_id, device_id, stop_only=True)
+    # Only explicit end-waiting holds participate; legacy unknown history does
+    # not unexpectedly quarantine a device. The caller holds the device lock.
+    cursor.execute("""SELECT i.id,i.state,i.effect,i.result_json,i.error_code,i.claimed_at,r.checkpoint
+        FROM local_tool_invocations i
+        JOIN agent_runners r ON r.runner_id=i.business_ref->>'runner_id'
+        AND r.tenant_id=i.tenant_id
+        JOIN local_tool_devices original ON original.id=i.device_id
+        JOIN local_tool_devices target ON target.id=%s AND target.tenant_id=i.tenant_id
+          AND target.user_id=i.user_id
+        WHERE i.tenant_id=%s AND i.business_kind='agent_runner'
+          AND (i.device_id=target.id OR original.machine_fingerprint_hash IS NOT NULL
+            AND original.machine_fingerprint_hash<>''
+            AND target.machine_fingerprint_hash=original.machine_fingerprint_hash)
+          AND r.checkpoint->>'detached_local_wait'='true'
+          AND (NOT r.checkpoint ? 'detached_local_invocations'
+            OR r.checkpoint->'detached_local_invocations' ? i.id::text)
+        """, (device_id, tenant_id))
+    for invocation in cursor.fetchall():
+        checkpoint = invocation['checkpoint']
+        held = checkpoint.get('detached_local_invocations')
+        if not isinstance(held, list):
+            # Compatibility for older accepted end-waiting checkpoints: derive
+            # only validated ownership references; classify each actual receipt
+            # below, including completed Engine facts with an unresolved transport.
+            held = owned_invocation_ids(checkpoint.get('execution') or {})
+        if str(invocation['id']) in checkpoint.get('verified_local_invocations', []):
+            continue
+        if (observation and checkpoint.get('execution', {}).get('execution_id') == observation.get('runner_id')
+                and str(invocation['id']) in observation['original_invocation_ids']):
+            continue
+        if str(invocation['id']) in held and not operation_completion_known(invocation):
+            raise DeviceOperationUnresolved('LOCAL_DEVICE_STOP_VERIFICATION_REQUIRED')
+
+
+def observed_invocation(invocation):
+    """Trusted stored receipt view; keep the persisted unknown fact unchanged."""
+    late = (invocation.get('result_json') or {}).get('_late_result')
+    if invocation.get('state') != 'unknown' or not isinstance(late, dict):
+        return invocation
+    if not result_proves_completion(late.get('success'), late.get('code'), late.get('effect')):
+        return invocation
+    return {**invocation, 'state': 'succeeded' if late['success'] else
+        'unknown' if late.get('code') == 'EXECUTION_UNKNOWN' else 'failed',
+        'effect': late.get('effect'), 'result_json': late,
+        'error_code': None if late['success'] else late.get('code'),
+        'error_message': None if late['success'] else late.get('message')}
+
+
+def continuation_retry_safe(invocation):
+    invocation = observed_invocation(invocation)
+    result = invocation.get('result_json') or {}
+    data = result.get('data')
+    return (invocation.get('state') == 'failed' and invocation.get('effect') == 'none'
+        and (invocation.get('error_code') or result.get('code')) in {
+            'TOOL_NOT_ALLOWED','TOOL_NOT_FOUND','UNKNOWN_TOOL','JOB_CHANGED',
+            'WRONG_PAGE','INVALID_ARGUMENT','CHROME_UNAVAILABLE','NOT_LOGGED_IN'}
+        and (data is None or isinstance(data, dict) and not (data.keys() - {'run_id'})))
+
+
 class DeviceReplacementError(ValueError):
     """Fixed public error code; never carries a ticket, token or SQL parameters."""
 
@@ -579,30 +711,35 @@ def create_invocation_in_tx(
     """
     if verify_binding and (not business_kind or not dedupe_key):
         raise ValueError("LOCAL_INVOCATION_BINDING_REQUIRES_DEDUPE")
+    lock_operation_admission(cursor, tenant_id)
+    if not lock_active_device(cursor, tenant_id, device_id):
+        raise DeviceOperationUnresolved('LOCAL_DEVICE_NOT_READY')
+    observation = None
+    if business_kind == 'agent_runner_recovery':
+        from .recovery_observation import observation_scope
+        observation = observation_scope(cursor, dict(tenant_id=tenant_id,user_id=user_id,session_id=session_id,
+            device_id=device_id,tool_name=tool_name,arguments_json=arguments,provider_key=provider_key,business_kind=business_kind,business_ref=business_ref))
+        if not observation:
+            raise DeviceOperationUnresolved('LOCAL_VERIFICATION_BINDING_INVALID')
+    assert_device_operations_settled(cursor, tenant_id, device_id, observation=observation)
     if tool_name == 'boss_resume_next':
         # Lock the parent in the same transaction as insertion. Competing calls
         # cannot fork the cursor, without changing the Runner's own dedupe key.
-        cursor.execute("""SELECT id FROM local_tool_invocations
+        cursor.execute("""SELECT * FROM local_tool_invocations
             WHERE id=%s AND tenant_id=%s AND user_id=%s AND session_id=%s AND device_id=%s
               AND tool_name IN ('boss_resume_batch','boss_resume_next')
-              AND state='succeeded' AND effect='none' FOR UPDATE""",
+              FOR UPDATE""",
             (arguments.get('continue_from'), tenant_id, user_id, session_id, device_id))
-        if cursor.fetchone() is None:
+        parent = cursor.fetchone()
+        parent = observed_invocation(dict(parent)) if parent else {}
+        if parent.get('state') != 'succeeded' or parent.get('effect') != 'none':
             raise ValueError('INVALID_CONTINUATION')
-        cursor.execute("""SELECT id,business_kind,dedupe_key FROM local_tool_invocations
+        cursor.execute("""SELECT id,business_kind,dedupe_key,state,effect,result_json,error_code FROM local_tool_invocations
             WHERE tenant_id=%s AND user_id=%s AND session_id=%s AND device_id=%s
               AND tool_name='boss_resume_next' AND arguments_json->>'continue_from'=%s
-              AND (state='failed' AND effect='none'
-                AND COALESCE(error_code,result_json->>'code') IN
-                  ('TOOL_NOT_ALLOWED','TOOL_NOT_FOUND','UNKNOWN_TOOL','JOB_CHANGED',
-                   'WRONG_PAGE','INVALID_ARGUMENT','CHROME_UNAVAILABLE')
-                AND CASE WHEN jsonb_typeof(result_json->'data') = 'object'
-                  THEN (result_json->'data') - 'run_id' = '{}'::jsonb
-                  ELSE result_json->'data' IS NULL OR result_json->'data' = 'null'::jsonb
-                END) IS NOT TRUE
-            ORDER BY created_at DESC LIMIT 1""",
+            ORDER BY created_at DESC""",
             (tenant_id, user_id, session_id, device_id, arguments.get('continue_from')))
-        successor = cursor.fetchone()
+        successor = next((record for record in cursor.fetchall() if not continuation_retry_safe(dict(record))), None)
         if successor and not (business_kind is not None and dedupe_key is not None
             and successor['business_kind'] == business_kind and successor['dedupe_key'] == dedupe_key):
             raise ResumeContinuationConflict(successor['id'])
@@ -766,14 +903,19 @@ def claim_next(
         params.append(list(provider_keys))
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        lock_operation_admission(cursor, tenant_id)
         if not lock_active_device(cursor, tenant_id, device_id):
             return None
         cursor.execute(
             f"""
-            SELECT id FROM local_tool_invocations
+            SELECT * FROM local_tool_invocations
             WHERE state = 'queued' AND device_id = %s AND tenant_id = %s
               {lane_filter}{provider_filter}
-            ORDER BY created_at
+              AND (business_kind IS DISTINCT FROM 'agent_runner_recovery' OR business_ref->>'version' IS DISTINCT FROM '3'
+                OR (deadline_at>NOW() AND EXISTS (SELECT 1 FROM agent_runners r
+                  WHERE r.runner_id=local_tool_invocations.business_ref->>'runner_id' AND r.tenant_id=local_tool_invocations.tenant_id
+                    AND r.checkpoint->'local_verification'->>'invocation_id'=local_tool_invocations.id::text)))
+            ORDER BY (business_kind='agent_runner_recovery') DESC NULLS LAST,created_at
             LIMIT 1
             FOR UPDATE SKIP LOCKED
             """,
@@ -783,6 +925,8 @@ def claim_next(
         if not row:
             conn.commit()
             return None
+        from .recovery_observation import observation_scope
+        assert_device_operations_settled(cursor, tenant_id, device_id, observation=observation_scope(cursor, row, dispatch=True))
         cursor.execute(
             """
             UPDATE local_tool_invocations
@@ -807,6 +951,18 @@ def mark_started(invocation_id: str, tenant_id: str, claim_token_hash: str) -> O
     """claimed → running。hash 匹配时返回当前记录（无论是否迁移），不匹配/不存在返回 None"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        lock_operation_admission(cursor, tenant_id)
+        cursor.execute('SELECT * FROM local_tool_invocations WHERE id=%s AND tenant_id=%s AND claim_token_hash=%s',
+            (invocation_id, tenant_id, claim_token_hash))
+        owner = cursor.fetchone()
+        if not owner or not lock_active_device(cursor, tenant_id, str(owner['device_id'])):
+            return None
+        from .recovery_observation import observation_scope
+        observation = observation_scope(cursor, owner, dispatch=True)
+        if (owner.get('business_kind') == 'agent_runner_recovery'
+                and (owner.get('business_ref') or {}).get('version') == 3 and observation is None):
+            return None
+        assert_device_operations_settled(cursor, tenant_id, str(owner['device_id']), observation=observation)
         cursor.execute(
             """
             UPDATE local_tool_invocations
@@ -895,6 +1051,17 @@ def append_event(
         return seq, cancel_flag
 
 
+def write_runtime_result(invocation_id, tenant_id, claim_token_hash, success, code=None,
+        message=None, effect=None, data=None, retryable=None, *, device_id=None):
+    invocation = get_invocation(invocation_id, tenant_id)
+    if invocation and invocation.get('business_kind') == 'agent_runner_recovery':
+        from .recovery_observation import write_result as write_observation_result
+        return write_observation_result(invocation_id, tenant_id, claim_token_hash, success,
+            code, message, effect, data, retryable, device_id)
+    return write_result(invocation_id, tenant_id, claim_token_hash, success, code,
+        message, effect, data, retryable, device_id=device_id)
+
+
 def write_result(
     invocation_id: str,
     tenant_id: str,
@@ -905,6 +1072,8 @@ def write_result(
     effect: Optional[str] = None,
     data: Optional[Dict[str, Any]] = None,
     retryable: Optional[bool] = None,
+    *,
+    device_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """写入终态（幂等）+ succeeded 首次落终态时同事务按次计费。
 
@@ -929,10 +1098,12 @@ def write_result(
             (invocation_id, tenant_id),
         )
         row = cursor.fetchone()
-        if not row or row["claim_token_hash"] != claim_token_hash:
+        if (not row or row["claim_token_hash"] != claim_token_hash
+                or device_id is not None and str(row['device_id']) != str(device_id)):
             conn.commit()
             return None
-        if row["state"] in TERMINAL_STATES:
+        late_result = row['state'] == 'unknown' and row.get('result_json') is None
+        if row["state"] in TERMINAL_STATES and not late_result:
             # 幂等：已终态重复写返回原状态，不报错
             conn.commit()
             return dict(row)
@@ -993,7 +1164,12 @@ def write_result(
                         (invocation_id, tenant_id),
                     )
                     row = cursor.fetchone()
-                    if not row or row["state"] in TERMINAL_STATES:
+                    if (not row or row['claim_token_hash'] != claim_token_hash
+                            or device_id is not None and str(row['device_id']) != str(device_id)):
+                        conn.commit()
+                        return None
+                    late_result = row['state'] == 'unknown' and row.get('result_json') is None
+                    if row["state"] in TERMINAL_STATES and not late_result:
                         conn.commit()
                         return dict(row) if row else None
 
@@ -1004,6 +1180,12 @@ def write_result(
             "data": data,
             "retryable": retryable,
         }
+        if late_result:
+            # The original lease-loss fact stays unknown. A final device receipt
+            # proves this invocation stopped, not that a new execution is allowed.
+            result_json = {'_late_result': {**result_json, 'effect': effect,
+                'stopped': result_proves_completion(success, code, effect)}}
+            new_state, effect, code, message = row['state'], row['effect'], row.get('error_code'), row.get('error_message')
         sql = """
             UPDATE local_tool_invocations
             SET state = %s,
@@ -1011,14 +1193,14 @@ def write_result(
                 result_json = %s,
                 error_code = %s,
                 error_message = %s,
-                finished_at = NOW(),
+                finished_at = COALESCE(finished_at, NOW()),
                 lease_expires_at = NULL"""
         params: List[Any] = [
             new_state,
             effect,
             Json(result_json),
-            None if success else code,
-            None if success else message,
+            code if late_result else None if success else code,
+            message if late_result else None if success else message,
         ]
         if bill_price is not None:
             sql += ",\n                credit_cost = %s"

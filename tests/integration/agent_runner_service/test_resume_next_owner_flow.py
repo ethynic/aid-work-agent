@@ -19,6 +19,7 @@ from .test_local_resume_flow import resume_payload, evaluation_reply
 from .test_local_invocation_recovery import interrupted, local_diagnosis
 from .test_worker import workers, api_pair, prices, accept, terminal, decoded
 from .test_worker_recovery import control
+from .test_local_wait_recovery import replay_completed_receipt_as_late
 
 pytestmark = pytest.mark.integration
 
@@ -42,9 +43,9 @@ def diagnosed_terminal(workers, database, identifier):
         raise AssertionError('Runner did not become terminal: ' + json.dumps(diagnosis)) from None
 
 
-@pytest.mark.parametrize('boundary', [None, 'resume.evaluate', 'resume.fee'])
+@pytest.mark.parametrize('boundary,late_receipt', [(None,False), ('resume.evaluate',False), ('resume.fee',False), ('resume.fee',True)])
 def test_next_scores_and_restores_original_images_without_duplicate_reads_or_fees(
-        workers, recruiting_domain, service_database, boundary):
+        workers, recruiting_domain, service_database, boundary, late_receipt):
     actor, profile = recruiting_domain
     candidates = ['虚构续筛' + uuid.uuid4().hex[:10] for _ in range(2)]
     for candidate in candidates:
@@ -74,6 +75,8 @@ def test_next_scores_and_restores_original_images_without_duplicate_reads_or_fee
         desktop.completed(0)
         workers.assert_clean_exit(first)
         assert diagnosed_terminal(workers, service_database, parent['runner_id'])['status'] == 'completed'
+        if late_receipt:
+            replay_completed_receipt_as_late(service_database, parent_id)
 
         # Omitted limit exercises the canonical default added by prepare_next.
         marker = workers.provider.register(tool_reply('boss_resume_next', {'continue_from': parent_id}, call_id='next-call'),
@@ -96,6 +99,8 @@ def test_next_scores_and_restores_original_images_without_duplicate_reads_or_fee
             wait_for((gate / 'committed.json').exists, timeout=30)
             stopped = interrupted(workers, service_database, accepted, child, hard=True)
             assert stopped['status'] == 'interrupted'
+            if late_receipt:
+                replay_completed_receipt_as_late(service_database, original_id)
             control(workers.api, actor, accepted['runner_id'], 'resume')
             child, _ = workers.start()
         workers.assert_clean_exit(child)

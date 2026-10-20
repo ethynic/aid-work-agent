@@ -4,6 +4,7 @@
  * CLI command 与 MCP tool handler 都从这里取 operation，保证业务能力只实现一次。
  * cli 元数据供薄 renderer 使用：write=true 的命令在执行前打印 ⚠️ 写动作提示。
  */
+import { createBossRecoveryProbeOperation } from './bossRecoveryProbe.js'
 import { createBossFilterOperation, createBossClearFilterOperation } from './bossFilter.js'
 import { createBossFilterOptionsOperation } from './bossFilterOptions.js'
 import { createBossGotoOperation } from './bossGoto.js'
@@ -70,5 +71,8 @@ export const OPERATIONS: Record<string, OperationEntry> = {
 
 // CLI 与 MCP 都消费同一注册表；本地恢复不依赖 Agent 或服务器再次派发。
 for (const entry of Object.values(OPERATIONS)) entry.operation = withLocalRecovery(entry.operation)
+
+// Host recovery observation must never enter automatic visual dismiss.
+OPERATIONS.boss_recovery_probe = { operation: createBossRecoveryProbeOperation(), cli: { write: false } }
 
 export const OPERATION_NAMES = Object.keys(OPERATIONS)

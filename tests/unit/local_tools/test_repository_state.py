@@ -104,15 +104,15 @@ class TestMarkStarted:
     def test_claimed_transitions_to_running(self):
         """claimed + hash 匹配：迁移 running"""
         updated = {"id": INVOCATION_ID, "state": "running", "claim_token_hash": HASH}
-        with _patch_conn([updated]):
+        with _patch_conn([{'device_id': INVOCATION_ID}, {'id': INVOCATION_ID}, None, updated]):
             row = repository.mark_started(INVOCATION_ID, TENANT, HASH)
         assert row["state"] == "running"
 
     def test_illegal_state_not_migrated(self):
         """非 claimed 状态（如 queued）：不迁移，返回当前状态供 API 层判 409"""
         current = {"id": INVOCATION_ID, "state": "queued", "claim_token_hash": HASH}
-        # 第一次 fetchone：UPDATE 未命中（None）；第二次：SELECT 返回当前状态
-        with _patch_conn([None, current]):
+        # Device admission precedes the attempted state transition.
+        with _patch_conn([{'device_id': INVOCATION_ID}, {'id': INVOCATION_ID}, None, current]):
             row = repository.mark_started(INVOCATION_ID, TENANT, HASH)
         assert row["state"] == "queued"
 

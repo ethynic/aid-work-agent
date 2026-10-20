@@ -40,8 +40,11 @@ def continuation_arguments(row, node, call_id, arguments, load_parent):
     parent = load_parent(parent_id) or {}
     if (str(parent.get('id')) != parent_id
             or any(str(parent.get(key)) != str(row[key]) for key in ('tenant_id', 'user_id', 'session_id'))
-            or parent.get('tool_name') not in {'boss_resume_batch', 'boss_resume_next'}
-            or parent.get('state') != 'succeeded' or parent.get('effect') != 'none'):
+            or parent.get('tool_name') not in {'boss_resume_batch', 'boss_resume_next'}):
+        reject()
+    from src.local_tools.repository import observed_invocation
+    parent = observed_invocation(parent)
+    if parent.get('state') != 'succeeded' or parent.get('effect') != 'none':
         reject()
     result, previous = parent.get('result_json'), parent.get('arguments_json')
     if not isinstance(result, dict) or not isinstance(previous, dict) or result.get('success') is not True:

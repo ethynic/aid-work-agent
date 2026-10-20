@@ -99,7 +99,11 @@ def validate_domain_phases(row,state,fact,cls,arguments):
     originals = {}
     for ref in refs.values():
         if ref.get('tool_call_id')==fact.call.id and ref.get('branch') in {'main','heal.retry'}:
-            originals[ref['invocation_id']] = repository.get_invocation(ref['invocation_id'],row['tenant_id'])
+            invocation = repository.get_invocation(ref['invocation_id'],row['tenant_id'])
+            from .local_owner import RunnerLocalLifecycle
+            RunnerLocalLifecycle.validate_invocation(state.identity,row['runner_id'],
+                LocalPhase(state.execution_id,fact.call.id,ref['branch'],ref['ordinal']),ref,invocation)
+            originals[ref['invocation_id']] = repository.observed_invocation(invocation)
     for key,phase in relevant:
         _owned(row,state,fact,key,phase)
         branch,ordinal,request = phase['branch'],phase['ordinal'],phase['request']

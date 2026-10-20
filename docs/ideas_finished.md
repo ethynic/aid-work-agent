@@ -49,7 +49,6 @@
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |------|------|------|---------|---------|
 | 20261013-1434 | 结构化提问交互（ask_user 提问卡片） | ✅ 已完成开发：提问卡片、渠道问答、待答通知与徽标、legacy 透传及埋点；待真机验收。 | [设计](system/design-ask-user-interactive-question.md) | [实施计划](plans/plan-ask-user-interactive-question.md) |
-| 20261014-boss-resume-recovery | BOSS 续筛评分与故障恢复 | ✅ 已完成开发：补齐续筛证明、中断提示和回执诊断，待部署验收。 | — | [计划](plans/plan-boss-resume-next-recovery-fix.md) |
 | 20261012-1544 | trace 观测 span 计时精确化 | ✅ 已完成开发（提交与部署待授权）：span 改用引擎侧墙钟计时并立即闭合，失败 LLM 与恢复路径补 span；历史数据不回填。 | — | [开发计划](plans/traceobs-timing-precision.md) |
 | 20261010-1638 | 统一通知基础设施与 Web 推送 | ✅ 已完成开发：统一通知底座与Web推送通过内外部终审，真实到达待环境验收。 | [统一设计](system/notification-infrastructure-design.md) / [Web设计](system/web-task-push-notification-design.md) | [开发计划](plans/plan-web-task-push-notification.md) |
 | 20260918-2045 | Redis 夜间巡检任务（生产专用） | ✅ 已完成开发：background_runner 调度器每日 00:30 巡检 Redis——内存水位（600MB 警告/800MB 严重）、碎片率（仅 used>100MB 判）、AOF 写入/重写状态、键淘汰、连接数、无 TTL 键抽样（上限 1000，超 200 疑似泄漏），「[Redis巡检]」前缀进主日志（1 条 INFO 汇总 + 越界 WARNING/ERROR）；REDIS_INSPECTION_ENABLED 门控默认关。2026-10-10 agent2 容器内对腾讯云托管 Redis 实跑验证通过（INFO 汇总 + 告警格式正确，顺带发现测试 Redis evicted=4599 真实告警）；生产 .env 已开启待重启生效（属部署事项，不影响任务关闭）。 | — | — |
@@ -88,6 +87,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261014-boss-resume-recovery | BOSS 续筛评分与故障恢复 | ✅ 已完成开发；存量未知受管资源闭环通过独立验证，不要求Windows重启，未部署。 | [设计](system/agent-application-architecture-design.md#56-本地调用对账与同会话结束等待2026-10-20增量) / [复盘](incidents/recruiting-runtime-filter-timeout-and-resume-blocked-20261020.md) | [计划](plans/plan-boss-resume-next-recovery-fix.md) |
 | 20261013-1618 | 职位VIP筛选与BOSS权益识别 | ✅ 已完成开发；配置分组、权益门禁与18项VIP组合真机验收通过。 | — | [开发计划](plans/desktop-automation/plan-boss-job-vip-entitlements.md) |
 | 20261013-1918 | BOSS筛选结果与推荐边界 | ✅ 已完成开发；排除补充推荐并返回无匹配，独立验证及真机只读验收通过。 | — | [计划](plans/desktop-automation/plan-boss-filter-result-boundary.md) |
 | 20261013-2023 | BOSS头像下方VIP徽标识别 | ✅ 已完成开发；跨iframe徽标自动识别，独立验证及真机VIP只读验收通过。 | — | [计划](plans/desktop-automation/plan-boss-avatar-vip-marker.md) |

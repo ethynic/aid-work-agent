@@ -126,6 +126,7 @@ class LocalRecoveryProof:
                 RunnerLocalLifecycle.validate_invocation(state.identity,row['runner_id'],phase,ref,invocation)
             except CheckpointFailure as error:
                 raise RunnerError('LOCAL_INVOCATION_OWNER_VERIFICATION_REQUIRED',409) from error
+            invocation = repository.observed_invocation(invocation)
             if invocation['state']=='unknown' or invocation.get('effect')=='unknown':
                 return False
             if ref['branch']=='main' and invocation['state']=='failed':
@@ -210,7 +211,10 @@ def _cancel_facts(cursor, row, *, request):
             cursor.execute('SELECT * FROM local_tool_invocations WHERE id=%s AND tenant_id=%s',
                 (fact['invocation_id'], row['tenant_id']))
             invocation = dict(cursor.fetchone())
-        facts.append({key:invocation.get(key) for key in ('id','state','effect','deadline_at')})
+        invocation = repository.observed_invocation(invocation)
+        facts.append({'kind':'local', 'holdable':phase is not None,
+            'completion_known':repository.operation_completion_known(invocation),
+            **{key:invocation.get(key) for key in ('id','state','effect','deadline_at')}})
     from .notify_audit import cancellation_facts
     facts.extend(cancellation_facts(row))
     from .browser_facts import cancellation_facts as browser_cancellation_facts
@@ -218,7 +222,7 @@ def _cancel_facts(cursor, row, *, request):
     return facts
 
 
-def cancel_completion_status(facts):
+def cancel_completion_status(facts, *, detached_local_wait=False):
     pending = False
     for fact in facts:
         if fact.get('kind')=='domain':
@@ -228,6 +232,8 @@ def cancel_completion_status(facts):
                 return False,'LOCAL_CANCEL_EFFECT_VERIFICATION_REQUIRED'
             continue
         if fact['state'] == 'unknown' or fact['effect'] == 'unknown':
+            if detached_local_wait and fact.get('kind') == 'local':
+                continue  # Logical cloud completion only; device hold remains.
             return False, 'LOCAL_CANCEL_EFFECT_VERIFICATION_REQUIRED'
         if fact['state'] not in repository.TERMINAL_STATES:
             deadline = fact['deadline_at']
@@ -292,7 +298,7 @@ def release_ready_cancellations(connection_factory, *, limit=16, after_queue_ord
                         or blocked.get('revision') != row['revision']):
                     continue
                 facts = _cancel_facts(cursor,row,request=False)
-                if not cancel_completion_status(facts)[0]:
+                if not cancel_completion_status(facts,detached_local_wait=checkpoint.get('detached_local_wait') is True)[0]:
                     continue
                 checkpoint['cancel_completion_blocked'] = {**blocked,'ready':True,'revision':row['revision']+1}
                 cursor.execute("""UPDATE agent_runners SET checkpoint=%s::jsonb,revision=revision+1,

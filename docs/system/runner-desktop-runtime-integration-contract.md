@@ -2,7 +2,7 @@
 
 > 契约 ID：`AID-RUNNER-DESKTOP-RUNTIME`
 >
-> 版本：`2.2`；日期：2026-10-20
+> 版本：`2.5`；日期：2026-10-20
 >
 > 状态：v2.0按用户逐条复核确定，替代v1.3的插件额外审批语义；候选0.3已有真实Host与Desktop消费验证，Windows隔离验收版已交付，尚未共同登记wire冻结。现有公开API以代码为基线；共享格式见第8.1节，任务binding、授权及资源占用wire仍待主导交付。隔离验收不代表生产发行或真实业务验收通过。
 >
@@ -324,3 +324,30 @@ H3可选automaticConnection只由新版独立Runtime preload开启。Device `/ru
 | 2026-10-08 | 1.3 定稿审阅 | Desktop工作流接受Runtime补充，无新增架构要求；明确架构定稿与wire冻结分开登记 | 本批Desktop仅修改共同契约、双方设计/计划的定稿状态与交接、桌面索引；版本不变，无schema/代码修改，接口及真实兼容验收待实施 |
 | 2026-10-09 | 2.0 用户复核 | 用户逐条确认C01～C12及schema；取消插件额外审批，允许手册优先/必要源码的云端AI分析，统一数字code/error，候选0.2替代0.1 | Runtime唯一写入；用户产品规则确定，Desktop重新消费/真实接线与wire冻结待完成；不改变已上线Device协议 |
 | 2026-10-09 | 2.0 / wire候选0.3 | 开发前七项实施决议，列表实例/revision包装与可选真实version；旧数组显式迁移 | Runtime唯一维护共享格式，独立测试/CR证据见Runtime计划第8节；Desktop须重新消费，真实接线与wire冻结未完成 |
+
+### 2026-10-20 复审历史：恢复观察v1（2.3，未发行实现已纠正）
+
+2.3曾将纯页面观察前置为scope登记后Windows重启，且Python/sessionTasks配置会禁用整个观察能力。复审确认这是过度门禁，相关新增见证和默认producer已删除；此前隔离测试只证明旧实现按当时规则运行，不能证明设计合理，也不能作为2.4修正验收。原已接受v1 invocation结果接纳保留兼容；后续请求统一按下方2.4。Phase9精确未决集合、缺指纹不连坐其他电脑、新意图不受历史登录错误限制等修正保留。
+
+### 2026-10-20 复审纠正：观察与停止独立（2.4，四项修正已验证）
+
+本记录优先于上方2.3未发行实现。唯一代码及文档写入者为恢复修复开发智能体，主控及独立测试/CR只读核对。Device claim/permit与H1/H3不变；Host观察请求/结果升级version=2、能力runtime_recovery_observe_v2，旧v1不能消费v2请求；旧回执没有代次时明确停稳未知，不推定已停止。
+
+- 删除新增scope重启见证；纯CDP页面观察不前置Windows重启、Runtime重启或停稳证明，不因Python/sessionTasks配置禁用。
+- resource_stopped与page_observed各自独立；纯观察成功不改变原业务unknown，不自动放行未知写动作。原认证迟到回执继续按已有完成判定解除自身hold。2.4未新增停稳producer，当时无回执历史hold未闭环；此阶段限制已由下方2.5设备受管边界停止路径替代。不能把新空home或页面可读当成旧执行已停。
+- page_summary增加有限页面事实与match/mismatch/unknown，复用既有导航路径、可见筛选徽章及面板判定；不能核对完整原条件时保留unknown，不从计数相同推出选项相同。
+- GET仅查询实际未决回执并投影入口，不修改冻结集合或审计历史；迟到明确回执与设备准入使用同一完成判定。
+- 本轮四项修正已通过独立测试与CodeReview；实际范围、历史停止关联缺口及验证登记在BOSS恢复计划Phase10，不宣称资源恢复全部完成。旧v1测试不能作为本次修正通过证据。
+
+
+### 2026-10-20 显式停止原设备受管资源（2.5，已完成开发）
+
+本批唯一写入者为恢复开发智能体；主控、独立测试与CR只读。Web/内部verify-local请求可选stop_resources:boolean（默认false保留v2纯读），显式true派发version=3，独立能力runtime_recovery_stop_v1；Device claim/permit和H1/H3不变。原请求版本、模式、设备、scope及ID集合冻结于business_ref，结果仅核销本次集合，不改变原业务unknown或重放未知发送。
+
+- 显式动作停止本Runtime/home启动的旧工具进程及旧孤儿Job，可能同时关闭由Runtime启动的浏览器；不停止其他设备或当前真实活动任务。服务端在同设备/同机实际claimed/running时拒绝；Host同桌面锁下暂停Provider新建，拒绝真实busy，关闭空闲Provider，复用原生terminate/probe逐一确认既有DPAPI Job为0，finally仅恢复临时fence，不重开永久停用的admission。Provider握手中的transport也纳入回收，原manager引用不得复活。
+- 原设备配对身份、home独占lease与既有受保护Job账本构成设备级执行边界，不要求旧invocation逐一有generation；存量unknown/result_json=NULL可据此解除自身hold，原业务结果仍unknown。
+- 既有私有DPAPI ledger添加可选business_started:boolean。新marker=false；受权普通BOSS Provider调度才置true，每代持久化一次，失败不保留内存成功标记；runtime_recovery_observe/boss_recovery_probe永不置true；旧无字段监督记录兼容。停止须有可信业务覆盖及非空受管Job集合，新空home先纯读产生的probe-only记录（包括重开Runtime后）不能自造历史停止证明。严格读取者同时兼容此可选字段，旧客户端需升级，不新增账本。
+- 真正活跃的未受管旧实例与系统进程检查不可用分别报告。空Jobs的旧登录session不阻断；非空旧session以既有DPAPI原生停止回执核对，或核实该旧session已无进程后确认边界消失，不能仅凭当前session查不到Job放行。不凭空home、busy=false、截图或用户声明签发证明，不将重启Windows作为常规门。纯读v2始终独立可用，Python/sessionTasks配置不整体禁用。
+- 版本3停止证明绑定scope/device/原ID集合/runtime_generation，证据为supervised_device_boundary、resource_scope=managed_provider_pool；消费仅限原BOSS调用，不用于未受管skill-runner/Python。页面是否观察/匹配单列，目标冲突或损坏标记page_target_unavailable，跳过页面观察，仍可提交真实stop proof；不静默换页。仅精确当前版本3显式scope可解自身资源hold。
+- 版本3领取及started同时核验当前冻结scope与数据库时钟截止；过期或被新请求替代的queued stop永不执行物理回收，也不能阻塞新scope领取。迟到回执可保留历史，仅当前精确scope可改变hold。普通业务180秒与v2观察兼容语义不变。
+- 冻结源码通过独立120项（native15、PG27、frontend78）及宽窄屏UI，CR无未解决P0/P1/P2。实际native Job dummy→Host→result API/PG→新意图create/claim/start已验证；跨端夹具的Runner终态不是新增真实Worker结算，不操作真实业务或重启用户系统。唯一进度与结果见BOSS恢复计划Phase10；未部署。

@@ -261,7 +261,9 @@ class LocalToolProxyTool(BaseTool):
             return {"success": False, "code": "DEVICE_UNAVAILABLE",
                     "message": "本地工具服务未就绪（云端未完成初始化），请联系管理员"}
         if device is None:
-            return {"success": False, "code": "DEVICE_UNAVAILABLE", "message": gate_error}
+            return {'success': False, 'code': 'DEVICE_UNAVAILABLE', 'effect': 'none',
+                'recovery_action': 'connect_original_device',
+                'message': f'{gate_error or "原执行设备不可用"}。请确认原执行电脑的 Runtime 已启动、联网且设备可用，再在本会话继续。'}
 
         if kwargs.get('_resume_expected_device_id') is not None and str(device['id']) != kwargs['_resume_expected_device_id']:
             return {'success': False, 'code': 'DEVICE_UNAVAILABLE', 'message': '原筛选设备已变更，未重新读取'}
@@ -328,6 +330,9 @@ class LocalToolProxyTool(BaseTool):
             return {'success': False, 'code': 'STALE_CONTINUATION',
                 'message': '该筛选引用已有后续批次，请使用最新结果；原调用未完成时先等待，不重读',
                 'data': {'latest_invocation_id': conflict.invocation_id}, 'invocation_id': None}
+        except repository.DeviceOperationUnresolved as error:
+            return {'success': False, 'code': str(error), 'effect': 'none',
+                'message': '原操作尚待核对，或原执行设备已变更；未派发新操作。请先确认原设备上的操作已停止并取得原回执。'}
         invocation_id = str(invocation["id"])
         logger.info(
             f"后端日志：本地工具 invocation 已创建 id={invocation_id} "
@@ -426,6 +431,7 @@ class LocalToolProxyTool(BaseTool):
 
     def _map_terminal(self, invocation: Dict[str, Any]) -> Dict[str, Any]:
         """云端终态 → 工具结果 {success, code, message, effect, data, invocation_id}"""
+        invocation = repository.observed_invocation(invocation)
         state = invocation.get("state")
         result_json = invocation.get("result_json") or {}
         effect = invocation.get("effect")
@@ -460,6 +466,10 @@ class LocalToolProxyTool(BaseTool):
             # WRONG_PAGE / PAYWALL / UI_CHANGED / BUSY 等中文文案直传（已是用户可读）
             result = {"success": False, "code": error_code or "FAILED",
                       "message": error_message or "本机执行失败", **base}
+
+        if self.name.startswith('boss_') and result.get('code') == 'NOT_LOGGED_IN' and effect == 'none':
+            result['message'] = '请在原执行电脑的原 Chrome 浏览器登录 BOSS 直聘，完成后在本会话回复“已登录，继续”。本次操作未执行。'
+            result['recovery_action'] = 'login_original_browser'
 
         if effect == "unknown" and UNKNOWN_EFFECT_NOTICE not in result["message"]:
             result["message"] = f"{result['message']}；{UNKNOWN_EFFECT_NOTICE}"
@@ -856,6 +866,8 @@ class BossFilterTool(LocalToolProxyTool):
         if _extended_filter_args(args) or args.get("options_ref"):
             try:
                 probe = await asyncio.to_thread(repository.get_invocation, args.get("options_ref"), tenant_id)
+                if probe:
+                    probe = repository.observed_invocation(probe)
             except Exception:
                 logger.error("后端日志：扩展筛选能力探查引用查询失败")
                 return {"success": False, "code": "FILTER_CAPABILITY_REQUIRED", "effect": "none", "message": "无法核验设备扩展筛选能力，原筛选未改动，请重新查询后再试"}

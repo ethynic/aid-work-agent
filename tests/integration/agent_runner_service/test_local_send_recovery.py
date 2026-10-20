@@ -13,13 +13,15 @@ from .provider import Reply, tool_reply
 from .test_local_invocation_recovery import interrupted
 from .test_worker import workers, api_pair, prices, accept, terminal, decoded
 from .test_worker_recovery import control
+from .test_local_wait_recovery import replay_completed_receipt_as_late
 
 pytestmark = pytest.mark.integration
 
 
 @pytest.mark.parametrize('boundary', ['comm-log-committed-restart', 'cancel-after-ack-before-comm-log'])
+@pytest.mark.parametrize('late_receipt', [False, True])
 def test_actual_original_send_is_not_reissued_when_postprocessing_restarts_or_cancels(
-        workers, recruiting_domain, service_database, boundary):
+        workers, recruiting_domain, service_database, boundary, late_receipt):
     from src.services.recruiting_resume_service import create_resume_record
     actor, profile = recruiting_domain
     candidate = '虚构发送' + uuid.uuid4().hex[:12]
@@ -48,6 +50,8 @@ def test_actual_original_send_is_not_reissued_when_postprocessing_restarts_or_ca
         assert json.loads((gate / 'committed.json').read_text())['branch'] == branch
         before_logs = service_database.rows('SELECT id FROM bs_recruiting_operator_resume_comm_logs WHERE tenant_id=%s', (actor.tenant_id,))
         assert len(before_logs) == (1 if branch == 'send.comm_log' else 0)
+        if late_receipt:
+            replay_completed_receipt_as_late(service_database, invocation_id)
         if branch == 'send.comm_log':
             stopped = interrupted(workers, service_database, accepted, first, hard=True)
             original_refs = decoded(stopped['checkpoint'])['execution']['resources']['local_invocations']
@@ -63,7 +67,7 @@ def test_actual_original_send_is_not_reissued_when_postprocessing_restarts_or_ca
     assert finished['status'] == ('completed' if branch == 'send.comm_log' else 'cancelled')
     invocations = service_database.rows('SELECT id,state,credit_cost FROM local_tool_invocations WHERE session_id=%s', (actor.session_id,))
     assert len(invocations) == 1 and str(invocations[0]['id']) == invocation_id
-    assert invocations[0]['state'] == 'succeeded' and Decimal(str(invocations[0]['credit_cost'])) == Decimal('1.00')
+    assert invocations[0]['state'] == ('unknown' if late_receipt else 'succeeded') and Decimal(str(invocations[0]['credit_cost'])) == Decimal('1.00')
     fees = service_database.rows('SELECT model,credit_cost FROM client_usage_logs WHERE tenant_id=%s', (actor.tenant_id,))
     assert fees == [{'model': 'boss_send_to', 'credit_cost': Decimal('1.00')}]
     logs = service_database.rows('SELECT id,resume_id,content FROM bs_recruiting_operator_resume_comm_logs WHERE tenant_id=%s', (actor.tenant_id,))

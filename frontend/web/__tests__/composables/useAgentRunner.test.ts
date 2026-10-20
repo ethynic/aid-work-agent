@@ -269,6 +269,182 @@ describe('Existing useAgent public interface with durable Runner transport', () 
     await loading; await flush()
   }
 
+  it('ended history verification reads page without claiming stop or requesting a system reboot', async () => {
+    const ended = runnerView({ status:'cancelled', settlement_status:'settled', cancel_requested:true,
+      local_verification_available:true, view_revision:2 })
+    await discoverParked(ended)
+    const checking = agent.resolveLocalRecovery('verify'); await flush()
+    const posted = request('/runners/runner-A/verify-local', 'POST')
+    expect(JSON.parse(posted.body!).client_request_id).toBeTruthy()
+    const queued = { invocation_id:'probe-A', state:'queued', waiting_ended:true }
+    posted.respond({success:true,runner:{...ended,view_revision:3,local_verification:queued}})
+    await checking; await flush()
+    request('/runners/runner-A').respond({success:true,runner:{...ended,view_revision:4,
+      local_verification:{...queued,state:'succeeded',resource_stopped:false,page_observed:true,stop_error_code:'LOCAL_RECOVERY_STOP_UNPROVED',page_summary:{observed:true,page_kind:'recommend',result:'unknown'}}}})
+    await flush()
+    expect(agent.localVerificationMessage.value).toContain('已只读观察')
+    expect(agent.localVerificationMessage.value).toContain('旧执行是否停止仍未知')
+    expect(agent.localVerificationMessage.value).not.toContain('重启')
+    const again = agent.resolveLocalRecovery('verify'); await flush()
+    request('/runners/runner-A/verify-local','POST').respond({success:true,runner:{...ended,view_revision:5,
+      local_verification:{...queued,invocation_id:'probe-B'}}})
+    await again; await flush(); await vi.advanceTimersByTimeAsync(1000)
+    request('/runners/runner-A').respond({success:true,runner:{...ended,view_revision:6,local_verification_available:false,
+      local_verification:{invocation_id:'probe-B',state:'failed',waiting_ended:true,resource_stopped:true,page_observed:false,error_code:'WRONG_PAGE'}}})
+    await flush()
+    expect(agent.localVerificationMessage.value).toContain('旧执行已停稳，但原页面未核对')
+    expect(agent.localVerificationMessage.value).not.toContain('请结束等待')
+    expect(network.requests.filter(item=>item.method==='POST').every(item=>item.url.endsWith('/verify-local'))).toBe(true)
+    const sending = agent.sendMessage('explicit new intent on current page',null,'A'); await flush()
+    capability(); await flush()
+    const newRequest = request('/runners','POST')
+    newRequest.respond({success:true,runner:runnerView({runner_id:'runner-new',queue_order:2,
+      client_request_id:JSON.parse(newRequest.body!).client_request_id,status:'waiting',local_recovery:true})},202)
+    await sending; await flush()
+    expect(agent.localRecovery.value?.runner_id).toBe('runner-new')
+  })
+
+  it('a late completion racing an already rendered verification button clears the entry without dispatch or reload', async () => {
+    const ended = runnerView({ status:'cancelled', settlement_status:'settled', cancel_requested:true,
+      local_verification_available:true, view_revision:2 })
+    await discoverParked(ended)
+    expect(agent.localRecovery.value?.runner_id).toBe('runner-A')
+    const checking = agent.resolveLocalRecovery('verify'); await flush()
+    // The late receipt settled the original between list discovery and POST.
+    request('/runners/runner-A/verify-local','POST').respond({success:true,runner:{...ended,local_verification_available:false}})
+    await checking; await flush()
+    expect(agent.localRecovery.value).toBeUndefined()
+    expect(network.requests.filter(item=>item.method==='POST')).toHaveLength(1)
+    expect(agent.error.value).toBeFalsy()
+  })
+
+  it('stopping old managed execution is explicit, passes its mode, and never resumes the original task', async () => {
+    const ended = runnerView({ status:'cancelled', settlement_status:'settled', cancel_requested:true, local_verification_available:true })
+    await discoverParked(ended)
+    const stopping = agent.resolveLocalRecovery('stop'); await flush()
+    const posted = request('/runners/runner-A/verify-local','POST')
+    expect(JSON.parse(posted.body!).stop_resources).toBe(true)
+    posted.respond({success:true,runner:{...ended,view_revision:2,local_verification_available:false,
+      local_verification:{invocation_id:'stop-A',state:'failed',waiting_ended:true,resource_stopped:true,page_observed:false,error_code:'WRONG_PAGE'}}})
+    await stopping; await flush()
+    expect(agent.localVerificationMessage.value).toContain('旧执行已停稳，但原页面未核对')
+    expect(network.requests.filter(item=>item.method==='POST')).toHaveLength(1)
+  })
+
+  it('another genuinely running operation reports busy without losing the pure-read entry', async () => {
+    await discoverParked(runnerView({status:'interrupted',local_recovery:true}))
+    const stopping = agent.resolveLocalRecovery('stop'); await flush()
+    request('/runners/runner-A/verify-local','POST').respond({code:'LOCAL_RECOVERY_BUSY'},409)
+    await stopping; await flush()
+    expect(agent.error.value).toContain('还有正在执行的任务')
+    expect(agent.localRecovery.value?.runner_id).toBe('runner-A')
+  })
+
+  it('only-read verification reports active-original guidance through the exact safe message reducer', async () => {
+    await discoverParked(runnerView({status:'interrupted',local_recovery:true}))
+    const checking = agent.resolveLocalRecovery('verify'); await flush()
+    request('/runners/runner-A/verify-local','POST').respond({code:'LOCAL_VERIFICATION_ORIGINAL_ACTIVE'},409)
+    await checking; await flush()
+    expect(agent.error.value).toContain('原本机调用仍在排队或执行')
+    expect(agent.runnerFeedback.value?.message).toBe(agent.error.value)
+    expect(network.requests.filter(item=>item.method==='POST')).toHaveLength(1)
+  })
+
+  it('unknown local work keeps drafts and requires explicit recovery instead of repeating resume on every send', async () => {
+    await discoverParked(runnerView({ status:'interrupted', local_recovery:true }))
+    const attachment = { file_id:'kept', name:'kept.txt', size:4, type:'file' as const, mime_type:'text/plain' }
+    agent.currentFiles.value = [attachment]
+    const disposition = await agent.sendMessage('ordinary new intent', null, 'A')
+    expect(disposition?.restoreInput).toBe(true)
+    expect(agent.error.value).toContain('核对并继续')
+    expect(agent.runnerFeedback.value?.message).toBe(agent.error.value)
+    expect(agent.currentFiles.value).toEqual([attachment])
+    expect(network.requests.filter(item => item.method === 'POST')).toEqual([])
+    expect(agent.localRecovery.value?.runner_id).toBe('runner-A')
+
+    const ending = agent.resolveLocalRecovery('end'); await flush()
+    const posted = request('/runners/runner-A/end-waiting', 'POST')
+    expect(JSON.parse(posted.body!)).toEqual({})
+    posted.respond({ success:true, runner:runnerView({ status:'interrupted', cancel_requested:true, view_revision:2 }) })
+    await ending; await flush()
+    expect(agent.localRecovery.value).toBeUndefined()
+    expect(agent.currentFiles.value).toEqual([attachment])
+    const closing = await agent.sendMessage('message during finalization', null, 'A')
+    expect(closing?.restoreInput).toBe(true)
+    expect(agent.error.value).toContain('正在结束原任务')
+    expect(agent.runnerFeedback.value?.message).toBe(agent.error.value)
+    expect(agent.currentFiles.value).toEqual([attachment])
+    expect(network.requests.filter(item => item.method === 'POST' && item.url.endsWith('/controls'))).toEqual([])
+    expect(network.requests.filter(item => item.method === 'POST' && item.url.endsWith('/runners'))).toEqual([])
+  })
+
+  it('explicit local check observes original runner with one stable resume key after a lost response', async () => {
+    await discoverParked(runnerView({ status:'interrupted', local_recovery:true }))
+    const checking = agent.resolveLocalRecovery('resume'); await flush()
+    const posted = request('/runners/runner-A/controls', 'POST')
+    const original = JSON.parse(posted.body!)
+    expect(original).toEqual({ client_request_id:expect.any(String), action:'resume' })
+    posted.reject(new TypeError('fictional lost response')); await checking
+    expect(agent.localRecovery.value).toBeUndefined()
+    await agent.resolveLocalRecovery('resume')
+    await vi.advanceTimersByTimeAsync(2000)
+    const retried = request('/runners/runner-A/controls', 'POST')
+    expect(retried.body).toBe(posted.body)
+    retried.respond({ success:true, runner:runnerView({ status:'interrupted', local_recovery:true, resume_requested:true, view_revision:2 }),
+      control:{control_id:'same-original',runner_id:'runner-A',client_request_id:original.client_request_id,action:'resume',status:'accepted'} }, 202)
+    await flush()
+    expect(network.requests.filter(item => item.method === 'POST' && item.url.endsWith('/runners'))).toEqual([])
+  })
+
+  it('local recovery rejection displays its safe reason through the final feedback reducer', async () => {
+    await discoverParked(runnerView({ status:'interrupted', local_recovery:true }))
+    const checking = agent.resolveLocalRecovery('resume'); await flush()
+    const posted = request('/runners/runner-A/controls', 'POST')
+    const original = JSON.parse(posted.body!)
+    posted.respond({ success:true, runner:runnerView({ status:'interrupted', local_recovery:true, view_revision:2 }),
+      control:{control_id:'rejected-original',runner_id:'runner-A',client_request_id:original.client_request_id,
+        action:'resume',status:'rejected',error_code:'RECOVERY_TOOL_VERIFICATION_REQUIRED'} }, 202)
+    await checking; await flush()
+    expect(agent.error.value).toContain('原本机操作结果尚未核对')
+    expect(agent.runnerFeedback.value?.message).toBe(agent.error.value)
+    expect(agent.error.value).toContain('尚未应用')
+  })
+
+  it('a normal cancel blocked on local unknown still offers explicit end without attempting to resume', async () => {
+    await discoverParked(runnerView({ status:'waiting', cancel_requested:true, local_recovery:true,
+      snapshot:{waiting:{kind:'verification'}} }))
+    const attachment = { file_id:'kept', name:'kept.txt', size:4, type:'file' as const, mime_type:'text/plain' }
+    agent.currentFiles.value = [attachment]
+    expect(agent.localRecovery.value?.cancel_requested).toBe(true)
+    await agent.resolveLocalRecovery('resume')
+    const disposition = await agent.sendMessage('new intent after cancellation', null, 'A')
+    expect(disposition?.restoreInput).toBe(true)
+    expect(agent.error.value).toContain('可选择“结束等待，继续对话”')
+    expect(agent.runnerFeedback.value?.message).toBe(agent.error.value)
+    expect(network.requests.filter(item => item.method === 'POST')).toEqual([])
+    const ending = agent.resolveLocalRecovery('end'); await flush()
+    request('/runners/runner-A/end-waiting','POST').respond({success:true,
+      runner:runnerView({status:'waiting',cancel_requested:true,view_revision:2,snapshot:{waiting:{kind:'verification'}}})})
+    await ending; await flush()
+    expect(agent.localRecovery.value).toBeUndefined()
+    const closing = await agent.sendMessage('during closing', null, 'A')
+    expect(closing?.restoreInput).toBe(true)
+    expect(agent.error.value).toContain('正在结束原任务')
+    expect(agent.currentFiles.value).toEqual([attachment])
+    expect(network.requests.filter(item => item.method === 'POST' && !item.url.endsWith('/end-waiting'))).toEqual([])
+  })
+
+  it('an older service without end-waiting shows the upgrade action and preserves the original task', async () => {
+    await discoverParked(runnerView({ status:'interrupted', local_recovery:true }))
+    const ending = agent.resolveLocalRecovery('end'); await flush()
+    request('/runners/runner-A/end-waiting', 'POST').respond({code:'NOT_FOUND',error:'not found'}, 404)
+    await ending; await flush()
+    expect(agent.error.value).toContain('请联系管理员更新服务端')
+    expect(agent.runnerFeedback.value?.message).toBe(agent.error.value)
+    expect(agent.localRecovery.value?.runner_id).toBe('runner-A')
+    expect(network.requests.filter(item => item.method === 'POST' && !item.url.endsWith('/end-waiting'))).toEqual([])
+  })
+
   it.each(['paused', 'interrupted'] as const)('an owned %s runner resumes the original ID/key/input/attachments after lost control acceptance', async status => {
     await discoverParked(runnerView({ status }))
     const attachment = { file_id: 'fictional-kept-file', name: 'kept.txt', size: 4, type: 'file' as const, mime_type: 'text/plain' }

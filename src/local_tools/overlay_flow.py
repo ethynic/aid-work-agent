@@ -43,7 +43,9 @@ async def poll_operation(proxy, operation, arguments, *, tenant_id, user_id, ses
         return {'success':False,'code':'INVALID_ARGS','message':error}
     device, error = await proxy._find_ready_device(tenant_id,user_id)
     if device is None:
-        return {'success':False,'code':'DEVICE_UNAVAILABLE','message':error}
+        return {'success':False,'code':'DEVICE_UNAVAILABLE','effect':'none',
+            'recovery_action':'connect_original_device',
+            'message':f'{error or "原执行设备不可用"}。请确认原执行电脑的 Runtime 已启动、联网且设备可用，再在本会话继续。'}
     if expected_device_id is not None and str(device['id'])!=expected_device_id:
         return {'success':False,'code':'DEVICE_UNAVAILABLE','message':'原操作的设备已变更，未派发后续操作'}
     if proxy._tool_credit_price()>0:

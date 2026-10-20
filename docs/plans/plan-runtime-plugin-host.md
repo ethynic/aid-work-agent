@@ -1,5 +1,9 @@
 # Runtime 执行环境、插件宿主与可视化客户端开发计划
 
+2026-10-20恢复检查点：按共同契约2.5保持v2纯读独立，新增显式v3停止本Runtime受管旧工具进程的路径，可覆盖无generation且结果永久丢失的存量BOSS调用；不重放原业务，不要求Windows重启。源码与dist已冻结，独立120项及宽窄UI通过，CR无阻断；唯一实现责任、精确范围及结果见[BOSS恢复计划Phase10](plan-boss-resume-next-recovery-fix.md)。旧2.3/v1证据仅历史，未发行或部署。
+
+2026-10-20恢复增量检查点：按[共同契约恢复增量](../system/runner-desktop-runtime-integration-contract.md#2026-10-20-本地未知调用恢复与web结束等待兼容增量)开发Web结束等待、迟到回执对账与设备冲突阻断；唯一代码写入者为恢复开发子智能体，无Runtime客户端或Device wire变更。进度与独立验证唯一记录在[BOSS恢复计划Phase 6～8](plan-boss-resume-next-recovery-fix.md)，本计划仅引用。
+
 2026-10-20共同检查点：按共同契约2.2及[BOSS计划23](desktop-automation/plan-boss-operation-verification-visual-recovery.md#23-runtime配对身份复用纠正2026-10-20)消除额外视觉token配置。主控唯一维护runtimeHost.ts、Desktop Supervisor、BOSS视觉client/localRecovery和版本元数据；backend身份角色唯一维护src/local_tools/api.py、boss_visual_service及必要台账代码。新增设备视觉入口，原H1/H3及配对/claim/permit不改；设备凭据只给受信BOSS，其他Provider隔离。独立TEST/CR后重打包，不部署。
 
 2026-10-14共同检查点：用户批准[干净安装计划](plan-runtime-clean-install.md)，共同契约2.1。安装角色负责安装代际与进程清理，服务端角色负责协议3及数据库，主控负责Main/H3自动激活与renderer。替代新版历史资源恢复门，旧协议1/2不变；验证以该计划为准。
@@ -192,3 +196,6 @@ Phase9连接恢复审计及源码补漏以[恢复计划的状态矩阵](plan-run
 ### 2026-10-13 Runtime r8 只读故障入口检查点
 
 主控唯一修改Runtime页面/Controller及测试、Desktop版本元数据和交付说明；H1/H3/Device及恢复事务语义不变。不支持插件时不误查询、不假刷新，恢复步骤首屏可见且不受检查忙碌禁用；详见[恢复计划Phase11](plan-runtime-upgrade-recovery.md#phase11-实施前共同检查点2026-10-13)。独立真实包故障/恢复交互与审查待完成。
+
+
+2026-10-20恢复纠正（优先于上方历史Phase10完成记录）：按[共同契约2.5](../system/runner-desktop-runtime-integration-contract.md)保留独立纯读，并新增显式停止本Runtime受管旧工具进程的路径，覆盖存量无generation且回执永久丢失的BOSS调用；不重放原业务、不要求Windows重启。独立120项及宽窄UI通过，CR无阻断；唯一进度见[BOSS恢复计划](../plans/plan-boss-resume-next-recovery-fix.md)，未部署。

@@ -73,6 +73,8 @@ export interface RunnerDeps {
   /** skill-runner 进程内 handler（M2）：provider=skill-runner 时代替 ProviderSet
    *  的 MCP 实例执行（无 MCP entry）；未注入 = 未配置 skills.python →
    *  PROVIDER_NOT_AVAILABLE（能力真实性，与 capabilities 上报同源） */
+  beforeProviderCall?: (invocation: ClaimedInvocation) => Promise<void>
+  recoveryObservation?: Pick<ProviderManager, 'callTool'>
   skillRunner?: SkillRunnerHandler
   /** Runtime-only bridge; called after lock/precheck/permit/journal, never by a model. */
   prepareProviderCall?: (inv: ClaimedInvocation, permit: WritePermit, signal: AbortSignal) => Promise<Record<string, unknown>>
@@ -291,9 +293,10 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
   // skill-runner（M2）：进程内 handler，不走 ProviderSet/MCP entry——可用性以 deps.skillRunner
   // 注入为准（cli 按 config.skills.python 配置且存在注入），缺 handler = 未安装（fail-closed）
   const providerKey = inv.provider ?? 'boss-recruiting'
+  const isRecoveryObservation = providerKey === 'runtime-recovery'
   const isSkillRunner = providerKey === SKILL_RUNNER_PROVIDER_KEY
   const manifest = deps.manifests?.[providerKey] ?? getProviderManifest(providerKey)
-  if (!manifest || (isSkillRunner ? !deps.skillRunner : !deps.providers.has(providerKey))) {
+  if (!manifest || (isRecoveryObservation ? !deps.recoveryObservation : isSkillRunner ? !deps.skillRunner : !deps.providers.has(providerKey))) {
     emit(`invocation ${inv.invocation_id} provider=${providerKey} 未安装或未配置入口，拒绝执行`)
     await sendFinalResult({
       success: false,
@@ -385,7 +388,7 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
 
   // 4. Provider 调用（进度转发 + 取消 + shutdown 中止 + 桌面资源仲裁）；
   // skill-runner → 进程内 handler（同一桌面锁域/终态映射链路，零复制）
-  const provider: Pick<ProviderManager, 'callTool'> = isSkillRunner
+  const provider: Pick<ProviderManager, 'callTool'> = isRecoveryObservation ? deps.recoveryObservation! : isSkillRunner
     ? deps.skillRunner!
     : deps.providers.get(providerKey)
   const lockName = desktopLockName(deps.desktopResourceKey)
@@ -548,6 +551,7 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
           callArgs = await deps.prepareProviderCall(inv, permit, abortController.signal)
           if (!permit.isValid() || abortController.signal.aborted) throw new Error('发送许可或执行已失效')
         }
+        await deps.beforeProviderCall?.(inv)
         return await provider.callTool(inv.tool_name, callArgs, {
           signal: permit ? AbortSignal.any([abortController.signal, AbortSignal.timeout(Math.max(0, Math.floor(permit.msRemaining())))]) : abortController.signal,
           onProgress: (p) => {

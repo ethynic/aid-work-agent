@@ -14,7 +14,7 @@ from .event_contracts import (EventContractError, change_kind, encoded_bytes,
                               invalidate_event, nonnegative, only_output_changed,
                               safe_public_state, stored_event, cancellation_became_ready,
                               cursor_state)
-from .public_view import decoded, public_runner
+from .public_view import decoded, public_runner, with_local_operation_facts
 
 
 class EventRepository:
@@ -110,7 +110,7 @@ class EventRepository:
         state = cursor_state(authorized_row)
 
         def reset():
-            return {'reset': True, 'runner': public_runner(authorized_row), 'head': head,
+            return {'reset': True, 'runner': public_runner(with_local_operation_facts(cursor, authorized_row)), 'head': head,
                     'floor': floor, 'events': [], 'last_seq': head, 'has_more': False,
                     'state': state}
 

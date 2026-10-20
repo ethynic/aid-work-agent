@@ -206,6 +206,18 @@ flowchart TB
 
 本次只修复worker进程内的Task回收边界，不改变持久状态、租约/恢复授权、计费、Device API、wire schema和渠道文案；丢失执行权的旧attempt不得继续调用模型或工具。验收必须证明双任务隔离、后续接单、取消收尾等待和主动服务关闭，不能只断言“未抛异常”。实施记录见[取消隔离修复计划](../plans/plan-runner-task-cancellation-isolation.md)，起因见[故障分析](../incidents/wecom-kf-excel-read-runner-interrupted-20261015.md)。
 
+### 5.6 本地调用对账与同会话结束等待（2026-10-20增量）
+
+本节是[恢复修复计划](../plans/plan-boss-resume-next-recovery-fix.md)的实施设计。2026-10-20首轮Phase 6～8隔离验证完成后，用户反例揭示准入过宽及页面核验缺失，随后按Phase 9～10复审修正并完成独立隔离验收，证据与限制见计划；尚未发行或部署。第5.3节的默认取消仍保留原会话占有；仅新增用户明确选择的Web结束等待分支，区分聊天生命周期与设备执行停止。
+
+- 未登录且effect=none明确要求登录；设备不可用另行提示。原操作恢复仍核验原设备及目标；新授权任务不受同会话上一条登录失败的设备限制，登录不是unknown核对证明。
+- Worker中断后恢复查询固定原invocation；不得因新Worker或恢复输入重新派发已领取动作。原租约回收unknown允许原claim的迟到回执仅写一次私有result_json._late_result，保留原state/effect/error事实；客户端明确unknown和已有终态不接纳矛盾替换。读取不计费；迟到成功沿既有写结果事务计费且幂等。
+- 原结果事实经归属校验后供显式恢复消费；Runtime在MCP超时/abort后也可能返回unknown而Provider仍在运行，迟到unknown不能证明设备动作停止或效果已知。仍活跃的原调用继续观察，失联不冒充完成；设备解封必须依赖已知完成或明确未开始的可信事实。
+- Web增量`POST /api/chat/runners/{runner_id}/end-waiting`（内部`/v1/runners/{runner_id}/end-waiting`，空body，沿既有success/runner响应）仅用于同主体chat任务、无活Worker且具备本地未知执行事实的等待。事务内核验并记录明确结束选择，随后复用cancel-only Worker与Finalizer结算、保存历史并原子释放聊天占有。普通cancel及其他渠道不改义。
+- 结束等待并不确认本机停止。原事务冻结经原归属验证且仍无明确资源完成事实的调用ID，设备创建/领取边界只对该集合核对后续冲突，不以已结束的普通历史失败封禁；Engine已完成但transport仍未知不能漏采，无法建立可信hold的legacy未决引用拒绝结束。冲突匹配原device或双方非空且相等的指纹，缺失指纹不扩大到其他电脑；用户可以继续普通聊天。停止证据和未知业务效果分别处理，不能借结束等待重放外部写动作。
+- 受权恢复按共同契约2.5：v2纯CDP观察独立可用，不要求Windows重启或其他功能配置；显式v3在原设备home受管边界内停止旧工具进程，以可信Job停稳解除原BOSS精确集合的资源hold，可覆盖结果永久丢失、无generation的旧调用。业务unknown不改、不重放；页面目标损坏或观察失败不抹掉可信停稳。独立120项及宽窄UI通过，CR无阻断；唯一进度见BOSS恢复计划Phase10。
+- 前端显示具体错误与明确的核对/结束动作；已拒绝的恢复不因普通输入被无提示重复发送，输入与附件继续保留。普通cancel因unknown核验阻断时仍显示结束等待入口并禁用恢复执行，只有明确detached收尾才显示正在结束；不能仅按cancel_requested隐藏入口。旧客户端无新入口，旧服务返回404时明确提示需更新，不静默降级为取消或新任务。
+
 ## 6. 查询基础、事件订阅与结果
 
 首个 Web 闭环通过主动查询获得状态、公开进度和结果；活跃页面有限频查询，终态停止，网络错误退避，页面卸载只停止观察。实时 SSE 随后增强，任何通知缺失都通过查询纠正。公开快照包含 revision，消费者对齐累计输出，不能反复追加全文。
@@ -369,3 +381,6 @@ Agent/AgentRunner 重构已完成。后续接入工作复用现有独立服务�
 | 暂停后出现新消息/渠道重跑 | Web 保留原占有与恢复点；KF 共用通用执行 claim，原队列确认取消终态并释放 claim 后交接，不保留 KF 投递 gate，也不伪装已停止或重演未知工具操作 |
 | 工具/配置版本变化或产物失效 | 明确拒绝不兼容恢复，不默默换配置或丢失上下文 |
 | 容量达到上限、持久存储失败 | 有界拒绝或安全停止，不无限缓存、不丢恢复事实后继续 |
+
+
+2026-10-20恢复纠正（优先于上方历史Phase10完成记录）：按[共同契约2.5](../system/runner-desktop-runtime-integration-contract.md)将纯页面观察与资源停止分离；显式v3停止设备受管旧工具进程，覆盖无generation且回执永久丢失的存量BOSS调用，不改原业务unknown。未受管活实例须先结束旧实例，其他真实活动任务不会被停止；不要求Windows重启。唯一进度与独立证据见[BOSS恢复计划](../plans/plan-boss-resume-next-recovery-fix.md)。

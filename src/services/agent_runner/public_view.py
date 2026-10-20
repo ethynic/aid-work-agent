@@ -134,9 +134,42 @@ def _public_result(value):
     return result
 
 
+def local_recovery_applicable(row):
+    if (row['session_kind'] != 'web' or row['source'] != 'chat'
+            or row['status'] not in {'waiting', 'paused', 'interrupted'}
+            or (row.get('checkpoint') or {}).get('detached_local_wait') is True
+            or row.get('worker_id') is not None or row.get('lease_until') is not None):
+        return False
+    root = (row.get('checkpoint') or {}).get('execution') or {}
+    def pending_local(node):
+        waiting = node.get('waiting') or {}
+        if waiting.get('kind') == 'clarification':
+            return False
+        refs = node.get('resources', {}).get('local_invocations') or {}
+        return any(node.get('tools', {}).get(ref.get('tool_call_id'), {}).get('phase')
+            in {'dispatching', 'waiting'} for ref in refs.values()) or any(
+            pending_local(child.get('checkpoint') or {}) for child in node.get('children', {}).values())
+    return pending_local(root)
+
+
+def with_local_operation_facts(cursor, row):
+    """Transient read projection; frozen IDs and unknown history remain untouched."""
+    if row is None:
+        return None
+    checkpoint = row.get('checkpoint') or {}
+    held = set(checkpoint.get('detached_local_invocations') or []) - set(checkpoint.get('verified_local_invocations') or [])
+    if not held or not checkpoint.get('detached_local_wait'):
+        return row
+    from src.local_tools.repository import operation_completion_known
+    cursor.execute('SELECT * FROM local_tool_invocations WHERE tenant_id=%s AND user_id=%s AND session_id=%s AND id=ANY(%s::uuid[])',
+        (row['tenant_id'], row['user_id'], row['session_id'], sorted(held)))
+    settled = {str(item['id']) for item in cursor.fetchall() if operation_completion_known(dict(item))}
+    return {**row, '_unresolved_local_invocations': sorted(held - settled)}
+
+
 def public_runner(row):
     """Explicit allowlist: tokens, checkpoints, prompts, receipts never cross API."""
-    return {
+    value = {
         "runner_id": row["runner_id"], "session": {"kind": row["session_kind"], "session_id": row["session_id"]},
         "source": row["source"],
         "status": row["status"], "settlement_status": row["settlement_status"],
@@ -151,3 +184,23 @@ def public_runner(row):
         "finished_at": row.get("finished_at"), "snapshot": _public_snapshot(row["public_snapshot"]),
         "result": _public_result(row.get("result")),
     }
+    checkpoint = row.get('checkpoint') or {}
+    verification = checkpoint.get('local_verification')
+    if isinstance(verification, dict):
+        value['local_verification'] = {key: verification.get(key) for key in
+            ('invocation_id', 'state', 'resource_stopped', 'page_observed', 'target_relation', 'error_code', 'stop_error_code')}
+        if isinstance(verification.get('page_summary'), dict):
+            value['local_verification']['page_summary'] = _display_fields(verification['page_summary'],
+                ('observed', 'page_kind', 'result', 'filter_count', 'panel_open', 'count_result'))
+        value['local_verification']['waiting_ended'] = checkpoint.get('detached_local_wait') is True
+        if verification.get('state') in {'queued', 'claimed', 'running'} and verification.get('deadline_at'):
+            from datetime import datetime, timezone
+            if datetime.fromisoformat(verification['deadline_at']) < datetime.now(timezone.utc):
+                value['local_verification'].update(state='failed', error_code='LOCAL_VERIFICATION_FAILED')
+    held = set(checkpoint.get('detached_local_invocations') or []) - set(checkpoint.get('verified_local_invocations') or [])
+    held = set(row.get('_unresolved_local_invocations', held))
+    if held and checkpoint.get('detached_local_wait'):
+        value['local_verification_available'] = True
+    if local_recovery_applicable(row):
+        value['local_recovery'] = True
+    return value

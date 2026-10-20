@@ -116,8 +116,10 @@ async def prepare_next(kwargs, operation=None):
     parent = await asyncio.to_thread(repository.get_invocation, parent_id, tenant_id)
     if (not parent or str(parent.get('tenant_id')) != str(tenant_id)
         or str(parent.get('user_id')) != str(user_id) or str(parent.get('session_id')) != str(session_id)
-        or parent.get('tool_name') not in ('boss_resume_batch', 'boss_resume_next')
-        or parent.get('state') != 'succeeded' or parent.get('effect') != 'none'):
+        or parent.get('tool_name') not in ('boss_resume_batch', 'boss_resume_next')):
+        return None, error('INVALID_CONTINUATION', '上次筛选记录不存在、归属不符或未安全完成，请恢复原筛选记录')
+    parent = repository.observed_invocation(parent)
+    if parent.get('state') != 'succeeded' or parent.get('effect') != 'none':
         return None, error('INVALID_CONTINUATION', '上次筛选记录不存在、归属不符或未安全完成，请恢复原筛选记录')
     arguments = parent.get('arguments_json') or {}
     result = parent.get('result_json') or {}

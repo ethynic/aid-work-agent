@@ -43,6 +43,8 @@ def assert_resume_model(cursor,row,node,call_id,ordinal,origin,provider,model):
     invocation = dict(cursor.fetchone() or {})
     RunnerLocalLifecycle.validate_invocation(Identity(**node['identity']),row['runner_id'],
         LocalPhase(node['execution_id'],call_id,ref['branch'],ref['ordinal']),ref,invocation)
+    from src.local_tools.repository import observed_invocation
+    invocation = observed_invocation(invocation)
     if invocation.get('state')!='succeeded' or invocation.get('effect')=='unknown':
         raise CheckpointFailure('LOCAL_RESUME_ITEM_OWNER_MISMATCH')
     data = (invocation.get('result_json') or {}).get('data')

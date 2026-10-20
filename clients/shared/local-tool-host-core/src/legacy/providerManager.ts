@@ -107,6 +107,8 @@ export class ProviderManager {
     }
   }
 
+  get isBusy(): boolean { return this.busy }
+
   get childPid(): number | null {
     return this.transport?.pid ?? null
   }
@@ -120,8 +122,9 @@ export class ProviderManager {
     if (this.shuttingDown) throw new ProviderCrashError('ProviderManager 正在关闭，不再启动 Provider')
     if (this.client && !this.crashed) return
     await this.disposeDead()
-
+    if (this.shuttingDown) throw new ProviderCrashError('Provider is shutting down')
     const launch = await this.prepareLaunch?.(this.entry)
+    if (this.shuttingDown) throw new ProviderCrashError('Provider is shutting down')
     const transport = new StdioClientTransport({
       command: launch?.command ?? this.nodeExecutable,
       args: launch?.args ?? [this.entry, 'mcp', '--stdio'],
@@ -158,18 +161,24 @@ export class ProviderManager {
       this.crashed = true
       logInfo('Provider 进程已退出/stdio 断开')
     }
+    this.transport = transport
     try {
       await client.connect(transport)
     } catch (err) {
-      // connect 失败时 transport 可能已 spawn 子进程（如进程起来了但握手失败/超时），
-      // 此时 this.transport 尚未赋值，disposeDead 回收不到，必须就地关闭防止进程泄漏
+      // 握手失败时子进程也可能已经启动，关闭本次 transport，避免遗留进程。
       try {
         await transport.close()
       } catch {
         // 忽略关闭错误
       }
+      if (this.transport === transport) this.transport = null
       const detail = err instanceof Error ? err.message : String(err)
       throw new ProviderCrashError(`Provider 启动失败（entry=${this.entry}）: ${detail}`)
+    }
+    if (this.shuttingDown) {
+      await transport.close()
+      this.transport = null
+      throw new ProviderCrashError('Provider stopped during connect')
     }
     this.client = client
     this.transport = transport
@@ -233,7 +242,8 @@ export class ProviderManager {
     if (!this.client && !this.transport) return
     const pid = this.transport?.pid ?? null
     try {
-      await this.client?.close()
+      if (this.client) await this.client.close()
+      else await this.transport?.close()
     } catch {
       // 忽略关闭错误
     }
@@ -287,6 +297,7 @@ export class ProviderSet {
   private readonly managerOpts: Omit<ProviderOptions, 'env'> & { providerEnv?: Record<string, Record<string, string>> }
   private readonly managers = new Map<string, ProviderManager>()
   private accepting = true
+  private recoveringPool = false
 
   constructor(entries: Record<string, string>, opts: Omit<ProviderOptions, 'env'> & { providerEnv?: Record<string, Record<string, string>> } = {}) {
     this.entries = { ...entries }
@@ -305,7 +316,7 @@ export class ProviderSet {
 
   /** 取（必要时创建）指定 Provider 的 Manager；未配置入口抛 ProviderNotAvailableError */
   get(key: string): ProviderManager {
-    if (!this.accepting) throw new ProviderNotAvailableError(key)
+    if (!this.accepting || this.recoveringPool) throw new ProviderNotAvailableError(key)
     const existing = this.managers.get(key)
     if (existing) return existing
     const entry = this.entries[key]
@@ -319,6 +330,19 @@ export class ProviderSet {
     const managers = [...this.managers.values()]
     await Promise.all(managers.map(m => m.shutdown()))
     this.managers.clear()
+  }
+
+  /** Explicit recovery of this Runtime's idle managed pool, never another live call. */
+  async recoverIdlePool<T>(stopResources: () => Promise<T>): Promise<T> {
+    if (!this.accepting || this.recoveringPool || [...this.managers.values()].some(manager => manager.isBusy)) throw new Error('LOCAL_RECOVERY_BUSY')
+    this.recoveringPool = true
+    const managers = [...this.managers.values()]
+    try {
+      const stopped = await Promise.allSettled(managers.map(manager => manager.shutdown()))
+      this.managers.clear()
+      if (stopped.some(result => result.status === 'rejected')) throw new Error('LOCAL_RECOVERY_STOP_UNPROVED')
+      return await stopResources()
+    } finally { this.managers.clear(); this.recoveringPool = false }
   }
 
   stopAdmission(): void { this.accepting = false }

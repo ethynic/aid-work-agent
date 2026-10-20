@@ -9,10 +9,21 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
+from pydantic import BaseModel, ConfigDict, Field
 
 from .contracts import RunnerError, RunnerSubmit, SessionRef, SessionQuery
 from .control_contracts import RunnerControl
 from .event_stream import ObserverAdmission, open_runner_events, parse_cursor
+
+
+class EndWaitingRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+
+class VerifyLocalRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    client_request_id: str = Field(min_length=1, max_length=128)
+    stop_resources: bool = False
 
 
 class EventOperationMiddleware(BaseHTTPMiddleware):
@@ -143,6 +154,16 @@ def create_app(*, config=None, manager=None):
         enabled()
         control, created, runner = await controls.submit_async(runner_id,body,credentials(request))
         return {'success':True,'control':control,'created':created,'runner':runner}
+
+    @app.post('/v1/runners/{runner_id}/verify-local')
+    async def verify_local(runner_id: str, body: VerifyLocalRequest, request: Request):
+        enabled()
+        return {'success': True, 'runner': await asyncio.to_thread(manager.verify_local, runner_id, body.client_request_id, credentials(request), stop_resources=body.stop_resources)}
+
+    @app.post('/v1/runners/{runner_id}/end-waiting')
+    async def end_waiting(runner_id: str, body: EndWaitingRequest, request: Request):
+        enabled()
+        return {'success': True, 'runner': await asyncio.to_thread(manager.end_waiting, runner_id, credentials(request))}
 
     @app.get('/v1/runners/{runner_id}/controls/{control_id}')
     async def get_control(runner_id: str,control_id: str,request: Request):
