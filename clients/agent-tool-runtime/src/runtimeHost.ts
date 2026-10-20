@@ -1,4 +1,4 @@
-import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, writeFileSync } from 'node:fs'
 import { randomUUID, randomBytes } from 'node:crypto'
 import { ApiClient } from './apiClient.js'
 import { registrationBlocksExecution } from './connectionRegistration.js'
@@ -68,7 +68,7 @@ export class LegacyExecution implements HostAdapter {
   private runFailure: unknown = null
   private stopping = false
   private supervision: ProcessSupervision
-  constructor(private nodeExecutable: string, private home: string = runtimeHomeDir(), private pluginOptions?: { trust: PublisherTrust[]; platform?: RuntimePlatform }) {
+  constructor(private nodeExecutable: string, private home: string = runtimeHomeDir(), private pluginOptions?: { trust: PublisherTrust[]; platform?: RuntimePlatform }, private cleanGeneration = false) {
     this.supervision = new ProcessSupervision(home, nodeExecutable)
     if (pluginOptions?.platform) {
       this.preparePluginImport = async (params, context) => {
@@ -141,14 +141,20 @@ export class LegacyExecution implements HostAdapter {
   }
   async initialize(): Promise<void> {
     configureRuntimeHome(this.home)
-    await assertNoLegacyRuntimeProcess()
+    if (!this.cleanGeneration) await assertNoLegacyRuntimeProcess()
     try { await recoverPairing() } catch { throw new ManagementError(11, '设备配对资料未能恢复，原身份文件和待处理事务已保留') }
     if (this.pluginOptions) {
-      try { this.pluginStore = new PluginStore({ home: this.home, trust: this.pluginOptions.trust,
+      const makeStore = () => new PluginStore({ home: this.home, trust: this.pluginOptions!.trust,
         platform: { platform: process.platform, arch: process.arch, node_version: process.versions.node, node_abi: process.versions.modules, runtime_version: RUNTIME_VERSION },
         probe: (root, manifest) => probePlugin(this.nodeExecutable, root, manifest, providerEnvironment()),
         onChanged: () => this.pluginsChanged?.() })
-      await this.pluginStore.initialize() } catch (error) {
+      try { this.pluginStore = makeStore(); await this.pluginStore.initialize() } catch (error) {
+        if (this.cleanGeneration && existsSync(join(this.home, 'plugins')) && !lstatSync(join(this.home, 'plugins')).isSymbolicLink()) {
+          // A corrupt plugin inventory is isolated from device connectivity.
+          renameSync(join(this.home, 'plugins'), join(this.home, `plugins-invalid-${randomUUID()}`))
+          this.pluginStore = makeStore(); await this.pluginStore.initialize()
+          return
+        }
         if (error instanceof ManagementError) throw error
         throw new ManagementError(11, '插件目录无法初始化，安装记录已保留')
       }
@@ -223,10 +229,12 @@ export class LegacyExecution implements HostAdapter {
     for (const key of ['AID_WECOM_SERVER_URL', 'AID_WECOM_SERVER_TOKEN']) {
       if (process.env[key] !== undefined) wecomEnv[key] = process.env[key]!
     }
-    // Each Provider gets its own approved credentials, never the Host/device environment.
+    // The trusted BOSS process uses this pairing, never independently configured credentials.
+    const bossEnv = { AIDWORK_RUNTIME_SERVER: server, AIDWORK_RUNTIME_DEVICE_TOKEN: token }
+    // Only BOSS receives the paired API context; other Providers never inherit it.
     const providers = new ProviderSet(entries, { nodeExecutable: this.nodeExecutable, baseEnv: providerEnvironment(),
       ...(this.supervision.enabled ? { prepareLaunch: (entry: string) => this.supervision.prepareLaunch(entry) } : {}),
-      providerEnv: { weixin: { AIDWORK_WEIXIN_BRIDGE_KEY: bridgeKey }, wecom: wecomEnv } })
+      providerEnv: { weixin: { AIDWORK_WEIXIN_BRIDGE_KEY: bridgeKey }, wecom: wecomEnv, 'boss-recruiting': bossEnv } })
     this.providers = providers
     this.runFailure = null
     this.stopping = false
@@ -351,7 +359,7 @@ export class LegacyExecution implements HostAdapter {
 }
 
 let compositionOpen = false
-export async function openRuntimeHost(options: { home?: string; nodeExecutable?: string; supervisor?: 'cli' | 'desktop' | 'runtime_app'; platform?: RuntimePlatform; trust?: PublisherTrust[] } = {}) {
+export async function openRuntimeHost(options: { home?: string; nodeExecutable?: string; supervisor?: 'cli' | 'desktop' | 'runtime_app'; platform?: RuntimePlatform; trust?: PublisherTrust[]; cleanGeneration?: boolean } = {}) {
   // Legacy helpers have process-wide home state; a Node child owns one composition.
   if (compositionOpen) throw new ManagementError(4, '本进程已有Runtime Host')
   compositionOpen = true
@@ -362,7 +370,8 @@ export async function openRuntimeHost(options: { home?: string; nodeExecutable?:
     configureRuntimeHome(home)
     const trust = options.trust ?? loadPackagedTrust(dirname(fileURLToPath(import.meta.url)))
     return await RuntimeHost.open({ home, version: RUNTIME_VERSION, supervisor: options.supervisor ?? 'cli', readOnlyOnFailure: options.supervisor === 'runtime_app',
-      adapter: new LegacyExecution(options.nodeExecutable ?? process.execPath, home, trust ? { platform: options.platform, trust } : undefined) })
+      adapter: new LegacyExecution(options.nodeExecutable ?? process.execPath, home, trust ? { platform: options.platform, trust } : undefined,
+        options.supervisor === 'runtime_app' && options.cleanGeneration === true) })
   } catch (error) {
     compositionOpen = false; configureRuntimeHome(undefined)
     throw error

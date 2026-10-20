@@ -1,3 +1,5 @@
+import { isBossPage } from '../boss/PageNavigator.js'
+import { runVerifiedPageOperation } from './pageOperation.js'
 /**
  * boss_open_chat operation（2026-08-27）：沟通页切换到指定联系人的会话（搜索优先，列表兜底）。
  *
@@ -50,30 +52,35 @@ export function createBossOpenChatOperation(
           return null
         },
         async (session) => {
-          // 前置校验：必须已在沟通页（与 read-chat 一致不自动跳转；跳转走 goto chat）
-          const url = await session.getUrl()
-          if (!url.includes('/web/chat/index')) {
-            throw new CodedOperationError(
-              'WRONG_PAGE',
-              '当前不在沟通页（URL 不含 /web/chat/index）：请先执行 goto chat 切换到沟通页后再打开会话（本工具不自动跳转）',
-            )
-          }
-          const executor = new ChatOpenExecutor({
-            snapshot: session.snapshot,
-            click: session.click,
-            clickAndType: session.clickAndType,
-            mouseWheel: session.mouseWheel,
-            pressEscape: session.pressEscape,
-            clearInput: session.clearInput,
-            signal: ctx.signal,
+          const verified = await runVerifiedPageOperation({ name: 'boss_open_chat', goal: '打开指定联系人的会话', expected: 'fresh会话头部精确等于目标联系人', operationClass: 'page_state', target: contact.trim() }, async (attempt) => {
+            // 前置校验：必须已在沟通页（与 read-chat 一致不自动跳转；跳转走 goto chat）
+            const url = await session.getUrl()
+            if (!isBossPage(url, 'chat')) {
+              throw new CodedOperationError(
+                'WRONG_PAGE',
+                '当前不在沟通页（URL 不含 /web/chat/index）：请先执行 goto chat 切换到沟通页后再打开会话（本工具不自动跳转）',
+              )
+            }
+            const executor = new ChatOpenExecutor({
+              snapshot: session.snapshot,
+              click: (...args) => attempt.input(() => session.click(...args)),
+              clickAndType: (...args) => attempt.input(() => session.clickAndType(...args)),
+              mouseWheel: (...args) => attempt.input(() => session.mouseWheel(...args)),
+              pressEscape: (...args) => attempt.input(() => session.pressEscape(...args)),
+              clearInput: session.clearInput ? (...args) => attempt.input(() => session.clearInput!(...args)) : undefined,
+              signal: ctx.signal,
+              ordinaryRetry: attempt.retry,
+            })
+            ctx.progress({ stage: 'execute', message: `打开会话「${contact.trim()}」（优先搜索找人，失败回退会话列表）` })
+            const r = await executor.open({ contact })
+            attempt.verified({status: 'met', evidence: [`fresh会话头部联系人为${r.contact}`]})
+            return {
+              message: `完成：${VIA_LABEL[r.via]}「${r.contact}」的会话，可用 read-chat 读取消息`,
+              data: { contact: r.contact, via: r.via },
+              effect: 'none' as const,
+            }
           })
-          ctx.progress({ stage: 'execute', message: `打开会话「${contact.trim()}」（优先搜索找人，失败回退会话列表）` })
-          const r = await executor.open({ contact })
-          return {
-            message: `完成：${VIA_LABEL[r.via]}「${r.contact}」的会话，可用 read-chat 读取消息`,
-            data: { contact: r.contact, via: r.via },
-            effect: 'none',
-          }
+          return { ...verified.value, data: { ...verified.value.data, operation_recovery: verified.facts } }
         },
       )
     },

@@ -84,7 +84,7 @@ Phase 1 实现 `direct_url` + `ticket_redirect` + `token_param` 三种；`form_s
 | 改动 | 文件 | 说明 |
 |------|------|------|
 | api-meta 解析扩展 | `src/services/recap/tasks/external_push.py` 的 `parse_api_meta`（或抽公共模块） | 新增 sso_* 键解析；建议将 api-meta 解析抽到 `src/services/tenant_api_doc.py` 供推送与入口共用 |
-| 外部系统列表 API | `src/api/external_systems.py`（新） | `GET /api/external-systems`：读租户文档 api-meta，返回 `[{system_id, name, sso_ready}]`；无 sso 声明返回空列表 |
+| 外部系统列表 API | `src/api/external_systems.py`（新） | `GET /api/external-systems`：读生效文档 api-meta（租户上传 `{subagent}-api.md` 优先，内置/自定义智能体经技能白名单命中 `configs/api_doc_templates/{skill}.md` 通用模板兜底），返回 `[{system_id, name, sso_ready}]`；多个智能体指向同一外部系统（同名同地址同模式）时只保留首个；无 sso 声明返回空列表 |
 | SSO 跳转 API | 同上 | `POST /api/external-systems/{system_id}/sso-url`：按 mode 生成跳转 URL；ticket_redirect 模式调第三方换票（复用 delegate_login 取 client_token，redis 缓存 23h 既有机制） |
 | 租户文档解析缓存 | 复用/参照推送侧文档读取 | 解析结果 redis 短缓存（如 10min），文档更新自然过期 |
 

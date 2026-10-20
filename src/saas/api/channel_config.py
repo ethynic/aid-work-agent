@@ -230,6 +230,8 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
             body.config.pop("callback_token", None)
         _validate_wechat_mp_safe_mode(body.config)
 
+    _validate_channel_subagent(admin["tenant_id"], body.subagent_type)
+
     try:
         config = ChannelConfigDB.create(
             tenant_id=admin["tenant_id"],
@@ -318,6 +320,8 @@ async def update_channel(config_id: str, request: Request, body: ChannelConfigUp
             body.config,
             existing_appid=str((existing.get("config") or {}).get("appid") or ""),
         )
+
+    _validate_channel_subagent(admin["tenant_id"], body.subagent_type)
 
     try:
         success = ChannelConfigDB.update(config_id, body.config, subagent_type=body.subagent_type, name=body.name)
@@ -671,9 +675,29 @@ async def rotate_wechat_mp_token(config_id: str, request: Request):
     }
 
 
+def _validate_channel_subagent(tenant_id: str, subagent_type: Optional[str]) -> None:
+    """校验渠道绑定的 subagent_type：本租户实例（active）或已订阅基础员工。
+
+    防跨租户绑定：实例须 tenant_id 匹配；基础 id 须在租户有效订阅内。
+    """
+    if not subagent_type:
+        return  # 不绑定数字员工
+    from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
+
+    row = TenantAgentInstanceDB.get(tenant_id, subagent_type)
+    if row and row.get("status") == "active":
+        return
+    if row:
+        raise HTTPException(status_code=400, detail="该数字员工副本已删除，请重新选择")
+    with get_db_connection() as conn:
+        allowed = SubscriptionDB.get_allowed_subagent_types(conn, tenant_id)
+    if subagent_type not in allowed:
+        raise HTTPException(status_code=400, detail="未订阅该数字员工，无法绑定")
+
+
 @router.get("/available-subagents")
 async def get_available_subagents(request: Request):
-    """获取当前租户可用的数字员工列表（用于渠道配置关联）"""
+    """获取当前租户可用的数字员工列表（用于渠道配置关联，含本租户副本实例）"""
     admin = require_admin(request)
     tenant_id = admin["tenant_id"]
 
@@ -693,6 +717,21 @@ async def get_available_subagents(request: Request):
             {"agent_id": t, "name": name_map.get(t, t)}
             for t in subagent_types
         ]
+
+        # 附加本租户数字员工副本实例（base 在订阅内才可见，订阅继承）
+        try:
+            from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
+            allowed_set = set(subagent_types)
+            for row in TenantAgentInstanceDB.list_by_tenant(tenant_id):
+                if row.get("agent_id") == row.get("base_agent_id"):
+                    continue
+                if row.get("base_agent_id") not in allowed_set:
+                    continue
+                name = row.get("display_name") or name_map.get(row["base_agent_id"], row["base_agent_id"])
+                result.append({"agent_id": row["agent_id"], "name": f"{name}（副本）"})
+        except Exception as e:
+            logger.warning(f"附加租户数字员工副本失败: {e}")
+
         return {"success": True, "subagents": result}
     except Exception as e:
         logger.error(f"获取可用数字员工列表失败: {e}")

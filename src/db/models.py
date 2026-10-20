@@ -728,7 +728,7 @@ class UserDB:
         page_size: int = 50,
         exclude_roles: list = None,
     ) -> dict:
-        """获取会话的消息列表（支持内容搜索）
+        """获取会话的消息列表（支持内容搜索，按时间倒序，最新在前）
 
         Args:
             session_id: 会话ID
@@ -767,7 +767,7 @@ class UserDB:
                 SELECT message_id, session_id, role, content, metadata, created_at
                 FROM chat_messages
                 WHERE {where_clause}
-                ORDER BY id ASC
+                ORDER BY id DESC
                 LIMIT %s OFFSET %s
             """, params + [page_size, offset])
 

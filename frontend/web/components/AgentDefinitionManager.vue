@@ -116,53 +116,6 @@
                       class="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-primary-400"></textarea>
                   </div>
 
-                  <!-- Tools Picker -->
-                  <div>
-                    <div class="flex items-center justify-between mb-1">
-                      <label class="text-xs text-gray-500">工具配置</label>
-                      <FullscreenPicker title="工具配置" :selected-count="additionalTools.length">
-                        <template #content>
-                          <div class="space-y-1.5">
-                            <label class="flex items-center gap-2 text-sm text-gray-600">
-                              <input type="checkbox" v-model="toolsInherit"
-                                class="w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500" />
-                              继承默认工具
-                            </label>
-                            <div v-if="!toolsInherit" class="space-y-1.5">
-                              <label v-for="tool in availableTools" :key="tool.id"
-                                class="flex items-center gap-3 px-3 py-2 text-sm bg-white rounded-lg border border-gray-200 hover:border-gray-300 cursor-pointer">
-                                <input type="checkbox"
-                                  class="w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
-                                  :checked="additionalTools.includes(tool.id)" @change="toggleTool(tool.id)" />
-                                <span class="font-medium text-gray-700">{{ tool.name }}</span>
-                                <span class="text-[11px] text-gray-400 font-mono" :title="tool.id">{{ tool.id }}</span>
-                                <span class="text-gray-400 truncate flex-1" :title="tool.description">{{ tool.description }}</span>
-                              </label>
-                              <div v-if="availableTools.length === 0" class="text-sm text-gray-400 py-2">加载中...</div>
-                            </div>
-                          </div>
-                        </template>
-                      </FullscreenPicker>
-                    </div>
-                    <div class="bg-gray-50 rounded-lg p-2">
-                      <label class="flex items-center gap-2 text-xs text-gray-600 mb-2">
-                        <input type="checkbox" v-model="toolsInherit" />
-                        继承默认工具
-                      </label>
-                      <div v-if="!toolsInherit" class="max-h-40 overflow-y-auto space-y-1">
-                        <label v-for="tool in availableTools" :key="tool.id"
-                          class="flex items-center gap-2 px-2 py-1 text-xs bg-white rounded border border-gray-100 hover:border-gray-200 cursor-pointer">
-                          <input type="checkbox" :checked="additionalTools.includes(tool.id)"
-                            @change="toggleTool(tool.id)" />
-                          <span class="font-medium text-gray-700">{{ tool.name }}</span>
-                          <span class="text-[11px] text-gray-400 font-mono" :title="tool.id">{{ tool.id }}</span>
-                          <span class="text-gray-400 truncate flex-1" :title="tool.description">{{ tool.description }}</span>
-                        </label>
-                        <div v-if="availableTools.length === 0" class="text-xs text-gray-400 py-1">加载中...</div>
-                      </div>
-                    </div>
-                  </div>
-
                   <!-- Skills Picker -->
                   <div>
                     <div class="flex items-center justify-between mb-1">
@@ -192,6 +145,60 @@
                         <span class="text-gray-400 truncate flex-1" :title="skill.description">{{ skill.description }}</span>
                       </label>
                       <div v-if="availableSkills.length === 0" class="text-xs text-gray-400 py-1">加载中...</div>
+                    </div>
+                  </div>
+
+                  <!-- Tools Picker -->
+                  <div>
+                    <div class="flex items-center justify-between mb-1">
+                      <label class="text-xs text-gray-500">工具配置</label>
+                      <FullscreenPicker title="工具配置" :selected-count="additionalTools.length">
+                        <template #content>
+                          <div class="space-y-1.5">
+                            <label class="flex items-center gap-2 text-sm text-gray-600">
+                              <input type="checkbox" v-model="toolsInherit"
+                                class="w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500" />
+                              继承默认工具
+                            </label>
+                            <div v-if="!toolsInherit" class="space-y-1.5">
+                              <label v-for="tool in availableTools" :key="tool.id"
+                                class="flex items-center gap-3 px-3 py-2 text-sm bg-white rounded-lg border border-gray-200 hover:border-gray-300 cursor-pointer"
+                                :class="toolSources(tool.id) ? 'opacity-75' : ''">
+                                <input type="checkbox"
+                                  class="w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
+                                  :checked="additionalTools.includes(tool.id) || !!toolSources(tool.id)"
+                                  :disabled="!!toolSources(tool.id)" @change="toggleTool(tool.id)" />
+                                <span class="font-medium text-gray-700">{{ tool.name }}</span>
+                                <BaseBadge v-if="toolSources(tool.id)" intent="info" size="sm"
+                                  :title="`由技能 ${toolSources(tool.id)!.join('、')} 依赖，不可手动取消`">技能依赖</BaseBadge>
+                                <span class="text-[11px] text-gray-400 font-mono" :title="tool.id">{{ tool.id }}</span>
+                                <span class="text-gray-400 truncate flex-1" :title="tool.description">{{ tool.description }}</span>
+                              </label>
+                              <div v-if="availableTools.length === 0" class="text-sm text-gray-400 py-2">加载中...</div>
+                            </div>
+                          </div>
+                        </template>
+                      </FullscreenPicker>
+                    </div>
+                    <div class="bg-gray-50 rounded-lg p-2">
+                      <label class="flex items-center gap-2 text-xs text-gray-600 mb-2">
+                        <input type="checkbox" v-model="toolsInherit" />
+                        继承默认工具
+                      </label>
+                      <div v-if="!toolsInherit" class="max-h-40 overflow-y-auto space-y-1">
+                        <label v-for="tool in availableTools" :key="tool.id"
+                          class="flex items-center gap-2 px-2 py-1 text-xs bg-white rounded border border-gray-100 hover:border-gray-200 cursor-pointer"
+                          :class="toolSources(tool.id) ? 'opacity-75' : ''">
+                          <input type="checkbox" :checked="additionalTools.includes(tool.id) || !!toolSources(tool.id)"
+                            :disabled="!!toolSources(tool.id)" @change="toggleTool(tool.id)" />
+                          <span class="font-medium text-gray-700">{{ tool.name }}</span>
+                          <BaseBadge v-if="toolSources(tool.id)" intent="info" size="sm"
+                            :title="`由技能 ${toolSources(tool.id)!.join('、')} 依赖，不可手动取消`">技能依赖</BaseBadge>
+                          <span class="text-[11px] text-gray-400 font-mono" :title="tool.id">{{ tool.id }}</span>
+                          <span class="text-gray-400 truncate flex-1" :title="tool.description">{{ tool.description }}</span>
+                        </label>
+                        <div v-if="availableTools.length === 0" class="text-xs text-gray-400 py-1">加载中...</div>
+                      </div>
                     </div>
                   </div>
 
@@ -254,20 +261,22 @@
                     <div class="bg-gray-50 rounded-lg p-2 space-y-1.5">
                       <div v-for="(task, i) in recapTasks" :key="i"
                         class="flex items-center gap-1.5 bg-white rounded-lg p-1.5 border border-gray-100">
-                        <select v-model="task.name"
-                          class="px-1.5 py-1 text-xs border border-gray-200 rounded focus:outline-none focus:border-primary-400 flex-1 min-w-0">
+                        <select v-model="task.name" :disabled="!!recapSources(task.name)"
+                          class="px-1.5 py-1 text-xs border border-gray-200 rounded focus:outline-none focus:border-primary-400 flex-1 min-w-0 disabled:bg-gray-100 disabled:text-gray-400">
                           <option v-for="opt in recapTaskOptions" :key="opt.name" :value="opt.name" :title="opt.description">
                             {{ opt.name }}
                           </option>
                         </select>
-                        <select v-model="task.when"
-                          class="px-1.5 py-1 text-xs border border-gray-200 rounded focus:outline-none focus:border-primary-400">
+                        <BaseBadge v-if="recapSources(task.name)" intent="info" size="sm"
+                          :title="`由技能 ${recapSources(task.name)!.join('、')} 带入，随技能勾选联动`">技能带入</BaseBadge>
+                        <select v-model="task.when" :disabled="!!recapSources(task.name)"
+                          class="px-1.5 py-1 text-xs border border-gray-200 rounded focus:outline-none focus:border-primary-400 disabled:bg-gray-100 disabled:text-gray-400">
                           <option v-for="w in recapWhenOptions" :key="w" :value="w">{{ w }}</option>
                         </select>
                         <label class="flex items-center gap-1 text-xs text-gray-600 whitespace-nowrap cursor-pointer">
                           <input type="checkbox" v-model="task.enabled" />启用
                         </label>
-                        <button @click="recapTasks.splice(i, 1)"
+                        <button v-if="!recapSources(task.name)" @click="recapTasks.splice(i, 1)"
                           class="text-danger-400 hover:text-danger-600 text-sm px-1">&times;</button>
                       </div>
                       <button @click="addRecapTask"
@@ -275,7 +284,7 @@
                         + 添加任务
                       </button>
                     </div>
-                    <p class="text-[11px] text-gray-400 mt-1">每轮问答回复送达后异步执行，失败不影响对话主流程。</p>
+                    <p class="text-[11px] text-gray-400 mt-1">每轮问答回复送达后异步执行，失败不影响对话主流程。recap 任务优先通过勾选技能自动带入；手动添加仅用于无技能来源的任务（如 lead_refresh）。</p>
                   </div>
 
                   <!-- Business Pages Editor -->
@@ -565,6 +574,7 @@ import PageMetaSelector from './PageMetaSelector.vue'
 import MyTextarea from './ui/MyTextarea.vue'
 import MenuIcon from './ui/MenuIcon.vue'
 import FullscreenPicker from './ui/FullscreenPicker.vue'
+import BaseBadge from './ui/BaseBadge.vue'
 import {
   listDefinitions, getDefinition, createDefinition,
   updateDefinition, deleteDefinition, updateSystemPrompt,
@@ -614,6 +624,44 @@ const selectedPageIds = computed(() => businessPages.value.map(p => p.id))
 const recapTasks = ref<{ name: string; when: string; enabled: boolean }[]>([])
 const recapTaskOptions = ref<RecapTaskMeta[]>([])
 const recapWhenOptions = ref<string[]>([])
+
+// 技能带入的 recap 任务与工具：由当前勾选技能的 requires_recap/requires_tools 实时推导，
+// 不持久化来源字段；条目名 -> 带入它的技能显示名列表（用于锁定态与来源徽章）
+const skillDerivedRecap = computed<Map<string, string[]>>(() => {
+  const map = new Map<string, string[]>()
+  for (const skillId of form.value.skills?.allowed || []) {
+    const skill = availableSkills.value.find(s => s.id === skillId)
+    if (!skill) continue
+    for (const req of skill.requires_recap || []) {
+      const names = map.get(req.name) || []
+      names.push(skill.name)
+      map.set(req.name, names)
+    }
+  }
+  return map
+})
+
+const skillDerivedTools = computed<Map<string, string[]>>(() => {
+  const map = new Map<string, string[]>()
+  for (const skillId of form.value.skills?.allowed || []) {
+    const skill = availableSkills.value.find(s => s.id === skillId)
+    if (!skill) continue
+    for (const toolId of skill.requires_tools || []) {
+      const names = map.get(toolId) || []
+      names.push(skill.name)
+      map.set(toolId, names)
+    }
+  }
+  return map
+})
+
+function recapSources(name: string): string[] | undefined {
+  return skillDerivedRecap.value.get(name)
+}
+
+function toolSources(toolId: string): string[] | undefined {
+  return skillDerivedTools.value.get(toolId)
+}
 
 // 聊天工具栏额外按钮 + 上传类型限定（选项来自前端 toolbar-buttons 注册表）
 const toolbarButtonOptions = listToolbarButtonMeta()
@@ -944,6 +992,7 @@ watch(sectionKeys, () => autoResizeAll())
 
 // ============== Tool/Skill Toggles ==============
 function toggleTool(toolId: string) {
+  if (toolSources(toolId)) return
   const idx = additionalTools.value.indexOf(toolId)
   if (idx >= 0) {
     additionalTools.value.splice(idx, 1)
@@ -959,6 +1008,7 @@ function toggleSkill(skillId: string) {
   const idx = arr.indexOf(skillId)
   if (idx >= 0) {
     arr.splice(idx, 1)
+    removeSkillRecapRequirements(skillId)
   } else {
     arr.push(skillId)
     applySkillRequirements(skillId)
@@ -966,7 +1016,7 @@ function toggleSkill(skillId: string) {
 }
 
 // 勾选技能时，按技能声明的依赖（requires_tools / requires_recap）自动补全工具与 recap 任务。
-// 只做增量补全，取消勾选不回删，避免误删管理员手动配置。
+// 取消勾选时：recap 任务自动回删（removeSkillRecapRequirements），工具不回删，避免误删共享配置。
 function applySkillRequirements(skillId: string) {
   const skill = availableSkills.value.find(s => s.id === skillId)
   if (!skill) return
@@ -979,6 +1029,29 @@ function applySkillRequirements(skillId: string) {
     if (!recapTasks.value.some(t => t.name === req.name)) {
       recapTasks.value.push({ name: req.name, when: req.when || 'every_round', enabled: true })
     }
+  }
+}
+
+// 取消勾选技能时，回删该技能带入且不再被其他已勾选技能覆盖的 recap 任务，并 toast 告知
+function removeSkillRecapRequirements(skillId: string) {
+  const skill = availableSkills.value.find(s => s.id === skillId)
+  if (!skill) return
+  const stillRequired = new Set<string>()
+  for (const id of form.value.skills?.allowed || []) {
+    const s = availableSkills.value.find(x => x.id === id)
+    for (const req of s?.requires_recap || []) stillRequired.add(req.name)
+  }
+  const removed: string[] = []
+  for (const req of skill.requires_recap || []) {
+    if (stillRequired.has(req.name)) continue
+    const idx = recapTasks.value.findIndex(t => t.name === req.name)
+    if (idx >= 0) {
+      recapTasks.value.splice(idx, 1)
+      removed.push(req.name)
+    }
+  }
+  if (removed.length > 0) {
+    showToast(`由 ${skill.name} 技能带入的 recap 条目 ${removed.join('、')} 已自动删除`)
   }
 }
 

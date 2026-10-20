@@ -14,12 +14,31 @@ npm --prefix clients/boss-resume-assistant run build:main
 npm --prefix clients/weixin-cli run build:main
 npm --prefix clients/wecom-cli run build:main
 venv/Scripts/python.exe clients/runtime-plugin-packaging/prepare-ocr.py
-node clients/runtime-plugin-packaging/package.mjs --test --node C:/repos/aid-work-agent/clients/runtime-plugin-packaging/assets/node/node-v22.23.3-win-x64/node.exe --npm-cli C:/nvm4w/nodejs/node_modules/npm/bin/npm-cli.js --output C:/repos/aid-work-agent/clients/runtime-plugin-packaging/release/final-acceptance
+node clients/runtime-plugin-packaging/package.mjs --test --test-key-id aid-isolated-bundle-20261015-next --node C:/repos/aid-work-agent/clients/runtime-plugin-packaging/assets/node/node-v22.23.3-win-x64/node.exe --npm-cli C:/nvm4w/nodejs/node_modules/npm/bin/npm-cli.js --output C:/repos/aid-work-agent/clients/runtime-plugin-packaging/release/new-acceptance
 ```
 
 `--node`、`--npm-cli` 是可信构建输入，按构建机实际位置提供。固定 Node ZIP 官方 SHA256：`2b0ff57b049cda1bbcea2240eec20467018713c1efe1f7360c2681859b90ed71`。构建工具验证其版本、平台、架构和 ABI；不会将 Node PATH 或 Electron executable 当客户机执行入口。
 
 输出目录必须全新，工具拒绝覆盖已生成包。一次运行签署全部三包，使用同一个仅驻内存的开发 signer；不保存私钥。单 Provider 调试可传 `--provider boss|weixin|wecom`，但新的测试运行仍应使用新目录。正式发布改为 `--signer <外部配置.json> --release-id <不可变发布标识>`，配置含 `key_id`、`private_key_path`，不能与 `--test` 混用；正式私钥不入库、不打印。
+
+## 跨电脑构建与历史升级
+
+验收公开信任根的唯一登记文件为本目录`trust/acceptance-roots.json`，随源码同步到其他构建机。`trust/history/runtime-r15.json`保存已交付r15的原始四根，字节SHA256固定为`bc1bdb8f0b949ec54f941821f1470207d913f6c2fef64c82646b356104d7f328`。历史key_id、公钥及Provider授权范围不得更名或覆盖；带历史命名的key_id与新交付文件名互不影响。
+
+`trust/history/*.roots.json`是后续已发布版本的公开根快照清单，例如`runtime-0.0.12.roots.json`保留本次五根。每次交付时，将完整登记集合保存为新的`<发布版本>.roots.json`并随源码提交，保留全部旧快照。构建会逐份校验登记集合覆盖这些快照；漏掉后来发布的根、改变历史身份或快照损坏均拒绝继续。
+
+1. 先更新源码并检查登记集合，复用已经交付的不可变插件包，不为同一版本换签名或换内容。
+2. 新版本打包使用全新`--test-key-id`。已登记的ID（包括早期默认ID）会在生成密钥前被拒绝；私钥只存在于签名进程内，换机不需要复制旧私钥。
+3. 将输出公钥显式追加登记（单Provider发行应先将该根的`providers`限定为实际发布的Provider）：
+
+   ```powershell
+   node clients/runtime-plugin-packaging/register-publisher-trust.mjs --input clients/runtime-plugin-packaging/release/new-acceptance/ISOLATED-TEST-TRUST-ROOT.json
+   ```
+
+4. 交付前将本轮完整登记集合保存为`trust/history/<发行版本>.roots.json`，审阅并提交公开根及发布快照变更，再用`--trust-roots clients/runtime-plugin-packaging/trust/acceptance-roots.json`准备Runtime。加载登记表会核对r15与所有已登记发布快照，prepare、安装器打包和最终验包要求输入与该集合一致；漏掉任何已交付版本的根、替公钥、改授权范围或夹入未登记新根均拒绝，不允许用本机缓存作为另一个信任基线。
+5. 用旧实际插件包在同一隔离home验证库存重开和版本升级；业务未就绪仍应如实显示。保留原产品身份/配对和插件状态，不要求用户为换构建机解绑重配。
+
+登记脚本只写公开根，追加操作使用锁与同目录原子替换；同一ID和相同身份幂等，同一ID绑定不同公钥或范围拒绝。正式production配置仍拒绝test_only根，不借取消交付名称标记绕过Windows签名要求。
 
 ## OCR 资产
 

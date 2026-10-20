@@ -750,6 +750,18 @@ run + pending items，worker 按租户串行领取（事务内 queued→running�
 - 配对重生成、完成替换、手工撤销及选定操作共用按 tenant/user 的事务级 advisory lock，避免与全用户单选 UPDATE 的锁顺序冲突；配对消费另以票据行锁保证一次性。
 - 新部署字段在 `deploy/init-postgres.sql`；现有环境由初始化的 `deploy/db_update.yaml` 增量块幂等添加。
 
+### 11.10 Runtime 干净安装注册协议3（2026-10-14，待部署）
+
+2026-10-14补偿登记：agent2代码发布后，存量`_db_update_applied.last_datetime=2026-10-14 18:00:00`使原17:00块被跳过，注册三列及索引未创建。追加`2026-10-14 22:45:00`同结构幂等迁移，不回拨已有水位，不修改设备/任务数据；用户授权后的复查已确认agent2结构齐全及22:45水位，助手没有重复写库，正式库只读确认水位为13日17:00、尚待发布。详情见[干净安装计划Phase7](../plans/plan-runtime-clean-install.md)和[复盘](../incidents/runtime-registration-migration-watermark-incident.md)。
+
+- `local_tool_devices.registration_id UUID NULL`：客户端以现有256-bit随机token与DPAPI保存的注册UUID；部分唯一索引 `uq_lt_devices_registration` 保证一次注册只建一设备。旧协议记录为空。
+- `registration_request_hash TEXT NULL`：规范JSON不可变意图摘要（name/platform/runtime_version/capabilities/machine_fingerprint/previous token hash/protocol=3）；凭据、OTP均不明文落库。`registration_code_hash TEXT NULL` 保存首次票据hash，以核对仍带码的重试。
+- 协议3首先锁注册ID并验证设备token hash、意图摘要及可选票据hash；恢复请求可无code，无需重新消费票据。已撤销设备明确拒绝，不重新选定、撤销或复活。新的注册事务按注册→tenant/user→票据/设备的顺序锁定，完成票据消费、创建、已验证原身份撤销与新设备自动单选。
+- 替换码以票据目标为准；普通码仅对同tenant/user且active的原token设备进行替换。原凭据未知/损坏或同账号已revoked不阻断干净注册；有记录但跨tenant/user明确拒绝、不消费码。替换目标的 `replaced_by_device_id` 仍仲裁唯一胜者；同账号其他设备仅清selected，不撤销。旧任务和执行事实保持原归属、原状态，不迁移、不标成功。
+- 协议1/2保留11.9行为。`POST /runtime/activate {}` 是旧协议暂存凭据迁移完成后的显式自动收尾，仅能选定鉴权token自身；拒绝请求指定任何目标，不用于每次启动的自动抢选。
+- 新库及现有库增量定义分别维护于 `init-postgres.sql` 与 `db_update.yaml`；该段是待部署实现语义，不代表agent2已更新。
+- 旧设备撤销后不能通过在途HTTP鉴权继续领取/续租或新签写许可：local claim、progress续租、write-authorize以及session task claim/renew在事务中先取设备active行 `FOR SHARE`，再锁任务/subject。撤销只锁设备不取任务锁，提交后的等待调用会重验并拒绝；不改旧任务结果事实。
+
 ## 12. 核心表关系图
 
 ```

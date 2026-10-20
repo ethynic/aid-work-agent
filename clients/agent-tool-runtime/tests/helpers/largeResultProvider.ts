@@ -21,6 +21,7 @@ lines.on('line', (line) => {
   }
   if (args.crash) { process.exit(1); return }
   const data = { success: true, code: 'OK', effect: 'none', retryable: false,
+    message: 'synthetic read completed', run_id: 'synthetic-result',
     data: { images: [{ base64: 'A'.repeat(args.base64_bytes ?? 1) }], padding: '' } }
   const result = { content: args.wire_bytes ? [] : [{ type: 'text', text: JSON.stringify(data) }],
     structuredContent: data }

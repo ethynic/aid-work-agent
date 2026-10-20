@@ -26,6 +26,7 @@ import { createBossCloseDetailOperation } from './bossCloseDetail.js'
 import { createBossOverlayInspectOperation } from './bossOverlayInspect.js'
 import { createBossOverlayDismissOperation } from './bossOverlayDismiss.js'
 import type { BossOperation } from './types.js'
+import { withLocalRecovery } from '../boss/localOperationRecovery.js'
 
 export interface OperationEntry {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -62,9 +63,12 @@ export const OPERATIONS: Record<string, OperationEntry> = {
   boss_open_detail: { operation: createBossOpenDetailOperation(), cli: { write: false } },
   boss_greet_detail: { operation: createBossGreetDetailOperation(), cli: { write: true } },
   boss_close_detail: { operation: createBossCloseDetailOperation(), cli: { write: false } },
-  // 弹层自愈原语（2026-08-31）：仅供云端自愈编排内部调用，不进 SUBAGENT 白名单（agent 不可见）
+  // 恢复原语保持原始入口，禁止递归进入本地恢复。
   boss_overlay_inspect: { operation: createBossOverlayInspectOperation(), cli: { write: false } },
   boss_overlay_dismiss: { operation: createBossOverlayDismissOperation(), cli: { write: false } },
 }
+
+// CLI 与 MCP 都消费同一注册表；本地恢复不依赖 Agent 或服务器再次派发。
+for (const entry of Object.values(OPERATIONS)) entry.operation = withLocalRecovery(entry.operation)
 
 export const OPERATION_NAMES = Object.keys(OPERATIONS)

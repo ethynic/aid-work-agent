@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { FilterSetter, FilterSetError, viewportOf } from '../src/main/boss/FilterSetter.js'
+import { FilterSetter, FilterSetError, FilterPostconditionError, viewportOf } from '../src/main/boss/FilterSetter.js'
 import type { DomSnapshot, ClickPoint } from '../src/main/boss/domSnapshot.js'
 
 /**
@@ -599,4 +599,102 @@ test('目标全部在可视区内 → mouseWheel 从不被调用（非 VIP 行�
   await setter.clear()
   assert.equal(r.clicks.length, 2)
   assert.equal(w.wheels.length, 0)
+})
+
+test('只读后验可区分真实 badge2 与清除后的无数字0，不产生额外输入', async () => {
+  const badge2 = buildSnap([{ text: '筛选·2', bounds: [1514, 33.5, 60, 23] }])
+  const r = recorder()
+  const setter = new FilterSetter({ snapshot: snapshotQueue([closedSnap, panelSnap, panelSnap, badge2, badge2, closedSnap]), click: r.click, sleep: r.sleep })
+  await assert.rejects(setter.clear(), FilterPostconditionError)
+  const clicks = r.clicks.length
+  assert.deepEqual(await setter.verifyLastPostcondition(), { status: 'unmet', expectedCount: 0, observedCount: 2, panelOpen: false })
+  assert.deepEqual(await setter.verifyLastPostcondition(), { status: 'met', expectedCount: 0, observedCount: 0, panelOpen: false })
+  assert.equal(r.clicks.length, clicks)
+})
+
+test('未定位筛选按钮是inconclusive，strings中的无数字文本不能证明已清除', async () => {
+  const missing = buildSnap([])
+  missing.strings.push('筛选', '筛选·99')
+  const r = recorder()
+  const setter = new FilterSetter({ snapshot: snapshotQueue([closedSnap, panelSnap, panelSnap, missing]), click: r.click, sleep: r.sleep })
+  await assert.rejects(setter.clear(), (error: unknown) => error instanceof FilterSetError && !(error instanceof FilterPostconditionError))
+  assert.deepEqual(await setter.verifyLastPostcondition(), { status: 'inconclusive', expectedCount: 0, observedCount: null, panelOpen: false })
+})
+
+test('背景其他位置的badge与不可见字符串不影响同一toolbar按钮的零计数', async () => {
+  const background = buildSnap([
+    { text: '筛选', bounds: [1514, 33.5, 42, 23] },
+    { text: '筛选·2', bounds: [600, 900, 60, 23] },
+    { text: '筛选·6', bounds: [1514, 2500, 60, 23] },
+  ])
+  background.strings.push('筛选·77')
+  const r = recorder()
+  const setter = new FilterSetter({ snapshot: snapshotQueue([closedSnap, panelSnap, panelSnap, background]), click: r.click, sleep: r.sleep })
+  await setter.clear()
+  assert.equal((await setter.verifyLastPostcondition()).observedCount, 0)
+})
+
+test('隐藏iframe即使保留layout和badge也不参与toolbar读取', async () => {
+  const snap = buildSnap([
+    { text: '筛选', bounds: [1514, 33.5, 42, 23] },
+    { text: '', bounds: [0, 0, 1000, 1000] },
+  ])
+  const hidden = snap.strings.push('hidden') - 1
+  const fakeBadge = snap.strings.push('筛选·2') - 1
+  snap.documents[0]!.nodes.contentDocumentIndex = { index: [2], value: [1] }
+  snap.documents[0]!.layout.styles = [[], [], [-1, -1, -1, -1, -1, hidden]]
+  snap.documents.push({ nodes: { nodeValue: [0, fakeBadge], contentDocumentIndex: [] }, layout: { nodeIndex: [0, 1], bounds: [[0, 0, 1000, 1000], [100, 50, 60, 23]] } })
+  const setter = new FilterSetter({ snapshot: async () => snap, click: async () => assert.fail('只读核验不得点击') })
+  const result = await setter.verifyLastPostcondition()
+  assert.equal(result.observedCount, 0)
+  assert.equal(result.status, 'inconclusive') // 尚未开始apply/clear，没有待核验意图。
+})
+
+test('错误后只读发现提交成功时返回原appliedRows/substitutions/membership，不重放输入', async () => {
+  const r = recorder()
+  const wrong = buildSnap([{ text: '筛选·4', bounds: [1514, 33.5, 60, 23] }])
+  const setter = new FilterSetter({ snapshot: snapshotQueue([closedSnap, ...Array(7).fill(panelSnap), wrong, doneSnap]), click: r.click, sleep: r.sleep })
+  await assert.rejects(setter.apply({ ...FULL_SPEC, experience: '20年以上' }), FilterPostconditionError)
+  const clicks = r.clicks.length
+  const result = await setter.verifyLastPostcondition()
+  assert.equal(result.status, 'met')
+  assert.deepEqual(result.result?.appliedRows, [{ label: '经验要求', options: ['5-10年'] }, { label: '学历要求', options: ['本科', '硕士', '博士'] }, { label: '薪资待遇', options: ['10-20K'] }])
+  assert.deepEqual(result.result?.substitutions, [{ row: '经验要求', requested: '20年以上', matched: '5-10年' }])
+  assert.deepEqual(result.result?.membership, setter.membership)
+  assert.deepEqual(result.result?.skippedFilters, [])
+  assert.equal(r.clicks.length, clicks)
+  result.result!.appliedRows.length = 0
+  assert.equal((await setter.verifyLastPostcondition()).result?.appliedRows.length, 3)
+})
+
+test('计数虽相同但面板未关闭不能把旧badge误判为已提交', async () => {
+  const stillOpen = buildSnap(panelItems.map((item) => item.text === '筛选' ? { ...item, text: '筛选·5' } : item))
+  const r = recorder()
+  const setter = new FilterSetter({ snapshot: snapshotQueue([closedSnap, ...Array(7).fill(panelSnap), stillOpen]), click: r.click, sleep: r.sleep })
+  await assert.rejects(setter.apply(FULL_SPEC), (error: unknown) => error instanceof FilterPostconditionError && error.message.includes('面板仍打开'))
+})
+
+test('直接click与snapshot异常保持原异常身份，不包装成可重试后验错误', async () => {
+  const clickError = new Error('click response lost')
+  const setter = new FilterSetter({ snapshot: async () => panelSnap, click: async () => { throw clickError }, sleep: async () => {} })
+  await assert.rejects(setter.clear(), (error: unknown) => error === clickError)
+  const snapshotError = new Error('snapshot disconnected')
+  let calls = 0
+  const other = new FilterSetter({ snapshot: async () => { if (++calls >= 3) throw snapshotError; return panelSnap }, click: async () => {}, sleep: async () => {} })
+  await assert.rejects(other.clear(), (error: unknown) => error === snapshotError)
+})
+
+test('确定点击响应丢失仍保留已验证行结果，之后只读确认可承认成功', async () => {
+  const lostResponse = new Error('confirm response lost')
+  let clicks = 0
+  const setter = new FilterSetter({
+    snapshot: snapshotQueue([closedSnap, panelSnap, panelSnap, panelSnap, doneSnap1]),
+    click: async () => { if (++clicks === 4) throw lostResponse }, sleep: async () => {},
+  })
+  await assert.rejects(setter.apply({ experience: '20年以上' }), (error: unknown) => error === lostResponse)
+  const verified = await setter.verifyLastPostcondition()
+  assert.equal(verified.status, 'met')
+  assert.deepEqual(verified.result?.appliedRows, [{ label: '经验要求', options: ['5-10年'] }])
+  assert.deepEqual(verified.result?.substitutions, [{ row: '经验要求', requested: '20年以上', matched: '5-10年' }])
+  assert.equal(clicks, 4)
 })

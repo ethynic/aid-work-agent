@@ -18,6 +18,7 @@ from loguru import logger
 
 from src.api.auth import get_current_user
 from src.db.client_binding_db import ClientUsageLogDB
+from src.db.models import UserDB
 from src.desktop_automation import audit, payload_resolver
 from src.desktop_automation.adapters import AdapterNotFoundError
 from src.desktop_automation.constants import BUSINESS_KIND_DESKTOP_AUTOMATION, OPERATION_PROTOCOL_V2
@@ -35,6 +36,8 @@ from src.local_tools.models import (
 )
 from src.local_tools.pricing import RESUME_RECOGNITION_TOOL_NAME, resume_recognition_price
 from src.services import recruiting_match_service, resume_vl_service
+from src.services.boss_visual_service import BossVisualRequestBody, RuntimeVisualCaller, diagnose_visual
+from src.saas.db.tenant_db import TenantDB
 from src.local_tools.security import generate_claim_token, sha256_hex
 from src.utils import sanitize_error_info
 
@@ -144,6 +147,12 @@ def _replacement_error(error: repository.DeviceReplacementError) -> HTTPExceptio
         "REPLACEMENT_TARGET_NOT_FOUND": (404, "目标设备不存在或不属于当前账号"),
         "REPLACEMENT_DEVICE_REVOKED": (401, "新设备已撤销，无法完成替换"),
         "REPLACEMENT_ALREADY_COMPLETED": (409, "旧设备已由另一次替换完成，新设备连接仍保留，请在网页确认选定设备"),
+        "REGISTRATION_INVALID": (400, "注册请求身份格式无效，请升级客户端"),
+        "REGISTRATION_CONFLICT": (409, "注册请求与原请求不一致，请重试原注册"),
+        "REGISTRATION_REVOKED": (401, "本次注册的设备已失效，请重新配对"),
+        "PREVIOUS_DEVICE_INVALID": (401, "原设备凭据无效，请重新配对"),
+        "PREVIOUS_DEVICE_SCOPE_MISMATCH": (403, "原设备与配对码不属于同一账号或租户"),
+        "PAIRING_CODE_REQUIRED": (400, "首次注册需要有效配对码"),
     }
     status, message = messages[error.code]
     return HTTPException(status_code=status, detail={"error": message, "code": error.code, "debug": ""})
@@ -209,7 +218,7 @@ async def revoke_device(device_id: str, request: Request):
 
 @router.post("/runtime/pair")
 async def runtime_pair(body: PairRequest):
-    """配对码换设备 + 设备 token（均无 header；token 明文仅此一次返回）"""
+    """票据注册；协议3受保护请求身份支持丢响应后的幂等恢复。"""
     try:
         result = await asyncio.to_thread(
             pairing.pair,
@@ -220,6 +229,9 @@ async def runtime_pair(body: PairRequest):
             body.capabilities,
             body.machine_fingerprint,
             body.pairing_protocol,
+            body.registration_id,
+            body.registration_token,
+            body.previous_device_token,
         )
         if not result:
             raise _http_error(400, "配对码无效、已过期或已被使用")
@@ -231,6 +243,24 @@ async def runtime_pair(body: PairRequest):
     except Exception:
         logger.opt(exception=RuntimeError("PAIRING_TRANSACTION_FAILED")).error("后端日志：设备配对失败，事务未提交")
         raise HTTPException(status_code=500, detail={"error": "设备配对失败，请稍后重试", "debug": ""})
+
+
+@router.post("/runtime/activate")
+async def runtime_activate(
+    body: ReplacementCompleteRequest = Body(default=ReplacementCompleteRequest()),
+    device: Dict = Depends(_require_device),
+):
+    """Explicit migration completion: select only the authenticated device itself."""
+    try:
+        selected = await asyncio.to_thread(repository.select_device, device["tenant_id"], device["user_id"], str(device["id"]))
+        if not selected:
+            raise _replacement_error(repository.DeviceReplacementError("REGISTRATION_REVOKED"))
+        return {"success": True, "selected": True}
+    except HTTPException:
+        raise
+    except Exception:
+        logger.opt(exception=RuntimeError("DEVICE_ACTIVATION_FAILED")).error("后端日志：设备激活失败")
+        raise HTTPException(status_code=500, detail={"error": "设备激活失败，请稍后重试", "debug": ""})
 
 
 @router.post("/runtime/replacement/complete")
@@ -437,6 +467,30 @@ async def runtime_result(
     except Exception as e:
         logger.opt(exception=True).error(f"后端日志：写入 invocation 终态失败 id={invocation_id}: {e}")
         raise _http_error(500, "写入结果失败，请稍后重试", e)
+
+
+@router.post("/runtime/boss/visual-diagnose")
+async def runtime_boss_visual_diagnose(
+    body: BossVisualRequestBody, device: Dict = Depends(_require_device)
+):
+    """复用配对设备身份诊断；新请求按实际用量×20，旧费率和回执保持冻结。"""
+    from fastapi.responses import JSONResponse
+
+    tenant_id, user_id = device["tenant_id"], device["user_id"]
+    tenant, user = await asyncio.gather(
+        asyncio.to_thread(TenantDB.get_by_id, tenant_id),
+        asyncio.to_thread(UserDB.get_by_id, user_id),
+    )
+    if not tenant or tenant.get("status") != "active":
+        raise _http_error(403, "设备租户不存在或已停用")
+    if (not user or user.get("tenant_id") != tenant_id
+            or user.get("status") != "active"):
+        raise _http_error(403, "设备用户不存在、已停用或不属于当前租户")
+    caller = RuntimeVisualCaller(tenant_id=tenant_id, device_id=str(device["id"]), user_id=user_id)
+    result = await diagnose_visual(body, caller)
+    if result["state"] in {"reserved", "dispatched"}:
+        return JSONResponse(result, status_code=202, headers={"Retry-After": "2"})
+    return result
 
 
 @router.post("/runtime/resume/evaluate")

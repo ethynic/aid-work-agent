@@ -31,6 +31,14 @@ export class FilterSetError extends Error {
   }
 }
 
+/** 只表示输入正常返回后，真实筛选按钮的最终计数明确不符；直接 I/O 错误不属于此类。 */
+export class FilterPostconditionError extends FilterSetError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'FilterPostconditionError'
+  }
+}
+
 /**
  * 面板滚动适配失败（目标在弹窗可视区外且无滚动能力 / 滚 3 次仍不可见）：
  * 属页面状态问题而非档位缺失，不可由 apply 的保底档位映射恢复——直接 fail-loud。
@@ -101,6 +109,11 @@ export interface PanelRowInfo {
   group?: 'ordinary' | 'vip'
 }
 
+export interface UnreadablePanelRow {
+  label: string
+  reason: string
+}
+
 /** 与真实取证 fixture 相同顺序，不引入 Runtime/evaluate。 */
 export const FILTER_SNAPSHOT_OPTIONS = {
   includeDOMRects: true,
@@ -129,6 +142,15 @@ export interface FilterApplyResult {
   membership: MembershipObservation
   skippedFilters: SkippedFilter[]
   applied: boolean
+}
+
+export interface FilterPostcondition {
+  status: 'met' | 'unmet' | 'inconclusive'
+  expectedCount: number | null
+  observedCount: number | null
+  panelOpen: boolean
+  /** 已完成面板选值、年龄与第一学历校验的原结果；仅 met 时可作为成功结果消费。 */
+  result?: FilterApplyResult
 }
 
 class VipUnavailable extends Error {
@@ -203,9 +225,14 @@ export class FilterSetter {
   private observedMembership: MembershipObservation = { status: 'unknown', source: 'unknown', evidence: ['尚未探查头像'] }
   private membershipOverride?: MembershipObservation
   private accountKey?: string | null
+  private unreadablePanelRows: UnreadablePanelRow[] = []
+  private toolbarAnchor?: { documentIndex: number; bounds: [number, number, number, number] }
+  private expectedCount: number | null = null
+  private pendingResult?: FilterApplyResult
 
   get membership(): MembershipObservation { return this.observedMembership }
   get accountRef(): string | null { return this.accountKey ?? null }
+  get unreadableRows(): UnreadablePanelRow[] { return this.unreadablePanelRows.map((row) => ({ ...row })) }
 
   constructor(private readonly deps: FilterSetterDeps) {
     this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)))
@@ -217,6 +244,9 @@ export class FilterSetter {
    * 任一步失败抛 FilterSetError。
    */
   async clear(): Promise<void> {
+    this.expectedCount = null
+    this.pendingResult = undefined
+    this.toolbarAnchor = undefined
     if (this.deps.signal?.aborted) throw new CancelledError()
     let snap = await this.ensurePanelOpen()
     // VIP 适配：目标可能在弹窗滚动区下方，点击前先确保可见
@@ -230,6 +260,7 @@ export class FilterSetter {
 
     snap = await this.deps.snapshot()
     snap = await this.ensureButtonVisible(snap, '确定')
+    this.expectedCount = 0
     await this.step('panel:confirm', async () => {
       const confirm = this.locateUniqueText(snap, (s) => s === '确定', '确定按钮')
       await this.deps.click(confirm, viewportOf(snap))
@@ -237,11 +268,9 @@ export class FilterSetter {
     })
 
     // 校验：徽章应为无计数的「筛选」
-    snap = await this.step('panel:verify', () => this.deps.snapshot())
-    const badge = snap.strings.map((s) => FILTER_BADGE_PATTERN.exec(s.trim())).find((m) => m !== null)
-    if (badge) {
-      throw new FilterSetError(`清除筛选校验失败：徽章仍为「筛选·${badge[1]}」（确定可能未生效）`)
-    }
+    const verified = await this.step('panel:verify', () => this.verifyLastPostcondition())
+    if (verified.status === 'inconclusive') throw new FilterSetError('清除筛选结果无法确认：未唯一读到可见筛选按钮，不能将不可读当作0')
+    if (verified.status === 'unmet') throw new FilterPostconditionError(`清除筛选校验失败：${verified.panelOpen ? '筛选面板仍打开，确定未生效' : `徽章仍为「筛选·${verified.observedCount}」（确定可能未生效）`}`)
   }
 
   /**
@@ -249,8 +278,8 @@ export class FilterSetter {
    *
    * 档位匹配策略（2026-08-17 用户定调：判断交 AI，CLI 只精确执行）：先按原文定位，0 命中时按
    * 归一化精确匹配兜底（15k-20k ≡ 15-20K）；仍不中则报错并列出该行全部可选档位——调用方
-   * （LLM）应先用 boss_filter_options/probeOptions 读可选档位，把用户口语化要求映射成最接近
-   * 的档位再传精确值，绝不让用户看页面。
+   * （LLM）应先用 boss_filter_options/probeOptions 读可选档位，只提交已确认且可匹配的子集，
+   * 未匹配条件跳过并告知，全部未匹配时不调用空筛选或清除。
    *
    * 进面板后先点「清除」再选选项：选项是切换式控件，上次运行残留的已选状态下
    * 直接点同名选项会变成反选（2026-08-06 chat 演示实测：筛选·5 残留 + 同 spec
@@ -258,6 +287,9 @@ export class FilterSetter {
    * 任一步失败抛 FilterSetError。
    */
   async apply(spec: FilterSpec): Promise<FilterApplyResult> {
+    this.expectedCount = null
+    this.pendingResult = undefined
+    this.toolbarAnchor = undefined
     this.membershipOverride = undefined
     this.accountKey = undefined
     try { return await this.applyOnce(spec) } catch (error) {
@@ -294,6 +326,7 @@ export class FilterSetter {
     }
 
     const initial = await this.deps.snapshot()
+    this.readToolbarCount(initial)
     const account = membershipAccountKey(initial)
     if (this.accountKey === undefined) this.accountKey = account
     else this.requireSameAccount(initial)
@@ -406,12 +439,16 @@ export class FilterSetter {
     this.verifySelectedRows(snap, rows, requiresStructure)
     if (appliedAge) {
       const current = this.ageSlider(snap).handles
-      if (current[0]!.value !== appliedAge.min || current[1]!.value !== appliedAge.max) throw new FilterSetError('提交前年龄范围已变化，拒绝确认')
+      if (current[0]!.value !== appliedAge.min || current[1]!.value !== appliedAge.max) throw new FilterPostconditionError('提交前年龄范围已变化，拒绝确认')
     }
-    if ((this.firstDegreeControl(snap)?.checked ?? false) !== firstDegreeOnly) throw new FilterSetError('提交前第一学历勾选状态已变化，拒绝确认')
+    if ((this.firstDegreeControl(snap)?.checked ?? false) !== firstDegreeOnly) throw new FilterPostconditionError('提交前第一学历勾选状态已变化，拒绝确认')
     snap = await this.ensureButtonVisible(snap, '确定')
     this.requireSameAccount(snap)
     if (rows.some((r) => filterGroup(r.labelPrefix) === 'vip' && r.options.length > 0) || appliedAge || firstDegreeOnly) this.requireVip(snap, spec.membership_hint)
+    // 保存已验证面板事实，提交响应丢失时可由只读后验确认，无需重建筛选结果。
+    const expected = rows.reduce((n, r) => n + r.options.length, 0) + (appliedAge && (appliedAge.min !== 16 || appliedAge.max !== null) ? 1 : 0) + (firstDegreeOnly ? 1 : 0)
+    this.expectedCount = expected
+    this.pendingResult = { filterCount: expected, substitutions, appliedRows: rows.map((r) => ({ label: r.labelPrefix, options: [...r.options] })), ...(appliedAge ? { age: appliedAge } : {}), firstDegreeOnly, membership: this.observedMembership, skippedFilters, applied: true }
     await this.step('panel:confirm', async () => {
       const confirm = this.locateUniqueText(snap, (s) => s === '确定', '确定按钮')
       await this.deps.click(confirm, viewportOf(snap))
@@ -419,18 +456,93 @@ export class FilterSetter {
     })
 
     // 5. 徽章计数校验（筛选·N）
-    const expected = rows.reduce((n, r) => n + r.options.length, 0) + (appliedAge && (appliedAge.min !== 16 || appliedAge.max !== null) ? 1 : 0) + (firstDegreeOnly ? 1 : 0)
-    const count = await this.step('panel:verify', async () => {
-      const verifySnap = await this.deps.snapshot()
-      const badge = verifySnap.strings.map((s) => FILTER_BADGE_PATTERN.exec(s.trim())).find((m) => m !== null)
-      return badge ? Number(badge[1]) : verifySnap.strings.some((s) => s.trim() === '筛选') ? 0 : null
-    })
-    if (count !== expected) {
-      throw new FilterSetError(
-        `筛选结果校验失败：期望「筛选·${expected}」，实际 ${count === null ? '未找到徽章（面板可能未提交）' : `筛选·${count}`}`,
-      )
+    const verified = await this.step('panel:verify', () => this.verifyLastPostcondition())
+    if (verified.status === 'inconclusive') throw new FilterSetError(`筛选结果无法确认：期望「筛选·${expected}」，未唯一读到可见筛选按钮`)
+    if (verified.status === 'unmet') throw new FilterPostconditionError(`筛选结果校验失败：期望「筛选·${expected}」，实际「筛选·${verified.observedCount}」${verified.panelOpen ? '，筛选面板仍打开' : ''}`)
+    return verified.result!
+  }
+
+  /** 只读 fresh 核验，不打开面板、不点击；快照 I/O 错误原样传播。 */
+  async verifyLastPostcondition(): Promise<FilterPostcondition> {
+    const snap = await this.deps.snapshot()
+    this.requireSameAccount(snap)
+    const observedCount = this.readToolbarCount(snap)
+    const panelOpen = this.visibleHits(snap, (text) => text === '经验要求' || text === '筛选条件').some((hit) => this.hitInViewport(snap, hit))
+    const status = this.expectedCount === null || observedCount === null ? 'inconclusive'
+      : !panelOpen && observedCount === this.expectedCount ? 'met' : 'unmet'
+    return { status, expectedCount: this.expectedCount, observedCount, panelOpen, ...(status === 'met' && this.pendingResult ? { result: structuredClone(this.pendingResult) } : {}) }
+  }
+
+  /** Probe cleanup uses the same visible toolbar/panel rules without inventing a filter count. */
+  async verifyProbeClosed(): Promise<{ status: 'met' | 'unmet' | 'inconclusive'; evidence: string[] }> {
+    const snap = await this.deps.snapshot()
+    return this.probeClosure(snap)
+  }
+
+  private probeClosure(snap: DomSnapshot): { status: 'met' | 'unmet' | 'inconclusive'; evidence: string[] } {
+    this.requireSameAccount(snap)
+    const count = this.readToolbarCount(snap)
+    const panelOpen = this.visibleHits(snap, (text) => text === '经验要求' || text === '筛选条件')
+      .some((hit) => this.hitInViewport(snap, hit))
+    return { status: panelOpen ? 'unmet' : count === null ? 'inconclusive' : 'met',
+      evidence: [panelOpen ? '筛选档位已读，但可见筛选面板仍展开' : count === null ? '面板标志不见且筛选工具栏不可读，不能确认已收起' : '原筛选工具栏可读且筛选面板标志已消失'] }
+  }
+
+  async closeProbePanel(): Promise<void> {
+    const snap = await this.deps.snapshot()
+    const before = this.probeClosure(snap)
+    if (before.status === 'met') return
+    if (before.status === 'inconclusive') throw new CodedOperationError('UI_CHANGED', before.evidence.join('；'))
+    const button = this.locateUniqueText(snap, (s) => FILTER_BUTTON_PATTERN.test(s), '筛选按钮')
+    await this.deps.click(button, viewportOf(snap))
+    await this.sleep(800)
+  }
+
+  private hitInViewport(snap: DomSnapshot, hit: VisibleHit): boolean {
+    const viewport = viewportOf(snap)
+    const b = this.nodeGlobalBounds(snap, hit.documentIndex, hit.nodeIndex)
+    if (!b || b[0] + b[2] / 2 < 0 || b[1] + b[3] / 2 < 0 || b[0] + b[2] / 2 >= viewport.width || b[1] + b[3] / 2 >= viewport.height) return false
+    let documentIndex = hit.documentIndex
+    let firstNode = hit.nodeIndex
+    while (true) {
+      const doc = snap.documents[documentIndex]!
+      const parents = doc.nodes.parentIndex ? parentMapOf(doc) : null
+      let node: number | undefined = firstNode
+      const seen = new Set<number>()
+      while (node !== undefined && !seen.has(node)) {
+        seen.add(node)
+        const styles = doc.layout.styles?.[doc.layout.nodeIndex.indexOf(node)]
+        if (styles && (snap.strings[styles[2] ?? -1] === 'none' || ['hidden', 'collapse'].includes(snap.strings[styles[5] ?? -1] ?? '') || snap.strings[styles[6] ?? -1] === '0')) return false
+        node = parents?.get(node)
+      }
+      if (documentIndex === 0) return true
+      let owner: { documentIndex: number; nodeIndex: number } | undefined
+      snap.documents.forEach((candidate, candidateIndex) => {
+        for (const [nodeIndex, childIndex] of indexedValues(candidate.nodes.contentDocumentIndex, 'contentDocumentIndex')) {
+          if (childIndex === documentIndex) owner = { documentIndex: candidateIndex, nodeIndex }
+        }
+      })
+      if (!owner) return false
+      const bounds = this.nodeGlobalBounds(snap, owner.documentIndex, owner.nodeIndex)
+      if (!bounds || b[0] + b[2] / 2 < bounds[0] || b[1] + b[3] / 2 < bounds[1] || b[0] + b[2] / 2 >= bounds[0] + bounds[2] || b[1] + b[3] / 2 >= bounds[1] + bounds[3]) return false
+      documentIndex = owner.documentIndex
+      firstNode = owner.nodeIndex
     }
-    return { filterCount: count, substitutions, appliedRows: rows.map((r) => ({ label: r.labelPrefix, options: r.options })), ...(appliedAge ? { age: appliedAge } : {}), firstDegreeOnly, membership: this.observedMembership, skippedFilters, applied: true }
+  }
+
+  /** 徽章必须来自同一可见按钮，strings 中其他位置/隐藏 iframe 的「筛选·N」不是证据。 */
+  private readToolbarCount(snap: DomSnapshot): number | null {
+    const hits = this.visibleHits(snap, (text) => FILTER_BUTTON_PATTERN.test(text)).filter((hit) => {
+      if (!this.hitInViewport(snap, hit)) return false
+      const b = this.nodeGlobalBounds(snap, hit.documentIndex, hit.nodeIndex)!
+      const anchor = this.toolbarAnchor
+      return !anchor || (hit.documentIndex === anchor.documentIndex && Math.abs(b[0] - anchor.bounds[0]) <= Math.max(b[2], anchor.bounds[2]) && Math.abs(b[1] - anchor.bounds[1]) <= Math.max(b[3], anchor.bounds[3]))
+    })
+    if (hits.length !== 1) return null
+    const hit = hits[0]!
+    this.toolbarAnchor ??= { documentIndex: hit.documentIndex, bounds: this.nodeGlobalBounds(snap, hit.documentIndex, hit.nodeIndex)! }
+    const badge = FILTER_BADGE_PATTERN.exec(hit.text)
+    return badge ? Number(badge[1]) : 0
   }
 
   private requireVip(snap: DomSnapshot, hint?: MembershipHint): void {
@@ -458,6 +570,7 @@ export class FilterSetter {
 
   private async openPanel(initial?: DomSnapshot): Promise<DomSnapshot> {
     let snap = initial ?? await this.deps.snapshot()
+    this.readToolbarCount(snap)
     if (this.visibleHits(snap, (s) => s === '经验要求').length === 1) return snap
     const button = this.locateUniqueText(snap, (s) => FILTER_BUTTON_PATTERN.test(s), '筛选按钮')
     await this.deps.click(button, viewportOf(snap))
@@ -468,29 +581,37 @@ export class FilterSetter {
   }
 
   /**
-   * 探查筛选面板全部可选档位（boss_filter_options 工具，2026-08-17 用户定调「判断交 AI」）：
+   * 探查筛选面板可确认的档位（boss_filter_options 工具，判断交 AI）：
    * 开面板 → describePanel 读各行选项 → 点「筛选」把面板收起还原页面。
    * 返回的选项交给调用方（LLM），由它把用户口语化要求（如 15k-20k / 5年以上 / 本科及以上）
-   * 映射成最接近的精确档位后再调 apply。0 行可读 → FilterSetError（页面结构异常）。
+   * 匹配到真实档位后再调 apply，不可读行单独报告且不阻塞其余行。0 行可读 → FilterSetError。
    */
-  async probeOptions(): Promise<PanelRowInfo[]> {
+  async probeOptions(options: { close?: boolean } = {}): Promise<PanelRowInfo[]> {
     if (this.deps.signal?.aborted) throw new CancelledError()
     const snap = await this.ensurePanelOpen()
     this.accountKey = membershipAccountKey(snap)
     this.observedMembership = inspectMembership(snap)
     // describePanel 只读结构（全量行都要读，不点击）——无需滚动适配
     const rows = await this.step('probe:describe', async () => this.describePanel(snap))
-    if (rows.some((r) => r.control === 'range')) this.ageSlider(snap)
-    const readable = rows.filter((r) => r.options.length > 0 || r.control === 'range')
+    const unreadable = this.unreadableRows
+    const readable = rows.filter((row) => {
+      if (row.control === 'range') {
+        try { this.ageSlider(snap); return true } catch (err) {
+          if (!(err instanceof FilterSetError)) throw err
+          unreadable.push({ label: row.label, reason: err.message })
+          return false
+        }
+      }
+      if (row.options.length > 0) return true
+      unreadable.push({ label: row.label, reason: '未解析到可选档位' })
+      return false
+    })
+    this.unreadablePanelRows = unreadable
     if (readable.length === 0) {
       throw new FilterSetError('筛选面板未解析到任何可选档位（面板可能未打开或页面结构已变），请人工查看')
     }
     // 收起面板还原页面（面板开着时点「筛选」= 关闭；不触发任何筛选变更）
-    const closeSnap = await this.deps.snapshot()
-    this.requireSameAccount(closeSnap)
-    const button = this.locateUniqueText(closeSnap, (s) => FILTER_BUTTON_PATTERN.test(s), '筛选按钮')
-    await this.deps.click(button, viewportOf(closeSnap))
-    await this.sleep(800)
+    if (options.close !== false) await this.closeProbePanel()
     return readable
   }
 
@@ -511,6 +632,7 @@ export class FilterSetter {
 
   /** 以真实标签列发现行，再取只包含该标签与选项的最近祖先，兼容会员新增行与折行。 */
   private structuralRows(snap: DomSnapshot): StructuralRow[] | null {
+    this.unreadablePanelRows = []
     const anchors = ROW_DEFS.flatMap((d) => this.visibleHits(snap, (s) => s.startsWith(d.labelPrefix)))
     if (anchors.length < 2 || !snap.documents[anchors[0]!.documentIndex]?.layout.styles?.length) return null
     const di = anchors[0]!.documentIndex
@@ -532,6 +654,7 @@ export class FilterSetter {
       && (footerRoot === null || !isDescendantOf(doc, h.nodeIndex, footerRoot)))
     const rows: StructuralRow[] = []
     for (const label of labels) {
+      let parsed = false
       let current = parents.get(label.nodeIndex)
       const visited = new Set<number>()
       while (current !== undefined && current !== panel && !visited.has(current)) {
@@ -540,14 +663,16 @@ export class FilterSetter {
         const options = all.filter((h) => h.nodeIndex !== label.nodeIndex
           && h.bounds[0] >= label.bounds[0] + label.bounds[2]
           && isDescendantOf(doc, h.nodeIndex, current!))
-        if (options.length > 0) {
-          rows.push({ label, root: current, options: options.filter((o) => o.text !== '修改筛选专业' && !o.text.startsWith('只看第一学历')) })
+        const usableOptions = options.filter((o) => o.text !== '修改筛选专业' && !o.text.startsWith('只看第一学历'))
+        if (usableOptions.length > 0) {
+          rows.push({ label, root: current, options: usableOptions })
+          parsed = true
           break
         }
         current = parents.get(current)
       }
+      if (!parsed) this.unreadablePanelRows.push({ label: label.text, reason: '未完整解析出该行控件或可选档位' })
     }
-    if (rows.length !== labels.length) throw new FilterSetError('部分筛选行未完整解析出控件，拒绝报告完整面板')
     return rows
   }
 
@@ -604,7 +729,8 @@ export class FilterSetter {
     if (inspectFilterPaywall(afterSnap)) throw new VipUnavailable({ status: 'non_vip', source: 'paywall', evidence: ['第一学历操作后出现已确认会员付费弹窗'] })
     this.requireSameAccount(afterSnap)
     const after = this.firstDegreeControl(afterSnap)
-    if (!after || after.checked !== target) throw new FilterSetError('第一学历勾选后状态未达到请求值，拒绝确认')
+    if (!after) throw new FilterSetError('第一学历勾选后控件不可读，无法确认状态')
+    if (after.checked !== target) throw new FilterPostconditionError('第一学历勾选后状态未达到请求值，拒绝确认')
     return target
   }
 
@@ -630,8 +756,9 @@ export class FilterSetter {
         }
         return false
       }).filter((o) => o.text !== '不限').map((o) => o.text)
-      if (!observedOptionClass || selected.length !== req.options.length || req.options.some((o) => !selected.includes(o))) {
-        throw new FilterSetError(`筛选行「${req.labelPrefix}」实际已选值校验失败：期望${req.options.join('、') || '不限'}，实际${selected.join('、') || '未选中'}`)
+      if (!observedOptionClass) throw new FilterSetError(`筛选行「${req.labelPrefix}」选中状态不可读`)
+      if (selected.length !== req.options.length || req.options.some((o) => !selected.includes(o))) {
+        throw new FilterPostconditionError(`筛选行「${req.labelPrefix}」实际已选值校验失败：期望${req.options.join('、') || '不限'}，实际${selected.join('、') || '未选中'}`)
       }
     }
   }
@@ -700,7 +827,7 @@ export class FilterSetter {
       }
     }
     const values = this.ageSlider(snap).handles
-    if (values[0]!.value !== requested.min || values[1]!.value !== requested.max) throw new FilterSetError('年龄范围最终校验未通过')
+    if (values[0]!.value !== requested.min || values[1]!.value !== requested.max) throw new FilterPostconditionError('年龄范围最终校验未通过')
     return requested
   }
 

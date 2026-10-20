@@ -13,7 +13,7 @@
   模块清单或业务规则有差异的租户仍可单独上传
 -->
 
-<!-- api-meta：系统代码解析的机器可读约定块，请勿删除本块或改键名（login_url 必填；user_token_name 缺省默认 client_token；user_token_header / agent_token_header 可选，缺省分别为 Client-Authorize-Token / Api-Authorize-Token；delegate_auto_create 为 true 时委托登录遇到「用户不存在」自动建号，本系统要求 false——手机号无账号必须提示联系管理员） -->
+<!-- api-meta：系统代码解析的机器可读约定块，请勿删除本块或改键名（login_url 必填；user_token_name 缺省默认 client_token；user_token_header / agent_token_header 可选，缺省分别为 Client-Authorize-Token / Api-Authorize-Token；delegate_auto_create 为 true 时委托登录遇到「用户不存在」自动建号，本系统要求 false——手机号无账号必须提示联系管理员；sso_* 可选，声明「外部系统」页面的跳转入口，无 SSO 能力的系统只填 sso_enabled + sso_url） -->
 ```api-meta
 login_url: https://erp${APP_ID}.aidingyi.cn/api/v1/erp.delegate/login
 auth_mode: delegate_login
@@ -21,11 +21,19 @@ user_token_name: client_token
 agent_token_header: Api-Authorize-Token
 http_method: POST
 delegate_auto_create: false
+sso_enabled: true
+sso_system_name: CRM 客户信息
+sso_mode: ticket_redirect
+sso_url: https://erp${APP_ID}.aidingyi.cn/pages/list?id=13&path=kehuxinxi
+sso_ticket_param: sso_ticket
+sso_grant_url: https://erp${APP_ID}.aidingyi.cn/api/v1/erp.delegate/sso_grant
+sso_login_url: https://erp${APP_ID}.aidingyi.cn/api/v1/erp.delegate/sso_login
+sso_fallback_url: https://erp${APP_ID}.aidingyi.cn/
 ```
 
 本系统采用**用户委托登录**：智能体（代理人）持 `agent_token` 代表终端用户（委托人）访问。全部接口为 `POST`，Body 为 `application/json`。
 
-**各模块有哪些字段、字段中文名、是否必填、枚举选项、填写格式，一律不写在本文档中**，由 `module_schema` 元数据接口运行时提供（本智能体对应技能脚本 `load_form_schema.py`，带 Redis 缓存 1h）。新增模块接入时只需在[模块清单表](#8-模块清单表)加一行。
+**各模块有哪些字段、字段中文名、是否必填、枚举选项、填写格式，一律不写在本文档中**，由 `module_schema` 元数据接口运行时提供（本智能体对应技能脚本 `load_form_schema.py`，带 Redis 缓存，默认 10 分钟）。**当前有哪些模块可填**由 `open_modules` 接口运行时提供（脚本 `load_open_modules.py`，同一缓存 TTL）。新增模块接入时只需在[模块清单表](#8-模块清单表)加一行（该表仅供人工查阅，运行时以 `open_modules` 为准）。
 
 ---
 
@@ -71,13 +79,43 @@ HTTP 状态码恒为 200，业务语义在顶层 `Code`：
 
 ---
 
-## 2. module 参数与 module_schema 元数据接口
+## 2. module 参数、open_modules 与 module_schema 元数据接口
 
 ### module 参数规则
 
 - `module` = 业务模块主表表名去掉 `t_` 前缀，如主表 `t_kehuxinxi` → `module: "kehuxinxi"`
 - **子表不能作为 module**（子表没有独立接口，随主表走）
 - 实际可用字段、字段类型与格式，**以 `module_schema` 返回为准，不要凭记忆硬编码字段名**
+
+### open_modules 接口（先取「可填哪些模块」）
+
+```
+POST https://erp${APP_ID}.aidingyi.cn/api/v1/erp.module/open_modules
+```
+
+入参：无。模块范围完全由 agent_token 配置的 `open_modules` 白名单 + 委托人角色权限决定，**不接受调用方传入**（防越权枚举）。
+
+鉴权：与业务接口一致（双 Token），但**仅需 `Api-Authorize-Token`（`${AGENT_TOKEN}`）即可调用**（供委托登录前预取清单）；携带 `Client-Authorize-Token`（`${client_token}`）时与委托人角色可写权限（`insert`/`update`）取交集，保证「开放」与「能填」一致。**委托登录完成后调用（两个 header 都带）结果最准确。**
+
+响应（`Response`）：
+
+```json
+{
+  "modules": [
+    { "module": "kehuxinxi", "display_name": "客户", "primary_table": "t_kehuxinxi" },
+    { "module": "lianxijilu", "display_name": "跟进记录", "primary_table": "t_lianxijilu" }
+  ]
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| modules[] | 开放模块数组；未开放任何模块时为 `[]`（`Code` 仍为 0） |
+| modules[].module | 模块名，与 `module_schema` / 业务接口的 `module` 参数口径一致 |
+| modules[].display_name | 模块中文名，用于向用户呈现可填表单清单 |
+| modules[].primary_table | 主表表名，便于理解数据结构 |
+
+> **先调本接口确定可填模块，再对选定模块调 `module_schema` 取字段。** 第 8 节模块清单表仅供人工查阅，**运行时以本接口返回为准**（不同租户/代理人开放的模块不同，不要硬编码模块名）。
 
 ### module_schema 接口
 
@@ -109,7 +147,7 @@ POST https://erp${APP_ID}.aidingyi.cn/api/v1/erp.module/module_schema
         { "attr_name": "tuiguangqudao", "display_name": "推广渠道", "component": "select", "required": false,
           "options": [{ "label": "微信私聊", "value": "微信私聊" }] },
         { "attr_name": "genjinhuizongzhaiyao", "display_name": "跟进汇总摘要", "component": "textarea", "required": false,
-          "create_hidden": true, "description": "由填写跟进记录后归纳更新，新建时无需填写" },
+          "create_hidden": true, "note": "由填写跟进记录后归纳更新，新建时无需填写" },
         { "attr_name": "id", "display_name": "系统编号", "component": "input", "required": false, "is_system": true }
       ]
     }
@@ -127,7 +165,7 @@ POST https://erp${APP_ID}.aidingyi.cn/api/v1/erp.module/module_schema
 | attrs[].component | 控件类型（`input`/`select`/`date`/`datetime`/`textarea`/`integer`/`number` 等），同时决定列表 filters 的 value 格式（见第 3 节） |
 | attrs[].required | 新增时是否必填（以编辑页 mandatory 元数据为准） |
 | attrs[].options | 枚举选项 `[{label, value}]`，写入/查询取 `value`；无枚举时省略 |
-| attrs[].description | 填写说明；未配置时省略 |
+| attrs[].note | 字段特殊说明（如"由填写跟进记录后归纳更新，新建时无需填写"）；未配置时省略 |
 | attrs[].create_hidden | `true` = 新增场景无需填写 |
 | attrs[].edit_hidden | `true` = 修改场景不可改 |
 | attrs[].is_system | `true` = 系统字段（`id`/`sid`/`create_user`/`create_time`/`update_time`/`status` 等），由后端自动处理，跳过用户填写与回显确认 |
@@ -319,6 +357,8 @@ POST https://erp${APP_ID}.aidingyi.cn/api/v1/erp.module/module_data_update
 
 新增模块由系统方在此表加行（module 名 / 中文名 / 主表 / 备注），文档其余部分不变。
 
+> 运行时以 [`open_modules` 接口](#open_modules-接口先取可填哪些模块)返回的模块清单为准（由 agent_token 配置 + 委托人角色权限决定），本表仅供人工查阅。
+
 ---
 
 ## 9. 模块备注：客户信息（kehuxinxi）
@@ -328,7 +368,7 @@ POST https://erp${APP_ID}.aidingyi.cn/api/v1/erp.module/module_data_update
 `genjinhuizongzhaiyao`（跟进汇总摘要）用于沉淀客户跟进状态的累计摘要，新建客户时无需填写（`create_hidden: true`），由填写跟进记录后归纳更新：
 
 1. 每次填写跟进记录后，判断该客户**最新的客户状态** `zhuangtai`（取值见 `module_schema` 返回的 options）
-2. 结合本次跟进记录与历史跟进情况，归纳最新的跟进汇总摘要 `genjinhuizongzhaiyao`（建议控制在 200 字以内）；**保留历史摘要条目**，按天分条追加，条与条之间用 CRLF（`\r\n\r\n`）分隔
+2. 结合本次跟进记录与历史跟进情况，归纳最新的跟进汇总摘要 `genjinhuizongzhaiyao`（建议控制在 200 字以内）。摘要必须**结论导向**：只写「客户需求/关注点 + 已确认的关键事实 + 下一步待办」，禁止逐轮复述「客户问…，AI 介绍…」的对话过程，禁止罗列产品清单或照抄本轮对话预摘要；能一句话说清就只写一句。**保留历史摘要条目**，按天分条追加，条与条之间用 CRLF（`\r\n\r\n`）分隔
 3. 调用修改接口（第 6 节），同时更新 `zhuangtai`、`genjinhuizongzhaiyao` 两个字段
 4. 若本次跟进**没有重要信息**，客户状态与摘要均无变化，可跳过修改
 

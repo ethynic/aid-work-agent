@@ -15,6 +15,7 @@ import { createBossCloseDetailOperation } from '../src/main/operations/bossClose
 import type { BossSession } from '../src/main/operations/bossContext.js'
 import type { OpContext } from '../src/main/operations/types.js'
 import type { DomSnapshot } from '../src/main/boss/domSnapshot.js'
+import { WinClickError } from '../src/main/input/WinMouseClicker.js'
 import { closedListSnap, detailSnap, listSnap } from './detailGreetFixture.js'
 
 function silentCtx(): OpContext {
@@ -25,7 +26,7 @@ const RECOMMEND_URL = 'https://www.zhipin.com/web/chat/recommend'
 const OTHER_URL = 'https://www.zhipin.com/web/chat/index'
 
 /** fake 工厂：固定 URL + snapshot 队列（用完后重复最后一个） */
-function fakeFactory(url: string, snaps: DomSnapshot[]) {
+function fakeFactory(url: string, snaps: DomSnapshot[], opts: { escapeError?: Error } = {}) {
   const calls: string[] = []
   let i = 0
   const session: BossSession = {
@@ -42,6 +43,7 @@ function fakeFactory(url: string, snaps: DomSnapshot[]) {
     },
     pressEscape: async () => {
       calls.push('escape')
+      if (opts.escapeError) throw opts.escapeError
     },
     clickAndType: async () => {},
     captureFullpage: async () => Buffer.alloc(0),
@@ -85,8 +87,8 @@ test('open-detail：缺 name → INVALID_ARGUMENT，且不连 Chrome（validate 
   assert.deepEqual(f.calls, [])
 })
 
-test('open-detail：推荐页当前屏找到 → 点击 → canvas 出现 → 姓名匹配 → 成功，effect=none', async () => {
-  const f = fakeFactory(RECOMMEND_URL, [TARGET_LIST, TARGET_LIST, detailSnap({ name: NAME, state: 'greet' })])
+test('open-detail：推荐页当前屏找到 → 点击 → 画布及右侧详情锚点出现 → 成功，effect=none', async () => {
+  const f = fakeFactory(RECOMMEND_URL, [TARGET_LIST, TARGET_LIST, detailSnap({ name: NAME, state: 'greet', canvasNameOnly: true })])
   const r = await createBossOpenDetailOperation(f.factory).execute({ name: NAME }, silentCtx())
   assert.equal(r.success, true)
   assert.equal(r.code, 'OK')
@@ -121,7 +123,7 @@ test('greet-detail：dry-run → 定位成功不点击，effect=none，详情保
 })
 
 test('greet-detail：已打过（按钮=继续沟通）→ 幂等成功，effect=none，不重复点击', async () => {
-  const f = fakeFactory(RECOMMEND_URL, [detailSnap({ name: NAME, state: 'continue' }), closedListSnap()])
+  const f = fakeFactory(RECOMMEND_URL, [detailSnap({ name: NAME, state: 'continue' }), detailSnap({ name: NAME, state: 'continue' }), closedListSnap()])
   const r = await createBossGreetDetailOperation(f.factory).execute({ name: NAME, greet_in_detail: true }, silentCtx())
   assert.equal(r.success, true)
   assert.equal(r.effect, 'none')
@@ -129,12 +131,13 @@ test('greet-detail：已打过（按钮=继续沟通）→ 幂等成功，effect
   assert.equal(r.data.already, true)
   assert.match(r.message, /已打过/)
   assert.match(r.message, /未重复点击/)
-  assert.deepEqual(f.calls, ['snapshot', 'escape', 'snapshot', 'close'])
+  assert.deepEqual(f.calls, ['snapshot', 'snapshot', 'escape', 'snapshot', 'close'])
 })
 
 test('greet-detail：真打成功 → effect=applied，消息注明按钮翻转与详情关闭', async () => {
   const f = fakeFactory(RECOMMEND_URL, [
     detailSnap({ name: NAME, state: 'greet' }),
+    detailSnap({ name: NAME, state: 'continue' }),
     detailSnap({ name: NAME, state: 'continue' }),
     closedListSnap(),
   ])
@@ -146,15 +149,35 @@ test('greet-detail：真打成功 → effect=applied，消息注明按钮翻转�
   assert.match(r.message, /详情已关闭/)
 })
 
-test('greet-detail：详情属于别人（姓名不符）→ WRONG_PAGE 可重试，effect=none，零点击', async () => {
-  const f = fakeFactory(RECOMMEND_URL, [detailSnap({ name: '李四', state: 'greet' })])
+test('greet-detail：无可靠详情归属且关闭被守卫拒绝→直接故障，effect=none，零外发', async () => {
+  const f = fakeFactory(RECOMMEND_URL, [detailSnap({ name: '李四', state: 'greet' })], { escapeError: new WinClickError('guard rejected', 2) })
   const r = await createBossGreetDetailOperation(f.factory).execute({ name: NAME, greet_in_detail: true }, silentCtx())
   assert.equal(r.success, false)
-  assert.equal(r.code, 'WRONG_PAGE')
-  assert.equal(r.retryable, true)
+  assert.equal(r.code, 'UI_CHANGED')
+  assert.equal(r.retryable, false)
   assert.equal(r.effect, 'none')
-  assert.match(r.message, /姓名与预期不符/)
-  assert.deepEqual(f.calls, ['snapshot', 'close'])
+  assert.match(r.message, /guard rejected/)
+  const facts = r.data.operation_recovery as { business_effect: { status: string }; execution: { ordinary_retries_used: number } }
+  assert.equal(facts.business_effect.status, 'not_started')
+  assert.equal(facts.execution.ordinary_retries_used, 0)
+  assert.deepEqual(f.calls, ['snapshot', 'snapshot', 'escape', 'close'])
+})
+
+test('greet-detail：canvas-only dry-run复用原目标重开，返回准确准备事实且零外发', async () => {
+  const opened = detailSnap({ name: NAME, state: 'greet', canvasNameOnly: true, decoyRows: [] })
+  const f = fakeFactory(RECOMMEND_URL, [opened, opened, TARGET_LIST, TARGET_LIST, opened, opened, opened])
+  const result = await createBossGreetDetailOperation(f.factory).execute({ name: NAME, dry_run: true, greet_in_detail: true }, silentCtx())
+  assert.equal(result.success, true)
+  assert.equal(result.effect, 'none')
+  assert.equal(result.data.dry_run, true)
+  assert.equal(f.calls.filter((call) => call === 'click').length, 1)
+  assert.equal(f.calls.filter((call) => call === 'escape').length, 1)
+  const facts = result.data.operation_recovery as { execution: { input_status: string }; business_effect: { status: string; completed_count: number }; verification: { status: string } }
+  assert.equal(facts.execution.input_status, 'attempted')
+  assert.equal(facts.business_effect.status, 'not_started')
+  assert.equal(facts.business_effect.completed_count, 0)
+  assert.equal(facts.verification.status, 'satisfied')
+  assert.match(result.message, /未点击打招呼/)
 })
 
 // ---------- boss_close_detail ----------

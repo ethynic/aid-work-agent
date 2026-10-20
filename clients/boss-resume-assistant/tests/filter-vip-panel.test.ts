@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
 import { FilterSetter } from '../src/main/boss/FilterSetter.js'
-import { withAccount } from './filterFixture.js'
+import { withAccount, withoutRowOptions } from './filterFixture.js'
 import { membershipAccountKey } from '../src/main/boss/MembershipInspector.js'
 import type { DomSnapshot, ClickPoint } from '../src/main/boss/domSnapshot.js'
 
@@ -43,6 +43,74 @@ test('真实会员结构：发现13行，薪资不串入求职状态，折行经
     assert.ok(rows.find((r) => r.label === '经验要求')?.options.some((o) => o.text === '10年以上'))
     assert.ok(rows.find((r) => r.label === '求职状态')?.options.some((o) => o.text === '离职-随时到岗'))
   }
+})
+
+test('真实结构增加无控件行：探查保留13个已确认行并报告局部不可读', async () => {
+  const snap = structuredClone(top), doc = snap.documents[2]!
+  const values = doc.nodes.nodeValue as number[], parents = doc.nodes.parentIndex as number[]
+  const age = values.findIndex((value) => snap.strings[value] === '年龄')
+  const panel = parents[parents[parents[parents[age]!]!]!]!
+  const row = values.length
+  snap.strings.push('未加载条件')
+  values.push(-1, snap.strings.length - 1)
+  parents.push(panel, row)
+  doc.layout.nodeIndex.push(row, row + 1)
+  doc.layout.bounds.push([412, 1150, 1602, 56], [412, 1162, 120, 31])
+  const f = setup([snap, done(0)])
+  const rows = await f.setter.probeOptions()
+  assert.equal(rows.length, 13)
+  assert.deepEqual(f.setter.unreadableRows.map((row) => row.label), ['未加载条件'])
+  assert.match(f.setter.unreadableRows[0]!.reason, /未完整解析/)
+  assert.equal(f.clicks.length, 0) // fresh后验已确认面板收起，不能把工具栏再点开。
+})
+
+test('真实结构部分行无选项：继续探查其余行，下一次完整探查清除旧诊断', async () => {
+  const broken = withoutRowOptions(top, ['性别'])
+  const f = setup([broken, done(0), top, done(0)])
+  assert.equal((await f.setter.probeOptions()).length, 12)
+  assert.deepEqual(f.setter.unreadableRows.map((row) => row.label), ['性别'])
+  assert.equal((await f.setter.probeOptions()).length, 13)
+  assert.deepEqual(f.setter.unreadableRows, [])
+})
+
+test('真实结构全部行无控件：拒绝声称探查成功', async () => {
+  const labels = setup([top]).setter.describePanel(top).map((row) => row.label)
+  const f = setup([withoutRowOptions(top, labels)])
+  await assert.rejects(f.setter.probeOptions(), /未解析到任何可选档位/)
+  assert.equal(f.setter.unreadableRows.length, 13)
+  assert.equal(f.clicks.length, 0)
+})
+
+test('不可读年龄只排除年龄；普通薪资仍可完成设置，显式请求年龄仍在清除前拒绝', async () => {
+  const breakAge = (snapshot: DomSnapshot) => {
+    const snap = structuredClone(snapshot)
+    // 真机年龄轨道宽760、高8；保留tooltip文本但破坏轨道，不能仅凭文字报告可设置范围。
+    for (const bounds of snap.documents[2]!.layout.bounds) {
+      if (bounds[2] === 760 && bounds[3] === 8) bounds[2] = 10
+    }
+    return snap
+  }
+  const broken = breakAge(top)
+  const probe = setup([broken, done(0)])
+  const rows = await probe.setter.probeOptions()
+  assert.equal(rows.length, 12)
+  assert.equal(rows.some((row) => row.label === '年龄'), false)
+  assert.deepEqual(probe.setter.unreadableRows.map((row) => row.label), ['年龄'])
+  assert.match(probe.setter.unreadableRows[0]!.reason, /年龄轨道/)
+  const apply = setup([broken, broken, breakAge(down), breakAge(selected(down, ['20-50K'])), done(1)])
+  assert.equal((await apply.setter.apply({ salary: '20-50K' })).filterCount, 1)
+  const age = setup([broken], async () => { assert.fail('不可读年龄禁止拖动') })
+  await assert.rejects(age.setter.apply({ membership_hint: 'vip', membership_account_ref: membershipAccountKey(top)!, age: { min: 25 } }), /年龄轨道/)
+  assert.equal(age.clicks.length, 0)
+})
+
+test('无控件的无关行不阻塞普通薪资；显式引用该行仍在清除前拒绝', async () => {
+  const broken = withoutRowOptions(top, ['性别'])
+  const f = setup([broken, broken, withoutRowOptions(down, ['性别']), withoutRowOptions(selected(down, ['20-50K']), ['性别']), done(1)])
+  assert.equal((await f.setter.apply({ salary: '20-50K' })).filterCount, 1)
+  const invalid = setup([broken])
+  await assert.rejects(invalid.setter.apply({ membership_hint: 'vip', membership_account_ref: membershipAccountKey(top)!, filters: [{ label: '性别', options: ['男'] }] }), /未在当前面板完整解析/)
+  assert.equal(invalid.clicks.length, 0)
 })
 
 test('真实顶部薪资：使用真实overflow scrollport和实测2倍CSS坐标，滚后点击', async () => {
@@ -135,7 +203,9 @@ test('超出实测年龄范围或缺少拖动能力：清除之前拒绝', async
 })
 
 test('徽章数量不能替代行勾选状态核验，未激活选项不确认', async () => {
-  const f = setup([top])
+  const inactive = selected(top, ['男'])
+  inactive.strings = inactive.strings.map(value => value === 'option active' ? 'option' : value)
+  const f = setup([inactive])
   await assert.rejects(f.setter.apply({ membership_hint: 'vip', membership_account_ref: membershipAccountKey(top)!, filters: [{ label: '性别', options: ['男'] }] }), /实际已选值校验失败/)
   assert.equal(f.clicks.length, 2) // 清除+选项，尚未确认。
 })

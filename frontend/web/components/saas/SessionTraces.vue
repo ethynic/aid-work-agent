@@ -113,7 +113,8 @@ function statusClass(status: string): string {
 }
 
 function statusLabel(status: string): string {
-  const map: Record<string, string> = { completed: '已完成', failed: '失败', cancelled: '用户取消', running: '运行中' }
+  const map: Record<string, string> = { completed: '已完成', failed: '失败', cancelled: '用户取消', running: '运行中',
+    waiting: '等待用户回复' }
   return map[status] || status
 }
 

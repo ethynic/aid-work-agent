@@ -47,8 +47,13 @@ import {
   type DomSnapshot,
   accumulateOwnerOffset,
   indexedValues,
+  classOf,
+  isDescendantOf,
+  parentMapOf,
 } from './domSnapshot.js'
-import { viewportOf } from './FilterSetter.js'
+import { viewportOf, FILTER_SNAPSHOT_OPTIONS } from './FilterSetter.js'
+import { snapshotNodeVisible } from './SnapshotVisibility.js'
+import { frameViewport } from './LoadedCandidateNavigation.js'
 import { CancelledError } from '../operations/types.js'
 
 export class ResumeReadError extends Error {
@@ -57,6 +62,9 @@ export class ResumeReadError extends Error {
     this.name = 'ResumeReadError'
   }
 }
+
+/** A page obstruction needs shared recovery, not per-resume skip/cleanup. */
+export class ResumeObstructedError extends ResumeReadError {}
 
 export interface ResumeReadDeps {
   /** 采集 fresh DOMSnapshot（定位简历 canvas） */
@@ -162,9 +170,16 @@ export interface DeviceRect {
  * 「像素级同画面比对失败」）或 Win32 滚轮落到视口外。滚轮点取交集中心恒在可见区内；
  * 裁剪恒在截图内。交集为空返回 null。
  */
+export const RESUME_SNAPSHOT_OPTIONS = { ...FILTER_SNAPSHOT_OPTIONS, includePaintOrder: true }
+
 export function locateResumeCanvas(snap: DomSnapshot): DeviceRect | null {
+  return resumeCanvasOf(snap)?.rect ?? null
+}
+
+export function resumeCanvasOf(snap: DomSnapshot): { rect: DeviceRect; di: number; ni: number } | null {
   let best: DeviceRect | null = null
   let bestArea = 0
+  let selected = { di: 0, ni: 0 }
   const vp = viewportOf(snap)
   const { minW, minH } = canvasMinSize(vp)
   const documents = snap.documents
@@ -178,7 +193,7 @@ export function locateResumeCanvas(snap: DomSnapshot): DeviceRect | null {
       continue // 隐藏 iframe owner 无可见 bounds（后台标签页），跳过
     }
     for (const [nodeIndex, nameValueIndex] of indexedValues(document.nodes.nodeName, 'nodeName')) {
-      if (snap.strings[nameValueIndex] !== 'CANVAS') continue
+      if (snap.strings[nameValueIndex] !== 'CANVAS' || !snapshotNodeVisible(snap, documentIndex, nodeIndex)) continue
       const layoutIndex = document.layout.nodeIndex.indexOf(nodeIndex)
       if (layoutIndex < 0) continue
       const b = document.layout.bounds[layoutIndex]
@@ -186,6 +201,7 @@ export function locateResumeCanvas(snap: DomSnapshot): DeviceRect | null {
       const area = b[2]! * b[3]!
       if (area <= bestArea) continue
       bestArea = area
+      selected = { di: documentIndex, ni: nodeIndex }
       best = {
         x: Math.round(offset.x + b[0]! - (document.scrollOffsetX ?? 0)),
         y: Math.round(offset.y + b[1]! - (document.scrollOffsetY ?? 0)),
@@ -201,7 +217,7 @@ export function locateResumeCanvas(snap: DomSnapshot): DeviceRect | null {
   const x2 = Math.min(vp.width, best.x + best.w)
   const y2 = Math.min(vp.height, best.y + best.h)
   if (x2 - x1 <= 0 || y2 - y1 <= 0) return null
-  return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 }
+  return { ...selected, rect: { x: x1, y: y1, w: x2 - x1, h: y2 - y1 } }
 }
 
 /**
@@ -225,7 +241,83 @@ export function canvasCandidates(snap: DomSnapshot): Array<{ w: number; h: numbe
   return out.sort((a, b) => b.w * b.h - a.w * a.h).slice(0, 5)
 }
 
+/** A modal outside the original canvas tree must not become the resume image or a false bottom. */
+export function assertResumeUnobstructed(snap: DomSnapshot, rect: DeviceRect): void {
+  const target = resumeCanvasOf(snap)
+  if (!target) return // The caller separately rejects a missing or changed original canvas.
+  const owners = new Map<number, Array<{ di: number; ni: number }>>()
+  snap.documents.forEach((doc, di) => {
+    for (const [ni, child] of indexedValues(doc.nodes.contentDocumentIndex, 'contentDocumentIndex')) {
+      if (!Number.isInteger(child) || child < 0) continue
+      const entries = owners.get(child) ?? []; entries.push({ di, ni }); owners.set(child, entries)
+    }
+  })
+  const pathOf = (di: number, ni: number): Map<number, number> | null => {
+    const result = new Map<number, number>()
+    for (;;) {
+      if (result.has(di)) return null
+      result.set(di, ni)
+      if (di === 0) return result
+      const links = owners.get(di)
+      if (links?.length !== 1) return null
+      di = links[0]!.di; ni = links[0]!.ni
+    }
+  }
+  const targetPath = pathOf(target.di, target.ni)
+  if (!targetPath) return
+  snap.documents.forEach((doc, di) => {
+    let offset: { x: number; y: number }, clip: ReturnType<typeof frameViewport>
+    try { offset = accumulateOwnerOffset(snap, di); clip = frameViewport(snap, di) } catch { return }
+    const attrs = doc.nodes.attributes ? new Map(indexedValues(doc.nodes.attributes, 'attributes')) : new Map<number, number[]>()
+    const parents = parentMapOf(doc)
+    for (let i = 0; i < doc.layout.nodeIndex.length; i++) {
+      const ni = doc.layout.nodeIndex[i]!, b = doc.layout.bounds[i]
+      if (!b || b.length !== 4 || !b.every(Number.isFinite) || b[2]! <= 0 || b[3]! <= 0 || !snapshotNodeVisible(snap, di, ni)) continue
+      const pairs = attrs.get(ni) ?? []
+      const role = pairs.findIndex((value, index) => index % 2 === 0 && snap.strings[value] === 'role')
+      if (!(role >= 0 && ['dialog', 'alertdialog'].includes(snap.strings[pairs[role + 1]!] ?? ''))
+        && !/(?:^|[-_\s])(?:dialog|modal|popup|mask|overlay)(?:[-_\s]|$)/i.test(classOf(snap, di, ni) ?? '')) continue
+      // Exclude the resume's own dialog/iframe ancestors before considering any overlap.
+      const targetNode = targetPath.get(di)
+      if (targetNode !== undefined && isDescendantOf(doc, targetNode, ni) === true) continue
+      const x = offset.x + b[0]! - (doc.scrollOffsetX ?? 0), y = offset.y + b[1]! - (doc.scrollOffsetY ?? 0)
+      const visible = { ...clip }, visited = new Set<number>()
+      let ancestor = parents?.get(ni)
+      while (ancestor !== undefined && ancestor >= 0 && !visited.has(ancestor)) {
+        visited.add(ancestor)
+        const index = doc.layout.nodeIndex.indexOf(ancestor), bounds = doc.layout.bounds[index], styles = doc.layout.styles?.[index]
+        if (bounds?.length === 4 && bounds.every(Number.isFinite)) {
+          const ax = offset.x + bounds[0]! - (doc.scrollOffsetX ?? 0), ay = offset.y + bounds[1]! - (doc.scrollOffsetY ?? 0)
+          if (['hidden', 'clip', 'auto', 'scroll'].includes(snap.strings[styles?.[0] ?? -1] ?? '')) {
+            visible.left = Math.max(visible.left, ax); visible.right = Math.min(visible.right, ax + bounds[2]!)
+          }
+          if (['hidden', 'clip', 'auto', 'scroll'].includes(snap.strings[styles?.[1] ?? -1] ?? '')) {
+            visible.top = Math.max(visible.top, ay); visible.bottom = Math.min(visible.bottom, ay + bounds[3]!)
+          }
+        }
+        ancestor = parents?.get(ancestor)
+      }
+      if (Math.min(rect.x + rect.w, x + b[2]!, visible.right) <= Math.max(rect.x, x, visible.left)
+        || Math.min(rect.y + rect.h, y + b[3]!, visible.bottom) <= Math.max(rect.y, y, visible.top)) continue
+      const candidatePath = pathOf(di, ni)
+      if (!candidatePath) continue
+      // Compare only in their nearest common document: other frames project to their visible owners.
+      const common = [...candidatePath.keys()].find(document => targetPath.has(document))
+      if (common === undefined) continue
+      const shared = snap.documents[common]!, candidateNode = candidatePath.get(common)!, canvasNode = targetPath.get(common)!
+      if (candidateNode === canvasNode || isDescendantOf(shared, canvasNode, candidateNode) === true) continue
+      const order = shared.layout.paintOrders
+      const candidateOrder = order?.[shared.layout.nodeIndex.indexOf(candidateNode)]
+      const canvasOrder = order?.[shared.layout.nodeIndex.indexOf(canvasNode)]
+      // Older snapshots did not request paint order. Their DOM sequence alone cannot prove occlusion.
+      if (!Number.isFinite(candidateOrder) || !Number.isFinite(canvasOrder) || candidateOrder! <= canvasOrder!) continue
+      throw new ResumeObstructedError('原简历采集区域被上层弹窗遮挡，未将遮罩图像作为简历或滚动到底证据；需要先恢复页面')
+    }
+  })
+}
+
 export class ResumeReader {
+  private activeRect?: DeviceRect
   private readonly sleep: (ms: number) => Promise<void>
 
   constructor(private readonly deps: ResumeReadDeps) {
@@ -251,6 +343,8 @@ export class ResumeReader {
         '未找到简历详情画布（页面中无大尺寸 CANVAS）：请先在推荐牛人页点开一个候选人的在线简历详情，再执行读取',
       )
     }
+    assertResumeUnobstructed(snap0, rect)
+    this.activeRect = rect
 
     const tmpDir = path.join(os.tmpdir(), `boss-cv-${randomUUID()}`)
     await fs.mkdir(tmpDir, { recursive: true })
@@ -348,7 +442,20 @@ export class ResumeReader {
     tmpDir: string,
     index: number,
   ): Promise<{ buf: Buffer; file: string }> {
+    const before = await this.deps.snapshot()
+    const current = locateResumeCanvas(before)
+    if (!current || !this.activeRect || Object.keys(this.activeRect).some((key) =>
+      current[key as keyof DeviceRect] !== this.activeRect![key as keyof DeviceRect])) {
+      throw new ResumeReadError('分段采图前原简历画布消失或几何已变化，未继续采集其他页面')
+    }
+    assertResumeUnobstructed(before, current)
     const buf = await this.deps.captureFullpage()
+    const after = await this.deps.snapshot()
+    const afterRect = locateResumeCanvas(after)
+    if (!afterRect || Object.keys(current).some(key => current[key as keyof DeviceRect] !== afterRect[key as keyof DeviceRect])) {
+      throw new ResumeReadError('分段采图期间原简历画布消失或几何已变化，未保存当前截图')
+    }
+    assertResumeUnobstructed(after, afterRect)
     const file = path.join(tmpDir, `part-raw-${index}.png`)
     await fs.writeFile(file, buf)
     return { buf, file }

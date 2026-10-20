@@ -6,6 +6,7 @@ import { createBossOpenDetailOperation } from '../src/main/operations/bossOpenDe
 import { createBossGreetDetailOperation } from '../src/main/operations/bossGreetDetail.js'
 import { createBossGreetOperation } from '../src/main/operations/bossGreet.js'
 import { FILTER_SNAPSHOT_OPTIONS } from '../src/main/boss/FilterSetter.js'
+import { RESUME_SNAPSHOT_OPTIONS } from '../src/main/boss/ResumeReader.js'
 import type { BossSession } from '../src/main/operations/bossContext.js'
 import type { OpContext } from '../src/main/operations/types.js'
 import { emptyRecommendations, withCanvas } from './recommendationBoundaryFixture.js'
@@ -28,9 +29,11 @@ test('正式operations空态零输入，关闭session，typed回执停筛且请�
   const cases = ['batch', 'next', 'open', 'greet', 'greet-detail', 'resume-detail'] as const
   for (const kind of cases) {
     let closed = 0, canonical = 0
+    // Single-detail rejects this empty precondition before its Reader runs; batch/next enter the shared Reader.
+    const expectedOptions = kind === 'batch' || kind === 'next' ? RESUME_SNAPSHOT_OPTIONS : FILTER_SNAPSHOT_OPTIONS
     const forbidden = async (): Promise<never> => { assert.fail(`${kind}不能输入或采图`) }
     const session: BossSession = {
-      snapshot: async (options) => { if (options) { assert.deepEqual(options, FILTER_SNAPSHOT_OPTIONS); canonical++ } return snap },
+      snapshot: async (options) => { if (options) { assert.deepEqual(options, expectedOptions); canonical++ } return snap },
       getUrl: async () => 'https://www.zhipin.com/web/chat/recommend', close: async () => { closed++ },
       click: forbidden, clickBrowse: forbidden, clickAndType: forbidden, mouseWheel: forbidden, pressEscape: forbidden, captureFullpage: forbidden,
     }

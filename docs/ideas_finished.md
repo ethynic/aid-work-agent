@@ -7,6 +7,10 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261015-1544 | Runtime跨电脑打包升级兼容 | ✅ 已完成开发：历史五根已固化，0.3.9升级及最终包启动通过，组合包完成。 | [设计](system/runtime-plugin-host-architecture-design.md#7-runtime-ui-与产品壳) | [计划](plans/plan-runtime-ui-boss-trial-bundle.md#phase17-跨电脑打包与直接升级2026-10-15) |
+| 20261015-1521 | Runner单任务取消隔离 | ✅ 已完成开发；独立核心51通过，CR无阻断，待部署，存量失败见计划。 | [设计](system/agent-application-architecture-design.md#55-执行任务取消与worker生命周期隔离2026-10-15) | [计划](plans/plan-runner-task-cancellation-isolation.md) |
+| 20261015-1052 | 对话失败提示与重试 | ✅ 已完成开发：成功重试清理、手动删除、灰色图标与紧凑气泡，待手动部署。 | [设计](system/agent-application-architecture-design.md#61-一份执行事实多种呈现) | [计划](plans/plan-chat-runner-failure-ui.md) |
+| 20261012-1120 | Runtime UI 与 BOSS 老用户试用组合包 | ✅ 已完成开发：r15长路径修复实装及插件导入通过，待客户筛选验收。 | [共同契约](system/runner-desktop-runtime-integration-contract.md)、[安装复盘](incidents/runtime-installer-missing-fixture-env-incident.md)、[迁移复盘](incidents/runtime-registration-migration-watermark-incident.md) | [组合包计划](plans/plan-runtime-ui-boss-trial-bundle.md)、[恢复计划](plans/plan-runtime-upgrade-recovery.md)、[干净安装计划](plans/plan-runtime-clean-install.md) |
 | 20261015-1023 | LLM HTTP 故障转移修复 | ✅ 已完成开发：保留 HTTP 状态码，修复 503 未切备用模型、错误正文读取中断及流式回复拼接。 | [设计](infrastructure/llm-failover-design.md#27-错误分类) | [计划](plans/plan-llm-http-failover-fix.md) |
 | 20261013-1155 | agent_runners queue_order 序列自愈 | ✅ 已完成开发（待部署验收）：submit 入口捕获 queue_order 唯一约束冲突后 setval 对齐序列并重试一次，根治 SQL 直插污染 BIGSERIAL 序列导致的连续 500（2026-10-13 agent1 事故）；隔离库回归 145 passed、CR 无 P0/P1，commit 62a082b2。 | [复盘](incidents/analysis-agent-runner-submit-500-uniqueviolation-incident.md) | [开发计划](plans/plan-runner-queue-order-sequence-selfheal.md) |
 | 20261010-1448 | 测试有效性审计与清理 | ✅ 已完成开发：清理失效、自证及重复测试，保留关键行为契约并完成三轮独立验证。 | — | [计划](plans/plan-test-suite-cleanup-20261010.md) |
@@ -44,6 +48,8 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |------|------|------|---------|---------|
+| 20261013-1434 | 结构化提问交互（ask_user 提问卡片） | ✅ 已完成开发：提问卡片、渠道问答、待答通知与徽标、legacy 透传及埋点；待真机验收。 | [设计](system/design-ask-user-interactive-question.md) | [实施计划](plans/plan-ask-user-interactive-question.md) |
+| 20261014-boss-resume-recovery | BOSS 续筛评分与故障恢复 | ✅ 已完成开发：补齐续筛证明、中断提示和回执诊断，待部署验收。 | — | [计划](plans/plan-boss-resume-next-recovery-fix.md) |
 | 20261012-1544 | trace 观测 span 计时精确化 | ✅ 已完成开发（提交与部署待授权）：span 改用引擎侧墙钟计时并立即闭合，失败 LLM 与恢复路径补 span；历史数据不回填。 | — | [开发计划](plans/traceobs-timing-precision.md) |
 | 20261010-1638 | 统一通知基础设施与 Web 推送 | ✅ 已完成开发：统一通知底座与Web推送通过内外部终审，真实到达待环境验收。 | [统一设计](system/notification-infrastructure-design.md) / [Web设计](system/web-task-push-notification-design.md) | [开发计划](plans/plan-web-task-push-notification.md) |
 | 20260918-2045 | Redis 夜间巡检任务（生产专用） | ✅ 已完成开发：background_runner 调度器每日 00:30 巡检 Redis——内存水位（600MB 警告/800MB 严重）、碎片率（仅 used>100MB 判）、AOF 写入/重写状态、键淘汰、连接数、无 TTL 键抽样（上限 1000，超 200 疑似泄漏），「[Redis巡检]」前缀进主日志（1 条 INFO 汇总 + 越界 WARNING/ERROR）；REDIS_INSPECTION_ENABLED 门控默认关。2026-10-10 agent2 容器内对腾讯云托管 Redis 实跑验证通过（INFO 汇总 + 告警格式正确，顺带发现测试 Redis evicted=4599 真实告警）；生产 .env 已开启待重启生效（属部署事项，不影响任务关闭）。 | — | — |
@@ -129,9 +135,11 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261015-1457 | Excel读取性能与正式库KB补迁 | ✅ 已完成开发；正式库240份已补迁，Excel修复独验96通过，代码未部署。 | [设计](tools/excel-read-performance-design.md) | [计划](plans/plan-excel-read-performance.md) |
+| 20261015-1516 | BOSS部分筛选项不可读时继续执行 | ✅ 已完成开发：跳过未匹配条件，独立测试与CR通过，待部署验收。 | [设计](design/recruiting/resume-job-matching-design.md) | [计划](plans/desktop-automation/plan-boss-partial-filter-discovery.md) |
 | 20261013-1410 | BOSS 会员筛选与聊天补充条件 | ✅ 已完成开发；会员滚动和聊天补充条件已通过真机验证。 | [设计](design/recruiting/resume-job-matching-design.md) | [开发计划](plans/desktop-automation/plan-boss-vip-dynamic-filters.md) |
 | 20261011-0948 | 数据分析与智能体成本治理 | ✅ 已完成开发：310.77 积分仿真 trace 归因 analyze_data 内层循环，6 点优化计划全部完成并三场复验（run5/6/7 含外层全口径均值 80.92，2/3 场落入 ≤90 目标）；报告生成模板化、交付节制为后续候选项未纳入。 | [复盘](incidents/analysis-agent-cost-392-credits-incident.md) | [开发计划](plans/plan-data-analysis-cost-optimization.md) |
-| 20261010-1053 | 统一知识库检索工具替代 attraction/hotel_search | ✅ 已完成开发（收尾待观察期/授权）：两工具由统一知识库工具替代，价格/项目表迁入文档 metadata（raw_payload 契约）替代固定 chunk 位次取表；Phase 1-3 完成、4a 软下线（catalog=False），4b 物理删除与真机迁移 --drop-chunks 待观察期后逐次授权。 | [设计](system/knowledge-base/unified-kb-resource-table-metadata-design.md) | [开发计划](plans/plan-unified-kb-resource-metadata.md) |
+| 20261010-1053 | 统一知识库检索工具替代 attraction/hotel_search | ✅ 已完成开发；正式库240份metadata已补迁，旧chunks待观察期后清场。 | [设计](system/knowledge-base/unified-kb-resource-table-metadata-design.md) | [开发计划](plans/plan-unified-kb-resource-metadata.md) |
 | 20261011-1236 | BOSS 坐标桥接与 Runtime MCP 大结果回传修复 | ✅ 已完成开发（真机验收通过） | [设计](design/recruiting/boss-resume-assistant-native-cdp-design.md) | [开发计划](plans/desktop-automation/plan-boss-card-coordinate-precision.md) |
 | 20260702-1250 | 工具总体优化梳理 | ✅ 已完成开发：跨工具 token 治理全收口（2026-07 起，2026-10-10 完成全部开发项）——规范修订（description 唯一通道、usage_guide 停用、落盘闭环契约）、read/edit offset 1-based + replace_all、word/excel/office 路由大内容落盘闭环、P2 echo/debug/文案/file_path 键位清理；三批次均走工作流三角色闭环（开发/独立测试/CR），tests/unit/tools 全量回归全绿。attraction/hotel 后续归统一知识库工具任务（20261010-1053）；待部署验证。 | [总体设计](tools/tool-overall-optimization-design.md) / [落盘闭环+grep](tools/large-content-retrieval-design.md) / [文件工具对齐](tools/file-tools-claude-code-parity-design.md) | [开发计划](tools/tool-overall-optimization-dev-plan.md) / [落盘闭环计划](tools/large-content-retrieval-dev-plan.md) |
 | 20260920-1554 | 知识库文件搜索工具（knowledge_file_search） | ✅ 已完成开发：按 documents.title 模糊/精确定位知识库文档，返回 file_path 供 read 分页读取，解决提示词按文件名引用文档时 LLM 拿标题当路径连败；模式 A 共享范围 + 栏目授权收口，纯 DB 元数据查询无计费点。2026-10-10 agent2 全场景验证通过：模糊/精确/0 命中引导/跨租户隔离/栏目授权收窄（subagent 上下文收窄为授权栏目 list）/带物理文件命中返回 file_path + read_hint（无物理文件的 DB-only 文档不返回路径，行为正确）。 | — | [开发计划](plans/plan-knowledge-file-search.md) |

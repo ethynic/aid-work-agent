@@ -2,7 +2,8 @@
 
 每轮：chat_records 聚合窗口内有消耗的用户 -> 解析生效绑定 -> 评估
 credit_budget -> 命中阈值写 abuse_events（1h 同键去重）+ 租户管理员与平台管理员
-通知（publish_in_tx 幂等键 + 24h TTL，IM/邮箱外发由既有 dispatcher 轮询完成）。
+通知（发布前 24h 节流预检 + publish_in_tx 幂等键，IM/邮箱外发由既有 dispatcher
+轮询完成）。
 
 Phase 1 不接执行链拦截点；warn 延迟为分钟级（扫描间隔），观察场景可接受。
 """
@@ -22,7 +23,8 @@ from .rules import SESSION_SOURCE_TYPES
 from .service import AntiAbuseService
 
 PRODUCER = "abuse_scanner"
-# 同一 (tenant, user, rule) 24h 内只通知一次（publish_in_tx 唯一约束 + TTL 幂等）
+# 同一 (tenant, user, rule) 24h 内只通知一次：发布前按 event_key 前缀预检未过期
+# 通知实现节流；publish_in_tx 唯一约束只防同 event_key 重复行（TTL 不参与判重）
 NOTIFY_TTL_SECONDS = 86400
 NOTIFY_CATEGORY = "abuse"
 
@@ -97,11 +99,27 @@ def _publish_admin_notifications(
 ) -> int:
     """租户管理员 + 平台管理员逐人发布 abuse.rule_triggered（幂等键含 user，24h TTL）。
 
+    发布前按 (scope_key, recipient) 预检同前缀未过期通知，实现「同一
+    (tenant, user, rule) 24h 内只通知一次」；hourly 分桶的 event_key 仅作
+    唯一约束行隔离，不承担通知节流（expires_at 不参与 ON CONFLICT 判重）。
+
     租户管理员按租户 scope 投递（走租户级外发 target）；平台管理员无租户属性，
     按 global scope 投递（仅站内信/个人 web_push，不触发租户级 IM 外发）。
     """
     cursor.execute("SELECT clock_timestamp() AS now")
     now = cursor.fetchone()["now"]
+    # 24h 通知节流预检：同前缀（abuse:{tenant}:{user}:credit_budget:）且未过期的
+    # 既有通知 = 该告警 24h 内已通知过。LIKE 通配符转义，防止租户/用户 ID 含 % _。
+    key_prefix = f"abuse:{tenant_id}:{user_id}:credit_budget:"
+    like_pattern = "".join(
+        "\\" + ch if ch in ("%", "_", "\\") else ch for ch in key_prefix
+    ) + "%"
+    cursor.execute(
+        """SELECT scope_key, recipient_user_id FROM notification_messages
+           WHERE producer = %s AND event_key LIKE %s AND expires_at > %s""",
+        (PRODUCER, like_pattern, now),
+    )
+    throttled = {(r["scope_key"], r["recipient_user_id"]) for r in cursor.fetchall()}
     # event_key 按小时分桶：唯一约束行在 retention 清理前长期存在，
     # 不分桶会让同键后续告警命中旧行被静默吞掉（与 abuse_events 的 1h 去重对齐）
     event_key = f"abuse:{tenant_id}:{user_id}:credit_budget:{now:%Y%m%d%H}"
@@ -129,6 +147,8 @@ def _publish_admin_notifications(
         + [(a, None, {**base_parameters, "show_tenant": True}) for a in platform_admins]
     ):
         subject = Subject(user_id=admin_id, tenant_id=admin_tenant)
+        if (subject.scope_key, admin_id) in throttled:
+            continue  # 24h 内已通知过该接收者，跳过
         # 平台副本无租户 scope，用 about_tenant 标注告警所属租户：
         # 平台管理员代管租户时 inbox 按此隔离，只见本租户相关的 global 副本
         resource_ref = {"type": "abuse_event", "id": str(event_id)}

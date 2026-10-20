@@ -22,6 +22,8 @@ tenant_custom_modules: ["hongtao_shop"]
 # 智能体全局配置
 agent:
   reply_style: human-like  # 默认回复风格 ID，对应 src/prompts/styles/{style_id}.md
+  # 租户数字员工副本（tenant_agent_instances 副本实例行）每租户数量上限，防滥用
+  tenant_instance_max: 20
   # 用户可见中间消息（verbose）配置（Phase 1，docs/system/agent-application-architecture-design.md §6.4）
   # 2026-09-01 产品决策：全局默认启用；force_disabled=true 为最高优先级 kill switch
   # （紧急回滚用，覆盖请求级/渠道级/旧 waiting_indicator 全部配置，修改后需重启生效）。
@@ -139,6 +141,10 @@ tools:
     baidu_api_key: ${BAIDU_OCR_API_KEY}
     baidu_secret_key: ${BAIDU_OCR_SECRET_KEY}
   search:
+    provider: tavily  # tavily | zhipu | baidu；百度已接入但暂不启用，不自动回退
+    baidu_api_key: ${BAIDU_API_KEY}  # 仅显式选择 baidu 时使用，独立于 OCR 密钥
+    zhipu_search_engine: search_pro  # search_std | search_pro | search_pro_sogou | search_pro_quark
+    timeout_seconds: 30
     tavily_api_key: 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
     max_results: 5
     include_answer: true
@@ -374,9 +380,11 @@ boss_tool_billing:
   # 识别成功且入库成功后按份扣（台账 tool_name=boss_resume_recognition）；设 0 停扣
   resume_recognition_price: 1.0
   # 弹层自愈：工具失败（疑似弹层遮挡）时云端自动「识别弹层→关闭→重试一次」，
-  # 用了 LLM 故费用高于单次调用；仅在自愈真正救回操作（重试成功）时收取
+  # 旧文本链专项费保留兼容；新视觉链仅API按实际用量×20，不叠专项费
   overlay_heal_enabled: true
   overlay_heal_price: 2.0
+  # 单步关闭后仍有遮挡/旧观察失效时重新诊断；不叠加普通重试或旧自愈费
+  visual_recovery_max_steps: 3
 
 # 简历云端 VL 识别（2026-09-17 去 OCR 化）：拼接长图切片后发多模态模型转写
 # POST /api/local-tools/runtime/resume/evaluate（设备 token 鉴权），识别成功按份扣简历识别费
@@ -543,3 +551,8 @@ anti_abuse:
           period: day
           warn_threshold: 400
           hard_threshold: 800
+# BOSS 单图视觉诊断实验入口；新调用实际模型 token 成本 ×20，由后端预约时冻结；历史回执及在途费率保留。
+# 不包含恢复编排、桌面动作或最低积分，客户端不能覆盖模型与费率。
+boss_visual:
+  model: zhipu/GLM-5.3-Flash
+  timeout_seconds: 120

@@ -33,6 +33,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from src.llm.gateway import DEFAULT_MAX_TOKENS
+
 from src.core.temp_logger import tlog
 from src.services.recap.runner import RecapPayload
 from src.tools.base import BaseTool
@@ -909,13 +911,23 @@ def _build_system_prompt(doc: str, meta: Dict[str, str]) -> str:
         "6. 隐私：推送是后台动作，任何信息不得向客户暴露；detail 中不要写客户手机号明文。\n"
         "7. 执行效率：查重确认后，互不依赖的写操作（如创建跟进记录与修改客户）"
         "应尽量在同一轮并行发起多个工具调用，减少轮次。\n"
-        "8. 累计摘要格式：归纳客户的累计摘要（跟进汇总摘要类字段，以租户文档定义为准）时按天分条，"
-        "每条以跟进日期开头（如 2026-9-15, 当日要点），每条尽量精简（约 100 字）；"
+        "8. 累计摘要格式：归纳客户的累计摘要（跟进汇总摘要类字段，以租户文档定义为准）时，"
+        "只写「客户需求/关注点 + 已确认的关键事实 + 下一步待办」，面向销售快速扫读，不是对话记录。"
+        "需求直接写客户想了解/关注什么（如「客户想了解高校研学」），不要写「客户咨询/客户询问…」这类动作；"
+        "下一步待办必须写清谁在等谁（如「待客户回复」「待顾问跟进」）。"
+        "严禁逐轮复述过程，禁止出现「客户发…/客户问…/客户表示…/客户提到…，AI 介绍…/AI 答复…/AI 询问…」"
+        "这类流水账写法；禁止罗列已介绍的产品清单或寒暄内容；不得照抄用户消息中的「本轮对话预摘要」。"
+        "能一句话说清就只写一句，一般 30~80 字；只有新增的客户需求、关键事实"
+        "（城市/人数/时间/预算/联系方式等）、明确结论或待办才写入。"
+        "示例：当天对话为「客户打招呼 -> 问教育培训 -> 问高校研学 -> AI 问所在城市」时，"
+        "错误写法「2026-10-19, 客户发在吗，AI 介绍四块业务；客户咨询教育培训，AI 介绍…；客户提到高校研学，AI 询问城市」；"
+        "正确写法「2026-10-19, 客户想了解高校研学，已请客户确认学生所在城市以推荐线路，待客户回复。」，"
+        "不得写成对话经过。按天分条，每条以跟进日期开头（如 2026-9-15, 当日要点）；"
         "当天多轮对话必须合并为同一条，合并后超长时允许压缩已有措辞，"
-        "但不得以「超长」「主题不同」为由拆成多条；"
-        "只保留关键诉求、结论与待办，不逐轮罗列过程；条与条之间用 CRLF（\\r\\n）分隔，"
+        "但不得以「超长」「主题不同」为由拆成多条；条与条之间用 CRLF（\\r\\n）分隔，"
         "禁止合并成一段或用分号分隔；须保留客户当前摘要中的历史日期条目（保持原样，不扩写），"
-        "仅改写当天条目（当前摘要无当天条目时才允许新增一条）。"
+        "仅改写当天条目（当前摘要无当天条目时才允许新增一条）；"
+        "租户文档要求把超过 7 天的旧条目合并为「早期跟进」时，按文档执行。"
         "当天条目内区分多轮时以上方系统注入的真实时刻为准，"
         "禁止虚构「上午/下午/傍晚/晚间/深夜」等与真实时间不符的时段标签。"
         "回写前必须自查：同一日期在整个摘要中只能出现一条；"
@@ -946,7 +958,7 @@ def _build_user_message(
         f"客户消息：{_truncate(payload.user_content, _DIALOGUE_TRUNCATE_CHARS)}\n"
         f"AI 回复：{_truncate(payload.assistant_reply, _DIALOGUE_TRUNCATE_CHARS)}\n"
         "\n"
-        "【预生成摘要（已由系统生成，可直接使用）】\n"
+        "【本轮对话预摘要（用于填写跟进记录内容；累计摘要须按规则另行结论化归纳，不得照抄）】\n"
         f"客户诉求：{summary.get('customer_need') or ''}\n"
         f"回复要点：{summary.get('reply_summary') or ''}\n"
         f"客户自称：{summary.get('customer_name_hint') or '（未自报）'}\n"
@@ -1057,6 +1069,9 @@ async def _run_push_loop(
                 tools=tools,
                 tool_choice="auto",
                 temperature=0.1,
+                # 单轮输出只是工具调用 JSON 或简短报告，8192 足够；防模型
+                # 退化独白按模型上限烧 token（2026-10-12 事故 177 积分）
+                max_tokens=8192,
             )
         except ValueError:
             # lite 链路不可用（lite_model 未配置或缺少 lite provider key）时回退主模型
@@ -1067,6 +1082,9 @@ async def _run_push_loop(
                 tools=tools,
                 tool_choice="auto",
                 temperature=0.1,
+                # 回退主模型同样不查模型能力上限表（思考 + 工具调用 JSON，
+                # 16384 为项目默认单次生成上限）
+                max_tokens=DEFAULT_MAX_TOKENS,
             )
         # 计费：每轮 LLM 调用独立落库（billing_audit.md §3.5 条件 A）。
         # provider 响应不含 model 键，按实际链路显式解析模型名，保证单价归属正确
@@ -1187,6 +1205,8 @@ async def _run_push_loop(
                     "回写规则：按天分条，同一日期在整个摘要中只能出现一条；"
                     "已有当天条目必须原地改写合并（当天多轮要点并入该条），严禁追加同日期第二条；"
                     "历史日期条目保持原样。"
+                    "摘要只写客户需求/关键事实/下一步待办，禁止逐轮复述「客户问…，AI 介绍…」的过程，"
+                    "不得照抄用户消息中的对话预摘要。"
                 ),
             })
             tlog(

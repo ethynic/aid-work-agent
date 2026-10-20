@@ -1,3 +1,6 @@
+import { RESUME_SNAPSHOT_OPTIONS } from '../boss/ResumeReader.js'
+import { isBossPage } from '../boss/PageNavigator.js'
+import { operationRecoveryFacts, operationRecoveryFailure } from './pageOperation.js'
 /**
  * boss_resume_batch operation：推荐牛人页逐个点开当前视口牛人卡片 → 读取简历 → 自动关闭 → 下一份。
  *
@@ -15,7 +18,7 @@
 import fsp from 'node:fs/promises'
 import { ResumeBatchReader } from '../boss/ResumeBatchReader.js'
 import { JobSwitcher, FILTER_BUTTON_PATTERN } from '../boss/JobSwitcher.js'
-import { viewportOf, FILTER_SNAPSHOT_OPTIONS } from '../boss/FilterSetter.js'
+import { viewportOf } from '../boss/FilterSetter.js'
 import { buildResumePayload, wheelAt, sameViewAt, stitchParts } from './bossResumeDetail.js'
 import {
   defaultSessionFactory,
@@ -83,93 +86,120 @@ export function createBossResumeBatchOperation(
           return null
         },
         async (session) => {
-          if (continuation && !(await session.getUrl()).includes('/web/chat/recommend')) {
-            throw new CodedOperationError('WRONG_PAGE', '续筛必须在原推荐牛人列表页，请先恢复该页面')
-          }
-          // 前置校验：必须在推荐牛人列表页（无「筛选」按钮即 WRONG_PAGE）。
-          // 已知局限（坑 17）：仍用文案判定——沟通页 DOM 内嵌推荐 iframe 时文案同样命中、会误通过
-          // （本 op 只读、无外部写副作用）；boss_greet 已于 2026-08-26 改 URL 判定（/web/chat/recommend），
-          // 本 op 待跟进同样改造。
-          // 已打开的简历详情弹层不算错页：boss_resume_detail 读完不关详情，ResumeBatchReader
-          // 入口会先 Escape 关掉残留弹层再点卡片（关不掉 fail-loud，防止把残留简历误记到卡片姓名下）。
-          const probe = await session.snapshot()
-          if (!probe.strings.some((s) => FILTER_BUTTON_PATTERN.test(s.trim()))) {
-            throw new CodedOperationError(
-              'WRONG_PAGE',
-              '当前页面不是推荐牛人列表页（未找到「筛选」按钮）：请先用 boss_goto 切换到「推荐牛人」页',
-            )
-          }
-          // job_name 一次取足：推荐页职位框当前职位（非推荐页为 null，契约可选）
-          const jobBox = new JobSwitcher({ snapshot: session.snapshot, click: session.click }).locateJobBox(probe)
-          const jobName = jobBox.name ?? null
-          if (continuation && jobName !== args.expected_job_name?.trim()) {
-            throw new CodedOperationError('JOB_CHANGED', '当前职位与上次筛选不一致，请恢复原职位或开始新一轮筛选')
-          }
-
-          if (saveDir) {
-            await fsp.mkdir(saveDir, { recursive: true })
-          }
-          ctx.progress({
-            stage: 'execute',
-            current: 0,
-            total: limit,
-            message: `逐个打开简历并读取（借用真实鼠标滚动，请勿移动）0/${limit}`,
-          })
-          const reader = new ResumeBatchReader({
-            snapshot: () => session.snapshot(FILTER_SNAPSHOT_OPTIONS),
-            click: (point, viewport) => session.click(point, viewport),
-            pressEscape: session.pressEscape,
-            captureFullpage: session.captureFullpage,
-            wheel: (rect, viewport, deltaY, notches) => wheelAt(rect, viewport, deltaY, notches),
-            sameView: (a, b, rect) => sameViewAt(a, b, rect),
-            stitch: stitchParts,
-            scroll: session.mouseWheel,
-            signal: ctx.signal,
-            onProgress: (done) => {
-              ctx.progress({
-                stage: 'execute',
-                current: done,
-                total: limit,
-                message: `逐个打开简历并读取（借用真实鼠标滚动，请勿移动）${done}/${limit}`,
-              })
-            },
-          })
-          const result = await reader.readBatch({ limit, saveDir: saveDir || undefined,
-            excludeNames: args.exclude_names?.map((n) => n.trim()), scanMore: continuation })
-          const names = result.resumes.map((r) => r.name).join('、')
-          let message: string
-          if (result.stop_reason === 'no_matching_candidates') {
-            message = '当前筛选条件没有符合的牛人，已停止读取；下方为推荐内容，未读取或打开推荐卡片'
-          } else if (result.stop_reason === 'recommendations_boundary') {
-            message = `已读取 ${result.resumes.length} 份筛选结果简历，到达推荐内容边界，已停止继续读取`
-          } else if (result.resumes.length === 0 && result.failures.length > 0) {
-            const first = result.failures[0]!
-            message = `完成：未能读取任何简历（尝试 ${result.attempted} 张卡片全部失败，第一个失败：${first.name ?? '未知姓名'}—${first.error}）`
-          } else {
-            message = `完成：成功读取 ${result.resumes.length} 份简历（${names}）`
-            if (result.failures.length > 0) {
-              const first = result.failures[0]!
-              message += `，失败 ${result.failures.length} 个（第一个：${first.name ?? '未知姓名'}—${first.error}）`
+          try {
+            if (!isBossPage(await session.getUrl(), 'recommend')) {
+              throw new CodedOperationError('WRONG_PAGE', '续筛必须在原推荐牛人列表页，请先恢复该页面')
             }
-          }
-          // P1 接缝质量警告：任一份存在可疑接缝（错位）→ 提示人工核对（元信息随各份 payload 带）
-          const seamSuspect = result.resumes.filter((r) => r.readResult.suspectSeams.length > 0)
-          if (seamSuspect.length > 0) {
-            const namesSuspect = seamSuspect.map((r) => r.name).join('、')
-            message += `；⚠️ ${seamSuspect.length} 份存在可疑拼接接缝（${namesSuspect}）：拼接图内容可能有重复/缺失，请人工核对拼接图`
-          }
-          return {
-            message,
-            data: {
-              resumes: result.resumes.map((r) => buildResumePayload(r.name, jobName, r.readResult, 'dom')),
-              failures: result.failures,
-              attempted: result.attempted,
-              processed_names: result.processed_names,
-              stop_reason: result.stop_reason,
-              job_name: jobName,
-              continuation: buildResumeContinuation(result.processed_names, args.exclude_names ?? [], jobName, result.stop_reason),
-            },
-            effect: 'none',
+            // 前置校验：必须在推荐牛人列表页（无「筛选」按钮即 WRONG_PAGE）。
+            // 已知局限（坑 17）：仍用文案判定——沟通页 DOM 内嵌推荐 iframe 时文案同样命中、会误通过
+            // （本 op 只读、无外部写副作用）；boss_greet 已于 2026-08-26 改 URL 判定（/web/chat/recommend），
+            // 本 op 待跟进同样改造。
+            // 已打开的简历详情弹层不算错页：boss_resume_detail 读完不关详情，ResumeBatchReader
+            // 入口会先 Escape 关掉残留弹层再点卡片（关不掉 fail-loud，防止把残留简历误记到卡片姓名下）。
+            const probe = await session.snapshot()
+            if (!probe.strings.some((s) => FILTER_BUTTON_PATTERN.test(s.trim()))) {
+              throw new CodedOperationError(
+                'WRONG_PAGE',
+                '当前页面不是推荐牛人列表页（未找到「筛选」按钮）：请先用 boss_goto 切换到「推荐牛人」页',
+              )
+            }
+            // job_name 一次取足：推荐页职位框当前职位（非推荐页为 null，契约可选）
+            const jobBox = new JobSwitcher({ snapshot: session.snapshot, click: session.click }).locateJobBox(probe)
+            const jobName = jobBox.name ?? null
+            if (continuation && jobName !== args.expected_job_name?.trim()) {
+              throw new CodedOperationError('JOB_CHANGED', '当前职位与上次筛选不一致，请恢复原职位或开始新一轮筛选')
+            }
+
+            if (saveDir) {
+              await fsp.mkdir(saveDir, { recursive: true })
+            }
+            ctx.progress({
+              stage: 'execute',
+              current: 0,
+              total: limit,
+              message: `逐个打开简历并读取（借用真实鼠标滚动，请勿移动）0/${limit}`,
+            })
+            const reader = new ResumeBatchReader({
+              snapshot: () => session.snapshot(RESUME_SNAPSHOT_OPTIONS),
+              click: (point, viewport) => session.click(point, viewport),
+              pressEscape: session.pressEscape,
+              captureFullpage: session.captureFullpage,
+              wheel: (rect, viewport, deltaY, notches) => wheelAt(rect, viewport, deltaY, notches),
+              sameView: (a, b, rect) => sameViewAt(a, b, rect),
+              stitch: stitchParts,
+              scroll: session.mouseWheel,
+              signal: ctx.signal,
+              onProgress: (done) => {
+                ctx.progress({
+                  stage: 'execute',
+                  current: done,
+                  total: limit,
+                  message: `逐个打开简历并读取（借用真实鼠标滚动，请勿移动）${done}/${limit}`,
+                })
+              },
+            })
+            const result = await reader.readBatch({ limit, saveDir: saveDir || undefined,
+              excludeNames: args.exclude_names?.map((n) => n.trim()), scanMore: continuation })
+            const failures = result.failures.map(({ execution, ...failure }) => ({
+              ...failure,
+              ...(execution ? { operation_recovery: {
+                ...operationRecoveryFacts({ name: operationName, operationClass: 'readonly', target: failure.name ?? undefined,
+                  goal: '读取当前候选人简历并关闭详情', expected: '当前份拼接图已产生且详情已关闭' }, execution),
+                error: { code: 'UI_CHANGED', source: execution.stage, summary: failure.error.slice(0, 1000) },
+              } } : {}),
+            }))
+            const facts = operationRecoveryFacts({ name: operationName, operationClass: 'readonly',
+              resultKind: result.resumes.length > 0 ? 'business_result' : 'page_state',
+              goal: result.resumes.length > 0 && result.recovery ? '保留已读取资料，完成关闭详情及恢复列表的收尾' : '逐项读取简历并恢复推荐列表',
+              expected: result.resumes.length > 0 && result.recovery ? '详情画布和详情操作列关闭，原推荐列表可访问' : '每份原详情已验证并产生拼接图，收尾后详情画布消失' },
+              result.recovery?.execution ?? { ...reader.batchExecution, stage: 'postcheck',
+                verification: { status: 'met', evidence: [`逐项处理完成，读取${result.resumes.length}份，失败${result.failures.length}项，停止原因${result.stop_reason}`] } })
+            if (result.recovery) {
+              facts.error = { code: result.recovery.code, source: result.recovery.execution.stage, summary: result.recovery.summary.slice(0, 1000) }
+              if (result.resumes.length === 0) operationRecoveryFailure(new CodedOperationError(
+                result.recovery.code as import('./types.js').ErrorCode, result.recovery.summary), facts,
+                { resumes: [], failures, attempted: result.attempted, processed_names: result.processed_names, stop_reason: result.stop_reason })
+            }
+            const names = result.resumes.map((r) => r.name).join('、')
+            let message: string
+            if (result.stop_reason === 'no_matching_candidates') {
+              message = '当前筛选条件没有符合的牛人，已停止读取；下方为推荐内容，未读取或打开推荐卡片'
+            } else if (result.stop_reason === 'recommendations_boundary') {
+              message = `已读取 ${result.resumes.length} 份筛选结果简历，到达推荐内容边界，已停止继续读取`
+            } else if (result.resumes.length === 0 && result.failures.length > 0) {
+              const first = result.failures[0]!
+              message = `完成：未能读取任何简历（尝试 ${result.attempted} 张卡片全部失败，第一个失败：${first.name ?? '未知姓名'}—${first.error}）`
+            } else {
+              message = `完成：成功读取 ${result.resumes.length} 份简历（${names}）`
+              if (result.failures.length > 0) {
+                const first = result.failures[0]!
+                message += `，失败 ${result.failures.length} 个（第一个：${first.name ?? '未知姓名'}—${first.error}）`
+              }
+            }
+            // P1 接缝质量警告：任一份存在可疑接缝（错位）→ 提示人工核对（元信息随各份 payload 带）
+            const seamSuspect = result.resumes.filter((r) => r.readResult.suspectSeams.length > 0)
+            if (seamSuspect.length > 0) {
+              const namesSuspect = seamSuspect.map((r) => r.name).join('、')
+              message += `；⚠️ ${seamSuspect.length} 份存在可疑拼接接缝（${namesSuspect}）：拼接图内容可能有重复/缺失，请人工核对拼接图`
+            }
+            return {
+              message,
+              data: {
+                operation_recovery: facts,
+                resumes: result.resumes.map((r) => buildResumePayload(r.name, jobName, r.readResult, 'dom')),
+                failures,
+                attempted: result.attempted,
+                processed_names: result.processed_names,
+                stop_reason: result.stop_reason,
+                job_name: jobName,
+                continuation: buildResumeContinuation(result.processed_names, args.exclude_names ?? [], jobName, result.stop_reason),
+              },
+              effect: 'none',
+            }
+          } catch (error) {
+            if (error instanceof CodedOperationError && error.data?.operation_recovery) throw error
+            return operationRecoveryFailure(error, operationRecoveryFacts({ name: operationName, operationClass: 'readonly', goal: '逐项读取简历并恢复推荐列表', expected: '推荐列表可读且可继续逐项打开详情' },
+              { attemptsUsed: 1, ordinaryRetriesUsed: 0, inputStatus: 'not_started', stage: 'prepared', verification: { status: 'inconclusive', evidence: ['批次入口页面尚未通过校验，未开始读取'] } }))
           }
         },
       )

@@ -1,464 +1,168 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
-import { randomUUID, createHash } from 'node:crypto';
-import { execFileSync, spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { execFileSync, spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { createPackage } from '@electron/asar'
 
-// Real builder Section and file/install-registry macros, isolated payload/home/keys.
-// UAC original-user callbacks are deliberately simulated. This is NOT real elevation.
-const directory = path.dirname(fileURLToPath(import.meta.url));
-const desktop = path.resolve(directory, '../..');
-const repo = path.resolve(desktop, '../..');
-const template = path.join(desktop, 'node_modules/app-builder-lib/templates/nsis');
-const source = path.join(desktop, 'scripts/runtime-installer.nsh');
-const powershell = path.join(process.env.WINDIR ?? 'C:/Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
-const cache = path.join(process.env.LOCALAPPDATA ?? '', 'electron-builder/Cache/nsis');
-function findCache(prefix, relative) {
-  if (!fs.existsSync(cache)) return undefined;
-  return fs.readdirSync(cache).filter(name => name.startsWith(prefix)).map(name => path.join(cache, name, relative)).find(file => fs.existsSync(file));
-}
-const compiler = process.platform === 'win32' ? findCache('nsis-', 'makensis.exe') : undefined;
-const plugins = process.platform === 'win32' ? findCache('nsis-resources-', 'plugins/x86-unicode') : undefined;
-const native = path.join(repo, 'clients/agent-tool-runtime/dist/src/native/RuntimeProcessSupervisor.exe');
-const legacyScript = path.join(desktop, 'scripts/runtime-legacy-upgrade.ps1');
-const csc = path.join(process.env.WINDIR ?? 'C:/Windows', 'Microsoft.NET/Framework64/v4.0.30319/csc.exe');
-const unavailable = process.platform !== 'win32' ? 'Windows-only real NSIS fixture' : !compiler || !plugins || !fs.existsSync(template) || !fs.existsSync(native) || !fs.existsSync(csc) ? 'NSIS cache/plugins, compiled native helper or .NET compiler unavailable' : false;
-const digest = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-const ns = value => String(value).replaceAll('/', '\\').replaceAll('$', '$$');
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-async function bounded(promise, label, duration = 30000) {
-  let timer;
-  try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`Fixture timeout: ${label}`)), duration); })]); }
-  finally { clearTimeout(timer); }
-}
-async function until(predicate, label, duration = 20000) {
-  const deadline = Date.now() + duration;
-  while (Date.now() < deadline) { if (await predicate()) return; await sleep(50); }
-  throw new Error(`Fixture timeout: ${label}`);
-}
-function run(executable, args, options) {
-  const child = spawn(executable, args, { windowsHide: true, stdio: 'pipe', ...options });
-  let stderr = ''; child.stderr?.on('data', data => { stderr += data; }); child.stdout?.resume();
-  const done = new Promise((resolve, reject) => { child.on('error', reject); child.on('close', code => resolve(code)); });
-  // Observe immediately so a failed spawn cannot become an unhandled rejection.
-  void done.catch(() => {});
-  const observed = bounded(done, 'owned process exit'); void observed.catch(() => {});
-  return { child, done: observed, completion: done, get stderr() { return stderr; } };
-}
-function registry(root, command) {
-  // Only generated UUID namespaces are interpolated into PowerShell, never user data.
-  assert.match(root, /^Software\\AidWorkRuntime(?:Install|Upgrade)Fixtures\\[0-9a-f-]+$/);
-  return execFileSync(powershell, ['-NoProfile', '-Command', command], { encoding: 'utf8' }).trim();
-}
-async function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aidns-'));
-  const id = randomUUID();
-  const appName = `RTIF-${id.slice(0,8)}`;
-  const appData = path.join(root, 'ad');
-  const local = path.join(root, 'local');
-  const installRegistry = `Software\\AidWorkRuntimeInstallFixtures\\${id}`;
-  const upgradeRegistry = `Software\\AidWorkRuntimeUpgradeFixtures\\${id}`;
-  const payload = path.join(root, 'payload');
-  for (const dir of [appData, local, payload]) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(payload, 'isolated-payload.txt'), 'isolated fixture, no business');
-  fs.writeFileSync(path.join(root, 'dummy-uninstaller.exe'), 'never executed; fresh fixture keys');
-  const timer = path.join(root, 'timer.exe');
-  execFileSync(csc, ['/nologo', '/target:exe', '/out:' + timer, path.join(directory, 'fixtures/runtime-installer-timer.cs')], { stdio: 'pipe' });
-  const children = [];
-  return { root, id, appName, appData, payload, timer, installRegistry, upgradeRegistry, children,
-    env: { ...process.env, APPDATA: appData, LOCALAPPDATA: local, USERPROFILE: path.join(root, 'profile') },
-    home: path.join(appData, 'aidwork-tool-runtime-acceptance'), userData: path.join(appData, 'aidwork-runtime-app-acceptance'),
-    async cleanup() {
-      // Release every checkpoint/task first. Never enumerate/terminate by name.
-      for (const item of children) for (const file of item.release ?? []) fs.writeFileSync(file, 'fixture cleanup release');
-      for (const item of children) {
-        try { await bounded(item.process.completion, 'owned fixture cleanup', 10000); }
-        catch {
-          // Failure-only fallback is limited to the exact ChildProcess we spawned.
-          if (item.process.child.pid && item.process.child.exitCode === null) item.process.child.kill();
-          await bounded(item.process.completion.catch(() => {}), 'exact owned child cleanup', 5000);
-        }
-      }
-      for (const key of [installRegistry, upgradeRegistry]) registry(key, `$r=[Microsoft.Win32.Registry]::CurrentUser;$r.DeleteSubKeyTree('${key}',$false);$r.Dispose()`);
-      // Temp artifacts are retained for evidence; no shared resources are removed.
-    } };
-}
-function build(f, name, { inner = false, callback = 'direct', checkpoint = false, cancel = false, timing = false, uninstall = false, pendingFault } = {}) {
-  const target = path.join(f.root, name, f.appName);
-  const log = path.join(f.root, name + '.log'); fs.writeFileSync(log, '');
-  let hook = fs.readFileSync(source, 'utf8').replace(/^\uFEFF/, '').replaceAll('\r\n','\n').replaceAll('-InstallDirectory "$INSTDIR"', `-InstallDirectory "$INSTDIR" -FixtureRegistryId "${f.id}"`).replaceAll('!insertmacro UAC_AsUser_Call Function', '!insertmacro Fixture_AsUser_Call Function');
-  const write = value => `FileOpen $9 "${ns(log)}" a\nFileSeek $9 0 END\nFileWrite $9 "${value}$\\r$\\n"\nFileClose $9\n`;
-  hook = hook.replace('  Call runtimeCallPendingUpgrade\n  ${If} $R0 != 0', `  Call runtimeCallPendingUpgrade\n${write('restore_exit=$R0')}  \${If} $R0 != 0`);
-  const pending = hook.indexOf('      nsExec::ExecToStack', hook.indexOf('Function runtimePendingUpgrade'));
-  assert.ok(pending > 0)
-  if (pendingFault) {
-    const end = hook.indexOf('\n', pending); const command = hook.slice(pending, end)
-    hook = hook.slice(0, pending) + `IntOp $FixturePendingAttempts $FixturePendingAttempts + 1\n${write('pending_attempt=$FixturePendingAttempts')}\${If} $FixturePendingAttempts == 1\nPush "FIXTURE_LAUNCH_CLASS"\nPush "${pendingFault === 'validation' ? '1' : '-532462766'}"\n\${Else}\n${write('pending_ps_invoked=1')}${command}\n\${EndIf}` + hook.slice(end)
-  } else hook = hook.slice(0, pending) + write('pending_ps_invoked=1') + hook.slice(pending)
-  hook = hook.replace('    StrCpy $R9 2\n  InitPluginsDir', `    StrCpy $R9 2\n\${If} $INSTDIR == "${ns(target)}"\n${write('guard_target_match=1;mode=$installMode')}\${Else}\n${write('guard_target_match=0;mode=$installMode')}\${EndIf}\n  InitPluginsDir`);
-  hook = hook.replace('        Pop $R1\n        ${If} $R0 == 0', `        Pop $R1\n${write('prepare_exit=$R0;code=$R1')}        \${If} $R0 == 0`);
-  hook = hook.replace('            Pop $R1\n            ${If} $R0 == 0', `            Pop $R1\n${write('prepare_exit=$R0;code=$R1')}            \${If} $R0 == 0`);
-  hook = hook.replace('      Pop $R1\n      ${If} $R0 == 0', `      Pop $R1\n${write('prepare_exit=$R0;code=$R1')}      \${If} $R0 == 0`);
-  // Prove Restore owns its payload even if the earlier guard's copy is unavailable.
-  hook = hook.replace('!macro customInstall\n', '!macro customInstall\n  Delete "$PLUGINSDIR\\runtime-legacy-upgrade.ps1"\n');
-  fs.writeFileSync(path.join(f.root, name + '-hook.nsh'), '\uFEFF' + hook);
-  // Use real mode-selection macros. Only their HKLM location lookup is redirected
-  // to a controlled target, so no elevated fixture registry writes are needed.
-  let multiUser = fs.readFileSync(path.join(template, 'multiUser.nsh'), 'utf8');
-  multiUser = multiUser.replace('ReadRegStr $perMachineInstallationFolder HKLM "${INSTALL_REGISTRY_KEY}" InstallLocation', `StrCpy $perMachineInstallationFolder "${ns(target)}"`);
-  fs.writeFileSync(path.join(f.root, name + '-multiUser.nsh'), multiUser);
-  const assisted = fs.readFileSync(path.join(template, 'assistedInstaller.nsh'), 'utf8');
-  const init = assisted.slice(assisted.indexOf('!macro initMultiUser'));
-  fs.writeFileSync(path.join(f.root, name + '-init.nsh'), init);
-  const script = `Unicode true
-OutFile "${name}${uninstall ? '-builder' : ''}.exe"
-RequestExecutionLevel user
-SilentInstall silent
-SilentUnInstall silent
-SetCompressor zlib
-!define PRODUCT_NAME "Isolated Runtime installer fixture"
-!define PRODUCT_FILENAME "${f.appName}"
-!define APP_FILENAME "${f.appName}"
-!define VERSION "0.0.1"
-!define APP_ID "cn.aidingyi.agent.runtime.acceptance"
-!define APP_GUID "${f.id}"
-!define UNINSTALL_APP_KEY "${f.id}"
-!define INSTALL_REGISTRY_KEY "${f.installRegistry}\\${name}\\Install"
-!define UNINSTALL_REGISTRY_KEY "${f.installRegistry}\\${name}\\Uninstall"
-!define SHORTCUT_NAME "${f.appName}"
-!define UNINSTALL_DISPLAY_NAME "Isolated fixture"
-!define APP_DESCRIPTION "Isolated fixture"
-!define APP_BUILD_DIR "${ns(f.payload)}"
-!define UNINSTALLER_OUT_FILE "${ns(path.join(f.root, 'dummy-uninstaller.exe'))}"
-!define ESTIMATED_SIZE 1
-!define INSTALL_MODE_PER_ALL_USERS_REQUIRED
-!define DO_NOT_CREATE_START_MENU_SHORTCUT
-!define DO_NOT_CREATE_DESKTOP_SHORTCUT
-!define allowToChangeInstallationDirectory
-!define isUpdated '0 == 1'
-!define isDeleteAppData '0 == 1'
-!define isForceRun '0 == 1'
-${uninstall ? '!define BUILD_UNINSTALLER' : ''}
-!define RUNTIME_LEGACY_UPGRADE_SOURCE "${ns(legacyScript)}"
-!define RUNTIME_SUPERVISOR_SOURCE "${ns(native)}"
-!addincludedir "${ns(template)}"
-!addincludedir "${ns(path.join(template, 'include'))}"
-!addplugindir "${ns(plugins)}"
-!include LogicLib.nsh
-!include FileFunc.nsh
-!include StdUtils.nsh
-!include UAC.nsh
-${inner ? '!undef UAC_IsInnerInstance\n!define UAC_IsInnerInstance \'1 == 1\'' : ''}
-${timing ? '!undef UAC_IsAdmin\n!define UAC_IsAdmin \'1 == 1\'' : ''}
-!macro Fixture_AsUser_Call type name flags
- ${callback === 'noop' || callback === 'failure' ? '' : 'Call \${name}'}
- ${callback === 'failure' ? 'SetErrors' : ''}
-!macroend
-!include "common.nsh"
-!include /CHARSET=UTF8 "${name}-hook.nsh"
-!include "allowOnlyOneInstallerInstance.nsh"
-!include /CHARSET=UTF8 "${name}-multiUser.nsh"
-Var appExe
-Var FixturePendingAttempts
-Var launchLink
-Var newStartMenuLink
-Var oldStartMenuLink
-Var newDesktopLink
-Var oldDesktopLink
-Var oldShortcutName
-Var oldMenuDirectory
-LangString uninstallFailed 1033 "FIXTURE_UNINSTALL_FAILED"
-LangString appCannotBeClosed 1033 "FIXTURE_CANNOT_CLOSE"
-!include "installUtil.nsh"
-!include /CHARSET=UTF8 "${name}-init.nsh"
-!include StrContains.nsh
-${!uninstall ? `Function instFilesPre
- \${StrContains} $0 "\${APP_FILENAME}" $INSTDIR
- \${If} $0 == ""
-  StrCpy $INSTDIR "$INSTDIR\\\${APP_FILENAME}"
- \${EndIf}
-FunctionEnd
-!insertmacro customPageAfterChangeDir` : ''}
-!insertmacro customHeader
-Function .onInit
- ${uninstall ? `WriteUninstaller "${ns(path.join(f.root, name + '.exe'))}"\nSetErrorLevel 0\nQuit` : `StrCpy $INSTDIR "${ns(target)}"
- StrCpy $installMode "CurrentUser"
- SetShellVarContext current
- ${timing ? `!insertmacro initMultiUser\n\${If} $INSTDIR == "${ns(path.join(f.root, 'previous-current-user', f.appName))}"\n${write('initial_target_match=1;mode=$installMode')}\${Else}\n${write('initial_target_match=0;mode=$installMode')}\${EndIf}` : ''}
- !insertmacro customInit
- ${write('init_completed=1')}
- ${checkpoint ? `${write('init_ready=1')}\n\${Do}\nSleep 50\n\${LoopUntil} \${FileExists} "${ns(path.join(f.root, name + '-continue'))}"\nCall runtimeInstFilesPre` : ''}`}
-FunctionEnd
-${uninstall ? `Function un.onInit
- StrCpy $INSTDIR "${ns(target)}"
- StrCpy $installMode "CurrentUser"
- !insertmacro CHECK_APP_RUNNING
-FunctionEnd
-Section Uninstall
- ${write('section_completed=1')}
-SectionEnd
-Section
-SectionEnd` : `Section
- ${cancel ? 'Call runtimeCancelPendingUpgrade\nSetErrorLevel 0\nQuit' : `SetShellVarContext current
- !include "${ns(path.join(template, 'installSection.nsh'))}"
- ${write('section_completed=1')}`}
-SectionEnd`}
-`;
-  fs.writeFileSync(path.join(f.root, name + '.nsi'), '\uFEFF' + script);
-  execFileSync(compiler, ['/INPUTCHARSET', 'UTF8', name + '.nsi'], { cwd: f.root, stdio: 'pipe' });
-  const exe = path.join(f.root, name + '.exe');
-  if (uninstall) execFileSync(path.join(f.root, name + '-builder.exe'), ['/S'], { cwd: f.root, stdio: 'pipe' });
-  return { exe, target, log, text: () => fs.readFileSync(log, 'utf8'), launch: env => {
-    const process = run(exe, uninstall ? ['/S', '_?=' + f.root] : ['/S'], { cwd: f.root, env: env ?? f.env });
-    f.children.push({ process, release: checkpoint ? [path.join(f.root, name + '-continue')] : [] });
-    return process;
-  } };
-}
-async function timer(f, build, modern = false) {
-  fs.mkdirSync(build.target, { recursive: true });
-  fs.copyFileSync(f.timer, path.join(build.target, f.appName + '.exe'));
-  if (modern) { const dir = path.join(build.target, 'resources/runtime/host/native'); fs.mkdirSync(dir, { recursive: true }); fs.copyFileSync(native, path.join(dir, 'RuntimeProcessSupervisor.exe')); }
-  const process = run(path.join(build.target, f.appName + '.exe'), [], { env: f.env });
-  f.children.push({ process, release: [path.join(build.target, 'fixture-release.txt')] });
-  await until(() => fs.existsSync(path.join(build.target, 'fixture-started.txt')), 'timer startup');
-  return { ...process, async release() { fs.writeFileSync(path.join(build.target, 'fixture-release.txt'), 'release'); assert.equal(await process.done, 0); } };
-}
-function prepare(f, b) {
-  fs.mkdirSync(f.home, { recursive: true }); fs.mkdirSync(b.target, { recursive: true });
-  fs.writeFileSync(path.join(f.home, 'host-running.json'), JSON.stringify({ instance_id: randomUUID() }));
-  const command = `"isolated-original.exe" --aidwork-runtime-login`;
-  registry(f.upgradeRegistry, `$r=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('${f.upgradeRegistry}\\Run');$r.SetValue('cn.aidingyi.agent.runtime.acceptance','${command}');$r.Dispose()`);
-  const result = execFileSync(powershell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', legacyScript, '-Mode', 'Prepare', '-AppId', 'cn.aidingyi.agent.runtime.acceptance', '-InstallerPath', b.exe, '-InstallDirectory', b.target, '-SupervisorPath', native, '-FixtureRegistryId', f.id], { env: f.env, encoding: 'utf8' });
-  assert.match(result, /PREPARED|REGISTERED/);
-}
-function runValue(f) { return registry(f.upgradeRegistry, `$r=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${f.upgradeRegistry}\\Run');if($r){[string]$r.GetValue('cn.aidingyi.agent.runtime.acceptance','ABSENT');$r.Dispose()}else{'ABSENT'}`); }
-function upgrade(f, mode, installer, target, script = legacyScript) {
-  const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-Mode', mode,
-    '-AppId', 'cn.aidingyi.agent.runtime.acceptance', '-InstallerPath', installer, '-InstallDirectory', target,
-    '-SupervisorPath', native, '-FixtureRegistryId', f.id];
-  try { return { code: 0, output: execFileSync(powershell, args, { env: f.env, encoding: 'utf8', timeout: 30000 }).trim() }; }
-  catch (error) { if (error.status === null) throw error; return { code: error.status, output: `${error.stdout ?? ''}${error.stderr ?? ''}`.trim() }; }
-}
-function treeHashes(root) {
-  const result = {};
-  if (!fs.existsSync(root)) return result;
-  for (const entry of fs.readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-    const file = path.join(root, entry.name);
-    if (entry.isDirectory()) for (const [child, hash] of Object.entries(treeHashes(file))) result[path.join(entry.name, child)] = hash;
-    else result[entry.name] = digest(file);
+const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
+const script = path.join(desktop, 'scripts/runtime-clean-install.ps1')
+const powershell = path.join(process.env.WINDIR ?? 'C:/Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe')
+const skip = process.platform !== 'win32' ? 'requires real Windows CurrentUser DPAPI/CIM/registry' : false
+function fixture() {
+  const id = randomUUID()
+  const root = path.join(os.tmpdir(), 'aid-runtime-install-fixture-' + id)
+  fs.mkdirSync(root)
+  const appData = path.join(root, 'appData'), install = path.join(root, 'install')
+  fs.mkdirSync(appData); fs.mkdirSync(install)
+  const namespace = `Software\\AidWorkRuntimeCleanInstallFixtures\\${id}`
+  const env = { ...process.env, APPDATA: appData, AIDWORK_RUNTIME_INSTALL_FIXTURE: id }
+  delete env.PSModulePath
+  return { root, appData, install, id, namespace, env,
+    run(mode) { return execFileSync(powershell, ['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',script,'-Mode',mode,'-AppId','cn.aidingyi.agent.runtime.acceptance','-InstallDirectory',install,'-FixtureRegistryId',id], { encoding:'utf8', windowsHide:true, env, timeout:30000 }).trim() },
+    ps(command) { return execFileSync(powershell, ['-NoProfile','-Command',command], { encoding:'utf8', windowsHide:true, env, timeout:30000 }).trim() },
+    cleanup() {
+      this.ps(`[Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree('${namespace}',$false)`)
+      assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir()))
+      assert.equal(path.basename(root), 'aid-runtime-install-fixture-' + id)
+      fs.rmSync(root, { recursive:true, force:true })
+    },
   }
-  return result;
 }
-function onceValue(f) { return registry(f.upgradeRegistry, `$r=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${f.upgradeRegistry}\\RunOnce');if($r){[string]$r.GetValue('cn.aidingyi.agent.runtime.acceptance.upgrade','ABSENT');$r.Dispose()}else{'ABSENT'}`); }
-function protectedSummary(f, file) {
-  // Decode only fixture-supplied control fields, never print protected payloads.
-  const command = `Add-Type -AssemblyName System.Security;$blob=[IO.File]::ReadAllText('${file}');$bytes=[Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String($blob),$null,[Security.Cryptography.DataProtectionScope]::CurrentUser);$s=[Text.Encoding]::UTF8.GetString($bytes)|ConvertFrom-Json;@{hash=$s.installerHash;originalRun=$s.originalRun.value}|ConvertTo-Json -Compress`;
-  return JSON.parse(execFileSync(powershell, ['-NoProfile', '-Command', command], { env: f.env, encoding: 'utf8', timeout: 30000 }));
+function child(entry, env) {
+  const processChild = spawn(process.execPath,[entry],{windowsHide:true,stdio:'ignore',env})
+  const exit = new Promise(resolve => processChild.once('exit', resolve))
+  return { processChild, exit }
+}
+async function ready(processChild) {
+  await new Promise((resolve, reject) => { processChild.once('spawn', resolve); processChild.once('error', reject) })
+  await new Promise(resolve=>setTimeout(resolve,200))
+}
+async function exited(item) {
+  let timer
+  try { await Promise.race([item.exit, new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('owned fixture did not stop')),5000)})]) }
+  finally { clearTimeout(timer) }
 }
 
-test('real DPAPI cross-revision pending and restored-cache rollover preserves first Run and all execution facts', { skip: unavailable }, async () => {
-  for (const state of ['pending', 'restored']) {
-    const f = await fixture();
-    try {
-      const old = build(f, `old-${state}`); const newer = build(f, `new-${state}`); prepare(f, old);
-      for (const dir of ['journal', 'result-outbox', 'sessions']) { fs.mkdirSync(path.join(f.home, dir), { recursive: true }); fs.writeFileSync(path.join(f.home, dir, 'fact.bin'), 'synthetic preserved fact'); }
-      if (state === 'restored') assert.deepEqual(upgrade(f, 'Restore', old.exe, old.target), { code: 0, output: 'RESTORED' });
-      const oldPending = treeHashes(path.join(f.userData, 'upgrade-pending')); const facts = treeHashes(f.home);
-      const firstRun = '"isolated-original.exe" --aidwork-runtime-login';
-      assert.deepEqual(upgrade(f, 'Prepare', newer.exe, old.target), { code: 0, output: 'PREPARED' });
-      const history = fs.readdirSync(path.join(f.userData, 'upgrade-history'));
-      assert.equal(history.length, 1); assert.deepEqual(treeHashes(path.join(f.userData, 'upgrade-history', history[0])), oldPending);
-      assert.deepEqual(treeHashes(f.home), facts); assert.equal(runValue(f), 'ABSENT'); assert.match(onceValue(f), /installer\.exe.*force-run/);
-      const summary = protectedSummary(f, path.join(f.userData, 'upgrade-pending/state.bin'));
-      assert.equal(summary.hash, digest(newer.exe)); assert.equal(summary.originalRun, firstRun);
-      assert.deepEqual(upgrade(f, 'Cancel', newer.exe, old.target), { code: 0, output: 'CANCELLED' }); assert.equal(runValue(f), firstRun);
-      assert.deepEqual(treeHashes(f.home), facts);
-    } finally { await f.cleanup(); }
-  }
-});
-
-test('rollover rejects tampered cache, foreign RunOnce and unproved cache without changing existing facts or startup', { skip: unavailable }, async () => {
-  for (const invalid of ['tampered', 'foreign-once', 'unproved', 'archive-wrong-hash', 'archive-wrong-scope']) {
-    const f = await fixture();
-    try {
-      const old = build(f, `old-${invalid}`); const newer = build(f, `new-${invalid}`); prepare(f, old);
-      const pending = path.join(f.userData, 'upgrade-pending');
-      if (invalid === 'tampered') fs.appendFileSync(path.join(pending, 'installer.exe'), 'tampered fixture');
-      if (invalid === 'foreign-once') registry(f.upgradeRegistry, `$r=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('${f.upgradeRegistry}\\RunOnce');$r.SetValue('cn.aidingyi.agent.runtime.acceptance.upgrade','controlled foreign command');$r.Dispose()`);
-      if (invalid === 'unproved' || invalid.startsWith('archive-')) {
-        // Reach the orphan-cache proof gate: no active state and no fixture Once.
-        registry(f.upgradeRegistry, `$r=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('${f.upgradeRegistry}\\RunOnce');$r.DeleteValue('cn.aidingyi.agent.runtime.acceptance.upgrade',$false);$r.Dispose();$r=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('${f.upgradeRegistry}\\Run');$r.SetValue('cn.aidingyi.agent.runtime.acceptance','current isolated Run');$r.Dispose()`);
-        if (invalid === 'unproved') fs.renameSync(path.join(pending, 'state.bin'), path.join(f.root, 'unproved-state.bin'));
-        else {
-          const archive = path.join(pending, 'archive'); fs.mkdirSync(archive);
-          const proof = path.join(archive, `state-${randomUUID()}.bin`); fs.renameSync(path.join(pending, 'state.bin'), proof);
-          if (invalid === 'archive-wrong-hash') fs.appendFileSync(path.join(pending, 'installer.exe'), 'wrong cached hash');
-          else {
-            const command = `Add-Type -AssemblyName System.Security;$p='${proof}';$b=[Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String([IO.File]::ReadAllText($p)),$null,[Security.Cryptography.DataProtectionScope]::CurrentUser);$s=[Text.Encoding]::UTF8.GetString($b)|ConvertFrom-Json;$s.home='${path.join(f.root, 'foreign-home')}';$b=[Text.Encoding]::UTF8.GetBytes(($s|ConvertTo-Json -Compress));[IO.File]::WriteAllText($p,[Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)))`;
-            execFileSync(powershell, ['-NoProfile', '-Command', command], { env: f.env, stdio: 'pipe', timeout: 30000 });
-          }
-        }
-      }
-      const facts = treeHashes(f.appData); const runBefore = runValue(f); const onceBefore = onceValue(f);
-      const result = upgrade(f, 'Prepare', newer.exe, old.target);
-      const expected = invalid === 'foreign-once' ? /RUNONCE_CONFLICT/ : invalid === 'archive-wrong-scope' ? /PENDING_STATE_SCOPE_MISMATCH/ : /PENDING_INSTALLER_MISMATCH|DIRECTORY_MISSING/;
-      assert.equal(result.code, 1); assert.match(result.output, expected);
-      assert.deepEqual(treeHashes(f.appData), facts); assert.equal(runValue(f), runBefore); assert.equal(onceValue(f), onceBefore);
-    } finally { await f.cleanup(); }
-  }
-});
-
-test('NSIS cross-revision pending v1 rollover does not request old Main; conflicting proof refuses before files or maintenance', { skip: unavailable }, async () => {
-  for (const conflict of [false, true]) {
-    const f = await fixture();
-    try {
-      const b = build(f, conflict ? 'conflict' : 'rollover'); fs.mkdirSync(f.home, { recursive: true }); fs.mkdirSync(b.target, { recursive: true });
-      fs.writeFileSync(path.join(f.home, 'host-running.json'), JSON.stringify({ instance_id: randomUUID() }));
-      registry(f.upgradeRegistry, `$r=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('${f.upgradeRegistry}\\Run');$r.SetValue('cn.aidingyi.agent.runtime.acceptance','controlled original Run');$r.Dispose()`);
-      const oldInstaller = path.join(f.root, 'old-installer.exe'); fs.copyFileSync(f.timer, oldInstaller);
-      assert.deepEqual(upgrade(f, 'Prepare', oldInstaller, b.target), { code: 0, output: 'PREPARED' });
-      if (conflict) fs.appendFileSync(path.join(f.userData, 'upgrade-pending/installer.exe'), 'invalid fixture cache');
-      const before = treeHashes(f.appData); const owned = await timer(f, b, true);
-      assert.equal(await b.launch().done, conflict ? 2 : 3010); assert.equal(owned.child.exitCode, null);
-      assert.equal(fs.existsSync(path.join(b.target, 'fixture-requested.txt')), false); assert.equal(fs.existsSync(path.join(b.target, 'isolated-payload.txt')), false);
-      assert.doesNotMatch(b.text(), /section_completed/); assert.match(b.text(), conflict ? /prepare_exit=1;code=PENDING_INSTALLER_MISMATCH/ : /prepare_exit=0;code=PREPARED/);
-      if (conflict) assert.deepEqual(treeHashes(f.appData), before);
-      await owned.release();
-    } finally { await f.cleanup(); }
-  }
-});
-
-test('same-installer orphan cache is reusable; missing/modern marker exit2 causes no startup or fact changes', { skip: unavailable }, async () => {
-  const f = await fixture();
+test('each reinstall allocates a fresh generation, preserving prior identity source and stable unknown registration', {skip}, () => {
+  const f=fixture()
   try {
-    const b = build(f, 'same-installer'); prepare(f, b);
-    const pending = path.join(f.userData, 'upgrade-pending'); const cacheBefore = digest(path.join(pending, 'installer.exe'));
-    fs.renameSync(path.join(pending, 'state.bin'), path.join(f.root, 'interrupted-state.bin'));
-    registry(f.upgradeRegistry, `$r=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('${f.upgradeRegistry}\\RunOnce');$r.DeleteValue('cn.aidingyi.agent.runtime.acceptance.upgrade',$false);$r.Dispose();$r=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('${f.upgradeRegistry}\\Run');$r.SetValue('cn.aidingyi.agent.runtime.acceptance','current isolated Run');$r.Dispose()`);
-    assert.deepEqual(upgrade(f, 'Prepare', b.exe, b.target), { code: 0, output: 'PREPARED' });
-    assert.equal(digest(path.join(pending, 'installer.exe')), cacheBefore);
-    assert.equal(fs.existsSync(path.join(f.userData, 'upgrade-history')), false);
-    assert.equal(protectedSummary(f, path.join(pending, 'state.bin')).originalRun, 'current isolated Run');
-  } finally { await f.cleanup(); }
-  for (const kind of ['missing', 'modern']) {
-    const m = await fixture();
-    try {
-      const b = build(m, kind); fs.mkdirSync(b.target, { recursive: true }); fs.mkdirSync(m.home, { recursive: true });
-      if (kind === 'modern') fs.writeFileSync(path.join(m.home, 'host-running.json'), JSON.stringify({ instance_id: randomUUID(), supervision: 'fixture-v2' }));
-      const facts = treeHashes(m.appData); const result = upgrade(m, 'Prepare', b.exe, b.target);
-      assert.equal(result.code, 2); assert.match(result.output, kind === 'missing' ? /NO_LEGACY_MARKER/ : /UNSUPPORTED_LEGACY_MARKER/);
-      assert.deepEqual(treeHashes(m.appData), facts); assert.equal(runValue(m), 'ABSENT'); assert.equal(onceValue(m), 'ABSENT');
-    } finally { await m.cleanup(); }
-  }
-});
-
-test('fixture-only archive faults restore a live old registration before Move or first Run without dangling Once after commit', { skip: unavailable }, async () => {
-  for (const phase of ['before', 'after']) {
-    const f = await fixture();
-    try {
-      const old = build(f, `old-${phase}`); const newer = build(f, `new-${phase}`); prepare(f, old);
-      const pending = path.join(f.userData, 'upgrade-pending'); const previousProof = treeHashes(pending); const facts = treeHashes(f.home);
-      const previousRun = runValue(f); const previousOnce = onceValue(f);
-      let script = fs.readFileSync(legacyScript, 'utf8').replaceAll('\r\n', '\n');
-      // The first matching boundary is the active state.bin branch exercised here.
-      const point = phase === 'before' ? '        Archive-PendingDirectory $pendingDirectory' : '        $archiveCommitted = $true';
-      assert.ok(script.includes(point), 'transaction injection boundary exists');
-      script = script.replace(point, phase === 'before' ? `        Fail 'FIXTURE_BEFORE_MOVE'\n${point}` : `${point}\n        Fail 'FIXTURE_AFTER_COMMIT'`);
-      const injected = path.join(f.root, 'fault-only.ps1'); fs.writeFileSync(injected, script);
-      const result = upgrade(f, 'Prepare', newer.exe, old.target, injected);
-      assert.equal(result.code, 1); assert.match(result.output, phase === 'before' ? /FIXTURE_BEFORE_MOVE/ : /FIXTURE_AFTER_COMMIT/);
-      assert.deepEqual(treeHashes(f.home), facts);
-      if (phase === 'before') {
-        assert.equal(runValue(f), previousRun); assert.equal(onceValue(f), previousOnce); assert.deepEqual(treeHashes(pending), previousProof);
-      } else {
-        assert.equal(runValue(f), '"isolated-original.exe" --aidwork-runtime-login'); assert.equal(onceValue(f), 'ABSENT');
-        assert.equal(fs.existsSync(pending), false);
-        const history = fs.readdirSync(path.join(f.userData, 'upgrade-history')); assert.equal(history.length, 1);
-        assert.deepEqual(treeHashes(path.join(f.userData, 'upgrade-history', history[0])), previousProof);
-      }
-    } finally { await f.cleanup(); }
-  }
-});
-
-test('real builder no-pending/invalid-home and pending self-contained Restore/Cancel', { skip: unavailable }, async () => {
-  const f = await fixture();
+    const metadata=path.join(f.appData,'aidwork-runtime-app-acceptance/installation-v2')
+    const ids=new Set(), homes=new Set()
+    let previous=path.join(f.appData,'aidwork-tool-runtime-acceptance')
+    for(let i=0;i<10;i++) {
+      const id=f.run('Finalize')
+      assert.match(id,/^[a-f0-9-]{36}$/)
+      const pointer=JSON.parse(fs.readFileSync(path.join(metadata,'current.json'),'utf8'))
+      assert.equal(pointer.id,id); assert.equal(pointer.initialized,false)
+      assert.equal(pointer.priorHome,previous)
+      assert.equal(fs.existsSync(pointer.home),true)
+      assert.deepEqual(fs.readdirSync(pointer.home),[])
+      ids.add(id); homes.add(pointer.home); previous=pointer.home
+      fs.writeFileSync(path.join(metadata,'clean-registration.bin'),'protected unknown registration')
+    }
+    assert.equal(ids.size,10); assert.equal(homes.size,10)
+    assert.equal(fs.readFileSync(path.join(metadata,'clean-registration.bin'),'utf8'),'protected unknown registration')
+  } finally { f.cleanup() }
+})
+test('corrupt old pointer does not block installer allocation', {skip}, () => {
+  const f=fixture()
   try {
-    const fresh = build(f, 'fresh'); assert.equal(await fresh.launch().done, 0); assert.match(fresh.text(), /restore_exit=0/); assert.doesNotMatch(fresh.text(), /pending_ps_invoked/);
-    const invalid = build(f, 'invalid'); assert.equal(await invalid.launch({ ...f.env, APPDATA: path.join(f.root, 'nonexistent') }).done, 0); assert.match(invalid.text(), /restore_exit=1004/); assert.doesNotMatch(invalid.text(), /pending_ps_invoked/);
-    const empty = build(f, 'empty'); assert.equal(await empty.launch({ ...f.env, APPDATA: '' }).done, 0); assert.match(empty.text(), /restore_exit=1004/); assert.doesNotMatch(empty.text(), /pending_ps_invoked/);
-    const pending = build(f, 'pending'); prepare(f, pending); assert.equal(runValue(f), 'ABSENT'); assert.equal(await pending.launch().done, 0); assert.match(pending.text(), /pending_ps_invoked=1/); assert.match(pending.text(), /restore_exit=0/); assert.match(runValue(f), /isolated-original/); assert.equal(fs.existsSync(path.join(f.userData, 'upgrade-pending/state.bin')), false);
-    // A new isolated home avoids rebinding the immutable previous installer proof.
-    const cancelled = await fixture();
-    try { const cancel = build(cancelled, 'cancel', { cancel: true }); prepare(cancelled, cancel); assert.equal(await cancel.launch().done, 0); assert.match(runValue(cancelled), /isolated-original/); assert.equal(fs.existsSync(path.join(cancelled.userData, 'upgrade-pending/state.bin')), true); }
-    finally { await cancelled.cleanup(); }
-    const corrupted = await fixture();
-    try { const broken = build(corrupted, 'broken'); const pendingDirectory = path.join(corrupted.userData, 'upgrade-pending'); fs.mkdirSync(pendingDirectory, { recursive: true }); fs.writeFileSync(path.join(pendingDirectory, 'state.bin'), 'invalid fixture proof'); assert.equal(await broken.launch().done, 0); assert.match(broken.text(), /restore_exit=1/); assert.match(broken.text(), /pending_ps_invoked=1/); assert.equal(fs.readFileSync(path.join(pendingDirectory, 'state.bin'), 'utf8'), 'invalid fixture proof'); }
-    finally { await corrupted.cleanup(); }
-  } finally { await f.cleanup(); }
-});
-
-test('inner callback missing/error refuses before actual builder file writes; timing resolves final machine target', { skip: unavailable }, async () => {
-  const f = await fixture();
+    f.run('Finalize')
+    const pointer=path.join(f.appData,'aidwork-runtime-app-acceptance/installation-v2/current.json')
+    fs.writeFileSync(pointer,'{broken old state')
+    f.run('Finalize')
+    const current=JSON.parse(fs.readFileSync(pointer,'utf8'))
+    assert.equal(current.priorHome,path.join(f.appData,'aidwork-tool-runtime-acceptance'))
+  } finally { f.cleanup() }
+})
+test('acceptance installer stops current-user verified npm CLI and its child, preserving unrelated node and fixture-only HKCU values', {skip}, async () => {
+  const f=fixture(); const children=[]
   try {
-    for (const callback of ['noop', 'failure']) { const b = build(f, callback, { inner: true, callback }); assert.equal(await b.launch().done, 2); assert.doesNotMatch(b.text(), /section_completed/); assert.equal(fs.existsSync(path.join(b.target, 'isolated-payload.txt')), false); }
-    const name = 'timing'; const old = path.join(f.root, 'previous-current-user', f.appName);
-    registry(f.installRegistry, `$r=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('${f.installRegistry}\\${name}\\Install');$r.SetValue('InstallLocation','${old.replaceAll('/', '\\')}');$r.Dispose()`);
-    const b = build(f, name, { inner: true, timing: true }); assert.equal(await b.launch().done, 0); assert.match(b.text(), /initial_target_match=1;mode=CurrentUser/); assert.match(b.text(), /guard_target_match=1;mode=all/); assert.equal(fs.existsSync(path.join(old, 'isolated-payload.txt')), false); assert.equal(fs.existsSync(path.join(b.target, 'isolated-payload.txt')), true);
-  } finally { await f.cleanup(); }
-});
-
-test('direct-call PRE callback rechecks restarted legacy timer before writes; uninstaller refuses legacy timer', { skip: unavailable }, async () => {
-  const f = await fixture(); let owned, installer;
+    const cli=path.join(f.appData,'npm/node_modules/agent-tool-runtime/dist/src/cli.js')
+    fs.mkdirSync(path.dirname(cli),{recursive:true})
+    const unrelated=path.join(f.root,'unrelated.cjs'), descendant=path.join(f.root,'descendant.cjs'), descendantPid=path.join(f.root,'child.pid')
+    fs.writeFileSync(unrelated,'setInterval(()=>{},1000)')
+    fs.writeFileSync(descendant,'setInterval(()=>{},1000)')
+    fs.writeFileSync(cli,`const {spawn}=require('node:child_process');const fs=require('node:fs');const p=spawn(process.execPath,[${JSON.stringify(descendant)}],{stdio:'ignore'});fs.writeFileSync(${JSON.stringify(descendantPid)},String(p.pid));setInterval(()=>{},1000)`)
+    const legacy=child(cli,f.env), other=child(unrelated,f.env);children.push(legacy,other)
+    await Promise.all([ready(legacy.processChild),ready(other.processChild)])
+    while(!fs.existsSync(descendantPid)) await new Promise(resolve=>setTimeout(resolve,50))
+    const pid=Number(fs.readFileSync(descendantPid,'utf8'))
+    f.ps(`$r=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('${f.namespace}\\Run');$r.SetValue('cn.aidingyi.agent.runtime.acceptance','old-product');$r.SetValue('other-product','unrelated');$r.SetValue('old-cli','"${process.execPath}" "${cli}" start');$r.Dispose()`)
+    assert.equal(f.run('Detect'),'PROCESS_RUNNING')
+    assert.equal(legacy.processChild.exitCode,null)
+    assert.equal(f.ps(`$r=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${f.namespace}\\Run');$r.GetValueNames().Count;$r.Dispose()`),'3')
+    assert.throws(() => execFileSync(powershell, ['-NoProfile','-NonInteractive','-File',script,'-Mode','Stop','-RequireIdle','-AppId','cn.aidingyi.agent.runtime.acceptance','-InstallDirectory',f.install,'-FixtureRegistryId',f.id], { encoding:'utf8',windowsHide:true,env:f.env,timeout:30000 }),
+      error => error.status === 1 && error.stdout.trim() === 'PROCESS_STARTED_DURING_INSTALL')
+    assert.equal(legacy.processChild.exitCode,null)
+    assert.equal(f.run('Stop'),'PROCESS_TAKEOVER_PASS')
+    await exited(legacy)
+    assert.equal(other.processChild.exitCode,null)
+    assert.equal(f.ps(`if(Get-Process -Id ${pid} -ErrorAction SilentlyContinue){'alive'}else{'stopped'}`),'stopped')
+    assert.equal(f.ps(`$r=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${f.namespace}\\Run');$r.GetValueNames() -join ',';$r.Dispose()`),'other-product')
+    assert.equal(f.run('Detect'),'PROCESS_CLEAR')
+  } finally {
+    for(const item of children) { if(item.processChild.exitCode===null)item.processChild.kill();await exited(item) }
+    f.cleanup()
+  }
+})
+test('final check reports concrete asset failure without printing private paths', {skip}, () => {
+  const f=fixture()
   try {
-    const b = build(f, 'pre', { inner: true, checkpoint: true }); fs.mkdirSync(f.home, { recursive: true }); fs.writeFileSync(path.join(f.home, 'host-running.json'), JSON.stringify({ instance_id: randomUUID() }));
-    installer = b.launch(); await until(() => b.text().includes('init_ready=1'), 'first guard completed'); owned = await timer(f, b); fs.writeFileSync(path.join(f.root, 'pre-continue'), 'continue'); assert.equal(await installer.done, 3010); assert.equal(owned.child.exitCode, null); assert.doesNotMatch(b.text(), /section_completed/); assert.equal(fs.existsSync(path.join(b.target, 'isolated-payload.txt')), false); await owned.release(); owned = undefined;
-    const un = build(f, 'uninstall', { uninstall: true }); owned = await timer(f, un); assert.equal(await un.launch().done, 2); assert.equal(owned.child.exitCode, null); assert.doesNotMatch(un.text(), /section_completed/);
-  } finally { await f.cleanup(); }
-});
-
-test('modern guard prepares v1 before requesting old Main; v2 retains normal drain without killing the timer', { skip: unavailable }, async () => {
-  for (const version of ['v1', 'v2']) {
-    const f = await fixture(); let owned
-    try {
-      const b = build(f, version); fs.mkdirSync(f.home, { recursive: true })
-      const marker = JSON.stringify({ instance_id: randomUUID(), ...(version === 'v2' ? { supervision: 'isolated-v2-proof' } : {}) })
-      fs.writeFileSync(path.join(f.home, 'host-running.json'), marker)
-      owned = await timer(f, b, true); const startedAt = Date.now(); const installer = b.launch()
-      if (version === 'v1') {
-        assert.equal(await installer.done, 3010); assert.ok(Date.now() - startedAt < 15000); assert.equal(owned.child.exitCode, null)
-        assert.equal(fs.existsSync(path.join(b.target, 'fixture-requested.txt')), false)
-        assert.match(b.text(), /prepare_exit=0;code=PREPARED/); assert.doesNotMatch(b.text(), /section_completed/)
-        assert.equal(fs.existsSync(path.join(b.target, 'isolated-payload.txt')), false)
-      } else {
-        await until(() => b.text().includes('code=UNSUPPORTED_LEGACY_MARKER'), 'v2 preparation refused', 25000)
-        assert.match(b.text(), /prepare_exit=2;code=UNSUPPORTED_LEGACY_MARKER/)
-        await until(() => fs.existsSync(path.join(b.target, 'fixture-requested.txt')), 'normal maintenance request')
-        assert.equal(fs.readFileSync(path.join(b.target, 'fixture-requested.txt'), 'utf8'), '--aidwork-exit-for-update')
-        assert.equal(owned.child.exitCode, null); assert.equal(installer.child.exitCode, null)
-        assert.equal(fs.existsSync(path.join(f.userData, 'upgrade-pending/state.bin')), false)
-        assert.equal(fs.existsSync(path.join(b.target, 'isolated-payload.txt')), false)
-        await owned.release(); owned = undefined; assert.equal(await installer.done, 0); assert.match(b.text(), /section_completed/)
-      }
-      assert.equal(fs.readFileSync(path.join(f.home, 'host-running.json'), 'utf8'), marker)
-    } finally { await f.cleanup() }
+    assert.throws(()=>f.run('Verify'), error=>error.status===1 && error.stdout.trim()==='INSTALLATION_ASSET_MISSING' && !error.stdout.includes(f.root))
+  } finally { f.cleanup() }
+})
+test('real NSIS hook compiles without legacy drain or reboot continuation gates', {skip}, () => {
+  const f=fixture()
+  try {
+    const cache=path.join(process.env.LOCALAPPDATA,'electron-builder/Cache/nsis')
+    const nsis=fs.readdirSync(cache).find(name=>name.startsWith('nsis-3.'))
+    const compiler=path.join(cache,nsis,'makensis.exe')
+    const ns=value=>value.replaceAll('/','\\').replaceAll('$','$$')
+    const source=path.join(f.root,'compile.nsi')
+    fs.writeFileSync(source,`Unicode true\n!include "LogicLib.nsh"\nName "Isolated Runtime hook"\nOutFile "${ns(path.join(f.root,'fixture.exe'))}"\nRequestExecutionLevel user\n!define APP_ID "cn.aidingyi.agent.runtime.acceptance"\n!define APP_GUID "isolated-fixture"\n!define UNINSTALL_APP_KEY "isolated-fixture"\n!define RUNTIME_CLEAN_INSTALL_SOURCE "${ns(script)}"\n!define UAC_IsInnerInstance '0 == 1'\n!define UAC_SYNCREGISTERS 0\n!define UAC_SYNCINSTDIR 0\n!macro UAC_AsUser_Call kind function flags\nCall \${function}\n!macroend\n!include "${ns(path.join(desktop,'scripts/runtime-installer.nsh'))}"\n!insertmacro customHeader\nSection\nStrCpy $INSTDIR "${ns(f.install)}"\n!insertmacro runtimeCheckBeforeInstall\n!insertmacro customInstall\nSectionEnd\n`,'utf8')
+    execFileSync(compiler,['/V2',source],{encoding:'utf8',windowsHide:true,timeout:30000})
+    assert.equal(fs.existsSync(path.join(f.root,'fixture.exe')),true)
+    const hook=fs.readFileSync(path.join(desktop,'scripts/runtime-installer.nsh'),'utf8')
+    assert.equal(/PrepareDeferred|runtimePendingUpgrade|600|3010/.test(hook),false)
+  } finally { f.cleanup() }
+})
+test('fixture seam rejects production and directory scope mismatches without touching real registry', {skip}, () => {
+  const f = fixture()
+  try {
+    for (const [appId, install, code] of [
+      ['cn.aidingyi.agent.runtime', f.install, 'FIXTURE_NOT_ALLOWED_IN_PRODUCTION'],
+      ['cn.aidingyi.agent.runtime.acceptance', f.root, 'FIXTURE_DIRECTORY_SCOPE_MISMATCH'],
+    ]) {
+      assert.throws(() => execFileSync(powershell, ['-NoProfile','-File',script,'-Mode','Stop','-AppId',appId,'-InstallDirectory',install,'-FixtureRegistryId',f.id], { encoding:'utf8',windowsHide:true,env:f.env,timeout:30000 }),
+        error => error.status === 1 && error.stdout.trim() === code)
+    }
+  } finally { f.cleanup() }
+})
+test('fresh installation probe rejects a Host whose describe succeeds while getState is blocked', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aid-host-check-'))
+  try {
+    const resources = path.join(root, 'resources'), host = path.join(resources, 'runtime/host'), metadata = path.join(root, 'metadata')
+    const archiveSource = path.join(root, 'archive/dist/renderer')
+    fs.mkdirSync(host, {recursive:true}); fs.mkdirSync(archiveSource, {recursive:true})
+    fs.writeFileSync(path.join(archiveSource,'index.html'), '<html><body>fixture page</body></html>')
+    await createPackage(path.join(root,'archive'), path.join(resources,'app.asar'))
+    fs.writeFileSync(path.join(host,'package.json'), '{"type":"module"}')
+    fs.writeFileSync(path.join(host,'dpapi.js'), 'export async function dpapiProtect(v){return v}; export async function dpapiUnprotect(v){return v}')
+    const entry = path.join(host,'managed-entry.js'), checker = path.join(desktop,'scripts/runtime-installation-check.mjs')
+    for (const blocked of [false,true]) {
+      fs.writeFileSync(entry, `process.on('message',r=>process.send({request_id:r.request_id,method:r.method,code:0,error:'',result:r.method==='describe'?{api_major:1,features:['first_party_plugins']}:{state:'${blocked?'blocked':'stopped'}',connection:'unpaired',${blocked?"blocked_reason:'fixture block'":''}}}));process.on('disconnect',()=>process.exit(0))`)
+      const run=()=>execFileSync(process.execPath,[checker,entry,metadata],{encoding:'utf8',windowsHide:true,timeout:30000})
+      if (blocked) assert.throws(run,error=>error.status!==0 && error.stderr.includes('FRESH_HOST_NOT_USABLE'))
+      else assert.equal(run().trim(),'INSTALLATION_CHECK_PASS')
+    }
+  } finally {
+    assert.equal(path.dirname(path.resolve(root)),path.resolve(os.tmpdir()))
+    assert.match(path.basename(root),/^aid-host-check-/)
+    fs.rmSync(root,{recursive:true,force:true})
   }
-});
-
-test('pending Restore retries one simulated CLR launcher failure but never retries a validation exit1', { skip: unavailable }, async () => {
-  for (const pendingFault of ['negative', 'validation']) {
-    const f = await fixture()
-    try {
-      const b = build(f, pendingFault, { pendingFault }); prepare(f, b); assert.equal(await b.launch().done, 0)
-      if (pendingFault === 'negative') {
-        assert.match(b.text(), /pending_attempt=1/); assert.match(b.text(), /pending_attempt=2/); assert.doesNotMatch(b.text(), /pending_attempt=3/)
-        assert.match(b.text(), /restore_exit=0/); assert.match(runValue(f), /isolated-original/)
-      } else {
-        assert.match(b.text(), /pending_attempt=1/); assert.doesNotMatch(b.text(), /pending_attempt=2/)
-        assert.match(b.text(), /restore_exit=1/); assert.equal(runValue(f), 'ABSENT'); assert.equal(fs.existsSync(path.join(f.userData, 'upgrade-pending/state.bin')), true)
-      }
-    } finally { await f.cleanup() }
-  }
-});
+})

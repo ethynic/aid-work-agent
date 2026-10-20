@@ -144,10 +144,10 @@ async def list_external_users(
 
     # 智能体名称反查：按「用户 × 智能体」组合返回时把 subagent_id 翻译为中文名
     if group_by_subagent:
-        from src.db.subagent_definition_db import SubagentDefinitionDB
+        from src.saas.services.agent_name_resolver import resolve_agent_names
 
         agent_ids = sorted({u.get("subagent_id") for u in result.get("users", []) if u.get("subagent_id")})
-        agent_name_map = SubagentDefinitionDB.get_name_map(agent_ids) if agent_ids else {}
+        agent_name_map = resolve_agent_names(tenant_id, agent_ids)
         for u in result.get("users", []):
             sid = u.get("subagent_id") or ""
             u["subagent_name"] = agent_name_map.get(sid, sid) if sid else ""

@@ -243,3 +243,57 @@ test('disconnect finishes pending queries immediately rather than keeping the fu
     assert.equal(disconnected, 1)
   } finally { await supervisor.stopAndExit(); t.mock.timers.reset() }
 })
+
+
+for (const product of ['desktop', 'runtime_app'] as const) {
+  for (const configured of [true, false]) {
+    test(`${product} Host spawn ignores ambient BOSS and device credentials when configured=${configured}`, async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'h3-boss-env-'))
+      const entry = path.join(root, 'host.cjs')
+      const excluded = ['OPENAI_API_KEY', 'ZHIPUAI_API_KEY', 'DEVICE_TOKEN', 'AIDWORK_DEVICE_TOKEN',
+        'AIDWORK_RUNTIME_DEVICE_TOKEN', 'AID_BOSS_DEVICE_TOKEN', 'AID_WECOM_SERVER_TOKEN',
+        'NODE_OPTIONS', 'NODE_PATH', 'AID_BOSS_SERVER_EXTRA', 'AIDWORK_RUNTIME_SERVER', 'AIDWORK_RUNTIME_DEVICE_TOKEN']
+      const keys = [...excluded, 'AID_BOSS_SERVER_URL', 'AID_BOSS_SERVER_TOKEN', 'AIDWORK_RUNTIME_HOME', 'AIDWORK_RUNTIME_CLEAN_GENERATION', 'APPDATA']
+      const previous = new Map(keys.map(key => [key, process.env[key]]))
+      const url = 'https://vision-backend.invalid', token = 'fixture-boss-token-not-a-real-credential'
+      const evidence = `{
+        boss_url: process.env.AID_BOSS_SERVER_URL === undefined,
+        boss_token: process.env.AID_BOSS_SERVER_TOKEN === undefined,
+        unrelated_secrets_absent: ${JSON.stringify(excluded)}.every(key => process.env[key] === undefined),
+        controlled_home: process.env.AIDWORK_RUNTIME_HOME === ${JSON.stringify(root)},
+        controlled_generation: process.env.AIDWORK_RUNTIME_CLEAN_GENERATION === ${product === 'runtime_app' ? "'1'" : 'undefined'},
+        system_environment_preserved: process.env.APPDATA === 'fixture-system-appdata'
+      }`
+      await writeFile(entry, host.replace("host_version:'fixture',", `host_version:'fixture',environment_evidence:${evidence},`))
+      const supervisor = new RuntimeSupervisor({ nodeExecutable: process.execPath, hostEntry: entry, home: root, supervisor: product,
+        takeSelectedPackage: async () => { throw new Error('no selection') }, onEvent: () => {}, onDisconnect: () => {}, requestTimeoutMs: 5000 })
+      try {
+        for (const key of excluded) process.env[key] = key === 'NODE_OPTIONS' ? '--no-warnings' : 'fixture-unrelated-sensitive-value'
+        process.env.AIDWORK_RUNTIME_HOME = 'parent-home-must-not-override-product-home'
+        process.env.AIDWORK_RUNTIME_CLEAN_GENERATION = 'parent-generation-must-not-override-product'
+        process.env.APPDATA = 'fixture-system-appdata'
+        if (configured) { process.env.AID_BOSS_SERVER_URL = url; process.env.AID_BOSS_SERVER_TOKEN = token }
+        else { delete process.env.AID_BOSS_SERVER_URL; delete process.env.AID_BOSS_SERVER_TOKEN }
+        const reply = await supervisor.request({ request_id: 'environment-proof', method: 'describe', params: {} })
+        assert.equal(reply.code, 0)
+        assert.deepEqual((reply.result as { environment_evidence: unknown }).environment_evidence, {
+          boss_url: true, boss_token: true, unrelated_secrets_absent: true, controlled_home: true,
+          controlled_generation: true, system_environment_preserved: true,
+        })
+      } finally {
+        try { await supervisor.stopAndExit() }
+        finally {
+          for (const [key, value] of previous) { if (value === undefined) delete process.env[key]; else process.env[key] = value }
+          await rm(root, { recursive: true, force: true })
+        }
+      }
+    })
+  }
+}
+
+test('renderer management requests cannot supply backend credential or environment overrides', () => {
+  for (const key of ['AID_BOSS_SERVER_URL', 'AID_BOSS_SERVER_TOKEN', 'env', 'token']) {
+    assert.throws(() => parseRuntimeRequest({ request_id: 'renderer-env', method: 'start',
+      params: { request_key: 'start', [key]: 'fixture-cannot-inject-main-environment' } }), /无效/)
+  }
+})

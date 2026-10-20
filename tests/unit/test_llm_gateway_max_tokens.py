@@ -36,6 +36,73 @@ class TestResolveMaxTokens:
                 assert gw._resolve_max_tokens(None) == DEFAULT_MAX_TOKENS
 
 
+class TestChatLiteDefaultMaxTokens:
+    """chat_lite 未显式指定 max_tokens 时用 DEFAULT_MAX_TOKENS 兜底，不查能力上限表
+
+    背景（2026-10-12 事故）：推送循环 chat_lite 未指定 max_tokens，
+    _resolve_max_tokens 查表返回 deepseek-flash 能力上限 393216，
+    模型退化独白跑满上限，单次调用烧 177 积分。
+    """
+
+    def _gw(self) -> LLMGateway:
+        gw = _new_gateway()
+        gw.provider_name = "deepseek"
+        return gw
+
+    async def test_default_is_not_capability_limit(self):
+        gw = self._gw()
+        captured = {}
+
+        async def fake_chat(**kwargs):
+            captured.update(kwargs)
+            return {"content": "ok"}
+
+        with patch("src.config.settings.settings") as mock_settings, \
+             patch.object(gw, "chat", side_effect=fake_chat):
+            mock_settings.llm.get_lite_target.return_value = ("deepseek", "deepseek-flash")
+            mock_settings.llm.model_max_tokens = {"deepseek-flash": 393216}
+            await gw.chat_lite([{"role": "user", "content": "hi"}])
+        assert captured["max_tokens"] == DEFAULT_MAX_TOKENS
+
+    async def test_explicit_value_passed_through(self):
+        gw = self._gw()
+        captured = {}
+
+        async def fake_chat(**kwargs):
+            captured.update(kwargs)
+            return {"content": "ok"}
+
+        with patch("src.config.settings.settings") as mock_settings, \
+             patch.object(gw, "chat", side_effect=fake_chat):
+            mock_settings.llm.get_lite_target.return_value = ("deepseek", "deepseek-flash")
+            await gw.chat_lite([{"role": "user", "content": "hi"}], max_tokens=8192)
+        assert captured["max_tokens"] == 8192
+
+    async def test_default_on_cross_provider_branch(self):
+        import contextlib
+
+        gw = _new_gateway()
+        gw.provider_name = "deepseek"
+        captured = {}
+
+        async def fake_provider_chat(**kwargs):
+            captured.update(kwargs)
+            return {"content": "ok"}
+
+        class _FakePool:
+            def acquire(self):
+                return contextlib.nullcontext("fake-key")
+
+        with patch("src.config.settings.settings") as mock_settings, \
+             patch("src.llm.gateway._build_key_pool", return_value=_FakePool()), \
+             patch("src.llm.gateway._build_provider") as mock_build:
+            mock_settings.llm.get_lite_target.return_value = ("zhipu", "GLM-5.3-Flash")
+            mock_settings.llm.model_max_tokens = {"GLM-5.3-Flash": 131072}
+            mock_build.return_value = type("P", (), {"chat": staticmethod(fake_provider_chat)})()
+            await gw.chat_lite([{"role": "user", "content": "hi"}])
+        assert captured["max_tokens"] == DEFAULT_MAX_TOKENS
+
+
 class TestClampMaxTokens:
     def test_clamp_to_config_limit(self):
         with patch("src.llm.providers.qwen.settings") as mock_settings:

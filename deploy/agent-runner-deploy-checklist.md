@@ -112,6 +112,10 @@ agent2（test）与 agent3（dev）共用业务库 `aid_work_agent2`（`deploy/�
 **同一数据库同一时刻只允许一个环境常驻 runner-worker**，
 否则两环境 worker 会在同一 lease 池上跨环境分摊任务。启动前也核查旧 KF 容器已完成收尾。
 
+> **2026-10-15 起 agent3 环境已停用**（共库 + lease 池跨环境抢任务，见 `服务器部署现状.md` §1.2），
+> 本条共库风险随之解除。恢复启用 agent3 的前置条件：先为其新建独立业务库（与
+> `aid_work_agent2` 分离），再回到本清单核查。
+
 ### ④ 令牌与 peer 检查（凭据不入文档/日志）
 
 `runner-worker` 启动门槛：`agent_runner.enabled=true` 且 `web_service_token` 明文存在

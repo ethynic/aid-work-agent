@@ -1,5 +1,5 @@
 import type { ChatMessage, ProgressMessage, DownloadableFile, ImageRef } from '@/types'
-import type { ChatMessageRecord } from '@/api/session'
+import type { ChatMessageRecord, FailedMessageUI } from '@/api/session'
 import type { RunnerSupplementalInput, RunnerView, RunnerPresentation } from '@/api/runner'
 import { extractQuickOptions } from './quickOptions'
 
@@ -58,9 +58,13 @@ export function historyMessages(records: ChatMessageRecord[]): ChatMessage[] {
 
 export function runnerMessages(row: RunnerView): ChatMessage[] {
   const accepted = time(row.accepted_at, Date.now())
-  const finished = time(row.finished_at || row.updated_at, accepted)
   const snapshot = row.snapshot
   const display = { ...(row.result?.assistant_metadata || {}), ...snapshot }
+  // Control acceptance/rejection updates the runner, not the old assistant reply.
+  // Legacy snapshots without event times retain the accepted time while parked.
+  const parked = ['waiting', 'paused', 'interrupted'].includes(row.status)
+  const lastProgress = Math.max(accepted, ...(display.progressMessages || []).map(item => time(item.timestamp, accepted)))
+  const finished = time(row.finished_at, parked ? lastProgress : time(row.updated_at, accepted))
   const images: ImageRef[] = (row.result?.images || snapshot.images || []).map(image => ({ ...image,
     placement: image.placement || snapshot.imagesPlacement || 'after_text' }))
   const common = { runnerId: row.runner_id, clientRequestId: row.client_request_id, queueOrder: row.queue_order }
@@ -74,6 +78,13 @@ export function runnerMessages(row: RunnerView): ChatMessage[] {
   if (!['completed', 'failed', 'cancelled'].includes(row.status)
       && wait?.kind === 'verification' && typeof wait.question === 'string') {
     details.waitingNotice = wait.question
+  }
+  if (!details.waitingNotice && wait?.kind === 'verification'
+      && !['completed', 'failed', 'cancelled'].includes(row.status)) {
+    details.waitingNotice = '任务已暂停，当前操作结果需要核对。请先检查页面和实际结果，再决定如何继续；系统不会自动重复操作。'
+  }
+  if (!details.waitingNotice && row.status === 'interrupted') {
+    details.waitingNotice = '任务已中断，尚未完成。已保留执行记录；下方进度仅表示已执行的步骤，不能作为最终结果。可尝试继续，若仍无法恢复请联系管理员。'
   }
   if (['completed', 'failed', 'cancelled'].includes(row.status) && !details.progressMessages?.some(item => ['complete', 'error'].includes(item.type))) {
     details.progressMessages?.push({ type: row.status === 'completed' ? 'complete' : 'error', timestamp: finished,
@@ -109,15 +120,44 @@ export function runnerMessages(row: RunnerView): ChatMessage[] {
   for (const input of inputs) {
     if (!additions.some(item => item.messageId===input.message_id)) additions.push(inputMessage(input))
   }
-  return [
+  const messages: ChatMessage[] = [
     { ...common, role: 'user', messageId: snapshot.input?.message_id || row.runner_id + ':user',
       content: snapshot.input?.text || '', attachments: snapshot.input?.attachments, timestamp: accepted },
     ...additions,
-    { ...common, role: 'assistant', messageId: row.runner_id + ':assistant',
+  ]
+  if (row.status === 'failed') {
+    const input = [...messages].reverse().find(message => message.role === 'user')
+    if (input) input.runnerFailure = { message: '服务暂时不可用，请稍后重试。' }
+  }
+  const assistant: ChatMessage = { ...common, role: 'assistant', messageId: row.runner_id + ':assistant',
       content: row.result?.output ?? snapshot.output ?? '', timestamp: finished,
       ...details, images, cancelled: row.status === 'cancelled',
-      runnerActive: !['completed', 'failed', 'cancelled'].includes(row.status) },
-  ]
+      runnerActive: !['completed', 'failed', 'cancelled'].includes(row.status) }
+  // 失败详情归到用户消息；已有回复/产物仍保留，不制造空白最终回复框。
+  if (row.status !== 'failed' || assistant.content.trim() || images.length
+      || details.downloadableFiles?.length || details.browserAssistance) messages.push(assistant)
+  return messages
+}
+
+/** Only explicit retry links and completed facts can retire a failed input. */
+export function visibleFailedMessages(messages: ChatMessage[], rows: RunnerView[], preferences: FailedMessageUI): ChatMessage[] {
+  const succeeded = new Set(rows.filter(row => row.status === 'completed').map(row => row.client_request_id))
+  const replaced = new Set<string>()
+  const sources = new Map(rows.filter(row => row.status === 'failed').map(row => [row.runner_id, row]))
+  // Propagate success through a chain of failed retries; identical text is never identity.
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const [requestId, sourceId] of Object.entries(preferences.retry_sources || {})) {
+      const source = sources.get(sourceId)
+      if (!source || replaced.has(sourceId) || !succeeded.has(requestId)) continue
+      replaced.add(sourceId)
+      succeeded.add(source.client_request_id)
+      changed = true
+    }
+  }
+  return messages.filter(message => !message.runnerFailure || !message.runnerId
+    || !(preferences.hidden_failed?.[message.runnerId] || replaced.has(message.runnerId)))
 }
 
 /** Display times never reorder a turn. Stable runner IDs replace optimistic/history copies. */

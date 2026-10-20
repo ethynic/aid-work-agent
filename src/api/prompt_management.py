@@ -627,6 +627,38 @@ async def tenant_list_labels(request: Request, scope_id: str):
         return _error_response("获取标签列表失败")
 
 
+def _sync_extra_to_instance(tenant_id: str, scope_id: str) -> None:
+    """production 标记后把 extra 内容同步到租户实例表（过渡期双写，失败不阻塞）。
+
+    scope_id 形如 extra:{subagent}:{tenant_id}；解析出的 tenant 不等于当前
+    请求租户时跳过（防伪造 scope_id 跨租户写）。
+    """
+    try:
+        if not scope_id.startswith("extra:"):
+            return
+        rest = scope_id[len("extra:"):]
+        if not rest.endswith(f":{tenant_id}"):
+            return
+        subagent_name = rest[: -len(f":{tenant_id}")]
+        if not subagent_name or ":" in subagent_name:
+            return
+
+        from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
+        from src.prompts.prompt_resolver import prompt_resolver
+        from src.saas.services.tenant_agent_instance_service import create_direct_customization
+
+        content = prompt_resolver.resolve(
+            scope="tenant_extra", scope_id=scope_id, tenant_id=tenant_id
+        )
+        create_direct_customization(tenant_id, subagent_name)
+        TenantAgentInstanceDB.update_overrides(
+            tenant_id, subagent_name,
+            {"extra_prompt": (content or "").strip() or None},
+        )
+    except Exception as e:
+        logger.opt(exception=True).error(f"双写实例表 extra_prompt 失败 scope_id={scope_id}: {e}")
+
+
 @tenant_router.put("/{scope_id}/labels/{label}")
 @audit_action(BehaviorAction.UPDATE, BehaviorResourceType.PROMPT, id_arg="scope_id")
 async def tenant_set_label(
@@ -646,6 +678,11 @@ async def tenant_set_label(
         )
         if not result:
             return _error_response("设置标签失败")
+
+        # 双写租户实例表 extra_prompt（tenant_agent_instances 迁移过渡期）
+        if label == "production":
+            _sync_extra_to_instance(tenant_id, scope_id)
+
         return _success_response(result)
     except HTTPException:
         raise

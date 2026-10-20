@@ -1,3 +1,5 @@
+import { isBossPage } from '../boss/PageNavigator.js'
+import { runVerifiedPageOperation } from './pageOperation.js'
 /**
  * boss_select_job operation（设计 §10.7）：推荐牛人页切换当前招聘职位到指定职位名（写动作）。
  *
@@ -31,22 +33,27 @@ export function createBossSelectJobOperation(
         sessionFactory,
         () => (jobName ? null : 'job_name（职位名）不能为空'),
         async (session, tracker) => {
-          const probe = await session.snapshot()
-          if (!probe.strings.some((s) => FILTER_BUTTON_PATTERN.test(s.trim()))) {
-            throw new CodedOperationError(
-              'WRONG_PAGE',
-              '当前页面不是推荐牛人列表页（未找到「筛选」按钮），请先用 boss_goto 切换到「推荐牛人」页',
-            )
-          }
-          const switcher = new JobSwitcher({ snapshot: session.snapshot, click: session.click, signal: ctx.signal })
-          ctx.progress({ stage: 'execute', message: `切换到职位「${jobName}」` })
-          await switcher.selectJob({ jobName })
-          tracker.completed = 1
-          return {
-            message: `完成：已切换到职位「${jobName}」`,
-            data: { job_name: jobName, switched: true },
-            effect: 'applied',
-          }
+          const verified = await runVerifiedPageOperation({ name: 'boss_select_job', goal: '切换当前招聘职位', expected: '当前职位框精确等于目标且下拉已收起', operationClass: 'page_state', target: jobName }, async (attempt) => {
+            if (!isBossPage(await session.getUrl(), 'recommend')) throw new CodedOperationError('WRONG_PAGE', '当前不在推荐牛人页面，请先用 boss_goto recommend')
+            const probe = await session.snapshot()
+            if (!probe.strings.some((s) => FILTER_BUTTON_PATTERN.test(s.trim()))) {
+              throw new CodedOperationError(
+                'WRONG_PAGE',
+                '当前页面不是推荐牛人列表页（未找到「筛选」按钮），请先用 boss_goto 切换到「推荐牛人」页',
+              )
+            }
+            const switcher = new JobSwitcher({ snapshot: session.snapshot, click: (...args) => attempt.input(() => session.click(...args)), signal: ctx.signal })
+            ctx.progress({ stage: 'execute', message: `切换到职位「${jobName}」` })
+            await switcher.selectJob({ jobName })
+            attempt.verified({status: 'met', evidence: [`当前职位框已验证为${jobName}且下拉收起`]})
+            tracker.completed = 1
+            return {
+              message: `完成：已切换到职位「${jobName}」`,
+              data: { job_name: jobName, switched: true },
+              effect: 'applied' as const,
+            }
+          })
+          return { ...verified.value, data: { ...verified.value.data, operation_recovery: verified.facts } }
         },
       )
     },

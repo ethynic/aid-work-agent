@@ -310,7 +310,11 @@ class TestDeleteExtraMd:
 # ============================================================
 
 class TestLoadExtraMdContract:
-    """调用真实 PromptSources 方法，验证租户 scope、返回内容及异常兜底。"""
+    """调用真实 PromptSources 方法，验证实例行权威语义、租户 scope、返回内容及异常兜底。
+
+    实例行（tenant_agent_instances）存在时以其 extra_prompt 为准：空即租户已清空
+    定制，不再回退 prompt_registry；仅无实例行时才回退 registry 存量数据。
+    """
 
     @pytest.fixture
     def agent(self):
@@ -321,13 +325,50 @@ class TestLoadExtraMdContract:
         instance._init_tenant_id = "tenant_001"
         return instance
 
+    @pytest.fixture
+    def no_instance_row(self):
+        """无实例行（存量环境未落库）→ 走 registry 回退路径"""
+        with patch(
+            "src.db.tenant_agent_instance_db.TenantAgentInstanceDB.get", return_value=None
+        ):
+            yield
+
     @pytest.mark.parametrize("content, expected", [("  定制内容\n", "定制内容"), (None, None), ("", None)])
-    def test_load_uses_tenant_resolver_and_strips_content(self, agent, content, expected):
+    def test_load_uses_tenant_resolver_and_strips_content(self, agent, no_instance_row, content, expected):
         with patch("src.prompts.prompt_resolver.prompt_resolver.resolve", return_value=content) as resolve:
             assert agent._load_extra_md() == expected
         resolve.assert_called_once_with(
             scope="tenant_extra", scope_id="extra:travel-consultant:tenant_001", tenant_id="tenant_001",
         )
+
+    def test_instance_row_content_wins(self, agent):
+        """实例行有内容：直接返回，不回退 registry"""
+        row = {"agent_id": "travel-consultant", "base_agent_id": "travel-consultant", "extra_prompt": "  实例内容\n"}
+        with patch("src.db.tenant_agent_instance_db.TenantAgentInstanceDB.get", return_value=row), \
+             patch("src.prompts.prompt_resolver.prompt_resolver.resolve") as resolve:
+            assert agent._load_extra_md() == "实例内容"
+        resolve.assert_not_called()
+
+    @pytest.mark.parametrize("agent_id, base_agent_id", [
+        ("travel-consultant", "travel-consultant"),          # 直用实例行
+        ("travel-consultant-abc123", "travel-consultant"),   # 副本实例行
+    ])
+    def test_instance_row_without_prompt_clears_customization(self, agent, agent_id, base_agent_id):
+        """实例行存在但 extra_prompt 为空：视为已清空定制，不回退 registry"""
+        row = {"agent_id": agent_id, "base_agent_id": base_agent_id, "extra_prompt": ""}
+        with patch("src.db.tenant_agent_instance_db.TenantAgentInstanceDB.get", return_value=row), \
+             patch("src.prompts.prompt_resolver.prompt_resolver.resolve", return_value="旧存量内容") as resolve:
+            assert agent._load_extra_md() is None
+        resolve.assert_not_called()
+
+    def test_instance_lookup_failure_falls_back_to_registry(self, agent):
+        """实例表查询异常：回退 registry，不中断提示词装配"""
+        with patch(
+            "src.db.tenant_agent_instance_db.TenantAgentInstanceDB.get",
+            side_effect=RuntimeError("pool not ready"),
+        ), patch("src.prompts.prompt_resolver.prompt_resolver.resolve", return_value="存量内容") as resolve:
+            assert agent._load_extra_md() == "存量内容"
+        resolve.assert_called_once()
 
     def test_missing_runtime_tenant_does_not_inherit_request_context(self, agent):
         agent._init_tenant_id = None
@@ -344,7 +385,7 @@ class TestLoadExtraMdContract:
             assert agent._load_extra_md() is None
         resolve.assert_not_called()
 
-    def test_load_resolver_failure_returns_none(self, agent):
+    def test_load_resolver_failure_returns_none(self, agent, no_instance_row):
         with patch("src.prompts.prompt_resolver.prompt_resolver.resolve", side_effect=RuntimeError("DB unavailable")) as resolve:
             assert agent._load_extra_md() is None
         resolve.assert_called_once()

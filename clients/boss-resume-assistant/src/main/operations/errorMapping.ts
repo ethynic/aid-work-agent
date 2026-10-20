@@ -112,6 +112,9 @@ export function mapExecutorError(err: unknown): MappedError {
       message: `${message}（写动作已发出但结果无法确认，请人工查看页面后再决定下一步，系统不会自动重试）`,
     }
   }
+  if (message.includes('[BOSS_POWERSHELL_PREPARE]') || message.includes('[BOSS_POWERSHELL_LAUNCH]')) {
+    return { code: 'INTERNAL_ERROR', message: `本机 PowerShell 脚本启动失败：${message}` }
+  }
   if (causeCode(err) === 'ECONNREFUSED' || CHROME_UNAVAILABLE_MARKERS.some((m) => message.includes(m))) {
     return {
       code: 'CHROME_UNAVAILABLE',

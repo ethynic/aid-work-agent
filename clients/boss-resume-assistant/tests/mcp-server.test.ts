@@ -258,3 +258,21 @@ test('stdout 零污染：原始 spawn 下 stdout 只出现 JSON-RPC 帧，stdin 
   }
   await waitFor(() => exited !== null, 10000)
 })
+
+
+test('internal target refs survive MCP validation but never enter domain argument validation or select another tab', async () => {
+  const client = await startClient([CLI, 'mcp', '--stdio', '--cdp-port', String(await freePort())])
+  try {
+    for (const [name, args] of [
+      ['boss_filter', { experience: '5-10年' }],
+      ['boss_clear_filter', {}],
+      ['boss_open_detail', { name: '张测试' }],
+    ] as const) {
+      const result = structuredOf(await client.callTool({ name, arguments: { ...args, _boss_target_ref: '00000000-0000-4000-8000-000000000099' } }))
+      assert.equal(result.code, 'UI_CHANGED')
+      const data = result.data as Record<string, unknown>
+      assert.equal(data.recovery_action_error, 'STALE_OBSERVATION')
+      assert.equal(data.input_status, 'not_started')
+    }
+  } finally { await client.close() }
+})

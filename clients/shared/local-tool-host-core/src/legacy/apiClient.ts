@@ -47,6 +47,12 @@ export interface PairResponse {
   replacement_pending?: boolean
 }
 
+export interface CleanPairRequest {
+  code?: string; pairing_protocol: 3; registration_id: string; registration_token: string
+  name: string; platform: string; runtime_version: string; capabilities: Record<string, unknown>
+  machine_fingerprint: string; previous_device_token?: string
+}
+
 export interface HeartbeatResponse {
   selected: boolean
   server_time?: string
@@ -274,6 +280,20 @@ export class ApiClient {
   async completeReplacement(): Promise<void> {
     const res = await this.post('/api/local-tools/runtime/replacement/complete', {}) as Record<string, unknown>
     if (res.success !== true || res.replacement_completed !== true) throw new ApiError(502, '旧设备注销尚未确认')
+  }
+
+  /** Protocol 3 is explicit: never consume a code through an older server. */
+  async pairClean(req: CleanPairRequest): Promise<PairResponse> {
+    const res = await this.post('/api/local-tools/runtime/pair', req, { auth: false }) as Record<string, unknown>
+    if (res.success !== true || res.pairing_protocol !== 3 || res.registration_completed !== true
+      || typeof res.device_id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(res.device_id)
+      || res.device_token !== req.registration_token) throw new ApiError(502, '服务器未完成新版连接注册，请升级配套服务端', undefined, 'PAIRING_PROTOCOL_UNSUPPORTED')
+    return { device_id: res.device_id, device_token: req.registration_token }
+  }
+
+  async activateDevice(): Promise<void> {
+    const res = await this.post('/api/local-tools/runtime/activate', {}) as Record<string, unknown>
+    if (res.success !== true || res.selected !== true) throw new ApiError(502, '设备选定尚未确认')
   }
 
   async heartbeat(req: { runtime_version: string; capabilities: Record<string, unknown>; manifest_digest: string }, signal?: AbortSignal): Promise<HeartbeatResponse> {

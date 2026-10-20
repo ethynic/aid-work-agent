@@ -2,6 +2,7 @@ export type ManagementMethod = 'describe' | 'getState' | 'plugins.list' | 'opera
 export interface ManagementRequest { request_id: string; method: ManagementMethod; params: Record<string, string> }
 /** H3 supplies this port from the trusted preload; no executable, path or business invocation. */
 export interface RuntimeManagementPort {
+  readonly automaticConnection?: boolean
   request(request: ManagementRequest): Promise<unknown>
   observe(listener: (event: unknown) => void): () => void
   onDisconnect?(listener: () => void): () => void

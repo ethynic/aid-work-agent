@@ -7,6 +7,7 @@
  * 借用真实鼠标约 1-2 秒，期间勿动鼠标（与筛选/发送同通道防风控）。
  */
 import { OverlayDismissExecutor } from '../boss/OverlayDismissExecutor.js'
+import { VisualRecovery, type VisualRecoveryDeps } from '../boss/visualRecovery.js'
 import {
   defaultSessionFactory,
   runBossOperation,
@@ -16,11 +17,13 @@ import type { BossOperation, OperationResult, OpContext } from './types.js'
 
 export interface BossOverlayDismissArgs {
   /** 关闭控件的精确文本（白名单内，与快照文本 trim 全等） */
-  text: string
+  text?: string
+  recovery_ref?: string
 }
 
 export function createBossOverlayDismissOperation(
   sessionFactory: BossSessionFactory = defaultSessionFactory,
+  visualDeps: VisualRecoveryDeps = {},
 ): BossOperation<BossOverlayDismissArgs> {
   return {
     name: 'boss_overlay_dismiss',
@@ -31,12 +34,17 @@ export function createBossOverlayDismissOperation(
         ctx,
         sessionFactory,
         () => {
+          if (args.recovery_ref !== undefined) return args.text !== undefined || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(args.recovery_ref) ? 'recovery_ref 需要 UUID，且与 text 互斥' : null
           if (typeof text !== 'string' || !text.trim()) {
             return 'text（关闭控件文本）不能为空'
           }
           return null
         },
         async (session) => {
+          if (args.recovery_ref) {
+            const data = await new VisualRecovery(visualDeps).dismiss(args.recovery_ref, session, ctx.signal)
+            return { message: '已投递一次关闭输入，需重新观察验证阻挡是否消失', data, effect: 'none' }
+          }
           const executor = new OverlayDismissExecutor({
             snapshot: session.snapshot,
             clickBrowse: session.clickBrowse,

@@ -441,3 +441,12 @@ test('canvas 未找到 → ResumeReadError（fail-loud），不滚不截不拼',
   assert.equal(f.captures.length, 0)
   assert.equal(f.stitchCalls.length, 0)
 })
+
+
+test('分段中原详情画布消失时停止采图，不把列表页当简历拼接', async () => {
+  const fake = makeFake([1000, 2000])
+  fake.readerDeps.snapshot = async () => fake.captures.length === 0 ? canvasSnap({ canvases: [CANVAS_BOUNDS] }) : canvasSnap({})
+  await assert.rejects(makeReader(fake).readResume(), /原简历画布消失或几何已变化/)
+  assert.equal(fake.captures.length, 1)
+  assert.equal(fake.stitchCalls.length, 0)
+})

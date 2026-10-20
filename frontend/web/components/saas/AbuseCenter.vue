@@ -84,30 +84,6 @@
             </BaseTable>
           </div>
 
-          <!-- 单用户明细弹框 -->
-          <BaseModal
-            v-model="showDetailModal"
-            :title="detailUser ? `${detailUser.nickname || detailUser.username || detailUser.user_id} 的请求明细` : '请求明细'"
-            size="lgx"
-          >
-            <div class="text-xs text-muted mb-2">窗口合计 {{ formatCredits(detailTotalCredits) }} 积分</div>
-            <div v-if="detailLoading" class="text-center py-6 text-muted text-sm">加载中...</div>
-            <template v-else-if="detailItems.length > 0">
-              <div class="table-scroll-wrapper">
-                <BaseTable :columns="detailColumns" :data="detailItems" row-key="id" table-fixed>
-                  <template #created_at="{ row }">{{ formatTime(row.created_at) }}</template>
-                  <template #user_message="{ row }">
-                    <span class="block truncate">{{ row.user_message }}</span>
-                  </template>
-                  <template #credit_cost="{ row }">{{ formatCredits(row.credit_cost) }}</template>
-                </BaseTable>
-              </div>
-            </template>
-            <div v-else class="text-center py-6 text-muted text-sm">窗口内暂无会话消耗记录</div>
-            <template #footer>
-              <BaseButton intent="secondary" @click="showDetailModal = false">关闭</BaseButton>
-            </template>
-          </BaseModal>
         </template>
         <div v-else class="text-center py-12 text-muted">窗口内暂无会话积分消耗</div>
       </div>
@@ -184,6 +160,31 @@
         </template>
         <div v-else class="text-center py-12 text-muted">暂无触发记录（观察模式下达到阈值即产生记录）</div>
       </div>
+
+      <!-- 单用户明细弹框（放在 Tab 容器外，禁用记录 Tab 打开时保持当前页签不切换） -->
+      <BaseModal
+        v-model="showDetailModal"
+        :title="detailUser ? `${detailUser.nickname || detailUser.username || detailUser.user_id} 的请求明细` : '请求明细'"
+        size="lgx"
+      >
+        <div class="text-xs text-muted mb-2">窗口合计 {{ formatCredits(detailTotalCredits) }} 积分</div>
+        <div v-if="detailLoading" class="text-center py-6 text-muted text-sm">加载中...</div>
+        <template v-else-if="detailItems.length > 0">
+          <div class="table-scroll-wrapper">
+            <BaseTable :columns="detailColumns" :data="detailItems" row-key="id" table-fixed>
+              <template #created_at="{ row }">{{ formatTime(row.created_at) }}</template>
+              <template #user_message="{ row }">
+                <span class="block truncate">{{ row.user_message }}</span>
+              </template>
+              <template #credit_cost="{ row }">{{ formatCredits(row.credit_cost) }}</template>
+            </BaseTable>
+          </div>
+        </template>
+        <div v-else class="text-center py-6 text-muted text-sm">窗口内暂无会话消耗记录</div>
+        <template #footer>
+          <BaseButton intent="secondary" @click="showDetailModal = false">关闭</BaseButton>
+        </template>
+      </BaseModal>
     </div>
   </div>
 </template>
@@ -407,8 +408,7 @@ function goUsageDetail(row: any) {
     request_count: 0,
     last_request_at: '',
   }
-  activeTab.value = 'usage'
-  loadedTabs.value.add('usage')
+  // 不切换 Tab：明细弹框已 Teleport 到 body，当前停留在禁用记录页签
   void openDetail(summary)
 }
 

@@ -1,3 +1,4 @@
+import { runVerifiedPageOperation } from './pageOperation.js'
 /**
  * boss_resume_detail operation（设计 §10.8）：读取当前打开的候选人在线简历详情并组装入库契约 payload。
  *
@@ -22,13 +23,14 @@
  * 前置校验：当前页面必须已打开候选人简历详情（存在大尺寸 CANVAS）→ 否则 WRONG_PAGE。
  * 详见 src/main/boss/ResumeReader.ts 头注释（坐标系/滚轮/到底检测的真机结论）。
  */
-import { execFile } from 'node:child_process'
+import { execPowerShellScript, PowerShellScriptError } from '../input/powerShell.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   MAX_SEGMENTS,
   ResumeReader,
+  RESUME_SNAPSHOT_OPTIONS,
   ResumeReadError,
   locateResumeCanvas,
   type DeviceRect,
@@ -62,20 +64,9 @@ function runPs(
   label: string,
   ErrorCtor: PsErrorCtor,
 ): Promise<{ stdout: string }> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      'powershell.exe',
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...args],
-      { timeout: timeoutMs },
-      (error, stdout, stderr) => {
-        if (error) {
-          const code = typeof error.code === 'number' ? error.code : undefined
-          reject(new ErrorCtor(`${label} 执行失败(exit=${code ?? 'unknown'}): ${stderr || error.message}`, code))
-        } else {
-          resolve({ stdout: String(stdout) })
-        }
-      },
-    )
+  return execPowerShellScript(scriptPath, args, { timeout: timeoutMs }).catch(error => {
+    const code = error instanceof PowerShellScriptError ? error.exitCode : undefined
+    throw new ErrorCtor(`${label} 执行失败(exit=${code ?? 'unknown'}): ${error instanceof Error ? error.message : 'PowerShell 执行失败'}`, code)
   })
 }
 
@@ -255,57 +246,63 @@ export function createBossResumeDetailOperation(
           return null
         },
         async (session) => {
-          // 前置校验：必须已打开候选人简历详情（存在大尺寸 CANVAS）
-          const probe = await session.snapshot(FILTER_SNAPSHOT_OPTIONS)
-          const stopReason = excludedRecommendationName(probe, nameParam)
-          if (stopReason) throw new CodedOperationError(stopReason === 'no_matching_candidates' ? 'NO_MATCHING_CANDIDATES' : 'RECOMMENDATIONS_BOUNDARY', '当前详情已证明属于筛选结果之外的补充推荐，已停止读取，未采图或提交简历')
-          const rect = locateResumeCanvas(probe)
-          if (!rect) {
-            throw new CodedOperationError(
-              'WRONG_PAGE',
-              '当前页面没有打开候选人在线简历详情（未找到简历画布）：请先在推荐牛人页点开一个候选人详情，再重试',
-            )
-          }
-          // job_name：推荐牛人页职位框的当前职位（JobSwitcher.locateJobBox 复用；非推荐页为 null，契约可选）
-          const jobBox = new JobSwitcher({ snapshot: session.snapshot, click: session.click }).locateJobBox(probe)
-          const viewport = viewportOf(probe)
-          const reader = new ResumeReader({
-            snapshot: session.snapshot,
-            captureFullpage: session.captureFullpage,
-            wheel: (deltaY, notches) => wheelAt(rect, viewport, deltaY, notches),
-            sameView: (a, b) => sameViewAt(a, b, rect),
-            stitch: stitchParts,
-            signal: ctx.signal,
-            onProgress: (stage, info) => {
-              if (stage === 'stitch') {
-                ctx.progress({ stage: 'execute', message: `拼接 ${info.segments} 段截图（云端识别准备）` })
-              }
-            },
+          const verified = await runVerifiedPageOperation({ name: 'boss_resume_detail', operationClass: 'readonly', target: nameParam,
+            goal: '读取已打开候选人的简历图像', expected: '原详情画布可读且分段图像已拼接，截断及接缝疑点单独报告' }, async (attempt) => {
+            // 前置校验：必须已打开候选人简历详情（存在大尺寸 CANVAS）
+            const probe = await session.snapshot(FILTER_SNAPSHOT_OPTIONS)
+            const stopReason = excludedRecommendationName(probe, nameParam)
+            if (stopReason) throw new CodedOperationError(stopReason === 'no_matching_candidates' ? 'NO_MATCHING_CANDIDATES' : 'RECOMMENDATIONS_BOUNDARY', '当前详情已证明属于筛选结果之外的补充推荐，已停止读取，未采图或提交简历')
+            const rect = locateResumeCanvas(probe)
+            if (!rect) {
+              throw new CodedOperationError(
+                'WRONG_PAGE',
+                '当前页面没有打开候选人在线简历详情（未找到简历画布）：请先在推荐牛人页点开一个候选人详情，再重试',
+              )
+            }
+            // job_name：推荐牛人页职位框的当前职位（JobSwitcher.locateJobBox 复用；非推荐页为 null，契约可选）
+            const jobBox = new JobSwitcher({ snapshot: session.snapshot, click: session.click }).locateJobBox(probe)
+            const viewport = viewportOf(probe)
+            const reader = new ResumeReader({
+              snapshot: () => session.snapshot(RESUME_SNAPSHOT_OPTIONS),
+              captureFullpage: session.captureFullpage,
+              wheel: (deltaY, notches) => attempt.input(() => wheelAt(rect, viewport, deltaY, notches)),
+              sameView: (a, b) => sameViewAt(a, b, rect),
+              stitch: stitchParts,
+              signal: ctx.signal,
+              onProgress: (stage, info) => {
+                if (stage === 'stitch') {
+                  ctx.progress({ stage: 'execute', message: `拼接 ${info.segments} 段截图（云端识别准备）` })
+                }
+              },
+            })
+            ctx.progress({ stage: 'execute', message: '回顶并分段截图（借用真实鼠标，请勿移动）' })
+            const result = await reader.readResume({ saveImageTo: saveImageTo || undefined })
+            attempt.verified({ status: result.segments > 0 && result.width > 0 && result.height > 0 && result.imageBuffer.length > 0 ? 'met' : 'inconclusive',
+              evidence: [`已采集${result.segments}段并拼接${result.width}x${result.height}图像，底部确认${result.bottomReached}，可疑接缝${result.suspectSeams.length}`] })
+            // 候选人姓名：唯一来源 = 显式入参（validate 已在读取前校验必传，此处恒非空）；
+            // 张冠李戴防护交叉校验在云端做（resume_name_matches 对云端识别文本，容忍 1 字误差）
+            const candidateName = nameParam
+            const truncateWarn = result.bottomReached
+              ? ''
+              : `；⚠️ 已达分段上限 ${MAX_SEGMENTS} 段仍未确认到底，简历内容可能被截断，请人工核对`
+            // P1 接缝质量警告：错位接缝（图像层 mis 超阈值）非空时提示人工核对——
+            // 拼接图该处可能有重复/缺失（真机 2026-09-02 黄钰鑫份曾中段重复/错乱）
+            const seamWarn =
+              result.suspectSeams.length > 0
+                ? `；⚠️ 可疑拼接接缝（错位：${result.suspectSeams.join('、')}）：拼接图内容可能有重复/缺失，请人工核对拼接图`
+                : ''
+            return {
+              message:
+                `完成：读取「${candidateName}」简历拼接图（${result.segments} 段，${result.width}x${result.height}，云端识别后入库）` +
+                truncateWarn +
+                seamWarn,
+              // 云端入库契约 payload（handoff §2）：candidate_name 必填，name_source='param'（姓名=显式入参），
+              // 其余可选；额外元信息云端按需忽略
+              data: buildResumePayload(candidateName, jobBox.name, result, 'param'),
+              effect: 'none' as const,
+            }
           })
-          ctx.progress({ stage: 'execute', message: '回顶并分段截图（借用真实鼠标，请勿移动）' })
-          const result = await reader.readResume({ saveImageTo: saveImageTo || undefined })
-          // 候选人姓名：唯一来源 = 显式入参（validate 已在读取前校验必传，此处恒非空）；
-          // 张冠李戴防护交叉校验在云端做（resume_name_matches 对云端识别文本，容忍 1 字误差）
-          const candidateName = nameParam
-          const truncateWarn = result.bottomReached
-            ? ''
-            : `；⚠️ 已达分段上限 ${MAX_SEGMENTS} 段仍未确认到底，简历内容可能被截断，请人工核对`
-          // P1 接缝质量警告：错位接缝（图像层 mis 超阈值）非空时提示人工核对——
-          // 拼接图该处可能有重复/缺失（真机 2026-09-02 黄钰鑫份曾中段重复/错乱）
-          const seamWarn =
-            result.suspectSeams.length > 0
-              ? `；⚠️ 可疑拼接接缝（错位：${result.suspectSeams.join('、')}）：拼接图内容可能有重复/缺失，请人工核对拼接图`
-              : ''
-          return {
-            message:
-              `完成：读取「${candidateName}」简历拼接图（${result.segments} 段，${result.width}x${result.height}，云端识别后入库）` +
-              truncateWarn +
-              seamWarn,
-            // 云端入库契约 payload（handoff §2）：candidate_name 必填，name_source='param'（姓名=显式入参），
-            // 其余可选；额外元信息云端按需忽略
-            data: buildResumePayload(candidateName, jobBox.name, result, 'param'),
-            effect: 'none',
-          }
+          return { ...verified.value, data: { ...verified.value.data, operation_recovery: verified.facts } }
         },
       )
     },

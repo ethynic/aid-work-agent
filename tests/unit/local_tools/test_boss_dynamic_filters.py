@@ -67,6 +67,87 @@ async def test_same_device_probe_preserves_reference_in_durable_intent_and_repla
     assert dispatch.await_args.args[4] == ARGS
 
 
+def partial_probe_data():
+    return {
+        "filter_schema_version": 3, "probe_complete": False,
+        "supported_fields": ["filters", "age", "first_degree_only"],
+        "unreadable_rows": [{"label": "院校", "reason": "控件未解析"}],
+        "rows": [
+            {"label": "经验要求", "control": "options", "selection": "multiple", "options": ["不限", "1年以内", "1-3年"]},
+            {"label": "求职状态", "control": "options", "selection": "multiple", "options": ["不限", "离职-随时到岗"]},
+            {"label": "年龄", "control": "range", "range": {"min": 16, "max": 45, "unlimited": True}},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("conditions", [
+    {"experience": "1年以内"},
+    {"filters": [{"label": "求职状态", "options": ["离职-随时到岗"]}]},
+    {"experience": "1-3年", "filters": [{"label": "求职状态", "options": ["离职-随时到岗"]}]},
+    {"age": {"min": 25, "max": None}},
+])
+async def test_unreadable_unrequested_row_does_not_block_confirmed_filter_subset(conditions):
+    args = {**conditions, "options_ref": REF}
+    with patch("src.local_tools.proxy_tool.repository.get_invocation", return_value=probe(result_json={"data": partial_probe_data()})), \
+            patch.object(LocalToolProxyTool, "_dispatch_and_wait", new=AsyncMock(return_value={"success": True})) as dispatch:
+        result = await BossFilterTool()._dispatch_and_wait("t", "u", "s", {"id": "d"}, args, None)
+    assert result["success"] is True
+    # 已确认子集的原始意图完整保留，不把不可读条件或猜测选项混入执行/恢复。
+    assert dispatch.await_args.args[4] == args
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("conditions", [
+    {"experience": "页面没有的经验档位"},
+    {"educations": ["大专"]},
+    {"filters": [{"label": "院校", "options": ["985"]}]},
+    {"filters": [{"label": "求职状态", "options": ["在职-月内到岗"]}]},
+    {"filters": [{"label": "年龄", "options": ["25岁以上"]}]},
+    {"first_degree_only": True, "experience": "1年以内"},
+])
+async def test_partial_probe_never_dispatches_unconfirmed_rows_options_or_range_disguises(conditions):
+    with patch("src.local_tools.proxy_tool.repository.get_invocation", return_value=probe(result_json={"data": partial_probe_data()})), \
+            patch.object(LocalToolProxyTool, "_dispatch_and_wait", new=AsyncMock()) as dispatch:
+        result = await BossFilterTool()._dispatch_and_wait("t", "u", "s", {"id": "d"}, {**conditions, "options_ref": REF}, None)
+    assert result["code"] == "FILTER_CAPABILITY_REQUIRED"
+    assert result["effect"] == "none"
+    dispatch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("damage", ["duplicate", "unreadable", "wrong_control", "no_multi", "no_age", "no_unlimited", "malformed_range", "not_partial", "empty"])
+async def test_partial_probe_requires_unambiguous_readable_control_evidence(damage):
+    data = partial_probe_data()
+    args = {"filters": [{"label": "求职状态", "options": ["不限", "离职-随时到岗"]}], "options_ref": REF}
+    if damage == "duplicate":
+        data["rows"].append(dict(data["rows"][1]))
+    elif damage == "unreadable":
+        data["unreadable_rows"].append({"label": "求职状态", "reason": "控件未解析"})
+    elif damage == "wrong_control":
+        data["rows"][1]["control"] = "range"
+    elif damage == "no_multi":
+        data["rows"][1]["selection"] = "unknown"
+    elif damage in {"no_age", "no_unlimited", "malformed_range"}:
+        args = {"age": {"min": 25, "max": None}, "options_ref": REF}
+        if damage == "no_age":
+            data["rows"].pop()
+        elif damage == "no_unlimited":
+            data["rows"][2]["range"]["unlimited"] = False
+        else:
+            data["rows"][2]["range"]["min"] = "16"
+    elif damage == "not_partial":
+        data["probe_complete"] = 0
+    else:
+        data["rows"] = []
+    with patch("src.local_tools.proxy_tool.repository.get_invocation", return_value=probe(result_json={"data": data})), \
+            patch.object(LocalToolProxyTool, "_dispatch_and_wait", new=AsyncMock()) as dispatch:
+        result = await BossFilterTool()._dispatch_and_wait("t", "u", "s", {"id": "d"}, args, None)
+    assert result["code"] == "FILTER_CAPABILITY_REQUIRED"
+    assert result["effect"] == "none"
+    dispatch.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_age_requires_age_capability_and_query_failure_does_not_dispatch():
     args = {"age": {"min": 25, "max": None}, "options_ref": REF}
@@ -112,3 +193,19 @@ def test_provider_extended_success_requires_version_and_actual_rows_not_only_bad
     age = {"age": {"min": 25, "max": None}, "options_ref": REF}
     data = {"filter_schema_version": 3, "membership": {"status": "vip"}, "applied_rows": [], "age": {"min": 25, "max": None}}
     assert tool._map_terminal({**invocation, "arguments_json": age, "result_json": {"data": data}})["success"] is True
+
+
+@pytest.mark.parametrize("data,verified", [
+    ({"filter_count": 1}, False),
+    ({"filter_schema_version": 3, "applied_rows": [{"label": "经验要求", "options": ["3-5年"]}]}, False),
+    ({"filter_schema_version": 3, "applied_rows": [{"label": "经验要求", "options": ["1年以内"]}]}, True),
+])
+def test_core_conditions_using_probe_reference_need_actual_selected_row_receipt(data, verified):
+    invocation = {"id": REF, "state": "succeeded", "effect": "applied",
+                  "arguments_json": {"experience": "1年以内", "options_ref": REF},
+                  "result_json": {"data": data}}
+    result = BossFilterTool()._map_terminal(invocation)
+    assert result["success"] is verified
+    if not verified:
+        assert result["code"] == "EXECUTION_UNKNOWN"
+        assert result["effect"] == "unknown"

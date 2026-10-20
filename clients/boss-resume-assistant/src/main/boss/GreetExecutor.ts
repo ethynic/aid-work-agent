@@ -1,27 +1,6 @@
-/**
- * 打招呼执行器（CLI greet 子命令）。
- *
- * 直接沿用筛选验证过的技术路线：DOMSnapshot 找全部「打招呼」按钮 → Win32 真实鼠标逐个点击。
- * 每点一个重新抓快照重新定位（点完列表会刷新，坐标永不复用）。
- * 当前视口点完后用 CDP mouseWheel 向下滚动加载更多（浏览类操作，不走 Win32），
- * 直到达到 limit 或滚到底（滚动前后列表文档 scrollOffsetY 不变判定到底）。
- *
- * 定向模式（2026-08-18 修复：真机发现只认 limit 不认人，列表顺序与 matched 名单顺序
- * 不保证一致，可能打错人）：传 names 姓名清单时，每轮 snapshot 后对可见按钮用 cardName.ts
- * 的真机锚定规则配对卡片姓名，只点姓名 ∈ names 的按钮；姓名配对失败或不在名单的按钮
- * 一律跳过（宁可不打，不能打错），滚动加载继续找，直到 names 全部完成或滚到底。
- *
- * 安全设计（fail-loud）：
- * - 只点当前视口内可见的按钮（视口外的先滚动再点）
- * - 每次点击后校验成功证据（2026-08-27 真机事故修复：点击高长磊实际成功，但页面同时插入
- *   「为你推荐」区块带来 2 个新「打招呼」按钮，总数 6→7 不降反升，旧「总数必须减少」
- *   校验误报 EXECUTION_UNKNOWN 中止。滚动懒加载/推荐区块插入都会新增按钮，按总数校验
- *   必然误报）：
- *   - 定向模式（传 names）：彻底放弃计数校验，按目标验证——after 快照中任一可见「打招呼」
- *     按钮仍配对出目标姓名 → 点击未生效，立即停止；无按钮配对出目标 → 成功
- *     （新增的无关按钮与验证无关）。
- *   - 非定向模式：计数证据（总数较点击前减少，原规则）| 位置证据（点击位置附近出现
- *     「继续沟通」按钮）任一满足即成功；两者都不满足才报 UNKNOWN 停止。
+/** Greet only approved cards, using a fresh target for every input.
+ * A positive result is the same card becoming “继续沟通”; disappearance/global totals are not proof.
+ * Executors record partial per-person results; Runner owns page recovery and any safe continuation.
  */
 import { type DomSnapshot, type ClickPoint, findNodesByString } from './domSnapshot.js'
 import { GREET_TEXT, CONTINUE_TEXT, pairCardName, findButtonsByExactText, type GreetButtonRef } from './cardName.js'
@@ -30,6 +9,7 @@ import { CancelledError } from '../operations/types.js'
 import { inspectRecommendationResults, type RecommendationStopReason } from './RecommendationResultBoundary.js'
 import { candidateButtonVisible, loadedCandidates, hasLoadedRecommendationList, candidateOption, resolveCandidateReference } from './LoadedCandidateNavigation.js'
 import { locateResumeCanvas } from './ResumeReader.js'
+import { BusinessOperationState } from './BusinessOperationState.js'
 
 export class GreetError extends Error {
   constructor(message: string) {
@@ -39,6 +19,7 @@ export class GreetError extends Error {
 }
 
 export interface GreetDeps {
+  state?: BusinessOperationState
   /** 采集 fresh DOMSnapshot（每次点击前重新采集，禁止复用旧坐标） */
   snapshot(): Promise<DomSnapshot>
   /** Win32 真实鼠标点击（viewport 为页面截图尺寸，device px） */
@@ -89,17 +70,12 @@ const MAX_SCROLL_ROUNDS = 30
  */
 const PAYWALL_MARKERS = ['该职位无开聊权益', '商品价格', '扫码支付']
 
-/**
- * 非定向模式点击后「位置证据」容差（device px）：after 快照中「继续沟通」按钮 center 与
- * 点击点比较的允许偏差。按钮翻转为「继续沟通」且卡片基本不动，容忍轻微 reflow。
- */
-const VERIFY_ROW_DY = 40
-const VERIFY_COL_DX = 100
-
 export class GreetExecutor {
   private readonly sleep: (ms: number) => Promise<void>
+  readonly state = new BusinessOperationState()
 
   constructor(private readonly deps: GreetDeps) {
+    this.state = deps.state ?? this.state
     this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)))
   }
 
@@ -218,7 +194,10 @@ export class GreetExecutor {
         }
 
         if (this.deps.signal?.aborted) throw new CancelledError('已取消：打招呼点击前中止')
-        await this.deps.click(target.point, viewportOf(snap))
+        const boundTarget = indexedTarget ?? loadedCandidates(snap).find(c => c.point?.x === target!.point.x && c.point?.y === target!.point.y)
+        targetName ??= boundTarget?.name ?? pairCardName(snap, target, viewportOf(snap))
+        if (!targetName) throw new GreetError('未能绑定待打招呼卡片姓名，未发送招呼')
+        await this.state.input(() => this.deps.click(target!.point, viewportOf(snap)), true)
         await this.sleep(1500)
 
         let after: DomSnapshot
@@ -232,47 +211,32 @@ export class GreetExecutor {
               '请关闭弹层并切换到有开聊权益的职位后重试',
           )
         }
-        // 点击后校验（2026-08-27 真机事故修复）：滚动懒加载/「为你推荐」区块插入都会新增按钮，
-        // 「全局总数必须减少」必然误报。定向模式按目标验证，非定向放宽为「位置证据 | 计数证据」任一。
+        // Verify the bound card or uniquely paired original name, never unrelated button totals.
         if (targetName !== null) {
-          if (indexedTarget) {
-            const confirmed = loadedCandidates(after).filter((c) => c.name === targetName && identity(c) === identity(indexedTarget))
+          if (boundTarget) {
+            const confirmed = loadedCandidates(after).filter((c) => c.name === targetName && identity(c) === identity(boundTarget))
             if (confirmed.length !== 1 || confirmed[0]!.excluded || confirmed[0]!.buttonText !== CONTINUE_TEXT) {
               throw new GreetError('点击后无法确认原候选人翻转为继续沟通，已停止，请人工确认结果')
             }
           } else {
-            // Legacy snapshots without trusted card structure retain target-specific viewport verification.
+            // A disappeared greet button alone can be a rerender, occlusion, or a removed card.
             const afterViewport = viewportOf(after)
-            const targetStillVisible = this.findGreetButtons(after).some(
+            const continues = findButtonsByExactText(after, CONTINUE_TEXT).filter(
               (btn) => pairCardName(after, btn, afterViewport) === targetName,
             )
-            if (targetStillVisible) {
+            if (continues.length !== 1) {
+              this.state.unconfirmed('原姓名卡片未唯一观察到继续沟通状态；不以按钮消失确认发送')
               throw new GreetError(
-                `第 ${greeted + 1} 个打招呼点击后目标「${targetName}」的按钮仍在页面上：` +
-                  '可能出现确认弹层或点击被拦截（若「为你推荐」区块出现同名卡片也会触发此判定），已停止，请人工查看页面',
+                `无法确认第 ${greeted + 1} 个目标「${targetName}」已翻转为继续沟通，发送结果未知`,
               )
             }
           }
-        } else {
-          // 非定向模式：计数证据（原规则，保留）或位置证据（点击点附近出现「继续沟通」）任一满足即成功
-          const remaining = this.findGreetButtons(after).length
-          const flippedNearClick = findButtonsByExactText(after, CONTINUE_TEXT).some(
-            (b) =>
-              Math.abs(b.point.y - target.point.y) <= VERIFY_ROW_DY &&
-              Math.abs(b.point.x - target.point.x) <= VERIFY_COL_DX,
-          )
-          if (remaining >= buttons.length && !flippedNearClick) {
-            throw new GreetError(
-              `第 ${greeted + 1} 个打招呼点击后按钮数未减少（${buttons.length}→${remaining}）且点击位置附近未翻转为「继续沟通」：` +
-                '可能出现确认弹层或点击被拦截，已停止，请人工查看页面' +
-                '（列表若同时插入「为你推荐」区块或懒加载新卡，总数校验不可靠，已同时校验点击位置翻转证据）',
-            )
-          }
         }
         greeted++
+        this.state.confirmed({ name: targetName, greeted: true }, '原目标卡片明确翻转为继续沟通')
         if (targetName !== null) {
           greetedNames.push(targetName)
-          pending!.delete(targetName)
+          pending?.delete(targetName)
           seekingName = null
           seekingIdentity = null
         }

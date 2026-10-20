@@ -40,6 +40,10 @@ const COMMAND_FLAGS: Readonly<Record<string, readonly string[]>> = {
   'open-detail': [], // 无专属 flag（必带 1 个姓名位置参数；缺失/空白在 command 层 fail-loud）
   'greet-detail': ['dry-run', 'greet-in-detail'],
   'close-detail': [],
+  screenshot: ['output', 'scope', 'snapshot-output', 'json'],
+  'window-click': ['observation', 'x', 'y', 'max-age-seconds', 'json'],
+  'page-click': ['image', 'x', 'y', 'max-age-seconds', 'json'],
+  'visual-diagnose': ['image', 'observation', 'request-id', 'goal', 'context-file', 'api-version', 'retrieve-only', 'json'],
   mcp: ['stdio'],
   doctor: ['json'],
   version: ['json'],
@@ -50,6 +54,10 @@ const GLOBAL_FLAGS: readonly string[] = ['cdp-port', 'help', 'h']
 
 /** 各命令允许的额外位置参数个数（命令名本身是 positional[0]，不计入；未登记的命令默认 0） */
 const COMMAND_POSITIONALS: Readonly<Record<string, number>> = {
+  screenshot: 0,
+  'window-click': 0,
+  'page-click': 0,
+  'visual-diagnose': 0,
   'greet-selected': 1,
   goto: 1, // goto recommend|chat
   'send-to': 1, // send-to <姓名>
@@ -83,6 +91,7 @@ export function validateCommandArgs(command: string | undefined, args: ParsedArg
   // 未登记的子命令（含无参数时的 undefined、help）不在本层报错：
   // 交回 main() 的 switch default 分支，保持既有「未知子命令」文案
   if (command === undefined) return { ok: true }
+  if (command === 'window-escape') return { ok: false, message: 'window-escape 已移除；故障恢复仅允许鼠标点击关闭' }
   const cmdFlags = ownEntry(COMMAND_FLAGS, command)
   if (cmdFlags === undefined) return { ok: true }
 
@@ -119,6 +128,39 @@ export function validateCommandArgs(command: string | undefined, args: ParsedArg
   }
 
   // 3) greet 显式意图门禁（防误触发真实写动作）
+  if (command === 'window-click' || command === 'page-click') {
+    if (command === 'page-click' && args.flags.has('cdp-port') && typeof args.flags.get('cdp-port') !== 'string') return { ok: false, message: '--cdp-port 需要端口值' }
+    for (const key of command === 'page-click' ? ['image', 'x', 'y'] : ['observation', 'x', 'y']) if (typeof args.flags.get(key) !== 'string' || !String(args.flags.get(key)).trim()) return { ok: false, message: `${command} 需要 --${key}` }
+    for (const key of ['x', 'y']) if (!Number.isInteger(Number(args.flags.get(key))) || Number(args.flags.get(key)) < 0) return { ok: false, message: `--${key} 需要非负整数像素` }
+    if (args.flags.has('max-age-seconds') && (typeof args.flags.get('max-age-seconds') !== 'string' || !Number.isInteger(Number(args.flags.get('max-age-seconds'))) || Number(args.flags.get('max-age-seconds')) < 1 || Number(args.flags.get('max-age-seconds')) > 600)) return { ok: false, message: '--max-age-seconds 需要1-600整数秒' }
+    if (args.flags.has('json') && args.flags.get('json') !== true) return { ok: false, message: '--json 不接受值' }
+  }
+  if (command === 'screenshot' || command === 'visual-diagnose') {
+    for (const key of ['json', 'retrieve-only']) {
+      if (args.flags.has(key) && args.flags.get(key) !== true) return { ok: false, message: `--${key} 不接受值` }
+    }
+    if (args.flags.has('cdp-port') && typeof args.flags.get('cdp-port') !== 'string') return { ok: false, message: '--cdp-port 需要端口值' }
+    if (command === 'screenshot') {
+      if (typeof args.flags.get('output') !== 'string' || !String(args.flags.get('output')).trim()) return { ok: false, message: 'screenshot 需要 --output <PNG路径>' }
+      if (args.flags.has('scope') && !['page', 'window'].includes(String(args.flags.get('scope')))) return { ok: false, message: '--scope 只能为 page 或 window' }
+      if (args.flags.has('snapshot-output') && (typeof args.flags.get('snapshot-output') !== 'string' || !String(args.flags.get('snapshot-output')).trim())) return { ok: false, message: '--snapshot-output 需要JSON文件路径' }
+      if (args.flags.has('snapshot-output') && args.flags.get('scope') === 'window') return { ok: false, message: '--snapshot-output 仅用于page采图' }
+    } else {
+      const id = args.flags.get('request-id')
+      if (typeof id !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id)) return { ok: false, message: 'visual-diagnose 需要 UUID 格式的 --request-id' }
+      if (args.flags.has('retrieve-only')) {
+        if (['image', 'goal', 'observation', 'context-file'].some(key => args.flags.has(key))) return { ok: false, message: '--retrieve-only 与 --image/--goal/--observation/--context-file 互斥' }
+      } else if (typeof args.flags.get('image') !== 'string' || !String(args.flags.get('image')).trim()) return { ok: false, message: '新诊断需要 --image <PNG路径>' }
+      if (args.flags.has('observation') && (typeof args.flags.get('observation') !== 'string' || !String(args.flags.get('observation')).trim())) return { ok: false, message: '--observation 需要窗口截图回执路径' }
+      if (args.flags.has('goal') && (typeof args.flags.get('goal') !== 'string' || !String(args.flags.get('goal')).trim() || String(args.flags.get('goal')).length > 1000)) return { ok: false, message: '--goal 需要非空文本（最多 1000 字符）' }
+      if (args.flags.has('api-version') && !['1', '2'].includes(String(args.flags.get('api-version')))) return { ok: false, message: '--api-version 只能为 1 或 2' }
+      if (args.flags.has('context-file')) {
+        if (typeof args.flags.get('context-file') !== 'string' || !String(args.flags.get('context-file')).trim()) return { ok: false, message: '--context-file 需要 JSON 路径' }
+        if (args.flags.has('goal') || args.flags.get('api-version') === '1') return { ok: false, message: '--context-file 使用 v2，且与 --goal 互斥' }
+      }
+      if (args.flags.get('api-version') === '2' && !args.flags.has('retrieve-only') && !args.flags.has('context-file')) return { ok: false, message: 'v2 新诊断需要 --context-file' }
+    }
+  }
   if (command === 'greet') return validateGreetIntent(args)
   if (command === 'lookup-candidates') {
     const raw = args.flags.get('names')

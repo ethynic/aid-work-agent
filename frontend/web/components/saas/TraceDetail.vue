@@ -168,8 +168,9 @@
               <div class="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-surface-hover"
                 @click="toggleSpan(span.span_id)">
                 <div class="flex items-center gap-2">
-                  <span :class="spanIconClass(span)" class="w-2 h-2 rounded-full inline-block"></span>
+                  <span :class="spanIconClass(span)" :title="statusLabel(span.status)" class="w-2 h-2 rounded-full inline-block"></span>
                   <span class="text-sm text-default font-medium">{{ span.name }}</span>
+                  <span v-if="span.status !== 'completed'" :class="statusClass(span.status)" class="text-xs px-1 rounded">{{ statusLabel(span.status) }}</span>
                   <span v-if="span.model" class="text-xs text-muted">({{ span.model }})</span>
                 </div>
                 <div class="flex items-center gap-3 text-xs text-muted">
@@ -370,6 +371,8 @@ function parseJson(str: string | null): any {
 
 function spanIconClass(span: SpanDetail): string {
   if (span.status === 'failed') return 'bg-danger-500'
+  if (['interrupted', 'waiting', 'paused', 'cancelled'].includes(span.status)) return 'bg-warning-500'
+  if (span.status !== 'completed') return 'bg-info-500'
   if (span.span_type === 'generation') return 'bg-info-500'
   return 'bg-success-500'
 }
@@ -377,12 +380,13 @@ function spanIconClass(span: SpanDetail): string {
 function statusClass(status: string): string {
   if (status === 'completed') return 'bg-success-100 text-success-700'
   if (status === 'failed') return 'bg-danger-100 text-danger-700'
-  if (status === 'cancelled') return 'bg-warning-100 text-warning-700'
+  if (['cancelled', 'interrupted', 'waiting', 'paused'].includes(status)) return 'bg-warning-100 text-warning-700'
   return 'bg-info-100 text-info-700'
 }
 
 function statusLabel(status: string): string {
-  const map: Record<string, string> = { completed: '已完成', failed: '失败', cancelled: '用户取消', running: '运行中' }
+  const map: Record<string, string> = { completed: '已完成', failed: '失败', cancelled: '已取消', running: '运行中',
+    interrupted: '已中断', waiting: '等待用户回复', paused: '已暂停' }
   return map[status] || status
 }
 

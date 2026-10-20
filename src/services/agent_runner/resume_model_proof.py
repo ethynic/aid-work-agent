@@ -3,7 +3,7 @@
 import hashlib
 
 from src.core.agent_engine.contracts import CheckpointFailure, Identity
-from src.local_tools.proxy_tool import BossResumeDetailTool, BossResumeBatchTool
+from src.local_tools.proxy_tool import BossResumeDetailTool, BossResumeBatchTool, BossResumeNextTool
 from src.tools.executor import normalize_provided_parameters
 from .contracts import canonical_json
 from .local_invocations import LocalPhase
@@ -12,7 +12,7 @@ from .local_invocations import LocalPhase
 def assert_resume_model(cursor,row,node,call_id,ordinal,origin,provider,model):
     from .local_owner import RunnerLocalLifecycle
     call = ((node.get('tools') or {}).get(call_id) or {}).get('call') or {}
-    cls = next((value for value in (BossResumeDetailTool,BossResumeBatchTool)
+    cls = next((value for value in (BossResumeDetailTool,BossResumeBatchTool,BossResumeNextTool)
         if value.name==call.get('name')),None)
     if (cls is None or type(ordinal) is not int or ordinal<0
             or not isinstance(provider,str) or not provider or not isinstance(model,str) or not model):
@@ -28,6 +28,13 @@ def assert_resume_model(cursor,row,node,call_id,ordinal,origin,provider,model):
         and ref.get('branch') in {'main','heal.retry'} and ref.get('ordinal')==0
         and ref.get('invocation_id')==origin.get('invocation_id')),None)
     arguments = normalize_provided_parameters(cls,call.get('arguments') or {})
+    if cls is BossResumeNextTool:
+        from .resume_next_proof import continuation_arguments
+        def load_parent(parent_id):
+            cursor.execute('SELECT * FROM local_tool_invocations WHERE id=%s AND tenant_id IS NOT DISTINCT FROM %s',
+                (parent_id,row['tenant_id']))
+            return dict(cursor.fetchone() or {})
+        arguments = continuation_arguments(row,node,call_id,arguments,load_parent)
     if (ref is None or ref.get('request',{}).get('arguments')!=arguments
             or ref.get('request',{}).get('tool_name')!=cls.name):
         raise CheckpointFailure('LOCAL_RESUME_ITEM_OWNER_MISMATCH')
@@ -39,7 +46,7 @@ def assert_resume_model(cursor,row,node,call_id,ordinal,origin,provider,model):
     if invocation.get('state')!='succeeded' or invocation.get('effect')=='unknown':
         raise CheckpointFailure('LOCAL_RESUME_ITEM_OWNER_MISMATCH')
     data = (invocation.get('result_json') or {}).get('data')
-    payloads = data.get('resumes') if cls is BossResumeBatchTool and isinstance(data,dict) else [data]
+    payloads = data.get('resumes') if cls in (BossResumeBatchTool,BossResumeNextTool) and isinstance(data,dict) else [data]
     if not isinstance(payloads,list) or not 0<=item<len(payloads) or not isinstance(payloads[item],dict):
         raise CheckpointFailure('LOCAL_RESUME_ITEM_OWNER_MISMATCH')
     payload = payloads[item]

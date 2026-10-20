@@ -7,6 +7,7 @@
  * 纯只读单次快照：不点击、不输入、不滚屏；无 URL 前置（弹层可出现在任意页面）。
  */
 import { collectOverlayCandidates } from '../boss/OverlayInspector.js'
+import { VisualRecovery, validateVisualArgs, type VisualInspectArgs, type VisualRecoveryDeps } from '../boss/visualRecovery.js'
 import {
   defaultSessionFactory,
   runBossOperation,
@@ -14,23 +15,25 @@ import {
 } from './bossContext.js'
 import type { BossOperation, OperationResult, OpContext } from './types.js'
 
-export interface BossOverlayInspectArgs {
-  /** 预留参数位，当前无入参 */
-  _unused?: never
-}
+export interface BossOverlayInspectArgs extends VisualInspectArgs {}
 
 export function createBossOverlayInspectOperation(
   sessionFactory: BossSessionFactory = defaultSessionFactory,
+  visualDeps: VisualRecoveryDeps = {},
 ): BossOperation<BossOverlayInspectArgs> {
   return {
     name: 'boss_overlay_inspect',
-    execute(_args: BossOverlayInspectArgs, ctx: OpContext): Promise<OperationResult> {
+    execute(args: BossOverlayInspectArgs, ctx: OpContext): Promise<OperationResult> {
       return runBossOperation(
         { kind: 'readonly', name: 'boss_overlay_inspect' },
         ctx,
         sessionFactory,
-        () => null,
+        () => validateVisualArgs(args),
         async (session) => {
+          if (args.request_id || args.visual_context || args.retrieve_only) {
+            const data = await new VisualRecovery(visualDeps).inspect(args, session, ctx.signal)
+            return { message: '已取得绑定页面或窗口的视觉诊断回执；页面判断与动作建议分别返回', data, effect: 'none' }
+          }
           const snapshot = await session.snapshot()
           const inspection = collectOverlayCandidates(snapshot)
           ctx.progress({

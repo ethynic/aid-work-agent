@@ -28,12 +28,32 @@ export class RuntimeController {
   private refreshPromise?: Promise<void>
   private intent?: { method: ManagementMethod; params: Record<string, string>; instance: string }
   private disposed = false
+  private automaticTimer?: ReturnType<typeof setTimeout>
 
   // Signed offline OCR packages require full integrity scans, including on reconnect.
   constructor(private port: RuntimeManagementPort, private readonly timeoutMs = 120_000) {}
   get supportsPlugins() { return this.view.description?.features.includes('first_party_plugins') === true }
   get supportsRecovery() { return typeof this.port.diagnoseConnection === 'function' && typeof this.port.reconfigureConnection === 'function' }
   get supportsRegistration() { return typeof this.port.registrationStatus === 'function' }
+  get automaticConnection() { return this.port.automaticConnection === true }
+  private scheduleAutomaticStatus() {
+    if (!this.automaticConnection || this.disposed || this.automaticTimer) return
+    this.automaticTimer = setTimeout(() => {
+      this.automaticTimer = undefined
+      void (async () => {
+        if (this.recovery.busy || this.view.busy) { this.scheduleAutomaticStatus(); return }
+        const sequence = this.recoverySequence
+        try {
+          const pending = await this.port.registrationStatus?.()
+          if (this.disposed || sequence !== this.recoverySequence) return
+          this.recovery.diagnosis = pending ? decodeConnectionDiagnosis(pending) : null
+          if (!this.view.connected) await this.connect()
+          else await this.refresh()
+        } catch { /* The next status check reconnects after a transient Main/Host transition. */ }
+        if (!this.disposed && (!this.view.connected || this.recovery.diagnosis?.category === 'CONNECTING')) this.scheduleAutomaticStatus()
+      })()
+    }, 2000)
+  }
   private async recoveryRequest<T>(request: Promise<T>): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined
     try { return await Promise.race([request, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('连接恢复结果尚未确认')), Math.max(this.timeoutMs, 300_000)) })]) }
@@ -47,7 +67,7 @@ export class RuntimeController {
       const value = await this.recoveryRequest(this.port.diagnoseConnection!())
       if (sequence === this.recoverySequence && !this.disposed) this.recovery.diagnosis = decodeConnectionDiagnosis(value)
     } catch { if (sequence === this.recoverySequence) this.recovery.error = '连接检查未完成。请检查旧Runtime是否已退出、当前Windows用户与安装文件，再检查连接。' }
-    finally { if (sequence === this.recoverySequence) this.recovery.busy = false }
+    finally { if (sequence === this.recoverySequence) { this.recovery.busy = false; if (this.recovery.diagnosis?.category === 'CONNECTING') this.scheduleAutomaticStatus() } }
   }
   async reconfigureConnection(input: ConnectionRecoveryInput) {
     if (!this.supportsRecovery || this.recovery.busy || this.view.busy || this.disposed) return
@@ -66,7 +86,7 @@ export class RuntimeController {
       this.resetConnection(true)
       await this.connect(this.port, true)
     } catch { if (sequence === this.recoverySequence) this.recovery.error = '恢复请求的结果尚未确认。重新打开客户端会继续本机恢复；点击检查连接，不要自动重复配对。' }
-    finally { if (sequence === this.recoverySequence) this.recovery.busy = false }
+    finally { if (sequence === this.recoverySequence) { this.recovery.busy = false; if (this.recovery.diagnosis?.category === 'CONNECTING') this.scheduleAutomaticStatus() } }
   }
   async connect(port = this.port, recovering = false) {
     if (this.recovery.busy && !recovering) return
@@ -96,6 +116,7 @@ export class RuntimeController {
       if (generation !== this.generation) return
       this.resetConnection()
       this.view.error = 'Runtime 管理连接已断开，请重新连接。'
+      this.scheduleAutomaticStatus()
     })
     try {
       // Pending registration is independent of the old Host handshake/lease.
@@ -125,7 +146,10 @@ export class RuntimeController {
     } catch (error) {
       if (generation === this.generation) { this.resetConnection(); this.view.error = this.message(error) }
     }
-    finally { if (generation === this.generation) this.view.connecting = false }
+    finally {
+      if (generation === this.generation) this.view.connecting = false
+      if (!this.view.connected || this.recovery.diagnosis?.category === 'CONNECTING') this.scheduleAutomaticStatus()
+    }
   }
   private resetConnection(clearIntent = false) {
     ++this.generation
@@ -142,7 +166,7 @@ export class RuntimeController {
     if (clearIntent) { this.intent = undefined; this.knownInstance = ''; this.view.operation = null; this.view.selectionLabel = '' }
     Object.assign(this.view, { connected: false, connecting: false, refreshing: false, state: null, plugins: null, description: null, stateDirty: true, pluginsDirty: true, busy: false, retryAvailable: false })
   }
-  dispose() { this.disposed = true; ++this.recoverySequence; this.recovery.busy = false; this.resetConnection(true) }
+  dispose() { this.disposed = true; clearTimeout(this.automaticTimer); ++this.recoverySequence; this.recovery.busy = false; this.resetConnection(true) }
   private message(error: unknown) { return error instanceof Error ? error.message : 'Runtime 管理操作失败' }
   private query(method: ManagementMethod, params: Record<string, string> = {}) {
     const request = { request_id: crypto.randomUUID(), method, params }

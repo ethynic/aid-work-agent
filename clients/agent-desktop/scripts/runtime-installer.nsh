@@ -1,12 +1,132 @@
-﻿; CurrentUser DPAPI and HKCU work always runs in the original UAC outer user.
+﻿; Installation uses CurrentUser callbacks even when the file-copy section elevates.
 !ifdef BUILD_UNINSTALLER
   !define RUNTIME_GUARD_FUNCTION "un.runtimeCheckAppRunning"
 !else
   !define RUNTIME_GUARD_FUNCTION "runtimeCheckAppRunning"
-  !define MUI_CUSTOMFUNCTION_ABORT runtimeCancelPendingUpgrade
+  ; Initialize these before builder initMultiUser reads any install key. The
+  ; generated ordinary uninstaller keeps the builder's original static keys.
+  Var runtimeInstallRegistryKey
+  Var runtimeUninstallRegistryKey
+  !define INSTALL_REGISTRY_KEY "$runtimeInstallRegistryKey"
+  !define UNINSTALL_REGISTRY_KEY "$runtimeUninstallRegistryKey"
+  !ifdef UNINSTALL_REGISTRY_KEY_2
+    Var runtimeLegacyUninstallRegistryKey
+    !define RUNTIME_ORIGINAL_UNINSTALL_REGISTRY_KEY_2 "${UNINSTALL_REGISTRY_KEY_2}"
+    !undef UNINSTALL_REGISTRY_KEY_2
+    !define UNINSTALL_REGISTRY_KEY_2 "$runtimeLegacyUninstallRegistryKey"
+  !endif
 !endif
 
+; Explicit acceptance-only isolation for final installer tests. Validate before
+; placing any environment text into a PowerShell command line.
+!macro runtimeReadFixture
+  ReadEnvStr $R6 "AIDWORK_RUNTIME_INSTALL_FIXTURE"
+  ; Normal customer machines have no fixture environment. ReadEnvStr marks a
+  ; missing optional variable as an error; never propagate it as a guard/UAC
+  ; failure after a successful product process check.
+  ClearErrors
+  ${If} $R6 != ""
+    ${If} "${APP_ID}" != "cn.aidingyi.agent.runtime.acceptance"
+      StrCpy $R0 2
+      StrCpy $R1 "FIXTURE_NOT_ALLOWED_IN_PRODUCTION"
+      Return
+    ${EndIf}
+    StrLen $R4 $R6
+    ${If} $R4 != 36
+      StrCpy $R0 2
+      StrCpy $R1 "INVALID_FIXTURE_NAMESPACE"
+      Return
+    ${EndIf}
+    StrCpy $R2 0
+    ${Do}
+      StrCpy $R3 $R6 1 $R2
+      ${If} $R3 != "0"
+      ${AndIf} $R3 != "1"
+      ${AndIf} $R3 != "2"
+      ${AndIf} $R3 != "3"
+      ${AndIf} $R3 != "4"
+      ${AndIf} $R3 != "5"
+      ${AndIf} $R3 != "6"
+      ${AndIf} $R3 != "7"
+      ${AndIf} $R3 != "8"
+      ${AndIf} $R3 != "9"
+      ${AndIf} $R3 != "a"
+      ${AndIf} $R3 != "b"
+      ${AndIf} $R3 != "c"
+      ${AndIf} $R3 != "d"
+      ${AndIf} $R3 != "e"
+      ${AndIf} $R3 != "f"
+      ${AndIf} $R3 != "-"
+        StrCpy $R0 2
+        StrCpy $R1 "INVALID_FIXTURE_NAMESPACE"
+        Return
+      ${EndIf}
+      IntOp $R2 $R2 + 1
+    ${LoopUntil} $R2 == 36
+  ${EndIf}
+!macroend
+
+; Only sanitized machine codes reach UI; launcher/parser output is discarded.
+!macro runtimeSanitizeFailureCode
+  ${Do}
+    StrLen $R4 $R1
+    ${If} $R4 == 0
+      ${ExitDo}
+    ${EndIf}
+    IntOp $R2 $R4 - 1
+    StrCpy $R3 $R1 1 $R2
+    ${If} $R3 == "$\r"
+    ${OrIf} $R3 == "$\n"
+      StrCpy $R1 $R1 $R2
+    ${Else}
+      ${ExitDo}
+    ${EndIf}
+  ${Loop}
+  StrLen $R4 $R1
+  ${If} $R4 < 1
+  ${OrIf} $R4 > 80
+    StrCpy $R1 "INSTALLATION_COMMAND_FAILED"
+  ${Else}
+    StrCpy $R2 0
+    ${Do}
+      StrCpy $R3 $R1 1 $R2
+      ${If} $R3 != "A"
+      ${AndIf} $R3 != "B"
+      ${AndIf} $R3 != "C"
+      ${AndIf} $R3 != "D"
+      ${AndIf} $R3 != "E"
+      ${AndIf} $R3 != "F"
+      ${AndIf} $R3 != "G"
+      ${AndIf} $R3 != "H"
+      ${AndIf} $R3 != "I"
+      ${AndIf} $R3 != "J"
+      ${AndIf} $R3 != "K"
+      ${AndIf} $R3 != "L"
+      ${AndIf} $R3 != "M"
+      ${AndIf} $R3 != "N"
+      ${AndIf} $R3 != "O"
+      ${AndIf} $R3 != "P"
+      ${AndIf} $R3 != "Q"
+      ${AndIf} $R3 != "R"
+      ${AndIf} $R3 != "S"
+      ${AndIf} $R3 != "T"
+      ${AndIf} $R3 != "U"
+      ${AndIf} $R3 != "V"
+      ${AndIf} $R3 != "W"
+      ${AndIf} $R3 != "X"
+      ${AndIf} $R3 != "Y"
+      ${AndIf} $R3 != "Z"
+      ${AndIf} $R3 != "_"
+        StrCpy $R1 "INSTALLATION_COMMAND_FAILED"
+        ${ExitDo}
+      ${EndIf}
+      IntOp $R2 $R2 + 1
+    ${LoopUntil} $R2 == $R4
+  ${EndIf}
+!macroend
+
 !macro runtimeCheckBeforeInstall
+  StrCpy $R7 "Stop"
   StrCpy $R9 2
   ClearErrors
   ${If} ${UAC_IsInnerInstance}
@@ -22,23 +142,38 @@
     Quit
   ${EndIf}
 !macroend
-
 !macro customCheckAppRunning
   !insertmacro runtimeCheckBeforeInstall
+  !ifndef BUILD_UNINSTALLER
+    ${If} $R6 != ""
+      ; Builder already computed link variables before CHECK_APP_RUNNING.
+      ; Redirect all four locations before its create/rename/cleanup macros.
+      CreateDirectory "$INSTDIR\fixture-shortcuts"
+      StrCpy $oldMenuDirectory ""
+      StrCpy $oldStartMenuLink "$INSTDIR\fixture-shortcuts\old-menu.lnk"
+      StrCpy $newStartMenuLink "$INSTDIR\fixture-shortcuts\menu.lnk"
+      StrCpy $oldDesktopLink "$INSTDIR\fixture-shortcuts\old-desktop.lnk"
+      StrCpy $newDesktopLink "$INSTDIR\fixture-shortcuts\desktop.lnk"
+    ${EndIf}
+  !endif
 !macroend
-
+!ifndef BUILD_UNINSTALLER
+  !macro preInit
+    Call runtimeConfigureInstallerFixture
+    ${If} $R0 != 0
+      SetErrorLevel 2
+      Quit
+    ${EndIf}
+  !macroend
+!endif
 !macro customInit
-  ; Silent installs do not run page callbacks. Resolve the machine target first.
   ${If} ${UAC_IsInnerInstance}
   ${AndIf} ${Silent}
     !insertmacro setInstallModePerAllUsers
     !insertmacro runtimeCheckBeforeInstall
   ${EndIf}
 !macroend
-
 !macro customPageAfterChangeDir
-  ; Wrap the actual InstFiles PRE callback, after the final directory choice.
-  ; The builder still skips its section guard in an assisted inner instance.
   !ifdef MUI_PAGE_CUSTOMFUNCTION_PRE
     !undef MUI_PAGE_CUSTOMFUNCTION_PRE
   !endif
@@ -52,199 +187,134 @@
     ${EndIf}
   FunctionEnd
 !macroend
-
-; Parsed after the builder declares APP_EXECUTABLE_FILENAME and installMode.
 !macro customHeader
+  !ifndef BUILD_UNINSTALLER
+    Function runtimeConfigureInstallerFixture
+      StrCpy $R0 0
+      StrCpy $runtimeInstallRegistryKey "Software\${APP_GUID}"
+      StrCpy $runtimeUninstallRegistryKey "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINSTALL_APP_KEY}"
+      !ifdef UNINSTALL_REGISTRY_KEY_2
+        StrCpy $runtimeLegacyUninstallRegistryKey "${RUNTIME_ORIGINAL_UNINSTALL_REGISTRY_KEY_2}"
+      !endif
+      !insertmacro runtimeReadFixture
+      ${If} $R6 != ""
+        ; Final EXE verification only uses silent CurrentUser installation.
+        ${IfNot} ${Silent}
+        ${OrIf} ${UAC_IsInnerInstance}
+          StrCpy $R0 2
+          Return
+        ${EndIf}
+        StrCpy $runtimeInstallRegistryKey "Software\AidWorkRuntimeCleanInstallFixtures\$R6\BuilderInstall"
+        StrCpy $runtimeUninstallRegistryKey "Software\AidWorkRuntimeCleanInstallFixtures\$R6\BuilderUninstall"
+        !ifdef UNINSTALL_REGISTRY_KEY_2
+          StrCpy $runtimeLegacyUninstallRegistryKey "Software\AidWorkRuntimeCleanInstallFixtures\$R6\BuilderLegacyUninstall"
+        !endif
+      ${EndIf}
+    FunctionEnd
+  !endif
   Function ${RUNTIME_GUARD_FUNCTION}
     StrCpy $R9 2
-  InitPluginsDir
-  File /oname=$PLUGINSDIR\runtime-legacy-upgrade.ps1 "${RUNTIME_LEGACY_UPGRADE_SOURCE}"
-  File /oname=$PLUGINSDIR\RuntimeProcessSupervisor.exe "${RUNTIME_SUPERVISOR_SOURCE}"
-  ; Never delegate process termination to the default builder check.
-  ${nsProcess::FindProcess} "${APP_EXECUTABLE_FILENAME}" $R0
-  ${If} $R0 == 0
+    !insertmacro runtimeReadFixture
+    InitPluginsDir
+    File /oname=$PLUGINSDIR\runtime-clean-install.ps1 "${RUNTIME_CLEAN_INSTALL_SOURCE}"
+    StrCpy $R5 ""
     !ifndef BUILD_UNINSTALLER
-      ; A legacy marker cannot be drained by old Main. Prepare BEFORE requesting
-      ; its maintenance exit, so no misleading old "upgrade paused" dialog appears.
-      nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\runtime-legacy-upgrade.ps1" -Mode Prepare -AppId "${APP_ID}" -InstallerPath "$EXEPATH" -InstallDirectory "$INSTDIR" -SupervisorPath "$PLUGINSDIR\RuntimeProcessSupervisor.exe"'
-      Pop $R0
-      Pop $R1
-      ${If} $R0 == 0
-        MessageBox MB_OK|MB_ICONINFORMATION "旧客户端的恢复已登记。请正常重启 Windows；登录后会自动继续安装，配对和任务记录保留。" /SD IDOK
-        StrCpy $R9 3010
-        Return
-      ${ElseIf} $R0 != 2
-        ; Only a missing/v2 marker means normal drain. Never hide a preparation
-        ; error as an active task; raw PowerShell output can contain private paths.
-        MessageBox MB_OK|MB_ICONEXCLAMATION "升级恢复登记失败（错误码：$R0），此次安装未覆盖旧程序。设备和任务记录保留。" /SD IDOK
-        StrCpy $R9 2
-        Return
-      ${EndIf}
-    !endif
-    ${If} ${FileExists} "$INSTDIR\resources\runtime\host\native\RuntimeProcessSupervisor.exe"
-      !ifdef BUILD_UNINSTALLER
-        ${StdUtils.ExecShellAsUser} $R1 "$INSTDIR\${APP_EXECUTABLE_FILENAME}" "open" "--aidwork-exit-for-uninstall"
-      !else
-        ${StdUtils.ExecShellAsUser} $R1 "$INSTDIR\${APP_EXECUTABLE_FILENAME}" "open" "--aidwork-exit-for-update"
-      !endif
-      DetailPrint "正在停止领取新任务，等待在途任务安全收尾…"
-      StrCpy $R2 0
-      ${Do}
-        Sleep 500
-        ${nsProcess::FindProcess} "${APP_EXECUTABLE_FILENAME}" $R0
-        ${If} $R0 == 603
-          ${ExitDo}
-        ${EndIf}
-        IntOp $R2 $R2 + 1
-        ${If} $R0 != 0
-        ${OrIf} $R2 >= 60
-          !ifndef BUILD_UNINSTALLER
-            Call runtimeScheduleDeferredInstall
-            ${If} $R9 == 3010
-              Return
-            ${EndIf}
-          !endif
-          MessageBox MB_OK|MB_ICONEXCLAMATION "旧 Runtime 未能在 30 秒内退出，此次未覆盖程序。请正常重启 Windows，登录后先不要启动旧客户端，立即重新运行本安装包。原配对和任务记录保留。安装后使用“连接检查与恢复”按具体提示恢复连接；不要反复覆盖、卸载或结束所有 Node 进程。" /SD IDOK
-          StrCpy $R9 2
-          Return
-        ${EndIf}
-      ${Loop}
-    ${Else}
-      !ifdef BUILD_UNINSTALLER
-        MessageBox MB_OK|MB_ICONEXCLAMATION "旧 Runtime 仍在运行。请从托盘退出后卸载；若旧版卡住，请运行新版安装器登记自动恢复。未终止任何进程。" /SD IDOK
-        StrCpy $R9 2
-        Return
-      !else
-        Call runtimeScheduleDeferredInstall
-        ${If} $R9 == 3010
-          Return
-        ${EndIf}
-        MessageBox MB_OK|MB_ICONEXCLAMATION "旧版仍在运行。请从托盘退出后重新安装；若旧版拒绝退出，请正常重启 Windows，登录后先不要启动旧版，立即重新运行本安装包。配对和任务记录保留，此次未覆盖旧程序。" /SD IDOK
-        StrCpy $R9 2
-        Return
-      !endif
+    nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\runtime-clean-install.ps1" -Mode Detect -AppId "${APP_ID}" -InstallDirectory "$INSTDIR" -FixtureRegistryId "$R6"'
+    Pop $R0
+    Pop $R1
+    !insertmacro runtimeSanitizeFailureCode
+    ${If} $R0 != 0
+      MessageBox MB_OK|MB_ICONEXCLAMATION "无法检查当前用户的旧 Runtime（$R1，退出码：$R0）。请检查当前用户权限、系统 PowerShell 或安全软件。本次安装未继续。" /SD IDOK
+      Return
     ${EndIf}
-  ${ElseIf} $R0 != 603
-    MessageBox MB_OK|MB_ICONEXCLAMATION "无法核验 Runtime 进程状态，安装已停止，未终止任何进程。" /SD IDOK
-    StrCpy $R9 2
-    Return
-  ${EndIf}
+    StrCpy $R5 "-RequireIdle"
+    ${If} $R1 == "PROCESS_RUNNING"
+      ; No processes or startup state have been changed at this point.
+      ; Silent installation cannot obtain consent, so it also cancels.
+      MessageBox MB_OKCANCEL|MB_ICONQUESTION|MB_DEFBUTTON2 "检测到旧 Runtime 客户端正在运行，需要退出后才能继续安装。$\r$\n$\r$\n点击“确定”将自动退出旧客户端及其本机执行进程并开始安装，当前任务会中断。$\r$\n点击“取消”将暂时不安装，旧客户端继续运行。" /SD IDCANCEL IDOK runtimeStopConfirmed
+      StrCpy $R9 1
+      Return
+    ${ElseIf} $R1 != "PROCESS_CLEAR"
+      MessageBox MB_OK|MB_ICONEXCLAMATION "无法确认旧 Runtime 的运行状态。本次安装未继续。" /SD IDOK
+      Return
+    ${EndIf}
+    Goto runtimeStopReady
+    runtimeStopConfirmed:
+    StrCpy $R5 ""
+    runtimeStopReady:
+    !endif
+    nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\runtime-clean-install.ps1" -Mode Stop -AppId "${APP_ID}" -InstallDirectory "$INSTDIR" -FixtureRegistryId "$R6" $R5'
+    Pop $R0
+    Pop $R1
+    ${If} $R0 != 0
+      !insertmacro runtimeSanitizeFailureCode
+      MessageBox MB_OK|MB_ICONEXCLAMATION "无法接管当前用户的旧 Runtime（$R1，退出码：$R0）。请检查当前用户权限、系统 PowerShell 或安全软件。安装未继续覆盖文件。" /SD IDOK
+      Return
+    ${EndIf}
     StrCpy $R9 0
   FunctionEnd
-
   !ifndef BUILD_UNINSTALLER
-    Function runtimeScheduleDeferredInstall
-      nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\runtime-legacy-upgrade.ps1" -Mode PrepareDeferred -AppId "${APP_ID}" -InstallerPath "$EXEPATH" -InstallDirectory "$INSTDIR" -SupervisorPath "$PLUGINSDIR\RuntimeProcessSupervisor.exe"'
-      Pop $R0
-      Pop $R1
-      ${If} $R0 == 0
-        MessageBox MB_OK|MB_ICONINFORMATION "旧客户端未能退出，重启续装已登记。请正常重启 Windows；已暂时关闭本产品旧版开机启动，登录后会自动继续安装。配对和任务记录保留。安装完成后在“连接检查与恢复”中按具体提示处理；若旧资源资料无法核验，页面会另行指导登记重启恢复。" /SD IDOK
-        StrCpy $R9 3010
-      ${Else}
-        MessageBox MB_OK|MB_ICONEXCLAMATION "重启续装登记失败（错误码：$R0）。旧程序和任务资料未覆盖。请确认原 Windows 用户、目录权限、系统 PowerShell 与凭据保护正常后重试；也可正常重启并立即重跑本安装包。" /SD IDOK
-        StrCpy $R9 2
-      ${EndIf}
-    FunctionEnd
-
-    Function runtimePendingUpgrade
-      StrCpy $R0 1004
-      ReadEnvStr $R8 "APPDATA"
-      ; Match the PowerShell environment, not all-users $APPDATA/ProgramData.
-      StrCpy $R1 $R8 2 1
-      ${If} $R1 != ":\"
-        Return
-      ${EndIf}
-      System::Call 'kernel32::GetFileAttributesW(w "$R8") i.r0'
-      ${If} $0 == -1
-        Return
-      ${EndIf}
-      IntOp $0 $0 & 16
-      ${If} $0 == 0
-        Return
-      ${EndIf}
-      ${If} "${APP_ID}" == "cn.aidingyi.agent.runtime.acceptance"
-        StrCpy $R8 "$R8\aidwork-runtime-app-acceptance\upgrade-pending\state.bin"
-      ${Else}
-        StrCpy $R8 "$R8\aidwork-runtime-app\upgrade-pending\state.bin"
-      ${EndIf}
-      ; Only real FILE/PATH_NOT_FOUND is a no-op. Access errors go to validation.
-      System::Call 'kernel32::GetFileAttributesW(w "$R8") i.r0 ?e'
-      Pop $R0
-      ${If} $0 == -1
-      ${AndIf} $R0 == 2
-      ${OrIf} $0 == -1
-      ${AndIf} $R0 == 3
-        StrCpy $R0 0
-        Return
-      ${EndIf}
+    Function runtimeFinalizeAsUser
+      !insertmacro runtimeReadFixture
       InitPluginsDir
-      File /oname=$PLUGINSDIR\runtime-legacy-upgrade.ps1 "${RUNTIME_LEGACY_UPGRADE_SOURCE}"
-      nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\runtime-legacy-upgrade.ps1" -Mode "$R7" -AppId "${APP_ID}" -InstallDirectory "$INSTDIR"'
+      File /oname=$PLUGINSDIR\runtime-clean-install.ps1 "${RUNTIME_CLEAN_INSTALL_SOURCE}"
+      nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\runtime-clean-install.ps1" -Mode "$R7" -AppId "${APP_ID}" -InstallDirectory "$INSTDIR" -FixtureRegistryId "$R6"'
       Pop $R0
       Pop $R1
-      ; R1 may contain PowerShell paths. Never display or log its raw contents.
     FunctionEnd
-
-    Function runtimeCallPendingUpgrade
-      StrCpy $R0 1005
+    Function runtimeCallFinalize
+      StrCpy $R0 2
       ClearErrors
       ${If} ${UAC_IsInnerInstance}
-        !insertmacro UAC_AsUser_Call Function runtimePendingUpgrade ${UAC_SYNCREGISTERS}|${UAC_SYNCINSTDIR}
+        !insertmacro UAC_AsUser_Call Function runtimeFinalizeAsUser ${UAC_SYNCREGISTERS}|${UAC_SYNCINSTDIR}
       ${Else}
-        Call runtimePendingUpgrade
+        Call runtimeFinalizeAsUser
       ${EndIf}
       ${If} ${Errors}
-        StrCpy $R0 1005
+        StrCpy $R0 2
       ${EndIf}
-      ${If} $R0 < 0
-      ${OrIf} $R0 == "error"
-      ${OrIf} $R0 == "timeout"
-        ; One bounded retry after a process/launcher failure. Revalidate the same
-        ; protected state; validation errors (exit 1) are never blindly retried.
-        Sleep 250
-        StrCpy $R0 1005
-        ClearErrors
-        ${If} ${UAC_IsInnerInstance}
-          !insertmacro UAC_AsUser_Call Function runtimePendingUpgrade ${UAC_SYNCREGISTERS}|${UAC_SYNCINSTDIR}
-        ${Else}
-          Call runtimePendingUpgrade
-        ${EndIf}
-        ${If} ${Errors}
-          StrCpy $R0 1005
-        ${EndIf}
-      ${EndIf}
-    FunctionEnd
-
-    Function runtimeCancelPendingUpgrade
-      StrCpy $R7 "Cancel"
-      Call runtimeCallPendingUpgrade
-    FunctionEnd
-    Function .onInstFailed
-      Call runtimeCancelPendingUpgrade
-      MessageBox MB_OK|MB_ICONEXCLAMATION "安装未完成，已尝试恢复原登录启动设置。请重新运行安装器继续；设备配对和任务记录仍保留。" /SD IDOK
     FunctionEnd
   !endif
 !macroend
-
 !macro customInstall
-  StrCpy $R7 "Restore"
-  Call runtimeCallPendingUpgrade
+  StrCpy $R7 "Verify"
+  Call runtimeCallFinalize
   ${If} $R0 != 0
-    MessageBox MB_OK|MB_ICONEXCLAMATION "安装完成，但旧版登录启动设置未能自动恢复（错误码：$R0）。设备配置保留；打开 Runtime 后可从托盘确认自动启动选项。" /SD IDOK
+    !insertmacro runtimeSanitizeFailureCode
+    MessageBox MB_OK|MB_ICONEXCLAMATION "安装检查未通过（$R1，退出码：$R0）。新版 Node Host、凭据保护或安装文件无法使用，请检查目录权限、系统 PowerShell 与安全软件后重新安装。" /SD IDOK
+    SetErrorLevel 2
+    Quit
+  ${EndIf}
+  StrCpy $R7 "Finalize"
+  Call runtimeCallFinalize
+  ${If} $R0 != 0
+    !insertmacro runtimeSanitizeFailureCode
+    MessageBox MB_OK|MB_ICONEXCLAMATION "安装代际登记失败（$R1，退出码：$R0）。请检查当前 Windows 用户配置目录权限后重新安装。" /SD IDOK
+    SetErrorLevel 2
+    Quit
+  ${EndIf}
+  ; The user callback writes the user pointer; the file-copy identity writes this
+  ; stamp, including per-machine installations where the user cannot write here.
+  StrCpy $R1 $R1 36
+  FileOpen $R0 "$INSTDIR\runtime-installation.id" w
+  FileWrite $R0 "$R1"
+  FileClose $R0
+  ${If} ${Errors}
+    MessageBox MB_OK|MB_ICONEXCLAMATION "安装代际文件无法保存，请检查安装目录权限后重新安装。" /SD IDOK
+    SetErrorLevel 2
+    Quit
+  ${EndIf}
+  ${If} $R6 != ""
+    ; The fixture's ordinary generated uninstaller is never executed. Clear
+    ; only its isolated keys so the next fixture install copies the final EXE
+    ; payload without invoking a production-key uninstaller.
+    DeleteRegValue HKCU "$runtimeUninstallRegistryKey" UninstallString
+    DeleteRegValue HKCU "$runtimeUninstallRegistryKey" QuietUninstallString
   ${EndIf}
 !macroend
-
 !macro customUnInstall
-  ; Remove only this product's current-user login item; retain Runtime facts/data.
   ${IfNot} ${isUpdated}
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${APP_ID}"
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\RunOnce" "${APP_ID}.upgrade"
-    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "${APP_ID}"
-    ; Allow a later reinstall to register again, while retaining all execution facts.
-    ${If} "${APP_ID}" == "cn.aidingyi.agent.runtime.acceptance"
-      Delete "$APPDATA\aidwork-runtime-app-acceptance\login-startup-initialized"
-    ${Else}
-      Delete "$APPDATA\aidwork-runtime-app\login-startup-initialized"
-    ${EndIf}
   ${EndIf}
 !macroend

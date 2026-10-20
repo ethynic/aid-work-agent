@@ -61,9 +61,16 @@
               <AgentIcon :agent-id="agent.agent_id" class="w-6 h-6" />
             </div>
             <div class="flex-1 min-w-0">
-              <h3 class="text-base font-semibold text-default truncate">
-                {{ getDisplayName(agent) }}
-              </h3>
+              <div class="flex items-center gap-1.5 min-w-0">
+                <h3 class="text-base font-semibold text-default truncate">
+                  {{ getDisplayName(agent) }}
+                </h3>
+                <span
+                  v-if="agent.type === 'tenant_instance'"
+                  class="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-primary-50 text-primary-600"
+                  title="本租户副本，能力实时继承父定义"
+                >副本</span>
+              </div>
               <div class="text-xs text-muted truncate">{{ agent.agent_id }}</div>
             </div>
           </div>
@@ -73,7 +80,7 @@
             {{ truncateDescription(agent.description) }}
           </p>
 
-          <!-- 操作按钮：管理员显示「立即使用 + 定制提示词」双按钮，普通用户仅「立即使用」 -->
+          <!-- 操作按钮：管理员显示「立即使用 + 定制」双按钮，普通用户仅「立即使用」 -->
           <div class="flex gap-2">
             <button
               class="flex-1 h-9 rounded-lg bg-primary-600 text-white text-sm font-medium hover:bg-primary-700 transition-colors"
@@ -84,16 +91,34 @@
             <button
               v-if="isTenantAdmin"
               class="flex-1 h-9 rounded-lg border border-default text-sm font-medium text-muted hover:border-primary-300 hover:text-primary-600 transition-colors"
-              title="为该数字员工追加本租户专属提示词"
+              title="重命名、扩展提示词、模板文件、知识栏目、简介快捷按钮与复制副本"
               @click.stop="handleCustomize(agent)"
             >
-              定制提示词
+              定制
+            </button>
+            <button
+              v-if="isTenantAdmin && agent.type === 'tenant_instance'"
+              class="h-9 px-3 flex-shrink-0 rounded-lg border border-danger-200 text-sm font-medium text-danger-600 hover:bg-danger-50 transition-colors"
+              title="删除该副本"
+              @click.stop="handleDeleteCopy(agent)"
+            >
+              删除
             </button>
           </div>
         </div>
         </div>
       </div>
     </div>
+
+    <!-- 定制弹框（重命名/扩展提示词/模板文件/知识栏目/简介快捷按钮/复制副本） -->
+    <TenantAgentCustomizeDialog
+      v-model="showCustomize"
+      :tenant-id="String(route.params.tenant_id || '')"
+      :agent-id="customizeAgent?.agent_id || ''"
+      :agent-name="customizeAgent ? getDisplayName(customizeAgent) : ''"
+      :is-copy-instance="customizeAgent?.type === 'tenant_instance'"
+      @changed="handleAgentChanged"
+    />
   </div>
 </template>
 
@@ -102,13 +127,18 @@ import { ref, computed, onMounted, inject } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import AgentIcon from '@/components/ui/AgentIcon.vue'
+import TenantAgentCustomizeDialog from '@/components/TenantAgentCustomizeDialog.vue'
 import { listSubagents, type SubagentListItem } from '@/api/subagent'
+import { deleteTenantAgentInstance } from '@/api/tenantAgentInstances'
 import { useTenantAuth } from '@/composables/useTenantAuth'
+import { useSubagentList } from '@/composables/useSubagentList'
 
 const router = useRouter()
 const route = useRoute()
 
 const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, logout: tenantLogout } = useTenantAuth()
+// 新会话页/菜单栏共用的模块级列表缓存，定制变更后必须强制刷新
+const { loadAvailableSubagents } = useSubagentList()
 
 // 管理员（租户管理员 / 平台管理员）可见定制提示词与 API配置 入口
 const isTenantAdmin = computed(() =>
@@ -174,6 +204,12 @@ async function loadAgents() {
   }
 }
 
+// 定制保存/复制/删除成功后：强制刷新共享列表，再刷新本页列表
+async function handleAgentChanged() {
+  await loadAvailableSubagents(true, true)
+  await loadAgents()
+}
+
 // 跳转到与该数字员工对话
 function handleUseAgent(agent: SubagentListItem) {
   const tid = route.params.tenant_id
@@ -184,11 +220,24 @@ function handleUseAgent(agent: SubagentListItem) {
   }
 }
 
-// 跳转到该数字员工的定制提示词编辑器
+// 打开定制弹框
+const showCustomize = ref(false)
+const customizeAgent = ref<SubagentListItem | null>(null)
+
 function handleCustomize(agent: SubagentListItem) {
-  const tid = route.params.tenant_id
-  if (tid) {
-    router.push(`/t/${tid}/agent/${agent.agent_id}/prompt`)
+  customizeAgent.value = agent
+  showCustomize.value = true
+}
+
+// 删除副本实例：被渠道配置占用时后端拒绝，前端提示需先解除渠道绑定
+async function handleDeleteCopy(agent: SubagentListItem) {
+  if (!confirm('确定删除该副本？删除后新会话无法继续使用。')) return
+  try {
+    await deleteTenantAgentInstance(agent.agent_id)
+    await handleAgentChanged()
+  } catch (e: any) {
+    console.error('删除副本失败:', e)
+    alert(e?.message || '删除失败')
   }
 }
 

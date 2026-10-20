@@ -109,25 +109,18 @@ test('搜索进入错会话（头部≠目标）→ 视同搜索失败不报成�
   assert.equal(r.clickAndTypes.length, 1)
 })
 
-test('搜索失败 → 列表兜底：先 Escape 清场残留浮层，点击席彬玮列表项（姓名中心 x+60）→ 头部切换 → via=list', async () => {
+test('搜索定位直接报错后不再点击列表，交共享恢复处理', async () => {
   const r = recorder()
-  const executor = new ChatOpenExecutor(makeDeps(r, [ANCHOR(), ANCHOR(), yangSnapshot(), yangSnapshot(), yangSnapshot(), yangSnapshot({ contact: '席彬玮' })]))
-  const result = await executor.open({ contact: '席彬玮' })
-  assert.deepEqual(result, { contact: '席彬玮', via: 'list' })
-  // 搜索点击序列：入口 2 次（首击+重试仍无搜索框），随后列表项点击 = 姓名中心 (286.5,453.5) 右移 60
-  assert.deepEqual(r.clicks, [
-    { x: 520, y: 141 },
-    { x: 520, y: 141 },
-    { x: 346.5, y: 453.5 },
-  ])
+  const executor = new ChatOpenExecutor(makeDeps(r, [ANCHOR(), ANCHOR(), yangSnapshot(), yangSnapshot()]))
+  await assert.rejects(executor.open({ contact: '席彬玮' }), /重试前无法重新唯一定位搜索入口/)
+  assert.deepEqual(r.clicks, [{ x: 520, y: 141 }])
   assert.equal(r.clickAndTypes.length, 0)
-  // Escape 2 次：搜索链路开头清场 1 次 + 列表兜底前清场（关残留搜索浮层恢复会话列表）1 次
-  assert.equal(r.escapes, 2)
+  assert.equal(r.escapes, 1)
 })
 
 test('双失败：搜索失败 + 列表 0 命中 → 汇总报错（可用联系人名单 + 搜索失败原因）', async () => {
   const r = recorder()
-  const executor = new ChatOpenExecutor(makeDeps(r, [ANCHOR(), ANCHOR(), yangSnapshot(), yangSnapshot(), yangSnapshot()]))
+  const executor = new ChatOpenExecutor(makeDeps(r, [yangSnapshot()]))
   await assert.rejects(
     executor.open({ contact: '张三丰' }),
     (e: unknown) => {
@@ -160,7 +153,7 @@ test('视口外目标：mouseWheel 滚动（锚点=容器 bounds 中心）→ �
     ],
   })
   // 流：头部/入口锚点 ×2 → 无框 ×2（搜索失败）→ 兜底定位（周天一 y=3238 视口外）→ 滚动后可见 → 轮询头部切换
-  const executor = new ChatOpenExecutor(makeDeps(r, [ANCHOR(), ANCHOR(), yangSnapshot(), yangSnapshot(), yangSnapshot(), scrolled, yangSnapshot({ contact: '周天一' })]))
+  const executor = new ChatOpenExecutor(makeDeps(r, [yangSnapshot(), yangSnapshot(), scrolled, yangSnapshot({ contact: '周天一' })]))
   const result = await executor.open({ contact: '周天一' })
   assert.deepEqual(result, { contact: '周天一', via: 'list' })
   // wheel 锚点来自 .user-list 容器 bounds [188,196,359,1088] 中心 (367.5,740) 取整；目标在下方 → deltaY 正
@@ -171,17 +164,17 @@ test('视口外目标：mouseWheel 滚动（锚点=容器 bounds 中心）→ �
 
 test('视口外且未注入 mouseWheel → fail-loud，不点击列表项', async () => {
   const r = recorder()
-  const executor = new ChatOpenExecutor(makeDeps(r, [ANCHOR(), ANCHOR(), yangSnapshot(), yangSnapshot(), yangSnapshot()], { noWheel: true }))
+  const executor = new ChatOpenExecutor(makeDeps(r, [yangSnapshot()], { noWheel: true }))
   await assert.rejects(executor.open({ contact: '周天一' }), /视口外且本环境无滚动原语/)
-  assert.equal(r.clicks.length, 2, '只有搜索入口的 2 次点击（首击+重试）')
+  assert.equal(r.clicks.length, 0, '纯只读发现列表项在视口外，未发输入')
 })
 
 test('点击列表项后头部轮询超时（8 次仍杨鸿杰）→ ChatOpenError（头部未切换）', async () => {
   const r = recorder()
-  const executor = new ChatOpenExecutor(makeDeps(r, [ANCHOR(), ANCHOR(), yangSnapshot(), yangSnapshot(), yangSnapshot()]))
+  const executor = new ChatOpenExecutor(makeDeps(r, [yangSnapshot()]))
   await assert.rejects(executor.open({ contact: '席彬玮' }), /头部未切换为「席彬玮」/)
   // 列表项点击已发出（入口 2 次 + 列表 1 次），只是头部校验失败
-  assert.equal(r.clicks.length, 3)
+  assert.equal(r.clicks.length, 1)
 })
 
 test('取消（signal 已 abort）→ CancelledError，不点不输入', async () => {

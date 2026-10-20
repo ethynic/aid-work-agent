@@ -13,20 +13,21 @@
     <div v-if="view.connected && view.stateDirty && !view.refreshing" class="inline-notice warning" role="status">设备状态未能完整读取，请按连接处理步骤检查。<button v-if="controller.supportsRecovery" type="button" class="status-action" @click="showRecovery">查看连接处理步骤</button></div>
 
     <section v-if="controller.supportsRecovery" ref="recoveryPanel" class="runtime-panel" aria-labelledby="recovery-title" aria-live="polite" tabindex="-1">
-      <div class="runtime-section-heading"><h2 id="recovery-title">连接检查与恢复</h2><button v-if="!recoveryDetailsVisible" type="button" class="status-action" @click="showRecovery">查看处理步骤</button><button type="button" class="runtime-secondary" :disabled="recovery.busy || view.busy" @click="controller.diagnoseConnection()">{{ recovery.busy ? '正在检查或恢复…' : '检查连接并给出处理方式' }}</button></div>
+      <div class="runtime-section-heading"><h2 id="recovery-title">{{ controller.automaticConnection ? '连接状态' : '连接检查与恢复' }}</h2><button v-if="!controller.automaticConnection && !recoveryDetailsVisible" type="button" class="status-action" @click="showRecovery">查看处理步骤</button><button type="button" class="runtime-secondary" :disabled="recovery.busy || view.busy" @click="controller.diagnoseConnection()">{{ recovery.busy ? '正在检查…' : controller.automaticConnection ? '检查连接' : '检查连接并给出处理方式' }}</button></div>
       <div v-if="recoveryDetailsVisible">
-      <p class="runtime-muted">先检查本机配置与服务器连接；确认修复时再核对旧执行资源。检查不领取任务。只关闭窗口会保留后台；托盘中的“退出”才会退出客户端。</p>
-      <div v-if="!recovery.diagnosis" class="inline-notice warning" role="status">
+      <p v-if="controller.automaticConnection" class="runtime-muted">有效配置自动复用；重新配对会自动切换新连接。旧版本历史状态不影响本次连接。</p>
+      <p v-else class="runtime-muted">先检查本机配置与服务器连接；确认修复时再核对旧执行资源。检查不领取任务。只关闭窗口会保留后台；托盘中的“退出”才会退出客户端。</p>
+      <div v-if="!recovery.diagnosis && !controller.automaticConnection" class="inline-notice warning" role="status">
         <p>{{ recovery.busy ? '正在检查本机配置、凭据与服务器连接。处理步骤仍可查看，完成后会显示可用的修复方式。' : '先点击上方“检查连接并给出处理方式”。客户端会判断能否保留原配对修复，或需要使用新配对码建立连接。' }}</p>
         <ol class="runtime-recovery-steps"><li>原设备身份和历史记录会保留。故障状态下显示不出设备信息，不代表原配对已经失效。</li><li>检查完成后，优先选择“保留原配对，修复管理连接”；只有原配置或凭据无法恢复时才重新配置。</li><li>如提示需要重启，先点击“登记重启恢复”，登记成功后正常重启 Windows，再继续处理。</li></ol>
       </div>
       <p v-else-if="recovery.busy" class="runtime-muted" role="status">正在检查或恢复，请等待当前结果。下方保留上次检查的步骤，恢复按钮暂时不可重复提交。</p>
       <p v-if="recovery.error" class="field-error" role="alert">{{ recovery.error }}</p>
       <template v-if="recovery.diagnosis">
-        <p :class="['inline-notice', recovery.diagnosis.service_verified ? 'success' : 'warning']">{{ recovery.diagnosis.summary }}（{{ recovery.diagnosis.category }}）</p>
-        <p v-if="recovery.diagnosis.service_verified" class="runtime-muted">已收到服务器心跳响应。执行仍需单独启动；BOSS插件需安装、登录并就绪。</p>
+        <p :class="['inline-notice', recovery.diagnosis.service_verified ? 'success' : 'warning']">{{ recovery.diagnosis.summary }}<template v-if="!controller.automaticConnection">（{{ recovery.diagnosis.category }}）</template></p>
+        <p v-if="recovery.diagnosis.service_verified" class="runtime-muted">服务器连接已验证。BOSS插件需安装、登录并就绪。</p>
         <ol class="runtime-recovery-steps"><li v-for="(step, index) in recovery.diagnosis.steps" :key="index">{{ step }}</li></ol>
-        <div class="runtime-actions">
+        <div v-if="!controller.automaticConnection" class="runtime-actions">
           <button v-if="recovery.diagnosis.can_preserve" type="button" class="runtime-secondary" :disabled="recovery.busy || view.busy" @click="recoveryMode = 'preserve'; recoveryConfirmed = false">保留原配对，修复管理连接</button>
           <button v-if="recovery.diagnosis.can_reconfigure" type="button" class="runtime-secondary" :disabled="recovery.busy || view.busy" @click="recoveryMode = 'new_device'; recoveryConfirmed = false">重新配置连接</button>
           <button v-if="controller.supportsRegistration && recovery.registered" type="button" class="primary-button runtime-primary" :disabled="recovery.busy || view.busy" @click="controller.reconfigureConnection({ mode: 'continue_registration', confirmed: true })">完成连接配置</button>
@@ -63,9 +64,10 @@
           <button class="runtime-secondary" type="button" :disabled="cannotStop || !['starting', 'running', 'reconciling'].includes(view.state.state)" @click="controller.mutate('stop')">停止执行</button>
         </div>
       </template>
-      <form v-if="!controller.supportsRecovery || view.state?.state === 'stopped'" class="runtime-pair-form" @submit.prevent="pair">
+      <form v-if="controller.automaticConnection || !controller.supportsRecovery || view.state?.state === 'stopped'" class="runtime-pair-form" @submit.prevent="pair">
         <div class="runtime-section-heading"><h3>{{ view.state?.device ? '更换设备配对' : '配对设备' }}</h3></div>
-        <p class="runtime-muted">执行运行时，临时网络中断会自动重试；已停止需启动执行，待核对或已阻断需处理对应原因。配对会生成新的设备编号，名称可沿用；完成后需在网页中选定新设备。配对前需停止执行，未确认的旧任务仍保留在原设备。</p>
+        <p v-if="controller.automaticConnection" class="runtime-muted">输入网页生成的配对码即可连接。重新配对将停止本机旧执行，自动启用新设备；旧任务不会转移或重复执行。</p>
+        <p v-else class="runtime-muted">执行运行时，临时网络中断会自动重试；已停止需启动执行，待核对或已阻断需处理对应原因。配对会生成新的设备编号，名称可沿用；完成后需在网页中选定新设备。配对前需停止执行，未确认的旧任务仍保留在原设备。</p>
         <div class="field"><label for="runtime-server">服务地址</label><input id="runtime-server" v-model.trim="form.server" type="url" placeholder="https://企业服务地址" autocomplete="url" required :disabled="!canPair"></div>
         <div class="field"><label for="runtime-device-name">设备名称</label><input id="runtime-device-name" v-model.trim="form.device_name" maxlength="100" placeholder="例如 招聘工作电脑" autocomplete="off" required :disabled="!canPair"></div>
         <div class="field"><label for="runtime-pairing-code">一次性配对码</label><input id="runtime-pairing-code" v-model.trim="form.pairing_code" type="password" autocomplete="off" placeholder="输入管理员提供的配对码" required :disabled="!canPair"></div>
@@ -127,7 +129,7 @@ const form = reactive({ server: '', device_name: '', pairing_code: '' })
 const confirmRemoval = ref('')
 const cannotAct = computed(() => !view.connected || view.busy || recovery.busy || view.retryAvailable || view.operation?.status === 'running' || view.stateDirty)
 const cannotStop = computed(() => !view.connected || view.busy || recovery.busy || view.retryAvailable || view.operation?.status === 'running' || view.stateDirty)
-const canPair = computed(() => !cannotAct.value && view.state?.state === 'stopped')
+const canPair = computed(() => controller.automaticConnection ? !recovery.busy && !view.busy && !view.connecting : !cannotAct.value && view.state?.state === 'stopped')
 const stateLabels = { stopped: '已停止', starting: '启动中', running: '运行中', draining: '收尾中', reconciling: '待核对', blocked: '已阻断' }
 const connectionLabels = { unpaired: '未配对', connecting: '连接中', online: '在线', offline: '离线', revoked: '授权已撤回' }
 const operationLabels = { start: '启动', stop: '停止', pair: '配对', import: '安装 / 升级', enable: '启用', disable: '停用', uninstall: '卸载' }

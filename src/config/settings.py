@@ -8,7 +8,7 @@ import os
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import yaml
 from pydantic import SecretStr, BaseModel, Field, validator
@@ -203,10 +203,16 @@ class OCRToolConfig(BaseModel):
 
 class SearchToolConfig(BaseModel):
     """搜索工具配置"""
+    provider: Literal["tavily", "zhipu", "baidu"] = "tavily"
     tavily_api_key: str = ""
+    baidu_api_key: str = ""  # 独立搜索凭据；配置密钥不会自动启用百度
     max_results: int = 5  # 控制上下文长度
     include_answer: bool = True  # 返回 AI 生成的答案摘要
     search_depth: str = "basic"  # basic | advanced
+    zhipu_search_engine: Literal[
+        "search_std", "search_pro", "search_pro_sogou", "search_pro_quark"
+    ] = "search_pro"
+    timeout_seconds: float = Field(30.0, gt=0, le=120)
 
 
 class BrowserToolConfig(BaseModel):
@@ -403,6 +409,8 @@ class AgentConfig(BaseModel):
     """
     reply_style: str = ""  # 默认回复风格 ID，对应 src/prompts/styles/{style_id}.md；空表示不注入
     verbose_feedback: AgentVerboseFeedbackConfig = Field(default_factory=AgentVerboseFeedbackConfig)
+    # 租户数字员工副本（tenant_agent_instances 副本实例行）数量上限，防滥用
+    tenant_instance_max: int = 20
 
 
 class AppConfig(BaseModel):
@@ -557,9 +565,11 @@ class BossToolBillingConfig(BaseModel):
 
     # 弹层自愈（overlay heal，2026-08-31）：本地工具失败（UI_CHANGED/BUSY）后云端自动
     # 「导出弹层候选 → 启发式/LLM 选关闭控件 → 关闭 → 重试原操作一次」。
-    # 用了 LLM，费用高于单次工具调用；仅在自愈真正救回操作（重试成功）时收取。
+    # 旧文本链专项费保留兼容；新视觉链只由后台API按实际用量×20，不叠专项费。
     overlay_heal_enabled: bool = True
     overlay_heal_price: float = 2.0
+    # Shared visual recovery steps, separate from each command's ordinary retry.
+    visual_recovery_max_steps: int = Field(default=3, ge=1, le=10)
 
 
 class ClientUsageReportConfig(BaseModel):
@@ -583,6 +593,12 @@ class ClientUsageReportConfig(BaseModel):
         # （成本×100 积分），C 模式若再上报同名 command 按 0 计，防双扣
         "session_history": 0.0,
     })
+
+
+class BossVisualConfig(BaseModel):
+    """Single-image BOSS diagnostic API. New requests freeze server-side fee factor 20; historical rows retain their factor."""
+    model: str = "zhipu/GLM-5.3-Flash"
+    timeout_seconds: int = Field(default=120, gt=0)
 
 
 class SessionHistoryConfig(BaseModel):
@@ -752,6 +768,7 @@ class Settings(BaseModel):
     external_push: ExternalPushConfig = Field(default_factory=ExternalPushConfig)
     client_usage_report: ClientUsageReportConfig = Field(default_factory=ClientUsageReportConfig)
     session_history: SessionHistoryConfig = Field(default_factory=SessionHistoryConfig)
+    boss_visual: BossVisualConfig = Field(default_factory=BossVisualConfig)
     desktop_agent: DesktopAgentConfig = Field(default_factory=DesktopAgentConfig)
     agent_runner: AgentRunnerConfig = Field(default_factory=AgentRunnerConfig)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
@@ -1007,6 +1024,12 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
     # 搜索工具配置
     if os.getenv("TAVILY_API_KEY"):
         yaml_config.setdefault("tools", {}).setdefault("search", {})["tavily_api_key"] = os.getenv("TAVILY_API_KEY")
+    if os.getenv("BAIDU_API_KEY"):
+        yaml_config.setdefault("tools", {}).setdefault("search", {})["baidu_api_key"] = os.getenv("BAIDU_API_KEY")
+    if os.getenv("SEARCH_PROVIDER"):
+        yaml_config.setdefault("tools", {}).setdefault("search", {})["provider"] = os.getenv("SEARCH_PROVIDER")
+    if os.getenv("ZHIPU_SEARCH_ENGINE"):
+        yaml_config.setdefault("tools", {}).setdefault("search", {})["zhipu_search_engine"] = os.getenv("ZHIPU_SEARCH_ENGINE")
 
     # 语音转文字工具配置（阿里云 ASR）
     if os.getenv("ALIYUN_ASR_ACCESS_KEY_ID"):

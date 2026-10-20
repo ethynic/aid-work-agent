@@ -78,7 +78,8 @@ def batch_metadata(result, arguments=None):
     elif len(cumulative) >= 1000:
         reason = 'history_limit'
     available = reason in ('limit_reached', 'viewport_complete')
-    return {'continuation_id': result.get('invocation_id'),
+    from .boss_visual_recovery import public_recovery_metadata
+    return {**public_recovery_metadata(result), 'continuation_id': result.get('invocation_id'),
         'processed_names': _names(data, {}), 'stop_reason': data.get('stop_reason'),
         'job_name': data.get('job_name'), 'attempted': data.get('attempted'),
         'continuation': {'available': available, 'reason': reason or 'missing_context',

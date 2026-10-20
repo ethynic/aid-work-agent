@@ -125,14 +125,14 @@ class TestMarkStarted:
 class TestAppendEvent:
     def test_terminal_state_rejected(self):
         """终态 invocation 拒绝进度上报"""
-        with _patch_conn([{"state": "succeeded"}]):
+        with _patch_conn([{"device_id": INVOCATION_ID}, {"id": INVOCATION_ID}, {"state": "succeeded"}]):
             assert repository.append_event(
                 INVOCATION_ID, TENANT, HASH, "stage", 1, 10, "msg", 60
             ) is None
 
     def test_cancel_requested_returns_cancel_flag(self):
         """cancel_requested 状态：放行上报且 cancel=True（设备借此感知取消）"""
-        with _patch_conn([{"state": "cancel_requested"}, {"next_seq": 3}]):
+        with _patch_conn([{"device_id": INVOCATION_ID}, {"id": INVOCATION_ID}, {"state": "cancel_requested"}, {"next_seq": 3}]):
             result = repository.append_event(
                 INVOCATION_ID, TENANT, HASH, "stage", 1, 10, "msg", 60
             )
@@ -140,7 +140,7 @@ class TestAppendEvent:
 
     def test_running_seq_increment(self):
         """running 状态：seq 递增，cancel=False"""
-        with _patch_conn([{"state": "running"}, {"next_seq": 2}]):
+        with _patch_conn([{"device_id": INVOCATION_ID}, {"id": INVOCATION_ID}, {"state": "running"}, {"next_seq": 2}]):
             result = repository.append_event(
                 INVOCATION_ID, TENANT, HASH, "stage", 2, 10, "msg", 60
             )

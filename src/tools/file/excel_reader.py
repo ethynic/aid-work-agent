@@ -45,6 +45,7 @@ class ExcelReader:
                 "error": "openpyxl库未安装，无法读取Excel文档"
             }
 
+        workbook = None
         try:
             path = Path(file_path)
             if not path.exists():
@@ -110,8 +111,6 @@ class ExcelReader:
             full_content = '\n\n'.join(all_sheets_content)
             total_lines = len(full_content.splitlines())
 
-            workbook.close()
-
             logger.info(f"成功读取Excel文档: {path} (工作表: {sheet_count})")
 
             return {
@@ -135,6 +134,9 @@ class ExcelReader:
                 "success": False,
                 "error": f"读取Excel文档失败: {str(e)}"
             }
+        finally:
+            if workbook is not None:
+                workbook.close()
 
     def _extract_sheet_data(self, sheet) -> Dict[str, Any]:
         """
@@ -146,28 +148,29 @@ class ExcelReader:
         Returns:
             工作表数据字典
         """
+        max_row, max_column = sheet.max_row, sheet.max_column
         data = {
             "name": sheet.title,
-            "max_row": sheet.max_row,
-            "max_column": sheet.max_column,
+            "max_row": max_row,
+            "max_column": max_column,
             "rows": [],
             "headers": [],
             "data": []
         }
 
         # 获取第一行作为表头
-        if sheet.max_row >= 1:
+        if max_row >= 1:
             headers = []
-            for col in range(1, sheet.max_column + 1):
+            for col in range(1, max_column + 1):
                 cell_value = sheet.cell(1, col).value
                 headers.append(str(cell_value) if cell_value is not None else "")
             data["headers"] = headers
 
         # 获取所有数据行
         rows = []
-        for row in range(1, sheet.max_row + 1):
+        for row in range(1, max_row + 1):
             row_data = []
-            for col in range(1, sheet.max_column + 1):
+            for col in range(1, max_column + 1):
                 cell_value = sheet.cell(row, col).value
                 row_data.append(cell_value)
             rows.append(row_data)
@@ -175,7 +178,7 @@ class ExcelReader:
         data["rows"] = rows
 
         # 提取数据（跳过表头）
-        if sheet.max_row > 1:
+        if max_row > 1:
             data["data"] = rows[1:]
         else:
             data["data"] = []
@@ -194,23 +197,25 @@ class ExcelReader:
         """
         text_lines = []
 
-        if sheet.max_row == 0:
+        # openpyxl 的动态维度会扫描全部已加载单元格；不能在每列循环中重复计算。
+        max_row, max_column = sheet.max_row, sheet.max_column
+        if max_row == 0:
             return "(空工作表)"
 
         # 获取每列的最大宽度（用于格式化）
         col_widths = []
-        for col in range(1, sheet.max_column + 1):
+        for col in range(1, max_column + 1):
             max_width = 0
-            for row in range(1, sheet.max_row + 1):
+            for row in range(1, max_row + 1):
                 cell_value = sheet.cell(row, col).value
                 cell_str = str(cell_value) if cell_value is not None else ""
                 max_width = max(max_width, len(cell_str))
             col_widths.append(min(max_width + 2, 50))  # 限制最大宽度
 
         # 格式化每一行
-        for row in range(1, sheet.max_row + 1):
+        for row in range(1, max_row + 1):
             row_parts = []
-            for col in range(1, sheet.max_column + 1):
+            for col in range(1, max_column + 1):
                 cell_value = sheet.cell(row, col).value
                 cell_str = str(cell_value) if cell_value is not None else ""
                 width = col_widths[col - 1]

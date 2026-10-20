@@ -187,8 +187,8 @@ class AgentFactory:
         if not registry:
             return None
 
-        # 自定义智能体实时读库，确保跨 worker 配置一致
-        config = AgentFactory.get_runtime_config(registry, name)
+        # 自定义智能体实时读库，确保跨 worker 配置一致；租户实例在此解析合并
+        config = AgentFactory.get_runtime_config(registry, name, tenant_id=tenant_id)
 
         if not config:
             return None
@@ -202,7 +202,7 @@ class AgentFactory:
         )
 
     @staticmethod
-    def get_runtime_config(registry, name: str) -> Optional[SubagentConfig]:
+    def get_runtime_config(registry, name: str, tenant_id: Optional[str] = None) -> Optional[SubagentConfig]:
         """
         执行期获取最新配置（跨 worker 一致的方案 A）。
 
@@ -210,9 +210,18 @@ class AgentFactory:
         实时重读，避免 worker 进程内 registry._configs 缓存旧配置导致修改模型/工具等不生效；
         内置（文件系统 SUBAGENT.md）智能体走内存缓存，零影响。
 
+        传入 tenant_id 时优先解析租户数字员工实例（tenant_agent_instances）：
+        命中则返回「父定义 + 租户覆盖项」的合并配置。
+
         注意：仅限「真正执行智能体」的入口调用（委托、standalone 对话创建），
         列表展示/描述等非执行场景继续用 registry.get() 的内存缓存。
         """
+        if tenant_id:
+            from src.subagents.tenant_resolver import resolve_tenant_config
+            merged = resolve_tenant_config(registry, tenant_id, name)
+            if merged is not None:
+                return merged
+
         config = registry.get(name)
         if config is None:
             # 内存没有（如创建后未刷新 registry），按 agent_id 从 DB 按需加载

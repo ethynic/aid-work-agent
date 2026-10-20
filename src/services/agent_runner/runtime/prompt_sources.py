@@ -258,10 +258,12 @@ class PromptSources:
         return template
 
     def _load_extra_md(self) -> Optional[str]:
-        """加载租户定制的 extra.md（Phase 4 起从数据库加载）
+        """加载租户定制扩展提示词
 
-        从 prompt_versions 表读取 scope='tenant_extra' 的 production 版本。
-        数据库无记录时返回 None（等价于"该租户未配置定制内容"）。
+        实例行权威：tenant_agent_instances 存在该 (tenant, agent) 行时，一律以
+        其 extra_prompt 为准（空 = 租户已清空定制，不再回退旧内容）；仅当无实例
+        行时才回退 prompt_versions 表 scope='tenant_extra'（存量过渡双读，覆盖
+        实例行未落库的环境，迁移完成后旧数据清理）。
         """
         if not self.subagent_config:
             return None
@@ -272,17 +274,34 @@ class PromptSources:
         if not tenant_id or not self.subagent_config.dir_name:
             return None
 
+        dir_name = self.subagent_config.dir_name
+
+        # 租户数字员工实例：直用实例行 / 副本实例行的 extra_prompt 存于实例表
+        try:
+            from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
+            row = TenantAgentInstanceDB.get(tenant_id, dir_name)
+            if row:
+                content = (row.get("extra_prompt") or "").strip()
+                if content:
+                    logger.debug(
+                        f"Loaded extra prompt (tenant instance) for tenant {tenant_id}, "
+                        f"subagent {dir_name}"
+                    )
+                return content or None
+        except Exception as e:
+            logger.warning(f"Failed to load extra prompt from tenant instance: {e}")
+
         try:
             from src.prompts.prompt_resolver import prompt_resolver
             content = prompt_resolver.resolve(
                 scope="tenant_extra",
-                scope_id=f"extra:{self.subagent_config.dir_name}:{tenant_id}",
+                scope_id=f"extra:{dir_name}:{tenant_id}",
                 tenant_id=tenant_id,
             )
             if content:
                 logger.debug(
                     f"Loaded extra.md (DB) for tenant {tenant_id}, "
-                    f"subagent {self.subagent_config.dir_name}"
+                    f"subagent {dir_name}"
                 )
                 return content.strip()
         except Exception as e:

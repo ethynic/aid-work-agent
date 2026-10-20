@@ -1,3 +1,8 @@
+import { createBossResumeBatchOperation } from '../src/main/operations/bossResumeBatch.js'
+import { emptyRecommendations } from './recommendationBoundaryFixture.js'
+import type { BossSession } from '../src/main/operations/bossContext.js'
+import { WinClickError } from '../src/main/input/WinMouseClicker.js'
+import { detailSnap } from './detailGreetFixture.js'
 /**
  * ResumeBatchReader 单测：推荐牛人页批量「点卡片 → 读简历 → Escape 关闭 → 下一张」链路。
  * fake 注入 snapshot/click/pressEscape/captureFullpage/wheel/sameView/stitch（参照 resume-reader.test.ts）。
@@ -24,7 +29,7 @@ import {
   OPEN_CLICK_ATTEMPTS,
 } from '../src/main/boss/ResumeBatchReader.js'
 import { buildResumePayload } from '../src/main/operations/bossResumeDetail.js'
-import type { DeviceRect, ResumeReadResult } from '../src/main/boss/ResumeReader.js'
+import { ResumeReader, type DeviceRect, type ResumeReadResult } from '../src/main/boss/ResumeReader.js'
 import type { DomSnapshot, ClickPoint } from '../src/main/boss/domSnapshot.js'
 import { findButtonsByExactText, pairCardNameWithPoint } from '../src/main/boss/cardName.js'
 import { viewportOf, FilterSetError } from '../src/main/boss/FilterSetter.js'
@@ -61,6 +66,8 @@ function buildSnap(
   rows: Row[],
   opts: { canvas?: boolean; extraCanvases?: Array<[number, number, number, number]> } = {},
 ): DomSnapshot {
+  if (opts.canvas) return detailSnap({ name: '当前候选人', state: 'greet', decoyRows: rows, canvasNameOnly: true,
+    extraItems: opts.extraCanvases?.map((bounds) => ({ canvas: true, bounds, parent: 0 })) })
   const strings: string[] = ['', 'HTML']
   const nvIndex: number[] = [0]
   const nvValue: number[] = [0]
@@ -369,9 +376,9 @@ test('续筛按根 HTML 节点对齐 layout，不把首项 #document 的空 clie
           snap.documents[0]!.layout.bounds[0]![dimension] = invalid as number
           return snap
         }
-        await assert.rejects(reader().readBatch({ limit: 1, excludeNames: [ROW1.name!], scanMore: true }),
-          (e: unknown) => invalid === 0 || invalid === -1 ? e instanceof FilterSetError
-            : e instanceof ResumeBatchError && /CSS 几何/.test(e.message))
+        const invalidResult = await reader().readBatch({ limit: 1, excludeNames: [ROW1.name!], scanMore: true })
+        assert.equal(invalidResult.stop_reason, 'page_operation_failed')
+        assert.ok(invalidResult.recovery?.summary)
         assert.deepEqual(scrolls, [])
       }
     }
@@ -398,8 +405,8 @@ test('续筛缺失或冲突 CSS 几何拒绝发滚轮；普通批量读取不要
     deps.snapshot = async () => { const snap = await snapshot(); corrupt(snap); return snap }
     let scrolls = 0
     deps.scroll = async () => { scrolls++ }
-    await assert.rejects(reader().readBatch({ limit: 1, excludeNames: [ROW1.name!], scanMore: true }),
-      (e: unknown) => e instanceof ResumeBatchError && /CSS 几何/.test(e.message))
+    const invalidResult = await reader().readBatch({ limit: 1, excludeNames: [ROW1.name!], scanMore: true })
+    assert.match(invalidResult.recovery!.summary, /CSS 几何/)
     assert.equal(scrolls, 0)
     assert.deepEqual(f.clicks, [])
   }
@@ -532,37 +539,22 @@ test('② DOM 姓名配对失败（无名卡）→ 不点击直接记 failure（
   assert.equal(f.escapes, 0) // 没开过详情，无需关闭
 })
 
-test('③ 打开超时（点后始终无 canvas）→ failures 记录后继续下一张（下一张成功）', async () => {
+test('③ 两次正常点击仍未打开详情 → 保留单人失败并交共用恢复，不盲点下一张', async () => {
   const { reader, f } = makeBatch([ROW1, ROW2], [{ openTimeout: true }, {}])
   const cap = captureStderr()
   let result
-  try {
-    result = await reader().readBatch({ limit: 2 })
-  } finally {
-    cap.restore()
-  }
-  assert.equal(result.resumes.length, 1)
-  assert.equal(result.resumes[0]!.name, '张三丰')
+  try { result = await reader().readBatch({ limit: 2 }) } finally { cap.restore() }
+  assert.deepEqual(result.resumes, [])
   assert.equal(result.failures.length, 1)
   assert.equal(result.failures[0]!.name, '刘草威')
-  assert.match(result.failures[0]!.error, /未打开/)
-  assert.match(result.failures[0]!.error, /未出现简历画布/)
-  assert.equal(result.attempted, 2)
-  // 失败卡按 OPEN_CLICK_ATTEMPTS 重点了 3 次 + 下一张 1 次
-  assert.equal(f.clicks.length, OPEN_CLICK_ATTEMPTS + 1)
-  // 2026-08-18 起失败路径也尝试 Escape 清场（画布判定未命中但详情可能实际开着，
-  // 不关会挡住列表导致后续卡片连环点空）：超时卡清场 1 次 + 成功卡关详情 1 次
-  assert.equal(f.escapes, 2)
-  // 2026-09-10 排障整改：逐卡诊断日志（无 canvas 现场 + 点击序列 + 批量摘要）必须落 stderr
-  const all = cap.lines.join('')
-  assert.match(all, /\[boss-batch\] 批量开始 limit=2/)
-  assert.match(all, /视口 1249x1277，卡片 2 行，按钮 y=\[146,330\]，行距≈184px/)
-  assert.match(all, /卡片\[刘草威\] 失败：点击卡片后简历详情未打开/)
-  // 点击序列：三次全姓名点（废除绝对像素主体列点）
-  assert.match(all, /点击序列 \(342,138\)姓名点→\(342,138\)姓名点→\(342,138\)姓名点/)
-  assert.match(all, /页面无 CANVAS 节点/)
-  assert.match(all, /卡片\[张三丰\] 已读取拼接图/)
-  assert.match(all, /批量结束：尝试 2 张，成功 1 份，失败 1 个/)
+  assert.equal(result.attempted, 1)
+  assert.equal(f.clicks.length, 2)
+  assert.equal(f.escapes, 0, '未见详情时不发无关Escape')
+  assert.equal(result.stop_reason, 'detail_not_opened')
+  assert.equal(result.recovery!.execution.attemptsUsed, 2)
+  assert.equal(result.recovery!.execution.ordinaryRetriesUsed, 1)
+  assert.equal(result.recovery!.execution.verification.status, 'unmet')
+  assert.match(cap.lines.join(''), /页面无 CANVAS 节点/)
 })
 
 test('③b 打开失败诊断日志带画布尺寸：接近阈值的大画布提示疑似详情已开（附件简历型/阈值问题定位依据）', async () => {
@@ -630,7 +622,8 @@ test('⑤ 关闭失败 → 当前份仍入 resumes + failures 带「未关闭」
   assert.match(result.failures[0]!.error, /未关闭/)
   assert.equal(result.attempted, 1)
   assert.equal(f.clicks.length, 1) // 不再处理后续卡片
-  assert.equal(f.escapes, 1)
+  assert.equal(f.escapes, 2)
+  assert.equal(result.recovery!.execution.ordinaryRetriesUsed, 1)
   assert.deepEqual(f.progress, []) // 中止路径不推进进度
 })
 
@@ -646,13 +639,11 @@ test('⑥ limit 先于卡片数截断（2 张卡 limit 1 → 只处理 1 张）'
   assert.deepEqual(f.progress, [[1, 1]])
 })
 
-test('⑦ 无卡片（无打招呼按钮）→ ResumeBatchError（fail-loud）', async () => {
+test('⑦ 无卡片 → 结构化页面错误供共用恢复，不声明已经读完', async () => {
   const { reader, f } = makeBatch([])
-  await assert.rejects(reader().readBatch({ limit: 1 }), (e: unknown) => {
-    assert.ok(e instanceof ResumeBatchError)
-    assert.match(e.message, /未找到任何牛人卡片/)
-    return true
-  })
+  const result = await reader().readBatch({ limit: 1 })
+  assert.equal(result.stop_reason, 'page_operation_failed')
+  assert.match(result.recovery!.summary, /未找到任何牛人卡片/)
   assert.equal(f.clicks.length, 0)
 })
 
@@ -715,16 +706,13 @@ test('⑩ 残留详情弹层：入口先 Escape 关闭再正常批量（残留�
   assert.equal(result.attempted, 1)
 })
 
-test('⑪ 残留详情弹层 Escape 关不掉 → ResumeBatchError（fail-loud，不点任何卡片）', async () => {
-  const { reader, f } = makeBatch([ROW1], [{ closeFail: true }], { initialState: 'canvas' })
-  await assert.rejects(reader().readBatch({ limit: 1 }), (e: unknown) => {
-    assert.ok(e instanceof ResumeBatchError)
-    assert.match(e.message, /未能关闭/)
-    return true
-  })
-  assert.equal(f.clicks.length, 0) // 绝不带弹层盲点卡片
-  assert.equal(f.captures, 0)
-  assert.equal(f.escapes, 1) // 只尝试过关残留弹层
+test('⑪ 残留详情正常Escape两次仍未关闭 → 结构化错误，不点背景卡片', async () => {
+  const { reader, f } = makeBatch([ROW1, ROW2], [{ closeFail: true }], { initialState: 'canvas' })
+  const result = await reader().readBatch({ limit: 1 })
+  assert.match(result.recovery!.summary, /未能关闭/)
+  assert.equal(result.recovery!.execution.ordinaryRetriesUsed, 1)
+  assert.equal(f.clicks.length, 0)
+  assert.equal(f.escapes, 2)
 })
 
 // ---------- P1 接缝质量元信息 → 云端契约 payload 透传 ----------
@@ -750,4 +738,92 @@ test('⑫ buildResumePayload 冒烟：suspect_seams/seam_mis/bottom_reached 透�
   for (const gone of ['ocr_text', 'ocr_chars', 'ocr_engine', 'ocr_accel', 'ocr_empty_segments', 'text_seam_unmatched']) {
     assert.equal(gone in payload, false, `payload 不应再含 ${gone}`)
   }
+})
+
+
+test('收尾输入直接异常仍保留已读取图像，不能整批重做', async () => {
+  const { reader, deps, f } = makeBatch([ROW1, ROW2])
+  deps.pressEscape = async () => { throw new WinClickError('[BOSS_INPUT_UNKNOWN] 输入结果未知') }
+  const result = await reader().readBatch({ limit: 2 })
+  assert.equal(result.resumes.length, 1)
+  assert.equal(result.resumes[0]!.name, ROW1.name)
+  assert.equal(result.resumes[0]!.readResult.imageBuffer.equals(STITCHED_PNG), true)
+  assert.equal(result.stop_reason, 'page_operation_failed')
+  assert.equal(result.recovery!.execution.ordinaryRetriesUsed, 0)
+  assert.equal(result.recovery!.execution.inputStatus, 'unknown')
+  assert.equal(f.clicks.length, 1)
+})
+
+test('打开输入直接异常不重击同卡，保留失败现场供共享视觉恢复', async () => {
+  const { reader, deps } = makeBatch([ROW1, ROW2])
+  let clicks = 0
+  deps.click = async () => { clicks++; throw new WinClickError('落点被浏览器弹窗阻挡', 2) }
+  const result = await reader().readBatch({ limit: 2 })
+  assert.equal(clicks, 1)
+  assert.deepEqual(result.resumes, [])
+  assert.equal(result.recovery!.execution.ordinaryRetriesUsed, 0)
+  assert.equal(result.recovery!.execution.verification.status, 'inconclusive')
+})
+
+
+test('批次成功facts透传实际click/Escape输入，不写死not_started', async () => {
+  const { deps, f } = makeBatch([ROW1])
+  const original = ResumeReader.prototype.readResume
+  ResumeReader.prototype.readResume = async () => ({ segments: 1, bottomReached: true, width: 760, height: 2400,
+    imageBuffer: STITCHED_PNG, seamMis: [], suspectSeams: [] })
+  const session: BossSession = {
+    snapshot: deps.snapshot, click: deps.click, pressEscape: deps.pressEscape,
+    clickBrowse: async () => { assert.fail('不应使用其他点击通道') }, clickAndType: async () => { assert.fail('不应键入') },
+    mouseWheel: async () => {}, captureFullpage: deps.captureFullpage,
+    getUrl: async () => 'https://www.zhipin.com/web/chat/recommend', close: async () => {},
+  }
+  try {
+    const result = await createBossResumeBatchOperation(async () => session).execute({ limit: 1 }, { signal: new AbortController().signal, progress() {} })
+    assert.equal(result.success, true)
+    const facts = result.data.operation_recovery as any
+    assert.equal(facts.execution.input_status, 'attempted')
+    assert.equal(facts.execution.attempts_used, 1)
+    assert.equal(facts.execution.ordinary_retries_used, 0)
+    assert.equal(facts.execution.stage, 'postcheck')
+    assert.equal(facts.verification.status, 'satisfied')
+    assert.equal(f.clicks.length, 1)
+    assert.equal(f.escapes, 1)
+  } finally { ResumeReader.prototype.readResume = original }
+})
+
+test('明确空匹配成功facts保持not_started，不因成功验证伪造输入', async () => {
+  let snapshots = 0
+  const noInput = async () => { assert.fail('明确空结果不应发送任何输入') }
+  const session: BossSession = {
+    snapshot: async () => ++snapshots === 1 ? buildSnap([]) : emptyRecommendations(),
+    click: noInput, clickBrowse: noInput, pressEscape: noInput, clickAndType: noInput, mouseWheel: noInput,
+    captureFullpage: async () => { assert.fail('空结果不采图') },
+    getUrl: async () => 'https://www.zhipin.com/web/chat/recommend', close: async () => {},
+  }
+  const result = await createBossResumeBatchOperation(async () => session).execute({ limit: 1 }, { signal: new AbortController().signal, progress() {} })
+  assert.equal(result.success, true)
+  const facts = result.data.operation_recovery as any
+  assert.equal(facts.execution.input_status, 'not_started')
+  assert.equal(facts.execution.attempts_used, 1)
+  assert.equal(facts.execution.ordinary_retries_used, 0)
+  assert.equal(facts.verification.status, 'satisfied')
+  assert.equal(result.data.stop_reason, 'no_matching_candidates')
+})
+
+
+test('成功终态保留当前项收尾的一次重试，不用默认0覆盖', async () => {
+  const { deps, reader } = makeBatch([ROW1])
+  const close = deps.pressEscape
+  let presses = 0
+  deps.pressEscape = async () => { if (++presses === 2) await close() }
+  const executor = reader()
+  const result = await executor.readBatch({ limit: 1 })
+  assert.equal(result.resumes.length, 1)
+  assert.equal(result.recovery, undefined)
+  assert.equal(executor.batchExecution.inputStatus, 'attempted')
+  assert.equal(executor.batchExecution.ordinaryRetriesUsed, 1)
+  assert.equal(executor.batchExecution.attemptsUsed, 2)
+  const copy = executor.batchExecution
+  copy.inputStatus = 'not_started'
+  assert.equal(executor.batchExecution.inputStatus, 'attempted', '回执是副本，调用方不能改执行事实')
 })

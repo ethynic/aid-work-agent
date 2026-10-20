@@ -262,8 +262,10 @@ class NotificationRepository:
             for identity in sorted((installation_ref, digest)):
                 cursor.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
                                ('notification:target:'+body.provider+':'+identity,))
-            cursor.execute('''SELECT * FROM notification_targets WHERE provider=%s AND identity_digest=%s FOR UPDATE''',
-                           (body.provider, digest))
+            # 同 scope 内 digest 唯一即可；不同租户允许共用同一群机器人 Webhook
+            # （平台管理员搭建一个群接收多租户告警）。
+            cursor.execute('''SELECT * FROM notification_targets WHERE provider=%s AND identity_digest=%s
+                AND scope_key=%s FOR UPDATE''', (body.provider, digest, subject.scope_key))
             endpoint = cursor.fetchone()
             if endpoint and not tenant_owned(endpoint, subject):
                 raise NotificationError('NOTIFICATION_TARGET_OWNED', 409)

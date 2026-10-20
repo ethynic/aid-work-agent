@@ -112,6 +112,11 @@ class SubagentConfig(BaseModel):
     # 来源标记
     from_db: bool = Field(default=False, description="是否来自数据库加载")
 
+    # 租户实例标记（tenant_agent_instances 合并产物）：system_prompt/工具/技能/模型取自父定义，
+    # name/description 为租户覆盖值，dir_name/agent_id 为实例行 agent_id
+    tenant_instance: bool = Field(default=False, description="是否为租户数字员工实例（合并配置）")
+    base_agent_id: Optional[str] = Field(default=None, description="租户实例继承的父定义 agent_id")
+
     class Config:
         use_enum_values = True
     

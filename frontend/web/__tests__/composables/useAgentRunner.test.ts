@@ -3,11 +3,12 @@ import { controlledRunnerFetch } from '../mocks/runnerFetch'
 import { runnerView } from '../mocks/runnerView'
 import type { RunnerView } from '@/api/runner'
 
-const external = vi.hoisted(() => ({ token: 'fictional-A', video: { value: { duration_sec: 10 } }, legacy: vi.fn(), history: vi.fn() }))
+const external = vi.hoisted(() => ({ token: 'fictional-A', video: { value: { duration_sec: 10 } }, legacy: vi.fn(), history: vi.fn(), session: vi.fn(), credit: vi.fn(), preferences: vi.fn() }))
 vi.mock('@/api/agent', () => ({ SSEManager: class { connect = external.legacy; disconnect() {} }, uploadFile: vi.fn() }))
-vi.mock('@/api/session', () => ({ getSessionMessages: external.history }))
+vi.mock('@/api/session', () => ({ getSessionMessages: external.history, getSession: external.session, updateFailedMessageUI: external.preferences }))
 vi.mock('@/composables/useTenantAuth', () => ({ useTenantAuth: () => ({ getAuthHeader: () => ({ Authorization: 'Bearer ' + external.token }) }) }))
 vi.mock('@/composables/useVideoGenParams', () => ({ useVideoGenParams: () => ({ params: external.video }) }))
+vi.mock('@/composables/useCreditCheck', () => ({ useCreditCheck: () => ({ checkCreditBeforeAction: external.credit }) }))
 
 describe('Existing useAgent public interface with durable Runner transport', () => {
   let network: ReturnType<typeof controlledRunnerFetch>
@@ -41,6 +42,9 @@ describe('Existing useAgent public interface with durable Runner transport', () 
     vi.resetModules(); vi.useFakeTimers()
     external.token = 'fictional-A'; external.video.value = { duration_sec: 10 }
     external.legacy.mockReset(); external.history.mockReset().mockResolvedValue({ messages: [] })
+    external.session.mockReset().mockResolvedValue({ session_id: 'A', subagent_id: 'original-agent', instance_id: 'original-instance' })
+    external.credit.mockReset().mockResolvedValue({ allowed: true })
+    external.preferences.mockReset().mockResolvedValue(undefined)
     network = controlledRunnerFetch(); vi.stubGlobal('fetch', network.fetch)
     agent = (await import('@/composables/useAgent')).useAgent()
     agent.sessionId.value = 'A'
@@ -459,6 +463,240 @@ describe('Existing useAgent public interface with durable Runner transport', () 
     }
     return { task, submitted: request('/runners', 'POST') }
   }
+
+  it('execution failure shows on the original input; retry uses a new key, original files/profile and preserves the attachment draft', async () => {
+    const originalFile = { file_id: 'original-file', name: 'original.txt', size: 1, type: 'file' as const, mime_type: 'text/plain' }
+    const row = runnerView({ status: 'failed', profile_id: 'original-agent',
+      snapshot: { input: { message_id: 'runner-A:user', text: '上海的', attachments: [originalFile] } },
+      result: { status: 'failed', output: '', error_code: 'EXECUTION_FAILED' } })
+    await send('A', row)
+    expect(agent.messages.value).toHaveLength(1)
+    const failed = agent.messages.value[0]
+    expect(failed.runnerFailure?.retry).toBeTypeOf('function')
+    const draft = { ...originalFile, file_id: 'draft-file', name: 'draft.txt' }
+    agent.currentFiles.value = [draft]
+    failed.runnerFailure?.retry?.()
+    failed.runnerFailure?.retry?.()
+    await flush(); capability(); await flush()
+    const retry = request('/runners', 'POST')
+    const payload = JSON.parse(retry.body!)
+    expect(payload).toMatchObject({ message: '上海的', subagent: 'original-agent', instance_id: 'original-instance', files: [originalFile] })
+    expect(payload.client_request_id).not.toBe(row.client_request_id)
+    expect(external.session).toHaveBeenCalledTimes(1)
+    expect(agent.currentFiles.value).toEqual([draft])
+    retry.reject(new TypeError('lost retry acceptance')); await flush()
+    expect(agent.messages.value.find(message => message.role === 'user' && message.clientRequestId === payload.client_request_id)?.submitFailure).toBeDefined()
+    await vi.advanceTimersByTimeAsync(2000)
+    const replay = request('/runners', 'POST')
+    expect(replay.body).toBe(retry.body)
+    replay.respond({ success: true, runner: runnerView({ runner_id: 'runner-retry', client_request_id: payload.client_request_id, queue_order: 2 }) }, 202)
+    await flush()
+    expect(external.legacy).not.toHaveBeenCalled()
+  })
+
+  it('historical failed tasks rebuild retry controls and stale callbacks cannot send after switching sessions or accounts', async () => {
+    const loading = agent.switchSession('A'); await flush(); capability(); await flush()
+    request('/sessions/A/runners').respond({ runners: [runnerView({ status: 'failed' })], active_runners: [], has_more: false, next_cursor: null })
+    await loading; await flush()
+    expect(agent.messages.value).toHaveLength(1)
+    const retry = agent.messages.value[0].runnerFailure?.retry
+    agent.sessionId.value = 'B'
+    retry?.(); await flush()
+    expect(external.session).not.toHaveBeenCalled()
+    agent.sessionId.value = 'A'; external.token = 'different-account'
+    retry?.(); await flush()
+    expect(external.session).not.toHaveBeenCalled()
+    expect(network.requests.filter(item => item.method === 'POST')).toHaveLength(0)
+  })
+
+  it('a successful retry removes only its source and refresh reconstructs the same result from persisted links', async () => {
+    const first = runnerView({ status: 'failed' })
+    await send('A', first)
+    const staleRetry = agent.messages.value[0].runnerFailure?.retry
+    staleRetry?.(); await flush(); capability(); await flush()
+    const retry = request('/runners', 'POST')
+    const key = JSON.parse(retry.body!).client_request_id
+    expect(external.preferences).toHaveBeenCalledWith('A', 'runner-A', { action: 'retry', client_request_id: key }, { Authorization: 'Bearer fictional-A' })
+    expect(agent.messages.value.some(item => item.runnerFailure)).toBe(true)
+    const retried = runnerView({ runner_id: 'retry-A', client_request_id: key, queue_order: 3 })
+    retry.respond({ success: true, runner: retried }, 202); await flush()
+    expect(agent.messages.value.find(item => item.runnerId === 'runner-A')?.runnerFailure?.retrying).toBe(true)
+    const completed = { ...retried, status: 'completed' as const, settlement_status: 'settled' as const, view_revision: 2,
+      result: { status: 'completed', output: '上海天气' } }
+    request('/runners/retry-A').respond({ success: true, runner: completed }); await flush()
+    expect(agent.messages.value.some(item => item.runnerId === 'runner-A')).toBe(false)
+    staleRetry?.(); await flush()
+    expect(external.preferences).toHaveBeenCalledTimes(1)
+    agent.clearSessionCache('A')
+    external.history.mockResolvedValue({ messages: [], failed_message_ui: { retry_sources: { [key]: 'runner-A' } } })
+    const reloading = agent.switchSession('A'); await flush(); capability(); await flush()
+    const other = runnerView({ runner_id: 'other-failed', client_request_id: 'other-key', status: 'failed', queue_order: 2 })
+    request('/sessions/A/runners').respond({ runners: [first, other, completed], active_runners: [], has_more: false, next_cursor: null })
+    await reloading; await flush()
+    expect(agent.messages.value.some(item => item.runnerId === 'runner-A')).toBe(false)
+    expect(agent.messages.value.filter(item => item.runnerFailure).map(item => item.runnerId)).toEqual(['other-failed'])
+    expect(agent.messages.value.some(item => item.content === '上海天气')).toBe(true)
+  })
+
+  it('failed retry persistence prevents submission and leaves the original failed input and draft available', async () => {
+    await send('A', runnerView({ status: 'failed' }))
+    external.preferences.mockRejectedValueOnce(new Error('消息操作未成功，请稍后重试。'))
+    agent.messages.value[0].runnerFailure?.retry?.(); await flush(); capability(); await flush()
+    expect(network.requests.filter(item => item.method === 'POST')).toHaveLength(1)
+    expect(agent.messages.value[0].runnerFailure?.retrying).toBe(false)
+    expect(agent.isProcessing.value).toBe(false)
+    expect(agent.error.value).toBe('消息操作未成功，请稍后重试。')
+  })
+
+  it('manual deletion persists before removing a failed input, keeps partial results and cannot be replayed from another account', async () => {
+    await send('A', runnerView({ status: 'failed', result: { status: 'failed', output: '保留部分分析' } }))
+    const input = agent.messages.value[0]
+    const remove = input.runnerFailure?.remove
+    let resolve!: () => void
+    external.preferences.mockImplementationOnce(() => new Promise<void>(done => { resolve = done }))
+    remove?.(); remove?.(); await flush()
+    expect(input.runnerFailure?.deleting).toBe(true)
+    expect(agent.messages.value).toHaveLength(2)
+    expect(external.preferences).toHaveBeenCalledTimes(1)
+    resolve(); await flush()
+    expect(agent.messages.value.map(item => item.content)).toEqual(['保留部分分析'])
+    agent.clearSessionCache('A')
+    external.history.mockResolvedValue({ messages: [], failed_message_ui: { hidden_failed: { 'runner-A': true } } })
+    const loading = agent.switchSession('A'); await flush(); capability(); await flush()
+    request('/sessions/A/runners').respond({ runners: [runnerView({ status: 'failed' })], active_runners: [], has_more: false, next_cursor: null })
+    await loading; await flush()
+    expect(agent.messages.value).toEqual([])
+    external.token = 'different-account'; remove?.(); await flush()
+    expect(external.preferences).toHaveBeenCalledTimes(1)
+  })
+
+  it('a failed delete keeps the original message and reports that it was not removed', async () => {
+    await send('A', runnerView({ status: 'failed' }))
+    external.preferences.mockRejectedValueOnce(new Error('消息操作未成功，请稍后重试。'))
+    agent.messages.value[0].runnerFailure?.remove?.(); await flush()
+    expect(agent.messages.value[0].runnerFailure?.deleting).toBe(false)
+    expect(agent.error.value).toBe('消息操作未成功，请稍后重试。')
+  })
+
+  it('deleting an earlier failed message cannot discard text from an active legacy response', async () => {
+    await send('A', runnerView({ status: 'failed' }))
+    const remove = agent.messages.value[0].runnerFailure?.remove
+    const legacySend = agent.sendMessage('legacy next turn', null, 'A')
+    await flush(); capability(false, true); await legacySend; await flush()
+    const args = external.legacy.mock.calls[0]
+    expect(args).toBeDefined()
+    args[5]('第一段')
+    expect(agent.messages.value[agent.messages.value.length - 1]?.content).toBe('第一段')
+    remove?.(); await flush()
+    args[5]('，第二段')
+    args[6]()
+    expect(agent.messages.value.map(item => item.content)).toEqual(['legacy next turn', '第一段，第二段'])
+    expect(agent.isProcessing.value).toBe(false)
+  })
+
+  it('only definitive local rejection can be deleted; stale retry cannot submit a dismissed optimistic turn', async () => {
+    const { task, submitted } = await sendToSubmission()
+    submitted.respond({ code: 'NO_CREDIT', error: 'fictional error' }, 403)
+    await task; await flush()
+    const input = agent.messages.value.find(item => item.role === 'user')!
+    const retry = input.submitFailure?.retry
+    expect(input.submitFailure?.remove).toBeTypeOf('function')
+    input.submitFailure?.remove?.(); retry?.(); await flush()
+    expect(agent.messages.value).toEqual([])
+    expect(network.requests.filter(item => item.method === 'POST')).toHaveLength(1)
+    expect(external.preferences).not.toHaveBeenCalled()
+  })
+
+  it('leaving while retry loads the original session cannot send into a background session', async () => {
+    await send('A', runnerView({ status: 'failed' }))
+    let resolveSession!: (value: unknown) => void
+    external.session.mockReturnValue(new Promise(resolve => { resolveSession = resolve }))
+    agent.messages.value[0].runnerFailure?.retry?.()
+    await flush()
+    agent.sessionId.value = 'B'
+    resolveSession({ session_id: 'A', subagent_id: 'original-agent' })
+    await flush()
+    expect(network.requests.filter(item => item.method === 'POST')).toHaveLength(1)
+  })
+
+  it('retry cannot consume another in-flight turn or fall back to legacy transport', async () => {
+    await send('A', runnerView({ status: 'failed' }))
+    const retry = agent.messages.value[0].runnerFailure?.retry
+    retry?.(); await flush(); capability(false, true); await flush()
+    expect(network.requests.filter(item => item.method === 'POST')).toHaveLength(1)
+    expect(external.legacy).not.toHaveBeenCalled()
+    expect(agent.isProcessing.value).toBe(false)
+    const next = agent.sendMessage('new turn', null, 'A')
+    await flush()
+    retry?.(); await flush()
+    expect(external.session).toHaveBeenCalledTimes(1)
+    capability(); await flush()
+    const submitted = request('/runners', 'POST')
+    submitted.respond({ success: true, runner: runnerView({ runner_id: 'runner-new', queue_order: 2,
+      client_request_id: JSON.parse(submitted.body!).client_request_id }) }, 202)
+    await next; await flush()
+  })
+
+  it('leaving during retry capabilities cancels the new send and releases its selection guard', async () => {
+    await send('A', runnerView({ status: 'failed' }))
+    const retry = agent.messages.value[0].runnerFailure?.retry
+    retry?.(); await flush()
+    agent.sessionId.value = 'B'
+    capability(); await flush()
+    expect(network.requests.filter(item => item.method === 'POST')).toHaveLength(1)
+    expect(agent.isSessionRunning('A')).toBe(false)
+    agent.sessionId.value = 'A'
+    retry?.(); await flush(); capability(); await flush()
+    const submitted = request('/runners', 'POST')
+    submitted.respond({ success: true, runner: runnerView({ runner_id: 'runner-retry', queue_order: 2,
+      client_request_id: JSON.parse(submitted.body!).client_request_id }) }, 202)
+    await flush()
+    expect(network.requests.filter(item => item.method === 'POST')).toHaveLength(2)
+  })
+
+  it('leaving during retry credit checks cannot submit or consume attachment drafts', async () => {
+    await send('A', runnerView({ status: 'failed' }))
+    let resolveCredit!: (value: { allowed: boolean }) => void
+    external.credit.mockReturnValue(new Promise(resolve => { resolveCredit = resolve }))
+    const draft = { file_id: 'draft-file', name: 'draft.txt', size: 1, type: 'file' as const, mime_type: 'text/plain' }
+    agent.currentFiles.value = [draft]
+    window.history.replaceState({}, '', '/t/tenant-A/chat')
+    try {
+      agent.messages.value[0].runnerFailure?.retry?.(); await flush()
+      agent.sessionId.value = 'B'
+      resolveCredit({ allowed: true }); await flush()
+      expect(network.requests.filter(item => item.method === 'POST')).toHaveLength(1)
+      expect(agent.currentFiles.value).toEqual([draft])
+      expect(agent.isSessionRunning('A')).toBe(false)
+    } finally {
+      window.history.replaceState({}, '', '/')
+    }
+  })
+
+  it('a delayed retry cannot release selection owned by another send while its credit check was pending', async () => {
+    await send('A', runnerView({ status: 'failed' }))
+    let resolveCredit!: (value: { allowed: boolean }) => void
+    external.credit.mockImplementationOnce(() => new Promise(resolve => { resolveCredit = resolve }))
+    window.history.replaceState({}, '', '/t/tenant-A/chat')
+    try {
+      agent.messages.value[0].runnerFailure?.retry?.(); await flush()
+      const normal = agent.sendMessage('ordinary input', null, 'A'); await flush()
+      agent.sessionId.value = 'B'
+      resolveCredit({ allowed: true }); await flush()
+      expect(agent.isSessionRunning('A')).toBe(true)
+      agent.sessionId.value = 'A'
+      await agent.sendMessage('must remain blocked', null, 'A'); await flush()
+      capability(); await flush()
+      const submitted = request('/runners', 'POST')
+      expect(JSON.parse(submitted.body!).message).toBe('ordinary input')
+      submitted.respond({ success: true, runner: runnerView({ runner_id: 'runner-ordinary', queue_order: 2,
+        client_request_id: JSON.parse(submitted.body!).client_request_id }) }, 202)
+      await normal; await flush()
+      expect(network.requests.filter(item => item.method === 'POST')).toHaveLength(2)
+    } finally {
+      window.history.replaceState({}, '', '/')
+    }
+  })
 
   it('definitive credit-blocked submission marks an explicit error state, restores the draft, and never auto-retries', async () => {
     const attachment = { file_id: 'fixture-credit-file', name: 'kept.txt', size: 8, type: 'file' as const, mime_type: 'text/plain' }

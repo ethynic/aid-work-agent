@@ -94,3 +94,28 @@ test('clickAndType：空文本 / 坐标超视口 → WinClickError，不调 ps1'
   await assert.rejects(clicker.clickAndType({ x: 9999, y: 100 }, VP, '你好'), WinClickError)
   assert.equal(called, 0)
 })
+
+
+test('bound physical click, drag and typing activate the exact target before one packaged input and pass its debug port', async () => {
+  const events: string[] = []
+  const clicker = new WinMouseClicker({ cdpPort: 9333, beforeInput: async () => { events.push('activate-original-target') }, execFileImpl: async (_file, args) => {
+    events.push('input'); assert.equal(args[args.indexOf('-CdpPort') + 1], '9333')
+    return { stdout: '', stderr: '' }
+  } })
+  await clicker.click({ x: 10, y: 20 }, VP)
+  await clicker.drag({ x: 10, y: 20 }, { x: 20, y: 20 }, VP)
+  await clicker.clickAndType({ x: 10, y: 20 }, VP, 'test')
+  assert.deepEqual(events, Array(3).fill(['activate-original-target', 'input']).flat())
+  await assert.rejects(clicker.click({ x: -1, y: 20 }, VP), WinClickError)
+  assert.equal(events.length, 6, 'invalid intent cannot activate or input')
+})
+
+test('a failed target activation is a proven zero-input guard failure for every physical action', async () => {
+  let inputs = 0
+  const clicker = new WinMouseClicker({ cdpPort: 9333, beforeInput: async () => { throw new Error('original tab closed') }, execFileImpl: async () => { inputs++; return { stdout: '', stderr: '' } } })
+  for (const action of [() => clicker.click({ x: 10, y: 20 }, VP), () => clicker.drag({ x: 10, y: 20 }, { x: 20, y: 20 }, VP), () => clicker.clickAndType({ x: 10, y: 20 }, VP, 'test')]) {
+    await assert.rejects(action(), (error: unknown) => error instanceof WinClickError && error.exitCode === 2 && error.message.includes('STALE_OBSERVATION'))
+  }
+  assert.equal(inputs, 0)
+  assert.throws(() => new WinMouseClicker({ cdpPort: 9333 }), WinClickError)
+})

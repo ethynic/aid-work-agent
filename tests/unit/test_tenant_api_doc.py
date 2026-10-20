@@ -12,9 +12,11 @@ from src.services.tenant_api_doc import (
     load_sso_config,
     load_sso_configs,
     list_doc_subagent_names,
+    list_sso_candidate_subagent_names,
     resolve_doc_text,
     render_doc_placeholders,
     find_unresolved_placeholders,
+    db_tenant_id,
 )
 
 pytestmark = [pytest.mark.unit, pytest.mark.api]
@@ -146,6 +148,23 @@ class TestDocScan:
             "src.services.tenant_api_doc._subagent_allowed_skills",
             lambda name: [],
         )
+        # 隔离内置/自定义智能体枚举，保证纯单元、不访问磁盘注册表与 DB
+        monkeypatch.setattr(
+            "src.services.tenant_api_doc._list_builtin_subagent_names",
+            lambda: [],
+        )
+        monkeypatch.setattr(
+            "src.services.tenant_api_doc._list_custom_agent_ids",
+            lambda: [],
+        )
+        monkeypatch.setattr(
+            "src.services.tenant_api_doc._allowed_skills_map",
+            lambda names: {n: [] for n in names},
+        )
+        monkeypatch.setattr(
+            "src.services.tenant_api_doc.load_tenant_env_vars_map",
+            lambda tid: {"*": {}},
+        )
 
     def test_list_names_from_templates_dir(self, monkeypatch, tmp_path):
         """glob 真实逻辑：只认 {name}-api.md，其余文件忽略；路径基于模块 __file__ 推导"""
@@ -186,6 +205,24 @@ class TestDocScan:
     def test_load_sso_configs_empty_when_no_docs(self, monkeypatch):
         self._setup_tenant(monkeypatch, {})
         assert load_sso_configs("tenant_x") == []
+
+    def test_candidate_names_include_builtin_and_custom(self, monkeypatch):
+        """租户文档之外还须枚内置/自定义智能体，才能发现模板兜底的入口（如 auto-form-filler）"""
+        monkeypatch.setattr(
+            "src.services.tenant_api_doc.list_doc_subagent_names",
+            lambda tid: ["pre-sales"],
+        )
+        monkeypatch.setattr(
+            "src.services.tenant_api_doc._list_builtin_subagent_names",
+            lambda: ["auto-form-filler", "pre-sales"],
+        )
+        monkeypatch.setattr(
+            "src.services.tenant_api_doc._list_custom_agent_ids",
+            lambda: ["sales-assistant"],
+        )
+        assert list_sso_candidate_subagent_names("tenant_x") == [
+            "pre-sales", "auto-form-filler", "sales-assistant",
+        ]
 
 
 # ============== 通用模板 fallback 与 ${VAR} 加载期渲染 ==============
@@ -261,15 +298,31 @@ class TestSubagentAllowedSkills:
         mock_db.get_by_agent_id.return_value = {"skills": {"allowed": []}}
         cfg = MagicMock()
         cfg.get_allowed_skills.return_value = ["pre-sales-api"]
+        mock_registry = MagicMock()
+        mock_registry.get.return_value = cfg
         with patch("src.db.subagent_definition_db.SubagentDefinitionDB", mock_db), \
-             patch("src.subagents.registry.subagent_registry") as mock_registry:
-            mock_registry.get.return_value = cfg
+             patch("src.services.agent_runner.runtime.resource_cache.cached_builtin_subagent_registry",
+                   return_value=mock_registry):
             assert tenant_api_doc._subagent_allowed_skills("pre-sales") == ["pre-sales-api"]
+
+    def test_builtin_registry_loaded_without_manual_init(self):
+        """回归：不依赖全局单例手动加载，也能读到内置子智能体技能白名单
+
+        缺陷背景：旧实现用 src.subagents.registry.subagent_registry 全局单例，
+        该单例无参构造不加载；skill 脚本子进程（create_subprocess_shell 起的独立
+        解释器）里恒为空，导致 auto-form-filler 等内置智能体读不到白名单、兜底
+        模板失效。
+        """
+        mock_db = MagicMock()
+        mock_db.get_by_agent_id.return_value = None  # DB 无该定义
+        with patch("src.db.subagent_definition_db.SubagentDefinitionDB", mock_db):
+            skills = tenant_api_doc._subagent_allowed_skills("pre-sales")
+        assert "pre-sales-api" in skills
 
     def test_both_sources_failed_returns_empty(self):
         with patch("src.db.subagent_definition_db.SubagentDefinitionDB",
                    side_effect=RuntimeError("no db")), \
-             patch("src.subagents.registry.subagent_registry",
+             patch("src.services.agent_runner.runtime.resource_cache.cached_builtin_subagent_registry",
                    side_effect=RuntimeError("no registry")):
             assert tenant_api_doc._subagent_allowed_skills("pre-sales") == []
 
@@ -312,6 +365,36 @@ class TestRenderDocPlaceholders:
         doc = "# 普通文档，无占位符"
         assert render_doc_placeholders(doc, "tenant_x", "pre-sales") == doc
 
+    def test_unprefixed_tenant_id_normalized_for_env_db(self):
+        """回归：skill 脚本剥离 `tenant_` 前缀后传入，DB 查询须补齐前缀
+
+        缺陷背景：load_api_config.py 为存储路径剥离前缀后调 load_rendered_doc，
+        而 subagent_env_vars 存带前缀 ID，前缀不匹配导致 ${APP_ID} 读不到、模板
+        渲染残留占位符、被误判为「未配置」。
+        """
+        mock_db = MagicMock()
+        mock_db.get_vars.return_value = [{"var_name": "APP_ID", "var_value": "10607"}]
+        mock_db.get_all_vars_for_tenant.return_value = []
+        with patch("src.db.subagent_env_var.SubagentEnvVarDB", mock_db):
+            rendered = render_doc_placeholders(_TEMPLATE, "abc123", "pre-sales")
+        assert mock_db.get_vars.call_args[0][0] == "tenant_abc123"
+        assert "erp10607.aidingyi.cn" in rendered
+        assert find_unresolved_placeholders(rendered) == []
+
+
+class TestDbTenantId:
+    def test_adds_missing_prefix(self):
+        assert db_tenant_id("abc123") == "tenant_abc123"
+
+    def test_keeps_existing_prefix(self):
+        assert db_tenant_id("tenant_abc123") == "tenant_abc123"
+
+    def test_anonymous_placeholder_untouched(self):
+        assert db_tenant_id("_anonymous") == "_anonymous"
+
+    def test_empty_returns_empty(self):
+        assert db_tenant_id("") == ""
+
 
 class TestFindUnresolvedPlaceholders:
     def test_excludes_credential_vars(self):
@@ -345,9 +428,61 @@ class TestLoadSsoConfigWithTemplate:
 
     def test_load_sso_configs_scans_all_docs(self):
         cfg = {"system_id": "pre-sales", "sso_ready": True}
-        with patch("src.services.tenant_api_doc.list_doc_subagent_names",
+        with patch("src.services.tenant_api_doc.list_sso_candidate_subagent_names",
                    return_value=["pre-sales", "other"]), \
+             patch("src.services.tenant_api_doc._allowed_skills_map",
+                   side_effect=lambda names: {n: [] for n in names}), \
+             patch("src.services.tenant_api_doc.load_tenant_env_vars_map",
+                   return_value={"*": {}}), \
              patch("src.services.tenant_api_doc.load_sso_config", side_effect=[cfg, None]) as m_cfg:
             configs = load_sso_configs("tenant_x")
         assert configs == [cfg]
         assert m_cfg.call_count == 2
+
+    def test_load_sso_configs_discovers_template_fallback_agent(self):
+        """未上传租户文档的智能体（auto-form-filler）经技能模板兜底也要出现在入口列表"""
+        with patch("src.services.tenant_api_doc.list_sso_candidate_subagent_names",
+                   return_value=["auto-form-filler"]), \
+             patch("src.services.tenant_api_doc._allowed_skills_map",
+                   side_effect=lambda names: {n: [] for n in names}), \
+             patch("src.services.tenant_api_doc.load_tenant_env_vars_map",
+                   return_value={"*": {}}), \
+             patch("src.services.tenant_api_doc.load_rendered_doc",
+                   return_value=_RENDERED_TEMPLATE):
+            configs = load_sso_configs("tenant_x")
+        assert [c["system_id"] for c in configs] == ["auto-form-filler"]
+        assert configs[0]["sso_ready"] is True
+
+    def test_load_sso_configs_prefers_ready_duplicate(self):
+        """同一系统首个声明未就绪、后续就绪时，保留就绪的那份（避免入口误显示不可用）"""
+        broken = {
+            "system_id": "pre-sales", "system_name": "CRM", "mode": "ticket_redirect",
+            "sso_url": "https://erp.example.com/", "sso_ready": False,
+        }
+        ready = {
+            "system_id": "auto-form-filler", "system_name": "CRM", "mode": "ticket_redirect",
+            "sso_url": "https://erp.example.com/", "sso_ready": True,
+        }
+        with patch("src.services.tenant_api_doc.list_sso_candidate_subagent_names",
+                   return_value=["pre-sales", "auto-form-filler"]), \
+             patch("src.services.tenant_api_doc._allowed_skills_map",
+                   side_effect=lambda names: {n: [] for n in names}), \
+             patch("src.services.tenant_api_doc.load_tenant_env_vars_map",
+                   return_value={"*": {}}), \
+             patch("src.services.tenant_api_doc.load_sso_config",
+                   side_effect=[broken, ready]):
+            configs = load_sso_configs("tenant_x")
+        assert configs == [ready]
+
+    def test_load_sso_configs_dedupes_same_system(self):
+        """多个智能体指向同一外部系统时只保留首个卡片，避免页面重复"""
+        with patch("src.services.tenant_api_doc.list_sso_candidate_subagent_names",
+                   return_value=["pre-sales", "auto-form-filler"]), \
+             patch("src.services.tenant_api_doc._allowed_skills_map",
+                   side_effect=lambda names: {n: [] for n in names}), \
+             patch("src.services.tenant_api_doc.load_tenant_env_vars_map",
+                   return_value={"*": {}}), \
+             patch("src.services.tenant_api_doc.load_rendered_doc",
+                   return_value=_RENDERED_TEMPLATE):
+            configs = load_sso_configs("tenant_x")
+        assert [c["system_id"] for c in configs] == ["pre-sales"]

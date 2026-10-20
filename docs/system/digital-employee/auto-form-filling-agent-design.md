@@ -105,12 +105,13 @@ C 档是唯一需要新增后端能力的点：sms_cli.py 仅负责发码/验码
 10605 表单字段定义存于 `ide_attr` / `ide_table` 元数据表（含 `display_name` 中文名），但无对外 schema 接口。提出需求：
 
 - 接口建议名：`POST /api/v1/erp.module/module_schema`，入参 `module`（如 `kehuxinxi`、`lianxijilu`）
-- 响应：字段数组，每项含 `field`（英文字段名）、`display_name`（中文）、`type`、`required`（必填）、`enum_values`（枚举字典，如 zhuangtai 的五种取值）、`description`（填写说明）、`is_create_hidden`（新建时无需填写的字段，如 genjinhuizongzhaiyao）
+- 响应：字段数组，每项含 `field`（英文字段名）、`display_name`（中文）、`type`、`required`（必填）、`enum_values`（枚举字典，如 zhuangtai 的五种取值）、`note`（字段特殊说明，如"新建时无需填写"）、`is_create_hidden`（新建时无需填写的字段，如 genjinhuizongzhaiyao）
 - 鉴权：与业务接口一致（AGENT_TOKEN + client_token）
 
 ### 5.2 我方消费方式
 
-- `load_form_schema.py` 运行时调用 schema 接口并做本地缓存（Redis，TTL 1h，key 含 tenant_id），避免每轮拉取。
+- `load_form_schema.py` 运行时调用 schema 接口并做本地缓存（Redis，TTL 读 `FORM_FILLING_CACHE_TTL`，默认 600s/10min，key 含 tenant_id），避免每轮拉取。
+- `load_open_modules.py` 运行时调用 open_modules 接口获取「可填哪些模块」清单并做同样缓存（同一 TTL 配置），智能体据此呈现可填表单，不硬编码模块清单。
 - api-doc 模板（`configs/api_doc_templates/form-filling-api.md`）不再手写字段清单，只保留：Base URL、鉴权说明、module 清单、**业务规则**（如"填完跟进记录须同步客户摘要"）。字段细节一律以 schema 接口为准——租户接入新 CRM 时只需上传文档 + 第三方提供 schema 接口，无需我方逐字段梳理。
 - 回显确认、必填补问、枚举校验均基于 schema 生成，这是"自动填表"能泛化到任意表单的前提。
 

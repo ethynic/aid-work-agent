@@ -24,6 +24,26 @@ function create(port: RuntimeManagementPort, timeout = 1000) { const controller 
 afterEach(() => { controllers.forEach((controller) => controller.dispose()); controllers.length = 0; vi.useRealTimers() })
 
 describe('Runtime production consumer', () => {
+  it('automatically reconnects the page after a background connection replaces its Host', async () => {
+    vi.useFakeTimers()
+    const { port, disconnect } = makePort()
+    Object.defineProperty(port, 'automaticConnection', { value: true })
+    let pending = true
+    port.registrationStatus = vi.fn(async () => pending ? { version: 1, category: 'CONNECTING', summary: '正在自动连接',
+      steps: [], service_verified: false, can_preserve: false, can_reconfigure: true, requires_reboot: false } : null)
+    const controller = create(port)
+    await controller.connect()
+    expect(controller.recovery.diagnosis?.category).toBe('CONNECTING')
+    disconnect()
+    expect(controller.view.connected).toBe(false)
+    pending = false
+    await vi.advanceTimersByTimeAsync(2100)
+    await flushPromises()
+    expect(controller.view.connected).toBe(true)
+    expect(controller.recovery.diagnosis).toBeNull()
+    expect(controller.view.state?.state).toBe('stopped')
+    expect(port.request).not.toHaveBeenCalledWith(expect.objectContaining({ method: 'start' }))
+  })
   it('loads persisted registration steps on reconnect without HTTP diagnosis or pairing', async () => {
     const { port } = makePort(); const controller = create(port)
     const pending = { version: 1, category: 'REGISTRATION_PENDING', summary: '新凭据已保存', steps: ['正常重启Windows后继续完成配置。'], service_verified: false, can_preserve: false, can_reconfigure: false, requires_reboot: true }

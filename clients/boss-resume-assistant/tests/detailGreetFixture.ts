@@ -1,3 +1,5 @@
+import { indexedValues } from '../src/main/boss/domSnapshot.js'
+import { locateResumeCanvas } from '../src/main/boss/ResumeReader.js'
 /**
  * 详情页打招呼三件套测试共用 fixture（detail-greet-executor.test.ts / boss-detail-greet-ops.test.ts）。
  *
@@ -5,7 +7,7 @@
  * - 视口 1249x1277；详情 canvas [168,40,760,1264]（与视口求交后 h=1237）。
  * - canvas 右侧操作列为纯 DOM：收藏/举报/不合适一行 + 「打招呼」按钮在其正下方，
  *   四节点挂同一容器父节点（parents 数组）；列表卡片「打招呼」挂容器外（诱饵）。
- * - 详情头部候选人姓名 DOM 文本在 canvas 顶区 (318,129)。
+ * - 发送身份门禁旧用例保留顶区姓名DOM；canvasNameOnly模拟真实开详情时姓名只在canvas的情况。
  * 列表卡片行结构按 cardName 真机锚定（姓名(342,y-8) + 状态(400,y-8) 同行 + 按钮(1162,y)）。
  */
 import type { DomSnapshot } from '../src/main/boss/domSnapshot.js'
@@ -106,20 +108,23 @@ export const DECOY_ROWS: ListRow[] = [
 ]
 
 /**
- * 详情打开态快照：canvas + 头部候选人姓名（canvas 顶区）+ 操作列（真机 DOM 同构：
+ * 详情打开态快照：canvas + 可选姓名DOM + 操作列（真机 DOM 同构：
  * 图标行容器与按钮容器是**兄弟子树**，同挂操作列容器下——locateActionBar 需上爬一层）+ 容器外的列表诱饵行。
  * state='greet' → 按钮容器内是「打招呼」；'continue' → 是「继续沟通」（已打过）。
  */
 export function detailSnap(opts: {
   name: string
-  state: 'greet' | 'continue'
+  state: 'greet' | 'continue' | 'missing'
+  /** canvas姓名没有对应DOM文本，模拟真实详情页。 */
+  canvasNameOnly?: boolean
+  showOverview?: boolean
   decoyRows?: ListRow[]
   /** 额外节点（如顶部区同名第二命中，构造姓名歧义用例） */
   extraItems?: SnapItem[]
 }): DomSnapshot {
   const items: SnapItem[] = [
     { canvas: true, bounds: CANVAS_BOUNDS, parent: 0 },
-    { text: opts.name, bounds: [300, 119, 36, 20], parent: 0 }, // 中心 (318,129)，canvas 顶区
+    { ...(opts.canvasNameOnly ? {} : { text: opts.name }), bounds: [300, 119, 36, 20], parent: 0 },
     { bounds: BAR_CONTAINER_BOUNDS, parent: 0 }, // 操作列容器（nodeIndex = 3）
     { bounds: BAR_TRIO_BOUNDS, parent: 3 }, // 图标行容器（LCA(三图标)，nodeIndex = 4）
     { bounds: [1060, 140, 60, 30], parent: 3 }, // 按钮子树容器（与图标行兄弟，nodeIndex = 5）
@@ -133,9 +138,10 @@ export function detailSnap(opts: {
   )
   if (opts.state === 'greet') {
     items.push({ text: GREET_STRING, bounds: [1064, 148, 42, 16], parent: buttonWrapper }) // 中心 (1085,156)
-  } else {
+  } else if (opts.state === 'continue') {
     items.push({ text: CONTINUE_STRING, bounds: [1058, 148, 56, 16], parent: buttonWrapper }) // 中心 (1086,156)
   }
+  if (opts.showOverview !== false) items.push({ text: '经历概览', bounds: [1040, 250, 64, 20], parent: 0 })
   items.push(...(opts.extraItems ?? []))
   // 诱饵行挂根节点（容器外）：结构级排除；真机几何上列表按钮与操作列同区带交叉，
   // 靠结构消歧而非几何（诱饵中心 x=1162 落在操作列 x 区间内，必须被 parentIndex 排除）
@@ -152,4 +158,39 @@ export function detailSnap(opts: {
 /** 详情关闭后的列表快照（默认诱饵行，无 canvas/操作列/头部姓名） */
 export function closedListSnap(): DomSnapshot {
   return listSnap(DECOY_ROWS)
+}
+
+
+/** Extend legacy geometry fixtures with the stable detail controls required by current open verification. */
+export function withDetailControls(snapshot: DomSnapshot): DomSnapshot {
+  const snap = structuredClone(snapshot), doc = snap.documents[0]!, canvas = locateResumeCanvas(snap)
+  if (!canvas) throw new Error('fixture requires a visible canvas')
+  const dense = (field: Parameters<typeof indexedValues>[0]) => {
+    const entries = indexedValues(field, 'fixture')
+    const result = Array.from({ length: Math.max(0, ...entries.map(([index]) => index)) + 1 }, () => -1)
+    for (const [index, value] of entries) result[index] = value as number
+    return result
+  }
+  const values = dense(doc.nodes.nodeValue), names = dense(doc.nodes.nodeName ?? [])
+  const parents = dense(doc.nodes.parentIndex ?? [])
+  const count = Math.max(values.length, names.length, parents.length, ...doc.layout.nodeIndex.map((index) => index + 1))
+  while (values.length < count) values.push(-1)
+  while (names.length < count) names.push(-1)
+  while (parents.length < count) parents.push(0)
+  const attrs = Array.from({ length: count }, (_, index) => (doc.nodes.attributes as number[][] | undefined)?.[index] ?? [])
+  doc.nodes.nodeValue = values; doc.nodes.nodeName = names; doc.nodes.parentIndex = parents; doc.nodes.attributes = attrs
+  const string = (text: string) => { snap.strings.push(text); return snap.strings.length - 1 }
+  const add = (parent: number, bounds: number[], text?: string) => {
+    const index = values.length
+    values.push(text ? string(text) : -1); names.push(string(text ? '#text' : 'DIV')); parents.push(parent); attrs.push([])
+    doc.layout.nodeIndex.push(index); doc.layout.bounds.push(bounds)
+    return index
+  }
+  const x = canvas.x + canvas.w + 80, y = canvas.y + 20
+  const bar = add(0, [x, y, 200, 140]), trio = add(bar, [x + 4, y + 15, 156, 28])
+  for (const [index, text] of ['收藏', '举报', '不合适'].entries()) add(trio, [x + 10 + index * 50, y + 20, 44, 20], text)
+  const button = add(bar, [x + 4, y + 60, 100, 40])
+  add(button, [x + 14, y + 70, 64, 20], '打招呼')
+  add(0, [x, y + 180, 90, 24], '经历概览')
+  return snap
 }

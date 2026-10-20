@@ -10,41 +10,11 @@ import { createBossSendToOperation } from '../src/main/operations/bossSendTo.js'
 import type { BossSession } from '../src/main/operations/bossContext.js'
 import type { OpContext } from '../src/main/operations/types.js'
 import type { DomSnapshot } from '../src/main/boss/domSnapshot.js'
-import { yangSnapshot } from './chatReadFixture.js'
+import { chatContactRef } from '../src/main/boss/BusinessOperationState.js'
+import { actionSnapshot } from './chatActionFixture.js'
 
 function silentCtx(): OpContext {
   return { signal: new AbortController().signal, progress: () => {} }
-}
-
-/** 构造发送链路帧：根节点视口 1249x1277（真机窗口），发送按钮 bounds=[1086,1215,120,36] */
-function sendSnap(extra: Array<{ text: string; bounds: [number, number, number, number] }> = []): DomSnapshot {
-  const strings: string[] = ['']
-  const idx: number[] = [0]
-  const values: number[] = [0]
-  const bounds: [number, number, number, number][] = [[0, 0, 1249, 1277]]
-  for (const item of [{ text: '发送', bounds: [1086, 1215, 120, 36] } as const, ...extra]) {
-    let si = strings.indexOf(item.text)
-    if (si < 0) {
-      strings.push(item.text)
-      si = strings.length - 1
-    }
-    idx.push(idx.length)
-    values.push(si)
-    bounds.push(item.bounds as [number, number, number, number])
-  }
-  return {
-    strings,
-    documents: [
-      {
-        nodes: {
-          nodeValue: { index: idx, value: values },
-          contentDocumentIndex: { index: [], value: [] },
-        },
-        layout: { nodeIndex: idx, bounds },
-        scrollOffsetY: 0,
-      },
-    ],
-  }
 }
 
 function fakeFactory(url: string, snaps: DomSnapshot[]) {
@@ -85,15 +55,16 @@ const MSG = '你好，我是 HR'
 
 test('already + dry-run：头部已是目标联系人 → 零搜索零点击，只输入不发送，data 带 via=already', async () => {
   const f = fakeFactory(CHAT_URL, [
-    yangSnapshot(), // open：snap0 头部=杨鸿杰 → already 快速路径
-    sendSnap(), // 发送：定位发送按钮
-    sendSnap([{ text: MSG, bounds: [200, 1180, 800, 30] }]), // dry-run 校验输入落地
+    actionSnapshot({ contact: '杨鸿杰' }),
+    actionSnapshot({ contact: '杨鸿杰' }),
+    actionSnapshot({ contact: '杨鸿杰', editor: MSG }),
   ])
   const op = createBossSendToOperation(f.factory)
   const r = await op.execute({ to: '杨鸿杰', message: MSG, dry_run: true }, silentCtx())
   assert.equal(r.success, true)
   assert.equal(r.effect, 'none')
-  assert.deepEqual(r.data, { to: '杨鸿杰', via: 'already', sent: false, dry_run: true })
+  assert.deepEqual({ to: r.data.to, via: r.data.via, sent: r.data.sent, dry_run: r.data.dry_run },
+    { to: '杨鸿杰', via: 'already', sent: false, dry_run: true })
   assert.match(r.message, /dry-run/)
   // already：无 click/wheel/escape（不进搜索、不滚列表），type 仅来自消息输入的 clickAndType
   assert.equal(f.calls.filter((c) => c === 'click').length, 0)
@@ -120,4 +91,13 @@ test('message 空 → INVALID_ARGUMENT，不连 Chrome', async () => {
   assert.equal(r.code, 'INVALID_ARGUMENT')
   assert.match(r.message, /message（消息内容）不能为空/)
   assert.deepEqual(f.calls, [])
+})
+
+
+test('recovery cannot send to a different same-named contact after page repair',async()=>{
+ const old=actionSnapshot({contact:'合成甲',demographic:'28岁'}),current=actionSnapshot({contact:'合成甲',demographic:'37岁'})
+ const f=fakeFactory(CHAT_URL,[current,current])
+ const result=await createBossSendToOperation(f.factory).execute({to:'合成甲',message:MSG},{...silentCtx(),expectedContactRef:chatContactRef(old)})
+ assert.equal(result.success,false);assert.equal(result.effect,'none');assert.equal(result.code,'UI_CHANGED')
+ assert.equal(f.calls.filter(c=>c==='type'||c==='click').length,0)
 })

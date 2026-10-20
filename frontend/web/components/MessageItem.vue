@@ -5,27 +5,46 @@
     class="message-enter-active message-user-wrapper"
   >
     <div class="flex flex-col items-end w-full">
-      <div class="message-user-bubble bg-primary-600 w-fit">
-        <div class="message-user-content text-white">
-          <div class="leading-relaxed" v-html="renderedContent"></div>
+      <div class="flex w-full items-center justify-end gap-1">
+        <div class="message-user-bubble bg-primary-600 w-fit min-w-0">
+          <div class="message-user-content text-white">
+            <div class="leading-relaxed" v-html="renderedContent"></div>
 
-          <!-- 附件标签 -->
-          <div v-if="displayAttachments.length > 0 || legacyAttachments.length > 0" class="mt-2 flex flex-wrap gap-2">
-            <AttachmentChip
-              v-for="att in displayAttachments"
-              :key="att.file_id"
-              :attachment="att"
-              @preview="handlePreview(att)"
-            />
-            <AttachmentChip
-              v-for="(att, idx) in legacyAttachments"
-              :key="'legacy-' + idx"
-              :attachment="att"
-              :clickable="false"
-            />
+            <!-- 附件标签 -->
+            <div v-if="displayAttachments.length > 0 || legacyAttachments.length > 0" class="mt-2 flex flex-wrap gap-2">
+              <AttachmentChip
+                v-for="att in displayAttachments"
+                :key="att.file_id"
+                :attachment="att"
+                @preview="handlePreview(att)"
+              />
+              <AttachmentChip
+                v-for="(att, idx) in legacyAttachments"
+                :key="'legacy-' + idx"
+                :attachment="att"
+                :clickable="false"
+              />
+            </div>
           </div>
         </div>
-      </div>
+        <div v-if="submitFailure || message.runnerFailure" class="flex shrink-0 items-center" aria-label="失败消息操作">
+          <BaseButton type="button" intent="ghost" size="sm" class="!w-8 !px-0"
+            :aria-label="failureBusy ? '正在处理失败消息' : '重试消息'"
+            :title="failureBusy ? '正在处理失败消息' : '重试消息'"
+            :disabled="failureBusy || !(submitFailure?.retry || message.runnerFailure?.retry)"
+            @click="retryFailure">
+            <svg class="h-4 w-4" :class="{ 'animate-spin': message.runnerFailure?.retrying }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.6-1L20 9M4 15l2.3 3A7 7 0 0 0 17.9 17" />
+            </svg>
+          </BaseButton>
+          <BaseButton v-if="removeFailure" type="button" intent="ghost" size="sm" class="!w-8 !px-0"
+            aria-label="删除失败消息" title="删除失败消息" :disabled="failureBusy" @click="removeFailure?.()">
+            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5" />
+            </svg>
+          </BaseButton>
+        </div>
+        </div>
       <!-- 历史只读已答卡片（supplementalInputs 扩展投影，设计 §7.1）：挂在结构化答案消息下 -->
       <div v-if="message.role === 'user' && message.answeredForm" class="w-full">
         <QuestionCard :answered="message.answeredForm" :auth-headers="authHeaders" />
@@ -34,12 +53,22 @@
       <div v-if="formattedTime" class="text-xs text-muted mt-1 mr-2">
         {{ formattedTime }}
       </div>
+      <div v-if="submitFailure || message.runnerFailure" class="mt-1 flex max-w-full items-center justify-end gap-1 text-xs text-muted" role="alert">
+        <svg class="h-3.5 w-3.5 shrink-0" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <circle cx="10" cy="10" r="7.5" /><path stroke-linecap="round" d="M10 6v4M10 13h.01" />
+        </svg>
+        <span>
+          {{ submitFailure?.kind === 'retrying'
+            ? '发送状态确认中，正在自动重试'
+            : '消息未发送成功' }}
+        </span>
+      </div>
     </div>
   </div>
 
   <!-- AI消息：全宽，无头像，无缩进 -->
   <div
-    v-else
+    v-else-if="!submitFailure"
     class="message-enter-active message-ai-wrapper"
   >
     <div class="message-ai-content">
@@ -61,33 +90,6 @@
         <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-warning-100 text-warning-700">
           用户已取消本轮回复
         </span>
-      </div>
-
-      <!-- 提交失败态（纯内存标记）：不受 runnerActive/debug 门控，
-           definitive 显示错误文案+重试；retrying 显示自动重试次数+立即重试 -->
-      <div v-if="submitFailure" class="mb-1" role="alert">
-        <div class="flex items-center gap-2 flex-wrap">
-          <span
-            :class="['inline-flex items-center px-2 py-0.5 rounded text-xs font-medium',
-                     submitFailure.kind === 'definitive'
-                       ? 'bg-danger-100 text-danger-700'
-                       : 'bg-warning-100 text-warning-700']"
-          >
-            {{ submitFailure.kind === 'definitive'
-              ? `发送失败：${submitFailure.message}`
-              : `发送不稳定，已自动重试 ${submitFailure.attempts} 次` }}
-          </span>
-          <button
-            type="button"
-            :class="['px-3 py-1 bg-white border rounded-full text-xs transition-colors',
-                     submitFailure.kind === 'definitive'
-                       ? 'border-danger-200 text-danger-600 hover:border-danger-400'
-                       : 'border-warning-200 text-warning-700 hover:border-warning-400']"
-            @click="submitFailure.retry()"
-          >
-            {{ submitFailure.kind === 'definitive' ? '重试' : '立即重试' }}
-          </button>
-        </div>
       </div>
 
       <div
@@ -244,6 +246,7 @@ import HumanAssistanceCard from './browser/HumanAssistanceCard.vue'
 import QuestionCard from './chat/QuestionCard.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAgent } from '@/composables/useAgent'
+import BaseButton from './ui/BaseButton.vue'
 
 interface Props {
   message: ChatMessage
@@ -319,9 +322,14 @@ const showInputHint = computed(() => {
   )
 })
 
-// 提交失败态（纯内存，乐观 assistant 消息专用）：失败时原地展示错误/重试，
-// 不落入「对方正在输入中」占位
+// 失败提示显示在用户消息旁；乐观 assistant 只作为内部提交占位，不渲染空框。
 const submitFailure = computed(() => props.message.submitFailure)
+const failureBusy = computed(() => !!(props.message.runnerFailure?.retrying || props.message.runnerFailure?.deleting))
+const removeFailure = computed(() => submitFailure.value?.remove || props.message.runnerFailure?.remove)
+function retryFailure() {
+  const retry = submitFailure.value?.retry || props.message.runnerFailure?.retry
+  retry?.()
+}
 
 // 用户取消的轮次（历史加载）：assistant metadata.cancelled，渲染明确标记避免误解
 const isCancelledRound = computed(() => {
@@ -472,12 +480,22 @@ function handlePreview(attachment: AttachmentInfo) {
   max-width: 85%;
   border: none;
   border-radius: 16px 16px 4px 16px;
-  padding: 10px 14px;
+  padding: 8px 12px;
   transition: all 0.2s;
 }
 
 .message-user-content {
   word-break: break-word;
+}
+
+.message-user-content :deep(p:first-child),
+.markdown-content :deep(> :first-child) {
+  margin-top: 0;
+}
+
+.message-user-content :deep(p:last-child),
+.markdown-content :deep(> :last-child) {
+  margin-bottom: 0;
 }
 
 /* AI消息：全宽，无缩进 */
@@ -489,7 +507,7 @@ function handlePreview(attachment: AttachmentInfo) {
   background-color: white;
   border: 1px solid #e5e7eb;
   border-radius: 12px;
-  padding: 12px 16px;
+  padding: 10px 14px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
@@ -509,11 +527,11 @@ function handlePreview(attachment: AttachmentInfo) {
 
   .message-user-bubble {
     max-width: 70%;
-    padding: 12px 16px;
+    padding: 8px 12px;
   }
 
   .message-ai-content {
-    padding: 14px 20px;
+    padding: 10px 14px;
   }
 }
 </style>

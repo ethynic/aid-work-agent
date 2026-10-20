@@ -12,6 +12,8 @@ import { resolveUpdateConfiguration } from './updateConfiguration.js'
 import { resolveProductConfiguration } from './productConfiguration.js'
 import { RuntimeSupervisor } from './runtimeSupervisor.js'
 import { RuntimeConnectionRecovery } from './runtimeConnectionRecovery.js'
+import { RuntimeCleanConnection } from './runtimeCleanConnection.js'
+import { cleanupRuntimePreviousHome, prepareRuntimeInstallation, rotateRuntimeConnection, selectRuntimeConnection } from './runtimeInstallation.js'
 import { RuntimeSelections } from './runtimeSelection.js'
 import { RuntimeStartup, runtimeLoginLaunch, resumeRuntimeAtLogin } from './runtimeStartup.js'
 import { RuntimeUpdateIntent, runtimeUpdateExit, RUNTIME_UPDATE_EXIT_ARGUMENT, shouldResumeRuntime } from './runtimeUpdate.js'
@@ -88,12 +90,37 @@ let credentialStore: EncryptedCredentialStore | null = null
 let desktopUpdater: DesktopUpdater | null = null
 let pendingDeepLink: string | null = null
 let runtimeSupervisor: RuntimeSupervisor | null = null
-let runtimeConnectionRecovery: RuntimeConnectionRecovery | null = null
+let runtimeConnectionRecovery: RuntimeConnectionRecovery | RuntimeCleanConnection | null = null
 let runtimeSelections: RuntimeSelections | null = null
 let runtimeTray: Tray | null = null
 let quitting = false
 let exitAllowed = false
 let exitPending = false
+
+function attachRuntimeSupervisor(home: string): void {
+  product.runtimeHome = home
+  runtimeSelections = new RuntimeSelections(home)
+  runtimeSupervisor = new RuntimeSupervisor({
+    nodeExecutable: product.nodeExecutable!, hostEntry: product.hostEntry!, home,
+    supervisor: product.kind === 'runtime' ? 'runtime_app' : 'desktop',
+    takeSelectedPackage: input => {
+      if (!mainWindow || mainWindow.isDestroyed() || !runtimeSelections) throw new Error('选包窗口已失效')
+      return runtimeSelections.take(input, mainWindow.webContents.id)
+    },
+    onEvent: event => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('desktop:runtime:event', event) },
+    onDisconnect: () => {
+      void runtimeSelections?.invalidate()
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('desktop:runtime:disconnected')
+    },
+  })
+  if (product.kind === 'runtime' && !smokeMode) {
+    const protectionModule = () => import(pathToFileURL(path.join(path.dirname(product.hostEntry!), 'dpapi.js')).href)
+    updateIntent = new RuntimeUpdateIntent(app.getPath('userData'), product.appId, home, {
+      protect: async value => (await protectionModule()).dpapiProtect(value),
+      unprotect: async value => (await protectionModule()).dpapiUnprotect(value),
+    })
+  }
+}
 
 function revealWindow(window: BrowserWindow): void {
   window.show()
@@ -166,7 +193,8 @@ function registerDesktopIpc(): void {
     assertTrustedSender(event)
     if (!runtimeSupervisor) throw new Error('当前产品没有本机Runtime管理能力')
     if (runtimeConnectionRecovery?.busy) throw new Error('连接恢复正在进行，请等待处理完成')
-    if (['start', 'pair'].includes((request as { method?: string })?.method ?? '') && await runtimeConnectionRecovery?.registrationBlocksExecution()) throw new Error('新设备注册尚待完成，请按连接处理步骤继续；可停止执行或退出')
+    if (product.kind === 'runtime' && (request as { method?: string })?.method === 'pair') throw new Error('请使用一次配对连接入口')
+    if (['start', 'pair'].includes((request as { method?: string })?.method ?? '') && await runtimeConnectionRecovery?.registrationBlocksExecution()) throw new Error('正在自动完成设备连接，请等待网络恢复；可停止执行或退出')
     const reply = await runtimeSupervisor.request(request)
     if (!maintenanceRequested && !runtimeConnectionRecovery?.busy && reply.code === 0 && ['start', 'stop'].includes((request as { method: string }).method)) {
       // A new explicit user intent supersedes a cancelled upgrade's resume intent.
@@ -446,24 +474,35 @@ if (!hasSingleInstanceLock) {
     nativeTheme.themeSource = 'system'
     Menu.setApplicationMenu(Menu.buildFromTemplate(applicationMenuTemplate(process.platform)))
     initializeDesktopUpdater()
+    let cleanInstallation: Awaited<ReturnType<typeof prepareRuntimeInstallation>> | undefined
     if (product.runtimeEnabled && product.nodeExecutable && product.hostEntry && product.runtimeHome) {
-      runtimeSelections = new RuntimeSelections(product.runtimeHome)
-      runtimeSupervisor = new RuntimeSupervisor({
-        nodeExecutable: product.nodeExecutable, hostEntry: product.hostEntry, home: product.runtimeHome,
-        supervisor: product.kind === 'runtime' ? 'runtime_app' : 'desktop',
-        takeSelectedPackage: input => {
-          if (!mainWindow || mainWindow.isDestroyed() || !runtimeSelections) throw new Error('选包窗口已失效')
-          return runtimeSelections.take(input, mainWindow.webContents.id)
-        },
-        onEvent: event => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('desktop:runtime:event', event) },
-        onDisconnect: () => {
-          void runtimeSelections?.invalidate()
-          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('desktop:runtime:disconnected')
-        },
-      })
-      if (product.kind === 'runtime') runtimeConnectionRecovery = new RuntimeConnectionRecovery({ home: product.runtimeHome,
-        node: product.nodeExecutable, hostEntry: product.hostEntry, supervisor: runtimeSupervisor,
-        onBeforeRecovery: async () => { await runtimeSelections?.invalidate(); await updateIntent?.save(false) } })
+      const legacyHome = product.runtimeHome
+      if (product.kind === 'runtime') {
+        const installationOptions = { legacyHome, userDataPath: app.getPath('userData'), appId: product.appId,
+          node: product.nodeExecutable, hostEntry: product.hostEntry, executable: process.execPath,
+          ...(smokeMode ? { stopLegacy: async () => {} } : {}) }
+        cleanInstallation = await prepareRuntimeInstallation(installationOptions)
+        attachRuntimeSupervisor(cleanInstallation.home)
+        const pendingCleanup = new Set<string>()
+        runtimeConnectionRecovery = new RuntimeCleanConnection({ metadataHome: cleanInstallation.metadataHome,
+          hostEntry: product.hostEntry, legacyHome, previousHome: cleanInstallation.priorHome,
+          home: () => product.runtimeHome!, supervisor: () => runtimeSupervisor!,
+          beforeChange: async () => { await runtimeSelections?.invalidate(); await updateIntent?.clear() },
+          afterChange: async () => {
+            for (const home of pendingCleanup) await cleanupRuntimePreviousHome(installationOptions, home).catch(() => 'cleanup_failed')
+            pendingCleanup.clear()
+          },
+          replaceHome: async target => {
+            await runtimeSupervisor!.exitForReplacement()
+            pendingCleanup.add(product.runtimeHome!)
+            const home = target
+              ? await selectRuntimeConnection(installationOptions, target).catch(async () => rotateRuntimeConnection(installationOptions, product.runtimeHome!))
+              : await rotateRuntimeConnection(installationOptions, product.runtimeHome!)
+            attachRuntimeSupervisor(home)
+            return home
+          } })
+        await runtimeConnectionRecovery.resume()
+      } else attachRuntimeSupervisor(legacyHome)
     }
     registerDesktopIpc()
     await registerRendererProtocol()
@@ -486,12 +525,13 @@ if (!hasSingleInstanceLock) {
       runtimeTray.on('double-click', () => { if (mainWindow) revealWindow(mainWindow) })
       if (runtimeSupervisor) {
         void (async () => {
-          const intent = await updateIntent?.read()
+          // Old installation resume records are not new-generation startup prerequisites.
+          const intent = await updateIntent?.read().catch(() => undefined)
           if (maintenanceRequested || runtimeConnectionRecovery?.busy || await runtimeConnectionRecovery?.registrationBlocksExecution()) return
           const reply = await runtimeSupervisor!.request({ request_id: randomUUID(), method: 'getState', params: {} })
           if (reply.code !== 0) throw new Error('RuntimeStartupStateRejected')
           const recovered = runtimeSupervisor!.recoveredAfterInterruption
-          if (!maintenanceRequested && !runtimeConnectionRecovery?.busy && shouldResumeRuntime({ intent, recovered, login: loginLaunch })) await resumeRuntimeAtLogin(value => {
+          if (!maintenanceRequested && !runtimeConnectionRecovery?.busy && (cleanInstallation?.fresh && cleanInstallation.migrated || shouldResumeRuntime({ intent, recovered, login: loginLaunch }))) await resumeRuntimeAtLogin(value => {
             if (maintenanceRequested || runtimeConnectionRecovery?.busy) throw new Error('RuntimeMaintenanceInProgress')
             return runtimeSupervisor!.request(value)
           })
@@ -511,6 +551,7 @@ if (!hasSingleInstanceLock) {
     }
   }).catch((error) => {
     logLifecycle('startup-failed', error instanceof Error ? error.name : 'unknown')
+    if (product.kind === 'runtime') dialog.showErrorBox('Runtime 启动失败', '新版运行目录或安装资源无法初始化。请检查当前用户的目录权限、Windows凭据保护和安装文件完整性。旧版本历史记录不会作为启动条件。')
     app.exit(1)
   })
 
@@ -526,6 +567,7 @@ if (!hasSingleInstanceLock) {
 
   app.on('before-quit', (event) => {
     desktopUpdater?.stop()
+    if (runtimeConnectionRecovery instanceof RuntimeCleanConnection) runtimeConnectionRecovery.dispose()
     if (!runtimeSupervisor || exitAllowed) { runtimeTray?.destroy(); return }
     if (runtimeConnectionRecovery?.busy) { event.preventDefault(); if (mainWindow) revealWindow(mainWindow); return }
     event.preventDefault(); quitting = true

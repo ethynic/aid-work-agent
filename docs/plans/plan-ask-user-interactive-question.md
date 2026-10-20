@@ -1,7 +1,7 @@
 # 结构化提问交互（ask_user 提问卡片）实施计划
 
 > 创建：2026-10-14；修订：2026-10-14（v2 接线责任与验证分工；v3 执行口径澄清：幂等用例按层分配、WP0 结果不复用、Phase 2 验证角色按风险定）
-> 状态：📋 待开发（设计 v6 已过架构评审）
+> 状态：✅ 已完成开发（Phase 1/2/3 已复审；真机验收待授权，expires_at 暂缓）
 > 设计文档：[design-ask-user-interactive-question.md](../system/design-ask-user-interactive-question.md)
 > ideas 条目：20261013-1434
 
@@ -9,9 +9,11 @@
 
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
-| Phase 1 | 协议 + 权威校验 + Web 提问卡片 + 渠道文字全渠道 | ✅ 开发完成（2026-10-14） | WP0-WP5 全部完成、三角色两轮流程走完（commit 56105660/d36f9ea3 + 本轮提交）。WP0 root 等待 spike 通过（§11.1）；WP1 契约/入口校验/摘要兼容；WP2 判定表受理/canonical 权威生成/422 错误链路/BFF 条件透传；WP3 ask_user 正式工具 + spike 收敛（root/SUBAGENT/legacy 行为矩阵内核级用例锁定）；WP4 Web QuestionCard（§5.7 状态机/绑定原 wait/capabilities 降级）；WP5 渠道文字五端（字节分段/预算核算/入站单管线/发送事实）。独立测试修复 3 缺陷：claim_resume 重建阻塞、kf 截断后重发承诺矛盾、多位数题号误解析；CR 修复 2 个 P1：无 form 等待结构化提交静默受理、多位数题号消费 wait。单元 3401 过（7 先存环境）+ 集成 33 过 + 契约 85 fixture + 前端 ask 37/全量 639 过（8 先存）。待：用户统一评审 + 真机渠道验收 |
-| Phase 2 | 同源待答可达性（提问通知 + 会话待答标识） | ✅ 开发完成（2026-10-14） | `task.waiting_input` 通知生产者挂 park 事务尾（chat/web 用户自有 runner 且 waiting(form) 才通知；event_key=runner:wait 去重，同 wait 重复 park 不重发）；`resource_in_tx` 增 `runner_waiting` 分支（点击解析回原会话带 `_load_session`）；站内信 INBOX 纳入该事件（渲染+跳转链接）；SW 白名单/文案更新；会话列表 `waiting_input` 徽标（查询异常降级无徽标，列表缓存 TTL 30s 内）。验证：notifications 单元 138 过（含 9 例 waiting 生产者新用例；web_push 8 例为先存环境）、后端 3417+集成 33、前端 642 与基线一致。主控单角色自验（子智能体额度冻结期）；真机验收待统一评审后。八轮评审修正：埋点移至认领消费事务提交后（prepare 内存阶段不再虚增）、skipped 用 payload.skip 事实、legacy clarify 不混入、respond/recover 双时长口径 |
-| Phase 3 | 增强项（按需） | ✅ 开发完成（2026-10-14） | legacy SSE form 透传（clarification 帧携带 form，旧页面作答方式不变）；生命周期埋点 MVP（[ask] produced/applied 结构化日志：提问率/跳过率/响应时长可由日志+DB 关联统计）；capabilities 已由 Phase 1 ask_structured_answers 覆盖（无多维度协商需求，无遗留）；expires_at 超时语义**暂缓**——需先冻结监管/取消/计费产品口径（设计 §5.5），未实现任何自动超时 |
+| Phase 1 | 协议 + 权威校验 + Web 提问卡片 + 渠道文字全渠道 | ✅ 开发完成（2026-10-14） | WP0-WP5 全部完成、三角色两轮流程走完（commit 56105660/d36f9ea3 + 本轮提交）。WP0 root 等待 spike 通过（§11.1）；WP1 契约/入口校验/摘要兼容；WP2 判定表受理/canonical 权威生成/422 错误链路/BFF 条件透传；WP3 ask_user 正式工具 + spike 收敛（root/SUBAGENT/legacy 行为矩阵内核级用例锁定）；WP4 Web QuestionCard（§5.7 状态机/绑定原 wait/capabilities 降级）；WP5 渠道文字五端（字节分段/预算核算/入站单管线/发送事实）。独立测试修复 3 缺陷：claim_resume 重建阻塞、kf 截断后重发承诺矛盾、多位数题号误解析；CR 修复 2 个 P1：无 form 等待结构化提交静默受理、多位数题号消费 wait。单元 3401 过（7 先存环境）+ 集成 33 过 + 契约 85 fixture + 前端 ask 37/全量 639 过（8 先存）。后续修正已完成代码复审；真机渠道验收待授权 |
+| Phase 2 | 同源待答可达性（提问通知 + 会话待答标识） | ✅ 开发完成（2026-10-14） | `task.waiting_input` 通知生产者挂 park 事务尾（chat/web 用户自有 runner 且 waiting(form) 才通知；event_key=runner:wait 去重，同 wait 重复 park 不重发）；`resource_in_tx` 增 `runner_waiting` 分支（点击解析回原会话带 `_load_session`）；站内信 INBOX 纳入该事件（渲染+跳转链接）；SW 白名单/文案更新；会话列表 `waiting_input` 徽标（查询异常降级无徽标，列表缓存 TTL 30s 内）。验证：notifications 单元 138 过（含 9 例 waiting 生产者新用例；web_push 8 例为先存环境）、后端 3417+集成 33、前端 642 与基线一致。主控单角色自验（子智能体额度冻结期）；后续修正已完成代码复审；真机验收待授权。埋点以最新 Phase 3 记录为准 |
+| Phase 3 | 增强项（按需） | ✅ 开发完成（2026-10-14） | legacy SSE form 透传（clarification 帧携带 form，旧页面作答方式不变）；生命周期埋点 MVP（[ask] produced 与事务提交后的 consumed；结构化及文字作答均计入，skipped 来自 payload.skip；recover_ms 表示控制受理至消费完成的时长，不是用户作答时长）；capabilities 已由 Phase 1 ask_structured_answers 覆盖（无多维度协商需求，无遗留）；expires_at 超时语义**暂缓**——需先冻结监管/取消/计费产品口径（设计 §5.5），未实现任何自动超时 |
+
+合并验证（2026-10-14）：功能分支 `89f60ccb` 与 master `a805eb24` 整合；保留双方数据库迁移与网络搜索任务索引。Web 构建通过，独立前端定向回归 35 项通过，契约检查 7 项及 85 个 fixture 通过，42 个 Python 文件语法与 4 个关键模块导入通过；当前环境缺少 pytest，后端完整测试未重跑，未执行部署或真实渠道验收。
 
 ## 1. 范围边界（评审固化，实施中不得扩张）
 
@@ -142,7 +144,7 @@
 ## 5. Phase 3：增强项（开发完成 2026-10-14，含两项按计划暂缓）
 
 - **legacy SSE form 透传（已完成）**：clarification 帧/child_clarification wait 携带 form（旧页面无卡片渲染能力，仅数据透传，作答方式不变）；桥帧有单测锁定向后兼容（无 form 无键）。
-- **埋点 MVP（已完成）**：`[ask] produced`（controls.py 生产点）与 `[ask] applied wait_id/skipped/elapsed_ms`（recovery.py 应用点）结构化日志——提问率/跳过率/响应时长可由日志与 DB 关联统计，未新增表或上报通道。
+- **埋点 MVP（已完成）**：`[ask] produced`（runtime/controls.py 生产点）与 `[ask] consumed wait_id/skipped/recover_ms`（recovery_repository.py 消费事务提交后）结构化日志；`recover_ms` 表示控制受理至消费完成的时长。当前不直接输出用户作答时长，未新增表或上报通道。
 - **capabilities 协商（无遗留）**：Phase 1 已交付 `ask_structured_answers` 能力字段 + 前端缓存降级；无多维度协商需求。
 - **expires_at 超时语义（暂缓）**：需先冻结监管/取消/计费产品口径（如超时自动跳过或转取消、时限默认值），属产品决策——设计 §5.5 明确不引入未冻结口径的自动超时；字段与解析已预留，口径定后实施。
 

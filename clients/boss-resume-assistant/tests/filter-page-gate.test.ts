@@ -5,14 +5,15 @@ import { createBossFilterOperation, createBossClearFilterOperation } from '../sr
 import { createBossFilterOptionsOperation } from '../src/main/operations/bossFilterOptions.js'
 import type { BossSession } from '../src/main/operations/bossContext.js'
 import type { DomSnapshot } from '../src/main/boss/domSnapshot.js'
+import { withAccount, withoutRowOptions } from './filterFixture.js'
 
 // 隐藏推荐iframe仍有全量会员布局及筛选徽章；真实页面URL才是动作前置条件。
 const fixture: DomSnapshot = JSON.parse(fs.readFileSync(new URL('../../tests/fixtures/boss-vip-panel-top.json', import.meta.url), 'utf8'))
 fixture.strings.push('筛选·7')
-function sessionAt(url: string) {
+function sessionAt(url: string, snaps: DomSnapshot[] = [fixture]) {
   const calls = { snapshot: 0, click: 0, drag: 0, wheel: 0, close: 0 }
   const session: BossSession = {
-    snapshot: async () => { calls.snapshot++; return fixture },
+    snapshot: async () => snaps[Math.min(calls.snapshot++, snaps.length - 1)]!,
     getUrl: async () => url,
     click: async () => { calls.click++ },
     drag: async () => { calls.drag++ },
@@ -48,4 +49,35 @@ test('推荐页允许query，参数错误仍发生于动作前而不是误报WRO
   assert.equal(f.calls.snapshot, 1)
   assert.equal(f.calls.click, 0)
   assert.equal(f.calls.close, 1)
+})
+
+test('局部探查成功明确报告不可读行，完整探查不遗留不可读标记', async () => {
+  const complete = withAccount(fixture)
+  // The saved panel fixture has a filter string but no visible toolbar text node.
+  // Cleanup now verifies that actual toolbar and must never click a strings-table-only match.
+  const doc = complete.documents[0]!, node = (doc.nodes.nodeValue as number[]).length
+  complete.strings.push('筛选', '#text')
+  ;(doc.nodes.nodeValue as number[]).push(complete.strings.length - 2)
+  ;(doc.nodes.nodeName as number[]).push(complete.strings.length - 1)
+  ;(doc.nodes.parentIndex as number[]).push(0)
+  ;(doc.nodes.attributes as number[][]).push([])
+  doc.layout.nodeIndex.push(node); doc.layout.bounds.push([2200, 24, 60, 31])
+  const closed = withAccount({ strings: ['', '筛选'], documents: [{ nodes: { nodeValue: [0, 1], contentDocumentIndex: [] }, layout: { nodeIndex: [0, 1], bounds: [[0, 0, 2506, 1476], [2200, 24, 60, 31]] } }] })
+  for (const partial of [true, false]) {
+    const panel = partial ? withoutRowOptions(complete, ['性别']) : complete
+    const f = sessionAt('https://www.zhipin.com/web/chat/recommend', [panel, panel, panel, closed])
+    const result = await createBossFilterOptionsOperation(f.factory).execute({}, context())
+    assert.equal(result.success, true)
+    assert.equal(result.effect, 'none')
+    assert.equal(result.data?.filter_schema_version, 3)
+    assert.equal(result.data?.probe_complete, !partial)
+    const unreadable = result.data?.unreadable_rows as Array<{ label: string; reason: string }>
+    assert.deepEqual(unreadable.map((row) => row.label), partial ? ['性别'] : [])
+    const rows = result.data?.rows as Array<{ label: string }>
+    assert.equal(rows.length, partial ? 12 : 13)
+    assert.equal(rows.some((row) => row.label === '性别'), !partial)
+    assert.ok(rows.some((row) => row.label === '薪资待遇[单选]'))
+    assert.equal(f.calls.click, 1)
+    assert.equal(f.calls.close, 1)
+  }
 })

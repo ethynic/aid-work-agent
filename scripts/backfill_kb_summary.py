@@ -110,8 +110,12 @@ async def _backfill_one(doc: dict, svc) -> bool:
 
 
 async def _main(args) -> int:
+    from src.db.database import init_postgres_pool
     from src.knowledge.service import knowledge_service
 
+    # 独立进程内 record_background_llm_usage 落库依赖连接池，未初始化会导致
+    # 摘要生成成功但计费行缺失（credit_cost 降级 0），故先生成用量计费环境
+    await asyncio.to_thread(init_postgres_pool)
     targets = _fetch_targets(args)
     logger.info(f"[backfill] 命中 {len(targets)} 个摘要为空的文档")
     if not targets:

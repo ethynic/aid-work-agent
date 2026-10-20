@@ -65,16 +65,16 @@ class MessageDeduplicator:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             try:
+                # ON CONFLICT DO NOTHING：冲突即重复（rowcount=0），
+                # 与捕获 IntegrityError 等价，但不让 postgres 日志产生 ERROR 噪音
+                # （2026-10-16 巡检：wecom_kf 回调重试高频冲突被误判为数据库故障）
                 cursor.execute("""
                     INSERT INTO channel_message_dedup (message_id, created_at)
                     VALUES (%s, %s)
+                    ON CONFLICT (message_id) DO NOTHING
                 """, (message_id, now))
                 conn.commit()
-                return False
-            except psycopg2.IntegrityError:
-                # 主键冲突 = 重复消息
-                conn.rollback()
-                return True
+                return cursor.rowcount == 0
             except Exception as e:
                 # DB 异常（连接抖动 / 死锁 / 不可达）时放行，
                 # 避免静默丢弃用户消息。下游业务需自行幂等兜底。

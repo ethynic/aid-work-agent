@@ -1,246 +1,67 @@
-/**
- * ChatSendExecutor 单测：发消息链路（定位发送按钮 → 激活输入框+逐字输入 → dry-run/真发送）。
- * fake 注入 snapshot/click/clickAndType（与 greet/chat-reject 测试同范式）。
- */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { ChatSendExecutor, ChatSendError, locateSendButton } from '../src/main/boss/ChatSendExecutor.js'
-import type { DomSnapshot, ClickPoint } from '../src/main/boss/domSnapshot.js'
-
-/** 构造 snapshot：根节点视口 1249x1277（真机窗口），items 为文本及其 bounds（同文案共享 string 下标） */
-function chatSnap(items: Array<{ text: string; bounds: [number, number, number, number] }>, strings?: string[]): DomSnapshot {
-  const strTab: string[] = strings ?? ['']
-  const idx: number[] = [0]
-  const values: number[] = [0]
-  const bounds: [number, number, number, number][] = [[0, 0, 1249, 1277]]
-  for (const item of items) {
-    let si = strTab.indexOf(item.text)
-    if (si < 0) {
-      strTab.push(item.text)
-      si = strTab.length - 1
-    }
-    idx.push(idx.length)
-    values.push(si)
-    bounds.push(item.bounds)
-  }
-  return {
-    strings: strTab,
-    documents: [
-      {
-        nodes: {
-          nodeValue: { index: idx, value: values },
-          contentDocumentIndex: { index: [], value: [] },
-        },
-        layout: { nodeIndex: idx, bounds },
-        scrollOffsetY: 0,
-      },
-    ],
-  }
+import { ChatSendExecutor, locateSendButton } from '../src/main/boss/ChatSendExecutor.js'
+import { chatContactRef } from '../src/main/boss/BusinessOperationState.js'
+import { WinClickError } from '../src/main/input/WinMouseClicker.js'
+import { actionSnapshot, text } from './chatActionFixture.js'
+const MSG='你好，我们聊聊岗位'
+function harness() {
+ let editor='', outgoing:string[]=[]
+ const counts={type:0,send:0},state={contact:'合成甲',land:true,deliver:true,clear:true}
+ const deps={snapshot:async()=>actionSnapshot({editor,outgoing,contact:state.contact}),sleep:async()=>{},clickAndType:async(_p:unknown,_v:unknown,value:string)=>{counts.type++;if(state.land)editor+=value},click:async()=>{counts.send++;if(state.deliver)outgoing.push(MSG);if(state.clear)editor=''}}
+ return {deps,counts,state,setEditor:(s:string)=>{editor=s},outgoing}
 }
-
-/** 依调用序返回 snapshot 队列，用完后重复最后一个 */
-function snapshotQueue(snaps: DomSnapshot[]): () => Promise<DomSnapshot> {
-  let i = 0
-  return async () => snaps[Math.min(i++, snaps.length - 1)]!
-}
-
-interface FakeDeps {
-  clicks: ClickPoint[]
-  clickAndTypes: Array<{ point: ClickPoint; text: string }>
-  click: (p: ClickPoint) => Promise<void>
-  clickAndType: (p: ClickPoint, viewport: { width: number; height: number }, text: string) => Promise<void>
-  sleep: (ms: number) => Promise<void>
-}
-
-function recorder(): FakeDeps {
-  const clicks: ClickPoint[] = []
-  const clickAndTypes: Array<{ point: ClickPoint; text: string }> = []
-  return {
-    clicks,
-    clickAndTypes,
-    click: async (p: ClickPoint) => {
-      clicks.push(p)
-    },
-    clickAndType: async (p: ClickPoint, _viewport: { width: number; height: number }, text: string) => {
-      clickAndTypes.push({ point: p, text })
-    },
-    sleep: async () => {},
-  }
-}
-
-// 真机参考坐标：发送按钮 center (1146,1233) → bounds=[1086,1215,120,36]；激活点 = center+(-130,-38)=(1016,1195)
-const SEND_BTN: [number, number, number, number] = [1086, 1215, 120, 36]
-const MSG = '你好，我是 HR'
-
-test('dry-run：定位发送按钮 → 点击激活点 → 逐字输入 → 校验输入落地，不点发送', async () => {
-  const r = recorder()
-  const executor = new ChatSendExecutor({
-    snapshot: snapshotQueue([
-      chatSnap([{ text: '发送', bounds: SEND_BTN }]), // 定位发送按钮
-      chatSnap([{ text: '发送', bounds: SEND_BTN }, { text: MSG, bounds: [200, 1180, 800, 30] }]), // dry-run 校验：strings 含 message
-    ]),
-    click: r.click,
-    clickAndType: r.clickAndType,
-    sleep: r.sleep,
-  })
-  const result = await executor.sendMessage({ message: MSG, dryRun: true })
-  assert.equal(result.sent, false)
-  // 激活点点击+输入走同一次 clickAndType（Win32 原子），没点发送按钮
-  assert.equal(r.clicks.length, 0)
-  assert.equal(r.clickAndTypes.length, 1)
-  assert.deepEqual(r.clickAndTypes[0]!.point, { x: 1016, y: 1195 })
-  assert.equal(r.clickAndTypes[0]!.text, MSG)
+test('same-conversation editor clears and a new outgoing exact message proves success even message remains in strings',async()=>{
+ const h=harness(),executor=new ChatSendExecutor(h.deps),r=await executor.sendMessage({message:MSG})
+ assert.equal(r.sent,true);assert.deepEqual(h.counts,{type:1,send:1});assert.equal(executor.state.businessEffect.status,'confirmed')
 })
-
-test('真发送：输入后点发送按钮，发送后输入框清空（strings 不含 message）→ sent=true', async () => {
-  const r = recorder()
-  const executor = new ChatSendExecutor({
-    snapshot: snapshotQueue([
-      chatSnap([{ text: '发送', bounds: SEND_BTN }]), // 定位发送按钮
-      chatSnap([{ text: '发送', bounds: SEND_BTN }]), // 真发送前重新定位
-      chatSnap([{ text: '发送', bounds: SEND_BTN }]), // 发送后校验：strings 不含 message（已清空）
-    ]),
-    click: r.click,
-    clickAndType: r.clickAndType,
-    sleep: r.sleep,
-  })
-  const result = await executor.sendMessage({ message: MSG })
-  assert.equal(result.sent, true)
-  // clickAndType 1 次（激活点+输入）+ click 1 次（发送按钮）
-  assert.equal(r.clickAndTypes.length, 1)
-  assert.deepEqual(r.clickAndTypes[0]!.point, { x: 1016, y: 1195 })
-  assert.equal(r.clickAndTypes[0]!.text, MSG)
-  assert.deepEqual(r.clicks, [{ x: 1146, y: 1233 }])
+test('dry run verifies exact editor value and never clicks send',async()=>{
+ const h=harness(),r=await new ChatSendExecutor(h.deps).sendMessage({message:MSG,dryRun:true});assert.equal(r.sent,false);assert.deepEqual(h.counts,{type:1,send:0})
 })
-
-test('发送校验失败（发送后输入框未清空，strings 仍含 message）→ ChatSendError（含无法确认 → EXECUTION_UNKNOWN）', async () => {
-  const r = recorder()
-  const executor = new ChatSendExecutor({
-    snapshot: snapshotQueue([
-      chatSnap([{ text: '发送', bounds: SEND_BTN }]), // 定位发送按钮
-      chatSnap([{ text: '发送', bounds: SEND_BTN }]), // 真发送前重新定位
-      chatSnap([{ text: '发送', bounds: SEND_BTN }, { text: MSG, bounds: [200, 1180, 800, 30] }]), // 发送后仍含 message
-    ]),
-    click: r.click,
-    clickAndType: r.clickAndType,
-    sleep: r.sleep,
-  })
-  await assert.rejects(executor.sendMessage({ message: MSG }), (e: unknown) => {
-    assert.ok(e instanceof ChatSendError)
-    assert.match((e as Error).message, /无法确认/)
-    return true
-  })
-  // 已完成激活输入（clickAndType）+ 点了发送按钮（发送动作已发出，但结果未知）
-  assert.equal(r.clickAndTypes.length, 1)
-  assert.equal(r.clicks.length, 1)
+test('old identical outgoing or incoming text never substitutes for a new outbound message',async()=>{
+ const h=harness();h.outgoing.push(MSG);h.state.deliver=false
+ const executor=new ChatSendExecutor(h.deps);await assert.rejects(executor.sendMessage({message:MSG}),/无法确认/)
+ assert.equal(h.counts.send,1);assert.equal(executor.state.businessEffect.status,'unknown')
 })
-
-test('无发送按钮（cx>850 视口内 0 个）→ ChatSendError，不点不输入', async () => {
-  const r = recorder()
-  const executor = new ChatSendExecutor({
-    snapshot: snapshotQueue([chatSnap([])]),
-    click: r.click,
-    clickAndType: r.clickAndType,
-    sleep: r.sleep,
-  })
-  await assert.rejects(executor.sendMessage({ message: MSG }), (e: unknown) => {
-    assert.ok(e instanceof ChatSendError)
-    assert.match((e as Error).message, /0 个/)
-    return true
-  })
-  assert.equal(r.clicks.length, 0)
-  assert.equal(r.clickAndTypes.length, 0)
+test('editor still populated after send is unknown and does not resend',async()=>{
+ const h=harness();h.state.clear=false
+ await assert.rejects(new ChatSendExecutor(h.deps).sendMessage({message:MSG}),/无法确认/);assert.equal(h.counts.send,1)
 })
-
-test('左列的「发送」不算数（cx<=850 被排除）→ 视为无发送按钮', async () => {
-  const r = recorder()
-  const executor = new ChatSendExecutor({
-    // cx=400 在左列区域（<=850），被排除 → 0 个有效发送按钮
-    snapshot: snapshotQueue([chatSnap([{ text: '发送', bounds: [340, 1100, 120, 36] }])]),
-    click: r.click,
-    clickAndType: r.clickAndType,
-    sleep: r.sleep,
-  })
-  await assert.rejects(executor.sendMessage({ message: MSG }), /0 个/)
-  assert.equal(r.clicks.length, 0)
+test('normal typing with readable empty editor retries once with fresh coordinates',async()=>{
+ const h=harness();let types=0;h.deps.clickAndType=async(_p,_v,value)=>{types++;if(types===2)h.setEditor(value)}
+ const executor=new ChatSendExecutor(h.deps);assert.equal((await executor.sendMessage({message:MSG,dryRun:true})).sent,false)
+ assert.equal(types,2);assert.equal(executor.state.execution.ordinaryRetriesUsed,1)
 })
-
-test('多个发送按钮（cx>850）→ 歧义 ChatSendError，不点不输入', async () => {
-  const r = recorder()
-  const executor = new ChatSendExecutor({
-    snapshot: snapshotQueue([
-      chatSnap([
-        { text: '发送', bounds: SEND_BTN },
-        { text: '发送', bounds: [1086, 600, 120, 36] }, // 第二个也在右侧
-      ]),
-    ]),
-    click: r.click,
-    clickAndType: r.clickAndType,
-    sleep: r.sleep,
-  })
-  await assert.rejects(executor.sendMessage({ message: MSG }), (e: unknown) => {
-    assert.ok(e instanceof ChatSendError)
-    assert.match((e as Error).message, /2 个/)
-    return true
-  })
-  assert.equal(r.clicks.length, 0)
+test('two empty typing postconditions stop before external submission',async()=>{
+ const h=harness();h.state.land=false;const executor=new ChatSendExecutor(h.deps)
+ await assert.rejects(executor.sendMessage({message:MSG}),/未完整落地/);assert.deepEqual(h.counts,{type:2,send:0});assert.equal(executor.state.businessEffect.status,'not_started')
 })
-
-test('真发送前发送按钮消失（页面切换/弹层）→ ChatSendError，消息未发送', async () => {
-  const r = recorder()
-  const executor = new ChatSendExecutor({
-    snapshot: snapshotQueue([
-      chatSnap([{ text: '发送', bounds: SEND_BTN }]), // 定位发送按钮（输入激活点）
-      chatSnap([]), // 真发送前重新定位：发送按钮消失
-    ]),
-    click: r.click,
-    clickAndType: r.clickAndType,
-    sleep: r.sleep,
-  })
-  await assert.rejects(executor.sendMessage({ message: MSG }), /发送按钮消失/)
-  // 激活输入已完成（clickAndType），未点发送
-  assert.equal(r.clickAndTypes.length, 1)
-  assert.equal(r.clicks.length, 0)
+test('different draft is preserved and exact existing draft is not appended twice',async()=>{
+ const h=harness();h.setEditor('用户的草稿');await assert.rejects(new ChatSendExecutor(h.deps).sendMessage({message:MSG}),/已有不同内容/);assert.equal(h.counts.type,0)
+ h.setEditor(MSG);assert.equal((await new ChatSendExecutor(h.deps).sendMessage({message:MSG})).sent,true);assert.equal(h.counts.type,0)
 })
-
-test('dry-run 输入校验失败（strings 不含 message）→ ChatSendError', async () => {
-  const r = recorder()
-  const executor = new ChatSendExecutor({
-    snapshot: snapshotQueue([
-      chatSnap([{ text: '发送', bounds: SEND_BTN }]), // 定位发送按钮
-      chatSnap([{ text: '发送', bounds: SEND_BTN }]), // dry-run 校验：strings 不含 message（输入未落地）
-    ]),
-    click: r.click,
-    clickAndType: r.clickAndType,
-    sleep: r.sleep,
-  })
-  await assert.rejects(executor.sendMessage({ message: MSG, dryRun: true }), /输入未落地/)
-  assert.equal(r.clickAndTypes.length, 1)
-  assert.equal(r.clicks.length, 0)
+test('conversation changing during preparation prevents the final click',async()=>{
+ const h=harness(),type=h.deps.clickAndType;h.deps.clickAndType=async(...args)=>{await type(...args);h.state.contact='合成乙'}
+ await assert.rejects(new ChatSendExecutor(h.deps).sendMessage({message:MSG}),/身份/);assert.equal(h.counts.send,0)
 })
-
-test('取消（signal 已 abort）→ CancelledError，不点不输入', async () => {
-  const r = recorder()
-  const executor = new ChatSendExecutor({
-    snapshot: snapshotQueue([chatSnap([{ text: '发送', bounds: SEND_BTN }])]),
-    click: r.click,
-    clickAndType: r.clickAndType,
-    sleep: r.sleep,
-    signal: AbortSignal.abort(),
-  })
-  await assert.rejects(executor.sendMessage({ message: MSG }), (e: unknown) => {
-    assert.equal((e as Error).name, 'CancelledError')
-    return true
-  })
-  assert.equal(r.clicks.length, 0)
+test('recovery guard rejects a different original conversation before any input',async()=>{
+ const h=harness(),ref=chatContactRef(actionSnapshot({contact:'合成乙'}))!
+ await assert.rejects(new ChatSendExecutor(h.deps).sendMessage({message:MSG,expectedContactRef:ref}),/绑定不一致/);assert.deepEqual(h.counts,{type:0,send:0})
 })
-
-test('locateSendButton 导出函数：同文案多 string 下标也全部命中', () => {
-  // 真机 §17 坑：同一文案在 strings 表可能有多个条目
-  const snap = chatSnap([{ text: '发送', bounds: SEND_BTN }])
-  // 额外塞一个重复下标的「发送」string（无布局节点）确保不误计
-  snap.strings.push('发送')
-  const { point, count } = locateSendButton(snap)
-  assert.equal(count, 1)
-  assert.deepEqual(point, { x: 1146, y: 1233 })
+test('activity/rejection labels do not alter stable contact binding; demographic changes do',()=>{
+ assert.equal(chatContactRef(actionSnapshot({status:'在线'})),chatContactRef(actionSnapshot({status:'已标记不合适'})))
+ assert.notEqual(chatContactRef(actionSnapshot({demographic:'28岁'})),chatContactRef(actionSnapshot({demographic:'35岁'})))
+})
+test('direct native typing error has zero ordinary retries',async()=>{
+ const h=harness();let typed=0;h.deps.clickAndType=async()=>{typed++;throw new WinClickError('native input failed',2)}
+ const executor=new ChatSendExecutor(h.deps);await assert.rejects(executor.sendMessage({message:MSG}));assert.equal(typed,1);assert.equal(executor.state.execution.ordinaryRetriesUsed,0)
+})
+test('missing or ambiguous send button never emits message input',()=>{
+ assert.equal(locateSendButton(actionSnapshot({send:false})).count,0)
+ assert.equal(locateSendButton(actionSnapshot({extra:[text('发送',1000,1000,80,20)]})).count,2)
+ assert.equal(locateSendButton(actionSnapshot({extra:[text('发送',100,1000,80,20)]})).count,1)
+})
+test('lack of a uniquely scoped editor is unknown, never a full-strings fallback',async()=>{
+ const h=harness();h.deps.snapshot=async()=>actionSnapshot({editor:null,friend:MSG})
+ await assert.rejects(new ChatSendExecutor(h.deps).sendMessage({message:MSG}),/编辑区/);assert.deepEqual(h.counts,{type:0,send:0})
 })

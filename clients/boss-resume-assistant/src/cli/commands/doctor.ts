@@ -24,6 +24,7 @@ export interface DoctorCommandOptions {
   json?: boolean
   /** 只读测试注入，不由 CLI 参数构造。 */
   gateway?: Pick<CdpGateway, 'connect' | 'attachToRecommendPage' | 'captureDomSnapshot' | 'close'>
+    & Partial<Pick<CdpGateway, 'getTargets' | 'getTargetId'>>
 }
 
 /** 登录态特征：推荐页「筛选」按钮或左侧菜单文案 */
@@ -33,6 +34,8 @@ export async function doctorCommand(opts: DoctorCommandOptions): Promise<number>
   const port = opts.cdpPort ?? DEFAULT_CDP_PORT
   const endpoint = `http://127.0.0.1:${port}`
   let failed = false
+  let bossPages: Array<{ target_id: string; url: string }> = []
+  let selectedTargetId: string | null = null
   const checks: Array<{ name: string; ok: boolean; severity: 'gate'; detail: string }> = []
   const print = (message: string) => { if (!opts.json) console.log(message) }
   const check = (ok: boolean, label: string, detail = '') => {
@@ -64,7 +67,15 @@ export async function doctorCommand(opts: DoctorCommandOptions): Promise<number>
   let attached = false
   if (connected) {
     try {
+      if (gw.getTargets) bossPages = (await gw.getTargets()).flatMap(target => {
+        try {
+          const url = new URL(target.url)
+          return target.type === 'page' && ['www.zhipin.com', 'zhipin.com'].includes(url.hostname)
+            ? [{ target_id: target.targetId, url: `${url.origin}${url.pathname}` }] : []
+        } catch { return [] }
+      })
       await gw.attachToRecommendPage()
+      selectedTargetId = gw.getTargetId?.() ?? null
       attached = check(true, 'attach BOSS（zhipin.com）页面')
     } catch (e) {
       check(false, 'attach BOSS（zhipin.com）页面', '请确认已在该 Chrome 打开 BOSS 直聘页面')
@@ -106,6 +117,7 @@ export async function doctorCommand(opts: DoctorCommandOptions): Promise<number>
   if (opts.json) {
     console.log(JSON.stringify({
       success: !failed, checks,
+      boss_pages: bossPages, selected_target_id: selectedTargetId,
       runtime_readiness: { ready: !failed && connected && attached, reason: failed ? '请启动调试 Chrome 并登录 BOSS，检查页面与脚本条件' : '只读 BOSS 页面与登录态检查通过' },
     }))
     return failed ? 1 : 0

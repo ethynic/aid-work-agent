@@ -4,8 +4,9 @@
 服务器在**同一事务**中验证 claim/device、active revision epoch、当前 delivery 未获
 许可、取消状态、deadline 和配额，保守预留配额并返回 permit_id/短 deadline。
 
-锁顺序（R49，符合 R12 subject→run 次序并与 cancel_run 的 run→deliveries→invocations
-序无交叉死锁）：task subject（FOR UPDATE，与发布/暂停互斥——许可事务同时锁定
+锁顺序先设备active（FOR SHARE，与设备撤销互斥），再按R49 subject→run次序。
+设备撤销不取任务锁，不引入task→device反向边。后续与cancel_run的run→deliveries→invocations
+序无交叉死锁：task subject（FOR UPDATE，与发布/暂停互斥——许可事务同时锁定
 subject/epoch，避免检查后授权漂移）→ run（经 delivery.run_id 租户域 FOR UPDATE，
 复验 run 未取消/未终态——终态 run 仅放行人工重试链重开的 delivery，R45/R52——
 与 cancel_run 单事务互斥）→ invocation → delivery → quota buckets（R9 固定 scope 顺序）。
@@ -36,6 +37,7 @@ from src.desktop_automation.constants import (
     TASK_STATUS_ACTIVE,
 )
 from src.local_tools.security import sha256_hex
+from src.local_tools.repository import lock_active_device
 
 PERMIT_TTL_SECONDS = 120  # 许可短有效期（默认；实际取 min(TTL, invocation deadline, claim lease))
 
@@ -89,7 +91,7 @@ def write_authorize(
         #    arguments_json/business_ref 创建后不可变）
         cursor.execute(
             """
-            SELECT claim_token_hash, business_kind, business_ref
+            SELECT claim_token_hash, business_kind, business_ref, device_id
             FROM local_tool_invocations
             WHERE id = %s AND tenant_id = %s
             """,
@@ -105,6 +107,13 @@ def write_authorize(
             raise PermitError(
                 "NOT_DESKTOP_AUTOMATION", 409, "仅桌面自动任务 v2 invocation 支持写动作许可"
             )
+        if str(pre["device_id"]) != str(device_id):
+            raise PermitError("DEVICE_MISMATCH", 403, "设备与 invocation 不匹配")
+        # Device -> subject/run/invocation: replacement only locks devices, so
+        # there is no task -> device reverse edge. A revoke winner denies new
+        # permits even if the HTTP dependency authenticated before replacement.
+        if not lock_active_device(cursor, tenant_id, device_id):
+            raise PermitError("DEVICE_REVOKED", 401, "设备已失效，请重新配对")
         business_ref = pre["business_ref"] or {}
         scenario_key = business_ref.get("scenario_key") or ""
         task_ref = business_ref.get("task_ref") or ""

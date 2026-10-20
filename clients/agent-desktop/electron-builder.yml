@@ -16,8 +16,10 @@ files:
   - dist/electron/windowState.js
   - dist/electron/platform.js
   - dist/electron/productConfiguration.js
+  - dist/electron/runtimeInstallation.js
   - dist/electron/runtimeSupervisor.js
   - dist/electron/runtimeConnectionRecovery.js
+  - dist/electron/runtimeCleanConnection.js
   - dist/electron/runtimeSelection.js
   - dist/electron/runtimeStartup.js
   - dist/electron/runtimeUpdate.js

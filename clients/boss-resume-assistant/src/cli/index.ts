@@ -65,8 +65,19 @@ const USAGE = `BOSS 招聘操作 CLI
   resume-next --exclude-names <姓名,姓名> --job <原职位> [--limit N]   跳过已处理者并滚动继续读取（默认3，最多10）
   resume-batch [--limit N] [--save-dir <目录>]   批量打开推荐牛人卡片并读取简历（默认 1 份，最大 10；逐个点开→读取→关闭→下一份，文本在云端识别；只读，但滚动借用真实鼠标约 30 秒/份，期间勿动鼠标）
   open-detail <姓名>            打开指定姓名候选人的简历详情（推荐牛人页按姓名找人并点开，详情保持打开供 resume-detail 读取；当前屏没有自动滚动查找，找不到 fail-loud 列出当前屏可见姓名；点击/滚动借用真实鼠标，期间勿动鼠标）
-  greet-detail <姓名> --greet-in-detail [--dry-run]   详情页打招呼默认关闭，仅明确选择直接模式后启用（校验归属；已打过幂等；打完关闭；--dry-run只定位不点击）
+  greet-detail <姓名> --greet-in-detail [--dry-run]   详情页打招呼默认关闭，仅明确选择直接模式后启用（校验归属；已打过幂等；打完关闭；--dry-run只核验不发送，必要时关闭重开详情）
   close-detail                  关闭当前打开的简历详情弹层（筛选不合格时的清理步，无业务副作用，详情未打开时幂等成功；期间勿动鼠标键盘）
+  screenshot --output <PNG路径> [--scope page|window] [--snapshot-output <本机JSON>] [--json]   实验采图；page为网页，window包含调试Chrome界面（仅抬窗，不导航）
+  window-click --observation <截图PNG.json> --x <像素X> --y <像素Y> [--max-age-seconds 120] [--json]
+                                 实验：核对窗口归属、原图新鲜性和落点后单次真实点击，期间勿动鼠标
+  page-click --image <网页PNG> --x <像素X> --y <像素Y> [--max-age-seconds 120] [--json]
+                                 实验：复用网页浏览点击；核对当前网页原图一致后单击，不代表目标完成
+  visual-diagnose --image <PNG路径> [--observation <截图PNG.json>] --request-id <UUID> [--goal <文本>] [--json]
+                                 实验：调用 Agent 后台视觉 API，按实际模型成本 20 倍计费，只诊断不点击
+  visual-diagnose --image <PNG路径> --context-file <JSON路径> --request-id <UUID> [--observation <截图PNG.json>] [--json]
+                                 v2实验：操作上下文、可见后态核验与鼠标关闭建议；page采集时间采用文件mtime
+  visual-diagnose --request-id <UUID> --retrieve-only [--api-version 1|2] [--json]   取回同一诊断回执，不重复推理
+                                 自动复用Runtime配对的服务器与设备身份，无需额外token；CLI 不含模型密钥
 
 Provider 命令：
   mcp --stdio                 启动标准本地 MCP server（stdout 只承载协议，供 Codex/WorkBuddy 等 Host 使用）
@@ -117,6 +128,31 @@ async function main(): Promise<number> {
   }
 
   switch (command) {
+    case 'screenshot': {
+      const cdpPort = parseCdpPort(args)
+      if (cdpPort === 'invalid') return 2
+      const { screenshotCommand } = await import('./commands/visualExperiment.js')
+      return screenshotCommand({ output: flagString(args, 'output')!, snapshotOutput: flagString(args, 'snapshot-output'), scope: flagString(args, 'scope') as 'page' | 'window' | undefined, cdpPort, json: hasFlag(args, 'json') })
+    }
+    case 'page-click': {
+      const cdpPort = parseCdpPort(args)
+      if (cdpPort === 'invalid') return 2
+      const { pageClickCommand } = await import('./commands/visualExperiment.js')
+      return pageClickCommand({ image: flagString(args, 'image')!, x: Number(flagString(args, 'x')), y: Number(flagString(args, 'y')),
+        maxAgeSeconds: args.flags.has('max-age-seconds') ? Number(flagString(args, 'max-age-seconds')) : undefined, cdpPort, json: hasFlag(args, 'json') })
+    }
+    case 'window-click': {
+      const { windowClickCommand } = await import('./commands/visualExperiment.js')
+      return windowClickCommand({ observation: flagString(args, 'observation')!, x: Number(flagString(args, 'x')), y: Number(flagString(args, 'y')),
+        maxAgeSeconds: args.flags.has('max-age-seconds') ? Number(flagString(args, 'max-age-seconds')) : undefined, json: hasFlag(args, 'json') })
+    }
+    case 'visual-diagnose': {
+      const { visualDiagnoseCommand } = await import('./commands/visualExperiment.js')
+      return visualDiagnoseCommand({ image: flagString(args, 'image'), requestId: flagString(args, 'request-id')!,
+        observation: flagString(args, 'observation'), goal: flagString(args, 'goal'), contextFile: flagString(args, 'context-file'),
+        apiVersion: args.flags.has('api-version') ? Number(flagString(args, 'api-version')) as 1 | 2 : undefined,
+        retrieveOnly: hasFlag(args, 'retrieve-only'), json: hasFlag(args, 'json') })
+    }
     case 'filter-options': {
       const cdpPort = parseCdpPort(args)
       if (cdpPort === 'invalid') return 2

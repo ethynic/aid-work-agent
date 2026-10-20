@@ -1,3 +1,4 @@
+import { BusinessOperationState, withBusinessRecovery } from '../boss/BusinessOperationState.js'
 /**
  * boss_send_to operation（设计 §10.6）：向指定联系人发送消息（写动作）。
  *
@@ -46,6 +47,9 @@ export function createBossSendToOperation(
           return null
         },
         async (session, tracker) => {
+          const state = new BusinessOperationState()
+          const intent = { name: 'boss_send_to', goal: '向指定联系人发送原消息', expected: '同一会话编辑区清空且新增同文出站消息', operationClass: 'external_effect' as const, target: to.trim() }
+          return withBusinessRecovery(state, intent, async () => {
           await ensureChatPage(session, ctx)
           // 1. 统一会话切换（already 零点击 / 搜索找人 / 列表兜底 + 头部身份校验；
           //    clearInput/pressEscape 注入透传：输入未落地清空重试、浮层清场）
@@ -56,12 +60,13 @@ export function createBossSendToOperation(
             mouseWheel: session.mouseWheel,
             pressEscape: session.pressEscape,
             clearInput: session.clearInput,
+            ordinaryRetry: () => state.retry(),
             signal: ctx.signal,
           })
           ctx.progress({ stage: 'execute', message: `打开「${to}」的会话（已在目标会话则零点击）` })
           const opened = await opener.open({ contact: to })
           // 2. 输入并发送消息
-          const sender = new ChatSendExecutor({
+          const sender = new ChatSendExecutor({ state,
             snapshot: session.snapshot,
             click: session.click,
             clickAndType: session.clickAndType,
@@ -71,13 +76,14 @@ export function createBossSendToOperation(
             stage: 'execute',
             message: dryRun ? '输入消息（dry-run 不发送）' : '输入并发送消息',
           })
-          const r = await sender.sendMessage({ message, dryRun })
+          const r = await sender.sendMessage({ message, dryRun, contact: to, expectedContactRef: ctx.expectedContactRef })
           tracker.completed = r.sent ? 1 : 0
           return {
             message: dryRun ? `完成：已向「${to}」输入消息（dry-run 未发送）` : `完成：已向「${to}」发送消息`,
             data: { to, via: opened.via, sent: r.sent, dry_run: dryRun },
             effect: r.sent ? ('applied' as const) : ('none' as const),
           }
+          })
         },
       )
     },

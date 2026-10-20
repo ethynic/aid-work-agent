@@ -16,10 +16,17 @@ from src.saas.api.tenant_auth import get_current_admin, require_admin
 from src.saas.db.permission_db import UserAgentPermissionDB
 from src.saas.db.subscription_db import SubscriptionDB
 from src.saas.models.enums import BehaviorAction, BehaviorResourceType
-from src.saas.permissions.checker import get_allowed_agent_ids_for_user
+from src.saas.permissions.checker import (
+    get_allowed_agent_ids_for_user,
+    expand_with_tenant_instances,
+)
 from src.services.behavior_log import audit_action
 from src.db.database import get_db_connection
 from src.core.agent import master_agent
+from src.saas.services.tenant_agent_instance_service import (
+    apply_direct_customization_overrides,
+    build_tenant_instance_items,
+)
 
 
 router = APIRouter(prefix="/api/saas/permissions", tags=["SaaS 数字员工授权"])
@@ -178,6 +185,9 @@ def set_user_agent_permissions(request: Request, user_id: str, body: SetUserAgen
     # 确保所有授权的agent_id都在租户授权范围内
     with get_db_connection() as conn:
         tenant_allowed = set(SubscriptionDB.get_allowed_subagent_types(conn, tenant_id))
+        # 展开本租户副本实例（副本实例是运行时实例，不在订阅基础列表内，
+        # 不展开会把用户勾选的副本实例当越权过滤掉）
+        tenant_allowed = set(expand_with_tenant_instances(tenant_id, list(tenant_allowed)))
         # 过滤掉超出租户范围的
         valid_agent_ids = [aid for aid in body.agent_ids if aid in tenant_allowed]
 
@@ -227,6 +237,11 @@ def get_tenant_available_user_agents(request: Request):
         for item in all_items
         if item["agent_id"] in tenant_allowed
     ]
+
+    # 追加本租户副本实例列表项（副本实例是运行时实例，不在 registry，须显式补入才可选授权）
+    result.extend(build_tenant_instance_items(tenant_id, tenant_allowed))
+    # 直用实例行不产生新条目，但显示名/简介覆盖需反映到对应基础员工
+    result = apply_direct_customization_overrides(tenant_id, result)
 
     # 如果租户有主智能体授权，添加到列表中
     if "main" in tenant_allowed:
@@ -289,6 +304,13 @@ def get_my_allowed_agents(request: Request):
             if item.get("upload_accept"):
                 agent_info["upload_accept"] = item["upload_accept"]
             result.append(agent_info)
+
+    # 追加本租户副本实例列表项（副本实例是运行时实例，不在 registry，须显式补入，
+    # 否则新会话页看不到已复制/已授权的副本实例）
+    result.extend(build_tenant_instance_items(user.get("tenant_id"), allowed_ids))
+    # 直用实例行不产生新条目，但显示名/简介覆盖需反映到对应基础员工，
+    # 否则新会话页仍显示父定义名称/简介
+    result = apply_direct_customization_overrides(user.get("tenant_id"), result)
 
     # 如果主智能体在允许列表中，添加到结果中
     if "main" in allowed_ids:

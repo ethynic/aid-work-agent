@@ -1,5 +1,9 @@
 # Runtime UI 与 BOSS CLI 老用户试用组合包
 
+> 2026-10-15：UI0.0.12/BOSS0.3.10组合包已完成，交付名称不带trial。源码50a0ba35、3b2001f4已推送；完整保留r15四根并固化五根发布快照，实际旧0.3.9升级和最终Runtime原生启动检查通过。ZIP及摘要见Phase17；Windows安装器仍未签名，未部署服务器或在客户机安装。
+
+> 2026-10-14：最新r13/UI0.0.9修复正常环境缺测试变量时安装退出，已实际本地完成正常非静默向导并退出0，交付`clients/release/AID-Work-Runtime-UI-BOSS-20261014-trial-r13.zip`；r11/r12保留历史，不再交客户安装。Host0.2.19/Core0.2.18/BOSS0.3.5不变。用户批准干净安装、有效身份复用和一次配对自动切换，以[干净安装计划](plan-runtime-clean-install.md)和共同契约2.1为准。源码纳入本次用户授权提交，新配对必须先发布配套服务端，服务器尚未部署。
+
 ## 开发进度
 
 | 阶段 | 内容 | 状态 | 完成记录 |
@@ -15,7 +19,40 @@
 | Phase 9 | 连接恢复路径复核与源码补漏 | ✅ 完成（2026-10-12） | r6九例及新源码8例/CR通过；完整自助修复未实施，不重新发行r6 |
 | Phase 10 | 自助连接恢复及故障说明r7发行 | ✅ 完成（2026-10-12） | 独立故障/实际包启动与CR通过；可操作步骤、BOSS0.3.1和未签名ZIP校验通过 |
 | Phase 11 | r8只读故障入口与实际恢复交互修复 | ✅ 完成（2026-10-13） | r7实际复现；r8实际UI5组/在线启停退出/CR与17文件ZIP通过 |
-| Phase 12 | 独立新注册与指定旧设备替换配套 | 🔧 进行中 | r9候选ZIP及新注册/错误闭环/最新BOSS0.3.5隔离链通过；真实安装/boot/agent2待现场 |
+| Phase 12 | 独立新注册与指定旧设备替换配套 | ✅ 完成（2026-10-14） | r9开发验证完成；启动语义由r11取代，真实UAC/boot/agent2仍待现场 |
+| Phase 13 | 干净安装与一次配对自动激活 | ✅ 完成（2026-10-14） | r11实际EXE连续安装10/10、包内Host9/9、GUI自动恢复/载荷比对与CR通过；详见干净安装计划 |
+| Phase 14 | 安装前旧进程检测及用户确认 | ✅ 完成（2026-10-14） | r12实际安装/静默取消及原NSIS确认/取消通过；增量5场景与CR通过，详情见干净安装计划Phase5 |
+| Phase 15 | 正常环境完整安装向导验证及退出修复 | ✅ 完成（2026-10-14） | r12正常交互退出2已复现；r13真实非静默正常安装到完成页退出0，独立回归/CR通过；见干净安装计划Phase6 |
+| Phase 16 | agent2存量迁移水位补偿 | ✅ 完成（2026-10-14） | agent2结构已补齐且无码接口400正常；补偿纳入本次提交，正式库只读确认待发布验收 |
+| Phase 17 | 跨电脑构建信任固化与新版组合包 | ✅ 完成（2026-10-15） | 旧0.3.9升级/最终Host与EXE独验通过，14文件ZIP摘要复核；未部署或客户机实装 |
+
+## Phase17 跨电脑打包与直接升级（2026-10-15）
+
+用户要求先提交招聘筛选修复，再打包新版Runtime/BOSS，交付版本名不带trial，且换构建电脑必须兼容此前用户安装的插件。筛选源码及UI0.0.12/BOSS0.3.10元数据已于`50a0ba35`推送，Host0.2.20/Core0.2.19保持。早期仅本机可见旧公钥加新公钥的候选被撤回并标为WITHHELD，不交付。
+
+旧流程把临时签名公钥仅放在忽略目录，另一台电脑没有上轮产物时便可能漏掉历史根。用户提供r15完整公开根，已恢复到`clients/runtime-plugin-packaging/trust/history/runtime-r15.json`：1425字节、SHA256`bc1bdb8f0b949ec54f941821f1470207d913f6c2fef64c82646b356104d7f328`，与用户提供逐字节相同。来源组合包`AID-Work-Runtime-UI-BOSS-20261015-trial-r15.zip`的用户提供SHA256为`b884100a25f390aac1abaa42f546579f9df1223e003080344d71e63ecdaaf91d`；最初仅取得公钥和用户提供的ZIP摘要，后续用户补齐原包后的实物核对另见本节补充登记。旧BOSS0.3.5实包已取得并复算SHA256`9cf4ca8ac93ba79b44b517f6370df6c64173dda89563f6e3fda2b2324561914b`，用于真实旧库存重开与升级验证。
+
+用户随后补充最新旧版实际为BOSS0.3.9，实包SHA256`c9204c1f9504549d688bf19623146efff09cd8f410e2b63d969bc189f4bbfd6b`已本机复算一致。最终主升级基线改为0.3.9→0.3.10，0.3.5证据保留为更早版本兼容回归，不能用较早基线代替最新旧版验证。
+
+方案：四根原key_id/public_key/providers/test_only逐项保留，另追加本次仅限BOSS的新根，汇总五根纳入Git，并将本轮五根固定为`history/runtime-0.0.12.roots.json`发布快照。新增公开根通过显式登记脚本原子追加；同key_id不同钥/范围拒绝，不可覆盖历史。加载登记表会核对r15原始基线及全部`*.roots.json`快照，确保本轮新根成为历史后也不能漏掉。prepare在复制资产前检查注册集合；打包和最终验包重复该完整性门，防止prepare后资源替换。测试签名生成先拒绝重复key_id，避免不同构建机以同名生成不同钥。仅公开根入库，私钥只在签名进程内；当前五根已登记，新BOSS包无需重新签名。
+
+共同检查点：主控唯一写入公开资产、设计/计划、说明及最终产物；开发子智能体provider_fix唯一写入prepare/package/verify/注册CLI与回归测试。无Runtime core、Device API、binding、授权或wire变更，共同契约仍2.1。按信任边界高风险流程独立测试与CR；正式Windows签名/production profile保持既有拒绝规则。升级保持原产品身份、账号与插件库存语义，不要求解绑或重配，不以手工关闭验签兼容旧包。
+
+验收：缺历史根/替公钥/更改scope/未登记根必须构建前拒绝，登记追加与幂等可跨电脑复用；最新旧0.3.9实包用恢复四根安装，再以新五根同home重开，库存与签名继续有效，0.3.5另作更早版本回归；导入0.3.10后语义升级、旧release保留；最终包内Node/Host重复核验与UI隔离smoke。安装器及组合ZIP重打后复读CRC/摘要，交付名称无trial；历史key_id为兼容原样保留。不部署服务器、不在用户真实Runtime home中执行验证。
+
+### Phase17验证登记
+
+- 原r15公钥资产：主控及独立审查各自核对1425字节与指定SHA256，恢复文件精确相同；五根中原四根逐字段无变化，第五根只含BOSS。本机登记表/本轮发布快照的工作副本为CRLF，Git blob为LF；独立验证记录两种摘要并仅归一换行，不将排版差异误报为公钥变化。历史保护按公钥DER及原key_id/providers/test_only核对，r15原始文件另核对固定字节摘要。
+- 独立真实历史实包：Core/PluginStore以四根导入0.3.5，再以五根同home重开，安装ID、版本、enabled及inventory字节保持；禁用后升级0.3.10保留原ID和禁用意图，旧release全部3608文件逐字节保留；再次重开/启用正常，降级拒绝且库存不变。7次真实固定Node的version探查成功，旧包外部摘要未变。报告及复跑脚本：`clients/agent-desktop/build/cross-machine-trust-independent/`，绑定Core源码/dist、Node、包与根摘要；业务就绪未模拟成真实登录，未操作Chrome。
+- 主控既有安装/身份迁移与更新回归：`node --test dist/tests/runtimeInstallation.test.js dist/tests/runtimeUpdate.test.js`，11通过、0失败/跳过。没有重新执行客户机实装、UAC或Windows登录测试；本轮不改这些产品实现。
+- BOSS0.3.10新包：签名、3611文件、24工具、三个修改模块与dist字节一致；独立执行包内部分探查、普通薪资apply及operation返回验证通过。外ZIP SHA256`239d0811c29b5c8bd3348c52c6dd263d949ec94a0a1284324098e895a67936ab`，不重签同版。
+- 构建保障独立最终：`node --test scripts/tests/runtime-packaging.test.mjs`20通过、插件打包测试4通过、0失败/跳过；另外11项独立边界覆盖真实并发登记、幂等/冲突、私钥与日志、第五根和坏发布快照，以及prepare真实入口和package/verify原代码路径适配的提前拒绝。报告`packaging-boundaries-report.json`明确verify前置签名检查使用stub，未冒称该边界覆盖实际Windows签名。独立CR无未关闭P0/P1/P2；主控模块加载/五脚本语法检查及diff检查通过。源码与公开资产已于`3b2001f4`推送两个远程。
+- 最新历史实包0.3.9→0.3.10：独立同home/四根到五根的真实Core重开和升级通过，安装ID、状态、inventory及旧3615个文件保持；原0.3.5结果另存`report-035.json`。当前`report.json`主基线已换0.3.9。
+- 最终Runtime重新prepare/package完成：UI0.0.12、Host包0.2.20、Core0.2.19、Node22.23.3，3695资源完整、五根对象与登记集合完全相同，`RUNTIME_PACKAGE_PASS`和`RUNTIME_VERIFY_PASS`，NotSigned。EXE126314566字节、SHA256`af1ff50da841168466ab720d29d3a7e32e7c0fe11eb35a857d3fd15b86aa6e54`，buildInput`d3d286e84d1ee842769bb748cd0f4d4275cebf0916885c2db0ca8462dc581576`，HostTGZ`be63fe3a99d8917a3c58a273ef4bc59c04fe824ce43cda826a202799fe788dc2`。源码提交后的最终包不再重建，后续只验包和复制交付。
+- 最终包独立验收：包内实际固定Node/Host通过私有IPC导入旧0.3.9、禁用、导入0.3.10、启用四项操作；安装ID、禁用意图、重开库存字节和旧3615个文件保持，10次doctor仅访问独占的本机503夹具。Host npm包为0.2.20，而实际describe协议版本沿用Core共享常量0.2.19，分别验证并在交付版本说明列出，未改协议。
+- 最终EXE原生管理检查：直接启动冻结包内EXE，使用独立临时用户目录和已有SMOKE模式；真实renderer执行describe/getState/plugins.list后发出原始`AGENT_DESKTOP_SMOKE_PASS`，2514毫秒退出0。Windows登录项指纹不变，无自启marker，安装器与app.asar摘要前后不变。通用Desktop smoke的五个HTTP夹具断言不适用于Runtime（其API固定runtime-local，原生管理检查走本机Host）；早期30秒超时及开发Electron依赖问题均作为验收脚本修正记录保留，没有改产品或伪造HTTP请求。完整报告为`final-package-report.json`，未执行安装器、真实Chrome、配对或招聘操作。
+- 最终组合ZIP：`clients/release/AID-Work-Runtime-0.0.12-BOSS-0.3.10-20261015.zip`，131105062字节、14文件，SHA256`eff86c2fd550142adaaa68a29959c7f8ac2eccb9c39a8e73c2e4e4dc3e759922`。按源码`3b2001f4`的最终安装器及原始签名插件复制组合，复读ZIP的CRC及全部文件摘要通过；附原生管理/历史升级/打包边界报告、已知5项无关CLI失败原始日志、五根和r15公钥、覆盖升级说明、版本和摘要。解包独立插件名为`boss-0.3.10.aidplugin.zip`，与原签名包字节相同。仅交付名称去掉trial，历史加密key_id原样保留；未部署服务器，真实客户覆盖安装/登录启动/招聘验收仍待现场。
+- 用户随后将r15完整原包放到主检出目录`clients/release/`，主控及独立测试分别复算130966136字节、上述b884100a开头SHA256及ZIP CRC通过。独立以7z静态解开旧NSIS的app-64.7z，真实trust-roots.json仍为1425字节/上述bc1bdb8f摘要，与固化资产逐字节一致；旧四根对象在新集合完全保留。旧Runtime实际UI0.0.11、安装器SHA256`487a552ca8965036f37fd07dd78642ecfad3de6e8cba75c8a09d8912ee8af8da`，旧新productConfiguration模块字节相同，appId、profile、userData及Runtime home名称一致；旧内嵌BOSS0.3.9也与用户最新旧插件逐字节相同。因此已完成升级测试的旧插件及恢复公钥均追溯到r15实物。单独补充报告`clients/release/runtime-0.0.12-r15-source-verification.json`及公钥来源元数据纳入Git；不修改已冻结的新ZIP和摘要。未运行旧安装器或旧应用，未改注册表或客户数据。
 
 上一客户包为 **r8**：UI0.0.5、Host包0.2.17、Core及H1上报0.2.16、BOSS0.3.1、Node22.23.3；修复r7只读故障下假刷新和自动诊断禁用处理入口，连接步骤首屏可见，检查只验证配置/服务器。实际EXE5组恢复及在线启停退出、独立CR和ZIP复核通过；详情见[恢复计划Phase11](plan-runtime-upgrade-recovery.md#phase11-最终交付2026-10-13)。ZIP `131135565`字节、17文件，SHA256 `127f9193c2130055af2a82706f6f998694658a715e8d8338fd1c0eeb4f9475ee`。真实客户UAC/Windows重启与BOSS业务待现场验收，旧r7以下保留历史。
 

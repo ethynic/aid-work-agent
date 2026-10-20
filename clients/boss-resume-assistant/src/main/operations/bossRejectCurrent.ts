@@ -12,6 +12,7 @@ import {
   type BossSessionFactory,
 } from './bossContext.js'
 import type { BossOperation, OperationResult, OpContext } from './types.js'
+import { BusinessOperationState, withBusinessRecovery } from '../boss/BusinessOperationState.js'
 
 export function createBossRejectCurrentOperation(
   sessionFactory: BossSessionFactory = defaultSessionFactory,
@@ -20,19 +21,24 @@ export function createBossRejectCurrentOperation(
     name: 'boss_reject_current',
     execute(_args: Record<string, never>, ctx: OpContext): Promise<OperationResult> {
       return runBossOperation({ kind: 'write', name: 'boss_reject_current' }, ctx, sessionFactory, () => null, async (session) => {
+        const state = new BusinessOperationState()
+        return withBusinessRecovery(state, { name: 'boss_reject_current', goal: '把原当前会话候选人标记不合适',
+          expected: '原目标会话从已加载的会话列表中消失或隐藏，其他会话保持可读', operationClass: 'external_effect' }, async () => {
         await ensureChatPage(session, ctx)
         const executor = new ChatRejectExecutor({
+          state,
           snapshot: session.snapshot,
           click: session.click,
           signal: ctx.signal,
         })
         ctx.progress({ stage: 'execute', message: '标记当前会话为「不合适」' })
-        await executor.rejectCurrent()
+        await executor.rejectCurrent({ expectedContactRef: ctx.expectedContactRef })
         return {
           message: '完成：已把当前会话的候选人标记为不合适',
           data: { rejected: true },
           effect: 'applied' as const,
         }
+        })
       })
     },
   }

@@ -1,5 +1,15 @@
 #!/bin/bash
 
+# 禁止以 root/sudo 运行（2026-10-19 事故防护）：
+# sudo 会保留 HOME=/home/ubuntu，root 身份的 git/写文件操作还会把仓库 .git 内部
+# 文件改成 root 属主，导致 ubuntu 后续免密 fetch 失败、git 反复索要密码。
+# 本脚本设计为以 ubuntu 用户直接运行（需要提权处已自带 sudo，ubuntu 已配 NOPASSWD）。
+if [ "$(id -u)" -eq 0 ]; then
+    echo "错误：请勿用 sudo/root 运行本脚本（会污染 git 凭据与仓库属主）。" >&2
+    echo "      请直接以 ubuntu 用户执行，不要加 sudo：bash $0" >&2
+    exit 1
+fi
+
 # ==============================================================================
 # AI 数字员工系统 - 快速更新脚本（不重建 Docker 镜像）
 # 用途: 仅更新代码，快速重启服务
@@ -18,6 +28,18 @@
 #   5. 内存上限移入 docker-compose.prod.yml 的 mem_limit（api 8G/background 4G/redis 1G），
 #      第 6 步只保留 docker update --cpus，不再用 docker update 覆盖内存
 #   6. 原子切换后把 dist 属主恢复为 ubuntu（node 容器以 root 编译，产物属主为 root）
+#   7. 新增 git 凭据自愈：.git-credentials 两次被 root 身份的 git/写文件操作
+#      覆盖属主为 root（600），ubuntu 读不到导致 git fetch 交互索要密码、
+#      脚本 set -e 直接失败（2026-10-14 事故）。fetch 前检测属主/可读性异常
+#      即从 /root/.git-credentials.bak（root:root 600 备份件，防连带被改）
+#      恢复内容并 chown 回 ubuntu；凭据本体不入 git 仓库
+#      （2026-10-19 加固：内容被清空为 0 字节时属主仍可能是 ubuntu，仅查属主会
+#       漏判，改为同时检查 codeup 凭据是否存在，缺失即从备份件恢复）
+#   8. runner overlay 自动叠加：服务器根级存在 docker-compose.agent-runner.yml
+#      副本时自动叠加到 compose 命令，避免 --remove-orphans 把 aid-runner-api/
+#      aid-runner-worker 当孤儿容器删除（2026-10-15 生产事故：发布后渠道消息
+#      全部 RUNNER_SERVICE_UNAVAILABLE）；并重建 runner 服务使新代码生效。
+#      删除根级副本即回到仅 api 形态（与 agent1 sim.sh 同模式）
 # ==============================================================================
 
 set -e
@@ -34,6 +56,37 @@ BUILD_LOG="/var/www/agent/log/frontend-build.log"
 
 # 配置 Git 安全目录（避免所有权检查错误）
 git config --global --add safe.directory /var/www/agent 2>/dev/null || true
+
+# 0. 自愈 git 凭据（见变更记录 7）
+CREDS_FILE="/home/ubuntu/.git-credentials"
+CREDS_BAK="/root/.git-credentials.bak"
+CREDS_MARKER="codeup.aliyun.com"
+if ! sudo test -f "$CREDS_BAK"; then
+    sudo install -m 600 -o root -g root /dev/null "$CREDS_BAK" 2>/dev/null || true
+fi
+# 触发条件：属主/可读性异常，或内容已丢失 codeup 凭据。文件被清空为 0 字节时
+# 属主仍可能是 ubuntu，仅查属主会漏判（2026-10-19 事故加固）
+if [ ! -r "$CREDS_FILE" ] || [ "$(stat -c %U "$CREDS_FILE" 2>/dev/null)" != "ubuntu" ] \
+   || ! grep -q "$CREDS_MARKER" "$CREDS_FILE" 2>/dev/null; then
+    echo "[0] 检测到 git 凭据文件异常（$(stat -c '%U:%G %a' "$CREDS_FILE" 2>/dev/null || echo '不可读')），自愈修复..."
+    if sudo test -s "$CREDS_BAK"; then
+        sudo cp "$CREDS_BAK" "$CREDS_FILE"
+    fi
+    sudo chown ubuntu:ubuntu "$CREDS_FILE"
+    sudo chmod 600 "$CREDS_FILE"
+    echo "    已恢复属主 ubuntu:ubuntu（600）"
+fi
+# 备份件为空但当前凭据有效时回填，保证下次损坏可自愈（首次部署 / 备份丢失场景）
+if ! sudo test -s "$CREDS_BAK" && grep -q "$CREDS_MARKER" "$CREDS_FILE" 2>/dev/null; then
+    sudo cp "$CREDS_FILE" "$CREDS_BAK"
+    sudo chown root:root "$CREDS_BAK"
+    sudo chmod 600 "$CREDS_BAK"
+fi
+if ! grep -q "$CREDS_MARKER" "$CREDS_FILE" 2>/dev/null; then
+    echo "错误：$CREDS_FILE 缺少 codeup.aliyun.com 凭据且备份件为空，无法自愈。"
+    echo "  请手工修复凭据文件后，执行：sudo install -m 600 -o root -g root $CREDS_FILE $CREDS_BAK"
+    exit 1
+fi
 
 # 1. 拉取代码（可选参数：目标 git 提交版本号，短哈希/长哈希/tag 均可；
 #    不传则更新到 origin/master 最新。指定旧版本用于回滚或停留在未全部
@@ -106,8 +159,36 @@ FRONTEND_PID=$!
 #    首连 DNS 失败降级进内存、跨 worker 状态漂移）。redis 配置/镜像变更时需手动
 #    单独执行：docker compose -f docker-compose.prod.yml up -d --force-recreate --wait aid-redis
 echo "[5] 重启后端服务..."
-docker compose -f docker-compose.prod.yml up -d --force-recreate --remove-orphans --wait \
+# runner overlay 副本存在则自动叠加：--remove-orphans 只认本次命令文件集内的服务，
+# 不叠加会把 aid-runner-api / aid-runner-worker 当孤儿容器删除（见变更记录 8）
+COMPOSE_ARGS=(-f docker-compose.prod.yml)
+if [ -f docker-compose.agent-runner.yml ]; then
+    COMPOSE_ARGS+=(-f docker-compose.agent-runner.yml)
+    echo "    检测到 runner overlay，已叠加 docker-compose.agent-runner.yml"
+fi
+docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate --remove-orphans --wait \
     aid-agent-api aid-agent-background
+
+# runner 服务重建使新代码生效；服务名以 overlay 实际定义为准，仅重建存在的服务
+if [ -f docker-compose.agent-runner.yml ]; then
+    RUNNER_SERVICES=$(docker compose "${COMPOSE_ARGS[@]}" config --services 2>/dev/null \
+        | grep -E '^runner' || true)
+    if [ -n "$RUNNER_SERVICES" ]; then
+        # shellcheck disable=SC2086
+        docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate $RUNNER_SERVICES
+        echo "    runner 服务已重建: $(echo $RUNNER_SERVICES | tr '\n' ' ')"
+    else
+        echo "  警告：overlay 中未找到 runner-* 服务定义，未重建 runner"
+    fi
+    # 从主 API 容器内验证 runner-api 可达（DNS + /health），失败仅告警不阻断
+    if docker exec aid-agent-api python -c \
+        "import urllib.request; urllib.request.urlopen('http://runner-api:8091/health', timeout=5)" \
+        2>/dev/null; then
+        echo "    runner-api 健康检查通过"
+    else
+        echo "  警告：runner-api /health 不可达（渠道对话将报 RUNNER_SERVICE_UNAVAILABLE），请检查 runner 容器"
+    fi
+fi
 
 # 6. 施加 CPU 限制（docker compose 非 swarm 会忽略 deploy.resources；
 #    内存上限已在 docker-compose.prod.yml 用 mem_limit 声明（api 8G/background 4G/redis 1G），

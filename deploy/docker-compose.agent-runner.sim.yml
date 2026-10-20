@@ -19,6 +19,15 @@
 #     AGENT_RUNNER_WEB_SERVICE_TOKEN（web_client 直读 os.environ，
 #     由 sim.yml api 服务的 env_file: .env 全量注入，无需在此 patch api 服务）
 #
+# ⚠️ 服务名必须带 -sim 后缀（runner-api-sim / runner-worker-sim）：
+#   2026-10-14 实证——agent1 仿真与生产 runner 接入同一外部网络
+#   agent_aid-network 时，compose 会把服务名注册为该网络的 DNS 别名，
+#   仿真 runner-api 与生产 aid-runner-api 共用别名 `runner-api` 导致
+#   Docker DNS 轮询，主 API 间歇性命中对端实例报 401 SERVICE_UNAUTHORIZED。
+#   两环境 .env 的 AGENT_RUNNER_API_URL 已改用容器名兜底
+#   （http://aid-runner-api1:8091 / http://aid-runner-api:8091）；
+#   本文件服务名带 -sim 后缀属仓库级根治，勿改回与服务别名撞名。
+#
 # ⚠️ 前提（deploy/agent-runner-deploy-checklist.md）：runner-api/worker 启动仅
 #   assert_schema 断言五张 agent_runner* 表（不建表），缺表以
 #   AGENT_RUNNER_SCHEMA_REQUIRED 失败退出；worker 启动门槛要求
@@ -33,20 +42,21 @@ networks:
 services:
   # AgentRunner 独立 API：接单/事件/控制 HTTP 面（8091），不执行任务。
   # 与主 API/worker 共享数据库与 storage 挂载；不迁移、不建表。
-  runner-api:
+  runner-api-sim:
     image: aid-agent-api:latest
     container_name: aid-runner-api1
     restart: "no"                    # 仿真按需启停，不随机自启
     mem_limit: 1g
+    shm_size: 128m
     env_file:
       - .env
     environment:
       # 运维识别标签（应用不读取），先例：background 的 SERVER_MODE=background
       - SERVER_MODE=agent-runner-api
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      # 指向 compose 服务名（127.0.0.1:8091 仅单机同进程形态可用）；
+      # 指向本文件服务名（带 -sim 后缀，防跨环境 DNS 别名撞名，见文件头说明）；
       # 消费者是主 API 容器的 web_client（经 .env 注入同值），本服务自身不调用
-      - AGENT_RUNNER_API_URL=http://runner-api:8091
+      - AGENT_RUNNER_API_URL=http://runner-api-sim:8091
       # 共享产物路径显式注入：storage 根 = src/core/storage.py::configured_storage_root
       - AGENT_RUNNER_STORAGE_ROOT=/app/storage
       # worker 侧 RuntimeFactory 资源目录（storage/agent_runner，同挂载卷内）
@@ -66,6 +76,7 @@ services:
       - /var/www/qb3_upload/agent_storage:/app/storage
     tmpfs:
       - /tmp:size=200m,mode=1777
+      - /home/appuser/tmp:size=128m,mode=1777
     networks:
       - aid-prod-net
     # /health 仅报告进程与 enabled 状态，不代表 DB/lease 健康（清单 §4）
@@ -83,22 +94,23 @@ services:
 
   # AgentRunner 执行 worker：认领/心跳/执行/恢复，全部经共享数据库，不监听 HTTP。
   # 内存口径对齐 aid-agent-api1（加载整套 Agent 运行时）。
-  runner-worker:
+  runner-worker-sim:
     image: aid-agent-api:latest
     container_name: aid-runner-worker1
     restart: "no"
     mem_limit: 4g
+    shm_size: 512m
     # 先起独立 API（schema 断言/接单面就绪）再起 worker；只为启动顺序确定性，
     # 不构成运行时耦合（worker 只访问 DB，不调用 API）
     depends_on:
-      runner-api:
+      runner-api-sim:
         condition: service_healthy
     env_file:
       - .env
     environment:
       - SERVER_MODE=agent-runner-worker
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - AGENT_RUNNER_API_URL=http://runner-api:8091
+      - AGENT_RUNNER_API_URL=http://runner-api-sim:8091
       - AGENT_RUNNER_STORAGE_ROOT=/app/storage
       - AGENT_RUNNER_RESOURCE_DIR=/app/storage/agent_runner
     entrypoint: ["sh", "-c"]
@@ -112,6 +124,7 @@ services:
       - /var/www/qb3_upload/agent_storage:/app/storage
     tmpfs:
       - /tmp:size=200m,mode=1777     # worker 执行 Browser 工具（Playwright/Chromium）需要可写 /tmp
+      - /home/appuser/tmp:size=2g,mode=1777   # TMPDIR 内存盘：转换/渲染类任务主执行者
     networks:
       - aid-prod-net
     # worker 无 HTTP/心跳端点，只能 pgrep 进程判活（[.] 防自匹配）；

@@ -106,6 +106,8 @@ flowchart TD
 
 固定产品输入为 resources/config/runtime-product.json 的 schemaVersion/productKind/profile，信任输入为 resources/runtime/trust-roots.json 的 schemaVersion/profile/roots。每根含 key_id、SPKI PUBLIC KEY PEM、providers、显式 test_only；拒绝私钥及伪 PUBLIC 头，production 拒绝测试根，不能从文件名推断信任。
 
+2026-10-15跨电脑构建修正：已交付验收包的公开信任根统一保存在版本管理的`clients/runtime-plugin-packaging/trust/acceptance-roots.json`，r15原始四根及来源摘要另存`trust/history/`。构建机没有自己的发行身份；换机必须消费同一已登记信任集合。prepare、打包与最终验包均拒绝遗漏历史根、同key_id替换公钥或改变授权Provider范围，以及未登记的新根。新验收签名使用唯一key_id，再显式追加登记公开根；私钥、设备身份和配对凭据不得入库。历史key_id即使带旧交付命名也原样保留，不能为重命名破坏旧签名。生产信任与Windows签名门保持独立，不因取消交付文件名的trial标记而降级。实现与升级实包验证见[组合包计划](../plans/plan-runtime-ui-boss-trial-bundle.md)。
+
 Node 固定22.23.3 / Windows x64 / ABI127；Host 资源从模块路径解析，不靠 cwd。独立验收产品 cn.aidingyi.agent.runtime.acceptance 使用独立 userData 与 %APPDATA%/aidwork-tool-runtime-acceptance，不覆盖生产目录。验收安装器 NotSigned、生产要求 Valid Windows 签名；无正式证书或信任根不能自动降级。
 
 首期 Host 是 main 的直属 child，用继承的私有 IPC；受管入口先监听再初始化，初始化失败回复原 describe。原生选包给 renderer selection_ref/label，私有 callback 再返回受控外 ZIP 快照；不把绝对路径或任意文件 API 给 renderer。没有受控通道的外置实例报冲突，不强抢或另建 TCP 接管服务。

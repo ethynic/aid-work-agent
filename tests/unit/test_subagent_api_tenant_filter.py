@@ -56,7 +56,8 @@ async def test_list_subagents_filters_by_target_tenant_for_platform_admin():
     with patch.object(subagent_module, "master_agent") as mock_master, \
          patch.object(subagent_module, "get_current_tenant_id", return_value=target_tenant_id), \
          patch.object(subagent_module, "get_allowed_agent_ids_for_user", return_value=allowed_ids) as mock_allowed, \
-         patch("src.api.auth.get_current_user", return_value=_make_platform_admin_user()):
+         patch("src.api.auth.get_current_user", return_value=_make_platform_admin_user()), \
+         patch("src.db.tenant_agent_instance_db.TenantAgentInstanceDB.list_by_tenant", return_value=[]):
         mock_master.subagent_registry = mock_registry
 
         request = MagicMock()
@@ -106,3 +107,62 @@ async def test_list_subagents_no_tenant_context_returns_all_unfiltered():
     assert "main" not in returned_ids, "demo 分支已删，无租户上下文不再强制追加 main"
     assert "travel-consultant" in returned_ids
     assert "trade-specialist" in returned_ids
+
+
+@pytest.mark.asyncio
+async def test_list_subagents_applies_direct_customization_overrides():
+    """直用实例行（agent_id == base_agent_id）的显示名/简介覆盖应合并进基础员工列表项"""
+    all_items = [
+        _make_item("data-analysis", "数据分析"),
+        _make_item("travel-consultant", "旅游咨询顾问"),
+    ]
+    instance_rows = [
+        {
+            "agent_id": "data-analysis",
+            "base_agent_id": "data-analysis",
+            "display_name": "数据分析专家定制版",
+            "description": "本租户定制简介",
+            "status": "active",
+        },
+        # 副本实例行由 _build_tenant_instance_items 处理，此处不参与合并
+        {
+            "agent_id": "data-analysis-copy1",
+            "base_agent_id": "data-analysis",
+            "display_name": "副本",
+            "description": None,
+            "status": "active",
+        },
+        # archived 行不生效
+        {
+            "agent_id": "travel-consultant",
+            "base_agent_id": "travel-consultant",
+            "display_name": "不应生效",
+            "description": "不应生效",
+            "status": "archived",
+        },
+    ]
+
+    mock_registry = MagicMock()
+    mock_registry.load_from_db = MagicMock()
+    mock_registry.get_all_subagents_with_type = MagicMock(return_value=all_items)
+
+    with patch.object(subagent_module, "master_agent") as mock_master, \
+         patch.object(subagent_module, "get_current_tenant_id", return_value="tenant_abc"), \
+         patch.object(subagent_module, "get_allowed_agent_ids_for_user",
+                      return_value=["data-analysis", "travel-consultant"]), \
+         patch("src.api.auth.get_current_user", return_value=_make_platform_admin_user()), \
+         patch("src.db.tenant_agent_instance_db.TenantAgentInstanceDB.list_by_tenant",
+               return_value=instance_rows):
+        mock_master.subagent_registry = mock_registry
+
+        request = MagicMock()
+        result = await subagent_module.list_subagents(request)
+
+    assert result["success"] is True
+    by_id = {item["agent_id"]: item for item in result["data"]}
+    assert by_id["data-analysis"]["name"] == "数据分析专家定制版"
+    assert by_id["data-analysis"]["display_name"] == "数据分析专家定制版"
+    assert by_id["data-analysis"]["description"] == "本租户定制简介"
+    # archived 行覆盖不生效，保持父定义
+    assert by_id["travel-consultant"]["name"] == "旅游咨询顾问"
+    assert by_id["travel-consultant"]["description"] == "旅游咨询顾问描述"

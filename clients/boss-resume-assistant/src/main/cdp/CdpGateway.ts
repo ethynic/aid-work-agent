@@ -31,6 +31,8 @@ export interface GatewayOptions {
 }
 
 export interface DomSnapshotOptions {
+  /** Read-only paint ordering for callers checking whether a captured region is covered. */
+  includePaintOrder?: boolean
   /** 仅需要实测 CSS 输入坐标的调用方开启；普通快照保持原采集成本。 */
   includeDOMRects?: boolean
   /** 原生快照计算样式；仅需要真实裁剪/控件结构的调用方按需请求。 */
@@ -76,13 +78,31 @@ export class CdpGateway {
   /** 找到推荐页 target 并 attach，返回 sessionId（后续方法自动带） */
   async attachToRecommendPage(): Promise<AttachResult> {
     const targets = await this.getTargets()
-    const page = targets.find(
-      (t) => t.type === 'page' && t.url.includes('zhipin.com'),
-    )
+    const candidates = targets.flatMap(target => {
+      try {
+        const url = new URL(target.url)
+        if (target.type !== 'page' || url.protocol !== 'https:' || !['www.zhipin.com', 'zhipin.com'].includes(url.hostname) || url.username || url.password) return []
+        // Keep the previous order between business tabs (chat/recommend); a new home tab must not steal attach.
+        return [{ target, priority: url.pathname.startsWith('/web/chat/') ? 0 : 1 }]
+      } catch { return [] }
+    })
+    const page = candidates.sort((a, b) => a.priority - b.priority)[0]?.target
     if (!page) {
       throw new Error(`no BOSS page target found among ${targets.length} targets`)
     }
     return this.attachToTarget(page.targetId)
+  }
+
+  /** Recovery refs never fall back to a different tab, even if several BOSS URLs match. */
+  async attachToBoundBossTarget(targetId: string): Promise<AttachResult> {
+    const target = (await this.getTargets()).find(t => t.targetId === targetId)
+    let legal = false
+    try {
+      const url = new URL(target?.url ?? '')
+      legal = target?.type === 'page' && url.protocol === 'https:' && ['www.zhipin.com', 'zhipin.com'].includes(url.hostname) && !url.port && !url.username && !url.password
+    } catch { /* Refuse a closed/replaced/non-BOSS target. */ }
+    if (!legal) throw new Error('BOUND_BOSS_TARGET_UNAVAILABLE')
+    return this.attachToTarget(targetId)
   }
 
   /** attach 到指定 target，建立 session */
@@ -98,6 +118,25 @@ export class CdpGateway {
 
   getSessionId(): string | undefined {
     return this.pageSessionId
+  }
+
+  getTargetId(): string | undefined { return this.pageTargetId }
+
+  /** Browser-level activation remains available when a JS dialog blocks Page methods. */
+  async activateTarget(): Promise<void> {
+    if (!this.pageTargetId) throw new Error('No bound BOSS target to activate')
+    await this.socket.send('Target.activateTarget', { targetId: this.pageTargetId })
+  }
+
+  async getPageMetrics(): Promise<{ width: number; height: number }> {
+    const metrics = await this.socket.send<{ cssVisualViewport?: { clientWidth: number; clientHeight: number; scale: number } }>(
+      'Page.getLayoutMetrics', {}, this.pageSessionId)
+    const viewport = metrics.cssVisualViewport
+    if (!viewport || !Number.isFinite(viewport.clientWidth) || !Number.isFinite(viewport.clientHeight)
+      || viewport.clientWidth <= 0 || viewport.clientHeight <= 0 || viewport.scale !== 1) {
+      throw new Error('无法确认网页CSS视口几何，未执行视觉坐标输入')
+    }
+    return { width: viewport.clientWidth, height: viewport.clientHeight }
   }
 
   /** 订阅 page session 事件（过滤本 session） */
@@ -154,7 +193,7 @@ export class CdpGateway {
   async captureDomSnapshot(opts: DomSnapshotOptions = {}): Promise<unknown> {
     return this.socket.send(
       'DOMSnapshot.captureSnapshot',
-      { computedStyles: opts.computedStyles ?? [], includePaintOrder: false, includeDOMRects: opts.includeDOMRects ?? false },
+      { computedStyles: opts.computedStyles ?? [], includePaintOrder: opts.includePaintOrder ?? false, includeDOMRects: opts.includeDOMRects ?? false },
       this.pageSessionId,
     )
   }

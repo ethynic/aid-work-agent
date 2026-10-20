@@ -28,7 +28,7 @@
       <template v-else>
         <MessageItem
           v-for="(message, index) in messages"
-          :key="index"
+          :key="message.messageId || index"
           :message="message"
           :is-processing="isProcessing && index === messages.length - 1 && message.role === 'assistant'"
           :input-hint-state="isProcessing && index === messages.length - 1 && message.role === 'assistant' ? inputHintState : 'idle'"

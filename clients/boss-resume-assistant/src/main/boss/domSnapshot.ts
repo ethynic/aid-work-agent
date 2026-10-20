@@ -37,6 +37,8 @@ export interface DomDocument {
     bounds: number[][] // [x, y, width, height]
     /** includeDOMRects=true 时按 layout 索引返回的 CSS 客户端矩形/尺寸；勿作任意节点的全局坐标。 */
     clientRects?: number[][]
+    /** Optional captureSnapshot paint order, aligned with layout.nodeIndex. */
+    paintOrders?: number[]
     /** 按调用方 computedStyles 顺序，值指向 strings。 */
     styles?: number[][]
   }

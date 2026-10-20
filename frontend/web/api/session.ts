@@ -64,6 +64,20 @@ export interface ChatMessageRecord {
   created_at: string
 }
 
+export interface FailedMessageUI {
+  hidden_failed?: Record<string, boolean>
+  /** New retry request key -> original failed Runner; presentation only. */
+  retry_sources?: Record<string, string>
+}
+
+export async function updateFailedMessageUI(sessionId: string, runnerId: string,
+  action: { action: 'hide' } | { action: 'retry'; client_request_id: string }, headers: Record<string, string>): Promise<void> {
+  const response = await fetch(`${API_BASE}/${encodeURIComponent(sessionId)}/failed-messages/${encodeURIComponent(runnerId)}`, {
+    method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(action),
+  })
+  if (!response.ok) throw new Error('消息操作未成功，请稍后重试。')
+}
+
 export interface CreateSessionRequest {
   title?: string
   context_data?: Record<string, any>
@@ -160,7 +174,7 @@ export async function deleteSession(sessionId: string): Promise<void> {
 /**
  * 获取会话消息
  */
-export async function getSessionMessages(sessionId: string): Promise<{ messages: ChatMessageRecord[] }> {
+export async function getSessionMessages(sessionId: string): Promise<{ messages: ChatMessageRecord[]; failed_message_ui?: FailedMessageUI }> {
   const res = await fetch(`${API_BASE}/${sessionId}/messages`, {
     headers: { ...getAuthHeader() }
   })

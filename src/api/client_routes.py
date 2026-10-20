@@ -45,6 +45,7 @@ from src.db.client_binding_db import (
     ClientUsageLogDB,
 )
 from src.llm.gateway import LLMGateway, llm_gateway
+from src.services.boss_visual_service import BossVisualRequestBody, diagnose_visual
 
 router = APIRouter(prefix="/api/client/v1", tags=["协会客户端"])
 
@@ -303,6 +304,19 @@ async def get_credits_detail(
 
 
 # ============== LLM 代理（计费 ×10） ==============
+
+@router.post("/boss/visual-diagnose")
+async def boss_visual_diagnose(
+    req: BossVisualRequestBody,
+    binding: ClientBinding = Depends(_require_binding),
+):
+    """Single diagnostic; new reservations ×20, historical billing rates frozen."""
+    from fastapi.responses import JSONResponse
+
+    result = await diagnose_visual(req, binding)
+    if result["state"] in {"reserved", "dispatched"}:
+        return JSONResponse(result, status_code=202, headers={"Retry-After": "2"})
+    return result
 
 @router.post("/llm/chat")
 async def llm_chat(

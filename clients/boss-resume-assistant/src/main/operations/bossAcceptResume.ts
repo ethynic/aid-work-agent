@@ -1,3 +1,4 @@
+import { BusinessOperationState, withBusinessRecovery } from '../boss/BusinessOperationState.js'
 /**
  * boss_accept_resume operation（设计 §10.2）：沟通页批量「同意」接收附件简历（写动作）。
  *
@@ -43,8 +44,11 @@ export function createBossAcceptResumeOperation(
           return null
         },
         async (session, tracker) => {
+          const state = new BusinessOperationState()
+          const intent = { name: 'boss_accept_resume', goal: '同意接收请求中的附件简历', expected: '同一会话处理条消失且出现新附件或明确接受结果', operationClass: 'external_effect' as const }
+          return withBusinessRecovery(state, intent, async () => {
           await ensureChatPage(session, ctx)
-          const executor = new ResumeConsentExecutor({
+          const executor = new ResumeConsentExecutor({ state,
             snapshot: session.snapshot,
             click: session.click,
             scroll: (deltaY) => session.mouseWheel(CHAT_LIST_SCROLL_POINT.x, CHAT_LIST_SCROLL_POINT.y, deltaY),
@@ -56,7 +60,7 @@ export function createBossAcceptResumeOperation(
             },
           })
           ctx.progress({ stage: 'execute', message: '逐个打开会话并点击「同意」' })
-          const result = await executor.acceptAll({ limit, preview })
+          const result = await executor.acceptAll({ limit, preview, expectedContactRef: ctx.expectedContactRef })
           return {
             message:
               `完成：同意接收 ${result.accepted} 人的附件简历` +
@@ -64,6 +68,7 @@ export function createBossAcceptResumeOperation(
               `（${result.reachedEnd ? '已滚到底' : '达到上限'}）`,
             data: { accepted: result.accepted, previewed: result.previewed, reached_end: result.reachedEnd },
           }
+          })
         },
       )
     },

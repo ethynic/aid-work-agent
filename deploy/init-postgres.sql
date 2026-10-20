@@ -1258,6 +1258,9 @@ CREATE TABLE IF NOT EXISTS local_tool_devices (
     replacement_device_id UUID,
     replacement_completed_at TIMESTAMP,
     replaced_by_device_id UUID,
+    registration_id UUID,
+    registration_request_hash TEXT,
+    registration_code_hash TEXT,
     last_seen_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1265,6 +1268,7 @@ CREATE TABLE IF NOT EXISTS local_tool_devices (
     UNIQUE (token_hash)
 );
 CREATE INDEX IF NOT EXISTS idx_lt_devices_tenant_user ON local_tool_devices USING btree (tenant_id, user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_lt_devices_registration ON local_tool_devices(registration_id) WHERE registration_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS local_tool_pairing_tickets (
     id UUID DEFAULT gen_random_uuid() NOT NULL,
@@ -5391,7 +5395,7 @@ CREATE TABLE IF NOT EXISTS notification_targets (
     verified_at TIMESTAMPTZ DEFAULT clock_timestamp(),
     created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
     updated_at TIMESTAMPTZ DEFAULT clock_timestamp(),
-    CONSTRAINT notification_target_identity UNIQUE(provider,identity_digest),
+    CONSTRAINT notification_target_identity UNIQUE(provider,identity_digest,scope_key),
     CONSTRAINT notification_target_scope CHECK (
         (tenant_id IS NULL AND scope_key='global') OR
         (tenant_id IS NOT NULL AND scope_key='tenant:' || tenant_id)),
@@ -5559,3 +5563,29 @@ CREATE TABLE IF NOT EXISTS file_assets (
 
 CREATE INDEX IF NOT EXISTS idx_file_assets_tenant ON file_assets(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_file_assets_tenant_size ON file_assets(tenant_id, size);
+
+-- ==================== 租户数字员工实例（tenant_agent_instances） ====================
+-- 统一模型：直用实例行 agent_id = base_agent_id（租户直接使用基础员工，可能未经任何定制）；
+-- 副本实例行 agent_id != base_agent_id（租户管理员复制产生，全局唯一，纯连字符）。
+-- 副本实例 system_prompt/工具/技能/模型运行时实时取自父定义，本表只存覆盖项。
+CREATE TABLE IF NOT EXISTS tenant_agent_instances (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    base_agent_id TEXT NOT NULL,
+    base_source TEXT,
+    display_name TEXT,
+    description TEXT,
+    extra_prompt TEXT,
+    greeting_summary TEXT,
+    greeting_prompts JSONB,
+    status TEXT DEFAULT 'active',
+    created_by TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_tenant_agent_inst UNIQUE (tenant_id, agent_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_agent_inst_copy ON tenant_agent_instances(agent_id) WHERE agent_id <> base_agent_id;
+CREATE INDEX IF NOT EXISTS idx_tenant_agent_inst_tenant ON tenant_agent_instances(tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_tenant_agent_inst_base ON tenant_agent_instances(tenant_id, base_agent_id);

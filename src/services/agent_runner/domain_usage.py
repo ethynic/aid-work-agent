@@ -81,9 +81,9 @@ def assert_physical_authorization(cursor, row, attempt, authorization, *, execut
             or fact.get('intent_digest')!=hashlib.sha256(canonical_json(fact.get('request') or {}).encode()).hexdigest()):
         raise CheckpointFailure('DOMAIN_MODEL_PHASE_NOT_STARTED')
     if purpose=='resume_recognition_covered':
-        from src.local_tools.proxy_tool import BossResumeDetailTool, BossResumeBatchTool
+        from src.local_tools.proxy_tool import BossResumeDetailTool, BossResumeBatchTool, BossResumeNextTool
         if phase.branch!='resume.evaluate' or (tool.get('call') or {}).get('name') not in {
-                BossResumeDetailTool.name,BossResumeBatchTool.name}:
+                BossResumeDetailTool.name,BossResumeBatchTool.name,BossResumeNextTool.name}:
             raise CheckpointFailure('COVERED_USAGE_OWNER_REQUIRED')
         from .resume_model_proof import assert_resume_model
         assert_resume_model(cursor,row,node,tool_call_id,phase.ordinal,fact['request'],provider,model)

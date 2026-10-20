@@ -37,3 +37,4 @@
 - 最终 import 检查：本地容器导入 `ProviderHTTPError`、`read_error_body`、FailoverGateway、LLMGateway 及四类 Provider → `LLM imports OK`（退出码 0）；相关 `git diff --check` 通过。
 - 最终独立测试：`./scripts/dev_test.sh tests/unit/llm/test_provider_http_failover.py tests/unit/test_llm_failover.py tests/unit/test_key_pool_cross_loop.py tests/unit/test_llm_gateway_max_tokens.py tests/unit/llm/test_llm_gateway_lite_model.py -p no:cacheprovider -q --tb=short` → **169 passed，0 failed，0 skipped**。另在容器 `/tmp` 执行独立临时 pytest → **40 passed，0 failed，0 skipped**：覆盖四类 Provider 的 503/429/400 正文读取中断、响应关闭、KeyPool 释放、连续失败熔断及后续跳过主槽，另验证成功流不被预读；临时文件已清理。本角色最终共 209 passed，不与开发自测重复相加。
 - 未执行真实模型 API 或服务器验证；2026-10-15 用户已授权提交本修复及相关文档，未部署。
+- master 合并验证（2026-10-15）：以 `origin/master=217c2962` 合入修复提交 `e32bf191`，仅完成索引的并发新增行发生冲突，两项均保留；修复源码和新测试与原提交一致。使用合并快照重跑原自测组 **176 passed**，独立执行 gateway lite/max_tokens 与 KeyPool 集成边界 **26 passed**，均 0 failed / 0 skipped；实际模块导入路径已核对为合并快照，import/diff 检查通过。

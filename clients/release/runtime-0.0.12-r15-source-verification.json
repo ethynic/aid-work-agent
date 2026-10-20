@@ -1,0 +1,76 @@
+{
+  "status": "PASS",
+  "timestamp": "2026-10-15T08:08:05.340718+00:00",
+  "scope": "Static ZIP -> NSIS -> app-64.7z extraction only; installer and historical application code never executed",
+  "source_archive": {
+    "path": "C:\\repos\\aid-work-agent\\clients\\release\\AID-Work-Runtime-UI-BOSS-20261015-trial-r15.zip",
+    "size": 130966136,
+    "sha256": "b884100a25f390aac1abaa42f546579f9df1223e003080344d71e63ecdaaf91d",
+    "crc_valid": true
+  },
+  "sevenzip": {
+    "path": "C:\\repos\\aid-work-agent\\clients\\agent-desktop\\node_modules\\electron-winstaller\\vendor\\7z.exe",
+    "sha256": "c7245e21a7553d9e52d434002a401c77a7ca7d0f245f2311b0ddf16f8f946c6f"
+  },
+  "historical_installer": {
+    "version": "0.0.11",
+    "sha256": "487a552ca8965036f37fd07dd78642ecfad3de6e8cba75c8a09d8912ee8af8da",
+    "manifest_match": true
+  },
+  "actual_extracted_trust": {
+    "bytes": 1425,
+    "sha256": "bc1bdb8f0b949ec54f941821f1470207d913f6c2fef64c82646b356104d7f328",
+    "identical_to_locked_r15_asset": true,
+    "root_count": 4,
+    "key_ids": [
+      "aid-isolated-dev-only",
+      "aid-isolated-runtime-trial-r3-final",
+      "aid-isolated-runtime-trial-r9-final-v035",
+      "aid-isolated-boss-ps-20261015-r15"
+    ]
+  },
+  "current_registry": {
+    "sha256": "c964187853580444e006c30098e90913084c21a27f2326a11353a12848f87ad0",
+    "root_count": 5,
+    "historical_four_exact_objects_preserved": true
+  },
+  "identity": {
+    "old_and_new_equal": true,
+    "profile": "acceptance",
+    "product_kind": "runtime",
+    "app_id": "cn.aidingyi.agent.runtime.acceptance",
+    "product_name": "AID Work Runtime 验收版",
+    "user_data_name": "aidwork-runtime-app-acceptance",
+    "runtime_home_name": "aidwork-tool-runtime-acceptance",
+    "product_configuration_module_bytes_identical": true,
+    "old_product_configuration_module_sha256": "152531f3bd3f24beb35fcfeab06439cd5c2f8893ad16089007e16665cf944ef7",
+    "actual_old_ui_package_version": "0.0.11",
+    "actual_old_config": {
+      "schemaVersion": 1,
+      "productKind": "runtime",
+      "profile": "acceptance"
+    },
+    "actual_new_config": {
+      "schemaVersion": 1,
+      "productKind": "runtime",
+      "profile": "acceptance"
+    },
+    "identity_field_source": "appId/userData/runtimeHome names are defined in the actual packaged productConfiguration.js acceptance identity; config JSON carries only schemaVersion/productKind/profile"
+  },
+  "embedded_boss": {
+    "version": "0.3.9",
+    "sha256": "c9204c1f9504549d688bf19623146efff09cd8f410e2b63d969bc189f4bbfd6b",
+    "bytes": 4491937,
+    "identical_to_user_latest_039": true
+  },
+  "frozen_new_artifacts_unchanged": true,
+  "limitations": [
+    "Historical installer signature Authenticode was not revalidated in this static source extraction",
+    "No historical installer/app execution, install, registry write or customer home access",
+    "Historical application identity established from actual packaged config, identical productConfiguration code, main application identity wiring and embedded release manifest"
+  ],
+  "frozen_new_artifacts_checked": [
+    "Final Runtime installer SHA-256",
+    "Final app.asar SHA-256"
+  ]
+}

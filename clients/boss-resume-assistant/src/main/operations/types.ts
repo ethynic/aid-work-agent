@@ -54,6 +54,10 @@ export interface OpContext {
   signal: AbortSignal
   progress: (p: ProgressEvent) => void
   cdpPort?: number
+  /** Internal opaque CLI binding; never part of model/API operation context. */
+  browserTargetRef?: string
+  /** Internal retry guard for commands whose original intent means the current conversation. */
+  expectedContactRef?: string
 }
 
 export interface BossOperation<Args> {
@@ -75,6 +79,7 @@ export class CodedOperationError extends Error {
   constructor(
     readonly code: ErrorCode,
     message: string,
+    readonly data?: Record<string, unknown>,
   ) {
     super(message)
     this.name = 'CodedOperationError'

@@ -22,6 +22,8 @@ export interface RunnerPresentation {
 export interface RunnerView {
   runner_id: string
   client_request_id: string
+  /** 服务端已公开的实际执行配置身份；旧版本响应可以省略。 */
+  profile_id?: string
   queue_order: number
   session: { kind: string; session_id: string }
   status: RunnerStatus

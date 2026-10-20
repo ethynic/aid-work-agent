@@ -78,11 +78,23 @@ def _model_proof(row,state,fact,key,phase):
 
 
 def validate_domain_phases(row,state,fact,cls,arguments):
-    from src.local_tools.proxy_tool import BossResumeDetailTool,BossResumeBatchTool,BossSendToTool,BossSendCurrentTool
+    from src.local_tools.proxy_tool import BossResumeDetailTool,BossResumeBatchTool,BossResumeNextTool,BossSendToTool,BossSendCurrentTool
     phases = state.resources.get('local_domain_phases') or {}
     relevant = [(key,phase) for key,phase in phases.items() if phase.get('tool_call_id')==fact.call.id]
-    if cls not in (BossResumeDetailTool,BossResumeBatchTool,BossSendToTool,BossSendCurrentTool):
+    if cls not in (BossResumeDetailTool,BossResumeBatchTool,BossResumeNextTool,BossSendToTool,BossSendCurrentTool):
         return all(phase['branch'].startswith('heal.') for _,phase in relevant)
+    if cls is BossResumeNextTool:
+        from .resume_next_proof import continuation_arguments
+        from src.core.agent_engine.contracts import CheckpointFailure
+        from src.tools.executor import normalize_provided_parameters
+        try:
+            proven = continuation_arguments(row,state.checkpoint(),fact.call.id,
+                normalize_provided_parameters(cls,fact.call.arguments),
+                lambda parent_id: repository.get_invocation(parent_id,row['tenant_id']))
+        except CheckpointFailure:
+            return False
+        if arguments != proven:
+            return False
     refs = state.resources.get('local_invocations') or {}
     originals = {}
     for ref in refs.values():
@@ -93,6 +105,10 @@ def validate_domain_phases(row,state,fact,cls,arguments):
         branch,ordinal,request = phase['branch'],phase['ordinal'],phase['request']
         if branch.startswith('heal.'):
             continue  # Original common proof validates these branches too.
+        if branch=='resume.next.request' and cls is BossResumeNextTool:
+            if ordinal!=0 or phase.get('phase')!='completed':
+                return False
+            continue  # Fully checked against its original parent above.
         invocation = originals.get(request.get('invocation_id'))
         if not invocation or invocation['state']!='succeeded' or invocation.get('effect')=='unknown':
             return False
@@ -108,7 +124,7 @@ def validate_domain_phases(row,state,fact,cls,arguments):
         if branch not in {'resume.policy','resume.evaluate','resume.evaluation','resume.fee','resume.insert','resume.match'}:
             return False
         item = ordinal//2 if branch=='resume.evaluate' else ordinal
-        payloads = data.get('resumes') if cls is BossResumeBatchTool and isinstance(data,dict) else [data]
+        payloads = data.get('resumes') if cls in (BossResumeBatchTool,BossResumeNextTool) and isinstance(data,dict) else [data]
         if not isinstance(payloads,list) or not 0<=item<len(payloads) or not isinstance(payloads[item],dict):
             return False
         payload = payloads[item]

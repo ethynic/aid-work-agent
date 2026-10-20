@@ -1,3 +1,4 @@
+import { PagePostconditionError } from '../src/main/operations/pageOperation.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { PageNavigator, NavError } from '../src/main/boss/PageNavigator.js'
@@ -89,16 +90,11 @@ test('已在目标页：跳过点击（幂等，不打扰列表滚动位置）',
   assert.equal(clicks.length, 0)
 })
 
-test('页面没有菜单文案（布局异常）→ 不盲点，URL 直跳兜底成功（2026-09-18）', async () => {
-  const { clicks, navigatedTo, deps: d } = deps([navSnap([])], [CHAT_URL, CHAT_URL], {
-    navigateUrls: [RECOMMEND_URL],
-  })
-  const nav = new PageNavigator(d)
-  const result = await nav.navigate('recommend')
-  assert.equal(result.clicked, true)
-  assert.equal(result.via, 'url-jump')
-  assert.equal(clicks.length, 0) // 定位失败绝不盲点
-  assert.deepEqual(navigatedTo, ['https://www.zhipin.com/web/chat/recommend'])
+test('页面没有菜单文案 → 直接报错交共用恢复，零普通重试', async () => {
+  const { clicks, navigatedTo, deps: d } = deps([navSnap([])], [CHAT_URL], { navigateUrls: [RECOMMEND_URL] })
+  await assert.rejects(new PageNavigator(d).navigate('recommend'), NavError)
+  assert.deepEqual(clicks, [])
+  assert.deepEqual(navigatedTo, [])
 })
 
 test('菜单找不到且直跳后仍未到达（未登录被重定向登录页）→ NavError 报登录提示', async () => {
@@ -122,19 +118,12 @@ test('侧栏区命中多个同文案但 x 分散 → 取最左命中（2026-09-0
   assert.deepEqual(clicks, [{ x: 93, y: 372 }])
 })
 
-test('侧栏区最左命中并列（Δx<5，布局异常）→ 不盲点，URL 直跳兜底成功', async () => {
-  const dup = { text: '沟通', bounds: [55, 400, 80, 32] as [number, number, number, number] } // cx=95，与 menu cx=93 并列
-  const { clicks, navigatedTo, deps: d } = deps(
-    [navSnap([{ text: '沟通', bounds: [53, 356, 80, 32] }, dup])],
-    [RECOMMEND_URL, RECOMMEND_URL],
-    { navigateUrls: [CHAT_URL] },
-  )
-  const nav = new PageNavigator(d)
-  const r = await nav.navigate('chat')
-  assert.equal(r.clicked, true)
-  assert.equal(r.via, 'url-jump')
-  assert.equal(clicks.length, 0) // 并列无法确定，绝不盲点
-  assert.equal(navigatedTo.length, 1)
+test('侧栏区最左命中并列 → 直接报错交共用恢复，零普通重试', async () => {
+  const dup = { text: '沟通', bounds: [55, 400, 80, 32] as [number, number, number, number] }
+  const { clicks, navigatedTo, deps: d } = deps([navSnap([{ text: '沟通', bounds: [53, 356, 80, 32] }, dup])], [RECOMMEND_URL])
+  await assert.rejects(new PageNavigator(d).navigate('chat'), /最左命中不唯一/)
+  assert.deepEqual(clicks, [])
+  assert.deepEqual(navigatedTo, [])
 })
 
 test('无 pageNavigate（旧测试替身）且菜单定位失败 → 保持原 fail-loud 报错', async () => {
@@ -149,36 +138,18 @@ test('无 pageNavigate（旧测试替身）且菜单定位失败 → 保持原 f
   assert.equal(navigatedTo.length, 0)
 })
 
-test('点击执行失败（WinClickError，BOSS 窗口在后台）→ 不上抛，URL 直跳兜底成功（2026-09-18 真机实证）', async () => {
-  const { clicks, navigatedTo, deps: d } = deps(
-    [navSnap([MENU_RECOMMEND])],
-    [CHAT_URL, CHAT_URL],
-    { clickThrows: new WinClickError('渲染子窗口不可见（BOSS 标签页窗口在后台）'), navigateUrls: [RECOMMEND_URL] },
-  )
-  const nav = new PageNavigator(d)
-  const result = await nav.navigate('recommend')
-  assert.equal(result.clicked, true)
-  assert.equal(result.via, 'url-jump')
-  assert.equal(clicks.length, 0) // 点击未落地
-  assert.equal(navigatedTo.length, 1) // 直跳兜底生效
+test('点击执行失败（WinClickError → 直接报错交共用恢复，零普通重试', async () => {
+  const failure = new WinClickError('渲染子窗口不可见')
+  const { navigatedTo, deps: d } = deps([navSnap([MENU_RECOMMEND])], [CHAT_URL], { clickThrows: failure })
+  await assert.rejects(new PageNavigator(d).navigate('recommend'), (error: unknown) => error === failure)
+  assert.deepEqual(navigatedTo, [])
 })
 
-test('点击执行失败且直跳后仍未到达 → NavError 报登录提示', async () => {
-  const { navigatedTo, deps: d } = deps(
-    [navSnap([MENU_RECOMMEND])],
-    [CHAT_URL, CHAT_URL],
-    {
-      clickThrows: new WinClickError('渲染子窗口不可见'),
-      navigateUrls: ['https://www.zhipin.com/web/user/?ka=header-login'],
-    },
-  )
-  const nav = new PageNavigator(d)
-  await assert.rejects(nav.navigate('recommend'), (e: unknown) => {
-    assert.ok(e instanceof NavError)
-    assert.match(e.message, /登录/)
-    return true
-  })
-  assert.equal(navigatedTo.length, 1)
+test('点击执行失败且直跳后仍未到达 → 直接报错交共用恢复，零普通重试', async () => {
+  const failure = new WinClickError('[BOSS_INPUT_UNKNOWN] 输入结果未知')
+  const { navigatedTo, deps: d } = deps([navSnap([MENU_RECOMMEND])], [CHAT_URL], { clickThrows: failure })
+  await assert.rejects(new PageNavigator(d).navigate('recommend'), (error: unknown) => error === failure)
+  assert.deepEqual(navigatedTo, [])
 })
 
 test('snapshot 抛基础设施异常（非 NavError/WinClickError）→ 原样上抛不吞，不盲跳', async () => {
@@ -200,7 +171,7 @@ test('点击后 URL 未跳转（点击被拦截）→ 先直跳兜底，兜底�
   const { clicks, navigatedTo, deps: d } = deps([navSnap([MENU_RECOMMEND])], [CHAT_URL, CHAT_URL])
   const nav = new PageNavigator(d)
   await assert.rejects(nav.navigate('recommend'), (e: unknown) => {
-    assert.ok(e instanceof NavError)
+    assert.ok(e instanceof PagePostconditionError)
     assert.match(e.message, /直跳/)
     return true
   })
@@ -254,7 +225,7 @@ test('兜底导航后 URL 仍未变 → fail-loud 报当前 URL', async () => {
   )
   const nav = new PageNavigator(d)
   await assert.rejects(nav.navigate('chat'), (e: unknown) => {
-    assert.ok(e instanceof NavError)
+    assert.ok(e instanceof PagePostconditionError)
     assert.match(e.message, /直跳/)
     return true
   })

@@ -1,3 +1,4 @@
+import { withDetailControls } from './detailGreetFixture.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { inspectRecommendationResults, excludedRecommendationName } from '../src/main/boss/RecommendationResultBoundary.js'
@@ -133,7 +134,7 @@ test('先读到真实匹配简历随后变空态，保留成功结果并以推�
     return { segments: 1, bottomReached: true, width: 1200, height: 1400, imageBuffer: Buffer.from('test-image'), seamMis: [], suspectSeams: [] }
   }
   try {
-    const reader = new ResumeBatchReader({ ...batchDeps(async () => state), click: async () => { state = withCanvas(matching) }, pressEscape: async () => { state = emptyRecommendations() } })
+    const reader = new ResumeBatchReader({ ...batchDeps(async () => state), click: async () => { state = withDetailControls(withCanvas(matching)) }, pressEscape: async () => { state = emptyRecommendations() } })
     const result = await reader.readBatch({ limit: 3 })
     assert.equal(result.resumes.length, 1)
     assert.equal(result.resumes[0]!.name, '钱测试')

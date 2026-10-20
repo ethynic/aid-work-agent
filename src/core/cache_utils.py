@@ -72,7 +72,7 @@ class CacheKeys:
     VIDEO_PROMPT_DRAFT = "video_prompt_draft"
     # 文件资产 / 企微客服 / 独立会话状态（登记前缀，消除管理后台"裸键"告警）
     UPLOADED_FILE = "uploaded_file"        # uploaded_file:{file_id}（文件/图片元数据）
-    SUBAGENT_GREETING = "subagent_greeting"  # subagent_greeting:{agent_id}（数字员工空态摘要+快捷按钮，LLM 生成后缓存）
+    SUBAGENT_GREETING = "subagent_greeting"  # subagent_greeting:{agent_id}；租户上下文为 subagent_greeting:{tenant_id}:{agent_id}（数字员工空态摘要+快捷按钮，LLM 生成后缓存）
     WECOM_KF = "wecom_kf"                  # wecom_kf:{corp_id}:{key}（企微客服，key 必须带企业维度）
     WECOM_KF_PULL_LOCK = "wecom_kf_pull_lock"          # wecom_kf_pull_lock:{tenant_id}:{open_kfid}（拉取任务互斥锁，防并发 sync_msg 撞微信 45009 限频）
     WECOM_KF_PULL_PENDING = "wecom_kf_pull_pending"    # wecom_kf_pull_pending:{tenant_id}:{open_kfid}（任务运行中新回调到达标记，任务完成后补偿拉取）
@@ -88,9 +88,15 @@ class CacheKeys:
     # TTL 23h 与 mobile 版一致，force_refresh 时覆盖）
     EXTERNAL_LOGIN_TOKEN_SESSION = "external_login_token_session"
     # 表单 schema 元数据缓存：form_schema:{tenant_id}:{subagent}:{module}
-    # （load_form_schema.py 拉取第三方 module_schema 接口后缓存，TTL 1h，
-    # key 按租户+子智能体隔离不同第三方系统）
+    # （load_form_schema.py 拉取第三方 module_schema 接口后缓存，key 按租户+子智能体
+    # 隔离不同第三方系统；TTL 读 FORM_FILLING_CACHE_TTL，默认 600s/10min，
+    # 与 open_modules 共用同一配置）
     FORM_SCHEMA = "form_schema"
+    # 开放模块清单缓存：open_modules:{tenant_id}:{subagent}:{scope}
+    # （load_open_modules.py 拉取第三方 open_modules 接口后缓存；scope=delegate/agent
+    # 区分「带委托会话的角色交集结果」与「仅 agent_token 的配置结果」，避免两种口径
+    # 互相污染；TTL 同 FORM_SCHEMA，读 FORM_FILLING_CACHE_TTL，默认 600s/10min）
+    OPEN_MODULES = "open_modules"
     # recap 任务幂等：recap_task:{tenant_id}:{task_name}:{round_message_id}
     # （每轮问答结束后的沉淀任务防重入/防回调重放，TTL 24h；docs/subagent/recap-mechanism-design.md）
     RECAP_TASK_DEDUP = "recap_task"

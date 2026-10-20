@@ -3,7 +3,7 @@
 
 调用第三方系统的 module_schema 元数据接口，返回指定模块的字段元数据
 （英文名/中文名/控件类型/必填/枚举/填写说明），并按租户+子智能体+module
-做 Redis 缓存（TTL 1h），避免每轮拉取。
+做 Redis 缓存（TTL 读 FORM_FILLING_CACHE_TTL，默认 600s/10min），避免每轮拉取。
 
 client_token 从会话级托管缓存读取（delegate_login.py 写入），不进 LLM 上下文。
 
@@ -26,8 +26,25 @@ import os
 import urllib.request
 import urllib.error
 
-_CACHE_TTL_SECONDS = 3600  # 元数据变更频率低，缓存 1h
+_DEFAULT_CACHE_TTL_SECONDS = 600  # 默认 10 分钟（.env 的 FORM_FILLING_CACHE_TTL 可覆盖）
 _HTTP_TIMEOUT_SECONDS = 15
+
+
+def _cache_ttl_seconds():
+    """表单元数据缓存有效期（秒）。
+
+    读 .env 的 FORM_FILLING_CACHE_TTL，缺省 600（10 分钟）。与
+    load_open_modules.py 共用同一配置，保证两个元数据接口的缓存窗口一致。
+    """
+    raw = (os.environ.get("FORM_FILLING_CACHE_TTL") or "").strip()
+    if raw:
+        try:
+            ttl = int(raw)
+            if ttl > 0:
+                return ttl
+        except ValueError:
+            pass
+    return _DEFAULT_CACHE_TTL_SECONDS
 
 
 def _emit(payload):
@@ -75,7 +92,7 @@ def _write_cached_schema(tenant_id, subagent_id, module, schema_payload):
         from src.core.cache_utils import CacheKeys, set_cached
         set_cached(
             CacheKeys.FORM_SCHEMA, tenant_id, subagent_id, module,
-            value=schema_payload, ttl=_CACHE_TTL_SECONDS,
+            value=schema_payload, ttl=_cache_ttl_seconds(),
         )
     except Exception as e:
         print(json.dumps({"_cache_write_error": str(e)}, ensure_ascii=False),
@@ -101,7 +118,7 @@ def _read_session_client_token(tenant_id, subagent_id):
 
 
 _ATTR_KEYS = ("attr_name", "display_name", "component", "required", "options",
-              "description", "create_hidden", "edit_hidden", "is_system")
+              "note", "create_hidden", "edit_hidden", "is_system")
 
 
 def _slim_attrs(attrs):

@@ -539,6 +539,7 @@ class RunnerWorker:
                 # _model 失败路径不发 llm_call 事件，从异常属性补记失败 span；
                 # 落库靠 finally 的 _persist_trace。on_llm_failure 内部吞异常。
                 try:
+                    collector.on_execution_error(error)
                     fact = getattr(error,'model_call_fact',None)
                     if fact:
                         collector.on_llm_failure(fact)
@@ -683,12 +684,18 @@ class RunnerWorker:
                     if once:
                         break
                 if once:
-                    await asyncio.gather(*tasks)
+                    if tasks:
+                        await asyncio.wait(tasks)
+                    for task in tasks:
+                        if not task.cancelled():
+                            task.result()
                     return len(tasks)
                 if tasks:
                     done, tasks = await asyncio.wait(tasks,timeout=self.config.poll_seconds,return_when=asyncio.FIRST_COMPLETED)
                     for task in done:
-                        await task
+                        # 单attempt取消不能终止worker；其他异常仍由result()暴露。
+                        if not task.cancelled():
+                            task.result()
                     completed += len(done)
                 else:
                     try:
