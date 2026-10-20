@@ -60,7 +60,7 @@ class KnowledgeBaseTool(BaseTool):
         "结果分两部分：results 为命中片段（text/doc_id/score/chunk_index/metadata）；"
         "documents 按 doc_id 归并文档信息（title/file_path/summary/doc_metadata 等），"
         "同一文档命中多个片段时文档信息只出现一次，片段经 doc_id 关联所属文档；"
-        "doc_metadata 仅含 raw_payload（业务原始数据：价格表/项目表/图片 file_id/销量/库存等"
+        "doc_metadata 仅含 raw_payload（业务原始数据：价格表/项目表/图片 file_id 等"
         "未写入正文的字段，可据 file_id 写 ![图片](file_id:xxx) 嵌图）；"
         "带封面的文档另含 cover_image（含 file_id 等图片引用信息，可用于行程图集/封面展示）。"
         "若已知文件名/文档标题、需要读取整个文件，先用 knowledge_file_search 定位拿到 file_path，再用 read 读取。"

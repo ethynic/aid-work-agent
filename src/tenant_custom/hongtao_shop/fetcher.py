@@ -9,8 +9,10 @@
 护栏：follow_redirects=False（域名硬编码白名单，不跟随跳转）、响应体 10MB 上限
 （超限即拒收，不截断半包）、固定 UA、页间 0.3s、单页重试 3 次退避。
 
-价格字段彻底排除（客户要求）：market_price/sell_price 解析后即弃，
-不进正文、不进 metadata、不进任何缓存表——本模块是价格字段的唯一入口。
+易变数值字段彻底排除（客户要求）：market_price/sell_price（价格，自 P1 起）
+与 stock/sales/comment_score/comment_num（库存/销量/评分/评论数，2026-10-20
+客户反馈其内容错误，要求彻底不同步）解析后即弃，不进正文、不进 metadata、
+不进任何缓存表——本模块是这六个字段的唯一入口。
 """
 
 from __future__ import annotations
@@ -36,8 +38,11 @@ MAX_RESPONSE_BYTES = 10 * 1024 * 1024  # 10MB 响应体护栏（超限即拒收�
 USER_AGENT = "aid-kb-ingest/1.0"
 REQUEST_TIMEOUT_SECONDS = 30.0
 
-# 客户要求彻底排除的价格字段（含 products 缓存表 DDL 亦不设列，三重防线）
-PRICE_FIELDS = ("market_price", "sell_price")
+# 客户要求彻底排除的字段（含 products 缓存表 DDL 亦不设价格列，三重防线）：
+# 价格自 P1 起即排除；易变数值四字段 2026-10-20 起同口径排除（源数据内容错误）
+EXCLUDED_FIELDS = (
+    "market_price", "sell_price", "stock", "sales", "comment_score", "comment_num",
+)
 
 
 class FetchError(RuntimeError):
@@ -67,9 +72,9 @@ def _s(value: Any) -> str:
     return str(value).strip() if value is not None else ""
 
 
-def strip_price_fields(item: dict) -> dict:
-    """价格字段即弃：解析后立刻 pop，后续任何结构不可见。"""
-    for key in PRICE_FIELDS:
+def strip_excluded_fields(item: dict) -> dict:
+    """排除字段即弃：解析后立刻 pop，后续任何结构不可见（正文/metadata/缓存表）。"""
+    for key in EXCLUDED_FIELDS:
         item.pop(key, None)
     return item
 
@@ -153,7 +158,7 @@ async def fetch_page(client: httpx.AsyncClient, endpoint: str, page: int) -> dic
 async def fetch_all(
     client: httpx.AsyncClient, endpoint: str, limit: Optional[int] = None
 ) -> FetchResult:
-    """全量分页拉取：翻到 total 或空页；价格字段即弃。
+    """全量分页拉取：翻到 total 或空页；排除字段（价格+易变数值）即弃。
 
     limit 仅用于冒烟截断（截断时 fetch_complete=False，对账门禁据此不推进删除）。
     """
@@ -165,7 +170,7 @@ async def fetch_all(
         if not isinstance(batch, list):
             raise FetchError(f"{endpoint} 第 {page} 页 datalist 非列表")
         if endpoint == PRODUCT_ENDPOINT:
-            batch = [strip_price_fields(dict(item)) for item in batch if isinstance(item, dict)]
+            batch = [strip_excluded_fields(dict(item)) for item in batch if isinstance(item, dict)]
         else:
             batch = [dict(item) for item in batch if isinstance(item, dict)]
         result.items.extend(batch)
