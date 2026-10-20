@@ -1,5 +1,7 @@
 # Agent 桌面客户端 v3 开发计划
 
+2026-10-20共同检查点：共同契约2.2及[BOSS计划23](desktop-automation/plan-boss-operation-verification-visual-recovery.md#23-runtime配对身份复用纠正2026-10-20)复用Runtime配对身份。主控唯一修改Supervisor去掉旧BOSS env透传、Runtime/BOSS接线及版本元数据，backend角色唯一新增设备视觉API及账务主体隔离。无renderer/IPC新配置，不改H1/H3、设备配对或claim/permit，独立TEST/CR及实际包核验后交付，不部署。
+
 2026-10-14共同检查点：独立Runtime按[干净安装计划](plan-runtime-clean-install.md)与共同契约2.1改造安装代际及自动连接。安装角色唯一维护productConfiguration/installer与新installation模块，主控唯一维护Main/H3消费，服务端角色唯一维护Device协议3；完整Desktop现有协议保持兼容。
 
 同日追加安装确认：Runtime主控接管NSIS/PowerShell唯一写入，安装前只读检测旧运行，确定才自动退出并安装，取消保持旧运行；不改完整Desktop/H3/wire。增量验证统一见干净安装计划Phase5。

@@ -83,8 +83,8 @@ export function withLocalRecovery<Args>(operation: BossOperation<Args>, deps: Lo
     if (!admitted || ctx.browserTargetRef && ctx.browserTargetRef !== admitted.target) return finish(original, original.success ? 'not_needed' : 'not_eligible')
     policy = admitted.policy
     const env = deps.env ?? process.env
-    if (!env.AID_BOSS_SERVER_URL?.trim() || !env.AID_BOSS_SERVER_TOKEN?.trim()) return finish(original, 'not_configured',
-      { message: 'CLI视觉恢复未配置：需要AID_BOSS_SERVER_URL与AID_BOSS_SERVER_TOKEN；保留原操作结果' })
+    if (!env.AIDWORK_RUNTIME_SERVER?.trim() || !env.AIDWORK_RUNTIME_DEVICE_TOKEN?.trim()) return finish(original, 'not_configured',
+      { message: '缺少Runtime配对上下文，请通过已配对的Runtime启动BOSS工具，并确认Runtime与BOSS插件版本匹配；保留原操作结果' })
     const inspect = deps.inspect ?? createBossOverlayInspectOperation()
     const dismiss = deps.dismiss ?? createBossOverlayDismissOperation()
     const boundCtx: OpContext = { ...ctx, browserTargetRef: admitted.target }

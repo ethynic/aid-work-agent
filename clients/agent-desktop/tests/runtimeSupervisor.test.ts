@@ -247,18 +247,18 @@ test('disconnect finishes pending queries immediately rather than keeping the fu
 
 for (const product of ['desktop', 'runtime_app'] as const) {
   for (const configured of [true, false]) {
-    test(`${product} Host spawn forwards only explicit BOSS backend credentials when configured=${configured}`, async () => {
+    test(`${product} Host spawn ignores ambient BOSS and device credentials when configured=${configured}`, async () => {
       const root = await mkdtemp(path.join(os.tmpdir(), 'h3-boss-env-'))
       const entry = path.join(root, 'host.cjs')
       const excluded = ['OPENAI_API_KEY', 'ZHIPUAI_API_KEY', 'DEVICE_TOKEN', 'AIDWORK_DEVICE_TOKEN',
         'AIDWORK_RUNTIME_DEVICE_TOKEN', 'AID_BOSS_DEVICE_TOKEN', 'AID_WECOM_SERVER_TOKEN',
-        'NODE_OPTIONS', 'NODE_PATH', 'AID_BOSS_SERVER_EXTRA']
+        'NODE_OPTIONS', 'NODE_PATH', 'AID_BOSS_SERVER_EXTRA', 'AIDWORK_RUNTIME_SERVER', 'AIDWORK_RUNTIME_DEVICE_TOKEN']
       const keys = [...excluded, 'AID_BOSS_SERVER_URL', 'AID_BOSS_SERVER_TOKEN', 'AIDWORK_RUNTIME_HOME', 'AIDWORK_RUNTIME_CLEAN_GENERATION', 'APPDATA']
       const previous = new Map(keys.map(key => [key, process.env[key]]))
       const url = 'https://vision-backend.invalid', token = 'fixture-boss-token-not-a-real-credential'
       const evidence = `{
-        boss_url: process.env.AID_BOSS_SERVER_URL === ${configured ? JSON.stringify(url) : 'undefined'},
-        boss_token: process.env.AID_BOSS_SERVER_TOKEN === ${configured ? JSON.stringify(token) : 'undefined'},
+        boss_url: process.env.AID_BOSS_SERVER_URL === undefined,
+        boss_token: process.env.AID_BOSS_SERVER_TOKEN === undefined,
         unrelated_secrets_absent: ${JSON.stringify(excluded)}.every(key => process.env[key] === undefined),
         controlled_home: process.env.AIDWORK_RUNTIME_HOME === ${JSON.stringify(root)},
         controlled_generation: process.env.AIDWORK_RUNTIME_CLEAN_GENERATION === ${product === 'runtime_app' ? "'1'" : 'undefined'},

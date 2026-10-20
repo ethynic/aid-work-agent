@@ -8,7 +8,7 @@ import type { VisualInspectArgs } from '../src/main/boss/visualRecovery.js'
 const targetRef = 'b2651b85-7bd3-43e6-a4e6-bd54b1697a5d'
 const contactRef = 'a'.repeat(64)
 const ctx = (): OpContext => ({ signal: new AbortController().signal, progress() {} })
-const env = { AID_BOSS_SERVER_URL: 'http://127.0.0.1:49553', AID_BOSS_SERVER_TOKEN: 'fake-test-binding' }
+const env = { AIDWORK_RUNTIME_SERVER: 'http://127.0.0.1:49553', AIDWORK_RUNTIME_DEVICE_TOKEN: 'fake-test-binding' }
 type Facts = Record<string, any>
 function source(name = 'boss_open_detail', kind: 'page_state' | 'readonly' | 'external_effect' = 'page_state',
   execution: Partial<PageExecution> = {}): OperationResult {

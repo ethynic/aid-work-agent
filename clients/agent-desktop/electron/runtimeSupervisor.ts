@@ -54,8 +54,6 @@ export class RuntimeSupervisor {
     this.childExited = false; this.instanceId = ''; this.stopOperation = undefined; this.recoveredInstanceId = ''; this.lifecycleInstanceId = ''
     const env: NodeJS.ProcessEnv = {}
     for (const key of ['PATH', 'Path', 'SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'USERNAME', 'SESSIONNAME', 'PROCESSOR_ARCHITECTURE']) if (process.env[key] !== undefined) env[key] = process.env[key]
-    // Only the existing backend vision credentials may cross this trusted main-to-Host boundary.
-    for (const key of ['AID_BOSS_SERVER_URL', 'AID_BOSS_SERVER_TOKEN']) if (process.env[key] !== undefined) env[key] = process.env[key]
     env.AIDWORK_RUNTIME_HOME = this.options.home
     if (this.options.supervisor === 'runtime_app') env.AIDWORK_RUNTIME_CLEAN_GENERATION = '1'
     const child = (this.options.spawnChild ?? spawn)(this.options.nodeExecutable, [this.options.hostEntry, `--supervisor=${this.options.supervisor}`], { env, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] })

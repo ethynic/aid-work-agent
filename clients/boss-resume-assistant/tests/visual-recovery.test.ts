@@ -117,7 +117,7 @@ test('shared visual primitives accept other BOSS operations without deciding the
 
 test('in-memory observations use the same backend-only v2 transport without leaking local context fields', async () => {
   const capturedAt = new Date().toISOString()
-  await visualDiagnose({ requestId: id, apiVersion: 2, imageBytes: png, context, capturedAt }, { env: { AID_BOSS_SERVER_URL: 'http://127.0.0.1:9999', AID_BOSS_SERVER_TOKEN: 'secret' }, fetch: (async (_url, init) => {
+  await visualDiagnose({ requestId: id, apiVersion: 2, imageBytes: png, context, capturedAt }, { env: { AIDWORK_RUNTIME_SERVER: 'http://127.0.0.1:9999', AIDWORK_RUNTIME_DEVICE_TOKEN: 'secret' }, fetch: (async (_url, init) => {
     const body = JSON.parse(String(init?.body))
     assert.equal(body.observation.captured_at, capturedAt); assert.equal(body.observation.after_attempt, 1)
     assert.equal(body.observation.space, 'page_image_px'); assert.deepEqual(body.context, { mode: 'standalone' })
@@ -298,14 +298,14 @@ test('window sidecar metadata alone determines API image space and time; native 
   const output = 'private-observation.png'
   const observation = { ...(await windowCapture()(join(await mkdtemp(join(tmpdir(), 'boss-api-window-')), output), 9222)) }
   try {
-    await visualDiagnose({ requestId: id, apiVersion: 2, imageBytes: png, context, windowObservation: observation }, { env: { AID_BOSS_SERVER_URL: 'http://127.0.0.1:9999', AID_BOSS_SERVER_TOKEN: 'secret' }, fetch: (async (_url, init) => {
+    await visualDiagnose({ requestId: id, apiVersion: 2, imageBytes: png, context, windowObservation: observation }, { env: { AIDWORK_RUNTIME_SERVER: 'http://127.0.0.1:9999', AIDWORK_RUNTIME_DEVICE_TOKEN: 'secret' }, fetch: (async (_url, init) => {
       const body = JSON.parse(String(init?.body))
       assert.equal(body.observation.space, 'window_image_px'); assert.equal(body.observation.captured_at, observation.captured_at)
       assert.equal(body.observation.image_base64, png.toString('base64'))
       assert.equal(body.observation.hwnd, undefined); assert.equal(body.observation.window, undefined); assert.equal(body.observation.output, undefined)
       return Response.json(response().body)
     }) as typeof fetch })
-    await assert.rejects(visualDiagnose({ requestId: id, apiVersion: 2, imageBytes: png, context, windowObservation: { ...observation, sha256: '0'.repeat(64) } }, { env: { AID_BOSS_SERVER_URL: 'http://127.0.0.1:9999', AID_BOSS_SERVER_TOKEN: 'secret' } }), /不是同一张原图/)
+    await assert.rejects(visualDiagnose({ requestId: id, apiVersion: 2, imageBytes: png, context, windowObservation: { ...observation, sha256: '0'.repeat(64) } }, { env: { AIDWORK_RUNTIME_SERVER: 'http://127.0.0.1:9999', AIDWORK_RUNTIME_DEVICE_TOKEN: 'secret' } }), /不是同一张原图/)
   } finally { await rm(join(observation.output, '..'), { recursive: true, force: true }) }
 })
 

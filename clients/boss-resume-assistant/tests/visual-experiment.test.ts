@@ -12,7 +12,26 @@ import { validateCommandArgs } from '../src/cli/validate.js'
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9gAAAABJRU5ErkJggg==', 'base64')
 const requestId = '0c5a306b-8659-4000-8000-123456789012'
-const env = { AID_BOSS_SERVER_URL: 'http://127.0.0.1:9999', AID_BOSS_SERVER_TOKEN: 'private-test-token' }
+const env = { AIDWORK_RUNTIME_SERVER: 'http://127.0.0.1:9999', AIDWORK_RUNTIME_DEVICE_TOKEN: 'private-test-token' }
+
+test('only paired Runtime context selects the device API; legacy manual credentials cannot substitute it', async () => {
+  let calls = 0
+  const legacy = { AID_BOSS_SERVER_URL: 'https://legacy.invalid', AID_BOSS_SERVER_TOKEN: 'legacy-fixture' }
+  const fetch = (async (url, init) => {
+    calls++
+    assert.equal(String(url), 'http://127.0.0.1:9999/api/local-tools/runtime/boss/visual-diagnose')
+    assert.equal((init?.headers as Record<string, string>).Authorization, 'Bearer private-test-token')
+    assert.equal(String(init?.body).includes('private-test-token'), false, 'Device identity belongs in authentication, not model input')
+    return Response.json({ state: 'dispatched' }, { status: 202 })
+  }) as typeof globalThis.fetch
+  for (const missing of [{}, legacy, { ...legacy, AIDWORK_RUNTIME_SERVER: env.AIDWORK_RUNTIME_SERVER },
+    { ...legacy, AIDWORK_RUNTIME_DEVICE_TOKEN: env.AIDWORK_RUNTIME_DEVICE_TOKEN }]) {
+    await assert.rejects(visualDiagnose({ requestId, retrieveOnly: true }, { env: missing, fetch }), /已配对的Runtime/)
+  }
+  assert.equal(calls, 0, 'No request or paid work may begin without the paired execution identity')
+  assert.equal((await visualDiagnose({ requestId, retrieveOnly: true }, { env: { ...legacy, ...env }, fetch })).status, 202)
+  assert.equal(calls, 1)
+})
 
 test('page screenshot preserves exact PNG pixels/hash and closes session without navigation or input', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'boss-screenshot-'))
@@ -65,7 +84,7 @@ test('diagnosis posts exact original image once to Agent API and returns receipt
   try {
     const result = await visualDiagnose({ image, requestId }, { env, fetch: (async (url, init) => {
       calls++
-      assert.equal(String(url), 'http://127.0.0.1:9999/api/client/v1/boss/visual-diagnose')
+      assert.equal(String(url), 'http://127.0.0.1:9999/api/local-tools/runtime/boss/visual-diagnose')
       assert.equal(init?.redirect, 'error')
       assert.equal((init?.headers as Record<string, string>).Authorization, 'Bearer private-test-token')
       const body = JSON.parse(String(init?.body))
@@ -110,7 +129,7 @@ test('network timeout/redirect errors never leak token or infer rejection, and n
 test('remote plaintext/URL credentials are refused before any request; local HTTP remains available', async () => {
   for (const url of ['http://example.com', 'https://name:password@example.com', 'https://example.com?token=secret', 'file:///tmp/backend']) {
     await assert.rejects(visualDiagnose({ requestId, retrieveOnly: true }, {
-      env: { ...env, AID_BOSS_SERVER_URL: url }, fetch: (async () => { throw new Error('must not fetch') }) as typeof fetch,
+      env: { ...env, AIDWORK_RUNTIME_SERVER: url }, fetch: (async () => { throw new Error('must not fetch') }) as typeof fetch,
     }), /后台 URL/)
   }
 })

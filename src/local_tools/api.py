@@ -18,6 +18,7 @@ from loguru import logger
 
 from src.api.auth import get_current_user
 from src.db.client_binding_db import ClientUsageLogDB
+from src.db.models import UserDB
 from src.desktop_automation import audit, payload_resolver
 from src.desktop_automation.adapters import AdapterNotFoundError
 from src.desktop_automation.constants import BUSINESS_KIND_DESKTOP_AUTOMATION, OPERATION_PROTOCOL_V2
@@ -35,6 +36,8 @@ from src.local_tools.models import (
 )
 from src.local_tools.pricing import RESUME_RECOGNITION_TOOL_NAME, resume_recognition_price
 from src.services import recruiting_match_service, resume_vl_service
+from src.services.boss_visual_service import BossVisualRequestBody, RuntimeVisualCaller, diagnose_visual
+from src.saas.db.tenant_db import TenantDB
 from src.local_tools.security import generate_claim_token, sha256_hex
 from src.utils import sanitize_error_info
 
@@ -464,6 +467,30 @@ async def runtime_result(
     except Exception as e:
         logger.opt(exception=True).error(f"后端日志：写入 invocation 终态失败 id={invocation_id}: {e}")
         raise _http_error(500, "写入结果失败，请稍后重试", e)
+
+
+@router.post("/runtime/boss/visual-diagnose")
+async def runtime_boss_visual_diagnose(
+    body: BossVisualRequestBody, device: Dict = Depends(_require_device)
+):
+    """复用配对设备身份诊断；新请求按实际用量×20，旧费率和回执保持冻结。"""
+    from fastapi.responses import JSONResponse
+
+    tenant_id, user_id = device["tenant_id"], device["user_id"]
+    tenant, user = await asyncio.gather(
+        asyncio.to_thread(TenantDB.get_by_id, tenant_id),
+        asyncio.to_thread(UserDB.get_by_id, user_id),
+    )
+    if not tenant or tenant.get("status") != "active":
+        raise _http_error(403, "设备租户不存在或已停用")
+    if (not user or user.get("tenant_id") != tenant_id
+            or user.get("status") != "active"):
+        raise _http_error(403, "设备用户不存在、已停用或不属于当前租户")
+    caller = RuntimeVisualCaller(tenant_id=tenant_id, device_id=str(device["id"]), user_id=user_id)
+    result = await diagnose_visual(body, caller)
+    if result["state"] in {"reserved", "dispatched"}:
+        return JSONResponse(result, status_code=202, headers={"Retry-After": "2"})
+    return result
 
 
 @router.post("/runtime/resume/evaluate")

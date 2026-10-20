@@ -2,6 +2,8 @@
 
 ## 开发进度
 
+最新纠正授权（2026-10-20）：复用Runtime配对的服务器和设备身份，删除手工额外token要求；更新设计/计划，独立TEST/CR后提交推送并交付Runtime0.0.14+BOSS0.3.12，不部署。旧0.0.13包的视觉配置要求是缺陷，不作为本轮可接受前置；详见23。
+
 最新交付授权（2026-10-20）：用户要求提交代码并打包Runtime供同事安装测试，目标agent2；按项目规则提交后推送当前upstream，不部署服务器。交付Runtime UI0.0.13+BOSS0.3.11验收包，保留原验收产品身份/历史信任根，不将此前10/19不提交说明当作本轮限制；本轮仍不执行新的BOSS外发。
 
 本轮收尾（2026-10-19）：用户明确本轮不发消息、先不标记不合适，send-to/send-current/reject-current的新增真实故障验收按其选择延期，不继续请求本轮外发授权。霍新附件已接收1/预览1/关闭，权限已消费；保持现状，不新增BOSS操作、视觉调用、提交、推送或部署。
@@ -26,6 +28,7 @@
 
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
+| 配对身份复用修正 | 设备视觉API、可信Host自动接线、无手工token验收和重打包 | ✅ 完成（2026-10-20） | 第23节；独立900/234/19/17、CR与实际包通过；agent2未部署 |
 | 同事测试包构建 | 同步master、修发行资产/配置透传、增版签名及静态验包 | ✅ 完成（2026-10-20） | 第22节；独立TEST/CR通过，随本次提交交付；agent2未部署、端到端待同事验收 |
 | 霍附件故障真机验收 | 新授权一条接收/预览/关闭，原身份不变 | ✅ 完成（2026-10-19） | 21.11 ctx绑定复用、独立145及CR、原场景仅霍接收1/预览1/关闭通过；消息未发 |
 | 关闭详情鼠标补齐 | 自属唯一关闭×与原业务Escape兼容 | ✅ 完成（2026-10-19） | 新18+关联87、build/typecheck、独立CR及21.6完整故障真机通过 |
@@ -820,3 +823,40 @@ Supervisor仅2个env透传修正独立17/17、0跳过及CR通过，真实spawn�
 | runtime-0.0.13.roots.json | 7a7c991e75fa7be7582f9b93d680e21a2ef346764a0b9d6e49c327a0f44cb18a |
 
 交付顺序：退出旧Runtime托盘→原用户/目录安装0.0.13→显式导入0.3.11→核版本/启用及agent2在线；视觉需管理员另配API/ClientBinding两env，并完全退出再启动以继承配置。随包先读我、版本信息、公开信任公钥、静态验证报告及校验文件，不含候选人资料/实验截图/模型key/配对或API令牌。完整源码提交及推送后才生成交付ZIP，版本信息以该次真实HEAD登记，不拿合并基线64c527ff冒充实现提交。
+
+## 23. Runtime配对身份复用纠正（2026-10-20）
+
+用户明确授权修正额外token设计，独立TEST/CR后提交推送并重打包，不部署。验收目标是Runtime安装/配对后无需额外URL或ClientBinding配置，CLI自主恢复调用同一后台，后台可信设备归属确定租户/用户并20倍结算。旧0.0.13/0.3.11包保持不可变，作为存在该缺陷的历史交付；新交付升级至UI0.0.14/Host0.2.21/BOSS0.3.12，Core0.2.19不变。
+
+| 步骤 | 内容 | 状态 | 验证/边界 |
+|---|---|---|---|
+| 设计及共同检查点 | 更新原设计、契约2.2及Runtime/Desktop两计划 | ✅ 完成（2026-10-20） | 主控负责本地接线/版本；backend角色负责设备API/账务；不改配对/H1/H3 |
+| 设备鉴权与账务 | 新设备视觉路由复用服务、设备主体隔离、历史兼容 | ✅ 完成（2026-10-20） | 无自动ClientBinding/额外token/schema变更；开发193、独立234及CR |
+| 本地接线 | 从配对身份注入BOSS，新设备URL，移除父env透传/手填提示 | ✅ 完成（2026-10-20） | 独立BOSS900/Host19/Supervisor17，停机重配生命周期CR通过 |
+| 独立验证 | 实际进程及API账务组合、鉴权撤销/隔离/污染/未知回执 | ✅ 完成（2026-10-20） | 实际组合3项含234，0失败/跳过，独立CR无阻断；非agent2实连 |
+| 发行构建 | 新版本/签名信任/Host/安装器静态验包及交付准备 | ✅ 完成（2026-10-20） | 新实际安装器/插件及7根/旧库存/MCP全部通过；随本次提交交付，不部署 |
+
+兼容方案：保留原`/api/client/v1/boss/visual-diagnose`及旧ClientBinding回执；新设备入口为`/api/local-tools/runtime/boss/visual-diagnose`且body/响应沿用视觉api_version1/2。Host给受信BOSS内存env `AIDWORK_RUNTIME_SERVER/DEVICE_TOKEN`，值只来自当前配对配置/DPAPI；旧AID_BOSS_SERVER_URL/TOKEN完全不影响新链。新BOSS缺上下文只提示使用已配对Runtime/升级匹配版本，不能要求手工token。旧插件不消费新env，升级需导入新插件，不静默把设备token送到client接口。
+
+计费/隔离：沿用同一个BossVisualUsageDB状态机、request_id/摘要与20倍/历史50倍冻结；设备caller须以独立命名空间主体验证取回/派发/结算。设备与user/tenant来自可信认证，不能接纳请求体或模型自报；余额/租户有效性检查沿既有原则，未知usage/模型状态不得新ID重调。
+
+验收不止env断言：实际受管Host从隔离配对配置/DPAPI启动BOSS进程，调用本地隔离FastAPI设备入口及实际账务状态机，仅模型/外部边界mock；记录receipt、取回同ID不重扣、跨设备/租户/撤销拒绝。测试/审查不访问真实BOSS、不消耗此前外发授权，不实调GLM，不修改部署环境。
+
+本地自测：BOSS/Host主构建与Desktop TypeScript编译通过；BOSS视觉client/本地恢复相关39、Supervisor17、实际Host环境3（无额外env与故意污染两组合）通过且0跳过。独立TS CR确认stop排空/关闭Provider后新start重新读取配对身份，无新增renderer/IPC配置入口；完整设备API及实际进程组合链由独立TEST继续。
+
+独立最终验证：BOSS900/900、Host配对/DPAPI/环境19/19、Supervisor17/17、后台相关234/234，0失败/0跳过。后台234包含实际Host配对→受管子进程生产视觉client→loopback FastAPI原设备鉴权SQL→真实隔离PostgreSQL BossVisualUsageDB的3项组合（v1/v2与unknown），新设备API23及PG9等。只替换模型、租户用户目录及空队列边界，未override设备鉴权/核心账务；新预约×20、同ID重复/取回仅一次结算0.20、跨设备403/伪token401/伪主体422/换user403/撤销401覆盖。unknown首502、同ID再请求/取回409，模型仅一次、无usage不扣费；不把未知当失败重发。
+
+首次独立测试中一条新增测试把detail.code错断为error，另PG父fixture试默认库而skip；修正测试断言并显式将DATABASE_URL/BOSS_VISUAL_TEST_DATABASE_URL限定loopback隔离库后原范围234全通过。保留初始和final日志，不称首轮全绿。开发初始API fixture的同类跳过亦已显式隔离修正，最终193/193；无默认/线上库写入。源码独立CR无P0/P1/P2，读取实际组合fixture证实未用mock掩盖Host/API/账务接线。
+
+已生成新BOSS0.3.12 Ed25519验收插件，7根保留全部6历史根且新root仅BOSS；实际3623必需文件、24工具与新身份接线编译字节匹配。临时PluginStore旧0.3.11升级新0.3.12在启用/禁用两组合保留ID/状态、同包幂等与拒绝降级通过，固定Node22.23.3 ABI127搬迁version/MCP initialize/tools/list通过（0 tools/call、0浏览器）。Host0.2.21由本次源码fresh npm pack；首条npm --prefix pack未找到根package，改正确cwd重跑成功，失败日志保留，非代码缺陷。
+
+最终安装器及独立静态验包RUNTIME_VERIFY_PASS：UI0.0.14、Host0.2.21、Core/报告0.2.19、固定Node22.23.3 ABI127 x64，3695资源。实际ASAR Supervisor与独测编译字节相等且不再透传旧BOSS env；实际包内Host与独测字节相等、从配对配置/loadDeviceToken唯一自动注入BOSS；7根与登记快照一致，由包内Core验新插件通过。独立脚本首轮Windows ASAR路径写法报错，按API改用平台路径后同一包通过，保留失败日志，无产品代码/包变化。
+
+| 新发行文件 | SHA256 |
+|---|---|
+| AID-Work-Runtime-0.0.14-win-x64-acceptance-unsigned.exe（126314771字节） | 363f8c7464180104ab7196451f673b0645e3e3b1cf0472c5004311a951da5e56 |
+| boss-0.3.12-dev.aidplugin.zip（交付名boss-0.3.12.aidplugin.zip） | e9908c984187cd2471248fcac18023f342914379ed15b37aa9cd75e196c93fe2 |
+| 新Host0.2.21 tgz | 259710c1ad43b60d3159bcb65dfb326b28b27ac04598c42274a7a12621d3438e |
+| runtime-0.0.14.roots.json | 9de21620439e40090ae9d1365daae3dad3c6af778d61eeb5fd7a31138e71c83f |
+
+源码及文档提交后立即推送已确认upstream，随后生成独立不可变新ZIP/版本信息/安装说明/公开验证报告及全部SHA256（sourceCommit为本次实际提交，非5fbdc1e8基线），旧交付不覆盖。新说明取消所有用户额外URL/token/环境配置步骤：退出旧托盘、原用户/目录安装0.0.14、手动导入0.3.12、沿用原配对或首次配对即可；后台配套路由需由维护方按单独部署授权发布，本轮无任何部署/服务器配置操作，也没有同事端安装或agent2实连。源代码验证与真实服务验收分别记录；消息/不合适及其他旧待验场景不因本轮身份修正自动算通过。

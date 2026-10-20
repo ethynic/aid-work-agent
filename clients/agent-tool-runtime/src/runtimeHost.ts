@@ -229,11 +229,9 @@ export class LegacyExecution implements HostAdapter {
     for (const key of ['AID_WECOM_SERVER_URL', 'AID_WECOM_SERVER_TOKEN']) {
       if (process.env[key] !== undefined) wecomEnv[key] = process.env[key]!
     }
-    const bossEnv: Record<string, string> = {}
-    for (const key of ['AID_BOSS_SERVER_URL', 'AID_BOSS_SERVER_TOKEN']) {
-      if (process.env[key] !== undefined) bossEnv[key] = process.env[key]!
-    }
-    // Each Provider gets its own approved credentials, never the Host/device environment.
+    // The trusted BOSS process uses this pairing, never independently configured credentials.
+    const bossEnv = { AIDWORK_RUNTIME_SERVER: server, AIDWORK_RUNTIME_DEVICE_TOKEN: token }
+    // Only BOSS receives the paired API context; other Providers never inherit it.
     const providers = new ProviderSet(entries, { nodeExecutable: this.nodeExecutable, baseEnv: providerEnvironment(),
       ...(this.supervision.enabled ? { prepareLaunch: (entry: string) => this.supervision.prepareLaunch(entry) } : {}),
       providerEnv: { weixin: { AIDWORK_WEIXIN_BRIDGE_KEY: bridgeKey }, wecom: wecomEnv, 'boss-recruiting': bossEnv } })

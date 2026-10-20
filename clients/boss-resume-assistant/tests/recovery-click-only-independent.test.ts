@@ -14,7 +14,7 @@ type Dict = Record<string, unknown>
 const id = '11111111-1111-4111-8111-111111111111'
 const ref = '22222222-2222-4222-8222-222222222222'
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9gAAAABJRU5ErkJggg==', 'base64')
-const env = { AID_BOSS_SERVER_URL: 'https://test.invalid', AID_BOSS_SERVER_TOKEN: 'test-only' }
+const env = { AIDWORK_RUNTIME_SERVER: 'https://test.invalid', AIDWORK_RUNTIME_DEVICE_TOKEN: 'test-only' }
 const context: VisualContext = { purpose: 'diagnose', available_actions: ['dismiss_click', 'press_escape'],
   operation: { name: 'boss_filter', result_kind: 'page_state', goal: '筛选', expected: '筛选按钮数字2' },
   execution: { stage: 'postcheck', input_status: 'attempted', attempts_used: 2, ordinary_retries_used: 1 },

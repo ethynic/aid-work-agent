@@ -412,10 +412,13 @@ class BossVisualUsageDB:
     def reserve(
         tenant_id: str, binding_id: str, request_id: str, input_digest: str,
         provider: str, model: str, price_snapshot: dict[str, Any],
+        *, caller_detail: Optional[dict[str, str]] = None,
     ) -> dict[str, Any]:
         """新请求余额准入并预约；并发同 ID 回读冻结行，不覆盖模型/价格。"""
         detail = {"input_digest": input_digest, "price_snapshot": price_snapshot,
                   "billing_factor": BOSS_VISUAL_BILLING_FACTOR}
+        if caller_detail is not None:
+            detail["caller"] = caller_detail
         with get_db_connection() as conn:
             cursor = conn.cursor()
             row = BossVisualUsageDB._read(cursor, tenant_id, request_id)
@@ -438,6 +441,8 @@ class BossVisualUsageDB:
                 else:
                     row = BossVisualUsageDB._read(cursor, tenant_id, request_id)
             BossVisualUsageDB._check_binding(row, binding_id)
+            if caller_detail is not None and row["detail"].get("caller") != caller_detail:
+                raise PermissionError("视觉请求不属于当前设备用户")
             if row["detail"].get("input_digest") != input_digest:
                 raise BossVisualConflictError("视觉请求 ID 的输入摘要不一致")
             conn.commit()

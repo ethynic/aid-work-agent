@@ -240,7 +240,7 @@ async function batchOperationScenario(kind: 'first_blocked' | 'second_blocked' |
   } }
   try {
     const result = await withLocalRecovery(counted, { inspect, dismiss, env: {
-      AID_BOSS_SERVER_URL: 'https://offline.invalid', AID_BOSS_SERVER_TOKEN: 'test-only' } }).execute(
+      AIDWORK_RUNTIME_SERVER: 'https://offline.invalid', AIDWORK_RUNTIME_DEVICE_TOKEN: 'test-only' } }).execute(
       { limit: kind === 'first_blocked' ? 1 : 2 }, { signal: new AbortController().signal, progress: () => {} })
     return { result, reads, readNames, rawCalls, repairs, paidObservations, escapes, artifact }
   } finally { ResumeReader.prototype.readResume = originalRead }

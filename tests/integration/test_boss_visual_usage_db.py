@@ -145,3 +145,42 @@ def test_reserved_factor_remains_20_after_another_process_changes_policy(visual_
     result = dao.settle("tenant", "binding", "frozen", {}, Decimal("0.01"), Decimal("0.20"), {})
     assert result["receipt"]["factor"] == 20
     assert result["receipt"]["credit_cost"] == "0.20"
+
+
+@pytest.mark.parametrize("status", ["reserved", "dispatched", "completed", "model_unknown"])
+def test_runtime_device_namespace_preserves_audit_and_rejects_other_callers_in_every_state(visual_pg, status):
+    """同租户另一个device/旧client不能续接、派发、置未知或结算这笔实际账务。"""
+    dao, connection = visual_pg
+    owner = "runtime-device:11111111-1111-4111-8111-111111111111"
+    caller = {"kind": "runtime_device", "device_id": owner.split(":", 1)[1], "user_id": "user-a"}
+    dao.reserve("tenant", owner, "paired-request", "digest", "zhipu", "model", {}, caller_detail=caller)
+    if status != "reserved":
+        assert dao.dispatch("tenant", owner, "paired-request")
+    if status == "completed":
+        dao.settle("tenant", owner, "paired-request", {}, Decimal("0.01"), Decimal("0.20"), {})
+    elif status == "model_unknown":
+        dao.mark_unknown("tenant", owner, "paired-request")
+    original = dao.get("tenant", "paired-request")
+    assert original["detail"]["caller"] == caller
+    assert original["detail"]["billing_factor"] == 20
+
+    for outsider in ["runtime-device:22222222-2222-4222-8222-222222222222", "legacy-client-binding"]:
+        with pytest.raises(PermissionError):
+            dao.reserve("tenant", outsider, "paired-request", "digest", "zhipu", "model", {})
+        with pytest.raises(PermissionError):
+            dao.dispatch("tenant", outsider, "paired-request")
+        with pytest.raises(PermissionError):
+            dao.mark_unknown("tenant", outsider, "paired-request")
+        with pytest.raises(PermissionError):
+            dao.settle("tenant", outsider, "paired-request", {}, Decimal("0.01"), Decimal("0.20"), {})
+    with pytest.raises(PermissionError):
+        dao.reserve("tenant", owner, "paired-request", "digest", "zhipu", "model", {},
+                    caller_detail={**caller, "user_id": "user-b"})
+    assert dao.get("another-tenant", "paired-request") is None
+    assert dao.get("tenant", "paired-request") == original
+    with connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT credit_balance FROM tenants WHERE tenant_id='tenant'")
+            assert cursor.fetchone()["credit_balance"] == (Decimal("0.80") if status == "completed" else Decimal("1.00"))
+            cursor.execute("SELECT COUNT(*) AS n FROM client_usage_logs")
+            assert cursor.fetchone()["n"] == 1

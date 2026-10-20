@@ -41,16 +41,17 @@ export async function visualDiagnose(opts: VisualDiagnoseOptions, deps: VisualDi
   if ((opts.contextFile || opts.context) && (version !== 2 || opts.goal !== undefined)) fail('上下文使用 v2，且与 --goal 互斥')
   if (version === 2 && !opts.retrieveOnly && !(opts.contextFile || opts.context)) fail('v2 新诊断需要上下文')
   const env = deps.env ?? process.env
-  const server = env.AID_BOSS_SERVER_URL?.trim()
-  const token = env.AID_BOSS_SERVER_TOKEN?.trim()
-  if (!server || !token) fail('请配置 AID_BOSS_SERVER_URL 与 AID_BOSS_SERVER_TOKEN（Agent 后台凭据）')
+  // Injected by the paired Runtime Host, never a separate user-managed API credential.
+  const server = env.AIDWORK_RUNTIME_SERVER?.trim()
+  const token = env.AIDWORK_RUNTIME_DEVICE_TOKEN?.trim()
+  if (!server || !token) fail('缺少Runtime配对上下文，请通过已配对的Runtime启动BOSS工具，并确认Runtime与BOSS插件版本匹配')
   let url: URL
-  try { url = new URL(server!) } catch { return fail('AID_BOSS_SERVER_URL 不是有效 URL') }
+  try { url = new URL(server!) } catch { return fail('Runtime配对服务器地址无效') }
   const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
   if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) || url.username || url.password || url.search || url.hash) {
     fail('后台 URL 需 HTTPS（本机允许 HTTP），不可包含凭据、查询参数或片段')
   }
-  url.pathname = `${url.pathname.replace(/\/$/, '')}/api/client/v1/boss/visual-diagnose`
+  url.pathname = `${url.pathname.replace(/\/$/, '')}/api/local-tools/runtime/boss/visual-diagnose`
   const body: Record<string, unknown> = { api_version: version, request_id: opts.requestId }
   if (opts.retrieveOnly) body.retrieve_only = true
   else {

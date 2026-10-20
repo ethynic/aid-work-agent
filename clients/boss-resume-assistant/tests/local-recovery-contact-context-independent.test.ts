@@ -12,7 +12,7 @@ import type { DomSnapshot } from '../src/main/boss/domSnapshot.js'
 
 type Dict = Record<string, unknown>
 const target = '11111111-1111-4111-8111-111111111111', originalRef = 'a'.repeat(64), otherRef = 'b'.repeat(64)
-const env = { AID_BOSS_SERVER_URL: 'https://offline.invalid', AID_BOSS_SERVER_TOKEN: 'test-only' }
+const env = { AIDWORK_RUNTIME_SERVER: 'https://offline.invalid', AIDWORK_RUNTIME_DEVICE_TOKEN: 'test-only' }
 const context = (ref?: unknown): OpContext => ({ signal: new AbortController().signal, progress: () => {},
   ...(ref === undefined ? {} : { expectedContactRef: ref as string }) })
 function source(name: string, factsRef?: unknown): OperationResult {

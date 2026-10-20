@@ -9,6 +9,7 @@ import io
 import json
 import time
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
@@ -185,6 +186,23 @@ class BossVisualRequestV2(_StrictModel):
 
 
 BossVisualRequestBody = Annotated[BossVisualRequest | BossVisualRequestV2, Field(discriminator="api_version")]
+
+
+@dataclass(frozen=True)
+class RuntimeVisualCaller:
+    """设备鉴权产生的计费主体，不是 ClientBinding，也不包含任何凭据。"""
+
+    tenant_id: str
+    device_id: str
+    user_id: str
+
+    @property
+    def binding_id(self) -> str:
+        return f"runtime-device:{self.device_id}"
+
+    @property
+    def audit_detail(self) -> dict[str, str]:
+        return {"kind": "runtime_device", "device_id": self.device_id, "user_id": self.user_id}
 
 
 class VisualPoint(_StrictModel):
@@ -397,6 +415,8 @@ def _existing(row: dict, binding: Any, digest: str | None = None) -> dict | None
     if row["binding_id"] != binding.binding_id:
         raise _error(403, "BINDING_MISMATCH")
     detail = row["detail"]
+    if isinstance(binding, RuntimeVisualCaller) and detail.get("caller") != binding.audit_detail:
+        raise _error(403, "BINDING_MISMATCH")
     if digest is not None and detail["input_digest"] != digest:
         raise _error(409, "REQUEST_ID_CONFLICT")
     if row["status"] == "completed":
@@ -446,9 +466,10 @@ async def diagnose_visual(req: BossVisualRequest | BossVisualRequestV2, binding:
             raise _error(503, "VISUAL_PRICE_NOT_CONFIGURED") from None
         price = json.loads(json.dumps(price, default=str))
         try:
+            caller = {"caller_detail": binding.audit_detail} if isinstance(binding, RuntimeVisualCaller) else {}
             row = await asyncio.to_thread(
                 BossVisualUsageDB.reserve, binding.tenant_id, binding.binding_id,
-                request_id, digest, provider, model, price,
+                request_id, digest, provider, model, price, **caller,
             )
         except BossVisualInsufficientCreditError:
             raise _error(402, "NO_CREDIT") from None

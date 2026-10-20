@@ -77,7 +77,7 @@ const USAGE = `BOSS 招聘操作 CLI
   visual-diagnose --image <PNG路径> --context-file <JSON路径> --request-id <UUID> [--observation <截图PNG.json>] [--json]
                                  v2实验：操作上下文、可见后态核验与鼠标关闭建议；page采集时间采用文件mtime
   visual-diagnose --request-id <UUID> --retrieve-only [--api-version 1|2] [--json]   取回同一诊断回执，不重复推理
-                                 配置 AID_BOSS_SERVER_URL（后台根地址）与 AID_BOSS_SERVER_TOKEN；CLI 不含模型密钥
+                                 自动复用Runtime配对的服务器与设备身份，无需额外token；CLI 不含模型密钥
 
 Provider 命令：
   mcp --stdio                 启动标准本地 MCP server（stdout 只承载协议，供 Codex/WorkBuddy 等 Host 使用）

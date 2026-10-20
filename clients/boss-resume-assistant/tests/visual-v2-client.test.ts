@@ -10,7 +10,7 @@ import { validateCommandArgs } from '../src/cli/validate.js'
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9gAAAABJRU5ErkJggg==', 'base64')
 const requestId = '0c5a306b-8659-4000-8000-123456789012'
-const env = { AID_BOSS_SERVER_URL: 'http://127.0.0.1:9999', AID_BOSS_SERVER_TOKEN: 'private-test-token' }
+const env = { AIDWORK_RUNTIME_SERVER: 'http://127.0.0.1:9999', AIDWORK_RUNTIME_DEVICE_TOKEN: 'private-test-token' }
 const context = { purpose: 'verify', operation: { name: 'open-detail', goal: '打开王欣详情', target_label: '王欣', expected: '简历区域及右侧经历概览和打招呼可见' },
   execution: { stage: 'postcheck', input_status: 'attempted', attempts_used: 2, ordinary_retries_used: 1 }, error: null,
   verification: { status: 'inconclusive', evidence: ['姓名在canvas，不能作为DOM靶点'] }, available_actions: ['press_escape'] }

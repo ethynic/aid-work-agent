@@ -6,7 +6,7 @@ import { okResult, failResult, type BossOperation, type OpContext, type Operatio
 import type { VisualInspectArgs } from '../src/main/boss/visualRecovery.js'
 
 const target = '11111111-1111-4111-8111-111111111111'
-const env = { AID_BOSS_SERVER_URL: 'https://backend.invalid', AID_BOSS_SERVER_TOKEN: 'fake-test-only' }
+const env = { AIDWORK_RUNTIME_SERVER: 'https://backend.invalid', AIDWORK_RUNTIME_DEVICE_TOKEN: 'fake-test-only' }
 const ctx = (): OpContext => ({ signal: new AbortController().signal, progress: () => {} })
 type Dict = Record<string, unknown>
 function original(name = 'boss_filter'): OperationResult {

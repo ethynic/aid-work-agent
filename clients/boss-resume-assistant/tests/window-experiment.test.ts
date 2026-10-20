@@ -89,7 +89,7 @@ test('a fresh window observation permits one constrained click attempt without r
 
 test('window diagnosis sends exact image and window coordinate space without local HWND or screen position', async () => {
   const item = await fixture()
-  const env = { AID_BOSS_SERVER_URL: 'http://127.0.0.1:9999', AID_BOSS_SERVER_TOKEN: 'test-token' }
+  const env = { AIDWORK_RUNTIME_SERVER: 'http://127.0.0.1:9999', AIDWORK_RUNTIME_DEVICE_TOKEN: 'test-token' }
   try {
     let calls = 0
     await visualDiagnose({ requestId, image: item.output, observation: item.file }, { env, fetch: (async (_url, init) => {

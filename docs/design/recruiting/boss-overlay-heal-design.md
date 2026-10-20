@@ -2,7 +2,18 @@
 
 ## V. 故障恢复仅鼠标关闭（2026-10-18，用户明确纠正）
 
-2026-10-20交付接线补齐：原Desktop→Host受信环境白名单须显式保留既有AID_BOSS_SERVER_URL/TOKEN，Host再按已定义规则只给BOSS Provider；不得让renderer/IPC提供令牌、广泛继承环境或借用设备token。仅修既有环境契约遗漏，不新增API/wire/身份格式。发行包必须包含PS驱动引用的BossPhysicalInput.cs及BossWindowExperiment.cs并由required_files签名覆盖。Runtime UI0.0.13/BOSS0.3.11同事验收包及后台前置见计划22。
+2026-10-20身份接线纠正（优先于下方旧环境配置方案）：用户明确拒绝第二套ClientBinding令牌。Runtime配对已经确定服务器/设备/租户/用户，视觉API必须直接复用，不要求用户或管理员配置任何额外URL/token。0.0.13/0.3.11中手工AID_BOSS_SERVER_URL/TOKEN方案是已知交付缺陷，由计划23替代；旧交付及历史实验记录不改写。
+
+### Runtime配对身份复用（2026-10-20）
+
+- 新增设备鉴权入口`POST /api/local-tools/runtime/boss/visual-diagnose`，沿用`_require_device`与现有视觉v1/v2请求/响应；复用视觉服务、实际usage×20和幂等台账，不新增用户凭据/激活/配对流程。服务器可信设备记录确定tenant/user/device，不从请求体接纳这些字段。
+- Host从当前已解密配对配置取server/token，只向BOSS子进程内存环境注入`AIDWORK_RUNTIME_SERVER`与`AIDWORK_RUNTIME_DEVICE_TOKEN`；这两个字段是内部启动接线，不是用户配置项。Desktop不透传旧BOSS环境变量，Host不从父进程读取/覆盖配对身份，其他Provider/renderer/IPC/日志/磁盘不获得该token。保持现有DPAPI存储与停止/重配生命周期，不建本地代理、token兑换或第二个恢复循环。
+- CLI诊断、取回和本地恢复均调用新设备入口。缺少配对上下文时明确提示通过已配对Runtime启动或升级匹配版本，不提示手填token；不得回退到旧ClientBinding接口。截图、恢复点击、fresh后态及原操作续做仍由CLI负责，服务器只诊断/计费。
+- 台账用确定性的命名空间设备主体区分旧client binding，按可信device/user归属隔离取回、dispatch及结算。沿用原request_id/输入摘要/20倍冻结规则，旧ClientBinding入口和历史20/50倍记录保持兼容；不为设备自动创建ClientBinding。无必要则不改schema。
+- 发行Runtime UI0.0.14/Host0.2.21/BOSS0.3.12，Core0.2.19不变。新BOSS不消费旧两环境变量；旧插件需手动升级，新Runtime不把设备token交给旧client接口。安装配对后自动具备调用上下文，服务端配套部署仍是开发交付职责，本轮不部署。
+- 唯一写入/共同检查点见共同契约2.2及两端计划登记；独立测试必须覆盖无手工配置的实际Host→BOSS进程→设备API→账务→取回组合链（仅模型最外层mock），设备撤销/跨设备跨租户/环境污染/未知结果不重放，不以纯env断言代替完整接线验证。
+
+发行包继续必须包含PS驱动引用的BossPhysicalInput.cs及BossWindowExperiment.cs并由required_files签名覆盖。旧0.0.13发行摘要及限制见计划22，新包结果见23。
 
 2026-10-19实调补齐：模型多出未声明的空备注字段时，不能丢掉已完整且合法的页面判断和关闭建议。仅v2模型响应解析按既有assessment字段白名单取值；未知顶层字段忽略且不返回客户端，不改变提示词schema、HTTP请求严格校验、已定义字段/动作/坐标/能力验证。缺字段、非法枚举仍失败，非法动作仍只丢动作；原ID回执与实际usage×20账务不改，不新增自动模型重试。关闭详情反例及原场景复验见计划21.5。
 

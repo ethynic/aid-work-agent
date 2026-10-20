@@ -44,6 +44,31 @@ def test_reservation_freezes_price_and_new_factor_without_debit(connection):
     conn.commit.assert_called_once()
 
 
+def test_runtime_device_caller_audit_is_frozen_without_creating_a_client_binding(connection):
+    conn, cursor = connection
+    caller = {"kind": "runtime_device", "device_id": "device", "user_id": "user"}
+    row = _row(binding_id="runtime-device:device")
+    detail = json.loads(row["detail"])
+    detail["caller"] = caller
+    row["detail"] = json.dumps(detail)
+    cursor.fetchone.side_effect = [None, {"credit_balance": Decimal("1")}, row]
+    actual = db.BossVisualUsageDB.reserve("tenant", "runtime-device:device", "req", "digest", "zhipu", "model", {}, caller_detail=caller)
+    assert actual["detail"]["caller"] == caller
+    inserted = json.loads(_writes(cursor, "INSERT")[0].args[1][-1])
+    assert inserted["caller"] == caller
+    assert not _writes(cursor, "client_bindings")
+    conn.commit.assert_called_once()
+
+
+def test_runtime_device_reservation_cannot_resume_a_different_user_or_missing_audit(connection):
+    conn, cursor = connection
+    cursor.fetchone.return_value = _row(binding_id="runtime-device:device")
+    with pytest.raises(PermissionError):
+        db.BossVisualUsageDB.reserve("tenant", "runtime-device:device", "req", "digest", "zhipu", "model", {},
+            caller_detail={"kind": "runtime_device", "device_id": "device", "user_id": "user"})
+    conn.commit.assert_not_called()
+
+
 def test_concurrent_reservation_reads_winner_instead_of_replacing_price(connection):
     _, cursor = connection
     cursor.fetchone.side_effect = [None, {"credit_balance": Decimal("1")}, None, _row()]
