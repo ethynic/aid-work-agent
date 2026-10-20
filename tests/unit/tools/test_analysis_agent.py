@@ -806,11 +806,11 @@ class TestSharedTenantScope:
             subagent_id=subagent_id,
         )
 
-    def test_no_tenant_returns_empty_scope(self):
-        """无 tenant_id → 空 SQL、空参数（无租户过滤）"""
+    def test_no_tenant_cannot_form_unfiltered_runtime_scope(self):
+        """无可信租户时不得构造全表运行时查询。"""
         ag = self._make_agent(tenant_id=None, subagent_id="travel-quote")
         sql, params = ag._build_tenant_scope()
-        assert sql == ""
+        assert sql == "AND FALSE"
         assert params == []
 
     def test_tenant_without_subagent_degenerates_to_own_tenant(self):
@@ -929,17 +929,15 @@ class TestMovedTableFallback:
         params = mock_cm.__enter__().cursor().execute.call_args[0][1]
         assert list(params) == [["tenant_t1"], "tenant_t1", "[数据表] %"]
 
-    def test_list_no_tenant_omits_moved_branch(self):
-        """无租户上下文（platform_admin 全局视图）：不拼兜底分支"""
-        agent = AnalysisAgent(
-            llm_gateway=MagicMock(), analyzer=_loaded_analyzer(),
-            analysis_id="t", tenant_id=None, subagent_id=None,
+    def test_missing_tenant_never_queries_shared_tables(self):
+        from src.tools.data_analysis.analysis_agent import (
+            query_data_tables_list, fetch_table_metadata_from_db, filter_available_table_ids,
         )
-        mock_cm = _moved_table_db_mock(list_rows=[])
-        with patch("src.db.database.get_db_connection", return_value=mock_cm):
-            agent._query_data_tables_list("")
-        sql = " ".join(mock_cm.__enter__().cursor().execute.call_args[0][0].split())
-        assert "title ILIKE" not in sql
+        with patch("src.db.database.get_db_connection") as db:
+            assert query_data_tables_list(tenant_id=None, agent_id="main") == []
+            assert fetch_table_metadata_from_db("101", None, None, "main") is None
+            assert filter_available_table_ids(["101"], None, None, "main") == set()
+        db.assert_not_called()
 
     def test_load_moved_table_requires_table_metadata(self):
         """加载：移动分支命中的文档必须带 table_name/columns，普通同名文档排除"""
@@ -1274,3 +1272,247 @@ class TestPromptCostPrinciples:
     def test_system_prompt_has_describe_discipline(self):
         from src.tools.data_analysis.analysis_tools_schema import ANALYSIS_SYSTEM_PROMPT
         assert "禁止冗余 describe" in ANALYSIS_SYSTEM_PROMPT
+
+
+# ============================================================
+# Phase 2（数据表按智能体配置）：名单范围在列表/单表/批量回查/检索统一生效
+# ============================================================
+
+_AGENT_SCOPE_SQL_MARK = "NOT (metadata::jsonb ? 'allowed_agent_ids')"
+# 带共享来源的调用会先执行 load_shared_ranges 的授权查询，打桩为空让 documents
+# 查询成为第一条 executed 记录
+_PATCH_SHARED_RANGES = patch("src.knowledge.retriever.tenant_range.load_shared_ranges", return_value=[])
+
+
+class _FakeResultRows:
+    """fetchall 返回 dict 行的最小游标替身（捕获 SQL 与参数）"""
+
+    def __init__(self, rows=None):
+        self.rows = rows or []
+        self.executed = []
+
+    def execute(self, sql, params=None):
+        self.executed.append((" ".join(str(sql).split()), list(params or [])))
+
+    def fetchall(self):
+        return self.rows
+
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
+
+class _FakeConn:
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def cursor(self, *args, **kwargs):
+        return self._cursor
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+class TestAgentScopeSqlShape:
+    """列表/单表回查 SQL：名单条件 AND 在完整 `(范围 OR 移动兜底)` 括号外侧，
+    参数与占位符成对追加（tenant → moved → scope）。"""
+
+    def test_query_data_tables_list_appends_scope_condition(self):
+        from src.tools.data_analysis.analysis_agent import query_data_tables_list
+
+        cur = _FakeResultRows([])
+        with patch("src.db.database.get_db_connection", return_value=_FakeConn(cur)), \
+                _PATCH_SHARED_RANGES:
+            query_data_tables_list("", "t1", "sub-a", None, "sub-a")
+
+        sql, params = cur.executed[0]
+        # OR 范围整体括号包裹（移动兜底为最后分支），名单条件在整体括号外 AND
+        assert "AND tenant_id = ANY(%s) OR (tenant_id = %s AND title ILIKE %s))" in sql
+        assert "AND ((NOT (metadata::jsonb ? 'allowed_agent_ids')" in sql
+        assert _AGENT_SCOPE_SQL_MARK in sql
+        # 参数顺序：范围 + 移动兜底 + 名单片段（agent_id 命中 → 数组包含参数 + 租户绑定）
+        assert params[:3] == [["t1"], "t1", "[数据表] %"]
+        import json as _json
+        assert params[3] == _json.dumps(["sub-a"], ensure_ascii=False)
+        assert params[4] == "t1"
+
+    def test_query_data_tables_list_unknown_identity_shared_only_params(self):
+        """agent_id=None：名单片段仅共享语义（无包含参数）"""
+        from src.tools.data_analysis.analysis_agent import query_data_tables_list
+
+        cur = _FakeResultRows([])
+        with patch("src.db.database.get_db_connection", return_value=_FakeConn(cur)):
+            query_data_tables_list("", "t1", None, None, None)
+
+        sql, params = cur.executed[0]
+        assert "@>" not in sql
+        # 参数顺序：范围（单租户）+ 移动兜底；名单片段无参（仅共享语义）
+        assert params == ["t1", "t1", "[数据表] %"]
+
+    def test_fetch_table_metadata_appends_scope_condition(self):
+        from src.tools.data_analysis.analysis_agent import fetch_table_metadata_from_db
+
+        row = {
+            "id": 9078, "title": "[数据表] 订单", "summary": "s",
+            "metadata": {"table_name": "orders", "columns": [{"name": "a"}]},
+            "source_type": "data-analysis-metadata", "tenant_id": "t_src",
+        }
+        cur = _FakeResultRows([row])
+        with patch("src.db.database.get_db_connection", return_value=_FakeConn(cur)), \
+                _PATCH_SHARED_RANGES:
+            meta = fetch_table_metadata_from_db("9078", "t1", "sub-a", "sub-a")
+
+        assert meta is not None and meta["table_id"] == "9078"
+        sql, params = cur.executed[0]
+        assert _AGENT_SCOPE_SQL_MARK in sql
+        import json as _json
+        # 参数顺序：id + 范围 + 移动兜底 + 名单片段（数组包含 + 租户绑定）
+        assert params[0] == 9078
+        assert params[4] == _json.dumps(["sub-a"], ensure_ascii=False)
+        assert params[5] == "t1"
+
+    def test_fetch_table_metadata_carries_owner_tenant(self):
+        """服务端回查把文档来源租户作为 source.owner_tenant_id 内部字段带入，
+        供 DataAnalyzer 数据库分支做连接器归属校验"""
+        from src.tools.data_analysis.analysis_agent import fetch_table_metadata_from_db
+
+        row = {
+            "id": 9078, "title": "订单", "summary": "s",
+            "metadata": {"table_name": "orders", "columns": [{"name": "a"}],
+                         "connector_id": "c1"},
+            "source_type": "data-analysis-metadata", "tenant_id": "t_src",
+        }
+        cur = _FakeResultRows([row])
+        with patch("src.db.database.get_db_connection", return_value=_FakeConn(cur)):
+            meta = fetch_table_metadata_from_db("9078", "t1", None, "main")
+
+        assert meta["source"]["connector_id"] == "c1"
+        assert meta["source"]["owner_tenant_id"] == "t_src"
+
+    def test_filter_available_table_ids_single_batch_query(self):
+        """产物来源表可用性：去重一次查询，移动兜底分支含结构有效性"""
+        from src.tools.data_analysis.analysis_agent import filter_available_table_ids
+
+        cur = _FakeResultRows([{"id": 9078}, {"id": 9079}])
+        with patch("src.db.database.get_db_connection", return_value=_FakeConn(cur)):
+            available = filter_available_table_ids(
+                {"9078", "9078", "9079", "abc"}, "t1", None, "main"
+            )
+        assert available == {"9078", "9079"}
+        sql, params = cur.executed[0]
+        assert "id = ANY(%s)" in sql
+        assert "jsonb_typeof(metadata::jsonb->'columns') = 'array'" in sql  # 移动分支结构校验
+        assert _AGENT_SCOPE_SQL_MARK in sql
+        assert params[0] == [9078, 9079]
+
+    def test_filter_available_table_ids_no_tenant_returns_empty(self):
+        from src.tools.data_analysis.analysis_agent import filter_available_table_ids
+
+        with patch("src.db.database.get_db_connection") as mock_conn:
+            assert filter_available_table_ids({"9078"}, None, None, None) == set()
+        mock_conn.assert_not_called()
+
+    def test_query_data_tables_list_excludes_prefix_non_table_docs(self):
+        """移动兜底分支结构有效性（§18.6）：仅同名前缀的普通知识文档不纳入列表
+        （不影响 50 表阈值计数）；真实移动表与 source_type 命中的表照常返回"""
+        from src.tools.data_analysis.analysis_agent import query_data_tables_list
+
+        moved_table = {
+            "id": 9078, "title": "[数据表] 订单", "summary": "s",
+            "metadata": {"table_name": "orders", "columns": [{"name": "a"}]},
+            "source_type": "file",
+        }
+        prefix_plain_doc = {
+            "id": 9079, "title": "[数据表] 使用说明", "summary": "s",
+            "metadata": {"foo": "bar"},
+            "source_type": "file",
+        }
+        source_type_table = {
+            "id": 9080, "title": "库存", "summary": "s",
+            "metadata": {"table_name": "stock", "columns": [{"name": "b"}]},
+            "source_type": "data-analysis-metadata",
+        }
+        cur = _FakeResultRows([moved_table, prefix_plain_doc, source_type_table])
+        with patch("src.db.database.get_db_connection", return_value=_FakeConn(cur)), \
+                _PATCH_SHARED_RANGES:
+            tables = query_data_tables_list("", "t1", None, None, None)
+
+        assert [t["table_id"] for t in tables] == ["9078", "9080"]
+        # 列表 SELECT 需带 source_type 供 Python 结构判定
+        assert "source_type" in cur.executed[0][0]
+
+
+class TestAgentScopePlumbing:
+    """检索/加载链路的身份透传与顺序约束"""
+
+    def _make_agent(self, tenant_id="t1", subagent_id=None, agent_id="main"):
+        return AnalysisAgent(
+            llm_gateway=MagicMock(),
+            analyzer=_loaded_analyzer(),
+            analysis_id="t_scope",
+            tables_metadata=[],
+            tenant_id=tenant_id,
+            subagent_id=subagent_id,
+            agent_id=agent_id,
+        )
+
+    @pytest.mark.asyncio
+    async def test_search_passes_agent_id_to_retriever(self):
+        """search_data_tables 语义检索透传可信 agent_id（排名/LIMIT 前过滤在检索层）"""
+        ag = self._make_agent(tenant_id="t1", subagent_id=None, agent_id="main")
+        fake_retriever = MagicMock()
+        fake_retriever.retrieve = AsyncMock(return_value=[])
+        ag._retriever = fake_retriever
+
+        await ag._handle_search_data_tables("销售")
+        kwargs = fake_retriever.retrieve.await_args.kwargs
+        assert kwargs["agent_id"] == "main"
+        assert kwargs["source_type"] == "data-analysis-metadata"
+
+    @pytest.mark.asyncio
+    async def test_loaded_table_stays_usable_without_recheck(self):
+        """进行中变更：已在内存的表不撤回——重复 load_table 直接确认，不再回查名单"""
+        ag = self._make_agent()
+        ag._loaded_table_ids.add("tbl_x")
+        ag.tables_metadata = [{"table_id": "tbl_x", "table_name": "X", "columns": []}]
+        with patch.object(ag, "_fetch_single_table_metadata") as mock_fetch:
+            result = await ag._handle_load_table("tbl_x")
+        assert result["success"] is True
+        mock_fetch.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unavailable_table_rejects_before_lineage(self):
+        """顺序：回查在等价产物提示之前——不可用表的拒绝不携带产物信息"""
+        ag = self._make_agent()
+        ag._lineage_intercepted.clear()
+        with patch.object(ag, "_fetch_single_table_metadata", return_value=None):
+            result = await ag._handle_load_table("revoked")
+        assert result["success"] is False
+        assert "equivalent_outputs" not in result
+        assert "intercepted" not in result
+
+    def test_fetch_documents_metadata_scoped(self):
+        """批量 metadata 回查与 search 同一可见范围（租户/共享 + 名单），无租户不查询"""
+        ag = self._make_agent(tenant_id="t1", subagent_id=None, agent_id="main")
+        rows = [
+            {"id": 9078, "title": "订单", "summary": "s",
+             "metadata": {"table_name": "orders", "columns": []}},
+            {"id": 9079, "title": "库存", "summary": "s2",
+             "metadata": {"table_name": "stock", "columns": []}},
+        ]
+        cur = _FakeResultRows(rows)
+        with patch("src.db.database.get_db_connection", return_value=_FakeConn(cur)):
+            result = ag._fetch_documents_metadata([9078, 9079])
+        assert 9078 in result and 9079 in result
+        sql, params = cur.executed[0]
+        assert "id IN (%s,%s)" in sql
+        assert "AND (source_type = 'data-analysis-metadata'AND tenant_id = %s)" in sql
+        assert _AGENT_SCOPE_SQL_MARK in sql
+
+        # 无租户：不回查（不放大为全局视图）
+        ag_anon = self._make_agent(tenant_id=None)
+        with patch("src.db.database.get_db_connection") as mock_conn:
+            assert ag_anon._fetch_documents_metadata([9078]) == {}
+        mock_conn.assert_not_called()

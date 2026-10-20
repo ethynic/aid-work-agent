@@ -141,6 +141,12 @@ class KnowledgeBaseTool(BaseTool):
         context = current_tool_execution_context()
         tenant_id = context.tenant_id if context else None
         subagent_id = context.subagent_id if context else None
+        # 数据表名单执行身份：仅取自可信 ToolExecutionContext（subagent_id 为空映射
+        # main）；无上下文不传——名单片段内实现「身份未知仅共享」，不冒充 main
+        agent_id = None
+        if context:
+            from src.services.data_analysis.access_scope import MAIN_AGENT_ID
+            agent_id = context.subagent_id or MAIN_AGENT_ID
 
         # 栏目授权收口（收窄 / 拒绝）；未配置精细授权时行为与现状完全一致
         source_type, rejection = resolve_category_scope(tenant_id, subagent_id, source_type)
@@ -169,6 +175,7 @@ class KnowledgeBaseTool(BaseTool):
             results = await self.retriever.retrieve(
                 query=query, top_k=top_k, tenant_id=tenant_id,
                 source_type=source_type, shared_ranges=shared_ranges,
+                agent_id=agent_id,
             )
 
             # 提取文档标题

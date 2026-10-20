@@ -244,7 +244,12 @@ def test_service_exact_match_uses_stem_expr():
     assert result["success"] is True and result["count"] == 0
     sql = " ".join(mock_cursor.execute.call_args[0][0].split())
     assert "regexp_replace(d.title" in sql
-    assert "ILIKE" not in sql
+    # 数据表名单过滤的移动兜底 marker 固定使用「[数据表] %」前缀 ILIKE
+    # （正/负分支各一次）；文件名只做精确/去扩展名比对，不进 ILIKE
+    assert sql.count("d.title ILIKE %s") == 2
+    params = mock_cursor.execute.call_args[0][1]
+    assert "[数据表] %" in params
+    assert all("融合知识库" not in str(p) or p == "融合知识库" for p in params)
     params = mock_cursor.execute.call_args[0][1]
     assert params.count("融合知识库") >= 2
 
@@ -403,3 +408,32 @@ async def test_file_search_authorized_source_type_passthrough():
         await tool.execute(file_name="x", source_type="数据分析")
 
     assert svc_mock.search_documents_by_title.call_args.kwargs["source_type"] == "数据分析"
+
+
+async def test_file_search_passes_trusted_agent_id_to_service():
+    """文件名检索把可信名单身份透传 search_documents_by_title（无上下文不传）"""
+    from src.tools.context import ToolExecutionContext, tool_execution_scope
+
+    tool = KnowledgeFileSearchTool()
+    mock_cm = _auth_db_mock([{"source_type": "数据分析", "owner_tenant_id": None}])
+    ctx = ToolExecutionContext(tenant_id="tenant_test1", subagent_id="data-analysis")
+    with tool_execution_scope(ctx), \
+            patch("src.db.database.get_db_connection", return_value=mock_cm), \
+            patch("src.knowledge.service.knowledge_service") as svc_mock:
+        svc_mock.search_documents_by_title.return_value = {
+            "success": True, "results": [], "count": 0,
+        }
+        await tool.execute(file_name="x", source_type="数据分析")
+
+    assert svc_mock.search_documents_by_title.call_args.kwargs["agent_id"] == "data-analysis"
+
+    # 无 ToolExecutionContext：身份未知（None），不映射 main
+    tool2 = KnowledgeFileSearchTool()
+    mock_cm2 = _auth_db_mock([{"source_type": "数据分析", "owner_tenant_id": None}])
+    with patch("src.db.database.get_db_connection", return_value=mock_cm2), \
+            patch("src.knowledge.service.knowledge_service") as svc_mock2:
+        svc_mock2.search_documents_by_title.return_value = {
+            "success": True, "results": [], "count": 0,
+        }
+        await tool2.execute(file_name="x", source_type="数据分析")
+    assert svc_mock2.search_documents_by_title.call_args.kwargs["agent_id"] is None

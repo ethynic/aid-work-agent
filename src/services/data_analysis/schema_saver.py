@@ -14,6 +14,11 @@ from src.db.database import get_db_connection
 from src.core.text_sanitizer import sanitize_text, sanitize_value
 from src.knowledge.embedding.embedding_client import TextEmbeddingV3Client
 from src.knowledge.vector_db.vector_db import get_vector_db
+from src.services.data_analysis.access_scope import (
+    ALLOWED_AGENT_IDS_FIELD,
+    normalize_agent_scope_ids,
+    read_stored_agent_scope,
+)
 from src.services.data_analysis.constants import (
     DATA_ANALYSIS_METADATA_SOURCE_TYPE,
     DATA_SOURCE_CATEGORY_DISPLAY_NAME,
@@ -90,12 +95,20 @@ async def save_schema_to_knowledge(
     source_info: str = "",
     connector_id: Optional[int] = None,
     source: Optional[str] = None,
+    allowed_agent_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     保存 schema 到知识库（documents + chunks + 向量），带去重。
 
+    Args:
+        allowed_agent_ids: 可选可用智能体名单。None/[] 按共享创建（不写字段，
+            与既有 metadata 形态一致）；非空名单由调用方（管理 API）完成租户
+            目录校验后传入，聊天附件工具不提供该参数（LLM 不可写名单）。
+        去重命中时保留已有名单，不借重新上传覆盖（返回 existing=true 与实际名单）。
+
     Returns:
-        {"success": True, "doc_id": int, "message": str} 或
+        {"success": True, "doc_id": int, "message": str, "existing": bool,
+         "allowed_agent_ids": List[str]} 或
         {"success": False, "error": str}
     """
     # 上传文件/HTTP 请求体可能携带孤立代理字符（如 PDF 复制的 \ud83c），
@@ -104,6 +117,12 @@ async def save_schema_to_knowledge(
     description = sanitize_text(description, source="data_analysis_schema")
     source_info = sanitize_text(source_info, source="data_analysis_schema")
     columns = sanitize_value(columns, source="data_analysis_schema")
+    # 名单形态兜底校验/去重（目录校验属调用方职责）；非法形态直接失败，
+    # 不静默降级为共享
+    try:
+        scope_ids = normalize_agent_scope_ids(allowed_agent_ids)
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
     schema_text = generate_schema_text(table_name, description, columns)
 
     try:
@@ -140,6 +159,9 @@ async def save_schema_to_knowledge(
         }
         if source:
             metadata["source"] = source
+        if scope_ids:
+            # 非空名单写入保留字段；共享（None/[]）不写字段，保持存量表形态
+            metadata[ALLOWED_AGENT_IDS_FIELD] = scope_ids
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -156,7 +178,9 @@ async def save_schema_to_knowledge(
             # 需要显式转换为 jsonb 才能使用 ->> 操作符
             cursor.execute(
                 """
-                SELECT id FROM documents
+                SELECT id,
+                       metadata::jsonb->'allowed_agent_ids' AS allowed_agent_ids
+                FROM documents
                 WHERE tenant_id IS NOT DISTINCT FROM %s
                     AND title = %s
                     AND metadata::jsonb->>'table_name' = %s
@@ -166,10 +190,23 @@ async def save_schema_to_knowledge(
             )
             existing = cursor.fetchone()
             if existing:
+                # 重复注册保留已有名单，不借重新上传覆盖/恢复共享；
+                # 异常配置按未配置展示为空名单（原始值仍在 metadata，待管理员修复）
+                stored_raw = existing.get("allowed_agent_ids")
+                if isinstance(stored_raw, str):
+                    try:
+                        stored_raw = json.loads(stored_raw)
+                    except (json.JSONDecodeError, TypeError):
+                        stored_raw = None
+                _status, effective_ids = read_stored_agent_scope(
+                    {ALLOWED_AGENT_IDS_FIELD: stored_raw}
+                )
                 return {
                     "success": True,
                     "doc_id": existing["id"],
                     "message": f"Schema '{table_name}' 已存在，跳过重复注册",
+                    "existing": True,
+                    "allowed_agent_ids": effective_ids,
                 }
 
             # 插入文档
@@ -212,7 +249,13 @@ async def save_schema_to_knowledge(
 
             conn.commit()
 
-        return {"success": True, "doc_id": doc_id, "message": "Schema 已保存到知识库"}
+        return {
+            "success": True,
+            "doc_id": doc_id,
+            "message": "Schema 已保存到知识库",
+            "existing": False,
+            "allowed_agent_ids": scope_ids,
+        }
 
     except Exception as e:
         logger.opt(exception=True).error(f"保存 schema 到知识库失败: {e}")

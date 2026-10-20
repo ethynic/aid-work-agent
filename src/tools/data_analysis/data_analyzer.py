@@ -8,6 +8,7 @@ DataAnalyzer — pandas/numpy 数据分析执行引擎
 import json
 import math
 import os
+import uuid
 import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -99,7 +100,12 @@ DEFAULT_CHART_THEME = "ft"
 class DataAnalyzer:
     """pandas/numpy 数据分析执行引擎"""
 
-    def __init__(self, session_id: str = None, tenant_id: str = ""):
+    def __init__(
+        self,
+        session_id: str = None,
+        tenant_id: str = "",
+        allow_arbitrary_path_source: bool = False,
+    ):
         self.session_id = session_id or ""
         # 产物按租户附件存储规范落盘：图表/导出表 -> report，中间聚合 CSV -> temp
         from src.core.storage import get_tenant_storage_dir
@@ -107,8 +113,14 @@ class DataAnalyzer:
         self.chart_output_dir = get_tenant_storage_dir(_tid, "report")
         self.data_output_dir = get_tenant_storage_dir(_tid, "temp")
         self._variables: Dict[str, pd.DataFrame] = {}
+        self._artifact_paths: Dict[str, str] = {}
         self._tables: Dict[str, pd.DataFrame] = {}
         self._table_meta: Dict[str, Dict] = {}
+        # 任意文件路径 source 逃生开关：生产 analyze_data 路径必须为 False——
+        # _resolve_source 的文件路径分支是未经注册表回查的读取面，LLM 可用任意
+        # 路径绕过数据表名单。低层测试/内部离线计算可显式开启保持旧行为；
+        # 已装入表/变量与授权加载入口 load_table 不受该开关影响。
+        self.allow_arbitrary_path_source = allow_arbitrary_path_source
 
     # ==================== 数据加载 ====================
 
@@ -176,9 +188,15 @@ class DataAnalyzer:
             return None
 
     async def _load_database(self, source: dict) -> Optional[pd.DataFrame]:
-        """从数据库加载数据"""
+        """从数据库加载数据。
+
+        连接器归属校验：source.owner_tenant_id（服务端回查时写入的文档来源租户
+        内部字段）必须与连接器归属租户一致——跨租户共享表使用来源租户的连接器，
+        而非调用租户；不一致或记录缺失显式报错，不得折叠成「源数据不存在」。
+        """
         connector_id = source.get("connector_id")
         db_table_name = source.get("db_table_name")
+        owner_tenant_id = source.get("owner_tenant_id")
 
         if not connector_id or not db_table_name:
             logger.error("[DataAnalyzer] 数据库加载缺少 connector_id 或 db_table_name")
@@ -190,8 +208,8 @@ class DataAnalyzer:
             with get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT db_type, host, port, database_name, username, password_encrypted "
-                    "FROM data_connectors WHERE id = %s",
+                    "SELECT db_type, host, port, database_name, username, password_encrypted, "
+                    "tenant_id FROM data_connectors WHERE id = %s",
                     (connector_id,),
                 )
                 record = cursor.fetchone()
@@ -199,6 +217,14 @@ class DataAnalyzer:
                     raise ValueError(f"连接器不存在: {connector_id}")
 
                 r = dict(record)
+                if owner_tenant_id:
+                    connector_tenant = r.get("tenant_id")
+                    if not connector_tenant or str(connector_tenant) != str(owner_tenant_id):
+                        # 授权读取的前提是「表来源租户 ↔ 连接器租户」一致；
+                        # 校验失败必须显式暴露，不当成无数据静默处理
+                        raise ValueError(
+                            f"数据表来源租户与连接器 {connector_id} 归属租户不一致，已拒绝读取"
+                        )
                 config = {
                     "db_type": r["db_type"],
                     "host": r["host"],
@@ -231,6 +257,9 @@ class DataAnalyzer:
         try:
             import asyncio
             return await asyncio.to_thread(_load)
+        except ValueError:
+            # 业务/授权校验错误显式上抛：调用方需要看到具体原因
+            raise
         except Exception as e:
             logger.opt(exception=True).error(f"[DataAnalyzer] 数据库加载失败: {e}")
             return None
@@ -242,7 +271,11 @@ class DataAnalyzer:
         解析数据源引用，支持三种方式（按优先级）：
         1. 内存变量名（_variables）
         2. 原始表 table_id（_tables）
-        3. 文件路径
+        3. 文件路径（仅 allow_arbitrary_path_source=True 时可用）
+
+        生产 analyze_data 构造的实例关闭优先级 3：任意路径读取是显式入参绕过面
+        （LLM 可传文件路径读取未经名单校验的数据）；原始文件应通过已授权表的
+        load_table 加载，历史产物经校验后的 load_output 装入。
         """
         if not source_ref:
             return None
@@ -255,8 +288,8 @@ class DataAnalyzer:
         if source_ref in self._tables:
             return self._tables[source_ref].copy()
 
-        # 优先级 3: 文件路径
-        if os.path.exists(source_ref):
+        # 优先级 3: 文件路径（逃生分支，生产路径禁用）
+        if self.allow_arbitrary_path_source and os.path.exists(source_ref):
             try:
                 if source_ref.endswith(".csv"):
                     df = pd.read_csv(source_ref)
@@ -277,8 +310,9 @@ class DataAnalyzer:
         self._variables[var_name] = df.copy()
 
         os.makedirs(self.data_output_dir, exist_ok=True)
-        file_path = os.path.join(self.data_output_dir, f"{var_name}.csv")
+        file_path = os.path.join(self.data_output_dir, f"analysis_output_{uuid.uuid4().hex}.csv")
         df.to_csv(file_path, index=False, encoding="utf-8-sig")
+        self._artifact_paths[var_name] = file_path
         logger.info(f"[DataAnalyzer] 存储变量 {var_name}: {len(df)} 行 -> {file_path}")
         return file_path
 

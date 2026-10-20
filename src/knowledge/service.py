@@ -19,6 +19,7 @@ from src.knowledge.retriever.tenant_range import (
     build_active_document_condition,
     build_tenant_range_conditions,
 )
+from src.services.data_analysis.access_scope import agent_scope_document_filter_sql
 from src.knowledge.embedding.embedding_client import TextEmbeddingV3Client, sanitize_error_info
 from src.knowledge.vector_db.vector_db import get_vector_db
 from src.config.settings import settings
@@ -1186,7 +1187,8 @@ class KnowledgeBaseService:
         top_k: int = 10,
         source_type: Optional[str] = None,
         sub_category: Optional[str] = None,
-        global_view: bool = False
+        global_view: bool = False,
+        agent_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         根据内容搜索文档（混合检索：向量 + FTS5 + RRF）
@@ -1201,6 +1203,8 @@ class KnowledgeBaseService:
             global_view: 认证 platform_admin 全局视图（且无租户上下文）时，
                 检索层（向量/全文）与标题回查均不携带租户过滤（恢复平台
                 管理员全局搜索口径）
+            agent_id: 可信执行身份，透传检索层做数据表名单过滤（None=身份未知，
+                仅排除非空名单记录，普通文档行为不变）
 
         Returns:
             搜索结果
@@ -1240,11 +1244,12 @@ class KnowledgeBaseService:
                     else:
                         sub_categories = [sub_category]
 
-                # 执行混合检索（global_view 透传给检索层：向量/全文两路放开租户收窄）
+                # 执行混合检索（global_view 透传给检索层：向量/全文两路放开租户收窄；
+                # agent_id 透传做数据表名单过滤，global_view 不受名单影响）
                 results = await retriever.retrieve(
                     query=query, top_k=top_k, user_id=user_id, tenant_id=tenant_id,
                     source_type=source_type, sub_categories=sub_categories,
-                    global_view=global_view,
+                    global_view=global_view, agent_id=agent_id,
                 )
 
                 # 补计费兜底：独立搜索 API 无会话 record，retriever 内的条件式
@@ -1343,6 +1348,7 @@ class KnowledgeBaseService:
         exact: bool = False,
         source_type: Optional[str] = None,
         limit: int = 10,
+        agent_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """按文件名/标题定位知识库文档（documents.title 匹配，返回文档级元数据）。
 
@@ -1350,7 +1356,9 @@ class KnowledgeBaseService:
         路径在哪」，供 LLM 拿 file_path 后用 read 工具分页读取。
 
         可见性与内容检索完全一致（knowledge_retrieval.md 模式 A）：
-        build_tenant_range_conditions（本租户 + 共享精确对）+ active/未过期过滤。
+        build_tenant_range_conditions（本租户 + 共享精确对）+ active/未过期过滤，
+        并在范围条件外单独叠加数据表名单条件（agent_id 为可信执行身份，
+        None=身份未知仅排除非空名单记录；LIMIT 前过滤）。
 
         Args:
             tenant_id: 本租户 ID，为空时直接返回空结果（无租户上下文不搜）
@@ -1359,6 +1367,7 @@ class KnowledgeBaseService:
             exact: True 时精确匹配 title（兼容去扩展名比对）；False 时模糊包含匹配
             source_type: 顶级分类代号过滤，不传搜全部
             limit: 返回条数上限（1~50）
+            agent_id: 可信执行身份（数据表名单过滤）
 
         Returns:
             {success, results, count}；results 内含 file_path / summary / owner 标注所需字段
@@ -1397,6 +1406,10 @@ class KnowledgeBaseService:
             tenant_id, source_type, shared_ranges, alias="d",
         )
         active_sql = build_active_document_condition(alias="d")
+        # 数据表名单过滤（LIMIT 前生效）：cast 只落在数据表形态行，普通文档放行
+        scope_sql, scope_params = agent_scope_document_filter_sql(
+            agent_id, tenant_id, alias="d",
+        )
 
         try:
             with self._get_db_connection() as conn:
@@ -1406,11 +1419,12 @@ class KnowledgeBaseService:
                            source_type, summary, created_at, tenant_id
                     FROM documents d
                     WHERE ({range_sql})
+                      AND {scope_sql}
                       AND {active_sql}
                       AND {match_sql}
                     ORDER BY {order_sql}, d.created_at DESC
                     LIMIT %s
-                """, range_params + match_params + order_params + [limit])
+                """, range_params + scope_params + match_params + order_params + [limit])
 
                 formatted_results = []
                 for row in cursor.fetchall():

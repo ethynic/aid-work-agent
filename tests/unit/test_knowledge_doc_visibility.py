@@ -114,6 +114,12 @@ def _make_api_request(user_role="unset", path="/api/knowledge/documents", header
 
 VISIBILITY_FRAGMENT = "d.status = 'active'"
 EXPIRY_FRAGMENT = "d.expires_at IS NULL OR d.expires_at > now()"
+# 数据表名单过滤片段参数（agent_id=None：身份未知仅共享，cast 只落数据表形态行，
+# marker 参数在正/负分支各出现一次）；无 agent_id 时名单条件本身无参
+_AGENT_SCOPE_PARAMS = [
+    "data-analysis-metadata", "t1", "[数据表] %",
+    "data-analysis-metadata", "t1", "[数据表] %",
+]
 
 
 class TestFtsVisibilitySQL:
@@ -137,8 +143,9 @@ class TestFtsVisibilitySQL:
         # OR 组合整体括号包裹，且可见性条件在 ORDER BY/LIMIT 之前
         assert "AND ((d.tenant_id = %s) OR (d.tenant_id = %s AND d.source_type = %s))" in flat
         assert flat.index(VISIBILITY_FRAGMENT) < flat.index("ORDER BY")
-        # 参数顺序不变：查询词×2 + 租户范围参数 + LIMIT
-        assert params == ["差旅", "差旅", "t1", "t2", "policy", 5]
+        # 参数顺序：查询词×2 + 租户范围参数 + 数据表名单过滤参数（agent_id=None
+        # 仅排除非空名单记录）+ LIMIT
+        assert params == ["差旅", "差旅", "t1", "t2", "policy", *_AGENT_SCOPE_PARAMS, 5]
 
     def test_global_view_branch_visibility(self):
         cur = _FakeCursor([])
@@ -189,7 +196,8 @@ class TestVectorVisibilitySQL:
         assert EXPIRY_FRAGMENT in flat
         assert "WHERE ((d.tenant_id = %s) OR (d.tenant_id = %s AND d.source_type = %s))" in flat
         assert flat.index(VISIBILITY_FRAGMENT) < flat.index("ORDER BY")
-        assert params == ["[0.1,0.2,0.3,0.4]", "t1", "t2", "policy", 5]
+        # 参数顺序：向量 + 租户范围参数 + 数据表名单过滤参数 + LIMIT
+        assert params == ["[0.1,0.2,0.3,0.4]", "t1", "t2", "policy", *_AGENT_SCOPE_PARAMS, 5]
 
     @pytest.mark.asyncio
     async def test_global_view_branch_visibility(self):

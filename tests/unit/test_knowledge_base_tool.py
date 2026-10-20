@@ -653,3 +653,47 @@ async def test_kb_search_cover_dirty_value_skipped_silently():
     assert result["success"] is True
     assert "cover_image" not in result["documents"]["11"]
     reg.assert_not_called()
+
+
+# ============================================================
+# Phase 2（数据表按智能体配置）：可信名单身份透传检索层
+# ============================================================
+
+
+def _kb_tool_with_retriever():
+    from src.tools.knowledge.knowledge_base_tool import KnowledgeBaseTool
+    tool = KnowledgeBaseTool()
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve = AsyncMock(return_value=[])
+    tool._retriever = mock_retriever
+    return tool, mock_retriever
+
+
+async def test_kb_search_passes_trusted_agent_id():
+    """可信上下文存在：名单身份取自 ToolExecutionContext（subagent 非空用其值）"""
+    from src.tools.context import ToolExecutionContext, tool_execution_scope
+
+    tool, mock_retriever = _kb_tool_with_retriever()
+    ctx = ToolExecutionContext(tenant_id="tenant_test1", subagent_id="data-analysis")
+    with tool_execution_scope(ctx):
+        await tool.execute(query="任意")
+
+    assert mock_retriever.retrieve.await_args.kwargs["agent_id"] == "data-analysis"
+
+
+async def test_kb_search_maps_main_within_trusted_context():
+    """可信上下文存在且 subagent_id 为空：名单身份映射 main"""
+    from src.tools.context import ToolExecutionContext, tool_execution_scope
+
+    tool, mock_retriever = _kb_tool_with_retriever()
+    with tool_execution_scope(ToolExecutionContext(tenant_id="tenant_test1")):
+        await tool.execute(query="任意")
+
+    assert mock_retriever.retrieve.await_args.kwargs["agent_id"] == "main"
+
+
+async def test_kb_search_without_context_keeps_identity_unknown():
+    """无 ToolExecutionContext ≠ main：不传身份（仅共享语义在 SQL 片段内实现）"""
+    tool, mock_retriever = _kb_tool_with_retriever()
+    await tool.execute(query="任意")
+    assert mock_retriever.retrieve.await_args.kwargs["agent_id"] is None
