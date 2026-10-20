@@ -556,3 +556,14 @@ anti_abuse:
 boss_visual:
   model: zhipu/GLM-5.3-Flash
   timeout_seconds: 120
+
+# 腾讯文档 OpenAPI 接入（docs/plans/plan-tencent-docs-knowledge-import.md）
+# 开发测试期经 env 注入个人开发者 Token（§7.1）；生产 OAuth 上线后
+# access_token 按租户用户加密存储，此处仅保留应用级参数。
+tencent_docs:
+  enabled: ${TDOC_ENABLED:-false}
+  client_id: ${TDOC_CLIENT_ID:-}
+  access_token: ${TDOC_ACCESS_TOKEN:-}
+  open_id: ${TDOC_OPEN_ID:-}
+  request_timeout: 30
+  export_daily_limit: 9

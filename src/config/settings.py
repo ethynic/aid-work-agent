@@ -494,6 +494,21 @@ class ExternalPushConfig(BaseModel):
     pre_sales: PreSalesPushConfig = Field(default_factory=PreSalesPushConfig)
 
 
+class TencentDocsConfig(BaseModel):
+    """腾讯文档 OpenAPI 接入配置（docs/plans/plan-tencent-docs-knowledge-import.md §7.1）
+
+    Phase 1 仅凭据直连（个人开发者 Token 或后续 OAuth token 经 env 注入）；
+    OAuth 授权流上线后 access_token 改为按 (tenant_id, user_id) 加密存储，
+    本段仅保留应用级 client_id 与频控/配额参数。
+    """
+    enabled: bool = False
+    client_id: str = ""
+    access_token: str = ""      # 开发测试期个人 Token；生产禁止落配置
+    open_id: str = ""
+    request_timeout: int = 30
+    export_daily_limit: int = 9  # 官方每 openID 每日导出配额
+
+
 class ClientConfig(BaseModel):
     """协会客户端配置（docs/tools/association-client-design.md）
 
@@ -773,6 +788,7 @@ class Settings(BaseModel):
     agent_runner: AgentRunnerConfig = Field(default_factory=AgentRunnerConfig)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
     anti_abuse: AntiAbuseConfig = Field(default_factory=AntiAbuseConfig)
+    tencent_docs: TencentDocsConfig = Field(default_factory=TencentDocsConfig)
 
     # 认证相关配置（从环境变量加载）
     qb_token: str = ""  # 平台管理员超级token（明文，仅用于向后兼容，推荐使用 qb_token_hash）
