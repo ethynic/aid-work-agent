@@ -28,6 +28,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261020-1223 | 腾讯文档知识库导入 | 📋 计划完成待启动 | 客户需将既有文档系统内容导入知识库；按受众面排序腾讯文档>飞书>金山>钉钉>语雀>石墨，Phase 1 聚焦腾讯文档：OAuth 多租户授权（token 加密存储，(client_id, open_id) 组合键）+ doc v3 结构化读取自写树转 Markdown 转换器（主路径，150 次/分）+ PDF 导出低频兜底（9 次/天/用户）+ 导入任务队列，配套通用批量上传兜底。官方文档快照已备齐（ext/腾讯文档接口/）。表格/智能表/增量同步留后续 Phase。待办：开发者账号与应用创建（需审核，尽早启动）。 | — | [计划](plans/plan-tencent-docs-knowledge-import.md) |
 | 20261013-1055 | Agent 网络搜索增强 | 🔧 部分完成 | 三家provider已接入，默认Tavily；融合、批量和正文核验待开发。 | [设计](system/agent-web-search-enhancement-design.md) | [计划](plans/plan-agent-web-search-enhancement.md) |
 | 20261008-runtime-plugin-host | Runtime 执行环境、插件宿主与可视化客户端 | 🔧 部分完成 | A1～A3完成；隔离验收包已交付，待人工及正式发行，第三方暂不开发；新增 v2 写路径泛化阶段（BOSS B3 依赖，待开发）。 | [唯一架构](system/runtime-plugin-host-architecture-design.md) / [共同契约](system/runner-desktop-runtime-integration-contract.md) / [接口](../contracts/runtime-host/v1/README.md) | [统一计划](plans/plan-runtime-plugin-host.md) |
 | 20261010-1642 | 系统级防滥用与限额 | 🔧 部分完成（Phase 1 开发完成，未部署） | Phase 1 观察闭环已完成：abuse_policies/abuse_events 两表、引擎 src/services/anti_abuse/（绑定匹配 user > channel（按 users.source 渠道类型） > tenant 兜底 > 平台默认）、定时扫描（300s）+ 事件 1h 去重 + 站内信通知（abuse.rule_triggered）、渠道入口 users.status 停用拦截（fail-open）、防滥用中心页（用量监控/禁用记录/触发记录 + 策略编辑）、用户停用/启用接口。Runner 链路 status 检查缺口登记 Phase 2 统一拦截点解决。 | [设计](system/saas/anti-abuse-policy-design.md) | — |

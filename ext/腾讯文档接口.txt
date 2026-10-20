@@ -1,0 +1,74 @@
+腾讯文档有官方 Open API，且已支持个人开发者直接接入（无需企业资质），Python 侧有成熟的调用路径和开源项目。下面按“官方接口 → 接入方式 → Python 开源案例 → 选型建议”给你梳理清楚。
+官方 API 接口情况
+腾讯文档开放平台（https://docs.qq.com/open）提供基于 HTTPS 的 Open API，能力覆盖很全：
+文件管理 API：新建、导入、重命名、移动、删除、复制、权限设置
+在线文档 API（doc）：获取/编辑 Word 类文档内容，接口为 GET /openapi/doc/v3/{fileId}，返回带段落层级、样式的 document 结构
+在线表格 API（sheet）：操作表格、获取表格内容
+在线智能表 API（smartsheet）：视图、子表、记录、字段的增删改查
+在线收集表 API、权限管理 API、用户/部门管理 API（SaaS 企业版）
+MCP 协议接口：https://docs.qq.com/openapi/mcp，把上述能力封装成 100+ 个工具（get_content、create_smartcanvas_by_mdx、manage.export_file 等）
+鉴权采用 OAuth 2.0 授权码模式，调用时需携带三元组：Access-Token、Client-Id、Open-Id。Access Token 有效期 30 天，Refresh Token 有效期 1 年。自 2025 年 7 月 1 日起每个应用可免费调用 20000 次 API；MCP 个人版免费用户 2000 次/天，超级会员 20000 次/天。
+官方接入教程见：Tencent Docs OpenAPI 接入教程，完整接口文档在 Open API 介绍。
+三种接入方式（Python 都能用）
+方式一：直接调 Open API（最轻量，推荐你先试）
+纯 HTTP 调用，Python 用 requests 即可，流程是：注册开发者 → 创建应用拿 Client ID/Secret → OAuth 授权拿 code → 换 Access Token + Open ID → 调接口。
+核心代码骨架：
+python
+
+编辑
+
+
+
+import requests
+
+BASE = "https://docs.qq.com/openapi"
+headers = {
+    "Access-Token": ACCESS_TOKEN,
+    "Client-Id": CLIENT_ID,
+    "Open-Id": OPEN_ID,
+}
+
+# 获取文档内容（在线文档）
+r = requests.get(f"{BASE}/doc/v3/{file_id}", headers=headers)
+doc = r.json()  # 返回 document 树 + version
+
+# 查询文档元信息
+r = requests.get(f"{BASE}/drive/v2/files/{file_id}/metadata", headers=headers)
+
+# MCP 方式获取纯文本正文（更省事）
+r = requests.post(
+    "https://docs.qq.com/openapi/mcp",
+    headers={"Authorization": MCP_TOKEN, "Content-Type": "application/json"},
+    json={"jsonrpc": "2.0", "method": "tools/call",
+          "params": {"name": "get_content", "arguments": {"file_id": file_id}}},
+)
+注意：所有请求必须由后台服务发起，Client Secret 不能放到前端。
+方式二：MCP 协议接入（能力最全）
+腾讯文档官方提供了 MCP Server，能力按 endpoint 拆分：
+表格
+endpoint	负责范围
+tencent-docs（主服务）	文件管理、创建、搜索、权限、智能文档、OCR
+doc-mcp	在线文档（Word 类）精细编辑
+sheet-mcp	在线表格（Excel 类）精细编辑
+slide-mcp	幻灯片（PPT）精细编辑
+获取 Token 的入口：https://docs.qq.com/open/auth/mcp.html（个人 Token 有效期一年）。Python 侧可用 mcp SDK 或 fastmcp 写客户端，也可以直接走 HTTP 调 MCP 端点。
+方式三：SaaS 企业版 Open API
+如果你对接的是企业版，需在企业管理后台创建自建应用，拿 Client ID/Secret，走企业维度的 access_token。企业版提供 100+ 个 API，还有私有化部署的文档中台（SDK + API 集成）。
+Python 开源项目与成熟案例
+tencent-docs-reader：把腾讯文档读取封装成可复用 Skill/CLI，核心思路是三条路径组合——get_content 拿完整正文、resolve_document_structure 拿标题层级与位置索引、manage.export_file 导出 DOCX 再用 python-docx + openpyxl 解析表格/图片/超链接。输出 Markdown + JSON + 资产文件。适合批量分析在线文档的场景。
+WorkBuddy 腾讯文档连接器：腾讯云官方生态里的实测案例，有完整的 python tencentdocs.py 调用链路（tdoc_init → create_smartcanvas_by_mdx → get_content → set_privilege），踩坑记录很详细（票据过期、endpoint 路由、新文档默认私密等）。
+腾讯文档 MCP（官方）：腾讯云开发者社区有官方使用指南，含 api_references.md、smartsheet_references.md、smartcanvas_references.md 三份完整参考文档，Python 调 MCP 时建议对照这份枚举值说明。
+Cookie 模拟导出方案（非官方）：用 requests + lxml 模拟浏览器导出流程（创建导出任务 → 轮询状态 → 下载 xlsx），适合只读场景但不稳定，Cookie 需手动从浏览器取，不建议作为生产方案。
+官方文档与参考链接：
+腾讯文档开放平台 - 产品与接入概览
+Tencent Docs OpenAPI 接入教程（含完整 OAuth 流程）
+Open API V3 介绍（doc/sheet/smartsheet 内容操作）
+获取 Doc 文档内容接口文档
+SaaS 开放接口（企业版）
+腾讯文档 MCP 使用指南（腾讯云）
+获取 MCP Token
+tencent-docs-reader 实现详解（CSDN）
+WorkBuddy 连腾讯文档实测踩坑记录
+给你的选型建议
+如果你的需求只是“读取腾讯文档内容”，最省事的路线是 MCP 的 get_content 接口：申请个人 Token 后，Python 一个 HTTP POST 就能拿到纯文本正文，不用处理 OAuth 授权码流程。若需要结构化内容（段落样式、表格单元格、图片），再叠加 resolve_document_structure 或导出 DOCX 用 python-docx 解析。
+如果你要对接的是企业内多用户文档（比如按员工身份操作其文档），则必须走 Open API + OAuth 2.0，在后台服务里完成 code 换 token 的流程。
