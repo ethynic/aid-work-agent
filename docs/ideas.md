@@ -29,6 +29,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261019-2005 | 数据分析数据表按智能体配置 | 📋 待开发 | 默认零配置，导入批次只选一次，已有表支持单项及批量分配。 | [设计§十八](system/digital-employee/data-analysis-subagent-design.md#十八租户内数据表按智能体配置2026-10-19待开发) | [开发计划](plans/plan-data-analysis-agent-scope.md) |
 | 20261013-1434 | 结构化提问交互（ask_user 提问卡片） | 🔧 部分完成 | Phase 1/2/3 开发完成待统一评审（分支 feature/ask-user-question-card：协议/受理校验/Web 卡片/渠道五端/待答通知与徽标/legacy 透传与埋点，七轮评审修正）；真机验收待指示，expires_at 需产品口径。 | [设计](system/design-ask-user-interactive-question.md) | [实施计划](plans/plan-ask-user-interactive-question.md) |
 | 20261008-runtime-plugin-host | Runtime 执行环境、插件宿主与可视化客户端 | 🔧 部分完成 | A1～A3完成；隔离验收包已交付，待人工及正式发行，第三方暂不开发；新增 v2 写路径泛化阶段（BOSS B3 依赖，待开发）。 | [唯一架构](system/runtime-plugin-host-architecture-design.md) / [共同契约](system/runner-desktop-runtime-integration-contract.md) / [接口](../contracts/runtime-host/v1/README.md) | [统一计划](plans/plan-runtime-plugin-host.md) |
 | 20261010-1642 | 系统级防滥用与限额 | 🔧 部分完成（Phase 1 开发完成，未部署） | Phase 1 观察闭环已完成：abuse_policies/abuse_events 两表、引擎 src/services/anti_abuse/（绑定匹配 user > channel（按 users.source 渠道类型） > tenant 兜底 > 平台默认）、定时扫描（300s）+ 事件 1h 去重 + 站内信通知（abuse.rule_triggered）、渠道入口 users.status 停用拦截（fail-open）、防滥用中心页（用量监控/禁用记录/触发记录 + 策略编辑）、用户停用/启用接口。Runner 链路 status 检查缺口登记 Phase 2 统一拦截点解决。 | [设计](system/saas/anti-abuse-policy-design.md) | — |
