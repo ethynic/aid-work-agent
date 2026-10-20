@@ -19,6 +19,7 @@ export const agentRoutes: RouteRecordRaw[] = [
       { path: 'reset-password', name: 'tenant-reset-password', component: () => import('@/components/saas/ResetPassword.vue') },
       { path: 'users', name: 'tenant-users', component: () => import('@/components/saas/TenantUserManager.vue') },
       { path: 'knowledge', name: 'tenant-knowledge', component: () => import('@/components/KnowledgeBase.vue') },
+      { path: 'knowledge/tdoc-imports', name: 'tenant-knowledge-tdoc-imports', component: () => import('@/components/knowledge/TencentDocsImport.vue') },
       { path: 'connections', name: 'tenant-connections', component: () => import('@/components/connections/ConnectionCenter.vue') },
       { path: 'connections/external-systems', name: 'tenant-external-systems', component: () => import('@/components/connections/ExternalSystems.vue') },
       { path: 'channels', name: 'tenant-channels', component: () => import('@/components/saas/ChannelConfig.vue') },

@@ -591,6 +591,69 @@ CREATE TRIGGER chunks_text_vec_trigger
 BEFORE INSERT OR UPDATE ON chunks
 FOR EACH ROW EXECUTE FUNCTION chunks_text_vec_update();
 
+-- 腾讯文档知识库导入：凭据绑定表（开发期个人 Token，预留 OAuth refresh_token）
+CREATE TABLE IF NOT EXISTS tdoc_credentials (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    access_token_enc TEXT NOT NULL,
+    refresh_token_enc TEXT,
+    open_id TEXT NOT NULL,
+    status TEXT DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, user_id)
+);
+
+-- 腾讯文档导入批次表
+CREATE TABLE IF NOT EXISTS tdoc_import_batches (
+    batch_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    status TEXT DEFAULT 'queued',
+    total_count INT DEFAULT 0,
+    success_count INT DEFAULT 0,
+    fail_count INT DEFAULT 0,
+    skip_count INT DEFAULT 0,
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_tdoc_batches_tenant ON tdoc_import_batches(tenant_id, created_at);
+
+-- 腾讯文档导入批次项表（每篇文档一行）
+CREATE TABLE IF NOT EXISTS tdoc_import_items (
+    id BIGSERIAL PRIMARY KEY,
+    batch_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    tdoc_file_id TEXT NOT NULL,
+    title TEXT,
+    doc_type TEXT,
+    status TEXT DEFAULT 'pending',
+    last_modify_time BIGINT,
+    document_id BIGINT,
+    error_message TEXT,
+    retry_count INT DEFAULT 0,
+    next_retry_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_tdoc_items_batch ON tdoc_import_items(batch_id);
+CREATE INDEX IF NOT EXISTS idx_tdoc_items_due ON tdoc_import_items(status, next_retry_at);
+
+-- 腾讯文档导入映射表（覆盖更新/跳过判断依据）
+CREATE TABLE IF NOT EXISTS tdoc_imported_docs (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    tdoc_file_id TEXT NOT NULL,
+    document_id BIGINT NOT NULL,
+    title TEXT,
+    last_modify_time BIGINT,
+    imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, tdoc_file_id)
+);
+
 -- 用户邮箱配置表
 CREATE TABLE IF NOT EXISTS user_email_settings (
     id SERIAL PRIMARY KEY,

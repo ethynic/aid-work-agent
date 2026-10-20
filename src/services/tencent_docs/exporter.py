@@ -37,6 +37,11 @@ def export_count_key(open_id: str, day: Optional[str] = None) -> str:
     return f"{CacheKeys.TDOC_EXPORT_COUNT}:{open_id}:{day}"
 
 
+def get_export_quota_used(open_id: str, day: Optional[str] = None) -> int:
+    """只读查询当日已用导出次数（不消费配额）。创建批次前的配额闸门预检用。"""
+    return int(redis_client.get(export_count_key(open_id, day)) or 0)
+
+
 def check_and_consume_export_quota(open_id: str, limit: int = EXPORT_DAILY_LIMIT) -> int:
     """占用一次导出配额，返回占用后已用次数。超限抛 ExportQuotaExceededError。
 
@@ -130,6 +135,7 @@ __all__ = [
     "ExportQuotaExceededError",
     "export_document",
     "export_count_key",
+    "get_export_quota_used",
     "check_and_consume_export_quota",
     "fetch_document_with_fallback",
     "parse_v2_file_id",

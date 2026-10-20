@@ -12,7 +12,7 @@
 
 | 维度 | 现状 |
 |------|------|
-| 开放平台 | https://docs.qq.com/open ，仅 OAuth 2.0 授权码模式（无应用级 client_credentials），个人开发者可接入；**应用创建需审核通过才发 Client ID/Secret** |
+| 开放平台 | https://docs.qq.com/open ，C 端个人版仅 OAuth 2.0 授权码模式（无应用级 client_credentials），个人开发者可接入；**应用创建需审核通过才发 Client ID/Secret**。注：client_credentials 并非全平台缺失——企业版 SaaS（自建应用 + OneID）支持应用级 token，与本 Phase 无关（见 ext/腾讯文档接口/07） |
 | 凭据三元组 | 请求头 `Access-Token` + `Client-Id` + `Open-Id`（Open-Id 在 token 响应的 `user_id` 字段返回） |
 | Token 有效期 | **文档自相矛盾**（文字 30 天 vs 示例 `expires_in=259200`=3 天）——必须以响应 `expires_in` 为准、提前 1 天刷新；Refresh Token 1 年（刷新不换新，沿用旧的），过期须重新授权 |
 | 内容读取（主路径） | `GET /openapi/doc/v3/{fileId}` 返回 Document→MainStory→Section→Paragraph→Run→Text 属性树，150 次/分钟，仅 `type=="Text"` 叶子节点有文字，需自写递归转 Markdown；**⚠️ 实测缺陷（2026-10-20）：文档含表格+图片后稳定返回 `400010 Unmarshal document error`**（纯文本文档正常），失败时须降级导出路径 |
@@ -22,7 +22,9 @@
 | 频控 | 单文件 150 次/分、单用户 300 次/分、导入 60 次/分；2025-07 起每应用免费 2 万次调用；**个人开发者 Token 控制台口径为按天 2000 次**（超级会员 20000/Plus 40000，见开发者后台温馨提示） |
 | 回调 | `redirect_uri` 后台白名单 + **仅 HTTPS**；多租户用统一回调域名 + `state` 带租户标识 |
 | 身份坑 | 用户换绑账号时 `Open ID` 会变 → DB 以 `(client_id, open_id)` 组合，保留 unionID 兜底 |
-| 域名区分 | 腾讯文档（docs.qq.com）与企业微信文档（doc.weixin.qq.com）两套体系，API 不通用 |
+| 域名区分 | 三套独立体系，API 不通用：腾讯文档个人版（docs.qq.com，三元组鉴权 + drive/v2 + doc/v3）、腾讯文档企业版 SaaS（saas.docs.qq.com 或企业专属域名，两元组鉴权 + OneID + drive/v3）、企业微信文档（doc.weixin.qq.com，corpid+secret）。接入前先看租户文档链接域名判断体系（ext/腾讯文档接口/07 §1） |
+
+> **范围决策（2026-10-20，产品确认）**：现有租户的腾讯文档账号均为**个人账号**（docs.qq.com），本 Phase 仅对接个人版 C 端路径（路径 A）；企业版 SaaS（租户自建应用 + OneID + 两元组鉴权 + drive/v3）与企业微信文档体系在出现实际租户需求前**不对接**。届时按 ext/腾讯文档接口/07 §5 的建议扩展 Provider 抽象：文档内容树解析器可复用，鉴权/路径/分页/错误码需另写适配。
 
 ## 3. 总体设计
 
@@ -74,9 +76,9 @@
 | 2 | OAuth 服务端实现 | authorize 跳转（`new_login=1`）、回调、code 换 token（code 5 分钟一次性）、refresh（提前 1 天按 `expires_in` 刷新）、加密存储、37017/37019 失效处理 | ⏸ 被任务 1 第三方应用阻塞，后置 |
 | 3 | drive 文件列表适配 | 文件枚举 + 元信息 + 关键字搜索 + `encodedID`→`fileID` converter + `shortcutID` 处理，分页 | ✅ 可先行——凭个人 Token 开发联调（文件列表已实测通） |
 | 4 | doc v3 树转 Markdown 转换器 | 递归遍历 Document/Paragraph/Run/Text 属性树，Paragraph 边界补 `\n`；样式/表格/图片映射策略实现时定 | ✅ 可先行——doc v3 读取已实测通（注意 URL 中 `$` 编码为 `%24`） |
-| 5 | 导入任务框架 | 异步队列 + 频控限速（单用户 300 次/分、单文件 150 次/分）+ 状态落库 + 前端任务页 | ✅ 可先行 |
-| 6 | 导出兜底（DOCX/PDF） | async-export（不填 exportType 得 DOCX，复用既有 docx 解析；`exportType=pdf` 得 PDF）+ progress 轮询（operationID 20 分钟 / URL 1800 秒）+ 每 openID 9 次/天配额闸门；**doc v3 报 400010 时自动降级此路径** | 📋 可与 #4 并行，优先级上调 |
-| 7 | 知识库前端入口 | 知识库页新增「从腾讯文档导入」+ 授权状态管理（含重新授权引导）；开发期先用「绑定个人测试 Token」代替 OAuth 授权位 | 📋 可先行 |
+| 5 | 导入任务框架 | 异步队列 + 频控限速（单用户 300 次/分、单文件 150 次/分）+ 状态落库 + 前端任务页 | ✅ 已完成开发（2026-10-20：调度器/导入服务/DB 4 表/36 单测全绿） |
+| 6 | 导出兜底（DOCX/PDF） | async-export（不填 exportType 得 DOCX，复用既有 docx 解析；`exportType=pdf` 得 PDF）+ progress 轮询（operationID 20 分钟 / URL 1800 秒）+ 每 openID 9 次/天配额闸门；**doc v3 报 400010 时自动降级此路径** | ✅ 已完成开发（0bcb03d3） |
+| 7 | 知识库前端入口 | 知识库页新增「从腾讯文档导入」+ 授权状态管理（含重新授权引导）；开发期先用「绑定个人测试 Token」代替 OAuth 授权位 | ✅ 已完成开发（2026-10-20：独立页面 /t/:tenant_id/knowledge/tdoc-imports，浏览器金路径真机验证待做） |
 | 8 | 测试与真机验收 | 单测（OAuth 刷新/树转换器/频控 mock）+ 测试环境真实账号联调 | 📋 随开发推进 |
 
 **执行顺序**：#3 -> #4 -> #5 -> #7 并行推进（全部可凭 §7.1 个人测试 Token 联调）；#2/#6 待第三方应用到位后补齐。

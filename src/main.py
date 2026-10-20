@@ -1801,6 +1801,8 @@ app.include_router(after_sales.router)
 app.include_router(scheduled_task.router)
 app.include_router(email_settings.router)
 app.include_router(knowledge_router)
+from src.api.knowledge_tdoc import router as knowledge_tdoc_router
+app.include_router(knowledge_tdoc_router)
 app.include_router(admin_subagent.router)
 app.include_router(admin_redis.router)
 app.include_router(subagent_extra.router)
