@@ -23,7 +23,11 @@
 #      绝不自动重试。降级：M2 三选二（输入框清空 / 消息区末尾任一行含 text 归一化前缀 12 字 /
 #      会话列表含目标名且含前缀），<2 项 → EXECUTION_UNKNOWN
 # 返回 data：{ navigate_required:false, title, sent_verification:{method,result,...},
-#   input_point:{x,y,source}, timing_ms, screenshot_paths }。
+#   input_point:{x,y,source}|null, timing_ms, screenshot_paths }。
+# P2 任务 3.4（发送动作与核验分离，设计 §4.3）：-SkipVerify 跳过 step5/6 终态证据与判定，
+#   发送完成后直接返回 sent=true/verified=false（TS 层用本地库核验接管）；-VerifyOnly 不做
+#   输入/发送（跳过 step0.5-4），仅执行既有 step5 终态证据 + step6 判定（TS 在本地库核验
+#   未命中时补做 OCR 气泡核验），input_point 返回 null；两开关互斥，既有默认行为零改动。
 # artifact：各步截图 + driver-log.txt（Jev state/answer 摘要、OCR 摘要、timing；
 # 绝不含 TYPESAFE_API_KEY——key 只在 Invoke-WeComJev 内经临时头文件瞬态使用）。
 # 注意：本文件含中文，必须以 UTF-8 with BOM 保存。
@@ -32,7 +36,17 @@ param(
     [string]$Subtitle = '',
     [string]$Section = '',
     [Parameter(Mandatory)][string]$Text,
-    [Parameter(Mandatory)][string]$ArtifactDir
+    [Parameter(Mandatory)][string]$ArtifactDir,
+    # P2 任务 3.4（发送动作与核验分离，设计 §4.3）：
+    # -SkipVerify：跳过 step5 终态证据与判定（本地库核验由 TS 层接管），发送完成后直接
+    #   返回 sent=true/verified=false（不产生 EXECUTION_UNKNOWN）；
+    # -VerifyOnly：不做输入/发送，仅执行既有 step5 终态证据（截图 + input/bubble/preview
+    #   OCR + 三选二/Jev 判定），供 TS 在本地库核验未命中时补做 OCR 气泡核验；需要
+    #   -TargetName/-ExpectedPrefix（核验文本，缺省取 -Text）等既有参数。
+    # 两开关互斥；既有默认行为（无开关）零改动。
+    [switch]$SkipVerify,
+    [switch]$VerifyOnly,
+    [string]$ExpectedPrefix = ''
 )
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -150,7 +164,14 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     $sectionDesc = $Section
     if ($sectionMap.ContainsKey($Section)) { $sectionDesc = $sectionMap[$Section] + '（' + $Section + '）' }
     $expectedName = $TargetName -replace '@微信$', ''
+    # 核验文本（step5/6 前缀与 Jev 关联证据用）：-ExpectedPrefix 优先，缺省取 -Text 原文
+    $verifyText = $Text
+    if ($ExpectedPrefix -ne '') { $verifyText = $ExpectedPrefix }
+    if ($SkipVerify -and $VerifyOnly) {
+        Throw-DriverError 'INVALID_ARGUMENT' '-SkipVerify 与 -VerifyOnly 互斥（前者跳过核验，后者只做核验）'
+    }
 
+    if (-not $VerifyOnly) {
     # 0.5) 搜索框残留防御（best-effort）：上游 search 后框内会保留查询词（M4 设计：overlay
     #     保持打开），agent 若 search→send 跳过 select，残留会污染标题带 OCR。Ctrl+F 聚焦
     #     搜索框 → Ctrl+A+Delete 清空（已验证原语；对空框是幂等空操作；清空同时关闭残留
@@ -373,24 +394,71 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
         Write-DriverLog ('step4 标题不一致，已清理自己刚输入的草稿（attach=' + $cleared + '）')
         Throw-DriverError 'UI_CHANGED' ('发送前复核：会话标题「' + $title2 + '」与目标「' + $expectedName + '」不一致，已清空自己刚输入的草稿并中止（防串消息，未按 Enter 发送）')
     }
+    } else {
+        # —— -VerifyOnly 模式（任务 3.4）：不做输入/发送（跳过 step0.5-4 的全部输入动作，
+        #    不点输入框、不碰草稿、不按 Enter），仅准备既有 step5 终态证据的输入：
+        #    当前窗口截图 + 标题带 OCR + 核验文本前缀（-ExpectedPrefix 优先，缺省 -Text）
+        $mainHwnd = Resolve-WeComMainWindow
+        $main = Get-WeComWindowInfo ([IntPtr]$mainHwnd)
+        Write-DriverLog ('verify-only target=' + $TargetName + ' section=' + $Section + ' mainHwnd=' + $mainHwnd + ' rect=(' + $main.X + ',' + $main.Y + ',' + $main.W + 'x' + $main.H + ')')
+        $after = Save-StepShot $mainHwnd 'step3-after.png'
+        [void]$shots.Add([string]$after.path)
+        $afterBoxes = Invoke-SendChatOcr ([string]$after.path) 'boxes'
+        $title2 = Get-WeComTitleFromTokens -Tokens @(Get-WeComBandTokens -Boxes @($afterBoxes.boxes) -W $after.w -H $after.h -Band 'title')
+        Write-DriverLog ('verify-only 当前标题 title=' + $title2)
+        # 第八轮评审 P2：核验证据一致性——当前标题与目标严格匹配（复用发送路径 step4 的
+        # Test-WeComTitleMatch 规则，含 @微信 后缀/「名+@/（」前缀形态），且必须先于 §5-6
+        # 三选二/Jev 判定。否则「输入框空 + 气泡/列表含前缀」可能在非目标会话凑满两项，
+        # 把别的会话的证据当成目标会话发送成功；不一致 → 无法确认（EXECUTION_UNKNOWN，
+        # 绝不 ocr-bubble 成功），消息可能已发出，不自动重试
+        if (-not (Test-WeComTitleMatch -Title $title2 -Expected $TargetName)) {
+            Throw-DriverError 'EXECUTION_UNKNOWN' ('发送后校验无法确认：当前会话标题「' + $title2 + '」与目标「' + $expectedName + '」不一致，核验证据可能来自其他会话（不会自动重试，请人工核对）')
+        }
+        # step5/6 的核验前缀与 Jev 关联文本统一由下方 §5-6 按 $verifyText 计算（-ExpectedPrefix 优先，缺省 -Text）
+        # step6 Jev 状态文本复用：多行脱敏预览变量与发送路径同源
+        $isMultiline = ($verifyText -match "[`r`n]")
+        $textPreview = $verifyText.Substring(0, [Math]::Min(12, $verifyText.Length)) -replace "[`r`n]", '⏎'
+    }
 
     # 5) Enter 发送 → 1.2s 渲染等待 → 终态证据 OCR（input/bubble/preview 三模式）
-    #    发送前重验主窗口存活（Enter 打在已销毁窗口上=静默未发，却会走 unknown 语义，必须防）
-    if (-not [WeComWin32]::IsWindow([IntPtr]$mainHwnd)) {
+    #    发送前重验主窗口存活（Enter 打在已销毁窗口上=静默未发，却会走 unknown 语义，必须防）；
+    #    -VerifyOnly 跳过发送子段（截图已在上方分支取得，绝不二次 Enter——防重复发送）
+    if (-not $VerifyOnly) {
+        if (-not [WeComWin32]::IsWindow([IntPtr]$mainHwnd)) {
+            $mainHwnd = Resolve-WeComMainWindow
+            Write-DriverLog ('step5 主窗口已重建，重解析 hwnd=' + $mainHwnd)
+        }
+        Write-DriverLog 'step5 PostMessage Enter 发送'
+        $t0 = $swTotal.ElapsedMilliseconds
+        Send-WeComEnter -Hwnd $mainHwnd
+        Start-Sleep -Milliseconds 1200
         $mainHwnd = Resolve-WeComMainWindow
-        Write-DriverLog ('step5 主窗口已重建，重解析 hwnd=' + $mainHwnd)
+        $after = Save-StepShot $mainHwnd 'step3-after.png'
+        [void]$shots.Add([string]$after.path)
+        $timing.send_wait = [int]($swTotal.ElapsedMilliseconds - $t0)
     }
-    Write-DriverLog 'step5 PostMessage Enter 发送'
-    $t0 = $swTotal.ElapsedMilliseconds
-    Send-WeComEnter -Hwnd $mainHwnd
-    Start-Sleep -Milliseconds 1200
-    $mainHwnd = Resolve-WeComMainWindow
-    $after = Save-StepShot $mainHwnd 'step3-after.png'
-    [void]$shots.Add([string]$after.path)
-    $timing.send_wait = [int]($swTotal.ElapsedMilliseconds - $t0)
+
+    if ($SkipVerify) {
+        # —— -SkipVerify 模式（任务 3.4）：跳过 step5 终态证据与判定（本地库核验由 TS 层
+        #    接管），发送完成后直接返回 sent=true/verified=false，不产生 EXECUTION_UNKNOWN
+        $timing.total = [int]$swTotal.ElapsedMilliseconds
+        Write-DriverLog ('done skip-verify timing=' + ($timing | ConvertTo-Json -Compress))
+        return @{
+            navigate_required = $false
+            title = $title2
+            sent = $true
+            verified = $false
+            sent_verification = @{ method = 'skipped'; result = 'unverified' }
+            input_point = @{ x = $ipX; y = $ipY; source = $ipSrc }
+            timing_ms = $timing
+            screenshot_paths = @($shots.ToArray())
+        }
+    }
 
     $t0 = $swTotal.ElapsedMilliseconds
-    $prefix = ConvertTo-WeComNormalized $Text
+    # 核验前缀统一取 $verifyText（-ExpectedPrefix 优先，缺省取 -Text；任务 3.4 修正：
+    # 旧实现此处取 $Text，-ExpectedPrefix 被静默覆盖失效）
+    $prefix = ConvertTo-WeComNormalized $verifyText
     # 前缀取 8 字（2026-09-28 真机实测修订：会话列表预览列只显示约 10 字 +「..」截断，
     # 12 字前缀永远匹配不上截断预览；8 字对本次输入文本的区分度已足够）
     if ($prefix.Length -gt 8) { $prefix = $prefix.Substring(0, 8) }
@@ -443,13 +511,13 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
 
     # 6) Jev #2 两问合一（sent_successfully / failure_mode）；降级 → 规则三选二
     $t0 = $swTotal.ElapsedMilliseconds
-    $stateTextForText = $Text
+    $stateTextForText = $verifyText
     if ($isMultiline) {
         # 多行脱敏（与 step3 日志/README 契约一致）：state 会整段落 driver-log，
         # 多行正文只给 Jev 前 12 字预览 + 总字数，不落 120 字（气泡/预览 OCR 证据行
         # 本就携带屏幕内容，前缀足以让 Jev 关联证据做终态判定）
-        $stateTextForText = ($textPreview + '…（多行，共 ' + $Text.Length + ' 字，脱敏只记前 12 字）')
-    } elseif ($stateTextForText.Length -gt 120) { $stateTextForText = $stateTextForText.Substring(0, 120) + '…（截断，共 ' + $Text.Length + ' 字）' }
+        $stateTextForText = ($textPreview + '…（多行，共 ' + $verifyText.Length + ' 字，脱敏只记前 12 字）')
+    } elseif ($stateTextForText.Length -gt 120) { $stateTextForText = $stateTextForText.Substring(0, 120) + '…（截断，共 ' + $verifyText.Length + ' 字）' }
     $previewHits = @()
     foreach ($row in @($preview.texts)) {
         $nt = ConvertTo-WeComNormalized ([string]$row)
@@ -457,13 +525,21 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
         if ($previewHits.Count -ge 5) { break }
     }
     $state2Lines = @()
-    $state2Lines += '企业微信消息发送后的 OCR 校验证据（PostMessage Enter 后 1.2s 截图）：'
+    if ($VerifyOnly) {
+        $state2Lines += '企业微信消息发送后的 OCR 校验证据（本轮仅核验，未执行输入/发送；截图为当前窗口实时状态）：'
+    } else {
+        $state2Lines += '企业微信消息发送后的 OCR 校验证据（PostMessage Enter 后 1.2s 截图）：'
+    }
     $state2Lines += ('—— 输入区 token：' + $(if (@($inputAfter.texts).Count -gt 0) { (@($inputAfter.texts) -join ' | ') } else { '（空）' }))
     $state2Lines += ('—— 消息区气泡 token（底部带，最多 8 个）：' + $(if ($bubbleTexts.Count -gt 0) { ($bubbleTexts -join ' / ') } else { '（空）' }))
     $state2Lines += '（证据说明：应用类会话（如文件传输助手/微信客服等官方应用）的消息区为内嵌网页渲染，截图可能整片空白——气泡 token 为空不等于未发送；此时「输入区已清空 + 会话列表预览出现该文本 + 『刚刚』时间戳」即为已成功发送的有效证据）'
     $state2Lines += ('—— 会话列表含目标名/前缀的行：' + $(if ($previewHits.Count -gt 0) { ($previewHits -join ' / ') } else { '（无）' }))
     $state2Lines += ('目标会话名：' + $expectedName)
-    $state2Lines += ('已输入并按 Enter 发送的文本：' + $stateTextForText)
+    if ($VerifyOnly) {
+        $state2Lines += ('待核验的已发送文本（本轮未执行输入/发送）：' + $stateTextForText)
+    } else {
+        $state2Lines += ('已输入并按 Enter 发送的文本：' + $stateTextForText)
+    }
     $state2Lines += '任务：判断该文本是否已成功发送到目标会话。'
     $state2Text = $state2Lines -join "`n"
     $jev2 = Invoke-WeComJev -StateText $state2Text -Questions @{
@@ -498,14 +574,15 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     $timing.total = [int]$swTotal.ElapsedMilliseconds
     Write-DriverLog ('done method=' + $method + ' rule_checks=' + $ruleChecks + '/3 timing=' + ($timing | ConvertTo-Json -Compress))
 
-    # 7) 返回（navigate_required=false = 已在目标会话完成发送与校验）
+    # 7) 返回（navigate_required=false = 已在目标会话完成发送与校验；-VerifyOnly 无输入动作，
+    #    input_point 返回 null——TS 侧归一为 null，不下发坐标）
     $sentVerification = @{ method = $method; result = 'sent' }
     if ($method -eq 'rule_2of3') { $sentVerification.rule_checks_passed = $ruleChecks }
     return @{
         navigate_required = $false
         title = $title2
         sent_verification = $sentVerification
-        input_point = @{ x = $ipX; y = $ipY; source = $ipSrc }
+        input_point = $(if ($VerifyOnly) { $null } else { @{ x = $ipX; y = $ipY; source = $ipSrc } })
         timing_ms = $timing
         screenshot_paths = @($shots.ToArray())
     }

@@ -82,6 +82,15 @@
 | 快照不可信（SNAPSHOT_UNSTABLE，内部重试后） | 是（只读场景） | true | 不返回半解密结果，不推进水位 |
 | UI 兜底也失败 | — | 按现有 UI 语义 | 现有错误码与 effect 不变 |
 
+**冻结点 4（2026-10-16，P2 实施前冻结——关注集合 schema）**：
+
+- **入参**：unread_list 与 watch_poll 增可选 `focus`：字符串数组，每项为会话名（本地库 resolve 按当前账号消歧，规则同 read-session：user_table/contact、conversation_table/群、多候选计入 failed）或账号绑定 target_ref（仅当账号与当前一致时可用，不一致计入 failed）。语义：**未传 = 全部会话；空数组 = INVALID_ARGUMENT**；单目标解析失败返回部分结果（`failed: [{focus, reason}]`，不推进其水位）。
+- **新增关注基线 = 加入时刻水位**：首次解析成功的关注会话在 DB 水位存储记录当前 max(message_id)，只报之后的新消息；**建立关注时的存量待回复由调用方初始化流程处理**（CLI watch 启动即输出一次当前待回复快照提示，归属调用方，不回放历史）。
+- **存储**：DB 水位与关注身份存独立文件（`%LOCALAPPDATA%\AidWorkAgent\wecom-cli\localdb-watch-state.json`），键 = {account, conversation_id}，与 UI 通道 watchState 完全分离；账号切换（锚点变化）→ 水位整体失效重建基线。
+- **返回事件**：本地库 watch 每轮 `{channel:'local-db', new_messages:[{conversation_id, messages:[{side,system?,msg_id,server_id?,text,time,parse_trusted}]}], last_sender:{<conv_id>:'self'|'peer'|null}, failed?}`；messages 为**全部**新消息（增量独立于待回复判定），最后发言方按"最后一条可参与回复判定的消息"计算（排除表 {1017,38,31}）；limit 每会话默认 100、只推进到已返回消息。
+- **失败语义**：DB 不可用 → 本轮 `{ok:false(结构化)/db_unavailable:true, 水位保留}` 不自动落 UI；解析失败会话进 failed 不推进水位。
+- **CLI/MCP 同源**：CLI watch 增 `--focus <名1,名2>`（仅本地库模式；UI 模式忽略并提示），MCP wecom_watch_poll/unread_list 增 `focus` 数组参数；旧无参调用行为不变（全部会话）。
+
 > **兜底适用范围限定（评审 v6）**：表中"进入 UI 兜底 = 是"仅适用于 read-session 与 unread_list；**watch 的 DB 路径失败不自动切 UI**（§4.2）；cursor 不可等价执行返回 `CURSOR_UNSUPPORTED` 不兜底（§4.1）；显式 `channel=local-db` 不兜底。公共分流实现不得覆盖业务例外。
 
 **冻结点 3（2026-10-15，P1b 实施评审通过）**：

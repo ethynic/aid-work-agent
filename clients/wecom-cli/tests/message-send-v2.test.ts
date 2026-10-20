@@ -90,6 +90,9 @@ function makeOp(keyDir: string, root: string, mock: DriverMock) {
     runDriverFn: makeRunDriver(mock),
     artifactDirFn: () => root,
     ...realDeps(keyDir),
+    // P2 任务 3.4：显式置空本地库状态——既有用例锁定「本地库不可用 → 老路径零改动」，
+    // 不依赖测试机的真实 localdb-state.json（否则 db 模式机器上会误入本地库核验分支）
+    localdb: { readStateFn: () => null },
   })
   return op
 }

@@ -20,9 +20,9 @@
  *   node dist/src/cli/index.js send (--target-ref <ref> | --target-name <会话名> [--subtitle <副标题>]) --text <文本> [--json]
  *   node dist/src/cli/index.js send-image (--target-ref <ref> | --target-name <会话名>) --image <本地绝对路径> [--json]
  *   node dist/src/cli/index.js send-file (--target-ref <ref> | --target-name <会话名>) --file <本地绝对路径> [--json]
- *   node dist/src/cli/index.js unread [--name <名>] [--json]
+ *   node dist/src/cli/index.js unread [--name <名>] [--channel local-db|ui] [--focus <名1,名2>] [--json]
  *   node dist/src/cli/index.js read-session (--target-ref <ref> | --target-name <会话名>) [--channel local-db|ui] [--limit N] [--cursor <cursor>] [--max-pages N] [--since-days N] [--json]
- *   node dist/src/cli/index.js watch [--interval 秒] [--once]
+ *   node dist/src/cli/index.js watch [--interval 秒] [--once] [--channel local-db|ui] [--focus <名1,名2>]
  *   node dist/src/cli/index.js add-customer --phone <11位手机号> --yes [--json]
  *   node dist/src/cli/index.js mcp --stdio
  *   node dist/src/cli/index.js doctor [--json] [--localdb]
@@ -61,18 +61,28 @@ const USAGE = `aid-wecom — 企业微信操作 CLI / MCP Provider（M1）
                             文件名去空白后须 ≥3 字符（过短拒发），调用方负责落盘；
                             粘贴经剪贴板通道会覆盖用户剪贴板；
                             发送后校验失败不自动重试，effect=unknown 时请人工核对）
-  unread [--name <名>] [--json]
-                            未读会话快照（只读，不开会话不清角标）：
-                            [{name, preview, unread_count}]，可选 --name 子串过滤
+  unread [--name <名>] [--channel local-db|ui] [--focus <名1,名2>] [--json]
+                            未读/待回复会话快照（只读，不开会话不清角标）：
+                            缺省按 doctor 状态分派——本地库可用返回待回复快照
+                            （judgment_basis=last_sender，可发现已读未回复）；否则 UI 角标
+                            快照（judgment_basis=badge，附能力差异说明）。
+                            --channel 显式覆盖（local-db 失败不兜底）；--name 按会话显示名
+                            子串过滤（两通道一致；本地库通道无显示名的会话会被排除）；
+                            --focus 关注会话名列表（本地库逐名解析，失败进 failed；UI 通道忽略）
   read-session (--target-ref <ref> | --target-name <会话名>) [--channel local-db|ui] [--limit N] [--cursor <cursor>] [--max-pages N] [--since-days N] [--json]
                             读会话消息（只读内容；进入会话会清除其未读角标）：
                             智能分发进会话（当前会话对→直读；不对→自动 search+select
                             切换后读）→ 滚动截屏 OCR + 页间去重，返回
                             {title, messages:[{side,text,time?}], pages_read}
                             （M9 由 read 改名，旧 read 动词废弃）
-  watch [--interval 秒] [--once]
-                            新消息跟踪循环：事件 NDJSON 逐行写 stdout
-                            （new_messages / tick），Ctrl+C 干净退出；--once 单轮
+  watch [--interval 秒] [--once] [--channel local-db|ui] [--focus <名1,名2>]
+                            新消息跟踪循环：事件 NDJSON 逐行写 stdout，Ctrl+C 干净退出；
+                            --once 单轮。--channel 显式通道（缺省按 doctor 状态分派：
+                            本地库可用走 local-db 冻结点 4 增量事件 {channel,new_messages,
+                            last_sender}，含消息 ID 与精确方向、不切会话清角标，DB 不可用
+                            轮不落 UI 等下轮）；--focus 关注输入列表（会话名或账号绑定
+                            target_ref；仅本地库通道生效，建立时一次性解析持久绑定、后续
+                            按绑定轮询（改名不影响跟踪），解析失败进 failed；UI 模式忽略）
 
 Provider 命令：
   mcp --stdio               启动标准本地 MCP server（stdout 只承载协议，供 agent Host 使用）
@@ -141,6 +151,8 @@ async function main(): Promise<number> {
       const { unreadCommand } = await import('./commands/unread.js')
       return unreadCommand({
         name: flagString(args, 'name'),
+        channel: flagString(args, 'channel'),
+        focus: flagString(args, 'focus'),
         json: hasFlag(args, 'json'),
       })
     }
@@ -162,6 +174,8 @@ async function main(): Promise<number> {
       return watchCommand({
         interval: flagString(args, 'interval'),
         once: hasFlag(args, 'once'),
+        channel: flagString(args, 'channel'),
+        focus: flagString(args, 'focus'),
       })
     }
     case 'add-customer': {

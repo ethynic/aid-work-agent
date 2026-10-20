@@ -14,9 +14,13 @@
 #   仍有文本）/ 纯二进制 / 空 / None / 非文本类型 / 长度越界
 #   messages：after-id/limit 边界 + 空批次 next_cursor=after-id / since 过滤 / 同秒多条入库序 /
 #   会话隔离 / 非文本行 text=null / 排除表不影响 messages / 解密库两种命名
-#   conversations：聚合与排序 / last_send_time 取水位行（迟到回退场景）
+#   conversations：聚合与排序 / last_send_time 取水位行（迟到回退场景）/ last_anchor =
+#   水位行消息摘要（watch 建基线锚，第九轮评审 P1）
 #   last-per-conv：排除表双向语义（系统在最后回退 / 全系统 last_participating=null /
-#   参与型最后=last）/ --exclude-types 追加语义（不缩减基础表）
+#   参与型最后=last）/ --exclude-types 追加语义（不缩减基础表）/ --with-names 反向取名
+#   （R 群名认 conversation_table、S 联系人名认 user_table、无命中 null；第九轮评审 P2；
+#   S: match_names=名称/别名/备注全部非空值、session 来源不可用 → naming_incomplete:true，
+#   第十轮评审 P2）
 #   resolve：群名多候选 / 零候选 / user name/alias/备注命中 / 来源库缺失 unavailable /
 #   列名不可确认 schema-unknown / id 列值形态发现
 #   协议：BAD_ARGS / 库缺失 DB_UNREADABLE（只读不建文件）/ 坏库 SQL_ERROR / 子进程端到端
@@ -220,6 +224,18 @@ class WorkdirFixture:
         return drv.cmd_query(['--workdir', self.dir] + args)
 
 
+def db_row_by_id(fx, message_id):
+    """message.db.dec.db 中指定 message_id 的行（_message_row 投影，供锚点同源断言）。"""
+    conn = sqlite3.connect(os.path.join(fx.dir, 'message.db.dec.db'))
+    try:
+        r = conn.execute('SELECT %s FROM message_table WHERE message_id=?'
+                         % ', '.join(drv.QUERY_MESSAGE_COLUMNS), (message_id,)).fetchone()
+    finally:
+        conn.close()
+    assert r is not None, 'db_row_by_id：行不存在 message_id=%s' % message_id
+    return drv._message_row(r)
+
+
 def sample_message_rows():
     """CONV_S 五条（含同秒三条、一条系统类 1017、一条更晚）+ CONV_R1 一条。"""
     return [
@@ -352,6 +368,13 @@ class QueryConversationsTest(unittest.TestCase):
             self.assertEqual(convs[0]['last_send_time'], 1700000100)
             self.assertEqual(convs[1]['count'], 1)
             self.assertEqual(convs[1]['last_send_time'], 1700000100)
+            # last_anchor = 水位行的消息稳定字段摘要（第九轮评审 P1：watch 建基线一并存储，
+            # 下轮锚点有效性校验的比对基准；64-hex、与 _message_anchor 同源）
+            self.assertEqual(convs[0]['last_anchor'],
+                             drv._message_anchor(db_row_by_id(fx, 3)))
+            self.assertRegex(convs[0]['last_anchor'], r'^[0-9a-f]{64}$')
+            self.assertEqual(convs[1]['last_anchor'],
+                             drv._message_anchor(db_row_by_id(fx, 2)))
 
     def test_empty_table(self):
         with tempfile.TemporaryDirectory(prefix='wecom-query-conv-') as tmp:
@@ -438,6 +461,138 @@ class LastPerConvTest(unittest.TestCase):
         self.assertEqual(list(c['last_participating'].keys()),
                          ['message_id', 'server_id', 'sequence', 'sender_id', 'conversation_id',
                           'content_type', 'send_time', 'flag', 'text', 'trusted'])
+
+
+class LastPerConvNamesTest(unittest.TestCase):
+    """last-per-conv --with-names 反向取名（第九轮评审 P2）：R 群名只认 conversation_table、
+    S 联系人名只认 user_table（与 resolve 同一命名纪律）；无命中/来源缺失 → name=null；
+    未传 --with-names 不附 name 键（契约面不变）。第十轮评审 P2：S: 行附 match_names =
+    该行所有非空名称字段（名称/别名/备注候选列，与 resolve 同列集）；存在 R: 会话且
+    session 来源不可用 → 顶层 naming_incomplete:true。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix='wecom-query-lpcname-')
+        self.fx = WorkdirFixture(self._tmp.name)
+        self.fx.add_message_db([
+            msg_row(CONV_S, PEER, 2, 1700000001, text_content('hi'), server_id='s1'),
+            msg_row(CONV_R1, PEER, 2, 1700000002, text_content('group'), server_id='g1'),
+            msg_row('R:anon', PEER, 2, 1700000003, text_content('no-name'), server_id='a1'),
+        ])
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def names(self, extra=()):
+        payload = self.fx.query(['--task', 'last-per-conv', '--with-names', '--account', SELF] + list(extra))
+        self.assertTrue(payload['ok'], payload)
+        return {c['conversation_id']: c.get('name') for c in payload['conversations']}
+
+    def rows(self, extra=()):
+        payload = self.fx.query(['--task', 'last-per-conv', '--with-names', '--account', SELF] + list(extra))
+        self.assertTrue(payload['ok'], payload)
+        return {c['conversation_id']: c for c in payload['conversations']}
+
+    def test_reverse_names_group_contact_and_missing(self):
+        self.fx.add_session_db([(CONV_R1, '项目群'), (CONV_S, 'S 标题不是命名来源')])
+        self.fx.add_user_db([(PEER, '陆伟', '', ''), (SELF, '我自己', '', '')])
+        names = self.names()
+        self.assertEqual(names[CONV_R1], '项目群', 'R: 群名认 conversation_table')
+        self.assertEqual(names[CONV_S], '陆伟', 'S: 联系人名认 user_table（会话 id 解析对方 id）')
+        self.assertIsNone(names['R:anon'], '无命名来源（不在 conversation_table）→ null')
+
+    def test_s_row_emits_match_names_alias_remark(self):
+        """第十轮评审 P2①：S: 行 match_names = 该行所有非空名称字段（name/alias/remark），
+        规范 name 不变；R: 行保持 name 单值、无 match_names 键。"""
+        self.fx.add_session_db([(CONV_R1, '项目群')])
+        self.fx.add_user_db([(PEER, '陆伟', 'luwei-alias', '陆总')])
+        row = self.rows()[CONV_S]
+        self.assertEqual(row['name'], '陆伟', '规范 name 列不变')
+        self.assertEqual(row['match_names'], ['陆伟', 'luwei-alias', '陆总'],
+                         '名称/别名/备注候选列全部非空值（与 resolve 同一列集）')
+        group_row = self.rows()[CONV_R1]
+        self.assertEqual(group_row['name'], '项目群')
+        self.assertNotIn('match_names', group_row, 'R: 群保持 name 单值（无 match_names 键）')
+
+    def test_s_match_names_without_canonical_name(self):
+        """规范 name 列为空串但备注有值：name=None、match_names 仍带备注（TS 过滤按
+        match_names 命中，输出 name 缺省）。"""
+        self.fx.add_user_db([(PEER, '', '', '陆总')])
+        row = self.rows()[CONV_S]
+        self.assertIsNone(row['name'])
+        self.assertEqual(row['match_names'], ['陆总'])
+
+    def test_naming_incomplete_when_session_db_missing(self):
+        """第十轮评审 P2②：存在 R: 会话且 session 解密库缺失 → 顶层 naming_incomplete:true
+        （R: 行 name=null；S: 命名不受影响）——TS 据此区分「取不到群名」与「确实无匹配」。"""
+        self.fx.add_user_db([(PEER, '陆伟', '', '')])
+        payload = self.fx.query(['--task', 'last-per-conv', '--with-names', '--account', SELF])
+        self.assertTrue(payload['ok'])
+        self.assertTrue(payload.get('naming_incomplete'))
+        names = self.names()
+        self.assertIsNone(names[CONV_R1])
+        self.assertIsNone(names['R:anon'])
+        self.assertEqual(names[CONV_S], '陆伟', 'S: 命名认 user 库，不随 session 缺失效')
+
+    def test_naming_incomplete_when_session_schema_unknown(self):
+        """session 库在但 name/id 列无法确认（schema-unknown）→ 同样标 naming_incomplete。"""
+        self.fx.add_session_db([], with_name=False)  # conversation_table 无 name 列
+        self.fx.add_user_db([(PEER, '陆伟', '', '')])
+        payload = self.fx.query(['--task', 'last-per-conv', '--with-names', '--account', SELF])
+        self.assertTrue(payload['ok'])
+        self.assertTrue(payload.get('naming_incomplete'))
+
+    def test_no_flag_when_source_available_but_row_missing(self):
+        """session 来源可用但个别 R: 行不在表内（无命中）→ 不标 naming_incomplete（name=null
+        即可；标注只表达「来源不可用」而非「无命中」）。"""
+        self.fx.add_session_db([(CONV_R1, '项目群')])  # R:anon 不在表内
+        self.fx.add_user_db([(PEER, '陆伟', '', '')])
+        payload = self.fx.query(['--task', 'last-per-conv', '--with-names', '--account', SELF])
+        self.assertTrue(payload['ok'])
+        self.assertNotIn('naming_incomplete', payload)
+        names = self.names()
+        self.assertIsNone(names['R:anon'], '无命中 → null（区别于来源不可用）')
+        self.assertEqual(names[CONV_R1], '项目群')
+
+    def test_no_flag_when_no_r_conversations(self):
+        """session 缺失但全是 S: 会话 → 不标（用户库正常命名；无 R: 会话恒 False）。"""
+        tmp = tempfile.TemporaryDirectory(prefix='wecom-query-lpcname-s-')
+        self.addCleanup(tmp.cleanup)
+        fx = WorkdirFixture(tmp.name)
+        fx.add_message_db([msg_row(CONV_S, PEER, 2, 1700000001, text_content('hi'), server_id='s1')])
+        fx.add_user_db([(PEER, '陆伟', '', '')])
+        payload = fx.query(['--task', 'last-per-conv', '--with-names', '--account', SELF])
+        self.assertTrue(payload['ok'])
+        self.assertNotIn('naming_incomplete', payload)
+        names = {c['conversation_id']: c.get('name') for c in payload['conversations']}
+        self.assertEqual(names[CONV_S], '陆伟')
+
+    def test_s_title_in_conversation_table_not_used_for_contact(self):
+        """S: 会话名不认 conversation_table（session 的 S 标题可能是缓存旧名）：user 无命中 → null。"""
+        self.fx.add_session_db([(CONV_R1, '项目群'), (CONV_S, '缓存旧名')])
+        self.fx.add_user_db([(SELF, '我自己', '', '')])  # PEER 不在 user_table
+        names = self.names()
+        self.assertIsNone(names[CONV_S], 'S: 只认 user_table，conversation_table 的 S 标题不作来源')
+        self.assertEqual(names[CONV_R1], '项目群')
+
+    def test_missing_source_dbs_name_null(self):
+        """session/user 解密库缺失：对应会话名 null，不报错。"""
+        self.fx.add_user_db([(PEER, '陆伟', '', '')])
+        names = self.names()
+        self.assertIsNone(names[CONV_R1], 'session 库缺失 → R: 群名 null')
+        self.assertEqual(names[CONV_S], '陆伟')
+        self.assertIsNone(names['R:anon'])
+
+    def test_without_flag_no_name_key(self):
+        """未传 --with-names：行不附 name 键（既有契约面不变）。"""
+        payload = self.fx.query(['--task', 'last-per-conv'])
+        self.assertTrue(payload['ok'])
+        for c in payload['conversations']:
+            self.assertNotIn('name', c)
+
+    def test_with_names_requires_account(self):
+        """--with-names 缺 --account → BAD_ARGS（S: 会话解析对方 id 需要本人账号）。"""
+        payload = self.fx.query(['--task', 'last-per-conv', '--with-names'])
+        self.assertEqual(payload.get('error'), 'BAD_ARGS')
 
 
 class ResolveTest(unittest.TestCase):
@@ -712,8 +867,10 @@ class SchemaUnsupportedTest(unittest.TestCase):
         self.assertIn('message_table', payload['detail'])
 
     def test_missing_column_schema_unsupported(self):
-        """message_table 在但缺 send_time 列：→ SCHEMA_UNSUPPORTED，detail 含列名。"""
-        self._db_with('CREATE TABLE message_table (message_id INTEGER PRIMARY KEY, conversation_id TEXT)')
+        """message_table 在但缺 send_time 列（投影 9 列中缺一）：→ SCHEMA_UNSUPPORTED，detail 含列名。"""
+        self._db_with('CREATE TABLE message_table (message_id INTEGER PRIMARY KEY, server_id TEXT,'
+                      'sequence INTEGER, sender_id TEXT, conversation_id TEXT,'
+                      'content_type INTEGER, flag INTEGER, content BLOB)')
         payload = drv.cmd_query(['--workdir', self.dir, '--task', 'conversations'])
         self.assertFalse(payload['ok'])
         self.assertEqual(payload['error'], 'SCHEMA_UNSUPPORTED')

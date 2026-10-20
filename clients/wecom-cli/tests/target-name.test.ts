@@ -114,7 +114,8 @@ function makeOp(kind: OpKind, keyDir: string, root: string, mock: DriverMock): A
   const shared = { runDriverFn: makeRunDriver(mock), artifactDirFn: () => root, ...realDeps(keyDir) }
   switch (kind) {
     case 'send':
-      return createWecomMessageSendOperation(shared)
+      // P2 任务 3.4：显式置空本地库状态（锁定老路径契约，不依赖测试机真实 localdb-state.json）
+      return createWecomMessageSendOperation({ ...shared, localdb: { readStateFn: () => null } })
     case 'send-image':
       return createWecomSendImageOperation(shared)
     case 'send-file':

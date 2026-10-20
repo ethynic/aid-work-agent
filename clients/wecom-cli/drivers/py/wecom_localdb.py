@@ -56,11 +56,19 @@
 #           last_message_id}] 按 last_message_id 降序。last_send_time 取水位行（最大
 #           message_id）那一行的 send_time——迟到同步下与 MAX(send_time) 可能不同，语义
 #           按"水位末端那条"（与 cursor 同一基元）。
-#         last-per-conv [--exclude-types <t[,t…]>]
+#         last-per-conv [--exclude-types <t[,t…]>] [--with-names --account <id>]
 #           每会话输出 last_message（无条件最后一条）与 last_participating（跳过
 #           CONFIRMED_SYSTEM_TYPES 排除表；--exclude-types 为【追加】语义，不缩减基础表）。
 #           供待回复判定（TS 侧按 sender_id 判断方向）；排除表只影响本任务，不影响
 #           messages 任务返回。全是系统消息 → last_participating=null。
+#           --with-names：反向取名附 name 字段（R: 群名只认 conversation_table、S: 联系人
+#           名只认 user_table——与 resolve 同一命名纪律；无命中/来源缺失 → name=null），
+#           供 TS 在未传 focus 的 name 过滤快照中按实际名称匹配（须与 --account 同传）。
+#           第十轮评审 P2：S: 行另附 match_names=[该行所有非空名称字段]（名称/别名/备注
+#           候选列，与 resolve 同一列集——备注/别名同语义参与命名），TS 过滤按 name/
+#           match_names 任意一项子串命中即算命中；存在 R: 会话但 session 来源不可用 →
+#           顶层 naming_incomplete:true（无 R: 会话或未要求 names 不标），TS 指定 name
+#           过滤时明确失败，不把「取不到群名」冒充「无匹配」空结果。
 #         context --account <目录账号>
 #           user_table.id 必须唯一命中目录账号；返回字符串 self_user_id 与 schema_version。
 #         resolve --name <名称> [--account <已核实本人ID>]
@@ -73,6 +81,23 @@
 #       库缺失/SQL 错误 → {ok:false, error,…} 不抛；缺表/缺列（schema 不兼容）→ 稳定错误码
 #       SCHEMA_UNSUPPORTED（评审 v6，doctor 归 compat）。本模式无密钥参与，输出不走 32-hex
 #       兜底脱敏（业务文本不得被破坏，见 emit redact 参数）。
+#   watch --workdir <dir> --watermarks <json文件路径> [--account <已核实本人ID>]
+#         [--limit N] [--exclude-types <t[,t…]>]
+#       P2 任务 3.2：watch_poll 本地库通道的多会话增量查询。watermarks JSON 形态
+#       {"<conversation_id>": <last_message_id | {last_message_id, anchor}>}（TS 侧 DB
+#       水位存储的导出；anchor = 水位行消息摘要，第九轮评审 P1 起非零水位必带）。每会话
+#       独立 limit，只取 message_id > 水位、按入库序（message_id 升序）；非零水位先做
+#       锚点有效性校验（行缺失/摘要不符 → 水位失效按 0 全量重报并标注 watermark_reset）：
+#       → {ok, task:'watch', per_conversation: [{conversation_id, messages:[行投影同
+#         messages 任务，含 text/trusted], last_message_id(该会话当前最大), last_sender_state:
+#         'self'|'peer'|null, has_more, watermark_reset?, next_anchor}], next_watermarks:{...}}
+#       last_sender_state 按该会话最后一条可参与回复判定消息（排除表 CONFIRMED_SYSTEM_TYPES
+#       + --exclude-types 追加，尾部系统消息不顶掉判定）的 sender 相对 --account 判向；
+#       会话全是系统类 / 未传 --account → null。has_more=true 表示该会话水位之后仍有未返回
+#       消息（本轮被 limit 截断，下轮继续）。next_watermarks 只包含返回过消息的会话、值 =
+#       已返回消息的最大 message_id（水位只推进到已返回记录；不读/无新消息的会话不出现，
+#       水位不推进）。会话在表中无任何行（账号切换残留水位等）→ 不出现在输出中。
+#       本模式无密钥参与，输出不走 32-hex 兜底脱敏（同 query）。
 #   active-account <操作主窗口PID>
 #       只查询该 WXWork 进程的磁盘句柄路径；唯一普通本地 Data/message.db → {ok,pid,message_db}。
 #       无匹配/多账号/枚举不完整均失败，不读进程内存或数据库内容。
@@ -829,7 +854,8 @@ QUERY_MESSAGE_COLUMNS = ('message_id', 'server_id', 'sequence', 'sender_id', 'co
 QUERY_USAGE = ('用法：wecom_localdb.py query --workdir <dir> '
                '--task messages|conversations|last-per-conv|resolve '
                '[--conv <会话id>] [--after-id N] [--limit N] [--since <秒>] '
-               '[--exclude-types <t[,t…]>] [--name <名称>]')
+               '[--exclude-types <t[,t…]>] [--name <名称>] '
+               '[--with-names（仅 last-per-conv，须与 --account 同传）]')
 
 # workdir 内解密库定位名：优先任务契约名 <logical>.db.dec.db，兼容 decrypt 自然产物名
 # <logical>.dec.db（_out_base 产物）。两命名都是显式约定，运行时确认存在才用。
@@ -912,22 +938,119 @@ def _query_messages(conn, conv, after_id, limit, since, anchor=None):
 def _query_conversations(conn):
     """conversations 任务：全表按 conversation_id 聚合，按 last_message_id 降序。
     last_send_time 取水位行（最大 message_id）的 send_time——迟到同步（更大 message_id、
-    更小 send_time）下与 MAX(send_time) 不同，语义与 cursor 同基元（水位末端那条）。"""
+    更小 send_time）下与 MAX(send_time) 不同，语义与 cursor 同基元（水位末端那条）。
+    last_anchor = 水位行的消息稳定字段摘要（_message_anchor，与 read-session 游标锚同源）：
+    watch 侧按 max 建基线时一并存储，供下轮 watch 的锚点有效性校验（第九轮评审 P1）。"""
+    cols = ', '.join(QUERY_MESSAGE_COLUMNS)
     rows = conn.execute(
-        'SELECT m.conversation_id, a.cnt, m.send_time, a.max_id '
-        'FROM (SELECT conversation_id, COUNT(*) AS cnt, MAX(message_id) AS max_id '
+        'SELECT %s, a.cnt '
+        'FROM (SELECT conversation_id AS _grp_conv, COUNT(*) AS cnt, MAX(message_id) AS max_id '
         '      FROM message_table GROUP BY conversation_id) AS a '
         'JOIN message_table AS m ON m.message_id = a.max_id '
-        'ORDER BY a.max_id DESC').fetchall()
-    conversations = [{'conversation_id': r[0], 'count': r[1], 'last_send_time': r[2],
-                      'last_message_id': r[3]} for r in rows]
+        'ORDER BY m.message_id DESC' % cols).fetchall()
+    conversations = []
+    for r in rows:
+        row = _message_row(r[:len(QUERY_MESSAGE_COLUMNS)])
+        conversations.append({'conversation_id': row['conversation_id'], 'count': r[-1],
+                              'last_send_time': row['send_time'],
+                              'last_message_id': row['message_id'],
+                              'last_anchor': _message_anchor(row)})
     return {'ok': True, 'task': 'conversations', 'conversations': conversations}
 
 
-def _query_last_per_conv(conn, exclude_extra):
+def _peer_id_of(conv_id, account):
+    """S: 会话 id（S:<a>_<b>）解析对方用户 id（与 account 相异的一端；自会话取 account 本身）；
+    解析失败 → None（调用方按无名处理，不猜）。"""
+    parts = conv_id[2:].split('_')
+    other = next((p for p in parts if p and p != account), None)
+    if other is None and account in parts:
+        other = account  # 自会话（S:self_self）：对方即本人
+    return other or None
+
+
+def _conversation_display_names(workdir, conv_ids, account):
+    """反向取名（last-per-conv --with-names）：与 resolve 同一命名纪律——
+    R: 群名只认 session 库 conversation_table（id→name 单值，值为 str 或 None）；
+    S: 联系人认 user 库 user_table（会话 id 解析对方 id→该行），复用 resolve 的名称/别名/
+    备注候选列交集（_USER_NAME_COLUMN_CANDIDATES 与 PRAGMA 取交集）：值为
+    {'name': 规范 name 列值（可 None）, 'match_names': [该行所有非空名称字段]}
+    （第十轮评审 P2①：备注/别名与 resolve 同语义参与命名，TS 过滤按 name/match_names
+    任意一项子串命中即算命中；来源库缺失 / 列名无法确认 / 无命中 / 全空 → name=None）。
+    返回 (names, session_unavailable)：存在 R: 会话且 session 来源不可用（解密库缺失或
+    name/id 列无法确认）→ True（第十轮评审 P2②，TS 指定 name 过滤时明确失败而非把
+    「取不到群名」冒充「无匹配」；无 R: 会话恒 False；session 可用但个别行无命中不标）。"""
+    names = {}
+    for cid in conv_ids:
+        names[cid] = {'name': None, 'match_names': []} if cid.startswith('S:') else None
+    session_unavailable = False
+    r_ids = sorted({c for c in conv_ids if c.startswith('R:')})
+    s_ids = sorted({c for c in conv_ids if c.startswith('S:')})
+    if r_ids:
+        path = _resolve_dec_db(workdir, 'session')
+        if path is None:
+            session_unavailable = True
+        else:
+            conn = _open_ro(path)
+            try:
+                columns = _table_columns(conn, 'conversation_table')
+                id_col = (_find_conversation_id_column(conn, 'conversation_table', columns)
+                          if 'name' in columns else None)
+                if id_col is None:
+                    session_unavailable = True
+                else:
+                    ph = ','.join('?' * len(r_ids))
+                    for cid, name in conn.execute(
+                            'SELECT %s, %s FROM conversation_table WHERE %s IN (%s)'
+                            % (_qi(id_col), _qi('name'), _qi(id_col), ph), r_ids).fetchall():
+                        if isinstance(cid, str) and isinstance(name, str) and name:
+                            names[cid] = name
+            finally:
+                conn.close()
+    if s_ids:
+        path = _resolve_dec_db(workdir, 'user')
+        if path is not None:
+            conn = _open_ro(path)
+            try:
+                columns = _table_columns(conn, 'user_table')
+                name_cols = [c for c in _USER_NAME_COLUMN_CANDIDATES if c in columns]
+                if 'id' in columns and name_cols:
+                    wanted = sorted({p for c in s_ids
+                                     for p in [_peer_id_of(c, account)] if p is not None})
+                    found = {}
+                    if wanted:
+                        ph = ','.join('?' * len(wanted))
+                        select = ', '.join([_qi('id')] + [_qi(c) for c in name_cols])
+                        for row in conn.execute(
+                                'SELECT %s FROM user_table WHERE %s IN (%s)'
+                                % (select, _qi('id'), ph), wanted).fetchall():
+                            entry = {'name': None, 'match_names': []}
+                            for offset, col in enumerate(name_cols, start=1):
+                                value = row[offset]
+                                if isinstance(value, str) and value:
+                                    entry['match_names'].append(value)
+                                    if col == 'name':
+                                        entry['name'] = value
+                            found[str(row[0])] = entry
+                    for cid in s_ids:
+                        peer = _peer_id_of(cid, account)
+                        if peer is not None:
+                            found_entry = found.get(str(peer))
+                            if found_entry is not None:
+                                names[cid] = found_entry
+            finally:
+                conn.close()
+    return names, session_unavailable
+
+
+def _query_last_per_conv(conn, exclude_extra, workdir=None, account=None, with_names=False):
     """last-per-conv 任务：每会话输出 last_message（无条件最后一条）与 last_participating
     （跳过排除表）。排除表 = CONFIRMED_SYSTEM_TYPES + --exclude-types（追加语义，只扩不缩）；
-    全是系统消息 → last_participating=null。方向判定（sender_id 比对本人）在 TS 侧。"""
+    全是系统消息 → last_participating=null。方向判定（sender_id 比对本人）在 TS 侧。
+    with_names=True 时附 name（反向取名，见 _conversation_display_names；account 必传——
+    S: 会话解析对方 id 需要；缺省路径不附 name 键，契约面不变）。S: 行另附 match_names =
+    该行所有非空名称字段（名称/别名/备注，第十轮评审 P2①，列表非空才带键）；存在 R: 会话
+    且 session 来源不可用 → 顶层 naming_incomplete:true（第十轮评审 P2②；无 R: 会话或
+    未要求 names 不标）。"""
     exclude = tuple(sorted(set(CONFIRMED_SYSTEM_TYPES) | set(exclude_extra)))
     cols = ', '.join(QUERY_MESSAGE_COLUMNS)
     last_rows = conn.execute(
@@ -944,16 +1067,32 @@ def _query_last_per_conv(conn, exclude_extra):
     for r in part_rows:
         row = _message_row(r)
         participating[row['conversation_id']] = row
+    conv_col = QUERY_MESSAGE_COLUMNS.index('conversation_id')
+    names, session_unavailable = (
+        _conversation_display_names(workdir, [r[conv_col] for r in last_rows], account)
+        if with_names and workdir else ({}, False))
     conversations = []
     for r in last_rows:
         row = _message_row(r)
-        conversations.append({
+        entry = {
             'conversation_id': row['conversation_id'],
             'last_message': row,
             'last_participating': participating.get(row['conversation_id']),
-        })
-    return {'ok': True, 'task': 'last-per-conv', 'exclude_types': list(exclude),
-            'conversations': conversations}
+        }
+        if with_names:
+            info = names.get(row['conversation_id'])
+            if isinstance(info, dict):  # S: 联系人：规范 name + 全部非空名称字段
+                entry['name'] = info.get('name')
+                if info.get('match_names'):
+                    entry['match_names'] = list(info['match_names'])
+            else:  # R: 群：name 单值（str 或 None）
+                entry['name'] = info
+        conversations.append(entry)
+    result = {'ok': True, 'task': 'last-per-conv', 'exclude_types': list(exclude),
+              'conversations': conversations}
+    if with_names and session_unavailable:
+        result['naming_incomplete'] = True
+    return result
 
 
 # conversation_table 的 id 列发现：① 字面候选列名优先（PRAGMA 确认存在才用）；
@@ -1108,10 +1247,14 @@ def _parse_query_args(args):
     limit = DEFAULT_QUERY_LIMIT
     since = None
     exclude_types = []
+    with_names = False
     i = 0
     while i < len(args):
         arg = args[i]
-        if arg in ('--workdir', '--task', '--conv', '--name', '--account', '--anchor') and i + 1 < len(args):
+        if arg == '--with-names':
+            with_names = True
+            i += 1
+        elif arg in ('--workdir', '--task', '--conv', '--name', '--account', '--anchor') and i + 1 < len(args):
             value = args[i + 1]
             if arg == '--workdir':
                 workdir = value
@@ -1170,7 +1313,9 @@ def _parse_query_args(args):
         return None
     if task == 'context' and not account:
         return None
-    return task, workdir, conv, after_id, limit, since, exclude_types, name, account, anchor
+    if task == 'last-per-conv' and with_names and not account:
+        return None  # S: 会话解析对方 id 需要本人账号（--with-names 必须与 --account 同传）
+    return task, workdir, conv, after_id, limit, since, exclude_types, name, account, anchor, with_names
 
 
 def cmd_query(args):
@@ -1181,7 +1326,7 @@ def cmd_query(args):
     parsed = _parse_query_args(args)
     if parsed is None:
         return {'ok': False, 'error': 'BAD_ARGS', 'message': QUERY_USAGE}
-    task, workdir, conv, after_id, limit, since, exclude_extra, name, account, anchor = parsed
+    task, workdir, conv, after_id, limit, since, exclude_extra, name, account, anchor, with_names = parsed
     msg_db = _resolve_dec_db(workdir, 'message')
     if msg_db is None:
         return {'ok': False, 'error': 'DB_UNREADABLE',
@@ -1199,12 +1344,192 @@ def cmd_query(args):
         if task == 'conversations':
             return _query_conversations(conn)
         if task == 'last-per-conv':
-            return _query_last_per_conv(conn, exclude_extra)
+            return _query_last_per_conv(conn, exclude_extra, workdir, account, with_names)
         return _query_resolve(workdir, name, account)  # task == 'resolve'（参数解析已保证）
     except sqlite3.OperationalError as e:
         # 缺表/缺列（sqlite3.OperationalError "no such table/column"）= 真实 schema 不支持：
         # 返回稳定错误码 SCHEMA_UNSUPPORTED（评审 v6），detail 保留原始消息（sqlite 消息
         # 自带缺失表/列名，如 "no such table: message_table"）
+        msg = str(e)
+        if 'no such table' in msg or 'no such column' in msg:
+            return {'ok': False, 'error': 'SCHEMA_UNSUPPORTED',
+                    'detail': '解密库 schema 缺少查询所需表/列：%s' % e}
+        return {'ok': False, 'error': 'SQL_ERROR', 'detail': '%s: %s' % (type(e).__name__, e)}
+    except sqlite3.Error as e:
+        return {'ok': False, 'error': 'SQL_ERROR', 'detail': '%s: %s' % (type(e).__name__, e)}
+    finally:
+        conn.close()
+
+
+# ---------- watch 模式（P2 任务 3.2：watch_poll 本地库通道的多会话增量查询） ----------
+
+WATCH_USAGE = ('用法：wecom_localdb.py watch --workdir <dir> --watermarks <json文件路径> '
+               '[--account <已核实本人ID>] [--limit N] [--exclude-types <t[,t…]>]')
+
+
+def _load_watermarks(path):
+    """水位文件 → {conversation_id: (last_message_id, anchor)}；读取失败/结构非法 → None（BAD_ARGS）。
+    JSON 形态（TS 侧 DB 水位存储的导出，第九轮评审 P1 起每条带锚点）：
+      {"<conversation_id>": <非负整数 message_id> |
+                            {"last_message_id": <非负整数>, "anchor": "<消息摘要，缺省 ''>"}, ...}
+    整数形态为旧桥兼容（anchor=''）；非零水位携带 anchor 才能通过 watch 的锚点有效性校验。"""
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    marks = {}
+    for conv, value in raw.items():
+        if not isinstance(conv, str) or not conv:
+            return None
+        if isinstance(value, dict):
+            mid = value.get('last_message_id')
+            anchor = value.get('anchor', '')
+            if isinstance(anchor, bool) or not isinstance(anchor, str):
+                return None
+        else:
+            mid, anchor = value, ''
+        if isinstance(mid, bool) or not isinstance(mid, int) or mid < 0:
+            return None
+        marks[conv] = (mid, anchor)
+    return marks
+
+
+def _query_watch(conn, watermarks, limit, account, exclude_extra):
+    """多会话增量（每会话独立 limit；只取 message_id > 水位、按入库序 message_id 升序）。
+    - 锚点有效性校验（第九轮评审 P1）：非零水位先 SELECT 该 message_id 行，计算
+      _message_anchor（与 read-session 游标锚同一函数，排除 server_id/sequence）与存储
+      anchor 比对——不匹配或行已不存在 → 旧水位不可信（同文件重写可原地重生更小 id 且
+      fileIdentity/schema_version 不变，TS 代际校验不可见）：按 0 处理（返回该会话当前
+      全部行）并在该会话输出 watermark_reset:true，绝不静默漏掉重生的早期 id；
+    - last_message_id = 该会话当前最大 message_id（整表末端，不是返回集末端——has_more
+      截断时两者不同，区分报表语义与水位语义）；
+    - next_watermarks 只包含返回过消息的会话、值 = 已返回消息的最大 message_id（水位只
+      推进到已返回记录；不读/无新消息的会话不出现，水位不推进）；
+    - next_anchor = 已返回消息末端行的消息摘要（TS 存入水位，供下轮锚点校验）；
+    - last_sender_state：该会话最后一条可参与回复判定消息（排除表 = CONFIRMED_SYSTEM_TYPES
+      + --exclude-types 追加；尾部系统消息不顶掉判定）的 sender 相对 --account 判向
+      self/peer；会话全是系统类 / 未传 --account → null；
+    - has_more：水位之后仍有未返回消息（total > len(messages)）；
+    - 水位指向的会话在表中无任何行（账号切换残留水位等）→ 不出现在输出与
+      next_watermarks（水位不推进，基线决策归调用方）。"""
+    exclude = tuple(sorted(set(CONFIRMED_SYSTEM_TYPES) | set(exclude_extra)))
+    cols = ', '.join(QUERY_MESSAGE_COLUMNS)
+    ph = ','.join('?' * len(exclude))
+    per_conversation = []
+    next_watermarks = {}
+    for conv in sorted(watermarks):
+        after_id, stored_anchor = watermarks[conv]
+        watermark_reset = False
+        if after_id > 0:
+            previous = conn.execute(
+                'SELECT %s FROM message_table WHERE message_id=? AND conversation_id=?' % cols,
+                (after_id, conv)).fetchone()
+            if previous is None or _message_anchor(_message_row(previous)) != stored_anchor:
+                after_id = 0  # 水位失效：按 0 全量重报（宁重报不漏报），标注由调用方透传消费侧
+                watermark_reset = True
+        rows = conn.execute(
+            'SELECT %s FROM message_table WHERE conversation_id = ? AND message_id > ? '
+            'ORDER BY message_id ASC LIMIT ?' % cols, (conv, after_id, limit)).fetchall()
+        if not rows:
+            continue
+        messages = [_message_row(r) for r in rows]
+        total_new = conn.execute(
+            'SELECT COUNT(*) FROM message_table WHERE conversation_id = ? AND message_id > ?',
+            (conv, after_id)).fetchone()[0]
+        max_id = conn.execute(
+            'SELECT MAX(message_id) FROM message_table WHERE conversation_id = ?',
+            (conv,)).fetchone()[0]
+        part = conn.execute(
+            'SELECT sender_id FROM message_table WHERE conversation_id = ? '
+            'AND content_type NOT IN (%s) ORDER BY message_id DESC LIMIT 1' % ph,
+            tuple([conv] + list(exclude))).fetchone()
+        if account is not None and part is not None and part[0] is not None:
+            state = 'self' if str(part[0]) == str(account) else 'peer'
+        else:
+            state = None
+        per_conversation.append({
+            'conversation_id': conv,
+            'messages': messages,
+            'last_message_id': max_id,
+            'last_sender_state': state,
+            'has_more': total_new > len(messages),
+            **({'watermark_reset': True} if watermark_reset else {}),
+            'next_anchor': _message_anchor(messages[-1]) if messages else '',
+        })
+        next_watermarks[conv] = messages[-1]['message_id']
+    return {'ok': True, 'task': 'watch', 'per_conversation': per_conversation,
+            'next_watermarks': next_watermarks}
+
+
+def _parse_watch_args(args):
+    """watch 参数解析：--workdir/--watermarks 必需；--account/--limit/--exclude-types 可选。
+    非法 → None（BAD_ARGS）。"""
+    workdir = None
+    watermarks_path = None
+    account = None
+    limit = DEFAULT_QUERY_LIMIT
+    exclude_types = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ('--workdir', '--watermarks', '--account') and i + 1 < len(args):
+            value = args[i + 1]
+            if arg == '--workdir':
+                workdir = value
+            elif arg == '--watermarks':
+                watermarks_path = value
+            else:
+                account = value
+            i += 2
+        elif arg == '--limit' and i + 1 < len(args):
+            try:
+                limit = int(args[i + 1])
+            except ValueError:
+                return None
+            if limit <= 0:
+                return None
+            i += 2
+        elif arg == '--exclude-types' and i + 1 < len(args):
+            try:
+                exclude_types = [int(t) for t in args[i + 1].split(',') if t.strip()]
+            except ValueError:
+                return None
+            if not exclude_types or any(t < 0 for t in exclude_types):
+                return None
+            i += 2
+        else:
+            return None
+    if not workdir or not watermarks_path:
+        return None
+    watermarks = _load_watermarks(watermarks_path)
+    if watermarks is None:
+        return None
+    return workdir, watermarks, account, limit, exclude_types
+
+
+def cmd_watch(args):
+    """watch 模式（P2 任务 3.2）：多会话增量查询（与 query 同协议：错误 JSON 不抛、退出码 0）。
+    解密库缺失/打开失败 → DB_UNREADABLE；schema 不兼容（缺表/缺列）→ SCHEMA_UNSUPPORTED；
+    其他 SQL 错误 → SQL_ERROR。本模式无密钥参与，输出不走兜底脱敏（业务正文同 query）。"""
+    parsed = _parse_watch_args(args)
+    if parsed is None:
+        return {'ok': False, 'error': 'BAD_ARGS', 'message': WATCH_USAGE}
+    workdir, watermarks, account, limit, exclude_extra = parsed
+    msg_db = _resolve_dec_db(workdir, 'message')
+    if msg_db is None:
+        return {'ok': False, 'error': 'DB_UNREADABLE',
+                'detail': 'workdir 内未找到 message 解密库（message.db.dec.db 或 message.dec.db）：%s'
+                          % workdir}
+    try:
+        conn = _open_ro(msg_db)
+    except sqlite3.Error as e:
+        return {'ok': False, 'error': 'DB_UNREADABLE', 'detail': '解密库只读打开失败：%s' % e}
+    try:
+        return _query_watch(conn, watermarks, limit, account, exclude_extra)
+    except sqlite3.OperationalError as e:
         msg = str(e)
         if 'no such table' in msg or 'no such column' in msg:
             return {'ok': False, 'error': 'SCHEMA_UNSUPPORTED',
@@ -1330,6 +1655,9 @@ def main():
     if args and args[0] == 'query':
         emit(cmd_query(args[1:]), redact=False)  # query 无密钥参与，业务文本不走兜底脱敏
         return
+    if args and args[0] == 'watch':
+        emit(cmd_watch(args[1:]), redact=False)  # watch 同 query：业务文本不走兜底脱敏
+        return
     if args and args[0] == 'keyscan':
         parsed = _parse_keyscan_args(args[1:])
         if parsed is None:
@@ -1360,7 +1688,9 @@ def main():
                      '（密钥经 stdin 传 hex） | keyscan --pids <pid[,pid…]> --db <页1源库副本>'
                      ' [--max-region-bytes N] [--aligned-first|--full]'
                      ' | query --workdir <dir> --task messages|conversations|last-per-conv|resolve'
-                     ' [参数见 QUERY_USAGE]'})
+                     ' [参数见 QUERY_USAGE]'
+                     ' | watch --workdir <dir> --watermarks <json文件路径>'
+                     ' [--account <id>] [--limit N] [--exclude-types <t[,t…]>]'})
 
 
 if __name__ == '__main__':

@@ -10,8 +10,8 @@
 |------|------|------|---------|
 | P0 | 前置调查（schema / 打包 / 登录证据） | ✅ 完成（2026-10-14，子智能体真机执行） | 水位基元=message_id；send_time=秒；无发送状态字段；群解析经 conversation_table 可行；WAL 旧代尾帧实观命中（4/6 帧）；DPAPI 单文件移植 + pycryptodome 打包仅 1 条 lock 条目 |
 | P1a | 组件 C1-C9 + doctor 深检（正确性优先序） | 🔧 进行中 | 组件已实现；本轮身份修复独立测试与 CR 通过（Node 419/419、Python 97 通过/1 跳过）；1.14 真实退出登录、同 PID 切号、锁屏待用户配合 |
-| P1b | read-session 本地库通道组合 + 真机读取冒烟 | 🔧 进行中 | 2.1–2.4 与合成整链独立验证、最终 CR 通过；全量 431/431 对应名称来源修复前版本，最终修复定向复验通过；真实 2.5 及 P1a 三态待验 |
-| P2 | 待回复检测 + 发送本地库核验 | 📋 待开发 | |
+| P1b | read-session 本地库通道组合 + 真机读取冒烟 | 🔧 部分完成（2.1–2.4 ✅ 含主控复核 432/432 基线；2.5 真机对比待矩阵条目 + 三态验收） | 2.1–2.4 与合成整链独立验证、最终 CR 通过、主控复核接缝与契约一致（2026-10-16 补记）；真实 2.5 及 P1a 三态待验 |
+| P2 | 待回复检测 + 发送本地库核验 | ✅ 完成（2026-10-16，代码层；第八、九轮评审修复同日完成；真机 db 轮/local-record 待矩阵条目后验收） | 3.1–3.5 全部交付：watch 按轮锁（间隔不持锁，真实子进程互斥测试）、unread/watch 本地库通道（待回复=最后可参与消息发言方、系统消息最小排除、focus 冻结点 4、watch DB 失败不落 UI 水位保留）、发送核验（基线时序+trusted 全等+OCR 兜底+不重入+verification 三值）；独立验收（接缝无漂移，修 -ExpectedPrefix 失效 P1）+ 一次性 CR（修 -VerifyOnly 超时 effect 误报 P1）；**第八轮评审修复（5 P1 + 2 P2，见 P2 节末记录）：发送链 ref 账号核对/核验失败归并 unknown/关注空会话水位 0/源库代际重建基线/focus 持久绑定/VerifyOnly 标题一致性/unread name DB 过滤**；**第九轮评审修复（2 P1 + 1 P2，见 P2 节末记录）：水位锚点校验（同文件重写全量重报）/ focus ref legacy+类型约束 / unread name 无 focus 反向取名**；终检 typecheck 通过、npm test 508/508、test:py 116（1 平台跳过）；**独立验证（2026-10-16）：评审者复现手法 7/7 PASS（16 项独立复现保留于 tests/independent-repro-round8.test.ts）**；**第九轮评审修复后复验（2026-10-16）**：3 项（同文件重写漏消息→水位锚点验有效/focus legacy 拒绝+类型约束/unread name 反向取名）经评审者复现手法 3/3 PASS，独立验证另修同族残留 1 处（同文件重写 max 不变时基线段锚比对绕过），终检 **npm test 509/509、test:py 116（1 平台跳过）**；**第十轮评审修复后复验（2026-10-16）**：2 项（锚点重建后 limit 分页卡第一页→重建路径允许水位回退写入，跨轮实测 [1,2]/[3,4]/[5,6]；名称过滤纳入备注/别名反向取名 + 命名来源不可用明确报 LOCALDB_UNAVAILABLE 不冒充空）经评审者复现手法 3/3 PASS，终检 **npm test 518/518（含独立复现）、test:py 122（1 平台跳过）**；评审通过后测试去重（2026-10-16）：独立复现 21 用例删除/6 用例移入模块/5 处补强断言，终检 **npm test 503/503、test:py 122**（注意：build:main 不清 dist，删测试源文件需同步清 dist/tests 产物） |
 | P3 | content_type 扩展 + validate + runbook 文档 | 📋 待开发 | |
 
 ### P1a 验收记录（2026-10-15）
@@ -60,8 +60,8 @@
 | 1 可信快照生产规则 | ✅ 已冻结（批次场景表全过：正常含旧代尾帧截断/坏校验和链/撕裂截断/未提交尾帧/错钥等，失败场景均不返回半解密产物、不推进水位） |
 | 2 P0 结论（水位基元/发送核验语义） | ✅ 已冻结（2026-10-14，见「P0 结论摘要」） |
 | 3 P1b 错误分流表 | ✅ 已冻结（2026-10-15，实施方案经主控评审通过；见设计 §2 冻结点 3） |
-| 4 P2 关注集合 schema | 📋 待 P2 任务 3.1 开发前评审冻结 |
-| 5 登录判定规则 | 🔧 1.10 原语已交付（四值判定 + 登录态真机冒烟），**三态验证待用户配合后冻结** |
+| 4 P2 关注集合 schema | ✅ 已冻结（2026-10-16，见设计 §2 冻结点 4；3.1 已按冻结 schema 实现 focus 字符串数组形态，watch/水位存储形态归 3.2） |
+| 5 登录判定规则 | ✅ 已冻结（三态验收：A 退出登录/B 切号 7 项 PASS；C 锁屏不适用【部署 VM 永不锁屏】；判定=主窗 PID→进程句柄 message.db 直接证据，日志不背书） |
 
 **需用户配合项清单**
 
@@ -137,7 +137,7 @@
 | 1.11 | doctor 深检（随组件增量点亮，设计 §5） | ✅ 完成（2026-10-15，本轮独立测试与 CR 通过） | 步骤 3 查询主窗 PID 唯一账号库；步骤 4 定向探测同一 PID 的实际版本；需要扫描时才验证额外候选同版本。任一身份失败禁止密钥与快照，开发自测 doctor/login/version/datadir 共 83 项通过 |
 | 1.12 | 结构化日志 logs/localdb.log + redaction 接入 | ✅ 完成（2026-10-15） | log.ts logLocaldbEvent（五类事件 JSONL/ISO UTC/未知 type 拒写）+ >5MB 轮转保留 .1 一个历史（轮转失败不阻断写入）+ 整行 redactSensitive；redaction.ts 扩展 32-hex 密钥样式串兜底（设计 §8，先于手机号规则防 hex 内数字段被改写）；deps 注入 fs/clock/dir；11 用例 |
 | 1.13 | 遗留产物清扫（owner 存活校验）+ 删除失败报告 | ✅ 完成（2026-10-15） | cleanup.ts sweepArtifacts：owner.json 缺失/坏 JSON/pid 非法或死亡 → 删；存活且启动时刻一致 → 跳过（不按在线时长删除）；PID 已复用 → 删；存活但启动时刻不可判 → 保守跳过；删除失败收集 {dir,error} 不抛不中断；只动 base 直接子目录；9 用例；P1b 组合任务已按 driver.ts 语义等待子进程 close 后清理目录（合成取消回归通过）；**收尾批次接线：doctor 启动清扫已接（步骤 1 前调用，失败只记 db_fallback(cleanup/sweep_failed) 日志不阻断），2 用例** |
-| 1.14 | P1a 验收：doctor 全链真机绿灯 | 🔧 部分（2026-10-15，自动化项完成） | 全量三链实跑全绿（typecheck / npm test 387/387 / test:py 91 含 1 平台跳过）+ doctor 真机止于步骤 4 ui(compat)（5.0.12.6018 不在矩阵，正确行为）+ keyscan 直测×2 稳定命中 ~2.7s（详见「P1a 验收记录（2026-10-15）」）；未登录/登录/锁屏三态 + 登录证据三态（进程在已登出、同 PID 切号、锁屏）+ 锁屏下本地库只读可用性实证待用户配合 |
+| 1.14 | P1a 验收：doctor 全链真机绿灯 | ✅ 完成（A 态 6/6 PASS、B 态 7/7 PASS 零串号全过、C 态不适用【部署 VM 永不锁屏，用户 2026-10-20 确认】；全链 db 绿灯随矩阵条目加入后复核——验收说明与执行记录见 [wecom-cli-localdb-three-state-acceptance](wecom-cli-localdb-three-state-acceptance.md)） | 全量三链实跑全绿（typecheck / npm test 387/387 / test:py 91 含 1 平台跳过）+ doctor 真机止于步骤 4 ui(compat)（5.0.12.6018 不在矩阵，正确行为）+ keyscan 直测×2 稳定命中 ~2.7s（详见「P1a 验收记录（2026-10-15）」）；未登录/登录/锁屏三态 + 登录证据三态（进程在已登出、同 PID 切号、锁屏）+ 锁屏下本地库只读可用性实证待用户配合 |
 
 ## P1b：read-session 本地库通道组合
 
@@ -151,6 +151,7 @@
 - 独立回归边界：包级 Node 431/431 通过对应最后名称来源修复之前的代码状态，未受影响部分复用该结果；最终状态通过上述 typecheck/build、2 文件 24/24 及独立名称/ref/空 contact 定向复验，未声称最终状态重新全量。另用 6 个新 Node 进程确认 db/unset 模式扫描负缓存跨进程保留、doctor epoch 变化后重试。独立测试未重跑 Python 全量，复用开发查询 55/55；CLI/MCP 参数另经静态核对，最终结论无阻断交付问题。
 - 合成测试产物残留：独立测试者清理 3 个仅含合成数据的临时根被自动审批拒绝（blocked by policy，未提供具体原因），当前未删除、未代删；边界已校验的递归删除仅返回拒绝后已停止尝试，不宣称全程无残留。路径：`C:\Users\PC\AppData\Local\Temp\p1b-independent-2e6b2a1057354ea994735b1c69d0c3ae`、`C:\Users\PC\AppData\Local\Temp\p1b-cache-independent-75bf1ff2157842f5bfe9fe279111beaa`、`C:\Users\PC\AppData\Local\Temp\p1b-cache-independent-b1c0727d1e6c46e5aded9cfc9d38368b`。
 - 2.5 实机同会话 UI 对比、手机端实时同步、CPU/磁盘/工程化整链性能未验：当前实际版本 5.0.12.6018 仍不在矩阵，未添加条目、未写真实 state/keystore、未读取真实聊天或操作 UI。P1a 1.14 退出登录/同 PID 切号/锁屏仍待验，P1a/P1b 整阶段均未标完成。
+- 主控复核（2026-10-16，接手后续阶段前）：基线三链实跑全绿（typecheck 通过、npm test 432/432、test:py 96 含 1 平台跳过）；核心代码逐文件核对——执行器严格版本准入/负缓存上下文/会话内身份校验/cursor v2 锚点与生成代际/读后账号与源文件复核、operation 层通道分派与冻结点 3 兜底白名单（cursor 三处 CURSOR_UNSUPPORTED、legacy ref DB 拒绝 UI 标注、能力差异说明、ui(transient) 提升带 checked_at 防并发）、身份链（主窗 PID→进程句柄 message.db→目录，强于 CEF 日志证据）均与冻结点 3 契约一致；**范围核实：本提交仅覆盖 P1b 2.1–2.4，P2（watch 锁修正/unread/watch 本地库通道/发送核验接线）未交付，计划 P2 仍为待开发**。
 
 
 | # | 任务 | 状态 | 说明 |
@@ -165,11 +166,27 @@
 
 | # | 任务 | 状态 | 说明 |
 |---|------|------|------|
-| 3.1 | unread_list 本地库通道（待回复 = 最后一条**可参与回复判定**的消息发送方为对方） | ☐ 未开始 | **系统/控制消息最小过滤**（已确认类型不参与最后发言方计算：不制造也不清除待回复；验证两向语义）；judgment_basis 标注；UI 兜底保留（快照语义）；**关注集合 schema 冻结点 4**：实现前评审冻结（关注身份=建立时一次性解析为 {account, conversation_id}；未传=全部/空数组=INVALID_ARGUMENT/单目标失败部分返回；**新增关注初始化=一次待回复快照检查**，归属调用方流程） |
-| 3.2 | watch_poll 本地库通道 + 关注集合（水位增量独立于待回复判定） | ☐ 未开始 | 轮询只认已解析会话身份（不复用短期 ref/不每轮 search）；返回全部新消息 + 最后发言方辅助字段；失败项不推进其水位；不可信快照不推进水位；**DB 不可用时报不可用保留水位，不自动落 UI**；消费侧规则（恢复后核对最新发言方/已回复状态）随本任务交付并与 Runner 消费流程对齐；群会话按 0.4 结论；CLI 参数/MCP schema/旧字段兼容 |
-| 3.3 | **watch 持锁修正**：按轮获取/释放既有互斥（CLI 与 MCP 轮询路径锁入口一并核对对齐） | ☐ 未开始 | 解除"监控进程堵死 send/search"（watch.ts 实证全程持锁）；**集成验证：watch 运行期间完成一次 send**；"DB 绕过 UI 锁"延后（共享状态读改写需串行协调，另立专项），不引入读写锁/多采集器 |
-| 3.4 | 发送核验接线调整（PS 发送/核验分离 + TS 编排） | ☐ 未开始 | 发送前基线记录（规避秒精度）→ 发送后匹配新记录；db 核验优先 → OCR 兜底；仅可信正文参与；时间单位按 0.1 结论；PS 超时/取消不重入发送阶段；仅入队证据时结构化体现未确认（不靠文案）；**success/applied 语义=客户端动作已记录并经本地核验，不得解释为对方已收到**；双不足保持 EXECUTION_UNKNOWN 不自动重发 |
-| 3.5 | toolDefs 描述更新（待回复检测为主要用途 + 通道语义） | ☐ 未开始 | unread/watch/read-session/message-send 四处 |
+| 3.1 | unread_list 本地库通道（待回复 = 最后一条**可参与回复判定**的消息发送方为对方） | 🔧 部分完成（2026-10-16，批次 A 开发自测通过） | 分派矩阵对齐 readSession 范本（unset→UI+hint / ui(compat)→UI / db、ui(transient)→本地库；白名单 VERSION_UNSUPPORTED/KEY_SCAN_FAILED/SNAPSHOT_UNSTABLE/LOCALDB_UNAVAILABLE 兜底，取消/身份/focus 解析类不兜底，强制 local-db 保留具体错误）；本地库执行器 `platform/localdb/unread.ts`（context 任务 user_table.id 唯一映射 → py `last-per-conv` 待回复双向判定 → focus 逐名 resolve 部分返回）；密钥/快照解密段提取共享 helper `platform/localdb/access.ts`（readSession 同段手术式搬移，行为不变）；输出 `channel='local-db'` + `judgment_basis='last_sender'`，conversations 仅待回复（unreplied:true），自会话不出现，全系统类计数标注；UI 通道加 `judgment_basis='badge'` + 能力差异说明，旧字段原样保留，focus 忽略并注明；MCP schema 增 channel/focus，CLI 增 --channel/--focus。合成测试 17 条（分派矩阵 8 + 真实三库整链 9：双向判定/自会话排除/focus 部分失败/版本准入 forced/missing-self/可选 session/清理失败/keyscan 负缓存）；真机冒烟：compat 态兜底 UI 行为不变、强制 local-db 报 VERSION_UNSUPPORTED 不兜底 | 
+| 3.2 | watch_poll 本地库通道 + 关注集合（水位增量独立于待回复判定） | 🔧 部分完成（2026-10-16，批次 B 开发自测通过） | py 增 `watch` 任务（多会话独立 limit 增量、watermarks 经 workdir 临时 JSON 传入、last_sender_state 按最后可参与判定消息判向、next_watermarks 只含返回过消息的会话=水位只推进到已返回消息）；TS 执行器 `platform/localdb/watch.ts`（复用 access.ts 共享段 + unread 的 resolveFocusConversation；DB 水位存储 `platform/localdb/watchDbState.ts`→`localdb-watch-state.json`，账号变化全量重置基线；首次解析成功会话基线=当前 max(message_id) 只报之后）；operation 分派对齐 unread 范本（unset→UI+hint / ui(compat)→UI / db、ui(transient)→本地库），**DB 不可用一律结构化 `{ok:false, code, db_unavailable:true}` 不落 UI**（含强制 local-db），取消/IDENTITY_UNCONFIRMED 不吞；冻结点 4 事件 `{channel:'local-db', new_messages, last_sender, failed?}` + resume_note 消费侧规则（恢复 DB 后核对最新发言方与已回复状态）；CLI watch 增 `--channel/--focus`（UI 模式 focus 忽略注明；本地库首轮基线提示一次，存量待回复不回放）；py 单测 10 条 + TS 合成整链 10 条（基线/增量/水位不推进/双向/limit 截断/focus/账号切换/准入/取消/响应防御归一）+ 分派矩阵 8 条；真机冒烟 compat 态分派 UI + 强制 local-db 结构化失败不落 UI（本机 5.0.12.6018 不在矩阵，db 轮真机验收待矩阵扩展） |
+| 3.3 | **watch 持锁修正**：按轮获取/释放既有互斥（CLI 与 MCP 轮询路径锁入口一并核对对齐） | ✅ 完成（2026-10-16，批次 A 开发自测通过） | watch.ts 改为每轮 acquire/finally release（含失败轮；BUSY 轮跳过等下轮，--once 保持退出码 1），轮询间隔不持锁；MCP runExclusive 本就是每调用独占，两侧锁粒度对齐已在 watch.ts 注明；集成验证：子进程真实跑 watch 桩轮（AID_WECOM_TEST_DRIVER_STUB，不触达真实企微），间隔窗口内另一进程成功 acquire 同 scope 互斥 → 持锁期间轮跳过（BUSY 告警、循环存活）→ 释放后下一轮自行恢复 |
+| 3.4 | 发送核验接线调整（PS 发送/核验分离 + TS 编排） | 🔧 部分完成（2026-10-16，批次 B 开发自测通过） | message-send.ps1 增 `-SkipVerify`（跳过 step5/6 终态证据，返回 sent=true/verified=false，不产生 EXECUTION_UNKNOWN）与 `-VerifyOnly`（不做输入/发送，仅既有终态证据+三选二/Jev 判定；`-ExpectedPrefix` 可选核验文本，缺省取 -Text；两开关互斥，既有默认行为零改动）；messageSend.ts 本地库编排（state db/ui(transient) 分派读法同 unread）：resolve conversation_id（复用 resolveFocusConversation，失败回退老路径）→ 快照解密取基线（conversations 任务当前 max，时序在发送动作前）→ `-SkipVerify` 发送 → 重新快照 messages --after-id=基线匹配「方向=本人 ∧ trusted 正文全等」（短轮询 3×1s 可注入）→ 命中 `verification='local-record'`（verification_detail 含匹配 message_id）→ 未命中/DB 失败转 `-VerifyOnly` → `ocr-bubble` → 双不足 EXECUTION_UNKNOWN（不重入发送，绝不重发）；本地库不可用完全走既有单次路径零改动；toolDefs 写明 success/applied=客户端动作已记录并经本地核验不代表对方已收到（决策 #47）；TS 合成链 7 条（命中/未命中转 VerifyOnly/快照失败转 VerifyOnly/双不足/老路径零改动/发送后取消 partial/基线前取消 none）；真机冒烟 compat 态走老路径 Jev 校验不变（local-record 真机验收待矩阵扩展） |
+| 3.5 | toolDefs 描述更新（待回复检测为主要用途 + 通道语义） | 🔧 部分完成（2026-10-16，批次 B 开发自测通过） | wecom_watch_poll 重写（待回复检测/增量为主要用途 + channel/focus 参数 + 本地库失败不落 UI + resume_note + CLI watch 对照，不承诺毫秒级/不漏检）；wecom_message_send 增 verification 三值语义（local-record/ocr-bubble/缺省，local-record 含义=客户端已记录并经本地核验不代表对方已收到）；wecom_unread_list 批次 A 已更新（本轮核对一致）；wecom_read_session 描述不变 |
+
+**第八轮评审修复（2026-10-16，5 P1 + 2 P2，独立用例全绿：typecheck / npm test 488/488 / test:py 108 含 1 平台跳过）**：
+
+1. **发送链 target_ref 账号绑定校验**（messageSend.ts）：verifyRefFn 之后、任何发送或降级之前核对 ref.account 与 probe 当前账号（本地库兜底 try 之外，不被 planLocaldb catch 吞掉转旧发送）；跨账号 → TARGET_REF_STALE、驱动零调用。用例：跨账号拒绝 / 账号匹配正常 local-record。
+2. **发送后核验失败统一归并**（messageSend.ts）：completed=1 后 -VerifyOnly 的一切错误（含 UI_CHANGED/RESULT_TIMEOUT/驱动失败）→ EXECUTION_UNKNOWN/effect=unknown（不再误报 effect=none 误导重发）；取消保持 CANCELLED/partial。用例：VerifyOnly 抛 UI_CHANGED → EXECUTION_UNKNOWN、不重入发送。
+3. **watch 显式关注空会话水位存 0**（watch.ts）：显式 focus 解析成功的空会话（message_table 无行）→ 水位存 0（首批消息全量按增量上报）；未传 focus 的全量模式首见会话仍按当前 max 建基线。用例：focus 空会话 → 新增 ID1、2 两条都报。
+4. **watch 源库代际校验**（watchDbState.ts + watch.ts）：存储增 generation = hash(源库 fileIdentity + schema_version)（与 cursor generation 同源同构）；有水位时代际缺失/不一致或 max < 存储水位（回退）→ 输出 `generation_changed:true` + `generation_reason` 并按当前 max 重建基线，不当「正常无消息轮」。用例：同账号换库（新 fileIdentity + AUTOINCREMENT 归零）/ 旧文件缺 generation / 水位回退，均重建后新消息正常报。
+5. **watch focus 持久绑定**（watchDbState.ts + watch.ts）：建立时一次性解析并持久绑定 `{key, conversation_id, display_name, source:'name'|'ref', bound_at}`；后续轮次只按 conversation_id 读数（改名不影响跟踪，输出显示名用绑定时值）；ref 输入 → verifyRefFn + 账号一致性核对 → 按 ref.name resolve 一次；会话消失/读取失败进 failed 不自动解绑。用例：改名后按绑定增量 / 真实签名+账号匹配 ref 绑定跟踪 / 跨账号 ref failed 不绑定。
+6. **-VerifyOnly 目标会话一致性**（message-send.ps1）：核验终态判定前以 Test-WeComTitleMatch 核对当前标题与 -TargetName（复用发送路径规则），不一致 → EXECUTION_UNKNOWN（证据可能来自非目标会话，绝不 ocr-bubble 成功）。用例：静态核对检查在 VerifyOnly 分支且先于三选二。
+7. **unread name 过滤 DB 通道**（unread.ts/unreadList.ts）：UI 通道 name 既有语义为 display_name 子串包含（`u.name.includes`），DB 通道应用同一语义；无显示名的会话（未传 focus）在指定 name 时排除；toolDefs/CLI help 注明。用例：子串过滤 DB 通道生效且语义与 UI 一致。
+
+**第九轮评审修复（2026-10-16，2 P1 + 1 P2，typecheck / npm test 508/508 / test:py 116 含 1 平台跳过）**：
+
+1. **watch 水位锚点（同文件重写漏消息）**（watchDbState.ts + watch.ts + wecom_localdb.py）：水位条目增 `anchor` = 水位行消息稳定字段摘要（py `_message_anchor` 同源，排除 server_id/sequence；基线建 max 行、watch 推进存返回末端、空会话水位 0 → ''）；py `watch` 对非零水位先 SELECT 该行复算摘要与存储比对，**不匹配/行不存在（含旧桥整数水位无锚）→ 水位失效按 0 处理（该会话全量重报）并输出 `watermark_reset:true`**；TS 透传会话级 `watermark_rebuilt` + 顶层 `watermark_reset` 明细与 message 标注，水位更新为返回末端 + 新锚。补代际校验盲区：同文件 DML 重写（fileIdentity/schema_version 不变）重生更小 id 不再被旧水位压住。trade-off：库重建/恢复旧备份会重报旧内容一次——「漏消息」与「重复」之间取不漏（消费侧 msg_id 去重 + resume_note）。conversations 任务增 `last_anchor`（基线锚来源）。用例：同文件重写 ID1-6 全量返回+标注 / 水位行删除重建 / 正常轮不触发 / 锚不匹配与缺锚 py 单测。
+2. **watch focus ref 身份约束**（watch.ts + unread.ts resolveFocusConversation + watchDbState.ts）：`identity.account` 缺失的 legacy ref → failed('legacy-ref-unsupported')（本地库只接受账号绑定 ref）；`identity.type`（contact/group）传入 resolve 作类型约束——contact 只认 S:、group 只认 R:，类型不符/无命中 → failed（群引用不得绑到同名联系人会话）；绑定条目增 `type` 存证（name 绑定不写）；已有绑定后续轮询按 conversation_id 读数不受影响。用例：legacy ref failed / group ref「Peer」+同名 contact failed / contact 绑定带 type 回归。
+3. **unread name 过滤无 focus 反向取名**（wecom_localdb.py + unread.ts）：py `last-per-conv` 增 `--with-names`（须与 --account 同传）——R: 群名只认 conversation_table、S: 联系人名只认 user_table（会话 id 解析对方 id；无命中/来源缺失 → name=null，与 resolve 同一命名纪律）；TS 指定 name 时反向取名后按实际名称子串过滤（name=null 指定 name 时排除、未指定时保留且 name 缺省），无 focus 的 name 查询不再把全部会话当「无显示名」排除；修正 independent-repro-round8.test.ts:400 的错误预期（无 focus name='Peer' 应命中真实待回复的 Peer）。用例：反向取名 R 群名/S 联系人名/无命中 null（py）+ 无 focus name 命中/排除/null 名行为（TS）。
 
 ## P3：扩展与维护工具
 
