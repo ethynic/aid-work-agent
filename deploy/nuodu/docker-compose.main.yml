@@ -1,7 +1,7 @@
 # 济南诺度私有云主 compose（139.129.48.30，混部环境）
 # 基于 docker-compose.prod.yml 适配：
 # 1. API 端口只绑 127.0.0.1（宝塔 nginx 同机反代，公网不可达）
-# 2. 存储路径改为 /var/www/aid/agent_{uploads,storage}
+# 2. 存储路径改为 /var/www/agent/agent_{uploads,storage}
 # 3. 内存限额压紧：与客户存量业务（已占约 7.6G/16G）混部，
 #    全套上限 api 2.5g + background 1.5g + redis 512m，实际占用约 2~3g
 # 4. WORKERS 默认 2（私有云用户量小）
@@ -46,8 +46,8 @@ services:
         tmpfs:
           mode: 1777
           size: 1g
-      - /var/www/aid/agent_uploads:/app/uploads
-      - /var/www/aid/agent_storage:/app/storage
+      - /var/www/agent/agent_uploads:/app/uploads
+      - /var/www/agent/agent_storage:/app/storage
     networks:
       - aid-network
     healthcheck:
@@ -86,8 +86,8 @@ services:
       - ./log:/app/log
       - ./configs:/app/configs
       - ./skills:/app/skills
-      - /var/www/aid/agent_uploads:/app/uploads
-      - /var/www/aid/agent_storage:/app/storage
+      - /var/www/agent/agent_uploads:/app/uploads
+      - /var/www/agent/agent_storage:/app/storage
       - type: tmpfs
         target: /tmp
         tmpfs:
