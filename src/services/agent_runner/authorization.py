@@ -233,6 +233,14 @@ class RunnerAuthorizer:
             return
         if tenant_id is None and user and user["role"] == UserRole.PLATFORM_ADMIN.value:
             return
+        # 租户数字员工副本实例（agent_id != base_agent_id）的订阅/用户授权挂在
+        # 基础员工上；实例归属已按 tenant_id+agent_id 限定，archived 行也解析
+        # （与会话历史可用口径一致，新会话在实例 API 层拒绝）。
+        cursor.execute("""SELECT base_agent_id FROM tenant_agent_instances
+            WHERE tenant_id=%s AND agent_id=%s LIMIT 1""", (tenant_id, profile_id))
+        instance_row = cursor.fetchone()
+        if instance_row and instance_row["base_agent_id"]:
+            profile_id = instance_row["base_agent_id"]
         cursor.execute("""SELECT 1 FROM subscriptions WHERE tenant_id=%s AND subagent_type=%s
             AND status='active' AND starts_at<=CURRENT_TIMESTAMP
             AND (expires_at IS NULL OR expires_at>CURRENT_TIMESTAMP) LIMIT 1""", (tenant_id, profile_id))
