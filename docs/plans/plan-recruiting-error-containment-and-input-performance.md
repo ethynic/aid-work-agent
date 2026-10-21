@@ -155,7 +155,7 @@ d470 案例第二批 3 份已取回但未处理即挂起，现无任何路径消
 | visual-region-compare.ps1（恢复核验） | ✅ 已迁 Node（2026-10-21） | regionExactEqual ARGB 零容差比较（复用 imageOps 基建）；20 场景双通道全一致（含 PS [int] 绑定银行家舍入实证），ps1 已删 |
 | 输入回退清理（win-click.ps1 等） | ✅ 已完成（2026-10-21） | win-click/cv-wheel 双通道删除，WinMouseClicker 纯 native（fail-loud），doctor 改原生能力探测，打包/旧测试清理 |
 
-**CLI 生产链路 PowerShell 专用脚本已清零**（2026-10-21）：scripts/ 仅剩实验工具 window-experiment.ps1 + BossPhysicalInput.cs（仍被实验脚本 Add-Type 引用，保留）+ Node 探针。全量测试 926/937（7 失败为既知 manifest 存量）。真机部署验证待用户指示。外部评审两项 P1 已修复（2026-10-21）：①首行 Up/Average/Paeth 滤镜 prevRow 按全 0（原空 Buffer 致 NaN 参与运算，真机 CDP 首行 Paeth 截图曾 7560 像素解码错、sameView 误判）；②CRC 表索引补 & 0xff（原全部 chunk CRC 错，Pillow UnidentifiedImageError 会使云端识别前置失败）。python 标准库独立 fixture 回归 + node:zlib.crc32 独立校验 + Pillow 端到端读图验证 + 红绿验证，全量 931/942。
+**CLI 主链路（筛选/点击/滚动/简历读取/同画面核验）PowerShell 专用脚本已清零**（2026-10-21）。仍保留 window-experiment.ps1 + BossPhysicalInput.cs + BossWindowExperiment.cs + powerShell.ts 封装：它们是**视觉恢复窗口分支（visualRecovery captureWindow/clickWindow）、视觉诊断（visualDiagnoseClient）与 CLI 诊断命令的生产依赖**，非仅历史参考；待窗口截图/点击能力迁 native 后一并清理（2026-10-21 用户确认口径）。全量测试 926/937（7 失败为既知 manifest 存量）。真机部署验证待用户指示。外部评审两项 P1 已修复（2026-10-21）：①首行 Up/Average/Paeth 滤镜 prevRow 按全 0（原空 Buffer 致 NaN 参与运算，真机 CDP 首行 Paeth 截图曾 7560 像素解码错、sameView 误判）；②CRC 表索引补 & 0xff（原全部 chunk CRC 错，Pillow UnidentifiedImageError 会使云端识别前置失败）。python 标准库独立 fixture 回归 + node:zlib.crc32 独立校验 + Pillow 端到端读图验证 + 红绿验证，全量 931/942。
 
 ## 行为与安全边界
 

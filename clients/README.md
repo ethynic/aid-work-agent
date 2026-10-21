@@ -1,224 +1,28 @@
-# 客户端工具部署手册（boss CLI + agent-tool-runtime）
+# 客户端构建与安装入口
 
-> 本页保留历史内嵌BOSS发货包说明。独立Runtime与签名插件的本次验收使用[构建手册第12节](../docs/system/desktop-agent-client-build-manual.md#12-独立runtime首期验收包)；当前源码不再支持本页的旧捆绑打包流程，`clients/pack.sh`会在修改文件前明确拒绝。
+## Runtime 与 BOSS 插件
 
-> 面向角色：给客户 Windows 电脑安装「招聘智能体本地执行组件」的实施/支持人员。
-> 两个组件的关系：**agent-tool-runtime（执行节点）在打包时已捆绑 boss CLI（BOSS 直聘
-> 操作能力）**——客户机只需安装一个 tgz 包，得到 `aid-runtime` 命令。
+**当前唯一打包流程：[Runtime 与 BOSS 插件构建及 ZIP 交付手册](../docs/ops/runtime-boss-release-guide.md)。**
 
----
+手册覆盖 Windows 构建环境、组件版本、原生共享依赖、固定 Node、BOSS 签名插件、历史公钥登记、Host tgz、Runtime 安装器、验包、说明与摘要以及最终 ZIP。最终交付统一放在 `clients/release/`，仓库根 `release/` 不作为交付目录。
 
-## 一、前置要求（客户电脑）
+当前 Runtime 和 BOSS 是独立安装的组件：组合 ZIP 内有 Runtime EXE 和 BOSS `.aidplugin.zip`；用户先安装 Runtime，再在其界面导入插件。安装 Runtime 不会自动升级 BOSS。首次配对后自动复用服务器和设备身份，视觉调用无需用户额外配置 token。
 
-| 项 | 要求 | 检查方式 |
-|---|---|---|
-| 操作系统 | Windows 10/11 x64 | — |
-| Node.js | **20 或更高（当前 LTS 24.x，开发验证环境即 v24；老版本如 v16 无法运行）** | `node -v`；未装/过旧去 https://nodejs.org 下 LTS 安装（覆盖安装即可，package.json 已声明 engines>=20） |
-| Chrome | 已安装并可登录 BOSS 直聘 | — |
-| 网络 | 能访问服务端地址（如 https://agent2.aidingyi.cn） | 浏览器打开该地址 |
-
-> ⚠️ 全程**不需要**管理员权限（npm 用户级安装 + DPAPI 用户级加密）。
-> 多人共用一台电脑时：每个 Windows 账户各自安装、各自配对（凭证按账户隔离）。
-
-## 二、编译新版本（在开发机/构建机上）
-
-### 1. 一键打包（推荐）
-
-```bash
-bash clients/pack.sh 0.2.15        # 版本号必填；--skip-smoke 可跳过冒烟
-```
-
-脚本自动完成并校验（2026-09-17 固化，每步防一个真实踩过的坑）：
-
-- 两处 `package.json` 版本统一修改 + 两个 lockfile 同步（runtime 捆绑 boss CLI 是否刷新
-  **只看版本号**，版本不变会把删 OCR 之前的旧拷贝原样打进包——0.2.13 重打包仍 140MB 即此因）
-- 打包前清 stale 捆绑拷贝 / `__pycache__` / 旧 dist（防陈旧产物混入）
-- `npm pack`（prepack 自动构建 boss CLI → runtime → install-links 捆绑）
-- 产物硬校验：包体 ≤15MB（OCR 环境混入就是 ~140MB，体积是最后防线）、无 ocr-python/
-  rapidocr 残留、捆绑 boss 版本=目标版本、简历管线 4 个 ps1 脚本与双 CLI 入口齐全
-- 冒烟：临时目录安装 tgz，`aid-runtime --help` 与 boss CLI `--help` 均可执行
-- 产物移入 `clients/release/`，并在 `release/VERSION.txt` 顶部插入占位条目
-
-### 2. 手工打包（备用；不推荐）
-
-`clients/boss-resume-assistant` 与 `clients/agent-tool-runtime` 两处 `package.json` 的
-`version` 同步修改后：
-
-```bash
-cd clients/agent-tool-runtime
-npm pack
-```
-`prepack` 钩子会自动依次：构建 boss CLI → 构建 runtime →
-`npm install --install-links`（把 file: 符号链接依赖转成实体目录打进 tar，避免 `..` 路径错乱）；
-`postpack` 打完自动恢复开发态。**产物：`agent-tool-runtime-<版本>.tgz`（boss CLI 已捆绑在内，
-客户机无需单独安装 boss 包）。**
-
-> ⚠️ 2026-09-17 去 OCR 化：简历识别改为云端 GLM-5.3-Flash 多模态（0.2.14 起），包内不再捆绑
-> `ocr-python/` Python 环境——体积从 ~140MB 降到 ~3.4MB，客户机不再需要任何本地 OCR 依赖。
-> ⚠️ 手工打包前**必须升 boss CLI 版本号**并删 `agent-tool-runtime/node_modules/boss-resume-assistant`：
-> `--install-links` 按 version 判断是否刷新捆绑拷贝，版本不变会打进旧副本
-> （0.2.13→0.2.14 就栽在这：OCR 已删但包里还有 140MB 旧环境）。
-
-### 3. 冒烟验证（发布前必做，防 files 漏文件）
-```bash
-mkdir %TEMP%\smoke && cd %TEMP%\smoke
-npm install <tgz 绝对路径>
-npx aid-runtime doctor --help   # 能执行即安装完整（doctor 会检查脚本齐全性）
-```
-
-## 三、安装（客户电脑）
-
-```bash
-npm install -g <tgz 文件路径>
-```
-装完得到命令 `aid-runtime`（boss-cli 捆绑在包内，由 runtime 自动调用，无需直接使用）。
-
-验证：`aid-runtime status`（应显示配置目录与配对状态；未配对属正常，见 §五）
-
-## 四、Chrome 调试实例（v0.2.1 起自动拉起，手工方式仅兜底）
-
-**默认无需任何手工配置**：首次执行任意 BOSS 操作时，CLI 检测调试端口（默认 9222）不通
-会自动拉起一个**固定持久 profile**（`C:\chrome-debug`）的 Chrome 调试实例并打开
-zhipin.com（ChromeLauncher：App Paths 注册表/常见路径定位 chrome.exe → detached
-spawn → 轮询端口就绪 ≤15s；找不到 Chrome/拉起失败/超时一律 fail-open 按原错误上报）。
-用户**只需在弹出的窗口里登录一次 BOSS**。用户偏好自己管理时设 `AID_BOSS_AUTO_CHROME=0` 关闭。
-
-背景：Chrome 136+ 默认用户数据目录会静默忽略调试端口参数，必须独立数据目录。当初
-「CLI 绝不启动 Chrome」决策针对的是临时 profile（指纹/登录态每次全新，触发 BOSS 风控）；
-固定持久 profile 与手动开快捷方式完全等价，不属禁区（ChromeAttacher 决策 6 修订二）。
-
-手工兜底（自动拉起失败的少数情况）：
-
-1. 新建桌面快捷方式，目标填：
-   ```
-   "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="C:\chrome-debug"
-   ```
-   （Chrome 路径按实际安装位置调整；数据目录固定用 `C:\chrome-debug` 便于支持排障）
-2. 用这个快捷方式打开 Chrome，**登录 BOSS 直聘**（登录态保存在独立目录，与日常
-   Chrome 互不影响；此后一直用这个快捷方式打开）
-3. 验证调试端口：浏览器访问 `http://127.0.0.1:9222/json/version` 能看到 JSON 即可
-
-> ⚠️ 智能体操作期间（筛选/打招呼约 2-3 分钟）请勿移动鼠标、勿遮挡该 Chrome 窗口。
-
-## 五、绑定服务器（配对）
-
-1. 在 Web 管理端（与服务端地址对应的站点）进入「本地工具 / 设备管理」页 →
-   **生成配对码**（8 位大写字母数字，**5 分钟内有效、一次性**）
-2. 客户电脑执行：
-   ```bash
-   aid-runtime pair --code <配对码> --server https://agent2.aidingyi.cn --name "张三-办公电脑"
-   ```
-   （`--server` 换成客户实际环境的服务端地址；配对成功后地址存入配置，后续 start 不再需要传）
-3. 启动常驻：
-   ```bash
-   aid-runtime start
-   ```
-   看到日志 `[runtime] 已启动 device_id=... server=...` 即成功；Web 设备页应显示
-   在线（绿色）。
-
-**配置与凭证位置**（支持排障时用）：
-- 配置：`%APPDATA%\aidwork-tool-runtime\config.json`（server 地址 / device_id / providers 入口）
-- 凭证：`%APPDATA%\aidwork-tool-runtime\credentials.bin`（DPAPI 加密，勿手工编辑/拷贝到别的机器——绑定了本机）
-
-### Runtime 多 Provider 配置（微信等新能力的启用入口）
-
-Runtime 从多 Provider 版本起支持在**一台设备上承载多个受信 Provider**（BOSS 直聘之外如微信操作能力）。配置入口是 `config.json` 的 `providers` 字段（key → 各 Provider CLI 入口绝对路径，本地管理员手工配置，**禁止云端下发**）：
-
-```json
-{
-  "server": "https://agent2.aidingyi.cn",
-  "device_id": "...",
-  "bossCliEntry": "C:\\...\\boss-resume-assistant\\dist\\src\\cli\\index.js",
-  "providers": {
-    "weixin": { "entry": "C:\\...\\weixin-cli\\dist\\src\\cli\\index.js" }
-  }
-}
-```
-
-规则与现状（与 `clients/agent-tool-runtime/src/providers.ts` 受信注册表一致）：
-- `boss-recruiting` 恒可用：`bossCliEntry` > `providers['boss-recruiting'].entry` > 包内默认入口（只装 BOSS 的存量设备零配置不变）；
-- 其余 Provider（当前为 `weixin`）**仅在 `providers` 显式配置 entry 时启用**——未配置=未安装，不上报 capability、不领取对应任务；
-- capability 上报为 `providers` 数组 + `provider_manifests`（provider_id/manifest_digest/protocol_version），服务端按此路由任务。
-
-**微信 Provider（`ai.aidwork.weixin`）启用前提**（三者缺一不可）：
-1. **安装**：目标机器具备微信操作 CLI（weixin-cli 构建产物），并在 `config.json` 的 `providers.weixin.entry` 配置其入口路径；`aid-runtime doctor` 逐 Provider 自检通过、`status` 列出 weixin；
-2. **受信**：CLI 的工具集必须落在服务端与 Runtime 双侧受信清单内——设备侧 `weixin_probe` / `weixin_name_resolve` / `weixin_chat_search` / `weixin_history_read` / `weixin_unread_list`（只读）与写操作 `weixin_message_send`（服务端另批准 v2 统一操作名 `weixin_message_send_v2`，走许可/证据链，不经 v1 发送）；清单外工具一律 TOOL_NOT_ALLOWED；
-3. **capability**：配对后设备上报的 capabilities 含 weixin 条目（manifest digest 匹配），服务端才会把微信任务派给该设备。
-
-> 版本边界：weixin Provider 当前 `protocol_version=1`（v2 受控写协议随真机验收 P0 交付前，v2 任务在 Runtime 侧 PROTOCOL_NOT_SUPPORTED 拒绝、不降级旧发送）。因此**仅安装+配置 entry 不会产生任何自动发送行为**；发送链路的服务端总开关见 `docs/ops/weixin-marketing-rollout.md`。
-
-## 六、自检与开机自启
-
-**自检**（装完/出问题时先跑这个）：
-```bash
-aid-runtime doctor
-```
-逐项检查：配置文件 / 凭证解密 / 服务端心跳全链路 / boss CLI 入口 / 子进程 doctor
-（脚本齐全 + CDP 端口 + BOSS 登录态）/ 桌面可交互。哪项 ✗ 就按输出提示处理。
-
-**后台常驻与开机自启（无窗口方案）**：
-
-runtime **不需要保持命令行窗口**——用仓库自带的脚本注册为登录自启的后台任务
-（无窗口运行 + 崩溃/误杀 10 秒自动拉起 + 日志落文件并按 5MB 轮转）：
-
-```powershell
-# 1. 把 clients/scripts/start_runtime.bat 复制到 %APPDATA%\aidwork-tool-runtime\
-# 2. 注册并启动（管理员不需要，当前用户即可）
-powershell -ExecutionPolicy Bypass -File clients\scripts\register_runtime_task.ps1
-```
-- 日志位置：`%APPDATA%\aidwork-tool-runtime\logs\runtime.log`（`runtime.old.log` 为轮转前一代）；
-  runtime 的 stderr 与其调用的 boss CLI 子进程 stderr 都汇入该文件（自动脱敏：token/长 base64 打码）
-- **远程排障采集**：让客户双击 `clients/release/collect_logs.bat` → 桌面生成
-  「aidwork-诊断包-时间戳.zip」（日志 + config.json + 环境/包版本 + status/doctor 输出；
-  绝不含 credentials.bin），发回即可分析
-- bat 优先用 npm 全局命令 `aid-runtime`，找不到时回退开发机仓库路径（客户机走前者）
-- 临时停止：`Stop-ScheduledTask -TaskName AidWorkToolRuntime`（同时结束 bat 宿主 cmd 进程）；
-  彻底移除：`Unregister-ScheduledTask -TaskName AidWorkToolRuntime`
-- **重启（升级后必做）**：`Stop-ScheduledTask -TaskName AidWorkToolRuntime; Start-ScheduledTask -TaskName AidWorkToolRuntime`。
-  不要用 Stop-Process 杀 node 进程来重启——会带走整个任务宿主（自愈循环无法接手），任务变 Ready 需手动 Start
-- **不要**做成 Windows 系统服务（SYSTEM/Session 0 无法操作用户桌面的 Chrome 与鼠标，
-  任务计划的登录任务是唯一正确形态）
-
-### 简历识别（v2 云端化，客户机零识别依赖）
-
-简历读取（resume-detail / resume-batch）0.2.14 起**改为云端识别**：客户机只做滚动截图+
-拼接，拼接长图随结果回传，由服务端调 GLM-5.3-Flash 多模态一次产出（姓名核对 + 人物总结 +
-职位匹配评分 + key_info）。客户机**不再需要 Python/RapidOCR/任何本地识别引擎**（0.2.13 及
-以前捆绑的 `ocr-python/` 环境已移除，包体积 ~140MB → ~3.4MB）。
-
-- 姓名核对：页面姓名与图中姓名由服务端比对（≤1 字容差），不符该份不入库不扣费
-- 计费：识别费 1 积分/份，云端评估成功即扣（截图不扣费）；单价服务端 config 可调
-- 服务端依赖：部署 ≥ 含 resume_vl 的服务端版本，且服务端配置 ZHIPU_API_KEYS（GLM-5.3-Flash）
-
-## 七、升级 / 卸载
-
-```bash
-# 升级（配置与配对凭证自动保留，无需重新配对）
-npm install -g <新版本 tgz 路径>
-# 然后重启后台任务（见 §六：Stop-ScheduledTask + Start-ScheduledTask）
-
-# 卸载
-npm rm -g agent-tool-runtime
-rmdir /s /q "%APPDATA%\aidwork-tool-runtime"   # 可选：清配置与凭证
-```
-
-## 八、常见问题
-
-| 现象 | 处置 |
+| 需求 | 入口 |
 |---|---|
-| doctor 报 CDP 连不上 9222 | 没用调试实例快捷方式开 Chrome（见 §四）；或 Chrome 未开 |
-| doctor 报无 BOSS 登录态 | 在调试实例 Chrome 里重新登录 zhipin.com |
-| 设备页不在线 | runtime 窗口是否还在运行；`--server` 地址是否正确；服务器网络是否可达 |
-| pair 报配对码无效 | 码超 5 分钟过期，重新生成 |
-| 打招呼/筛选执行失败 EXECUTION_UNKNOWN | 按工具返回的中文提示人工查看页面（多为确认弹层/风控拦截），勿连续重试 |
-| 简历识别失败/提示服务端评估失败 | 0.2.14 起识别在云端：查服务端日志（简历评估/ZHIPU key 配置）；客户机只需确认截图拼接正常 |
-| 提示付费墙（该职位无开聊权益） | BOSS 账号权益问题，切换职位或开通权益 |
+| 从源码生成新的 Runtime + BOSS ZIP | [完整出包步骤](../docs/ops/runtime-boss-release-guide.md) |
+| 收件人安装或升级 | 使用本次 ZIP 内的“先读我.md”；[说明生成及安装顺序](../docs/ops/runtime-boss-release-guide.md#8-复制交付文件说明和源码状态) |
+| 完整桌面对话客户端（非独立 Runtime） | [桌面客户端构建手册](../docs/system/desktop-agent-client-build-manual.md) |
+| 插件容器、签名及其他 Provider 资产 | [插件打包说明](runtime-plugin-packaging/README.md) |
+| 共同契约及实际完成范围 | [集成契约](../docs/system/runner-desktop-runtime-integration-contract.md)、[Runtime 计划](../docs/plans/plan-runtime-plugin-host.md) |
 
----
-*一键安装脚本（install.ps1/upgrade.ps1）与看门狗自愈在《部署封装设计》中规划，
-当前以本手册手工流程为准。设计文档：`docs/design/recruiting/recruiting-client-deployment-design.md`*
+## 历史流程
+
+原本文的 `bash clients/pack.sh <版本>`、Runtime 内嵌 BOSS 的全局 npm tgz、计划任务安装方式适用于旧交付；当前 `clients/pack.sh` 已在修改文件前拒绝独立插件布局，不再推荐执行。历史文件、版本记录及已交付包保留原意，不作为当前构建步骤。旧部署内容可通过 Git 历史查阅；不要把历史 `clients/release/安装手册.md` 当作新 Runtime 的安装说明。
 
 ## 九、客户端计费接入规范（三模式，新客户端必读）
+
+> 下列激活/ClientBinding 说明面向相应独立客户端接入，不是 Runtime/BOSS 的安装步骤。Runtime/BOSS 使用已有 Device 配对身份，不要求用户再取得独立 API token；其当前流程见本文顶部链接。
 
 > 设计总纲：[docs/design/billing/client-billing-integration-design.md](../docs/design/billing/client-billing-integration-design.md)
 > 铁律：**客户端永远不上报金额**。金额由服务端按价目表/用量计算，客户端只产生"事实"。

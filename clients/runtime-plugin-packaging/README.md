@@ -1,46 +1,25 @@
-# 第一方 Runtime 离线包构建
+# 第一方 Runtime 离线包格式与打包入口
 
-此目录仅在构建机运行。客户机接收 `.aidplugin.zip`，验证签名与完整清单后解包；不运行 npm、pip、Git 或安装 hook。支持 BOSS、微信、企业微信，保留各 Provider 实际 MCP 工具集合（当前分别 21、8、10 项）。Host 可执行的受信工具子集由 Runtime 原有策略决定。
+**Runtime + BOSS 从源码到最终 ZIP 的唯一操作流程：[完整打包手册](../../docs/ops/runtime-boss-release-guide.md)。** 本页保留容器格式、其他 Provider 资产和签名原理，不维护另一套出包命令。
 
-外层仅 `envelope.json`、`payload.zip`。内层包含完整 `runtime-manifest.json`、`dist/src`、生产 `node_modules`、驱动、包元数据和适用的内部 OCR Python/模型/原生依赖。签名和 manifest 摘要采用 RFC8785；包摘要/大小绑定内层原始 ZIP 字节。`distribution.required_files` 覆盖内层所有普通文件，只排除 manifest 自身，避免自引用。
+此目录仅在构建机运行。客户机接收 `.aidplugin.zip`，验证签名与清单后解包，不运行 npm、pip、Git 或安装 hook。支持 BOSS、微信、企业微信；工具集合由本次插件 `version --json` 和 `runtime-manifest.json` 产生，不把历史工具数量当作当前清单。Host 可执行范围由 Runtime 的受信策略决定。
 
-## 构建
+## 包格式
 
-在仓库根运行，Node 路径必须是 H3 批准的 22.23.3 Windows x64 / ABI127：
+外层仅 `envelope.json`、`payload.zip`。内层包含 `runtime-manifest.json`、`dist/src`、生产 `node_modules`、批准的驱动及适用的内部原生依赖/OCR 资产。签名及 manifest 摘要使用 RFC8785；包摘要和大小绑定内层 ZIP 字节。`distribution.required_files` 覆盖内层普通文件，仅排除 manifest 自身，避免自引用。
 
-```powershell
-npm --prefix clients/runtime-plugin-packaging ci --ignore-scripts
-npm --prefix clients/boss-resume-assistant run build:main
-npm --prefix clients/weixin-cli run build:main
-npm --prefix clients/wecom-cli run build:main
-venv/Scripts/python.exe clients/runtime-plugin-packaging/prepare-ocr.py
-node clients/runtime-plugin-packaging/package.mjs --test --test-key-id aid-isolated-bundle-20261015-next --node C:/repos/aid-work-agent/clients/runtime-plugin-packaging/assets/node/node-v22.23.3-win-x64/node.exe --npm-cli C:/nvm4w/nodejs/node_modules/npm/bin/npm-cli.js --output C:/repos/aid-work-agent/clients/runtime-plugin-packaging/release/new-acceptance
-```
+## 当前构建及信任规则
 
-`--node`、`--npm-cli` 是可信构建输入，按构建机实际位置提供。固定 Node ZIP 官方 SHA256：`2b0ff57b049cda1bbcea2240eec20467018713c1efe1f7360c2681859b90ed71`。构建工具验证其版本、平台、架构和 ABI；不会将 Node PATH 或 Electron executable 当客户机执行入口。
+- [构建机与依赖安装](../../docs/ops/runtime-boss-release-guide.md#2-构建机条件及执行约定)：当前 BOSS/Host 依赖 `clients/shared/win32-native-input`，构建前安装该共享包依赖；BOSS-only 不准备 OCR。
+- [签署和公钥登记](../../docs/ops/runtime-boss-release-guide.md#5-签署-boss-插件登记公钥及完整历史快照)：单 BOSS 使用 `--provider boss`、唯一 `--test-key-id`、固定 Node 和全新输出目录。不要照抄历史批次的签名 ID。
+- 验收公钥唯一登记表为 `trust/acceptance-roots.json`，原始 r15 资产在 `trust/history/runtime-r15.json`，后续完整快照在 `trust/history/*.roots.json`。旧 key_id、公钥、Provider 范围和 test_only 不变；登记工具只追加公钥，不读取旧私钥。
+- 单 BOSS 新根先收窄到 `ai.aidwork.boss-recruiting` 再登记。prepare/package/verify 消费完整登记集合，不使用本轮只有一个根的文件替代历史集合。
+- 每次交付保留完整公开根快照；同步这些公开资产即可换构建机，不要求用户解绑重配。新私钥只驻签名进程，不能为同一已交付版本重签不同内容。
+- 正式签署使用外部 `--signer` 和不可变 `--release-id`，不能混用 `--test`；Windows production 另需有效代码签名，详见[发行边界](../../docs/ops/runtime-boss-release-guide.md#10-正式签名发行与故障排查)。
 
-输出目录必须全新，工具拒绝覆盖已生成包。一次运行签署全部三包，使用同一个仅驻内存的开发 signer；不保存私钥。单 Provider 调试可传 `--provider boss|weixin|wecom`，但新的测试运行仍应使用新目录。正式发布改为 `--signer <外部配置.json> --release-id <不可变发布标识>`，配置含 `key_id`、`private_key_path`，不能与 `--test` 混用；正式私钥不入库、不打印。
+如需构建微信或企业微信，`package.mjs` 还支持 `--provider weixin`、`--provider wecom`，不传 provider 才会遍历三个 Provider；对应源码先分别构建，OCR 资产按下节准备。不要为只交付 BOSS 的任务额外构建全部三包。
 
-## 跨电脑构建与历史升级
-
-验收公开信任根的唯一登记文件为本目录`trust/acceptance-roots.json`，随源码同步到其他构建机。`trust/history/runtime-r15.json`保存已交付r15的原始四根，字节SHA256固定为`bc1bdb8f0b949ec54f941821f1470207d913f6c2fef64c82646b356104d7f328`。历史key_id、公钥及Provider授权范围不得更名或覆盖；带历史命名的key_id与新交付文件名互不影响。
-
-`trust/history/*.roots.json`是后续已发布版本的公开根快照清单，例如`runtime-0.0.12.roots.json`保留本次五根。每次交付时，将完整登记集合保存为新的`<发布版本>.roots.json`并随源码提交，保留全部旧快照。构建会逐份校验登记集合覆盖这些快照；漏掉后来发布的根、改变历史身份或快照损坏均拒绝继续。
-
-1. 先更新源码并检查登记集合，复用已经交付的不可变插件包，不为同一版本换签名或换内容。
-2. 新版本打包使用全新`--test-key-id`。已登记的ID（包括早期默认ID）会在生成密钥前被拒绝；私钥只存在于签名进程内，换机不需要复制旧私钥。
-3. 将输出公钥显式追加登记（单Provider发行应先将该根的`providers`限定为实际发布的Provider）：
-
-   ```powershell
-   node clients/runtime-plugin-packaging/register-publisher-trust.mjs --input clients/runtime-plugin-packaging/release/new-acceptance/ISOLATED-TEST-TRUST-ROOT.json
-   ```
-
-4. 交付前将本轮完整登记集合保存为`trust/history/<发行版本>.roots.json`，审阅并提交公开根及发布快照变更，再用`--trust-roots clients/runtime-plugin-packaging/trust/acceptance-roots.json`准备Runtime。加载登记表会核对r15与所有已登记发布快照，prepare、安装器打包和最终验包要求输入与该集合一致；漏掉任何已交付版本的根、替公钥、改授权范围或夹入未登记新根均拒绝，不允许用本机缓存作为另一个信任基线。
-5. 用旧实际插件包在同一隔离home验证库存重开和版本升级；业务未就绪仍应如实显示。保留原产品身份/配对和插件状态，不要求用户为换构建机解绑重配。
-
-登记脚本只写公开根，追加操作使用锁与同目录原子替换；同一ID和相同身份幂等，同一ID绑定不同公钥或范围拒绝。正式production配置仍拒绝test_only根，不借取消交付名称标记绕过Windows签名要求。
-
-## OCR 资产
+## 微信 / 企业微信的 OCR 资产（BOSS-only 跳过）
 
 `ocr-assets.lock.json` 固定 CPython 3.12.10 embed-amd64、18 份官方 PyPI wheels、Microsoft VC Runtime 14.44.35211 和构建机解包工具的版本/原始 SHA256/来源。Python 摘要来自官方 Sigstore bundle；wheel 摘要来自官方 PyPI release metadata。所有 wheel 包内许可证/模型保留，Python LICENSE 和 Microsoft CRT license 一并交付。MSVC exe 另外核对 Microsoft Authenticode；仅解包 CAB，绝不运行其安装器。构建用的 7-Zip 不进入客户机包。
 
@@ -56,19 +35,14 @@ node clients/runtime-plugin-packaging/package.mjs --test --test-key-id aid-isola
 {
   "schemaVersion": 1,
   "profile": "acceptance",
-  "roots": [{ "key_id": "aid-isolated-dev-only", "public_key": "<SPKI PEM>", "providers": ["ai.aidwork.boss-recruiting", "ai.aidwork.weixin", "ai.aidwork.wecom"], "test_only": true }]
+  "roots": [{ "key_id": "aid-isolated-schema-example", "public_key": "<SPKI PEM>", "providers": ["ai.aidwork.boss-recruiting", "ai.aidwork.weixin", "ai.aidwork.wecom"], "test_only": true }]
 }
 ```
 
 该根单独交付，包内不含可自行建立信任的公钥。生产配置必须拒绝测试根。正式生产信任根、签名边界、CPython 3.12.10 的发行安全评审和 Microsoft CRT 再分发许可资格仍需正式发行流程核验；本轮开发包不代表这些门已通过。
 
-## 验证
+## 验证与最终交付
 
-```powershell
-npm --prefix clients/runtime-plugin-packaging test
-venv/Scripts/python.exe clients/runtime-plugin-packaging/verify-offline.py --directory C:/repos/aid-work-agent/clients/runtime-plugin-packaging/release/final-acceptance --node C:/repos/aid-work-agent/clients/runtime-plugin-packaging/assets/node/node-v22.23.3-win-x64/node.exe
-```
+签名、搬迁、实际原生依赖加载、Runtime 验包以及交付 ZIP 的逐项命令统一见[打包手册第 7～9 节](../../docs/ops/runtime-boss-release-guide.md#7-插件验包和相关验证)。现有 `verify-offline.py` 会验证清单、版本并做 doctor 只读检查；未登录导致的未就绪和原生模块缺失不能混为一谈。静态验包不表示真实 NSIS 安装、客户升级或 BOSS 业务已通过。
 
-smoke 在系统临时目录复制 payload，移除仓库/npm/Python/Git PATH 和 Provider 凭证，只留 Windows 系统 PATH 与隔离 artifact 目录；检查分离信任根签名、manifest/每文件完整性、真实固定 Node 的 version/doctor JSON、包内 Python 对合成图片的实际 OCR，并核对执行后 payload 全部字节与文件集合不变。doctor 的 `runtime_readiness` 是结构化基础运行条件；进程存在不冒充已验证登录，业务动作仍执行既有门禁。smoke 不发送真实消息、不点击业务 GUI，不代替最终干净 Windows 测试机和安装包验收。
-
-源码定向测试通过；全套 CLI 回归仍有 HEAD 可复现的既有失败，主开发计划登记准确证据，不将本包自测表述为所有业务回归全绿。产物与依赖缓存在本目录 .gitignore 范围，不提交。
+源码定向测试入口仍为 `npm test`（本目录），不生成客户交付 ZIP。编译缓存和打包中间文件不交付；最终 EXE、插件、说明、报告及组合 ZIP 统一汇总至 `clients/release/`，不在仓库根目录新建 release。

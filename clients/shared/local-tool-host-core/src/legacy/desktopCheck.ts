@@ -57,9 +57,9 @@ function loadNativeDesktopProbe(): Promise<{ module: NativeInputDesktopModule; a
   if (nativeLoaded === null) {
     nativeLoaded = (async () => {
       if (process.platform !== 'win32') return null
-      // 动态说明符（变量）避免编译期解析该包；运行时缺包走 catch 回退
-      const specifier = '@aid/win32-native-input'
-      const mod = await import(specifier) as unknown as NativeInputDesktopModule
+      // 字面量动态 import（依赖边界扫描要求可静态扫描；包已声明为 file: 依赖可编译期解析）。
+      // 运行时缺包/加载失败的回退语义不变：抛错进下方 catch 走 PowerShell
+      const mod = await import('@aid/win32-native-input') as unknown as NativeInputDesktopModule
       // 构造即加载 dll（koffi 版本不符/dll 缺失在此抛错，进 catch 回退）
       const api = mod.createKoffiApi()
       return { module: mod, api }
