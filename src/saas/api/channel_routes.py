@@ -612,7 +612,7 @@ async def _process_tenant_wecom_background(
         from src.channels.runner_agent import ChannelRunnerAgent
         agent = ChannelRunnerAgent(source='wecom', session_id=session_id,
             channel_user_id=message.user_id, channel_chat_id=None,
-            profile_id=subagent_type or 'main', config_id=config_id)
+            profile_id=subagent_type or 'main', config_id=config_id, tenant_id=tenant_id)
 
         # 开始记录 token 消耗
         record_service = SessionRecordManager.start_record(
@@ -998,7 +998,7 @@ async def _process_tenant_dingtalk_background(
         from src.channels.runner_agent import ChannelRunnerAgent
         agent = ChannelRunnerAgent(source='dingtalk', session_id=session_id,
             channel_user_id=message.user_id, channel_chat_id=None,
-            profile_id=subagent_type or 'main', config_id=config_id)
+            profile_id=subagent_type or 'main', config_id=config_id, tenant_id=tenant_id)
 
         # 开始记录 token 消耗
         record_service = SessionRecordManager.start_record(
@@ -1170,7 +1170,7 @@ async def _process_tenant_feishu_background(
         from src.channels.runner_agent import ChannelRunnerAgent
         agent = ChannelRunnerAgent(source='feishu', session_id=session_id,
             channel_user_id=message.user_id, channel_chat_id=None,
-            profile_id=subagent_type or 'main', config_id=config_id)
+            profile_id=subagent_type or 'main', config_id=config_id, tenant_id=tenant_id)
 
         # 开始记录 token 消耗
         record_service = SessionRecordManager.start_record(
@@ -2708,7 +2708,7 @@ async def _process_tenant_wecom_kf_messages(
                 from src.channels.runner_agent import ChannelRunnerAgent
                 agent = ChannelRunnerAgent(source='wecom_kf', session_id=session_id,
                     channel_user_id=unified_msg.user_id, channel_chat_id=open_kfid,
-                    profile_id=subagent_type or 'main', config_id=config_id)
+                    profile_id=subagent_type or 'main', config_id=config_id, tenant_id=tenant_id)
                 _kf_tlog(
                     "Agent路由: tenant={tenant}, session_id={session_id}, "
                     "subagent_type={subagent_type}, agent_class={agent_class}, "

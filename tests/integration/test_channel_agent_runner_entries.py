@@ -277,6 +277,7 @@ async def test_success_round_trip_constructs_agent_and_persists_batch(
         "channel_chat_id": None,
         "profile_id": expected_profile,
         "config_id": "cfg-1",
+        "tenant_id": "tenant-1",
     }
     # batch 持久化含 user + assistant
     harness.batch_write.assert_called_once()
