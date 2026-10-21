@@ -124,23 +124,12 @@ test('experimental native CLI requires explicit observation and integer image po
 })
 
 
-test('bound page input raises only the uniquely owned debug BOSS window and never title-selects an unrelated window', async () => {
-  const script = await readFile(fileURLToPath(new URL('../../scripts/win-click.ps1', import.meta.url)), 'utf8')
-  const selection = script.slice(script.indexOf('if ($CdpPort -gt 0)'), script.indexOf('$rw = [Win32]::FindRenderWidget'))
-  assert.match(selection, /--remote-debugging-port/)
-  assert.match(selection, /processes.Count -ne 1/)
-  assert.match(selection, /::Find\(\[int\]\$processes\[0\].ProcessId\)/)
-  assert.ok(selection.indexOf('::Find(') < selection.indexOf('::Foreground($win)'))
-  assert.ok(selection.indexOf('::Foreground($win)') < selection.indexOf('::RequireForeground($win)'))
-  assert.match(selection, /else \{ \$win = \[Win32\]::FindWindowByTitle/)
-  assert.match(selection, /if \(\$CdpPort -le 0\) \{/)
-  const beforeDown = script.slice(script.indexOf('$expectedPoint ='), script.indexOf('$physicalScope.MarkInputStarted()'))
-  assert.ok(beforeDown.includes('Assert-BoundForeground'))
-  assert.match(script, /foreach \(\$ch in \$Text.ToCharArray\(\)\) \{\s*Assert-BoundForeground\s*\[Win32\]::TypeUnicode/)
+// 2026-10-21：win-click.ps1 已删（native 输入替代）；绑定窗口唯一性不变量由共享包
+// win32-native-input 的测试覆盖，这里保留随 window-experiment.ps1 出厂的 C++ 侧断言。
+test('the experiment native helper resolves only the uniquely owned debug BOSS window, never foreground guessing', async () => {
   const native = await readFile(fileURLToPath(new URL('../../scripts/BossWindowExperiment.cs', import.meta.url)), 'utf8')
   const find = native.slice(native.indexOf('public static IntPtr Find('), native.indexOf('public static bool BelongsTo'))
   assert.ok(find.includes('BelongsTo(candidate, other)'), 'owned dialogs do not count as independent main windows')
   assert.ok(find.includes('mainWindows.Count != 1'), 'foreground is not evidence of the CDP target when several BOSS windows exist')
   assert.equal(find.includes('GetForegroundWindow()'), false)
-  for (const state of ['render widget unavailable', 'render widget hidden']) assert.ok(script.includes(`STALE_OBSERVATION: ${state}; input refused`))
 })

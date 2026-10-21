@@ -14,7 +14,8 @@
 # 3. 0.2.14 起包内不得有 ocr-python/rapidocr（简历识别已云端化）——产物硬校验，
 #    且包体 >15MB 直接判失败（OCR 环境混入就是 ~140MB，体积是最后的防线）
 # 4. scripts/__pycache__ 不得进包；构建前清 dist 防删除源码后的陈旧产物
-# 5. 简历管线必需的 4 个 ps1 脚本必须在包内（缺一个客户机简历读取就挂）
+# 5. 简历图像处理（segdiff/stitch）已迁 Node（2026-10-21，boss/imageOps.ts，零脚本依赖）：
+#    校验 dist/src/main/boss/imageOps.js 在包内（缺了客户机简历读取就挂）
 # 6. 冒烟：干净目录安装 tgz 后 aid-runtime --help 必须能执行（README §二.3 要求）
 set -euo pipefail
 
@@ -85,10 +86,11 @@ OCR_HITS=$(grep -ci "ocr-python\|rapidocr" <<<"$LIST" || true)
 BUNDLED_VER=$(tar -xzOf "$TGZ" package/node_modules/boss-resume-assistant/package.json 2>/dev/null \
     | grep -o '"version": *"[^"]*"' | head -1 | grep -o '[0-9][^"]*')
 [ "$BUNDLED_VER" = "$VER" ] || { echo "失败：捆绑 boss CLI 版本 $BUNDLED_VER ≠ $VER（stale 拷贝）"; exit 1; }
-for f in cv-stitch.ps1 cv-wheel.ps1 cv-segdiff.ps1 win-click.ps1; do
-    grep -q "boss-resume-assistant/scripts/$f" <<<"$LIST" \
-        || { echo "失败：缺少简历管线必需脚本 $f"; exit 1; }
-done
+# 输入回退 ps1（点击/滚轮）已删（2026-10-21，native 全量替代）；
+# 读取链路 cv-segdiff/cv-stitch.ps1 与恢复核验 visual-region-compare.ps1 已迁 Node
+# （2026-10-21，boss/imageOps.ts，生产链路零脚本依赖；scripts/ 仅剩实验工具 window-experiment.ps1）
+grep -q "boss-resume-assistant/dist/src/main/boss/imageOps.js" <<<"$LIST" \
+    || { echo "失败：缺少简历图像处理模块 imageOps.js"; exit 1; }
 grep -q "boss-resume-assistant/dist/src/cli/index.js" <<<"$LIST" \
     || { echo "失败：缺少 boss CLI 入口"; exit 1; }
 grep -q "dist/src/cli.js" <<<"$LIST" || { echo "失败：缺少 runtime 入口"; exit 1; }

@@ -1,16 +1,15 @@
 /** Bound observation/input primitives; localOperationRecovery owns orchestration. */
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { lstat, mkdir, open, readFile, readdir, realpath, rename, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { captureWindow, clickWindow, type WindowObservation } from '../input/windowExperiment.js'
-import { execPowerShellScript } from '../input/powerShell.js'
 import { CancelledError, CodedOperationError } from '../operations/types.js'
 import type { BossSession } from '../operations/bossContext.js'
 import { pngMetadata } from '../operations/bossScreenshot.js'
+import { regionExactEqualFiles } from './imageOps.js'
 import { visualDiagnose, VisualDiagnoseError } from './visualDiagnoseClient.js'
 
 export type VisualContext = Record<string, unknown>
@@ -70,14 +69,11 @@ function actionOf(record: RecordData, image?: Buffer): Action | undefined {
   if (bx < 0 || by < 0 || bw <= 0 || bh <= 0 || bx + bw > m.width || by + bh > m.height || x < bx || x >= bx + bw || y < by || y >= by + bh) return
   return a as unknown as DismissAction
 }
-function compareScript(): string {
-  const here = dirname(fileURLToPath(import.meta.url))
-  for (const up of ['../../../..', '../../..']) { const p = resolve(here, up, 'scripts/visual-region-compare.ps1'); if (existsSync(p)) return p }
-  throw new Error('未找到网页局部图像核验脚本')
-}
+/** 关闭控件区域核验（visual-region-compare.ps1 已迁 imageOps.regionExactEqualFiles，
+ * 语义 1:1：32-bit ARGB 逐像素全等、零容差；区域/图像非法抛 ImageOpsError →
+ * dismiss 捕获包装 STALE_OBSERVATION，与 ps1 exit 1 路径一致）。 */
 async function compareRegion(original: string, fresh: string, region: { x: number; y: number; width: number; height: number }): Promise<boolean> {
-  const r = await execPowerShellScript(compareScript(), ['-Original', original, '-Fresh', fresh, '-X', String(region.x), '-Y', String(region.y), '-Width', String(region.width), '-Height', String(region.height)], { timeout: 15_000 })
-  return JSON.parse(r.stdout).equal === true
+  return regionExactEqualFiles(original, fresh, { x: region.x, y: region.y, w: region.width, h: region.height }, readFileSync)
 }
 export class VisualRecovery {
   private readonly root: string

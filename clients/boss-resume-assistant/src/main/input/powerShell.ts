@@ -3,13 +3,12 @@ import { lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
+// 输入回退 ps1 通道（点击/滚轮，2026-10-21）已删除：native 输入（@aid/win32-native-input）
+// 全量替代；读取链路 cv-segdiff/cv-stitch 与恢复核验 visual-region-compare（2026-10-21）
+// 已迁 Node（boss/imageOps.ts）。生产链路仅剩实验工具 window-experiment.ps1。
+// 详见 docs/plans/plan-recruiting-error-containment-and-input-performance.md
 const dependencies: Readonly<Record<string, readonly string[]>> = {
-  'win-click.ps1': ['BossPhysicalInput.cs'],
-  'cv-wheel.ps1': ['BossPhysicalInput.cs'],
-  'cv-stitch.ps1': [],
-  'cv-segdiff.ps1': [],
   'window-experiment.ps1': ['BossPhysicalInput.cs', 'BossWindowExperiment.cs'],
-  'visual-region-compare.ps1': [],
 }
 
 export class PowerShellScriptError extends Error {
@@ -96,7 +95,7 @@ export async function execPowerShellScript(script: string, args: string[], optio
     const name = path.basename(script)
     if (!Object.hasOwn(dependencies, name) || !localAbsolute(script)) throw new Error('POWERSHELL_SCRIPT_NOT_ALLOWED')
     ordinaryPath(path.dirname(script), true)
-    const files = [name, ...dependencies[name]!, ...(name === 'win-click.ps1' && args.includes('-CdpPort') ? ['BossWindowExperiment.cs'] : [])]
+    const files = [name, ...dependencies[name]!]
     // Read verified source bytes before creating the stage. No source link or
     // missing sibling can fall back to an older installed copy.
     const sources = files.map(file => {

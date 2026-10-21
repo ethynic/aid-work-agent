@@ -29,6 +29,10 @@ if($ExitCode -ne 0){[Console]::Error.Write('[BOSS_INPUT_UNKNOWN] input result un
 [Console]::Out.Write(($data | ConvertTo-Json -Compress))
 `
 
+// 2026-10-21：win-click.ps1 已删（native 输入替代）；本文件回归 execPowerShellScript
+// 私有暂存机制本身，fixture 换用仍在依赖表内的 window-experiment.ps1（两个 .cs 依赖）
+const SCRIPT_NAME = 'window-experiment.ps1'
+
 test('long-path-unaware PowerShell rejects the original existing file and runs its private short copy', { skip: process.platform !== 'win32', timeout: 30_000 }, async t => {
   const f = setup(t)
   const system = path.join(process.env.SystemRoot!, 'System32/WindowsPowerShell/v1.0/powershell.exe')
@@ -39,9 +43,10 @@ test('long-path-unaware PowerShell rejects the original existing file and runs i
   bytes.write('0   </longPathAware>', index, 'ascii')
   writeFileSync(executable, bytes)
   copyFileSync(system + '.config', executable + '.config')
-  const script = path.join(f.source, 'win-click.ps1')
+  const script = path.join(f.source, SCRIPT_NAME)
   writeFileSync(script, fixture)
   writeFileSync(path.join(f.source, 'BossPhysicalInput.cs'), 'current-version-one')
+  writeFileSync(path.join(f.source, 'BossWindowExperiment.cs'), 'window-version-one')
   const old = spawnSync(executable, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script], { windowsHide: true, timeout: 10_000 })
   assert.equal(old.status, 4294770688)
   assert.equal(existsSync(script), true)
@@ -63,25 +68,29 @@ test('long-path-unaware PowerShell rejects the original existing file and runs i
 
 test('preparation rejects missing dependencies, junction sources, unknown scripts and overlong temp paths', { skip: process.platform !== 'win32', timeout: 30_000 }, async t => {
   const f = setup(t)
-  const script = path.join(f.source, 'win-click.ps1')
+  const script = path.join(f.source, SCRIPT_NAME)
   writeFileSync(script, fixture)
   const options = { timeout: 5000, temporaryRoot: f.temporaryRoot }
   await assert.rejects(execPowerShellScript(script, [], options), /BOSS_POWERSHELL_PREPARE/)
   assert.deepEqual(readdirSync(f.temporaryRoot), [])
+  // 两个依赖任一缺失都拒绝；补齐后通过
   writeFileSync(path.join(f.source, 'BossPhysicalInput.cs'), 'test')
+  await assert.rejects(execPowerShellScript(script, [], options), /BOSS_POWERSHELL_PREPARE/)
+  writeFileSync(path.join(f.source, 'BossWindowExperiment.cs'), 'test')
   await assert.rejects(execPowerShellScript(path.join(f.source, 'unapproved.ps1'), [], options), /POWERSHELL_SCRIPT_NOT_ALLOWED/)
   const linked = path.join(f.root, 'linked')
   symlinkSync(f.source, linked, 'junction')
-  await assert.rejects(execPowerShellScript(path.join(linked, 'win-click.ps1'), [], options), /POWERSHELL_UNSAFE_PATH/)
+  await assert.rejects(execPowerShellScript(path.join(linked, SCRIPT_NAME), [], options), /POWERSHELL_UNSAFE_PATH/)
   await assert.rejects(execPowerShellScript(script, [], { ...options, temporaryRoot: f.source }), /POWERSHELL_TEMP_PATH_TOO_LONG/)
   assert.ok(!readdirSync(f.source).some(name => name.startsWith('aid-bps-')))
 })
 
 test('script failure/timeout and synchronous launch rejection clean only their own nonce and preserve unknown', { skip: process.platform !== 'win32', timeout: 30_000 }, async t => {
   const f = setup(t, 260)
-  const script = path.join(f.source, 'win-click.ps1')
+  const script = path.join(f.source, SCRIPT_NAME)
   writeFileSync(script, fixture)
   writeFileSync(path.join(f.source, 'BossPhysicalInput.cs'), 'current')
+  writeFileSync(path.join(f.source, 'BossWindowExperiment.cs'), 'current')
   const options = { timeout: 5000, temporaryRoot: f.temporaryRoot }
   await assert.rejects(execPowerShellScript(script, ['-ExitCode', '2'], options), (error: unknown) => {
     assert.ok(error instanceof PowerShellScriptError)

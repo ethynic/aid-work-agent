@@ -12,7 +12,7 @@ const boss = resolve(here, basename(dirname(here)) === 'dist' ? '../..' : '..')
 const repo = resolve(boss, '../..')
 const load = (name: string) => import(pathToFileURL(join(boss, 'dist/src/main', name + '.js')).href)
 const { execPowerShellScript, PowerShellScriptError } = await load('input/powerShell')
-const { WinMouseClicker, WinClickError } = await load('input/WinMouseClicker')
+const { WinClickError } = await load('input/WinMouseClicker')
 const { mapExecutorError } = await load('operations/errorMapping')
 const { sameViewAt, stitchParts } = await load('operations/bossResumeDetail')
 const output = join(repo, 'clients/agent-desktop/build/boss-powershell-independent')
@@ -88,6 +88,8 @@ function fake(file: string, version = 'one') {
   writeFileSync(file, synthetic(version))
   const dependency = join(dirname(file), 'BossPhysicalInput.cs')
   writeFileSync(dependency, '\uFEFF// byte-preserved dependency 中文 ' + version)
+  // 2026-10-21：win-click.ps1 已删，fixture 载体换成 window-experiment.ps1（两个 .cs 依赖）
+  writeFileSync(join(dirname(file), 'BossWindowExperiment.cs'), '\uFEFF// byte-preserved window dependency 中文 ' + version)
   return dependency
 }
 function validateStage(data: Record<string, any>, source: string, dependency: string) {
@@ -106,7 +108,7 @@ test('independent unaware PowerShell 240/260/500 boundary reproduces old failure
   const f = fixture(t)
   const outcomes = []
   for (const length of [240, 260, 500]) {
-    const file = scriptAt(f.root, 'win-click.ps1', length)
+    const file = scriptAt(f.root, 'window-experiment.ps1', length)
     const dep = fake(file)
     const old = spawnSync(f.unaware, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file, '-OldProbe'], { windowsHide: true, timeout: 15000 })
     assert.equal(old.status, length < 260 ? 0 : 4294770688)
@@ -124,8 +126,8 @@ test('independent unaware PowerShell 240/260/500 boundary reproduces old failure
 
 test('independent concurrent calls and source-version change never share or reuse staging', { skip: process.platform !== 'win32', timeout: 60000 }, async t => {
   const f = fixture(t)
-  const sourceA = scriptAt(f.root, 'win-click.ps1', 505)
-  const sourceB = scriptAt(f.root, 'win-click.ps1', 507)
+  const sourceA = scriptAt(f.root, 'window-experiment.ps1', 505)
+  const sourceB = scriptAt(f.root, 'window-experiment.ps1', 507)
   const depA = fake(sourceA, 'first')
   const depB = fake(sourceB, 'second')
   const [a, b] = await Promise.all([sourceA, sourceB].map(source => execPowerShellScript(source, ['-Hold', '1000'], f.options).then((result: { stdout: string }) => JSON.parse(result.stdout))))
@@ -143,17 +145,17 @@ test('independent concurrent calls and source-version change never share or reus
 
 test('independent missing dependency, unapproved source, UNC, junction and long-temp inputs fail without stale fallback', { skip: process.platform !== 'win32', timeout: 45000 }, async t => {
   const f = fixture(t)
-  const source = scriptAt(f.root, 'win-click.ps1', 500)
+  const source = scriptAt(f.root, 'window-experiment.ps1', 500)
   writeFileSync(source, synthetic('missing'))
   await assert.rejects(execPowerShellScript(source, [], f.options), /BOSS_POWERSHELL_PREPARE/)
   fake(source)
-  await assert.rejects(execPowerShellScript('\\\\localhost\\C$\\win-click.ps1', [], f.options), /BOSS_POWERSHELL_PREPARE/)
+  await assert.rejects(execPowerShellScript('\\\\localhost\\C$\\window-experiment.ps1', [], f.options), /BOSS_POWERSHELL_PREPARE/)
   const unknown = join(dirname(source), 'other.ps1')
   writeFileSync(unknown, 'exit 99')
   await assert.rejects(execPowerShellScript(unknown, [], f.options), /BOSS_POWERSHELL_PREPARE/)
   const linkedSource = join(f.root, 'linked-source')
   symlinkSync(dirname(source), linkedSource, 'junction')
-  await assert.rejects(execPowerShellScript(join(linkedSource, 'win-click.ps1'), [], f.options), /POWERSHELL_UNSAFE_PATH/)
+  await assert.rejects(execPowerShellScript(join(linkedSource, 'window-experiment.ps1'), [], f.options), /POWERSHELL_UNSAFE_PATH/)
   const linkedTemp = join(f.root, 'linked-stage')
   symlinkSync(f.stageRoot, linkedTemp, 'junction')
   await assert.rejects(execPowerShellScript(source, [], { ...f.options, temporaryRoot: linkedTemp }), /POWERSHELL_UNSAFE_PATH/)
@@ -163,9 +165,9 @@ test('independent missing dependency, unapproved source, UNC, junction and long-
   results.push({ name: 'unsafe_sources_refused', cases: 6, fallback: false, residual_stage_count: 0 })
 })
 
-test('independent failure timeout launch errors clean nonce and preserve unknown priority through actual clicker wrapper', { skip: process.platform !== 'win32', timeout: 60000 }, async t => {
+test('independent failure timeout launch errors clean nonce and preserve unknown priority through the wrapper error surface', { skip: process.platform !== 'win32', timeout: 60000 }, async t => {
   const f = fixture(t)
-  const source = scriptAt(f.root, 'win-click.ps1', 500)
+  const source = scriptAt(f.root, 'window-experiment.ps1', 500)
   fake(source)
   await assert.rejects(execPowerShellScript(source, ['-Mode', 'timeout'], { ...f.options, timeout: 800 }), (error: unknown) => error instanceof PowerShellScriptError)
   assert.deepEqual(readdirSync(f.stageRoot), [])
@@ -177,50 +179,42 @@ test('independent failure timeout launch errors clean nonce and preserve unknown
     assert.equal(mapExecutorError(new WinClickError(error.message)).code, 'INTERNAL_ERROR')
     return true
   })
+  // 输入后 unknown 优先级不因环境关键词降级（2026-10-21 起 WinMouseClicker 无 ps 包装，映射面不变）
   writeFileSync(source, '\uFEFFparam([int]$X,[int]$Y,[int]$CssW,[int]$CssH)\n[Console]::Error.Write("[BOSS_INPUT_UNKNOWN] harmless independent fixture");exit 3')
-  const clicker = new WinMouseClicker({ scriptPath: source, channel: 'powershell' })
-  await assert.rejects(clicker.click({ x: 1, y: 1 }, { width: 10, height: 10 }), (error: any) => {
-    assert.ok(error instanceof WinClickError)
-    assert.equal(mapExecutorError(error).code, 'EXECUTION_UNKNOWN')
-    assert.equal(mapExecutorError(new WinClickError(error.message + '[BOSS_POWERSHELL_LAUNCH]')).code, 'EXECUTION_UNKNOWN')
-    return true
-  })
+  const unknownError = new WinClickError('[BOSS_INPUT_UNKNOWN] harmless independent fixture', 3)
+  assert.equal(mapExecutorError(unknownError).code, 'EXECUTION_UNKNOWN')
+  assert.equal(mapExecutorError(new WinClickError(unknownError.message + '[BOSS_POWERSHELL_LAUNCH]')).code, 'EXECUTION_UNKNOWN')
   unlinkSync(join(dirname(source), 'BossPhysicalInput.cs'))
-  await assert.rejects(clicker.click({ x: 1, y: 1 }, { width: 10, height: 10 }), (error: any) => {
-    assert.equal(mapExecutorError(error).code, 'INTERNAL_ERROR'); return true
+  await assert.rejects(execPowerShellScript(source, [], f.options), (error: any) => {
+    assert.equal(mapExecutorError(new WinClickError(error.message)).code, 'INTERNAL_ERROR'); return true
   })
   assert.deepEqual(readdirSync(f.stageRoot), [])
-  results.push({ name: 'failure_and_unknown', timeout_rejected: true, synchronous_argument_error_redacted: true, actual_default_clicker_wrapper: true, unknown_priority_preserved: true, preparation_internal_error: true })
+  results.push({ name: 'failure_and_unknown', timeout_rejected: true, synchronous_argument_error_redacted: true, unknown_priority_preserved: true, preparation_internal_error: true })
 })
 
-test('independent four genuine scripts compile and run harmless guards or synthetic-image operations from >500 paths', { skip: process.platform !== 'win32', timeout: 90000 }, async t => {
+test('independent genuine experiment script compiles and runs harmless guards from >500 paths; read-chain ops are Node-native', { skip: process.platform !== 'win32', timeout: 90000 }, async t => {
   const f = fixture(t)
-  const script = scriptAt(f.root, 'win-click.ps1', 510)
+  const script = scriptAt(f.root, 'window-experiment.ps1', 510)
   const source = dirname(script)
-  for (const name of ['win-click.ps1', 'cv-wheel.ps1', 'cv-segdiff.ps1', 'cv-stitch.ps1', 'BossPhysicalInput.cs']) copyFileSync(join(boss, 'scripts', name), '\\\\?\\' + join(source, name))
-  const uniqueTitle = 'NO_SUCH_AID_INDEPENDENT_WINDOW_' + randomUUID()
-  for (const name of ['win-click.ps1', 'cv-wheel.ps1']) {
-    await assert.rejects(execPowerShellScript(join(source, name), ['-X', '0', '-Y', '0', '-TitleKeyword', uniqueTitle], f.options), (error: any) => {
-      assert.equal(error.exitCode, 1)
-      assert.ok(!error.message.includes('[BOSS_POWERSHELL_PREPARE]'))
-      assert.ok(!error.message.includes('[BOSS_POWERSHELL_LAUNCH]'))
-      assert.match(error.message, /Chrome|chrome|window|窗口/)
-      return true
-    })
-  }
-  const imageA = join(f.root, 'image-a.png'), imageB = join(f.root, 'image-b.png'), imageOut = join(f.root, 'stitched.png')
+  for (const name of ['window-experiment.ps1', 'BossPhysicalInput.cs', 'BossWindowExperiment.cs']) copyFileSync(join(boss, 'scripts', name), '\\\\?\\' + join(source, name))
+  // 唯一残留的输入实验脚本：随机端口必然「找不到唯一调试 Chrome」→ exit 1 守卫拒绝，零输入
+  const uniquePort = String(40000 + Math.floor(Math.random() * 20000))
+  await assert.rejects(execPowerShellScript(join(source, 'window-experiment.ps1'), ['-Action', 'capture', '-CdpPort', uniquePort], f.options), (error: any) => {
+    assert.equal(error.exitCode, 1)
+    assert.ok(!error.message.includes('[BOSS_POWERSHELL_PREPARE]'))
+    assert.ok(!error.message.includes('[BOSS_POWERSHELL_LAUNCH]'))
+    assert.match(error.message, /Chrome|chrome|window|窗口/)
+    return true
+  })
+  // 读取链路（cv-segdiff/cv-stitch.ps1）2026-10-21 已迁 Node（boss/imageOps.ts，脚本删除）：
+  // operation 导出仍可对合成图完成 sameView/stitch（双通道对照验收见 tests/image-ops.test.ts）
+  const imageA = join(f.root, 'image-a.png'), imageB = join(f.root, 'image-b.png')
   ps(`$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Drawing; $b=New-Object Drawing.Bitmap(8,8);$g=[Drawing.Graphics]::FromImage($b);$g.Clear([Drawing.Color]::White);$b.Save('${imageA}',[Drawing.Imaging.ImageFormat]::Png);$b.Save('${imageB}',[Drawing.Imaging.ImageFormat]::Png);$g.Dispose();$b.Dispose()`)
-  const geometry = ['-X', '0', '-Y', '0', '-W', '8', '-H', '8']
-  const diff = await execPowerShellScript(join(source, 'cv-segdiff.ps1'), ['-A', imageA, '-B', imageB, ...geometry], f.options)
-  assert.match(diff.stdout, /misrate=0\.0000/)
-  const stitch = await execPowerShellScript(join(source, 'cv-stitch.ps1'), ['-Parts', imageA, ...geometry, '-Out', imageOut], f.options)
-  assert.match(stitch.stdout, /stitched=8x8/)
-  assert.ok(existsSync(imageOut))
   const imageViaOperation = join(f.root, 'operation-stitch.png')
   assert.equal(await sameViewAt(imageA, imageB, { x: 0, y: 0, w: 8, h: 8 }), true)
   assert.deepEqual(await stitchParts([imageA], { x: 0, y: 0, w: 8, h: 8 }, imageViaOperation), { width: 8, height: 8, overlaps: [], seamMis: [] })
   assert.deepEqual(readdirSync(f.stageRoot), [])
-  results.push({ name: 'four_actual_scripts', source_script_lengths: ['win-click.ps1', 'cv-wheel.ps1', 'cv-segdiff.ps1', 'cv-stitch.ps1'].map(name => join(source, name).length), win_click_and_wheel: 'compiled and reached unique nonexistent-window guard; no input sent', segdiff: 'misrate=0.0000', stitch: 'stitched=8x8', actual_runPs_exports: ['sameViewAt', 'stitchParts'], recruitment_actions: 0 })
+  results.push({ name: 'genuine_scripts', source_script_lengths: [join(source, 'window-experiment.ps1').length], window_experiment: 'compiled and reached unique-port guard; no input sent', read_chain: 'node imageOps (cv ps1 deleted 2026-10-21)', actual_runPs_exports: ['sameViewAt', 'stitchParts'], recruitment_actions: 0 })
 })
 
 after(() => {

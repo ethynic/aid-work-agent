@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { execPowerShellScript, PowerShellScriptError } from '../src/main/input/powerShell.js'
+import { execPowerShellScript } from '../src/main/input/powerShell.js'
+
+// 2026-10-21：原「missing/hidden bound render widgets 走零输入 exit 2」用例随 win-click.ps1
+// 删除而移除——该守卫的现行实现在共享包 @aid/win32-native-input（windows/sequence），由其自带测试覆盖。
 
 test('independent: production native ownership selects one main window behind owned dialogs and refuses two independent windows',
   { skip: process.platform !== 'win32', timeout: 30_000 }, async () => {
@@ -40,49 +43,21 @@ ${source.slice(start, end)}
         if(!refused) throw new Exception("Ambiguous independent browser windows must not use foreground guessing");
     }
 }`
-    const script = join(directory, 'visual-region-compare.ps1')
-    await writeFile(script, `Add-Type -TypeDefinition @'
+    // 载体借用实验工具 window-experiment.ps1 之名（execPowerShellScript 白名单唯一入口，
+    // visual-region-compare.ps1 已迁 Node 删除）并携带其真实依赖 .cs（随加固 staging 拷贝，
+    // 本探针不使用），继续在同一加固执行路径上跑真实算法。
+    const script = join(directory, 'window-experiment.ps1')
+    await Promise.all([
+      writeFile(script, `Add-Type -TypeDefinition @'
 ${compiled}
 '@
 [IndependentNativeOwnership]::Probe()
 Write-Output 'independent-native-ownership-passed'
-`)
+`),
+      copyFile(fileURLToPath(new URL('../../scripts/BossPhysicalInput.cs', import.meta.url)), join(directory, 'BossPhysicalInput.cs')),
+      copyFile(fileURLToPath(new URL('../../scripts/BossWindowExperiment.cs', import.meta.url)), join(directory, 'BossWindowExperiment.cs')),
+    ])
     const result = await execPowerShellScript(script, [], { timeout: 15_000 })
     assert.match(result.stdout, /independent-native-ownership-passed/)
-  } finally { await rm(directory, { recursive: true, force: true }) }
-})
-
-test('independent: missing and hidden bound render widgets execute the production zero-input exit-two path',
-  { skip: process.platform !== 'win32', timeout: 30_000 }, async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'boss-native-independent-'))
-  assert.ok(directory.startsWith(join(tmpdir(), 'boss-native-independent-')))
-  try {
-    const source = await readFile(fileURLToPath(new URL('../../scripts/win-click.ps1', import.meta.url)), 'utf8')
-    const start = source.indexOf('$rw = [Win32]::FindRenderWidget($win)')
-    const end = source.indexOf('$pt = Get-ScreenPoint', start)
-    const finalCatch = source.lastIndexOf('} catch {')
-    assert.ok(start > 0 && end > start && finalCatch > end)
-    for (const handle of [0, 100]) {
-      const script = join(directory, 'visual-region-compare.ps1')
-      await writeFile(script, `\ufeff$ErrorActionPreference='Stop'
-Add-Type -TypeDefinition 'using System; public class Win32 { public static IntPtr FindRenderWidget(IntPtr w) { return new IntPtr(${handle}); } public static bool IsWindowVisible(IntPtr w) { return false; } }'
-$CdpPort=9333
-$win=[IntPtr]10
-function Assert-BoundForeground {}
-$physicalScope=[PSCustomObject]@{InputStarted=$false}
-$physicalScope | Add-Member -MemberType ScriptMethod -Name Dispose -Value {}
-try {
-${source.slice(start, end)}
-throw 'Unexpected input path'
-${source.slice(finalCatch)}
-`)
-      await assert.rejects(execPowerShellScript(script, [], { timeout: 10_000 }), (error: unknown) => {
-        assert.ok(error instanceof PowerShellScriptError)
-        assert.equal(error.exitCode, 2)
-        assert.match(error.message, handle ? /render\s+widget\s+hidden/ : /render\s+widget\s+unavailable/)
-        assert.doesNotMatch(error.message, /BOSS_INPUT_UNKNOWN|Unexpected input path/)
-        return true
-      })
-    }
   } finally { await rm(directory, { recursive: true, force: true }) }
 })

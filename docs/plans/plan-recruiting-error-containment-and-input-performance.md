@@ -149,11 +149,13 @@ d470 案例第二批 3 份已取回但未处理即挂起，现无任何路径消
 
 | 脚本 | 状态 | 说明 |
 |------|------|------|
-| cv-wheel.ps1（简历滚动） | ✅ 已迁 native（2026-10-21） | 共享包 wheel 序列（1:1 移植：每格守卫+MarkInputStarted+负数 uint wrap 收绑定层）；CLI 走 WinMouseClicker.wheel（cv-wheel.ps1 回退过渡）。单测 38+18；真机 BOSS 推荐页实测：boss_resume_batch limit=1 读取成功，6 次滚动全部 native 通道（op=wheel ok=1，单次 ~1.25s，无回退日志），native click 1.3s，全程 30s |
-| cv-segdiff.ps1（同画面确认） | 📋 待迁 | 像素容差比较决定滚动停止，需双通道输出对照 |
-| cv-stitch.ps1（拼接对齐） | 📋 待迁 | mis 阈值进云端契约元数据，需 1:1 保持判定 |
-| visual-region-compare.ps1（恢复核验） | 📋 待迁 | visualRecovery 生产链路 |
-| 输入回退清理（win-click.ps1 等） | 📋 待执行 | native 点击真机已验（本次实测含 op=click ok=1），可执行清理 |
+| cv-wheel.ps1（简历滚动） | ✅ 已迁 native（2026-10-21） | 共享包 wheel 序列（1:1 移植：每格守卫+MarkInputStarted+负数 uint wrap 收绑定层）；真机 BOSS 实测 6 次滚动全 native（单次 ~1.25s），ps1 已删 |
+| cv-segdiff.ps1（同画面确认） | ✅ 已迁 Node（2026-10-21） | imageOps.ts 零依赖 PNG 编解码+像素比较；GDI+ 降采样实证复刻（97.5% 字节级、100% ±1/255）；双通道对照 sameView 布尔/数值全一致（含 0.0098-vs-0.01 边界），ps1 已删 |
+| cv-stitch.ps1（拼接对齐） | ✅ 已迁 Node（2026-10-21） | overlap/mis/stitched 与 PS 精确相等（mis 进云端契约全程一致），拼接 PNG 逐字节一致；7 段全链路 ~600ms 优于 ps1 秒级，ps1 已删 |
+| visual-region-compare.ps1（恢复核验） | ✅ 已迁 Node（2026-10-21） | regionExactEqual ARGB 零容差比较（复用 imageOps 基建）；20 场景双通道全一致（含 PS [int] 绑定银行家舍入实证），ps1 已删 |
+| 输入回退清理（win-click.ps1 等） | ✅ 已完成（2026-10-21） | win-click/cv-wheel 双通道删除，WinMouseClicker 纯 native（fail-loud），doctor 改原生能力探测，打包/旧测试清理 |
+
+**CLI 生产链路 PowerShell 专用脚本已清零**（2026-10-21）：scripts/ 仅剩实验工具 window-experiment.ps1 + BossPhysicalInput.cs（仍被实验脚本 Add-Type 引用，保留）+ Node 探针。全量测试 926/937（7 失败为既知 manifest 存量）。真机部署验证待用户指示。外部评审两项 P1 已修复（2026-10-21）：①首行 Up/Average/Paeth 滤镜 prevRow 按全 0（原空 Buffer 致 NaN 参与运算，真机 CDP 首行 Paeth 截图曾 7560 像素解码错、sameView 误判）；②CRC 表索引补 & 0xff（原全部 chunk CRC 错，Pillow UnidentifiedImageError 会使云端识别前置失败）。python 标准库独立 fixture 回归 + node:zlib.crc32 独立校验 + Pillow 端到端读图验证 + 红绿验证，全量 931/942。
 
 ## 行为与安全边界
 

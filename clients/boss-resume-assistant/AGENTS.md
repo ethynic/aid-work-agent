@@ -110,16 +110,16 @@ const gw = new CdpGateway(); await gw.connect('http://127.0.0.1:9222')
 
 ```
 page 坐标（Executor 计算）  = accumulateOwnerOffset(docIdx) + boundsCenter(bounds) − scrollOffset
-屏幕坐标（win-click.ps1 内） = RenderWidget 矩形 Left/Top + page × (视口宽高 ÷ CssW,CssH)
+屏幕坐标（native 输入内）   = RenderWidget 矩形 Left/Top + page × (视口宽高 ÷ CssW,CssH)
 ```
 
-- **DPI 坑（§17 坑7，勿再犯）**：DOMSnapshot bounds 是 device px（150% 缩放屏 = 虚拟 px × 1.5）。ps1 用 `scale = 视口宽/CssW` 实时比例换算，自动覆盖任意 DPI——**绝不做固定 ÷1.5**，窗口几何每次都可能变，`GetWindowRect(Chrome_RenderWidgetHostHWND)` 必须每次实时取、不缓存。
+- **DPI 坑（§17 坑7，勿再犯）**：DOMSnapshot bounds 是 device px（150% 缩放屏 = 虚拟 px × 1.5）。native 层用 `scale = 视口宽/CssW` 实时比例换算，自动覆盖任意 DPI——**绝不做固定 ÷1.5**，窗口几何每次都可能变，`GetWindowRect(Chrome_RenderWidgetHostHWND)` 必须每次实时取、不缓存。
 - **scrollOffset 坑（§17 坑16）**：iframe 文档内滚动后 bounds 不变、`scrollOffsetY` 变——不减滚动偏移，滚动后新露出的元素会被永远当成视口外（表现为"一直滚但一个都不点"）。
 - **隐藏 iframe 坑**：后台标签页/隐藏 iframe 的 owner 无可见 bounds，`accumulateOwnerOffset` 抛错，必须 try/catch 跳过该 document。
 
 ### 10.3 Win32 真实鼠标点击（复用 `WinMouseClicker`，只传坐标 + viewport）
 
-业务层唯一入口 `WinMouseClicker.click(point, viewport)`（`BossSession.click` 同款）——**调用方只传 page 坐标和视口尺寸**，其余全部内置（`scripts/win-click.ps1`）：
+业务层唯一入口 `WinMouseClicker.click(point, viewport)`（`BossSession.click` 同款）——**调用方只传 page 坐标和视口尺寸**，其余全部内置（`@aid/win32-native-input` koffi FFI；2026-10-21 起 PowerShell 输入回退脚本已删，仅 native 单通道）：
 
 1. 按标题关键字找 Chrome 窗口（`FindWindowByTitle`）；多个 `Chrome_RenderWidgetHostHWND` 取**可见**实例（§17 坑14）。
 2. 最小化先 `SW_RESTORE`（最小化时 render widget 被销毁，枚举不到）；`AttachThreadInput` + `SetForegroundWindow` 破前台锁（后台进程直接 SetForegroundWindow 被静默拒绝）。
@@ -127,7 +127,7 @@ page 坐标（Executor 计算）  = accumulateOwnerOffset(docIdx) + boundsCenter
 4. `WindowFromPoint` 落点守卫：落点必须归属 render widget（防遮挡窗口吃点击/会话终端里的"幽灵按钮"截图影像）；失败 `SetWindowPos` 抬窗重算重试一次，仍败 exit 2 → `WinClickError` fail-loud，**绝不盲点**。
 5. 拟人动作：`SetCursorPos` 分 10 步移动（每步 25ms）→ 悬停 500ms → `mouse_event` LEFTDOWN/70ms/LEFTUP。
 
-约束：统一 `SetCursorPos + mouse_event`，**禁 SendInput 绝对坐标**（多显示器需 VIRTUALDESK 标志有坑）；借真实光标约 1s，调用前必须提示用户手离鼠标；ps1 文件必须 UTF-8 BOM。
+约束：统一 `SetCursorPos + mouse_event`，**禁 SendInput 绝对坐标**（多显示器需 VIRTUALDESK 标志有坑）；借真实光标约 1s，调用前必须提示用户手离鼠标；读取链路/实验残余 ps1 文件必须 UTF-8 BOM。
 
 **通道选择（2026-08-26 用户定调：点击/输入第一优先 Win32，防爬是关键；§16 决策 8）**：
 
@@ -145,9 +145,9 @@ page 坐标（Executor 计算）  = accumulateOwnerOffset(docIdx) + boundsCenter
 标准流程（参照 `ChatSendExecutor.sendMessage` / `ChatSearchExecutor.openContact`，2026-08-26 真机复验通过）：
 
 1. 定位输入框（文本节点直接定位，或相邻锚点 + 固定偏移——input/textarea 的 value/placeholder 无 bounds 抓不到坐标）。
-2. **`clickAndType(point, viewport, text)` 一次调用原子完成**：ps1 内先拟人点击聚焦（500ms），再 SendInput `KEYEVENTF_UNICODE` 逐字真实键入（200ms/字，中文走 wScan 全 16 位）。不拆成「click + 单独输入」两次进程调用——间隙会被抢焦点。
+2. **`clickAndType(point, viewport, text)` 一次调用原子完成**：native 层内先拟人点击聚焦（500ms），再 SendInput `KEYEVENTF_UNICODE` 逐字真实键入（200ms/字，中文走 wScan 全 16 位）。不拆成「click + 单独输入」两次调用——间隙会被抢焦点。
 3. 等 ~600ms 落地后校验：普通输入框 value 会进 strings；contenteditable（反爬碎片节点）用「输入前后 strings **差集**的字符覆盖率 ≥80%」判落地（防页面原有常见字假放行）。
 4. 发送/提交按钮属写动作，重新 fresh snapshot 定位后走 Win32 `click`，发送后校验状态变化，UNKNOWN 不重试。
 5. CDP `dispatchKey(type='char')` 通道已于 2026-08-26 移除（历史实证风控不拦键盘，但用户原则：真实事件优先）。
 
-ps1 键盘实现注意（`win-click.ps1`）：SendInput 的 INPUT 结构是联合体（cbSize 必须 40，x64），keybd_event 的 bScan 单字节装不下中文；§17 坑10 的「禁 SendInput」仅指鼠标绝对坐标。
+native 键盘实现注意（`@aid/win32-native-input`）：SendInput 的 INPUT 结构是联合体（cbSize 必须 40，x64），keybd_event 的 bScan 单字节装不下中文；§17 坑10 的「禁 SendInput」仅指鼠标绝对坐标。

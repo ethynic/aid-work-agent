@@ -133,12 +133,14 @@ test('independent: every MCP adapter consumes the same opaque target transport f
   }
 })
 
-test('independent: bound input privately stages its extra native dependency and never falls back when it is missing',
+test('independent: packaged experiment input privately stages its native dependencies and never falls back when one is missing',
   { skip: process.platform !== 'win32', timeout: 30_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'boss-common-independent-'))
   assert.ok(directory.startsWith(join(tmpdir(), 'boss-common-independent-')))
   try {
-    const script = join(directory, 'win-click.ps1')
+    // 2026-10-21：win-click.ps1（按 -CdpPort 追加依赖）已删；用 window-experiment.ps1
+    // （恒定两个 .cs 依赖）回归同一暂存语义
+    const script = join(directory, 'window-experiment.ps1')
     await writeFile(script, `param([int]$CdpPort=0)
 $ErrorActionPreference='Stop'
 @{port=$CdpPort; physical=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'BossPhysicalInput.cs')); window=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'BossWindowExperiment.cs')); stage=$PSScriptRoot} | ConvertTo-Json -Compress

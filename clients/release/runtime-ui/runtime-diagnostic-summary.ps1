@@ -164,7 +164,7 @@ try {
     $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     foreach ($proc in (Get-CimInstance Win32_Process)) {
         if ($proc.ProcessId -eq $PID) { continue }
-        $related = $proc.Name -like 'AID Work Runtime*' -or ($proc.Name -in @('node.exe', 'powershell.exe') -and $proc.CommandLine -match 'aidwork-tool-runtime|agent-tool-runtime|managed-entry\.js|boss-resume-assistant|BossPhysicalInput|win-click\.ps1|cv-wheel\.ps1')
+        $related = $proc.Name -like 'AID Work Runtime*' -or ($proc.Name -in @('node.exe', 'powershell.exe') -and $proc.CommandLine -match 'aidwork-tool-runtime|agent-tool-runtime|managed-entry\.js|boss-resume-assistant|BossPhysicalInput|window-experiment\.ps1')
         if (-not $related) { continue }
         $owner = Invoke-CimMethod -InputObject $proc -MethodName GetOwnerSid
         if ($owner.ReturnValue -ne 0) { throw 'process-owner-unavailable' }

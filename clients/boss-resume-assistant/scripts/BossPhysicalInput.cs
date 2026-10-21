@@ -2,8 +2,9 @@ using System;
 using System.Runtime.InteropServices;
 using System.Text;
 
-// Shared by win-click.ps1 and cv-wheel.ps1. Page coordinates are mapped against
-// physical HWND bounds; no DPI multiplier is inferred or cached.
+// Shared by window-experiment.ps1 (the deleted input fallback scripts were removed
+// 2026-10-21; input now goes through @aid/win32-native-input). Page coordinates are
+// mapped against physical HWND bounds; no DPI multiplier is inferred or cached.
 public static class BossPhysicalInput
 {
     [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left, Top, Right, Bottom; }

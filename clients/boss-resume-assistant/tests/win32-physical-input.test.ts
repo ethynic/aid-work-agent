@@ -24,7 +24,10 @@ function runProbe(source: string, resources: Record<string, string> = {}, args: 
   }
 }
 
-test('physical input: production DPI scope, mapping and guards refuse unsafe native results', { skip: !windows }, () => {
+// 2026-10-21：win-click.ps1 / cv-wheel.ps1 已删（native 输入全量替代，守卫由共享包
+// win32-native-input 的测试覆盖）。BossPhysicalInput.cs 仍随 window-experiment.ps1 出厂，
+// 本文件继续回归它的 DPI 作用域/光标守卫/输入已开始语义（fake native 边界）。
+test('physical input: production DPI scope and guards refuse unsafe native results', { skip: !windows }, () => {
   const production = fs.readFileSync(path.join(SCRIPTS, 'BossPhysicalInput.cs'), 'utf8')
   // Replace only the native boundary. All scope, validation and movement logic is production code.
   const fakeNative = `    private static class Native
@@ -62,17 +65,10 @@ public static class FakeInput {
     public static BossPhysicalInput.Rect Bounds = new BossPhysicalInput.Rect { Left=49, Top=568, Right=2553, Bottom=2042 };
     public static BossPhysicalInput.Point Cursor;
 }`
-  const mappings = ['win-click.ps1', 'cv-wheel.ps1'].map((file, i) => {
-    const script = fs.readFileSync(path.join(SCRIPTS, file), 'utf8')
-    const mapping = script.match(/function Get-ScreenPoint\([^\n]+\) \{[\s\S]*?\r?\n\}/)?.[0]
-    assert.ok(mapping, `${file} mapping must be exercised`)
-    return mapping.replace('Get-ScreenPoint', `Get-ScreenPoint${i}`)
-  }).join('\n')
   const probe = runProbe(`$ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @'
 ${fakeSource}
 '@
-${mappings}
 function Assert($condition, $message) { if (-not $condition) { throw $message } }
 function Refused($body, $message) {
   $caught = $false
@@ -93,10 +89,6 @@ Assert ([FakeInput]::Context -eq [IntPtr](-1)) 'failed verification not restored
 [FakeInput]::IgnoreContext = $false
 $scope = [BossPhysicalInput]::Enter()
 try {
-  foreach ($mapping in @('Get-ScreenPoint0', 'Get-ScreenPoint1')) {
-    $point = & $mapping $widget 2504 1474 684 276
-    Assert ($point[0] -eq 733 -and $point[1] -eq 844) 'real 200 percent geometry mapping incorrect'
-  }
   [BossPhysicalInput]::MoveCursor(733,844)
   [BossPhysicalInput]::RequireCursorOnWidget($widget,733,844)
   [FakeInput]::Owner = [IntPtr]101
@@ -113,11 +105,6 @@ try {
   [FakeInput]::CursorOk = $false
   Refused { [BossPhysicalInput]::MoveCursor(733,844) } 'Cannot read physical cursor'
   [FakeInput]::CursorOk = $true
-  [FakeInput]::RectOk = $false
-  Refused { Get-ScreenPoint0 $widget 2504 1474 684 276 } 'Cannot read physical'
-  [FakeInput]::RectOk = $true
-  [FakeInput]::Bounds = New-Object BossPhysicalInput+Rect
-  Refused { Get-ScreenPoint1 $widget 2504 1474 684 276 } 'Cannot read physical'
   [FakeInput]::Context = [IntPtr](-1)
   $moves = [FakeInput]::Moves
   Refused { [BossPhysicalInput]::MoveCursor(733,844) } 'context lost'
@@ -147,59 +134,16 @@ Write-Output 'physical-input-probe-passed'
 `)
   assert.equal(probe.status, 0, probe.stderr || probe.stdout)
   assert.match(probe.stdout, /physical-input-probe-passed/)
-
-  // Run the complete click entrypoint with fake native APIs: an unrelated HWND must
-  // retain the established exit=2, restore context, and emit no mouse/key input.
-  const script = fs.readFileSync(path.join(SCRIPTS, 'win-click.ps1'), 'utf8').replace(/\r\n/g, '\n')
-  const start = script.indexOf('public class Win32 {')
-  const end = script.indexOf('\n"@', start)
-  assert.ok(start >= 0 && end > start)
-  const fakeWindow = `public class Win32 {
-    public static IntPtr FindWindowByTitle(string title) { return new IntPtr(10); }
-    public static IntPtr FindRenderWidget(IntPtr parent) { return new IntPtr(100); }
-    public static bool IsIconic(IntPtr hwnd) { return false; }
-    public static bool IsWindowVisible(IntPtr hwnd) { return true; }
-    public static bool ShowWindow(IntPtr hwnd, int command) { return true; }
-    public static IntPtr GetForegroundWindow() { return new IntPtr(10); }
-    public static uint GetWindowThreadProcessId(IntPtr hwnd, ref uint pid) { return 1; }
-    public static uint GetCurrentThreadId() { return 1; }
-    public static bool AttachThreadInput(uint a, uint b, bool attach) { return true; }
-    public static bool BringWindowToTop(IntPtr hwnd) { return true; }
-    public static bool SetForegroundWindow(IntPtr hwnd) { return true; }
-    public static bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int w, int h, uint flags) { return true; }
-    public const uint SWP_NOMOVE=2, SWP_NOSIZE=1, MOUSEEVENTF_LEFTDOWN=2, MOUSEEVENTF_LEFTUP=4;
-    public static readonly IntPtr HWND_TOP=IntPtr.Zero;
-    public static void mouse_event(uint f, uint x, uint y, uint d, UIntPtr extra) { Console.WriteLine("UNSAFE_MOUSE_EVENT"); }
-    public static void TypeUnicode(char ch) { Console.WriteLine("UNSAFE_KEY_EVENT"); }
-}`
-  const blockedSource = fakeSource.replace('Owner = new IntPtr(100)', 'Owner = new IntPtr(101)')
-    .replace('var previous = FakeInput.Context;',
-      'if (context.ToInt64() == -1) Console.WriteLine("DPI_CONTEXT_RESTORED"); var previous = FakeInput.Context;')
-  const blocked = runProbe(script.slice(0, start) + fakeWindow + script.slice(end),
-    { 'BossPhysicalInput.cs': blockedSource }, ['-X', '684', '-Y', '276', '-CssW', '2504', '-CssH', '1474'])
-  assert.equal(blocked.status, 2, blocked.stderr || blocked.stdout)
-  assert.match(blocked.stdout, /DPI_CONTEXT_RESTORED/)
-  assert.doesNotMatch(blocked.stdout, /UNSAFE_MOUSE_EVENT|UNSAFE_KEY_EVENT|已点击|已输入/)
-
-  const restoreFailure = fakeSource.replace('public static uint Thread = 1;',
-    'static FakeInput() { RefuseRestore = true; } public static uint Thread = 1;')
-  const afterInput = runProbe(script.slice(0, start) + fakeWindow + script.slice(end),
-    { 'BossPhysicalInput.cs': restoreFailure }, ['-X', '684', '-Y', '276', '-CssW', '2504', '-CssH', '1474'])
-  assert.notEqual(afterInput.status, 0, 'post-input cleanup failure must not return success')
-  assert.match(afterInput.stdout, /UNSAFE_MOUSE_EVENT/)
-  assert.match(afterInput.stderr, /\[BOSS_INPUT_UNKNOWN\]/)
 })
 
-test('both Windows entry scripts compile and refuse a missing target without input', { skip: !windows }, () => {
-  for (const file of ['win-click.ps1', 'cv-wheel.ps1']) {
-    const script = path.join(SCRIPTS, file)
-    assert.deepEqual([...fs.readFileSync(script).subarray(0, 3)], [0xef, 0xbb, 0xbf], `${file} needs UTF-8 BOM`)
-    const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script,
-      '-X', '684', '-Y', '276', '-CssW', '2504', '-CssH', '1474', '-TitleKeyword', '__aid_boss_no_window_test_01a1293d__'],
+test('the remaining Windows experiment entry script compiles and refuses a missing debug target without input', { skip: !windows }, () => {
+  const file = path.join(SCRIPTS, 'window-experiment.ps1')
+  assert.deepEqual([...fs.readFileSync(file).subarray(0, 3)], [0xef, 0xbb, 0xbf], 'window-experiment.ps1 needs UTF-8 BOM')
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', file,
+    '-Action', 'capture', '-CdpPort', '49999'],
     { encoding: 'utf8', timeout: 30000 })
-    assert.equal(result.status, 1, result.stderr || result.stdout)
-    assert.match(result.stderr.replace(/\s+/g, ''), /__aid_boss_no_window_test_01a1293d__/)
-    assert.doesNotMatch(result.stderr, /Add-Type.*:|CompilerError|SOURCE_CODE_ERROR/)
-    assert.doesNotMatch(result.stdout, /已点击|wheeled|已输入/)
-  }
+  assert.equal(result.status, 1, result.stderr || result.stdout)
+  assert.match(result.stderr.replace(/\s+/g, ''), /debugChromebrowserprocess/)
+  assert.doesNotMatch(result.stderr, /Add-Type.*:|CompilerError|SOURCE_CODE_ERROR/)
+  assert.doesNotMatch(result.stdout, /captured|已点击|已输入/)
 })

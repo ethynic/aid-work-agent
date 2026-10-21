@@ -104,7 +104,7 @@ export interface ResumeBatchDeps {
   pressEscape(): Promise<void>
   /** 无 clip 整页截图（device px，与 DOMSnapshot bounds 同坐标系） */
   captureFullpage(): Promise<Buffer>
-  /** Win32 滚轮（真实实现调 scripts/cv-wheel.ps1；deltaY<0 向下） */
+  /** Win32 滚轮（真实实现经 WinMouseClicker.wheel 走 native FFI；deltaY<0 向下） */
   wheel(
     rect: DeviceRect,
     viewport: { width: number; height: number },

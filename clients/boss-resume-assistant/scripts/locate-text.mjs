@@ -52,7 +52,7 @@ try {
     const cx = Math.round(owner.x + h.x + h.w / 2)
     const cy = Math.round(owner.y + h.y + h.h / 2)
     console.log(`中心点 page 坐标: (${cx}, ${cy})  docIdx=${h.docIdx} ownerOffset=(${owner.x},${owner.y})`)
-    // 最后一行输出机读 JSON（cssW/cssH 为视口 CSS 尺寸，供 win-click 换算缩放）
+    // 最后一行输出机读 JSON（cssW/cssH 为视口 CSS 尺寸，供 Win32 物理输入换算缩放）
     console.log(`RESULT ${JSON.stringify({ cx, cy, cssW: Math.round(rootB[2]), cssH: Math.round(rootB[3]), hits: hits.length })}`)
   }
 } finally {

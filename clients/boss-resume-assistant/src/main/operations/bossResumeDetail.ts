@@ -3,8 +3,9 @@ import { runVerifiedPageOperation } from './pageOperation.js'
  * boss_resume_detail operation（设计 §10.8）：读取当前打开的候选人在线简历详情并组装入库契约 payload。
  *
  * 简历详情是 canvas 像素（WASM fillText），DOM 抓不到文字 → 链路：
- * Win32 滚轮回顶 → 分段整页截图（字节差 + cv-segdiff.ps1 像素确认 + 连续两次相同才判到底）→
- * 重叠对齐拼接（scripts/cv-stitch.ps1）。文本识别在云端（boss_resume_detail 工具层调
+ * Win32 滚轮回顶 → 分段整页截图（字节差 + cv-segdiff 像素确认 + 连续两次相同才判到底）→
+ * 重叠对齐拼接（cv-stitch；两者 2026-10-21 已自 ps1 迁移 Node：boss/imageOps.ts）。
+ * 文本识别在云端（boss_resume_detail 工具层调
  * GLM-5.3-Flash 多模态读拼接长图，2026-09-17 去 OCR 化）——本地 OCR 链路（RapidOCR/WinRT）
  * 已整体下线，客户端不再产出文本。
  * 只读（effect=none），但滚动借用真实鼠标约 1-2 秒，执行期间用户手不能碰鼠标。
@@ -23,10 +24,7 @@ import { runVerifiedPageOperation } from './pageOperation.js'
  * 前置校验：当前页面必须已打开候选人简历详情（存在大尺寸 CANVAS）→ 否则 WRONG_PAGE。
  * 详见 src/main/boss/ResumeReader.ts 头注释（坐标系/滚轮/到底检测的真机结论）。
  */
-import { execPowerShellScript, PowerShellScriptError } from '../input/powerShell.js'
 import fs from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import {
   MAX_SEGMENTS,
   ResumeReader,
@@ -36,6 +34,7 @@ import {
   type DeviceRect,
   type ResumeReadResult,
 } from '../boss/ResumeReader.js'
+import { segdiffMisrateFiles, stitchPartsImage } from '../boss/imageOps.js'
 import { JobSwitcher } from '../boss/JobSwitcher.js'
 import { viewportOf, FILTER_SNAPSHOT_OPTIONS } from '../boss/FilterSetter.js'
 import { excludedRecommendationName } from '../boss/RecommendationResultBoundary.js'
@@ -54,38 +53,9 @@ export interface BossResumeDetailArgs {
   save_image_to?: string
 }
 
-type PsErrorCtor = new (message: string, exitCode?: number) => Error
-
-/** 执行 PowerShell 脚本（复用 win-click.ps1 的调用约定）；非零退出 fail-loud */
-function runPs(
-  scriptPath: string,
-  args: string[],
-  timeoutMs: number,
-  label: string,
-  ErrorCtor: PsErrorCtor,
-): Promise<{ stdout: string }> {
-  return execPowerShellScript(scriptPath, args, { timeout: timeoutMs }).catch(error => {
-    const code = error instanceof PowerShellScriptError ? error.exitCode : undefined
-    throw new ErrorCtor(`${label} 执行失败(exit=${code ?? 'unknown'}): ${error instanceof Error ? error.message : 'PowerShell 执行失败'}`, code)
-  })
-}
-
-/**
- * scripts/<name> 绝对路径（与 WinMouseClicker.defaultScriptPath 同款探测）。
- * 源码（src/main/operations）向上 3 级、编译后（dist/src/main/operations）向上 4 级是工程根。
- */
-function cvScriptPath(name: string): string {
-  const here = path.dirname(fileURLToPath(import.meta.url))
-  for (const up of ['..\\..\\..\\..', '..\\..\\..']) {
-    const candidate = path.resolve(here, up, 'scripts', name)
-    if (fs.existsSync(candidate)) return candidate
-  }
-  throw new WinClickError(`未找到 scripts/${name}（已从 ${here} 向上探测）`)
-}
-
 /**
  * Win32 滚轮落点 = canvas 中心（page device px）；CssW/CssH = viewport device 尺寸。
- * 输入本体走 session.physicalWheel（WinMouseClicker：native FFI 优先，cv-wheel.ps1 回退）：
+ * 输入本体走 session.physicalWheel（WinMouseClicker：native FFI，无 PowerShell 回退）：
  * BOSS 反作弊拦 CDP 合成 mouseWheel（WASM 虚拟滚动不动，2026-08-14 真机实证）。
  * export：bossResumeBatch operation（同域：读简历 canvas）复用同一落点口径。
  */
@@ -94,8 +64,10 @@ export function wheelCenter(rect: DeviceRect): { x: number; y: number } {
 }
 
 /**
- * 裁剪 + 对齐 + 拼接：解析 cv-stitch.ps1 stdout（overlapNN=<n> mis=<rate> / stitched=<w>x<h>）。
- * seamMis = 每接缝错配率（P1 接缝质量元信息，>SEAM_MIS_SUSPECT 由 ResumeReader 归入 suspectSeams）。
+ * 裁剪 + 对齐 + 拼接（2026-10-21 自 cv-stitch.ps1 迁移 Node，语义 1:1，见 boss/imageOps.ts）：
+ * 裁剪 rect → 相邻段重叠对齐（|dR|+|dG|+|dB|>60 错配、搜索 10%..95% 段高）→ 垂直拼接 → PNG 落盘。
+ * seamMis = 每接缝错配率（P1 接缝质量元信息，mis 已按 ps1 stdout F2 口径量化，
+ * >SEAM_MIS_SUSPECT 由 ResumeReader 归入 suspectSeams，进云端契约元数据 seam_mis/suspect_seams）。
  * export：bossResumeBatch operation 复用（同域共用）。
  */
 export async function stitchParts(
@@ -103,31 +75,10 @@ export async function stitchParts(
   rect: DeviceRect,
   outFile: string,
 ): Promise<{ width: number; height: number; overlaps: number[]; seamMis: number[] }> {
-  const { stdout } = await runPs(
-    cvScriptPath('cv-stitch.ps1'),
-    [
-      '-Parts', parts.join(','),
-      '-X', String(rect.x),
-      '-Y', String(rect.y),
-      '-W', String(rect.w),
-      '-H', String(rect.h),
-      '-Out', outFile,
-    ],
-    180000,
-    'cv-stitch.ps1',
-    ResumeReadError,
-  )
-  const stitched = /stitched=(\d+)x(\d+)/.exec(stdout)
-  if (!stitched) {
-    throw new ResumeReadError(`cv-stitch.ps1 输出缺少 stitched=<w>x<h> 行：${stdout.trim()}`)
-  }
-  // 接缝行形如 "overlap01=746 mis=0.08"（mis 为 InvariantCulture F2）；overlap/mis 成对解析
-  const seamLines = [...stdout.matchAll(/overlap\d+=(\d+)\s+mis=([\d.]+)/g)]
-  return {
-    width: Number(stitched[1]),
-    height: Number(stitched[2]),
-    overlaps: seamLines.map((m) => Number(m[1]!)),
-    seamMis: seamLines.map((m) => Number(m[2]!)),
+  try {
+    return stitchPartsImage(parts, rect, outFile, { readFile: (f) => fs.readFileSync(f), writeFile: (f, data) => fs.writeFileSync(f, data) })
+  } catch (error) {
+    throw new ResumeReadError(`cv-stitch 拼接失败：${error instanceof Error ? error.message : String(error)}`)
   }
 }
 
@@ -135,31 +86,20 @@ export async function stitchParts(
 export const SAME_VIEW_MISRATE_MAX = 0.01
 
 /**
- * 像素级同画面确认（P1 到底判定加固，仿 wheelAt 模式调 scripts/cv-segdiff.ps1）：
- * 比较两段整页截图的 canvas 区域（rect）是否同一画面。裁剪越界（窗口中途变化）时 PS exit 1
- * → runPs 抛 ResumeReadError（fail-loud，由 ResumeReader 包装后上抛）。
+ * 像素级同画面确认（P1 到底判定加固；2026-10-21 自 cv-segdiff.ps1 迁移 Node，语义 1:1，
+ * 见 boss/imageOps.ts）：比较两段整页截图的 canvas 区域（rect）是否同一画面。
+ * misrate 已按 ps1 stdout F4 口径量化（0.01004 → 0.0100 → 判同画面，与 PS 侧解析一致）。
+ * 裁剪越界（窗口中途变化）→ ImageOpsError → 此处转 ResumeReadError（fail-loud，由 ResumeReader 上抛）。
  * export：bossResumeBatch operation 复用（同域共用）。
  */
 export async function sameViewAt(a: string, b: string, rect: DeviceRect): Promise<boolean> {
-  const { stdout } = await runPs(
-    cvScriptPath('cv-segdiff.ps1'),
-    [
-      '-A', a,
-      '-B', b,
-      '-X', String(rect.x),
-      '-Y', String(rect.y),
-      '-W', String(rect.w),
-      '-H', String(rect.h),
-    ],
-    120000,
-    'cv-segdiff.ps1',
-    ResumeReadError,
-  )
-  const m = /misrate=([\d.]+)/.exec(stdout)
-  if (!m) {
-    throw new ResumeReadError(`cv-segdiff.ps1 输出缺少 misrate=<x> 行：${stdout.trim()}`)
+  let misrate: number
+  try {
+    misrate = segdiffMisrateFiles(a, b, rect, (f) => fs.readFileSync(f))
+  } catch (error) {
+    throw new ResumeReadError(`cv-segdiff 同画面比对失败：${error instanceof Error ? error.message : String(error)}`)
   }
-  return Number(m[1]!) <= SAME_VIEW_MISRATE_MAX
+  return misrate <= SAME_VIEW_MISRATE_MAX
 }
 
 /**
