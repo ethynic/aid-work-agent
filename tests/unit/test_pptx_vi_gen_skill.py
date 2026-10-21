@@ -1,7 +1,7 @@
-"""pptx-vi-gen 技能测试：注册发现 + CLI 校验与端到端生成。
+"""pptx-vi-gen 技能测试：注册发现 + CLI 校验与端到端生成 + 编辑往返。
 
-端到端用例实际渲染 PNG 并合成 pptx（依赖容器内 Noto CJK 字体），
-3 页小内容下耗时秒级。
+端到端用例实际生成 pptx（依赖容器内 Noto CJK 字体），
+小内容下耗时秒级。产出为 python-pptx 原生可编辑 PPT。
 """
 
 import json
@@ -13,6 +13,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SKILL_DIR = PROJECT_ROOT / "src" / "skills" / "pptx-vi-gen-1.0.0"
 GENERATE = SKILL_DIR / "scripts" / "generate.py"
+EDIT = SKILL_DIR / "scripts" / "edit.py"
+TEMPLATE_FILL = SKILL_DIR / "scripts" / "template_fill.py"
 
 CONTENT = {
     "slides": [
@@ -68,6 +70,16 @@ class TestPptxViGenSkill(unittest.TestCase):
         self.assertTrue(result["vi"]["has_logo"] is False)
         preview = Path(result["preview_dir"])
         self.assertEqual(len(list(preview.glob("slide_*.png"))), 3)
+        # 原生可编辑：文本框内存在 content 中的标题（非整页贴图）
+        from pptx import Presentation
+        prs = Presentation(str(pptx_path))
+        all_text = "\n".join(
+            sh.text_frame.text
+            for slide in prs.slides for sh in slide.shapes
+            if sh.has_text_frame
+        )
+        self.assertIn("测试演示", all_text)
+        self.assertIn("要点一", all_text)
         pptx_path.unlink(missing_ok=True)
         import shutil
         shutil.rmtree(preview, ignore_errors=True)
@@ -117,6 +129,73 @@ class TestPptxViGenSkill(unittest.TestCase):
             result = json.loads(proc.stdout)
             self.assertFalse(result["success"], msg=proc.stdout)
             self.assertIn(expect, result["error"], msg=proc.stdout)
+
+
+    def test_edit_cli_round_trip(self):
+        """生成 -> edit.py 改字/删页，断言修改生效、.bak 生成。"""
+        workdir = PROJECT_ROOT / "storage" / "tmp" / "test_pptx_vi_gen"
+        workdir.mkdir(parents=True, exist_ok=True)
+        proc = _run_cli(["--output", "out_edit.pptx"], workdir, content=CONTENT)
+        result = json.loads(proc.stdout)
+        self.assertTrue(result["success"], msg=proc.stdout + proc.stderr)
+        deck = Path(result["pptx"])
+
+        spec = {"ops": [
+            {"op": "replace_text", "find": "测试演示", "replace": "修改后的标题", "scope": "deck"},
+            {"op": "delete_slide", "slide": 2},
+        ]}
+        (workdir / "edit_spec.json").write_text(
+            json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+        cmd = [sys.executable, str(EDIT), "--pptx", "out_edit.pptx", "--spec", "edit_spec.json"]
+        proc = subprocess.run(
+            cmd, cwd=str(workdir),
+            env={"PATH": "/usr/local/bin:/usr/bin:/bin", "PROJECT_ROOT": str(PROJECT_ROOT),
+                 "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1", "HOME": "/tmp"},
+            capture_output=True, text=True, timeout=120)
+        result = json.loads(proc.stdout)
+        self.assertTrue(result["success"], msg=proc.stdout + proc.stderr)
+        self.assertEqual(result["slides"], 2)
+        self.assertTrue((workdir / "out_edit.pptx.bak").exists())
+
+        from pptx import Presentation
+        prs = Presentation(str(deck))
+        all_text = "\n".join(
+            sh.text_frame.text
+            for slide in prs.slides for sh in slide.shapes
+            if sh.has_text_frame
+        )
+        self.assertIn("修改后的标题", all_text)
+        self.assertNotIn("测试演示", all_text)
+        self.assertNotIn("要点页", all_text)   # 第 2 页已删
+
+        deck.unlink(missing_ok=True)
+        Path(str(deck) + ".bak").unlink(missing_ok=True)
+        (workdir / "edit_spec.json").unlink(missing_ok=True)
+
+    def test_template_fill_analyze_smoke(self):
+        """路线一 analyze 冒烟：临时构造最小模板，断言解析出版式与占位符。"""
+        from pptx import Presentation
+        workdir = PROJECT_ROOT / "storage" / "tmp" / "test_pptx_vi_gen"
+        workdir.mkdir(parents=True, exist_ok=True)
+        tpl = workdir / "tpl_smoke.pptx"
+        prs = Presentation()
+        s1 = prs.slides.add_slide(prs.slide_layouts[0])
+        s1.shapes.title.text = "模板标题"
+        prs.save(str(tpl))
+
+        proc = subprocess.run(
+            [sys.executable, str(TEMPLATE_FILL), "analyze", "--template", "tpl_smoke.pptx"],
+            cwd=str(workdir),
+            env={"PATH": "/usr/local/bin:/usr/bin:/bin", "PROJECT_ROOT": str(PROJECT_ROOT),
+                 "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1", "HOME": "/tmp"},
+            capture_output=True, text=True, timeout=120)
+        result = json.loads(proc.stdout)
+        self.assertTrue(result["success"], msg=proc.stdout + proc.stderr)
+        layouts = result["analysis"]["layouts"]
+        self.assertTrue(layouts)
+        idx0 = layouts[0]["placeholders"]
+        self.assertIn(0, [p["idx"] for p in idx0])
+        tpl.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

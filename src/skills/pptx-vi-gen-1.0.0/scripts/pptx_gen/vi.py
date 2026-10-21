@@ -1,6 +1,7 @@
-"""从客户 .pptx 模板提取视觉识别（VI）：主题色 / 主题字体 / Logo。
+"""Extract a customer's visual identity from their .pptx template.
 
-提取结果填充到完整 VI dict（缺项用默认值兜底），供渲染引擎使用。
+Pulls theme colors + theme fonts + a logo image from the template, filling
+the rest from a sane default so the renderer always has a complete VI.
 """
 import glob
 import io
@@ -114,3 +115,13 @@ def extract_vi(template_path):
 
     vi["logo_img"] = _logo_image(prs)
     return vi
+
+
+if __name__ == "__main__":
+    import json
+    import os
+    import sys
+    v = extract_vi(sys.argv[1])
+    v.pop("logo_img", None)
+    print(json.dumps({k: (os.path.basename(val) if k.startswith("font_") and val else val)
+                      for k, val in v.items()}, ensure_ascii=False, indent=2))
