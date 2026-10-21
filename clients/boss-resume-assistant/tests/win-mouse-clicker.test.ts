@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { WinMouseClicker, WinClickError } from '../src/main/input/WinMouseClicker.js'
+import { WinMouseClicker, WinClickError, channelFromEnv } from '../src/main/input/WinMouseClicker.js'
+import type { NativeInputSession } from '../src/main/input/WinMouseClicker.js'
 
 const VP = { width: 1917, height: 1905 }
 
@@ -118,4 +119,110 @@ test('a failed target activation is a proven zero-input guard failure for every 
   }
   assert.equal(inputs, 0)
   assert.throws(() => new WinMouseClicker({ cdpPort: 9333 }), WinClickError)
+})
+
+// ---- 原生通道（Phase 1）：通道选择 / 参数 / 错误映射 / 回退 ----
+
+test('channelFromEnv：native/powershell/未设置/非法值', () => {
+  assert.equal(channelFromEnv({}), undefined)
+  assert.equal(channelFromEnv({ AID_BOSS_INPUT: '' }), undefined)
+  assert.equal(channelFromEnv({ AID_BOSS_INPUT: 'native' }), 'native')
+  assert.equal(channelFromEnv({ AID_BOSS_INPUT: 'powershell' }), 'powershell')
+  assert.throws(() => channelFromEnv({ AID_BOSS_INPUT: 'nOative1' }), /AID_BOSS_INPUT/)
+})
+
+test('默认走原生通道且不调用 PowerShell', async () => {
+  const requests: object[] = []
+  const session: NativeInputSession = { perform: async (r) => { requests.push(r); return { output: ['已点击'] } } }
+  let psCalls = 0
+  const clicker = new WinMouseClicker({
+    channel: 'native',
+    nativeOpener: async () => session,
+    execFileImpl: async () => { psCalls++; return { stdout: '', stderr: '' } },
+  })
+  await clicker.click({ x: 903.75, y: 640.2 }, VP)
+  await clicker.drag({ x: 10, y: 10 }, { x: 20.8, y: 20 }, VP)
+  await clicker.clickAndType({ x: 1016, y: 1195 }, VP, '你好')
+  assert.equal(psCalls, 0)
+  assert.equal(requests.length, 3)
+  assert.deepEqual([
+    { ...requests[0] },
+    { ...requests[1] },
+    { ...requests[2] },
+  ].map((r) => (r as Record<string, unknown>)), [
+    { x: 904, y: 640, cssW: 1917, cssH: 1905, op: 'click' },
+    { x: 10, y: 10, cssW: 1917, cssH: 1905, dragX: 21, dragY: 20, op: 'drag' },
+    { x: 1016, y: 1195, cssW: 1917, cssH: 1905, text: '你好', op: 'clickAndType' },
+  ])
+})
+
+test('原生通道绑定模式传 cdpPort 且先激活原标签', async () => {
+  const events: string[] = []
+  const session: NativeInputSession = { perform: async (r) => { events.push(`input:${(r as { cdpPort?: number }).cdpPort ?? 'none'}`); return { output: [] } } }
+  const clicker = new WinMouseClicker({
+    cdpPort: 9333,
+    beforeInput: async () => { events.push('activate') },
+    channel: 'native',
+    nativeOpener: async () => session,
+    execFileImpl: async () => { throw new Error('ps') },
+  })
+  await clicker.click({ x: 10, y: 20 }, VP)
+  await clicker.clickAndType({ x: 10, y: 20 }, VP, 't')
+  assert.deepEqual(events, ['activate', 'input:9333', 'activate', 'input:9333'])
+})
+
+test('原生守卫拒绝（exit 2）与效果未知（exit 1）映射为 WinClickError', async () => {
+  const mk = (name: string, exitCode: 1 | 2, message: string) => ({ perform: async () => { throw Object.assign(new Error(message), { name, exitCode }) } })
+  const refused = new WinMouseClicker({ channel: 'native', nativeOpener: async () => mk('NativeInputError', 2, '落点仍被遮挡') })
+  await assert.rejects(refused.click({ x: 1, y: 1 }, VP), (e: unknown) => {
+    assert.ok(e instanceof WinClickError)
+    assert.equal(e.exitCode, 2)
+    assert.match(e.message, /落点仍被遮挡/)
+    return true
+  })
+  const unknown = new WinMouseClicker({ channel: 'native', nativeOpener: async () => mk('NativeInputError', 1, '[BOSS_INPUT_UNKNOWN] 拖动期间窗口几何变化') })
+  await assert.rejects(unknown.click({ x: 1, y: 1 }, VP), (e: unknown) => e instanceof WinClickError && e.exitCode === 1 && e.message.includes('[BOSS_INPUT_UNKNOWN]'))
+  const other = new WinMouseClicker({ channel: 'native', nativeOpener: async () => ({ perform: async () => { throw new Error('koffi X') } }) })
+  await assert.rejects(other.click({ x: 1, y: 1 }, VP), (e: unknown) => e instanceof WinClickError && e.exitCode === undefined && /原生输入通道失败/.test(e.message))
+})
+
+test('原生加载失败 → 自动回退 PowerShell（单次日志）且后续不再重试', async () => {
+  let opens = 0
+  const psCalls: string[][] = []
+  const errors: string[] = []
+  const original = process.stderr.write.bind(process.stderr)
+  process.stderr.write = ((chunk: string) => { errors.push(String(chunk)); return true }) as typeof process.stderr.write
+  try {
+    const clicker = new WinMouseClicker({
+      channel: 'native',
+      nativeOpener: async () => { opens++; throw new Error('koffi 加载失败: DLL') },
+      execFileImpl: async (_f, args) => { psCalls.push(args); return { stdout: '', stderr: '' } },
+    })
+    await clicker.click({ x: 5, y: 5 }, VP)
+    await clicker.click({ x: 5, y: 5 }, VP)
+    await clicker.drag({ x: 5, y: 5 }, { x: 6, y: 6 }, VP)
+    assert.equal(opens, 1, '只尝试打开一次')
+    assert.equal(psCalls.length, 3)
+    assert.ok(psCalls[0]!.includes('-X'))
+    const logged = errors.filter((line) => line.includes('[boss-input]'))
+    assert.equal(logged.length, 1)
+    assert.match(logged[0]!, /koffi 加载失败: DLL/)
+    assert.equal(clicker.inputChannel, 'powershell')
+  } finally {
+    process.stderr.write = original
+  }
+})
+
+test('环境变量强制 powershell 时原生会话不被加载', async () => {
+  let opens = 0
+  let ps = 0
+  const clicker = new WinMouseClicker({
+    channel: channelFromEnv({ AID_BOSS_INPUT: 'powershell' }),
+    nativeOpener: async () => { opens++; throw new Error('should not open') },
+    execFileImpl: async () => { ps++; return { stdout: '', stderr: '' } },
+  })
+  await clicker.click({ x: 1, y: 1 }, VP)
+  assert.equal(opens, 0)
+  assert.equal(ps, 1)
+  assert.equal(clicker.inputChannel, 'powershell')
 })

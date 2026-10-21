@@ -178,7 +178,7 @@ test('independent failure timeout launch errors clean nonce and preserve unknown
     return true
   })
   writeFileSync(source, '\uFEFFparam([int]$X,[int]$Y,[int]$CssW,[int]$CssH)\n[Console]::Error.Write("[BOSS_INPUT_UNKNOWN] harmless independent fixture");exit 3')
-  const clicker = new WinMouseClicker({ scriptPath: source })
+  const clicker = new WinMouseClicker({ scriptPath: source, channel: 'powershell' })
   await assert.rejects(clicker.click({ x: 1, y: 1 }, { width: 10, height: 10 }), (error: any) => {
     assert.ok(error instanceof WinClickError)
     assert.equal(mapExecutorError(error).code, 'EXECUTION_UNKNOWN')

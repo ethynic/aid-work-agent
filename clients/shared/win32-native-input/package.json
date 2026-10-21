@@ -1,0 +1,32 @@
+{
+  "name": "@aid/win32-native-input",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Win32 物理输入进程内 FFI 能力（koffi）：守卫/拟人序列/逐字键入，替代 PowerShell+Add-Type 链路",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "test:real": "npm run build && node --test tests/real/*.test.mjs"
+  },
+  "dependencies": {
+    "koffi": "3.3.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

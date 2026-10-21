@@ -9,18 +9,20 @@
   "type": "module",
   "scripts": {
     "build": "npm run build:main",
-    "build:main": "npm run build:core && tsc -p tsconfig.main.json && node scripts/build-process-supervisor.mjs",
-    "typecheck": "npm run build:core && tsc --noEmit -p tsconfig.main.json",
+    "build:main": "npm run build:core && npm run build:native && tsc -p tsconfig.main.json && node scripts/build-process-supervisor.mjs",
+    "typecheck": "npm run build:core && npm run build:native && tsc --noEmit -p tsconfig.main.json",
     "test": "npm run build:main && node scripts/run-tests.mjs",
     "cli": "npm run build:main && node dist/src/cli.js",
     "prepack": "npm run build:main && npm install --install-links --ignore-scripts",
     "postpack": "npm install --install-links=false --ignore-scripts",
-    "build:core": "npm --prefix ../shared/local-tool-host-core run build"
+    "build:core": "npm --prefix ../shared/local-tool-host-core run build",
+    "build:native": "npm --prefix ../shared/win32-native-input run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
     "zod": "4.4.3",
-    "@aid/local-tool-host-core": "file:../shared/local-tool-host-core"
+    "@aid/local-tool-host-core": "file:../shared/local-tool-host-core",
+    "@aid/win32-native-input": "file:../shared/win32-native-input"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
@@ -33,6 +35,7 @@
     "dist/src"
   ],
   "bundledDependencies": [
-    "@aid/local-tool-host-core"
+    "@aid/local-tool-host-core",
+    "@aid/win32-native-input"
   ]
 }
