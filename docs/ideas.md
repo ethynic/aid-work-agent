@@ -23,6 +23,7 @@
 | 20260917-1201 | 生产 243 仿真环境（staging） | 🔧 部分完成 | 代码层完成（a7394c1a）：SIMULATION_MODE 门控（SMTP/通知 dry-run、附件删除跳过、启动横幅）+ 同步脚本 + sim compose + nginx conf；243 服务器侧已上线（2026-09-17）：建库建账号 + schema 初始化（属主移交 aid_sim_user）+ 代码 rsync + cherry-pick + nginx 白名单上线（白名单放 snippets/ 避免 http 层污染生产的踩坑已回写文档）+ aid-agent-api1 healthy、启动横幅生效、表 149 张自动补齐；2026-09-17 更新脚本落地：sim.sh 默认附带代码同步（rsync 生产工作区 + sim-base 基准重放仿真增量，--skip-code 可跳过）+ 新增 agent1_update.sh 验证模式（git 拉取指定版本 + 前端构建，与复现模式互斥）；待 P1 验收（办公 IP 访问 + 同步真实租户联调）。 | [设计](system/simulation-env-design.md) | — |
 | 20261012-1230 | file_assets 历史文件名补录 | ✅ agent2 已补录，生产待执行 | commit 8825d880 上线 file_assets 表持久化文件元数据（根治下载文件名退化）后，存量历史文件名需跑补录脚本恢复（磁盘 + 消息表原始名优先，幂等）。agent2 已执行（磁盘 1241 + 消息 769，共 1457 行）；生产 243 发布后需同样执行。 | — | —（执行步骤见 [生产发布备忘](../deploy/生产发布备忘.md)） |
 | 20261012-2130 | docs 文档清理（3 个月前失效文档） | ✅ 已执行（2026-10-13） | 41 个删除项已 git rm；待定 wecom-integration.md 摘取有效章节至 wecom-crypto-troubleshooting.md 后删除；research_index 8 条目 + 全部悬空引用已清理；B 级重点项 6 处已修（含 2 个部署文档凭证脱敏），其余 32 个 B 级小修待后续顺手处理。 | [清理计划](plans/plan-docs-cleanup-20261012.md) | — |
+| 20261021-2200 | 私有云生产环境部署指南 | ✅ 已完成（2026-10-21） | 新增 [deploy/生产环境部署指南.md](../deploy/生产环境部署指南.md)：面向客户私有云全新部署的通用 playbook，综合 243 独占迁移档案与济南诺度混部实例（摸底决策、Docker/codeup 三通道、sparse-checkout、PG 绑址、.env 必改项、宝塔 TLS、发布后事项、验收清单、两例踩坑速查）。 | [部署指南](../deploy/生产环境部署指南.md) | — |
 
 ## 系统功能
 
