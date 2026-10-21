@@ -337,6 +337,7 @@ def build_tenant_instance_items(tenant_id: str, allowed_ids: Any) -> List[Dict[s
             "description": row.get("description") or (base_cfg.description if base_cfg else ""),
             "type": "tenant_instance",
             "base_agent_id": row["base_agent_id"],
+            "created_at": row.get("created_at"),
             "business_pages": (base_cfg.business_pages if base_cfg else None) or [],
         }
         if base_cfg is not None and base_cfg.chat_toolbar:

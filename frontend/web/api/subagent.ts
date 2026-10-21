@@ -35,6 +35,7 @@ export interface SubagentListItem {
   subagent_type?: string    // 子智能体类型
   status?: string           // 实例状态：idle/busy
   avatar?: string           // 头像
+  created_at?: string       // 副本实例创建时间（排序用）
   [key: string]: any        // 允许其他字段
 }
 

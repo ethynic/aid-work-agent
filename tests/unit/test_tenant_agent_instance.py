@@ -281,6 +281,24 @@ class TestBuildTenantInstanceItems:
         assert [i["agent_id"] for i in items] == ["sales-t1-ab12"]
         assert items[0]["type"] == "tenant_instance"
         assert items[0]["base_agent_id"] == "sales"
+        # 创建时间透传给前端排序（直用在前、副本按创建时间升序）
+        assert items[0]["created_at"] == rows[1]["created_at"]
+
+    def test_created_at_passed_through_for_sorting(self):
+        rows = [
+            _row("sales-t1-aa11", "sales", created_at="2026-10-01 10:00:00"),
+            _row("sales-t1-bb22", "sales", created_at="2026-10-02 10:00:00"),
+        ]
+        fake_agent = type("A", (), {})()
+        fake_agent.subagent_registry = type("R", (), {})()
+        fake_agent.subagent_registry.get = lambda _id: None
+        with patch.object(svc.TenantAgentInstanceDB, "list_by_tenant", return_value=rows), \
+             patch("src.core.agent.get_master_agent", return_value=fake_agent):
+            items = svc.build_tenant_instance_items("t1", {"sales"})
+        assert [i["created_at"] for i in items] == [
+            "2026-10-01 10:00:00",
+            "2026-10-02 10:00:00",
+        ]
 
     def test_empty_tenant_returns_empty(self):
         assert svc.build_tenant_instance_items("", {"sales"}) == []

@@ -188,6 +188,19 @@ function getDisplayName(agent: SubagentListItem): string {
   return agent.display_name || agent.instance_name || agent.name
 }
 
+// 排序：直用实例在前（保持接口原有顺序），副本实例按创建时间升序
+function sortAgents(list: SubagentListItem[]): SubagentListItem[] {
+  const direct = list.filter(a => a.type !== 'tenant_instance')
+  const copies = list
+    .filter(a => a.type === 'tenant_instance')
+    .sort((a, b) => {
+      const ta = a.created_at ? new Date(a.created_at).getTime() : 0
+      const tb = b.created_at ? new Date(b.created_at).getTime() : 0
+      return ta - tb
+    })
+  return [...direct, ...copies]
+}
+
 // 加载数字员工列表，过滤 main CEO 智能体
 async function loadAgents() {
   loading.value = true
@@ -195,7 +208,7 @@ async function loadAgents() {
     const res = await listSubagents()
     const list = res.data || []
     // 过滤掉 main（CEO 智能体不展示给用户）
-    agents.value = list.filter(a => a.agent_id !== 'main')
+    agents.value = sortAgents(list.filter(a => a.agent_id !== 'main'))
   } catch (e) {
     console.error('加载数字员工列表失败:', e)
     agents.value = []
