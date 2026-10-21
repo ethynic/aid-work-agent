@@ -1,0 +1,144 @@
+# 济南诺度私有云主 compose（139.129.48.30，混部环境）
+# 基于 docker-compose.prod.yml 适配：
+# 1. API 端口只绑 127.0.0.1（宝塔 nginx 同机反代，公网不可达）
+# 2. 存储路径改为 /var/www/aid/agent_{uploads,storage}
+# 3. 内存限额压紧：与客户存量业务（已占约 7.6G/16G）混部，
+#    全套上限 api 2.5g + background 1.5g + redis 512m，实际占用约 2~3g
+# 4. WORKERS 默认 2（私有云用户量小）
+
+services:
+  aid-agent-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aid-agent-api:latest
+    container_name: aid-agent-api
+    restart: unless-stopped
+    mem_limit: 2.5g
+    shm_size: 512m
+    depends_on:
+      aid-redis:
+        condition: service_healthy
+    ports:
+      # 仅本机可达，宝塔 nginx 反代 https://agent.jzzysd.com -> localhost:8000
+      - "127.0.0.1:8000:8000"
+    env_file:
+      - .env
+    environment:
+      - SERVER_MODE=fastapi
+      - SERVER_PORT=8000
+      - WORKERS=${WORKERS:-2}
+      - WORKER_TIMEOUT=${WORKER_TIMEOUT:-120}
+      - DEBUG=${DEBUG:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - .:/app
+      - ./log:/app/log
+      - ./configs:/app/configs
+      - ./skills:/app/skills
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          mode: 1777
+          size: 200m
+      - type: tmpfs
+        target: /home/appuser/tmp
+        tmpfs:
+          mode: 1777
+          size: 1g
+      - /var/www/aid/agent_uploads:/app/uploads
+      - /var/www/aid/agent_storage:/app/storage
+    networks:
+      - aid-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  aid-agent-background:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aid-agent-api:latest
+    container_name: aid-agent-background
+    restart: unless-stopped
+    mem_limit: 1.5g
+    shm_size: 512m
+    depends_on:
+      aid-redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - SERVER_MODE=background
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    entrypoint: ["sh", "-c"]
+    command: ["/usr/local/bin/fix_tmp.sh && exec gosu appuser python -m src.background_runner"]
+    volumes:
+      - .:/app
+      - ./log:/app/log
+      - ./configs:/app/configs
+      - ./skills:/app/skills
+      - /var/www/aid/agent_uploads:/app/uploads
+      - /var/www/aid/agent_storage:/app/storage
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          mode: 1777
+          size: 200m
+      - type: tmpfs
+        target: /home/appuser/tmp
+        tmpfs:
+          mode: 1777
+          size: 1g
+    networks:
+      - aid-network
+    healthcheck:
+      test: ["CMD-SHELL", "test -n \"$$(find /app/storage/.bg_runner_alive -mmin -2 2>/dev/null)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  aid-redis:
+    image: redis:7.4-alpine
+    container_name: aid-redis
+    restart: unless-stopped
+    mem_limit: 512m
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\" --appendonly yes"]
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD required}
+    volumes:
+      - aid-redis-data:/data
+    networks:
+      - aid-network
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  aid-network:
+    driver: bridge
+
+volumes:
+  aid-redis-data:
+    driver: local
