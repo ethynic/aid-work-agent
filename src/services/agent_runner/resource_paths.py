@@ -47,7 +47,7 @@ def cleanup_workspaces(resource_directory, identity, checkpoint):
         try:
             path.unlink(missing_ok=True)
         except OSError:
-            logger.warning('AgentRunner image artifact cleanup unavailable')
+            logger.opt(exception=True).warning('AgentRunner image artifact cleanup unavailable')
     for value in [resources.get('workspace'), *resources.get('reply_workspaces',[])]:
         if not value:
             continue

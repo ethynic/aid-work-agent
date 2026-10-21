@@ -362,7 +362,7 @@ def _finish_browser_shutdown_task(task: asyncio.Task) -> None:
     try:
         task.result()
     except Exception as exc:
-        logger.warning("浏览器后台回收异常: type={}", type(exc).__name__)
+        logger.opt(exception=True).warning("浏览器后台回收异常")
 
 
 async def _close_browser_runs_on_shutdown() -> None:
@@ -384,7 +384,7 @@ async def _close_browser_runs_on_shutdown() -> None:
     except asyncio.TimeoutError:
         logger.warning("浏览器 shutdown 回收超过 15 秒预算")
     except Exception as exc:
-        logger.warning("浏览器 shutdown 回收异常: type={}", type(exc).__name__)
+        logger.opt(exception=True).warning("浏览器 shutdown 回收异常")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

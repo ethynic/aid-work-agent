@@ -116,5 +116,5 @@ class RunnerFinalizer:
             if record:
                 update_total_cost('tr_'+runner['runner_id'],float(record.get('credit_cost') or 0))
                 update_user_message_id('tr_'+runner['runner_id'],runner['runner_id']+':user')
-        except Exception as error:
-            logger.warning('AgentRunner committed trace projection unavailable kind={}',type(error).__name__)
+        except Exception:
+            logger.opt(exception=True).warning('AgentRunner committed trace projection unavailable')

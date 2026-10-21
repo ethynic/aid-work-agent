@@ -52,7 +52,7 @@ async def _hold_prepared_delivery(queue, session_id, lease_token, enabled,
                 check()
             except Exception:
                 lost = True
-                logger.error("后端日志：渠道交付 ownership 丢失 session={}", session_id)
+                logger.opt(exception=True).error("后端日志：渠道交付 ownership 丢失 session={}", session_id)
                 owner.cancel()
                 return
 

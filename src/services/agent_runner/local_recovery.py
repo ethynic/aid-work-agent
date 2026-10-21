@@ -328,7 +328,7 @@ def release_ready_cancellations(connection_factory, *, limit=16, after_queue_ord
                 EventRepository.notify_in_tx(cursor,previous,cancellation_ready=True)
                 connection.commit()
         except CheckpointFailure as error:
-            logger.warning('Local cancellation remains blocked kind={}',type(error).__name__)
+            logger.opt(exception=True).warning('Local cancellation remains blocked: {!r}',error)
     return candidates[-1]['queue_order'] if len(candidates)==limit else 0
 
 

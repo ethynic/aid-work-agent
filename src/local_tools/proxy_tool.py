@@ -889,7 +889,7 @@ class BossFilterTool(LocalToolProxyTool):
                 if probe:
                     probe = repository.observed_invocation(probe)
             except Exception:
-                logger.error("后端日志：扩展筛选能力探查引用查询失败")
+                logger.opt(exception=True).error("后端日志：扩展筛选能力探查引用查询失败")
                 return {"success": False, "code": "FILTER_CAPABILITY_REQUIRED", "effect": "none", "message": "无法核验设备扩展筛选能力，原筛选未改动，请重新查询后再试"}
             result = (probe or {}).get("result_json") or {}
             data = result.get("data") if isinstance(result, dict) else None
