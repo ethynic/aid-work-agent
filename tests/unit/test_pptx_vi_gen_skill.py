@@ -1,0 +1,123 @@
+"""pptx-vi-gen 技能测试：注册发现 + CLI 校验与端到端生成。
+
+端到端用例实际渲染 PNG 并合成 pptx（依赖容器内 Noto CJK 字体），
+3 页小内容下耗时秒级。
+"""
+
+import json
+import subprocess
+import sys
+import unittest
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SKILL_DIR = PROJECT_ROOT / "src" / "skills" / "pptx-vi-gen-1.0.0"
+GENERATE = SKILL_DIR / "scripts" / "generate.py"
+
+CONTENT = {
+    "slides": [
+        {"role": "cover", "title": "测试演示", "subtitle": "副标题",
+         "date": "2026 年 10 月", "org": "测试部"},
+        {"role": "bullets", "title": "要点页", "lead": "导语。",
+         "items": [{"h": "要点一", "d": "具体描述一"},
+                   {"h": "要点二", "d": "具体描述二"}]},
+        {"role": "end", "title": "谢谢观看"},
+    ]
+}
+
+
+def _run_cli(args, cwd, content=None, stdin_data=None):
+    env = {
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "PROJECT_ROOT": str(PROJECT_ROOT),
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUTF8": "1",
+        "HOME": "/tmp",
+    }
+    if content is not None:
+        content_path = cwd / "content.json"
+        content_path.write_text(json.dumps(content, ensure_ascii=False), encoding="utf-8")
+        args = args + ["--content", "content.json"]
+    cmd = [sys.executable, str(GENERATE)] + args
+    proc = subprocess.run(
+        cmd, cwd=str(cwd), env=env, capture_output=True, text=True,
+        input=stdin_data, timeout=120,
+    )
+    return proc
+
+
+class TestPptxViGenSkill(unittest.TestCase):
+    def test_skill_discovered_by_registry(self):
+        from src.core.skill_registry import SkillRegistry
+        registry = SkillRegistry()
+        registry.load_from_directory(str(PROJECT_ROOT / "src" / "skills"))
+        self.assertIn("pptx-vi-gen", registry.list_skills())
+        skill = registry.get("pptx-vi-gen")
+        self.assertIsNotNone(skill)
+
+    def test_cli_end_to_end_default_vi(self):
+        workdir = PROJECT_ROOT / "storage" / "tmp" / "test_pptx_vi_gen"
+        workdir.mkdir(parents=True, exist_ok=True)
+        proc = _run_cli(["--output", "out_test.pptx", "--preview"], workdir, content=CONTENT)
+        result = json.loads(proc.stdout)
+        self.assertTrue(result["success"], msg=proc.stdout + proc.stderr)
+        pptx_path = Path(result["pptx"])
+        self.assertTrue(pptx_path.exists())
+        self.assertGreater(pptx_path.stat().st_size, 10_000)
+        self.assertEqual(result["slides"], 3)
+        self.assertTrue(result["vi"]["has_logo"] is False)
+        preview = Path(result["preview_dir"])
+        self.assertEqual(len(list(preview.glob("slide_*.png"))), 3)
+        pptx_path.unlink(missing_ok=True)
+        import shutil
+        shutil.rmtree(preview, ignore_errors=True)
+
+    def test_cli_stdin_content(self):
+        workdir = PROJECT_ROOT / "storage" / "tmp" / "test_pptx_vi_gen"
+        workdir.mkdir(parents=True, exist_ok=True)
+        proc = _run_cli(["--output", "out_stdin.pptx", "--content", "-"], workdir,
+                        stdin_data=json.dumps(CONTENT, ensure_ascii=False))
+        result = json.loads(proc.stdout)
+        self.assertTrue(result["success"], msg=proc.stdout + proc.stderr)
+        Path(result["pptx"]).unlink(missing_ok=True)
+
+    def test_cli_rejects_unknown_role(self):
+        workdir = PROJECT_ROOT / "storage" / "tmp" / "test_pptx_vi_gen"
+        workdir.mkdir(parents=True, exist_ok=True)
+        bad = {"slides": [{"role": "chart", "title": "x"}]}
+        proc = _run_cli([], workdir, content=bad)
+        result = json.loads(proc.stdout)
+        self.assertFalse(result["success"])
+        self.assertIn("role 非法", result["error"])
+
+    def test_cli_rejects_missing_title(self):
+        workdir = PROJECT_ROOT / "storage" / "tmp" / "test_pptx_vi_gen"
+        workdir.mkdir(parents=True, exist_ok=True)
+        bad = {"slides": [{"role": "cover", "subtitle": "no title"}]}
+        proc = _run_cli([], workdir, content=bad)
+        result = json.loads(proc.stdout)
+        self.assertFalse(result["success"])
+        self.assertIn("缺少 title", result["error"])
+
+    def test_cli_rejects_missing_required_fields(self):
+        workdir = PROJECT_ROOT / "storage" / "tmp" / "test_pptx_vi_gen"
+        workdir.mkdir(parents=True, exist_ok=True)
+        cases = [
+            ({"role": "stats", "title": "x"}, "缺少必需字段 stats"),
+            ({"role": "twocol", "title": "x",
+              "left": {"h": "a", "items": ["1"]}}, "缺少必需字段 right"),
+            ({"role": "bullets", "title": "x", "items": [{"d": "no h"}]},
+             "缺少 h（小标题）"),
+            ({"role": "stats", "title": "x",
+              "stats": [{"num": str(k), "label": "l"} for k in range(5)]},
+             "超过 4 张卡"),
+        ]
+        for content, expect in cases:
+            proc = _run_cli([], workdir, content={"slides": [content]})
+            result = json.loads(proc.stdout)
+            self.assertFalse(result["success"], msg=proc.stdout)
+            self.assertIn(expect, result["error"], msg=proc.stdout)
+
+
+if __name__ == "__main__":
+    unittest.main()

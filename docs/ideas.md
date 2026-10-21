@@ -56,6 +56,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261021-1625 | pptx-vi-gen 技能：模板 VI 提取 + 美观 PPT 生成 | 🔧 部分完成（开发+单测完成，待提交部署） | 从第三方系统（workbuddy）移植的 PPT 生成技能，仅整合其"路线二"（VI 生成，其"路线一"模板填充与 ppt_process 工具重叠不引入）。从客户上传的 .pptx 模板提取 VI（主题色/字体/Logo），LLM 按 7 种版式 schema（cover/section/stats/bullets/twocol/image/end）产出 content.json，Pillow 逐页渲染 1920×1080 后合成整页图片版 PPT（文字不可编辑）。新增 src/skills/pptx-vi-gen-1.0.0/（SKILL.md + scripts/generate.py CLI + pptx_gen 库），移植改造：vi.py 字体查找补 Linux Noto CJK/文泉驿路径（原硬编码 Windows 字体）、pipeline.py 支持无模板默认 VI 兜底、路径解析不做跨租户 glob（fail-fast）。SKILL.md 划清与 ppt_process 工具边界（本技能管"模板 VI + 美观图片版"，可编辑 PPT 走 ppt_process）。独立验证通过（6 个单测：注册发现/stdin/端到端/非法 role/缺 title/缺必需字段），容器内端到端验证渲染质量正常。 | — | — |
 | 20261014-2043 | wecom-cli 本地库数据通道（local-db） | 📋 待开发 | 解密企微本地 SQLite 库作为读历史/待回复检测/发送校验三能力的主数据源（5.0.11.6029 本机已全链路验证），UI/OCR 链路转兜底；版本矩阵分派 + doctor 首跑深检定基调；v1 仅文本消息。 | [设计](design/wecom/wecom-cli-localdb-design.md) | — |
 | 20260714-1911 | 浏览器混合执行、可视化与人工接管 | 🔧 部分完成 | Phase 0～1 已完成；Phase 2 已实现、待真实 Redis/PostgreSQL 门禁。 | [设计](tools/browser/browser_visualization_design.md) | [开发计划](tools/browser/browser_execution_dev_plan.md) |
 | 20260630-1733 | PDF reportlab 固定版式生成器 | 📋 待开发 | 暂不开发，未来如出现强固定版式需求再评估。 | [设计](tools/pdf/pdf_tool_design.md) | — |
