@@ -34,7 +34,14 @@ def assert_resume_model(cursor,row,node,call_id,ordinal,origin,provider,model):
             cursor.execute('SELECT * FROM local_tool_invocations WHERE id=%s AND tenant_id IS NOT DISTINCT FROM %s',
                 (parent_id,row['tenant_id']))
             return dict(cursor.fetchone() or {})
-        arguments = continuation_arguments(row,node,call_id,arguments,load_parent)
+        def load_attempts(parent):
+            cursor.execute('''SELECT id,state,effect,result_json,error_code FROM local_tool_invocations
+                WHERE tenant_id=%s AND user_id=%s AND session_id=%s AND device_id=%s
+                  AND tool_name='boss_resume_next' AND arguments_json->>'continue_from'=%s''',
+                (row['tenant_id'],row['user_id'],row['session_id'],str(parent['device_id']),str(parent['id'])))
+            return [dict(record) for record in cursor.fetchall()]
+        arguments = continuation_arguments(row,node,call_id,arguments,load_parent,
+            load_attempts=load_attempts,current_invocation_id=origin.get('invocation_id'))
     if (ref is None or ref.get('request',{}).get('arguments')!=arguments
             or ref.get('request',{}).get('tool_name')!=cls.name):
         raise CheckpointFailure('LOCAL_RESUME_ITEM_OWNER_MISMATCH')

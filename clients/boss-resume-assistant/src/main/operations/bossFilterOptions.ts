@@ -42,7 +42,8 @@ export function createBossFilterOptionsOperation(
             } catch { /* 非法URL按错误页面拒绝，不能根据后台iframe文案放行。 */ }
             if (!onRecommend) throw new CodedOperationError('WRONG_PAGE', '当前不在 BOSS 推荐牛人页面，请先用 boss_goto recommend；后台筛选文案不构成页面前置条件')
             // 前置校验：必须在推荐牛人列表页（有「筛选」按钮，与 bossGreet 同源判定）
-            const probe = await session.snapshot()
+            // Phase 5 快照热点分段：前置校验快照与业务面板快照分开计段，便于归因
+            const probe = await perf.time('snapshot:precheck', () => session.snapshot())
             if (!probe.strings.some((s) => FILTER_BUTTON_PATTERN.test(s.trim()))) {
               throw new CodedOperationError(
                 'WRONG_PAGE',
@@ -56,6 +57,8 @@ export function createBossFilterOptionsOperation(
               // 性能埋点：固定 sleep 与关键阶段耗时进 collector（只记名称与毫秒）
               sleep: (ms) => perf.time(`sleep:${ms}`, () => new Promise<void>((r) => setTimeout(r, ms))),
               step: <T>(name: string, fn: () => Promise<T>) => perf.time(`filter:${name}`, fn),
+              // Phase 5 存活热点分段：纯计算步骤同步计时（结构解析等）
+              stepSync: <T>(name: string, fn: () => T) => perf.timeSync(name, fn),
               // VIP 面板滚动适配：CDP 浏览类滚动（不占真实鼠标）
               mouseWheel: (...args) => activeAttempt.input(() => session.mouseWheel(...args)),
             })

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import path from 'node:path'
 import test from 'node:test'
 import { WinMouseClicker, WinClickError, channelFromEnv } from '../src/main/input/WinMouseClicker.js'
 import type { NativeInputSession } from '../src/main/input/WinMouseClicker.js'
@@ -225,4 +226,62 @@ test('环境变量强制 powershell 时原生会话不被加载', async () => {
   assert.equal(opens, 0)
   assert.equal(ps, 1)
   assert.equal(clicker.inputChannel, 'powershell')
+})
+
+// ---- 滚轮（cv-wheel native 迁移）：参数 / 通道 / 校验 / 绑定激活 ----
+
+test('wheel PowerShell 回退：cv-wheel.ps1 参数面（DeltaY/Notches/TitleKeyword，无 -CdpPort/-Text）', async () => {
+  const calls: string[][] = []
+  const clicker = new WinMouseClicker({ execFileImpl: async (_file, args) => { calls.push(args); return { stdout: '', stderr: '' } } })
+  await clicker.wheel({ x: 531.6, y: 658.2 }, VP, -120, 6)
+  const args = calls[0]!
+  assert.equal(args[args.indexOf('-File') + 1]!.split(path.sep).join('/').endsWith('/scripts/cv-wheel.ps1'), true)
+  assert.equal(args[args.indexOf('-X') + 1], '532')
+  assert.equal(args[args.indexOf('-Y') + 1], '658')
+  assert.equal(args[args.indexOf('-CssW') + 1], String(VP.width))
+  assert.equal(args[args.indexOf('-CssH') + 1], String(VP.height))
+  assert.equal(args[args.indexOf('-DeltaY') + 1], '-120')
+  assert.equal(args[args.indexOf('-Notches') + 1], '6')
+  assert.equal(args[args.indexOf('-TitleKeyword') + 1], 'BOSS直聘 - Google Chrome')
+  assert.equal(args.includes('-CdpPort'), false, 'cv-wheel.ps1 无绑定参数')
+  assert.equal(args.includes('-Text'), false)
+})
+
+test('wheel 原生通道：请求形状带 wheelDeltaY/notches 与 cdpPort，不调 PowerShell', async () => {
+  const requests: object[] = []
+  const session: NativeInputSession = { perform: async (r) => { requests.push(r); return { output: ['已滚动 3 格 × -120'] } } }
+  let psCalls = 0
+  const clicker = new WinMouseClicker({
+    cdpPort: 9333,
+    beforeInput: async () => {},
+    channel: 'native',
+    nativeOpener: async () => session,
+    execFileImpl: async () => { psCalls++; return { stdout: '', stderr: '' } },
+  })
+  await clicker.wheel({ x: 531, y: 658 }, VP, -120, 3)
+  assert.equal(psCalls, 0)
+  assert.deepEqual({ ...requests[0] }, {
+    x: 531, y: 658, cssW: VP.width, cssH: VP.height,
+    wheelDeltaY: -120, notches: 3, cdpPort: 9333, op: 'wheel',
+  })
+})
+
+test('wheel 参数校验：deltaY=0 / notches=0 → WinClickError 零输入', async () => {
+  let inputs = 0
+  const clicker = new WinMouseClicker({ execFileImpl: async () => { inputs++; return { stdout: '', stderr: '' } } })
+  for (const bad of [() => clicker.wheel({ x: 10, y: 20 }, VP, 0, 3), () => clicker.wheel({ x: 10, y: 20 }, VP, -120, 0)]) {
+    await assert.rejects(bad(), (error: unknown) => error instanceof WinClickError && !error.message.includes('UNKNOWN'))
+  }
+  assert.equal(inputs, 0)
+})
+
+test('wheel 绑定模式：输入前激活原标签；激活失败零输入 STALE_OBSERVATION', async () => {
+  const events: string[] = []
+  const ok = new WinMouseClicker({ cdpPort: 9333, beforeInput: async () => { events.push('activate') }, execFileImpl: async () => { events.push('input'); return { stdout: '', stderr: '' } } })
+  await ok.wheel({ x: 10, y: 20 }, VP, -120, 2)
+  assert.deepEqual(events, ['activate', 'input'])
+  let inputs = 0
+  const broken = new WinMouseClicker({ cdpPort: 9333, beforeInput: async () => { throw new Error('original tab closed') }, execFileImpl: async () => { inputs++; return { stdout: '', stderr: '' } } })
+  await assert.rejects(broken.wheel({ x: 10, y: 20 }, VP, -120, 2), (error: unknown) => error instanceof WinClickError && error.exitCode === 2)
+  assert.equal(inputs, 0)
 })

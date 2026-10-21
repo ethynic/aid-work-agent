@@ -28,7 +28,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20261020-recruiting-error-perf | 招聘链路单点错误治理与 Win32 输入性能修复 | 🔧 部分完成 | 原生输入开发+测试+CR完成待真机实测；1210分类、180秒拆除开发中。 | [复盘](incidents/recruiting-runtime-filter-timeout-and-resume-blocked-20261020.md) | [计划](plans/plan-recruiting-error-containment-and-input-performance.md) |
+| 20261020-recruiting-error-perf | 招聘链路单点错误治理与 Win32 输入性能修复 | 🔧 部分完成 | 单份跳过+多轮CR完成；native点击与cv-wheel滚动真机验证通过，余读取脚本待迁 | [复盘](incidents/recruiting-runtime-filter-timeout-and-resume-blocked-20261020.md) | [计划](plans/plan-recruiting-error-containment-and-input-performance.md) |
 | 20261020-1223 | 腾讯文档知识库导入 | 🔧 部分完成 | 客户需将既有文档系统内容导入知识库；按受众面排序腾讯文档>飞书>金山>钉钉>语雀>石墨，Phase 1 聚焦腾讯文档。已完成（0bcb03d3）：适配层 src/services/tencent_docs/（drive 列表客户端 + doc v3 属性树转 Markdown 转换器 + 400010 自动降级导出 DOCX 兜底与每 openID 每日 9 次配额闸门），36 个单测全绿、独立验证无 P0/P1。已完成（2026-10-20）：导入任务框架（任务 #5，DB 4 表 + 凭据加密存取 + 批次预检/配额闸门/无变化跳过 + Redis 单副本调度器 + 知识库入库覆盖更新）与前端入口（任务 #7，独立页面 /t/:tenant_id/knowledge/tdoc-imports：凭据绑定/目录浏览/文件选择/批次进度轮询），72 个单测全绿；浏览器真机联调与 OAuth 多租户授权（#2，被第三方应用入口缺失阻塞，待官方反馈）待做。范围决策（2026-10-20，产品确认）：现有租户腾讯文档账号均为个人账号，仅对接个人版 C 端；企业版 SaaS（OneID + drive/v3）与企业微信文档体系待实际需求出现再对接（调研快照 ext/腾讯文档接口/07）。遗留确认项：search 接口参数名待真机验证、400010 触发条件待定位。测试凭据明文登记计划 §7.1。 | — | [计划](plans/plan-tencent-docs-knowledge-import.md) |
 | 20261013-1055 | Agent 网络搜索增强 | 🔧 部分完成 | 三家provider已接入，默认Tavily；融合、批量和正文核验待开发。 | [设计](system/agent-web-search-enhancement-design.md) | [计划](plans/plan-agent-web-search-enhancement.md) |
 | 20261008-runtime-plugin-host | Runtime 执行环境、插件宿主与可视化客户端 | 🔧 部分完成 | A1～A3完成；隔离验收包已交付，待人工及正式发行，第三方暂不开发；新增 v2 写路径泛化阶段（BOSS B3 依赖，待开发）。 | [唯一架构](system/runtime-plugin-host-architecture-design.md) / [共同契约](system/runner-desktop-runtime-integration-contract.md) / [接口](../contracts/runtime-host/v1/README.md) | [统一计划](plans/plan-runtime-plugin-host.md) |
@@ -76,6 +76,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261021-1126 | Web Agent 单条回复分享 | 📋 待开发 | 独立网页完整展示所选回复及图片附件，由分享人决定是否需要密码。 | [设计](system/web-agent-reply-sharing-design.md) | [计划](plans/plan-web-agent-reply-sharing.md) |
 | 20260714-1912 | Agent 跨平台桌面客户端 | 🔧 部分完成（H3待人工验收） | 共用 Runner 与 Runtime，UI竞态修复后的首期验收包已重建验证。 | [桌面设计 v3](system/desktop-agent-client-design.md) / [Runner 架构](system/agent-application-architecture-design.md) / [共同契约](system/runner-desktop-runtime-integration-contract.md) | [开发计划](plans/plan-desktop-agent-client.md) |
 
 ---

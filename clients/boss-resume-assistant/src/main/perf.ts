@@ -28,6 +28,19 @@ export class PerfCollector {
     }
   }
 
+  /**
+   * 同步计时段（Phase 5，2026-10-20）：FilterSetter 的纯计算步骤（结构解析/预校验/
+   * 可见区几何/年龄读取）为同步函数，用本方法记录；口径与 time 一致（抛错也记时后重抛）。
+   */
+  timeSync<T>(name: string, fn: () => T): T {
+    const start = Date.now()
+    try {
+      return fn()
+    } finally {
+      this.record(name, Date.now() - start)
+    }
+  }
+
   /** 某步骤名的累计毫秒（未记录过返回 0）；runBossOperation 行首 connect/body/close 用 */
   totalMsOf(name: string): number {
     return this.entries.get(name)?.totalMs ?? 0

@@ -19,7 +19,8 @@ import fsp from 'node:fs/promises'
 import { ResumeBatchReader } from '../boss/ResumeBatchReader.js'
 import { JobSwitcher, FILTER_BUTTON_PATTERN } from '../boss/JobSwitcher.js'
 import { viewportOf } from '../boss/FilterSetter.js'
-import { buildResumePayload, wheelAt, sameViewAt, stitchParts } from './bossResumeDetail.js'
+import { buildResumePayload, wheelCenter, sameViewAt, stitchParts } from './bossResumeDetail.js'
+import { WinClickError } from '../input/WinMouseClicker.js'
 import {
   defaultSessionFactory,
   runBossOperation,
@@ -124,7 +125,10 @@ export function createBossResumeBatchOperation(
               click: (point, viewport) => session.click(point, viewport),
               pressEscape: session.pressEscape,
               captureFullpage: session.captureFullpage,
-              wheel: (rect, viewport, deltaY, notches) => wheelAt(rect, viewport, deltaY, notches),
+              wheel: (rect, viewport, deltaY, notches) => {
+                if (!session.physicalWheel) throw new WinClickError('当前会话不支持 Win32 真实滚轮（physicalWheel 缺失）')
+                return session.physicalWheel(wheelCenter(rect), viewport, deltaY, notches)
+              },
               sameView: (a, b, rect) => sameViewAt(a, b, rect),
               stitch: stitchParts,
               scroll: session.mouseWheel,

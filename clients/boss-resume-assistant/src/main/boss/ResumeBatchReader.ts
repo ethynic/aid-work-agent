@@ -377,8 +377,20 @@ export class ResumeBatchReader {
               }
               retrySnap = await this.deps.snapshot()
             }
-            const freshCard = this.locateCards(retrySnap).find((candidate) => candidate.name === card.name)
-            if (!freshCard?.namePoint) throw new ResumeBatchError('重击前无法重新确认原候选人卡片及来源，已停止，禁止使用旧坐标')
+            const cardsNow = this.locateCards(retrySnap)
+            const freshCard = cardsNow.find((candidate) => candidate.name === card.name)
+            if (!freshCard?.namePoint) {
+              // 原卡片在重试前从列表消失（推荐流刷新/列表更新）：无残留详情（上方已关），
+              // 本份记失败后回到批次主循环——即使当前视口已无卡片，也复用主循环既有的
+              // 滚动、无进展与列表边界判断寻找后续候选人，不在此额外设空卡片门禁；
+              // 「禁止使用旧坐标」原则不变：不再点击原卡片
+              pushFailure(
+                card.name,
+                '点击后详情未打开，重试前原候选人卡片已从列表消失（列表已更新）',
+                `重试快照剩余 ${cardsNow.length} 张卡片，回到主循环继续`,
+              )
+              continue batchLoop
+            }
             pt = freshCard.namePoint
             clickViewport = viewportOf(retrySnap)
           }
@@ -409,11 +421,16 @@ export class ResumeBatchReader {
             `${canvasNote}${nearMiss ? '；存在接近阈值的大画布，疑似详情实际已打开' : ''}`,
         )
         // 详情可能实际已打开但画布判定未命中（真机 2026-08-18：572 高画布被阈值卡掉）——
-        // 失败路径也必须尝试关闭，否则弹层挡住列表导致后续卡片连环点空
+        // 失败路径也必须尝试关闭，否则弹层挡住列表导致后续卡片连环点空。
+        // 关闭成功=列表仍可操作：本份已按失败收敛（pushFailure），继续处理下一人；
+        // 关不掉=页面无法继续操作：才停止批次进入恢复流程
         const closed = await this.tryCloseDetail()
-        stopReason = closed ? 'detail_not_opened' : 'detail_not_closed'
-        needsRecovery(closed ? '两次正常点击后仍未检出完整详情结构' : '打开失败且详情收尾未完成', 'unmet')
-        break
+        if (!closed) {
+          stopReason = 'detail_not_closed'
+          needsRecovery('打开失败且详情收尾未完成', 'unmet')
+          break
+        }
+        continue
       }
 
       if (lastSnap && (inspectRecommendationResults(lastSnap).stopReason === 'no_matching_candidates' || excludedRecommendationName(lastSnap, card.name))) {

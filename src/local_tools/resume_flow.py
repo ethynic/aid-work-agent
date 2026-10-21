@@ -8,6 +8,9 @@ references, the server evaluation and small tool output.
 import asyncio
 import copy
 import hashlib
+import json
+
+from loguru import logger
 
 from .domain_artifacts import prepare_image_ref
 from .domain_fee import write_domain_fee, invalidate_domain_fee_cache
@@ -72,17 +75,30 @@ async def process_item(owner, *, tenant_id, execution_id, tool_call_id,
                 raise LocalContinuationRequired('LOCAL_RESUME_MODEL_CONFIGURATION_CHANGED') from error
             return _failure('RESUME_VL_FAILED', f'简历识别模型配置非法：{error}')
         except vl.ResumeVLError as error:
-            # Existing known domain failure remains a per-item business result.
-            return _failure('RESUME_VL_FAILED', f'简历云端识别失败：{error}')
-        if not vl.resume_name_matches(name, evaluation.get('name_seen') or ''):
-            return _failure('RESUME_NAME_MISMATCH', '姓名核对不匹配，已跳过不入库不扣费，请人工核对后重试')
-        evaluation['match_threshold'] = (policy_result['job_context'] or {}).get('match_threshold')
+            evaluation = _failure('RESUME_VL_FAILED', f'简历云端识别失败：{error}')
+        except LocalContinuationRequired as error:
+            if error.code != 'LOCAL_MODEL_RESPONSE_VERIFICATION_REQUIRED':
+                raise
+            # 单份无响应不重试、不挂起批次；供应商回执仍保留原 unknown 事实。
+            evaluation = _failure('RESUME_VL_FAILED', '简历识别未收到模型响应，已跳过该份')
+        if evaluation.get('success') is not False:
+            if not vl.resume_name_matches(name, evaluation.get('name_seen') or ''):
+                evaluation = _failure('RESUME_NAME_MISMATCH', '姓名核对不匹配，已跳过不入库不扣费')
+            else:
+                evaluation['match_threshold'] = (policy_result['job_context'] or {}).get('match_threshold')
+        if evaluation.get('success') is False:
+            logger.warning("后端日志：简历 VL 单份跳过 item={}/invocation={} 诊断={} 原因={}",
+                item_ordinal, invocation_id,
+                json.dumps(vl.image_diagnostics(stitched), ensure_ascii=False), evaluation['message'])
+        # 保存单份成功或失败结论，恢复批次时复用；不重识别已跳过的份。
         evaluation = await owner.complete_phase(branch='resume.evaluation', ordinal=item_ordinal,
             intent=origin, result=evaluation)
     else:
         if evaluated['request'] != origin or evaluated.get('phase') != 'completed':
             raise LocalContinuationRequired('LOCAL_RESUME_EVALUATION_VERIFICATION_REQUIRED')
         evaluation = evaluated['result']
+    if evaluation.get('success') is False:
+        return evaluation
     fee = await owner.commit_domain(branch='resume.fee', ordinal=item_ordinal,
         intent={**origin, 'billing_tool_name': RESUME_RECOGNITION_TOOL_NAME,
             'credit_cost': policy_result['credit_cost'], 'device_id': device_id}, writer=write_domain_fee)

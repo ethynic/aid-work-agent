@@ -225,7 +225,9 @@ class LocalToolProxyTool(BaseTool):
     unsupported_provider_message = (
         "选定设备不支持 BOSS 招聘操作。请确认本机 Runtime 已启用 boss-recruiting 能力后再试"
     )
-    timeout_seconds = 180  # 默认 3 分钟；写动作（greet/accept）子类改为 10 分钟
+    # 非 durable 旧路径的观察窗（超时 request_cancel+TIMEOUT）；Phase 4 起 durable
+    # 路径不把它持久化为任务总时限（见 _poll_invocation），写动作子类仍改 10 分钟
+    timeout_seconds = 180
     # 弹层自愈主体标记：False 的工具失败后不再触发自愈（overlay 原语自身防递归）
     heal_eligible = True
     # Server-owned adapter policy; CLI facts and model output cannot grant replay.
@@ -345,15 +347,25 @@ class LocalToolProxyTool(BaseTool):
         })
 
         return await self._poll_invocation(invocation, tenant_id, progress_queue,
-            durable_deadline=invocation.get('deadline_at') if operation is not None else None)
+            durable=operation is not None)
 
-    async def _poll_invocation(self, invocation, tenant_id, progress_queue, *, durable_deadline=None):
-        """Keep the original wire/event polling; durable owners keep its deadline."""
+    async def _poll_invocation(self, invocation, tenant_id, progress_queue, *, durable=False):
+        """Keep the original wire/event polling; durable owners observe the persisted call.
+
+        Phase 4（观察与执行解耦）：durable 观察不再有 Runner 侧墙钟总时限。
+        - 行上存有旧 deadline（存量投影）：到期仍进 LOCAL_DEADLINE_VERIFICATION_REQUIRED，
+          既有持久事实不忽略；
+        - 无 deadline（新绑定）：执行健康性以设备活动续租为准——租约停续且无回执时
+          交给权威清扫器 expire_stale_claims 收敛为 unknown（效果未知保护保留）；
+          queued 尚无执行归属，继续等待（出口：设备领取 / 显式取消）；
+        - 非 durable 旧路径：本地 timeout_seconds 观察窗 + request_cancel + TIMEOUT 不变。
+        """
         invocation_id = str(invocation['id'])
 
         seq_cursor = 0
         loop = asyncio.get_event_loop()
         deadline = loop.time() + self.timeout_seconds
+        durable_deadline = invocation.get('deadline_at') if durable else None
         while True:
             events = await asyncio.to_thread(repository.list_events, invocation_id, seq_cursor)
             for event in events:
@@ -371,12 +383,20 @@ class LocalToolProxyTool(BaseTool):
                 result = self._map_terminal(invocation)
                 return self._attach_credit_cost(invocation, result)
 
-            expired = (datetime.now(durable_deadline.tzinfo) >= durable_deadline
-                if durable_deadline else loop.time() >= deadline)
-            if expired:
+            if durable:
                 if durable_deadline is not None:
-                    from src.local_tools.durable_flow import LocalContinuationRequired
-                    raise LocalContinuationRequired('LOCAL_DEADLINE_VERIFICATION_REQUIRED', invocation_id)
+                    if datetime.now(durable_deadline.tzinfo) >= durable_deadline:
+                        from src.local_tools.durable_flow import LocalContinuationRequired
+                        raise LocalContinuationRequired('LOCAL_DEADLINE_VERIFICATION_REQUIRED', invocation_id)
+                elif (invocation or {}).get("state") in ('claimed', 'running', 'cancel_requested'):
+                    stale = await asyncio.to_thread(
+                        repository.claim_lease_expired, invocation_id, tenant_id)
+                    if stale:
+                        # 活动续租停止且无回执：权威清扫器把租约过期执行收敛为
+                        # unknown，下一轮读到终态走 EXECUTION_UNKNOWN（效果未知保护）。
+                        await asyncio.to_thread(repository.expire_stale_claims)
+                        continue
+            elif loop.time() >= deadline:
                 # TIMEOUT 是 proxy 本地码：云端状态机由 request_cancel 推进，不受影响
                 await asyncio.to_thread(repository.request_cancel, invocation_id, tenant_id)
                 logger.warning(

@@ -34,6 +34,7 @@ const WniEnumWindowsProc = koffi.proto('bool WniEnumWindowsProc(intptr hWnd, int
 // ---- 常量 ----
 
 const MOUSEEVENTF_LEFTDOWN = 0x0002
+const MOUSEEVENTF_WHEEL = 0x0800
 const MOUSEEVENTF_LEFTUP = 0x0004
 const INPUT_KEYBOARD = 1
 const KEYEVENTF_KEYUP = 0x0002
@@ -177,6 +178,11 @@ export function createKoffiApi(): NativeApi {
 
     mouseEventLeftDown: () => mouseEvent(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0n),
     mouseEventLeftUp: () => mouseEvent(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0n),
+    mouseEventWheel: (deltaY) => {
+      // cv-wheel.ps1 真机坑：dwData 是 uint，负 DeltaY 直接按 uint 解释会静默变 0（完全不滚）；
+      // 负值 wrap 到无符号区间收在绑定层，调用方一律传有符号值（-120=向下）
+      mouseEvent(MOUSEEVENTF_WHEEL, 0, 0, deltaY >>> 0, 0n)
+    },
     typeUnicode: (codeUnit) => {
       // KEYEVENTF_UNICODE down+up 成对（wScan 16 位装下中文/代理项；§17 坑10 的「禁 SendInput」
       // 仅指鼠标绝对坐标，键盘无多显示器 VIRTUALDESK 问题——与 ps1 注释一致）

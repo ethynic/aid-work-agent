@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 import math
 import re
@@ -39,6 +40,7 @@ from loguru import logger
 from PIL import Image
 
 from src.config.settings import settings
+from src.llm.errors import provider_outcome
 from src.llm.gateway import llm_gateway
 from src.services import recruiting_match_service as _match_service
 
@@ -156,6 +158,29 @@ def slice_stitched_image(png_base64: str) -> List[str]:
     return bands
 
 
+def image_diagnostics(image_base64: str) -> Dict[str, Any]:
+    """单份图像诊断事实：格式、模式、尺寸、字节数、摘要。
+
+    绝不包含简历内容（只输出解码元信息与 base64 摘要），供单份失败时落
+    可审计日志；解码失败也保留已确定的事实（base64 字节数与摘要）。
+    """
+    payload = (image_base64 or "").strip()
+    facts: Dict[str, Any] = {
+        "format": None, "mode": None, "size": None,
+        "base64_bytes": len(payload), "bytes": None,
+        "digest": hashlib.sha256(payload.encode()).hexdigest(),
+    }
+    try:
+        raw = base64.b64decode(payload)
+        facts["bytes"] = len(raw)
+        with Image.open(BytesIO(raw)) as image:
+            facts.update(format=image.format, mode=image.mode,
+                         size=f"{image.width}x{image.height}")
+    except Exception as error:  # noqa: BLE001 Pillow 解码异常类型不固定，诊断不丢已确定事实
+        facts["decode_error"] = type(error).__name__
+    return facts
+
+
 # ============== VL 评估（姓名 + 总结 + 评分 + key_info，v2 合并调用） ==============
 
 # 提示词要点（设计 §4.1 v2）：先读姓名（决策⑨姓名核对前置）/ 连续截图重叠去重 /
@@ -251,6 +276,10 @@ async def evaluate_resume(
       确定性判定，不依赖模型判断力）；
     - job_ctx 为 None → 提示词要求 score/match_summary 输出 null（沿袭「未关联职位跳过评分」）；
     - 超时/异常/JSON 不合法重试 1 次；仍失败抛 ResumeVLError（调用方不扣费）；
+      供应商明确拒绝（4xx/5xx）与返回不可解析同属「有响应」失败，重试可达（每次重试是
+      经 owner.model_phase 授权的新物理调用）；无响应/结果未知仍由 owner 侧验证保护立即抛出；
+      恢复重入遇已消耗尝试位（LOCAL_MODEL_ATTEMPT_ALREADY_CONSUMED）同样换下一尝试位；
+      调用方将单份无响应收敛为失败并继续批次，不要求用户操作；
     - 本函数不记 LLM token 账（识别费由调用方按份扣，见模块 docstring）。
     """
     if not band_images_b64:
@@ -282,11 +311,17 @@ async def evaluate_resume(
         except Exception as e:  # noqa: BLE001 LLM 异常统一走重试，最终转 ResumeVLError
             if (getattr(e, 'authoritative_storage_failure', False)
                     or getattr(e, 'tool_continuation_required', False)):
+                # 无响应/结果未知（LOCAL_MODEL_RESPONSE_VERIFICATION_REQUIRED 等）
+                # 维持 owner 侧验证保护立即抛出，不重试、不放松防重复计费。
                 raise
-            last_error = f"LLM 调用失败: {type(e).__name__}: {e}"
+            # 恢复重入的已消耗尝试位（LOCAL_MODEL_ATTEMPT_ALREADY_CONSUMED）不是
+            # 供应商结果：该位已持有不可重放的回执，此处换下一尝试位（新物理调用）。
+            outcome = ('already_consumed' if getattr(e, 'attempt_consumed', False)
+                       else provider_outcome(e) or 'no_response')
+            last_error = f"LLM 调用失败[{outcome}]: {type(e).__name__}: {e}"
             logger.warning(
-                f"后端日志：简历 VL 评估失败（第 {attempt} 次）provider={provider_name} "
-                f"model={model}: {last_error}"
+                f"后端日志：简历 VL 评估失败（第 {attempt} 次 provider_result={outcome}）"
+                f"provider={provider_name} model={model}: {last_error}"
             )
             continue
         text = (response.get("content") or "").strip() if isinstance(response, dict) else ""

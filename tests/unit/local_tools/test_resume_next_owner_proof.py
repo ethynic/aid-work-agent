@@ -62,12 +62,20 @@ def proof(monkeypatch):
     model_phase = save('resume.evaluate', {**origin, 'model_purpose': 'resume_recognition_covered',
                                           'model_phase_version': 1}, status='started')
     records = {parent_id: parent, invocation_id: invocation}
+    attempts_rows: list = []  # 续筛历史尝试列表（continue_from 查询）；用例可注入模拟 DB 返回顺序
 
     class Cursor:
         def execute(self, sql, args):
-            self.result = records.get(args[0]) if 'FROM local_tool_invocations' in sql else None
+            if 'continue_from' in sql:  # 沿游标的历史尝试列表查询（派发扫描/授权读取共用形态）
+                self.result = None
+                self.rows = attempts_rows
+            else:
+                self.result = records.get(args[0]) if 'FROM local_tool_invocations' in sql else None
+                self.rows = []
         def fetchone(self):
             return self.result
+        def fetchall(self):
+            return self.rows
 
     @contextmanager
     def connection():
@@ -76,7 +84,8 @@ def proof(monkeypatch):
     monkeypatch.setattr(repository, 'get_db_connection', connection)
     monkeypatch.setattr(repository, 'get_invocation', lambda identifier, tenant: copy.deepcopy(records.get(identifier)))
     return SimpleNamespace(state=state, row=row, parent=parent, invocation=invocation,
-                          next_phase=next_phase, model_phase=model_phase, cursor=Cursor())
+                          next_phase=next_phase, model_phase=model_phase, cursor=Cursor(),
+                          attempts_rows=attempts_rows)
 
 
 def authorize(proof):
@@ -144,3 +153,32 @@ def test_device_argument_tampering_is_not_hidden_by_frozen_canonical_request(pro
         authorize(proof)
     with pytest.raises(RunnerError):
         LocalRecoveryProof().can_restore(proof.row, proof.state, proof.state.tools['call'])
+
+
+def _failed_attempt(name):
+    """同游标「失败且可重试」历史尝试记录：无简历成果（resumes 空）+ 已标记处理过该候选人"""
+    return dict(id=str(uuid4()), state='failed', effect='none', error_code='UI_CHANGED',
+                result_json={'data': {'resumes': [], 'processed_names': [name], 'attempted': 1,
+                                      'failures': [], 'stop_reason': 'UI_CHANGED'}})
+
+
+@pytest.mark.parametrize('order', ['newest_first', 'oldest_first'])
+def test_failed_attempt_names_are_order_insensitive(order):
+    # 评审复现：派发按 created_at DESC 合并、模型授权读取无 ORDER BY——名单合成必须与顺序无关
+    from src.local_tools.resume_continuation import failed_attempt_names
+    rows = [_failed_attempt('乙'), _failed_attempt('甲')]
+    if order == 'oldest_first':
+        rows.reverse()
+    assert failed_attempt_names(rows) == ['乙', '甲']
+
+
+def test_model_authorization_survives_attempt_record_order_flip(proof):
+    # 派发时（DB 按 created_at DESC）：先见乙记录；授权时模拟 DB 返回另一种合法顺序（先甲）。
+    # 排序合成后两侧 exclude_names 一致，恢复证明不再误拒 LOCAL_RESUME_CONTINUATION_PROOF_INVALID
+    proof.attempts_rows[:] = [_failed_attempt('甲'), _failed_attempt('乙')]
+    names = ['previous', '乙', '甲']
+    ref = proof.state.resources['local_invocations'][LocalPhase('runner', 'call', 'main', 0).key('runner')]
+    ref['request']['arguments']['exclude_names'] = names
+    proof.next_phase['result']['exclude_names'] = names
+    proof.invocation['arguments_json']['exclude_names'] = names
+    assert authorize(proof).endswith(':resume_recognition_covered')

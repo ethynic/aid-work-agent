@@ -14,8 +14,14 @@ from .recruiting_writers import write_comm_log
 async def read_original(owner, *, branch, intent, invoke):
     original = await owner.saved_domain(branch=branch, ordinal=0)
     if original is not None:
-        if original['request'] != intent or original.get('phase') != 'completed':
-            raise LocalContinuationRequired('LOCAL_CLOUD_READ_VERIFICATION_REQUIRED')
+        if original['request'] != intent:
+            # 读取意图变化不可复用旧结果：结束原调用后按新意图重新发起
+            # （有 cancel/结束等待出口），错误码后缀供前端给出可执行指引。
+            raise LocalContinuationRequired('LOCAL_CLOUD_READ_INTENT_CHANGED')
+        if original.get('phase') != 'completed':
+            # 纯读无外部副作用：原读取未完成时允许直接重读，不进验证等待。
+            result = await invoke()
+            return await owner.complete_phase(branch=branch, ordinal=0, intent=intent, result=result)
         return original['result']
     # The actual runtime checks this tool's profile/identity before invoking the
     # read. A crash here can repeat only the explicitly registered read branch.

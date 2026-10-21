@@ -29,6 +29,7 @@ function makeFakeWorld(options = {}) {
     dpi: -1, // 进程默认 DPI_AWARENESS_CONTEXT_UNAWARE(-1)
     thread: 4242,
     typed: [],
+    wheels: [],
     calls: [],
     sleeps: [],
     chrome: options.chrome ?? [],
@@ -193,6 +194,11 @@ function makeFakeWorld(options = {}) {
     },
     mouseEventLeftUp() {
       state.calls.push('LEFTUP')
+    },
+    mouseEventWheel(deltaY) {
+      // fake 层记录有符号值（-120=向下）；uint wrap 是 koffi 绑定层的责任
+      state.calls.push(`WHEEL(${deltaY})`)
+      state.wheels.push(deltaY)
     },
     typeUnicode(codeUnit) {
       state.calls.push(`typed(0x${codeUnit.toString(16)})`)
@@ -704,4 +710,85 @@ test('守卫拒绝时也输出 ok=0 的计时单行', async () => {
   await assert.rejects(runClick(world, {}, (line) => logs.push(line)))
   const perf = logs.find((line) => line.startsWith('[boss-perf]'))
   assert.ok(perf && perf.includes('ok=0'))
+})
+
+// ---- 滚轮（cv-wheel.ps1 1:1 移植）----
+
+async function runWheel(world, request = {}, log = () => {}) {
+  return performPhysicalInput(
+    { api: world.api, sleep: world.sleep, log },
+    { x: 958, y: 500, cssW: VP.cssW, cssH: VP.cssH, op: 'wheel', ...request },
+  )
+}
+
+test('滚轮序列：单步光标就位 + 每格守卫后注入 WHEEL，格间 150ms，无左键事件', async () => {
+  const { world } = standardWorld()
+  const result = await runWheel(world, { wheelDeltaY: -120, notches: 3 })
+  const calls = world.state.calls
+  // 光标就位是单步直移（cv-wheel.ps1 MoveCursor 语义，不做拟人 10 步）
+  assert.equal(calls.filter((c) => c.startsWith('setCursor(')).length, 1)
+  assert.equal(calls.filter((c) => c === 'WHEEL(-120)').length, 3)
+  assert.ok(!calls.includes('LEFTDOWN') && !calls.includes('LEFTUP'))
+  // 200ms 就位 + 格间 150ms × (notches-1)，最后一格后不等
+  assert.deepEqual(world.state.sleeps, [400, 200, 150, 150])
+  assert.ok(result.output.some((line) => line.includes('已滚动 3 格 × -120')))
+  assert.equal(calls.at(-1), 'dpi_set(-1)', '最终恢复 DPI 上下文')
+})
+
+test('滚轮 wheelDeltaY 自动推断 op（缺省 op 时），notches 缺省 6（cv-wheel.ps1 默认）', async () => {
+  const { world } = standardWorld()
+  const logs = []
+  await performPhysicalInput(
+    { api: world.api, sleep: world.sleep, log: (line) => logs.push(line) },
+    { x: 958, y: 500, cssW: VP.cssW, cssH: VP.cssH, wheelDeltaY: -120 },
+  )
+  assert.equal(world.state.wheels.length, 6)
+  const perf = logs.find((line) => line.startsWith('[boss-perf]'))
+  assert.ok(perf && perf.includes('op=wheel'))
+})
+
+test('滚轮守卫：注入后下一格前光标被挪走 → BOSS_INPUT_UNKNOWN（效果未知会计）', async () => {
+  const { world } = standardWorld()
+  // 回读序：就位校验(1) → 第 1 格守卫(2) → 第 2 格守卫(3)。第 3 次回读被挪走：
+  // 第 1 格已注入（MarkInputStarted 已过）、第 2 格守卫失败 → 效果未知会计
+  world.state.jitterAtRead = 3
+  await assert.rejects(
+    runWheel(world, { wheelDeltaY: -120, notches: 3 }),
+    (error) => error instanceof NativeInputError && error.exitCode === 1
+      && error.kind === 'BOSS_INPUT_UNKNOWN' && error.message.includes('[BOSS_INPUT_UNKNOWN]'),
+  )
+  assert.equal(world.state.wheels.length, 1, '第 1 格已发出，第 2 格守卫拦截')
+})
+
+test('滚轮守卫：首格注入前光标被挪走 → 无 UNKNOWN 前缀（输入未开始，与 ps1 会计一致）', async () => {
+  const { world } = standardWorld()
+  world.state.jitterAtRead = 2 // 第 1 格守卫（首格注入前）失败
+  await assert.rejects(
+    runWheel(world, { wheelDeltaY: -120, notches: 3 }),
+    (error) => error instanceof NativeInputError && !error.message.includes('[BOSS_INPUT_UNKNOWN]'),
+  )
+  assert.equal(world.state.wheels.length, 0)
+})
+
+test('滚轮参数校验：DeltaY=0 或 notches=0 → FAILED exit 1，零输入', async () => {
+  for (const bad of [{ wheelDeltaY: 0 }, { wheelDeltaY: -120, notches: 0 }]) {
+    const { world } = standardWorld()
+    await assert.rejects(
+      runWheel(world, bad),
+      (error) => error instanceof NativeInputError && error.exitCode === 1 && error.kind === 'FAILED',
+    )
+    assert.equal(world.state.wheels.length, 0)
+  }
+})
+
+test('绑定模式滚轮：唯一调试 Chrome 定位 + 每格前台校验后注入', async () => {
+  const { world } = boundChromeWorld([
+    { pid: 3131, exeName: 'chrome.exe', commandLine: '"C:\Chrome\chrome.exe" --remote-debugging-port=9333 --user-data-dir=C:\chrome-debug https://www.zhipin.com' },
+  ])
+  const result = await performPhysicalInput(
+    { api: world.api, sleep: world.sleep, log: () => {} },
+    { x: 958, y: 500, cssW: VP.cssW, cssH: VP.cssH, cdpPort: 9333, wheelDeltaY: -120, notches: 2 },
+  )
+  assert.equal(world.state.wheels.length, 2)
+  assert.ok(result.output.some((line) => line.includes('已滚动 2 格')))
 })

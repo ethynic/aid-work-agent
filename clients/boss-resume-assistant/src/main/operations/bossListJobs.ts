@@ -26,21 +26,28 @@ export function createBossListJobsOperation(
         ctx,
         sessionFactory,
         () => null,
-        async (session) => {
+        async (session, _tracker, perf) => {
           let cleanupFacts: Record<string, unknown> | undefined
           let cleanupError: { code: string; message: string } | undefined
           const verified = await runVerifiedPageOperation({ name: 'boss_list_jobs', goal: '读取当前招聘者职位列表', expected: '展开下拉后存在非trigger职位项', operationClass: 'readonly' }, async (attempt) => {
             let activeAttempt = attempt
             // 前置校验：必须在推荐牛人列表页（有「筛选」按钮）
             if (!isBossPage(await session.getUrl(), 'recommend')) throw new CodedOperationError('WRONG_PAGE', '当前不在推荐牛人页面，请先用 boss_goto recommend')
-            const probe = await session.snapshot()
+            // Phase 5 快照热点分段（TS/CDP 侧）：列职位 3 次 snapshot 累计 14.030s 的独立热点，
+            // 前置校验快照与 JobSwitcher 业务快照分开计段，嵌套口径按最内层归因
+            //（session 级 snapshot 计时仍覆盖总量）。
+            const probe = await perf.time('snapshot:precheck', () => session.snapshot())
             if (!probe.strings.some((s) => FILTER_BUTTON_PATTERN.test(s.trim()))) {
               throw new CodedOperationError(
                 'WRONG_PAGE',
                 '当前页面不是推荐牛人列表页（未找到「筛选」按钮），请先用 boss_goto 切换到「推荐牛人」页',
               )
             }
-            const switcher = new JobSwitcher({ snapshot: session.snapshot, click: (...args) => activeAttempt.input(() => session.click(...args)), signal: ctx.signal })
+            const switcher = new JobSwitcher({
+              snapshot: (opts?: import('../cdp/CdpGateway.js').DomSnapshotOptions) => perf.time('snapshot:listJobs', () => session.snapshot(opts)),
+              click: (...args) => activeAttempt.input(() => session.click(...args)),
+              signal: ctx.signal,
+            })
             ctx.progress({ stage: 'execute', message: '打开职位下拉并解析职位列表' })
             const jobs = await switcher.listJobs()
             attempt.verified({status: 'met', evidence: [`展开后的职位列表包含${jobs.length}个可读项（排除当前职位框）`]})

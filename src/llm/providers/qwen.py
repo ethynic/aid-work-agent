@@ -12,8 +12,8 @@ import httpx
 from loguru import logger
 
 from src.config.settings import settings
-from .base import BaseLLMProvider
-from ..errors import ProviderHTTPError, read_error_body
+from .base import BaseLLMProvider, ensure_chat_completion_shape
+from ..errors import ProviderHTTPError, ProviderResponseInvalid, read_error_body
 from ..error_detail import describe_exception
 from ..llm_call_logger import generate_request_id, log_llm_invoke
 
@@ -131,12 +131,22 @@ class QwenProvider(BaseLLMProvider):
                     json=request_body,
                 )
                 response.raise_for_status()
-                result = response.json()
+                try:
+                    result = response.json()
+                except ValueError:
+                    # 200 但 body 不是合法 JSON：有响应的不可解析结果，保留正文摘要
+                    raise ProviderResponseInvalid(
+                        f"{self.DISPLAY_NAME}响应 JSON 解析失败: {response.text[:500]}"
+                    ) from None
                 if not isinstance(result, dict):
                     # 200 但 body 不是 JSON 对象（如字面量 null），带上响应体便于定位
-                    raise RuntimeError(
+                    raise ProviderResponseInvalid(
                         f"{self.DISPLAY_NAME}响应非 JSON 对象: {response.text[:500]}"
                     )
+                # 结构校验失败（choices 缺失/null 元素/message 形态等）同属
+                # 「有响应但不可解析」：先校验结构再做字段访问，杜绝
+                # AttributeError 逃逸成无响应验证保护导致整批挂起
+                ensure_chat_completion_shape(result, display_name=self.DISPLAY_NAME)
 
             parsed = self._parse_response(result)
 
@@ -365,9 +375,11 @@ class QwenProvider(BaseLLMProvider):
             finish_reason = "stop"
 
         # 推理模型（kimi-k3 等）答案在 content，为空则回退 reasoning_content
-        # （仅 REASONING_CONTENT_FALLBACK 开启的子类生效，qwen 存量行为不变）
+        # （仅 REASONING_CONTENT_FALLBACK 开启的子类生效，qwen 存量行为不变）。
+        # message 为 null 是校验器放行的既有容忍形态，取值用 or {} 对齐主路径，
+        # 不得在回退路径上抛 AttributeError
         if not content and self.REASONING_CONTENT_FALLBACK:
-            content = (choices[0].get("message", {}) if choices else {}).get("reasoning_content", "") or ""
+            content = ((choices[0].get("message") or {}) if choices else {}).get("reasoning_content", "") or ""
 
         result = {
             "content": content,

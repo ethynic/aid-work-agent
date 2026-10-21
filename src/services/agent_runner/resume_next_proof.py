@@ -9,13 +9,19 @@ import hashlib
 from uuid import UUID
 
 from src.core.agent_engine.contracts import CheckpointFailure
-from src.local_tools.resume_continuation import _names, batch_metadata
+from src.local_tools.resume_continuation import _names, batch_metadata, failed_attempt_names
 from .contracts import canonical_json
 from .local_invocations import LocalPhase
 
 
-def continuation_arguments(row, node, call_id, arguments, load_parent):
-    """Return public canonical arguments, or reject any changed ownership fact."""
+def continuation_arguments(row, node, call_id, arguments, load_parent,
+                           load_attempts=None, current_invocation_id=None):
+    """Return public canonical arguments, or reject any changed ownership fact.
+
+    exclude_names 与派发时 prepare_next 的合成口径一致：父批名单 + 沿同一游标
+    「失败且可重试」历史尝试已标记的候选人（load_attempts 注入读取，恢复证明
+    时排除当前调用自身记录——其派发时尚不存在）。两处不一致即拒绝。
+    """
     def reject():
         raise CheckpointFailure('LOCAL_RESUME_CONTINUATION_PROOF_INVALID')
 
@@ -55,8 +61,11 @@ def continuation_arguments(row, node, call_id, arguments, load_parent):
     capability = batch_metadata({**result, 'invocation_id': parent_id, 'effect': parent['effect']}, previous)
     if not capability['continuation']['available']:
         reject()
+    attempts = load_attempts(parent) if load_attempts is not None else []
+    names = list(dict.fromkeys(_names(data, previous)
+        + failed_attempt_names(attempts, (current_invocation_id,))))
     canonical = {'continue_from': parent_id, 'limit': intent['limit'],
-                 'exclude_names': _names(data, previous), 'expected_job_name': data['job_name'].strip(),
+                 'exclude_names': names, 'expected_job_name': data['job_name'].strip(),
                  '_resume_expected_device_id': str(parent['device_id'])}
     main = LocalPhase(node['execution_id'], call_id, 'main', 0)
     ref = (node.get('resources', {}).get('local_invocations') or {}).get(main.key(row['runner_id'])) or {}

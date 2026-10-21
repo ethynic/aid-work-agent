@@ -34,7 +34,7 @@ async function withoutAutoChromeSwitch<T>(fn: () => Promise<T>): Promise<T> {
 
 test('常量契约：固定 profile 目录与初始页', () => {
   assert.equal(DEFAULT_DEBUG_PROFILE_DIR, 'C:\\chrome-debug')
-  assert.equal(DEFAULT_INITIAL_URL, 'https://www.zhipin.com')
+  assert.equal(DEFAULT_INITIAL_URL, 'https://www.zhipin.com/web/chat/recommend')
 })
 
 test('findChromeExe：注册表 HKCU 命中直接返回', () => {

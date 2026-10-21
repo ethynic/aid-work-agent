@@ -150,15 +150,64 @@ def observed_invocation(invocation):
         'error_message': None if late['success'] else late.get('message')}
 
 
+# CLI 回执固定附加的诊断元数据键（与业务读取成果无关）：
+# - operation_recovery / visual_recovery：withLocalRecovery 对每个结果无条件附加；
+# - page_operation：旧版 page_state 回执的等价事实键（operationRecoveryFailure）；
+# - browser_target_ref：runBossOperation 的绑定目标标识；
+# - run_id：历史允许的调用标识。
+# 方向选择：识别「已知诊断键」为非成果，其余键一律视为业务成果（fail-closed）——
+# 若改用业务键白名单，未来 CLI 回执新增成果字段会被误判为元数据而放行重试，
+# 造成已读成果重复读取/重复计费；诊断键集合由 CLI 回执构造处稳定产出，漏新
+# 诊断键的后果只是多拦一次重试（安全侧），绝不放行真成果。
+CONTINUATION_DIAGNOSTIC_KEYS = frozenset({'run_id', 'operation_recovery', 'visual_recovery',
+    'page_operation', 'browser_target_ref'})
+
+# 「确认为空才算无成果」的只读结果字段（boss_resume_batch/next 失败回执的真实形态）。
+# 「没有简历读取成果」以 resumes 为空列表为准（第八轮评审：取卡即标记含失败路径，
+# processed_names 有名字/attempted>0 不代表有读取成果——成果 payload 只进 resumes）；
+# processed_names/attempted/failures/stop_reason 不再作为拦截必要条件。
+# 判定方向保持 fail-closed：resumes 非空或类型异常、以及集合外的任何未知新键，
+# 一律视为业务成果拦截重试，防重复读取/重复计费。
+NO_OUTCOME_RESULT_KEYS = frozenset({'resumes', 'processed_names', 'attempted',
+    'failures', 'stop_reason'})
+
+
+def _confirmed_no_read_outcomes(data):
+    """只读批读取失败回执「确认为空」才视为无成果：resumes 为空列表（或键
+    缺省）通过；非空或类型异常拦截（已读简历 payload 只出现在 resumes）。"""
+    resumes = data.get('resumes')
+    return resumes is None or (isinstance(resumes, list) and not resumes)
+
+
 def continuation_retry_safe(invocation):
+    """失败调用是否允许沿原游标重试（不构成重复读取/计费）。
+
+    两类放行（评审第七/八轮，人工修复分支）：
+    1. 纯诊断回执：data 仅含已知诊断元数据键——明确未执行类失败
+       （NOT_LOGGED_IN/WRONG_PAGE 等），问题解决后重试；
+    2. 无成果页面失败：data 额外携带「确认为空」的结果字段与失败诊断——
+       「没有简历读取成果」以 resumes 为空列表为准（取卡即标记含失败路径，
+       processed_names/attempted 不代表有成果）；UI_CHANGED（页面操作失败）
+       与 NOT_LOGGED_IN/WRONG_PAGE 在「无成果」语义下同等对待，人工修复页面
+       后沿原游标重试，不返回 STALE_CONTINUATION。
+    """
     invocation = observed_invocation(invocation)
     result = invocation.get('result_json') or {}
     data = result.get('data')
-    return (invocation.get('state') == 'failed' and invocation.get('effect') == 'none'
-        and (invocation.get('error_code') or result.get('code')) in {
-            'TOOL_NOT_ALLOWED','TOOL_NOT_FOUND','UNKNOWN_TOOL','JOB_CHANGED',
-            'WRONG_PAGE','INVALID_ARGUMENT','CHROME_UNAVAILABLE','NOT_LOGGED_IN'}
-        and (data is None or isinstance(data, dict) and not (data.keys() - {'run_id'})))
+    if (invocation.get('state') != 'failed' or invocation.get('effect') != 'none'
+            or (invocation.get('error_code') or result.get('code')) not in {
+                'TOOL_NOT_ALLOWED','TOOL_NOT_FOUND','UNKNOWN_TOOL','JOB_CHANGED',
+                'WRONG_PAGE','INVALID_ARGUMENT','CHROME_UNAVAILABLE','NOT_LOGGED_IN',
+                'UI_CHANGED'}):
+        return False
+    if data is None:
+        return True
+    if not isinstance(data, dict):
+        return False
+    if not (data.keys() - CONTINUATION_DIAGNOSTIC_KEYS):
+        return True
+    return (_confirmed_no_read_outcomes(data)
+        and not (data.keys() - CONTINUATION_DIAGNOSTIC_KEYS - NO_OUTCOME_RESULT_KEYS))
 
 
 class DeviceReplacementError(ValueError):
@@ -737,7 +786,7 @@ def create_invocation_in_tx(
         cursor.execute("""SELECT id,business_kind,dedupe_key,state,effect,result_json,error_code FROM local_tool_invocations
             WHERE tenant_id=%s AND user_id=%s AND session_id=%s AND device_id=%s
               AND tool_name='boss_resume_next' AND arguments_json->>'continue_from'=%s
-            ORDER BY created_at DESC""",
+            ORDER BY created_at DESC, id DESC""",
             (tenant_id, user_id, session_id, device_id, arguments.get('continue_from')))
         successor = next((record for record in cursor.fetchall() if not continuation_retry_safe(dict(record))), None)
         if successor and not (business_kind is not None and dedupe_key is not None
@@ -813,6 +862,28 @@ def set_invocation_credit_cost(invocation_id: str, credit_cost: float) -> None:
         conn.commit()
 
 
+def list_resume_next_attempts(parent_id: str, tenant_id: str, user_id: str,
+                              session_id: str, device_id: str) -> List[Dict[str, Any]]:
+    """列出沿同一游标（continue_from=parent）的全部 boss_resume_next 记录。
+
+    与 create_invocation_in_tx 的后继扫描同口径（tenant/user/session/device 归属）。
+    供续筛游标合成使用：其中「失败且可重试」的尝试已标记处理过的候选人
+    （取卡即标记，含失败路径）沿用游标排除语义合并进新的 exclude_names，
+    人工修复页面后的重试不再重复尝试这些失败候选人。
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT id, state, effect, result_json, error_code
+            FROM local_tool_invocations
+            WHERE tenant_id=%s AND user_id=%s AND session_id=%s AND device_id=%s
+              AND tool_name='boss_resume_next' AND arguments_json->>'continue_from'=%s
+            ORDER BY created_at DESC, id DESC""",
+            (tenant_id, user_id, session_id, device_id, parent_id),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
 def get_invocation(invocation_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
     """按 id+tenant 查询 invocation（含 v2 扩展列）。M0.5 proxy 轮询终态 / v2 链路使用"""
     with get_db_connection() as conn:
@@ -850,14 +921,18 @@ def list_events(invocation_id: str, since_seq: int = 0) -> List[Dict[str, Any]]:
 
 
 def expire_stale_claims() -> int:
-    """租约过期的 claimed/running → unknown/effect=unknown（claim 路径顺带调用）"""
+    """租约过期的 claimed/running/cancel_requested → unknown/effect=unknown（claim 路径顺带调用）
+
+    cancel_requested 一并纳入（Phase 4）：deadline 拆除后取消回执等待不再有持久截止
+    兜底，租约停续即执行归属丢失，按效果未知收敛（设备是否已停手无法确认）。
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
             UPDATE local_tool_invocations
             SET state = 'unknown', effect = 'unknown', finished_at = NOW()
-            WHERE state IN ('claimed', 'running')
+            WHERE state IN ('claimed', 'running', 'cancel_requested')
               AND lease_expires_at IS NOT NULL
               AND lease_expires_at < NOW()
             """
@@ -867,6 +942,28 @@ def expire_stale_claims() -> int:
         if count:
             logger.warning(f"后端日志：{count} 条本地工具 invocation 租约过期，置为 unknown")
         return count
+
+
+def claim_lease_expired(invocation_id: str, tenant_id: str) -> bool:
+    """执行侧（claimed/running/cancel_requested）租约是否已停续（活动续租观察）。
+
+    queued 尚无执行归属（未领取、无租约），恒为 False。SQL 内与 NOW() 同会话时区
+    比较（lease_expires_at 为无时区列，与 permits 同一注意点）。
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT (state IN ('claimed', 'running', 'cancel_requested')
+                    AND lease_expires_at IS NOT NULL AND lease_expires_at < NOW()) AS stale
+            FROM local_tool_invocations
+            WHERE id = %s AND tenant_id = %s
+            """,
+            (invocation_id, tenant_id),
+        )
+        row = cursor.fetchone()
+        conn.commit()
+        return bool(row and row["stale"])
 
 
 def claim_next(

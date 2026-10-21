@@ -73,6 +73,19 @@ def validate_legacy_cancel(identity, fact, invocation):
         raise CheckpointFailure('LOCAL_INVOCATION_OWNER_VERIFICATION_REQUIRED')
 
 
+def stored_deadline_expired(invocation):
+    """存量持久 deadline 到期判定（Phase 4 投影）。
+
+    仅旧 checkpoint 保存的 deadline_at 参与判定：非终态且到期 → True（进
+    LOCAL_DEADLINE_VERIFICATION_REQUIRED 家族）；无 deadline（新绑定）或已终态
+    → False，健康性交由租约与终态事实治理，不用工具 timeout 阻断。
+    """
+    deadline = invocation.get('deadline_at')
+    return (deadline is not None
+        and invocation.get('state') not in repository.TERMINAL_STATES
+        and datetime.now(deadline.tzinfo) >= deadline)
+
+
 class LocalRecoveryProof:
     def can_restore(self, row, state, fact):
         from src.local_tools.proxy_tool import LOCAL_PROXY_TOOL_CLASSES, LocalToolProxyTool
@@ -101,7 +114,10 @@ class LocalRecoveryProof:
             from .resume_next_proof import continuation_arguments
             try:
                 arguments = continuation_arguments(row,state.checkpoint(),fact.call.id,arguments,
-                    lambda parent_id: repository.get_invocation(parent_id,row['tenant_id']))
+                    lambda parent_id: repository.get_invocation(parent_id,row['tenant_id']),
+                    load_attempts=lambda parent: repository.list_resume_next_attempts(str(parent['id']),
+                        row['tenant_id'],row['user_id'],row['session_id'],str(parent['device_id'])),
+                    current_invocation_id=ref.get('invocation_id'))
             except CheckpointFailure as error:
                 raise RunnerError('LOCAL_RESUME_CONTINUATION_PROOF_INVALID',409) from error
         if (ref.get('request') or {}).get('arguments')!=arguments:
@@ -133,10 +149,9 @@ class LocalRecoveryProof:
                 from src.local_tools.durable_flow import healing_requires_verification
                 if healing_requires_verification(cls,invocation.get('error_code'),invocation.get('effect')):
                     return False
-            deadline = invocation.get('deadline_at')
-            if not deadline:
-                return False
-            if invocation['state'] not in repository.TERMINAL_STATES and datetime.now(deadline.tzinfo)>=deadline:
+            # 存量投影（Phase 4）：旧 checkpoint 持久化的 deadline 到期仍拒绝恢复；
+            # 新绑定无 deadline，健康性由租约/终态治理，恢复不被工具 timeout 阻断。
+            if stored_deadline_expired(invocation):
                 raise RunnerError('LOCAL_DEADLINE_VERIFICATION_REQUIRED',409)
         from .domain_recovery import validate_domain_phases
         if not validate_domain_phases(row,state,fact,cls,arguments):
@@ -237,8 +252,11 @@ def cancel_completion_status(facts, *, detached_local_wait=False):
             return False, 'LOCAL_CANCEL_EFFECT_VERIFICATION_REQUIRED'
         if fact['state'] not in repository.TERMINAL_STATES:
             deadline = fact['deadline_at']
-            if deadline is None or datetime.now(deadline.tzinfo) >= deadline:
+            if deadline is not None and datetime.now(deadline.tzinfo) >= deadline:
+                # 存量投影：旧持久 deadline 到期仍进取消核验家族，不忽略。
                 return False, 'LOCAL_CANCEL_DEADLINE_VERIFICATION_REQUIRED'
+            # 无 deadline（新绑定/旧非 durable 行）：取消回执等待不再被工具 timeout
+            # 判死；执行侧停续由租约清扫收敛为 unknown 后走效果核验家族。
             pending = True
     return (False, 'LOCAL_CANCEL_ACK_PENDING') if pending else (True,None)
 

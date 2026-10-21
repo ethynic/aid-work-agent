@@ -4,7 +4,7 @@ The execution owner supplies fencing/storage through the neutral lifecycle
 port. Special resume recognition and overlay healing have their own stages.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 
 class LocalContinuationRequired(RuntimeError):
@@ -14,6 +14,22 @@ class LocalContinuationRequired(RuntimeError):
         self.code, self.invocation_id = code, invocation_id
 
 
+class LocalModelAttemptConsumed(RuntimeError):
+    """A dispatched model attempt already holds its immutable usage receipt.
+
+    That attempt ordinal is never replayed. Recovery consumes the fetched
+    item on a new attempt ordinal (an independently traceable physical call
+    under the original business intent) or converges it as a per-item
+    failure. Unlike the no-response protection this is not a continuation
+    block, so upper retry loops may advance to their next attempt slot.
+    """
+    attempt_consumed = True
+
+    def __init__(self, code='LOCAL_MODEL_ATTEMPT_ALREADY_CONSUMED'):
+        super().__init__(code)
+        self.code = code
+
+
 def supports_original_invocation(tool):
     from .proxy_tool import LocalToolProxyTool
     return isinstance(tool, LocalToolProxyTool) and type(tool).execute is LocalToolProxyTool.execute
@@ -21,8 +37,13 @@ def supports_original_invocation(tool):
 
 async def original_invocation(proxy, operation, device, arguments):
     saved = await operation.owner.saved_phase(branch=operation.branch, ordinal=operation.ordinal)
-    deadline = (datetime.fromisoformat(saved['request']['deadline_at']) if saved is not None
-        else datetime.now(timezone.utc) + timedelta(seconds=proxy.timeout_seconds))
+    # Phase 4：工具默认 timeout 不再持久化为健康后台任务的总时限。新绑定的
+    # durable invocation 不带 deadline，其生命期由设备活动续租（claim/进度续租，
+    # 停续由 expire_stale_claims 收敛为 unknown）与显式取消治理，Runner 仅观察
+    # 持久原调用直至终态。已保存 phase 的 deadline 是存量持久事实，原样复用、
+    # 到期语义不忽略（存量投影见 proxy_tool._poll_invocation / local_recovery）。
+    deadline = (datetime.fromisoformat(saved['request']['deadline_at'])
+        if saved is not None and saved['request'].get('deadline_at') else None)
     return await operation.owner.bind_invocation(branch=operation.branch,
         ordinal=operation.ordinal, tool_name=proxy.name, device=device,
         arguments=arguments, provider_key=proxy.invocation_provider_key, deadline_at=deadline)

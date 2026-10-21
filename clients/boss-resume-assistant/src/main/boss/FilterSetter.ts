@@ -83,6 +83,10 @@ export interface FilterSetterDeps {
   /** 阶段计时埋点（panel:open / panel:clear / panel:option / panel:confirm / panel:verify /
    *  probe:describe，只记名称与毫秒，不记页面内容）；缺省恒等透传 */
   step?<T>(name: string, fn: () => Promise<T>): Promise<T>
+  /** 同步阶段计时埋点（Phase 5 存活热点分段：filter:parse:structure / filter:parse:panelGeometry /
+   *  filter:precheck:rows / filter:visible:clip / filter:age:read，只记名称与毫秒）；
+   *  与 step 同口径，fn 抛错同样记时后重抛；缺省恒等透传（旧调用方行为不变） */
+  stepSync?<T>(name: string, fn: () => T): T
 }
 
 interface VisibleHit {
@@ -222,6 +226,7 @@ const EXTRA_ROW_LABEL_PREFIXES = ['年龄', '活跃度', '性别', '近期没有
 export class FilterSetter {
   private readonly sleep: (ms: number) => Promise<void>
   private readonly step: <T>(name: string, fn: () => Promise<T>) => Promise<T>
+  private readonly stepSync: <T>(name: string, fn: () => T) => T
   private observedMembership: MembershipObservation = { status: 'unknown', source: 'unknown', evidence: ['尚未探查头像'] }
   private membershipOverride?: MembershipObservation
   private accountKey?: string | null
@@ -237,6 +242,7 @@ export class FilterSetter {
   constructor(private readonly deps: FilterSetterDeps) {
     this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)))
     this.step = deps.step ?? ((_name, fn) => fn())
+    this.stepSync = deps.stepSync ?? ((_name, fn) => fn())
   }
 
   /**
@@ -371,28 +377,32 @@ export class FilterSetter {
       this.ageSlider(snap)
       if (rows.some((r) => r.labelPrefix === '年龄')) throw new FilterSetError('年龄范围不能同时作为离散行设置')
     }
-    for (const row of rows) {
-      const info = discovered.find((r) => r.label === row.labelPrefix || r.label.startsWith(`${row.labelPrefix}[`))
-      const generic = (spec.filters ?? []).some((r) => r.label.trim() === row.labelPrefix)
-      if (generic && (!info || info.control === 'range')) throw new FilterSetError(`筛选行「${row.labelPrefix}」${info ? '为范围控件，不能按离散选项设置' : '未在当前面板完整解析到'}，原筛选尚未清除`)
-      if (generic && row.options.length > 1 && info?.selection !== 'multiple') {
-        throw new FilterSetError(`筛选行「${row.labelPrefix}」未确认支持多选，拒绝设置多个选项`)
-      }
-      if (new Set(row.options).size !== row.options.length) throw new FilterSetError(`筛选行「${row.labelPrefix}」选项重复`)
-      row.options = row.options.map((option) => {
-        try { this.locateRowOptionHit(snap, row.labelPrefix, option); return option } catch (err) {
-          if (!(err instanceof FilterSetError) || !err.message.includes('实际 0 个')) throw err
-          const available = this.rowOptionTexts(snap, row.labelPrefix)
-          const exact = available.find((t) => generic ? t === option : normalizeOptionText(t) === normalizeOptionText(option))
-          const closest = exact ?? (generic ? null : pickClosestOption(option, available))
-          if (!closest) throw new FilterSetError(`${row.labelPrefix} 没有匹配的选项「${option}」，该行可选：${available.join('、') || '（未解析到选项）'}；请先用 boss_filter_options 查询，原筛选尚未清除（原始定位错误：${err.message}）`)
-          this.locateRowOptionHit(snap, row.labelPrefix, closest)
-          if (!exact) substitutions.push({ row: row.labelPrefix, requested: option, matched: closest })
-          return closest
+    // Phase 5 存活热点分段：逐行预校验（定位校验 + 档位保底映射）在清除前完成，
+    // 是 body 未覆盖耗时的独立成分；同步段，抛错同样记时后原样重抛。
+    this.stepSync('filter:precheck:rows', () => {
+      for (const row of rows) {
+        const info = discovered.find((r) => r.label === row.labelPrefix || r.label.startsWith(`${row.labelPrefix}[`))
+        const generic = (spec.filters ?? []).some((r) => r.label.trim() === row.labelPrefix)
+        if (generic && (!info || info.control === 'range')) throw new FilterSetError(`筛选行「${row.labelPrefix}」${info ? '为范围控件，不能按离散选项设置' : '未在当前面板完整解析到'}，原筛选尚未清除`)
+        if (generic && row.options.length > 1 && info?.selection !== 'multiple') {
+          throw new FilterSetError(`筛选行「${row.labelPrefix}」未确认支持多选，拒绝设置多个选项`)
         }
-      }).filter((option) => option !== '不限')
-      if (new Set(row.options).size !== row.options.length) throw new FilterSetError(`筛选行「${row.labelPrefix}」多个请求映射到同一个实际选项，请合并后再试，原筛选尚未清除`)
-    }
+        if (new Set(row.options).size !== row.options.length) throw new FilterSetError(`筛选行「${row.labelPrefix}」选项重复`)
+        row.options = row.options.map((option) => {
+          try { this.locateRowOptionHit(snap, row.labelPrefix, option); return option } catch (err) {
+            if (!(err instanceof FilterSetError) || !err.message.includes('实际 0 个')) throw err
+            const available = this.rowOptionTexts(snap, row.labelPrefix)
+            const exact = available.find((t) => generic ? t === option : normalizeOptionText(t) === normalizeOptionText(option))
+            const closest = exact ?? (generic ? null : pickClosestOption(option, available))
+            if (!closest) throw new FilterSetError(`${row.labelPrefix} 没有匹配的选项「${option}」，该行可选：${available.join('、') || '（未解析到选项）'}；请先用 boss_filter_options 查询，原筛选尚未清除（原始定位错误：${err.message}）`)
+            this.locateRowOptionHit(snap, row.labelPrefix, closest)
+            if (!exact) substitutions.push({ row: row.labelPrefix, requested: option, matched: closest })
+            return closest
+          }
+        }).filter((option) => option !== '不限')
+        if (new Set(row.options).size !== row.options.length) throw new FilterSetError(`筛选行「${row.labelPrefix}」多个请求映射到同一个实际选项，请合并后再试，原筛选尚未清除`)
+      }
+    })
 
     if (this.deps.signal?.aborted) throw new CancelledError()
 
@@ -638,6 +648,12 @@ export class FilterSetter {
 
   /** 以真实标签列发现行，再取只包含该标签与选项的最近祖先，兼容会员新增行与折行。 */
   private structuralRows(snap: DomSnapshot): StructuralRow[] | null {
+    // Phase 5 存活热点分段：结构解析是 body 未覆盖耗时（81.381s）的主要成分之一，
+    // 原生化输入通道后依然存在；只记名称与毫秒，不记页面内容。
+    return this.stepSync('filter:parse:structure', () => this.structuralRowsUnclocked(snap))
+  }
+
+  private structuralRowsUnclocked(snap: DomSnapshot): StructuralRow[] | null {
     this.unreadablePanelRows = []
     const anchors = ROW_DEFS.flatMap((d) => this.visibleHits(snap, (s) => s.startsWith(d.labelPrefix)))
     if (anchors.length < 2 || !snap.documents[anchors[0]!.documentIndex]?.layout.styles?.length) return null
@@ -771,6 +787,12 @@ export class FilterSetter {
 
   /** 从年龄行的实际轨道及两个含tooltip的直接子节点识别滑块，不依赖混淆class。 */
   private ageSlider(snap: DomSnapshot): { label: VisibleHit; rail: [number, number, number, number]; handles: Array<{ point: ClickPoint; value: number | null; hit: VisibleHit }> } {
+    // Phase 5 存活热点分段：年龄值读取（轨道/句柄结构解析 + tooltip 值读取）在 setAge
+    // 循环内反复执行（拖动后核验），是 body 未覆盖耗时的独立成分。
+    return this.stepSync('filter:age:read', () => this.ageSliderUnclocked(snap))
+  }
+
+  private ageSliderUnclocked(snap: DomSnapshot): { label: VisibleHit; rail: [number, number, number, number]; handles: Array<{ point: ClickPoint; value: number | null; hit: VisibleHit }> } {
     const rows = this.structuralRows(snap)?.filter((r) => r.label.text === '年龄')
     if (rows?.length !== 1) throw new FilterSetError('当前面板未唯一解析到年龄范围控件')
     const row = rows[0]!, di = row.label.documentIndex, doc = snap.documents[di]!, parents = parentMapOf(doc)!
@@ -847,6 +869,12 @@ export class FilterSetter {
       ...(row.label.text === '年龄' ? { range: { min: 16, max: 45, unlimited: true } } : {}),
       options: row.label.text === '年龄' ? [] : row.options.map((h) => ({ text: h.text, point: this.toGlobalPoint(snap, h) })),
     }))
+    // Phase 5 存活热点分段：无 styles 的旧快照走行带几何路径，单独计时。
+    return this.stepSync('filter:parse:panelGeometry', () => this.describePanelByGeometry(snap))
+  }
+
+  /** describePanel 的行带几何 fallback（structuralRows 不可用时的旧路径） */
+  private describePanelByGeometry(snap: DomSnapshot): PanelRowInfo[] {
     // 1. 行标签命中（每行恰好 1 个才收）
     const labelHits = new Map<string, VisibleHit>()
     for (const def of ROW_DEFS) {
@@ -1037,9 +1065,17 @@ export class FilterSetter {
   ): Promise<DomSnapshot> {
     for (let attempt = 0; ; attempt++) {
       if (this.deps.signal?.aborted) throw new CancelledError()
-      const hit = locate(snap)
-      const cy = this.toGlobalPoint(snap, hit).y
-      const { top, bottom } = this.visibleClipOf(snap, mode, hit)
+      // Phase 5 存活热点分段：可视 clip 几何（目标定位 + 全局坐标 + clip 上下界）为纯同步计算，
+      // 与滚动/快照（各自已计）互斥；每次迭代记一次。
+      const geo = this.stepSync('filter:visible:clip', () => {
+        const hit = locate(snap)
+        const cy = this.toGlobalPoint(snap, hit).y
+        const clip = this.visibleClipOf(snap, mode, hit)
+        return { hit, cy, clip }
+      })
+      const hit = geo.hit
+      const cy = geo.cy
+      const { top, bottom } = geo.clip
       const range = `[${Math.round(top)}, ${Math.round(bottom)}]`
       if (cy <= bottom - padding && cy >= top + padding) return snap
       if (attempt >= 3) {

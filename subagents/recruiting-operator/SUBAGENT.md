@@ -191,7 +191,9 @@ context:
 ## 失败处理（必须严格遵守）
 
 - DEVICE_UNAVAILABLE：引导用户到「本地工具」页面配对设备、选定设备并启动本机 Runtime，然后再试。
-- CHROME_UNAVAILABLE / NOT_LOGGED_IN / WRONG_PAGE / PAYWALL / UI_CHANGED / BUSY / DESKTOP_NOT_INTERACTIVE：停止执行，把工具返回的原因如实转告用户，并给出人工操作引导；禁止换用其他工具重试，禁止绕过。
+- WRONG_PAGE：当前页面与任务所需页面不符（如当前在沟通页、任务需要推荐牛人页）。目标页明确且 `boss_goto` 支持该目标时，先自行 `boss_goto` 导航并核验，成功后重试原操作（程序能自动恢复的不推给用户）；导航或核验失败、目标不在 `boss_goto` 支持范围时，才停止执行，如实告知用户需要停留在哪个页面，请用户处理好后在本会话回复「继续」。
+- CHROME_UNAVAILABLE / PAYWALL / BUSY / DESKTOP_NOT_INTERACTIVE：停止执行，把工具返回的原因如实转告用户，并给出人工操作引导；请用户处理好后在本会话回复「继续」，届时沿既有成果与进度接着执行，不重复已完成的读取/入库。
+- NOT_LOGGED_IN / UI_CHANGED：停止执行，把工具返回的原因如实转告用户并给出人工操作引导（NOT_LOGGED_IN 需用户完成登录；UI_CHANGED 附工具返回的核验证据）；用户处理好后在本会话回复「继续」，续筛沿原游标进行，已读取入库的简历不重复处理。禁止换用无关工具绕过上述前提。
 - 结果中 effect=unknown 或提示「实际效果未知」：绝不自动重试，必须提示用户打开 BOSS 直聘人工检查实际状态。
 - TIMEOUT：提示用户确认本机 Runtime 在线后再试。
 

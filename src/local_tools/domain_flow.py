@@ -131,13 +131,13 @@ async def resume_result(proxy, operation, kwargs, *, batch):
                 'text': f"✅ 第 {ordinal + 1}/{len(payloads)} 份已入库：{summary['candidate_name']}"})
     if not summaries:
         return {**original, 'success': False, 'code': 'RESUME_STORE_FAILED', 'data': {**metadata, 'resumes': [], 'failures': failures},
-            'message': f'批量读取 {len(payloads)} 份简历但全部入库失败，请稍后重试或联系管理员'}
+            'message': f'本批读取 {len(payloads)} 份简历，0 份入库，已跳过 {len(failures)} 份'}
     if batch:
         message = f"已存入简历库 {len(summaries)} 份：" + '、'.join(s['candidate_name'] or '?' for s in summaries)
         if stop_note := filter_stop_message(data.get('stop_reason')):
             message += f"；{stop_note}"
         if failures:
-            message += f"；{len(failures)} 份失败（第一个：{failures[0].get('name') or '未知姓名'}—{failures[0].get('error')}）"
+            message += f"；已跳过 {len(failures)} 份"
         return {**original, 'data': {**metadata, 'resumes': summaries, 'failures': failures}, 'message': message}
     summary = summaries[0]
     message = f"简历已存入简历库：{summary['candidate_name']}"

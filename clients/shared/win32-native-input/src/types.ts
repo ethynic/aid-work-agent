@@ -86,6 +86,12 @@ export interface NativeApi {
    * 发送数 != 2 抛错（GetLastError 由绑定层附加）。
    */
   typeUnicode(codeUnit: number): void
+  /**
+   * mouse_event(MOUSEEVENTF_WHEEL)：deltaY 为有符号值（非 0，-120=向下一格）。
+   * Win32 dwData 是 uint——负值 wrap 到无符号区间的责任在绑定层（cv-wheel.ps1 真机坑：
+   * 负数直接按 uint 解释会静默变 0，完全不滚动），调用方一律传有符号值。
+   */
+  mouseEventWheel(deltaY: number): void
 
   // ---- 进程命令行（绑定模式 WMI/Get-CimInstance 的进程内替代）----
   /** CreateToolhelp32Snapshot 快照枚举全部进程 */
@@ -117,6 +123,10 @@ export interface PhysicalInputRequest {
   /** 拖动终点 page 坐标；与 dragY 必须同时提供 */
   dragX?: number
   dragY?: number
+  /** 滚轮：每格 delta（非 0 整数，负=向下，单位=格×120）；提供时 op 为 wheel */
+  wheelDeltaY?: number
+  /** 滚轮格数（>=1；缺省 6，与 cv-wheel.ps1 默认一致） */
+  notches?: number
   /** 绑定模式：调试端口 >0 时启用（按 cmdline 唯一性 + BossWindowExperiment 语义） */
   cdpPort?: number
   /** 非绑定模式窗口标题关键字 */

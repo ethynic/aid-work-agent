@@ -78,7 +78,15 @@ export async function performPhysicalInput(ctx: SequenceContext, request: Physic
   const sleep = ctx.sleep ?? defaultSleep
   const log = ctx.log ?? defaultLog
   const timer = new SegmentTimer()
-  const op = request.op ?? (request.text !== undefined ? 'clickAndType' : request.dragX !== undefined ? 'drag' : 'click')
+  const op = request.op ?? (request.text !== undefined ? 'clickAndType' : request.wheelDeltaY !== undefined ? 'wheel' : request.dragX !== undefined ? 'drag' : 'click')
+  const wheeling = op === 'wheel'
+  // cv-wheel.ps1 的参数校验（exit 2 语义）：DeltaY 非 0、Notches >= 1
+  if (wheeling && (!Number.isInteger(request.wheelDeltaY) || request.wheelDeltaY === 0)) {
+    throw new NativeInputError(`wheelDeltaY 必须为非 0 整数（当前: ${request.wheelDeltaY}）`, 1, 'FAILED')
+  }
+  if (wheeling && request.notches !== undefined && (!Number.isInteger(request.notches) || request.notches < 1)) {
+    throw new NativeInputError(`notches 必须为 >=1 的整数（当前: ${request.notches}）`, 1, 'FAILED')
+  }
   const bound = (request.cdpPort ?? 0) > 0
   const output: string[] = []
   let completed = false
@@ -180,8 +188,14 @@ export async function performPhysicalInput(ctx: SequenceContext, request: Physic
       }
     })
 
-    // ---- 拟人移动：10 步 + 500ms 悬停（ps1 213~223）----
+    // ---- 光标就位：wheel 单步直移 + 200ms（cv-wheel.ps1 MoveCursor 语义，滚动不拟人）；
+    //      点击/拖动/键入走拟人 10 步 + 500ms 悬停（ps1 213~223）----
     await timer.measureAsync('move', async () => {
+      if (wheeling) {
+        moveCursor(api, sx, sy)
+        await sleep(200)
+        return
+      }
       const cursor = readCursor(api)
       for (let i = 1; i <= 10; i++) {
         const mx = psInt(cursor.x + (sx - cursor.x) * i / 10)
@@ -194,6 +208,25 @@ export async function performPhysicalInput(ctx: SequenceContext, request: Physic
       requireCursorOnWidget(api, rw, expected.x, expected.y)
     })
     if (bound) requireBoundForeground(api, win)
+
+    // ---- 滚轮（cv-wheel.ps1 150~160）：每格前实时重算落点并双谓词守卫，MarkInputStarted
+    //      划定效果未知边界后注入；格间 150ms（最后一格不等）。负 DeltaY 的 uint wrap 在绑定层 ----
+    if (wheeling) {
+      const notches = request.notches ?? 6
+      await timer.measureAsync('wheel', async () => {
+        for (let i = 1; i <= notches; i++) {
+          if (bound) requireBoundForeground(api, win)
+          const expected = screenPoint(api, rw, request.cssW, request.cssH, request.x, request.y)
+          requireCursorOnWidget(api, rw, expected.x, expected.y)
+          scope!.markInputStarted()
+          api.mouseEventWheel(request.wheelDeltaY!)
+          if (i < notches) await sleep(150)
+        }
+        output.push(`已滚动 ${notches} 格 × ${request.wheelDeltaY}`)
+      })
+      completed = true
+      return { output }
+    }
 
     // ---- 按下（ps1 224~236）：MarkInputStarted 划定“效果未知”会计边界 ----
     let dragEnd: { x: number; y: number } | undefined

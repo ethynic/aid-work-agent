@@ -13,6 +13,7 @@ import {
   runBossOperation,
   type BossSessionFactory,
 } from './bossContext.js'
+import { PerfCollector } from '../perf.js'
 import { CodedOperationError, type BossOperation, type OperationResult, type OpContext } from './types.js'
 
 export interface BossFilterArgs {
@@ -35,7 +36,7 @@ function verification(value: FilterPostcondition): PageExecution['verification']
 }
 
 async function verifiedFilter<T>(setter: FilterSetter, invoke: () => Promise<T>, execution: PageExecution,
-  name: string, goal: string, expected: string, progress: OpContext['progress']): Promise<T> {
+  name: string, goal: string, expected: string, progress: OpContext['progress'], perf?: PerfCollector): Promise<T> {
   for (;;) {
     execution.attemptsUsed++
     try {
@@ -47,7 +48,12 @@ async function verifiedFilter<T>(setter: FilterSetter, invoke: () => Promise<T>,
       if (error instanceof CancelledError) throw error
       let observed: FilterPostcondition | undefined
       if (execution.inputStatus !== 'not_started' || error instanceof FilterPostconditionError) {
-        try { observed = await setter.verifyLastPostcondition() } catch (verifyError) {
+        // Phase 5 存活热点分段：失败后的只读核验此前未包装计时（未包装调用），
+        // 现单独计段；perf 缺省（旧调用方）保持原行为。
+        const verify = () => setter.verifyLastPostcondition()
+        try {
+          observed = await (perf ? perf.time('filter:verify:fallback', verify) : verify())
+        } catch (verifyError) {
           if (verifyError instanceof CodedOperationError || verifyError instanceof CancelledError) throw verifyError
           // Preserve the original failure; a failed read is not success.
         }
@@ -157,6 +163,8 @@ export function createBossFilterOperation(
             // 性能埋点：固定 sleep 与关键阶段耗时进 collector（只记名称与毫秒）
             sleep: (ms) => perf.time(`sleep:${ms}`, () => new Promise<void>((r) => setTimeout(r, ms))),
             step: <T>(name: string, fn: () => Promise<T>) => perf.time(`filter:${name}`, fn),
+            // Phase 5 存活热点分段：纯计算步骤同步计时（结构解析/预校验/可见区几何/年龄读取）
+            stepSync: <T>(name: string, fn: () => T) => perf.timeSync(name, fn),
             // VIP 面板滚动适配：CDP 浏览类滚动（不占真实鼠标）
             mouseWheel: session.mouseWheel,
             drag: session.drag,
@@ -172,7 +180,7 @@ export function createBossFilterOperation(
             first_degree_only: args.first_degree_only,
           }
           let result: Awaited<ReturnType<FilterSetter['apply']>>
-          result = await verifiedFilter(setter, () => setter.apply(spec), execution, 'boss_filter', goal, expected, ctx.progress)
+          result = await verifiedFilter(setter, () => setter.apply(spec), execution, 'boss_filter', goal, expected, ctx.progress, perf)
           // 保底映射说明：LLM/用户传的档位页面上不存在时已自动映射到最接近的真实档位，必须转述
           const subNote = result.substitutions
             .map((s) => `${s.row}「${s.requested}」无该档位，已按最接近的「${s.matched}」设置`)
@@ -233,9 +241,10 @@ export function createBossClearFilterOperation(
             signal: ctx.signal,
             sleep: (ms) => perf.time(`sleep:${ms}`, () => new Promise<void>((r) => setTimeout(r, ms))),
             step: <T>(name: string, fn: () => Promise<T>) => perf.time(`filter:${name}`, fn),
+            stepSync: <T>(name: string, fn: () => T) => perf.timeSync(name, fn),
             mouseWheel: session.mouseWheel,
           })
-          await verifiedFilter(setter, () => setter.clear(), execution, 'boss_clear_filter', goal, expected, ctx.progress)
+          await verifiedFilter(setter, () => setter.clear(), execution, 'boss_clear_filter', goal, expected, ctx.progress, perf)
           return {
             message: '筛选已清除（徽章无计数）',
             data: { filter_count: 0, applied: true,

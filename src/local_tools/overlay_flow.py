@@ -31,7 +31,7 @@ async def poll_operation(proxy, operation, arguments, *, tenant_id, user_id, ses
         proxy._push_progress(progress_queue,{'type':'started','invocation_id':str(invocation['id']),
             'text':f'⏳ 正在等待原本机操作：{proxy.display_name}'})
         result = await proxy._poll_invocation(invocation,tenant_id,progress_queue,
-            durable_deadline=invocation['deadline_at'])
+            durable=True)
         if allow_visual_input_unknown and proxy.name == 'boss_overlay_dismiss' and arguments.get('recovery_ref'):
             return result
         return _known(result, proxy)

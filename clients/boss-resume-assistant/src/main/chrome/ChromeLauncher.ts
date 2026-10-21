@@ -20,8 +20,12 @@ import { spawn } from 'node:child_process'
 /** 固定持久 profile 目录（与 clients/README.md §四、release 安装手册的快捷方式参数一致） */
 export const DEFAULT_DEBUG_PROFILE_DIR = 'C:\\chrome-debug'
 
-/** 拉起后打开的初始页（attach 逻辑按 zhipin.com 识别页面） */
-export const DEFAULT_INITIAL_URL = 'https://www.zhipin.com'
+/**
+ * 拉起后打开的初始页：推荐牛人页（attach 逻辑按 zhipin.com 识别页面，不受路径影响）。
+ * 选推荐牛人而非首页：登录态表现最明确——已登录直接可用，未登录被重定向到登录页；
+ * 首页无论是否登录都展示「登录」入口（已登录点击则静默通过），无法判断登录态，易引起误解。
+ */
+export const DEFAULT_INITIAL_URL = 'https://www.zhipin.com/web/chat/recommend'
 /** 拉起后页面加载缓冲：端口就绪 ≠ 页面渲染完，冷启动下立即 attach 会扑空（真机 2026-08-24） */
 const LAUNCH_SETTLE_MS = 4000
 

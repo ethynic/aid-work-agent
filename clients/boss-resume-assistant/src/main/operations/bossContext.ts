@@ -68,6 +68,7 @@ function instrumentSession(session: BossSession, perf: PerfCollector): BossSessi
     clickBrowse: (point) => perf.time('cdp:clickBrowse', () => session.clickBrowse(point)),
     clickAndType: (point, viewport, text) => perf.time('win32:clickAndType', () => session.clickAndType(point, viewport, text)),
     mouseWheel: (x, y, deltaY) => perf.time('cdp:mouseWheel', () => session.mouseWheel(x, y, deltaY)),
+    ...(session.physicalWheel ? { physicalWheel: (point: ClickPoint, viewport: { width: number; height: number }, deltaY: number, notches: number) => perf.time('win32:wheel', () => session.physicalWheel!(point, viewport, deltaY, notches)) } : {}),
     pressEscape: () => perf.time('cdp:escape', () => session.pressEscape()),
     captureFullpage: () => perf.time('cdp:screenshot', () => session.captureFullpage()),
     getUrl: () => perf.time('cdp:getUrl', () => session.getUrl()),
@@ -102,6 +103,12 @@ export interface BossSession {
   clickAndType(point: ClickPoint, viewport: { width: number; height: number }, text: string): Promise<void>
   /** CDP mouseWheel 滚动（浏览类操作，不占用真实鼠标） */
   mouseWheel(x: number, y: number, deltaY: number): Promise<void>
+  /**
+   * Win32 真实滚轮（简历 canvas 滚动专用）：BOSS 反作弊拦 CDP 合成 mouseWheel（WASM
+   * 虚拟滚动不动，2026-08-14 真机实证），只有真实 mouse_event WHEEL 有效。
+   * 可选成员：旧测试替身/精简会话可不提供，缺失时简历读取链路显式报错。
+   */
+  physicalWheel?(point: ClickPoint, viewport: { width: number; height: number }, deltaY: number, notches: number): Promise<void>
   /** 按 Escape（CDP dispatchKey，关简历预览弹层用） */
   pressEscape(): Promise<void>
   /** 清空当前聚焦输入框（CDP ctrl+a 全选 + Delete，可选）：搜索框输入未落地的清空重试用。
@@ -187,6 +194,7 @@ export const defaultSessionFactory: BossSessionFactory = async (ctx) => {
     mouseWheel: async (x, y, deltaY) => {
       await gw.dispatchMouse({ type: 'mouseWheel', x, y, deltaX: 0, deltaY })
     },
+    physicalWheel: (point, viewport, deltaY, notches) => clicker.wheel(point, viewport, deltaY, notches),
     pressEscape: async () => {
       await gw.dispatchKey({ type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
       await gw.dispatchKey({ type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })

@@ -51,17 +51,17 @@ const defaultExecFile: ExecFileLike = async (_file, args, opts) => {
 }
 
 /**
- * scripts/win-click.ps1 绝对路径。
+ * scripts/<name> 绝对路径（win-click.ps1 / cv-wheel.ps1 共用探测）。
  * 源码（src/main/input）向上 3 级、编译后（dist/src/main/input）向上 4 级是工程根，
  * 两个候选按存在性取一，都找不到 fail-loud。
  */
-function defaultScriptPath(): string {
+function defaultScriptPath(name: 'win-click.ps1' | 'cv-wheel.ps1' = 'win-click.ps1'): string {
   const here = path.dirname(fileURLToPath(import.meta.url))
   for (const up of ['..\\..\\..\\..', '..\\..\\..']) {
-    const candidate = path.resolve(here, up, 'scripts', 'win-click.ps1')
+    const candidate = path.resolve(here, up, 'scripts', name)
     if (fs.existsSync(candidate)) return candidate
   }
-  throw new WinClickError(`未找到 scripts/win-click.ps1（已从 ${here} 向上探测）`)
+  throw new WinClickError(`未找到 scripts/${name}（已从 ${here} 向上探测）`)
 }
 
 /** 物理输入通道 */
@@ -85,6 +85,8 @@ export interface NativeInputSession {
     text?: string
     dragX?: number
     dragY?: number
+    wheelDeltaY?: number
+    notches?: number
     cdpPort?: number
     op?: string
   }): Promise<{ output: string[] }>
@@ -115,11 +117,13 @@ interface PhysicalRequest {
   viewport: { width: number; height: number }
   drag?: { x: number; y: number }
   text?: string
+  wheel?: { deltaY: number; notches: number }
   op: string
 }
 
 export class WinMouseClicker {
   private readonly scriptPath: string
+  private readonly wheelScriptPath: string
   private readonly execFileImpl: ExecFileLike
   private readonly cdpPort?: number
   private readonly beforeInput?: () => Promise<void>
@@ -132,6 +136,7 @@ export class WinMouseClicker {
 
   constructor(opts: {
     scriptPath?: string
+    wheelScriptPath?: string
     execFileImpl?: ExecFileLike
     cdpPort?: number
     beforeInput?: () => Promise<void>
@@ -143,6 +148,7 @@ export class WinMouseClicker {
     this.cdpPort = opts.cdpPort
     this.beforeInput = opts.beforeInput
     this.scriptPath = opts.scriptPath ?? defaultScriptPath()
+    this.wheelScriptPath = opts.wheelScriptPath ?? defaultScriptPath('cv-wheel.ps1')
     this.execFileImpl = opts.execFileImpl ?? defaultExecFile
     // 显式构造 > 环境变量 > 默认；注入 execFileImpl 时视为显式 powershell
     // （旧测试/调用方注入的语义是 PowerShell 路径）
@@ -192,6 +198,29 @@ export class WinMouseClicker {
     await this.perform({ point, viewport, text, op: 'clickAndType' })
   }
 
+  /**
+   * Win32 真实滚轮滚动 page 坐标（简历 canvas 专用）：BOSS 反作弊拦 CDP 合成 mouseWheel
+   * （WASM 虚拟滚动不动，2026-08-14 真机实证），必须真实 mouse_event WHEEL。
+   * deltaY 为每格 delta（负=向下，单位=格×120），notches 为格数（格间 ~150ms）。
+   * 借用真实光标约 1s + notches×0.15s，调用前必须提示用户勿动鼠标。
+   */
+  async wheel(
+    point: ClickPoint,
+    viewport: { width: number; height: number },
+    deltaY: number,
+    notches: number,
+  ): Promise<void> {
+    this.assertClickable(point, viewport)
+    if (!Number.isInteger(deltaY) || deltaY === 0) {
+      throw new WinClickError(`滚轮 deltaY 必须为非 0 整数（当前: ${deltaY}）`)
+    }
+    if (!Number.isInteger(notches) || notches < 1) {
+      throw new WinClickError(`滚轮 notches 必须为 >=1 的整数（当前: ${notches}）`)
+    }
+    await this.activateBoundTarget()
+    await this.perform({ point, viewport, wheel: { deltaY, notches }, op: 'wheel' })
+  }
+
   /** 通道无关的执行入口：native 优先，失败回退 powershell（各一次日志） */
   private async perform(request: PhysicalRequest): Promise<void> {
     if (this.channel === 'native' && !this.nativeFailed) {
@@ -209,7 +238,7 @@ export class WinMouseClicker {
   }
 
   private toNativeRequest(request: PhysicalRequest): Parameters<NativeInputSession['perform']>[0] {
-    const { point, viewport, drag, text } = request
+    const { point, viewport, drag, text, wheel } = request
     return {
       x: Math.round(point.x),
       y: Math.round(point.y),
@@ -217,6 +246,7 @@ export class WinMouseClicker {
       cssH: viewport.height,
       ...(drag ? { dragX: Math.round(drag.x), dragY: Math.round(drag.y) } : {}),
       ...(text !== undefined ? { text } : {}),
+      ...(wheel ? { wheelDeltaY: wheel.deltaY, notches: wheel.notches } : {}),
       ...(this.cdpPort ? { cdpPort: this.cdpPort } : {}),
       op: request.op,
     }
@@ -242,7 +272,34 @@ export class WinMouseClicker {
   }
 
   private async runPowerShell(request: PhysicalRequest): Promise<void> {
-    const { point, viewport, drag, text } = request
+    const { point, viewport, drag, text, wheel } = request
+    // cv-wheel.ps1 与 win-click.ps1 参数面不同（无 -Text/-Drag/-CdpPort，多 -DeltaY/-Notches/-TitleKeyword）；
+    // cv-wheel.ps1 无绑定模式，PowerShell 回退恒用标题关键字定位（现状语义，过渡期保留）
+    if (wheel) {
+      const args = [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        this.wheelScriptPath,
+        '-X',
+        String(Math.round(point.x)),
+        '-Y',
+        String(Math.round(point.y)),
+        '-CssW',
+        String(viewport.width),
+        '-CssH',
+        String(viewport.height),
+        '-DeltaY',
+        String(wheel.deltaY),
+        '-Notches',
+        String(wheel.notches),
+        '-TitleKeyword',
+        'BOSS直聘 - Google Chrome',
+      ]
+      await this.execFileImpl('powershell.exe', args, { timeout: 60000 })
+      return
+    }
     const args = [
       '-NoProfile',
       '-ExecutionPolicy',

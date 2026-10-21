@@ -7,13 +7,33 @@
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
 | Phase 1 | Win32 输入 Node 原生化（共享输入能力，BOSS CLI 先行） | 🔧 进行中 | 开发+独立测试+CR 完成（2026-10-21）：单测 32、通道 19、打包 8 全绿，真实输入端到端通过；待用户真实 BOSS 网页实测；未提交 |
-| Phase 2 | model_phase 供应商结果分类与单份失败收敛 | 🔧 进行中 | 2026-10-20 工作流启动（与 Phase 1 并行） |
-| Phase 3 | 恢复消费已取回简历成果 | 📋 待开发 | 排在 Phase 2 后（共享简历流代码） |
-| Phase 4 | 180 秒持久截止语义拆除 | 📋 待开发 | 排在 Phase 3 后（共享 durable_flow） |
-| Phase 5 | 存活热点分段与替换前基线固定 | 🔧 进行中 | 2026-10-20 工作流启动（与 Phase 1 并行，不触输入链路文件） |
-| Phase 7 | 进度语义分离与可观测性缺口 | 📋 待开发 | 排在 Phase 5 后（同客户端/共享包轨道） |
-| Phase 8 | 独立测试与 CodeReview | 📋 待开发 | 各 Phase 自带测试/CR，此处做组合验收 |
+| Phase 2 | model_phase 供应商结果分类与单份失败收敛 | ✅ 完成（2026-10-21） | 产品纠正完成：删除新增模型等待 UI/API/标记，单份失败后台自动跳过；复用既有评估事实防止恢复重识别，失败不扣识别费。独立后端 52、前端 65、额外探针 4 通过，Web build 通过，独立 CR 无阻塞；四轮 CR（2026-10-21）：CLI 批次打开失败分支补齐自动跳过——详情可关闭（列表仍可操作）即记失败继续下一人，仅关不掉才停批进恢复，移除 detail_not_opened 停止码；五轮 CR（2026-10-21）：重试前原卡片消失分支补齐单份收敛（vanishAfterClick 夹具用例）；六轮 CR（2026-10-21）续筛/恢复链路完整闭环四项：①continuation_retry_safe 区分诊断元数据与业务成果（已知诊断键集合 fail-closed），NOT_LOGGED_IN/WRONG_PAGE 解决后沿原游标续筛不再被 STALE_CONTINUATION 拦截；②回执 visual_recovery.page_restored=true 时 available 判定不再被旧 stop_reason 禁止（unsafe/missing_context/终局门禁保留），恢复后沿游标续筛不重读；③重试分支空视口不再终止——记失败回主循环复用滚动/无进展/边界判断（refreshList 夹具用例）；④SUBAGENT.md 失败处理拆出 WRONG_PAGE 自动导航（boss_goto 先行核验后重试），人工场景统一「处理好后回复继续、沿既有成果续跑」语义。resume-batch 36、continuation 42、CLI 合流定向 61、客户端全量 917/925（8 失败为 manifest/input 既知存量）；七轮 CR（2026-10-21）人工恢复两阻断：①available 判定放行页面状态类停止原因（page_restored 自动恢复之外，人工恢复经既有页面/职位校验本次再核验，通过沿游标续筛，unsafe/missing_context/终局门禁保留）；②retry-safe 扩展「无成果页面失败」——UI_CHANGED 与登录/错页同等，空 resumes/processed_names+attempted=0 确认无成果才放行（非空/类型异常/未知键仍拦），新续筛不 STALE_CONTINUATION 沿原游标；continuation 60 用例（含双通道×门禁回归）、local_tools 598 通过；八轮 CR（2026-10-21）人工恢复再两分支：①「无成果」判定改以 resumes 空为准（attempted>0/processed_names 含失败候选人不再拦截，fail-closed 保留 resumes 非空/类型异常/未知键），失败候选人沿游标合并排除（list_resume_next_attempts + 恢复证明同口径注入三调用点）；②no_progress 纳入放行停止原因（双通道×门禁回归覆盖，search_limit/cancelled 维持禁止）；continuation 75 用例、恢复证明 76、local_tools 613 通过；九轮 CR（2026-10-21）排序缺陷：failed_attempt_names 返回改为按名字排序（名单合成与派发/授权两侧查询顺序无关，消除恢复证明列表顺序严格比较误拒），游标两处查询加 id DESC tiebreaker；复现用例红绿验证（还原排序即失败），owner_proof 21、continuation 75、local_tools 616、agent_runner 177 通过（各 1 存量失败）；未提交未部署 |
+| Phase 3 | 恢复消费已取回简历成果 | ✅ 完成（2026-10-20） | 恢复沿原 invocation 消费已取回成果：不重抓、不重复计费、新视觉调用独立尝试身份；1210 挂起→恢复→单份跳过→终局全链通过；评审 4 项 low 反馈已处置（overlay heal 补测、docstring 修正）。单测 14+相关 76 通过（2 项失败为存量），CR approve；遗留：集成测试未跑，domain_recovery/durable_flow 有被还原史需提交前核对符号在位；未提交 |
+| Phase 4 | 180 秒持久截止语义拆除 | ✅ 完成（2026-10-20） | 投影方案：存量 deadline 保留旧到期语义、新绑定不再持久化工具 timeout 截止；durable 观察无墙钟、租约停续经权威清扫器收敛、cancel_requested 纳入租约清扫（补全保护）。单测 20+受影响目录 541/176 通过（失败经 stash A/B 甄别为存量），CR approve（4 条 low 不阻塞）；遗留：集成套件与 expire_stale_claims SQL 需有库环境回归；未提交 |
+| Phase 5 | 存活热点分段与替换前基线固定 | ✅ 完成（2026-10-20） | FilterSetter 5 段+filter:verify:fallback、快照 snapshot:* 分段、调用层 [runtime-perf] 四字段落地（desktopCheck 本体不计时），替换前基线登记至 docs/perf/recruiting-input-hotspot-baseline.md。组合回归 148、host-core 74、runtime 相关 65 全绿、typecheck 0 错误（全量 9 失败甄别为存量/Phase 1 域），CR approve；未提交 |
+| Phase 7 | 进度语义分离与可观测性缺口 | ✅ 完成（2026-10-20） | 心跳与语义进展分离（重复同句去重、带标注心跳、无进展告警一次且随语义进展复位）、log 写失败限频 stderr 告警+健康累计、诊断导出按 installation-v2 指针定位 home 修复 homeExists 误报。定向 71/71、host-core 74/74、PS1 语法+夹具实测通过（全量 4 失败经 HEAD worktree 复现为存量），CR approve；外部 CR 修复（2026-10-21）：进度入队即固定快照（连续 push 不再丢中间步骤）、log 健康落盘 log-health.json 并进诊断导出摘要（ps1 醒目告警行），定向 20/20 通过；二轮 CR 修复（2026-10-21）：健康文件两级写入（logs 目录故障降级 home 根、恢复自愈）、诊断读取端目录探测明确报错（不再呈现「无记录无错误」），6 场景测试+ps1 夹具 22 断言通过；三轮 CR 修复（2026-10-21）：读取改两位置新鲜度选择（记录内 updatedAt 优先、文件 mtime 兜底，TS/ps1 同规则），主位置旧文件不再遮蔽降级新记录（红绿验证），8 用例+夹具通过；未提交 |
+| Phase 8 | 独立测试与 CodeReview | ✅ 完成（2026-10-21） | 本轮自动跳过纠正已独立验证与 CR：后端 52、前端 65、额外探针 4 通过；真实集成未通过 Windows 夹具平台前置，保留验证缺口；此前其他阶段验证仍以各行记录为准 |
 | Phase 6 | 真机观察输入性能是否复现（末位） | 📋 待开发 | 2026-10-20 用户决策：不设隔离 A/B，仅真机观察；依赖 Phase 1 上线 |
+
+## 2026-10-21 产品纠正：单份失败后台自动跳过
+
+批量筛选允许少量简历无法查看或识别；该份后台记失败并继续下一份，不挂起整批、不询问用户、不新增前端按钮或横幅。此前为此新增的模型等待交互和 `end-waiting` scope、等待目标绑定、幂等标记全部撤销；原有设备恢复能力不在本次变更范围。
+
+- 模型无响应的该份不再重试；原供应商回执保持 unknown，不伪造成功，不扣该份识别费。完整拒绝/不可解析沿用一次重试，耗尽后自动跳过。
+- 复用既有 `resume.evaluation` 保存单份失败结论；批次恢复时不重新识别已跳过份，不另建跳过标记或恢复通道。
+- 图像不可解析、姓名不匹配等单份失败同样自动跳过；后台保留失败与图像元信息，批次结果仅汇总跳过数。全部失败仍如实返回零入库，不伪报成功。
+- 租约、存储、取消及实际外部写入的失败不作为单份模型失败吞掉。
+
+### 本轮验证记录
+
+- 开发自测：相关后端四文件 48 项通过；追加坏图、取消与执行完整性用例后，组合文件 7 项通过。
+- 独立测试：四个后端文件 52 项通过，0 失败/跳过；前端 Runner API 与 useAgentRunner 65 项通过，0 失败/跳过。额外 4 个独立探针在系统临时文件中运行通过，覆盖全部失败零入库、失败事实保存异常穿透、模型回执存储失败穿透、姓名不匹配恢复不重识别。
+- Web `npm run build` 成功；被撤销的前端与 end-waiting API 文件与 HEAD 一致。独立 CodeReview 未发现本轮阻塞问题，核对了真实 phase 写入、恢复证明与 covered 模型回执结算代码。
+- 后端命令：`./scripts/dev_test.sh tests/unit/services/agent_runner/test_model_phase_outcome.py tests/unit/services/agent_runner/test_phase2_single_item_failure_regression.py tests/unit/services/agent_runner/test_phase3_recovered_resume_consumption.py tests/unit/services/agent_runner/test_phase8_failure_recovery_combination.py -p no:cacheprovider -q`。
+- 前端命令（frontend 目录）：`npm test -- web/__tests__/composables/useAgentRunner.test.ts web/__tests__/api/runner.test.ts`、`npm run build`。
+- 持久化与计费落账测试使用边界桩，不冒充真实 PG/CAS 集成验收。此前 Windows 集成夹具在 `os.getuid`/`os.killpg` 前置阻塞，本轮未重复启动；未提交、未部署。
+
+下面“事实基础”为开发前历史快照；与本节冲突的人工恢复要求已废弃，以本节及更新后的 Phase 2 为准。
 
 ## 事实基础（2026-10-20 审计，开发前复核）
 
@@ -63,12 +83,12 @@
 按供应商结果三分，让已有的单份失败设计真正可达：
 
 1. **明确拒绝**（收到完整 HTTP 响应体，如 400/1210、4xx/5xx 带错误码）：以可识别的业务异常穿透 `model_phase`，进入 `resume_vl_service` 既有重试（第 2 次可达），仍失败走 `resume_flow._failure('RESUME_VL_FAILED')` 单份跳过、批次继续。非 dict 响应同属"有响应"类。
-2. **无响应/结果未知**（超时、连接中断）：保留 `LOCAL_MODEL_RESPONSE_VERIFICATION_REQUIRED` 验证保护，防重复计费不放松。
+2. **无响应/结果未知**（超时、连接中断）：模型层保留真实未知事实，单份处理层自动保存失败并跳过；不重试该份、不挂起整批、不扣识别费。
 3. **返回不可解析**（有响应但内容无效）：同明确拒绝处理，保留原始码与描述形成可审计单份失败事实。
 4. 计费账本按实际回执记录，不伪造 observed/成功；网络无响应与设备外部写动作仍按各自证据保护。
-5. 前端 verification 续聊入口：复用恢复批次已交付的「结束等待」交互框架（dd634717），本项只需补模型侧缺口——展示真实供应商错误码与单份上下文，提供「重试该份/跳过该份」经授权选项，明确输入是否已受理；并决策模型侧等待的出口形态（将 domain 未知纳入 end-waiting  eligibility，或单列入口），当前 `local_wait.py:43-45` 对其明确拒绝。覆盖 waiting/verification 下输入「继续」的前后端组合（不能只修一端）。
+5. **无需前端交互**：删除本阶段新增的模型等待横幅、重试/跳过按钮及配套接口扩展；后台逐份收敛失败后继续批次，复用既有单份评估事实记录失败，恢复不重识别已跳过份。
 6. 图像诊断：不含简历内容的格式、模式、尺寸、字节数、摘要及供应商错误分类。
-7. 次要触发面收窄：`cloud_flow.py:17-18` 纯读恢复允许直接重读（读无副作用）；恢复被拒时 `*_INTENT_CHANGED` 类提示给出可执行指引（有 cancel 出口，仅优化提示）。
+7. 次要触发面收窄：`cloud_flow.py:17-18` 纯读恢复允许直接重读（读无副作用）；意图变化保留既有错误与取消出口，不为此新增前端交互。
 
 ## Phase 3：恢复消费已取回简历成果
 
@@ -96,6 +116,7 @@ d470 案例第二批 3 份已取回但未处理即挂起，现无任何路径消
 3. **调用层非 desktopCheck 部分分段**：桌面锁等待、Provider 就绪/调度；desktopCheck 本体由 Phase 1 进程内化消除，其耗时经 Phase 6 真机观察核对是否随之收敛。
 4. **基线固定**：以已采集 runtime.log 数据（单次点击均值 26.235s、拖动 27.495s、write 工具前置间隔 11～15s、body/call 层漏计值）登记为替换前基线，供 Phase 6 前后对比；不要求客户重复提供日志。
 5. 守卫失败证据（预期/实际坐标、widget、命中 HWND、前台/几何变化）不在旧路径补做，作为 Phase 1 native 实现的内建能力交付。
+6. 替换前基线已固定（2026-10-20）：[docs/perf/recruiting-input-hotspot-baseline.md](../perf/recruiting-input-hotspot-baseline.md)。
 
 ## Phase 7：进度语义分离与可观测性缺口
 
@@ -121,6 +142,18 @@ d470 案例第二批 3 份已取回但未处理即挂起，现无任何路径消
 2. 观察点：单次点击/拖动是否复现 26s 量级退化（对照 Phase 5 登记的替换前基线：点击 26.235s / 拖动 27.495s）；native 内建分段计时是否回到健康机器 ~1s 量级。
 3. 若复现：先按最小证据采集流程取证再重启/关闭进程（系统可用/已提交内存、分页与磁盘延迟、CPU；Runtime/Provider/Chrome/PowerShell 进程私有内存、句柄、线程、CPU/IO），再重新评估归因——客户重启恢复是临时现象，不据此关闭内存/进程状态排查。
 4. 前置工具热点（列职位 3 次 snapshot 14.030s、列/选职位 40s+ 量级）由 Phase 5 分段计时覆盖，随本阶段真机观察一并核对是否收敛。
+
+## 读取链路 PowerShell 迁移（2026-10-21 用户决策：不长期维护双通道）
+
+已替代的输入回退（win-click.ps1 通道）连同旧测试、doctor 检查、打包引用待清理；读取链路脚本迁 Node 后再删对应 ps1 与 BossPhysicalInput.cs。进度：
+
+| 脚本 | 状态 | 说明 |
+|------|------|------|
+| cv-wheel.ps1（简历滚动） | ✅ 已迁 native（2026-10-21） | 共享包 wheel 序列（1:1 移植：每格守卫+MarkInputStarted+负数 uint wrap 收绑定层）；CLI 走 WinMouseClicker.wheel（cv-wheel.ps1 回退过渡）。单测 38+18；真机 BOSS 推荐页实测：boss_resume_batch limit=1 读取成功，6 次滚动全部 native 通道（op=wheel ok=1，单次 ~1.25s，无回退日志），native click 1.3s，全程 30s |
+| cv-segdiff.ps1（同画面确认） | 📋 待迁 | 像素容差比较决定滚动停止，需双通道输出对照 |
+| cv-stitch.ps1（拼接对齐） | 📋 待迁 | mis 阈值进云端契约元数据，需 1:1 保持判定 |
+| visual-region-compare.ps1（恢复核验） | 📋 待迁 | visualRecovery 生产链路 |
+| 输入回退清理（win-click.ps1 等） | 📋 待执行 | native 点击真机已验（本次实测含 op=click ok=1），可执行清理 |
 
 ## 行为与安全边界
 

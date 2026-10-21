@@ -11,8 +11,8 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 import httpx
 from loguru import logger
 
-from .base import BaseLLMProvider
-from ..errors import ProviderHTTPError, read_error_body
+from .base import BaseLLMProvider, ensure_chat_completion_shape
+from ..errors import ProviderHTTPError, ProviderResponseInvalid, read_error_body
 from ..error_detail import describe_exception
 from ..llm_call_logger import generate_request_id, log_llm_invoke
 
@@ -97,12 +97,22 @@ class DeepSeekProvider(BaseLLMProvider):
                     json=request_body,
                 )
                 response.raise_for_status()
-                result = response.json()
+                try:
+                    result = response.json()
+                except ValueError:
+                    # 200 但 body 不是合法 JSON：有响应的不可解析结果，保留正文摘要
+                    raise ProviderResponseInvalid(
+                        f"DeepSeek 响应 JSON 解析失败: {response.text[:500]}"
+                    ) from None
                 if not isinstance(result, dict):
                     # 200 但 body 不是 JSON 对象（如字面量 null），带上响应体便于定位
-                    raise RuntimeError(
+                    raise ProviderResponseInvalid(
                         f"DeepSeek 响应非 JSON 对象: {response.text[:500]}"
                     )
+                # 结构校验失败（choices 缺失/null 元素/message 形态等）同属
+                # 「有响应但不可解析」：先校验结构再做字段访问，杜绝
+                # AttributeError 逃逸成无响应验证保护导致整批挂起
+                ensure_chat_completion_shape(result, display_name="DeepSeek")
 
             parsed = self._parse_response(result)
 

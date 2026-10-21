@@ -84,36 +84,13 @@ function cvScriptPath(name: string): string {
 }
 
 /**
- * Win32 滚轮：滚动点 = canvas 中心（page device px），CssW/CssH = viewport device 尺寸（DPI 换算在 ps1 内）。
- * TitleKeyword 显式传 win-click.ps1 同款「BOSS直聘 - Google Chrome」：不用 cv-wheel 的默认 "Google Chrome"，
- * 否则多 Chrome 窗口时 EnumWindows 按 Z 序可能命中其他窗口 → 错滚 → BOSS canvas 纹丝不动 →
- * 各段截图字节相同被判「到底」→ 静默只返回首屏半成品（违背 fail-loud，真机标题 2026-08-14 实证）。
- *
- * export：bossResumeBatch operation（同域：读简历 canvas）复用同一套 PS runner。
+ * Win32 滚轮落点 = canvas 中心（page device px）；CssW/CssH = viewport device 尺寸。
+ * 输入本体走 session.physicalWheel（WinMouseClicker：native FFI 优先，cv-wheel.ps1 回退）：
+ * BOSS 反作弊拦 CDP 合成 mouseWheel（WASM 虚拟滚动不动，2026-08-14 真机实证）。
+ * export：bossResumeBatch operation（同域：读简历 canvas）复用同一落点口径。
  */
-export async function wheelAt(
-  rect: DeviceRect,
-  viewport: { width: number; height: number },
-  deltaY: number,
-  notches: number,
-): Promise<void> {
-  const cx = Math.round(rect.x + rect.w / 2)
-  const cy = Math.round(rect.y + rect.h / 2)
-  await runPs(
-    cvScriptPath('cv-wheel.ps1'),
-    [
-      '-X', String(cx),
-      '-Y', String(cy),
-      '-CssW', String(viewport.width),
-      '-CssH', String(viewport.height),
-      '-DeltaY', String(deltaY),
-      '-Notches', String(notches),
-      '-TitleKeyword', 'BOSS直聘 - Google Chrome',
-    ],
-    60000,
-    'cv-wheel.ps1',
-    WinClickError,
-  )
+export function wheelCenter(rect: DeviceRect): { x: number; y: number } {
+  return { x: Math.round(rect.x + rect.w / 2), y: Math.round(rect.y + rect.h / 2) }
 }
 
 /**
@@ -265,7 +242,10 @@ export function createBossResumeDetailOperation(
             const reader = new ResumeReader({
               snapshot: () => session.snapshot(RESUME_SNAPSHOT_OPTIONS),
               captureFullpage: session.captureFullpage,
-              wheel: (deltaY, notches) => attempt.input(() => wheelAt(rect, viewport, deltaY, notches)),
+              wheel: (deltaY, notches) => attempt.input(() => {
+                if (!session.physicalWheel) throw new WinClickError('当前会话不支持 Win32 真实滚轮（physicalWheel 缺失）')
+                return session.physicalWheel(wheelCenter(rect), viewport, deltaY, notches)
+              }),
               sameView: (a, b) => sameViewAt(a, b, rect),
               stitch: stitchParts,
               signal: ctx.signal,
