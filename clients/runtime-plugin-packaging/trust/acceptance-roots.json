@@ -70,6 +70,22 @@
       "providers": [
         "ai.aidwork.boss-recruiting"
       ]
+    },
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-boss-0-3-14-20261021-211301",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAej23Noz7GmpcD/b0IMuv04rYn8479EuBCTaCvVIeU0s=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.boss-recruiting"
+      ]
+    },
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-boss-0-3-15-20261021-212741",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAKnZPvAfRml3w83iTvix2JmU7sA8MzYppTVwsXkH25cQ=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.boss-recruiting"
+      ]
     }
   ],
   "profile": "acceptance"

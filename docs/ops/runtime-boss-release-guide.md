@@ -5,6 +5,7 @@
 > 本文是当前独立 Runtime + BOSS 插件的打包入口。完整桌面对话客户端另见[桌面构建手册](../system/desktop-agent-client-build-manual.md)；旧 `clients/pack.sh`、npm 全局捆绑安装和历史交付记录不作为新包的操作步骤。
 >
 > 2026-10-21 实跑修订：修复 PS 5.1 下 `Get-Content -Raw` 缺 `-Encoding UTF8`（中文 JSON 解析失败）与 shared workspace 逐成员 ci 互毁依赖两处问题，详见第 4 节注释与第 10 节排查表。
+> 本文各节的组合一键执行脚本：[clients/agent-desktop/scripts/release-batch.ps1](../../clients/agent-desktop/scripts/release-batch.ps1)（含第 10 节排查表所列的 tar 优先级与压缩占用自愈等实跑修复）。
 
 ## 1. 交付形态和目录
 
@@ -327,6 +328,7 @@ git status --short
 | `ConvertFrom-Json` 报“传入的对象无效” | PS 5.1 按 ANSI 读 UTF-8 无 BOM 文件所致；所有 `Get-Content -Raw` 带 `-Encoding UTF8`（2026-10-21 实跑） |
 | `boss build:native` 报 `Cannot find module 'koffi'` | shared 是 workspace 根，从 `clients/shared` 根一次 ci；逐成员 ci 互毁根依赖（2026-10-21 实跑） |
 | prepare-runtime 的 tar 报 `Cannot connect to C` | Git Bash 的 GNU tar 抢占了 `tar.exe`，把盘符路径当远程主机；确保 Windows 自带 `System32	ar.exe` 优先（如把 System32 前置 PATH）（2026-10-21 实跑） |
+| `Compress-Archive` 对刚复制的 `boss-*.aidplugin.zip` 报 PermissionDenied | 实证根因（2026-10-21 RM API 复现 5/5）：workspace 内编辑器（VS Code 系）文件 watcher 对刚复制的新文件短暂监视读取，而 126MB 安装器按字母序先被压缩，拖出的时间窗撞上该锁；watcher 秒级释放，失败时诊断占用者并退避重试即过（配套脚本 `clients/agent-desktop/scripts/release-batch.ps1` 已内置） |
 | `npm ci` 报 lockfile 不一致 | 只同步受影响工程 lockfile 后重试，保留审阅差异 |
 | 找不到 `win32-native-input/dist/index.js` | 检查共享包依赖安装、BOSS `build:main`，不要直接复制旧 tgz |
 | Koffi 原生模块缺失 | 查本批签名 payload 中的共享包及 Koffi；包内加载通过后再交付 |
