@@ -452,8 +452,12 @@ class SmsConfig(BaseModel):
     username: str = ""  # 助通用户名
     password: str = ""  # 助通密码
     signature: str = ""  # 短信签名
-    template_yzm: str = ""  # 验证码模板ID
+    template_yzm: str = ""  # 验证码模板ID（助通）
     qb_sms_code: str = ""  # 短信验证码 bypass 码（用于测试/演示）
+    aliyun_access_key_id: str = ""  # 阿里云短信 AccessKey ID
+    aliyun_access_key_secret: str = ""  # 阿里云短信 AccessKey Secret
+    aliyun_sign_name: str = ""  # 阿里云短信签名名称
+    aliyun_template_yzm: str = ""  # 阿里云验证码模板CODE（如 SMS_123456789）
 
 
 class BillingConfig(BaseModel):
@@ -1112,6 +1116,14 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         yaml_config.setdefault("sms", {})["template_yzm"] = os.getenv("SMS_TEMPLATE_YZM")
     if os.getenv("QBSMSCODE"):
         yaml_config.setdefault("sms", {})["qb_sms_code"] = os.getenv("QBSMSCODE")
+    if os.getenv("SMS_ALIYUN_ACCESS_KEY_ID"):
+        yaml_config.setdefault("sms", {})["aliyun_access_key_id"] = os.getenv("SMS_ALIYUN_ACCESS_KEY_ID")
+    if os.getenv("SMS_ALIYUN_ACCESS_KEY_SECRET"):
+        yaml_config.setdefault("sms", {})["aliyun_access_key_secret"] = os.getenv("SMS_ALIYUN_ACCESS_KEY_SECRET")
+    if os.getenv("SMS_ALIYUN_SIGN_NAME"):
+        yaml_config.setdefault("sms", {})["aliyun_sign_name"] = os.getenv("SMS_ALIYUN_SIGN_NAME")
+    if os.getenv("SMS_ALIYUN_TEMPLATE_YZM"):
+        yaml_config.setdefault("sms", {})["aliyun_template_yzm"] = os.getenv("SMS_ALIYUN_TEMPLATE_YZM")
 
     # 积分计费配置：环境变量覆盖
     billing_cfg = yaml_config.setdefault("billing", {})
