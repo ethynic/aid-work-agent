@@ -69,8 +69,8 @@ class NotificationDispatcher:
         while not self._stop.is_set():
             try:
                 await self.tick()
-            except Exception as error:
-                logger.error('notification dispatcher failure class={}',type(error).__name__)
+            except Exception:
+                logger.opt(exception=True).error('notification dispatcher failure')
             try:
                 await asyncio.wait_for(self._stop.wait(),timeout=self.config.poll_seconds)
             except asyncio.TimeoutError:
