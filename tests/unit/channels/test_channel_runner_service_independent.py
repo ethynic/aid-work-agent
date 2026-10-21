@@ -126,7 +126,7 @@ def bridge(monkeypatch):
         peers={'bridge': {'sources': ['wecom_kf', 'chat', 'feishu', 'dingtalk', 'wecom']}})
     authorizer = RunnerAuthorizer(config, store.connection,
         source_port=build_source_capabilities(config, store.connection))
-    manager = RunnerManager(repository, authorizer, SimpleNamespace(resolve=lambda profile: (None, 'fingerprint')))
+    manager = RunnerManager(repository, authorizer, SimpleNamespace(resolve=lambda profile, tenant=None: (None, 'fingerprint')))
     controls = {}
 
     class Controls:
@@ -706,7 +706,7 @@ async def test_real_recovery_reply_on_fresh_schema_uses_generic_control_without_
     row.update(profile_fingerprint='fingerprint', checkpoint={'execution': state.checkpoint()})
     control = {'control_id': 'reply-control', 'action': 'reply', 'accepted_at': '2026-10-08',
         'payload': {'action': 'reply', 'answer': 'Shanghai', 'attachments': [], 'wait_id': 'wait', 'target_execution_id': 'runner-1'}}
-    coordinator = RecoveryCoordinator(bridge.authorizer, SimpleNamespace(resolve=lambda profile: (None, 'fingerprint')))
+    coordinator = RecoveryCoordinator(bridge.authorizer, SimpleNamespace(resolve=lambda profile, tenant=None: (None, 'fingerprint')))
     recovered = coordinator.prepare(row, control)
     root = recovered.states['runner-1']
     assert root.outcome == Outcome.RUNNING and root.waiting is None

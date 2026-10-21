@@ -32,7 +32,7 @@ class RunnerManager:
         execution_request = request.model_copy(update={'profile_id':profile_id})
         principal = self.authorizer.authorize(execution_request, **credentials)
         self.authorizer.assert_credit(principal)
-        _, fingerprint = self.profiles.resolve(profile_id)
+        _, fingerprint = self.profiles.resolve(profile_id, principal.identity.tenant_id)
         from .input_projection import project_execution_context
         execution_context = project_execution_context(request, profile_id, fingerprint)
         row, created = self.repository.submit(principal, request, fingerprint, resolved_profile_id=profile_id,

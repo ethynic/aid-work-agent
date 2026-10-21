@@ -10,6 +10,7 @@ import uuid
 import pytest
 
 from src.services.agent_runner.authorization import RunnerAuthorizer, RunnerError
+from src.services.agent_runner.profiles import ProfileCatalog
 
 pytestmark = pytest.mark.integration
 
@@ -111,6 +112,83 @@ def test_foreign_tenant_instance_id_is_not_resolved(
     finally:
         with service_database.connect() as connection, connection.cursor() as cursor:
             cursor.execute("DELETE FROM tenants WHERE tenant_id=%s", (other_tenant,))
+
+
+@pytest.fixture
+def profile_instance_tenant(service_database):
+    """A copy instance and an archived instance over a real builtin base agent."""
+    suffix = uuid.uuid4().hex
+    tenant_id = f"runner_profile_inst_{suffix}"
+    base = "pre-sales"
+    copy_id = f"{base}-tenant-{suffix}-c0py"
+    archived_id = f"{base}-tenant-{suffix}-arch"
+    with service_database.connect() as connection, connection.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO tenants (tenant_id, company_name, tenant_code, credit_balance) VALUES (%s, %s, %s, 1000)",
+            (tenant_id, f"测试租户-runner-profile-{suffix}", f"T{uuid.uuid4().hex[:6].upper()}"))
+        cursor.execute(
+            """INSERT INTO tenant_agent_instances (tenant_id, agent_id, base_agent_id, display_name, status)
+            VALUES (%s, %s, %s, %s, 'active'), (%s, %s, %s, %s, 'archived')""",
+            (tenant_id, copy_id, base, "副本实例名",
+             tenant_id, archived_id, base, "归档实例名"))
+    try:
+        yield tenant_id, base, copy_id, archived_id
+    finally:
+        with service_database.connect() as connection, connection.cursor() as cursor:
+            cursor.execute("DELETE FROM tenant_agent_instances WHERE tenant_id=%s", (tenant_id,))
+            cursor.execute("DELETE FROM tenants WHERE tenant_id=%s", (tenant_id,))
+
+
+def test_copy_instance_profile_resolves_with_tenant(profile_instance_tenant):
+    """Regression: instances live outside the global registry, so submit used to
+    fail PROFILE_NOT_FOUND 404 right after the profile authorization fix."""
+    tenant_id, base, copy_id, _ = profile_instance_tenant
+    config, fingerprint = ProfileCatalog().resolve(copy_id, tenant_id)
+    assert config.dir_name == copy_id
+    assert config.base_agent_id == base
+    assert config.tenant_instance is True
+    assert config.name == "副本实例名"
+    base_config, base_fingerprint = ProfileCatalog().resolve(base, tenant_id)
+    assert base_config.dir_name == base
+    assert fingerprint != base_fingerprint
+
+
+def test_instance_profile_fingerprint_is_stable(profile_instance_tenant):
+    tenant_id, _, copy_id, _ = profile_instance_tenant
+    _, first = ProfileCatalog().resolve(copy_id, tenant_id)
+    _, second = ProfileCatalog().resolve(copy_id, tenant_id)
+    assert first == second
+
+
+def test_archived_instance_profile_still_resolves(profile_instance_tenant):
+    tenant_id, base, _, archived_id = profile_instance_tenant
+    config, _ = ProfileCatalog().resolve(archived_id, tenant_id)
+    assert config.dir_name == archived_id
+    assert config.base_agent_id == base
+
+
+def test_instance_profile_is_tenant_scoped(profile_instance_tenant, service_database):
+    tenant_id, _, copy_id, _ = profile_instance_tenant
+    suffix = uuid.uuid4().hex
+    other_tenant = f"runner_profile_other_{suffix}"
+    with service_database.connect() as connection, connection.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO tenants (tenant_id, company_name, tenant_code, credit_balance) VALUES (%s, %s, %s, 1000)",
+            (other_tenant, f"测试租户-runner-profile-other-{suffix}", f"T{uuid.uuid4().hex[:6].upper()}"))
+    try:
+        with pytest.raises(RunnerError) as caught:
+            ProfileCatalog().resolve(copy_id, other_tenant)
+        assert caught.value.code == "PROFILE_NOT_FOUND" and caught.value.status == 404
+    finally:
+        with service_database.connect() as connection, connection.cursor() as cursor:
+            cursor.execute("DELETE FROM tenants WHERE tenant_id=%s", (other_tenant,))
+
+
+def test_instance_profile_without_tenant_is_not_resolved(profile_instance_tenant):
+    _, _, copy_id, _ = profile_instance_tenant
+    with pytest.raises(RunnerError) as caught:
+        ProfileCatalog().resolve(copy_id)
+    assert caught.value.code == "PROFILE_NOT_FOUND" and caught.value.status == 404
 
 
 def test_user_permission_check_also_binds_to_base_agent(

@@ -20,7 +20,8 @@ class ChildRecoveryAdapter:
         from ..aggregate_tree import child_tree_finished
         stopped = {Outcome.COMPLETED,Outcome.FAILED,Outcome.CANCELLED,Outcome.ITERATION_LIMIT}
         if restored is None or restored.outcome not in stopped or not child_tree_finished(restored.checkpoint()):
-            config, fingerprint = await asyncio.to_thread(self.profiles.resolve,fact['profile_id'])
+            config, fingerprint = await asyncio.to_thread(
+                self.profiles.resolve,fact['profile_id'],parent.identity.tenant_id)
             if fingerprint != fact.get('profile_fingerprint'):
                 raise RunnerError('RECOVERY_PROFILE_CHANGED',409)
             def ports(record):

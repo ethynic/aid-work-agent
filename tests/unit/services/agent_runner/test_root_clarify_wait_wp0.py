@@ -329,7 +329,7 @@ async def recovered_state():
     authorizer = SimpleNamespace(authorize_persisted=lambda row, **kwargs: principal,
                                  assert_credit=lambda principal: None)
     coordinator = RecoveryCoordinator(authorizer, SimpleNamespace(
-        resolve=lambda profile: (None, "fingerprint")))
+        resolve=lambda profile, tenant=None: (None, "fingerprint")))
     prepared = coordinator.prepare(row, reply_control)
     return prepared, wait_id
 
@@ -393,7 +393,7 @@ async def recovered_ask_state():
     authorizer = SimpleNamespace(authorize_persisted=lambda row, **kwargs: principal,
                                  assert_credit=lambda principal: None)
     coordinator = RecoveryCoordinator(authorizer, SimpleNamespace(
-        resolve=lambda profile: (None, "fingerprint")))
+        resolve=lambda profile, tenant=None: (None, "fingerprint")))
     prepared = coordinator.prepare(row, reply_control)
     return prepared, wait_id, canonical
 

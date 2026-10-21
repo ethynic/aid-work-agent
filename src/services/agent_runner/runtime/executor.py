@@ -283,7 +283,8 @@ class RuntimeExecution:
                 # on the cancel-acquire path.
                 if state is not None and adapter_contract_mismatch(self.state.resources):
                     raise ValueError('RECOVERY_ADAPTER_VERSION_UNSUPPORTED')
-                _, profile_fingerprint = await asyncio.to_thread(MainProfileCatalog().resolve,self.state.profile_id)
+                _, profile_fingerprint = await asyncio.to_thread(
+                    MainProfileCatalog().resolve,self.state.profile_id,self.state.identity.tenant_id)
                 fingerprint = await asyncio.to_thread(configuration_fingerprint,profile_fingerprint)
                 previous = self.state.resources.get('configuration_fingerprint')
                 if state is not None and previous != fingerprint:

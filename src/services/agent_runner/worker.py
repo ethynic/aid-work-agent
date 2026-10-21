@@ -150,7 +150,7 @@ class RuntimeFactory:
         from .runtime.profile import RuntimeResources
         from .runtime.executor import RuntimeExecution
         from .runtime.history_repository import HistoryRepository
-        config, fingerprint = await asyncio.to_thread(self.profiles.resolve,row['profile_id'])
+        config, fingerprint = await asyncio.to_thread(self.profiles.resolve,row['profile_id'],row.get('tenant_id'))
         if fingerprint != row['profile_fingerprint']:
             raise RunnerError('PROFILE_CHANGED_AFTER_ACCEPT',409)
         from src.core.plan_facts import PlanFacts

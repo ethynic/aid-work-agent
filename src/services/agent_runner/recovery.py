@@ -32,7 +32,7 @@ class RecoveryCoordinator:
         kwargs={'prepared_source':prepared_source} if prepared_source is not None else {}
         principal = self.authorizer.authorize_persisted(row,**kwargs)
         self.authorizer.assert_credit(principal)
-        _, fingerprint = self.profiles.resolve(row['profile_id'])
+        _, fingerprint = self.profiles.resolve(row['profile_id'], row.get('tenant_id'))
         if fingerprint != row['profile_fingerprint']:
             raise RunnerError('RECOVERY_PROFILE_CHANGED',409)
         checkpoint = copy.deepcopy(row.get('checkpoint') or {})
@@ -58,7 +58,7 @@ class RecoveryCoordinator:
             if active:
                 if not fingerprint:
                     raise RunnerError('RECOVERY_PROFILE_FINGERPRINT_MISSING',409)
-                config, current = self.profiles.resolve(state.profile_id)
+                config, current = self.profiles.resolve(state.profile_id, row.get('tenant_id'))
                 if current != fingerprint or (getattr(config,'version',None) != state.profile_version):
                     raise RunnerError('RECOVERY_PROFILE_CHANGED',409)
                 # Unknown/retired adapter contract versions are rejected before
@@ -119,7 +119,7 @@ class RecoveryCoordinator:
                 if child.get('unstarted') is True:
                     if child.get('checkpoint') or child.get('status')!='unstarted' or call_id not in state.tools:
                         raise RunnerError('CHECKPOINT_CHILD_STATUS_MISMATCH',409)
-                    _, child_fingerprint = self.profiles.resolve(child.get('profile_id'))
+                    _, child_fingerprint = self.profiles.resolve(child.get('profile_id'), row.get('tenant_id'))
                     if child_fingerprint!=child.get('profile_fingerprint'):
                         raise RunnerError('RECOVERY_PROFILE_CHANGED',409)
                     self.authorizer.authorize_child_profile(principal,child['profile_id'])

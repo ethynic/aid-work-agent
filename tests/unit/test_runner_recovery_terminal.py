@@ -26,7 +26,7 @@ def checkpoint_fixture(outcome, phase='completed'):
     authorizer = SimpleNamespace(authorize_persisted=lambda row: SimpleNamespace(identity=identity),
         assert_credit=lambda principal: None,
         authorize_child_profile=lambda principal, profile: authorized_children.append(profile))
-    profiles = SimpleNamespace(resolve=lambda profile: (None, 'fixture-current-main'))
+    profiles = SimpleNamespace(resolve=lambda profile, tenant=None: (None, 'fixture-current-main'))
     row = {'profile_id': 'main', 'profile_fingerprint': 'fixture-current-main', 'runner_id': parent.execution_id,
            'checkpoint': {'execution': parent.checkpoint()}}
     control = {'control_id': 'fixture-control', 'action': 'resume', 'payload': {}}
