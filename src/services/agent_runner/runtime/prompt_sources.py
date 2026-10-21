@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Optional
+from typing import Dict, Optional
 from loguru import logger
 from src.config.settings import settings
 from src.core.agent_engine.contracts import AgentMode
@@ -233,29 +233,48 @@ class PromptSources:
         """DB 子智能体的 system_prompt 实时渲染：模板 + sections 变量"""
         agent_id = self.subagent_config.dir_name
 
-        # 1. 获取模板（从 prompt_versions production 版本，走缓存）
+        # 副本实例：prompt 模板与 sections 都挂在 base agent_id 下（副本行不落
+        # prompt_versions/subagent_prompt_sections），先按实例 id 解析（预留副本独立
+        # Prompt 的能力），查不到再回退父定义；直用实例行 agent_id == base_agent_id 不受影响
+        base_agent_id = getattr(self.subagent_config, "base_agent_id", None)
+        prompt_ids = [agent_id]
+        if base_agent_id and base_agent_id != agent_id:
+            prompt_ids.append(base_agent_id)
+
+        # 1. 获取模板（prompt_versions production 版本，走缓存）
         from src.prompts.prompt_resolver import prompt_resolver
-        template = prompt_resolver.resolve(scope="subagent", scope_id=agent_id)
+        template = None
+        for pid in prompt_ids:
+            template = prompt_resolver.resolve(scope="subagent", scope_id=pid)
+            if template:
+                break
         if not template:
             # 降级到 config.system_prompt（load_from_db 时存的模板内容）
-            return self.subagent_config.system_prompt or ""
+            template = self.subagent_config.system_prompt or ""
 
         # 2. 获取 sections 变量值（走缓存）
-        from src.core.cache_utils import CacheKeys, get_cached, set_cached, delete_cached
-        cached_sections = get_cached(CacheKeys.PROMPT_SECTIONS, agent_id)
-        if cached_sections is not None:
-            section_map = cached_sections
-        else:
-            from src.db.subagent_prompt_section_db import SubagentPromptSectionDB
-            section_map = SubagentPromptSectionDB.get_sections_map(agent_id)
-            set_cached(CacheKeys.PROMPT_SECTIONS, agent_id, value=section_map, ttl=300)
+        section_map = self._load_sections_map(prompt_ids)
 
-        # 3. 渲染模板
+        # 3. 渲染模板（降级模板同样要渲染，否则占位符原样进入 system prompt）
         if section_map:
             from src.prompts.renderer import render_sections
             return render_sections(template, section_map)
 
         return template
+
+    @staticmethod
+    def _load_sections_map(prompt_ids) -> Dict[str, str]:
+        """按优先级加载 sections 变量映射：实例 id 优先，空则回退父定义"""
+        from src.core.cache_utils import CacheKeys, get_cached, set_cached
+        for pid in prompt_ids:
+            cached = get_cached(CacheKeys.PROMPT_SECTIONS, pid)
+            if cached is None:
+                from src.db.subagent_prompt_section_db import SubagentPromptSectionDB
+                cached = SubagentPromptSectionDB.get_sections_map(pid)
+                set_cached(CacheKeys.PROMPT_SECTIONS, pid, value=cached, ttl=300)
+            if cached:
+                return cached
+        return {}
 
     def _load_extra_md(self) -> Optional[str]:
         """加载租户定制扩展提示词
