@@ -197,8 +197,11 @@ class RuntimeExecution:
         config = self.resources.subagent_config
         if self.identity.tenant_id and config:
             from src.db.subagent_env_var import SubagentEnvVarDB
+            # 环境变量按父定义名查（副本实例无独立环境变量配置入口）；dir_name 已切为
+            # 实例 id 仅供 extra.md/知识栏目隔离，直接用它查副本会落空
+            env_agent_id = getattr(config, "base_agent_id", None) or config.dir_name
             variables = await asyncio.to_thread(SubagentEnvVarDB.get_vars,
-                                               self.identity.tenant_id, config.dir_name)
+                                               self.identity.tenant_id, env_agent_id)
             env_vars = {item["var_name"]: item.get("var_value", "")
                         for item in variables if item.get("var_name") and item.get("var_value")}
         return ExecutionContextFactory.for_agent_call(

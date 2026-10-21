@@ -6,7 +6,7 @@ external_push recap 适配器：每轮问答后把对话数据推送到租户外
 由 recap runner 调度（任务级幂等已由 runner 完成）。适配器本身不硬编码任何
 第三方系统的 BASE_URL / 接口路径 / 模块字段元数据——这些全部由租户接口文档
 storage/tenants/{tenant_id}/templates/{subagent_name}-api.md 指定（按子智能体
-严格隔离，不回退其他智能体的文档），执行流程：
+严格隔离；副本实例解析为父定义名后取父定义文档），执行流程：
 
 上下文采集 -> 租户文档加载（缺失放弃）-> api-meta 解析 -> 前置校验 ->
 LLM 摘要（计费）-> 委托登录（Redis 缓存，login_url 来自文档 api-meta 块）->
@@ -346,13 +346,16 @@ def _get_agent_token(tenant_id: str, subagent_name: Optional[str]) -> Optional[s
     """AGENT_TOKEN 存于租户级子智能体环境变量（subagent_env_vars 表）
 
     recap 是后台任务，无请求上下文（env_vars 不注入 os.environ），必须按
-    tenant_id 显式查库。先按当前子智能体精确查，未配置则兜底遍历租户全部。
+    tenant_id 显式查库。先按当前子智能体精确查（副本实例解析为父定义名，
+    副本无独立环境变量配置入口），未配置则兜底遍历租户全部。
     """
     try:
         from src.db.subagent_env_var import SubagentEnvVarDB
+        from src.services.tenant_api_doc import resolve_base_agent_id
 
         if subagent_name:
-            for var in SubagentEnvVarDB.get_vars(tenant_id, subagent_name):
+            base_name = resolve_base_agent_id(tenant_id, subagent_name)
+            for var in SubagentEnvVarDB.get_vars(tenant_id, base_name):
                 if var.get("var_name") == "AGENT_TOKEN" and var.get("var_value"):
                     return var["var_value"]
         for var in SubagentEnvVarDB.get_all_vars_for_tenant(tenant_id):
