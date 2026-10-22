@@ -43,6 +43,20 @@ class SubagentEnvVarDB:
                 return False
 
     @staticmethod
+    def list_var_names(subagent_name: str) -> List[Dict[str, Any]]:
+        """跨租户聚合某子智能体的环境变量名（不含值），供配置导出时生成占位符提示"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """SELECT DISTINCT ON (var_name) var_name, description
+                   FROM subagent_env_vars
+                   WHERE subagent_name = %s
+                   ORDER BY var_name""",
+                (subagent_name,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    @staticmethod
     def get_vars(tenant_id: str, subagent_name: str) -> List[Dict[str, Any]]:
         """获取某子智能体的所有环境变量"""
         with get_db_connection() as conn:
