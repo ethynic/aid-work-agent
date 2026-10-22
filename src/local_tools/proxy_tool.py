@@ -506,7 +506,10 @@ class LocalToolProxyTool(BaseTool):
 
         租户不存在：不阻断；余额 ≤0：阻断（invocation 不创建，设备不出工）；
         检查异常：不阻断避免误伤（与对话入口同一容错取向）。
+        私有云部署：跳过（客户自购 key，无积分概念，余额恒 0 不得阻断）。
         """
+        if settings.deployment.private_cloud:
+            return None
         try:
             from src.saas.db.tenant_db import TenantDB
             tenant = await asyncio.to_thread(TenantDB.get_by_id, tenant_id)

@@ -586,12 +586,15 @@ def _check_tenant_credit_blocked(tenant_id: Optional[str]) -> Optional[JSONRespo
     """租户积分余额硬阻断检查（#37 Phase 4）
 
     在 /api/chat 与 /api/chat/stream 入口处调用：
+    - 私有云部署：放行（客户自购 key，无积分概念，余额恒 0 不得阻断）
     - tenant_id 为空（platform_admin 全局视图/后台调用）：放行
     - 租户余额 > 0：放行
     - 租户余额 ≤ 0：返回 403 JSONResponse，阻断对话
 
     返回 None 表示放行，返回 JSONResponse 表示阻断（直接 return 给前端）。
     """
+    if settings.deployment.private_cloud:
+        return None
     if not tenant_id:
         return None
     try:

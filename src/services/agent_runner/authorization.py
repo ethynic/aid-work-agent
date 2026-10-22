@@ -81,6 +81,10 @@ class RunnerAuthorizer:
         tenant_id = principal.identity.tenant_id
         if tenant_id is None:
             return
+        # 私有云部署跳过（客户自购 key，无积分概念，余额恒 0 不得 402 阻断）
+        from src.config.settings import settings
+        if settings.deployment.private_cloud:
+            return
         with self.connection_factory() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT credit_balance FROM tenants WHERE tenant_id=%s", (tenant_id,))

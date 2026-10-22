@@ -33,6 +33,8 @@ export interface TenantInfo {
 const admin = ref<TenantAdmin | null>(null)
 const tenant = ref<TenantInfo | null>(null)
 const saasToken = ref<string | null>(null)
+// 私有云部署标志（/me 返回，部署级标志与租户无关）：隐藏积分/充值相关 UI
+const privateCloud = ref(false)
 const isLoading = ref(false)
 const isInitialized = ref(false)
 
@@ -111,6 +113,7 @@ export function useTenantAuth() {
           if (info?.user) {
             admin.value = info.user
             tenant.value = info.tenant ? { ...info.tenant, status: info.tenant.status } : null
+            privateCloud.value = !!info.private_cloud
 
             // 检查租户状态和到期日期（仅对租户管理员和普通用户）
             if (tenant.value && admin.value!.role !== 'platform_admin') {
@@ -215,6 +218,7 @@ export function useTenantAuth() {
       saasToken.value = null
       admin.value = null
       tenant.value = null
+      privateCloud.value = false
     }
   }
 
@@ -258,6 +262,7 @@ export function useTenantAuth() {
     admin,
     tenant,
     saasToken,
+    privateCloud,
     isLoggedIn,
     isLoading,
     isInitialized,

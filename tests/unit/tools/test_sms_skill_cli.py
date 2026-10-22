@@ -172,15 +172,15 @@ class TestSendSms:
 
     @patch.object(sms_cli, "send_sms_code", return_value=True)
     @patch.object(sms_cli, "_record_sms_billing")
-    def test_send_usage_factor_1_skips_billing(
+    def test_send_private_cloud_skips_billing(
         self, mock_billing, _mock_send, mock_redis, qb_code_empty
     ):
-        """私有云自购（usage_factor=1）：真实发信但不扣积分、不要求计费身份"""
+        """私有云部署（PRIVATE_CLOUD=true）：真实发信但不扣积分、不要求计费身份"""
         manager = MagicMock()
         manager.get_sender.return_value = MagicMock(
             is_available=MagicMock(return_value=True))
         with patch.object(sms_cli, "sms_manager", manager), \
-             patch.object(sms_cli.settings.billing, "usage_factor", 1):
+             patch.object(sms_cli.settings.deployment, "private_cloud", True):
             result = sms_cli.send_sms(mobile="13800138000")
 
         assert result["success"] is True
@@ -193,16 +193,16 @@ class TestSendSms:
     @patch.object(sms_cli, "_check_credit_balance", return_value=None)
     @patch.object(sms_cli, "_resolve_billing_identity",
                   return_value={"tenant_id": "t1", "user_id": "u1", "session_id": None})
-    def test_send_usage_factor_100_still_bills(
+    def test_send_public_cloud_still_bills(
         self, _mock_identity, _mock_balance, mock_billing, _mock_send,
         mock_redis, qb_code_empty
     ):
-        """平台加价（usage_factor!=1）：真实发信照常扣积分"""
+        """公有云部署（非私有云）：真实发信照常扣积分"""
         manager = MagicMock()
         manager.get_sender.return_value = MagicMock(
             is_available=MagicMock(return_value=True))
         with patch.object(sms_cli, "sms_manager", manager), \
-             patch.object(sms_cli.settings.billing, "usage_factor", 100):
+             patch.object(sms_cli.settings.deployment, "private_cloud", False):
             result = sms_cli.send_sms(mobile="13800138000")
 
         assert result["success"] is True

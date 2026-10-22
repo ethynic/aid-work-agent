@@ -17,6 +17,7 @@ from fastapi import APIRouter, Request, Query
 from loguru import logger
 
 from src.saas.api.tenant_auth import require_admin, sanitize_error_info
+from src.config.settings import settings
 from src.saas.db.channel_config_db import ChannelConfigDB
 from src.saas.db.tenant_db import TenantDB
 from src.saas.services.renewal import compute_renewal_status
@@ -31,6 +32,56 @@ router = APIRouter(prefix="/api/saas/billing", tags=["SaaS 余额与用量"])
 # saas api 跨层 import 租户定制/公众号模块，勿单侧改名——集成测试
 # TestImageParseAggregation 锁定现值）
 IMAGE_PARSE_SOURCE_TYPES_SQL = "('wechat_mp_image_parse', 'hongtao_shop_image_parse')"
+
+
+def _bd_qty_sql(section: str, field: str) -> str:
+    """usage_breakdown jsonb 分项数量的安全取值表达式。
+
+    jsonb_typeof 守卫 + 数值正则，畸形行（分项不是数字）返回 NULL 而非炸整页查询。
+    """
+    path = f"usage_breakdown->'{section}'->>'{field}'"
+    return (
+        f"CASE WHEN jsonb_typeof(usage_breakdown) = 'object' "
+        f"AND jsonb_typeof(usage_breakdown->'{section}') = 'object' "
+        f"AND {path} ~ '^-?[0-9]+(\\.[0-9]+)?$' "
+        f"THEN ({path})::float8 END"
+    )
+
+
+def _token_qty_exprs() -> dict:
+    """私有云用量页 7 分项（token/秒/次数量）的 SQL 聚合表达式。
+
+    回填口径与 _parse_breakdown_items 一致：usage_breakdown.chat（老数据兜底
+    summary_llm）分项缺失时回退 chat_records 裸列（prompt_tokens - cached_input_tokens 等）。
+    """
+    return {
+        "non_cached_input": (
+            f"COALESCE({_bd_qty_sql('chat', 'non_cached_input_tokens')}, "
+            f"{_bd_qty_sql('summary_llm', 'non_cached_input_tokens')}, "
+            f"GREATEST(COALESCE(prompt_tokens, 0) - COALESCE(cached_input_tokens, 0), 0))"
+        ),
+        "cached_input": (
+            f"COALESCE({_bd_qty_sql('chat', 'cached_input_tokens')}, "
+            f"{_bd_qty_sql('summary_llm', 'cached_input_tokens')}, cached_input_tokens, 0)"
+        ),
+        "cache_creation_input": (
+            f"COALESCE({_bd_qty_sql('chat', 'cache_creation_input_tokens')}, "
+            f"{_bd_qty_sql('summary_llm', 'cache_creation_input_tokens')}, 0)"
+        ),
+        "output": (
+            f"COALESCE({_bd_qty_sql('chat', 'completion_tokens')}, "
+            f"{_bd_qty_sql('summary_llm', 'completion_tokens')}, completion_tokens, 0)"
+        ),
+        "video": f"COALESCE({_bd_qty_sql('video', 'duration_seconds')}, 0)",
+        "asr": f"COALESCE({_bd_qty_sql('asr', 'calls')}, 0)",
+        "embedding": f"COALESCE({_bd_qty_sql('embedding', 'tokens')}, 0)",
+    }
+
+
+def _clean_num(v) -> float:
+    """整数化展示值（token 数不带 .0 尾巴）"""
+    f = float(v or 0)
+    return int(f) if f.is_integer() else f
 
 
 # ============== API 端点 ==============
@@ -125,12 +176,18 @@ async def get_usage(
             client_params.append(model)
         client_where_sql = " AND ".join(client_where_clauses)
 
+        # 私有云模式：额外返回 7 分项 token/秒/次数量（客户无积分概念，看原始用量）
+        private_cloud = settings.deployment.private_cloud
+        qty_exprs = _token_qty_exprs() if private_cloud else {}
+
         union_sql = f"""
-            SELECT created_at, credit_cost, session_id, 'chat' AS usage_type
+            SELECT created_at, credit_cost, session_id, 'chat' AS usage_type,
+                   usage_breakdown, prompt_tokens, cached_input_tokens, completion_tokens
             FROM chat_records
             WHERE {chat_where_sql}
             UNION ALL
-            SELECT created_at, credit_cost, session_id, 'client' AS usage_type
+            SELECT created_at, credit_cost, session_id, 'client' AS usage_type,
+                   NULL::jsonb AS usage_breakdown, NULL, NULL, NULL
             FROM client_usage_logs
             WHERE {client_where_sql}
         """
@@ -150,7 +207,13 @@ async def get_usage(
             )
             total = int(cursor.fetchone()["cnt"] or 0)
 
-            # 按日聚合：会话数/消息数只统计智能体对话，客户端调用单列
+            # 按日聚合：会话数/消息数只统计智能体对话，客户端调用单列；
+            # 私有云模式附加 7 分项 token 数量列
+            token_qty_select = ""
+            if qty_exprs:
+                token_qty_select = ",\n                    " + ",\n                    ".join(
+                    f"COALESCE(SUM({expr}), 0) AS qty_{key}" for key, expr in qty_exprs.items()
+                )
             cursor.execute(
                 f"""
                 SELECT
@@ -160,7 +223,7 @@ async def get_usage(
                     COALESCE(SUM(credit_cost) FILTER (WHERE usage_type = 'client'), 0) AS client_credit_cost,
                     COUNT(DISTINCT session_id) FILTER (WHERE usage_type = 'chat') AS session_count,
                     COUNT(*) FILTER (WHERE usage_type = 'chat') AS message_count,
-                    COUNT(*) FILTER (WHERE usage_type = 'client') AS client_call_count
+                    COUNT(*) FILTER (WHERE usage_type = 'client') AS client_call_count{token_qty_select}
                 FROM ({union_sql}) t
                 GROUP BY DATE(created_at)
                 ORDER BY DATE(created_at) DESC
@@ -168,8 +231,9 @@ async def get_usage(
                 """,
                 (*union_params, page_size, offset),
             )
-            items = [
-                {
+            items = []
+            for row in cursor.fetchall():
+                item = {
                     "date": str(row.get("date")) if row.get("date") else None,
                     "credit_cost": float(row.get("credit_cost") or 0),
                     "chat_credit_cost": float(row.get("chat_credit_cost") or 0),
@@ -178,17 +242,25 @@ async def get_usage(
                     "message_count": int(row.get("message_count") or 0),
                     "client_call_count": int(row.get("client_call_count") or 0),
                 }
-                for row in cursor.fetchall()
-            ]
+                if qty_exprs:
+                    item["token_qty"] = {
+                        key: _clean_num(row.get(f"qty_{key}")) for key in qty_exprs
+                    }
+                items.append(item)
 
             # 全量汇总（不受分页影响，与 items 列表使用相同筛选条件）
+            token_total_select = ""
+            if qty_exprs:
+                token_total_select = ",\n                    " + ",\n                    ".join(
+                    f"COALESCE(SUM({expr}), 0) AS total_qty_{key}" for key, expr in qty_exprs.items()
+                )
             cursor.execute(
                 f"""
                 SELECT
                     COALESCE(SUM(credit_cost), 0) AS total_credit_cost,
                     COUNT(DISTINCT session_id) FILTER (WHERE usage_type = 'chat') AS total_session_count,
                     COUNT(*) FILTER (WHERE usage_type = 'chat') AS total_message_count,
-                    COUNT(*) FILTER (WHERE usage_type = 'client') AS total_client_call_count
+                    COUNT(*) FILTER (WHERE usage_type = 'client') AS total_client_call_count{token_total_select}
                 FROM ({union_sql}) t
                 """,
                 union_params,
@@ -200,6 +272,10 @@ async def get_usage(
                 "total_message_count": int(summary_row.get("total_message_count") or 0),
                 "total_client_call_count": int(summary_row.get("total_client_call_count") or 0),
             }
+            if qty_exprs:
+                summary["total_token_qty"] = {
+                    key: _clean_num(summary_row.get(f"total_qty_{key}")) for key in qty_exprs
+                }
 
         return {
             "success": True,
@@ -277,8 +353,10 @@ async def get_daily_usage_detail(
     if not tenant_id:
         return {"success": False, "message": "未关联租户"}
 
-    # 是否返回 token 三列（仅平台管理员）
-    reveal_tokens = role == "platform_admin"
+    # 是否返回 token 三列与 usage_breakdown 分项：平台管理员（审计口径）；
+    # 私有云部署下租户管理员也可看（用量页 token 分项展示，但剥离单价/系数/积分）
+    reveal_tokens = role == "platform_admin" or settings.deployment.private_cloud
+    reveal_pricing = role == "platform_admin"
 
     # 日期格式校验（参数化 SQL 已防注入，这里防逻辑错误）
     try:
@@ -491,6 +569,13 @@ async def get_daily_usage_detail(
                     items[-1]["cached_input_tokens"] = int(r.get("cached_input_tokens") or 0)
                     items[-1]["completion_tokens"] = int(r.get("completion_tokens") or 0)
                     items[-1]["breakdown_items"] = _parse_breakdown_items(r.get("usage_breakdown"))
+                    if not reveal_pricing:
+                        # 私有云租户视角：只保留数量，剥离平台内部单价/系数/积分对账字段
+                        for bi in items[-1]["breakdown_items"]:
+                            bi["unit_price"] = None
+                            bi["usage_factor"] = None
+                            bi["credit"] = None
+                            bi["is_per_million"] = False
                     # 文本模型：优先 usage_breakdown.chat.model（summary_llm 为 mid_term 摘要等场景），
                     # 老数据 breakdown 无 model 时回退到 chat_records.model 列
                     _bd = r.get("usage_breakdown") or {}

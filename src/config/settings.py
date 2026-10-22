@@ -482,6 +482,16 @@ class BillingConfig(BaseModel):
     asr_usage_factor: int = 100
 
 
+class DeploymentConfig(BaseModel):
+    """部署形态配置
+
+    - private_cloud: 私有云部署（客户自购 API key/短信通道，费用自行承担）。
+      True 时隐藏/简化公有云专属能力：前台不展示"积分"概念（用量页改显 token 分项、
+      隐藏充值记录入口、跳过余额提醒），短信发送不扣费
+    """
+    private_cloud: bool = False
+
+
 class PreSalesPushConfig(BaseModel):
     """外部推送（recap 任务 external_push）配置
 
@@ -785,6 +795,7 @@ class Settings(BaseModel):
     storage: StorageConfig = Field(default_factory=StorageConfig)
     redis: RedisConfig = Field(default_factory=RedisConfig)
     billing: BillingConfig = Field(default_factory=BillingConfig)
+    deployment: DeploymentConfig = Field(default_factory=DeploymentConfig)
     video_gen: VideoGenConfig = Field(default_factory=VideoGenConfig)
     client: ClientConfig = Field(default_factory=ClientConfig)
     boss_tool_billing: BossToolBillingConfig = Field(default_factory=BossToolBillingConfig)
@@ -1162,6 +1173,12 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
             billing_cfg["asr_usage_factor"] = int(os.getenv("ASR_USAGE_FACTOR"))
         except ValueError:
             pass
+
+    # 部署形态：私有云开关（.env PRIVATE_CLOUD，私有云部署脚本无需改 config.yaml）
+    if os.getenv("PRIVATE_CLOUD") is not None:
+        yaml_config.setdefault("deployment", {})["private_cloud"] = (
+            os.getenv("PRIVATE_CLOUD", "").strip().lower() in ("true", "1", "yes", "on")
+        )
 
     s = Settings(**yaml_config)
 

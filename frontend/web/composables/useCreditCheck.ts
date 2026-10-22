@@ -54,7 +54,7 @@ function markWarnedToday(tenantId: string, userId: string): void {
 
 export function useCreditCheck() {
   const toast = useToast()
-  const { admin, tenant, getCurrentTenantId } = useTenantAuth()
+  const { admin, tenant, privateCloud, getCurrentTenantId } = useTenantAuth()
 
   /**
    * 在关键动作前检查积分余额
@@ -71,6 +71,11 @@ export function useCreditCheck() {
    * @param action 触发场景，决定余额 ≤ 0 时是否真正阻断
    */
   async function checkCreditBeforeAction(action: CreditCheckAction): Promise<CreditCheckResult> {
+    // 私有云部署：无积分概念（余额恒为 0），全部跳过，避免余额耗尽阻断对话
+    if (privateCloud.value) {
+      return { allowed: true, balance: null, reason: 'private_cloud_skipped' }
+    }
+
     // 平台管理员仅在无租户上下文时跳过（如 /portal 平台管理后台）；
     // 在租户前台 /t/{tenant_id} 代管场景下，X-Tenant-Id 已注入，需继续检查对应租户余额
     if (admin.value?.role === 'platform_admin' && !getCurrentTenantId()) {

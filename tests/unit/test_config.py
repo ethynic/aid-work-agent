@@ -76,6 +76,28 @@ def test_billing_usage_factor_invalid_env_fallback(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# 私有云部署开关（PRIVATE_CLOUD）
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("env_value,expected", [
+    ("True", True), ("true", True), ("1", True), ("yes", True), ("on", True),
+    ("False", False), ("false", False), ("0", False), ("", False),
+])
+def test_private_cloud_env_override(monkeypatch, env_value, expected):
+    """PRIVATE_CLOUD env 覆盖 deployment.private_cloud，多写法归一化为 bool"""
+    monkeypatch.setenv("PRIVATE_CLOUD", env_value)
+    settings = create_settings()
+    assert settings.deployment.private_cloud is expected
+
+
+def test_private_cloud_default_false(monkeypatch):
+    """未设置 PRIVATE_CLOUD 时默认公有云（False）"""
+    monkeypatch.delenv("PRIVATE_CLOUD", raising=False)
+    settings = create_settings()
+    assert settings.deployment.private_cloud is False
+
+
+# ---------------------------------------------------------------------------
 # LLM_PROVIDER 链式写法（"a/b/c" 完整优先级链）
 # ---------------------------------------------------------------------------
 

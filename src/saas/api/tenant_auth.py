@@ -840,6 +840,8 @@ async def get_admin_info(request: Request, tenant_id: Optional[str] = None):
         }
 
     return {
+        # 部署形态标志：私有云部署时前台隐藏积分/充值相关 UI（与租户无关，全部署统一）
+        "private_cloud": settings.deployment.private_cloud,
         "user": {
             "user_id": admin["user_id"],
             "phone": admin["phone"],

@@ -272,7 +272,7 @@ def _record_sms_billing(mobile: str, identity: Dict[str, Optional[str]]) -> None
 
     短信已实际发出，落账失败只记错误日志，不向用户报错（无法撤回短信）。
     send_sms_code 的 bypass（qb_sms_code 已配置且无通道）在调用方提前分流；
-    usage_factor=1（私有云客户自购，平台不扣积分）时调用方不落账。
+    私有云部署（PRIVATE_CLOUD=true，客户自购通道不扣积分）时调用方不落账。
     到达此函数即真实发信且平台加价。
     """
     tenant_id = identity.get("tenant_id")
@@ -377,9 +377,8 @@ def send_sms(
     # 3.5 计费准入：租户身份 fail-closed + 余额预检（每条真实发送扣 1 积分）
     # 两类场景不计费、不要求计费身份：
     # - bypass_no_channel：未真实发信（qb_sms_code 且无通道）
-    # - usage_factor == 1：私有云部署，客户自购 key/短信通道，费用自行承担
-    #   （与 LLM 用量系数=1 平台不加价同语义）
-    charge_credits = (not bypass_no_channel) and settings.billing.usage_factor != 1
+    # - 私有云部署（PRIVATE_CLOUD=true）：客户自购 key/短信通道，费用自行承担，不扣积分
+    charge_credits = (not bypass_no_channel) and not settings.deployment.private_cloud
     identity: Dict[str, Optional[str]] = {}
     if charge_credits:
         identity = _resolve_billing_identity()
@@ -422,7 +421,7 @@ def send_sms(
     # 5. 记录频控计数（仅成功后）
     _record_send(mobile)
 
-    # 6. 计费落账（真实发信且平台加价才扣费；bypass / usage_factor=1 私有云不计费）
+    # 6. 计费落账（真实发信且平台加价才扣费；bypass / 私有云不计费）
     if charge_credits:
         _record_sms_billing(mobile, identity)
 

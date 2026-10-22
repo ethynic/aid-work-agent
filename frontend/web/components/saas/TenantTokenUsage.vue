@@ -1,7 +1,7 @@
 <template>
   <div class="h-full flex flex-col bg-canvas">
     <AppHeader
-      title="积分用量"
+      :title="pageTitle"
       :is-logged-in="effectiveIsLoggedIn"
       :user="effectiveUser"
       @toggle-sidebar="handleToggleSidebar"
@@ -30,8 +30,15 @@
       <div v-if="loading" class="text-center py-12 text-muted">加载中...</div>
 
       <template v-else>
-        <!-- 余额 + 用量汇总卡片 -->
-        <div v-if="balance || usageSummary" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <!-- 私有云：7 分项 token 汇总卡片（无积分概念） -->
+        <div v-if="privateCloud && usageSummary" class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-4 mb-6">
+          <div v-for="c in tokenQtyCols" :key="c.key" class="bg-surface rounded-lg p-4 border border-default">
+            <div class="text-xs text-muted">{{ c.label }}</div>
+            <div class="text-xl font-bold text-default mt-1">{{ fmtNum(usageSummary.total_token_qty?.[c.key]) }}</div>
+          </div>
+        </div>
+        <!-- 公有云：余额 + 用量汇总卡片 -->
+        <div v-else-if="balance || usageSummary" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
           <div class="bg-surface rounded-lg p-4 border border-default">
             <div class="text-xs text-muted">积分余额</div>
             <div class="text-xl font-bold text-primary-600 mt-1">{{ formatCredit(balance?.credit_balance) }}</div>
@@ -54,9 +61,22 @@
         <div class="mb-4">
           <h3 class="text-sm font-medium text-default mb-3">每日用量明细</h3>
           <div class="table-scroll-wrapper">
-            <BaseTable :columns="columns" :data="data" row-key="date">
+            <BaseTable :columns="columns" :data="data" row-key="date" table-fixed>
               <template #index="{ index }">{{ seqNumber(index) }}</template>
-              <template #date="{ row }">{{ row.date || '-' }}</template>
+              <template #date="{ row }">
+                <!-- 私有云：积分列不存在，明细下钻入口移到日期列 -->
+                <a v-if="privateCloud && canViewDetail"
+                   class="text-primary-600 font-medium underline-offset-2 hover:underline cursor-pointer"
+                   @click="openDetailModal(row)">{{ row.date || '-' }}</a>
+                <span v-else>{{ row.date || '-' }}</span>
+              </template>
+              <template #tq_non_cached_input="{ row }">{{ fmtNum(row.token_qty?.non_cached_input) }}</template>
+              <template #tq_cached_input="{ row }">{{ fmtNum(row.token_qty?.cached_input) }}</template>
+              <template #tq_cache_creation_input="{ row }">{{ fmtNum(row.token_qty?.cache_creation_input) }}</template>
+              <template #tq_output="{ row }">{{ fmtNum(row.token_qty?.output) }}</template>
+              <template #tq_video="{ row }">{{ fmtNum(row.token_qty?.video) }}</template>
+              <template #tq_asr="{ row }">{{ fmtNum(row.token_qty?.asr) }}</template>
+              <template #tq_embedding="{ row }">{{ fmtNum(row.token_qty?.embedding) }}</template>
               <template #credit_cost="{ row }">
                 <span v-if="!canViewDetail" class="text-danger-600 font-medium">{{ formatCredit(row.credit_cost) }}</span>
                 <a v-else
@@ -92,7 +112,7 @@
     <!-- 每日用量明细弹窗（平台管理员 + 租户管理员可见入口） -->
     <BaseModal
       v-model="showDetailModal"
-      :title="`积分用量明细 - ${detailDate}`"
+      :title="`${privateCloud ? '用量明细' : '积分用量明细'} - ${detailDate}`"
       size="xl"
       mode="view"
       :scrollable="false"
@@ -101,10 +121,17 @@
       <template v-else>
         <div class="flex flex-col h-[calc(90vh-6rem)]">
           <div class="flex-1 min-h-0 mb-4 table-scroll-wrapper">
-            <BaseTable :columns="detailColumns" :data="detailData" row-key="record_id">
+            <BaseTable :columns="detailColumns" :data="detailData" row-key="record_id" table-fixed>
               <template #index="{ index }">
                 {{ (detailCurrentPage - 1) * detailPageSize + index + 1 }}
               </template>
+              <template #bd_non_cached_input="{ row }">{{ formatBreakdownQty(row, 'non_cached_input') }}</template>
+              <template #bd_cached_input="{ row }">{{ formatBreakdownQty(row, 'cached_input') }}</template>
+              <template #bd_cache_creation_input="{ row }">{{ formatBreakdownQty(row, 'cache_creation_input') }}</template>
+              <template #bd_output="{ row }">{{ formatBreakdownQty(row, 'output') }}</template>
+              <template #bd_video="{ row }">{{ formatBreakdownQty(row, 'video') }}</template>
+              <template #bd_asr="{ row }">{{ formatBreakdownQty(row, 'asr') }}</template>
+              <template #bd_embedding="{ row }">{{ formatBreakdownQty(row, 'embedding') }}</template>
               <template #usage_type="{ row }">
                 <span v-if="row.usage_type === 'client'"
                       class="text-xs px-1.5 py-0.5 rounded bg-primary-50 text-primary-600 border border-primary-200">客户端</span>
@@ -178,7 +205,7 @@ import {
 const route = useRoute()
 const router = useRouter()
 const toast = useToast()
-const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, logout: tenantLogout } = useTenantAuth()
+const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, logout: tenantLogout, privateCloud } = useTenantAuth()
 
 // 平台管理员判断
 const isPlatformAdmin = computed(() => tenantAdmin.value?.role === 'platform_admin')
@@ -186,6 +213,9 @@ const isPlatformAdmin = computed(() => tenantAdmin.value?.role === 'platform_adm
 const isTenantAdmin = computed(() => tenantAdmin.value?.role === 'tenant_admin')
 // 「消耗积分」下钻链接与弹窗入口：平台管理员 + 租户管理员可见
 const canViewDetail = computed(() => isPlatformAdmin.value || isTenantAdmin.value)
+
+// 页面标题：私有云不出现积分概念
+const pageTitle = computed(() => privateCloud.value ? 'Token 用量' : '积分用量')
 
 // 统一的登录状态检查
 const effectiveIsLoggedIn = computed(() => tenantIsLoggedIn.value)
@@ -224,14 +254,35 @@ const pageSize = ref(20)
 // 查询期全量汇总（后端返回，跨页稳定）
 const usageSummary = ref<UsageSummary | null>(null)
 
-const columns = [
-  { key: 'index', label: '序号', width: '60px' },
-  { key: 'date', label: '日期', width: '140px' },
-  { key: 'credit_cost', label: '消耗积分', width: '120px' },
-  { key: 'session_count', label: '会话数', width: '100px' },
-  { key: 'message_count', label: '消息数', width: '100px' },
-  { key: 'client_call_count', label: '客户端调用', width: '100px' },
-]
+// 7 分项定义（key 对应后端 token_qty / breakdown_items 的分项 key）
+const tokenQtyCols = [
+  { key: 'non_cached_input', label: '未命中缓存输入' },
+  { key: 'cached_input', label: '命中缓存输入' },
+  { key: 'cache_creation_input', label: '缓存创建输入' },
+  { key: 'output', label: '输出' },
+  { key: 'video', label: '视频模型(秒)' },
+  { key: 'asr', label: 'ASR(次)' },
+  { key: 'embedding', label: '向量模型' },
+] as const
+
+const columns = computed(() => {
+  const base: Array<{ key: string; label: string; width: string }> = [
+    { key: 'index', label: '序号', width: '60px' },
+    { key: 'date', label: '日期', width: '140px' },
+  ]
+  if (privateCloud.value) {
+    // 私有云：消耗积分列换成 7 分项 token 数量
+    tokenQtyCols.forEach((c) => base.push({ key: `tq_${c.key}`, label: c.label, width: '130px' }))
+  } else {
+    base.push({ key: 'credit_cost', label: '消耗积分', width: '120px' })
+  }
+  base.push(
+    { key: 'session_count', label: '会话数', width: '100px' },
+    { key: 'message_count', label: '消息数', width: '100px' },
+    { key: 'client_call_count', label: '客户端调用', width: '100px' },
+  )
+  return base
+})
 
 function seqNumber(index: number): number {
   return (currentPage.value - 1) * pageSize.value + index + 1
@@ -308,8 +359,7 @@ const detailPageSize = ref(20)
 const detailDate = ref('')
 
 // 弹窗列定义：类型列区分智能体对话与客户端调用（P3 双表口径）。
-// usage_breakdown 7 分项敏感对账列（未命中缓存输入/命中缓存输入/缓存创建输入/输出/视频模型/ASR/向量模型）
-// 已从租户前台移除，仅在管理后台「平台积分消耗」页面的明细弹框中展示
+// 公有云仅积分列；私有云把积分列换成 7 分项数量列（后端已剥离单价/系数/积分，仅返回数量）
 const detailColumns = computed(() => {
   const cols: Array<{ key: string; label: string; width: string }> = [
     { key: 'index', label: '序号', width: '60px' },
@@ -321,9 +371,31 @@ const detailColumns = computed(() => {
     { key: 'user_display', label: '用户', width: '200px' },
     { key: 'channel_label', label: '渠道会话', width: '150px' },
   ]
-  cols.push({ key: 'credit_cost', label: '消耗积分', width: '100px' })
+  if (privateCloud.value) {
+    tokenQtyCols.forEach((c) => cols.push({ key: `bd_${c.key}`, label: c.label, width: '130px' }))
+  } else {
+    cols.push({ key: 'credit_cost', label: '消耗积分', width: '100px' })
+  }
   return cols
 })
+
+// 数值格式化：千分位 + 小数去尾零（私有云 token/秒/次数量展示）
+function fmtNum(v: number | string | null | undefined): string {
+  if (v === null || v === undefined || v === '') return '-'
+  const num = typeof v === 'string' ? parseFloat(v) : Number(v)
+  if (isNaN(num)) return '-'
+  const trimmed = num.toFixed(6).replace(/\.?0+$/, '')
+  const [intPart, decPart] = trimmed.split('.')
+  const intFormatted = Number(intPart).toLocaleString('en-US')
+  return decPart !== undefined ? `${intFormatted}.${decPart}` : intFormatted
+}
+
+// 私有云明细弹窗：usage_breakdown 分项仅展示数量（后端已剥离单价/系数/积分）
+function formatBreakdownQty(row: Record<string, any>, key: string): string {
+  const item = (row.breakdown_items || []).find((i: any) => i.key === key)
+  if (!item) return '-'
+  return fmtNum(item.qty)
+}
 
 function truncateText(text: string | null | undefined, maxLen: number = 30): string {
   if (!text) return '-'

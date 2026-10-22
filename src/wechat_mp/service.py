@@ -3501,8 +3501,14 @@ class WeChatMPSyncService:
     # ==================== 余额 ====================
 
     def _check_credit(self, tenant_id: str) -> Tuple[bool, str]:
-        """余额检查：余额 <= 0 或租户不存在拦截；检查异常时不阻断（对齐既有策略）。"""
+        """余额检查：余额 <= 0 或租户不存在拦截；检查异常时不阻断（对齐既有策略）。
+
+        私有云部署跳过（客户自购 key，无积分概念，余额恒 0 不得阻断）。
+        """
         try:
+            from src.config.settings import settings
+            if settings.deployment.private_cloud:
+                return True, ""
             from src.saas.db.tenant_db import TenantDB
 
             tenant = TenantDB.get_by_id(tenant_id)
