@@ -19,9 +19,19 @@ describe('share exactly the reply shown in the conversation', () => {
     const wrapper = mount(MessageItem, { props: { message }, global: { stubs: {
       MessageShareDialog: { name: 'MessageShareDialog', props: ['sessionId', 'messageId'], template: '<div />' },
     } } })
-    await wrapper.findAll('button').find(button => button.text() === '复制链接')!.trigger('click')
+    await wrapper.get('button[aria-label="复制分享链接"]').trigger('click')
     await flushPromises()
     expect(wrapper.getComponent({ name: 'MessageShareDialog' }).props('messageId')).toBe(row.runner_id + ':assistant')
+    wrapper.unmount()
+  })
+
+  it('keeps the share action and timestamp in one compact row with an accessible icon', () => {
+    const wrapper = mount(MessageItem, { props: { message: {
+      role: 'assistant', messageId: 'reply-a', content: 'Selected reply', timestamp: Date.now(),
+    } } })
+    const action = wrapper.get('button[aria-label="复制分享链接"]')
+    expect(action.find('svg[aria-hidden="true"]').exists()).toBe(true)
+    expect(action.element.parentElement?.textContent).toMatch(/\d{2}:\d{2}.*分享/)
     wrapper.unmount()
   })
 })

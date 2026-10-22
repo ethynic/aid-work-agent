@@ -168,13 +168,20 @@
         </div>
       </div>
     </div>
-    <BaseButton v-if="canShare" type="button" intent="ghost" size="sm" class="mt-1" @click="showShareDialog = true">复制链接</BaseButton>
+    <div v-if="!showInputHint && (formattedTime || canShare)" class="ml-2 mt-1 flex min-h-7 items-center gap-2 text-xs text-muted">
+      <span v-if="formattedTime" class="tabular-nums">{{ formattedTime }}</span>
+      <span v-if="formattedTime && canShare" aria-hidden="true" class="text-gray-300">·</span>
+      <BaseButton v-if="canShare" type="button" intent="ghost" size="sm"
+        class="!h-7 !px-1.5 !text-xs !font-normal text-muted focus:!ring-0 focus-visible:!ring-2 focus-visible:!ring-primary-500/40"
+        aria-label="复制分享链接" title="复制分享链接" @click="showShareDialog = true">
+        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M10 13a5 5 0 0 0 7.1 0l3-3a5 5 0 0 0-7.1-7.1l-1.7 1.7m2.7 6.4a5 5 0 0 0-7.1 0l-3 3a5 5 0 0 0 7.1 7.1l1.7-1.7" />
+        </svg>
+        分享
+      </BaseButton>
+    </div>
     <MessageShareDialog v-if="showShareDialog && sessionId && message.messageId"
       :session-id="sessionId" :message-id="shareMessageId" @close="showShareDialog = false" />
-    <!-- 时间戳 - AI消息左下 -->
-    <div v-if="formattedTime && !showInputHint" class="text-xs text-muted mt-1 ml-2">
-      {{ formattedTime }}
-    </div>
   </div>
 </template>
 

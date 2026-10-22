@@ -29,6 +29,13 @@ function mountModal() {
 }
 
 describe('BaseModal 遮罩层点击关闭', () => {
+  it('keeps fullscreen for existing dialogs and lets compact share dialogs omit it', async () => {
+    const wrapper = mountModal()
+    expect(wrapper.find('button[title="全屏"]').exists()).toBe(true)
+    await wrapper.setProps({ showFullscreen: false })
+    expect(wrapper.find('button[title="全屏"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
   it('正常点击遮罩层时关闭弹框', async () => {
     const wrapper = mountModal()
     const overlay = wrapper.find(overlaySelector)
