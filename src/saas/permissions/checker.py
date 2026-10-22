@@ -127,28 +127,65 @@ def get_tenant_instance_base(tenant_id: str, agent_id: str) -> Optional[str]:
     return None
 
 
-def expand_with_tenant_instances(tenant_id: Optional[str], allowed_ids: List[str]) -> List[str]:
+def expand_with_tenant_instances(
+    tenant_id: Optional[str], allowed_ids: List[str], instance_rows: Optional[List[dict]] = None
+) -> List[str]:
     """把本租户数字员工副本实例（base 在订阅/允许集合内）附加到允许列表。
 
     直用实例行（agent_id == base_agent_id）不产生新 ID，仅副本实例行附加。
+    instance_rows：调用方已查好的租户实例行（避免重复查询），缺省时自查。
     """
     if not tenant_id or not allowed_ids:
         return allowed_ids
     try:
-        from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
-        rows = TenantAgentInstanceDB.list_by_tenant(tenant_id)
+        if instance_rows is None:
+            from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
+            instance_rows = TenantAgentInstanceDB.list_by_tenant(tenant_id)
     except Exception:
         return allowed_ids
     allowed_set = set(allowed_ids)
     extra = [
         r["agent_id"]
-        for r in rows
+        for r in instance_rows
         if r.get("status") == "active"
         and r.get("agent_id") != r.get("base_agent_id")
         and r.get("base_agent_id") in allowed_set
         and r["agent_id"] not in allowed_set
     ]
     return allowed_ids + extra
+
+
+def _merge_directly_granted_instances(
+    tenant_id: Optional[str], base_result: List[str], granted_ids: List[str]
+) -> List[str]:
+    """把副本实例合并进普通用户允许列表，保持「授权到哪个副本就看到哪个副本」语义。
+
+    - 连带路径：授权基础员工 → expand_with_tenant_instances 追加其全部 active 副本
+    - 直接授权路径：仅勾选副本（未勾基础员工）时，副本 ID 不在订阅表，订阅交集会
+      整条丢弃；此处按副本 base 仍有有效订阅补回，不连带基础员工与其他副本
+    """
+    if not tenant_id:
+        return base_result
+    try:
+        from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
+        rows = TenantAgentInstanceDB.list_by_tenant(tenant_id)
+    except Exception:
+        return base_result
+    expanded = expand_with_tenant_instances(tenant_id, base_result, instance_rows=rows)
+    if not granted_ids:
+        return expanded
+    expanded_set = set(expanded)
+    active = {r["agent_id"]: r for r in rows if r.get("status") == "active"}
+    extras = []
+    for aid in granted_ids:
+        if aid in expanded_set:
+            continue
+        row = active.get(aid)
+        if not row or row.get("agent_id") == row.get("base_agent_id"):
+            continue  # 非副本（基础员工/直用行），不属本函数职责
+        if get_agent_quota(tenant_id, row["base_agent_id"])[0]:
+            extras.append(aid)
+    return expanded + extras
 
 
 def _all_subagent_dir_names() -> List[str]:
@@ -211,11 +248,13 @@ def get_allowed_agent_ids_for_user(
     cache_key_id = f"{user_id}:{tenant_id}"
 
     # 普通用户：优先从缓存获取（租户管理员不走缓存）。
-    # 缓存只存基础员工列表；租户副本实例在读取侧追加，副本实例增删即时生效
+    # 缓存只存基础员工交集；副本实例（连带 + 直接授权）在读取侧追加，副本增删即时生效
     if user and not is_tenant_admin(user):
         cached = get_cached(CacheKeys.USER_AGENTS, cache_key_id)
         if cached is not None:
-            return expand_with_tenant_instances(tenant_id, cached)
+            with get_db_connection() as conn:
+                granted = UserAgentPermissionDB.get_allowed_agents(conn, user_id)
+            return _merge_directly_granted_instances(tenant_id, cached, granted)
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -237,12 +276,13 @@ def get_allowed_agent_ids_for_user(
             return expand_with_tenant_instances(tenant_id, tenant_allowed)
 
         # 普通用户 → 取交集（用户允许且租户有订阅）
-        user_allowed = set(UserAgentPermissionDB.get_allowed_agents(conn, user_id))
+        granted = UserAgentPermissionDB.get_allowed_agents(conn, user_id)
+        user_allowed = set(granted)
         result = [aid for aid in tenant_allowed if aid in user_allowed]
 
         # 写入缓存
         set_cached(CacheKeys.USER_AGENTS, cache_key_id, value=result, ttl=300)
-        return expand_with_tenant_instances(tenant_id, result)
+        return _merge_directly_granted_instances(tenant_id, result, granted)
 
 
 def count_tenant_subscribed_agents(tenant_id: str) -> int:

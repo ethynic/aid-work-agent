@@ -303,6 +303,21 @@ class TestBuildTenantInstanceItems:
     def test_empty_tenant_returns_empty(self):
         assert svc.build_tenant_instance_items("", {"sales"}) == []
 
+    def test_directly_granted_copy_passes_without_base(self):
+        rows = [
+            _row("sales", "sales"),
+            _row("sales-t1-ab12", "sales"),
+            _row("hr-t1-zz99", "hr"),
+        ]
+        fake_agent = type("A", (), {})()
+        fake_agent.subagent_registry = type("R", (), {})()
+        fake_agent.subagent_registry.get = lambda _id: None
+        with patch.object(svc.TenantAgentInstanceDB, "list_by_tenant", return_value=rows), \
+             patch("src.core.agent.get_master_agent", return_value=fake_agent):
+            # allowed 仅含副本自身（仅勾副本场景，base 不在 allowed）→ 副本放行
+            items = svc.build_tenant_instance_items("t1", {"sales-t1-ab12"})
+        assert [i["agent_id"] for i in items] == ["sales-t1-ab12"]
+
 
 # ============== apply_direct_customization_overrides ==============
 
