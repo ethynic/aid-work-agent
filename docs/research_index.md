@@ -55,3 +55,4 @@
 | PPT 生成质量课题调研：从「能生成」到「能交付」 | [调研](research/ppt-generation-quality-research.md) | PPT 工具重构方向（2026-09-29）：三轮 trace 实证+业界调研（Codex/Anthropic skill/Presenton/Gamma 系）；结论=LLM 只选布局填槽、样式由主题库+规则排版保底、模板改一次性转译、QA 变门禁、python-pptx 回退废弃；分 P0-P3 落地路线。 |
 | 三环境 ERROR/WARNING 日志收集与处理清单（2026-10-01~10-12） | [报告](plans/log-error-review-20261012.md) | 📋 逐项处理中（2026-10-12 收集生产/仿真/测试三环境）：P0=生产 LLM failover 链故障（Kimi 401 + 智谱余额不足/429，10-11 爆发 500+ 条）、wecom_kf 45009 修复待部署验证；P1=测试 weixin_marketing 凭证解密失败（持续中）、两租户 external_push 缺 APP_ID、cp_tool 跨租户探测；防滥用表缺失已自愈。 |
 | 企业微信本地库解密读取（local-db 通道）技术调研 | [调研](research/wecom-local-db-decrypt-research.md) | wecom-cli read-session 第三通道候选：本机 5.0.11.6029 全链路验证通过（wxSQLite3 aes128cbc + 只读内存提取密钥 + 副本解密）；8 步流水线按版本矩阵分派，算法/密钥形态/页布局任一随版本变化即失效，失效显式化不静默降级（2026-10-14）。 |
+| 无源码交付私有云——代码保护方案调研 | [调研](research/private-cloud-no-source-code-delivery.md) | 私有云交付不含源码（2026-10-22 调研完成，待实施）：核心逻辑 Cython 编译 + 其余 PyArmor + 技能/提示词加密；废弃 git pull 改离线镜像交付；Docker 无加密机制、载体更换不解决保密。 |
