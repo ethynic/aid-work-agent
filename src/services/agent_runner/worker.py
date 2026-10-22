@@ -276,6 +276,7 @@ class RunnerWorker:
     def stop(self):
         self.stopping.set()
         for task, control in list(self.jobs.items()):
+            control.interruption_reason = '执行服务正在停止，已保留原任务进度；本机操作仍按原回执核对。'
             control.interrupt()
             task.cancel()
 
@@ -291,6 +292,15 @@ class RunnerWorker:
             except BaseException as error:
                 if isinstance(error, asyncio.CancelledError):
                     raise
+                import psycopg2
+                kind = 'lease_lost' if isinstance(error, LeaseLost) else 'storage_unavailable' if isinstance(error, psycopg2.Error) else 'heartbeat_failed'
+                control.interruption_reason = {
+                    'lease_lost': '原执行租约已失效，已停止推进；请在原会话核对进度后继续。',
+                    'storage_unavailable': '执行心跳存储暂不可用，已停止推进并保留进度；请稍后在原会话继续。',
+                    'heartbeat_failed': '执行心跳发生异常，已停止推进并保留进度；本机操作仍需核对原回执。',
+                }[kind]
+                logger.warning('AgentRunner heartbeat stopped runner={} reason={} error_type={}',
+                    attempt.runner_id, kind, type(error).__name__)
                 control.interrupt()
                 owner_task.cancel()
                 return
@@ -531,7 +541,8 @@ class RunnerWorker:
                 # Statistics CAS is not interruption authority. A real storage
                 # fault still propagates after the original interruption attempt.
                 try:
-                    await asyncio.to_thread(self.executions.interrupt_attempt,attempt)
+                    await asyncio.to_thread(self.executions.interrupt_attempt,attempt,
+                        **({'public_verification': control.interruption_reason} if getattr(control, 'interruption_reason', None) else {}))
                 except LeaseLost:
                     pass
             raise

@@ -9,8 +9,10 @@
  * 禁止引入 Playwright/Puppeteer/Selenium；禁止 Runtime.*。
  */
 import { EventEmitter } from 'node:events'
+import { createHash } from 'node:crypto'
 import { assertMethodAllowed, ForbiddenCdpMethodError } from './methodPolicy.js'
 import type { AuditWriter } from './audit.js'
+import { CdpCommandTimeoutError, CdpTargetUnavailableError, CdpConnectionError } from './errors.js'
 
 export interface CdpSocketOptions {
   timeoutMs?: number
@@ -69,7 +71,7 @@ export class CdpSocket extends EventEmitter {
     this.socketFactory = opts.socketFactory
   }
 
-  async connect(webSocketUrl: string): Promise<void> {
+  async connect(webSocketUrl: string, signal?: AbortSignal): Promise<void> {
     if (this.socket) throw new Error('CDP socket is already connected')
     const socket = this.socketFactory
       ? this.socketFactory(webSocketUrl)
@@ -77,11 +79,25 @@ export class CdpSocket extends EventEmitter {
     this.socket = socket
     try {
       await new Promise<void>((resolve, reject) => {
-        socket.once('open', () => resolve())
-        socket.once('error', (err) => reject(err as Error))
+        const cleanup = () => {
+          clearTimeout(timer)
+          socket.off('open', opened); socket.off('error', failed); socket.off('close', closed)
+          signal?.removeEventListener('abort', aborted)
+        }
+        const opened = () => { cleanup(); resolve() }
+        const failed = () => { cleanup(); reject(new CdpConnectionError('CDP WebSocket error')) }
+        const closed = () => { cleanup(); reject(new CdpConnectionError('CDP WebSocket disconnected during handshake')) }
+        const aborted = () => { cleanup(); reject(new Error('CDP connection cancelled')) }
+        const timer = setTimeout(() => { cleanup(); reject(new CdpConnectionError('CDP WebSocket handshake timed out')) }, this.timeoutMs)
+        socket.once('open', opened); socket.once('error', failed); socket.once('close', closed)
+        signal?.addEventListener('abort', aborted, { once: true })
+        if (signal?.aborted) aborted()
       })
     } catch (error) {
       if (this.socket === socket) this.socket = undefined
+      // Keep an error listener while terminating a connecting ws (ws emits error on terminate).
+      socket.on('error', () => {})
+      socket.terminate ? socket.terminate() : socket.close()
       throw error
     }
     socket.on('message', (data) => this.onMessage(data as Buffer | string))
@@ -120,13 +136,16 @@ export class CdpSocket extends EventEmitter {
     if (!this.socket) throw new Error('CDP socket is not connected')
 
     const id = this.nextId++
+    const sessionTag = sessionId ? createHash('sha256').update(sessionId).digest('hex').slice(0, 10) : 'browser'
     const result = new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id)
-        reject(new Error(`CDP request timed out: ${method}`))
+        process.stderr.write(`[boss-cdp] id=${id} session=${sessionTag} method=${method} event=${method === 'Input.dispatchMouseEvent' ? params.type : '-'} stage=timeout elapsed_ms=${Date.now() - startedAt}\n`)
+        reject(new CdpCommandTimeoutError(method))
       }, this.timeoutMs)
       this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer, sessionId })
       try {
+        process.stderr.write(`[boss-cdp] id=${id} session=${sessionTag} method=${method} event=${method === 'Input.dispatchMouseEvent' ? params.type : '-'} stage=send\n`)
         this.socket!.send(
           JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }),
         )
@@ -138,6 +157,7 @@ export class CdpSocket extends EventEmitter {
     })
     try {
       const value = await result
+      process.stderr.write(`[boss-cdp] id=${id} session=${sessionTag} method=${method} event=${method === 'Input.dispatchMouseEvent' ? params.type : '-'} stage=ack elapsed_ms=${Date.now() - startedAt}\n`)
       await this.audit(method, params, sessionId, startedAt, 'OK')
       return value
     } catch (error) {
@@ -191,13 +211,15 @@ export class CdpSocket extends EventEmitter {
       if (pending.sessionId !== message.sessionId) {
         clearTimeout(pending.timer)
         this.pending.delete(message.id)
-        pending.reject(new Error(`CDP response session mismatch for request ${message.id}`))
+        pending.reject(new CdpTargetUnavailableError('CDP response session mismatch'))
         return
       }
       clearTimeout(pending.timer)
       this.pending.delete(message.id)
       if (message.error) {
-        pending.reject(new Error(`CDP error ${message.error.code}: ${message.error.message}`))
+        const text = `CDP error ${message.error.code}: ${message.error.message}`
+        pending.reject(/session (?:with given id )?not found|no target with given id|target closed/i.test(message.error.message)
+          ? new CdpTargetUnavailableError(text) : new Error(text))
       } else {
         pending.resolve(message.result)
       }

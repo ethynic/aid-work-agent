@@ -7,8 +7,9 @@
  * 退出只断开 CDP 连接，绝不关闭用户的 Chrome。
  */
 import { CdpGateway, type DomSnapshotOptions } from '../cdp/CdpGateway.js'
+import { CdpConnectionError } from '../cdp/errors.js'
 import { DEFAULT_CDP_PORT } from '../chrome/ChromeAttacher.js'
-import { ensureDebugChrome } from '../chrome/ChromeLauncher.js'
+import { ensureDebugChrome, runningChromeProfile, DEFAULT_DEBUG_PROFILE_DIR, DEFAULT_INITIAL_URL } from '../chrome/ChromeLauncher.js'
 import { WinMouseClicker } from '../input/WinMouseClicker.js'
 import type { DomSnapshot, ClickPoint } from '../boss/domSnapshot.js'
 import { randomUUID } from 'node:crypto'
@@ -23,7 +24,8 @@ import {
   type OpContext,
 } from './types.js'
 import { mapExecutorError } from './errorMapping.js'
-import { rememberBrowserTarget, resolveBrowserTarget, targetBindingStale } from '../boss/browserTargetBinding.js'
+import { rememberBrowserTarget, resolveBrowserTarget, targetBindingStale, updateBrowserTarget, type BrowserPageContext } from '../boss/browserTargetBinding.js'
+import { captureBrowserPageContext, restoreBrowserPageContext, rememberFilterResult } from '../boss/browserPageRecovery.js'
 import { PerfCollector } from '../perf.js'
 
 /**
@@ -125,6 +127,8 @@ export interface BossSession {
   activateTarget?(): Promise<void>
   cdpPort?: number
   browserTargetRef?: string
+  /** Real sessions provide trusted local account/profile evidence; absent in old/fake sessions. */
+  recoveryPageContext?(prior?: BrowserPageContext): Promise<BrowserPageContext | undefined>
   getPageMetrics?(): Promise<{ width: number; height: number }>
   /** CDP 页内导航（Page.navigate）。goto 幂等兜底专用：点击菜单未触发 SPA 路由变化时，
    *  在 /web/chat 区内直跳目标页（不动鼠标键盘）。可选成员——旧测试替身可不提供，
@@ -162,19 +166,43 @@ export const defaultSessionFactory: BossSessionFactory = async (ctx) => {
   const gw = new CdpGateway({ timeoutMs: 10000 })
   const clicker = new WinMouseClicker({ cdpPort: ctx.cdpPort ?? DEFAULT_CDP_PORT, beforeInput: () => gw.activateTarget() })
   const binding = ctx.browserTargetRef ? await resolveBrowserTarget(ctx.browserTargetRef, ctx.cdpPort ?? DEFAULT_CDP_PORT) : undefined
+  let rebuilt = false
+  let launched = false
+  let currentTarget = binding?.target_id
+  const saved = binding?.page_context && { ...binding.page_context,
+    job_name: binding.page_context.job_name ?? ctx.recoveryJobName }
   ctx.progress({ stage: 'connect', message: `连接 Chrome 调试端口（${endpoint}）` })
   try {
-    // 端口不通时自动拉起固定 profile 调试实例（fail-open，拉不起则由下方 connect 报原有错误；
-    // 包 withAbort 使拉起等待期间用户取消依然立即生效）
-    const launched = binding ? false : await withAbort(ensureDebugChrome(ctx.cdpPort ?? DEFAULT_CDP_PORT), ctx.signal)
+    // A live old target needs no new metadata. Reopening a bound browser must
+    // use its known persistent profile, never guess the default for an old ref.
+    const reopenProfile = saved?.managed_profile_dir ?? (!binding ? DEFAULT_DEBUG_PROFILE_DIR : undefined)
+    if (reopenProfile) launched = await withAbort(ensureDebugChrome(ctx.cdpPort ?? DEFAULT_CDP_PORT,
+      { profileDir: reopenProfile, initialUrl: saved?.entry_url ?? DEFAULT_INITIAL_URL, signal: ctx.signal }), ctx.signal)
     if (launched) {
       ctx.progress({ stage: 'connect', message: '已自动拉起调试 Chrome 并打开 BOSS 直聘；首次使用请在该窗口登录一次' })
     }
-    await withAbort(gw.connect(endpoint), ctx.signal)
+    try { await withAbort(gw.connect(endpoint, ctx.signal), ctx.signal) }
+    catch (error) {
+      if (binding && !reopenProfile && error instanceof CdpConnectionError) {
+        throw new CodedOperationError('UI_CHANGED', '原调试浏览器不可连接，且无法确定原持久 profile；请用原 profile 打开 Chrome 后在原会话接续')
+      }
+      throw error
+    }
     ctx.progress({ stage: 'attach', message: 'attach BOSS 页面' })
     if (binding) {
-      try { await withAbort(gw.attachToBoundBossTarget(binding.target_id), ctx.signal) }
-      catch (error) { if (error instanceof CancelledError) throw error; throw targetBindingStale() }
+      try { await withAbort(gw.attachToBoundBossTarget(binding.target_id, binding.restore_pending === true), ctx.signal) }
+      catch (error) {
+        if (error instanceof CancelledError) throw error
+        if (!ctx.recoverBrowserTarget) throw error
+        if (ctx.signal.aborted) throw new CancelledError()
+        if (!saved) throw new CodedOperationError('UI_CHANGED', '原页面已关闭，缺少原职位及有效筛选记录；请恢复原业务页面后在原会话接续')
+        ctx.progress({ stage: 'recover', message: '正在重建原 BOSS 业务页面并核验账号、职位与筛选条件' })
+        await withAbort(gw.createBossPage(endpoint, saved.entry_url), ctx.signal)
+        currentTarget = gw.getTargetId()!
+        await updateBrowserTarget(ctx.browserTargetRef!, ctx.cdpPort ?? DEFAULT_CDP_PORT, binding.target_id,
+          b => ({ ...b, target_id: currentTarget!, restore_pending: true }))
+        rebuilt = true
+      }
     } else await withAbort(gw.attachToRecommendPage(), ctx.signal)
   } catch (err) {
     // connect/attach 失败时 gw 不会进入 BossSession，runBossOperation 的 finally 关不到它；
@@ -182,7 +210,7 @@ export const defaultSessionFactory: BossSessionFactory = async (ctx) => {
     await gw.close().catch(() => {})
     throw err
   }
-  return {
+  const session: BossSession = {
     snapshot: async (opts) => (await gw.captureDomSnapshot(opts)) as DomSnapshot,
     click: (point, viewport) => clicker.click(point, viewport),
     drag: (from, to, viewport) => clicker.drag(from, to, viewport),
@@ -223,6 +251,29 @@ export const defaultSessionFactory: BossSessionFactory = async (ctx) => {
     },
     close: () => gw.close().catch(() => {}),
   }
+  session.recoveryPageContext = async prior => {
+    const captured = await captureBrowserPageContext(session, prior)
+    if (!captured) return
+    const instance = gw.getBrowserInstanceId()
+    if (instance) captured.browser_instance = instance
+    const profile = prior?.managed_profile_dir ?? (launched ? DEFAULT_DEBUG_PROFILE_DIR : await runningChromeProfile(ctx.cdpPort ?? DEFAULT_CDP_PORT, ctx.signal))
+    if (profile) captured.managed_profile_dir = profile
+    return captured
+  }
+  try {
+    if (rebuilt || binding?.restore_pending) {
+      // A new tab is a connection detail. Only the original business identity can authorize its inputs.
+      if (!saved) throw new CodedOperationError('UI_CHANGED', '缺少原业务页面记录，请恢复原职位及筛选后接续')
+      await withAbort(restoreBrowserPageContext(session, saved, ctx), ctx.signal)
+      if (ctx.signal.aborted) throw new CancelledError()
+      await updateBrowserTarget(ctx.browserTargetRef!, ctx.cdpPort ?? DEFAULT_CDP_PORT, currentTarget!,
+        b => ({ ...b, restore_pending: false, page_context: { ...saved, browser_instance: gw.getBrowserInstanceId() } }))
+    } else if (ctx.recoverBrowserTarget && binding?.page_context) {
+      const current = await session.recoveryPageContext(binding.page_context)
+      if (current?.account_ref && binding.page_context.account_ref && current.account_ref !== binding.page_context.account_ref) throw targetBindingStale()
+    }
+    return session
+  } catch (error) { await session.close(); throw error }
 }
 
 /** body 的成功产出；effect 缺省时按 kind+completed 自动计算 */
@@ -285,11 +336,19 @@ export async function runBossOperation(
       if (targetId !== expected.target_id) throw targetBindingStale()
     } else if (targetId) browserTargetRef = await rememberBrowserTarget(targetId, ctx.cdpPort ?? DEFAULT_CDP_PORT)
     if (browserTargetRef) session.browserTargetRef = browserTargetRef
+    if (browserTargetRef && session.recoveryPageContext && targetId) {
+      const binding = await resolveBrowserTarget(browserTargetRef, ctx.cdpPort ?? DEFAULT_CDP_PORT)
+      const page = await session.recoveryPageContext(binding.page_context).catch(() => undefined)
+      if (page) await updateBrowserTarget(browserTargetRef, ctx.cdpPort ?? DEFAULT_CDP_PORT, targetId,
+        b => ({ ...b, page_context: page }))
+    }
     const outcome = await perf.time('body', () => body(instrumentSession(session!, perf), tracker, perf))
     const effect = outcome.effect ?? (spec.kind === 'readonly' ? 'none' : writeEffect(true, 'OK', tracker.completed))
     ctx.progress({ stage: 'done', message: outcome.message })
     ok = true
-    return okResult(runId, outcome.message, effect, boundData(outcome.data ?? {}))
+    const result = okResult(runId, outcome.message, effect, boundData(outcome.data ?? {}))
+    if (session.recoveryPageContext) await rememberFilterResult(spec.name, result, ctx.cdpPort ?? DEFAULT_CDP_PORT)
+    return result
   } catch (err) {
     const mapped = mapExecutorError(err)
     logOpFailure(runId, mapped.code, mapped.message)

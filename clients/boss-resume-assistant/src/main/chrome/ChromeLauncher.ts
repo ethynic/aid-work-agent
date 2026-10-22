@@ -13,9 +13,41 @@
  * - fail-open：任何一步失败（找不到 chrome.exe / spawn 失败 / 端口等待超时）都静默
  *   返回 false，让调用方继续走原连接路径报原有错误——本模块绝不引入新的失败形态
  */
-import { execSync } from 'node:child_process'
+import { execSync, execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import path from 'node:path'
+import { promisify } from 'node:util'
+
+/** Read the profile of the process actually listening on this local CDP port.
+ * Only the profile leaves the subprocess; command lines never enter logs/bindings.
+ */
+export async function runningChromeProfile(port: number, signal?: AbortSignal): Promise<string | undefined> {
+  if (process.platform !== 'win32' || !Number.isInteger(port) || port < 1 || port > 65535 || signal?.aborted) return
+  const root = process.env.SystemRoot
+  if (!root || !/^[A-Za-z]:\\/.test(root)) return
+  const executable = path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  const script = `$ErrorActionPreference='Stop'; $OutputEncoding=[Console]::OutputEncoding=[Text.UTF8Encoding]::new();
+$ids=@(Get-NetTCPConnection -State Listen -LocalPort ([int]$env:AID_BOSS_PROFILE_PORT) | Select-Object -ExpandProperty OwningProcess -Unique);
+$profiles=@(foreach($processId in $ids) {
+ $p=Get-CimInstance Win32_Process -Filter ('ProcessId='+$processId);
+ if($p.Name -ne 'chrome.exe') { continue };
+ $m=[regex]::Match($p.CommandLine,'(?:"--user-data-dir=([^"\\r\\n]+)"|--user-data-dir="([^"\\r\\n]+)"|--user-data-dir=([^\\s"]+))');
+ if($m.Success) { foreach($g in $m.Groups | Select-Object -Skip 1) { if($g.Success) { $g.Value; break } } }
+}); ConvertTo-Json -Compress -InputObject @($profiles | Select-Object -Unique)`
+  try {
+    const { stdout } = await promisify(execFile)(executable, ['-NoProfile', '-NonInteractive', '-Command', script],
+      { windowsHide: true, encoding: 'utf8', timeout: 5000, signal,
+        env: { ...process.env, AID_BOSS_PROFILE_PORT: String(port) } })
+    const profiles: unknown = JSON.parse(stdout.trim().replace(/^\uFEFF/, ''))
+    if (Array.isArray(profiles) && profiles.length === 1 && typeof profiles[0] === 'string'
+      && path.win32.isAbsolute(profiles[0]) && !/[\x00-\x1f"]/.test(profiles[0])) return profiles[0]
+  } catch { /* The existing fixed persistent profile configuration remains available. */ }
+}
+export function browserInstanceId(webSocketUrl: string): string {
+  return createHash('sha256').update(webSocketUrl).digest('hex')
+}
 
 /** 固定持久 profile 目录（与 clients/README.md §四、release 安装手册的快捷方式参数一致） */
 export const DEFAULT_DEBUG_PROFILE_DIR = 'C:\\chrome-debug'
@@ -108,11 +140,11 @@ async function probePort(port: number, fetchImpl: typeof fetch): Promise<boolean
  */
 export async function ensureDebugChrome(
   port: number,
-  opts: { profileDir?: string; initialUrl?: string } = {},
+  opts: { profileDir?: string; initialUrl?: string; signal?: AbortSignal } = {},
   deps: ChromeLauncherDeps = {},
 ): Promise<boolean> {
   // 显式退出开关：测试隔离（mcp 测试子进程设 0 防真拉 Chrome）与用户偏好「我自己管理 Chrome」两用
-  if (process.env.AID_BOSS_AUTO_CHROME === '0') return false
+  if (process.env.AID_BOSS_AUTO_CHROME === '0' || opts.signal?.aborted) return false
   const fetchImpl = deps.fetchImpl ?? fetch
   const doSpawn = deps.spawnImpl
     ?? ((exe: string, args: string[]): { unref(): void } => {
@@ -125,8 +157,10 @@ export async function ensureDebugChrome(
 
   try {
     if (await probePort(port, fetchImpl)) return false
+    if (opts.signal?.aborted) return false
     const exe = findChromeExe(deps)
     if (!exe) return false
+    if (opts.signal?.aborted) return false
         doSpawn(exe, [
           `--remote-debugging-port=${port}`,
           `--user-data-dir=${opts.profileDir ?? DEFAULT_DEBUG_PROFILE_DIR}`,
@@ -144,9 +178,10 @@ export async function ensureDebugChrome(
     const deadline = Date.now() + READY_TIMEOUT_MS
     while (Date.now() < deadline) {
       await sleep(PROBE_INTERVAL_MS)
+      if (opts.signal?.aborted) return false
       if (await probePort(port, fetchImpl)) {
         await sleep(LAUNCH_SETTLE_MS) // 等初始页渲染（冷启动页面晚于端口就绪）
-        return true
+        return !opts.signal?.aborted
       }
     }
     return false

@@ -226,6 +226,7 @@ export function useAgent() {
   async function resolveLocalRecovery(action: 'resume' | 'end' | 'verify' | 'stop') {
     const row = localRecovery.value
     if (!row || localRecoveryBusy.value || action === 'resume' && row.cancel_requested) return
+    if (row.local_recovery_actions && !row.local_recovery_actions.includes(action)) return
     const sid = sessionId.value
     const state = getStreamState(sid)
     const generation = state.runnerGeneration

@@ -10,7 +10,7 @@ from datetime import datetime
 
 from src.core.agent_engine.contracts import CheckpointFailure
 from src.local_tools import repository as invocation_repository
-from .local_invocations import LocalInvocationRepository, LocalPhase, _execution
+from .local_invocations import LocalInvocationRepository, LocalPhase, LocalDispatchRejected, _execution
 from .local_phases import LocalPhaseRepository
 from .ownership import LeaseLost, StopRequested
 
@@ -136,6 +136,18 @@ class RunnerLocalLifecycle:
             original = await self.saved_phase(branch=branch, ordinal=ordinal)
             return original['invocation']
         except BaseException as error:
+            if isinstance(error, LocalDispatchRejected):
+                # The binding repository proved rollback; persist convergence
+                # with the same owner CAS before exposing a business result.
+                from .local_invocations import dispatch_rejection_result
+                fact = self.state.tools[self.call_id]
+                fact.phase, fact.success, fact.result = 'completed', False, dispatch_rejection_result(error.reason)
+                try:
+                    await self.control.save(self.state, 'local_not_dispatched')
+                except BaseException as storage_error:
+                    self._fail(storage_error)
+                    raise
+                raise error.reason
             if isinstance(error, StopRequested) and not (self.state.resources.get('local_invocations') or {}).get(
                     phase.key(self.root.attempt.runner_id)):
                 # The atomically fenced enqueue did not commit. A user pause

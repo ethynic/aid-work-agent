@@ -28,7 +28,7 @@ import {
   runBossOperation,
   type BossSessionFactory,
 } from './bossContext.js'
-import { CodedOperationError, type BossOperation, type OperationResult, type OpContext } from './types.js'
+import { CodedOperationError, okResult, type BossOperation, type OperationResult, type OpContext } from './types.js'
 
 export interface BossResumeBatchArgs {
   /** 读取份数上限（默认 1；CLI 层最大 10，MCP schema 收紧到 3） */
@@ -79,9 +79,9 @@ export function createBossResumeBatchOperation(
       }
       let originalJob: string | null | undefined
       let originalAccount: string | undefined
-      const run = (ctx: OpContext): Promise<OperationResult> => runBossOperation(
+      const runSession = (ctx: OpContext): Promise<OperationResult> => runBossOperation(
         { kind: 'readonly', name: operationName },
-        ctx,
+        { ...ctx, recoveryJobName: originalJob ?? (typeof args.expected_job_name === 'string' ? args.expected_job_name.trim() : undefined) },
         sessionFactory,
         () => {
           if (!Number.isInteger(limit) || limit <= 0 || limit > LIMIT_MAX) {
@@ -119,7 +119,7 @@ export function createBossResumeBatchOperation(
             const jobBox = new JobSwitcher({ snapshot: session.snapshot, click: session.click }).locateJobBox(probe)
             const jobName = jobBox.name ?? null
             const account = membershipAccountKey(probe)
-            if (originalAccount && account !== originalAccount) throw new CodedOperationError('UI_CHANGED', '恢复后原账号已变化或无法确认，保留已读资料，不改读其他账号候选人')
+            if (originalAccount && account && account !== originalAccount) throw new CodedOperationError('UI_CHANGED', '恢复后原账号已变化，保留已读资料，不改读其他账号候选人')
             originalAccount ??= account ?? undefined
             if (originalJob !== undefined && originalJob !== jobName) throw new CodedOperationError('JOB_CHANGED', '恢复后职位已变化，保留已读资料，不改读新职位候选人')
             originalJob ??= jobName
@@ -232,6 +232,28 @@ export function createBossResumeBatchOperation(
           }
         },
       )
+      const run = async (current: OpContext): Promise<OperationResult> => {
+        const result = await runSession(current)
+        if (result.success || !checkpoint.resumes?.length) return result
+        // Connection/login/cancellation can fail before body() starts. The
+        // retained batch still contains genuine read results and must reach the
+        // original receipt for per-item processing, without claiming full work.
+        const facts = operationRecoveryFacts({ name: operationName, operationClass: 'readonly',
+          resultKind: 'business_result', goal: '保留本批已读取资料，恢复原列表后继续剩余数量',
+          expected: '已读图片保留，未完成数量及当前依赖明确' }, checkpoint.execution ?? {
+            attemptsUsed: 1, ordinaryRetriesUsed: 0, stage: 'prepared', inputStatus: 'not_started',
+            verification: { status: 'inconclusive', evidence: ['恢复连接尚未完成，保留已读取成果'] } })
+        facts.error = { code: result.code, source: 'prepared', summary: result.message.slice(0, 1000) }
+        return okResult(result.run_id, `已读取 ${checkpoint.resumes.length} 份；剩余工作尚未完成：${result.message}`, 'none', {
+          ...result.data, operation_recovery: facts,
+          resumes: checkpoint.resumes.map(item => payloadFor(item, originalJob ?? null)),
+          failures: checkpoint.failures ?? [], processed_names: [...checkpoint.processedNames ?? []],
+          attempted: checkpoint.attempted ?? 0, job_name: originalJob,
+          stop_reason: current.signal.aborted || result.code === 'CANCELLED' ? 'cancelled' : 'page_operation_failed',
+          cleanup_error: { code: result.code, message: result.message },
+          cleanup_warning: `剩余工作需要恢复（${result.code}）：${result.message}`,
+        })
+      }
       if (ctx.recoveryContinuation) ctx.recoveryContinuation.resume = run
       return run(ctx)
     },

@@ -15,15 +15,13 @@
  */
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeSync } from 'node:fs'
 import path from 'node:path'
-import type { ApiClient, OperationResultPayload } from './apiClient.js'
-import { ApiError, DeviceRevokedError, NetworkError } from './apiClient.js'
+import type { ApiClient, InvocationResultPayload, OperationResultPayload } from './apiClient.js'
+import { ApiError, DeviceRevokedError, isRetryableTransportError } from './apiClient.js'
 import { logError, logInfo } from './log.js'
 import { recordOperationAck } from './completionProof.js'
 
-export interface OutboxEntry {
+interface OutboxMetadata {
   invocation_id: string
-  endpoint: 'operation-result'
-  payload: OperationResultPayload
   created_at: string
   /** 已尝试发送次数（每次失败 +1，供排障与测试断言） */
   attempts: number
@@ -35,6 +33,12 @@ export interface OutboxEntry {
   /** gave_up 原因（HTTP 状态 + 服务端错误码摘要，非敏感） */
   gave_up_reason?: string
 }
+
+/** v2 root files retain their original shape; older consumers ignore the v1 subdirectory. */
+export type OutboxEntry = OutboxMetadata & (
+  | { endpoint: 'operation-result'; payload: OperationResultPayload }
+  | { endpoint: 'result'; protocol_version: 1; payload: InvocationResultPayload }
+)
 
 export type OutboxOutcome =
   | 'acked' // 2xx，条目已删除（唯一删除路径）
@@ -49,20 +53,33 @@ export function resultOutboxDir(runtimeHome: string): string {
 /** 指数退避等待，shutdown 时立即返回 false（invocationRunner 同语义共用） */
 export async function backoffSleep(ms: number, shutdownSignal?: AbortSignal): Promise<boolean> {
   if (shutdownSignal?.aborted) return false
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(true), ms)
-    shutdownSignal?.addEventListener('abort', () => {
-      clearTimeout(timer)
-      resolve(false)
-    }, { once: true })
-  })
+  // Node clamps oversized timers to 1ms. Split long Retry-After values instead of busy retrying.
+  let remaining = ms
+  do {
+    const chunk = Math.min(remaining, 2_147_483_647)
+    const proceeded = await new Promise<boolean>((resolve) => {
+      const finish = (value: boolean) => {
+        clearTimeout(timer)
+        shutdownSignal?.removeEventListener('abort', abort)
+        resolve(value)
+      }
+      const timer = setTimeout(() => finish(true), chunk)
+      const abort = () => finish(false)
+      shutdownSignal?.addEventListener('abort', abort, { once: true })
+      if (shutdownSignal?.aborted) abort()
+    })
+    if (!proceeded) return false
+    remaining -= chunk
+  } while (remaining > 0)
+  return true
 }
 
 export class ResultOutbox {
   constructor(readonly dir: string) {}
 
-  private fileFor(invocationId: string): string {
-    return path.join(this.dir, `${invocationId}.json`)
+  private fileFor(invocationId: string, endpoint: OutboxEntry['endpoint'] = 'operation-result'): string {
+    if (!/^[A-Za-z0-9_-]+$/.test(invocationId)) throw new Error('Invalid outbox invocation identity')
+    return path.join(this.dir, ...(endpoint === 'result' ? ['legacy-v1'] : []), `${invocationId}.json`)
   }
 
   /** 原子写入：先写 <id>.json.tmp 再 rename（崩溃时最多残留 tmp，不产生半写条目） */
@@ -70,6 +87,19 @@ export class ResultOutbox {
     const entry: OutboxEntry = {
       invocation_id: invocationId,
       endpoint: 'operation-result',
+      payload,
+      created_at: new Date().toISOString(),
+      attempts: 0,
+    }
+    this.writeEntry(entry)
+    return entry
+  }
+
+  saveLegacy(invocationId: string, payload: InvocationResultPayload): OutboxEntry {
+    const entry: OutboxEntry = {
+      invocation_id: invocationId,
+      endpoint: 'result',
+      protocol_version: 1,
       payload,
       created_at: new Date().toISOString(),
       attempts: 0,
@@ -100,48 +130,56 @@ export class ResultOutbox {
 
   /** 删除条目（幂等，不存在时静默） */
   remove(invocationId: string): void {
-    try {
-      unlinkSync(this.fileFor(invocationId))
-    } catch {
-      // ENOENT 视为已删除
-    }
-    // 同名残留 tmp 一并清理
-    try {
-      rmSync(this.fileFor(invocationId) + '.tmp', { force: true })
-    } catch {
-      // 忽略
+    for (const endpoint of ['operation-result', 'result'] as const) {
+      try {
+        unlinkSync(this.fileFor(invocationId, endpoint))
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+      }
+      rmSync(this.fileFor(invocationId, endpoint) + '.tmp', { force: true })
     }
   }
 
   load(invocationId: string): OutboxEntry | null {
-    try {
-      return JSON.parse(readFileSync(this.fileFor(invocationId), 'utf8')) as OutboxEntry
-    } catch {
-      return null
+    for (const endpoint of ['operation-result', 'result'] as const) {
+      try {
+        const entry = JSON.parse(readFileSync(this.fileFor(invocationId, endpoint), 'utf8')) as OutboxEntry
+        if (entry.endpoint !== endpoint || entry.invocation_id !== invocationId || (entry.endpoint === 'result' && entry.protocol_version !== 1)) throw new Error('Unsupported outbox identity/version')
+        return entry
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+      }
     }
+    return null
   }
 
   loadAll(): OutboxEntry[] {
     if (!existsSync(this.dir)) return []
     const entries: OutboxEntry[] = []
-    for (const name of readdirSync(this.dir)) {
-      if (!name.endsWith('.json')) continue
-      try {
-        entries.push(JSON.parse(readFileSync(path.join(this.dir, name), 'utf8')) as OutboxEntry)
-      } catch (err) {
-        logError(`result outbox 条目解析失败（保留待人工排查）: ${name}: ${err instanceof Error ? err.message : String(err)}`)
+    for (const directory of [this.dir, path.join(this.dir, 'legacy-v1')]) {
+      if (!existsSync(directory)) continue
+      const endpoint = directory === this.dir ? 'operation-result' : 'result'
+      for (const name of readdirSync(directory)) {
+        if (!name.endsWith('.json')) continue
+        try {
+          const entry = JSON.parse(readFileSync(path.join(directory, name), 'utf8')) as OutboxEntry
+          if (entry.endpoint !== endpoint || `${entry.invocation_id}.json` !== name || (entry.endpoint === 'result' && entry.protocol_version !== 1)) throw new Error('Unsupported outbox identity/version')
+          entries.push(entry)
+        } catch {
+          logError(`result outbox 条目解析失败（保留待人工排查）: ${name}`)
+        }
       }
     }
     return entries
   }
 
   private writeEntry(entry: OutboxEntry): void {
-    mkdirSync(this.dir, { recursive: true })
-    const file = this.fileFor(entry.invocation_id)
+    const file = this.fileFor(entry.invocation_id, entry.endpoint)
+    mkdirSync(path.dirname(file), { recursive: true })
     const tmp = file + '.tmp'
     // tmp 写入 + fsync 再 rename（掉电安全，与 journal 同标准；rename 后目录元数据
     // fsync 在 Windows 上无通用 API，接受进程崩溃安全、极端掉电窗口由 rename 原子性兜底）
-    const fd = openSync(tmp, 'w')
+    const fd = openSync(tmp, 'w', 0o600)
     try {
       writeSync(fd, JSON.stringify(entry, null, 2))
       fsyncSync(fd)
@@ -153,7 +191,7 @@ export class ResultOutbox {
 }
 
 /** 回执摘要（ERROR 级终态收敛日志用）：只含非敏感字段，绝不含 claim_token/permit_token */
-function receiptSummary(payload: OperationResultPayload): string {
+function receiptSummary(payload: OperationResultPayload | InvocationResultPayload): string {
   const p = payload as unknown as Record<string, unknown>
   return [
     `request_id=${String(p['request_id'] ?? '-')}`,
@@ -197,21 +235,26 @@ export async function deliverOutboxEntry(
   for (;;) {
     attempt += 1
     try {
-      const ack = await api.operationResult(entry.invocation_id, entry.payload)
-      // Persist original ACK evidence before deleting the only pending receipt. Unknown
-      // effects remain unresolved even when the server accepted their report.
-      recordOperationAck(path.dirname(outbox.dir), entry.invocation_id, entry.payload, ack)
+      if (entry.endpoint === 'result') {
+        await api.result(entry.invocation_id, entry.payload)
+      } else if (entry.endpoint === 'operation-result') {
+        const ack = await api.operationResult(entry.invocation_id, entry.payload)
+        // Persist original ACK evidence before deleting the only pending receipt.
+        recordOperationAck(path.dirname(outbox.dir), entry.invocation_id, entry.payload, ack)
+      } else {
+        throw new Error('Unsupported outbox endpoint')
+      }
       outbox.remove(entry.invocation_id)
-      emit(`invocation ${entry.invocation_id} v2 终态已 ACK（operation-result），outbox 条目已删除`)
+      emit(`invocation ${entry.invocation_id} 终态已 ACK（${entry.endpoint}），outbox 条目已删除`)
       return 'acked'
     } catch (err) {
-      if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
+      if (err instanceof ApiError && !isRetryableTransportError(err)) {
         // 确定性 4xx（403/404/409/422 等）：绑定/payload 不被接受，重试大概率不变——
         // 保留条目并标记 gave_up（R21：永不删除，停止主动重试，留待人工对账）
-        outbox.markAttempt(entry.invocation_id, err.message)
-        outbox.markGaveUp(entry.invocation_id, `HTTP ${err.status}${err.serverMessage ? ` ${err.serverMessage}` : ''}`)
+        outbox.markAttempt(entry.invocation_id, `HTTP ${err.status}`)
+        outbox.markGaveUp(entry.invocation_id, `HTTP ${err.status}${err.code && /^[A-Z0-9_]{1,80}$/.test(err.code) ? ` ${err.code}` : ''}`)
         logError(
-          `invocation ${entry.invocation_id} v2 终态被云端确定性拒绝（HTTP ${err.status}${err.serverMessage ? ` ${err.serverMessage}` : ''}），条目保留并标记 gave_up（停止主动重试、永不删除，待人工对账）；回执摘要: ${receiptSummary(entry.payload)}；原文: ${err.message}`,
+          `invocation ${entry.invocation_id} 终态被云端拒绝（HTTP ${err.status}），条目保留并标记 gave_up（停止主动重试、待对账）；回执摘要: ${receiptSummary(entry.payload)}`,
         )
         return 'gave-up'
       }
@@ -221,13 +264,14 @@ export async function deliverOutboxEntry(
         return 'gave-up'
       }
       // 网络失败 / 5xx：保留条目退避重试
-      outbox.markAttempt(entry.invocation_id, err instanceof Error ? err.message : String(err))
+      outbox.markAttempt(entry.invocation_id, err instanceof ApiError ? `HTTP ${err.status}` : err instanceof Error ? err.name : 'UnknownError')
       if (attempt >= maxAttempts) {
         logError(`invocation ${entry.invocation_id} v2 终态重投 ${attempt} 次未成功（outbox 条目保留，稍后再投）`)
         return 'retry-exhausted'
       }
-      emit(`v2 终态回传失败（网络/服务暂不可用），${backoff}ms 后重试`)
-      const proceed = await backoffSleep(backoff, opts.shutdownSignal)
+      const delay = Math.max(backoff, err instanceof ApiError ? err.retryAfterMs ?? 0 : 0)
+      emit(`终态回传失败（网络/服务暂不可用），${delay}ms 后重试原结果`)
+      const proceed = await backoffSleep(delay, opts.shutdownSignal)
       if (!proceed) {
         logError(`invocation ${entry.invocation_id} v2 终态未能回传（Runtime 关闭中，outbox 条目保留）`)
         return 'shutdown'

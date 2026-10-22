@@ -7,6 +7,9 @@ import pytest
 
 from src.services.agent_runner.ownership import Attempt, LeaseLost
 from src.services.agent_runner.worker import RunnerWorker
+from src.services.agent_runner.usage_context import UsageScope
+from src.core.agent_engine.contracts import CheckpointFailure
+import psycopg2
 
 
 class WorkerHarness:
@@ -73,6 +76,47 @@ class WorkerHarness:
         await asyncio.wait_for(
             asyncio.gather(*(self.started[name].wait() for name in names)), timeout=2,
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure,reason', [
+    (LeaseLost('RUNNER_ATTEMPT_EXPIRED'), '租约已失效'),
+    (psycopg2.OperationalError('fixture connection lost'), '心跳存储暂不可用'),
+    (RuntimeError('fixture unexpected heartbeat failure'), '心跳发生异常'),
+])
+async def test_heartbeat_stops_owned_io_with_the_actual_public_cause(failure, reason):
+    harness = WorkerHarness([])
+    def fail(*args): raise failure
+    harness.worker.executions.heartbeat = fail
+    control = SimpleNamespace(interrupt=lambda: None)
+    owner = asyncio.create_task(asyncio.Event().wait())
+    await harness.worker._heartbeat(Attempt('original', 'worker', 1), control, owner)
+    with pytest.raises(asyncio.CancelledError): await owner
+    assert reason in control.interruption_reason
+    assert str(failure) not in control.interruption_reason, 'raw exceptions must not become public details'
+
+
+def test_explicit_service_stop_is_distinguishable_from_lease_or_storage_failure():
+    harness = WorkerHarness([])
+    # A hashable task stand-in is enough for stop's existing owned job map.
+    class Task:
+        def cancel(self): pass
+    control = SimpleNamespace(interrupt=lambda: None)
+    harness.worker.jobs = {Task(): control}
+    harness.worker.stop()
+    assert '服务正在停止' in control.interruption_reason
+    assert harness.worker.stopping.is_set()
+
+
+def test_usage_ownership_loss_keeps_its_cause_but_real_storage_failure_still_blocks():
+    scope = UsageScope(Attempt('original', 'worker', 1), None, 'original')
+    lost = LeaseLost('RUNNER_ATTEMPT_EXPIRED')
+    scope.fail(lost)
+    with pytest.raises(LeaseLost) as rejected: scope.check()
+    assert rejected.value is lost
+    scope = UsageScope(scope.attempt, None, 'original')
+    scope.fail(psycopg2.OperationalError('fixture database unavailable'))
+    with pytest.raises(CheckpointFailure, match='RUNNER_USAGE_STORAGE_FAILED'): scope.check()
 
 
 @pytest.mark.asyncio

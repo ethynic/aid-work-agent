@@ -194,6 +194,18 @@ def continuation_retry_safe(invocation):
     invocation = observed_invocation(invocation)
     result = invocation.get('result_json') or {}
     data = result.get('data')
+    if (invocation.get('state') == 'unknown' and invocation.get('effect') == 'none'
+            and invocation.get('tool_name') == 'boss_resume_next'
+            and result.get('success') is False and result.get('code') == 'EXECUTION_UNKNOWN'
+            and isinstance(data, dict) and data.get('resumes') == []):
+        facts = data.get('operation_recovery') or {}
+        operation = facts.get('operation') if isinstance(facts, dict) else None
+        # A returned readonly command receipt is different from a claim lost
+        # without any result. The next CLI verifies the original job/page again.
+        return (isinstance(facts, dict) and facts.get('operation_class') == 'readonly'
+            and isinstance(operation, dict) and operation.get('name') == 'boss_resume_next'
+            and data.get('stop_reason') == 'page_operation_failed'
+            and not (data.keys() - CONTINUATION_DIAGNOSTIC_KEYS - NO_OUTCOME_RESULT_KEYS - {'job_name'}))
     if (invocation.get('state') != 'failed' or invocation.get('effect') != 'none'
             or (invocation.get('error_code') or result.get('code')) not in {
                 'TOOL_NOT_ALLOWED','TOOL_NOT_FOUND','UNKNOWN_TOOL','JOB_CHANGED',

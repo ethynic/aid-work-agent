@@ -223,7 +223,7 @@ class BrowserRecoveryProof:
 class ApplicationToolRecovery:
     """Finite installed capabilities; the scheduling/kernel ports stay neutral."""
     def __init__(self,process,connection_factory):
-        self.local=LocalRecoveryProof()
+        self.local=LocalRecoveryProof(connection_factory)
         self.browser=BrowserRecoveryProof(process,connection_factory)
 
     async def affinity(self,row):

@@ -329,12 +329,19 @@ class LocalToolProxyTool(BaseTool):
                     provider_key=self.invocation_provider_key,
                 )
         except repository.ResumeContinuationConflict as conflict:
-            return {'success': False, 'code': 'STALE_CONTINUATION',
+            return {'success': False, 'code': 'STALE_CONTINUATION', 'effect': 'none',
                 'message': '该筛选引用已有后续批次，请使用最新结果；原调用未完成时先等待，不重读',
                 'data': {'latest_invocation_id': conflict.invocation_id}, 'invocation_id': None}
         except repository.DeviceOperationUnresolved as error:
+            messages = {
+                'LOCAL_DEVICE_OFFLINE': '原执行设备离线，未派发；请保持原 Runtime 在线。',
+                'LOCAL_DEVICE_UNSUPPORTED': '原设备不支持此工具，未派发；请检查原设备插件版本。',
+                'LOCAL_DEVICE_NOT_READY': '原设备已撤销或未就绪，未派发；请检查原设备连接。',
+                'LOCAL_RECOVERY_BUSY': '原设备正在核对或停止旧执行，未派发；请等待核对完成。',
+            }
             return {'success': False, 'code': str(error), 'effect': 'none',
-                'message': '原操作尚待核对，或原执行设备已变更；未派发新操作。请先确认原设备上的操作已停止并取得原回执。'}
+                'invocation_id': None, 'data': None,
+                'message': messages.get(str(error), '原设备仍有未决操作，未派发；请核对原回执或结束旧等待。')}
         invocation_id = str(invocation["id"])
         logger.info(
             f"后端日志：本地工具 invocation 已创建 id={invocation_id} "

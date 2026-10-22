@@ -15,10 +15,10 @@
  * - 全部 Provider tool call 持桌面资源锁执行（含旧 boss 链路）；等待超时 → DESKTOP_RESOURCE_BUSY
  * - 执行中每 2s 或每个业务进度回传 progress；ack.cancel=true → 协作式中止（AbortController）
  * - 写动作断线：本地继续完成原子动作，恢复后回传终态；无法证明效果 → EXECUTION_UNKNOWN
- * - 旧链路 claim_token 仅内存持有；v2 按契约将 claim/permit 身份持久于 result outbox（仅该目录）
+ * - 两类原结果均持久于 result outbox；v1 独立子目录供旧消费者安全忽略
  */
 import type { ApiClient, ClaimedInvocation, InvocationResultPayload, OperationResultPayload } from './apiClient.js'
-import { ApiError, DeviceRevokedError, NetworkError } from './apiClient.js'
+import { ApiError, DeviceRevokedError, isRetryableTransportError } from './apiClient.js'
 import { getProviderManifest, isToolAllowedFor, isWriteToolFor, type ProviderManifest } from './providers.js'
 import type { ProviderSet, ProviderManager } from './providerManager.js'
 import { ProviderCrashError } from './providerManager.js'
@@ -119,6 +119,7 @@ class ProgressForwarder {
   /** 无进展告警是否已发出（语义进展后重置；每个停滞周期告警一次，避免刷屏） */
   private stalledWarned = false
   cancelled = false
+  authorityLost = false
 
   constructor(
     private readonly api: ApiClient,
@@ -198,6 +199,7 @@ class ProgressForwarder {
   }
 
   private async doSend(payload: { stage?: string; current?: number; total?: number; message?: string }): Promise<void> {
+    if (this.cancelled || this.authorityLost) return
     try {
       const ack = await this.api.progress(this.invocationId, {
         claim_token: this.claimToken,
@@ -217,18 +219,19 @@ class ProgressForwarder {
         this.onCancel()
       }
     } catch (err) {
-      if (err instanceof NetworkError || err instanceof DeviceRevokedError) {
+      if (err instanceof DeviceRevokedError || (err instanceof ApiError && [401, 403, 404, 409].includes(err.status))) {
+        this.authorityLost = true
+        this.emit('云端已拒绝当前执行权，停止续租并协作式中止；已发生的效果仍需回报')
+        this.stop()
+        this.onCancel()
+        return
+      }
+      if (isRetryableTransportError(err)) {
         // 断线策略：进度丢失可容忍，继续本地执行，终态会重试回传
         if (!this.cloudOffline) {
           this.cloudOffline = true
           this.emit('云端连接中断（进度暂无法回传，本地继续执行）')
         }
-        return
-      }
-      if (err instanceof ApiError && err.status === 404) {
-        // 租约过期/状态不允许：云端已不再接受进度，停止续租（终态大概率也被拒，但仍尝试）
-        this.emit('云端拒绝进度回传（租约可能过期），停止续租')
-        this.stop()
         return
       }
       logError(`进度回传失败: ${err instanceof Error ? err.message : String(err)}`)
@@ -256,7 +259,7 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
 
   // v2 结果 outbox：与 PollLoop 启动重投共用实例（deps 注入），缺省按数据目录派生
   const dataDir = deps.runtimeDataDir ?? runtimeHomeDir()
-  const outbox = isV2Invocation ? (deps.resultOutbox ?? new ResultOutbox(resultOutboxDir(dataDir))) : null
+  const outbox = deps.resultOutbox ?? new ResultOutbox(resultOutboxDir(dataDir))
 
   /** 旧链路终态回传（/result）：payload 逐键显式构造——键集与顺序和改造前一致，
    *  FinalResult 的 v2 专用字段绝不进入旧路径（逐字节兼容，含计费语义） */
@@ -270,35 +273,22 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
       data: final.data,
       retryable: final.retryable,
     }
-    let backoff = retryBase
-    for (;;) {
-      try {
-        await deps.api.result(inv.invocation_id, payload)
-        // data_bytes：证明 data 随终态发出（排障「结果回传丢 data」时与云端落库侧比对）
-        const dataBytes = payload.data === undefined ? 0 : JSON.stringify(payload.data).length
-        emit(
-          `invocation ${inv.invocation_id} 终态已回传 success=${final.success} code=${final.code ?? '-'} ` +
-            `effect=${final.effect ?? '-'} data_bytes=${dataBytes}`,
-        )
-        return
-      } catch (err) {
-        if (err instanceof ApiError) {
-          logError(`invocation ${inv.invocation_id} 终态被云端拒绝（HTTP ${err.status}），放弃重试: ${err.message}`)
-          return
-        }
-        if (err instanceof DeviceRevokedError) {
-          logError(`invocation ${inv.invocation_id} 终态回传失败：设备已撤销，结果丢失（fail-loud）`)
-          return
-        }
-        emit(`终态回传失败（网络），${backoff}ms 后重试`)
-        const proceed = await backoffSleep(backoff, deps.shutdownSignal)
-        if (!proceed) {
-          logError(`invocation ${inv.invocation_id} 终态未能回传（Runtime 关闭中），结果丢失（fail-loud）`)
-          return
-        }
-        backoff = Math.min(backoff * 2, retryMax)
+    let entry: OutboxEntry
+    try {
+      entry = outbox.saveLegacy(inv.invocation_id, payload)
+    } catch {
+      logError(`invocation ${inv.invocation_id} v1 outbox 落盘失败，直接发送原结果一次（无重启保障）`)
+      try { await deps.api.result(inv.invocation_id, payload) } catch {
+        logError(`invocation ${inv.invocation_id} v1 原结果未获 ACK 且无法持久化，需核对原调用`)
       }
+      return
     }
+    await deliverOutboxEntry(deps.api, outbox, entry, {
+      retryBaseMs: retryBase,
+      retryMaxMs: retryMax,
+      shutdownSignal: deps.shutdownSignal,
+      emit,
+    })
   }
 
   /** v2 终态回传（operation-result）：先原子落 result outbox 再发送；仅 2xx ACK 删条目（R21），
@@ -413,20 +403,18 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
     const startedT0 = Date.now()
     let backoff = retryBase
     for (;;) {
+      if (deps.shutdownSignal?.aborted) return
       try {
-        await deps.api.started(inv.invocation_id, inv.claim_token)
+        await deps.api.started(inv.invocation_id, inv.claim_token, deps.shutdownSignal)
         break
       } catch (err) {
-        if (err instanceof ApiError) {
-          logError(`invocation ${inv.invocation_id} started 被云端拒绝（HTTP ${err.status}），放弃执行: ${err.message}`)
+        if (!isRetryableTransportError(err)) {
+          logError(`invocation ${inv.invocation_id} started 未获接纳，未执行 Provider${err instanceof ApiError ? ` HTTP ${err.status}` : err instanceof DeviceRevokedError ? '（设备已撤销）' : ''}`)
           return
         }
-        if (err instanceof DeviceRevokedError) {
-          logError(`invocation ${inv.invocation_id} started 失败：设备已撤销`)
-          return
-        }
-        emit(`started 失败（网络），${backoff}ms 后重试`)
-        const proceed = await backoffSleep(backoff, deps.shutdownSignal)
+        const delay = Math.max(backoff, err instanceof ApiError ? err.retryAfterMs ?? 0 : 0)
+        emit(`started 暂不可用，${delay}ms 后重传原请求`)
+        const proceed = await backoffSleep(delay, deps.shutdownSignal)
         if (!proceed) return
         backoff = Math.min(backoff * 2, retryMax)
       }
@@ -459,6 +447,7 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
     : deps.providers.get(providerKey)
   const lockName = desktopLockName(deps.desktopResourceKey)
   const abortController = new AbortController()
+  if (deps.shutdownSignal?.aborted) abortController.abort()
   const onShutdownAbort = () => abortController.abort()
   deps.shutdownSignal?.addEventListener('abort', onShutdownAbort, { once: true })
 
@@ -489,6 +478,7 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
   let settled: Record<string, unknown> | null = null
   let callError: Error | null = null
   let lockBusy = false
+  let providerStarted = false
   const lockEnterMs = Date.now()
   try {
     // 桌面资源仲裁入口：全部 Provider（含旧 boss 链路）的 tool call 都持锁执行，不改 MCP 契约；
@@ -501,6 +491,17 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
       async () => {
         const lockAcquiredMs = Date.now()
         phase.lockWaitMs = lockAcquiredMs - lockEnterMs
+        await forwarder.flush()
+        if (abortController.signal.aborted) {
+          lockPreabort = preabortFinal({
+            success: false,
+            code: forwarder.authorityLost ? 'EXECUTION_AUTHORITY_LOST' : 'CANCELLED',
+            message: '执行已停止，未开始 Provider 调用',
+            retryable: false,
+            safe_to_retry: false,
+          })
+          return null
+        }
         if (isV2Invocation && writeTool) {
           // 取消状态复验（R20）：flush 让等待期最后一批进度 ACK 先落地，再读取消标志；
           // 已被取消/关闭则不申请许可、不执行（effect none，可重试语义与取消分支一致收敛）
@@ -625,6 +626,8 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
         phase.lockPrepMs = Date.now() - lockAcquiredMs
         const providerCallT0 = Date.now()
         try {
+          if (abortController.signal.aborted) throw new Error('EXECUTION_AUTHORITY_LOST')
+          providerStarted = true
           return await provider.callTool(inv.tool_name, callArgs, {
             signal: permit ? AbortSignal.any([abortController.signal, AbortSignal.timeout(Math.max(0, Math.floor(permit.msRemaining())))]) : abortController.signal,
             onProgress: (p) => {
@@ -675,6 +678,21 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
     ? { permit_id: finalPermit.permitId, permit_token: finalPermit.permitToken }
     : {}
   const strField = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
+
+  if (forwarder.authorityLost) {
+    await sendFinalResult({
+      success: false,
+      code: 'EXECUTION_AUTHORITY_LOST',
+      message: '云端已拒绝当前执行权，已停止；已发动作按原回执核对',
+      effect: strField(settled?.['effect']) ?? (providerStarted && writeTool ? 'unknown' : 'none'),
+      phase: strField(settled?.['phase']) ?? (providerStarted && writeTool ? 'unknown' : 'prepared'),
+      data: settled?.['data'] as Record<string, unknown> | undefined,
+      retryable: false,
+      safe_to_retry: false,
+      ...permitFields,
+    })
+    return
+  }
 
   if (forwarder.cancelled) {
     // 云端取消优先：协作式中止后回 cancelled 终态（保留已产生的局部 effect）

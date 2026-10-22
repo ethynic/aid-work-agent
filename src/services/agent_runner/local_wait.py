@@ -18,17 +18,20 @@ def end_waiting(repository, principal, runner_id):
         if row['session_kind'] != 'web' or row['source'] != 'chat':
             raise RunnerError('LOCAL_END_WAIT_FORBIDDEN', 403)
         checkpoint = row.get('checkpoint') or {}
-        if checkpoint.get('detached_local_wait') is True:
+        if checkpoint.get('detached_local_wait') is True or checkpoint.get('ended_undispatched_wait') is True:
             return row  # Retrying a lost response cannot affect another owner.
         if (row['status'] not in {'waiting', 'paused', 'interrupted'}
                 or row.get('worker_id') is not None or row.get('lease_until') is not None
                 or checkpoint.get('pending_finalization')):
             raise RunnerError('LOCAL_END_WAIT_NOT_READY', 409)
         root = checkpoint.get('execution') or {}
+        from .unbound_local import resolve_tree_in_tx
+        converged = resolve_tree_in_tx(cursor, row, root)
         # Serialize the hold with all create/claim/permit device boundaries.
         ids = sorted({fact['request']['device_id'] for _, phase, fact
             in owned_invocations(root, runner_id) if phase is not None})
-        if not ids:
+        undispatched = converged and not ids
+        if not ids and not undispatched:
             raise RunnerError('LOCAL_END_WAIT_NOT_APPLICABLE', 409)
         from src.local_tools.repository import lock_operation_admission
         lock_operation_admission(cursor, row['tenant_id'])
@@ -38,9 +41,9 @@ def end_waiting(repository, principal, runner_id):
             raise RunnerError('LOCAL_INVOCATION_OWNER_VERIFICATION_REQUIRED', 409)
         facts = _cancel_facts(cursor, row, request=False)
         from .public_view import local_recovery_applicable
-        if not local_recovery_applicable(row):
+        if not undispatched and not local_recovery_applicable(row):
             raise RunnerError('LOCAL_END_WAIT_NOT_APPLICABLE', 409)
-        if (not any(fact.get('state') == 'unknown' or fact.get('effect') == 'unknown' for fact in facts)
+        if (not undispatched and not any(fact.get('state') == 'unknown' or fact.get('effect') == 'unknown' for fact in facts)
                 or any(fact.get('kind') == 'domain' and not fact.get('known') for fact in facts)):
             raise RunnerError('LOCAL_END_WAIT_NOT_APPLICABLE', 409)
         # Request stop, retain all original facts, then use the existing
@@ -51,7 +54,8 @@ def end_waiting(repository, principal, runner_id):
             raise RunnerError('LOCAL_END_WAIT_NOT_APPLICABLE', 409)
         held = sorted(str(fact['id']) for fact in facts if fact.get('kind') == 'local'
             and not fact['completion_known'])
-        checkpoint = {**checkpoint, 'detached_local_wait': True, 'detached_local_invocations': held}
+        checkpoint = ({**checkpoint, 'ended_undispatched_wait': True} if undispatched else
+            {**checkpoint, 'detached_local_wait': True, 'detached_local_invocations': held})
         checkpoint.pop('cancel_completion_blocked', None)
         close_pending_controls(cursor, runner_id, 'CONTROL_EXECUTION_CLOSED')
         cursor.execute('''UPDATE agent_runners SET checkpoint=%s::jsonb,cancel_requested=TRUE,

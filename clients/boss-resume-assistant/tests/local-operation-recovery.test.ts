@@ -41,7 +41,7 @@ const meta = (r: OperationResult) => r.data.visual_recovery as Dict
 
 test('all 22 business entries share local ownership and the two primitives cannot recursively recover', async () => {
   assert.equal(Object.keys(LOCAL_RECOVERY_POLICIES).length, 22)
-  assert.equal(Object.keys(OPERATIONS).length, 24)
+  assert.equal(Object.keys(OPERATIONS).length, 25)
   const primitive: BossOperation<Dict> = { name: 'boss_overlay_inspect', async execute() { throw Error('not called') } }
   assert.equal(withLocalRecovery(primitive), primitive)
   for (const name of Object.keys(LOCAL_RECOVERY_POLICIES)) {

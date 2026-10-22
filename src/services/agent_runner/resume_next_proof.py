@@ -15,7 +15,7 @@ from .local_invocations import LocalPhase
 
 
 def continuation_arguments(row, node, call_id, arguments, load_parent,
-                           load_attempts=None, current_invocation_id=None):
+                           load_attempts=None, current_invocation_id=None, require_binding=True):
     """Return public canonical arguments, or reject any changed ownership fact.
 
     exclude_names 与派发时 prepare_next 的合成口径一致：父批名单 + 沿同一游标
@@ -62,14 +62,19 @@ def continuation_arguments(row, node, call_id, arguments, load_parent,
     if not capability['continuation']['available']:
         reject()
     attempts = load_attempts(parent) if load_attempts is not None else []
+    history_version = (saved.get('result') or {}).get('_resume_history_version', 1)
+    if type(history_version) is not int or history_version not in {1, 2}:
+        reject()
     names = list(dict.fromkeys(_names(data, previous)
-        + failed_attempt_names(attempts, (current_invocation_id,))))
+        + failed_attempt_names(attempts, (current_invocation_id,), history_version=history_version)))
     canonical = {'continue_from': parent_id, 'limit': intent['limit'],
                  'exclude_names': names, 'expected_job_name': data['job_name'].strip(),
                  '_resume_expected_device_id': str(parent['device_id'])}
+    if history_version == 2:
+        canonical['_resume_history_version'] = 2
     main = LocalPhase(node['execution_id'], call_id, 'main', 0)
     ref = (node.get('resources', {}).get('local_invocations') or {}).get(main.key(row['runner_id'])) or {}
     if (saved.get('result') != canonical
-            or ref.get('request', {}).get('device_id') != canonical['_resume_expected_device_id']):
+            or require_binding and ref.get('request', {}).get('device_id') != canonical['_resume_expected_device_id']):
         reject()
     return {key: value for key, value in canonical.items() if not key.startswith('_')}

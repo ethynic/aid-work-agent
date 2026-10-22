@@ -588,15 +588,15 @@ test('errorMapping：取消与主动 code', () => {
   assert.equal(mapExecutorError(new CodedOperationError('WRONG_PAGE', '非推荐页')).code, 'WRONG_PAGE')
 })
 
-test('errorMapping：Chrome 连接失败', () => {
+test('errorMapping：连接失败与命令回执未知必须分开', () => {
   const withCause = new TypeError('fetch failed', { cause: Object.assign(new Error('x'), { code: 'ECONNREFUSED' }) })
   assert.equal(mapExecutorError(withCause).code, 'CHROME_UNAVAILABLE')
   assert.equal(mapExecutorError(new Error('fetch failed')).code, 'CHROME_UNAVAILABLE')
-  assert.equal(mapExecutorError(new Error('CDP request timed out after 10000ms')).code, 'CHROME_UNAVAILABLE')
+  assert.equal(mapExecutorError(new Error('CDP request timed out after 10000ms')).code, 'EXECUTION_UNKNOWN')
 })
 
-test('errorMapping：未登录/未打开 BOSS 页面', () => {
-  assert.equal(mapExecutorError(new Error('no BOSS page target found among 5 targets')).code, 'NOT_LOGGED_IN')
+test('errorMapping：无业务标签不代表已经核验未登录', () => {
+  assert.equal(mapExecutorError(new Error('no BOSS page target found among 5 targets')).code, 'WRONG_PAGE')
   assert.equal(mapExecutorError(new NavError('页面上找不到菜单文案「沟通」（不在 DOM 文本表中），请确认已登录 BOSS')).code, 'NOT_LOGGED_IN')
 })
 

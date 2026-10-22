@@ -148,6 +148,9 @@ def local_recovery_applicable(row):
         refs = node.get('resources', {}).get('local_invocations') or {}
         return any(node.get('tools', {}).get(ref.get('tool_call_id'), {}).get('phase')
             in {'dispatching', 'waiting'} for ref in refs.values()) or any(
+            fact.get('phase') in {'dispatching', 'waiting'}
+            and (fact.get('call') or {}).get('name') == 'boss_resume_next'
+            for fact in node.get('tools', {}).values()) or any(
             pending_local(child.get('checkpoint') or {}) for child in node.get('children', {}).values())
     return pending_local(root)
 
@@ -203,4 +206,10 @@ def public_runner(row):
         value['local_verification_available'] = True
     if local_recovery_applicable(row):
         value['local_recovery'] = True
+        root = checkpoint.get('execution') or {}
+        from src.local_tools.repository import owned_invocation_ids
+        value['local_recovery_kind'] = 'original_operation' if owned_invocation_ids(root) else 'dispatch_unconfirmed'
+        value['local_recovery_actions'] = (['verify', 'stop', 'end'] if row.get('cancel_requested') else
+            ['verify', 'stop', 'resume', 'end']) if owned_invocation_ids(root) else (
+                ['end'] if row.get('cancel_requested') else ['resume', 'end'])
     return value

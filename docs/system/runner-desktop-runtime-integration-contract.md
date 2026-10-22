@@ -2,7 +2,7 @@
 
 > 契约 ID：`AID-RUNNER-DESKTOP-RUNTIME`
 >
-> 版本：`2.5`；日期：2026-10-20
+> 版本：`2.6`；日期：2026-10-22
 >
 > 状态：v2.0按用户逐条复核确定，替代v1.3的插件额外审批语义；候选0.3已有真实Host与Desktop消费验证，Windows隔离验收版已交付，尚未共同登记wire冻结。现有公开API以代码为基线；共享格式见第8.1节，任务binding、授权及资源占用wire仍待主导交付。隔离验收不代表生产发行或真实业务验收通过。
 >
@@ -15,6 +15,8 @@
 > 上位基线：[已完成 AgentRunner 架构](agent-application-architecture-design.md)、[Provider 规范](first-party-cli-mcp-provider-standard.md)
 
 ## 1. 适用范围与约束层级
+
+2026-10-22恢复增量实施检查点（[修复计划](../plans/plan-runner-local-tool-recovery-lockup-fix.md)，开发中）：Device wire、H1/H3及绑定身份不变。唯一写入者：主控维护后端恢复证明/公开投影与本契约；Runtime传输角色维护共享Core及Runtime消费；BOSS恢复角色维护CLI本机恢复。v2 `result-outbox/<id>.json`保持原格式；v1结果使用同一outbox设施的`legacy-v1/`子目录，显式`protocol_version=1`、`endpoint=result`，只补传原payload。旧消费者只扫描根目录，因此忽略并保留v1文件，不得误投operation-result或重执行；新版分别投递原endpoint，ACK前保留。CLI保持OperationResult/error枚举及operation_recovery schema2、visual_recovery schema1；现有诊断字典补充脱敏失败类别/子阶段。browserTargetBinding可增加本机可选业务URL及原profile信息；原profile可由已有可信本机配置或实际浏览器进程参数确认，不强制要求新增managed_profile_dir字段或“曾由本启动器拉起”的磁盘记录。旧记录缺字段但仍可确定原profile时支持自动重开，确实无法确定时准确说明，不猜测陌生profile。只读/可重设页面可重建tab，未知外发不重放；取消/失权禁止重开。当前CLI调用内确定性恢复、Runtime独立续租，不新增本地Agent或后台恢复调度协议；既有release绑定不改，需新版能力则在原会话合法创建新版接续执行。生产/消费与旧格式组合验证按本批影响范围登记，未验收前不宣称兼容通过。此前“只attach”的历史限制在用户明确授权的原profile重开范围内被本条替代；不得杀无关Chrome、清Cookie/profile或偷换账号。
 
 2026-10-20共同检查点：用户授权BOSS视觉恢复直接复用Runtime配对身份，禁止额外URL/ClientBinding token配置。新增设备API`POST /api/local-tools/runtime/boss/visual-diagnose`（复用既有视觉body v1/v2及响应/20倍计费），不改H1/H3/Device配对/claim/permit格式。Host唯一从当前配对配置/DPAPI凭据为受信BOSS进程注入内存字段`AIDWORK_RUNTIME_SERVER`和`AIDWORK_RUNTIME_DEVICE_TOKEN`；不向其他Provider、renderer/IPC、日志或磁盘扩散，不接纳父env覆盖。CLI本地恢复职责保持。旧ClientBinding API不改，历史台账保留；新BOSS只消费新设备入口，旧插件不消费新字段且需升级。唯一写入：本任务主控维护Runtime Host/CLI/Main及版本，backend身份角色维护设备路由/视觉主体与台账；独立角色只读审查/测试。两端计划已同步登记，实施及实际producer/consumer组合测试记录见[BOSS计划23](../plans/desktop-automation/plan-boss-operation-verification-visual-recovery.md#23-runtime配对身份复用纠正2026-10-20)。本版本仅增加该设备API及受信BOSS调用边界，不声称其他共同wire已完成冻结。
 
@@ -29,6 +31,8 @@
 2026-10-09用户复核决议：安装即本机使用授权，安装成功默认enabled=true，运行条件独立决定ready，不另设插件审批或默认逐次弹窗。账号/配对/设备使用关系、目标workspace及既有任务策略继续复用。允许安装分析调用云端模型：先读SKILL.md，信息不足时才补传必要源码；这不是本地任务Agent loop。日期标为v1.3的记录属于历史基线，冲突处以v2.0及第8.1节当前候选0.3为准。
 
 当前实施范围：第一部分Runtime UI、BOSS/weixin/wecom第一方插件安装管理及必要核心/既有执行兼容已交付隔离验收版，人工与正式发行门见统一Runtime计划。第三方skill安装、AI分析、动态登记/执行为第二部分，契约/schema/fixture保留，暂不开发。当前以候选0.3为格式入口，不因文档收敛改变C01～C12、schema或版本；第一部分不能把保留的skill格式展示为已支持能力。公共壳/H2/H3职责保持。
+
+恢复增量兼容细节（2.6）：公开 Runner 投影新增可选 `local_recovery_kind` / `local_recovery_actions`，只展示候选动作，不授予执行权；旧 Web 忽略新增字段，新 Web 遇旧服务端缺字段时沿原入口。后端继续在原受权事务核对恢复/结束能力。续筛领域阶段保存私有 `_resume_history_version=2`，旧缺字段沿 v1 原资格和排除名单证明，不改变已接受 invocation 参数；私有版本不发往 CLI/Device API。CLI 本机 binding 的可选 `restore_pending` 只记录已创建页面尚待登录/职位/筛选恢复，原 ref 和 target 索引同步，旧普通读取不依赖这些新增字段。CLI 内部持久记录不承诺在降级至旧插件后仍能自动恢复新 target；在途调用继续使用原 release，不热换代码。实际组合测试及未验收范围见修复计划第9节。
 
 ## 2. 必须稳定的十二项边界
 

@@ -3,6 +3,7 @@ import { mapExecutorError } from '../operations/errorMapping.js'
 import type { PageExecution } from '../operations/pageOperation.js'
 import { candidateReference, loadedCandidates, resolveCandidateReference } from './LoadedCandidateNavigation.js'
 import { WinClickError } from '../input/WinMouseClicker.js'
+import { isTransientCdpError } from '../cdp/errors.js'
 /**
  * 推荐牛人页批量简历读取执行器（CLI resume-batch 命令 / boss_resume_batch tool，设计 §10.8 延伸）。
  *
@@ -305,10 +306,13 @@ export class ResumeBatchReader {
       failures.splice(pending.failureStart)
       if (pending.phase === 'close') checkpoint.current = undefined
       else {
-        if (pending.reference && !resolveCandidateReference(initial, pending.name, pending.reference)) {
-          throw new ResumeBatchError('恢复后原候选卡片或账号职位已变化，未读取其他候选人')
-        }
         processedNames.delete(pending.name)
+        // A refreshed list can move or remove the unfinished card. Rescan under
+        // the same job/filter intent, preserving completed names and payloads.
+        if (!this.locateCards(initial).some(card => card.name === pending.name)) {
+          resumeName = null
+          checkpoint.current = undefined
+        }
       }
     }
 
@@ -508,6 +512,7 @@ export class ResumeBatchReader {
         })
       } catch (err) {
         if (err instanceof CancelledError || err instanceof ResumeObstructedError) throw err
+        if (isTransientCdpError(err)) throw err
         // 读取失败也必须先尝试关闭详情，否则弹层挡住列表没法点下一张
         const closed = await this.tryCloseDetail()
         const readErrMsg = err instanceof Error ? err.message : String(err)
@@ -549,6 +554,7 @@ export class ResumeBatchReader {
     } catch (error) {
       if (error instanceof CancelledError && resumes.length === 0) throw error
       const mapped = mapExecutorError(error)
+      if (isTransientCdpError(error) && checkpoint.current?.phase !== 'close' && currentName) processedNames.delete(currentName)
       pushFailure(currentName, mapped.message)
       stopReason = mapped.code === 'CANCELLED' ? 'cancelled' : 'page_operation_failed'
       recovery = { code: mapped.code, summary: mapped.message, execution: structuredClone(this.execution) }

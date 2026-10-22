@@ -21,6 +21,8 @@ export interface RunnerPresentation {
 }
 export interface RunnerView {
   local_recovery?: boolean
+  local_recovery_kind?: 'original_operation' | 'dispatch_unconfirmed'
+  local_recovery_actions?: Array<'verify' | 'stop' | 'resume' | 'end'>
   local_verification_available?: boolean
   local_verification?: { invocation_id: string; state: string; resource_stopped?: boolean; page_observed?: boolean; target_relation?: string | null; waiting_ended?: boolean; error_code?: string | null; stop_error_code?: string | null; page_summary?: { observed: boolean; page_kind: string; result?: 'match' | 'mismatch' | 'unknown'; filter_count?: number | null; panel_open?: boolean; count_result?: string } }
   runner_id: string

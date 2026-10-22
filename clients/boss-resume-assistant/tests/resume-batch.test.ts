@@ -29,6 +29,8 @@ import {
   OPEN_CLICK_ATTEMPTS,
 } from '../src/main/boss/ResumeBatchReader.js'
 import { buildResumePayload } from '../src/main/operations/bossResumeDetail.js'
+import { withLocalRecovery } from '../src/main/boss/localOperationRecovery.js'
+import { CodedOperationError } from '../src/main/operations/types.js'
 import { ResumeReader, type DeviceRect, type ResumeReadResult } from '../src/main/boss/ResumeReader.js'
 import type { DomSnapshot, ClickPoint } from '../src/main/boss/domSnapshot.js'
 import { findButtonsByExactText, pairCardNameWithPoint } from '../src/main/boss/cardName.js'
@@ -883,3 +885,54 @@ test('成功终态保留当前项收尾的一次重试，不用默认0覆盖', a
   copy.inputStatus = 'not_started'
   assert.equal(executor.batchExecution.inputStatus, 'attempted', '回执是副本，调用方不能改执行事实')
 })
+
+
+test('CDP close timeout retains the first image and checkpoint recovery never reads or charges that candidate again', async () => {
+  const batch = makeBatch([ROW1, ROW2])
+  batch.deps.checkpoint = {}
+  const close = batch.deps.pressEscape
+  let injected = false
+  batch.deps.pressEscape = async () => {
+    if (!injected) { injected = true; throw new Error('CDP request timed out: Input.dispatchMouseEvent') }
+    await close()
+  }
+  const first = await batch.reader().readBatch({ limit: 2 })
+  assert.equal(first.resumes.length, 1)
+  const saved = first.resumes[0]
+  const second = await batch.reader().readBatch({ limit: 2 })
+  assert.equal(second.resumes.length, 2)
+  assert.equal(second.resumes[0], saved)
+  assert.equal(batch.f.stitchCalls.length, 2, 'completed candidate must not be captured a second time')
+  assert.equal(second.stop_reason, 'limit_reached')
+})
+
+
+for (const code of ['NOT_LOGGED_IN', 'UI_CHANGED', 'CANCELLED'] as const) {
+  test('retained batch survives a pre-body recovery dependency: ' + code, async () => {
+    const { deps } = makeBatch([ROW1, ROW2])
+    const originalRead = ResumeReader.prototype.readResume
+    ResumeReader.prototype.readResume = async () => ({ segments: 1, bottomReached: true, width: 760, height: 2400,
+      imageBuffer: STITCHED_PNG, seamMis: [], suspectSeams: [] })
+    const controller = new AbortController()
+    let connections = 0
+    const session: BossSession = {
+      snapshot: deps.snapshot, click: deps.click,
+      pressEscape: async () => { throw new Error('CDP request timed out: Input.dispatchMouseEvent') },
+      clickBrowse: async () => {}, clickAndType: async () => {}, mouseWheel: async () => {},
+      captureFullpage: deps.captureFullpage, getUrl: async () => 'https://www.zhipin.com/web/chat/recommend', close: async () => {},
+    }
+    try {
+      const operation = createBossResumeBatchOperation(async () => {
+        if (++connections === 1) return session
+        if (code === 'CANCELLED') controller.abort()
+        throw new CodedOperationError(code, 'fixture dependency before Reader')
+      })
+      const result = await withLocalRecovery(operation, { env: {}, sleep: async () => {} }).execute({ limit: 2 },
+        { signal: controller.signal, progress() {} })
+      assert.equal(connections, 2)
+      assert.equal((result.data.resumes as unknown[]).length, 1, 'final receipt must carry the already captured image')
+      assert.equal((result.data.cleanup_error as any).code, code)
+      assert.equal(result.data.stop_reason, code === 'CANCELLED' ? 'cancelled' : 'page_operation_failed')
+    } finally { ResumeReader.prototype.readResume = originalRead }
+  })
+}

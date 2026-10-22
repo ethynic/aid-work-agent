@@ -83,7 +83,7 @@ PAGE_STATE_STOP_REASONS = frozenset({'detail_not_closed', 'page_operation_failed
     'UI_CHANGED', 'no_progress'})
 
 
-def failed_attempt_names(attempts, exclude_ids=()):
+def failed_attempt_names(attempts, exclude_ids=(), *, history_version=1):
     """沿同一游标「失败且可重试」的续筛尝试中已标记处理过的候选人名单。
 
     取卡即标记含失败路径：processed_names 有名字不代表有简历读取成果
@@ -100,13 +100,26 @@ def failed_attempt_names(attempts, exclude_ids=()):
     """
     merged = []
     for record in attempts or ():
+        # Frozen v1 requests predate eligibility of returned readonly unknowns.
+        if history_version == 1 and repository.observed_invocation(record).get('state') != 'failed':
+            continue
         if str(record.get('id')) in set(exclude_ids):
             continue
         if not repository.continuation_retry_safe(record):
             continue
         data = (record.get('result_json') or {}).get('data')
         if isinstance(data, dict):
-            merged.extend(_names(data, {}))
+            if history_version == 1:
+                # Existing frozen requests used take-card exclusion semantics.
+                # Preserve their proof rather than reinterpret an accepted call.
+                merged.extend(_names(data, {}))
+                continue
+            # A temporary input error is not a completed candidate. Only final
+            # per-item failures belong to the exclusion history of a retry.
+            failures = data.get('failures') or []
+            completed = [item for item in failures if isinstance(item, dict)
+                and not isinstance(item.get('operation_recovery'), dict)]
+            merged.extend(_names({'failures': completed}, {}))
     return sorted(dict.fromkeys(merged))
 
 
@@ -199,12 +212,13 @@ async def prepare_next(kwargs, operation=None):
     # （含失败路径的取卡标记），人工修复后重试不再重复尝试这些失败候选人
     attempts = await asyncio.to_thread(repository.list_resume_next_attempts, parent_id,
         tenant_id, user_id, session_id, str(parent['device_id']))
-    names = list(dict.fromkeys(names + failed_attempt_names(attempts)))
+    names = list(dict.fromkeys(names + failed_attempt_names(attempts, history_version=2)))
     job = data.get('job_name')
     if not names or len(names) >= 1000 or not isinstance(job, str) or not job.strip():
         return None, error('INVALID_CONTINUATION', '上次筛选缺少职位或已处理名单，或已达1000人续筛边界')
     canonical = {'continue_from': parent_id, 'limit': limit, 'exclude_names': names,
-        'expected_job_name': job.strip(), '_resume_expected_device_id': str(parent['device_id'])}
+        'expected_job_name': job.strip(), '_resume_expected_device_id': str(parent['device_id']),
+        '_resume_history_version': 2}
     if operation is not None:
         canonical = await operation.owner.complete_phase(branch='resume.next.request', ordinal=operation.ordinal,
             intent=intent, result=canonical)

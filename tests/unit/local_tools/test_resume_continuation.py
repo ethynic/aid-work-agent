@@ -575,8 +575,8 @@ async def test_retry_excludes_failed_candidates_along_cursor(monkeypatch):
                         lambda *args, **kwargs: attempts)
     canonical, failure = await continuation.prepare_next(kwargs())
     assert failure is None
-    assert canonical['exclude_names'] == ['甲先生', '乙先生', '丙先生', '丁先生'], \
-        '失败候选人丁沿用游标排除；成功戊/有成果失败己不合并（前者游标已含、后者不可重试）'
+    assert canonical['exclude_names'] == ['甲先生', '乙先生', '丙先生'], \
+        '临时页面失败的丁尚未完成，不因一次取卡就永久排除；已完成父批仍排除'
 
 
 @pytest.mark.asyncio

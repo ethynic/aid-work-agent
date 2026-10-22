@@ -182,3 +182,15 @@ def test_model_authorization_survives_attempt_record_order_flip(proof):
     proof.next_phase['result']['exclude_names'] = names
     proof.invocation['arguments_json']['exclude_names'] = names
     assert authorize(proof).endswith(':resume_recognition_covered')
+
+
+def test_frozen_v1_proof_does_not_gain_new_readonly_unknown_history(proof):
+    # The accepted v1 canonical request never included temporary take-card names
+    # from unknown receipts; newer retry eligibility must not change its intent.
+    proof.attempts_rows.append(dict(id=str(uuid4()), tool_name='boss_resume_next',
+        state='unknown', effect='none', result_json={'success': False, 'code': 'EXECUTION_UNKNOWN',
+            'data': {'resumes': [], 'processed_names': ['temporary'], 'attempted': 1,
+                'stop_reason': 'page_operation_failed', 'operation_recovery': {
+                    'operation_class': 'readonly', 'operation': {'name': 'boss_resume_next'}}}}))
+    assert authorize(proof).endswith(':resume_recognition_covered')
+    assert LocalRecoveryProof().can_restore(proof.row, proof.state, proof.state.tools['call'])

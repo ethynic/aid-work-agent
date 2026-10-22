@@ -21,6 +21,7 @@ import { ResumeBatchError } from '../boss/ResumeBatchReader.js'
 import { DetailGreetError } from '../boss/DetailGreetExecutor.js'
 import { WinClickError } from '../input/WinMouseClicker.js'
 import { CancelledError, CodedOperationError, type ErrorCode } from './types.js'
+import { CdpCommandTimeoutError, CdpTargetUnavailableError, CdpConnectionError } from '../cdp/errors.js'
 
 export interface MappedError {
   code: ErrorCode
@@ -50,16 +51,13 @@ const POST_WRITE_VERIFY_MARKERS = [
 const CHROME_UNAVAILABLE_MARKERS = [
   'ECONNREFUSED',
   'fetch failed',
-  'timed out',
-  'timeout',
   'socket is not connected',
   'WebSocket disconnected',
   'socket closed',
-  'session mismatch',
 ]
 
 /** 未登录/未打开 BOSS 页面标记 */
-const NOT_LOGGED_IN_MARKERS = ['请确认已登录', 'no BOSS page target found']
+const NOT_LOGGED_IN_MARKERS = ['请确认已登录']
 
 /** 参数类 FilterSetError 标记（规格 §3） */
 const FILTER_ARG_MARKERS = ['行为单选', '未提供任何筛选条件']
@@ -115,7 +113,16 @@ export function mapExecutorError(err: unknown): MappedError {
   if (message.includes('[BOSS_POWERSHELL_PREPARE]') || message.includes('[BOSS_POWERSHELL_LAUNCH]')) {
     return { code: 'INTERNAL_ERROR', message: `本机 PowerShell 脚本启动失败：${message}` }
   }
-  if (causeCode(err) === 'ECONNREFUSED' || CHROME_UNAVAILABLE_MARKERS.some((m) => message.includes(m))) {
+  if (err instanceof CdpCommandTimeoutError || /^CDP request timed out(?::| after )/.test(message)) {
+    return { code: 'EXECUTION_UNKNOWN', message: `Chrome 调试命令回执超时：${message}；需要回读当前页面状态，不能据此判断输入是否生效` }
+  }
+  if (err instanceof CdpTargetUnavailableError || /CDP response session mismatch|BOUND_BOSS_TARGET_UNAVAILABLE/.test(message)) {
+    return { code: 'UI_CHANGED', message: `Chrome 页面连接已失效：${message}` }
+  }
+  if (message.includes('no BOSS page target found')) {
+    return { code: 'WRONG_PAGE', message: '当前调试浏览器没有 BOSS 业务页面；尚未核验登录状态' }
+  }
+  if (err instanceof CdpConnectionError || causeCode(err) === 'ECONNREFUSED' || CHROME_UNAVAILABLE_MARKERS.some((m) => message.includes(m))) {
     return {
       code: 'CHROME_UNAVAILABLE',
       message: `无法连接 Chrome 调试端口：${message}。请确认 Chrome 已带 --remote-debugging-port 启动`,

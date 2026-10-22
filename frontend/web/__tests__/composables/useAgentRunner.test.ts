@@ -269,6 +269,62 @@ describe('Existing useAgent public interface with durable Runner transport', () 
     await loading; await flush()
   }
 
+  it.each(['verify', 'stop'] as const)('an undispatched old checkpoint cannot send a device %s request', async action => {
+    await discoverParked(runnerView({ status:'interrupted', local_recovery:true,
+      local_recovery_kind:'dispatch_unconfirmed', local_recovery_actions:['resume','end'] }))
+    const attachment = { file_id:'kept', name:'kept.txt', size:4, type:'file' as const, mime_type:'text/plain' }
+    agent.currentFiles.value = [attachment]
+    await agent.resolveLocalRecovery(action); await flush()
+    expect(network.requests.filter(item => item.method === 'POST')).toEqual([])
+    expect(agent.localRecovery.value?.runner_id).toBe('runner-A')
+    expect(agent.currentFiles.value).toEqual([attachment])
+    expect(agent.localRecoveryBusy.value).toBe(false)
+  })
+
+  it.each(['resume', 'end'] as const)('an undispatched old checkpoint can %s in the same session', async action => {
+    const row = runnerView({ status:'interrupted', local_recovery:true,
+      local_recovery_kind:'dispatch_unconfirmed', local_recovery_actions:['resume','end'] })
+    await discoverParked(row)
+    const resolving = agent.resolveLocalRecovery(action); await flush()
+    const posted = request('/runners/runner-A/' + (action === 'resume' ? 'controls' : 'end-waiting'), 'POST')
+    const body = JSON.parse(posted.body!)
+    if (action === 'resume') {
+      expect(body).toEqual({ client_request_id:expect.any(String), action:'resume' })
+      posted.respond({ success:true, runner:{ ...row, view_revision:2, resume_requested:true },
+        control:{ control_id:'old-dispatch-resume', runner_id:row.runner_id,
+          client_request_id:body.client_request_id, action:'resume', status:'accepted' } }, 202)
+    } else {
+      expect(body).toEqual({})
+      posted.respond({ success:true, runner:runnerView({ status:'cancelled', cancel_requested:true,
+        settlement_status:'settled', view_revision:2 }) })
+    }
+    await resolving; await flush()
+    expect(network.requests.filter(item => item.method === 'POST')).toHaveLength(1)
+    expect(network.requests.some(item => item.method === 'POST' && item.url.endsWith('/runners'))).toBe(false)
+    expect(agent.localRecoveryBusy.value).toBe(false)
+    expect(agent.error.value).toBeFalsy()
+  })
+
+  it.each(['verify', 'stop'] as const)('a server without the optional actions field keeps the existing %s request', async action => {
+    const row = runnerView({ status:'interrupted', local_recovery:true })
+    await discoverParked(row)
+    const resolving = agent.resolveLocalRecovery(action); await flush()
+    const posted = request('/runners/runner-A/verify-local', 'POST')
+    expect(JSON.parse(posted.body!).stop_resources).toBe(action === 'stop' ? true : undefined)
+    posted.respond({ success:true, runner:{ ...row, view_revision:2 } })
+    await resolving; await flush()
+    expect(network.requests.filter(item => item.method === 'POST')).toHaveLength(1)
+    expect(agent.error.value).toBeFalsy()
+  })
+
+  it.each(['verify', 'stop', 'resume', 'end'] as const)('an explicit empty actions list cannot fall back to legacy %s permission', async action => {
+    await discoverParked(runnerView({ status:'interrupted', local_recovery:true, local_recovery_actions:[] }))
+    await agent.resolveLocalRecovery(action); await flush()
+    expect(network.requests.filter(item => item.method === 'POST')).toEqual([])
+    expect(agent.localRecovery.value?.runner_id).toBe('runner-A')
+    expect(agent.localRecoveryBusy.value).toBe(false)
+  })
+
   it('ended history verification reads page without claiming stop or requesting a system reboot', async () => {
     const ended = runnerView({ status:'cancelled', settlement_status:'settled', cancel_requested:true,
       local_verification_available:true, view_revision:2 })

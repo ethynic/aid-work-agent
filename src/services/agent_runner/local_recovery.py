@@ -87,6 +87,9 @@ def stored_deadline_expired(invocation):
 
 
 class LocalRecoveryProof:
+    def __init__(self, connection_factory=None):
+        self.connection_factory = connection_factory or repository.get_db_connection
+
     def can_restore(self, row, state, fact):
         from src.local_tools.proxy_tool import LOCAL_PROXY_TOOL_CLASSES, LocalToolProxyTool
         from src.local_tools.domain_flow import supports_owned_device_class, cloud_read_branch, domain_classes
@@ -99,7 +102,10 @@ class LocalRecoveryProof:
             from .notify_facts import delivery_facts
             return delivery_facts(row,state.checkpoint(),fact.call.id)['known']
         from src.tools.executor import normalize_provided_parameters
-        arguments = normalize_provided_parameters(cls,fact.call.arguments)
+        try:
+            arguments = normalize_provided_parameters(cls,fact.call.arguments)
+        except (TypeError, ValueError) as error:
+            raise RunnerError('LOCAL_PHASE_INTENT_CHANGED', 409) from error
         cloud_branch = cloud_read_branch(cls,arguments)
         if cloud_branch is not None:
             from .domain_recovery import cloud_read_proof
@@ -108,7 +114,33 @@ class LocalRecoveryProof:
         phase = LocalPhase(state.execution_id, fact.call.id, 'main', 0)
         ref = refs.get(phase.key(row['runner_id']))
         if ref is None:
-            return False
+            from src.local_tools.proxy_tool import BossResumeNextTool
+            if cls is not BossResumeNextTool:
+                return False
+            from .local_invocations import _execution
+            from .unbound_local import resolve_next_in_tx
+            with self.connection_factory() as connection:
+                cursor = connection.cursor()
+                current = lock_runner(cursor, row['runner_id'])
+                if (current['revision'] != row['revision'] or current['lease_valid']
+                        or current['status'] not in {'waiting', 'paused', 'interrupted'}
+                        or current.get('cancel_requested')):
+                    return False
+                node = _execution(current['checkpoint'], state.execution_id, row['runner_id'])
+                if not resolve_next_in_tx(cursor, current, node, fact.call.id):
+                    return False
+                # claim_resume CAS persists this prepared checkpoint; no IO is
+                # issued by preflight, and concurrent control changes invalidate it.
+                restored = node['tools'][fact.call.id]
+                if restored['phase'] == 'completed':
+                    fact.phase, fact.success, fact.result = 'completed', False, restored['result']
+                    state.waiting = None
+                    return True
+                state.resources['local_invocations'] = copy.deepcopy(node['resources']['local_invocations'])
+                refs = state.resources['local_invocations']
+                ref = refs.get(phase.key(row['runner_id']))
+                if ref is None:
+                    return False
         from src.local_tools.proxy_tool import BossResumeNextTool
         if cls is BossResumeNextTool:
             from .resume_next_proof import continuation_arguments
@@ -206,6 +238,8 @@ def _cancel_facts(cursor, row, *, request):
         return []
     if execution.get('execution_id') != row['runner_id']:
         raise CheckpointFailure('LOCAL_ROOT_OWNER_MISMATCH')
+    from .unbound_local import resolve_tree_in_tx
+    resolve_tree_in_tx(cursor, row, execution)
     expected_identity = {key:row[key] for key in ('tenant_id','user_id','session_id','source','session_kind')}
     facts = []
     for identity, phase, fact in owned_invocations(execution, row['runner_id']):
