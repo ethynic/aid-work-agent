@@ -23,6 +23,7 @@
 | 20260917-1201 | 生产 243 仿真环境（staging） | 🔧 部分完成 | 代码层完成（a7394c1a）：SIMULATION_MODE 门控（SMTP/通知 dry-run、附件删除跳过、启动横幅）+ 同步脚本 + sim compose + nginx conf；243 服务器侧已上线（2026-09-17）：建库建账号 + schema 初始化（属主移交 aid_sim_user）+ 代码 rsync + cherry-pick + nginx 白名单上线（白名单放 snippets/ 避免 http 层污染生产的踩坑已回写文档）+ aid-agent-api1 healthy、启动横幅生效、表 149 张自动补齐；2026-09-17 更新脚本落地：sim.sh 默认附带代码同步（rsync 生产工作区 + sim-base 基准重放仿真增量，--skip-code 可跳过）+ 新增 agent1_update.sh 验证模式（git 拉取指定版本 + 前端构建，与复现模式互斥）；待 P1 验收（办公 IP 访问 + 同步真实租户联调）。 | [设计](system/simulation-env-design.md) | — |
 | 20261012-1230 | file_assets 历史文件名补录 | ✅ agent2 已补录，生产待执行 | commit 8825d880 上线 file_assets 表持久化文件元数据（根治下载文件名退化）后，存量历史文件名需跑补录脚本恢复（磁盘 + 消息表原始名优先，幂等）。agent2 已执行（磁盘 1241 + 消息 769，共 1457 行）；生产 243 发布后需同样执行。 | — | —（执行步骤见 [生产发布备忘](../deploy/生产发布备忘.md)） |
 | 20261012-2130 | docs 文档清理（3 个月前失效文档） | ✅ 已执行（2026-10-13） | 41 个删除项已 git rm；待定 wecom-integration.md 摘取有效章节至 wecom-crypto-troubleshooting.md 后删除；research_index 8 条目 + 全部悬空引用已清理；B 级重点项 6 处已修（含 2 个部署文档凭证脱敏），其余 32 个 B 级小修待后续顺手处理。 | [清理计划](plans/plan-docs-cleanup-20261012.md) | — |
+| 20261021-2200 | 私有云生产环境部署指南 | ✅ 已完成（2026-10-21） | 新增 [deploy/生产环境部署指南.md](../deploy/生产环境部署指南.md)：面向客户私有云全新部署的通用 playbook，综合 243 独占迁移档案与济南诺度混部实例（摸底决策、Docker/codeup 三通道、sparse-checkout、PG 绑址、.env 必改项、宝塔 TLS、发布后事项、验收清单、两例踩坑速查）。 | [部署指南](../deploy/生产环境部署指南.md) | — |
 
 ## 系统功能
 
@@ -56,7 +57,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20261021-1625 | pptx-vi-gen 技能：模板 VI 提取 + 美观 PPT 生成 | 🔧 部分完成（开发+单测完成，待提交部署） | 从第三方系统（workbuddy）移植的 PPT 生成技能，仅整合其"路线二"（VI 生成，其"路线一"模板填充与 ppt_process 工具重叠不引入）。从客户上传的 .pptx 模板提取 VI（主题色/字体/Logo），LLM 按 7 种版式 schema（cover/section/stats/bullets/twocol/image/end）产出 content.json，Pillow 逐页渲染 1920×1080 后合成整页图片版 PPT（文字不可编辑）。新增 src/skills/pptx-vi-gen-1.0.0/（SKILL.md + scripts/generate.py CLI + pptx_gen 库），移植改造：vi.py 字体查找补 Linux Noto CJK/文泉驿路径（原硬编码 Windows 字体）、pipeline.py 支持无模板默认 VI 兜底、路径解析不做跨租户 glob（fail-fast）。SKILL.md 划清与 ppt_process 工具边界（本技能管"模板 VI + 美观图片版"，可编辑 PPT 走 ppt_process）。独立验证通过（6 个单测：注册发现/stdin/端到端/非法 role/缺 title/缺必需字段），容器内端到端验证渲染质量正常。 | — | — |
+| 20261021-1625 | pptx-vi-gen 技能：模板 VI 提取 + 原生可编辑 PPT 生成与修改 | 🔧 部分完成（开发+单测完成，待提交部署） | 从第三方系统（workbuddy）移植并升级至其新版 pptx_gen：路线二渲染引擎由 Pillow 整页贴图改为 python-pptx 原生形状渲染（文本框/圆角矩形/椭圆/图片，1920×1080 网格），所有产出文字在 PowerPoint/WPS 完全可编辑；新增 edit_deck 手术式修改（scripts/edit.py，改字/加页/删页/移页/换页/换色，原地修改自动留 .bak）；路线一（模板占位符填充/整页拷贝替换，scripts/template_fill.py analyze+generate）经确认一并引入，SKILL.md 重新划定与 ppt_process 边界（本技能管模板驱动生成+本技能 deck 的迭代修改）。移植改造保留我方补丁：vi.py 字体查找 Linux Noto CJK/文泉驿路径、sysClr 取 lastClr、generate_native/preview_pngs 无模板 default_vi 兜底、路径 fail-fast 不跨租户 glob；另修上游 _replace_in_frame 二次替换 bug（repl 含 find 时误判残留）。references/usage.md 入库。单测 8 个全绿（注册发现/stdin/端到端可编辑性断言/edit 往返/analyze 冒烟/非法 role/缺字段）。 | — | — |
 | 20261014-2043 | wecom-cli 本地库数据通道（local-db） | 📋 待开发 | 解密企微本地 SQLite 库作为读历史/待回复检测/发送校验三能力的主数据源（5.0.11.6029 本机已全链路验证），UI/OCR 链路转兜底；版本矩阵分派 + doctor 首跑深检定基调；v1 仅文本消息。 | [设计](design/wecom/wecom-cli-localdb-design.md) | — |
 | 20260714-1911 | 浏览器混合执行、可视化与人工接管 | 🔧 部分完成 | Phase 0～1 已完成；Phase 2 已实现、待真实 Redis/PostgreSQL 门禁。 | [设计](tools/browser/browser_visualization_design.md) | [开发计划](tools/browser/browser_execution_dev_plan.md) |
 | 20260630-1733 | PDF reportlab 固定版式生成器 | 📋 待开发 | 暂不开发，未来如出现强固定版式需求再评估。 | [设计](tools/pdf/pdf_tool_design.md) | — |

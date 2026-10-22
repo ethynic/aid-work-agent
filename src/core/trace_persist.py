@@ -94,8 +94,8 @@ def update_completion(trace_id, *, status, output, duration_ms):
             updated = bool(cursor.rowcount)
             cursor.commit()
             return updated
-    except Exception as error:
-        logger.warning('Trace completion projection unavailable kind={}',type(error).__name__)
+    except Exception:
+        logger.opt(exception=True).warning('Trace completion projection unavailable')
         return False
 
 

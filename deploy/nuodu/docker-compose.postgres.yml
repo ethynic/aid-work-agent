@@ -1,7 +1,11 @@
 # 济南诺度私有云 PostgreSQL（139.129.48.30）
 # 基于 deploy/docker-compose.postgres.yml 适配混部环境（与客户存量业务同机）：
-# 1. 端口只绑 127.0.0.1（宝塔 nginx 同机反代，公网不可达）
-# 2. 内存参数按「存量业务已占 7.6G / 共 16G」压缩：shared_buffers 512MB、容器上限 3G
+# 1. 端口只绑 127.0.0.1（宿主机 psql/备份脚本本机入口；公网必不可达）。
+#    教训：阿里云公网 IP 是 NAT 到内网 IP，「绑内网 IP」≠ 公网不可达（2026-10-21 实测
+#    172.29.49.136 绑定从办公网可达，安全组限制未按预期生效）；app 容器改经共享
+#    docker 网络 app_aid-network 以服务名 postgres:5432 直连，不再依赖宿主机端口
+# 2. 内存参数 2026-10-21 调优（Java 应用压缩 -Xmx 后腾出内存）：shared_buffers 1GB、
+#    work_mem 16MB、maintenance 512MB、effective_cache_size 6GB、/pg_temp 2G、容器上限 4G
 # 3. 密码经同目录 .env 注入（POSTGRES_PASSWORD），不入库不入对话
 
 services:
@@ -15,10 +19,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
       # 混部优化（16G 宿主机，本项目可用约 7G）：
       POSTGRES_MAX_CONNECTIONS: 40
-      POSTGRES_SHARED_BUFFERS: 512MB
-      POSTGRES_EFFECTIVE_CACHE_SIZE: 4096MB
-      POSTGRES_WORK_MEM: 8MB
-      POSTGRES_MAINTENANCE_WORK_MEM: 256MB
+      POSTGRES_SHARED_BUFFERS: 1GB
+      POSTGRES_EFFECTIVE_CACHE_SIZE: 6144MB
+      POSTGRES_WORK_MEM: 16MB
+      POSTGRES_MAINTENANCE_WORK_MEM: 512MB
       POSTGRES_WAL_LEVEL: minimal
       POSTGRES_MAX_WAL_SIZE: 1GB
       POSTGRES_MIN_WAL_SIZE: 256MB
@@ -39,13 +43,13 @@ services:
       - "-c"
       - "max_connections=40"
       - "-c"
-      - "shared_buffers=512MB"
+      - "shared_buffers=1GB"
       - "-c"
-      - "effective_cache_size=4096MB"
+      - "effective_cache_size=6144MB"
       - "-c"
-      - "work_mem=8MB"
+      - "work_mem=16MB"
       - "-c"
-      - "maintenance_work_mem=256MB"
+      - "maintenance_work_mem=512MB"
       - "-c"
       - "temp_tablespaces=/pg_temp"
       - "-c"
@@ -87,15 +91,14 @@ services:
       - "-c"
       - "lock_timeout=10000"
     ports:
-      # 绑内网 IP：同机容器经 172.29.49.136:15432 访问；公网（阿里云公网 IP 为 NAT）
-      # 与宿主机 127.0.0.1 之外的其他网卡均不可达
-      - "172.29.49.136:15432:5432"
+      # 只绑 127.0.0.1：仅供宿主机 psql/备份脚本使用；app 容器走 app_aid-network 服务名直连
+      - "127.0.0.1:15432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       # init.sql 仅在数据卷首次初始化时执行（主库建表）
       - ./init-postgres.sql:/docker-entrypoint-initdb.d/init.sql:ro
     networks:
-      - aid-network
+      - app_aid-network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aid_user} -d postgres"]
       interval: 10s
@@ -105,14 +108,14 @@ services:
     deploy:
       resources:
         limits:
-          memory: 3G
+          memory: 4G
           cpus: "1.5"
         reservations:
-          memory: 1G
+          memory: 2G
           cpus: "0.5"
     shm_size: 512m
     tmpfs:
-      - /pg_temp:mode=1777,size=1024m,uid=999,gid=999
+      - /pg_temp:mode=1777,size=2048m,uid=999,gid=999
       - /tmp:mode=1777,size=200m,uid=999,gid=999
     logging:
       driver: json-file
@@ -124,5 +127,6 @@ volumes:
   postgres_data:
 
 networks:
-  aid-network:
-    driver: bridge
+  app_aid-network:
+    external: true
+    name: app_aid-network

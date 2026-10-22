@@ -567,7 +567,7 @@ class RunnerWorker:
                     await asyncio.to_thread(self.finalizer.finalize,attempt)
             except Exception:
                 pass
-            logger.error('AgentRunner attempt stopped runner={} kind={}',row['runner_id'],type(error).__name__)
+            logger.opt(exception=True).error('AgentRunner attempt stopped runner={}',row['runner_id'])
         finally:
             heartbeat.cancel()
             await asyncio.gather(heartbeat,return_exceptions=True)
@@ -579,7 +579,7 @@ class RunnerWorker:
             try:
                 await asyncio.to_thread(guard.unlink,missing_ok=True)
             except OSError as error:
-                logger.warning('AgentRunner guard cleanup unavailable kind={}',type(error).__name__)
+                logger.opt(exception=True).warning('AgentRunner guard cleanup unavailable')
 
     async def _preserve_duration(self, attempt, control):
         # Only add elapsed time to the last COMMITTED execution. The cancelled
@@ -614,7 +614,7 @@ class RunnerWorker:
                     cleanup(child.get('checkpoint') or {},child.get('execution_id'))
             cleanup((row.get('checkpoint') or {}).get('execution') or {},row['runner_id'])
         except Exception as error:
-            logger.warning('AgentRunner resource cleanup unavailable kind={}',type(error).__name__)
+            logger.opt(exception=True).warning('AgentRunner resource cleanup unavailable')
 
     @staticmethod
     def _agent_user(user_id, tenant_id, *, source=None, channel_user_id=None):
@@ -665,7 +665,7 @@ class RunnerWorker:
                     model=record.get('model'),provider=record.get('provider'),agent_iterations=record.get('agent_iterations') or 0)
             collector.on_complete(projection,persist_sync=True)
         except Exception as error:
-            logger.warning('AgentRunner trace flush unavailable kind={}',type(error).__name__)
+            logger.opt(exception=True).warning('AgentRunner trace flush unavailable')
 
     async def run(self, *, once=False, max_tasks=None):
         if not self.config.enabled:

@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""pptx-vi-gen 技能 CLI 入口：模板 VI + content.json -> 成品 PPT。
+"""pptx-vi-gen 技能 CLI 入口：模板 VI + content.json -> 原生可编辑 PPT。
 
 用法：
   python scripts/generate.py --template 模板.pptx --content content.json --output 输出.pptx
   cat content.json | python scripts/generate.py --template 模板.pptx --content - --output 输出.pptx
 
+产出为 python-pptx 原生形状构建的可编辑 PPT（非贴图）。
 stdout 输出 JSON 结果（供 LLM 解析），错误时 success=false。
 """
 import argparse
 import json
 import os
-import shutil
 import sys
 import time
 from pathlib import Path
@@ -19,8 +19,8 @@ PROJECT_ROOT = os.environ.get("PROJECT_ROOT") or str(Path(__file__).resolve().pa
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from pptx_gen.pipeline import generate_from_vi  # noqa: E402
-from pptx_gen.render import RENDERERS  # noqa: E402
+from pptx_gen.native import NATIVE_RENDERERS  # noqa: E402
+from pptx_gen.pipeline import generate_from_vi, preview_pngs  # noqa: E402
 from pptx_gen.vi import default_vi, extract_vi  # noqa: E402
 
 
@@ -55,9 +55,9 @@ def _load_content(spec: str) -> dict:
         raise ValueError("content 格式错误：slides 不能为空")
     for i, page in enumerate(data["slides"], 1):
         role = page.get("role")
-        if role not in RENDERERS:
+        if role not in NATIVE_RENDERERS:
             raise ValueError(
-                f"第 {i} 页 role 非法: {role!r}，可用: {', '.join(sorted(RENDERERS))}"
+                f"第 {i} 页 role 非法: {role!r}，可用: {', '.join(sorted(NATIVE_RENDERERS))}"
             )
         if role != "end" and not page.get("title"):
             raise ValueError(f"第 {i} 页（{role}）缺少 title")
@@ -162,13 +162,11 @@ def main():
         if args.preview:
             preview_dir = out_path.with_suffix("").resolve()
             preview_dir = Path(str(preview_dir) + "_preview")
-            preview_dir.mkdir(parents=True, exist_ok=True)
-            for png in sorted(Path(result["tmp"]).glob("slide_*.png")):
-                shutil.copy(png, preview_dir / png.name)
+            pngs = preview_pngs(str(template_path) if template_path else None,
+                                content, str(preview_dir),
+                                vi_override=vi_override or None, base_dir=base_dir)
             out["preview_dir"] = str(preview_dir)
-
-        # 中间 PNG 不再需要（已合成进 pptx / 已拷贝预览），清理避免磁盘累积
-        shutil.rmtree(result["tmp"], ignore_errors=True)
+            out["preview_count"] = len(pngs)
 
         print(json.dumps(out, ensure_ascii=False))
         return 0

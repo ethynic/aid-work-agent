@@ -96,7 +96,7 @@ async def _execute(model, kwargs, operation):
     except SessionTaskError as exc:
         return {"success": False, "code": exc.code, "error": str(exc)}
     except Exception as exc:
-        logger.error("会话任务工具调用失败，异常类型={}", type(exc).__name__)
+        logger.opt(exception=True).error("会话任务工具调用失败")
         return {"success": False, "code": "INTERNAL_ERROR", "error": "操作失败，请稍后重试"}
 
 

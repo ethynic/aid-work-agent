@@ -458,6 +458,11 @@ class SmsConfig(BaseModel):
     aliyun_access_key_secret: str = ""  # 阿里云短信 AccessKey Secret
     aliyun_sign_name: str = ""  # 阿里云短信签名名称
     aliyun_template_yzm: str = ""  # 阿里云验证码模板CODE（如 SMS_123456789）
+    tencent_secret_id: str = ""  # 腾讯云 SecretId
+    tencent_secret_key: str = ""  # 腾讯云 SecretKey
+    tencent_sms_sdk_app_id: str = ""  # 腾讯云短信 SmsSdkAppId（控制台应用ID）
+    tencent_sign_name: str = ""  # 腾讯云短信签名名称
+    tencent_template_yzm: str = ""  # 腾讯云验证码模板ID（纯数字）
 
 
 class BillingConfig(BaseModel):
@@ -1124,6 +1129,16 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         yaml_config.setdefault("sms", {})["aliyun_sign_name"] = os.getenv("SMS_ALIYUN_SIGN_NAME")
     if os.getenv("SMS_ALIYUN_TEMPLATE_YZM"):
         yaml_config.setdefault("sms", {})["aliyun_template_yzm"] = os.getenv("SMS_ALIYUN_TEMPLATE_YZM")
+    if os.getenv("SMS_TENCENT_SECRET_ID"):
+        yaml_config.setdefault("sms", {})["tencent_secret_id"] = os.getenv("SMS_TENCENT_SECRET_ID")
+    if os.getenv("SMS_TENCENT_SECRET_KEY"):
+        yaml_config.setdefault("sms", {})["tencent_secret_key"] = os.getenv("SMS_TENCENT_SECRET_KEY")
+    if os.getenv("SMS_TENCENT_SDK_APP_ID"):
+        yaml_config.setdefault("sms", {})["tencent_sms_sdk_app_id"] = os.getenv("SMS_TENCENT_SDK_APP_ID")
+    if os.getenv("SMS_TENCENT_SIGN_NAME"):
+        yaml_config.setdefault("sms", {})["tencent_sign_name"] = os.getenv("SMS_TENCENT_SIGN_NAME")
+    if os.getenv("SMS_TENCENT_TEMPLATE_YZM"):
+        yaml_config.setdefault("sms", {})["tencent_template_yzm"] = os.getenv("SMS_TENCENT_TEMPLATE_YZM")
 
     # 积分计费配置：环境变量覆盖
     billing_cfg = yaml_config.setdefault("billing", {})

@@ -1,53 +1,54 @@
-"""End-to-end: template VI + content spec -> rendered .pptx.
+"""End-to-end: template VI + content spec -> native editable .pptx.
 
-generate_from_vi(template_path, content, out_path, vi_override=None)
-
-  content = {"slides": [ {role, ...}, ... ]}
-  vi_override = partial VI dict to force brand/accent/... (demo / brand lock)
+All decks produced by this skill are native and fully editable: this entry
+delegates to native.generate_native (identical signature and return shape).
+The Pillow renderer (render.py / dark_theme.py) is kept for QA previews
+only -- it never produces deck output.
 """
 import os
-import tempfile
 
 from PIL import Image
 
-from .compose import compose
-from .render import render
+from .native import generate_native
+from .render import render as _render_page_png
 from .vi import default_vi, extract_vi
 
 
-def _load_page_image(page, base_dir):
-    ref = page.get("image")
-    if not ref:
-        return None
-    path = ref if os.path.isabs(ref) else os.path.join(base_dir, ref)
-    if not os.path.exists(path):
-        return None
-    return Image.open(path).convert("RGBA")
+def generate_from_vi(template_path, content, out_path, vi_override=None,
+                     base_dir=None):
+    """Route 2 entry -> native editable deck (see native.generate_native)."""
+    return generate_native(template_path, content, out_path,
+                           vi_override=vi_override, base_dir=base_dir)
 
 
-def generate_from_vi(template_path, content, out_path, vi_override=None, base_dir=None):
-    if template_path:
-        base_dir = base_dir or os.path.dirname(os.path.abspath(template_path))
-        vi = extract_vi(template_path)
-    else:
-        # 无模板时用默认 VI（可再被 vi_override 覆盖）
-        base_dir = base_dir or os.getcwd()
-        vi = default_vi()
+def preview_pngs(template_path, content, out_dir, vi_override=None,
+                 base_dir=None):
+    """QA-only: render the content to 1920x1080 PNG previews.
+
+    Previews approximate the native deck's layout for a quick eyeball check.
+    They are NOT deck output -- decks are always native & editable.
+    Returns the list of PNG paths.
+    """
+    base_dir = base_dir or (os.getcwd() if template_path is None
+                            else os.path.dirname(os.path.abspath(template_path)))
+    vi = default_vi() if template_path is None else extract_vi(template_path)
     if vi_override:
         vi.update(vi_override)
-
-    slides = content["slides"]
-    total = len(slides)
-    tmp = tempfile.mkdtemp(prefix="vigen_")
-    png_paths = []
-    for i, page in enumerate(slides, 1):
-        page_image = _load_page_image(page, base_dir)
-        canvas = render(vi, page, i, total, page_image=page_image)
-        png = os.path.join(tmp, f"slide_{i:02d}.png")
+    os.makedirs(out_dir, exist_ok=True)
+    paths = []
+    total = len(content["slides"])
+    for i, page in enumerate(content["slides"], 1):
+        img = None
+        ref = page.get("image")
+        if ref:
+            p = ref if os.path.isabs(ref) else os.path.join(base_dir, ref)
+            if os.path.exists(p):
+                img = Image.open(p).convert("RGBA")
+        canvas = _render_page_png(vi, page, i, total, page_image=img)
+        png = os.path.join(out_dir, f"slide_{i:02d}.png")
         canvas.save(png)
-        png_paths.append(png)
-
-    return {"out": compose(png_paths, out_path), "slides": total, "tmp": tmp}
+        paths.append(png)
+    return paths
 
 
 if __name__ == "__main__":

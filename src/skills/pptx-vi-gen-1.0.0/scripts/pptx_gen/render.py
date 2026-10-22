@@ -210,7 +210,7 @@ def render_bullets(c, p, i, n):
 
 def render_stats(c, p, i, n):
     top = c.header(p["title"], p.get("lead"))
-    stats = p["stats"][:4]
+    stats = p["stats"]
     cols = min(len(stats), 4)
     gap = 36
     cw = (c.w - 2 * MARGIN - gap * (cols - 1)) // cols
@@ -301,6 +301,21 @@ RENDERERS = {
     "image": render_image,
     "end": render_end,
 }
+
+# Original light renderers are kept here so a single deck can be switched
+# back to the light theme:
+#   from pptx_gen import render as _r
+#   _r.RENDERERS.update(_r.LIGHT_RENDERERS)
+LIGHT_RENDERERS = dict(RENDERERS)
+
+# Skill default theme: the deep-navy "dark" look (see dark_theme.py).
+# Palette resolves from the extracted VI (accent / brand / dark), so
+# vi_override can still recolor a dark deck.
+try:
+    from .dark_theme import DARK_RENDERERS as _DARK_RENDERERS
+    RENDERERS.update(_DARK_RENDERERS)
+except Exception:  # dark_theme.py ships with the skill; ignore if removed
+    pass
 
 
 def render(vi, page, index, total, page_image=None):
