@@ -20,13 +20,14 @@ export function createBossRejectCurrentOperation(
   return {
     name: 'boss_reject_current',
     execute(_args: Record<string, never>, ctx: OpContext): Promise<OperationResult> {
-      return runBossOperation({ kind: 'write', name: 'boss_reject_current' }, ctx, sessionFactory, () => null, async (session) => {
-        const state = new BusinessOperationState()
+      const state = new BusinessOperationState()
+      const checkpoint: import('../boss/ChatRejectExecutor.js').RejectCheckpoint = {}
+      const run = (ctx: OpContext): Promise<OperationResult> => runBossOperation({ kind: 'write', name: 'boss_reject_current' }, ctx, sessionFactory, () => null, async (session) => {
         return withBusinessRecovery(state, { name: 'boss_reject_current', goal: '把原当前会话候选人标记不合适',
           expected: '原目标会话从已加载的会话列表中消失或隐藏，其他会话保持可读', operationClass: 'external_effect' }, async () => {
         await ensureChatPage(session, ctx)
         const executor = new ChatRejectExecutor({
-          state,
+          state, checkpoint,
           snapshot: session.snapshot,
           click: session.click,
           signal: ctx.signal,
@@ -40,6 +41,8 @@ export function createBossRejectCurrentOperation(
         }
         })
       })
+      if (ctx.recoveryContinuation) ctx.recoveryContinuation.resume = run
+      return run(ctx)
     },
   }
 }

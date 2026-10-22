@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+import { membershipAccountKey } from './MembershipInspector.js'
 /**
  * 附件简历同意执行器（CLI accept 子命令）。
  *
@@ -20,12 +22,12 @@ import {
   accumulateOwnerOffset,
   boundsCenter,
   indexedValues,
-  classOf,
+  classOf, isDescendantOf,
 } from './domSnapshot.js'
 import { viewportOf } from './FilterSetter.js'
 import { CancelledError } from '../operations/types.js'
 import { BusinessOperationState } from './BusinessOperationState.js'
-import { headerContactOf } from './ChatReadExecutor.js'
+import { headerContactOf, conversationListNamesOf } from './ChatReadExecutor.js'
 import { locateResumeCanvas } from './ResumeReader.js'
 
 export class ConsentError extends Error {
@@ -37,6 +39,7 @@ export class ConsentError extends Error {
 
 export interface ConsentDeps {
   state?: BusinessOperationState
+  checkpoint?: ConsentCheckpoint
   snapshot(): Promise<DomSnapshot>
   click(point: ClickPoint, viewport: { width: number; height: number }): Promise<void>
   /** CDP mouseWheel 滚动左列会话列表；缺省时只处理当前可见的 */
@@ -75,6 +78,20 @@ interface AgreeButton extends ClickPoint {
   source: 'processing_bar' | 'message_card'
 }
 
+interface ConsentRequest {
+  key: string
+  name: string
+  ids: Record<string, string>
+  demographics: Record<string, string>
+}
+
+export interface ConsentCheckpoint {
+  pendingRequest?: ConsentRequest | null
+  accepted?: number
+  previewed?: number
+  current?: { contact: string; previewsBefore: number; noticesBefore: number; processingBarOnly: boolean; accepted?: boolean; previewPhase?: 'opening' | 'closing' | 'closed' }
+}
+
 export class ResumeConsentExecutor {
   private readonly sleep: (ms: number) => Promise<void>
   readonly state: BusinessOperationState
@@ -88,8 +105,54 @@ export class ResumeConsentExecutor {
   async acceptAll(opts: { limit?: number; preview?: boolean; expectedContactRef?: string } = {}): Promise<{ accepted: number; previewed: number; reachedEnd: boolean }> {
     const limit = opts.limit ?? 20
     const preview = opts.preview ?? false
-    let accepted = 0
-    let previewed = 0
+    const checkpoint = this.deps.checkpoint ?? {}
+    let accepted = checkpoint.accepted ?? 0
+    let previewed = checkpoint.previewed ?? 0
+    const fulfill = async () => {
+      const current = checkpoint.current!
+      if (!current.accepted) {
+        let snap = await this.deps.snapshot()
+        this.state.bindContact(snap)
+        if (this.acceptedSince(snap, current)) {
+          current.accepted = true
+        } else {
+          const agree = this.locateAgreeButton(snap, current.processingBarOnly)
+          if (!agree || this.previewCount(snap) !== current.previewsBefore || this.acceptedNoticeCount(snap) !== current.noticesBefore) {
+            this.state.unconfirmed('恢复后原请求没有确定的接受或尚未接受证据')
+            throw new ConsentError('原接收请求结果仍未知，未重复点击同意')
+          }
+          this.state.notSubmitted('原会话同意处理条仍在且附件及接受提示基线未变，原请求尚未接受')
+          await this.state.input(() => this.deps.click(agree, viewportOf(snap)), true)
+          await this.sleep(1500)
+          for (let poll = 0; poll < 3; poll++) {
+            snap = await this.deps.snapshot()
+            this.state.bindContact(snap)
+            if (this.acceptedSince(snap, current)) { current.accepted = true; break }
+            if (poll < 2) await this.sleep(1000)
+          }
+          if (!current.accepted) {
+            this.state.unconfirmed('原会话缺少处理条消失及新附件/明确同意结果的联合证据')
+            throw new ConsentError('无法确认原同意已成功，未以其他同意按钮减少报成功')
+          }
+        }
+        accepted++
+        checkpoint.accepted = accepted
+        this.state.confirmed({ contact: current.contact, accepted: true }, '原会话处理条消失且新附件或明确同意结果出现')
+        this.deps.onProgress?.(accepted)
+      }
+      if (preview) {
+        await this.previewResume(accepted, current)
+        previewed++
+        checkpoint.previewed = previewed
+      }
+      checkpoint.current = undefined
+    }
+    if (checkpoint.pendingRequest === null) throw new ConsentError('恢复后原请求列表行身份无法确认，未选择其他请求人')
+    if (checkpoint.current) {
+      if (this.deps.signal?.aborted) throw new CancelledError()
+      await this.sleep(1500)
+      await fulfill()
+    }
     for (;;) {
       // 1. 处理当前可见的全部目标会话
       for (;;) {
@@ -99,8 +162,13 @@ export class ResumeConsentExecutor {
         const targets = this.findListTargets(snap)
         if (targets.length === 0) break
 
+        const pending = checkpoint.pendingRequest
+        const matched = pending ? targets.filter(point => this.requestIdentity(snap, point)?.key === pending.key) : targets
+        if (pending && matched.length !== 1) throw new ConsentError('恢复后原请求列表行不再唯一，未选择其他请求人')
+        const target = matched[0]!
+        checkpoint.pendingRequest ??= this.requestIdentity(snap, target) ?? null
         this.state.startItem()
-        await this.state.input(() => this.deps.click(targets[0]!, viewportOf(snap)))
+        await this.state.input(() => this.deps.click(target, viewportOf(snap)))
         await this.sleep(1800)
 
         // 打开会话后定位处理条「同意」（找不着等 1s 再试一次：面板可能加载慢）
@@ -117,36 +185,12 @@ export class ResumeConsentExecutor {
               '页面结构可能已变，已停止，请人工查看',
           )
         }
+        if (checkpoint.pendingRequest && !this.requestMatchesHeader(agreeSnap, checkpoint.pendingRequest)) throw new ConsentError('原请求人稳定身份未匹配，未对当前其他会话同意')
         this.state.bindContact(agreeSnap, accepted === 0 ? opts.expectedContactRef : undefined)
-        const contact = headerContactOf(agreeSnap)
-        const previewsBefore = this.previewCount(agreeSnap)
-        const noticesBefore = this.acceptedNoticeCount(agreeSnap)
-        const processingBarOnly = agree.source === 'processing_bar'
-        await this.state.input(() => this.deps.click(agree!, viewportOf(agreeSnap)), true)
-        await this.sleep(1500)
-
-        let afterSnap = await this.deps.snapshot()
-        let confirmed = false
-        for (let poll = 0; poll < 3; poll++) {
-          this.state.bindContact(afterSnap)
-          const explicitAccepted = this.acceptedNoticeCount(afterSnap) > noticesBefore
-          if (!this.locateAgreeButton(afterSnap, processingBarOnly) && (this.previewCount(afterSnap) > previewsBefore || explicitAccepted)) { confirmed = true; break }
-          if (poll < 2) { await this.sleep(1000); afterSnap = await this.deps.snapshot() }
-        }
-        if (!confirmed) {
-          this.state.unconfirmed('原会话缺少处理条消失及新附件/明确同意结果的联合证据')
-          throw new ConsentError(
-            `无法确认第 ${accepted + 1} 个「同意」已成功，未以其他同意按钮减少报成功`,
-          )
-        }
-        accepted++
-        this.state.confirmed({ contact, accepted: true }, '原会话处理条消失且新附件或明确同意结果出现')
-        this.deps.onProgress?.(accepted)
-
-        if (preview) {
-          await this.previewResume(accepted)
-          previewed++
-        }
+        checkpoint.pendingRequest = undefined
+        checkpoint.current = { contact: headerContactOf(agreeSnap), previewsBefore: this.previewCount(agreeSnap),
+          noticesBefore: this.acceptedNoticeCount(agreeSnap), processingBarOnly: agree.source === 'processing_bar' }
+        await fulfill()
       }
 
       // 2. 可见的处理完了，滚动左列加载更多；签名不变（含一次重试）= 到底
@@ -160,6 +204,78 @@ export class ResumeConsentExecutor {
         if (attempt === 1) return { accepted, previewed, reachedEnd: true }
       }
     }
+  }
+
+  private stableIdentity(snap: DomSnapshot, di: number, root: number): Pick<ConsentRequest, 'ids' | 'demographics'> {
+    const doc = snap.documents[di]!, ids: Record<string, string> = {}, demographics: Record<string, string> = {}
+    for (const [node, attributes] of indexedValues(doc.nodes.attributes, 'attributes')) {
+      if (isDescendantOf(doc, node, root) !== true) continue
+      for (let i = 0; i + 1 < attributes.length; i += 2) {
+        const key = snap.strings[attributes[i]!] ?? ''
+        if (/^data-(?:geek-id|uid|user-id|encrypt-geek-id)$/.test(key)) ids[key] = snap.strings[attributes[i + 1]!] ?? ''
+      }
+    }
+    const texts = indexedValues(doc.nodes.nodeValue, 'nodeValue').filter(([node, index]) => index >= 0 && isDescendantOf(doc, node, root) === true)
+    for (const [, index] of texts) for (const value of (snap.strings[index] ?? '').split(/[|·\s]+/u)) {
+      const kind = /^\d+岁$/.test(value) ? 'age' : /^\d+(?:-\d+)?年(?:经验)?$|^应届生$/.test(value) ? 'experience'
+        : /^(?:本科|硕士|博士|大专|高中|中专)$/.test(value) ? 'education' : /^(?:男|女)$/.test(value) ? 'gender' : null
+      if (kind) demographics[kind] = kind === 'experience' ? value.replace(/经验$/u, '') : value
+    }
+    return { ids, demographics }
+  }
+
+  private requestIdentities(snap: DomSnapshot, point?: ClickPoint): ConsentRequest[] {
+    const names = conversationListNamesOf(snap), matches: ConsentRequest[] = []
+    snap.documents.forEach((doc, di) => {
+      for (const [row] of indexedValues(doc.nodes.attributes, 'attributes')) {
+        if (!(classOf(snap, di, row) ?? '').split(/\s+/).includes('geek-item')) continue
+        const texts = indexedValues(doc.nodes.nodeValue, 'nodeValue').filter(([ni, si]) => si >= 0 && isDescendantOf(doc, ni, row) === true)
+        if (point && !texts.some(([ni]) => {
+          const bounds = doc.layout.bounds[doc.layout.nodeIndex.indexOf(ni)]
+          if (!bounds) return false
+          const offset = accumulateOwnerOffset(snap, di)
+          const x = offset.x + bounds[0]! - (doc.scrollOffsetX ?? 0), y = offset.y + bounds[1]! - (doc.scrollOffsetY ?? 0)
+          return point.x >= x && point.x <= x + bounds[2]! && point.y >= y && point.y <= y + bounds[3]!
+        })) continue
+        const values = texts.map(([, si]) => snap.strings[si]?.trim()).filter(Boolean)
+        const rowNames = names.filter(name => values.includes(name))
+        if (rowNames.length !== 1) continue
+        const identity = this.stableIdentity(snap, di, row)
+        // Unread badges, last message and activity times may change as soon as the row is opened.
+        matches.push({ key: createHash('sha256').update(JSON.stringify([membershipAccountKey(snap), rowNames[0], identity])).digest('hex'),
+          name: rowNames[0]!, ...identity })
+      }
+    })
+    return matches
+  }
+
+  private requestIdentity(snap: DomSnapshot, point: ClickPoint): ConsentRequest | undefined {
+    const matches = this.requestIdentities(snap, point)
+    return matches.length === 1 ? matches[0] : undefined
+  }
+
+  private requestMatchesHeader(snap: DomSnapshot, request: ConsentRequest): boolean {
+    if (headerContactOf(snap) !== request.name) return false
+    const doc = snap.documents[0]!
+    const roots = indexedValues(doc.nodes.attributes, 'attributes').filter(([node]) =>
+      (classOf(snap, 0, node) ?? '').split(/\s+/).includes('base-info-single-container'))
+    if (roots.length !== 1) return false
+    const header = this.stableIdentity(snap, 0, roots[0]![0])
+    const compatible = (row: ConsentRequest) => (['ids', 'demographics'] as const).every(kind =>
+      Object.entries(row[kind]).every(([key, value]) => header[kind][key] === undefined || header[kind][key] === value))
+    if (!compatible(request)) return false
+    // Opening an unread request may remove its row from that filtered list. A common stable
+    // identity already proves the original contact; absence of the list row cannot undo it.
+    if (Object.keys(request.ids).some(key => !!request.ids[key] && header.ids[key] === request.ids[key])) return true
+    const candidates = this.requestIdentities(snap).filter(row => row.name === request.name && compatible(row))
+    // Use fields both surfaces expose; absent header fields do not invalidate a unique name,
+    // but cannot disambiguate two otherwise compatible same-name rows.
+    return candidates.length === 1 && candidates[0]!.key === request.key
+  }
+
+  private acceptedSince(snap: DomSnapshot, current: NonNullable<ConsentCheckpoint['current']>): boolean {
+    return !this.locateAgreeButton(snap, current.processingBarOnly)
+      && (this.previewCount(snap) > current.previewsBefore || this.acceptedNoticeCount(snap) > current.noticesBefore)
   }
 
   private previewCount(snap: DomSnapshot): number {
@@ -178,33 +294,42 @@ export class ResumeConsentExecutor {
    * - 「点击预览附件简历」取右侧面板最下方一个（聊天历史里可能有旧附件的同名按钮，最新送达的在最底）
    * - 弹层打开校验：可见附件 iframe 中已加载简历画布；Escape 后附件 iframe 不再可见
    */
-  private async previewResume(nth: number): Promise<void> {
-    if (!this.deps.pressEscape) throw new ConsentError('preview 模式缺少 pressEscape 依赖')
-    let previewBtn: ClickPoint | null = null
-    for (let attempt = 0; attempt < 3 && !previewBtn; attempt++) {
-      if (attempt > 0) await this.sleep(1500)
+  private async previewResume(nth: number, checkpoint: NonNullable<ConsentCheckpoint['current']>): Promise<void> {
+    if (checkpoint.previewPhase === 'closed') return
+    if (checkpoint.previewPhase === 'closing') {
       const snap = await this.deps.snapshot()
-      const viewport = viewportOf(snap)
-      const candidates = this.findText(snap, PREVIEW_TEXT).filter(
-        (h) => h.x > listMaxX(viewport.width) && h.x < viewport.width && h.y > 0 && h.y < viewport.height,
-      )
-      if (candidates.length > 0) {
-        const bottom = candidates.reduce((a, b) => (a.y > b.y ? a : b)) // 最下方 = 最新送达
-        previewBtn = { x: bottom.x, y: bottom.y }
+      if (attachmentPreviewState(snap) === 'closed') { checkpoint.previewPhase = 'closed'; return }
+    }
+    const existing = checkpoint.previewPhase ? await this.waitForPreview() : undefined
+    if (!existing || attachmentPreviewState(existing) === 'closed') {
+      if (!this.deps.pressEscape) throw new ConsentError('preview 模式缺少 pressEscape 依赖')
+      let previewBtn: ClickPoint | null = null
+      for (let attempt = 0; attempt < 3 && !previewBtn; attempt++) {
+        if (attempt > 0) await this.sleep(1500)
+        const snap = await this.deps.snapshot()
+        const viewport = viewportOf(snap)
+        const candidates = this.findText(snap, PREVIEW_TEXT).filter(
+          (h) => h.x > listMaxX(viewport.width) && h.x < viewport.width && h.y > 0 && h.y < viewport.height,
+        )
+        if (candidates.length > 0) {
+          const bottom = candidates.reduce((a, b) => (a.y > b.y ? a : b)) // 最下方 = 最新送达
+          previewBtn = { x: bottom.x, y: bottom.y }
+        }
       }
-    }
-    if (!previewBtn) {
-      throw new ConsentError(`第 ${nth} 个同意后等待 4.5s 仍未出现「${PREVIEW_TEXT}」按钮，附件可能未送达，已停止，请人工查看`)
-    }
-    const snap = await this.deps.snapshot()
-    this.state.bindContact(snap)
-    const freshPreviews = this.findText(snap, PREVIEW_TEXT).filter(h => h.x > listMaxX(viewportOf(snap).width)
-      && h.x < viewportOf(snap).width && h.y > 0 && h.y < viewportOf(snap).height)
-    if (!freshPreviews.length) throw new ConsentError('已接受简历，但预览入口已变化，未使用缓存坐标点击')
-    const freshPreview = freshPreviews.reduce((a, b) => a.y > b.y ? a : b)
-    await this.state.input(() => this.deps.click(freshPreview, viewportOf(snap)))
-    await this.sleep(2000)
+      if (!previewBtn) {
+        throw new ConsentError(`第 ${nth} 个同意后等待 4.5s 仍未出现「${PREVIEW_TEXT}」按钮，附件可能未送达，已停止，请人工查看`)
+      }
+      const snap = await this.deps.snapshot()
+      this.state.bindContact(snap)
+      const freshPreviews = this.findText(snap, PREVIEW_TEXT).filter(h => h.x > listMaxX(viewportOf(snap).width)
+        && h.x < viewportOf(snap).width && h.y > 0 && h.y < viewportOf(snap).height)
+      if (!freshPreviews.length) throw new ConsentError('已接受简历，但预览入口已变化，未使用缓存坐标点击')
+      const freshPreview = freshPreviews.reduce((a, b) => a.y > b.y ? a : b)
+      checkpoint.previewPhase = 'opening'
+      await this.state.input(() => this.deps.click(freshPreview, viewportOf(snap)))
+      await this.sleep(2000)
 
+    }
     let openSnap = await this.waitForPreview()
     if (attachmentPreviewState(openSnap) === 'closed' && this.state.retry()) {
       this.state.bindContact(openSnap)
@@ -219,6 +344,7 @@ export class ResumeConsentExecutor {
     if (attachmentPreviewState(openSnap) !== 'ready') {
       throw new ConsentError(`第 ${nth} 个点击预览后未确认附件画布已加载，已停止，请人工查看`)
     }
+    checkpoint.previewPhase = 'closing'
     await this.state.input(() => this.deps.pressEscape!())
     await this.sleep(800)
     let closedSnap = await this.deps.snapshot()
@@ -230,6 +356,7 @@ export class ResumeConsentExecutor {
     if (attachmentPreviewState(closedSnap) !== 'closed') {
       throw new ConsentError(`第 ${nth} 个预览弹层 Escape 后未关闭，已停止，请人工查看`)
     }
+    checkpoint.previewPhase = 'closed'
   }
 
   /** 已出现附件框时只等内容加载，不再点击背景里的预览入口。 */

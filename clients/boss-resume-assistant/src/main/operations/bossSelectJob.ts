@@ -57,7 +57,7 @@ export function createBossSelectJobOperation(
               data: { job_name: jobName, switched: true },
               effect: 'applied' as const,
             }
-          })
+          }, ctx.previousPageExecution)
           return { ...verified.value, data: { ...verified.value.data, operation_recovery: verified.facts } }
         },
       )

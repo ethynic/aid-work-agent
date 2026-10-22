@@ -1,5 +1,31 @@
 # BOSS 操作后验证与视觉异常恢复设计
 
+## W. 排障后完成原任务（2026-10-22）
+
+当前共享恢复已能关闭障碍，但`observe_only`遇unknown/confirmed/partial和`preserve_result`遇已读成果时直接返回，未回到领域后验；页面恢复不等于原任务完成。本轮覆盖全部22个页面业务CLI，恢复原语`overlay_inspect/dismiss`及纯观察`recovery_probe`不递归接入。
+
+只增加一套每次CLI调用私有的进程内continuation holder，经内部`OpContext`让领域operation登记一个续做函数；不新增公开工具、API或wire。函数仅保留原参数、必要领域checkpoint和状态，不捕获供后续使用的旧session。原`runBossOperation`退出关闭连接，公共排障原语也退出后，续做重新进入原`runBossOperation`取得新session，固定原browser target及取消信号；Provider外层互斥仍覆盖原调用，不另行解锁。执行器重用自己的定位、后验和尾段，重连不清空普通重试预算；失败不递归恢复、不复活旧not_started证据。
+
+排障后先fresh核验原业务：已完成则收敛最终成功及真实累计结果，明确未完成则按原授权/原身份继续并再次核验，证据仍不可判才保留unknown。unknown是待核验状态，不是永久禁令；GLM只判断障碍及关闭后态，不代替业务结果。领域fresh明确未完成后，先记录当前项未提交（先前其他完成量仍保留confirmed），再继续最终输入；若续点被原生守卫明确零输入拒绝，就按最新业务事实返回none/partial，不把旧物理input unknown重新当作业务unknown。没有新的确定业务证据仍保持unknown，实际最终输入照常先置unknown。三类判断复用现有页面语义与合理等待，不要求网页不存在的额外证明：同账号/职位的原唯一候选卡片“继续沟通”确认已完成、仍可操作“打招呼”可确认未完成；消息以原会话、原draft和精确我方同文消息基线联合判断；接受简历以原处理条及新增附件/明确结果判断；不合适以原列表目标移除/隐藏或新增明确标记判断。
+
+| 命令/路径 | 需要保持及续做的原目标 |
+|---|---|
+| filter/clear_filter/goto/open_chat/select_job/open_detail/close_detail/interview_demo | 复用原execute及领域后验/一次普通重试，不为统一外观重写；原会话/详情目标约束不丢 |
+| filter_options/list_jobs | 已读payload保留，fresh完成原面板/下拉收起和对应verify后再成功 |
+| lookup_candidates/read_chat | 复用原读取流程；read_chat保持原contact绑定，不以恢复后的其他当前会话替代 |
+| resume_detail | 仍为原详情取得拼接图目标，失败后不能换人读取，不额外增加关闭要求 |
+| resume_batch/resume_next | 保留已读payload、已完成/明确跳过集合、当前未完项、剩余额度和原continuation；恢复后完成原关闭/余项，不把所有processed_names都当成功项 |
+| greet/greet_selected/greet_detail | 保存原候选ref/详情因果绑定、账号/职位及当前项；fresh同目标后验消解unknown，批次跳过已完成项，不按姓名重播整个批次 |
+| send_to/send_current | 保存contactRef、原消息、发送前精确我方消息基线及draft阶段；已发不重发，原draft仍在且基线未变才继续发送，其他情况诚实未知 |
+| accept_resume | 保存原会话/请求及附件/接受提示基线、accepted/previewed及关闭阶段；已接受只续预览/关闭，不再点同意，批次仅消费剩余额度 |
+| reject_current | 保存原会话和列表前态/提示基线；已移除即确认，仍在原目标且未完成才续，BOSS自动切人后不能重跑当前会话标记 |
+
+实现补充：共享层每次调用新建holder，恢复后消费一次；重连在进入领域body之前就失败时，也保留原unknown、已确认明细/已读成果及普通重试次数，不以新连接的“零输入”覆盖历史业务状态；已有unknown/partial外发的retryable必须仍为false。既有failResult工厂按effect落实此共同契约：未知/部分副作用均不可上层自动重播，明确none则沿用原错误码重试语义；恢复投影从none改为unknown/partial的分支也显式保持false。恢复返回仍有cleanup_error、恢复错误或部分失败时，不仅凭success=true宣称全任务完成。
+
+打招呼checkpoint保留当前原卡片引用、既有账号/职位scope摘要及累计人数，非定向批次重排也先完成该卡片，再消费原剩余额度。接收准备阶段保留原请求列表行的账户/稳定身份，不把未读数、末条消息、活动时间写入身份；fresh重定位同一行并核对打开的联系人，再按原附件/提示基线判断。fresh header必须用双方可比较的稳定ID/人口字段核对原请求身份，同名点行被吞时不能误接受另一人；共同稳定ID一致且无字段冲突可直接确认，不强求清未读后左列表仍保留原行，缺强ID时才用同名列表消歧。经验值“5年/5年经验”按同义值局部归一化；字段缺失不强求DOM不存在的信息，无法区分才保留未完成。批次首人caller身份只在accepted=0消费，后续项由当前checkpoint约束。已接受阶段只接预览/关闭尾段。简历批次保留原payload对象及fetched_at、未完当前项阶段、已完成集合和原账号/职位；已取得的资料不重新读取或生成时间。读取成功后的close失败与尚未读到当前人分开处理。
+
+checkpoint、DOM基线和闭包仅在当次CLI进程内，不进入工具JSON、MCP、视觉API、持久日志或公开回执。原`confirmed_items`、已读payload、累计次数和剩余limit保持，最终tracker/effect/data与实际成果一致，不二次累计。进程中断后缺失这些证据仍诚实保留未知，不创造跨进程续做或自动重发能力。本轮仅合成快照/隔离测试及独立TEST/CR，不消耗已用外发授权，不做真实发送、提交、打包或部署，实施见计划26。
+
 ## V. 故障恢复仅鼠标关闭（2026-10-18，用户明确纠正）
 
 2026-10-20身份接线纠正（优先于下方旧环境配置方案）：用户明确拒绝第二套ClientBinding令牌。Runtime配对已经确定服务器/设备/租户/用户，视觉API必须直接复用，不要求用户或管理员配置任何额外URL/token。0.0.13/0.3.11中手工AID_BOSS_SERVER_URL/TOKEN方案是已知交付缺陷，由计划23替代；旧交付及历史实验记录不改写。
@@ -20,6 +46,8 @@
 2026-10-22窗口观察兼容修正：`captureWindow`沿用Node写出的无BOM UTF-8 JSON sidecar，`window-experiment.ps1`读取该文件时显式指定`Get-Content -Encoding UTF8`，避免Windows PowerShell 5.1默认ANSI解码损坏中文窗口标题和原图路径；脚本自身保留UTF-8 BOM。仅修读取编码，不改截图、坐标空间、鼠标关闭、窗口/进程/时效/hash/局部像素校验或未知结果保护，不迁移PowerShell或增加fallback。回归以真实PS5.1执行从生产脚本抽取的读取管道，核对Node生产sidecar的中文及转义字符、路径、数值和摘要，并检查ASCII/BOM及坏JSON；离线测试不运行原生截图/点击。实施见计划24，本轮不提交、部署、打包或升版本；不是实际弹窗闭环验收。
 
 2026-10-19实调补齐：模型多出未声明的空备注字段时，不能丢掉已完整且合法的页面判断和关闭建议。仅v2模型响应解析按既有assessment字段白名单取值；未知顶层字段忽略且不返回客户端，不改变提示词schema、HTTP请求严格校验、已定义字段/动作/坐标/能力验证。缺字段、非法枚举仍失败，非法动作仍只丢动作；原ID回执与实际usage×20账务不改，不新增自动模型重试。关闭详情反例及原场景复验见计划21.5。
+
+以下两段为计划21阶段的旧策略记录；本轮统一按W先用原身份fresh领域后验解消未知，具备确定未完成证据即可续做，不再一律要求人工核对。
 
 未知业务结果禁止在当前自动恢复调用中重发；人实际核对未发并明确授予一次新动作后，可在重新确认原身份/页面的前提下发起新执行。旧unknown回执及费用保留，新授权只消费一次，不把它伪装成旧调用自动恢复成功，也不要求正常新调用额外付费看图。陈selected的人工确认后续做真机见计划21.10。
 

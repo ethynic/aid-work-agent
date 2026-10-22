@@ -27,6 +27,7 @@ export class ChatRejectError extends Error {
 
 export interface ChatRejectDeps {
   state?: BusinessOperationState
+  checkpoint?: RejectCheckpoint
   /** 采集 fresh DOMSnapshot（每次点击前后重新采集，禁止复用旧坐标） */
   snapshot(): Promise<DomSnapshot>
   /** Win32 真实鼠标点击（viewport 为页面截图尺寸，device px） */
@@ -43,6 +44,8 @@ const CONFIRM_TEXT = '确定'
 const HEADER_MIN_Y = 130
 const HEADER_MAX_Y = 400
 
+export interface RejectCheckpoint { before?: DomSnapshot; confirmed?: boolean }
+
 export class ChatRejectExecutor {
   private readonly sleep: (ms: number) => Promise<void>
   readonly state: BusinessOperationState
@@ -55,11 +58,24 @@ export class ChatRejectExecutor {
   /** 把当前会话的候选人标记为不合适；成功返回，任何异常/歧义抛 ChatRejectError */
   async rejectCurrent(opts: { expectedContactRef?: string } = {}): Promise<void> {
     if (this.deps.signal?.aborted) throw new CancelledError()
-    const snap = await this.deps.snapshot()
-    this.state.bindContact(snap, opts.expectedContactRef)
-    const button = this.locateRejectButton(snap)
+    const fresh = await this.deps.snapshot()
+    const checkpoint = this.deps.checkpoint ?? {}
+    const snap = checkpoint.before ?? fresh
+    const nameBefore = this.panelHeaderName(snap)
+    if (checkpoint.confirmed) return
+    if (checkpoint.before && this.markSucceeded(fresh, snap)) {
+      this.state.confirmed({ rejected: true, contact: nameBefore }, '恢复后原目标会话已从可读列表移除或出现明确标记结果')
+      checkpoint.confirmed = true
+      return
+    }
+    this.state.bindContact(fresh, opts.expectedContactRef)
+    if (checkpoint.before && this.locateConfirmButton(fresh)) {
+      await this.confirmRejection(fresh, snap, nameBefore, checkpoint)
+      return
+    }
+    const button = this.locateRejectButton(fresh)
     if (!button) {
-      const count = this.countRejectButtons(snap)
+      const count = this.countRejectButtons(fresh)
       throw new ChatRejectError(
         count === 0
           ? '当前页面右侧面板没有「不合适」按钮：请先打开一个会话（或该候选人已标记不合适）'
@@ -68,13 +84,12 @@ export class ChatRejectExecutor {
     }
 
     // 点击前记录面板头部姓名：标记成功后 BOSS 自动切会话，靠它区分「成功切走」和「点击没生效」
-    const nameBefore = this.panelHeaderName(snap)
-
-    await this.state.input(() => this.deps.click(button, viewportOf(snap)), true)
+    checkpoint.before ??= snap
+    await this.state.input(() => this.deps.click(button, viewportOf(fresh)), true)
     await this.sleep(1200)
 
     let after = await this.deps.snapshot()
-    if (this.markSucceeded(after, snap)) { this.state.confirmed({ rejected: true, contact: nameBefore }, '原目标会话已从可读列表中移除或隐藏，或出现新的明确标记结果'); return }
+    if (this.markSucceeded(after, snap)) { this.state.confirmed({ rejected: true, contact: nameBefore }, '原目标会话已从可读列表中移除或隐藏，或出现新的明确标记结果'); checkpoint.confirmed = true; return }
 
     // 原因选择层：没有评估理由可映射，绝不乱选
     const reasonHit = REJECT_REASON_OPTIONS.find((o) => after.strings.some((s) => s.trim() === o))
@@ -94,20 +109,22 @@ export class ChatRejectExecutor {
           '点击可能被拦截或弹层结构变化，已停止，请人工查看页面',
       )
     }
-    // Confirm belongs to the original open conversation. A changed header is not a success signal.
+    await this.confirmRejection(after, snap, nameBefore, checkpoint)
+  }
+
+  private async confirmRejection(after: DomSnapshot, before: DomSnapshot, name: string | null, checkpoint: RejectCheckpoint): Promise<void> {
+    const confirm = this.locateConfirmButton(after)
+    if (!confirm) throw new ChatRejectError('原会话确认按钮不唯一，未继续标记')
     this.state.bindContact(after)
-    this.state.businessEffect.status = 'not_started'
     await this.state.input(() => this.deps.click(confirm, viewportOf(after)), true)
     await this.sleep(1200)
-
-    after = await this.deps.snapshot()
-    if (!this.markSucceeded(after, snap)) {
+    const result = await this.deps.snapshot()
+    if (!this.markSucceeded(result, before)) {
       this.state.unconfirmed('缺少明确已标记不合适的结果，未凭按钮消失或会话切换报成功')
-      throw new ChatRejectError(
-        '确认后「不合适」按钮仍存在且会话未切换：标记结果无法确认，已停止，请人工查看页面',
-      )
+      throw new ChatRejectError('确认后原会话标记结果无法确认')
     }
-    this.state.confirmed({ rejected: true, contact: nameBefore }, '确认后原目标会话已从可读列表中移除或隐藏，或出现新的明确标记结果')
+    this.state.confirmed({ rejected: true, contact: name }, '确认后原目标会话已从可读列表移除或出现明确标记结果')
+    checkpoint.confirmed = true
   }
 
   /**

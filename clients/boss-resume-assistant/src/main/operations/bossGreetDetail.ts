@@ -37,7 +37,9 @@ export function createBossGreetDetailOperation(
     execute(args: BossGreetDetailArgs, ctx: OpContext): Promise<OperationResult> {
       const name = (args?.name ?? '').trim()
       const dryRun = args?.dry_run === true
-      return runBossOperation(
+      const state = new BusinessOperationState()
+      const checkpoint: import('../boss/DetailGreetExecutor.js').DetailGreetCheckpoint = {}
+      const run = (ctx: OpContext): Promise<OperationResult> => runBossOperation(
         { kind: 'write', name: 'boss_greet_detail' },
         ctx,
         sessionFactory,
@@ -48,7 +50,6 @@ export function createBossGreetDetailOperation(
           return null
         },
         async (session, tracker, perf) => {
-          const state = new BusinessOperationState()
           const intent = { name: 'boss_greet_detail', goal: '向当前指定候选人详情打招呼', expected: dryRun ? '原候选人详情归属已确认，唯一打招呼按钮已定位且未点击打招呼' : '同一详情操作栏翻转为继续沟通', operationClass: 'external_effect' as const, target: name }
           return withBusinessRecovery(state, intent, async () => {
           ctx.progress({
@@ -57,7 +58,7 @@ export function createBossGreetDetailOperation(
               ? `校验详情归属并定位「${name}」的「打招呼」按钮（dry-run，必要时重新打开详情，不点击打招呼）`
               : `校验详情归属并向「${name}」发送打招呼（真实写动作，借用真实鼠标，请勿移动）`,
           })
-          const executor = new DetailGreetExecutor({ state,
+          const executor = new DetailGreetExecutor({ state, checkpoint,
             snapshot: () => session.snapshot(FILTER_SNAPSHOT_OPTIONS),
             click: session.click,
             pressEscape: session.pressEscape,
@@ -90,6 +91,8 @@ export function createBossGreetDetailOperation(
           })
         },
       )
+      if (ctx.recoveryContinuation) ctx.recoveryContinuation.resume = run
+      return run(ctx)
     },
   }
 }

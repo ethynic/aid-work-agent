@@ -7,7 +7,7 @@ import { GREET_TEXT, CONTINUE_TEXT, pairCardName, findButtonsByExactText, type G
 import { viewportOf } from './FilterSetter.js'
 import { CancelledError } from '../operations/types.js'
 import { inspectRecommendationResults, type RecommendationStopReason } from './RecommendationResultBoundary.js'
-import { candidateButtonVisible, loadedCandidates, hasLoadedRecommendationList, candidateOption, resolveCandidateReference } from './LoadedCandidateNavigation.js'
+import { candidateButtonVisible, loadedCandidates, hasLoadedRecommendationList, candidateOption, resolveCandidateReference, candidateReference } from './LoadedCandidateNavigation.js'
 import { locateResumeCanvas } from './ResumeReader.js'
 import { BusinessOperationState } from './BusinessOperationState.js'
 
@@ -20,6 +20,7 @@ export class GreetError extends Error {
 
 export interface GreetDeps {
   state?: BusinessOperationState
+  checkpoint?: GreetCheckpoint
   /** 采集 fresh DOMSnapshot（每次点击前重新采集，禁止复用旧坐标） */
   snapshot(): Promise<DomSnapshot>
   /** Win32 真实鼠标点击（viewport 为页面截图尺寸，device px） */
@@ -70,6 +71,16 @@ const MAX_SCROLL_ROUNDS = 30
  */
 const PAYWALL_MARKERS = ['该职位无开聊权益', '商品价格', '扫码支付']
 
+export interface GreetCheckpoint {
+  scopeDigest?: string
+  greeted?: number
+  greetedNames?: string[]
+  pending?: Set<string> | null
+  ambiguousNames?: NonNullable<GreetOutcome['ambiguousNames']>
+  scrollRounds?: number
+  current?: { name: string; ref: string | null }
+}
+
 export class GreetExecutor {
   private readonly sleep: (ms: number) => Promise<void>
   readonly state = new BusinessOperationState()
@@ -96,19 +107,43 @@ export class GreetExecutor {
     }
     const limit = opts.limit ?? (names ? names.length : 10)
     // 定向待打名单（trim 后精确匹配）；非定向为 null（走历史路径）
-    const pending = names ? new Set(names.map((n) => n.trim())) : null
-    const greetedNames: string[] = []
-    const ambiguousNames: NonNullable<GreetOutcome['ambiguousNames']> = []
-    let greeted = 0
+    const checkpoint = this.deps.checkpoint ?? {}
+    const pending = checkpoint.pending === undefined ? names ? new Set(names.map((n) => n.trim())) : null : checkpoint.pending
+    checkpoint.pending = pending
+    const greetedNames = checkpoint.greetedNames ??= []
+    const ambiguousNames = checkpoint.ambiguousNames ??= []
+    let greeted = checkpoint.greeted ?? 0
     const finish = (end: boolean, limited = false, reason?: RecommendationStopReason): GreetOutcome =>
       outcome(greeted,end,names,greetedNames,limited,reason,ambiguousNames)
     // 定向模式滚动次数；未加载目标的后续加载搜索仍有总上限。
-    let scrollRounds = 0
+    let scrollRounds = checkpoint.scrollRounds ?? 0
     let stoppedByLimit = false
     const seekAttempts = new Map<string, number>()
     let seekingName: string | null = null
     let seekingIdentity: string | null = null
     const identity = (c: ReturnType<typeof loadedCandidates>[number]): string => JSON.stringify([c.identityDigest,c.cardInfo])
+    const confirm = (name: string) => {
+      greeted++
+      this.state.confirmed({ name, greeted: true }, '原目标卡片明确翻转为继续沟通')
+      greetedNames.push(name)
+      pending?.delete(name)
+      checkpoint.current = undefined
+      seekingName = null
+      seekingIdentity = null
+      this.deps.onProgress?.(greeted)
+    }
+    try {
+    if (checkpoint.current) {
+      if (this.deps.signal?.aborted) throw new CancelledError()
+      await this.sleep(1500)
+      const snap = await this.deps.snapshot()
+      const current = checkpoint.current
+      const candidate = current.ref ? resolveCandidateReference(snap, current.name, current.ref) : null
+      if (!candidate || candidate.excluded) throw new GreetError('恢复后原候选卡片身份无法确认，发送结果仍未知')
+      if (candidate.buttonText === CONTINUE_TEXT) confirm(current.name)
+      else if (candidate.buttonText !== GREET_TEXT) throw new GreetError('恢复后原候选卡片状态无法确认，发送结果仍未知')
+      else this.state.notSubmitted('fresh原候选引用仍为打招呼，当前目标尚未发送')
+    }
     for (;;) {
       // 1. 点完当前视口内所有可见按钮（定向时只点姓名 ∈ names 的）
       for (;;) {
@@ -120,12 +155,15 @@ export class GreetExecutor {
         const resultState = inspectRecommendationResults(snap)
         if (resultState.stopReason === 'no_matching_candidates') return finish(true,false,greeted === 0 ? resultState.stopReason : 'recommendations_boundary')
         const buttons = this.findGreetButtons(snap)
-        const loaded = pending ? loadedCandidates(snap) : []
+        const loaded = loadedCandidates(snap)
+        if (checkpoint.scopeDigest && !loaded.some(card => card.scopeDigest === checkpoint.scopeDigest)) throw new GreetError('原账号或职位范围无法确认，未继续剩余打招呼')
         const indexedList = pending !== null && hasLoadedRecommendationList(snap)
-        const selected = opts.selection ? resolveCandidateReference(snap,opts.selection.name,opts.selection.candidate_ref) : null
-        if (opts.selection && !selected) throw new GreetError('候选引用已过期或卡片、账号、职位已变化，已停止；请重新查询候选人，不回退姓名发送')
-        if (opts.selection && selected?.buttonText !== GREET_TEXT) throw new GreetError('指定候选人当前没有可用打招呼按钮，已停止，请重新查询状态')
+        const selection = checkpoint.current?.ref ? { name: checkpoint.current.name, candidate_ref: checkpoint.current.ref } : opts.selection
+        const selected = selection ? resolveCandidateReference(snap,selection.name,selection.candidate_ref) : null
+        if (selection && !selected) throw new GreetError('候选引用已过期或卡片、账号、职位已变化，已停止；请重新查询候选人，不回退姓名发送')
+        if (selection && selected?.buttonText !== GREET_TEXT) throw new GreetError('指定候选人当前没有可用打招呼按钮，已停止，请重新查询状态')
         if (pending) for (const name of pending) {
+          if (checkpoint.current && name !== checkpoint.current.name) continue
           const matches = loaded.filter((c) => c.name === name && (!selected || c.identityDigest === selected.identityDigest))
           if (matches.length > 1) {
             ambiguousNames.push({name,candidates:matches.map((c,i)=>candidateOption(c,i+1))})
@@ -144,7 +182,7 @@ export class GreetExecutor {
           continue
         }
         // Full-DOM identity index precedes the viewport/boundary test: a matching card may be ABOVE a visible fallback boundary.
-        const indexedTarget = pending ? loaded.filter((c) => pending.has(c.name)
+        const indexedTarget = pending || selected ? loaded.filter((c) => (!pending || pending.has(c.name))
           && (!selected || c.identityDigest === selected.identityDigest)
           && (!seekingName || (c.name === seekingName && identity(c) === seekingIdentity)) && !c.excluded && c.buttonText === GREET_TEXT && c.point)
           .sort((a, b) => Number(candidateButtonVisible(b)) - Number(candidateButtonVisible(a))
@@ -197,6 +235,9 @@ export class GreetExecutor {
         const boundTarget = indexedTarget ?? loadedCandidates(snap).find(c => c.point?.x === target!.point.x && c.point?.y === target!.point.y)
         targetName ??= boundTarget?.name ?? pairCardName(snap, target, viewportOf(snap))
         if (!targetName) throw new GreetError('未能绑定待打招呼卡片姓名，未发送招呼')
+        this.state.contactName = targetName
+        checkpoint.scopeDigest ??= boundTarget?.scopeDigest ?? undefined
+        checkpoint.current = { name: targetName, ref: checkpoint.current?.ref ?? opts.selection?.candidate_ref ?? (boundTarget ? candidateReference(boundTarget) : null) }
         await this.state.input(() => this.deps.click(target!.point, viewportOf(snap)), true)
         await this.sleep(1500)
 
@@ -232,15 +273,7 @@ export class GreetExecutor {
             }
           }
         }
-        greeted++
-        this.state.confirmed({ name: targetName, greeted: true }, '原目标卡片明确翻转为继续沟通')
-        if (targetName !== null) {
-          greetedNames.push(targetName)
-          pending?.delete(targetName)
-          seekingName = null
-          seekingIdentity = null
-        }
-        this.deps.onProgress?.(greeted)
+        confirm(targetName)
       }
 
       // 2. 视口内点完了，向下滚动加载更多。
@@ -268,6 +301,10 @@ export class GreetExecutor {
         scrollRounds++
         this.deps.onSearchProgress?.(scrollRounds)
       }
+    }
+    } finally {
+      checkpoint.greeted = greeted
+      checkpoint.scrollRounds = scrollRounds
     }
   }
 

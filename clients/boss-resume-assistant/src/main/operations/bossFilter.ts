@@ -79,8 +79,8 @@ async function verifiedFilter<T>(setter: FilterSetter, invoke: () => Promise<T>,
   }
 }
 
-function filterExecution(): PageExecution {
-  return { attemptsUsed: 0, ordinaryRetriesUsed: 0, inputStatus: 'not_started', stage: 'prepared',
+function filterExecution(previous?: PageExecution): PageExecution {
+  return { attemptsUsed: previous?.attemptsUsed ?? 0, ordinaryRetriesUsed: previous?.ordinaryRetriesUsed ?? 0, inputStatus: 'not_started', stage: 'prepared',
     verification: { status: 'inconclusive', evidence: [] } }
 }
 
@@ -153,7 +153,7 @@ export function createBossFilterOperation(
           } catch { /* 非法URL按错误页面拒绝，不能根据后台iframe文案放行。 */ }
           if (!onRecommend) throw new CodedOperationError('WRONG_PAGE', '当前不在 BOSS 推荐牛人页面，请先用 boss_goto recommend；后台筛选文案不构成页面前置条件')
           ctx.progress({ stage: 'execute', message: '设置筛选面板' })
-          const execution = filterExecution()
+          const execution = filterExecution(ctx.previousPageExecution)
           const goal = `设置候选人筛选条件：${JSON.stringify(args).slice(0, 850)}`
           const expected = '筛选面板已关闭；实际筛选按钮数字等于已应用条件数，选中条件与请求匹配'
           const setter = new FilterSetter({
@@ -232,7 +232,7 @@ export function createBossClearFilterOperation(
           } catch { /* 非法URL按错误页面拒绝，不能根据后台iframe文案放行。 */ }
           if (!onRecommend) throw new CodedOperationError('WRONG_PAGE', '当前不在 BOSS 推荐牛人页面，请先用 boss_goto recommend；后台筛选文案不构成页面前置条件')
           ctx.progress({ stage: 'execute', message: '打开面板 → 清除 → 确定' })
-          const execution = filterExecution()
+          const execution = filterExecution(ctx.previousPageExecution)
           const goal = '清除当前候选人筛选条件'
           const expected = '筛选面板已关闭；实际可见筛选按钮不带数字（0个条件）'
           const setter = new FilterSetter({

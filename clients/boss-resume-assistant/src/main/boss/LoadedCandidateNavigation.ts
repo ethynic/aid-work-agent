@@ -21,6 +21,7 @@ export interface LoadedCandidate {
   cardInfo: CandidateCardInfo
   /** Opaque identity fingerprint; no position, active status or action label participates. */
   identityDigest: string | null
+  scopeDigest?: string | null
   excluded: boolean
   documentIndex: number
   buttonText: string | null
@@ -210,7 +211,7 @@ export function loadedCandidates(s: DomSnapshot): LoadedCandidate[] {
       const hasDescription = Object.values(cardInfo).some(v => Array.isArray(v) ? v.length > 0 : !!v)
       const identityDigest = scope && hasDescription ? createHash('sha256')
         .update(JSON.stringify({ scope,name,cardInfo,avatarSources })).digest('hex') : null
-      out.push({ name, advantage, cardInfo, identityDigest,
+      out.push({ name, advantage, cardInfo, identityDigest, scopeDigest: scope ? createHash('sha256').update(scope).digest('hex') : null,
         excluded: excludedRecommendationNode(s, di, node), documentIndex: di,
         buttonText: selected?.text ?? null, point: screen ? { x: screen[0]! + screen[2]! / 2, y: screen[1]! + screen[3]! / 2 } : null,
         buttonBounds: screen, top, bottom, left, right })

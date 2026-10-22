@@ -23,6 +23,7 @@ export class ChatSendError extends Error {
 }
 
 export interface ChatSendDeps {
+  checkpoint?: SendCheckpoint
   state?: BusinessOperationState
   /** 采集 fresh DOMSnapshot（每次定位前重新采集，禁止复用旧坐标） */
   snapshot(): Promise<DomSnapshot>
@@ -79,9 +80,11 @@ export class ChatSendExecutor {
   private readonly sleep: (ms: number) => Promise<void>
   readonly state = new BusinessOperationState()
   targetContact = ''
+  private readonly checkpoint: SendCheckpoint
 
   constructor(private readonly deps: ChatSendDeps) {
     this.state = deps.state ?? this.state
+    this.checkpoint = deps.checkpoint ?? {}
     this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)))
   }
 
@@ -98,10 +101,20 @@ export class ChatSendExecutor {
 
     // 1. 定位发送按钮（视口右半唯一）；由它推导输入框激活点
     const snap = await this.deps.snapshot()
-    this.targetContact = headerContactOf(snap)
+    this.targetContact = this.checkpoint.contact ?? headerContactOf(snap)
     this.state.bindContact(snap, opts.expectedContactRef)
-    if (!this.targetContact || opts.contact && this.targetContact !== opts.contact.trim()) {
+    if (!this.targetContact || headerContactOf(snap) !== this.targetContact || opts.contact && this.targetContact !== opts.contact.trim()) {
       throw new ChatSendError('当前会话身份不可确认或与目标不符，尚未输入或发送消息')
+    }
+    this.checkpoint.contact = this.targetContact
+    if (this.checkpoint.matchesBefore !== undefined) {
+      const status = await this.sentState(snap, message, this.checkpoint.matchesBefore)
+      if (status === 'sent') { this.confirmSent(); return { sent: true } }
+      if (status !== 'unsent') {
+        this.state.unconfirmed('恢复后原会话消息基线或草稿无法确认，不重复发送')
+        throw new ChatSendError('恢复后仍无法确认原消息结果')
+      }
+      this.state.notSubmitted('原会话完整草稿仍在且精确我方消息基线未增，原消息尚未发送')
     }
     const { point: sendBtn, count } = locateSendButton(snap)
     if (!sendBtn) {
@@ -144,6 +157,7 @@ export class ChatSendExecutor {
 
     const beforeMessages = await new ChatReadExecutor({ snapshot: async () => beforeSend }).read({ contact: this.targetContact })
     const matchesBefore = beforeMessages.messages.filter(m => m.sender === 'me' && m.text === message).length
+    this.checkpoint.matchesBefore ??= matchesBefore
     const { point: sendBtn2 } = locateSendButton(beforeSend)
     if (!sendBtn2) {
       throw new ChatSendError('输入消息后发送按钮消失（页面可能切换/弹层遮挡），已停止，请人工查看（消息未发送）')
@@ -153,15 +167,28 @@ export class ChatSendExecutor {
     await this.sleep(SEND_DELAY)
 
     const after = await this.deps.snapshot()
-    this.verifyContact(after)
-    const afterMessages = await new ChatReadExecutor({ snapshot: async () => after }).read({ contact: this.targetContact })
-    const matchesAfter = afterMessages.messages.filter(m => m.sender === 'me' && m.text === message).length
-    if (editorText(after) !== '' || matchesAfter <= matchesBefore) {
+    if (await this.sentState(after, message, this.checkpoint.matchesBefore) !== 'sent') {
       this.state.unconfirmed('同一会话未同时观察到编辑区清空与新增同文我方消息，结果未知，不重复发送')
       throw new ChatSendError('无法确认消息发送结果：缺少同会话编辑区清空及新增出站消息的联合证据')
     }
-    this.state.confirmed({ contact: this.targetContact, sent: true }, '同一会话编辑区清空且我方同文消息数增加')
+    this.confirmSent()
     return { sent: true }
+  }
+
+  private async sentState(snap: DomSnapshot, message: string, before: number): Promise<'sent' | 'unsent' | 'unknown'> {
+    this.verifyContact(snap)
+    const messages = await new ChatReadExecutor({ snapshot: async () => snap }).read({ contact: this.targetContact })
+    const matches = messages.messages.filter(m => m.sender === 'me' && m.text === message).length
+    const editor = editorText(snap)
+    if (editor === '' && matches > before) return 'sent'
+    return editor === message && matches === before ? 'unsent' : 'unknown'
+  }
+
+  private confirmSent(): void {
+    if (!this.checkpoint.confirmed) {
+      this.state.confirmed({ contact: this.targetContact, sent: true }, '同一会话编辑区清空且我方同文消息数增加')
+      this.checkpoint.confirmed = true
+    }
   }
 
   private verifyContact(snap: DomSnapshot): void {
@@ -172,6 +199,8 @@ export class ChatSendExecutor {
     }
   }
 }
+
+export interface SendCheckpoint { contact?: string; matchesBefore?: number; confirmed?: boolean }
 
 /** Read fragmented contenteditable text in DOM order, scoped to one visible chat editor. */
 export function editorText(snap: DomSnapshot): string | null {

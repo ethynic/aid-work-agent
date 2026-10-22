@@ -38,6 +38,8 @@ import { segdiffMisrateFiles, stitchPartsImage } from '../boss/imageOps.js'
 import { JobSwitcher } from '../boss/JobSwitcher.js'
 import { viewportOf, FILTER_SNAPSHOT_OPTIONS } from '../boss/FilterSetter.js'
 import { excludedRecommendationName } from '../boss/RecommendationResultBoundary.js'
+import { candidateReference, loadedCandidates, resolveCandidateReference } from '../boss/LoadedCandidateNavigation.js'
+import { DetailGreetExecutor } from '../boss/DetailGreetExecutor.js'
 import { WinClickError } from '../input/WinMouseClicker.js'
 import {
   defaultSessionFactory,
@@ -149,7 +151,9 @@ export function createBossResumeDetailOperation(
       const nameParam = (rawName ?? '').trim()
       const rawSaveTo = args?.save_image_to
       const saveImageTo = (rawSaveTo ?? '').trim()
-      return runBossOperation(
+      let originalCard: string | null | undefined
+      let resuming = false
+      const run = (ctx: OpContext): Promise<OperationResult> => runBossOperation(
         { kind: 'readonly', name: 'boss_resume_detail' },
         ctx,
         sessionFactory,
@@ -166,7 +170,24 @@ export function createBossResumeDetailOperation(
           const verified = await runVerifiedPageOperation({ name: 'boss_resume_detail', operationClass: 'readonly', target: nameParam,
             goal: '读取已打开候选人的简历图像', expected: '原详情画布可读且分段图像已拼接，截断及接缝疑点单独报告' }, async (attempt) => {
             // 前置校验：必须已打开候选人简历详情（存在大尺寸 CANVAS）
-            const probe = await session.snapshot(FILTER_SNAPSHOT_OPTIONS)
+            let probe = await session.snapshot(FILTER_SNAPSHOT_OPTIONS)
+            if (resuming) {
+              if (originalCard) {
+                if (!resolveCandidateReference(probe, nameParam, originalCard)) throw new CodedOperationError('UI_CHANGED', '原简历候选卡片或账号职位已变化，未改读其他人')
+                const opener = new DetailGreetExecutor({ snapshot: () => session.snapshot(FILTER_SNAPSHOT_OPTIONS),
+                  click: session.click, pressEscape: session.pressEscape, scroll: session.mouseWheel, signal: ctx.signal,
+                  previousExecution: ctx.previousPageExecution })
+                await opener.openDetail({ name: nameParam })
+                probe = await session.snapshot(FILTER_SNAPSHOT_OPTIONS)
+              } else {
+                // Some attachment views have no backing recommendation card. The same visible
+                // detail identity, rather than its position or a background name, must then match.
+                DetailGreetExecutor.verifyDetailName(probe, nameParam)
+              }
+            } else if (originalCard === undefined) {
+              const cards = loadedCandidates(probe).filter(card => card.name === nameParam && !card.excluded)
+              originalCard = cards.length === 1 ? candidateReference(cards[0]!) : null
+            }
             const stopReason = excludedRecommendationName(probe, nameParam)
             if (stopReason) throw new CodedOperationError(stopReason === 'no_matching_candidates' ? 'NO_MATCHING_CANDIDATES' : 'RECOMMENDATIONS_BOUNDARY', '当前详情已证明属于筛选结果之外的补充推荐，已停止读取，未采图或提交简历')
             const rect = locateResumeCanvas(probe)
@@ -221,10 +242,12 @@ export function createBossResumeDetailOperation(
               data: buildResumePayload(candidateName, jobBox.name, result, 'param'),
               effect: 'none' as const,
             }
-          })
+          }, ctx.previousPageExecution)
           return { ...verified.value, data: { ...verified.value.data, operation_recovery: verified.facts } }
         },
       )
+      if (ctx.recoveryContinuation) ctx.recoveryContinuation.resume = (context) => { resuming = true; return run(context) }
+      return run(ctx)
     },
   }
 }

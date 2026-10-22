@@ -68,8 +68,10 @@ function admit(name: string, result: OperationResult): Admitted | undefined {
 export function withLocalRecovery<Args>(operation: BossOperation<Args>, deps: LocalRecoveryDeps = {}): BossOperation<Args> {
   if (!LOCAL_RECOVERY_POLICIES[operation.name]) return operation
   return { name: operation.name, async execute(args, ctx) {
+    const continuation: NonNullable<OpContext['recoveryContinuation']> = {}
+    const executionCtx = { ...ctx, recoveryContinuation: continuation }
     let original: OperationResult
-    try { original = await operation.execute(args, ctx) }
+    try { original = await operation.execute(args, executionCtx) }
     catch { original = failResult(randomUUID(), 'INTERNAL_ERROR', '操作未取得结构化结果，执行结果未知', 'unknown') }
     const receipts: unknown[] = [], observations: Dict[] = [], steps: Dict[] = []
     const seen = new Set<string>()
@@ -91,7 +93,7 @@ export function withLocalRecovery<Args>(operation: BossOperation<Args>, deps: Lo
       { message: '缺少Runtime配对上下文，请通过已配对的Runtime启动BOSS工具，并确认Runtime与BOSS插件版本匹配；保留原操作结果' })
     const inspect = deps.inspect ?? createBossOverlayInspectOperation()
     const dismiss = deps.dismiss ?? createBossOverlayDismissOperation()
-    const boundCtx: OpContext = { ...ctx, browserTargetRef: admitted.target }
+    const boundCtx: OpContext = { ...executionCtx, browserTargetRef: admitted.target }
     let context = admitted.context, mode: 'page' | 'window' = 'page'
     const abort = () => { if (ctx.signal.aborted) throw new Error('cancelled') }
     const assess = (r: OperationResult) => {
@@ -122,14 +124,21 @@ export function withLocalRecovery<Args>(operation: BossOperation<Args>, deps: Lo
     }
     const resume = async (): Promise<OperationResult> => {
       abort()
-      if (policy === 'preserve_result') return finish(original, 'page_restored_result_preserved', { page_restored: true })
+      if (policy === 'preserve_result' && !continuation.resume) return finish(original, 'page_restored_result_preserved', { page_restored: true })
       const op = dict(context.operation)
       if (policy === 'readonly' && operation.name === 'boss_read_chat' && !op.target_label) return finish(original, 'page_restored_target_unbound', { page_restored: true })
       const recordedContact = admitted.facts.recovery_contact_ref, expectedContact = boundCtx.expectedContactRef
+      const domainAccept = operation.name === 'boss_accept_resume' && !!continuation.resume
       const contact = recordedContact === undefined ? expectedContact : recordedContact
       const contactBound = typeof contact === 'string' && /^[a-f0-9]{64}$/.test(contact)
         && (recordedContact === undefined || expectedContact === undefined || recordedContact === expectedContact)
-      if (policy === 'observe_only') {
+      if (policy === 'observe_only' && CONTACT_TOOLS.has(operation.name) && operation.name !== 'boss_accept_resume' && !contactBound) {
+        return finish(original, 'page_restored_target_unbound', { page_restored: true })
+      }
+      if (!domainAccept && recordedContact !== undefined && expectedContact !== undefined && recordedContact !== expectedContact) {
+        return finish(original, 'page_restored_target_unbound', { page_restored: true })
+      }
+      if (policy === 'observe_only' && !continuation.resume) {
         const business = dict(admitted.facts.business_effect)
         const safe = business.status === 'not_started' && business.completed_count === 0 && original.effect === 'none'
           && original.code !== 'EXECUTION_UNKNOWN' && (!CONTACT_TOOLS.has(operation.name) || contactBound)
@@ -137,19 +146,44 @@ export function withLocalRecovery<Args>(operation: BossOperation<Args>, deps: Lo
       }
       const resumeArgs = operation.name === 'boss_read_chat' && !dict(args).contact && op.target_label
         ? { ...args, contact: op.target_label } : { ...args }
-      const resumeCtx = { ...boundCtx, ...(typeof contact === 'string' ? { expectedContactRef: contact } : {}) }
+      const previous = dict(admitted.facts.execution), verification = dict(admitted.facts.verification)
+      const resumeContact = domainAccept ? expectedContact ?? recordedContact : contact
+      const resumeCtx: OpContext = { ...boundCtx, ...(typeof resumeContact === 'string' ? { expectedContactRef: resumeContact } : {}),
+        previousPageExecution: { attemptsUsed: Number(previous.attempts_used), ordinaryRetriesUsed: Number(previous.ordinary_retries_used),
+          inputStatus: previous.input_status as 'not_started' | 'attempted' | 'unknown', stage: previous.stage as 'prepared' | 'input' | 'postcheck',
+          verification: { status: verification.status === 'satisfied' ? 'met' : verification.status === 'not_satisfied' ? 'unmet' : 'inconclusive',
+            evidence: verification.evidence as string[] } } }
       // Raw operation only: do not enter another recovery cycle after the original goal is resumed.
       let result: OperationResult
-      try { result = await operation.execute(resumeArgs, resumeCtx) }
+      try {
+        const resume = continuation.resume
+        continuation.resume = undefined // A continuation belongs to this invocation and is consumed once.
+        result = resume ? await resume(resumeCtx) : await operation.execute(resumeArgs, resumeCtx)
+      }
       catch {
         // The resumed call may have crossed its commit boundary. Never resurrect the earlier not_started proof.
-        const facts = { ...admitted.facts, execution: { stage: 'input', input_status: 'unknown', attempts_used: 1, ordinary_retries_used: 0 },
+        const facts = { ...admitted.facts, execution: { ...previous, stage: 'input', input_status: 'unknown' },
           verification: { status: 'inconclusive', evidence: ['恢复后原操作未取得结构化结果，不能确认最终业务状态'] },
-          ...(policy === 'observe_only' ? { business_effect: { status: 'unknown', completed_count: 0 } } : {}) }
+          ...(policy === 'observe_only' ? { business_effect: { ...dict(admitted.facts.business_effect), status: 'unknown' } } : {}) }
         result = failResult(randomUUID(), 'EXECUTION_UNKNOWN', '恢复后原操作未取得结构化结果，执行状态未知',
-          policy === 'observe_only' ? 'unknown' : 'none', { browser_target_ref: admitted.target, operation_recovery: facts })
+          policy === 'observe_only' ? 'unknown' : 'none', { ...original.data, browser_target_ref: admitted.target, operation_recovery: facts })
       }
-      return finish(result, result.success ? 'recovered' : 'original_goal_unconfirmed', { page_restored: true, resumed: true,
+      if (!result.success && !object(result.data.operation_recovery)) {
+        // A fresh connection/target guard can fail before the domain continuation starts. Its
+        // zero-input result says nothing about the earlier business submission or retained reads.
+        const unknown = policy === 'observe_only' && dict(admitted.facts.business_effect).status === 'unknown'
+        result = { ...result, code: unknown ? 'EXECUTION_UNKNOWN' : result.code, effect: original.effect,
+          retryable: policy === 'observe_only' && (unknown || original.effect !== 'none') ? false : result.retryable,
+          data: { ...original.data, ...result.data, browser_target_ref: admitted.target,
+            operation_recovery: { ...admitted.facts,
+              verification: { status: 'inconclusive', evidence: ['恢复后原领域核验未开始；保留先前业务状态与已取得成果'] },
+              error: { code: result.code, source: 'prepared', summary: result.message.slice(0, 1000) } } } }
+      }
+      const facts = dict(result.data.operation_recovery)
+      const incomplete = result.data.cleanup_error || result.data.recovery || facts.error && dict(facts.verification).status !== 'satisfied'
+      const partial = result.effect === 'partial' || ['failures', 'missing_names', 'ambiguous_names'].some(
+        key => Array.isArray(result.data[key]) && (result.data[key] as unknown[]).length > 0)
+      return finish(result, !result.success || incomplete ? 'original_goal_unconfirmed' : partial ? 'recovered_with_partial_result' : 'recovered', { page_restored: true, resumed: true,
         resume_execution: dict(result.data.operation_recovery).execution })
     }
     const appendEvidence = (evidence: string) => { context = { ...context, verification: {

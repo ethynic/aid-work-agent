@@ -2,6 +2,8 @@
 
 ## 开发进度
 
+最新开发授权（2026-10-22）：修复所有22个页面业务CLI排障后的原任务续做，复用原领域后验、身份和剩余额度。未知须先fresh回查再判，明确未完成自动继续，仍未知才停；单一进程内holder保存必要checkpoint，重新建session，不复用旧连接或递归恢复。不真机外发、不连接远端库、不运行Python测试、不提交/推送、打包或部署，见设计W及26。
+
 最新提交授权（2026-10-22）：用户要求提交窗口UTF-8修复及配套发行源码，按项目规范提交并推送，不部署。下方“不提交”保留为当时的开发/打包边界；已封存安装包及其出包时`sourceCommit/dirty`记录不改写、不重打。
 
 最新交付授权（2026-10-22）：用户要求打包BOSS供Runtime更新；本批按既有验收签名/信任链生成BOSS0.3.16，并配套包含新公钥的Runtime UI0.0.18，Host0.2.21/Core0.2.19不升版。产物统一`clients/release`，使用当前含未提交UTF-8修复的工作区，真实HEAD及dirty状态写入交付清单；不提交、推送、部署或改动已安装Runtime/配对，见25。下方24的“不打包/升版”是此前代码修复阶段边界，不覆盖本次交付授权。
@@ -36,6 +38,7 @@
 
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
+| 排障后原任务闭环 | 全部页面业务CLI领域核验、尾段与剩余项续做 | ✅ 完成（2026-10-22） | 独立分组345/95/58及最终3例通过，CR通过；未打包/真机/部署，见26 |
 | 中文窗口修复验收包 | BOSS0.3.16与信任配套Runtime0.0.18 | ✅ 完成（2026-10-22） | 第25节；Runtime/插件及最终ZIP15文件独立验包和CR通过，产物已封存；授权提交推送，未部署 |
 | 窗口中文JSON兼容 | PS5.1读取Node无BOM UTF-8观察元数据 | ✅ 完成（2026-10-22） | 第24节；开发11/11、独立28/28、build及CR通过，未发布/未实点整链 |
 | 视觉403修复 | 平台管理员配对身份兼容、CLI拒绝原因及回归 | ✅ 完成（2026-10-22） | 23.1；独立API39+7、CLI新9、build及CR通过，CLI1基线失败；用户授权提交推送，agent2待部署授权 |
@@ -929,3 +932,45 @@ Supervisor仅2个env透传修正独立17/17、0跳过及CR通过，真实spawn�
 交付说明要求先沿用原用户/位置安装Runtime0.0.18，再在Runtime导入未解压的BOSS插件，不手工改root或重配。日志定位采用`%APPDATA%/aidwork-runtime-app-acceptance/installation-v2/current.json`的`home/logs/runtime.log`。BOSS包仅包含客户端UTF-8及403错误摘要；403鉴权修正本身为后台提交`c892c1b2`，需确保agent2服务端包含它，本轮未部署且未核当前服务版本，不因安装客户端包宣称解除后台403。最终组合ZIP独立复读15个文件、目录逐文件SHA与SHA256SUMS及ZIP摘要均通过，退出0，最终SHA仍为`f9c724ea023b51ebcb73ef146359be14f83675528d76aeaec2e5d6c85a963dac`；交付已封存，不再修改或重打本批。用户要求后续直接使用既有一键九步正式入口，不继续维护临时变体。
 
 交付不包含私钥、令牌、配对资料、截图、真实简历或实验日志。本轮不实际安装/导入、操作BOSS业务、投递鼠标/键盘、调用视觉模型、提交/推送或部署；真实窗口关闭及视觉恢复整链未测，不用静态验包冒充业务成功。
+
+## 26. 排障后原任务闭环（2026-10-22）
+
+真实故障已由主控只读关联：原定向greet点击正常返回但后验unknown，客服弹窗经CLI→后台视觉API（20倍）成功关闭且后态无遮挡；共享层直接返回`page_restored_business_unconfirmed`，没有再读取原目标业务状态。这是续做接缝缺失，不是视觉403。原截图/DOM仅留忽略目录，测试使用已有合成fixtures，不提交候选人资料。
+
+本轮按设计W覆盖22个页面业务入口。共享`OpContext`只增加当次调用私有、仅承载一个续做函数的holder；必要领域保存原目标/基线/当前阶段及累计成果，重新进入`runBossOperation`获得新session后复用原执行器后验/尾段。page_state及简单readonly保留原execute；两个有payload的只读清理入口、外发及简历批次才增加必要checkpoint。不新增工具/API/持久化状态、通用phase框架、第二恢复loop或重试层。
+
+先共享接缝，再分组落地：三种打招呼与批次；两种发送；接收/预览/关闭与不合适；简历详情/批次及只读面板收尾。已完成项不重投/重读，当前未完项不因`processed_names`而跳过，原limit仅消费剩余额度，普通重试不重连清零。恢复后的确定性成功必须返回最终OK/累计成果，原失败只保留审计；无法判断则保留真实unknown。
+
+验证重点：原客服遮挡→点击正常返回unknown→关闭→同卡仍打招呼→一次续点→继续沟通；已经发出则零重复；消息同文旧历史不冒充新发送；接受已成功后只补预览/关闭；标记后自动切人不误标；批次部分完成不重复计数、payload不丢、剩余额度不扩。旧session dispose后所有方法抛错仍可用新session完成；并发/交错调用各holder隔离、取消/原target变更拒绝、函数/DOM/基线不进入JSON/API。完成后走独立TEST及CR；本轮无真实业务输入、远端数据库、Python测试、提交、打包或部署。
+
+26.1 实现及开发者自测（待独立验收）：共享单holder+新session续做、领域成果核验及预览/收尾/剩余项均已落地。原current消息在首个可读probe即保存contact；接收点列表行准备失败由原稳定请求行重定位承担，不要求尚未打开的会话先有header ref。回调抛错和新session连接/target守卫提前结构化失败均保留原unknown/已确认明细、payload与已用普通重试。注册断言由旧24修为既有25（22业务+2恢复原语+1纯观察probe），显式验证probe不接自动恢复；注册表/公开工具未增改。
+
+开发验证使用现有BOSS本地TypeScript编译器及Node，显式`AID_BOSS_AUTO_CHROME=0`；不运行Python/conftest/远端数据库。首次5领域108例107通过/1失败为旧详情“无checkpoint重复调用unknown不得重做”保护被移除，已恢复该保护，仅当前私有checkpoint可续做；后续7文件156例155通过/1失败为上述既有注册数量断言，按主控同意修正，未隐藏失败。新增本组12例及预整合独立准备的8例合计20/20通过（此处为开发者执行，不能替代独立角色正式验收）；只读组8新增+相关旧测试三文件50/50通过。审阅修正前本地编译退出0，15个定向文件252/252通过、0失败/跳过，退出0；下方记录最终差分及受影响重跑，不能将252例说成最终代码完整复跑。git diff --check通过。
+
+复现命令（工作目录`clients/boss-resume-assistant`）：`$env:AID_BOSS_AUTO_CHROME='0'; .\node_modules\.bin\tsc.cmd -p tsconfig.main.json --pretty false`，随后`node --test --test-reporter=dot dist/tests/recovery-continuation.test.js dist/tests/readonly-recovery-continuation.test.js dist/tests/greet-executor.test.js dist/tests/chat-send-executor.test.js dist/tests/resume-consent.test.js dist/tests/chat-reject-executor.test.js dist/tests/detail-greet-executor.test.js dist/tests/local-operation-recovery.test.js dist/tests/local-operation-recovery-independent.test.js dist/tests/remaining-page-recovery.test.js dist/tests/retained-read-cleanup.test.js dist/tests/resume-batch.test.js dist/tests/boss-send-to.test.js dist/tests/boss-detail-greet-ops.test.js dist/tests/detail-greet-opt-in.test.js`。开发日志仅ignored`.tmp/recovery-continuation-*.log`；误在仓库根执行的npx同名tsc仅输出“not the tsc command”且未验证项目，已改用现有依赖的明确本地路径，后续不靠该输出宣称成功。
+
+以上仅合成Node快照/真实执行器编排：没有实际关闭吴的客服弹窗或再发招呼，没有调用视觉API/模型或额外计费，没有修改已安装Runtime、发行包或后台。独立TEST/CR及最终状态仍待收敛，本阶段不提交/推送、打包或部署。
+
+26.2 预审修正及最终受影响自测：共享新连接CHROME_UNAVAILABLE在保留原unknown/partial时，必须同时将retryable置false，避免上层把“新连接没输入”当作可重放旧业务。新增用例先红灯1失败（true≠false），修后本组+共享三文件61/61通过。接受批次只在accepted=0消费原caller expectedContactRef；原首人已成功后，第二人ref不同不应被共享层一刀切阻断，保留caller约束由既有first-only逻辑及当前checkpoint核验，不放松单人消息/不合适或无callback旧路径。
+
+另补原请求行到已打开header的稳定身份核验：同名A行点击被吞、仍是有处理条的B时，不能仅凭姓名同文点同意。保存原行稳定ID/人口字段，fresh header只比较双方具备的同名字段，并须在原列表同名项中唯一对应原key；字段缺失不强求页面不存在的信息，确实同名无法区分才停止。两例覆盖不同geek-id/年龄时被吞零同意、正确打开A后正常接受；批次例覆盖首人已接收、第二人被挡、恢复后只补第二人且原limit2不变。
+
+最终源码重新冻结后本地tsc退出0；受影响4文件（recovery-continuation/resume-consent/local-operation-recovery/local-operation-recovery-independent）87/87通过、0失败/跳过，退出0，含本组16项新回归。独立TEST/CR在此最终源码上执行，尚未将预整合独立准备用例的开发者运行等同正式独立结果。边界仍是不实点BOSS、不外发、不调模型/数据库、不提交/推送、打包或部署。
+
+26.3 最后两项过度门禁消除：原请求行与fresh header共有稳定ID相等且可比字段无矛盾，直接确认原身份，不再要求打开后左未读列表仍渲染该行；没有共同强ID才保留列表同名消歧。经验展示“5年/5年经验”去后缀做局部等义归一化，避免同一人被不同展示文案误拒。新增合并正例同ID、跨面同义经验、清未读导致原列表行移除仍正常接受；不同ID/被吞点行的零同意负例保留。
+
+此最终差分本地编译退出0，受影响recovery-continuation/resume-consent两文件40/40通过、0失败/跳过，退出0（本组新测试最终17项）；87例是此两行修订前的上一状态，不将其冒充最终全量复跑。独立角色按最终hash补接收受影响验证，其余已跑域结果按原状态保留；开发者编译与独立345回归的结束通知存在交错，已明确告知独立角色不要将跨时段测试称为最终同一hash全量。所有产品源码已再次冻结，后续仅更新正式独立证据。
+
+26.4 副作用重试契约收尾：已有failResult工厂仅一行落实unknown/partial的retryable=false，none仍按原错误码（如CHROME_UNAVAILABLE）可重试；恢复投影把none改成unknown/partial时的显式false保留。覆盖领域已有facts的“接受confirmed后预览WebSocket断连”，不是只修新连接发生在body前的分支。新增组合例先红灯1失败（true≠false），修后本地tsc退出0，operations-result/recovery-continuation/local-operation-recovery/local-operation-recovery-independent/resume-consent五文件129/129通过、0失败/跳过，退出0；本组新回归最终18项。该局部修后不再扩功能或机械重跑其他已验证域。
+
+26.5 正式独立验证记录：最终typecheck退出0；15文件回归345/345通过，接收最终状态+独立真实operation10例所在4文件95/95通过；factory修订后operations-result/recovery-continuation两文件58/58通过，另24个code/effect组合矩阵通过，均0失败/跳过、退出0。各组有交叉且对应受影响差分复用，禁止相加或称最终一遍全量；源码hash及命令/日志索引仅存ignored`.tmp/continuation-independent-20261022/final-independent-report.json`。95例包括新session接已接受后的预览→关闭完整成功，accepted=1、previewed=1、effect=applied、同意仅1次；原session close后方法throw仍可完成。正式CR对上述已审差分及factory最后一行复核通过；随后补查fresh negative后保留旧unknown的事实分类问题，待主控裁决及必要修正，不提前宣称所有审阅问题清零。根零业务版本/注册检查显示25工具、22页面业务路径，没有BOSS业务调用。此处为已完成的审阅批次记录，后续若有最终局部分类修正应单列受影响验证，不改写此前对应状态。
+
+26.6 最后事实分类修正：greet原ref仍GREET、详情原身份仍可招呼、消息完整原draft且精确我方基线未增、接收原处理条/计数未变，这四个现有明确negative分支，续点前复用BusinessOperationState.notSubmitted记录最新未提交事实；保留身份/checkpoint/累计明细及物理输入历史，不调用startItem、不动reject缺少同等negative证明的分支。最终input仍照常先置unknown。四例均先红（0/4），只解消business状态后仍0/4，实证operationRecoveryFailure无条件用旧physical input unknown覆盖了fresh业务事实；因此仅在已有可信external business not_started/confirmed时按业务事实优先分类，其他未知不变。
+
+最终本地tsc退出0；受影响recovery-continuation/greet-executor/chat-send-executor/resume-consent/detail-greet-executor/remaining-page-recovery/local-operation-recovery/local-operation-recovery-independent八文件182/182通过、0失败/跳过，退出0（新增本组最终22项）。新的续点原生exit2不应复活旧unknown；真实不确定消息的反例仍保持unknown。独立角色追加真实operation“fresh未发→续点exit2→none”和“先一人已完成→第二人fresh未发→exit2→partial”两例，作为此最终差分验收；此前各域证据不机械重跑或相加。此后不再扩功能，不提交/推送、打包或部署。
+
+26.7 本阶段开发完成（2026-10-22）：最后事实分类的独立6文件初跑128例中127通过/1失败；唯一失败确认为独立夹具names模式选择更居中候选人，前置尚未确认首人，产品返回none正确。只把独立用例改为非定向limit2并显式断言甲→乙→乙的点击前置，产品未变；最终定向3/3通过、0失败/跳过、退出0：fresh未发消息后续点exit2为已知none；先前一人已完成、第二人fresh未发后exit2保留confirmed/partial；没有fresh negative仍unknown。原127/128失败日志保留，不隐藏为产品全绿；最终类型检查退出0，独立JSON报告更新源码hash和差分范围。局部分类及此前整体正式CR均通过，无剩余阻塞问题。
+
+最终证据按实际差分复用：开发者最终受影响8文件182/182；独立15文件345/345、接收成功链4文件95/95、factory两文件58/58及24个code/effect组合、最后分类定向3/3。这些组合有重叠、部分覆盖不同修订状态，不相加、不声称最终单遍全量。根最后版本/25注册/22页面业务入口与diff检查为零业务启动；函数/基线仍仅进程内，原物理unknown历史保留，明确未提交后原生零输入拒绝不会新增第三击。
+
+本阶段仅完成代码、合成验证和独立审查；ideas整体仍部分完成，真实Runtime/BOSS插件未更新，吴的真实原任务未重新执行、没有新招呼/消息/接收/标记授权消费、没有视觉API/模型调用或计费。后端API及20倍计费保持；未提交、推送、打包、安装或部署。本次无关工作区改动、既有发行包/配对/凭据均保留。

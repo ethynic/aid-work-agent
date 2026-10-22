@@ -30,7 +30,9 @@ export function createBossSendCurrentOperation(
     execute(args: BossSendCurrentArgs, ctx: OpContext): Promise<OperationResult> {
       const message = args?.message ?? ''
       const dryRun = args?.dry_run === true
-      return runBossOperation(
+      const state = new BusinessOperationState()
+      const checkpoint: import('../boss/ChatSendExecutor.js').SendCheckpoint = {}
+      const run = (ctx: OpContext): Promise<OperationResult> => runBossOperation(
         { kind: 'write', name: 'boss_send_current' },
         ctx,
         sessionFactory,
@@ -39,12 +41,12 @@ export function createBossSendCurrentOperation(
           return null
         },
         async (session, tracker) => {
-          const state = new BusinessOperationState()
           const intent = { name: 'boss_send_current', goal: '向原当前会话发送原消息', expected: '原会话编辑区清空且新增同文出站消息', operationClass: 'external_effect' as const }
           return withBusinessRecovery(state, intent, async () => {
           await ensureChatPage(session, ctx)
           // 前置：必须已选中会话（有发送按钮），否则提示先选会话
           const probe = await session.snapshot()
+          state.bindContact(probe, ctx.expectedContactRef)
           const { count } = locateSendButton(probe)
           if (count === 0) {
             throw new CodedOperationError(
@@ -52,7 +54,7 @@ export function createBossSendCurrentOperation(
               '当前沟通页未选中会话（未找到发送按钮）：请先在左侧会话列表选择一个会话后再发送',
             )
           }
-          const sender = new ChatSendExecutor({ state,
+          const sender = new ChatSendExecutor({ state, checkpoint,
             snapshot: session.snapshot,
             click: session.click,
             clickAndType: session.clickAndType,
@@ -72,6 +74,8 @@ export function createBossSendCurrentOperation(
           })
         },
       )
+      if (ctx.recoveryContinuation) ctx.recoveryContinuation.resume = run
+      return run(ctx)
     },
   }
 }

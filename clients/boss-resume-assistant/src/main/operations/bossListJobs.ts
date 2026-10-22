@@ -21,12 +21,32 @@ export function createBossListJobsOperation(
   return {
     name: 'boss_list_jobs',
     execute(_args: Record<string, never>, ctx: OpContext): Promise<OperationResult> {
-      return runBossOperation(
+      let retained: { message: string; data: Record<string, unknown>; effect: 'none' } | undefined
+      const run = (ctx: OpContext): Promise<OperationResult> => runBossOperation(
         { kind: 'readonly', name: 'boss_list_jobs' },
         ctx,
         sessionFactory,
         () => null,
         async (session, _tracker, perf) => {
+          if (retained) {
+            const intent = { name: 'boss_list_jobs', operationClass: 'readonly' as const, goal: '保留已读职位列表，收起职位下拉', expected: '原职位框可读且非trigger下拉项消失' }
+            let execution = ctx.previousPageExecution!
+            try {
+              const closed = await runVerifiedPageOperation(intent, async (attempt) => {
+                execution = attempt.execution
+                const switcher = new JobSwitcher({ snapshot: session.snapshot,
+                  click: (...args) => attempt.input(() => session.click(...args)), signal: ctx.signal })
+                const state = await switcher.verifyDropdownClosed()
+                if (state.status !== 'met') await switcher.closeDropdown()
+                attempt.verified(await switcher.verifyDropdownClosed())
+              }, ctx.previousPageExecution)
+              return { ...retained, data: { ...retained.data, operation_recovery: closed.facts } }
+            } catch (error) {
+              const pending = retainedReadCleanupFailure(error, intent, execution)
+              return { ...retained, message: retained.message + '；已保留读取结果，页面收尾尚未确认',
+                data: { ...retained.data, operation_recovery: pending.facts, cleanup_error: pending.cleanupError } }
+            }
+          }
           let cleanupFacts: Record<string, unknown> | undefined
           let cleanupError: { code: string; message: string } | undefined
           const verified = await runVerifiedPageOperation({ name: 'boss_list_jobs', goal: '读取当前招聘者职位列表', expected: '展开下拉后存在非trigger职位项', operationClass: 'readonly' }, async (attempt) => {
@@ -81,11 +101,14 @@ export function createBossListJobsOperation(
               },
               effect: 'none' as const,
             }
-          })
+          }, ctx.previousPageExecution)
+          retained = verified.value
           return { ...verified.value, message: verified.value.message + (cleanupError ? '；已保留读取结果，页面收尾尚未确认' : ''),
             data: { ...verified.value.data, operation_recovery: cleanupFacts ?? verified.facts, ...(cleanupError ? { cleanup_error: cleanupError } : {}) } }
         },
       )
+      if (ctx.recoveryContinuation) ctx.recoveryContinuation.resume = run
+      return run(ctx)
     },
   }
 }

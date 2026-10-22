@@ -61,6 +61,7 @@ export function createBossOpenDetailOperation(
             message: `在推荐牛人列表中查找「${name}」并打开简历详情（点击/滚动借用真实鼠标，请勿移动）`,
           })
           const executor = new DetailGreetExecutor({
+            previousExecution: ctx.previousPageExecution,
             snapshot: () => session.snapshot(FILTER_SNAPSHOT_OPTIONS),
             click: session.click,
             pressEscape: session.pressEscape,

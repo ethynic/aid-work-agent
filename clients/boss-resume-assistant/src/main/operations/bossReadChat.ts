@@ -71,7 +71,7 @@ export function createBossReadChatOperation(
               data: { ...result },
               effect: 'none' as const,
             }
-          })
+          }, ctx.previousPageExecution)
           return { ...verified.value, data: { ...verified.value.data, operation_recovery: verified.facts } }
         },
       )

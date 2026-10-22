@@ -42,7 +42,7 @@ import { PagePostconditionError } from '../operations/pageOperation.js'
 import { excludedRecommendationName, inspectRecommendationResults, type RecommendationStopReason } from './RecommendationResultBoundary.js'
 import { WinClickError } from '../input/WinMouseClicker.js'
 import { BusinessOperationState } from './BusinessOperationState.js'
-import { loadedCandidates, candidateButtonVisible, candidateScrollEvent, frameViewport } from './LoadedCandidateNavigation.js'
+import { loadedCandidates, candidateButtonVisible, candidateScrollEvent, frameViewport, candidateReference, resolveCandidateReference } from './LoadedCandidateNavigation.js'
 
 export class DetailGreetError extends Error {
   constructor(message: string) {
@@ -68,7 +68,11 @@ export interface DetailOpenExecution {
   verification: DetailOpenVerification
 }
 
+export interface DetailGreetCheckpoint { attempted?: boolean; confirmed?: boolean; candidateRef?: string }
+
 export interface DetailGreetDeps {
+  checkpoint?: DetailGreetCheckpoint
+  previousExecution?: DetailOpenExecution
   state?: BusinessOperationState
   /** 采集 fresh DOMSnapshot（每次定位/校验前重新采集，禁止复用旧坐标） */
   snapshot(): Promise<DomSnapshot>
@@ -391,9 +395,34 @@ export class DetailGreetExecutor {
    */
   async greet(opts: { name: string; dryRun?: boolean }): Promise<DetailGreetOutcome> {
     if (this.deps.signal?.aborted) throw new CancelledError('已取消：详情页打招呼尚未开始')
-    if (this.state.businessEffect.status === 'unknown') throw new DetailGreetError('上次详情打招呼结果未知，禁止重新打开或再次发送')
+    if (this.state.businessEffect.status === 'unknown' && !this.deps.checkpoint) throw new DetailGreetError('上次详情打招呼结果未知，禁止重新打开或再次发送')
     const name = opts.name.trim()
+    const checkpoint = this.deps.checkpoint ?? {}
     let snap = await this.deps.snapshot()
+    if (checkpoint.attempted) {
+      await this.sleep(1500)
+      snap = await this.deps.snapshot()
+      const card = checkpoint.candidateRef ? resolveCandidateReference(snap, name, checkpoint.candidateRef) : null
+      if (!checkpoint.confirmed && checkpoint.candidateRef && (!card || card.excluded)) throw new DetailGreetError('恢复后原候选人身份、账号或职位不匹配，发送结果未知')
+      let detailState: ReturnType<typeof DetailGreetExecutor.locateGreetState> | undefined
+      if (!checkpoint.candidateRef && locateResumeCanvas(snap)) {
+        DetailGreetExecutor.verifyDetailName(snap, name)
+        detailState = DetailGreetExecutor.locateGreetState(snap, DetailGreetExecutor.locateActionBar(snap))
+      }
+      if (!checkpoint.confirmed && (card?.buttonText === CONTINUE_TEXT || detailState?.alreadyGreeted)) {
+        this.state.confirmed({ name, greeted: true }, '恢复后原候选人已明确翻转为继续沟通')
+        checkpoint.confirmed = true
+      }
+      if (checkpoint.confirmed) {
+        if (locateResumeCanvas(snap)) {
+          if (!card) DetailGreetExecutor.verifyDetailName(snap, name)
+          await this.step('detail:close', () => this.closeDetailAfterGreet())
+        }
+        return { greeted: true }
+      }
+      if (card?.buttonText !== GREET_TEXT && detailState?.alreadyGreeted !== false) throw new DetailGreetError('恢复后原详情状态无法确认，发送结果仍未知')
+      this.state.notSubmitted('fresh原候选身份仍为可打招呼状态，当前目标尚未发送')
+    }
     const excluded = excludedRecommendationName(snap, name)
     if (excluded) return { greeted: false, stopReason: excluded }
     const nameHits = DetailGreetExecutor.detailNameHits(snap, name)
@@ -423,12 +452,20 @@ export class DetailGreetExecutor {
     if (state.alreadyGreeted) {
       // 幂等：按钮已是「继续沟通」，不点击，直接关闭详情
       await this.step('detail:close', () => this.closeDetailAfterGreet())
+      if (checkpoint.attempted) {
+        if (!checkpoint.confirmed) this.state.confirmed({ name, greeted: true }, '恢复后原详情操作列明确翻转为继续沟通')
+        checkpoint.confirmed = true
+        return { greeted: true }
+      }
       return { greeted: false, already: true }
     }
     if (opts.dryRun) {
       this.state.execution.verification = { status: 'met', evidence: ['原目标详情归属已确认，右侧唯一打招呼按钮已定位，未点击打招呼'] }
       return { greeted: false, dryRun: true, point: state.point }
     }
+    const cards = loadedCandidates(snap).filter(c => c.name === name && !c.excluded)
+    if (cards.length === 1) checkpoint.candidateRef ??= candidateReference(cards[0]!) ?? undefined
+    checkpoint.attempted = true
     await this.state.input(() => this.deps.click(state.point!, viewportOf(snap)), true)
     // 点击后校验：轮询按钮翻转为「继续沟通」（与列表按钮同状态机）
     let flipped = false
@@ -463,6 +500,7 @@ export class DetailGreetExecutor {
       )
     }
     this.state.confirmed({ name, greeted: true }, '当前详情操作列明确翻转为继续沟通')
+    checkpoint.confirmed = true
     await this.step('detail:close', () => this.closeDetailAfterGreet())
     return { greeted: true }
   }
@@ -534,7 +572,7 @@ export class DetailGreetExecutor {
    * 成功后详情保持打开（供 boss_resume_detail 读取），本方法不读取不关闭。
    */
   async openDetail(opts: { name: string; onSearchProgress?: (screens: number) => void }): Promise<{ name: string; opened?: false; stopReason?: RecommendationStopReason }> {
-    this.openExecution = { attemptsUsed: 0, ordinaryRetriesUsed: 0, inputStatus: 'not_started', stage: 'prepared', verification: { status: 'inconclusive', evidence: ['尚未点击目标卡片'] } }
+    this.openExecution = { attemptsUsed: this.deps.previousExecution?.attemptsUsed ?? 0, ordinaryRetriesUsed: this.deps.previousExecution?.ordinaryRetriesUsed ?? 0, inputStatus: 'not_started', stage: 'prepared', verification: { status: 'inconclusive', evidence: ['尚未点击目标卡片'] } }
     this.clickedName = undefined
     this.residualCleared = false
     try { return await this.openDetailImpl(opts) } catch (error) {

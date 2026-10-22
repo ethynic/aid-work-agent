@@ -38,6 +38,7 @@ export function createBossInterviewDemoOperation(
         },
         async (session) => {
           const state = new BusinessOperationState()
+          if (ctx.previousPageExecution) state.execution = structuredClone(ctx.previousPageExecution)
           return withBusinessRecovery(state, { name: 'boss_interview_demo', goal: '在原当前会话演示填写面试表单并取消',
             expected: '备注和日期值核验且取消后表单消失，未发送', operationClass: 'page_state' }, async () => {
           await ensureChatPage(session, ctx)

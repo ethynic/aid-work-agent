@@ -16,7 +16,9 @@ import { operationRecoveryFacts, operationRecoveryFailure } from './pageOperatio
  * 单份失败（打开超时/读取失败/姓名无法确定）记 failures 后继续下一份；全部失败仍 success（信息在 data）。
  */
 import fsp from 'node:fs/promises'
-import { ResumeBatchReader } from '../boss/ResumeBatchReader.js'
+import { ResumeBatchReader, type ResumeBatchCheckpoint, type BatchResumeResult } from '../boss/ResumeBatchReader.js'
+import { mapExecutorError } from './errorMapping.js'
+import { membershipAccountKey } from '../boss/MembershipInspector.js'
 import { JobSwitcher, FILTER_BUTTON_PATTERN } from '../boss/JobSwitcher.js'
 import { viewportOf } from '../boss/FilterSetter.js'
 import { buildResumePayload, wheelCenter, sameViewAt, stitchParts } from './bossResumeDetail.js'
@@ -68,7 +70,16 @@ export function createBossResumeBatchOperation(
     execute(args: BossResumeBatchArgs, ctx: OpContext): Promise<OperationResult> {
       const limit = args?.limit ?? (continuation ? 3 : 1)
       const saveDir = (args?.save_dir ?? '').trim()
-      return runBossOperation(
+      const checkpoint: ResumeBatchCheckpoint = {}
+      const payloads = new Map<BatchResumeResult, Record<string, unknown>>()
+      const payloadFor = (resume: BatchResumeResult, job: string | null): Record<string, unknown> => {
+        let payload = payloads.get(resume)
+        if (!payload) { payload = buildResumePayload(resume.name, job, resume.readResult, 'dom'); payloads.set(resume, payload) }
+        return payload
+      }
+      let originalJob: string | null | undefined
+      let originalAccount: string | undefined
+      const run = (ctx: OpContext): Promise<OperationResult> => runBossOperation(
         { kind: 'readonly', name: operationName },
         ctx,
         sessionFactory,
@@ -107,6 +118,11 @@ export function createBossResumeBatchOperation(
             // job_name 一次取足：推荐页职位框当前职位（非推荐页为 null，契约可选）
             const jobBox = new JobSwitcher({ snapshot: session.snapshot, click: session.click }).locateJobBox(probe)
             const jobName = jobBox.name ?? null
+            const account = membershipAccountKey(probe)
+            if (originalAccount && account !== originalAccount) throw new CodedOperationError('UI_CHANGED', '恢复后原账号已变化或无法确认，保留已读资料，不改读其他账号候选人')
+            originalAccount ??= account ?? undefined
+            if (originalJob !== undefined && originalJob !== jobName) throw new CodedOperationError('JOB_CHANGED', '恢复后职位已变化，保留已读资料，不改读新职位候选人')
+            originalJob ??= jobName
             if (continuation && jobName !== args.expected_job_name?.trim()) {
               throw new CodedOperationError('JOB_CHANGED', '当前职位与上次筛选不一致，请恢复原职位或开始新一轮筛选')
             }
@@ -121,6 +137,7 @@ export function createBossResumeBatchOperation(
               message: `逐个打开简历并读取（借用真实鼠标滚动，请勿移动）0/${limit}`,
             })
             const reader = new ResumeBatchReader({
+              checkpoint,
               snapshot: () => session.snapshot(RESUME_SNAPSHOT_OPTIONS),
               click: (point, viewport) => session.click(point, viewport),
               pressEscape: session.pressEscape,
@@ -190,7 +207,7 @@ export function createBossResumeBatchOperation(
               message,
               data: {
                 operation_recovery: facts,
-                resumes: result.resumes.map((r) => buildResumePayload(r.name, jobName, r.readResult, 'dom')),
+                resumes: result.resumes.map((r) => payloadFor(r, jobName)),
                 failures,
                 attempted: result.attempted,
                 processed_names: result.processed_names,
@@ -202,11 +219,21 @@ export function createBossResumeBatchOperation(
             }
           } catch (error) {
             if (error instanceof CodedOperationError && error.data?.operation_recovery) throw error
+            if (checkpoint.resumes?.length) {
+              const mapped = mapExecutorError(error)
+              throw new CodedOperationError(mapped.code, mapped.message, {
+                resumes: checkpoint.resumes.map(r => payloadFor(r, originalJob ?? null)),
+                failures: checkpoint.failures ?? [], attempted: checkpoint.attempted ?? 0,
+                processed_names: [...checkpoint.processedNames ?? []], job_name: originalJob,
+              })
+            }
             return operationRecoveryFailure(error, operationRecoveryFacts({ name: operationName, operationClass: 'readonly', goal: '逐项读取简历并恢复推荐列表', expected: '推荐列表可读且可继续逐项打开详情' },
               { attemptsUsed: 1, ordinaryRetriesUsed: 0, inputStatus: 'not_started', stage: 'prepared', verification: { status: 'inconclusive', evidence: ['批次入口页面尚未通过校验，未开始读取'] } }))
           }
         },
       )
+      if (ctx.recoveryContinuation) ctx.recoveryContinuation.resume = run
+      return run(ctx)
     },
   }
 }
