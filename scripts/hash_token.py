@@ -13,12 +13,11 @@ from src.db.models import hash_password
 
 def main():
     if len(sys.argv) < 2:
-        print("用法: python -m scripts.sh_qbtoken <明文密码>")
+        print("用法: python -m scripts.hash_token <明文密码>")
         sys.exit(1)
 
     plaintext = sys.argv[1]
     hashed = hash_password(plaintext)
-    print(f"Token 明文: {plaintext}")
     print(f"Token 哈希: {hashed}")
     print()
     print("请将哈希值设置到 .env 中：")
