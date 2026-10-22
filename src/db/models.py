@@ -2076,6 +2076,11 @@ def send_sms_code(phone: str) -> bool:
     # 检查短信通道是否可用
     sender = sms_manager.get_sender()
     if sender is None or not sender.is_available():
+        # bypass 模式（qb_sms_code 已配置）且无可用通道：跳过真实发信直接返回成功，
+        # 校验侧由 verify_sms_code 的 qb_sms_code 放行（私有云未购短信通道的临时场景）
+        if settings.sms.qb_sms_code:
+            logger.info(f"后端日志：QBSMSCODE bypass 无通道发送，phone={phone}")
+            return True
         logger.error("短信通道未配置或不可用，无法发送验证码")
         return False
 
