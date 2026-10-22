@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
+import { execFile } from 'node:child_process'
 import test from 'node:test'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
 import { captureWindow, clickWindow, loadWindowObservation, type WindowObservation, type WindowScriptRunner } from '../src/main/input/windowExperiment.js'
 import { pngMetadata } from '../src/main/operations/bossScreenshot.js'
 import { visualDiagnose } from '../src/main/boss/visualDiagnoseClient.js'
@@ -12,6 +14,23 @@ import { validateCommandArgs } from '../src/cli/validate.js'
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9gAAAABJRU5ErkJggg==', 'base64')
 const requestId = '0c5a306b-8659-4000-8000-123456789012'
+
+async function readObservationWithWindowsPowerShell(file: string): Promise<unknown> {
+  const source = await readFile(fileURLToPath(new URL('../../scripts/window-experiment.ps1', import.meta.url)))
+  assert.deepEqual(source.subarray(0, 3), Buffer.from([0xef, 0xbb, 0xbf]), 'the packaged PS5.1 script must retain its UTF-8 BOM')
+  const read = source.toString('utf8').match(/^\s*\$meta = Get-Content[^\r\n]*\| ConvertFrom-Json\s*$/m)?.[0]
+  assert.ok(read, 'execute the production observation read pipeline, not a test-side reimplementation')
+  const command = `$ErrorActionPreference='Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) { throw 'Expected Windows PowerShell 5.1' }
+$Observation=$env:AID_BOSS_TEST_WINDOW_OBSERVATION
+${read}
+$meta | ConvertTo-Json -Depth 10 -Compress`
+  const executable = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  const { stdout } = await promisify(execFile)(executable, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')],
+    { windowsHide: true, timeout: 15_000, encoding: 'utf8', env: { ...process.env, AID_BOSS_TEST_WINDOW_OBSERVATION: file } })
+  return JSON.parse(stdout)
+}
 
 test('native click distinguishes cursor movement from ownership changes before mouse down without logging page text', async () => {
   const script = await readFile(fileURLToPath(new URL('../../scripts/BossWindowExperiment.cs', import.meta.url)), 'utf8')
@@ -53,6 +72,39 @@ test('window capture invokes only packaged native script, preserves image and wr
     assert.equal(JSON.stringify(data).includes(png.toString('base64')), false)
     assert.equal((await loadWindowObservation(item.file)).sha256, pngMetadata(png).sha256)
     assert.deepEqual(await readFile(item.output), png)
+  } finally { await rm(item.dir, { recursive: true, force: true }) }
+})
+
+test('Windows PowerShell 5.1 reads the Node-produced UTF-8 observation without corrupting Chinese window titles or paths', { skip: process.platform !== 'win32' }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'boss-窗口观察-'))
+  const output = join(dir, '原窗口 截图.png')
+  const captured = { captured_at: new Date().toISOString(),
+    window: { hwnd: '12345', pid: 300, left: -1200, top: 42, width: 1, height: 1 },
+    owned_dialogs: [{ hwnd: '67890', title: '要恢复页面吗？ "异常关闭" \\恢复', class: 'Chrome_WidgetWin_1' }] }
+  try {
+    const observation = await captureWindow(output, 9222, async () => {
+      await writeFile(output, png)
+      return { stdout: JSON.stringify(captured), stderr: '' }
+    })
+    const bytes = await readFile(observation.metadata_path)
+    assert.equal(bytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])), false, 'exercise the production no-BOM sidecar')
+    assert.deepEqual(await readObservationWithWindowsPowerShell(observation.metadata_path), JSON.parse(bytes.toString('utf8')),
+      'titles, escaped characters, source path, numeric coordinates and image hash must all survive the read unchanged')
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
+test('Windows PowerShell observation read remains compatible with ASCII and UTF-8 BOM while rejecting invalid JSON', { skip: process.platform !== 'win32' }, async () => {
+  const item = await fixture()
+  try {
+    assert.deepEqual(await readObservationWithWindowsPowerShell(item.file), item.observation)
+    const bomObservation = { ...item.observation, owned_dialogs: [{ title: '恢复页面' }] }
+    await writeFile(item.file, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(JSON.stringify(bomObservation), 'utf8')]))
+    assert.deepEqual(await readObservationWithWindowsPowerShell(item.file), bomObservation)
+    await writeFile(item.file, '{"window":{"title":"恢复页面"', 'utf8')
+    await assert.rejects(readObservationWithWindowsPowerShell(item.file), (error: unknown) => {
+      const failure = error as { code?: unknown; stderr?: unknown }
+      return failure.code === 1 && typeof failure.stderr === 'string' && failure.stderr.includes('ConvertFrom-Json')
+    }, 'malformed metadata must fail at the real JSON parser')
   } finally { await rm(item.dir, { recursive: true, force: true }) }
 })
 

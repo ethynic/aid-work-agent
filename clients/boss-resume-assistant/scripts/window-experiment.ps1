@@ -26,7 +26,7 @@ try {
   $window = [BossWindowExperiment]::Find($browserPid)
   if ($Action -ne 'capture') {
     if ($MaxAgeSeconds -lt 1 -or $MaxAgeSeconds -gt 600) { throw 'Invalid observation age limit; input refused' }
-    $meta = Get-Content -LiteralPath $Observation -Raw | ConvertFrom-Json
+    $meta = Get-Content -LiteralPath $Observation -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($meta.space -ne 'window_image_px' -or $meta.window.pid -ne $browserPid -or [string]$meta.window.hwnd -ne $window.ToInt64().ToString()) { throw 'Observation does not identify this debug Chrome window' }
     if ($meta.window.process_started_at -and $meta.window.process_started_at -ne $processStartedAt) { throw 'STALE_OBSERVATION: Chrome process identity changed' }
     $age = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($meta.captured_at)).TotalSeconds

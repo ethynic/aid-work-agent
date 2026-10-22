@@ -2,6 +2,12 @@
 
 ## 开发进度
 
+最新提交授权（2026-10-22）：用户要求提交窗口UTF-8修复及配套发行源码，按项目规范提交并推送，不部署。下方“不提交”保留为当时的开发/打包边界；已封存安装包及其出包时`sourceCommit/dirty`记录不改写、不重打。
+
+最新交付授权（2026-10-22）：用户要求打包BOSS供Runtime更新；本批按既有验收签名/信任链生成BOSS0.3.16，并配套包含新公钥的Runtime UI0.0.18，Host0.2.21/Core0.2.19不升版。产物统一`clients/release`，使用当前含未提交UTF-8修复的工作区，真实HEAD及dirty状态写入交付清单；不提交、推送、部署或改动已安装Runtime/配对，见25。下方24的“不打包/升版”是此前代码修复阶段边界，不覆盖本次交付授权。
+
+最新修复范围（2026-10-22，窗口中文JSON）：用户授权先修复兼容代码，保留PowerShell；仅在窗口观察读取处显式指定UTF-8，新增真实Windows PowerShell 5.1离线回归。本次不提交、推送、部署、打包或升版本，不操作BOSS/鼠标、不调视觉API或远端数据库，见24；此前403提交授权仅为已完成历史任务。
+
 最新修复范围（2026-10-22）：实际agent2配对设备及三个故障请求只读关联确认，用户为active平台管理员、自身租户为空，设备及目标租户均active；视觉入口误用普通用户租户等值校验导致403。仅修既有角色语义及CLI拒绝摘要，保留PowerShell和鼠标恢复，不操作BOSS、不实调模型；开发验证时未提交或部署，最新提交推送授权见23.1，部署仍待明确指令。
 
 最新纠正授权（2026-10-20）：复用Runtime配对的服务器和设备身份，删除手工额外token要求；更新设计/计划，独立TEST/CR后提交推送并交付Runtime0.0.14+BOSS0.3.12，不部署。旧0.0.13包的视觉配置要求是缺陷，不作为本轮可接受前置；详见23。
@@ -30,6 +36,8 @@
 
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
+| 中文窗口修复验收包 | BOSS0.3.16与信任配套Runtime0.0.18 | ✅ 完成（2026-10-22） | 第25节；Runtime/插件及最终ZIP15文件独立验包和CR通过，产物已封存；授权提交推送，未部署 |
+| 窗口中文JSON兼容 | PS5.1读取Node无BOM UTF-8观察元数据 | ✅ 完成（2026-10-22） | 第24节；开发11/11、独立28/28、build及CR通过，未发布/未实点整链 |
 | 视觉403修复 | 平台管理员配对身份兼容、CLI拒绝原因及回归 | ✅ 完成（2026-10-22） | 23.1；独立API39+7、CLI新9、build及CR通过，CLI1基线失败；用户授权提交推送，agent2待部署授权 |
 | 配对身份复用修正 | 设备视觉API、可信Host自动接线、无手工token验收和重打包 | ✅ 完成（2026-10-20） | 第23节；独立900/234/19/17、CR与实际包通过；agent2未部署 |
 | 同事测试包构建 | 同步master、修发行资产/配置透传、增版签名及静态验包 | ✅ 完成（2026-10-20） | 第22节；独立TEST/CR通过，随本次提交交付；agent2未部署、端到端待同事验收 |
@@ -843,7 +851,7 @@ Supervisor仅2个env透传修正独立17/17、0跳过及CR通过，真实spawn�
 
 独立TEST：同样显式隔离后的设备视觉API39/39通过；额外内存API检查7项通过，包括已完成诊断后角色撤销、用户停用/删除、租户停用的取回仍403且不新增模型/账务，普通用户伪header无法越租户。`npm run build:main`退出0；CLI四文件组合为`local-operation-recovery`、`local-operation-recovery-independent`、`visual-recovery`、`visual-v2-client`，共69例68通过/1基线失败，新9例全通过。开发组合包含`recovery-click-only-independent`而非`visual-v2-client`，因此71与69不是同一组合的结果；两轮失败均为HEAD已注册`boss_recovery_probe`令总数25，而旧测试assert24，注册表无本轮diff，不称CLI全绿。独立CR无P0/P1/P2，另确认后台`_map_terminal/public_recovery_metadata`保留`api_error`给Agent，未新增输入或业务重放。
 
-本阶段已完成开发及独立验证，但agent2尚未更新，CLI/API实际配对整链未复验；不将本地测试当成线上403已解除。Chrome窗口观察的中文JSON兼容问题保留为已知未修项，本轮按用户要求保留PowerShell，不宣称已解决所有遮挡；整项仍因原真机验收缺口保持部分完成。
+本阶段已完成开发及独立验证，但agent2尚未更新，CLI/API实际配对整链未复验；不将本地测试当成线上403已解除。403修复时Chrome窗口观察的中文JSON兼容问题保留为已知未修项；后续单独兼容修正见24，保留PowerShell，不宣称已解决所有遮挡；整项仍因原真机验收缺口保持部分完成。
 
 开发与验证当时未提交或部署；最新提交推送授权见本节开头。仍不替换PowerShell，不修改点击或自动重放策略，不改数据库归属、不添加用户配置，不操作真实BOSS、不实调模型、不构建发布包。代码通过不代表agent2已生效；线上实际恢复须后续明确部署授权并单独验收。
 
@@ -883,3 +891,41 @@ Supervisor仅2个env透传修正独立17/17、0跳过及CR通过，真实spawn�
 | runtime-0.0.14.roots.json | 9de21620439e40090ae9d1365daae3dad3c6af778d61eeb5fd7a31138e71c83f |
 
 源码及文档提交后立即推送已确认upstream，随后生成独立不可变新ZIP/版本信息/安装说明/公开验证报告及全部SHA256（sourceCommit为本次实际提交，非5fbdc1e8基线），旧交付不覆盖。新说明取消所有用户额外URL/token/环境配置步骤：退出旧托盘、原用户/目录安装0.0.14、手动导入0.3.12、沿用原配对或首次配对即可；后台配套路由需由维护方按单独部署授权发布，本轮无任何部署/服务器配置操作，也没有同事端安装或agent2实连。源代码验证与真实服务验收分别记录；消息/不合适及其他旧待验场景不因本轮身份修正自动算通过。
+
+## 24. Windows PowerShell窗口中文JSON兼容（2026-10-22）
+
+范围：只修`window-experiment.ps1`的观察元数据读取，添加`-Encoding UTF8`；生产者`captureWindow`保持无BOM UTF-8 JSON，PS脚本保持UTF-8 BOM。Windows PowerShell 5.1默认ANSI读取会损坏中文标题及原图路径，可能在JSON解析或后续原图访问阶段受阻；这与后台视觉403是两个独立缺陷，不需要替换PowerShell或降低输入守卫。
+
+已有窗口身份、进程创建时间、前景、几何、时效、原图hash、局部像素和鼠标-only守卫保持；不改截图/坐标映射、不增加恢复分支、不改API/计费/wire，不迁移其他`Get-Content`或C#加载。本轮不提交、推送、部署、打包或升版本，403修复的历史提交授权不复用。
+
+回归复用现有`window-experiment.test.ts`：仅stub原生capture边界，由真实`captureWindow`写sidecar，在中文临时目录中保留中文窗口标题、引号与反斜杠，再调用Windows自带PS5.1执行从生产脚本抽取的`$meta`读取管道，不手写替代parser、不执行原生脚本或真实输入。整份JSON深比较核对中文、路径、坐标数值、hash和其他字段；另检查ASCII、UTF-8 BOM兼容及坏JSON确实在真实parser处拒绝。临时文件`mkdtemp`创建并在`finally`清理，非Windows诚实跳过PS专属回归。
+
+开发自测：先`npx tsc -p tsconfig.main.json`退出0，再`node --test --test-name-pattern='Windows PowerShell' dist/tests/window-experiment.test.js`，2例1通过/1失败/0跳过，红灯精确显示中文标题及原图路径乱码，坐标/hash未变。仅添加读取编码后，`node --test dist/tests/window-experiment.test.js dist/tests/window-escape.test.js`共11通过/0失败/0跳过，包含真实PS5.1、脚本BOM、旧守卫及恢复Escape移除；无需改写测试或侧文件来转绿。日志位于忽略目录`.tmp/window-observation-utf8-20261022/`。
+
+独立测试及CR（2026-10-22）：`npm run build:main`退出0；设置`AID_BOSS_AUTO_CHROME=0`后，`node --test dist/tests/window-experiment.test.js dist/tests/window-escape.test.js dist/tests/visual-recovery.test.js`共28通过/0失败/0跳过，退出0。真实PS5.1执行生产读取管道，中文无BOM、路径/转义字符、坐标/hash、ASCII/BOM和坏JSON全部通过。独立审查无P0/P1/P2，确认产品只改读取编码一行，脚本BOM及全部原输入/窗口守卫保持，测试局部且无新增恢复逻辑。本修复完成开发，未提交、打包、部署或升版本。
+
+本轮仅离线Node/PS测试，没有启动/关闭Chrome、截图点击真实BOSS、调用后台或模型、运行Python测试或连接远端库。完成代码兼容不代表已发布到当前Runtime或实际中文弹窗整链通过，需后续授权发布/真机复验。
+
+## 25. 中文窗口修复验收包交付（2026-10-22）
+
+用户要求打包BOSS安装包，由其在Runtime中更新。按[统一打包手册](../../ops/runtime-boss-release-guide.md)复用现有验收链，不新增签署或安装设计：`--test`私钥只在单次进程内生成且不保存，已有私钥不可复用，故BOSS0.3.16需新公钥；当前Runtime0.0.17不含该根，配套发行Runtime UI0.0.18保留旧身份及完整历史根，再显式导入BOSS新插件。Host0.2.21/Core0.2.19/native0.1.0没有本次功能改动，不机械升版，不修改已安装信任根、不重新配对。
+
+本批目录`clients/release/AID-Work-Runtime-0.0.18-BOSS-0.3.16-20261022-114501/`，同名组合ZIP及SHA256置于`clients/release/`。源码基线`ecdfe153c7b3832a845c79028c37b86d5c3b6502`且dirty=true，明确包括未提交的窗口JSON UTF-8修复、版本及公开根；不是全部内容等于该HEAD。CLI已提交的403拒绝摘要也进入新payload；后台403修复仍需另行部署agent2，安装本包不部署服务器。
+
+构建复用`release-batch.ps1`的任务临时副本，仅跳过已具备的六组`npm ci`并补本批dirty/兼容/日志位置说明，所有实际消费者fresh编译，BOSS签名、公开根登记/快照、Host prepack、Runtime prepare/NSIS与既有验包步骤沿用原脚本。固定Node22.23.3/win32-x64/ABI127；不改正式打包脚本或基础设施，不覆盖旧0.0.17批次。单一构建目录独占，独立验证使用各自临时解包目录。
+
+构建及自验：BOSS0.3.16含25工具、3,734个payload文件，原生模块搬迁后`NATIVE_INPUT_LOAD_OK`；既有离线验签/清单及payload只读不变通过，doctor只读结果exit1/ready=false作为未就绪记录，不为打包强制开Chrome或登录。Runtime标准构建及两次`RUNTIME_VERIFY_PASS`通过，3,811资源；插件打包专项8/8、Runtime打包专项20/20，均0失败/0跳过。组合压缩初次受编辑器/Git只读监视锁影响，原脚本诊断并退避后成功，未杀进程或改打包基础设施；最终说明/报告固定后按原第9节统一重算摘要并封存，未覆盖旧批次。
+
+独立插件验包通过：新根`aid-isolated-boss-0-3-16-20261022-114501`仅BOSS，仓库完整登记表、Runtime资源及`runtime-0.0.18.roots.json`共11根，10个旧根逐字段保留；现已安装Runtime的旧10根确实拒绝新包，新11根接受，不能仅凭随包公钥自验宣称旧版可导入。临时PluginStore从旧0.3.15升级0.3.16在启用/禁用两组合保持installation_id及原状态，不读取配对凭据；与实际客户机安装/库存升级区分记录。包内窗口PS脚本与当前源字节一致且保留BOM/显式UTF-8，CLI编译结果与当前`api_error`摘要代码一致；FFI只加载零物理输入，MCP initialize/list25通过、零业务tools/call。敏感资产扫描未见凭据、私钥、真实截图/简历或第一方实验日志。
+
+独立Runtime验包确认实际ASAR UI0.0.18、Host0.2.21/Core0.2.19、完整11根及其资源摘要，安装器为本批126,998,684字节、NotSigned验收版。三份独立公开报告及两份源码/信任核验报告已随交付目录收入；`build-info.json`显式`sourceCommit=ecdfe153c7b3832a845c79028c37b86d5c3b6502`、`dirty=true`、`containsUncommittedWindowUtf8Fix=true`。用户原Runtime锁文件已有改动逐字节保持，不混入其他任务文件。
+
+| 最终交付文件 | 字节数 | SHA256 |
+|---|---:|---|
+| `AID-Work-Runtime-0.0.18-BOSS-0.3.16-20261022-114501.zip` | 132632886 | `f9c724ea023b51ebcb73ef146359be14f83675528d76aeaec2e5d6c85a963dac` |
+| `AID-Work-Runtime-0.0.18-win-x64-acceptance-unsigned.exe` | 126998684 | `6f40f976f5396511b381cb42fb7dada07bddd2268afe97e0a4929166daeb00f0` |
+| `boss-0.3.16-dev.aidplugin.zip` | 5356671 | `8b336765ba57c84ccddf0a678124743628c8102f40710fdb5bd35d90af8daa27` |
+
+交付说明要求先沿用原用户/位置安装Runtime0.0.18，再在Runtime导入未解压的BOSS插件，不手工改root或重配。日志定位采用`%APPDATA%/aidwork-runtime-app-acceptance/installation-v2/current.json`的`home/logs/runtime.log`。BOSS包仅包含客户端UTF-8及403错误摘要；403鉴权修正本身为后台提交`c892c1b2`，需确保agent2服务端包含它，本轮未部署且未核当前服务版本，不因安装客户端包宣称解除后台403。最终组合ZIP独立复读15个文件、目录逐文件SHA与SHA256SUMS及ZIP摘要均通过，退出0，最终SHA仍为`f9c724ea023b51ebcb73ef146359be14f83675528d76aeaec2e5d6c85a963dac`；交付已封存，不再修改或重打本批。用户要求后续直接使用既有一键九步正式入口，不继续维护临时变体。
+
+交付不包含私钥、令牌、配对资料、截图、真实简历或实验日志。本轮不实际安装/导入、操作BOSS业务、投递鼠标/键盘、调用视觉模型、提交/推送或部署；真实窗口关闭及视觉恢复整链未测，不用静态验包冒充业务成功。
