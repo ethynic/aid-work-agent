@@ -88,6 +88,19 @@ if ! grep -q "$CREDS_MARKER" "$CREDS_FILE" 2>/dev/null; then
     exit 1
 fi
 
+# 0.5 .env 快照（防覆盖：2026-10-22 诺度 .env 被覆盖丢失客户 key 事故。
+#    快照存仓库外目录，git 操作不波及；保留最近 10 份；.env 缺失直接中止，
+#    防止把更新发到未初始化环境）
+ENV_SNAPSHOT_DIR="/var/www/env_snapshots"
+if [ ! -f "/var/www/agent/.env" ]; then
+    echo "错误：/var/www/agent/.env 不存在，中止更新（环境未初始化？）。"
+    exit 1
+fi
+mkdir -p "$ENV_SNAPSHOT_DIR"
+cp "/var/www/agent/.env" "$ENV_SNAPSHOT_DIR/.env_$(date +%Y%m%d_%H%M%S)"
+ls -1t "$ENV_SNAPSHOT_DIR"/.env_* 2>/dev/null | tail -n +11 | xargs -r rm -f
+echo "[0.5] .env 已快照到 $ENV_SNAPSHOT_DIR（保留最近 10 份）"
+
 # 1. 拉取代码（可选参数：目标 git 提交版本号，短哈希/长哈希/tag 均可；
 #    不传则更新到 origin/master 最新。指定旧版本用于回滚或停留在未全部
 #    合入测试通过的提交）
