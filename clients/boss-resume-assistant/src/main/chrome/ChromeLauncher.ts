@@ -127,11 +127,18 @@ export async function ensureDebugChrome(
     if (await probePort(port, fetchImpl)) return false
     const exe = findChromeExe(deps)
     if (!exe) return false
-    doSpawn(exe, [
-      `--remote-debugging-port=${port}`,
-      `--user-data-dir=${opts.profileDir ?? DEFAULT_DEBUG_PROFILE_DIR}`,
-      opts.initialUrl ?? DEFAULT_INITIAL_URL,
-    ])
+        doSpawn(exe, [
+          `--remote-debugging-port=${port}`,
+          `--user-data-dir=${opts.profileDir ?? DEFAULT_DEBUG_PROFILE_DIR}`,
+          // 抑制「Chrome 未正确关闭，要恢复页面吗？」气泡：调试实例随 CLI 拉起/退出，
+          // 会被判定为异常关闭，恢复气泡挡住页面影响自动化定位与首次使用
+          '--disable-session-crashed-bubble',
+          // 抑制「Google Chrome 不是您的默认浏览器」提示条：调试实例专用 profile
+          // 每次触发默认浏览器检查，提示条占据页面顶部挤压布局（元素整体下移），
+          // 且与用户日常浏览器无关——不该在调试实例上提示
+          '--no-default-browser-check',
+          opts.initialUrl ?? DEFAULT_INITIAL_URL,
+        ])
     const deadline = Date.now() + READY_TIMEOUT_MS
     while (Date.now() < deadline) {
       await sleep(PROBE_INTERVAL_MS)
