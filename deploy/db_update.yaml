@@ -4015,3 +4015,17 @@
         imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(tenant_id, tdoc_file_id)
     );
+
+- datetime: "2026-10-22 09:00:00"
+  remark: "Web 单条回复分享：展示副本、可选密码及图片附件引用"
+  statements: |
+    CREATE TABLE IF NOT EXISTS chat_message_shares (
+        share_key TEXT PRIMARY KEY,
+        tenant_id TEXT,
+        user_id TEXT,
+        session_id TEXT,
+        message_id TEXT,
+        reply_data JSONB,
+        password_hash TEXT,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );

@@ -1,4 +1,6 @@
 import { marked } from 'marked'
+import DOMPurify from 'dompurify'
+import { replyFileId, type ReplyFileResolver } from './replyResources'
 import { markedHighlight } from 'marked-highlight'
 // ✅ 优化：只导入 highlight.js 核心和需要的语言，减少约 150KB 打包体积
 import hljs from 'highlight.js/lib/core'
@@ -63,8 +65,18 @@ marked.use({ renderer: { link: linkRenderer, image: imageRenderer } })
 /**
  * 将 markdown 文本渲染为 HTML
  */
-export function renderMarkdown(content: string): string {
-  return marked(content) as string
+export function renderMarkdown(content: string, resolveFile?: ReplyFileResolver): string {
+  const template = document.createElement('template')
+  template.innerHTML = marked(content) as string
+  if (resolveFile) {
+    for (const element of template.content.querySelectorAll('img[src], a[href]')) {
+      const attribute = element.tagName === 'IMG' ? 'src' : 'href'
+      const original = element.getAttribute(attribute) || ''
+      const fileId = replyFileId(original)
+      if (fileId) element.setAttribute(attribute, resolveFile(fileId, attribute === 'href'))
+    }
+  }
+  return DOMPurify.sanitize(template.innerHTML, { ADD_ATTR: ['target'] })
 }
 
 export { marked }

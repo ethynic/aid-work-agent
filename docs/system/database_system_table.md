@@ -928,3 +928,11 @@ Web 与 KF 恢复均须核验原 claim，并将新 attempt/lease 和消费后的
 | `notification_deliveries` | `delivery_id` 主键，唯一 `(notification_id,target_id)`；固定 `binding_version`、加密渲染快照；state/attempts/next_attempt_at；owner/lease_until/claim_version 提供认领 fencing；受限 error_class/provider_acceptance_id 与 accepted/delivered/displayed/read 时间。pending due、sending lease、message 索引服务重试与清理；Web accepted 仅表示供应商接纳，不写虚构展示或已读回执 |
 
 message、target、preference 的 scope CHECK 保证 NULL tenant 对应 `global`，有 tenant 对应 `tenant:<id>`，用户始终独立隔离。delivery 不重复存租户，所有读写通过原 message/target 核验精确归属。四表无外键、触发器；引用完整性和原资源权限由通知核心在短事务内检查。网络发送不持数据库锁；清理仅删除过保留期的通知消息及其投递账本，不删除 Runner、会话、目标或偏好。参数、配置及渲染内容沿用既有 EncryptionManager，目标配置不存登录 bearer。
+
+### `chat_message_shares` — Web 单条回复分享
+
+2026-10-22 新增，属于系统表；`share_key` 随机主键标识一个独立分享页面。
+保存 `tenant_id/user_id/session_id/message_id` 来源归属、`reply_data JSONB` 展示副本、可空的 `password_hash` 和带数据库默认值的 `created_at TIMESTAMPTZ`。
+展示副本只含所选回复的正文、图片、附件及下载卡片信息，不包含完整会话、工具参数或登录凭证；文件仍使用现有存储，服务端保存引用，公开文件标识使用分享内别名。
+创建按 fresh 登录主体核对源会话归属，匿名阅读在可选密码验证后返回整条回复；图片预览与下载使用绑定分享路径的现有短期资源签名，并限制到该条回复内的文件。
+不使用外键、触发器或新增访客会话表。DDL 同步在 `deploy/init-postgres.sql` 与 `deploy/db_update.yaml`，服务与数据访问分别为 `src/services/message_sharing/`、`src/db/message_share_db.py`。

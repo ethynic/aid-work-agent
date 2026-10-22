@@ -5652,3 +5652,15 @@ CREATE TABLE IF NOT EXISTS tenant_agent_instances (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_agent_inst_copy ON tenant_agent_instances(agent_id) WHERE agent_id <> base_agent_id;
 CREATE INDEX IF NOT EXISTS idx_tenant_agent_inst_tenant ON tenant_agent_instances(tenant_id, status);
 CREATE INDEX IF NOT EXISTS idx_tenant_agent_inst_base ON tenant_agent_instances(tenant_id, base_agent_id);
+
+-- Web 单条 Agent 回复分享（图片/附件只记录引用，不复制文件）
+CREATE TABLE IF NOT EXISTS chat_message_shares (
+    share_key TEXT PRIMARY KEY,
+    tenant_id TEXT,
+    user_id TEXT,
+    session_id TEXT,
+    message_id TEXT,
+    reply_data JSONB,
+    password_hash TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);

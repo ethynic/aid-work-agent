@@ -108,7 +108,7 @@
         ref="htmlFrameRef"
         :src="getFileUrl(attachment.file_id)"
         class="block w-full h-full min-h-0 border-0"
-        sandbox="allow-same-origin allow-scripts"
+        :sandbox="shared ? 'allow-scripts allow-downloads' : 'allow-same-origin allow-scripts'"
         @load="handleHtmlLoad"
       ></iframe>
 
@@ -221,7 +221,7 @@
 import { ref, shallowRef, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import type { AttachmentInfo } from '@/types'
 import type { WorkBook } from 'xlsx-js-style'
-import { getFileUrl, getFileDownloadUrl } from '@/api/agent'
+import { useReplyResources } from '@/utils/replyResources'
 import { renderMarkdown } from '@/utils/markdown'
 import { formatFileSize } from '@/utils/file'
 import {
@@ -244,6 +244,9 @@ interface Props {
 }
 
 const props = defineProps<Props>()
+const { fileUrl, shared, resolver } = useReplyResources()
+const getFileUrl = (fileId: string) => fileUrl(fileId)
+const getFileDownloadUrl = (fileId: string) => fileUrl(fileId, true)
 const emit = defineEmits<{
   (e: 'close'): void
 }>()
@@ -375,7 +378,7 @@ const officeSizeBlocked = computed(() => {
 // Markdown 渲染后的内容
 const renderedTextContent = computed(() => {
   if (previewType.value === 'markdown' && textContent.value) {
-    return renderMarkdown(textContent.value)
+    return renderMarkdown(textContent.value, resolver)
   }
   return ''
 })

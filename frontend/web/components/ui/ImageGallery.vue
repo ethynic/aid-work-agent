@@ -120,7 +120,11 @@ function downloadCurrent() {
 /* 单图：max-width 600px，不强制等宽 */
 .image-gallery.layout-single .gallery-item {
   flex: 0 0 auto;
-  max-width: 600px;
+  max-width: min(600px, 100%);
+}
+
+.image-gallery.layout-single .gallery-img {
+  height: auto;
 }
 
 /* 2-3 张：横向并排，等宽，正方形 */
