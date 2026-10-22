@@ -7,6 +7,8 @@
 ### Runtime配对身份复用（2026-10-20）
 
 - 新增设备鉴权入口`POST /api/local-tools/runtime/boss/visual-diagnose`，沿用`_require_device`与现有视觉v1/v2请求/响应；复用视觉服务、实际usage×20和幂等台账，不新增用户凭据/激活/配对流程。服务器可信设备记录确定tenant/user/device，不从请求体接纳这些字段。
+- 2026-10-22鉴权修正：平台管理员按既有租户上下文规则可进入指定租户并配对，用户自身`tenant_id=NULL`是正常身份，不能因它不等于设备租户而拒绝视觉诊断。入口仍校验当前用户及设备租户存在且active，普通用户必须归属设备租户；平台管理员资格只认当前UserDB角色。调用主体、审计、台账和20倍计费仍取可信设备绑定，不接受header/body选择其他租户，不修改数据库归属或增加令牌。
+- CLI共用恢复在`visual_recovery.observations[].api_error`保留已知401/403公开拒绝原因，未知正文仅给对应HTTP拒绝摘要，不转发debug、headers或任意detail。API拒绝不能误报为页面遮挡无法修复，仍保留原业务结果且不触发新的付费观察或输入；不改PowerShell、普通点击及外发unknown重放规则。此次只修后台鉴权及本地诊断可观察性，不升级API/wire或另建恢复流程。
 - Host从当前已解密配对配置取server/token，只向BOSS子进程内存环境注入`AIDWORK_RUNTIME_SERVER`与`AIDWORK_RUNTIME_DEVICE_TOKEN`；这两个字段是内部启动接线，不是用户配置项。Desktop不透传旧BOSS环境变量，Host不从父进程读取/覆盖配对身份，其他Provider/renderer/IPC/日志/磁盘不获得该token。保持现有DPAPI存储与停止/重配生命周期，不建本地代理、token兑换或第二个恢复循环。
 - CLI诊断、取回和本地恢复均调用新设备入口。缺少配对上下文时明确提示通过已配对Runtime启动或升级匹配版本，不提示手填token；不得回退到旧ClientBinding接口。截图、恢复点击、fresh后态及原操作续做仍由CLI负责，服务器只诊断/计费。
 - 台账用确定性的命名空间设备主体区分旧client binding，按可信device/user归属隔离取回、dispatch及结算。沿用原request_id/输入摘要/20倍冻结规则，旧ClientBinding入口和历史20/50倍记录保持兼容；不为设备自动创建ClientBinding。无必要则不改schema。

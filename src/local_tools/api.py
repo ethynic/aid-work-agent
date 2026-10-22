@@ -489,8 +489,10 @@ async def runtime_boss_visual_diagnose(
     )
     if not tenant or tenant.get("status") != "active":
         raise _http_error(403, "设备租户不存在或已停用")
-    if (not user or user.get("tenant_id") != tenant_id
-            or user.get("status") != "active"):
+    # Pairing follows tenant-context authority: platform admins may act in a tenant
+    # without belonging to it; the authenticated device still fixes the billing tenant.
+    if (not user or user.get("status") != "active"
+            or user.get("role") != "platform_admin" and user.get("tenant_id") != tenant_id):
         raise _http_error(403, "设备用户不存在、已停用或不属于当前租户")
     caller = RuntimeVisualCaller(tenant_id=tenant_id, device_id=str(device["id"]), user_id=user_id)
     result = await diagnose_visual(body, caller)

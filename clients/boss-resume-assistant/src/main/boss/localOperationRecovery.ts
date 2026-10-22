@@ -27,6 +27,10 @@ const dict = (v: unknown): Dict => object(v) ? v : {}
 const CODES = new Set(['UI_CHANGED', 'BUSY', 'EXECUTION_UNKNOWN', 'CHROME_UNAVAILABLE'])
 const CONTACT_TOOLS = new Set(['boss_send_current', 'boss_reject_current', 'boss_accept_resume'])
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/
+const API_REJECTIONS: Readonly<Record<number, readonly string[]>> = {
+  401: ['缺少设备 token', '设备 token 无效或设备已撤销'],
+  403: ['设备租户不存在或已停用', '设备用户不存在、已停用或不属于当前租户'],
+}
 interface Admitted { facts: Dict; context: VisualContext; policy: Policy | 'preserve_result'; target: string }
 
 function admit(name: string, result: OperationResult): Admitted | undefined {
@@ -106,7 +110,14 @@ export function withLocalRecovery<Args>(operation: BossOperation<Args>, deps: Lo
         receipt()
       }
       abort()
-      observations.push({ branch, mode: observationMode, ...Object.fromEntries(['request_id', 'http_status', 'state', 'diagnosis', 'diagnosis_error', 'action_error'].map(k => [k, a.visual[k]])) })
+      const observation: Dict = { branch, mode: observationMode, ...Object.fromEntries(['request_id', 'http_status', 'state', 'diagnosis', 'diagnosis_error', 'action_error'].map(k => [k, a.visual[k]])) }
+      const status = a.visual.http_status, error = dict(a.visual.detail).error
+      if (status === 401 || status === 403) {
+        // Only known public refusals enter tool results; never forward arbitrary detail/debug.
+        observation.api_error = typeof error === 'string' && API_REJECTIONS[status]!.includes(error)
+          ? error : `视觉恢复接口拒绝访问（HTTP ${status}）`
+      }
+      observations.push(observation)
       return a
     }
     const resume = async (): Promise<OperationResult> => {
