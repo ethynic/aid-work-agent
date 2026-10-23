@@ -244,7 +244,8 @@ def enqueue_human_period_tasks(tenant_id: str, session_id: str, round_message_id
     channel_routes._persist_kf_context_customer_message 落库成功后调用本函数，
     构造最小 RecapPayload rpush 到 RECAP_QUEUE，由 background_runner 消费。
     任务均为拉模式（执行时自采 DB），user_content / assistant_reply 留空：
-    - lead_refresh：留资线索意向度/需求刷新（未留资会话 no-op）
+    - lead_refresh：留资线索意向度/需求刷新（未留资会话 no-op；
+      已声明外部系统入口的租户跳过，见 lead_refresh 模块注释）
     - external_push_human：人工期对话推送第三方系统（未对接租户文档 no-op）
 
     任何异常吞掉不阻断消息链路；Redis 不可用时直接放弃（不降级进程内执行——
