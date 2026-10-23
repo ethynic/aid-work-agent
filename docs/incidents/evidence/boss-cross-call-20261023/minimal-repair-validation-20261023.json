@@ -1,0 +1,200 @@
+{
+  "date": "2026-10-23",
+  "role": "independent_test",
+  "cwd": "C:/repos/aid-work-agent/clients/boss-resume-assistant",
+  "build": {
+    "command": "npm run build:main",
+    "exit": 0,
+    "notes": "shared native TypeScript plus CLI TypeScript compiled; no packaging or deployment"
+  },
+  "compile": {
+    "command": "node node_modules/typescript/bin/tsc -p tsconfig.main.json",
+    "exit": 0
+  },
+  "groups": [
+    {
+      "label": "phase10_phase11_phase8",
+      "tests": 174,
+      "pass": 174,
+      "fail": 0,
+      "skip": 0,
+      "exit": 0,
+      "files": [
+        "filter-edit-resume",
+        "filter-setter",
+        "filter-entitlements",
+        "filter-page-gate",
+        "filter-phase5-perf",
+        "filter-vip-panel",
+        "window-containment",
+        "window-experiment",
+        "visual-recovery",
+        "local-operation-recovery",
+        "win32-physical-input",
+        "widget-hidden-recovery",
+        "widget-hidden-resume"
+      ],
+      "command": "$env:AID_BOSS_AUTO_CHROME='0'; node --test dist/tests/filter-edit-resume.test.js dist/tests/filter-setter.test.js dist/tests/filter-entitlements.test.js dist/tests/filter-page-gate.test.js dist/tests/filter-phase5-perf.test.js dist/tests/filter-vip-panel.test.js dist/tests/window-containment.test.js dist/tests/window-experiment.test.js dist/tests/visual-recovery.test.js dist/tests/local-operation-recovery.test.js dist/tests/win32-physical-input.test.js dist/tests/widget-hidden-recovery.test.js dist/tests/widget-hidden-resume.test.js"
+    },
+    {
+      "label": "phase9_and_adjacent",
+      "tests": 260,
+      "pass": 258,
+      "fail": 2,
+      "skip": 0,
+      "exit": 1,
+      "files": [
+        "candidate-scroll-recovery",
+        "independent-recovery-boundaries",
+        "resume-batch",
+        "loaded-candidate-navigation",
+        "greet-executor",
+        "recommendation-result-boundary",
+        "detail-greet-executor",
+        "boss-detail-greet-ops",
+        "detail-greet-opt-in",
+        "operations-result",
+        "recommendation-boundary-operations",
+        "candidate-selection",
+        "candidate-selection-wiring",
+        "resume-obstruction-independent",
+        "resume-reader"
+      ],
+      "command": "$env:AID_BOSS_AUTO_CHROME='0'; node --test dist/tests/candidate-scroll-recovery.test.js dist/tests/independent-recovery-boundaries.test.js dist/tests/resume-batch.test.js dist/tests/loaded-candidate-navigation.test.js dist/tests/greet-executor.test.js dist/tests/recommendation-result-boundary.test.js dist/tests/detail-greet-executor.test.js dist/tests/boss-detail-greet-ops.test.js dist/tests/detail-greet-opt-in.test.js dist/tests/operations-result.test.js dist/tests/recommendation-boundary-operations.test.js dist/tests/candidate-selection.test.js dist/tests/candidate-selection-wiring.test.js dist/tests/resume-obstruction-independent.test.js dist/tests/resume-reader.test.js"
+    },
+    {
+      "label": "independent_and_progress",
+      "tests": 30,
+      "pass": 28,
+      "fail": 2,
+      "skip": 0,
+      "exit": 1,
+      "files": [
+        "local-operation-recovery-independent",
+        "page-operation-independent",
+        "operations-progress-cancel"
+      ],
+      "command": "$env:AID_BOSS_AUTO_CHROME='0'; node --test dist/tests/local-operation-recovery-independent.test.js dist/tests/page-operation-independent.test.js dist/tests/operations-progress-cancel.test.js"
+    },
+    {
+      "label": "followup_fixtures_boundary",
+      "tests": 40,
+      "pass": 39,
+      "fail": 1,
+      "skip": 0,
+      "exit": 1,
+      "files": [
+        "independent-recovery-boundaries",
+        "resume-obstruction-independent",
+        "operations-progress-cancel",
+        "recommendation-result-boundary"
+      ],
+      "log": ".tmp/boss-independent-followup-20261023.tap",
+      "command": "$env:AID_BOSS_AUTO_CHROME='0'; node --test --test-reporter=tap dist/tests/independent-recovery-boundaries.test.js dist/tests/resume-obstruction-independent.test.js dist/tests/operations-progress-cancel.test.js dist/tests/recommendation-result-boundary.test.js"
+    },
+    {
+      "label": "final_affected_retest",
+      "tests": 62,
+      "pass": 62,
+      "fail": 0,
+      "skip": 0,
+      "exit": 0,
+      "files": [
+        "resume-obstruction-independent",
+        "local-operation-recovery"
+      ],
+      "log": ".tmp/boss-independent-final-20261023.tap",
+      "command": "$env:AID_BOSS_AUTO_CHROME='0'; node --test --test-reporter=tap dist/tests/resume-obstruction-independent.test.js dist/tests/local-operation-recovery.test.js"
+    },
+    {
+      "label": "p1_checkpoint_and_partial_final",
+      "tests": 121,
+      "pass": 121,
+      "fail": 0,
+      "skip": 0,
+      "exit": 0,
+      "files": [
+        "candidate-scroll-recovery",
+        "resume-batch",
+        "widget-hidden-recovery",
+        "widget-hidden-resume",
+        "resume-obstruction-independent",
+        "local-operation-recovery"
+      ],
+      "command": "$env:AID_BOSS_AUTO_CHROME='0'; node --test --test-reporter=tap dist/tests/candidate-scroll-recovery.test.js dist/tests/resume-batch.test.js dist/tests/widget-hidden-recovery.test.js dist/tests/widget-hidden-resume.test.js dist/tests/resume-obstruction-independent.test.js dist/tests/local-operation-recovery.test.js",
+      "log": ".tmp/boss-independent-p1-retest-20261023.tap",
+      "purpose": "P1 original pending binding survives offscreen and rejects same-name replacement; latest partial projection regression"
+    }
+  ],
+  "final_unique_files": 31,
+  "final_unique_tests": 467,
+  "final_failures": 0,
+  "final_skipped": 0,
+  "counting": "Groups overlap for targeted rechecks; do not sum all group totals. Unique total is 174 + 260 + 30 + 1 CR local regression + 2 P1 pending-binding regressions. Latest affected six-file rerun is 121/121.",
+  "initial_failures": [
+    "operations-progress-cancel: 2 flat-list fixtures migrated by root to structural source, original intent retained; followup both pass",
+    "resume-obstruction-independent: 2 stale pre-Phase8 replay/stop assertions migrated to checkpoint continuation; original image retained, confirmed candidate never reread/reclicked; final both pass",
+    "followup migration initially assumed no stop_reason; actual successful batch limit_reached is correct; assertion corrected and final pass"
+  ],
+  "changes_by_tester": [
+    "tests/independent-recovery-boundaries.test.ts: two independently designed negative cases",
+    "tests/resume-obstruction-independent.test.ts: strengthen checkpoint regression assertions; root explicitly delegated ownership"
+  ],
+  "limits": [
+    "No customer Chrome or real external input used",
+    "No real original HWND move performed",
+    "Mixed-DPI/monitor L-shape and negative origins covered by isolated production C# geometry, not live monitors",
+    "Actual client A2 observation after upgrade remains field acceptance",
+    "No commits, packaging, deployment"
+  ],
+  "independent_review": {
+    "result": "pass",
+    "unresolved_p0_p1_p2": 0,
+    "closed_findings": [
+      "P1: clipped pending card discarded original reference; full loaded source check now preserves binding",
+      "P2: normal filter draft close suggestion could be dismissed after window fallback; final diagnosis guard now resumes setter",
+      "P2: unavailable_names omitted from recovered partial projection; now included"
+    ],
+    "reproduction": "same-name replacement before fix: clicks=1; after fix clicks=0, scrolls=0, originalReferencePreserved=true"
+  },
+  "root_verification": {
+    "command": "npm run typecheck",
+    "exit": 0,
+    "diff_check": "git diff --check -- clients/boss-resume-assistant and task documentation: exit 0",
+    "no_commit_package_deploy": true
+  },
+  "source_sha256": {
+    "clients/boss-resume-assistant/scripts/BossWindowExperiment.cs": "4db981953ce202665082911266bf08744b5c43f2f8f294289df448ac9e496ef6",
+    "clients/boss-resume-assistant/scripts/window-experiment.ps1": "825b67d0025d5713c442f374088b3b4409996a15180dbf3bddae0311f370893a",
+    "clients/boss-resume-assistant/src/main/boss/FilterSetter.ts": "14bcc00fda780c94e9361b7d41123dd7370d4d23dce24ee605a6deb592d2045f",
+    "clients/boss-resume-assistant/src/main/boss/GreetExecutor.ts": "fbc97d0d7c87dfd02c926b93809e2d7c0d664da3d0d09d6a01b4cb7e9f068fad",
+    "clients/boss-resume-assistant/src/main/boss/LoadedCandidateNavigation.ts": "efd1af0bda8c1246e33747b81ce479a5c182fbdb5e3024ed23ddb1c55e575075",
+    "clients/boss-resume-assistant/src/main/boss/RecommendationResultBoundary.ts": "cd85e19623597ef0ad16fc5b4fdad3229ce6f776cc231be8eaf0a7b5180034af",
+    "clients/boss-resume-assistant/src/main/boss/ResumeBatchReader.ts": "8a8b7adf55e39f102a8bdb590071603ad193d78ca5091cc5994a06832ac7662e",
+    "clients/boss-resume-assistant/src/main/boss/cardName.ts": "fe187cdda2af08ea39e6904b58289ec9a96fac0f8de4decdd3a8ecc27b708b75",
+    "clients/boss-resume-assistant/src/main/boss/localOperationRecovery.ts": "9189219da4f7e78229639eabf2c44f71a70ce153139a7af24fff361d4f18f7a4",
+    "clients/boss-resume-assistant/src/main/boss/visualRecovery.ts": "acbcbe6ec0e98bba8ab9a13aa551a7f18802240d2fcade4469cc20d5864743ff",
+    "clients/boss-resume-assistant/src/main/input/windowExperiment.ts": "f4fd5a6965f4c536d445aad6fb63d643415dc379a8974d25415e8b0918c7ade0",
+    "clients/boss-resume-assistant/src/main/operations/bossContext.ts": "bce995b112ebe05da6ca81971df9f47669bc9a575b56ffa074301e2fc3bf539d",
+    "clients/boss-resume-assistant/src/main/operations/bossFilter.ts": "e4e069984d101554a3ddf92fedc4bf7b131c77dba2bee50c862d1d13ec307148",
+    "clients/boss-resume-assistant/src/main/operations/bossGreet.ts": "8c7f94bef3b7a6a82aec85adc392a4cc528c0b8cfe6a21e87743986aa7607d26",
+    "clients/boss-resume-assistant/src/main/operations/bossOverlayDismiss.ts": "4710fd7df618473baff90009466b1a38ae1ef3531e5229ae7880c9f2e4ee7d07",
+    "clients/boss-resume-assistant/src/main/operations/bossOverlayInspect.ts": "cc1d4638e521a77178889e1347d1d38334b8832d25b5d925310664575ebd90c1",
+    "clients/boss-resume-assistant/src/main/operations/pageOperation.ts": "48974394794d5ffa3a837a1d00bf974b913df787cb0b2a395ab2ab63627baf37",
+    "clients/boss-resume-assistant/src/main/operations/types.ts": "eebb2aef64f78a048308920d7c79d5349e08c78f59429bf222335f1aa8b9b148",
+    "clients/boss-resume-assistant/tests/candidate-scroll-recovery.test.ts": "42d1400fd185b6daa184b08b0b48e68200f6a735076b10a9eed27200e00d3468",
+    "clients/boss-resume-assistant/tests/detailGreetFixture.ts": "26cdbfac6f3c731709b2dba7e5a876f06f1064d00673b8ecf52dfe40a8140b59",
+    "clients/boss-resume-assistant/tests/filter-edit-resume.test.ts": "a672cbf452684bc069883375f89ed531131da9823f20495d3c133bdb282459ac",
+    "clients/boss-resume-assistant/tests/independent-recovery-boundaries.test.ts": "f47e9f1298fdf4c482a4f561083cd0bf855ef41f64c1dc223115d061ca75ddd2",
+    "clients/boss-resume-assistant/tests/loaded-candidate-navigation.test.ts": "70e23b57d2bcd8d9bacecd15b2411ccfb8d1549a9840dd210a46e74176bd662c",
+    "clients/boss-resume-assistant/tests/local-operation-recovery.test.ts": "46414b644ff8e52456ecc8e1d2c8970dc74f7121206449da2e0955f0a260f882",
+    "clients/boss-resume-assistant/tests/operations-progress-cancel.test.ts": "7b6f11e583b171278bb41994ccc0c405270ad04421dbd9b6576b3bdf53652eef",
+    "clients/boss-resume-assistant/tests/operations-result.test.ts": "dcadf4125017f1e87de801b3df6bc97ffa3f77ed163186ecc873555579adad24",
+    "clients/boss-resume-assistant/tests/recommendation-result-boundary.test.ts": "8e7523c72fcab7875698db088f0b5089c89b1e99003e563a47519ec5f813d9bc",
+    "clients/boss-resume-assistant/tests/recommendationBoundaryFixture.ts": "87a32fddbd0acfe6cbed6f80346fb7a8b7516b8197d684199a1a4ab4526d5658",
+    "clients/boss-resume-assistant/tests/resume-batch.test.ts": "e83bcdedad8c9bd1d8b70eeec6371fba6f69c385e67615ed0823fd9addf739f8",
+    "clients/boss-resume-assistant/tests/resume-obstruction-independent.test.ts": "a877ea2e8481f0cfe3930c232fc711fbd1d7b73816f9d75de290e6c1c1ae1eb7",
+    "clients/boss-resume-assistant/tests/structuralListFixture.ts": "1b09b9775f5d2c2306f20ab1e06c9d58746a6ccfc3284fff41a583b42d269a30",
+    "clients/boss-resume-assistant/tests/window-containment.test.ts": "10a3003170187b655bb0c4047386c76244878e68667ffb4aa57b2a0511e5f186"
+  }
+}

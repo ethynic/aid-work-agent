@@ -5,7 +5,7 @@ import { lstat, mkdir, open, readFile, readdir, realpath, rename, unlink, writeF
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { captureWindow, clickWindow, type WindowObservation } from '../input/windowExperiment.js'
+import { captureWindow, clickWindow, WindowCaptureError, type WindowCaptureBudget, type WindowObservation } from '../input/windowExperiment.js'
 import { CancelledError, CodedOperationError } from '../operations/types.js'
 import type { BossSession } from '../operations/bossContext.js'
 import { pngMetadata } from '../operations/bossScreenshot.js'
@@ -17,7 +17,7 @@ export interface VisualInspectArgs { request_id?: string; visual_context?: Visua
 interface DismissAction { kind: 'dismiss'; space: 'page_image_px' | 'window_image_px'; point: { x: number; y: number }; target_box: { x: number; y: number; width: number; height: number }; target_label: string }
 type Action = DismissAction
 interface PageMetrics { width: number; height: number }
-interface RecordData { request_id: string; recovery_ref: string; url: string; captured_at: string; context: VisualContext; image?: { width: number; height: number }; observation_mode?: 'page' | 'window'; window_observation?: WindowObservation; browser_target_ref?: string; target_id?: string; page_metrics?: PageMetrics; response?: { status: number; body: unknown } }
+interface RecordData { request_id: string; recovery_ref: string; url: string; captured_at: string; context: VisualContext; image?: { width: number; height: number }; observation_mode?: 'page' | 'window'; window_observation?: WindowObservation; browser_target_ref?: string; geometry_epoch?: string; target_id?: string; page_metrics?: PageMetrics; response?: { status: number; body: unknown } }
 export interface VisualRecoveryDeps {
   root?: string
   diagnose?: typeof visualDiagnose
@@ -80,6 +80,18 @@ export class VisualRecovery {
   private readonly now: () => number
   constructor(private readonly deps: VisualRecoveryDeps = {}) { this.root = deps.root ?? join(tmpdir(), 'aid-boss-visual'); this.now = deps.now ?? Date.now }
   private directory(id: string): string { if (!UUID.test(id)) invalid('无效视觉引用'); return join(this.root, id.toLowerCase()) }
+  private async geometryEpoch(target?: string, invalidate = false): Promise<string> {
+    if (!target || !UUID.test(target)) return ''
+    const path = join(this.root, `geometry-${target.toLowerCase()}.epoch`)
+    if (invalidate) {
+      const epoch = randomUUID(), temporary = join(this.root, `${randomUUID()}.epoch`)
+      await writeFile(temporary, epoch, { flag: 'wx', mode: 0o600 }); await rename(temporary, path); return epoch
+    }
+    try {
+      if ((await lstat(path)).isSymbolicLink()) invalid('窗口几何版本不是普通本机文件')
+      return await readFile(path, 'utf8')
+    } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return ''; throw error }
+  }
   private async locked<T>(id: string, fn: (directory: string) => Promise<T>): Promise<T> {
     const directory = this.directory(id)
     await mkdir(this.root, { recursive: true, mode: 0o700 })
@@ -139,7 +151,7 @@ export class VisualRecovery {
       }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
   }
-  async inspect(args: VisualInspectArgs, session: BossSession, signal: AbortSignal): Promise<Record<string, unknown>> {
+  async inspect(args: VisualInspectArgs, session: BossSession, signal: AbortSignal, budget: WindowCaptureBudget = { repositionsUsed: 0 }): Promise<Record<string, unknown>> {
     const error = validateVisualArgs(args); if (error) invalid(error)
     const id = args.request_id!.toLowerCase()
     await this.cleanupExpiredImages()
@@ -162,8 +174,14 @@ export class VisualRecovery {
           let stage = 'window_activate'
           try {
             await session.activateTarget()
+            if (signal.aborted) throw new CancelledError()
             stage = 'window_capture'
-            windowObservation = await (this.deps.captureWindow ?? captureWindow)(join(directory, 'page.png'), session.cdpPort ?? 9222)
+            const used = budget.repositionsUsed
+            try { windowObservation = await (this.deps.captureWindow ?? captureWindow)(join(directory, 'page.png'), session.cdpPort ?? 9222, undefined, { budget, signal }) }
+            finally {
+              // Invalidate old observations even when the one reposition attempt has an uncertain result.
+              if (budget.repositionsUsed > used) await this.geometryEpoch(session.browserTargetRef, true)
+            }
             stage = 'window_identity'
             if (!windowObservation.window.process_started_at || !Number.isFinite(Date.parse(windowObservation.window.process_started_at))) throw new CodedOperationError('UI_CHANGED', '窗口观察缺少 Chrome 进程创建身份')
             stage = 'window_read'
@@ -174,13 +192,14 @@ export class VisualRecovery {
             const machine = (error as NodeJS.ErrnoException | undefined)?.code
             throw new CodedOperationError(code, `绑定窗口观察失败（${stage}），未取得有效窗口诊断`, {
               visual_failure: { stage, original_code: code,
+                ...(error instanceof WindowCaptureError ? { reason: error.reason, ...(error.geometry ? { geometry: error.geometry } : {}) } : {}),
                 ...(['ENOENT', 'EACCES', 'EBUSY', 'ETIMEDOUT'].includes(String(machine)) ? { machine_code: machine } : {}) },
             })
           }
         } else image = await session.captureFullpage()
         const metadata = pngMetadata(image)
         if (await session.getUrl() !== url || await session.getTargetId?.() !== targetId || mode === 'page' && !sameMetrics(metrics, await metricsOf(session))) throw stale('截图期间页面或视口已切换，请重新观察')
-        record = { request_id: id, recovery_ref: randomUUID(), url, captured_at: windowObservation?.captured_at ?? new Date(this.now()).toISOString(), context: args.visual_context!, image: { width: metadata.width, height: metadata.height }, target_id: targetId, page_metrics: metrics, observation_mode: mode, window_observation: windowObservation, browser_target_ref: session.browserTargetRef }
+        record = { request_id: id, recovery_ref: randomUUID(), url, captured_at: windowObservation?.captured_at ?? new Date(this.now()).toISOString(), context: args.visual_context!, image: { width: metadata.width, height: metadata.height }, target_id: targetId, page_metrics: metrics, observation_mode: mode, window_observation: windowObservation, browser_target_ref: session.browserTargetRef, geometry_epoch: await this.geometryEpoch(session.browserTargetRef) }
         if (mode === 'page') await writeFile(join(directory, 'page.png'), image, { flag: 'wx', mode: 0o600 })
         await this.save(directory, record)
       }
@@ -212,7 +231,7 @@ export class VisualRecovery {
       if (record) {
         const age = this.now() - Date.parse(record.captured_at)
         const consumed = existsSync(join(directory, 'consumed'))
-        if (consumed || age < 0 || age > MAX_AGE) {
+        if (consumed || age < 0 || age > MAX_AGE || (record.geometry_epoch ?? '') !== await this.geometryEpoch(record.browser_target_ref)) {
           await this.removeImages(directory)
           result.recovery_action_error = consumed ? 'ALREADY_CONSUMED' : 'STALE_OBSERVATION'
           return result
@@ -230,7 +249,7 @@ export class VisualRecovery {
       return result
     })
   }
-  async dismiss(ref: string, session: BossSession, signal: AbortSignal): Promise<Record<string, unknown>> {
+  async dismiss(ref: string, session: BossSession, signal: AbortSignal, budget: WindowCaptureBudget = { repositionsUsed: 0 }): Promise<Record<string, unknown>> {
     if (!UUID.test(ref)) invalid('无效 recovery_ref')
     let id: string
     try { id = await readFile(join(this.root, `${ref.toLowerCase()}.ref`), 'utf8') } catch { throw stale('视觉恢复引用不存在，请重新诊断') }
@@ -238,6 +257,8 @@ export class VisualRecovery {
       const record = JSON.parse(await readFile(join(directory, 'record.json'), 'utf8')) as RecordData
       if (record.recovery_ref !== ref.toLowerCase()) invalid('视觉恢复引用不匹配')
       if (record.browser_target_ref && record.browser_target_ref !== session.browserTargetRef) throw stale('恢复引用与原操作的浏览器绑定不一致')
+      if (signal.aborted) throw new CancelledError()
+      if ((record.geometry_epoch ?? '') !== await this.geometryEpoch(record.browser_target_ref)) throw stale('原窗口归位后观察已失效，请重新诊断')
       const age = this.now() - Date.parse(record.captured_at)
       if (existsSync(join(directory, 'consumed'))) throw new CodedOperationError('UI_CHANGED', '视觉恢复引用已消费，不重复输入', { recovery_action_error: 'ALREADY_CONSUMED', input_status: 'not_started' })
       if (age < 0 || age > MAX_AGE) { await this.removeImages(directory); throw stale('视觉观察已过期，请重新诊断') }
@@ -256,8 +277,9 @@ export class VisualRecovery {
         if (mode === 'window') {
           if (!record.window_observation || !session.activateTarget) throw stale('缺少原窗口绑定，未执行输入')
           await session.activateTarget()
+          if (signal.aborted) throw new CancelledError()
           let freshWindow: WindowObservation
-          try { freshWindow = await (this.deps.captureWindow ?? captureWindow)(join(directory, 'fresh.png'), session.cdpPort ?? 9222) }
+          try { freshWindow = await (this.deps.captureWindow ?? captureWindow)(join(directory, 'fresh.png'), session.cdpPort ?? 9222, undefined, { budget, signal, allowReposition: false }) }
           catch { throw stale('无法重新确认绑定窗口或前景，请重新观察') }
           const before = record.window_observation, after = freshWindow
           if (before.cdp_port !== after.cdp_port || !sameWindow(before, after)) throw stale('窗口身份或几何已改变，未执行输入')

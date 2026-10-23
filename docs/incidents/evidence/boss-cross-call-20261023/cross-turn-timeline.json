@@ -1,0 +1,1181 @@
+{
+  "source": "agent2 SELECT-only runner/immutable invocation correlation",
+  "date": "2026-10-23",
+  "result_error_codes": {
+    "OK": 53,
+    "INTERNAL_ERROR": 9,
+    "UI_CHANGED": 22
+  },
+  "transport_error_marker_count": 0,
+  "turns": [
+    {
+      "runner_id": "runner_9958c1b4733341e58885457ec9c94625",
+      "session_id": "session_e23e102b8b92",
+      "status": "completed",
+      "accepted_beijing": "2026-10-23 10:48:28.675806",
+      "finished_beijing": "2026-10-23 10:58:10.241845",
+      "invocation_ids": [
+        "4e456515-0049-4658-95a9-a5fd8ca4e11f",
+        "0e9eedda-6c64-4693-a682-971fe917c1f2",
+        "5d6b6815-fe71-4b0d-b944-c30ace57f71f",
+        "e19ebc78-f890-4b9b-b945-c679d30db470",
+        "de33e585-9e1a-4bb0-ad34-6f58dcfb5a03",
+        "0ad7a592-18a2-4905-a095-9c0ee8865eb2",
+        "924491a5-4c1d-4ca2-a528-5f4de8687cd4",
+        "6bfb4824-0470-4345-bd9b-cbb39db47b7b"
+      ],
+      "client_call_count": 8,
+      "client_state_counts": {
+        "succeeded": 8
+      },
+      "read_payload_count": 9,
+      "tool_sequence": [
+        {
+          "id": "4e456515-0049-4658-95a9-a5fd8ca4e11f",
+          "time": "2026-10-23 10:49:17.410951",
+          "tool": "boss_goto",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "0e9eedda-6c64-4693-a682-971fe917c1f2",
+          "time": "2026-10-23 10:49:29.766555",
+          "tool": "boss_list_jobs",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "5d6b6815-fe71-4b0d-b944-c30ace57f71f",
+          "time": "2026-10-23 10:49:44.532120",
+          "tool": "boss_select_job",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "e19ebc78-f890-4b9b-b945-c679d30db470",
+          "time": "2026-10-23 10:49:52.499736",
+          "tool": "boss_filter_options",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "de33e585-9e1a-4bb0-ad34-6f58dcfb5a03",
+          "time": "2026-10-23 10:50:03.383403",
+          "tool": "boss_filter",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "0ad7a592-18a2-4905-a095-9c0ee8865eb2",
+          "time": "2026-10-23 10:50:47.470050",
+          "tool": "boss_resume_batch",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": "limit_reached",
+          "read_count": 3
+        },
+        {
+          "id": "924491a5-4c1d-4ca2-a528-5f4de8687cd4",
+          "time": "2026-10-23 10:53:06.036271",
+          "tool": "boss_resume_next",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": "limit_reached",
+          "read_count": 3
+        },
+        {
+          "id": "6bfb4824-0470-4345-bd9b-cbb39db47b7b",
+          "time": "2026-10-23 10:56:00.949282",
+          "tool": "boss_resume_next",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": "limit_reached",
+          "read_count": 3
+        }
+      ]
+    },
+    {
+      "runner_id": "runner_7b03523b5da54325ac2ed7bd4fd98a57",
+      "session_id": "session_e23e102b8b92",
+      "status": "completed",
+      "accepted_beijing": "2026-10-23 11:00:40.526001",
+      "finished_beijing": "2026-10-23 11:00:54.104197",
+      "invocation_ids": [
+        "304d0ccc-b957-4954-a86c-bb54b739fc17",
+        "6a54b620-fe6a-4159-9b1b-8dbdc6019f9a"
+      ],
+      "client_call_count": 2,
+      "client_state_counts": {
+        "succeeded": 2
+      },
+      "read_payload_count": 0,
+      "tool_sequence": [
+        {
+          "id": "304d0ccc-b957-4954-a86c-bb54b739fc17",
+          "time": "2026-10-23 11:00:43.410304",
+          "tool": "boss_goto",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "6a54b620-fe6a-4159-9b1b-8dbdc6019f9a",
+          "time": "2026-10-23 11:00:46.765126",
+          "tool": "boss_greet",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        }
+      ]
+    },
+    {
+      "runner_id": "runner_8600c271adb443689014a1c56b6cc5b3",
+      "session_id": "session_e23e102b8b92",
+      "status": "completed",
+      "accepted_beijing": "2026-10-23 11:06:52.433512",
+      "finished_beijing": "2026-10-23 11:07:32.163092",
+      "invocation_ids": [
+        "76ef2920-510b-4b9a-a775-edd912bca018",
+        "36a8fb5f-a7cb-4a7a-b8e4-a02a09674347",
+        "56887c1d-bf29-4449-81d3-083e68a73dd4"
+      ],
+      "client_call_count": 3,
+      "client_state_counts": {
+        "succeeded": 1,
+        "failed": 2
+      },
+      "read_payload_count": 0,
+      "tool_sequence": [
+        {
+          "id": "76ef2920-510b-4b9a-a775-edd912bca018",
+          "time": "2026-10-23 11:07:18.291555",
+          "tool": "boss_goto",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "36a8fb5f-a7cb-4a7a-b8e4-a02a09674347",
+          "time": "2026-10-23 11:07:20.693196",
+          "tool": "boss_resume_next",
+          "state": "failed",
+          "error_code": "INTERNAL_ERROR",
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "56887c1d-bf29-4449-81d3-083e68a73dd4",
+          "time": "2026-10-23 11:07:25.773203",
+          "tool": "boss_resume_batch",
+          "state": "failed",
+          "error_code": "INTERNAL_ERROR",
+          "stop_reason": null,
+          "read_count": null
+        }
+      ]
+    },
+    {
+      "runner_id": "runner_3d952ae9c0d24b058649eac725c58026",
+      "session_id": "session_e23e102b8b92",
+      "status": "completed",
+      "accepted_beijing": "2026-10-23 11:21:37.997144",
+      "finished_beijing": "2026-10-23 11:22:27.584904",
+      "invocation_ids": [
+        "b4d30300-3640-4292-b49e-8d52d54a0969",
+        "d47b3df0-aae2-4ad6-b735-a030b94ebbce"
+      ],
+      "client_call_count": 2,
+      "client_state_counts": {
+        "failed": 2
+      },
+      "read_payload_count": 0,
+      "tool_sequence": [
+        {
+          "id": "b4d30300-3640-4292-b49e-8d52d54a0969",
+          "time": "2026-10-23 11:21:43.226626",
+          "tool": "boss_filter_options",
+          "state": "failed",
+          "error_code": "UI_CHANGED",
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "d47b3df0-aae2-4ad6-b735-a030b94ebbce",
+          "time": "2026-10-23 11:22:02.337427",
+          "tool": "boss_filter_options",
+          "state": "failed",
+          "error_code": "UI_CHANGED",
+          "stop_reason": null,
+          "read_count": null
+        }
+      ]
+    },
+    {
+      "runner_id": "runner_22e0c959fcff41b7977e59eb12db66a6",
+      "session_id": "session_e23e102b8b92",
+      "status": "completed",
+      "accepted_beijing": "2026-10-23 11:24:31.205263",
+      "finished_beijing": "2026-10-23 11:30:34.694721",
+      "invocation_ids": [
+        "927823c2-b1f2-4818-b0cd-ed73e4e682db",
+        "347e11d1-a1eb-4869-a5b3-27e7f90b72b8",
+        "7fbd1dd3-9519-4cd4-bf2f-ebcb13259e28",
+        "5bdfd67d-93a7-46f3-bd5f-2315ff88681c"
+      ],
+      "client_call_count": 4,
+      "client_state_counts": {
+        "succeeded": 4
+      },
+      "read_payload_count": 6,
+      "tool_sequence": [
+        {
+          "id": "927823c2-b1f2-4818-b0cd-ed73e4e682db",
+          "time": "2026-10-23 11:24:33.107693",
+          "tool": "boss_filter_options",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "347e11d1-a1eb-4869-a5b3-27e7f90b72b8",
+          "time": "2026-10-23 11:24:43.290584",
+          "tool": "boss_filter",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "7fbd1dd3-9519-4cd4-bf2f-ebcb13259e28",
+          "time": "2026-10-23 11:25:28.186178",
+          "tool": "boss_resume_batch",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": "limit_reached",
+          "read_count": 3
+        },
+        {
+          "id": "5bdfd67d-93a7-46f3-bd5f-2315ff88681c",
+          "time": "2026-10-23 11:27:46.842951",
+          "tool": "boss_resume_next",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": "limit_reached",
+          "read_count": 3
+        }
+      ]
+    },
+    {
+      "runner_id": "runner_2afd4ac171aa4de4be4bd52945113618",
+      "session_id": "session_e23e102b8b92",
+      "status": "completed",
+      "accepted_beijing": "2026-10-23 11:38:59.470913",
+      "finished_beijing": "2026-10-23 11:39:36.325665",
+      "invocation_ids": [
+        "f8a02297-ff44-47ca-9304-5d56deb8cf59",
+        "fc9e4be7-27c3-4001-85f6-04468c926491"
+      ],
+      "client_call_count": 2,
+      "client_state_counts": {
+        "failed": 2
+      },
+      "read_payload_count": 0,
+      "tool_sequence": [
+        {
+          "id": "f8a02297-ff44-47ca-9304-5d56deb8cf59",
+          "time": "2026-10-23 11:39:03.778553",
+          "tool": "boss_resume_next",
+          "state": "failed",
+          "error_code": "UI_CHANGED",
+          "stop_reason": "page_operation_failed",
+          "read_count": 0
+        },
+        {
+          "id": "fc9e4be7-27c3-4001-85f6-04468c926491",
+          "time": "2026-10-23 11:39:15.905279",
+          "tool": "boss_resume_next",
+          "state": "failed",
+          "error_code": "UI_CHANGED",
+          "stop_reason": "page_operation_failed",
+          "read_count": 0
+        }
+      ]
+    },
+    {
+      "runner_id": "runner_aeb1013d846f4f058125849947c329df",
+      "session_id": "session_58d8ad3527fb",
+      "status": "completed",
+      "accepted_beijing": "2026-10-23 13:51:14.633734",
+      "finished_beijing": "2026-10-23 13:52:51.112495",
+      "invocation_ids": [
+        "c610049d-e93e-4c61-a24e-90921fc1e261",
+        "cca90608-563a-452c-a3a5-1304192465cd",
+        "2ac9ffab-fecc-4113-85a1-2bb74c9e55a6",
+        "c1256c3d-3973-4507-8720-8c71993445bc",
+        "58ab1505-b4f3-4bba-96be-8de711e5a75f"
+      ],
+      "client_call_count": 5,
+      "client_state_counts": {
+        "succeeded": 1,
+        "failed": 4
+      },
+      "read_payload_count": 0,
+      "tool_sequence": [
+        {
+          "id": "c610049d-e93e-4c61-a24e-90921fc1e261",
+          "time": "2026-10-23 13:51:44.561067",
+          "tool": "boss_goto",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "cca90608-563a-452c-a3a5-1304192465cd",
+          "time": "2026-10-23 13:51:47.469542",
+          "tool": "boss_list_jobs",
+          "state": "failed",
+          "error_code": "UI_CHANGED",
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "2ac9ffab-fecc-4113-85a1-2bb74c9e55a6",
+          "time": "2026-10-23 13:52:08.494788",
+          "tool": "boss_filter_options",
+          "state": "failed",
+          "error_code": "UI_CHANGED",
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "c1256c3d-3973-4507-8720-8c71993445bc",
+          "time": "2026-10-23 13:52:23.234158",
+          "tool": "boss_filter_options",
+          "state": "failed",
+          "error_code": "UI_CHANGED",
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "58ab1505-b4f3-4bba-96be-8de711e5a75f",
+          "time": "2026-10-23 13:52:36.793444",
+          "tool": "boss_goto",
+          "state": "failed",
+          "error_code": "UI_CHANGED",
+          "stop_reason": null,
+          "read_count": null
+        }
+      ]
+    },
+    {
+      "runner_id": "runner_66a3ef2a611343c18f2413582d38d557",
+      "session_id": "session_58d8ad3527fb",
+      "status": "completed",
+      "accepted_beijing": "2026-10-23 13:56:46.176989",
+      "finished_beijing": "2026-10-23 14:25:34.540262",
+      "invocation_ids": [
+        "f2e09796-2537-463d-843c-cb8296c79766",
+        "56967449-6ee6-46b4-bbe0-9568f0d0dd51",
+        "e16c2779-cc44-4d9c-98b0-8f475a3d6e0c",
+        "1c5dd12b-c91c-4954-a699-e2b5e2667631",
+        "e234dbb2-0499-4393-be29-1131adfafd60",
+        "d3b703b1-b2ee-4016-9622-b3447869c1d5",
+        "cadad921-e149-4a60-a5e3-54d364c89631",
+        "05946fcd-5d21-47f7-9036-864bd3159a7f",
+        "596e9d77-b49a-4983-93fe-3f245dd0f39f",
+        "866302cb-6c4d-4eb4-9ad3-e15654a3a2cd",
+        "e53970f3-bdb8-4ebe-ae3e-bcc4a2dda0e2",
+        "ad008b9d-b5d9-400d-acfd-9ff6190cb827",
+        "612c6c48-4af0-4a6f-a15a-731dabfb3e48",
+        "e5de331c-1cac-4aba-8c57-73c1a074ea14",
+        "748910db-d169-41c9-a6f8-145d7ec88f1b",
+        "75e58b2a-40c5-456b-8c0f-e0d5e1738cab",
+        "a26b013c-9d69-4c6c-8624-7b814f3c4940",
+        "bbe4d4eb-11bd-4a14-93be-829f7c077fe3",
+        "2b7aa25d-3f84-4dc8-9d6f-c15057700fd4",
+        "3a25e662-083e-4739-85a5-bd8c5473d4da",
+        "c5ee2e90-a84e-41e5-86a4-d4d1605c662d"
+      ],
+      "client_call_count": 21,
+      "client_state_counts": {
+        "succeeded": 20,
+        "failed": 1
+      },
+      "read_payload_count": 32,
+      "tool_sequence": [
+        {
+          "id": "f2e09796-2537-463d-843c-cb8296c79766",
+          "time": "2026-10-23 13:56:48.231915",
+          "tool": "boss_goto",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "56967449-6ee6-46b4-bbe0-9568f0d0dd51",
+          "time": "2026-10-23 13:56:50.851733",
+          "tool": "boss_filter_options",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "e16c2779-cc44-4d9c-98b0-8f475a3d6e0c",
+          "time": "2026-10-23 13:57:01.927449",
+          "tool": "boss_filter",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "1c5dd12b-c91c-4954-a699-e2b5e2667631",
+          "time": "2026-10-23 13:57:51.998766",
+          "tool": "boss_resume_batch",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": "limit_reached",
+          "read_count": 3
+        },
+        {
+          "id": "e234dbb2-0499-4393-be29-1131adfafd60",
+          "time": "2026-10-23 14:00:00.669335",
+          "tool": "boss_resume_next",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": "limit_reached",
+          "read_count": 3
+        },
+        {
+          "id": "d3b703b1-b2ee-4016-9622-b3447869c1d5",
+          "time": "2026-10-23 14:02:27.606628",
+          "tool": "boss_resume_next",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": "limit_reached",
+          "read_count": 3
+        },
+        {
+          "id": "cadad921-e149-4a60-a5e3-54d364c89631",
+          "time": "2026-10-23 14:05:44.583483",
+          "tool": "boss_open_detail",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "05946fcd-5d21-47f7-9036-864bd3159a7f",
+          "time": "2026-10-23 14:05:54.077117",
+          "tool": "boss_greet_detail",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "596e9d77-b49a-4983-93fe-3f245dd0f39f",
+          "time": "2026-10-23 14:06:06.881985",
+          "tool": "boss_open_detail",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "866302cb-6c4d-4eb4-9ad3-e15654a3a2cd",
+          "time": "2026-10-23 14:06:12.661761",
+          "tool": "boss_greet_detail",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "e53970f3-bdb8-4ebe-ae3e-bcc4a2dda0e2",
+          "time": "2026-10-23 14:06:26.300710",
+          "tool": "boss_resume_next",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": "limit_reached",
+          "read_count": 3
+        },
+        {
+          "id": "ad008b9d-b5d9-400d-acfd-9ff6190cb827",
+          "time": "2026-10-23 14:08:55.960105",
+          "tool": "boss_resume_next",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": "limit_reached",
+          "read_count": 3
+        },
+        {
+          "id": "612c6c48-4af0-4a6f-a15a-731dabfb3e48",
+          "time": "2026-10-23 14:11:37.702785",
+          "tool": "boss_resume_next",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": "limit_reached",
+          "read_count": 3
+        },
+        {
+          "id": "e5de331c-1cac-4aba-8c57-73c1a074ea14",
+          "time": "2026-10-23 14:13:57.445055",
+          "tool": "boss_resume_next",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": "limit_reached",
+          "read_count": 3
+        },
+        {
+          "id": "748910db-d169-41c9-a6f8-145d7ec88f1b",
+          "time": "2026-10-23 14:16:07.157226",
+          "tool": "boss_resume_next",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": "limit_reached",
+          "read_count": 3
+        },
+        {
+          "id": "75e58b2a-40c5-456b-8c0f-e0d5e1738cab",
+          "time": "2026-10-23 14:18:22.867802",
+          "tool": "boss_resume_next",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": "limit_reached",
+          "read_count": 3
+        },
+        {
+          "id": "a26b013c-9d69-4c6c-8624-7b814f3c4940",
+          "time": "2026-10-23 14:20:49.112823",
+          "tool": "boss_open_detail",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "bbe4d4eb-11bd-4a14-93be-829f7c077fe3",
+          "time": "2026-10-23 14:20:57.103177",
+          "tool": "boss_greet_detail",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "2b7aa25d-3f84-4dc8-9d6f-c15057700fd4",
+          "time": "2026-10-23 14:21:11.809431",
+          "tool": "boss_resume_next",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": "limit_reached",
+          "read_count": 3
+        },
+        {
+          "id": "3a25e662-083e-4739-85a5-bd8c5473d4da",
+          "time": "2026-10-23 14:24:01.082305",
+          "tool": "boss_resume_next",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": "page_operation_failed",
+          "read_count": 2
+        },
+        {
+          "id": "c5ee2e90-a84e-41e5-86a4-d4d1605c662d",
+          "time": "2026-10-23 14:25:25.201624",
+          "tool": "boss_resume_next",
+          "state": "failed",
+          "error_code": "INTERNAL_ERROR",
+          "stop_reason": null,
+          "read_count": null
+        }
+      ]
+    },
+    {
+      "runner_id": "runner_9984c8fd53054e4f9fd3c865ac383622",
+      "session_id": "session_58d8ad3527fb",
+      "status": "completed",
+      "accepted_beijing": "2026-10-23 14:30:44.919552",
+      "finished_beijing": "2026-10-23 14:30:55.659299",
+      "invocation_ids": [
+        "d9211c17-a2e9-4b6f-87c5-7f1b66c0e373",
+        "1f744332-2cec-4a04-af28-bc3565a849fd"
+      ],
+      "client_call_count": 2,
+      "client_state_counts": {
+        "succeeded": 1,
+        "failed": 1
+      },
+      "read_payload_count": 0,
+      "tool_sequence": [
+        {
+          "id": "d9211c17-a2e9-4b6f-87c5-7f1b66c0e373",
+          "time": "2026-10-23 14:30:47.232319",
+          "tool": "boss_goto",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "1f744332-2cec-4a04-af28-bc3565a849fd",
+          "time": "2026-10-23 14:30:49.904245",
+          "tool": "boss_greet",
+          "state": "failed",
+          "error_code": "INTERNAL_ERROR",
+          "stop_reason": null,
+          "read_count": null
+        }
+      ]
+    },
+    {
+      "runner_id": "runner_386f2626342d4ed69754f974e2fc0364",
+      "session_id": "session_58d8ad3527fb",
+      "status": "completed",
+      "accepted_beijing": "2026-10-23 14:32:54.886671",
+      "finished_beijing": "2026-10-23 14:35:45.836106",
+      "invocation_ids": [
+        "7786d877-c9b9-4fba-89c8-f5c4cf12e57c",
+        "aa8d597d-f507-4aea-bb68-62ec8451def8",
+        "a4ae6a54-9983-4766-b192-2d23f8927afd",
+        "30afbe57-5f82-428b-aae7-513f3a75dd5c",
+        "3385785d-9276-4043-a2a4-16d5064da353",
+        "1e4c200d-49fe-4d2b-b945-17ce92e0ac02",
+        "fd3bfe25-f00a-4bb9-81a8-27b13695a1f3",
+        "37309365-7ec6-4dad-ae7e-376de8448b36",
+        "bab0ef72-686c-40c8-a311-959039012aee",
+        "7ec458ea-45d8-45fb-bad4-38b56f2d3036"
+      ],
+      "client_call_count": 10,
+      "client_state_counts": {
+        "succeeded": 5,
+        "failed": 5
+      },
+      "read_payload_count": 0,
+      "tool_sequence": [
+        {
+          "id": "7786d877-c9b9-4fba-89c8-f5c4cf12e57c",
+          "time": "2026-10-23 14:33:03.648076",
+          "tool": "boss_filter_options",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "aa8d597d-f507-4aea-bb68-62ec8451def8",
+          "time": "2026-10-23 14:33:19.535207",
+          "tool": "boss_filter",
+          "state": "failed",
+          "error_code": "UI_CHANGED",
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "a4ae6a54-9983-4766-b192-2d23f8927afd",
+          "time": "2026-10-23 14:33:57.418142",
+          "tool": "boss_filter_options",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "30afbe57-5f82-428b-aae7-513f3a75dd5c",
+          "time": "2026-10-23 14:34:06.673844",
+          "tool": "boss_greet",
+          "state": "failed",
+          "error_code": "INTERNAL_ERROR",
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "3385785d-9276-4043-a2a4-16d5064da353",
+          "time": "2026-10-23 14:34:11.485269",
+          "tool": "boss_goto",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "1e4c200d-49fe-4d2b-b945-17ce92e0ac02",
+          "time": "2026-10-23 14:34:18.723371",
+          "tool": "boss_open_chat",
+          "state": "failed",
+          "error_code": "UI_CHANGED",
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "fd3bfe25-f00a-4bb9-81a8-27b13695a1f3",
+          "time": "2026-10-23 14:34:54.008666",
+          "tool": "boss_goto",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "37309365-7ec6-4dad-ae7e-376de8448b36",
+          "time": "2026-10-23 14:35:00.050907",
+          "tool": "boss_greet",
+          "state": "failed",
+          "error_code": "INTERNAL_ERROR",
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "bab0ef72-686c-40c8-a311-959039012aee",
+          "time": "2026-10-23 14:35:05.186704",
+          "tool": "boss_goto",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "7ec458ea-45d8-45fb-bad4-38b56f2d3036",
+          "time": "2026-10-23 14:35:11.203781",
+          "tool": "boss_open_chat",
+          "state": "failed",
+          "error_code": "UI_CHANGED",
+          "stop_reason": null,
+          "read_count": null
+        }
+      ]
+    },
+    {
+      "runner_id": "runner_83f552145a7f4260899987bf26136cd3",
+      "session_id": "session_6f5b69259d79",
+      "status": "completed",
+      "accepted_beijing": "2026-10-23 15:46:24.780100",
+      "finished_beijing": "2026-10-23 15:48:14.390236",
+      "invocation_ids": [
+        "0793983a-fa3b-4164-8bad-db26bd4902ee",
+        "59ca6d39-990c-4118-959b-52b8a6c64641",
+        "a5eb57e4-2b76-40f6-8db0-44cae1f49f9a",
+        "60c5c58d-95a3-4f4a-b9a1-debe19f86419",
+        "c495d0a9-19f1-4e08-a13d-1574f83285b7"
+      ],
+      "client_call_count": 5,
+      "client_state_counts": {
+        "succeeded": 1,
+        "failed": 4
+      },
+      "read_payload_count": 0,
+      "tool_sequence": [
+        {
+          "id": "0793983a-fa3b-4164-8bad-db26bd4902ee",
+          "time": "2026-10-23 15:46:47.539936",
+          "tool": "boss_goto",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "59ca6d39-990c-4118-959b-52b8a6c64641",
+          "time": "2026-10-23 15:46:49.985881",
+          "tool": "boss_list_jobs",
+          "state": "failed",
+          "error_code": "UI_CHANGED",
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "a5eb57e4-2b76-40f6-8db0-44cae1f49f9a",
+          "time": "2026-10-23 15:47:21.266158",
+          "tool": "boss_filter_options",
+          "state": "failed",
+          "error_code": "UI_CHANGED",
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "60c5c58d-95a3-4f4a-b9a1-debe19f86419",
+          "time": "2026-10-23 15:47:38.630271",
+          "tool": "boss_filter_options",
+          "state": "failed",
+          "error_code": "UI_CHANGED",
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "c495d0a9-19f1-4e08-a13d-1574f83285b7",
+          "time": "2026-10-23 15:47:52.125247",
+          "tool": "boss_goto",
+          "state": "failed",
+          "error_code": "UI_CHANGED",
+          "stop_reason": null,
+          "read_count": null
+        }
+      ]
+    },
+    {
+      "runner_id": "runner_dbdfad2bdfa04818b0f829d2de8bb776",
+      "session_id": "session_6f5b69259d79",
+      "status": "completed",
+      "accepted_beijing": "2026-10-23 15:49:29.542065",
+      "finished_beijing": "2026-10-23 15:56:44.376239",
+      "invocation_ids": [
+        "1a2a53cf-cdfc-4e16-ae7e-329febb5102b",
+        "6ce2a4da-14b4-45bc-ae6e-e8e400d0c4eb",
+        "1331bb7b-84f6-4532-afaf-fa9ef6c0014a",
+        "de63baa9-c872-4973-8df1-0782301ac2c8",
+        "43dc1197-217b-48a1-a9ca-e597f4413c8f",
+        "75ce0440-a826-4fd2-b02a-8c4b2f8c67b4",
+        "c3a603b2-8bdf-4324-935b-1ea2fee8e6bb",
+        "1aa7833a-b5b8-4fe4-8f0e-c260934d9f14"
+      ],
+      "client_call_count": 8,
+      "client_state_counts": {
+        "succeeded": 4,
+        "failed": 4
+      },
+      "read_payload_count": 5,
+      "tool_sequence": [
+        {
+          "id": "1a2a53cf-cdfc-4e16-ae7e-329febb5102b",
+          "time": "2026-10-23 15:49:33.056708",
+          "tool": "boss_filter_options",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "6ce2a4da-14b4-45bc-ae6e-e8e400d0c4eb",
+          "time": "2026-10-23 15:49:43.998202",
+          "tool": "boss_filter",
+          "state": "failed",
+          "error_code": "UI_CHANGED",
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "1331bb7b-84f6-4532-afaf-fa9ef6c0014a",
+          "time": "2026-10-23 15:49:57.303756",
+          "tool": "boss_filter",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "de63baa9-c872-4973-8df1-0782301ac2c8",
+          "time": "2026-10-23 15:50:48.858645",
+          "tool": "boss_resume_batch",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": "limit_reached",
+          "read_count": 3
+        },
+        {
+          "id": "43dc1197-217b-48a1-a9ca-e597f4413c8f",
+          "time": "2026-10-23 15:53:15.469336",
+          "tool": "boss_resume_next",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": "page_operation_failed",
+          "read_count": 2
+        },
+        {
+          "id": "75ce0440-a826-4fd2-b02a-8c4b2f8c67b4",
+          "time": "2026-10-23 15:55:50.813804",
+          "tool": "boss_resume_next",
+          "state": "failed",
+          "error_code": "UI_CHANGED",
+          "stop_reason": "page_operation_failed",
+          "read_count": 0
+        },
+        {
+          "id": "c3a603b2-8bdf-4324-935b-1ea2fee8e6bb",
+          "time": "2026-10-23 15:56:12.410031",
+          "tool": "boss_resume_next",
+          "state": "failed",
+          "error_code": "UI_CHANGED",
+          "stop_reason": "page_operation_failed",
+          "read_count": 0
+        },
+        {
+          "id": "1aa7833a-b5b8-4fe4-8f0e-c260934d9f14",
+          "time": "2026-10-23 15:56:28.258358",
+          "tool": "boss_resume_batch",
+          "state": "failed",
+          "error_code": "UI_CHANGED",
+          "stop_reason": "page_operation_failed",
+          "read_count": 0
+        }
+      ]
+    },
+    {
+      "runner_id": "runner_50c38a7ab03c4b54a971c45e617a2b54",
+      "session_id": "session_6f5b69259d79",
+      "status": "completed",
+      "accepted_beijing": "2026-10-23 15:57:15.362459",
+      "finished_beijing": "2026-10-23 16:01:20.544994",
+      "invocation_ids": [
+        "989b3f29-2c58-4e9d-9dc7-b0fcba07ab8c",
+        "2d2e3082-82b5-47d3-a60e-1281480dcd99",
+        "c7dd5a52-0f8a-40a7-8d57-d4b306a718b2"
+      ],
+      "client_call_count": 3,
+      "client_state_counts": {
+        "succeeded": 2,
+        "failed": 1
+      },
+      "read_payload_count": 5,
+      "tool_sequence": [
+        {
+          "id": "989b3f29-2c58-4e9d-9dc7-b0fcba07ab8c",
+          "time": "2026-10-23 15:57:18.541188",
+          "tool": "boss_resume_next",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": "limit_reached",
+          "read_count": 3
+        },
+        {
+          "id": "2d2e3082-82b5-47d3-a60e-1281480dcd99",
+          "time": "2026-10-23 15:59:23.273665",
+          "tool": "boss_resume_next",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": "page_operation_failed",
+          "read_count": 2
+        },
+        {
+          "id": "c7dd5a52-0f8a-40a7-8d57-d4b306a718b2",
+          "time": "2026-10-23 16:01:12.573771",
+          "tool": "boss_resume_next",
+          "state": "failed",
+          "error_code": "INTERNAL_ERROR",
+          "stop_reason": null,
+          "read_count": null
+        }
+      ]
+    },
+    {
+      "runner_id": "runner_010a1bd001c34822b799e7923afd0e40",
+      "session_id": "session_6f5b69259d79",
+      "status": "completed",
+      "accepted_beijing": "2026-10-23 16:04:13.435684",
+      "finished_beijing": "2026-10-23 16:04:19.800724",
+      "invocation_ids": [
+        "58776d02-d4aa-4ef0-9250-9d86c0f59b2a"
+      ],
+      "client_call_count": 1,
+      "client_state_counts": {
+        "failed": 1
+      },
+      "read_payload_count": 0,
+      "tool_sequence": [
+        {
+          "id": "58776d02-d4aa-4ef0-9250-9d86c0f59b2a",
+          "time": "2026-10-23 16:04:16.256649",
+          "tool": "boss_greet",
+          "state": "failed",
+          "error_code": "INTERNAL_ERROR",
+          "stop_reason": null,
+          "read_count": null
+        }
+      ]
+    },
+    {
+      "runner_id": "runner_059ae40d76284c0ba0e0c48629345d2e",
+      "session_id": "session_6f5b69259d79",
+      "status": "completed",
+      "accepted_beijing": "2026-10-23 16:04:48.293970",
+      "finished_beijing": "2026-10-23 16:08:36.627433",
+      "invocation_ids": [
+        "ace0649e-0c02-4c46-b479-d6681365a233",
+        "3743344f-bc73-48cd-a789-e51a5da0721d",
+        "3c68ecb5-c401-4239-902d-79ec707b789b",
+        "601c8e3e-e69a-4933-b1c4-ded6b369b2c1",
+        "3920b84d-72a7-45cc-a995-e21bdae4f7ac",
+        "983c63a3-c18e-466c-8437-b015651a675c",
+        "c068a736-5b5f-4799-bfc5-0843d08e9567",
+        "38cc072d-6922-4379-890f-a273da2c3071"
+      ],
+      "client_call_count": 8,
+      "client_state_counts": {
+        "failed": 4,
+        "succeeded": 4
+      },
+      "read_payload_count": 0,
+      "tool_sequence": [
+        {
+          "id": "ace0649e-0c02-4c46-b479-d6681365a233",
+          "time": "2026-10-23 16:04:52.355725",
+          "tool": "boss_resume_batch",
+          "state": "failed",
+          "error_code": "INTERNAL_ERROR",
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "3743344f-bc73-48cd-a789-e51a5da0721d",
+          "time": "2026-10-23 16:05:39.963609",
+          "tool": "boss_filter_options",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "3c68ecb5-c401-4239-902d-79ec707b789b",
+          "time": "2026-10-23 16:05:54.054825",
+          "tool": "boss_filter",
+          "state": "failed",
+          "error_code": "UI_CHANGED",
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "601c8e3e-e69a-4933-b1c4-ded6b369b2c1",
+          "time": "2026-10-23 16:07:03.214549",
+          "tool": "boss_filter",
+          "state": "failed",
+          "error_code": "UI_CHANGED",
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "3920b84d-72a7-45cc-a995-e21bdae4f7ac",
+          "time": "2026-10-23 16:07:37.207528",
+          "tool": "boss_goto",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "983c63a3-c18e-466c-8437-b015651a675c",
+          "time": "2026-10-23 16:07:44.005036",
+          "tool": "boss_goto",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "c068a736-5b5f-4799-bfc5-0843d08e9567",
+          "time": "2026-10-23 16:07:50.029293",
+          "tool": "boss_filter_options",
+          "state": "succeeded",
+          "error_code": null,
+          "stop_reason": null,
+          "read_count": null
+        },
+        {
+          "id": "38cc072d-6922-4379-890f-a273da2c3071",
+          "time": "2026-10-23 16:08:00.013124",
+          "tool": "boss_filter",
+          "state": "failed",
+          "error_code": "UI_CHANGED",
+          "stop_reason": null,
+          "read_count": null
+        }
+      ]
+    }
+  ],
+  "selected_cleanup_receipts": [
+    {
+      "id": "5bdfd67d-93a7-46f3-bd5f-2315ff88681c",
+      "session_id": "session_e23e102b8b92",
+      "tool_name": "boss_resume_next",
+      "state": "succeeded",
+      "error_code": null,
+      "created_at": "2026-10-23 11:27:46.842951",
+      "runner_id": "runner_22e0c959fcff41b7977e59eb12db66a6",
+      "input_status": "attempted",
+      "verification": {
+        "status": "satisfied",
+        "evidence": [
+          "逐项处理完成，读取3份，失败1项，停止原因limit_reached"
+        ]
+      },
+      "stop_reason": "limit_reached",
+      "read_count": 3,
+      "transport_error_marker": false,
+      "has_failures": true
+    },
+    {
+      "id": "de63baa9-c872-4973-8df1-0782301ac2c8",
+      "session_id": "session_6f5b69259d79",
+      "tool_name": "boss_resume_batch",
+      "state": "succeeded",
+      "error_code": null,
+      "created_at": "2026-10-23 15:50:48.858645",
+      "runner_id": "runner_dbdfad2bdfa04818b0f829d2de8bb776",
+      "input_status": "attempted",
+      "verification": {
+        "status": "satisfied",
+        "evidence": [
+          "逐项处理完成，读取3份，失败0项，停止原因limit_reached"
+        ]
+      },
+      "stop_reason": "limit_reached",
+      "read_count": 3,
+      "transport_error_marker": false,
+      "has_failures": true
+    },
+    {
+      "id": "989b3f29-2c58-4e9d-9dc7-b0fcba07ab8c",
+      "session_id": "session_6f5b69259d79",
+      "tool_name": "boss_resume_next",
+      "state": "succeeded",
+      "error_code": null,
+      "created_at": "2026-10-23 15:57:18.541188",
+      "runner_id": "runner_50c38a7ab03c4b54a971c45e617a2b54",
+      "input_status": "attempted",
+      "verification": {
+        "status": "satisfied",
+        "evidence": [
+          "逐项处理完成，读取3份，失败1项，停止原因limit_reached"
+        ]
+      },
+      "stop_reason": "limit_reached",
+      "read_count": 3,
+      "transport_error_marker": false,
+      "has_failures": true
+    },
+    {
+      "id": "2d2e3082-82b5-47d3-a60e-1281480dcd99",
+      "session_id": "session_6f5b69259d79",
+      "tool_name": "boss_resume_next",
+      "state": "succeeded",
+      "error_code": null,
+      "created_at": "2026-10-23 15:59:23.273665",
+      "runner_id": "runner_50c38a7ab03c4b54a971c45e617a2b54",
+      "input_status": "attempted",
+      "verification": {
+        "status": "inconclusive",
+        "evidence": []
+      },
+      "stop_reason": "page_operation_failed",
+      "read_count": 2,
+      "transport_error_marker": false,
+      "has_failures": true
+    }
+  ]
+}

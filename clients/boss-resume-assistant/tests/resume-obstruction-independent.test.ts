@@ -204,7 +204,7 @@ test('independent: paint metadata is an explicit read-only snapshot option and s
 async function batchOperationScenario(kind: 'first_blocked' | 'second_blocked' | 'ordinary_failure') {
   const names = ['甲小明', '乙小明'], rows = names.map((name, i) => ({ name, buttonY: 146 + i * 184 }))
   let detail = false, current = 0, repaired = false, reads = 0, rawCalls = 0, repairs = 0, paidObservations = 0
-  const readNames: string[] = [], escapes: string[] = []
+  const readNames: string[] = [], escapes: string[] = [], clickedNames: string[] = []
   const artifact = Buffer.from('first-valid-resume-is-preserved')
   const originalRead = ResumeReader.prototype.readResume
   ResumeReader.prototype.readResume = async () => {
@@ -218,7 +218,7 @@ async function batchOperationScenario(kind: 'first_blocked' | 'second_blocked' |
       const snap = detail ? detailSnap({ name: names[current]!, state: 'greet', canvasNameOnly: true, decoyRows: rows }) : listSnap(rows)
       snap.strings.push('筛选'); return snap
     },
-    click: async point => { current = Math.abs(point.y - 138) < Math.abs(point.y - 322) ? 0 : 1; detail = true },
+    click: async point => { current = Math.abs(point.y - 138) < Math.abs(point.y - 322) ? 0 : 1; clickedNames.push(names[current]!); detail = true },
     pressEscape: async () => { escapes.push(names[current]!); detail = false },
     getTargetId: async () => 'offline-resume-obstruction-test',
     getUrl: async () => 'https://www.zhipin.com/web/chat/recommend', close: async () => {},
@@ -242,32 +242,34 @@ async function batchOperationScenario(kind: 'first_blocked' | 'second_blocked' |
     const result = await withLocalRecovery(counted, { inspect, dismiss, env: {
       AIDWORK_RUNTIME_SERVER: 'https://offline.invalid', AIDWORK_RUNTIME_DEVICE_TOKEN: 'test-only' } }).execute(
       { limit: kind === 'first_blocked' ? 1 : 2 }, { signal: new AbortController().signal, progress: () => {} })
-    return { result, reads, readNames, rawCalls, repairs, paidObservations, escapes, artifact }
+    return { result, reads, readNames, rawCalls, repairs, paidObservations, escapes, clickedNames, artifact }
   } finally { ResumeReader.prototype.readResume = originalRead }
 }
 
 test('independent: first blocked batch item propagates to local recovery before a valid resume can be read', async () => {
   const h = await batchOperationScenario('first_blocked'), v = h.result.data.visual_recovery as Record<string, unknown>
   assert.equal(h.result.success, true); assert.equal(v.state, 'recovered')
-  assert.equal(h.rawCalls, 2); assert.equal(h.repairs, 1); assert.equal(h.paidObservations, 2)
+  assert.equal(h.rawCalls, 1, 'the retained invocation resumes its own checkpoint without entering raw execute again')
+  assert.equal(h.repairs, 1); assert.equal(h.paidObservations, 2)
   assert.deepEqual(h.readNames, ['甲小明', '甲小明'])
+  assert.ok(h.clickedNames.every(name => name === '甲小明'), 'the failed first target cannot advance to a different candidate')
   assert.equal((h.result.data.resumes as unknown[]).length, 1)
 })
 
 test('independent: later blocked batch item repairs page while preserving first image without rereading or advancing', async () => {
   const h = await batchOperationScenario('second_blocked'), v = h.result.data.visual_recovery as Record<string, unknown>
-  assert.equal(h.result.success, true); assert.equal(v.state, 'page_restored_result_preserved')
+  assert.equal(h.result.success, true); assert.equal(v.state, 'recovered')
   assert.equal(h.rawCalls, 1); assert.equal(h.repairs, 1); assert.equal(h.paidObservations, 2)
-  assert.deepEqual(h.readNames, ['甲小明', '乙小明']); assert.deepEqual(h.escapes, ['甲小明'])
+  assert.deepEqual(h.readNames, ['甲小明', '乙小明', '乙小明'])
+  assert.equal(h.clickedNames.filter(name => name === '甲小明').length, 1, 'the confirmed first candidate must not be clicked again during continuation')
+  assert.equal(h.readNames.filter(name => name === '甲小明').length, 1, 'the confirmed image must be retained rather than regenerated')
   const resumes = h.result.data.resumes as Array<{ candidate_name: string; images: Array<{ base64: string }> }>
-  assert.equal(resumes.length, 1); assert.equal(resumes[0]!.candidate_name, '甲小明')
+  assert.deepEqual(resumes.map(resume => resume.candidate_name), ['甲小明', '乙小明'])
   assert.deepEqual(Buffer.from(resumes[0]!.images[0]!.base64, 'base64'), h.artifact)
-  // 恢复契约（与后端 resume_continuation._page_restored 对齐）：批次回执必须让
-  // 「页面已恢复」事实可见（visual_recovery.page_restored=true，后端据此允许沿
-  // 游标续筛处理剩余候选人）；同时原停止原因作为诊断保留，不被恢复成功抹掉
+  // Phase 8 retains both the completed image and the unfinished original target.
+  // A successful continuation reaches the requested quantity, rather than retaining the obstruction stop.
   assert.equal(v.page_restored, true)
-  assert.equal(typeof h.result.data.stop_reason, 'string')
-  assert.notEqual(h.result.data.stop_reason, '')
+  assert.equal(h.result.data.stop_reason, 'limit_reached')
 })
 
 test('independent: ordinary individual image error still closes safely and continues without paid recovery', async () => {

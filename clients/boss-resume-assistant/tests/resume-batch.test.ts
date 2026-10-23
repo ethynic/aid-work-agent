@@ -1,3 +1,4 @@
+import { structuralListSnapshot } from './structuralListFixture.js'
 import { createBossResumeBatchOperation } from '../src/main/operations/bossResumeBatch.js'
 import { emptyRecommendations } from './recommendationBoundaryFixture.js'
 import type { BossSession } from '../src/main/operations/bossContext.js'
@@ -70,69 +71,21 @@ function buildSnap(
 ): DomSnapshot {
   if (opts.canvas) return detailSnap({ name: '当前候选人', state: 'greet', decoyRows: rows, canvasNameOnly: true,
     extraItems: opts.extraCanvases?.map((bounds) => ({ canvas: true, bounds, parent: 0 })) })
-  const strings: string[] = ['', 'HTML']
-  const nvIndex: number[] = [0]
-  const nvValue: number[] = [0]
-  const nameIndex: number[] = [0]
-  const nameValue: number[] = [1]
-  const layoutNodeIndex: number[] = [0]
-  const layoutBounds: Array<[number, number, number, number]> = [[0, 0, 1249, 1277]]
-
-  const intern = (s: string): number => {
-    let i = strings.indexOf(s)
-    if (i < 0) {
-      strings.push(s)
-      i = strings.length - 1
-    }
-    return i
+  const snap = structuralListSnapshot(rows.map(row => ({ name: row.name,
+    button: [1130, row.buttonY - 16, 64, 32],
+    nameBounds: [317, row.buttonY - (row.nameDy ?? 8) - 10, 50, 20],
+  })), 1249, 1277)
+  for (const b of opts.extraCanvases ?? []) {
+    const doc = snap.documents[0]!, node = (doc.nodes.nodeValue as number[]).length
+    snap.strings.push('CANVAS')
+    ;(doc.nodes.nodeValue as number[]).push(0)
+    ;(doc.nodes.nodeName as number[]).push(snap.strings.length - 1)
+    ;(doc.nodes.parentIndex as number[]).push(0)
+    ;(doc.nodes.attributes as number[][]).push([])
+    ;(doc.nodes.contentDocumentIndex as number[]).push(-1)
+    doc.layout.nodeIndex.push(node); doc.layout.bounds.push(b); doc.layout.clientRects!.push([...b])
   }
-  let nextNi = 1
-  /** 文本节点（nodeValue 指向 strings；nodeName 空） */
-  const addText = (s: string, bounds: [number, number, number, number]): void => {
-    const ni = nextNi++
-    nvIndex.push(ni)
-    nvValue.push(intern(s))
-    nameIndex.push(ni)
-    nameValue.push(0)
-    layoutNodeIndex.push(ni)
-    layoutBounds.push(bounds)
-  }
-  /** CANVAS 元素节点（nodeName='CANVAS'，无文本） */
-  const addCanvas = (bounds: [number, number, number, number]): void => {
-    const ni = nextNi++
-    nvIndex.push(ni)
-    nvValue.push(0)
-    nameIndex.push(ni)
-    nameValue.push(intern('CANVAS'))
-    layoutNodeIndex.push(ni)
-    layoutBounds.push(bounds)
-  }
-
-  addText('筛选', [1100, 50, 80, 24])
-  for (const row of rows) {
-    // 真机锚定：姓名(342,y-8) 与活跃状态(400,y-8) 同行，按钮中心 (1162,y)
-    if (row.name !== null) addText(row.name, [317, row.buttonY - (row.nameDy ?? 8) - 10, 50, 20])
-    addText('刚刚活跃', [370, row.buttonY - 18, 60, 20]) // 中心 (400, y-8)
-    addText('本科', [317, row.buttonY + 30, 40, 20]) // 噪音：同行带外（y 差 38 > 8）
-    addText(GREET_STRING, [1130, row.buttonY - 16, 64, 32]) // 中心 (1162, y)
-  }
-  if (opts.canvas) addCanvas(CANVAS_BOUNDS)
-  for (const b of opts.extraCanvases ?? []) addCanvas(b)
-
-  return {
-    strings,
-    documents: [
-      {
-        nodes: {
-          nodeValue: { index: nvIndex, value: nvValue },
-          nodeName: { index: nameIndex, value: nameValue },
-          contentDocumentIndex: { index: [], value: [] },
-        },
-        layout: { nodeIndex: layoutNodeIndex, bounds: layoutBounds, clientRects: layoutBounds.map((b) => [...b]) },
-        scrollOffsetY: 0,
-      },
-    ],
-  }
+  return snap
 }
 
 /** 每张卡的行为脚本（按点击次序对位） */
@@ -243,6 +196,7 @@ test('locateCards：原始小数几何与 doctor 配对一致，iframe owner 和
   const snap = buildSnap([{ name: '张三丰', buttonY: 211.5, nameDy: 15.5 }])
   const list = snap.documents[0]!
   // 真实边界：按钮 bounds y=196/h=31，ownerY=80 → 291.5；姓名中心=276。
+  list.layout.bounds[list.layout.bounds.length - 2] = [1130, 196, 64, 31]
   list.layout.bounds[list.layout.bounds.length - 1] = [1130, 196, 64, 31]
   snap.documents = [
     { nodes: { nodeValue: [0, 0], contentDocumentIndex: { index: [1], value: [2] } },
@@ -261,14 +215,13 @@ test('locateCards：原始小数几何与 doctor 配对一致，iframe owner 和
   }
 })
 
-test('姓名节点小数也使用原始几何：15.75 接受，16 及超界拒绝', () => {
+test('同卡片姓名使用原始小数几何，不依赖旧的16像素同行阈值', () => {
   for (const buttonY of [292, 291.5, 291.75]) {
     for (const dy of [15.75, 16, 16.25, -15.75, -16, -16.25]) {
       const snap = buildSnap([{ name: '张三丰', buttonY, nameDy: dy }])
       const button = findButtonsByExactText(snap, '打招呼')[0]!
       const paired = pairCardNameWithPoint(snap, button, viewportOf(snap))
-      const expected = Math.abs(dy) < 16 ? { name: '张三丰', point: { x: 342, y: buttonY - dy } }
-        : { name: null, point: null }
+      const expected = { name: '张三丰', point: { x: 342, y: buttonY - dy } }
       assert.deepEqual(paired, expected, `buttonY=${buttonY}, dy=${dy}`)
       const [card] = new ResumeBatchReader(makeBatch([]).deps).locateCards(snap)
       assert.deepEqual(card, { name: expected.name, namePoint: expected.point, greetButtonY: buttonY })

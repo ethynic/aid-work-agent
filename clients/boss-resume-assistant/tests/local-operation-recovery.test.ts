@@ -51,6 +51,58 @@ test('readonly零输入且网页已满足：不再请求窗口诊断来否决正
   assert.deepEqual(h.seen.map(call => call.args.observation_mode), ['page'])
 })
 
+test('filter draft resumes the original setter on a healthy edit page without treating input stage as window failure', async () => {
+  for (const name of ['boss_filter', 'boss_clear_filter']) {
+    const h = harness([visual('absent', 'satisfied')], name)
+    const facts = h.initial.data.operation_recovery as Dict
+    facts.execution = { stage: 'input', input_status: 'attempted', attempts_used: 1, ordinary_retries_used: 0 }
+    facts.verification = { status: 'inconclusive', evidence: ['filter_phase=draft_edited'] }
+    h.initial.effect = 'partial'
+    const result = await h.wrapped.execute({ age: '不限' }, ctx())
+    assert.equal(result.success, true); assert.equal(h.calls.length, 2)
+    assert.deepEqual(h.seen.map(call => call.args.observation_mode), ['page'])
+    assert.equal(h.calls[1]!.ctx.previousPageExecution!.inputStatus, 'attempted')
+    assert.equal(h.calls[0]!.ctx.windowCaptureBudget, h.seen[0]!.ctx.windowCaptureBudget)
+    assert.equal(h.seen[0]!.ctx.windowCaptureBudget, h.calls[1]!.ctx.windowCaptureBudget)
+  }
+})
+
+test('a normal filter close suggestion returns to the setter while other obstructions still use the existing guarded dismiss', async () => {
+  for (const label of ['关闭筛选面板', '关闭筛选面板中的推广广告']) {
+    const observed = visual('present', 'not_satisfied', 'ref-filter')
+    const diagnosis = ((observed.data.visual as Dict).diagnosis as Dict)
+    diagnosis.proposed_action = { kind: 'dismiss', target_label: label }
+    const h = harness([observed, visual('absent', 'satisfied')])
+    const facts = h.initial.data.operation_recovery as Dict
+    facts.verification = { status: 'inconclusive', evidence: ['filter_phase=draft_edited'] }
+    const result = await h.wrapped.execute({}, ctx())
+    assert.equal(result.success, true)
+    assert.deepEqual(h.dismissals, label === '关闭筛选面板' ? [] : ['ref-filter'])
+  }
+})
+
+test('window fallback also preserves the normal draft filter panel instead of dismissing it', async () => {
+  const observed = visual('present','not_satisfied','window-filter')
+  ;((observed.data.visual as Dict).diagnosis as Dict).proposed_action = {kind:'dismiss',target_label:'关闭筛选面板'}
+  const h = harness([failResult('page','UI_CHANGED','page capture unavailable','none'),observed])
+  ;(h.initial.data.operation_recovery as Dict).verification = {status:'inconclusive',evidence:['filter_phase=draft_edited']}
+  const result = await h.wrapped.execute({},ctx())
+  assert.equal(result.success,true); assert.equal(h.calls.length,2); assert.deepEqual(h.dismissals,[])
+  assert.deepEqual(h.seen.map(c => c.args.observation_mode),['page','window'])
+})
+
+test('window capture fixed failure reasons and numeric geometry survive recovery without copying private diagnostics', async () => {
+  const failure = failResult('capture', 'INTERNAL_ERROR', 'private diagnostic', 'none', {
+    visual_failure: { stage: 'window_capture', original_code: 'INTERNAL_ERROR', reason: 'window_outside_screen', secret: 'no-leak',
+      geometry: { window: [-100, 0, 100, 100], screen: [0, 0, 1920, 1080], work: [0, 0, 1920, 1040], dpi: 144, title: 'no-leak' } } })
+  const h = harness([failResult('page', 'UI_CHANGED', 'page blocked', 'none'), failure])
+  const result = await h.wrapped.execute({}, ctx())
+  const observation = (meta(result).observations as Dict[])[1]!
+  assert.equal(observation.reason, 'window_outside_screen')
+  assert.deepEqual(observation.geometry, { window: [-100, 0, 100, 100], screen: [0, 0, 1920, 1080], work: [0, 0, 1920, 1040], dpi: 144 })
+  assert.equal(JSON.stringify(meta(result)).includes('no-leak'), false)
+})
+
 test('all 22 business entries share local ownership and the two primitives cannot recursively recover', async () => {
   assert.equal(Object.keys(LOCAL_RECOVERY_POLICIES).length, 22)
   assert.equal(Object.keys(OPERATIONS).length, 25)

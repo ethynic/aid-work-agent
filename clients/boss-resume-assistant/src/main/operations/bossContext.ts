@@ -361,7 +361,8 @@ export async function runBossOperation(
       && data.confirmed_items.length >= business!.completed_count!
     const completed = confirmed ? Math.max(tracker.completed, business!.completed_count!) : tracker.completed
     const effect = spec.kind === 'readonly' ? 'none' : confirmed && business?.status === 'confirmed'
-      ? 'partial' : writeEffect(false, mapped.code, completed)
+      ? 'partial' : facts?.operation_class === 'external_effect' && business?.status === 'not_started' && completed === 0
+        ? 'none' : writeEffect(false, mapped.code, completed)
     if (spec.kind === 'write' && completed > 0) data.completed = completed
     return failResult(runId, mapped.code, mapped.message, effect, boundData(data))
   } finally {

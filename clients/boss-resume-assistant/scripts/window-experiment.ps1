@@ -5,9 +5,18 @@
   [string]$Observation = '',
   [int]$X = -1,
   [int]$Y = -1,
-  [int]$MaxAgeSeconds = 120
+  [int]$MaxAgeSeconds = 120,
+  [switch]$AllowReposition,
+  [string]$ExpectedWindow = '',
+  [string]$CancelFile = ''
 )
 $ErrorActionPreference = 'Stop'
+function Assert-Active { if ($CancelFile -and (Test-Path -LiteralPath $CancelFile)) { throw 'window_capture_cancelled' } }
+function Rect-Data($r) { return @([int]$r.Left, [int]$r.Top, [int]$r.Right, [int]$r.Bottom) }
+$failureReason = ''
+$geometry = $null
+$repositioned = $false
+Assert-Active
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Windows.Forms
@@ -33,8 +42,14 @@ try {
     if ($age -lt 0 -or $age -gt $MaxAgeSeconds) { throw 'Observation expired; capture again' }
     [BossWindowExperiment]::RequireGeometry($window, $meta.window.left, $meta.window.top, $meta.window.width, $meta.window.height)
   }
+  Assert-Active
+  if ($ExpectedWindow) {
+    $expected = $ExpectedWindow | ConvertFrom-Json
+    if ([string]$expected.hwnd -ne $window.ToInt64().ToString() -or $expected.pid -ne $browserPid -or $expected.process_started_at -ne $processStartedAt) { $failureReason = 'window_identity_changed'; throw $failureReason }
+  }
   [BossWindowExperiment]::Foreground($window)
   Start-Sleep -Milliseconds 400
+  Assert-Active
   [BossWindowExperiment]::RequireForeground($window)
   $rect = [BossWindowExperiment]::ReadCaptureRect($window)
   $width = $rect.Right - $rect.Left
@@ -66,8 +81,30 @@ try {
     [BossWindowExperiment]::Click($window, $meta.window.left, $meta.window.top, $meta.window.width, $meta.window.height, $X, $Y, $scope)
     @{ clicked = $true; x = $X; y = $Y; space = 'window_image_px'; hwnd = $window.ToInt64().ToString() } | ConvertTo-Json -Compress
   } else {
-    $screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
-    if ($rect.Left -lt $screen.Left -or $rect.Top -lt $screen.Top -or $rect.Right -gt $screen.Right -or $rect.Bottom -gt $screen.Bottom) { throw 'Browser window extends outside visible screen; capture refused' }
+    $geometry = [BossWindowExperiment]::ReadGeometry($window)
+    if (-not [BossWindowExperiment]::Covered($geometry.Window, $geometry.Screens)) {
+      $failureReason = 'window_outside_screen'
+      if (-not $AllowReposition) { throw $failureReason }
+      Assert-Active
+      if ([BossWindowExperiment]::Find($browserPid) -ne $window -or ([DateTimeOffset](Get-Process -Id $browserPid).StartTime).ToUniversalTime().ToString('o') -ne $processStartedAt) { $failureReason = 'window_identity_changed'; throw $failureReason }
+      $failureReason = 'window_reposition_failed'
+      [BossWindowExperiment]::Reposition($window, $geometry, $CancelFile)
+      $repositioned = $true
+      Start-Sleep -Milliseconds 400
+      Assert-Active
+      [BossWindowExperiment]::Foreground($window)
+      Start-Sleep -Milliseconds 400
+      Assert-Active
+      [BossWindowExperiment]::RequireForeground($window)
+      if ([BossWindowExperiment]::Find($browserPid) -ne $window) { $failureReason = 'window_identity_changed'; throw $failureReason }
+      $geometry = [BossWindowExperiment]::ReadGeometry($window)
+      if (-not [BossWindowExperiment]::Covered($geometry.Window, $geometry.Screens)) { $failureReason = 'window_outside_screen'; throw $failureReason }
+      $rect = $geometry.Window
+      $width = $rect.Right - $rect.Left
+      $height = $rect.Bottom - $rect.Top
+    }
+    $failureReason = ''
+    Assert-Active
     $image = New-Object System.Drawing.Bitmap($width, $height)
     $graphics = [System.Drawing.Graphics]::FromImage($image)
     try {
@@ -77,9 +114,19 @@ try {
       $image.Save($Output, [System.Drawing.Imaging.ImageFormat]::Png)
     } finally { $graphics.Dispose(); $image.Dispose() }
     $dialogs = @([BossWindowExperiment]::OwnedDialogs($window) | ForEach-Object { @{ hwnd = $_.ToInt64().ToString(); title = [BossWindowExperiment]::Title($_); class = [BossWindowExperiment]::ClassName($_) } })
-    @{ captured_at = [DateTimeOffset]::UtcNow.ToString('o'); window = @{ hwnd = $window.ToInt64().ToString(); pid = $browserPid; process_started_at = $processStartedAt; left = $rect.Left; top = $rect.Top; width = $width; height = $height }; owned_dialogs = $dialogs } | ConvertTo-Json -Depth 5 -Compress
+    @{ captured_at = [DateTimeOffset]::UtcNow.ToString('o'); window = @{ hwnd = $window.ToInt64().ToString(); pid = $browserPid; process_started_at = $processStartedAt; left = $rect.Left; top = $rect.Top; width = $width; height = $height }; owned_dialogs = $dialogs; repositioned = $repositioned; geometry = @{ window = (Rect-Data $geometry.Window); screen = (Rect-Data $geometry.Screen); work = (Rect-Data $geometry.Work); dpi = $geometry.Dpi } } | ConvertTo-Json -Depth 5 -Compress
   }
 } catch {
+  if ($Action -eq 'capture' -and $window) {
+    if ($_.Exception.Message -match 'window_capture_cancelled') { $failureReason = 'window_capture_cancelled' }
+    if ($_.Exception.Message -eq 'window_geometry_unavailable') { $failureReason = 'window_geometry_unavailable' }
+    if (-not $failureReason) { $failureReason = 'window_capture_failed' }
+    $geometryData = $null
+    if ($geometry) { $geometryData = @{ window = (Rect-Data $geometry.Window); screen = (Rect-Data $geometry.Screen); work = (Rect-Data $geometry.Work); dpi = $geometry.Dpi } }
+    $diagnostic = @{ reason = $failureReason; repositioned = $repositioned; window = @{ hwnd = $window.ToInt64().ToString(); pid = $browserPid; process_started_at = $processStartedAt }; geometry = $geometryData } | ConvertTo-Json -Depth 5 -Compress
+    [Console]::Error.WriteLine('[BOSS_WINDOW_DIAGNOSTIC]' + $diagnostic)
+    exit 2
+  }
   # Preserve the zero-input/unknown boundary even if output serialization failed.
   if ($scope.InputStarted) { throw ('[BOSS_INPUT_UNKNOWN] ' + $_.Exception.Message) }
   throw ('[BOSS_WINDOW_REFUSED] ' + $_.Exception.Message)

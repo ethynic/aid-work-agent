@@ -50,7 +50,8 @@ test('同名即使有一人不可见也跳过，不能先点击可见者', async
 })
 test('无推进最多三次定位，不能回退逐屏扫描', async () => {
   const h=harness([{name:'甲小明',y:3000}],10000,0)
-  await assert.rejects(()=>new GreetExecutor(h.deps).greetVisible({names:['甲小明']}),/无法进入/)
+  const result = await new GreetExecutor(h.deps).greetVisible({names:['甲小明']})
+  assert.deepEqual(result.unavailableNames, ['甲小明'])
   assert.equal(h.deltas.length,3); assert.equal(h.clicks.length,0)
 })
 test('滚动期间目标消失，跳过且禁止使用旧点击点', async () => {
@@ -78,11 +79,11 @@ test('device px / CSS px=2：直接滚动正确转换；无有效 CSS 几何不�
   assert.throws(()=>candidateScrollEvent(broken,200),/有效根 HTML CSS/)
   assert.throws(()=>candidateScrollEvent(s,NaN),/有效根 HTML CSS/)
 })
-test('已滚入 fallback 区仍向上直接定位正常目标，不点推荐人', async () => {
+test('非空插入推荐分区不会排除名单内真实卡片，按近到远定位', async () => {
   const h=harness([{name:'甲小明',y:3000},{name:'乙小明',y:10000}],10000)
   h.deps.snapshot=async()=>loadedSnapshot(h.cards,10000-h.deltas.reduce((a,b)=>a-b,0),1)
   await new GreetExecutor(h.deps).greetVisible({names:['甲小明','乙小明']})
-  assert.deepEqual(h.clicks,['甲小明']); assert.ok(h.deltas[0]!<0)
+  assert.deepEqual(h.clicks,['乙小明','甲小明']); assert.ok(h.deltas[0]!<0)
 })
 test('定位时列表重新排布，按新布局修正，不使用原按钮坐标', async () => {
   const h=harness([{name:'甲小明',y:3000}],10000)
@@ -111,7 +112,8 @@ test('子文档比实际 iframe 高，按钮在 owner 外绝不点击', async ()
   const candidate=loadedCandidates(s)[0]!
   assert.equal(candidate.bottom,140);assert.equal(candidateButtonVisible(candidate),false)
   let clicks=0
-  await assert.rejects(()=>new GreetExecutor({snapshot:async()=>s,click:async()=>{clicks++},scroll:async()=>{},sleep:async()=>{}}).greetVisible({names:['甲小明']}),/无法进入/)
+  const result = await new GreetExecutor({snapshot:async()=>s,click:async()=>{clicks++},scroll:async()=>{},sleep:async()=>{}}).greetVisible({names:['甲小明']})
+  assert.deepEqual(result.unavailableNames,['甲小明'])
   assert.equal(clicks,0)
 })
 test('owner 被祖先 overflow 裁剪，按钮不进入操作区域', () => {
@@ -178,7 +180,7 @@ test('正式operation：混合名单公开回执分别包含成功、重名优�
   assert.deepEqual((result.data?.ambiguous_names as NonNullable<typeof result.data>['ambiguous_names'] as Array<{candidates:Array<{advantage:string|null}>}>)[0]?.candidates.map(c=>c.advantage),['Java优势','PHP优势'])
   assert.match(result.message,/姓名输入有误或页面已刷新/);assert.match(result.message,/重名 1 个/)
 })
-test('正式operation：推荐边界分支仍保留重名、未找到提示，零输入', async () => {
+test('正式operation：普通插入分区不制造终态，保留重名和未找到提示', async () => {
   const snapshot=loadedSnapshot([{name:'甲小明',y:300,advantage:'Java优势'},
     {name:'甲小明',y:5000},{name:'乙小明',y:10000}],10000,2)
   let inputs=0
@@ -186,10 +188,21 @@ test('正式operation：推荐边界分支仍保留重名、未找到提示，�
   const session: BossSession={snapshot:async()=>snapshot,click:forbidden,mouseWheel:forbidden,
     getUrl:async()=> 'https://www.zhipin.com/web/chat/recommend',close:async()=>{},
     clickBrowse:forbidden,pressEscape:forbidden,clickAndType:forbidden,captureFullpage:async()=>{throw Error('Unexpected capture')}}
-  const result=await createBossGreetOperation(async()=>session).execute({names:['甲小明','不存在','乙小明']},
+  const result=await createBossGreetOperation(async()=>session).execute({names:['甲小明','不存在']},
     {signal:new AbortController().signal,progress:()=>{}})
   assert.equal(result.success,true);assert.equal(inputs,0)
-  assert.equal(result.data?.stop_reason,'recommendations_boundary')
-  assert.deepEqual(result.data?.missing_names,['不存在','乙小明'])
-  assert.match(result.message,/推荐内容边界/);assert.match(result.message,/重名 1 个/);assert.match(result.message,/未找到 2 人/)
+  assert.equal(result.data?.stop_reason,undefined)
+  assert.deepEqual(result.data?.missing_names,['不存在'])
+  assert.match(result.message,/重名 1 个/);assert.match(result.message,/未找到 1 人/)
+})
+
+
+test('普通插入分区不会扩大授权：未批准的可见唯一候选人不能替代缺失或重名目标', async () => {
+  const h = harness([{name:'甲小明',y:300},{name:'甲小明',y:5000},{name:'乙小明',y:600}],0)
+  h.deps.snapshot = async () => loadedSnapshot(h.cards,0,2)
+  const result = await new GreetExecutor(h.deps).greetVisible({names:['甲小明','不存在']})
+  assert.deepEqual(h.clicks,[]); assert.deepEqual(h.deltas,[])
+  assert.deepEqual(result.greetedNames,[]); assert.deepEqual(result.missingNames,['不存在'])
+  assert.equal(result.ambiguousNames?.[0]?.name,'甲小明')
+  assert.equal(result.stopReason,undefined)
 })

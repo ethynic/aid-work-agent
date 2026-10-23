@@ -1,7 +1,7 @@
 import { DetailGreetExecutor } from './DetailGreetExecutor.js'
 import { mapExecutorError } from '../operations/errorMapping.js'
 import type { PageExecution } from '../operations/pageOperation.js'
-import { candidateReference, loadedCandidates, resolveCandidateReference } from './LoadedCandidateNavigation.js'
+import { candidateButtonVisible, candidateReference, candidateScrollEvent, loadedCandidates, resolveCandidateReference } from './LoadedCandidateNavigation.js'
 import { WinClickError, nativeWindowInputFailure } from '../input/WinMouseClicker.js'
 import { isTransientCdpError } from '../cdp/errors.js'
 /**
@@ -143,7 +143,7 @@ export interface ResumeBatchCheckpoint {
   attempted?: number
   scrollRounds?: number
   execution?: PageExecution
-  current?: { name: string; reference: string | null; phase: 'open' | 'read' | 'close'; failureStart: number; nativeWindowRefusals?: number }
+  current?: { name: string; reference: string | null; sourceIdentity?: string; phase: 'open' | 'read' | 'close'; failureStart: number; nativeWindowRefusals?: number }
 }
 
 /** 点卡片后轮询等详情 canvas 出现的总超时（ms）。真机 ~600ms 出现，轮询容错 */
@@ -236,13 +236,15 @@ export class ResumeBatchReader {
   locateCards(snap: DomSnapshot): BatchCard[] {
     const viewport = viewportOf(snap)
     const buttons = findButtonsByExactText(snap, GREET_TEXT)
-    return buttons.map((btn) => {
+    return buttons.flatMap((btn) => {
       const paired = pairCardNameWithPoint(snap, btn, viewport)
-      return {
+      if (!paired.name && loadedCandidates(snap).some(c => c.documentIndex === btn.documentIndex
+        && c.point?.x === btn.point.x && c.point.y === btn.point.y)) return []
+      return [{
         name: paired.name,
         namePoint: paired.point,
         greetButtonY: btn.point.y,
-      }
+      }]
     })
   }
 
@@ -267,6 +269,9 @@ export class ResumeBatchReader {
     const processedNames = checkpoint.processedNames ??= new Set<string>()
     const excluded = new Set(opts.excludeNames ?? [])
     const anonymousRows = checkpoint.anonymousRows ??= new Set<number>()
+    const seekAttempts = new Map<string, number>(), unavailableThisRun = new Set<string>()
+    const seekIdentities = new Map<string,string>()
+    const sourceIdentity = (c: ReturnType<typeof loadedCandidates>[number]) => JSON.stringify([c.name,c.identityDigest,c.scopeDigest,c.cardInfo])
     let scrollRounds = checkpoint.scrollRounds ?? 0
     let stopReason = 'viewport_complete'
     let attempted = checkpoint.attempted ?? 0
@@ -317,11 +322,13 @@ export class ResumeBatchReader {
       if (pending.phase === 'close') checkpoint.current = undefined
       else {
         processedNames.delete(pending.name)
-        // A refreshed list can move or remove the unfinished card. Rescan under
-        // the same job/filter intent, preserving completed names and payloads.
-        if (!this.locateCards(initial).some(card => card.name === pending.name)) {
-          resumeName = null
-          checkpoint.current = undefined
+        // A clipped name is still a loaded card. Preserve its original binding
+        // across window resize/scroll instead of rebinding a same-name replacement.
+        currentName = pending.name
+        const sources = loadedCandidates(initial).filter(c => c.name === pending.name && !c.excluded)
+        if (sources.length !== 1 || pending.reference && !resolveCandidateReference(initial,pending.name,pending.reference)
+          || pending.sourceIdentity && sourceIdentity(sources[0]!) !== pending.sourceIdentity) {
+          throw new ResumeBatchError('恢复后原未完成候选来源缺失或已变化，保留原绑定，未点击同名替代卡片')
         }
       }
     }
@@ -335,6 +342,18 @@ export class ResumeBatchReader {
       const snap = await this.deps.snapshot()
       const viewport = viewportOf(snap)
       const cards = this.locateCards(snap)
+      const loaded = loadedCandidates(snap)
+      for (const [name,identity] of seekIdentities) {
+        const matches = loaded.filter(c => c.name === name && !c.excluded)
+        if (matches.length !== 1 || sourceIdentity(matches[0]!) !== identity) {
+          if (resumeName === name) throw new ResumeBatchError('恢复定位期间原候选卡片已变化，未使用同名替代卡片')
+          unavailableThisRun.add(name)
+          this.execution = { attemptsUsed: 1, ordinaryRetriesUsed: 0, stage: 'postcheck', inputStatus: 'not_started',
+            verification: { status: 'unmet', evidence: ['定位期间原候选来源已变化；未使用旧坐标或同名替代卡片'] } }
+          pushFailure(name,'定位期间原候选卡片已变化，已保留为未处理')
+          seekIdentities.delete(name)
+        }
+      }
       const resultState = inspectRecommendationResults(snap)
       if (resultState.stopReason === 'no_matching_candidates') { stopReason = attempted === 0 ? resultState.stopReason : 'recommendations_boundary'; break }
       if (firstRound) {
@@ -346,7 +365,7 @@ export class ResumeBatchReader {
             (ys.length > 1 ? `，行距≈${ys[1]! - ys[0]!}px（参考机 184px）` : ''),
         )
       }
-      if (firstRound && cards.length === 0 && !opts.scanMore && !resultState.stopReason) {
+      if (firstRound && cards.length === 0 && loaded.length === 0 && !opts.scanMore && !resultState.stopReason) {
         throw new ResumeBatchError(
           '当前视口未找到任何牛人卡片（无「打招呼」按钮）：请确认已打开推荐牛人列表页且列表已加载，必要时先滚动让卡片进入视口',
         )
@@ -355,8 +374,30 @@ export class ResumeBatchReader {
       // key = name ?? `row@${按钮y}`：无名卡按行去重；同名牛人跳过（推荐流极少重复，重复时不重读同一人）。
       // 取卡即标记 key 已处理（含失败路径）——否则失败的卡会被下一轮重复选中，死循环
       const card = resumeName ? cards.find(c => c.name === resumeName) : cards.find((c) => c.name
-        ? !processedNames.has(c.name) && !excluded.has(c.name)
+        ? !processedNames.has(c.name) && !excluded.has(c.name) && !unavailableThisRun.has(c.name)
         : !anonymousRows.has(c.greetButtonY))
+      const hiddenTarget = loaded.find(c => !c.excluded && c.buttonText === GREET_TEXT && c.point
+        && (resumeName ? c.name === resumeName : !processedNames.has(c.name) && !excluded.has(c.name) && !unavailableThisRun.has(c.name))
+        && (!candidateButtonVisible(c) || !c.namePoint || c.namePoint.y < c.top + 8 || c.namePoint.y > c.bottom - 8))
+      if (!card && hiddenTarget) {
+        const tries = seekAttempts.get(hiddenTarget.name) ?? 0
+        if (this.deps.scroll && tries < 3 && hiddenTarget.bottom > hiddenTarget.top
+          && hiddenTarget.point!.x > hiddenTarget.left && hiddenTarget.point!.x < hiddenTarget.right) {
+          const event = candidateScrollEvent(snap, hiddenTarget.point!.y - (hiddenTarget.top + hiddenTarget.bottom) / 2)
+          if (this.deps.signal?.aborted) throw new CancelledError('已取消：候选卡片定位中止')
+          await this.input(() => this.deps.scroll!(event.x,event.y,event.deltaY))
+          seekIdentities.set(hiddenTarget.name,sourceIdentity(hiddenTarget))
+          seekAttempts.set(hiddenTarget.name,tries+1)
+          await this.sleep(1200)
+          continue // A fresh snapshot must prove both the name anchor and action are visible.
+        }
+        if (resumeName) throw new ResumeBatchError('恢复后原未完成候选人无法进入可操作视窗，未使用旧坐标')
+        unavailableThisRun.add(hiddenTarget.name)
+        this.execution = { attemptsUsed: 1, ordinaryRetriesUsed: 0, stage: 'postcheck', inputStatus: 'not_started',
+          verification: { status: 'unmet', evidence: ['同卡片已识别但未能进入可操作视窗；未点击、未标记已处理'] } }
+        pushFailure(hiddenTarget.name,'候选卡片暂不可操作，已保留为未处理')
+        continue
+      }
       if (resumeName && !card) throw new ResumeBatchError('恢复后原未完成候选人尚不可定位，未跳过该人或改读其他人')
       if (resumeName && cards.filter(c => c.name === resumeName).length !== 1) throw new ResumeBatchError('恢复后原未完成候选人姓名有歧义，未改读其他人')
       if (!card) {
@@ -387,6 +428,13 @@ export class ResumeBatchReader {
         anonymousRows.clear()
         continue
       }
+      if (card.name && loaded.filter(c => c.name === card.name && !c.excluded).length > 1) {
+        unavailableThisRun.add(card.name)
+        this.execution = { attemptsUsed: 1, ordinaryRetriesUsed: 0, stage: 'postcheck', inputStatus: 'not_started',
+          verification: { status: 'unmet', evidence: ['同名卡片来源不唯一；未点击、未标记已处理'] } }
+        pushFailure(card.name,'同名候选卡片无法唯一绑定，已保留为未处理')
+        continue
+      }
       if (card.name) processedNames.add(card.name)
       else anonymousRows.add(card.greetButtonY)
 
@@ -406,11 +454,15 @@ export class ResumeBatchReader {
         this.execution = { attemptsUsed: 1, ordinaryRetriesUsed: 0, stage: 'prepared', inputStatus: 'not_started', verification: { status: 'inconclusive', evidence: [] } }
         const bound = loadedCandidates(snap).filter(candidate => candidate.name === card.name && !candidate.excluded)
         checkpoint.current = { name: card.name, reference: bound.length === 1 ? candidateReference(bound[0]!) : null,
+          ...(bound.length === 1 ? { sourceIdentity: sourceIdentity(bound[0]!) } : {}),
           phase: 'open', failureStart: failures.length }
       }
       resumeName = null
       if (checkpoint.current?.reference && !resolveCandidateReference(snap, card.name, checkpoint.current.reference)) {
         throw new ResumeBatchError('原候选卡片在继续读取前已变化，未点击替代卡片')
+      }
+      if (checkpoint.current?.sourceIdentity && loaded.filter(c => c.name === card.name && sourceIdentity(c) === checkpoint.current!.sourceIdentity).length !== 1) {
+        throw new ResumeBatchError('原候选来源在继续读取前已变化，未点击替代卡片')
       }
 
       // 1. 点击姓名节点打开详情，轮询等大 canvas 出现（真机 ~600ms）。
@@ -446,6 +498,11 @@ export class ResumeBatchReader {
               throw new ResumeBatchError('重试前原候选卡片已变化，未点击同名替代卡片')
             }
             const freshCard = cardsNow.find((candidate) => candidate.name === card.name)
+            const freshSources = loadedCandidates(retrySnap).filter(c => c.name === card.name && !c.excluded)
+            if (freshCard && (freshSources.length !== 1 || checkpoint.current?.sourceIdentity
+              && sourceIdentity(freshSources[0]!) !== checkpoint.current.sourceIdentity)) {
+              throw new ResumeBatchError('重试前原候选来源不唯一或已变化，未点击同名替代卡片')
+            }
             if (!freshCard?.namePoint) {
               // 原卡片在重试前从列表消失（推荐流刷新/列表更新）：无残留详情（上方已关），
               // 本份记失败后回到批次主循环——即使当前视口已无卡片，也复用主循环既有的

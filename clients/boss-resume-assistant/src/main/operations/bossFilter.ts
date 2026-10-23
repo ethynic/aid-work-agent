@@ -4,7 +4,7 @@
  * 推荐牛人页筛选面板：设置经验/学历/薪资（替换语义，先清除再选）或一键清空。
  * 全部走 Win32 真实鼠标通道；写动作，徽章计数校验通过才算成功。
  */
-import { FilterSetter, FilterPostconditionError, FILTER_SNAPSHOT_OPTIONS, type FilterSpec, type FilterPostcondition } from '../boss/FilterSetter.js'
+import { FilterSetter, FilterSetError, FilterPostconditionError, FILTER_SNAPSHOT_OPTIONS, type FilterSpec, type FilterPostcondition } from '../boss/FilterSetter.js'
 import { WinClickError } from '../input/WinMouseClicker.js'
 import { CancelledError } from './types.js'
 import { pageFacts, pageFailure, type PageExecution } from './pageOperation.js'
@@ -35,17 +35,50 @@ function verification(value: FilterPostcondition): PageExecution['verification']
   return { status: value.status, evidence: [`filter_button_count=${value.observedCount ?? 'unreadable'}; expected=${value.expectedCount ?? 'unknown'}; panel_open=${value.panelOpen}`] }
 }
 
+function filterFacts(setter: FilterSetter, name: string, goal: string, expected: string, execution: PageExecution) {
+  const phase = setter.editPhase === 'not_started'
+    ? execution.verification.evidence.find((value) => /^filter_phase=(draft_edited|submitted)$/.test(value))?.split('=')[1] ?? 'not_started'
+    : setter.editPhase
+  const evidence = execution.verification.evidence.filter((value) => !value.startsWith('filter_phase='))
+  execution.verification.evidence = [...evidence.slice(-8), `filter_phase=${phase}`]
+  return pageFacts(name, goal, phase === 'draft_edited'
+    ? '原筛选草稿可能已改变；正常筛选编辑面板不是障碍；确认原推荐页可继续编辑即可，随后按原请求重新设置并提交核验'
+    : expected, execution)
+}
+
+function filterEffect(result: OperationResult): OperationResult {
+  const facts = result.data.operation_recovery as { verification?: { evidence?: string[] } } | undefined
+  const phase = facts?.verification?.evidence?.find((value) => value.startsWith('filter_phase='))?.split('=')[1]
+  return !result.success && phase === 'draft_edited' && result.effect === 'none'
+    ? { ...result, effect: 'partial', retryable: false } : result
+}
+
 async function verifiedFilter<T>(setter: FilterSetter, invoke: () => Promise<T>, execution: PageExecution,
-  name: string, goal: string, expected: string, progress: OpContext['progress'], perf?: PerfCollector): Promise<T> {
+  name: string, goal: string, expected: string, progress: OpContext['progress'], perf?: PerfCollector, resumeSubmitted = false): Promise<T> {
   for (;;) {
     execution.attemptsUsed++
     try {
+      if (resumeSubmitted) {
+        // A lost confirm response is checked using the retained, validated result before clearing anything.
+        const previous = await setter.verifyLastPostcondition()
+        execution.verification = verification(previous)
+        if (previous.status === 'met' && (name === 'boss_clear_filter' || previous.result)) {
+          execution.stage = 'postcheck'
+          return previous.result as T
+        }
+        if (previous.status !== 'unmet') throw new FilterSetError('原筛选提交结果仍无法确认，保留原提交状态，未重新清除或选值')
+        resumeSubmitted = false
+      }
       const result = await invoke()
       execution.stage = 'postcheck'
       execution.verification = { status: 'met', evidence: ['executor已核验实际按钮计数、选项与面板关闭；不可应用条件保留skipped结果'] }
       return result
     } catch (error) {
-      if (error instanceof CancelledError) throw error
+      if (error instanceof CancelledError) {
+        if (setter.editPhase === 'not_started') throw error
+        const facts = filterFacts(setter, name, goal, expected, execution)
+        throw new CodedOperationError('CANCELLED', error.message, { operation_recovery: facts, page_operation: facts })
+      }
       let observed: FilterPostcondition | undefined
       if (execution.inputStatus !== 'not_started' || error instanceof FilterPostconditionError) {
         // Phase 5 存活热点分段：失败后的只读核验此前未包装计时（未包装调用），
@@ -74,14 +107,14 @@ async function verifiedFilter<T>(setter: FilterSetter, invoke: () => Promise<T>,
           continue
         }
       }
-      pageFailure(error, pageFacts(name, goal, expected, execution))
+      pageFailure(error, filterFacts(setter, name, goal, expected, execution))
     }
   }
 }
 
 function filterExecution(previous?: PageExecution): PageExecution {
-  return { attemptsUsed: previous?.attemptsUsed ?? 0, ordinaryRetriesUsed: previous?.ordinaryRetriesUsed ?? 0, inputStatus: 'not_started', stage: 'prepared',
-    verification: { status: 'inconclusive', evidence: [] } }
+  return { attemptsUsed: previous?.attemptsUsed ?? 0, ordinaryRetriesUsed: previous?.ordinaryRetriesUsed ?? 0, inputStatus: previous?.inputStatus ?? 'not_started', stage: 'prepared',
+    verification: { status: 'inconclusive', evidence: previous?.verification.evidence.filter((value) => value.startsWith('filter_phase=')) ?? [] } }
 }
 
 function trackedClick(click: import('./bossContext.js').BossSession['click'], execution: PageExecution): typeof click {
@@ -90,7 +123,7 @@ function trackedClick(click: import('./bossContext.js').BossSession['click'], ex
     execution.stage = 'input'; execution.inputStatus = 'unknown'
     try { await click(point, viewport); execution.inputStatus = 'attempted' }
     catch (error) {
-      if (error instanceof WinClickError && error.exitCode === 2) execution.inputStatus = previous
+      if (error instanceof WinClickError && error.exitCode === 2 && !error.message.includes('[BOSS_INPUT_UNKNOWN]')) execution.inputStatus = previous
       throw error
     }
   }
@@ -138,7 +171,9 @@ export function createBossFilterOperation(
   return {
     name: 'boss_filter',
     execute(args: BossFilterArgs, ctx: OpContext): Promise<OperationResult> {
-      return runBossOperation(
+      let retainedSetter: FilterSetter | undefined
+      let retainedExecution: PageExecution | undefined
+      const run = (ctx: OpContext): Promise<OperationResult> => runBossOperation(
         { kind: 'write', name: 'boss_filter' },
         ctx,
         sessionFactory,
@@ -153,7 +188,8 @@ export function createBossFilterOperation(
           } catch { /* 非法URL按错误页面拒绝，不能根据后台iframe文案放行。 */ }
           if (!onRecommend) throw new CodedOperationError('WRONG_PAGE', '当前不在 BOSS 推荐牛人页面，请先用 boss_goto recommend；后台筛选文案不构成页面前置条件')
           ctx.progress({ stage: 'execute', message: '设置筛选面板' })
-          const execution = filterExecution(ctx.previousPageExecution)
+          const execution = filterExecution(ctx.previousPageExecution ?? retainedExecution)
+          retainedExecution = execution
           const goal = `设置候选人筛选条件：${JSON.stringify(args).slice(0, 850)}`
           const expected = '筛选面板已关闭；实际筛选按钮数字等于已应用条件数，选中条件与请求匹配'
           const setter = new FilterSetter({
@@ -169,6 +205,9 @@ export function createBossFilterOperation(
             mouseWheel: session.mouseWheel,
             drag: session.drag,
           })
+          const resumeSubmitted = retainedSetter?.editPhase === 'submitted'
+          if (retainedSetter) setter.retainInvocationState(retainedSetter)
+          retainedSetter = setter
           const spec: FilterSpec = {
             experience: args.experience?.trim(),
             educations: args.educations?.map((e) => e.trim()),
@@ -180,7 +219,7 @@ export function createBossFilterOperation(
             first_degree_only: args.first_degree_only,
           }
           let result: Awaited<ReturnType<FilterSetter['apply']>>
-          result = await verifiedFilter(setter, () => setter.apply(spec), execution, 'boss_filter', goal, expected, ctx.progress, perf)
+          result = await verifiedFilter(setter, () => setter.apply(spec), execution, 'boss_filter', goal, expected, ctx.progress, perf, resumeSubmitted)
           // 保底映射说明：LLM/用户传的档位页面上不存在时已自动映射到最接近的真实档位，必须转述
           const subNote = result.substitutions
             .map((s) => `${s.row}「${s.requested}」无该档位，已按最接近的「${s.matched}」设置`)
@@ -206,7 +245,9 @@ export function createBossFilterOperation(
             effect: result.applied ? 'applied' as const : 'none' as const,
           }
         },
-      )
+      ).then(filterEffect)
+      if (ctx.recoveryContinuation) ctx.recoveryContinuation.resume = run
+      return run(ctx)
     },
   }
 }
@@ -217,7 +258,9 @@ export function createBossClearFilterOperation(
   return {
     name: 'boss_clear_filter',
     execute(_args: Record<string, never>, ctx: OpContext): Promise<OperationResult> {
-      return runBossOperation(
+      let retainedSetter: FilterSetter | undefined
+      let retainedExecution: PageExecution | undefined
+      const run = (ctx: OpContext): Promise<OperationResult> => runBossOperation(
         { kind: 'write', name: 'boss_clear_filter' },
         ctx,
         sessionFactory,
@@ -232,7 +275,8 @@ export function createBossClearFilterOperation(
           } catch { /* 非法URL按错误页面拒绝，不能根据后台iframe文案放行。 */ }
           if (!onRecommend) throw new CodedOperationError('WRONG_PAGE', '当前不在 BOSS 推荐牛人页面，请先用 boss_goto recommend；后台筛选文案不构成页面前置条件')
           ctx.progress({ stage: 'execute', message: '打开面板 → 清除 → 确定' })
-          const execution = filterExecution(ctx.previousPageExecution)
+          const execution = filterExecution(ctx.previousPageExecution ?? retainedExecution)
+          retainedExecution = execution
           const goal = '清除当前候选人筛选条件'
           const expected = '筛选面板已关闭；实际可见筛选按钮不带数字（0个条件）'
           const setter = new FilterSetter({
@@ -244,7 +288,10 @@ export function createBossClearFilterOperation(
             stepSync: <T>(name: string, fn: () => T) => perf.timeSync(name, fn),
             mouseWheel: session.mouseWheel,
           })
-          await verifiedFilter(setter, () => setter.clear(), execution, 'boss_clear_filter', goal, expected, ctx.progress, perf)
+          const resumeSubmitted = retainedSetter?.editPhase === 'submitted'
+          if (retainedSetter) setter.retainInvocationState(retainedSetter)
+          retainedSetter = setter
+          await verifiedFilter(setter, () => setter.clear(), execution, 'boss_clear_filter', goal, expected, ctx.progress, perf, resumeSubmitted)
           return {
             message: '筛选已清除（徽章无计数）',
             data: { filter_count: 0, applied: true,
@@ -253,7 +300,9 @@ export function createBossClearFilterOperation(
             effect: 'applied' as const,
           }
         },
-      )
+      ).then(filterEffect)
+      if (ctx.recoveryContinuation) ctx.recoveryContinuation.resume = run
+      return run(ctx)
     },
   }
 }

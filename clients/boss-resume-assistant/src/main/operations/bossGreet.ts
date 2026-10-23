@@ -139,6 +139,8 @@ export function createBossGreetOperation(
               parts.push(`未找到 ${missing.length} 人（${missing.join('、')}），已跳过；可能姓名输入有误或页面已刷新移除${stopNote}`)
             }
             if (ambiguous.length > 0) parts.push(`重名 ${ambiguous.length} 个（${ambiguous.map(c=>c.name).join('、')}），已跳过，请根据返回的各人优势确认对象`)
+            if (result.alreadyContactedNames?.length) parts.push(`已联系（${result.alreadyContactedNames.join('、')}），未重复发送`)
+            if (result.unavailableNames?.length) parts.push(`暂不可操作（${result.unavailableNames.join('、')}），未发送、仍未完成`)
             return {
               message: parts.join('；'),
               data: {
@@ -147,6 +149,8 @@ export function createBossGreetOperation(
                 greeted_names: greeted,
                 missing_names: missing,
                 ambiguous_names: ambiguous,
+                ...(result.alreadyContactedNames?.length ? { already_contacted_names: result.alreadyContactedNames } : {}),
+                ...(result.unavailableNames?.length ? { unavailable_names: result.unavailableNames } : {}),
                 stopped_by_limit: result.stoppedByLimit ?? false,
                 ...(result.stopReason ? { stop_reason: result.stopReason } : {}),
               },

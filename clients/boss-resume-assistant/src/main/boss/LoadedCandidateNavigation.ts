@@ -32,6 +32,8 @@ export interface LoadedCandidate {
   left: number
   right: number
   buttonBounds: number[] | null
+  /** Same-card name anchor from this snapshot, never a nearby page label. */
+  namePoint?: ClickPoint | null
 }
 const has = (s: DomSnapshot, di: number, ni: number, token: string): boolean => (classOf(s, di, ni) ?? '').split(/\s+/).includes(token)
 const rect = (b: number[] | undefined): b is number[] => !!b && b.length === 4 && b.every(Number.isFinite) && b[2]! > 0 && b[3]! > 0
@@ -91,7 +93,7 @@ export function loadedCandidates(s: DomSnapshot): LoadedCandidate[] {
   const account = membershipAccountKey(s)
   s.documents.forEach((d, di) => {
     const parents = parentMapOf(d)
-    if (!parents || !d.nodes.attributes) return
+    if (!parents || !d.nodes.attributes || !d.nodes.nodeName) return
     const values = indexedValues(d.nodes.nodeValue, 'nodeValue')
     const children = new Map<number, number[]>()
     for (const [node, parent] of parents) { const siblings = children.get(parent) ?? []; siblings.push(node); children.set(parent, siblings) }
@@ -188,6 +190,9 @@ export function loadedCandidates(s: DomSnapshot): LoadedCandidate[] {
         || !has(s, di, container, 'list-wrap') || !has(s, di, container, 'card-list-wrap')) continue
       const action = actions.get(card), selected = action?.length === 1 ? action[0] : undefined
       const b = selected ? d.layout.bounds[layout.get(selected.node) ?? -1] : undefined
+      const nb = d.layout.bounds[layout.get(node) ?? -1]
+      const namePoint = rect(nb) ? { x: offset.x + nb[0]! + nb[2]! / 2 - (d.scrollOffsetX ?? 0),
+        y: offset.y + nb[1]! + nb[3]! / 2 - (d.scrollOffsetY ?? 0) } : null
       const screen = rect(b) ? [offset.x + b[0]! - (d.scrollOffsetX ?? 0), offset.y + b[1]! - (d.scrollOffsetY ?? 0), b[2]!, b[3]!] : null
       const advantages = advantageSections.get(card)
       const advantage = advantages?.length === 1 && advantages[0] ? advantages[0] : null
@@ -214,7 +219,7 @@ export function loadedCandidates(s: DomSnapshot): LoadedCandidate[] {
       out.push({ name, advantage, cardInfo, identityDigest, scopeDigest: scope ? createHash('sha256').update(scope).digest('hex') : null,
         excluded: excludedRecommendationNode(s, di, node), documentIndex: di,
         buttonText: selected?.text ?? null, point: screen ? { x: screen[0]! + screen[2]! / 2, y: screen[1]! + screen[3]! / 2 } : null,
-        buttonBounds: screen, top, bottom, left, right })
+        buttonBounds: screen, namePoint, top, bottom, left, right })
     }
   })
   return out

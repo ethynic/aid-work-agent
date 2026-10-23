@@ -23,6 +23,11 @@ import {
 import { CancelledError, CodedOperationError } from '../operations/types.js'
 import { effectiveMembership, filterGroup, inspectMembership, membershipAccountKey, type MembershipHint, type MembershipObservation } from './MembershipInspector.js'
 import { closeFilterPaywall, inspectFilterPaywall } from './FilterPaywall.js'
+import { WinClickError } from '../input/WinMouseClicker.js'
+
+export type FilterEditPhase = 'not_started' | 'draft_edited' | 'submitted'
+
+interface FilterClip { left: number; right: number; top: number; bottom: number }
 
 export class FilterSetError extends Error {
   constructor(message: string) {
@@ -234,7 +239,17 @@ export class FilterSetter {
   private toolbarAnchor?: { documentIndex: number; bounds: [number, number, number, number] }
   private expectedCount: number | null = null
   private pendingResult?: FilterApplyResult
+  private phase: FilterEditPhase = 'not_started'
 
+  get editPhase(): FilterEditPhase { return this.phase }
+  /** Invocation-private handoff to a fresh session; no page coordinates or callbacks are reused. */
+  retainInvocationState(previous: FilterSetter): void {
+    this.phase = previous.phase
+    this.expectedCount = previous.expectedCount
+    this.pendingResult = previous.pendingResult ? structuredClone(previous.pendingResult) : undefined
+    this.accountKey = previous.accountKey
+    this.toolbarAnchor = undefined // Window recovery may have changed geometry; re-anchor from the new snapshot.
+  }
   get membership(): MembershipObservation { return this.observedMembership }
   get accountRef(): string | null { return this.accountKey ?? null }
   get unreadableRows(): UnreadablePanelRow[] { return this.unreadablePanelRows.map((row) => ({ ...row })) }
@@ -260,7 +275,7 @@ export class FilterSetter {
     await this.step('panel:clear', async () => {
       const clearBtn = this.locateUniqueText(snap, (s) => s === '清除', '清除按钮')
       this.deps.onMutation?.()
-      await this.deps.click(clearBtn, viewportOf(snap))
+      await this.phaseClick(clearBtn, snap, 'draft_edited')
       await this.sleep(500)
     })
 
@@ -269,7 +284,7 @@ export class FilterSetter {
     this.expectedCount = 0
     await this.step('panel:confirm', async () => {
       const confirm = this.locateUniqueText(snap, (s) => s === '确定', '确定按钮')
-      await this.deps.click(confirm, viewportOf(snap))
+      await this.phaseClick(confirm, snap, 'submitted')
       await this.sleep(2000)
     })
 
@@ -413,7 +428,7 @@ export class FilterSetter {
     await this.step('panel:clear', async () => {
       const clearBtn = this.locateUniqueText(snap, (s) => s === '清除', '清除按钮')
       this.deps.onMutation?.()
-      await this.deps.click(clearBtn, viewportOf(snap))
+      await this.phaseClick(clearBtn, snap, 'draft_edited')
       await this.sleep(500)
     })
 
@@ -461,7 +476,7 @@ export class FilterSetter {
     this.pendingResult = { filterCount: expected, substitutions, appliedRows: rows.map((r) => ({ label: r.labelPrefix, options: [...r.options] })), ...(appliedAge ? { age: appliedAge } : {}), firstDegreeOnly, membership: this.observedMembership, skippedFilters, applied: true }
     await this.step('panel:confirm', async () => {
       const confirm = this.locateUniqueText(snap, (s) => s === '确定', '确定按钮')
-      await this.deps.click(confirm, viewportOf(snap))
+      await this.phaseClick(confirm, snap, 'submitted')
       await this.sleep(2000)
     })
 
@@ -473,10 +488,22 @@ export class FilterSetter {
   }
 
   /** 只读 fresh 核验，不打开面板、不点击；快照 I/O 错误原样传播。 */
-  async verifyLastPostcondition(): Promise<FilterPostcondition> {
-    const snap = await this.deps.snapshot()
-    const observed = this.observePostcondition(snap, this.expectedCount)
+  async verifyLastPostcondition(snapshot?: DomSnapshot): Promise<FilterPostcondition> {
+    const snap = snapshot ?? await this.deps.snapshot()
+    const observed = this.observePostcondition(snap, this.phase === 'submitted' ? this.expectedCount : null)
     return { ...observed, ...(observed.status === 'met' && this.pendingResult ? { result: structuredClone(this.pendingResult) } : {}) }
+  }
+
+  /** Preserve the commit boundary on ambiguous input; certified zero-input rejection keeps the previous phase. */
+  private async phaseClick(point: ClickPoint, snap: DomSnapshot, next: FilterEditPhase): Promise<void> {
+    if (this.deps.signal?.aborted) throw new CancelledError()
+    const previous = this.phase
+    this.phase = next
+    try { await this.deps.click(point, viewportOf(snap)) }
+    catch (error) {
+      if (error instanceof WinClickError && error.exitCode === 2 && !error.message.includes('[BOSS_INPUT_UNKNOWN]')) this.phase = previous
+      throw error
+    }
   }
 
   /** Pure snapshot reader shared by recovery; never opens or changes the panel. */
@@ -985,44 +1012,60 @@ export class FilterSetter {
     return [b[0]! + offset.x - (doc.scrollOffsetX ?? 0), b[1]! + offset.y - (doc.scrollOffsetY ?? 0), b[2]!, b[3]!]
   }
 
-  /**
-   * 可视 clip（panel 模式 = 行标签 LCA 容器与视口的交集，容器取不到时退化为仅视口；
-   * viewport 模式 = 仅视口，供「清除/确定」按钮用——按钮在弹窗 footer，不随内容区滚动，
-   * 用行容器底做下界会把 footer 按钮误判为越界）。
-   */
-  private visibleClipOf(snap: DomSnapshot, mode: 'panel' | 'viewport', hit?: VisibleHit): { top: number; bottom: number } {
+  /** The click clip includes every ancestor; the wheel clip starts at the actual scrollport.
+   * A hidden group moving with the content may be entirely offscreen without hiding that scrollport. */
+  private visibleClipOf(snap: DomSnapshot, mode: 'panel' | 'viewport', hit: VisibleHit, forScroll = false): FilterClip {
     const viewport = viewportOf(snap)
-    let top = 0
-    let bottom = viewport.height
-    if (mode === 'panel') {
-      if (hit && snap.documents[hit.documentIndex]?.layout.styles?.length) {
-        const doc = snap.documents[hit.documentIndex]!
-        const parents = parentMapOf(doc)
-        let cur: number | undefined = hit.nodeIndex
-        const seen = new Set<number>()
-        while (cur !== undefined && !seen.has(cur)) {
-          seen.add(cur)
-          const index = doc.layout.nodeIndex.indexOf(cur)
-          const overflow = snap.strings[doc.layout.styles?.[index]?.[1] ?? -1]
-          if (overflow && ['auto', 'scroll', 'hidden', 'clip'].includes(overflow)) {
-            const b = this.nodeGlobalBounds(snap, hit.documentIndex, cur)
-            if (b) { top = Math.max(top, b[1]); bottom = Math.min(bottom, b[1] + b[3]) }
-          }
-          cur = parents?.get(cur)
-        }
-        if (bottom <= top) throw new PanelScrollError('筛选面板可视滚动区域为空，拒绝盲点')
-        return { top, bottom }
+    const clip: FilterClip = { left: 0, right: viewport.width, top: 0, bottom: viewport.height }
+    const intersect = (di: number, node: number, force = false) => {
+      const doc = snap.documents[di]!, index = doc.layout.nodeIndex.indexOf(node)
+      const styles = doc.layout.styles?.[index]
+      const clips = (axis: number) => force || ['auto', 'scroll', 'hidden', 'clip'].includes(snap.strings[styles?.[axis] ?? -1] ?? '')
+      if (!clips(0) && !clips(1)) return
+      const b = this.nodeGlobalBounds(snap, di, node)
+      if (!b || !b.every(Number.isFinite) || b[2] <= 0 || b[3] <= 0) throw new PanelScrollError(`筛选面板裁剪祖先几何不可读（doc=${di}, node=${node}），拒绝盲点`)
+      if (clips(0)) { clip.left = Math.max(clip.left, b[0]); clip.right = Math.min(clip.right, b[0] + b[2]) }
+      if (clips(1)) { clip.top = Math.max(clip.top, b[1]); clip.bottom = Math.min(clip.bottom, b[1] + b[3]) }
+    }
+    const doc = snap.documents[hit.documentIndex]!
+    if (mode === 'panel' && doc.layout.styles?.length) {
+      const parents = parentMapOf(doc), ancestors: number[] = [], seen = new Set<number>()
+      let node: number | undefined = hit.nodeIndex
+      while (node !== undefined && node >= 0 && !seen.has(node)) {
+        seen.add(node); ancestors.push(node); node = parents?.get(node)
       }
+      const scrollAt = ancestors.findIndex((n) => ['auto', 'scroll'].includes(snap.strings[doc.layout.styles?.[doc.layout.nodeIndex.indexOf(n)]?.[1] ?? -1] ?? ''))
+      // No proven scrollport: retain all true clips rather than expanding to the screen.
+      for (const ancestor of ancestors.slice(forScroll && scrollAt >= 0 ? scrollAt : 0)) intersect(hit.documentIndex, ancestor)
+    } else if (mode === 'panel') {
       const allLabelHits = ROW_DEFS.flatMap((d) => this.visibleHits(snap, (s) => s.startsWith(d.labelPrefix)))
       for (const [docIdx, nodeIdx] of this.panelContainerByDoc(snap, allLabelHits)) {
         const b = this.nodeGlobalBounds(snap, docIdx, nodeIdx)
         if (b) {
-          bottom = Math.min(bottom, b[1] + b[3])
-          top = Math.max(top, b[1])
+          clip.bottom = Math.min(clip.bottom, b[1] + b[3])
+          clip.top = Math.max(clip.top, b[1])
         }
       }
     }
-    return { top, bottom }
+    // Child-document bounds do not establish visibility: retain the real iframe and its outer clips.
+    let current = hit.documentIndex
+    const documents = new Set<number>()
+    while (current !== 0) {
+      if (documents.has(current)) throw new PanelScrollError('筛选面板iframe祖先循环，拒绝盲点')
+      documents.add(current)
+      const owners: Array<{ di: number; node: number }> = []
+      snap.documents.forEach((d, di) => {
+        for (const [node, child] of indexedValues(d.nodes.contentDocumentIndex, 'contentDocumentIndex')) if (child === current) owners.push({ di, node })
+      })
+      if (owners.length !== 1) throw new PanelScrollError('筛选面板iframe不可唯一定位，拒绝盲点')
+      const owner = owners[0]!, parents = parentMapOf(snap.documents[owner.di]!), seen = new Set<number>()
+      let node: number | undefined = owner.node
+      while (node !== undefined && node >= 0 && !seen.has(node)) {
+        seen.add(node); intersect(owner.di, node, node === owner.node); node = parents?.get(node)
+      }
+      current = owner.di
+    }
+    return clip
   }
 
   /** 仅筛选滚轮使用根 HTML 同节点的 bounds/clientRects，点击仍保留 device bounds 口径。 */
@@ -1069,15 +1112,23 @@ export class FilterSetter {
       // 与滚动/快照（各自已计）互斥；每次迭代记一次。
       const geo = this.stepSync('filter:visible:clip', () => {
         const hit = locate(snap)
-        const cy = this.toGlobalPoint(snap, hit).y
+        const point = this.toGlobalPoint(snap, hit)
         const clip = this.visibleClipOf(snap, mode, hit)
-        return { hit, cy, clip }
+        const scrollClip = this.visibleClipOf(snap, mode, hit, true)
+        return { hit, point, clip, scrollClip }
       })
       const hit = geo.hit
-      const cy = geo.cy
-      const { top, bottom } = geo.clip
+      const cy = geo.point.y
+      const { top, bottom } = geo.scrollClip
       const range = `[${Math.round(top)}, ${Math.round(bottom)}]`
-      if (cy <= bottom - padding && cy >= top + padding) return snap
+      if (cy <= geo.clip.bottom - padding && cy >= geo.clip.top + padding
+        && geo.point.x >= geo.clip.left && geo.point.x <= geo.clip.right) return snap
+      if (bottom <= top || geo.scrollClip.right <= geo.scrollClip.left) {
+        throw new PanelScrollError(`筛选面板真实可视滚动区域为空（doc=${hit.documentIndex}, node=${hit.nodeIndex}, left=${Math.round(geo.scrollClip.left)}, right=${Math.round(geo.scrollClip.right)}, top=${Math.round(top)}, bottom=${Math.round(bottom)}），拒绝盲点`)
+      }
+      if (cy >= top + padding && cy <= bottom - padding) {
+        throw new PanelScrollError(`目标「${what}」仍受内部裁剪（doc=${hit.documentIndex}, node=${hit.nodeIndex}, x=${Math.round(geo.point.x)}, y=${Math.round(cy)}，clip=${Math.round(geo.clip.left)},${Math.round(geo.clip.top)}..${Math.round(geo.clip.right)},${Math.round(geo.clip.bottom)}），拒绝盲点`)
+      }
       if (attempt >= 3) {
         throw new PanelScrollError(
           `目标「${what}」滚动 3 次后仍在筛选弹窗可视区外（y=${Math.round(cy)} 不在 ${range}），请人工查看`,
@@ -1093,7 +1144,8 @@ export class FilterSetter {
         ? Math.ceil(cy - bottom + padding) + 200
         : -(Math.ceil(top + padding - cy) + 200)
       const wheelY = Math.min(bottom - 1, Math.max(top + 1, bottom - 100))
-      const wheel = this.cssWheel(snap, scrollXOf(snap, hit), wheelY, deltaY)
+      const wheelX = Math.max(geo.scrollClip.left + 1, Math.min(geo.scrollClip.right - 1, scrollXOf(snap, hit)))
+      const wheel = this.cssWheel(snap, wheelX, wheelY, deltaY)
       await this.deps.mouseWheel(wheel.x, wheel.y, wheel.deltaY)
       await this.sleep(400)
       snap = await this.deps.snapshot()

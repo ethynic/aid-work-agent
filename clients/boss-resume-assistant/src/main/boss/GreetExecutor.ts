@@ -50,6 +50,8 @@ export interface GreetOutcome {
   /** 定向模式时返回：names 中滚到底也没找到（或被 limit 截断）的姓名 */
   missingNames?: string[]
   ambiguousNames?: Array<{ name: string; candidates: Array<ReturnType<typeof candidateOption>> }>
+  alreadyContactedNames?: string[]
+  unavailableNames?: string[]
   /** 定向模式滚动查找达到 MAX_SCROLL_ROUNDS 上限而停止（未滚到底）。提示用户目标可能不在当前筛选结果中 */
   stoppedByLimit?: boolean
   stopReason?: RecommendationStopReason
@@ -77,6 +79,8 @@ export interface GreetCheckpoint {
   greetedNames?: string[]
   pending?: Set<string> | null
   ambiguousNames?: NonNullable<GreetOutcome['ambiguousNames']>
+  alreadyContactedNames?: string[]
+  unavailableNames?: string[]
   scrollRounds?: number
   current?: { name: string; ref: string | null }
 }
@@ -112,9 +116,11 @@ export class GreetExecutor {
     checkpoint.pending = pending
     const greetedNames = checkpoint.greetedNames ??= []
     const ambiguousNames = checkpoint.ambiguousNames ??= []
+    const alreadyContactedNames = checkpoint.alreadyContactedNames ??= []
+    const unavailableNames = checkpoint.unavailableNames ??= []
     let greeted = checkpoint.greeted ?? 0
     const finish = (end: boolean, limited = false, reason?: RecommendationStopReason): GreetOutcome =>
-      outcome(greeted,end,names,greetedNames,limited,reason,ambiguousNames)
+      outcome(greeted,end,names,greetedNames,limited,reason,ambiguousNames,alreadyContactedNames,unavailableNames)
     // 定向模式滚动次数；未加载目标的后续加载搜索仍有总上限。
     let scrollRounds = checkpoint.scrollRounds ?? 0
     let stoppedByLimit = false
@@ -161,7 +167,7 @@ export class GreetExecutor {
         const selection = checkpoint.current?.ref ? { name: checkpoint.current.name, candidate_ref: checkpoint.current.ref } : opts.selection
         const selected = selection ? resolveCandidateReference(snap,selection.name,selection.candidate_ref) : null
         if (selection && !selected) throw new GreetError('候选引用已过期或卡片、账号、职位已变化，已停止；请重新查询候选人，不回退姓名发送')
-        if (selection && selected?.buttonText !== GREET_TEXT) throw new GreetError('指定候选人当前没有可用打招呼按钮，已停止，请重新查询状态')
+        if (selection && selected?.buttonText !== GREET_TEXT && selected?.buttonText !== CONTINUE_TEXT) throw new GreetError('指定候选人当前没有可用打招呼按钮，已停止，请重新查询状态')
         if (pending) for (const name of pending) {
           if (checkpoint.current && name !== checkpoint.current.name) continue
           const matches = loaded.filter((c) => c.name === name && (!selected || c.identityDigest === selected.identityDigest))
@@ -169,6 +175,9 @@ export class GreetExecutor {
             ambiguousNames.push({name,candidates:matches.map((c,i)=>candidateOption(c,i+1))})
             pending.delete(name)
             if (seekingName === name) { seekingName = null; seekingIdentity = null }
+          } else if (matches.length === 1 && !matches[0]!.excluded && matches[0]!.buttonText === CONTINUE_TEXT) {
+            alreadyContactedNames.push(name)
+            pending.delete(name)
           } else if (indexedList && matches.length === 0) {
             // A named historical target must be present in the full loaded DOM. Do not scan screens for a typo.
             pending.delete(name)
@@ -188,10 +197,15 @@ export class GreetExecutor {
           .sort((a, b) => Number(candidateButtonVisible(b)) - Number(candidateButtonVisible(a))
             || Math.abs(a.point!.y - (a.top + a.bottom) / 2) - Math.abs(b.point!.y - (b.top + b.bottom) / 2))[0] : undefined
         if (indexedTarget && !candidateButtonVisible(indexedTarget)) {
-          if (!this.deps.scroll) return finish(false)
           const attempts = seekAttempts.get(indexedTarget.name) ?? 0
-          if (attempts >= 3 || indexedTarget.bottom <= indexedTarget.top || indexedTarget.point!.x <= indexedTarget.left
-            || indexedTarget.point!.x >= indexedTarget.right) throw new GreetError('已加载目标无法进入可操作视窗，已停止，禁止使用旧坐标点击')
+          if (!this.deps.scroll || attempts >= 3 || indexedTarget.bottom <= indexedTarget.top || indexedTarget.point!.x <= indexedTarget.left
+            || indexedTarget.point!.x >= indexedTarget.right) {
+            if (selection) throw new GreetError('已加载目标无法进入可操作视窗，已停止，禁止使用旧坐标点击')
+            unavailableNames.push(indexedTarget.name)
+            pending!.delete(indexedTarget.name)
+            seekingName = null; seekingIdentity = null
+            continue
+          }
           const delta = indexedTarget.point!.y - (indexedTarget.top + indexedTarget.bottom) / 2
           if (!Number.isFinite(delta) || Math.abs(delta) < 1) throw new GreetError('目标滚动距离无效，已停止')
           if (this.deps.signal?.aborted) throw new CancelledError('已取消：目标定位中止')
@@ -209,7 +223,7 @@ export class GreetExecutor {
           break
         }
 
-        // 可靠结构优先精确匹配同卡片按钮；旧无结构快照保持原可见按钮配对路径。
+        // Every action and name comes from the same structural card in this snapshot.
         let target: GreetButtonRef | null = indexedTarget ? { point: indexedTarget.point!, documentIndex: indexedTarget.documentIndex } : buttons[0]!
         let targetName: string | null = null
         if (pending !== null) {
@@ -310,7 +324,7 @@ export class GreetExecutor {
 
   /** 视口内全部「打招呼」按钮，按 y 从上到下排序（含所在文档序号，定向模式配对姓名用） */
   private findGreetButtons(snap: DomSnapshot): GreetButtonRef[] {
-    return findButtonsByExactText(snap, GREET_TEXT)
+    return findButtonsByExactText(snap, GREET_TEXT).filter(btn => pairCardName(snap,btn,viewportOf(snap)) !== null)
   }
 }
 
@@ -323,12 +337,17 @@ function outcome(
   stoppedByLimit = false,
   stopReason?: RecommendationStopReason,
   ambiguousNames: NonNullable<GreetOutcome['ambiguousNames']> = [],
+  alreadyContactedNames: string[] = [],
+  unavailableNames: string[] = [],
 ) {
   if (names === undefined) return { greeted, reachedEnd, ...(stopReason ? { stopReason } : {}) }
   const greetedSet = new Set(greetedNames)
   const ambiguousSet = new Set(ambiguousNames.map(c=>c.name))
-  const missingNames = [...new Set(names.map((n) => n.trim()))].filter((n) => !greetedSet.has(n) && !ambiguousSet.has(n))
-  return { greeted, reachedEnd, greetedNames: [...greetedNames], missingNames, ambiguousNames, stoppedByLimit, ...(stopReason ? { stopReason } : {}) }
+  const missingNames = [...new Set(names.map((n) => n.trim()))].filter((n) => !greetedSet.has(n) && !ambiguousSet.has(n)
+    && !alreadyContactedNames.includes(n) && !unavailableNames.includes(n))
+  return { greeted, reachedEnd, greetedNames: [...greetedNames], missingNames, ambiguousNames, stoppedByLimit,
+    ...(alreadyContactedNames.length ? { alreadyContactedNames: [...alreadyContactedNames] } : {}),
+    ...(unavailableNames.length ? { unavailableNames: [...unavailableNames] } : {}), ...(stopReason ? { stopReason } : {}) }
 }
 
 /** 列表滚动位置：打招呼按钮所在文档的 scrollOffsetY；无按钮时取各文档最大值（列表是唯一滚动文档） */

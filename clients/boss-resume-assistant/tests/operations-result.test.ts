@@ -1,3 +1,4 @@
+import { structuralListSnapshot } from './structuralListFixture.js'
 /**
  * operations 参数校验 fail-fast + 错误映射全路径 + effect/retryable 语义。
  *
@@ -86,20 +87,10 @@ function snapWithTexts(texts: string[]): DomSnapshot {
 /** greet 用 snapshot：根 + 「筛选」+ N 个「打招呼」按钮 + 附加文案（相同文案共享 string 下标） */
 function greetSnap(buttons: Array<[number, number, number, number]>, extraTexts: string[] = [],
   continued: Array<[number, number, number, number]> = []): DomSnapshot {
-  const texts: string[] = ['筛选']
-  const boxes: Array<[number, number, number, number]> = [[100, 100, 50, 20]]
-  for (const [bounds, state] of [...buttons.map(b => [b, '打招呼'] as const), ...continued.map(b => [b, '继续沟通'] as const)]) {
-    const y = bounds[1] + bounds[3] / 2
-    texts.push(bounds[1] < 300 ? '张三丰' : '李四海', '刚刚活跃', state)
-    boxes.push([300, y - 18, 70, 20], [390, y - 18, 70, 20], bounds)
-  }
-  for (const text of extraTexts) { texts.push(text); boxes.push([100, 300, 150, 20]) }
-  const ids = Array.from({ length: texts.length + 1 }, (_, i) => i)
-  const bounds: Array<[number, number, number, number]> = [[0, 0, 1917, 1905], ...boxes]
-  return { strings: ['', ...texts, 'HTML'], documents: [{ nodes: {
-    nodeValue: { index: ids, value: ids }, nodeName: { index: [0], value: [texts.length + 1] },
-    contentDocumentIndex: { index: [], value: [] } },
-    layout: { nodeIndex: ids, bounds, clientRects: bounds } }] }
+  return structuralListSnapshot([
+    ...buttons.map(button => ({ name: button[1] < 300 ? '张三丰' : '李四海', button })),
+    ...continued.map(button => ({ name: button[1] < 300 ? '张三丰' : '李四海', button, continued: true })),
+  ], 1917, 1905, extraTexts)
 }
 
 test('Win32 输入后异常（含超时及登录关键词）回执 unknown，输入前拒绝保持 none，均不自动重试', async () => {
@@ -355,6 +346,10 @@ test('boss_resume_next：排除列表必填，错页/职位变化时不点击', 
 test('批量与续筛透传 DOMRects/可见性样式/paintOrder；缺失几何返回 none 且不发输入', async () => {
   for (const continuation of [true, false]) {
     const snap = snapWithTexts(['筛选', 'PHP开发 _ 上海 8-12K'])
+    snap.strings.push('HTML', '#text')
+    snap.documents[0]!.nodes.nodeName = [snap.strings.length - 2, snap.strings.length - 1, snap.strings.length - 1]
+    snap.documents[0]!.nodes.parentIndex = [-1, 0, 0]
+    snap.documents[0]!.nodes.attributes = [[], [], []]
     snap.documents[0]!.layout.bounds[1] = [1000, 200, 60, 24]
     snap.documents[0]!.layout.bounds[2] = [500, 200, 300, 24]
     const f = fakeFactory([snap])
@@ -473,48 +468,9 @@ test('greet 成功路径：effect=applied，data 含 greeted/reached_end', async
 
 /** 定向 greet 用 snapshot：根视口 1917x1905 + 「筛选」+ 卡片行（姓名/活跃状态/按钮，真机锚定坐标） */
 function greetNamedSnap(rows: Array<{ name: string | null; buttonY: number; continued?: boolean }>): DomSnapshot {
-  // node 0 根 / node 1 = 「筛选」（probe 前置校验用），其余为卡片行文本节点
-  const strings: string[] = ['', '筛选']
-  const nvIndex: number[] = [0, 1]
-  const nvValue: number[] = [0, 1]
-  const layoutNodeIndex: number[] = [0, 1]
-  const layoutBounds: Array<[number, number, number, number]> = [[0, 0, 1917, 1905], [100, 100, 50, 20]]
-  const intern = (s: string): number => {
-    let i = strings.indexOf(s)
-    if (i < 0) {
-      strings.push(s)
-      i = strings.length - 1
-    }
-    return i
-  }
-  let nextNi = 2
-  const addText = (s: string, bounds: [number, number, number, number]): void => {
-    const ni = nextNi++
-    nvIndex.push(ni)
-    nvValue.push(intern(s))
-    layoutNodeIndex.push(ni)
-    layoutBounds.push(bounds)
-  }
-  for (const row of rows) {
-    if (row.name !== null) addText(row.name, [317, row.buttonY - 18, 50, 20]) // 中心 (342, y-8)
-    addText('刚刚活跃', [370, row.buttonY - 18, 60, 20]) // 中心 (400, y-8)
-    addText('本科', [317, row.buttonY + 30, 40, 20]) // 噪音
-    addText(row.continued ? '继续沟通' : '\n                  打招呼', [1130, row.buttonY - 16, 64, 32]) // 中心 (1162, y)
-  }
-  const htmlIndex = intern('HTML')
-  return {
-    strings,
-    documents: [
-      {
-        nodes: {
-          nodeValue: { index: nvIndex, value: nvValue },
-          nodeName: { index: [0], value: [htmlIndex] },
-          contentDocumentIndex: { index: [], value: [] },
-        },
-        layout: { nodeIndex: layoutNodeIndex, bounds: layoutBounds, clientRects: layoutBounds },
-      },
-    ],
-  }
+  return structuralListSnapshot(rows.map(row => ({ name: row.name,
+    button: [1130, row.buttonY - 16, 64, 32], continued: row.continued,
+  })), 1917, 1905)
 }
 
 test('boss_greet：names 非法（空数组/超 3 个/含空串）→ INVALID_ARGUMENT，不连 Chrome', async () => {
@@ -547,33 +503,33 @@ test('greet 定向：MCP 默认 limit=1 不截断名单（operation 钳到 ≥ n
   const B = { name: '张三丰', buttonY: 330 }
   // MCP schema 对省略的 limit 注入默认 1（zod .default(1)），SUBAGENT 链路只传 names——
   // 修复前 limit=1 + names 2 人会在打完第 1 人后截断，第 2 人误报进 missing_names。
-  // probe → 定位[A,B] → 点 A → 校验[B] → 定位[B] → 点 B → 校验[] → 名单完成
+  // 真实结构索引按离视窗中心最近的目标：probe → 点 B → 确认 B → 点 A → 确认 A。
   const f = fakeFactory([
     greetNamedSnap([A, B]),
     greetNamedSnap([A, B]),
-    greetNamedSnap([{...A, continued: true}, B]),
-    greetNamedSnap([{...A, continued: true}, B]),
+    greetNamedSnap([A, {...B, continued: true}]),
+    greetNamedSnap([A, {...B, continued: true}]),
     greetNamedSnap([{...A, continued: true}, {...B, continued: true}]),
   ])
   const r = await createBossGreetOperation(f.factory).execute({ limit: 1, names: ['刘草威', '张三丰'] }, silentCtx())
   assert.equal(r.success, true)
   assert.equal(r.data.greeted, 2)
-  assert.deepEqual(r.data.greeted_names, ['刘草威', '张三丰'])
+  assert.deepEqual(r.data.greeted_names, ['张三丰', '刘草威'])
   assert.deepEqual(r.data.missing_names, [])
   assert.deepEqual(f.clicks, [
-    { x: 1162, y: 146 },
     { x: 1162, y: 330 },
+    { x: 1162, y: 146 },
   ])
 })
 
-test('greet 定向缺人：页面只有 A 但要找王五 → 0 人到底，missing_names=[王五]，message 如实说明', async () => {
+test('greet 定向缺人：页面只有 A 但要找王五 → 0人且不伪造到底，missing_names=[王五]，message 如实说明', async () => {
   const A = { name: '刘草威', buttonY: 146 }
-  // probe → 定位[A]（A 不在名单，无目标）→ 滚动两次 offset 均不变（0→0）→ 判到底返回
+  // 全量已加载结构索引没有目标：零输入返回未找到，不能据此声称全列表到底。
   const f = fakeFactory([greetNamedSnap([A]), greetNamedSnap([A])])
   const r = await createBossGreetOperation(f.factory).execute({ names: ['王五'] }, silentCtx())
   assert.equal(r.success, true)
   assert.equal(r.data.greeted, 0)
-  assert.equal(r.data.reached_end, true)
+  assert.equal(r.data.reached_end, false)
   assert.deepEqual(r.data.greeted_names, [])
   assert.deepEqual(r.data.missing_names, ['王五'])
   assert.equal(f.clicks.length, 0)
@@ -688,16 +644,16 @@ test('errorMapping：脚本缺失与兜底 → INTERNAL_ERROR', () => {  assert.
   assert.equal(mapExecutorError('字符串错误').code, 'INTERNAL_ERROR')
 })
 
-test('写动作未预期异常（INTERNAL_ERROR）→ effect=unknown（规格 §3 兜底行：不可误报 none 让 Host 误以为无副作用）', async () => {
+test('写动作在任何输入前快照异常：保留 INTERNAL_ERROR 且已证明未执行时 effect=none', async () => {
   const f = fakeFactory([snapWithTexts(['沟通'])])
-  // snapshot 抛非 executor Error 的意外异常 → INTERNAL_ERROR；写动作是否落地不可知 → unknown
+  // 前置snapshot异常，BusinessOperationState明确not_started；不能误报曾执行外发。
   f.session.snapshot = async () => {
     throw new Error('boom: unexpected snapshot failure')
   }
   const r = await createBossRejectCurrentOperation(f.factory).execute({}, silentCtx())
   assert.equal(r.success, false)
   assert.equal(r.code, 'INTERNAL_ERROR')
-  assert.equal(r.effect, 'unknown')
+  assert.equal(r.effect, 'none')
   assert.equal(r.retryable, false)
 })
 

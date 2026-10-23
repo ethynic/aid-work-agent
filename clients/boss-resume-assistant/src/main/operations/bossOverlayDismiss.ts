@@ -42,7 +42,7 @@ export function createBossOverlayDismissOperation(
         },
         async (session) => {
           if (args.recovery_ref) {
-            const data = await new VisualRecovery(visualDeps).dismiss(args.recovery_ref, session, ctx.signal)
+            const data = await new VisualRecovery(visualDeps).dismiss(args.recovery_ref, session, ctx.signal, ctx.windowCaptureBudget ?? { repositionsUsed: 0 })
             return { message: '已投递一次关闭输入，需重新观察验证阻挡是否消失', data, effect: 'none' }
           }
           const executor = new OverlayDismissExecutor({

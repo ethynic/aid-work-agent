@@ -1,3 +1,4 @@
+import { structuralListSnapshot } from './structuralListFixture.js'
 import { indexedValues } from '../src/main/boss/domSnapshot.js'
 import { locateResumeCanvas } from '../src/main/boss/ResumeReader.js'
 /**
@@ -89,16 +90,11 @@ export interface ListRow {
   buttonY: number
 }
 
-/** 列表页快照：卡片行（姓名/活跃状态/噪音/打招呼按钮，全部挂根节点=容器外诱饵） */
+/** 列表页快照：保留真实卡片祖先链和按钮结构；详情诱饵另由 detailSnap 提供 */
 export function listSnap(rows: ListRow[]): DomSnapshot {
-  const items: SnapItem[] = []
-  for (const row of rows) {
-    if (row.name !== null) items.push({ text: row.name, bounds: [317, row.buttonY - 18, 50, 20], parent: 0 }) // 中心 (342, y-8)
-    items.push({ text: '刚刚活跃', bounds: [370, row.buttonY - 18, 60, 20], parent: 0 }) // 中心 (400, y-8)
-    items.push({ text: '本科', bounds: [317, row.buttonY + 30, 40, 20], parent: 0 }) // 噪音：同行带外
-    items.push({ text: GREET_STRING, bounds: [1130, row.buttonY - 16, 64, 32], parent: 0 }) // 中心 (1162, y)
-  }
-  return buildSnap(items)
+  return structuralListSnapshot(rows.map(row => ({ name: row.name,
+    button: [1130, row.buttonY - 16, 64, 32],
+  })), VIEWPORT.width, VIEWPORT.height)
 }
 
 /** 诱饵行默认组（详情打开态下列表仍可见——容器外「打招呼」必须被结构级排除） */
