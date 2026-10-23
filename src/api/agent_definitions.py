@@ -875,7 +875,14 @@ def _conflict_response(agent_id: str) -> JSONResponse:
 
 @router.post("/import")
 async def import_definition(request: Request, body: ImportDefinitionRequest):
-    """导入数字员工配置 JSON，创建新员工或按冲突策略覆盖/另存"""
+    """导入数字员工配置 JSON，创建新员工或按冲突策略覆盖/另存
+
+    按文件原样导入，不做技能依赖自动补全（tools/recap 忠实透传）：导出文件
+    是源环境已验证的最终配置，导入是跨环境迁移而非交互式编辑。技能依赖补全
+    仅属于交互式编辑路径（前端勾选技能联动 + create/update 保存时合并）。
+    背景（2026-10-23）：导出文件不含 lead_refresh 轮后任务，导入后被
+    apply_skill_requirements 自动补上，与源环境配置不一致。
+    """
     try:
         admin = _require_admin(request)
 
@@ -926,9 +933,6 @@ async def import_definition(request: Request, body: ImportDefinitionRequest):
         if existing and body.conflict_strategy == "overwrite":
             # 覆盖更新：空值传空容器/空串以清掉目标环境残留（DB update 过滤 None；
             # 例外：llm_provider/llm_model_codes 传 None 会强制写空 JSONB，恰好也是清残留）
-            tools, recap, _ = SubagentDefinitionService.apply_skill_requirements(
-                d.get("tools"), d.get("skills"), d.get("recap"),
-            )
             SubagentDefinitionService.update_definition(
                 agent_id,
                 created_by=admin.get("user_id"),
@@ -937,7 +941,7 @@ async def import_definition(request: Request, body: ImportDefinitionRequest):
                 version=d.get("version"),
                 author=d.get("author"),
                 triggers=d.get("triggers") or {},
-                tools=tools,
+                tools=d.get("tools") or {},
                 skills=d.get("skills") or {},
                 context=d.get("context") or {},
                 delegatable_to=d.get("delegatable_to") or [],
@@ -946,7 +950,7 @@ async def import_definition(request: Request, body: ImportDefinitionRequest):
                 llm_model_codes=d.get("llm_model_codes"),
                 reply_style=d.get("reply_style") or "",
                 business_pages=d.get("business_pages") or [],
-                recap=recap,
+                recap=d.get("recap") or {},
                 chat_toolbar=d.get("chat_toolbar") or [],
                 upload_accept=d.get("upload_accept") or "",
                 status=import_status,
@@ -981,9 +985,6 @@ async def import_definition(request: Request, body: ImportDefinitionRequest):
             agent_id, name = new_id, new_name
 
         # 创建路径（新员工或 rename 另存）
-        tools, recap, auto_completed = SubagentDefinitionService.apply_skill_requirements(
-            d.get("tools"), d.get("skills"), d.get("recap"),
-        )
         result = SubagentDefinitionService.create_definition(
             agent_id=agent_id,
             name=name,
@@ -992,7 +993,7 @@ async def import_definition(request: Request, body: ImportDefinitionRequest):
             version=d.get("version") or "1.0.0",
             author=d.get("author"),
             triggers=d.get("triggers"),
-            tools=tools,
+            tools=d.get("tools"),
             skills=d.get("skills"),
             context=d.get("context"),
             delegatable_to=d.get("delegatable_to"),
@@ -1001,7 +1002,7 @@ async def import_definition(request: Request, body: ImportDefinitionRequest):
             llm_model_codes=d.get("llm_model_codes"),
             reply_style=d.get("reply_style"),
             business_pages=d.get("business_pages"),
-            recap=recap,
+            recap=d.get("recap"),
             chat_toolbar=d.get("chat_toolbar"),
             upload_accept=d.get("upload_accept"),
             created_by=admin.get("user_id"),
@@ -1022,7 +1023,7 @@ async def import_definition(request: Request, body: ImportDefinitionRequest):
 
         logger.info(f"后端日志：管理员导入创建数字员工 {agent_id}")
         return _success({"agent_id": agent_id, "name": name, "mode": "create"},
-                        warnings=warnings, auto_completed=auto_completed)
+                        warnings=warnings)
     except HTTPException:
         raise
     except Exception as e:

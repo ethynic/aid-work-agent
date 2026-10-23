@@ -180,6 +180,35 @@ class TestImport:
         assert create_mock.call_args.kwargs["agent_id"] == "emp_a"
         assert create_mock.call_args.kwargs["system_prompt"] == "你是员工A"
 
+    def test_import_no_skill_requirement_completion(self, client, monkeypatch):
+        """导入按文件原样：不按技能声明自动补全 tools/recap（2026-10-23 PM 反馈：
+        导出文件不含 lead_refresh，导入后被自动补上，与源环境配置不一致）"""
+        _mock_agent(monkeypatch)
+        monkeypatch.setattr(
+            api_mod.SubagentDefinitionService, "get_definition", staticmethod(lambda agent_id: None),
+        )
+        apply_mock = MagicMock(return_value=({}, {}, ["recap: lead_refresh(every_round)"]))
+        monkeypatch.setattr(
+            api_mod.SubagentDefinitionService, "apply_skill_requirements", apply_mock,
+        )
+        create_mock = MagicMock(return_value={"definition": {}})
+        monkeypatch.setattr(
+            api_mod.SubagentDefinitionService, "create_definition", staticmethod(create_mock),
+        )
+        payload = _import_payload()
+        payload["definition"]["recap"] = {
+            "tasks": [{"name": "external_push", "when": "every_round", "enabled": True}],
+        }
+
+        res = client.post("/api/admin/agent-definitions/import", json=payload)
+        assert res.status_code == 200
+        apply_mock.assert_not_called()
+        assert create_mock.call_args.kwargs["tools"] == {"inherit": False, "additional": ["http_api"]}
+        assert create_mock.call_args.kwargs["recap"] == {
+            "tasks": [{"name": "external_push", "when": "every_round", "enabled": True}],
+        }
+        assert "auto_completed" not in res.json()
+
     def test_import_conflict_returns_409_with_info(self, client, monkeypatch):
         reg_cfg = MagicMock()
         reg_cfg.from_db = True
@@ -253,6 +282,9 @@ class TestImport:
         kwargs = update_mock.call_args.kwargs
         assert kwargs["name"] == "员工A"
         assert "recap" in kwargs and "triggers" in kwargs
+        # 按文件原样透传，不按技能声明补全（2026-10-23 导入保真）
+        assert kwargs["tools"] == {"inherit": False, "additional": ["http_api"]}
+        assert kwargs["recap"] == {"tasks": []}
         # 知识库栏目代号跨环境不通用：不随导入迁移，保持目标环境原值
         assert "knowledge_sources" not in kwargs
         prompt_mock.assert_called_once()
