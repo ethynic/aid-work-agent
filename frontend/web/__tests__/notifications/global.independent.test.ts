@@ -50,7 +50,7 @@ describe('independent global notification read-only boundary', () => {
     expect(renderedMessages).toHaveLength(2)
     for (const component of renderedMessages) {
       const message = component.props('message')
-      expect(message.quickOptions).toEqual([])
+      expect(message).not.toHaveProperty('quickOptions')
       expect(message.browserAssistance).toBeUndefined()
       expect(message.runnerActive).toBe(false)
     }

@@ -61,7 +61,7 @@ async function load() {
     if (task.runner_id !== resource.runner_id || task.session.kind !== 'web' || task.session.session_id !== session.session_id) throw new Error('通知与原任务不匹配。')
     title.value = session.title || '未命名会话'
     status.value = task.status
-    messages.value = mergeRunnerMessages(historyMessages(history.messages), [task]).map(message => ({ ...message, quickOptions: [], browserAssistance: undefined, submitFailure: undefined, runnerActive: false }))
+    messages.value = mergeRunnerMessages(historyMessages(history.messages), [task]).map(message => ({ ...message, browserAssistance: undefined, submitFailure: undefined, runnerActive: false }))
   } catch { if (requestGeneration === generation) error.value = '原会话或任务暂时无法查看，请确认当前账号及资源权限后重试。' }
   finally { if (requestGeneration === generation) loading.value = false }
 }

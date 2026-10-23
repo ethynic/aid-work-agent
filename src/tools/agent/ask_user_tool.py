@@ -10,8 +10,7 @@ AskUserTool - 阻塞式结构化提问（AskForm）
 durable 链路 wait 附 form 进入等待，用户 reply（结构化 answers/skip 或纯文本）
 经恢复链路回注为本工具的 tool result。
 
-三工具分工（usage guide 同步声明）：ask_user=阻塞式结构化提问（推荐）；
-clarify=阻塞式纯文本追问（兼容存量）；present_options=非阻塞建议按钮。
+提问分工：ask_user=阻塞式结构化提问；clarify=阻塞式纯文本追问（兼容存量）。
 """
 
 import json
@@ -78,8 +77,8 @@ class AskUserTool(BaseTool):
     usage_guide = (
         "当信息缺失且候选明确、或需要用户做业务确认/选择时调用：一次调用把 1~5 个问题"
         "打包进 questions，阻塞等待用户作答后继续（root 与子执行一致）。分工：开放式"
-        "问题没有明确候选项时不用本工具，改用 clarify（纯文本追问）；不阻塞的建议按钮"
-        "用 present_options。题型显式声明：互斥选择用 single（最多选一项），可并集的"
+        "问题没有明确候选项时不用本工具，改用 clarify（纯文本追问）；无需作答的建议"
+        "直接写在正文中。题型显式声明：互斥选择用 single（最多选一项），可并集的"
         "多选用 multi（受 max_select 约束），自由文本用 text（不得携带 options）。选项题"
         "默认保留自定义输入（allow_custom_text 默认 true，仅严格业务确认门才关闭）；"
         "每个选项 label 附一句 description 说明含义。文案精炼即可（title ≤20 字、"

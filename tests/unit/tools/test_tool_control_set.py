@@ -72,6 +72,20 @@ def test_none_available_subagents_keeps_unrestricted_semantics():
     assert registry.available_seen is None
 
 
+@pytest.mark.asyncio
+async def test_retired_options_stay_executable_for_pending_calls_but_are_not_advertised():
+    controls, _ = make_controls()
+    assert 'present_options' not in {item['name'] for item in controls.definitions(available_subagents=None)}
+    assert 'present_options' not in controls.usage_guides()
+    # A checkpoint may already contain this call. Keep its ordinary result semantics;
+    # never reinterpret it as a blocking ask_user or fail an unrelated resumed task.
+    legacy = controls.get('present_options')
+    result = await legacy.execute(question='旧任务问题', options=[
+        {'key': '1', 'label': '选项一'}, {'key': '2', 'label': '选项二'}])
+    assert result['success'] is True and result['question'] == '旧任务问题'
+    assert 'form' not in result
+
+
 def test_delegate_definition_keeps_multimodal_contract():
     controls, _ = make_controls()
     definition = next(

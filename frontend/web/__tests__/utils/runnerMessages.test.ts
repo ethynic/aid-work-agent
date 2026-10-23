@@ -129,7 +129,7 @@ describe('Runner display merges durable facts with existing messages', () => {
     expect(projected[1].progressMessages?.some(item => item.content.includes('已停止'))).toBe(true)
   })
 
-  it('cumulative tool facts keep tool-call identity, masking, downloads, options, images and verbose details', () => {
+  it('cumulative tool facts keep identity and artifacts without recreating retired choice buttons', () => {
     const row = runnerView({ snapshot: { output: 'answer', images: [{ file_id: 'img', download_url: '/api/files/img/download', display_name: 'Fixture image', mime_type: 'image/png', size_bytes: 42, source: 'tool_generated', usage: 'inline', placement: 'before_text' }], imagesPlacement: 'before_text',
       verboseMessages: [{ eventId: 'verbose-1', data: 'working', source: 'policy', timestamp: 1 }],
       progressMessages: [{ type: 'tool_start', toolName: 'future_tool', displayName: 'Future tool', toolCallId: 'call-1', toolArgs: { password: '***' } },
@@ -139,7 +139,8 @@ describe('Runner display merges durable facts with existing messages', () => {
     expect(projected.progressMessages?.map(item => item.toolCallId)).toEqual(['call-1', 'call-1'])
     expect(projected.progressMessages?.[0].toolArgs).toEqual({ password: '***' })
     expect(projected.downloadableFiles?.map(item => item.file_id)).toEqual(['file'])
-    expect(projected.quickOptions?.map(item => item.key)).toEqual(['one', 'two'])
+    expect(projected).not.toHaveProperty('quickOptions')
+    expect(projected.progressMessages?.[1].result.data.options).toHaveLength(2)
     expect(projected.images?.[0].placement).toBe('before_text')
     expect(projected.images?.[0].download_url).toBe('/api/files/img/download')
     expect(projected.images?.[0].display_name).toBe('Fixture image')

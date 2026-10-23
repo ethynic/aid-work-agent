@@ -39,7 +39,7 @@ context:
 5. 用 `scripts/generate_quotation_lists.py` 生成报价清单，**必须带 `--structure confirmed_structure.json`**
 6. 用 `scripts/validate.py` 自动校验，通过后才能交付
 
-**两个确认门的交互方式**：调用 `present_options` 工具向用户出选项卡片（一般 3~4 个，如「1. 按提案继续 / 2. 大类全要 / 3. 我要调整，请打字说明」），同时在回复正文给出完整编号清单与证据页码——web 端用户点按钮即可，渠道端用户打字回复数字同样有效。
+**两个确认门的交互方式**：调用 `ask_user` 发起结构化提问并等待实际作答。`questions` 包含一题 `type=single`、`required=true`，候选项放 `options[].label`（如「按提案继续」「全部候选空间」「我要调整」）；保留 `allow_custom_text=true` 供用户填写修改意见，确认门设置 `allow_skip=false`。同时在正文给出清单与证据页码；渠道端按提问文字作答。
 
 **关键：确认门 1、2 都通过前，禁止生成任何 Excel 文件。**
 

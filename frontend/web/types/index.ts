@@ -77,7 +77,6 @@ export interface ChatMessage {
   browserAssistance?: BrowserHumanAssistance
   /** Safe verification notice on the original assistant message. */
   waitingNotice?: string
-  quickOptions?: QuickOption[]  // 编号选择按钮（§5.1 选择交互；纯前端增强，不持久化到历史）
   /** 用户主动取消的轮次（后端持久化于 assistant metadata.cancelled，历史加载时显示"用户取消"标记） */
   cancelled?: boolean
   /** 所属 runner 仍在执行（queued/running/finalizing）：执行中在气泡下展示最近
@@ -90,13 +89,6 @@ export interface ChatMessage {
   questionCard?: QuestionCardBinding
   /** 历史只读已答表单卡片：投影自 supplementalInputs 扩展（form+answers，设计 §7.1） */
   answeredForm?: AnsweredFormBinding
-}
-
-/** 编号选择元数据（设计 §5.1 选择交互）：工具结果 data.options，前端渲染编号按钮 */
-export interface QuickOption {
-  key: string
-  label: string
-  description?: string
 }
 
 // ---- 结构化提问交互（ask_user / AskForm，设计 §4.1；wire 见 runner 快照 waiting.form）----

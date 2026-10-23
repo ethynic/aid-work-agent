@@ -66,7 +66,7 @@ class ToolControlSet:
     def definitions(self, *, available_subagents: Optional[Sequence[str]]) -> list[dict]:
         definitions = [
             self._tools[name].to_tool_definition()
-            for name in ("skill_execute", "create_plan", "clarify", "ask_user", "present_options")
+            for name in ("skill_execute", "create_plan", "clarify", "ask_user")
         ]
         definitions.append(self._dependencies.skill_registry.get_skill_tool_definition())
         if self._delegate is not None:
@@ -81,7 +81,7 @@ class ToolControlSet:
         self, *, subagent_descriptions: str = "", include_delegate: bool = False
     ) -> str:
         guides = []
-        for name in ("skill_execute", "create_plan", "clarify", "ask_user", "present_options"):
+        for name in ("skill_execute", "create_plan", "clarify", "ask_user"):
             guide = self._tools[name].get_usage_guide()
             if guide:
                 guides.append(f"### {name}\n{guide}")

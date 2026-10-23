@@ -1,7 +1,5 @@
 """User-visible tool facts, distinct from private execution messages/results."""
 
-import copy
-
 from src.core.agent_events import mask_tool_args
 
 
@@ -57,8 +55,3 @@ def project_user_event(snapshot, event):
         snapshot['browserAssistance'] = browser_display(event)
     elif event.get('type') == 'images':
         snapshot['imagesPlacement'] = event.get('placement','after_text')
-    elif event.get('type') == 'tool_result' and event.get('success'):
-        result = tool_result_display(event.get('result'))
-        options = (result.get('data') or {}).get('options')
-        if options:
-            snapshot['quickOptions'] = copy.deepcopy(options)

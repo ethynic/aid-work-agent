@@ -96,11 +96,9 @@ def _public_snapshot(value):
         result['images'] = _public_images(value['images'])
     if 'waiting' in value:
         result['waiting'] = _public_waiting(value['waiting'])
-    from .presentation import browser_display, option_items
+    from .presentation import browser_display
     if isinstance(value.get('browserAssistance'),dict):
         result['browserAssistance'] = browser_display(value['browserAssistance'])
-    if isinstance(value.get('quickOptions'),list):
-        result['quickOptions'] = option_items(value['quickOptions'])
     if isinstance(value.get('input'), dict):
         result['input'] = _display_fields(value['input'], ('message_id', 'text'))
         result['input']['attachments'] = _display_items(value['input'].get('attachments'),

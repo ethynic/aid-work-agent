@@ -5,7 +5,6 @@ import { SSEManager, uploadFile, type UploadedFile } from '@/api/agent'
 import { getSession, getSessionMessages, updateFailedMessageUI, type FailedMessageUI } from '@/api/session'
 import { RunnerClient, RunnerRequestError, runnerTerminal, runnerObservationComplete, type RunnerCapabilities, type RunnerControlIntent, type RunnerControlView, type RunnerSubmission, type RunnerView, type RunnerWait } from '@/api/runner'
 import { historyMessages, mergeRunnerMessages, visibleFailedMessages } from '@/utils/runnerMessages'
-import { extractQuickOptions } from '@/utils/quickOptions'
 import { clientCanonicalText } from '@/utils/askForm'
 import { useToast } from 'vue-toastification'
 import { useTenantAuth } from './useTenantAuth'
@@ -1288,15 +1287,6 @@ export function useAgent() {
                     mime_type: result.mime_type || '',
                   })
                 }
-              }
-            }
-            // 编号选择元数据：成功结果带 data.options 时挂到助手消息渲染选项按钮；
-            // 纯前端增强不进历史持久化，用户手动回复数字同样有效）
-            const quickOptions = extractQuickOptions(result)
-            if (quickOptions.length) {
-              const lastMsg = state.messages.value[state.messages.value.length - 1]
-              if (lastMsg && lastMsg.role === 'assistant') {
-                lastMsg.quickOptions = quickOptions
               }
             }
             addProgress(

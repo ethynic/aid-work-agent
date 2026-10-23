@@ -164,10 +164,10 @@ class TestAssembly:
         names = [definition["name"] for definition in controls.definitions(
             available_subagents=None)]
         assert "ask_user" in names
+        assert "present_options" not in names
         guides = controls.usage_guides()
         assert "### ask_user" in guides
-        # 分工说明随三工具 guide 一起注入
-        assert "present_options" in guides and "clarify" in guides
+        assert "present_options" not in guides and "clarify" in guides
         tool = controls.get("ask_user")
         assert tool is not None and tool.catalog is False
         assert "阻塞" in tool.usage_guide

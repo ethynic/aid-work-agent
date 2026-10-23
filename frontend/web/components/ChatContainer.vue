@@ -43,7 +43,6 @@
               :subagent-name="currentSubagentName"
               :greeting="emptyStateGreeting"
               @quick-prompt="handleQuickPrompt"
-              @send="handleSend"
             />
           </div>
 
