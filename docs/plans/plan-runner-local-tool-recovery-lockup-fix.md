@@ -12,7 +12,7 @@
 | Phase 5 | 生命周期、错误证据及跨版本联调 | 🔧 进行中 | 原因分类、公开动作与Web回归通过；真实发布切换/视觉检查未执行 |
 | Phase 6 | 独立测试、CodeReview及旧会话验收 | 🔧 进行中 | 独立测试及CR完成本批验证，详情见第9节；A1～A6真实业务与部署仍待授权 |
 | Phase 7 | 崩溃残留锁修复与测试包准备 | ✅ 完成（2026-10-22） | Windows真实子进程及打包产物复验通过，已交付0.0.24/0.3.22验收包；未部署/安装/业务续做 |
-| Phase 8 | 原生窗口零输入拒绝的自动恢复 | ✅ 完成（2026-10-23） | 独立native46及CLI166唯一相关用例通过，CR通过；现场A2未验收，未打包/部署 |
+| Phase 8 | 原生窗口零输入拒绝的自动恢复 | ✅ 完成（2026-10-23） | 独立212项及CR通过；0.0.25/0.3.23验包通过，现场A2待用户更新后验收 |
 
 ## 1. 范围、基线与交付边界
 
@@ -406,4 +406,18 @@ Python测试使用现有API容器的 `/opt/venv/bin/python` 和当前挂载源�
 - 同目录补合成fixture后：`node node_modules/typescript/bin/tsc -p tsconfig.main.json`，exit0；`node --test dist/tests/widget-hidden-recovery-independent.test.js`，exit0，11/11，无跳过；其余155项有效结果复用。
 - 同目录`node dist/src/cli/index.js --help`，exit0，仅显示帮助，未启动或操作Chrome。
 
-该Phase已完成开发，原A2真实Chrome/客户会话尚未验收；未提交、推送、升级版本、打包或部署，也未再次取线上记录。实际隐藏HWND/window捕获底层原因仍待客户机日志，不宣称现场问题已根治。发布仅需实际受影响客户端能力及共享native payload，不因本补丁强制更新后台API。
+该Phase已完成开发，原A2真实Chrome/客户会话尚未验收；上述开发验证结束时未提交、推送、升级版本、打包或部署，也未再次取线上记录。后续授权交付见12.3。实际隐藏HWND/window捕获底层原因仍待客户机日志，不宣称现场问题已根治。本补丁不要求更新后台API。
+
+### 12.3 授权提交与一键打包交付（2026-10-23）
+
+用户授权提交推送并使用已有一键脚本出包，不部署服务器。fetch后快进远程3个无关提交，保留其他任务全部工作区改动；只暂存本修复及关联文档，修复提交`54d5befc`已推送当前master的两个配置远程。主控对最终修复源码重新构建通过。
+
+原样执行`clients/agent-desktop/scripts/release-batch.ps1`九阶段，exit0。该现有入口生成Runtime+BOSS组合包，每批新插件使用内存临时签名私钥；新公钥需随配套Runtime交付，不能宣称该新插件可单独导入不含此公钥的旧Runtime。Runtime UI升至0.0.25，BOSS升至0.3.23，Host0.2.22/Core0.2.20及私有native0.1.0保持脚本原有版本；native从当前构建重新pack，未复用旧tgz。登记表14个历史根原样保留，仅追加本批BOSS范围公钥；完整发布快照为`clients/runtime-plugin-packaging/trust/history/runtime-0.0.25.roots.json`。
+
+- 最终组合ZIP：`clients/release/AID-Work-Runtime-0.0.25-BOSS-0.3.23-20261023-153417.zip`，132651379字节，SHA256 `91d8b284c720f19c4a56d5eb8ab83fa8def5cc86fcc8188413997d8ae8930e3b`。
+- 同名交付目录中的插件：`boss-0.3.23-dev.aidplugin.zip`，5376431字节，SHA256 `2311aa5a73ef5c0ea1e7698aeeba7eea4250e68bc1d54abbedb08880443191f0`。插件Ed25519签名，Runtime Windows安装器仍为NotSigned验收版。
+- 构建、`RUNTIME_PACKAGE_PASS`、`RUNTIME_VERIFY_PASS`、插件签名/3736文件清单/搬迁后version及只读payload不变、实际`NATIVE_INPUT_LOAD_OK`均通过；打包定向测试8+20项通过、无跳过。doctor如实为exit1/ready=false，不能当作业务验收通过。
+- ZIP首次压缩遇编辑器短暂文件监视占用，原脚本诊断后自动退避重试成功，最终逐项文件摘要复读通过；未重启Windows、结束编辑器或修改打包脚本。
+- 独立发行审查通过：ZIP10项清单、CRC及逐文件摘要、EXE与manifest关联、9个关键修复dist与当前构建一致；实际构建资源中的信任根与交付/历史快照一致。未另解NSIS或运行安装器，不将静态验包写成安装通过。
+
+交付保留原配对及用户数据：先安装同包Runtime，再从Runtime导入本批BOSS插件；不解压插件本身。安装、覆盖升级、Runtime UI及A2客户业务恢复仍待用户更新后验证，未部署agent2或其他服务器。ZIP/EXE不进入Git，版本、公开根/完整快照及ZIP校验值随本次授权提交。
