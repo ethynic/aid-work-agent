@@ -163,6 +163,30 @@ mkdir -p "$(dirname "$BUILD_LOG")"
 ) > "$BUILD_LOG" 2>&1 &
 FRONTEND_PID=$!
 
+# 4.5 发布前自检：容器间数据库连通性（2026-10-23 诺度同型事故）。
+#    服务器重启后 dockerd 偶发未能编程 iptables（FORWARD 空、DOCKER nat 链缺失），
+#    容器访问 postgres:5432 全超时——此时重建 aid-agent-api 必然起不来，全站 404。
+#    用现有 api 容器实测 DATABASE_URL 连通性，异常即中止并给出修复指引。
+echo "[4.5] 发布前自检：容器间数据库连通性..."
+if docker ps --format '{{.Names}}' | grep -qx 'aid-agent-api'; then
+    if ! docker exec aid-agent-api python -c "
+import os, sys, psycopg2
+try:
+    psycopg2.connect(os.environ['DATABASE_URL'], connect_timeout=5).close()
+except Exception as e:
+    print(f'PG 连接失败: {e}', file=sys.stderr)
+    sys.exit(1)
+"; then
+        echo "错误：容器内无法连接 PostgreSQL（典型原因：服务器重启后 docker iptables 规则丢失）。" >&2
+        echo "  修复：sudo systemctl restart docker（重建 iptables 并自动拉起容器），完成后重跑本脚本。" >&2
+        kill "$FRONTEND_PID" 2>/dev/null || true
+        exit 1
+    fi
+    echo "    PG 连通性正常"
+else
+    echo "  警告：aid-agent-api 容器未运行，跳过连通性自检（首次部署或服务未启动？）"
+fi
+
 # 5. 后端重启（与前端编译并行）
 #    不先 down：up --force-recreate 会自动 stop→remove→create，省去 down 后到 up 之间
 #    所有容器同时停止的全停窗口；api 与 background 由 compose 串行错开重建（api 先起时
