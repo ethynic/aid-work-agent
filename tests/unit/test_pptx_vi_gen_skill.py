@@ -172,6 +172,75 @@ class TestPptxViGenSkill(unittest.TestCase):
         Path(str(deck) + ".bak").unlink(missing_ok=True)
         (workdir / "edit_spec.json").unlink(missing_ok=True)
 
+    def test_cli_new_roles_end_to_end(self):
+        """上游 2026-10-22 新增角色端到端：toc/table/timeline/process/quote/stats。
+
+        同时验证溢出保护：stats 大数字 fit=True + max_lines=1 -> word_wrap=False。
+        """
+        workdir = PROJECT_ROOT / "storage" / "tmp" / "test_pptx_vi_gen"
+        workdir.mkdir(parents=True, exist_ok=True)
+        content = {"slides": [
+            {"role": "toc", "items": ["第一章", "第二章", "第三章"]},
+            {"role": "stats", "title": "关键指标",
+             "stats": [{"num": "44.63万", "label": "成交额", "desc": "同比 +18%"},
+                       {"num": "1,234", "label": "订单数", "desc": "环比 +6%"},
+                       {"num": "31%", "label": "毛利率", "desc": "稳中有升"}]},
+            {"role": "table", "title": "季度数据", "head": ["指标", "Q1", "Q2"],
+             "rows": [["营收", "120", "150"], ["毛利率", "31%", "33%"]],
+             "caption": "数据来源：测试"},
+            {"role": "timeline", "title": "里程碑",
+             "items": [{"t": "1 月", "h": "立项", "d": "完成调研"},
+                       {"t": "2 月", "h": "开发", "d": "Alpha 版本"},
+                       {"t": "3 月", "h": "上线", "d": "全量发布"}]},
+            {"role": "process", "title": "实施流程",
+             "steps": [{"h": "需求", "d": "澄清范围"},
+                       {"h": "设计", "d": "原型评审"},
+                       {"h": "交付", "d": "验收上线"}]},
+            {"role": "quote", "quote": "把简单留给用户。", "author": "测试团队"},
+            {"role": "end", "title": "谢谢观看"},
+        ]}
+        proc = _run_cli(["--output", "out_roles.pptx"], workdir, content=content)
+        result = json.loads(proc.stdout)
+        self.assertTrue(result["success"], msg=proc.stdout + proc.stderr)
+        deck = Path(result["pptx"])
+        try:
+            from pptx import Presentation
+            prs = Presentation(str(deck))
+            all_text = "\n".join(
+                sh.text_frame.text
+                for slide in prs.slides for sh in slide.shapes
+                if sh.has_text_frame
+            )
+            self.assertIn("关键指标", all_text)
+            self.assertIn("44.63万", all_text)
+            self.assertIn("里程碑", all_text)
+            self.assertIn("把简单留给用户。", all_text)
+            # 新版式产出原生表格（GraphicFrame，非贴图）
+            self.assertTrue(
+                any(sh.has_table for slide in prs.slides for sh in slide.shapes))
+            # 溢出保护：fit=True + max_lines=1 的文本框必须禁换行
+            num_frames = [
+                sh.text_frame for slide in prs.slides for sh in slide.shapes
+                if sh.has_text_frame and "44.63万" in sh.text_frame.text
+            ]
+            self.assertTrue(num_frames)
+            self.assertFalse(num_frames[0].word_wrap)
+        finally:
+            deck.unlink(missing_ok=True)
+
+    def test_native_measure_uses_real_font(self):
+        """measure() 必须走真实字体文件，而不是静默退回 em 估算。"""
+        import sys as _sys
+        _sys.path.insert(0, str(SKILL_DIR / "scripts"))
+        from pptx_gen import native
+        from pptx_gen.native import measure
+        s = "44.63万"
+        m = measure(s, 94, bold=True)
+        em = sum(native._em(ch) for ch in s) * 94
+        self.assertGreater(m, 0)
+        # 字体缺失时 measure 精确等于 em 估算 -> 此断言失败即为字体未生效
+        self.assertNotAlmostEqual(m, em, delta=max(1.0, em * 0.005))
+
     def test_template_fill_analyze_smoke(self):
         """路线一 analyze 冒烟：临时构造最小模板，断言解析出版式与占位符。"""
         from pptx import Presentation

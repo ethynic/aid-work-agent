@@ -8,7 +8,7 @@ description: >
   模板风格 PPT、品牌VI PPT、美观演示文稿、套用公司模板做 PPT、
   修改已生成的 PPT（改字/加页/删页/移页/换页/换色）。
 metadata:
-  version: "2.0.0"
+  version: "2.1.0"
   author: aid-work-agent
   trigger_keywords:
     - 按模板生成PPT
@@ -40,7 +40,7 @@ metadata:
 
 ## ⚠️ 严禁事项
 
-**不要自己设计版式或逐页堆文字**——7 种版式的视觉排版（配色、间距、字体层级）
+**不要自己设计版式或逐页堆文字**——14 种版式的视觉排版（配色、间距、字体层级）
 已由渲染引擎内置，自行拼凑必然效果差且浪费大量 token。所有生成必须通过
 `skill_execute` 调用本技能的管线脚本：
 
@@ -62,8 +62,11 @@ metadata:
 ### 内容 schema（content.json，由你编写）
 
 每页一个对象，按内容特点选 role。**版式分工**：cover（封面）和 end（结尾）各用
-一次；section（章节页）用于划分篇章；正文页用 stats（大数字卡）/ bullets（要点列表）/
-twocol（双栏对比）/ image（图片展示）组合，避免连续多页同一 role。
+一次；toc（目录）放正文前；section（章节页）划分篇章；正文页按内容特点组合：
+stats（大数字卡）/ bullets（要点列表）/ twocol（双栏对比）/ image（图片展示）/
+table（数据表格）/ image_text（图文组合）/ image_grid（多图画廊）/ timeline（时间轴）/
+process（流程步骤）/ quote（金句），避免连续多页同一 role。全部字段见
+`references/usage.md` 第 1 节。
 
 ```jsonc
 {
@@ -158,7 +161,7 @@ python scripts/edit.py --pptx "输出文件名.pptx" --spec edit_spec.json
 | `move_slide` | `slide` + `to` | 移页到新位置 |
 | `recolor` | `accent`/`brand`/`dark`，或 `map` {旧hex: 新hex} | 全局换色（文本/形状/渐变全覆盖） |
 
-edit_spec 完整字段与示例见 `references/usage.md` 第 7 节。stdout 返回
+edit_spec 完整字段与示例见 `references/usage.md` 第 8 节。stdout 返回
 `applied`（每个 op 的执行结果）与 `warnings`（失败项，需修正后重试）。
 
 **验证改动**：用 python-pptx 结构 dump 检查（`python -c` 遍历 slides/shapes
@@ -201,7 +204,8 @@ deck_spec 每页二选一（同一 spec 内可混用）：
 
 ## 边界与已知限制
 
-- 内置 7 种版式（cover/section/stats/bullets/twocol/image/end），没有表格、SmartArt、动画
+- 内置 14 种版式（cover/toc/section/stats/bullets/twocol/image/table/image_text/
+  image_grid/timeline/process/quote/end），支持原生表格；没有 SmartArt、动画
 - `image` role 的图片按等比缩放放入卡片，建议用户上传清晰的大图
 - 模板中提取不到主题色时使用默认深蓝品牌色
 - 路线二的 QA 预览 PNG（Pillow 渲染）与原生 deck 排版近似但不逐像素一致，

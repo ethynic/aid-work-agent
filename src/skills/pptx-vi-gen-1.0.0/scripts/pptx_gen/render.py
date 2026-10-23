@@ -3,9 +3,13 @@
 Every slide is drawn from a small set of primitives so the whole deck shares
 one visual language driven by the customer VI (colors / fonts / logo).
 
-Roles: cover, section, bullets, stats, twocol, image, end.
-Trade-off: pages are raster images, so text in the final PPT is not editable
-(see README for how to switch to editable text later).
+Light-theme preview renderers (legacy). The default preview theme is the
+dark one in dark_theme.py (installed as RENDERERS at the end of this file),
+which mirrors native.py's deck geometry parameter-for-parameter. Switch back:
+    import pptx_gen.render as R
+    R.RENDERERS = R.LIGHT_RENDERERS
+Roles (dark theme, all 14): cover, toc, section, bullets, stats, table,
+twocol, image, image_text, image_grid, timeline, process, quote, end.
 """
 import os
 
@@ -85,10 +89,35 @@ class Canvas:
             out.append(cur)
         return out
 
+    def fit_line_size(self, s, kind, max_size, max_w):
+        """Largest font size <= max_size whose single line fits within max_w."""
+        size = max_size
+        while size > 8:
+            if self.d.textlength(str(s), font=self.font(kind, size)) <= max_w:
+                return size
+            size -= 2
+        return 8
+
+    def fit_size(self, s, kind, max_size, max_w, max_h, lh=1.35):
+        """Largest font size <= max_size whose wrapped block fits max_w x max_h."""
+        size = max_size
+        for _ in range(60):
+            if size < 8:
+                size = 8
+                break
+            font = self.font(kind, size)
+            lines = self.wrap(s, font, max_w) if max_w else [str(s)]
+            if int(size * lh) * len(lines) <= max_h:
+                return size
+            size -= 2
+        return max(size, 8)
+
     def text(self, xy, s, size, color, kind="body", max_w=None, lh=1.35,
-             alpha=255, anchor="la"):
-        font = self.font(kind, size)
+             alpha=255, anchor="la", fit=False, max_h=None):
         x, y = xy
+        if (fit or max_h) and max_w:
+            size = self.fit_size(s, kind, size, max_w, max_h or 999999, lh)
+        font = self.font(kind, size)
         lines = self.wrap(s, font, max_w) if max_w else str(s).split("\n")
         step = int(size * lh)
         for ln in lines:
@@ -146,8 +175,8 @@ class Canvas:
     def header(self, title, lead=None, color=None):
         ink = color or self.vi.get("dark", "#10263D")
         self.card([MARGIN, 92, MARGIN + 10, 178], self.vi["accent"], radius=5)
-        self.text((MARGIN + 34, 92), title, 58, ink, kind="title",
-                  max_w=self.w - 2 * MARGIN - 40)
+        ts = self.fit_line_size(title, "title", 58, self.w - 2 * MARGIN - 40)
+        self.text((MARGIN + 34, 92), title, ts, ink, kind="title")
         y = 186
         if lead:
             y = self.text((MARGIN + 34, 188), lead, 30, self.vi.get("muted", "#6B7280"),
@@ -183,8 +212,8 @@ def render_section(c, p, i, n):
     c.text((MARGIN, 250), p.get("no", f"{i:02d}"), 210, c.vi["accent"],
            kind="title", alpha=95)
     c.card([MARGIN, 520, MARGIN + 130, 530], c.vi["accent"], radius=5)
-    c.text((MARGIN, 566), p["title"], 78, c.vi["dark"], kind="title",
-           max_w=c.w - 2 * MARGIN - 200)
+    ts = c.fit_line_size(p["title"], "title", 78, c.w - 2 * MARGIN - 200)
+    c.text((MARGIN, 566), p["title"], ts, c.vi["dark"], kind="title")
     if p.get("lead"):
         c.text((MARGIN, 720), p["lead"], 34, c.vi.get("muted", "#6B7280"),
                max_w=c.w - 2 * MARGIN - 240)
@@ -201,9 +230,10 @@ def render_bullets(c, p, i, n):
         c.circle(MARGIN + 36, y + 42, 34, c.vi["accent"])
         c.center((MARGIN + 36, y + 42), f"{idx + 1}", 30, "#FFFFFF", kind="title")
         c.text((MARGIN + 96, y), it["h"], 38, c.vi["dark"], kind="title",
-               max_w=c.w - MARGIN - 96 - MARGIN)
+               max_w=c.w - MARGIN - 96 - MARGIN, fit=True, max_h=46)
         c.text((MARGIN + 96, y + 56), it.get("d", ""), 28,
-               c.vi.get("muted", "#6B7280"), max_w=c.w - MARGIN - 96 - MARGIN)
+               c.vi.get("muted", "#6B7280"),
+               max_w=c.w - MARGIN - 96 - MARGIN, fit=True, max_h=rh - 64)
         y += rh
     c.footer(p.get("org", ""), i, n)
 
@@ -214,20 +244,30 @@ def render_stats(c, p, i, n):
     cols = min(len(stats), 4)
     gap = 36
     cw = (c.w - 2 * MARGIN - gap * (cols - 1)) // cols
-    ch = 380
-    y = top + 40
+
+    def _card_h(s):
+        d = s.get("desc", "")
+        d_h = 0
+        if d:
+            ds = c.fit_size(d, "body", 25, cw - 52, 130, 1.3)
+            d_h = int(ds * 1.3) * len(c.wrap(d, c.font("body", ds), cw - 52))
+        return int(274 + d_h + 34)
+
+    ch = max(_card_h(s) for s in stats)
+    avail_bot = FOOTER_Y - 60
+    y = top + 40 + max(0, (avail_bot - top - 40 - ch) // 2)
     x = MARGIN
     for s in stats:
         c.card([x, y, x + cw, y + ch], "#FFFFFF", radius=26,
                outline=c.vi["accent"], outline_alpha=130, width=2)
         c.card([x + 26, y + 30, x + 26 + 60, y + 36], c.vi["accent"], radius=3)
-        c.text((x + 26, y + 74), s["num"], 104, c.vi["brand"], kind="title",
-               max_w=cw - 52)
-        c.text((x + 26, y + 214), s["label"], 32, c.vi["dark"], kind="title",
+        ns = c.fit_line_size(s["num"], "title", 104, cw - 52)
+        c.text((x + 26, y + 74), s["num"], ns, c.vi["brand"], kind="title")
+        c.text((x + 26, y + 218), s["label"], 32, c.vi["dark"], kind="title",
                max_w=cw - 52)
         if s.get("desc"):
-            c.text((x + 26, y + 266), s["desc"], 25, c.vi.get("muted", "#6B7280"),
-                   max_w=cw - 52, lh=1.3)
+            c.text((x + 26, y + 274), s["desc"], 25, c.vi.get("muted", "#6B7280"),
+                   max_w=cw - 52, lh=1.3, fit=True, max_h=ch - 274 - 28)
         x += cw + gap
     c.footer(p.get("org", ""), i, n)
 
@@ -238,42 +278,53 @@ def render_twocol(c, p, i, n):
     gap = 48
     cw = (c.w - 2 * MARGIN - gap) // 2
     bottom = FOOTER_Y - 60
+    strip = [c.vi["accent"], c.vi["accent"]]
+    item_h = 92
+    n_max = max(len(col["items"]) for col in cols)
+    card_h = 150 + n_max * item_h + 36
+    y0 = top + 12 + max(0, (bottom - top - 12 - card_h) // 2)
     for k, col in enumerate(cols):
         x = MARGIN + k * (cw + gap)
-        c.card([x, top + 12, x + cw, bottom], "#FFFFFF", radius=26,
+        c.card([x, y0, x + cw, y0 + card_h], "#FFFFFF", radius=26,
                outline=c.vi["accent"], outline_alpha=110, width=2)
-        c.card([x, top + 12, x + cw, top + 18], c.vi["accent"], radius=6)
-        c.text((x + 36, top + 52), col["h"], 40, c.vi["brand"], kind="title",
+        c.card([x, y0, x + cw, y0 + 10], c.vi["accent"], radius=6)
+        c.text((x + 36, y0 + 52), col["h"], 40, c.vi["brand"], kind="title",
                max_w=cw - 72)
-        items = col["items"]
-        area_top, area_bot = top + 150, bottom - 44
-        step = (area_bot - area_top) // max(1, len(items))
-        for j, it in enumerate(items):
-            yy = area_top + j * step + (step - 40) // 2
-            c.circle(x + 46, yy + 18, 7, c.vi["accent"])
+        for j, it in enumerate(col["items"]):
+            yy = y0 + 150 + j * item_h + (item_h - 44) // 2
+            c.circle(x + 46, yy + 20, 7, c.vi["accent"])
             c.text((x + 70, yy), it, 28, c.vi.get("ink", "#1A1A1A"),
-                   max_w=cw - 106, lh=1.34)
+                   max_w=cw - 106, lh=1.34, fit=True, max_h=44)
     c.footer(p.get("org", ""), i, n)
 
 
 def render_image(c, p, i, n):
     top = c.header(p["title"], p.get("lead"))
-    box = [MARGIN, top + 16, c.w - MARGIN, FOOTER_Y - 90]
-    c.card(box, "#FFFFFF", radius=26, outline=c.vi["accent"], outline_alpha=110, width=2)
-    pad = 28
-    inner = [box[0] + pad, box[1] + pad, box[2] - pad, box[3] - pad - 70]
+    box_top, box_bottom = top + 16, FOOTER_Y - 90
+    avail_h = box_bottom - box_top
+    cap_h = 76 if p.get("caption") else 0
     img = getattr(c, "_page_image", None)
     if img is not None:
-        iw, ih = inner[2] - inner[0], inner[3] - inner[1]
-        r = min(iw / img.width, ih / img.height)
+        max_iw, max_ih = c.w - 2 * MARGIN, avail_h - 56 - cap_h
+        r = min(max_iw / img.width, max_ih / img.height)
         nw, nh = int(img.width * r), int(img.height * r)
+        card_w = min(c.w - 2 * MARGIN, nw + 56)
+        card_h = nh + 56 + cap_h
+        cx = MARGIN + (c.w - 2 * MARGIN - card_w) // 2
+        cy = box_top + max(0, (avail_h - card_h) // 2)
+        c.card([cx, cy, cx + card_w, cy + card_h], "#FFFFFF", radius=26,
+               outline=c.vi["accent"], outline_alpha=110, width=2)
         im = img.resize((nw, nh))
-        ox = inner[0] + (iw - nw) // 2
-        oy = inner[1] + (ih - nh) // 2
-        c.img.paste(im, (ox, oy), im if im.mode == "RGBA" else None)
-    if p.get("caption"):
-        c.text((box[0] + pad, box[3] - 62), p["caption"], 26,
-               c.vi.get("muted", "#6B7280"), max_w=box[2] - box[0] - 2 * pad)
+        c.img.paste(im, (cx + (card_w - nw) // 2, cy + 28),
+                    im if im.mode == "RGBA" else None)
+        if p.get("caption"):
+            c.text((cx + 28, cy + card_h - 62), p["caption"], 26,
+                   c.vi.get("muted", "#6B7280"), max_w=card_w - 56)
+    else:
+        c.card([MARGIN, box_top, c.w - MARGIN, box_bottom], "#FFFFFF",
+               radius=26, outline=c.vi["accent"], outline_alpha=110, width=2)
+        c.text((MARGIN + 28, box_top + avail_h // 2 - 24), "图片占位", 26,
+               c.vi.get("muted", "#6B7280"), max_w=c.w - 2 * MARGIN - 56)
     c.footer(p.get("org", ""), i, n)
 
 
@@ -292,7 +343,8 @@ def render_end(c, p, i, n):
                max_w=c.w - 2 * MARGIN, alpha=230)
 
 
-RENDERERS = {
+# 浅色备用版式（ legacy ）：默认不启用，切回方式见文件末尾
+LIGHT_RENDERERS = {
     "cover": render_cover,
     "section": render_section,
     "bullets": render_bullets,
@@ -302,24 +354,25 @@ RENDERERS = {
     "end": render_end,
 }
 
-# Original light renderers are kept here so a single deck can be switched
-# back to the light theme:
-#   from pptx_gen import render as _r
-#   _r.RENDERERS.update(_r.LIGHT_RENDERERS)
-LIGHT_RENDERERS = dict(RENDERERS)
 
-# Skill default theme: the deep-navy "dark" look (see dark_theme.py).
-# Palette resolves from the extracted VI (accent / brand / dark), so
-# vi_override can still recolor a dark deck.
-try:
-    from .dark_theme import DARK_RENDERERS as _DARK_RENDERERS
-    RENDERERS.update(_DARK_RENDERERS)
-except Exception:  # dark_theme.py ships with the skill; ignore if removed
-    pass
-
-
-def render(vi, page, index, total, page_image=None):
+def render(vi, page, index, total, page_image=None, page_images=None):
     c = Canvas(vi)
     c._page_image = page_image
-    RENDERERS[page["role"]](c, page, index, total)
+    c._page_images = page_images or []
+    role = page["role"]
+    if role not in RENDERERS:
+        # graceful preview fallback so a new native role never blocks QA
+        c.vgrad(vi["brand"], vi["dark"])
+        c.text((MARGIN, 120), page.get("title", role), 58, "#FFFFFF",
+               kind="title", max_w=c.w - 2 * MARGIN)
+        c.text((MARGIN, 240), f"[preview N/A for role: {role}]", 30,
+               "#A9C2DA")
+        return c
+    RENDERERS[role](c, page, index, total)
     return c
+
+
+# ---- default preview theme: dark (mirrors native.py deck geometry) ----
+from .dark_theme import DARK_RENDERERS  # noqa: E402
+
+RENDERERS = DARK_RENDERERS

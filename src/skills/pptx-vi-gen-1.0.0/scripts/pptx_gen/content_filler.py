@@ -10,6 +10,18 @@ and grows/shrinks paragraph count by cloning the last paragraph.
 """
 import copy
 
+from pptx.enum.text import MSO_AUTO_SIZE
+
+
+def _safe_text(tf):
+    """Prevent overflow: enable wrap + shrink-to-fit (matches PowerPoint's
+    'shrink text on overflow'). Applied only when we fully control the text."""
+    tf.word_wrap = True
+    try:
+        tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
+    except Exception:
+        pass
+
 
 def _as_lines(value):
     if isinstance(value, (list, tuple)):
@@ -68,6 +80,7 @@ def replace_text(slide, replacements):
                 break
             if key == name or key == full:
                 _fill_paragraphs(shp.text_frame, new_text)
+                _safe_text(shp.text_frame)
                 touched.append(name)
                 done.add(id(shp))
                 break
@@ -103,6 +116,7 @@ def fill_placeholders(slide, fields):
             if key in candidates or key == str(idx):
                 if ph.has_text_frame:
                     _fill_paragraphs(ph.text_frame, value)
+                    _safe_text(ph.text_frame)
                     filled.append((idx, ph.name))
                 break
     return filled

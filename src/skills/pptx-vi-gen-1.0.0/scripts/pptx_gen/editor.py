@@ -236,6 +236,10 @@ def _op_set_text(prs, op):
         raise ValueError("no shape matching %r on slide %s"
                          % (op.get("match"), op["slide"]))
     _set_frame_text(target.text_frame, op["text"])
+    # new text may be longer than the old one: enable wrap + shrink-to-fit
+    # so it can never spill out of the shape / page
+    from .content_filler import _safe_text
+    _safe_text(target.text_frame)
 
 
 def _op_add_slide(prs, op, pal, base_dir):
