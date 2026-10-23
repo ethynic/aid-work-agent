@@ -1,23 +1,25 @@
 {
   "name": "boss-resume-assistant",
-  "version": "0.3.12",
+  "version": "0.3.22",
   "engines": {
     "node": ">=20"
   },
   "description": "BOSS 招聘操作 CLI（7 个真机验证操作 + MCP）",
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.main.json",
-    "build:main": "tsc -p tsconfig.main.json",
-    "typecheck": "tsc --noEmit -p tsconfig.main.json",
+    "build": "npm run build:native && tsc -p tsconfig.main.json",
+    "build:main": "npm run build:native && tsc -p tsconfig.main.json",
+    "typecheck": "npm run build:native && tsc --noEmit -p tsconfig.main.json",
     "test": "npm run build:main && node scripts/run-tests.mjs",
     "cli": "npm run build:main && node dist/src/cli/index.js",
-    "prepack": "npm run build:main"
+    "prepack": "npm run build:main",
+    "build:native": "npm --prefix ../shared/win32-native-input run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
     "ws": "^8.21.1",
-    "zod": "4.4.3"
+    "zod": "4.4.3",
+    "@aid/win32-native-input": "file:../shared/win32-native-input"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

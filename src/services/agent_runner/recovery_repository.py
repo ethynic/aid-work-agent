@@ -91,6 +91,16 @@ class RecoveryRepository:
                 raise RunnerError('RECOVERY_FINALIZATION_PENDING',409)
             if recovery_port is not None:
                 recovery_port.assert_claim_in_tx(cursor,row,control,worker_id=worker_id)
+            checkpoint=copy.deepcopy(checkpoint)
+            checkpoint.pop('timer_activation',None)
+            timer=checkpoint.get('durable_sleep') or {}
+            if timer.get('phase')=='consumed' and timer.get('trigger')=='user_resume':
+                from .durable_sleep import nodes
+                cursor.execute('SELECT clock_timestamp() AS database_now')
+                timer['woke_at']=cursor.fetchone()['database_now'].isoformat()
+                for node in nodes(checkpoint['execution']):
+                    if node.get('execution_id')==timer.get('execution_id'):
+                        node['tools'][timer['tool_call_id']]['result']['woke_at']=timer['woke_at']
             number = row['attempt'] + 1
             cursor.execute('''UPDATE agent_runner_controls SET status='consumed',consumed_attempt=%s,
                 consumed_at=clock_timestamp() WHERE control_id=%s AND status='accepted'
@@ -98,7 +108,7 @@ class RecoveryRepository:
             consumed_at = (cursor.fetchone() or {}).get('consumed_at')
             cursor.execute('''UPDATE agent_runners SET status='running',attempt=%s,worker_id=%s,
                 lease_until=clock_timestamp()+(%s*INTERVAL '1 second'),checkpoint=%s::jsonb,
-                pause_requested=FALSE,resume_control_id=NULL,revision=revision+1,
+                pause_requested=FALSE,resume_control_id=NULL,wake_at=NULL,revision=revision+1,
                 control_revision=control_revision+1,view_revision=view_revision+1,updated_at=clock_timestamp()
                 WHERE runner_id=%s RETURNING *''',
                 (number,worker_id,lease_seconds,capped_checkpoint_dumps(checkpoint),runner_id))
@@ -202,14 +212,22 @@ class RecoveryRepository:
             cursor.execute('''UPDATE agent_runner_controls SET status='consumed',consumed_attempt=%s,
                 consumed_at=clock_timestamp() WHERE runner_id=%s AND action='pause' AND status='accepted' ''',
                 (attempt.number,attempt.runner_id))
-            checkpoint = {**checkpoint,'released_attempt':release_proof(attempt,'paused',
+            from .durable_sleep import preserve_activation_fence
+            checkpoint = {**preserve_activation_fence(row,checkpoint),'released_attempt':release_proof(attempt,'paused',
                 'unstarted_pause' if checkpoint.get('unstarted') is True else 'parked')}
+            wake_at=row.get('wake_at')
+            from .durable_sleep import sleep_leaf,arm_in_tx
+            if sleep_leaf(checkpoint) is not None:
+                wake_at=arm_in_tx(cursor,row,checkpoint)
+                root = checkpoint['execution']
+                snapshot={**(snapshot or {}),'waiting':copy.deepcopy(root.get('waiting')),
+                    'business_iterations':(root.get('resources') or {}).get('business_iterations',root.get('iteration',0))}
             snapshot = merge_control_projection(snapshot,row.get('public_snapshot'))
             snapshot = project_public_snapshot(cursor,row,checkpoint=checkpoint,snapshot=snapshot,status='paused')
             cursor.execute('''UPDATE agent_runners SET status='paused',worker_id=NULL,lease_until=NULL,
                 checkpoint=%s::jsonb,public_snapshot=%s::jsonb,revision=revision+1,
-                view_revision=view_revision+1,updated_at=clock_timestamp() WHERE runner_id=%s RETURNING *''',
-                (capped_checkpoint_dumps(checkpoint),capped_snapshot_dumps(snapshot),attempt.runner_id))
+                wake_at=%s,view_revision=view_revision+1,updated_at=clock_timestamp() WHERE runner_id=%s RETURNING *''',
+                (capped_checkpoint_dumps(checkpoint),capped_snapshot_dumps(snapshot),wake_at,attempt.runner_id))
             result = decoded(cursor.fetchone())
             result = sync_public_display(cursor,result,advance_view=False)
             result = EventRepository.notify_in_tx(cursor,row,after=result)

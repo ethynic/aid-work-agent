@@ -230,6 +230,36 @@ export const TOOL_DEFS: WecomToolDef[] = [
     },
     annotations: { title: '企业微信新消息跟踪（单轮）', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
+  {
+    name: 'wecom_group_list',
+    title: '企业微信本地库群列表与关键词搜索',
+    description: '直接查询当前账号本地库的已同步群，无UI搜索、不切会话、不清未读。query按群名作字面子串匹配；不传query列出群。' +
+      '按群名和会话ID稳定排序，过滤后取limit个（默认100）；返回groups:[{name,conversation_id}],count,has_more。' +
+      '仅代表本机已同步数据，不承诺企业全部群或当前成员资格；缺库/版本/身份错误明确失败，不降级视觉。',
+    zodShape: {
+      query: z.string().min(1).max(100).optional().describe('可选群名关键词，字面子串匹配（%和_不作通配符）；不传列群'),
+      limit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional().describe('最多返回群数，默认100；has_more标注还有更多'),
+    },
+    annotations: { title: '企业微信本地库群查询', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: 'wecom_group_read',
+    title: '企业微信本地库群消息时间线',
+    description: '直接从本地库按完整群名读取最近N条群消息（limit默认100），先按发送时间选最近N条，再按时间从早到晚返回。' +
+      '支持from_time/to_time闭区间查询，超过limit仍取区间内最近N条，has_more=true说明还有更早消息。' +
+      '时间精确到秒：YYYY-MM-DD HH:mm:ss按北京时间UTC+08:00解释，或带时区RFC3339。' +
+      '返回messages含msg_id/sender_id/sender_name/send_time/time/text/parse_trusted；按有序片段恢复@成员/@所有人及引用前文，' +
+      'mentions含kind/user_id/name/name_source，mentions_complete标记提及解析完整性；姓名未知为null并保留字符串ID，naming_incomplete标记姓名缺口。' +
+      '非文本占位，invalid_time_count标注无法排列的异常时间记录数。' +
+      '同名多群拒绝，不切会话、不清未读、不降级UI；不提供增量水位游标，仅覆盖本机已同步记录。',
+    zodShape: {
+      target_name: z.string().min(1).max(100).describe('完整群名，精确匹配，仅在群中消歧'),
+      limit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional().describe('最多返回消息数，默认100；范围内选最近N条再按时间升序'),
+      from_time: z.string().min(1).optional().describe('可选起始时间（包含）；完整到秒，默认北京时间或显式带时区RFC3339'),
+      to_time: z.string().min(1).optional().describe('可选结束时间（包含）；完整到秒，默认北京时间或显式带时区RFC3339'),
+    },
+    annotations: { title: '企业微信本地库群消息时间线', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
 ]
 
 export const TOOL_NAMES = TOOL_DEFS.map((t) => t.name)

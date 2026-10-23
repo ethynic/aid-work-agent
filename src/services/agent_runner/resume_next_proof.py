@@ -9,13 +9,19 @@ import hashlib
 from uuid import UUID
 
 from src.core.agent_engine.contracts import CheckpointFailure
-from src.local_tools.resume_continuation import _names, batch_metadata
+from src.local_tools.resume_continuation import _names, batch_metadata, failed_attempt_names
 from .contracts import canonical_json
 from .local_invocations import LocalPhase
 
 
-def continuation_arguments(row, node, call_id, arguments, load_parent):
-    """Return public canonical arguments, or reject any changed ownership fact."""
+def continuation_arguments(row, node, call_id, arguments, load_parent,
+                           load_attempts=None, current_invocation_id=None, require_binding=True):
+    """Return public canonical arguments, or reject any changed ownership fact.
+
+    exclude_names 与派发时 prepare_next 的合成口径一致：父批名单 + 沿同一游标
+    「失败且可重试」历史尝试已标记的候选人（load_attempts 注入读取，恢复证明
+    时排除当前调用自身记录——其派发时尚不存在）。两处不一致即拒绝。
+    """
     def reject():
         raise CheckpointFailure('LOCAL_RESUME_CONTINUATION_PROOF_INVALID')
 
@@ -40,8 +46,11 @@ def continuation_arguments(row, node, call_id, arguments, load_parent):
     parent = load_parent(parent_id) or {}
     if (str(parent.get('id')) != parent_id
             or any(str(parent.get(key)) != str(row[key]) for key in ('tenant_id', 'user_id', 'session_id'))
-            or parent.get('tool_name') not in {'boss_resume_batch', 'boss_resume_next'}
-            or parent.get('state') != 'succeeded' or parent.get('effect') != 'none'):
+            or parent.get('tool_name') not in {'boss_resume_batch', 'boss_resume_next'}):
+        reject()
+    from src.local_tools.repository import observed_invocation
+    parent = observed_invocation(parent)
+    if parent.get('state') != 'succeeded' or parent.get('effect') != 'none':
         reject()
     result, previous = parent.get('result_json'), parent.get('arguments_json')
     if not isinstance(result, dict) or not isinstance(previous, dict) or result.get('success') is not True:
@@ -52,12 +61,20 @@ def continuation_arguments(row, node, call_id, arguments, load_parent):
     capability = batch_metadata({**result, 'invocation_id': parent_id, 'effect': parent['effect']}, previous)
     if not capability['continuation']['available']:
         reject()
+    attempts = load_attempts(parent) if load_attempts is not None else []
+    history_version = (saved.get('result') or {}).get('_resume_history_version', 1)
+    if type(history_version) is not int or history_version not in {1, 2}:
+        reject()
+    names = list(dict.fromkeys(_names(data, previous)
+        + failed_attempt_names(attempts, (current_invocation_id,), history_version=history_version)))
     canonical = {'continue_from': parent_id, 'limit': intent['limit'],
-                 'exclude_names': _names(data, previous), 'expected_job_name': data['job_name'].strip(),
+                 'exclude_names': names, 'expected_job_name': data['job_name'].strip(),
                  '_resume_expected_device_id': str(parent['device_id'])}
+    if history_version == 2:
+        canonical['_resume_history_version'] = 2
     main = LocalPhase(node['execution_id'], call_id, 'main', 0)
     ref = (node.get('resources', {}).get('local_invocations') or {}).get(main.key(row['runner_id'])) or {}
     if (saved.get('result') != canonical
-            or ref.get('request', {}).get('device_id') != canonical['_resume_expected_device_id']):
+            or require_binding and ref.get('request', {}).get('device_id') != canonical['_resume_expected_device_id']):
         reject()
     return {key: value for key, value in canonical.items() if not key.startswith('_')}

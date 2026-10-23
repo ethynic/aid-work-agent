@@ -1,19 +1,18 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { VisualRecovery, validateVisualArgs, type VisualContext } from '../src/main/boss/visualRecovery.js'
 import { VisualDiagnoseError, visualDiagnose } from '../src/main/boss/visualDiagnoseClient.js'
+import { encodePng, regionExactEqualFiles } from '../src/main/boss/imageOps.js'
 import type { BossSession } from '../src/main/operations/bossContext.js'
-import { execPowerShellScript } from '../src/main/input/powerShell.js'
 import type { WindowObservation } from '../src/main/input/windowExperiment.js'
 import { pngMetadata } from '../src/main/operations/bossScreenshot.js'
 import { CodedOperationError } from '../src/main/operations/types.js'
 import { createBossOverlayDismissOperation } from '../src/main/operations/bossOverlayDismiss.js'
-import { fileURLToPath } from 'node:url'
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9gAAAABJRU5ErkJggg==', 'base64')
 const png40 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAYAAACM/rhtAAAAWElEQVR4nM3OQQEAIACEMKR/5zOCT1mCnW0jTOIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkzt+Blws+6gRMEVPP7QAAAABJRU5ErkJggg==', 'base64')
@@ -139,20 +138,34 @@ test('parallel consumers cannot issue the same visual close click twice', async 
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
-test('real image comparison ignores unrelated caret pixels and rejects changes at the close target', { skip: process.platform !== 'win32', timeout: 30_000 }, async () => {
+test('real image comparison ignores unrelated caret pixels and rejects changes at the close target', async () => {
   const root = await mkdtemp(join(tmpdir(), 'boss-region-'))
   try {
-    const images = [
-      'iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAYAAACM/rhtAAAAWElEQVR4nM3OQQEAIACEMKR/5zOCT1mCnW0jTOIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkTuIkzt+Blws+6gRMEVPP7QAAAABJRU5ErkJggg==',
-      'iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAYAAACM/rhtAAAAW0lEQVR4nM3OQQHAQBCEMBb/nucc9FuiILdthEmcxEmcxEmcxEmcxEmcxEmcxEmcxEmcxEmcxEmcxEmcxEmcxEmcxEmcxEmcxEmcxEmcxEmcxEmcxPl34Mvd8QA+8wRPiS9ACgAAAABJRU5ErkJggg==',
-      'iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAYAAACM/rhtAAAAZElEQVR4nO3XsQ3AMAzEQJr77+wgMygFgegmeFCVzr33EiZxEidxEidxEidxEidxEidxEidxEidxEidxEidxEid/G3jOaQ+8H/9g/zvx13bg1Bac2oJTW3BqC05twaktOLUFGXjfhwcl4wdPtabGoQAAAABJRU5ErkJggg==',
-    ]
+    // 旧用例的固定 base64 实为损坏 PNG（zlib 均不可解，仅 GDI+ 宽容解码可读）；迁 Node 严格
+    // 解码后改用合成有效 PNG 表达同一场景：区域 (4,4,32,32) 外插入符噪声不判变、
+    // 区域内关闭控件位移必须拦截。ps1 双通道对照见 tests/image-ops.test.ts。
+    const W = 40, H = 40
+    const px = Buffer.alloc(W * H * 4)
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4
+      px[i] = 200; px[i + 1] = 210; px[i + 2] = 230; px[i + 3] = 255
+      if (x >= 16 && x < 26 && y >= 16 && y < 26) { px[i] = 90; px[i + 1] = 60; px[i + 2] = 40 } // 关闭控件块
+    }
+    const caret = Buffer.from(px)
+    for (const [cx, cy] of [[1, 1], [38, 39], [20, 2]] as const) { // 区域外插入符像素
+      const i = (cy * W + cx) * 4
+      caret[i] = 0; caret[i + 1] = 0; caret[i + 2] = 0
+    }
+    const moved = Buffer.from(px)
+    for (let y = 16; y < 26; y++) for (let x = 18; x < 28; x++) { // 关闭控件位移 2px（差异仍在区域内）
+      const i = (y * W + x) * 4
+      moved[i] = 90; moved[i + 1] = 60; moved[i + 2] = 40
+    }
+    const images = [px, caret, moved].map(data => encodePng({ width: W, height: H, data }))
     const files = images.map((_, i) => join(root, `${i}.png`))
-    await Promise.all(files.map((file, i) => writeFile(file, Buffer.from(images[i]!, 'base64'))))
-    const script = fileURLToPath(new URL('../../scripts/visual-region-compare.ps1', import.meta.url))
+    await Promise.all(files.map((file, i) => writeFile(file, images[i]!)))
     for (const [index, expected] of [[1, true], [2, false]] as const) {
-      const result = await execPowerShellScript(script, ['-Original', files[0]!, '-Fresh', files[index]!, '-X', '4', '-Y', '4', '-Width', '32', '-Height', '32'], { timeout: 10_000 })
-      assert.equal(JSON.parse(result.stdout).equal, expected)
+      assert.equal(regionExactEqualFiles(files[0]!, files[index]!, { x: 4, y: 4, w: 32, h: 32 }, readFileSync), expected)
     }
   } finally { await rm(root, { recursive: true, force: true }) }
 })

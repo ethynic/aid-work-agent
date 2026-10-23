@@ -4,6 +4,7 @@
 title = '[数据表] {table_name}' + metadata table_name/source_info，不再限定 source_type。
 """
 import json
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -26,16 +27,22 @@ def _dedup_db_mock(existing_id=None):
     return mock_cm, mock_cursor
 
 
+@contextmanager
 def _patch_embedding():
-    """mock embedding 客户端（0 token，跳过计费分支）"""
+    """mock embedding 客户端（0 token，跳过计费分支），并固定 key 读取，
+    使测试不依赖 EMBEDDING_API_KEY 环境变量（容器/宿主机均可运行）"""
     client = MagicMock()
     client.embed_batch = AsyncMock(return_value=[[0.0] * 8])
     client.last_usage_tokens = 0
     client.model = "text-embedding-v3"
-    return patch(
+    with patch(
         "src.services.data_analysis.schema_saver.TextEmbeddingV3Client",
         return_value=client,
-    )
+    ), patch(
+        "src.config.settings.get_embedding_api_key",
+        return_value="test-embedding-key",
+    ):
+        yield
 
 
 @pytest.mark.asyncio
@@ -160,3 +167,147 @@ async def test_ensure_category_skipped_without_tenant():
         if "INSERT INTO knowledge_categories" in c[0][0]
     ]
     assert not cat_calls
+
+
+# ============== 可用智能体名单（2026-10 设计 §18.5） ==============
+
+
+@pytest.mark.asyncio
+async def test_create_with_allowed_agent_ids_writes_metadata():
+    """新创建携带非空名单：写入 metadata 保留字段，返回实际名单与 existing=false"""
+    mock_cm, mock_cursor = _dedup_db_mock(existing_id=None)
+    mock_cursor.fetchone.side_effect = [None, {"id": 9101}, {"id": 5101}]
+    with _patch_embedding(), \
+            patch("src.services.data_analysis.schema_saver.get_db_connection",
+                  return_value=mock_cm), \
+            patch("src.services.data_analysis.schema_saver.get_vector_db") as vec_mock:
+        vec_client = MagicMock()
+        vec_client.insert = AsyncMock()
+        vec_mock.return_value = vec_client
+        result = await save_schema_to_knowledge(
+            tenant_id="tenant_t1",
+            table_name="表C",
+            description="",
+            columns=[{"name": "a"}],
+            source_info="c.xlsx",
+            allowed_agent_ids=["main", "sales-assistant"],
+        )
+
+    assert result["success"] is True
+    assert result["existing"] is False
+    assert result["allowed_agent_ids"] == ["main", "sales-assistant"]
+    insert_calls = [
+        c for c in mock_cursor.execute.call_args_list
+        if "INSERT INTO documents" in c[0][0]
+    ]
+    metadata = json.loads(insert_calls[0][0][1][7])  # INSERT 参数第 8 位为 metadata
+    assert metadata["allowed_agent_ids"] == ["main", "sales-assistant"]
+
+
+@pytest.mark.asyncio
+async def test_create_without_scope_keeps_metadata_unchanged():
+    """不传名单：metadata 不新增 allowed_agent_ids 字段（共享按缺省，行为不变）"""
+    mock_cm, mock_cursor = _dedup_db_mock(existing_id=None)
+    mock_cursor.fetchone.side_effect = [None, {"id": 9102}, {"id": 5102}]
+    with _patch_embedding(), \
+            patch("src.services.data_analysis.schema_saver.get_db_connection",
+                  return_value=mock_cm), \
+            patch("src.services.data_analysis.schema_saver.get_vector_db") as vec_mock:
+        vec_client = MagicMock()
+        vec_client.insert = AsyncMock()
+        vec_mock.return_value = vec_client
+        result = await save_schema_to_knowledge(
+            tenant_id="tenant_t1",
+            table_name="表D",
+            description="",
+            columns=[{"name": "a"}],
+            source_info="d.xlsx",
+        )
+
+    assert result["success"] is True
+    assert result["existing"] is False
+    assert result["allowed_agent_ids"] == []
+    insert_calls = [
+        c for c in mock_cursor.execute.call_args_list
+        if "INSERT INTO documents" in c[0][0]
+    ]
+    metadata = json.loads(insert_calls[0][0][1][7])
+    assert "allowed_agent_ids" not in metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reupload_ids", [None, [], ["other-agent"]])
+async def test_dedup_hit_preserves_existing_scope(reupload_ids):
+    """重复注册保留已有名单：不覆盖为共享，也不借重传扩大名单"""
+    mock_cm, mock_cursor = _dedup_db_mock(existing_id=2341)
+    # 判重 SELECT 返回已有名单（jsonb 解析后为 list）
+    mock_cursor.fetchone.side_effect = None
+    mock_cursor.fetchone.return_value = {"id": 2341, "allowed_agent_ids": ["main"]}
+    with _patch_embedding(), \
+            patch("src.services.data_analysis.schema_saver.get_db_connection",
+                  return_value=mock_cm):
+        result = await save_schema_to_knowledge(
+            tenant_id="tenant_t1",
+            table_name="渠道销售",
+            description="渠道维度销售",
+            columns=[{"name": "amount"}],
+            source_info="sales.xlsx",
+            allowed_agent_ids=reupload_ids,
+        )
+
+    assert result["success"] is True
+    assert result["existing"] is True
+    assert result["allowed_agent_ids"] == ["main"]
+    # 判重命中不触发 INSERT，名单无从被覆盖
+    insert_calls = [
+        c for c in mock_cursor.execute.call_args_list
+        if "INSERT INTO documents" in c[0][0]
+    ]
+    assert not insert_calls
+    # 判重查询带出已存名单
+    dedup_sql = mock_cursor.execute.call_args_list[1][0][0]
+    assert "allowed_agent_ids" in dedup_sql
+
+
+@pytest.mark.asyncio
+async def test_dedup_hit_without_existing_scope_returns_empty_list():
+    """重复命中存量共享表（无名单字段）：返回 existing 与空名单"""
+    mock_cm, mock_cursor = _dedup_db_mock(existing_id=2342)
+    mock_cursor.fetchone.return_value = {"id": 2342, "allowed_agent_ids": None}
+    with _patch_embedding(), \
+            patch("src.services.data_analysis.schema_saver.get_db_connection",
+                  return_value=mock_cm):
+        result = await save_schema_to_knowledge(
+            tenant_id="tenant_t1",
+            table_name="存量表",
+            description="",
+            columns=[{"name": "a"}],
+            source_info="old.xlsx",
+            allowed_agent_ids=["main"],
+        )
+
+    assert result["existing"] is True
+    assert result["allowed_agent_ids"] == []
+
+
+@pytest.mark.asyncio
+async def test_invalid_scope_shape_fails_without_insert():
+    """名单形态非法（非字符串元素）：直接失败，不写库不向量化注册"""
+    mock_cm, mock_cursor = _dedup_db_mock(existing_id=None)
+    with _patch_embedding(), \
+            patch("src.services.data_analysis.schema_saver.get_db_connection",
+                  return_value=mock_cm):
+        result = await save_schema_to_knowledge(
+            tenant_id="tenant_t1",
+            table_name="表E",
+            description="",
+            columns=[{"name": "a"}],
+            source_info="e.xlsx",
+            allowed_agent_ids=["main", ""],
+        )
+
+    assert result["success"] is False
+    assert "allowed_agent_ids" in result["error"]
+    # 失败前不触发判重/INSERT（栏目创建之前的参数处理阶段即失败）
+    executed = [c[0][0] for c in mock_cursor.execute.call_args_list]
+    assert not any("documents" in sql for sql in executed)

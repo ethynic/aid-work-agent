@@ -5,6 +5,7 @@
 """
 
 import json
+import re
 from datetime import datetime, date
 from decimal import Decimal
 from uuid import UUID
@@ -663,3 +664,281 @@ async def delete_label(request: Request, agent_id: str, label: str):
     except Exception as e:
         logger.error(f"删除标签失败: {e}")
         return _error("删除标签失败")
+
+
+# ============== 配置导出/导入（跨环境迁移） ==============
+
+EXPORT_FORMAT = "agent_definition_export"
+SUPPORTED_EXPORT_VERSION = 1
+
+AGENT_ID_RE = re.compile(r'^[a-zA-Z0-9_-]+$')
+
+
+class ImportDefinitionRequest(BaseModel):
+    format: str = Field(..., description="导出文件格式标识")
+    version: int = Field(..., description="导出文件结构版本")
+    definition: Dict[str, Any] = Field(..., description="数字员工定义内容")
+    conflict_strategy: Optional[str] = Field(None, description="冲突策略：overwrite=覆盖更新 / rename=另存为新")
+    new_agent_id: Optional[str] = Field(None, description="rename 策略的新 Agent ID")
+    new_name: Optional[str] = Field(None, description="rename 策略的新显示名称")
+
+
+def _get_prompt_content(agent_id: str) -> str:
+    """读取当前 production（兜底 latest）版本的 system_prompt 内容"""
+    info = SubagentDefinitionService._get_prompt_info(agent_id)
+    if not info:
+        return ""
+    version_num = info.get("production_version") or info.get("latest_version")
+    if not version_num:
+        return ""
+    data = PromptRegistryService.get_version(str(info["prompt_id"]), int(version_num))
+    return (data or {}).get("content", "")
+
+
+@router.get("/{agent_id}/export")
+async def export_definition(request: Request, agent_id: str):
+    """导出数字员工配置为 JSON（敏感信息不导出，仅保留占位符提示）"""
+    try:
+        _require_admin(request)
+
+        definition = SubagentDefinitionService.get_definition(agent_id)
+        if not definition:
+            return _error(f"自定义数字员工不存在: {agent_id}（内置数字员工不支持导出）", 404)
+
+        from src.db.subagent_env_var import SubagentEnvVarDB
+
+        env_placeholders = []
+        try:
+            env_placeholders = [
+                {"name": v["var_name"], "description": v.get("description") or ""}
+                for v in SubagentEnvVarDB.list_var_names(agent_id)
+            ]
+        except Exception as e:
+            logger.opt(exception=True).warning(f"导出环境变量占位符失败: {e}")
+
+        export_notes = [
+            "环境变量与第三方凭证（AGENT_TOKEN 等）不随文件导出，导入后需在目标环境「租户设置-环境变量」中按占位符补充",
+            "租户 API 文档（api-doc）请通过租户前台的配置文件上传/下载功能单独迁移",
+            "knowledge_sources 仅导出栏目配置，知识库文档内容需在目标环境单独上传或共享授权",
+        ]
+
+        return _success({
+            "format": EXPORT_FORMAT,
+            "version": SUPPORTED_EXPORT_VERSION,
+            "exported_at": datetime.now().isoformat(timespec="seconds"),
+            "definition": {
+                "agent_id": definition.get("agent_id"),
+                "name": definition.get("name"),
+                "description": definition.get("description"),
+                "version": definition.get("version"),
+                "author": definition.get("author"),
+                "triggers": definition.get("triggers") or {},
+                "tools": definition.get("tools") or {},
+                "skills": definition.get("skills") or {},
+                "context": definition.get("context") or {},
+                "delegatable_to": definition.get("delegatable_to") or [],
+                "allow_delegation": definition.get("allow_delegation", True),
+                "llm_provider": definition.get("llm_provider"),
+                "llm_model_codes": definition.get("llm_model_codes"),
+                "reply_style": definition.get("reply_style"),
+                "business_pages": definition.get("business_pages"),
+                "knowledge_sources": definition.get("knowledge_sources"),
+                "chat_toolbar": definition.get("chat_toolbar"),
+                "upload_accept": definition.get("upload_accept"),
+                "recap": definition.get("recap"),
+                "system_prompt": _get_prompt_content(agent_id),
+            },
+            "env_var_placeholders": env_placeholders,
+            "notes": export_notes,
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.opt(exception=True).error(f"导出数字员工配置失败: {e}")
+        return _error("导出失败")
+
+
+def _collect_import_warnings(definition: Dict[str, Any]) -> List[str]:
+    """校验技能/工具在目标环境的存在性，缺失项生成警告（不阻断导入）"""
+    warnings: List[str] = []
+    from src.core.agent import get_master_agent
+
+    agent = get_master_agent()
+
+    allowed_skills = ((definition.get("skills") or {}).get("allowed")) or []
+    if allowed_skills:
+        skill_registry = agent.skill_registry
+        loaded = set(skill_registry.list_all_loaded_skills()) if skill_registry else set()
+        missing = [s for s in allowed_skills if s not in loaded]
+        if missing:
+            warnings.append(f"以下技能在当前环境不存在，将忽略或需安装: {', '.join(missing)}")
+
+    tools_cfg = definition.get("tools") or {}
+    tool_list = tools_cfg.get("additional") or tools_cfg.get("allowed") or []
+    if tool_list:
+        tool_registry = agent.tool_registry
+        available = set(tool_registry._tools.keys()) if tool_registry else set()
+        missing_tools = [t for t in tool_list if t not in available]
+        if missing_tools:
+            warnings.append(f"以下工具在当前环境不存在: {', '.join(missing_tools)}")
+
+    return warnings
+
+
+def _conflict_response(agent_id: str) -> JSONResponse:
+    """agent_id 冲突时返回 409 与现有定义信息，供前端选择冲突策略"""
+    from src.core.agent import master_agent
+
+    reg_cfg = master_agent.subagent_registry.get(agent_id) if master_agent.subagent_registry else None
+    if reg_cfg is not None and not getattr(reg_cfg, "from_db", False):
+        conflict_type = "builtin"
+        conflict_name = reg_cfg.name
+    else:
+        conflict_type = "custom"
+        conflict_name = reg_cfg.name if reg_cfg else agent_id
+    return JSONResponse(
+        {
+            "success": False,
+            "error": f"智能体 {agent_id} 已存在",
+            "conflict": {"agent_id": agent_id, "type": conflict_type, "name": conflict_name},
+        },
+        status_code=409,
+    )
+
+
+@router.post("/import")
+async def import_definition(request: Request, body: ImportDefinitionRequest):
+    """导入数字员工配置 JSON，创建新员工或按冲突策略覆盖/另存"""
+    try:
+        admin = _require_admin(request)
+
+        if body.format != EXPORT_FORMAT:
+            return _error(f"不支持的配置文件格式: {body.format}", 400)
+        if body.version > SUPPORTED_EXPORT_VERSION:
+            return _error(f"配置文件版本过新（v{body.version}），请先升级系统", 400)
+
+        d = body.definition
+        agent_id = str(d.get("agent_id") or "").strip()
+        name = str(d.get("name") or "").strip()
+        system_prompt = str(d.get("system_prompt") or "")
+        if not agent_id or not name or not system_prompt.strip():
+            return _error("配置文件缺少必需字段（agent_id / name / system_prompt）", 400)
+        if not AGENT_ID_RE.match(agent_id):
+            return _error("Agent ID 只能包含字母、数字、下划线和连字符", 400)
+
+        _validate_recap_config(d.get("recap"))
+
+        existing = SubagentDefinitionService.get_definition(agent_id)
+
+        # 纯内置（未被 DB 定义覆盖）同名时同样走冲突流程：内置不可覆盖，只能另存
+        from src.core.agent import master_agent
+        reg_cfg = master_agent.subagent_registry.get(agent_id) if master_agent.subagent_registry else None
+        is_pure_builtin = reg_cfg is not None and not getattr(reg_cfg, "from_db", False)
+
+        if (existing or is_pure_builtin) and not body.conflict_strategy:
+            return _conflict_response(agent_id)
+
+        if is_pure_builtin and body.conflict_strategy == "overwrite":
+            return _error("内置数字员工不可覆盖，请改用「另存为新」指定新的 Agent ID", 409)
+
+        warnings = _collect_import_warnings(d)
+
+        if existing and body.conflict_strategy == "overwrite":
+            # 覆盖更新：空值传空容器/空串以清掉目标环境残留（DB update 过滤 None；
+            # 例外：llm_provider/llm_model_codes 传 None 会强制写空 JSONB，恰好也是清残留）
+            tools, recap, _ = SubagentDefinitionService.apply_skill_requirements(
+                d.get("tools"), d.get("skills"), d.get("recap"),
+            )
+            SubagentDefinitionService.update_definition(
+                agent_id,
+                created_by=admin.get("user_id"),
+                name=name,
+                description=d.get("description") or "",
+                version=d.get("version"),
+                author=d.get("author"),
+                triggers=d.get("triggers") or {},
+                tools=tools,
+                skills=d.get("skills") or {},
+                context=d.get("context") or {},
+                delegatable_to=d.get("delegatable_to") or [],
+                allow_delegation=bool(d.get("allow_delegation", True)),
+                llm_provider=d.get("llm_provider"),
+                llm_model_codes=d.get("llm_model_codes"),
+                reply_style=d.get("reply_style") or "",
+                business_pages=d.get("business_pages") or [],
+                knowledge_sources=d.get("knowledge_sources") or [],
+                recap=recap,
+                chat_toolbar=d.get("chat_toolbar") or [],
+                upload_accept=d.get("upload_accept") or "",
+            )
+            SubagentDefinitionService.update_system_prompt(
+                agent_id,
+                system_prompt,
+                commit_message="导入配置覆盖",
+                created_by=admin.get("user_id"),
+            )
+            # 刷新 registry 并清空态摘要缓存（与 update 路由口径一致）
+            from src.core.agent import master_agent
+            from src.core.cache_utils import CacheKeys, delete_cached
+            if master_agent.subagent_registry:
+                master_agent.subagent_registry.load_from_db()
+            delete_cached(CacheKeys.SUBAGENT_GREETING, agent_id)
+
+            logger.info(f"后端日志：管理员导入并覆盖数字员工 {agent_id}")
+            return _success({"agent_id": agent_id, "name": name, "mode": "overwrite"},
+                            warnings=warnings)
+
+        if (existing or is_pure_builtin) and body.conflict_strategy == "rename":
+            new_id = str(body.new_agent_id or "").strip()
+            new_name = str(body.new_name or "").strip() or name
+            if not new_id:
+                return _error("另存为新的数字员工需要提供新 Agent ID", 400)
+            if not AGENT_ID_RE.match(new_id):
+                return _error("新 Agent ID 只能包含字母、数字、下划线和连字符", 400)
+            if SubagentDefinitionService.get_definition(new_id):
+                return _error(f"新 Agent ID 已存在: {new_id}", 409)
+            agent_id, name = new_id, new_name
+
+        # 创建路径（新员工或 rename 另存）
+        tools, recap, auto_completed = SubagentDefinitionService.apply_skill_requirements(
+            d.get("tools"), d.get("skills"), d.get("recap"),
+        )
+        result = SubagentDefinitionService.create_definition(
+            agent_id=agent_id,
+            name=name,
+            system_prompt=system_prompt,
+            description=d.get("description"),
+            version=d.get("version") or "1.0.0",
+            author=d.get("author"),
+            triggers=d.get("triggers"),
+            tools=tools,
+            skills=d.get("skills"),
+            context=d.get("context"),
+            delegatable_to=d.get("delegatable_to"),
+            allow_delegation=bool(d.get("allow_delegation", True)),
+            llm_provider=d.get("llm_provider"),
+            llm_model_codes=d.get("llm_model_codes"),
+            reply_style=d.get("reply_style"),
+            business_pages=d.get("business_pages"),
+            knowledge_sources=d.get("knowledge_sources"),
+            recap=recap,
+            chat_toolbar=d.get("chat_toolbar"),
+            upload_accept=d.get("upload_accept"),
+            created_by=admin.get("user_id"),
+            commit_message="导入配置",
+        )
+        if not result:
+            return _error("导入失败：创建定义未成功")
+
+        from src.core.agent import master_agent
+        if master_agent.subagent_registry:
+            master_agent.subagent_registry.load_from_db()
+
+        logger.info(f"后端日志：管理员导入创建数字员工 {agent_id}")
+        return _success({"agent_id": agent_id, "name": name, "mode": "create"},
+                        warnings=warnings, auto_completed=auto_completed)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.opt(exception=True).error(f"导入数字员工配置失败: {e}")
+        return _error("导入失败")

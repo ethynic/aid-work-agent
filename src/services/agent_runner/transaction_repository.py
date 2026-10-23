@@ -36,7 +36,7 @@ def write_history(cursor, runner, result):
         for child in state.get('children',{}).values():
             yield from applied_controls(child.get('checkpoint') or {})
     applied = set(applied_controls((runner.get('checkpoint') or {}).get('execution') or {}))
-    supplements = (runner.get('checkpoint') or {}).get('supplemental_inputs') or []
+    supplements = [] if result.get('archival') else (runner.get('checkpoint') or {}).get('supplemental_inputs') or []
     for item in supplements:
         control_id = item.get('control_id')
         if not control_id or control_id not in applied or control_id in recorded_controls:
@@ -45,16 +45,20 @@ def write_history(cursor, runner, result):
         messages.append({'role':'user','content':item.get('text',''),
             'metadata':{'control_id':control_id,'accepted_at':item.get('accepted_at'),
                         'attachments':item.get('attachments') or []}})
-    if result.get('output') or result.get('images') or result.get('status') == 'cancelled':
+    if not result.get('archival') and (result.get('output') or result.get('images') or result.get('status') == 'cancelled'):
         metadata = {**(result.get('assistant_metadata') or {}),'images':result.get('images') or []}
         if result.get('status') == 'cancelled':
             metadata['cancelled'] = True
-        messages.append({'role':'assistant','content':result.get('output',''),'metadata':metadata})
+        final = {'role':'assistant','content':result.get('output',''),'metadata':metadata}
+        if ((runner.get('checkpoint') or {}).get('execution') or {}).get('resources',{}).get('history_version') == 1:
+            final['_history_id'] = runner['runner_id']+':final'
+        messages.append(final)
     normalized = []
     for index,message in enumerate(messages):
         control_id = (message.get('metadata') or {}).get('control_id')
-        message_id = control_id+':user' if control_id and message['role']=='user' else (
+        message_id = control_id+':user' if control_id and message['role']=='user' else (message.get('_history_id') or (
             runner['runner_id'] + (':user' if index == 0 else f':message:{index}'))
+        )
         metadata = {**(message.get('metadata') or {}),'runner_id':runner['runner_id'],
                     'runner_queue_order':runner['queue_order']}
         for key in ('tool_calls','tool_call_id','reasoning_content'):
@@ -91,9 +95,9 @@ def settle_record(cursor, runner, result, cost, totals, breakdown):
     state = (runner.get('checkpoint') or {}).get('execution') or {}
     models = sorted({group['model'] for group in breakdown['groups'] if group.get('model')})
     providers = sorted({group['provider'] for group in breakdown['groups'] if group.get('provider')})
+    details = execution_statistics(state, runner['runner_id'],runner.get('checkpoint') or {})
     if record is None:
         user_message=runner['input']['text']
-        details = execution_statistics(state, runner['runner_id'],runner.get('checkpoint') or {})
         ChatRecordDB.create_in_tx(cursor,runner['record_id'],session_id=runner['session_id'],
             tenant_id=runner['tenant_id'],user_id=runner['user_id'],user_message=user_message,
             assistant_message=result.get('output',''),model=','.join(models),provider=','.join(providers),
@@ -102,10 +106,14 @@ def settle_record(cursor, runner, result, cost, totals, breakdown):
             subagent_calls=details['subagent_calls'] or None,duration_ms=result.get('duration_ms',0))
     cursor.execute('''UPDATE chat_records SET credit_cost=%s,prompt_tokens=%s,completion_tokens=%s,
         cached_input_tokens=%s,total_token_count=%s,embedding_tokens=%s,asr_calls=%s,
-        usage_breakdown=%s::jsonb,model=%s,provider=%s WHERE record_id=%s''',
+        usage_breakdown=%s::jsonb,model=%s,provider=%s,status=%s,assistant_message=%s,
+        agent_iterations=%s,duration_ms=%s,execution_details=%s::jsonb,subagent_calls=%s::jsonb,error_message=%s WHERE record_id=%s''',
         (cost,totals['prompt_tokens'],totals['completion_tokens'],totals['cached_input_tokens'],
          totals['total_token_count'],totals['embedding_tokens'],totals['asr_calls'],
-         json.dumps(breakdown,ensure_ascii=False,default=str),','.join(models),','.join(providers),runner['record_id']))
+         json.dumps(breakdown,ensure_ascii=False,default=str),','.join(models),','.join(providers),
+         result['status'],result.get('output',''),state.get('iteration',0),result.get('duration_ms',0),
+         json.dumps(details,ensure_ascii=False),json.dumps(details['subagent_calls'] or None,ensure_ascii=False),
+         result.get('error_code'),runner['record_id']))
     if not ChatRecordDB.debit_in_tx(cursor,runner['tenant_id'],delta):
         raise CheckpointFailure('BILLING_TENANT_NOT_FOUND')
     return delta
@@ -132,7 +140,11 @@ def execution_statistics(state, runner_id, envelope=None):
             'task_description':str(call.get('task_description',''))[:200],
             'success':child.get('status')=='completed','result_summary':str(checkpoint.get('output') or '')[:200],
             'token_usage':usage,'duration_ms':child.get('duration_ms',0)})
-    return {'runner_id':runner_id,'tool_executions':tools,'total_iterations':state.get('iteration',0),
+    result = {'runner_id':runner_id,'tool_executions':tools,'total_iterations':state.get('iteration',0),
             'subagent_calls':children,'plan_id':state.get('plan_ref'),
             'plan_steps':[{key:step.get(key) for key in ('task_id','tool_name','description','status')}
                           for step in (envelope.get('business_plan') or {}).get('tasks',[])]}
+    for key in ('archived_tool_count','archived_child_count'):
+        if key in (state.get('resources') or {}):
+            result[key] = state['resources'][key]
+    return result

@@ -38,12 +38,14 @@ vi.mock('@/composables/useSession', () => ({
 const tenantIsLoggedIn = ref(false)
 const tenantAdmin = ref<any>(null)
 const tenant = ref<any>(null)
+const privateCloud = ref(false)
 vi.mock('@/composables/useTenantAuth', () => ({
   useTenantAuth: () => ({
     admin: tenantAdmin,
     tenant,
     isLoggedIn: tenantIsLoggedIn,
     logout: vi.fn(),
+    privateCloud,
   }),
 }))
 

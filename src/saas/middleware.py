@@ -121,9 +121,15 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
         try:
             path = request.url.path
 
+            # Public reply sharing carries its own narrow resource grant, not a
+            # visitor's possibly unrelated logged-in tenant context.
+            public_share = re.fullmatch(r'/api/public/reply-shares/[A-Za-z0-9_-]+/(?:view|files/[A-Za-z0-9_.-]+)', path)
+
             # 1. 租户级回调路由：/t/{tenant_id}/...
             tenant_match = _TENANT_CALLBACK_PATTERN.match(path)
-            if tenant_match:
+            if public_share:
+                pass
+            elif tenant_match:
                 tenant_id = tenant_match.group(1)
                 logger.debug(f"[TenantMiddleware] Tenant callback: tenant_id={tenant_id}")
 

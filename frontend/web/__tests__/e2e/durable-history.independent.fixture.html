@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>持续任务历史窗口独立验证</title></head>
+<body style="margin:0"><div id="app" style="height:100vh"></div>
+<script type="module">
+import { createApp, h, ref } from 'vue'
+import MessageList from '../../components/MessageList.vue'
+import '../../style.css'
+const history = ref({ older:false,hasMore:true,loading:false,error:undefined })
+const messages = ref(Array.from({ length:40 },(_,index) => ({ role:'assistant',
+  messageId:'fixture:history:'+index,content:'独立验证记录 '+index+'。已归档的群聊观察与处理结果。',timestamp:index })))
+window.fixtureActions = []
+window.fixtureUpdateHistory = values => Object.assign(history.value,values)
+window.fixtureAddMessage = () => messages.value.push({ role:'assistant',messageId:'fixture:history:next',content:'新增实时消息',timestamp:99 })
+createApp({ setup:() => () => h(MessageList,{ messages:messages.value,history:history.value,
+  followLatest:!history.value.older,isProcessing:false,inputHintState:'idle',
+  onHistory:action => { window.fixtureActions.push(action);history.value.older = action === 'older' } }) }).mount('#app')
+</script></body></html>

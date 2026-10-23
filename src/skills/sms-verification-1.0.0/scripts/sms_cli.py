@@ -9,7 +9,9 @@
 
 复用 src.db.models.send_sms_code / verify_sms_code 底层能力，复用 sms_codes 表
 （TTL 15 分钟）。qb_sms_code bypass 仅存在于 verify 校验侧（send_sms_code
-始终真实发信），因此 send 成功即真实发信、必扣费。
+始终真实发信），因此 send 成功即真实发信、必扣费。例外：qb_sms_code 已配置
+且无可用短信通道时，send_sms_code 跳过真实发信直接返回成功（私有云未购通道
+的 bypass 场景）。
 
 频控（脚本层）：
 - 60s 内同一手机号只能发送 1 次（防秒刷）
@@ -269,7 +271,9 @@ def _record_sms_billing(mobile: str, identity: Dict[str, Optional[str]]) -> None
     """真实发送成功后落账：chat_records 审计记录 + 同事务扣减 tenants.credit_balance。
 
     短信已实际发出，落账失败只记错误日志，不向用户报错（无法撤回短信）。
-    send_sms_code 无 bypass（bypass 仅在 verify 校验侧），返回 True 即真实发信。
+    send_sms_code 的 bypass（qb_sms_code 已配置且无通道）在调用方提前分流；
+    私有云部署（PRIVATE_CLOUD=true，客户自购通道不扣积分）时调用方不落账。
+    到达此函数即真实发信且平台加价。
     """
     tenant_id = identity.get("tenant_id")
     if not tenant_id:
@@ -342,16 +346,21 @@ def send_sms(
             "debug": "invalid mobile format",
         }
 
-    # 2. 检查短信通道可用性
+    # 2. 检查短信通道可用性（qb_sms_code 已配置且无通道时走 bypass，跳过真实发信与计费）
+    bypass_no_channel = False
     try:
         sender = sms_manager.get_sender()
         if sender is None or not sender.is_available():
-            logger.error(f"短信通道未配置，无法发送验证码 mobile={mobile}")
-            return {
-                "success": False,
-                "error": "短信通道未配置，请联系管理员",
-                "debug": "sms sender not available",
-            }
+            if settings.sms.qb_sms_code:
+                bypass_no_channel = True
+                logger.info(f"QBSMSCODE bypass：无可用短信通道，跳过真实发信 mobile={mobile}")
+            else:
+                logger.error(f"短信通道未配置，无法发送验证码 mobile={mobile}")
+                return {
+                    "success": False,
+                    "error": "短信通道未配置，请联系管理员",
+                    "debug": "sms sender not available",
+                }
     except Exception as e:
         logger.opt(exception=True).error(f"短信通道检查异常: {e}")
         return {
@@ -366,20 +375,26 @@ def send_sms(
         return blocked
 
     # 3.5 计费准入：租户身份 fail-closed + 余额预检（每条真实发送扣 1 积分）
-    identity = _resolve_billing_identity()
-    if not identity["tenant_id"]:
-        logger.warning(
-            f"短信验证码发送被拒绝：无法确认租户身份 mobile={mobile}, "
-            f"tenant={tenant_id}, user={user_id}, session={session_id}"
-        )
-        return {
-            "success": False,
-            "error": "无法确认租户身份，短信发送被拒绝，请联系管理员",
-            "reason": "billing_identity_missing",
-        }
-    blocked = _check_credit_balance(identity["tenant_id"])
-    if blocked:
-        return blocked
+    # 两类场景不计费、不要求计费身份：
+    # - bypass_no_channel：未真实发信（qb_sms_code 且无通道）
+    # - 私有云部署（PRIVATE_CLOUD=true）：客户自购 key/短信通道，费用自行承担，不扣积分
+    charge_credits = (not bypass_no_channel) and not settings.deployment.private_cloud
+    identity: Dict[str, Optional[str]] = {}
+    if charge_credits:
+        identity = _resolve_billing_identity()
+        if not identity["tenant_id"]:
+            logger.warning(
+                f"短信验证码发送被拒绝：无法确认租户身份 mobile={mobile}, "
+                f"tenant={tenant_id}, user={user_id}, session={session_id}"
+            )
+            return {
+                "success": False,
+                "error": "无法确认租户身份，短信发送被拒绝，请联系管理员",
+                "reason": "billing_identity_missing",
+            }
+        blocked = _check_credit_balance(identity["tenant_id"])
+        if blocked:
+            return blocked
 
     # 4. 调用底层发送
     _ensure_db_pool()
@@ -406,8 +421,9 @@ def send_sms(
     # 5. 记录频控计数（仅成功后）
     _record_send(mobile)
 
-    # 6. 计费落账（send_sms_code 无 bypass，返回 True 即真实发信必扣费）
-    _record_sms_billing(mobile, identity)
+    # 6. 计费落账（真实发信且平台加价才扣费；bypass / 私有云不计费）
+    if charge_credits:
+        _record_sms_billing(mobile, identity)
 
     logger.info(
         f"短信验证码发送成功 mobile={mobile}, "

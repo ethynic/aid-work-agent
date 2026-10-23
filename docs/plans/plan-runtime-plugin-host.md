@@ -1,5 +1,13 @@
 # Runtime 执行环境、插件宿主与可视化客户端开发计划
 
+2026-10-22休眠检查点：按[共同契约2.8 §5.6](../system/runner-desktop-runtime-integration-contract.md#56-通用持久化休眠增量2026-10-22)由Runner工作流实现云端持久化timer/continuous，唯一进度见[休眠计划](plan-agent-runner-durable-sleep.md#13-本轮实施基线与共同检查点)。Runtime/Device/Host/Provider无新sleep wire或本地loop；已有invocation队列/桌面锁和固定release规则保持，真实多任务接线验收单独记录，不能由云端单测代替。
+
+2026-10-22复审修复兼容检查点：Runner私有工具代次/累计BIGINT及历史产物退休由同一修复角色负责；snapshot可选history_revision仅为历史更新水位，Web拉取既有历史，旧消费者可忽略，Device/Host不变。实现与独测/CR结论统一见[休眠计划第17节](plan-agent-runner-durable-sleep.md#17-复审修复与验证2026-10-22)，本地Runner/Web独测及CR已通过，未部署；本条不宣称Desktop或真机Runtime已验收。
+
+2026-10-20恢复检查点：按共同契约2.5保持v2纯读独立，新增显式v3停止本Runtime受管旧工具进程的路径，可覆盖无generation且结果永久丢失的存量BOSS调用；不重放原业务，不要求Windows重启。源码与dist已冻结，独立120项及宽窄UI通过，CR无阻断；唯一实现责任、精确范围及结果见[BOSS恢复计划Phase10](plan-boss-resume-next-recovery-fix.md)。旧2.3/v1证据仅历史，未发行或部署。
+
+2026-10-20恢复增量检查点：按[共同契约恢复增量](../system/runner-desktop-runtime-integration-contract.md#2026-10-20-本地未知调用恢复与web结束等待兼容增量)开发Web结束等待、迟到回执对账与设备冲突阻断；唯一代码写入者为恢复开发子智能体，无Runtime客户端或Device wire变更。进度与独立验证唯一记录在[BOSS恢复计划Phase 6～8](plan-boss-resume-next-recovery-fix.md)，本计划仅引用。
+
 2026-10-20共同检查点：按共同契约2.2及[BOSS计划23](desktop-automation/plan-boss-operation-verification-visual-recovery.md#23-runtime配对身份复用纠正2026-10-20)消除额外视觉token配置。主控唯一维护runtimeHost.ts、Desktop Supervisor、BOSS视觉client/localRecovery和版本元数据；backend身份角色唯一维护src/local_tools/api.py、boss_visual_service及必要台账代码。新增设备视觉入口，原H1/H3及配对/claim/permit不改；设备凭据只给受信BOSS，其他Provider隔离。独立TEST/CR后重打包，不部署。
 
 2026-10-14共同检查点：用户批准[干净安装计划](plan-runtime-clean-install.md)，共同契约2.1。安装角色负责安装代际与进程清理，服务端角色负责协议3及数据库，主控负责Main/H3自动激活与renderer。替代新版历史资源恢复门，旧协议1/2不变；验证以该计划为准。
@@ -179,6 +187,11 @@ manifest版本0.3.0/0.1.0/0.1.0；完整MCP工具21/8/10，Host子集不扩大�
 
 ## 11. 本次文档收敛
 
+### 2026-10-21 打包操作手册整理
+
+已完成纯文档整理：[Runtime 与 BOSS 插件构建及 ZIP 交付手册](../ops/runtime-boss-release-guide.md)作为当前出包入口，覆盖版本/原生依赖、固定 Node、BOSS 签名及历史根、正确 cwd 下的 Host pack、Runtime 安装器、实际包验证、安装说明和 clients/release 最终 ZIP。clients README、插件 README、旧构建手册第12节及历史安装说明均跳转至该入口。11段PowerShell在5.1/7均语法通过，62个本地链接及新增相关锚点有效，5个npm script名称、6个固定工具路径及pack/prepare参数与源码一致，diff检查通过；动态版本产物路径不要求本轮存在。未执行构建、安装、模型调用、签名登记、版本修改或出包，未提交/部署。没有改运行时策略、公共 wire 或共同契约版本，不另建开发功能。
+
+
 2026-10-09按用户要求，将旧M1/M2任务与Runtime M0.4合入本计划/唯一架构，删除过时独立调研设计与实施计划，替换入链引用。将代码完成与未验收分开登记；原Server审批/hash事实保留，未实现第三方新机制不改状态。不改执行逻辑、共同契约语义或schema版本；用户已明确要求提交本次整理，不部署。
 
 文档核对：43个Runtime相关本地链接/锚点、索引唯一性与B1/B2状态检查通过；删除文件的旧引用已清除。源码/测试/配置仅修注释指针，15个Python文件排除docstring后的AST与HEAD一致，TypeScript去注释和YAML非注释内容在替换前后相同；定向git diff --check通过。纯文档工作未重跑业务测试，工作区其他任务修改保留。
@@ -192,3 +205,6 @@ Phase9连接恢复审计及源码补漏以[恢复计划的状态矩阵](plan-run
 ### 2026-10-13 Runtime r8 只读故障入口检查点
 
 主控唯一修改Runtime页面/Controller及测试、Desktop版本元数据和交付说明；H1/H3/Device及恢复事务语义不变。不支持插件时不误查询、不假刷新，恢复步骤首屏可见且不受检查忙碌禁用；详见[恢复计划Phase11](plan-runtime-upgrade-recovery.md#phase11-实施前共同检查点2026-10-13)。独立真实包故障/恢复交互与审查待完成。
+
+
+2026-10-20恢复纠正（优先于上方历史Phase10完成记录）：按[共同契约2.5](../system/runner-desktop-runtime-integration-contract.md)保留独立纯读，并新增显式停止本Runtime受管旧工具进程的路径，覆盖存量无generation且回执永久丢失的BOSS调用；不重放原业务、不要求Windows重启。独立120项及宽窄UI通过，CR无阻断；唯一进度见[BOSS恢复计划](../plans/plan-boss-resume-next-recovery-fix.md)，未部署。

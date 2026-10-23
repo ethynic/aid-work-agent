@@ -33,7 +33,9 @@ export function createBossAcceptResumeOperation(
     execute(args: BossAcceptResumeArgs, ctx: OpContext): Promise<OperationResult> {
       const limit = args?.limit ?? 20
       const preview = args?.preview ?? true
-      return runBossOperation(
+      const state = new BusinessOperationState()
+      const checkpoint: import('../boss/ResumeConsentExecutor.js').ConsentCheckpoint = {}
+      const run = (ctx: OpContext): Promise<OperationResult> => runBossOperation(
         { kind: 'write', name: 'boss_accept_resume' },
         ctx,
         sessionFactory,
@@ -44,11 +46,10 @@ export function createBossAcceptResumeOperation(
           return null
         },
         async (session, tracker) => {
-          const state = new BusinessOperationState()
           const intent = { name: 'boss_accept_resume', goal: '同意接收请求中的附件简历', expected: '同一会话处理条消失且出现新附件或明确接受结果', operationClass: 'external_effect' as const }
           return withBusinessRecovery(state, intent, async () => {
           await ensureChatPage(session, ctx)
-          const executor = new ResumeConsentExecutor({ state,
+          const executor = new ResumeConsentExecutor({ state, checkpoint,
             snapshot: session.snapshot,
             click: session.click,
             scroll: (deltaY) => session.mouseWheel(CHAT_LIST_SCROLL_POINT.x, CHAT_LIST_SCROLL_POINT.y, deltaY),
@@ -61,6 +62,7 @@ export function createBossAcceptResumeOperation(
           })
           ctx.progress({ stage: 'execute', message: '逐个打开会话并点击「同意」' })
           const result = await executor.acceptAll({ limit, preview, expectedContactRef: ctx.expectedContactRef })
+          tracker.completed = result.accepted
           return {
             message:
               `完成：同意接收 ${result.accepted} 人的附件简历` +
@@ -71,6 +73,8 @@ export function createBossAcceptResumeOperation(
           })
         },
       )
+      if (ctx.recoveryContinuation) ctx.recoveryContinuation.resume = run
+      return run(ctx)
     },
   }
 }

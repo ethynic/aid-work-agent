@@ -71,8 +71,9 @@ class ControlRepository:
         waiting = ControlRepository.waiting_for(row, request)
         if waiting is None:
             raise RunnerError('CONTROL_WAIT_STALE',409)
-        expected = 'clarification' if request.action == 'reply' else 'human_assistance'
-        if waiting.get('kind') != expected:
+        expected = ({'clarification'} if request.action == 'reply' else
+                    {'timer','continuous_guard'} if request.action == 'resume' else {'human_assistance'})
+        if waiting.get('kind') not in expected:
             raise RunnerError('CONTROL_WAIT_KIND_MISMATCH',409)
 
     def _accept_ask_form(self, row, request):
@@ -175,6 +176,10 @@ class ControlRepository:
                 raise RunnerError('RUNNER_NOT_PARKED',409)
             if row.get('resume_control_id'):
                 raise RunnerError('RUNNER_RESUME_PENDING',409)
+            guard_wait = any((waiting or {}).get('kind')=='continuous_guard'
+                for _,waiting in execution_waits(row.get('checkpoint')))
+            if request.action=='resume' and ((row.get('checkpoint',{}).get('durable_sleep') or {}).get('phase')=='armed' or guard_wait):
+                self.assert_wait(row,request)
             if request.action in ('reply','browser_complete'):
                 self.assert_wait(row,request)
                 cursor.execute('''SELECT 1 FROM agent_runner_controls WHERE runner_id=%s

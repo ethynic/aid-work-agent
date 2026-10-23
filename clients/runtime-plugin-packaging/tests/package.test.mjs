@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 import canonicalize from 'canonicalize'
-import { createOfflinePackage, copyProviderScriptAssets, filesUnder, sha256, zipBytes, main } from '../package.mjs'
+import { createOfflinePackage, copyProviderScriptAssets, filesUnder, sha256, zipBytes, main, stageNativeInputDependency } from '../package.mjs'
 
 test('release signature binds inner payload and full canonical manifest, with no self hash', async () => {
   const pair = generateKeyPairSync('ed25519')
@@ -119,5 +119,53 @@ test('non-BOSS script staging retains its PowerShell-only asset policy', () => {
       copyProviderScriptAssets(provider, source, target)
       assert.deepEqual(filesUnder(target).map(file => file.path), ['driver.ps1'])
     }
+  } finally { rmSync(home, { recursive: true, force: true }) }
+})
+
+test('native input dependency: no declaration stays untouched; declared one is restaged as an in-stage tarball with dist check', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'aid-native-input-staging-'))
+  try {
+    // source: <home>/clients/<provider>; shared: <home>/clients/shared/win32-native-input
+    // （与真实仓库一致：package.json 的 file:../shared/win32-native-input 按 provider 目录解析）
+    const provider = join(home, 'clients', 'some-provider')
+    const shared = join(home, 'clients', 'shared', 'win32-native-input')
+    mkdirSync(provider, { recursive: true })
+    const stage = (deps) => {
+      const s = mkdtempSync(join(home, 'stage-'))
+      writeFileSync(join(s, 'package.json'), JSON.stringify({ name: 'p', version: '1.0.0', dependencies: deps }, null, 2))
+      return s
+    }
+    const NATIVE_DEP = { '@aid/win32-native-input': 'file:../shared/win32-native-input' }
+
+    // 未声明依赖：返回 null，不改 package.json
+    const untouched = stage(undefined)
+    assert.equal(stageNativeInputDependency(provider, untouched, {}), null)
+    assert.equal(JSON.parse(readFileSync(join(untouched, 'package.json'), 'utf8')).dependencies, undefined)
+
+    // 未构建（缺 dist）直接失败
+    mkdirSync(shared, { recursive: true })
+    writeFileSync(join(shared, 'package.json'), JSON.stringify({ name: '@aid/win32-native-input', version: '0.1.0' }))
+    const missingDist = stage(NATIVE_DEP)
+    assert.throws(() => stageNativeInputDependency(provider, missingDist, {}), /build before packaging/)
+    assert.equal(existsSync(join(missingDist, 'win32-native-input.tgz')), false)
+
+    // 已构建：dist 存在；注入 fake npm cli（单测不跑真实 npm pack）
+    mkdirSync(join(shared, 'dist'), { recursive: true })
+    writeFileSync(join(shared, 'dist/index.js'), 'export {}')
+    const tarName = 'aid-win32-native-input-0.1.0.tgz'
+    const fakeNpm = join(home, 'fake-npm.cjs')
+    writeFileSync(fakeNpm, "const {writeFileSync}=require('node:fs');const {join}=require('node:path');"
+      + "const dest=process.argv.slice(2).map(a=>a.startsWith('--pack-destination=')?a.slice('--pack-destination='.length):null).filter(Boolean)[0];"
+      + "writeFileSync(join(dest,'aid-win32-native-input-0.1.0.tgz'),'tarball-bytes')")
+    // 评审 P2：源码树残留的同名旧 tgz 不得被复用——每次必须从当前构建产物重新 pack
+    writeFileSync(join(shared, tarName), 'stale-tarball-bytes')
+    const ready = stage(NATIVE_DEP)
+    assert.equal(stageNativeInputDependency(provider, ready, { node: process.execPath, npm_cli: fakeNpm }), tarName)
+    assert.deepEqual(readFileSync(join(ready, tarName)), Buffer.from('tarball-bytes'))
+    assert.deepEqual(readFileSync(join(shared, tarName)), Buffer.from('stale-tarball-bytes'))
+    const rewritten = JSON.parse(readFileSync(join(ready, 'package.json'), 'utf8'))
+    assert.equal(rewritten.dependencies['@aid/win32-native-input'], `file:./${tarName}`)
+    // 不再包含相对路径（staged npm 无法解析）
+    assert.ok(!readFileSync(join(ready, 'package.json'), 'utf8').includes('../shared'))
   } finally { rmSync(home, { recursive: true, force: true }) }
 })

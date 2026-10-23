@@ -22,11 +22,18 @@ class ProfileCatalog:
                      if item['agent_id'] in allowed]
         return available[0] if len(available) == 1 else "main"
 
-    def resolve(self, profile_id):
+    def resolve(self, profile_id, tenant_id=None):
         registry = self.registry()
         # Custom DB-defined profiles use the same configuration parser as existing
         # callers, without obtaining their shared Agent/resource objects.
         config = registry.get(profile_id)
+        if config is None and tenant_id:
+            # 租户数字员工副本实例不进全局 registry（无租户上下文），按实例行
+            # 与父定义合并解析；未命中实例的标准 id 仍保持原 404 口径。
+            from src.subagents.tenant_resolver import resolve_tenant_config
+            merged = resolve_tenant_config(registry, tenant_id, profile_id)
+            if merged is not None and merged.dir_name == profile_id:
+                config = merged
         if not config or config.dir_name != profile_id:
             raise RunnerError("PROFILE_NOT_FOUND", 404)
         fingerprint = hashlib.sha256(canonical_json(config.model_dump(mode="json")).encode()).hexdigest()
@@ -34,9 +41,9 @@ class ProfileCatalog:
 
 
 class MainProfileCatalog(ProfileCatalog):
-    def resolve(self, profile_id):
+    def resolve(self, profile_id, tenant_id=None):
         if profile_id != "main":
-            return super().resolve(profile_id)
+            return super().resolve(profile_id, tenant_id)
         from src.config.settings import settings
         fingerprint = hashlib.sha256(canonical_json(settings.agent.model_dump(mode="json")).encode()).hexdigest()
         return None, fingerprint

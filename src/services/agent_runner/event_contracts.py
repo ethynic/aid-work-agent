@@ -31,7 +31,9 @@ def safe_public_state(row):
                                         if item.get('type') in _PUBLIC_PROGRESS]
     return {key: value[key] for key in ('status', 'settlement_status', 'cancel_requested',
             'pause_requested', 'resume_requested', 'control_revision')} | {
-                'snapshot': snapshot, 'result': value['result']}
+                'snapshot': snapshot, 'result': value['result'],
+                'usage':value.get('usage'),'execution_mode':value.get('execution_mode'),
+                'sleep_blocked':value.get('sleep_blocked')}
 
 
 def change_kind(before, after, requested='revision_changed'):

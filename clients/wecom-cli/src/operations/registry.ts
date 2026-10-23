@@ -21,6 +21,7 @@ import { createWecomSendFileOperation } from './sendFile.js'
 import { createWecomSendImageOperation } from './sendImage.js'
 import { createWecomUnreadListOperation } from './unreadList.js'
 import { createWecomWatchPollOperation } from './watchPoll.js'
+import { createWecomGroupListOperation, createWecomGroupReadOperation } from './groups.js'
 import type { WecomOperation } from './types.js'
 
 export interface OperationEntry {
@@ -44,6 +45,8 @@ export const OPERATIONS: Record<string, OperationEntry> = {
   wecom_unread_list: { operation: createWecomUnreadListOperation(), cli: { write: false } },
   wecom_read_session: { operation: createWecomReadSessionOperation(), cli: { write: false } },
   wecom_watch_poll: { operation: createWecomWatchPollOperation(), cli: { write: false } },
+  wecom_group_list: { operation: createWecomGroupListOperation(), cli: { write: false } },
+  wecom_group_read: { operation: createWecomGroupReadOperation(), cli: { write: false } },
 }
 
 export const OPERATION_NAMES = Object.keys(OPERATIONS)

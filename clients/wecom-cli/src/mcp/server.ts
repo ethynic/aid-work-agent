@@ -25,6 +25,8 @@ import { redactSensitive } from '../security/redaction.js'
  */
 const INSTRUCTIONS =
   '企业微信操作 Provider。工具：wecom_probe（只读环境/登录态探测）、' +
+  'wecom_group_list（本地库群关键词搜索/列群，limit控制数量）、' +
+  'wecom_group_read（本地库读群消息，支持时间范围，最近N条按时间升序；两工具不切会话、不清未读）、' +
   'wecom_chat_search（只读搜索联系人/群聊，返回带 target_ref 的候选）、' +
   'wecom_message_send（写：向 target_ref/target_name 目标发送 1 条文本消息；target_name 直达模式内部自动 search 定位）、' +
   'wecom_send_image（写：向 target_ref 目标发送 1 张本地图片，image_path 须为本机绝对路径且 ≤20MB，调用方负责落盘）、' +

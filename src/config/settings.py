@@ -452,8 +452,17 @@ class SmsConfig(BaseModel):
     username: str = ""  # 助通用户名
     password: str = ""  # 助通密码
     signature: str = ""  # 短信签名
-    template_yzm: str = ""  # 验证码模板ID
+    template_yzm: str = ""  # 验证码模板ID（助通）
     qb_sms_code: str = ""  # 短信验证码 bypass 码（用于测试/演示）
+    aliyun_access_key_id: str = ""  # 阿里云短信 AccessKey ID
+    aliyun_access_key_secret: str = ""  # 阿里云短信 AccessKey Secret
+    aliyun_sign_name: str = ""  # 阿里云短信签名名称
+    aliyun_template_yzm: str = ""  # 阿里云验证码模板CODE（如 SMS_123456789）
+    tencent_secret_id: str = ""  # 腾讯云 SecretId
+    tencent_secret_key: str = ""  # 腾讯云 SecretKey
+    tencent_sms_sdk_app_id: str = ""  # 腾讯云短信 SmsSdkAppId（控制台应用ID）
+    tencent_sign_name: str = ""  # 腾讯云短信签名名称
+    tencent_template_yzm: str = ""  # 腾讯云验证码模板ID（纯数字）
 
 
 class BillingConfig(BaseModel):
@@ -471,6 +480,16 @@ class BillingConfig(BaseModel):
     video_gen_usage_factor: int = 33
     embedding_usage_factor: int = 100
     asr_usage_factor: int = 100
+
+
+class DeploymentConfig(BaseModel):
+    """部署形态配置
+
+    - private_cloud: 私有云部署（客户自购 API key/短信通道，费用自行承担）。
+      True 时隐藏/简化公有云专属能力：前台不展示"积分"概念（用量页改显 token 分项、
+      隐藏充值记录入口、跳过余额提醒），短信发送不扣费
+    """
+    private_cloud: bool = False
 
 
 class PreSalesPushConfig(BaseModel):
@@ -492,6 +511,21 @@ class PreSalesPushConfig(BaseModel):
 class ExternalPushConfig(BaseModel):
     """外部系统推送配置（docs/subagent/recap-mechanism-design.md §6）"""
     pre_sales: PreSalesPushConfig = Field(default_factory=PreSalesPushConfig)
+
+
+class TencentDocsConfig(BaseModel):
+    """腾讯文档 OpenAPI 接入配置（docs/plans/plan-tencent-docs-knowledge-import.md §7.1）
+
+    Phase 1 仅凭据直连（个人开发者 Token 或后续 OAuth token 经 env 注入）；
+    OAuth 授权流上线后 access_token 改为按 (tenant_id, user_id) 加密存储，
+    本段仅保留应用级 client_id 与频控/配额参数。
+    """
+    enabled: bool = False
+    client_id: str = ""
+    access_token: str = ""      # 开发测试期个人 Token；生产禁止落配置
+    open_id: str = ""
+    request_timeout: int = 30
+    export_daily_limit: int = 9  # 官方每 openID 每日导出配额
 
 
 class ClientConfig(BaseModel):
@@ -671,6 +705,7 @@ class AgentRunnerLimitsConfig(BaseModel):
 class AgentRunnerConfig(BaseModel):
     enabled: bool = False
     web_enabled: bool = False
+    durable_sleep_enabled: bool = False
     api_url: str = "http://127.0.0.1:8091"
     web_service_id: str = "web"
     # 服务间明文凭据：主 API 与 runner-api 共用同一 .env 注入，恒等比较即验证。
@@ -761,6 +796,7 @@ class Settings(BaseModel):
     storage: StorageConfig = Field(default_factory=StorageConfig)
     redis: RedisConfig = Field(default_factory=RedisConfig)
     billing: BillingConfig = Field(default_factory=BillingConfig)
+    deployment: DeploymentConfig = Field(default_factory=DeploymentConfig)
     video_gen: VideoGenConfig = Field(default_factory=VideoGenConfig)
     client: ClientConfig = Field(default_factory=ClientConfig)
     boss_tool_billing: BossToolBillingConfig = Field(default_factory=BossToolBillingConfig)
@@ -773,6 +809,7 @@ class Settings(BaseModel):
     agent_runner: AgentRunnerConfig = Field(default_factory=AgentRunnerConfig)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
     anti_abuse: AntiAbuseConfig = Field(default_factory=AntiAbuseConfig)
+    tencent_docs: TencentDocsConfig = Field(default_factory=TencentDocsConfig)
 
     # 认证相关配置（从环境变量加载）
     qb_token: str = ""  # 平台管理员超级token（明文，仅用于向后兼容，推荐使用 qb_token_hash）
@@ -970,6 +1007,8 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         runner_cfg["web_service_id"] = os.environ["AGENT_RUNNER_WEB_SERVICE_ID"]
     if os.getenv("AGENT_RUNNER_ENABLED") is not None:
         runner_cfg["enabled"] = os.getenv("AGENT_RUNNER_ENABLED", "").lower() in ("true", "1", "yes")
+    if os.getenv('AGENT_RUNNER_DURABLE_SLEEP_ENABLED') is not None:
+        runner_cfg['durable_sleep_enabled'] = os.environ['AGENT_RUNNER_DURABLE_SLEEP_ENABLED'].lower() in ('true','1','yes')
     browser_owner = runner_cfg.setdefault('browser_owner', {})
     if os.getenv('AGENT_RUNNER_BROWSER_OWNER_ENABLED') is not None:
         browser_owner['enabled'] = os.environ['AGENT_RUNNER_BROWSER_OWNER_ENABLED'].lower() in ('true','1','yes')
@@ -1096,6 +1135,24 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         yaml_config.setdefault("sms", {})["template_yzm"] = os.getenv("SMS_TEMPLATE_YZM")
     if os.getenv("QBSMSCODE"):
         yaml_config.setdefault("sms", {})["qb_sms_code"] = os.getenv("QBSMSCODE")
+    if os.getenv("SMS_ALIYUN_ACCESS_KEY_ID"):
+        yaml_config.setdefault("sms", {})["aliyun_access_key_id"] = os.getenv("SMS_ALIYUN_ACCESS_KEY_ID")
+    if os.getenv("SMS_ALIYUN_ACCESS_KEY_SECRET"):
+        yaml_config.setdefault("sms", {})["aliyun_access_key_secret"] = os.getenv("SMS_ALIYUN_ACCESS_KEY_SECRET")
+    if os.getenv("SMS_ALIYUN_SIGN_NAME"):
+        yaml_config.setdefault("sms", {})["aliyun_sign_name"] = os.getenv("SMS_ALIYUN_SIGN_NAME")
+    if os.getenv("SMS_ALIYUN_TEMPLATE_YZM"):
+        yaml_config.setdefault("sms", {})["aliyun_template_yzm"] = os.getenv("SMS_ALIYUN_TEMPLATE_YZM")
+    if os.getenv("SMS_TENCENT_SECRET_ID"):
+        yaml_config.setdefault("sms", {})["tencent_secret_id"] = os.getenv("SMS_TENCENT_SECRET_ID")
+    if os.getenv("SMS_TENCENT_SECRET_KEY"):
+        yaml_config.setdefault("sms", {})["tencent_secret_key"] = os.getenv("SMS_TENCENT_SECRET_KEY")
+    if os.getenv("SMS_TENCENT_SDK_APP_ID"):
+        yaml_config.setdefault("sms", {})["tencent_sms_sdk_app_id"] = os.getenv("SMS_TENCENT_SDK_APP_ID")
+    if os.getenv("SMS_TENCENT_SIGN_NAME"):
+        yaml_config.setdefault("sms", {})["tencent_sign_name"] = os.getenv("SMS_TENCENT_SIGN_NAME")
+    if os.getenv("SMS_TENCENT_TEMPLATE_YZM"):
+        yaml_config.setdefault("sms", {})["tencent_template_yzm"] = os.getenv("SMS_TENCENT_TEMPLATE_YZM")
 
     # 积分计费配置：环境变量覆盖
     billing_cfg = yaml_config.setdefault("billing", {})
@@ -1119,6 +1176,12 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
             billing_cfg["asr_usage_factor"] = int(os.getenv("ASR_USAGE_FACTOR"))
         except ValueError:
             pass
+
+    # 部署形态：私有云开关（.env PRIVATE_CLOUD，私有云部署脚本无需改 config.yaml）
+    if os.getenv("PRIVATE_CLOUD") is not None:
+        yaml_config.setdefault("deployment", {})["private_cloud"] = (
+            os.getenv("PRIVATE_CLOUD", "").strip().lower() in ("true", "1", "yes", "on")
+        )
 
     s = Settings(**yaml_config)
 

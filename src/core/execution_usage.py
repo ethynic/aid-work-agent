@@ -13,6 +13,9 @@ def execution_token_usage(checkpoint):
             totals[target] += int(value or 0)
 
     def visit(node):
+        archived = (node.get('resources') or {}).get('archived_token_usage') or {}
+        for key in totals:
+            totals[key] += int(archived.get(key,0))
         for fact in node.get('model_calls', []):
             owner = fact.get('execution_id') or fact.get('child_execution_id') or node.get('execution_id')
             key = (owner, fact.get('call_id'))

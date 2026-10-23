@@ -69,6 +69,7 @@
 import { computed, ref } from 'vue'
 import type { DownloadableFile, AttachmentInfo } from '@/types'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
+import { useReplyResources } from '@/utils/replyResources'
 import { resolveApiUrl, saveDownloadUrl } from '@/platform/urlResolver'
 import { getAuthHeader } from '@/api/auth'
 import { triggerNativeDownload } from '@/utils/download'
@@ -79,6 +80,7 @@ import FileTypeIcon from './FileTypeIcon.vue'
 const props = defineProps<{ file: DownloadableFile }>()
 
 const { openPreview } = useAttachmentPreview()
+const { resolver } = useReplyResources()
 
 const downloading = ref(false)
 
@@ -86,7 +88,7 @@ async function handleDownload() {
   if (downloading.value) return
   downloading.value = true
   try {
-    const url = resolveApiUrl(props.file.download_url)
+    const url = resolver ? resolver(props.file.file_id, true) : resolveApiUrl(props.file.download_url)
     if (window.agentDesktop) {
       await saveDownloadUrl(url, props.file.file_name, getAuthHeader())
       return
@@ -96,7 +98,7 @@ async function handleDownload() {
   } catch (e) {
     console.error('文件下载失败:', e)
     // Web fallback 保持现有浏览器下载行为；Desktop 不允许绕过受控保存能力。
-    if (!window.agentDesktop) window.open(props.file.download_url, '_blank')
+    if (!window.agentDesktop) window.open(resolver ? resolver(props.file.file_id, true) : props.file.download_url, '_blank')
   } finally {
     downloading.value = false
   }

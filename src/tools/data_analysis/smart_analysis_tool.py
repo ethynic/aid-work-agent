@@ -80,9 +80,14 @@ class SmartDataAnalysisTool(BaseTool):
         tables_metadata = kwargs.get("tables_metadata")
         session_id = kwargs.get("session_id")
 
-        # 1. 解析 tenant_id / subagent_id（subagent_id 用于共享知识库检索范围）
+        # 1. 解析身份与租户（设计 §18.4 身份语义）：
+        #    - ToolExecutionContext 存在 → 可信上下文；tenant_id 冲突以上下文为准，
+        #      subagent_id 为空映射 main（可信上下文内的转换）
+        #    - 无上下文 ≠ main：有租户无身份时仅共享表 + 诊断提示，不冒充主智能体；
+        #      无租户不查询全表（与现状一致）
         tenant_id = None
         subagent_id = None
+        agent_id = None  # 数据表名单执行身份：None=身份未知（仅共享）
         context = None
         try:
             from src.saas.context import get_current_tenant_id
@@ -91,11 +96,14 @@ class SmartDataAnalysisTool(BaseTool):
             pass
         try:
             from src.tools.context import current_tool_execution_context
+            from src.services.data_analysis.access_scope import MAIN_AGENT_ID
             context = current_tool_execution_context()
             if context:
                 subagent_id = context.subagent_id
-                if not tenant_id:
+                if context.tenant_id:
+                    # 请求级可信执行上下文优先于进程级租户变量（冲突场景以可信为准）
                     tenant_id = context.tenant_id
+                agent_id = context.subagent_id or MAIN_AGENT_ID
                 # session_id 以服务端工具执行上下文为准（LLM 参数可幻觉/被注入，
                 # 且是产物注册表路径成分，不可信值会导致复用错位或路径异常）；
                 # 无上下文的调用方（后台任务）才用参数值
@@ -103,14 +111,24 @@ class SmartDataAnalysisTool(BaseTool):
                     session_id = context.session_id
         except Exception:
             pass
+        # 诊断提示（不含数据内容）：仅「有租户但身份未确定」场景出现
+        identity_notice = (
+            "调用身份未确定，本次仅使用共享数据表"
+            if (not context and tenant_id)
+            else None
+        )
 
-        # 2. 初始化 DataAnalyzer（产物按租户落 storage/tenants/{tid}/report|temp）
+        # 2. 初始化 DataAnalyzer（产物按租户落 storage/tenants/{tid}/report|temp）；
+        #    生产路径显式关闭任意文件路径 source 逃生（allow_arbitrary_path_source=False）
         from src.tools.data_analysis.data_analyzer import DataAnalyzer
-        analyzer = DataAnalyzer(session_id=session_id, tenant_id=tenant_id or "")
+        analyzer = DataAnalyzer(
+            session_id=session_id, tenant_id=tenant_id or "",
+            allow_arbitrary_path_source=False,
+        )
 
-        # 3. 预加载表（仅加载带 table_id/doc_id 的完整 metadata）
-        # 主智能体可能传入 search_data_tables 的简化结构（仅 table_id/table_name/description，
-        # 无 source），直接加载必失败；先回查 documents 表补全完整 metadata，再加载。
+        # 3. 预加载表：显式入参只把 table_id/doc_id 当选择依据，无论是否带 source
+        # 一律回查服务端记录（防 LLM 伪造 source 绕过名单）；任一指定表不可用
+        # 整体显式失败（不做部分加载、不回退传入 source、不用原始请求 metadata）
         if tables_metadata:
             from src.tools.data_analysis.analysis_agent import fetch_table_metadata_from_db
 
@@ -118,33 +136,60 @@ class SmartDataAnalysisTool(BaseTool):
             for meta in tables_metadata:
                 table_id = meta.get("table_id") or meta.get("doc_id")
                 if not table_id:
-                    enriched_tables.append(meta)
-                    continue
-                if not meta.get("source"):
-                    try:
-                        full_meta = await asyncio.to_thread(
-                            fetch_table_metadata_from_db, str(table_id), tenant_id, subagent_id
-                        )
-                        if full_meta:
-                            meta = full_meta
-                    except Exception as e:
-                        logger.warning(f"[SmartDataAnalysisTool] 回查表 {table_id} 完整元数据失败: {e}")
-                enriched_tables.append(meta)
+                    return self._with_identity_notice(
+                        {
+                            "success": False,
+                            "error": "指定的数据表缺少 table_id，无法加载；请通过 "
+                                     "search_data_tables 获取 table_id 后重试",
+                        },
+                        identity_notice,
+                    )
+                try:
+                    full_meta = await asyncio.to_thread(
+                        fetch_table_metadata_from_db,
+                        str(table_id), tenant_id, subagent_id, agent_id,
+                    )
+                except Exception as e:
+                    logger.warning(f"[SmartDataAnalysisTool] 回查表 {table_id} 完整元数据失败: {e}")
+                    return self._with_identity_notice(
+                        {"success": False, "error": f"数据表 {table_id} 当前不可用，无法加载"},
+                        identity_notice,
+                    )
+                if not full_meta:
+                    # 不区分不存在/无权；传入的 source/原始 metadata 一律弃用
+                    return self._with_identity_notice(
+                        {
+                            "success": False,
+                            "error": f"指定的数据表 {table_id} 当前不可用"
+                                     "（不存在或未开放给当前调用身份），已跳过本次分析",
+                        },
+                        identity_notice,
+                    )
+                enriched_tables.append(full_meta)
+            # 全部回查通过后才开始物理加载（不做部分加载）
+            for meta in enriched_tables:
                 try:
                     await analyzer.load_table(meta)
                 except Exception as e:
                     logger.opt(exception=True).error(f"[SmartDataAnalysisTool] 加载表失败: {e}")
-                    return {"success": False, "error": f"加载数据表失败: {e}"}
+                    return self._with_identity_notice(
+                        {"success": False, "error": f"加载数据表失败: {e}"},
+                        identity_notice,
+                    )
             tables_metadata = enriched_tables
             export_only_mode = False
         else:
             # 改进3（2026-10）：导出/整理类需求且会话已有产物时，跳过开局批量预加载
             #（导出应基于已有产物而非重新加载原始数据；此前同会话连续 4 次导出类调用
             # 每次都重付 49 表预加载 + schema 目录注入，实测单次多耗 20-40 积分）
+            # 可复用判定含来源表可用性 DB 回查：async 路径沿用 to_thread 模式
             export_only_mode = (
                 SmartDataAnalysisTool._is_export_only_requirement(requirement)
                 and bool(session_id)
-                and self._session_has_artifacts(tenant_id, session_id)
+                and await asyncio.to_thread(
+                    self._session_has_reusable_artifacts,
+                    tenant_id, session_id, subagent_id, agent_id,
+                )
             )
             if export_only_mode:
                 tables_metadata = []
@@ -157,7 +202,7 @@ class SmartDataAnalysisTool(BaseTool):
                 # 模型开局即面对「已加载的表 + 完整 schema」，禁止逐个 search/load_table
                 #（此前 36 张同构表被内层模型逐个 load_table 共 82 次，列定义永久滞留上下文）
                 tables_metadata = await self._batch_select_and_load(
-                    analyzer, requirement, tenant_id, subagent_id
+                    analyzer, requirement, tenant_id, subagent_id, agent_id
                 )
 
         # 4. 运行 AnalysisAgent
@@ -178,11 +223,14 @@ class SmartDataAnalysisTool(BaseTool):
                 subagent_id=subagent_id,
                 session_id=session_id,
                 export_only_mode=export_only_mode,
+                agent_id=agent_id,
             )
             result = await agent.run(requirement)
         except Exception as e:
             logger.opt(exception=True).error(f"[SmartDataAnalysisTool] AnalysisAgent 运行失败: {e}")
-            return {"success": False, "error": f"分析执行失败: {e}"}
+            return self._with_identity_notice(
+                {"success": False, "error": f"分析执行失败: {e}"}, identity_notice
+            )
 
         # 主智能体防线：success=True 但结论为空时降级为失败。
         # 防止空结论被主智能体误判为"知识库中无相关数据"（2026-08 生产事故归因）。
@@ -192,6 +240,13 @@ class SmartDataAnalysisTool(BaseTool):
             result["error"] = "分析未产出有效结论（输出可能被截断），请重试或简化分析需求"
             result["conclusion"] = result["error"]
 
+        return self._with_identity_notice(result, identity_notice)
+
+    @staticmethod
+    def _with_identity_notice(result: Dict[str, object], notice: Optional[str]) -> Dict[str, object]:
+        """附加身份诊断提示（不含数据内容）：仅「有租户但无可信身份」场景。"""
+        if notice and isinstance(result, dict):
+            result["identity_notice"] = notice
         return result
 
     @staticmethod
@@ -207,12 +262,28 @@ class SmartDataAnalysisTool(BaseTool):
         return bool(_EXPORT_MARKER_RE.search(text)) and not _ANALYSIS_WORD_RE.search(text)
 
     @staticmethod
-    def _session_has_artifacts(tenant_id: Optional[str], session_id: Optional[str]) -> bool:
-        """会话产物注册表是否非空（导出短路的前提：无产物无可复用，走正常路径）。"""
+    def _session_has_reusable_artifacts(
+        tenant_id: Optional[str],
+        session_id: Optional[str],
+        subagent_id: Optional[str],
+        agent_id: Optional[str],
+    ) -> bool:
+        """会话是否存在当前可复用的产物（导出短路前提）。
+
+        复用资格与清单/load_output 同口径：已登记 + source_table_ids 完整 +
+        每张来源表当前均可用（批量去重一次查询）。无可复用产物则不短路导出。
+        读取失败视为无可复用（走正常路径，fail-soft 与原行为一致）。
+        """
         try:
+            from src.tools.data_analysis.analysis_agent import filter_reusable_artifact_entries
             from src.tools.data_analysis.analysis_artifacts import load_artifacts
 
-            return bool(load_artifacts(tenant_id or "", session_id or "", limit=1))
+            entries = load_artifacts(tenant_id or "", session_id or "")
+            if not entries:
+                return False
+            return bool(
+                filter_reusable_artifact_entries(entries, tenant_id, subagent_id, agent_id)
+            )
         except Exception as e:
             logger.warning(f"[SmartDataAnalysisTool] 会话产物查询失败（走正常路径）: {e}")
             return False
@@ -223,12 +294,14 @@ class SmartDataAnalysisTool(BaseTool):
         requirement: str,
         tenant_id: Optional[str],
         subagent_id: Optional[str],
+        agent_id: Optional[str] = None,
     ) -> List[dict]:
         """服务端一次性选表并批量加载，返回成功加载的完整 metadata 列表。
 
-        选表策略：数据表数 <= FULL_LOAD_THRESHOLD 全量选中；超过时按 requirement
-        语义检索 top SEMANTIC_SELECT_TOP_K（检索失败退回不预加载，由内层模型自行
-        search_data_tables，即改动前的行为）。
+        选表策略：数据表数（已按名单过滤）<= FULL_LOAD_THRESHOLD 全量选中；超过时
+        按 requirement 语义检索 top SEMANTIC_SELECT_TOP_K（检索失败退回不预加载，
+        由内层模型自行 search_data_tables，即改动前的行为）。过滤发生在计数、
+        选表与加载之前，受限表不影响阈值判定。
         单表回查/加载失败仅跳过并告警，不阻断整体分析（个别孤儿表不应拖垮全部分析）。
         """
         from src.tools.data_analysis.analysis_agent import (
@@ -240,10 +313,10 @@ class SmartDataAnalysisTool(BaseTool):
             # 无租户上下文不批量加载：列表查询会放大为跨租户全局视图
             return []
 
-        # 选表：与内层 list_data_tables 同口径（含共享来源租户与移动兜底）
+        # 选表：与内层 list_data_tables 同口径（含共享来源租户与移动兜底 + 名单）
         try:
             table_summaries = await asyncio.to_thread(
-                query_data_tables_list, "", tenant_id, subagent_id
+                query_data_tables_list, "", tenant_id, subagent_id, None, agent_id
             )
         except Exception as e:
             logger.warning(f"[SmartDataAnalysisTool] 查询数据表列表失败，跳过开局批量加载: {e}")
@@ -257,7 +330,7 @@ class SmartDataAnalysisTool(BaseTool):
             select_desc = "全量"
         else:
             selected_ids = await SmartDataAnalysisTool._semantic_select_ids(
-                requirement, tenant_id, subagent_id
+                requirement, tenant_id, subagent_id, agent_id
             )
             select_desc = f"语义检索 top{SEMANTIC_SELECT_TOP_K}"
             if not selected_ids:
@@ -275,7 +348,7 @@ class SmartDataAnalysisTool(BaseTool):
             metas = []
             for tid in selected_ids:
                 try:
-                    meta = fetch_table_metadata_from_db(str(tid), tenant_id, subagent_id)
+                    meta = fetch_table_metadata_from_db(str(tid), tenant_id, subagent_id, agent_id)
                 except Exception as e:
                     logger.warning(f"[SmartDataAnalysisTool] 回查表 {tid} 完整元数据失败，跳过: {e}")
                     continue
@@ -308,9 +381,16 @@ class SmartDataAnalysisTool(BaseTool):
 
     @staticmethod
     async def _semantic_select_ids(
-        requirement: str, tenant_id: Optional[str], subagent_id: Optional[str]
+        requirement: str,
+        tenant_id: Optional[str],
+        subagent_id: Optional[str],
+        agent_id: Optional[str] = None,
     ) -> List[str]:
-        """超过全量阈值时按需求语义检索选中表 doc_id 列表（复用 HybridRetriever）。"""
+        """超过全量阈值时按需求语义检索选中表 doc_id 列表（复用 HybridRetriever）。
+
+        agent_id 透传检索层：名单条件在排名/LIMIT 前过滤，受限表占前排不会
+        挤掉可用表候选。
+        """
         try:
             from src.tools.data_analysis.analysis_agent import create_data_tables_retriever
 
@@ -327,6 +407,7 @@ class SmartDataAnalysisTool(BaseTool):
                 tenant_id=tenant_id,
                 source_type="data-analysis-metadata",
                 shared_ranges=shared_ranges,
+                agent_id=agent_id,
             )
             return [str(r["doc_id"]) for r in results]
         except Exception as e:

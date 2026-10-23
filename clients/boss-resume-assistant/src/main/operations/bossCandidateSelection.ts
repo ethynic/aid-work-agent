@@ -31,7 +31,7 @@ export function createBossLookupCandidatesOperation(factory: BossSessionFactory 
         return {message:'已只读查询候选卡片；请结合用户的选择使用对应candidate_ref，未发送招呼',effect:'none' as const,
           data:{candidates:groups,missing_names:groups.filter(g=>!g.candidates.length).map(g=>g.name),
             ...(state.stopReason ? {stop_reason:state.stopReason} : {})}}
-        })
+        }, ctx.previousPageExecution)
         return { ...verified.value, data: { ...verified.value.data, operation_recovery: verified.facts } }
       })
   }}
@@ -39,12 +39,13 @@ export function createBossLookupCandidatesOperation(factory: BossSessionFactory 
 
 export function createBossGreetSelectedOperation(factory: BossSessionFactory = defaultSessionFactory): BossOperation<BossGreetSelectedArgs> {
   return {name:'boss_greet_selected', execute(args,ctx) {
-    return runBossOperation({kind:'write',name:'boss_greet_selected'},ctx,factory,()=>{
+    const state = new BusinessOperationState()
+    const checkpoint: import('../boss/GreetExecutor.js').GreetCheckpoint = {}
+    const run = (ctx: import('./types.js').OpContext): Promise<import('./types.js').OperationResult> => runBossOperation({kind:'write',name:'boss_greet_selected'},ctx,factory,()=>{
       if (typeof args?.name!=='string'||!args.name.trim()||args.name.length>30) return 'name必须是非空姓名（最多30字符）'
       if (typeof args?.candidate_ref!=='string'||args.candidate_ref.length!==91||!/^boss-card-v1:\d{13}:[a-f0-9]{64}$/.test(args.candidate_ref)) return '必须提供候选卡片回执中的有效candidate_ref，不能只传姓名'
       return null
     },async(session,tracker)=>{
-      const state = new BusinessOperationState()
       return withBusinessRecovery(state, { name: 'boss_greet_selected', goal: '向原候选引用的候选人打招呼',
         expected: '原候选引用身份对应的卡片翻转为继续沟通', operationClass: 'external_effect', target: args.name.trim() }, async () => {
       if (!recommend(await session.getUrl())) throw new CodedOperationError('WRONG_PAGE','请在推荐牛人列表使用候选引用打招呼')
@@ -53,15 +54,18 @@ export function createBossGreetSelectedOperation(factory: BossSessionFactory = d
       const selected=resolveCandidateReference(probe,name,args.candidate_ref)
       if (!selected) throw new CodedOperationError('UI_CHANGED','候选引用已过期或身份、账号、职位不匹配，未发送；请只读重新查询，不退回姓名发送')
       if (ctx.signal.aborted) throw new CancelledError()
-      if (selected.buttonText==='继续沟通') return {message:'该候选人已经打过招呼，本次未重复发送',effect:'none',data:{greeted:0,already_greeted:true,greeted_names:[]}}
-      const executor=new GreetExecutor({state,snapshot:()=>session.snapshot(FILTER_SNAPSHOT_OPTIONS),click:session.click,
+      if (selected.buttonText==='继续沟通' && !checkpoint.current) return {message:'该候选人已经打过招呼，本次未重复发送',effect:'none',data:{greeted:0,already_greeted:true,greeted_names:[]}}
+      const executor=new GreetExecutor({state,checkpoint,snapshot:()=>session.snapshot(FILTER_SNAPSHOT_OPTIONS),click:session.click,
         scroll:(delta,snap)=>{const e=candidateScrollEvent(snap,delta);return session.mouseWheel(e.x,e.y,e.deltaY)},
         signal:ctx.signal,onProgress:done=>{tracker.completed=done;ctx.progress({stage:'execute',current:done,total:1,message:'已向选定候选人打招呼'})}})
       const result=await executor.greetVisible({names:[name],limit:1,selection:{name,candidate_ref:args.candidate_ref}})
+          tracker.completed=result.greeted
       return {message:result.greeted===1?'已向用户选定的候选人打招呼':'未向指定候选人发送招呼，请重新查询候选卡片',
         data:{greeted:result.greeted,greeted_names:result.greetedNames??[],missing_names:result.missingNames??[],
           ...(result.stopReason ? {stop_reason:result.stopReason} : {})}}
       })
     })
+    if (ctx.recoveryContinuation) ctx.recoveryContinuation.resume = run
+    return run(ctx)
   }}
 }

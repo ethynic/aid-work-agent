@@ -66,3 +66,37 @@ test('snapshot 深拷贝：外部修改不影响内部聚合', async () => {
   assert.equal(c.snapshot().get('x')!.count, 1)
   assert.ok(!c.snapshot().has('y'))
 })
+
+// ---------- Phase 5（2026-10-20）同步计时段 ----------
+
+test('timeSync 聚合同名段：count/totalMs/maxMs 与 time 共用聚合口径', () => {
+  const c = new PerfCollector()
+  c.timeSync('sync', () => {
+    let n = 0
+    for (let i = 0; i < 2e6; i++) n += i // 纯同步负载
+    return n
+  })
+  c.timeSync('sync', () => 1)
+  const e = c.snapshot().get('sync')
+  assert.ok(e, 'sync 应有聚合条目')
+  assert.equal(e.count, 2)
+  assert.ok(e.totalMs >= 0)
+  // 同步段与异步段聚合在同一 collector（[boss-perf] 行统一输出）
+  c.timeSync('mixed', () => 1)
+  assert.equal(c.snapshot().get('mixed')!.count, 1)
+})
+
+test('timeSync 抛错：照常记时并原样重新抛出（失败路径不丢段）', () => {
+  const c = new PerfCollector()
+  assert.throws(
+    () => c.timeSync('sync-boom', () => { throw new Error('同步炸了') }),
+    /同步炸了/,
+  )
+  const e = c.snapshot().get('sync-boom')
+  assert.ok(e, '异常路径也应记时')
+  assert.equal(e.count, 1)
+  assert.ok(e.totalMs >= 0)
+  // 记时不影响后续聚合
+  c.timeSync('sync-boom', () => 1)
+  assert.equal(c.snapshot().get('sync-boom')!.count, 2)
+})

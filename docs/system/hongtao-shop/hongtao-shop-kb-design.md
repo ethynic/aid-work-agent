@@ -1,6 +1,6 @@
 # 宏陶商城产品知识库同步（hongtao_shop 专用模块）设计
 
-> 版本 v1.9（2026-09-22：v1.1 评审修订；v1.2 确认六表 DDL；v1.3 用户看码后三点决议——knowledge 零侵入/分类用租户「产品」/砍 agent 工具；v1.4 零私有表重构；v1.5 数据源授权 Web 化——portal 开通/停用 + 连接中心菜单门控 + 同步方式自动/手动；v1.6 VL 描述上限 100→400（agent2 试跑发现文字密集详情图被切半句）；v1.7 正文结构化字段区——产品名称/型号/颜色/工艺/卖点/适用空间/其他，标识字段移 metadata，砍实拍素材计数行；v1.8 去开场句 + 前端「白名单模式」更名「部分同步」+ 产品列表滚动修复，见 §3.1 与附录；v1.9 metadata 业务数据收进 raw_payload 与通用 api-ingest 契约对齐，见 §3.2）。
+> 版本 v1.10（2026-09-22：v1.1 评审修订；v1.2 确认六表 DDL；v1.3 用户看码后三点决议——knowledge 零侵入/分类用租户「产品」/砍 agent 工具；v1.4 零私有表重构；v1.5 数据源授权 Web 化——portal 开通/停用 + 连接中心菜单门控 + 同步方式自动/手动；v1.6 VL 描述上限 100→400（agent2 试跑发现文字密集详情图被切半句）；v1.7 正文结构化字段区——产品名称/型号/颜色/工艺/卖点/适用空间/其他，标识字段移 metadata，砍实拍素材计数行；v1.8 去开场句 + 前端「白名单模式」更名「部分同步」+ 产品列表滚动修复，见 §3.1 与附录；v1.9 metadata 业务数据收进 raw_payload 与通用 api-ingest 契约对齐，见 §3.2；v1.10 易变数值字段（stock/sales/comment_score/comment_num）全链路排除——2026-10-20 客户反馈库存/销量/评分源数据内容错误，fetcher 即弃同价格口径，智能体不再看到库存/销量/评分，见 §2/§3.2/§5/§5.1）。
 > 客户：宏陶陶瓷（`tenant_d18c257ff434`，agent2 测试环境验收后上正式）。
 > 与 api_ingest 通用设计的关系：通用方案已**删除**（2026-10-09 评估确认不做通用化，宏陶需求由本专用模块承接，相关设计/计划文档已清理），本模块为宏陶专用，无收编计划。
 
@@ -25,7 +25,7 @@
 
 商品接口共 674 条（实测 2026-09-21：578 正常名称 + 96 "编号:xx" 占位名；detail 富文本基本全图无文字；386/674 的 name 前缀含可提取型号）。
 
-**过滤**：只入库 `status=1`（上架）商品。**价格字段彻底排除**：`market_price`、`sell_price` 不进正文、不进 metadata、**不进任何缓存表**（fetcher 收到即弃，含 products 目录缓存表 DDL 不设价格列）。
+**过滤**：只入库 `status=1`（上架）商品。**价格字段彻底排除**：`market_price`、`sell_price` 不进正文、不进 metadata、**不进任何缓存表**（fetcher 收到即弃，含 products 目录缓存表 DDL 不设价格列）。**v1.10 起排除范围扩至易变数值字段**：`stock`、`sales`、`comment_score`、`comment_num` 同口径全链路排除（客户反馈源数据内容错误），六个字段在 fetcher 解析后即弃。
 
 字段去向（产品接口）：
 
@@ -39,7 +39,7 @@
 | detail 图片 | ❌ | ✅ `detail_images` | 全部 URL（去重、剔除 spacer 占位）；**做 VL**（§4） |
 | detail 文字 | ✅ | — | 富文本文字极少，并入正文 |
 | video | ❌ | ✅ `video` | 商品视频（实测全空，保留通道） |
-| stock/sales/comment_score/comment_num | ❌ **（v1.1 移出正文）** | ✅ | **易变数值只进 metadata**（§5.1 hash 口径），智能体答实时库存经检索结果的 metadata 直接可见（v1.3 工具已取消） |
+| stock/sales/comment_score/comment_num | ❌ | ❌ | **彻底排除（v1.10）**：2026-10-20 客户反馈源数据内容错误，fetcher 即弃同价格口径（v1.1 曾只移出正文进 metadata）；智能体不再看到库存/销量/评分 |
 | createtime | ✅（上架时间，稳定） | ✅ | |
 | **market_price / sell_price** | ❌ | ❌ | **彻底排除** |
 
@@ -66,20 +66,19 @@
 
 VL 转述为**按字段结构化输出**（v1.7 指令：每行「字段名：内容」，字段限型号/尺寸/系列/颜色/工艺/卖点/适用空间/其他，≤400 字）；渲染器按前缀解析聚合，无前缀行归入「其他」（兼容旧缓存）。
 
-正文**不含**库存/销量/评分/同步日期（v1.1 移 metadata）与商品ID/上架时间/商品编码/分类ID（v1.7 移 metadata，正文只留检索语义字段）；**不含实拍素材/效果图计数**（v1.7：论坛关联变化不再触发重嵌，只走 metadata「先比对后写」轻量更新）。
+正文**不含**库存/销量/评分/同步日期（v1.1 移出正文；v1.10 四字段全链路排除不进 metadata）与商品ID/上架时间/商品编码/分类ID（v1.7 移 metadata，正文只留检索语义字段）；**不含实拍素材/效果图计数**（v1.7：论坛关联变化不再触发重嵌，只走 metadata「先比对后写」轻量更新）。
 
 ### 3.2 metadata（documents.metadata，TEXT JSON，不进向量）
 
 **v1.9 结构**：业务数据整包嵌套在 `raw_payload`（与通用 api-ingest 契约 D12 对齐），顶层只留系统痕迹（trace/pipeline_version/sync_run_id）。检索工具 `knowledge_base_search` 的 `doc_metadata` 白名单只取 `raw_payload`——新增业务键无需改工具侧，系统痕迹不进 LLM 上下文；完整 metadata 供人查看走前端文档详情弹窗。存量平铺行由 skip 路径「先比对后写」自动迁移（结构不等 → 轻量 UPDATE，零重嵌入；content_hash 只含 pipeline_version + 正文，结构变化不触发重判）。`file_type` 同轮由 markdown 修正为 json（API 来源文档无实体文件，表达数据源形态）；前端点击标题下载对外部无原文链接文档提示改走操作列「详情」（列表 title/类型 badge/详情弹窗随之显示 JSON）。
 
-智能体经 `knowledge_base_search` 检索命中读到的 `documents.<doc_id>.doc_metadata`（仅 raw_payload，`_no_truncate` 全量返回，v1.3 已取消专有工具）获取链接与实时库存：
+智能体经 `knowledge_base_search` 检索命中读到的 `documents.<doc_id>.doc_metadata`（仅 raw_payload，`_no_truncate` 全量返回，v1.3 已取消专有工具）获取产品信息与图/视频链接。**v1.10：易变数值（stock/sales/comment_score/comment_num）不再进 raw_payload**（全链路排除，存量键由下一轮 skip 路径轻量 UPDATE 自动清除，或经 `scripts/hongtao_kb_remove_volatile_fields.py` 提前清理）：
 
 ```json
 {
   "raw_payload": {
     "name": "...", "model": "...", "procode": "...", "sellpoint": "...", "cid": "...",
     "listing_date": "2025-09-21",
-    "stock": 1000, "sales": 0, "comment_score": "5.0", "comment_num": 0,
     "pics": ["效果图轮播 URL..."], "detail_images": ["详情长图 URL..."], "video": "",
     "forum_media": [
       {"post_id": 419, "catename": "工地实景", "content": "TPJ157042地面铺贴实景…",
@@ -108,8 +107,8 @@ VL 转述为**按字段结构化输出**（v1.7 指令：每行「字段名：�
 ## 5. 处理管线
 
 ```
-fetch（双接口全量分页；商品过滤 status=1，价格字段即弃；follow_redirects=False，
-      响应大小护栏 10MB，UA 固定）
+fetch（双接口全量分页；商品过滤 status=1，价格与易变数值字段即弃（v1.10）；
+      follow_redirects=False，响应大小护栏 10MB，UA 固定）
 → 记录账本刷新（bs_content_sync_records，payload 存目录字段，last_seen_at 对账用）
 → 论坛关联（§5，内存态全量重算，零关系表）
 → 图级 VL 缓存判增量 → VL 解析新增 detail 图
@@ -122,7 +121,7 @@ fetch（双接口全量分页；商品过滤 status=1，价格字段即弃；fol
 ### 5.1 content_hash 口径（v1.1 定版）
 
 - **hash 输入 = pipeline_version + 渲染正文全文 sha256**（正文只含稳定内容，§3.1）；v1.7 起正文不再含论坛计数——forum_media 变化只走 metadata「先比对后写」轻量更新，不触发重嵌（链接本就存 metadata 供智能体发送，正文无loss）。
-- **未变（跳过）**：不重建 chunks/vec、零计费、**不抖 updated_at**；stock/sales/score/sync_date 走 metadata「先比对后写」——值变才 UPDATE documents.metadata，一次轻量 UPDATE，不动 chunks。
+- **未变（跳过）**：不重建 chunks/vec、零计费、**不抖 updated_at**；sync_date（trace）/forum_media 走 metadata「先比对后写」——值变才 UPDATE documents.metadata，一次轻量 UPDATE，不动 chunks（v1.10 起易变数值不进 metadata，存量库中的旧键因比对不等在下一轮 skip 自动零计费清除）。
 - **变更**：删旧 chunks/vec 重建 + 重嵌计费（图级 VL 缓存在，只付 embedding）。
 - **新建**：全链路。
 

@@ -15,10 +15,10 @@
  * - 全部 Provider tool call 持桌面资源锁执行（含旧 boss 链路）；等待超时 → DESKTOP_RESOURCE_BUSY
  * - 执行中每 2s 或每个业务进度回传 progress；ack.cancel=true → 协作式中止（AbortController）
  * - 写动作断线：本地继续完成原子动作，恢复后回传终态；无法证明效果 → EXECUTION_UNKNOWN
- * - 旧链路 claim_token 仅内存持有；v2 按契约将 claim/permit 身份持久于 result outbox（仅该目录）
+ * - 两类原结果均持久于 result outbox；v1 独立子目录供旧消费者安全忽略
  */
 import type { ApiClient, ClaimedInvocation, InvocationResultPayload, OperationResultPayload } from './apiClient.js'
-import { ApiError, DeviceRevokedError, NetworkError } from './apiClient.js'
+import { ApiError, DeviceRevokedError, isRetryableTransportError } from './apiClient.js'
 import { getProviderManifest, isToolAllowedFor, isWriteToolFor, type ProviderManifest } from './providers.js'
 import type { ProviderSet, ProviderManager } from './providerManager.js'
 import { ProviderCrashError } from './providerManager.js'
@@ -52,6 +52,9 @@ export interface RunnerDeps {
   desktopLockTimeoutMs?: number
   /** 进度续租间隔（默认 2000ms，规格 §3） */
   progressIntervalMs?: number
+  /** 无业务进展告警阈值 ms（默认 60000；心跳续租与语义进展分离后，「通路活跃」
+   *  不再冒充「业务推进」，超过该时长无语义进展即本地告警+心跳标注——Phase 7） */
+  noProgressWarnMs?: number
   /** 终态/started 网络重试基数（默认 1000ms） */
   retryBaseMs?: number
   retryMaxMs?: number
@@ -73,6 +76,8 @@ export interface RunnerDeps {
   /** skill-runner 进程内 handler（M2）：provider=skill-runner 时代替 ProviderSet
    *  的 MCP 实例执行（无 MCP entry）；未注入 = 未配置 skills.python →
    *  PROVIDER_NOT_AVAILABLE（能力真实性，与 capabilities 上报同源） */
+  beforeProviderCall?: (invocation: ClaimedInvocation) => Promise<void>
+  recoveryObservation?: Pick<ProviderManager, 'callTool'>
   skillRunner?: SkillRunnerHandler
   /** Runtime-only bridge; called after lock/precheck/permit/journal, never by a model. */
   prepareProviderCall?: (inv: ClaimedInvocation, permit: WritePermit, signal: AbortSignal) => Promise<Record<string, unknown>>
@@ -94,14 +99,27 @@ interface FinalResult {
   permit_token?: string
 }
 
-/** 进度转发器：业务进度立即发 + 每 progressIntervalMs 续租；串行化发送，cancel 透传 */
+/** 无业务进展告警默认阈值（Phase 7）：心跳只证明上报通路活跃，超过该时长无语义进展即告警 */
+const NO_PROGRESS_WARN_DEFAULT_MS = 60_000
+
+/** 进度转发器：业务语义进展与心跳续租分离（Phase 7，2026-10-20 复盘：68 条相同
+ * 「设置筛选面板」心跳掩盖卡死）。语义进展（内容有变化）立即发原文；定时续租发
+ * 带标注的心跳——报告当前步骤、最近语义进展、实际无进展时长，不冒充业务推进；
+ * 重复同一句语义内容不重置无进展时钟、不重复上报；无进展超阈值本地告警（只诊断，
+ * 不自动重放）。串行化发送，cancel 透传。 */
 class ProgressForwarder {
-  private last: { stage?: string; current?: number; total?: number; message?: string } = { stage: 'running' }
+  /** 最近一次语义进展内容（业务事实）；心跳续租不改变它 */
+  private semantic: { stage?: string; current?: number; total?: number; message?: string } = { stage: 'running' }
+  /** 最近一次语义进展时刻（Date.now()）——「实际无进展时长」的基准 */
+  private semanticAt = Date.now()
   private lastSentAt = 0
   private chain: Promise<void> = Promise.resolve()
   private timer: ReturnType<typeof setInterval> | null = null
   private cloudOffline = false
+  /** 无进展告警是否已发出（语义进展后重置；每个停滞周期告警一次，避免刷屏） */
+  private stalledWarned = false
   cancelled = false
+  authorityLost = false
 
   constructor(
     private readonly api: ApiClient,
@@ -110,12 +128,13 @@ class ProgressForwarder {
     private readonly intervalMs: number,
     private readonly onCancel: () => void,
     private readonly emit: (msg: string) => void,
+    private readonly noProgressWarnMs: number = NO_PROGRESS_WARN_DEFAULT_MS,
   ) {}
 
   start(): void {
     this.timer = setInterval(() => {
       if (Date.now() - this.lastSentAt >= this.intervalMs) {
-        this.push({})
+        this.renew()
       }
     }, this.intervalMs)
   }
@@ -125,10 +144,17 @@ class ProgressForwarder {
     this.timer = null
   }
 
-  /** 更新最近进度并入队一次发送（串行链保证不并发、不乱序） */
+  /** 业务语义进展：内容有变化才推进语义时钟并入队一次发送；重复同一句不重报、不重置时钟。
+   *  快照在 push 时固定（CodeReview 2026-10-21：此前闭包在队列执行时才读 this.semantic，
+   *  连续 push A、B 实际发送 B、B——队列积压时中间步骤被合并覆盖）；去重判断同样基于
+   *  push 时刻的 this.semantic 与本次 update 原文，字段全为基元，无共享可变对象。 */
   push(update: { stage?: string; current?: number; total?: number; message?: string }): void {
-    this.last = { ...this.last, ...update }
-    this.chain = this.chain.then(() => this.doSend())
+    if (!this.isSemanticAdvance(update)) return
+    this.semantic = { ...this.semantic, ...update }
+    this.semanticAt = Date.now()
+    this.stalledWarned = false
+    const snapshot = { ...this.semantic }
+    this.chain = this.chain.then(() => this.doSend(snapshot))
   }
 
   /** 等待所有已入队进度发送完成（终态前 flush） */
@@ -136,14 +162,51 @@ class ProgressForwarder {
     await this.chain
   }
 
-  private async doSend(): Promise<void> {
+  /** update 是否携带新语义：任一定义字段与最近语义快照不同才算；全等/空更新不算推进 */
+  private isSemanticAdvance(update: { stage?: string; current?: number; total?: number; message?: string }): boolean {
+    for (const key of ['stage', 'current', 'total', 'message'] as const) {
+      const value = update[key]
+      if (value !== undefined && this.semantic[key] !== value) return true
+    }
+    return false
+  }
+
+  /** 心跳续租：无新语义的租约续期，消息显式标注（心跳续租 + 无新进展时长）；停滞超阈值时本地告警一次 */
+  private renew(): void {
+    const now = Date.now()
+    const noProgressMs = now - this.semanticAt
+    if (noProgressMs >= this.noProgressWarnMs && !this.stalledWarned) {
+      this.stalledWarned = true
+      this.emit(
+        `[无进展告警] invocation ${this.invocationId} 已 ${Math.floor(noProgressMs / 1000)}s 无业务语义进展` +
+          `（当前步骤 ${this.semantic.stage ?? '-'}，最近进展：${this.semantic.message ?? '尚未收到'}）` +
+          `——心跳续租仅证明上报通路活跃，不代表业务推进；不自动重放，等待执行终态或人工诊断`,
+      )
+    }
+    this.chain = this.chain.then(() => this.doSend(this.heartbeatPayload(now)))
+  }
+
+  /** 心跳 payload：报告当前步骤、最近语义进展、实际无进展时长；超阈值附加告警标注 */
+  private heartbeatPayload(now: number): { stage?: string; current?: number; total?: number; message?: string } {
+    const noProgressSec = Math.max(0, Math.floor((now - this.semanticAt) / 1000))
+    const base = this.semantic.message
+      ?? (this.semantic.stage && this.semantic.stage !== 'running' ? `当前步骤 ${this.semantic.stage}` : '尚未收到业务进展')
+    const message =
+      now - this.semanticAt >= this.noProgressWarnMs
+        ? `${base}（心跳续租，无新进展 ${noProgressSec}s，已超过告警阈值 ${Math.round(this.noProgressWarnMs / 1000)}s）`
+        : `${base}（心跳续租，无新进展 ${noProgressSec}s）`
+    return { stage: this.semantic.stage, current: this.semantic.current, total: this.semantic.total, message }
+  }
+
+  private async doSend(payload: { stage?: string; current?: number; total?: number; message?: string }): Promise<void> {
+    if (this.cancelled || this.authorityLost) return
     try {
       const ack = await this.api.progress(this.invocationId, {
         claim_token: this.claimToken,
-        stage: this.last.stage,
-        current: this.last.current,
-        total: this.last.total,
-        message: this.last.message,
+        stage: payload.stage,
+        current: payload.current,
+        total: payload.total,
+        message: payload.message,
       })
       this.lastSentAt = Date.now()
       if (this.cloudOffline) {
@@ -156,18 +219,19 @@ class ProgressForwarder {
         this.onCancel()
       }
     } catch (err) {
-      if (err instanceof NetworkError || err instanceof DeviceRevokedError) {
+      if (err instanceof DeviceRevokedError || (err instanceof ApiError && [401, 403, 404, 409].includes(err.status))) {
+        this.authorityLost = true
+        this.emit('云端已拒绝当前执行权，停止续租并协作式中止；已发生的效果仍需回报')
+        this.stop()
+        this.onCancel()
+        return
+      }
+      if (isRetryableTransportError(err)) {
         // 断线策略：进度丢失可容忍，继续本地执行，终态会重试回传
         if (!this.cloudOffline) {
           this.cloudOffline = true
           this.emit('云端连接中断（进度暂无法回传，本地继续执行）')
         }
-        return
-      }
-      if (err instanceof ApiError && err.status === 404) {
-        // 租约过期/状态不允许：云端已不再接受进度，停止续租（终态大概率也被拒，但仍尝试）
-        this.emit('云端拒绝进度回传（租约可能过期），停止续租')
-        this.stop()
         return
       }
       logError(`进度回传失败: ${err instanceof Error ? err.message : String(err)}`)
@@ -195,7 +259,7 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
 
   // v2 结果 outbox：与 PollLoop 启动重投共用实例（deps 注入），缺省按数据目录派生
   const dataDir = deps.runtimeDataDir ?? runtimeHomeDir()
-  const outbox = isV2Invocation ? (deps.resultOutbox ?? new ResultOutbox(resultOutboxDir(dataDir))) : null
+  const outbox = deps.resultOutbox ?? new ResultOutbox(resultOutboxDir(dataDir))
 
   /** 旧链路终态回传（/result）：payload 逐键显式构造——键集与顺序和改造前一致，
    *  FinalResult 的 v2 专用字段绝不进入旧路径（逐字节兼容，含计费语义） */
@@ -209,35 +273,22 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
       data: final.data,
       retryable: final.retryable,
     }
-    let backoff = retryBase
-    for (;;) {
-      try {
-        await deps.api.result(inv.invocation_id, payload)
-        // data_bytes：证明 data 随终态发出（排障「结果回传丢 data」时与云端落库侧比对）
-        const dataBytes = payload.data === undefined ? 0 : JSON.stringify(payload.data).length
-        emit(
-          `invocation ${inv.invocation_id} 终态已回传 success=${final.success} code=${final.code ?? '-'} ` +
-            `effect=${final.effect ?? '-'} data_bytes=${dataBytes}`,
-        )
-        return
-      } catch (err) {
-        if (err instanceof ApiError) {
-          logError(`invocation ${inv.invocation_id} 终态被云端拒绝（HTTP ${err.status}），放弃重试: ${err.message}`)
-          return
-        }
-        if (err instanceof DeviceRevokedError) {
-          logError(`invocation ${inv.invocation_id} 终态回传失败：设备已撤销，结果丢失（fail-loud）`)
-          return
-        }
-        emit(`终态回传失败（网络），${backoff}ms 后重试`)
-        const proceed = await backoffSleep(backoff, deps.shutdownSignal)
-        if (!proceed) {
-          logError(`invocation ${inv.invocation_id} 终态未能回传（Runtime 关闭中），结果丢失（fail-loud）`)
-          return
-        }
-        backoff = Math.min(backoff * 2, retryMax)
+    let entry: OutboxEntry
+    try {
+      entry = outbox.saveLegacy(inv.invocation_id, payload)
+    } catch {
+      logError(`invocation ${inv.invocation_id} v1 outbox 落盘失败，直接发送原结果一次（无重启保障）`)
+      try { await deps.api.result(inv.invocation_id, payload) } catch {
+        logError(`invocation ${inv.invocation_id} v1 原结果未获 ACK 且无法持久化，需核对原调用`)
       }
+      return
     }
+    await deliverOutboxEntry(deps.api, outbox, entry, {
+      retryBaseMs: retryBase,
+      retryMaxMs: retryMax,
+      shutdownSignal: deps.shutdownSignal,
+      emit,
+    })
   }
 
   /** v2 终态回传（operation-result）：先原子落 result outbox 再发送；仅 2xx ACK 删条目（R21），
@@ -291,9 +342,10 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
   // skill-runner（M2）：进程内 handler，不走 ProviderSet/MCP entry——可用性以 deps.skillRunner
   // 注入为准（cli 按 config.skills.python 配置且存在注入），缺 handler = 未安装（fail-closed）
   const providerKey = inv.provider ?? 'boss-recruiting'
+  const isRecoveryObservation = providerKey === 'runtime-recovery'
   const isSkillRunner = providerKey === SKILL_RUNNER_PROVIDER_KEY
   const manifest = deps.manifests?.[providerKey] ?? getProviderManifest(providerKey)
-  if (!manifest || (isSkillRunner ? !deps.skillRunner : !deps.providers.has(providerKey))) {
+  if (!manifest || (isRecoveryObservation ? !deps.recoveryObservation : isSkillRunner ? !deps.skillRunner : !deps.providers.has(providerKey))) {
     emit(`invocation ${inv.invocation_id} provider=${providerKey} 未安装或未配置入口，拒绝执行`)
     await sendFinalResult({
       success: false,
@@ -342,27 +394,32 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
   }
 
   // 2. started（幂等，网络重试；失败则放弃执行——写动作未开始无副作用，租约过期云端回收）
+  // Phase 5 调用层分段计时（2026-10-20）：started 回传 / 桌面锁等待 / 锁内前置（Provider
+  // 就绪：取消复验、会话复核、写许可、journal）/ Provider 调用本体，结束输出 [runtime-perf] 单行；
+  // desktopCheck 本体不计时（Phase 1 进程内化消除，其耗时经 Phase 6 真机观察核对）。
+  // 只记毫秒数与工具名，不记参数/页面内容（与 [boss-perf] 同口径）。-1 = 该段未发生。
+  const phase = { startedMs: -1, lockWaitMs: -1, lockPrepMs: -1, providerCallMs: -1 }
   {
+    const startedT0 = Date.now()
     let backoff = retryBase
     for (;;) {
+      if (deps.shutdownSignal?.aborted) return
       try {
-        await deps.api.started(inv.invocation_id, inv.claim_token)
+        await deps.api.started(inv.invocation_id, inv.claim_token, deps.shutdownSignal)
         break
       } catch (err) {
-        if (err instanceof ApiError) {
-          logError(`invocation ${inv.invocation_id} started 被云端拒绝（HTTP ${err.status}），放弃执行: ${err.message}`)
+        if (!isRetryableTransportError(err)) {
+          logError(`invocation ${inv.invocation_id} started 未获接纳，未执行 Provider${err instanceof ApiError ? ` HTTP ${err.status}` : err instanceof DeviceRevokedError ? '（设备已撤销）' : ''}`)
           return
         }
-        if (err instanceof DeviceRevokedError) {
-          logError(`invocation ${inv.invocation_id} started 失败：设备已撤销`)
-          return
-        }
-        emit(`started 失败（网络），${backoff}ms 后重试`)
-        const proceed = await backoffSleep(backoff, deps.shutdownSignal)
+        const delay = Math.max(backoff, err instanceof ApiError ? err.retryAfterMs ?? 0 : 0)
+        emit(`started 暂不可用，${delay}ms 后重传原请求`)
+        const proceed = await backoffSleep(delay, deps.shutdownSignal)
         if (!proceed) return
         backoff = Math.min(backoff * 2, retryMax)
       }
     }
+    phase.startedMs = Date.now() - startedT0
   }
   emit(`invocation ${inv.invocation_id} 已开始执行 tool=${inv.tool_name}`)
 
@@ -385,11 +442,12 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
 
   // 4. Provider 调用（进度转发 + 取消 + shutdown 中止 + 桌面资源仲裁）；
   // skill-runner → 进程内 handler（同一桌面锁域/终态映射链路，零复制）
-  const provider: Pick<ProviderManager, 'callTool'> = isSkillRunner
+  const provider: Pick<ProviderManager, 'callTool'> = isRecoveryObservation ? deps.recoveryObservation! : isSkillRunner
     ? deps.skillRunner!
     : deps.providers.get(providerKey)
   const lockName = desktopLockName(deps.desktopResourceKey)
   const abortController = new AbortController()
+  if (deps.shutdownSignal?.aborted) abortController.abort()
   const onShutdownAbort = () => abortController.abort()
   deps.shutdownSignal?.addEventListener('abort', onShutdownAbort, { once: true })
 
@@ -400,6 +458,7 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
     deps.progressIntervalMs ?? 2_000,
     () => abortController.abort(),
     emit,
+    deps.noProgressWarnMs ?? NO_PROGRESS_WARN_DEFAULT_MS,
   )
   // forwarder 先于锁启动：锁等待期间持续续租租约并感知取消（R20 取消状态复验的数据来源）
   forwarder.start()
@@ -419,6 +478,8 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
   let settled: Record<string, unknown> | null = null
   let callError: Error | null = null
   let lockBusy = false
+  let providerStarted = false
+  const lockEnterMs = Date.now()
   try {
     // 桌面资源仲裁入口：全部 Provider（含旧 boss 链路）的 tool call 都持锁执行，不改 MCP 契约；
     // 等待超时按未提交处理回 DESKTOP_RESOURCE_BUSY（绝不复用旧 'BUSY' 码，避免误触发云端旧弹层自愈）。
@@ -428,6 +489,19 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
     settled = await withDesktopLock(
       lockName,
       async () => {
+        const lockAcquiredMs = Date.now()
+        phase.lockWaitMs = lockAcquiredMs - lockEnterMs
+        await forwarder.flush()
+        if (abortController.signal.aborted) {
+          lockPreabort = preabortFinal({
+            success: false,
+            code: forwarder.authorityLost ? 'EXECUTION_AUTHORITY_LOST' : 'CANCELLED',
+            message: '执行已停止，未开始 Provider 调用',
+            retryable: false,
+            safe_to_retry: false,
+          })
+          return null
+        }
         if (isV2Invocation && writeTool) {
           // 取消状态复验（R20）：flush 让等待期最后一批进度 ACK 先落地，再读取消标志；
           // 已被取消/关闭则不申请许可、不执行（effect none，可重试语义与取消分支一致收敛）
@@ -548,24 +622,34 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
           callArgs = await deps.prepareProviderCall(inv, permit, abortController.signal)
           if (!permit.isValid() || abortController.signal.aborted) throw new Error('发送许可或执行已失效')
         }
-        return await provider.callTool(inv.tool_name, callArgs, {
-          signal: permit ? AbortSignal.any([abortController.signal, AbortSignal.timeout(Math.max(0, Math.floor(permit.msRemaining())))]) : abortController.signal,
-          onProgress: (p) => {
-            const stage = extractStage(p.message)
-            forwarder.push({
-              stage,
-              current: typeof p.progress === 'number' ? Math.round(p.progress) : undefined,
-              total: typeof p.total === 'number' ? Math.round(p.total) : undefined,
-              message: p.message,
-            })
-          },
-        })
+        await deps.beforeProviderCall?.(inv)
+        phase.lockPrepMs = Date.now() - lockAcquiredMs
+        const providerCallT0 = Date.now()
+        try {
+          if (abortController.signal.aborted) throw new Error('EXECUTION_AUTHORITY_LOST')
+          providerStarted = true
+          return await provider.callTool(inv.tool_name, callArgs, {
+            signal: permit ? AbortSignal.any([abortController.signal, AbortSignal.timeout(Math.max(0, Math.floor(permit.msRemaining())))]) : abortController.signal,
+            onProgress: (p) => {
+              const stage = extractStage(p.message)
+              forwarder.push({
+                stage,
+                current: typeof p.progress === 'number' ? Math.round(p.progress) : undefined,
+                total: typeof p.total === 'number' ? Math.round(p.total) : undefined,
+                message: p.message,
+              })
+            },
+          })
+        } finally {
+          phase.providerCallMs = Date.now() - providerCallT0
+        }
       },
       { timeoutMs: deps.desktopLockTimeoutMs, signal: abortController.signal },
     )
   } catch (err) {
     if (err instanceof DesktopLockTimeoutError) {
       lockBusy = true
+      phase.lockWaitMs = Date.now() - lockEnterMs
       logError(`invocation ${inv.invocation_id} 桌面资源锁等待超时: ${err.message}`)
     } else {
       callError = err instanceof Error ? err : new Error(String(err))
@@ -573,6 +657,10 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
   } finally {
     forwarder.stop()
     deps.shutdownSignal?.removeEventListener('abort', onShutdownAbort)
+    emit(
+      `[runtime-perf] invocation=${inv.invocation_id} tool=${inv.tool_name} provider=${providerKey}` +
+        ` started_ms=${phase.startedMs} lock_wait_ms=${phase.lockWaitMs} lock_prep_ms=${phase.lockPrepMs} provider_call_ms=${phase.providerCallMs}`,
+    )
   }
   await forwarder.flush()
 
@@ -590,6 +678,21 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
     ? { permit_id: finalPermit.permitId, permit_token: finalPermit.permitToken }
     : {}
   const strField = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
+
+  if (forwarder.authorityLost) {
+    await sendFinalResult({
+      success: false,
+      code: 'EXECUTION_AUTHORITY_LOST',
+      message: '云端已拒绝当前执行权，已停止；已发动作按原回执核对',
+      effect: strField(settled?.['effect']) ?? (providerStarted && writeTool ? 'unknown' : 'none'),
+      phase: strField(settled?.['phase']) ?? (providerStarted && writeTool ? 'unknown' : 'prepared'),
+      data: settled?.['data'] as Record<string, unknown> | undefined,
+      retryable: false,
+      safe_to_retry: false,
+      ...permitFields,
+    })
+    return
+  }
 
   if (forwarder.cancelled) {
     // 云端取消优先：协作式中止后回 cancelled 终态（保留已产生的局部 effect）

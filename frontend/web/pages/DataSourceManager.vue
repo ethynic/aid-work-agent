@@ -42,8 +42,30 @@
         </div>
       </div>
 
+      <!-- 批量设置可用智能体：仅选中后出现，未选不常驻；全选限当前页 -->
+      <div v-if="isScopeAdmin && selectedSchemaIds.length > 0" class="flex items-center gap-3 mb-3">
+        <span class="text-sm text-muted">已选 {{ selectedSchemaIds.length }} 张表</span>
+        <BaseButton size="sm" @click="openBatchScopeDialog">设置可用智能体</BaseButton>
+      </div>
+
       <BaseTable :columns="schemaColumns" :data="(schemas as any[])" row-key="id">
         <template #index="{ index }">{{ seqNumber(index) }}</template>
+        <template #select_header>
+          <input
+            type="checkbox"
+            :checked="isAllPageSelected"
+            aria-label="全选当前页"
+            @change="toggleSelectAllPage"
+          />
+        </template>
+        <template #select="{ row }">
+          <input
+            type="checkbox"
+            :checked="selectedSchemaIds.includes(row.id)"
+            :aria-label="'选择 ' + row.title"
+            @change="toggleRowSelected(row.id)"
+          />
+        </template>
         <template #title="{ row }"><span class="font-medium">{{ row.title }}</span></template>
         <template #source="{ row }">
           <a
@@ -58,6 +80,22 @@
           <BaseBadge :intent="sourceStatusIntent(row.source_status)">
             {{ sourceStatusLabel(row.source_status) }}
           </BaseBadge>
+        </template>
+        <template #agent_scope="{ row }">
+          <!-- 管理员：范围文本+编辑图标的链接式按钮，原生 button 保证 Tab/Enter/Space 与可见焦点；
+               普通用户：只读文本 -->
+          <button
+            v-if="isScopeAdmin"
+            type="button"
+            class="inline-flex items-center gap-1 px-1 -mx-1 rounded text-primary-600 hover:text-primary-700 hover:underline cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary-500"
+            @click="openSingleScopeDialog(row)"
+          >
+            <span>{{ agentScopeDisplay(row) }}</span>
+            <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931zm0 0L19.5 7.125" />
+            </svg>
+          </button>
+          <span v-else class="text-muted">{{ agentScopeDisplay(row) }}</span>
         </template>
         <template #columns_count="{ row }">{{ row.metadata?.columns?.length || 0 }}</template>
         <template #relations="{ row }">{{ countRelations(row) }}</template>
@@ -77,7 +115,7 @@
         :total="total"
         :current-page="currentPage"
         :page-size="pageSize"
-        @change="handlePageChange"
+        @change="handlePageChangeAndClearSelection"
       />
     </div>
 
@@ -120,6 +158,22 @@
         <div class="flex justify-between items-center">
           <span class="text-muted text-sm">{{ currentReviewIndex + 1 }} / {{ reviewSchemas.length }}</span>
         </div>
+        <!-- 本批新表可用智能体：紧凑摘要，默认不展开名单；更改复用选择弹框，
+             弹框点保存才更新本批草稿（仅前端状态）。首张新表成功入库后锁定为只读。 -->
+        <div v-if="!editingSchemaDoc" class="flex items-center gap-2 bg-surface-hover rounded px-3 py-2 text-sm">
+          <span class="text-muted shrink-0">本批新表可用智能体：</span>
+          <span class="text-default font-medium truncate">{{ importBatchScopeLabel }}</span>
+          <!-- 名单编辑仅管理员可用（Q1：普通用户可见但只读）；角色未就绪同样只读，
+               不影响按默认共享的导入 -->
+          <BaseButton
+            v-if="!importBatchLocked && isScopeAdmin"
+            intent="ghost"
+            size="sm"
+            class="shrink-0"
+            @click="openImportScopeDialog"
+          >更改</BaseButton>
+          <span v-else class="text-xs text-muted shrink-0">首张表已入库，本批设置已锁定</span>
+        </div>
         <div>
           <label class="text-sm text-muted mb-1 block">表名 <span class="text-danger-500">*</span></label>
           <BaseInput v-model="currentSchema.table_name" />
@@ -153,6 +207,111 @@
       <template #footer>
         <BaseButton intent="secondary" @click="skipSchema">跳过</BaseButton>
         <BaseButton @click="confirmSchema">确认入库</BaseButton>
+      </template>
+    </BaseModal>
+
+    <!-- Modal: 可用智能体选择（单表 / 批量 / 导入批次共用同一弹框与选择规则） -->
+    <BaseModal
+      :model-value="showScopeModal"
+      :title="scopeModalTitle"
+      accessible
+      size="md"
+      mode="create"
+      @update:model-value="onScopeModalVisibleChange"
+    >
+      <div class="space-y-4">
+        <div class="space-y-2">
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input
+              type="radio"
+              name="agent-scope-choice"
+              :disabled="scopeSaving"
+              :checked="scopeChoice === 'all'"
+              @change="chooseAllAgents"
+            />
+            <span class="text-sm text-default">全部智能体（默认）</span>
+          </label>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input
+              type="radio"
+              name="agent-scope-choice"
+              :disabled="scopeSaving"
+              :checked="scopeChoice === 'specified'"
+              @change="chooseSpecifiedMode"
+            />
+            <span class="text-sm text-default">仅指定智能体</span>
+          </label>
+        </div>
+
+        <!-- 名称列表常驻展示：点击名字即进入指定模式并选中，无需先切换模式 -->
+        <div class="space-y-2">
+          <BaseInput
+            v-if="agentOptions.length > 8"
+            v-model="scopeSearch"
+            :disabled="scopeSaving"
+            placeholder="搜索智能体名称..."
+            size="sm"
+          />
+          <div v-if="agentOptionsLoading" class="text-sm text-muted py-2">智能体列表加载中...</div>
+          <div v-else-if="agentOptionsError" class="flex items-center gap-3 py-2">
+            <span class="text-sm text-danger-600">智能体列表加载失败，原有范围未变化</span>
+            <BaseButton intent="secondary" size="sm" @click="retryAgentOptions">重试</BaseButton>
+          </div>
+          <div v-else class="max-h-64 overflow-y-auto border border-default rounded divide-y divide-default">
+            <label
+              v-for="opt in filteredAgentOptions"
+              :key="opt.id"
+              class="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-surface-hover"
+            >
+              <input
+                type="checkbox"
+                :checked="scopeDraftIds.includes(opt.id)"
+                :disabled="scopeSaving"
+                :aria-label="opt.name"
+                @change="toggleDraftAgent(opt.id)"
+              />
+              <span class="text-sm text-default">{{ opt.name }}</span>
+            </label>
+            <div v-if="filteredAgentOptions.length === 0" class="px-3 py-2 text-sm text-muted">
+              无匹配智能体
+            </div>
+          </div>
+
+          <!-- 失效 ID：当前名单里不在可用目录中的智能体，显示保留标识并允许主动移除 -->
+          <div v-if="invalidDraftIds.length > 0" class="border border-default rounded px-3 py-2 space-y-1">
+            <div class="text-xs text-muted">以下智能体已不在可用目录，可取消勾选移除：</div>
+            <label v-for="id in invalidDraftIds" :key="id" class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" :disabled="scopeSaving" :checked="true" :aria-label="agentIdLabel(id)" @change="removeDraftAgent(id)" />
+              <span class="text-sm text-muted">{{ agentIdLabel(id) }}</span>
+            </label>
+          </div>
+
+          <!-- 取消最后一位时保持仅指定模式并提示，不隐式恢复共享 -->
+          <div v-if="scopeChoice === 'specified' && scopeDraftIds.length === 0" class="text-sm text-warning-600">
+            请选择至少一个智能体，或选择全部智能体
+          </div>
+        </div>
+
+        <div class="text-xs text-muted space-y-1">
+          <p>默认全部可用；指定后仅选中的智能体可用，对后续分析及尚未加载的数据生效。</p>
+          <p v-if="scopeChoice === 'specified' && hasOutboundShare">
+            如该数据已对外共享，指定后其他租户将无法使用。
+          </p>
+          <p v-if="scopeTargetKind === 'batch'">
+            将这 {{ scopeTargetDocs.length }} 张表统一设为所选智能体可用，替换原设置。
+          </p>
+        </div>
+
+        <div v-if="batchProgress" class="text-sm text-muted">
+          已处理 {{ batchProgress.done }}/{{ batchProgress.total }}，成功 {{ batchProgress.success }}、失败 {{ batchProgress.fail }}
+        </div>
+        <div v-if="scopeError" class="text-sm text-danger-600">{{ scopeError }}</div>
+      </div>
+      <template #footer>
+        <BaseButton intent="secondary" :disabled="scopeSaving" @click="closeScopeModal">取消</BaseButton>
+        <BaseButton :disabled="!scopeCanSave || scopeSaving" @click="saveScopeModal">
+          {{ scopeSaving ? '保存中...' : '保存' }}
+        </BaseButton>
       </template>
     </BaseModal>
 
@@ -336,6 +495,8 @@ import BaseModal from '@/components/ui/BaseModal.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import { usePageContext } from '@/composables/usePageContext'
+import { useTenantAuth } from '@/composables/useTenantAuth'
+import { listSubagents } from '@/api/subagent'
 import {
   listConnectors,
   createConnector,
@@ -349,6 +510,7 @@ import {
   listSchemas,
   saveSchema,
   updateSchema,
+  updateAgentScope,
   deleteSchema,
   inferRelations as inferRelationsApi,
   listRelations,
@@ -372,6 +534,8 @@ const total = ref(0)
 const searchQuery = ref('')
 const searched = ref(false)
 const searching = ref(false)
+// 租户级出向知识共享（from_tenant_id=当前租户），仅用于指定模式的条件文案
+const hasOutboundShare = ref(false)
 
 const {
   currentPage,
@@ -390,6 +554,8 @@ const {
     })
     schemas.value = res.schemas
     total.value = res.total
+    // 租户级出向共享布尔值：仅在「仅指定」模式下控制一句条件文案
+    hasOutboundShare.value = res.has_outbound_knowledge_share === true
   } catch (e) {
     console.error('加载数据表失败', e)
     schemas.value = []
@@ -399,16 +565,52 @@ const {
   }
 })
 
-const schemaColumns = [
+// 角色与设计 §18.5 一致：tenant_admin 或代管中的 platform_admin；
+// 复用 useTenantAuth（/api/saas/auth/me），未就绪时只影响编辑入口，不影响默认导入
+const { admin: tenantAdmin } = useTenantAuth()
+const isScopeAdmin = computed(() => {
+  const role = tenantAdmin.value?.role
+  return role === 'tenant_admin' || role === 'platform_admin'
+})
+
+// 表格当前页选中集合（仅管理员可见选择列），换页/搜索/租户变化时清空
+const selectedSchemaIds = ref<number[]>([])
+
+const isAllPageSelected = computed(() =>
+  schemas.value.length > 0 && schemas.value.every(row => selectedSchemaIds.value.includes(row.id))
+)
+
+function toggleRowSelected(id: number) {
+  const index = selectedSchemaIds.value.indexOf(id)
+  if (index >= 0) {
+    selectedSchemaIds.value.splice(index, 1)
+  } else {
+    selectedSchemaIds.value.push(id)
+  }
+}
+
+function toggleSelectAllPage() {
+  selectedSchemaIds.value = isAllPageSelected.value ? [] : schemas.value.map(row => row.id)
+}
+
+async function handlePageChangeAndClearSelection(page: number) {
+  selectedSchemaIds.value = []
+  await handlePageChange(page)
+}
+
+// schemaColumns 依赖管理员角色：选择列仅管理员可见
+const schemaColumns = computed(() => [
   { key: 'index', label: '序号', width: '60px' },
+  ...(isScopeAdmin.value ? [{ key: 'select', label: '', width: '40px' }] : []),
   { key: 'title', label: '表名' },
   { key: 'source', label: '来源' },
   { key: 'source_status', label: '状态', width: '100px' },
+  { key: 'agent_scope', label: '可用智能体', width: '150px' },
   { key: 'columns_count', label: '字段数', width: '80px' },
   { key: 'relations', label: '关联数', width: '80px' },
   { key: 'created_at', label: '创建时间', width: '160px' },
   { key: 'actions', label: '操作', width: '120px' },
-]
+])
 
 async function loadSchemas() {
   await refresh()
@@ -417,12 +619,14 @@ async function loadSchemas() {
 function searchSchemas() {
   if (!searchQuery.value.trim()) return
   searched.value = true
+  selectedSchemaIds.value = [] // 搜索条件变化清空选择，不引入跨页选择集
   ctxSearch(searchQuery.value)
 }
 
 async function clearSearch() {
   searchQuery.value = ''
   searched.value = false
+  selectedSchemaIds.value = []
   await ctxSearch('')
 }
 
@@ -477,8 +681,24 @@ const reviewSchemas = ref<SchemaInfo[]>([])
 const currentReviewIndex = ref(0)
 const editingSchemaDoc = ref<SchemaDocument | null>(null)
 const importConnectorId = ref<string | null>(null)
+// 本批新表的可用智能体草稿（null=共享）。仅是本次导入表单的临时值：
+// 弹框点保存才更新，取消丢弃；新批次或切换租户重置，不记忆上次名单
+const importBatchScope = ref<string[] | null>(null)
+// 首张新表成功入库后锁定摘要（只读回显）；跳过/保存失败不锁定。
+// 锁定只表示摘要不可再改，已绑定名单继续随后续每张新表提交
+const importBatchLocked = ref(false)
+// 重复命中已有表（后端保留原名单），批次结束用一条结果提示统一列出
+const batchExistingTitles = ref<string[]>([])
 
 const currentSchema = computed(() => reviewSchemas.value[currentReviewIndex.value] || null)
+
+// 摘要显示格式与列表一致：全部智能体 / 名称 / 名称 +N
+const importBatchScopeLabel = computed(() => {
+  const ids = importBatchScope.value
+  if (!ids || ids.length === 0) return '全部智能体'
+  const first = agentIdLabel(ids[0])
+  return ids.length === 1 ? first : `${first} +${ids.length - 1}`
+})
 
 const columnReviewColumns = [
   { key: 'name', label: '原始列名', width: '120px' },
@@ -504,27 +724,50 @@ function openSchemaReview(schemasData: SchemaInfo[], connectorId?: string) {
   currentReviewIndex.value = 0
   editingSchemaDoc.value = null
   importConnectorId.value = connectorId || null
+  // 新批次重置为本批草稿：默认共享，不沿用上一次导入的专用名单
+  importBatchScope.value = null
+  importBatchLocked.value = false
+  batchExistingTitles.value = []
   showSchemaReview.value = true
 }
 
 async function confirmSchema() {
   if (!currentSchema.value) return
   const schema = currentSchema.value
+  let saveResult: Awaited<ReturnType<typeof saveSchema>> | null = null
   try {
     if (editingSchemaDoc.value) {
       await updateSchema(editingSchemaDoc.value.id, schema)
     } else {
-      await saveSchema({ ...schema, connector_id: importConnectorId.value || undefined })
+      const batchIds = importBatchScope.value
+      // 已绑定批次名单随每张新表确认入库提交；从未保存过更改则按共享创建（不传字段）
+      saveResult = await saveSchema({
+        ...schema,
+        connector_id: importConnectorId.value || undefined,
+        ...(batchIds && batchIds.length > 0 ? { allowed_agent_ids: batchIds } : {}),
+      })
     }
   } catch (e: any) {
     alert(e.message || '保存失败')
-    return
+    return // 保存失败不锁定本批摘要
+  }
+
+  if (!editingSchemaDoc.value) {
+    // 首张新表成功入库即锁定摘要，避免中途改名单使前面已保存表保持旧值
+    importBatchLocked.value = true
+    if (saveResult?.existing) {
+      // 重复命中已有表：后端保留原范围，本批值不覆盖
+      batchExistingTitles.value.push(schema.table_name)
+    }
   }
 
   if (currentReviewIndex.value < reviewSchemas.value.length - 1) {
     currentReviewIndex.value++
   } else {
     showSchemaReview.value = false
+    if (!editingSchemaDoc.value && batchExistingTitles.value.length > 0) {
+      alert(`以下表已存在，沿用原可用智能体设置：${batchExistingTitles.value.join('、')}`)
+    }
     await loadSchemas()
   }
 }
@@ -537,15 +780,291 @@ function skipSchema() {
   }
 }
 
+// ===== 可用智能体范围（单表 / 批量 / 导入批次共用一个选择弹框） =====
+
+// 智能体选项目录：复用既有 /api/subagents（agent_id + 显示名，含 main）。
+// 按需加载且不阻塞默认导入；失败保留已加载目录并可重试，不用空列表覆盖
+interface AgentOption {
+  id: string
+  name: string
+}
+
+const agentOptions = ref<AgentOption[]>([])
+const agentOptionsLoading = ref(false)
+const agentOptionsError = ref(false)
+
+const agentNameById = computed(() => {
+  const map = new Map<string, string>()
+  for (const opt of agentOptions.value) map.set(opt.id, opt.name)
+  return map
+})
+
+async function loadAgentOptions() {
+  if (agentOptionsLoading.value) return
+  agentOptionsLoading.value = true
+  agentOptionsError.value = false
+  try {
+    const res = await listSubagents()
+    if (res.success && Array.isArray(res.data)) {
+      agentOptions.value = res.data
+        .filter(item => !!item && typeof item.agent_id === 'string')
+        .map(item => ({
+          id: item.agent_id,
+          // 租户实例优先 display_name/instance_name，其余用基础名；不展示技术 ID
+          name: item.display_name || item.instance_name || item.name || item.agent_id,
+        }))
+    } else {
+      agentOptionsError.value = true
+    }
+  } catch {
+    // 目录失败仅标记可重试，已加载/已有范围保持不变
+    agentOptionsError.value = true
+  } finally {
+    agentOptionsLoading.value = false
+  }
+}
+
+// 已成功加载则不再重复请求；失败后允许重试
+function ensureAgentOptions() {
+  if (agentOptions.value.length > 0 && !agentOptionsError.value) return
+  void loadAgentOptions()
+}
+
+function retryAgentOptions() {
+  void loadAgentOptions()
+}
+
+function agentIdLabel(id: string): string {
+  const name = agentNameById.value.get(id)
+  // 名称无法解析时保留原始 ID 作可识别标识，绝不把限定表显示成共享
+  return name || `${id}（已不可用）`
+}
+
+// 列表展示：全部智能体 / 名称 / 名称 +N
+function agentScopeDisplay(row: any): string {
+  const ids = row?.allowed_agent_ids
+  if (!Array.isArray(ids) || ids.length === 0) return '全部智能体'
+  const first = agentIdLabel(ids[0])
+  return ids.length === 1 ? first : `${first} +${ids.length - 1}`
+}
+
+type ScopeTargetKind = 'single' | 'batch' | 'import'
+
+const showScopeModal = ref(false)
+const scopeTargetKind = ref<ScopeTargetKind>('single')
+const scopeTargetDocs = ref<SchemaDocument[]>([])
+// 全部智能体与指定名单互斥；null=批量混合范围尚未选定目标
+const scopeChoice = ref<'all' | 'specified' | null>(null)
+const scopeDraftIds = ref<string[]>([])
+const scopeSearch = ref('')
+const scopeSaving = ref(false)
+const scopeError = ref('')
+const batchProgress = ref<{ done: number; total: number; success: number; fail: number } | null>(null)
+
+const scopeModalTitle = computed(() => {
+  if (scopeTargetKind.value === 'import') return '设置本批新表可用智能体'
+  if (scopeTargetKind.value === 'batch') return `批量设置可用智能体（${scopeTargetDocs.value.length} 张表）`
+  const doc = scopeTargetDocs.value[0]
+  return doc ? `设置可用智能体 — ${doc.title}` : '设置可用智能体'
+})
+
+const scopeCanSave = computed(
+  () => scopeChoice.value === 'all' || (scopeChoice.value === 'specified' && scopeDraftIds.value.length > 0)
+)
+
+const filteredAgentOptions = computed(() => {
+  const kw = scopeSearch.value.trim().toLowerCase()
+  if (!kw) return agentOptions.value
+  return agentOptions.value.filter(opt => opt.name.toLowerCase().includes(kw))
+})
+
+// 当前草稿里不在可用目录中的失效 ID；搜索过滤不影响其展示
+const invalidDraftIds = computed(() => scopeDraftIds.value.filter(id => !agentNameById.value.has(id)))
+
+function resetScopeDialogUi() {
+  scopeSearch.value = ''
+  scopeError.value = ''
+  batchProgress.value = null
+  scopeSaving.value = false
+}
+
+function initScopeDraft(ids: string[] | null | undefined) {
+  if (Array.isArray(ids) && ids.length > 0) {
+    scopeChoice.value = 'specified'
+    scopeDraftIds.value = [...ids]
+  } else {
+    scopeChoice.value = 'all'
+    scopeDraftIds.value = []
+  }
+}
+
+function openSingleScopeDialog(row: any) {
+  scopeTargetKind.value = 'single'
+  scopeTargetDocs.value = [row]
+  initScopeDraft(row.allowed_agent_ids)
+  resetScopeDialogUi()
+  showScopeModal.value = true
+  ensureAgentOptions()
+}
+
+function openBatchScopeDialog() {
+  const rows = schemas.value.filter(row => selectedSchemaIds.value.includes(row.id))
+  if (rows.length === 0) return
+  scopeTargetKind.value = 'batch'
+  scopeTargetDocs.value = rows
+  // 范围一致时回显当前值；混合范围不预选「全部智能体」，必须明确选定目标，避免误恢复共享
+  const scopeLists = rows.map(row => (Array.isArray(row.allowed_agent_ids) ? row.allowed_agent_ids : []))
+  const firstKey = JSON.stringify(scopeLists[0])
+  if (scopeLists.every(ids => JSON.stringify(ids) === firstKey)) {
+    initScopeDraft(scopeLists[0])
+  } else {
+    scopeChoice.value = null
+    scopeDraftIds.value = []
+  }
+  resetScopeDialogUi()
+  showScopeModal.value = true
+  ensureAgentOptions()
+}
+
+function openImportScopeDialog() {
+  if (importBatchLocked.value) return
+  scopeTargetKind.value = 'import'
+  scopeTargetDocs.value = []
+  initScopeDraft(importBatchScope.value)
+  resetScopeDialogUi()
+  showScopeModal.value = true
+  ensureAgentOptions()
+}
+
+function closeScopeModal() {
+  if (scopeSaving.value) return
+  // 草稿模式：关闭/取消不修改任何数据，导入批次草稿同样丢弃
+  showScopeModal.value = false
+}
+
+// 统一拦截弹框可见性变化（含右上角 X / Escape 等组件内部关闭入口）：
+// 保存进行中不允许关闭，保持弹框与选择稳定（§18.8.2）；其余关闭视为取消丢弃草稿
+function onScopeModalVisibleChange(visible: boolean) {
+  if (!visible && scopeSaving.value) return
+  showScopeModal.value = visible
+}
+
+function chooseAllAgents() {
+  // 全部与指定互斥：选全部清空指定草稿。全部是动态共享状态，
+  // 不等于勾选当前所有名字，新增加的智能体也能使用共享表
+  scopeChoice.value = 'all'
+  scopeDraftIds.value = []
+}
+
+function chooseSpecifiedMode() {
+  scopeChoice.value = 'specified'
+}
+
+function toggleDraftAgent(id: string) {
+  const index = scopeDraftIds.value.indexOf(id)
+  if (index >= 0) {
+    scopeDraftIds.value.splice(index, 1)
+    return
+  }
+  // 点击名字即进入指定模式并选中；取消最后一位保持指定模式并提示
+  scopeDraftIds.value.push(id)
+  scopeChoice.value = 'specified'
+}
+
+function removeDraftAgent(id: string) {
+  const index = scopeDraftIds.value.indexOf(id)
+  if (index >= 0) scopeDraftIds.value.splice(index, 1)
+}
+
+async function saveScopeModal() {
+  if (!scopeCanSave.value || scopeSaving.value) return
+  scopeError.value = ''
+  const ids = scopeChoice.value === 'all' ? null : [...scopeDraftIds.value]
+
+  // 导入批次：点保存只更新前端本批草稿，不调用 agent-scope 写库；
+  // 未保存的勾选不入库，关闭/取消丢弃
+  if (scopeTargetKind.value === 'import') {
+    importBatchScope.value = ids
+    showScopeModal.value = false
+    return
+  }
+
+  scopeSaving.value = true
+  try {
+    if (scopeTargetKind.value === 'single') {
+      const doc = scopeTargetDocs.value[0]
+      const res = await updateAgentScope(doc.id, ids)
+      applyScopeToRow(doc.id, res.allowed_agent_ids)
+      showScopeModal.value = false
+    } else {
+      await saveBatchScope(scopeTargetDocs.value, ids)
+    }
+  } catch (e: any) {
+    // 失败保留弹框与草稿并提示原因，旧配置未变化
+    scopeError.value = e?.message || '保存失败，请稍后重试'
+  } finally {
+    scopeSaving.value = false
+  }
+}
+
+function applyScopeToRow(docId: number, ids: string[]) {
+  const row = schemas.value.find(item => item.id === docId)
+  if (row) row.allowed_agent_ids = ids
+}
+
+// 批量保存复用逐表 agent-scope 接口，最多 5 并发；单次至多当前页 100 张（分页上限）
+const BATCH_SCOPE_CONCURRENCY = 5
+
+async function saveBatchScope(docs: SchemaDocument[], ids: string[] | null) {
+  const progress = { done: 0, total: docs.length, success: 0, fail: 0 }
+  batchProgress.value = { ...progress }
+  const failedDocs: SchemaDocument[] = []
+  let cursor = 0
+  const workers = Array.from({ length: Math.min(BATCH_SCOPE_CONCURRENCY, docs.length) }, async () => {
+    while (cursor < docs.length) {
+      const doc = docs[cursor++]
+      try {
+        const res = await updateAgentScope(doc.id, ids)
+        applyScopeToRow(doc.id, res.allowed_agent_ids)
+        progress.success++
+      } catch {
+        // 单表失败不中断其余表；失败表保留选中，之后仅重试失败表
+        progress.fail++
+        failedDocs.push(doc)
+      } finally {
+        progress.done++
+        batchProgress.value = { ...progress }
+      }
+    }
+  })
+  await Promise.all(workers)
+
+  if (progress.fail === 0) {
+    selectedSchemaIds.value = []
+    showScopeModal.value = false
+    alert(`已更新 ${progress.success} 张表`)
+  } else {
+    // 成功表已更新显示；失败表保留选中供重试，不整批标记成功也不回滚成功项
+    selectedSchemaIds.value = failedDocs.map(doc => doc.id)
+    scopeTargetDocs.value = failedDocs
+    scopeError.value = `已更新 ${progress.success} 张表，${progress.fail} 张失败；可直接保存重试失败表`
+  }
+}
+
 async function editSchema(row: any) {
   const schema: SchemaInfo = {
-    table_name: row.title || '',
+    table_name: row.metadata?.table_name || (row.title || '').replace(/^\[数据表\] /, ''),
     description: row.summary || '',
     source_info: row.metadata?.source_info || '',
+    ...(row.metadata?.source && typeof row.metadata.source === 'object' ? { source: row.metadata.source } : {}),
+    ...(row.metadata && 'connector_id' in row.metadata ? { connector_id: row.metadata.connector_id } : {}),
     columns: row.metadata?.columns || [],
   }
-  editingSchemaDoc.value = row
   openSchemaReview([schema])
+  // openSchemaReview 会重置为新建批次；编辑已有表必须在其后绑定目标文档，
+  // 确认入库才走 updateSchema（否则会误发 POST 重复建表），
+  // 且编辑视图不显示本批摘要、不修改原名单（§18.8.4）
+  editingSchemaDoc.value = row
 }
 
 async function handleDeleteSchema(row: any) {
@@ -927,5 +1446,7 @@ async function handleDeleteRelation(row: any) {
 onMounted(() => {
   loadSchemas()
   loadConnectors()
+  // 名称列展示需要目录解析；后台加载不阻塞列表渲染与默认导入
+  ensureAgentOptions()
 })
 </script>

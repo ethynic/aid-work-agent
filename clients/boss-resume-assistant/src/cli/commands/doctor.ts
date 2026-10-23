@@ -4,17 +4,18 @@
  * 用法：
  *   node dist/src/cli/index.js doctor [--cdp-port 9222]
  *
- * 检查 ① win-click.ps1 存在 ② CDP 端点可连 ③ 能 attach zhipin.com 页面
- * ④ 页面含登录态特征（「筛选」按钮或侧边菜单文案）
- * ⑤ 姓名配对自检（2026-09-01 新增）：推荐页视口内「打招呼」按钮与卡片姓名配对——
+ * 检查 ① 原生物理输入能力可用（2026-10-21 起替代原 PowerShell 点击脚本存在检查——
+ *   PowerShell 输入回退通道已删除，物理输入只走 @aid/win32-native-input koffi FFI）
+ *   ② CDP 端点可连 ③ 能 attach zhipin.com 页面
+ *   ④ 页面含登录态特征（「筛选」按钮或侧边菜单文案）
+ *   ⑤ 姓名配对自检（2026-09-01 新增）：推荐页视口内「打招呼」按钮与卡片姓名配对——
  *   配对率低说明页面布局与锚定规则失配，定向打招呼会「滚遍列表也找不到人」。
  * 任一失败退出码 1。只读：绝不点击、不产生任何业务写动作。
  * （2026-09-17 去 OCR 化：原第⑥项 OCR 引擎检查随本地 OCR 链路下线删除——
- * 文本识别在云端多模态模型，客户端零 OCR 依赖。）
+ *   文本识别在云端多模态模型，客户端零 OCR 依赖。）
  */
 import { CdpGateway } from '../../main/cdp/CdpGateway.js'
 import { DEFAULT_CDP_PORT } from '../../main/chrome/ChromeAttacher.js'
-import { WinMouseClicker } from '../../main/input/WinMouseClicker.js'
 import type { DomSnapshot } from '../../main/boss/domSnapshot.js'
 import { viewportOf } from '../../main/boss/FilterSetter.js'
 import { GREET_TEXT, findButtonsByExactText, pairCardName } from '../../main/boss/cardName.js'
@@ -45,12 +46,15 @@ export async function doctorCommand(opts: DoctorCommandOptions): Promise<number>
     return ok
   }
 
-  // ① win-click.ps1 存在（WinMouseClicker 构造时探测路径，缺失即抛）
+  // ① 原生物理输入能力可用（koffi FFI 加载成功即通过；只加载 API，不投递任何输入）
   try {
-    new WinMouseClicker()
-    check(true, 'win-click.ps1 点击脚本存在')
+    if (process.platform !== 'win32') throw new Error('win32-native-input 仅支持 win32 平台')
+    const mod: typeof import('@aid/win32-native-input') = await import('@aid/win32-native-input')
+    mod.createKoffiApi()
+    check(true, '原生物理输入能力可用（win32-native-input koffi）')
   } catch (e) {
-    check(false, 'win-click.ps1 点击脚本存在', e instanceof Error ? e.message : String(e))
+    check(false, '原生物理输入能力可用（win32-native-input koffi）',
+      `${e instanceof Error ? e.message : String(e)}；物理输入已无 PowerShell 回退，请重装/修复客户端捆绑的 @aid/win32-native-input（koffi 原生模块）后重试`)
   }
 
   // ② CDP 端点可连

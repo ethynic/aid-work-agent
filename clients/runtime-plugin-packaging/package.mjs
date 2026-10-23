@@ -69,6 +69,43 @@ export function copyProviderScriptAssets(name, source, target) {
   for (const file of readdirSync(source).filter(file => file.endsWith('.ps1') || dependencies.includes(file))) cpSync(join(source, file), join(target, file))
 }
 
+const NATIVE_INPUT_SPEC = 'file:../shared/win32-native-input'
+
+/**
+ * 处理 Provider 对第一方原生输入共享包的依赖（`file:../shared/win32-native-input`）。
+ * 临时 stage 不在仓库目录，相对路径无法解析；npm 对 file: 目录依赖创建的链接
+ * （绝对路径）也无法随包分发。改为：npm pack 出 tgz 放进 stage，把 package.json
+ * 的 spec 重写为 `file:./<tgz>`（不再生成链接，node_modules 是真实拷贝）。
+ * 返回 null（未声明依赖）；否则返回 tgz 相对名（安装完成后需删除，不入 payload）。
+ * 需要先构建共享包（dist/），因为 --ignore-scripts 不会执行 prepack。
+ */
+export function stageNativeInputDependency(source, stage, options = {}) {
+  const pkgPath = join(stage, 'package.json')
+  const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
+  const spec = pkg.dependencies?.['@aid/win32-native-input']
+  if (!spec) return null
+  if (spec !== NATIVE_INPUT_SPEC) throw new Error(`Unsupported @aid/win32-native-input dependency spec: ${spec}`)
+  // source = clients/<provider>（与 package.json 的 file:../shared/win32-native-input 同级解析）
+  const origin = resolve(source, '../shared/win32-native-input')
+  if (!existsSync(join(origin, 'dist/index.js'))) throw new Error('Run npm --prefix clients/shared/win32-native-input build before packaging (dist/index.js missing)')
+  const { name: pkgName, version } = JSON.parse(readFileSync(join(origin, 'package.json'), 'utf8'))
+  const tarball = `${pkgName.replace(/^@/, '').replace('/', '-')}-${version}.tgz`
+  // 每次从当前构建产物重新 pack 到临时目录（评审 P2）：同版本源码更新后，源码树残留的
+  // 旧 tgz 不得混入发布——签名与摘要只能证明内容完整，证明不了内容是最新的。
+  const npm = options.npm_cli && existsSync(options.npm_cli) ? options.npm_cli : 'npm'
+  const node = options.node && existsSync(options.node) ? options.node : process.execPath
+  const packDir = mkdtempSync(join(tmpdir(), 'aid-native-input-pack-'))
+  try {
+    execFileSync(node, [npm, 'pack', '--ignore-scripts', '--no-audit', '--no-fund', `--pack-destination=${packDir}`], { cwd: origin, timeout: 60000, stdio: 'pipe' })
+    const produced = join(packDir, tarball)
+    if (!existsSync(produced)) throw new Error(`npm pack did not produce ${tarball}`)
+    cpSync(produced, join(stage, tarball))
+  } finally { rmSync(packDir, { recursive: true, force: true }) }
+  pkg.dependencies['@aid/win32-native-input'] = `file:./${tarball}`
+  writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n')
+  return tarball
+}
+
 async function buildProvider(name, options, signer) {
   const definition = definitions[name]
   if (!definition) throw new Error('Unknown first-party Provider')
@@ -95,7 +132,15 @@ async function buildProvider(name, options, signer) {
     cpSync(join(source, 'package-lock.json'), join(stage, 'package-lock.json'))
     const npm = options.npm_cli
     if (!npm || !existsSync(npm)) throw new Error('Pass --npm-cli with the build machine npm CLI path')
-    execFileSync(options.node, [npm, 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: stage, timeout: 120000, stdio: 'pipe' })
+    // 首发原生输入共享包依赖：file: 相对路径在临时 stage 无法解析，重写为
+    // 仓内 tgz（见 stageNativeInputDependency）；此时锁文件需要 npm 重新生成，
+    // 用 install 而不是 ci（其余依赖仍按既有锁定版本解析）
+    const nativeInputTarball = stageNativeInputDependency(source, stage, options)
+    execFileSync(options.node, [npm, nativeInputTarball ? 'install' : 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: stage, timeout: 120000, stdio: 'pipe' })
+    if (nativeInputTarball) {
+      rmSync(join(stage, nativeInputTarball), { force: true })
+      // 重写后的锁文件不回源；manifest 按实际 staged 内容生成
+    }
     // npm creates executable wrapper links; these are unnecessary in a node-entry distribution.
     rmSync(join(stage, 'node_modules/.bin'), { recursive: true, force: true })
     const pkg = JSON.parse(readFileSync(join(stage, 'package.json'), 'utf8'))

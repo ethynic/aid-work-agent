@@ -78,7 +78,8 @@ def _public_waiting(value):
     if not isinstance(value, dict):
         return None
     result = _display_fields(value, ('kind', 'question', 'tool_call_id', 'execution_id',
-        'invocation_id', 'assistance_id', 'child_status','wait_id','target_execution_id'))
+        'invocation_id', 'assistance_id', 'child_status','wait_id','target_execution_id',
+        'seconds','reason','wake_at','version'))
     if isinstance(value.get('missing_info'), list):
         result['missing_info'] = [item for item in value['missing_info'] if isinstance(item, str)]
     if isinstance(value.get('form'), dict):
@@ -90,7 +91,11 @@ def _public_waiting(value):
 
 def _public_snapshot(value):
     value = value if isinstance(value, dict) else {}
-    result = _display_fields(value, ('progress', 'output', 'iteration', 'imagesPlacement'))
+    result = _display_fields(value, ('progress', 'output', 'iteration', 'business_iterations', 'imagesPlacement'))
+    if value.get('history_version') == 1:
+        result['history_version'] = 1
+    if type(value.get('history_revision')) is int and value['history_revision']>=0:
+        result['history_revision'] = value['history_revision']
     result.update(_public_presentation(value))
     if 'images' in value:
         result['images'] = _public_images(value['images'])
@@ -134,9 +139,45 @@ def _public_result(value):
     return result
 
 
+def local_recovery_applicable(row):
+    if (row['session_kind'] != 'web' or row['source'] != 'chat'
+            or row['status'] not in {'waiting', 'paused', 'interrupted'}
+            or (row.get('checkpoint') or {}).get('detached_local_wait') is True
+            or row.get('worker_id') is not None or row.get('lease_until') is not None):
+        return False
+    root = (row.get('checkpoint') or {}).get('execution') or {}
+    def pending_local(node):
+        waiting = node.get('waiting') or {}
+        if waiting.get('kind') == 'clarification':
+            return False
+        refs = node.get('resources', {}).get('local_invocations') or {}
+        return any(node.get('tools', {}).get(ref.get('tool_call_id'), {}).get('phase')
+            in {'dispatching', 'waiting'} for ref in refs.values()) or any(
+            fact.get('phase') in {'dispatching', 'waiting'}
+            and (fact.get('call') or {}).get('name') == 'boss_resume_next'
+            for fact in node.get('tools', {}).values()) or any(
+            pending_local(child.get('checkpoint') or {}) for child in node.get('children', {}).values())
+    return pending_local(root)
+
+
+def with_local_operation_facts(cursor, row):
+    """Transient read projection; frozen IDs and unknown history remain untouched."""
+    if row is None:
+        return None
+    checkpoint = row.get('checkpoint') or {}
+    held = set(checkpoint.get('detached_local_invocations') or []) - set(checkpoint.get('verified_local_invocations') or [])
+    if not held or not checkpoint.get('detached_local_wait'):
+        return row
+    from src.local_tools.repository import operation_completion_known
+    cursor.execute('SELECT * FROM local_tool_invocations WHERE tenant_id=%s AND user_id=%s AND session_id=%s AND id=ANY(%s::uuid[])',
+        (row['tenant_id'], row['user_id'], row['session_id'], sorted(held)))
+    settled = {str(item['id']) for item in cursor.fetchall() if operation_completion_known(dict(item))}
+    return {**row, '_unresolved_local_invocations': sorted(held - settled)}
+
+
 def public_runner(row):
     """Explicit allowlist: tokens, checkpoints, prompts, receipts never cross API."""
-    return {
+    value = {
         "runner_id": row["runner_id"], "session": {"kind": row["session_kind"], "session_id": row["session_id"]},
         "source": row["source"],
         "status": row["status"], "settlement_status": row["settlement_status"],
@@ -151,3 +192,40 @@ def public_runner(row):
         "finished_at": row.get("finished_at"), "snapshot": _public_snapshot(row["public_snapshot"]),
         "result": _public_result(row.get("result")),
     }
+    checkpoint = row.get('checkpoint') or {}
+    verification = checkpoint.get('local_verification')
+    from .continuous import enabled
+    if enabled(checkpoint,row.get('input')):
+        value['execution_mode'] = 'continuous'
+    usage = row.get('public_snapshot',{}).get('usage')
+    if isinstance(usage,dict):
+        value['usage'] = _display_fields(usage,('task_credits','session_credits','pending','updated_at'))
+    blocked = checkpoint.get('sleep_blocked')
+    if isinstance(blocked,dict) and isinstance(blocked.get('error_code'),str):
+        code = blocked['error_code']
+        value['sleep_blocked'] = {'error_code':code if len(code)<=128 and code.replace('_','').isalnum()
+            else 'SLEEP_RECOVERY_BLOCKED'}
+    if isinstance(verification, dict):
+        value['local_verification'] = {key: verification.get(key) for key in
+            ('invocation_id', 'state', 'resource_stopped', 'page_observed', 'target_relation', 'error_code', 'stop_error_code')}
+        if isinstance(verification.get('page_summary'), dict):
+            value['local_verification']['page_summary'] = _display_fields(verification['page_summary'],
+                ('observed', 'page_kind', 'result', 'filter_count', 'panel_open', 'count_result'))
+        value['local_verification']['waiting_ended'] = checkpoint.get('detached_local_wait') is True
+        if verification.get('state') in {'queued', 'claimed', 'running'} and verification.get('deadline_at'):
+            from datetime import datetime, timezone
+            if datetime.fromisoformat(verification['deadline_at']) < datetime.now(timezone.utc):
+                value['local_verification'].update(state='failed', error_code='LOCAL_VERIFICATION_FAILED')
+    held = set(checkpoint.get('detached_local_invocations') or []) - set(checkpoint.get('verified_local_invocations') or [])
+    held = set(row.get('_unresolved_local_invocations', held))
+    if held and checkpoint.get('detached_local_wait'):
+        value['local_verification_available'] = True
+    if local_recovery_applicable(row):
+        value['local_recovery'] = True
+        root = checkpoint.get('execution') or {}
+        from src.local_tools.repository import owned_invocation_ids
+        value['local_recovery_kind'] = 'original_operation' if owned_invocation_ids(root) else 'dispatch_unconfirmed'
+        value['local_recovery_actions'] = (['verify', 'stop', 'end'] if row.get('cancel_requested') else
+            ['verify', 'stop', 'resume', 'end']) if owned_invocation_ids(root) else (
+                ['end'] if row.get('cancel_requested') else ['resume', 'end'])
+    return value

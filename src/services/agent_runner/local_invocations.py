@@ -13,10 +13,41 @@ import json
 import uuid
 
 from src.db.database import get_db_connection
-from src.local_tools.repository import create_invocation_in_tx
+from src.local_tools.repository import (create_invocation_in_tx, ResumeContinuationConflict,
+    DeviceOperationUnresolved)
 from .ownership import LeaseLost, lock_runner
 from .repository import decoded
 from .persistence_limits import capped_checkpoint_dumps
+
+
+class LocalDispatchRejected(Exception):
+    """A typed admission rejection whose entire binding transaction rolled back."""
+    def __init__(self, reason):
+        super().__init__('LOCAL_DISPATCH_REJECTED')
+        self.reason = reason
+
+
+def dispatch_rejection_result(reason):
+    """Only typed, rollback-proven admission failures enter this business result."""
+    stale = isinstance(reason, ResumeContinuationConflict)
+    return {'success': False, 'code': 'STALE_CONTINUATION' if stale else str(reason),
+        'effect': 'none', 'invocation_id': None,
+        'data': {'latest_invocation_id': reason.invocation_id} if stale else None,
+        'message': '该筛选引用已有后续批次，请使用最新结果；本次未派发。' if stale else
+            '原设备未就绪或仍有待核对操作，本次未派发；请检查原设备及回执。'}
+
+
+def phase_binding(cursor, row, phase):
+    """Find an original binding by both durable keys, including legacy torn facts."""
+    reference = dict(runner_id=row['runner_id'], execution_id=phase.execution_id,
+        tool_call_id=phase.tool_call_id, branch=phase.branch, ordinal=phase.ordinal)
+    cursor.execute('''SELECT * FROM local_tool_invocations WHERE tenant_id=%s
+        AND business_kind='agent_runner' AND (dedupe_key=%s OR business_ref=%s::jsonb)''',
+        (row['tenant_id'], phase.key(row['runner_id']), json.dumps(reference)))
+    matches = cursor.fetchall()
+    if len(matches) > 1:
+        raise LeaseLost('LOCAL_PHASE_INVOCATION_CHANGED')
+    return dict(matches[0]) if matches else None
 
 
 @dataclass(frozen=True)
@@ -71,6 +102,22 @@ class LocalInvocationRepository:
     def bind(self, attempt, revision, phase, *, device_id, tool_name, arguments,
              provider_key=None, deadline_at=None, authorization_epoch=None,
              execution_lane='standard', device_policy=None):
+        with self.connection_factory() as connection:
+            try:
+                return self._bind(attempt, revision, phase, device_id=device_id,
+                    tool_name=tool_name, arguments=arguments, provider_key=provider_key,
+                    deadline_at=deadline_at, authorization_epoch=authorization_epoch,
+                    execution_lane=execution_lane, device_policy=device_policy, connection=connection)
+            except (ResumeContinuationConflict, DeviceOperationUnresolved) as error:
+                # get_db_connection logs rollback errors while preserving the
+                # original exception. Require an explicit successful rollback
+                # here before granting the typed no-dispatch proof.
+                connection.rollback()
+                raise LocalDispatchRejected(error) from error
+
+    def _bind(self, attempt, revision, phase, *, device_id, tool_name, arguments,
+              provider_key=None, deadline_at=None, authorization_epoch=None,
+              execution_lane='standard', device_policy=None, connection=None):
         """Fence, insert/dedupe and associate the phase in one transaction.
 
         A slow invocation unique/device lock may consume the lease. Recheck the
@@ -83,71 +130,81 @@ class LocalInvocationRepository:
         # and actual queued invocation must describe exactly the same input.
         arguments = json.loads(json.dumps(arguments, sort_keys=True,
             separators=(',', ':'), ensure_ascii=False, allow_nan=False))
-        with self.connection_factory() as conn:
-            cursor = conn.cursor()
-            row = lock_runner(cursor, attempt.runner_id, attempt, dispatch=True)
-            if row['revision'] != revision:
-                raise LeaseLost('CHECKPOINT_REVISION_CHANGED')
-            checkpoint = copy.deepcopy(row.get('checkpoint') or {})
-            node = _execution(checkpoint, phase.execution_id, row['runner_id'])
-            identity = node.get('identity') or {}
-            if identity != {key: row[key] for key in (
-                    'tenant_id', 'user_id', 'session_id', 'source', 'session_kind')}:
-                raise LeaseLost('LOCAL_EXECUTION_IDENTITY_MISMATCH')
-            if not row['tenant_id'] or not row['user_id']:
-                raise LeaseLost('LOCAL_BINDING_REQUIRES_USER_TENANT')
-            fact = node.get('tools', {}).get(phase.tool_call_id) or {}
-            if ((fact.get('call') or {}).get('id') != phase.tool_call_id
-                    or fact.get('phase') not in {'dispatching', 'waiting'}):
-                raise LeaseLost('LOCAL_TOOL_NOT_DISPATCHED')
+        conn = connection
+        cursor = conn.cursor()
+        row = lock_runner(cursor, attempt.runner_id, attempt, dispatch=True)
+        if row['revision'] != revision:
+            raise LeaseLost('CHECKPOINT_REVISION_CHANGED')
+        checkpoint = copy.deepcopy(row.get('checkpoint') or {})
+        node = _execution(checkpoint, phase.execution_id, row['runner_id'])
+        identity = node.get('identity') or {}
+        if identity != {key: row[key] for key in (
+                'tenant_id', 'user_id', 'session_id', 'source', 'session_kind')}:
+            raise LeaseLost('LOCAL_EXECUTION_IDENTITY_MISMATCH')
+        if not row['tenant_id'] or not row['user_id']:
+            raise LeaseLost('LOCAL_BINDING_REQUIRES_USER_TENANT')
+        fact = node.get('tools', {}).get(phase.tool_call_id) or {}
+        if ((fact.get('call') or {}).get('id') != phase.tool_call_id
+                or fact.get('phase') not in {'dispatching', 'waiting'}):
+            raise LeaseLost('LOCAL_TOOL_NOT_DISPATCHED')
 
-            cursor.execute("""SELECT * FROM local_tool_devices WHERE id=%s
-                AND tenant_id=%s AND user_id=%s AND status='active' FOR UPDATE""",
-                (device_id, row['tenant_id'], row['user_id']))
-            device = cursor.fetchone()
-            if not device:
-                raise LeaseLost('LOCAL_DEVICE_OWNER_MISMATCH')
-            if device_policy is not None:
-                # last_seen_at is TIMESTAMP, populated from NOW() in this DB
-                # session. Compare wall clocks in that same session timezone.
-                cursor.execute('SELECT clock_timestamp()::timestamp AS now')
-                if device_policy(dict(device), cursor.fetchone()['now']) is not None:
-                    raise LeaseLost('LOCAL_DEVICE_NOT_READY')
-            key = phase.key(attempt.runner_id)
-            intent = dict(device_id=str(device_id), tool_name=tool_name,
-                          arguments=arguments, provider_key=provider_key,
-                          deadline_at=deadline_at.isoformat() if deadline_at else None,
-                          authorization_epoch=authorization_epoch,
-                          execution_lane=execution_lane)
-            intent_json = json.dumps(intent, sort_keys=True, separators=(',', ':'),
-                                     ensure_ascii=False, allow_nan=False)
-            digest = hashlib.sha256(intent_json.encode()).hexdigest()
-            phases = node.setdefault('resources', {}).setdefault('local_invocations', {})
-            previous = phases.get(key)
-            if previous is not None and previous.get('intent_digest') != digest:
-                raise LeaseLost('LOCAL_PHASE_INTENT_CHANGED')
-            reference = dict(runner_id=attempt.runner_id, execution_id=phase.execution_id,
-                             tool_call_id=phase.tool_call_id, branch=phase.branch,
-                             ordinal=phase.ordinal)
-            invocation_id = create_invocation_in_tx(
-                cursor, row['tenant_id'], row['user_id'], device_id, tool_name,
-                arguments, row['session_id'], provider_key=provider_key,
-                business_kind='agent_runner', business_ref=reference, dedupe_key=key,
-                deadline_at=deadline_at, authorization_epoch=authorization_epoch,
-                execution_lane=execution_lane, verify_binding=True,
-            )
-            if previous is not None and previous.get('invocation_id') != invocation_id:
-                raise LeaseLost('LOCAL_PHASE_INVOCATION_CHANGED')
-            # Same row lock remains held, but the database wall clock must advance.
-            lock_runner(cursor, attempt.runner_id, attempt, dispatch=True)
-            if previous is not None:
-                return row
-            phases[key] = {**reference, 'invocation_id': invocation_id,
-                           'intent_digest': digest, 'request': json.loads(intent_json)}
-            cursor.execute("""UPDATE agent_runners SET checkpoint=%s::jsonb,
-                revision=revision+1,updated_at=clock_timestamp()
-                WHERE runner_id=%s RETURNING *""",
-                (capped_checkpoint_dumps(checkpoint), attempt.runner_id))
-            committed = decoded(cursor.fetchone())
-            conn.commit()
-            return committed
+        # A pre-existing row without its atomic checkpoint is an invariant
+        # failure, never evidence that it is safe to enqueue another IO.
+        key = phase.key(attempt.runner_id)
+        previous = (node.get('resources', {}).get('local_invocations') or {}).get(key)
+        if previous is None and phase_binding(cursor, row, phase) is not None:
+            raise LeaseLost('LOCAL_INVOCATION_OWNER_VERIFICATION_REQUIRED')
+
+        from src.local_tools.repository import lock_operation_admission
+        lock_operation_admission(cursor, row['tenant_id'])
+        cursor.execute("""SELECT * FROM local_tool_devices WHERE id=%s
+            AND tenant_id=%s AND user_id=%s AND status='active' FOR UPDATE""",
+            (device_id, row['tenant_id'], row['user_id']))
+        device = cursor.fetchone()
+        if not device:
+            raise LeaseLost('LOCAL_DEVICE_OWNER_MISMATCH')
+        if device_policy is not None:
+            # last_seen_at is TIMESTAMP, populated from NOW() in this DB
+            # session. Compare wall clocks in that same session timezone.
+            cursor.execute('SELECT clock_timestamp()::timestamp AS now')
+            reason = device_policy(dict(device), cursor.fetchone()['now'])
+            if reason is not None:
+                raise DeviceOperationUnresolved('LOCAL_DEVICE_' + reason.upper())
+        key = phase.key(attempt.runner_id)
+        intent = dict(device_id=str(device_id), tool_name=tool_name,
+                      arguments=arguments, provider_key=provider_key,
+                      deadline_at=deadline_at.isoformat() if deadline_at else None,
+                      authorization_epoch=authorization_epoch,
+                      execution_lane=execution_lane)
+        intent_json = json.dumps(intent, sort_keys=True, separators=(',', ':'),
+                                 ensure_ascii=False, allow_nan=False)
+        digest = hashlib.sha256(intent_json.encode()).hexdigest()
+        phases = node.setdefault('resources', {}).setdefault('local_invocations', {})
+        previous = phases.get(key)
+        if previous is not None and previous.get('intent_digest') != digest:
+            raise LeaseLost('LOCAL_PHASE_INTENT_CHANGED')
+        reference = dict(runner_id=attempt.runner_id, execution_id=phase.execution_id,
+                         tool_call_id=phase.tool_call_id, branch=phase.branch,
+                         ordinal=phase.ordinal)
+        invocation_id = create_invocation_in_tx(
+            cursor, row['tenant_id'], row['user_id'], device_id, tool_name,
+            arguments, row['session_id'], provider_key=provider_key,
+            business_kind='agent_runner', business_ref=reference, dedupe_key=key,
+            deadline_at=deadline_at, authorization_epoch=authorization_epoch,
+            execution_lane=execution_lane, verify_binding=True,
+        )
+        if previous is not None and previous.get('invocation_id') != invocation_id:
+            raise LeaseLost('LOCAL_PHASE_INVOCATION_CHANGED')
+        # Same row lock remains held, but the database wall clock must advance.
+        lock_runner(cursor, attempt.runner_id, attempt, dispatch=True)
+        if previous is not None:
+            return row
+        phases[key] = {**reference, 'invocation_id': invocation_id,
+                       'intent_digest': digest, 'request': json.loads(intent_json)}
+        cursor.execute("""UPDATE agent_runners SET checkpoint=%s::jsonb,
+            revision=revision+1,updated_at=clock_timestamp()
+            WHERE runner_id=%s RETURNING *""",
+            (capped_checkpoint_dumps(checkpoint), attempt.runner_id))
+        committed = decoded(cursor.fetchone())
+        conn.commit()
+        return committed

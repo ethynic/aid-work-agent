@@ -128,7 +128,7 @@ export interface PrepareDecryptedParams {
   getState: () => LocalDbState | null
   putState: (state: LocalDbState) => boolean
   /** 产物目录名前缀（两段发布；各执行器传自己的语义名：read-session/unread/watch/send-*） */
-  workPrefix: 'read-session' | 'unread' | 'watch' | 'send-baseline' | 'send-verify'
+  workPrefix: 'read-session' | 'unread' | 'watch' | 'send-baseline' | 'send-verify' | 'groups'
   /**
    * 可选 session 库失败是否容忍跳过（readSession：仅 contact 目标——已有实际 S 会话时不依赖
    * session，group/typeless 需 session 核实则传播；unread：恒容忍——focus 单目标解析失败进

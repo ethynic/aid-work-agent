@@ -110,6 +110,15 @@ function Get-WeComBandTokens {
     } | Sort-Object { [double]$_.y0 }, { [double]$_.x0 })
 }
 
+function Test-WeComTextInputToken($Token, [int]$W, [int]$H) {
+    # 工具栏约 0.83h；右侧总结/群信息栏也不是编辑区。与 input OCR 判空带一致，
+    # 只有编辑区内部 token 可供 Jev 选择；空白框保留既有 0.5w/0.9h 回退坐标。
+    $cx = ([double]$Token.x0 + [double]$Token.x1) / 2
+    $text = ConvertTo-WeComNormalized ([string]$Token.text)
+    return ([double]$Token.y0 -ge $H * 0.855 -and [double]$Token.y1 -le $H * 0.97 -and
+        $cx -gt $W * 0.40 -and $cx -lt $W * 0.74 -and -not $text.StartsWith('发送'))
+}
+
 function Get-WeComTitleFromTokens {
     # 标题带 token → 标题行文本：按 y 中心聚类成视觉行（同行 = y 中心差 ≤14px，标题
     # token 高约 20-24px，同 py cluster_lines 的 0.7 行高语义），取首行按 x 序拼接
@@ -172,19 +181,14 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     }
 
     if (-not $VerifyOnly) {
-    # 0.5) 搜索框残留防御（best-effort）：上游 search 后框内会保留查询词（M4 设计：overlay
-    #     保持打开），agent 若 search→send 跳过 select，残留会污染标题带 OCR。Ctrl+F 聚焦
-    #     搜索框 → Ctrl+A+Delete 清空（已验证原语；对空框是幂等空操作；清空同时关闭残留
-    #     overlay；焦点先落在搜索框，绝不触碰聊天输入框里的用户草稿）。
+    # 0.5) 搜索框残留防御：空搜索不聚焦/清除；非空只按已实证布局点击搜索专属清空点。
+    #     无可靠布局证明时保守中止，绝不盲发 Ctrl+A/Delete 伤及聊天草稿。
     $mainHwnd = Resolve-WeComMainWindow
     $main = Get-WeComWindowInfo ([IntPtr]$mainHwnd)
     $t0 = $swTotal.ElapsedMilliseconds
-    [void](Send-WeComAttachChordKey -Hwnd $mainHwnd -Vk 0x46)
-    Start-Sleep -Milliseconds 150
     [void](Clear-WeComSearchBoxV2 -MainHwnd $mainHwnd)
-    Start-Sleep -Milliseconds 200
     $timing.precheck = [int]($swTotal.ElapsedMilliseconds - $t0)
-    Write-DriverLog ('step0.5 搜索框残留清空（防御性，best-effort）耗时=' + $timing.precheck + 'ms')
+    Write-DriverLog ('step0.5 已确认搜索框为空，未使用键盘清理；耗时=' + $timing.precheck + 'ms')
 
     # 1) 主窗口 + 截图 + boxes OCR 两带（标题带 + 底部输入带）
     Write-DriverLog ('target=' + $TargetName + ' subtitle=' + $Subtitle + ' section=' + $Section + ' mainHwnd=' + $mainHwnd + ' rect=(' + $main.X + ',' + $main.Y + ',' + $main.W + 'x' + $main.H + ')')
@@ -219,15 +223,14 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
         has_draft = @{ type = 'choice'; instructions = '底部文本输入区是否已有输入的草稿文本？（灰色占位符（如「发送消息」）不算草稿；工具栏图标行的碎字不算草稿）'; criteria = @{
             yes = '输入区有已输入的草稿文本'; no = '输入区干净（无草稿）' } }
     }
+    $critInput = @{}
     if ($bottomTokens.Count -gt 0) {
         # 输入点选择只在底部带有 token 时可问（Jev 按 token 中心点击）；
         # 「发送(S)」按钮不是输入框（2026-09-28 真机：Jev 曾误选，空框时点它侥幸无害，
         # 但语义错误），按归一化前缀剔除后无可选 token 则不问该题（走比例坐标降级）
-        $critInput = @{}
         for ($i = 0; $i -lt $bottomTokens.Count; $i++) {
             $tk = $bottomTokens[$i]
-            $nText = ConvertTo-WeComNormalized ([string]$tk.text)
-            if ($nText.StartsWith('发送')) { continue }
+            if (-not (Test-WeComTextInputToken -Token $tk -W $pre.w -H $pre.h)) { continue }
             $cx = [int](([double]$tk.x0 + [double]$tk.x1) / 2)
             $cy = [int](([double]$tk.y0 + [double]$tk.y1) / 2)
             $critInput[('B' + $i)] = ('OCR文本「' + [string]$tk.text + '」中心坐标(' + $cx + ',' + $cy + ')')
@@ -307,7 +310,8 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     if ($jev1.used) { $jevPoint = [string]$jev1.answers.input_point.choice }
     if ($jevPoint -match '^B(\d+)$') {
         $idx = [int]$Matches[1]
-        if ($idx -ge 0 -and $idx -lt $bottomTokens.Count) {
+        if ($idx -ge 0 -and $idx -lt $bottomTokens.Count -and $critInput.ContainsKey($jevPoint) -and
+                (Test-WeComTextInputToken -Token $bottomTokens[$idx] -W $pre.w -H $pre.h)) {
             $tk = $bottomTokens[$idx]
             $ipX = [int]($main.X + ([double]$tk.x0 + [double]$tk.x1) / 2)
             $ipY = [int]($main.Y + ([double]$tk.y0 + [double]$tk.y1) / 2)

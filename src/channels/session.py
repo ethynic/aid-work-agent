@@ -52,7 +52,7 @@ async def _hold_prepared_delivery(queue, session_id, lease_token, enabled,
                 check()
             except Exception:
                 lost = True
-                logger.error("后端日志：渠道交付 ownership 丢失 session={}", session_id)
+                logger.opt(exception=True).error("后端日志：渠道交付 ownership 丢失 session={}", session_id)
                 owner.cancel()
                 return
 
@@ -991,9 +991,10 @@ class ChannelSessionManager:
         # 积分余额硬阻断：余额 ≤ 0 拒绝渠道消息处理（#37 Phase 4）
         # 命中时通过 send_response 发送提示并返回 status='no_credit'，避免调用 LLM 扣费
         # 同时标记 record_service 跳过 save，避免后续 end_record 写入空 chat_record 噪声
+        # 私有云部署跳过（客户自购 key，无积分概念，余额恒 0 不得阻断）
         try:
             from src.config.settings import settings as _settings
-            if tenant_id:
+            if tenant_id and not _settings.deployment.private_cloud:
                 from src.saas.db.tenant_db import TenantDB
                 _tenant_info = TenantDB.get_by_id(tenant_id)
                 if _tenant_info is not None:

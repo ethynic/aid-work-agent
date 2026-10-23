@@ -180,6 +180,8 @@
 
 两个表存在内容冗余但设计合理，服务于不同业务目的。
 
+2026-10-22长期归档消费增量（本地独测及CR通过，未部署）：`chat_messages`新增复合索引`idx_chat_messages_session_id(session_id,id)`，用于同会话受权runner归档的有界ID历史分页，标准/Nuodu初始化与`db_update.yaml`幂等升级同步。新分页直接读取PG，原最近消息/Redis缓存入口保持；在SQL中先过滤不可展示工具声明，再取有限窗口。读取协议及独测状态见[休眠计划第17节](../plans/plan-agent-runner-durable-sleep.md#17-复审修复与验证2026-10-22)。
+
 ### 3.3 `chat_records` — 会话记录表
 
 每次完整对话（用户输入 → AI 回复）的处理记录，是计费和审计的核心数据源。
@@ -189,9 +191,11 @@
 - `model` / `provider` — 使用的大模型和提供商
 - `agent_iterations` — 智能体循环迭代次数
 - `subagent_calls` — 子智能体调用记录（JSON）
-- `duration_ms` — 对话耗时
-- `status` — 执行状态（`completed` / `failed` / `cancelled`）
+- `duration_ms` — 对话耗时；持久Runner记录累计活跃attempt毫秒，不含park后的休眠
+- `status` — 执行状态（`completed` / `failed` / `cancelled`；持久Runner增量结算期间可为`running`）
 - `source_type` — 来源类型（`chat` 网页端 / `wecom` / `dingtalk` / `feishu` / `wecom_kf` 等渠道端）
+
+2026-10-22长期任务复审修复（本地独测及CR通过，未部署）：`total_token_count`、`prompt_tokens`、`completion_tokens`、`cached_input_tokens`、`agent_iterations`、`duration_ms`、`embedding_tokens`、`asr_calls`由INTEGER扩大为BIGINT，避免同一record跨长期attempt累计溢出。两套初始化DDL及`db_update.yaml`的原位幂等迁移已在隔离PG验证，原数据、价格和record归属不变；实际独测/CR状态见[休眠计划第17节](../plans/plan-agent-runner-durable-sleep.md#17-复审修复与验证2026-10-22)。
 
 **关系**：
 - `chat_records.user_id` → `users.user_id`
@@ -850,6 +854,8 @@ DDL 同步维护于 `deploy/init-postgres.sql` 与 `deploy/db_update.yaml`
 开发计划：[AgentRunner](../plans/plan-agent-runner-service.md)。公开订阅 events 属 M5，
 不与计费 receipts 共表。本节记录实际 schema，worker/计费状态能力以计划阶段验收为准。
 
+2026-10-22持久化休眠增量（本地开发，未部署）：`agent_runners.wake_at TIMESTAMPTZ NULL`是数据库时钟调度投影，部分索引`idx_agent_runners_wake(wake_at,runner_id) WHERE status='waiting' AND wake_at IS NOT NULL`；DDL同步`deploy/init-postgres.sql`与`deploy/nuodu/init-postgres.sql`，增量落`deploy/db_update.yaml`。原行锁下与checkpoint的`durable_sleep.version=1`等待事实原子提交，消费/取消清空，阻断清调度投影但保留原deadline，pause不靠TTL释放会话claim；不新增timer表。continuous当前策略保存在原checkpoint，原input/digest不回写，累计积分来自唯一record及原收据；非终态结算分组累计复用`chat_records.usage_breakdown`内版本化扩展，不另建费用表。详情与验收唯一见[休眠计划](../plans/plan-agent-runner-durable-sleep.md)。
+
 | 表 | 字段与职责 |
 |---|---|
 | `agent_runners` | `runner_id` 主键；`queue_order` 持久队列顺序；真实 nullable `tenant_id`、内部 `scope_key`、`session_kind/session_id`、`actor_kind/actor_id/user_id/service_id/source`；`client_request_id/input_digest/input` 保存不可变意图；`profile_id/profile_fingerprint` 分开保存解析配置；`checkpoint/checkpoint_version` 为私有恢复事实；`status` 执行状态与 `settlement_status` 费用状态分开；`attempt/worker_id/lease_until` 执行权；`revision` 恢复点 CAS、`view_revision` 公开变化、`control_revision/cancel_requested` 控制请求；`public_snapshot/result` 可见投影；`event_seq` 永不回退的通知 head、`event_floor_seq` 已清理连续前缀末序（历史默认均为 0）；唯一稳定 `record_id`；`accepted_at/updated_at/finished_at`。`queue_order` 由 `agent_runners_queue_order_seq`（BIGSERIAL）发号，提交入口已内置序列自愈：撞 `agent_runners_queue_order_key` 时 `setval` 对齐 `GREATEST(max(queue_order), last_value)` 后重试一次（2026-10-13 agent1 直插污染事故，详见 [复盘](../incidents/analysis-agent1-runner-submit-500-uniqueviolation-incident.md)） |
@@ -928,3 +934,11 @@ Web 与 KF 恢复均须核验原 claim，并将新 attempt/lease 和消费后的
 | `notification_deliveries` | `delivery_id` 主键，唯一 `(notification_id,target_id)`；固定 `binding_version`、加密渲染快照；state/attempts/next_attempt_at；owner/lease_until/claim_version 提供认领 fencing；受限 error_class/provider_acceptance_id 与 accepted/delivered/displayed/read 时间。pending due、sending lease、message 索引服务重试与清理；Web accepted 仅表示供应商接纳，不写虚构展示或已读回执 |
 
 message、target、preference 的 scope CHECK 保证 NULL tenant 对应 `global`，有 tenant 对应 `tenant:<id>`，用户始终独立隔离。delivery 不重复存租户，所有读写通过原 message/target 核验精确归属。四表无外键、触发器；引用完整性和原资源权限由通知核心在短事务内检查。网络发送不持数据库锁；清理仅删除过保留期的通知消息及其投递账本，不删除 Runner、会话、目标或偏好。参数、配置及渲染内容沿用既有 EncryptionManager，目标配置不存登录 bearer。
+
+### `chat_message_shares` — Web 单条回复分享
+
+2026-10-22 新增，属于系统表；`share_key` 随机主键标识一个独立分享页面。
+保存 `tenant_id/user_id/session_id/message_id` 来源归属、`reply_data JSONB` 展示副本、可空的 `password_hash` 和带数据库默认值的 `created_at TIMESTAMPTZ`。
+展示副本只含所选回复的正文、图片、附件及下载卡片信息，不包含完整会话、工具参数或登录凭证；文件仍使用现有存储，服务端保存引用，公开文件标识使用分享内别名。
+创建按 fresh 登录主体核对源会话归属，匿名阅读在可选密码验证后返回整条回复；图片预览与下载使用绑定分享路径的现有短期资源签名，并限制到该条回复内的文件。
+不使用外键、触发器或新增访客会话表。DDL 同步在 `deploy/init-postgres.sql` 与 `deploy/db_update.yaml`，服务与数据访问分别为 `src/services/message_sharing/`、`src/db/message_share_db.py`。

@@ -40,7 +40,7 @@ def contract_fixture(*, root_version='current', child_outcome=Outcome.RUNNING, c
         assert_credit=lambda principal: None,
         authorize_child_profile=lambda principal, profile: None)
     fingerprints = {'main': ROOT_FINGERPRINT, 'fixture-child': CHILD_FINGERPRINT}
-    profiles = SimpleNamespace(resolve=lambda profile: (None, fingerprints[profile]))
+    profiles = SimpleNamespace(resolve=lambda profile, tenant=None: (None, fingerprints[profile]))
     row = {'profile_id': 'main', 'profile_fingerprint': ROOT_FINGERPRINT, 'runner_id': parent.execution_id,
            'checkpoint': {'execution': parent.checkpoint()}}
     control = {'control_id': 'fixture-control', 'action': 'resume', 'payload': {}}

@@ -336,7 +336,9 @@ def resolve_doc_text(
     判定条件是技能而非固定子智能体名：技能白名单包含某技能（如 pre-sales-api）
     且 configs/api_doc_templates/{skill}.md 存在即可用通用模板，自定义数字员工
     （如 sales-assistant）同样适用。allowed_skills 传入时不再逐智能体查库。
+    副本实例先解析为父定义名（文档与技能白名单均按父定义读取）。
     """
+    subagent_name = resolve_base_agent_id(tenant_id, subagent_name)
     tenant_doc = load_tenant_doc(tenant_id, subagent_name)
     if tenant_doc is not None:
         return tenant_doc
@@ -364,15 +366,37 @@ def db_tenant_id(tenant_id: str) -> str:
     return tenant_id
 
 
+def resolve_base_agent_id(tenant_id: str, subagent_name: str) -> str:
+    """副本实例名解析为父定义名（tenant_agent_instances.base_agent_id）
+
+    副本实例不进 subagent_definitions / 内置 registry，且前端无副本级接口文档
+    与环境变量配置入口——接口文档、技能白名单、环境变量一律按父定义读取。
+    直用实例行（agent_id = base_agent_id）、非实例名、查询失败均原样返回。
+    """
+    if not subagent_name or not tenant_id:
+        return subagent_name
+    try:
+        from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
+
+        row = TenantAgentInstanceDB.get(db_tenant_id(tenant_id), subagent_name)
+        base = (row or {}).get("base_agent_id")
+        if row and base and row.get("agent_id") != base:
+            return str(base)
+    except Exception as e:
+        logger.debug(f"[tenant_api_doc] 解析副本实例父定义失败 tenant={tenant_id}, agent={subagent_name}: {e}")
+    return subagent_name
+
+
 def load_tenant_env_vars(tenant_id: str, subagent_name: str = "") -> Dict[str, str]:
     """租户环境变量：子智能体精确 -> 租户任意智能体兜底（忽略空值）"""
     db_tid = db_tenant_id(tenant_id)
+    base_name = resolve_base_agent_id(tenant_id, subagent_name) if subagent_name else ""
     env_vars: Dict[str, str] = {}
     try:
         from src.db.subagent_env_var import SubagentEnvVarDB
 
-        if subagent_name:
-            for var in SubagentEnvVarDB.get_vars(db_tid, subagent_name):
+        if base_name:
+            for var in SubagentEnvVarDB.get_vars(db_tid, base_name):
                 if var.get("var_name") and var.get("var_value"):
                     env_vars[var["var_name"]] = var["var_value"]
         for var in SubagentEnvVarDB.get_all_vars_for_tenant(db_tid):

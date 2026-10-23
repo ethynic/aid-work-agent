@@ -79,7 +79,7 @@ export function createBossOpenChatOperation(
               data: { contact: r.contact, via: r.via },
               effect: 'none' as const,
             }
-          })
+          }, ctx.previousPageExecution)
           return { ...verified.value, data: { ...verified.value.data, operation_recovery: verified.facts } }
         },
       )

@@ -55,6 +55,7 @@ export class BusinessOperationState {
 
   async input<T>(action: () => Promise<T>, final = false): Promise<T> {
     const priorBusinessStatus = this.businessEffect.status
+    const priorInputStatus = this.execution.inputStatus
     this.execution.stage = 'input'
     this.execution.inputStatus = 'attempted'
     if (final) {
@@ -69,6 +70,7 @@ export class BusinessOperationState {
       // Only the native pre-input guard can certify that no physical final input was issued.
       const refused = error instanceof WinClickError && !error.message.includes('[BOSS_INPUT_UNKNOWN]')
         && (error.exitCode === 2 || /\[BOSS_POWERSHELL_(?:PREPARE|LAUNCH)\]/.test(error.message))
+      if (refused) this.execution.inputStatus = priorInputStatus
       if (final && refused) this.businessEffect.status = priorBusinessStatus
       if (final && !refused) this.execution.inputStatus = 'unknown'
       throw error
@@ -86,6 +88,12 @@ export class BusinessOperationState {
   unconfirmed(evidence: string): void {
     this.execution.stage = 'postcheck'
     this.execution.verification = { status: 'inconclusive', evidence: [evidence] }
+  }
+
+  notSubmitted(evidence: string): void {
+    this.businessEffect.status = this.businessEffect.completed_count > 0 ? 'confirmed' : 'not_started'
+    this.execution.stage = 'postcheck'
+    this.execution.verification = { status: 'unmet', evidence: [evidence] }
   }
 
   retry(): boolean {

@@ -1,7 +1,9 @@
 """宏陶商城产品 → 知识文档渲染（renderer，纯函数模块）。
 
 设计 §3（v1.7 结构化正文）：正文只含稳定内容（无库存/销量/评分/同步日期，
-消除 hash 抖动），易变数值只进 metadata；正文为「产品信息」字段区——
+消除 hash 抖动）；v1.10 起易变数值（stock/sales/comment_score/comment_num，
+2026-10-20 客户反馈其内容错误）全链路排除——fetcher 即弃，不再进 metadata；
+正文为「产品信息」字段区——
 产品名称/型号/颜色/工艺/卖点/适用空间/其他，由 VL 按字段转述（vision 指令）
 + 名称/接口字段聚合而成；商品ID/上架时间等标识字段只进 metadata；
 论坛实拍素材不再进正文计数（关联变化只走 metadata 轻量更新，不触发重嵌）。
@@ -140,7 +142,7 @@ def render_product(
 ) -> RenderedProduct:
     """渲染一个产品 → (title, content_md, metadata, content_hash)。
 
-    - item：fetcher 产物（价格字段已弃）；
+    - item：fetcher 产物（价格与易变数值字段已弃）；
     - vl_map：URL → CachedVision（describe_images_cached 产物）；
     - forum_media：该产品的关联帖列表 [{post_id, catename, content, images, video}]。
     """
@@ -218,7 +220,9 @@ def render_product(
 
     # v1.9：业务数据收进 raw_payload（与通用 api-ingest 契约对齐），顶层只留
     # trace/pipeline_version/sync_run_id 等系统痕迹；检索工具 doc_metadata 白名单
-    # 只取 raw_payload，新增业务键无需改工具侧
+    # 只取 raw_payload，新增业务键无需改工具侧。
+    # v1.10：易变数值（stock/sales/comment_score/comment_num，源数据内容错误）
+    # 不再入库（fetcher 即弃），raw_payload 只含稳定业务数据与素材链接
     metadata: Dict[str, Any] = {
         "raw_payload": {
             "name": name,
@@ -227,10 +231,6 @@ def render_product(
             "sellpoint": sellpoint,
             "cid": cid,
             "listing_date": created,
-            "stock": _s(item.get("stock")),
-            "sales": _s(item.get("sales")),
-            "comment_score": _s(item.get("comment_score")),
-            "comment_num": _s(item.get("comment_num")),
             "pics": pics,
             "detail_images": detail_imgs,
             "video": video,

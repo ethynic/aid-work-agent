@@ -13,15 +13,51 @@
  * - fail-open：任何一步失败（找不到 chrome.exe / spawn 失败 / 端口等待超时）都静默
  *   返回 false，让调用方继续走原连接路径报原有错误——本模块绝不引入新的失败形态
  */
-import { execSync } from 'node:child_process'
+import { execSync, execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import path from 'node:path'
+import { promisify } from 'node:util'
+
+/** Read the profile of the process actually listening on this local CDP port.
+ * Only the profile leaves the subprocess; command lines never enter logs/bindings.
+ */
+export async function runningChromeProfile(port: number, signal?: AbortSignal): Promise<string | undefined> {
+  if (process.platform !== 'win32' || !Number.isInteger(port) || port < 1 || port > 65535 || signal?.aborted) return
+  const root = process.env.SystemRoot
+  if (!root || !/^[A-Za-z]:\\/.test(root)) return
+  const executable = path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  const script = `$ErrorActionPreference='Stop'; $OutputEncoding=[Console]::OutputEncoding=[Text.UTF8Encoding]::new();
+$ids=@(Get-NetTCPConnection -State Listen -LocalPort ([int]$env:AID_BOSS_PROFILE_PORT) | Select-Object -ExpandProperty OwningProcess -Unique);
+$profiles=@(foreach($processId in $ids) {
+ $p=Get-CimInstance Win32_Process -Filter ('ProcessId='+$processId);
+ if($p.Name -ne 'chrome.exe') { continue };
+ $m=[regex]::Match($p.CommandLine,'(?:"--user-data-dir=([^"\\r\\n]+)"|--user-data-dir="([^"\\r\\n]+)"|--user-data-dir=([^\\s"]+))');
+ if($m.Success) { foreach($g in $m.Groups | Select-Object -Skip 1) { if($g.Success) { $g.Value; break } } }
+}); ConvertTo-Json -Compress -InputObject @($profiles | Select-Object -Unique)`
+  try {
+    const { stdout } = await promisify(execFile)(executable, ['-NoProfile', '-NonInteractive', '-Command', script],
+      { windowsHide: true, encoding: 'utf8', timeout: 5000, signal,
+        env: { ...process.env, AID_BOSS_PROFILE_PORT: String(port) } })
+    const profiles: unknown = JSON.parse(stdout.trim().replace(/^\uFEFF/, ''))
+    if (Array.isArray(profiles) && profiles.length === 1 && typeof profiles[0] === 'string'
+      && path.win32.isAbsolute(profiles[0]) && !/[\x00-\x1f"]/.test(profiles[0])) return profiles[0]
+  } catch { /* The existing fixed persistent profile configuration remains available. */ }
+}
+export function browserInstanceId(webSocketUrl: string): string {
+  return createHash('sha256').update(webSocketUrl).digest('hex')
+}
 
 /** 固定持久 profile 目录（与 clients/README.md §四、release 安装手册的快捷方式参数一致） */
 export const DEFAULT_DEBUG_PROFILE_DIR = 'C:\\chrome-debug'
 
-/** 拉起后打开的初始页（attach 逻辑按 zhipin.com 识别页面） */
-export const DEFAULT_INITIAL_URL = 'https://www.zhipin.com'
+/**
+ * 拉起后打开的初始页：推荐牛人页（attach 逻辑按 zhipin.com 识别页面，不受路径影响）。
+ * 选推荐牛人而非首页：登录态表现最明确——已登录直接可用，未登录被重定向到登录页；
+ * 首页无论是否登录都展示「登录」入口（已登录点击则静默通过），无法判断登录态，易引起误解。
+ */
+export const DEFAULT_INITIAL_URL = 'https://www.zhipin.com/web/chat/recommend'
 /** 拉起后页面加载缓冲：端口就绪 ≠ 页面渲染完，冷启动下立即 attach 会扑空（真机 2026-08-24） */
 const LAUNCH_SETTLE_MS = 4000
 
@@ -104,11 +140,11 @@ async function probePort(port: number, fetchImpl: typeof fetch): Promise<boolean
  */
 export async function ensureDebugChrome(
   port: number,
-  opts: { profileDir?: string; initialUrl?: string } = {},
+  opts: { profileDir?: string; initialUrl?: string; signal?: AbortSignal } = {},
   deps: ChromeLauncherDeps = {},
 ): Promise<boolean> {
   // 显式退出开关：测试隔离（mcp 测试子进程设 0 防真拉 Chrome）与用户偏好「我自己管理 Chrome」两用
-  if (process.env.AID_BOSS_AUTO_CHROME === '0') return false
+  if (process.env.AID_BOSS_AUTO_CHROME === '0' || opts.signal?.aborted) return false
   const fetchImpl = deps.fetchImpl ?? fetch
   const doSpawn = deps.spawnImpl
     ?? ((exe: string, args: string[]): { unref(): void } => {
@@ -121,19 +157,31 @@ export async function ensureDebugChrome(
 
   try {
     if (await probePort(port, fetchImpl)) return false
+    if (opts.signal?.aborted) return false
     const exe = findChromeExe(deps)
     if (!exe) return false
-    doSpawn(exe, [
-      `--remote-debugging-port=${port}`,
-      `--user-data-dir=${opts.profileDir ?? DEFAULT_DEBUG_PROFILE_DIR}`,
-      opts.initialUrl ?? DEFAULT_INITIAL_URL,
-    ])
+    if (opts.signal?.aborted) return false
+        doSpawn(exe, [
+          `--remote-debugging-port=${port}`,
+          `--user-data-dir=${opts.profileDir ?? DEFAULT_DEBUG_PROFILE_DIR}`,
+          // 抑制「要恢复页面吗？Chrome 未正确关闭」气泡：调试实例随 CLI 拉起/退出，
+          // 常被判定为异常关闭，恢复气泡挡住页面影响自动化定位与首次使用。
+          // 必须用 --hide-crash-restore-bubble：旧资料的 --disable-session-crashed-bubble
+          // 已从 Chromium 移除（0.0.21 包实测无效），这是当前生效的开关
+          '--hide-crash-restore-bubble',
+          // 抑制「Google Chrome 不是您的默认浏览器」提示条：调试实例专用 profile
+          // 每次触发默认浏览器检查，提示条占据页面顶部挤压布局（元素整体下移），
+          // 且与用户日常浏览器无关——不该在调试实例上提示
+          '--no-default-browser-check',
+          opts.initialUrl ?? DEFAULT_INITIAL_URL,
+        ])
     const deadline = Date.now() + READY_TIMEOUT_MS
     while (Date.now() < deadline) {
       await sleep(PROBE_INTERVAL_MS)
+      if (opts.signal?.aborted) return false
       if (await probePort(port, fetchImpl)) {
         await sleep(LAUNCH_SETTLE_MS) // 等初始页渲染（冷启动页面晚于端口就绪）
-        return true
+        return !opts.signal?.aborted
       }
     }
     return false

@@ -1,5 +1,46 @@
 # BOSS 操作后验证与视觉异常恢复设计
 
+## W0. 排障后完成原任务（2026-10-22）
+
+当前共享恢复已能关闭障碍，但`observe_only`遇unknown/confirmed/partial和`preserve_result`遇已读成果时直接返回，未回到领域后验；页面恢复不等于原任务完成。本轮覆盖全部22个页面业务CLI，恢复原语`overlay_inspect/dismiss`及纯观察`recovery_probe`不递归接入。
+
+只增加一套每次CLI调用私有的进程内continuation holder，经内部`OpContext`让领域operation登记一个续做函数；不新增公开工具、API或wire。函数仅保留原参数、必要领域checkpoint和状态，不捕获供后续使用的旧session。原`runBossOperation`退出关闭连接，公共排障原语也退出后，续做重新进入原`runBossOperation`取得新session，固定原browser target及取消信号；Provider外层互斥仍覆盖原调用，不另行解锁。执行器重用自己的定位、后验和尾段，重连不清空普通重试预算；失败不递归恢复、不复活旧not_started证据。
+
+排障后先fresh核验原业务：已完成则收敛最终成功及真实累计结果，明确未完成则按原授权/原身份继续并再次核验，证据仍不可判才保留unknown。unknown是待核验状态，不是永久禁令；GLM只判断障碍及关闭后态，不代替业务结果。领域fresh明确未完成后，先记录当前项未提交（先前其他完成量仍保留confirmed），再继续最终输入；若续点被原生守卫明确零输入拒绝，就按最新业务事实返回none/partial，不把旧物理input unknown重新当作业务unknown。没有新的确定业务证据仍保持unknown，实际最终输入照常先置unknown。三类判断复用现有页面语义与合理等待，不要求网页不存在的额外证明：同账号/职位的原唯一候选卡片“继续沟通”确认已完成、仍可操作“打招呼”可确认未完成；消息以原会话、原draft和精确我方同文消息基线联合判断；接受简历以原处理条及新增附件/明确结果判断；不合适以原列表目标移除/隐藏或新增明确标记判断。
+
+| 命令/路径 | 需要保持及续做的原目标 |
+|---|---|
+| filter/clear_filter/goto/open_chat/select_job/open_detail/close_detail/interview_demo | 复用原execute及领域后验/一次普通重试，不为统一外观重写；原会话/详情目标约束不丢 |
+| filter_options/list_jobs | 已读payload保留，fresh完成原面板/下拉收起和对应verify后再成功 |
+| lookup_candidates/read_chat | 复用原读取流程；read_chat保持原contact绑定，不以恢复后的其他当前会话替代 |
+| resume_detail | 仍为原详情取得拼接图目标，失败后不能换人读取，不额外增加关闭要求 |
+| resume_batch/resume_next | 保留已读payload、已完成/明确跳过集合、当前未完项、剩余额度和原continuation；恢复后完成原关闭/余项，不把所有processed_names都当成功项 |
+| greet/greet_selected/greet_detail | 保存原候选ref/详情因果绑定、账号/职位及当前项；fresh同目标后验消解unknown，批次跳过已完成项，不按姓名重播整个批次 |
+| send_to/send_current | 保存contactRef、原消息、发送前精确我方消息基线及draft阶段；已发不重发，原draft仍在且基线未变才继续发送，其他情况诚实未知 |
+| accept_resume | 保存原会话/请求及附件/接受提示基线、accepted/previewed及关闭阶段；已接受只续预览/关闭，不再点同意，批次仅消费剩余额度 |
+| reject_current | 保存原会话和列表前态/提示基线；已移除即确认，仍在原目标且未完成才续，BOSS自动切人后不能重跑当前会话标记 |
+
+实现补充：共享层每次调用新建holder，恢复后消费一次；重连在进入领域body之前就失败时，也保留原unknown、已确认明细/已读成果及普通重试次数，不以新连接的“零输入”覆盖历史业务状态；已有unknown/partial外发的retryable必须仍为false。既有failResult工厂按effect落实此共同契约：未知/部分副作用均不可上层自动重播，明确none则沿用原错误码重试语义；恢复投影从none改为unknown/partial的分支也显式保持false。恢复返回仍有cleanup_error、恢复错误或部分失败时，不仅凭success=true宣称全任务完成。
+
+打招呼checkpoint保留当前原卡片引用、既有账号/职位scope摘要及累计人数，非定向批次重排也先完成该卡片，再消费原剩余额度。接收准备阶段保留原请求列表行的账户/稳定身份，不把未读数、末条消息、活动时间写入身份；fresh重定位同一行并核对打开的联系人，再按原附件/提示基线判断。fresh header必须用双方可比较的稳定ID/人口字段核对原请求身份，同名点行被吞时不能误接受另一人；共同稳定ID一致且无字段冲突可直接确认，不强求清未读后左列表仍保留原行，缺强ID时才用同名列表消歧。经验值“5年/5年经验”按同义值局部归一化；字段缺失不强求DOM不存在的信息，无法区分才保留未完成。批次首人caller身份只在accepted=0消费，后续项由当前checkpoint约束。已接受阶段只接预览/关闭尾段。简历批次保留原payload对象及fetched_at、未完当前项阶段、已完成集合和原账号/职位；已取得的资料不重新读取或生成时间。读取成功后的close失败与尚未读到当前人分开处理。
+
+checkpoint、DOM基线和闭包仅在当次CLI进程内，不进入工具JSON、MCP、视觉API、持久日志或公开回执。原`confirmed_items`、已读payload、累计次数和剩余limit保持，最终tracker/effect/data与实际成果一致，不二次累计。进程中断后缺失这些证据仍诚实保留未知，不创造跨进程续做或自动重发能力。本轮仅合成快照/隔离测试及独立TEST/CR，不消耗已用外发授权，不做真实发送、提交、打包或部署，实施见计划26。
+
+
+## W. 浏览器CDP故障自动恢复（2026-10-22用户补充，待实施）
+
+实施状态（2026-10-22）：本批已在master完成恢复实现及独立自动化验证，真实Chrome/旧会话业务验收尚待执行；本节标题保留原计划定位。具体代码、兼容及测试证据以[计划第9节](../../plans/plan-runner-local-tool-recovery-lockup-fix.md#9-开发实施与独立验证记录2026-10-22)为准。重建页有局部可取消就绪等待；登录后复用原导航器回入口，新target同步原ref索引，恢复未完成保留待恢复标记。缺可选账号摘要不单独判失登，缺恢复元数据不阻止旧健康页面普通读取。
+
+追加修正：本机binding短更新临界区使用操作系统句柄锁，复用Runtime已采用的命名管道模式；进程退出/崩溃自动释放，不按TTL删除活锁。旧未发布.lock文件不再参与新版仲裁，不改变冻结release、Host桌面互斥或Device接口。真实子进程验证及新测试包进度见[计划第10节](../../plans/plan-runner-local-tool-recovery-lockup-fix.md#10-残留锁修复与测试包准备2026-10-22追加授权)。
+
+用户要求浏览器故障不直接阻断整轮任务：CDP操作可以重试，浏览器关闭也应自动重开、进入指定页面并接续筛选。实施阶段、旧游标兼容及六个业务验收统一登记在[修复计划](../../plans/plan-runner-local-tool-recovery-lockup-fix.md#46-浏览器cdp故障自动恢复顺序用户补充待实施)，本节不代表现版能力已交付。
+
+本节优先于下文“原tab保持”和“直接输入异常零普通重试”在只读/可重设页面动作上的限制：CDP target/session/tab可重建；固定设备、受权profile/账号、职位、筛选意图和已处理身份保持。先回读后态，已达成直接续做；否则fresh定位重试语义步骤，逐级重连、建tab、受管重开浏览器并回业务入口。允许重走列表和读取，复用已识别/扣费/入库结果，不要求用户证明历史点击是否收到ACK。视觉诊断不可用不否定确定性恢复能力。
+
+当前CLI调用内对瞬态浏览器故障做可取消的确定性退避，Runtime独立续租，Runner观察原调用；不假定已有自动唤醒调度器，不另建本地Agent。Reader保留半批数组，恢复wrapper重建session后继续同一语义步骤，不能重跑整个operation丢失资料；参数/协议及真实人工依赖不盲目无限重试。保持局部连接/命令超时，不设置任务总截止；查询/取消可用，补充输入按原机制留到安全点。登录/验证码解决后可在原会话继续，明确取消/停止/撤权不重开。未知招呼/消息核对原事实不盲重发；V节禁用故障恢复Escape保持。实现闭环见[计划4.7](../../plans/plan-runner-local-tool-recovery-lockup-fix.md#47-最小实现闭环与职责落地复审结论)。
+
+过度门禁复审：确定性读取/页面恢复先于视觉诊断，视觉schema和配对要求只约束视觉分支；旧任务缺新增可选字段、头像摘要变化或浏览器不是本启动器拉起，都不能单独变成整轮拒绝理由。复用可信本机profile配置及原业务参数，不建第二本恢复授权账。具体CLI文件与修改顺序见[计划5.3](../../plans/plan-runner-local-tool-recovery-lockup-fix.md#53-boss-cli首批修改清单与执行顺序)，验收只保留计划第6节六个业务场景，内部异常按修改自动化回归。
+
 ## V. 故障恢复仅鼠标关闭（2026-10-18，用户明确纠正）
 
 2026-10-20身份接线纠正（优先于下方旧环境配置方案）：用户明确拒绝第二套ClientBinding令牌。Runtime配对已经确定服务器/设备/租户/用户，视觉API必须直接复用，不要求用户或管理员配置任何额外URL/token。0.0.13/0.3.11中手工AID_BOSS_SERVER_URL/TOKEN方案是已知交付缺陷，由计划23替代；旧交付及历史实验记录不改写。
@@ -7,6 +48,8 @@
 ### Runtime配对身份复用（2026-10-20）
 
 - 新增设备鉴权入口`POST /api/local-tools/runtime/boss/visual-diagnose`，沿用`_require_device`与现有视觉v1/v2请求/响应；复用视觉服务、实际usage×20和幂等台账，不新增用户凭据/激活/配对流程。服务器可信设备记录确定tenant/user/device，不从请求体接纳这些字段。
+- 2026-10-22鉴权修正：平台管理员按既有租户上下文规则可进入指定租户并配对，用户自身`tenant_id=NULL`是正常身份，不能因它不等于设备租户而拒绝视觉诊断。入口仍校验当前用户及设备租户存在且active，普通用户必须归属设备租户；平台管理员资格只认当前UserDB角色。调用主体、审计、台账和20倍计费仍取可信设备绑定，不接受header/body选择其他租户，不修改数据库归属或增加令牌。
+- CLI共用恢复在`visual_recovery.observations[].api_error`保留已知401/403公开拒绝原因，未知正文仅给对应HTTP拒绝摘要，不转发debug、headers或任意detail。API拒绝不能误报为页面遮挡无法修复，仍保留原业务结果且不触发新的付费观察或输入；不改PowerShell、普通点击及外发unknown重放规则。此次只修后台鉴权及本地诊断可观察性，不升级API/wire或另建恢复流程。
 - Host从当前已解密配对配置取server/token，只向BOSS子进程内存环境注入`AIDWORK_RUNTIME_SERVER`与`AIDWORK_RUNTIME_DEVICE_TOKEN`；这两个字段是内部启动接线，不是用户配置项。Desktop不透传旧BOSS环境变量，Host不从父进程读取/覆盖配对身份，其他Provider/renderer/IPC/日志/磁盘不获得该token。保持现有DPAPI存储与停止/重配生命周期，不建本地代理、token兑换或第二个恢复循环。
 - CLI诊断、取回和本地恢复均调用新设备入口。缺少配对上下文时明确提示通过已配对Runtime启动或升级匹配版本，不提示手填token；不得回退到旧ClientBinding接口。截图、恢复点击、fresh后态及原操作续做仍由CLI负责，服务器只诊断/计费。
 - 台账用确定性的命名空间设备主体区分旧client binding，按可信device/user归属隔离取回、dispatch及结算。沿用原request_id/输入摘要/20倍冻结规则，旧ClientBinding入口和历史20/50倍记录保持兼容；不为设备自动创建ClientBinding。无必要则不改schema。
@@ -15,7 +58,11 @@
 
 发行包继续必须包含PS驱动引用的BossPhysicalInput.cs及BossWindowExperiment.cs并由required_files签名覆盖。旧0.0.13发行摘要及限制见计划22，新包结果见23。
 
+2026-10-22窗口观察兼容修正：`captureWindow`沿用Node写出的无BOM UTF-8 JSON sidecar，`window-experiment.ps1`读取该文件时显式指定`Get-Content -Encoding UTF8`，避免Windows PowerShell 5.1默认ANSI解码损坏中文窗口标题和原图路径；脚本自身保留UTF-8 BOM。仅修读取编码，不改截图、坐标空间、鼠标关闭、窗口/进程/时效/hash/局部像素校验或未知结果保护，不迁移PowerShell或增加fallback。回归以真实PS5.1执行从生产脚本抽取的读取管道，核对Node生产sidecar的中文及转义字符、路径、数值和摘要，并检查ASCII/BOM及坏JSON；离线测试不运行原生截图/点击。实施见计划24，本轮不提交、部署、打包或升版本；不是实际弹窗闭环验收。
+
 2026-10-19实调补齐：模型多出未声明的空备注字段时，不能丢掉已完整且合法的页面判断和关闭建议。仅v2模型响应解析按既有assessment字段白名单取值；未知顶层字段忽略且不返回客户端，不改变提示词schema、HTTP请求严格校验、已定义字段/动作/坐标/能力验证。缺字段、非法枚举仍失败，非法动作仍只丢动作；原ID回执与实际usage×20账务不改，不新增自动模型重试。关闭详情反例及原场景复验见计划21.5。
+
+以下两段为计划21阶段的旧策略记录；本轮统一按W先用原身份fresh领域后验解消未知，具备确定未完成证据即可续做，不再一律要求人工核对。
 
 未知业务结果禁止在当前自动恢复调用中重发；人实际核对未发并明确授予一次新动作后，可在重新确认原身份/页面的前提下发起新执行。旧unknown回执及费用保留，新授权只消费一次，不把它伪装成旧调用自动恢复成功，也不要求正常新调用额外付费看图。陈selected的人工确认后续做真机见计划21.10。
 

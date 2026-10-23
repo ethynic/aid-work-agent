@@ -4,7 +4,8 @@
   "type": "module",
   "workspaces": [
     "agent-coordinator-core",
-    "local-tool-host-core"
+    "local-tool-host-core",
+    "win32-native-input"
   ],
   "scripts": {
     "typecheck": "npm run typecheck --workspaces --if-present",

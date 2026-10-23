@@ -42,7 +42,9 @@ export function createBossGreetOperation(
     execute(args: BossGreetArgs, ctx: OpContext): Promise<OperationResult> {
       const limit = args?.limit ?? 10
       const names = args?.names
-      return runBossOperation(
+      const state = new BusinessOperationState()
+      const checkpoint: import('../boss/GreetExecutor.js').GreetCheckpoint = {}
+      const run = (ctx: OpContext): Promise<OperationResult> => runBossOperation(
         { kind: 'write', name: 'boss_greet' },
         ctx,
         sessionFactory,
@@ -64,7 +66,6 @@ export function createBossGreetOperation(
           return null
         },
         async (session, tracker) => {
-          const state = new BusinessOperationState()
           const intent = { name: 'boss_greet', goal: '按原授权名单在推荐页打招呼', expected: '同一目标卡片翻转为继续沟通', operationClass: 'external_effect' as const }
           return withBusinessRecovery(state, intent, async () => {
           // 前置校验：必须在推荐牛人列表页（URL 判定，坑 17）。
@@ -87,7 +88,7 @@ export function createBossGreetOperation(
           // names ≤ 3 已校验，钳后不突破单次 3 人授权上限。
           const effectiveLimit = targetNames ? Math.max(limit, targetNames.length) : limit
           const total = targetNames ? targetNames.length : limit
-          const executor = new GreetExecutor({ state,
+          const executor = new GreetExecutor({ state, checkpoint,
             snapshot: () => session.snapshot(FILTER_SNAPSHOT_OPTIONS),
             click: session.click,
             scroll: (deltaY, snapshot) => {
@@ -111,6 +112,7 @@ export function createBossGreetOperation(
               : undefined,
           })
           const result = await executor.greetVisible({ limit: effectiveLimit, names: targetNames })
+          tracker.completed = result.greeted
           if (result.stopReason && !targetNames) return {
             message: result.stopReason === 'no_matching_candidates'
               ? '当前筛选条件没有符合的牛人，已停止；未向下方推荐卡片打招呼'
@@ -157,6 +159,8 @@ export function createBossGreetOperation(
           })
         },
       )
+      if (ctx.recoveryContinuation) ctx.recoveryContinuation.resume = run
+      return run(ctx)
     },
   }
 }

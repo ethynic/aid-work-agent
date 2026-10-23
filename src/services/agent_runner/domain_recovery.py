@@ -51,10 +51,23 @@ def _model_proof(row,state,fact,key,phase):
                 assert_resume_model(cursor,row,state.checkpoint(),fact.call.id,phase['ordinal'],request,*target.split('/',1))
             except CheckpointFailure:
                 return False
-            cursor.execute('''SELECT 1 FROM agent_runner_usage_receipts WHERE runner_id=%s
+            cursor.execute('''SELECT * FROM agent_runner_usage_receipts WHERE runner_id=%s
                 AND execution_id=%s AND tool_call_id=%s AND purpose=%s LIMIT 1''',
                 (row['runner_id'],state.execution_id,fact.call.id,'domain:'+key+':'+purpose))
-            return cursor.fetchone() is None
+            receipt = cursor.fetchone()
+            if receipt is None:
+                # Never dispatched: the owner's zero-receipt rearm path may
+                # redispatch this same ordinal as a new physical call.
+                return True
+            # A dispatched attempt holds an immutable receipt and is never
+            # replayed. Recovery consumes the already fetched item on the next
+            # attempt ordinal (or converges the item as a per-item failure),
+            # so a proven receipt opens recovery without weakening the
+            # no-replay guarantee. Verify the receipt belongs to this exact
+            # phase and its original dispatch attempt first.
+            receipt = dict(receipt)
+            return (receipt.get('authorized_attempt')==phase.get('authorized_attempt')
+                and receipt.get('phase') in {'observed','unknown'})
         if phase.get('phase')!='completed':
             return False
         result = phase.get('result') or {}
@@ -87,10 +100,15 @@ def validate_domain_phases(row,state,fact,cls,arguments):
         from .resume_next_proof import continuation_arguments
         from src.core.agent_engine.contracts import CheckpointFailure
         from src.tools.executor import normalize_provided_parameters
+        main_ref = next((value for value in (state.resources.get('local_invocations') or {}).values()
+            if value.get('tool_call_id') == fact.call.id and value.get('branch') == 'main'), {})
         try:
             proven = continuation_arguments(row,state.checkpoint(),fact.call.id,
                 normalize_provided_parameters(cls,fact.call.arguments),
-                lambda parent_id: repository.get_invocation(parent_id,row['tenant_id']))
+                lambda parent_id: repository.get_invocation(parent_id,row['tenant_id']),
+                load_attempts=lambda parent: repository.list_resume_next_attempts(str(parent['id']),
+                    row['tenant_id'],row['user_id'],row['session_id'],str(parent['device_id'])),
+                current_invocation_id=main_ref.get('invocation_id'))
         except CheckpointFailure:
             return False
         if arguments != proven:
@@ -99,7 +117,11 @@ def validate_domain_phases(row,state,fact,cls,arguments):
     originals = {}
     for ref in refs.values():
         if ref.get('tool_call_id')==fact.call.id and ref.get('branch') in {'main','heal.retry'}:
-            originals[ref['invocation_id']] = repository.get_invocation(ref['invocation_id'],row['tenant_id'])
+            invocation = repository.get_invocation(ref['invocation_id'],row['tenant_id'])
+            from .local_owner import RunnerLocalLifecycle
+            RunnerLocalLifecycle.validate_invocation(state.identity,row['runner_id'],
+                LocalPhase(state.execution_id,fact.call.id,ref['branch'],ref['ordinal']),ref,invocation)
+            originals[ref['invocation_id']] = repository.observed_invocation(invocation)
     for key,phase in relevant:
         _owned(row,state,fact,key,phase)
         branch,ordinal,request = phase['branch'],phase['ordinal'],phase['request']

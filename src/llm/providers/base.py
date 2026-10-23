@@ -8,6 +8,57 @@ import json
 from abc import ABC, abstractmethod
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
+from ..errors import ProviderResponseInvalid
+
+
+def _shape_invalid(display_name: str, reason: str):
+    raise ProviderResponseInvalid(f"{display_name}响应结构校验失败: {reason}")
+
+
+def ensure_chat_completion_shape(result: Dict[str, Any], *, display_name: str) -> None:
+    """校验 200 响应对象的结构形态；失败抛 ProviderResponseInvalid（返回不可解析）。
+
+    校验边界与解析层 (_parse_response) 的字段访问严格对应：只校验将要访问的
+    结构（choices 列表与首元素、message、tool_calls 元素、usage 的容器类型），
+    且必须在字段访问前完成——结构错误是「有响应但不可解析」的可审计单份失败
+    事实，不能以 AttributeError 逃逸成无响应验证保护。null 容器（message/
+    usage 为 null）维持既有空 dict 兜底语义不变，不属结构错误；本函数不覆盖的
+    字段出现意外类型仍按内部异常处理，不吞成供应商错误。
+
+    Args:
+        result: 已确认是 dict 的 200 响应 JSON 对象
+        display_name: 供应商展示名（错误信息前缀）
+    """
+    choices = result.get("choices")
+    if not isinstance(choices, list) or not choices:
+        _shape_invalid(display_name, f"choices 缺失/空或非列表: {type(choices).__name__}")
+    first = choices[0]
+    if not isinstance(first, dict):
+        _shape_invalid(display_name, f"choices[0] 非 JSON 对象: {type(first).__name__}")
+    message = first.get("message")
+    if message is not None and not isinstance(message, dict):
+        _shape_invalid(display_name, f"choices[0].message 非 JSON 对象: {type(message).__name__}")
+    tool_calls = message.get("tool_calls") if isinstance(message, dict) else None
+    if tool_calls is not None:
+        if not isinstance(tool_calls, list):
+            _shape_invalid(display_name,
+                           f"choices[0].message.tool_calls 非列表: {type(tool_calls).__name__}")
+        for index, call in enumerate(tool_calls):
+            if not isinstance(call, dict):
+                _shape_invalid(display_name,
+                               f"choices[0].message.tool_calls[{index}] 非 JSON 对象: {type(call).__name__}")
+            # 口径（三家一致）：tool_calls[i].function 缺失或为 null 都属结构错误。
+            # function 是工具调用本体，解析器要访问 function.name/arguments，
+            # 兜底成空名工具调用比按「返回不可解析」单份失败收敛更危险——
+            # 因此不做解析器兼容，直接归类 ProviderResponseInvalid。
+            function = call.get("function")
+            if not isinstance(function, dict):
+                _shape_invalid(display_name,
+                               f"tool_calls[{index}].function 缺失/为 null 或非 JSON 对象: {type(function).__name__}")
+    usage = result.get("usage")
+    if usage is not None and not isinstance(usage, dict):
+        _shape_invalid(display_name, f"usage 非 JSON 对象: {type(usage).__name__}")
+
 
 class BaseLLMProvider(ABC):
     """

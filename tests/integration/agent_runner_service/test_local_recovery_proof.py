@@ -31,14 +31,15 @@ def test_known_noheal_failure_reuses_original_but_healing_or_unknown_remains_ver
     assert owned['runner_id']==accepted['runner_id']
     identity=Identity(*(owned[key] for key in ('tenant_id','user_id','session_id','source','session_kind')))
     state=ExecutionState(identity,owned['runner_id'],AgentMode.MASTER,'Fixture',[])
-    call=ToolCall('proof-local-call',tool,{})
+    arguments = {'job_name': 'Fixture job'} if tool == 'boss_select_job' else {}
+    call=ToolCall('proof-local-call',tool,arguments)
     state.tools[call.id]=ToolFact(call,phase='dispatching')
     row=execution.save_checkpoint(attempt(owned),owned['revision'],{'execution':state.checkpoint()})
     device=devices.create_device(actor.tenant_id,actor.user_id,'fixture-local-proof-'+uuid.uuid4().hex)
     try:
         phase=LocalPhase(state.execution_id,call.id,'main',0)
         row=LocalInvocationRepository(service_database.connect).bind(attempt(row),row['revision'],phase,
-            device_id=str(device['id']),tool_name=tool,arguments={},deadline_at=datetime.now(timezone.utc)+timedelta(seconds=60))
+            device_id=str(device['id']),tool_name=tool,arguments=arguments,deadline_at=datetime.now(timezone.utc)+timedelta(seconds=60))
         original=row['checkpoint']['execution']['resources']['local_invocations'][phase.key(row['runner_id'])]['invocation_id']
         claim='fixture-claim-hash-'+uuid.uuid4().hex
         invocation=devices.claim_next(str(device['id']),actor.tenant_id,claim,60,expected_invocation_id=original)

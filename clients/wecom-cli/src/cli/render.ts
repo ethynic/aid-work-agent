@@ -17,6 +17,8 @@ export interface RunCliOperationOptions {
   exclusive?: boolean
   /** true 时 progress 走 stderr，stdout 最后一行只输出 OperationResult JSON（AI 组合调用用） */
   json?: boolean
+  /** 人工模式下显示结果明细；JSON模式只输出原结构化结果。 */
+  renderData?: (data: Record<string, unknown>) => void
 }
 
 /**
@@ -67,6 +69,7 @@ export async function runCliOperation<Args>(
     }
     if (result.success) {
       console.log(`✅ ${result.message}`)
+      opts.renderData?.(result.data)
       return 0
     }
     console.error(`❌ ${result.message}（code=${result.code}${result.retryable ? '，可重试' : '，不可自动重试'}）`)

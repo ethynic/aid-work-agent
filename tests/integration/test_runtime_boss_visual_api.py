@@ -139,6 +139,57 @@ def test_paired_identity_diagnoses_and_retrieves_once_at_20_without_client_bindi
     h.gateway.assert_awaited_once()
 
 
+@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("user_tenant", [None, "tenant-b"])
+def test_platform_admin_pairing_keeps_device_tenant_and_charges_once(harness, version, user_tenant):
+    """Tenant-context pairing permits global admins; vision must use that same authority."""
+    h, body = harness, payload(version)
+    h.users["user-a"].update(role="platform_admin", tenant_id=user_tenant)
+    if version == 1:
+        h.gateway.return_value["content"] = json.dumps({"page_summary": "推广遮挡", "verdict": "not_satisfied",
+            "reason": "页面被遮挡", "proposed_action": None})
+    first = post(h, body, **{"X-Tenant-Id": "tenant-b"})
+    assert first.status_code == 200
+    assert first.json()["receipt"]["factor"] == 20
+    assert first.json()["receipt"]["credit_cost"] == "0.20"
+    assert post(h, body).json() == first.json()
+    assert post(h, {"api_version": version, "request_id": body["request_id"], "retrieve_only": True}).json() == first.json()
+    assert h.reservations == [("tenant-a", f"runtime-device:{h.device['id']}", {"caller_detail": {
+        "kind": "runtime_device", "device_id": h.device["id"], "user_id": "user-a"}})]
+    assert list(h.rows) == [("tenant-a", body["request_id"])]
+    assert len(h.settlements) == 1
+    h.gateway.assert_awaited_once()
+
+
+@pytest.mark.parametrize("kind", ["user_missing", "suspended", "deactivated", "tenant_missing", "tenant_suspended", "role_revoked"])
+def test_platform_admin_exception_cannot_bypass_live_user_or_tenant_checks(harness, kind):
+    h = harness
+    h.users["user-a"].update(role="platform_admin", tenant_id=None)
+    if kind == "user_missing":
+        h.users.clear()
+    elif kind in {"suspended", "deactivated"}:
+        h.users["user-a"]["status"] = kind
+    elif kind == "tenant_missing":
+        h.tenants.clear()
+    elif kind == "tenant_suspended":
+        h.tenants["tenant-a"]["status"] = "suspended"
+    else:
+        h.users["user-a"]["role"] = "user"
+    assert post(h, payload()).status_code == 403
+    h.gateway.assert_not_called()
+    assert not h.reservations
+
+
+@pytest.mark.parametrize("role", ["user", "tenant_admin", None])
+@pytest.mark.parametrize("user_tenant", [None, "tenant-b"])
+def test_non_platform_users_cannot_use_an_unrelated_device_tenant(harness, role, user_tenant):
+    h = harness
+    h.users["user-a"].update(role=role, tenant_id=user_tenant)
+    assert post(h, payload(), **{"X-Tenant-Id": "tenant-a"}).status_code == 403
+    h.gateway.assert_not_called()
+    assert not h.reservations
+
+
 @pytest.mark.parametrize("token", ["", "wrong", "client-token"])
 def test_only_active_paired_device_can_enter_and_never_falls_back_to_client_token(harness, token):
     assert post(harness, payload(), token).status_code == 401

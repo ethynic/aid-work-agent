@@ -112,8 +112,15 @@ def write_authorize(
         # Device -> subject/run/invocation: replacement only locks devices, so
         # there is no task -> device reverse edge. A revoke winner denies new
         # permits even if the HTTP dependency authenticated before replacement.
+        from .repository import lock_operation_admission
+        lock_operation_admission(cursor, tenant_id)
         if not lock_active_device(cursor, tenant_id, device_id):
             raise PermitError("DEVICE_REVOKED", 401, "设备已失效，请重新配对")
+        from .repository import assert_device_operations_settled, DeviceOperationUnresolved
+        try:
+            assert_device_operations_settled(cursor, tenant_id, device_id)
+        except DeviceOperationUnresolved as error:
+            raise PermitError(str(error), 409, '原本机操作尚未确认停止，暂不能执行新的桌面操作') from error
         business_ref = pre["business_ref"] or {}
         scenario_key = business_ref.get("scenario_key") or ""
         task_ref = business_ref.get("task_ref") or ""

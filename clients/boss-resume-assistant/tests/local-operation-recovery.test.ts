@@ -41,7 +41,7 @@ const meta = (r: OperationResult) => r.data.visual_recovery as Dict
 
 test('all 22 business entries share local ownership and the two primitives cannot recursively recover', async () => {
   assert.equal(Object.keys(LOCAL_RECOVERY_POLICIES).length, 22)
-  assert.equal(Object.keys(OPERATIONS).length, 24)
+  assert.equal(Object.keys(OPERATIONS).length, 25)
   const primitive: BossOperation<Dict> = { name: 'boss_overlay_inspect', async execute() { throw Error('not called') } }
   assert.equal(withLocalRecovery(primitive), primitive)
   for (const name of Object.keys(LOCAL_RECOVERY_POLICIES)) {
@@ -93,6 +93,34 @@ test('unknown receipt uses same id at most twice and never creates a fresh paid 
   assert.equal(meta(r).state, 'diagnosis_unavailable'); assert.equal(h.calls.length, 1)
   assert.equal(h.seen.length, 3); assert.equal(new Set(h.seen.map(x => x.args.request_id)).size, 1)
   assert.deepEqual(h.seen.slice(1).map(x => x.args.retrieve_only), [true, true]); assert.equal(h.dismissals.length, 0)
+})
+
+for (const [status, error] of [
+  [401, '缺少设备 token'],
+  [401, '设备 token 无效或设备已撤销'],
+  [403, '设备租户不存在或已停用'],
+  [403, '设备用户不存在、已停用或不属于当前租户'],
+] as const) test(`backend ${status} rejection preserves its known reason without invoking page repair: ${error}`, async () => {
+  const h = harness([okResult('denied', '视觉回执', 'none', { visual: {
+    http_status: status, detail: { error, debug: 'private-debug-must-not-leak' }, headers: { Authorization: 'private-header-must-not-leak' },
+  } })])
+  const r = await h.wrapped.execute({}, ctx())
+  assert.equal(meta(r).state, 'diagnosis_unavailable')
+  assert.equal((meta(r).observations as Dict[])[0]!.api_error, error)
+  assert.equal(r.code, h.initial.code); assert.equal(r.message, h.initial.message)
+  assert.equal(h.calls.length, 1); assert.equal(h.seen.length, 1); assert.equal(h.dismissals.length, 0)
+  assert.ok(!JSON.stringify(r).includes('private-'), 'unrelated backend diagnostic fields must stay private')
+})
+
+for (const detail of [
+  { error: 'Bearer private-token-must-not-leak' }, { error: { token: 'private-token-must-not-leak' } },
+  'private-detail-must-not-leak', { error: '缺少设备 token' }, undefined,
+]) test(`unrecognised 403 body cannot leak into recovery observations: ${JSON.stringify(detail)}`, async () => {
+  const h = harness([okResult('denied', '视觉回执', 'none', { visual: { http_status: 403, detail } })])
+  const r = await h.wrapped.execute({}, ctx())
+  assert.equal((meta(r).observations as Dict[])[0]!.api_error, '视觉恢复接口拒绝访问（HTTP 403）')
+  assert.ok(!JSON.stringify(r).includes('private-'))
+  assert.equal(h.calls.length, 1); assert.equal(h.dismissals.length, 0)
 })
 
 test('postcheck inconclusive cannot become explicit failure or permit original replay', async () => {

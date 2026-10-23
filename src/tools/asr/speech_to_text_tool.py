@@ -364,14 +364,14 @@ class SpeechToTextTool(BaseTool):
                         }
 
         except aiohttp.ClientError as e:
-            logger.error("后端日志：阿里云 ASR 网络错误 type={}", type(e).__name__)
+            logger.opt(exception=True).error("后端日志：阿里云 ASR 网络错误")
             return {
                 "success": False,
                 "error": "阿里云 ASR 网络错误，请稍后重试",
                 "debug": type(e).__name__,
             }
         except Exception as e:
-            logger.error("后端日志：阿里云 ASR 未知错误 type={}", type(e).__name__)
+            logger.opt(exception=True).error("后端日志：阿里云 ASR 未知错误")
             return {
                 "success": False,
                 "error": "语音转文字失败",

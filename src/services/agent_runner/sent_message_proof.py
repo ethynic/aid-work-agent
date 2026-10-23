@@ -24,6 +24,8 @@ def assert_sent_message(cursor, row, node, call_id, intent):
     invocation = dict(cursor.fetchone() or {})
     RunnerLocalLifecycle.validate_invocation(Identity(**node['identity']),row['runner_id'],
         LocalPhase(node['execution_id'],call_id,ref['branch'],ref['ordinal']),ref,invocation)
+    from src.local_tools.repository import observed_invocation
+    invocation = observed_invocation(invocation)
     data = (invocation.get('result_json') or {}).get('data') or {}
     if (invocation.get('state') != 'succeeded' or invocation.get('effect') == 'unknown'
             or not isinstance(data,dict) or data.get('sent') is not True or data.get('dry_run')):

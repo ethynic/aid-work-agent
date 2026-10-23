@@ -7,6 +7,7 @@ Prepared before the ordinary Local slice freeze; run only after handoff.
 from decimal import Decimal
 import json
 import re
+import time
 import uuid
 
 import pytest
@@ -201,7 +202,7 @@ def test_original_device_terminal_result_after_worker_stop_is_reused_and_billed_
 
 
 @pytest.mark.parametrize('physical_state',['queued','running'])
-def test_resume_keeps_original_inflight_invocation_and_deadline_without_enqueue(
+def test_resume_keeps_original_inflight_invocation_without_enqueue(
         workers,ordinary_local,service_database,physical_state):
     actor,profile,folder,device=ordinary_local
     if physical_state=='running': (folder/'allow-claim').touch()
@@ -213,7 +214,8 @@ def test_resume_keeps_original_inflight_invocation_and_deadline_without_enqueue(
     original_id=reference['invocation_id']
     if physical_state=='running': wait_for((folder/'device-claimed.json').exists,timeout=15)
     physical=service_database.rows('SELECT state,deadline_at FROM local_tool_invocations WHERE id=%s',(original_id,))[0]
-    assert physical['state']==physical_state and physical['deadline_at'] is not None
+    # Phase 4：新 durable 绑定不再持久化工具 timeout 派生的 deadline
+    assert physical['state']==physical_state and physical['deadline_at'] is None
     stopped=interrupted(workers,service_database,accepted,first)
     assert service_database.rows('SELECT state FROM local_tool_invocations WHERE id=%s',(original_id,))[0]['state']==physical_state
     control(workers.api,actor,accepted['runner_id'],'resume')
@@ -329,37 +331,42 @@ def test_original_unknown_legacy_unbound_or_heal_phase_rejects_before_consumptio
     assert service_database.rows('SELECT 1 FROM chat_records WHERE session_id=%s',(actor.session_id,))==[]
 
 
-def test_actual_proxy_elapsed_deadline_parks_without_cancel_and_new_cli_resume_rejects_same_deadline(
+def test_actual_proxy_elapsed_timeout_healthy_execution_completes_without_parking(
         workers,ordinary_local,service_database):
-    actor,profile,folder,_=ordinary_local
-    marker=workers.provider.register(tool_reply('boss_select_job',{'job_name':'Fixture exact job'},call_id='elapsed-local-call'))
+    """Phase 4：观察与执行解耦——超过工具 timeout 的健康执行不停车、不取消。
+
+    probe 给真实注册的 boss 代理设 timeout_seconds=1；设备在 claim（租约续活）
+    后延迟超过 1 秒才写结果。Runner 侧 durable 轮询无墙钟总时限，等至终态，
+    全程不进 LOCAL_DEADLINE_VERIFICATION_REQUIRED、不 request_cancel。
+    旧「到期停车 + resume 拒绝」的存量投影语义由单元测试
+    tests/unit/local_tools/test_durable_deadline_semantics.py 覆盖。
+    """
+    actor,profile,folder,device=ordinary_local
+    marker=workers.provider.register(tool_reply('boss_select_job',{'job_name':'Fixture exact job'},call_id='elapsed-local-call'),
+                                     Reply(content='same-invocation-recovered-result'))
     accepted=accept(workers.api,actor,marker,profile_id=profile)
+    (folder/'allow-claim').touch()
     # Only timeout configuration on the actual registered proxy instance changes;
     # real Worker/Runtime/Engine/Owner/PG/poll and the wall clock execute normally.
     from pathlib import Path
     probe=workers.processes.start([str(Path(__file__).with_name('local_deadline_probe.py'))],
         environment=workers.environment,private_working_directory=True)
-    workers.assert_clean_exit(probe)
-    parked=runner(service_database,accepted['runner_id'])
-    assert parked['status']=='waiting'
-    waiting=decoded(parked['public_snapshot'])['waiting']
-    assert waiting['kind']=='verification' and waiting['error_code']=='LOCAL_DEADLINE_VERIFICATION_REQUIRED'
-    reference=committed_local(parked)
+    wait_for((folder/'device-claimed.json').exists,timeout=20)
+    time.sleep(2.5)  # > probe 的 timeout_seconds=1：证明观察窗与工具 timeout 解耦
+    reference=committed_local(runner(service_database,accepted['runner_id']))
     original_id=reference['invocation_id']
-    physical=service_database.rows('SELECT state,deadline_at,clock_timestamp()>deadline_at AS expired FROM local_tool_invocations WHERE id=%s',(original_id,))[0]
-    assert physical['state']=='queued' and physical['expired']
-    assert original_count(service_database,actor)==1
-    resumed,_=control(workers.api,actor,accepted['runner_id'],'resume')
-    retry,_=workers.start();workers.assert_clean_exit(retry)
-    receipt=workers.api.call('GET',f"/v1/runners/{accepted['runner_id']}/controls/{resumed['control']['control_id']}",actor=actor).json()['control']
-    assert receipt['status']=='rejected' and receipt['error_code']=='LOCAL_DEADLINE_VERIFICATION_REQUIRED'
-    assert receipt['consumed_at'] is not None
-    assert service_database.rows('SELECT consumed_attempt FROM agent_runner_controls WHERE control_id=%s',(receipt['control_id'],))==[{'consumed_attempt':None}]
-    after=runner(service_database,accepted['runner_id'])
-    assert after['attempt']==parked['attempt'] and committed_local(after)==reference
+    assert service_database.rows('SELECT state FROM local_tool_invocations WHERE id=%s',(original_id,))[0]['state']=='running'
+    (folder/'allow-result').touch();workers.assert_clean_exit(device)
+    workers.assert_clean_exit(probe)
+    finished=terminal(service_database,accepted['runner_id'])
+    assert finished['status']=='completed'
+    assert decoded(finished['result'])['output']=='same-invocation-recovered-result'
+    waiting=(decoded(finished['public_snapshot']) or {}).get('waiting')
+    assert waiting is None
     assert service_database.rows('SELECT state,deadline_at FROM local_tool_invocations WHERE id=%s',(original_id,))[0]=={
-        'state':'queued','deadline_at':physical['deadline_at']}
-    assert original_count(service_database,actor)==1 and len(workers.provider.requests(marker))==1
+        'state':'succeeded','deadline_at':None}
+    assert original_count(service_database,actor)==1 and len(workers.provider.requests(marker))==2
+    assert not workers.provider.errors
 
 
 def test_unknown_device_cancel_ack_keeps_claim_and_is_not_hot_reclaimed(workers,ordinary_local,service_database):

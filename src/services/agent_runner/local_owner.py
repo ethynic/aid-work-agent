@@ -10,7 +10,7 @@ from datetime import datetime
 
 from src.core.agent_engine.contracts import CheckpointFailure
 from src.local_tools import repository as invocation_repository
-from .local_invocations import LocalInvocationRepository, LocalPhase, _execution
+from .local_invocations import LocalInvocationRepository, LocalPhase, LocalDispatchRejected, _execution
 from .local_phases import LocalPhaseRepository
 from .ownership import LeaseLost, StopRequested
 
@@ -136,6 +136,18 @@ class RunnerLocalLifecycle:
             original = await self.saved_phase(branch=branch, ordinal=ordinal)
             return original['invocation']
         except BaseException as error:
+            if isinstance(error, LocalDispatchRejected):
+                # The binding repository proved rollback; persist convergence
+                # with the same owner CAS before exposing a business result.
+                from .local_invocations import dispatch_rejection_result
+                fact = self.state.tools[self.call_id]
+                fact.phase, fact.success, fact.result = 'completed', False, dispatch_rejection_result(error.reason)
+                try:
+                    await self.control.save(self.state, 'local_not_dispatched')
+                except BaseException as storage_error:
+                    self._fail(storage_error)
+                    raise
+                raise error.reason
             if isinstance(error, StopRequested) and not (self.state.resources.get('local_invocations') or {}).get(
                     phase.key(self.root.attempt.runner_id)):
                 # The atomically fenced enqueue did not commit. A user pause
@@ -229,7 +241,7 @@ class RunnerLocalLifecycle:
 
     async def model_phase(self, *, branch, ordinal, intent, invoke, purpose='llm'):
         """Domain response ownership is separate from Engine model steps."""
-        from src.local_tools.durable_flow import LocalContinuationRequired
+        from src.local_tools.durable_flow import LocalContinuationRequired, LocalModelAttemptConsumed
         from src.llm.call_observer import provider_call_purpose
         from .domain_usage import domain_model_permit
         if purpose not in {'llm','resume_recognition_covered'}:
@@ -250,7 +262,13 @@ class RunnerLocalLifecycle:
                          'domain:'+self._phase(branch,ordinal).key(self.root.attempt.runner_id)+':'+purpose))
                     return cursor.fetchone() is None
             if not await asyncio.to_thread(unissued):
-                raise LocalContinuationRequired('LOCAL_MODEL_RESPONSE_VERIFICATION_REQUIRED')
+                # This attempt ordinal already holds an immutable receipt from
+                # a dispatched physical call (e.g. a hung provider result); it
+                # is never replayed. Recovery moves to the next attempt ordinal
+                # as a new authorized physical call, or the item converges as a
+                # per-item failure. The no-response protection below still
+                # guards every fresh dispatch unchanged.
+                raise LocalModelAttemptConsumed()
             # Receipt.start always precedes provider IO. Under the root lock a
             # second check proves this original phase has never dispatched.
             await self._domain(branch=branch,ordinal=ordinal,intent=intent,writer=None,rearm_model=True)
@@ -262,10 +280,20 @@ class RunnerLocalLifecycle:
         except Exception as error:
             if getattr(error,'authoritative_storage_failure',False):
                 raise
+            from src.llm.errors import provider_outcome
+            if provider_outcome(error) is not None:
+                # A complete provider response (explicit HTTP rejection or an
+                # unparseable body) is an auditable per-item business failure
+                # with its original code kept; its usage receipt already holds
+                # the honest uncertain state and is never upgraded here.
+                raise
             # No response proof: a replay is a new physical call, not recovery.
             raise LocalContinuationRequired('LOCAL_MODEL_RESPONSE_VERIFICATION_REQUIRED') from error
         if not isinstance(response,dict):
-            raise LocalContinuationRequired('LOCAL_MODEL_RESPONSE_VERIFICATION_REQUIRED')
+            # A response arrived but carries no usable object: the same auditable
+            # per-item failure class as an explicit rejection, not an unknown.
+            from src.llm.errors import ProviderResponseInvalid
+            raise ProviderResponseInvalid('LOCAL_MODEL_RESPONSE_NOT_AN_OBJECT') from None
         result = {key:response.get(key) for key in ('content','usage','provider','model','_runner_receipt_id')}
         if not result['_runner_receipt_id']:
             error = CheckpointFailure('LOCAL_MODEL_RECEIPT_VERIFICATION_REQUIRED')

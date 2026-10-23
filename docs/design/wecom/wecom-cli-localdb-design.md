@@ -420,3 +420,29 @@ C3 数据目录 ┘
 - 图片/文件/语音等非文本消息的库内实体解析（FileStorage 二级加密未逆向）。
 - 撤回/引用等扩展消息语义、群聊成员明细（P3 评估）。
 - 通用账号管理框架（只做最小身份绑定）。
+
+## 12. 本地库群列表与时间线查询（2026-10-22）
+
+用户确认：直接查询 local-db，避开视觉搜索；历史取最近 N 条，再按发送时间从早到晚展示。
+
+- `list-groups [--query <关键词>] [--limit N]` / `wecom_group_list`：从当前账号 session 库 `conversation_table` 列出本机已同步的 R: 群，包括无消息群；关键词为群名的字面子串（%/_ 不作通配符），过滤、按会话 ID 去重后按名称和 ID 稳定排序再限制数量。默认 100，返回 `{channel,groups:[{name,conversation_id}],count,has_more,scope}`；不宣称覆盖企业全部群或实时成员资格。
+- `read-group --target-name <群名> [--limit N] [--from-time <时间>] [--to-time <时间>]` / `wecom_group_read`：群名精确匹配，仅在 R: 群内消歧，同名不同群明确 `TARGET_AMBIGUOUS`；默认最近 100 条。时间边界均包含，时间格式为带时区 RFC3339（秒精度），或 `YYYY-MM-DD HH:mm:ss`（固定 Asia/Shanghai，UTC+08:00）。范围内超过 limit 时取最近 N 条，`has_more=true` 明示截断；无匹配消息成功返回空数组。
+- Python 新增独立 `query --task groups/history`。history 在 SQL 中按 `send_time DESC,message_id DESC` 选取 N+1 条，再输出升序；仅接纳有效非负整数秒时间，异常时间记录数量显式返回。输出保留 `sender_id/send_time` 和既有解析可信标记，非文本仍占位。现有 `messages` 水位游标和 watch 语义不变。
+- 2026-10-22 真机结构证据（5.0.12.6018）：`session.conversation_table` 使用 `con_numeric_id INTEGER` 与 `id TEXT`，名称为 `name TEXT`；`id` 同时含 R:/S:/Y: 及其他系统会话前缀。旧实现只认 `conversation_id/conv_id`，全样本前缀推断会因系统条目失败；新增已实证的 `id TEXT` 候选，原显式列名优先，不用数值内部ID替代会话ID。未知 schema 仍拒绝；本次只登记结构与形态统计，不登记实际账号、群ID或聊天内容。
+- 两个 operation 复用 `admitLocaldbVersion/prepareDecryptedDbs`、当前主窗口账号直接证据及本人 user_table 映射；返回前复核账号/PID/目录及源库文件身份，失败不回退 UI。查询结束/取消/异常均清理解密产物，清理失败显式返回。
+- 本批唯一写入者为本任务主控（Python 驱动及其测试委托开发角色）；仅增加 Provider 工具，不修改 Runtime core、Device API、binding、授权或共同 wire。既有 OperationResult 和 manifest major 不变，工具列表及 schema_digest 由 toolDefs 同源推导，旧工具输入和语义保持兼容；本地 MCP 生产/消费联调验证新工具发现与调用。
+
+验收：字面关键词、limit、空群/同名群/缺失 schema、迟到入库和同秒消息、时间边界/非法时间、账号变化/取消/清理、CLI/MCP 注册一致性；真机查询指定群“新劳务云系统项目沟通群”最近 100 条及时间范围，正文仅在本机受忽略的验收目录保存，不写入日志或提交。
+
+### 12.1 群消息用户名与提及恢复（2026-10-22）
+
+用户以三张截图要求补齐发言人用户名、`@成员`、`@所有人`，包括带引用前文的回复。复用P4群历史通道，不扩展图片/附件内容解析。
+
+结构实证（5.0.12.6018）：type=2 的根字段1可重复，每项是按顺序排列的片段；片段字段1为varint类型，字段2为负载。类型0负载的字段1是UTF-8文字；类型5负载字段1为uint64用户ID，字段2为显示名，ID=0代表所有人。真机本批5条content_type=0也使用相同有序片段，其中1条含提及；history对type0先识别原顶层单字段UTF-8包装，再处理有序片段，两种已知格式兼容。截图中的引用是普通文字片段（引用作者/文字及分隔线），没有独立可信身份字段；按原文保留，不从引用文字猜测作者ID，也不把引用文字内的字面@当结构化提及。旧“递归取最深最长字符串”会丢兄弟片段，需在history专用解析中替代。
+
+- history新增完整varint/wire解析，按片段原序拼接文字和`@显示名`；同一消息多次提及原样保留。缺字段/未知类型/损坏UTF-8或protobuf明确`trusted=false`，已识别片段可保留并标示缺口；不静默挑一段冒充完整正文。未知片段用占位表示，`mentions_complete=false`；识别状态独立保存，不以占位文案判断，合法正文即使与占位文案同文也不能被重复或丢失。
+- history输出新增`sender_name: string|null`、`sender_name_source: user_table|unresolved`及`mentions:[{kind:user|all,user_id:string,name:string|null,name_source:message|user_table|unresolved}]`、`mentions_complete:boolean`。所有ID继续是字符串，ID=0以`kind=all`表达。提及优先保留消息内历史显示名，缺名时按ID补当前用户表姓名；找不到保留ID及未知提示，不能按同名反查身份。
+- 发言人按`user_table.id`精确批量取`name`，只查询本批发言者/提及的ID；不枚举输出通讯录。缺失/空名/冲突不猜，`naming_incomplete=true`明示。群名片并非本批已确定来源，不擅自套用。人工输出与查看文件优先显示姓名，未解析姓名显示未知及ID；JSON始终保留原ID和解析可信标记。
+- 仅改变`query history`投影及群读取适配；原`extract_content/_message_row/_message_anchor/query messages/watch`保持语义，避免历史展示增强使已持久化游标失效。新增输出字段属Provider兼容增量，旧输入/OperationResult/共同wire不变，MCP描述和同源digest随实现同步。
+
+验收包括：纯文字、多段/多成员/所有人/仅提及、中文与emoji、同名不同ID、大uint64、缺名及冲突、引用前文加@和较短回复、未知/损坏片段、排序与时间范围保持；对照用户截图中的“是的@周亚清”“@周亚清 表名是这个：t_bank”“@段勇波 @邵昆”和“@所有人”逐项真机核对。真实载荷仅在受控解密快照内检查，清理和账号复核沿用P4，不把原始blob/凭据写入日志或文档。

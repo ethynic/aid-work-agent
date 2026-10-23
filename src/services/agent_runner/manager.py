@@ -25,6 +25,9 @@ class RunnerManager:
             return public_runner(existing), False
         if not accept_new:
             raise RunnerError('WEB_SUBMISSIONS_DISABLED', 503)
+        if request.execution_mode is not None:
+            from .continuous import assert_continuous_supported
+            assert_continuous_supported(request.source, request.session.kind)
         # 单请求字节闸在入口拒绝（413 背压），不落任何行；已受理的幂等重放不受影响。
         from .persistence_limits import assert_intent_within_request_limit
         assert_intent_within_request_limit(request.intent(), code='REQUEST_TOO_LARGE')
@@ -32,7 +35,7 @@ class RunnerManager:
         execution_request = request.model_copy(update={'profile_id':profile_id})
         principal = self.authorizer.authorize(execution_request, **credentials)
         self.authorizer.assert_credit(principal)
-        _, fingerprint = self.profiles.resolve(profile_id)
+        _, fingerprint = self.profiles.resolve(profile_id, principal.identity.tenant_id)
         from .input_projection import project_execution_context
         execution_context = project_execution_context(request, profile_id, fingerprint)
         row, created = self.repository.submit(principal, request, fingerprint, resolved_profile_id=profile_id,
@@ -99,6 +102,20 @@ class RunnerManager:
         row = self.repository.get(runner_id)
         principal = self._authorize_row(row, credentials)
         return public_runner(self.repository.cancel(principal, runner_id))
+
+    def verify_local(self, runner_id, request_id, credentials, *, stop_resources=False):
+        self.authorizer.verify_service(credentials['service_id'], credentials['service_token'], None)
+        row = self.repository.get(runner_id)
+        principal = self._authorize_row(row, credentials)
+        from .local_verification import verify_local
+        return public_runner(verify_local(self.repository, principal, runner_id, request_id, stop_resources=stop_resources))
+
+    def end_waiting(self, runner_id, credentials):
+        self.authorizer.verify_service(credentials['service_id'], credentials['service_token'], None)
+        row = self.repository.get(runner_id)
+        principal = self._authorize_row(row, credentials)
+        from .local_wait import end_waiting
+        return public_runner(end_waiting(self.repository, principal, runner_id))
 
     def list_session(self, request, credentials, limit=100, before_runner_id=None):
         principal = self.authorizer.authorize(request, execute=False, **credentials)

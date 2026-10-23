@@ -41,9 +41,22 @@
 #       在任何日志/异常消息；其余字段仍逐字段脱敏兜底。
 #   query --workdir <dir> --task <t> [参数]
 #       C8 读库查询（任务 1.8）：对 workdir 内【已解密明文库】做只读 SQL（uri ro，不写不改）。
-#       message.db.dec.db 必需（兼容 decrypt 自然产物命名 message.dec.db）；user.db.dec.db /
+#       除 groups 外 message.db.dec.db 必需（兼容 decrypt 自然产物命名 message.dec.db）；user.db.dec.db /
 #       session.db.dec.db 用于 resolve；context 还需要 user 库确认本人 ID 映射。
 #       任务：
+#         groups [--name <关键词>] [--limit N]
+#           只读 session 库 conversation_table 的 R: 群，群名字面子串过滤、按会话 ID
+#           去重后按名称/ID 稳定排序；包含无消息群，不依赖 message 库。返回 groups /
+#           count / has_more；缺少群名来源明确失败，不冒充空列表。
+#         history --conv <R:群id> [--limit N] [--since <秒>] [--until <秒>]
+#           时间边界均包含；按 send_time DESC,message_id DESC 选最近 N 条，再按时间
+#           升序输出。仅接纳北京时间四位年份可展示的非负整数秒时间，invalid_time_count 为当前群异常时间记录
+#           总量，has_more 明示范围内仍有消息。独立于 messages 的入库水位与锚点。
+#           type0 优先已知直接文字包装，否则与 type2 一同按已实证有序文字/提及片段恢复，
+#           附 mentions/mentions_complete；未知或
+#           损坏片段明确占位并标 trusted=false。sender_name/source 按 user_table.id
+#           精确补名，提及优先保留消息内历史名，缺名才查用户库；naming_incomplete
+#           明示本批存在未确定姓名。无独立引用身份实证，不从前置引用文字猜测作者。
 #         messages --conv <id> [--after-id N] [--anchor <摘要>] [--limit N] [--since <秒>]
 #           未传 after-id 取最近 limit 条；显式 after-id（含 0）按 message_id 升序取
 #           大于该水位的 limit 条（缺省 100）；since 为 send_time（秒）可选过滤。
@@ -852,8 +865,8 @@ QUERY_MESSAGE_COLUMNS = ('message_id', 'server_id', 'sequence', 'sender_id', 'co
                          'content_type', 'send_time', 'flag', 'content')
 
 QUERY_USAGE = ('用法：wecom_localdb.py query --workdir <dir> '
-               '--task messages|conversations|last-per-conv|resolve '
-               '[--conv <会话id>] [--after-id N] [--limit N] [--since <秒>] '
+               '--task messages|conversations|last-per-conv|resolve|groups|history '
+               '[--conv <会话id>] [--after-id N] [--limit N] [--since <秒>] [--until <秒>] '
                '[--exclude-types <t[,t…]>] [--name <名称>] '
                '[--with-names（仅 last-per-conv，须与 --account 同传）]')
 
@@ -874,7 +887,9 @@ def _resolve_dec_db(workdir, logical):
 def _open_ro(path):
     """只读打开 SQLite（uri ro；不创建文件、不写不改——§8 本地库原文永不修改）。"""
     uri = 'file:' + urllib.parse.quote(path.replace('\\', '/'), safe='/') + '?mode=ro'
-    return sqlite3.connect(uri, uri=True)
+    conn = sqlite3.connect(uri, uri=True)
+    conn.text_factory = lambda b: b.decode('utf-8', errors='replace')
+    return conn
 
 
 def _qi(ident):
@@ -956,6 +971,257 @@ def _query_conversations(conn):
                               'last_message_id': row['message_id'],
                               'last_anchor': _message_anchor(row)})
     return {'ok': True, 'task': 'conversations', 'conversations': conversations}
+
+
+def _query_groups(conn, keyword, limit):
+    """session 库群名列表：字面子串过滤、按 ID 去重后稳定排序，包含无消息群。"""
+    columns = _table_columns(conn, 'conversation_table')
+    id_col = (_find_conversation_id_column(conn, 'conversation_table', columns)
+              if 'name' in columns else None)
+    if id_col is None:
+        return {'ok': False, 'error': 'SCHEMA_UNSUPPORTED',
+                'detail': 'conversation_table 缺少可确认的群会话 ID 或 name 列'}
+    cid = _qi(id_col)
+    sql = ('SELECT %s, MIN(name) AS group_name FROM conversation_table '
+           "WHERE typeof(%s) = 'text' AND %s GLOB 'R:*' "
+           "AND typeof(name) = 'text' AND trim(name) <> '' "
+           'AND instr(name, ?) > 0 GROUP BY %s '
+           'ORDER BY group_name, %s LIMIT ?' % (cid, cid, cid, cid, cid))
+    rows = conn.execute(sql, (keyword or '', limit + 1)).fetchall()
+    groups = [{'conversation_id': row[0], 'name': row[1]} for row in rows[:limit]]
+    return {'ok': True, 'task': 'groups', 'groups': groups, 'count': len(groups),
+            'has_more': len(rows) > limit}
+
+
+def _history_varint(data, offset):
+    """history 严格读取 uint64；不改变旧 extract_content 的容错契约。"""
+    value = 0
+    for index in range(10):
+        if offset >= len(data):
+            return None
+        byte = data[offset]
+        offset += 1
+        if index == 9 and byte > 1:
+            return None
+        value |= (byte & 0x7f) << (7 * index)
+        if not byte & 0x80:
+            return value, offset
+    return None
+
+
+def _history_fields(data):
+    """完整 tag/wire 读取，保留损坏位置之前的字段并显式返回完整性。"""
+    fields = []
+    offset = 0
+    while offset < len(data):
+        tag = _history_varint(data, offset)
+        if tag is None:
+            return fields, False
+        key, offset = tag
+        number, wire = key >> 3, key & 7
+        if number == 0 or number > 0x1fffffff:
+            return fields, False
+        if wire == 0:
+            item = _history_varint(data, offset)
+            if item is None:
+                return fields, False
+            value, offset = item
+        elif wire == 2:
+            item = _history_varint(data, offset)
+            if item is None:
+                return fields, False
+            size, offset = item
+            if size > len(data) - offset:
+                return fields, False
+            value = data[offset:offset + size]
+            offset += size
+        elif wire in (1, 5):
+            size = 8 if wire == 1 else 4
+            if size > len(data) - offset:
+                return fields, False
+            value = data[offset:offset + size]
+            offset += size
+        else:
+            return fields, False
+        fields.append((number, wire, value))
+    return fields, True
+
+
+_HISTORY_GAP = '[消息片段未解析]'
+
+
+def _history_segment(data):
+    """已实证的富文本片段；返回内容、完整性及是否识别，展示文字不充当状态哨兵。"""
+    fields, complete = _history_fields(data)
+    kinds = [value for number, wire, value in fields if (number, wire) == (1, 0)]
+    payloads = [value for number, wire, value in fields if (number, wire) == (2, 2)]
+    if len(kinds) != 1 or len(payloads) != 1:
+        return [_HISTORY_GAP], False, False
+    complete = complete and len(fields) == 2
+    payload, payload_complete = _history_fields(payloads[0])
+    complete = complete and payload_complete
+    kind = kinds[0]
+    if kind == 0:
+        texts = [value for number, wire, value in payload if (number, wire) == (1, 2)]
+        if len(texts) != 1:
+            return [_HISTORY_GAP], False, False
+        try:
+            text = texts[0].decode('utf-8')
+        except UnicodeDecodeError:
+            return [_HISTORY_GAP], False, False
+        if text and not _is_printable_text(text):
+            return [_HISTORY_GAP], False, False
+        complete = complete and len(payload) == 1
+        return [text] + ([] if complete else [_HISTORY_GAP]), complete, True
+    if kind == 5:
+        ids = [value for number, wire, value in payload if (number, wire) == (1, 0)]
+        names = [value for number, wire, value in payload if (number, wire) == (2, 2)]
+        if len(ids) != 1 or len(names) > 1:
+            return [_HISTORY_GAP], False, False
+        name = None
+        if names:
+            try:
+                decoded = names[0].decode('utf-8')
+                if decoded and not _is_printable_text(decoded):
+                    complete = False
+                elif decoded.strip():
+                    name = decoded
+            except UnicodeDecodeError:
+                complete = False
+        complete = complete and len(payload) == 1 + len(names)
+        user_id = str(ids[0])
+        mention = {'kind': 'all' if user_id == '0' else 'user', 'user_id': user_id,
+                   'name': '所有人' if user_id == '0' else name,
+                   'name_source': 'message' if user_id == '0' or name else 'unresolved'}
+        return [mention] + ([] if complete else [_HISTORY_GAP]), complete, True
+    return [_HISTORY_GAP], False, False
+
+
+def _history_content(content, content_type, fallback):
+    """history 专用有序片段；旧 messages/watch 的正文与锚点继续使用原解析。"""
+    if content_type not in (0, 2):
+        return [fallback['text']] if fallback['text'] is not None else [], fallback['trusted']
+    if isinstance(content, str):
+        content = content.encode('utf-8')
+    elif isinstance(content, memoryview):
+        content = content.tobytes()
+    if not isinstance(content, (bytes, bytearray)) or not content:
+        return [_HISTORY_GAP], False
+    if content_type == 0:
+        legacy_text = _strict_extract(bytes(content), 0)
+        if legacy_text is not None:
+            return [legacy_text], True
+    fields, root_complete = _history_fields(content)
+    complete = root_complete
+    parts = []
+    known = False
+    for number, wire, value in fields:
+        if (number, wire) != (1, 2):
+            parts.append(_HISTORY_GAP)
+            complete = False
+            continue
+        segment, segment_complete, recognized = _history_segment(value)
+        parts.extend(segment)
+        known = known or recognized
+        complete = complete and segment_complete
+    if not root_complete or not fields:
+        parts.append(_HISTORY_GAP)
+    if not known and fallback['text'] is not None:
+        parts = [fallback['text'], _HISTORY_GAP]
+    return parts, complete and bool(fields)
+
+
+def _history_user_names(workdir, user_ids):
+    """只查本批 ID；重复、空名或来源缺失不猜。分批绑定避免 SQLite 参数上限。"""
+    path = _resolve_dec_db(workdir, 'user') if workdir else None
+    if path is None or not user_ids:
+        return {}
+    user = None
+    try:
+        user = _open_ro(path)
+        columns = _table_columns(user, 'user_table')
+        if 'id' not in columns or 'name' not in columns:
+            return {}
+        names = {}
+        wanted = sorted(user_ids)
+        for start in range(0, len(wanted), 400):
+            batch = wanted[start:start + 400]
+            found = {}
+            sql = ('SELECT CAST(id AS TEXT), name FROM user_table '
+                   'WHERE CAST(id AS TEXT) IN (%s)' % ','.join('?' * len(batch)))
+            for uid, name in user.execute(sql, batch):
+                found.setdefault(uid, []).append(name)
+            for uid, values in found.items():
+                if (len(values) == 1 and isinstance(values[0], str) and values[0].strip()
+                        and _is_printable_text(values[0])):
+                    names[uid] = values[0]
+        return names
+    except sqlite3.Error:
+        return {}  # 降级由每条 unresolved 和顶层 naming_incomplete 明示。
+    finally:
+        if user is not None:
+            user.close()
+
+
+def _history_messages(rows, workdir):
+    projected = []
+    user_ids = set()
+    for row in rows:
+        message = _message_row(row)
+        parts, complete = _history_content(row[-1], message['content_type'], message)
+        mentions = [part for part in parts if isinstance(part, dict)]
+        if message['sender_id'] is not None:
+            user_ids.add(message['sender_id'])
+        user_ids.update(mention['user_id'] for mention in mentions
+                        if mention['kind'] == 'user' and mention['name'] is None)
+        projected.append((message, parts, mentions, complete))
+    names = _history_user_names(workdir, user_ids)
+    messages = []
+    naming_incomplete = False
+    for message, parts, mentions, complete in projected:
+        sender_name = names.get(message['sender_id'])
+        message['sender_name'] = sender_name
+        message['sender_name_source'] = 'user_table' if sender_name else 'unresolved'
+        naming_incomplete = naming_incomplete or sender_name is None
+        for mention in mentions:
+            if mention['name'] is None:
+                mention['name'] = names.get(mention['user_id'])
+                mention['name_source'] = 'user_table' if mention['name'] else 'unresolved'
+            naming_incomplete = naming_incomplete or mention['name'] is None
+        if message['content_type'] in (0, 2):
+            message['text'] = ''.join(
+                part if isinstance(part, str) else '@' + (part['name'] or '未知成员(%s)' % part['user_id'])
+                for part in parts)
+            message['trusted'] = complete
+        message['mentions'] = mentions
+        message['mentions_complete'] = complete
+        messages.append(message)
+    return messages, naming_incomplete
+
+
+def _query_history(conn, conv, limit, since, until, workdir=None):
+    """最近 N 条有效时间消息升序展示；发送时间相同以 message_id 保持稳定顺序。"""
+    valid_time = ("typeof(send_time) = 'integer' "
+                  'AND send_time >= 0 AND send_time <= 253402271999')
+    invalid_time_count = conn.execute(
+        'SELECT COUNT(*) FROM message_table WHERE conversation_id = ? AND NOT (%s)'
+        % valid_time, (conv,)).fetchone()[0]
+    sql = ('SELECT %s FROM message_table WHERE conversation_id = ? AND %s'
+           % (', '.join(QUERY_MESSAGE_COLUMNS), valid_time))
+    params = [conv]
+    if since is not None:
+        sql += ' AND send_time >= ?'
+        params.append(since)
+    if until is not None:
+        sql += ' AND send_time <= ?'
+        params.append(until)
+    sql += ' ORDER BY send_time DESC, message_id DESC LIMIT ?'
+    params.append(limit + 1)
+    rows = conn.execute(sql, params).fetchall()
+    messages, naming_incomplete = _history_messages(reversed(rows[:limit]), workdir)
+    return {'ok': True, 'task': 'history', 'conversation_id': conv,
+            'messages': messages, 'count': len(messages), 'has_more': len(rows) > limit,
+            'invalid_time_count': invalid_time_count, 'naming_incomplete': naming_incomplete}
 
 
 def _peer_id_of(conv_id, account):
@@ -1096,7 +1362,8 @@ def _query_last_per_conv(conn, exclude_extra, workdir=None, account=None, with_n
 
 
 # conversation_table 的 id 列发现：① 字面候选列名优先（PRAGMA 确认存在才用）；
-# ② 值形态证据——采样文本列，全部非空样本呈 conversation_id 形态（R:/S:/Y: 前缀）→ 认定。
+# ② 5.0.12.6018 实证 id TEXT（同表 con_numeric_id 为整数，不能用作会话 ID）；
+# ③ 值形态证据——采样文本列，全部非空样本呈 conversation_id 形态（R:/S:/Y: 前缀）→ 认定。
 # 都失败 → None（调用方 schema-unknown 降级）。id 列真实列名未经 P0 文档化，不硬编码猜测。
 _CONV_ID_NAME_CANDIDATES = ('conversation_id', 'conv_id')
 _CONV_ID_VALUE_PREFIXES = ('R:', 'S:', 'Y:')
@@ -1109,7 +1376,14 @@ def _find_conversation_id_column(conn, table, columns):
     for cand in _CONV_ID_NAME_CANDIDATES:
         if cand in columns:
             return cand
+    if 'id' in columns:
+        id_info = next((r for r in conn.execute('PRAGMA table_info(%s)' % table)
+                        if r[1] == 'id'), None)
+        if id_info and id_info[2].strip().upper() == 'TEXT':
+            return 'id'  # 同列可包含 AN/AP/CL 等非聊天标识，不能要求所有样本均为 R:/S:/Y:。
     for col in columns:
+        if col == 'id':
+            continue  # 已实证适配只接受声明 TEXT 的 id，不盲信数值标识或宽松 SQLite 存储。
         sql = 'SELECT %s FROM %s WHERE %s IS NOT NULL LIMIT 20' % (_qi(col), table, _qi(col))
         values = [r[0] for r in conn.execute(sql).fetchall()]
         if values and all(isinstance(v, str) and v.startswith(_CONV_ID_VALUE_PREFIXES)
@@ -1246,6 +1520,7 @@ def _parse_query_args(args):
     anchor = None
     limit = DEFAULT_QUERY_LIMIT
     since = None
+    until = None
     exclude_types = []
     with_names = False
     i = 0
@@ -1285,13 +1560,17 @@ def _parse_query_args(args):
             if limit <= 0:
                 return None
             i += 2
-        elif arg == '--since' and i + 1 < len(args):
+        elif arg in ('--since', '--until') and i + 1 < len(args):
             try:
-                since = int(args[i + 1])
+                value = int(args[i + 1])
             except ValueError:
                 return None
-            if since < 0:
+            if value < 0:
                 return None  # 负秒数大概率是单位（ms）误传，显式拒绝
+            if arg == '--since':
+                since = value
+            else:
+                until = value
             i += 2
         elif arg == '--exclude-types' and i + 1 < len(args):
             try:
@@ -1305,7 +1584,8 @@ def _parse_query_args(args):
             return None
     if not workdir or not task:
         return None
-    if task not in ('messages', 'conversations', 'last-per-conv', 'resolve', 'context'):
+    if task not in ('messages', 'conversations', 'last-per-conv', 'resolve', 'context',
+                    'groups', 'history'):
         return None
     if task == 'messages' and not conv:
         return None
@@ -1315,7 +1595,22 @@ def _parse_query_args(args):
         return None
     if task == 'last-per-conv' and with_names and not account:
         return None  # S: 会话解析对方 id 需要本人账号（--with-names 必须与 --account 同传）
-    return task, workdir, conv, after_id, limit, since, exclude_types, name, account, anchor, with_names
+    if until is not None and task != 'history':
+        return None
+    if task == 'history':
+        if not conv or not conv.startswith('R:') or len(conv) <= 2:
+            return None
+        if since is not None and until is not None and since > until:
+            return None
+    if task in ('groups', 'history'):
+        if (after_id is not None or anchor is not None or with_names or exclude_types
+                or limit >= 9223372036854775807
+                or any(t is not None and t > 9223372036854775807 for t in (since, until))):
+            return None
+        if task == 'groups' and (conv is not None or since is not None):
+            return None
+    return (task, workdir, conv, after_id, limit, since, exclude_types, name, account,
+            anchor, with_names, until)
 
 
 def cmd_query(args):
@@ -1326,19 +1621,25 @@ def cmd_query(args):
     parsed = _parse_query_args(args)
     if parsed is None:
         return {'ok': False, 'error': 'BAD_ARGS', 'message': QUERY_USAGE}
-    task, workdir, conv, after_id, limit, since, exclude_extra, name, account, anchor, with_names = parsed
-    msg_db = _resolve_dec_db(workdir, 'message')
-    if msg_db is None:
+    (task, workdir, conv, after_id, limit, since, exclude_extra, name, account,
+     anchor, with_names, until) = parsed
+    logical_db = 'session' if task == 'groups' else 'message'
+    query_db = _resolve_dec_db(workdir, logical_db)
+    if query_db is None:
         return {'ok': False, 'error': 'DB_UNREADABLE',
-                'detail': 'workdir 内未找到 message 解密库（message.db.dec.db 或 message.dec.db）：%s'
-                          % workdir}
+                'detail': 'workdir 内未找到 %s 解密库（%s.db.dec.db 或 %s.dec.db）：%s'
+                          % (logical_db, logical_db, logical_db, workdir)}
     try:
-        conn = _open_ro(msg_db)
+        conn = _open_ro(query_db)
     except sqlite3.Error as e:
         return {'ok': False, 'error': 'DB_UNREADABLE', 'detail': '解密库只读打开失败：%s' % e}
     try:
         if task == 'messages':
             return _query_messages(conn, conv, after_id, limit, since, anchor)
+        if task == 'groups':
+            return _query_groups(conn, name, limit)
+        if task == 'history':
+            return _query_history(conn, conv, limit, since, until, workdir)
         if task == 'context':
             return _query_context(workdir, conn, account)
         if task == 'conversations':

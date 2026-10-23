@@ -34,7 +34,7 @@ async function withoutAutoChromeSwitch<T>(fn: () => Promise<T>): Promise<T> {
 
 test('常量契约：固定 profile 目录与初始页', () => {
   assert.equal(DEFAULT_DEBUG_PROFILE_DIR, 'C:\\chrome-debug')
-  assert.equal(DEFAULT_INITIAL_URL, 'https://www.zhipin.com')
+  assert.equal(DEFAULT_INITIAL_URL, 'https://www.zhipin.com/web/chat/recommend')
 })
 
 test('findChromeExe：注册表 HKCU 命中直接返回', () => {
@@ -88,7 +88,7 @@ test('ensureDebugChrome：端口不通→拉起→就绪返回 true，参数带�
   assert.equal(launched, true)
   assert.equal(calls.length, 1)
   assert.equal(calls[0]!.exe, 'C:\\Chrome\\chrome.exe')
-  assert.deepEqual(calls[0]!.args, ['--remote-debugging-port=9223', `--user-data-dir=${DEFAULT_DEBUG_PROFILE_DIR}`, DEFAULT_INITIAL_URL])
+  assert.deepEqual(calls[0]!.args, ['--remote-debugging-port=9223', `--user-data-dir=${DEFAULT_DEBUG_PROFILE_DIR}`, '--hide-crash-restore-bubble', '--no-default-browser-check', DEFAULT_INITIAL_URL])
 })
 
 test('ensureDebugChrome：找不到 chrome.exe 返回 false 不抛', async () => {

@@ -225,7 +225,9 @@ class LocalToolProxyTool(BaseTool):
     unsupported_provider_message = (
         "选定设备不支持 BOSS 招聘操作。请确认本机 Runtime 已启用 boss-recruiting 能力后再试"
     )
-    timeout_seconds = 180  # 默认 3 分钟；写动作（greet/accept）子类改为 10 分钟
+    # 非 durable 旧路径的观察窗（超时 request_cancel+TIMEOUT）；Phase 4 起 durable
+    # 路径不把它持久化为任务总时限（见 _poll_invocation），写动作子类仍改 10 分钟
+    timeout_seconds = 180
     # 弹层自愈主体标记：False 的工具失败后不再触发自愈（overlay 原语自身防递归）
     heal_eligible = True
     # Server-owned adapter policy; CLI facts and model output cannot grant replay.
@@ -261,7 +263,9 @@ class LocalToolProxyTool(BaseTool):
             return {"success": False, "code": "DEVICE_UNAVAILABLE",
                     "message": "本地工具服务未就绪（云端未完成初始化），请联系管理员"}
         if device is None:
-            return {"success": False, "code": "DEVICE_UNAVAILABLE", "message": gate_error}
+            return {'success': False, 'code': 'DEVICE_UNAVAILABLE', 'effect': 'none',
+                'recovery_action': 'connect_original_device',
+                'message': f'{gate_error or "原执行设备不可用"}。请确认原执行电脑的 Runtime 已启动、联网且设备可用，再在本会话继续。'}
 
         if kwargs.get('_resume_expected_device_id') is not None and str(device['id']) != kwargs['_resume_expected_device_id']:
             return {'success': False, 'code': 'DEVICE_UNAVAILABLE', 'message': '原筛选设备已变更，未重新读取'}
@@ -325,9 +329,19 @@ class LocalToolProxyTool(BaseTool):
                     provider_key=self.invocation_provider_key,
                 )
         except repository.ResumeContinuationConflict as conflict:
-            return {'success': False, 'code': 'STALE_CONTINUATION',
+            return {'success': False, 'code': 'STALE_CONTINUATION', 'effect': 'none',
                 'message': '该筛选引用已有后续批次，请使用最新结果；原调用未完成时先等待，不重读',
                 'data': {'latest_invocation_id': conflict.invocation_id}, 'invocation_id': None}
+        except repository.DeviceOperationUnresolved as error:
+            messages = {
+                'LOCAL_DEVICE_OFFLINE': '原执行设备离线，未派发；请保持原 Runtime 在线。',
+                'LOCAL_DEVICE_UNSUPPORTED': '原设备不支持此工具，未派发；请检查原设备插件版本。',
+                'LOCAL_DEVICE_NOT_READY': '原设备已撤销或未就绪，未派发；请检查原设备连接。',
+                'LOCAL_RECOVERY_BUSY': '原设备正在核对或停止旧执行，未派发；请等待核对完成。',
+            }
+            return {'success': False, 'code': str(error), 'effect': 'none',
+                'invocation_id': None, 'data': None,
+                'message': messages.get(str(error), '原设备仍有未决操作，未派发；请核对原回执或结束旧等待。')}
         invocation_id = str(invocation["id"])
         logger.info(
             f"后端日志：本地工具 invocation 已创建 id={invocation_id} "
@@ -340,15 +354,25 @@ class LocalToolProxyTool(BaseTool):
         })
 
         return await self._poll_invocation(invocation, tenant_id, progress_queue,
-            durable_deadline=invocation.get('deadline_at') if operation is not None else None)
+            durable=operation is not None)
 
-    async def _poll_invocation(self, invocation, tenant_id, progress_queue, *, durable_deadline=None):
-        """Keep the original wire/event polling; durable owners keep its deadline."""
+    async def _poll_invocation(self, invocation, tenant_id, progress_queue, *, durable=False):
+        """Keep the original wire/event polling; durable owners observe the persisted call.
+
+        Phase 4（观察与执行解耦）：durable 观察不再有 Runner 侧墙钟总时限。
+        - 行上存有旧 deadline（存量投影）：到期仍进 LOCAL_DEADLINE_VERIFICATION_REQUIRED，
+          既有持久事实不忽略；
+        - 无 deadline（新绑定）：执行健康性以设备活动续租为准——租约停续且无回执时
+          交给权威清扫器 expire_stale_claims 收敛为 unknown（效果未知保护保留）；
+          queued 尚无执行归属，继续等待（出口：设备领取 / 显式取消）；
+        - 非 durable 旧路径：本地 timeout_seconds 观察窗 + request_cancel + TIMEOUT 不变。
+        """
         invocation_id = str(invocation['id'])
 
         seq_cursor = 0
         loop = asyncio.get_event_loop()
         deadline = loop.time() + self.timeout_seconds
+        durable_deadline = invocation.get('deadline_at') if durable else None
         while True:
             events = await asyncio.to_thread(repository.list_events, invocation_id, seq_cursor)
             for event in events:
@@ -366,12 +390,20 @@ class LocalToolProxyTool(BaseTool):
                 result = self._map_terminal(invocation)
                 return self._attach_credit_cost(invocation, result)
 
-            expired = (datetime.now(durable_deadline.tzinfo) >= durable_deadline
-                if durable_deadline else loop.time() >= deadline)
-            if expired:
+            if durable:
                 if durable_deadline is not None:
-                    from src.local_tools.durable_flow import LocalContinuationRequired
-                    raise LocalContinuationRequired('LOCAL_DEADLINE_VERIFICATION_REQUIRED', invocation_id)
+                    if datetime.now(durable_deadline.tzinfo) >= durable_deadline:
+                        from src.local_tools.durable_flow import LocalContinuationRequired
+                        raise LocalContinuationRequired('LOCAL_DEADLINE_VERIFICATION_REQUIRED', invocation_id)
+                elif (invocation or {}).get("state") in ('claimed', 'running', 'cancel_requested'):
+                    stale = await asyncio.to_thread(
+                        repository.claim_lease_expired, invocation_id, tenant_id)
+                    if stale:
+                        # 活动续租停止且无回执：权威清扫器把租约过期执行收敛为
+                        # unknown，下一轮读到终态走 EXECUTION_UNKNOWN（效果未知保护）。
+                        await asyncio.to_thread(repository.expire_stale_claims)
+                        continue
+            elif loop.time() >= deadline:
                 # TIMEOUT 是 proxy 本地码：云端状态机由 request_cancel 推进，不受影响
                 await asyncio.to_thread(repository.request_cancel, invocation_id, tenant_id)
                 logger.warning(
@@ -426,6 +458,7 @@ class LocalToolProxyTool(BaseTool):
 
     def _map_terminal(self, invocation: Dict[str, Any]) -> Dict[str, Any]:
         """云端终态 → 工具结果 {success, code, message, effect, data, invocation_id}"""
+        invocation = repository.observed_invocation(invocation)
         state = invocation.get("state")
         result_json = invocation.get("result_json") or {}
         effect = invocation.get("effect")
@@ -461,6 +494,10 @@ class LocalToolProxyTool(BaseTool):
             result = {"success": False, "code": error_code or "FAILED",
                       "message": error_message or "本机执行失败", **base}
 
+        if self.name.startswith('boss_') and result.get('code') == 'NOT_LOGGED_IN' and effect == 'none':
+            result['message'] = '请在原执行电脑的原 Chrome 浏览器登录 BOSS 直聘，完成后在本会话回复“已登录，继续”。本次操作未执行。'
+            result['recovery_action'] = 'login_original_browser'
+
         if effect == "unknown" and UNKNOWN_EFFECT_NOTICE not in result["message"]:
             result["message"] = f"{result['message']}；{UNKNOWN_EFFECT_NOTICE}"
         return result
@@ -476,7 +513,10 @@ class LocalToolProxyTool(BaseTool):
 
         租户不存在：不阻断；余额 ≤0：阻断（invocation 不创建，设备不出工）；
         检查异常：不阻断避免误伤（与对话入口同一容错取向）。
+        私有云部署：跳过（客户自购 key，无积分概念，余额恒 0 不得阻断）。
         """
+        if settings.deployment.private_cloud:
+            return None
         try:
             from src.saas.db.tenant_db import TenantDB
             tenant = await asyncio.to_thread(TenantDB.get_by_id, tenant_id)
@@ -856,8 +896,10 @@ class BossFilterTool(LocalToolProxyTool):
         if _extended_filter_args(args) or args.get("options_ref"):
             try:
                 probe = await asyncio.to_thread(repository.get_invocation, args.get("options_ref"), tenant_id)
+                if probe:
+                    probe = repository.observed_invocation(probe)
             except Exception:
-                logger.error("后端日志：扩展筛选能力探查引用查询失败")
+                logger.opt(exception=True).error("后端日志：扩展筛选能力探查引用查询失败")
                 return {"success": False, "code": "FILTER_CAPABILITY_REQUIRED", "effect": "none", "message": "无法核验设备扩展筛选能力，原筛选未改动，请重新查询后再试"}
             result = (probe or {}).get("result_json") or {}
             data = result.get("data") if isinstance(result, dict) else None

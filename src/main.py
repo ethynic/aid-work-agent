@@ -362,7 +362,7 @@ def _finish_browser_shutdown_task(task: asyncio.Task) -> None:
     try:
         task.result()
     except Exception as exc:
-        logger.warning("浏览器后台回收异常: type={}", type(exc).__name__)
+        logger.opt(exception=True).warning("浏览器后台回收异常")
 
 
 async def _close_browser_runs_on_shutdown() -> None:
@@ -384,7 +384,7 @@ async def _close_browser_runs_on_shutdown() -> None:
     except asyncio.TimeoutError:
         logger.warning("浏览器 shutdown 回收超过 15 秒预算")
     except Exception as exc:
-        logger.warning("浏览器 shutdown 回收异常: type={}", type(exc).__name__)
+        logger.opt(exception=True).warning("浏览器 shutdown 回收异常")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -586,12 +586,15 @@ def _check_tenant_credit_blocked(tenant_id: Optional[str]) -> Optional[JSONRespo
     """租户积分余额硬阻断检查（#37 Phase 4）
 
     在 /api/chat 与 /api/chat/stream 入口处调用：
+    - 私有云部署：放行（客户自购 key，无积分概念，余额恒 0 不得阻断）
     - tenant_id 为空（platform_admin 全局视图/后台调用）：放行
     - 租户余额 > 0：放行
     - 租户余额 ≤ 0：返回 403 JSONResponse，阻断对话
 
     返回 None 表示放行，返回 JSONResponse 表示阻断（直接 return 给前端）。
     """
+    if settings.deployment.private_cloud:
+        return None
     if not tenant_id:
         return None
     try:
@@ -1791,6 +1794,8 @@ async def cancel_chat_generation(session_id: str, http_request: Request):
 
 app.include_router(auth.router)
 app.include_router(session_api.router)
+from src.api.message_share import router as message_share_router
+app.include_router(message_share_router)
 from src.api.agent_runner_web import router as agent_runner_web_router
 app.include_router(agent_runner_web_router)
 app.include_router(channels_api.router)
@@ -1801,6 +1806,8 @@ app.include_router(after_sales.router)
 app.include_router(scheduled_task.router)
 app.include_router(email_settings.router)
 app.include_router(knowledge_router)
+from src.api.knowledge_tdoc import router as knowledge_tdoc_router
+app.include_router(knowledge_tdoc_router)
 app.include_router(admin_subagent.router)
 app.include_router(admin_redis.router)
 app.include_router(subagent_extra.router)

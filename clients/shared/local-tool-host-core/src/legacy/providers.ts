@@ -27,6 +27,7 @@ export interface ProviderManifest {
 // 与 boss CLI 的 TOOL_DEFS（src/mcp/toolDefs.ts）保持同步——2026-08-17 真机踩坑：
 // 新增工具没进此清单会被 TOOL_NOT_ALLOWED 拒绝，云端智能体误判「功能不可用」
 const BOSS_TOOLS = [
+  'boss_recovery_probe',
   'boss_filter',
   'boss_clear_filter',
   'boss_filter_options',
@@ -120,6 +121,9 @@ const SKILL_RUNNER_TOOLS = ['skill_script_run'] as const
 const SKILL_RUNNER_WRITE_TOOLS: ReadonlySet<string> = new Set(['skill_script_run'])
 
 export const TRUSTED_MANIFESTS: Readonly<Record<string, ProviderManifest>> = {
+  'runtime-recovery': { provider_key: 'runtime-recovery', provider_id: 'ai.aidwork.runtime-recovery',
+    tools: ['runtime_recovery_observe'], execution_target: 'local_required', protocol_version: 1,
+    shared_lock_capable: false, write_tools: new Set() },
   'boss-recruiting': {
     provider_key: 'boss-recruiting',
     provider_id: 'ai.aidwork.boss-recruiting',

@@ -42,18 +42,21 @@ def _clarification_wait(waiting):
 
 class ChannelRunnerAgent:
     def __init__(self, *, source, session_id, channel_user_id, channel_chat_id,
-                 profile_id='main', config_id=None, client=None):
+                 profile_id='main', config_id=None, client=None, tenant_id=None):
         from src.config.settings import settings
         self.source, self.session_id = source, session_id
         self.channel_user_id, self.channel_chat_id = channel_user_id, channel_chat_id
         self.profile_id, self.config_id = profile_id or 'main', config_id
+        self.tenant_id = tenant_id
         self.client = client or RunnerServiceClient(settings.agent_runner)
 
     @property
     def subagent_config(self):
         # 原 recap 只需配置，不在渠道进程装配模型或执行 Agent。
+        # 必须带 tenant_id：副本实例不进全局 registry，无租户上下文会 PROFILE_NOT_FOUND
+        # （recap 配置读取被 trigger_recap 静默吞掉，外部推送停摆）。
         from src.services.agent_runner.profiles import MainProfileCatalog
-        return MainProfileCatalog().resolve(self.profile_id)[0]
+        return MainProfileCatalog().resolve(self.profile_id, tenant_id=self.tenant_id)[0]
 
     async def _request(self, method, path, **kwargs):
         for attempt in range(4):

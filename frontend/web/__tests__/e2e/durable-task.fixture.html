@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>任务状态隔离验证</title></head>
+<body><div id="app"></div>
+<script type="module">
+import { createApp, h, ref } from 'vue'
+import DurableTaskStatus from '../../components/chat/DurableTaskStatus.vue'
+import '../../style.css'
+const row = ref({ runner_id:'fixture', client_request_id:'fixture', queue_order:1, session:{ kind:'web', session_id:'fixture' },
+  status:'waiting', execution_mode:'continuous', cancel_requested:false, revision:1, control_revision:0,
+  settlement_status:'pending', view_revision:1, accepted_at:'2026-10-22T12:00:00Z', updated_at:'2026-10-22T12:00:00Z',
+  snapshot:{ waiting:{ kind:'timer', wait_id:'original-wait', target_execution_id:'original-leaf', seconds:10,
+    wake_at:'2026-10-22T12:00:10Z', reason:'等待群内新消息，再判断是否需要回复。' } },
+  usage:{ task_credits:1.25, session_credits:8.5, pending:true, updated_at:'2026-10-22T12:00:00Z' } })
+window.fixtureActions = []
+window.fixtureUpdate = values => Object.assign(row.value, values)
+createApp({ setup:() => () => h('main', { class:'mx-auto max-w-3xl p-4' },
+  h(DurableTaskStatus, { row:row.value, busy:false, onControl:action => window.fixtureActions.push(action) })) }).mount('#app')
+</script></body></html>

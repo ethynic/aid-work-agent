@@ -92,7 +92,7 @@ export async function readLocaldbSession(
         throw new CodedOperationError('IDENTITY_UNCONFIRMED', '账号目录与 user_table.id 的本人身份映射未确认')
       }
       if (value.error === 'SCHEMA_UNSUPPORTED') throw new CodedOperationError('VERSION_UNSUPPORTED', '本地库 schema 不支持当前读取')
-      throw unavailable('本地库查询未完成')
+      throw unavailable('本地库查询未完成: ' + JSON.stringify(value).slice(0, 300))
     }
     const query = (params: string[]) => call(['query', '--workdir', work.dir, ...params]).then(requireQuery)
     const meta = await query(['--task', 'context', '--account', current.account])

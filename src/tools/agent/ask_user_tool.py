@@ -59,6 +59,8 @@ class AskUserInput(BaseModel):
     questions: List[AskQuestionItem] = Field(
         ..., min_length=1, max_length=5, description="问题列表（1~5 题，打包进同一个提问）")
     allow_skip: bool = Field(True, description="是否允许用户整体跳过（忽略按钮）")
+    purpose: Optional[Literal['confirm_continuous']] = Field(None,
+        description="不确定是否持续跟进时指定confirm_continuous；平台生成固定确认选项，普通问题不填")
 
 
 def _option_entry(key, option):

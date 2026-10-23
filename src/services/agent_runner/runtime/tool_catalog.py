@@ -3,10 +3,11 @@ from typing import List, Dict, Any
 from src.core.agent_engine.contracts import AgentMode
 
 class ToolCatalog:
-    def __init__(self, mode, registry, controls, visibility, skill_registry=None):
+    def __init__(self, mode, registry, controls, visibility, skill_registry=None, supports_sleep=False):
         self.mode, self.tool_registry, self._tool_controls = mode, registry, controls
         self._get_available_subagents = visibility.available
         self.skill_registry = skill_registry
+        self.supports_sleep = supports_sleep
     def _get_tools(self) -> List[Dict[str, Any]]:
         """
         Get tool definitions from ToolRegistry + virtual tools + dynamic tools
@@ -24,6 +25,8 @@ class ToolCatalog:
         tools.extend(self._tool_controls.definitions(
             available_subagents=available_subagents
         ))
+        if not self.supports_sleep:
+            tools = [tool for tool in tools if tool.get('name')!='agent_sleep']
         
         return tools
 
@@ -63,5 +66,7 @@ class ToolCatalog:
         control_guides = self._tool_controls.usage_guides()
         if control_guides:
             guides = f"{guides}\n\n{control_guides}" if guides else control_guides
+        if self.supports_sleep:
+            guides += '\n\n### agent_sleep\n'+self._tool_controls.get('agent_sleep').get_usage_guide()
 
         return guides

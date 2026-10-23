@@ -16,16 +16,19 @@ import { operationRecoveryFacts, operationRecoveryFailure } from './pageOperatio
  * 单份失败（打开超时/读取失败/姓名无法确定）记 failures 后继续下一份；全部失败仍 success（信息在 data）。
  */
 import fsp from 'node:fs/promises'
-import { ResumeBatchReader } from '../boss/ResumeBatchReader.js'
+import { ResumeBatchReader, type ResumeBatchCheckpoint, type BatchResumeResult } from '../boss/ResumeBatchReader.js'
+import { mapExecutorError } from './errorMapping.js'
+import { membershipAccountKey } from '../boss/MembershipInspector.js'
 import { JobSwitcher, FILTER_BUTTON_PATTERN } from '../boss/JobSwitcher.js'
 import { viewportOf } from '../boss/FilterSetter.js'
-import { buildResumePayload, wheelAt, sameViewAt, stitchParts } from './bossResumeDetail.js'
+import { buildResumePayload, wheelCenter, sameViewAt, stitchParts } from './bossResumeDetail.js'
+import { WinClickError } from '../input/WinMouseClicker.js'
 import {
   defaultSessionFactory,
   runBossOperation,
   type BossSessionFactory,
 } from './bossContext.js'
-import { CodedOperationError, type BossOperation, type OperationResult, type OpContext } from './types.js'
+import { CodedOperationError, okResult, type BossOperation, type OperationResult, type OpContext } from './types.js'
 
 export interface BossResumeBatchArgs {
   /** 读取份数上限（默认 1；CLI 层最大 10，MCP schema 收紧到 3） */
@@ -67,9 +70,18 @@ export function createBossResumeBatchOperation(
     execute(args: BossResumeBatchArgs, ctx: OpContext): Promise<OperationResult> {
       const limit = args?.limit ?? (continuation ? 3 : 1)
       const saveDir = (args?.save_dir ?? '').trim()
-      return runBossOperation(
+      const checkpoint: ResumeBatchCheckpoint = {}
+      const payloads = new Map<BatchResumeResult, Record<string, unknown>>()
+      const payloadFor = (resume: BatchResumeResult, job: string | null): Record<string, unknown> => {
+        let payload = payloads.get(resume)
+        if (!payload) { payload = buildResumePayload(resume.name, job, resume.readResult, 'dom'); payloads.set(resume, payload) }
+        return payload
+      }
+      let originalJob: string | null | undefined
+      let originalAccount: string | undefined
+      const runSession = (ctx: OpContext): Promise<OperationResult> => runBossOperation(
         { kind: 'readonly', name: operationName },
-        ctx,
+        { ...ctx, recoveryJobName: originalJob ?? (typeof args.expected_job_name === 'string' ? args.expected_job_name.trim() : undefined) },
         sessionFactory,
         () => {
           if (!Number.isInteger(limit) || limit <= 0 || limit > LIMIT_MAX) {
@@ -106,6 +118,11 @@ export function createBossResumeBatchOperation(
             // job_name 一次取足：推荐页职位框当前职位（非推荐页为 null，契约可选）
             const jobBox = new JobSwitcher({ snapshot: session.snapshot, click: session.click }).locateJobBox(probe)
             const jobName = jobBox.name ?? null
+            const account = membershipAccountKey(probe)
+            if (originalAccount && account && account !== originalAccount) throw new CodedOperationError('UI_CHANGED', '恢复后原账号已变化，保留已读资料，不改读其他账号候选人')
+            originalAccount ??= account ?? undefined
+            if (originalJob !== undefined && originalJob !== jobName) throw new CodedOperationError('JOB_CHANGED', '恢复后职位已变化，保留已读资料，不改读新职位候选人')
+            originalJob ??= jobName
             if (continuation && jobName !== args.expected_job_name?.trim()) {
               throw new CodedOperationError('JOB_CHANGED', '当前职位与上次筛选不一致，请恢复原职位或开始新一轮筛选')
             }
@@ -120,11 +137,15 @@ export function createBossResumeBatchOperation(
               message: `逐个打开简历并读取（借用真实鼠标滚动，请勿移动）0/${limit}`,
             })
             const reader = new ResumeBatchReader({
+              checkpoint,
               snapshot: () => session.snapshot(RESUME_SNAPSHOT_OPTIONS),
               click: (point, viewport) => session.click(point, viewport),
               pressEscape: session.pressEscape,
               captureFullpage: session.captureFullpage,
-              wheel: (rect, viewport, deltaY, notches) => wheelAt(rect, viewport, deltaY, notches),
+              wheel: (rect, viewport, deltaY, notches) => {
+                if (!session.physicalWheel) throw new WinClickError('当前会话不支持 Win32 真实滚轮（physicalWheel 缺失）')
+                return session.physicalWheel(wheelCenter(rect), viewport, deltaY, notches)
+              },
               sameView: (a, b, rect) => sameViewAt(a, b, rect),
               stitch: stitchParts,
               scroll: session.mouseWheel,
@@ -186,7 +207,7 @@ export function createBossResumeBatchOperation(
               message,
               data: {
                 operation_recovery: facts,
-                resumes: result.resumes.map((r) => buildResumePayload(r.name, jobName, r.readResult, 'dom')),
+                resumes: result.resumes.map((r) => payloadFor(r, jobName)),
                 failures,
                 attempted: result.attempted,
                 processed_names: result.processed_names,
@@ -198,11 +219,43 @@ export function createBossResumeBatchOperation(
             }
           } catch (error) {
             if (error instanceof CodedOperationError && error.data?.operation_recovery) throw error
+            if (checkpoint.resumes?.length) {
+              const mapped = mapExecutorError(error)
+              throw new CodedOperationError(mapped.code, mapped.message, {
+                resumes: checkpoint.resumes.map(r => payloadFor(r, originalJob ?? null)),
+                failures: checkpoint.failures ?? [], attempted: checkpoint.attempted ?? 0,
+                processed_names: [...checkpoint.processedNames ?? []], job_name: originalJob,
+              })
+            }
             return operationRecoveryFailure(error, operationRecoveryFacts({ name: operationName, operationClass: 'readonly', goal: '逐项读取简历并恢复推荐列表', expected: '推荐列表可读且可继续逐项打开详情' },
               { attemptsUsed: 1, ordinaryRetriesUsed: 0, inputStatus: 'not_started', stage: 'prepared', verification: { status: 'inconclusive', evidence: ['批次入口页面尚未通过校验，未开始读取'] } }))
           }
         },
       )
+      const run = async (current: OpContext): Promise<OperationResult> => {
+        const result = await runSession(current)
+        if (result.success || !checkpoint.resumes?.length) return result
+        // Connection/login/cancellation can fail before body() starts. The
+        // retained batch still contains genuine read results and must reach the
+        // original receipt for per-item processing, without claiming full work.
+        const facts = operationRecoveryFacts({ name: operationName, operationClass: 'readonly',
+          resultKind: 'business_result', goal: '保留本批已读取资料，恢复原列表后继续剩余数量',
+          expected: '已读图片保留，未完成数量及当前依赖明确' }, checkpoint.execution ?? {
+            attemptsUsed: 1, ordinaryRetriesUsed: 0, stage: 'prepared', inputStatus: 'not_started',
+            verification: { status: 'inconclusive', evidence: ['恢复连接尚未完成，保留已读取成果'] } })
+        facts.error = { code: result.code, source: 'prepared', summary: result.message.slice(0, 1000) }
+        return okResult(result.run_id, `已读取 ${checkpoint.resumes.length} 份；剩余工作尚未完成：${result.message}`, 'none', {
+          ...result.data, operation_recovery: facts,
+          resumes: checkpoint.resumes.map(item => payloadFor(item, originalJob ?? null)),
+          failures: checkpoint.failures ?? [], processed_names: [...checkpoint.processedNames ?? []],
+          attempted: checkpoint.attempted ?? 0, job_name: originalJob,
+          stop_reason: current.signal.aborted || result.code === 'CANCELLED' ? 'cancelled' : 'page_operation_failed',
+          cleanup_error: { code: result.code, message: result.message },
+          cleanup_warning: `剩余工作需要恢复（${result.code}）：${result.message}`,
+        })
+      }
+      if (ctx.recoveryContinuation) ctx.recoveryContinuation.resume = run
+      return run(ctx)
     },
   }
 }

@@ -3956,3 +3956,101 @@
     ) pv ON TRUE
     WHERE v.sub_name <> ''
     ON CONFLICT (tenant_id, agent_id) DO NOTHING;
+
+- datetime: "2026-10-20 12:00:00"
+  remark: "腾讯文档知识库导入：凭据绑定表、导入批次/批次项表、租户级导入映射表（任务#5/#7）"
+  statements: |
+    CREATE TABLE IF NOT EXISTS tdoc_credentials (
+        id SERIAL PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        access_token_enc TEXT NOT NULL,
+        refresh_token_enc TEXT,
+        open_id TEXT NOT NULL,
+        status TEXT DEFAULT 'active',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(tenant_id, user_id)
+    );
+    CREATE TABLE IF NOT EXISTS tdoc_import_batches (
+        batch_id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        status TEXT DEFAULT 'queued',
+        total_count INT DEFAULT 0,
+        success_count INT DEFAULT 0,
+        fail_count INT DEFAULT 0,
+        skip_count INT DEFAULT 0,
+        error_message TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_tdoc_batches_tenant ON tdoc_import_batches(tenant_id, created_at);
+    CREATE TABLE IF NOT EXISTS tdoc_import_items (
+        id BIGSERIAL PRIMARY KEY,
+        batch_id TEXT NOT NULL,
+        tenant_id TEXT NOT NULL,
+        tdoc_file_id TEXT NOT NULL,
+        title TEXT,
+        doc_type TEXT,
+        status TEXT DEFAULT 'pending',
+        last_modify_time BIGINT,
+        document_id BIGINT,
+        error_message TEXT,
+        retry_count INT DEFAULT 0,
+        next_retry_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_tdoc_items_batch ON tdoc_import_items(batch_id);
+    CREATE INDEX IF NOT EXISTS idx_tdoc_items_due ON tdoc_import_items(status, next_retry_at);
+    CREATE TABLE IF NOT EXISTS tdoc_imported_docs (
+        id SERIAL PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        tdoc_file_id TEXT NOT NULL,
+        document_id BIGINT NOT NULL,
+        title TEXT,
+        last_modify_time BIGINT,
+        imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(tenant_id, tdoc_file_id)
+    );
+
+- datetime: "2026-10-22 09:00:00"
+  remark: "Web 单条回复分享：展示副本、可选密码及图片附件引用"
+  statements: |
+    CREATE TABLE IF NOT EXISTS chat_message_shares (
+        share_key TEXT PRIMARY KEY,
+        tenant_id TEXT,
+        user_id TEXT,
+        session_id TEXT,
+        message_id TEXT,
+        reply_data JSONB,
+        password_hash TEXT,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+
+- datetime: "2026-10-22 23:00:00"
+  remark: "AgentRunner 通用持久化休眠：数据库时钟唤醒索引"
+  statements: |
+    ALTER TABLE agent_runners ADD COLUMN IF NOT EXISTS wake_at TIMESTAMPTZ;
+    CREATE INDEX IF NOT EXISTS idx_agent_runners_wake ON agent_runners(wake_at,runner_id)
+        WHERE status='waiting' AND wake_at IS NOT NULL;
+
+- datetime: "2026-10-22 23:10:00"
+  remark: "AgentRunner 长期任务累计用量与执行时长扩为 BIGINT，保留既有计费记录"
+  statements: |
+    ALTER TABLE chat_records
+        ALTER COLUMN total_token_count TYPE BIGINT,
+        ALTER COLUMN prompt_tokens TYPE BIGINT,
+        ALTER COLUMN completion_tokens TYPE BIGINT,
+        ALTER COLUMN cached_input_tokens TYPE BIGINT,
+        ALTER COLUMN agent_iterations TYPE BIGINT,
+        ALTER COLUMN duration_ms TYPE BIGINT,
+        ALTER COLUMN embedding_tokens TYPE BIGINT,
+        ALTER COLUMN asr_calls TYPE BIGINT;
+
+- datetime: "2026-10-22 23:20:00"
+  remark: "Runner 归档历史按原会话和单调消息 ID 有界分页"
+  statements: |
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id ON chat_messages(session_id, id);

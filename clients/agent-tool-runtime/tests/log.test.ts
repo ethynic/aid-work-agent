@@ -14,7 +14,7 @@ process.env.AIDWORK_RUNTIME_HOME = home
 
 // 置于 import 之后：log/config 模块读 env 是每次调用时读（runtimeHomeDir 非常量），
 // 但保险起见动态 import 确保模块在本测试内首次加载
-const { logInfo, logError, logProviderChunk } = await import('../src/log.js')
+const { logInfo, logError, logProviderChunk, logFileHealthSnapshot } = await import('../src/log.js')
 
 const logFile = path.join(home, 'logs', 'runtime.log')
 
@@ -63,4 +63,46 @@ test('轮转：超 5MB 时 rename 为 runtime.old.log，新文件重新累计', 
   const fresh = readFileSync(logFile, 'utf-8')
   assert.match(fresh, /trigger rotate/)
   assert.ok(!fresh.includes('xxxx'), '新文件不应含旧内容')
+})
+
+test('文件写失败可见告警（Phase 7）：stderr 限频告警 + 健康记录累计，不再静默降级', () => {
+  // 用独立 home：logs 位置放一个同名文件阻断 mkdirSync，模拟磁盘/权限故障
+  const failHome = mkdtempSync(path.join(tmpdir(), 'rt-log-fail-'))
+  const savedHome = process.env.AIDWORK_RUNTIME_HOME
+  const originalWrite = process.stderr.write
+  const captured: string[] = []
+  const capturingWrite = ((chunk: Uint8Array | string) => {
+    captured.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'))
+    return true
+  }) as unknown as typeof process.stderr.write
+  try {
+    writeFileSync(path.join(failHome, 'logs'), 'not-a-directory', 'utf8')
+    process.env.AIDWORK_RUNTIME_HOME = failHome
+    process.stderr.write = capturingWrite
+
+    const before = logFileHealthSnapshot()
+    logInfo('first failing line')
+    const afterFirst = logFileHealthSnapshot()
+    assert.equal(afterFirst.fileWriteFailures, before.fileWriteFailures + 1, '健康记录应累计首次失败')
+    assert.ok(afterFirst.lastFileWriteError, '应记录最近失败原因')
+    assert.ok(afterFirst.lastFileWriteErrorAt, '应记录最近失败时间')
+    const alarmsAfterFirst = captured.filter((line) => line.includes('日志文件写入失败'))
+    assert.equal(alarmsAfterFirst.length, 1, '首次失败立即告警一次')
+    assert.match(alarmsAfterFirst[0]!, /磁盘空间与目录权限/)
+
+    logInfo('second failing line')
+    const afterSecond = logFileHealthSnapshot()
+    assert.equal(afterSecond.fileWriteFailures, before.fileWriteFailures + 2, '失败计数继续累计')
+    assert.equal(captured.filter((line) => line.includes('日志文件写入失败')).length, 1, '限频窗口内不重复告警（防刷屏）')
+
+    // 恢复可写后：告警语义不回滚健康记录（累计事实保留），写恢复正常
+    process.env.AIDWORK_RUNTIME_HOME = home
+    logInfo('recovered write')
+    assert.equal(logFileHealthSnapshot().fileWriteFailures, afterSecond.fileWriteFailures, '历史失败计数不清零')
+    assert.ok(readFileSync(logFile, 'utf-8').includes('recovered write'), '恢复后应正常落盘')
+  } finally {
+    process.stderr.write = originalWrite
+    process.env.AIDWORK_RUNTIME_HOME = savedHome
+    rmSync(failHome, { recursive: true, force: true })
+  }
 })

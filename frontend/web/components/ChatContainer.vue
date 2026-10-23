@@ -38,6 +38,9 @@
           <div class="flex-1 overflow-hidden">
             <MessageList
               :messages="messages"
+              :history="durableHistory"
+              :follow-latest="!durableHistory?.older"
+              @history="loadDurableHistory"
               :is-processing="isProcessing"
               :input-hint-state="inputHintState"
               :subagent-name="currentSubagentName"
@@ -49,6 +52,20 @@
 
           <!-- Input Area -->
           <div class="flex-shrink-0 border-t border-gray-200 bg-white p-2 md:p-4 pb-[max(0.5rem,env(safe-area-inset-bottom))] shadow-sticky z-10">
+            <DurableTaskStatus v-if="durableTask" :row="durableTask" :busy="durableTaskBusy" @control="controlDurableTask" />
+            <div v-if="localRecovery" role="status" class="mb-3 rounded-lg border border-warning-200 bg-warning-50 p-3 text-sm text-gray-700">
+              <p v-if="localRecovery.local_recovery_kind === 'dispatch_unconfirmed'">原任务的派发状态待核对。可以核对并继续，或结束旧等待后在本会话继续交流；已有成果会保留。</p>
+              <p v-else-if="!localRecovery.local_verification?.resource_stopped">原本机操作需要核对。请保持原执行电脑的 Runtime 连接，以便回传结果。只读核验仅观察页面，不能据此确认旧执行停止或原操作成功，不会重复原操作；结束等待后可以继续对话。</p>
+              <p v-if="localRecovery.local_recovery_kind !== 'dispatch_unconfirmed' && !localRecovery.local_verification?.resource_stopped" class="mt-1">停止本 Runtime 启动的旧工具进程，可能同时关闭由 Runtime 启动的浏览器；有其他任务正在执行时不会停止，也不会重发原任务。</p>
+              <p v-if="localVerificationMessage" class="mt-1">{{ localVerificationMessage }}</p>
+              <p v-if="localRecovery.cancel_requested && localRecovery.local_recovery" class="mt-1">原任务已请求取消，仍有本机结果待核对。可以结束等待后继续对话。</p>
+              <div class="mt-2 flex flex-wrap gap-2">
+                <BaseButton v-if="!localRecovery.local_verification?.resource_stopped && (localRecovery.local_recovery_actions?.includes('verify') ?? true)" size="sm" :disabled="localRecoveryBusy || ['queued','claimed','running'].includes(localRecovery.local_verification?.state || '')" @click="resolveLocalRecovery('verify')">只读核验页面</BaseButton>
+                <BaseButton v-if="!localRecovery.local_verification?.resource_stopped && (localRecovery.local_recovery_actions?.includes('stop') ?? true)" size="sm" intent="secondary" :disabled="localRecoveryBusy || ['queued','claimed','running'].includes(localRecovery.local_verification?.state || '')" @click="resolveLocalRecovery('stop')">停止旧执行并解锁设备</BaseButton>
+                <BaseButton v-if="localRecovery.local_recovery" size="sm" :disabled="localRecoveryBusy || localRecovery.cancel_requested" @click="resolveLocalRecovery('resume')">核对并继续</BaseButton>
+                <BaseButton v-if="localRecovery.local_recovery" size="sm" intent="secondary" :disabled="localRecoveryBusy" @click="resolveLocalRecovery('end')">结束等待，继续对话</BaseButton>
+              </div>
+            </div>
             <ChatInput
               ref="chatInputRef"
               @send="handleSend"
@@ -92,6 +109,8 @@ import ChatInput from './ChatInput.vue'
 import AppHeader from './AppHeader.vue'
 import MenuSidebar from './MenuSidebar.vue'
 import AttachmentPreviewPanel from './AttachmentPreviewPanel.vue'
+import BaseButton from './ui/BaseButton.vue'
+import DurableTaskStatus from './chat/DurableTaskStatus.vue'
 
 import { useAgent } from '@/composables/useAgent'
 import { getSession } from '@/api/session'
@@ -132,7 +151,16 @@ const {
   sessionId: agentSessionId,
   inputHintState,
   isWaitingHuman,
-  runnerFeedback
+  runnerFeedback,
+  durableTask,
+  durableTaskBusy,
+  durableHistory,
+  loadDurableHistory,
+  controlDurableTask,
+  localRecovery,
+  localRecoveryBusy,
+  localVerificationMessage,
+  resolveLocalRecovery
 } = useAgent()
 
 // Runner errors are already reduced to safe product messages by the owner.

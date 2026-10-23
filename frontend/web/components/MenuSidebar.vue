@@ -838,7 +838,7 @@ const emit = defineEmits<{
 const router = useRouter()
 const route = useRoute()
 const isDesktopNotificationsUnavailable = import.meta.env.VITE_DESKTOP_TARGET === 'true'
-const { admin: tenantAdmin, tenant, logout: tenantLogout, isLoggedIn: tenantIsLoggedIn } = useTenantAuth()
+const { admin: tenantAdmin, tenant, logout: tenantLogout, isLoggedIn: tenantIsLoggedIn, privateCloud } = useTenantAuth()
 const { currentTheme, setTheme, getAvailableThemes } = useTheme()
 
 const showUserMenu = ref(false)
@@ -997,10 +997,10 @@ const adminSubMenuItems = computed(() => {
     { path: `${base}/users`, label: '用户管理', icon: 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM22 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75' },
     // 企业设置：齿轮（简化版）
     { path: `${base}/settings`, label: '企业设置', icon: 'M12 8a4 4 0 100 8 4 4 0 000-8zM19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3h0a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5h0a1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8v0a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z' },
-    // 积分用量：柱状图
-    { path: `${base}/token-usage`, label: '积分用量', icon: 'M3 21h18M6 17V9M11 17V5M16 17v-4M21 17v-7' },
-    // 充值记录：钱包/硬币
-    { path: `${base}/recharge-records`, label: '充值记录', icon: 'M21 12a9 9 0 11-18 0 9 9 0 0118 0zM12 7v10M9 10h4.5a1.5 1.5 0 010 3H9' },
+    // 用量：柱状图（私有云不展示积分概念，标签改 Token 用量）
+    { path: `${base}/token-usage`, label: privateCloud.value ? 'Token 用量' : '积分用量', icon: 'M3 21h18M6 17V9M11 17V5M16 17v-4M21 17v-7' },
+    // 充值记录：钱包/硬币（私有云客户自购 key 充值，无此页）
+    ...(privateCloud.value ? [] : [{ path: `${base}/recharge-records`, label: '充值记录', icon: 'M21 12a9 9 0 11-18 0 9 9 0 0118 0zM12 7v10M9 10h4.5a1.5 1.5 0 010 3H9' }]),
     // 回复风格：对话气泡
     { path: `${base}/reply-styles`, label: '回复风格', icon: 'M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z' },
     // 行为日志：清单/审计剪贴板

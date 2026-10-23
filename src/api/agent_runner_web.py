@@ -3,6 +3,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from urllib.parse import quote
+from typing import Literal
 
 from fastapi import APIRouter, FastAPI, Request, Query
 from fastapi.exceptions import RequestValidationError
@@ -14,6 +15,7 @@ from src.config.settings import settings
 from src.services.agent_runner.contracts import AttachmentRef, RunnerError, RunnerSubmit, SessionRef
 from src.services.agent_runner.web_client import RunnerServiceClient, close_event_transport
 from src.services.agent_runner.control_contracts import RunnerControl
+from src.services.agent_runner.api import EndWaitingRequest, VerifyLocalRequest
 from src.services.agent_runner.event_stream import ObserverAdmission, parse_cursor
 from src.services.agent_runner.web_event_stream import WebEventResponse
 
@@ -26,6 +28,7 @@ class WebSubmission(BaseModel):
     subagent: str | None = Field(default=None, max_length=128)
     instance_id: str | None = Field(default=None, max_length=256)
     video_params: dict | None = None
+    execution_mode: Literal['continuous'] | None = None
 
     class Config:
         extra = 'forbid'
@@ -36,7 +39,7 @@ class WebSubmission(BaseModel):
         return RunnerSubmit(client_request_id=self.client_request_id, text=self.message,
             session=SessionRef(kind='web', session_id=self.session_id), attachments=self.files,
             profile_id=self.subagent or 'main', routing_policy='explicit' if self.subagent else 'default_single',
-            instance_id=self.instance_id, request_data=data)
+            instance_id=self.instance_id, request_data=data, execution_mode=self.execution_mode)
 
 
 def error_response(error):
@@ -108,6 +111,8 @@ def create_router(config=None, client=None):
                 'observe_existing':bool(config.api_url and client.token),
                 'events_supported':bool(config.api_url and client.token),
                 'ask_structured_answers':True,
+                'durable_sleep_v1':getattr(config,'durable_sleep_enabled',False) is True,
+                'continuous_execution_v1':getattr(config,'durable_sleep_enabled',False) is True,
                 'contract_version':1, 'transport':'runner_poll'}
 
     @router.post('/runners', status_code=202)
@@ -116,7 +121,7 @@ def create_router(config=None, client=None):
         # A disabled submit switch still looks up a matching accepted key; it can
         # never create a runner. Retries keep the original immutable payload.
         return await forward(request, 'POST', '/v1/runners',
-            body=intent.model_dump(mode='json'), accept_new=config.web_enabled)
+            body=intent.transport(), accept_new=config.web_enabled)
 
     @router.post('/runners/sync')
     async def sync_reply(body: WebSubmission, request: Request):
@@ -159,6 +164,14 @@ def create_router(config=None, client=None):
             raise RunnerError('CONTROL_COMPLETION_FORBIDDEN',403)
         return await forward(request,'POST','/v1/runners/'+quote(runner_id,safe='')+'/controls',
                              body=control_body(body))
+
+    @router.post('/runners/{runner_id}/verify-local')
+    async def verify_local(runner_id: str, body: VerifyLocalRequest, request: Request):
+        return await forward(request, 'POST', '/v1/runners/'+quote(runner_id,safe='')+'/verify-local', body=body.model_dump())
+
+    @router.post('/runners/{runner_id}/end-waiting')
+    async def end_waiting(runner_id: str, body: EndWaitingRequest, request: Request):
+        return await forward(request, 'POST', '/v1/runners/'+quote(runner_id,safe='')+'/end-waiting', body={})
 
     @router.get('/runners/{runner_id}/controls/{control_id}')
     async def get_control(runner_id: str,control_id: str,request: Request):

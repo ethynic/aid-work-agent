@@ -7,6 +7,7 @@
 
 | 故障主题 | 文档 | 摘要 |
 |---------|------|------|
+| 招聘筛选235秒慢操作与登录后恢复封锁 | [recruiting-runtime-filter-timeout-and-resume-blocked-20261020.md](recruiting-runtime-filter-timeout-and-resume-blocked-20261020.md) | 2026-10-20：慢输入待后续；存量未知执行已支持受管资源停稳解锁，独立验证通过。 |
 | 数字员工定制弹框扩展提示词不回显：迁移块原地改写致错键数据残留 | [tenant-agent-instance-migration-drift-incident.md](tenant-agent-instance-migration-drift-incident.md) | 2026-10-16 测试环境：10-14 迁移块草稿版落库后原地改写但 datetime 未变，水位已过的库永久漏跑，直用实例行 agent_id 错用 tenant_id 致弹框/列表覆盖项命不中（运行时靠 registry 回退掩盖）；补偿块纠偏结构与数据 + 运行时收敛为实例行权威（空即清空） |
 | Web 会话 subagent_id 为空显示「主智能体」 | [web-session-subagent-display-mislabel-incident.md](web-session-subagent-display-mislabel-incident.md) | 2026-09-07 生产：隐式建会话不写 subagent_id 致显示错标，实际执行/计费均正确（after-sales）；2026-10-16 复核问题已不存在，残余风险=隐式建会话路径仍不回写，新增聊天入口需检查 |
 | 微信客服读取异常宽表导致 Runner 中断 | [wecom-kf-excel-read-runner-interrupted-20261015.md](wecom-kf-excel-read-runner-interrupted-20261015.md) | 2026-10-15生产：Excel重复维度扫描阻塞222秒，旧KB数据未迁metadata；补迁与修复见关联计划。 |

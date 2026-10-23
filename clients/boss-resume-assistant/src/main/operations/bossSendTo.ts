@@ -37,7 +37,9 @@ export function createBossSendToOperation(
       const to = args?.to ?? ''
       const message = args?.message ?? ''
       const dryRun = args?.dry_run === true
-      return runBossOperation(
+      const state = new BusinessOperationState()
+      const checkpoint: import('../boss/ChatSendExecutor.js').SendCheckpoint = {}
+      const run = (ctx: OpContext): Promise<OperationResult> => runBossOperation(
         { kind: 'write', name: 'boss_send_to' },
         ctx,
         sessionFactory,
@@ -47,7 +49,6 @@ export function createBossSendToOperation(
           return null
         },
         async (session, tracker) => {
-          const state = new BusinessOperationState()
           const intent = { name: 'boss_send_to', goal: '向指定联系人发送原消息', expected: '同一会话编辑区清空且新增同文出站消息', operationClass: 'external_effect' as const, target: to.trim() }
           return withBusinessRecovery(state, intent, async () => {
           await ensureChatPage(session, ctx)
@@ -66,7 +67,7 @@ export function createBossSendToOperation(
           ctx.progress({ stage: 'execute', message: `打开「${to}」的会话（已在目标会话则零点击）` })
           const opened = await opener.open({ contact: to })
           // 2. 输入并发送消息
-          const sender = new ChatSendExecutor({ state,
+          const sender = new ChatSendExecutor({ state, checkpoint,
             snapshot: session.snapshot,
             click: session.click,
             clickAndType: session.clickAndType,
@@ -86,6 +87,8 @@ export function createBossSendToOperation(
           })
         },
       )
+      if (ctx.recoveryContinuation) ctx.recoveryContinuation.resume = run
+      return run(ctx)
     },
   }
 }

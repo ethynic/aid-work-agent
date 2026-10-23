@@ -29,6 +29,8 @@ import {
   OPEN_CLICK_ATTEMPTS,
 } from '../src/main/boss/ResumeBatchReader.js'
 import { buildResumePayload } from '../src/main/operations/bossResumeDetail.js'
+import { withLocalRecovery } from '../src/main/boss/localOperationRecovery.js'
+import { CodedOperationError } from '../src/main/operations/types.js'
 import { ResumeReader, type DeviceRect, type ResumeReadResult } from '../src/main/boss/ResumeReader.js'
 import type { DomSnapshot, ClickPoint } from '../src/main/boss/domSnapshot.js'
 import { findButtonsByExactText, pairCardNameWithPoint } from '../src/main/boss/cardName.js'
@@ -141,6 +143,10 @@ interface CardScript {
   readError?: boolean
   /** Escape 后 canvas 不消失（关闭失败） */
   closeFail?: boolean
+  /** 首击后该卡片从列表消失（模拟推荐流刷新，重试前找不到原卡片） */
+  vanishAfterClick?: boolean
+  /** 首击后列表整体替换为给定行（模拟刷新后视口内容变化；配 deps.scroll 模拟滚动出新卡） */
+  refreshList?: Row[]
 }
 
 /** 状态机 fake：click 切 canvas 态、escape 切列表态（脚本可覆盖）。
@@ -163,7 +169,14 @@ function makeBatch(
   }
   let state: 'list' | 'canvas' = opts.initialState ?? 'list'
   let cardIdx = 0 // 当前正在处理的卡片序号（readBatch 逐卡推进；重点同一张卡不推进）
-  const scriptAt = (i: number): CardScript => scripts[i] ?? {}
+  const vanishedRows = new Set<number>() // vanishAfterClick 卡：首击后从快照中移除（列表刷新）
+  // 脚本在初始 rows 上按原始对位预绑定到行对象：refreshList 替换 rows 后 index 对位会错位
+  // （滚动换回的既有行按对象取原脚本，refreshList 换入的新行默认空脚本=正常卡）
+  const rowScript = new Map<Row, CardScript>()
+  rows.forEach((row, i) => rowScript.set(row, scripts[i] ?? {}))
+  let lastRow: Row | null = null
+  const scriptOfRow = (row: Row | null | undefined): CardScript =>
+    (row != null ? rowScript.get(row) : undefined) ?? {}
   /** 点击点 y → 卡片行序（buttonY 唯一，姓名点 buttonY-8 可反查） */
   const rowOfPoint = (y: number): number => {
     const hit = rows.findIndex((r) => Math.abs(r.buttonY + 70 - y) <= 2 || Math.abs(r.buttonY - (r.nameDy ?? 8) - y) <= 2)
@@ -172,23 +185,27 @@ function makeBatch(
   const deps: ResumeBatchDeps = {
     snapshot: async () => {
       f.snapshotCount++
-      return buildSnap(rows, { canvas: state === 'canvas', extraCanvases: opts.extraCanvases })
+      return buildSnap(rows.filter((_, i) => !vanishedRows.has(i)), { canvas: state === 'canvas', extraCanvases: opts.extraCanvases })
     },
     click: async (point) => {
       f.clicks.push(point)
       // 脚本按卡片行对位（不是点击次序——重点机制下同一张卡会点多次）
-      const s = scriptAt(rowOfPoint(point.y))
+      const idx = rowOfPoint(point.y)
+      lastRow = rows[idx] ?? null
+      cardIdx = idx
+      const s = scriptOfRow(lastRow)
       state = s.openTimeout ? 'list' : 'canvas'
-      cardIdx = rowOfPoint(point.y)
+      if (s.vanishAfterClick) vanishedRows.add(idx)
+      if (s.refreshList) rows.splice(0, rows.length, ...s.refreshList)
     },
     pressEscape: async () => {
       f.escapes++
-      const s = scriptAt(cardIdx)
+      const s = scriptOfRow(lastRow ?? rows[cardIdx] ?? null)
       state = s.closeFail ? 'canvas' : 'list'
     },
     captureFullpage: async () => {
       f.captures++
-      if (scriptAt(cardIdx).readError) {
+      if (scriptOfRow(lastRow ?? rows[cardIdx] ?? null).readError) {
         // readError 卡：滚轮回顶后的截图阶段直接抛错（模拟截图/管线失败）
         throw new Error('截图管线异常（fake）')
       }
@@ -539,22 +556,63 @@ test('② DOM 姓名配对失败（无名卡）→ 不点击直接记 failure（
   assert.equal(f.escapes, 0) // 没开过详情，无需关闭
 })
 
-test('③ 两次正常点击仍未打开详情 → 保留单人失败并交共用恢复，不盲点下一张', async () => {
+test('③ 打开失败但详情可关闭（列表仍可操作）→ 记失败后继续下一人，不进恢复', async () => {
   const { reader, f } = makeBatch([ROW1, ROW2], [{ openTimeout: true }, {}])
   const cap = captureStderr()
   let result
   try { result = await reader().readBatch({ limit: 2 }) } finally { cap.restore() }
-  assert.deepEqual(result.resumes, [])
+  // 第一人（刘草威）打不开只记单份失败；第二人（张三丰）正常读取入库
+  assert.equal(result.resumes.length, 1)
+  assert.equal(result.resumes[0]!.name, '张三丰')
   assert.equal(result.failures.length, 1)
   assert.equal(result.failures[0]!.name, '刘草威')
-  assert.equal(result.attempted, 1)
-  assert.equal(f.clicks.length, 2)
-  assert.equal(f.escapes, 0, '未见详情时不发无关Escape')
-  assert.equal(result.stop_reason, 'detail_not_opened')
-  assert.equal(result.recovery!.execution.attemptsUsed, 2)
-  assert.equal(result.recovery!.execution.ordinaryRetriesUsed, 1)
-  assert.equal(result.recovery!.execution.verification.status, 'unmet')
+  assert.match(result.failures[0]!.error, /点击卡片后简历详情未打开/)
+  assert.equal(result.attempted, 2, '两人都尝试了')
+  assert.equal(f.clicks.length, 3, '刘草威两次（重点重试）+ 张三丰一次')
+  assert.equal(f.escapes, 1, '未开详情不发无关 Escape；张三丰正常关闭一次')
+  assert.equal(result.stop_reason, 'viewport_complete', '正常走完视口而非提前停止')
+  assert.equal(result.recovery, undefined, '列表仍可用时不交共用恢复')
+  assert.deepEqual(f.progress, [[1, 2]])
   assert.match(cap.lines.join(''), /页面无 CANVAS 节点/)
+  // 「关不掉才停止」分支与读取失败路径（readError+closeFail 用例）同构：detail_not_closed + 恢复
+})
+
+test('③d 重试前原卡片从列表消失（列表仍可用）→ 记失败继续下一人，不终止批次', async () => {
+  const { reader, f } = makeBatch([ROW1, ROW2], [{ openTimeout: true, vanishAfterClick: true }, {}])
+  const result = await reader().readBatch({ limit: 2 })
+  // 甲首击未打开且重试前卡片消失（列表刷新）：只记单份失败；乙正常读取
+  assert.equal(result.resumes.length, 1)
+  assert.equal(result.resumes[0]!.name, '张三丰')
+  assert.equal(result.failures.length, 1)
+  assert.equal(result.failures[0]!.name, '刘草威')
+  assert.match(result.failures[0]!.error, /原候选人卡片已从列表消失/)
+  assert.equal(result.attempted, 2)
+  assert.equal(f.clicks.length, 2, '甲仅首击一次（卡片消失后不重击旧坐标）+ 乙一次')
+  assert.equal(f.escapes, 1, '乙正常关闭一次')
+  assert.equal(result.stop_reason, 'viewport_complete', '正常走完视口而非 UI_CHANGED 终止')
+  assert.equal(result.recovery, undefined)
+  assert.deepEqual(f.progress, [[1, 2]])
+})
+
+test('③e 重试前原卡片消失且当前视口为空 → 回主循环滚动继续处理，不终止批次', async () => {
+  const rows = [ROW1, ROW2]
+  const { reader, deps, f } = makeBatch(rows, [{ openTimeout: true, refreshList: [] }, {}])
+  let scrolls = 0
+  deps.scroll = async () => {
+    scrolls++
+    if (scrolls === 1) rows.splice(0, rows.length, ROW2) // 滚动后乙回到视口
+  }
+  const result = await reader().readBatch({ limit: 1, scanMore: true })
+  // 甲首击未打开且列表刷新后视口为空：记单份失败回主循环，经滚动找到乙继续
+  assert.equal(result.failures.length, 1)
+  assert.equal(result.failures[0]!.name, '刘草威')
+  assert.match(result.failures[0]!.error, /原候选人卡片已从列表消失/)
+  assert.equal(result.resumes.length, 1)
+  assert.equal(result.resumes[0]!.name, '张三丰')
+  assert.equal(result.attempted, 2)
+  assert.equal(scrolls, 1, '视口为空时通过滚动寻找后续候选人，而非抛错终止')
+  assert.equal(result.stop_reason, 'limit_reached', '乙读取成功达到上限正常结束')
+  assert.equal(result.recovery, undefined)
 })
 
 test('③b 打开失败诊断日志带画布尺寸：接近阈值的大画布提示疑似详情已开（附件简历型/阈值问题定位依据）', async () => {
@@ -827,3 +885,54 @@ test('成功终态保留当前项收尾的一次重试，不用默认0覆盖', a
   copy.inputStatus = 'not_started'
   assert.equal(executor.batchExecution.inputStatus, 'attempted', '回执是副本，调用方不能改执行事实')
 })
+
+
+test('CDP close timeout retains the first image and checkpoint recovery never reads or charges that candidate again', async () => {
+  const batch = makeBatch([ROW1, ROW2])
+  batch.deps.checkpoint = {}
+  const close = batch.deps.pressEscape
+  let injected = false
+  batch.deps.pressEscape = async () => {
+    if (!injected) { injected = true; throw new Error('CDP request timed out: Input.dispatchMouseEvent') }
+    await close()
+  }
+  const first = await batch.reader().readBatch({ limit: 2 })
+  assert.equal(first.resumes.length, 1)
+  const saved = first.resumes[0]
+  const second = await batch.reader().readBatch({ limit: 2 })
+  assert.equal(second.resumes.length, 2)
+  assert.equal(second.resumes[0], saved)
+  assert.equal(batch.f.stitchCalls.length, 2, 'completed candidate must not be captured a second time')
+  assert.equal(second.stop_reason, 'limit_reached')
+})
+
+
+for (const code of ['NOT_LOGGED_IN', 'UI_CHANGED', 'CANCELLED'] as const) {
+  test('retained batch survives a pre-body recovery dependency: ' + code, async () => {
+    const { deps } = makeBatch([ROW1, ROW2])
+    const originalRead = ResumeReader.prototype.readResume
+    ResumeReader.prototype.readResume = async () => ({ segments: 1, bottomReached: true, width: 760, height: 2400,
+      imageBuffer: STITCHED_PNG, seamMis: [], suspectSeams: [] })
+    const controller = new AbortController()
+    let connections = 0
+    const session: BossSession = {
+      snapshot: deps.snapshot, click: deps.click,
+      pressEscape: async () => { throw new Error('CDP request timed out: Input.dispatchMouseEvent') },
+      clickBrowse: async () => {}, clickAndType: async () => {}, mouseWheel: async () => {},
+      captureFullpage: deps.captureFullpage, getUrl: async () => 'https://www.zhipin.com/web/chat/recommend', close: async () => {},
+    }
+    try {
+      const operation = createBossResumeBatchOperation(async () => {
+        if (++connections === 1) return session
+        if (code === 'CANCELLED') controller.abort()
+        throw new CodedOperationError(code, 'fixture dependency before Reader')
+      })
+      const result = await withLocalRecovery(operation, { env: {}, sleep: async () => {} }).execute({ limit: 2 },
+        { signal: controller.signal, progress() {} })
+      assert.equal(connections, 2)
+      assert.equal((result.data.resumes as unknown[]).length, 1, 'final receipt must carry the already captured image')
+      assert.equal((result.data.cleanup_error as any).code, code)
+      assert.equal(result.data.stop_reason, code === 'CANCELLED' ? 'cancelled' : 'page_operation_failed')
+    } finally { ResumeReader.prototype.readResume = originalRead }
+  })
+}

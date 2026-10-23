@@ -780,7 +780,12 @@ class HongtaoShopSyncService:
         self, tenant_id: str, run: Dict[str, Any], record: Dict[str, Any],
         rendered, native_id: str, vl_images: int, vl_billed: int,
     ) -> None:
-        """零计费跳过；metadata（stock/sales/sync_date/forum_media 等）值变才一次轻量 UPDATE。"""
+        """零计费跳过；metadata（trace.sync_date / raw_payload.forum_media）值变才一次轻量 UPDATE。
+
+        v1.10 起易变数值（stock/sales/comment_score/comment_num）不进 metadata；
+        存量库中的旧键因比对不等会在下一轮 skip 走本路径零计费清除
+        （也可用 scripts/hongtao_kb_remove_volatile_fields.py 提前清理）。
+        """
         doc_id = record.get("doc_id")
         if doc_id:
             with get_db_connection() as conn:

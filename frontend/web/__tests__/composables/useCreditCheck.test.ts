@@ -15,7 +15,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // 使用 vi.hoisted 确保 mock 引用在 vi.mock 工厂内可用（vi.mock 调用会被提升到文件顶部）
 // 注意：vi.hoisted 内不能引用外部 import（如 ref），故用普通对象模拟 ref 的 .value 接口
-const { mockGetTenantBalance, mockToast, mockAdmin, mockTenant, mockGetCurrentTenantId } = vi.hoisted(() => ({
+const { mockGetTenantBalance, mockToast, mockAdmin, mockTenant, mockPrivateCloud, mockGetCurrentTenantId } = vi.hoisted(() => ({
   mockGetTenantBalance: vi.fn(),
   mockToast: {
     error: vi.fn(),
@@ -27,6 +27,8 @@ const { mockGetTenantBalance, mockToast, mockAdmin, mockTenant, mockGetCurrentTe
   mockAdmin: { value: null as { user_id: string; role: string } | null },
   // 模拟 ref<{tenant_id} | null> 的最小接口
   mockTenant: { value: null as { tenant_id: string } | null },
+  // 模拟私有云部署标志（默认公有云）
+  mockPrivateCloud: { value: false },
   // 模拟当前路由提取的租户 ID（平台管理员代管场景有值）
   mockGetCurrentTenantId: vi.fn(),
 }))
@@ -46,6 +48,7 @@ vi.mock('@/composables/useTenantAuth', () => ({
   useTenantAuth: () => ({
     admin: mockAdmin,
     tenant: mockTenant,
+    privateCloud: mockPrivateCloud,
     getCurrentTenantId: mockGetCurrentTenantId,
   }),
 }))
@@ -61,6 +64,19 @@ describe('useCreditCheck', () => {
     mockGetCurrentTenantId.mockReturnValue(undefined)
     // 默认清除 localStorage（低余额去重）
     localStorage.clear()
+  })
+
+  it('私有云部署：跳过余额检查，不调用余额接口', async () => {
+    mockPrivateCloud.value = true
+    mockAdmin.value = { user_id: 'u1', role: 'tenant_admin' }
+
+    const { checkCreditBeforeAction } = useCreditCheck()
+    const result = await checkCreditBeforeAction('sendMessage')
+
+    expect(result.allowed).toBe(true)
+    expect(result.reason).toBe('private_cloud_skipped')
+    expect(mockGetTenantBalance).not.toHaveBeenCalled()
+    mockPrivateCloud.value = false
   })
 
   it('newSession 入口：余额 ≤ 0 应阻断（allowed: false）', async () => {

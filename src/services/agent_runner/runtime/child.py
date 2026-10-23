@@ -153,11 +153,24 @@ class ChildExecution:
         else:
             self.runtime.observer = CompatibilityObserver(task_record=task_record)
         events = []
-        async for event in self.runtime.run(task_description, task_record=task_record, image_paths=image_paths,
-                                           state=self.restored_state):
-            events.append(event)
-            if progress_callback:
-                await progress_callback(event)
+        try:
+            async for event in self.runtime.run(task_description, task_record=task_record, image_paths=image_paths,
+                                               state=self.restored_state):
+                events.append(event)
+                if progress_callback:
+                    await progress_callback(event)
+        except Exception as error:
+            from ..ownership import StopRequested
+            if isinstance(error,StopRequested) and error.command=='pause' and self.runtime.state is not None:
+                # Admission can reject after the child's before_model intent
+                # was saved. Persist the kernel's not_started correction before
+                # the parent parks, so a denied charge is not an unknown model.
+                state = self.runtime.state
+                state.outcome = Outcome.PAUSED
+                if getattr(error,'credit_blocked',False):
+                    state.resources['credit_blocked'] = True
+                await self.runtime.control.save(state,'pause_pre_dispatch')
+            raise
         state = self.runtime.state
         from src.core.execution_usage import execution_token_usage
         usage = execution_token_usage(state.checkpoint())
@@ -169,7 +182,8 @@ class ChildExecution:
             return {"result": None, "summary": "等待操作", "status": "waiting", "waiting": wait, "token_usage": usage}
         if state.outcome != Outcome.COMPLETED:
             return {"result": None, "summary": "任务未完成", "status": state.outcome.value,
-                    "error": state.error_code or state.outcome.value, "token_usage": usage}
+                    "error": state.error_code or state.outcome.value, "token_usage": usage,
+                    "waiting": state.waiting}
         return {"result": {"content": state.output}, "summary": state.output[:500] or "Task completed",
                 "token_usage": usage, "events": events}
 

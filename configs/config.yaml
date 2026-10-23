@@ -343,6 +343,11 @@ billing:
   embedding_usage_factor: 100  # 向量模型用量系数，embedding token × 单价 × 系数 = 积分用量（知识库向量化/检索 query 向量化）
   asr_usage_factor: 100  # 语音识别用量系数，ASR 调用次数 × 单价 × 系数 = 积分用量（阿里云 NLS 按次计费）
 
+# 部署形态配置：private_cloud 为 true 表示私有云部署（客户自购 API key/短信通道，费用自行承担），
+# 前台隐藏"积分"概念（用量页改显 token 分项、隐藏充值记录入口、跳过余额提醒），短信发送不扣费
+deployment:
+  private_cloud: ${PRIVATE_CLOUD:-false}
+
 # recap 任务推送配置（docs/subagent/recap-mechanism-design.md）
 external_push:
   pre_sales:
@@ -485,6 +490,8 @@ agent_runner:
   # 本地容器验证（2026-10-04）：Web 闭环走 Runner；令牌明文仅在 .env。
   enabled: true
   web_enabled: true
+  # 同池 API/worker 全部升级并完成隔离验收后才显式开启。
+  durable_sleep_enabled: false
   api_url: "http://127.0.0.1:8091"
   web_service_id: "web"
   peers:
@@ -556,3 +563,14 @@ anti_abuse:
 boss_visual:
   model: zhipu/GLM-5.3-Flash
   timeout_seconds: 120
+
+# 腾讯文档 OpenAPI 接入（docs/plans/plan-tencent-docs-knowledge-import.md）
+# 开发测试期经 env 注入个人开发者 Token（§7.1）；生产 OAuth 上线后
+# access_token 按租户用户加密存储，此处仅保留应用级参数。
+tencent_docs:
+  enabled: ${TDOC_ENABLED:-false}
+  client_id: ${TDOC_CLIENT_ID:-}
+  access_token: ${TDOC_ACCESS_TOKEN:-}
+  open_id: ${TDOC_OPEN_ID:-}
+  request_timeout: 30
+  export_daily_limit: 9

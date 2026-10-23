@@ -15,9 +15,9 @@
 """
 
 import asyncio
-from typing import Literal, Optional, List
+from typing import Annotated, Literal, Optional, List
 
-from fastapi import APIRouter, HTTPException, Path, Request
+from fastapi import APIRouter, HTTPException, Path, Query, Request
 from pydantic import BaseModel, Field
 from loguru import logger
 
@@ -203,14 +203,26 @@ async def get_session(request: Request, session_id: str):
 
 
 @router.get("/{session_id}/messages")
-async def list_messages(request: Request, session_id: str, limit: int = 100):
-    """获取会话的所有消息"""
+async def list_messages(request: Request, session_id: str, limit: int = 100,
+        runner_id: Annotated[Optional[str],Query(min_length=1,max_length=128)] = None,
+        before_id: Annotated[str,Query(pattern=r'^(0|[1-9][0-9]{0,18})$')] = '0'):
+    """获取会话消息；持续任务支持有限的最新/更早展示窗口。"""
     from src.api.web_subject import owned_web_session
     session = await asyncio.to_thread(owned_web_session, request.headers.get('Authorization',''),
                             request.headers.get('X-Tenant-Id'), session_id)
-    messages = await asyncio.to_thread(MessageDB.list_by_session, session_id, limit)
     from src.api.message_projection import public_conversation_messages
     from src.services.chat_failed_messages import failed_message_ui
+    if runner_id is not None:
+        before = int(before_id)
+        if not 1<=limit<=100 or before>2**63-1:
+            raise HTTPException(status_code=422,detail='历史分页参数无效')
+        page = await asyncio.to_thread(MessageDB.list_runner_history_page,session_id,runner_id,
+            before_id=before,limit=limit)
+        return {**page,'messages':public_conversation_messages(page['messages']),
+            'failed_message_ui':failed_message_ui(session)}
+    if before_id!='0':
+        raise HTTPException(status_code=422,detail='历史分页需要指定原任务')
+    messages = await asyncio.to_thread(MessageDB.list_by_session, session_id, limit)
     return {"messages": public_conversation_messages(messages), "failed_message_ui": failed_message_ui(session)}
 
 

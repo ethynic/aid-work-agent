@@ -1,6 +1,6 @@
 {
   "name": "@aid/local-tool-host-core",
-  "version": "0.2.19",
+  "version": "0.2.20",
   "private": true,
   "type": "module",
   "engines": {
@@ -29,6 +29,7 @@
     "test": "npm run build && node --test tests/*.test.mjs"
   },
   "dependencies": {
+    "@aid/win32-native-input": "file:../win32-native-input",
     "@modelcontextprotocol/sdk": "1.30.0",
     "canonicalize": "2.1.0",
     "jsonc-parser": "3.3.1",

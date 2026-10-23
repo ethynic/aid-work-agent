@@ -34,8 +34,9 @@ class UserAgentPermissionDB:
 
         conn.commit()
         logger.info(f"User {user_id} agent permissions updated: {len(agent_ids)} agents")
-        # 清除用户数字员工列表缓存
-        delete_cached(CacheKeys.USER_AGENTS, user_id)
+        # 清除用户数字员工列表缓存（key 与 checker.get_allowed_agent_ids_for_user 的
+        # f"{user_id}:{tenant_id}" 对齐，避免授权变更后旧缓存残留 5 分钟）
+        delete_cached(CacheKeys.USER_AGENTS, f"{user_id}:{tenant_id}")
 
     @staticmethod
     def add_permission(conn: Any, user_id: str, tenant_id: str, agent_id: str) -> None:

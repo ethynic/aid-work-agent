@@ -97,3 +97,41 @@ class TestVerifyTokenSuspendedUser:
         })
         result = auth_service.verify_token("tok_orphan")
         assert result == "u_ghost"
+
+
+class TestVerifyQbToken:
+    """_verify_qb_token：qb_token_hash 优先 bcrypt 校验，明文仅作未配置哈希时的兜底"""
+
+    @patch("src.services.auth_service.settings")
+    def test_hash_configured_takes_priority(self, mock_settings):
+        """配置了 qb_token_hash 时走 bcrypt 校验，明文 qb_token 即使匹配也不参与"""
+        from src.db.models import hash_password
+        from src.services import auth_service
+
+        mock_settings.qb_token_hash = hash_password("correct-pass")
+        mock_settings.qb_token = "correct-pass"
+
+        assert auth_service._verify_qb_token("correct-pass") is True
+        assert auth_service._verify_qb_token("wrong-pass") is False
+
+    @patch("src.services.auth_service.settings")
+    def test_plaintext_fallback_without_hash(self, mock_settings):
+        """未配置 qb_token_hash 时回退明文比较"""
+        from src.services import auth_service
+
+        mock_settings.qb_token_hash = ""
+        mock_settings.qb_token = "legacy-token"
+
+        assert auth_service._verify_qb_token("legacy-token") is True
+        assert auth_service._verify_qb_token("other") is False
+
+    @patch("src.services.auth_service.settings")
+    def test_no_config_returns_false(self, mock_settings):
+        """两者都未配置时拒绝（不因空串比较误放行）"""
+        from src.services import auth_service
+
+        mock_settings.qb_token_hash = ""
+        mock_settings.qb_token = ""
+
+        assert auth_service._verify_qb_token("") is False
+        assert auth_service._verify_qb_token("anything") is False

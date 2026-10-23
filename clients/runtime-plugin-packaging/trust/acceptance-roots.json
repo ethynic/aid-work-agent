@@ -62,6 +62,62 @@
       "providers": [
         "ai.aidwork.boss-recruiting"
       ]
+    },
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-boss-0-3-13-20261021-205808",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEApg/n/jpRFVqx+Z13UgFtEc2yD0LBm9rG7D7D29tHIgw=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.boss-recruiting"
+      ]
+    },
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-boss-0-3-14-20261021-211301",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAej23Noz7GmpcD/b0IMuv04rYn8479EuBCTaCvVIeU0s=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.boss-recruiting"
+      ]
+    },
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-boss-0-3-15-20261021-212741",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAKnZPvAfRml3w83iTvix2JmU7sA8MzYppTVwsXkH25cQ=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.boss-recruiting"
+      ]
+    },
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-boss-0-3-16-20261022-114501",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAiYFPAJpt6mJep0kzANhPpmhllyVop10SjKNAv5JXmzY=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.boss-recruiting"
+      ]
+    },
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-boss-0-3-19-20261022-133851",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAYkQh2Ywd+LRrqrNbuwfIAIp/NeDdXCiXlHgiQehWsXw=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.boss-recruiting"
+      ]
+    },
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-boss-0-3-21-20261022-135901",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAG+3BTCyDIobdE1+lpOhCn3cM39RfvX7PZdqz8FnG3Nc=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.boss-recruiting"
+      ]
+    },
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-boss-0-3-22-20261022-180618",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA6JifhryglxWoOYQ9ZIe3GS3ur/6ePXh/9iMVrtmsI54=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.boss-recruiting"
+      ]
     }
   ],
   "profile": "acceptance"

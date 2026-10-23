@@ -93,6 +93,9 @@ export interface BalanceResponse {
   message?: string
 }
 
+/** 7 分项数量 key（与 breakdown_items 的分项 key 一致） */
+export type TokenQtyKey = BreakdownItem['key']
+
 export interface UsageItem {
   date: string
   credit_cost: number
@@ -102,6 +105,8 @@ export interface UsageItem {
   chat_credit_cost?: number
   client_credit_cost?: number
   client_call_count?: number
+  /** 私有云模式：7 分项数量（token/秒/次），公有云不返回 */
+  token_qty?: Partial<Record<TokenQtyKey, number>>
 }
 
 export interface UsageSummary {
@@ -109,6 +114,8 @@ export interface UsageSummary {
   total_session_count: number
   total_message_count: number
   total_client_call_count?: number
+  /** 私有云模式：查询期 7 分项数量汇总 */
+  total_token_qty?: Partial<Record<TokenQtyKey, number>>
 }
 
 export interface UsageResponse {
@@ -264,6 +271,7 @@ export interface DailyUsageDetailItem {
   command?: string
   arguments?: string
   // 以下字段仅平台管理员可见，租户管理员调用时不返回
+  // （私有云部署例外：租户管理员可拿 breakdown_items，但仅数量、无单价/系数/积分）
   prompt_tokens?: number
   cached_input_tokens?: number
   completion_tokens?: number

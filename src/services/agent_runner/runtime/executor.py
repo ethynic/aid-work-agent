@@ -93,8 +93,9 @@ class ModelAdapter:
                 self._message_has_image_references(message) for message in messages):
             messages = self._resolve_image_references(state)
         with execution_call(state.execution_id, call_id):
+            from ..continuous_context import context_prompt
             response = await self.gateway.chat_with_tools(
-                system_prompt=state.system_prompt, messages=messages, tools=tools)
+                system_prompt=state.system_prompt+context_prompt(state), messages=messages, tools=tools)
         response = dict(response)
         response.setdefault("model", self.gateway.get_model_name())
         response.setdefault("provider", self.gateway.get_provider_name())
@@ -163,8 +164,10 @@ class RuntimeExecution:
         self.control = control or CompatibilityControl()
         self.observer = observer or CompatibilityObserver()
         self.visibility = ProfileResolver(resources.subagent_registry, identity.tenant_id)
+        from ..continuous import supported
+        self.supports_sleep = getattr(self.control,'durable_owner',False) and supported(identity.source,identity.session_kind)
         self.catalog = ToolCatalog(resources.mode, resources.tool_registry, resources._tool_controls,
-                                   self.visibility, resources.skill_registry)
+                                   self.visibility, resources.skill_registry, supports_sleep=self.supports_sleep)
         self.skills = SkillSession(identity.tenant_id, resources.skill_registry, resources.memory)
         history_source = identity.source if identity.session_kind == "channel" else "chat"
         self.history = SessionHistory(resources.memory, history_source,
@@ -197,8 +200,11 @@ class RuntimeExecution:
         config = self.resources.subagent_config
         if self.identity.tenant_id and config:
             from src.db.subagent_env_var import SubagentEnvVarDB
+            # 环境变量按父定义名查（副本实例无独立环境变量配置入口）；dir_name 已切为
+            # 实例 id 仅供 extra.md/知识栏目隔离，直接用它查副本会落空
+            env_agent_id = getattr(config, "base_agent_id", None) or config.dir_name
             variables = await asyncio.to_thread(SubagentEnvVarDB.get_vars,
-                                               self.identity.tenant_id, config.dir_name)
+                                               self.identity.tenant_id, env_agent_id)
             env_vars = {item["var_name"]: item.get("var_value", "")
                         for item in variables if item.get("var_name") and item.get("var_value")}
         return ExecutionContextFactory.for_agent_call(
@@ -270,6 +276,28 @@ class RuntimeExecution:
                         reply_workspaces.append(workspace)
             owned_state = self.state
             if getattr(self.control,'durable_owner',False):
+                root_control = self.control
+                while hasattr(root_control,'parent_control'):
+                    root_control = root_control.parent_control
+                if state is None and 'business_round_policy' not in getattr(root_control,'envelope',{}):
+                    config = self.resources.subagent_config
+                    self.state.max_iterations = config.get_max_iterations(default=20) if config else 20
+                policy = getattr(root_control,'envelope',{}).get('continuous')
+                if policy is not None and (not isinstance(policy,dict) or policy.get('version')!=1):
+                    raise ValueError('RECOVERY_CONTINUOUS_VERSION_UNSUPPORTED')
+                from ..continuous import enabled
+                if self.supports_sleep:
+                    identity_version = self.state.resources.get('tool_identity_version')
+                    if ('tool_identity_version' in self.state.resources
+                            and (type(identity_version) is not int or identity_version != 1)):
+                        raise ValueError('RECOVERY_TOOL_IDENTITY_VERSION_UNSUPPORTED')
+                    self.state.resources['durable_sleep_version'] = 1
+                    self.state.resources['tool_identity_version'] = 1
+                if enabled(
+                        getattr(root_control,'envelope',{}), getattr(root_control,'intent',{})):
+                    self.state.resources['continuous_enabled'] = True
+                    self.state.resources.setdefault('business_iterations',self.state.iteration)
+                    self.state.resources.setdefault('continuous_segment_start',self.state.resources['business_iterations'])
                 from ..profiles import MainProfileCatalog
                 from ..runtime_manifest import configuration_fingerprint
                 from ..adapter_contract import (ADAPTER_CONTRACT_VERSION, adapter_contract_mismatch)
@@ -283,7 +311,8 @@ class RuntimeExecution:
                 # on the cancel-acquire path.
                 if state is not None and adapter_contract_mismatch(self.state.resources):
                     raise ValueError('RECOVERY_ADAPTER_VERSION_UNSUPPORTED')
-                _, profile_fingerprint = await asyncio.to_thread(MainProfileCatalog().resolve,self.state.profile_id)
+                _, profile_fingerprint = await asyncio.to_thread(
+                    MainProfileCatalog().resolve,self.state.profile_id,self.state.identity.tenant_id)
                 fingerprint = await asyncio.to_thread(configuration_fingerprint,profile_fingerprint)
                 previous = self.state.resources.get('configuration_fingerprint')
                 if state is not None and previous != fingerprint:
@@ -296,6 +325,12 @@ class RuntimeExecution:
                     from .child_recovery import ChildRecoveryAdapter
                     self.child_recovery = ChildRecoveryAdapter(self,MainProfileCatalog())
                 if state is not None:
+                    if self.state.role.value != 'subagent' and not self.control.command():
+                        # Restored descendants are still checkpoint data here;
+                        # compact before child adapters create live objects.
+                        from ..continuous_lifecycle import before_dispatch
+                        await self.control._authorize_execution(self.state.profile_id)
+                        await before_dispatch(self.control,self.state,quiescent=True)
                     continued = await self.child_recovery.restore_orphaned_children(self.state)
                     if not continued:
                         await self.control.save(self.state,'restored_children')

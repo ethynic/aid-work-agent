@@ -395,6 +395,9 @@ class BossVisualUsageDB:
 
     @staticmethod
     def _check_balance(cursor, tenant_id: str) -> None:
+        # 私有云部署跳过（客户自购 key，无积分概念，余额恒 0 不得阻断）
+        if settings.deployment.private_cloud:
+            return
         cursor.execute("SELECT credit_balance FROM tenants WHERE tenant_id = %s", (tenant_id,))
         tenant = cursor.fetchone()
         if not tenant:

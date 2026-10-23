@@ -33,6 +33,11 @@ import { flagString, parseArgs, hasFlag } from './args.js'
 const USAGE = `aid-wecom — 企业微信操作 CLI / MCP Provider（M1）
 
 操作命令：
+  list-groups [--query <关键词>] [--limit N] [--json]
+                            本地库搜索/列出已同步群（默认100），不操作界面；has_more标注截断
+  read-group --target-name <完整群名> [--limit N] [--from-time <时间>] [--to-time <时间>] [--json]
+                            本地库读取最近N条（默认100），按时间升序；时间区间含两端
+                            时间：YYYY-MM-DD HH:mm:ss（北京时间）或带时区RFC3339
   probe [--verbose] [--json]
                             只读环境探测：平台 / 交互会话 / PowerShell / WXWork.exe 进程 /
                             主窗口解析 / 登录态 / 当前内容页（不激活窗口、不发送输入、不改剪贴板）
@@ -99,6 +104,11 @@ async function main(): Promise<number> {
   const command = args.positional[0]
 
   switch (command) {
+    case 'list-groups':
+    case 'read-group': {
+      const { groupsCommand } = await import('./commands/groups.js')
+      return groupsCommand(args)
+    }
     case 'probe': {
       const { probeCommand } = await import('./commands/probe.js')
       return probeCommand({ verbose: hasFlag(args, 'verbose'), json: hasFlag(args, 'json') })

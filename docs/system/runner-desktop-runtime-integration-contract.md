@@ -2,7 +2,7 @@
 
 > 契约 ID：`AID-RUNNER-DESKTOP-RUNTIME`
 >
-> 版本：`2.2`；日期：2026-10-20
+> 版本：`2.8`；日期：2026-10-22
 >
 > 状态：v2.0按用户逐条复核确定，替代v1.3的插件额外审批语义；候选0.3已有真实Host与Desktop消费验证，Windows隔离验收版已交付，尚未共同登记wire冻结。现有公开API以代码为基线；共享格式见第8.1节，任务binding、授权及资源占用wire仍待主导交付。隔离验收不代表生产发行或真实业务验收通过。
 >
@@ -15,6 +15,8 @@
 > 上位基线：[已完成 AgentRunner 架构](agent-application-architecture-design.md)、[Provider 规范](first-party-cli-mcp-provider-standard.md)
 
 ## 1. 适用范围与约束层级
+
+2026-10-22恢复增量实施检查点（[修复计划](../plans/plan-runner-local-tool-recovery-lockup-fix.md)，开发中）：Device wire、H1/H3及绑定身份不变。唯一写入者：主控维护后端恢复证明/公开投影与本契约；Runtime传输角色维护共享Core及Runtime消费；BOSS恢复角色维护CLI本机恢复。v2 `result-outbox/<id>.json`保持原格式；v1结果使用同一outbox设施的`legacy-v1/`子目录，显式`protocol_version=1`、`endpoint=result`，只补传原payload。旧消费者只扫描根目录，因此忽略并保留v1文件，不得误投operation-result或重执行；新版分别投递原endpoint，ACK前保留。CLI保持OperationResult/error枚举及operation_recovery schema2、visual_recovery schema1；现有诊断字典补充脱敏失败类别/子阶段。browserTargetBinding可增加本机可选业务URL及原profile信息；原profile可由已有可信本机配置或实际浏览器进程参数确认，不强制要求新增managed_profile_dir字段或“曾由本启动器拉起”的磁盘记录。旧记录缺字段但仍可确定原profile时支持自动重开，确实无法确定时准确说明，不猜测陌生profile。只读/可重设页面可重建tab，未知外发不重放；取消/失权禁止重开。当前CLI调用内确定性恢复、Runtime独立续租，不新增本地Agent或后台恢复调度协议；既有release绑定不改，需新版能力则在原会话合法创建新版接续执行。生产/消费与旧格式组合验证按本批影响范围登记，未验收前不宣称兼容通过。此前“只attach”的历史限制在用户明确授权的原profile重开范围内被本条替代；不得杀无关Chrome、清Cookie/profile或偷换账号。
 
 2026-10-20共同检查点：用户授权BOSS视觉恢复直接复用Runtime配对身份，禁止额外URL/ClientBinding token配置。新增设备API`POST /api/local-tools/runtime/boss/visual-diagnose`（复用既有视觉body v1/v2及响应/20倍计费），不改H1/H3/Device配对/claim/permit格式。Host唯一从当前配对配置/DPAPI凭据为受信BOSS进程注入内存字段`AIDWORK_RUNTIME_SERVER`和`AIDWORK_RUNTIME_DEVICE_TOKEN`；不向其他Provider、renderer/IPC、日志或磁盘扩散，不接纳父env覆盖。CLI本地恢复职责保持。旧ClientBinding API不改，历史台账保留；新BOSS只消费新设备入口，旧插件不消费新字段且需升级。唯一写入：本任务主控维护Runtime Host/CLI/Main及版本，backend身份角色维护设备路由/视觉主体与台账；独立角色只读审查/测试。两端计划已同步登记，实施及实际producer/consumer组合测试记录见[BOSS计划23](../plans/desktop-automation/plan-boss-operation-verification-visual-recovery.md#23-runtime配对身份复用纠正2026-10-20)。本版本仅增加该设备API及受信BOSS调用边界，不声称其他共同wire已完成冻结。
 
@@ -29,6 +31,8 @@
 2026-10-09用户复核决议：安装即本机使用授权，安装成功默认enabled=true，运行条件独立决定ready，不另设插件审批或默认逐次弹窗。账号/配对/设备使用关系、目标workspace及既有任务策略继续复用。允许安装分析调用云端模型：先读SKILL.md，信息不足时才补传必要源码；这不是本地任务Agent loop。日期标为v1.3的记录属于历史基线，冲突处以v2.0及第8.1节当前候选0.3为准。
 
 当前实施范围：第一部分Runtime UI、BOSS/weixin/wecom第一方插件安装管理及必要核心/既有执行兼容已交付隔离验收版，人工与正式发行门见统一Runtime计划。第三方skill安装、AI分析、动态登记/执行为第二部分，契约/schema/fixture保留，暂不开发。当前以候选0.3为格式入口，不因文档收敛改变C01～C12、schema或版本；第一部分不能把保留的skill格式展示为已支持能力。公共壳/H2/H3职责保持。
+
+恢复增量兼容细节（2.6）：公开 Runner 投影新增可选 `local_recovery_kind` / `local_recovery_actions`，只展示候选动作，不授予执行权；旧 Web 忽略新增字段，新 Web 遇旧服务端缺字段时沿原入口。后端继续在原受权事务核对恢复/结束能力。续筛领域阶段保存私有 `_resume_history_version=2`，旧缺字段沿 v1 原资格和排除名单证明，不改变已接受 invocation 参数；私有版本不发往 CLI/Device API。CLI 本机 binding 的可选 `restore_pending` 只记录已创建页面尚待登录/职位/筛选恢复，原 ref 和 target 索引同步，旧普通读取不依赖这些新增字段。CLI 内部持久记录不承诺在降级至旧插件后仍能自动恢复新 target；在途调用继续使用原 release，不热换代码。实际组合测试及未验收范围见修复计划第9节。
 
 ## 2. 必须稳定的十二项边界
 
@@ -204,6 +208,35 @@ BOSS 等跨多次 invocation 的连续 GUI 流程若需保持桌面独占，不�
 3. **断网执行必须有可验证的许可边界**。只有协议与本机监管明确支持、且仍在有效许可内的已批准确定性执行才可推进；不得凭缓存授权新领任务、新建写动作许可或无限续租。要求在线复查的动作在断网时不得开始；本机撤权/停止及许可到期按预定停止策略处理，确认不了停止则按上一项阻断。云端撤权在离线设备上不能承诺即时生效，H2必须明确许可期限与失联策略，策略不允许离线继续时不得启用该能力。恢复联网仅核对和补传原事实。
 4. **调用超时、占用期限与流程期限分开**。progress不自动延长执行许可或超时，资源续租也不自动延长脚本运行时间。当前skill默认900秒、硬上限1800秒，不因采用独立Runtime就获得无限时长。超长流程优先由原Runner按受权调用分段推进，跨调用占用不等于跨调用授权；确需扩大单次时限时先冻结监管、取消及兼容规则，不能用重复启动脚本规避限制。
 
+### 5.6 通用持久化休眠增量（2026-10-22）
+
+用户确认由 Agent 主动调用业务工具并自主休眠，到期由云端 Runner 恢复同一任务。候选[设计](agent-runner-durable-sleep-design.md)及[计划](../plans/plan-agent-runner-durable-sleep.md)扩展云端 timer 等待与持续任务，不要求 CLI 主动唤醒，也不在 Runtime 增加模型循环、长期业务调度器或 sleep Device/Host wire。
+
+本条在契约2.7登记实施检查点；公开Runner API保持contract_version=1，候选0.3 Host格式不变。沿原会话、runner行wake_at与checkpoint特性扩展，不强制新会话、timer表或全局schema升级。云端timer不能延长原invocation的timeout/permit/资源独占；休眠与唤醒继续核验原主体、固定设备、任务claim和已有调用事实，unknown写不自动重放。单次调用版本固定规则保持。
+
+实施前由本任务主控登记Runner接单/快照/能力协商/checkpoint的候选版本、唯一写入者和生产/消费fixture；Web/Desktop公共Runner消费与现有两项计划登记影响，Device/Host/Provider无变化则明确记录不受影响。旧worker当前没有新任务隔离领取保证，启用前须验证领取池版本一致；不以旧UI忽略可选字段代替严格解析及恢复兼容验证。此时再按实际差异登记契约版本，本次不宣称已共同验收。
+
+2026-10-22用户反馈候选：普通请求不增加必填模式，仅可选continuous或经原ask_user/reply绑定确认启用；新普通任务默认50业务轮次且成功纯sleep不占数，实际模型调用/费用仍记账。会话显示累计积分，由用户决定任务寿命，不新增任务总预算。多个runner或单任务多目标的本机调用复用既有invocation队列/标准领取loop/桌面锁，CLI互斥不再复制成新队列；本条不扩张wecom受信工具面或宣称5群已验收。
+
+实施共同检查点（生产/消费测试完成后才记为验收）：唯一实现写入方为本Runner功能工作流，休眠开发角色拥有park/恢复/worker，持续任务开发角色拥有模式确认/账本/公开投影，主控拥有Web消费者与契约；同一源码文件修改前交接所有权。
+
+| 接口/格式 | 冻结增量 | 兼容及验证 |
+|---|---|---|
+| 创建与能力 | 可选`execution_mode="continuous"`，普通请求省略；能力`durable_sleep_v1`、`continuous_execution_v1` | 旧省略字段digest不变；缺能力即不支持；默认关闭，新API/worker组合隔离测试后才开放 |
+| 公开视图 | 顶层可选`execution_mode`、脱敏`sleep_blocked.error_code`；`usage={task_credits,session_credits,pending,updated_at}`；snapshot保留实际iteration、新增business_iterations及可选history_version=1 | 白名单显式投影，无私有checkpoint泄露；Web真实producer/consumer fixture验证，旧消费者可查询/取消 |
+| timer leaf | `kind=timer,version=1,seconds,reason,wake_at,wait_id,target_execution_id`，嵌套child_wait沿原树 | resume携带原wait/leaf，服务端消费再次核验；旧无定位客户端可取消，不能盲目继续timer |
+| 分段执行保护 | `kind=continuous_guard`，assistance_id按实际iteration区分本段；同样定位原wait/leaf | 根或child均可显式继续，仅重置所选叶段起点，旧wait不得给新段额度；子执行正常委派回复仍可完成并返回父 |
+| 持久格式 | 原runner行nullable wake_at、checkpoint.durable_sleep.version=1，continuous.version=1 | 同事务park/消费、当前owner fencing；未知版本拒绝，旧任务无字段沿原恢复规则 |
+| Device/Host/Provider | 无新增字段或接口 | 无本地睡眠/模型loop；原claim/permit/release/digest/锁不改 |
+
+回退必须先关闭新能力准入并保留支持版本处理存量，或安全结束新语义任务；旧worker不能与新timer同池，即使paused仍可能被旧cancel-only领取。不得以pause所有任务作为充分回退方案；配置/全局prompt严格指纹不关闭。实际producer/consumer测试与限制统一登记[休眠计划第13节](../plans/plan-agent-runner-durable-sleep.md#13-本轮实施基线与共同检查点)。
+
+2026-10-22整体复审修复检查点（2.8，本地开发验证完成）：唯一修复角色维护云端恢复/工具身份/归档及schema，主控维护本契约和关联设计；独立测试与CR只读。Device/Host wire及API major 1保持。云端私有`tool_identity_version=1`按原持久模型调用区分新工具代次，旧pending及已接受invocation不重命名。历史产物复用chat_messages.metadata已有images/downloadableFiles；不在Runtime新增loop、队列或资源授权。累计BIGINT为数据库内部兼容扩大。公开snapshot新增可选`history_revision`（非负整数，单调历史投影水位，不是event_seq/权限），由原history_offset、artifact_history_offset及archived_child_count导出，同checkpoint重试不变；供客户端在窗口退休后拉取已提交历史。旧客户端忽略，新客户端遇旧服务缺字段保持原行为。Web消费保持每会话一个在途刷新，成功才推进已读取水位，失败允许后续事件重试；generation/认证变化丢弃旧结果，以messageId合并历史而不覆盖瞬态输入。需同时验证公开白名单/事件、TS、真实历史metadata消费者及旧端组合。实际实现/证据与未完成项统一见[休眠计划第17节](../plans/plan-agent-runner-durable-sleep.md#17-复审修复与验证2026-10-22)；本地Runner/Web生产消费、独立测试和CR已通过，未提交、部署或宣称真机/多天验收。
+
+2.8的历史窗口读取面（本地Runner/Web验证完成，未部署）：复用`GET /api/sessions/{session_id}/messages`，无runner_id时沿原接口/缓存；有runner_id（≤128字符）时为原session授权下的归档窗口读取。可选before_id为默认"0"的十进制非负ID字符串（严格格式且≤INT64_MAX），0取最新页、正数取id更小的更早页，limit限定1～100。按session及runner共同过滤并直接PG读取，SQL先排不可展示tool声明，再倒序取limit+1、正序返回；涵盖control:user和child产物。响应沿原messages/failed_message_ui并加has_more:boolean（有更早展示行）、next_cursor:string（本页最早ID，空页沿输入before/0）。参数不授予执行或跨会话读取权。
+
+Web自动刷新只更新最近100条归档展示窗口，不将全部历史回填浏览器；更早记录按页替换、返回最新重取。浏览旧页时live只更新当前Runner状态，不能冲走窗口；当前任务投影、乐观输入及停止控制保留，当前assistant按稳定投影ID定位。history_revision仅表示最新窗口更新水位，成功请求后才推进，失败保持当前窗口并可重试，不声称全历史已加载。旧客户端忽略新字段，新客户端遇旧服务缺字段沿原行为；默认接口/原历史缓存不改变。复用原MessageList/BaseButton及默认兼容followLatest，不新增历史中心、页面、模型loop或执行权限。已本地验证长期浏览器状态有界、当前输出/输入保留、旧页/最新切换、加载失败/并发与认证隔离、键盘/窄屏及真实历史metadata消费者，证据统一见休眠计划第17节；Desktop及真机Runtime组合不在本轮验收范围。
+
 ## 6. 产品生命周期差异由壳配置处理
 
 完整 Desktop 首期保持关闭最后窗口退出；独立 Runtime产品形态关窗口收至托盘。该区别是壳配置，不是两个 Runtime core。
@@ -324,3 +357,30 @@ H3可选automaticConnection只由新版独立Runtime preload开启。Device `/ru
 | 2026-10-08 | 1.3 定稿审阅 | Desktop工作流接受Runtime补充，无新增架构要求；明确架构定稿与wire冻结分开登记 | 本批Desktop仅修改共同契约、双方设计/计划的定稿状态与交接、桌面索引；版本不变，无schema/代码修改，接口及真实兼容验收待实施 |
 | 2026-10-09 | 2.0 用户复核 | 用户逐条确认C01～C12及schema；取消插件额外审批，允许手册优先/必要源码的云端AI分析，统一数字code/error，候选0.2替代0.1 | Runtime唯一写入；用户产品规则确定，Desktop重新消费/真实接线与wire冻结待完成；不改变已上线Device协议 |
 | 2026-10-09 | 2.0 / wire候选0.3 | 开发前七项实施决议，列表实例/revision包装与可选真实version；旧数组显式迁移 | Runtime唯一维护共享格式，独立测试/CR证据见Runtime计划第8节；Desktop须重新消费，真实接线与wire冻结未完成 |
+
+### 2026-10-20 复审历史：恢复观察v1（2.3，未发行实现已纠正）
+
+2.3曾将纯页面观察前置为scope登记后Windows重启，且Python/sessionTasks配置会禁用整个观察能力。复审确认这是过度门禁，相关新增见证和默认producer已删除；此前隔离测试只证明旧实现按当时规则运行，不能证明设计合理，也不能作为2.4修正验收。原已接受v1 invocation结果接纳保留兼容；后续请求统一按下方2.4。Phase9精确未决集合、缺指纹不连坐其他电脑、新意图不受历史登录错误限制等修正保留。
+
+### 2026-10-20 复审纠正：观察与停止独立（2.4，四项修正已验证）
+
+本记录优先于上方2.3未发行实现。唯一代码及文档写入者为恢复修复开发智能体，主控及独立测试/CR只读核对。Device claim/permit与H1/H3不变；Host观察请求/结果升级version=2、能力runtime_recovery_observe_v2，旧v1不能消费v2请求；旧回执没有代次时明确停稳未知，不推定已停止。
+
+- 删除新增scope重启见证；纯CDP页面观察不前置Windows重启、Runtime重启或停稳证明，不因Python/sessionTasks配置禁用。
+- resource_stopped与page_observed各自独立；纯观察成功不改变原业务unknown，不自动放行未知写动作。原认证迟到回执继续按已有完成判定解除自身hold。2.4未新增停稳producer，当时无回执历史hold未闭环；此阶段限制已由下方2.5设备受管边界停止路径替代。不能把新空home或页面可读当成旧执行已停。
+- page_summary增加有限页面事实与match/mismatch/unknown，复用既有导航路径、可见筛选徽章及面板判定；不能核对完整原条件时保留unknown，不从计数相同推出选项相同。
+- GET仅查询实际未决回执并投影入口，不修改冻结集合或审计历史；迟到明确回执与设备准入使用同一完成判定。
+- 本轮四项修正已通过独立测试与CodeReview；实际范围、历史停止关联缺口及验证登记在BOSS恢复计划Phase10，不宣称资源恢复全部完成。旧v1测试不能作为本次修正通过证据。
+
+
+### 2026-10-20 显式停止原设备受管资源（2.5，已完成开发）
+
+本批唯一写入者为恢复开发智能体；主控、独立测试与CR只读。Web/内部verify-local请求可选stop_resources:boolean（默认false保留v2纯读），显式true派发version=3，独立能力runtime_recovery_stop_v1；Device claim/permit和H1/H3不变。原请求版本、模式、设备、scope及ID集合冻结于business_ref，结果仅核销本次集合，不改变原业务unknown或重放未知发送。
+
+- 显式动作停止本Runtime/home启动的旧工具进程及旧孤儿Job，可能同时关闭由Runtime启动的浏览器；不停止其他设备或当前真实活动任务。服务端在同设备/同机实际claimed/running时拒绝；Host同桌面锁下暂停Provider新建，拒绝真实busy，关闭空闲Provider，复用原生terminate/probe逐一确认既有DPAPI Job为0，finally仅恢复临时fence，不重开永久停用的admission。Provider握手中的transport也纳入回收，原manager引用不得复活。
+- 原设备配对身份、home独占lease与既有受保护Job账本构成设备级执行边界，不要求旧invocation逐一有generation；存量unknown/result_json=NULL可据此解除自身hold，原业务结果仍unknown。
+- 既有私有DPAPI ledger添加可选business_started:boolean。新marker=false；受权普通BOSS Provider调度才置true，每代持久化一次，失败不保留内存成功标记；runtime_recovery_observe/boss_recovery_probe永不置true；旧无字段监督记录兼容。停止须有可信业务覆盖及非空受管Job集合，新空home先纯读产生的probe-only记录（包括重开Runtime后）不能自造历史停止证明。严格读取者同时兼容此可选字段，旧客户端需升级，不新增账本。
+- 真正活跃的未受管旧实例与系统进程检查不可用分别报告。空Jobs的旧登录session不阻断；非空旧session以既有DPAPI原生停止回执核对，或核实该旧session已无进程后确认边界消失，不能仅凭当前session查不到Job放行。不凭空home、busy=false、截图或用户声明签发证明，不将重启Windows作为常规门。纯读v2始终独立可用，Python/sessionTasks配置不整体禁用。
+- 版本3停止证明绑定scope/device/原ID集合/runtime_generation，证据为supervised_device_boundary、resource_scope=managed_provider_pool；消费仅限原BOSS调用，不用于未受管skill-runner/Python。页面是否观察/匹配单列，目标冲突或损坏标记page_target_unavailable，跳过页面观察，仍可提交真实stop proof；不静默换页。仅精确当前版本3显式scope可解自身资源hold。
+- 版本3领取及started同时核验当前冻结scope与数据库时钟截止；过期或被新请求替代的queued stop永不执行物理回收，也不能阻塞新scope领取。迟到回执可保留历史，仅当前精确scope可改变hold。普通业务180秒与v2观察兼容语义不变。
+- 冻结源码通过独立120项（native15、PG27、frontend78）及宽窄屏UI，CR无未解决P0/P1/P2。实际native Job dummy→Host→result API/PG→新意图create/claim/start已验证；跨端夹具的Runner终态不是新增真实Worker结算，不操作真实业务或重启用户系统。唯一进度与结果见BOSS恢复计划Phase10；未部署。

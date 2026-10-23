@@ -14,6 +14,8 @@ from src.services.tenant_api_doc import (
     list_doc_subagent_names,
     list_sso_candidate_subagent_names,
     resolve_doc_text,
+    resolve_base_agent_id,
+    load_tenant_env_vars,
     render_doc_placeholders,
     find_unresolved_placeholders,
     db_tenant_id,
@@ -260,6 +262,29 @@ def _patch_env_db(vars_by_name):
     return patch("src.db.subagent_env_var.SubagentEnvVarDB", mock_db)
 
 
+def _patch_instance_db(row):
+    """patch TenantAgentInstanceDB：get 返回给定实例行（None = 无实例）"""
+    mock_db = MagicMock()
+    mock_db.get.return_value = row
+    return patch("src.db.tenant_agent_instance_db.TenantAgentInstanceDB", mock_db)
+
+
+_REPLICA_ROW = {
+    "agent_id": "sales-assistant-tenant-e9b2fab93a2f-1upa",
+    "base_agent_id": "sales-assistant",
+}
+_DIRECT_ROW = {"agent_id": "sales-assistant", "base_agent_id": "sales-assistant"}
+
+
+@pytest.fixture(autouse=True)
+def _no_replica_instance():
+    """默认无副本实例行（resolve_base_agent_id 原样返回），副本用例内自行覆盖"""
+    p = _patch_instance_db(None)
+    p.start()
+    yield
+    p.stop()
+
+
 class TestResolveDocText:
     def test_tenant_doc_takes_priority(self):
         """租户上传的文档优先，不查技能模板"""
@@ -284,6 +309,48 @@ class TestResolveDocText:
         with patch.object(tenant_api_doc, "load_tenant_doc", return_value=None), \
              patch.object(tenant_api_doc, "_subagent_allowed_skills", return_value=[]):
             assert resolve_doc_text("tenant_x", "pre-sales") is None
+
+    def test_replica_resolves_parent_doc_and_skills(self, template_dir):
+        """副本实例无独立文档与技能配置，文档与技能白名单均按父定义解析"""
+        replica = "sales-assistant-tenant-e9b2fab93a2f-1upa"
+        with _patch_instance_db(_REPLICA_ROW), \
+             patch.object(tenant_api_doc, "load_tenant_doc", return_value=None) as m_load, \
+             patch.object(tenant_api_doc, "_subagent_allowed_skills",
+                          return_value=["pre-sales-api"]) as m_skills:
+            assert resolve_doc_text("tenant_x", replica) == _TEMPLATE
+        m_load.assert_called_once_with("tenant_x", "sales-assistant")
+        m_skills.assert_called_once_with("sales-assistant")
+
+
+class TestResolveBaseAgentId:
+    def test_replica_resolves_to_base(self):
+        with _patch_instance_db(_REPLICA_ROW):
+            assert resolve_base_agent_id(
+                "tenant_x", "sales-assistant-tenant-e9b2fab93a2f-1upa"
+            ) == "sales-assistant"
+
+    def test_tenant_id_prefix_normalized_for_lookup(self):
+        with _patch_instance_db(_REPLICA_ROW) as mock_db:
+            resolve_base_agent_id("e9b2fab93a2f", "sales-assistant-tenant-x-1upa")
+        assert mock_db.get.call_args[0] == ("tenant_e9b2fab93a2f", "sales-assistant-tenant-x-1upa")
+
+    def test_direct_instance_unchanged(self):
+        with _patch_instance_db(_DIRECT_ROW):
+            assert resolve_base_agent_id("tenant_x", "sales-assistant") == "sales-assistant"
+
+    def test_unknown_agent_unchanged(self):
+        with _patch_instance_db(None):
+            assert resolve_base_agent_id("tenant_x", "pre-sales") == "pre-sales"
+
+    def test_db_error_unchanged(self):
+        mock_db = MagicMock()
+        mock_db.get.side_effect = RuntimeError("db down")
+        with patch("src.db.tenant_agent_instance_db.TenantAgentInstanceDB", mock_db):
+            assert resolve_base_agent_id("tenant_x", "pre-sales") == "pre-sales"
+
+    def test_empty_inputs_unchanged(self):
+        assert resolve_base_agent_id("", "pre-sales") == "pre-sales"
+        assert resolve_base_agent_id("tenant_x", "") == ""
 
 
 class TestSubagentAllowedSkills:
@@ -364,6 +431,17 @@ class TestRenderDocPlaceholders:
     def test_plain_doc_untouched(self):
         doc = "# 普通文档，无占位符"
         assert render_doc_placeholders(doc, "tenant_x", "pre-sales") == doc
+
+    def test_replica_env_vars_lookup_uses_base_name(self):
+        """副本实例环境变量按父定义名精确查（副本无独立环境变量配置入口）"""
+        mock_db = MagicMock()
+        mock_db.get_vars.return_value = [{"var_name": "APP_ID", "var_value": "10607"}]
+        mock_db.get_all_vars_for_tenant.return_value = []
+        with _patch_instance_db(_REPLICA_ROW), \
+             patch("src.db.subagent_env_var.SubagentEnvVarDB", mock_db):
+            env = load_tenant_env_vars("tenant_x", "sales-assistant-tenant-e9b2fab93a2f-1upa")
+        assert mock_db.get_vars.call_args[0] == ("tenant_x", "sales-assistant")
+        assert env == {"APP_ID": "10607"}
 
     def test_unprefixed_tenant_id_normalized_for_env_db(self):
         """回归：skill 脚本剥离 `tenant_` 前缀后传入，DB 查询须补齐前缀

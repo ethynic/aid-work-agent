@@ -50,6 +50,7 @@ export function historyMessages(records: ChatMessageRecord[]): ChatMessage[] {
       const meta = row.metadata || {}
       const timestamp = time(row.role === 'user' ? meta.accepted_at || meta.sent_at || row.created_at : row.created_at, Date.now())
       return { role: row.role as ChatMessage['role'], content: row.content, timestamp, messageId: row.message_id,
+        runnerHistory: true,
         runnerId: meta.runner_id, queueOrder: meta.runner_queue_order,
         ...presentation(meta, timestamp), attachments: meta.attachments, images: meta.images,
         cancelled: meta.cancelled === true }
@@ -129,7 +130,7 @@ export function runnerMessages(row: RunnerView): ChatMessage[] {
     const input = [...messages].reverse().find(message => message.role === 'user')
     if (input) input.runnerFailure = { message: '服务暂时不可用，请稍后重试。' }
   }
-  const assistant: ChatMessage = { ...common, role: 'assistant', messageId: row.runner_id + ':assistant',
+  const assistant: ChatMessage = { ...common, role: 'assistant', messageId: row.runner_id + (row.execution_mode === 'continuous' || snapshot.history_version === 1 ? ':final' : ':assistant'),
       content: row.result?.output ?? snapshot.output ?? '', timestamp: finished,
       ...details, images, cancelled: row.status === 'cancelled',
       runnerActive: !['completed', 'failed', 'cancelled'].includes(row.status) }
@@ -179,11 +180,20 @@ export function mergeRunnerMessages(history: ChatMessage[], rows: RunnerView[]):
       // History's physical message ID stays authoritative after finalization.
       for (const message of projected) {
         const persisted = group.messages.find(item => item.messageId===message.messageId)
-          || (message.messageId===row.runner_id+':assistant'
+          || (row.execution_mode !== 'continuous' && row.snapshot.history_version !== 1 && message.messageId===row.runner_id+':assistant'
             ? [...group.messages].reverse().find(item => item.role==='assistant' && !item.messageId?.startsWith('wait_')) : undefined)
-        if (persisted?.messageId && !persisted.messageId.startsWith('request:')) message.messageId = persisted.messageId
+        if (persisted?.messageId && !persisted.messageId.startsWith('request:')) {
+          message.messageId = persisted.messageId
+          if (persisted.runnerHistory) message.runnerHistory = true
+        }
       }
-      group.messages = projected; group.id = row.runner_id; group.order = row.queue_order
+      // Continuous checkpoints retain a recent window; closed messages remain
+      // authoritative in chat history and must survive each snapshot refresh.
+      const archived = group.messages.filter(message =>
+        (message.messageId?.startsWith(row.runner_id + ':history:')
+          || message.runnerHistory && message.role === 'user' && message.messageId?.startsWith('control_'))
+        && !projected.some(item => item.messageId === message.messageId))
+      group.messages = [projected[0]!, ...archived, ...projected.slice(1)]; group.id = row.runner_id; group.order = row.queue_order
     } else {
       group = { id: row.runner_id, order: row.queue_order, messages: projected }
       const before = groups.findIndex(item => item.order !== undefined && item.order > row.queue_order)

@@ -8,6 +8,8 @@
 import { CdpSocket } from './CdpSocket.js'
 import type { CdpEvent } from './CdpSocket.js'
 import type { AuditWriter } from './audit.js'
+import { browserInstanceId } from '../chrome/ChromeLauncher.js'
+import { CdpTargetUnavailableError, CdpConnectionError } from './errors.js'
 
 export interface CdpTargetInfo {
   targetId: string
@@ -44,6 +46,8 @@ export class CdpGateway {
   private readonly fetchImpl: typeof fetch
   private pageSessionId?: string
   private pageTargetId?: string
+  private browserInstance?: string
+  private readonly timeoutMs: number
 
   constructor(opts: GatewayOptions = {}) {
     this.socket = new CdpSocket({
@@ -52,21 +56,45 @@ export class CdpGateway {
       socketFactory: opts.socketFactory,
     })
     this.fetchImpl = opts.fetchImpl ?? fetch
+    this.timeoutMs = opts.timeoutMs ?? 10000
   }
 
   /** 连接到 browser-level CDP。httpEndpoint 形如 http://127.0.0.1:9222 */
-  async connect(httpEndpoint: string): Promise<void> {
-    const version = await this.fetchImpl(`${httpEndpoint}/json/version`).then((r) => r.json()) as {
+  async connect(httpEndpoint: string, signal?: AbortSignal): Promise<void> {
+    const localSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(this.timeoutMs)]) : AbortSignal.timeout(this.timeoutMs)
+    const version = await this.fetchImpl(`${httpEndpoint}/json/version`, { signal: localSignal }).then((r) => {
+      if (r.ok === false) throw new Error('CDP version endpoint unavailable')
+      return r.json()
+    }).catch(() => { throw new CdpConnectionError('CDP version endpoint unavailable or timed out') }) as {
       webSocketDebuggerUrl: string
     }
     if (!version.webSocketDebuggerUrl) {
       throw new Error('CDP /json/version missing webSocketDebuggerUrl')
     }
-    await this.socket.connect(version.webSocketDebuggerUrl)
+    this.browserInstance = browserInstanceId(version.webSocketDebuggerUrl)
+    await this.socket.connect(version.webSocketDebuggerUrl, signal)
   }
 
   get isConnected(): boolean {
     return this.socket.isConnected
+  }
+
+  getBrowserInstanceId(): string | undefined { return this.browserInstance }
+
+  /** DevTools HTTP creates only a known BOSS business entry, without script injection. */
+  async createBossPage(httpEndpoint: string, url: string): Promise<AttachResult> {
+    const targetUrl = new URL(url)
+    if (targetUrl.origin !== 'https://www.zhipin.com' || !['/web/chat/recommend', '/web/chat/index'].includes(targetUrl.pathname)
+      || targetUrl.search || targetUrl.hash) throw new CdpTargetUnavailableError('Unsupported BOSS recovery entry')
+    const result = await this.fetchImpl(`${httpEndpoint}/json/new?${encodeURIComponent(targetUrl.href)}`, {
+      method: 'PUT', signal: AbortSignal.timeout(10000),
+    })
+    if (!result.ok) throw new CdpTargetUnavailableError('BOSS recovery page creation failed')
+    const target = await result.json() as { id?: string }
+    if (typeof target.id !== 'string' || !target.id) throw new CdpTargetUnavailableError('BOSS recovery page has no target')
+    // The target was just created at the allowlisted entry. Attach even if it
+    // redirects to login, so the recovery owner can report that actual state.
+    return this.attachToTarget(target.id)
   }
 
   /** 列出所有 target */
@@ -94,14 +122,16 @@ export class CdpGateway {
   }
 
   /** Recovery refs never fall back to a different tab, even if several BOSS URLs match. */
-  async attachToBoundBossTarget(targetId: string): Promise<AttachResult> {
+  async attachToBoundBossTarget(targetId: string, allowLogin = false): Promise<AttachResult> {
     const target = (await this.getTargets()).find(t => t.targetId === targetId)
     let legal = false
     try {
       const url = new URL(target?.url ?? '')
-      legal = target?.type === 'page' && url.protocol === 'https:' && ['www.zhipin.com', 'zhipin.com'].includes(url.hostname) && !url.port && !url.username && !url.password
+      legal = target?.type === 'page' && url.protocol === 'https:'
+        && (['www.zhipin.com', 'zhipin.com'].includes(url.hostname) || allowLogin && url.hostname === 'passport.zhipin.com')
+        && !url.port && !url.username && !url.password
     } catch { /* Refuse a closed/replaced/non-BOSS target. */ }
-    if (!legal) throw new Error('BOUND_BOSS_TARGET_UNAVAILABLE')
+    if (!legal) throw new CdpTargetUnavailableError()
     return this.attachToTarget(targetId)
   }
 

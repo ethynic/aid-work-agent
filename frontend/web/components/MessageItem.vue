@@ -79,65 +79,7 @@
         <span class="text-xs text-muted verbose-hint" aria-live="polite">{{ liveHintText }}</span>
       </div>
 
-      <!-- before_text 图片：文本上方（Phase 2 P2.7） -->
-      <ImageGallery
-        v-if="!showInputHint && beforeTextImages.length"
-        :images="beforeTextImages"
-      />
-
-      <!-- 用户取消标记：被中止的轮次正文可能为空，用标记代替空气泡 -->
-      <div v-if="isCancelledRound" class="mb-1">
-        <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-warning-100 text-warning-700">
-          用户已取消本轮回复
-        </span>
-      </div>
-
-      <div
-        v-if="!showInputHint && (props.message.content || !isCancelledRound)"
-        class="text-gray-700 leading-relaxed markdown-content prose-sm md:prose-base prose-slate max-w-none"
-        v-html="renderedContent"
-      ></div>
-
-      <p v-if="message.waitingNotice" class="mt-2 text-sm text-muted" role="status">
-        {{ message.waitingNotice }}
-      </p>
-
-      <!-- after_text 图片：文本下方（默认位置，Phase 2 P2.7） -->
-      <ImageGallery
-        v-if="!showInputHint && afterTextImages.length"
-        :images="afterTextImages"
-      />
-
-      <!-- inline 图片：Phase 2 仍按 after_text 渲染（精确行内留 Phase 3） -->
-      <ImageGallery
-        v-if="!showInputHint && inlineImages.length"
-        :images="inlineImages"
-      />
-
-      <!-- 附件标签 -->
-      <div v-if="displayAttachments.length > 0 || legacyAttachments.length > 0" class="mt-2 flex flex-wrap gap-2">
-        <AttachmentChip
-          v-for="att in displayAttachments"
-          :key="att.file_id"
-          :attachment="att"
-          @preview="handlePreview(att)"
-        />
-        <AttachmentChip
-          v-for="(att, idx) in legacyAttachments"
-          :key="'legacy-' + idx"
-          :attachment="att"
-          :clickable="false"
-        />
-      </div>
-
-      <!-- 下载文件卡片 -->
-      <div v-if="downloadableFiles.length > 0" class="mt-3 flex flex-wrap gap-2">
-        <DownloadFileCard
-          v-for="file in downloadableFiles"
-          :key="file.file_id"
-          :file="file"
-        />
-      </div>
+      <ReplyContent v-if="!showInputHint" :message="message" :is-processing="isProcessing" />
 
       <HumanAssistanceCard
         v-if="message.browserAssistance"
@@ -226,19 +168,29 @@
         </div>
       </div>
     </div>
-    <!-- 时间戳 - AI消息左下 -->
-    <div v-if="formattedTime && !showInputHint" class="text-xs text-muted mt-1 ml-2">
-      {{ formattedTime }}
+    <div v-if="!showInputHint && (formattedTime || canShare)" class="ml-2 mt-1 flex min-h-7 items-center gap-2 text-xs text-muted">
+      <span v-if="formattedTime" class="tabular-nums">{{ formattedTime }}</span>
+      <span v-if="formattedTime && canShare" aria-hidden="true" class="text-gray-300">·</span>
+      <BaseButton v-if="canShare" type="button" intent="ghost" size="sm"
+        class="!h-7 !px-1.5 !text-xs !font-normal text-muted focus:!ring-0 focus-visible:!ring-2 focus-visible:!ring-primary-500/40"
+        aria-label="复制分享链接" title="复制分享链接" @click="showShareDialog = true">
+        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M10 13a5 5 0 0 0 7.1 0l3-3a5 5 0 0 0-7.1-7.1l-1.7 1.7m2.7 6.4a5 5 0 0 0-7.1 0l-3 3a5 5 0 0 0 7.1 7.1l1.7-1.7" />
+        </svg>
+        分享
+      </BaseButton>
     </div>
+    <MessageShareDialog v-if="showShareDialog && sessionId && message.messageId"
+      :session-id="sessionId" :message-id="shareMessageId" @close="showShareDialog = false" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import type { ChatMessage, AttachmentInfo, DownloadableFile, InputHintState, ProgressMessage, QuickOption } from '@/types'
+import { ref, computed, defineAsyncComponent } from 'vue'
+import type { ChatMessage, AttachmentInfo, InputHintState, ProgressMessage, QuickOption } from '@/types'
 import AttachmentChip from './AttachmentChip.vue'
-import DownloadFileCard from './DownloadFileCard.vue'
-import ImageGallery from './ui/ImageGallery.vue'
+import ReplyContent from './chat/ReplyContent.vue'
+import { getRuntime } from '@/platform/runtime'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 import { renderMarkdown } from '@/utils/markdown'
 import { useDebugMode } from '@/composables/useDebugMode'
@@ -331,16 +283,19 @@ function retryFailure() {
   retry?.()
 }
 
-// 用户取消的轮次（历史加载）：assistant metadata.cancelled，渲染明确标记避免误解
-const isCancelledRound = computed(() => {
-  return props.message.role === 'assistant' && props.message.cancelled === true
-})
-
 // verbose 中间提示（Phase 2，设计 §8.2）：assistant 正文为空且处理中时，
 // 用当前会话的 live verbose 文案替换「对方正在输入中...」占位（同一占位区，
 // 不新增聊天气泡）；response 开始后 showInputHint 变 false 自动隐藏。
 // 历史 metadata 中的 verboseMessages 不在此展示（默认不在已完成消息下展开）。
-const { liveVerbose } = useAgent()
+const { liveVerbose, sessionId } = useAgent()
+const MessageShareDialog = defineAsyncComponent(() => import('./chat/MessageShareDialog.vue'))
+const showShareDialog = ref(false)
+// Runner projections can reuse an intermediate history ID; share the final view shown here.
+const shareMessageId = computed(() => props.message.messageId?.endsWith(':final') ? props.message.messageId : props.message.runnerId && props.message.runnerActive !== undefined
+  ? props.message.runnerId + ':assistant' : props.message.messageId!)
+const canShare = computed(() => getRuntime().target === 'web' && !!sessionId?.value && !!props.message.messageId
+  && !props.isProcessing && !props.message.runnerActive && !props.message.questionCard
+  && !!(props.message.content.trim() || props.message.images?.length || props.message.attachments?.length || props.message.downloadableFiles?.length))
 const liveHintText = computed(() => liveVerbose.value?.data || '对方正在输入中...')
 
 const hasProgress = computed(() => {
@@ -426,31 +381,9 @@ const displayContent = computed(() => {
   return content
 })
 
-const downloadableFiles = computed<DownloadableFile[]>(() => {
-  // 与「正在输入中」用同一套判断逻辑：
-  // 仅当消息不在处理中，或 response 已开始流式（content 非空）时才展示下载卡片
-  // 避免工具执行阶段提前展示中间产物
-  const files = props.message.downloadableFiles || []
-  if (files.length === 0) return []
-  const hasResponse = displayContent.value.trim().length > 0
-  return (!props.isProcessing || hasResponse) ? files : []
-})
-
 const renderedContent = computed(() => {
   return renderMarkdown(displayContent.value)
 })
-
-// Phase 2 P2.7：按 placement 分组图片
-// 历史消息兼容：旧消息无 placement 字段时按 after_text 处理（默认值）
-const beforeTextImages = computed(() =>
-  (props.message.images || []).filter(img => img.placement === 'before_text')
-)
-const afterTextImages = computed(() =>
-  (props.message.images || []).filter(img => !img.placement || img.placement === 'after_text')
-)
-const inlineImages = computed(() =>
-  (props.message.images || []).filter(img => img.placement === 'inline')
-)
 
 const formattedTime = computed<string | null>(() => {
   if (!props.message.timestamp) return null

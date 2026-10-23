@@ -91,23 +91,23 @@ CREATE TABLE IF NOT EXISTS chat_records (
     user_id TEXT,
     user_message TEXT,
     assistant_message TEXT,
-    total_token_count INTEGER DEFAULT 0,
-    prompt_tokens INTEGER DEFAULT 0,
-    completion_tokens INTEGER DEFAULT 0,
-    cached_input_tokens INTEGER DEFAULT 0,
+    total_token_count BIGINT DEFAULT 0,
+    prompt_tokens BIGINT DEFAULT 0,
+    completion_tokens BIGINT DEFAULT 0,
+    cached_input_tokens BIGINT DEFAULT 0,
     model TEXT,
     provider TEXT,
     execution_details TEXT,
-    agent_iterations INTEGER DEFAULT 0,
+    agent_iterations BIGINT DEFAULT 0,
     subagent_calls TEXT,
     status TEXT DEFAULT 'completed',
     error_message TEXT,
-    duration_ms INTEGER DEFAULT 0,
+    duration_ms BIGINT DEFAULT 0,
     source_type TEXT DEFAULT 'chat',
     credit_cost NUMERIC(12,2) NOT NULL DEFAULT 0.00,
     -- LLM 计费接入改造（2026-08-12）：embedding/ASR/视频提示词 等扩展计费维度
-    embedding_tokens INTEGER DEFAULT 0,   -- 累加该轮交互中所有 embedding 调用的 input token
-    asr_calls INTEGER DEFAULT 0,          -- 累加该轮交互中所有 ASR 调用次数（阿里云 NLS 按次计费）
+    embedding_tokens BIGINT DEFAULT 0,   -- 累加该轮交互中所有 embedding 调用的 input token
+    asr_calls BIGINT DEFAULT 0,          -- 累加该轮交互中所有 ASR 调用次数（阿里云 NLS 按次计费）
     usage_breakdown JSONB,                -- 详细分项明细 JSON（chat/embedding/asr/vision 各自 token 与 credit）
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -160,6 +160,7 @@ CREATE INDEX IF NOT EXISTS idx_channel_messages_session ON channel_messages(sess
 -- v3.2.1 P2-1：chat_messages 表同样需要 (session_id, created_at) 索引，
 -- 供 MessageDB.count_messages_by_session（压缩阈值快路径）走索引扫描
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created ON chat_messages(session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id ON chat_messages(session_id, id);
 
 -- 会话内上下文压缩摘要表（mid-term memory）
 -- 每次压缩产生一行，旧的 summary 置为 superseded，永不删除
@@ -590,6 +591,69 @@ DROP TRIGGER IF EXISTS chunks_text_vec_trigger ON chunks;
 CREATE TRIGGER chunks_text_vec_trigger
 BEFORE INSERT OR UPDATE ON chunks
 FOR EACH ROW EXECUTE FUNCTION chunks_text_vec_update();
+
+-- 腾讯文档知识库导入：凭据绑定表（开发期个人 Token，预留 OAuth refresh_token）
+CREATE TABLE IF NOT EXISTS tdoc_credentials (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    access_token_enc TEXT NOT NULL,
+    refresh_token_enc TEXT,
+    open_id TEXT NOT NULL,
+    status TEXT DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, user_id)
+);
+
+-- 腾讯文档导入批次表
+CREATE TABLE IF NOT EXISTS tdoc_import_batches (
+    batch_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    status TEXT DEFAULT 'queued',
+    total_count INT DEFAULT 0,
+    success_count INT DEFAULT 0,
+    fail_count INT DEFAULT 0,
+    skip_count INT DEFAULT 0,
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_tdoc_batches_tenant ON tdoc_import_batches(tenant_id, created_at);
+
+-- 腾讯文档导入批次项表（每篇文档一行）
+CREATE TABLE IF NOT EXISTS tdoc_import_items (
+    id BIGSERIAL PRIMARY KEY,
+    batch_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    tdoc_file_id TEXT NOT NULL,
+    title TEXT,
+    doc_type TEXT,
+    status TEXT DEFAULT 'pending',
+    last_modify_time BIGINT,
+    document_id BIGINT,
+    error_message TEXT,
+    retry_count INT DEFAULT 0,
+    next_retry_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_tdoc_items_batch ON tdoc_import_items(batch_id);
+CREATE INDEX IF NOT EXISTS idx_tdoc_items_due ON tdoc_import_items(status, next_retry_at);
+
+-- 腾讯文档导入映射表（覆盖更新/跳过判断依据）
+CREATE TABLE IF NOT EXISTS tdoc_imported_docs (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    tdoc_file_id TEXT NOT NULL,
+    document_id BIGINT NOT NULL,
+    title TEXT,
+    last_modify_time BIGINT,
+    imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, tdoc_file_id)
+);
 
 -- 用户邮箱配置表
 CREATE TABLE IF NOT EXISTS user_email_settings (
@@ -3042,6 +3106,7 @@ CREATE TABLE IF NOT EXISTS agent_runners (
     attempt INTEGER NOT NULL DEFAULT 0,
     worker_id TEXT,
     lease_until TIMESTAMPTZ,
+    wake_at TIMESTAMPTZ,
     revision BIGINT NOT NULL DEFAULT 0,
     view_revision BIGINT NOT NULL DEFAULT 0,
     control_revision BIGINT NOT NULL DEFAULT 0,
@@ -3060,6 +3125,8 @@ CREATE TABLE IF NOT EXISTS agent_runners (
 CREATE INDEX IF NOT EXISTS idx_agent_runners_queue ON agent_runners(status,queue_order);
 CREATE INDEX IF NOT EXISTS idx_agent_runners_session ON agent_runners(scope_key,session_kind,session_id,queue_order);
 CREATE INDEX IF NOT EXISTS idx_agent_runners_lease ON agent_runners(lease_until) WHERE status IN ('running','finalizing');
+CREATE INDEX IF NOT EXISTS idx_agent_runners_wake ON agent_runners(wake_at,runner_id)
+    WHERE status='waiting' AND wake_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS agent_runner_session_claims (
     scope_key TEXT NOT NULL,
@@ -5589,3 +5656,15 @@ CREATE TABLE IF NOT EXISTS tenant_agent_instances (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_agent_inst_copy ON tenant_agent_instances(agent_id) WHERE agent_id <> base_agent_id;
 CREATE INDEX IF NOT EXISTS idx_tenant_agent_inst_tenant ON tenant_agent_instances(tenant_id, status);
 CREATE INDEX IF NOT EXISTS idx_tenant_agent_inst_base ON tenant_agent_instances(tenant_id, base_agent_id);
+
+-- Web 单条 Agent 回复分享（图片/附件只记录引用，不复制文件）
+CREATE TABLE IF NOT EXISTS chat_message_shares (
+    share_key TEXT PRIMARY KEY,
+    tenant_id TEXT,
+    user_id TEXT,
+    session_id TEXT,
+    message_id TEXT,
+    reply_data JSONB,
+    password_hash TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);

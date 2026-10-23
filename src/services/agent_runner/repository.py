@@ -11,7 +11,7 @@ from .contracts import RunnerError, RunnerStatus, scope_key
 
 
 from .persistence_limits import capped_checkpoint_dumps, capped_snapshot_dumps
-from .public_view import decoded, public_runner
+from .public_view import decoded, public_runner, with_local_operation_facts
 from .event_repository import EventRepository
 
 # 绕过应用的 SQL 直插可以占用 queue_order 却不推进 BIGSERIAL 序列，此后正常
@@ -34,7 +34,7 @@ class RunnerRepository:
                 cursor.execute("SELECT to_regclass(%s) AS name", (name,))
                 if not cursor.fetchone()["name"]:
                     raise RuntimeError("AGENT_RUNNER_SCHEMA_REQUIRED")
-            cursor.execute('SELECT event_seq,event_floor_seq FROM agent_runners LIMIT 0')
+            cursor.execute('SELECT event_seq,event_floor_seq,wake_at FROM agent_runners LIMIT 0')
             from src.notifications.repository import NotificationRepository
             NotificationRepository.assert_schema_in_tx(cursor)
 
@@ -72,6 +72,11 @@ class RunnerRepository:
                             for key in ('file_id','name','type','mime_type','size')}
                            for item in request.attachments]},
             'progress':None,'output':'','images':[]}
+        checkpoint = dict(initial_checkpoint if initial_checkpoint is not None else
+            ({'execution_context':execution_context} if execution_context is not None else {}))
+        checkpoint.setdefault('business_round_policy',{'version':1,'default_max_iterations':50})
+        if request.execution_mode == 'continuous':
+            checkpoint['continuous'] = {'version':1,'enabled':True,'source':'creation','policy_revision':1}
         cursor.execute("""INSERT INTO agent_runners
             (runner_id, tenant_id, scope_key, session_kind, session_id, actor_kind, actor_id, user_id,
              service_id, source, client_request_id, input_digest, input, profile_id, profile_fingerprint,
@@ -83,7 +88,7 @@ class RunnerRepository:
             identity.user_id, principal.service_id, identity.source, request.client_request_id,
             request.digest(), json.dumps(request.intent(), ensure_ascii=False), resolved_profile_id or request.profile_id,
             profile_fingerprint, "record_" + uuid.uuid4().hex, capped_snapshot_dumps(snapshot),
-            capped_checkpoint_dumps(initial_checkpoint if initial_checkpoint is not None else ({'execution_context':execution_context} if execution_context is not None else {}))))
+            capped_checkpoint_dumps(checkpoint)))
         row = cursor.fetchone()
         created = row is not None
         if row is None:
@@ -107,7 +112,7 @@ class RunnerRepository:
             row = decoded(cursor.fetchone())
             if row is None:
                 raise RunnerError("RUNNER_NOT_FOUND", 404)
-            return row
+            return with_local_operation_facts(cursor, row)
 
     def find_request(self, principal, request):
         with self.connection_factory() as conn:
@@ -121,7 +126,7 @@ class RunnerRepository:
                 raise RunnerError("IDEMPOTENCY_INPUT_MISMATCH", 409)
             if row:
                 self.assert_owner(principal, row)
-            return row
+            return with_local_operation_facts(cursor, row)
 
     def list_session(self, principal, limit=100, before_runner_id=None):
         identity = principal.identity
@@ -151,6 +156,8 @@ class RunnerRepository:
             cursor.execute("SELECT * FROM agent_runners WHERE " + where + """ AND status IN
                 ('running','waiting','paused','interrupted','finalizing') ORDER BY queue_order DESC""", parameters)
             active = [decoded(row) for row in cursor.fetchall()]
+            page = [with_local_operation_facts(cursor, row) for row in page]
+            active = [with_local_operation_facts(cursor, row) for row in active]
             return {"rows": page, "active": active, "has_more": has_more,
                     "next_cursor": page[-1]["runner_id"] if has_more else None}
 
@@ -182,7 +189,7 @@ class RunnerRepository:
             if row['cancel_requested'] or row['status'] in ('completed','failed','cancelled'):
                 from .control_repository import close_pending_controls
                 close_pending_controls(cursor,runner_id,'CONTROL_EXECUTION_CLOSED')
-                cursor.execute('''UPDATE agent_runners SET resume_control_id=NULL,pause_requested=FALSE
+                cursor.execute('''UPDATE agent_runners SET resume_control_id=NULL,pause_requested=FALSE,wake_at=NULL
                     WHERE runner_id=%s RETURNING *''',(runner_id,))
                 row = decoded(cursor.fetchone())
             from .application_public_projection import sync_public_display

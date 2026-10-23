@@ -113,7 +113,7 @@ test('Win32 输入后异常（含超时及登录关键词）回执 unknown，输
     let attempts = 0
     f.session.click = async () => {
       attempts++
-      throw new WinClickError(`win-click.ps1 执行失败(exit=${failure.afterInput ? 1 : 2}): ${failure.message}`, failure.afterInput ? 1 : 2)
+      throw new WinClickError(`原生输入失败(exit=${failure.afterInput ? 1 : 2}): ${failure.message}`, failure.afterInput ? 1 : 2)
     }
     const result = await createBossGreetOperation(f.factory).execute({ limit: 1 }, silentCtx())
     assert.equal(result.success, false)
@@ -588,15 +588,15 @@ test('errorMapping：取消与主动 code', () => {
   assert.equal(mapExecutorError(new CodedOperationError('WRONG_PAGE', '非推荐页')).code, 'WRONG_PAGE')
 })
 
-test('errorMapping：Chrome 连接失败', () => {
+test('errorMapping：连接失败与命令回执未知必须分开', () => {
   const withCause = new TypeError('fetch failed', { cause: Object.assign(new Error('x'), { code: 'ECONNREFUSED' }) })
   assert.equal(mapExecutorError(withCause).code, 'CHROME_UNAVAILABLE')
   assert.equal(mapExecutorError(new Error('fetch failed')).code, 'CHROME_UNAVAILABLE')
-  assert.equal(mapExecutorError(new Error('CDP request timed out after 10000ms')).code, 'CHROME_UNAVAILABLE')
+  assert.equal(mapExecutorError(new Error('CDP request timed out after 10000ms')).code, 'EXECUTION_UNKNOWN')
 })
 
-test('errorMapping：未登录/未打开 BOSS 页面', () => {
-  assert.equal(mapExecutorError(new Error('no BOSS page target found among 5 targets')).code, 'NOT_LOGGED_IN')
+test('errorMapping：无业务标签不代表已经核验未登录', () => {
+  assert.equal(mapExecutorError(new Error('no BOSS page target found among 5 targets')).code, 'WRONG_PAGE')
   assert.equal(mapExecutorError(new NavError('页面上找不到菜单文案「沟通」（不在 DOM 文本表中），请确认已登录 BOSS')).code, 'NOT_LOGGED_IN')
 })
 
@@ -638,7 +638,7 @@ test('errorMapping：结构变化/找不到元素 → UI_CHANGED', () => {
     new ChatRejectError('当前页面右侧面板没有「不合适」按钮'),
     new InterviewDemoError('未找到唯一的「约面试」按钮'),
     new GreetError('某个结构错误'),
-    new WinClickError('win-click.ps1 执行失败(exit=2): 落点被遮挡', 2),
+    new WinClickError('原生输入失败(exit=2): 落点被遮挡', 2),
     new JobSwitchError('职位「Java」不在当前招聘者的职位列表中（可用职位：PHP开发工程师、前端开发），请人工查看'),
     new JobSwitchError('打开职位下拉后未解析到任何职位项（项无 layout bounds 可能是等待不足），请人工查看'),
     new ResumeReadError('未找到简历详情画布（页面中无大尺寸 CANVAS）：请先在推荐牛人页点开一个候选人的在线简历详情，再执行读取'),
@@ -683,7 +683,7 @@ test('errorMapping：详情页三件套 DetailGreetError 分类', () => {
   )
 })
 
-test('errorMapping：脚本缺失与兜底 → INTERNAL_ERROR', () => {  assert.equal(mapExecutorError(new WinClickError('未找到 scripts/win-click.ps1（已从 x 向上探测）')).code, 'INTERNAL_ERROR')
+test('errorMapping：脚本缺失与兜底 → INTERNAL_ERROR', () => {  assert.equal(mapExecutorError(new WinClickError('未找到 scripts/cv-segdiff.ps1（已从 x 向上探测）')).code, 'INTERNAL_ERROR')
   assert.equal(mapExecutorError(new Error('unexpected')).code, 'INTERNAL_ERROR')
   assert.equal(mapExecutorError('字符串错误').code, 'INTERNAL_ERROR')
 })

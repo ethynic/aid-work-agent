@@ -6,7 +6,7 @@ import type { AskForm, AskFormErrorItem, BrowserHumanAssistance, DownloadableFil
 export type { AskForm, AskFormErrorItem, RunnerAnswerItem } from '@/types'
 
 export type RunnerStatus = RunnerEventStatus
-export interface RunnerWait { kind: string; wait_id?: string; target_execution_id?: string; question?: string; form?: AskForm; child_wait?: RunnerWait }
+export interface RunnerWait { kind: string; wait_id?: string; target_execution_id?: string; question?: string; form?: AskForm; child_wait?: RunnerWait; wake_at?: string; seconds?: number; reason?: string }
 export interface RunnerSupplementalInput { control_id: string; client_request_id: string; message_id: string; text: string; wait_id?: string | null; accepted_at: string; attachments?: UploadedFile[]; form?: AskForm; answers?: RunnerAnswerItem[] }
 export interface RunnerControlIntent { client_request_id: string; action: 'pause' | 'resume' | 'reply'; target_execution_id?: string; wait_id?: string; answer?: string; attachments?: UploadedFile[]; answers?: RunnerAnswerItem[]; skip?: boolean }
 export interface RunnerControlView { control_id: string; runner_id: string; client_request_id: string;
@@ -20,6 +20,14 @@ export interface RunnerPresentation {
   imagesPlacement?: ImageRef['placement']
 }
 export interface RunnerView {
+  sleep_blocked?: { error_code: string }
+  execution_mode?: 'continuous'
+  usage?: { task_credits: number; session_credits: number; pending: boolean; updated_at: string | null }
+  local_recovery?: boolean
+  local_recovery_kind?: 'original_operation' | 'dispatch_unconfirmed'
+  local_recovery_actions?: Array<'verify' | 'stop' | 'resume' | 'end'>
+  local_verification_available?: boolean
+  local_verification?: { invocation_id: string; state: string; resource_stopped?: boolean; page_observed?: boolean; target_relation?: string | null; waiting_ended?: boolean; error_code?: string | null; stop_error_code?: string | null; page_summary?: { observed: boolean; page_kind: string; result?: 'match' | 'mismatch' | 'unknown'; filter_count?: number | null; panel_open?: boolean; count_result?: string } }
   runner_id: string
   client_request_id: string
   /** 服务端已公开的实际执行配置身份；旧版本响应可以省略。 */
@@ -37,13 +45,14 @@ export interface RunnerView {
   accepted_at: string
   updated_at: string
   finished_at?: string | null
-  snapshot: RunnerPresentation & { output?: string; images?: ImageRef[]; waiting?: RunnerWait;
+  snapshot: RunnerPresentation & { output?: string; images?: ImageRef[]; waiting?: RunnerWait; iteration?: number; business_iterations?: number; history_version?: 1; history_revision?: number;
     supplementalInputs?: RunnerSupplementalInput[];
     clarificationQuestions?: { message_id: string; wait_id: string; text: string; created_at: string }[];
     input?: { message_id: string; text: string; attachments: UploadedFile[] } }
   result?: { status: string; output?: string; images?: ImageRef[]; error_code?: string; assistant_metadata?: RunnerPresentation } | null
 }
 export interface RunnerSubmission {
+  execution_mode?: 'continuous'
   client_request_id: string
   message: string
   session_id: string
@@ -52,7 +61,13 @@ export interface RunnerSubmission {
   instance_id?: string | null
   video_params?: Record<string, unknown> | null
 }
-export interface RunnerCapabilities { web_enabled: boolean; observe_existing?: boolean; contract_version: number; transport: string; events_supported?: boolean; ask_structured_answers?: boolean }
+export interface RunnerCapabilities { web_enabled: boolean; observe_existing?: boolean; contract_version: number; transport: string; events_supported?: boolean; ask_structured_answers?: boolean; durable_sleep_v1?: boolean; continuous_execution_v1?: boolean }
+
+export function runnerWaitLeaf(wait?: RunnerWait): RunnerWait | undefined {
+  let depth = 64
+  while (wait?.kind === 'child_wait' && depth-- > 0) wait = wait.child_wait
+  return wait?.kind === 'child_wait' ? undefined : wait
+}
 export interface RunnerPage { runners: RunnerView[]; active_runners: RunnerView[]; has_more: boolean; next_cursor: string | null }
 export class RunnerRequestError extends Error {
   /** 422 表单校验的逐题明细（设计 §5.7），经 BFF 原样透传；其余错误为 undefined */
@@ -73,7 +88,7 @@ function formErrors(value: unknown): AskFormErrorItem[] | undefined {
 }
 
 const apiBase = () => `${import.meta.env.VITE_API_BASE_URL || '/api'}/chat`
-export const runnerObservationComplete = (row: RunnerView) => runnerTerminal(row.status) && row.settlement_status === 'settled'
+export const runnerObservationComplete = (row: RunnerView) => runnerTerminal(row.status) && row.settlement_status === 'settled' && !['queued','claimed','running'].includes(row.local_verification?.state || '')
 export const runnerTerminal = (status: RunnerStatus) => ['completed', 'failed', 'cancelled'].includes(status)
 
 /** Requests are observers. Aborting them never sends a control request. */
@@ -132,6 +147,12 @@ export class RunnerClient {
   }
   async cancel(id: string, headers: Record<string, string>) {
     return (await this.request<{ success: boolean; runner: RunnerView }>('/runners/' + encodeURIComponent(id) + '/cancel', headers, {})).runner
+  }
+  async verifyLocal(id: string, requestId: string, headers: Record<string, string>, stopResources = false) {
+    return (await this.request<{ success: boolean; runner: RunnerView }>('/runners/' + encodeURIComponent(id) + '/verify-local', headers, { client_request_id: requestId, ...(stopResources ? { stop_resources: true } : {}) })).runner
+  }
+  async endWaiting(id: string, headers: Record<string, string>) {
+    return (await this.request<{ success: boolean; runner: RunnerView }>('/runners/' + encodeURIComponent(id) + '/end-waiting', headers, {})).runner
   }
   async control(id: string, body: RunnerControlIntent, headers: Record<string, string>) {
     const result = await this.request<{ success: boolean; runner: RunnerView; control: RunnerControlView }>(

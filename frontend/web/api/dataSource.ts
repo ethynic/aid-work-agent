@@ -31,6 +31,8 @@ export interface ColumnInfo {
 }
 
 export interface SchemaInfo {
+  connector_id?: string | null
+  source?: Record<string, any> | null
   table_name: string
   description: string
   source_info: string
@@ -55,6 +57,12 @@ export interface SchemaDocument {
   summary?: string
   /** 源数据是否仍可用：available=可用 / missing=源已失效（孤儿元数据）/ unknown=未知 */
   source_status?: 'available' | 'missing' | 'unknown'
+  /**
+   * 可用智能体名单（服务端标准化后的展示值）：
+   * [] 或缺失=租户内全部智能体共享；非空=仅名单内智能体可用。
+   * 异常配置（手工改库产生的非法形态）服务端也按 [] 展示，与共享不可区分。
+   */
+  allowed_agent_ids?: string[] | null
 }
 
 // ===== Connector APIs =====
@@ -338,7 +346,7 @@ export async function listSchemas(params?: {
   page?: number
   pageSize?: number
   keyword?: string
-}): Promise<{ schemas: SchemaDocument[]; total: number }> {
+}): Promise<{ schemas: SchemaDocument[]; total: number; has_outbound_knowledge_share?: boolean }> {
   const query = new URLSearchParams()
   if (params?.page) query.set('page', String(params.page))
   if (params?.pageSize) query.set('page_size', String(params.pageSize))
@@ -351,12 +359,48 @@ export async function listSchemas(params?: {
     throw new Error(`获取数据表列表失败: ${response.status}`)
   }
   const result = await response.json()
-  return { schemas: result.schemas || result.data || [], total: result.total ?? 0 }
+  return {
+    schemas: result.schemas || result.data || [],
+    total: result.total ?? 0,
+    // 租户级出向知识共享布尔值，仅用于指定模式的条件文案
+    has_outbound_knowledge_share: result.has_outbound_knowledge_share === true,
+  }
+}
+
+/**
+ * 仅更新一张表的可调用智能体名单（不触发向量化）。
+ * null/[]=恢复本租户全部智能体共享；非空=替换为该名单。
+ */
+export async function updateAgentScope(
+  docId: number,
+  allowedAgentIds: string[] | null
+): Promise<{ success: boolean; doc_id: number; allowed_agent_ids: string[] }> {
+  const response = await fetch(`${API_BASE}/schemas/${docId}/agent-scope`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeader()
+    },
+    body: JSON.stringify({ allowed_agent_ids: allowedAgentIds })
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}))
+    throw new Error(err.error || `更新可用智能体失败: ${response.status}`)
+  }
+  return response.json()
 }
 
 export async function saveSchema(
-  schema: SchemaInfo & { connector_id?: string }
-): Promise<{ success: boolean; document_id: number }> {
+  schema: SchemaInfo & { connector_id?: string; allowed_agent_ids?: string[] | null }
+): Promise<{
+  success: boolean
+  doc_id?: number
+  message?: string
+  /** true=重复命中已有表，服务端保留原名单不覆盖 */
+  existing?: boolean
+  /** 实际生效名单：新表为本次提交值（共享为 []），重复表为原有名单 */
+  allowed_agent_ids?: string[]
+}> {
   const response = await fetch(`${API_BASE}/schemas`, {
     method: 'POST',
     headers: {

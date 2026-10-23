@@ -255,6 +255,13 @@ class TestGlobalAdminViewScope:
         assert "tenant_id IS NULL" in sql
 
 
+# 数据表名单过滤片段参数（agent_id=None，marker 在正/负分支各出现一次）
+_AGENT_SCOPE_PARAMS = [
+    "data-analysis-metadata", "t1", "[数据表] %",
+    "data-analysis-metadata", "t1", "[数据表] %",
+]
+
+
 class TestFtsGlobalViewSQL:
     """FTS 检索层 SQL 构造：global_view=True + tenant None 不携带任何租户收窄条件；
     默认 False（含不传参的既有调用方）与现行收窄逐字节一致"""
@@ -308,7 +315,8 @@ class TestFtsGlobalViewSQL:
         flat = _flat(sql)
         assert "(d.tenant_id = %s)" in flat
         assert "demo" not in flat
-        assert params == ["差旅", "差旅", "t1", 5]
+        # 租户分支叠加数据表名单过滤参数（agent_id=None 仅排除非空名单记录）
+        assert params == ["差旅", "差旅", "t1", *_AGENT_SCOPE_PARAMS, 5]
 
     def test_fts_search_forwards_global_view(self):
         """_fts_search 包装层将 global_view 透传到 _postgres_fts_search"""
@@ -366,7 +374,8 @@ class TestVectorSearchGlobalViewSQL:
         sql, params = self._select_sql(cur)
         flat = _flat(sql)
         assert "(d.tenant_id = %s)" in flat
-        assert params == ["[0.1,0.2,0.3,0.4]", "t1", 5]
+        # 租户分支叠加数据表名单过滤参数（agent_id=None 仅排除非空名单记录）
+        assert params == ["[0.1,0.2,0.3,0.4]", "t1", *_AGENT_SCOPE_PARAMS, 5]
 
 
 class TestRetrieveGlobalViewPlumbing:

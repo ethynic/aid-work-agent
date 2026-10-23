@@ -54,7 +54,7 @@ export function createBossGotoOperation(
               message: result.clicked ? `已跳转${viaNote}` : '已在目标页面，无需跳转',
               data: { target: args.target, navigated: result.clicked, via: result.via },
             }
-          })
+          }, ctx.previousPageExecution)
           return { ...verified.value, data: { ...verified.value.data, operation_recovery: verified.facts } }
         },
       )

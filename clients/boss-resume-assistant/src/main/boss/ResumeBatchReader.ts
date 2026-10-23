@@ -1,7 +1,9 @@
 import { DetailGreetExecutor } from './DetailGreetExecutor.js'
 import { mapExecutorError } from '../operations/errorMapping.js'
 import type { PageExecution } from '../operations/pageOperation.js'
+import { candidateReference, loadedCandidates, resolveCandidateReference } from './LoadedCandidateNavigation.js'
 import { WinClickError } from '../input/WinMouseClicker.js'
+import { isTransientCdpError } from '../cdp/errors.js'
 /**
  * 推荐牛人页批量简历读取执行器（CLI resume-batch 命令 / boss_resume_batch tool，设计 §10.8 延伸）。
  *
@@ -94,6 +96,8 @@ export interface BatchResumeResult {
 }
 
 export interface ResumeBatchDeps {
+  /** Invocation-local progress only; no session or snapshot is retained. */
+  checkpoint?: ResumeBatchCheckpoint
   /** 采集 fresh DOMSnapshot（每次点击前重新采集，禁止复用旧坐标） */
   snapshot(): Promise<DomSnapshot>
   /** Win32 真实鼠标点击（打开卡片详情）。2026-09-11 从 CDP 合成点击（clickBrowse）切换：
@@ -104,7 +108,7 @@ export interface ResumeBatchDeps {
   pressEscape(): Promise<void>
   /** 无 clip 整页截图（device px，与 DOMSnapshot bounds 同坐标系） */
   captureFullpage(): Promise<Buffer>
-  /** Win32 滚轮（真实实现调 scripts/cv-wheel.ps1；deltaY<0 向下） */
+  /** Win32 滚轮（真实实现经 WinMouseClicker.wheel 走 native FFI；deltaY<0 向下） */
   wheel(
     rect: DeviceRect,
     viewport: { width: number; height: number },
@@ -127,6 +131,17 @@ export interface ResumeBatchDeps {
   sleep?(ms: number): Promise<void>
   /** 推荐列表 CDP 滚动，参数为 CSS px；详情读取仍使用独立的 wheel 管线。 */
   scroll?(x: number, y: number, deltaY: number): Promise<void>
+}
+
+export interface ResumeBatchCheckpoint {
+  resumes?: BatchResumeResult[]
+  failures?: Array<{ name: string | null; error: string; execution?: PageExecution }>
+  processedNames?: Set<string>
+  anonymousRows?: Set<number>
+  attempted?: number
+  scrollRounds?: number
+  execution?: PageExecution
+  current?: { name: string; reference: string | null; phase: 'open' | 'read' | 'close'; failureStart: number }
 }
 
 /** 点卡片后轮询等详情 canvas 出现的总超时（ms）。真机 ~600ms 出现，轮询容错 */
@@ -239,18 +254,22 @@ export class ResumeBatchReader {
     recovery?: { code: string; summary: string; execution: PageExecution }
   }> {
     const limit = opts.limit
-    const resumes: BatchResumeResult[] = []
-    const failures: Array<{ name: string | null; error: string; execution?: PageExecution }> = []
-    const processedNames = new Set<string>()
+    const checkpoint = this.deps.checkpoint ?? {}
+    const resumes = checkpoint.resumes ??= []
+    const failures = checkpoint.failures ??= []
+    const processedNames = checkpoint.processedNames ??= new Set<string>()
     const excluded = new Set(opts.excludeNames ?? [])
-    const anonymousRows = new Set<number>()
-    let scrollRounds = 0
+    const anonymousRows = checkpoint.anonymousRows ??= new Set<number>()
+    let scrollRounds = checkpoint.scrollRounds ?? 0
     let stopReason = 'viewport_complete'
-    let attempted = 0
+    let attempted = checkpoint.attempted ?? 0
     let firstRound = true
     let currentName: string | null = null
     let recovery: { code: string; summary: string; execution: PageExecution } | undefined
-    this.execution = { attemptsUsed: 1, ordinaryRetriesUsed: 0, stage: 'prepared', inputStatus: 'not_started', verification: { status: 'inconclusive', evidence: [] } }
+    const pending = checkpoint.current
+    let resumeName = pending && pending.phase !== 'close' ? pending.name : null
+    this.execution = checkpoint.execution ? structuredClone(checkpoint.execution)
+      : { attemptsUsed: 1, ordinaryRetriesUsed: 0, stage: 'prepared', inputStatus: 'not_started', verification: { status: 'inconclusive', evidence: [] } }
     const needsRecovery = (summary: string, status: 'unmet' | 'inconclusive', code = 'UI_CHANGED'): void => {
       this.execution.stage = 'postcheck'
       this.execution.verification = { status, evidence: [summary] }
@@ -270,7 +289,10 @@ export class ResumeBatchReader {
     try {
     const initial = await this.deps.snapshot()
     const initialState = inspectRecommendationResults(initial)
-    if (initialState.stopReason === 'no_matching_candidates') return { resumes, failures, attempted, processed_names: [], stop_reason: initialState.stopReason }
+    if (initialState.stopReason === 'no_matching_candidates' && !pending) return {
+      resumes: [...resumes], failures: [...failures], attempted, processed_names: [...processedNames],
+      stop_reason: resumes.length ? 'recommendations_boundary' : initialState.stopReason,
+    }
     if (locateResumeCanvas(initial)) {
       const closed = await this.tryCloseDetail()
       if (!closed) {
@@ -279,9 +301,24 @@ export class ResumeBatchReader {
         )
       }
     }
+    if (pending) {
+      // The last failure described the interrupted stage, not a permanently skipped candidate.
+      failures.splice(pending.failureStart)
+      if (pending.phase === 'close') checkpoint.current = undefined
+      else {
+        processedNames.delete(pending.name)
+        // A refreshed list can move or remove the unfinished card. Rescan under
+        // the same job/filter intent, preserving completed names and payloads.
+        if (!this.locateCards(initial).some(card => card.name === pending.name)) {
+          resumeName = null
+          checkpoint.current = undefined
+        }
+      }
+    }
 
     batchLoop: for (;;) {
       if (this.deps.signal?.aborted) throw new CancelledError(`已取消：已读取 ${resumes.length} 份简历后中止`)
+      if (resumes.length >= limit) { stopReason = 'limit_reached'; break }
       if (excluded.size + processedNames.size >= 1000) { stopReason = 'history_limit'; break }
       // 拟人节奏：相邻卡片间留间隔（含失败重试路径），降低风控事件节流风险
       if (attempted > 0) await this.sleep(CARD_PACE_DELAY)
@@ -307,9 +344,11 @@ export class ResumeBatchReader {
       firstRound = false
       // key = name ?? `row@${按钮y}`：无名卡按行去重；同名牛人跳过（推荐流极少重复，重复时不重读同一人）。
       // 取卡即标记 key 已处理（含失败路径）——否则失败的卡会被下一轮重复选中，死循环
-      const card = cards.find((c) => c.name
+      const card = resumeName ? cards.find(c => c.name === resumeName) : cards.find((c) => c.name
         ? !processedNames.has(c.name) && !excluded.has(c.name)
         : !anonymousRows.has(c.greetButtonY))
+      if (resumeName && !card) throw new ResumeBatchError('恢复后原未完成候选人尚不可定位，未跳过该人或改读其他人')
+      if (resumeName && cards.filter(c => c.name === resumeName).length !== 1) throw new ResumeBatchError('恢复后原未完成候选人姓名有歧义，未改读其他人')
       if (!card) {
         if (resultState.stopReason) { stopReason = resultState.stopReason; break }
         if (!opts.scanMore) break
@@ -323,6 +362,7 @@ export class ResumeBatchReader {
         let moved = false
         let scrollSnap = snap
         for (let retry = 0; retry < 2; retry++) {
+          if (retry > 0 && this.execution.ordinaryRetriesUsed > 0) break
           if (this.deps.signal?.aborted) throw new CancelledError('已取消：列表推进中止')
           const event = this.listScrollEvent(scrollSnap)
           if (retry > 0) { this.execution.ordinaryRetriesUsed = 1; this.execution.attemptsUsed = 2 }
@@ -349,9 +389,19 @@ export class ResumeBatchReader {
         )
         continue
       }
-      attempted++
+      const continuingItem = resumeName === card.name
+      if (!continuingItem) attempted++
       currentName = card.name
-      this.execution = { attemptsUsed: 1, ordinaryRetriesUsed: 0, stage: 'prepared', inputStatus: 'not_started', verification: { status: 'inconclusive', evidence: [] } }
+      if (!continuingItem) {
+        this.execution = { attemptsUsed: 1, ordinaryRetriesUsed: 0, stage: 'prepared', inputStatus: 'not_started', verification: { status: 'inconclusive', evidence: [] } }
+        const bound = loadedCandidates(snap).filter(candidate => candidate.name === card.name && !candidate.excluded)
+        checkpoint.current = { name: card.name, reference: bound.length === 1 ? candidateReference(bound[0]!) : null,
+          phase: 'open', failureStart: failures.length }
+      }
+      resumeName = null
+      if (checkpoint.current?.reference && !resolveCandidateReference(snap, card.name, checkpoint.current.reference)) {
+        throw new ResumeBatchError('原候选卡片在继续读取前已变化，未点击替代卡片')
+      }
 
       // 1. 点击姓名节点打开详情，轮询等大 canvas 出现（真机 ~600ms）。
       //    首击偶发被吞（真机 2026-08-17 实证重击即开）→ 整个 OPEN_POLL_TIMEOUT 窗口内
@@ -361,7 +411,8 @@ export class ResumeBatchReader {
       const clickSequence: string[] = []
       const openAttempts = Math.max(1, Math.ceil(OPEN_POLL_TIMEOUT / OPEN_POLL_INTERVAL))
       for (let i = 0; i < openAttempts && !rect; i++) {
-        if (i % OPEN_RECLICK_AFTER === 0 && i / OPEN_RECLICK_AFTER < OPEN_CLICK_ATTEMPTS) {
+        if (i % OPEN_RECLICK_AFTER === 0 && i / OPEN_RECLICK_AFTER < OPEN_CLICK_ATTEMPTS
+          && (i === 0 || this.execution.ordinaryRetriesUsed === 0)) {
           let pt = card.namePoint
           let clickViewport = viewport
           if (i > 0) {
@@ -377,8 +428,24 @@ export class ResumeBatchReader {
               }
               retrySnap = await this.deps.snapshot()
             }
-            const freshCard = this.locateCards(retrySnap).find((candidate) => candidate.name === card.name)
-            if (!freshCard?.namePoint) throw new ResumeBatchError('重击前无法重新确认原候选人卡片及来源，已停止，禁止使用旧坐标')
+            const cardsNow = this.locateCards(retrySnap)
+            if (checkpoint.current?.reference && !resolveCandidateReference(retrySnap, card.name, checkpoint.current.reference)) {
+              throw new ResumeBatchError('重试前原候选卡片已变化，未点击同名替代卡片')
+            }
+            const freshCard = cardsNow.find((candidate) => candidate.name === card.name)
+            if (!freshCard?.namePoint) {
+              // 原卡片在重试前从列表消失（推荐流刷新/列表更新）：无残留详情（上方已关），
+              // 本份记失败后回到批次主循环——即使当前视口已无卡片，也复用主循环既有的
+              // 滚动、无进展与列表边界判断寻找后续候选人，不在此额外设空卡片门禁；
+              // 「禁止使用旧坐标」原则不变：不再点击原卡片
+              pushFailure(
+                card.name,
+                '点击后详情未打开，重试前原候选人卡片已从列表消失（列表已更新）',
+                `重试快照剩余 ${cardsNow.length} 张卡片，回到主循环继续`,
+              )
+              checkpoint.current = undefined
+              continue batchLoop
+            }
             pt = freshCard.namePoint
             clickViewport = viewportOf(retrySnap)
           }
@@ -409,11 +476,17 @@ export class ResumeBatchReader {
             `${canvasNote}${nearMiss ? '；存在接近阈值的大画布，疑似详情实际已打开' : ''}`,
         )
         // 详情可能实际已打开但画布判定未命中（真机 2026-08-18：572 高画布被阈值卡掉）——
-        // 失败路径也必须尝试关闭，否则弹层挡住列表导致后续卡片连环点空
+        // 失败路径也必须尝试关闭，否则弹层挡住列表导致后续卡片连环点空。
+        // 关闭成功=列表仍可操作：本份已按失败收敛（pushFailure），继续处理下一人；
+        // 关不掉=页面无法继续操作：才停止批次进入恢复流程
         const closed = await this.tryCloseDetail()
-        stopReason = closed ? 'detail_not_opened' : 'detail_not_closed'
-        needsRecovery(closed ? '两次正常点击后仍未检出完整详情结构' : '打开失败且详情收尾未完成', 'unmet')
-        break
+        if (!closed) {
+          stopReason = 'detail_not_closed'
+          needsRecovery('打开失败且详情收尾未完成', 'unmet')
+          break
+        }
+        checkpoint.current = undefined
+        continue
       }
 
       if (lastSnap && (inspectRecommendationResults(lastSnap).stopReason === 'no_matching_candidates' || excludedRecommendationName(lastSnap, card.name))) {
@@ -422,6 +495,7 @@ export class ResumeBatchReader {
 
       // 2. 复用单份读取管线（滚动点 = canvas 中心，viewport 固定取点卡片前那份）
       const readViewport = lastSnap ? viewportOf(lastSnap) : viewport
+      checkpoint.current!.phase = 'read'
       const reader = new ResumeReader({
         snapshot: this.deps.snapshot,
         captureFullpage: this.deps.captureFullpage,
@@ -438,6 +512,7 @@ export class ResumeBatchReader {
         })
       } catch (err) {
         if (err instanceof CancelledError || err instanceof ResumeObstructedError) throw err
+        if (isTransientCdpError(err)) throw err
         // 读取失败也必须先尝试关闭详情，否则弹层挡住列表没法点下一张
         const closed = await this.tryCloseDetail()
         const readErrMsg = err instanceof Error ? err.message : String(err)
@@ -451,6 +526,7 @@ export class ResumeBatchReader {
           break
         }
         pushFailure(card.name, `读取简历失败：${readErrMsg}`, `读取管线异常，Escape 关闭成功`)
+        checkpoint.current = undefined
         continue
       }
 
@@ -462,6 +538,7 @@ export class ResumeBatchReader {
           `${result.bottomReached ? '，已到底' : '，未到底'}；${result.width}x${result.height}）`,
       )
       resumes.push({ name, readResult: result })
+      checkpoint.current!.phase = 'close'
       const closed = await this.tryCloseDetail()
       processedNames.add(name)
       if (!closed) {
@@ -470,18 +547,23 @@ export class ResumeBatchReader {
         pushFailure(name, 'Escape 后简历详情未关闭，无法继续处理后续卡片')
         break
       }
+      checkpoint.current = undefined
       this.deps.onProgress?.(resumes.length, limit)
       if (resumes.length >= limit) { stopReason = 'limit_reached'; break }
     }
     } catch (error) {
       if (error instanceof CancelledError && resumes.length === 0) throw error
       const mapped = mapExecutorError(error)
+      if (isTransientCdpError(error) && checkpoint.current?.phase !== 'close' && currentName) processedNames.delete(currentName)
       pushFailure(currentName, mapped.message)
       stopReason = mapped.code === 'CANCELLED' ? 'cancelled' : 'page_operation_failed'
       recovery = { code: mapped.code, summary: mapped.message, execution: structuredClone(this.execution) }
     }
     batchLog(`批量结束：尝试 ${attempted} 张，成功 ${resumes.length} 份，失败 ${failures.length} 个`)
-    return { resumes, failures, attempted, processed_names: [...processedNames], stop_reason: stopReason, ...(recovery ? { recovery } : {}) }
+    checkpoint.attempted = attempted
+    checkpoint.scrollRounds = scrollRounds
+    checkpoint.execution = structuredClone(this.execution)
+    return { resumes: [...resumes], failures: [...failures], attempted, processed_names: [...processedNames], stop_reason: stopReason, ...(recovery ? { recovery } : {}) }
   }
 
   /** Escape 关闭详情并轮询 canvas 消失；超时未消失返回 false（弹层挡住列表，调用方必须停止） */

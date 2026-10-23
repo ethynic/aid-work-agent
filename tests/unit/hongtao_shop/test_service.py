@@ -253,9 +253,12 @@ async def test_full_pipeline_new_products(harness):
     assert all(p["content_hash"] and p["doc_id"] and p["miss_streak"] == 0
                and p["processing_status"] == "success" for p in products)
     # 论坛关联为内存态（零关系表）：已由上方 metadata.forum_media 断言覆盖
-    # 价格零出现（chunks + metadata 双查）
+    # 价格与易变数值零出现（chunks + metadata 双查；v1.10：六字段全链路排除）
     for d in docs:
-        assert "price" not in (d["metadata"] or "").lower()
+        meta_text = (d["metadata"] or "").lower()
+        assert "price" not in meta_text
+        for key in ("stock", "sales", "comment_score", "comment_num"):
+            assert f'"{key}"' not in meta_text
 
 
 async def test_idempotent_rerun_zero_embedding(harness):
@@ -281,25 +284,59 @@ async def test_idempotent_rerun_zero_embedding(harness):
     assert doc2["updated_at"] == doc["updated_at"]  # metadata 未变不写行不抖 updated_at
 
 
-async def test_metadata_only_change_updates_without_reembed(harness):
-    """易变数值（stock）变化：metadata 更新、零重嵌（设计 §5.1 先比对后写）。"""
+async def test_volatile_field_change_ignored_no_write(harness):
+    """v1.10 易变数值（stock）全链路排除：源值变化不进 metadata，判定等价零写跳过。"""
     harness["create_source"]()
     harness["scripts"].append(FetchScript(products=[_product(1)]))
     await harness["service"].run_now(harness["tenant_id"])
     calls_after_first = harness["embedding"].calls
 
+    doc = harness["query"](
+        "SELECT id, updated_at, metadata FROM documents "
+        "WHERE tenant_id = %s AND origin = 'hongtao_shop'", (harness["tenant_id"],),
+    )[0]
+
     harness["scripts"].append(FetchScript(products=[_product(1, stock="42")]))
     result = await harness["service"].run_now(harness["tenant_id"])
     assert result["counts"]["skip"] == 1  # hash 未变仍 skip
-    assert harness["embedding"].calls == calls_after_first
-    doc = harness["query"](
-        "SELECT metadata, file_type FROM documents "
-        "WHERE tenant_id = %s AND origin = 'hongtao_shop'",
-        (harness["tenant_id"],),
+    assert harness["embedding"].calls == calls_after_first  # 零重嵌
+    doc2 = harness["query"](
+        "SELECT updated_at, metadata FROM documents WHERE id = %s", (doc["id"],),
     )[0]
-    assert json.loads(doc["metadata"])["raw_payload"]["stock"] == "42"
+    assert doc2["updated_at"] == doc["updated_at"]  # metadata 未变不写行不抖 updated_at
+    assert doc2["metadata"] == doc["metadata"]
+    # raw_payload 不含易变数值键（v1.10 起不入库）
+    assert "stock" not in json.loads(doc2["metadata"])["raw_payload"]
+
+
+async def test_forum_media_change_still_light_update(harness):
+    """v1.10 后 skip 路径仅剩的更新触发源：forum_media 变化仍走轻量 UPDATE
+    （零重嵌、不重建 chunks；同轮修正存量 file_type），updated_at 随写抖动。"""
+    harness["create_source"]()
+    harness["scripts"].append(
+        FetchScript(products=[_product(1)], posts=[_post(419, "TFZJ1890014地面铺贴实景")])
+    )
+    await harness["service"].run_now(harness["tenant_id"])
+    calls_after_first = harness["embedding"].calls
+
+    doc = harness["query"](
+        "SELECT id, updated_at, metadata FROM documents "
+        "WHERE tenant_id = %s AND origin = 'hongtao_shop'", (harness["tenant_id"],),
+    )[0]
+
+    # 第二轮论坛帖消失 → raw_payload.forum_media 变空 → metadata 比对不等
+    harness["scripts"].append(FetchScript(products=[_product(1)], posts=[]))
+    result = await harness["service"].run_now(harness["tenant_id"])
+    assert result["counts"]["skip"] == 1  # hash 未变仍 skip（forum_media 不进正文）
+    assert harness["embedding"].calls == calls_after_first  # 零重嵌
+    doc2 = harness["query"](
+        "SELECT updated_at, metadata, file_type FROM documents WHERE id = %s",
+        (doc["id"],),
+    )[0]
+    assert doc2["updated_at"] != doc["updated_at"]  # metadata 变才一次轻量 UPDATE
+    assert json.loads(doc2["metadata"])["raw_payload"]["forum_media"] == []
     # skip 轻量 UPDATE 同轮修正 file_type（存量 markdown 行迁移）
-    assert doc["file_type"] == "json"
+    assert doc2["file_type"] == "json"
 
 
 async def test_off_shelf_soft_delete_and_restore(harness):
@@ -641,15 +678,18 @@ async def test_execute_aborts_without_source_row(harness):
 
 def test_metadata_equivalent_legacy_flat_vs_v19_nested():
     """v1.9 结构迁移：存量平铺 metadata vs 新 raw_payload 嵌套渲染结果判定不等，
-    skip 路径走轻量 UPDATE 自动迁移（零重嵌入）；新结构自身剔除易变键后等价跳过。"""
+    skip 路径走轻量 UPDATE 自动迁移（零重嵌入）。
+
+    v1.10：渲染产物 raw_payload 不再含易变数值——存量残留四键 vs 新渲染无键
+    判定不等（下一轮 skip 零计费清除），键清理完成后等价跳过。"""
     from src.tenant_custom.hongtao_shop.service import (
         PIPELINE_VERSION, _metadata_equivalent,
     )
 
     run = {"id": 101}
+    # v1.10 渲染产物口径：raw_payload 只含稳定业务数据（无 stock/sales 等易变数值）
     rendered_new = {
-        "raw_payload": {"name": "瑞峰", "stock": "1000", "sales": "0",
-                        "pics": ["https://oss/p1.jpg"]},
+        "raw_payload": {"name": "瑞峰", "pics": ["https://oss/p1.jpg"]},
         "trace": {"source": "hongtao_shop", "native_id": "83",
                   "sync_date": "2026-09-22"},
     }
@@ -664,7 +704,17 @@ def test_metadata_equivalent_legacy_flat_vs_v19_nested():
     })
     assert _metadata_equivalent(legacy_stored, rendered_new, run) is False
 
-    # 新结构已落库（仅易变键差异）：等价 → 零写跳过
+    # v1.10 存量残留（raw_payload 含易变键）vs 新渲染无键：不等 → 下一轮 skip 清除
+    stale_stored = json.dumps({
+        "raw_payload": {"name": "瑞峰", "stock": "1000", "sales": "0",
+                        "pics": ["https://oss/p1.jpg"]},
+        "trace": {"source": "hongtao_shop", "native_id": "83",
+                  "sync_date": "2026-09-22"},
+        "pipeline_version": PIPELINE_VERSION, "sync_run_id": 100,
+    })
+    assert _metadata_equivalent(stale_stored, rendered_new, run) is False
+
+    # 键已清除的新结构已落库：等价 → 零写跳过
     stored_new = json.dumps({
         "raw_payload": rendered_new["raw_payload"],
         "trace": {"source": "hongtao_shop", "native_id": "83",

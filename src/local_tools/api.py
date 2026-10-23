@@ -350,7 +350,7 @@ async def runtime_claim(wait: int = 20, device: Dict = Depends(_require_device))
                         f"{invocation['tool_name']} 不在设备 Provider 批准清单内，置为失败"
                     )
                     await asyncio.to_thread(
-                        repository.write_result,
+                        repository.write_runtime_result,
                         str(invocation["id"]),
                         tenant_id,
                         sha256_hex(claim_token),
@@ -375,6 +375,8 @@ async def runtime_claim(wait: int = 20, device: Dict = Depends(_require_device))
             if asyncio.get_event_loop().time() >= deadline:
                 return {"success": True, "invocation": None}
             await asyncio.sleep(CLAIM_POLL_INTERVAL)
+    except repository.DeviceOperationUnresolved:
+        return {'success': True, 'invocation': None, 'blocked_reason': 'LOCAL_DEVICE_STOP_VERIFICATION_REQUIRED'}
     except HTTPException:
         raise
     except Exception as e:
@@ -397,6 +399,9 @@ async def runtime_started(
         if row["state"] != "running":
             raise _http_error(409, f"当前状态不允许标记开始: {row['state']}")
         return {"success": True, "state": row["state"]}
+    except repository.DeviceOperationUnresolved as error:
+        raise HTTPException(status_code=409, detail={'error': str(error), 'debug': str(error),
+            'message': '原本机操作尚未确认完成。请保持原 Runtime 连接以回传结果，暂不能开始新操作。'}) from error
     except HTTPException:
         raise
     except Exception as e:
@@ -442,7 +447,7 @@ async def runtime_result(
     tenant_id = device["tenant_id"]
     try:
         row = await asyncio.to_thread(
-            repository.write_result,
+            repository.write_runtime_result,
             invocation_id,
             tenant_id,
             sha256_hex(body.claim_token),
@@ -452,6 +457,7 @@ async def runtime_result(
             body.effect,
             body.data,
             body.retryable,
+            device_id=str(device['id']),
         )
         if not row:
             raise _http_error(404, "invocation 不存在或 claim token 不匹配")
@@ -483,8 +489,10 @@ async def runtime_boss_visual_diagnose(
     )
     if not tenant or tenant.get("status") != "active":
         raise _http_error(403, "设备租户不存在或已停用")
-    if (not user or user.get("tenant_id") != tenant_id
-            or user.get("status") != "active"):
+    # Pairing follows tenant-context authority: platform admins may act in a tenant
+    # without belonging to it; the authenticated device still fixes the billing tenant.
+    if (not user or user.get("status") != "active"
+            or user.get("role") != "platform_admin" and user.get("tenant_id") != tenant_id):
         raise _http_error(403, "设备用户不存在、已停用或不属于当前租户")
     caller = RuntimeVisualCaller(tenant_id=tenant_id, device_id=str(device["id"]), user_id=user_id)
     result = await diagnose_visual(body, caller)

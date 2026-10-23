@@ -191,16 +191,13 @@ export function checkDbFingerprint(
   const expectHex = expectHeader.toString('hex')
   const magicOk = parsed.magic === dbMagic
   const headerOk = parsed.plaintext_header === expectHex
-  if (!magicOk && !headerOk) {
-    return result(false, `魔数与明文页头均不匹配：期望 ${dbMagic} / ${expectHex}`, parsed.magic, parsed.plaintext_header)
-  }
-  if (!magicOk) {
-    return result(false, `魔数不匹配：期望 ${dbMagic}，实际 ${parsed.magic}`, parsed.magic, parsed.plaintext_header)
-  }
+  // 结构校验（跨账号恒定）：[16:24] 明文页头不加密存储、参数与方案绑定。
+  // [0:8] 魔数 = 加密后的"SQLite f"，值取决于密钥（不同账号/密钥 → 不同密文），
+  // 不能作为跨账号的方案级硬门禁；记录到 observed 供诊断。
   if (!headerOk) {
     return result(false, `明文页头不匹配：期望 ${expectHex}，实际 ${parsed.plaintext_header}`, parsed.magic, parsed.plaintext_header)
   }
-  return result(true, '魔数与明文页头均匹配', parsed.magic, parsed.plaintext_header)
+  return result(true, '明文页头匹配（结构校验通过）', parsed.magic, parsed.plaintext_header)
 }
 
 export interface ExeConstantsDeps {

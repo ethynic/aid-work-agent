@@ -14,8 +14,8 @@
  * ⚠️ 坐标系大坑（本项目最重要的坑之一）：Page.captureScreenshot 无 clip 整页截图的输出就是
  * **device px，与 DOMSnapshot bounds 同一坐标系**（真机实证：整页 1249x1277 = viewport bounds）。
  * 截图后按 device 坐标直接裁剪，**绝不做 DPI 换算**——曾按 ÷1.5 换算导致右侧截掉一半内容。
- * DPI 缩放只在「device px → 屏幕物理像素」一步发生（cv-wheel.ps1 用 GetWindowRect 比例换算，
- * 与 win-click.ps1 同款），本执行器内不出现。
+ * DPI 缩放只在「device px → 屏幕物理像素」一步发生（native 输入用 GetWindowRect 比例换算），
+ * 本执行器内不出现。
  *
  * 为什么滚动走 Win32 而不是 CDP（真机实证）：BOSS 风控拦截合成事件——CDP
  * Input.dispatchMouseEvent mouseWheel + 键盘 PageDown/ArrowDown/Space 全部无效（canvas
@@ -71,7 +71,7 @@ export interface ResumeReadDeps {
   snapshot(): Promise<DomSnapshot>
   /** 无 clip 整页截图（PNG 字节，device px，与 DOMSnapshot bounds 同坐标系） */
   captureFullpage(): Promise<Buffer>
-  /** Win32 滚轮（真实实现调 scripts/cv-wheel.ps1；deltaY<0 向下，单位=格×120） */
+  /** Win32 滚轮（真实实现经 WinMouseClicker.wheel 走 native FFI；deltaY<0 向下，单位=格×120） */
   wheel(deltaY: number, notches: number): Promise<void>
   /** 像素级同画面确认（真实实现调 scripts/cv-segdiff.ps1）：比对两段整页截图的 canvas 区域
    *  是否同一画面。只在相邻段字节差 < BOTTOM_SIZE_EPSILON 时被调（快路径跳过 PS 调用） */

@@ -328,7 +328,8 @@ def build_tenant_instance_items(tenant_id: str, allowed_ids: Any) -> List[Dict[s
             continue
         if row.get("agent_id") == row.get("base_agent_id"):
             continue  # 直用实例行不产生新列表项
-        if row["base_agent_id"] not in allowed:
+        # 放行条件：base 在允许集合（连带/租户范围），或副本自身被直接授权（仅勾副本场景）
+        if row["base_agent_id"] not in allowed and row["agent_id"] not in allowed:
             continue
         base_cfg = registry.get(row["base_agent_id"]) if registry else None
         item = {
@@ -337,6 +338,7 @@ def build_tenant_instance_items(tenant_id: str, allowed_ids: Any) -> List[Dict[s
             "description": row.get("description") or (base_cfg.description if base_cfg else ""),
             "type": "tenant_instance",
             "base_agent_id": row["base_agent_id"],
+            "created_at": row.get("created_at"),
             "business_pages": (base_cfg.business_pages if base_cfg else None) or [],
         }
         if base_cfg is not None and base_cfg.chat_toolbar:

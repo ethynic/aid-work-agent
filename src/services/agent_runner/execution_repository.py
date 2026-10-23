@@ -1,8 +1,9 @@
 """Logical claims and renewable execution attempts are separate durable owners."""
 from loguru import logger
+import copy
 
 from src.db.database import get_db_connection
-from .ownership import Attempt, LeaseLost, lock_runner
+from .ownership import Attempt, LeaseLost, StopRequested, lock_runner
 from .persistence_limits import capped_checkpoint_dumps, capped_snapshot_dumps
 from .repository import decoded
 from .control_projection import merge_control_projection
@@ -71,10 +72,13 @@ class ExecutionRepository:
         self._source_dispatch(cursor,row,prepared)
         return lock_runner(cursor,attempt.runner_id,attempt,dispatch=True)
 
-    def acquire(self, worker_id, lease_seconds):
+    def acquire_priority(self,worker_id,lease_seconds):
+        return self.acquire(worker_id,lease_seconds,priority_only=True)
+
+    def acquire(self, worker_id, lease_seconds, *, priority_only=False):
         with self.connection_factory() as conn:
             cursor = conn.cursor()
-            cursor.execute("""SELECT r.* FROM agent_runners r WHERE
+            cursor.execute("""SELECT r.* FROM agent_runners r WHERE (
                 (r.status='queued'
                  AND NOT EXISTS (SELECT 1 FROM agent_runner_session_claims c WHERE
                     c.scope_key=r.scope_key AND c.session_kind=r.session_kind AND c.session_id=r.session_id)
@@ -88,8 +92,9 @@ class ExecutionRepository:
                     AND (NOT (r.checkpoint ? 'cancel_completion_blocked')
                          OR r.checkpoint->'cancel_completion_blocked'->>'ready'='true')
                     AND (r.lease_until IS NULL OR r.lease_until<=clock_timestamp())
-                    AND EXISTS (SELECT 1 FROM agent_runner_session_claims c WHERE c.owner_runner_id=r.runner_id))
-                ORDER BY r.queue_order FOR UPDATE OF r SKIP LOCKED LIMIT 1""")
+                    AND EXISTS (SELECT 1 FROM agent_runner_session_claims c WHERE c.owner_runner_id=r.runner_id)))
+                AND (NOT %s OR r.status<>'queued')
+                ORDER BY r.queue_order FOR UPDATE OF r SKIP LOCKED LIMIT 1""",(priority_only,))
             row = decoded(cursor.fetchone())
             if row is None:
                 return None
@@ -154,6 +159,8 @@ class ExecutionRepository:
             physical_dispatch=dispatch
             if physical_dispatch:
                 self._source_dispatch(cursor,row,source_prepared)
+            from .durable_sleep import preserve_activation_fence
+            checkpoint = preserve_activation_fence(row,checkpoint)
             snapshot = merge_control_projection(snapshot,row.get('public_snapshot'))
             snapshot = project_public_snapshot(cursor,row,checkpoint=checkpoint,snapshot=snapshot)
             cursor.execute("""UPDATE agent_runners SET checkpoint=%s::jsonb,
@@ -210,13 +217,35 @@ class ExecutionRepository:
                 raise LeaseLost('RUNNER_EXECUTION_CLOSED')
             if row["revision"] != revision:
                 raise LeaseLost("CHECKPOINT_REVISION_CHANGED")
-            checkpoint = {**checkpoint,'released_attempt':release_proof(attempt,status,'parked')}
+            if status=='paused':
+                if row['cancel_requested']:
+                    # Cancellation owns the next acquisition. A concurrent
+                    # pause must not remain an accepted polling tombstone.
+                    from .control_repository import close_pending_controls
+                    close_pending_controls(cursor,attempt.runner_id,'RUNNER_CANCEL_REQUESTED')
+                elif row.get('pause_requested'):
+                    cursor.execute("""UPDATE agent_runner_controls SET status='consumed',consumed_attempt=%s,
+                        consumed_at=clock_timestamp() WHERE runner_id=%s AND action='pause' AND status='accepted'""",
+                        (attempt.number,attempt.runner_id))
+            from .durable_sleep import preserve_activation_fence
+            checkpoint = {**preserve_activation_fence(row,checkpoint),'released_attempt':release_proof(attempt,status,'parked')}
+            wake_at = None
+            from .durable_sleep import arm_in_tx,sleep_leaf
+            leaf = sleep_leaf(checkpoint)
+            if leaf is not None:
+                if row['cancel_requested']:
+                    raise StopRequested('cancel')
+                wake_at=arm_in_tx(cursor,row,checkpoint)
+                root = checkpoint['execution']
+                snapshot={**(snapshot or {}),'waiting':copy.deepcopy(root.get('waiting')),
+                    'business_iterations':(root.get('resources') or {}).get('business_iterations',root.get('iteration',0))}
             snapshot = merge_control_projection(snapshot,row.get('public_snapshot'))
             snapshot = project_public_snapshot(cursor,row,checkpoint=checkpoint,snapshot=snapshot,status=status)
+            lock_runner(cursor,attempt.runner_id,attempt)
             cursor.execute("""UPDATE agent_runners SET status=%s,checkpoint=%s::jsonb,public_snapshot=%s::jsonb,
                 worker_id=NULL,lease_until=NULL,revision=revision+1,view_revision=view_revision+1,
-                updated_at=CURRENT_TIMESTAMP WHERE runner_id=%s RETURNING *""", (status,
-                capped_checkpoint_dumps(checkpoint), capped_snapshot_dumps(snapshot), attempt.runner_id))
+                wake_at=%s,updated_at=CURRENT_TIMESTAMP WHERE runner_id=%s RETURNING *""", (status,
+                capped_checkpoint_dumps(checkpoint), capped_snapshot_dumps(snapshot), wake_at, attempt.runner_id))
             result = decoded(cursor.fetchone())
             result = sync_public_display(cursor,result,advance_view=False)
             result = EventRepository.notify_in_tx(cursor,row,after=result)
@@ -234,8 +263,8 @@ class ExecutionRepository:
                     cursor.execute('RELEASE SAVEPOINT runner_waiting_notify')
                 except Exception as error:  # noqa: BLE001 - 通知失败回滚至 savepoint，保留 park 更新
                     cursor.execute('ROLLBACK TO SAVEPOINT runner_waiting_notify')
-                    logger.warning('runner waiting notification production failed '
-                                   'runner_id={} error={!r}', result['runner_id'], error)
+                    logger.opt(exception=True).warning('runner waiting notification production failed '
+                                   'runner_id={}', result['runner_id'])
             conn.commit()
             return result
 
@@ -249,7 +278,8 @@ class ExecutionRepository:
                     raise LeaseLost('FINALIZATION_INTENT_IMMUTABLE')
                 return row
             if row['revision']!=revision: raise LeaseLost('CHECKPOINT_REVISION_CHANGED')
-            checkpoint = {**checkpoint, "pending_finalization": result}
+            from .durable_sleep import preserve_activation_fence
+            checkpoint = {**preserve_activation_fence(row,checkpoint), "pending_finalization": result}
             snapshot = merge_control_projection(snapshot,row.get('public_snapshot'))
             snapshot = project_public_snapshot(cursor,row,checkpoint=checkpoint,snapshot=snapshot,status='finalizing')
             previous = (row.get('checkpoint') or {}).get('pending_finalization')
@@ -264,7 +294,7 @@ class ExecutionRepository:
             if row["revision"] != revision:
                 raise LeaseLost("CHECKPOINT_REVISION_CHANGED")
             cursor.execute("""UPDATE agent_runners SET status='finalizing', checkpoint=%s::jsonb,
-                public_snapshot=%s::jsonb,revision=revision+1,view_revision=view_revision+1,
+                public_snapshot=%s::jsonb,wake_at=NULL,revision=revision+1,view_revision=view_revision+1,
                 updated_at=CURRENT_TIMESTAMP WHERE runner_id=%s RETURNING *""",
                 (capped_checkpoint_dumps(checkpoint),
                  capped_snapshot_dumps(snapshot), attempt.runner_id))

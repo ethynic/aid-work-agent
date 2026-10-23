@@ -74,6 +74,31 @@ aid-wecom version [--json]                  # 版本 + provider manifest（含 s
 
 ## 本地库读取（P1b）
 
+### 群关键词搜索、群列表及时间线（P4）
+
+以下命令直接查询当前登录账号的本地数据库，不使用截图/OCR/Jev，不切换会话或清除未读。复用版本矩阵、账号确认和可信快照；缺库或不兼容时明确失败，不回退视觉。列表范围是**本机已同步群**，包含无聊天记录的群，不能视为企业全部群或当前成员资格清单。
+
+```powershell
+# 按群名关键词作字面子串匹配，过滤后最多返回10个（%/_不作通配符）
+node dist/src/cli/index.js list-groups --query "测试" --limit 10 --json
+# 列出最多20个群，按群名和会话ID稳定排序
+node dist/src/cli/index.js list-groups --limit 20 --json
+# 取最近100条，再按发送时间从早到晚排列
+node dist/src/cli/index.js read-group --target-name "新劳务云系统项目沟通群" --limit 100 --json
+# 时间闭区间内最近100条，仍按时间升序；未写时区时固定按北京时间
+node dist/src/cli/index.js read-group --target-name "新劳务云系统项目沟通群" --from-time "2026-10-01 00:00:00" --to-time "2026-10-22 23:59:59" --limit 100 --json
+```
+
+对应 MCP 工具为 `wecom_group_list({query?,limit?})` 与 `wecom_group_read({target_name,limit?,from_time?,to_time?})`。完整群名精确匹配，仅在群中消歧；多个同名群返回 `TARGET_AMBIGUOUS`。时间须完整到秒，也接受 `2026-10-22T12:00:00+08:00` / `2026-10-22T04:00:00Z`，起止两端均包含。只有单侧时间也可查询。
+
+两种查询默认 `limit=100`，返回 `count` 和 `has_more`；`has_more=true` 表示数量被限制，消息查询保留区间内最近 N 条。消息按 `send_time` 升序，同秒按 `msg_id` 升序；`sender_id` 保持字符串，`time` 固定北京时间，`send_time` 和输出的 `from_time/to_time` 为 Unix 秒。没有消息成功返回空数组，异常时间不进入时间线并以 `invalid_time_count` 明示（当前群总异常数）；非文本消息仍占位，`parse_trusted` 表示正文解析可信性，人工输出会给不可信文本加上 `[正文解析待核验]`。本命令不返回增量游标。
+
+原 `search` / `wecom_chat_search` 仍使用界面搜索；需要本地库搜群请使用 `list-groups`。新增工具进入本 Provider 的标准 MCP 发现面；本批不修改旧 D1 Runtime 的静态工具清单，也未发布或安装新版 Runtime 插件。
+
+群消息显示姓名并保留字符串 `sender_id`，`sender_name` 从当前账号本地用户表精确映射；查无姓名时为 `null`，人工输出显示 `未知用户(ID)`，不会按同名推断身份。`sender_name_source` 标明 `user_table/unresolved`，顶层 `naming_incomplete` 明示姓名缺口。
+
+文本消息按本地有序片段拼接，恢复普通文字、多次 `@成员`、`@所有人` 以及引用前文。`mentions:[{kind,user_id,name,name_source}]` 仅记录结构化提及，引用文字中的字面 `@` 不冒充真实提及；提及优先使用消息内历史显示名，缺名时才按ID补用户表姓名。`mentions_complete=false` 或 `parse_trusted=false` 表示未知/损坏片段等解析缺口；无法识别的片段明确占位，不能视为完整正文。引用前文按消息里的原始文字保留，不猜引用作者ID；非文本消息仍不解析实体内容。既有 read-session 增量游标和 watch 锚点语义保持不变。
+
 运行 `aid-wecom doctor --localdb` 确认版本与账号后，`read-session` 优先读取本地库，首次默认最近 100 条，后续将返回的 `data.cursor` 原样传入 `--cursor` 续读；`--limit` 控制每批条数。游标绑定当前账号、会话及数据库代际，不能交给 UI 通道或跨账号复用。
 
 `--channel local-db` 强制本地库且失败不回退，`--channel ui` 使用既有 UI 链路。未初始化仍可走 UI；普通首读的通道故障可回退 UI并显示原因，取消、参数、账号或目标错误不回退。带账号的 ref 必须与当前账号一致；旧 ref 继续用于 UI，本地库要求新 ref 或 `--target-name`。本地库不切会话、不清角标，非文本仅占位。

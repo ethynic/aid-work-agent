@@ -51,6 +51,8 @@ def issue_download_ticket(
     tenant_id: Optional[str] = None,
     user_id: Optional[str] = None,
     role: Optional[str] = None,
+    *,
+    ttl_seconds: int = TICKET_TTL_SECONDS,
 ) -> str:
     """签发下载票据，绑定目标下载路径 + 租户 + 用户 + 角色。
 
@@ -62,7 +64,7 @@ def issue_download_ticket(
             "t": tenant_id or "",
             "u": user_id or "",
             "role": role or "",
-            "e": int(time.time()) + TICKET_TTL_SECONDS,
+            "e": int(time.time()) + ttl_seconds,
         },
         ensure_ascii=False,
     ).encode("utf-8")

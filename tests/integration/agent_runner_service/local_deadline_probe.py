@@ -1,7 +1,9 @@
 """Normal RuntimeFactory DI: short timeout on the actual registered boss proxy.
 
-No method/clock/result replacements. The real bind persists its native deadline,
-real polling elapses, and a later undecorated CLI resumes that same stored fact.
+No method/clock/result replacements. Since Phase 4 the durable bind persists no
+deadline; timeout_seconds only bounds the legacy non-durable observation window.
+The real poll keeps observing the persisted original invocation (lease liveness)
+until its terminal state, so an execution slower than timeout_seconds completes.
 """
 import asyncio
 import signal

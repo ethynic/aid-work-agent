@@ -13,16 +13,16 @@ from src.db.models import hash_password
 
 def main():
     if len(sys.argv) < 2:
-        print("用法: python -m scripts.sh_qbtoken <明文密码>")
+        print("用法: python -m scripts.hash_token <明文密码>")
         sys.exit(1)
 
     plaintext = sys.argv[1]
     hashed = hash_password(plaintext)
-    print(f"Token 明文: {plaintext}")
     print(f"Token 哈希: {hashed}")
     print()
-    print("请将哈希值设置到 .env 中：")
-    print(f"QBTOKEN_HASH={hashed}")
+    print("请将哈希值设置到 .env 中（必须用单引号包裹：bcrypt 哈希含 $，")
+    print("不加引号会被 docker compose env_file 变量插值吃掉 $ 开头片段）：")
+    print(f"QBTOKEN_HASH='{hashed}'")
     print()
     print("或设置到 config.yaml 中：")
     print(f"qb_token_hash: \"{hashed}\"")

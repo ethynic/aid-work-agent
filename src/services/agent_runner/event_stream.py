@@ -167,8 +167,8 @@ class ObserverResponse(Response):
             # Headers are already committed. End only this observer; the next
             # fresh query/reconnect reports its normal safe HTTP error.
             pass
-        except Exception as error:
-            logger.warning('Runner event observer ended kind={}', type(error).__name__)
+        except Exception:
+            logger.opt(exception=True).warning('Runner event observer ended')
         finally:
             async def cleanup():
                 # The owner of cleanup is shielded as a whole: a second

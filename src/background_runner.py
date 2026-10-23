@@ -211,7 +211,19 @@ async def _run():
             f"background runner: wechat_mp scheduler 启动失败（不影响 runner）: {e}",
         )
 
-    # 6. 租户定制模块调度按需加载（configs/config.yaml tenant_custom_modules 清单
+    # 6. 腾讯文档导入批次调度（任务 #5；单副本 Redis 锁，启动失败不影响 runner）
+    _tdoc_scheduler = None
+    try:
+        from src.services.tencent_docs.import_scheduler import TdocImportScheduler
+
+        _tdoc_scheduler = TdocImportScheduler()
+        await _tdoc_scheduler.start()
+    except Exception as e:
+        logger.opt(exception=True).error(
+            f"background runner: tencent_docs 导入调度器启动失败（不影响 runner）: {e}",
+        )
+
+    # 7. 租户定制模块调度按需加载（configs/config.yaml tenant_custom_modules 清单
     # 控制；每个工厂返回带 start()/stop() 的调度器，启动失败不影响 runner）
     _optional_schedulers = []
     try:
@@ -254,12 +266,18 @@ async def _run():
     if _billing_scheduler is not None:
         await _billing_scheduler.stop()
 
-    # 停机：poller → wechat_mp scheduler → hongtao_shop scheduler → scheduler → DB 池
+    # 停机：poller → wechat_mp scheduler → tencent_docs 调度器 → hongtao_shop scheduler → scheduler → DB 池
     try:
         if _poller is not None:
             await _poller.stop()
     except Exception as e:
         logger.warning(f"background runner: poller stop 异常: {e}")
+
+    try:
+        if _tdoc_scheduler is not None:
+            await _tdoc_scheduler.stop()
+    except Exception as e:
+        logger.opt(exception=True).error(f"background runner: tencent_docs 调度器 stop error: {e}")
 
     try:
         if _wmp_scheduler is not None:

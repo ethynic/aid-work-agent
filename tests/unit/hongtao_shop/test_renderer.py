@@ -35,7 +35,7 @@ def _item(**overrides):
         "comment_score": "5.0",
         "comment_num": "2",
         "createtime": "1758432000",
-        # 价格字段故意注入：fetcher 即弃后渲染层不得 copy-through
+        # 价格与易变数值字段故意注入：v1.10 起全链路排除，渲染层不得 copy-through
         "market_price": "399.00",
         "sell_price": "299.00",
     }
@@ -138,7 +138,9 @@ def test_render_product_metadata_complete():
     rp = m["raw_payload"]
     assert rp["name"] == "TFZJ1890014欧典米灰"
     assert rp["model"] == "TFZJ1890014"
-    assert rp["stock"] == "1000" and rp["sales"] == "9"  # 易变数值只在 metadata
+    # v1.10：易变数值全链路排除，raw_payload 不再含四键（fixture 已注入）
+    for absent in ("stock", "sales", "comment_score", "comment_num"):
+        assert absent not in rp, f"raw_payload 不应再包含 {absent}"
     assert rp["pics"] == ["https://oss/pic574.jpg", "https://oss/p574_1.jpg", "https://oss/p574_2.jpg"]
     assert rp["detail_images"] == ["https://oss/d574_1.jpg", "https://oss/d574_2.jpg"]
     assert len(rp["forum_media"]) == 1
@@ -149,11 +151,14 @@ def test_render_product_metadata_complete():
     assert m["trace"]["native_id"] == "574"
     assert m["trace"]["sync_date"] == "2026-09-21"
     assert m["trace"]["content_hash"] == r.content_hash
-    # 价格字段彻底排除：正文与 metadata 双查（fixture 已注入 market_price/sell_price）
+    # 价格与易变数值彻底排除：metadata 序列化双查（fixture 已注入六字段）
     assert "399" not in r.content_md and "299" not in r.content_md
+    assert "1000" not in r.content_md
     assert "market_price" not in r.content_md and "sell_price" not in r.content_md
     serialized = json.dumps(m, ensure_ascii=False)
     assert "market_price" not in serialized and "sell_price" not in serialized
+    assert "stock" not in serialized and "sales" not in serialized
+    assert "comment_score" not in serialized and "comment_num" not in serialized
     assert "399" not in serialized and "299" not in serialized
 
 

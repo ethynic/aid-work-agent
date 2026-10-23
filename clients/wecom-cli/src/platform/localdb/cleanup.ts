@@ -175,7 +175,7 @@ export interface LocaldbWorkDir {
 }
 
 /** 产物目录前缀（各执行器语义名；新执行器登记于此，清扫协议按目录 owner 标记与前缀无关） */
-export type LocaldbWorkPrefix = 'doctor' | 'read-session' | 'unread' | 'watch' | 'send-baseline' | 'send-verify'
+export type LocaldbWorkPrefix = 'doctor' | 'read-session' | 'unread' | 'watch' | 'send-baseline' | 'send-verify' | 'groups'
 
 /** owner 就绪后原子发布；先等待调用的所有子进程退出，再调用 cleanup。 */
 export function createLocaldbWorkDir(prefix: LocaldbWorkPrefix, workBaseDir?: string | null): LocaldbWorkDir | null {

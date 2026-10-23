@@ -33,6 +33,9 @@ class UsageScope:
             except OSError as error:
                 self.fatal_error = self.fatal_error or error
         if self.fatal_error is not None:
+            from .ownership import LeaseLost
+            if isinstance(self.fatal_error, LeaseLost):
+                raise self.fatal_error  # Stop IO with its original ownership reason.
             raise CheckpointFailure("RUNNER_USAGE_STORAGE_FAILED") from self.fatal_error
 
     def fail(self, error):

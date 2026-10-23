@@ -58,6 +58,14 @@ export interface OpContext {
   browserTargetRef?: string
   /** Internal retry guard for commands whose original intent means the current conversation. */
   expectedContactRef?: string
+  /** Only the local readonly/page-state recovery owner may rebuild a lost connection target. */
+  recoverBrowserTarget?: boolean
+  /** Original batch intent, used only when rebuilding its business page. */
+  recoveryJobName?: string
+  /** One invocation-private continuation. Never serialize this holder or its captured domain state. */
+  recoveryContinuation?: { resume?: (context: OpContext) => Promise<OperationResult> }
+  /** Carry the consumed ordinary retry into a fresh post-repair execution. */
+  previousPageExecution?: import('./pageOperation.js').PageExecution
 }
 
 export interface BossOperation<Args> {
@@ -100,7 +108,7 @@ export function failResult(
   effect: Effect,
   data: Record<string, unknown> = {},
 ): OperationResult {
-  return { success: false, code, message, effect, data, retryable: RETRYABLE_CODES.has(code), run_id: runId }
+  return { success: false, code, message, effect, data, retryable: effect !== 'unknown' && effect !== 'partial' && RETRYABLE_CODES.has(code), run_id: runId }
 }
 
 /**

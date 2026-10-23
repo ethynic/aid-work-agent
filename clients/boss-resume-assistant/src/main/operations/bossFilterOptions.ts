@@ -23,12 +23,32 @@ export function createBossFilterOptionsOperation(
   return {
     name: 'boss_filter_options',
     execute(_args: Record<string, never>, ctx: OpContext): Promise<OperationResult> {
-      return runBossOperation(
+      let retained: { message: string; data: Record<string, unknown>; effect: 'none' } | undefined
+      const run = (ctx: OpContext): Promise<OperationResult> => runBossOperation(
         { kind: 'readonly', name: 'boss_filter_options' },
         ctx,
         sessionFactory,
         () => null,
         async (session, _tracker, perf) => {
+          if (retained) {
+            const intent = { name: 'boss_filter_options', operationClass: 'readonly' as const, goal: '保留已读筛选档位，收起筛选面板', expected: '原筛选工具栏可读且筛选面板已收起' }
+            let execution = ctx.previousPageExecution!
+            try {
+              const closed = await runVerifiedPageOperation(intent, async (attempt) => {
+                execution = attempt.execution
+                const setter = new FilterSetter({ snapshot: () => session.snapshot(FILTER_SNAPSHOT_OPTIONS),
+                  click: (...args) => attempt.input(() => session.click(...args)), signal: ctx.signal })
+                const state = await setter.verifyProbeClosed()
+                if (state.status !== 'met') await setter.closeProbePanel()
+                attempt.verified(await setter.verifyProbeClosed())
+              }, ctx.previousPageExecution)
+              return { ...retained, data: { ...retained.data, operation_recovery: closed.facts } }
+            } catch (error) {
+              const pending = retainedReadCleanupFailure(error, intent, execution)
+              return { ...retained, message: retained.message + '；已保留读取结果，页面收尾尚未确认',
+                data: { ...retained.data, operation_recovery: pending.facts, cleanup_error: pending.cleanupError } }
+            }
+          }
           let cleanupFacts: Record<string, unknown> | undefined
           let cleanupError: { code: string; message: string } | undefined
           const verified = await runVerifiedPageOperation({ name: 'boss_filter_options', goal: '读取筛选可选档位并收起面板', expected: '可读筛选档位已取得且面板已收起', operationClass: 'readonly' }, async (attempt) => {
@@ -42,7 +62,8 @@ export function createBossFilterOptionsOperation(
             } catch { /* 非法URL按错误页面拒绝，不能根据后台iframe文案放行。 */ }
             if (!onRecommend) throw new CodedOperationError('WRONG_PAGE', '当前不在 BOSS 推荐牛人页面，请先用 boss_goto recommend；后台筛选文案不构成页面前置条件')
             // 前置校验：必须在推荐牛人列表页（有「筛选」按钮，与 bossGreet 同源判定）
-            const probe = await session.snapshot()
+            // Phase 5 快照热点分段：前置校验快照与业务面板快照分开计段，便于归因
+            const probe = await perf.time('snapshot:precheck', () => session.snapshot())
             if (!probe.strings.some((s) => FILTER_BUTTON_PATTERN.test(s.trim()))) {
               throw new CodedOperationError(
                 'WRONG_PAGE',
@@ -56,6 +77,8 @@ export function createBossFilterOptionsOperation(
               // 性能埋点：固定 sleep 与关键阶段耗时进 collector（只记名称与毫秒）
               sleep: (ms) => perf.time(`sleep:${ms}`, () => new Promise<void>((r) => setTimeout(r, ms))),
               step: <T>(name: string, fn: () => Promise<T>) => perf.time(`filter:${name}`, fn),
+              // Phase 5 存活热点分段：纯计算步骤同步计时（结构解析等）
+              stepSync: <T>(name: string, fn: () => T) => perf.timeSync(name, fn),
               // VIP 面板滚动适配：CDP 浏览类滚动（不占真实鼠标）
               mouseWheel: (...args) => activeAttempt.input(() => session.mouseWheel(...args)),
             })
@@ -102,11 +125,14 @@ export function createBossFilterOptionsOperation(
               },
               effect: 'none' as const,
             }
-          })
+          }, ctx.previousPageExecution)
+          retained = verified.value
           return { ...verified.value, message: verified.value.message + (cleanupError ? '；已保留读取结果，页面收尾尚未确认' : ''),
             data: { ...verified.value.data, operation_recovery: cleanupFacts ?? verified.facts, ...(cleanupError ? { cleanup_error: cleanupError } : {}) } }
         },
       )
+      if (ctx.recoveryContinuation) ctx.recoveryContinuation.resume = run
+      return run(ctx)
     },
   }
 }

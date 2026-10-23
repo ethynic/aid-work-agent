@@ -1,6 +1,13 @@
 <template>
   <div class="h-full overflow-y-auto p-2 md:p-4 bg-gray-50" ref="containerRef">
     <div class="max-w-4xl mx-auto space-y-4 md:space-y-6 px-2 md:px-4">
+      <div v-if="history" class="flex flex-wrap items-center gap-2 text-sm text-muted" aria-label="任务历史记录">
+        <p role="status" class="min-w-0 flex-1">{{ history.loading ? '正在加载历史记录…' : history.older ? '正在查看较早记录' : '显示最近记录，较早内容已保存。' }}</p>
+        <BaseButton v-if="history.hasMore" intent="secondary" size="sm" :disabled="history.loading" @click="$emit('history', 'older')">更早记录</BaseButton>
+        <BaseButton v-if="history.older || history.error" intent="secondary" size="sm" :disabled="history.loading" @click="$emit('history', 'latest')">返回最新</BaseButton>
+        <p v-if="history.error" role="alert" class="w-full text-danger-600">{{ history.error }}</p>
+      </div>
+
       <!-- Empty State -->
       <div v-if="messages.length === 0" class="flex flex-col items-center justify-center h-full text-center px-2 md:px-4">
         <div class="w-20 h-20 rounded-2xl bg-gradient-to-br from-primary-100 to-primary-200 flex items-center justify-center mb-6 shadow-message">
@@ -53,11 +60,14 @@ import { ref, watch, nextTick } from 'vue'
 import type { ChatMessage, InputHintState } from '@/types'
 import { DEFAULT_GREETING, type SubagentGreeting } from '@/utils/sessionGreetings'
 import MessageItem from './MessageItem.vue'
+import BaseButton from './ui/BaseButton.vue'
 
 interface Props {
   messages: ChatMessage[]
   isProcessing: boolean
   inputHintState: InputHintState
+  followLatest?: boolean
+  history?: { older: boolean; hasMore: boolean; loading: boolean; error?: string }
   /** 当前数字员工显示名称（空态标题展示；无则主智能体） */
   subagentName?: string | null
   /** 当前数字员工的空态摘要与快捷按钮；无则渲染默认兜底 */
@@ -66,12 +76,14 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   subagentName: null,
+  followLatest: true,
   greeting: () => DEFAULT_GREETING,
 })
 defineEmits<{
   (e: 'quick-prompt', prompt: string): void
   /** 消息内动作触发的发送（如 §5.1 编号选择按钮），与输入框/空态快捷按钮同链路 */
   (e: 'send', content: string): void
+  (e: 'history', action: 'older' | 'latest'): void
 }>()
 const containerRef = ref<HTMLElement | null>(null)
 
@@ -88,8 +100,12 @@ watch(() => props.isProcessing, async (processing) => {
   }
 })
 
+watch(() => props.followLatest, async follow => {
+  if (follow) { await nextTick(); scrollToBottom() }
+})
+
 function scrollToBottom() {
-  if (containerRef.value) {
+  if (props.followLatest && containerRef.value) {
     containerRef.value.scrollTop = containerRef.value.scrollHeight
   }
 }

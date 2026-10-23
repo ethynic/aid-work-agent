@@ -350,3 +350,59 @@ export async function optimizeSection(
   })
   return handleResponse(response)
 }
+
+// ============== 配置导出/导入（跨环境迁移） ==============
+
+export interface AgentExportEnvelope {
+  format: string
+  version: number
+  exported_at: string
+  definition: Record<string, any>
+  env_var_placeholders: { name: string; description: string }[]
+  notes: string[]
+}
+
+export interface ImportConflict {
+  agent_id: string
+  type: 'custom' | 'builtin'
+  name: string
+}
+
+export interface ImportPayload {
+  format: string
+  version: number
+  definition: Record<string, any>
+  conflict_strategy?: 'overwrite' | 'rename'
+  new_agent_id?: string
+  new_name?: string
+}
+
+export interface ImportResult {
+  status: number
+  ok: boolean
+  body: {
+    success: boolean
+    error?: string
+    conflict?: ImportConflict
+    data?: { agent_id: string; name: string; mode: string }
+    warnings?: string[]
+    auto_completed?: string[]
+  }
+}
+
+export async function exportDefinition(agentId: string): Promise<{ success: boolean; data: AgentExportEnvelope }> {
+  const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}/export`, {
+    headers: getAuthHeaders(),
+  })
+  return handleResponse(response)
+}
+
+export async function importDefinition(payload: ImportPayload): Promise<ImportResult> {
+  const response = await fetch(`${API_BASE}/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(payload),
+  })
+  const body = await response.json()
+  return { status: response.status, ok: response.ok, body }
+}

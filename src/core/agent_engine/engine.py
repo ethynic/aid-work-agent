@@ -5,6 +5,7 @@ closing this iterator is an execution-owner action; subscribers never own it.
 """
 
 import asyncio
+import hashlib
 import json
 import time
 import uuid
@@ -13,7 +14,7 @@ from typing import AsyncIterator
 from src.core.agent_events import (
     _truncate_tool_content, make_event, make_image_event, mask_tool_args,
 )
-from .contracts import DispatchResult, ExecutionState, Outcome, ToolCall, ToolFact, TerminalDirective
+from .contracts import AgentMode, DispatchResult, ExecutionState, Outcome, ToolCall, ToolFact, TerminalDirective
 from .ports import ControlPort, ModelPort, ObserverPort, ToolPort
 
 
@@ -22,10 +23,10 @@ def is_tool_result_echo(content) -> bool:
             and '"tool_result"' in content.lstrip()[:300])
 
 
-def normalize_calls(raw_calls: list) -> list[ToolCall]:
+def normalize_calls(raw_calls: list, namespace=None) -> list[ToolCall]:
     calls = []
     ids = set()
-    for raw in raw_calls:
+    for ordinal, raw in enumerate(raw_calls):
         function = raw.get("function", raw)
         name = function.get("name")
         if not name:
@@ -42,6 +43,8 @@ def normalize_calls(raw_calls: list) -> list[ToolCall]:
         if call_id in ids:
             raise ValueError("DUPLICATE_TOOL_CALL_ID")
         ids.add(call_id)
+        if namespace is not None:
+            call_id = "call_" + hashlib.sha256(f"{namespace}:{ordinal}".encode()).hexdigest()[:40]
         calls.append(ToolCall(call_id, name, arguments))
     return calls
 
@@ -122,6 +125,9 @@ class AgentEngine:
         # Retain a stable ID even when the provider response is interrupted.
         fact = {"call_id": call_id, "execution_id": state.execution_id,
                 "iteration": state.iteration, "phase": "started"}
+        identity_version = state.resources.get("tool_identity_version")
+        if type(identity_version) is int and identity_version == 1:
+            fact["tool_identity_version"] = 1
         state.model_calls.append(fact)
         await control.save(state, "before_model")
         started = time.monotonic()
@@ -135,6 +141,10 @@ class AgentEngine:
                 "iteration": state.iteration, "error_code": type(error).__name__,
                 "start_ts": started_wall, "end_ts": time.time(),
                 "duration_ms": int((time.monotonic() - started) * 1000)}
+            if getattr(error,'credit_blocked',False):
+                # Receipt admission rejected before provider I/O. Preserve that
+                # zero-dispatch fact so an explicit funded resume may retry.
+                fact['phase']='not_started'
             if getattr(error, "authoritative_storage_failure", False):
                 raise
             # Identify provider I/O separately from authoritative checkpoint and
@@ -173,6 +183,16 @@ class AgentEngine:
             return
         state.outcome = Outcome.RUNNING
         state.waiting = None
+        # Physical iteration remains an audit counter. Business rounds have a
+        # separate durable allowance; the application may credit a committed
+        # pure control wait, but a restart never replenishes ordinary work.
+        state.resources.setdefault('business_iterations',state.iteration)
+
+        def business_used():
+            value = state.resources['business_iterations']
+            if state.resources.get('continuous_enabled') is True:
+                value -= state.resources.get('continuous_segment_start',0)
+            return value
 
         async def observed(event):
             await observer.event(state, event)
@@ -193,7 +213,7 @@ class AgentEngine:
             if self._directive(state):
                 yield await observed(await self._stop_execution(state,control,tools))
                 return
-            while state.pending or unapplied_response() or state.iteration < state.max_iterations:
+            while state.pending or unapplied_response() or business_used() < state.max_iterations:
                 if self._directive(state):
                     yield await observed(await self._stop_execution(state,control,tools))
                     return
@@ -214,6 +234,8 @@ class AgentEngine:
                         response = saved['response']
                     else:
                         state.iteration += 1
+                        state.resources['business_iterations'] += 1
+                        state.resources.pop('round_tool_ids',None)
                         response, event = await self._model(state, model, tools, control, observer)
                         yield await observed(event)
                     if not saved and not response.get("tool_calls") and is_tool_result_echo(response.get("content")):
@@ -229,7 +251,19 @@ class AgentEngine:
                             yield await observed(event)
                     if response.get('protocol_error'):
                         raise RuntimeError(response['protocol_error'])
-                    calls = normalize_calls(response.get("tool_calls", []))
+                    response_fact = next((fact for fact in reversed(state.model_calls)
+                        if owned_model_fact(fact) and fact.get("iteration")==state.iteration
+                        and fact.get("phase")=="completed" and fact.get("response") is response), None)
+                    # Namespace only newly versioned responses. Old unapplied
+                    # checkpoints and existing pending calls retain their IDs.
+                    identity_version = response_fact.get("tool_identity_version") if response_fact else None
+                    namespace = (f"{state.execution_id}:{response_fact['call_id']}"
+                        if type(identity_version) is int and identity_version == 1 else None)
+                    calls = normalize_calls(response.get("tool_calls", []),namespace)
+                    state.resources['round_tool_ids'] = [call.id for call in calls]
+                    if namespace is not None:
+                        orders = state.resources.setdefault('tool_cursor_orders',{})
+                        orders.update({call.id:[state.iteration,index] for index,call in enumerate(calls)})
                     content = response.get("content") or ""
                     message = {"role": "assistant", "content": content}
                     if response.get("reasoning_content"):
@@ -241,7 +275,15 @@ class AgentEngine:
                         if owned_model_fact(fact) and fact.get('iteration')==state.iteration and fact.get('phase')=='completed':
                             fact['applied'] = True
                     if not calls:
-                        state.output += content
+                        if state.resources.get('continuous_enabled') is True:
+                            state.output = content
+                        else:
+                            state.output += content
+                        if state.resources.get('continuous_enabled') is True and state.role != AgentMode.SUBAGENT:
+                            await control.save(state,'model_completed')
+                            if content:
+                                yield await observed(make_event('response',data=content))
+                            continue
                         if state.followup_messages:
                             await control.save(state,'model_completed')
                             if content:
@@ -320,6 +362,16 @@ class AgentEngine:
                         if result.terminal_directive is not None else None)
                     if fact.terminal_directive is not None:state.terminal_directive=fact.terminal_directive
                     if not fact.result_recorded:
+                        identity_version = state.resources.get('tool_identity_version')
+                        if type(identity_version) is int and identity_version == 1:
+                            orders = state.resources.setdefault('tool_cursor_orders',{})
+                            if call.id not in orders:
+                                # Old pending/unapplied calls keep their original
+                                # ID, but their newly paired result is new proof.
+                                known = [*orders.values(),*(state.resources.get('continuous_cursor_orders') or {}).values()]
+                                ordinal = 1+max((value[1] for value in known
+                                    if value[0]==state.iteration),default=-1)
+                                orders[call.id] = [state.iteration,ordinal]
                         serialized = result.content if isinstance(result.content, str) else json.dumps(result.content, ensure_ascii=False)
                         state.messages.append({"role": "tool", "tool_call_id": call.id,
                             "content": serialized if result.preserve_content else _truncate_tool_content(serialized)})
@@ -360,10 +412,17 @@ class AgentEngine:
                     break
 
             if state.outcome == Outcome.RUNNING:
-                state.outcome = Outcome.ITERATION_LIMIT
-                state.error_code = "ITERATION_LIMIT"
-                await control.save(state, "iteration_limit")
-                yield await observed(make_event("iteration_limit", limit=state.max_iterations))
+                if state.resources.get('continuous_enabled') is True:
+                    state.outcome = Outcome.PAUSED
+                    state.waiting = {'kind':'continuous_guard','reason':'CONTINUOUS_SEGMENT_LIMIT',
+                        'assistance_id':'continuous_guard:'+str(state.iteration)}
+                    await control.save(state,'continuous_guard')
+                    yield await observed(make_event('paused',reason=state.waiting))
+                else:
+                    state.outcome = Outcome.ITERATION_LIMIT
+                    state.error_code = "ITERATION_LIMIT"
+                    await control.save(state, "iteration_limit")
+                    yield await observed(make_event("iteration_limit", limit=state.max_iterations))
             tool_messages = [message for message in state.messages[state.initial_len:]
                              if message.get("role") == "tool" or message.get("tool_calls")]
             if tool_messages:

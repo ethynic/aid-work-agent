@@ -262,6 +262,12 @@ test('independent: later blocked batch item repairs page while preserving first 
   const resumes = h.result.data.resumes as Array<{ candidate_name: string; images: Array<{ base64: string }> }>
   assert.equal(resumes.length, 1); assert.equal(resumes[0]!.candidate_name, '甲小明')
   assert.deepEqual(Buffer.from(resumes[0]!.images[0]!.base64, 'base64'), h.artifact)
+  // 恢复契约（与后端 resume_continuation._page_restored 对齐）：批次回执必须让
+  // 「页面已恢复」事实可见（visual_recovery.page_restored=true，后端据此允许沿
+  // 游标续筛处理剩余候选人）；同时原停止原因作为诊断保留，不被恢复成功抹掉
+  assert.equal(v.page_restored, true)
+  assert.equal(typeof h.result.data.stop_reason, 'string')
+  assert.notEqual(h.result.data.stop_reason, '')
 })
 
 test('independent: ordinary individual image error still closes safely and continues without paid recovery', async () => {

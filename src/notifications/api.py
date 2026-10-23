@@ -24,7 +24,7 @@ class NotificationRoute(APIRoute):
             except NotificationError as error:
                 return JSONResponse({'error':error.code}, status_code=error.status)
             except Exception as error:
-                logger.error('notification api failure class={}', type(error).__name__)
+                logger.opt(exception=True).error('notification api failure')
                 return JSONResponse({'error':'NOTIFICATION_UNAVAILABLE'}, status_code=503)
         return safe
 

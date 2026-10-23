@@ -23,6 +23,7 @@ class ToolControlSet:
         from src.tools.agent.ask_user_tool import AskUserTool
         from src.tools.agent.clarify_tool import ClarifyTool
         from src.tools.agent.present_options_tool import PresentOptionsTool
+        from src.tools.agent.sleep_tool import AgentSleepTool
         from src.tools.plan.create_plan_tool import CreatePlanTool
         from src.tools.skill.skill_execute_tool import SkillExecuteTool
         from src.tools.skill.use_skill_tool import UseSkillTool
@@ -42,6 +43,7 @@ class ToolControlSet:
             ClarifyTool(),
             AskUserTool(),
             PresentOptionsTool(),
+            AgentSleepTool(),
             UseSkillTool(dependencies.skill_registry),
         )
         self._tools = {tool.name: tool for tool in tools}
@@ -66,7 +68,7 @@ class ToolControlSet:
     def definitions(self, *, available_subagents: Optional[Sequence[str]]) -> list[dict]:
         definitions = [
             self._tools[name].to_tool_definition()
-            for name in ("skill_execute", "create_plan", "clarify", "ask_user", "present_options")
+            for name in ("skill_execute", "create_plan", "clarify", "ask_user", "present_options", "agent_sleep")
         ]
         definitions.append(self._dependencies.skill_registry.get_skill_tool_definition())
         if self._delegate is not None:

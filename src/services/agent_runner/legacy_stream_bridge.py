@@ -19,6 +19,7 @@ the auth service are the only identity dependency.
 """
 
 import asyncio
+import copy
 import json
 import time
 import uuid
@@ -134,6 +135,19 @@ def _leaf_waiting(snapshot):
     return waiting if isinstance(waiting, dict) else {}
 
 
+
+def _projection_suffix(items, previous_length, previous_tail):
+    """Append diff for both legacy cumulative lists and bounded live windows."""
+    tail_start = max(0,previous_length-48)
+    if (len(items)>=previous_length and items[tail_start:previous_length]==previous_tail):
+        return items[previous_length:]
+    # Compaction removes a prefix. Match only a bounded previous tail, without
+    # keeping an ever-growing set of delivered tool/image IDs in the bridge.
+    for overlap in range(min(len(previous_tail),len(items)),0,-1):
+        if previous_tail[-overlap:]==items[:overlap]:
+            return items[overlap:]
+    return items
+
 class _LegacyFrameState:
     """Monotone public-snapshot deltas rendered as legacy SSE events.
 
@@ -147,6 +161,7 @@ class _LegacyFrameState:
         self.progress = 0
         self.verbose = 0
         self.images = 0
+        self.progress_tail, self.verbose_tail, self.images_tail = [], [], []
         self.assistance = None
         self.clarification = None
 
@@ -164,22 +179,22 @@ class _LegacyFrameState:
             # still closes with its real terminal frame below.
             self.output = output
         items = snapshot.get('progressMessages') or []
-        for item in items[max(self.progress, 0):]:
+        for item in _projection_suffix(items,self.progress,self.progress_tail):
             if isinstance(item, dict) and item.get('type'):
                 frames.append({key: value for key, value in item.items() if key != 'content'})
-        self.progress = max(self.progress, len(items))
+        self.progress,self.progress_tail = len(items),copy.deepcopy(items[-48:])
         messages = snapshot.get('verboseMessages') or []
-        for item in messages[max(self.verbose, 0):]:
+        for item in _projection_suffix(messages,self.verbose,self.verbose_tail):
             if isinstance(item, dict) and item.get('eventId'):
                 frames.append({'type': 'verbose', **{key: item[key] for key in
                     ('eventId', 'data', 'source', 'timestamp') if key in item}})
-        self.verbose = max(self.verbose, len(messages))
+        self.verbose,self.verbose_tail = len(messages),copy.deepcopy(messages[-48:])
         images = snapshot.get('images') or []
-        fresh = [item for item in images[max(self.images, 0):] if isinstance(item, dict)]
+        fresh = [item for item in _projection_suffix(images,self.images,self.images_tail) if isinstance(item,dict)]
         if fresh:
             frames.append({'type': 'images', 'images': fresh,
                            'placement': snapshot.get('imagesPlacement') or 'after_text'})
-        self.images = max(self.images, len(images))
+        self.images,self.images_tail = len(images),copy.deepcopy(images[-48:])
         assistance = snapshot.get('browserAssistance')
         if (isinstance(assistance, dict) and assistance.get('assistance_id')
                 and assistance.get('assistance_id') != self.assistance
@@ -341,7 +356,7 @@ async def bridged_stream_response(request, *, message, session_id, files=None,
                                   instance_id=instance_id, video_params=video_params)
     try:
         accepted = await client.request('POST', '/v1/runners', authorization=authorization,
-                                        tenant=tenant, body=intent.model_dump(mode='json'),
+                                        tenant=tenant, body=intent.transport(),
                                         accept_new=config.web_enabled)
     except RunnerError as error:
         status, payload = bridge_error_payload(error)

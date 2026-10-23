@@ -161,7 +161,7 @@ def root_reply(runner_id, wait_id):
 def recovery_for(principal, row):
     authorizer = SimpleNamespace(authorize_persisted=lambda persisted, **kwargs: principal,
                                  assert_credit=lambda principal: None)
-    profiles = SimpleNamespace(resolve=lambda profile: (None, row["profile_fingerprint"]))
+    profiles = SimpleNamespace(resolve=lambda profile, tenant=None: (None, row["profile_fingerprint"]))
     return RecoveryCoordinator(authorizer, profiles)
 
 

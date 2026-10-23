@@ -86,7 +86,7 @@ class ExecutionState:
     role: AgentMode
     system_prompt: str
     messages: list[dict]
-    max_iterations: int = 20
+    max_iterations: int = 50
     iteration: int = 0
     initial_len: int = 0
     pending: list[ToolCall] = field(default_factory=list)

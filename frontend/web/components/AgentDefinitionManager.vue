@@ -28,13 +28,21 @@
           <!-- Left: List -->
           <div class="w-72 flex-shrink-0 border-r border-gray-200 bg-white overflow-y-auto">
             <div class="p-3 space-y-2">
-              <button @click="openCreateDialog"
-                class="w-full px-3 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 flex items-center justify-center gap-1">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-                </svg>
-                新建智能体
-              </button>
+              <div class="flex gap-2">
+                <button @click="openCreateDialog"
+                  class="flex-1 px-3 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 flex items-center justify-center gap-1">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+                  </svg>
+                  新建智能体
+                </button>
+                <button @click="triggerImportFile" :disabled="importing"
+                  class="px-3 py-2 text-sm text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50">
+                  {{ importing ? '导入中...' : '导入' }}
+                </button>
+                <input ref="importFileInput" type="file" accept=".json,application/json" class="hidden"
+                  @change="onImportFileChange" />
+              </div>
               <input v-model="searchQuery" type="text" placeholder="搜索..."
                 class="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-primary-400" />
             </div>
@@ -82,6 +90,10 @@
                       class="px-3 py-1.5 text-xs bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
                       :disabled="saving">
                       {{ saving ? '保存中...' : (pendingCreate ? '保存为自定义数字员工' : '保存定义') }}
+                    </button>
+                    <button v-if="!pendingCreate" @click="handleExport" :disabled="exporting"
+                      class="px-3 py-1.5 text-xs text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50">
+                      {{ exporting ? '导出中...' : '导出配置' }}
                     </button>
                     <button v-if="!pendingCreate" @click="confirmDelete"
                       class="px-3 py-1.5 text-xs text-danger-600 border border-danger-200 rounded-lg hover:bg-danger-50">
@@ -563,6 +575,49 @@
       :agent-description="form.description || ''"
       @select="onPagesSelected"
     />
+
+    <!-- 导入冲突弹框 -->
+    <BaseModal v-model="conflictDialog" title="导入冲突" size="md">
+      <div class="space-y-3">
+        <p class="text-sm text-default">
+          智能体「{{ conflictInfo?.name }}」（<span class="font-mono text-xs">{{ conflictInfo?.agent_id }}</span>）已存在。
+        </p>
+        <p v-if="conflictInfo?.type === 'builtin'" class="text-xs text-warning-600 bg-warning-50 rounded px-3 py-2">
+          目标为内置数字员工，不可覆盖，只能另存为新的 Agent ID。
+        </p>
+        <div class="space-y-2">
+          <label v-if="conflictInfo?.type !== 'builtin'" class="flex items-center gap-2 text-sm">
+            <input type="radio" value="overwrite" v-model="conflictMode" class="w-4 h-4 text-primary-600" />
+            覆盖更新（用配置文件内容替换现有定义，Prompt 会新增版本）
+          </label>
+          <label class="flex items-center gap-2 text-sm">
+            <input type="radio" value="rename" v-model="conflictMode" class="w-4 h-4 text-primary-600" />
+            另存为新的数字员工
+          </label>
+        </div>
+        <div v-if="conflictMode === 'rename'" class="space-y-2 pl-6">
+          <div>
+            <label class="text-xs text-gray-500 mb-1 block">新 Agent ID <span class="text-danger-500">*</span></label>
+            <input v-model="renameId" type="text"
+              class="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-primary-400" />
+          </div>
+          <div>
+            <label class="text-xs text-gray-500 mb-1 block">新名称</label>
+            <input v-model="renameName" type="text"
+              class="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-primary-400" />
+          </div>
+        </div>
+        <p class="text-xs text-gray-400">导入前请确认目标环境的技能/工具/知识库栏目可用，缺失项会在导入结果中提示。</p>
+      </div>
+      <template #footer>
+        <button @click="conflictDialog = false"
+          class="px-4 py-2 text-sm text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50">取消</button>
+        <button @click="confirmConflictImport" :disabled="importing"
+          class="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50">
+          {{ importing ? '导入中...' : '确认导入' }}
+        </button>
+      </template>
+    </BaseModal>
   </div>
 </template>
 
@@ -575,6 +630,7 @@ import MyTextarea from './ui/MyTextarea.vue'
 import MenuIcon from './ui/MenuIcon.vue'
 import FullscreenPicker from './ui/FullscreenPicker.vue'
 import BaseBadge from './ui/BaseBadge.vue'
+import BaseModal from './ui/BaseModal.vue'
 import {
   listDefinitions, getDefinition, createDefinition,
   updateDefinition, deleteDefinition, updateSystemPrompt,
@@ -582,8 +638,10 @@ import {
   saveDraft, listLabels, setLabel,
   listToolsMeta, listSkillsMeta, listReplyStylesMeta, listRecapTasksMeta,
   getSections, saveSection, optimizeSection as apiOptimizeSection,
+  exportDefinition, importDefinition,
   type AgentDefinition, type PromptVersion, type DiffResult,
   type ToolMeta, type SkillMeta, type ReplyStyleMeta, type RecapTaskMeta,
+  type ImportPayload, type ImportConflict, type AgentExportEnvelope,
 } from '@/api/agentDefinitions'
 import { listToolbarButtonMeta } from '@/components/chat/toolbar-buttons/registry'
 import { useTenantAuth } from '@/composables/useTenantAuth'
@@ -1325,6 +1383,121 @@ async function loadDiff() {
     if (res.success) diffData.value = res.data
   } catch (e) { console.error('对比失败', e) }
   finally { diffLoading.value = false }
+}
+
+// ============== 配置导出/导入 ==============
+const exporting = ref(false)
+const importing = ref(false)
+const importFileInput = ref<HTMLInputElement | null>(null)
+const conflictDialog = ref(false)
+const conflictInfo = ref<ImportConflict | null>(null)
+const conflictMode = ref<'overwrite' | 'rename'>('overwrite')
+const renameId = ref('')
+const renameName = ref('')
+let pendingImportPayload: ImportPayload | null = null
+
+async function handleExport() {
+  if (!selectedAgentId.value) return
+  exporting.value = true
+  try {
+    const res = await exportDefinition(selectedAgentId.value)
+    if (!res.success || !res.data) {
+      showToast('导出失败', 'error')
+      return
+    }
+    const envelope: AgentExportEnvelope = res.data
+    const blob = new Blob([JSON.stringify(envelope, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `agent_${selectedAgentId.value}_config.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    showToast('配置已导出（环境变量等敏感信息需在目标环境补充）', 'info')
+  } catch (e: any) {
+    showToast(e.message || '导出失败', 'error')
+  } finally { exporting.value = false }
+}
+
+function triggerImportFile() {
+  importFileInput.value?.click()
+}
+
+async function onImportFileChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  let envelope: AgentExportEnvelope
+  try {
+    envelope = JSON.parse(await file.text())
+  } catch {
+    showToast('配置文件不是有效的 JSON', 'error')
+    return
+  }
+  if (envelope.format !== 'agent_definition_export' || !envelope.definition) {
+    showToast('配置文件格式不正确', 'error')
+    return
+  }
+  if (envelope.env_var_placeholders?.length) {
+    const names = envelope.env_var_placeholders.map(v => v.name).join('、')
+    showToast(`配置包含 ${envelope.env_var_placeholders.length} 个环境变量占位符（${names}），导入后请在租户设置中补充`, 'info')
+  }
+  pendingImportPayload = {
+    format: envelope.format,
+    version: envelope.version,
+    definition: envelope.definition,
+  }
+  await doImport(pendingImportPayload)
+}
+
+async function doImport(payload: ImportPayload) {
+  importing.value = true
+  try {
+    const res = await importDefinition(payload)
+    if (res.status === 409 && res.body.conflict) {
+      conflictInfo.value = res.body.conflict
+      conflictMode.value = res.body.conflict.type === 'builtin' ? 'rename' : 'overwrite'
+      renameId.value = `${res.body.conflict.agent_id}_import`
+      renameName.value = payload.definition.name || res.body.conflict.agent_id
+      conflictDialog.value = true
+      return
+    }
+    if (!res.ok || !res.body.success) {
+      showToast(res.body.error || '导入失败', 'error')
+      return
+    }
+    for (const w of res.body.warnings || []) showToast(w, 'info')
+    if (res.body.auto_completed?.length) {
+      showToast(`已按技能依赖自动补全: ${res.body.auto_completed.join('、')}`, 'info')
+    }
+    showToast(res.body.data?.mode === 'overwrite' ? '已覆盖更新配置' : '导入成功')
+    conflictDialog.value = false
+    pendingImportPayload = null
+    await loadList()
+    const created = agents.value.find(a => a.agent_id === res.body.data?.agent_id)
+    if (created) await selectAgent(created)
+  } catch (e: any) {
+    showToast(e.message || '导入失败', 'error')
+  } finally { importing.value = false }
+}
+
+async function confirmConflictImport() {
+  if (!pendingImportPayload) return
+  if (conflictMode.value === 'rename') {
+    if (!renameId.value.trim()) {
+      showToast('请填写新 Agent ID', 'error')
+      return
+    }
+    await doImport({
+      ...pendingImportPayload,
+      conflict_strategy: 'rename',
+      new_agent_id: renameId.value.trim(),
+      new_name: renameName.value.trim() || undefined,
+    })
+  } else {
+    await doImport({ ...pendingImportPayload, conflict_strategy: 'overwrite' })
+  }
 }
 
 // ============== Init ==============

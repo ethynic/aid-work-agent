@@ -1,3 +1,4 @@
+import { recoveryObservation } from './recoveryObservation.js'
 import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, writeFileSync } from 'node:fs'
 import { randomUUID, randomBytes } from 'node:crypto'
 import { ApiClient } from './apiClient.js'
@@ -259,11 +260,22 @@ export class LegacyExecution implements HostAdapter {
     logInfo(`[runtime] providers: ${Object.keys(entries).join(', ')}`)
     // v2 写路径数据目录（journal/ + result-outbox/，跟随 runtime home；启动重投共用同一 outbox 实例）
     const dataDir = runtimeHomeDir()
+    const recoveryReady = Boolean(entries['boss-recruiting'] && existsSync(resolve(dirname(entries['boss-recruiting']), '../main/operations/bossRecoveryProbe.js')))
+    const capabilities = () => {
+      const value = deviceCapabilities(this.effectiveConfig(config))
+      if (recoveryReady && this.supervision.enabled) value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_stop_v1']
+      if (recoveryReady) { value.providers = [...(value.providers as string[]), 'runtime-recovery']; value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_observe_v2'] }
+      return value
+    }
     const loop = new PollLoop({
       api,
       runnerDeps: {
         providers,
+        beforeProviderCall: async (inv) => {
+          if ((inv.provider ?? 'boss-recruiting') === 'boss-recruiting' && inv.tool_name !== 'boss_recovery_probe') await this.supervision.noteBusinessExecution()
+        },
         ...(skillRunner ? { skillRunner } : {}),
+        ...(recoveryReady ? { recoveryObservation: recoveryObservation(providers, this.supervision) } : {}),
         desktopCheck: async () => (await checkDesktopInteractive()).interactive,
         desktopResourceKey: deriveResourceKey(),
         runtimeDataDir: dataDir,
@@ -273,7 +285,7 @@ export class LegacyExecution implements HostAdapter {
       // stdout，服务化启动无重定向时文件日志全无回传链路痕迹（2026-09-10 客户现场诊断包实证）。
       // logInfo = stderr + %APPDATA% 文件双写，前缀格式不变。
       onEvent: (msg) => logInfo(msg),
-      capabilities: () => deviceCapabilities(this.effectiveConfig(config)),
+      capabilities,
       canClaim: () => Object.values(this.resolveEntries(config)).some(entry => existsSync(entry)) || Boolean(skillRunner),
       onConnection: connection,
     })

@@ -7,6 +7,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261022-2109 | agent2 指定分支发布 | ✅ 已完成开发：支持特性分支固定SHA发布，独立测试及CR通过，待部署验收。 | [设计与计划](plans/plan-agent2-branch-deploy.md) | [计划](plans/plan-agent2-branch-deploy.md) |
 | 20261015-1544 | Runtime跨电脑打包升级兼容 | ✅ 已完成开发：历史五根已固化，0.3.9升级及最终包启动通过，组合包完成。 | [设计](system/runtime-plugin-host-architecture-design.md#7-runtime-ui-与产品壳) | [计划](plans/plan-runtime-ui-boss-trial-bundle.md#phase17-跨电脑打包与直接升级2026-10-15) |
 | 20261015-1521 | Runner单任务取消隔离 | ✅ 已完成开发；独立核心51通过，CR无阻断，待部署，存量失败见计划。 | [设计](system/agent-application-architecture-design.md#55-执行任务取消与worker生命周期隔离2026-10-15) | [计划](plans/plan-runner-task-cancellation-isolation.md) |
 | 20261015-1052 | 对话失败提示与重试 | ✅ 已完成开发：成功重试清理、手动删除、灰色图标与紧凑气泡，待手动部署。 | [设计](system/agent-application-architecture-design.md#61-一份执行事实多种呈现) | [计划](plans/plan-chat-runner-failure-ui.md) |
@@ -48,8 +49,8 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |------|------|------|---------|---------|
+| 20261022-1956 | Agent 通用持久化休眠与自动唤醒 | ✅ 已完成开发：恢复与容量边界修复，独立测试及CR通过，未部署。 | [设计](system/agent-runner-durable-sleep-design.md) | [开发计划](plans/plan-agent-runner-durable-sleep.md) |
 | 20261013-1434 | 结构化提问交互（ask_user 提问卡片） | ✅ 已完成开发：提问卡片、渠道问答、待答通知与徽标、legacy 透传及埋点；待真机验收。 | [设计](system/design-ask-user-interactive-question.md) | [实施计划](plans/plan-ask-user-interactive-question.md) |
-| 20261014-boss-resume-recovery | BOSS 续筛评分与故障恢复 | ✅ 已完成开发：补齐续筛证明、中断提示和回执诊断，待部署验收。 | — | [计划](plans/plan-boss-resume-next-recovery-fix.md) |
 | 20261012-1544 | trace 观测 span 计时精确化 | ✅ 已完成开发（提交与部署待授权）：span 改用引擎侧墙钟计时并立即闭合，失败 LLM 与恢复路径补 span；历史数据不回填。 | — | [开发计划](plans/traceobs-timing-precision.md) |
 | 20261010-1638 | 统一通知基础设施与 Web 推送 | ✅ 已完成开发：统一通知底座与Web推送通过内外部终审，真实到达待环境验收。 | [统一设计](system/notification-infrastructure-design.md) / [Web设计](system/web-task-push-notification-design.md) | [开发计划](plans/plan-web-task-push-notification.md) |
 | 20260918-2045 | Redis 夜间巡检任务（生产专用） | ✅ 已完成开发：background_runner 调度器每日 00:30 巡检 Redis——内存水位（600MB 警告/800MB 严重）、碎片率（仅 used>100MB 判）、AOF 写入/重写状态、键淘汰、连接数、无 TTL 键抽样（上限 1000，超 200 疑似泄漏），「[Redis巡检]」前缀进主日志（1 条 INFO 汇总 + 越界 WARNING/ERROR）；REDIS_INSPECTION_ENABLED 门控默认关。2026-10-10 agent2 容器内对腾讯云托管 Redis 实跑验证通过（INFO 汇总 + 告警格式正确，顺带发现测试 Redis evicted=4599 真实告警）；生产 .env 已开启待重启生效（属部署事项，不影响任务关闭）。 | — | — |
@@ -88,6 +89,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261014-boss-resume-recovery | BOSS 续筛评分与故障恢复 | ✅ 已完成开发；存量未知受管资源闭环通过独立验证，不要求Windows重启，未部署。 | [设计](system/agent-application-architecture-design.md#56-本地调用对账与同会话结束等待2026-10-20增量) / [复盘](incidents/recruiting-runtime-filter-timeout-and-resume-blocked-20261020.md) | [计划](plans/plan-boss-resume-next-recovery-fix.md) |
 | 20261013-1618 | 职位VIP筛选与BOSS权益识别 | ✅ 已完成开发；配置分组、权益门禁与18项VIP组合真机验收通过。 | — | [开发计划](plans/desktop-automation/plan-boss-job-vip-entitlements.md) |
 | 20261013-1918 | BOSS筛选结果与推荐边界 | ✅ 已完成开发；排除补充推荐并返回无匹配，独立验证及真机只读验收通过。 | — | [计划](plans/desktop-automation/plan-boss-filter-result-boundary.md) |
 | 20261013-2023 | BOSS头像下方VIP徽标识别 | ✅ 已完成开发；跨iframe徽标自动识别，独立验证及真机VIP只读验收通过。 | — | [计划](plans/desktop-automation/plan-boss-avatar-vip-marker.md) |
@@ -225,6 +227,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261021-1126 | Web Agent 单条回复分享 | ✅ 已完成开发：所选回复独立分享，图标与时间同行，弹框支持可选密码及图片附件。 | [设计](system/web-agent-reply-sharing-design.md) | [计划](plans/plan-web-agent-reply-sharing.md) |
 | 20260602-0956 | 前端 Office 预览 | ✅ 已完成开发：Word/Excel/PPT 三格式预览（整页/整表缩放、10MB/20MB/1000 行硬门槛、FileTypeIcon 类型徽标、懒加载分包），511 项单测与手动验收全过。 | [设计](research/frontend-office-preview-design.md) | — |
 | 20260922-1931 | 租户前台知识库「访问授权」矩阵 | ✅ 已完成开发：知识库页面「访问授权」矩阵弹框（行=一级栏目、列=数字员工）三态复选框自助配置栏目授权——半选=未配置默认全允许、首勾 confirm 收窄、取消全部勾选恢复默认、保存原样保留跨租户共享项（复用现有接口后端零改动）；三态语义同步管理后台 TenantMgmt「知识库关联」弹框（本租户栏目三态、共享栏目二态）。2026-10-10 agent2 全链路验证：矩阵渲染/首勾确认文案/半选→勾选流转/保存落库（own 项 owner_tenant_id=null）/共享项原样保留/取消勾选恢复未配置/后台三态一致；验证后租户配置已还原。 | — | — |
 | 20260720-1459 | 执行中任务切走不打断（后台继续执行 + 侧栏完成角标；原名「多会话后台流式」） | ✅ 已完成开发：会话后台执行不阻塞切换。2026-10-10 agent2 E2E 五步验证：长任务发出→侧栏 spinner；点新会话无 confirm 弹窗、后台任务继续执行并完成落库（assistant 回复持久化）；点回原会话显示完整回复、角标清除；新建会话携带所选数字员工无弹窗。「spinner→完成小点」瞬时视觉因截图缓存未独立留证，功能由后端落库与返回展示证实。 | [设计](system/multi-session-background-streaming-design.md) | — |

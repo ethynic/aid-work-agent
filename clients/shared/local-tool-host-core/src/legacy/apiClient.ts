@@ -17,7 +17,7 @@ export class ApiError extends Error {
   readonly status: number
   readonly serverMessage?: string
   readonly code?: string
-  constructor(status: number, message: string, serverMessage?: string, code?: string) {
+  constructor(status: number, message: string, serverMessage?: string, code?: string, readonly retryAfterMs?: number) {
     super(message)
     this.name = 'ApiError'
     this.status = status
@@ -39,6 +39,26 @@ export class AbortLoopError extends Error {
     super(message)
     this.name = 'AbortLoopError'
   }
+}
+
+/** Only transport failures may be retried with the original invocation identity. */
+export function isRetryableTransportError(error: unknown): boolean {
+  if (error instanceof NetworkError) return true
+  if (!(error instanceof ApiError)) return false
+  if (error.code && new Set(['DEVICE_REVOKED', 'CLAIM_MISMATCH', 'LEASE_EXPIRED', 'REQUEST_ID_MISMATCH', 'PERMIT_BINDING_INVALID', 'INVOCATION_NOT_FOUND', 'INVOCATION_NOT_CLAIMED']).has(error.code)) return false
+  return [408, 429, 500, 502, 503, 504].includes(error.status)
+}
+
+/** Retry-After is either seconds or an HTTP date; invalid values do not change backoff. */
+function retryAfterMs(response: Response): number | undefined {
+  const value = response.headers.get('retry-after')?.trim()
+  if (!value) return undefined
+  if (/^\d+(?:\.\d+)?$/.test(value)) {
+    const milliseconds = Number(value) * 1000
+    return Number.isFinite(milliseconds) ? milliseconds : undefined
+  }
+  const date = Date.parse(value)
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : undefined
 }
 
 export interface PairResponse {
@@ -226,7 +246,7 @@ export class ApiClient {
         ? parsed['detail']
         : typeof errorBody['error'] === 'string' ? errorBody['error'] : ''
       const code = typeof errorBody['code'] === 'string' ? errorBody['code'] : undefined
-      throw new ApiError(response.status, `云端返回 HTTP ${response.status}${detail ? `: ${detail}` : ''}`, detail || undefined, code)
+      throw new ApiError(response.status, `云端返回 HTTP ${response.status}${detail ? `: ${detail}` : ''}`, detail || undefined, code, retryAfterMs(response))
     }
     return parsed
   }
@@ -326,8 +346,8 @@ export class ApiClient {
     }
   }
 
-  async started(invocationId: string, claimToken: string): Promise<void> {
-    await this.post(`/api/local-tools/runtime/invocations/${invocationId}/started`, { claim_token: claimToken })
+  async started(invocationId: string, claimToken: string, signal?: AbortSignal): Promise<void> {
+    await this.post(`/api/local-tools/runtime/invocations/${invocationId}/started`, { claim_token: claimToken }, { signal })
   }
 
   /** Frozen text payload, device-authenticated; never follows caller supplied URLs. */

@@ -174,8 +174,13 @@ export async function deleteSession(sessionId: string): Promise<void> {
 /**
  * 获取会话消息
  */
-export async function getSessionMessages(sessionId: string): Promise<{ messages: ChatMessageRecord[]; failed_message_ui?: FailedMessageUI }> {
-  const res = await fetch(`${API_BASE}/${sessionId}/messages`, {
+export interface RunnerHistoryPageOptions { runner_id: string; before_id: string }
+export interface SessionMessagePage { messages: ChatMessageRecord[]; failed_message_ui?: FailedMessageUI;
+  has_more?: boolean; next_cursor?: string }
+
+export async function getSessionMessages(sessionId: string, page?: RunnerHistoryPageOptions): Promise<SessionMessagePage> {
+  const query = page ? '?' + new URLSearchParams({ ...page, limit: '100' }) : ''
+  const res = await fetch(`${API_BASE}/${sessionId}/messages${query}`, {
     headers: { ...getAuthHeader() }
   })
   if (!res.ok) {
@@ -184,7 +189,9 @@ export async function getSessionMessages(sessionId: string): Promise<{ messages:
     ;(error as any).status = res.status
     throw error
   }
-  return res.json()
+  const result: SessionMessagePage = await res.json()
+  if (page && (typeof result.has_more !== 'boolean' || !/^(0|[1-9][0-9]*)$/.test(result.next_cursor || ''))) throw new Error('历史分页响应无效')
+  return result
 }
 
 /**

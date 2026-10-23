@@ -147,7 +147,7 @@ class SubagentConfig(BaseModel):
             return []
         return self.skills.get("allowed", [])
 
-    def get_max_iterations(self, default: int = 20, max_allowed: int = 100) -> int:
+    def get_max_iterations(self, default: int = 50, max_allowed: int = 100) -> int:
         """获取智能体循环轮数上限（context.max_iterations），缺省/非法值回退 default，上限钳制"""
         from loguru import logger
         raw = (self.context or {}).get("max_iterations", default)

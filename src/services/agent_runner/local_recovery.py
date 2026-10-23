@@ -73,7 +73,23 @@ def validate_legacy_cancel(identity, fact, invocation):
         raise CheckpointFailure('LOCAL_INVOCATION_OWNER_VERIFICATION_REQUIRED')
 
 
+def stored_deadline_expired(invocation):
+    """存量持久 deadline 到期判定（Phase 4 投影）。
+
+    仅旧 checkpoint 保存的 deadline_at 参与判定：非终态且到期 → True（进
+    LOCAL_DEADLINE_VERIFICATION_REQUIRED 家族）；无 deadline（新绑定）或已终态
+    → False，健康性交由租约与终态事实治理，不用工具 timeout 阻断。
+    """
+    deadline = invocation.get('deadline_at')
+    return (deadline is not None
+        and invocation.get('state') not in repository.TERMINAL_STATES
+        and datetime.now(deadline.tzinfo) >= deadline)
+
+
 class LocalRecoveryProof:
+    def __init__(self, connection_factory=None):
+        self.connection_factory = connection_factory or repository.get_db_connection
+
     def can_restore(self, row, state, fact):
         from src.local_tools.proxy_tool import LOCAL_PROXY_TOOL_CLASSES, LocalToolProxyTool
         from src.local_tools.domain_flow import supports_owned_device_class, cloud_read_branch, domain_classes
@@ -86,7 +102,10 @@ class LocalRecoveryProof:
             from .notify_facts import delivery_facts
             return delivery_facts(row,state.checkpoint(),fact.call.id)['known']
         from src.tools.executor import normalize_provided_parameters
-        arguments = normalize_provided_parameters(cls,fact.call.arguments)
+        try:
+            arguments = normalize_provided_parameters(cls,fact.call.arguments)
+        except (TypeError, ValueError) as error:
+            raise RunnerError('LOCAL_PHASE_INTENT_CHANGED', 409) from error
         cloud_branch = cloud_read_branch(cls,arguments)
         if cloud_branch is not None:
             from .domain_recovery import cloud_read_proof
@@ -95,13 +114,42 @@ class LocalRecoveryProof:
         phase = LocalPhase(state.execution_id, fact.call.id, 'main', 0)
         ref = refs.get(phase.key(row['runner_id']))
         if ref is None:
-            return False
+            from src.local_tools.proxy_tool import BossResumeNextTool
+            if cls is not BossResumeNextTool:
+                return False
+            from .local_invocations import _execution
+            from .unbound_local import resolve_next_in_tx
+            with self.connection_factory() as connection:
+                cursor = connection.cursor()
+                current = lock_runner(cursor, row['runner_id'])
+                if (current['revision'] != row['revision'] or current['lease_valid']
+                        or current['status'] not in {'waiting', 'paused', 'interrupted'}
+                        or current.get('cancel_requested')):
+                    return False
+                node = _execution(current['checkpoint'], state.execution_id, row['runner_id'])
+                if not resolve_next_in_tx(cursor, current, node, fact.call.id):
+                    return False
+                # claim_resume CAS persists this prepared checkpoint; no IO is
+                # issued by preflight, and concurrent control changes invalidate it.
+                restored = node['tools'][fact.call.id]
+                if restored['phase'] == 'completed':
+                    fact.phase, fact.success, fact.result = 'completed', False, restored['result']
+                    state.waiting = None
+                    return True
+                state.resources['local_invocations'] = copy.deepcopy(node['resources']['local_invocations'])
+                refs = state.resources['local_invocations']
+                ref = refs.get(phase.key(row['runner_id']))
+                if ref is None:
+                    return False
         from src.local_tools.proxy_tool import BossResumeNextTool
         if cls is BossResumeNextTool:
             from .resume_next_proof import continuation_arguments
             try:
                 arguments = continuation_arguments(row,state.checkpoint(),fact.call.id,arguments,
-                    lambda parent_id: repository.get_invocation(parent_id,row['tenant_id']))
+                    lambda parent_id: repository.get_invocation(parent_id,row['tenant_id']),
+                    load_attempts=lambda parent: repository.list_resume_next_attempts(str(parent['id']),
+                        row['tenant_id'],row['user_id'],row['session_id'],str(parent['device_id'])),
+                    current_invocation_id=ref.get('invocation_id'))
             except CheckpointFailure as error:
                 raise RunnerError('LOCAL_RESUME_CONTINUATION_PROOF_INVALID',409) from error
         if (ref.get('request') or {}).get('arguments')!=arguments:
@@ -126,16 +174,16 @@ class LocalRecoveryProof:
                 RunnerLocalLifecycle.validate_invocation(state.identity,row['runner_id'],phase,ref,invocation)
             except CheckpointFailure as error:
                 raise RunnerError('LOCAL_INVOCATION_OWNER_VERIFICATION_REQUIRED',409) from error
+            invocation = repository.observed_invocation(invocation)
             if invocation['state']=='unknown' or invocation.get('effect')=='unknown':
                 return False
             if ref['branch']=='main' and invocation['state']=='failed':
                 from src.local_tools.durable_flow import healing_requires_verification
                 if healing_requires_verification(cls,invocation.get('error_code'),invocation.get('effect')):
                     return False
-            deadline = invocation.get('deadline_at')
-            if not deadline:
-                return False
-            if invocation['state'] not in repository.TERMINAL_STATES and datetime.now(deadline.tzinfo)>=deadline:
+            # 存量投影（Phase 4）：旧 checkpoint 持久化的 deadline 到期仍拒绝恢复；
+            # 新绑定无 deadline，健康性由租约/终态治理，恢复不被工具 timeout 阻断。
+            if stored_deadline_expired(invocation):
                 raise RunnerError('LOCAL_DEADLINE_VERIFICATION_REQUIRED',409)
         from .domain_recovery import validate_domain_phases
         if not validate_domain_phases(row,state,fact,cls,arguments):
@@ -190,6 +238,8 @@ def _cancel_facts(cursor, row, *, request):
         return []
     if execution.get('execution_id') != row['runner_id']:
         raise CheckpointFailure('LOCAL_ROOT_OWNER_MISMATCH')
+    from .unbound_local import resolve_tree_in_tx
+    resolve_tree_in_tx(cursor, row, execution)
     expected_identity = {key:row[key] for key in ('tenant_id','user_id','session_id','source','session_kind')}
     facts = []
     for identity, phase, fact in owned_invocations(execution, row['runner_id']):
@@ -210,7 +260,10 @@ def _cancel_facts(cursor, row, *, request):
             cursor.execute('SELECT * FROM local_tool_invocations WHERE id=%s AND tenant_id=%s',
                 (fact['invocation_id'], row['tenant_id']))
             invocation = dict(cursor.fetchone())
-        facts.append({key:invocation.get(key) for key in ('id','state','effect','deadline_at')})
+        invocation = repository.observed_invocation(invocation)
+        facts.append({'kind':'local', 'holdable':phase is not None,
+            'completion_known':repository.operation_completion_known(invocation),
+            **{key:invocation.get(key) for key in ('id','state','effect','deadline_at')}})
     from .notify_audit import cancellation_facts
     facts.extend(cancellation_facts(row))
     from .browser_facts import cancellation_facts as browser_cancellation_facts
@@ -218,7 +271,7 @@ def _cancel_facts(cursor, row, *, request):
     return facts
 
 
-def cancel_completion_status(facts):
+def cancel_completion_status(facts, *, detached_local_wait=False):
     pending = False
     for fact in facts:
         if fact.get('kind')=='domain':
@@ -228,11 +281,16 @@ def cancel_completion_status(facts):
                 return False,'LOCAL_CANCEL_EFFECT_VERIFICATION_REQUIRED'
             continue
         if fact['state'] == 'unknown' or fact['effect'] == 'unknown':
+            if detached_local_wait and fact.get('kind') == 'local':
+                continue  # Logical cloud completion only; device hold remains.
             return False, 'LOCAL_CANCEL_EFFECT_VERIFICATION_REQUIRED'
         if fact['state'] not in repository.TERMINAL_STATES:
             deadline = fact['deadline_at']
-            if deadline is None or datetime.now(deadline.tzinfo) >= deadline:
+            if deadline is not None and datetime.now(deadline.tzinfo) >= deadline:
+                # 存量投影：旧持久 deadline 到期仍进取消核验家族，不忽略。
                 return False, 'LOCAL_CANCEL_DEADLINE_VERIFICATION_REQUIRED'
+            # 无 deadline（新绑定/旧非 durable 行）：取消回执等待不再被工具 timeout
+            # 判死；执行侧停续由租约清扫收敛为 unknown 后走效果核验家族。
             pending = True
     return (False, 'LOCAL_CANCEL_ACK_PENDING') if pending else (True,None)
 
@@ -292,7 +350,7 @@ def release_ready_cancellations(connection_factory, *, limit=16, after_queue_ord
                         or blocked.get('revision') != row['revision']):
                     continue
                 facts = _cancel_facts(cursor,row,request=False)
-                if not cancel_completion_status(facts)[0]:
+                if not cancel_completion_status(facts,detached_local_wait=checkpoint.get('detached_local_wait') is True)[0]:
                     continue
                 checkpoint['cancel_completion_blocked'] = {**blocked,'ready':True,'revision':row['revision']+1}
                 cursor.execute("""UPDATE agent_runners SET checkpoint=%s::jsonb,revision=revision+1,
@@ -304,7 +362,7 @@ def release_ready_cancellations(connection_factory, *, limit=16, after_queue_ord
                 EventRepository.notify_in_tx(cursor,previous,cancellation_ready=True)
                 connection.commit()
         except CheckpointFailure as error:
-            logger.warning('Local cancellation remains blocked kind={}',type(error).__name__)
+            logger.opt(exception=True).warning('Local cancellation remains blocked: {!r}',error)
     return candidates[-1]['queue_order'] if len(candidates)==limit else 0
 
 

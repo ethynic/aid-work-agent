@@ -38,13 +38,9 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.ChatSearch' -Body {
     $swTotal = [System.Diagnostics.Stopwatch]::StartNew()
     $timing = @{ focus = 0; box_check = 0; typing = 0; overlay = 0; jev = 0; total = 0 }
 
-    # 1) 主窗口 + 聚焦搜索框（主路径 attachstate Ctrl+F，降级 OCR+Jev/规则点击）
+    # 1) 主窗口；先安全清理非空搜索，确认空框后才聚焦和输入。
     $mainHwnd = Resolve-WeComMainWindow
     Write-DriverLog ('query=' + $Query + ' mainHwnd=' + $mainHwnd)
-    $t0 = $swTotal.ElapsedMilliseconds
-    $focusMethod = Focus-WeComSearchBox -MainHwnd $mainHwnd
-    $timing.focus = [int]($swTotal.ElapsedMilliseconds - $t0)
-    Write-DriverLog ('step1 focus method=' + $focusMethod + ' 耗时=' + $timing.focus + 'ms')
 
     # 2) 残留检测 + 清空（动态裁切 OCR 判态；has_content/unknown 都清，清不空 fail-closed）
     $t0 = $swTotal.ElapsedMilliseconds
@@ -59,6 +55,11 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.ChatSearch' -Body {
         }
     }
     $timing.box_check = [int]($swTotal.ElapsedMilliseconds - $t0)
+
+    $t0 = $swTotal.ElapsedMilliseconds
+    $focusMethod = Focus-WeComSearchBox -MainHwnd $mainHwnd
+    $timing.focus = [int]($swTotal.ElapsedMilliseconds - $t0)
+    Write-DriverLog ('step2.5 focus method=' + $focusMethod + ' 耗时=' + $timing.focus + 'ms')
 
     # 3) 输入 query + OCR 回读验证（失败 UI_CHANGED；聚焦降级链是否成功也由此兜底）
     $t0 = $swTotal.ElapsedMilliseconds
@@ -82,7 +83,14 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.ChatSearch' -Body {
         'l|I1i!'.Contains($echoNorm.Substring($echoNorm.Length - 1))
     )
     if (-not $echoOk) {
-        Throw-DriverError 'UI_CHANGED' ('搜索框回读文本与 query 不一致（框内「' + $sb3.Content + '」≠「' + $normQuery + '），聚焦/输入链路未生效，已中止')
+        $copiedEcho = Test-WeComSearchClipboardEcho -MainHwnd $mainHwnd -Query $Query
+        Write-DriverLog ('step3 全文复制核验 matched=' + $copiedEcho.matched + ' length=' + $copiedEcho.copied_length + ' reason=' + $copiedEcho.reason + ' restored=' + $copiedEcho.restored)
+        if (-not $copiedEcho.matched) {
+            if ($copiedEcho.reason -in @('clipboard_write_failed','clipboard_close_failed','clipboard_restore_failed')) {
+                Throw-DriverError 'UI_CHANGED' '剪贴板写入/恢复失败，原内容可能未恢复，请检查；已中止且未重试'
+            }
+            Throw-DriverError 'UI_CHANGED' '搜索框 OCR 与完整复制回读均未确认 query，已中止；未清除未知焦点或自动重新输入'
+        }
     }
     $timing.typing = [int]($swTotal.ElapsedMilliseconds - $t0)
 

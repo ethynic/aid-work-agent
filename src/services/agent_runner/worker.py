@@ -150,7 +150,7 @@ class RuntimeFactory:
         from .runtime.profile import RuntimeResources
         from .runtime.executor import RuntimeExecution
         from .runtime.history_repository import HistoryRepository
-        config, fingerprint = await asyncio.to_thread(self.profiles.resolve,row['profile_id'])
+        config, fingerprint = await asyncio.to_thread(self.profiles.resolve,row['profile_id'],row.get('tenant_id'))
         if fingerprint != row['profile_fingerprint']:
             raise RunnerError('PROFILE_CHANGED_AFTER_ACCEPT',409)
         from src.core.plan_facts import PlanFacts
@@ -213,7 +213,11 @@ def execution_result(state, status=None, error_code=None):
     mapped = {'completed':'completed','cancelled':'cancelled'}
     status = status or mapped.get(state.outcome.value,'failed')
     messages = []
-    for message in state.messages[state.initial_len:]:
+    for index, original in enumerate(state.messages[state.initial_len:]):
+        message=copy.deepcopy(original)
+        if state.resources.get('history_version')==1:
+            message['_history_id']=(state.execution_id+':history:'+
+                str(state.resources.get('history_offset',0)+index))
         if message.get('role')=='user':
             metadata = message.get('metadata') or {}
             if metadata.get('control_id'):
@@ -221,6 +225,10 @@ def execution_result(state, status=None, error_code=None):
                                  'metadata':copy.deepcopy(metadata)})
         elif message.get('role')=='tool' or message.get('tool_calls'):
             messages.append(copy.deepcopy(message))
+        elif (state.resources.get('history_version')==1 and message.get('role')=='assistant'
+                and not (index==len(state.messages)-state.initial_len-1
+                    and message.get('content')==state.output)):
+            messages.append(message)
     # Cancellation may leave siblings unexecuted. History records a projection of
     # that fact, while the authoritative pending ledger remains unchanged.
     paired = {message.get('tool_call_id') for message in messages if message.get('role') == 'tool'}
@@ -266,6 +274,8 @@ class RunnerWorker:
         self._cancel_ready_scan_at = 0.0
         self._cancel_scan_after = 0
         self._recovery_scan_after = 0
+        self._timer_scan_after = 0
+        self._acquisition_turn = 0
 
     async def _park(self,control,state,status):
         row=await control.park(state,status)
@@ -276,6 +286,7 @@ class RunnerWorker:
     def stop(self):
         self.stopping.set()
         for task, control in list(self.jobs.items()):
+            control.interruption_reason = '执行服务正在停止，已保留原任务进度；本机操作仍按原回执核对。'
             control.interrupt()
             task.cancel()
 
@@ -291,6 +302,15 @@ class RunnerWorker:
             except BaseException as error:
                 if isinstance(error, asyncio.CancelledError):
                     raise
+                import psycopg2
+                kind = 'lease_lost' if isinstance(error, LeaseLost) else 'storage_unavailable' if isinstance(error, psycopg2.Error) else 'heartbeat_failed'
+                control.interruption_reason = {
+                    'lease_lost': '原执行租约已失效，已停止推进；请在原会话核对进度后继续。',
+                    'storage_unavailable': '执行心跳存储暂不可用，已停止推进并保留进度；请稍后在原会话继续。',
+                    'heartbeat_failed': '执行心跳发生异常，已停止推进并保留进度；本机操作仍需核对原回执。',
+                }[kind]
+                logger.warning('AgentRunner heartbeat stopped runner={} reason={} error_type={}',
+                    attempt.runner_id, kind, type(error).__name__)
                 control.interrupt()
                 owner_task.cancel()
                 return
@@ -306,6 +326,18 @@ class RunnerWorker:
                 await executor.drain_owned_tasks(stop=False)
                 return active
             if active and not control.cancel_requested:
+                from .durable_sleep import sleep_leaf
+                if not control.stopped and runtime.state is not None:
+                    try:
+                        sleeping=sleep_leaf({'execution':runtime.state.checkpoint()},safe=True)
+                    except RunnerError:
+                        sleeping=None
+                    if sleeping is not None:
+                        # Child wait has been checkpointed. Its owned task may
+                        # still be closing the task record; drain that normal
+                        # return instead of rewriting it as cancellation.
+                        await executor.drain_owned_tasks(stop=False)
+                        return False
                 from .aggregate_tree import child_tree_finished
                 if (not control.stopped and runtime.state is not None
                         and child_tree_finished(runtime.state.checkpoint())):
@@ -339,7 +371,8 @@ class RunnerWorker:
         facts = await collect(not control.envelope.get('cancel_completion_requested',False))
         until = time.monotonic()+5.0
         while True:
-            ready, issue = cancel_completion_status(facts)
+            ready, issue = cancel_completion_status(facts,
+                detached_local_wait=control.envelope.get('detached_local_wait') is True)
             if ready:
                 return True
             if issue != 'LOCAL_CANCEL_ACK_PENDING' or time.monotonic() >= until:
@@ -360,6 +393,7 @@ class RunnerWorker:
             guard.parent.mkdir(parents=True,exist_ok=True)
             descriptor = os.open(guard,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
             os.close(descriptor)
+        control.resource_directory = self.factory.resource_directory
         control.usage_scope = scope
         async def authorize_current(profile_id=None):
             prepared=await self.sources.prepare_execution(row) if self.sources is not None else None
@@ -384,7 +418,10 @@ class RunnerWorker:
             from src.core.trace_collector import TraceCollector
             collector = TraceCollector(row['session_id'],row['tenant_id'] or '',row['user_id'] or '',
                 row['input']['text'],source_type=row['source'],subagent_id=None if row['profile_id']=='main' else row['profile_id'])
-            collector.trace.trace_id = 'tr_'+row['runner_id']
+            attempt_trace=(getattr(self.config,'durable_sleep_enabled',False)
+                and row['source']=='chat' and row['session_kind']=='web')
+            collector.trace.trace_id = ('tr_'+row['runner_id']+
+                (':'+str(row['attempt']) if attempt_trace else ''))
             control.trace_collector = collector
             # A committed finalization intent is immutable even if a user requests
             # cancellation while its transaction is retrying.
@@ -397,14 +434,22 @@ class RunnerWorker:
                     state = control.envelope.get('execution')
                     state = ExecutionState.restore(state) if state else None
                     result = execution_result(state,'cancelled')
+                    if control.envelope.get('detached_local_wait') is True:
+                        result['output'] = '已结束原任务的云端等待，可以继续对话。原本机操作结果仍待核对；确认停止前，该设备的新操作会被阻止。'
                     result['duration_ms'] = int((time.monotonic()-started)*1000)
                     await control.stage(state,result)
                 scope.check()
                 await asyncio.to_thread(self.finalizer.finalize,attempt)
                 return
             with runner_usage_scope(scope):
+                timer_activation=control.envelope.get('timer_activation') or {}
+                trusted_timer=(timer_activation.get('version')==1
+                    and timer_activation.get('attempt')==row['attempt']
+                    and timer_activation.get('action_started') is False
+                    and bool(timer_activation.get('wait_id')))
                 resume_state = (ExecutionState.restore(control.envelope['execution'])
-                    if control.envelope.get('applied_control_id') and control.envelope.get('execution') else None)
+                    if (control.envelope.get('applied_control_id') or trusted_timer)
+                    and control.envelope.get('execution') else None)
                 while True:
                     try:
                         if runtime is None:
@@ -412,8 +457,15 @@ class RunnerWorker:
                             principal = await asyncio.to_thread(self.authorizer.authorize_persisted,row,
                                 **({'prepared_source':control.prepared_source} if control.prepared_source is not None else {}))
                             await asyncio.to_thread(self.authorizer.assert_credit,principal)
+                            if resume_state is not None:
+                                resume_state.resources.pop('admission_blocked',None)
                             runtime = await self.factory.create(row,principal,control)
-                            attachments = await asyncio.to_thread(self.factory.attachments,row)
+                            # A restored execution already owns scoped workspace
+                            # artifacts and canonical input. Re-resolving its
+                            # original temporary upload IDs after days of sleep
+                            # would incorrectly make upload TTL the task TTL.
+                            attachments = ([] if resume_state is not None else
+                                await asyncio.to_thread(self.factory.attachments,row))
                             from src.core.request_context import AgentRequestContext
                             projection = control.envelope.get('execution_context')
                             if projection is None:
@@ -448,9 +500,30 @@ class RunnerWorker:
                     except StopRequested as error:
                         control.cancel_requested = error.command == 'cancel'
                         control.pause_requested = error.command == 'pause'
+                        if getattr(error,'credit_blocked',False):
+                            control.credit_paused=True
+                            if runtime and runtime.state:
+                                runtime.state.resources['credit_blocked']=True
                         if runtime and runtime.state:
                             runtime.state.outcome = Outcome.CANCELLED if control.cancel_requested else Outcome.PAUSED
                     except RunnerError as error:
+                        if (runtime is None and resume_state is not None and error.code in {
+                                'CREDIT_BLOCKED','USER_UNAUTHORIZED','TENANT_UNAVAILABLE',
+                                'TENANT_EXPIRED','SUBSCRIPTION_REQUIRED','PROFILE_FORBIDDEN'}):
+                            # The restored tree is already owned, but no new IO
+                            # began. Keep its consumed timer/control and claim;
+                            # only explicit resume after admission changes retries.
+                            resume_state.outcome = Outcome.PAUSED
+                            resume_state.resources['admission_blocked'] = error.code
+                            control.snapshot['progress'] = ('积分不足，任务进度已保留；充值后可继续。'
+                                if error.code=='CREDIT_BLOCKED' else '执行权限暂不可用，任务进度已保留；恢复权限后可继续，或停止任务。')
+                            async with control.lock:
+                                checkpoint,snapshot = control._capture(resume_state)
+                                saved = await asyncio.to_thread(self.executions.park,attempt,
+                                    control.revision,'paused',checkpoint,snapshot)
+                                control.envelope,control.revision = saved['checkpoint'],saved['revision']
+                                control.snapshot = saved['public_snapshot']
+                            return
                         await self._drain_children(runtime,control)
                         scope.check()
                         if control.stopped:
@@ -528,7 +601,8 @@ class RunnerWorker:
                 # Statistics CAS is not interruption authority. A real storage
                 # fault still propagates after the original interruption attempt.
                 try:
-                    await asyncio.to_thread(self.executions.interrupt_attempt,attempt)
+                    await asyncio.to_thread(self.executions.interrupt_attempt,attempt,
+                        **({'public_verification': control.interruption_reason} if getattr(control, 'interruption_reason', None) else {}))
                 except LeaseLost:
                     pass
             raise
@@ -564,7 +638,7 @@ class RunnerWorker:
                     await asyncio.to_thread(self.finalizer.finalize,attempt)
             except Exception:
                 pass
-            logger.error('AgentRunner attempt stopped runner={} kind={}',row['runner_id'],type(error).__name__)
+            logger.opt(exception=True).error('AgentRunner attempt stopped runner={}',row['runner_id'])
         finally:
             heartbeat.cancel()
             await asyncio.gather(heartbeat,return_exceptions=True)
@@ -576,7 +650,7 @@ class RunnerWorker:
             try:
                 await asyncio.to_thread(guard.unlink,missing_ok=True)
             except OSError as error:
-                logger.warning('AgentRunner guard cleanup unavailable kind={}',type(error).__name__)
+                logger.opt(exception=True).warning('AgentRunner guard cleanup unavailable')
 
     async def _preserve_duration(self, attempt, control):
         # Only add elapsed time to the last COMMITTED execution. The cancelled
@@ -611,7 +685,7 @@ class RunnerWorker:
                     cleanup(child.get('checkpoint') or {},child.get('execution_id'))
             cleanup((row.get('checkpoint') or {}).get('execution') or {},row['runner_id'])
         except Exception as error:
-            logger.warning('AgentRunner resource cleanup unavailable kind={}',type(error).__name__)
+            logger.opt(exception=True).warning('AgentRunner resource cleanup unavailable')
 
     @staticmethod
     def _agent_user(user_id, tenant_id, *, source=None, channel_user_id=None):
@@ -639,8 +713,29 @@ class RunnerWorker:
             from src.db.models import ChatRecordDB
             from types import SimpleNamespace
             runner = self.repository.get(runner_id)
+            if runner.get('attempt') != control.attempt.number:
+                # A new attempt can acquire immediately after park. Its trace
+                # has a distinct ID; the old finally must also avoid projecting
+                # that newer attempt's totals into its stale collector.
+                return
             collector.trace.status = runner['status']
             collector.trace.output = (runner.get('result') or {}).get('output') or control.snapshot.get('output') or ''
+            if collector.trace.trace_id == 'tr_'+runner_id+':'+str(control.attempt.number):
+                # Attempt traces contain local physical spans only. Cumulative
+                # billing lives in one stable chat_record, never copied into
+                # each wakeup where cross-trace aggregation would double it.
+                if finalization_retry:
+                    return
+                spans=[span for span in collector.trace.spans if span.name=='llm_call']
+                collector.trace.total_tokens=sum(int((span.usage or {}).get('prompt_tokens',0) or 0)
+                    +int((span.usage or {}).get('completion_tokens',0) or 0) for span in spans)
+                collector.trace.agent_iterations=len(spans)
+                collector.trace.total_cost=0
+                collector.trace.user_message_id=runner_id+':user'
+                collector.trace.metadata.update(runner_id=runner_id,runner_attempt=control.attempt.number,
+                    usage_scope='attempt',cost_scope='chat_record_only',record_id=runner['record_id'])
+                collector.on_complete(None,persist_sync=True)
+                return
             if finalization_retry:
                 from src.core.trace_persist import update_completion
                 update_completion(collector.trace.trace_id,status=runner['status'],output=collector.trace.output,
@@ -662,7 +757,7 @@ class RunnerWorker:
                     model=record.get('model'),provider=record.get('provider'),agent_iterations=record.get('agent_iterations') or 0)
             collector.on_complete(projection,persist_sync=True)
         except Exception as error:
-            logger.warning('AgentRunner trace flush unavailable kind={}',type(error).__name__)
+            logger.opt(exception=True).warning('AgentRunner trace flush unavailable')
 
     async def run(self, *, once=False, max_tasks=None):
         if not self.config.enabled:
@@ -723,9 +818,6 @@ class RunnerWorker:
                 if close is not None: await close()
 
     async def _acquire_next(self):
-        from .control_repository import ControlRepository
-        from .recovery import RecoveryCoordinator
-        from .recovery_repository import RecoveryRepository
         hook=getattr(self.factory,'prepare_acquisition',None)
         if hook is not None:
             await hook()
@@ -734,6 +826,30 @@ class RunnerWorker:
             self._cancel_scan_after = await asyncio.to_thread(release_ready_cancellations,
                 self.repository.connection_factory,after_queue_order=self._cancel_scan_after)
             self._cancel_ready_scan_at = time.monotonic()+10.0
+        if not getattr(self.config,'durable_sleep_enabled',False):
+            return await self._acquire_controls() or await self._acquire_queued()
+        priority=getattr(self.executions,'acquire_priority',None)
+        if priority is not None:
+            urgent=await asyncio.to_thread(priority,self.worker_id,self.config.lease_seconds)
+            if urgent is not None:
+                return urgent
+        sources=(self._acquire_controls,self._acquire_timers,self._acquire_queued)
+        for offset in range(len(sources)):
+            index=(self._acquisition_turn+offset)%len(sources)
+            acquired=await sources[index]()
+            if acquired is not None:
+                self._acquisition_turn=(index+1)%len(sources)
+                return acquired
+        self._acquisition_turn=(self._acquisition_turn+1)%len(sources)
+        return None
+
+    async def _acquire_queued(self):
+        return await asyncio.to_thread(self.executions.acquire,self.worker_id,self.config.lease_seconds)
+
+    async def _acquire_controls(self):
+        from .control_repository import ControlRepository
+        from .recovery import RecoveryCoordinator
+        from .recovery_repository import RecoveryRepository
         recovery = RecoveryRepository(self.repository.connection_factory)
         candidates=await asyncio.to_thread(recovery.next_candidates,after_queue_order=self._recovery_scan_after)
         self._recovery_scan_after=candidates[-1]['queue_order'] if candidates else 0
@@ -768,7 +884,34 @@ class RunnerWorker:
                     continue
                 await asyncio.to_thread(recovery.reject_resume,row['runner_id'],revision=row['revision'],
                     control_id=row['resume_control_id'],error_code=error.code)
-        return await asyncio.to_thread(self.executions.acquire,self.worker_id,self.config.lease_seconds)
+        return None
+
+    async def _acquire_timers(self):
+        from .recovery import RecoveryCoordinator
+        if getattr(self.config,'durable_sleep_enabled',False):
+            from .timer_repository import TimerRepository
+            timers=TimerRepository(self.repository.connection_factory)
+            candidates=await asyncio.to_thread(timers.next_candidates,after_queue_order=self._timer_scan_after)
+            self._timer_scan_after=candidates[-1]['queue_order'] if candidates else 0
+            for row in candidates:
+                try:
+                    affinity=getattr(self.tool_recovery,'affinity',None)
+                    if affinity is not None and not await affinity(row):
+                        continue
+                    prepared_source=await self.sources.prepare_execution(row) if self.sources is not None else None
+                    prepared=await asyncio.to_thread(RecoveryCoordinator(self.authorizer,self.factory.profiles,
+                        tool_recovery=self.tool_recovery,attachment_resolver=self.factory.attachments,
+                        resource_directory=self.factory.resource_directory).prepare,row,
+                        prepared_source=prepared_source,timer_trigger=True)
+                    claimed=await asyncio.to_thread(timers.claim,row,self.worker_id,self.config.lease_seconds,
+                        prepared.checkpoint,source_port=self.sources,prepared_source=prepared_source)
+                    if claimed is not None:
+                        return claimed
+                except SourceUnavailable as error:
+                    await asyncio.to_thread(timers.hold,row,'SOURCE_RECOVERY_UNAVAILABLE')
+                except RunnerError as error:
+                    await asyncio.to_thread(timers.hold,row,error.code)
+        return None
 
 
 async def run_worker(arguments):

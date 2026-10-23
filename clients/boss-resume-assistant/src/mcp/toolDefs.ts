@@ -29,6 +29,8 @@ export interface BossToolDef {
 }
 
 const TOOL_DEFINITIONS: BossToolDef[] = [
+  { name: 'boss_recovery_probe', title: '恢复只读观察', description: 'Host专用：只连接已有Chrome并读取固定标签，不点击、不激活、不恢复业务',
+    zodShape: { expectation: z.discriminatedUnion('kind', [z.object({ kind: z.literal('navigation'), target: z.enum(['recommend', 'chat']) }).strict(), z.object({ kind: z.literal('clear_filter') }).strict(), z.object({ kind: z.literal('filter'), count: z.number().int().nonnegative().optional() }).strict()]).optional() }, annotations: { title: '恢复只读观察', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } },
   {
     name: 'boss_filter',
     title: '设置筛选条件',

@@ -9,6 +9,7 @@
           <div class="flex items-center gap-1">
             <slot name="header-extra"></slot>
             <button
+              v-if="showFullscreen"
               class="w-7 h-7 flex items-center justify-center rounded text-muted hover:text-default hover:bg-surface-hover transition-colors"
               :title="isFullscreen ? '退出全屏' : '全屏'"
               @click="toggleFullscreen"
@@ -71,6 +72,8 @@ const props = withDefaults(defineProps<{
   scrollable?: boolean
   /** 显式启用对话框语义、键盘焦点管理；既有调用者默认行为不变。 */
   accessible?: boolean
+  /** 紧凑操作弹框可隐藏全屏入口；既有调用者默认保留。 */
+  showFullscreen?: boolean
   /**
    * 弹框模式，决定点击遮罩层和关闭按钮的行为：
    * - 'create'（默认）：新增页，点击遮罩不关闭，避免用户填写大量数据时误关闭
@@ -98,6 +101,7 @@ const props = withDefaults(defineProps<{
   size: 'md',
   scrollable: true,
   accessible: false,
+  showFullscreen: true,
   mode: 'create',
   closeOnOverlay: undefined,
 })
