@@ -203,7 +203,7 @@ class OCRToolConfig(BaseModel):
 
 class SearchToolConfig(BaseModel):
     """搜索工具配置"""
-    provider: Literal["tavily", "zhipu", "baidu"] = "tavily"
+    provider: Literal["deepseek", "tavily", "zhipu", "baidu"] = "deepseek"
     tavily_api_key: str = ""
     baidu_api_key: str = ""  # 独立搜索凭据；配置密钥不会自动启用百度
     max_results: int = 5  # 控制上下文长度
@@ -213,6 +213,14 @@ class SearchToolConfig(BaseModel):
         "search_std", "search_pro", "search_pro_sogou", "search_pro_quark"
     ] = "search_pro"
     timeout_seconds: float = Field(30.0, gt=0, le=120)
+
+
+class WebFetchToolConfig(BaseModel):
+    """公开文档读取与有界远端回退；仅可信配置控制。"""
+    provider: Literal["auto", "native", "remote"] = "auto"
+    remote_provider: Literal["tavily", "deepseek"] = "tavily"
+    pdf_max_download_mb: int = Field(25, ge=1, le=50)
+    total_timeout_seconds: float = Field(90.0, gt=0, le=180)
 
 
 class BrowserToolConfig(BaseModel):
@@ -247,6 +255,7 @@ class ToolsConfig(BaseModel):
     email: EmailToolConfig = Field(default_factory=EmailToolConfig)
     ocr: OCRToolConfig = Field(default_factory=OCRToolConfig)
     search: SearchToolConfig = Field(default_factory=SearchToolConfig)
+    fetch: WebFetchToolConfig = Field(default_factory=WebFetchToolConfig)
     browser: BrowserToolConfig = Field(default_factory=BrowserToolConfig)
     maps: MapsToolConfig = Field(default_factory=MapsToolConfig)
     asr: ASRToolConfig = Field(default_factory=ASRToolConfig)
@@ -1066,6 +1075,16 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         yaml_config.setdefault("tools", {}).setdefault("search", {})["provider"] = os.getenv("SEARCH_PROVIDER")
     if os.getenv("ZHIPU_SEARCH_ENGINE"):
         yaml_config.setdefault("tools", {}).setdefault("search", {})["zhipu_search_engine"] = os.getenv("ZHIPU_SEARCH_ENGINE")
+
+    # 公开文档读取配置；由 Pydantic 校验边界，无效值不静默放宽限制。
+    if os.getenv("WEB_FETCH_PROVIDER"):
+        yaml_config.setdefault("tools", {}).setdefault("fetch", {})["provider"] = os.getenv("WEB_FETCH_PROVIDER")
+    if os.getenv("WEB_FETCH_REMOTE_PROVIDER"):
+        yaml_config.setdefault("tools", {}).setdefault("fetch", {})["remote_provider"] = os.getenv("WEB_FETCH_REMOTE_PROVIDER")
+    if os.getenv("WEB_FETCH_PDF_MAX_DOWNLOAD_MB"):
+        yaml_config.setdefault("tools", {}).setdefault("fetch", {})["pdf_max_download_mb"] = os.getenv("WEB_FETCH_PDF_MAX_DOWNLOAD_MB")
+    if os.getenv("WEB_FETCH_TOTAL_TIMEOUT_SECONDS"):
+        yaml_config.setdefault("tools", {}).setdefault("fetch", {})["total_timeout_seconds"] = os.getenv("WEB_FETCH_TOTAL_TIMEOUT_SECONDS")
 
     # 语音转文字工具配置（阿里云 ASR）
     if os.getenv("ALIYUN_ASR_ACCESS_KEY_ID"):

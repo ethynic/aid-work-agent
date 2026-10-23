@@ -229,6 +229,33 @@ class AgentEngine:
                             yield await observed(event)
                     if response.get('protocol_error'):
                         raise RuntimeError(response['protocol_error'])
+                    incomplete = (response.get("finish_reason") == "length" or
+                        not response.get("tool_calls") and not str(response.get("content") or "").strip())
+                    if incomplete:
+                        stopped = await self._control(state, control)
+                        if stopped:
+                            yield await observed(stopped)
+                            return
+                        for fact in state.model_calls:
+                            if owned_model_fact(fact) and fact.get('iteration') == state.iteration and fact.get('phase') == 'completed':
+                                fact['applied'] = True
+                        attempts = state.resources.get("incomplete_model_responses", 0) + 1
+                        state.resources["incomplete_model_responses"] = attempts
+                        if attempts >= 2:
+                            state.outcome = Outcome.FAILED
+                            state.error_code = "MODEL_OUTPUT_INCOMPLETE"
+                            text = "模型连续返回不完整内容，任务尚未完成；已保存的阶段成果保留。"
+                            state.output += text
+                            await control.save(state, "model_output_incomplete")
+                            yield await observed(make_event("error", data=text, error_code=state.error_code))
+                            yield await observed(make_event("response", data=text))
+                            return
+                        state.messages.append({"role": "user", "content":
+                            "[系统生成检查] 上次生成被截断或为空，其中工具未执行，任务未完成。请基于现有事实继续，优先保存/校验实际成果并给出答复，避免重复长篇分析。"})
+                        await control.save(state, "model_output_incomplete")
+                        yield await observed(make_event("progress", data="上次生成不完整，正在恢复交付"))
+                        continue
+                    state.resources.pop("incomplete_model_responses", None)
                     calls = normalize_calls(response.get("tool_calls", []))
                     content = response.get("content") or ""
                     message = {"role": "assistant", "content": content}
@@ -362,8 +389,11 @@ class AgentEngine:
             if state.outcome == Outcome.RUNNING:
                 state.outcome = Outcome.ITERATION_LIMIT
                 state.error_code = "ITERATION_LIMIT"
+                text = "本轮已达到执行上限，任务尚未完成；已保存的阶段成果保留，不能将其视为全部验收通过。"
+                state.output += text
                 await control.save(state, "iteration_limit")
                 yield await observed(make_event("iteration_limit", limit=state.max_iterations))
+                yield await observed(make_event("response", data=text))
             tool_messages = [message for message in state.messages[state.initial_len:]
                              if message.get("role") == "tool" or message.get("tool_calls")]
             if tool_messages:

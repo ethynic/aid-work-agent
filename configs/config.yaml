@@ -69,6 +69,7 @@ llm:
     qwen3-vl-flash: 32768
     qwen3.8-flash: 131072
     deepseek-flash: 393216
+    deepseek-v4-pro: 393216
     deepseek-v4-flash: 393216   # deepseek-flash 改名后的新模型码，缺失会回退默认 16384 截断长输出
     GLM-5.3-Flash: 131072
   qwen:
@@ -129,6 +130,11 @@ video_gen:
 
 # 工具配置
 tools:
+  fetch:
+    provider: auto  # native网络失败时回退到下面显式选定的远端正文服务
+    remote_provider: tavily  # tavily Extract；可选deepseek Fetch，不影响搜索默认源
+    pdf_max_download_mb: 25  # 文字型PDF下载上限，1..50 MiB；HTML固定5 MiB
+    total_timeout_seconds: 90  # 下载及隔离解析的总时限，最大180秒
   email:
     smtp_server: ${SMTP_SERVER}
     smtp_port: 465
@@ -141,7 +147,7 @@ tools:
     baidu_api_key: ${BAIDU_OCR_API_KEY}
     baidu_secret_key: ${BAIDU_OCR_SECRET_KEY}
   search:
-    provider: tavily  # tavily | zhipu | baidu；百度已接入但暂不启用，不自动回退
+    provider: deepseek  # deepseek | tavily | zhipu | baidu；DeepSeek复用LLM密钥，不自动回退
     baidu_api_key: ${BAIDU_API_KEY}  # 仅显式选择 baidu 时使用，独立于 OCR 密钥
     zhipu_search_engine: search_pro  # search_std | search_pro | search_pro_sogou | search_pro_quark
     timeout_seconds: 30

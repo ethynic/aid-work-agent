@@ -13,8 +13,8 @@ from unittest.mock import AsyncMock, patch
 from src.tools.registry import ToolRegistry
 from src.tools.executor import ToolExecutor
 
-from src.config.settings import SearchToolConfig
-from src.services.web_search.providers import baidu, tavily
+from src.config.settings import LLMProviderConfig, SearchToolConfig
+from src.services.web_search.providers import baidu, deepseek, tavily
 from src.tools.search import search_tool
 
 
@@ -148,7 +148,7 @@ async def test_executor_routes_baidu_and_normalizes_string_parameters(monkeypatc
 
 @pytest.mark.asyncio
 async def test_executor_tavily_registration_and_schema(monkeypatch):
-    cfg = SearchToolConfig(tavily_api_key="unit-key")
+    cfg = SearchToolConfig(provider="tavily", tavily_api_key="unit-key")
     monkeypatch.setattr(search_tool, "settings", SimpleNamespace(tools=SimpleNamespace(search=cfg)))
     mocked = AsyncMock(return_value={"success": True, "results": [], "count": 0})
     monkeypatch.setattr(tavily.TavilyProvider, "search", mocked)
@@ -160,3 +160,38 @@ async def test_executor_tavily_registration_and_schema(monkeypatch):
     assert "keyword" in definition["input_schema"]["properties"]
     result = await ToolExecutor(registry=tools).execute("web_search", {"keyword": "公开资料"})
     assert result["success"] and mocked.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_executor_default_deepseek_uses_http_and_normalizes_parameters(monkeypatch):
+    monkeypatch.setattr(search_tool, "settings", SimpleNamespace(
+        tools=SimpleNamespace(search=SearchToolConfig()),
+        llm=SimpleNamespace(deepseek=LLMProviderConfig(api_keys=["unit-key"])),
+    ))
+    original = httpx.AsyncClient
+    requests, clients = [], []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json={"results": [{"title": "官网", "url": "https://example.com/",
+            "summary": "公开资料", "content": "网页全文", "rerank_score": 2.1}]})
+
+    def client(**kwargs):
+        instance = original(transport=httpx.MockTransport(handler), **kwargs)
+        clients.append(instance)
+        return instance
+
+    monkeypatch.setattr(deepseek.httpx, "AsyncClient", client)
+    tools = ToolRegistry()
+    tools.register(search_tool.WebSearchTool())
+    executor = ToolExecutor(registry=tools)
+    for depth, kind in [("basic", "summary"), ("advanced", "full_text")]:
+        result = await executor.execute("web_search", {
+            "keyword": "公开资料", "max_results": "2", "include_answer": "false", "search_depth": depth,
+        })
+        assert result["success"] and result["provider"] == "deepseek"
+        assert result["results"][0]["content_kind"] == kind and "answer" not in result
+        assert json.loads(requests[-1].content) == {
+            "query": "公开资料", "count": 2, "need_content": depth == "advanced",
+        }
+    assert all(client.is_closed for client in clients)

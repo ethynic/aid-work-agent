@@ -13,8 +13,8 @@ def test_billing_video_gen_usage_factor_default():
     assert cfg.usage_factor == 100
 
 
-def test_search_config_without_provider_keeps_tavily():
-    assert SearchToolConfig().provider == "tavily"
+def test_search_config_without_provider_uses_deepseek():
+    assert SearchToolConfig().provider == "deepseek"
 
 
 def test_zhipu_search_uses_existing_llm_key_config(monkeypatch, tmp_path):

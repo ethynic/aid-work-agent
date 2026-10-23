@@ -100,3 +100,18 @@ AgentEngine / 既有子智能体
 默认provider:tavily；百度与智谱不自动启用、不因主源缺密钥或失败而调用。只有操作者显式改配置/SEARCH_PROVIDER才选对应源，Agent参数不暴露provider。已接入不代表已部署或已启用，不实现第4节拟议的多源融合/后备链。
 
 百度使用[官方V2独立搜索](https://ai.baidu.com/ai-doc/AppBuilder/pmaxd1hvy)，固定HTTPS端点、standard版本、web-only，解析references中的snippet/content、url、date、website和rerank_score。域名限定原生match.site（上限20），排除使用block_websites，并按域名边界严格后过滤。week/month/year使用search_recency_filter；官方page_time限定固定date-math套餐，无法表达精确最近24小时，day请求前明确拒绝，不扩大范围、不另调其他源。日期保留供应商原值，不自动当作已核实原始发布日期；摘要不表示完整正文或模型答案。接线和HTTP契约以隔离MockTransport验证，不实际启用百度进行效果评测。
+
+## 首批通用组件提交边界（2026-10-23）
+
+用户批准DeepSeek独立搜索并设默认、HTML/文字PDF读取、有界显式远端回退、会话来源保存与Read分页，以及通用模型截断修复、主体默认50轮和Pro输出容量配置。不改Device/wire或浏览器工具。
+
+Search basic返回摘要，advanced请求正文，实际类型不升格；返回完整来源元数据及有限预览，正文以会话隔离文件和SHA回读。Read仅研究正文整行分页，普通文件行为保留。来源是外部数据，不是执行指令。
+
+Fetch提供auto/native/remote，缺省auto：原生成功立即返回，仅网络/TLS/连接/响应超时类错误尝试一次配置选定的远端（缺省Tavily Extract，可选DeepSeek Fetch）；不按Key自动换源。公网DNS/逐跳固定IP与TLS验证、HTML5MiB、PDF缺省25MiB/可配1..50MiB、100页、100万字符、总90秒/可配至180秒、可终止解析子进程保持有界。远端固定API、响应6MiB、压缩读前拒绝，保留导航及读取尝试；provider_fetch不冒充本机直读，最终URL/源站时间未知时明确标记。
+
+三个LLM adapter保留length；引擎不执行不完整输出里的工具，一次恢复仍连续失败则明确失败，取消优先；耗尽时给出未完成说明。MASTER无profile时默认50，其他模式及显式profile沿原限额。Pro补模型能力表393216，避免缺表16K；最大输出是生成容量，不替代实际用量及准入预算。
+
+本批不包含research_plan/research_validate、CSV/客户资格/官网身份规则、研究交付绑定、全局完成门禁或业务进度提示；不得因用户搜索并导出普通CSV而强制研究校验。相关原型与完整Skill实验保留本地，不作为本批生产能力。普通生成MD仍可能受通用回读截断，Search召回质量也需组件层继续增强。
+
+
+兼容契约：会话投影保留既有search_engine/response_time。Tavily answer保留为供应商生成摘要，明确answer_kind，预览最多700字符；超出部分完整保存到同一会话文件，附SHA并由Read分页，不能作为新增source或原始全文证据。

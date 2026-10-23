@@ -5,7 +5,13 @@
 - qwen._clamp_max_tokens：上限从 config.yaml llm.model_max_tokens 读取
 """
 
+from contextlib import asynccontextmanager
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
+
+import pytest
+import yaml
 
 from src.llm.gateway import DEFAULT_MAX_TOKENS, LLMGateway
 from src.llm.providers.qwen import _clamp_max_tokens
@@ -17,6 +23,39 @@ def _new_gateway() -> LLMGateway:
 
 
 class TestResolveMaxTokens:
+    @pytest.mark.parametrize("model,explicit,expected", [
+        ("deepseek-v4-pro", None, 393216),
+        ("deepseek-v4-pro", 4000, 4000),
+        ("unknown-probe-model", None, DEFAULT_MAX_TOKENS),
+    ])
+    async def test_shipped_model_limits_reach_tool_call_provider(self, model, explicit, expected):
+        """Pro reasoning must not hit the unknown-model 16K fallback before producing a tool call."""
+        config_path = Path(__file__).resolve().parents[2] / "configs" / "config.yaml"
+        limits = yaml.safe_load(config_path.read_text(encoding="utf-8"))["llm"]["model_max_tokens"]
+        captured = {}
+
+        @asynccontextmanager
+        async def acquire():
+            yield "test-key"
+
+        async def provider_chat(**kwargs):
+            captured.update(kwargs)
+            return {"content": "ok", "finish_reason": "stop"}
+
+        gw = _new_gateway()
+        gw.provider_name = "deepseek"
+        gw._model_codes = {"deepseek": model}
+        gw._failover_enabled = False
+        gw._key_pool = SimpleNamespace(acquire=acquire)
+        provider = SimpleNamespace(model=model, chat=provider_chat)
+        with patch("src.llm.gateway.settings") as mock_settings, \
+             patch("src.llm.gateway._build_provider", return_value=provider):
+            mock_settings.llm.model_max_tokens = limits
+            await gw.chat_with_tools(
+                [{"role": "user", "content": "continue research"}], tools=[], max_tokens=explicit,
+            )
+        assert captured["max_tokens"] == expected
+
     def test_explicit_value_returned(self):
         gw = _new_gateway()
         assert gw._resolve_max_tokens(4000) == 4000
