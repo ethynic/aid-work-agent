@@ -543,4 +543,13 @@ CR关闭项：P1恢复时离屏原卡被误判消失并丢绑定，现全量源�
 
 提交前已fetch两个配置远程，master快进4个上游提交至`b213bd76`；仅`docs/ideas.md`与本地索引改动重叠，经保留原内容、三方合并后恢复，其他任务工作区改动保留。本次仅提交BOSS最小修复、关联设计/计划和脱敏证据；无关Web搜索、B2B、企微改动不纳入。BOSS源码SHA256与独立验证清单一致，原467项与CR结论有效复用；提交前主控再做构建检查。
 
-一键脚本会独立提升Runtime UI/BOSS patch版本、使用临时内存签名生成BOSS插件、追加公开信任根和完整版本快照、生成Host及Runtime安装器、验包并输出组合ZIP。实际版本、源码提交、产物摘要及验证结果待脚本完成后登记；不覆盖上一批交付。版本/公开根及最终发行记录作为同一授权范围的后续提交同步，ZIP/EXE不进入Git。
+一键脚本会独立提升Runtime UI/BOSS patch版本、使用临时内存签名生成BOSS插件、追加公开信任根和完整版本快照、生成Host及Runtime安装器、验包并输出组合ZIP。脚本九阶段exit 0，源码基线修复提交`e44830e2`已推送当前master配置的Codeup和GitHub两个远程。Runtime UI升至0.0.26、BOSS升至0.3.24；Host0.2.22/Core0.2.20/native0.1.0保持，固定Node22.23.3。未修改一键脚本、未复用旧dist/tgz、未覆盖旧交付。版本/公开根及本记录作为同一授权范围的后续提交同步，ZIP/EXE不进入Git。
+
+- 组合ZIP：`clients/release/AID-Work-Runtime-0.0.26-BOSS-0.3.24-20261023-212022.zip`，132657733字节；SHA256 `cb28f00f3aa1a4c4a65e7135ad8a07d6057d9ad22e25defe7ea0302cc5356644`。
+- Runtime安装器：`AID-Work-Runtime-0.0.26-win-x64-acceptance-unsigned.exe`，127000636字节；SHA256 `29b84d5fd8fcee0c595be0b3b5f0f6c0ec4a9fbb341639af5e72294c8e153cf0`；Windows签名仍为NotSigned验收版。
+- BOSS插件：`boss-0.3.24-dev.aidplugin.zip`，5382194字节；SHA256 `8e6a6176e966e746cf09370228da2a998f9db748fe85e06dc26a3ee114f2b981`。Ed25519签名；15个旧根原样保留、仅新增本批BOSS范围公钥，完整16根快照`clients/runtime-plugin-packaging/trust/history/runtime-0.0.26.roots.json`与实际Runtime资源一致。必须使用配套新Runtime，不能将本批新钥插件当作可独立导入不含此公钥的旧Runtime。
+- `RUNTIME_PACKAGE_PASS`/`RUNTIME_VERIFY_PASS`、3811运行资源、插件签名/3736文件清单/搬迁后版本及payload不变、实际`NATIVE_INPUT_LOAD_OK`均通过；打包定向测试8+20项通过、0失败/跳过。doctor为exit1/ready=false，如实记录构建机业务环境未就绪，不宣称BOSS业务可操作。
+- 主控复核最终ZIP10项CRC/长度及每项SHA256、SHA256SUMS全清单；包内18个本次修改生产文件与当前构建逐字节相同。首轮压缩遇VS Code/Git短暂占用，现有脚本退避重试成功；未结束进程或修改脚本。
+- 可复核发行清单：[release-0.0.26-boss-0.3.24-validation.json](../incidents/evidence/boss-cross-call-20261023/release-0.0.26-boss-0.3.24-validation.json)。本机运行日志`.tmp/boss-release-20261023/release-batch.log`。原独立467项及CR源码结论复用，打包后未改业务源码。
+
+交付：先安装组合ZIP中的Runtime，再通过Runtime导入本批BOSS插件，沿用原配对和用户资料。未运行安装器、未操作客户浏览器、未做真实多屏归位或业务续做、未部署任何服务器。
