@@ -107,9 +107,8 @@ def render_cover(c, p, i, n):
         c.text((MARGIN, 640), p["subtitle"], ss, "#CDDCEF")
     # key-number chips (content-driven: page["chips"] = ["...", ...])
     x, y = MARGIN, 730
-    f = c.font("body", 28)
     for t in p.get("chips", []):
-        tw = int(c.d.textlength(t, font=f))
+        tw = int(c.textwidth(t, "body", 28))
         c.card([x, y, x + tw + 56, y + 64], INK, alpha=12, radius=32,
                outline=pal["gold"], outline_alpha=80, width=2)
         c.text((x + 28, y + 32), t, 28, INK, anchor="lm")
@@ -171,7 +170,7 @@ def render_stats(c, p, i, n):
         d_h = 0
         if d:
             ds = c.fit_size(d, "body", 25, cw - 52, 130, 1.3)
-            d_h = int(ds * 1.3) * len(c.wrap(d, c.font("body", ds), cw - 52))
+            d_h = int(ds * 1.3) * len(c.wrap(d, "body", ds, cw - 52))
         return int(274 + d_h + 34)
 
     ch = max(_card_h(s) for s in stats)
@@ -208,9 +207,9 @@ def render_table(c, p, i, n):
     rh = max(44, min(92, (area_bot - area_top) // nrow))
     weights = []
     for ci in range(ncol):
-        m = c.d.textlength(str(head[ci]), font=c.font("title", 26))
+        m = c.textwidth(str(head[ci]), "title", 26)
         for r in rows:
-            m = max(m, c.d.textlength(str(r[ci]), font=c.font("body", 24)))
+            m = max(m, c.textwidth(str(r[ci]), "body", 24))
         weights.append(m)
     tot = sum(weights) or 1
     col_w = [max(120, int(area_w * wgt / tot)) for wgt in weights]

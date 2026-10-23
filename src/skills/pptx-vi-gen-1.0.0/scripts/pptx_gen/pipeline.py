@@ -16,10 +16,17 @@ from .vi import default_vi, extract_vi
 
 
 def generate_from_vi(template_path, content, out_path, vi_override=None,
-                     base_dir=None):
-    """Route 2 entry -> native editable deck (see native.generate_native)."""
+                     base_dir=None, remap_fonts=True, embed_fonts=False):
+    """Route 2 entry -> native editable deck (see native.generate_native).
+
+    Fonts: every run is written as the commercially-free Source Han Sans CN
+    (SIL OFL 1.1). remap_fonts=True is an idempotent safety net; embed_fonts
+    embeds the OTFs into the file (+17 MB) for machines without the font.
+    """
     return generate_native(template_path, content, out_path,
-                           vi_override=vi_override, base_dir=base_dir)
+                           vi_override=vi_override, base_dir=base_dir,
+                           remap_fonts=remap_fonts,
+                           embed_fonts=embed_fonts)
 
 
 def preview_pngs(template_path, content, out_dir, vi_override=None,
@@ -32,10 +39,32 @@ def preview_pngs(template_path, content, out_dir, vi_override=None,
     """
     base_dir = base_dir or (os.getcwd() if template_path is None
                             else os.path.dirname(os.path.abspath(template_path)))
-    # 无模板时走内置默认 VI（本项目允许不带 --template 生成）
+    # 无模板时走内置默认 VI（与 native.generate_native 口径一致）
     vi = default_vi() if template_path is None else extract_vi(template_path)
     if vi_override:
         vi.update(vi_override)
+    # 预览必须与 deck 用同一份商用免费字体（assets/fonts/ 内的思源黑体 OTF
+    # 与 Noto Sans TTF）：CJK→思源、拉丁→Noto Sans
+    if not vi.get("font_title") or not vi.get("font_body"):
+        from .fonts import font_file
+        vi["font_title"] = vi.get("font_title") or font_file(bold=True)
+        vi["font_body"] = vi.get("font_body") or font_file(bold=False)
+    if not vi.get("font_latin_title") or not vi.get("font_latin_body"):
+        from .fonts import latin_font_file
+        vi["font_latin_title"] = (vi.get("font_latin_title")
+                                  or latin_font_file(bold=True))
+        vi["font_latin_body"] = (vi.get("font_latin_body")
+                                 or latin_font_file(bold=False))
+    # 这四个键必须是"存在的字体文件路径"——若上游塞入了字体名等非路径值，
+    # 一律纠正为随包字体，避免预览回退成微型点阵字体
+    from .fonts import font_file as _ff, latin_font_file as _lf
+    for k, resolver in (("font_title", lambda: _ff(True)),
+                        ("font_body", lambda: _ff(False)),
+                        ("font_latin_title", lambda: _lf(True)),
+                        ("font_latin_body", lambda: _lf(False))):
+        v = vi.get(k)
+        if not v or not os.path.exists(v):
+            vi[k] = resolver()
     os.makedirs(out_dir, exist_ok=True)
     paths = []
     missing = []

@@ -150,6 +150,8 @@ def main():
     parser.add_argument("--accent", help="强制强调色，如 #2E9CCA")
     parser.add_argument("--preview", action="store_true",
                         help="同时输出每页 PNG 预览到 <output>_preview/ 目录")
+    parser.add_argument("--embed-fonts", action="store_true",
+                        help="把思源黑体/Noto Sans 嵌入 pptx（约 +18MB，未装字体的机器也原样渲染）")
     args = parser.parse_args()
 
     try:
@@ -179,7 +181,8 @@ def main():
         base_dir = str(template_path.parent) if template_path else str(Path.cwd())
         result = generate_from_vi(str(template_path) if template_path else None,
                                   content, str(out_path),
-                                  vi_override=vi_override or None, base_dir=base_dir)
+                                  vi_override=vi_override or None, base_dir=base_dir,
+                                  embed_fonts=args.embed_fonts)
 
         vi_info = {k: v for k, v in vi.items()
                    if k != "logo_img" and not k.startswith("font_")}
@@ -193,6 +196,10 @@ def main():
             "slides": result["slides"],
             "vi": vi_info,
         }
+        if result.get("fonts"):
+            out["fonts_replaced"] = result["fonts"]
+        if result.get("embedded"):
+            out["fonts_embedded"] = result["embedded"]
 
         if args.preview:
             preview_dir = out_path.with_suffix("").resolve()

@@ -15,6 +15,8 @@ import os
 
 from PIL import Image, ImageDraw, ImageFont
 
+from .fonts import is_cjk
+
 W, H = 1920, 1080
 MARGIN = 120
 FOOTER_Y = 1000
@@ -38,18 +40,44 @@ class Canvas:
         self.w, self.h = w, h
         self.img = Image.new("RGB", (w, h), _hex(vi.get("light", (245, 247, 250))))
         self.d = ImageDraw.Draw(self.img, "RGBA")
-        self._fc = {}
+        self._fc = {}       # (kind, size, cjk) -> font
+        # 双轨字体：CJK→思源黑体，拉丁→Noto Sans（与 deck 写法一致）
+        self._cjk = {"title": vi.get("font_title"), "body": vi.get("font_body")}
+        self._lat = {
+            "title": vi.get("font_latin_title") or vi.get("font_title"),
+            "body": vi.get("font_latin_body") or vi.get("font_body"),
+        }
 
     # ---- fonts ----
-    def font(self, kind, size):
-        key = (kind, size)
+    def font(self, kind, size, cjk=False):
+        key = (kind, size, cjk)
         if key not in self._fc:
-            path = self.vi.get("font_title" if kind == "title" else "font_body")
+            table = self._lat if not cjk else self._cjk
+            path = table.get(kind)
+            if path and not os.path.exists(path):
+                # 值必须是文件路径；不是路径（例如被塞了字体"名"）时退回
+                # 同 kind 的 CJK 字体，绝不落到微型点阵默认字体
+                path = self._cjk.get(kind)
+                if path and not os.path.exists(path):
+                    path = None
             try:
-                self._fc[key] = ImageFont.truetype(path, size)
-            except Exception:
+                self._fc[key] = (ImageFont.truetype(path, size) if path
+                                 else ImageFont.load_default())
+            except (OSError, ValueError):
+                # NOTE: narrow except on purpose — a bare `except Exception`
+                # once hid a NameError and silently disabled real-font use.
                 self._fc[key] = ImageFont.load_default()
         return self._fc[key]
+
+    def _char_font(self, ch, kind, size):
+        return self.font(kind, size, cjk=is_cjk(ch))
+
+    def textwidth(self, s, kind, size):
+        """Mixed-script line width: each char measured with its own font."""
+        total = 0.0
+        for ch in str(s):
+            total += self.d.textlength(ch, font=self._char_font(ch, kind, size))
+        return total
 
     # ---- backgrounds ----
     def _paste_grad(self, grad):
@@ -73,7 +101,7 @@ class Canvas:
         self._paste_grad(col.resize((self.w, self.h)))
 
     # ---- text ----
-    def wrap(self, s, font, max_w):
+    def wrap(self, s, kind, size, max_w):
         out = []
         for para in str(s).split("\n"):
             if para == "":
@@ -81,7 +109,7 @@ class Canvas:
                 continue
             cur = ""
             for ch in para:
-                if self.d.textlength(cur + ch, font=font) <= max_w or not cur:
+                if self.textwidth(cur + ch, kind, size) <= max_w or not cur:
                     cur += ch
                 else:
                     out.append(cur)
@@ -93,7 +121,7 @@ class Canvas:
         """Largest font size <= max_size whose single line fits within max_w."""
         size = max_size
         while size > 8:
-            if self.d.textlength(str(s), font=self.font(kind, size)) <= max_w:
+            if self.textwidth(str(s), kind, size) <= max_w:
                 return size
             size -= 2
         return 8
@@ -105,29 +133,49 @@ class Canvas:
             if size < 8:
                 size = 8
                 break
-            font = self.font(kind, size)
-            lines = self.wrap(s, font, max_w) if max_w else [str(s)]
+            lines = self.wrap(s, kind, size, max_w) if max_w else [str(s)]
             if int(size * lh) * len(lines) <= max_h:
                 return size
             size -= 2
         return max(size, 8)
+
+    def _draw_line(self, x, y, s, size, color, kind, alpha, anchor):
+        """Draw one line, mixing CJK (思源) and Latin (Noto Sans) glyphs."""
+        s = str(s)
+        ch_fonts = [self._char_font(ch, kind, size) for ch in s]
+        widths = [self.d.textlength(c, font=f) for c, f in zip(s, ch_fonts)]
+        total = sum(widths)
+        anchor = anchor or "la"
+        ah = anchor[0]
+        av = anchor[1] if len(anchor) > 1 else "a"
+        if ah == "m":
+            x0 = x - total / 2
+        elif ah == "r":
+            x0 = x - total
+        else:
+            x0 = x
+        # 'a' baseline（与 PIL 默认一致）；'m' 中部（近似上移 size/2）
+        y0 = y - size / 2 if av == "m" else y
+        fill = _rgba(color, alpha)
+        cx = x0
+        for c, f, w in zip(s, ch_fonts, widths):
+            self.d.text((cx, y0), c, font=f, fill=fill, anchor="la")
+            cx += w
 
     def text(self, xy, s, size, color, kind="body", max_w=None, lh=1.35,
              alpha=255, anchor="la", fit=False, max_h=None):
         x, y = xy
         if (fit or max_h) and max_w:
             size = self.fit_size(s, kind, size, max_w, max_h or 999999, lh)
-        font = self.font(kind, size)
-        lines = self.wrap(s, font, max_w) if max_w else str(s).split("\n")
+        lines = self.wrap(s, kind, size, max_w) if max_w else str(s).split("\n")
         step = int(size * lh)
         for ln in lines:
-            self.d.text((x, y), ln, font=font, fill=_rgba(color, alpha), anchor=anchor)
+            self._draw_line(x, y, ln, size, color, kind, alpha, anchor)
             y += step
         return y
 
     def center(self, xy, s, size, color, kind="body", alpha=255):
-        self.d.text(xy, str(s), font=self.font(kind, size),
-                    fill=_rgba(color, alpha), anchor="mm")
+        self._draw_line(xy[0], xy[1], s, size, color, kind, alpha, "mm")
 
     # ---- shapes ----
     def card(self, box, color, alpha=255, radius=22, outline=None,

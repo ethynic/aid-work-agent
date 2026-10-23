@@ -21,13 +21,18 @@ from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE, PP_ALIGN
 from pptx.oxml.ns import qn
 from pptx.util import Emu, Pt
 
+from .fonts import (FONT_NAME, FONT_NAME_LATIN, font_file, latin_font_file,
+                     is_cjk, remap_presentation)
+from .fonts import embed_fonts as _embed_fonts
 from .vi import default_vi, extract_vi
 
 EMU_PX = 6350                     # 12192000 EMU / 1920 px  (144 px per inch)
 W, H = 1920, 1080
 MARGIN = 120
 FOOTER_Y = 1000
-FONT = "微软雅黑"
+# 商用免费双轨字体（见 fonts.py）：CJK→思源黑体(FONT_NAME)，拉丁→Noto Sans
+FONT = FONT_NAME
+FONT_LATIN = FONT_NAME_LATIN
 
 INK, BODY, MUTED = "FFFFFF", "E8F0F8", "A9C2DA"
 DARKTXT, CYAN = "0A1E33", "35B8D9"
@@ -59,60 +64,38 @@ def _alpha(parent, pct):
 
 
 def _em(ch):
-    """Rough glyph advance of `ch` in em units (Microsoft YaHei-ish)."""
+    """Glyph advance of `ch` in em units — fallback only when no font file.
+
+    思源黑体的实测值（size 1000）：CJK 满格 1.0、数字 0.555、句点 0.278、
+    % 0.921、括号 0.338、空格 0.224、大写拉丁约 0.608。Noto Sans 的拉丁字形
+    与此近似，故兜底模型对两种字体通用。
+    """
     o = ord(ch)
     if o >= 0x2E80 or ch in "·—…“”‘’":
         return 1.0
     if ch.isdigit():
-        return 0.55
+        return 0.555
     if ch in ".,:;'!|":
-        return 0.30
+        return 0.278
     if ch == "%":
-        return 0.87
+        return 0.921
     if ch in "+-":
-        return 0.76
+        return 0.555
     if ch in "()[]{}<>/":
-        return 0.38
+        return 0.338
     if ch == " ":
-        return 0.28
-    return 0.56
+        return 0.224
+    return 0.608
 
 
-def _resolve_font_files():
-    """Locate regular/bold CJK font files (YaHei first) once, at import.
-
-    Windows 优先微软雅黑；Linux 容器（Noto CJK / 文泉驿）与 vi.py 的
-    字体查找口径一致，否则量测会静默退回 em 估算。
-    """
-    fdir = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
-    ldir = "/usr/share/fonts"
-    cands = {
-        "reg": [os.path.join(fdir, n) for n in
-                ("msyh.ttc", "msyh.ttf", "simhei.ttf", "simsun.ttc")] + [
-            os.path.join(ldir, "opentype", "noto", "NotoSansCJK-Regular.ttc"),
-            os.path.join(ldir, "truetype", "noto", "NotoSansCJK-Regular.ttc"),
-            os.path.join(ldir, "truetype", "wqy", "wqy-zenhei.ttc"),
-        ],
-        "bold": [os.path.join(fdir, n) for n in
-                 ("msyhbd.ttc", "msyhbd.ttf", "msyh.ttc", "simhei.ttf")] + [
-            os.path.join(ldir, "opentype", "noto", "NotoSansCJK-Bold.ttc"),
-            os.path.join(ldir, "truetype", "noto", "NotoSansCJK-Bold.ttc"),
-        ],
-    }
-    out = {}
-    for k, paths in cands.items():
-        out[k] = next((p for p in paths if os.path.exists(p)), None)
-    return out
-
-
-_FONT_FILES = _resolve_font_files()
 _PIL_FONT_CACHE = {}
 
 
-def _pil_font(size, bold=False):
-    key = (int(round(size)), bool(bold))
+def _pil_font(size, bold=False, cjk=False):
+    """Load the right bundled font for a script (CJK→思源, 拉丁→Noto Sans)."""
+    key = (int(round(size)), bool(bold), cjk)
     if key not in _PIL_FONT_CACHE:
-        path = _FONT_FILES.get("bold" if bold else "reg")
+        path = (font_file(bold) if cjk else latin_font_file(bold))
         font = None
         if path:
             try:
@@ -128,18 +111,23 @@ def _pil_font(size, bold=False):
 
 
 def measure(s, size, bold=False):
-    """Real glyph-advance width (px) from the actual font file.
+    """Real glyph-advance width (px) — per character with its OWN font.
 
-    The em-model in _em() underestimates bold YaHei digits by ~8%, which
-    made 'fit' shrink too little and text still wrapped in PowerPoint.
-    Measuring the real font is exact; em-model is only the last-resort
-    fallback when no font file is available.
+    CJK chars are measured from Source Han Sans CN, Latin/digits from Noto
+    Sans, so the overflow protection matches what PowerPoint actually renders
+    (it picks the typeface per character by script). The em-model in _em() is
+    only the last-resort fallback when a font file is unavailable.
     """
     s = str(s)
-    f = _pil_font(size, bold)
-    if f is not None:
-        return f.getlength(s)
-    return sum(_em(ch) for ch in s) * size
+    total = 0.0
+    for ch in s:
+        cjk = is_cjk(ch)
+        f = _pil_font(size, bold, cjk=cjk)
+        if f is not None:
+            total += f.getlength(ch)
+        else:
+            total += _em(ch) * size
+    return total
 
 
 def est_w(s, size, bold=False):
@@ -258,14 +246,15 @@ def _set_run(r, text, size, color, bold=False, alpha=None):
     f.size = _pt(size)
     f.bold = bold
     f.color.rgb = RGBColor.from_string(_hex(color))
-    f.name = FONT                       # latin
+    f.name = FONT_LATIN                 # latin（数字/字母）→ Noto Sans
     rPr = r._r.get_or_add_rPr()
-    for tag in ("a:ea", "a:cs"):        # east-asian + complex scripts
+    # ea（CJK）→ 思源黑体；cs（复杂脚本）→ Noto Sans，与 latin 一致
+    for tag, fam in (("a:ea", FONT), ("a:cs", FONT_LATIN)):
         e = rPr.find(qn(tag))
         if e is None:
             e = rPr.makeelement(qn(tag), {})
             rPr.append(e)
-        e.set("typeface", FONT)
+        e.set("typeface", fam)
     if alpha is not None:
         sf = rPr.find(qn("a:solidFill"))
         if sf is not None:
@@ -896,8 +885,15 @@ def _palette(vi):
 
 
 def generate_native(template_path, content, out_path, vi_override=None,
-                    base_dir=None):
-    """Route 3 entry: build a fully editable .pptx from structured content."""
+                    base_dir=None, remap_fonts=True, embed_fonts=False):
+    """Route 3 entry: build a fully editable .pptx from structured content.
+
+    remap_fonts: 把 deck 内任何残留字体名统一为商用免费字体
+                （latin/cs→Noto Sans，ea→思源黑体；本路线输出本就只用这套
+                 ﻿双轨字体，属幂等保险）。
+    embed_fonts: 把思源黑体 + Noto Sans 嵌入 pptx（+18MB），未装这些字体的
+                 机器也能原样渲染（opt-in）。
+    """
     base_dir = base_dir or (os.getcwd() if template_path is None
                             else os.path.dirname(os.path.abspath(template_path)))
     # 无模板时走内置默认 VI（本项目允许不带 --template 生成）
@@ -943,10 +939,13 @@ def generate_native(template_path, content, out_path, vi_override=None,
         sys.stderr.write("WARNING: image file(s) not found (layout kept with "
                          "placeholder panels): %s\n" % "; ".join(missing))
 
+    font_report = remap_presentation(prs) if remap_fonts else None
     try:
         prs.core_properties.title = slides[0].get("title", "PPT")
     except Exception:
         pass
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     prs.save(out_path)
-    return {"out": out_path, "slides": total}
+    embed_report = _embed_fonts(out_path) if embed_fonts else None
+    return {"out": out_path, "slides": total, "fonts": font_report,
+            "embedded": embed_report}

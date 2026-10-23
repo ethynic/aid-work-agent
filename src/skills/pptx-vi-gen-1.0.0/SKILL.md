@@ -8,7 +8,7 @@ description: >
   模板风格 PPT、品牌VI PPT、美观演示文稿、套用公司模板做 PPT、
   修改已生成的 PPT（改字/加页/删页/移页/换页/换色）。
 metadata:
-  version: "2.1.0"
+  version: "2.2.0"
   author: aid-work-agent
   trigger_keywords:
     - 按模板生成PPT
@@ -125,7 +125,7 @@ python scripts/generate.py \
 }
 ```
 
-失败时 `success=false` + `error` 字段（如 role 非法、缺 title、文件不存在），修正 content.json 后重试。
+失败时 `success=false` + `error` 字段（如 role 非法、缺 title、文件不存在），修正 content.json 后重试。使用客户模板时输出可能带 `fonts_replaced`（模板商业字体被替换为免费字体的清单）。
 
 **第 4 步：用 cp 交付**
 
@@ -196,11 +196,21 @@ deck_spec 每页二选一（同一 spec 内可混用）：
 | | `--output` | 否 | 输出文件名（默认 `vi_ppt_<时间戳>.pptx`） |
 | | `--brand` / `--accent` | 否 | 强制品牌色/强调色（十六进制，如 `#1F4E79`） |
 | | `--preview` | 否 | 输出每页 PNG 预览目录 |
+| | `--embed-fonts` | 否 | 嵌入思源黑体/Noto Sans 进 pptx（约 +18MB，未装字体的机器也原样渲染） |
 | `edit.py` | `--pptx` | 是 | 目标 deck 路径 |
 | | `--spec` | 是 | edit_spec.json 路径，或 `-` 表示 stdin |
 | | `--output` | 否 | 输出路径（缺省原地修改，自动留 `.bak`） |
 | `template_fill.py` | `analyze --template` | 是 | 解析模板，输出版式/占位符 JSON |
 | | `generate --template --spec --output` | 是 | 按 deck_spec 生成 |
+
+## 商用免费字体策略（2.2.0 起强制）
+
+交付客户的 PPT **不携带任何字体授权风险**，按字符所属脚本自动选字体（与 PowerPoint/WPS 原生行为一致）：
+
+- **双轨规则**：ea（中文）→ **思源黑体 CN**（Source Han Sans CN），latin/cs（字母/数字）→ **Noto Sans**（两者均为 SIL OFL 1.1 商用免费，随包分发在 `scripts/pptx_gen/assets/fonts/`）。思源的拉丁字形偏宽，数字/字母单独用 Noto Sans 更干净。
+- **路线二**：每个 run 显式写 latin=Noto Sans / ea=思源黑体；量测与 QA 预览按字符分流用同一份字体文件，保证「测得准 = 渲染一致」。
+- **路线一与 edit.py**：保存前把模板里的商业字体（微软雅黑/宋体/Arial/Calibri 等）按标签分流替换为免费字体；免费白名单字体（思源/Noto/MiSans/普惠体/HarmonyOS Sans 等）原样保留。替换清单在返回 JSON 的 `fonts_replaced` 字段，可审计。
+- **字体嵌入（opt-in）**：`--embed-fonts` 把两款字体嵌进 pptx（约 +18MB），未安装字体的电脑也能原样渲染；默认关闭（未嵌入时打开方按度量兼容字体替换，版式不散——单行元素禁换行 + 0.92 宽度预算兜底）。
 
 ## 边界与已知限制
 

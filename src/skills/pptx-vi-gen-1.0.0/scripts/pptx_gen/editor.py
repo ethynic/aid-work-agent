@@ -40,6 +40,7 @@ from pptx.opc.packuri import PackURI
 from pptx.oxml.ns import qn
 from pptx.parts.presentation import PresentationPart
 
+from .fonts import remap_presentation
 from .native import EMU_PX, _hex, add_page_slide
 
 # colors that are never the "accent" when sniffing a deck's palette
@@ -286,10 +287,14 @@ def _op_recolor(prs, op, pal_now):
 
 
 # ---------------------------------------------------------------- pipeline
-def edit_deck(pptx_path, edit_spec, out_path=None, palette=None):
+def edit_deck(pptx_path, edit_spec, out_path=None, palette=None,
+              remap_fonts=True):
     """Apply edit_spec ops to an existing deck. Returns a report dict.
 
     In-place by default (a .bak sibling is kept next to the file).
+
+    remap_fonts: 保存前把 deck 内商业字体替换为商用免费的思源黑体 CN
+                 （白名单内的免费字体保留）；对自家生成的 deck 是 no-op。
     """
     prs = Presentation(pptx_path)
     base_dir = os.path.dirname(os.path.abspath(pptx_path))
@@ -332,10 +337,12 @@ def edit_deck(pptx_path, edit_spec, out_path=None, palette=None):
                 warnings.append("%s failed: %s" % (kind, e))
 
     _refresh_page_numbers(prs)
+    font_report = remap_presentation(prs) if remap_fonts else None
     out = out_path or pptx_path
     if os.path.abspath(out) == os.path.abspath(pptx_path):
         shutil.copy2(pptx_path, pptx_path + ".bak")
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     prs.save(out)
     return {"out": out, "slides": len(prs.slides._sldIdLst),
-            "applied": applied, "warnings": warnings}
+            "applied": applied, "warnings": warnings,
+            "fonts": font_report}

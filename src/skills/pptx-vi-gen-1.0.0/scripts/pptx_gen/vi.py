@@ -2,6 +2,11 @@
 
 Pulls theme colors + theme fonts + a logo image from the template, filling
 the rest from a sane default so the renderer always has a complete VI.
+
+Font policy: fonts are NEVER taken from the customer template for rendering —
+only the commercially-free bundled font (see fonts.py) is used, so generated
+decks carry zero font-licensing risk. Template theme fonts are still read but
+remapped to their free equivalent for the audit trail.
 """
 import glob
 import io
@@ -12,36 +17,9 @@ from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.opc.constants import RELATIONSHIP_TYPE as RT
 from lxml import etree
 
+from . import fonts as _fonts
+
 NS = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
-
-# 字体查找同时覆盖 Windows（开发机）与 Linux（部署容器，Noto CJK / 文泉驿）
-_WIN_FONTS = r"C:\Windows\Fonts"
-_LINUX_FONTS = "/usr/share/fonts"
-
-
-def _find_cjk(bold):
-    if bold:
-        order = [
-            fr"{_WIN_FONTS}\msyhbd.ttc", fr"{_WIN_FONTS}\msyhbd.ttf",
-            f"{_LINUX_FONTS}/opentype/noto/NotoSansCJK-Bold.ttc",
-            f"{_LINUX_FONTS}/truetype/noto/NotoSansCJK-Bold.ttc",
-        ]
-    else:
-        order = [
-            fr"{_WIN_FONTS}\msyh.ttc", fr"{_WIN_FONTS}\msyh.ttf",
-            f"{_LINUX_FONTS}/opentype/noto/NotoSansCJK-Regular.ttc",
-            f"{_LINUX_FONTS}/truetype/noto/NotoSansCJK-Regular.ttc",
-        ]
-    order += [
-        fr"{_WIN_FONTS}\simhei.ttf", fr"{_WIN_FONTS}\Deng.ttf",
-        fr"{_WIN_FONTS}\simsun.ttf",
-        f"{_LINUX_FONTS}/truetype/wqy/wqy-zenhei.ttc",
-    ]
-    for pat in order:
-        hits = glob.glob(pat)
-        if hits:
-            return hits[0]
-    return None
 
 
 def default_vi():
@@ -52,10 +30,11 @@ def default_vi():
         "light": "#F5F7FA",
         "ink": "#1A1A1A",
         "muted": "#6B7280",
-        "font_title": _find_cjk(bold=True),
-        "font_body": _find_cjk(bold=False),
-        "font_latin_title": None,
-        "font_latin_body": None,
+        # 商用免费双轨字体（OFL）：CJK→思源黑体，拉丁→Noto Sans
+        "font_title": _fonts.font_file(bold=True),
+        "font_body": _fonts.font_file(bold=False),
+        "font_latin_title": _fonts.latin_font_file(bold=True),
+        "font_latin_body": _fonts.latin_font_file(bold=False),
         "logo_img": None,
     }
 
@@ -106,10 +85,17 @@ def extract_vi(template_path):
         if fs is not None:
             mj = fs.find(".//a:majorFont/a:latin", NS)
             mn = fs.find(".//a:minorFont/a:latin", NS)
-            if mj is not None:
-                vi["font_latin_title"] = mj.get("typeface")
-            if mn is not None:
-                vi["font_latin_body"] = mn.get("typeface")
+            # 模板主题字体只作审计记录（theme_latin_*），绝不写入
+            # font_latin_* —— 那两个键必须是"字体文件路径"（预览渲染用），
+            # 曾经把映射后的字体"名"写进去导致 PIL 回退成微型点阵字体。
+            for el, key in ((mj, "theme_latin_title"),
+                            (mn, "theme_latin_body")):
+                if el is not None:
+                    tf = el.get("typeface")
+                    # 主题字体是 latin 标签：映射为免费拉丁字体（Noto Sans）
+                    new, _why = _fonts.remap_typeface(tf, tag="a:latin",
+                                                      strict=True)
+                    vi[key] = new or _fonts.FONT_NAME_LATIN
     except Exception:
         pass
 
@@ -119,7 +105,6 @@ def extract_vi(template_path):
 
 if __name__ == "__main__":
     import json
-    import os
     import sys
     v = extract_vi(sys.argv[1])
     v.pop("logo_img", None)
