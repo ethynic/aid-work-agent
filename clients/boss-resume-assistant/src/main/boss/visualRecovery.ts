@@ -159,10 +159,24 @@ export class VisualRecovery {
         let image: Buffer, windowObservation: WindowObservation | undefined
         if (mode === 'window') {
           if (!targetId || !session.activateTarget) throw new CodedOperationError('UI_CHANGED', '当前会话不能激活绑定 BOSS 标签，未观察其他窗口')
-          await session.activateTarget()
-          windowObservation = await (this.deps.captureWindow ?? captureWindow)(join(directory, 'page.png'), session.cdpPort ?? 9222)
-          if (!windowObservation.window.process_started_at || !Number.isFinite(Date.parse(windowObservation.window.process_started_at))) throw new CodedOperationError('UI_CHANGED', '窗口观察缺少 Chrome 进程创建身份')
-          image = await readFile(join(directory, 'page.png'))
+          let stage = 'window_activate'
+          try {
+            await session.activateTarget()
+            stage = 'window_capture'
+            windowObservation = await (this.deps.captureWindow ?? captureWindow)(join(directory, 'page.png'), session.cdpPort ?? 9222)
+            stage = 'window_identity'
+            if (!windowObservation.window.process_started_at || !Number.isFinite(Date.parse(windowObservation.window.process_started_at))) throw new CodedOperationError('UI_CHANGED', '窗口观察缺少 Chrome 进程创建身份')
+            stage = 'window_read'
+            image = await readFile(join(directory, 'page.png'))
+          } catch (error) {
+            if (error instanceof CancelledError || signal.aborted) throw new CancelledError()
+            const code = error instanceof CodedOperationError ? error.code : 'INTERNAL_ERROR'
+            const machine = (error as NodeJS.ErrnoException | undefined)?.code
+            throw new CodedOperationError(code, `绑定窗口观察失败（${stage}），未取得有效窗口诊断`, {
+              visual_failure: { stage, original_code: code,
+                ...(['ENOENT', 'EACCES', 'EBUSY', 'ETIMEDOUT'].includes(String(machine)) ? { machine_code: machine } : {}) },
+            })
+          }
         } else image = await session.captureFullpage()
         const metadata = pngMetadata(image)
         if (await session.getUrl() !== url || await session.getTargetId?.() !== targetId || mode === 'page' && !sameMetrics(metrics, await metricsOf(session))) throw stale('截图期间页面或视口已切换，请重新观察')

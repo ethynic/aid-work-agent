@@ -29,6 +29,8 @@ checkpoint、DOM基线和闭包仅在当次CLI进程内，不进入工具JSON、
 
 ## W. 浏览器CDP故障自动恢复（2026-10-22用户补充，待实施）
 
+2026-10-23现场补充（✅已完成开发，待真机验收）：Win32 `render widget hidden`认证零输入拒绝，先在绑定Chrome内最多1.2秒重枚举，再复用同一continuation做可取消退避及新session/fresh定位；原生连续无进展最多2次重连，原CDP恢复语义不变。只读/保留半批成果分支在page无阻挡且goal satisfied、本次输入未投递（累计not_started或独立认证零输入证明）时直接领域续做，窗口诊断不作额外门禁，历史attempted仍如实保留。开卡两次原生拒绝后可对同ref fresh定位使用已有CDP clickBrowse，按根HTML bounds/clientRects换算CSS坐标并核验详情；不扩大到滚轮、筛选或任何外发。未读卡不永久processed，已有图片及收尾阶段保留；关闭残留详情后fresh列表再校验pending原ref，不使用关闭前快照清身份或重复计数。窗口诊断仅记录脱敏子阶段/原code/白名单系统码，隐藏旧HWND几何取证失败不能新增拒绝。独立212个唯一相关用例及CR通过，证据及边界见[复盘](../../incidents/boss-render-widget-hidden-recovery-gap-20261023.md)与[计划12节](../../plans/plan-runner-local-tool-recovery-lockup-fix.md#12-2026-10-23现场增量隐藏渲染窗口未自动恢复开发验证中)，验收仍归原A2；未重试客户现场、发布或升级版本。
+
 实施状态（2026-10-22）：本批已在master完成恢复实现及独立自动化验证，真实Chrome/旧会话业务验收尚待执行；本节标题保留原计划定位。具体代码、兼容及测试证据以[计划第9节](../../plans/plan-runner-local-tool-recovery-lockup-fix.md#9-开发实施与独立验证记录2026-10-22)为准。重建页有局部可取消就绪等待；登录后复用原导航器回入口，新target同步原ref索引，恢复未完成保留待恢复标记。缺可选账号摘要不单独判失登，缺恢复元数据不阻止旧健康页面普通读取。
 
 追加修正：本机binding短更新临界区使用操作系统句柄锁，复用Runtime已采用的命名管道模式；进程退出/崩溃自动释放，不按TTL删除活锁。旧未发布.lock文件不再参与新版仲裁，不改变冻结release、Host桌面互斥或Device接口。真实子进程验证及新测试包进度见[计划第10节](../../plans/plan-runner-local-tool-recovery-lockup-fix.md#10-残留锁修复与测试包准备2026-10-22追加授权)。

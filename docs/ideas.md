@@ -29,7 +29,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20261022-1606 | 本地工具失败与原会话恢复闭环 | 🔧 部分完成 | 恢复及崩溃锁验证通过，0.0.24/0.3.22验收包已生成，待业务验收。 | [设计增量](system/agent-application-architecture-design.md#本地工具阻断与原会话恢复2026-10-22增量待实现) | [修复计划](plans/plan-runner-local-tool-recovery-lockup-fix.md) |
+| 20261022-1606 | 本地工具失败与原会话恢复闭环 | 🔧 部分完成 | 隐藏渲染窗口补丁及独立验证完成，真实业务验收待执行。 | [设计增量](system/agent-application-architecture-design.md#本地工具阻断与原会话恢复2026-10-22增量待实现)、[复盘](incidents/boss-render-widget-hidden-recovery-gap-20261023.md) | [修复计划](plans/plan-runner-local-tool-recovery-lockup-fix.md) |
 | 20261020-recruiting-error-perf | 招聘链路单点错误治理与 Win32 输入性能修复 | 🔧 部分完成 | 单份跳过+多轮CR+读取链路PS全迁Node完成（双通道对照验证），Phase 6 真机观察待做 | [复盘](incidents/recruiting-runtime-filter-timeout-and-resume-blocked-20261020.md) | [计划](plans/plan-recruiting-error-containment-and-input-performance.md) |
 | 20261020-1223 | 腾讯文档知识库导入 | 🔧 部分完成 | 客户需将既有文档系统内容导入知识库；按受众面排序腾讯文档>飞书>金山>钉钉>语雀>石墨，Phase 1 聚焦腾讯文档。已完成（0bcb03d3）：适配层 src/services/tencent_docs/（drive 列表客户端 + doc v3 属性树转 Markdown 转换器 + 400010 自动降级导出 DOCX 兜底与每 openID 每日 9 次配额闸门），36 个单测全绿、独立验证无 P0/P1。已完成（2026-10-20）：导入任务框架（任务 #5，DB 4 表 + 凭据加密存取 + 批次预检/配额闸门/无变化跳过 + Redis 单副本调度器 + 知识库入库覆盖更新）与前端入口（任务 #7，独立页面 /t/:tenant_id/knowledge/tdoc-imports：凭据绑定/目录浏览/文件选择/批次进度轮询），72 个单测全绿；浏览器真机联调与 OAuth 多租户授权（#2，被第三方应用入口缺失阻塞，待官方反馈）待做。范围决策（2026-10-20，产品确认）：现有租户腾讯文档账号均为个人账号，仅对接个人版 C 端；企业版 SaaS（OneID + drive/v3）与企业微信文档体系待实际需求出现再对接（调研快照 ext/腾讯文档接口/07）。遗留确认项：search 接口参数名待真机验证、400010 触发条件待定位。测试凭据明文登记计划 §7.1。 | — | [计划](plans/plan-tencent-docs-knowledge-import.md) |
 | 20261013-1055 | Agent 网络搜索增强 | 🔧 部分完成 | 通用Search/Fetch及Read已实现；定向召回继续增强。 | [设计](system/agent-web-search-enhancement-design.md) | [计划](plans/plan-agent-web-search-enhancement.md) |

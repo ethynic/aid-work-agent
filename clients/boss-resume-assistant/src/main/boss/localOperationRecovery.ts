@@ -81,17 +81,25 @@ export function withLocalRecovery<Args>(operation: BossOperation<Args>, deps: Lo
     // The domain continuation retains its Reader checkpoint and payloads. It
     // reconnects within this invocation; never re-enter operation.execute or vision.
     let reconnects = 0
+    let nativeReconnects = 0
     let lastCompleted = -1
     const deterministic = LOCAL_RECOVERY_POLICIES[operation.name] !== 'observe_only'
     const transientResult = () => original.code === 'CHROME_UNAVAILABLE'
       || isTransientCdpError(new Error(original.message))
       || isTransientCdpError(new Error(String(dict(dict(original.data.operation_recovery).error).summary ?? '')))
-    while (deterministic && continuation.resume && transientResult() && !ctx.signal.aborted) {
+    const nativeFailure = () => original.effect === 'none'
+      && ['render_widget_hidden', 'render_widget_unavailable', 'foreground_unavailable', 'target_activation_failed'].includes(String(dict(original.data.operation_recovery).native_input_failure))
+    const completedReads = () => Array.isArray(original.data.resumes) ? original.data.resumes.length : 0
+    while (deterministic && continuation.resume
+      && (transientResult() || nativeFailure() && (nativeReconnects < 2 || completedReads() > lastCompleted)) && !ctx.signal.aborted) {
       const completed = Array.isArray(original.data.resumes) ? original.data.resumes.length : 0
-      if (completed > lastCompleted) { reconnects = 0; lastCompleted = completed }
+      if (completed > lastCompleted) { reconnects = 0; nativeReconnects = 0; lastCompleted = completed }
+      const native = nativeFailure()
+      if (native) nativeReconnects++
       const ms = [1000, 2000, 5000, 10000][Math.min(reconnects++, 3)]!
-      ctx.progress({ stage: 'recover', current: completed, message: `浏览器连接暂时中断，正在自动恢复并保留已读取的 ${completed} 份资料（${ms / 1000}秒后重连）` })
-      deterministicSteps.push({ branch: 'transport', code: original.code, completed, backoff_ms: ms })
+      ctx.progress({ stage: 'recover', current: completed, message: `${native ? '浏览器原生窗口暂不可用' : '浏览器连接暂时中断'}，正在自动恢复并保留已读取的 ${completed} 份资料（${ms / 1000}秒后重连）` })
+      deterministicSteps.push({ branch: native ? 'native_window' : 'transport', code: original.code,
+        ...(native ? { native_input_failure: dict(original.data.operation_recovery).native_input_failure } : {}), completed, backoff_ms: ms })
       if (deterministicSteps.length > 10) deterministicSteps.shift()
       try {
         await (deps.sleep ? deps.sleep(ms, ctx.signal) : delay(ms, undefined, { signal: ctx.signal }))
@@ -147,6 +155,12 @@ export function withLocalRecovery<Args>(operation: BossOperation<Args>, deps: Lo
       observation.operation_code = a.result.code
       observation.model_called = a.visual.receipt ? true : null
       observation.failure_stage = a.result.success ? undefined : observationMode === 'page' ? 'page_capture_or_diagnosis' : 'window_capture_or_diagnosis'
+      const failure = dict(a.result.data.visual_failure)
+      if (['window_activate', 'window_capture', 'window_read', 'window_identity'].includes(String(failure.stage))) {
+        observation.failure_stage = failure.stage
+        if (['INTERNAL_ERROR', 'UI_CHANGED', 'CHROME_UNAVAILABLE', 'EXECUTION_UNKNOWN', 'CANCELLED'].includes(String(failure.original_code))) observation.original_code = failure.original_code
+        if (['ENOENT', 'EACCES', 'EBUSY', 'ETIMEDOUT'].includes(String(failure.machine_code))) observation.machine_code = failure.machine_code
+      }
       const status = a.visual.http_status, error = dict(a.visual.detail).error
       if (status === 401 || status === 403) {
         // Only known public refusals enter tool results; never forward arbitrary detail/debug.
@@ -227,6 +241,8 @@ export function withLocalRecovery<Args>(operation: BossOperation<Args>, deps: Lo
       for (let index = 0; index < 3; index++) {
         const diagnoseContext = { ...context, purpose: 'diagnose', available_actions: ['dismiss_click'] }
         let a = await observe(`step${index}.diagnose`, diagnoseContext, mode)
+        if ((policy === 'readonly' || policy === 'preserve_result') && (dict(context.execution).input_status === 'not_started' || nativeFailure())
+          && a.diagnosis?.obstruction === 'absent' && a.diagnosis.goal_state === 'satisfied') return await resume()
         if (policy === 'observe_only' && a.diagnosis?.obstruction === 'absent' && (mode === 'window' || dict(context.execution).stage !== 'input')) return await resume()
         const captureFailed = !Object.keys(a.visual).length && ['CHROME_UNAVAILABLE', 'UI_CHANGED', 'INTERNAL_ERROR'].includes(a.result.code)
         const unexplained = a.diagnosis && (a.diagnosis.obstruction === 'unknown'

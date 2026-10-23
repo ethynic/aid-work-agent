@@ -39,6 +39,18 @@ function harness(sequence: OperationResult[], name = 'boss_filter') {
 }
 const meta = (r: OperationResult) => r.data.visual_recovery as Dict
 
+test('readonly零输入且网页已满足：不再请求窗口诊断来否决正常页面续做', async () => {
+  const h = harness([visual('absent', 'satisfied')], 'boss_filter_options')
+  const f = h.initial.data.operation_recovery as Dict
+  f.operation_class = 'readonly'
+  f.execution = { stage: 'input', input_status: 'not_started', attempts_used: 1, ordinary_retries_used: 0 }
+  const result = await h.wrapped.execute({}, ctx())
+  assert.equal(result.success, true)
+  assert.equal(meta(result).state, 'recovered')
+  assert.equal(h.calls.length, 2)
+  assert.deepEqual(h.seen.map(call => call.args.observation_mode), ['page'])
+})
+
 test('all 22 business entries share local ownership and the two primitives cannot recursively recover', async () => {
   assert.equal(Object.keys(LOCAL_RECOVERY_POLICIES).length, 22)
   assert.equal(Object.keys(OPERATIONS).length, 25)

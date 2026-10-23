@@ -48,6 +48,8 @@ export interface SequenceContext {
   sleep?: (ms: number) => Promise<void>
   /** 默认写 stderr 单行（与 [boss-perf]/[boss-op] 同通道） */
   log?: LogSink
+  /** Invocation cancellation; not serialized with the physical request. */
+  signal?: AbortSignal
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
@@ -150,7 +152,18 @@ export async function performPhysicalInput(ctx: SequenceContext, request: Physic
     let sx = 0
     let sy = 0
     await timer.measureAsync('discover', async () => {
-      rw = customTarget ? customTarget.rw : findRenderWidget(api, win)
+      // Activation can precede Chromium's visible widget recreation. Re-enumerate
+      // the bound window for 1.2s; never hold on to its hidden fallback HWND.
+      for (let probe = 0; ; probe++) {
+        ctx.signal?.throwIfAborted()
+        if (bound) requireBoundForeground(api, win)
+        rw = customTarget ? customTarget.rw : findRenderWidget(api, win, (hwnd, visible, rect) => {
+          log(`[boss-input-discovery] phase=discover probe=${probe} window=${win} widget=${hwnd} pid=${api.getWindowThreadProcessId(hwnd).pid} visible=${Number(visible)} rect=${rect ? `${rect.left},${rect.top},${rect.right},${rect.bottom}` : 'unavailable'} foreground=${api.getForegroundWindow()} minimized=${Number(api.isIconic(win))}`)
+        })
+        if (rw && api.isWindowVisible(rw) || !bound || customTarget || probe >= 6) break
+        log(`[boss-input-discovery] phase=wait probe=${probe} window=${win} reason=${rw ? 'hidden' : 'unavailable'}`)
+        await sleep(200)
+      }
       if (rw === 0) {
         if (bound) throw new NativeInputError('STALE_OBSERVATION: render widget unavailable; input refused', 2, 'STALE_OBSERVATION')
         throw new NativeInputError('未找到 Chrome 渲染子窗口（窗口已还原仍无渲染子窗口）', 1, 'FAILED')

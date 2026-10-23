@@ -12,6 +12,7 @@
 | Phase 5 | 生命周期、错误证据及跨版本联调 | 🔧 进行中 | 原因分类、公开动作与Web回归通过；真实发布切换/视觉检查未执行 |
 | Phase 6 | 独立测试、CodeReview及旧会话验收 | 🔧 进行中 | 独立测试及CR完成本批验证，详情见第9节；A1～A6真实业务与部署仍待授权 |
 | Phase 7 | 崩溃残留锁修复与测试包准备 | ✅ 完成（2026-10-22） | Windows真实子进程及打包产物复验通过，已交付0.0.24/0.3.22验收包；未部署/安装/业务续做 |
+| Phase 8 | 原生窗口零输入拒绝的自动恢复 | ✅ 完成（2026-10-23） | 独立native46及CLI166唯一相关用例通过，CR通过；现场A2未验收，未打包/部署 |
 
 ## 1. 范围、基线与交付边界
 
@@ -19,7 +20,7 @@
 
 2026-10-22用户补充的产品要求：**浏览器/CDP故障默认自动恢复，浏览器被关闭也要自行重开、回到指定业务页面继续；不能仅因浏览器状态或CDP回执异常就把整轮交给用户核对。**允许重新走页面与读取流程，已完成的识别、扣费、入库和招呼沿用原事实，不从业务零进度重做。下文4.3、4.6和第6节六个业务验收落实此要求；属于待实施行为，不代表现版已经具备。
 
-本排障会话仅复核源码和修订文档，不修改代码、任务或服务，不提交、部署或重试现场任务。共享工作区已存在其他开发流程的未提交实现，进度以对应流程记录为准；本次保留这些改动，不将它们当成本会话已验证的交付。
+初始排查阶段仅复核源码和修订文档，不修改代码、任务或服务，不提交、部署或重试现场任务；后续授权实施及验证以第9、12节为准。共享工作区其他任务的未提交改动均保留，不将它们当成本任务已验证的交付。
 
 ### 1.1 审查基线
 
@@ -268,7 +269,7 @@
 | 编号 | 场景 | 通过标准 |
 |---|---|---|
 | A1 | 正常筛选50份 | 有足够候选人时完成目标，中途不固定停在25份、不因总时限停止；候选人确实不足则准确说明已完成数量和原因 |
-| A2 | 筛选中CDP暂时超时或断连 | 自动回读、重试/重连并接续，不要求人工核对或再次说继续；视觉诊断不可用也不单独阻断确定性恢复 |
+| A2 | 筛选中连接异常或原生窗口零输入拒绝 | CDP超时/断连自动恢复；render widget hidden先重新激活、探测并fresh定位重试，必要时复用已有读取通道；诊断不可用不单独阻断，不要求人工F5 |
 | A3 | 筛选中关掉tab或浏览器 | 自动恢复原登录环境、返回指定职位及筛选页面，接着完成剩余数量 |
 | A4 | 中途失败后在原会话说继续 | 能接续剩余工作，已有简历、扣费和招呼不重复；覆盖现场14份入库、2次招呼及旧执行状态，不能只测新会话 |
 | A5 | 真正未登录，随后完成登录 | 准确提示登录依赖；登录后原会话可接续，不要求另开会话 |
@@ -368,3 +369,41 @@ Python测试使用现有API容器的 `/opt/venv/bin/python` 和当前挂载源�
 用户已明确授权提交并推送本次修改，agent2部署及新版客户端安装由用户手动执行。已fetch确认master上游；共享主线新增私有云及回复分享提交后，按当前基线`dccf978f`核对本任务61个暂存文件，索引只加入本任务一行，保留其他任务未提交改动。安装器/ZIP不进入Git，登记源码、版本、公开信任根及ZIP校验值。
 
 从Git暂存树导出隔离源码，仅复用已安装依赖目录：CLI构建及10文件集合181通过、Web构建及useAgentRunner 62通过、真实独立PostgreSQL与相关单测168通过，均无失败/跳过；RunnerWorker/ApplicationToolRecovery/Web路由入口导入通过，未启动调度。数据库仍只省略无关vector扩展/表/索引，不连接现场数据库。`git diff --cached --check`通过；源码及产物此前独立CR结论保持。上述结果对应待提交代码，不依赖工作区未提交的其他功能代码；真实业务验收范围仍按第6、10节。
+
+## 12. 2026-10-23现场增量：隐藏渲染窗口未自动恢复（开发验证中）
+
+复盘：[agent2页面正常但续筛被隐藏渲染窗口守卫拒绝](../incidents/boss-render-widget-hidden-recovery-gap-20261023.md)。trace `tr_runner_2afd4ac171aa4de4be4bd52945113618` 中两次续筛均为Win32 `render widget hidden`零输入拒绝，网页诊断两次均无阻挡且goal satisfied，但强转window诊断失败后退出；不是CDP读取超时，也不是后台Runner拒绝“继续”。
+
+本批仅补四处现有链路，不新增恢复框架、Device协议或人工门禁：
+
+- 共享`win32-native-input`窗口探测及CLI恢复入口：隐藏/暂不可用widget明确零输入时，重新激活原target、等待并重新枚举；fresh页面定位后重试，不移除真实落点与外发保护。
+- `localOperationRecovery.ts`：纳入本机瞬态零输入拒绝，不限于CDP异常；readonly/input_status=not_started且网页无阻挡时不强制窗口视觉分支，直接本机重定位/续读。
+- `ResumeBatchReader.ts`：恢复前保留当前批次资料；尚未读取的失败卡片不标完成或永久排除。必要时对已支持的打开卡片动作复用CDP clickBrowse并做领域后验；不改打招呼/消息通道。
+- 诊断日志：保留窗口观察的原始脱敏错误和必要窗口元数据，区分可见性探测失败与CDP传输错误；模型回复不把STALE泛称为截图超龄或让用户手动F5兜底。
+
+验收归入原A2，不增加场景总数。可恢复机制已按源码确认，具体选中隐藏widget的窗口现场及window诊断INTERNAL_ERROR底层原因仍需客户端日志；本次未重试现场操作，不宣称底层现场原因已确定。
+
+### 12.1 最小实现与边界（2026-10-23）
+
+- 绑定Chrome激活后，仅hidden/unavailable widget做6次200ms等待及重新枚举（最多1.2秒），不保留隐藏HWND。custom resolveTarget及非绑定路径保持原语义；隐藏旧HWND的诊断矩形读取失败不阻断后续可见实例。前台、归属、落点、光标及输入后unknown守卫保持。已有OpContext取消贯穿WinMouseClicker到native调用上下文，新等待每轮检查取消。
+- 认证的`WinClickError exitCode=2`加精确hidden/unavailable/foreground/target activation原因生成内部`native_input_failure`；任意STALE、光标变化、遮挡及输入后unknown均不生成该证明。证明不进入视觉上下文，不清除同卡此前已投递输入事实。共享恢复复用原领域continuation、新session及取消/退避；原生连续无新资料最多2次重连，新增资料后重新计数，原CDP可取消退避语义保持。
+- Reader保留原ref、当前阶段、图片对象及次数，open/read遇认证拒绝不把未读人加入processed_names，内层读取catch不吞掉该异常。开卡两次原生拒绝后，仅原ref仍可fresh解析且根HTML真实几何有效时使用已有clickBrowse；device bounds按根bounds/clientRects比例换CSS坐标，继续使用详情操作列/经历概览及画布后验。没有几何或身份依据不猜坐标。此兜底不扩到真实滚轮、筛选控件或招呼/消息/接受等写动作。
+- readonly及保留半批成果的分支，page诊断absent+satisfied，且累计not_started或本次有认证零输入证明时，直接回到领域续做，不再由失败window诊断否决。其他未知输入仍保留原判据。窗口观察新增脱敏activate/capture/identity/read失败阶段、原业务code和白名单系统码，不复制任意异常正文。
+- 不改Device/API/wire、配对、20倍计费、版本或发布配置；用户旧安装包暂不含本补丁。只使用合成Win32世界/DOM和隔离临时目录，没有点击客户Chrome、外发、付费模型请求或远程数据库操作。
+
+### 12.2 验证记录
+
+开发红复现：两项native及两项CLI回归均在旧源码失败，分别覆盖隐藏新widget未重枚举、持续隐藏未等待、正常page仍被window分支否决、零输入未读卡进入processed_names。首轮实现build通过；native40项、CLI原受影响集合79项通过，无失败/跳过。补充生产operation→wrapper→新session→Reader→同ref fresh开卡的125%/150%/200%缩放合成链、半批page判据及诊断脱敏后，5文件66项通过。
+
+独立首轮native46项通过，CLI新增用例最初7/8通过：读中滚轮零输入中断后，Reader关闭残留详情仍用关闭前快照判断pending卡片，错误清除原ref并重复计attempt。已修为关闭后立即fresh列表再校验原pending/ref；不通过清ref或接受同名替代绕过。开发重跑build与Reader/新开发集/独立集，58/58通过，无失败/跳过，涵盖原图片保留、未完卡不排除、同名替代拒绝及persistent真实滚轮不改CDP。
+
+独立最终验证覆盖212个唯一相关用例（native46、CLI166），无剩余产品失败或跳过。CLI最终9文件组合首跑165/166通过，唯一失败为独立新增job-scope合成fixture缺实体筛选节点，真实JobSwitcher返回null，产品仍安全拒绝了输入但错误码与测试预期不符；仅补合成DOM后编译通过，独立文件11/11复跑通过，其他155项在相同产品源码上的有效结果复用，不把首跑写成exit0。独立CR已复核最终Reader修正并通过，无待修阻断。
+
+最终独立命令与退出状态（均为离线合成测试）：
+
+- `clients/shared/win32-native-input`：`node --test tests/sequence.test.mjs tests/widget-hidden-independent.test.mjs`，exit0，46/46，无跳过。
+- `clients/boss-resume-assistant`：`npm run build:main`，exit0；`node --test dist/tests/widget-hidden-recovery-independent.test.js dist/tests/widget-hidden-recovery.test.js dist/tests/resume-batch.test.js dist/tests/local-operation-recovery.test.js dist/tests/local-operation-recovery-independent.test.js dist/tests/win-mouse-clicker.test.js dist/tests/browser-page-recovery.test.js dist/tests/visual-recovery.test.js dist/tests/visual-v2-client.test.js`，exit1，165/166，失败仅上述fixture。
+- 同目录补合成fixture后：`node node_modules/typescript/bin/tsc -p tsconfig.main.json`，exit0；`node --test dist/tests/widget-hidden-recovery-independent.test.js`，exit0，11/11，无跳过；其余155项有效结果复用。
+- 同目录`node dist/src/cli/index.js --help`，exit0，仅显示帮助，未启动或操作Chrome。
+
+该Phase已完成开发，原A2真实Chrome/客户会话尚未验收；未提交、推送、升级版本、打包或部署，也未再次取线上记录。实际隐藏HWND/window捕获底层原因仍待客户机日志，不宣称现场问题已根治。发布仅需实际受影响客户端能力及共享native payload，不因本补丁强制更新后台API。

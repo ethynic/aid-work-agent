@@ -17,6 +17,7 @@
  * 注意：借用真实光标，点击期间（约 1s）用户手不能碰鼠标，CLI 调用前必须提示。
  */
 import type { ClickPoint } from '../boss/domSnapshot.js'
+import { CancelledError } from '../operations/types.js'
 
 export class WinClickError extends Error {
   constructor(
@@ -26,6 +27,15 @@ export class WinClickError extends Error {
     super(message)
     this.name = 'WinClickError'
   }
+}
+
+/** Only certified zero-input lifecycle refusals, never cursor/occlusion/unknown errors. */
+export function nativeWindowInputFailure(error: unknown): 'render_widget_hidden' | 'render_widget_unavailable' | 'foreground_unavailable' | 'target_activation_failed' | undefined {
+  if (!(error instanceof WinClickError) || error.exitCode !== 2) return
+  if (error.message === 'STALE_OBSERVATION: render widget hidden; input refused') return 'render_widget_hidden'
+  if (error.message === 'STALE_OBSERVATION: render widget unavailable; input refused') return 'render_widget_unavailable'
+  if (error.message === 'STALE_OBSERVATION: Debug Chrome is not foreground; observation/input refused') return 'foreground_unavailable'
+  if (error.message === 'STALE_OBSERVATION: 无法激活原 BOSS 标签，未投递物理输入') return 'target_activation_failed'
 }
 
 /** 原生输入能力会话（创建成功即 koffi 已加载） */
@@ -42,7 +52,7 @@ export interface NativeInputSession {
     notches?: number
     cdpPort?: number
     op?: string
-  }): Promise<{ output: string[] }>
+  }, signal?: AbortSignal): Promise<{ output: string[] }>
 }
 
 /** 原生会话加载器（单测注入 fake 用；默认动态 import 共享包） */
@@ -58,7 +68,7 @@ const defaultNativeOpener: NativeInputOpener = async () => {
     throw new Error(`koffi 加载失败: ${error instanceof Error ? error.message : String(error)}`)
   }
   return {
-    perform: (request) => mod.performPhysicalInput({ api }, request),
+    perform: (request, signal) => mod.performPhysicalInput({ api, signal }, request),
   }
 }
 
@@ -78,6 +88,7 @@ export class WinMouseClicker {
   private readonly cdpPort?: number
   private readonly beforeInput?: () => Promise<void>
   private readonly nativeOpener: NativeInputOpener
+  private readonly signal?: AbortSignal
   /** 原生会话缓存（含失败的 Promise：fail-loud 抛错，不重试加载、不回退） */
   private nativeSession: Promise<NativeInputSession> | null = null
 
@@ -85,11 +96,13 @@ export class WinMouseClicker {
     cdpPort?: number
     beforeInput?: () => Promise<void>
     nativeOpener?: NativeInputOpener
+    signal?: AbortSignal
   } = {}) {
     if (opts.cdpPort !== undefined && (!Number.isInteger(opts.cdpPort) || opts.cdpPort < 1 || opts.cdpPort > 65535 || !opts.beforeInput)) throw new WinClickError('绑定真实输入需要合法调试端口与标签激活方法', 2)
     this.cdpPort = opts.cdpPort
     this.beforeInput = opts.beforeInput
     this.nativeOpener = opts.nativeOpener ?? defaultNativeOpener
+    this.signal = opts.signal
   }
 
   /**
@@ -155,9 +168,13 @@ export class WinMouseClicker {
   private async perform(request: PhysicalRequest): Promise<void> {
     const session = await this.openNative()
     try {
-      await session.perform(this.toNativeRequest(request))
+      if (this.signal?.aborted) throw new CancelledError()
+      await session.perform(this.toNativeRequest(request), this.signal)
     } catch (error) {
-      throw toWinClickError(error)
+      if (error instanceof CancelledError) throw error
+      const mapped = toWinClickError(error)
+      if (this.signal?.aborted && mapped.exitCode === 2 && !mapped.message.includes('[BOSS_INPUT_UNKNOWN]')) throw new CancelledError()
+      throw mapped
     }
   }
 
@@ -191,6 +208,7 @@ export class WinMouseClicker {
   }
 
   private async activateBoundTarget(): Promise<void> {
+    if (this.signal?.aborted) throw new CancelledError()
     if (!this.beforeInput) return
     try { await this.beforeInput() }
     catch { throw new WinClickError('STALE_OBSERVATION: 无法激活原 BOSS 标签，未投递物理输入', 2) }

@@ -495,6 +495,38 @@ function boundChromeWorld(processes) {
   return { world, win, rw }
 }
 
+test('绑定widget暂时隐藏：重新枚举新可见实例后输入，不复用隐藏HWND', async () => {
+  const { world, win, rw } = boundChromeWorld([{ pid: 3131, exeName: 'chrome.exe', commandLine: 'chrome.exe --remote-debugging-port=9333' }])
+  world.state.windows.get(rw).visible = false
+  let probes = 0
+  const enumerate = world.api.enumChildWindows
+  world.api.enumChildWindows = (parent, visit) => {
+    if (++probes === 3) world.addWindow({ parent: win, cls: 'Chrome_RenderWidgetHostHWND',
+      rect: { left: 0, top: 40, right: 1920, bottom: 1080 }, pid: 3131 })
+    return enumerate(parent, visit)
+  }
+  const logs = []
+  await performPhysicalInput({ api: world.api, sleep: world.sleep, log: line => logs.push(line) },
+    { x: 100, y: 100, cssW: VP.cssW, cssH: VP.cssH, cdpPort: 9333 })
+  assert.equal(probes, 3)
+  assert.equal(world.state.calls.filter(call => call === 'LEFTDOWN').length, 1)
+  assert.ok(logs.some(line => line.includes('boss-input-discovery') && line.includes('visible=0')))
+  assert.ok(logs.every(line => !line.includes('BOSS直聘 - Google Chrome')), '诊断不得记录窗口标题')
+})
+
+test('绑定widget持续隐藏：有界重新枚举后仍以exit2零输入拒绝', async () => {
+  const { world, rw } = boundChromeWorld([{ pid: 3131, exeName: 'chrome.exe', commandLine: 'chrome.exe --remote-debugging-port=9333' }])
+  world.state.windows.get(rw).visible = false
+  let probes = 0
+  const enumerate = world.api.enumChildWindows
+  world.api.enumChildWindows = (parent, visit) => { probes++; return enumerate(parent, visit) }
+  await assert.rejects(performPhysicalInput({ api: world.api, sleep: world.sleep, log: () => {} },
+    { x: 100, y: 100, cssW: VP.cssW, cssH: VP.cssH, cdpPort: 9333 }),
+  error => error.exitCode === 2 && /render widget hidden; input refused/.test(error.message))
+  assert.ok(probes > 1 && probes <= 8, '探测应等待短暂widget重建，但持续故障不得无限等待')
+  assert.ok(!world.state.calls.includes('LEFTDOWN'))
+})
+
 test('绑定模式：唯一调试 Chrome → 绑定找窗 → 前台 → 输入；命令行匹配语义与 ps1 一致', async () => {
   const { world, win } = boundChromeWorld([
     { pid: 3131, exeName: 'chrome.exe', commandLine: '"C:\\Chrome\\chrome.exe" --remote-debugging-port=9333 --user-data-dir=C:\\chrome-debug https://www.zhipin.com' },

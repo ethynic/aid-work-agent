@@ -906,6 +906,25 @@ test('CDP close timeout retains the first image and checkpoint recovery never re
   assert.equal(second.stop_reason, 'limit_reached')
 })
 
+test('隐藏widget零输入拒绝不将未读取卡片永久排除，并保留同批领域续读', async () => {
+  const batch = makeBatch([ROW1])
+  batch.deps.checkpoint = {}
+  const click = batch.deps.click
+  let refused = true
+  batch.deps.click = async (point, viewport) => {
+    if (refused) { refused = false; throw new WinClickError('STALE_OBSERVATION: render widget hidden; input refused', 2) }
+    await click(point, viewport)
+  }
+  const first = await batch.reader().readBatch({ limit: 1 })
+  assert.equal(first.resumes.length, 0)
+  assert.deepEqual(first.processed_names, [], '尚未读取不能进入后端续筛排除名单')
+  assert.equal(first.recovery?.execution.inputStatus, 'not_started')
+  const second = await batch.reader().readBatch({ limit: 1 })
+  assert.equal(second.resumes.length, 1)
+  assert.equal(second.attempted, 1, '同一未完成卡片不是新的候选人尝试')
+  assert.equal(second.failures.length, 0)
+})
+
 
 for (const code of ['NOT_LOGGED_IN', 'UI_CHANGED', 'CANCELLED'] as const) {
   test('retained batch survives a pre-body recovery dependency: ' + code, async () => {

@@ -2,7 +2,7 @@ import { DetailGreetExecutor } from './DetailGreetExecutor.js'
 import { mapExecutorError } from '../operations/errorMapping.js'
 import type { PageExecution } from '../operations/pageOperation.js'
 import { candidateReference, loadedCandidates, resolveCandidateReference } from './LoadedCandidateNavigation.js'
-import { WinClickError } from '../input/WinMouseClicker.js'
+import { WinClickError, nativeWindowInputFailure } from '../input/WinMouseClicker.js'
 import { isTransientCdpError } from '../cdp/errors.js'
 /**
  * 推荐牛人页批量简历读取执行器（CLI resume-batch 命令 / boss_resume_batch tool，设计 §10.8 延伸）。
@@ -104,6 +104,8 @@ export interface ResumeBatchDeps {
    *  客户机实证 BOSS 反作弊 SDK 会选择性拦截 CDP 合成点击（同账号 greet 的 Win32 点击一直
    *  正常），被拦时点击静默失效「页面无反应」；Win32 为操作系统级真人输入，SDK 无法区分。 */
   click(point: ClickPoint, viewport: { width: number; height: number }): Promise<void>
+  /** Existing read-only card browsing channel, used only after repeated native lifecycle refusals. CSS px. */
+  clickBrowse?(point: ClickPoint): Promise<void>
   /** CDP dispatchKey Escape（关闭简历详情弹层） */
   pressEscape(): Promise<void>
   /** 无 clip 整页截图（device px，与 DOMSnapshot bounds 同坐标系） */
@@ -141,7 +143,7 @@ export interface ResumeBatchCheckpoint {
   attempted?: number
   scrollRounds?: number
   execution?: PageExecution
-  current?: { name: string; reference: string | null; phase: 'open' | 'read' | 'close'; failureStart: number }
+  current?: { name: string; reference: string | null; phase: 'open' | 'read' | 'close'; failureStart: number; nativeWindowRefusals?: number }
 }
 
 /** 点卡片后轮询等详情 canvas 出现的总超时（ms）。真机 ~600ms 出现，轮询容错 */
@@ -185,7 +187,7 @@ export class ResumeBatchReader {
   }
 
   /** 只桥接续筛列表输入；点击与截图保持原 bounds 口径。不能根据系统 DPI 猜倍率。 */
-  private listScrollEvent(snap: DomSnapshot): { x: number; y: number; deltaY: number } {
+  private rootCssScale(snap: DomSnapshot): { viewport: { width: number; height: number }; sx: number; sy: number } {
     const root = snap.documents[0]
     const invalid = (): never => { throw new ResumeBatchError('续筛列表缺少有效的根 HTML CSS 几何：未发送滚动') }
     const validRect = (rect: number[] | undefined): rect is number[] => !!rect && rect.length === 4
@@ -214,6 +216,11 @@ export class ResumeBatchReader {
     const sy = bounds[3]! / css[3]!
     if (!Number.isFinite(sx) || !Number.isFinite(sy) || sx <= 0 || sy <= 0
       || Math.abs(sx - sy) > Math.max(sx, sy) * 0.001) return invalid()
+    return { viewport, sx, sy }
+  }
+
+  private listScrollEvent(snap: DomSnapshot): { x: number; y: number; deltaY: number } {
+    const { viewport, sx, sy } = this.rootCssScale(snap)
     return {
       x: (viewport.width / 2) / sx,
       y: (viewport.height / 2) / sy,
@@ -251,7 +258,7 @@ export class ResumeBatchReader {
     attempted: number
     processed_names: string[]
     stop_reason: string
-    recovery?: { code: string; summary: string; execution: PageExecution }
+    recovery?: { code: string; summary: string; execution: PageExecution; nativeInputFailure?: string }
   }> {
     const limit = opts.limit
     const checkpoint = this.deps.checkpoint ?? {}
@@ -265,7 +272,7 @@ export class ResumeBatchReader {
     let attempted = checkpoint.attempted ?? 0
     let firstRound = true
     let currentName: string | null = null
-    let recovery: { code: string; summary: string; execution: PageExecution } | undefined
+    let recovery: { code: string; summary: string; execution: PageExecution; nativeInputFailure?: string } | undefined
     const pending = checkpoint.current
     let resumeName = pending && pending.phase !== 'close' ? pending.name : null
     this.execution = checkpoint.execution ? structuredClone(checkpoint.execution)
@@ -287,7 +294,7 @@ export class ResumeBatchReader {
     if (this.deps.signal?.aborted) throw new CancelledError('已取消：批量读取尚未开始')
     batchLog(`批量开始 limit=${limit}`)
     try {
-    const initial = await this.deps.snapshot()
+    let initial = await this.deps.snapshot()
     const initialState = inspectRecommendationResults(initial)
     if (initialState.stopReason === 'no_matching_candidates' && !pending) return {
       resumes: [...resumes], failures: [...failures], attempted, processed_names: [...processedNames],
@@ -300,6 +307,9 @@ export class ResumeBatchReader {
           '启动前检测到已打开的简历详情弹层，且 Escape 后未能关闭：请人工按 Escape 关闭详情后重试',
         )
       }
+      // Closing a resumed read changes the visible document. The old detail
+      // snapshot cannot establish that its unfinished list card disappeared.
+      initial = await this.deps.snapshot()
     }
     if (pending) {
       // The last failure described the interrupted stage, not a permanently skipped candidate.
@@ -415,7 +425,9 @@ export class ResumeBatchReader {
           && (i === 0 || this.execution.ordinaryRetriesUsed === 0)) {
           let pt = card.namePoint
           let clickViewport = viewport
-          if (i > 0) {
+          const browse = (checkpoint.current?.nativeWindowRefusals ?? 0) >= 2
+            && !!checkpoint.current?.reference && !!this.deps.clickBrowse
+          if (i > 0 || browse) {
             let retrySnap = await this.deps.snapshot()
             if (inspectRecommendationResults(retrySnap).stopReason === 'no_matching_candidates' || excludedRecommendationName(retrySnap, card.name)) {
               stopReason = 'recommendations_boundary'; break batchLoop
@@ -428,6 +440,7 @@ export class ResumeBatchReader {
               }
               retrySnap = await this.deps.snapshot()
             }
+            lastSnap = retrySnap
             const cardsNow = this.locateCards(retrySnap)
             if (checkpoint.current?.reference && !resolveCandidateReference(retrySnap, card.name, checkpoint.current.reference)) {
               throw new ResumeBatchError('重试前原候选卡片已变化，未点击同名替代卡片')
@@ -451,7 +464,13 @@ export class ResumeBatchReader {
           }
           if (i > 0) { this.execution.ordinaryRetriesUsed = 1; this.execution.attemptsUsed = 2 }
           clickSequence.push(`(${pt.x},${pt.y})姓名点`)
-          await this.input(() => this.deps.click(pt, clickViewport))
+          if (browse) {
+            // Fresh snapshot above proved the same candidate. CDP consumes CSS
+            // px, not DOMSnapshot device bounds; use actual root geometry.
+            const { sx, sy } = this.rootCssScale(lastSnap!)
+            const cssPoint = { x: pt.x / sx, y: pt.y / sy }
+            await this.input(() => this.deps.clickBrowse!(cssPoint))
+          } else await this.input(() => this.deps.click(pt, clickViewport))
         }
         await this.sleep(OPEN_POLL_INTERVAL)
         if (this.deps.signal?.aborted) throw new CancelledError(`已取消：已读取 ${resumes.length} 份简历后中止`)
@@ -512,7 +531,7 @@ export class ResumeBatchReader {
         })
       } catch (err) {
         if (err instanceof CancelledError || err instanceof ResumeObstructedError) throw err
-        if (isTransientCdpError(err)) throw err
+        if (isTransientCdpError(err) || nativeWindowInputFailure(err)) throw err
         // 读取失败也必须先尝试关闭详情，否则弹层挡住列表没法点下一张
         const closed = await this.tryCloseDetail()
         const readErrMsg = err instanceof Error ? err.message : String(err)
@@ -554,10 +573,13 @@ export class ResumeBatchReader {
     } catch (error) {
       if (error instanceof CancelledError && resumes.length === 0) throw error
       const mapped = mapExecutorError(error)
-      if (isTransientCdpError(error) && checkpoint.current?.phase !== 'close' && currentName) processedNames.delete(currentName)
+      const nativeFailure = nativeWindowInputFailure(error)
+      if ((isTransientCdpError(error) || nativeFailure) && checkpoint.current?.phase !== 'close' && currentName) processedNames.delete(currentName)
+      if (nativeFailure && checkpoint.current) checkpoint.current.nativeWindowRefusals = (checkpoint.current.nativeWindowRefusals ?? 0) + 1
       pushFailure(currentName, mapped.message)
       stopReason = mapped.code === 'CANCELLED' ? 'cancelled' : 'page_operation_failed'
-      recovery = { code: mapped.code, summary: mapped.message, execution: structuredClone(this.execution) }
+      recovery = { code: mapped.code, summary: mapped.message, execution: structuredClone(this.execution),
+        ...(nativeFailure ? { nativeInputFailure: nativeFailure } : {}) }
     }
     batchLog(`批量结束：尝试 ${attempted} 张，成功 ${resumes.length} 份，失败 ${failures.length} 个`)
     checkpoint.attempted = attempted

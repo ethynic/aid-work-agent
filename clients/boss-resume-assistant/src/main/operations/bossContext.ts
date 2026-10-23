@@ -164,7 +164,7 @@ export function withAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<
 export const defaultSessionFactory: BossSessionFactory = async (ctx) => {
   const endpoint = `http://127.0.0.1:${ctx.cdpPort ?? DEFAULT_CDP_PORT}`
   const gw = new CdpGateway({ timeoutMs: 10000 })
-  const clicker = new WinMouseClicker({ cdpPort: ctx.cdpPort ?? DEFAULT_CDP_PORT, beforeInput: () => gw.activateTarget() })
+  const clicker = new WinMouseClicker({ cdpPort: ctx.cdpPort ?? DEFAULT_CDP_PORT, beforeInput: () => gw.activateTarget(), signal: ctx.signal })
   const binding = ctx.browserTargetRef ? await resolveBrowserTarget(ctx.browserTargetRef, ctx.cdpPort ?? DEFAULT_CDP_PORT) : undefined
   let rebuilt = false
   let launched = false
