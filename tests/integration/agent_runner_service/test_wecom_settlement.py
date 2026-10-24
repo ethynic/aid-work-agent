@@ -11,6 +11,7 @@ from src.services.agent_runner.contracts import RunnerSubmit
 from src.services.agent_runner.execution_repository import ExecutionRepository
 from src.services.agent_runner.finalizer import RunnerFinalizer
 from src.services.agent_runner.repository import RunnerRepository
+from src.services.agent_runner.transaction_repository import write_history
 from src.services.agent_runner.usage_repository import UsageRepository
 from src.services.session_record import SessionRecordManager
 
@@ -91,6 +92,38 @@ def test_real_wecom_receipts_settle_once_while_channel_is_only_history_writer(
     stored = service_database.rows('SELECT role FROM channel_messages WHERE session_id=%s', (session_id,))
     assert len(stored) == 4
     assert sorted(item['role'] for item in stored) == ['assistant', 'assistant', 'tool', 'user']
+
+
+def test_write_history_stamps_user_message_with_submission_time(
+    wecom_session, service_database
+):
+    """write_history 的主 user 消息时间必须是任务提交时刻（用户发送时间）。
+
+    为什么重要：Runner 整轮消息在回答完成后落库，若 user 消息用落库时刻，
+    前端问/答显示同一时间（都是回答时刻），与真实对话节奏不符。
+    tool/assistant 仍用落库时刻（接近实际产生时间）。
+    """
+    actor, _channel, session = wecom_session
+    session_id = session['session_id']
+    config = AgentRunnerConfig(web_service_token='fixture-token',
+        peers={'wecom-test': {'sources': ['wecom']}})
+    authorizer = RunnerAuthorizer(config, service_database.connect)
+    request = RunnerSubmit(source='wecom', session={'kind': 'channel', 'session_id': session_id},
+        channel_user_id=session['channel_user_id'], client_request_id=uuid.uuid4().hex, text='request')
+    principal = authorizer.authorize(request, 'wecom-test', 'fixture-token')
+    row, created = RunnerRepository(service_database.connect).submit(principal, request, 'fixture-profile')
+    assert created
+
+    with service_database.connect() as connection, connection.cursor() as cursor:
+        write_history(cursor, row, {'status': 'completed', 'output': 'answer', 'messages': []})
+
+    stored = service_database.rows(
+        'SELECT role, content, created_at FROM channel_messages WHERE session_id=%s ORDER BY id',
+        (session_id,))
+    assert [item['role'] for item in stored] == ['user', 'assistant']
+    accepted = row['accepted_at'].replace(tzinfo=None)
+    assert stored[0]['created_at'] == accepted, 'user 消息 created_at 必须等于 agent_runners.accepted_at'
+    assert stored[1]['created_at'] >= stored[0]['created_at'], 'assistant 时间不得早于 user'
 
 
 @pytest.mark.parametrize('fault,code', [

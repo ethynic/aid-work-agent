@@ -63,7 +63,11 @@ def write_history(cursor, runner, result):
         content = '' if message.get('tool_calls') else message.get('content','')
         if not isinstance(content,str):
             content = json.dumps(content,ensure_ascii=False)
-        created = now.replace(tzinfo=None)+timedelta(microseconds=index)
+        # 主 user 消息用任务提交时刻（用户实际发送时间）；tool/assistant 仍用落库时刻
+        if index == 0:
+            created = runner['accepted_at'].replace(tzinfo=None)
+        else:
+            created = now.replace(tzinfo=None)+timedelta(microseconds=index)
         normalized.append({'message_id':message_id,'role':message['role'],'content':content,
                            'metadata':metadata,'created_at':created,'idempotent':True})
         if runner['session_kind'] == 'channel':
