@@ -142,6 +142,7 @@ export function withLocalRecovery<Args>(operation: BossOperation<Args>, deps: Lo
     const observe = async (branch: string, visualContext: VisualContext, observationMode: 'page' | 'window') => {
       abort()
       const id = (deps.requestId ?? randomUUID)()
+      const repositionsBefore = executionCtx.windowCaptureBudget.repositionsUsed
       let a = assess(await inspect.execute({ request_id: id, visual_context: visualContext, observation_mode: observationMode }, boundCtx))
       const receipt = () => { if (a.visual.receipt && !seen.has(id)) { receipts.push(a.visual.receipt); seen.add(id) } }
       receipt()
@@ -173,8 +174,19 @@ export function withLocalRecovery<Args>(operation: BossOperation<Args>, deps: Lo
         observation.api_error = typeof error === 'string' && API_REJECTIONS[status]!.includes(error)
           ? error : `视觉恢复接口拒绝访问（HTTP ${status}）`
       }
+      const image = dict(a.data.observation)
+      const captureCompleted = observationMode === 'window' && a.result.success && a.result.code === 'OK'
+        && a.data.browser_target_ref === admitted.target && image.mode === 'window' && image.space === 'window_image_px'
+        && [image.width, image.height].every(value => Number.isSafeInteger(value) && Number(value) > 0)
+        && a.data.recovery_action_error == null
+      const repositionsAfter = executionCtx.windowCaptureBudget.repositionsUsed
+      if (observationMode === 'window') Object.assign(observation, {
+        repositions_before: repositionsBefore, repositions_after: repositionsAfter, capture_completed: captureCompleted,
+      })
       observations.push(observation)
-      return a
+      // A spent budget alone proves only an attempt, including uncertain/failed native moves.
+      return { ...a, repositionedWindowReady: repositionsBefore === 0 && repositionsAfter === 1 && captureCompleted
+        && a.visual.request_id === id && a.visual.diagnosis_error == null && a.visual.action_error == null }
     }
     const resume = async (): Promise<OperationResult> => {
       abort()
@@ -245,6 +257,11 @@ export function withLocalRecovery<Args>(operation: BossOperation<Args>, deps: Lo
     let lastState = 'diagnosis_unavailable'
     const filterDraft = policy === 'page_state' && ['boss_filter', 'boss_clear_filter'].includes(operation.name)
       && Array.isArray(dict(context.verification).evidence) && (dict(context.verification).evidence as unknown[]).includes('filter_phase=draft_edited')
+    const filterPhases = (dict(context.verification).evidence as string[]).filter(value => value.startsWith('filter_phase='))
+    const filterNotStarted = policy === 'page_state' && ['boss_filter', 'boss_clear_filter'].includes(operation.name)
+      && original.code === 'UI_CHANGED' && original.effect === 'none'
+      && dict(context.execution).stage === 'input' && dict(context.execution).input_status === 'not_started'
+      && filterPhases.length === 1 && filterPhases[0] === 'filter_phase=not_started'
     const normalFilterControls = new Set(['关闭筛选面板', '收起筛选面板', '取消筛选面板', '筛选面板关闭按钮', '关闭筛选条件面板', '筛选面板右上角关闭按钮'])
     try {
       for (let index = 0; index < 3; index++) {
@@ -264,6 +281,12 @@ export function withLocalRecovery<Args>(operation: BossOperation<Args>, deps: Lo
         if (!a.diagnosis) return finish(original, 'diagnosis_unavailable')
         if (filterDraft && a.diagnosis.obstruction === 'present'
           && normalFilterControls.has(String(dict(a.diagnosis.proposed_action).target_label))) return await resume()
+        if (filterNotStarted && continuation.resume && a.repositionedWindowReady
+          && a.diagnosis.obstruction === 'absent' && a.diagnosis.goal_state === 'inconclusive' && a.diagnosis.proposed_action == null) {
+          // Window readiness permits execution; only the fresh domain postcheck can confirm the business goal.
+          steps.push({ branch: 'window_reposition_resume', mode: 'window', input_status: 'not_started' })
+          return await resume()
+        }
         if (a.diagnosis.obstruction === 'absent' && (policy === 'observe_only' || a.diagnosis.goal_state === 'satisfied')) return await resume()
         const action = dict(a.diagnosis.proposed_action)
         if (typeof a.data.recovery_ref !== 'string' || action.kind !== 'dismiss' || a.diagnosis.obstruction !== 'present') return finish(original, 'no_supported_action')

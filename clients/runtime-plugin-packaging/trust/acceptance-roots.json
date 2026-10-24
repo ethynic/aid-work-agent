@@ -134,6 +134,22 @@
       "providers": [
         "ai.aidwork.boss-recruiting"
       ]
+    },
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-boss-0-3-25-20261023-221526",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAOvfRw0058vi22jYDeTm0+wv2cFu/pBDu6bmsvvc7ssk=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.boss-recruiting"
+      ]
+    },
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-boss-0-3-26-20261023-222847",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAyVPHnIMN7tPO/oGNo110vQZsK6+DESp1wPk0dKK7UXk=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.boss-recruiting"
+      ]
     }
   ],
   "profile": "acceptance"

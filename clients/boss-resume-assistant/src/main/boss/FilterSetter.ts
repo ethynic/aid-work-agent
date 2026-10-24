@@ -126,7 +126,7 @@ export interface UnreadablePanelRow {
 /** 与真实取证 fixture 相同顺序，不引入 Runtime/evaluate。 */
 export const FILTER_SNAPSHOT_OPTIONS = {
   includeDOMRects: true,
-  computedStyles: ['overflow-x', 'overflow-y', 'display', 'position', 'height', 'visibility', 'opacity'],
+  computedStyles: ['overflow-x', 'overflow-y', 'display', 'position', 'height', 'visibility', 'opacity', 'contain'],
 }
 
 interface StructuralRow {
@@ -1012,6 +1012,25 @@ export class FilterSetter {
     return [b[0]! + offset.x - (doc.scrollOffsetX ?? 0), b[1]! + offset.y - (doc.scrollOffsetY ?? 0), b[2]!, b[3]!]
   }
 
+  /** Root overflow clips the document viewport, not the root element's scrolled content box.
+   * BODY propagation requires positive style/ancestry evidence; ordinary BODY clips remain binding. */
+  private viewportOverflowNode(snap: DomSnapshot, documentIndex: number, node: number): boolean {
+    const doc = snap.documents[documentIndex]!
+    if (!doc.nodes.nodeName) return false
+    const names = new Map(indexedValues(doc.nodes.nodeName, 'nodeName')), parents = parentMapOf(doc)
+    const roots = [...names].filter(([n, name]) => snap.strings[name] === 'HTML'
+      && snap.strings[names.get(parents?.get(n) ?? -1) ?? -1] === '#document')
+    if (roots.length !== 1) return false
+    const html = roots[0]![0]
+    const style = (n: number) => doc.layout.styles?.[doc.layout.nodeIndex.indexOf(n)]?.map(v => snap.strings[v])
+    if (node === html) return style(html)?.[2] !== 'none'
+    if (snap.strings[names.get(node) ?? -1] !== 'BODY' || parents?.get(node) !== html) return false
+    const bodies = [...names].filter(([n, name]) => snap.strings[name] === 'BODY' && parents?.get(n) === html)
+    const h = style(html), b = style(node)
+    return bodies.length === 1 && h?.[0] === 'visible' && h[1] === 'visible'
+      && h[7] === 'none' && b?.[7] === 'none' && b[2] !== 'none'
+  }
+
   /** The click clip includes every ancestor; the wheel clip starts at the actual scrollport.
    * A hidden group moving with the content may be entirely offscreen without hiding that scrollport. */
   private visibleClipOf(snap: DomSnapshot, mode: 'panel' | 'viewport', hit: VisibleHit, forScroll = false): FilterClip {
@@ -1022,7 +1041,12 @@ export class FilterSetter {
       const styles = doc.layout.styles?.[index]
       const clips = (axis: number) => force || ['auto', 'scroll', 'hidden', 'clip'].includes(snap.strings[styles?.[axis] ?? -1] ?? '')
       if (!clips(0) && !clips(1)) return
-      const b = this.nodeGlobalBounds(snap, di, node)
+      let b = this.nodeGlobalBounds(snap, di, node)
+      if (!force && this.viewportOverflowNode(snap, di, node)) {
+        const bounds = doc.layout.bounds[0], offset = accumulateOwnerOffset(snap, di)
+        // The document viewport stays at the iframe origin while its contents scroll.
+        b = bounds ? [offset.x, offset.y, bounds[2]!, bounds[3]!] : null
+      }
       if (!b || !b.every(Number.isFinite) || b[2] <= 0 || b[3] <= 0) throw new PanelScrollError(`筛选面板裁剪祖先几何不可读（doc=${di}, node=${node}），拒绝盲点`)
       if (clips(0)) { clip.left = Math.max(clip.left, b[0]); clip.right = Math.min(clip.right, b[0] + b[2]) }
       if (clips(1)) { clip.top = Math.max(clip.top, b[1]); clip.bottom = Math.min(clip.bottom, b[1] + b[3]) }

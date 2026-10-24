@@ -19,7 +19,8 @@ export function loadPackagedTrust(entryDirectory: string): PublisherTrust[] | un
       || !['desktop', 'runtime'].includes(product.productKind as string) || !['production', 'acceptance'].includes(product.profile as string)) throw new Error()
     const trust = read(join(resources, 'runtime/trust-roots.json')) as Record<string, unknown>
     if (Object.keys(trust).sort().join(',') !== 'profile,roots,schemaVersion' || trust.schemaVersion !== 1 || trust.profile !== product.profile
-      || !Array.isArray(trust.roots) || !trust.roots.length || trust.roots.length > 16) throw new Error()
+      || !Array.isArray(trust.roots) || !trust.roots.length) throw new Error()
+    // Historical publishers accumulate across releases; the file read already bounds input size.
     const keys = new Set<string>()
     for (const root of trust.roots as PublisherTrust[]) {
       if (!root || Object.keys(root).sort().join(',') !== 'key_id,providers,public_key,test_only' || typeof root.key_id !== 'string' || !root.key_id

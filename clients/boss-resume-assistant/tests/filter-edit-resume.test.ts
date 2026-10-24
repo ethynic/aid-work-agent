@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import test, { type TestContext } from 'node:test'
 import { FilterSetter, PanelScrollError } from '../src/main/boss/FilterSetter.js'
 import { createBossFilterOperation } from '../src/main/operations/bossFilter.js'
@@ -9,6 +13,9 @@ import type { OpContext } from '../src/main/operations/types.js'
 import type { DomSnapshot } from '../src/main/boss/domSnapshot.js'
 import { membershipAccountKey } from '../src/main/boss/MembershipInspector.js'
 import { withAccount } from './filterFixture.js'
+import { withLocalRecovery } from '../src/main/boss/localOperationRecovery.js'
+import { createBossOverlayInspectOperation } from '../src/main/operations/bossOverlayInspect.js'
+import { captureWindow } from '../src/main/input/windowExperiment.js'
 
 const read = (name: string): DomSnapshot => withAccount(JSON.parse(fs.readFileSync(new URL(`../../tests/fixtures/boss-vip-panel-${name}.json`, import.meta.url), 'utf8')))
 const top = read('top'), down = read('down')
@@ -194,4 +201,102 @@ test('certified zero input at clear is not reported as edited draft, even with a
   const facts = result.data.operation_recovery as any
   assert.equal(facts.execution.input_status, 'not_started')
   assert.ok(facts.verification.evidence.includes('filter_phase=not_started'))
+})
+
+test('one CLI invocation repositions and runs the real fresh setter through both requested rows and commit', async t => {
+  immediateTimers(t)
+  const root = await mkdtemp(join(tmpdir(), 'boss-filter-window-resume-'))
+  const port = 65431, targetId = 'window-resume-' + randomUUID()
+  const budget = { repositionsUsed: 0 }, modes: string[] = [], events: string[] = []
+  const start = withAccount(JSON.parse(fs.readFileSync(new URL('../../tests/fixtures/boss-filter-document-scroll-20261023.json', import.meta.url), 'utf8')) as DomSnapshot)
+  const done = withAccount({ strings: ['', '筛选·2'], documents: [{ nodes: { nodeValue: [0, 1], contentDocumentIndex: [] }, layout: { nodeIndex: [0, 1], bounds: [[0, 0, 1410, 1266], [1294, 52, 70, 36]] } }] })
+  const beforeMove = structuredClone(done)
+  beforeMove.documents[0]!.layout.bounds[1]![0] = 1000
+  const freshPoints = [{ x: 1329, y: 70 }, { x: 1231, y: 912 }, { x: 1251.9609375, y: 671.5 },
+    { x: 1042.625, y: 756.5 }, { x: 1303, y: 912 }]
+  let connects = 0, rawExecutions = 0, captures = 0, moves = 0, diagnoses = 0, closes = 0
+  const clicks: number[] = [], snapshots: number[] = []
+  const factory = async (ctx: OpContext): Promise<BossSession> => {
+    const id = connects++; clicks[id] = 0; snapshots[id] = 0
+    assert.equal(ctx.windowCaptureBudget, budget)
+    if (id > 0) {
+      assert.ok(ctx.browserTargetRef)
+      assert.equal(ctx.previousPageExecution!.attemptsUsed, 1)
+      assert.equal(ctx.previousPageExecution!.ordinaryRetriesUsed, 0)
+      assert.equal(budget.repositionsUsed, 1)
+    }
+    let page = id === 0 ? beforeMove : done
+    return {
+      getUrl: async () => 'https://www.zhipin.com/web/chat/recommend', getTargetId: async () => targetId,
+      snapshot: async () => { snapshots[id] = snapshots[id]! + 1; events.push('snapshot:' + id); return page },
+      click: async point => {
+        clicks[id] = clicks[id]! + 1
+        if (id === 0) {
+          assert.deepEqual(point, { x: 1035, y: 70 })
+          throw new WinClickError('STALE_OBSERVATION: Physical cursor differs from requested point; input refused', 2)
+        }
+        assert.ok(snapshots[id]! > 0, 'new session must read fresh geometry before input')
+        assert.deepEqual(point, freshPoints[clicks[id]! - 1], 'each resumed input must use its fresh target geometry')
+        events.push('input:' + id)
+        page = clicks[id] === 3 ? selected(start, '3-5年')
+          : clicks[id] === 4 ? selected(selected(start, '3-5年'), '本科') : clicks[id] === 5 ? done : start
+      },
+      mouseWheel: async () => { assert.fail('visible fixture must not need scrolling') },
+      clickBrowse: async () => { assert.fail('filter writes must retain the existing input channel') },
+      clickAndType: async () => {}, pressEscape: async () => {}, captureFullpage: async () => Buffer.alloc(0),
+      close: async () => { closes++; events.push('close:' + id) },
+    }
+  }
+  // Browser/OS/model boundaries are fake; recovery, capture bookkeeping and the domain setter are real.
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9gAAAABJRU5ErkJggg==', 'base64')
+  const visualFactory = async (ctx: OpContext): Promise<BossSession> => ({
+    browserTargetRef: ctx.browserTargetRef, cdpPort: port,
+    getUrl: async () => 'https://www.zhipin.com/web/chat/recommend', getTargetId: async () => targetId,
+    getPageMetrics: async () => ({ width: 1, height: 1 }), captureFullpage: async () => png,
+    activateTarget: async () => {}, close: async () => {},
+  } as BossSession)
+  const inspect = createBossOverlayInspectOperation(visualFactory, {
+    root,
+    diagnose: async options => {
+      diagnoses++; modes.push(options.windowObservation ? 'window' : 'page')
+      return { status: 200, body: { request_id: options.requestId, state: 'completed', diagnosis: {
+        obstruction: 'absent', goal_state: 'inconclusive', proposed_action: null,
+      }, diagnosis_error: null, action_error: null } }
+    },
+    captureWindow: async (output, cdpPort, _runner, options) => captureWindow(output, cdpPort, async (_script, args) => {
+      captures++
+      const identity = { hwnd: '12345', pid: 300, process_started_at: '2026-10-23T00:00:00Z', left: 0, top: 0, width: 1, height: 1 }
+      if (!args.includes('-AllowReposition')) throw new Error('[BOSS_WINDOW_DIAGNOSTIC]' + JSON.stringify({
+        reason: 'window_outside_screen', window: identity,
+        geometry: { window: [2560, 0, 2561, 1], screen: [0, 0, 2560, 1440], work: [0, 0, 2560, 1392], dpi: 96 },
+      }))
+      moves++; events.push('reposition-and-capture')
+      assert.equal(options!.budget, budget); assert.equal(budget.repositionsUsed, 1)
+      assert.deepEqual(JSON.parse(args[args.indexOf('-ExpectedWindow') + 1]!), identity)
+      await writeFile(output, png)
+      return { stdout: JSON.stringify({ window: identity, captured_at: new Date().toISOString(), owned_dialogs: [], repositioned: true }), stderr: '' }
+    }, options),
+  })
+  try {
+    const raw = createBossFilterOperation(factory)
+    const result = await withLocalRecovery({ name: raw.name, execute: (args: Parameters<typeof raw.execute>[0], ctx) => {
+      rawExecutions++; return raw.execute(args, ctx)
+    } }, { inspect, env: { AIDWORK_RUNTIME_SERVER: 'https://offline.invalid', AIDWORK_RUNTIME_DEVICE_TOKEN: 'fake-test-only' },
+      dismiss: { name: 'boss_overlay_dismiss', execute: async () => { assert.fail('no obstruction to dismiss') } },
+    }).execute({ experience: '3-5年', educations: ['本科'] }, { signal: new AbortController().signal, progress: () => {}, cdpPort: port, windowCaptureBudget: budget })
+    assert.equal(result.success, true, result.message); assert.equal(result.effect, 'applied')
+    assert.equal(result.data.applied, true)
+    assert.deepEqual(result.data.applied_rows, [{ label: '经验要求', options: ['3-5年'] }, { label: '学历要求', options: ['本科'] }])
+    assert.deepEqual(clicks, [1, 5], 'refused input; fresh session opens, clears, selects both rows, confirms')
+    assert.equal(rawExecutions, 1, 'no agent redispatch or raw operation re-entry')
+    assert.equal(connects, 2); assert.equal(closes, 2); assert.equal(moves, 1); assert.equal(captures, 2)
+    assert.equal(diagnoses, 2); assert.deepEqual(modes, ['page', 'window']); assert.equal(budget.repositionsUsed, 1)
+    assert.ok(events.indexOf('close:0') < events.indexOf('reposition-and-capture'))
+    assert.ok(events.indexOf('reposition-and-capture') < events.indexOf('snapshot:1'))
+    assert.ok(events.indexOf('snapshot:1') < events.indexOf('input:1'))
+    const recovery = result.data.visual_recovery as any, facts = result.data.operation_recovery as any
+    assert.equal(recovery.state, 'recovered'); assert.equal(recovery.resumed, true)
+    assert.equal(facts.execution.attempts_used, 2); assert.equal(facts.execution.ordinary_retries_used, 0)
+    assert.equal(facts.verification.status, 'satisfied')
+  } finally { await rm(root, { recursive: true, force: true }) }
 })

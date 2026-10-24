@@ -1,0 +1,158 @@
+{
+  "date": "2026-10-23",
+  "timezone": "Asia/Shanghai",
+  "status": "passed_for_requested_three_round_business_scenario",
+  "runtime_ui": "0.0.28",
+  "host": "0.2.23",
+  "boss": {
+    "plugin_id": "ai.aidwork.boss-recruiting",
+    "version": "0.3.26",
+    "enabled": true,
+    "release_id": "dev-boss-0.3.26-81e256fe32ce34ed",
+    "directory": "63e5bfe4-d402-4f54-a2f6-1fa690d9c253",
+    "filter_setter_sha256": "589e85904e9ab73debe2552cd17fa1a0c0c52a903b195ac1b1c00cc8761e0f42"
+  },
+  "same_original_conversation": true,
+  "same_php_job": true,
+  "observed_page_target_stable": true,
+  "initial_exclusions": 15,
+  "rounds": [
+    {
+      "sent_local": "22:49:31",
+      "completed_local": "22:52:31",
+      "action": "apply_3-5_years_bachelor_then_read",
+      "exclude_count": 15,
+      "read": 3,
+      "web_confirmed_saved": 3
+    },
+    {
+      "sent_local": "22:52:52",
+      "completed_local": "22:54:59",
+      "action": "continue_without_filter_change",
+      "exclude_count": 18,
+      "read": 3,
+      "web_confirmed_saved": 3,
+      "resulting_list_scroll_y": 597
+    },
+    {
+      "sent_local": "22:55:16",
+      "completed_local": "22:57:58",
+      "action": "reapply_same_filters_after_nonzero_scroll_then_read",
+      "exclude_count": 21,
+      "pre_apply_list_scroll_y": 597,
+      "during_filter_edit_list_scroll_y": 597,
+      "read": 3,
+      "web_confirmed_saved": 3
+    }
+  ],
+  "deduplication": {
+    "new_read": 9,
+    "new_unique": 9,
+    "overlap_with_prior_15": 0,
+    "web_confirmed_total_saved": 24
+  },
+  "filter_geometry": {
+    "observed_at_utc": "2026-10-23T14:55:29.648Z",
+    "experience_center": [
+      1251.9609375,
+      671.5
+    ],
+    "bachelor_center": [
+      1042.625,
+      756.5
+    ],
+    "fixed_clip": [
+      499,
+      93,
+      1364,
+      889
+    ],
+    "ordinary_root_clipping_counterfactual": [
+      499,
+      93,
+      1364,
+      669
+    ],
+    "counterfactual_is_offline_control_not_old_version_live_run": true,
+    "snapshot_caught_experience_active_before_bachelor_click": true,
+    "final_selection_verified_by_production_pre_submit_check_and_applied_receipt": true,
+    "final_toolbar_count": 2,
+    "list_reset_to_zero_observed_only_after_filter_submission": true
+  },
+  "runtime_log": {
+    "sha256": "1dd0941754fb96dbd0535c42823c7fc1dfda1b1b2189a560a14cc9cbc79c3fbf",
+    "lines_after_baseline": 1189,
+    "tools": [
+      {
+        "at": "2026-10-23T14:49:55.145Z",
+        "tool": "boss_filter",
+        "success": "true",
+        "code": "OK",
+        "effect": "applied",
+        "elapsed_ms": "18559"
+      },
+      {
+        "at": "2026-10-23T14:51:47.247Z",
+        "tool": "boss_resume_next",
+        "success": "true",
+        "code": "OK",
+        "effect": "none",
+        "elapsed_ms": "108485"
+      },
+      {
+        "at": "2026-10-23T14:54:11.592Z",
+        "tool": "boss_resume_next",
+        "success": "true",
+        "code": "OK",
+        "effect": "none",
+        "elapsed_ms": "76690"
+      },
+      {
+        "at": "2026-10-23T14:55:35.000Z",
+        "tool": "boss_filter",
+        "success": "true",
+        "code": "OK",
+        "effect": "applied",
+        "elapsed_ms": "15940"
+      },
+      {
+        "at": "2026-10-23T14:57:15.892Z",
+        "tool": "boss_resume_next",
+        "success": "true",
+        "code": "OK",
+        "effect": "none",
+        "elapsed_ms": "98396"
+      }
+    ],
+    "cdp_sent": 399,
+    "cdp_ack": 399,
+    "methods": {
+      "Target.getTargets": 15,
+      "Target.attachToTarget": 5,
+      "DOMSnapshot.captureSnapshot": 203,
+      "Target.activateTarget": 85,
+      "Target.detachFromTarget": 5,
+      "Page.captureScreenshot": 66,
+      "Input.dispatchKeyEvent": 18,
+      "Input.dispatchMouseEvent": 2
+    },
+    "native": {
+      "click_1": 19,
+      "wheel_1": 66
+    },
+    "error_count": 0
+  },
+  "greeting_or_chat_tools": 0,
+  "not_triggered": [
+    "hidden_widget_recovery",
+    "out_of_screen_window_relocation"
+  ],
+  "limitations": [
+    "597px live root scroll reproduced; not the original 1344px offset",
+    "stable target observed across new connections; not a test of hidden-window or reconnect recovery",
+    "UI save receipts and local unique-read evidence; no direct database query"
+  ],
+  "changes_this_turn": "documentation_and_ignored_test_evidence_only",
+  "commit_push_package_server_deploy": false,
+  "raw_candidate_material": "retained only in ignored local .tmp folder"
+}

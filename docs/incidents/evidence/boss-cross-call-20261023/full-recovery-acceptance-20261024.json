@@ -1,0 +1,1113 @@
+{
+  "date": "2026-10-24",
+  "timezone": "Asia/Shanghai",
+  "status": "business_recovery_completed_cli_filter_resume_gap_observed",
+  "plugin": {
+    "version": "0.3.26",
+    "release_id": "dev-boss-0.3.26-81e256fe32ce34ed",
+    "directory": "63e5bfe4-d402-4f54-a2f6-1fa690d9c253",
+    "enabled": true
+  },
+  "production_code_changed": false,
+  "original_conversation_retained": true,
+  "phase8_business": {
+    "sent_local": "18:07:23",
+    "completed_local": "18:08:11",
+    "initial_exclusions": 24,
+    "read": 1,
+    "web_confirmed_saved": 1,
+    "web_confirmed_total_saved": 25,
+    "overlap_with_initial_24": 0,
+    "user_manually_restored": false,
+    "minimized_precondition_file_sha256": "0951701adf4f2fd8def3747e2debf3e221248278b0ba6dfce70ac7c454cf952f",
+    "native_discovery_probe": 0,
+    "zero_input_reconnect_branch_triggered": false,
+    "extended_1_2s_widget_wait_branch_triggered": false
+  },
+  "first_sampler": {
+    "count": 7401,
+    "transitions": [
+      {
+        "at": "2026-10-24T10:06:43.206Z",
+        "elapsed_ms": 2,
+        "window": "15339516",
+        "minimized": false,
+        "window_rect": {
+          "left": 1140,
+          "top": 5,
+          "right": 2566,
+          "bottom": 1366
+        },
+        "foreground": "331052",
+        "tracked": {
+          "hwnd": "5312714",
+          "valid": true,
+          "parent": "15339516",
+          "root": "15339516",
+          "visible": true,
+          "rect": {
+            "left": 1148,
+            "top": 92,
+            "right": 2558,
+            "bottom": 1358
+          }
+        },
+        "selected": "5312714",
+        "selected_visible": true,
+        "widgets": [
+          {
+            "hwnd": "5312714",
+            "parent": "15339516",
+            "visible": true,
+            "rect": {
+              "left": 1148,
+              "top": 92,
+              "right": 2558,
+              "bottom": 1358
+            }
+          },
+          {
+            "hwnd": "4001528",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": 1870,
+              "top": 90,
+              "right": 1871,
+              "bottom": 91
+            }
+          },
+          {
+            "hwnd": "19795832",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": 1263,
+              "top": 46,
+              "right": 2479,
+              "bottom": 90
+            }
+          }
+        ]
+      },
+      {
+        "at": "2026-10-24T10:07:04.271Z",
+        "elapsed_ms": 21067,
+        "window": "15339516",
+        "minimized": false,
+        "window_rect": {
+          "left": 1140,
+          "top": 5,
+          "right": 2566,
+          "bottom": 1366
+        },
+        "foreground": "15339516",
+        "tracked": {
+          "hwnd": "5312714",
+          "valid": true,
+          "parent": "15339516",
+          "root": "15339516",
+          "visible": true,
+          "rect": {
+            "left": 1148,
+            "top": 92,
+            "right": 2558,
+            "bottom": 1358
+          }
+        },
+        "selected": "5312714",
+        "selected_visible": true,
+        "widgets": [
+          {
+            "hwnd": "5312714",
+            "parent": "15339516",
+            "visible": true,
+            "rect": {
+              "left": 1148,
+              "top": 92,
+              "right": 2558,
+              "bottom": 1358
+            }
+          },
+          {
+            "hwnd": "4001528",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": 1870,
+              "top": 90,
+              "right": 1871,
+              "bottom": 91
+            }
+          },
+          {
+            "hwnd": "19795832",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": 1263,
+              "top": 46,
+              "right": 2479,
+              "bottom": 90
+            }
+          }
+        ]
+      },
+      {
+        "at": "2026-10-24T10:07:04.347Z",
+        "elapsed_ms": 21143,
+        "window": "15339516",
+        "minimized": true,
+        "window_rect": {
+          "left": -32000,
+          "top": -32000,
+          "right": -31840,
+          "bottom": -31972
+        },
+        "foreground": "15339516",
+        "tracked": {
+          "hwnd": "5312714",
+          "valid": true,
+          "parent": "15339516",
+          "root": "15339516",
+          "visible": true,
+          "rect": {
+            "left": -31992,
+            "top": -31913,
+            "right": -30582,
+            "bottom": -30647
+          }
+        },
+        "selected": "5312714",
+        "selected_visible": true,
+        "widgets": [
+          {
+            "hwnd": "5312714",
+            "parent": "15339516",
+            "visible": true,
+            "rect": {
+              "left": -31992,
+              "top": -31913,
+              "right": -30582,
+              "bottom": -30647
+            }
+          },
+          {
+            "hwnd": "4001528",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": -31270,
+              "top": -31915,
+              "right": -31269,
+              "bottom": -31914
+            }
+          },
+          {
+            "hwnd": "19795832",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": -31877,
+              "top": -31959,
+              "right": -30661,
+              "bottom": -31915
+            }
+          }
+        ]
+      },
+      {
+        "at": "2026-10-24T10:07:04.363Z",
+        "elapsed_ms": 21159,
+        "window": "15339516",
+        "minimized": true,
+        "window_rect": {
+          "left": -32000,
+          "top": -32000,
+          "right": -31840,
+          "bottom": -31972
+        },
+        "foreground": "331052",
+        "tracked": {
+          "hwnd": "5312714",
+          "valid": true,
+          "parent": "8129800",
+          "root": "8129800",
+          "visible": false,
+          "rect": {
+            "left": 0,
+            "top": 87,
+            "right": 1410,
+            "bottom": 1353
+          }
+        },
+        "selected": "4001528",
+        "selected_visible": false,
+        "widgets": [
+          {
+            "hwnd": "4001528",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": -31270,
+              "top": -31915,
+              "right": -31269,
+              "bottom": -31914
+            }
+          },
+          {
+            "hwnd": "19795832",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": -31877,
+              "top": -31959,
+              "right": -30661,
+              "bottom": -31915
+            }
+          }
+        ]
+      },
+      {
+        "at": "2026-10-24T10:07:25.839Z",
+        "elapsed_ms": 42635,
+        "window": "15339516",
+        "minimized": false,
+        "window_rect": {
+          "left": 1140,
+          "top": 5,
+          "right": 2566,
+          "bottom": 1366
+        },
+        "foreground": "15339516",
+        "tracked": {
+          "hwnd": "5312714",
+          "valid": true,
+          "parent": "8129800",
+          "root": "8129800",
+          "visible": false,
+          "rect": {
+            "left": 0,
+            "top": 87,
+            "right": 1410,
+            "bottom": 1353
+          }
+        },
+        "selected": "4001528",
+        "selected_visible": false,
+        "widgets": [
+          {
+            "hwnd": "4001528",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": 1870,
+              "top": 90,
+              "right": 1871,
+              "bottom": 91
+            }
+          },
+          {
+            "hwnd": "19795832",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": 1263,
+              "top": 46,
+              "right": 2479,
+              "bottom": 90
+            }
+          }
+        ]
+      },
+      {
+        "at": "2026-10-24T10:07:25.854Z",
+        "elapsed_ms": 42650,
+        "window": "15339516",
+        "minimized": false,
+        "window_rect": {
+          "left": 1140,
+          "top": 5,
+          "right": 2566,
+          "bottom": 1366
+        },
+        "foreground": "15339516",
+        "tracked": {
+          "hwnd": "5312714",
+          "valid": true,
+          "parent": "15339516",
+          "root": "15339516",
+          "visible": true,
+          "rect": {
+            "left": 1148,
+            "top": 92,
+            "right": 2558,
+            "bottom": 1358
+          }
+        },
+        "selected": "5312714",
+        "selected_visible": true,
+        "widgets": [
+          {
+            "hwnd": "5312714",
+            "parent": "15339516",
+            "visible": true,
+            "rect": {
+              "left": 1148,
+              "top": 92,
+              "right": 2558,
+              "bottom": 1358
+            }
+          },
+          {
+            "hwnd": "4001528",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": 1870,
+              "top": 90,
+              "right": 1871,
+              "bottom": 91
+            }
+          },
+          {
+            "hwnd": "19795832",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": 1263,
+              "top": 46,
+              "right": 2479,
+              "bottom": 90
+            }
+          }
+        ]
+      }
+    ],
+    "ack_visibility_order": "uncertain due approximately 15ms sample interval"
+  },
+  "phase8_high_resolution": {
+    "sent_local": "19:07:19",
+    "completed_local": "19:07:33",
+    "operation": "boss_filter_options",
+    "elapsed_ms": 6116,
+    "applied_filters_changed": false,
+    "new_resumes": 0,
+    "sample_count": 38305,
+    "max_observed_sample_gap_ms": 1,
+    "activation_log": [
+      "2026-10-24T11:07:20.087Z [boss-cdp] id=8 session=browser method=Target.activateTarget event=- stage=send",
+      "2026-10-24T11:07:20.111Z [boss-cdp] id=8 session=browser method=Target.activateTarget event=- stage=ack elapsed_ms=24"
+    ],
+    "key_samples": [
+      {
+        "at": "2026-10-24T11:07:20.089Z",
+        "elapsed_ms": 20378,
+        "window": "15339516",
+        "minimized": true,
+        "window_rect": {
+          "left": -32000,
+          "top": -32000,
+          "right": -31840,
+          "bottom": -31972
+        },
+        "foreground": "331052",
+        "tracked": {
+          "hwnd": "5312714",
+          "valid": true,
+          "parent": "8129800",
+          "root": "8129800",
+          "visible": false,
+          "rect": {
+            "left": 0,
+            "top": 87,
+            "right": 1410,
+            "bottom": 1353
+          }
+        },
+        "selected": "4001528",
+        "selected_visible": false,
+        "widgets": [
+          {
+            "hwnd": "4001528",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": -31270,
+              "top": -31915,
+              "right": -31269,
+              "bottom": -31914
+            }
+          },
+          {
+            "hwnd": "19795832",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": -31877,
+              "top": -31959,
+              "right": -30661,
+              "bottom": -31915
+            }
+          }
+        ],
+        "sample_started_at": "2026-10-24T11:07:20.089Z",
+        "sample_ended_at": "2026-10-24T11:07:20.089Z"
+      },
+      {
+        "at": "2026-10-24T11:07:20.090Z",
+        "elapsed_ms": 20379,
+        "window": "15339516",
+        "minimized": false,
+        "window_rect": {
+          "left": -32000,
+          "top": -32000,
+          "right": -31840,
+          "bottom": -31972
+        },
+        "foreground": "0",
+        "tracked": {
+          "hwnd": "5312714",
+          "valid": true,
+          "parent": "8129800",
+          "root": "8129800",
+          "visible": false,
+          "rect": {
+            "left": 0,
+            "top": 87,
+            "right": 1410,
+            "bottom": 1353
+          }
+        },
+        "selected": "4001528",
+        "selected_visible": false,
+        "widgets": [
+          {
+            "hwnd": "4001528",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": -31270,
+              "top": -31915,
+              "right": -31269,
+              "bottom": -31914
+            }
+          },
+          {
+            "hwnd": "19795832",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": -31877,
+              "top": -31959,
+              "right": -30661,
+              "bottom": -31915
+            }
+          }
+        ],
+        "sample_started_at": "2026-10-24T11:07:20.090Z",
+        "sample_ended_at": "2026-10-24T11:07:20.090Z"
+      },
+      {
+        "at": "2026-10-24T11:07:20.091Z",
+        "elapsed_ms": 20380,
+        "window": "15339516",
+        "minimized": false,
+        "window_rect": {
+          "left": -32000,
+          "top": -32000,
+          "right": -31840,
+          "bottom": -31972
+        },
+        "foreground": "0",
+        "tracked": {
+          "hwnd": "5312714",
+          "valid": true,
+          "parent": "8129800",
+          "root": "8129800",
+          "visible": false,
+          "rect": {
+            "left": 0,
+            "top": 87,
+            "right": 1410,
+            "bottom": 1353
+          }
+        },
+        "selected": "4001528",
+        "selected_visible": false,
+        "widgets": [
+          {
+            "hwnd": "4001528",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": -31270,
+              "top": -31915,
+              "right": -31269,
+              "bottom": -31914
+            }
+          },
+          {
+            "hwnd": "19795832",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": -31877,
+              "top": -31959,
+              "right": -30661,
+              "bottom": -31915
+            }
+          }
+        ],
+        "sample_started_at": "2026-10-24T11:07:20.091Z",
+        "sample_ended_at": "2026-10-24T11:07:20.091Z"
+      },
+      {
+        "at": "2026-10-24T11:07:20.092Z",
+        "elapsed_ms": 20381,
+        "window": "15339516",
+        "minimized": false,
+        "window_rect": {
+          "left": 1140,
+          "top": 5,
+          "right": 2566,
+          "bottom": 1366
+        },
+        "foreground": "15339516",
+        "tracked": {
+          "hwnd": "5312714",
+          "valid": true,
+          "parent": "8129800",
+          "root": "8129800",
+          "visible": false,
+          "rect": {
+            "left": 0,
+            "top": 87,
+            "right": 1410,
+            "bottom": 1353
+          }
+        },
+        "selected": "4001528",
+        "selected_visible": false,
+        "widgets": [
+          {
+            "hwnd": "4001528",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": 1870,
+              "top": 90,
+              "right": 1871,
+              "bottom": 91
+            }
+          },
+          {
+            "hwnd": "19795832",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": 1263,
+              "top": 46,
+              "right": 2479,
+              "bottom": 90
+            }
+          }
+        ],
+        "sample_started_at": "2026-10-24T11:07:20.092Z",
+        "sample_ended_at": "2026-10-24T11:07:20.092Z"
+      },
+      {
+        "at": "2026-10-24T11:07:20.104Z",
+        "elapsed_ms": 20393,
+        "window": "15339516",
+        "minimized": false,
+        "window_rect": {
+          "left": 1140,
+          "top": 5,
+          "right": 2566,
+          "bottom": 1366
+        },
+        "foreground": "15339516",
+        "tracked": {
+          "hwnd": "5312714",
+          "valid": true,
+          "parent": "8129800",
+          "root": "8129800",
+          "visible": false,
+          "rect": {
+            "left": 0,
+            "top": 87,
+            "right": 1410,
+            "bottom": 1353
+          }
+        },
+        "selected": "4001528",
+        "selected_visible": false,
+        "widgets": [
+          {
+            "hwnd": "4001528",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": 1870,
+              "top": 90,
+              "right": 1871,
+              "bottom": 91
+            }
+          },
+          {
+            "hwnd": "19795832",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": 1263,
+              "top": 46,
+              "right": 2479,
+              "bottom": 90
+            }
+          }
+        ],
+        "sample_started_at": "2026-10-24T11:07:20.104Z",
+        "sample_ended_at": "2026-10-24T11:07:20.104Z"
+      },
+      {
+        "at": "2026-10-24T11:07:20.105Z",
+        "elapsed_ms": 20394,
+        "window": "15339516",
+        "minimized": false,
+        "window_rect": {
+          "left": 1140,
+          "top": 5,
+          "right": 2566,
+          "bottom": 1366
+        },
+        "foreground": "15339516",
+        "tracked": {
+          "hwnd": "5312714",
+          "valid": true,
+          "parent": "15339516",
+          "root": "15339516",
+          "visible": false,
+          "rect": {
+            "left": 1148,
+            "top": 92,
+            "right": 2558,
+            "bottom": 1358
+          }
+        },
+        "selected": "5312714",
+        "selected_visible": false,
+        "widgets": [
+          {
+            "hwnd": "5312714",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": 1148,
+              "top": 92,
+              "right": 2558,
+              "bottom": 1358
+            }
+          },
+          {
+            "hwnd": "4001528",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": 1870,
+              "top": 90,
+              "right": 1871,
+              "bottom": 91
+            }
+          },
+          {
+            "hwnd": "19795832",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": 1263,
+              "top": 46,
+              "right": 2479,
+              "bottom": 90
+            }
+          }
+        ],
+        "sample_started_at": "2026-10-24T11:07:20.105Z",
+        "sample_ended_at": "2026-10-24T11:07:20.105Z"
+      },
+      {
+        "at": "2026-10-24T11:07:20.106Z",
+        "elapsed_ms": 20395,
+        "window": "15339516",
+        "minimized": false,
+        "window_rect": {
+          "left": 1140,
+          "top": 5,
+          "right": 2566,
+          "bottom": 1366
+        },
+        "foreground": "15339516",
+        "tracked": {
+          "hwnd": "5312714",
+          "valid": true,
+          "parent": "15339516",
+          "root": "15339516",
+          "visible": false,
+          "rect": {
+            "left": 1148,
+            "top": 92,
+            "right": 2558,
+            "bottom": 1358
+          }
+        },
+        "selected": "5312714",
+        "selected_visible": false,
+        "widgets": [
+          {
+            "hwnd": "5312714",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": 1148,
+              "top": 92,
+              "right": 2558,
+              "bottom": 1358
+            }
+          },
+          {
+            "hwnd": "4001528",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": 1870,
+              "top": 90,
+              "right": 1871,
+              "bottom": 91
+            }
+          },
+          {
+            "hwnd": "19795832",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": 1263,
+              "top": 46,
+              "right": 2479,
+              "bottom": 90
+            }
+          }
+        ],
+        "sample_started_at": "2026-10-24T11:07:20.106Z",
+        "sample_ended_at": "2026-10-24T11:07:20.106Z"
+      },
+      {
+        "at": "2026-10-24T11:07:20.107Z",
+        "elapsed_ms": 20396,
+        "window": "15339516",
+        "minimized": false,
+        "window_rect": {
+          "left": 1140,
+          "top": 5,
+          "right": 2566,
+          "bottom": 1366
+        },
+        "foreground": "15339516",
+        "tracked": {
+          "hwnd": "5312714",
+          "valid": true,
+          "parent": "15339516",
+          "root": "15339516",
+          "visible": true,
+          "rect": {
+            "left": 1148,
+            "top": 92,
+            "right": 2558,
+            "bottom": 1358
+          }
+        },
+        "selected": "5312714",
+        "selected_visible": true,
+        "widgets": [
+          {
+            "hwnd": "5312714",
+            "parent": "15339516",
+            "visible": true,
+            "rect": {
+              "left": 1148,
+              "top": 92,
+              "right": 2558,
+              "bottom": 1358
+            }
+          },
+          {
+            "hwnd": "4001528",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": 1870,
+              "top": 90,
+              "right": 1871,
+              "bottom": 91
+            }
+          },
+          {
+            "hwnd": "19795832",
+            "parent": "15339516",
+            "visible": false,
+            "rect": {
+              "left": 1263,
+              "top": 46,
+              "right": 2479,
+              "bottom": 90
+            }
+          }
+        ],
+        "sample_started_at": "2026-10-24T11:07:20.107Z",
+        "sample_ended_at": "2026-10-24T11:07:20.107Z"
+      }
+    ],
+    "first_visible_at_utc": "2026-10-24T11:07:20.107Z",
+    "activate_ack_at_utc": "2026-10-24T11:07:20.111Z",
+    "visible_before_ack_ms": 4,
+    "post_ack_hidden_reproduced": false,
+    "sampling_is_sequential_not_atomic": true,
+    "unchanged_samples_compacted": true
+  },
+  "phase11": {
+    "sent_local": "19:14:33",
+    "completed_local": "19:16:09",
+    "manual_reposition_after_setup": false,
+    "initial_dwm_frame": [
+      1414,
+      4,
+      2826,
+      1358
+    ],
+    "initial_screen": [
+      0,
+      0,
+      2560,
+      1440
+    ],
+    "initial_dpi": 96,
+    "final_dwm_frame": [
+      1148,
+      4,
+      2560,
+      1358
+    ],
+    "same_main_hwnd": "15339516",
+    "same_widget_hwnd": "5312714",
+    "same_page_target": "AFCC87118744DCC79E7CFE072795F723",
+    "window_translation_count_observed": 1,
+    "position_changes": [
+      {
+        "at": "2026-10-24T11:14:13.898Z",
+        "start": "2026-10-24T11:14:13.898Z",
+        "rect": {
+          "left": 1407,
+          "top": 4,
+          "right": 2833,
+          "bottom": 1365
+        },
+        "widget": {
+          "hwnd": "5312714",
+          "valid": true,
+          "parent": "15339516",
+          "root": "15339516",
+          "visible": true,
+          "rect": {
+            "left": 1415,
+            "top": 91,
+            "right": 2825,
+            "bottom": 1357
+          }
+        }
+      },
+      {
+        "at": "2026-10-24T11:14:43.098Z",
+        "start": "2026-10-24T11:14:43.098Z",
+        "rect": {
+          "left": 1141,
+          "top": 4,
+          "right": 2567,
+          "bottom": 1365
+        },
+        "widget": {
+          "hwnd": "5312714",
+          "valid": true,
+          "parent": "15339516",
+          "root": "15339516",
+          "visible": true,
+          "rect": {
+            "left": 1149,
+            "top": 91,
+            "right": 2559,
+            "bottom": 1357
+          }
+        }
+      }
+    ],
+    "native_window_image_size": [
+      1412,
+      1354
+    ],
+    "native_window_image_sha256": "7b5401baf347606c78e311843892763a320d52a70ff730f985cafd8008ae8ff0",
+    "native_window_image_pixels_preserved": false,
+    "native_window_image_cleanup_reason": "production removes images after completed diagnosis without executable proposed_action; metadata and receipt preserved",
+    "final_page_image_sha256": "c73aac16577a0ff2bdfd233a7dd867a174c9bc0d6398a2a02f8c342f0329d859",
+    "window_capture_at_utc": "2026-10-24T11:14:43.9963518+00:00",
+    "repositioned": true,
+    "new_geometry_epoch": "4ae827d3-8f31-4857-8b77-cf1cbe75109e",
+    "old_page_record_epoch": "",
+    "stale_epoch_guard_direct_rejection_tested": false,
+    "visual_diagnoses": [
+      {
+        "mode": "page",
+        "captured_at": "2026-10-24T11:14:32.966Z",
+        "obstruction": "absent",
+        "goal_state": "inconclusive"
+      },
+      {
+        "mode": "window",
+        "captured_at": "2026-10-24T11:14:43.9963518+00:00",
+        "obstruction": "absent",
+        "goal_state": "inconclusive"
+      }
+    ],
+    "first_filter_result": {
+      "at": "2026-10-24T11:14:52.065Z",
+      "code": "UI_CHANGED",
+      "effect": "none",
+      "input_status": "not_started"
+    },
+    "agent_reissued_filter": true,
+    "same_cli_call_resumed_filter": false,
+    "second_filter_result": {
+      "at": "2026-10-24T11:15:11.498Z",
+      "code": "OK",
+      "effect": "applied"
+    },
+    "fresh_dom_after_capture_at_utc": "2026-10-24T11:14:55.274Z",
+    "final_filter_count": 2,
+    "new_read": 1,
+    "web_confirmed_saved": 1,
+    "excluded_prior": 25,
+    "web_confirmed_total_saved": 26,
+    "budget_exhausted_then_reoffscreen_negative_case_tested": false,
+    "sampler_sample_count": 10201,
+    "sampler_max_gap_ms": 17
+  },
+  "not_verified": [
+    "historical post-activation persistent hidden failure",
+    "certified native refusal domain reconnect",
+    "extended 1.2s hidden-widget wait exhaustion",
+    "read-only CDP fallback",
+    "same-budget reoffscreen refusal after one consumed reposition",
+    "direct stale-epoch input rejection",
+    "mixed DPI or multiple monitors"
+  ],
+  "raw_material": "ignored .tmp only; no candidate screenshot committed",
+  "commit_package_deploy": false,
+  "runtime_log_summary": {
+    "cdp_sent": 145,
+    "cdp_ack": 145,
+    "native": {
+      "click_1": 9,
+      "wheel_1": 14,
+      "click_0": 1
+    },
+    "tools": [
+      {
+        "at": "2026-10-24T10:07:52.318Z",
+        "tool": "boss_resume_next",
+        "success": "true",
+        "code": "OK",
+        "effect": "none",
+        "elapsed_ms": "26788"
+      },
+      {
+        "at": "2026-10-24T11:07:25.963Z",
+        "tool": "boss_filter_options",
+        "success": "true",
+        "code": "OK",
+        "effect": "none",
+        "elapsed_ms": "6116"
+      },
+      {
+        "at": "2026-10-24T11:14:52.065Z",
+        "tool": "boss_filter",
+        "success": "false",
+        "code": "UI_CHANGED",
+        "effect": "none",
+        "elapsed_ms": "20091"
+      },
+      {
+        "at": "2026-10-24T11:15:11.498Z",
+        "tool": "boss_filter",
+        "success": "true",
+        "code": "OK",
+        "effect": "applied",
+        "elapsed_ms": "16269"
+      },
+      {
+        "at": "2026-10-24T11:15:46.317Z",
+        "tool": "boss_resume_next",
+        "success": "true",
+        "code": "OK",
+        "effect": "none",
+        "elapsed_ms": "32263"
+      }
+    ],
+    "expected_initial_zero_input_refusal": "Physical cursor differs from requested point",
+    "failed_filter_operations": 1,
+    "greeting_or_chat_tools": 0,
+    "navigation_or_reload_commands": 0,
+    "raw_log_sha256": "892309dca39a6912aa18c56b8ce63a6560597deff570e9e1b34798a8f22c683c"
+  },
+  "business_totals": {
+    "initial_saved": 24,
+    "new_unique_saved": 2,
+    "overlap_with_initial_24": 0,
+    "web_confirmed_total_saved": 26
+  },
+  "followup_gap": "Window normalization succeeds but inconclusive goal diagnosis leaves first CLI filter call failed; agent then reissues the operation. Do not report same-invocation CLI continuation passed.",
+  "raw_evidence_sha256": {
+    "phase8-watch.json": "dd4a7a31fc395afbc22b3c1cdf89dd14cabe462d48639c91eb3ecd0c0f13c8f5",
+    "phase8-final-watch.json": "3dae582e72e09db5f112afcdbcdc45d2b81961821cbf61c7dabb5baabf2eab41",
+    "phase8-final-samples.jsonl": "a65ccb060eaa60385419f09e5cfa02f79896edb1ab99f634c6bf1a10771b0a03",
+    "phase11-watch.json": "fb1fbaed51db1e31bf58e7cadd6bf4b647e1abd3b9c51c3c4bb4357bd36346c3",
+    "phase11-samples.jsonl": "fba482531a92a39325135090d19a878805d4067578031209169786a77502fbf5",
+    "phase11-pre.json": "cb4aed324158e9d312bb6f34302da4e1a49da1a58710822539760bba53f2e5bb",
+    "phase11-post.json": "aa6acbdd7e1ba1164de7e4ebcc64b2d52dc4cc2c382bebbebf017665fe27e70a",
+    "phase11-visual-records.json": "e4ca7e80b48dd69f9b5a8e22f932948ab8a5cd3754890c78b97df59f4d6b45a9",
+    "phase11-position-changes.json": "9d68fcb8a8a27e28e843dac25ba7ccaf66c01b8012821293b7fbc113612404f3",
+    "phase11-final-page-report.json": "41a9c7aaf2bad36c554071a1cec66f5f699df2b5507097ce675b6af02c445138",
+    "final-chat-receipt.png": "d8bfdfde6ba8417075bb516aa64ca3d1f0108988575e60962ce5b26114b70222"
+  },
+  "installed_recovery_modules": {
+    "dist/src/main/boss/localOperationRecovery.js": {
+      "sha256": "0f169582beefa683dcdbe714ead8d185cd22c4b45c9243b708947d23e8793d2b",
+      "matches_current_compiled_module": true
+    },
+    "dist/src/main/boss/visualRecovery.js": {
+      "sha256": "288392f78a36320f17926b237cfa018b7c4efe35030050e4b7f5e7f4d5940ff7",
+      "matches_current_compiled_module": true
+    },
+    "dist/src/main/input/windowExperiment.js": {
+      "sha256": "6b62ad69c2266a5d8c96ca79415d388d2f4df1ba7c98254f76bebac066a1c846",
+      "matches_current_compiled_module": true
+    },
+    "dist/src/main/boss/FilterSetter.js": {
+      "sha256": "589e85904e9ab73debe2552cd17fa1a0c0c52a903b195ac1b1c00cc8761e0f42",
+      "matches_current_compiled_module": true
+    }
+  },
+  "cli_continuation_followup": {
+    "evidence": "cli-continuation-replay-20261024.json",
+    "diagnosis": "page_state resume incorrectly requires final business goal satisfied after window recovery; saved absent/inconclusive diagnoses do not invoke continuation",
+    "minimal_proposal": "combine same-window-observe budget transition with successful current window receipt and certified not_started filter phase, then reuse existing continuation once",
+    "implementation_status": "implemented_independent_test_review_passed_live_installed_version_pending",
+    "implementation_evidence": "cli-window-resume-validation-20261024.json"
+  }
+}

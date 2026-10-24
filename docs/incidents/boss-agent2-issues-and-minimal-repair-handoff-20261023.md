@@ -2,7 +2,7 @@
 
 本文是今天agent2招聘问题的**统一开发交接入口**，包含事实、修改范围、实施顺序和验证要求，无需按截图各修一套逻辑。详细取证、调用ID和证据边界已并入本文；被替代的独立诊断文档合并删除。
 
-状态：用户已确认最小方案并授权开发，允许真实超屏时原窗口一次归位后重新截图和定位；本次Phase 9/10/11已完成开发，独立467项回归及CodeReview通过，详细记录见[原计划§16](../plans/plan-runner-local-tool-recovery-lockup-fix.md#16-本次最小修复实施与独立验证2026-10-23)。修复`e44830e2`已提交推送，配套Runtime0.0.26/BOSS0.3.24已组合打包验包；详见[发行记录](../plans/plan-runner-local-tool-recovery-lockup-fix.md#17-本次提交与-runtimeboss-组合包2026-10-23)。未部署或操作客户浏览器。新增[跨轮调用核查](#67-跨轮调用专项核查2026-10-23只读调查)与[客户Runtime原始日志核验](#68-客户runtime原始日志核验2026-10-23)，后者补齐窗口截图失败原因和四次“3+2份后误配推荐”的时序。部分既有修复已完成开发，见下表；开发前核对当前源码及实际运行版本，不重复实现。进度唯一登记在[原恢复开发计划](../plans/plan-runner-local-tool-recovery-lockup-fix.md)的Phase 9/10/11及既有Phase 8验证记录，不另建开发计划或恢复架构；最小新增范围及实现记录见原设计W4。
+状态：用户已确认最小方案并授权开发，允许真实超屏时原窗口一次归位后重新截图和定位；本次Phase 9/10/11已完成开发，独立467项回归及CodeReview通过，详细记录见[原计划§16](../plans/plan-runner-local-tool-recovery-lockup-fix.md#16-本次最小修复实施与独立验证2026-10-23)。修复`e44830e2`已提交推送，配套Runtime0.0.26/BOSS0.3.24已组合打包验包；详见[发行记录](../plans/plan-runner-local-tool-recovery-lockup-fix.md#17-本次提交与-runtimeboss-组合包2026-10-23)。晚间用户安装后已真机连续续读15份，非空筛选失败，根BODY裁剪遗漏已实证，见[§6.9](#69-本机php职位连续多轮验收2026-10-23晚间)；该增量及安装时发现的Host16根上限均已修，分别通过独立169/29项及CR；Runtime0.0.28已自主安装，BOSS0.3.26待原生导入，详见[原计划§19](../plans/plan-runner-local-tool-recovery-lockup-fix.md#19-根滚动视口修复与自主更新验收2026-10-23)；未部署服务器。新增[跨轮调用核查](#67-跨轮调用专项核查2026-10-23只读调查)与[客户Runtime原始日志核验](#68-客户runtime原始日志核验2026-10-23)，后者补齐窗口截图失败原因和四次“3+2份后误配推荐”的时序。部分既有修复已完成开发，见下表；开发前核对当前源码及实际运行版本，不重复实现。进度唯一登记在[原恢复开发计划](../plans/plan-runner-local-tool-recovery-lockup-fix.md)的Phase 9/10/11及既有Phase 8验证记录，不另建开发计划或恢复架构；最小新增范围及实现记录见原设计W4。
 
 ## 1. 目标与取舍
 
@@ -517,3 +517,55 @@ Win32的`IsWindowVisible`检查的是窗口及祖先的`WS_VISIBLE`样式，不�
 剩余的底层未知已缩小：**隐藏widget具体哪个HWND、为何隐藏，以及截图矩形究竟哪一边超屏**。完整日志没有这些字段；现有材料可确认故障分层和23次截图拒绝原因，不能继续从同一文件推出不存在的几何事实。本轮没有新增诊断代码、重试客户操作或部署。
 
 当前方案讨论据此调整重点：先修已重复出现的同卡配对/混合列表和筛选编辑；复核既有Phase 8是否真正进入客户执行链；将窗口截图超屏拒绝作为独立恢复缺口处理。正常页面引用接续与激活后fresh属于已确认代码缺口，但本批没有证据将它们升级为所有事故的共同根因，也不采用每轮刷新/重开浏览器来替代修复。
+
+### 6.9 本机PHP职位连续多轮验收（2026-10-23晚间）
+
+用户已安装Runtime0.0.26/BOSS0.3.24并登录推荐页，主控通过agent2原“打开boss”会话连续测试，未刷新/新建会话。安装版18个相关生产文件与发行清单SHA256一致；原生新枚举日志存在。首批3份、随后3份、再3份、清除全部筛选后6份，共15份读取并由网页确认入库，指纹无重复；实际发生列表滚动，未误配“推荐”。只读简历，不发送招呼或聊天。
+
+“全部不限”有效筛选数0，成功仅证明开面板/清除/提交。用户指出没有真实筛选条件后，第6轮21:53:15改为经验3–5年＋本科、其他不限，排除已读15位并读取3份。结果：21:53:39.932、21:54:45.685两次原始空clip，均为`left=499,right=1364,top=93,bottom=-78`；包装后分别UI_CHANGED/partial，中途一次高级行参数触发MEMBERSHIP_REQUIRED/none。新条件未成功提交，新增0份，不能写为整套真机验收通过。
+
+**本次空clip的具体根因已确认。** 停止后保留原页面，使用已安装插件只读截图/快照接口导出真实几何和computed styles；直接用安装版FilterSetter离线计算两项，均复现相同负下边界。doc2文档已滚动1344px，iframe原点y=40，根BODY布局高度1226、overflow auto/scroll，HTML两轴visible，HTML/BODY contain none。程序将BODY当成普通裁剪祖先，按`40-1344+1226=-78`向上移动裁剪下边界。实际`.filter-panel > .top`范围`[499,93,865,796]`，经验/本科中心分别`(1251.96,671.5)`、`(1042.625,756.5)`，均可见。离线只将这一BODY改按文档视口裁剪，其他祖先限制不动，立即得到有效clip`[499,93,1364,889]`。依据[W3C overflow传播规则](https://www.w3.org/TR/css-overflow-3/#overflow-propagation)，此处computed BODY overflow不能作为BODY自身used裁剪，根视口不随自身内容滚动；不是DOM读取失败或真实面板隐藏。
+
+因此，前轮保留的**列表滚动状态**确实能触发后轮筛选故障，但触发点是几何语义错误。重新采DOM会稳定重现，单纯再attach/激活、刷新/回顶或窗口归位不能构成修复。当前生产日志733次CDP请求全部ACK，29次原生click及103次wheel成功，本轮未触发隐藏widget或截图超屏拒绝；不将其历史底层未知改称已解决。现象与白天空clip同形，白天无祖先快照，不能追溯宣称所有白天clip均由该BODY导致。
+
+关联独立能力缺口：21:45:38请求保留其他当前条件，`boss_filter_options`仅返回可选值及单/多选模式，缺当前selected值；整体替换无法保证未指明条件不丢，模型因此询问用户。会员确认是另一个参数/能力门槛，两者不归为CDP丢控制。
+
+最小增量仍归Phase 10，修每文档根视口及BODY/HTML overflow传播判定，保留内层/iframe裁剪，补真实匿名祖先几何回归，之后在原滚动现场完成非空条件提交并续读剩余3份。Phase 8和11不重复建设；本轮未改生产代码、提交、打包或部署。完整轮次、未验项及后续安排见[原计划§18](../plans/plan-runner-local-tool-recovery-lockup-fix.md#18-本机php连续多轮业务验收2026-10-23晚间)，设计见[W4.8](../design/recruiting/boss-overlay-heal-design.md#w48-本机连续多轮验收根文档滚动裁剪遗漏2026-10-23)，脱敏证据见[live-php-acceptance-20261023.json](evidence/boss-cross-call-20261023/live-php-acceptance-20261023.json)。原始截图及DOM含候选资料，仅保留在本机忽略目录，不提交。
+
+### 6.10 修复、发行与本机自主安装的最终状态
+
+用户随后授权修复、打包并尽量自行安装。根BODY裁剪已修，新增真实匿名面板/祖先fixture；旧代码三项红、修后五项通过，独立169项及CR通过。安装首批Runtime0.0.27/BOSS0.3.25时又实证Host0.2.22硬限16根与发行追加历史根冲突：第17根触发冷H1 describe code9、NSIS exit2，首批已撤回。最小删除冗余根数上限，保留65536字节及全部逐项校验；独立29项及CR通过，Host升0.2.23。共同H1/Device/schema及信任权限不变。
+
+最终Runtime0.0.28/BOSS0.3.26组合包已验，实际冷H1检查及NSIS安装exit0。Runtime已在原目录升级，原设备身份/配对和旧BOSS启用状态迁移保留，18根资源与验证产物一致。调试端口在Runtime更新期间曾不可达，已用可信原profile恢复，确认原账号和PHP职位一致，当前文档滚动0；未继续读取新简历，不能称非空筛选业务复验通过。
+
+自主安装结束时实际BOSS仍0.3.24 enabled（用户后续导入及续验见§6.11），0.3.26签名包待用户通过Runtime原生选包导入。工具只有浏览器控制、没有原生App窗口能力，产品也未提供无UI导入CLI/API；未伪造selection_ref、改inventory或另写安装旁路。用户醒后导入最终插件即可沿原agent2会话继续，排除15份，先复现非零文档滚动再验3–5年＋本科和剩余3份。详情、最终包摘要与脱敏安装回执见[原计划§19.4](../plans/plan-runner-local-tool-recovery-lockup-fix.md#194-最终新包本机安装及人工剩余步骤)。本轮未Git提交/推送或部署服务器。
+
+### 6.11 BOSS0.3.26原会话三轮续验通过
+
+用户完成原生导入后，清单确认0.3.26 enabled，安装版FilterSetter.js摘要与受测发行包一致。22:49:31～22:57:58继续原“打开boss”会话、PHP职位，三轮分别为具体筛选后读3份、保持筛选续读3份、从597px滚动状态重设同一筛选再读3份。全部9份获网页入库确认，排除集合依次15/18/21，新增内部及与原15份均无重复，累计24份；没有招呼或聊天工具调用。
+
+第三轮编辑中doc2仍滚动597px，经验及本科中心分别671.5/756.5，修复clip下边界889；离线仅撤去根视口特判，边界变为669，会误排两个可见选项。两次实际筛选均OK/applied且计数2；BOSS在提交后自行重绘回顶，未靠提前回顶或刷新绕过故障。此次不是原1344px现场，但真实覆盖同一错误分支。399次业务CDP均ACK，click19/wheel66成功，无负clip或控制异常；隐藏widget恢复和真实超屏归位均未触发，不扩大通过范围。原始截图/DOM/日志只留忽略目录；本轮仅文档更新，无生产修改、打包、提交或部署。详见[原计划§20](../plans/plan-runner-local-tool-recovery-lockup-fix.md#20-boss0326原会话三轮真机复验2026-10-23)及[脱敏证据](evidence/boss-cross-call-20261023/live-php-boss-0.3.26-20261023.json)。
+
+### 6.12 隐藏及截图超屏的受控取证（2026-10-24）
+
+用户手动最小化/还原、拖出/移回同一BOSS窗口，主控只读枚举并调用安装版截图接口；所有capture明确禁止自动归位，实际预算0、仅一次采集调用。PID51096、HWND15339516，显示器[0,0,2560,1440]、DPI96。最小化时原父窗口仅枚举到隐藏辅助widget，生产选择器返回hidden fallback4001528，但CDP仍可读原target及597px列表；还原后主widget5312714重新出现。51～64ms间隔1200次观察未采到未最小化而选择器仍hidden，不代表历史激活后错误已复现。
+
+停稳真超屏DWM框[1297,2,2709,1356]右边超149px，实际captureWindow在allowReposition=false下拒绝window_outside_screen；手动回屏DWM框[1147,5,2559,1359]后，虽然普通GetWindowRect到2566，实际截图仍成功1412×1354。两组正式对照的前/中/后矩形均完全一致，无自动归位掩盖。当前本机没有发现这两类受控状态的误判；旧客户机15次hidden/23次超屏缺原生矩形，具体历史底因仍不能由本机对照替代。自动恢复/归位、混合DPI和多屏未验。第二次最小化直接追踪确认原widget5312714仍有效，换父至隐藏Chrome_WidgetWin_0（8129800），还原后挂回15339516且可见；其隐藏期间rect仍为[0,87,1410,1353]，不能只因坐标在屏内就认为可操作。详见[计划§21](../plans/plan-runner-local-tool-recovery-lockup-fix.md#21-隐藏窗口及超屏判断的只读取证2026-10-24)及[脱敏证据](evidence/boss-cross-call-20261023/window-visibility-and-screen-evidence-20261024.json)。本轮没有生产修改、提交、打包或部署。
+
+### 6.13 完整恢复实测及CLI内接续边界（2026-10-24）
+
+用户授权完整恢复测试后，原会话最小化续读1份成功、累计25份，无人工还原或候选通讯。第二次只读筛选选项也自动激活并收尾。加密观察确定主窗口已还原而widget仍在隐藏父下的窗口期存在，但本次widget于19:07:20.107可见，早于19:07:20.111的激活ACK约4ms，没有复现历史ACK后隐藏。没有触发原生持续拒绝的重连/兜底，不将正常激活成功扩大为所有Phase 8分支通过。19:14预置真实超屏266px后，首次输入被守卫拒绝，窗口观察自动归位一次、原HWND不变且尺寸保持，新截图1412×1354并更新geometry epoch。首调用仍因目标不确定返回失败；智能体随后重派筛选，新DOM定位后成功提交并再入库1份，累计26份，无重复或候选通讯。业务恢复完成，但同一CLI调用自动接回setter的衔接缺口保留，不扩大为完全确定性闭环。详细时序、验收边界和阶段证据见[计划§22](../plans/plan-runner-local-tool-recovery-lockup-fix.md#22-完整恢复真机测试2026-10-24)、[full-recovery-acceptance-20261024.json](evidence/boss-cross-call-20261023/full-recovery-acceptance-20261024.json)。未改生产代码、提交、打包或部署。
+
+
+### 6.14 CLI接续缺口已由安装版回执重放定位（2026-10-24）
+
+原window诊断reason已明确：输入被零输入拒绝，面板关闭和旧徽章2不足以证明3–5年＋本科确实匹配，所以absent/inconclusive正确。CLI page_state分支却要求原最终goal已经satisfied才能resume，无dismiss建议则返回原失败；本次not_started不命中已有draft_edited专用分支，cursor mismatch也不属于Phase 8的hidden/unavailable确定性恢复分类。这解释了19:14:43截图已归位、19:14:52首CLI仍失败、19:14:55智能体新派发后19:15:11才成功的时序，不能归咎于本次CDP失联或持续隐藏。
+
+直接加载安装版withLocalRecovery并注入原page/window诊断离线重放，原回执continuation=0、no_supported_action；只把window goal_state改为satisfied作单字段对照，continuation=1，原binding、共享预算及执行计数均传入续做。四个相关安装编译模块与工作区dist hash一致。外层失败envelope按保存context重建、归位预算变化由替身模拟、对照续做为sentinel，未访问浏览器/视觉接口，不是新真机结果，也未独立取回现场outer state。见[重放证据](evidence/boss-cross-call-20261023/cli-continuation-replay-20261024.json)。
+
+最小方案仅增加共享恢复消费端的窄条件：原filter/clear已认证UI_CHANGED/none、input/not_started与filter_phase=not_started，已有continuation；同次window观察预算0→1且实际窗口观察及completed回执有效、无stale/consumed等错误，absent/inconclusive接回原resume一次，最终由fresh setter后验决定成功。计数增加不单独证明恢复；不改模型结论、不扩全部page_state/外发、不新增窗口恢复器或wire。已有Phase 8/11、target/epoch/取消、submitted核验及预算继续复用。完整设计与待实施验收见[W4.11](../design/recruiting/boss-overlay-heal-design.md#w411-已归位零输入筛选的同调用接续2026-10-24已实现待真机复验)、[计划§23](../plans/plan-runner-local-tool-recovery-lockup-fix.md#23-cli内部接续缺口日志定位与最小修复2026-10-24)。此处为前次调查结论；用户随后已授权最小开发、独立测试与CodeReview，执行结果如下。
+
+
+本轮仅修改localOperationRecovery消费判断，复用原归位/截图/epoch与续做闭包，未修改Runtime/native/FilterSetter。最终74项定向及typecheck通过，独立15文件261项与精确坐标探针通过，CR无新增P0/P1/P2。组合回归确认一次外层execute内完成归位、重采、新session读取及新工具栏坐标、3–5年＋本科两行选中、提交与实际后验；没有智能体第二次派发。外部OS/浏览器/模型为替身，不能写作新安装版真机已通过。
+
+全量npm test并未全绿：1116项中1104通过、8失败、4跳过，包含已有工具数量断言、祖先滚动fixture、旧dist孤儿用例及MCP工作进程限时中断。失败及中断保留，不扩修无关范围；明细见[计划§23.4](../plans/plan-runner-local-tool-recovery-lockup-fix.md#234-最小增量开发独立测试及codereview结果)和[开发验证证据](evidence/boss-cross-call-20261023/cli-window-resume-validation-20261024.json)。本轮未提交、推送、打包、安装或部署，原安装版及原会话未替换；真正的新版本单调用验收仍待后续发行安装。

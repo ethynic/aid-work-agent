@@ -283,3 +283,98 @@ for (const state of ['unknown', 'confirmed', 'execution_unknown'] as const) {
     }
   })
 }
+
+
+function windowFilterHarness(name = 'boss_filter', change: {
+  initial?: (r: OperationResult) => void; observed?: (r: OperationResult) => void
+  before?: number; after?: number; noContinuation?: boolean; failResume?: boolean; pending?: boolean; cancel?: boolean
+} = {}) {
+  const initial = original(name), facts = initial.data.operation_recovery as Dict
+  facts.execution = { stage: 'input', input_status: 'not_started', attempts_used: 2, ordinary_retries_used: 1 }
+  facts.verification = { status: 'inconclusive', evidence: ['filter_phase=not_started'] }
+  change.initial?.(initial)
+  const budget = { repositionsUsed: change.before ?? 0 }, abort = new AbortController()
+  const modes: unknown[] = [], ids: string[] = [], contexts: OpContext[] = []
+  let calls = 0, resumes = 0, dismissals = 0, pending = change.pending
+  const operation: BossOperation<Dict> = { name, async execute(args, c) {
+    calls++
+    if (!change.noContinuation) c.recoveryContinuation!.resume = async fresh => {
+      resumes++; contexts.push(fresh)
+      assert.deepEqual(args, { experience: '3-5年', educations: ['本科'] })
+      return change.failResume ? failResult('resume', 'UI_CHANGED', 'fresh定位仍失败', 'none') : okResult('resume', '领域后验完成', 'applied')
+    }
+    return initial
+  } }
+  const inspect: BossOperation<VisualInspectArgs> = { name: 'boss_overlay_inspect', async execute(args, c) {
+    assert.equal(c.windowCaptureBudget, budget); assert.equal(c.browserTargetRef, target)
+    ids.push(args.request_id!); const mode = args.retrieve_only ? 'window' : args.observation_mode
+    modes.push(args.retrieve_only ? 'retrieve' : mode)
+    const r = visual('absent', 'inconclusive'); r.data.browser_target_ref = target
+    ;(r.data.visual as Dict).request_id = args.request_id
+    if (mode === 'window') {
+      budget.repositionsUsed = change.after ?? 1
+      r.data.observation = { mode: 'window', space: 'window_image_px', width: 1412, height: 1354 }
+      change.observed?.(r)
+      if (pending && !args.retrieve_only) { pending = false; Object.assign(r.data.visual as Dict, { state: 'pending', http_status: 202, diagnosis: null }) }
+      if (change.cancel) abort.abort()
+    }
+    return r
+  } }
+  const dismiss: BossOperation<{ recovery_ref?: string }> = { name: 'boss_overlay_dismiss', async execute() {
+    dismissals++; return failResult('dismiss', 'UI_CHANGED', 'unexpected dismiss', 'none')
+  } }
+  return { budget, modes, ids, contexts, get counts() { return { calls, resumes, dismissals } },
+    run: () => withLocalRecovery(operation, { inspect, dismiss, env }).execute({ experience: '3-5年', educations: ['本科'] }, { signal: abort.signal, progress: () => {}, windowCaptureBudget: budget }) }
+}
+
+for (const name of ['boss_filter', 'boss_clear_filter']) test(`${name}: successful reposition resumes the unstarted filter inside one invocation despite inconclusive business goal`, async () => {
+  const h = windowFilterHarness(name), r = await h.run()
+  assert.equal(r.success, true); assert.equal(meta(r).state, 'recovered')
+  assert.deepEqual(h.counts, { calls: 1, resumes: 1, dismissals: 0 }); assert.deepEqual(h.modes, ['page', 'window'])
+  assert.equal(h.contexts[0]!.windowCaptureBudget, h.budget); assert.equal(h.budget.repositionsUsed, 1)
+  assert.equal(h.contexts[0]!.browserTargetRef, target)
+  assert.equal(h.contexts[0]!.previousPageExecution!.attemptsUsed, 2)
+  assert.equal(h.contexts[0]!.previousPageExecution!.ordinaryRetriesUsed, 1)
+  assert.equal((meta(r).steps as Dict[])[0]!.branch, 'window_reposition_resume')
+  const observation = (meta(r).observations as Dict[])[1]!
+  assert.equal(observation.repositions_before, 0); assert.equal(observation.repositions_after, 1); assert.equal(observation.capture_completed, true)
+})
+
+test('repositioned window receipt can complete by same-request retrieval without another capture', async () => {
+  const h = windowFilterHarness('boss_filter', { pending: true }), r = await h.run()
+  assert.equal(r.success, true); assert.equal(h.counts.resumes, 1)
+  assert.deepEqual(h.modes, ['page', 'window', 'retrieve']); assert.equal(h.ids[1], h.ids[2]); assert.notEqual(h.ids[0], h.ids[1])
+})
+
+test('resumed failure returns its actual failure without recursively recovering or dispatching again', async () => {
+  const h = windowFilterHarness('boss_filter', { failResume: true }), r = await h.run()
+  assert.equal(r.success, false); assert.equal(r.code, 'UI_CHANGED'); assert.equal(meta(r).state, 'original_goal_unconfirmed')
+  assert.deepEqual(h.counts, { calls: 1, resumes: 1, dismissals: 0 }); assert.deepEqual(h.modes, ['page', 'window'])
+})
+
+type WindowChange = Parameters<typeof windowFilterHarness>[1]
+const denied: Array<[string, WindowChange]> = [
+  ['budget consumed but capture failed', { observed: r => { r.success = false; r.code = 'UI_CHANGED'; delete r.data.observation } }],
+  ['no reposition', { after: 0 }], ['previously spent budget', { before: 1 }], ['no continuation', { noContinuation: true }],
+  ['missing image width', { observed: r => { delete (r.data.observation as Dict).width } }],
+  ['page image', { observed: r => { (r.data.observation as Dict).space = 'page_image_px' } }],
+  ['other binding', { observed: r => { r.data.browser_target_ref = '22222222-2222-4222-8222-222222222222' } }],
+  ['other request', { observed: r => { (r.data.visual as Dict).request_id = 'another-request' } }],
+  ['diagnosis error', { observed: r => { (r.data.visual as Dict).diagnosis_error = 'INVALID_MODEL_DIAGNOSIS' } }],
+  ['action error', { observed: r => { (r.data.visual as Dict).action_error = 'INVALID_MODEL_ACTION' } }],
+  ['unknown receipt', { observed: r => { (r.data.visual as Dict).state = 'unknown' } }], ['cancelled', { cancel: true }],
+  ...['STALE_OBSERVATION', 'ALREADY_CONSUMED'].map(error => [error, { observed: (r: OperationResult) => { r.data.recovery_action_error = error } }] as [string, WindowChange]),
+  ...['attempted', 'unknown'].map(status => [status + ' input', { initial: (r: OperationResult) => { ((r.data.operation_recovery as Dict).execution as Dict).input_status = status } }] as [string, WindowChange]),
+  ...['draft_edited', 'submitted'].map(phase => [phase + ' filter', { initial: (r: OperationResult) => { ((r.data.operation_recovery as Dict).verification as Dict).evidence = ['filter_phase=' + phase] } }] as [string, WindowChange]),
+  ['conflicting phases', { initial: r => { ((r.data.operation_recovery as Dict).verification as Dict).evidence = ['filter_phase=not_started', 'filter_phase=submitted'] } }],
+  ['unknown original', { initial: r => { r.code = 'EXECUTION_UNKNOWN' } }], ['partial original', { initial: r => { r.effect = 'partial' } }],
+]
+for (const [reason, change] of denied) test(`reposition must not authorize filter replay: ${reason}`, async () => {
+  const h = windowFilterHarness('boss_filter', change), r = await h.run()
+  assert.equal(r.success, false); assert.equal(h.counts.resumes, 0); assert.equal(h.counts.calls, 1)
+})
+
+test('reposition proof does not newly authorize other page-state tools', async () => {
+  const h = windowFilterHarness('boss_goto'), r = await h.run()
+  assert.equal(r.success, false); assert.equal(h.counts.resumes, 0)
+})

@@ -1,0 +1,138 @@
+{
+  "date": "2026-10-23",
+  "scope": "Append-only packaged publisher history must not fail at the seventeenth trusted root",
+  "independent_test": {
+    "date": "2026-10-23",
+    "role": "independent_test",
+    "source_sha256": "6adf86405b0479d196752c888e45d115ebc71366f0a9abf42fa2ea28f92ba812",
+    "test_sha256": "b60a41c6d415c24f47ea98f0726657f7dc6807e9469df3f40c028fc9022829d4",
+    "source_modified_by_tester": false,
+    "documents_modified_by_tester": false,
+    "installed_app_accessed": false,
+    "real_credentials_accessed": false,
+    "installer_executed": false,
+    "build": {
+      "cwd": "C:/repos/aid-work-agent/clients/agent-tool-runtime",
+      "command": "npm run build:main",
+      "log": ".tmp/runtime-trust-independent-build.log",
+      "exit": 0
+    },
+    "regression": {
+      "pass": 16,
+      "note": "Includes isolated real managed child H1 and lease/shutdown; only temporary fake identities/providers, no installed app or real credential read",
+      "exit": 0,
+      "command": "node --test --test-concurrency=1 --test-reporter=tap dist/tests/productTrust.test.js dist/tests/managedLifecycle.test.js dist/tests/hostIndependent.test.js",
+      "tests": 16,
+      "skip": 0,
+      "log": ".tmp/runtime-trust-independent-regression.tap",
+      "fail": 0,
+      "cwd": "C:/repos/aid-work-agent/clients/agent-tool-runtime"
+    },
+    "independent_probe": {
+      "pass": 13,
+      "exit": 0,
+      "command": "node --test --test-reporter=tap .tmp/runtime-trust-independent-probe.mjs",
+      "tests": 13,
+      "source": ".tmp/runtime-trust-independent-probe.mjs",
+      "skip": 0,
+      "log": ".tmp/runtime-trust-independent-probe.tap",
+      "fail": 0,
+      "cwd": "C:/repos/aid-work-agent"
+    },
+    "actual_registry": {
+      "roots": 17,
+      "sha256": "bce9c5e6f2e393cb634d32c0120ae73a5f10b6cd47722266ceb5ec0160caa16c",
+      "bytes": 5350,
+      "path": "clients/runtime-plugin-packaging/trust/acceptance-roots.json",
+      "proof": "Exact source bytes copied into temporary config/runtime-product.json + runtime/trust-roots.json layout; production loadPackagedTrust returns all seventeen unmodified roots"
+    },
+    "final_total": {
+      "pass": 29,
+      "skip": 0,
+      "tests": 29,
+      "fail": 0
+    },
+    "limits": [
+      "No actual installation or packaged-resource acceptance performed",
+      "Existing BOSS 169-test source unchanged result reused, not included in29",
+      "No production source/test/document modifications; only .tmp evidence"
+    ]
+  },
+  "independent_review": {
+    "schema_version": 1,
+    "role": "independent_codereview",
+    "recorded_at": "2026-10-23T22:27:23.7823293+08:00",
+    "status": "passed",
+    "unresolved_p1": 0,
+    "unresolved_p2": 0,
+    "scope": [
+      "clients/agent-tool-runtime/src/productTrust.ts: removal of roots.length > 16 only, with file-size-bound explanation",
+      "clients/agent-tool-runtime/tests/productTrust.test.ts: historical root-count regression and retained validation"
+    ],
+    "production_sources": [
+      {
+        "path": "clients/agent-tool-runtime/src/productTrust.ts",
+        "sha256": "6adf86405b0479d196752c888e45d115ebc71366f0a9abf42fa2ea28f92ba812"
+      }
+    ],
+    "test_sources": [
+      {
+        "path": "clients/agent-tool-runtime/tests/productTrust.test.ts",
+        "sha256": "b60a41c6d415c24f47ea98f0726657f7dc6807e9469df3f40c028fc9022829d4"
+      }
+    ],
+    "findings": [],
+    "confirmed_boundaries": [
+      "Trust source remains the fixed installed product resources path; no new environment, argv, renderer, or remote trust source.",
+      "The existing regular-file/symlink checks and 65536-byte read limit remain unchanged.",
+      "Trust schema, matching product profile, nonempty roots, unique key_id, first-party provider scope, and Ed25519 public-key validation remain unchanged.",
+      "Production continues rejecting test_only roots; private PEM and invalid provider checks remain covered by the existing test.",
+      "Offline package signature selection still requires publisher key_id and provider scope; Ed25519 signature verification is unchanged."
+    ],
+    "test_review": {
+      "valid_historical_roots": 18,
+      "duplicate_key_id_rejected": true,
+      "padded_file_size_rejected_bytes": 65537,
+      "validates_intent": "Future releases must retain historical publisher trust without a redundant release-count ceiling while keeping all existing trust boundaries.",
+      "independent_test_matrix_rerun": false,
+      "reason": "Read-only independent CodeReview; build and two tests were reported by the developer and independent testing is a separate role."
+    },
+    "root_cause": "Packaged trust history reached 17 roots while Host hard-coded a maximum of 16, producing H1 describe code 9 and failing the installer fresh-host check.",
+    "environment_pollution_claimed": false,
+    "actions": {
+      "source_modified": false,
+      "documents_modified": false,
+      "installed": false,
+      "stopped_processes": false,
+      "credentials_read": false
+    }
+  },
+  "developer_reproduction": {
+    "before": {
+      "log": ".tmp/boss-root-clip-release-20261023/trust-before.tap",
+      "tests": 2,
+      "pass": 1,
+      "fail": 1
+    },
+    "after": {
+      "log": ".tmp/boss-root-clip-release-20261023/trust-after.tap",
+      "tests": 2,
+      "pass": 2,
+      "fail": 0,
+      "skip": 0
+    }
+  },
+  "installed_failure": {
+    "runtime": "0.0.27",
+    "host": "0.2.22",
+    "nsis_exit": 2,
+    "h1_describe_code": 9,
+    "root_count": 17,
+    "product_and_host_files_match_package": true,
+    "finalize_executed": false
+  },
+  "fix_boundaries": "Only redundant 16-root count cap removed; fixed resource source, 65536-byte bound, unique key IDs, provider/profile/test_only and Ed25519 verification retained; no wire/schema/authority change",
+  "new_host_version": "0.2.23",
+  "server_deployment": false,
+  "git_commit": false
+}

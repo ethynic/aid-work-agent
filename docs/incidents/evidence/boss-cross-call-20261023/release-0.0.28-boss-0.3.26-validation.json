@@ -1,0 +1,45 @@
+{
+  "date": "2026-10-23",
+  "batch": "AID-Work-Runtime-0.0.28-BOSS-0.3.26-20261023-222847",
+  "versions": {
+    "runtime_ui": "0.0.28",
+    "boss": "0.3.26",
+    "host": "0.2.23",
+    "core": "0.2.20",
+    "native": "0.1.0",
+    "node": "22.23.3"
+  },
+  "zip": "clients/release/AID-Work-Runtime-0.0.28-BOSS-0.3.26-20261023-222847.zip",
+  "zip_bytes": 132658738,
+  "zip_sha256": "f9cb05ab49c488124e7313aad7fb4cf9d938d90a6706b24d2fccba54c80e09ec",
+  "zip_entries_checked": 10,
+  "sha256sums_checked": true,
+  "historical_roots_preserved": 17,
+  "roots_current": 18,
+  "plugin_verification": {
+    "archive": "boss-0.3.26-dev.aidplugin.zip",
+    "sha256": "f11379f50f716a2fe6a83a4f54a941117ccfab62269a9b05a3e0ec524d375d5e",
+    "size": 5382729,
+    "files": 3736,
+    "tools": 25,
+    "doctor_exit": 1,
+    "runtime_readiness": {
+      "ready": false,
+      "reason": "请启动调试 Chrome 并登录 BOSS，检查页面与脚本条件"
+    },
+    "payload_unchanged": true,
+    "synthetic_ocr": false
+  },
+  "source_payload_matches": {
+    "FilterSetter.js": "589e85904e9ab73debe2552cd17fa1a0c0c52a903b195ac1b1c00cc8761e0f42",
+    "productTrust.js": "b7ee5d71a678e472b281d5ef05baa2d24ed6fc5b3f83a1e354eaff410092d4b7"
+  },
+  "runtime_package": "passed",
+  "native_module_load": "passed",
+  "cold_installed_resources_handshake": "INSTALLATION_CHECK_PASS",
+  "packaging_tests": "8 plugin + 20 Runtime, 0 failure/skip",
+  "supersedes_withdrawn_batch": "AID-Work-Runtime-0.0.27-BOSS-0.3.25-20261023-221526",
+  "installed_business_acceptance": "pending native import of BOSS0.3.26; actual migrated BOSS remains0.3.24 enabled",
+  "nsis_installation": "passed exit0; actual Runtime0.0.28/Host0.2.23, same paired device, 18 roots",
+  "installation_evidence": "runtime-0.0.28-local-installation-20261023.json"
+}

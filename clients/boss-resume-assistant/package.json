@@ -1,6 +1,6 @@
 {
   "name": "boss-resume-assistant",
-  "version": "0.3.24",
+  "version": "0.3.26",
   "engines": {
     "node": ">=20"
   },

@@ -6,6 +6,24 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { loadPackagedTrust } from '../src/productTrust.js'
 
+test('append-only publisher history remains loadable beyond sixteen releases, within the existing file-size bound', t => {
+  const resources = mkdtempSync(join(tmpdir(), 'runtime-trust-history-'))
+  t.after(() => rmSync(resources, { recursive: true, force: true }))
+  const entry = join(resources, 'runtime/host')
+  mkdirSync(entry, { recursive: true }); mkdirSync(join(resources, 'config'))
+  writeFileSync(join(resources, 'config/runtime-product.json'), JSON.stringify({ schemaVersion: 1, productKind: 'runtime', profile: 'acceptance' }))
+  const publicKey = generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'pem' }).toString()
+  const roots = Array.from({ length: 18 }, (_, i) => ({ key_id: `historical-release-${i}`, public_key: publicKey, providers: ['ai.aidwork.boss-recruiting'], test_only: true }))
+  const file = join(resources, 'runtime/trust-roots.json')
+  const bytes = JSON.stringify({ schemaVersion: 1, profile: 'acceptance', roots })
+  writeFileSync(file, bytes)
+  assert.deepEqual(loadPackagedTrust(entry), roots, 'new releases must preserve all previously trusted publisher roots')
+  writeFileSync(file, JSON.stringify({ schemaVersion: 1, profile: 'acceptance', roots: [...roots, roots[0]] }))
+  assert.throws(() => loadPackagedTrust(entry), error => (error as { code: number }).code === 9, 'publisher identities must remain unique even with more historical roots')
+  writeFileSync(file, bytes.padEnd(65537, ' '))
+  assert.throws(() => loadPackagedTrust(entry), error => (error as { code: number }).code === 9, 'removing the redundant count cap must retain the bounded trusted-file read')
+})
+
 test('plugin trust comes only from fixed matching product resources; production rejects acceptance keys', t => {
   const resources = mkdtempSync(join(tmpdir(), 'aid-product-trust-')); t.after(() => rmSync(resources, { recursive: true, force: true }))
   const entry = join(resources, 'runtime/host'); mkdirSync(entry, { recursive: true }); mkdirSync(join(resources, 'config'))

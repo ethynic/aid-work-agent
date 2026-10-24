@@ -1,0 +1,2028 @@
+{
+  "date": "2026-10-24",
+  "timezone": "Asia/Shanghai",
+  "scope": "local read-only visibility and physical-screen diagnosis, no automatic reposition",
+  "plugin_version": "0.3.26",
+  "release_id": "dev-boss-0.3.26-81e256fe32ce34ed",
+  "installed_source_sha256": {
+    "scripts/BossPhysicalInput.cs": "f82dffe3de6099ba3697f272213877566867222f72c7ceb7b265b46fa3740a49",
+    "scripts/BossWindowExperiment.cs": "4db981953ce202665082911266bf08744b5c43f2f8f294289df448ac9e496ef6",
+    "node_modules/@aid/win32-native-input/dist/windows.js": "18a3bed5afd7cfba0bd8ce0ff959e8ccb3b37313ebf2d908ebc460b208e60ff3",
+    "node_modules/@aid/win32-native-input/dist/sequence.js": "2b4f1571586821dcdb273f758cc4af3c39ec5f0ff680ffe246dd7241cd557f06"
+  },
+  "production_csharp_matches_probe_sources": true,
+  "controlled_changes": "user manually minimized/restored and dragged window out/back; no automation moved the window",
+  "states": [
+    {
+      "label": "baseline",
+      "at": "2026-10-24T09:55:05.8725378+00:00",
+      "browser_pid": 51096,
+      "bound_hwnd": "15339516",
+      "window": {
+        "hwnd": "15339516",
+        "pid": 51096,
+        "tid": 14356,
+        "class": "Chrome_WidgetWin_1",
+        "parent": "0",
+        "root": "15339516",
+        "root_owner": "15339516",
+        "visible": true,
+        "own_ws_visible": true,
+        "minimized": false,
+        "maximized": false,
+        "foreground": true,
+        "window_dpi": 96,
+        "window_dpi_context": "-4",
+        "rect": [
+          1137,
+          0,
+          2563,
+          1361
+        ],
+        "dwm_frame": [
+          1144,
+          0,
+          2556,
+          1354
+        ],
+        "dwm_frame_status": 0,
+        "cloaked": 0,
+        "thread_dpi_context": "-4"
+      },
+      "widgets": [
+        {
+          "hwnd": "5312714",
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": true,
+          "own_ws_visible": true,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1145,
+            87,
+            2555,
+            1353
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        },
+        {
+          "hwnd": "4001528",
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": false,
+          "own_ws_visible": false,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1867,
+            85,
+            1868,
+            86
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        },
+        {
+          "hwnd": "19795832",
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": false,
+          "own_ws_visible": false,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1260,
+            41,
+            2476,
+            85
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        }
+      ],
+      "selected_visible_widget": "5312714",
+      "geometry": {
+        "virtual_screen": [
+          0,
+          0,
+          2560,
+          1440
+        ],
+        "covered": true,
+        "screens": [
+          [
+            0,
+            0,
+            2560,
+            1440
+          ]
+        ],
+        "dpi": 96,
+        "window": [
+          1144,
+          0,
+          2556,
+          1354
+        ],
+        "work": [
+          0,
+          0,
+          2560,
+          1392
+        ]
+      },
+      "input_sent": 0,
+      "activation_sent": 0,
+      "reposition_sent": 0,
+      "independent_uncovered_area_px2": 0
+    },
+    {
+      "label": "minimized",
+      "at": "2026-10-24T09:55:52.0299946+00:00",
+      "browser_pid": 51096,
+      "bound_hwnd": "15339516",
+      "window": {
+        "hwnd": "15339516",
+        "pid": 51096,
+        "tid": 14356,
+        "class": "Chrome_WidgetWin_1",
+        "parent": "0",
+        "root": "15339516",
+        "root_owner": "15339516",
+        "visible": true,
+        "own_ws_visible": true,
+        "minimized": true,
+        "maximized": false,
+        "foreground": false,
+        "window_dpi": 96,
+        "window_dpi_context": "-4",
+        "rect": [
+          -32000,
+          -32000,
+          -31840,
+          -31972
+        ],
+        "dwm_frame": [
+          -31993,
+          -32000,
+          -31847,
+          -31979
+        ],
+        "dwm_frame_status": 0,
+        "cloaked": 0,
+        "thread_dpi_context": "-4"
+      },
+      "widgets": [
+        {
+          "hwnd": "4001528",
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": false,
+          "own_ws_visible": false,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            -31270,
+            -31915,
+            -31269,
+            -31914
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        },
+        {
+          "hwnd": "19795832",
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": false,
+          "own_ws_visible": false,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            -31877,
+            -31959,
+            -30661,
+            -31915
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        }
+      ],
+      "selected_visible_widget": null,
+      "geometry": {
+        "virtual_screen": [
+          0,
+          0,
+          2560,
+          1440
+        ],
+        "covered": false,
+        "screens": [
+          [
+            0,
+            0,
+            2560,
+            1440
+          ]
+        ],
+        "dpi": 96,
+        "window": [
+          -31993,
+          -32000,
+          -31847,
+          -31979
+        ],
+        "work": [
+          0,
+          0,
+          2560,
+          1392
+        ]
+      },
+      "input_sent": 0,
+      "activation_sent": 0,
+      "reposition_sent": 0,
+      "independent_uncovered_area_px2": 3066
+    },
+    {
+      "label": "restored",
+      "at": "2026-10-24T09:56:54.8911047+00:00",
+      "browser_pid": 51096,
+      "bound_hwnd": "15339516",
+      "window": {
+        "hwnd": "15339516",
+        "pid": 51096,
+        "tid": 14356,
+        "class": "Chrome_WidgetWin_1",
+        "parent": "0",
+        "root": "15339516",
+        "root_owner": "15339516",
+        "visible": true,
+        "own_ws_visible": true,
+        "minimized": false,
+        "maximized": false,
+        "foreground": false,
+        "window_dpi": 96,
+        "window_dpi_context": "-4",
+        "rect": [
+          1137,
+          0,
+          2563,
+          1361
+        ],
+        "dwm_frame": [
+          1144,
+          0,
+          2556,
+          1354
+        ],
+        "dwm_frame_status": 0,
+        "cloaked": 0,
+        "thread_dpi_context": "-4"
+      },
+      "widgets": [
+        {
+          "hwnd": "5312714",
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": true,
+          "own_ws_visible": true,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1145,
+            87,
+            2555,
+            1353
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        },
+        {
+          "hwnd": "4001528",
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": false,
+          "own_ws_visible": false,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1867,
+            85,
+            1868,
+            86
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        },
+        {
+          "hwnd": "19795832",
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": false,
+          "own_ws_visible": false,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1260,
+            41,
+            2476,
+            85
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        }
+      ],
+      "selected_visible_widget": "5312714",
+      "geometry": {
+        "virtual_screen": [
+          0,
+          0,
+          2560,
+          1440
+        ],
+        "covered": true,
+        "screens": [
+          [
+            0,
+            0,
+            2560,
+            1440
+          ]
+        ],
+        "dpi": 96,
+        "window": [
+          1144,
+          0,
+          2556,
+          1354
+        ],
+        "work": [
+          0,
+          0,
+          2560,
+          1392
+        ]
+      },
+      "input_sent": 0,
+      "activation_sent": 0,
+      "reposition_sent": 0,
+      "independent_uncovered_area_px2": 0
+    },
+    {
+      "label": "offscreen-stable-before",
+      "at": "2026-10-24T09:58:05.0961418+00:00",
+      "browser_pid": 51096,
+      "bound_hwnd": "15339516",
+      "window": {
+        "hwnd": "15339516",
+        "pid": 51096,
+        "tid": 14356,
+        "class": "Chrome_WidgetWin_1",
+        "parent": "0",
+        "root": "15339516",
+        "root_owner": "15339516",
+        "visible": true,
+        "own_ws_visible": true,
+        "minimized": false,
+        "maximized": false,
+        "foreground": false,
+        "window_dpi": 96,
+        "window_dpi_context": "-4",
+        "rect": [
+          1290,
+          2,
+          2716,
+          1363
+        ],
+        "dwm_frame": [
+          1297,
+          2,
+          2709,
+          1356
+        ],
+        "dwm_frame_status": 0,
+        "cloaked": 0,
+        "thread_dpi_context": "-4"
+      },
+      "widgets": [
+        {
+          "hwnd": "4001528",
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": false,
+          "own_ws_visible": false,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            2020,
+            87,
+            2021,
+            88
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        },
+        {
+          "hwnd": "19795832",
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": false,
+          "own_ws_visible": false,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1413,
+            43,
+            2629,
+            87
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        },
+        {
+          "hwnd": "5312714",
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": true,
+          "own_ws_visible": true,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1298,
+            89,
+            2708,
+            1355
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        }
+      ],
+      "selected_visible_widget": "5312714",
+      "geometry": {
+        "virtual_screen": [
+          0,
+          0,
+          2560,
+          1440
+        ],
+        "covered": false,
+        "screens": [
+          [
+            0,
+            0,
+            2560,
+            1440
+          ]
+        ],
+        "dpi": 96,
+        "window": [
+          1297,
+          2,
+          2709,
+          1356
+        ],
+        "work": [
+          0,
+          0,
+          2560,
+          1392
+        ]
+      },
+      "input_sent": 0,
+      "activation_sent": 0,
+      "reposition_sent": 0,
+      "independent_uncovered_area_px2": 201746
+    },
+    {
+      "label": "offscreen-stable-after",
+      "at": "2026-10-24T09:58:07.8856876+00:00",
+      "browser_pid": 51096,
+      "bound_hwnd": "15339516",
+      "window": {
+        "hwnd": "15339516",
+        "pid": 51096,
+        "tid": 14356,
+        "class": "Chrome_WidgetWin_1",
+        "parent": "0",
+        "root": "15339516",
+        "root_owner": "15339516",
+        "visible": true,
+        "own_ws_visible": true,
+        "minimized": false,
+        "maximized": false,
+        "foreground": true,
+        "window_dpi": 96,
+        "window_dpi_context": "-4",
+        "rect": [
+          1290,
+          2,
+          2716,
+          1363
+        ],
+        "dwm_frame": [
+          1297,
+          2,
+          2709,
+          1356
+        ],
+        "dwm_frame_status": 0,
+        "cloaked": 0,
+        "thread_dpi_context": "-4"
+      },
+      "widgets": [
+        {
+          "hwnd": "4001528",
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": false,
+          "own_ws_visible": false,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            2020,
+            87,
+            2021,
+            88
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        },
+        {
+          "hwnd": "19795832",
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": false,
+          "own_ws_visible": false,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1413,
+            43,
+            2629,
+            87
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        },
+        {
+          "hwnd": "5312714",
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": true,
+          "own_ws_visible": true,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1298,
+            89,
+            2708,
+            1355
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        }
+      ],
+      "selected_visible_widget": "5312714",
+      "geometry": {
+        "virtual_screen": [
+          0,
+          0,
+          2560,
+          1440
+        ],
+        "covered": false,
+        "screens": [
+          [
+            0,
+            0,
+            2560,
+            1440
+          ]
+        ],
+        "dpi": 96,
+        "window": [
+          1297,
+          2,
+          2709,
+          1356
+        ],
+        "work": [
+          0,
+          0,
+          2560,
+          1392
+        ]
+      },
+      "input_sent": 0,
+      "activation_sent": 0,
+      "reposition_sent": 0,
+      "independent_uncovered_area_px2": 201746
+    },
+    {
+      "label": "onscreen-before",
+      "at": "2026-10-24T09:58:53.3778596+00:00",
+      "browser_pid": 51096,
+      "bound_hwnd": "15339516",
+      "window": {
+        "hwnd": "15339516",
+        "pid": 51096,
+        "tid": 14356,
+        "class": "Chrome_WidgetWin_1",
+        "parent": "0",
+        "root": "15339516",
+        "root_owner": "15339516",
+        "visible": true,
+        "own_ws_visible": true,
+        "minimized": false,
+        "maximized": false,
+        "foreground": false,
+        "window_dpi": 96,
+        "window_dpi_context": "-4",
+        "rect": [
+          1140,
+          5,
+          2566,
+          1366
+        ],
+        "dwm_frame": [
+          1147,
+          5,
+          2559,
+          1359
+        ],
+        "dwm_frame_status": 0,
+        "cloaked": 0,
+        "thread_dpi_context": "-4"
+      },
+      "widgets": [
+        {
+          "hwnd": "4001528",
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": false,
+          "own_ws_visible": false,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1870,
+            90,
+            1871,
+            91
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        },
+        {
+          "hwnd": "19795832",
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": false,
+          "own_ws_visible": false,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1263,
+            46,
+            2479,
+            90
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        },
+        {
+          "hwnd": "5312714",
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": true,
+          "own_ws_visible": true,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1148,
+            92,
+            2558,
+            1358
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        }
+      ],
+      "selected_visible_widget": "5312714",
+      "geometry": {
+        "virtual_screen": [
+          0,
+          0,
+          2560,
+          1440
+        ],
+        "covered": true,
+        "screens": [
+          [
+            0,
+            0,
+            2560,
+            1440
+          ]
+        ],
+        "dpi": 96,
+        "window": [
+          1147,
+          5,
+          2559,
+          1359
+        ],
+        "work": [
+          0,
+          0,
+          2560,
+          1392
+        ]
+      },
+      "input_sent": 0,
+      "activation_sent": 0,
+      "reposition_sent": 0,
+      "independent_uncovered_area_px2": 0
+    },
+    {
+      "label": "onscreen-after",
+      "at": "2026-10-24T09:58:56.1292829+00:00",
+      "browser_pid": 51096,
+      "bound_hwnd": "15339516",
+      "window": {
+        "hwnd": "15339516",
+        "pid": 51096,
+        "tid": 14356,
+        "class": "Chrome_WidgetWin_1",
+        "parent": "0",
+        "root": "15339516",
+        "root_owner": "15339516",
+        "visible": true,
+        "own_ws_visible": true,
+        "minimized": false,
+        "maximized": false,
+        "foreground": true,
+        "window_dpi": 96,
+        "window_dpi_context": "-4",
+        "rect": [
+          1140,
+          5,
+          2566,
+          1366
+        ],
+        "dwm_frame": [
+          1147,
+          5,
+          2559,
+          1359
+        ],
+        "dwm_frame_status": 0,
+        "cloaked": 0,
+        "thread_dpi_context": "-4"
+      },
+      "widgets": [
+        {
+          "hwnd": "4001528",
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": false,
+          "own_ws_visible": false,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1870,
+            90,
+            1871,
+            91
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        },
+        {
+          "hwnd": "19795832",
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": false,
+          "own_ws_visible": false,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1263,
+            46,
+            2479,
+            90
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        },
+        {
+          "hwnd": "5312714",
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": true,
+          "own_ws_visible": true,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1148,
+            92,
+            2558,
+            1358
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        }
+      ],
+      "selected_visible_widget": "5312714",
+      "geometry": {
+        "virtual_screen": [
+          0,
+          0,
+          2560,
+          1440
+        ],
+        "covered": true,
+        "screens": [
+          [
+            0,
+            0,
+            2560,
+            1440
+          ]
+        ],
+        "dpi": 96,
+        "window": [
+          1147,
+          5,
+          2559,
+          1359
+        ],
+        "work": [
+          0,
+          0,
+          2560,
+          1392
+        ]
+      },
+      "input_sent": 0,
+      "activation_sent": 0,
+      "reposition_sent": 0,
+      "independent_uncovered_area_px2": 0
+    },
+    {
+      "label": "minimized-tracked-final",
+      "at": "2026-10-24T10:02:56.0528643+00:00",
+      "browser_pid": 51096,
+      "bound_hwnd": "15339516",
+      "window": {
+        "hwnd": "15339516",
+        "is_window": true,
+        "pid": 51096,
+        "tid": 14356,
+        "class": "Chrome_WidgetWin_1",
+        "parent": "0",
+        "root": "15339516",
+        "root_owner": "15339516",
+        "visible": true,
+        "own_ws_visible": true,
+        "minimized": true,
+        "maximized": false,
+        "foreground": false,
+        "window_dpi": 96,
+        "window_dpi_context": "-4",
+        "rect": [
+          -32000,
+          -32000,
+          -31840,
+          -31972
+        ],
+        "dwm_frame": [
+          -31993,
+          -32000,
+          -31847,
+          -31979
+        ],
+        "dwm_frame_status": 0,
+        "cloaked": 0,
+        "thread_dpi_context": "-4"
+      },
+      "widgets": [
+        {
+          "hwnd": "4001528",
+          "is_window": true,
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": false,
+          "own_ws_visible": false,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            -31270,
+            -31915,
+            -31269,
+            -31914
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        },
+        {
+          "hwnd": "19795832",
+          "is_window": true,
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": false,
+          "own_ws_visible": false,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            -31877,
+            -31959,
+            -30661,
+            -31915
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        }
+      ],
+      "selected_visible_widget": null,
+      "geometry": {
+        "virtual_screen": [
+          0,
+          0,
+          2560,
+          1440
+        ],
+        "covered": false,
+        "screens": [
+          [
+            0,
+            0,
+            2560,
+            1440
+          ]
+        ],
+        "dpi": 96,
+        "window": [
+          -31993,
+          -32000,
+          -31847,
+          -31979
+        ],
+        "work": [
+          0,
+          0,
+          2560,
+          1392
+        ]
+      },
+      "input_sent": 0,
+      "activation_sent": 0,
+      "reposition_sent": 0,
+      "independent_uncovered_area_px2": 3066
+    },
+    {
+      "label": "restored-tracked-final",
+      "at": "2026-10-24T10:03:32.5512908+00:00",
+      "browser_pid": 51096,
+      "bound_hwnd": "15339516",
+      "window": {
+        "hwnd": "15339516",
+        "is_window": true,
+        "pid": 51096,
+        "tid": 14356,
+        "class": "Chrome_WidgetWin_1",
+        "parent": "0",
+        "root": "15339516",
+        "root_owner": "15339516",
+        "visible": true,
+        "own_ws_visible": true,
+        "minimized": false,
+        "maximized": false,
+        "foreground": false,
+        "window_dpi": 96,
+        "window_dpi_context": "-4",
+        "rect": [
+          1140,
+          5,
+          2566,
+          1366
+        ],
+        "dwm_frame": [
+          1147,
+          5,
+          2559,
+          1359
+        ],
+        "dwm_frame_status": 0,
+        "cloaked": 0,
+        "thread_dpi_context": "-4"
+      },
+      "widgets": [
+        {
+          "hwnd": "5312714",
+          "is_window": true,
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": true,
+          "own_ws_visible": true,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1148,
+            92,
+            2558,
+            1358
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        },
+        {
+          "hwnd": "4001528",
+          "is_window": true,
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": false,
+          "own_ws_visible": false,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1870,
+            90,
+            1871,
+            91
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        },
+        {
+          "hwnd": "19795832",
+          "is_window": true,
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": false,
+          "own_ws_visible": false,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1263,
+            46,
+            2479,
+            90
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        }
+      ],
+      "selected_visible_widget": "5312714",
+      "geometry": {
+        "virtual_screen": [
+          0,
+          0,
+          2560,
+          1440
+        ],
+        "covered": true,
+        "screens": [
+          [
+            0,
+            0,
+            2560,
+            1440
+          ]
+        ],
+        "dpi": 96,
+        "window": [
+          1147,
+          5,
+          2559,
+          1359
+        ],
+        "work": [
+          0,
+          0,
+          2560,
+          1392
+        ]
+      },
+      "input_sent": 0,
+      "activation_sent": 0,
+      "reposition_sent": 0,
+      "independent_uncovered_area_px2": 0
+    }
+  ],
+  "captures": [
+    {
+      "at": "2026-10-24T09:58:05.515Z",
+      "plugin": "0.3.26",
+      "label": "offscreen-stable-capture",
+      "allowReposition": false,
+      "budget": {
+        "repositionsUsed": 0
+      },
+      "calls": [
+        {
+          "action": "capture",
+          "allow_reposition_argument": false
+        }
+      ],
+      "success": false,
+      "reason": "window_outside_screen",
+      "geometry": {
+        "window": [
+          1297,
+          2,
+          2709,
+          1356
+        ],
+        "screen": [
+          0,
+          0,
+          2560,
+          1440
+        ],
+        "work": [
+          0,
+          0,
+          2560,
+          1392
+        ],
+        "dpi": 96
+      },
+      "at_end": "2026-10-24T09:58:07.018Z"
+    },
+    {
+      "at": "2026-10-24T09:58:53.593Z",
+      "plugin": "0.3.26",
+      "label": "onscreen-capture",
+      "allowReposition": false,
+      "budget": {
+        "repositionsUsed": 0
+      },
+      "calls": [
+        {
+          "action": "capture",
+          "allow_reposition_argument": false
+        }
+      ],
+      "success": true,
+      "window": {
+        "top": 5,
+        "left": 1147,
+        "width": 1412,
+        "pid": 51096,
+        "process_started_at": "2026-10-23T14:36:39.0820133+00:00",
+        "height": 1354,
+        "hwnd": "15339516"
+      },
+      "geometry": {
+        "dpi": 96,
+        "work": [
+          0,
+          0,
+          2560,
+          1392
+        ],
+        "screen": [
+          0,
+          0,
+          2560,
+          1440
+        ],
+        "window": [
+          1147,
+          5,
+          2559,
+          1359
+        ]
+      },
+      "repositioned": false,
+      "image_size": [
+        1412,
+        1354
+      ],
+      "at_end": "2026-10-24T09:58:55.155Z"
+    }
+  ],
+  "capture_api_activation": "installed capture API foregrounded the original window; it was not minimized in either capture; no reposition argument or budget use; frames unchanged before/during/after",
+  "restoration_watch": {
+    "samples": 1200,
+    "actual_interval_ms": [
+      51,
+      64
+    ],
+    "transitions": [
+      {
+        "at": "2026-10-24T09:56:12.648Z",
+        "elapsed_ms": 3,
+        "window": "15339516",
+        "minimized": true,
+        "rect": {
+          "left": -32000,
+          "top": -32000,
+          "right": -31840,
+          "bottom": -31972
+        },
+        "selected": "4001528",
+        "selected_visible": false,
+        "widgets": [
+          {
+            "hwnd": "4001528",
+            "visible": false,
+            "rect": {
+              "left": -31270,
+              "top": -31915,
+              "right": -31269,
+              "bottom": -31914
+            }
+          },
+          {
+            "hwnd": "19795832",
+            "visible": false,
+            "rect": {
+              "left": -31877,
+              "top": -31959,
+              "right": -30661,
+              "bottom": -31915
+            }
+          }
+        ]
+      },
+      {
+        "at": "2026-10-24T09:56:35.336Z",
+        "elapsed_ms": 22690,
+        "window": "15339516",
+        "minimized": false,
+        "rect": {
+          "left": 1137,
+          "top": 0,
+          "right": 2563,
+          "bottom": 1361
+        },
+        "selected": "5312714",
+        "selected_visible": true,
+        "widgets": [
+          {
+            "hwnd": "5312714",
+            "visible": true,
+            "rect": {
+              "left": 1145,
+              "top": 87,
+              "right": 2555,
+              "bottom": 1353
+            }
+          },
+          {
+            "hwnd": "4001528",
+            "visible": false,
+            "rect": {
+              "left": 1867,
+              "top": 85,
+              "right": 1868,
+              "bottom": 86
+            }
+          },
+          {
+            "hwnd": "19795832",
+            "visible": false,
+            "rect": {
+              "left": 1260,
+              "top": 41,
+              "right": 2476,
+              "bottom": 85
+            }
+          }
+        ]
+      }
+    ],
+    "non_minimized_hidden_selected_samples": 0
+  },
+  "cdp_checks": [
+    {
+      "label": "baseline-native",
+      "at": "2026-10-24T09:55:46.367Z",
+      "window": "15339516",
+      "minimized": true,
+      "selected_widget": "4001528",
+      "selected_widget_visible": false,
+      "cdp": {
+        "target": "AFCC87118744DCC79E7CFE072795F723",
+        "document_scrolls": [
+          0,
+          0,
+          597
+        ],
+        "rootBounds": [
+          0,
+          0,
+          1410,
+          1266
+        ],
+        "rootClientRects": []
+      }
+    },
+    {
+      "label": "restored-native",
+      "at": "2026-10-24T09:56:55.191Z",
+      "window": "15339516",
+      "minimized": false,
+      "selected_widget": "5312714",
+      "selected_widget_visible": true,
+      "cdp": {
+        "target": "AFCC87118744DCC79E7CFE072795F723",
+        "document_scrolls": [
+          0,
+          0,
+          597
+        ],
+        "rootBounds": [
+          0,
+          0,
+          1410,
+          1266
+        ],
+        "rootClientRects": []
+      }
+    },
+    {
+      "label": "offscreen-native",
+      "at": "2026-10-24T09:58:05.395Z",
+      "window": "15339516",
+      "minimized": false,
+      "selected_widget": "5312714",
+      "selected_widget_visible": true,
+      "cdp": {
+        "target": "AFCC87118744DCC79E7CFE072795F723",
+        "document_scrolls": [
+          0,
+          0,
+          597
+        ],
+        "rootBounds": [
+          0,
+          0,
+          1410,
+          1266
+        ],
+        "rootClientRects": []
+      }
+    },
+    {
+      "label": "onscreen-native",
+      "at": "2026-10-24T09:58:56.442Z",
+      "window": "15339516",
+      "minimized": false,
+      "selected_widget": "5312714",
+      "selected_widget_visible": true,
+      "cdp": {
+        "target": "AFCC87118744DCC79E7CFE072795F723",
+        "document_scrolls": [
+          0,
+          0,
+          597
+        ],
+        "rootBounds": [
+          0,
+          0,
+          1410,
+          1266
+        ],
+        "rootClientRects": []
+      }
+    }
+  ],
+  "conclusions": [
+    "minimized original parent enumerated only genuinely invisible fallback widgets while CDP remained readable",
+    "controlled non-minimized capture frame really exceeded screen by 149px on right; installed no-reposition capture refused",
+    "after manual return DWM frame was inside and capture succeeded although GetWindowRect still extended 6px beyond right edge",
+    "no observed false positive in these controlled states; not proof of old customer incident cause",
+    "direct tracked original widget HWND 5312714 remained valid but parent changed from 15339516 to hidden Chrome_WidgetWin_0 HWND8129800; widget and parent both not visible during minimize"
+  ],
+  "not_verified": [
+    "historical post-activation hidden refusal",
+    "sub-51ms transient",
+    "Phase 8 complete automatic recovery",
+    "Phase 11 automatic reposition",
+    "mixed-DPI and multiple-monitor states"
+  ],
+  "original_widget_parent_tracking": {
+    "at": "2026-10-24T10:02:56.0528643+00:00",
+    "tracked_widgets": [
+      {
+        "hwnd": "5312714",
+        "is_window": true,
+        "pid": 51096,
+        "tid": 14356,
+        "class": "Chrome_RenderWidgetHostHWND",
+        "parent": "8129800",
+        "root": "8129800",
+        "root_owner": "8129800",
+        "visible": false,
+        "own_ws_visible": false,
+        "minimized": false,
+        "maximized": false,
+        "foreground": false,
+        "window_dpi": 96,
+        "window_dpi_context": "-4",
+        "rect": [
+          0,
+          87,
+          1410,
+          1353
+        ],
+        "dwm_frame": null,
+        "dwm_frame_status": -2147024890,
+        "cloaked": 0,
+        "thread_dpi_context": "-4"
+      },
+      {
+        "hwnd": "4001528",
+        "is_window": true,
+        "pid": 51096,
+        "tid": 14356,
+        "class": "Chrome_RenderWidgetHostHWND",
+        "parent": "15339516",
+        "root": "15339516",
+        "root_owner": "15339516",
+        "visible": false,
+        "own_ws_visible": false,
+        "minimized": false,
+        "maximized": false,
+        "foreground": false,
+        "window_dpi": 96,
+        "window_dpi_context": "-4",
+        "rect": [
+          -31270,
+          -31915,
+          -31269,
+          -31914
+        ],
+        "dwm_frame": null,
+        "dwm_frame_status": -2147024890,
+        "cloaked": 0,
+        "thread_dpi_context": "-4"
+      },
+      {
+        "hwnd": "19795832",
+        "is_window": true,
+        "pid": 51096,
+        "tid": 14356,
+        "class": "Chrome_RenderWidgetHostHWND",
+        "parent": "15339516",
+        "root": "15339516",
+        "root_owner": "15339516",
+        "visible": false,
+        "own_ws_visible": false,
+        "minimized": false,
+        "maximized": false,
+        "foreground": false,
+        "window_dpi": 96,
+        "window_dpi_context": "-4",
+        "rect": [
+          -31877,
+          -31959,
+          -30661,
+          -31915
+        ],
+        "dwm_frame": null,
+        "dwm_frame_status": -2147024890,
+        "cloaked": 0,
+        "thread_dpi_context": "-4"
+      }
+    ],
+    "tracked_parents": [
+      {
+        "hwnd": "8129800",
+        "is_window": true,
+        "pid": 51096,
+        "tid": 14356,
+        "class": "Chrome_WidgetWin_0",
+        "parent": "0",
+        "root": "8129800",
+        "root_owner": "8129800",
+        "visible": false,
+        "own_ws_visible": false,
+        "minimized": false,
+        "maximized": false,
+        "foreground": false,
+        "window_dpi": 96,
+        "window_dpi_context": "-4",
+        "rect": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "dwm_frame": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "dwm_frame_status": 0,
+        "cloaked": 0,
+        "thread_dpi_context": "-4"
+      },
+      {
+        "hwnd": "15339516",
+        "is_window": true,
+        "pid": 51096,
+        "tid": 14356,
+        "class": "Chrome_WidgetWin_1",
+        "parent": "0",
+        "root": "15339516",
+        "root_owner": "15339516",
+        "visible": true,
+        "own_ws_visible": true,
+        "minimized": true,
+        "maximized": false,
+        "foreground": false,
+        "window_dpi": 96,
+        "window_dpi_context": "-4",
+        "rect": [
+          -32000,
+          -32000,
+          -31840,
+          -31972
+        ],
+        "dwm_frame": [
+          -31993,
+          -32000,
+          -31847,
+          -31979
+        ],
+        "dwm_frame_status": 0,
+        "cloaked": 0,
+        "thread_dpi_context": "-4"
+      },
+      {
+        "hwnd": "15339516",
+        "is_window": true,
+        "pid": 51096,
+        "tid": 14356,
+        "class": "Chrome_WidgetWin_1",
+        "parent": "0",
+        "root": "15339516",
+        "root_owner": "15339516",
+        "visible": true,
+        "own_ws_visible": true,
+        "minimized": true,
+        "maximized": false,
+        "foreground": false,
+        "window_dpi": 96,
+        "window_dpi_context": "-4",
+        "rect": [
+          -32000,
+          -32000,
+          -31840,
+          -31972
+        ],
+        "dwm_frame": [
+          -31993,
+          -32000,
+          -31847,
+          -31979
+        ],
+        "dwm_frame_status": 0,
+        "cloaked": 0,
+        "thread_dpi_context": "-4"
+      }
+    ],
+    "restored": {
+      "at": "2026-10-24T10:03:32.5512908+00:00",
+      "tracked_widgets": [
+        {
+          "hwnd": "5312714",
+          "is_window": true,
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": true,
+          "own_ws_visible": true,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1148,
+            92,
+            2558,
+            1358
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        },
+        {
+          "hwnd": "4001528",
+          "is_window": true,
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": false,
+          "own_ws_visible": false,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1870,
+            90,
+            1871,
+            91
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        },
+        {
+          "hwnd": "19795832",
+          "is_window": true,
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_RenderWidgetHostHWND",
+          "parent": "15339516",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": false,
+          "own_ws_visible": false,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1263,
+            46,
+            2479,
+            90
+          ],
+          "dwm_frame": null,
+          "dwm_frame_status": -2147024890,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        }
+      ],
+      "tracked_parents": [
+        {
+          "hwnd": "15339516",
+          "is_window": true,
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_WidgetWin_1",
+          "parent": "0",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": true,
+          "own_ws_visible": true,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1140,
+            5,
+            2566,
+            1366
+          ],
+          "dwm_frame": [
+            1147,
+            5,
+            2559,
+            1359
+          ],
+          "dwm_frame_status": 0,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        },
+        {
+          "hwnd": "15339516",
+          "is_window": true,
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_WidgetWin_1",
+          "parent": "0",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": true,
+          "own_ws_visible": true,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1140,
+            5,
+            2566,
+            1366
+          ],
+          "dwm_frame": [
+            1147,
+            5,
+            2559,
+            1359
+          ],
+          "dwm_frame_status": 0,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        },
+        {
+          "hwnd": "15339516",
+          "is_window": true,
+          "pid": 51096,
+          "tid": 14356,
+          "class": "Chrome_WidgetWin_1",
+          "parent": "0",
+          "root": "15339516",
+          "root_owner": "15339516",
+          "visible": true,
+          "own_ws_visible": true,
+          "minimized": false,
+          "maximized": false,
+          "foreground": false,
+          "window_dpi": 96,
+          "window_dpi_context": "-4",
+          "rect": [
+            1140,
+            5,
+            2566,
+            1366
+          ],
+          "dwm_frame": [
+            1147,
+            5,
+            2559,
+            1359
+          ],
+          "dwm_frame_status": 0,
+          "cloaked": 0,
+          "thread_dpi_context": "-4"
+        }
+      ]
+    }
+  },
+  "production_changes": false,
+  "commit_push_package_deploy": false,
+  "raw_candidate_screenshot": "local ignored .tmp only",
+  "raw_evidence_sha256": {
+    "baseline-native.json": "48fc13efd2a059050d07df98ff652c368d1952124e036c4bca6bd64fd40b20e4",
+    "baseline.json": "a3408ef223dec82a773205d5b6eebdf61ed2bcc68f3d15346439bfcc844cb7aa",
+    "minimized-tracked-final.json": "950201533e7e8ec8304d200dab0a3183379ed6a68e7a8310e78d07dfff5ac82b",
+    "minimized.json": "fe5ad4588a488d094ac177057e7c39e6bf1d0a359ae268c12ce5e49ff1e4a500",
+    "offscreen-after.json": "0ee7ce05679d35390f50df3a2e36a159b4ce8cf11a2c454af590defb107548a6",
+    "offscreen-capture-result.json": "eda3a6c43c01b87f7d6c091e1f0d575242ead8232013c175bf88fa71b9cb19c3",
+    "offscreen-native.json": "2e90ecb3130b716e88ae2bfbd44367cc95dcd12b5e5c92fbfd659591ed57c237",
+    "offscreen-observed.json": "9c8d1a80253c8a5c3d3c5f822b642957aae7a9d445d595343cb90eafc155625a",
+    "offscreen-stable-after.json": "627869ca81db10d333f4f6dc10c0d4fbe5c0d05b0d30fe72320652be2352ca69",
+    "offscreen-stable-before.json": "a8c2df14df1214e0dee9e960db62eebd6d5949b9fd76b8ea0adfdaa325b889dc",
+    "offscreen-stable-capture-result.json": "d200f817bfde7e0bd5898dcf3d7e87bdcc6cf5c5768f303b01a560111e65692a",
+    "onscreen-after.json": "023c59619c97fbab47b19c54bd9ba4b789827d6787b9538f2a448b0e031d55cc",
+    "onscreen-before.json": "547e3efb3263665fdd8b70680323686ab58b52f438d8a7a5556912826ed4f52c",
+    "onscreen-capture-result.json": "8e498cecae6e702c184adbf9e30e61ba429ea0699f65b1431d7e2f531d9de77b",
+    "onscreen-capture.png": "63d16faa36ef05e3b2bbce97fcf453672503332fc03170a9fd2ccb1da2b56cf3",
+    "onscreen-capture.png.json": "d4909ef8135d5767514e3d0433fa5361eba8d154ae7f472293501d28f3e76171",
+    "onscreen-native.json": "ae188ea8b382ba1c3973f24cb228d182aaf18a327bc2e0abf840730084a83215",
+    "restore-watch.json": "93ca5556093cc3845aa7c24c8084df73447ce1befe5c4e789ac12ad73961b98f",
+    "restored-native.json": "42d5e353d52a4b7294f9140e0b45b66cf5ba66a88fa26d67410f90c277bd3f3c",
+    "restored-tracked-final.json": "c1ed0e80863d41ab2442fc18047c33adbe4e587d0956972c7371cbd925c72643",
+    "restored.json": "d1fed932336dcc737803bb29875ff58650dc25cb7a32f790c58b383cdae6309f"
+  }
+}
