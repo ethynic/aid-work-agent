@@ -150,6 +150,14 @@
       "providers": [
         "ai.aidwork.boss-recruiting"
       ]
+    },
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-boss-0-3-27-20261024-200152",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA/ps1lYVXtRn8+Gb+XNEG9nbvc0c+pOWfULxurMMfk6M=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.boss-recruiting"
+      ]
     }
   ],
   "profile": "acceptance"

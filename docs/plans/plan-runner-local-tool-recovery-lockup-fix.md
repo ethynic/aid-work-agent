@@ -834,4 +834,17 @@ Runtime业务日志399次CDP请求全部ACK；19次原生点击和66次原生滚
 
 提交前确认master跟踪origin/master，origin的既有push配置同时指向Codeup与GitHub。fetch发现6个远程提交，改动文件不与本批重叠，已无stash/覆盖地快进到25405aa4；无关工作区改动保留。只纳入本恢复任务：此前0.0.28/0.3.26基线所需根滚动裁剪、Runtime历史信任根兼容及其已验测试/版本/公开根/脱敏证据，以及本次CLI接续、关联测试和文档。两项基线生产源码SHA256仍与各自独立测试记录相同；当前CLI最终74项、独立261项及CR结论见§23.4，提交前typecheck再次通过。全量项目未全绿的结果保留，不扩大修复范围。
 
-按现有clients/agent-desktop/scripts/release-batch.ps1原样执行；脚本将Runtime UI/BOSS分别升patch，Host/Core/native保持已验证版本，每批生成新的BOSS签名公钥并追加完整历史根，生成配套Runtime与组合ZIP。尚在提交/出包过程中，最终commit、版本、摘要及验包结果在本节补齐。真实安装、原会话单次CLI归位后筛选仍由用户安装后续验；不执行安装器、不替换inventory、不部署服务器。
+按现有clients/agent-desktop/scripts/release-batch.ps1原样执行；脚本将Runtime UI/BOSS分别升patch，Host/Core/native保持已验证版本，每批生成新的BOSS签名公钥并追加完整历史根，生成配套Runtime与组合ZIP。源码提交371a73a0已推送主远程Codeup/master；GitHub镜像连续TLS握手失败，包含临时复用现有Windows代理的尝试，未关闭证书校验或修改永久Git配置。发行版本、公开根及下述结果由本次授权范围的后续提交同步，二进制ZIP/EXE不进入Git。真实安装、原会话单次CLI归位后筛选仍由用户安装后续验；不执行安装器、不替换inventory、不部署服务器。
+
+
+### 24.1 最终发行及校验
+
+现有一键脚本九阶段exit0，生成Runtime UI0.0.29、BOSS0.3.27；Host0.2.23/Core0.2.20/native0.1.0/固定Node22.23.3不变。完整历史18个根逐对象保留，新增第19个本批BOSS-only公钥，登记表/版本快照/交付副本/Runtime资源完全一致。包内4个BOSS关键编译模块与受测dist逐字节一致，含window_reposition_resume；Runtime实际productTrust.js亦与受测dist一致。
+
+- 组合ZIP：[AID-Work-Runtime-0.0.29-BOSS-0.3.27-20261024-200152.zip](../../clients/release/AID-Work-Runtime-0.0.29-BOSS-0.3.27-20261024-200152.zip)，132659104字节；[SHA256文件](../../clients/release/AID-Work-Runtime-0.0.29-BOSS-0.3.27-20261024-200152.zip.sha256)。
+- ZIP SHA256：`f1080050181fb050ed4aafee0b9fee268c6c4386122fc39ac0f50b934cf9c6d7`；10个交付项CRC、ZIP逐项摘要及SHA256SUMS全部复读一致。
+- Runtime_PACKAGE/VERIFY、插件签名/完整清单/搬迁后payload不变、NATIVE_INPUT_LOAD_OK均通过；脚本打包回归8＋20项，0失败/跳过。安装器按既有acceptance策略NotSigned，未改成正式签名发行。
+- 新包固定Node22.23.3下再跑最终74项接续/筛选组合回归，74/74、0失败/跳过。对最终win-unpacked资源以隔离临时home运行现有runtime-installation-check.mjs，冷H1 describe/getState、DPAPI与页面归档检查INSTALLATION_CHECK_PASS；不接触原配对或启动任务，不能称真实NSIS安装通过。
+- 插件doctor只读检查ready=true、exit0，未改变payload、没有业务输入或视觉模型请求。实际安装、导入及原会话一次CLI归位后筛选仍not_run；先由用户安装同包Runtime，再通过受支持原生界面导入BOSS0.3.27，沿用原配对和原会话。
+
+ZIP第一次压缩遇Git进程短暂读占用，原脚本自身诊断并退避后成功；没有结束编辑器或Git进程、没有修改打包脚本。完整脱敏发行记录见[release-0.0.29-boss-0.3.27-validation.json](../incidents/evidence/boss-cross-call-20261023/release-0.0.29-boss-0.3.27-validation.json)。原全量测试未全绿的明细继续保留§23.4，不用打包成功覆盖。无安装、部署、后台更新或原会话重建。

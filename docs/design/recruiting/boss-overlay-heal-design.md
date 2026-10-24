@@ -107,7 +107,7 @@ Phase 8未进入实际执行链时，问题是交付/执行核验，不能另写
 
 ### W4.11 已归位零输入筛选的同调用接续（2026-10-24，已实现待真机复验）
 
-实施状态：最小消费端修复及独立TEST/CR已完成，最终74项定向、独立261项相关回归、类型检查通过，CR无P0/P1/P2；全量npm test存在外围失败和MCP限时中断，未全绿。一次外层调用内的归位→重采→fresh新坐标→3–5年＋本科→提交后验已由真实组件组合回归验证，OS/浏览器/模型为边界替身；新安装版真机尚未验。无提交、打包或部署。完整结果见原计划§23.4。
+实施状态：最小消费端修复及独立TEST/CR已完成，最终74项定向、独立261项相关回归、类型检查通过，CR无P0/P1/P2；全量npm test存在外围失败和MCP限时中断，未全绿。一次外层调用内的归位→重采→fresh新坐标→3–5年＋本科→提交后验已由真实组件组合回归验证，OS/浏览器/模型为边界替身；新安装版真机尚未验。源码371a73a0已推送Codeup，现有脚本已生成0.0.29/0.3.27并验包通过；GitHub镜像TLS失败尚未同步。未安装或部署，完整结果见原计划§23.4/§24。
 
 日志和原诊断已定位：窗口归位/整窗截图成功后，视觉正确返回absent/inconclusive（旧徽章2不能证明本次请求已应用）；共享page_state门槛却要求最终筛选goal_state=satisfied才接回原setter，因此首CLI返回UI_CHANGED，智能体新派发才完成。安装payload离线重放原回执得到continuation=0、no_supported_action；只改window的goal_state为satisfied作对照则continuation=1。外层失败envelope为保存context重建，未冒称从现场读取到完整outer state。详见[计划§23](../../plans/plan-runner-local-tool-recovery-lockup-fix.md#23-cli内部接续缺口日志定位与最小修复2026-10-24)及[分支重放证据](../../incidents/evidence/boss-cross-call-20261023/cli-continuation-replay-20261024.json)。
 
