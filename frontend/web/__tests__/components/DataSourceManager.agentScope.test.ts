@@ -217,29 +217,21 @@ describe('权限与编辑入口', () => {
     expect((sales.element as HTMLInputElement).checked).toBe(true)
   })
 
-  it('普通用户：范围只读文本、无选择列、无批量操作', async () => {
+  it('普通用户：整页拒绝，不加载任何数据', async () => {
     auth.adminRef!.value = { role: 'user' }
-    ds.listSchemas.mockResolvedValue({
-      schemas: [schemaRow(1, { allowed_agent_ids: ['sales-assistant'] })],
-      total: 1,
-      has_outbound_knowledge_share: false,
-    })
     const wrapper = await mountPage()
 
-    // 行内只剩编辑/删除，无范围编辑按钮
-    const rowButtons = wrapper.findAll('tbody tr')[0].findAll('button').map(b => b.text().trim())
-    expect(rowButtons).toEqual(['编辑', '删除'])
-    expect(wrapper.text()).toContain('销售助手')
-    // 无选择列与全选框
-    expect(wrapper.find('input[aria-label="全选当前页"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('仅管理员可访问数据源管理')
+    expect(wrapper.find('tbody tr').exists()).toBe(false)
+    expect(ds.listSchemas).not.toHaveBeenCalled()
+    expect(ds.listConnectors).not.toHaveBeenCalled()
   })
 
-  it('角色未就绪：范围只读，不影响列表加载', async () => {
+  it('角色未就绪（admin 为 null）：视为非管理员拒绝，不加载列表', async () => {
     auth.adminRef!.value = null
     const wrapper = await mountPage()
-    const rowButtons = wrapper.findAll('tbody tr')[0].findAll('button').map(b => b.text().trim())
-    expect(rowButtons).toEqual(['编辑', '删除'])
-    expect(wrapper.text()).toContain('表1')
+    expect(wrapper.text()).toContain('仅管理员可访问数据源管理')
+    expect(ds.listSchemas).not.toHaveBeenCalled()
   })
 
   it('管理员范围控件是原生 button（自带 Tab/Enter/Space 激活语义）且带可见焦点样式', async () => {
@@ -696,18 +688,15 @@ describe('导入批次可用智能体', () => {
     expect(wrapper.text()).not.toContain('本批设置已锁定')
   })
 
-  it('普通用户/角色未就绪：本批摘要只读无更改入口，默认共享入库不受影响', async () => {
+  it('普通用户/角色未就绪：整页拒绝，无法进入导入与入库流程', async () => {
+    ds.saveSchema.mockResolvedValue({ success: true, existing: false, allowed_agent_ids: [] })
     for (const role of ['user', null]) {
       auth.adminRef!.value = role === null ? null : { role }
-      ds.saveSchema.mockResolvedValue({ success: true, existing: false, allowed_agent_ids: [] })
-      const wrapper = await openReviewViaConnectorImport([schemaInfo('表A')])
+      const wrapper = await mountPage()
 
-      expect(wrapper.text()).toContain('本批新表可用智能体：全部智能体')
-      expect(findButtonByText(wrapper, '更改')).toBeUndefined()
-
-      await clickButton(wrapper, '确认入库')
-      expect(ds.saveSchema).toHaveBeenCalledTimes(1)
-      expect(ds.saveSchema.mock.calls[0][0].allowed_agent_ids).toBeUndefined()
+      expect(wrapper.text()).toContain('仅管理员可访问数据源管理')
+      expect(findButtonByText(wrapper, '确认入库')).toBeUndefined()
+      expect(ds.saveSchema).not.toHaveBeenCalled()
       ds.saveSchema.mockClear()
     }
   })
