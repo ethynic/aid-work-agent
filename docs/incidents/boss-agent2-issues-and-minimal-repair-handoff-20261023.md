@@ -563,9 +563,20 @@ Win32的`IsWindowVisible`检查的是窗口及祖先的`WS_VISIBLE`样式，不�
 
 直接加载安装版withLocalRecovery并注入原page/window诊断离线重放，原回执continuation=0、no_supported_action；只把window goal_state改为satisfied作单字段对照，continuation=1，原binding、共享预算及执行计数均传入续做。四个相关安装编译模块与工作区dist hash一致。外层失败envelope按保存context重建、归位预算变化由替身模拟、对照续做为sentinel，未访问浏览器/视觉接口，不是新真机结果，也未独立取回现场outer state。见[重放证据](evidence/boss-cross-call-20261023/cli-continuation-replay-20261024.json)。
 
-最小方案仅增加共享恢复消费端的窄条件：原filter/clear已认证UI_CHANGED/none、input/not_started与filter_phase=not_started，已有continuation；同次window观察预算0→1且实际窗口观察及completed回执有效、无stale/consumed等错误，absent/inconclusive接回原resume一次，最终由fresh setter后验决定成功。计数增加不单独证明恢复；不改模型结论、不扩全部page_state/外发、不新增窗口恢复器或wire。已有Phase 8/11、target/epoch/取消、submitted核验及预算继续复用。完整设计与待实施验收见[W4.11](../design/recruiting/boss-overlay-heal-design.md#w411-已归位零输入筛选的同调用接续2026-10-24已实现待真机复验)、[计划§23](../plans/plan-runner-local-tool-recovery-lockup-fix.md#23-cli内部接续缺口日志定位与最小修复2026-10-24)。此处为前次调查结论；用户随后已授权最小开发、独立测试与CodeReview，执行结果如下。
+最小方案仅增加共享恢复消费端的窄条件：原filter/clear已认证UI_CHANGED/none、input/not_started与filter_phase=not_started，已有continuation；同次window观察预算0→1且实际窗口观察及completed回执有效、无stale/consumed等错误，absent/inconclusive接回原resume一次，最终由fresh setter后验决定成功。计数增加不单独证明恢复；不改模型结论、不扩全部page_state/外发、不新增窗口恢复器或wire。已有Phase 8/11、target/epoch/取消、submitted核验及预算继续复用。完整设计与待实施验收见[W4.11](../design/recruiting/boss-overlay-heal-design.md#w411-已归位零输入筛选的同调用接续2026-10-24已实现10-26真机通过)、[计划§23](../plans/plan-runner-local-tool-recovery-lockup-fix.md#23-cli内部接续缺口日志定位与最小修复2026-10-24)。此处为前次调查结论；用户随后已授权最小开发、独立测试与CodeReview，执行结果如下。
 
 
 本轮仅修改localOperationRecovery消费判断，复用原归位/截图/epoch与续做闭包，未修改Runtime/native/FilterSetter。最终74项定向及typecheck通过，独立15文件261项与精确坐标探针通过，CR无新增P0/P1/P2。组合回归确认一次外层execute内完成归位、重采、新session读取及新工具栏坐标、3–5年＋本科两行选中、提交与实际后验；没有智能体第二次派发。外部OS/浏览器/模型为替身，不能写作新安装版真机已通过。
 
 全量npm test并未全绿：1116项中1104通过、8失败、4跳过，包含已有工具数量断言、祖先滚动fixture、旧dist孤儿用例及MCP工作进程限时中断。失败及中断保留，不扩修无关范围；明细见[计划§23.4](../plans/plan-runner-local-tool-recovery-lockup-fix.md#234-最小增量开发独立测试及codereview结果)和[开发验证证据](evidence/boss-cross-call-20261023/cli-window-resume-validation-20261024.json)。本轮未提交、推送、打包、安装或部署，原安装版及原会话未替换；真正的新版本单调用验收仍待后续发行安装。
+
+
+### 6.15 安装版单CLI接续及恢复后跨轮续读已真验（2026-10-26）
+
+用户安装Runtime0.0.29/BOSS0.3.27后核对4个关键安装模块与交付包一致。原agent2“打开boss”会话/26份入库保留；预检由既有工具恢复已关闭的Chrome并确认PHP职位及登录。随后用户手动右拖同窗，DWM框[1381,22,2793,1376]在2560×1440屏上真实超右233px，DPI96；本次稳定基线PID10416/HWND6492670/widget135890，不冒称与10-24是同一进程。
+
+10:06:48只派发一次boss_filter。先在输入前发生cursor mismatch拒绝，none/not_started；page与window视觉均absent/inconclusive。原CLI于10:07:02.481自行平移一次，window重采明确repositioned=true、新epoch；10:07:11.199取得fresh DOM ACK，接回原setter，10:07:26.906外层唯一MCP终态OK/applied、38793ms，实际3–5年＋本科、筛选计数2及面板关闭均已核验。ACK前提取的脱敏原始结果直接证明state=recovered、resumed=true、steps=window_reposition_resume、attempts_used=2/ordinary_retries_used=0。不是由智能体再次调用完成。
+
+11851个原生只读样本、最大间隔17ms，只有一次位置变化，原句柄/父链/可见性不变；归位后DWM[1148,22,2560,1376]完整屏内，尺寸不变。主任务43次CDP均ACK、原生click拒绝1/成功5，无导航/刷新。原窗口采图本次已及时保存本地，公开证据只记摘要；未持久化或输出outbox claim/permit等凭据。网页把成功码描述为null，原CLI回执明确OK，以原结果判定。
+
+下一轮保持条件，不重新筛选，单boss_resume_next读取1份，网页10:10:33确认成功入库、累计27；姓名指纹与原26份无交集，无招呼或聊天。此次真机补齐§6.14的接续门槛缺口，剩余持续隐藏、二次超屏预算耗尽及混合DPI等未验项不外推。[验收证据](evidence/boss-cross-call-20261023/live-single-cli-recovery-20261026.json)、[原计划§25](../plans/plan-runner-local-tool-recovery-lockup-fix.md#25-boss0327单调用归位后筛选真机验收2026-10-26)。本次仅验收及文档同步，没有改代码、提交、打包或部署。

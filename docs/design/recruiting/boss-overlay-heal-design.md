@@ -105,9 +105,9 @@ Phase 8未进入实际执行链时，问题是交付/执行核验，不能另写
 
 原会话最小化后，现有工具自行激活原窗口、重新枚举主widget并续读1份成功入库，累计25份、无重复；未人工还原。再次最小化只读选项探查也成功收尾。约每毫秒的只读观察捕获主窗口还原、widget从隐藏父8129800挂回15339516、再恢复可见的阶段：19:07:20.107可见，19:07:20.111激活ACK，本次可见早约4ms，未复现ACK后仍隐藏。实际输入均首次探测成功，没有触发1.2秒多次探测、领域退避重连或CDP开卡兜底，保留未验。19:14实际超屏266px后触发一次自动平移、不缩放；窗口截图repositioned=true且新geometry epoch已生成，随后新DOM采集、筛选提交及新增1份入库成功，累计26份。首次CLI调用因视觉goal_state=inconclusive仍返回UI_CHANGED，实际由智能体重新派发筛选后完成，不冒称同调用原setter自动接续通过。预算耗尽后的再次超屏负向分支未验；详见计划§22.3/22.4。详见[计划§22](../../plans/plan-runner-local-tool-recovery-lockup-fix.md#22-完整恢复真机测试2026-10-24)与[阶段证据](../../incidents/evidence/boss-cross-call-20261023/full-recovery-acceptance-20261024.json)。无生产修改。
 
-### W4.11 已归位零输入筛选的同调用接续（2026-10-24，已实现待真机复验）
+### W4.11 已归位零输入筛选的同调用接续（2026-10-24已实现，10-26真机通过）
 
-实施状态：最小消费端修复及独立TEST/CR已完成，最终74项定向、独立261项相关回归、类型检查通过，CR无P0/P1/P2；全量npm test存在外围失败和MCP限时中断，未全绿。一次外层调用内的归位→重采→fresh新坐标→3–5年＋本科→提交后验已由真实组件组合回归验证，OS/浏览器/模型为边界替身；新安装版真机尚未验。源码371a73a0已推送Codeup，现有脚本已生成0.0.29/0.3.27并验包通过；GitHub镜像TLS失败尚未同步。未安装或部署，完整结果见原计划§23.4/§24。
+实施状态：代码及独立TEST/CR已完成（74项定向、独立261项、CR无P0/P1/P2）；用户安装Runtime0.0.29/BOSS0.3.27后，10-26已在原会话真机通过单次boss_filter的一次归位、重采、fresh定位及两项提交后验，原始回执recovered/resumed=true、steps=window_reposition_resume。两次视觉仍absent/inconclusive，没有智能体二次派发。随后保持条件排除26份续读新增1份入库，累计27份。见原计划§25和脱敏真机证据；此前全量npm test外围失败/中断仍保留，未因此写成全绿。源码/发行追溯见§23.4/§24；本次验收无生产修改、提交、打包或部署。
 
 日志和原诊断已定位：窗口归位/整窗截图成功后，视觉正确返回absent/inconclusive（旧徽章2不能证明本次请求已应用）；共享page_state门槛却要求最终筛选goal_state=satisfied才接回原setter，因此首CLI返回UI_CHANGED，智能体新派发才完成。安装payload离线重放原回执得到continuation=0、no_supported_action；只改window的goal_state为satisfied作对照则continuation=1。外层失败envelope为保存context重建，未冒称从现场读取到完整outer state。详见[计划§23](../../plans/plan-runner-local-tool-recovery-lockup-fix.md#23-cli内部接续缺口日志定位与最小修复2026-10-24)及[分支重放证据](../../incidents/evidence/boss-cross-call-20261023/cli-continuation-replay-20261024.json)。
 

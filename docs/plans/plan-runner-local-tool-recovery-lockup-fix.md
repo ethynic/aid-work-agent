@@ -18,7 +18,7 @@
 | Phase 9 | 推荐页候选配对、混合列表与发送事实修正 | ✅ 完成（2026-10-23） | 独立TEST/CR通过；晚间原会话滚动续读15份无重复，未知插入及发送仍未实机验证 |
 | Phase 10 | 筛选面板clip与编辑阶段恢复 | ✅ 完成（2026-10-23） | 独立169项及CR通过；0.3.26原会话三轮新增9份，597px滚动后非空筛选通过，见§20 |
 | Phase 11 | 窗口截图超屏的局部恢复与诊断 | ✅ 完成（2026-10-23） | 独立TEST/CR通过；一次归位/重截图/续做已验，CLI首调用接续边界见§22 |
-| Phase 12 | 已归位零输入筛选的CLI内接续 | ✅ 完成（2026-10-24） | 独立261项及CR通过；全量存在外围失败，新版真机待验，见§23.4 |
+| Phase 12 | 已归位零输入筛选的CLI内接续 | ✅ 完成（2026-10-24） | 独立261项/CR通过；10-26安装版单调用续做及下一轮续读真验通过，见§25 |
 
 ## 1. 范围、基线与交付边界
 
@@ -801,7 +801,7 @@ Runtime业务日志399次CDP请求全部ACK；19次原生点击和66次原生滚
 | CLI消费判断与关联诊断 | ✅ 完成（2026-10-24） | 在同一次window观察中组合已有可信事实，复用原continuation，仅接续一次；暂不动native/Runtime/后端 |
 | 针对性回归及独立TEST/CR | ✅ 完成（2026-10-24） | 原真实absent/inconclusive回执应触发原闭包一次；新快照/原参数/同target/预算与普通重试不重置；第二次失败直接如实返回 |
 | 负向保护 | ✅ 完成（2026-10-24） | 预算增加但捕获失败、无预算变化、过期/旧epoch/已消费、identity/target变化、pending/unknown、取消均不能获准；已编辑/提交及外发不新增重放；filter与clear均覆盖 |
-| 同会话真机复验 | 📋 待开发 | 用户移出原窗后只派发一次boss_filter；一次归位→重采→同调用内fresh定位提交→最终OK，确认没有靠智能体第二次派发；再按既有排除集合续读核对 |
+| 同会话真机复验 | ✅ 完成（2026-10-26） | 安装版0.3.27单次boss_filter完成一次归位/重采/fresh定位提交；下一轮排除26份新增1份入库，详见§25 |
 
 用户本轮已明确授权上述最小开发与独立TEST/CR。代码及独立验证已完成，最终状态见§23.4；本机安装版未替换，原会话新版本真机复验仍待发行/安装后执行。未提交、打包或部署。
 
@@ -848,3 +848,44 @@ Runtime业务日志399次CDP请求全部ACK；19次原生点击和66次原生滚
 - 插件doctor只读检查ready=true、exit0，未改变payload、没有业务输入或视觉模型请求。实际安装、导入及原会话一次CLI归位后筛选仍not_run；先由用户安装同包Runtime，再通过受支持原生界面导入BOSS0.3.27，沿用原配对和原会话。
 
 ZIP第一次压缩遇Git进程短暂读占用，原脚本自身诊断并退避后成功；没有结束编辑器或Git进程、没有修改打包脚本。完整脱敏发行记录见[release-0.0.29-boss-0.3.27-validation.json](../incidents/evidence/boss-cross-call-20261023/release-0.0.29-boss-0.3.27-validation.json)。原全量测试未全绿的明细继续保留§23.4，不用打包成功覆盖。无安装、部署、后台更新或原会话重建。
+
+
+## 25. BOSS0.3.27单调用归位后筛选真机验收（2026-10-26）
+
+用户确认已安装新Runtime/BOSS并授权继续原会话测试，随后手动将同一个BOSS窗口向右移出。仅使用已安装生产工具恢复业务；主控的本机采样器/探针只读取句柄、父链、可见性与几何，不激活、移动或输入。原生GUI工具此前因不能可靠识别Chrome网址停止，因此由用户手动布置超屏，不使用其他GUI旁路拖窗。无生产代码修改、提交、重新打包或部署。
+
+### 25.1 安装、原会话及测试基线
+
+实读Runtime EXE为0.0.29.0、Host0.2.23、inventory中BOSS0.3.27 enabled，release_id=dev-boss-0.3.27-5e9bf5e54ecf7f9c。安装payload的localOperationRecovery/FilterSetter/visualRecovery/windowExperiment四个编译模块逐项SHA256与交付包一致，包含window_reposition_resume分支。Runtime在线运行，配对沿用；Edge原tab711071515仍为agent2“打开boss”会话，先前入库26份保留。
+
+预检开始时Chrome未运行，既有工具于10:03:32启动并恢复既有登录页面，新Chrome PID10416、开始时间02:03:32.523627Z；boss_goto、boss_list_jobs和boss_filter_options均OK，确认PHP开发工程师（上海15–30K）及面板13行可读、探查后收起，无写筛选或新简历。网页自然语言把这一过程说成原窗口唤起，但进程证据说明这是本次新启动的Chrome；不能冒称与10-24是同一PID/HWND。受控超屏验收从这个稳定基线开始，之后原PID/HWND/widget/target保持一致。
+
+用户移出后的只读快照：HWND6492670，主widget135890、parent6492670，DPI96；DWM框[1381,22,2793,1376]，屏幕[0,0,2560,1440]，右侧真实超出233px。主窗未最小化、widget可见，不是隐藏或边框误判。正常外框包含不可见边框，前[1374,22,2800,1383]、后[1141,22,2567,1383]，截图覆盖结论按DWM框判断。
+
+### 25.2 只派发一次boss_filter的完整闭环
+
+10:06:48在原会话要求只调用一次boss_filter：experience=3-5年、educations=[本科]、salary=不限，其他不限，允许整体替换；不重新探查/导航/换职位/刷新，不读新简历、不招呼、不聊天；若失败立即保留现场，不允许智能体第二次派发。主任务日志窗口在下一轮前固定为120行，仅有一个外层boss_filter MCP终态。
+
+| 北京时间 | 现场证据 |
+|----------|----------|
+| 10:06:49.019 | 首次物理点击因cursor mismatch在输入前拒绝；UI_CHANGED/none，input/not_started，attempts_used=1，ordinary_retries_used=0 |
+| 10:06:49.206 | page采图；target=27E980BD3554DFF168FCF18AED78AC34、旧epoch为空；诊断absent/inconclusive |
+| 10:07:02.481 | 只读采样见唯一一次窗口平移，原HWND/widget及parent不变，尺寸未变 |
+| 10:07:03.3528966 | window重截图成功：repositioned=true，DWM框[1148,22,2560,1376]完整屏内；新epoch=f3ea1147-abc8-4ddb-85c6-2d5dc6564738；同一target，诊断仍absent/inconclusive |
+| 10:07:11.159 | window观察返回；同次repositions_before=0→after=1，capture_completed=true，无诊断/动作错误 |
+| 10:07:11.167→11.199 | 原continuation新session发送并ACK fresh DOMSnapshot，在归位截图之后重新读取；没有重用旧观察落点 |
+| 10:07:26.906 | 唯一外层boss_filter返回success=true、code=OK、effect=applied，38793ms；提交后实际条件/计数/面板后验satisfied |
+| 10:07:26.939 | ACK删除前只读提取outbox结果白名单，直接取得recovered、resumed=true、window_reposition_resume；未保存或输出claim/permit/device token |
+| 10:07:34 | 原会话最终回复确认两项实际选中、筛选·2、面板关闭，没有第二次派发 |
+
+原始CLI回执：visual_recovery.state=recovered、resumed=true、page_restored=true，steps仅window_reposition_resume(window/not_started)；original_execution.input_status=not_started，resume_execution为postcheck/attempted、attempts_used=2、ordinary_retries_used=0，verification=satisfied。**两次领域run是同一CLI里的原闭包接续，不是两次MCP工具派发，也没有额外普通重试。**Native日志为首次click拒绝1、续做click成功5，符合开面板→清除→经验→学历→确定；43次CDP请求全部ACK，无Page.navigate/Page.reload。
+
+11851次只读采样最大间隔17ms，仅两个位置状态（初始＋一次平移）。前/后HWND6492670、widget135890、父链及可见性不变，DWM大小1412×1354，归位后右界恰为2560。此次提前监听新visual record，原page/window PNG均在生命周期清理前复制到本机忽略目录，window PNG摘要与原metadata.sha256相同；公开证据只保存元数据/摘要，不提交候选像素。网页摘要把成功code说成null，而采到的原始CLI结果为OK，本验收以原始结果为准；不据这条摘要差异改协议。
+
+对比§22/23：两次诊断仍是absent/inconclusive，视觉没有改成假成功；现在可通过已归位＋有效观察＋认证零输入的窄条件接回领域执行并完成后验。故本次缺口确为CLI接续门槛未消费恢复事实，修复已由安装版真机闭环验证；不能把这一结论推广到历史持续隐藏或CDP超时的所有事故。
+
+### 25.3 恢复后的下一轮续读
+
+10:09:25在原会话继续要求保持刚才PHP职位及3–5年＋本科，不重设筛选、不刷新、不回顶，只读并入库1份，排除先前26份。仅一个boss_resume_next，10:10:07.180返回OK/none、42017ms；日志实际成功读取1份，其姓名SHA256前12位325b1a49c43c，与已入库26个指纹无交集。网页10:10:33确认新增1份成功入库、累计27份；不把本地读取回执代替网页入库确认，未直接查询DB。下一轮没有额外boss_filter/导航/刷新，没有招呼或聊天工具调用。
+
+完整脱敏证据：[live-single-cli-recovery-20261026.json](../incidents/evidence/boss-cross-call-20261023/live-single-cli-recovery-20261026.json)。原始采样、白名单原始结果、两张原采图及网页回执留在本机`.tmp/boss-cli-live-20261026/`，采样/取证进程均已正常停止。单调用验收和随后跨轮续读已通过；同预算再次超屏拒绝、混合DPI/多屏、持续隐藏1.2秒耗尽等分支仍未实机覆盖，先前全量测试失败/中断不因此转为通过。整体Phase 5/6剩余项不冒称完成。本轮仅同步验收文档，无生产修改、Git提交、打包或部署。

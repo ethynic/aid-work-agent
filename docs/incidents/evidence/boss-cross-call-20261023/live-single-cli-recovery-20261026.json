@@ -1,0 +1,322 @@
+{
+  "date": "2026-10-26",
+  "timezone": "Asia/Shanghai",
+  "status": "single_cli_filter_recovery_and_next_turn_read_passed",
+  "versions": {
+    "runtime_ui": "0.0.29",
+    "host": "0.2.23",
+    "boss": "0.3.27"
+  },
+  "plugin": {
+    "version": "0.3.27",
+    "release_id": "dev-boss-0.3.27-5e9bf5e54ecf7f9c",
+    "enabled": true
+  },
+  "installed_modules": [
+    {
+      "module": "dist/src/main/boss/localOperationRecovery.js",
+      "sha256": "b7c77f83906d7e18c63d98d567259e951c7554c3c6ce96835feb58830146849a",
+      "matches_release": true
+    },
+    {
+      "module": "dist/src/main/boss/FilterSetter.js",
+      "sha256": "589e85904e9ab73debe2552cd17fa1a0c0c52a903b195ac1b1c00cc8761e0f42",
+      "matches_release": true
+    },
+    {
+      "module": "dist/src/main/boss/visualRecovery.js",
+      "sha256": "288392f78a36320f17926b237cfa018b7c4efe35030050e4b7f5e7f4d5940ff7",
+      "matches_release": true
+    },
+    {
+      "module": "dist/src/main/input/windowExperiment.js",
+      "sha256": "6b62ad69c2266a5d8c96ca79415d388d2f4df1ba7c98254f76bebac066a1c846",
+      "matches_release": true
+    }
+  ],
+  "same_agent2_conversation": true,
+  "preflight": {
+    "initial_chrome_running": false,
+    "existing_launcher_recovered_browser": true,
+    "tools": [
+      "boss_goto",
+      "boss_list_jobs",
+      "boss_filter_options"
+    ],
+    "php_job_confirmed": true,
+    "new_resumes": 0,
+    "note": "New Chrome process was launched before the controlled test; do not call it the 10-24 HWND. Same current PID/HWND/target retained throughout this controlled test."
+  },
+  "window": {
+    "pid": 10416,
+    "process_started_at": "2026-10-26T02:03:32.5236270+00:00",
+    "hwnd": "6492670",
+    "widget_hwnd": "135890",
+    "dpi": 96,
+    "screen": [
+      0,
+      0,
+      2560,
+      1440
+    ],
+    "work": [
+      0,
+      0,
+      2560,
+      1392
+    ],
+    "before_dwm": [
+      1381,
+      22,
+      2793,
+      1376
+    ],
+    "after_dwm": [
+      1148,
+      22,
+      2560,
+      1376
+    ],
+    "outside_right_pixels": 233,
+    "same_window_and_widget": true,
+    "position_states": [
+      {
+        "at": "2026-10-26T02:05:24.221Z",
+        "rect": {
+          "left": 1374,
+          "top": 22,
+          "right": 2800,
+          "bottom": 1383
+        }
+      },
+      {
+        "at": "2026-10-26T02:07:02.481Z",
+        "rect": {
+          "left": 1141,
+          "top": 22,
+          "right": 2567,
+          "bottom": 1383
+        }
+      }
+    ],
+    "position_changes": 1,
+    "sample_count": 11851,
+    "max_sample_gap_ms": 17,
+    "sampler_input_activation_reposition_sent": 0
+  },
+  "outer_tools": [
+    {
+      "at": "2026-10-26T02:07:26.906Z",
+      "tool": "boss_filter",
+      "success": "true",
+      "code": "OK",
+      "effect": "applied",
+      "elapsed_ms": "38793"
+    }
+  ],
+  "cli_result": {
+    "observed_at": "2026-10-26T02:07:26.939Z",
+    "success": true,
+    "code": "OK",
+    "effect": "applied",
+    "retryable": false,
+    "operation_recovery": {
+      "schema_version": 2,
+      "owner": "cli",
+      "operation_class": "page_state",
+      "operation": {
+        "name": "boss_filter",
+        "goal": "设置候选人筛选条件：{\"experience\":\"3-5年\",\"educations\":[\"本科\"],\"salary\":\"不限\"}",
+        "expected": "筛选面板已关闭；实际筛选按钮数字等于已应用条件数，选中条件与请求匹配",
+        "result_kind": "page_state"
+      },
+      "execution": {
+        "stage": "postcheck",
+        "input_status": "attempted",
+        "attempts_used": 2,
+        "ordinary_retries_used": 0
+      },
+      "verification": {
+        "status": "satisfied",
+        "evidence": [
+          "executor已核验实际按钮计数、选项与面板关闭；不可应用条件保留skipped结果"
+        ]
+      }
+    },
+    "visual_recovery": {
+      "state": "recovered",
+      "owner": "cli",
+      "policy": "page_state",
+      "resumed": true,
+      "page_restored": true,
+      "original_code": "UI_CHANGED",
+      "original_effect": "none",
+      "original_execution": {
+        "stage": "input",
+        "input_status": "not_started",
+        "attempts_used": 1,
+        "ordinary_retries_used": 0
+      },
+      "resume_execution": {
+        "stage": "postcheck",
+        "input_status": "attempted",
+        "attempts_used": 2,
+        "ordinary_retries_used": 0
+      },
+      "steps": [
+        {
+          "branch": "window_reposition_resume",
+          "mode": "window",
+          "input_status": "not_started"
+        }
+      ],
+      "observations": [
+        {
+          "branch": "step0.diagnose",
+          "mode": "page",
+          "request_id": "edf18bdb-1762-440f-bbc3-4ac173496ee6",
+          "http_status": 200,
+          "state": "completed",
+          "operation_code": "OK",
+          "diagnosis_error": null,
+          "action_error": null,
+          "diagnosis": {
+            "obstruction": "absent",
+            "goal_state": "inconclusive"
+          }
+        },
+        {
+          "branch": "step0.diagnose.window",
+          "mode": "window",
+          "request_id": "03444700-1299-46ff-acf3-379b3a2483d0",
+          "http_status": 200,
+          "state": "completed",
+          "operation_code": "OK",
+          "repositions_before": 0,
+          "repositions_after": 1,
+          "capture_completed": true,
+          "diagnosis_error": null,
+          "action_error": null,
+          "diagnosis": {
+            "obstruction": "absent",
+            "goal_state": "inconclusive"
+          }
+        }
+      ]
+    }
+  },
+  "visual_observations": [
+    {
+      "request_id": "edf18bdb-1762-440f-bbc3-4ac173496ee6",
+      "mode": "page",
+      "target_id": "27E980BD3554DFF168FCF18AED78AC34",
+      "captured_at": "2026-10-26T02:06:49.206Z",
+      "geometry_epoch": "",
+      "image": {
+        "width": 1410,
+        "height": 1266,
+        "sha256": "159093b10de49887d26c6778174b1ca85beeced98df6a0ffec0bc0f682a3e69d",
+        "original_pixels_preserved_locally": true
+      },
+      "repositioned": false,
+      "window": null,
+      "diagnosis": {
+        "obstruction": "absent",
+        "goal_state": "inconclusive"
+      }
+    },
+    {
+      "request_id": "03444700-1299-46ff-acf3-379b3a2483d0",
+      "mode": "window",
+      "target_id": "27E980BD3554DFF168FCF18AED78AC34",
+      "captured_at": "2026-10-26T02:07:03.3528966+00:00",
+      "geometry_epoch": "f3ea1147-abc8-4ddb-85c6-2d5dc6564738",
+      "image": {
+        "width": 1412,
+        "height": 1354,
+        "sha256": "928521db03dcfb9e94cb73771c29ff0f1ffc3280c04a720103985f5f39c3bdb6",
+        "original_pixels_preserved_locally": true
+      },
+      "repositioned": true,
+      "window": {
+        "top": 22,
+        "left": 1148,
+        "width": 1412,
+        "pid": 10416,
+        "process_started_at": "2026-10-26T02:03:32.5236270+00:00",
+        "height": 1354,
+        "hwnd": "6492670"
+      },
+      "diagnosis": {
+        "obstruction": "absent",
+        "goal_state": "inconclusive"
+      }
+    }
+  ],
+  "native_counts": {
+    "click_0": 1,
+    "click_1": 5
+  },
+  "cdp": {
+    "sent": 43,
+    "acked": 43,
+    "navigate_or_reload": 0,
+    "first_fresh_snapshot_send": "2026-10-26T02:07:11.167Z",
+    "first_fresh_snapshot_ack": "2026-10-26T02:07:11.199Z"
+  },
+  "original_receipt_capture": {
+    "captured_from_outbox_before_ack_deletion": true,
+    "persisted_only_whitelisted_business_result_fields": true,
+    "claim_permit_device_tokens_persisted_or_printed": false
+  },
+  "web_receipt": {
+    "completed_local": "10:07:34",
+    "reported_one_call": true,
+    "reported_code": null,
+    "authoritative_cli_code": "OK",
+    "note": "Web wording says code=null; use actual captured CLI result OK for acceptance, not the generated summary."
+  },
+  "followup": {
+    "requested_new_resumes": 1,
+    "exclude_previously_saved": 26,
+    "status": "passed",
+    "outer_tools": [
+      {
+        "at": "2026-10-26T02:10:07.180Z",
+        "tool": "boss_resume_next",
+        "success": "true",
+        "code": "OK",
+        "effect": "none",
+        "elapsed_ms": "42017"
+      }
+    ],
+    "actual_reads": [
+      {
+        "at": "2026-10-26T02:10:06.550Z",
+        "fingerprint": "325b1a49c43c"
+      }
+    ],
+    "overlap_with_previous_26": 0,
+    "web_confirmed_saved": 1,
+    "web_confirmed_total_saved": 27,
+    "web_completed_local": "10:10:33",
+    "filter_reapplied": false,
+    "navigate_or_reload": 0,
+    "no_greeting_or_chat_tools": true
+  },
+  "limitations": [
+    "Does not cover same-budget second-offscreen rejection, mixed-DPI/multi-monitor or after-activation persistent hidden branches.",
+    "Does not convert all earlier full-suite failures into passes."
+  ],
+  "production_code_changed": false,
+  "committed": false,
+  "packaged": false,
+  "deployed": false,
+  "local_evidence": {
+    "directory": ".tmp/boss-cli-live-20261026",
+    "raw_native_png_preserved": true,
+    "raw_pixel_data_committed": false,
+    "main_chat_screenshot": "onecall-chat-receipt.png",
+    "followup_chat_screenshot": "followup-chat-receipt.png"
+  }
+}
