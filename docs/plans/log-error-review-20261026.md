@@ -50,9 +50,10 @@ src.services.recap.runner:_run_tasks:463
 - **根因已定位（2026-10-26，254 ERP 端 error/access 日志实证）**：`order` 参数元素格式错误 → 服务端裸取 `v['type']` 抛 KeyError。ERP 接口文档只写「order: 排序规则」未给元素结构，sales-assistant 的 LLM 猜成 `{"attr":"id","value":"desc"}` / `{"attr":"id","sort":"desc"}`（均无 `type` 键）；`core/application/module.py:446` `if v['type'] == 'asc'` 直接 KeyError，全局异常处理器只回类名，故我方仅见「Unexpected Error: KeyError」。不带 order 的同款请求全部 200。
 - **修复（qbweb3.1 本地已改，待部署 254 c_qba）**：module.py 两处（446 列表 / 874 导出）order 解析容错（attr 兼容 field/column、方向兼容 value/sort、缺省 desc）；app.py 全局 500 报错带异常详情与业务帧位置（`Unexpected Error: KeyError: 'type' @module.py:446`）；接口文档补 order 元素结构表。事故入参隔离验证通过。
 - **处理**：
-  - [ ] 同步修复代码到 254 `/var/www/qbapi` 并重启 c_qba 容器（重启即生效，代码目录挂载）
-  - [ ] 在 254 c_qba 容器内跑 `test_key_apis` 回归（需容器内可连被测服务）
-  - [ ] 修复部署后观察 production 日志确认 module_listing_view 500 不再复现、推送恢复
+  - [x] 同步修复代码到 254 `/var/www/qbapi` 并重启 c_qba 容器（2026-10-26 用户已同步，代码在位：module.py:448/879、app.py:287）
+  - [x] 在 254 c_qba 容器内跑 `test_key_apis` 回归（2026-10-26：9 passed / 2 skipped 数据条件跳过；apifox_smoke 11 passed）
+  - [x] 事故入参回归（2026-10-26，c_qba 容器内实测）：`{"attr":"id","value":"desc"}`、`{"attr":"id","sort":"desc"}` 两种原 500 入参均 200；缺省方向/大写 DESC/field 别名容错均 PASS；desc/asc 方向实测生效（造数验证后已清理）
+  - [ ] 修复部署后观察 production 日志确认 module_listing_view 500 不再复现、推送恢复（下轮巡检核对）
 
 ### P1-2 tenant_api_doc 租户环境变量 APP_ID 未配置（57 WARNING，10-19~10-23）
 
@@ -73,9 +74,24 @@ src.services.recap.runner:_run_tasks:463
 （计数含 render_doc_placeholders + load_sso_config 两条日志）
 
 - 上期 P1-3 的延续且租户范围扩大（2→6）。涉及 SSO 入口与 external_push，未配置时入口按未配置处理、推送放弃。
+- **逐租户核对结论（2026-10-26，生产库 subagent_env_vars / tenant_agent_instances / channel_sessions / chat_sessions + 日志时间线实证）**：
+
+| 租户 | APP_ID 配置 | 实际在用 | 结论 |
+|------|------------|---------|------|
+| tenant_29304e2196e8 | ✅ 10-21 已配（sales-assistant） | sales-assistant 在用（渠道 79 会话，最后 10-25） | 已闭环：10-22 起告警消失 |
+| tenant_c148f4efb4dc | ✅ 10-21 已配（sales-assistant） | sales-assistant 在用（渠道 109 + web 34 会话，最后 10-26） | 已闭环：10-22 起告警消失 |
+| tenant_48434f6195ed | ❌ 未配 | sales-assistant 在用（渠道 3 会话，最后 10-26，当天持续告警） | **在用，需前台补配 APP_ID** |
+| tenant_d9527ad8bc7e | ❌ 未配 | sales-assistant 低频（渠道 9 会话，最后 10-23） | 待确认是否继续使用：在用则补配，弃用则关 external_push |
+| tenant_af2eefa4594d | ❌ 未配（仅 AGENT_TOKEN，10-10 配） | sales-assistant 用过（渠道 22 会话，最后 10-21 后无活动） | 待确认是否停用：停用则关 external_push |
+| tenant_ea24cd1a1097 | ❌ 无相关配置 | 仅 travel-consultant（渠道 28 + web 32 会话），不用 sales-assistant/pre-sales/auto-form-filler | 无需配置，告警为枚举噪音（见下） |
+
+- **补充发现**：
+  - 告警量与在用无关：`load_sso_configs` 经 `list_sso_candidate_subagent_names` 枚举**全部**内置/自定义子智能体名（`src/services/tenant_api_doc.py:239`），凡技能白名单命中 pre-sales-api / form-filling-api 模板者都会渲染 `${APP_ID}` 并在未配置时告警，即使租户从未使用该智能体。ea24cd1a1097 的告警全部属此类。
+  - `${APP_ID}` 引用点仅两个兜底模板：`configs/api_doc_templates/pre-sales-api.md`（sales-assistant 技能白名单含 pre-sales-api，故其同样告警）与 `configs/api_doc_templates/form-filling-api.md`（auto-form-filler）；6 租户均无租户上传文档（`storage/tenants/{tid}/templates/` 不存在）。
+  - sales-assistant 基础定义 external_push=every_round enabled，未配置租户每轮 recap 都告警并放弃推送。
 - **处理**：
-  - [ ] 逐租户确认是否在用：在用则在前台补配租户环境变量 `APP_ID`；不在用则关闭对应子智能体的 external_push recap 任务
-  - [ ] 评估告警收敛：同一（租户, 子智能体）组合的未配置告警去重/降频，避免刷屏
+  - [x] 逐租户确认是否在用（2026-10-26 核对完成，见上表；48434f6195ed 待补配，d9527ad8bc7e / af2eefa4594d 待业务确认后补配或关任务）
+  - [ ] 评估告警收敛：同一（租户, 子智能体）组合的未配置告警去重/降频，避免刷屏；可考虑候选枚举先按租户实际启用的智能体过滤（消除 ea24cd1a1097 类噪音）
 
 ### P1-3 计费 model 为空（42 WARNING，10-19~10-25 持续）
 
@@ -85,9 +101,15 @@ src.services.billing:calculate_llm_credit_cost_with_breakdown:337 / :382
 ```
 
 - 上期 P2（19 条）升级：本期生产 42 条、credit_cost 恒为 0，说明有调用点不回传 model 字段导致漏计费，且持续发生（最近 10-25 17:22）。
+- **排查结论（2026-10-26，生产库 chat_records + 生产日志实证）**：**误报，无实际漏计费，无需回填**。
+  - 生产库 10-19 起 model 为空共 52 条：`wecom_kf` 46 条 + `hongtao_shop_embedding` 5 条 + `wechat_mp_embedding` 1 条。
+  - wecom_kf 46 条全部为**语音消息 ASR 计费记录**（0 LLM token、usage_breakdown 仅 asr、credit_cost=1.00 纯 ASR）：`channel_routes.py` wecom_kf 路径 `skip_save = not asr_success`，语音识别成功时保存只含 ASR 用量的 record，该 record 从未 `set_model`（LLM 费用由 Runner 结算，落同会话另一条 `model=deepseek-flash` 记录，抽样核对计费完整）。告警链路：`save()` -> `calculate_llm_credit_cost_with_breakdown`（生产日志当前全部 `billing.py:382`，文档头部 :337 为上期旧版本行号）。
+  - 根因是 `billing.py` 中 `calculate_llm_credit_cost_with_breakdown` **先判 model 再判 usage_calls**，无 LLM 用量的纯 ASR 记录也触发告警；告警频率 = 微信客服语音消息量，故持续出现。embedding 6 条为离线向量化记录（`knowledge/service.py` 链路），纯 embedding 无 chat model 属设计使然，且该路径不触发 382 告警。
+  - 排除「测试代码漏传 model」假设：全部记录来自生产渠道语音/离线向量化，非测试路径。
 - **处理**：
-  - [ ] 定位未回传 model 的调用点（337 与 382 两个函数分别对应哪类计费路径），按 [billing_audit.md](../../.claude/rules/billing_audit.md) §3 checklist 排查
-  - [ ] 修复后回填漏计的 chat_records（如可定位）
+  - [x] 定位未回传 model 的调用点（2026-10-26：非调用点缺 model，是纯 ASR/embedding 记录的误报，见上）
+  - [x] 修复告警误报（2026-10-26：`billing.py` `calculate_llm_credit_cost_with_breakdown` 将 `if not usage_calls` 空用量静默返回提前到 model 检查之前；真实 LLM 用量缺 model 仍告警）——待部署
+  - [x] 回填核对（2026-10-26：无需回填，wecom_kf 的 LLM 费用在同会话其他记录正常落账、ASR 1 积分正常；embedding 积分正常）
 
 ### P2-4 10-21 全栈重启事件（一次性，已恢复）
 
@@ -173,7 +195,22 @@ Run time of job "王晓产品演示提醒" (trigger: date[2026-10-20 14:30:00 CS
 
 ### P2-6 tenant_api_doc APP_ID 未配置（25 WARNING，10-20~10-21）
 
-同生产 P1-2，租户为测试租户（pre-sales / auto-form-filler / aidefine-sales-assistant / auto-form-filler-v2）。随生产侧一并处理口径。
+同生产 P1-2。25 条告警实际全部来自单一测试租户 `tenant_e9b2fab93a2f`（原登记的 pre-sales / auto-form-filler / aidefine-sales-assistant / auto-form-filler-v2 是子智能体名，非租户）。
+
+- **逐租户核对结论（2026-10-26，测试库 subagent_env_vars / channel_sessions / chat_sessions + 测试日志实证）**：
+
+| 租户 | APP_ID 配置 | 实际在用 | 结论 |
+|------|------------|---------|------|
+| tenant_e9b2fab93a2f | ✅ 10-21 16:50（sales-assistant） | sales-assistant（渠道 8 + web 33 会话，止 10-23） | 已闭环：10-22 起告警消失；10-20/21 对其他 3 个子智能体名的告警均为枚举噪音（该租户从未使用） |
+| tenant_9b9fb62aff5e | ✅ pre-sales 10-19（租户级兜底覆盖全租户） | pre-sales（止 10-19）、aidefine-sales-assistant（10-22 仍活动，external_push 启用 + pre-sales-api 技能）、auto-form-filler（止 10-20） | 功能已覆盖；aidefine-sales-assistant 名下无精确配置，建议补配使语义清晰 |
+| tenant_1dc997a1806b | ✅ auto-form-filler 10-19（兜底覆盖） | auto-form-filler（web 6 会话，止 10-20）、pre-sales（止 08-25） | 功能已覆盖；pre-sales 精确项未配但基本停用 |
+| tenant_811ba3ad3ac8 | ✅ auto-form-filler / auto-form-filler-v2 10-20 | auto-form-filler（止 10-20） | 已闭环（auto-form-filler-v2 定义无 external_push，配置属预留） |
+| tenant_53cfbdef870c | ❌ 无任何配置 | sales-assistant（web 2 会话，止 10-21） | 潜在缺口：日志窗口内未触发 recap/文档加载暂无告警；若启用渠道推送将告警并放弃推送 |
+| tenant_d18c257ff434 | ❌ 无任何配置 | sales-assistant（web 4 会话，止 10-21） | 同上 |
+| tenant_49a0f3d1706a / tenant_b6459319f621 | 仅 AGENT_TOKEN（7~9 月旧配置） | 无近期活动 | 历史遗留，无影响 |
+
+- **机制说明**：`load_tenant_env_vars` / `load_tenant_env_vars_map` 的租户级兜底——租户内任一智能体配置的变量对全部智能体生效（精确项优先），故上述「兜底覆盖」租户功能上不受影响。
+- 测试环境 10-22 起零告警，无生产 P1-2 那类持续噪音；遗留动作仅 53cfbdef870c / d18c257ff434 两个租户待业务确认后再补配。
 
 ## 5. 处理顺序建议
 

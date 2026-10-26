@@ -378,10 +378,12 @@ def calculate_llm_credit_cost_with_breakdown(
         (credit_cost, breakdown)。非 tiered 模型回退原逻辑（按累计 token 统一算）；
         model 缺失或 tcp 无单价返回 (0.0, {})。
     """
+    # 无 LLM 用量的记录（纯 ASR/embedding 等）直接静默返回，先于 model 检查：
+    # 此类记录从未 set_model（如 wecom_kf 语音消息只含 ASR 用量），不应触发误报
+    if not usage_calls:
+        return 0.0, {}
     if not model:
         logger.warning("计费：model 为空，credit_cost=0")
-        return 0.0, {}
-    if not usage_calls:
         return 0.0, {}
 
     tcp = price_snapshot if price_snapshot is not None else TokenCostPriceDB.get_by_model_name(model)

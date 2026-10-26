@@ -1020,6 +1020,21 @@ class TestTieredMergedCall:
                 usage_factor_override=usage_factor_override,
             )
 
+    def test_empty_usage_calls_no_model_warning(self):
+        """无 LLM 用量的记录（纯 ASR/embedding 等）静默返回 0，不触发 model 为空告警
+
+        场景：wecom_kf 语音消息只含 ASR 用量、从未 set_model，save() 仍会以
+        model=None 调用本函数；空用量先于 model 检查，避免误报刷屏（P1-3）。
+        """
+        from src.services.billing import calculate_llm_credit_cost_with_breakdown
+        with patch("src.services.billing.logger") as mock_logger:
+            credit_cost, breakdown = calculate_llm_credit_cost_with_breakdown(
+                usage_calls=[], model=None,
+            )
+        assert credit_cost == 0.0
+        assert breakdown == {}
+        mock_logger.warning.assert_not_called()
+
     def test_two_calls_merged(self):
         """两轮 [10K(档1), 40K(档2)] 各自取档，反向单价 = 加权平均，总成本对账自洽"""
         credit_cost, breakdown = self._call([
