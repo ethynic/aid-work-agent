@@ -1,5 +1,7 @@
 # Runtime 执行环境、插件宿主与可视化客户端开发计划
 
+2026-10-26 wecom对账检查点：按[共同契约2.9 §5.7](../system/runner-desktop-runtime-integration-contract.md#57-wecom发送对账接线2026-10-26)追加业务工具wecom_send_status schema v1，沿原只读operation与固定原发送/设备scope；MCP/core主控、local_tools后端角色各自限域写入，实际范围/结果唯一登记在[wecom计划](plan-wecom-cli-group-chat-experiment.md#2026-10-26-mcp与runtime发送对账接线)。Device/Host/H3/Runner公开wire、原unknown/hold及outbox不变，不自动解除verification等待；旧CLI明确拒绝新能力并保留旧六工具。本地接线及独立TEST/CR已完成（PG63、TS32、单测173通过另2旧BOSS基线失败）；无提交/部署，真实群聊、长期运行及新Desktop UI未验收。
+
 2026-10-22休眠检查点：按[共同契约2.8 §5.6](../system/runner-desktop-runtime-integration-contract.md#56-通用持久化休眠增量2026-10-22)由Runner工作流实现云端持久化timer/continuous，唯一进度见[休眠计划](plan-agent-runner-durable-sleep.md#13-本轮实施基线与共同检查点)。Runtime/Device/Host/Provider无新sleep wire或本地loop；已有invocation队列/桌面锁和固定release规则保持，真实多任务接线验收单独记录，不能由云端单测代替。
 
 2026-10-22复审修复兼容检查点：Runner私有工具代次/累计BIGINT及历史产物退休由同一修复角色负责；snapshot可选history_revision仅为历史更新水位，Web拉取既有历史，旧消费者可忽略，Device/Host不变。实现与独测/CR结论统一见[休眠计划第17节](plan-agent-runner-durable-sleep.md#17-复审修复与验证2026-10-22)，本地Runner/Web独测及CR已通过，未部署；本条不宣称Desktop或真机Runtime已验收。

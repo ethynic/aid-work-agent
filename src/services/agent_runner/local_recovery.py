@@ -152,6 +152,21 @@ class LocalRecoveryProof:
                     current_invocation_id=ref.get('invocation_id'))
             except CheckpointFailure as error:
                 raise RunnerError('LOCAL_RESUME_CONTINUATION_PROOF_INVALID',409) from error
+        from src.local_tools.proxy_tool import WecomSendStatusTool
+        if cls is WecomSendStatusTool:
+            from src.local_tools.wecom_send_status import original_scope, SendStatusScopeError, rejected_before_dispatch
+            try:
+                request = ref.get('request') or {}
+                failed = repository.get_invocation(ref['invocation_id'], row['tenant_id'])
+                if rejected_before_dispatch(failed, arguments, request):
+                    arguments = request['arguments']
+                else:
+                    with self.connection_factory() as connection:
+                        scope = original_scope(connection.cursor(), row['tenant_id'], row['user_id'],
+                            row['session_id'], arguments['send_invocation_id'], device_id=request.get('device_id'))
+                    arguments = {'receipt_id': scope['receipt_id']}
+            except SendStatusScopeError as error:
+                raise RunnerError('LOCAL_PHASE_INTENT_CHANGED', 409) from error
         if (ref.get('request') or {}).get('arguments')!=arguments:
             raise RunnerError('LOCAL_PHASE_INTENT_CHANGED',409)
         original_device = ref['request']['device_id']

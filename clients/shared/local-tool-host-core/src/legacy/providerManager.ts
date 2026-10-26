@@ -9,6 +9,7 @@
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { randomUUID } from 'node:crypto'
 import { logError, logInfo, logProviderChunk } from './log.js'
 import { decodeProviderResult } from './providerResult.js'
 
@@ -84,6 +85,7 @@ export class ProviderManager {
   private busy = false
   private shuttingDown = false
   private resumeNextSupported: boolean | undefined
+  private sendStatusSupported: boolean | undefined
   private readonly providerEnv: Record<string, string>
   private readonly nodeExecutable: string
   private readonly baseEnv: Record<string, string>
@@ -197,6 +199,23 @@ export class ProviderManager {
     try {
       await this.ensureStarted()
       const client = this.client!
+      // A trusted Runtime may be newer than its installed WeCom CLI. Only this new read
+      // capability needs a preflight; legacy tools retain their existing lazy call path.
+      if (name === 'wecom_send_status') {
+        if (this.sendStatusSupported === undefined) {
+          const listed = await client.listTools({}, { signal: opts.signal, timeout: opts.timeoutMs ?? 30_000 })
+          const tool = listed.tools.find(item => item.name === name)
+          const schema = tool?.inputSchema
+          const properties = schema?.properties as Record<string, { type?: string }> | undefined
+          this.sendStatusSupported = schema?.required?.length === 1 && schema.required[0] === 'receipt_id'
+            && properties?.['receipt_id']?.type === 'string' && tool?.annotations?.readOnlyHint === true
+        }
+        if (!this.sendStatusSupported) return {
+          success: false, code: 'TOOL_NOT_ALLOWED', effect: 'none', retryable: false,
+          run_id: randomUUID(), data: { send_status: 'unknown' },
+          message: '当前企业微信插件不支持只读发送对账，请升级插件；未发送或重发消息，原发送结果仍未知',
+        }
+      }
       // A new Runtime may still have an older BOSS CLI installed. Reject before
       // callTool rather than turning an unknown-tool error into unknown effect.
       if (name === 'boss_resume_next') {
@@ -239,6 +258,7 @@ export class ProviderManager {
 
   private async disposeDead(): Promise<void> {
     this.resumeNextSupported = undefined
+    this.sendStatusSupported = undefined
     if (!this.client && !this.transport) return
     const pid = this.transport?.pid ?? null
     try {

@@ -24,7 +24,11 @@ import { redactSensitive } from '../security/redaction.js'
  * server instructions（前 512 字符内含关键前提、副作用和写动作上限）
  */
 const INSTRUCTIONS =
-  '企业微信操作 Provider。工具：wecom_probe（只读环境/登录态探测）、' +
+  '企业微信操作 Provider，仅 Windows。UI操作需企业微信已登录、交互桌面已解锁；本地库按自身条件检查。' +
+  '写动作每次单目标，effect=unknown禁止重发。发送对账只读，查询成功不等于发送confirmed，不自动继续原任务。' +
+  '发送会真实触达；多行文本、图片和文件发送会覆盖剪贴板且不恢复。' +
+  '工具：wecom_probe（只读环境/登录态探测）、' +
+  'wecom_send_status（只读：用原发送receipt_id对账；查询成功不等于发送confirmed，unknown禁止重发）、' +
   'wecom_group_list（本地库群关键词搜索/列群，limit控制数量）、' +
   'wecom_group_read（本地库读群消息，支持时间范围，最近N条按时间升序；两工具不切会话、不清未读）、' +
   'wecom_chat_search（只读搜索联系人/群聊，返回带 target_ref 的候选）、' +

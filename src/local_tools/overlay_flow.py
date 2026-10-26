@@ -25,7 +25,16 @@ async def poll_operation(proxy, operation, arguments, *, tenant_id, user_id, ses
     original = await operation.owner.saved_phase(branch=operation.branch,ordinal=operation.ordinal)
     if original is not None:
         request, invocation = original['request'],original['invocation']
-        if (request['arguments']!=arguments or request['tool_name']!=proxy.name
+        compared_arguments = arguments
+        from .proxy_tool import WecomSendStatusTool
+        if type(proxy) is WecomSendStatusTool:
+            from .wecom_send_status import SendStatusScopeError, rejected_before_dispatch
+            try:
+                compared_arguments = request['arguments'] if rejected_before_dispatch(invocation, arguments, request) else (
+                    await proxy.native_arguments(tenant_id, user_id, session_id, arguments, request['device_id']))
+            except SendStatusScopeError as error:
+                raise LocalContinuationRequired('LOCAL_PHASE_INTENT_CHANGED', str(invocation['id'])) from error
+        if (request['arguments']!=compared_arguments or request['tool_name']!=proxy.name
                 or expected_device_id is not None and request['device_id']!=expected_device_id):
             raise LocalContinuationRequired('LOCAL_PHASE_INTENT_CHANGED',str(invocation['id']))
         proxy._push_progress(progress_queue,{'type':'started','invocation_id':str(invocation['id']),

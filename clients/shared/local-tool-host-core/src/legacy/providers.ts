@@ -93,13 +93,14 @@ const WEIXIN_V2_TOOLS = [...WEIXIN_TOOLS, 'weixin_session_observe', 'weixin_mess
 const WEIXIN_V2_WRITE_TOOLS: ReadonlySet<string> = new Set(['weixin_message_send', 'weixin_message_send_v2'])
 
 // 与 wecom CLI 的 TOOL_DEFS（src/mcp/toolDefs.ts，M11b 起 read_session 进 MCP）保持同步
-// ——接入 6 工具：search/select 不单独接入（send 类内部已含 search 定位链）；
+// ——接入 7 工具：增加只读send_status；search/select 不单独接入（send 类内部已含 search 定位链）；
 // watch_poll/add_customer 不接入（轮询与获客动作不进 runtime 受信面）。
 // 写集合按现 CLI OPERATIONS 的 cli.write：仅三个发送工具为写；probe/unread/
 // read_session 只读（read_session 进会话清角标归 CLI 只读语义，锁屏前置不拦）
 const WECOM_TOOLS = [
   'wecom_probe',
   'wecom_message_send',
+  'wecom_send_status',
   'wecom_send_image',
   'wecom_send_file',
   'wecom_read_session',

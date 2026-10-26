@@ -10,8 +10,52 @@
 | 实验 | 持续轮询、@本人必回、其他消息择机回复 | ✅ 完成（2026-10-23） | 用户要求暂停后发送结束招呼并退出；累计590轮、8条确认发送，无pending |
 | 搜索收尾 | 完整搜索与剪贴板恢复（2026-10-26） | ✅ 完成（2026-10-26） | 最终当前源码双轮CLI搜索/全文复制/原文及个人状态/草稿/清理核对通过；未提交、部署或恢复监听 |
 | 发送对账 | W4严格核验与重启后只读恢复 | ✅ 完成（2026-10-26） | 独测TS49/恢复7/Python78通过，CR无遗留；仅CLI，无新真实发送验收 |
+| MCP/Runtime对账 | W4新增只读工具接线 | ✅ 完成（2026-10-26） | PG63/TS32通过，单测173通过另2旧BOSS失败；CR无遗留 |
+
+## 2026-10-26 MCP与Runtime发送对账接线
+
+基线`4c024796`，用户授权继续接入现有发送对账能力，独立测试与CR；不提交/推送、部署或恢复监听。按高风险流程，主控开发MCP/Runtime并自测，后端开发角色限域写Python代理/精确scope及其测试，源码冻结后两个独立角色分别TEST/CR。保留原package-lock生成改动，不操作真实群发送。设计沿[§4.3.2](../design/wecom/wecom-cli-localdb-design.md#432-对账能力mcpruntime接线2026-10-26)。
+
+实施共同检查点（唯一写入者）：主控拥有`clients/wecom-cli/src/mcp/{toolDefs,server}.ts`、共享core `legacy/{providers,providerManager}.ts`、相关TS/MJS测试及所有设计/计划/契约；后端角色拥有`src/local_tools/`必要注册/代理/repository/read-only scope与Python测试、`subagents/recruiting-operator/SUBAGENT.md`；另限域维护`src/services/agent_runner/local_recovery.py`在原严格参数比较前的status来源证明适配，并在overlay_flow.poll_operation同源适配Cloud ID与native receipt等价，原owner/phase严格比较及_known不变。不修改Device/Host/H3公共wire、其他Runner核心、outbox格式或全局package/lockfile。所有额外必要文件先明确责任，不让两个角色并行写同文件。
+
+成功标准：真实stdio MCP发现/校验/调用到原只读operation，Runtime只给wecom路由并保留readonly/effectnone；旧CLI缺新能力明确拒绝，旧6工具不受影响，缓存随子进程清除；原发送unknown的receipt可由可信普通/late结果提取，cloud模型只给send_invocation_id，跨主体/会话/设备和伪造scope零派发；detached hold只允许这次精确只读查询且原hold/unknown不改；查询unknown不等于发送confirmed，默认工具价非零也不误扣本地工具费；原发送绝不重放。原Runner verification等待不自动解除，不把它扩成新的恢复平台或持续任务验收。
+
+计划：登记新增schema v1与2.9共同边界 → MCP工具及Runtime受信/实际能力门禁 → 后端代理与来源scope/收费 → 匿名合成库或注入边界的生产消费集成测试 → 独立测试/CR并修复到通过 → 更新本节。真实群聊、真实配对/发行包安装和多天运行仍另验，不能用mock冒充；若真实数据只读核对确有必要，只读且不入项目日志。
+
+### MCP/Runtime接线验证过程记录
+
+主控已完成CLI、共享core/native和Runtime构建；依赖按原lockfile执行npm ci --ignore-scripts，未修改package/lockfile。初次core缺tsc/原生包声明由补齐依赖并先构建native解决；测试首次把ProviderSet.shutdownAll误写为shutdown，已修测试并只停止所属MCP测试子进程；旧manifest数组位置断言随新工具插入而失败，改按工具名取对应schema后11项通过。这些失败不计作产品通过证据。
+
+TS freeze2自测：新WeCom兼容/stdio4项+既有续筛/结果解析9项共13通过，Runtime wecom定向4通过，CLI manifest/progress11通过，无跳过。真实stdio验证缺失凭据读取从MCP经Runtime原outbox ACK完整保留unknown/effectnone，未读真实账号或发消息。独立CR在freeze1发现额外必填参数被误接受（P2），已修required恰好receipt_id、可选字段仍可兼容；freeze2子集CR通过，完整后端待最终独测/CR。
+
+后端新增权限触及入队/claim/started，使用本任务新建、loopback随机端口的PostgreSQL17.11 helper及随机aid_test_*库验证真实SQL，不连接.env或业务库。二进制来自[EDB官方下载](https://www.enterprisedb.com/download-postgresql-binaries)，ZIP SHA256为4b8db0930c38f6ef845db919551dedda3b6b845aeb0927b3d79a6e8e9e4537cf，仅开发测试依赖，无系统服务或业务部署；本地bin缓存保留。Windows pg_ctl stdout继承导致bootstrap未返回，但root依据自建data/postmaster.pid恢复所有权元数据并用psycopg2验证同helper，不接管旧helper。SQL验证及完整冻结结果待补。
+
+只读对账的工具费固定0；原Runner _known不放开，cloud send_invocation_id与native receipt_id在resume及poll两处以同一原发送证据等价验证，不能省略取消或重启归属证明。旧BOSS注册面已有两项基线差异（manifest/测试期望漏boss_lookup_candidates、boss_greet_selected），不借本任务恢复无关BOSS能力，独立阶段须保留失败事实。首轮测试临时目录清理曾被自动审批返回blocked by policy而拒绝，未说明更具体原因，保留该匿名目录，不影响源码和测试通过结论。
+
+后端全freeze1独测：147项通过、2项精确既有BOSS注册差异失败；初批相邻PG53项通过，另外4个旧BOSS真实worker用例在预检因当前dashscope SDK缺base_compatible_api_url而setup失败，teardown又遇Windows无os.killpg（1 error）；未将这些旧worker业务记为通过，独测仅按精确PID/父进程/命令清理其自有4个API子进程。原SQL测试随机库均DROP、helper保留给修后独测。此后仅重跑相关status/proof/admission存储范围，不为本任务修改全局SDK安全预检或通用worker夹具。
+
+完整CR发现排队失效P2：原测试仅断言不派发但保留queued，遗漏设备队头会持续重选。最小修复为来源scope失效只结束尚未started的status自身，原send/hold/_known与终态幂等不改；其他未决hold仍阻断。同步补崩溃后消费该server零派发失败的有限私有证明，不把source解析失败当一般恢复许可，不新建调用。额外必填schema兼容P2在TS freeze2已独测/CR闭环；后端随后fullfreeze2复验通过前两点，但独测实际混合end_wait又发现server拒绝status自身被错误当作未完成而phantom hold；fullfreeze3仅对严格服务端no-dispatch证明识别该status自身完成，补持久hold查询所需列，未加全局错误码/未动local_wait策略，最终均独立转绿。
+
+### MCP/Runtime最终结果（2026-10-26）
+
+完成MCP工具及说明、Runtime受信第7项/实际Provider能力门禁、云端原send ID适配与原设备scope。初次调用若当前显式受权设备B与原send设备A不同，拒绝并需选回原设备，不自动换机；已有durable phase按原保存device核对。独立对账不改变原发送unknown/hold或自动解除原Runner verification等待。只有status自身确证未派发的失败可恢复消费已有事实/确证物理完成，不能把它用于原send或新业务授权。
+
+- 构建：主控当前CLI、共享core/native、Runtime构建通过。最终metadata增量仅重跑CLI build及真实stdio断言；core逻辑/Runtime源码与已有构建证据一致，不机械重复全量。MCP初始化前512字符实际断言含Windows、UI登录解锁、单目标、未知不重发、只读查询成功不等于confirmed、真实触达和发送剪贴板覆盖不恢复。
+- 独立TS32通过、0失败/跳过：core13、Runtime wecom定向4、CLI manifest/progress11、另4个真实SDK stdio独立场景（原结果ACK丢失仅重投outbox，不重调用Provider；旧CLI/额外required零调用拒绝、可选字段/respawn兼容等）。其中Runtime4按同hash复用，其余28在最终源码重新执行。
+- 独立Python单测173通过、2失败、0跳过：`venv/Scripts/python.exe -m pytest tests/unit/local_tools/test_wecom_send_status.py tests/unit/local_tools/test_wecom_proxy_tool.py tests/unit/local_tools/test_proxy_tool.py tests/unit/local_tools/test_local_wait_recovery.py tests/unit/local_tools/test_write_result_billing.py tests/unit/local_tools/test_repository_state.py tests/unit/test_agent_local_tool_registration.py -p no:cacheprovider -q`。两失败精确为本节前述BOSS旧基线，HEAD AST差异与当前一致，未纳入修复；实际Wecom7项装配通过，不称全库全绿。
+- 独立真实PG63通过、0失败/错误/跳过：本轮22、相邻proof/admission/store31、独立7及取消/旧hold3。包括原/late来源、跨主体/会话/设备拒绝、三个准入点、只有精确原hold只读旁路、configured默认付费重复result零工具费、失效队头后合法调用推进、拒绝后重启只消费已有失败、借用/客户端marker/坏版本/缺字段拒绝、mixed end_wait与历史held投影。只读查询confirmed/unknown都不改原发送审计/hold。
+- PG使用本任务专有helper与原isolated入口随机aid_test库，Temp wrapper只精确省略vector extension/chunks_vec/hnsw3条无关DDL，各断言1，其余原init及业务SQL不变；pgvector未验。原4个BOSS Worker在SDK预检setup失败、Windows teardown错误已单列，不纳入最终63；独测按精确归属PID清其4个API进程。最终随机测试库及连接均0，root已核任务数据目录/PID后停止helper，原bootstrap捕获管道随之以TimeoutExpired退出（设施问题，非pytest结果），没有接管业务DB/旧helper；二进制cache和匿名证据保留。
+- 完整独立CR通过，无未解决P0/P1/P2；审查者另执行22项匿名证明/归属/恢复断言通过。首轮CR harness全socket禁连误拦Windows asyncio自管道，先建loop再禁连后绿，未改产品源码。原`_known`函数及`write_result` AST与HEAD一致，无新恢复平台/后台loop/重发队列。
+
+完整29文件freeze3前后hash一致，聚合`0206b5f523b4a11aebec88b89aa095683045e435ad152d4f5e65ddddf5c18be3`（sorted path:sha256，LF，无尾LF），最终仅更新文档验收状态。全命令/证据在`%TEMP%/wecom-status-runtime-independent-58f623d4/backend/independent-full-final-evidence.json`，冻结`%TEMP%/wecom-send-status-full-freeze3.json`。主控复核原unknown门未改、源码hash无漂移、无暂存；HEAD仍`4c024796`，原package-lock三peer生成变化继续保留。无提交、推送、部署、真实群消息或监听恢复。W6持续任务/真实Worker、配对发行、多设备和多天运行验收未因此完成。
+
+### MCP/Runtime接线提交核验（2026-10-26）
+
+用户在最终验收后明确授权提交并推送当前分支，替代上文接线阶段的禁止提交约束；部署、恢复群聊监听仍未授权。提交前fetch origin与github，当前`feature/ask-user-question-card`与两端对应远程分支均无分叉；29文件逐项匹配最终交付清单，原package-lock三peer生成改动保留不提交。复用同源码CLI/core/Runtime构建、独立PG63/TS32、单测173通过另2个HEAD旧BOSS失败及最终CR通过证据；主控追加隔离数据库guard下的注册/启动import/0价检查通过，不重复业务测试或启动真实群聊。未顺带合并新master、不进行发行包安装或部署。
 
 ## 2026-10-26 发送确认与对账恢复（W4）
+
+以下保留CLI实现及`4c024796`提交前后的验收记录；当前MCP/Runtime增量进度以上节为准。
 
 本轮基线`6daf84db`，仅在wecom工作树修复发送确认和只读恢复，禁止提交/推送、部署、监听及真实群消息发送。保留既有package-lock生成变化。高风险流程：主控开发、自测 → 独立测试 + 独立CR → 主控整合核验；数据投影由独立开发者限域修改，其余由主控统一整合。沿用[本地库设计§4.3.1](../design/wecom/wecom-cli-localdb-design.md#431-不确定发送的只读对账2026-10-26w4)，不新增Runtime恢复平台。
 
@@ -76,9 +120,9 @@ node --test dist/tests/input-locator.test.js dist/tests/powershell-input.indepen
 | W1 | 完整群名搜索与剪贴板恢复 | 已应用旧补丁并补齐个人标记、OLE空读及未恢复提示；最终独测23项与CR通过，当前源码真实双轮完整搜索、原文恢复、个人状态、草稿和清理核对通过 | 已完成（2026-10-26） |
 | W2 | 搜索与编辑区定位稳定性 | 工具栏误选已修；OCR横向裁切、图标先于正文、正文合并×已有回归。继续验证窗口尺寸、DPI及焦点变化，布局不能确认时须安全中止、保留人工草稿 | 待扩展验收 |
 | W3 | 人工同账号发言与自动出站消息区分 | 临时脚本已修正self全过滤；产品监控编排须以已确认出站ID区分，验证人工发言不漏、自动回复不自触发，不直接复制临时脚本的近期原文去重策略作为永久协议 | 待产品接入 |
-| W4 | 不确定发送的核验与幂等 | 本轮一次unknown经原群可信全文只读核对，未重复发送；严格投影/分页、加密凭据与CLI只读重启对账完成；独测TS49/恢复7/Python78及CR通过，unknown不重发 | CLI已完成，待W6联动 |
+| W4 | 不确定发送的核验与幂等 | 本轮一次unknown经原群可信全文只读核对，未重复发送；严格投影/分页、加密凭据与CLI只读重启对账完成；独测TS49/恢复7/Python78及CR通过，unknown不重发 | CLI/MCP/Runtime接线已完成 |
 | W5 | 普通群友闲聊不插话 | @本人和非@承接已实测；纯群友闲聊未遇真实样本。补第三人互聊、话题切换及多条@合并处理样本 | 待补验收 |
-| W6 | 真正Runner与Runtime持续任务联动 | 本轮是开发助手决策+临时脚本轮询。按Runner计划另验持久休眠、发布/重启恢复、停止在途任务、重复唤醒、累计用量，以及多天运行的状态增长 | 待集成验收 |
+| W6 | 真正Runner与Runtime持续任务联动 | 原实验是开发助手决策+临时脚本轮询；发送对账MCP/Runtime接线已开发验收，真正持续Runner、多天运行/发布重启/停止在途/重复唤醒/累计用量与状态增长仍须集成验收 | 待集成验收 |
 | W7 | 多任务共用企业微信设备 | 本轮只串行操作一个群。另验多会话任务与单任务多群，复用既有设备队列/锁，保证搜索/切群/发送的连续操作不相互串扰 | 待并发验收 |
 | W8 | 时延与读取故障恢复 | 约10秒轮询另计CLI耗时，实际单次发送约20–27秒，不能承诺10秒回复；记录各阶段时延并定位瓶颈。补CLI无结构化输出、断连后的游标保留和pending恢复 | 待处理 |
 

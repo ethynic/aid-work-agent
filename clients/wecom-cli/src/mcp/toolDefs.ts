@@ -114,7 +114,9 @@ export const TOOL_DEFS: WecomToolDef[] = [
       '（发送前基线之后出现「方向=本人 ∧ 正文全等 ∧ trusted」的新记录，verification_detail.message_id 为匹配记录；' +
       '含义=客户端已记录并经本地核验，不代表对方已收到/已读）；未命中或本地库核验失败转 OCR 气泡核验，' +
       'verification=ocr-bubble。本地库不可用走驱动内 OCR 核验（无 verification 字段，行为不变）。' +
-      '核验失败返回 EXECUTION_UNKNOWN（消息可能已发出，系统不会自动重试、绝不重入发送阶段，请人工确认）。',
+      '核验失败返回 EXECUTION_UNKNOWN（消息可能已发出，系统不会自动重试、绝不重入发送阶段）。' +
+      '本地库基线可用时，发送前保存加密凭据；结果或错误data.receipt_id供wecom_send_status只读对账，' +
+      '不能因unknown再次调用发送。无receipt_id时须人工核对，不猜测凭据。',
     zodShape: {
       target_ref: z.string().min(1).optional().describe('发送目标句柄（wecom_chat_search 返回的 target_ref；与 target_name 二选一）'),
       target_name: z.string().min(1).max(100).optional().describe('直达模式：按会话名（联系人/群名，可含 @微信 后缀）定位目标，内部自动 search 并做身份校验（同名多候选无法消歧返回 TARGET_AMBIGUOUS）；与 target_ref 二选一'),
@@ -122,6 +124,20 @@ export const TOOL_DEFS: WecomToolDef[] = [
       text: z.string().min(1).max(2000).describe('消息文本（最长 2000 字，支持多行：含换行时经剪贴板粘贴通道输入并覆盖用户剪贴板且不恢复；更长请分段多次发送）'),
     },
     annotations: { title: '企业微信发送文本消息', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  },
+  {
+    name: 'wecom_send_status',
+    title: '企业微信发送结果对账',
+    description:
+      '使用原wecom_message_send返回的receipt_id只读核对发送结果；不搜索、切群、输入、OCR或发送，不自动重发。' +
+      '凭据绑定本机Windows用户、原企微账号/会话/源库与时间窗。查询success=true/effect=none只表示读取完成，' +
+      '必须检查data.send_status：confirmed仅表示原发送窗口内有唯一可信全文匹配的客户端记录，' +
+      '不代表对方收到/已读；unknown仍可能已发送，稍后只读核对或人工处理，禁止重试原发送。' +
+      '凭据缺失、失效、不可解密、换账号/库、歧义、扫描达到上限均不推断未发送。',
+    zodShape: {
+      receipt_id: z.string().min(1).max(96).describe('原文本发送结果data.receipt_id，非路径；不得猜测或改用其他发送的凭据'),
+    },
+    annotations: { title: '企业微信发送结果对账', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
     name: 'wecom_send_image',

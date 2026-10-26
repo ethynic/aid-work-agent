@@ -2,7 +2,7 @@
 
 > 契约 ID：`AID-RUNNER-DESKTOP-RUNTIME`
 >
-> 版本：`2.8`；日期：2026-10-22
+> 版本：`2.9`；日期：2026-10-26
 >
 > 状态：v2.0按用户逐条复核确定，替代v1.3的插件额外审批语义；候选0.3已有真实Host与Desktop消费验证，Windows隔离验收版已交付，尚未共同登记wire冻结。现有公开API以代码为基线；共享格式见第8.1节，任务binding、授权及资源占用wire仍待主导交付。隔离验收不代表生产发行或真实业务验收通过。
 >
@@ -237,6 +237,16 @@ BOSS 等跨多次 invocation 的连续 GUI 流程若需保持桌面独占，不�
 
 Web自动刷新只更新最近100条归档展示窗口，不将全部历史回填浏览器；更早记录按页替换、返回最新重取。浏览旧页时live只更新当前Runner状态，不能冲走窗口；当前任务投影、乐观输入及停止控制保留，当前assistant按稳定投影ID定位。history_revision仅表示最新窗口更新水位，成功请求后才推进，失败保持当前窗口并可重试，不声称全历史已加载。旧客户端忽略新字段，新客户端遇旧服务缺字段沿原行为；默认接口/原历史缓存不改变。复用原MessageList/BaseButton及默认兼容followLatest，不新增历史中心、页面、模型loop或执行权限。已本地验证长期浏览器状态有界、当前输出/输入保留、旧页/最新切换、加载失败/并发与认证隔离、键盘/窄屏及真实历史metadata消费者，证据统一见休眠计划第17节；Desktop及真机Runtime组合不在本轮验收范围。
 
+### 5.7 wecom发送对账接线（2026-10-26）
+
+本增量版本2.9登记`wecom_send_status`业务schema v1；MCP/legacy工具集合及各自既有digest算法更新，Device v1/Host候选0.3/H3/Runner公开API major不变。唯一进度见[wecom计划](../plans/plan-wecom-cli-group-chat-experiment.md#2026-10-26-mcp与runtime发送对账接线)。主控唯一写MCP与共享core providers/providerManager及关联TS测试/本文；后端开发角色唯一写local_tools注册、代理、原发送scope及Python测试，另限域写Runner local_recovery.can_restore的status参数等价证明；既有owner/phase比较及_known不变。Runtime与Desktop计划均引用此记录，未实现/未测项不登记验收。
+
+本地输入receipt_id仅为当前用户DPAPI证据目录标识；云端模型传send_invocation_id，由服务端从原可信wecom_message_send结果提取receipt，验证tenant/user/session/固定原device。detached hold只对服务端建立并在enqueue/claim重验的精确只读原发送scope开放，不据模型tool名/readonly/参数放行。对账结果保持独立，只读成功不等于发送confirmed；原unknown、hold、已接受release和invocation审计不修改，未知发送不重放，原Runner verification等待不自动解除。无receipt/失效来源保持原核验与权限门。初次对账仍核当前显式选机/固定binding；选B而原send在A时拒绝、需选回A，不自动换机。来源/phase在排队后失效仅收敛未started的status为failed/none并让队列继续，不改原send。该server拒绝可用result_json顶层私有version=1零派发证明恢复既有失败：status ID、Cloud send ID、business ref和完整native request/owner必须全部匹配，客户端data不可信；无标记/坏版本不享该窄恢复，旧严格source校验保留。不新增公共wire、结果outbox格式或恢复队列。
+
+Runtime追加第7项wecom只读工具，写集合及锁/超时/许可/原结果outbox不变；旧CLI仍可用旧六项，新工具实际listTools/schema/readonly门禁不通过时明确none/升级，不静默调用未知工具或回退发送。能力缓存绑定子进程代次；signed旧release不原地改变，新版需后续显式升级。工具调用本身0积分，不替代模型实际用量计费。新增工具不是Device wire新增权限或资源停稳证明，不将本轮接线冒充长期群聊/多设备/锁屏验收。
+
+2.9实施状态：本地MCP/Runtime/后端生产消费及独立TEST/CR已完成；PG63/TS32通过，单测173通过另2个HEAD旧BOSS基线失败保留。后端仅严格server no-dispatch证明可判该status自身物理完成，持久hold查询带齐必需字段，原send unknown/hold及全局完成码不变。真实企业微信、完整Worker受当前SDK阻断的旧场景、发行/安装及长期运行未验；没有提交或部署。全部命令、负例修复与范围统一见wecom计划最终结果，不以本条代替产品/线上验收。
+
 ## 6. 产品生命周期差异由壳配置处理
 
 完整 Desktop 首期保持关闭最后窗口退出；独立 Runtime产品形态关窗口收至托盘。该区别是壳配置，不是两个 Runtime core。
@@ -357,6 +367,7 @@ H3可选automaticConnection只由新版独立Runtime preload开启。Device `/ru
 | 2026-10-08 | 1.3 定稿审阅 | Desktop工作流接受Runtime补充，无新增架构要求；明确架构定稿与wire冻结分开登记 | 本批Desktop仅修改共同契约、双方设计/计划的定稿状态与交接、桌面索引；版本不变，无schema/代码修改，接口及真实兼容验收待实施 |
 | 2026-10-09 | 2.0 用户复核 | 用户逐条确认C01～C12及schema；取消插件额外审批，允许手册优先/必要源码的云端AI分析，统一数字code/error，候选0.2替代0.1 | Runtime唯一写入；用户产品规则确定，Desktop重新消费/真实接线与wire冻结待完成；不改变已上线Device协议 |
 | 2026-10-09 | 2.0 / wire候选0.3 | 开发前七项实施决议，列表实例/revision包装与可选真实version；旧数组显式迁移 | Runtime唯一维护共享格式，独立测试/CR证据见Runtime计划第8节；Desktop须重新消费，真实接线与wire冻结未完成 |
+| 2026-10-26 | 2.9 | wecom发送只读对账工具schema v1、原发送/设备scope及有限私有零派发证明 | 本地生产消费/独测/CR完成；真实群聊/发行/长期运行未验，未提交部署 |
 
 ### 2026-10-20 复审历史：恢复观察v1（2.3，未发行实现已纠正）
 

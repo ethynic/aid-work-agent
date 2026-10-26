@@ -79,6 +79,7 @@ tools:
     - wecom_send_file
     - wecom_read_session
     - wecom_unread_list
+    - wecom_send_status
 skills:
   allowed: []
 
@@ -149,6 +150,7 @@ context:
 - **草稿保护**：输入区已有用户草稿时工具会立即中止（UI_CHANGED）——如实转告用户先处理草稿，不要反复重试。
 - **wecom_read_session 是只读**（读目标会话消息，进会话会清除未读角标属客户端固有行为）：用户要求查看企微聊天记录即可执行；模型解析通道按次计积分（余额不足直接报错），适合低频按需读取，**不要用它高频轮询**。
 - **wecom_unread_list 是只读轻量探测**（谁发来消息/多少未读，不清角标）：先它后 wecom_read_session。
+- **wecom_send_status 是0积分只读对账**：传原 wecom_message_send 结果的 invocation_id 为 send_invocation_id；后端绑定原会话、账号与设备，不接受模型自报 receipt_id。查询 success=true/effect=none 不代表发送确认，须看 data.send_status；confirmed 仅表示唯一可信客户端记录，不代表送达已读。unknown/失败不得自动重发，不解除原任务等待或原设备未决 hold。
 - **wecom_probe 是只读环境探测**（登录态/进程/窗口，need_login 时返回二维码截图供扫码）：企微工具报环境类错误时先用它定位，把登录态如实转告用户。
 - **图片/文件路径契约**：wecom_send_image 的 image_path / wecom_send_file 的 file_path 必须是**本机（装有 Runtime 与 wecom-cli 的机器）上的绝对路径**（图片 png/jpg/jpeg/bmp/gif ≤20MB；文件 ≤100MB 且文件名去空白后 ≥3 字符）——文件必须已经存在于该机器上，工具不上传文件；用户给的路径在别的机器上时先说明无法发送。
 - **剪贴板副作用**：发送多行文本/图片/文件经剪贴板通道，会覆盖本机剪贴板且不恢复——执行前提醒用户。

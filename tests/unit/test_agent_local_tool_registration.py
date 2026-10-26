@@ -65,6 +65,7 @@ WECOM_TOOLS = {
     "wecom_send_file",
     "wecom_read_session",
     "wecom_unread_list",
+    "wecom_send_status",
 }
 
 

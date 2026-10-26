@@ -15,4 +15,5 @@ LOCAL_PROXY_TOOL_NAMES = frozenset({
     # catalog TRUSTED_PROVIDERS['wecom'] 逐字一致
     "wecom_probe", "wecom_message_send", "wecom_send_image",
     "wecom_send_file", "wecom_read_session", "wecom_unread_list",
+    "wecom_send_status",
 })

@@ -569,4 +569,4 @@ node dist/src/cli/index.js send-status --receipt-id <原receipt_id> --json
 
 明确无发送动作的阶段会删除凭据（如checkpoint取消、导航前检查、写前拒绝）；删除失败立即停止，`receipt_invalidation_failed=true`的ID不可用于自动确认。驱动中超时/取消/unknown保留证据用于只读核对。
 
-凭据位于既有`artifacts/send-*/send-receipt.dpapi`，一个发送阶段一个小文件；清理该证据目录后无法恢复。不要将密文或原始群消息上传日志。只有旧OCR路径的发送没有可重建本地证明，不产生receipt。本轮入口仅CLI，Runtime/MCP产品接线及新真实发送验收仍待W6联动，不改原Runtime结果补传设施。
+凭据位于既有`artifacts/send-*/send-receipt.dpapi`，一个发送阶段一个小文件；清理该证据目录后无法恢复。不要将密文或原始群消息上传日志。只有旧OCR路径的发送没有可重建本地证明，不产生receipt。MCP同时暴露`wecom_send_status({receipt_id})`，沿用CLI同一只读operation；Runtime受信清单追加此只读工具，并在调用前核实际Provider能力，旧CLI提示升级而不重发。云端代理接收`send_invocation_id`，服务端从原发送可信结果提取receipt，核对同主体/会话/固定原设备后派发；不允许用模型自报receipt绕过权限或其他设备hold。对账调用本身0积分，模型实际用量照常计费；查询成功仍须看`data.send_status`，不自动改变原unknown/hold或解除原Runner核验等待。新真实发送、多天持续任务及正式发行升级仍待后续验收，不改原Runtime结果补传设施。

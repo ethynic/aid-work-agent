@@ -79,7 +79,7 @@ class TestToolDefinitions:
         boss_lookup_candidates / boss_greet_selected 为重名候选查询与确认发送。
         wecom 6 个（M11c，2026-09-29）：企业微信 Provider 纯代理工具，category=local_wecom。
         """
-        assert len(LOCAL_PROXY_TOOL_CLASSES) == 32
+        assert len(LOCAL_PROXY_TOOL_CLASSES) == 33
         assert LOCAL_PROXY_TOOL_NAMES == (
             set(catalog.allowed_tools("boss-recruiting")) | set(catalog.allowed_tools("wecom"))
         )

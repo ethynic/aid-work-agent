@@ -59,7 +59,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20261023-1226 | wecom CLI 群聊实验与输入修复 | 🔧 部分完成 | 搜索、剪贴板与CLI发送对账已修复；Runner联动等后续项保留。 | [设计](design/wecom/wecom-cli-design.md#11-群聊实验的输入定位修正2026-10-23实施中) | [开发计划](plans/plan-wecom-cli-group-chat-experiment.md) |
+| 20261023-1226 | wecom CLI 群聊实验与输入修复 | 🔧 部分完成 | 发送对账CLI/MCP/Runtime接线已完成，真实持续任务联动待验。 | [设计](design/wecom/wecom-cli-design.md#11-群聊实验的输入定位修正2026-10-23实施中) | [开发计划](plans/plan-wecom-cli-group-chat-experiment.md) |
 | 20261018-1736 | wecom-cli 登录引导增强（自动拉起 + 二维码直返） | 💡 灵感 | 三态验收发现：need_login 态 probe 已返回登录二维码 base64，缺口是 WECOM_NOT_FOUND（进程未启动）时不自动拉起企微——增加自动启动后把二维码转交 agent 引导用户扫码。 | [验收记录](plans/wecom-cli-localdb-three-state-acceptance.md) | — |
 | 20261014-2043 | wecom-cli 本地库数据通道（local-db） | 🔧 部分完成 | 群查询、用户名及@提及恢复已验收，其余原计划阶段继续跟踪。 | [设计](design/wecom/wecom-cli-localdb-design.md) | [开发计划](plans/plan-wecom-cli-localdb.md) |
 | 20261021-1625 | pptx-vi-gen 技能：模板 VI 提取 + 原生可编辑 PPT 生成与修改 | 🔧 部分完成（开发+单测完成，待提交部署） | 从第三方系统（workbuddy）移植并升级至其新版 pptx_gen：路线二渲染引擎由 Pillow 整页贴图改为 python-pptx 原生形状渲染（文本框/圆角矩形/椭圆/图片，1920×1080 网格），所有产出文字在 PowerPoint/WPS 完全可编辑；新增 edit_deck 手术式修改（scripts/edit.py，改字/加页/删页/移页/换页/换色，原地修改自动留 .bak）；路线一（模板占位符填充/整页拷贝替换，scripts/template_fill.py analyze+generate）经确认一并引入，SKILL.md 重新划定与 ppt_process 边界（本技能管模板驱动生成+本技能 deck 的迭代修改）。移植改造保留我方补丁：vi.py 字体查找 Linux Noto CJK/文泉驿路径、sysClr 取 lastClr、generate_native/preview_pngs 无模板 default_vi 兜底、路径 fail-fast 不跨租户 glob；另修上游 _replace_in_frame 二次替换 bug（repl 含 find 时误判残留）。references/usage.md 入库。单测 8 个全绿（注册发现/stdin/端到端可编辑性断言/edit 往返/analyze 冒烟/非法 role/缺字段）。 | — | — |

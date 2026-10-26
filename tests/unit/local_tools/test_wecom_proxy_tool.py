@@ -29,6 +29,7 @@ from src.local_tools.proxy_tool import (
     WecomSendFileTool,
     WecomSendImageTool,
     WecomUnreadListTool,
+    WecomSendStatusTool,
 )
 
 pytestmark = pytest.mark.unit
@@ -45,6 +46,7 @@ WECOM_MANIFEST_TOOLS = [
     "wecom_send_file",
     "wecom_read_session",
     "wecom_unread_list",
+    "wecom_send_status",
 ]
 
 WECOM_PROXY_CLASSES = [
@@ -54,6 +56,7 @@ WECOM_PROXY_CLASSES = [
     WecomSendFileTool,
     WecomReadSessionTool,
     WecomUnreadListTool,
+    WecomSendStatusTool,
 ]
 
 

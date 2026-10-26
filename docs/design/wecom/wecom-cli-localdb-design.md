@@ -273,9 +273,23 @@ C3 数据目录 ┘
 - 在已有每阶段`send-*`证据目录保存不可覆盖的`send-receipt.dpapi`，复用DPAPI CurrentUser；账号、会话、基线/锚、源代际、文本和时间窗仅在密文中。文件写入、flush、close成功且进度事件发出receipt ID后才调用发送驱动；open(wx)成功后write/flush/close被捕获失败由保存函数清理自己创建的文件，open碰撞不删既有文件，自清失败的unknown/receipt ID/失效失败诊断穿透派发前错误包装；凭据写失败则明确未派发。导航重入阶段各有凭据，最终结果/错误附最后阶段ID。无需增加全局ledger、恢复队列、计时器或Runtime outbox。已知未派发（checkpoint取消/进度失败）、navigate_required或发送驱动明确写前拒绝时立即删除本阶段凭据，删除成功才允许继续导航；第二阶段保存前清掉旧ID。失效删除失败立即停止并返回unknown及receipt_invalidation_failed，不能称已退役；timeout、驱动内取消及unknown保留凭据。只读对账返回confirmed前再检查原凭据存在，避免用已失效的内存副本误确认。
 - `send-status --receipt-id <ID>`为CLI只读恢复入口，共用相同核验代码，不调用UI/OCR、搜索/切群或发送。未观察到、歧义、上限、账号/代际/锚失效、凭据丢失/损坏/不可解密均不推断未发送、不自动重发；可稍后再次只读对账。已确认只代表客户端记录，不代表服务端送达/已读。正常发送保留原本地优先、仅VerifyOnly的OCR兜底。
 - receipt ID与目录同名，严格拒绝路径穿越和链接目录/文件；密文载荷有大小/版本/字段边界。复用现有artifact生命周期，一次发送阶段只增加一个小文件；清理证据后无法再对账。进程/系统强杀可能留下半文件，读取失败保持unknown；不声称fsync可抵御所有硬件故障。强杀发生在已知无动作结果与凭据失效之间，或所有失效IO均失败，不能保证该证据已退役；持有该ID的消费方须保存失效失败/原none结果，不能随后用相符记录覆写已知事实。
-- 无本地基线的旧OCR发送仍没有可重建的库内证明，不伪造receipt。未知结果不能盲重试原send；调用方保存receipt ID，改用只读入口。Runtime原结果outbox仍只补传原结果，不重执行。本轮不改Device wire、Runner、Runtime core或MCP受信工具清单；新CLI命令的Runtime产品接线留在W6联动验收。
+- 无本地基线的旧OCR发送仍没有可重建的库内证明，不伪造receipt。未知结果不能盲重试原send；调用方保存receipt ID，改用只读入口。Runtime原结果outbox仍只补传原结果，不重执行。4.3.1的CLI阶段不改Device wire、Runner、Runtime core或MCP受信工具清单；后续接线增量以4.3.2为准，多天持续任务仍在W6另验。
 
 实施状态：2026-10-26 CLI代码与只读恢复完成；独测TS49、恢复边界7、Python78通过，最终独立CR无未解决P0/P1/P2。已知none凭据与刷盘失败自建文件残留两类问题已修复并独立复验。范围、真实命令、失败历史与尚未验收边界见[W4计划记录](../../plans/plan-wecom-cli-group-chat-experiment.md#w4最终结果2026-10-26)；Runtime/MCP接线不在本轮交付中。
+
+### 4.3.2 对账能力MCP/Runtime接线（2026-10-26）
+
+沿用4.3.1的本地核验，不添加本地Agent loop、自动重发、全局receipt账本或新队列。新增Provider工具`wecom_send_status`（业务schema v1）：本地MCP输入仅`receipt_id`，只读/idempotent，返回原OperationResult/effect=none，`data.send_status=confirmed|unknown`；查询success不代表发送confirmed。CLI严格解析、账户/代际/锚/时间窗/文件失效边界继续唯一实现在现有operation。
+
+云端代理输入为`send_invocation_id`，由服务端验证原`wecom_message_send`记录的tenant/user/session/固定device归属，从可信result.data或可信_late_result.data取得receipt再向本机传`receipt_id`。receipt为目录标识，不能作为授权令牌或由模型自报路径。明确none/已退役及无合法证据的来源拒绝，不能搜索别的设备或按当前全局selected换机。入队、claim和started分别重验来源；若原设备有detached hold，仅server-owned精确原发送只读scope可通过，其他read/write与普通伪造参数不获旁路。对账不改原unknown/hold、不补verified_local_invocations、不自动解除Runner verification等待；用户/原控制流程决定后续，不扩大本轮为自动续跑。初次对账仍遵守现有显式选机/固定binding门：若当前受权设备为B而原send在A，则拒绝并需选回原设备，不自动跨设备切换。
+
+enqueue之后来源/phase失效时，服务端只将该尚未started的status收敛failed/effect=none/WECOM_SEND_SCOPE_INVALID，并追加既有事件；不让无效queued行永久堵队头，后续合法调用下一轮可推进，其他device hold仍保留。原发送结果不作任何修改。为使崩溃后能消费这份已持久化零派发失败，result_json顶层使用私有version=1证明，绑定status ID、Cloud send ID、business kind/ref及完整native request；客户端data同名字段不获信任。只有该精确拒绝终态、未started且原owner/native/Cloud参数全部匹配才直接读取已有失败，不新建调用或解析失效source；普通succeeded/unknown和无合法私有证明的旧记录仍沿严格source校验。同一严格顶层证明只将该status自身的物理完成判为已知，避免混合结束等待时造phantom hold；持久hold查询显式带齐证明所需列，缺started_at等列仍拒绝，不新增全局错误码完成许可。原发送unknown和hold审计不变。
+
+MCP工具清单和schema_digest同源更新；Runtime受信wecom面从既有6项追加此1项，写集合、protocol_version=1、shared_lock_capable=false、桌面互斥和原结果outbox均不变。既有六工具在旧CLI上继续用原路径；新工具在实际Provider listTools确认receipt_id字符串schema和只读annotation后才callTool，缺少receipt_id字符串必填声明、存在额外必填参数或非只读注解时明确none并提示升级，能力缓存只属于当前子进程，重启清除。该门禁沿现有BOSS续筛兼容模式，不把静态Host受信清单当已安装CLI确实实现新工具的证明。后端既有tool/schema_digest强校验仍未完整实施，不虚称新增字段完成端到端摘要授权。
+
+云端本地对账工具明确0积分，不因默认tool price非零而误收费；模型推理的实际计费继续沿原机制。旧已接受invocation/release/digest不热替换，旧signed包不改写，部署/升级时创建新release；源码实现不等于当前安装已升级。共同接口checkpoint与文件责任登记见[共同契约2.9](../../system/runner-desktop-runtime-integration-contract.md#57-wecom发送对账接线2026-10-26)，实际验证统一见原群聊实验计划W4接线段。
+
+接线实施完成（2026-10-26）：独立PG63、TS32通过；相关单测173通过、另2项已证明HEAD存在的BOSS注册基线失败保留；最终完整CR无未解决P0/P1/P2。schema额外必填、失效队头、已有拒绝失败恢复与混合结束等待/持久hold投影均有红→修复→独立绿。源码未提交/部署，不恢复监听；真实企业微信、安装发行、长期运行及受当前SDK环境阻断的旧Worker场景未验。完整证据/命令/边界见[本轮计划](../../plans/plan-wecom-cli-group-chat-experiment.md#mcpruntime最终结果2026-10-26)。
 
 ## 5. doctor 深检（首跑定基调）
 

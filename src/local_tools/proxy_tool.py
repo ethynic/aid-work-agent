@@ -2700,6 +2700,64 @@ class WecomUnreadListTool(WecomLocalToolProxyTool):
     InputModel = WecomUnreadListInput
 
 
+class WecomSendStatusInput(BaseModel):
+    model_config = {'extra': 'forbid'}
+    send_invocation_id: str = Field(..., min_length=36, max_length=36,
+        description='原 wecom_message_send 返回的 invocation_id；只读核对该次发送，不接受本机 receipt_id')
+
+
+class WecomSendStatusTool(WecomLocalToolProxyTool):
+    name = 'wecom_send_status'
+    display_name = '企业微信发送结果核对'
+    description = (
+        '用原 wecom_message_send 的 invocation_id，只在原账号、会话和设备只读核对发送结果。'
+        '不打开窗口、不输入、不发送、不重放原调用；本地对账0积分。'
+        '查询 success=true/effect=none 只表示查询完成，须看 data.send_status 是否 confirmed；'
+        'confirmed 仅证明唯一可信客户端记录，不代表对方收到或已读。'
+        'unknown 或核对失败时保持原发送未知，禁止自动重发；原任务继续仍走既有控制流程。')
+    InputModel = WecomSendStatusInput
+
+    def _validate_args(self, args):
+        from .wecom_send_status import valid_invocation_id
+        if set(args) != {'send_invocation_id'} or not valid_invocation_id(args.get('send_invocation_id')):
+            return 'send_invocation_id 必须是原发送返回的有效 invocation_id'
+        return None
+
+    async def native_arguments(self, tenant_id, user_id, session_id, arguments, device_id):
+        from .wecom_send_status import resolve_original, SendStatusScopeError
+        if self._validate_args(arguments):
+            raise SendStatusScopeError()
+        scope = await asyncio.to_thread(resolve_original, tenant_id, user_id, session_id,
+            arguments['send_invocation_id'], device_id=device_id)
+        return {'receipt_id': scope['receipt_id']}
+
+    async def _dispatch_and_wait(self, tenant_id, user_id, session_id, device, args, progress_queue):
+        from uuid import uuid4
+        from .lifecycle import current_local_operation
+        from .wecom_send_status import SendStatusScopeError
+        try:
+            native = await self.native_arguments(tenant_id, user_id, session_id, args, str(device['id']))
+            operation = current_local_operation()
+            if operation is not None:
+                invocation = await operation.owner.bind_invocation(branch=operation.branch,
+                    ordinal=operation.ordinal, tool_name=self.name, device=device,
+                    arguments=native, provider_key='wecom')
+            else:
+                from .service import LocalInvocationService
+                invocation = await asyncio.to_thread(LocalInvocationService().enqueue,
+                    tenant_id=tenant_id, user_id=user_id, device_id=str(device['id']),
+                    tool_name=self.name, arguments=native, session_id=session_id, provider_key='wecom',
+                    business_kind='wecom_send_status', business_ref={'version': 1,
+                        'send_invocation_id': args['send_invocation_id']}, dedupe_key=uuid4().hex)
+        except (SendStatusScopeError, repository.DeviceOperationUnresolved):
+            return {'success': False, 'code': 'WECOM_SEND_SCOPE_INVALID', 'effect': 'none',
+                'message': '原发送回执或原设备归属未确认，未派发对账；请核对原 invocation_id 和执行设备。',
+                'data': None, 'invocation_id': None}
+        self._push_progress(progress_queue, {'type': 'started', 'invocation_id': str(invocation['id']),
+            'text': '正在原设备只读核对发送结果；不会重新发送'})
+        return await self._poll_invocation(invocation, tenant_id, progress_queue, durable=operation is not None)
+
+
 LOCAL_PROXY_TOOL_CLASSES = (
     BossFilterTool,
     BossClearFilterTool,
@@ -2733,6 +2791,7 @@ LOCAL_PROXY_TOOL_CLASSES = (
     WecomSendFileTool,
     WecomReadSessionTool,
     WecomUnreadListTool,
+    WecomSendStatusTool,
 )
 
 LOCAL_PROXY_TOOL_NAMES = frozenset(cls.name for cls in LOCAL_PROXY_TOOL_CLASSES)
