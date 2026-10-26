@@ -237,9 +237,12 @@ class RunnerAuthorizer:
             return
         if tenant_id is None and user and user["role"] == UserRole.PLATFORM_ADMIN.value:
             return
-        # 租户数字员工副本实例（agent_id != base_agent_id）的订阅/用户授权挂在
-        # 基础员工上；实例归属已按 tenant_id+agent_id 限定，archived 行也解析
-        # （与会话历史可用口径一致，新会话在实例 API 层拒绝）。
+        # 租户数字员工副本实例（agent_id != base_agent_id）：订阅仍挂基础员工；
+        # 实例归属已按 tenant_id+agent_id 限定，archived 行也解析（与会话历史
+        # 可用口径一致，新会话在实例 API 层拒绝）。用户级授权按实例 ID 或基础
+        # 员工 ID 任一命中放行（授权界面按实例 ID 写入 user_agent_permissions，
+        # 历史数据两种形态并存），仅限本次请求的 profile，不引入通配。
+        requested_profile_id = profile_id
         cursor.execute("""SELECT base_agent_id FROM tenant_agent_instances
             WHERE tenant_id=%s AND agent_id=%s LIMIT 1""", (tenant_id, profile_id))
         instance_row = cursor.fetchone()
@@ -252,7 +255,7 @@ class RunnerAuthorizer:
             raise RunnerError("PROFILE_FORBIDDEN", 403)
         if user and user["role"] not in (UserRole.PLATFORM_ADMIN.value, UserRole.TENANT_ADMIN.value):
             cursor.execute("""SELECT 1 FROM user_agent_permissions WHERE user_id=%s
-                AND agent_id=%s AND tenant_id IS NOT DISTINCT FROM %s LIMIT 1""",
-                (user["user_id"], profile_id, tenant_id))
+                AND agent_id IN (%s, %s) AND tenant_id IS NOT DISTINCT FROM %s LIMIT 1""",
+                (user["user_id"], requested_profile_id, profile_id, tenant_id))
             if not cursor.fetchone():
                 raise RunnerError("PROFILE_FORBIDDEN", 403)
