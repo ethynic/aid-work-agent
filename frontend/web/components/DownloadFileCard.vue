@@ -72,7 +72,7 @@ import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 import { useReplyResources } from '@/utils/replyResources'
 import { resolveApiUrl, saveDownloadUrl } from '@/platform/urlResolver'
 import { getAuthHeader } from '@/api/auth'
-import { triggerNativeDownload } from '@/utils/download'
+import { triggerCompatibleDownload } from '@/utils/download'
 import { detectOfficePreviewKind, officePreviewMaxBytes } from '@/utils/officePreview'
 import { detectFileIconKind, type FileIconKind } from '@/utils/file'
 import FileTypeIcon from './FileTypeIcon.vue'
@@ -93,8 +93,9 @@ async function handleDownload() {
       await saveDownloadUrl(url, props.file.file_name, getAuthHeader())
       return
     }
-    // 直链原生下载（download_url 免认证），浏览器下载管理器自带进度条
-    triggerNativeDownload(url, props.file.file_name)
+    // 微信内置浏览器（X5/XWeb）对 download 属性支持残缺：微信内整页导航交由
+    // 微信下载器/文件预览接管；非微信保持直链原生下载，浏览器下载管理器自带进度条
+    triggerCompatibleDownload(url, props.file.file_name)
   } catch (e) {
     console.error('文件下载失败:', e)
     // Web fallback 保持现有浏览器下载行为；Desktop 不允许绕过受控保存能力。

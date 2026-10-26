@@ -46,7 +46,8 @@ describe('one reply renderer for chat and sharing', () => {
     await wrapper.findAll('button').find(button => button.text().includes('报告.png'))!.trigger('click')
     const preview = mount(AttachmentPreviewPanel, { props: { attachment: useAttachmentPreview().previewAttachment.value }, global: { provide } })
     expect(preview.find('img').attributes('src')).toBe(resource('asset_1'))
-    expect(preview.find('a[download]').attributes('href')).toBe(resource('asset_1', true))
+    // 面板下载 anchor 已不带 download 属性（微信内置浏览器兼容，见 utils/download.ts），按 href 识别
+    expect(preview.find('a[href*="download"]').attributes('href')).toBe(resource('asset_1', true))
     const urls: string[] = []
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { urls.push(this.getAttribute('href') || '') })
     await wrapper.findAll('button').find(button => button.text().includes('数据.zip'))!.trigger('click')

@@ -11,6 +11,33 @@ import { getAuthHeader } from '@/api/auth'
 const API_ROOT = import.meta.env.VITE_API_BASE_URL || '/api'
 
 /**
+ * 微信/企业微信内置浏览器检测
+ *
+ * 微信与企业微信内置浏览器（X5/XWeb 内核）的 UA 均含 MicroMessenger 标识
+ * （企业微信 UA 为 wxwork + MicroMessenger 组合）
+ */
+export function isWeChatBrowser(): boolean {
+  return /MicroMessenger/i.test(navigator.userAgent)
+}
+
+/**
+ * 兼容下载入口
+ *
+ * 微信内置浏览器（X5/XWeb 内核）对 HTML5 download 属性支持残缺：
+ * a[download] 直链会被微信下载器接管并以 0B 失败。微信内改用整页导航，
+ * 由微信自身的下载器/文件预览接管（响应已带 Content-Disposition: attachment，
+ * 不会跳离页面；iOS 微信弹出内置文档预览供保存）；非微信保持原生直链下载，
+ * 浏览器下载管理器自带进度条。
+ */
+export function triggerCompatibleDownload(url: string, filename?: string): void {
+  if (isWeChatBrowser()) {
+    window.location.href = url
+    return
+  }
+  triggerNativeDownload(url, filename)
+}
+
+/**
  * 触发浏览器原生下载（同源直链，浏览器读取 Content-Disposition 作为文件名，
  * filename 参数仅作兜底提示）
  */

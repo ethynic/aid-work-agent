@@ -256,8 +256,8 @@ describe('AttachmentPreviewPanel —— Excel 加载失败降级', () => {
     const wrapper = mountPanel(makeAttachment({ file_id: 'file_excel_dead', name: '坏文件.xlsx' }))
     await settle()
     expect(await waitFor(() => wrapper.text().includes('表格预览加载失败，请尝试下载查看'))).toBe(true)
-    // 下载按钮指向直链下载地址
-    const downloadLink = wrapper.find('a[download]')
+    // 下载按钮指向直链下载地址（anchor 不带 download 属性：微信内改为整页导航兼容）
+    const downloadLink = wrapper.find('a[href*="/download"]')
     expect(downloadLink.exists()).toBe(true)
     expect(downloadLink.attributes('href')).toContain('/api/files/file_excel_dead/download')
   })
@@ -391,7 +391,7 @@ describe('AttachmentPreviewPanel —— 切到不可预览类型时 loading 遮�
     // 遮罩必须熄灭，unsupported UI 与下载按钮可交互
     expect(wrapper.text()).not.toContain('加载中')
     expect(wrapper.text()).toContain('此文件类型无法预览')
-    expect(wrapper.find('a[download]').exists()).toBe(true)
+    expect(wrapper.find('a[href*="/download"]').exists()).toBe(true)
 
     // 慢响应在其后（>400ms）到达：过期任务不得翻转任何状态，遮罩保持熄灭
     await new Promise(r => setTimeout(r, 600))
