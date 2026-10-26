@@ -185,7 +185,7 @@
 |---|------|------|---------|---------|
 | 20261008-1603 | 飞书、钉钉对话服务接入 AgentRunner | ✅ 已完成开发（待部署真机验收）：保留原渠道业务，仅接入独立 Runner 并传递可信渠道来源；两轮审核修复完成。 | [接入边界](system/agent-application-architecture-design.md#81-后续接入的固定边界) | [飞书](channel/feishu/implementation_plan.md#agentrunner-接入后续独立事项) / [钉钉](channel/dingtalk/implementation_plan.md#agentrunner-接入后续独立事项) / [审核](reviews/feishu-dingtalk-agentrunner-review-2026-10-09.md) |
 | 20261010-wecom-runner | 企业微信应用渠道接入 AgentRunner | ✅ 已完成开发，保留原渠道流程；待部署及真机验收。 | [接入设计](plans/plan-wecom-agent-runner-integration.md#2-接入设计) / [共同契约](system/runner-desktop-runtime-integration-contract.md) | [开发计划](plans/plan-wecom-agent-runner-integration.md) |
-| 20261009-1452 | 微信客服完整 Markdown 交付 | ✅ 已完成开发：默认原文前缀与原生完整 MD，仅正文图片考虑长图；待真机验收。 | [设计](channel/wecom_kf/wecom_kf_design.md#十四2026-10-09-长答复交付调整) | — |
+| 20261009-1452 | 微信客服完整 Markdown 交付 | ✅ 已完成开发：文件路径答复一律原文前缀呈现（2026-10-26 短表格前缀修订 §14.10），原生完整 MD；MD 渲染已真机部分验收。 | [设计](channel/wecom_kf/wecom_kf_design.md#十四2026-10-09-长答复交付调整) | — |
 | 20261008-1340 | 微信客服原渠道恢复与 AgentRunner 接入 | ✅ 已完成开发：原渠道接入独立 Runner，误重构已移除，迁移历史保留；agent2 已发布并真机验收通过（文本/语音/合并/取代）。 | [设计](system/agent-application-architecture-design.md) | [计划](plans/plan-wecom-kf-channel-restore.md) |
 | 20260916-1830 | 公众号自有号清单源（历史文章导入，主通道） | ✅ 已完成开发：租户扫码绑定自有号，定期拉「发表记录」清单走既有 URL 直采入库（首次回填上限+增量重叠即停，r3 修生产超量回填事故）；2026-10-09 验收通过。 | [设计](system/wechat-mp/wechat-mp-list-source-design.md) | — |
 | 20260914-1901 | 微信公众号内容入知识库 | ✅ 已完成开发：回调/URL 直采/手动粘贴/freepublish 接口对账多通道入库，图片 VL 解析（门禁放开+r2 白描指令/200 张护栏）、content_md 组装、500 字总结、按 token 计费；WP0–WP13 全交付，2026-10-09 验收通过。 | [设计](system/wechat-mp/wechat-mp-knowledge-ingestion-design.md) | — |

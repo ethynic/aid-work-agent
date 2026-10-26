@@ -145,15 +145,37 @@ async def test_overflow_default_is_prefix_and_complete_utf8_md(registry, monkeyp
     assert info["mime_type"] == "text/markdown" and info["file_name"] == "详细答复.md"
 
 
-async def test_short_table_uses_md_notice_without_model_or_image(registry, monkeypatch):
+async def test_short_table_projects_prefix_without_model_or_image(registry, monkeypatch):
     model = AsyncMock()
     monkeypatch.setattr("src.channels.wecom_kf.reply_delivery._model_preview", model)
     image = AsyncMock()
     files = []
     delivery = await prepare("方案如下：\n|项目|价格|\n|---|---|\n|A|20|", files, summary_mode="llm", prepare_image=image)
-    assert delivery["mode"] == "notice" and len(files) == 1
+    assert delivery["mode"] == "prefix" and len(files) == 1
+    assert delivery["text"].startswith("方案如下：")
+    assert "项目：A" in delivery["text"] and delivery["text"].endswith(FILE_NOTICE)
+    assert len(delivery["text"]) <= 500
     model.assert_not_awaited()
     image.assert_not_awaited()
+
+
+async def test_short_table_long_projection_truncates_prefix_without_model(registry, monkeypatch):
+    model = AsyncMock()
+    monkeypatch.setattr("src.channels.wecom_kf.reply_delivery._model_preview", model)
+    files = []
+    rows = "\n".join(f"|A{index}|100|" for index in range(40))
+    delivery = await prepare(f"报价如下：\n|项目|价格|\n|---|---|\n{rows}", files, summary_mode="llm")
+    assert delivery["mode"] == "prefix" and len(files) == 1
+    assert delivery["text"].startswith("报价如下：")
+    assert delivery["text"].endswith("…" + FILE_NOTICE)
+    assert len(delivery["text"]) <= 500
+    model.assert_not_awaited()
+
+
+async def test_short_image_render_failure_projects_prefix(registry):
+    delivery = await prepare("![图](https://example.com/a.png)\n说明文字。", prepare_image=AsyncMock(return_value=None))
+    assert delivery["mode"] == "prefix"
+    assert "说明文字。" in delivery["text"] and delivery["text"].endswith(FILE_NOTICE)
 
 
 async def test_code_image_example_never_selects_real_image(registry):
