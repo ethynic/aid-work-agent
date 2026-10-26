@@ -1,10 +1,8 @@
 ﻿# drivers/ps1/chat-search.ps1 — wecom_chat_search 驱动（M4：Jev 决策 + overlay 保持打开）
 # 流程（2026-09-28 真机验证，experiments/probes/e1-e3 系列）：
-#   1) 解析主窗口 → Focus-WeComSearchBox（attachstate Ctrl+F 主路径；降级 OCR+Jev 选 token
-#      点击；再降级规则点占位符 token）；
-#   2) 动态搜索框状态检测（裁切放大 OCR）→ 非 empty 清空（attachstate Ctrl+A + Delete），
-#      复核仍非 empty → UI_CHANGED fail-closed；
-#   3) 输入 query → OCR 回读验证（剥前导 Qq 图标误读 + 末尾光标伪影容忍；失败 UI_CHANGED）；
+#   1) 解析主窗口，先按已验证搜索布局点击专属清空点并复核 empty；不做键盘清理；
+#   2) Focus-WeComSearchBox（attachstate Ctrl+F + OCR/Jev 可靠锚点点击）；
+#   3) 输入 query → 原 OCR 严格回读；裁切时以新鲜完整复制结果兜底，恢复剪贴板失败则中止；
 #   4) 等 SearchResultWindow2 可见 + 高度稳定（400ms 轮询，连续两次等高，≤10s）→ 稳定帧
 #      chat_ocr search 模式 OCR 结果条目；
 #   5) Jev 单次合并调用（best_result + is_ambiguous 两问）；降级 → 规则 best + 概率全 null；

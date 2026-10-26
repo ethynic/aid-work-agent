@@ -6,6 +6,7 @@ import test from 'node:test'
 for (const suite of [
   { file: 'input-locator-regression.ps1', marker: /PS_INPUT_LOCATOR_OK/ },
   { file: 'search-input-regression.ps1', marker: /PS_SEARCH_INPUT_OK/ },
+  { file: 'clipboard-policy-regression.ps1', marker: /PS_CLIPBOARD_POLICY_OK/ },
 ]) test(`real PowerShell ${suite.file} preserves input and clipboard safety`, {
   skip: process.platform !== 'win32',
 }, () => {

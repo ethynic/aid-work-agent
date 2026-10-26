@@ -54,6 +54,20 @@ public class WeComWin32 {
     [DllImport("kernel32.dll")] static extern bool GlobalUnlock(IntPtr memory);
     [DllImport("kernel32.dll")] static extern UIntPtr GlobalSize(IntPtr memory);
     [DllImport("kernel32.dll")] static extern IntPtr GlobalFree(IntPtr memory);
+    [DllImport("edputil.dll")] static extern int EdpGetEnterpriseIdForClipboard(out IntPtr enterpriseId);
+    [DllImport("kernel32.dll")] static extern IntPtr GetProcessHeap();
+    [DllImport("kernel32.dll")] static extern bool HeapFree(IntPtr heap, uint flags, IntPtr memory);
+    public static bool IsPersonalClipboard() {
+        IntPtr enterpriseId = IntPtr.Zero;
+        try {
+            return EdpGetEnterpriseIdForClipboard(out enterpriseId) == 0 && enterpriseId == IntPtr.Zero;
+        } catch (DllNotFoundException) { return false; }
+        catch (EntryPointNotFoundException) { return false; }
+        finally {
+            if (enterpriseId != IntPtr.Zero && !HeapFree(GetProcessHeap(), 0, enterpriseId))
+                throw new InvalidOperationException("CLIPBOARD_PROTECTION_CHECK_FAILED");
+        }
+    }
     static IntPtr AllocateClipboardText(string text) {
         byte[] bytes = Encoding.Unicode.GetBytes(text + "\0");
         IntPtr memory = GlobalAlloc(2, (UIntPtr)bytes.Length);
@@ -929,10 +943,26 @@ function Test-WeComSearchWindowUnchanged($Before, $After) {
 function Get-WeComPlainClipboard {
     Add-Type -AssemblyName System.Windows.Forms
     $data = [Windows.Forms.Clipboard]::GetDataObject()
-    if ($null -eq $data -or $data.GetFormats($false).Count -eq 0) { return @{empty=$true;text=''} }
-    if (@($data.GetFormats($false) | Where-Object {
+    if ($null -eq $data -or @($data.GetFormats($false)).Count -eq 0) {
+        # OLE can briefly report no data just after a native write, even at the same
+        # clipboard sequence. Refresh once; callers still require stable provenance.
+        Start-Sleep -Milliseconds 25
+        $data = [Windows.Forms.Clipboard]::GetDataObject()
+    }
+    if ($null -eq $data) { return @{empty=$true;text=''} }
+    $formats=@($data.GetFormats($false))
+    if ($formats.Count -eq 0) { return @{empty=$true;text=''} }
+    $extra=@($formats | Where-Object {
         $_ -notin @('UnicodeText','Text','OEMText','System.String','Locale')
-    }).Count -or -not [Windows.Forms.Clipboard]::ContainsText()) { throw 'CLIPBOARD_NOT_PLAIN_TEXT' }
+    })
+    if (-not [Windows.Forms.Clipboard]::ContainsText()) { throw 'CLIPBOARD_NOT_PLAIN_TEXT' }
+    if ($extra.Count -gt 0) {
+        # A system EDP marker alone does not prove enterprise ownership. Ask Windows;
+        # never discard a real identity, unknown policy or other non-text formats.
+        if ($extra.Count -ne 1 -or $extra[0] -ne 'EnterpriseDataProtectionId') { throw 'CLIPBOARD_NOT_PLAIN_TEXT' }
+        Initialize-WeComWin32
+        if (-not [WeComWin32]::IsPersonalClipboard()) { throw 'CLIPBOARD_NOT_PLAIN_TEXT' }
+    }
     return @{empty=$false;text=[Windows.Forms.Clipboard]::GetText()}
 }
 
@@ -945,7 +975,7 @@ function New-WeComClipboardOwner {
 function Test-WeComSearchClipboardEcho {
     param([int64]$MainHwnd, [string]$Query, [int]$TimeoutMs = 1500)
     $result = @{matched=$false;copied_length=$null;reason='clipboard_unavailable';restored=$false}
-    $original=$null;$touched=$false;$copied=$null;$copySeq=$null;$sentinelSeq=$null;$window=$null
+    $original=$null;$touched=$false;$copied=$null;$copySeq=$null;$sentinelSeq=$null;$window=$null;$copyRequested=$false
     $sentinel='AidWecomSearchEcho:' + [guid]::NewGuid().ToString('N')
     try {
         if ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') { return $result }
@@ -961,30 +991,44 @@ function Test-WeComSearchClipboardEcho {
         [void][WeComWin32]::GetWindowThreadProcessId([IntPtr]$MainHwnd,[ref]$ownerPid)
         if ($ownerPid -le 0) { $result.reason='search_window_changed';return $result }
         $window=New-WeComClipboardOwner
-        $writtenSeq=[uint32]0
+        $lockedWriteStamp=[uint32]0
         $touched=$true
         if (-not [WeComWin32]::ExchangeClipboardText($window.Handle,$originalSeq,$original.text,
-                $original.empty,$sentinel,$false,[ref]$writtenSeq)) { $result.reason='clipboard_changed';return $result }
-        $sentinelSeq=$writtenSeq
+                $original.empty,$sentinel,$false,[ref]$lockedWriteStamp)) { $result.reason='clipboard_changed';return $result }
+        # lockedWriteStamp is not a receipt: CloseClipboard may publish synthesized formats.
+        # Certify the published unique nonce with a stable read and our exact hidden owner.
+        $publishedSeq=[WeComWin32]::GetClipboardSequenceNumber()
         $check=Get-WeComPlainClipboard
-        if ($check.text -cne $sentinel -or $sentinelSeq -ne [WeComWin32]::GetClipboardSequenceNumber()) { return $result }
+        $publishedOwner=[WeComWin32]::GetClipboardOwner()
+        $publishedAfter=[WeComWin32]::GetClipboardSequenceNumber()
+        if ($check.empty -or $check.text -cne $sentinel -or
+                $publishedOwner -ne $window.Handle -or $publishedSeq -ne $publishedAfter) { return $result }
+        $sentinelSeq=$publishedSeq
         if (-not (Test-WeComSearchWindowUnchanged $before (Get-WeComWindowInfo ([IntPtr]$MainHwnd)))) { return $result }
         if (-not (Send-WeComAttachChordKey -Hwnd $MainHwnd -Vk 0x41)) { return $result }
         Start-Sleep -Milliseconds 100
+        $copyRequested=$true
         if (-not (Send-WeComAttachChordKey -Hwnd $MainHwnd -Vk 0x43)) { return $result }
         $deadline=[DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
         while ([DateTime]::UtcNow -lt $deadline) {
-            $seq=[WeComWin32]::GetClipboardSequenceNumber();$copyPid=0
-            [void][WeComWin32]::GetWindowThreadProcessId([WeComWin32]::GetClipboardOwner(),[ref]$copyPid)
-            if ($seq -ne $sentinelSeq -and $copyPid -eq $ownerPid) {
+            $seq=[WeComWin32]::GetClipboardSequenceNumber()
+            if ($seq -ne $sentinelSeq) {
                 $observed=Get-WeComPlainClipboard
-                if ($observed.text -cne $sentinel -and $seq -eq [WeComWin32]::GetClipboardSequenceNumber()) {
-                    $copied=$observed.text;$copySeq=$seq
-                    $result.copied_length=$copied.Length
-                    $result.matched=([string]::Equals($copied,$Query,[StringComparison]::Ordinal) -and
-                        (Test-WeComSearchWindowUnchanged $before (Get-WeComWindowInfo ([IntPtr]$MainHwnd))))
-                    $result.reason='copied'
-                    break
+                $copyPid=0
+                [void][WeComWin32]::GetWindowThreadProcessId([WeComWin32]::GetClipboardOwner(),[ref]$copyPid)
+                $copyAfter=[WeComWin32]::GetClipboardSequenceNumber()
+                if ($copyPid -eq $ownerPid -and $observed.text -cne $sentinel -and $seq -eq $copyAfter) {
+                    if ($observed.empty -or $observed.text.Length -eq 0) {
+                        # An empty OLE snapshot cannot certify this nonempty search query.
+                        $result.reason='clipboard_copy_read_failed'
+                    } else {
+                        $copied=$observed.text;$copySeq=$seq
+                        $result.copied_length=$copied.Length
+                        $result.matched=([string]::Equals($copied,$Query,[StringComparison]::Ordinal) -and
+                            (Test-WeComSearchWindowUnchanged $before (Get-WeComWindowInfo ([IntPtr]$MainHwnd))))
+                        $result.reason='copied'
+                        break
+                    }
                 }
             }
             Start-Sleep -Milliseconds 75
@@ -992,18 +1036,25 @@ function Test-WeComSearchClipboardEcho {
     } catch {
         $result.matched=$false
         $result.reason=if ($_.Exception.Message -match 'CLIPBOARD_WRITE_FAILED') { 'clipboard_write_failed' }
-            elseif ($_.Exception.Message -match 'CLIPBOARD_CLOSE_FAILED') { 'clipboard_close_failed' } else { 'clipboard_unavailable' }
+            elseif ($_.Exception.Message -match 'CLIPBOARD_CLOSE_FAILED') { 'clipboard_close_failed' }
+            elseif ($copyRequested) { 'clipboard_copy_read_failed' } else { 'clipboard_unavailable' }
     }
     finally {
         if ($touched -and $null -ne $original) {
             try {
                 $seq=[WeComWin32]::GetClipboardSequenceNumber();$current=Get-WeComPlainClipboard
-                $ours=($seq -eq $sentinelSeq -and $current.text -ceq $sentinel) -or
-                    ($null -ne $copySeq -and $seq -eq $copySeq -and $current.text -ceq $copied)
+                $currentOwner=[WeComWin32]::GetClipboardOwner()
+                $stable=($seq -eq [WeComWin32]::GetClipboardSequenceNumber())
+                # Even a failed receipt/close may leave our nonce. Retire it only with our
+                # exact owner and a stable current snapshot; native CAS rechecks before writing.
+                $nonceOwned=($null -ne $window -and -not $current.empty -and
+                    $currentOwner -eq $window.Handle -and $current.text -ceq $sentinel)
+                $ours=$stable -and ($nonceOwned -or
+                    ($null -ne $copySeq -and $seq -eq $copySeq -and $current.text -ceq $copied))
                 if ($ours) {
-                    $writtenSeq=[uint32]0
+                    $lockedWriteStamp=[uint32]0
                     $result.restored=[WeComWin32]::ExchangeClipboardText($window.Handle,$seq,$current.text,
-                        $current.empty,$original.text,$original.empty,[ref]$writtenSeq)
+                        $current.empty,$original.text,$original.empty,[ref]$lockedWriteStamp)
                 }
             } catch {
                 $result.matched=$false;$result.restored=$false
@@ -1012,8 +1063,13 @@ function Test-WeComSearchClipboardEcho {
             }
             if (-not $result.restored) {
                 $result.matched=$false
-                if ($result.reason -notin @('clipboard_write_failed','clipboard_close_failed','clipboard_restore_failed')) {
-                    $result.reason='clipboard_changed'
+                if ($result.reason -eq 'clipboard_copy_read_failed') {
+                    # Copy may already have replaced the saved value, but no copy receipt was proved.
+                    $result.reason='clipboard_restore_failed'
+                } elseif ($result.reason -notin @('clipboard_write_failed','clipboard_close_failed','clipboard_restore_failed')) {
+                    if ($stable -and $current.empty -and $null -ne $window -and $currentOwner -eq $window.Handle) {
+                        $result.reason='clipboard_restore_failed'
+                    } else { $result.reason='clipboard_changed' }
                 }
             }
         }

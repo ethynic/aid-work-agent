@@ -9,7 +9,8 @@ public class WeComWin32 {
  public static string Text, CopyPayload;
  public static bool Empty, NonText, WindowDisposed, WriteFail;
  public static uint Sequence;
- public static int Owner, Exchanges, RaceOnExchange, FailOnExchange;
+ public static int Owner, Exchanges, RaceOnExchange, FailOnExchange, PublishAdvance, FailAfterWriteOnExchange;
+ public static bool ForeignOwnerAfterWrite;
  public static string FailureCode;
  public static uint GetClipboardSequenceNumber() { return Sequence; }
  public static IntPtr GetClipboardOwner() { return (IntPtr)Owner; }
@@ -22,7 +23,11 @@ public class WeComWin32 {
   if(Exchanges==RaceOnExchange) {Text="external-write";Empty=false;Owner=777;Sequence++;}
   if(Sequence!=expected || Empty!=wasEmpty || (!Empty && Text!=previous))return false;
   if(WriteFail || Exchanges==FailOnExchange)throw new InvalidOperationException(FailureCode);
-  Text=next;Empty=nextEmpty;NonText=false;Owner=99;Sequence++;written=Sequence;return true;
+  Text=next;Empty=nextEmpty;NonText=false;Owner=99;Sequence++;written=Sequence;
+  Sequence+=(uint)PublishAdvance; // CloseClipboard publishes synthesized formats after the out stamp.
+  if(Exchanges==1 && ForeignOwnerAfterWrite) {Owner=777;Sequence++;}
+  if(Exchanges==FailAfterWriteOnExchange)throw new InvalidOperationException("CLIPBOARD_CLOSE_FAILED");
+  return true;
  }
 }
 '@
@@ -46,8 +51,13 @@ function Send-WeComClick {param($Hwnd,$ScreenX,$ScreenY)
 function Get-WeComPlainClipboard {
  $script:clipboardReads++
  if([WeComWin32]::NonText-or$script:clipboardReadFails){throw 'CLIPBOARD_UNAVAILABLE'}
+ if($script:copyReadFails-and$script:clipboardReads-eq3){throw 'COPY_READ_FAILED'}
  if($script:restoreReadFails-and$script:clipboardReads-ge4){throw 'RESTORE_READ_FAILED'}
  $value=@{empty=[WeComWin32]::Empty;text=[WeComWin32]::Text}
+ if($script:advanceOnReceiptRead-and$script:clipboardReads-eq2){[WeComWin32]::Sequence++}
+ if($script:raceOnReceiptRead-and$script:clipboardReads-eq2){
+  [WeComWin32]::Text='external-write';[WeComWin32]::Owner=777;[WeComWin32]::Sequence++
+ }
  if($script:raceOnCopyRead-and$script:clipboardReads-eq3){
   [WeComWin32]::Text='external-write';[WeComWin32]::Owner=777;[WeComWin32]::Sequence++
  }
@@ -75,18 +85,20 @@ function Reset-Case {
  [WeComWin32]::WindowDisposed=$false;[WeComWin32]::Sequence=10;[WeComWin32]::Owner=77
  [WeComWin32]::Exchanges=0;[WeComWin32]::RaceOnExchange=0;[WeComWin32]::WriteFail=$false
  [WeComWin32]::FailOnExchange=0;[WeComWin32]::FailureCode='CLIPBOARD_WRITE_FAILED'
+ [WeComWin32]::PublishAdvance=0;[WeComWin32]::FailAfterWriteOnExchange=0;[WeComWin32]::ForeignOwnerAfterWrite=$false
  [WeComWin32]::CopyPayload='full-query'
  $script:actions=New-Object Collections.ArrayList
  $script:windowReads=0;$script:moveOnRead=0;$script:clipboardReads=0;$script:failedChord=0
  $script:clearEmpty=$true;$script:noCopy=$false;$script:foreignCopy=$false
  $script:clipboardReadFails=$false;$script:raceOnCopyRead=$false
- $script:restoreReadFails=$false;$script:disposeFails=$false
+ $script:advanceOnReceiptRead=$false;$script:raceOnReceiptRead=$false
+ $script:restoreReadFails=$false;$script:disposeFails=$false;$script:copyReadFails=$false
  $script:useProducerFocus=$false
  $script:state=@{State='unknown';Content='tail-query';ContentPos=@(268,36);PlaceholderPos=$null;
   TokensRaw=@(@{text='tail-query';x0=207;x1=329;y0=25;y1=48},
    @{text='Q!';x0=187;x1=216;y0=29;y1=46},@{text='+';x0=369;x1=384;y0=31;y1=45})}
 }
-function Invoke-EchoProbe {return Test-WeComSearchClipboardEcho -MainHwnd 101 -Query 'full-query' -TimeoutMs 5}
+function Invoke-EchoProbe {return Test-WeComSearchClipboardEcho -MainHwnd 101 -Query 'full-query' -TimeoutMs 100}
 
 Reset-Case
 $result=Invoke-EchoProbe
@@ -95,11 +107,35 @@ Assert-True ([WeComWin32]::Text-ceq'original-text') 'original text must return u
 Assert-True ([WeComWin32]::WindowDisposed) 'hidden clipboard owner must be disposed'
 Assert-True (@($actions|Where-Object {$_.kind-eq'chord'-and$_.vk-notin@(0x41,0x43)}).Count-eq0) 'copy verification must never Delete/Enter'
 
+Reset-Case;[WeComWin32]::PublishAdvance=3
+$result=Invoke-EchoProbe
+Assert-True ($result.matched-and$result.restored-and[WeComWin32]::Text-ceq'original-text') 'Close publication sequence advances must not invalidate fresh copy or abandon the saved clipboard'
+Reset-Case;$script:advanceOnReceiptRead=$true
+$result=Invoke-EchoProbe
+Assert-True (-not$result.matched-and$result.restored-and$actions.Count-eq0-and[WeComWin32]::Text-ceq'original-text') 'unstable receipt must block copying but its still-owned unique nonce must be retired'
+Reset-Case;$script:raceOnReceiptRead=$true
+$result=Invoke-EchoProbe
+Assert-True (-not$result.matched-and-not$result.restored-and$actions.Count-eq0-and[WeComWin32]::Text-ceq'external-write') 'foreign write during receipt must prevent copying and must never be restored over'
+Reset-Case;[WeComWin32]::ForeignOwnerAfterWrite=$true
+$result=Invoke-EchoProbe
+Assert-True (-not$result.matched-and-not$result.restored-and$actions.Count-eq0-and[WeComWin32]::Owner-eq777) 'identical nonce under another owner must not establish a receipt or permit restoration'
+Reset-Case;[WeComWin32]::FailAfterWriteOnExchange=1;[WeComWin32]::PublishAdvance=3
+$result=Invoke-EchoProbe
+Assert-True (-not$result.matched-and$result.restored-and$result.reason-eq'clipboard_close_failed'-and[WeComWin32]::Text-ceq'original-text') 'a close fault after writing must stay explicit while finally recovers our owned unique nonce'
+
 Reset-Case;[WeComWin32]::CopyPayload='tail-query'
 $result=Invoke-EchoProbe
 Assert-True (-not$result.matched-and$result.restored) 'missing first character must never pass exact matching'
+Reset-Case;$script:copyReadFails=$true
+$result=Invoke-EchoProbe
+Assert-True (-not$result.matched-and-not$result.restored-and$result.reason-eq'clipboard_restore_failed') 'copy may replace the original before its read fails, so unproved restoration must be explicit'
+Assert-True ([WeComWin32]::Exchanges-eq1-and[WeComWin32]::Text-ceq'full-query') 'missing copy receipt must never cause a blind restore over an unproved current value'
 Reset-Case;[WeComWin32]::CopyPayload=' full-query'
 Assert-True (-not(Invoke-EchoProbe).matched) 'clipboard equality must not trim or normalize the copied query'
+Reset-Case;[WeComWin32]::CopyPayload=' full query '
+[WeComWin32]::Text="original  value`r`n with spaces "
+$result=Test-WeComSearchClipboardEcho -MainHwnd 101 -Query ' full query ' -TimeoutMs 100
+Assert-True ($result.matched-and$result.restored-and[WeComWin32]::Text-ceq"original  value`r`n with spaces ") 'full query and restored clipboard must retain meaningful spaces and line endings'
 Reset-Case;[WeComWin32]::Text='full-query';$script:noCopy=$true
 $result=Invoke-EchoProbe
 Assert-True (-not$result.matched-and$result.restored-and[WeComWin32]::Text-ceq'full-query') 'old expected clipboard text cannot fake a new copy'
@@ -172,17 +208,18 @@ function Write-DriverLog {param($Msg)}
 function Send-WeComText {param($Hwnd,$Text)}
 function Invoke-WeComJev {param($StateText,$Questions)return @{used=$false}}
 function Wait-WeComWindow {param($ClassName,$TimeoutMs)$script:overlayReached=$true;throw 'TEST_OVERLAY_BOUNDARY'}
-foreach($case in @('ocr-exact','clipped-copy-exact','copy-mismatch','restore-read-failure','restore-write-failure','restore-close-failure')){
+foreach($case in @('ocr-exact','clipped-copy-exact','copy-mismatch','copy-read-failure','restore-read-failure','restore-write-failure','restore-close-failure')){
  Reset-Case;$script:overlayReached=$false;$Query='full-query'
  if($case-eq'ocr-exact'){$script:state.Content=$Query}
  if($case-eq'copy-mismatch'){[WeComWin32]::CopyPayload='tail-query'}
+ if($case-eq'copy-read-failure'){$script:copyReadFails=$true}
  if($case-eq'restore-read-failure'){$script:restoreReadFails=$true}
  if($case-eq'restore-write-failure'){[WeComWin32]::FailOnExchange=2}
  if($case-eq'restore-close-failure'){[WeComWin32]::FailOnExchange=2;[WeComWin32]::FailureCode='CLIPBOARD_CLOSE_FAILED'}
  $failure='';try{& $body}catch{$failure=$_.Exception.Message}
  Assert-True ($overlayReached-eq($case-in@('ocr-exact','clipped-copy-exact'))) 'only a proved complete query with safe restoration may reach the search overlay'
  if($case-eq'ocr-exact'){Assert-True ([WeComWin32]::Exchanges-eq0) 'successful original OCR must not use clipboard at all'}
- if($case-like'restore-*-failure'){
+ if($case-like'restore-*-failure'-or$case-eq'copy-read-failure'){
   Assert-True ($failure-like'*剪贴板写入/恢复失败*原内容可能未恢复*已中止且未重试*') 'clipboard system failure must be visible to the user, not merely logged'
  }
 }
