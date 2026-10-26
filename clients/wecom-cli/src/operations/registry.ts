@@ -15,6 +15,7 @@ import { createWecomAddCustomerOperation } from './addCustomer.js'
 import { createWecomChatSearchOperation } from './chatSearch.js'
 import { createWecomChatSelectOperation } from './chatSelect.js'
 import { createWecomMessageSendOperation } from './messageSend.js'
+import { createWecomSendStatusOperation } from './sendStatus.js'
 import { createWecomProbeOperation } from './probe.js'
 import { createWecomReadSessionOperation } from './readSession.js'
 import { createWecomSendFileOperation } from './sendFile.js'
@@ -40,6 +41,7 @@ export const OPERATIONS: Record<string, OperationEntry> = {
   wecom_chat_search: { operation: createWecomChatSearchOperation(), cli: { write: false } },
   wecom_chat_select: { operation: createWecomChatSelectOperation(), cli: { write: true } },
   wecom_message_send: { operation: createWecomMessageSendOperation(), cli: { write: true } },
+  wecom_send_status: { operation: createWecomSendStatusOperation(), cli: { write: false } },
   wecom_send_image: { operation: createWecomSendImageOperation(), cli: { write: true } },
   wecom_send_file: { operation: createWecomSendFileOperation(), cli: { write: true } },
   wecom_unread_list: { operation: createWecomUnreadListOperation(), cli: { write: false } },

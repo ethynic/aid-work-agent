@@ -556,3 +556,17 @@ npm install
 npm run typecheck   # tsc --noEmit
 npm test            # build + node --test（全 mock，不需要真实企微）
 ```
+
+## 不确定发送结果的只读恢复
+
+本地库基线可用的文本发送在调用发送驱动前写入DPAPI CurrentUser加密凭据，并通过checkpoint进度和最终结果/错误的`data.receipt_id`提供ID。调用方应保存ID；`effect=unknown/partial`或进程退出没有原结果时，不要再次调用send，改为：
+
+```powershell
+node dist/src/cli/index.js send-status --receipt-id <原receipt_id> --json
+```
+
+该命令只读本地库，不切群、不输入、不发送。`data.send_status=confirmed`只表示原账号、会话、源代际及基线之后、原时间窗内有唯一可信全文匹配记录，不代表对方已收到/已读，也不能区分窗口内人工发送的同文。`unknown`仍可能已发出，应稍后只读核查或人工判断，不得自动重发。凭据缺失/损坏、换账号/库、锚失效、歧义或扫描达到上限均不推断未发送。
+
+明确无发送动作的阶段会删除凭据（如checkpoint取消、导航前检查、写前拒绝）；删除失败立即停止，`receipt_invalidation_failed=true`的ID不可用于自动确认。驱动中超时/取消/unknown保留证据用于只读核对。
+
+凭据位于既有`artifacts/send-*/send-receipt.dpapi`，一个发送阶段一个小文件；清理该证据目录后无法恢复。不要将密文或原始群消息上传日志。只有旧OCR路径的发送没有可重建本地证明，不产生receipt。本轮入口仅CLI，Runtime/MCP产品接线及新真实发送验收仍待W6联动，不改原Runtime结果补传设施。

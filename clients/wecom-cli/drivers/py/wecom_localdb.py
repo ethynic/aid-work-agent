@@ -865,7 +865,7 @@ QUERY_MESSAGE_COLUMNS = ('message_id', 'server_id', 'sequence', 'sender_id', 'co
                          'content_type', 'send_time', 'flag', 'content')
 
 QUERY_USAGE = ('用法：wecom_localdb.py query --workdir <dir> '
-               '--task messages|conversations|last-per-conv|resolve|groups|history '
+               '--task messages|send-messages|conversations|last-per-conv|resolve|groups|history '
                '[--conv <会话id>] [--after-id N] [--limit N] [--since <秒>] [--until <秒>] '
                '[--exclude-types <t[,t…]>] [--name <名称>] '
                '[--with-names（仅 last-per-conv，须与 --account 同传）]')
@@ -924,7 +924,7 @@ def _message_anchor(row):
     return hashlib.sha256(json.dumps(fields, separators=(',', ':')).encode('utf-8')).hexdigest()
 
 
-def _query_messages(conn, conv, after_id, limit, since, anchor=None):
+def _query_messages(conn, conv, after_id, limit, since, anchor=None, *, until=None, send_projection=False):
     """首次取最近 limit 条；显式 after-id（含 0）取水位之后最早 limit 条。
     返回集按入库序，next_cursor_id 只认返回集末端；空批次保留原水位/锚点。
     since 可选过滤，排除表不影响本任务。"""
@@ -939,15 +939,20 @@ def _query_messages(conn, conv, after_id, limit, since, anchor=None):
     if since is not None:
         sql += ' AND send_time >= ?'
         params.append(since)
+    if until is not None:
+        sql += ' AND send_time <= ?'
+        params.append(until)
     sql += ' ORDER BY message_id %s LIMIT ?' % ('DESC' if after_id is None else 'ASC')
     params.append(limit)
-    messages = [_message_row(r) for r in conn.execute(sql, params).fetchall()]
+    rows = conn.execute(sql, params).fetchall()
     if after_id is None:
-        messages.reverse()
+        rows.reverse()
+    legacy_messages = [_message_row(row) for row in rows]
+    messages = [_send_message_row(row) for row in rows] if send_projection else legacy_messages
     next_cursor_id = messages[-1]['message_id'] if messages else (after_id or 0)
-    return {'ok': True, 'task': 'messages', 'conversation_id': conv,
+    return {'ok': True, 'task': 'send-messages' if send_projection else 'messages', 'conversation_id': conv,
             'count': len(messages), 'next_cursor_id': next_cursor_id, 'messages': messages,
-            'next_anchor': _message_anchor(messages[-1]) if messages else (anchor or '')}
+            'next_anchor': _message_anchor(legacy_messages[-1]) if messages else (anchor or '')}
 
 
 def _query_conversations(conn):
@@ -1129,6 +1134,16 @@ def _history_content(content, content_type, fallback):
     if not known and fallback['text'] is not None:
         parts = [fallback['text'], _HISTORY_GAP]
     return parts, complete and bool(fields)
+
+
+def _send_message_row(row):
+    """发送确认只信完整纯文本片段；不改变旧消息正文或游标锚点。"""
+    message = _message_row(row)
+    parts, complete = _history_content(row[-1], message['content_type'], message)
+    message['trusted'] = complete and all(isinstance(part, str) for part in parts)
+    if message['trusted']:
+        message['text'] = ''.join(parts)
+    return message
 
 
 def _history_user_names(workdir, user_ids):
@@ -1584,10 +1599,10 @@ def _parse_query_args(args):
             return None
     if not workdir or not task:
         return None
-    if task not in ('messages', 'conversations', 'last-per-conv', 'resolve', 'context',
+    if task not in ('messages', 'send-messages', 'conversations', 'last-per-conv', 'resolve', 'context',
                     'groups', 'history'):
         return None
-    if task == 'messages' and not conv:
+    if task in ('messages', 'send-messages') and not conv:
         return None
     if task == 'resolve' and not name:
         return None
@@ -1595,8 +1610,14 @@ def _parse_query_args(args):
         return None
     if task == 'last-per-conv' and with_names and not account:
         return None  # S: 会话解析对方 id 需要本人账号（--with-names 必须与 --account 同传）
-    if until is not None and task != 'history':
+    if until is not None and task not in ('history', 'send-messages'):
         return None
+    if task == 'send-messages':
+        if (with_names or exclude_types or limit >= 9223372036854775807
+                or any(value is not None and value > 9223372036854775807
+                       for value in (after_id, since, until))
+                or (since is not None and until is not None and since > until)):
+            return None
     if task == 'history':
         if not conv or not conv.startswith('R:') or len(conv) <= 2:
             return None
@@ -1636,6 +1657,9 @@ def cmd_query(args):
     try:
         if task == 'messages':
             return _query_messages(conn, conv, after_id, limit, since, anchor)
+        if task == 'send-messages':
+            return _query_messages(conn, conv, after_id, limit, since, anchor,
+                                   until=until, send_projection=True)
         if task == 'groups':
             return _query_groups(conn, name, limit)
         if task == 'history':

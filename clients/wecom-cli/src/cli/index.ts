@@ -55,6 +55,8 @@ const USAGE = `aid-wecom — 企业微信操作 CLI / MCP Provider（M1）
                             二选一——name 直达模式内部自动 search 定位，同名多候选
                             无法消歧时拒绝；发送后校验失败不自动重试，
                             effect=unknown 时请人工核对）
+  send-status --receipt-id <ID> [--json]
+                            只读对账原发送凭据；unknown 时勿重发，不切群、不输入、不发消息
   send-image (--target-ref <ref> | --target-name <会话名>) --image <本地绝对路径> [--json]
                             向目标发送 1 张图片（写动作；png/jpg/jpeg/bmp/gif
                             ≤20MB，路径须为装有 wecom-cli 的机器上的本地绝对路径，调用方
@@ -138,6 +140,10 @@ async function main(): Promise<number> {
         text: flagString(args, 'text'),
         json: hasFlag(args, 'json'),
       })
+    }
+    case 'send-status': {
+      const { sendStatusCommand } = await import('./commands/sendStatus.js')
+      return sendStatusCommand({ receiptId: flagString(args, 'receipt-id'), json: hasFlag(args, 'json') })
     }
     case 'send-image': {
       const { sendImageCommand } = await import('./commands/sendImage.js')

@@ -31,7 +31,7 @@
  *      当前 max(message_id) 为基线（时序保证：基线在发送动作前记录，规避 send_time 秒级
  *      精度与迟到回退，设计 §4.3 时间基准）；
  *   2) 发送：driver `-SkipVerify`（动作与核验分离，不产生 EXECUTION_UNKNOWN）；
- *   3) 本地库核验：重新快照解密 → query messages --after-id=基线 → 匹配：方向=本人 ∧
+ *   3) 本地库核验：重新快照解密 → query send-messages --after-id=基线（有界分页） → 匹配：方向=本人 ∧
  *      会话匹配 ∧ trusted 正文与发送文本全等（设计 §7：发送核验仅使用可信正文）。命中 →
  *      applied + data.verification='local-record'（verification_detail 含匹配 message_id）；
  *      发送后短轮询等待落库（P0：发送后落库延迟未实测，轮询次数/间隔可注入，缺省 3 次 × 1s）；
@@ -49,7 +49,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runWecomOperation } from './context.js'
 import { CancelledError, CodedOperationError, type OperationResult, type OpContext, type WecomOperation } from './types.js'
-import { runPowerShellDriver, type RunPowerShellDriverFn } from '../platform/powershell.js'
+import { DEFAULT_DRIVER_TIMEOUT_MS, runPowerShellDriver, type RunPowerShellDriverFn } from '../platform/powershell.js'
 import { artifactDir } from '../platform/environment.js'
 import {
   createTargetRef,
@@ -64,14 +64,13 @@ import {
   validateTargetSelector,
   type ResolvedByNameTarget,
 } from './navigate.js'
-import { admitLocaldbVersion, prepareDecryptedDbs, unavailable } from '../platform/localdb/access.js'
-import { readLocalState, writeLocalState } from '../platform/localdb/matrix.js'
-import { runLocaldbPy } from '../platform/localdb/driver.js'
-import { logLocaldbEvent } from '../platform/localdb/log.js'
-import { probeCurrentAccount, checkCancelled, type CurrentAccount } from '../platform/localdb/identity.js'
+import { withSendSnapshot, verifySendReceipt, type SendBaseline, type SendReceipt, type SendCheck } from '../platform/localdb/sendVerification.js'
+import { invalidateSendReceipt, saveSendReceipt, type ReceiptCrypto } from '../platform/sendReceipt.js'
+import { mapExecutorError } from './errorMapping.js'
+import { readLocalState } from '../platform/localdb/matrix.js'
+import { probeCurrentAccount, checkCancelled } from '../platform/localdb/identity.js'
 import { resolveFocusConversation } from '../platform/localdb/unread.js'
 import { parseConversationRows } from '../platform/localdb/watch.js'
-import type { RawMessageRow } from '../platform/localdb/messages.js'
 import type { LocaldbReadDeps } from '../platform/localdb/readSession.js'
 
 /** dist/src/operations → 包根 drivers/ps1 */
@@ -121,6 +120,7 @@ export function createWecomMessageSendOperation(
     localdb?: LocaldbReadDeps
     /** 本地库核验轮询参数（缺省 3 次 × 1s；测试注入 0 延迟） */
     localdbVerifyPoll?: LocaldbVerifyPoll
+    receiptCrypto?: ReceiptCrypto
   } = {},
 ): WecomOperation<WecomMessageSendArgs> {
   const runDriverFn = deps.runDriverFn ?? runPowerShellDriver
@@ -131,8 +131,6 @@ export function createWecomMessageSendOperation(
   const artifactDirFn = deps.artifactDirFn ?? (() => artifactDir())
   const local = deps.localdb ?? {}
   const getLocalState = local.readStateFn ?? (() => readLocalState(local.stateDir))
-  const putLocalState = local.writeStateFn ?? (state => writeLocalState(state, local.stateDir))
-  const runPy = local.runPyFn ?? runLocaldbPy
   const poll = { attempts: deps.localdbVerifyPoll?.attempts ?? 3, delayMs: deps.localdbVerifyPoll?.delayMs ?? 1000 }
   return {
     name: 'wecom_message_send',
@@ -196,50 +194,12 @@ export function createWecomMessageSendOperation(
           }
           opCtx.progress({ stage: 'execute', message: `解析目标「${target.name}」，发送前检查当前会话` })
 
-          /** workdir 内一次「快照解密 → 业务查询」会话（finally 自清理；对齐 unread 段结构） */
-          const withSnapshot = async <T>(current: CurrentAccount, workPrefix: 'send-baseline' | 'send-verify', fn: (query: (params: string[]) => Promise<Record<string, unknown>>) => Promise<T>): Promise<T> => {
-            checkCancelled(opCtx.signal)
-            const state = getLocalState()
-            const admission = await admitLocaldbVersion(opCtx, current, state, {}, local)
-            const paths = current.dataDir.db_paths!
-            const prepared = await prepareDecryptedDbs(
-              { message: paths.message, user: paths.user, session: paths.session },
-              {
-                ctx: opCtx, current, version: admission.version, expected: admission.expected,
-                algorithm: admission.algorithm, state, getState: getLocalState, putState: putLocalState,
-                workPrefix, tolerateSessionFailure: true, deps: local,
-              },
-            )
-            try {
-              const call = async (params: string[]): Promise<Record<string, unknown>> => {
-                checkCancelled(opCtx.signal)
-                const result = await runPy(params, { signal: opCtx.signal })
-                checkCancelled(opCtx.signal) // runLocaldbPy 已等待 close，随后才允许 finally 清理。
-                if (!result.ok || !result.data) throw unavailable('本地库子进程未完成，请检查 Python 环境')
-                return result.data
-              }
-              const requireQuery = (value: Record<string, unknown>): Record<string, unknown> => {
-                if (value.ok === true) return value
-                if (value.error === 'IDENTITY_UNCONFIRMED') {
-                  throw new CodedOperationError('IDENTITY_UNCONFIRMED', '账号目录与 user_table.id 的本人身份映射未确认')
-                }
-                if (value.error === 'SCHEMA_UNSUPPORTED') throw new CodedOperationError('VERSION_UNSUPPORTED', '本地库 schema 不支持当前读取')
-                throw unavailable('本地库查询未完成')
-              }
-              return await fn((params) => call(['query', '--workdir', prepared.work.dir, ...params]).then(requireQuery))
-            } finally {
-              if (!prepared.work.cleanup()) {
-                (local.logFn ?? logLocaldbEvent)({ type: 'db_fallback', stage: 'send-verify', reason: 'remove_failed' })
-              }
-            }
-          }
-
           /**
            * 本地库方案准备（发送前）：分派读法同 unread（db / ui(transient)），probe 身份链 →
            * resolve 目标 conversation_id → conversations 任务取基线。任何失败（身份/版本/
            * 快照/resolve 等）→ null = 回退老路径（此时未发送任何消息，零损失）；取消照常抛。
            */
-          const planLocaldb = async (): Promise<{ conversationId: string; baseline: number; current: CurrentAccount } | null> => {
+          const planLocaldb = async (): Promise<SendBaseline | null> => {
             try {
               const state = getLocalState()
               if (!state || !(state.mode === 'db' || (state.mode === 'ui' && state.kind === 'transient'))) return null
@@ -247,7 +207,10 @@ export function createWecomMessageSendOperation(
               checkCancelled(opCtx.signal)
               let conversationId: string | null = null
               let baseline = 0
-              await withSnapshot(current, 'send-baseline', async (query) => {
+              let anchor = ''
+              let source = ''
+              let schema = 0
+              await withSendSnapshot(current, opCtx, local, 'send-baseline', async (query, sourceId) => {
                 const meta = await query(['--task', 'context', '--account', current.account])
                 checkCancelled(opCtx.signal)
                 if (typeof meta.self_user_id !== 'string' || meta.self_user_id !== current.account || !Number.isSafeInteger(meta.schema_version)) {
@@ -257,10 +220,14 @@ export function createWecomMessageSendOperation(
                 const row = parseConversationRows((await query(['--task', 'conversations'])).conversations)
                   .find((c) => c.conversation_id === conversationId)
                 baseline = row ? row.last_message_id : 0
+                anchor = row?.last_anchor ?? ''
+                if (baseline > 0 && !/^[a-f0-9]{64}$/.test(anchor)) throw new Error('missing baseline anchor')
+                source = sourceId
+                schema = meta.schema_version as number
               })
               checkCancelled(opCtx.signal)
               opCtx.progress({ stage: 'execute', message: `本地库发送基线已记录（「${target.name}」max message_id=${baseline}）` })
-              return { conversationId: conversationId!, baseline, current }
+              return { account: current.account, conversationId: conversationId!, baseline, anchor, sourceId: source, schema }
             } catch (err) {
               if (err instanceof CancelledError || (err instanceof CodedOperationError && err.code === 'CANCELLED')) throw err
               checkCancelled(opCtx.signal)
@@ -270,165 +237,200 @@ export function createWecomMessageSendOperation(
             }
           }
 
-          /**
-           * 本地库核验一次：重新快照解密 → messages --after-id=基线 → 匹配「方向=本人 ∧
-           * 会话匹配 ∧ trusted 正文与发送文本全等」。命中返回匹配 message_id；未命中 null；
-           * 本地库失败抛出（调用方转 -VerifyOnly 兜底）。
-           */
-          const verifyByLocaldb = async (plan: { conversationId: string; baseline: number; current: CurrentAccount }): Promise<number | null> => {
-            return withSnapshot(plan.current, 'send-verify', async (query) => {
-              const res = await query([
-                '--task', 'messages', '--conv', plan.conversationId,
-                '--after-id', String(plan.baseline), '--limit', '50',
-              ])
-              const rows = (Array.isArray(res.messages) ? res.messages : []).filter(
-                (r): r is RawMessageRow => r !== null && typeof r === 'object',
-              )
-              const hit = rows.find((r) =>
-                r.trusted === true && // 设计 §7：发送核验仅使用可信正文（parse_trusted=true）
-                r.sender_id === plan.current.account && // 方向 = 本人（sender_id 严格相等）
-                typeof r.text === 'string' && r.text === args.text, // 正文全等
-              )
-              return hit !== undefined && Number.isSafeInteger(hit.message_id) ? hit.message_id : null
-            })
-          }
-
           // —— 本地库方案（state db/ui(transient)）：基线 → 发送（-SkipVerify）→ 本地库核验 —— //
           const plan = await planLocaldb()
           if (plan !== null) {
-            const spawnSendDriver = (dir: string): Promise<Record<string, unknown>> =>
-              runDriverFn({
-                script: DRIVER_PATH,
-                args: [
-                  '-TargetName', target.name,
-                  '-Subtitle', target.subtitle,
-                  '-Section', target.type,
-                  '-Text', args.text,
-                  '-ArtifactDir', dir,
-                  '-SkipVerify', // 动作与核验分离：终态判定由本地库接管（设计 §4.3 接线）
-                ],
-                signal: opCtx.signal,
+            let receipt: SendReceipt | undefined
+            let receiptId: string | undefined
+            const diagnostics: SendCheck[] = []
+            try {
+              const spawnSendDriver = async (dir: string): Promise<Record<string, unknown>> => {
+                // A navigation-only stage is retired before the next stage gets its own checkpoint.
+                receipt = undefined
+                receiptId = undefined
+                let driverInvoked = false
+                const retire = () => {
+                  try { invalidateSendReceipt(dir) } catch {
+                    throw new CodedOperationError('INTERNAL_ERROR',
+                      '已知无发送动作，但恢复凭据失效失败；已停止本次调用，勿用该凭据自动确认或重发', 'unknown',
+                      { receipt_invalidation_failed: true })
+                  }
+                }
+                try {
+                  const now = (local.now ?? Date.now)()
+                  const checkpoint: SendReceipt = { ...plan, version: 1, text: args.text,
+                    since: Math.floor(now / 1000) - 2, until: Math.ceil((now + DEFAULT_DRIVER_TIMEOUT_MS) / 1000) + 2 }
+                  try {
+                    receiptId = await saveSendReceipt(dir, checkpoint, deps.receiptCrypto)
+                    receipt = checkpoint
+                  } catch (err) {
+                    if (err instanceof CodedOperationError && err.effectOverride === 'unknown') throw err
+                    throw new CodedOperationError('INTERNAL_ERROR', '发送前加密凭据未落盘，未调用发送驱动', 'none')
+                  }
+                  opCtx.progress({ stage: 'checkpoint', message: `发送恢复凭据：${receiptId}（结果未知时仅用 send-status 对账，勿重发）` })
+                  if (opCtx.signal.aborted) throw new CodedOperationError('CANCELLED', '发送前已取消，未调用发送驱动', 'none')
+                  driverInvoked = true
+                  const result = await runDriverFn({
+                    script: DRIVER_PATH,
+                    args: [
+                      '-TargetName', target.name,
+                      '-Subtitle', target.subtitle,
+                      '-Section', target.type,
+                      '-Text', args.text,
+                      '-ArtifactDir', dir,
+                      '-SkipVerify', // 动作与核验分离：终态判定由本地库接管（设计 §4.3 接线）
+                    ],
+                    signal: opCtx.signal,
+                  })
+                  if (result.navigate_required === true) retire()
+                  return result
+                } catch (err) {
+                  // These codes are the existing driver's pre-Enter rejection contract. A timeout,
+                  // in-driver cancellation, crash or unknown is never proof of no write.
+                  const knownNone = err instanceof CodedOperationError &&
+                    (err.effectOverride === 'none' || (err.effectOverride === undefined &&
+                      !['RESULT_TIMEOUT', 'EXECUTION_UNKNOWN', 'CANCELLED', 'INTERNAL_ERROR'].includes(err.code)))
+                  if (receiptId && (!driverInvoked || knownNone)) retire()
+                  if (!driverInvoked && !(err instanceof CodedOperationError && err.effectOverride === 'unknown')) {
+                    const mapped = mapExecutorError(err)
+                    throw new CodedOperationError(mapped.code, mapped.message, 'none',
+                      err instanceof CodedOperationError ? err.data : undefined)
+                  }
+                  throw err
+                }
+              }
+              const { data, navigated } = await runStageWithNavigation({
+                runDriverFn,
+                verifyRefFn,
+                createRefFn,
+                opCtx,
+                root,
+                target,
+                artifactPrefix: 'send',
+                spawnStage: spawnSendDriver,
+                texts: {
+                  writeDesc: '消息',
+                  notSentNote: '未发送消息',
+                  checkDesc: '发送前检查',
+                  afterEnter: '执行发送',
+                },
               })
-            const { data, navigated } = await runStageWithNavigation({
-              runDriverFn,
-              verifyRefFn,
-              createRefFn,
-              opCtx,
-              root,
-              target,
-              artifactPrefix: 'send',
-              spawnStage: spawnSendDriver,
-              texts: {
-                writeDesc: '消息',
-                notSentNote: '未发送消息',
-                checkDesc: '发送前检查',
-                afterEnter: '执行发送',
-              },
-            })
-            // 发送动作已完成（driver ok = Enter 已按、无 EXECUTION_UNKNOWN）：此后任何失败
-            // 都不能重入发送阶段——本地库核验失败转 -VerifyOnly，仍失败 EXECUTION_UNKNOWN
-            tracker.completed = 1
+              // 发送动作已完成（driver ok = Enter 已按、无 EXECUTION_UNKNOWN）：此后任何失败
+              // 都不能重入发送阶段——本地库核验失败转 -VerifyOnly，仍失败 EXECUTION_UNKNOWN
+              tracker.completed = 1
 
-            // 本地库核验（短轮询等待落库；轮询参数可注入）
-            let localHit: number | null = null
-            let dbVerifyFailed: string | null = null
-            for (let attempt = 1; attempt <= Math.max(1, poll.attempts); attempt++) {
-              if (attempt > 1) await sleepAbortable(poll.delayMs, opCtx.signal)
+              // 本地库核验（短轮询等待落库；轮询参数可注入）
+              let localHit: number | null = null
+              let dbVerifyFailed: string | null = null
+              for (let attempt = 1; attempt <= Math.max(1, poll.attempts); attempt++) {
+                if (attempt > 1) await sleepAbortable(poll.delayMs, opCtx.signal)
+                try {
+                  const check = await verifySendReceipt(receipt!, opCtx, local)
+                  diagnostics.push(check)
+                  localHit = check.message_id ?? null
+                  if (check.status === 'confirmed') break
+                } catch (err) {
+                  if (err instanceof CancelledError || (err instanceof CodedOperationError && err.code === 'CANCELLED')) throw err
+                  checkCancelled(opCtx.signal)
+                  dbVerifyFailed = err instanceof CodedOperationError ? err.code : 'LOCALDB_UNAVAILABLE'
+                  break
+                }
+              }
+
+              const sentVerificationRaw = (data.sent_verification ?? null) as Record<string, unknown> | null
+              const sentVerification =
+                sentVerificationRaw !== null && typeof sentVerificationRaw === 'object'
+                  ? {
+                      method: sentVerificationRaw.method === 'rule_2of3'
+                        ? 'rule_2of3'
+                        : sentVerificationRaw.method === 'skipped' ? 'skipped' : 'jev',
+                      result: typeof sentVerificationRaw.result === 'string' ? sentVerificationRaw.result : 'unknown',
+                      ...(typeof sentVerificationRaw.failure_mode === 'string' ? { failure_mode: sentVerificationRaw.failure_mode } : {}),
+                    }
+                  : null
+              const ipRaw = (data.input_point ?? null) as Record<string, unknown> | null
+              const inputPoint =
+                ipRaw !== null && typeof ipRaw === 'object'
+                  ? {
+                      x: typeof ipRaw.x === 'number' && Number.isFinite(ipRaw.x) ? Math.round(ipRaw.x) : null,
+                      y: typeof ipRaw.y === 'number' && Number.isFinite(ipRaw.y) ? Math.round(ipRaw.y) : null,
+                    }
+                  : null
+              const baseData = {
+                receipt_id: receiptId,
+                localdb_verification: diagnostics,
+                target: target.name,
+                ...(resolved !== null
+                  ? { resolved_target: { name: resolved.name, subtitle: resolved.subtitle, section: resolved.section } }
+                  : {}),
+                title: typeof data.title === 'string' && data.title.length > 0 ? data.title : target.name,
+                navigated,
+                sent_verification: sentVerification,
+                input_point: inputPoint,
+                timing_ms: sanitizeTiming(data.timing_ms),
+                screenshot_paths: Array.isArray(data.screenshot_paths)
+                  ? data.screenshot_paths.filter((p): p is string => typeof p === 'string')
+                  : [],
+              }
+
+              if (localHit !== null) {
+                // db 核验命中：客户端已记录该出站消息（本地核验），非服务端回执（决策 #47）
+                return {
+                  message: `已向「${target.name}」发送消息，本地库核验命中（客户端记录已落库匹配 message_id=${localHit}；仅代表客户端动作已记录，不代表对方已收到）`,
+                  data: {
+                    ...baseData,
+                    verification: 'local-record' as const,
+                    verification_detail: { method: 'local-record' as const, message_id: localHit },
+                  },
+                }
+              }
+
+              // 未命中/本地库核验失败 → 既有 OCR 核验：driver -VerifyOnly（仅终态证据与判定，
+              // 不重入发送阶段）；验证驱动失败按「消息可能已发出」归并 EXECUTION_UNKNOWN
+              opCtx.progress({ stage: 'execute', message: dbVerifyFailed !== null ? `本地库核验失败（${dbVerifyFailed}），转 OCR 气泡核验` : '本地库未匹配到新记录，转 OCR 气泡核验' })
+              const verifyDir = join(root, `send-verify-${new Date().toISOString().replace(/[:.]/g, '-')}`)
+              mkdirSync(verifyDir, { recursive: true })
               try {
-                localHit = await verifyByLocaldb(plan)
-                if (localHit !== null) break
+                await runDriverFn({
+                  script: DRIVER_PATH,
+                  args: [
+                    '-TargetName', target.name,
+                    '-Subtitle', target.subtitle,
+                    '-Section', target.type,
+                    '-Text', args.text,
+                    '-ArtifactDir', verifyDir,
+                    '-VerifyOnly', // 仅核验：不输入、不发送（驱动内 step0.5-4 全跳过）
+                  ],
+                  signal: opCtx.signal,
+                })
               } catch (err) {
+                // 核验调用直调驱动、不经 runStageWithNavigation 的写动作翻译：发送已完成
+                // （tracker.completed=1），核验阶段的任何失败（RESULT_TIMEOUT/UI_CHANGED/
+                // 驱动失败等）都不得透传原码——会被 writeEffect 归为 effect=none（消息已
+                // 发出却报「未发生写动作」，误导消费侧重发），统一按 §4.3「发送后的失败保持
+                // EXECUTION_UNKNOWN」归并（effect=unknown）；取消保持既有 CANCELLED/partial
                 if (err instanceof CancelledError || (err instanceof CodedOperationError && err.code === 'CANCELLED')) throw err
                 checkCancelled(opCtx.signal)
-                dbVerifyFailed = err instanceof CodedOperationError ? err.code : 'LOCALDB_UNAVAILABLE'
-                break
+                throw new CodedOperationError('EXECUTION_UNKNOWN',
+                  `核验链路失败（${err instanceof CodedOperationError ? err.code : '驱动执行失败'}）：` +
+                  '消息可能已发出，但本地库核验与 OCR 气泡核验均未完成（不会自动重试，请用 send-status 对账）', undefined, baseData)
               }
-            }
-
-            const sentVerificationRaw = (data.sent_verification ?? null) as Record<string, unknown> | null
-            const sentVerification =
-              sentVerificationRaw !== null && typeof sentVerificationRaw === 'object'
-                ? {
-                    method: sentVerificationRaw.method === 'rule_2of3'
-                      ? 'rule_2of3'
-                      : sentVerificationRaw.method === 'skipped' ? 'skipped' : 'jev',
-                    result: typeof sentVerificationRaw.result === 'string' ? sentVerificationRaw.result : 'unknown',
-                    ...(typeof sentVerificationRaw.failure_mode === 'string' ? { failure_mode: sentVerificationRaw.failure_mode } : {}),
-                  }
-                : null
-            const ipRaw = (data.input_point ?? null) as Record<string, unknown> | null
-            const inputPoint =
-              ipRaw !== null && typeof ipRaw === 'object'
-                ? {
-                    x: typeof ipRaw.x === 'number' && Number.isFinite(ipRaw.x) ? Math.round(ipRaw.x) : null,
-                    y: typeof ipRaw.y === 'number' && Number.isFinite(ipRaw.y) ? Math.round(ipRaw.y) : null,
-                  }
-                : null
-            const baseData = {
-              target: target.name,
-              ...(resolved !== null
-                ? { resolved_target: { name: resolved.name, subtitle: resolved.subtitle, section: resolved.section } }
-                : {}),
-              title: typeof data.title === 'string' && data.title.length > 0 ? data.title : target.name,
-              navigated,
-              sent_verification: sentVerification,
-              input_point: inputPoint,
-              timing_ms: sanitizeTiming(data.timing_ms),
-              screenshot_paths: Array.isArray(data.screenshot_paths)
-                ? data.screenshot_paths.filter((p): p is string => typeof p === 'string')
-                : [],
-            }
-
-            if (localHit !== null) {
-              // db 核验命中：客户端已记录该出站消息（本地核验），非服务端回执（决策 #47）
+              // 驱动正常返回 = 终态核验通过（EXECUTION_UNKNOWN 由驱动抛出、原样向上传播）
               return {
-                message: `已向「${target.name}」发送消息，本地库核验命中（客户端记录已落库匹配 message_id=${localHit}；仅代表客户端动作已记录，不代表对方已收到）`,
+                message: `已向「${target.name}」发送消息，发送后校验通过（OCR 气泡证据；本地库未命中${dbVerifyFailed !== null ? `，本地库核验失败 ${dbVerifyFailed}` : ''}）`,
                 data: {
                   ...baseData,
-                  verification: 'local-record' as const,
-                  verification_detail: { method: 'local-record' as const, message_id: localHit },
+                  verification: 'ocr-bubble' as const,
+                  ...(dbVerifyFailed !== null ? { localdb_verify_failed: dbVerifyFailed } : {}),
                 },
               }
-            }
-
-            // 未命中/本地库核验失败 → 既有 OCR 核验：driver -VerifyOnly（仅终态证据与判定，
-            // 不重入发送阶段）；验证驱动失败按「消息可能已发出」归并 EXECUTION_UNKNOWN
-            opCtx.progress({ stage: 'execute', message: dbVerifyFailed !== null ? `本地库核验失败（${dbVerifyFailed}），转 OCR 气泡核验` : '本地库未匹配到新记录，转 OCR 气泡核验' })
-            const verifyDir = join(root, `send-verify-${new Date().toISOString().replace(/[:.]/g, '-')}`)
-            mkdirSync(verifyDir, { recursive: true })
-            try {
-              await runDriverFn({
-                script: DRIVER_PATH,
-                args: [
-                  '-TargetName', target.name,
-                  '-Subtitle', target.subtitle,
-                  '-Section', target.type,
-                  '-Text', args.text,
-                  '-ArtifactDir', verifyDir,
-                  '-VerifyOnly', // 仅核验：不输入、不发送（驱动内 step0.5-4 全跳过）
-                ],
-                signal: opCtx.signal,
-              })
             } catch (err) {
-              // 核验调用直调驱动、不经 runStageWithNavigation 的写动作翻译：发送已完成
-              // （tracker.completed=1），核验阶段的任何失败（RESULT_TIMEOUT/UI_CHANGED/
-              // 驱动失败等）都不得透传原码——会被 writeEffect 归为 effect=none（消息已
-              // 发出却报「未发生写动作」，误导消费侧重发），统一按 §4.3「发送后的失败保持
-              // EXECUTION_UNKNOWN」归并（effect=unknown）；取消保持既有 CANCELLED/partial
-              if (err instanceof CancelledError || (err instanceof CodedOperationError && err.code === 'CANCELLED')) throw err
-              checkCancelled(opCtx.signal)
-              throw new CodedOperationError('EXECUTION_UNKNOWN',
-                `核验链路失败（${err instanceof CodedOperationError ? err.code : '驱动执行失败'}）：` +
-                '消息可能已发出，但本地库核验与 OCR 气泡核验均未完成（不会自动重试，请人工核对）')
-            }
-            // 驱动正常返回 = 终态核验通过（EXECUTION_UNKNOWN 由驱动抛出、原样向上传播）
-            return {
-              message: `已向「${target.name}」发送消息，发送后校验通过（OCR 气泡证据；本地库未命中${dbVerifyFailed !== null ? `，本地库核验失败 ${dbVerifyFailed}` : ''}）`,
-              data: {
-                ...baseData,
-                verification: 'ocr-bubble' as const,
-                ...(dbVerifyFailed !== null ? { localdb_verify_failed: dbVerifyFailed } : {}),
-              },
+              const mapped = mapExecutorError(err)
+              throw new CodedOperationError(mapped.code, mapped.message,
+                err instanceof CodedOperationError ? err.effectOverride : undefined,
+                { ...(err instanceof CodedOperationError ? err.data : {}),
+                  ...(receiptId ? { receipt_id: receiptId, send_status: 'unknown' } : {}),
+                  localdb_verification: diagnostics })
             }
           }
 

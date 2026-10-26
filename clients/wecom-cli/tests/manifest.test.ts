@@ -131,7 +131,7 @@ test('toolDefs ↔ registry 一致性守卫：每个 toolDef 可取到 operation
   // registry ⊇ toolDefs：M11b 起 registry 10 个 operation 且全部进 MCP toolDefs
   // （read_session 由仅 CLI 改为同时暴露 MCP，watch_poll 留 CLI——runtime 受信清单
   // 不含 watch_poll/add_customer，见 agent-tool-runtime providers.ts）
-  assert.equal(OPERATION_NAMES.length, 12)
+  assert.equal(OPERATION_NAMES.length, 13)
   assert.ok(OPERATION_NAMES.includes('wecom_read_session'))
   for (const name of TOOL_NAMES) {
     assert.ok(OPERATION_NAMES.includes(name), `MCP tool「${name}」必须在 OPERATIONS 注册`)

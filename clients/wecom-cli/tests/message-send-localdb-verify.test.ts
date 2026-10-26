@@ -16,8 +16,8 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -30,6 +30,9 @@ import type { CurrentAccount } from '../src/platform/localdb/identity.js'
 import { writeLocalState } from '../src/platform/localdb/matrix.js'
 import { captureSnapshot } from '../src/platform/localdb/snapshot.js'
 import { createTargetRef, verifyTargetRef } from '../src/platform/targetRef.js'
+import { createWecomSendStatusOperation } from '../src/operations/sendStatus.js'
+import { loadSendReceipt } from '../src/platform/sendReceipt.js'
+import { runLocaldbPy } from '../src/platform/localdb/driver.js'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
 const python = join(root, '..', '..', 'venv', 'Scripts', 'python.exe')
@@ -84,7 +87,7 @@ async function fixture(): Promise<Fixture> {
       page_size: 4096, db_magic: readFileSync(data.db_paths!.message!).subarray(0, 8).toString('hex') } } }),
     loadKeyFn: async () => ({ keyHex: KEY, savedAt: 'fixture' }),
     stateDir, keyDir: stateDir, workBaseDir: join(base, 'work'), logFn: () => true,
-    now: () => 1700100000000, snapshotRetryMs: 1,
+    now: () => 1700000014000, snapshotRetryMs: 1,
   }
   return { base, current, deps, stateDir, artifactRoot: join(base, 'artifacts'),
     appendTwo: () => execFileSync(python, [helper, base, 'append', '2'], { windowsHide: true }),
@@ -490,4 +493,275 @@ test('静态核对（P2）：-VerifyOnly 分支的标题一致性检查存在且
   assert.ok(sendRecheck > -1 && sendRecheck < verifyTitleLog, '定位发送路径 step4 复核（位于 -VerifyOnly 分支之前）')
   const sendBlock = src.slice(sendRecheck, verifyTitleLog)
   assert.ok(sendBlock.includes('UI_CHANGED'), '发送路径 step4 复核语义保持 UI_CHANGED')
+})
+
+function recoverySend(f: Fixture, mock: DriverMock, overrides: Parameters<typeof createWecomMessageSendOperation>[0] = {}) {
+  return createWecomMessageSendOperation({ runDriverFn: makeRunDriver(mock),
+    verifyRefFn: () => ({ name: 'Peer', type: 'other', subtitle: '' }),
+    artifactDirFn: () => f.artifactRoot, localdb: f.deps,
+    localdbVerifyPoll: { attempts: 1, delayMs: 0 }, ...overrides })
+}
+
+async function unknownReceipt(f: Fixture): Promise<string> {
+  const mock: DriverMock = { calls: [], stages: [new CodedOperationError('RESULT_TIMEOUT', 'synthetic timeout')] }
+  const result = await recoverySend(f, mock).execute({ target_ref: 'ref', text: 'synthetic-14' }, silentCtx())
+  assert.equal(result.effect, 'unknown')
+  assert.equal(mock.calls.length, 1)
+  assert.equal(typeof result.data.receipt_id, 'string')
+  return result.data.receipt_id as string
+}
+
+test('繁忙会话超过50条仍可核验尾部，diagnostics明确分页且不含正文', windows, async () => {
+  const f = await fixture()
+  try {
+    const mock: DriverMock = { calls: [], stages: [{ ...SKIP_OK }], onSend: () => {
+      execFileSync(python, [helper, f.base, 'append', '64'], { windowsHide: true })
+    } }
+    const r = await recoverySend(f, mock).execute({ target_ref: 'ref', text: 'synthetic-76' }, silentCtx())
+    assert.equal(r.data.verification, 'local-record')
+    assert.deepEqual(r.data.verification_detail, { method: 'local-record', message_id: 76 })
+    assert.equal((r.data.localdb_verification as Array<{pages: number}>)[0]!.pages, 2)
+    assert.ok(!JSON.stringify(r.data.localdb_verification).includes('synthetic-76'))
+    assert.equal(mock.calls.length, 1)
+  } finally { f.close() }
+})
+
+test('checkpoint加密失败在派发前终止，effect=none且驱动零调用', windows, async () => {
+  const f = await fixture()
+  try {
+    const mock: DriverMock = { calls: [], stages: [] }
+    const r = await recoverySend(f, mock, { receiptCrypto: { protect: async () => { throw new Error('secret must not leak') } } })
+      .execute({ target_ref: 'ref', text: 'synthetic-14' }, silentCtx())
+    assert.equal(r.code, 'INTERNAL_ERROR')
+    assert.equal(r.effect, 'none')
+    assert.equal(mock.calls.length, 0)
+    assert.ok(!JSON.stringify(r).includes('secret must not leak'))
+  } finally { f.close() }
+})
+
+test('save自清失败unknown及receipt ID必须穿透两层派发前错误包装，驱动零调用', windows, async () => {
+  const f = await fixture()
+  try {
+    const id = 'send-2026-10-26T00-00-00-000Z'
+    const mock: DriverMock = { calls: [], stages: [] }
+    const r = await recoverySend(f, mock, { receiptCrypto: { protect: async () => {
+      throw new CodedOperationError('INTERNAL_ERROR', 'synthetic save cleanup failed', 'unknown',
+        { receipt_id: id, receipt_invalidation_failed: true })
+    } } }).execute({ target_ref: 'ref', text: 'synthetic-14' }, silentCtx())
+    assert.equal(r.effect, 'unknown')
+    assert.equal(r.data.receipt_id, id)
+    assert.equal(r.data.receipt_invalidation_failed, true)
+    assert.equal(mock.calls.length, 0)
+  } finally { f.close() }
+})
+
+test('驱动超时返回恢复ID；迟到落库后只读对账收敛，重复查询零重发', windows, async () => {
+  const f = await fixture()
+  try {
+    const id = await unknownReceipt(f)
+    const status = createWecomSendStatusOperation({ artifactDirFn: () => f.artifactRoot, localdb: f.deps })
+    let result = await status.execute({ receipt_id: id }, silentCtx())
+    assert.equal(result.data.send_status, 'unknown')
+    assert.equal(result.effect, 'none')
+    f.appendTwo()
+    for (let i = 0; i < 2; i++) {
+      result = await status.execute({ receipt_id: id }, silentCtx())
+      assert.equal(result.data.send_status, 'confirmed')
+      assert.equal(result.effect, 'none')
+    }
+    const receipt = await loadSendReceipt(f.artifactRoot, id)
+    assert.equal(receipt.text, 'synthetic-14')
+    const disk = readFileSync(join(f.artifactRoot, id, 'send-receipt.dpapi'), 'utf8')
+    assert.ok(!disk.includes(receipt.text) && !disk.includes(SELF), '真实DPAPI密文不得包含正文或账号明文')
+  } finally { f.close() }
+})
+
+test('换账号、换源库、原地基线重写均拒绝旧凭据，不误报confirmed', windows, async () => {
+  for (const mode of ['account', 'replace', 'reuse'] as const) {
+    const f = await fixture()
+    try {
+      const id = await unknownReceipt(f)
+      f.appendTwo()
+      if (mode !== 'account') execFileSync(python, [helper, f.base, mode, '0'], { windowsHide: true })
+      const status = createWecomSendStatusOperation({ artifactDirFn: () => f.artifactRoot,
+        localdb: mode === 'account' ? { ...f.deps, probeAccountFn: async () => ({ ...f.current, account: 'other' }) } : f.deps })
+      const r = await status.execute({ receipt_id: id }, silentCtx())
+      assert.equal(r.success, false, mode)
+      assert.equal(r.effect, 'none')
+      assert.equal(r.data.send_status, 'unknown')
+    } finally { f.close() }
+  }
+})
+
+test('凭据丢失、损坏和路径穿越都不当作未发送', windows, async () => {
+  const f = await fixture()
+  try {
+    const id = await unknownReceipt(f)
+    const status = createWecomSendStatusOperation({ artifactDirFn: () => f.artifactRoot, localdb: f.deps })
+    writeFileSync(join(f.artifactRoot, id, 'send-receipt.dpapi'), 'corrupt', 'utf8')
+    const broken = await status.execute({ receipt_id: id }, silentCtx())
+    assert.equal(broken.code, 'CONTENT_UNAVAILABLE')
+    assert.equal(broken.data.send_status, 'unknown')
+    rmSync(join(f.artifactRoot, id, 'send-receipt.dpapi'))
+    assert.equal((await status.execute({ receipt_id: id }, silentCtx())).data.send_status, 'unknown')
+    assert.equal((await status.execute({ receipt_id: '../outside' }, silentCtx())).code, 'INVALID_ARGUMENT')
+  } finally { f.close() }
+})
+
+test('同文歧义、时间窗外相同文本和扫描上限都保持unknown', windows, async () => {
+  const f = await fixture()
+  try {
+    const id = await unknownReceipt(f)
+    const receipt = await loadSendReceipt(f.artifactRoot, id)
+    for (const mode of ['ambiguous', 'outside', 'limit'] as const) {
+      let pages = 0
+      const localdb: LocaldbReadDeps = { ...f.deps, runPyFn: async (params, opts) => {
+        if (params[params.indexOf('--task') + 1] !== 'send-messages') return runLocaldbPy(params, opts)
+        pages++
+        const after = Number(params[params.indexOf('--after-id') + 1])
+        const messages = Array.from({ length: mode === 'limit' ? 50 : mode === 'ambiguous' ? 2 : 1 }, (_, i) => ({
+          message_id: after + i + 1, conversation_id: receipt.conversationId, sender_id: SELF,
+          text: receipt.text, trusted: true, send_time: mode === 'outside' ? receipt.until + 1 : receipt.since + 1,
+        }))
+        return { ok: true, raw_last_line: '', data: { ok: true, conversation_id: receipt.conversationId, messages,
+          next_cursor_id: messages.at(-1)!.message_id, next_anchor: 'a'.repeat(64) } }
+      } }
+      const r = await createWecomSendStatusOperation({ artifactDirFn: () => f.artifactRoot, localdb })
+        .execute({ receipt_id: id }, silentCtx())
+      assert.equal(r.data.send_status, 'unknown', mode)
+      assert.equal((r.data.reconciliation as {reason: string}).reason,
+        mode === 'limit' ? 'scan_limit' : mode === 'ambiguous' ? 'ambiguous' : 'not_observed')
+      assert.equal(pages, mode === 'limit' ? 20 : 1)
+    }
+  } finally { f.close() }
+})
+
+test('发送子进程落库后立即退出，父进程只靠已flush凭据恢复；无原结果且不重派发送', windows, async () => {
+  const f = await fixture()
+  try {
+    const moduleUrl = new URL('../src/operations/messageSend.js', import.meta.url).href
+    const script = `
+      import { createWecomMessageSendOperation } from ${JSON.stringify(moduleUrl)};
+      import { readFileSync, existsSync } from 'node:fs';
+      import { execFileSync } from 'node:child_process';
+      import { join } from 'node:path';
+      const p = JSON.parse(readFileSync(0, 'utf8'));
+      let receipt;
+      const localdb = { probeAccountFn: async () => p.current,
+        detectInstallFn: async () => ({ installed: true, pid: 4242, version: p.version,
+          exe_path: 'C:/synthetic/WXWork.exe', install_dir: 'C:/synthetic', version_source: 'process',
+          process_started_at: null, upgrade_signals: [] }),
+        loadMatrixFn: () => ({ entries: { [p.version]: { status: 'validated', algorithm: 'wxaes128cbc-nonlegacy', page_size: 4096,
+          db_magic: readFileSync(p.current.dataDir.db_paths.message).subarray(0,8).toString('hex') } } }),
+        loadKeyFn: async () => ({ keyHex: p.key, savedAt: 'fixture' }),
+        stateDir: p.stateDir, keyDir: p.stateDir, workBaseDir: join(p.base, 'child-work'), logFn: () => true,
+        now: () => 1700000014000, snapshotRetryMs: 1 };
+      await createWecomMessageSendOperation({ localdb, artifactDirFn: () => p.artifactRoot,
+        verifyRefFn: () => ({ name: 'Peer', type: 'other', subtitle: '' }),
+        runDriverFn: async options => {
+          if (!receipt || !existsSync(join(p.artifactRoot, receipt, 'send-receipt.dpapi'))) process.exit(91);
+          execFileSync(p.python, [p.helper, p.base, 'append', '2'], { windowsHide: true });
+          process.exit(17);
+        } }).execute({ target_ref: 'ref', text: 'synthetic-14' }, { signal: new AbortController().signal,
+          progress: event => { if (event.stage === 'checkpoint') {
+            receipt = event.message.match(/send-[0-9TZ-]+/)[0]; console.log(receipt);
+          } } });
+      process.exit(92);
+    `
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+      input: JSON.stringify({ ...f, deps: undefined, python, helper, version: VERSION, key: KEY }), encoding: 'utf8', windowsHide: true,
+    })
+    assert.equal(child.status, 17, '必须已进入合成发送落库并硬退出，而非正常返回或基线失败')
+    const id = child.stdout.trim()
+    assert.ok(existsSync(join(f.artifactRoot, id, 'send-receipt.dpapi')))
+    const r = await createWecomSendStatusOperation({ artifactDirFn: () => f.artifactRoot, localdb: f.deps })
+      .execute({ receipt_id: id }, silentCtx())
+    assert.equal(r.success, true)
+    assert.equal(r.data.send_status, 'confirmed')
+    assert.equal(r.effect, 'none')
+  } finally { f.close() }
+})
+
+test('checkpoint处取消或进度回调失败：驱动零调用，原凭据失效，后到同文不能误确认', windows, async () => {
+  for (const mode of ['abort', 'progress-error'] as const) {
+    const f = await fixture()
+    try {
+      const controller = new AbortController()
+      let id = ''
+      const mock: DriverMock = { calls: [], stages: [] }
+      const r = await recoverySend(f, mock).execute({ target_ref: 'ref', text: 'synthetic-14' }, {
+        signal: controller.signal, progress: event => {
+          if (event.stage === 'checkpoint') {
+            id = event.message.match(/send-[0-9TZ-]+/)![0]
+            if (mode === 'abort') controller.abort()
+            else throw new Error('synthetic progress failure')
+          }
+        },
+      })
+      assert.equal(r.effect, 'none')
+      assert.equal(r.code, mode === 'abort' ? 'CANCELLED' : 'INTERNAL_ERROR')
+      assert.equal(mock.calls.length, 0)
+      assert.ok(id)
+      assert.equal(existsSync(join(f.artifactRoot, id, 'send-receipt.dpapi')), false)
+      f.appendTwo()
+      const later = await createWecomSendStatusOperation({ artifactDirFn: () => f.artifactRoot, localdb: f.deps })
+        .execute({ receipt_id: id }, silentCtx())
+      assert.equal(later.data.send_status, 'unknown')
+    } finally { f.close() }
+  }
+})
+
+test('navigate_required或明确发送前拒绝的阶段立刻失效，后续同文不使旧凭据确认', windows, async () => {
+  for (const stage of [{ navigate_required: true }, new CodedOperationError('UI_CHANGED', 'synthetic draft exists')]) {
+    const f = await fixture()
+    try {
+      const mock: DriverMock = { calls: [], stages: [stage] }
+      let id = ''
+      const r = await recoverySend(f, mock).execute({ target_ref: 'ref', text: 'synthetic-14' }, {
+        signal: new AbortController().signal,
+        progress: event => { if (event.stage === 'checkpoint') id = event.message.match(/send-[0-9TZ-]+/)![0] },
+      })
+      assert.equal(r.success, false)
+      assert.ok(id)
+      assert.equal(existsSync(join(f.artifactRoot, id, 'send-receipt.dpapi')), false)
+      f.appendTwo()
+      const later = await createWecomSendStatusOperation({ artifactDirFn: () => f.artifactRoot, localdb: f.deps })
+        .execute({ receipt_id: id }, silentCtx())
+      assert.equal(later.data.send_status, 'unknown')
+    } finally { f.close() }
+  }
+})
+
+test('已知none但凭据删除失败立即报unknown并停止，不继续搜索导航或第二次派发', windows, async () => {
+  const f = await fixture()
+  try {
+    const mock: DriverMock = { calls: [], stages: [{ navigate_required: true }], onSend: call => {
+      const dir = call.args![call.args!.indexOf('-ArtifactDir') + 1]!
+      const path = join(dir, 'send-receipt.dpapi')
+      rmSync(path)
+      mkdirSync(path) // Real unlink must fail for a directory; no mocked successful invalidation.
+    } }
+    const r = await recoverySend(f, mock).execute({ target_ref: 'ref', text: 'synthetic-14' }, silentCtx())
+    assert.equal(r.code, 'INTERNAL_ERROR')
+    assert.equal(r.effect, 'unknown')
+    assert.equal(r.data.receipt_invalidation_failed, true)
+    assert.equal(mock.calls.length, 1)
+  } finally { f.close() }
+})
+
+test('只读核验期间原阶段已失效：返回confirmed前复核存在性，不使用内存中的旧凭据确认', windows, async () => {
+  const f = await fixture()
+  try {
+    const id = await unknownReceipt(f)
+    f.appendTwo()
+    const localdb: LocaldbReadDeps = { ...f.deps, runPyFn: async (params, opts) => {
+      const result = await runLocaldbPy(params, opts)
+      if (params[params.indexOf('--task') + 1] === 'send-messages') rmSync(join(f.artifactRoot, id, 'send-receipt.dpapi'))
+      return result
+    } }
+    const r = await createWecomSendStatusOperation({ artifactDirFn: () => f.artifactRoot, localdb })
+      .execute({ receipt_id: id }, silentCtx())
+    assert.equal(r.success, false)
+    assert.equal(r.data.send_status, 'unknown')
+  } finally { f.close() }
 })
