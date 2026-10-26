@@ -164,9 +164,13 @@ Run time of job "王晓产品演示提醒" (trigger: date[2026-10-20 14:30:00 CS
 
 - 3 个 date 触发器（10-20 14:30 / 10-20 14:40 / 10-21 10:00）错过执行时间后**反复重注册反复 missed**（10-20 到 10-24 多个时间点成批出现），说明提醒从未送达，且任务一直挂在调度器里每次启动都刷 missed。
 - 关联：10-20 同日有「一次性任务缺少执行时间 task_id=...」WARNING，疑似同一链路（session_tasks 一次性提醒 → scheduler 注册）的字段缺失或时间换算问题。
-- **处理**：
-  - [ ] 排查 session_tasks 一次性提醒的注册链路：为何 date trigger 在创建后 5 分钟即错过（missed by 0:05:13 首次即 miss）、为何错过后被反复重注册
-  - [ ] 核对 misfire_grace_time 与过期任务的清理策略；过期提醒应显式作废而不是永远挂着
+- **排查结论（2026-10-26，代码定位，已修复待部署）**：与 session_tasks 无关，本链路是 scheduled_tasks 通用定时任务（create_scheduled_task 工具创建）。三个缺陷叠加：
+  1. 创建端不校验：create_scheduled_task 对 once 类型不校验 run_at 存在性/格式/是否未来时间--LLM 未解析出 run_at 落库 cron_expression=NULL（即「一次性任务缺少执行时间」WARNING），解析出过去时间也照常入库，任务创建即死，提醒从未送达
+  2. 过期任务永不作废：once 任务 status 恒为 active，每次进程重启 list_active() 重注册过期 DateTrigger 刷 missed；且启动注册未填 _reconcile_seen、首轮 reconcile（30s）会再重注册一次--每次重启每个死任务刷 2 条 missed，3 个死任务 × 约 20 次重启 ≈ 122 条
+  3. 执行成功不收尾：executor 对 once 任务成功执行后不改状态，同样被重启重注册
+- **修复**：创建端校验 run_at（必填 + 未来时间 + 格式归一化，兼容缺秒/T 分隔/斜杠日期等 LLM 变体）；manager._register_job 对缺失/不可解析/超宽限（300s，与 misfire_grace_time 一致）过期的 once 任务显式置 expired 不注册；executor 对成功执行的 once 任务置 completed；启动注册后即填 _reconcile_seen 消除首轮重复注册。存量 3 条脏数据部署后首次注册自愈为 expired
+- **追加：渠道场景尽力投递（2026-10-26，已修复待部署）**：wecom_kf 等渠道创建的提醒即使调度修复也无法保证送达（平台 48h 窗口/配额/接待状态限制）。三层投递：创建时如实告知（渠道创建返回附提示文案）；执行成功后经 ChannelFactory 直投一次，失败登记 scheduled_task_deliveries（pending，新表，db_update.yaml 2026-10-26 15:00:00）；客户下次来消息时入站钩子合并补投（挂在 AI 可接待分支、转人工/拦截判定之后）。每日 04:45 清理：pending 超 3 天置 expired，终态保留 7 天。代码：src/scheduler/delivery.py + executor/delivery 钩子 + channel_routes 补投挂点 + ScheduledTaskDeliveryDB
+- **独立测试与 CodeReview 结论（2026-10-26）**：178 单测全绿（tests/unit/scheduler/）+ wecom_kf adapter 回归 85 全绿；无 P0。已按审查意见修复：① 失败的 once 任务在 5 分钟宽限内被 reconcile 反复重注册补跑（重复计费）-- _register_job 对 last_run_at 非空的过期 once 任务直接作废；② 直投写共享 adapter 的 current_open_kfid 有并发交错窗口 -- send_text 增加显式 open_kfid 参数，投递链路不碰共享状态；③ 双空租户 fail-closed 拒绝；④ 补投 attempts 达 5 次自动 expired；⑤ 标记逐条容错、补投钩子日志对齐 opt(exception=True)、任务名截 50 字、纯日期串 run_at 拒绝、前端状态映射补 expired。已知限制（登记不修）：多客服账号租户直投可能取到非会话账号的 adapter（open_kfid 与凭证不匹配时企微报错降级 pending，不会错发，补投兜底）；补投先于 Agent 回复发送（临近窗口耗尽时可能占用配额）；跨事件循环复用缓存 adapter 的 httpx 连接池（5s 窗口内并发触发可能报错降级 pending）。真机端到端（真实企微 API 直投/48h 窗口/补投）待部署验收
 
 ### P2-2 本地工具 invocation 租约过期 / 许可清扫（46 WARNING，10-20~10-22）
 

@@ -4,9 +4,8 @@ import asyncio
 import os
 import threading
 import time
-import traceback
-from datetime import datetime
-from typing import Optional, Dict
+from datetime import datetime, timedelta
+from typing import Any, Optional, Dict
 
 from loguru import logger
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -18,6 +17,53 @@ from src.scheduler.db import ScheduledTaskDB
 from src.scheduler.executor import ScheduledTaskExecutor
 from src.core.redis_client import redis_client
 from src.core.cache_utils import CacheKeys
+
+# 一次性任务过期宽限：与 job_defaults.misfire_grace_time 一致。
+# run_time 落在宽限内仍允许注册（APScheduler 会补跑）；超出宽限视为过期任务，
+# 显式作废（status=expired）而不是永远挂着——否则每次进程重启都会重注册一次
+# 过去时间的 DateTrigger，反复刷「Run time of job ... was missed」WARNING。
+_ONCE_MISFIRE_GRACE_SECONDS = 300
+
+# parse_run_datetime 兼容的时间格式（LLM 常见输出：缺秒 / T 分隔 / 斜杠日期）
+_RUN_AT_FORMATS = (
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d %H:%M",
+    "%Y/%m/%d %H:%M:%S",
+    "%Y/%m/%d %H:%M",
+)
+
+
+def parse_run_datetime(value: Any) -> Optional[datetime]:
+    """解析一次性任务执行时间为 naive 北京时间 datetime；不可解析返回 None。
+
+    工具层创建时已归一化为 "%Y-%m-%d %H:%M:%S"，这里兼容存量行与 LLM 变体输出；
+    带时区的时间换算到 Asia/Shanghai 后去时区（调度器时区即 Asia/Shanghai）。
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    for fmt in _RUN_AT_FORMATS:
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if text.count(":") == 0:
+        # 纯日期串（fromisoformat 接受 "2026-10-20"）会解析成当天 00:00，
+        # 与创建端「必须向用户确认具体时间」口径不符，视为不可解析
+        return None
+    if dt.tzinfo is not None:
+        try:
+            from zoneinfo import ZoneInfo
+            dt = dt.astimezone(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
+        except Exception:
+            return None
+    return dt
 
 # 全局单例
 _executor = ScheduledTaskExecutor()
@@ -107,8 +153,12 @@ class ScheduledTaskManager:
         registered_count = 0
         for task in active_tasks:
             try:
-                self._register_job(task)
-                registered_count += 1
+                if self._register_job(task):
+                    registered_count += 1
+                    # 启动注册后即记签名，否则首轮 reconcile 会把刚注册的任务
+                    # 再重注册一次（过期 once 任务因此每重启刷两条 missed）。
+                    # 作废任务不填：状态已置 expired，后续 reconcile 不再拉取
+                    self._reconcile_seen[task["task_id"]] = self._task_signature(task)
             except Exception as e:
                 logger.opt(exception=True).error(f"后端日志：注册定时任务失败 task_id={task['task_id']}, {e}")
 
@@ -306,6 +356,21 @@ class ScheduledTaskManager:
             logger.info("后端日志：已注册工作成果复盘任务 (cron=02:30)")
         except Exception as e:
             logger.error(f"后端日志：注册工作成果复盘任务失败: {e}")
+
+        # ===== 定时任务补投记录清理（每日 04:45）=====
+        # pending 超 3 天置 expired（客户 48h 窗口早已关闭）；sent/expired 保留 7 天后清除
+        try:
+            self._scheduler.add_job(
+                self._run_delivery_cleanup,
+                CronTrigger(hour=4, minute=45, timezone="Asia/Shanghai"),
+                id="job_system_delivery_cleanup",
+                name="Scheduled Task Delivery Cleanup",
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("后端日志：已注册定时任务补投记录清理任务 (cron=04:45)")
+        except Exception as e:
+            logger.error(f"后端日志：注册定时任务补投记录清理任务失败: {e}")
 
         # ===== 视频生成状态轮询（每 30s，只在 background_runner 进程跑）=====
         # 设计文档 docs/system/content-production/mvp-design.md §10
@@ -619,13 +684,7 @@ class ScheduledTaskManager:
                 # 单任务隔离：一条畸形任务（坏 cron / scheduler 异常）不得中断整轮对账，
                 # 否则会每 30s 卡住所有其他任务的注册/移除/触发。
                 try:
-                    sig = (
-                        t.get("schedule_type"),
-                        t.get("cron_expression"),
-                        t.get("interval_seconds"),
-                        t.get("status"),
-                        str(t.get("updated_at")),
-                    )
+                    sig = self._task_signature(t)
                     if t.get("status") == "active":
                         if self._reconcile_seen.get(tid) != sig:
                             self._register_job(t)  # replace_existing=True 幂等
@@ -1041,6 +1100,21 @@ class ScheduledTaskManager:
             except Exception:
                 pass
 
+    def _run_delivery_cleanup(self):
+        """补投记录清理（APScheduler 回调，后台线程执行）。
+
+        pending 超 3 天置 expired（渠道收发窗口早已关闭，补投无意义）；
+        sent/expired 终态记录保留 7 天后删除，控制表体积。
+        """
+        try:
+            from src.scheduler.db import ScheduledTaskDeliveryDB
+            expired = ScheduledTaskDeliveryDB.expire_stale(older_than_days=3)
+            deleted = ScheduledTaskDeliveryDB.cleanup_retention(keep_days=7)
+            if expired or deleted:
+                logger.info(f"后端日志：补投记录清理完成 expired={expired}, deleted={deleted}")
+        except Exception as e:
+            logger.opt(exception=True).error(f"后端日志：补投记录清理失败: {e}")
+
     # ===== 视频生成状态轮询回调（async，每 30s）=====
     def _run_video_gen_poll(self):
         """视频生成状态轮询（APScheduler 回调，后台线程执行）。
@@ -1140,6 +1214,17 @@ class ScheduledTaskManager:
             logger.opt(exception=True).error(f"后端日志：移除定时任务失败 task_id={task_id}, {e}")
             return False
 
+    @staticmethod
+    def _task_signature(t: dict) -> tuple:
+        """reconcile 变更判定签名（schedule_type/cron/interval/status/updated_at）"""
+        return (
+            t.get("schedule_type"),
+            t.get("cron_expression"),
+            t.get("interval_seconds"),
+            t.get("status"),
+            str(t.get("updated_at")),
+        )
+
     def _register_job(self, task: dict) -> Optional[str]:
         """注册单个任务到 APScheduler"""
         task_id = task["task_id"]
@@ -1157,16 +1242,36 @@ class ScheduledTaskManager:
 
         # 构建 trigger
         if schedule_type == "once":
-            # 一次性任务：使用 cron_expression 中存储的 datetime
-            if cron_expression:
-                try:
-                    run_time = datetime.strptime(cron_expression, "%Y-%m-%d %H:%M:%S")
-                    trigger = DateTrigger(run_date=run_time)
-                except ValueError:
-                    trigger = CronTrigger.from_crontab(cron_expression, timezone="Asia/Shanghai")
-            else:
-                logger.warning(f"后端日志：一次性任务缺少执行时间 task_id={task_id}")
+            # 一次性任务：cron_expression 存储执行时间 datetime。
+            # 缺失/不可解析/已过期（超出宽限）的任务永远无法正常触发，显式作废，
+            # 防止每次启动/对账重注册一个过去时间的 DateTrigger 反复刷 missed
+            run_time = parse_run_datetime(cron_expression)
+            if run_time is None:
+                ScheduledTaskDB.update_status(task_id, "expired")
+                logger.warning(
+                    f"后端日志：一次性任务缺少有效执行时间，已作废 "
+                    f"task_id={task_id}, cron_expression={cron_expression!r}"
+                )
                 return None
+            if run_time < datetime.now() - timedelta(seconds=_ONCE_MISFIRE_GRACE_SECONDS):
+                ScheduledTaskDB.update_status(task_id, "expired")
+                logger.warning(
+                    f"后端日志：一次性任务执行时间已过且超出宽限，已作废 "
+                    f"task_id={task_id}, run_time={run_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+                return None
+            if run_time <= datetime.now() and task.get("last_run_at"):
+                # 已执行过但未收尾（执行失败的 once 任务 update_after_run 会刷
+                # last_run_at 且 status 仍 active）：宽限内若再注册，APScheduler
+                # 会补跑过去时间的 DateTrigger，叠加 executor 的 60s 重试线程
+                # 造成重复执行/重复计费。执行过即不再补跑，直接作废。
+                ScheduledTaskDB.update_status(task_id, "expired")
+                logger.warning(
+                    f"后端日志：一次性任务已执行过且未成功收尾，不再补跑，已作废 "
+                    f"task_id={task_id}, run_time={run_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+                return None
+            trigger = DateTrigger(run_date=run_time)
         elif schedule_type == "interval" and interval_seconds:
             trigger = IntervalTrigger(seconds=interval_seconds)
         elif cron_expression:

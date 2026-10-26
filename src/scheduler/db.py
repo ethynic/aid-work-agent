@@ -9,6 +9,9 @@ from loguru import logger
 from src.db.database import get_db_connection, get_current_timestamp
 from src.scheduler.error_sanitizer import sanitize_scheduled_task_error
 
+# 补投尝试上限：达到后置 expired，避免按客户消息频率反复调用企微 API
+_MAX_DELIVERY_ATTEMPTS = 5
+
 
 def _sanitize_error(error_msg: str) -> str:
     """过滤敏感信息（统一委托独立脱敏模块，含引号/未闭合/截断保守遮蔽）"""
@@ -458,3 +461,124 @@ class ScheduledTaskLogDB:
                 }
             return {"total_runs": 0, "success_count": 0, "fail_count": 0,
                     "avg_duration_ms": 0, "success_rate": 0}
+
+
+class ScheduledTaskDeliveryDB:
+    """定时任务待补投记录数据库访问类
+
+    记录渠道场景（如 wecom_kf）创建的定时任务的投递结果：直投成功记 sent，
+    直投失败/无直投机会记 pending，等客户下次来消息时补投。不建跨渠道抽象，
+    channel_type 仅登记事实来源，补投逻辑只对 wecom_kf 生效。
+    """
+
+    @staticmethod
+    def create_pending(task_id: str, tenant_id: str, user_id: str,
+                       channel_type: str, channel_chat_id: str,
+                       channel_user_id: str, session_id: str,
+                       content: str) -> Optional[Dict[str, Any]]:
+        """登记一条待补投记录"""
+        delivery_id = f"sdlv_{uuid.uuid4().hex[:12]}"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("""
+                    INSERT INTO scheduled_task_deliveries
+                    (delivery_id, task_id, tenant_id, user_id, channel_type,
+                     channel_chat_id, channel_user_id, session_id, content, status)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending')
+                """, (delivery_id, task_id, tenant_id or "", user_id or "",
+                      channel_type, channel_chat_id or "", channel_user_id or "",
+                      session_id or "", content or ""))
+                conn.commit()
+                return ScheduledTaskDeliveryDB.get_by_id(delivery_id)
+            except Exception as e:
+                logger.opt(exception=True).error(
+                    f"后端日志：创建定时任务待补投记录失败 task_id={task_id}, {e}")
+                return None
+
+    @staticmethod
+    def get_by_id(delivery_id: str) -> Optional[Dict[str, Any]]:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM scheduled_task_deliveries WHERE delivery_id = %s",
+                (delivery_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    @staticmethod
+    def list_pending(tenant_id: str, channel_chat_id: str,
+                     channel_user_id: str) -> List[Dict[str, Any]]:
+        """列出某渠道联系人名下全部待补投记录（按创建时间升序，合并补投）"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM scheduled_task_deliveries
+                WHERE tenant_id = %s AND channel_type = 'wecom_kf'
+                  AND channel_chat_id = %s AND channel_user_id = %s
+                  AND status = 'pending'
+                ORDER BY created_at ASC
+                LIMIT 20
+            """, (tenant_id, channel_chat_id, channel_user_id))
+            rows = cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    @staticmethod
+    def mark_sent(delivery_id: str) -> bool:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE scheduled_task_deliveries
+                SET status = 'sent', delivered_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE delivery_id = %s
+            """, (delivery_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    @staticmethod
+    def mark_failed(delivery_id: str, error: str) -> bool:
+        """记录最近一次补投失败原因，保持 pending 等下次补投。
+
+        attempts 达 _MAX_DELIVERY_ATTEMPTS 后自动置 expired：连续多次补投
+        失败说明渠道侧持续不可达，不再按客户消息频率反复调用企微 API。
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE scheduled_task_deliveries
+                SET attempts = attempts + 1, last_error = %s,
+                    status = CASE WHEN attempts + 1 >= %s
+                                  THEN 'expired' ELSE status END,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE delivery_id = %s
+            """, ((error or "")[:500], _MAX_DELIVERY_ATTEMPTS, delivery_id))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    @staticmethod
+    def expire_stale(older_than_days: int = 3) -> int:
+        """超过时限仍未补投的记录置 expired（客户 48 小时窗口早已关闭）"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE scheduled_task_deliveries
+                SET status = 'expired', updated_at = CURRENT_TIMESTAMP
+                WHERE status = 'pending'
+                  AND created_at < CURRENT_TIMESTAMP - (%s || ' days')::interval
+            """, (str(older_than_days),))
+            conn.commit()
+            return cursor.rowcount
+
+    @staticmethod
+    def cleanup_retention(keep_days: int = 7) -> int:
+        """清理已终结（sent/expired）超期记录"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                DELETE FROM scheduled_task_deliveries
+                WHERE status IN ('sent', 'expired')
+                  AND updated_at < CURRENT_TIMESTAMP - (%s || ' days')::interval
+            """, (str(keep_days),))
+            conn.commit()
+            return cursor.rowcount

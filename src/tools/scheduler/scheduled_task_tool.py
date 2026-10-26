@@ -7,6 +7,7 @@
 """
 
 import asyncio
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 from loguru import logger
@@ -37,6 +38,8 @@ def _resolve_runtime_tenant_id(context: Optional[ToolExecutionContext]) -> Optio
 # 且没有明确指向其他渠道（邮件/短信/钉钉/飞书/企业微信）的词时才拒绝创建；
 # 任何不确定情况（如仅提"微信"、或发送目标是邮箱）一律放行走通用定时任务，
 # 避免误伤。拦截发生在 dry_run 之前（R56：确定微信任务不执行旧 dry_run）。
+
+_VALID_SCHEDULE_TYPES = {"daily", "weekly", "monthly", "interval", "once"}
 
 _WEIXIN_MARKETING_DOMAIN_MARKERS = (
     "微信群发", "微信营销", "微信推送", "微信自动发送", "weixin_automation",
@@ -95,7 +98,12 @@ class CreateScheduledTaskInput(BaseModel):
         "示例：「1. 使用 email_process 读取未读邮件（action=read, unseen_only=true） 2. 将邮件列表汇总为文本 3. 使用 email_process 发送汇总到 zhangsan@company.com（action=send）」"
     ))
     schedule_type: str = Field(..., description="调度类型：daily每天, weekly每周, monthly每月, interval间隔, once一次性")
-    time_config: Dict[str, Any] = Field(..., description="时间配置，必须从用户话语中解析，所有时间为北京时间")
+    time_config: Dict[str, Any] = Field(..., description=(
+        "时间配置，必须从用户话语中解析，所有时间为北京时间。"
+        "once 类型必填 run_at（格式 YYYY-MM-DD HH:MM:SS，必须是未来时间）；"
+        "daily/weekly/monthly 用 hour/minute（weekly 另需 day_of_week，monthly 另需 day）；"
+        "interval 用 interval_hours"
+    ))
 
 
 class ManageScheduledTaskInput(BaseModel):
@@ -160,6 +168,8 @@ class CreateScheduledTaskTool(BaseTool):
         "为用户创建定时执行的任务。当用户说「每天/每周/每月/定期/定时/每隔X小时」+ 某个操作时使用。"
         "创建前会先执行一次验证，只有验证通过才会创建定时任务。"
         "支持每天、每周、每月、间隔执行、一次性等模式。"
+        "一次性任务（schedule_type=once）必须在 time_config.run_at 提供未来的具体时间"
+        "（格式 YYYY-MM-DD HH:MM:SS，北京时间）；过去时间会被拒绝。"
         "如果用户询问已创建的定时任务，使用 manage_scheduled_task 工具查看。"
         "【重要】必须从用户话语中解析出具体的调度时间（北京时间）。"
         "如果用户没有给出具体时间，必须先向用户确认后再调用，禁止自行猜测默认时间。"
@@ -213,6 +223,41 @@ class CreateScheduledTaskTool(BaseTool):
         if not time_config:
             logger.warning("后端日志：创建定时任务缺少时间配置 time_config 为空")
             return {"success": False, "error": "缺少时间配置（time_config），请明确指定调度时间"}
+
+        if schedule_type not in _VALID_SCHEDULE_TYPES:
+            return {
+                "success": False,
+                "error": (
+                    f"不支持的调度类型: {schedule_type}，"
+                    "可选值：daily（每天）/ weekly（每周）/ monthly（每月）/ "
+                    "interval（间隔）/ once（一次性）"
+                ),
+            }
+
+        # 一次性任务：run_at 必填、必须可解析、必须是未来时间，并归一化为
+        # "%Y-%m-%d %H:%M:%S" 落库（调度器按该格式 strptime 构建 DateTrigger）。
+        # 不校验会产生创建即死的任务：无 run_at 永不注册；过去时间首次注册即 missed
+        if schedule_type == "once":
+            from src.scheduler.manager import parse_run_datetime
+
+            run_at_dt = parse_run_datetime(time_config.get("run_at"))
+            if run_at_dt is None:
+                return {
+                    "success": False,
+                    "error": (
+                        "一次性任务缺少有效执行时间：time_config.run_at 必填，"
+                        "格式 YYYY-MM-DD HH:MM:SS（北京时间），请向用户确认具体时间"
+                    ),
+                }
+            if run_at_dt <= datetime.now():
+                return {
+                    "success": False,
+                    "error": (
+                        f"执行时间 {run_at_dt.strftime('%Y-%m-%d %H:%M:%S')} 已经过去，"
+                        "无法创建一次性提醒，请向用户确认新的未来时间"
+                    ),
+                }
+            time_config["run_at"] = run_at_dt.strftime("%Y-%m-%d %H:%M:%S")
 
         if len(task_prompt) > 2000:
             logger.warning(f"后端日志：创建定时任务 task_prompt 超长 length={len(task_prompt)}")
@@ -310,6 +355,14 @@ class CreateScheduledTaskTool(BaseTool):
 
         logger.info(f"后端日志：定时任务创建成功 task_id={task['task_id']}, user_id={user_id}, name={name}")
 
+        message = (f"定时任务已创建！名称：{name}，调度：{schedule_description}。"
+                   f"首次验证执行结果：{dry_run_preview}...")
+        # 渠道收发限制如实告知：wecom_kf 仅能在客户来消息后的窗口内回复，
+        # 提醒触发时若无直投机会，会在客户下次来消息时补投
+        if context and context.channel == "wecom_kf":
+            message += ("（温馨提示：提醒到点时会尽力发送给您；若当前微信客服会话"
+                        "不满足平台发送条件，提醒将在您下次发消息时送达）")
+
         return {
             "success": True,
             "task_id": task["task_id"],
@@ -317,7 +370,7 @@ class CreateScheduledTaskTool(BaseTool):
             "schedule_description": schedule_description,
             "next_run_at": task.get("next_run_at"),
             "dry_run_result_preview": dry_run_preview,
-            "message": f"定时任务已创建！名称：{name}，调度：{schedule_description}。首次验证执行结果：{dry_run_preview}..."
+            "message": message
         }
 
 
