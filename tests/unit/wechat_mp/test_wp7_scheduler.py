@@ -481,19 +481,46 @@ class TestDriver:
         finally:
             await sched.stop()
 
-    async def test_start_refuses_when_lock_held_or_redis_down(self):
-        """驱动锁被占（已有副本）→ 空转返回；Redis 不可用 → 拒绝启动不无锁降级。"""
+    async def test_start_lock_held_starts_driver_task_redis_down_refused(self):
+        """锁被占（幽灵锁残留）→ 仍启动驱动任务返回 True（原断言「返回 False」按
+        幽灵锁自愈语义改写）；Redis 不可用 → 仍拒绝启动不无锁降级。"""
         redis = FakeQueueRedis()
         lock_key = redis.make_key(DRIVER_LOCK_PREFIX)
         # 锁值按 JSON 存储（对齐 service._lock_value 口径，FakeRedis.get 会反序列化）
-        assert redis.acquire_lock(lock_key, json.dumps("other-replica"), ex=300) is True
-        sched = WeChatMPScheduler(redis=redis)
-        assert await sched.start() is False
-        assert sched._task is None
-        assert redis.get(lock_key) == "other-replica"  # 锁未被抢占
+        assert redis.acquire_lock(lock_key, json.dumps("ghost-replica"), ex=300) is True
+        sched = WeChatMPScheduler(redis=redis, service=object())  # 锁被占路径不触达 service
+        try:
+            assert await sched.start() is True
+            assert sched._task is not None and not sched._task.done()
+            assert sched._lock_key == lock_key  # 锁 key 保留供循环内重试接管
+            assert redis.get(lock_key) == "ghost-replica"  # 锁未被抢占
+            # 续期失败（他人持有）→ 重取失败，驱动循环保持等待
+            assert await sched._ensure_driver_lock() is False
+        finally:
+            await sched.stop()
+        # 未持锁的 stop 不误删他人锁
+        assert redis.get(lock_key) == "ghost-replica"
 
         sched2 = WeChatMPScheduler(redis=FakeQueueRedis(available=False))
         assert await sched2.start() is False
+        assert sched2._task is None
+
+    async def test_start_lock_held_takeover_after_release(self):
+        """锁被占启动后，幽灵锁 TTL 过期消失 → _ensure_driver_lock 失锁重取接管。"""
+        redis = FakeQueueRedis()
+        lock_key = redis.make_key(DRIVER_LOCK_PREFIX)
+        assert redis.acquire_lock(lock_key, json.dumps("ghost-replica"), ex=300) is True
+        sched = WeChatMPScheduler(redis=redis, service=object())  # 锁被占路径不触达 service
+        try:
+            assert await sched.start() is True
+            # 幽灵锁过期消失（从替身删除模拟 TTL 到期）
+            with redis._lock:
+                redis._store.pop(lock_key, None)
+            assert await sched._ensure_driver_lock() is True
+            with redis._lock:
+                assert redis._store[lock_key] == sched._owner
+        finally:
+            await sched.stop()
 
 
 # ------------------------------- 遗留 A 回归：状态翻转不破坏复核零计费 -------------------------------

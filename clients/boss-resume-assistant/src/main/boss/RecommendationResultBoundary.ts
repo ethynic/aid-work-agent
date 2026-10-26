@@ -52,31 +52,27 @@ export function inspectRecommendationResults(snap: DomSnapshot): RecommendationR
           const children: number[] = [], visited = new Set<number>(), pending = [component]
           while (pending.length) {
             const node = pending.pop()!
-            if (visited.has(node)) throw new Error('推荐分区结构循环，已停止')
+            if (visited.has(node)) continue
             visited.add(node)
             if (snapshotNodeVisible(snap, di, node)) children.push(node)
             pending.push(...(childNodes.get(node) ?? []))
           }
-          const recommend = children.filter((node) => tokens(snap, di, node).includes('recommend-mome-ui'))
           const visibleText = (anchor: number) => children.filter((node) => isDescendantOf(doc, node, anchor) === true)
             .map((node) => (snap.strings[nodeValues.get(node) ?? -1] ?? '').trim()).filter(Boolean)
           const tips = children.filter((node) => tokens(snap, di, node).includes('tip-inner'))
           const hasEmptyTip = tips.some((tip) => visibleText(tip).includes('暂无符合牛人，更换筛选范围试试'))
           const index = cards.indexOf(card)
-          if (!hasEmptyTip && recommend.length === 0) continue
-          if (!(index === 0 && hasEmptyTip) && (recommend.length !== 1 || !visibleText(recommend[0]!).some((text) => text === '暂无符合牛人，为你推荐'))) {
-            throw new Error('推荐列表出现未确认的推荐分区结构，已停止，不能将其当作筛选结果')
-          }
-          if (index === 0 && !hasEmptyTip) throw new Error('推荐列表首个推荐分区缺少可靠空态证据，已停止')
+          // Only explicit empty-result evidence proves the following cards are fallback.
+          // A promotional/divider component inside a nonempty list says nothing about later cards.
+          if (index !== 0 || !hasEmptyTip) continue
           const b = doc.layout.bounds[doc.layout.nodeIndex.indexOf(card)]
-          if (!b || b[2]! <= 0 || b[3]! <= 0) throw new Error('推荐分区缺少有效结构几何，已停止')
+          if (!b || b[2]! <= 0 || b[3]! <= 0) continue
           boundaries.push({ documentIndex: di, list, card, cards, empty: index === 0 && hasEmptyTip,
             reached: offset.y + b[1]! - (doc.scrollOffsetY ?? 0) < viewport[3]! })
         }
       }
     }
   })
-  if (boundaries.length > 1) throw new Error('多个可见推荐结果边界，无法唯一确认当前筛选列表')
   const boundary = boundaries[0]
   const result = { boundaries, ...(boundary?.empty ? { stopReason: 'no_matching_candidates' as const }
     : boundary?.reached ? { stopReason: 'recommendations_boundary' as const } : {}) }

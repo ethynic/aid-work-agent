@@ -11,6 +11,12 @@ lead_refresh recap 适配器：留资线索动态刷新（意向度 / 客户需�
 确定性数据（人工服务归属）不在本适配器——由 transfer_to_human 工具
 转接成功时事件驱动即时回写（update_transfer_info），与本章字段不重叠。
 
+租户级守卫（2026-10-23）：租户已声明任一外部系统入口（load_sso_configs
+非空，如 qbweb3.1）时跳过分析——此时前端微信接待页已隐藏「留资线索」Tab，
+意向度/需求分条产出无人消费，分析纯属 LLM 成本浪费。守卫是成本优化而非
+正确性边界，查询异常 fail-open 放行分析。技能自动补全（requires_recap）
+为平台级声明、保存时无法按租户判断，故统一在运行时守卫兜底。
+
 设计文档：docs/subagent/pre-sales/lead-capture-refresh-design.md
 """
 
@@ -161,8 +167,27 @@ class LeadRefreshAdapter:
             )
             return
 
+        # 4. 外部系统入口守卫：租户已声明任一外部系统入口（如 qbweb3.1）则跳过。
+        #    放在冷却占坑之后：本检查含模板目录扫描与 DB 查询，放在占坑前会对
+        #    每条客户消息轮次都执行（守卫口径与前端隐藏留资线索 Tab 完全同源）
         try:
-            # 4. 采集消息：执行时刻的 channel_messages 快照（近 50 条，时间正序）
+            from src.services.tenant_api_doc import load_sso_configs
+
+            external_systems = await asyncio.to_thread(load_sso_configs, payload.tenant_id)
+        except Exception as e:
+            logger.opt(exception=True).debug(f"[lead_refresh] 外部系统入口检查失败，放行分析（fail-open）: {e}")
+            external_systems = []
+        if external_systems:
+            tlog(
+                _TOPIC,
+                "skip: 租户已声明外部系统入口, lead_id={lid}, n={n}",
+                lid=lead_id,
+                n=len(external_systems),
+            )
+            return
+
+        try:
+            # 5. 采集消息：执行时刻的 channel_messages 快照（近 50 条，时间正序）
             raw_messages = await asyncio.to_thread(
                 channel_session_manager.get_messages,
                 payload.session_id,
@@ -187,7 +212,7 @@ class LeadRefreshAdapter:
                 except (TypeError, json.JSONDecodeError):
                     old_demand_points = None
 
-            # 5. 构造分析输入：线索既有信息 + 消息序列 + 上次需求分条（供合并去重）
+            # 6. 构造分析输入：线索既有信息 + 消息序列 + 上次需求分条（供合并去重）
             user_content = (
                 "【线索既有信息】\n"
                 f"客户姓名：{lead.get('contact_name') or '未知'}\n"
@@ -199,7 +224,7 @@ class LeadRefreshAdapter:
                 f"{transcript}"
             )
 
-            # 6. chat_lite 分析（轻量模型足够；主链路异常时 runner 吞掉，下一条消息重试）
+            # 7. chat_lite 分析（轻量模型足够；主链路异常时 runner 吞掉，下一条消息重试）
             from src.llm.gateway import llm_gateway
             from src.services.session_record import record_background_llm_usage
 
@@ -222,7 +247,7 @@ class LeadRefreshAdapter:
                 model=_resolve_lite_model_name(),
             )
 
-            # 7. 解析与校验：失败/越界保留旧值，删占坑键待下一条消息重试
+            # 8. 解析与校验：失败/越界保留旧值，删占坑键待下一条消息重试
             data = _extract_json_object(response.get("content", ""))
             if not data:
                 redis_client.delete(cooldown_key)
@@ -257,7 +282,7 @@ class LeadRefreshAdapter:
                 )
                 return
 
-            # 8. 回写线索行（同步 DB 调用经 to_thread 包裹，不阻塞事件循环）
+            # 9. 回写线索行（同步 DB 调用经 to_thread 包裹，不阻塞事件循环）
             updated = await asyncio.to_thread(
                 LeadCaptureDB.update_analysis,
                 lead_id,
@@ -268,7 +293,7 @@ class LeadRefreshAdapter:
                 last_message_id,
             )
 
-            # 9. 前后对比留痕（意向度变化、需求条数变化）
+            # 10. 前后对比留痕（意向度变化、需求条数变化）
             old_points = old_demand_points if isinstance(old_demand_points, list) else []
             tlog(
                 _TOPIC,

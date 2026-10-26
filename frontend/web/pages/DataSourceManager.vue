@@ -1,5 +1,13 @@
 <template>
   <div class="p-6 max-w-[1400px] mx-auto h-full overflow-y-auto w-full">
+    <!-- 页面门禁：数据源管理仅管理员可用，普通用户隐藏（含直连 URL 场景） -->
+    <div v-if="authState === 'checking'" class="flex items-center justify-center py-12 text-sm text-muted">
+      加载中...
+    </div>
+    <div v-else-if="authState === 'denied'" class="flex items-center justify-center py-12 text-sm text-muted">
+      仅管理员可访问数据源管理
+    </div>
+    <template v-else>
     <!-- Tab switcher -->
     <div class="flex gap-1 mb-5 border-b border-default">
       <button
@@ -483,6 +491,7 @@
 
     <!-- Hidden file input -->
     <input ref="fileInput" type="file" accept=".xlsx,.xls,.csv" style="display:none" @change="handleFileSelect" />
+    </template>
   </div>
 </template>
 
@@ -566,12 +575,15 @@ const {
 })
 
 // 角色与设计 §18.5 一致：tenant_admin 或代管中的 platform_admin；
-// 复用 useTenantAuth（/api/saas/auth/me），未就绪时只影响编辑入口，不影响默认导入
-const { admin: tenantAdmin } = useTenantAuth()
+// 复用 useTenantAuth（/api/saas/auth/me），init 幂等（TenantLayout 已调用则直接返回）
+const { admin: tenantAdmin, init: initTenantAuth } = useTenantAuth()
 const isScopeAdmin = computed(() => {
   const role = tenantAdmin.value?.role
   return role === 'tenant_admin' || role === 'platform_admin'
 })
+
+// 页面门禁状态：认证就绪前不渲染内容，非管理员不发起任何数据加载
+const authState = ref<'checking' | 'allowed' | 'denied'>('checking')
 
 // 表格当前页选中集合（仅管理员可见选择列），换页/搜索/租户变化时清空
 const selectedSchemaIds = ref<number[]>([])
@@ -1443,7 +1455,13 @@ async function handleDeleteRelation(row: any) {
 }
 
 // ===== Init =====
-onMounted(() => {
+onMounted(async () => {
+  await initTenantAuth()
+  if (!isScopeAdmin.value) {
+    authState.value = 'denied'
+    return
+  }
+  authState.value = 'allowed'
   loadSchemas()
   loadConnectors()
   // 名称列展示需要目录解析；后台加载不阻塞列表渲染与默认导入

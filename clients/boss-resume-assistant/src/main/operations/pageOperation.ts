@@ -1,5 +1,5 @@
 /** Shared domain facts; the CLI recovery wrapper owns repair and replay policy. */
-import { WinClickError } from '../input/WinMouseClicker.js'
+import { WinClickError, nativeWindowInputFailure } from '../input/WinMouseClicker.js'
 import { mapExecutorError } from './errorMapping.js'
 import { CodedOperationError } from './types.js'
 
@@ -135,17 +135,19 @@ export function operationRecoveryFailure(error: unknown, facts: Record<string, u
   const mapped = mapExecutorError(error)
   // Invalid intent, cancellation, unavailable transport and business preconditions cannot be fixed by a page click.
   if (!['UI_CHANGED', 'EXECUTION_UNKNOWN', 'BUSY', 'INTERNAL_ERROR', 'CHROME_UNAVAILABLE'].includes(mapped.code)) throw error
-  if (mapped.code === 'INTERNAL_ERROR' && !(error instanceof WinClickError)) throw error
   const execution = facts.execution as Record<string, unknown>
   const business = facts.business_effect as { status?: unknown; completed_count?: unknown } | undefined
   const externalUnknown = facts.operation_class === 'external_effect' && (business
     ? business.status === 'unknown' : execution.input_status === 'attempted')
   const knownBusiness = facts.operation_class === 'external_effect' && ['not_started', 'confirmed'].includes(String(business?.status))
   const code = execution.input_status === 'unknown' && !knownBusiness || externalUnknown
-    ? 'EXECUTION_UNKNOWN' : mapped.code === 'CHROME_UNAVAILABLE' ? 'CHROME_UNAVAILABLE' : 'UI_CHANGED'
+    ? 'EXECUTION_UNKNOWN' : mapped.code === 'CHROME_UNAVAILABLE' ? 'CHROME_UNAVAILABLE'
+      : mapped.code === 'INTERNAL_ERROR' && !(error instanceof WinClickError) ? 'INTERNAL_ERROR' : 'UI_CHANGED'
   // Typed execution facts replace legacy blanket instructions to stop and ask a human.
   const message = error instanceof Error ? error.message : mapped.message
-  const recovery = { ...facts, error: { code, source: execution.stage, summary: message.slice(0, 1000) } }
+  const nativeFailure = nativeWindowInputFailure(error)
+  const recovery = { ...facts, ...(nativeFailure ? { native_input_failure: nativeFailure } : {}),
+    error: { code, source: execution.stage, summary: message.slice(0, 1000) } }
   throw new CodedOperationError(code, message, {
     ...data, operation_recovery: recovery,
     ...(facts.operation_class === 'page_state' ? { page_operation: recovery } : {}),

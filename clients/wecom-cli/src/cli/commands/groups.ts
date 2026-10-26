@@ -8,7 +8,8 @@ import { flagString, hasFlag, type ParsedArgs } from '../args.js'
 /** 新群命令严格校验，避免缺值/拼错时间参数静默扩大读取范围。 */
 export async function groupsCommand(args: ParsedArgs): Promise<number> {
   const list = args.positional[0] === 'list-groups'
-  const allowed = list ? ['query', 'limit', 'json'] : ['target-name', 'limit', 'from-time', 'to-time', 'json']
+  const poll = args.positional[0] === 'poll-group'
+  const allowed = list ? ['query', 'limit', 'json'] : poll ? ['target-name', 'cursor', 'json'] : ['target-name', 'limit', 'from-time', 'to-time', 'json']
   let invalid = args.positional.length !== 1 ? '群查询不接受额外位置参数' : null
   for (const [key, value] of args.flags) {
     if (!allowed.includes(key)) invalid = `未知参数 --${key}`
@@ -22,6 +23,9 @@ export async function groupsCommand(args: ParsedArgs): Promise<number> {
     return 2
   }
   if (list) return listGroupsCommand({ query: flagString(args, 'query'), limit: flagString(args, 'limit'), json: hasFlag(args, 'json') })
+  if (poll) return runCliOperation(getOperationEntry('wecom_group_poll').operation, {
+    target_name: flagString(args, 'target-name'), ...(flagString(args, 'cursor') === undefined ? {} : { cursor: flagString(args, 'cursor') }),
+  }, { exclusive: true, json: hasFlag(args, 'json'), renderData(data) { console.log(JSON.stringify(data)) } })
   return readGroupCommand({ targetName: flagString(args, 'target-name'), limit: flagString(args, 'limit'),
     fromTime: flagString(args, 'from-time'), toTime: flagString(args, 'to-time'), json: hasFlag(args, 'json') })
 }

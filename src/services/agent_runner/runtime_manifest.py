@@ -11,7 +11,7 @@ def configuration_fingerprint(profile_fingerprint):
     root = Path(__file__).resolve().parents[2] / 'prompts'
     prompts = {str(path.relative_to(root)):hashlib.sha256(path.read_bytes()).hexdigest()
                for path in sorted(root.rglob('*')) if path.is_file() and path.suffix in {'.md','.yaml','.yml','.txt','.py'}}
-    private = {'version':1,'profile_fingerprint':profile_fingerprint,
+    private = {'version':2,'profile_fingerprint':profile_fingerprint,
                'llm':settings.llm.model_dump(mode='json'),
                'agent':settings.agent.model_dump(mode='json'),'prompt_files':prompts}
     return hashlib.sha256(canonical_json(private).encode()).hexdigest()

@@ -156,8 +156,12 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
             total = len(lines)
 
             if section_start:
-                return self._read_section(lines, section_start, section_end, limit, total)
-            return self._read_range(lines, offset, limit, total)
+                result = self._read_section(lines, section_start, section_end, limit, total)
+            else:
+                result = self._read_range(lines, offset, limit, total)
+            if ".web_research" in path.parts and isinstance(result, dict):
+                return self._research_page(result, offset)
+            return result
 
         except Exception as e:
             # 文件不存在/路径越界多为 LLM 猜错路径导致，模型会依据报错自纠，
@@ -167,6 +171,25 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
             else:
                 logger.opt(exception=True).error(f"读取文件失败: {e}")
             return f"读取文件失败: {e}"
+
+    @staticmethod
+    def _research_page(result, offset):
+        """Keep a complete, bounded page out of the generic tool-string truncator."""
+        selected, size = [], 0
+        for line in result["content"].splitlines():
+            if size + len(line) + 1 > 6000:
+                break
+            selected.append(line)
+            size += len(line) + 1
+        if not selected and result["read_lines"]:
+            raise ValueError("research_body_line_too_long")
+        start = result.get("section_start_line", offset or 1)
+        if len(selected) < result["read_lines"]:
+            result["content"] = "\n".join(selected)
+            result["read_lines"] = len(selected)
+            result["next_hint"] = f"研究正文分页，继续: offset={start + len(selected)}"
+        result["_no_truncate"] = True
+        return result
 
     # ------------------------------------------------------------------
     # 路径解析
@@ -185,6 +208,9 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
         """
         path = Path(file_path)
 
+        from src.services.web_search.evidence import guard_research_read
+        research_path = guard_research_read(path)
+
         # 相对路径：基于项目根目录解析
         if not path.is_absolute():
             project_root = Path(__file__).resolve().parent.parent.parent.parent
@@ -196,6 +222,11 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
         project_root = Path(__file__).resolve().parent.parent.parent.parent
         tmp_dir = Path(tempfile.gettempdir()).resolve()
         try:
+            if research_path:
+                # Only session-checked evidence may use an external storage mount.
+                if not path.is_file():
+                    raise FileNotFoundError(f"文件不存在: {file_path}")
+                return path
             path.relative_to(project_root)
         except ValueError:
             # 不在项目根目录内，检查是否在临时目录内
@@ -231,11 +262,27 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
 
     def _read_with_auto_detection(self, path: Path) -> tuple:
         """自动检测编码并读取文件，返回 (content, encoding)"""
+        # 完整验证UTF-8，避免UTF-7误猜或采样截断多字节字符后破坏原文。
+        utf8_content = None
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                utf8_content = f.read()
+            if '\x00' not in utf8_content:
+                return utf8_content, 'utf-8'
+        except UnicodeDecodeError:
+            pass
+
         # 先读取前几KB用于检测
         with open(path, 'rb') as f:
             sample = f.read(8192)
 
         detected_encoding = self._detect_encoding(sample)
+
+        # NUL填充也可能是无BOM的宽字符文件，保留既有UTF-16/32识别。
+        if utf8_content is not None and not (
+            detected_encoding and detected_encoding.startswith(('utf-16', 'utf-32'))
+        ):
+            return utf8_content, 'utf-8'
 
         if detected_encoding:
             try:

@@ -129,6 +129,7 @@ import { unifiedLogin } from '@/api/auth'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAgent } from '@/composables/useAgent'
 import { useSession } from '@/composables/useSession'
+import { useSubagentList } from '@/composables/useSubagentList'
 
 const { setLogin } = useTenantAuth()
 const toast = useToast()
@@ -245,10 +246,12 @@ async function handleLogin() {
       // 登录成功后先清空所有缓存（避免同账号多设备时显示旧数据）
       const { clearSessionCache: clearAgentSessionCache, clearSession: clearAgentSession, clearAttachments } = useAgent()
       const { clearSessionCache: clearSessionListCache } = useSession()
+      const { clearCache: clearSubagentListCache } = useSubagentList()
       clearAgentSessionCache()
       clearAgentSession()
       clearAttachments()
       clearSessionListCache()
+      clearSubagentListCache()
 
       // 跳转
       window.location.href = notificationReturnUrl(new URLSearchParams(window.location.search).get('return_to')) || res.redirect_url

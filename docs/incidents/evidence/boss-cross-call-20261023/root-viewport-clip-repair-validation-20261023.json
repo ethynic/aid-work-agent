@@ -1,0 +1,165 @@
+{
+  "date": "2026-10-23",
+  "scope": "Root HTML/BODY viewport overflow clip after retained list scrolling",
+  "independent_test": {
+    "date": "2026-10-23",
+    "role": "independent_test",
+    "production_modified_by_tester": false,
+    "documents_modified_by_tester": false,
+    "real_business_inputs": 0,
+    "source_sha256": "7ca96e9dec6944590f65552108ea403bf2992e2855c0efdb61ecdffffa2d7415",
+    "fixture_sha256": "135d7c459f232cd1f45e18582cd3724026935bf60659badca905ea0fa46762f8",
+    "test_sha256": "eccdc96aaf9b5dd2651f4e4de0f302e57edafdb7d8a38a5912b7f37bba76205e",
+    "cwd": "C:/repos/aid-work-agent/clients/boss-resume-assistant",
+    "build": {
+      "command": "npm run build:main",
+      "exit": 0,
+      "log": ".tmp/boss-root-clip-independent-build.log"
+    },
+    "regression": {
+      "tests": 162,
+      "command": "$env:AID_BOSS_AUTO_CHROME='0'; node --test --test-reporter=tap dist/tests/filter-document-scroll.test.js dist/tests/filter-edit-resume.test.js dist/tests/filter-setter.test.js dist/tests/filter-entitlements.test.js dist/tests/filter-page-gate.test.js dist/tests/filter-phase5-perf.test.js dist/tests/filter-vip-panel.test.js dist/tests/page-operation-independent.test.js dist/tests/local-operation-recovery.test.js dist/tests/local-operation-recovery-independent.test.js",
+      "log": ".tmp/boss-root-clip-independent-regression.tap",
+      "skip": 0,
+      "fail": 0,
+      "pass": 162,
+      "exit": 0
+    },
+    "independent_probe": {
+      "pass": 7,
+      "fail": 0,
+      "command": "node --test --test-reporter=tap .tmp/boss-root-clip-independent-probe.mjs",
+      "exit": 0,
+      "log": ".tmp/boss-root-clip-independent-probe.tap",
+      "source": ".tmp/boss-root-clip-independent-probe.mjs",
+      "skip": 0,
+      "cases": [
+        "Anonymized ancestor geometry, requested eight styles and scroll match original raw snapshot",
+        "Disable only viewportOverflowNode reproduces old -78 bottom; restore yields889",
+        "Missing contain/node metadata never authorizes BODY propagation",
+        "Root HTML viewport does not scroll with root contents; bottom1189",
+        "Independent overflow-auto DIV still clips at1066",
+        "Nested iframe offsets subtract parent scroll exactly once",
+        "HTML own overflow stays viewport-bound while BODY overflow disabled"
+      ],
+      "tests": 7
+    },
+    "final_total": {
+      "pass": 169,
+      "tests": 169,
+      "fail": 0,
+      "skip": 0
+    },
+    "transient_probe_failures": [
+      {
+        "classification": "probe comparison scope",
+        "cause": "Original raw includes nine style columns; current request and anonymized fixture retain eight",
+        "case": "raw style equality",
+        "correction": "Compare each of the eight requested fields and all retained raw geometry/scroll; no product change"
+      },
+      {
+        "classification": "probe synthetic geometry",
+        "cause": "Probe moved iframe owner but left ordinary overflow-auto DIV2051 unshifted; its actual clip correctly remained1066",
+        "case": "root scroll expected1189 got1066",
+        "correction": "Keep original scenario asserting1066; add consistent full-content translation scenario asserting HTML viewport1189"
+      }
+    ],
+    "product_failures_found": 0,
+    "scope_limits": [
+      "No real browser input or production window movement",
+      "No package/install/deployment performed by independent tester",
+      "Live acceptance after installation belongs to root",
+      "No repository source/test/document edits; temporary probe/evidence only"
+    ]
+  },
+  "independent_review": {
+    "schema_version": 1,
+    "role": "independent_codereview",
+    "recorded_at": "2026-10-23T22:14:47.5755518+08:00",
+    "status": "passed",
+    "unresolved_p1": 0,
+    "unresolved_p2": 0,
+    "scope": [
+      "clients/boss-resume-assistant/src/main/boss/FilterSetter.ts: root HTML/BODY overflow viewport propagation and appended contain computed style",
+      "clients/boss-resume-assistant/tests/filter-document-scroll.test.ts",
+      "clients/boss-resume-assistant/tests/fixtures/boss-filter-document-scroll-20261023.json"
+    ],
+    "production_sources": [
+      {
+        "path": "clients/boss-resume-assistant/src/main/boss/FilterSetter.ts",
+        "sha256": "7ca96e9dec6944590f65552108ea403bf2992e2855c0efdb61ecdffffa2d7415"
+      }
+    ],
+    "findings": [],
+    "additional_check": {
+      "kind": "synthetic_readonly_replay_of_anonymized_fixture",
+      "root_scroll_y": 200,
+      "child_document_index": 2,
+      "child_scroll_y": 1344,
+      "iframe_owner_document_y_delta": 200,
+      "actual_clip": {
+        "left": 499,
+        "right": 1364,
+        "top": 93,
+        "bottom": 889
+      },
+      "expected_clip": {
+        "left": 499,
+        "right": 1364,
+        "top": 93,
+        "bottom": 889
+      },
+      "passed": true,
+      "purpose": "Ancestor scroll is deducted once while child viewport remains anchored to iframe origin."
+    },
+    "reviewed_constraints": [
+      "HTML root overflow applies to document viewport.",
+      "BODY propagation requires HTML visible overflow on both axes and positive HTML/BODY contain=none ancestry/style evidence.",
+      "Ordinary internal clips, non-propagating BODY clips, iframe owners and outer clips remain binding."
+    ],
+    "specification": "https://www.w3.org/TR/css-overflow-3/#overflow-propagation",
+    "plugin_installation_limit": {
+      "runtime_silent_upgrade_supported": true,
+      "plugin_external_non_ui_import_supported": false,
+      "evidence": [
+        "agent-tool-runtime CLI has pair/start/status/doctor/unpair only; no plugin import/enable commands.",
+        "managed-entry requires direct parent private IPC.",
+        "Main choose-package requires trusted renderer and native file dialog; selection_ref is not an arbitrary file path."
+      ],
+      "current_native_cua_available": false,
+      "required_remaining_step": "Select the signed BOSS package through the Runtime native file picker."
+    },
+    "actions": {
+      "production_modified": false,
+      "documents_modified": false,
+      "installed": false,
+      "stopped_processes": false,
+      "credentials_read": false,
+      "real_browser_input": false,
+      "independent_test_matrix_repeated": false
+    }
+  },
+  "developer_reproduction": {
+    "before": {
+      "log": ".tmp/boss-live-20261023/root-clip-before.tap",
+      "tests": 5,
+      "pass": 2,
+      "fail": 3,
+      "purpose": "Actual fixture reproduces bottom=-78 and public apply failure before repair"
+    },
+    "after": {
+      "log": ".tmp/boss-live-20261023/root-clip-after.tap",
+      "tests": 5,
+      "pass": 5,
+      "fail": 0,
+      "skip": 0
+    },
+    "typecheck": {
+      "log": ".tmp/boss-live-20261023/root-clip-typecheck.log",
+      "exit_code": 0
+    }
+  },
+  "production_source_sha256": "7ca96e9dec6944590f65552108ea403bf2992e2855c0efdb61ecdffffa2d7415",
+  "no_commit_or_server_deploy": true,
+  "installed_live_acceptance": "Pending signed-package installation; not replaced by isolated tests"
+}

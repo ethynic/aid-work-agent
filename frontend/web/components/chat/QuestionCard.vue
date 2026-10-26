@@ -46,8 +46,7 @@
     </div>
   </article>
 
-  <!-- 可作答提问卡片（快照 waiting.form 投影，设计 §7.1 + §5.7 状态机）。
-       与 quickOptions（非阻塞编号按钮）视觉区分：有边框与标题区。 -->
+  <!-- 可作答提问卡片（快照 waiting.form 投影，设计 §7.1 + §5.7 状态机） -->
   <article
     v-else-if="card"
     data-test="question-card"

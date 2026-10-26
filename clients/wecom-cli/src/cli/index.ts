@@ -33,6 +33,8 @@ import { flagString, parseArgs, hasFlag } from './args.js'
 const USAGE = `aid-wecom — 企业微信操作 CLI / MCP Provider（M1）
 
 操作命令：
+  poll-group --target-name <完整群名> [--cursor <原游标>] [--json]
+                            本地库独立增量读取；首次历史仅作上下文，后续原样回传各群游标
   list-groups [--query <关键词>] [--limit N] [--json]
                             本地库搜索/列出已同步群（默认100），不操作界面；has_more标注截断
   read-group --target-name <完整群名> [--limit N] [--from-time <时间>] [--to-time <时间>] [--json]
@@ -107,6 +109,7 @@ async function main(): Promise<number> {
 
   switch (command) {
     case 'list-groups':
+    case 'poll-group':
     case 'read-group': {
       const { groupsCommand } = await import('./commands/groups.js')
       return groupsCommand(args)
@@ -134,6 +137,7 @@ async function main(): Promise<number> {
     case 'send': {
       const { sendCommand } = await import('./commands/send.js')
       return sendCommand({
+        groupCursor: flagString(args, 'group-cursor'),
         targetRef: flagString(args, 'target-ref'),
         targetName: flagString(args, 'target-name'),
         subtitle: flagString(args, 'subtitle'),

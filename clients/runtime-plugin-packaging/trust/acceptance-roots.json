@@ -118,6 +118,46 @@
       "providers": [
         "ai.aidwork.boss-recruiting"
       ]
+    },
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-boss-0-3-23-20261023-153417",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA1zuJ90it1WqCLv4JfwJmkrqnyRvu9ZGf8nGkG0RzB8E=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.boss-recruiting"
+      ]
+    },
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-boss-0-3-24-20261023-212022",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAbDqiQu1fkt0pmStiuHbH0k8tHMNncfx7JRBPv+AnGsI=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.boss-recruiting"
+      ]
+    },
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-boss-0-3-25-20261023-221526",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAOvfRw0058vi22jYDeTm0+wv2cFu/pBDu6bmsvvc7ssk=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.boss-recruiting"
+      ]
+    },
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-boss-0-3-26-20261023-222847",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAyVPHnIMN7tPO/oGNo110vQZsK6+DESp1wPk0dKK7UXk=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.boss-recruiting"
+      ]
+    },
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-boss-0-3-27-20261024-200152",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA/ps1lYVXtRn8+Gb+XNEG9nbvc0c+pOWfULxurMMfk6M=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.boss-recruiting"
+      ]
     }
   ],
   "profile": "acceptance"

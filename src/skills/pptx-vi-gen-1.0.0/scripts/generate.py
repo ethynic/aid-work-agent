@@ -59,7 +59,7 @@ def _load_content(spec: str) -> dict:
             raise ValueError(
                 f"第 {i} 页 role 非法: {role!r}，可用: {', '.join(sorted(NATIVE_RENDERERS))}"
             )
-        if role != "end" and not page.get("title"):
+        if role not in ("end", "toc", "quote") and not page.get("title"):
             raise ValueError(f"第 {i} 页（{role}）缺少 title")
         err = _validate_page_fields(i, role, page)
         if err:
@@ -93,6 +93,41 @@ def _validate_page_fields(i, role, page):
             col = page.get(side)
             if not isinstance(col, dict) or not col.get("h") or not isinstance(col.get("items"), list) or not col["items"]:
                 return missing(f"{side}（含 h 和非空 items 数组）")
+    elif role == "table":
+        head = page.get("head")
+        rows = page.get("rows")
+        if not isinstance(head, list) or not head:
+            return missing("head（非空表头数组）")
+        if not isinstance(rows, list) or not rows:
+            return missing("rows（非空数据行数组）")
+        for j, row in enumerate(rows, 1):
+            if not isinstance(row, list) or len(row) != len(head):
+                return f"第 {i} 页（table）rows 第 {j} 行列数与 head 不一致"
+    elif role == "timeline":
+        items = page.get("items")
+        if not isinstance(items, list) or not items:
+            return missing("items（非空数组，每项含 t/h，d 可选）")
+        for j, it in enumerate(items, 1):
+            if not it.get("h"):
+                return f"第 {i} 页（timeline）items 第 {j} 项缺少 h（标题）"
+    elif role == "process":
+        steps = page.get("steps")
+        if not isinstance(steps, list) or not steps:
+            return missing("steps（非空数组，每项含 h，d 可选）")
+        for j, st in enumerate(steps, 1):
+            if not st.get("h"):
+                return f"第 {i} 页（process）steps 第 {j} 项缺少 h（步骤名）"
+    elif role == "toc":
+        items = page.get("items")
+        if not isinstance(items, list) or not items:
+            return missing("items（非空数组，每项含 h，d 可选）")
+    elif role == "quote":
+        if not page.get("quote"):
+            return missing("quote（引言正文）")
+    elif role == "image_grid":
+        images = page.get("images")
+        if not isinstance(images, list) or not (2 <= len(images) <= 4):
+            return missing("images（2~4 项，每项为图片路径或 {src, caption}）")
     return None
 
 
@@ -115,6 +150,8 @@ def main():
     parser.add_argument("--accent", help="强制强调色，如 #2E9CCA")
     parser.add_argument("--preview", action="store_true",
                         help="同时输出每页 PNG 预览到 <output>_preview/ 目录")
+    parser.add_argument("--embed-fonts", action="store_true",
+                        help="把思源黑体/Noto Sans 嵌入 pptx（约 +18MB，未装字体的机器也原样渲染）")
     args = parser.parse_args()
 
     try:
@@ -144,7 +181,8 @@ def main():
         base_dir = str(template_path.parent) if template_path else str(Path.cwd())
         result = generate_from_vi(str(template_path) if template_path else None,
                                   content, str(out_path),
-                                  vi_override=vi_override or None, base_dir=base_dir)
+                                  vi_override=vi_override or None, base_dir=base_dir,
+                                  embed_fonts=args.embed_fonts)
 
         vi_info = {k: v for k, v in vi.items()
                    if k != "logo_img" and not k.startswith("font_")}
@@ -158,6 +196,10 @@ def main():
             "slides": result["slides"],
             "vi": vi_info,
         }
+        if result.get("fonts"):
+            out["fonts_replaced"] = result["fonts"]
+        if result.get("embedded"):
+            out["fonts_embedded"] = result["embedded"]
 
         if args.preview:
             preview_dir = out_path.with_suffix("").resolve()

@@ -46,7 +46,6 @@
               :subagent-name="currentSubagentName"
               :greeting="emptyStateGreeting"
               @quick-prompt="handleQuickPrompt"
-              @send="handleSend"
             />
           </div>
 
@@ -556,12 +555,21 @@ onMounted(async () => {
       if (hasSession && currentSessionId.value) {
         agentSessionId.value = currentSessionId.value
       }
-    } else if (currentSessionId.value && !subagentName.value) {
-      // currentSessionId 已有值且为非子智能体路由（从历史列表跳转过来）
-      // 子智能体路由始终开始新会话，避免加载其他智能体的历史消息
+    } else if (currentSessionId.value) {
+      // 从历史列表跳转过来（此时组件新挂载，watch(currentSessionId) 不会触发）
       // 同步 id 并显式加载该会话消息，避免挂载后无消息显示为空白"新会话"
-      agentSessionId.value = currentSessionId.value
-      await switchSession(currentSessionId.value)
+      // 子智能体路由仅加载属于当前数字员工的会话，不属于则维持新会话行为
+      const session = sessions.value.find(s => s.session_id === currentSessionId.value)
+      const sessionSubagent = (session?.subagent_id ||
+        (session?.context_data?.subagent as string | undefined)) || 'main'
+      if (!subagentName.value || sessionSubagent === subagentName.value) {
+        agentSessionId.value = currentSessionId.value
+        await switchSession(currentSessionId.value)
+      } else {
+        selectSession(null)
+        clearSession()
+        clearAttachments()
+      }
     }
 })
 

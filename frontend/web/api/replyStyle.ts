@@ -194,3 +194,52 @@ export async function activateSystemVersion(styleId: string, version: number): P
   }
   return res.json()
 }
+
+// ============== 系统风格导出/导入（跨环境迁移） ==============
+
+export interface ReplyStyleExportEnvelope {
+  format: string
+  version: number
+  exported_at: string
+  styles: { style_id: string; name: string; description: string | null; content: string }[]
+}
+
+export interface ReplyStyleImportConflict {
+  style_id: string
+  name: string
+}
+
+export interface ReplyStyleImportResult {
+  status: number
+  ok: boolean
+  body: {
+    success: boolean
+    detail?: string | { message: string; conflicts: ReplyStyleImportConflict[] }
+    created?: number
+    updated?: number
+    skipped?: number
+  }
+}
+
+export async function exportSystemStyles(): Promise<{ success: boolean; data: ReplyStyleExportEnvelope }> {
+  const res = await fetch(`${SYSTEM_BASE}/export`, {
+    headers: { ...getSaasAuthHeader() },
+  })
+  if (!res.ok) throw new Error('导出系统风格失败')
+  return res.json()
+}
+
+export async function importSystemStyles(payload: {
+  format: string
+  version: number
+  styles: ReplyStyleExportEnvelope['styles']
+  conflict_strategy?: 'overwrite' | 'skip'
+}): Promise<ReplyStyleImportResult> {
+  const res = await fetch(`${SYSTEM_BASE}/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
+    body: JSON.stringify(payload),
+  })
+  const body = await res.json()
+  return { status: res.status, ok: res.ok, body }
+}

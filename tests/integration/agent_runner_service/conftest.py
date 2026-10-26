@@ -156,6 +156,16 @@ class Processes:
 
     def stop(self, child, *, force=False):
         assert child in self.children
+        if os.name == 'nt':
+            if child.poll() is None:
+                # Only this fixture's exact Popen handle, never a name-wide kill.
+                child.kill() if force else child.terminate()
+                try:
+                    child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.wait(timeout=5)
+            return
         try:
             os.killpg(child.pid, signal.SIGKILL if force else signal.SIGTERM)
         except ProcessLookupError:

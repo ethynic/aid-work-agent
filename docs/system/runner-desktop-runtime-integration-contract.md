@@ -2,7 +2,7 @@
 
 > 契约 ID：`AID-RUNNER-DESKTOP-RUNTIME`
 >
-> 版本：`2.9`；日期：2026-10-26
+> 版本：`2.10`；日期：2026-10-26
 >
 > 状态：v2.0按用户逐条复核确定，替代v1.3的插件额外审批语义；候选0.3已有真实Host与Desktop消费验证，Windows隔离验收版已交付，尚未共同登记wire冻结。现有公开API以代码为基线；共享格式见第8.1节，任务binding、授权及资源占用wire仍待主导交付。隔离验收不代表生产发行或真实业务验收通过。
 >
@@ -15,6 +15,8 @@
 > 上位基线：[已完成 AgentRunner 架构](agent-application-architecture-design.md)、[Provider 规范](first-party-cli-mcp-provider-standard.md)
 
 ## 1. 适用范围与约束层级
+
+2026-10-26 W6实施检查点：新增`wecom_group_poll` schema v1（target_name/cursor）及文本发送可选`group_cursor`，CLI唯一生产、MCP/Runtime第8项受信工具及云proxy共同消费；旧CLI缺能力在实际listTools门禁零调用拒绝，旧7工具普通调用不变。首次context不作new，后续账号/群/generation/anchor及原群名独立游标；不消费共享watch水位。监控root文本回复必须带原group_cursor、不得ref替代，其他媒体发送不在本轮授权范围；CLI发送前验证原账号/群/库且不可OCR降级。Runner checkpoint私有`resources.wecom_task_device` v1（原root identity/runner_id/device_id）在首次poll与invocation同事务原子固定，后续root/child WeCom沿原设备；运行时配置指纹升级拒绝旧Worker静默忽略。Device/H1/H3 wire与release/unknown/outbox语义不改，新工具只用于新版release。唯一写入：主控CLI/MCP/core及文档，backend角色云端配置/代理/Runner及后端验证，独立TEST/CR只读。详见[W6计划](../plans/plan-wecom-cli-group-chat-experiment.md#w6-配置智能体完整链路2026-10-26)；不部署、不恢复监听，不宣称真实群及多天验收完成。
 
 2026-10-22恢复增量实施检查点（[修复计划](../plans/plan-runner-local-tool-recovery-lockup-fix.md)，开发中）：Device wire、H1/H3及绑定身份不变。唯一写入者：主控维护后端恢复证明/公开投影与本契约；Runtime传输角色维护共享Core及Runtime消费；BOSS恢复角色维护CLI本机恢复。v2 `result-outbox/<id>.json`保持原格式；v1结果使用同一outbox设施的`legacy-v1/`子目录，显式`protocol_version=1`、`endpoint=result`，只补传原payload。旧消费者只扫描根目录，因此忽略并保留v1文件，不得误投operation-result或重执行；新版分别投递原endpoint，ACK前保留。CLI保持OperationResult/error枚举及operation_recovery schema2、visual_recovery schema1；现有诊断字典补充脱敏失败类别/子阶段。browserTargetBinding可增加本机可选业务URL及原profile信息；原profile可由已有可信本机配置或实际浏览器进程参数确认，不强制要求新增managed_profile_dir字段或“曾由本启动器拉起”的磁盘记录。旧记录缺字段但仍可确定原profile时支持自动重开，确实无法确定时准确说明，不猜测陌生profile。只读/可重设页面可重建tab，未知外发不重放；取消/失权禁止重开。当前CLI调用内确定性恢复、Runtime独立续租，不新增本地Agent或后台恢复调度协议；既有release绑定不改，需新版能力则在原会话合法创建新版接续执行。生产/消费与旧格式组合验证按本批影响范围登记，未验收前不宣称兼容通过。此前“只attach”的历史限制在用户明确授权的原profile重开范围内被本条替代；不得杀无关Chrome、清Cookie/profile或偷换账号。
 

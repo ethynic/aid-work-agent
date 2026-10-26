@@ -58,7 +58,7 @@ def _make_client():
     return TextEmbeddingV3Client(api_key="sk-test-fake-key-for-unit-test")
 
 
-def _make_fake_resp(status_code=200, embeddings=None):
+def _make_fake_resp(status_code=200, embeddings=None, code=""):
     """构造一个最小可用的 fake DashScope 响应对象"""
     return type(
         "R",
@@ -68,6 +68,7 @@ def _make_fake_resp(status_code=200, embeddings=None):
             "output": {"embeddings": [{"embedding": e} for e in (embeddings or [[0.1, 0.2]])]},
             "usage": None,
             "message": "ok",
+            "code": code,
         },
     )()
 
@@ -138,6 +139,107 @@ def test_no_retry_on_non_transient_error():
             client._call_dashscope_with_retry(["hello"])
 
     assert mock_call.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# _call_and_check_with_business_retry 业务层错误重试测试
+# （2026-10-26：InternalError.Algo.Embedding_pipeline_Error 阿里云侧偶发）
+# ---------------------------------------------------------------------------
+
+
+def test_business_retry_succeeds_after_internal_error(monkeypatch):
+    """第一次 InternalError 业务错误，第二次成功 -> 延迟重试 1 次后成功"""
+    monkeypatch.setattr(
+        "src.knowledge.embedding.embedding_client.time.sleep", lambda s: None
+    )
+    client = _make_client()
+    algo_err = _make_fake_resp(
+        status_code=500, code="InternalError.Algo.Embedding_pipeline_Error"
+    )
+    fake_resp = _make_fake_resp()
+    with patch(
+        "src.knowledge.embedding.embedding_client.TextEmbedding.call",
+        side_effect=[algo_err, fake_resp],
+    ) as mock_call:
+        resp = client._call_and_check_with_business_retry(["hello"])
+
+    assert resp is fake_resp
+    assert mock_call.call_count == 2
+
+
+def test_business_retry_exhausted_raises(monkeypatch):
+    """连续 2 次 InternalError 业务错误 -> 抛出 Embedding API 失败"""
+    monkeypatch.setattr(
+        "src.knowledge.embedding.embedding_client.time.sleep", lambda s: None
+    )
+    client = _make_client()
+    algo_err = _make_fake_resp(
+        status_code=500, code="InternalError.Algo.Embedding_pipeline_Error"
+    )
+    with patch(
+        "src.knowledge.embedding.embedding_client.TextEmbedding.call",
+        return_value=algo_err,
+    ) as mock_call:
+        with pytest.raises(Exception, match="Embedding API 失败"):
+            client._call_and_check_with_business_retry(["hello"])
+
+    assert mock_call.call_count == 2
+
+
+def test_business_error_non_retryable_no_retry():
+    """非 InternalError 业务错误（如鉴权失败）不重试，直接抛出"""
+    client = _make_client()
+    auth_err = _make_fake_resp(status_code=401, code="InvalidApiKey")
+    auth_err.message = "Invalid API key"
+    with patch(
+        "src.knowledge.embedding.embedding_client.TextEmbedding.call",
+        return_value=auth_err,
+    ) as mock_call:
+        with pytest.raises(Exception, match="Embedding API 失败"):
+            client._call_and_check_with_business_retry(["hello"])
+
+    assert mock_call.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_embed_batch_business_retry(monkeypatch):
+    """embed_batch（异步路径）InternalError 业务错误重试后成功"""
+    monkeypatch.setattr(
+        "src.knowledge.embedding.embedding_client.time.sleep", lambda s: None
+    )
+    client = _make_client()
+    algo_err = _make_fake_resp(
+        status_code=500, code="InternalError.Algo.Embedding_pipeline_Error"
+    )
+    fake_resp = _make_fake_resp(embeddings=[[0.1, 0.2, 0.3]])
+    with patch(
+        "src.knowledge.embedding.embedding_client.TextEmbedding.call",
+        side_effect=[algo_err, fake_resp],
+    ) as mock_call:
+        embeddings = await client.embed_batch(["hello"])
+
+    assert embeddings == [[0.1, 0.2, 0.3]]
+    assert mock_call.call_count == 2
+
+
+def test_embed_sync_business_retry(monkeypatch):
+    """embed_sync（同步路径）InternalError 业务错误重试后成功"""
+    monkeypatch.setattr(
+        "src.knowledge.embedding.embedding_client.time.sleep", lambda s: None
+    )
+    client = _make_client()
+    algo_err = _make_fake_resp(
+        status_code=500, code="InternalError.Algo.Embedding_pipeline_Error"
+    )
+    fake_resp = _make_fake_resp(embeddings=[[0.1, 0.2, 0.3]])
+    with patch(
+        "src.knowledge.embedding.embedding_client.TextEmbedding.call",
+        side_effect=[algo_err, fake_resp],
+    ) as mock_call:
+        emb = client.embed_sync("hello")
+
+    assert emb == [0.1, 0.2, 0.3]
+    assert mock_call.call_count == 2
 
 
 # ---------------------------------------------------------------------------

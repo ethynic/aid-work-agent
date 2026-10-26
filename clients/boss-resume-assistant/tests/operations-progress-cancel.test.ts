@@ -11,6 +11,7 @@ import { createBossAcceptResumeOperation } from '../src/main/operations/bossAcce
 import type { BossSession } from '../src/main/operations/bossContext.js'
 import type { OpContext, ProgressEvent } from '../src/main/operations/types.js'
 import { actionSnapshot, text } from './chatActionFixture.js'
+import { structuralListSnapshot } from './structuralListFixture.js'
 import type { DomSnapshot, ClickPoint } from '../src/main/boss/domSnapshot.js'
 
 /** 依调用序返回 snapshot 队列，用完后重复最后一个。
@@ -37,14 +38,10 @@ function fakeSession(snaps: DomSnapshot[], opts: { url?: string } = {}) {
 
 /** Same candidate cards stay visible after each verified greeting. */
 function greetSnap(buttons: Array<[number, number, number, number]>, continued: Array<[number, number, number, number]> = []): DomSnapshot {
-  const texts = ['筛选'], boxes: Array<[number, number, number, number]> = [[100,100,50,20]]
-  for (const [bounds, label] of [...buttons.map(b => [b, '打招呼'] as const), ...continued.map(b => [b, '继续沟通'] as const)]) {
-    const y = bounds[1] + bounds[3] / 2
-    texts.push(bounds[1] < 300 ? '张三丰' : bounds[1] < 600 ? '李四海' : '王五平', '刚刚活跃', label)
-    boxes.push([300,y-18,70,20], [390,y-18,70,20], bounds)
-  }
-  const ids=Array.from({length:texts.length+1},(_,i)=>i), bounds: Array<[number, number, number, number]> = [[0,0,1917,1905],...boxes]
-  return {strings:['',...texts,'HTML'],documents:[{nodes:{nodeValue:{index:ids,value:ids},nodeName:{index:[0],value:[texts.length+1]},contentDocumentIndex:{index:[],value:[]}},layout:{nodeIndex:ids,bounds,clientRects:bounds}}]}
+  const rows = [...buttons.map(button => ({button,continued:false})), ...continued.map(button => ({button,continued:true}))]
+    .map(row => ({...row,name:row.button[1] < 300 ? '张三丰' : row.button[1] < 600 ? '李四海' : '王五平',
+      nameBounds:[300,row.button[1]+row.button[3]/2-18,70,20] as [number,number,number,number]}))
+  return structuralListSnapshot(rows,1917,1905)
 }
 const BTN1: [number, number, number, number] = [1690,208,64,32]
 const BTN2: [number, number, number, number] = [1690,484,64,32]

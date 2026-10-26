@@ -66,6 +66,7 @@ WECOM_TOOLS = {
     "wecom_read_session",
     "wecom_unread_list",
     "wecom_send_status",
+    "wecom_group_poll",
 }
 
 

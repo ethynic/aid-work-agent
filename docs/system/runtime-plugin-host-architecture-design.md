@@ -106,6 +106,8 @@ flowchart TD
 
 固定产品输入为 resources/config/runtime-product.json 的 schemaVersion/productKind/profile，信任输入为 resources/runtime/trust-roots.json 的 schemaVersion/profile/roots。每根含 key_id、SPKI PUBLIC KEY PEM、providers、显式 test_only；拒绝私钥及伪 PUBLIC 头，production 拒绝测试根，不能从文件名推断信任。
 
+2026-10-23自主升级实测修正：历史根按发行追加后达到17项，旧Host额外的16项硬上限导致NSIS安装冷握手code9，虽验包通过仍无法完成安装。Host0.2.23移除此冗余数量上限，保留固定来源、无链接、65536字节文件上限及全部逐项校验；不删除历史根或扩大信任权限。独立29项及CR通过，最终Runtime0.0.28携18根的冷H1安装检查及本机NSIS实装通过，原配对与旧BOSS启用状态迁移保留。失败批次0.0.27已撤回；新BOSS0.3.26随后由用户原生导入，清单及代码摘要核对通过，原会话三轮新增入库9份及滚动后筛选复验通过，详见恢复计划§20；Runtime安装与插件导入仍分开核验。详情见[恢复计划§19](../plans/plan-runner-local-tool-recovery-lockup-fix.md#19-根滚动视口修复与自主更新验收2026-10-23)。共同H1/Device/schema不变。
+
 2026-10-15跨电脑构建修正：已交付验收包的公开信任根统一保存在版本管理的`clients/runtime-plugin-packaging/trust/acceptance-roots.json`，r15原始四根及来源摘要另存`trust/history/`。构建机没有自己的发行身份；换机必须消费同一已登记信任集合。prepare、打包与最终验包均拒绝遗漏历史根、同key_id替换公钥或改变授权Provider范围，以及未登记的新根。新验收签名使用唯一key_id，再显式追加登记公开根；私钥、设备身份和配对凭据不得入库。历史key_id即使带旧交付命名也原样保留，不能为重命名破坏旧签名。生产信任与Windows签名门保持独立，不因取消交付文件名的trial标记而降级。实现与升级实包验证见[组合包计划](../plans/plan-runtime-ui-boss-trial-bundle.md)。
 
 Node 固定22.23.3 / Windows x64 / ABI127；Host 资源从模块路径解析，不靠 cwd。独立验收产品 cn.aidingyi.agent.runtime.acceptance 使用独立 userData 与 %APPDATA%/aidwork-tool-runtime-acceptance，不覆盖生产目录。验收安装器 NotSigned、生产要求 Valid Windows 签名；无正式证书或信任根不能自动降级。

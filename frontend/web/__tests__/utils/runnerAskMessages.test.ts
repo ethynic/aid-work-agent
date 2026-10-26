@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { runnerMessages } from '@/utils/runnerMessages'
+import { historyMessages, mergeRunnerMessages, runnerMessages } from '@/utils/runnerMessages'
 import { runnerView } from '../mocks/runnerView'
 import type { AskForm } from '@/types'
 
@@ -18,7 +18,69 @@ const waitingForm = {
 }
 const questions = [{ message_id: 'wait-1:assistant', wait_id: 'wait-1', text: '需要澄清', created_at: '2026-10-14T10:00:00Z' }]
 
+const jobOptions = [{ key: 'job-a', label: '岗位甲' }, { key: 'job-b', label: '岗位乙' }]
+const legacyOptions = { quickOptions: jobOptions }
+const jobProgress = [
+  { type: 'tool_start', toolName: 'boss_jobs_list', toolCallId: 'jobs-1' },
+  { type: 'tool_result', toolName: 'boss_jobs_list', toolCallId: 'jobs-1', success: true,
+    result: { success: true, data: { options: jobOptions } } },
+]
+
 describe('structured ask projections (WP4 runnerMessages)', () => {
+  it.each([true, false])('job progress cannot recreate shortcuts alongside a separate question message (old snapshot: %s)', old => {
+    const row = runnerView({ status: 'waiting', snapshot: {
+      waiting: waitingForm, clarificationQuestions: questions, progressMessages: jobProgress,
+      ...(old ? legacyOptions : {}),
+    } })
+    const before = JSON.stringify(row)
+    const projected = mergeRunnerMessages([], [row])
+    const question = projected.find(item => item.questionCard)!
+    const assistant = projected.find(item => item.messageId === 'runner-A:assistant')!
+    expect(question.messageId).not.toBe(assistant.messageId)
+    expect(question.questionCard?.form).toEqual(form)
+    expect(assistant.progressMessages?.filter(item => item.type === 'tool_result')).toHaveLength(1)
+    expect(projected.every(item => !('quickOptions' in item))).toBe(true)
+    expect(mergeRunnerMessages(projected, [row]).every(item => !('quickOptions' in item))).toBe(true)
+    expect(JSON.stringify(row)).toBe(before)
+  })
+
+  it('completed reload keeps the answered card and removes old job shortcuts from finalized tool facts', () => {
+    const row = runnerView({ status: 'completed', result: { status: 'completed', output: '已选择岗位',
+      assistant_metadata: { progressMessages: jobProgress, ...legacyOptions } }, snapshot: {
+      clarificationQuestions: questions,
+      supplementalInputs: [{ control_id: 'answer', client_request_id: 'key', message_id: 'answer:user',
+        wait_id: 'wait-1', text: '选择岗位甲', accepted_at: '2026-10-14T10:01:00Z', form,
+        answers: [{ question_id: 'q1', selected_keys: ['q1o1'] }] }],
+    } })
+    const projected = runnerMessages(row)
+    expect(projected.find(item => item.answeredForm)?.answeredForm?.terminal).toBe(true)
+    expect(projected.every(item => !('quickOptions' in item))).toBe(true)
+  })
+
+  it('history-only loading ignores retired options even when tool source is absent', () => {
+    const progress = jobProgress.map(event => event.type === 'tool_result' ? { ...event, toolName: undefined } : event)
+    const projected = historyMessages([{ message_id: 'persisted', session_id: 'A', role: 'assistant',
+      content: '历史回复', created_at: '2026-10-14T10:00:00Z', metadata: {
+        runner_id: 'runner-A', quickOptions: jobOptions, progressMessages: progress,
+      } }])
+    expect(projected[0]).not.toHaveProperty('quickOptions')
+    expect(projected[0].progressMessages).toHaveLength(2)
+  })
+
+  it.each(['present_options', 'future_tool', undefined])('no tool can restore the retired buttons (%s)', toolName => {
+    const explicit = { type: 'tool_result', toolName, toolCallId: 'choices-1', success: true,
+      result: { success: true, question: '请选择', data: { options: jobOptions } } }
+    const row = runnerView({ status: 'waiting', snapshot: { waiting: waitingForm, clarificationQuestions: questions,
+      ...legacyOptions, progressMessages: [...jobProgress, explicit] } })
+    expect(runnerMessages(row).every(item => !('quickOptions' in item))).toBe(true)
+  })
+
+  it('snapshot choices with no tool facts are also retired', () => {
+    const row = runnerView({ status: 'waiting', snapshot: { waiting: waitingForm, clarificationQuestions: questions,
+      ...legacyOptions } })
+    expect(runnerMessages(row).every(item => !('quickOptions' in item))).toBe(true)
+  })
+
   it('binds the question message to its own runner/wait/execution identities with the live form', () => {
     const row = runnerView({ status: 'waiting', snapshot: { waiting: waitingForm, clarificationQuestions: questions } })
     const projected = runnerMessages(row)

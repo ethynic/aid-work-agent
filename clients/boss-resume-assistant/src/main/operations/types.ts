@@ -51,6 +51,8 @@ export interface ProgressEvent {
 }
 
 export interface OpContext {
+  /** Local invocation only; shared by observations/continuations, never a wire field. */
+  windowCaptureBudget?: { repositionsUsed: number }
   signal: AbortSignal
   progress: (p: ProgressEvent) => void
   cdpPort?: number

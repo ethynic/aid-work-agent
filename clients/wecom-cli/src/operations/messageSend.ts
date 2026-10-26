@@ -72,6 +72,9 @@ import { probeCurrentAccount, checkCancelled } from '../platform/localdb/identit
 import { resolveFocusConversation } from '../platform/localdb/unread.js'
 import { parseConversationRows } from '../platform/localdb/watch.js'
 import type { LocaldbReadDeps } from '../platform/localdb/readSession.js'
+import { decodeGroupCursor, groupCursorError } from '../platform/localdb/groupCursor.js'
+import { queryLocaldbGroups } from '../platform/localdb/groups.js'
+import { hash } from '../platform/localdb/access.js'
 
 /** dist/src/operations → 包根 drivers/ps1 */
 const DRIVER_PATH = fileURLToPath(new URL('../../../drivers/ps1/message-send.ps1', import.meta.url))
@@ -83,6 +86,8 @@ export interface WecomMessageSendArgs {
   /** 直达模式可选消歧副标题（同名多候选时收紧匹配，如「微信联系人」） */
   subtitle?: string
   text: string
+  /** Monitoring sends must carry the exact poll cursor, preventing a same-name group switch. */
+  group_cursor?: string
 }
 
 const MAX_TEXT_LENGTH = 2000
@@ -144,6 +149,8 @@ export function createWecomMessageSendOperation(
           }
           const selectorErr = validateTargetSelector(args)
           if (selectorErr !== null) return selectorErr
+          if (args.group_cursor !== undefined && (typeof args.group_cursor !== 'string' || !args.group_cursor ||
+              args.group_cursor.length > 2048 || !args.target_name || args.target_ref)) return 'group_cursor仅支持完整群名target_name'
           if (args.subtitle !== undefined && typeof args.subtitle !== 'string') {
             return 'subtitle 必须是字符串（直达模式消歧用，可选）'
           }
@@ -168,6 +175,12 @@ export function createWecomMessageSendOperation(
           if (!root) {
             throw new CodedOperationError('INTERNAL_ERROR', '%LOCALAPPDATA% 未设置，无法定位 artifact 目录')
           }
+          // Check scope before any UI search. A monitored send never falls back to OCR-only admission.
+          const bound = args.group_cursor === undefined ? undefined : decodeGroupCursor(args.group_cursor, args.target_name!.trim())
+          if (bound) {
+            const current = await (local.probeAccountFn ?? probeCurrentAccount)(opCtx)
+            await queryLocaldbGroups({ targetName: args.target_name!.trim(), cursor: args.group_cursor, poll: true, limit: 50 }, opCtx, current, local)
+          }
 
           // M11a 直达模式：内部 search 身份定位转 ref（定位失败 effect=none 且注明未发送
           // 消息），定位成功后走与 ref 模式完全一致的既有链路
@@ -181,6 +194,7 @@ export function createWecomMessageSendOperation(
             )
           }
           const target = verifyRefFn(resolved !== null ? resolved.target_ref : args.target_ref!)
+          if (bound && (target.type !== 'group' || target.name !== args.target_name!.trim())) throw groupCursorError()
           // 第八轮评审 P1：target_ref 账号绑定校验必须在任何发送或降级之前——本地库 try
           // 之外，不被 planLocaldb 的兜底 catch 吞掉转旧发送路径（跨账号签发的有效 ref
           // 不得 OK/applied）。probe 身份链不依赖版本矩阵，老路径同样可用（对齐 readSession
@@ -202,7 +216,7 @@ export function createWecomMessageSendOperation(
           const planLocaldb = async (): Promise<SendBaseline | null> => {
             try {
               const state = getLocalState()
-              if (!state || !(state.mode === 'db' || (state.mode === 'ui' && state.kind === 'transient'))) return null
+              if (!bound && (!state || !(state.mode === 'db' || (state.mode === 'ui' && state.kind === 'transient')))) return null
               const current = await (local.probeAccountFn ?? probeCurrentAccount)(opCtx)
               checkCancelled(opCtx.signal)
               let conversationId: string | null = null
@@ -216,7 +230,9 @@ export function createWecomMessageSendOperation(
                 if (typeof meta.self_user_id !== 'string' || meta.self_user_id !== current.account || !Number.isSafeInteger(meta.schema_version)) {
                   throw new CodedOperationError('IDENTITY_UNCONFIRMED', '本人 sender_id 域身份未确认')
                 }
-                conversationId = await resolveFocusConversation(query, target.name, meta.self_user_id as string)
+                conversationId = await resolveFocusConversation(query, target.name, meta.self_user_id as string, bound ? 'group' : undefined)
+                if (bound && (bound.account !== current.account || bound.conversationId !== conversationId ||
+                    bound.generation !== hash([sourceId, meta.schema_version]))) throw groupCursorError()
                 const row = parseConversationRows((await query(['--task', 'conversations'])).conversations)
                   .find((c) => c.conversation_id === conversationId)
                 baseline = row ? row.last_message_id : 0
@@ -230,6 +246,7 @@ export function createWecomMessageSendOperation(
               return { account: current.account, conversationId: conversationId!, baseline, anchor, sourceId: source, schema }
             } catch (err) {
               if (err instanceof CancelledError || (err instanceof CodedOperationError && err.code === 'CANCELLED')) throw err
+              if (bound) throw err
               checkCancelled(opCtx.signal)
               // 本地库不可用/resolve 失败：基线阶段未发送任何消息，完全回退老路径（零改动）
               opCtx.progress({ stage: 'execute', message: `本地库发送核验不可用（${err instanceof CodedOperationError ? err.code : 'LOCALDB_UNAVAILABLE'}），走驱动内 OCR 核验` })

@@ -217,7 +217,7 @@ describe('useAgent 多会话后台流式', () => {
     expect(agent.hasSessionUnreadCompletion('session_A')).toBe(true)
   })
 
-  it('同名工具按 toolCallId 独立关联，并按结果形状消费文件和快捷选项', async () => {
+  it('同名工具按 toolCallId 独立关联，保留文件及结果而不生成旧快捷按钮', async () => {
     const agent = useAgent()
     await agent.sendMessage('执行两个同名工具', null, 'session_tools')
     agent.sessionId.value = 'session_tools'
@@ -252,6 +252,7 @@ describe('useAgent 多会话后台流式', () => {
     ])
     expect(toolProgress.every(progress => progress.displayName === '未来工具')).toBe(true)
     expect(assistant.downloadableFiles?.map(file => file.file_id)).toEqual(['file-2'])
-    expect(assistant.quickOptions?.map(option => option.key)).toEqual(['1', '2'])
+    expect(assistant).not.toHaveProperty('quickOptions')
+    expect(toolProgress[3].result.data.options).toHaveLength(2)
   })
 })

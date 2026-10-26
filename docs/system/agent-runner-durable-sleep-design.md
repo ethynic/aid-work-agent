@@ -1,5 +1,7 @@
 # AgentRunner 通用持久化休眠与自动唤醒设计
 
+2026-10-26最新master整合兼容补记：master增量迁移已推进到10月26日，原10月22日sleep/BIGINT/history索引块在存量环境会被单一last_datetime跳过；保留历史不改，追加17:00同结构幂等补齐块，正常启动/强制重放均须保持已有用量及积分行。fresh init结构不变，不修改迁移框架。实际验证、未提交合并状态及新旧Runner语义处理统一见[WeCom整合计划](../plans/plan-wecom-cli-group-chat-experiment.md#最新master与runtime核查2026-10-26用户追问后补核)，不能用全新库通过代替master水位升级证明。
+
 > 日期：2026-10-22；状态：本地开发、独立测试及CodeReview完成，master已整合；尚未提交或部署。最新修复、独立验证及历史Windows环境问题处理见开发计划第17节，未宣称真实企微多天验收通过。
 >
 > 依据：[Runner 现行架构](agent-application-architecture-design.md)、[共同集成契约](runner-desktop-runtime-integration-contract.md)；实施进度唯一记录于[开发计划](../plans/plan-agent-runner-durable-sleep.md)。

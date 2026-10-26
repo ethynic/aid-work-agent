@@ -1,0 +1,106 @@
+{
+  "date": "2026-10-24",
+  "batch": "AID-Work-Runtime-0.0.29-BOSS-0.3.27-20261024-200152",
+  "source_base_commit": "371a73a06bd43fec6ce5deaf40f8cedc7ac8c9a7",
+  "source_push": {
+    "codeup_master": "passed",
+    "github_master": "failed TLS handshake; direct and existing system proxy attempts failed"
+  },
+  "script": "clients/agent-desktop/scripts/release-batch.ps1",
+  "script_changed": false,
+  "script_exit": 0,
+  "archive": {
+    "zip": "clients\\release\\AID-Work-Runtime-0.0.29-BOSS-0.3.27-20261024-200152.zip",
+    "size": 132659104,
+    "sha256": "f1080050181fb050ed4aafee0b9fee268c6c4386122fc39ac0f50b934cf9c6d7",
+    "entries": 10,
+    "crc_passed": true,
+    "all_file_hashes_passed": true,
+    "versions": {
+      "ui": "0.0.29",
+      "host": "0.2.23",
+      "core": "0.2.20",
+      "nativeInput": "0.1.0",
+      "boss": "0.3.27",
+      "node": "22.23.3"
+    }
+  },
+  "runtime_signature": "NotSigned",
+  "historical_roots_preserved": 18,
+  "final_roots": 19,
+  "new_root_provider_scope": [
+    "ai.aidwork.boss-recruiting"
+  ],
+  "registry_delivery_snapshot_resources_equal": true,
+  "plugin_verification": {
+    "archive": "boss-0.3.27-dev.aidplugin.zip",
+    "sha256": "bb0568a15b89949336da091274f9e4880a77e83d06143ad439b44ded74c90fb9",
+    "size": 5383161,
+    "files": 3736,
+    "tools": 25,
+    "doctor_exit": 0,
+    "runtime_readiness": {
+      "ready": true,
+      "reason": "只读 BOSS 页面与登录态检查通过"
+    },
+    "payload_unchanged": true,
+    "synthetic_ocr": false
+  },
+  "packaged_boss_modules": [
+    {
+      "module": "boss/localOperationRecovery.js",
+      "sha256": "b7c77f83906d7e18c63d98d567259e951c7554c3c6ce96835feb58830146849a",
+      "matches_tested_workspace_dist": true
+    },
+    {
+      "module": "boss/FilterSetter.js",
+      "sha256": "589e85904e9ab73debe2552cd17fa1a0c0c52a903b195ac1b1c00cc8761e0f42",
+      "matches_tested_workspace_dist": true
+    },
+    {
+      "module": "boss/visualRecovery.js",
+      "sha256": "288392f78a36320f17926b237cfa018b7c4efe35030050e4b7f5e7f4d5940ff7",
+      "matches_tested_workspace_dist": true
+    },
+    {
+      "module": "input/windowExperiment.js",
+      "sha256": "6b62ad69c2266a5d8c96ca79415d388d2f4df1ba7c98254f76bebac066a1c846",
+      "matches_tested_workspace_dist": true
+    }
+  ],
+  "packaged_runtime_trust_module_matches_tested_dist": true,
+  "checks": {
+    "runtime_package": "passed",
+    "runtime_verify": "passed",
+    "plugin_signature_and_payload": "passed",
+    "native_input_load": "passed",
+    "packaging_tests": {
+      "plugin": 8,
+      "runtime": 20,
+      "failed": 0,
+      "skipped": 0
+    },
+    "fixed_node_22_targeted": {
+      "tests": 74,
+      "passed": 74,
+      "failed": 0,
+      "skipped": 0
+    },
+    "isolated_cold_host": "INSTALLATION_CHECK_PASS",
+    "zip_crc_and_all_file_hashes": "passed"
+  },
+  "logs": {
+    "release": ".tmp/boss-cli-window-release-20261024/release-batch.log",
+    "targeted": ".tmp/boss-cli-window-release-20261024/node22-targeted.log",
+    "cold_host": ".tmp/boss-cli-window-release-20261024/cold-host-check.log"
+  },
+  "limitations": [
+    "NSIS installer not executed; current installed Runtime/BOSS not replaced.",
+    "No live Agent2 same-session one-CLI recovery acceptance for this new release yet.",
+    "Earlier full-suite failures/termination remain recorded in cli-window-resume-validation-20261024.json; this release does not claim full-suite green."
+  ],
+  "commit_authorized": true,
+  "package_authorized": true,
+  "installed": false,
+  "deployed": false
+}

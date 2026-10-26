@@ -1,0 +1,141 @@
+{
+  "date": "2026-10-24",
+  "status": "implemented_independent_test_review_passed_live_installed_version_pending",
+  "production_scope": [
+    "clients/boss-resume-assistant/src/main/boss/localOperationRecovery.ts"
+  ],
+  "validation_scope": [
+    "clients/boss-resume-assistant/tests/local-operation-recovery.test.ts",
+    "clients/boss-resume-assistant/tests/filter-edit-resume.test.ts"
+  ],
+  "source_hashes": [
+    {
+      "file": "clients/boss-resume-assistant/src/main/boss/localOperationRecovery.ts",
+      "sha256": "0deadcd2738468a87f85aad9209678c8a3e58464d39e961be7cf861ba5510e3f"
+    },
+    {
+      "file": "clients/boss-resume-assistant/tests/local-operation-recovery.test.ts",
+      "sha256": "faf5f71382d4dee4fee5c80a91d00e8381b42a0987595d513db60a3df74afd5d"
+    },
+    {
+      "file": "clients/boss-resume-assistant/tests/filter-edit-resume.test.ts",
+      "sha256": "ebc82088ed79c1061f66e398ca7d2bc367ecd9295dc40cf350189d846a93078c"
+    }
+  ],
+  "behavior": {
+    "outer_execute_count": 1,
+    "domain_sessions": 2,
+    "repositions": 1,
+    "native_capture_attempts": 2,
+    "diagnoses": 2,
+    "resumed_inputs": 5,
+    "first_toolbar_point": [
+      1035,
+      70
+    ],
+    "resumed_toolbar_point": [
+      1329,
+      70
+    ],
+    "applied_rows": [
+      "3-5年",
+      "本科"
+    ],
+    "final_result": "OK/applied; verification satisfied",
+    "browser_os_model_boundaries": "test doubles; production recovery/capture bookkeeping/operations/setter are real"
+  },
+  "developer_red": {
+    "tests": 4,
+    "passed": 0,
+    "failed": 4,
+    "log": ".tmp/boss-cli-window-resume-20261024/red-test.log"
+  },
+  "final_targeted": {
+    "command": "node --test dist/tests/filter-edit-resume.test.js dist/tests/local-operation-recovery.test.js",
+    "tests": 74,
+    "passed": 74,
+    "failed": 0,
+    "skipped": 0,
+    "exit": 0,
+    "log": ".tmp/boss-cli-window-resume-20261024/final-targeted.log"
+  },
+  "typecheck": {
+    "command": "npm run typecheck",
+    "exit": 0,
+    "log": ".tmp/boss-cli-window-resume-20261024/final-typecheck.log"
+  },
+  "independent_test": {
+    "command": "node --test dist/tests/local-operation-recovery.test.js dist/tests/local-operation-recovery-independent.test.js dist/tests/filter-edit-resume.test.js dist/tests/filter-document-scroll.test.js dist/tests/filter-setter.test.js dist/tests/filter-page-gate.test.js dist/tests/visual-recovery.test.js dist/tests/window-experiment.test.js dist/tests/window-containment.test.js dist/tests/remaining-page-recovery.test.js dist/tests/widget-hidden-recovery.test.js dist/tests/widget-hidden-recovery-independent.test.js dist/tests/local-recovery-contact-context-independent.test.js dist/tests/independent-recovery-boundaries.test.js dist/tests/recovery-click-only-independent.test.js",
+    "test_files": 15,
+    "tests": 261,
+    "passed": 261,
+    "failed": 0,
+    "skipped": 0,
+    "exit": 0,
+    "log": "C:\\repos\\aid-work-agent\\.tmp\\boss-cli-window-resume-20261024\\independent-test\\current-source-regression.tap"
+  },
+  "independent_coordinate_probe": {
+    "command": "node --test .tmp/boss-cli-window-resume-20261024/independent-test/fresh-coordinate-probe.test.mjs",
+    "cwd": "C:\\repos\\aid-work-agent",
+    "tests": 1,
+    "passed": 1,
+    "failed": 0,
+    "skipped": 0,
+    "exit": 0,
+    "log": "C:\\repos\\aid-work-agent\\.tmp\\boss-cli-window-resume-20261024\\independent-test\\fresh-coordinate-probe.tap",
+    "checks": [
+      "first toolbar rejected at (1035,70), resumed toolbar fresh at (1329,70)",
+      "all five resumed points asserted: open(1329,70), clear(1231,912), experience(1251.9609375,671.5), education(1042.625,756.5), confirm(1303,912)",
+      "original outer raw execute=1, domain connects=2, close=2, reposition=1, capture runner=2, page/window diagnoses=2",
+      "actual captureWindow bookkeeping, VisualRecovery, overlay inspect, runBossOperation, retained continuation, real FilterSetter and domain postcheck; only browser/OS/model boundaries mocked",
+      "budget and execution counters preserved; final result OK/applied and verification satisfied"
+    ]
+  },
+  "independent_review": {
+    "p0": 0,
+    "p1": 0,
+    "p2": 0,
+    "final_coordinate_assertions_reviewed": true,
+    "report": ".tmp/boss-cli-window-resume-20261024/independent-review.md"
+  },
+  "full_suite": {
+    "command": "npm test",
+    "test_files": 89,
+    "tests": 1116,
+    "passed": 1104,
+    "failed": 8,
+    "skipped": 4,
+    "exit": 1,
+    "log": ".tmp/boss-cli-window-resume-20261024/full-npm-test.log",
+    "all_green": false,
+    "failures": [
+      "dom-snapshot-owner-scroll: 2 fixture/card/canvas assertions; no wrapper invocation",
+      "manifest: 3 tool count/name assertions, actual25 vs expected24",
+      "mcp-server: list_tools expected24 vs actual25",
+      "orphan readonly-recovery-continuation dist-only test: original batch card extraction, before wrapper",
+      "mcp-conformance worker terminated after bounded wait; full cause not determined"
+    ],
+    "bounded_wait": {
+      "elapsed_seconds": 193.0,
+      "stopped_test_process_ids": [
+        36672,
+        11624
+      ],
+      "reason": "MCP test workers exceeded 180s bounded wait without completion"
+    },
+    "scope_note": "Two MCP test workers did not complete and were stopped after 193s; no production process stopped. Not a full-suite pass. Unrelated failures left unchanged.",
+    "independent_isolation": "manifest + dom-snapshot-owner-scroll separately:12 tests,7 pass,5 fail,0 skip,exit1; orphan separately fails before wrapper; logs retained",
+    "skips": "4 legacy PowerShell image dual-channel comparisons with removed scripts"
+  },
+  "limits": [
+    "No new installed plugin/live Agent2/real OS input acceptance in this turn.",
+    "No real visual HTTP/model billing tested.",
+    "Historical hidden-after-activation, multi-monitor and mixed-DPI gaps remain as previously recorded.",
+    "Full project test suite is not green; no unrelated repair attempted."
+  ],
+  "commit": false,
+  "push": false,
+  "package": false,
+  "install": false,
+  "deploy": false
+}

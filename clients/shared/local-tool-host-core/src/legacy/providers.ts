@@ -101,6 +101,7 @@ const WECOM_TOOLS = [
   'wecom_probe',
   'wecom_message_send',
   'wecom_send_status',
+  'wecom_group_poll',
   'wecom_send_image',
   'wecom_send_file',
   'wecom_read_session',

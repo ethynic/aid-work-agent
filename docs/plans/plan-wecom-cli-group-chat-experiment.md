@@ -11,6 +11,88 @@
 | 搜索收尾 | 完整搜索与剪贴板恢复（2026-10-26） | ✅ 完成（2026-10-26） | 最终当前源码双轮CLI搜索/全文复制/原文及个人状态/草稿/清理核对通过；未提交、部署或恢复监听 |
 | 发送对账 | W4严格核验与重启后只读恢复 | ✅ 完成（2026-10-26） | 独测TS49/恢复7/Python78通过，CR无遗留；仅CLI，无新真实发送验收 |
 | MCP/Runtime对账 | W4新增只读工具接线 | ✅ 完成（2026-10-26） | PG63/TS32通过，单测173通过另2旧BOSS失败；CR无遗留 |
+| W6 配置智能体联动 | 配置→持续Runner→Runtime→CLI增量群读与回复 | ✅ 完成（2026-10-26） | 旧分支基线隔离PG76及CR通过；最新master组合验证另列下阶段 |
+| 最新Runtime整合 | 同步master的BOSS/Runtime修复并组合回归 | ✅ 完成（2026-10-26） | 1721707f整合验收版获授权提交；PG/Worker100与迁移34通过、CR通过；3旧Runtime断言保留 |
+
+## W6 配置智能体完整链路（2026-10-26）
+
+### 最新master与Runtime核查（2026-10-26，用户追问后补核）
+
+本节首次核查之后，用户已明确授权完整整合master并重新独测/CR；原“不合并”仅指首次核查阶段，本阶段以新授权为准，仍禁止提交/推送、部署和恢复真实监听或发送。采用现项目dev-workflow高风险流程：主控唯一处理Git/前端/迁移清单/文档及W6备份重叠，backend开发角色仅解决engine/context_assembler/control_set三处冲突与其直接测试，独立TEST/CR冻结后只读验证；不新增wire或恢复平台，不改契约2.10语义。
+
+2026-10-26实施记录：新fetch后两端master仍1721707f；HEAD仍ffd18b2f。合并前51文件逐一复制并SHA256校验至任务Temp（wecom-master-integration-backup-7l_qzhwf），无stash、无覆盖式reset。仅docs/ideas.md、src/api/agent_definitions.py与master路径重叠，先验证备份后对这两文件精确restore、--no-commit --no-ff完整merge，再按base/已合结果/原未提交副本三方重放，均无重放冲突。第一次merge因ideas CRLF/stat未刷新拒绝，在status确认两文件干净后重试成功进入合并；无丢失改动。其余49文件内容均核对原副本，13个merge仅换行变化已恢复原字节；package-lock原三peer改动保持。
+
+8个提交间冲突已解：迁移清单双方独立条目均保留；3份索引保留新master条目和本分支已实现WeCom/agent2记录；MessageList退役旧send快捷选项事件但保持续任务history分页事件；engine先拒绝/消费不完整模型响应再normalize namespace，保continuous_guard与tool代次/游标顺序；control新定义移除present_options、保agent_sleep并保旧pending实例恢复；普通所有角色默认50轮，显式profile优先，master新增无profile期待20的两处测试同步既定50要求。共享Runtime productTrust、win32 sequence/windows、acceptance根与实例授权均核对master逐字一致。索引为未提交合并状态，MERGE_HEAD=1721707f，未自动生成合并commit。
+
+整合后发现升级水位边界：master的2026-10-26 15:00迁移已推进单一last_datetime，原10月22日三条分支迁移即使按顺序合并也会被存量环境跳过。保留历史条目不改，在2026-10-26 17:00追加同结构幂等catchup（wake_at/唤醒索引、8列BIGINT、历史分页索引），不改全局迁移算法。新增真实PG反证将匿名库模拟为master旧schema与水位，保留真实usage/credit行；升级补齐与全新结构一致、重复启动/强制重放不丢记录、可写入超过INT32计数。该反证+原迁移+迁移单测33项自测通过。
+
+合并语义额外6项真实Engine反证：length截断部分sleep/send不能派发或arm，model_usage与拒绝checkpoint两处重启不重放，后续同provider call ID仍namespace/游标顺序正确，只有真正提交的纯sleep抵扣业务轮次，普通50轮notice与continuous50轮PAUSEDguard分离；新测试及相邻98项自测通过。Runtime/WeCom/BOSS/Web构建通过（BOSS依赖按原锁npm ci --ignore-scripts，无lock改写）；shared native46、Web103及5文件真实PG/Worker43自测通过，PG包含两配置W6链路、实例授权、发送结算与休眠。所有pytest均显式新task loopback50925随机aid_test，LOGS默认连接禁用；无默认共享库访问，不以W9旧入口冒充隔离。
+
+Runtime广跑的3项providers断言失败经独立CR核对：HEAD与MERGE_HEAD两端均BOSS25（测试期望24、遗漏boss_recovery_probe）、detail排除后digest d51463db...462f5（测试仍旧f1b9dd6d...522f）、Provider5含runtime-recovery（测试期望4），属于双父共有陈旧测试锚点，未发现丢BOSS能力。不删恢复工具、不改生产白名单凑绿，仍记录非全仓全绿；旧后端BOSS/catalog基线另按独测范围记录。
+
+#### 最新master整合最终验收（2026-10-26）
+
+独立真实PG/Worker主批100通过、0失败/跳过：既有W6与设备/恢复/对账/睡眠边界、master实例授权与发送结算，加实际HTTP finish_reason=length首帧的零派发，后续合法poll/sleep与fresh Worker复用provider call ID仍四个独立call、5个usage receipts，取消后无新模型；原大于12K完整JSON仍到达模型。另独立纯Engine等91项经显式隔离入口通过。
+
+迁移独立34通过、0失败/跳过（原33加独立partial-rollout）：保留真实已park wake/checkpoint、已超INT32 token和credit17.25，在master15水位、其余7个INTEGER及缺历史索引的混合已发布状态下，catchup升级/重复启动/强制重放全部保数据；8列均能写INT32以上，原sleep随后真实claim一次且重复claim拒绝。不能以无账本行的全新库代替此证明。
+
+客户端独立：shared native46、BOSS fake恢复/零输入/unknown43、Web111、插件package/store17均通过；Runtime定向16项为13通过和上述3项双父陈旧断言失败。额外23个真实不同Ed25519历史/新根的旧/新签名均crypto verify通过（1场景）；实际CLI lostACK仅补传原unknown4场景、MessageList保history事件且不转发退役send2场景通过。均未操作真实企业微信/Chrome；不声称实际发行安装或真实用户群验收。
+
+独立完整CR通过，无未解决新增P0/P1/P2；6项真实Engine/sleep纯内存反证独立通过，升级水位缺陷已闭环。freeze2 295文件聚合`034f4a7611f0493d5479af7a1bcd14aa37b61ef229573fde3fe993bcd17904f0`逐项一致；最终仅增补文档验收记录。主控核113个变更Python AST、8冲突均解除、master关键5文件逐字一致和原package-lock三peer哈希保留。原51文件备份仍保留，不以stash或强制覆盖代替保全。
+
+当前是已解除冲突的未提交merge：HEAD仍ffd18b2f、MERGE_HEAD1721707f，合并结果在index+worktree，W6及补齐修复仍有未暂存部分，不存在新merge commit或push。已确认0 aid_test数据库/连接及本批API/Worker/MCP残留；主控核任务root/data/pid后仅停止本任务50925 PG helper，端口无监听。仍未提交、部署、安装客户端或恢复真实群聊监听。W9旧测试入口、旧fingerprint恢复、真群/多天/发行包与本机证据保留策略继续按原边界另验。
+
+独立全命令/文件/计数/双父基线及清理证据：`%TEMP%/wecom-master-independent-f130afb8/independent-master-integration-final-evidence.json`。其中Web111与额外组件2可合计113，不能再把合计与子项重复相加；其他计数按各批原始结果记录。最终文档仅补验收事实，产品源码与freeze2一致。
+
+#### 本次验收版提交授权与后续（2026-10-26）
+
+用户在完整整合及独测/CR完成后明确要求先提交本版，替代上文修复阶段的禁止提交/推送；部署、安装和恢复群聊监听仍未授权。提交前确认当前分支feature/ask-user-question-card、upstream origin同名分支及github同名分支均与原HEAD无分叉；fetch两端后master新增2dda0f1c（仅wecom_kf呈现/文档/对应单测），本次固定提交已验收的1721707f合并结果，不引入这条未经本轮验收的新提交。295个冻结文件逐项内容一致，另3个删除项精确继承master；原wecom-cli/package-lock.json三peer生成改动排除，其他本任务及合并改动统一入库。源码与现有主控构建/113个Python AST、独测和CR证据一致，只增补提交记录，不重复业务测试。实际提交SHA及推送结果以Git记录为准；目标为已确认origin配置的Codeup与GitHub当前分支，不推master、不force。
+
+后续建议顺序：先单独修W9测试入口强制隔离及3项Runtime陈旧断言，避免后续验证默认回退共享库；再制作Runtime+wecom CLI组合验收包，验证真实安装/升级、配对与历史签名兼容，并明确旧fingerprint待恢复任务处理；用户明确授权部署agent2后用当前分支部署，由配置好的智能体做真群@本人/闲聊/同账号人工发言、断网/重启/unknown与多任务多群验收，再做至少跨日的累计积分/状态及磁盘增长观察。agent2验收通过后再按用户指示合回master。本节不是部署或恢复监听授权。
+
+仅fetch origin/github、只读比较，两端master均为`1721707f`；当前分支HEAD `ffd18b2f`，共同祖先仍`3b713e08`，HEAD...master为本分支独有9/master独有39。上一轮W6开发未先合入这些更新，这是流程遗漏；PG76/产品CR只证明当前旧分支源码组合，不代表最新版Runtime、签名插件及已安装版本兼容。本次不合并、提交、部署或恢复监听，原50文件交付冻结中产品源码未改变，新增本核查记录。
+
+缺少的相关更新：`54d5befc`隐藏/重建Chrome渲染窗口重新枚举、零输入失败后的原业务接续（含共享win32-native-input）；`e44830e2`候选配对、筛选草稿/提交接续、超屏归位；`371a73a0`归位后原CLI调用内接续，并修Runtime productTrust历史根数量超过16时错误拒绝；`6f8d684b`对应Runtime0.0.29/BOSS0.3.27组合验收包记录及新版信任根。Runtime源码package基线0.2.22、master0.2.23，不能将其与组合包Runtime标签0.0.29混为同一版本字段；也未检查当前机器实际安装版本。
+
+范围判定：共享local-tool-host-core相对共同祖先没有master新增差异，但Runtime productTrust、共享native、签名根与发布入口确有差异，不能据此说Runtime整体已最新。WeCom UI发送走自己的PowerShell/PostMessage链，不直接使用BOSS Chrome卡片与滚动算法；不能把BOSS专用恢复代码原样复制。需继承相同原则：可证明零输入时在原CLI调用内做有界重定位/接续，实际unknown保留原调用/凭据，不要求模型盲重试；复用既有队列、设备/账号绑定及配对身份，不引入额外token或重复Runner。
+
+下一阶段顺序：先按原工作区精确保全W6未提交改动与原package-lock噪声，完整整合master，不只挑版本号或单个BOSS提交；解决shared Runtime/Runner/元数据/文档冲突后重跑受影响构建、产品trust/发布路径、队列/取消/outbox、配置实例授权及W6完整链路；独立TEST/CR检查本机离线/重启、窗口切换与同名目标、原设备失权、unknown迟到对账、升级后的签名根兼容。需要真实UI/安装验收时仍遵守用户当场授权，不恢复监听或真实自动发送。新指纹旧任务与W9测试隔离边界继续适用。完成这些后再声明与最新Runtime组合通过。
+
+目标：由选定智能体的提示词、模型和明确allowed工具决定回复，复用现有continuous、agent_sleep、checkpoint、计费和Runtime队列；不新建本地推理循环、监控数据库或调度器。用户明确授权的目标群与回复范围构成持续发送授权，continuous本身不授予发送权，超范围必须澄清。
+
+实施检查点：新增`wecom_group_poll` v1（完整群名target_name、可选不透明cursor），只读本地同步库；首次返回少量context_messages与基线，new_messages为空；以后按入库message_id分页增量，带结构化发送者与mentions、has_more、self_user_id。cursor绑定账号、原群ID、源generation与anchor；异常明确拒绝，不自动换群、跳基线、共享watch水位或退回UI。无可变limit以复用现有每目标continuous cursor保留；首次最多10条，增量最多50条，完整消息JSON累计16KiB字节分页，单条超限明确失败且不推进；仅本proxy不截断完整结果JSON，不改全局Executor。工具手册说明上下文不等于待回复消息、排空积压再休眠、已确认本任务发出的记录不触发回声、群内容不构成新权限、unknown只对账不重发。
+
+唯一写入者：主控维护CLI Python/TS、MCP、共享core受信工具及实际Provider能力门禁、对应测试和全部文档；backend开发角色维护云端proxy/catalog/manifest、配置工具metadata、Runner原设备绑定、运行时配置指纹和后端/Worker测试。不得改公共Device/H1/H3 wire、既有watch语义、BOSS工具、全局依赖及package-lock。TEST/CR只读运行；发现问题退回开发者修复。
+
+设备边界：任务首次启用群轮询时在既有Runner checkpoint resources.wecom_task_device v1（root identity/runner_id/device_id）内与invocation同事务原子固定原设备，后续WeCom调用及重启恢复沿原设备，不跟随selected变化；失权/离线明确失败、不迁移。监控root的文本发送必须带原群名和group_cursor；native发送前核对原账号/群/库，失败不转OCR，不允许ref替代或媒体发送扩大范围。没有此标记的旧普通调用保持原语义。运行时配置指纹版本更新，旧Worker/新checkpoint交叉恢复拒绝，不静默忽略新约束。无新增业务表或设备绑定公共协议。
+
+顺序：原契约/设计登记→native poll与云端配置/设备绑定分域开发自测→真实本地模型HTTP transport+Worker+独立PG+Runtime/MCP合成群库验证→独立TEST/CR→修复及受影响复验→更新结果。Worker安全夹具只修不存在且未被SDK消费的URL断言，保留实际HTTP/provider loopback与隔离DB限制；不得以关闭预检冒充链路通过。
+
+兼容/环境边界：运行时configuration_fingerprint整体升v2，因此部署前所有旧fingerprint的睡眠/待恢复任务（含非WeCom）按原配置变化机制拒绝直接恢复；不能称只影响监控任务。未来部署需先处理存量待恢复任务，不自动改旧checkpoint或重放未知副作用。实际Worker测试复用既有Windows信号hook平台适配，仅替代OS signal hook；不等于未适配的Windows生产Worker CLI已可启动。独立PG17缓存仅用于随机aid_test库，bootstrap精确省略三条不相关vector扩展/表/索引DDL，其余原SQL不变，vector不在验收范围。
+
+验收：两个配置不同的匿名智能体携带各自system/model/tools与群上下文调用实际Gateway；精确发送模型生成内容；首次历史不回放、分页/多群/多任务不串游标、账号/库替换/anchor拒绝；睡眠后新Worker消费已保存游标、重复唤醒不重复发送、unknown不重发、停止无后续派发、计费沿原幂等、长期history有界。UI配置可选择WeCom工具且不扩大现有allowed。真实企业微信/发行包/多天运行不在本次验收范围。
+
+### W6修复与验证记录
+
+开发自测完成跨组件闭环后，独立CR发现P1：原库群scope与UI同名联系人可能拼接；已对带group_cursor的发送在driver前强制UI目标为group且原名精确一致，DB解析限制group，匿名反证变为effectnone、发送driver0调用，旧普通发送保持。另一P2为显式cursor:null跨云/MCP schema不一致会误入unknown核验；poll cursor及新send group_cursor均在派发前拒绝null，真实ToolExecutor normalize反证确保设备选择/入队0，省略字段维持原路径。旧test_proxy工具计数33→34随新增工具修正。
+
+真实Worker还暴露通用12K尾截破坏结果JSON，已用native完整消息16KiB分页+该proxy专用preserve修复；不可用全局关闭截断替代。容量自测5000条完成fact循环后，5个目标最新cursor与一个原设备pin均保留，活动fact/order≤32；这不代表本机发送artifact有自动清理。
+
+自测有效隔离证据：后端freeze2的20文件聚合`f98df630c4f4c9286be85261c1172b72fac1a8dc01ced51df6c5f11cc889e12f`；215项随机aid_test单测通过、0失败/跳过。前版有效PG67项通过（含真实Worker3、root/child设备pin6及相邻恢复/对账/睡眠），后版null/count改动不改变这些valid-path。客户端构建及direct group6、Python新poll6通过；独立最终全链结果见本节后续，不能把自测写成独测通过。
+
+测试设施遗留（本轮未擅自扩改全局hook）：普通pytest入口的根session hooks可回退默认共享库，扫描并删除测试命名tenant关联数据；旧registration用例的真实SkillLoader还可能执行6个非空init_script建表/索引。本轮早期普通unit183项数值断言通过，但未证明其目标隔离，随后追加慢批次已按精确父子PID中止；现存输出不足以证明未连接/未写入，没有连接业务库追查。上述183不作为最终隔离证据，已在明确loopback随机aid_test入口以215项重新验证。后续验证禁止依赖默认DSN；该旧入口需单独修复，删除硬编码回退、禁止未证明隔离的自动清理/初始化。文档不记录连接凭据。
+
+### W6独立结果（2026-10-26）
+
+独立PG76项通过、0失败/错误/跳过：基于原67项范围，加真实并发首次pin唯一设备、3个损坏marker回滚和实际Engine大于12K完整JSON到HTTP模型的5个独立反证、以及4个工具可见性用例。两配置分别核对实际system/model/tools，初context不回复，新@内容与上下文到达模型，返回正文经实际Runtime/stdio MCP/native加密合成库精确发送、local-record确认；换Worker续cursor、切selected不迁移、竞争唤醒、人工同账号发言与回声区分、取消停止、unknown不重放和usage receipts幂等通过。模型远端用request-aware本地HTTP peer替代，UI发送驱动纯注入；不可将此称为真实外部模型回答质量或真群验收。
+
+独立新进程单测125通过、3项既有失败；4个可见性用例从unit中明确deselect，已转上述随机PG验收，不计skip。三项既有失败为两个BOSS注册差异（test_manifest_matches_proxy_tool_classes、TestRecruitingSubagentMd.test_frontmatter_and_body_parsed）及catalog原provider总数过期（test_existing_three_entries_unchanged期望4而HEAD已有5个含runtime-recovery），均按HEAD基线核对，未顺带修改。新tool计数34、真实Executor显式null零enqueue和省略路径在freeze2新解释器复验通过。普通unit入口此次显式guard loopback及隔离库名，LOGS默认连接禁用；Worker实际trace同随机PG并做安全预检。
+
+客户端独立最终计数（不重叠）：CLI48、Python group54、core16、Runtime wecom4、独立客户端探针9项，均0失败/跳过。CLI包含group-poll6、既有发送27及groups/mentions/manifest15；未受影响部分复用同源码结果。探针含fresh-process Runtime精确首尾空格/多行回复、UTF8字节分页/oversize和actual SDK旧能力零RPC/缓存代次等。初次Temp探针有字段归属断言误解和与开发者MCP争全局互斥的BUSY，修正探针并串行重跑后通过，未修改生产锁绕过。原selftest SQLite连接上下文未close导致两次Windows清理失败已修test closing；旧manifest位置/计数断言随新增工具更新；这些初次失败不当作通过证据。
+
+完整产品CR通过，无未解决P0/P1/P2；独立复核原同名联系人P1红绿、null P2真实Executor4项、原设备/root-child边界、preserve正常/恢复路径与5000fact有界。freeze2后端20文件hash全部一致，客户端受影响24文件冻结一致；主控核对22个变更Python语法、暂存0及原package-lock哈希未变。测试设施W9、真群/多天/发行包及本机artifact保留仍是明确未验/待处理项，不用本轮CR覆盖它们。
+
+独测完整命令/初始失败/冻结边界证据：`%TEMP%/wecom-w6-independent-7b57fce8/independent-w6-final-evidence.json`。收尾确认0个aid_test库/连接、本批API/Worker/MCP均退出，主控核对任务元数据/原data/pid后仅关闭本任务64303 PG helper，未动其他服务；测试二进制缓存保留。当前分支`feature/ask-user-question-card`、HEAD `ffd18b2f`不变，未暂存、提交、推送、部署、执行真实UI发送或恢复群聊监听。
 
 ## 2026-10-26 MCP与Runtime发送对账接线
 
@@ -119,12 +201,14 @@ node --test dist/tests/input-locator.test.js dist/tests/powershell-input.indepen
 |---|---|---|---|
 | W1 | 完整群名搜索与剪贴板恢复 | 已应用旧补丁并补齐个人标记、OLE空读及未恢复提示；最终独测23项与CR通过，当前源码真实双轮完整搜索、原文恢复、个人状态、草稿和清理核对通过 | 已完成（2026-10-26） |
 | W2 | 搜索与编辑区定位稳定性 | 工具栏误选已修；OCR横向裁切、图标先于正文、正文合并×已有回归。继续验证窗口尺寸、DPI及焦点变化，布局不能确认时须安全中止、保留人工草稿 | 待扩展验收 |
-| W3 | 人工同账号发言与自动出站消息区分 | 临时脚本已修正self全过滤；产品监控编排须以已确认出站ID区分，验证人工发言不漏、自动回复不自触发，不直接复制临时脚本的近期原文去重策略作为永久协议 | 待产品接入 |
+| W3 | 人工同账号发言与自动出站消息区分 | 配置智能体工具手册按确认出站ID排除回声，隔离真实Worker验证自消息不回声、本人手动@发言仍回复；真实模型效果另验 | 隔离接入完成 |
 | W4 | 不确定发送的核验与幂等 | 本轮一次unknown经原群可信全文只读核对，未重复发送；严格投影/分页、加密凭据与CLI只读重启对账完成；独测TS49/恢复7/Python78及CR通过，unknown不重发 | CLI/MCP/Runtime接线已完成 |
 | W5 | 普通群友闲聊不插话 | @本人和非@承接已实测；纯群友闲聊未遇真实样本。补第三人互聊、话题切换及多条@合并处理样本 | 待补验收 |
-| W6 | 真正Runner与Runtime持续任务联动 | 原实验是开发助手决策+临时脚本轮询；发送对账MCP/Runtime接线已开发验收，真正持续Runner、多天运行/发布重启/停止在途/重复唤醒/累计用量与状态增长仍须集成验收 | 待集成验收 |
+| W6 | 真正Runner与Runtime持续任务联动 | 两配置prompt/model/tools经实际Gateway到Runtime/MCP/CLI合成库，换Worker续游标、竞争唤醒/停止/unknown及用量幂等独测通过；真实群/多天另验 | 隔离集成完成 |
 | W7 | 多任务共用企业微信设备 | 本轮只串行操作一个群。另验多会话任务与单任务多群，复用既有设备队列/锁，保证搜索/切群/发送的连续操作不相互串扰 | 待并发验收 |
 | W8 | 时延与读取故障恢复 | 约10秒轮询另计CLI耗时，实际单次发送约20–27秒，不能承诺10秒回复；记录各阶段时延并定位瓶颈。补CLI无结构化输出、断连后的游标保留和pending恢复 | 待处理 |
+| W9 | 测试入口强制隔离 | 根pytest session hooks与真实SkillLoader可能使用默认共享库清理/初始化；移除硬编码默认连接，所有自动写入前证明隔离，当前只在显式loopback随机aid_test验收 | 待单独修复 |
+| W10 | 长期本机证据保留 | 新poll无持久水位/截图且解密产物清理；既有send/search artifact与receipt随操作增长，生产前确定保留/磁盘策略，不自动删除未知发送凭据 | 待运维策略 |
 
 W1的[历史补丁](patches/wecom-search-clipboard-recovery-pending.patch)已于2026-10-26应用并进一步修复，仅供追溯，不要对当前工作树重复应用。修复不持久化用户剪贴板原文，历史原内容未保存不能补称已找回。
 

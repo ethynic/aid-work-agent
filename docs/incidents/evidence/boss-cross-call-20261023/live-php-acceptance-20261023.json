@@ -1,0 +1,855 @@
+{
+  "date": "2026-10-23",
+  "timezone": "Asia/Shanghai",
+  "purpose": "Authorized live PHP job continuity test; no recruitment messaging",
+  "environment": {
+    "runtime": "0.0.26",
+    "boss": "0.3.24",
+    "release_id": "dev-boss-0.3.24-2f08d40c88b5dad7",
+    "installed_production_file_hash_matches": [
+      {
+        "path": "scripts/BossWindowExperiment.cs",
+        "sha256": "4db981953ce202665082911266bf08744b5c43f2f8f294289df448ac9e496ef6"
+      },
+      {
+        "path": "scripts/window-experiment.ps1",
+        "sha256": "825b67d0025d5713c442f374088b3b4409996a15180dbf3bddae0311f370893a"
+      },
+      {
+        "path": "dist/src/main/boss/FilterSetter.js",
+        "sha256": "26ae2a76431d59a7a22055b1e66f418bcdc1d3e8a8e3923e82c5706cca9a94fe"
+      },
+      {
+        "path": "dist/src/main/boss/GreetExecutor.js",
+        "sha256": "3776e036239cb490604f833ffb8fe4aa8e2a2681af32036bb33be433edf927ff"
+      },
+      {
+        "path": "dist/src/main/boss/LoadedCandidateNavigation.js",
+        "sha256": "0244688a295b0a285510ac9fb981daeb3afcb0379cdb72a9ad283dce70319e19"
+      },
+      {
+        "path": "dist/src/main/boss/RecommendationResultBoundary.js",
+        "sha256": "1d1459633aa887f13f76bf0dcebcaa50a4de39bc4b548167e99e9d2ed478eb0b"
+      },
+      {
+        "path": "dist/src/main/boss/ResumeBatchReader.js",
+        "sha256": "f0f95c54dbe50bd187723c1bce9c327a239666047c6489b83e29d9e687617aea"
+      },
+      {
+        "path": "dist/src/main/boss/cardName.js",
+        "sha256": "812dd0061fd75a6cd23935796ad33b6d64cafe129c0f93ff15b1babd67e98f12"
+      },
+      {
+        "path": "dist/src/main/boss/localOperationRecovery.js",
+        "sha256": "0f169582beefa683dcdbe714ead8d185cd22c4b45c9243b708947d23e8793d2b"
+      },
+      {
+        "path": "dist/src/main/boss/visualRecovery.js",
+        "sha256": "288392f78a36320f17926b237cfa018b7c4efe35030050e4b7f5e7f4d5940ff7"
+      },
+      {
+        "path": "dist/src/main/input/windowExperiment.js",
+        "sha256": "6b62ad69c2266a5d8c96ca79415d388d2f4df1ba7c98254f76bebac066a1c846"
+      },
+      {
+        "path": "dist/src/main/operations/bossContext.js",
+        "sha256": "062718ab01ea0258f3c7d310b0648e8fa793fb70125e02733695314c3828eb7a"
+      },
+      {
+        "path": "dist/src/main/operations/bossFilter.js",
+        "sha256": "a9a8694952f59be188c17ebe9b8b8318a7852a8fe0383485a5a5789c97fbcb71"
+      },
+      {
+        "path": "dist/src/main/operations/bossGreet.js",
+        "sha256": "9dd11a631ef606fa42c7ae751349d98ff5b56d105ec23bc9a38a6221beee1770"
+      },
+      {
+        "path": "dist/src/main/operations/bossOverlayDismiss.js",
+        "sha256": "91aea0ced932546929da9bd794ab9ce45c86ff9c437c6e23417f23a4875212e1"
+      },
+      {
+        "path": "dist/src/main/operations/bossOverlayInspect.js",
+        "sha256": "21e5f9f68c3a1877e25ab2aed400718c22af6684b347f1e4eb0c72839187a717"
+      },
+      {
+        "path": "dist/src/main/operations/pageOperation.js",
+        "sha256": "0c0ef459f4c06e4f5bfc3630aede285da6f7f995a84ddf435bbbb9d370ef229f"
+      },
+      {
+        "path": "dist/src/main/operations/types.js",
+        "sha256": "d76e2dc7ce5130cc170cb3f4a33c3b9ba0fbcf0c6d88e757283e88792658946a"
+      }
+    ],
+    "web": "agent2",
+    "conversation": "Existing 打开boss; no new conversation or refresh",
+    "job": "PHP 开发工程师"
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "user_message_local": "21:36:12",
+      "local_tool_complete_utc": "13:38:08.042Z",
+      "web_final_local": "21:39:10",
+      "local_read": 3,
+      "cloud_saved": 3,
+      "result": "passed",
+      "candidate_fingerprints": [
+        "8317b4e9b656",
+        "747b607b873f",
+        "b430ee82a54a"
+      ],
+      "input_action": "read_only"
+    },
+    {
+      "round": 2,
+      "user_message_local": "21:39:55",
+      "requested_new": 3,
+      "result": "passed",
+      "intent": "same PHP job/filter, continue excluding already saved candidates",
+      "local_read": 3,
+      "cloud_saved": 3,
+      "web_final_local": "21:41:55"
+    },
+    {
+      "round": 3,
+      "user_message_local": "21:42:10",
+      "requested_new": 3,
+      "result": "passed",
+      "intent": "cross initial six-card viewport, exclude six saved candidates",
+      "local_read": 3,
+      "cloud_saved": 3,
+      "web_final_local": "21:45:10",
+      "actual_list_scroll": true
+    },
+    {
+      "round": 4,
+      "user_message_local": "21:45:38",
+      "requested_new": 6,
+      "result": "blocked_before_filter_write",
+      "intent": "set gender/experience unrestricted, preserve other current filters, exclude nine saved candidates",
+      "web_final_local": "21:46:05",
+      "tool_options_ok": true,
+      "cause": "options schema gives available options and selection mode, not current selected values; replace semantics cannot preserve unspecified existing fields"
+    },
+    {
+      "round": 5,
+      "user_message_local": "21:47:19",
+      "requested_new": 6,
+      "result": "passed",
+      "intent": "explicit full replacement: all available page filters unrestricted; preserve PHP job and nine saved exclusions",
+      "filter_result": {
+        "tool": "boss_filter",
+        "complete_utc": "13:47:43.410Z",
+        "success": true,
+        "effect": "applied",
+        "elapsed_ms": 14599
+      },
+      "local_read": 6,
+      "cloud_saved": 6,
+      "web_final_local": "21:52:37",
+      "effective_filter_count": 0
+    },
+    {
+      "round": 6,
+      "user_message_local": "21:53:15",
+      "requested_new": 3,
+      "result": "failed_nonempty_filter",
+      "intent": "explicit nonempty filters: experience 3-5 years, bachelor degree; other available filters unrestricted; exclude fifteen saved candidates",
+      "user_steering": "User explicitly requested adding real filtering conditions next round",
+      "web_final_local": "21:55:14",
+      "local_read": 0,
+      "cloud_saved": 0,
+      "filter_applied": false,
+      "root_cause": "root BODY overflow propagation was treated as an ordinary scrolling element clip"
+    }
+  ],
+  "runtime_observations": {
+    "last_log_time": "2026-10-23T13:55:06.683Z",
+    "tool_outcomes": [
+      {
+        "at": "2026-10-23T13:36:21.350Z",
+        "tool": "boss_goto",
+        "success": "true",
+        "code": "OK",
+        "effect": "none",
+        "elapsed_ms": "2656"
+      },
+      {
+        "at": "2026-10-23T13:36:30.245Z",
+        "tool": "boss_list_jobs",
+        "success": "true",
+        "code": "OK",
+        "effect": "none",
+        "elapsed_ms": "6277"
+      },
+      {
+        "at": "2026-10-23T13:36:39.256Z",
+        "tool": "boss_select_job",
+        "success": "true",
+        "code": "OK",
+        "effect": "applied",
+        "elapsed_ms": "5435"
+      },
+      {
+        "at": "2026-10-23T13:38:08.042Z",
+        "tool": "boss_resume_batch",
+        "success": "true",
+        "code": "OK",
+        "effect": "none",
+        "elapsed_ms": "86360"
+      },
+      {
+        "at": "2026-10-23T13:41:21.282Z",
+        "tool": "boss_resume_next",
+        "success": "true",
+        "code": "OK",
+        "effect": "none",
+        "elapsed_ms": "82944"
+      },
+      {
+        "at": "2026-10-23T13:43:47.709Z",
+        "tool": "boss_resume_next",
+        "success": "true",
+        "code": "OK",
+        "effect": "none",
+        "elapsed_ms": "94572"
+      },
+      {
+        "at": "2026-10-23T13:45:48.032Z",
+        "tool": "boss_filter_options",
+        "success": "true",
+        "code": "OK",
+        "effect": "none",
+        "elapsed_ms": "6024"
+      },
+      {
+        "at": "2026-10-23T13:47:43.410Z",
+        "tool": "boss_filter",
+        "success": "true",
+        "code": "OK",
+        "effect": "applied",
+        "elapsed_ms": "14599"
+      },
+      {
+        "at": "2026-10-23T13:49:31.734Z",
+        "tool": "boss_resume_next",
+        "success": "true",
+        "code": "OK",
+        "effect": "none",
+        "elapsed_ms": "104706"
+      },
+      {
+        "at": "2026-10-23T13:51:49.771Z",
+        "tool": "boss_resume_next",
+        "success": "true",
+        "code": "OK",
+        "effect": "none",
+        "elapsed_ms": "85503"
+      },
+      {
+        "at": "2026-10-23T13:53:25.027Z",
+        "tool": "boss_filter_options",
+        "success": "true",
+        "code": "OK",
+        "effect": "none",
+        "elapsed_ms": "5828"
+      },
+      {
+        "at": "2026-10-23T13:54:29.301Z",
+        "tool": "boss_filter",
+        "success": "false",
+        "code": "UI_CHANGED",
+        "effect": "partial",
+        "elapsed_ms": "61311"
+      },
+      {
+        "at": "2026-10-23T13:54:35.449Z",
+        "tool": "boss_filter",
+        "success": "false",
+        "code": "MEMBERSHIP_REQUIRED",
+        "effect": "none",
+        "elapsed_ms": "144"
+      },
+      {
+        "at": "2026-10-23T13:55:06.588Z",
+        "tool": "boss_filter",
+        "success": "false",
+        "code": "UI_CHANGED",
+        "effect": "partial",
+        "elapsed_ms": "25725"
+      }
+    ],
+    "native_inputs": {
+      "click_1": 29,
+      "wheel_1": 103
+    },
+    "viewport_observations": [
+      {
+        "at": "2026-10-23T13:36:42.052Z",
+        "viewport": "1410x1266",
+        "button_y": "146,330,514,698,882,1066"
+      },
+      {
+        "at": "2026-10-23T13:39:58.730Z",
+        "viewport": "1410x1266",
+        "button_y": "146,330,514,698,882,1066"
+      },
+      {
+        "at": "2026-10-23T13:42:13.565Z",
+        "viewport": "1410x1266",
+        "button_y": "146,330,514,698,882,1066"
+      },
+      {
+        "at": "2026-10-23T13:47:47.336Z",
+        "viewport": "1410x1266",
+        "button_y": "146,330,514,698,882,1066"
+      },
+      {
+        "at": "2026-10-23T13:50:24.647Z",
+        "viewport": "1410x1266",
+        "button_y": "101,285,469,653,837,1021,1205"
+      }
+    ],
+    "cdp_sent": 733,
+    "cdp_ack": 733,
+    "cdp_methods_sent": {
+      "Target.getTargets": 66,
+      "Target.attachToTarget": 20,
+      "DOMSnapshot.captureSnapshot": 348,
+      "Target.detachFromTarget": 20,
+      "Target.activateTarget": 136,
+      "Page.captureScreenshot": 105,
+      "Input.dispatchKeyEvent": 30,
+      "Input.dispatchMouseEvent": 4,
+      "Page.getLayoutMetrics": 4
+    }
+  },
+  "candidate_counts": {
+    "local_read": 15,
+    "unique": 15,
+    "web_confirmed_saved": 15,
+    "failed_nonempty_filter_round_added": 0
+  },
+  "geometry_capture_utc": "2026-10-23T14:00:37.433Z",
+  "computed_styles_order": [
+    "overflow-x",
+    "overflow-y",
+    "display",
+    "position",
+    "height",
+    "visibility",
+    "opacity",
+    "contain",
+    "transform"
+  ],
+  "geometry": [
+    {
+      "row": "经验要求",
+      "option": "3-5年",
+      "document_index": 2,
+      "target_node_index": 628,
+      "point": {
+        "x": 1251.9609375,
+        "y": 671.5
+      },
+      "document_scroll": {
+        "x": 0,
+        "y": 1344
+      },
+      "production_click_clip": {
+        "left": 499,
+        "right": 1364,
+        "top": 93,
+        "bottom": -78
+      },
+      "production_scroll_clip": {
+        "left": 499,
+        "right": 1364,
+        "top": 93,
+        "bottom": -78
+      },
+      "relevant_ancestors": [
+        {
+          "node": 346,
+          "tag": "DIV",
+          "className": "top",
+          "bounds": [
+            331,
+            1397,
+            865,
+            796
+          ],
+          "clientRects": [
+            0,
+            0,
+            865,
+            796
+          ],
+          "scrollRects": [
+            0,
+            0,
+            865,
+            796
+          ],
+          "offsetRects": [
+            0,
+            0,
+            865,
+            796
+          ],
+          "styles": [
+            "auto",
+            "auto",
+            "block",
+            "static",
+            "796px",
+            "visible",
+            "1",
+            "none",
+            "none"
+          ],
+          "globalBounds": [
+            499,
+            93,
+            865,
+            796
+          ]
+        },
+        {
+          "node": 345,
+          "tag": "DIV",
+          "className": "filter-panel",
+          "bounds": [
+            331,
+            1397,
+            865,
+            846
+          ],
+          "clientRects": [
+            0,
+            0,
+            865,
+            846
+          ],
+          "scrollRects": [
+            0,
+            0,
+            865,
+            846
+          ],
+          "offsetRects": [
+            -795,
+            41,
+            865,
+            846
+          ],
+          "styles": [
+            "auto",
+            "hidden",
+            "flex",
+            "absolute",
+            "846px",
+            "visible",
+            "1",
+            "none",
+            "none"
+          ],
+          "globalBounds": [
+            499,
+            93,
+            865,
+            846
+          ]
+        },
+        {
+          "node": 28,
+          "tag": "BODY",
+          "bounds": [
+            0,
+            0,
+            1236,
+            1226
+          ],
+          "clientRects": [
+            0,
+            0,
+            1236,
+            1226
+          ],
+          "scrollRects": [
+            0,
+            0,
+            1236,
+            2804
+          ],
+          "offsetRects": [
+            0,
+            0,
+            1236,
+            1226
+          ],
+          "styles": [
+            "auto",
+            "scroll",
+            "block",
+            "static",
+            "1226px",
+            "visible",
+            "1",
+            "none",
+            "none"
+          ],
+          "globalBounds": [
+            168,
+            -1304,
+            1236,
+            1226
+          ]
+        },
+        {
+          "node": 2,
+          "tag": "HTML",
+          "className": "",
+          "bounds": [
+            0,
+            0,
+            1236,
+            1226
+          ],
+          "clientRects": [
+            0,
+            0,
+            1236,
+            1226
+          ],
+          "scrollRects": [
+            0,
+            1344,
+            1236,
+            2804
+          ],
+          "offsetRects": [
+            0,
+            0,
+            1236,
+            1226
+          ],
+          "styles": [
+            "visible",
+            "visible",
+            "block",
+            "static",
+            "1226px",
+            "visible",
+            "1",
+            "none",
+            "none"
+          ],
+          "globalBounds": [
+            168,
+            -1304,
+            1236,
+            1226
+          ]
+        }
+      ]
+    },
+    {
+      "row": "学历要求",
+      "option": "本科",
+      "document_index": 2,
+      "target_node_index": 656,
+      "point": {
+        "x": 1042.625,
+        "y": 756.5
+      },
+      "document_scroll": {
+        "x": 0,
+        "y": 1344
+      },
+      "production_click_clip": {
+        "left": 499,
+        "right": 1364,
+        "top": 93,
+        "bottom": -78
+      },
+      "production_scroll_clip": {
+        "left": 499,
+        "right": 1364,
+        "top": 93,
+        "bottom": -78
+      },
+      "relevant_ancestors": [
+        {
+          "node": 346,
+          "tag": "DIV",
+          "className": "top",
+          "bounds": [
+            331,
+            1397,
+            865,
+            796
+          ],
+          "clientRects": [
+            0,
+            0,
+            865,
+            796
+          ],
+          "scrollRects": [
+            0,
+            0,
+            865,
+            796
+          ],
+          "offsetRects": [
+            0,
+            0,
+            865,
+            796
+          ],
+          "styles": [
+            "auto",
+            "auto",
+            "block",
+            "static",
+            "796px",
+            "visible",
+            "1",
+            "none",
+            "none"
+          ],
+          "globalBounds": [
+            499,
+            93,
+            865,
+            796
+          ]
+        },
+        {
+          "node": 345,
+          "tag": "DIV",
+          "className": "filter-panel",
+          "bounds": [
+            331,
+            1397,
+            865,
+            846
+          ],
+          "clientRects": [
+            0,
+            0,
+            865,
+            846
+          ],
+          "scrollRects": [
+            0,
+            0,
+            865,
+            846
+          ],
+          "offsetRects": [
+            -795,
+            41,
+            865,
+            846
+          ],
+          "styles": [
+            "auto",
+            "hidden",
+            "flex",
+            "absolute",
+            "846px",
+            "visible",
+            "1",
+            "none",
+            "none"
+          ],
+          "globalBounds": [
+            499,
+            93,
+            865,
+            846
+          ]
+        },
+        {
+          "node": 28,
+          "tag": "BODY",
+          "bounds": [
+            0,
+            0,
+            1236,
+            1226
+          ],
+          "clientRects": [
+            0,
+            0,
+            1236,
+            1226
+          ],
+          "scrollRects": [
+            0,
+            0,
+            1236,
+            2804
+          ],
+          "offsetRects": [
+            0,
+            0,
+            1236,
+            1226
+          ],
+          "styles": [
+            "auto",
+            "scroll",
+            "block",
+            "static",
+            "1226px",
+            "visible",
+            "1",
+            "none",
+            "none"
+          ],
+          "globalBounds": [
+            168,
+            -1304,
+            1236,
+            1226
+          ]
+        },
+        {
+          "node": 2,
+          "tag": "HTML",
+          "className": "",
+          "bounds": [
+            0,
+            0,
+            1236,
+            1226
+          ],
+          "clientRects": [
+            0,
+            0,
+            1236,
+            1226
+          ],
+          "scrollRects": [
+            0,
+            1344,
+            1236,
+            2804
+          ],
+          "offsetRects": [
+            0,
+            0,
+            1236,
+            1226
+          ],
+          "styles": [
+            "visible",
+            "visible",
+            "block",
+            "static",
+            "1226px",
+            "visible",
+            "1",
+            "none",
+            "none"
+          ],
+          "globalBounds": [
+            168,
+            -1304,
+            1236,
+            1226
+          ]
+        }
+      ]
+    }
+  ],
+  "offline_proof": {
+    "proofs": [
+      {
+        "label": "经验要求",
+        "option": "3-5年",
+        "point": {
+          "x": 1251.9609375,
+          "y": 671.5
+        },
+        "production_clip": {
+          "left": 499,
+          "right": 1364,
+          "top": 93,
+          "bottom": -78
+        },
+        "offline_single_ancestor_viewport_control": {
+          "left": 499,
+          "right": 1364,
+          "top": 93,
+          "bottom": 889
+        },
+        "point_inside_control": true
+      },
+      {
+        "label": "学历要求",
+        "option": "本科",
+        "point": {
+          "x": 1042.625,
+          "y": 756.5
+        },
+        "production_clip": {
+          "left": 499,
+          "right": 1364,
+          "top": 93,
+          "bottom": -78
+        },
+        "offline_single_ancestor_viewport_control": {
+          "left": 499,
+          "right": 1364,
+          "top": 93,
+          "bottom": 889
+        },
+        "point_inside_control": true
+      }
+    ],
+    "production_changes": false,
+    "browser_inputs": 0
+  },
+  "root_cause": {
+    "confirmed_for": "This evening nonempty-filter failures; historical failures without equivalent DOM remain unproven",
+    "offending_ancestor": {
+      "document": 2,
+      "node": 28,
+      "tag": "BODY"
+    },
+    "incorrect_bottom_calculation": "iframeOriginY(40) - documentScrollY(1344) + BODY height(1226) = -78",
+    "mechanism": "BODY computed overflow propagated to viewport was reapplied as ordinary element clipping; document viewport must not move with its own content scroll",
+    "reference": "https://www.w3.org/TR/css-overflow-3/#overflow-propagation"
+  },
+  "raw_local_exports": [
+    {
+      "local_ignored_file": ".tmp/boss-live-20261023/filter-failure.png",
+      "bytes": 310338,
+      "sha256": "3bf4c836d1f3a6096827afb48de291a24a2b79fb345b9e1a67e6947a541b149a",
+      "raw_data_committed": false
+    },
+    {
+      "local_ignored_file": ".tmp/boss-live-20261023/filter-failure-dom.json",
+      "bytes": 1045579,
+      "sha256": "bf5ddebcf35f983e7948d6040ad5f256840d17a69cdb57c3528967c306cd74a7",
+      "raw_data_committed": false
+    },
+    {
+      "local_ignored_file": ".tmp/boss-live-20261023/filter-failure-geometry-dom.json",
+      "bytes": 1275982,
+      "sha256": "96e8369faf283382ad7c16c2e859a97a672c79840be1c38433609856adb218b1",
+      "raw_data_committed": false
+    }
+  ],
+  "limitations": [
+    "Nonempty filter live acceptance failed, target filters not submitted, zero new resumes in failed round",
+    "Hidden-widget recovery and actual offscreen-window reposition were not triggered and are not accepted as passed",
+    "No live greetings, messages, unknown advertising insertion, or recovery fault injection",
+    "Historical 467 independent tests and CodeReview remain prior-code results, not a pass for this live case",
+    "Only docs and ignored diagnostic scripts changed; no production repair, commit, package, or deployment in this test turn"
+  ]
+}

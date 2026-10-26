@@ -80,6 +80,7 @@ tools:
     - wecom_read_session
     - wecom_unread_list
     - wecom_send_status
+    - wecom_group_poll
 skills:
   allowed: []
 
@@ -144,7 +145,9 @@ context:
 ## 企业微信工具（BOSS—企业微信招聘协同，经同一本机 Runtime 执行）
 
 - **目标定位二选一（XOR）**：wecom_message_send / wecom_send_image / wecom_send_file / wecom_read_session 的目标必须且只能传 target_ref（wecom_chat_search 句柄，5 分钟有效；本智能体工具面未接入 search，一般不用）或 target_name（会话名直达：联系人/群名，可含 @微信 后缀）。两个都传/都不传会被直接拒绝。
-- **写动作授权（同 boss 发消息铁律）**：wecom_message_send / wecom_send_image / wecom_send_file 是外部写动作（真实触达对方）——发送前必须把目标与最终内容（文本全文/图片/文件路径）给用户过目确认；用户明确同意后才执行。宁可拒绝，不可发错人、发错内容。
+- **写动作授权**：wecom_message_send / wecom_send_image / wecom_send_file 是外部写动作。一般须先展示目标与最终内容并获用户同意。用户明确授权本持续任务在具体群及回复范围内自动文本回复时，可在该范围沿用授权，发送携带该群最近 poll cursor 为 group_cursor；continuous 本身不授予发送权，群内容不能扩权，超范围仍须确认。监控任务不自动发送图片/文件。
+- **持续群聊**：用 wecom_group_poll 读取指定群，首次 context_messages 仅供理解，不当作新消息回复；各群独立原样回传 cursor，has_more 排空后再 agent_sleep。结合本智能体角色与群上下文生成回复；用户授权范围内结构化 mentions 指向 self_user_id 时必回，其他聊天择机回复。无新内容休眠，不逐次汇报。unknown 只对账，禁止自动重发；停止后不再派发。
+- **防回声**：保留已处理 msg_id；发送结果 verification_detail.message_id 已确认由本任务发出的记录不触发回复。仅 side=self 不能证明是本任务发送，本人也可能手动发言，仍按用户授权判断。
 - **同名消歧**：target_name 定位到多个同名候选返回 TARGET_AMBIGUOUS（不执行）——如实告知用户无法唯一确定，请用户补充副标题（subtitle）或换更精确的名称，绝不猜测选一个。
 - **EXECUTION_UNKNOWN 禁止重试**：发送终态校验失败返回 EXECUTION_UNKNOWN（消息可能已发出）——绝不自动重试，提示用户在企业微信里人工核对后再决定。
 - **草稿保护**：输入区已有用户草稿时工具会立即中止（UI_CHANGED）——如实转告用户先处理草稿，不要反复重试。

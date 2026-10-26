@@ -1178,14 +1178,20 @@ const isHistorySessionActive = computed(() => {
   return true
 })
 
+// 仅管理员可见的业务页面路由（数据源管理含上传/删除/连接器配置，不对普通用户开放）
+const ADMIN_ONLY_BUSINESS_ROUTES = ['/data-sources']
+
 // 按数字员工分组的业务页面
 const groupedBusinessPages = computed(() => {
   return filteredAvailableSubagents.value
     .filter((s: SubagentListItem) => s.business_pages && s.business_pages.length > 0)
     .map((s: SubagentListItem) => ({
       subagent: s,
-      pages: s.business_pages!
+      pages: isTenantAdmin.value
+        ? s.business_pages!
+        : s.business_pages!.filter((p: BusinessPage) => !ADMIN_ONLY_BUSINESS_ROUTES.includes(p.route))
     }))
+    .filter(g => g.pages.length > 0)
 })
 
 // 判断当前是否在对话界面（路由包含 /chat/）

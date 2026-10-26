@@ -138,12 +138,13 @@ test('weixin v2 会话变体：仅显式协商后生效（setManifestOverride）
   assert.ok(!isToolAllowedFor(reverted, 'weixin_message_send_v2'))
 })
 
-test('wecom manifest：发送对账接入 7 工具清单一致，仅三个发送工具为写，v1 独占桌面锁', () => {
+test('wecom manifest：持续群聊接入 8 工具清单一致，仅三个发送工具为写，v1 独占桌面锁', () => {
   const wecom = getProviderManifest('wecom')!
   assert.deepEqual([...wecom.tools], [
     'wecom_probe',
     'wecom_message_send',
     'wecom_send_status',
+    'wecom_group_poll',
     'wecom_send_image',
     'wecom_send_file',
     'wecom_read_session',

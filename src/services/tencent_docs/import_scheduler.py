@@ -1,7 +1,7 @@
 """腾讯文档导入批次调度器（background runner 单副本运行）
 
-- 单副本 Redis 锁：抢不到/Redis 不可用拒绝启动（对齐 wechat_mp 调度器硬规则），
-  runner 整体不因此挂掉。
+- 单副本 Redis 锁：抢不到（可能为强杀残留幽灵锁）→ 仍启动驱动任务，循环内每 30s
+  重试接管；Redis 不可用拒绝启动（对齐 wechat_mp 调度器硬规则），runner 整体不因此挂掉。
 - 驱动循环 10s：领 queued 批次置 running -> 领到期 item（跨批次）并发执行
   （Semaphore 2）。同批次 item 的腾讯文档调用经 import_service.throttle_tdoc_call
   全局节流（0.5s 间隔）。
@@ -47,6 +47,7 @@ class TdocImportScheduler:
         self._lock_key: Optional[str] = None
 
     async def start(self) -> bool:
+        """启动驱动；锁被占也启动驱动任务（循环内重试接管），Redis 不可用拒绝启动。"""
         if self._task is not None and not self._task.done():
             logger.warning("腾讯文档导入调度器已在运行，跳过重复启动")
             return True
@@ -59,17 +60,21 @@ class TdocImportScheduler:
         acquired = await asyncio.to_thread(
             self._redis.acquire_lock, self._lock_key, self._owner, DRIVER_LOCK_TTL_SECONDS
         )
-        if not acquired:
-            logger.info("腾讯文档导入调度器已在其他副本运行，本副本空转返回 owner={}", self._owner)
-            self._lock_key = None
-            return False
-
         self._stop_event.clear()
         self._task = asyncio.create_task(self._run_loop(), name="tdoc-import-scheduler")
-        logger.info(
-            "腾讯文档导入调度器已启动 owner={} scan={}s 并发={}",
-            self._owner, SCAN_INTERVAL_SECONDS, ITEM_CONCURRENCY,
-        )
+        if acquired:
+            logger.info(
+                "腾讯文档导入调度器已启动 owner={} scan={}s 并发={}",
+                self._owner, SCAN_INTERVAL_SECONDS, ITEM_CONCURRENCY,
+            )
+        else:
+            # 锁被占：可能为强杀残留的幽灵锁（TTL 过期后可接管）。不再放弃启动，
+            # 保留锁 key 交给 _run_loop 内 _ensure_driver_lock 的失锁自愈路径重试接管
+            logger.info(
+                "腾讯文档导入调度器锁被占（可能为强杀残留幽灵锁），驱动任务已启动，"
+                "循环内每 {}s 重试接管 owner={}",
+                LOCK_RETRY_SECONDS, self._owner,
+            )
         return True
 
     async def stop(self) -> None:

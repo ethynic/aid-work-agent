@@ -31,7 +31,7 @@ export function createBossOverlayInspectOperation(
         () => validateVisualArgs(args),
         async (session) => {
           if (args.request_id || args.visual_context || args.retrieve_only) {
-            const data = await new VisualRecovery(visualDeps).inspect(args, session, ctx.signal)
+            const data = await new VisualRecovery(visualDeps).inspect(args, session, ctx.signal, ctx.windowCaptureBudget ?? { repositionsUsed: 0 })
             return { message: '已取得绑定页面或窗口的视觉诊断回执；页面判断与动作建议分别返回', data, effect: 'none' }
           }
           const snapshot = await session.snapshot()

@@ -22,7 +22,7 @@ import { createWecomSendFileOperation } from './sendFile.js'
 import { createWecomSendImageOperation } from './sendImage.js'
 import { createWecomUnreadListOperation } from './unreadList.js'
 import { createWecomWatchPollOperation } from './watchPoll.js'
-import { createWecomGroupListOperation, createWecomGroupReadOperation } from './groups.js'
+import { createWecomGroupListOperation, createWecomGroupReadOperation, createWecomGroupPollOperation } from './groups.js'
 import type { WecomOperation } from './types.js'
 
 export interface OperationEntry {
@@ -49,6 +49,7 @@ export const OPERATIONS: Record<string, OperationEntry> = {
   wecom_watch_poll: { operation: createWecomWatchPollOperation(), cli: { write: false } },
   wecom_group_list: { operation: createWecomGroupListOperation(), cli: { write: false } },
   wecom_group_read: { operation: createWecomGroupReadOperation(), cli: { write: false } },
+  wecom_group_poll: { operation: createWecomGroupPollOperation(), cli: { write: false } },
 }
 
 export const OPERATION_NAMES = Object.keys(OPERATIONS)

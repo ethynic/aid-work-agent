@@ -75,9 +75,30 @@ class TestLifecycle:
         assert s._task is None
 
     @pytest.mark.asyncio
-    async def test_rejects_start_when_lock_taken(self, patched_db):
-        s = TdocImportScheduler(redis=FakeRedis(can_acquire=False))
-        assert await s.start() is False
+    async def test_lock_taken_starts_driver_task(self, patched_db):
+        """锁被占（强杀残留幽灵锁）→ 仍启动驱动任务返回 True（原断言「返回 False」
+        按幽灵锁自愈语义改写）；未持锁的 stop() 正常停机不误删他人锁。"""
+        redis = FakeRedis(can_acquire=False)
+        s = TdocImportScheduler(redis=redis)
+        assert await s.start() is True
+        assert s._task is not None and not s._task.done()
+        assert s._lock_key is not None  # 锁 key 保留供循环内重试接管
+        await s.stop()
+        assert s._task is None
+        assert redis.released == []  # 未持锁，stop 不产生任何释放动作
+
+    @pytest.mark.asyncio
+    async def test_lock_taken_takeover_after_release(self, patched_db):
+        """锁被占启动后，幽灵锁 TTL 过期消失 → _ensure_driver_lock 失锁重取接管。"""
+        redis = FakeRedis(can_acquire=False)
+        s = TdocImportScheduler(redis=redis)
+        assert await s.start() is True
+        # 幽灵锁过期消失：替换为可正常 acquire 的替身行为（模拟 TTL 到期后键不存在）
+        redis.can_acquire = True
+        assert await s._ensure_driver_lock() is True
+        assert redis.locks[s._lock_key] == s._owner
+        await s.stop()
+        assert redis.locks == {}
 
     @pytest.mark.asyncio
     async def test_start_stop_releases_lock(self, patched_db):

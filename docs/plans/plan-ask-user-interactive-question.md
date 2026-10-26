@@ -1,7 +1,7 @@
 # 结构化提问交互（ask_user 提问卡片）实施计划
 
 > 创建：2026-10-14；修订：2026-10-14（v2 接线责任与验证分工；v3 执行口径澄清：幂等用例按层分配、WP0 结果不复用、Phase 2 验证角色按风险定）
-> 状态：✅ 已完成开发（Phase 1/2/3 已复审；真机验收待授权，expires_at 暂缓）
+> 状态：Phase 1/2/3 已完成开发；Phase 4 按 2026-10-23 用户最新要求完成旧版快捷选项整体退役，独立测试与复审通过；既有真机验收及 expires_at 口径不变。
 > 设计文档：[design-ask-user-interactive-question.md](../system/design-ask-user-interactive-question.md)
 > ideas 条目：20261013-1434
 
@@ -12,6 +12,7 @@
 | Phase 1 | 协议 + 权威校验 + Web 提问卡片 + 渠道文字全渠道 | ✅ 开发完成（2026-10-14） | WP0-WP5 全部完成、三角色两轮流程走完（commit 56105660/d36f9ea3 + 本轮提交）。WP0 root 等待 spike 通过（§11.1）；WP1 契约/入口校验/摘要兼容；WP2 判定表受理/canonical 权威生成/422 错误链路/BFF 条件透传；WP3 ask_user 正式工具 + spike 收敛（root/SUBAGENT/legacy 行为矩阵内核级用例锁定）；WP4 Web QuestionCard（§5.7 状态机/绑定原 wait/capabilities 降级）；WP5 渠道文字五端（字节分段/预算核算/入站单管线/发送事实）。独立测试修复 3 缺陷：claim_resume 重建阻塞、kf 截断后重发承诺矛盾、多位数题号误解析；CR 修复 2 个 P1：无 form 等待结构化提交静默受理、多位数题号消费 wait。单元 3401 过（7 先存环境）+ 集成 33 过 + 契约 85 fixture + 前端 ask 37/全量 639 过（8 先存）。后续修正已完成代码复审；真机渠道验收待授权 |
 | Phase 2 | 同源待答可达性（提问通知 + 会话待答标识） | ✅ 开发完成（2026-10-14） | `task.waiting_input` 通知生产者挂 park 事务尾（chat/web 用户自有 runner 且 waiting(form) 才通知；event_key=runner:wait 去重，同 wait 重复 park 不重发）；`resource_in_tx` 增 `runner_waiting` 分支（点击解析回原会话带 `_load_session`）；站内信 INBOX 纳入该事件（渲染+跳转链接）；SW 白名单/文案更新；会话列表 `waiting_input` 徽标（查询异常降级无徽标，列表缓存 TTL 30s 内）。验证：notifications 单元 138 过（含 9 例 waiting 生产者新用例；web_push 8 例为先存环境）、后端 3417+集成 33、前端 642 与基线一致。主控单角色自验（子智能体额度冻结期）；后续修正已完成代码复审；真机验收待授权。埋点以最新 Phase 3 记录为准 |
 | Phase 3 | 增强项（按需） | ✅ 开发完成（2026-10-14） | legacy SSE form 透传（clarification 帧携带 form，旧页面作答方式不变）；生命周期埋点 MVP（[ask] produced 与事务提交后的 consumed；结构化及文字作答均计入，skipped 来自 payload.skip；recover_ms 表示控制受理至消费完成的时长，不是用户作答时长）；capabilities 已由 Phase 1 ask_structured_answers 覆盖（无多维度协商需求，无遗留）；expires_at 超时语义**暂缓**——需先冻结监管/取消/计费产品口径（设计 §5.5），未实现任何自动超时 |
+| Phase 4 | 旧版快捷选项整体退役，统一使用 ask_user | ✅ 完成（2026-10-23） | 自测后端58+静态8/前端73；独立后端84/前端82通过；Web构建与CR通过，待部署及真机验收，见§8 |
 
 合并验证（2026-10-14）：功能分支 `89f60ccb` 与 master `a805eb24` 整合；保留双方数据库迁移与网络搜索任务索引。Web 构建通过，独立前端定向回归 35 项通过，契约检查 7 项及 85 个 fixture 通过，42 个 Python 文件语法与 4 个关键模块导入通过；当前环境缺少 pytest，后端完整测试未重跑，未执行部署或真实渠道验收。
 
@@ -90,7 +91,7 @@
 
 1. 基于 WP0 结论实现完整 root 等待（`controls.py` 正式分支，wait 载荷附 `form`），**复用 WP0 用例**，不重建。
 2. 新建 `ask_user_tool.py`（catalog=False）：InputModel 仅内容字段；`execute` 生成 form_id/question_id/key + 硬校验（题型/选项匹配、required/max_select、总载荷 8KB）；`control_set.py` 装配；usage guide（何时提问、题型声明、文案长度建议口径）。
-3. `clarify_tool.py` / `present_options_tool.py`：保留，usage guide 增加三工具分工。
+3. `clarify_tool.py` / `present_options_tool.py`：本阶段保留，usage guide 增加三工具分工；2026-10-23 后者按 Phase 4 退役，仅保留已固定旧调用执行兼容。
 
 验收（与 WP2 合并）：等待生命周期全链路——受理→恢复→工具结果→续跑；连续两轮 ask；等待中 cancel/pause；子执行既有 clarify 路径不回归。
 
@@ -166,3 +167,43 @@
 - 聚焦实际改动（评审口径）：正常提交、跳过、幂等、必要非法输入、长行分段、发送失败、历史恢复；无实际故障或业务依据不增加检查项。
 - 每阶段完成：先更新本计划「开发进度」区，再同步 `docs/ideas.md` 索引行（规范见 AGENTS.md）。
 - 部署由用户当场指示，助手只准备命令与检查清单。
+
+## 8. 2026-10-23：旧版快捷选项整体退役
+
+关联索引：20261023-1624；设计见[设计§12](../system/design-ask-user-interactive-question.md#12-旧版快捷选项整体退役2026-10-23)。用户已授权提交代码；新范围完成验证后提交并推送，不部署。
+
+### 8.1 已核实事实
+
+- agent2 trace：`tr_runner_fad11fadee904df98a5851c0a5bc4880`；会话：`session_3743bc53e26f`；时间：2026-10-23 15:29:49。`boss_jobs_list` 成功后调用 `ask_user` 进入 waiting；模型没有生成正文，三个岗位标签来自旧 `quickOptions` 展示链路。
+- 旧链路从任意工具的 `data.options` 自动生成按钮，经 Runner 快照、历史消息投影、Web 映射及 legacy SSE 重建，最终由 `MessageItem` 渲染。只改一个来源或隐藏单条消息不能完成退役。
+- 初版按工具来源过滤并保留 `present_options` 的实现已被用户否定；初版自测与独立验证结果仅适用于旧范围，不能作为本次新范围的通过证据。
+
+### 8.2 最新范围（2026-10-23 用户明确修订）
+
+**整套旧版快捷选项功能停用，统一使用 `ask_user`；不按工具名特判，不再保留任何工具的旧按钮。** 此要求覆盖此前“保留 present_options 显式按钮”的范围。
+
+1. 删除 `presentation.py` 从工具结果提升 `quickOptions` 的分支；Runner 公共视图与历史消息投影忽略该旧字段，不清理数据库或修改模型使用的原始工具结果。
+2. 删除 Web 的 `quickOptions` 类型、工具结果提取、Runner/历史映射、legacy SSE 挂载、消息组件渲染及数字发送事件链。旧服务端、旧快照、内存缓存及来源缺失的历史记录均不再恢复按钮；`data.options` 仍可作为普通工具进度事实存在。
+3. `present_options` 不再出现在新模型调用的定义/指南中；`ask_user`、`clarify` 的指南不再推荐旧按钮，无需作答的建议写正文。旧工具实现仅保留已固定 checkpoint 调用的执行兼容，不自动把非阻塞调用改写成阻塞 wait。
+4. 运行时 `spec-to-quotation-list` 的两个业务确认门改用 `ask_user`，保留自定义输入与等待实际作答的语义。
+5. `ask_user` 卡片、分页、自定义输入、提交/忽略及历史已答回显继续沿用，不改变控制、权限、计费或共享 Device/wire 契约。输入框和空态快捷提示不属于本次旧编号选项，不删除。
+
+### 8.3 验收
+
+| 场景 | 通过标准 |
+|---|---|
+| 任意工具结果 | 数据与进度保留，不创建旧快捷按钮，不依赖工具名称 |
+| 实时、历史、刷新和缓存 | 即使存在旧 quickOptions 或工具 options，映射和实际组件也不再展示旧标签或发送数字 |
+| ask_user | 当前提问卡片可提交/忽略；已答与未答历史继续正常投影 |
+| 工具装配与引用 | 新调用只推荐 ask_user/clarify；旧 present_options 不暴露给模型，已固定旧调用仍可返回原结果 |
+
+### 8.4 实施与验证
+
+- 风险：高（涉及核心工具装配）。主控开发与自测，独立测试及独立 CodeReview 分别验证，复用不受新范围影响的环境信息。
+- 已删除旧投影/按钮链路与按工具名过滤方案，完成旧工具曝光下线及运行时 skill/子智能体两个确认门迁移。`present_options` 类仅保留已有 checkpoint 的执行返回兼容。
+- 主控自测：Git Bash 宿主 Python 3.12/pytest 9 经 `scripts/dev_test.sh` 运行 `test_retired_quick_options`、`test_ask_form_projection_wp2`、`test_root_clarify_wait_wp0`、`test_runner_message_projection`、`test_tool_control_set`、`test_ask_user_tool`、`test_present_options_tool`，58 passed；另 `test_tool_execution_cleanup.py` 8 passed。前端 `npm test --` 对 Runner/ask 映射、QuestionCard、退役按钮/中断组件、useAgentAsk、多会话 SSE、通知详情共8文件，73 passed。
+- 独立测试：后端上述相关模块加 `test_legacy_stream_bridge`、`test_subagent_protocol`、`test_subagent_assets` 共9文件76 passed，相邻 `test_tool_assembly.py` 8 passed，合计84 passed；前端10文件80 passed，另实际 `MessageItem + QuestionCard` 组合探针2 passed（提交包含原 runner/wait/execution 及结构化答案；忽略仍传 skip:true；缓存旧字段无按钮/数字发送），合计82 passed，无失败或跳过，临时探针已清理。
+- `cd frontend; npm run build` 最终通过（类型检查、依赖边界273源文件、Vite、Web产物1135模块）。首次构建发现旧快照测试直接传已删除类型字段，改用旧数据扩展fixture后通过；现有 Pydantic 弃用、Browserslist 和大 chunk 警告不阻断。
+- 独立CR已复核无阻断。发现的旧工具静态测试断言、运行时 skill Changelog 和建筑供应链子智能体旧提示均已修正；全仓 `subagents`/`src/skills` 无旧工具推荐，前端无旧消费链。`git diff --check` 通过。
+- 提交前已 fetch 并快进同步远程 3 个提交；仅对重叠的 ideas.md 单文件临时保存并恢复，保留其他任务工作区改动。本任务提交时只暂存自身文件及共享索引的自身条目。
+- 未部署，未改现场任务；真实浏览器及 agent2 同形 trace 验收待执行。

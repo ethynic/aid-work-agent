@@ -16,6 +16,8 @@ ChannelSessionManager.process_and_persist / add_messages_batch_transactional 单
 """
 
 import json
+from datetime import datetime
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -188,6 +190,33 @@ class TestAddMessagesBatchTransactional:
         update_calls = [s for s in spy if "update channel_sessions" in s[0]]
         assert len(update_calls) >= 1, "应 UPDATE channel_sessions.last_message_at"
         assert memory_store["sessions"]["sid_test"]["last_message_at"] is not None
+
+    def test_created_at_passthrough_to_insert(self, manager, mock_db_ctx):
+        """created_at 透传：带 created_at 的消息显式落库该时间，未带的消息不传该列。
+
+        为什么重要：整轮消息在回答完成后批量写入，若 user 消息不带原始接收时间，
+        DB 默认 CURRENT_TIMESTAMP 会让问/答显示同一时间（都是回答时刻）。
+        """
+        _memory_store, _conn, spy = mock_db_ctx
+        user_time = datetime(2026, 10, 24, 10, 0, 0)
+
+        messages = [
+            {"role": "user", "content": "问题", "created_at": user_time},
+            {"role": "assistant", "content": "回复"},
+        ]
+        result = manager.add_messages_batch_transactional("sid_test", "t1", messages)
+        assert result is not None and len(result) == 2
+
+        inserts = [s for s in spy if "insert into channel_messages" in s[0]]
+        assert len(inserts) == 2
+        # user：params 末尾带 created_at（insert_message 仅在非 None 时追加该列）
+        user_params = inserts[0][1]
+        assert user_params[3] == "user"
+        assert user_params[-1] == user_time
+        # assistant：不传 created_at（参数长度少一列），落库用 DB 默认值
+        assistant_params = inserts[1][1]
+        assert assistant_params[3] == "assistant"
+        assert len(assistant_params) == len(user_params) - 1
 
     def test_empty_messages_returns_empty_list_not_none(self, manager, mock_db_ctx):
         """边界：空列表直接返回 []，不能误返回 None（调用方把 None 当失败处理）。
@@ -406,6 +435,43 @@ class TestProcessAndPersist:
         patched_session_queue.finish_processing.assert_called_once_with(
             "sid_test", "lease-1"
         )
+
+    @pytest.mark.asyncio
+    async def test_user_message_created_at_uses_entry_time(
+        self, manager, mock_db_ctx, patched_session_queue, stub_agent
+    ):
+        """process_and_persist 入口记录接收时间：user 消息带 created_at 落库，assistant 不带。
+
+        为什么重要：LLM 处理耗时数分钟，user 消息落库发生在回答完成之后；
+        不显式携带入口时间则问/答 created_at 相同，前端展示时间失真。
+        """
+        _memory_store, _conn, spy = mock_db_ctx
+        patched_session_queue.enqueue_and_process.return_value = EnqueueResult(
+            status="success",
+            response_text="hello back",
+            merged_input="你好",
+            was_merged=False,
+            lease_token="lease-1",
+        )
+
+        before = datetime.now()
+        result = await manager.process_and_persist(
+            session_id="sid_test",
+            tenant_id="t1",
+            user_content="你好",
+            agent=stub_agent,
+            send_response=AsyncMock(return_value=True),
+        )
+        after = datetime.now()
+
+        assert result["status"] == "success"
+        inserts = [s for s in spy if "insert into channel_messages" in s[0]]
+        assert len(inserts) == 2
+        user_created_at = inserts[0][1][-1]
+        assert isinstance(user_created_at, datetime), "user 消息必须显式携带接收时间"
+        assert before <= user_created_at <= after
+        assert inserts[1][1][3] == "assistant"
+        assert len(inserts[1][1]) == len(inserts[0][1]) - 1, "assistant 不应带 created_at"
 
     @pytest.mark.asyncio
     async def test_agent_images_persisted_to_assistant_metadata(

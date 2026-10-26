@@ -455,7 +455,8 @@ function statusText(status: string): string {
     active: '活跃',
     paused: '已暂停',
     completed: '已完成',
-    cancelled: '已取消'
+    cancelled: '已取消',
+    expired: '已过期'
   }
   return map[status] || status
 }

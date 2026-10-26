@@ -164,7 +164,7 @@ export function withAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<
 export const defaultSessionFactory: BossSessionFactory = async (ctx) => {
   const endpoint = `http://127.0.0.1:${ctx.cdpPort ?? DEFAULT_CDP_PORT}`
   const gw = new CdpGateway({ timeoutMs: 10000 })
-  const clicker = new WinMouseClicker({ cdpPort: ctx.cdpPort ?? DEFAULT_CDP_PORT, beforeInput: () => gw.activateTarget() })
+  const clicker = new WinMouseClicker({ cdpPort: ctx.cdpPort ?? DEFAULT_CDP_PORT, beforeInput: () => gw.activateTarget(), signal: ctx.signal })
   const binding = ctx.browserTargetRef ? await resolveBrowserTarget(ctx.browserTargetRef, ctx.cdpPort ?? DEFAULT_CDP_PORT) : undefined
   let rebuilt = false
   let launched = false
@@ -361,7 +361,8 @@ export async function runBossOperation(
       && data.confirmed_items.length >= business!.completed_count!
     const completed = confirmed ? Math.max(tracker.completed, business!.completed_count!) : tracker.completed
     const effect = spec.kind === 'readonly' ? 'none' : confirmed && business?.status === 'confirmed'
-      ? 'partial' : writeEffect(false, mapped.code, completed)
+      ? 'partial' : facts?.operation_class === 'external_effect' && business?.status === 'not_started' && completed === 0
+        ? 'none' : writeEffect(false, mapped.code, completed)
     if (spec.kind === 'write' && completed > 0) data.completed = completed
     return failResult(runId, mapped.code, mapped.message, effect, boundData(data))
   } finally {

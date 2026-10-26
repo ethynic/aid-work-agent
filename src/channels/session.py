@@ -782,7 +782,8 @@ class ChannelSessionManager:
                     from src.db.channel_message_repository import insert_message
                     insert_message(cursor,message_id=message_id,session_id=session_id,
                         tenant_id=tenant_id,role=role,content=content,message_type=message_type,
-                        attachments=attachments,metadata=metadata,is_recalled=mark_recalled)
+                        attachments=attachments,metadata=metadata,is_recalled=mark_recalled,
+                        created_at=msg.get("created_at"))
                     created_ids.append(message_id)
 
                 from src.db.channel_message_repository import touch_session
@@ -940,6 +941,9 @@ class ChannelSessionManager:
                 "merged_input": str,
             }
         """
+        # user 消息原始接收时间：整轮消息在回答完成后批量落库，DB 默认时间
+        # 会与 assistant 相同，user 消息必须显式携带此刻时间
+        user_received_at = datetime.now()
         # 延迟导入避免循环依赖
         from src.core.session_queue import session_queue
 
@@ -1330,6 +1334,7 @@ class ChannelSessionManager:
                     "message_type": message_type,
                     "attachments": attachments_to_write if attachments_to_write else None,
                     "metadata": merged_user_metadata,
+                    "created_at": user_received_at,
                 })
 
             # tool 消息序列（wecom_kf 等需要持久化 tool_calls + tool 结果）

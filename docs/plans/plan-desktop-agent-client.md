@@ -1,5 +1,7 @@
 # Agent 桌面客户端 v3 开发计划
 
+2026-10-26 W6检查点：沿[共同契约2.10](../system/runner-desktop-runtime-integration-contract.md)由Runner固定持续群聊原设备，Runtime新增只读轮询及group_cursor发送门禁；本轮不改Desktop UI、公开binding或Device wire。唯一进度见[W6计划](plan-wecom-cli-group-chat-experiment.md#w6-配置智能体完整链路2026-10-26)，隔离链路验证不等于Desktop发布验收，禁止部署或恢复监听。
+
 2026-10-26 wecom对账检查点：按[共同契约2.9 §5.7](../system/runner-desktop-runtime-integration-contract.md#57-wecom发送对账接线2026-10-26)追加业务工具wecom_send_status schema v1，沿原只读operation与固定原发送/设备scope；MCP/core主控、local_tools后端角色各自限域写入，实际范围/结果唯一登记在[wecom计划](plan-wecom-cli-group-chat-experiment.md#2026-10-26-mcp与runtime发送对账接线)。Device/Host/H3/Runner公开wire、原unknown/hold及outbox不变，不自动解除verification等待；旧CLI明确拒绝新能力并保留旧六工具。本地接线及独立TEST/CR已完成（PG63、TS32、单测173通过另2旧BOSS基线失败）；无提交/部署，真实群聊、长期运行及新Desktop UI未验收。
 
 2026-10-22休眠检查点：按[共同契约2.8 §5.6](../system/runner-desktop-runtime-integration-contract.md#56-通用持久化休眠增量2026-10-22)由Runner工作流唯一维护接单/能力/timer/累计积分与Web消费者，进度见[休眠计划](plan-agent-runner-durable-sleep.md#13-本轮实施基线与共同检查点)。公开API major仍为1；Desktop缺新能力时不创建continuous或盲目resume timer，查询/取消仍可用。新Desktop壳消费适配需另行组合验证，本轮不声称Desktop UI已支持。

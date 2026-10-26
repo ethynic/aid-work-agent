@@ -248,6 +248,15 @@ async def list_tools_meta(request: Request):
             "name": getattr(tool, 'display_name', None) or name,
             "description": getattr(tool, 'description', '') or '',
         })
+    # Local proxies are deliberately absent from the master registry. Listing
+    # trusted WeCom choices does not add them to any profile's allowed tools.
+    from src.local_tools.catalog import allowed_tools
+    from src.local_tools.proxy_tool import LOCAL_PROXY_TOOL_CLASSES
+    trusted = set(allowed_tools('wecom'))
+    existing = {item['id'] for item in tools}
+    for cls in LOCAL_PROXY_TOOL_CLASSES:
+        if cls.name in trusted and cls.name not in existing:
+            tools.append({'id': cls.name, 'name': cls.display_name, 'description': cls.description})
     return _success(tools)
 
 
@@ -719,8 +728,20 @@ async def export_definition(request: Request, agent_id: str):
         export_notes = [
             "环境变量与第三方凭证（AGENT_TOKEN 等）不随文件导出，导入后需在目标环境「租户设置-环境变量」中按占位符补充",
             "租户 API 文档（api-doc）请通过租户前台的配置文件上传/下载功能单独迁移",
-            "knowledge_sources 仅导出栏目配置，知识库文档内容需在目标环境单独上传或共享授权",
+            "knowledge_sources 仅作参考：栏目代号（source_type）由各环境独立生成，跨环境不通用，导入时不迁移；目标环境请按 display_name 在「租户设置-知识库关联」重新配置，知识库文档内容需单独上传或共享授权",
+            "分段变量值（System Prompt 中 {{变量}} 的取值）随文件导出",
         ]
+
+        try:
+            sections = [
+                {"section_key": s["section_key"], "content": s.get("content") or ""}
+                for s in SubagentDefinitionService.get_sections(agent_id)
+            ]
+        except Exception as e:
+            # 置 None（而非空列表）：导入侧将 None 视为「文件不含分段数据」，
+            # 避免导出瞬时故障产生的空 sections 覆盖导入时清空目标环境分段
+            logger.opt(exception=True).warning(f"导出分段变量值失败: {e}")
+            sections = None
 
         return _success({
             "format": EXPORT_FORMAT,
@@ -732,6 +753,7 @@ async def export_definition(request: Request, agent_id: str):
                 "description": definition.get("description"),
                 "version": definition.get("version"),
                 "author": definition.get("author"),
+                "status": definition.get("status") or "active",
                 "triggers": definition.get("triggers") or {},
                 "tools": definition.get("tools") or {},
                 "skills": definition.get("skills") or {},
@@ -747,6 +769,7 @@ async def export_definition(request: Request, agent_id: str):
                 "upload_accept": definition.get("upload_accept"),
                 "recap": definition.get("recap"),
                 "system_prompt": _get_prompt_content(agent_id),
+                "sections": sections,
             },
             "env_var_placeholders": env_placeholders,
             "notes": export_notes,
@@ -785,6 +808,59 @@ def _collect_import_warnings(definition: Dict[str, Any]) -> List[str]:
     return warnings
 
 
+SECTION_KEY_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+
+
+def _restore_sections(
+    agent_id: str,
+    sections: Any,
+    updated_by: Optional[str],
+    warnings: List[str],
+    replace: bool,
+) -> None:
+    """恢复分段变量值到 subagent_prompt_sections 表
+
+    sections 为 None 表示配置文件来自不含分段数据的旧版导出，跳过并提示；
+    空列表仅在 replace 模式下清空目标残留。
+    """
+    if sections is None:
+        warnings.append("配置文件未包含分段变量值（旧版导出格式），请在目标环境手动检查分段变量")
+        return
+    if not isinstance(sections, list):
+        warnings.append("配置文件分段变量值格式异常，已跳过恢复")
+        return
+
+    from src.db.subagent_prompt_section_db import SubagentPromptSectionDB
+
+    try:
+        if replace:
+            if not SubagentPromptSectionDB.delete_sections(agent_id):
+                warnings.append("清理目标环境已有分段变量失败，残留分段可能与导入值合并，请手动检查分段变量")
+
+        restored = 0
+        for item in sections:
+            if not isinstance(item, dict):
+                warnings.append(f"分段变量项格式异常（应为对象），已跳过: {item!r}")
+                continue
+            key = str(item.get("section_key") or "").strip()
+            content = item.get("content")
+            if not key or not SECTION_KEY_RE.match(key) or not isinstance(content, str):
+                warnings.append(f"分段变量 {key or '(空)'} 格式非法，已跳过")
+                continue
+            if SubagentPromptSectionDB.upsert_section(agent_id, key, content, updated_by):
+                restored += 1
+            else:
+                warnings.append(f"分段变量 {key} 写入失败")
+
+        if restored or replace:
+            from src.core.cache_utils import CacheKeys, delete_cached
+            delete_cached(CacheKeys.PROMPT_SECTIONS, agent_id)
+    except Exception as e:
+        # 定义主体已导入成功，分段失败不应使整体导入报「失败」
+        logger.opt(exception=True).error(f"导入分段变量值失败: {e}")
+        warnings.append("分段变量值恢复失败，请手动检查分段变量")
+
+
 def _conflict_response(agent_id: str) -> JSONResponse:
     """agent_id 冲突时返回 409 与现有定义信息，供前端选择冲突策略"""
     from src.core.agent import master_agent
@@ -808,7 +884,14 @@ def _conflict_response(agent_id: str) -> JSONResponse:
 
 @router.post("/import")
 async def import_definition(request: Request, body: ImportDefinitionRequest):
-    """导入数字员工配置 JSON，创建新员工或按冲突策略覆盖/另存"""
+    """导入数字员工配置 JSON，创建新员工或按冲突策略覆盖/另存
+
+    按文件原样导入，不做技能依赖自动补全（tools/recap 忠实透传）：导出文件
+    是源环境已验证的最终配置，导入是跨环境迁移而非交互式编辑。技能依赖补全
+    仅属于交互式编辑路径（前端勾选技能联动 + create/update 保存时合并）。
+    背景（2026-10-23）：导出文件不含 lead_refresh 轮后任务，导入后被
+    apply_skill_requirements 自动补上，与源环境配置不一致。
+    """
     try:
         admin = _require_admin(request)
 
@@ -843,12 +926,22 @@ async def import_definition(request: Request, body: ImportDefinitionRequest):
 
         warnings = _collect_import_warnings(d)
 
+        import_status = d.get("status")
+        if import_status is not None and import_status not in ("active", "disabled"):
+            warnings.append(f"状态值 {import_status!r} 非法，已忽略（导入后保持目标环境原状态）")
+            import_status = None
+
+        # 知识库栏目代号（source_type）由各环境独立生成，跨环境不通用，不随导入迁移：
+        # 覆盖模式不传该字段（保持目标环境原值），创建模式走默认空列表
+        if d.get("knowledge_sources"):
+            warnings.append(
+                "知识库栏目关联不随导入迁移（栏目代号跨环境不通用），请按导出文件中的 display_name "
+                "在目标环境「租户设置-知识库关联」重新配置"
+            )
+
         if existing and body.conflict_strategy == "overwrite":
             # 覆盖更新：空值传空容器/空串以清掉目标环境残留（DB update 过滤 None；
             # 例外：llm_provider/llm_model_codes 传 None 会强制写空 JSONB，恰好也是清残留）
-            tools, recap, _ = SubagentDefinitionService.apply_skill_requirements(
-                d.get("tools"), d.get("skills"), d.get("recap"),
-            )
             SubagentDefinitionService.update_definition(
                 agent_id,
                 created_by=admin.get("user_id"),
@@ -857,7 +950,7 @@ async def import_definition(request: Request, body: ImportDefinitionRequest):
                 version=d.get("version"),
                 author=d.get("author"),
                 triggers=d.get("triggers") or {},
-                tools=tools,
+                tools=d.get("tools") or {},
                 skills=d.get("skills") or {},
                 context=d.get("context") or {},
                 delegatable_to=d.get("delegatable_to") or [],
@@ -866,10 +959,10 @@ async def import_definition(request: Request, body: ImportDefinitionRequest):
                 llm_model_codes=d.get("llm_model_codes"),
                 reply_style=d.get("reply_style") or "",
                 business_pages=d.get("business_pages") or [],
-                knowledge_sources=d.get("knowledge_sources") or [],
-                recap=recap,
+                recap=d.get("recap") or {},
                 chat_toolbar=d.get("chat_toolbar") or [],
                 upload_accept=d.get("upload_accept") or "",
+                status=import_status,
             )
             SubagentDefinitionService.update_system_prompt(
                 agent_id,
@@ -877,6 +970,7 @@ async def import_definition(request: Request, body: ImportDefinitionRequest):
                 commit_message="导入配置覆盖",
                 created_by=admin.get("user_id"),
             )
+            _restore_sections(agent_id, d.get("sections"), admin.get("user_id"), warnings, replace=True)
             # 刷新 registry 并清空态摘要缓存（与 update 路由口径一致）
             from src.core.agent import master_agent
             from src.core.cache_utils import CacheKeys, delete_cached
@@ -900,9 +994,6 @@ async def import_definition(request: Request, body: ImportDefinitionRequest):
             agent_id, name = new_id, new_name
 
         # 创建路径（新员工或 rename 另存）
-        tools, recap, auto_completed = SubagentDefinitionService.apply_skill_requirements(
-            d.get("tools"), d.get("skills"), d.get("recap"),
-        )
         result = SubagentDefinitionService.create_definition(
             agent_id=agent_id,
             name=name,
@@ -911,7 +1002,7 @@ async def import_definition(request: Request, body: ImportDefinitionRequest):
             version=d.get("version") or "1.0.0",
             author=d.get("author"),
             triggers=d.get("triggers"),
-            tools=tools,
+            tools=d.get("tools"),
             skills=d.get("skills"),
             context=d.get("context"),
             delegatable_to=d.get("delegatable_to"),
@@ -920,8 +1011,7 @@ async def import_definition(request: Request, body: ImportDefinitionRequest):
             llm_model_codes=d.get("llm_model_codes"),
             reply_style=d.get("reply_style"),
             business_pages=d.get("business_pages"),
-            knowledge_sources=d.get("knowledge_sources"),
-            recap=recap,
+            recap=d.get("recap"),
             chat_toolbar=d.get("chat_toolbar"),
             upload_accept=d.get("upload_accept"),
             created_by=admin.get("user_id"),
@@ -929,6 +1019,12 @@ async def import_definition(request: Request, body: ImportDefinitionRequest):
         )
         if not result:
             return _error("导入失败：创建定义未成功")
+        if import_status == "disabled":
+            # DB create 不接收 status（默认 active），禁用状态补一次更新
+            SubagentDefinitionService.update_definition(
+                agent_id, created_by=admin.get("user_id"), status="disabled",
+            )
+        _restore_sections(agent_id, d.get("sections"), admin.get("user_id"), warnings, replace=False)
 
         from src.core.agent import master_agent
         if master_agent.subagent_registry:
@@ -936,7 +1032,7 @@ async def import_definition(request: Request, body: ImportDefinitionRequest):
 
         logger.info(f"后端日志：管理员导入创建数字员工 {agent_id}")
         return _success({"agent_id": agent_id, "name": name, "mode": "create"},
-                        warnings=warnings, auto_completed=auto_completed)
+                        warnings=warnings)
     except HTTPException:
         raise
     except Exception as e:

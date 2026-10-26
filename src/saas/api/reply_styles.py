@@ -6,7 +6,8 @@
 - 系统内置风格管理：/api/saas/reply-styles/system/*（platform_admin）
 """
 
-from typing import Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -119,6 +120,112 @@ async def create_system_style(request: Request, body: StyleCreateRequest):
 
     _trigger_reload()
     return {"success": True, "style": _format_style(style)}
+
+
+# ==================== 系统风格导出/导入（platform_admin，跨环境迁移）====================
+
+REPLY_STYLE_EXPORT_FORMAT = "reply_style_export"
+REPLY_STYLE_EXPORT_VERSION = 1
+
+
+class ReplyStyleImportItem(BaseModel):
+    style_id: str = Field(..., min_length=1, max_length=50)
+    name: str = Field(..., min_length=1, max_length=50)
+    description: Optional[str] = Field(None, max_length=200)
+    content: str = Field(..., min_length=1)
+
+
+class ReplyStyleImportRequest(BaseModel):
+    format: str = Field(..., description="导出文件格式标识")
+    version: int = Field(..., description="导出文件结构版本")
+    styles: List[ReplyStyleImportItem] = Field(..., description="风格列表")
+    conflict_strategy: Optional[str] = Field(
+        None, description="冲突策略：overwrite=冲突项覆盖为新版本 / skip=跳过冲突项"
+    )
+
+
+@router.get("/system/export")
+async def export_system_styles(request: Request):
+    """全量导出系统内置风格为 JSON（风格无敏感信息，直接全量搬）"""
+    _require_platform_admin(request)
+
+    styles = [
+        {
+            "style_id": s["style_id"],
+            "name": s["name"],
+            "description": s.get("description"),
+            "content": s["content"],
+        }
+        for s in ReplyStyleDB.list_system_styles()
+    ]
+    return {
+        "success": True,
+        "data": {
+            "format": REPLY_STYLE_EXPORT_FORMAT,
+            "version": REPLY_STYLE_EXPORT_VERSION,
+            "exported_at": datetime.now().isoformat(timespec="seconds"),
+            "styles": styles,
+        },
+    }
+
+
+@router.post("/system/import")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.REPLY_STYLE)
+async def import_system_styles(request: Request, body: ReplyStyleImportRequest):
+    """批量导入系统内置风格；style_id 冲突按策略覆盖或跳过"""
+    _require_platform_admin(request)
+
+    if body.format != REPLY_STYLE_EXPORT_FORMAT:
+        raise HTTPException(status_code=400, detail=f"不支持的配置文件格式: {body.format}")
+    if body.version > REPLY_STYLE_EXPORT_VERSION:
+        raise HTTPException(status_code=400, detail=f"配置文件版本过新（v{body.version}），请先升级系统")
+    if not body.styles:
+        raise HTTPException(status_code=400, detail="配置文件中没有风格数据")
+
+    created, updated, skipped = 0, 0, 0
+    for item in body.styles:
+        existing = ReplyStyleDB.get_active(item.style_id, SYSTEM_TENANT)
+        if existing:
+            if body.conflict_strategy == "overwrite":
+                result = ReplyStyleDB.create_new_version(
+                    style_id=item.style_id,
+                    tenant_id=SYSTEM_TENANT,
+                    name=item.name,
+                    content=item.content,
+                    description=item.description,
+                )
+                if not result:
+                    raise HTTPException(status_code=500, detail=f"覆盖风格 {item.style_id} 失败")
+                updated += 1
+            elif body.conflict_strategy == "skip":
+                skipped += 1
+            else:
+                conflicts = [
+                    {"style_id": s["style_id"], "name": s["name"]}
+                    for s in ReplyStyleDB.list_system_styles()
+                    if any(i.style_id == s["style_id"] for i in body.styles)
+                ]
+                raise HTTPException(
+                    status_code=409,
+                    detail={"message": "部分风格标识已存在", "conflicts": conflicts},
+                )
+        else:
+            result = ReplyStyleDB.create(
+                style_id=item.style_id,
+                tenant_id=SYSTEM_TENANT,
+                name=item.name,
+                content=item.content,
+                description=item.description,
+            )
+            if not result:
+                raise HTTPException(status_code=500, detail=f"创建风格 {item.style_id} 失败")
+            created += 1
+
+    _trigger_reload()
+    logger.info(
+        f"后端日志：管理员导入系统回复风格 created={created} updated={updated} skipped={skipped}"
+    )
+    return {"success": True, "created": created, "updated": updated, "skipped": skipped}
 
 
 @router.get("/system/{style_id}")

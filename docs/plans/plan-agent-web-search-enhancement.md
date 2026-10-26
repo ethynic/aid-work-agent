@@ -4,6 +4,9 @@
 
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
+| Read UTF-8 | 已验证UTF-8优先，保留旧编码兼容 | ✅ 完成（2026-10-26） | 隔离工具候选323回归通过，用户已确认，仅工具切片 |
+| PDF页段 | 可选页段参数、原页码及来源元数据 | ✅ 完成（2026-10-26） | 默认路径兼容；隔离工具候选323回归通过，未部署 |
+| 首批提交 | 通用Search/Fetch、Read、模型完整性、50轮及Pro容量 | ✅ 完成（2026-10-23） | 隔离候选独立533通过/0跳过，CR及主控import通过；研究交付层排除，未部署 |
 | Phase 0 | 上游源码核对、现状审计与设计草案 | ✅ 完成（2026-10-13） | 源码及价格已核对；百度/智谱实测补充见调研 §9–10；博查单价及规模质量待核实 |
 | Phase 1A | 智谱独立搜索接入与兼容修复 | ✅ 完成（2026-10-13） | 80相关用例通过，修复后14例独立复测通过；CR已收口，同key真实Pro返回3条；未部署 |
 | Phase 1B | 统一provider注册及百度接入，默认保留Tavily | ✅ 完成（2026-10-14） | 独立121项通过/0跳过，CR通过；同步远程后121项复验及启动检查通过，国内源默认关闭，用户授权提交，未部署 |
@@ -90,3 +93,36 @@
 定向测试通过项目 `scripts/dev_test.sh` 执行，先确认容器或宿主环境运行当前源码。涉及配置、import 与装配时补隔离启动检查，避免真实业务任务启动；独立验证报告真实命令、通过/失败/跳过、环境及未验证项。修复后重跑受影响检查，不机械跑全量测试。
 
 先更新本表，再同步 ideas 索引状态。全部开发和必要验证完成后移动到 ideas_finished，部署状态单独如实记录，不把代码完成写成线上效果已验收。
+
+## 首批通用能力提交（2026-10-23，用户明确授权）
+
+范围按设计“首批通用组件提交边界”：DeepSeek默认搜索；HTML/PDF有界原生/远端Fetch；会话来源SHA及Read分页；LLM length/空输出正确处理及耗尽可见说明；主默认50和Pro393216。
+
+实际按修改点拆分，并以临时Git index导出隔离提交树验证，避免未提交模块造成假绿。独立测试和只读CR检查候选目录。提交前主控亲自验证配置/import/工具装配。只暂存批准组件与对应测试/设计计划，提交后推送已确认upstream；不部署、不调用浏览器、不再跑整Skill。
+
+排除research_plan/validate、delivery/validation/identity/report、Runtime研究交付上下文/完成门禁/进度提示、整Skill脚本与批量实验，以及WeCom等其他任务。API接入和组件回归通过不能等同搜索召回质量或全业务达标。已有真实11URL原生与远端各11成功，但网络也已恢复；固定7条Search查询仍暴露站内人数、官网联系人和官方PDF召回缺口，后续优先只补组件召回。
+
+输出容量：仅补deepseek-v4-pro:393216（384K），原缺表回退16384；真实调用已超过16K并执行完整工具。显式max_tokens优先及未知模型/chat_lite旧16K默认尚未统一清理，未冒称全局放大；费用不能靠压低生成上限控制。
+
+
+### 首批提交验证记录
+
+- 当前远程快进基线为6a915b4982，独立验证运行隔离候选源码，不导入原工作区未提交的研究模块。宿主项目venv/Python3.12，经scripts/dev_test.sh执行；数据库/日志库/Redis为localhost:1，供应商边界为替身，无浏览器或部署。
+- 独立19文件回归最终533 passed / 0 failed / 0 skipped。首轮5例resume_vl组合因隔离候选没有.env中的智谱key而失败；使用明确synthetic测试key后19文件完整重跑通过，未使用真实供应商网络。受影响Search/来源投影2文件独立29通过，与533重叠不累计。
+- CR发现会话来源投影丢失既有Tavily answer和search_engine/response_time；已保留元数据，将answer标记为provider_generated_summary，预览上限700字符，长摘要另存会话文件/SHA供Read分页，不混作原始来源。新增短/长/关闭摘要及跨会话拒读回归。CR复核无剩余P0/P1/P2，真实候选diff --check通过。
+- 主控最终import及配置检查通过，关键模块均来自候选，默认deepseek，未批准研究工具物理不存在；未启动业务服务。普通Search→Write组件交付无需研究门禁，独立烟测completed。
+- 首批提交不表示完整Skill或搜索质量验收通过。下一步优先用固定查询逐项补官网、联系人、官方PDF的搜索召回；Fetch继续按具体失败样本增强。
+
+
+独立回归可复现命令（隔离候选目录；PATH使用本项目venv，PYTHONPATH指向候选；ZHIPU_API_KEYS=unit-isolated-zhipu-key，DB/日志库/Redis均为localhost:1）：
+
+```bash
+scripts/dev_test.sh tests/unit/tools/test_deepseek_search_tool.py tests/unit/tools/test_baidu_search_tool.py tests/unit/tools/test_search_tool.py tests/unit/tools/test_search_provider_independent.py tests/unit/tools/test_zhipu_search_tool.py tests/unit/tools/test_web_fetch_tool.py tests/unit/tools/test_remote_fetch_tool.py tests/unit/tools/test_fetch_service_routing.py tests/unit/tools/test_research_evidence.py tests/unit/tools/test_read_tool.py tests/unit/tools/test_tool_assembly.py tests/unit/test_research_completion_status.py tests/unit/test_agent_default_iterations.py tests/unit/test_llm_gateway_max_tokens.py tests/unit/test_config.py tests/unit/llm/test_provider_structural_validation.py tests/unit/llm/test_deepseek_provider.py tests/unit/test_qwen_provider_thinking_cache.py tests/integration/test_tool_execution.py -p no:cacheprovider -q
+```
+
+
+## Read/PDF独立提交切片（2026-10-26）
+
+本批仅4个工具/服务生产文件与3个测试文件：read_tool.py/test_read_tool.py；web_search/fetch.py、web_search/evidence.py、search/fetch_tool.py与test_web_fetch_tool.py、test_fetch_service_routing.py。PDF工具通用研究提示不随分页提交，Agent主循环、Runtime、control_set及Search提示保持HEAD原样。
+
+基于1e7261c29e1f0f616f9000698463e9c87b65c193的独立候选中，两个新研究模块不存在，6个Agent执行/装配/策略文件与HEAD逐字一致。9相关测试文件323通过/0失败/0跳过（17.52秒），涵盖Read编码、原生/远端Fetch、来源投影、工具装配、Agent引擎/恢复/清理；设计见原设计新增的Read/PDF两节。用户已确认提交此工具切片；Agent执行流程和通用提示不提交，未部署。

@@ -1,6 +1,6 @@
 import { RunnerEventDecoder, RunnerEventProtocolError, RUNNER_EVENT_FRAME_BYTES, type RunnerEventFrame, type RunnerEventStatus } from './runnerEventStream'
 import type { UploadedFile } from './agent'
-import type { AskForm, AskFormErrorItem, BrowserHumanAssistance, DownloadableFile, ImageRef, QuickOption, RunnerAnswerItem, VerboseMessage } from '@/types'
+import type { AskForm, AskFormErrorItem, BrowserHumanAssistance, DownloadableFile, ImageRef, RunnerAnswerItem, VerboseMessage } from '@/types'
 
 // 结构化提问交互（WP4）的 wire 类型以 @/types 为单一来源，此处按契约命名再导出。
 export type { AskForm, AskFormErrorItem, RunnerAnswerItem } from '@/types'
@@ -15,7 +15,6 @@ export interface RunnerPresentation {
   progressMessages?: Record<string, unknown>[]
   downloadableFiles?: DownloadableFile[]
   verboseMessages?: VerboseMessage[]
-  quickOptions?: QuickOption[]
   browserAssistance?: BrowserHumanAssistance
   imagesPlacement?: ImageRef['placement']
 }

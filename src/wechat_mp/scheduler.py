@@ -4,8 +4,9 @@
 到期任务生成与租户分发；全部抓取/入库/计费/领取能力仍在 WeChatMPSyncService。
 
 - **单副本驱动锁**：start() 时 Redis acquire_lock（随机 owner、TTL+周期续期）；
-  抢不到（已有副本）→ 记日志空转返回；Redis 不可用 → **拒绝启动**（设计硬规则：
-  不能无锁降级），但 background runner 整体不因此挂掉（记 ERROR 即可）。
+  抢不到（已有副本或强杀残留幽灵锁）→ 仍启动驱动任务，循环内每 30s 重试接管；
+  Redis 不可用 → **拒绝启动**（设计硬规则：不能无锁降级），但 background runner
+  整体不因此挂掉（记 ERROR 即可）。
 - **驱动协程（短周期）**：非阻塞 lpop 唤醒信号 key（受理侧经 notify.rpush 跨进程
   唤醒）；取到或每 60s 兜底 → 执行一轮领取：查有 queued run 的租户（SELECT
   DISTINCT，只读跨租户租户发现，仅驱动使用）→ 逐租户 claim_and_run（async，
@@ -151,10 +152,10 @@ class WeChatMPScheduler:
     # ==================== 生命周期 ====================
 
     async def start(self) -> bool:
-        """启动驱动（抢不到单副本锁或 Redis 不可用 → 不启动，返回 False）。
+        """启动驱动；锁被占也启动驱动任务（循环内重试接管），Redis 不可用拒绝启动。
 
-        返回 False 不抛异常：调用方（background runner）记录日志后继续，
-        runner 整体不因 wechat_mp 调度失败而挂掉。
+        Redis 不可用时返回 False 不抛异常：调用方（background runner）记录日志
+        后继续，runner 整体不因 wechat_mp 调度失败而挂掉。
         """
         if self._task is not None and not self._task.done():
             logger.bind(module="wechat_mp").warning("wechat_mp 调度器已在运行，跳过重复启动")
@@ -167,32 +168,34 @@ class WeChatMPScheduler:
             )
             return False
 
-        self._owner = uuid.uuid4().hex
-        self._lock_key = self._redis.make_key(DRIVER_LOCK_PREFIX)
-        acquired = await asyncio.to_thread(
-            self._redis.acquire_lock, self._lock_key, self._owner, DRIVER_LOCK_TTL_SECONDS
-        )
-        if not acquired:
-            logger.bind(module="wechat_mp").info(
-                "wechat_mp 调度器已在其他副本运行，本副本空转返回 owner={}", self._owner
-            )
-            self._lock_key = None
-            return False
-
         if self._service is None:
             from src.wechat_mp.service import WeChatMPSyncService
 
             self._service = WeChatMPSyncService()
 
+        self._owner = uuid.uuid4().hex
+        self._lock_key = self._redis.make_key(DRIVER_LOCK_PREFIX)
+        acquired = await asyncio.to_thread(
+            self._redis.acquire_lock, self._lock_key, self._owner, DRIVER_LOCK_TTL_SECONDS
+        )
         self._stop_event.clear()
         self._claim_requested = False
         self._redis_down_logged = False
         self._task = asyncio.create_task(self._run_loop(), name="wechat-mp-scheduler")
-        logger.bind(module="wechat_mp").info(
-            "wechat_mp 调度器已启动 owner={} tick={}s 兜底={}s 并发={} 复核间隔={}h",
-            self._owner, TICK_INTERVAL_SECONDS, IDLE_SCAN_SECONDS,
-            TENANT_CONCURRENCY, RECHECK_INTERVAL_HOURS,
-        )
+        if acquired:
+            logger.bind(module="wechat_mp").info(
+                "wechat_mp 调度器已启动 owner={} tick={}s 兜底={}s 并发={} 复核间隔={}h",
+                self._owner, TICK_INTERVAL_SECONDS, IDLE_SCAN_SECONDS,
+                TENANT_CONCURRENCY, RECHECK_INTERVAL_HOURS,
+            )
+        else:
+            # 锁被占：可能为强杀残留的幽灵锁（TTL 过期后可接管）。不再放弃启动，
+            # 保留锁 key 交给 _run_loop 内 _ensure_driver_lock 的失锁自愈路径重试接管
+            logger.bind(module="wechat_mp").info(
+                "wechat_mp 调度器锁被占（可能为强杀残留幽灵锁），驱动任务已启动，"
+                "循环内每 {}s 重试接管 owner={}",
+                LOCK_RETRY_SECONDS, self._owner,
+            )
         return True
 
     async def stop(self) -> None:

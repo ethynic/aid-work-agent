@@ -8,7 +8,7 @@ description: >
   模板风格 PPT、品牌VI PPT、美观演示文稿、套用公司模板做 PPT、
   修改已生成的 PPT（改字/加页/删页/移页/换页/换色）。
 metadata:
-  version: "2.0.0"
+  version: "2.2.0"
   author: aid-work-agent
   trigger_keywords:
     - 按模板生成PPT
@@ -40,7 +40,7 @@ metadata:
 
 ## ⚠️ 严禁事项
 
-**不要自己设计版式或逐页堆文字**——7 种版式的视觉排版（配色、间距、字体层级）
+**不要自己设计版式或逐页堆文字**——14 种版式的视觉排版（配色、间距、字体层级）
 已由渲染引擎内置，自行拼凑必然效果差且浪费大量 token。所有生成必须通过
 `skill_execute` 调用本技能的管线脚本：
 
@@ -62,8 +62,11 @@ metadata:
 ### 内容 schema（content.json，由你编写）
 
 每页一个对象，按内容特点选 role。**版式分工**：cover（封面）和 end（结尾）各用
-一次；section（章节页）用于划分篇章；正文页用 stats（大数字卡）/ bullets（要点列表）/
-twocol（双栏对比）/ image（图片展示）组合，避免连续多页同一 role。
+一次；toc（目录）放正文前；section（章节页）划分篇章；正文页按内容特点组合：
+stats（大数字卡）/ bullets（要点列表）/ twocol（双栏对比）/ image（图片展示）/
+table（数据表格）/ image_text（图文组合）/ image_grid（多图画廊）/ timeline（时间轴）/
+process（流程步骤）/ quote（金句），避免连续多页同一 role。全部字段见
+`references/usage.md` 第 1 节。
 
 ```jsonc
 {
@@ -122,7 +125,7 @@ python scripts/generate.py \
 }
 ```
 
-失败时 `success=false` + `error` 字段（如 role 非法、缺 title、文件不存在），修正 content.json 后重试。
+失败时 `success=false` + `error` 字段（如 role 非法、缺 title、文件不存在），修正 content.json 后重试。使用客户模板时输出可能带 `fonts_replaced`（模板商业字体被替换为免费字体的清单）。
 
 **第 4 步：用 cp 交付**
 
@@ -158,7 +161,7 @@ python scripts/edit.py --pptx "输出文件名.pptx" --spec edit_spec.json
 | `move_slide` | `slide` + `to` | 移页到新位置 |
 | `recolor` | `accent`/`brand`/`dark`，或 `map` {旧hex: 新hex} | 全局换色（文本/形状/渐变全覆盖） |
 
-edit_spec 完整字段与示例见 `references/usage.md` 第 7 节。stdout 返回
+edit_spec 完整字段与示例见 `references/usage.md` 第 8 节。stdout 返回
 `applied`（每个 op 的执行结果）与 `warnings`（失败项，需修正后重试）。
 
 **验证改动**：用 python-pptx 结构 dump 检查（`python -c` 遍历 slides/shapes
@@ -193,15 +196,26 @@ deck_spec 每页二选一（同一 spec 内可混用）：
 | | `--output` | 否 | 输出文件名（默认 `vi_ppt_<时间戳>.pptx`） |
 | | `--brand` / `--accent` | 否 | 强制品牌色/强调色（十六进制，如 `#1F4E79`） |
 | | `--preview` | 否 | 输出每页 PNG 预览目录 |
+| | `--embed-fonts` | 否 | 嵌入思源黑体/Noto Sans 进 pptx（约 +18MB，未装字体的机器也原样渲染） |
 | `edit.py` | `--pptx` | 是 | 目标 deck 路径 |
 | | `--spec` | 是 | edit_spec.json 路径，或 `-` 表示 stdin |
 | | `--output` | 否 | 输出路径（缺省原地修改，自动留 `.bak`） |
 | `template_fill.py` | `analyze --template` | 是 | 解析模板，输出版式/占位符 JSON |
 | | `generate --template --spec --output` | 是 | 按 deck_spec 生成 |
 
+## 商用免费字体策略（2.2.0 起强制）
+
+交付客户的 PPT **不携带任何字体授权风险**，按字符所属脚本自动选字体（与 PowerPoint/WPS 原生行为一致）：
+
+- **双轨规则**：ea（中文）→ **思源黑体 CN**（Source Han Sans CN），latin/cs（字母/数字）→ **Noto Sans**（两者均为 SIL OFL 1.1 商用免费，随包分发在 `scripts/pptx_gen/assets/fonts/`）。思源的拉丁字形偏宽，数字/字母单独用 Noto Sans 更干净。
+- **路线二**：每个 run 显式写 latin=Noto Sans / ea=思源黑体；量测与 QA 预览按字符分流用同一份字体文件，保证「测得准 = 渲染一致」。
+- **路线一与 edit.py**：保存前把模板里的商业字体（微软雅黑/宋体/Arial/Calibri 等）按标签分流替换为免费字体；免费白名单字体（思源/Noto/MiSans/普惠体/HarmonyOS Sans 等）原样保留。替换清单在返回 JSON 的 `fonts_replaced` 字段，可审计。
+- **字体嵌入（opt-in）**：`--embed-fonts` 把两款字体嵌进 pptx（约 +18MB），未安装字体的电脑也能原样渲染；默认关闭（未嵌入时打开方按度量兼容字体替换，版式不散——单行元素禁换行 + 0.92 宽度预算兜底）。
+
 ## 边界与已知限制
 
-- 内置 7 种版式（cover/section/stats/bullets/twocol/image/end），没有表格、SmartArt、动画
+- 内置 14 种版式（cover/toc/section/stats/bullets/twocol/image/table/image_text/
+  image_grid/timeline/process/quote/end），支持原生表格；没有 SmartArt、动画
 - `image` role 的图片按等比缩放放入卡片，建议用户上传清晰的大图
 - 模板中提取不到主题色时使用默认深蓝品牌色
 - 路线二的 QA 预览 PNG（Pillow 渲染）与原生 deck 排版近似但不逐像素一致，

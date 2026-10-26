@@ -408,7 +408,8 @@ class QwenProvider(BaseLLMProvider):
                 }
                 for tc in tool_calls
             ]
-            result["finish_reason"] = "tool_calls"
+            if finish_reason != "length":
+                result["finish_reason"] = "tool_calls"
 
         return result
 

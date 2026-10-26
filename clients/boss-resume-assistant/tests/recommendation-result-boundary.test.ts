@@ -41,16 +41,16 @@ test('真实空态batch/next/greet/open与已打开推荐详情停止，零输�
   assert.equal((await detail.greet({ name: '李样例' })).stopReason, 'no_matching_candidates')
 })
 
-test('边界前正常卡片可定位，边界后推荐被排除；读完/排除正常卡片后不滚入推荐', async () => {
+test('非空列表中的推荐分区不排除后续真实卡片', async () => {
   const snap = matchingThenRecommendations()
   const reader = new ResumeBatchReader(batchDeps(async () => snap))
-  assert.deepEqual(reader.locateCards(snap).map((card) => card.name), ['钱测试'])
-  assert.equal(inspectRecommendationResults(snap).stopReason, 'recommendations_boundary')
-  const result = await reader.readBatch({ limit: 3, scanMore: true, excludeNames: ['钱测试'] })
+  assert.deepEqual(reader.locateCards(snap).map((card) => card.name), ['钱测试', '李样例', '赵示例'])
+  assert.equal(inspectRecommendationResults(snap).stopReason, undefined)
+  const result = await reader.readBatch({ limit: 3, scanMore: false, excludeNames: ['钱测试', '李样例', '赵示例'] })
   assert.equal(result.attempted, 0)
-  assert.equal(result.stop_reason, 'recommendations_boundary')
+  assert.equal(result.stop_reason, 'viewport_complete')
   assert.equal(excludedRecommendationName(snap, '钱测试'), undefined)
-  assert.equal(excludedRecommendationName(snap, '李样例'), 'recommendations_boundary')
+  assert.equal(excludedRecommendationName(snap, '李样例'), undefined)
 })
 
 test('隐藏空态/隐藏frame及其他文档或候选人描述的同文案不制造空结果', () => {
@@ -79,11 +79,12 @@ test('真实空态tip仍可见，推荐divider隐藏或缺失仍应零匹配停�
   assert.equal(inspectRecommendationResults(missingDivider).stopReason, 'no_matching_candidates')
 })
 
-test('经历中的目标同名不能证明详情来自推荐；两区姓名字段同名则歧义停止', () => {
+test('非空插入分区和经历同名不能伪造全局排除证据', () => {
   const snap = matchingThenRecommendations(), doc = snap.documents[2]!, parents = parentMapOf(doc)!
   const values = doc.nodes.nodeValue as number[]
   const actualName = values.findIndex((value) => snap.strings[value] === '李样例')
-  const card = inspectRecommendationResults(snap).boundaries[0]!.cards.at(-1)!
+  let card = actualName
+  while (!(classOf(snap, 2, card) ?? '').split(/\s+/).includes('card-item')) card = parents.get(card)!
   const node = values.length; snap.strings.push('钱测试'); values.push(snap.strings.length - 1)
   ;(doc.nodes.parentIndex as number[]).push(card)
   ;(doc.nodes.attributes as number[][]).push([])
@@ -92,14 +93,15 @@ test('经历中的目标同名不能证明详情来自推荐；两区姓名字�
   assert.equal(excludedRecommendationName(experience, '钱测试'), undefined)
   const duplicate = structuredClone(snap)
   ;(duplicate.documents[2]!.nodes.nodeValue as number[])[actualName] = duplicate.strings.indexOf('钱测试')
-  assert.throws(() => excludedRecommendationName(duplicate, '钱测试'), /同名候选人/)
+  assert.equal(excludedRecommendationName(duplicate, '钱测试'), undefined)
   assert.ok(parents)
 })
 
-test('未知推荐组件文案不放行；终态原因不会被缺少职位/历史覆盖', () => {
+test('未知插入组件不导致全局异常；真实终态不会被缺少职位/历史覆盖', () => {
   const snap = matchingThenRecommendations()
   snap.strings = snap.strings.map((text) => text === '暂无符合牛人，为你推荐' ? '未知推荐区文案' : text)
-  assert.throws(() => inspectRecommendationResults(snap), /未确认/)
+  assert.equal(inspectRecommendationResults(snap).stopReason, undefined)
+  assert.deepEqual(new ResumeBatchReader(batchDeps(async () => snap)).locateCards(snap).map(card => card.name), ['钱测试', '李样例', '赵示例'])
   for (const reason of ['no_matching_candidates', 'recommendations_boundary']) {
     const next = buildResumeContinuation([], [], null, reason)
     assert.equal(next.available, false)

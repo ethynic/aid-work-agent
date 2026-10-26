@@ -24,15 +24,21 @@ export function findWindowByTitle(api: NativeApi, keyword: string): number {
  * 2026-08-31 真机修正语义：Chrome 151 存在多个可见 render widget（弹层/扩展小部件），
  * 第一个可见可能是 96px 小部件导致换算集体打偏——必须取面积最大；全不可见时回退第一个隐藏的。
  */
-export function findRenderWidget(api: NativeApi, parent: number): number {
+export function findRenderWidget(api: NativeApi, parent: number, observe?: (hwnd: number, visible: boolean, rect?: ReturnType<typeof readRect>) => void): number {
   let firstHidden = 0
   let found = 0
   let bestArea = 0
   api.enumChildWindows(parent, (hwnd) => {
     if (api.getClassName(hwnd) === 'Chrome_RenderWidgetHostHWND') {
-      if (api.isWindowVisible(hwnd)) {
-        const r = readRect(api, hwnd)
-        const area = (r.right - r.left) * (r.bottom - r.top)
+      const visible = api.isWindowVisible(hwnd)
+      // Hidden HWNDs may already be destroyed. Diagnostic geometry must not
+      // prevent enumeration from reaching a later visible widget.
+      let r: ReturnType<typeof readRect> | undefined
+      if (visible) r = readRect(api, hwnd)
+      else if (observe) { try { r = api.getWindowRect(hwnd) } catch { /* diagnostic only */ } }
+      observe?.(hwnd, visible, r)
+      if (visible) {
+        const area = (r!.right - r!.left) * (r!.bottom - r!.top)
         if (area > bestArea) {
           bestArea = area
           found = hwnd

@@ -1,0 +1,45 @@
+{
+  "date": "2026-10-23",
+  "runtime_ui": "0.0.28",
+  "host": "0.2.23",
+  "installer_exit": 0,
+  "installed_product_version": "0.0.28.0",
+  "installation_resources_match_verified_package": [
+    "runtime/host/productTrust.js",
+    "runtime/trust-roots.json",
+    "config/runtime-product.json"
+  ],
+  "generation_initialized": true,
+  "device_pairing_preserved": true,
+  "credential_file_preserved": true,
+  "same_device_identity": true,
+  "trust_roots": 18,
+  "runtime_and_managed_host_processes_present": true,
+  "runtime_running_marker_present": true,
+  "installed_boss": {
+    "version": "0.3.24",
+    "enabled": true
+  },
+  "new_boss_package": "0.3.26",
+  "plugin_import_completed": false,
+  "blocking_reason": "Runtime native package chooser is required; current browser automation exposes no native application surface and no supported non-UI plugin-import CLI/API exists",
+  "browser_restore": {
+    "original_profile_confirmed": true,
+    "initial_launch": true,
+    "same_account": true,
+    "same_job": true,
+    "cdp_available": true,
+    "current_document_scroll_y": 0,
+    "browser_inputs": 0,
+    "new_profile_created": false
+  },
+  "fresh_business_reads": 0,
+  "nonempty_filter_business_acceptance": "pending after plugin import; must reproduce nonzero document scroll again",
+  "git_commit_executed": false,
+  "server_deployed": false,
+  "raw_screenshot": {
+    "ignored_path": ".tmp/boss-root-clip-release-20261023b/restored-boss-page.png",
+    "sha256": "eff68d6b3d9af9dc43cb97463f8a2d98d96d1dc9bc578efd3a70bcc741cb7235",
+    "committed": false
+  }
+}

@@ -22,6 +22,8 @@ from pptx import Presentation
 from pptx.oxml.ns import qn
 
 from .content_filler import fill_placeholders, replace_text
+from .fonts import remap_presentation
+from .fonts import embed_fonts as _embed_fonts
 from .slide_copy import copy_slide
 
 
@@ -33,7 +35,18 @@ def _drop_first_n_slides(prs, n):
         sldIdLst.remove(sldId)
 
 
-def generate(template_path, deck_spec, out_path):
+def generate(template_path, deck_spec, out_path, remap_fonts=True,
+             embed_fonts=False):
+    """Fill a customer template with content (route 1, text stays editable).
+
+    remap_fonts: replace commercial fonts in the template (Microsoft YaHei,
+                  SimSun, Arial, ...) with the commercially-free Source Han
+                  Sans CN; fonts on the free whitelist are kept. Pass False to
+                  preserve the template's own fonts entirely (e.g. the customer
+                  owns a license for their brand font).
+    embed_fonts: embed the Source Han Sans OTFs into the pptx (+17 MB) so it
+                  renders identically on machines without the font (opt-in).
+    """
     prs = Presentation(template_path)
     original_count = len(prs.slides)
     log = []
@@ -56,9 +69,12 @@ def generate(template_path, deck_spec, out_path):
     if not deck_spec.get("keep_template_slides", False):
         _drop_first_n_slides(prs, original_count)
 
+    font_report = remap_presentation(prs) if remap_fonts else None
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     prs.save(out_path)
-    return {"out": out_path, "slides": log, "generated": len(log)}
+    embed_report = _embed_fonts(out_path) if embed_fonts else None
+    return {"out": out_path, "slides": log, "generated": len(log),
+            "fonts": font_report, "embedded": embed_report}
 
 
 if __name__ == "__main__":

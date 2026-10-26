@@ -65,6 +65,12 @@ class PromptCache:
     def invalidate_label(self, prompt_id: str, label: str):
         delete_cached(CacheKeys.PROMPT_LABEL, prompt_id, label)
 
+    def invalidate_registry(self, tenant_id: Optional[str], scope: str, scope_id: str):
+        """失效 registry 缓存（键按 scope_id 组织，删除 prompt 时必须单独失效，
+        否则同 scope_id 重建后 resolve 在 TTL 内命中旧 prompt_id 导致拿不到内容）"""
+        tenant_key = tenant_id or "_sys"
+        delete_cached(CacheKeys.PROMPT_REGISTRY, tenant_key, scope, scope_id)
+
     def invalidate_prompt(self, prompt_id: str):
         delete_cached_pattern(CacheKeys.PROMPT_CONTENT, prompt_id, "")
         delete_cached_pattern(CacheKeys.PROMPT_LABEL, prompt_id, "")

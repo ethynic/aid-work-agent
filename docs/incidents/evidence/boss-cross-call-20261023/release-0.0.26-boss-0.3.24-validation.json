@@ -1,0 +1,142 @@
+{
+  "batch": "AID-Work-Runtime-0.0.26-BOSS-0.3.24-20261023-212022",
+  "source_commit": "e44830e20796c3562c0919df58b577683fc95f4b",
+  "versions": {
+    "ui": "0.0.26",
+    "host": "0.2.22",
+    "core": "0.2.20",
+    "nativeInput": "0.1.0",
+    "boss": "0.3.24",
+    "node": "22.23.3"
+  },
+  "script": "clients/agent-desktop/scripts/release-batch.ps1",
+  "script_exit": 0,
+  "zip": {
+    "path": "clients/release/AID-Work-Runtime-0.0.26-BOSS-0.3.24-20261023-212022.zip",
+    "size": 132657733,
+    "sha256": "cb28f00f3aa1a4c4a65e7135ad8a07d6057d9ad22e25defe7ea0302cc5356644",
+    "entries": 10,
+    "crc": "passed",
+    "all_entry_sha256": "passed"
+  },
+  "runtime": {
+    "file": "AID-Work-Runtime-0.0.26-win-x64-acceptance-unsigned.exe",
+    "size": 127000636,
+    "sha256": "29b84d5fd8fcee0c595be0b3b5f0f6c0ec4a9fbb341639af5e72294c8e153cf0",
+    "signature_status": "NotSigned",
+    "package_verify": "passed",
+    "resource_files": 3811
+  },
+  "plugin": {
+    "file": "boss-0.3.24-dev.aidplugin.zip",
+    "size": 5382194,
+    "sha256": "8e6a6176e966e746cf09370228da2a998f9db748fe85e06dc26a3ee114f2b981",
+    "signature_verify": "passed",
+    "files": 3736,
+    "tools": 25,
+    "doctor_exit": 1,
+    "ready": false,
+    "payload_unchanged": true,
+    "current_production_files_match": 18
+  },
+  "native_input_load": "NATIVE_INPUT_LOAD_OK",
+  "packaging_tests": {
+    "plugin": 8,
+    "runtime": 20,
+    "failed": 0,
+    "skipped": 0
+  },
+  "trust_roots": {
+    "old_preserved": 15,
+    "new_boss_only": 1,
+    "total": 16,
+    "registry_snapshot_bundled_match": true
+  },
+  "compression_retry": "first attempt file-watcher/Git temporary lock; existing script retry succeeded without process termination or script changes",
+  "limits": {
+    "runtimePackage": "passed",
+    "runtimeVerify": "passed",
+    "pluginOffline": "passed",
+    "nativeInputLoad": "passed",
+    "nsisInstallation": "not_run",
+    "oldInventoryUpgrade": "not_run",
+    "runtimeUiSmoke": "not_run",
+    "bossBusiness": "not_run",
+    "visualRecovery": "not_run"
+  },
+  "payload_source_checks": [
+    {
+      "path": "scripts/BossWindowExperiment.cs",
+      "sha256": "4db981953ce202665082911266bf08744b5c43f2f8f294289df448ac9e496ef6"
+    },
+    {
+      "path": "scripts/window-experiment.ps1",
+      "sha256": "825b67d0025d5713c442f374088b3b4409996a15180dbf3bddae0311f370893a"
+    },
+    {
+      "path": "dist/src/main/boss/FilterSetter.js",
+      "sha256": "26ae2a76431d59a7a22055b1e66f418bcdc1d3e8a8e3923e82c5706cca9a94fe"
+    },
+    {
+      "path": "dist/src/main/boss/GreetExecutor.js",
+      "sha256": "3776e036239cb490604f833ffb8fe4aa8e2a2681af32036bb33be433edf927ff"
+    },
+    {
+      "path": "dist/src/main/boss/LoadedCandidateNavigation.js",
+      "sha256": "0244688a295b0a285510ac9fb981daeb3afcb0379cdb72a9ad283dce70319e19"
+    },
+    {
+      "path": "dist/src/main/boss/RecommendationResultBoundary.js",
+      "sha256": "1d1459633aa887f13f76bf0dcebcaa50a4de39bc4b548167e99e9d2ed478eb0b"
+    },
+    {
+      "path": "dist/src/main/boss/ResumeBatchReader.js",
+      "sha256": "f0f95c54dbe50bd187723c1bce9c327a239666047c6489b83e29d9e687617aea"
+    },
+    {
+      "path": "dist/src/main/boss/cardName.js",
+      "sha256": "812dd0061fd75a6cd23935796ad33b6d64cafe129c0f93ff15b1babd67e98f12"
+    },
+    {
+      "path": "dist/src/main/boss/localOperationRecovery.js",
+      "sha256": "0f169582beefa683dcdbe714ead8d185cd22c4b45c9243b708947d23e8793d2b"
+    },
+    {
+      "path": "dist/src/main/boss/visualRecovery.js",
+      "sha256": "288392f78a36320f17926b237cfa018b7c4efe35030050e4b7f5e7f4d5940ff7"
+    },
+    {
+      "path": "dist/src/main/input/windowExperiment.js",
+      "sha256": "6b62ad69c2266a5d8c96ca79415d388d2f4df1ba7c98254f76bebac066a1c846"
+    },
+    {
+      "path": "dist/src/main/operations/bossContext.js",
+      "sha256": "062718ab01ea0258f3c7d310b0648e8fa793fb70125e02733695314c3828eb7a"
+    },
+    {
+      "path": "dist/src/main/operations/bossFilter.js",
+      "sha256": "a9a8694952f59be188c17ebe9b8b8318a7852a8fe0383485a5a5789c97fbcb71"
+    },
+    {
+      "path": "dist/src/main/operations/bossGreet.js",
+      "sha256": "9dd11a631ef606fa42c7ae751349d98ff5b56d105ec23bc9a38a6221beee1770"
+    },
+    {
+      "path": "dist/src/main/operations/bossOverlayDismiss.js",
+      "sha256": "91aea0ced932546929da9bd794ab9ce45c86ff9c437c6e23417f23a4875212e1"
+    },
+    {
+      "path": "dist/src/main/operations/bossOverlayInspect.js",
+      "sha256": "21e5f9f68c3a1877e25ab2aed400718c22af6684b347f1e4eb0c72839187a717"
+    },
+    {
+      "path": "dist/src/main/operations/pageOperation.js",
+      "sha256": "0c0ef459f4c06e4f5bfc3630aede285da6f7f995a84ddf435bbbb9d370ef229f"
+    },
+    {
+      "path": "dist/src/main/operations/types.js",
+      "sha256": "d76e2dc7ce5130cc170cb3f4a33c3b9ba0fbcf0c6d88e757283e88792658946a"
+    }
+  ],
+  "no_deployment": true
+}

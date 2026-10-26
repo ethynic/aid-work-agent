@@ -83,6 +83,66 @@ print(res)  # {'out': 'out.pptx', 'slides': 7}  —— 原生可编辑
 
 > 调用 `generate_from_vi(tpl, content, out, base_dir=...)` 可自定义图片基准目录。
 
+### table（数据表格）
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `title` | str | ✓ | 标题 |
+| `lead` | str | | 导语 |
+| `head` | list[str] | ✓ | 表头（建议 ≤6 列） |
+| `rows` | list[list[str]] | ✓ | 数据行，每行列数 = `len(head)` |
+| `caption` | str | | 表下注释（如数据来源） |
+
+原生 PPT 表格（文字可编辑）：表头用品牌色、 body 斑马纹；**纯数字列自动右对齐**，其余居中/首列左对齐；列宽按各列最长内容比例分配；单元格文字过长自动缩字号（最小 8pt）并留在格内。
+
+### image_text（图文组合，单图）
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `title` | str | ✓ | 标题 |
+| `lead` | str | | 导语 |
+| `image` | str | | 图片路径（同上） |
+| `side` | str | | `"left"`（默认）或 `"right"`，图在哪一侧 |
+| `h` | str | | 文本区小标题 |
+| `points` | list | | 文本要点，每项 `{"h":..,"d":..}` 或纯字符串 |
+| `chips` | list[str] | | 底部小标签（按空间自适应裁剪） |
+
+### image_grid（图文组合，多图 2~4 张）
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `title` | str | ✓ | 标题 |
+| `lead` | str | | 导语 |
+| `images` | list | ✓ | 2~4 项，每项 `{"src": 路径, "caption": 题注}`（也接受纯路径字符串） |
+| `caption` | str | | 整页底部注释 |
+
+4 张 = 2×2，3 张 = 1×3，2 张 = 1×2；每张图独立题注。图片缺失时该格降级为占位面板（并在 stderr 告警），不影响其他格。
+
+### timeline（横向时间轴）
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `title` | str | ✓ | 标题 |
+| `lead` | str | | 导语 |
+| `items` | list | ✓ | 3~5 项，每项 `{"t": 时间, "h": 标题, "d": 描述(可选)}` |
+
+### process（流程步骤）
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `title` | str | ✓ | 标题 |
+| `lead` | str | | 导语 |
+| `steps` | list | ✓ | 3~5 项，每项 `{"h": 步骤名, "d": 描述(可选)}`，步骤间有箭头连接 |
+
+### quote（金句/大引言）
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `quote` | str | ✓ | 引言正文 |
+| `author` | str | | 署名 |
+| `title` | str | | 署名下的职务/来源 |
+
+### toc（目录）
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `title` | str | | 缺省"目录" |
+| `lead` | str | | 导语 |
+| `items` | list | ✓ | 每项 `{"h": 章节名, "d": 一句说明(可选)}` 或纯字符串；超过 4 项自动分两栏 |
+
 ### end（结尾）
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
@@ -100,14 +160,14 @@ print(res)  # {'out': 'out.pptx', 'slides': 7}  —— 原生可编辑
 vi = extract_vi("客户模板.pptx")
 # -> {
 #   "brand","accent","dark","light","ink","muted":  hex 配色,
-#   "font_title","font_body":  中文字体路径(如 msyh.ttc),
-#   "font_latin_title","font_latin_body":  拉丁字体名,
+#   "font_title","font_body":  随包思源黑体 CN 的 OTF 路径（Bold/Regular，CJK 用），
+#                               "font_latin_title/body": 随包 Noto Sans 的 TTF 路径（拉丁/数字用），
 #   "logo_img":  PIL.Image (客户 Logo)
 # }
 ```
 
 - 想锁死品牌色：`generate_from_vi(..., vi_override={"brand":"#1F4E79","accent":"#2E9CCA","dark":"#10263D"})`。
-- 自动从系统找中文字体（Windows 默认微软雅黑）；Linux/mac 请保证装有中文字体，否则回退可能缺字。
+- **字体不从模板取**：`font_*` 永远指向随包的商用免费字体（CJK=思源黑体 CN / 拉丁=Noto Sans，均 OFL）；模板主题里的字体只作审计记录（`theme_latin_*`）并映射为免费等价（见第 9 节）。
 
 ---
 
@@ -133,6 +193,7 @@ generate("客户模板.pptx", spec, "out.pptx")
 - `analyze("客户模板.pptx")` 返回版式/占位符清单，先跑它决定 `layout_index` 与占位符 key。
 - 模式 B 的 `replacements` key 命中顺序：**形状名 → 整段原文 → 原文子串**，逐 run 替换，保留字体/项目符号。
 - 两模式可在同一 `slides` 混用。
+- **字体合规（默认开）**：保存前把模板里的商业字体（微软雅黑/宋体/等线/Arial/Calibri/方正/汉仪…，含主题里的）替换为思源黑体 CN；`remap_fonts=False` 可完全保留模板原字体（客户自有授权场景）。替换清单见返回值的 `fonts` 字段。
 
 ---
 
@@ -151,16 +212,50 @@ generate("客户模板.pptx", spec, "out.pptx")
 
 ---
 
-## 5. 扩展方法
+## 5. 溢出保护（防"字体太大撑出页面"）
 
-- **新增页面版式**：在 `pptx_gen/native.py` 写一个 `render_xxx(slide, page, i, n, pal, img_path)`（用 `rect/oval/text/shape_text/header/footer` 原语，见源码），再登记 `NATIVE_RENDERERS["xxx"] = render_xxx`。内容 schema 加对应字段即可。
-- **接图表**：在调用前用 matplotlib/你自己的绘图生成 PNG，页用 `{"role":"image","image":"图.png"}` 引用。示例见 `examples/run_demo2.py` 的 `make_chart`。
-- **QA 预览**：`preview_pngs(tpl, content, out_dir)` 用 Pillow 引擎出 1920×1080 预览图，用于肉眼检查版式；它**不产出 deck**，deck 永远走原生可编辑路径。
+程序化生成 PPT 最常见的翻车点：**字号写死 + 文本框固定 + 不开启自适应**，内容一长（如 KPI 大数字 `44.63万`）就溢出卡片甚至页面。本技能在两条路线都内置了防溢出：
+
+- **native 路线**（native.py）：三层保护，缺一不可——
+  1. **真实字体测量**：`measure()` 用 PIL 加载真实字体文件（msyh/msyhbd/simhei…）逐字测宽，**区分加粗**（加粗雅黑数字比常规宽 ~8%，实测 `44.63万` 在 94px 加粗下 = 353px，而 em 估算只给 329px）。⚠️ 曾经 `_pil_font()` 漏导入 `ImageFont`，`NameError` 被 `except Exception` 静默吞掉导致**每次测量都静默退回 em 估算、验证假通过**——现在 except 已收窄为 `(OSError, ValueError)`，且验证脚本必须对比 `measure()` 与直接 `ImageFont.truetype().getlength()` 证明字体活性。
+  2. **自动缩字号**：`text(..., fit=True, max_lines=1)` 按 `w×0.92`（单行）/`w×0.97`（多行）预算缩小字号——单行收缩到放得下为止（实测 `44.63万` 104→82px、`1,234.56万`→58px），长段落收缩到换行后高度不超框。
+  3. **硬禁换行**：`max_lines=1` 的文本框直接设 `word_wrap=False`——**无论查看器替换成多宽的字体都永远不会换行**（配合自适应字号，溢出量也压在卡片内边距里）。这是针对"查看器字体比测量字体宽"的终极兜底。
+- **模板填充路线**（content_filler.py）：`_safe_text()` 对整框替换的文本开启 `word_wrap=True` + `auto_size=TEXT_TO_FIT_SHAPE`（等价 PowerPoint 的"溢出时缩小文字"）；`editor.py` 的 `set_text` 操作同样生效。
+
+新写版式时，凡是内容长度不可控的文本，一律加 `fit=True`（单行元素再加 `max_lines=1`）。
+
+验证方式（缺一不可）：① 对比 `measure()` 与直接 `ImageFont` 测量值，证明真实字体生效；② 重开生成的 pptx，单行元素检查 `word_wrap is False` 且 `est_w(text, size_px) <= 文本框宽px×0.93`。
+
+---
+
+## 6. 扩展方法
+
+版式系统是**注册表模式**，加新版式 = 写一个渲染函数 + 登记一行，主链路/编辑器/校验全部自动生效：
+
+```python
+# pptx_gen/native.py
+def render_swot(slide, page, i, n, pal, img_path):
+    bg(slide, pal)
+    top = header(slide, pal, page["title"], page.get("lead"))
+    # ... 用 rect/oval/text/shape_text/header/footer 原语布局四象限 ...
+    # 内容长度不可控的文本一律 fit=True（单行元素加 max_lines=1）
+
+NATIVE_RENDERERS["swot"] = render_swot          # native 生效
+DARK_RENDERERS["swot"] = render_swot_preview    # dark_theme.py 里加同名预览（可选，默认主题）
+```
+
+- **编辑器同步可用**：`edit_deck` 的 `add_slide`/`replace_slide` 直接读 `NATIVE_RENDERERS`，新角色立刻能加页/换页。
+- **未知 role 会明确报错**（列出全部可用角色），不会静默跳过。
+- **预览主题架构**：`render.py` 末尾安装 `RENDERERS = DARK_RENDERERS`——**深色 14 角色为默认预览主题**，几何参数与 `native.py` 逐参数对齐（docstring 声明），保证 QA 预览与 deck 视觉一致；浅色 7 角色退为 `LIGHT_RENDERERS` legacy，切回方式：`import pptx_gen.render as R; R.RENDERERS = R.LIGHT_RENDERERS`。新增预览角色注册到 `dark_theme.py` 的 `DARK_RENDERERS`。
+- **预览可选**：`render.py` 未登记的 role 会自动降级为"标题 + [preview N/A]"页，不阻塞 QA；补上预览函数即可肉眼校验。
+- **接图表**：调用前用 matplotlib/自己的绘图生成 PNG，页用 `{"role":"image","image":"图.png"}` 或 `image_text`/`image_grid` 引用。示例见 `examples/run_demo2.py` 的 `make_chart/make_line_chart/make_panels`。
+- **多图解析**：`image_grid` 读 `page["images"]`（相对 `base_dir` 解析，`base_dir` 默认 = 模板所在目录，可用参数覆盖）；缺失文件保留占位面板并在 stderr 告警。
+- **QA 预览**：`preview_pngs(tpl, content, out_dir)` 用 Pillow 引擎出 1920×1080 预览图；它**不产出 deck**，deck 永远走原生可编辑路径。
 - **路线一换图**：`pptx_gen/slide_copy.py` 已可靠深拷贝含图页面；若要"按内容换图"，在拷贝后替换 Picture 形状的 `image.blob` 并改写 `r:embed`（python-pptx 1.0.x 用 `get_or_add` 重建关系）。
 
 ---
 
-## 6. 依赖与运行
+## 7. 依赖与运行
 
 ```bash
 pip install -r requirements.txt   # python-pptx>=1.0.0, Pillow>=10.0.0
@@ -172,7 +267,7 @@ pip install -r requirements.txt   # python-pptx>=1.0.0, Pillow>=10.0.0
 
 ---
 
-## 7. 修改已生成的 PPT（edit_deck）
+## 8. 修改已生成的 PPT（edit_deck）
 
 `edit_deck(pptx_path, edit_spec, out_path=None)` 对已生成的 deck 做手术式修改：默认原地写入（同级留 `.bak`），只动 op 涉及的内容。适合"deck 已经手工改过"或"只动一两页"的场景；整deck重排请回到 content.json 重生成。
 
@@ -231,3 +326,68 @@ res = edit_deck("deck.pptx", spec)
 ```
 
 改完用 `preview_pngs(tpl, content, out_dir)`（需要 content.json）或直接 python-pptx 结构 dump 验证；页码在结构变动后已自动刷新。
+
+---
+
+## 9. 商用免费字体策略（2026-10-23 起强制执行）
+
+交付客户的 PPT 不携带字体授权风险：**双轨商用免费字体**——东亚字符用思源黑体 CN（Source Han Sans CN，SIL OFL 1.1），拉丁字母/数字用 Noto Sans（SIL OFL 1.1；许可证全文见 `pptx_gen/assets/fonts/OFL-1.1.txt`）。字体文件随包分发（思源 Regular 8.4MB / Bold 8.6MB + NotoSans Regular/Bold 各约 0.6MB）。
+
+### 9.1 三条规则
+
+1. **双轨 typeface**：每个 run 写 `a:latin`=Noto Sans、`a:ea`=Source Han Sans CN、`a:cs`=Noto Sans。PowerPoint/WPS 按字符脚本自动选字体：数字/字母走 latin（Noto Sans，字形干净），中文走 ea（思源黑体）。为什么不用思源包办拉丁：思源的拉丁字形按汉字混排习惯设计，单独看偏宽偏怪；Noto Sans 与思源同源（Noto Sans CJK = Source Han 的 Google 发行版），搭配视觉一致。
+2. **测量 = 渲染**：`native.measure()`（防溢出的字宽测量）按字符脚本分流——CJK 字符用思源 OTF、拉丁/数字用 Noto Sans TTF 逐字符求和；`preview_pngs`（QA 预览）、`embed_fonts`（嵌入）同样读包内同一组字体文件。`fonts.font_file()` / `latin_font_file()` 解析不到包内文件时才回退系统已装免费字体——**验证脚本必须断言它们返回包内文件**，否则测量与 deck 字体名会静默分叉（msyh 时代就踩过这个坑）。
+3. **模板字体一律接管（按标签分流）**：路线一保留客户版式，但保存前把商业字体替换为免费等价——`remap_typeface(name, tag)` 依据该 typeface 出现在 `a:latin`/`a:cs` 还是 `a:ea` 决定映射目标（拉丁字体名→Noto Sans，中文字体名→思源）；白名单内的免费字体（思源/Noto/MiSans/普惠体/HarmonyOS Sans/站酷免费系…）保留。
+
+   **接管范围 = deck 内任何 typeface 属性**（`remap_presentation` 覆盖四类元素，漏一类就把商业字体留在成品里）：
+
+   | 元素 | 出现位置 | 映射规则 |
+   |---|---|---|
+   | `a:latin` / `a:cs` | run 级 rPr | → Noto Sans |
+   | `a:ea` | run 级 rPr | → 思源黑体 CN |
+   | `a:font script="Hans"` 等 | 主题 fontScheme 按脚本回退（模板默认宋体/ＭＳ Ｐゴシック/新細明體/Times/Arial…） | CJK 脚本（Hans/Hant/Jpan/Hang/Kore…）→思源，其余→Noto Sans |
+   | `a:buFont` | 母版/段落项目符号字体（常写死 Arial） | → Noto Sans |
+   | `a:sym` | 符号字体 | → Noto Sans |
+   | 空的 `a:ea` | 主题 fontScheme | 补成思源黑体 CN（否则继承主题的中文落到查看器默认字体宋体/等线） |
+
+   > ⚠️ **两个曾经踩过的坑**：① `el.tag` 是 lxml 全限定名（`{ns}latin`）而 `remap_typeface` 比的是前缀名（`"a:latin"`）——不转换的话标签分流永远落空，Calibri 会被错换成中文字体；② 只遍历 `a:latin/ea/cs` 会漏掉 `a:buFont`（Arial）和 `a:font script=`（宋体），deck 里仍留商业字体。`verify/verify_font_policy.py` 直接断言"成品里任何 typeface 都不落在免费集合之外"，这类回归会被抓住。
+
+### 9.2 映射表（`fonts.remap_typeface`）
+
+| 模板字体 | 处理 |
+|---|---|
+| 微软雅黑 / Microsoft YaHei / 等线 / 黑体 / 楷体 / 仿宋 / DengXian（出现在 a:ea） | → Source Han Sans CN |
+| 宋体 / SimSun / 华文中宋 等 serif 系 | → Source Han Sans CN（报告标注 `serif_demoted`：许可证优先于字形风格） |
+| Arial / Calibri / Times New Roman / Segoe UI 等（出现在 a:latin/a:cs） | → Noto Sans（免费拉丁字体） |
+| 方正* / 汉仪* / 华康* 等字库品牌（前缀命中） | → Source Han Sans CN |
+| 白名单免费字体 | 原样保留 |
+| 未知字体 | strict 模式（默认）→ Source Han Sans CN；报告列出待审 |
+
+### 9.3 嵌入字体（opt-in）
+
+```python
+generate_from_vi(tpl, content, "out.pptx", embed_fonts=True)   # 路线二
+generate(tpl, spec, "out.pptx", embed_fonts=True)              # 路线一
+```
+
+- 把**两款字体各 Regular+Bold**（共 4 个文件）嵌进 pptx（`ppt/fonts/fontN.fntdata` + `embeddedFontLst` 两款字体各一条 + `embedTrueTypeFonts="1"`），**未装这些字体的电脑（客户机）也能原样渲染**；文件约 +18MB，幂等可重复调用。
+- 默认关闭：未嵌入时打开方会替换字体，但版式不散——单行元素 `word_wrap=False` 硬禁换行 + 0.92 宽度预算兜底（思源与常见 CJK 字体度量兼容）。
+- 要保留模板原字体（客户自有授权的品牌字库）：`generate(..., remap_fonts=False)`。
+
+### 9.4 Python API（`pptx_gen/fonts.py`）
+
+```python
+from pptx_gen import FONT_NAME, font_file, remap_typeface, remap_presentation, embed_fonts
+
+FONT_NAME                    # 'Source Han Sans CN'
+font_file(bold=False)        # 包内 OTF 路径（找不到才回退系统免费字体）
+remap_typeface("微软雅黑")    # -> ('Source Han Sans CN', 'nonfree')
+remap_presentation(prs)      # 全 deck（幻灯片/版式/母版/主题/图表）合规化，返回审计报告
+embed_fonts("out.pptx")      # 嵌入字体，返回 {'embedded': True, 'parts': [...]}
+```
+
+### 9.5 验证
+
+`verify_font_policy.py`（工作区根目录）五道断言：① 包内 OTF 可解析（防静默回退）；② `measure()` 与直接 ImageFont 一致（字体活性）；③ 路线二 deck 内 typeface 只剩 `FONT_NAME`；④ 路线一 deck remap 后同样全免费且报告有记录；⑤ 嵌入后 `embeddedFontLst`/`fntdata`/rels 结构正确、python-pptx 可重开、重复嵌入不叠加。
+
+**安装提示**（发给最终用户的话术）：本 PPT 使用思源黑体（Source Han Sans CN，开源字体，SIL OFL 1.1，可免费商用）。若未勾选"嵌入字体"且本机未安装，PowerPoint 会自动替换字体，版式不受影响；也可前往 Adobe 官方仓库免费下载安装。

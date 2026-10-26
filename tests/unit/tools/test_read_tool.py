@@ -666,6 +666,93 @@ class TestOfficeRouting:
 class TestEncodingDetection:
     """编码检测测试"""
 
+    @pytest.mark.parametrize("text", [
+        "+1.5%\n+6.7%\nHeadcount growth +20% YoY\nWeb traffic trend +800% QoQ",
+        "员工人数 272\n增长 +1.5%\nنمو +6.7%",
+        "A" * 8191 + "中\n增长 +19.8%",
+        "Growth\x00+1.5%\nHeadcount growth +20% YoY",
+    ], ids=["literal-percentages", "multilingual", "utf8-sample-boundary", "nul-with-utf7-guess"])
+    @pytest.mark.asyncio
+    async def test_valid_utf8_preserves_evidence_despite_utf7_guess(self, tmp_path, text):
+        """UTF-7猜测不能改变有效UTF-8原文，包括跨采样边界的字符。"""
+        from src.tools.file.read_tool import ReadTool
+
+        tool = ReadTool()
+        path = tmp_path / "evidence.txt"
+        path.write_bytes(text.encode("utf-8"))
+        with patch.object(tool, "_detect_encoding", return_value="utf-7"):
+            result = await tool.execute(file_path=str(path))
+
+        assert isinstance(result, dict)
+        restored = [line.partition("\t")[2] for line in result["content"].splitlines()]
+        assert restored == text.splitlines()
+
+    @pytest.mark.parametrize("encoding,bom", [
+        ("utf-16-le", b"\xff\xfe"),
+        ("utf-16-be", b"\xfe\xff"),
+    ])
+    @pytest.mark.asyncio
+    async def test_utf16_bom_keeps_legacy_decoding(self, tmp_path, encoding, bom):
+        """严格UTF-8失败后，仍按显式UTF-16 BOM读取既有文件。"""
+        from src.tools.file.read_tool import ReadTool
+
+        text = "员工人数 272\n增长 +1.5%"
+        path = tmp_path / "utf16.txt"
+        path.write_bytes(bom + text.encode(encoding))
+        result = await ReadTool().execute(file_path=str(path))
+
+        assert isinstance(result, dict)
+        restored = [line.partition("\t")[2] for line in result["content"].splitlines()]
+        assert restored == ("\ufeff" + text).splitlines()
+
+    @pytest.mark.parametrize("encoding", ["utf-16-le", "utf-16-be"])
+    @pytest.mark.asyncio
+    async def test_utf16_without_bom_keeps_legacy_decoding(self, tmp_path, encoding):
+        """NUL填充的UTF-16英文文件不能因也合法于UTF-8而失去既有识别。"""
+        from src.tools.file.read_tool import ReadTool
+
+        text = "Employees 272\r\nGrowth +1.5%\r\n\r\nEnd\r\n" * 20
+        path = tmp_path / "utf16-without-bom.txt"
+        path.write_bytes(text.encode(encoding))
+        result = await ReadTool().execute(file_path=str(path))
+
+        assert isinstance(result, dict)
+        restored = [line.partition("\t")[2] for line in result["content"].splitlines()]
+        assert restored == text.splitlines()
+
+    @pytest.mark.asyncio
+    async def test_saved_utf8_percentages_survive_executor_pagination(self, tmp_path, monkeypatch):
+        """模型经真实Read分页看到的百分比必须与保存来源逐行相同。"""
+        from src.services.web_search.evidence import publish_research_result
+        from src.tools.context import ToolExecutionContext, tool_execution_scope
+        from src.tools.executor import ToolExecutor
+        from src.tools.file.read_tool import ReadTool
+        from src.tools.registry import ToolRegistry
+
+        monkeypatch.setenv("AGENT_RUNNER_STORAGE_ROOT", str(tmp_path / "storage"))
+        context = ToolExecutionContext(tenant_id="read_utf8", user_id="reader", session_id="evidence")
+        body = "\n".join(f"{i:04} +1.5% +6.7% +19.8% +65.9% +800% growth" for i in range(400))
+        with tool_execution_scope(context):
+            source = publish_research_result({"success": True, "results": [{
+                "url": "https://example.com/workforce", "content": body, "content_kind": "full_text",
+            }]})["results"][0]
+        tool = ReadTool()
+        registry = ToolRegistry()
+        registry.register(tool)
+        executor = ToolExecutor(registry)
+        restored, offset, pages = [], 1, 0
+        with patch.object(tool, "_detect_encoding", return_value="utf-7"):
+            while offset <= len(body.splitlines()):
+                result = await executor.execute("read", {"file_path": source["body_file_path"], "offset": offset}, context=context)
+                assert isinstance(result, dict) and result["read_lines"] > 0
+                restored.extend(line.partition("\t")[2] for line in result["content"].splitlines())
+                offset += result["read_lines"]
+                pages += 1
+
+        assert pages > 1
+        assert restored == body.splitlines()
+        assert Path(source["body_file_path"]).read_bytes() == body.encode("utf-8")
+
     @pytest.mark.asyncio
     async def test_gbk_file(self, tmp_path):
         """GBK 编码文件读取"""

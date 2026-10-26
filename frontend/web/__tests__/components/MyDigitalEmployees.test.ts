@@ -55,6 +55,18 @@ vi.mock('@/components/AppHeader.vue', () => ({
   }),
 }))
 
+// 定制弹框 stub：暴露 open 状态便于断言（真实组件较重）
+vi.mock('@/components/TenantAgentCustomizeDialog.vue', () => ({
+  default: defineComponent({
+    name: 'TenantAgentCustomizeDialog',
+    props: ['modelValue', 'tenantId', 'agentId', 'agentName', 'isCopyInstance'],
+    emits: ['update:modelValue', 'changed'],
+    setup(props) {
+      return () => h('div', { class: 'customize-dialog-stub' }, props.modelValue ? 'customize-open' : 'customize-closed')
+    },
+  }),
+}))
+
 // ============== 测试 ==============
 
 import MyDigitalEmployees from '@/components/MyDigitalEmployees.vue'
@@ -245,7 +257,7 @@ describe('MyDigitalEmployees', () => {
     expect(wrapper.text()).not.toContain('API配置')
   })
 
-  it('租户管理员：渲染双按钮和 API配置 入口，点击跳转正确路径', async () => {
+  it('租户管理员：渲染「立即使用 + 定制」双按钮和 API配置 入口，点击定制打开弹框', async () => {
     tenantAdmin.value = { user_id: 'u1', phone: '', username: 'admin', role: 'tenant_admin' }
     routePath.value = '/t/t1/my-agents'
     routeParams.value = { tenant_id: 't1' }
@@ -267,11 +279,12 @@ describe('MyDigitalEmployees', () => {
     expect(buttons.length).toBe(2)
     expect(wrapper.text()).toContain('API配置')
 
-    // 点击「定制提示词」跳转编辑器
-    const customizeBtn = buttons.find(b => b.text() === '定制提示词')
+    // 点击「定制」打开定制弹框（旧版「定制提示词」跳转 /agent/:name/prompt 已退役）
+    const customizeBtn = buttons.find(b => b.text() === '定制')
     expect(customizeBtn).toBeTruthy()
+    expect(wrapper.text()).not.toContain('customize-open')
     await customizeBtn!.trigger('click')
-    expect(routerPush).toHaveBeenCalledWith('/t/t1/agent/trade-specialist/prompt')
+    expect(wrapper.text()).toContain('customize-open')
   })
 
   it('平台管理员：点击「API配置」跳转连接中心', async () => {

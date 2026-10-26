@@ -15,6 +15,8 @@
 | Phase 5 | 独立验证、CR、发布前检查与验收材料 | ✅ 完成（2026-10-22） | 六项及追加边界修复；最终独测/CR/主控检查通过，结果见第17节；未提交或部署 |
 | 后续验收 | agent2/真实Runtime与wecom、持续时长观察 | 📋 待开发 | 尚未提交、推送或部署；需用户后续明确指示后进行，不代表多天已验 |
 
+2026-10-26配置智能体持续群聊联动在[W6计划](plan-wecom-cli-group-chat-experiment.md#w6-配置智能体完整链路2026-10-26)完成隔离开发验收：复用现有sleep/continuous/history与用量，补独立群游标、配置入口和原设备固定；独测PG76通过，CR问题均闭环。隔离新Worker/Runtime/MCP验证不等于真实群或多天验收；旧pytest入口安全风险单独登记W9。此次不提交、部署或恢复监听。
+
 > 日期：2026-10-22；设计：[通用持久化休眠与自动唤醒](../system/agent-runner-durable-sleep-design.md)；上位：[现行 Runner 架构](../system/agent-application-architecture-design.md)、[共同契约](../system/runner-desktop-runtime-integration-contract.md)。
 >
 > 2026-10-22最新授权：用户明确要求在wecom工作树按计划开发，先同步master，再走开发、独立测试与CodeReview；禁止提交和部署。此前仅设计的限制已被本轮授权替代，旧文档检查记录仍只代表当时状态。

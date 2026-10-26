@@ -4,6 +4,10 @@ Regression: a copy instance (agent_id != base_agent_id) carries no subscription
 row of its own; the authorizer must resolve it to base_agent_id before the
 subscriptions / user_agent_permissions checks, otherwise tenant-portal chat
 submissions fail with PROFILE_FORBIDDEN (403).
+
+User-level permission accepts either the requested instance agent_id or the
+resolved base_agent_id: the admin permission UI writes user_agent_permissions
+rows by instance agent_id, while historical rows may bind to either form.
 """
 import uuid
 
@@ -203,6 +207,55 @@ def test_user_permission_check_also_binds_to_base_agent(
         cursor.execute(
             "INSERT INTO user_agent_permissions (user_id, agent_id, tenant_id) VALUES (%s, %s, %s)",
             (user_id, base, tenant_id))
+    try:
+        allowed(authorizer, service_database, tenant_id, copy_id, user={"role": "user", "user_id": user_id})
+        service_database.rows("DELETE FROM user_agent_permissions WHERE user_id=%s", (user_id,))
+        rejected(authorizer, service_database, tenant_id, copy_id, user={"role": "user", "user_id": user_id})
+    finally:
+        with service_database.connect() as connection, connection.cursor() as cursor:
+            cursor.execute("DELETE FROM user_agent_permissions WHERE user_id=%s", (user_id,))
+            cursor.execute("DELETE FROM users WHERE user_id=%s", (user_id,))
+
+
+def test_instance_row_does_not_grant_sibling_or_base(
+        authorizer, service_database, instance_tenant):
+    """An instance-scoped grant must stay on that instance: a sibling copy of
+    the same base and the base agent itself stay 403 (IN list is bounded to the
+    requested profile and its resolved base, never other instance rows)."""
+    tenant_id, base, copy_id, _, archived_id = instance_tenant
+    suffix = uuid.uuid4().hex
+    user_id = f"runner_inst_user_{suffix}"
+    with service_database.connect() as connection, connection.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO users (user_id, tenant_id, role, status, username) VALUES (%s, %s, 'user', 'active', %s)",
+            (user_id, tenant_id, user_id))
+        cursor.execute(
+            "INSERT INTO user_agent_permissions (user_id, agent_id, tenant_id) VALUES (%s, %s, %s)",
+            (user_id, copy_id, tenant_id))
+    try:
+        rejected(authorizer, service_database, tenant_id, archived_id, user={"role": "user", "user_id": user_id})
+        rejected(authorizer, service_database, tenant_id, base, user={"role": "user", "user_id": user_id})
+    finally:
+        with service_database.connect() as connection, connection.cursor() as cursor:
+            cursor.execute("DELETE FROM user_agent_permissions WHERE user_id=%s", (user_id,))
+            cursor.execute("DELETE FROM users WHERE user_id=%s", (user_id,))
+
+
+def test_user_permission_on_instance_id_also_grants(
+        authorizer, service_database, instance_tenant):
+    """Regression: the permission UI writes user_agent_permissions by instance
+    agent_id only; a plain user must pass when requesting that same instance,
+    and must fail again once the row is removed (guards against a wildcard IN)."""
+    tenant_id, base, copy_id, _, _ = instance_tenant
+    suffix = uuid.uuid4().hex
+    user_id = f"runner_inst_user_{suffix}"
+    with service_database.connect() as connection, connection.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO users (user_id, tenant_id, role, status, username) VALUES (%s, %s, 'user', 'active', %s)",
+            (user_id, tenant_id, user_id))
+        cursor.execute(
+            "INSERT INTO user_agent_permissions (user_id, agent_id, tenant_id) VALUES (%s, %s, %s)",
+            (user_id, copy_id, tenant_id))
     try:
         allowed(authorizer, service_database, tenant_id, copy_id, user={"role": "user", "user_id": user_id})
         service_database.rows("DELETE FROM user_agent_permissions WHERE user_id=%s", (user_id,))

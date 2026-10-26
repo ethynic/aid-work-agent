@@ -3,9 +3,9 @@
 import asyncio
 import os
 import threading
-import traceback
-from datetime import datetime
-from typing import Optional, Dict
+import time
+from datetime import datetime, timedelta
+from typing import Any, Optional, Dict
 
 from loguru import logger
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -18,10 +18,59 @@ from src.scheduler.executor import ScheduledTaskExecutor
 from src.core.redis_client import redis_client
 from src.core.cache_utils import CacheKeys
 
+# 一次性任务过期宽限：与 job_defaults.misfire_grace_time 一致。
+# run_time 落在宽限内仍允许注册（APScheduler 会补跑）；超出宽限视为过期任务，
+# 显式作废（status=expired）而不是永远挂着——否则每次进程重启都会重注册一次
+# 过去时间的 DateTrigger，反复刷「Run time of job ... was missed」WARNING。
+_ONCE_MISFIRE_GRACE_SECONDS = 300
+
+# parse_run_datetime 兼容的时间格式（LLM 常见输出：缺秒 / T 分隔 / 斜杠日期）
+_RUN_AT_FORMATS = (
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d %H:%M",
+    "%Y/%m/%d %H:%M:%S",
+    "%Y/%m/%d %H:%M",
+)
+
+
+def parse_run_datetime(value: Any) -> Optional[datetime]:
+    """解析一次性任务执行时间为 naive 北京时间 datetime；不可解析返回 None。
+
+    工具层创建时已归一化为 "%Y-%m-%d %H:%M:%S"，这里兼容存量行与 LLM 变体输出；
+    带时区的时间换算到 Asia/Shanghai 后去时区（调度器时区即 Asia/Shanghai）。
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    for fmt in _RUN_AT_FORMATS:
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if text.count(":") == 0:
+        # 纯日期串（fromisoformat 接受 "2026-10-20"）会解析成当天 00:00，
+        # 与创建端「必须向用户确认具体时间」口径不符，视为不可解析
+        return None
+    if dt.tzinfo is not None:
+        try:
+            from zoneinfo import ZoneInfo
+            dt = dt.astimezone(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
+        except Exception:
+            return None
+    return dt
+
 # 全局单例
 _executor = ScheduledTaskExecutor()
 # 分布式锁 key（走 make_key 自动拼接 REDIS_KEY_PREFIX，避免裸键）
 _SCHEDULER_LOCK_KEY = redis_client.make_key(CacheKeys.SCHEDULER_LOCK, "manager")
+# 锁重试接管间隔（强杀残留幽灵锁场景：TTL 300s 过期后重试即可抢到）
+_LOCK_RETRY_SECONDS = 30
 
 
 def _ensure_any_session_scenario_registered() -> bool:
@@ -56,6 +105,8 @@ class ScheduledTaskManager:
         self._jobs: Dict[str, str] = {}  # task_id -> apscheduler job_id
         self._running = False
         self._lock_value: Optional[str] = None
+        # 锁重试接管线程（强杀残留幽灵锁场景）；None=未启动，启动成功后自然退出
+        self._retry_thread: Optional[threading.Thread] = None
         # reconcile 对账缓存：task_id -> 最近一次注册时的签名 tuple
         # 签名按 (schedule_type, cron, interval, status, updated_at) 计算，
         # 仅当签名变化时才重注册，避免每 30s 重置 interval 计时
@@ -72,12 +123,22 @@ class ScheduledTaskManager:
             self._lock_value = f"{os.getpid()}:{threading.current_thread().ident}"
             acquired = redis_client.acquire_lock(_SCHEDULER_LOCK_KEY, self._lock_value, ex=300)
             if not acquired:
-                logger.info("后端日志：定时任务调度器已在其他 worker 中运行，当前 worker 跳过启动")
+                # 锁被占：可能为强杀残留的幽灵锁（TTL 300s 过期后可接管），起后台
+                # 线程重试接管，不直接放弃（否则锁过期后无人再尝试，调度器永久停摆）
+                logger.info(
+                    f"后端日志：定时任务调度器锁被占（可能为强杀残留幽灵锁），"
+                    f"后台每 {_LOCK_RETRY_SECONDS}s 重试接管 lock_owner={self._lock_value}"
+                )
+                self._start_acquire_retry_thread()
                 return
         except Exception as e:
             logger.warning(f"后端日志：分布式锁获取失败，继续启动调度器: {e}")
             self._lock_value = None
 
+        self._start_scheduler_locked()
+
+    def _start_scheduler_locked(self):
+        """抢锁成功后的启动主体：构造调度器 → 加载注册任务 → 启动 → 系统任务。"""
         self._scheduler = BackgroundScheduler(
             timezone="Asia/Shanghai",
             job_defaults={
@@ -92,8 +153,12 @@ class ScheduledTaskManager:
         registered_count = 0
         for task in active_tasks:
             try:
-                self._register_job(task)
-                registered_count += 1
+                if self._register_job(task):
+                    registered_count += 1
+                    # 启动注册后即记签名，否则首轮 reconcile 会把刚注册的任务
+                    # 再重注册一次（过期 once 任务因此每重启刷两条 missed）。
+                    # 作废任务不填：状态已置 expired，后续 reconcile 不再拉取
+                    self._reconcile_seen[task["task_id"]] = self._task_signature(task)
             except Exception as e:
                 logger.opt(exception=True).error(f"后端日志：注册定时任务失败 task_id={task['task_id']}, {e}")
 
@@ -104,6 +169,34 @@ class ScheduledTaskManager:
         self._register_system_jobs()
 
         logger.info(f"后端日志：定时任务调度器已启动，已注册 {registered_count} 个活跃任务")
+
+    def _start_acquire_retry_thread(self):
+        """启动锁重试接管线程（已有存活线程则不重复起，防双跑）。"""
+        if self._retry_thread is not None and self._retry_thread.is_alive():
+            return
+        self._retry_thread = threading.Thread(
+            target=self._acquire_retry_loop,
+            args=(self._lock_value,),
+            daemon=True,
+            name="scheduler-lock-retry",
+        )
+        self._retry_thread.start()
+
+    def _acquire_retry_loop(self, lock_value: str):
+        """后台重试接管调度锁（幽灵锁残留场景）：锁 TTL 过期后 acquire 成功即补启动。
+
+        while not self._running 保证：补启动成功（或调度器已被其他途径启动）后
+        线程自然退出，不会在调度器运行期间重复抢锁导致双跑。
+        """
+        while not self._running:
+            time.sleep(_LOCK_RETRY_SECONDS)
+            try:
+                if redis_client.acquire_lock(_SCHEDULER_LOCK_KEY, lock_value, ex=300):
+                    self._lock_value = lock_value
+                    self._start_scheduler_locked()
+                    return
+            except Exception as e:  # noqa: BLE001 单轮异常不终止重试
+                logger.warning(f"后端日志：定时任务调度器锁重试接管失败（继续等待）: {e}")
 
     def _register_system_jobs(self):
         """注册系统级定时任务"""
@@ -263,6 +356,21 @@ class ScheduledTaskManager:
             logger.info("后端日志：已注册工作成果复盘任务 (cron=02:30)")
         except Exception as e:
             logger.error(f"后端日志：注册工作成果复盘任务失败: {e}")
+
+        # ===== 定时任务补投记录清理（每日 04:45）=====
+        # pending 超 3 天置 expired（客户 48h 窗口早已关闭）；sent/expired 保留 7 天后清除
+        try:
+            self._scheduler.add_job(
+                self._run_delivery_cleanup,
+                CronTrigger(hour=4, minute=45, timezone="Asia/Shanghai"),
+                id="job_system_delivery_cleanup",
+                name="Scheduled Task Delivery Cleanup",
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("后端日志：已注册定时任务补投记录清理任务 (cron=04:45)")
+        except Exception as e:
+            logger.error(f"后端日志：注册定时任务补投记录清理任务失败: {e}")
 
         # ===== 视频生成状态轮询（每 30s，只在 background_runner 进程跑）=====
         # 设计文档 docs/system/content-production/mvp-design.md §10
@@ -576,13 +684,7 @@ class ScheduledTaskManager:
                 # 单任务隔离：一条畸形任务（坏 cron / scheduler 异常）不得中断整轮对账，
                 # 否则会每 30s 卡住所有其他任务的注册/移除/触发。
                 try:
-                    sig = (
-                        t.get("schedule_type"),
-                        t.get("cron_expression"),
-                        t.get("interval_seconds"),
-                        t.get("status"),
-                        str(t.get("updated_at")),
-                    )
+                    sig = self._task_signature(t)
                     if t.get("status") == "active":
                         if self._reconcile_seen.get(tid) != sig:
                             self._register_job(t)  # replace_existing=True 幂等
@@ -998,6 +1100,21 @@ class ScheduledTaskManager:
             except Exception:
                 pass
 
+    def _run_delivery_cleanup(self):
+        """补投记录清理（APScheduler 回调，后台线程执行）。
+
+        pending 超 3 天置 expired（渠道收发窗口早已关闭，补投无意义）；
+        sent/expired 终态记录保留 7 天后删除，控制表体积。
+        """
+        try:
+            from src.scheduler.db import ScheduledTaskDeliveryDB
+            expired = ScheduledTaskDeliveryDB.expire_stale(older_than_days=3)
+            deleted = ScheduledTaskDeliveryDB.cleanup_retention(keep_days=7)
+            if expired or deleted:
+                logger.info(f"后端日志：补投记录清理完成 expired={expired}, deleted={deleted}")
+        except Exception as e:
+            logger.opt(exception=True).error(f"后端日志：补投记录清理失败: {e}")
+
     # ===== 视频生成状态轮询回调（async，每 30s）=====
     def _run_video_gen_poll(self):
         """视频生成状态轮询（APScheduler 回调，后台线程执行）。
@@ -1097,6 +1214,17 @@ class ScheduledTaskManager:
             logger.opt(exception=True).error(f"后端日志：移除定时任务失败 task_id={task_id}, {e}")
             return False
 
+    @staticmethod
+    def _task_signature(t: dict) -> tuple:
+        """reconcile 变更判定签名（schedule_type/cron/interval/status/updated_at）"""
+        return (
+            t.get("schedule_type"),
+            t.get("cron_expression"),
+            t.get("interval_seconds"),
+            t.get("status"),
+            str(t.get("updated_at")),
+        )
+
     def _register_job(self, task: dict) -> Optional[str]:
         """注册单个任务到 APScheduler"""
         task_id = task["task_id"]
@@ -1114,16 +1242,36 @@ class ScheduledTaskManager:
 
         # 构建 trigger
         if schedule_type == "once":
-            # 一次性任务：使用 cron_expression 中存储的 datetime
-            if cron_expression:
-                try:
-                    run_time = datetime.strptime(cron_expression, "%Y-%m-%d %H:%M:%S")
-                    trigger = DateTrigger(run_date=run_time)
-                except ValueError:
-                    trigger = CronTrigger.from_crontab(cron_expression, timezone="Asia/Shanghai")
-            else:
-                logger.warning(f"后端日志：一次性任务缺少执行时间 task_id={task_id}")
+            # 一次性任务：cron_expression 存储执行时间 datetime。
+            # 缺失/不可解析/已过期（超出宽限）的任务永远无法正常触发，显式作废，
+            # 防止每次启动/对账重注册一个过去时间的 DateTrigger 反复刷 missed
+            run_time = parse_run_datetime(cron_expression)
+            if run_time is None:
+                ScheduledTaskDB.update_status(task_id, "expired")
+                logger.warning(
+                    f"后端日志：一次性任务缺少有效执行时间，已作废 "
+                    f"task_id={task_id}, cron_expression={cron_expression!r}"
+                )
                 return None
+            if run_time < datetime.now() - timedelta(seconds=_ONCE_MISFIRE_GRACE_SECONDS):
+                ScheduledTaskDB.update_status(task_id, "expired")
+                logger.warning(
+                    f"后端日志：一次性任务执行时间已过且超出宽限，已作废 "
+                    f"task_id={task_id}, run_time={run_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+                return None
+            if run_time <= datetime.now() and task.get("last_run_at"):
+                # 已执行过但未收尾（执行失败的 once 任务 update_after_run 会刷
+                # last_run_at 且 status 仍 active）：宽限内若再注册，APScheduler
+                # 会补跑过去时间的 DateTrigger，叠加 executor 的 60s 重试线程
+                # 造成重复执行/重复计费。执行过即不再补跑，直接作废。
+                ScheduledTaskDB.update_status(task_id, "expired")
+                logger.warning(
+                    f"后端日志：一次性任务已执行过且未成功收尾，不再补跑，已作废 "
+                    f"task_id={task_id}, run_time={run_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+                return None
+            trigger = DateTrigger(run_date=run_time)
         elif schedule_type == "interval" and interval_seconds:
             trigger = IntervalTrigger(seconds=interval_seconds)
         elif cron_expression:

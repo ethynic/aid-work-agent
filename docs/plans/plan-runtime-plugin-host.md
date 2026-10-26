@@ -1,5 +1,9 @@
 # Runtime 执行环境、插件宿主与可视化客户端开发计划
 
+2026-10-26完整master整合：wecom工作树已将1721707f（含历史信任根>16修复、共享窗口恢复及BOSS0.3.27）整合为未提交merge，W6未提交修改保留。Runtime/CLI/BOSS/Web构建及独立组合验证完成，CR无新增未决问题，3项旧Runtime清单/digest断言仍失败；升级水位幂等补齐另经真实存量PG验收。结果唯一见[WeCom整合计划](plan-wecom-cli-group-chat-experiment.md#最新master与runtime核查2026-10-26用户追问后补核)，未部署、安装或恢复监听，不等于已安装版本验收。
+
+2026-10-26 W6检查点：按[共同契约2.10](../system/runner-desktop-runtime-integration-contract.md)新增只读wecom_group_poll及scoped文本发送group_cursor能力门禁，复用原Runtime调度/锁/outbox，不新增本地loop。设备私有标记由Runner唯一写入，旧CLI新工具零派发拒绝；实现/隔离验收唯一见[W6计划](plan-wecom-cli-group-chat-experiment.md#w6-配置智能体完整链路2026-10-26)，禁止部署或恢复监听。
+
 2026-10-26 wecom对账检查点：按[共同契约2.9 §5.7](../system/runner-desktop-runtime-integration-contract.md#57-wecom发送对账接线2026-10-26)追加业务工具wecom_send_status schema v1，沿原只读operation与固定原发送/设备scope；MCP/core主控、local_tools后端角色各自限域写入，实际范围/结果唯一登记在[wecom计划](plan-wecom-cli-group-chat-experiment.md#2026-10-26-mcp与runtime发送对账接线)。Device/Host/H3/Runner公开wire、原unknown/hold及outbox不变，不自动解除verification等待；旧CLI明确拒绝新能力并保留旧六工具。本地接线及独立TEST/CR已完成（PG63、TS32、单测173通过另2旧BOSS基线失败）；无提交/部署，真实群聊、长期运行及新Desktop UI未验收。
 
 2026-10-22休眠检查点：按[共同契约2.8 §5.6](../system/runner-desktop-runtime-integration-contract.md#56-通用持久化休眠增量2026-10-22)由Runner工作流实现云端持久化timer/continuous，唯一进度见[休眠计划](plan-agent-runner-durable-sleep.md#13-本轮实施基线与共同检查点)。Runtime/Device/Host/Provider无新sleep wire或本地loop；已有invocation队列/桌面锁和固定release规则保持，真实多任务接线验收单独记录，不能由云端单测代替。

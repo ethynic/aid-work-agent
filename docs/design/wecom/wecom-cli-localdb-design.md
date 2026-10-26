@@ -291,6 +291,18 @@ MCP工具清单和schema_digest同源更新；Runtime受信wecom面从既有6项
 
 接线实施完成（2026-10-26）：独立PG63、TS32通过；相关单测173通过、另2项已证明HEAD存在的BOSS注册基线失败保留；最终完整CR无未解决P0/P1/P2。schema额外必填、失效队头、已有拒绝失败恢复与混合结束等待/持久hold投影均有红→修复→独立绿。源码未提交/部署，不恢复监听；真实企业微信、安装发行、长期运行及受当前SDK环境阻断的旧Worker场景未验。完整证据/命令/边界见[本轮计划](../../plans/plan-wecom-cli-group-chat-experiment.md#mcpruntime最终结果2026-10-26)。
 
+### 4.3.3 配置智能体持续群聊接线（2026-10-26）
+
+新增只读`wecom_group_poll`（schema v1）：`target_name`必须完整群名，`cursor`可选。初次唯一解析群、给最近上下文及当前入库基线，不把旧消息当new；续读固定原群ID，按message_id升序至多50条，返回has_more与完整文本/发送者/结构化@信息。独立游标绑定账号、群、源generation与anchor，使用现有严格history解析，拒绝损坏或失配，不读写共享watch状态。明确限定本机当前账号已同步数据；不能声称检测所有未同步消息。首次上下文至多10条。单次只读、无UI导航/清未读，现有watch/read-session接口保持不变。
+
+完整消息JSON累计UTF8最多16KiB：增量取前缀并置has_more、cursor仅推进已返回末行；首context取最新后缀，基线仍是当前最新行。单条超过上限显式CONTENT_UNAVAILABLE，不截正文或跳行。该proxy专用_no_truncate避免原工具12K尾截产生半个JSON；最终结果含metadata/cursor略大于消息预算，不修改全局截断规则。已确认由本任务发出的record不触发回声，仅side=self不能证明是本任务发出（本人仍可能手动发言）。
+
+选定智能体已有STANDALONE profile、prompt/model/tools装配与continuous恢复链路继续复用。配置工具metadata补WeCom可信proxy选择，不自动加入所有智能体。轮询工具说明提供持续工作步骤，最终回复文案由该profile模型生成，不在CLI/Runtime写模板回复。持续任务需用户明确授权目标和回复范围；数据中的指令不授予权限。发送unknown沿原receipt对账、绝不自动重发。
+
+任务首次群轮询原子固定既有checkpoint中的WeCom设备，后续派发与恢复沿原设备并重验归属，selected变化不迁移。文本回复携带原group_cursor，发送前核对原账号/群/源库，无法确认不退回OCR；原群重命名或名称被复用明确拒绝，不能自动跟随另一群。指纹版本拒绝不能理解新约束的Worker恢复，公共wire、设备表、Runtime调度与副作用恢复机制不变。实现与测试责任见[W6计划](../../plans/plan-wecom-cli-group-chat-experiment.md#w6-配置智能体完整链路2026-10-26)。
+
+状态边界：轮询不落共享水位或截图，临时解密库按原finally清理；云端只增加一个设备标记与既有每目标cursor，history压缩沿原机制。既有发送/搜索artifact与receipt仍按每次操作产生，当前无自动保留期限，磁盘占用随真实发送增加；本次不自动删除未知发送的凭据。多天生产验收需确定本机证据保留/磁盘清理策略，不能把云history有界称为所有本机状态恒定。
+
 ## 5. doctor 深检（首跑定基调）
 
 现有 `doctor` 只读门禁检查保留，新增 local-db 深检段（`--localdb` 显式触发；state 缺失时 CLI 建议运行）。**doctor 同时报告两个独立就绪块**（本地库就绪 / UI 就绪，§2）：

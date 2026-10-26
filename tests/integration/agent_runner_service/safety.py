@@ -27,7 +27,8 @@ def verify_resource_targets(*, database_name, provider_port):
         configuration = getattr(settings.llm, name)
         assert local_endpoint(configuration.base_url), "Provider endpoint is not fixture-local"
     assert local_endpoint(dashscope.base_http_api_url), "SDK embedding endpoint is not fixture-local"
-    assert local_endpoint(dashscope.base_compatible_api_url), "SDK compatible endpoint is not fixture-local"
+    # Installed DashScope SDK consumes base_http_api_url for embeddings; Qwen's
+    # compatible client consumes settings.llm.qwen.base_url, checked above.
     assert bool(get_embedding_api_key()), "Fixture embedding key was not resolved"
 
     # Validate the parsed module target BEFORE opening a connection, so a bad

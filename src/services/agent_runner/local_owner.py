@@ -48,6 +48,10 @@ class RunnerLocalLifecycle:
                 raise CheckpointFailure('LOCAL_CHILD_OWNER_MISMATCH')
             fact['checkpoint'] = state.checkpoint()
             state, control = control.parent_state, control.parent_control
+        from .wecom_device_binding import RESOURCE
+        marker = row['checkpoint']['execution'].get('resources', {}).get(RESOURCE)
+        if marker is not None:
+            state.resources[RESOURCE] = copy.deepcopy(marker)
         self.root.envelope = copy.deepcopy(row['checkpoint'])
         self.root.revision = row['revision']
         self.root.snapshot = copy.deepcopy(row['public_snapshot'])
@@ -105,6 +109,12 @@ class RunnerLocalLifecycle:
     async def authorize_operation(self):
         """Check the current original owner before selecting a new operation."""
         await self.control.authorize_dispatch(self.state.profile_id)
+
+    def wecom_device_id(self):
+        from .wecom_device_binding import bound_device
+        return bound_device(self.root.envelope['execution'], self.root.attempt.runner_id,
+            {key: getattr(self.state.identity, key) for key in
+                ('tenant_id', 'user_id', 'session_id', 'source', 'session_kind')})
 
     async def bind_invocation(self, *, branch, ordinal, tool_name, device, arguments,
                               provider_key=None, deadline_at=None, authorization_epoch=None,

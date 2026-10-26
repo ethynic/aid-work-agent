@@ -72,7 +72,7 @@ export function withLocalRecovery<Args>(operation: BossOperation<Args>, deps: Lo
   if (!LOCAL_RECOVERY_POLICIES[operation.name]) return operation
   return { name: operation.name, async execute(args, ctx) {
     const continuation: NonNullable<OpContext['recoveryContinuation']> = {}
-    const executionCtx = { ...ctx, recoveryContinuation: continuation }
+    const executionCtx = { ...ctx, recoveryContinuation: continuation, windowCaptureBudget: ctx.windowCaptureBudget ?? { repositionsUsed: 0 } }
     let original: OperationResult
     try { original = await operation.execute(args, executionCtx) }
     catch { original = failResult(randomUUID(), 'INTERNAL_ERROR', '操作未取得结构化结果，执行结果未知', 'unknown') }
@@ -81,17 +81,25 @@ export function withLocalRecovery<Args>(operation: BossOperation<Args>, deps: Lo
     // The domain continuation retains its Reader checkpoint and payloads. It
     // reconnects within this invocation; never re-enter operation.execute or vision.
     let reconnects = 0
+    let nativeReconnects = 0
     let lastCompleted = -1
     const deterministic = LOCAL_RECOVERY_POLICIES[operation.name] !== 'observe_only'
     const transientResult = () => original.code === 'CHROME_UNAVAILABLE'
       || isTransientCdpError(new Error(original.message))
       || isTransientCdpError(new Error(String(dict(dict(original.data.operation_recovery).error).summary ?? '')))
-    while (deterministic && continuation.resume && transientResult() && !ctx.signal.aborted) {
+    const nativeFailure = () => original.effect === 'none'
+      && ['render_widget_hidden', 'render_widget_unavailable', 'foreground_unavailable', 'target_activation_failed'].includes(String(dict(original.data.operation_recovery).native_input_failure))
+    const completedReads = () => Array.isArray(original.data.resumes) ? original.data.resumes.length : 0
+    while (deterministic && continuation.resume
+      && (transientResult() || nativeFailure() && (nativeReconnects < 2 || completedReads() > lastCompleted)) && !ctx.signal.aborted) {
       const completed = Array.isArray(original.data.resumes) ? original.data.resumes.length : 0
-      if (completed > lastCompleted) { reconnects = 0; lastCompleted = completed }
+      if (completed > lastCompleted) { reconnects = 0; nativeReconnects = 0; lastCompleted = completed }
+      const native = nativeFailure()
+      if (native) nativeReconnects++
       const ms = [1000, 2000, 5000, 10000][Math.min(reconnects++, 3)]!
-      ctx.progress({ stage: 'recover', current: completed, message: `浏览器连接暂时中断，正在自动恢复并保留已读取的 ${completed} 份资料（${ms / 1000}秒后重连）` })
-      deterministicSteps.push({ branch: 'transport', code: original.code, completed, backoff_ms: ms })
+      ctx.progress({ stage: 'recover', current: completed, message: `${native ? '浏览器原生窗口暂不可用' : '浏览器连接暂时中断'}，正在自动恢复并保留已读取的 ${completed} 份资料（${ms / 1000}秒后重连）` })
+      deterministicSteps.push({ branch: native ? 'native_window' : 'transport', code: original.code,
+        ...(native ? { native_input_failure: dict(original.data.operation_recovery).native_input_failure } : {}), completed, backoff_ms: ms })
       if (deterministicSteps.length > 10) deterministicSteps.shift()
       try {
         await (deps.sleep ? deps.sleep(ms, ctx.signal) : delay(ms, undefined, { signal: ctx.signal }))
@@ -134,6 +142,7 @@ export function withLocalRecovery<Args>(operation: BossOperation<Args>, deps: Lo
     const observe = async (branch: string, visualContext: VisualContext, observationMode: 'page' | 'window') => {
       abort()
       const id = (deps.requestId ?? randomUUID)()
+      const repositionsBefore = executionCtx.windowCaptureBudget.repositionsUsed
       let a = assess(await inspect.execute({ request_id: id, visual_context: visualContext, observation_mode: observationMode }, boundCtx))
       const receipt = () => { if (a.visual.receipt && !seen.has(id)) { receipts.push(a.visual.receipt); seen.add(id) } }
       receipt()
@@ -147,14 +156,37 @@ export function withLocalRecovery<Args>(operation: BossOperation<Args>, deps: Lo
       observation.operation_code = a.result.code
       observation.model_called = a.visual.receipt ? true : null
       observation.failure_stage = a.result.success ? undefined : observationMode === 'page' ? 'page_capture_or_diagnosis' : 'window_capture_or_diagnosis'
+      const failure = dict(a.result.data.visual_failure)
+      if (['window_activate', 'window_capture', 'window_read', 'window_identity'].includes(String(failure.stage))) {
+        observation.failure_stage = failure.stage
+        if (['INTERNAL_ERROR', 'UI_CHANGED', 'CHROME_UNAVAILABLE', 'EXECUTION_UNKNOWN', 'CANCELLED'].includes(String(failure.original_code))) observation.original_code = failure.original_code
+        if (['ENOENT', 'EACCES', 'EBUSY', 'ETIMEDOUT'].includes(String(failure.machine_code))) observation.machine_code = failure.machine_code
+        if (['window_outside_screen', 'window_identity_changed', 'window_reposition_failed', 'window_geometry_unavailable', 'window_capture_failed', 'window_capture_cancelled'].includes(String(failure.reason))) {
+          observation.reason = failure.reason
+          const g = dict(failure.geometry)
+          if (['window', 'screen', 'work'].every(k => Array.isArray(g[k]) && (g[k] as unknown[]).length === 4 && (g[k] as unknown[]).every(Number.isSafeInteger))
+            && Number.isInteger(g.dpi) && Number(g.dpi) > 0 && Number(g.dpi) <= 960) observation.geometry = { window: g.window, screen: g.screen, work: g.work, dpi: g.dpi }
+        }
+      }
       const status = a.visual.http_status, error = dict(a.visual.detail).error
       if (status === 401 || status === 403) {
         // Only known public refusals enter tool results; never forward arbitrary detail/debug.
         observation.api_error = typeof error === 'string' && API_REJECTIONS[status]!.includes(error)
           ? error : `视觉恢复接口拒绝访问（HTTP ${status}）`
       }
+      const image = dict(a.data.observation)
+      const captureCompleted = observationMode === 'window' && a.result.success && a.result.code === 'OK'
+        && a.data.browser_target_ref === admitted.target && image.mode === 'window' && image.space === 'window_image_px'
+        && [image.width, image.height].every(value => Number.isSafeInteger(value) && Number(value) > 0)
+        && a.data.recovery_action_error == null
+      const repositionsAfter = executionCtx.windowCaptureBudget.repositionsUsed
+      if (observationMode === 'window') Object.assign(observation, {
+        repositions_before: repositionsBefore, repositions_after: repositionsAfter, capture_completed: captureCompleted,
+      })
       observations.push(observation)
-      return a
+      // A spent budget alone proves only an attempt, including uncertain/failed native moves.
+      return { ...a, repositionedWindowReady: repositionsBefore === 0 && repositionsAfter === 1 && captureCompleted
+        && a.visual.request_id === id && a.visual.diagnosis_error == null && a.visual.action_error == null }
     }
     const resume = async (): Promise<OperationResult> => {
       abort()
@@ -215,7 +247,7 @@ export function withLocalRecovery<Args>(operation: BossOperation<Args>, deps: Lo
       }
       const facts = dict(result.data.operation_recovery)
       const incomplete = result.data.cleanup_error || result.data.recovery || facts.error && dict(facts.verification).status !== 'satisfied'
-      const partial = result.effect === 'partial' || ['failures', 'missing_names', 'ambiguous_names'].some(
+      const partial = result.effect === 'partial' || ['failures', 'missing_names', 'ambiguous_names', 'unavailable_names'].some(
         key => Array.isArray(result.data[key]) && (result.data[key] as unknown[]).length > 0)
       return finish(result, !result.success || incomplete ? 'original_goal_unconfirmed' : partial ? 'recovered_with_partial_result' : 'recovered', { page_restored: true, resumed: true,
         resume_execution: dict(result.data.operation_recovery).execution })
@@ -223,10 +255,23 @@ export function withLocalRecovery<Args>(operation: BossOperation<Args>, deps: Lo
     const appendEvidence = (evidence: string) => { context = { ...context, verification: {
       ...dict(context.verification), evidence: [...dict(context.verification).evidence as string[], evidence].slice(-10) } } }
     let lastState = 'diagnosis_unavailable'
+    const filterDraft = policy === 'page_state' && ['boss_filter', 'boss_clear_filter'].includes(operation.name)
+      && Array.isArray(dict(context.verification).evidence) && (dict(context.verification).evidence as unknown[]).includes('filter_phase=draft_edited')
+    const filterPhases = (dict(context.verification).evidence as string[]).filter(value => value.startsWith('filter_phase='))
+    const filterNotStarted = policy === 'page_state' && ['boss_filter', 'boss_clear_filter'].includes(operation.name)
+      && original.code === 'UI_CHANGED' && original.effect === 'none'
+      && dict(context.execution).stage === 'input' && dict(context.execution).input_status === 'not_started'
+      && filterPhases.length === 1 && filterPhases[0] === 'filter_phase=not_started'
+    const normalFilterControls = new Set(['关闭筛选面板', '收起筛选面板', '取消筛选面板', '筛选面板关闭按钮', '关闭筛选条件面板', '筛选面板右上角关闭按钮'])
     try {
       for (let index = 0; index < 3; index++) {
         const diagnoseContext = { ...context, purpose: 'diagnose', available_actions: ['dismiss_click'] }
         let a = await observe(`step${index}.diagnose`, diagnoseContext, mode)
+        if (filterDraft && mode === 'page' && a.diagnosis?.obstruction === 'absent' && a.diagnosis.goal_state === 'satisfied') return await resume()
+        if (filterDraft && mode === 'page' && a.diagnosis?.obstruction === 'present'
+          && normalFilterControls.has(String(dict(a.diagnosis.proposed_action).target_label))) return await resume()
+        if ((policy === 'readonly' || policy === 'preserve_result') && (dict(context.execution).input_status === 'not_started' || nativeFailure())
+          && a.diagnosis?.obstruction === 'absent' && a.diagnosis.goal_state === 'satisfied') return await resume()
         if (policy === 'observe_only' && a.diagnosis?.obstruction === 'absent' && (mode === 'window' || dict(context.execution).stage !== 'input')) return await resume()
         const captureFailed = !Object.keys(a.visual).length && ['CHROME_UNAVAILABLE', 'UI_CHANGED', 'INTERNAL_ERROR'].includes(a.result.code)
         const unexplained = a.diagnosis && (a.diagnosis.obstruction === 'unknown'
@@ -234,6 +279,14 @@ export function withLocalRecovery<Args>(operation: BossOperation<Args>, deps: Lo
           || a.diagnosis.goal_state !== 'satisfied' && !a.data.recovery_ref)
         if (mode === 'page' && (captureFailed || unexplained)) { mode = 'window'; a = await observe(`step${index}.diagnose.window`, diagnoseContext, mode) }
         if (!a.diagnosis) return finish(original, 'diagnosis_unavailable')
+        if (filterDraft && a.diagnosis.obstruction === 'present'
+          && normalFilterControls.has(String(dict(a.diagnosis.proposed_action).target_label))) return await resume()
+        if (filterNotStarted && continuation.resume && a.repositionedWindowReady
+          && a.diagnosis.obstruction === 'absent' && a.diagnosis.goal_state === 'inconclusive' && a.diagnosis.proposed_action == null) {
+          // Window readiness permits execution; only the fresh domain postcheck can confirm the business goal.
+          steps.push({ branch: 'window_reposition_resume', mode: 'window', input_status: 'not_started' })
+          return await resume()
+        }
         if (a.diagnosis.obstruction === 'absent' && (policy === 'observe_only' || a.diagnosis.goal_state === 'satisfied')) return await resume()
         const action = dict(a.diagnosis.proposed_action)
         if (typeof a.data.recovery_ref !== 'string' || action.kind !== 'dismiss' || a.diagnosis.obstruction !== 'present') return finish(original, 'no_supported_action')

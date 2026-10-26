@@ -13,6 +13,7 @@ import { getTenantScopedKey, type SaasBaseKey } from '@/api/tenantStorage'
 import { credentialGet, credentialRemove, credentialSet } from '@/platform/credentialStore'
 import { prepareIdentityChange } from '@/platform/identityHooks'
 import { useCreditCheck } from './useCreditCheck'
+import { useSubagentList } from './useSubagentList'
 
 export interface TenantAdmin {
   user_id: string
@@ -219,6 +220,8 @@ export function useTenantAuth() {
       admin.value = null
       tenant.value = null
       privateCloud.value = false
+      // 清空数字员工列表缓存，防止换账号登录后命中上一用户的缓存
+      useSubagentList().clearCache()
     }
   }
 

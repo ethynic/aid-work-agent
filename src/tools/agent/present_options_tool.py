@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-PresentOptionsTool - 向用户出示选项卡片
+PresentOptionsTool - 旧任务执行兼容（不再向模型暴露）
 
 在需要用户选择/确认的场景（分阶段工作流确认门、方案二选一等），把问题与候选选项
 返回给前端：web 端在助手消息下方渲染编号按钮，点击即发送对应序号；用户也可直接
-打字回复（序号或自由文本等效）。仅 frontend quickOptions 增强约定：
-工具成功结果带 data.options 数组（≥2 项）即渲染按钮。
+打字回复（序号或自由文本等效）。旧版快捷按钮已停用；保留结果执行以兼容在途
+checkpoint，不再注入工具定义或指南。新任务需要用户选择时统一使用 ask_user。
 """
 
 from typing import Any, Dict, List, Optional

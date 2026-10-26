@@ -140,6 +140,7 @@ export function createBossResumeBatchOperation(
               checkpoint,
               snapshot: () => session.snapshot(RESUME_SNAPSHOT_OPTIONS),
               click: (point, viewport) => session.click(point, viewport),
+              clickBrowse: session.clickBrowse,
               pressEscape: session.pressEscape,
               captureFullpage: session.captureFullpage,
               wheel: (rect, viewport, deltaY, notches) => {
@@ -177,6 +178,7 @@ export function createBossResumeBatchOperation(
                 verification: { status: 'met', evidence: [`逐项处理完成，读取${result.resumes.length}份，失败${result.failures.length}项，停止原因${result.stop_reason}`] } })
             if (result.recovery) {
               facts.error = { code: result.recovery.code, source: result.recovery.execution.stage, summary: result.recovery.summary.slice(0, 1000) }
+              if (result.recovery.nativeInputFailure) facts.native_input_failure = result.recovery.nativeInputFailure
               if (result.resumes.length === 0) operationRecoveryFailure(new CodedOperationError(
                 result.recovery.code as import('./types.js').ErrorCode, result.recovery.summary), facts,
                 { resumes: [], failures, attempted: result.attempted, processed_names: result.processed_names, stop_reason: result.stop_reason })

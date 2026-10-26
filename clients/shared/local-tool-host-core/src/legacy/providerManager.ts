@@ -86,6 +86,8 @@ export class ProviderManager {
   private shuttingDown = false
   private resumeNextSupported: boolean | undefined
   private sendStatusSupported: boolean | undefined
+  private groupPollSupported: boolean | undefined
+  private groupSendSupported: boolean | undefined
   private readonly providerEnv: Record<string, string>
   private readonly nodeExecutable: string
   private readonly baseEnv: Record<string, string>
@@ -199,6 +201,27 @@ export class ProviderManager {
     try {
       await this.ensureStarted()
       const client = this.client!
+      if (name === 'wecom_group_poll' || (name === 'wecom_message_send' && args.group_cursor !== undefined)) {
+        const poll = name === 'wecom_group_poll'
+        const cached = poll ? this.groupPollSupported : this.groupSendSupported
+        let supported = cached
+        if (supported === undefined) {
+          const listed = await client.listTools({}, { signal: opts.signal, timeout: opts.timeoutMs ?? 30_000 })
+          const tool = listed.tools.find(item => item.name === name)
+          const schema = tool?.inputSchema
+          const props = schema?.properties as Record<string, { type?: string }> | undefined
+          const required = schema?.required ?? []
+          supported = poll
+            ? required.length === 1 && required[0] === 'target_name' && props?.['target_name']?.type === 'string'
+              && props?.['cursor']?.type === 'string' && tool?.annotations?.readOnlyHint === true
+            : required.length === 1 && required[0] === 'text' && props?.['group_cursor']?.type === 'string'
+              && props?.['target_name']?.type === 'string' && tool?.annotations?.readOnlyHint === false
+          if (poll) this.groupPollSupported = supported
+          else this.groupSendSupported = supported
+        }
+        if (!supported) return { success: false, code: 'TOOL_NOT_ALLOWED', effect: 'none', retryable: false,
+          run_id: randomUUID(), message: '当前企业微信插件缺少持续群聊的游标或发送目标校验能力，请升级插件；未执行调用' }
+      }
       // A trusted Runtime may be newer than its installed WeCom CLI. Only this new read
       // capability needs a preflight; legacy tools retain their existing lazy call path.
       if (name === 'wecom_send_status') {
@@ -259,6 +282,8 @@ export class ProviderManager {
   private async disposeDead(): Promise<void> {
     this.resumeNextSupported = undefined
     this.sendStatusSupported = undefined
+    this.groupPollSupported = undefined
+    this.groupSendSupported = undefined
     if (!this.client && !this.transport) return
     const pid = this.transport?.pid ?? null
     try {

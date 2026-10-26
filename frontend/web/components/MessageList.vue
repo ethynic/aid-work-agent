@@ -39,7 +39,6 @@
           :message="message"
           :is-processing="isProcessing && index === messages.length - 1 && message.role === 'assistant'"
           :input-hint-state="isProcessing && index === messages.length - 1 && message.role === 'assistant' ? inputHintState : 'idle'"
-          @send="$emit('send', $event)"
         />
         
         <!-- Typing Indicator -->
@@ -81,8 +80,6 @@ const props = withDefaults(defineProps<Props>(), {
 })
 defineEmits<{
   (e: 'quick-prompt', prompt: string): void
-  /** 消息内动作触发的发送（如 §5.1 编号选择按钮），与输入框/空态快捷按钮同链路 */
-  (e: 'send', content: string): void
   (e: 'history', action: 'older' | 'latest'): void
 }>()
 const containerRef = ref<HTMLElement | null>(null)

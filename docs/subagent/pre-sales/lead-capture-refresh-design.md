@@ -278,6 +278,7 @@ def update_transfer_info(lead_id, tenant_id, transferred_to, servicer_name) -> b
 | 9.4 | 意向度判定标准租户级可配置 | 一期固定通用标准写死适配器 prompt | 若运营反馈口径不一，二期仿 pre-sales-api.md 模式下沉租户配置 |
 | 9.5 | 人工期对话是否推送第三方系统 | **Phase 2 已实现（2026-09-16）**：新适配器 `external_push_human`，节流推送（同 lead_refresh 冷却模式，5 分钟冷却按 session 维度）+ 推送时同步客户表转人工字段（zhuanrengongshijian / rengongkefuxingming，多次转人工记录最新）与跟进汇总摘要（genjinhuizongzhaiyao / zhuangtai）+ 不要求留资；入口 B `enqueue_lead_refresh` 更名 `enqueue_human_period_tasks`，task_config 含 [lead_refresh, external_push_human] 两任务；推送契约见 10605 文档 §12.6 | — |
 | 9.6 | converted 线索是否继续刷新 | 继续刷新 | 若产品认为成单后无需跟踪，加一行过滤即可 |
+| 9.7 | 对接外部 CRM（qbweb3.1）的租户是否继续意向度分析 | **已决策（2026-10-23）**：运行时守卫跳过——`load_sso_configs(tenant_id)` 非空即 no-op，与前端隐藏「留资线索」Tab 完全同口径（`listExternalSystems` 非空）。检查位于冷却占坑之后（含目录扫描与 DB 查询，避免每条客户消息轮次都执行），查询异常 fail-open 放行分析（守卫是成本优化而非正确性边界）。技能 `requires_recap` 自动补全为平台级声明、保存时无法按租户判断，故不做保存期整改，统一运行时兜底；未对接租户能力完整保留 | 实际背景：客户反馈 qbweb3.1 承担完整 CRM 职能后，意向度/需求分条产出无人消费，分析纯属 LLM 成本浪费 |
 
 ## 10. 分期
 

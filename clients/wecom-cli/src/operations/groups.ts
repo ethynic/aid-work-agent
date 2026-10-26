@@ -7,6 +7,23 @@ import type { LocaldbReadDeps } from '../platform/localdb/readSession.js'
 
 export interface GroupListArgs { query?: string; limit?: number }
 export interface GroupReadArgs { target_name: string; limit?: number; from_time?: string; to_time?: string }
+export interface GroupPollArgs { target_name: string; cursor?: string }
+
+/** One bounded local read; scheduling and cursor persistence belong to Runner. */
+export function createWecomGroupPollOperation(local: LocaldbReadDeps = {}): WecomOperation<GroupPollArgs> {
+  return { name: 'wecom_group_poll', execute: (args, ctx) => runWecomOperation('readonly', ctx, () => {
+    if (!args || typeof args !== 'object' || Array.isArray(args) ||
+        typeof args.target_name !== 'string' || !args.target_name.trim() || args.target_name.length > 100 ||
+        Object.keys(args).some(key => key !== 'target_name' && key !== 'cursor')) return '只接受完整群名target_name及可选cursor'
+    if (args.cursor !== undefined && (typeof args.cursor !== 'string' || !args.cursor || args.cursor.length > 2048)) return 'cursor必须为原轮询游标'
+    return null
+  }, async opCtx => {
+    const current = await (local.probeAccountFn ?? probeCurrentAccount)(opCtx)
+    checkCancelled(opCtx.signal)
+    return queryLocaldbGroups({ targetName: args.target_name.trim(), cursor: args.cursor,
+      limit: args.cursor === undefined ? 10 : 50, poll: true }, opCtx, current, local)
+  }) }
+}
 
 /** 无时区的完整时间固定按北京时间解释；不依赖执行电脑的时区。 */
 export function parseGroupTime(value: string): number {

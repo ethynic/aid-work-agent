@@ -484,6 +484,33 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_task ON scheduled_task_logs(t
 CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_user ON scheduled_task_logs(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_tenant ON scheduled_task_logs(tenant_id, created_at DESC);
 
+-- 定时任务待补投记录表
+-- 渠道场景（wecom_kf）创建的定时任务执行成功后，若直投失败/无直投机会，
+-- 记 pending 等客户下次来消息时补投；status: pending/sent/expired
+CREATE TABLE IF NOT EXISTS scheduled_task_deliveries (
+    id SERIAL PRIMARY KEY,
+    delivery_id TEXT UNIQUE NOT NULL,
+    tenant_id TEXT NOT NULL DEFAULT '',
+    task_id TEXT,
+    user_id TEXT,
+    channel_type TEXT,
+    channel_chat_id TEXT,
+    channel_user_id TEXT,
+    session_id TEXT,
+    content TEXT,
+    status TEXT DEFAULT 'pending',
+    attempts INTEGER DEFAULT 0,
+    last_error TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    delivered_at TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_scheduled_task_deliveries_target
+    ON scheduled_task_deliveries(tenant_id, channel_type, channel_chat_id, channel_user_id, status);
+CREATE INDEX IF NOT EXISTS idx_scheduled_task_deliveries_task
+    ON scheduled_task_deliveries(task_id, created_at DESC);
+
 -- ============== 知识库表 ==============
 
 -- 知识库分类表

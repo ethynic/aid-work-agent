@@ -136,8 +136,8 @@ async def test_timeout_and_cancel_close_client(search_context):
 
 
 @pytest.mark.asyncio
-async def test_default_tavily_never_calls_domestic_providers_even_on_failure(monkeypatch):
-    config = SearchToolConfig(tavily_api_key="unit-tavily", baidu_api_key="unit-baidu")
+async def test_explicit_tavily_never_calls_other_providers_even_on_failure(monkeypatch):
+    config = SearchToolConfig(provider="tavily", tavily_api_key="unit-tavily", baidu_api_key="unit-baidu")
     monkeypatch.setattr(search_tool, "settings", SimpleNamespace(tools=SimpleNamespace(search=config)))
     baidu_search, zhipu_search = AsyncMock(), AsyncMock()
     monkeypatch.setattr(baidu.BaiduProvider, "search", baidu_search)
@@ -147,7 +147,7 @@ async def test_default_tavily_never_calls_domestic_providers_even_on_failure(mon
     result = await WebSearchTool().execute(keyword="查询", provider="baidu")
     assert not result["success"] and primary.await_count == 1
     baidu_search.assert_not_called(); zhipu_search.assert_not_called()
-    assert set(registry.PROVIDER_FACTORIES) == {"tavily", "baidu", "zhipu"}
+    assert set(registry.PROVIDER_FACTORIES) == {"deepseek", "tavily", "baidu", "zhipu"}
 
 
 def test_baidu_key_config_does_not_enable_baidu(monkeypatch, tmp_path):

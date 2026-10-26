@@ -20,6 +20,7 @@ export interface SendCommandOptions {
   targetName?: string
   subtitle?: string
   text?: string
+  groupCursor?: string
   /** true 时 stdout 最后一行输出 OperationResult JSON */
   json?: boolean
 }
@@ -34,6 +35,7 @@ export async function sendCommand(opts: SendCommandOptions): Promise<number> {
     ...(opts.targetName !== undefined ? { target_name: opts.targetName } : {}),
     ...(opts.subtitle !== undefined ? { subtitle: opts.subtitle } : {}),
     text: opts.text as string,
+    ...(opts.groupCursor === undefined ? {} : { group_cursor: opts.groupCursor }),
   }
   return runCliOperation(entry.operation, args, { exclusive: true, json: opts.json })
 }

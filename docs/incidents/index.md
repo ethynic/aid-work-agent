@@ -7,6 +7,11 @@
 
 | 故障主题 | 文档 | 摘要 |
 |---------|------|------|
+| 数字员工实例入口普通用户消息 403 与数据分析「没有数据」误报 | [tenant-instance-agent-403-incident-20261026.md](tenant-instance-agent-403-incident-20261026.md) | 2026-10-26 agent2：授权按实例 ID 写 user_agent_permissions、runner `_profile` 归并 base 后查询致 PROFILE_FORBIDDEN 403（修复=权限查询兼容实例/base 双 ID，已开发待提交）；10-23「没有数据」为主智能体会话按名单看不到受限数据表（设计内），403 修复后经实例入口即正常 |
+| 诺度wecom_kf客户发消息红色感叹号（腾讯侧未收消息） | [wecom-kf-customer-send-failure-20261025.md](wecom-kf-customer-send-failure-20261025.md) | 2026-10-25 15:00起：我方回调/sync/出站全正常，客户消息未进腾讯系统（10-25 14:38后仅enter_session无text/voice）；servicer/list对全部kfid报95000，疑企微后台「通过API管理」被关；排查中待诺度管理员反馈 |
+| 发版强杀残留 Redis 锁致后台调度器全部永久罢工（宏陶商城同步停摆 44h） | [scheduler-ghost-lock-stall-20261021.md](scheduler-ghost-lock-stall-20261021.md) | 2026-10-21 生产发版：旧容器 7s 内被强杀未释放调度锁，新容器启动一次性抢锁失败即永久放弃，hongtao_shop/wechat_mp/腾讯文档/主定时任务 4 个调度器全灭且不自愈；修复 = 抢锁失败仍启动驱动循环自愈接管 |
+| 2026-10-23 BOSS问题统一开发交接 | [boss-agent2-issues-and-minimal-repair-handoff-20261023.md](boss-agent2-issues-and-minimal-repair-handoff-20261023.md) | 0.3.27原会话单调用归位续做、随后续读入库均已真验。 |
+| agent2页面正常但续筛被隐藏渲染窗口守卫拒绝 | [boss-render-widget-hidden-recovery-gap-20261023.md](boss-render-widget-hidden-recovery-gap-20261023.md) | 2026-10-23：Win32零输入拒绝未进入确定性恢复，网页诊断正常仍转窗口诊断失败，非CDP读取超时。 |
 | 招聘筛选235秒慢操作与登录后恢复封锁 | [recruiting-runtime-filter-timeout-and-resume-blocked-20261020.md](recruiting-runtime-filter-timeout-and-resume-blocked-20261020.md) | 2026-10-20：慢输入待后续；存量未知执行已支持受管资源停稳解锁，独立验证通过。 |
 | 数字员工定制弹框扩展提示词不回显：迁移块原地改写致错键数据残留 | [tenant-agent-instance-migration-drift-incident.md](tenant-agent-instance-migration-drift-incident.md) | 2026-10-16 测试环境：10-14 迁移块草稿版落库后原地改写但 datetime 未变，水位已过的库永久漏跑，直用实例行 agent_id 错用 tenant_id 致弹框/列表覆盖项命不中（运行时靠 registry 回退掩盖）；补偿块纠偏结构与数据 + 运行时收敛为实例行权威（空即清空） |
 | Web 会话 subagent_id 为空显示「主智能体」 | [web-session-subagent-display-mislabel-incident.md](web-session-subagent-display-mislabel-incident.md) | 2026-09-07 生产：隐式建会话不写 subagent_id 致显示错标，实际执行/计费均正确（after-sales）；2026-10-16 复核问题已不存在，残余风险=隐式建会话路径仍不回写，新增聊天入口需检查 |

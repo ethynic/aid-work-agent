@@ -2,7 +2,7 @@
 name: spec-to-quotation-list
 description: 把任意设计手册 / 设计规范 / FF&E 规范 / 材料 spec book PDF 转成中英双语「室内材料报价清单」Excel。采用分阶段交互工作流：先扫描文档动态发现「空间」与「大类」，交用户确认/调整（两个确认门）；都通过后，再按确认的结构（空间×大类）生成多份 Excel 清单。每份文件内按产品类别（建材/家具/灯具/窗帘/饰品/标识/洁具五金等）分区并带合计总金额公式；空间名一律用文档真实名称；无真实产品的大类/组合不生成文件；用户声明的大类可跨空间合并为一份全项目文件；供应商名录等非产品条目不进主表。This skill should be used when the user provides a design specification PDF (plus optionally an Excel template) and asks for a material / FF&E / interior quotation list, or asks to split a quotation list by space or category.
 metadata:
-  version: "2.0.0"
+  version: "2.0.1"
   author: aid-work-agent
 dependencies:
   - fitz
@@ -85,7 +85,7 @@ python scripts/discover_structure.py --pdf <spec.pdf> [--items items.json] [--js
 - **候选空间**：主要来自 PDF 目录（所有层级），已标注哪些「像空间」、哪些「像非空间章节（通常只进 Notes）」，并附证据页码与已有条目数（若给了 items.json）。
 - **候选大类**：来自调色板 + 文档关键词/items 命中，`✓` 表示建议保留、`✗` 表示文档未明显提及建议暂不含。
 
-**▶ 必须暂停，把这份清单交给用户确认。** 调用 `present_options` 工具出选项卡片（如「1. 按提案继续 / 2. 大类全要 / 3. 我要调整（请打字说明）」），同时在回复正文给出完整编号清单，用户点按钮或打字回复均可。用户常见的调整：
+**▶ 必须暂停，把这份清单交给用户确认。** 调用 `ask_user` 发起结构化提问：用 `questions` 包含一题 `type=single`、`required=true`，候选项用 `options[].label`（如「按提案继续」「全部候选空间」「我要调整」），保留 `allow_custom_text=true` 供用户填写修改意见；确认门设置 `allow_skip=false`。收到回复后再继续，渠道端沿用提问文字作答。用户常见的调整：
 
 - **重命名**：如把扫描到的 "Public Areas" 按文档真实名保持，或把 "客房" 改回文档里的 "The HappyRoom"。
 - **合并**：如把 Lobby / Reception / Corridor 合并为一个 "Public Areas"。
@@ -99,7 +99,7 @@ python scripts/discover_structure.py --pdf <spec.pdf> [--items items.json] [--js
 
 基于同一次提案的大类部分，交用户确认/调整：可增删大类（如确认要「艺术品」、或不要「机电与设备」）、可重命名（如「硬装材料」保持）。**并主动问用户：哪些大类不按空间拆分、只要一份全项目文件？**（常见：标识 Signage、客用品与易耗品 Amenities → 写进 `global_themes`）
 
-**▶ 再次暂停，确认大类清单**（同样用 `present_options` 出选项卡片 + 正文编号清单）。
+**▶ 再次暂停，确认大类清单**（同样用 `ask_user` 结构化提问，保留自定义输入，确认门不允许跳过）。
 
 确认后，把两份确认结果写成 `$OUT/confirmed_structure.json`：
 
@@ -203,6 +203,10 @@ python scripts/validate.py $OUT/excel [--max-mb 20]
 
 ## 变更记录 Changelog
 
+### v2.0.1（2026-10-23）
+
+两个确认门改用 `ask_user`，等待用户实际作答后继续；旧快捷选项按钮已停用。
+
 ### v2.0.0（2026-09-29，合并 workbuddy v3.1.0 分阶段交互版）
 
 1. **分阶段交互工作流（两个确认门）**：新增 `discover_structure.py` 扫描发现引擎；生成前必须先确认「空间」与「大类」两份清单，确认结果落盘 `confirmed_structure.json`，生成器以 `--structure` 约束只产出确认过的组合。
@@ -210,7 +214,7 @@ python scripts/validate.py $OUT/excel [--max-mb 20]
 3. **新增 `global_themes`（跨空间合并大类）**：标识/客用品等大类可只出 1 份全项目文件。
 4. **非产品条目不进主表**：供应商名录等无数量无单价的条目剔除，另存 suppliers_directory.json。
 5. **保留我方增强**：`merge_items.py` 分批编条目（已适配 items[] 新格式，新增 space/theme/category 必填校验）；`--size-budget-mb` 体积预算自动降质重嵌（生成器 ImageFinder 参数化 + degrade）；validate.py 跳过目录页等非报价工作簿；`$SKILL_TMP_DIR` 运行环境纪律。
-6. 两个确认门用 `present_options` 工具出选项卡片（web 端可点击、渠道端打字回数字）。
+6. 两个确认门当时采用旧非阻塞选项工具，现已由 v2.0.1 统一替换为 `ask_user`。
 
 ### v1.0.0（2026-09 初版）
 

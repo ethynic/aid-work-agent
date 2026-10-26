@@ -72,6 +72,15 @@ def _analysis_json(level="high", reason="主动询价", points=None):
     }, ensure_ascii=False)
 
 
+@pytest.fixture(autouse=True)
+def _no_external_systems(monkeypatch):
+    """默认租户无外部系统入口（守卫放行），避免单测触发真实目录扫描/DB 查询；
+    守卫相关用例自行覆盖该 patch"""
+    monkeypatch.setattr(
+        "src.services.tenant_api_doc.load_sso_configs", lambda tenant_id: []
+    )
+
+
 class TestLeadRefreshAdapter:
     @pytest.mark.asyncio
     async def test_noop_when_no_lead_capture(self):
@@ -280,6 +289,57 @@ class TestEnqueueLeadRefresh:
             mock_redis.rpush.return_value = False
             enqueue_human_period_tasks("tenant_abc", "tenant_abc_wecom_kf_kf1_user1_pre-sales", "msgid_9")
             mock_run.assert_not_called()
+
+
+class TestExternalSystemGuard:
+    """外部系统入口守卫：租户已声明 sso 入口（如 qbweb3.1）时跳过分析"""
+
+    @pytest.mark.asyncio
+    async def test_skip_when_tenant_has_external_system(self):
+        """租户已声明外部系统入口：占坑成功也不分析、不回写、不读消息"""
+        payload = _make_payload()
+        with patch("src.channels.session.channel_session_manager") as mock_mgr, \
+                patch("src.saas.db.lead_capture_db.LeadCaptureDB") as mock_db, \
+                patch("src.services.recap.tasks.lead_refresh.redis_client") as mock_redis, \
+                patch("src.llm.gateway.llm_gateway") as mock_gw, \
+                patch("src.services.tenant_api_doc.load_sso_configs") as mock_sso:
+            mock_mgr.get_session_by_id.return_value = {
+                "metadata": {"lead_capture": {"lead_id": "lead_lc_abc123"}}
+            }
+            mock_db.get_by_id.return_value = _make_lead()
+            mock_redis.acquire_lock.return_value = True
+            mock_sso.return_value = [{"system_id": "pre-sales", "name": "qbweb3.1"}]
+
+            await LeadRefreshAdapter.execute(payload)
+
+            mock_gw.chat_lite.assert_not_called()
+            mock_db.update_analysis.assert_not_called()
+            mock_mgr.get_messages.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fail_open_when_guard_check_errors(self):
+        """守卫检查异常：放行继续分析（守卫是成本优化而非正确性边界）"""
+        payload = _make_payload()
+        response = {"content": _analysis_json(), "usage": None}
+        with patch("src.channels.session.channel_session_manager") as mock_mgr, \
+                patch("src.saas.db.lead_capture_db.LeadCaptureDB") as mock_db, \
+                patch("src.services.recap.tasks.lead_refresh.redis_client") as mock_redis, \
+                patch("src.llm.gateway.llm_gateway") as mock_gw, \
+                patch("src.services.session_record.record_background_llm_usage"), \
+                patch("src.services.tenant_api_doc.load_sso_configs") as mock_sso:
+            mock_mgr.get_session_by_id.return_value = {
+                "metadata": {"lead_capture": {"lead_id": "lead_lc_abc123"}}
+            }
+            mock_mgr.get_messages.return_value = _make_messages()
+            mock_db.get_by_id.return_value = _make_lead()
+            mock_redis.acquire_lock.return_value = True
+            mock_sso.side_effect = RuntimeError("db down")
+            mock_gw.chat_lite = AsyncMock(return_value=response)
+
+            await LeadRefreshAdapter.execute(payload)
+
+            mock_gw.chat_lite.assert_awaited_once()
+            mock_db.update_analysis.assert_called_once()
 
 
 class TestDemandPointsMissingField:

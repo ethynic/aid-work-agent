@@ -30,7 +30,7 @@ class ClarifyTool(BaseTool):
     usage_guide = (
         "阻塞式纯文本追问：信息缺失且问题开放、没有明确候选项时使用（如补全缺失字段）。"
         "有明确候选或需要业务确认时改用 ask_user（阻塞式结构化提问，推荐，用户可点选作答）；"
-        "不阻塞执行的建议按钮用 present_options。"
+        "无需作答的建议直接写在正文中。"
     )
     display_name = "澄清问题"
     category = "agent"

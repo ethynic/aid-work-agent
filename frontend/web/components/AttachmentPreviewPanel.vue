@@ -27,7 +27,7 @@
       <a
         v-if="attachment?.file_id"
         :href="getFileDownloadUrl(attachment.file_id)"
-        download
+        @click="onDownloadClick"
         class="p-1.5 rounded-lg text-gray-400 hover:text-primary-500 hover:bg-primary-50 transition-colors flex-shrink-0"
         title="下载文件"
       >
@@ -69,7 +69,7 @@
         <a
           v-if="attachment?.file_id"
           :href="getFileDownloadUrl(attachment.file_id)"
-          download
+          @click="onDownloadClick"
           class="inline-flex items-center gap-1.5 px-4 py-2 bg-primary-500 text-white rounded-lg text-sm hover:bg-primary-600 transition-colors"
         >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -204,7 +204,7 @@
         <a
           v-if="attachment?.file_id"
           :href="getFileDownloadUrl(attachment.file_id)"
-          download
+          @click="onDownloadClick"
           class="inline-flex items-center gap-1.5 px-4 py-2 bg-primary-500 text-white rounded-lg text-sm hover:bg-primary-600 transition-colors"
         >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -236,6 +236,7 @@ import {
   DOCX_DEFAULT_PAGE_HEIGHT,
 } from '@/utils/officePreview'
 import { detectFileIconKind, type FileIconKind } from '@/utils/file'
+import { isWeChatBrowser } from '@/utils/download'
 import FileTypeIcon from './FileTypeIcon.vue'
 import PdfCanvasPreview from './PdfCanvasPreview.vue'
 
@@ -250,6 +251,17 @@ const getFileDownloadUrl = (fileId: string) => fileUrl(fileId, true)
 const emit = defineEmits<{
   (e: 'close'): void
 }>()
+
+// 下载点击：微信内置浏览器（X5/XWeb）对 download 属性支持残缺，
+// a[download] 直链被微信下载器 0B 接管；微信内整页导航交由微信下载器/文件预览
+// 接管（响应带 attachment 头，不跳离页面）。非微信保持原生直链，
+// 浏览器下载管理器自带进度条，且保留右键复制链接等 anchor 语义
+function onDownloadClick(event: MouseEvent) {
+  if (!isWeChatBrowser()) return
+  event.preventDefault()
+  const fileId = props.attachment?.file_id
+  if (fileId) window.location.href = getFileDownloadUrl(fileId)
+}
 
 const loading = ref(false)
 const error = ref<string | null>(null)

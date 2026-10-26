@@ -1,0 +1,100 @@
+{
+  "kind": "offline_control_flow_replay",
+  "date": "2026-10-24T11:22:46.918Z",
+  "production_source_changed": false,
+  "network_or_browser_calls": false,
+  "scope": "installed withLocalRecovery; operation body and inspect are injected stubs, saved diagnoses are real, window budget advance is simulated",
+  "installed_modules": [
+    {
+      "module": "boss/localOperationRecovery.js",
+      "sha256": "0f169582beefa683dcdbe714ead8d185cd22c4b45c9243b708947d23e8793d2b",
+      "matches_workspace_dist": true
+    },
+    {
+      "module": "boss/visualRecovery.js",
+      "sha256": "288392f78a36320f17926b237cfa018b7c4efe35030050e4b7f5e7f4d5940ff7",
+      "matches_workspace_dist": true
+    },
+    {
+      "module": "input/windowExperiment.js",
+      "sha256": "6b62ad69c2266a5d8c96ca79415d388d2f4df1ba7c98254f76bebac066a1c846",
+      "matches_workspace_dist": true
+    },
+    {
+      "module": "boss/FilterSetter.js",
+      "sha256": "589e85904e9ab73debe2552cd17fa1a0c0c52a903b195ac1b1c00cc8761e0f42",
+      "matches_workspace_dist": true
+    }
+  ],
+  "source_records": [
+    "229b25d6-f71d-4669-874b-3b7b748cf98a",
+    "e8969988-918e-426d-a742-b02ee55a3756"
+  ],
+  "results": [
+    {
+      "name": "saved_receipts",
+      "diagnosis_modified": "none",
+      "raw_failure_envelope": "reconstructed from saved context; not recovered original outer result",
+      "counts": {
+        "raw_execute": 1,
+        "continuation": 0,
+        "dismiss": 0
+      },
+      "observation_modes": [
+        "page",
+        "window"
+      ],
+      "simulated_window_budget": 1,
+      "result": {
+        "success": false,
+        "code": "UI_CHANGED",
+        "effect": "none",
+        "state": "no_supported_action"
+      }
+    },
+    {
+      "name": "single_field_control",
+      "diagnosis_modified": "only window goal_state: inconclusive -> satisfied",
+      "raw_failure_envelope": "reconstructed from saved context; not recovered original outer result",
+      "counts": {
+        "raw_execute": 1,
+        "continuation": 1,
+        "dismiss": 0
+      },
+      "observation_modes": [
+        "page",
+        "window"
+      ],
+      "simulated_window_budget": 1,
+      "result": {
+        "success": true,
+        "code": "OK",
+        "effect": "applied",
+        "state": "recovered"
+      },
+      "continuation_context": {
+        "binding_retained": true,
+        "budget_shared": true,
+        "budget_used": 1,
+        "previous_execution": {
+          "attemptsUsed": 1,
+          "ordinaryRetriesUsed": 0,
+          "inputStatus": "not_started",
+          "stage": "input",
+          "verification": {
+            "status": "inconclusive",
+            "evidence": [
+              "fresh filter postcheck unavailable",
+              "filter_phase=not_started"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "limitations": [
+    "No actual original outer visual_recovery.state recovered; no_supported_action is reproduced offline.",
+    "Control continuation is a sentinel, not a fresh real browser operation.",
+    "This verifies existing control flow, not an implemented fix."
+  ]
+}

@@ -75,7 +75,6 @@ def test_frontend_does_not_branch_on_ordinary_tool_names():
         assert not any(re.search(pattern, source) for pattern in comparison_patterns)
     assert "downloadToolNames" not in source
     assert "boss_jobs_list" not in source
-    assert "extractQuickOptions(result)" in source
 
 
 def test_download_file_is_recognized_from_result_shape_for_any_tool():

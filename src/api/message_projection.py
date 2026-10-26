@@ -3,7 +3,7 @@
 import copy
 
 from src.services.agent_runner.presentation import (
-    browser_display, option_items, progress_display, scalar_fields,
+    browser_display, progress_display, scalar_fields,
 )
 
 
@@ -20,7 +20,10 @@ def public_conversation_messages(messages):
             continue
         if not isinstance(metadata, dict) or not metadata.get('runner_id'):
             # Existing legacy history keeps its established presentation policy.
-            result.append(copy.deepcopy(message))
+            legacy = copy.deepcopy(message)
+            if isinstance(legacy.get('metadata'), dict):
+                legacy['metadata'].pop('quickOptions', None)
+            result.append(legacy)
             continue
         projected = scalar_fields(message, ('message_id', 'session_id', 'role', 'content'))
         if 'created_at' in message:
@@ -39,8 +42,6 @@ def public_conversation_messages(messages):
             display['progressMessages'] = [progress_display(item) for item in metadata['progressMessages'] if isinstance(item, dict)]
         if isinstance(metadata.get('browserAssistance'), dict):
             display['browserAssistance'] = browser_display(metadata['browserAssistance'])
-        if isinstance(metadata.get('quickOptions'), list):
-            display['quickOptions'] = option_items(metadata['quickOptions'])
         projected['metadata'] = display
         result.append(projected)
     return result

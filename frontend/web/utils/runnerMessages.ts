@@ -1,7 +1,6 @@
 import type { ChatMessage, ProgressMessage, DownloadableFile, ImageRef } from '@/types'
 import type { ChatMessageRecord, FailedMessageUI } from '@/api/session'
 import type { RunnerSupplementalInput, RunnerView, RunnerPresentation } from '@/api/runner'
-import { extractQuickOptions } from './quickOptions'
 
 const time = (value: unknown, fallback: number) => {
   const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Date.parse(value) : NaN
@@ -28,7 +27,6 @@ export function progressMessages(values: Record<string, unknown>[] | undefined, 
 function presentation(value: RunnerPresentation, timestamp: number): Partial<ChatMessage> {
   const progress = progressMessages(value.progressMessages, timestamp)
   const files = new Map<string, DownloadableFile>((value.downloadableFiles || []).map(file => [file.file_id, file]))
-  let options = value.quickOptions
   for (const event of progress) {
     if (event.type !== 'tool_result' || !event.success) continue
     const result = event.result
@@ -37,11 +35,9 @@ function presentation(value: RunnerPresentation, timestamp: number): Partial<Cha
       file_size: result.file_size || 0, download_url: result.download_url || `/api/files/${result.file_id}/download`,
       mime_type: result.mime_type || '',
     })
-    const next = extractQuickOptions(result)
-    if (next.length) options = next
   }
   return { progressMessages: progress, downloadableFiles: Array.from(files.values()),
-    verboseMessages: value.verboseMessages || [], quickOptions: options, browserAssistance: value.browserAssistance }
+    verboseMessages: value.verboseMessages || [], browserAssistance: value.browserAssistance }
 }
 
 export function historyMessages(records: ChatMessageRecord[]): ChatMessage[] {

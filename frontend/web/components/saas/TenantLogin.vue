@@ -110,6 +110,7 @@ import { adminPasswordLogin, getTenantPublicInfo } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAgent } from '@/composables/useAgent'
 import { useSession } from '@/composables/useSession'
+import { useSubagentList } from '@/composables/useSubagentList'
 
 const router = useRouter()
 const route = useRoute()
@@ -189,10 +190,12 @@ async function handleLogin() {
       // 登录成功后先清空所有缓存（避免同账号多设备时显示旧数据）
       const { clearSessionCache: clearAgentSessionCache, clearSession: clearAgentSession, clearAttachments } = useAgent()
       const { clearSessionCache: clearSessionListCache } = useSession()
+      const { clearCache: clearSubagentListCache } = useSubagentList()
       clearAgentSessionCache()
       clearAgentSession()
       clearAttachments()
       clearSessionListCache()
+      clearSubagentListCache()
 
       // 平台管理员的 tenant 可能为 null
       const tenantInfo = res.tenant ? { ...res.tenant, status: res.tenant.status } : null

@@ -52,8 +52,9 @@ class AnalyzeDataInput(BaseModel):
     )
     tables_metadata: Optional[List[dict]] = Field(
         None,
-        description="[可选] 已匹配到的相关表 Metadata 列表。不传时服务端自动选表并预加载"
-        "（表少全量、表多按需求语义检索），分析智能体直接在已加载的表上分析"
+        description="[可选] 已匹配到的相关表列表，每项必须含 table_id（来自 "
+        "search_data_tables / list_data_tables，或知识库搜索结果中数据表文档的 id）。"
+        "无法提供 table_id 时不要传本参数，服务端会按需求自动选表并预加载"
     )
     session_id: Optional[str] = Field(
         None,
@@ -126,24 +127,92 @@ class SmartDataAnalysisTool(BaseTool):
             allow_arbitrary_path_source=False,
         )
 
-        # 3. 预加载表：显式入参只把 table_id/doc_id 当选择依据，无论是否带 source
-        # 一律回查服务端记录（防 LLM 伪造 source 绕过名单）；任一指定表不可用
-        # 整体显式失败（不做部分加载、不回退传入 source、不用原始请求 metadata）
+        # 3. 预加载表：显式入参以 table_id/doc_id（缺 ID 时退化为表名线索，见下）为
+        # 选择依据，无论是否带 source 一律回查服务端记录（防 LLM 伪造 source 绕过名单）；
+        # 任一指定表不可用整体显式失败（不做部分加载、不回退传入 source、不用原始
+        # 请求 metadata）
         if tables_metadata:
             from src.tools.data_analysis.analysis_agent import fetch_table_metadata_from_db
+
+            # 2026-10-26 生产 case（tr_runner_2e6e90bd…）：外层模型从知识库搜索结果
+            # 拼 tables_metadata，条目只有 table_name/title 没有 table_id，此前整体
+            # 硬拒导致外层被迫多烧一轮生成才改走自动选表。现对带名称线索的条目在
+            # 调用方可见范围内按表名精确解析：query_data_tables_list 已内置租户范围
+            # + 移动兜底 + 智能体名单过滤；解析出的 table_id 仍走下方
+            # fetch_table_metadata_from_db 回查链路，防伪造 source、不做部分加载、
+            # 回查未命中整体失败等既有语义全部不变。解析结果只用于本次调用，
+            # 不回写请求。
+            visible_tables: Optional[List[dict]] = None  # 同请求内共享一次列表查询
 
             enriched_tables: List[dict] = []
             for meta in tables_metadata:
                 table_id = meta.get("table_id") or meta.get("doc_id")
                 if not table_id:
-                    return self._with_identity_notice(
-                        {
-                            "success": False,
-                            "error": "指定的数据表缺少 table_id，无法加载；请通过 "
-                                     "search_data_tables 获取 table_id 后重试",
-                        },
-                        identity_notice,
-                    )
+                    # 缺 table_id/doc_id：取名称线索（去掉 [数据表] 前缀）按表名精确解析；
+                    # str() 兜底非字符串名称（LLM 入参不保证类型，此前行内 .strip() 会抛
+                    # AttributeError 变成执行层裸异常，而非本工具的引导性失败）
+                    hint = str(meta.get("table_name") or meta.get("title") or "").strip()
+                    if hint.startswith("[数据表] "):
+                        hint = hint[len("[数据表] "):].strip()
+                    if not hint:
+                        # 无任何选择依据：维持硬拒
+                        return self._with_identity_notice(
+                            {
+                                "success": False,
+                                "error": "指定的数据表缺少 table_id，无法加载；请通过 "
+                                         "search_data_tables 获取 table_id 后重试，"
+                                         "或不传 tables_metadata 由服务端自动选表",
+                            },
+                            identity_notice,
+                        )
+                    if visible_tables is None:
+                        from src.tools.data_analysis.analysis_agent import query_data_tables_list
+                        try:
+                            visible_tables = await asyncio.to_thread(
+                                query_data_tables_list,
+                                keyword="", tenant_id=tenant_id,
+                                subagent_id=subagent_id, agent_id=agent_id,
+                            )
+                        except Exception as e:
+                            logger.warning(f"[SmartDataAnalysisTool] 按表名解析查询可见表列表失败: {e}")
+                            return self._with_identity_notice(
+                                {
+                                    "success": False,
+                                    "error": f"查询可用数据表失败，无法按表名解析「{hint}」；"
+                                             "请通过 search_data_tables 获取 table_id 后重试",
+                                },
+                                identity_notice,
+                            )
+                    matches = [t for t in visible_tables if t.get("table_name") == hint]
+                    if len(matches) == 1:
+                        table_id = str(matches[0]["table_id"])
+                        logger.info(
+                            f"[SmartDataAnalysisTool] tables_metadata 缺 table_id，"
+                            f"已按表名解析：{hint} -> {table_id}（仅本次调用使用）"
+                        )
+                    elif len(matches) > 1:
+                        cands = "；".join(
+                            f"{t.get('table_id')}({t.get('table_name')})" for t in matches
+                        )
+                        return self._with_identity_notice(
+                            {
+                                "success": False,
+                                "error": f"表名「{hint}」在当前可用范围内匹配到多张表"
+                                         f"（{cands}）；请在 tables_metadata 中带上对应 "
+                                         "table_id 后重试",
+                            },
+                            identity_notice,
+                        )
+                    else:
+                        return self._with_identity_notice(
+                            {
+                                "success": False,
+                                "error": f"在当前可用范围内未找到表「{hint}」；可通过 "
+                                         "search_data_tables 获取 table_id 后重试，"
+                                         "或不要传 tables_metadata，服务端会按需求自动选表",
+                            },
+                            identity_notice,
+                        )
                 try:
                     full_meta = await asyncio.to_thread(
                         fetch_table_metadata_from_db,

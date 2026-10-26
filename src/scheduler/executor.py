@@ -202,6 +202,22 @@ class ScheduledTaskExecutor:
                 tenant_id=task_tenant_id
             )
             ScheduledTaskDB.update_after_run(task_id, success=True, result_summary=result_summary)
+            # 一次性任务执行后即收尾，否则行恒为 active，进程重启后会被
+            # 反复重注册已过期的 DateTrigger 刷 missed
+            if task.get("schedule_type") == "once":
+                ScheduledTaskDB.update_status(task_id, "completed")
+
+            # 尽力投递：渠道场景（如 wecom_kf）创建的提醒直投给客户，失败时
+            # 登记补投；任何异常只记日志，不影响任务成功状态
+            try:
+                from src.scheduler.delivery import deliver_task_result
+                delivery = await deliver_task_result(task, result)
+                if not delivery.get("delivered"):
+                    logger.info(f"后端日志：定时任务结果未直投 task_id={task_id}, "
+                                f"reason={delivery.get('reason')}")
+            except Exception as delivery_err:
+                logger.opt(exception=True).error(
+                    f"后端日志：定时任务投递钩子异常 task_id={task_id}, {delivery_err}")
 
             logger.info(f"后端日志：定时任务执行完成 task_id={task_id}, status=success, "
                         f"duration={duration_ms}ms")

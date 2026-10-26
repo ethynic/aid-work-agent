@@ -25,6 +25,13 @@
           <BaseButton size="sm" @click="handleClientSearch">搜索</BaseButton>
         </div>
         <div class="page-toolbar-right">
+          <input ref="importFileInput" type="file" accept=".json,application/json" class="hidden" @change="onImportFileChange" />
+          <BaseButton intent="secondary" @click="triggerImportFile" :disabled="importing">
+            {{ importing ? '导入中...' : '导入' }}
+          </BaseButton>
+          <BaseButton intent="secondary" @click="handleExportAll" :disabled="exporting">
+            {{ exporting ? '导出中...' : '导出全部' }}
+          </BaseButton>
           <BaseButton @click="openCreate">新增风格</BaseButton>
         </div>
       </div>
@@ -153,6 +160,36 @@
         <BaseButton intent="secondary" @click="showViewer = false">关闭</BaseButton>
       </template>
     </BaseModal>
+
+    <!-- 导入冲突弹框 -->
+    <BaseModal v-model="conflictDialog" title="导入冲突" size="md">
+      <div class="space-y-3">
+        <p class="text-sm text-default">
+          以下 {{ conflicts.length }} 个风格标识已存在，请选择处理方式：
+        </p>
+        <div class="max-h-32 overflow-y-auto bg-surface-hover rounded-lg p-2 space-y-1">
+          <div v-for="c in conflicts" :key="c.style_id" class="text-sm text-default">
+            {{ c.name }} <span class="text-muted font-mono text-xs">{{ c.style_id }}</span>
+          </div>
+        </div>
+        <div class="space-y-2">
+          <label class="flex items-center gap-2 text-sm">
+            <input type="radio" value="overwrite" v-model="conflictMode" class="w-4 h-4 text-primary-600" />
+            覆盖更新（冲突项以导入文件内容创建新版本）
+          </label>
+          <label class="flex items-center gap-2 text-sm">
+            <input type="radio" value="skip" v-model="conflictMode" class="w-4 h-4 text-primary-600" />
+            跳过冲突项（仅导入新风格）
+          </label>
+        </div>
+      </div>
+      <template #footer>
+        <BaseButton intent="secondary" @click="conflictDialog = false">取消</BaseButton>
+        <BaseButton @click="confirmConflictImport" :disabled="importing">
+          {{ importing ? '导入中...' : '确认导入' }}
+        </BaseButton>
+      </template>
+    </BaseModal>
   </div>
 </template>
 
@@ -171,7 +208,8 @@ import MyTextarea from '@/components/ui/MyTextarea.vue'
 import {
   listSystemStyles, getSystemStyle, createSystemStyle, updateSystemStyle,
   deleteSystemStyle, listSystemVersions, activateSystemVersion,
-  type ReplyStyleVersion,
+  exportSystemStyles, importSystemStyles,
+  type ReplyStyleVersion, type ReplyStyleExportEnvelope, type ReplyStyleImportConflict,
 } from '@/api/replyStyle'
 
 const toast = useToast()
@@ -353,6 +391,102 @@ function formatTimeSec(t: string | null): string {
   const d = new Date(t)
   if (isNaN(d.getTime())) return t
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
+}
+
+// ============== 配置导出/导入 ==============
+const exporting = ref(false)
+const importing = ref(false)
+const importFileInput = ref<HTMLInputElement | null>(null)
+const conflictDialog = ref(false)
+const conflicts = ref<ReplyStyleImportConflict[]>([])
+const conflictMode = ref<'overwrite' | 'skip'>('overwrite')
+type ImportPayload = Parameters<typeof importSystemStyles>[0]
+let pendingImportPayload: ImportPayload | null = null
+
+async function handleExportAll() {
+  exporting.value = true
+  try {
+    const res = await exportSystemStyles()
+    if (!res.success || !res.data) {
+      toast.error('导出失败')
+      return
+    }
+    const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `reply_styles_config.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success(`已导出 ${res.data.styles.length} 个系统风格`)
+  } catch (e: any) {
+    toast.error(e.message || '导出失败')
+  } finally {
+    exporting.value = false
+  }
+}
+
+function triggerImportFile() {
+  importFileInput.value?.click()
+}
+
+async function onImportFileChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  let envelope: ReplyStyleExportEnvelope
+  try {
+    envelope = JSON.parse(await file.text())
+  } catch {
+    toast.error('配置文件不是有效的 JSON')
+    return
+  }
+  if (envelope.format !== 'reply_style_export' || !Array.isArray(envelope.styles)) {
+    toast.error('配置文件格式不正确')
+    return
+  }
+  if (envelope.styles.length === 0) {
+    toast.error('配置文件中没有风格数据')
+    return
+  }
+  pendingImportPayload = { format: envelope.format, version: envelope.version, styles: envelope.styles }
+  await doImport(pendingImportPayload)
+}
+
+async function doImport(payload: ImportPayload) {
+  importing.value = true
+  try {
+    const res = await importSystemStyles(payload)
+    if (res.status === 409 && res.body.detail && typeof res.body.detail === 'object') {
+      conflicts.value = res.body.detail.conflicts || []
+      conflictMode.value = 'overwrite'
+      conflictDialog.value = true
+      return
+    }
+    if (!res.ok || !res.body.success) {
+      const detail = res.body.detail
+      toast.error(typeof detail === 'string' ? detail : '导入失败')
+      return
+    }
+    const parts: string[] = []
+    if (res.body.created) parts.push(`新建 ${res.body.created}`)
+    if (res.body.updated) parts.push(`覆盖 ${res.body.updated}`)
+    if (res.body.skipped) parts.push(`跳过 ${res.body.skipped}`)
+    toast.success(`导入完成：${parts.join('，') || '无变更'}`)
+    conflictDialog.value = false
+    pendingImportPayload = null
+    await loadStyles()
+  } catch (e: any) {
+    toast.error(e.message || '导入失败')
+  } finally {
+    importing.value = false
+  }
+}
+
+async function confirmConflictImport() {
+  if (!pendingImportPayload) return
+  await doImport({ ...pendingImportPayload, conflict_strategy: conflictMode.value })
 }
 
 onMounted(() => loadStyles())

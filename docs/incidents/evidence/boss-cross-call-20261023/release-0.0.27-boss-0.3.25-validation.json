@@ -1,0 +1,48 @@
+{
+  "date": "2026-10-23",
+  "batch": "AID-Work-Runtime-0.0.27-BOSS-0.3.25-20261023-221526",
+  "zip": "clients/release/AID-Work-Runtime-0.0.27-BOSS-0.3.25-20261023-221526.zip",
+  "zip_bytes": 132658667,
+  "zip_sha256": "274020a834d02f3b30ac869814b06eda022da9b7fe21a99a9ecd6b3f4cfba830",
+  "zip_entries_checked": 10,
+  "sha256sums_checked": true,
+  "historical_roots_preserved": 16,
+  "roots_current": 17,
+  "plugin_verification": {
+    "archive": "boss-0.3.25-dev.aidplugin.zip",
+    "sha256": "fc8b5014e40c4fbfe03241ee23c2e7cffbfcac8023e3b658dc48a35a4367e18f",
+    "size": 5382734,
+    "files": 3736,
+    "tools": 25,
+    "doctor_exit": 0,
+    "runtime_readiness": {
+      "ready": true,
+      "reason": "只读 BOSS 页面与登录态检查通过"
+    },
+    "payload_unchanged": true,
+    "synthetic_ocr": false
+  },
+  "payload_source": {
+    "path": "dist/src/main/boss/FilterSetter.js",
+    "sha256": "589e85904e9ab73debe2552cd17fa1a0c0c52a903b195ac1b1c00cc8761e0f42",
+    "compiled_source_matches": true,
+    "contains_root_viewport_fix": true,
+    "archive_sha256": "fc8b5014e40c4fbfe03241ee23c2e7cffbfcac8023e3b658dc48a35a4367e18f"
+  },
+  "runtime_package": "passed",
+  "native_module_load": "passed",
+  "packaging_tests": "8 plugin packaging + 20 Runtime packaging, 0 failures/skips",
+  "installed_business_acceptance": "not_run",
+  "delivery_status": "withdrawn_after_real_nsis_install_failure",
+  "nsis_installation": {
+    "exit_code": 2,
+    "stage": "customInstall Verify / fresh Host describe",
+    "h1_code": 9,
+    "error": "Runtime产品或发布信任配置无效",
+    "confirmed_cause": "productTrust.ts rejects roots.length > 16; archive contains 17 append-only roots",
+    "exe_bytes_replaced": true,
+    "generation_finalized": false,
+    "pairing_files_modified_by_assistant": false
+  },
+  "not_for_delivery": true
+}

@@ -1214,6 +1214,47 @@ def _history_messages(rows, workdir):
     return messages, naming_incomplete
 
 
+def _query_group_poll(conn, conv, after_id, limit, anchor, workdir):
+    """Stateless insertion-order pages; the first batch is context, never old work to replay."""
+    if after_id is not None and after_id > 0:
+        previous = conn.execute('SELECT %s FROM message_table WHERE message_id=? AND conversation_id=?'
+                                % ', '.join(QUERY_MESSAGE_COLUMNS), (after_id, conv)).fetchone()
+        if previous is None or anchor != _message_anchor(_message_row(previous)):
+            return {'ok': False, 'error': 'CURSOR_STALE'}
+    rows = conn.execute('SELECT %s FROM message_table WHERE conversation_id=? AND message_id>? '
+                        'ORDER BY message_id %s LIMIT ?' % (', '.join(QUERY_MESSAGE_COLUMNS),
+                        'DESC' if after_id is None else 'ASC'),
+                        (conv, after_id or 0, limit + 1)).fetchall()
+    selected = rows[:limit]
+    if after_id is None:
+        selected.reverse()
+    messages, incomplete = _history_messages(selected, workdir)
+    # Keep a complete bounded JSON message for the model, rather than truncating
+    # its JSON/text after a cursor was advanced. Large single rows fail loudly.
+    total = 0
+    kept = []
+    indices = range(len(messages) - 1, -1, -1) if after_id is None else range(len(messages))
+    for index in indices:
+        size = len(json.dumps(messages[index], ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
+        if total + size > 16384:
+            if not kept:
+                return {'ok': False, 'error': 'CONTENT_TOO_LARGE'}
+            break
+        kept.append(index)
+        total += size
+    if after_id is None:
+        kept.reverse()
+    more = after_id is not None and (len(rows) > limit or len(kept) < len(selected))
+    selected = [selected[index] for index in kept]
+    messages = [messages[index] for index in kept]
+    last = _message_row(selected[-1]) if selected else None
+    return {'ok': True, 'task': 'group-poll', 'conversation_id': conv, 'messages': messages,
+            'count': len(messages), 'has_more': more,
+            'next_cursor_id': last['message_id'] if last else (after_id or 0),
+            'next_anchor': _message_anchor(last) if last else (anchor or ''),
+            'invalid_time_count': 0, 'naming_incomplete': incomplete}
+
+
 def _query_history(conn, conv, limit, since, until, workdir=None):
     """最近 N 条有效时间消息升序展示；发送时间相同以 message_id 保持稳定顺序。"""
     valid_time = ("typeof(send_time) = 'integer' "
@@ -1600,7 +1641,7 @@ def _parse_query_args(args):
     if not workdir or not task:
         return None
     if task not in ('messages', 'send-messages', 'conversations', 'last-per-conv', 'resolve', 'context',
-                    'groups', 'history'):
+                    'groups', 'history', 'group-poll'):
         return None
     if task in ('messages', 'send-messages') and not conv:
         return None
@@ -1622,6 +1663,14 @@ def _parse_query_args(args):
         if not conv or not conv.startswith('R:') or len(conv) <= 2:
             return None
         if since is not None and until is not None and since > until:
+            return None
+    if task == 'group-poll':
+        if (not conv or not conv.startswith('R:') or len(conv) <= 2 or with_names or exclude_types
+                or since is not None or until is not None or limit > 50
+                or (after_id is not None and after_id > 9007199254740991)
+                or (after_id is None and anchor is not None)
+                or (after_id == 0 and anchor != '')
+                or (after_id is not None and after_id > 0 and (anchor is None or not re.fullmatch(r'[0-9a-f]{64}', anchor)))):
             return None
     if task in ('groups', 'history'):
         if (after_id is not None or anchor is not None or with_names or exclude_types
@@ -1664,6 +1713,8 @@ def cmd_query(args):
             return _query_groups(conn, name, limit)
         if task == 'history':
             return _query_history(conn, conv, limit, since, until, workdir)
+        if task == 'group-poll':
+            return _query_group_poll(conn, conv, after_id, limit, anchor, workdir)
         if task == 'context':
             return _query_context(workdir, conn, account)
         if task == 'conversations':

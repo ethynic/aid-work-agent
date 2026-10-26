@@ -1,0 +1,854 @@
+[
+  {
+    "id": "de33e585-9e1a-4bb0-ad34-6f58dcfb5a03",
+    "session_id": "session_e23e102b8b92",
+    "tool_name": "boss_filter",
+    "created_at": "2026-10-23 10:50:03.383403",
+    "runner_id": "runner_9958c1b4733341e58885457ec9c94625",
+    "verification": {
+      "status": "satisfied",
+      "evidence": [
+        "executor已核验实际按钮计数、选项与面板关闭；不可应用条件保留skipped结果"
+      ]
+    },
+    "native_hidden": false,
+    "recovery_state": "not_needed",
+    "steps_count": 0,
+    "observation_count": 0,
+    "observations": []
+  },
+  {
+    "id": "b4d30300-3640-4292-b49e-8d52d54a0969",
+    "session_id": "session_e23e102b8b92",
+    "tool_name": "boss_filter_options",
+    "created_at": "2026-10-23 11:21:43.226626",
+    "runner_id": "runner_3d952ae9c0d24b058649eac725c58026",
+    "verification": {
+      "status": "inconclusive",
+      "evidence": []
+    },
+    "native_hidden": true,
+    "recovery_state": "diagnosis_unavailable",
+    "steps_count": 0,
+    "observation_count": 2,
+    "observations": [
+      {
+        "branch": "step0.diagnose",
+        "mode": "page",
+        "http_status": 200,
+        "state": "completed",
+        "failure_stage": null,
+        "original_code": null,
+        "obstruction": "absent",
+        "goal_state": "inconclusive"
+      },
+      {
+        "branch": "step0.diagnose.window",
+        "mode": "window",
+        "http_status": null,
+        "state": null,
+        "failure_stage": "window_capture_or_diagnosis",
+        "original_code": null,
+        "obstruction": null,
+        "goal_state": null
+      }
+    ]
+  },
+  {
+    "id": "d47b3df0-aae2-4ad6-b735-a030b94ebbce",
+    "session_id": "session_e23e102b8b92",
+    "tool_name": "boss_filter_options",
+    "created_at": "2026-10-23 11:22:02.337427",
+    "runner_id": "runner_3d952ae9c0d24b058649eac725c58026",
+    "verification": {
+      "status": "inconclusive",
+      "evidence": []
+    },
+    "native_hidden": true,
+    "recovery_state": "diagnosis_unavailable",
+    "steps_count": 0,
+    "observation_count": 2,
+    "observations": [
+      {
+        "branch": "step0.diagnose",
+        "mode": "page",
+        "http_status": 200,
+        "state": "completed",
+        "failure_stage": null,
+        "original_code": null,
+        "obstruction": "absent",
+        "goal_state": "inconclusive"
+      },
+      {
+        "branch": "step0.diagnose.window",
+        "mode": "window",
+        "http_status": null,
+        "state": null,
+        "failure_stage": "window_capture_or_diagnosis",
+        "original_code": null,
+        "obstruction": null,
+        "goal_state": null
+      }
+    ]
+  },
+  {
+    "id": "347e11d1-a1eb-4869-a5b3-27e7f90b72b8",
+    "session_id": "session_e23e102b8b92",
+    "tool_name": "boss_filter",
+    "created_at": "2026-10-23 11:24:43.290584",
+    "runner_id": "runner_22e0c959fcff41b7977e59eb12db66a6",
+    "verification": {
+      "status": "satisfied",
+      "evidence": [
+        "executor已核验实际按钮计数、选项与面板关闭；不可应用条件保留skipped结果"
+      ]
+    },
+    "native_hidden": false,
+    "recovery_state": "not_needed",
+    "steps_count": 0,
+    "observation_count": 0,
+    "observations": []
+  },
+  {
+    "id": "f8a02297-ff44-47ca-9304-5d56deb8cf59",
+    "session_id": "session_e23e102b8b92",
+    "tool_name": "boss_resume_next",
+    "created_at": "2026-10-23 11:39:03.778553",
+    "runner_id": "runner_2afd4ac171aa4de4be4bd52945113618",
+    "verification": {
+      "status": "inconclusive",
+      "evidence": []
+    },
+    "native_hidden": true,
+    "recovery_state": "diagnosis_unavailable",
+    "steps_count": 0,
+    "observation_count": 2,
+    "observations": [
+      {
+        "branch": "step0.diagnose",
+        "mode": "page",
+        "http_status": 200,
+        "state": "completed",
+        "failure_stage": null,
+        "original_code": null,
+        "obstruction": "absent",
+        "goal_state": "satisfied"
+      },
+      {
+        "branch": "step0.diagnose.window",
+        "mode": "window",
+        "http_status": null,
+        "state": null,
+        "failure_stage": "window_capture_or_diagnosis",
+        "original_code": null,
+        "obstruction": null,
+        "goal_state": null
+      }
+    ]
+  },
+  {
+    "id": "fc9e4be7-27c3-4001-85f6-04468c926491",
+    "session_id": "session_e23e102b8b92",
+    "tool_name": "boss_resume_next",
+    "created_at": "2026-10-23 11:39:15.905279",
+    "runner_id": "runner_2afd4ac171aa4de4be4bd52945113618",
+    "verification": {
+      "status": "inconclusive",
+      "evidence": []
+    },
+    "native_hidden": true,
+    "recovery_state": "diagnosis_unavailable",
+    "steps_count": 0,
+    "observation_count": 2,
+    "observations": [
+      {
+        "branch": "step0.diagnose",
+        "mode": "page",
+        "http_status": 200,
+        "state": "completed",
+        "failure_stage": null,
+        "original_code": null,
+        "obstruction": "absent",
+        "goal_state": "satisfied"
+      },
+      {
+        "branch": "step0.diagnose.window",
+        "mode": "window",
+        "http_status": null,
+        "state": null,
+        "failure_stage": "window_capture_or_diagnosis",
+        "original_code": null,
+        "obstruction": null,
+        "goal_state": null
+      }
+    ]
+  },
+  {
+    "id": "cca90608-563a-452c-a3a5-1304192465cd",
+    "session_id": "session_58d8ad3527fb",
+    "tool_name": "boss_list_jobs",
+    "created_at": "2026-10-23 13:51:47.469542",
+    "runner_id": "runner_aeb1013d846f4f058125849947c329df",
+    "verification": {
+      "status": "inconclusive",
+      "evidence": []
+    },
+    "native_hidden": true,
+    "recovery_state": "diagnosis_unavailable",
+    "steps_count": 0,
+    "observation_count": 2,
+    "observations": [
+      {
+        "branch": "step0.diagnose",
+        "mode": "page",
+        "http_status": 200,
+        "state": "completed",
+        "failure_stage": null,
+        "original_code": null,
+        "obstruction": "absent",
+        "goal_state": "inconclusive"
+      },
+      {
+        "branch": "step0.diagnose.window",
+        "mode": "window",
+        "http_status": null,
+        "state": null,
+        "failure_stage": "window_capture_or_diagnosis",
+        "original_code": null,
+        "obstruction": null,
+        "goal_state": null
+      }
+    ]
+  },
+  {
+    "id": "2ac9ffab-fecc-4113-85a1-2bb74c9e55a6",
+    "session_id": "session_58d8ad3527fb",
+    "tool_name": "boss_filter_options",
+    "created_at": "2026-10-23 13:52:08.494788",
+    "runner_id": "runner_aeb1013d846f4f058125849947c329df",
+    "verification": {
+      "status": "inconclusive",
+      "evidence": []
+    },
+    "native_hidden": true,
+    "recovery_state": "diagnosis_unavailable",
+    "steps_count": 0,
+    "observation_count": 2,
+    "observations": [
+      {
+        "branch": "step0.diagnose",
+        "mode": "page",
+        "http_status": 200,
+        "state": "completed",
+        "failure_stage": null,
+        "original_code": null,
+        "obstruction": "absent",
+        "goal_state": "inconclusive"
+      },
+      {
+        "branch": "step0.diagnose.window",
+        "mode": "window",
+        "http_status": null,
+        "state": null,
+        "failure_stage": "window_capture_or_diagnosis",
+        "original_code": null,
+        "obstruction": null,
+        "goal_state": null
+      }
+    ]
+  },
+  {
+    "id": "c1256c3d-3973-4507-8720-8c71993445bc",
+    "session_id": "session_58d8ad3527fb",
+    "tool_name": "boss_filter_options",
+    "created_at": "2026-10-23 13:52:23.234158",
+    "runner_id": "runner_aeb1013d846f4f058125849947c329df",
+    "verification": {
+      "status": "inconclusive",
+      "evidence": []
+    },
+    "native_hidden": true,
+    "recovery_state": "diagnosis_unavailable",
+    "steps_count": 0,
+    "observation_count": 2,
+    "observations": [
+      {
+        "branch": "step0.diagnose",
+        "mode": "page",
+        "http_status": 200,
+        "state": "completed",
+        "failure_stage": null,
+        "original_code": null,
+        "obstruction": "absent",
+        "goal_state": "inconclusive"
+      },
+      {
+        "branch": "step0.diagnose.window",
+        "mode": "window",
+        "http_status": null,
+        "state": null,
+        "failure_stage": "window_capture_or_diagnosis",
+        "original_code": null,
+        "obstruction": null,
+        "goal_state": null
+      }
+    ]
+  },
+  {
+    "id": "58ab1505-b4f3-4bba-96be-8de711e5a75f",
+    "session_id": "session_58d8ad3527fb",
+    "tool_name": "boss_goto",
+    "created_at": "2026-10-23 13:52:36.793444",
+    "runner_id": "runner_aeb1013d846f4f058125849947c329df",
+    "verification": {
+      "status": "inconclusive",
+      "evidence": []
+    },
+    "native_hidden": true,
+    "recovery_state": "diagnosis_unavailable",
+    "steps_count": 0,
+    "observation_count": 2,
+    "observations": [
+      {
+        "branch": "step0.diagnose",
+        "mode": "page",
+        "http_status": 200,
+        "state": "completed",
+        "failure_stage": null,
+        "original_code": null,
+        "obstruction": "absent",
+        "goal_state": "not_satisfied"
+      },
+      {
+        "branch": "step0.diagnose.window",
+        "mode": "window",
+        "http_status": null,
+        "state": null,
+        "failure_stage": "window_capture_or_diagnosis",
+        "original_code": null,
+        "obstruction": null,
+        "goal_state": null
+      }
+    ]
+  },
+  {
+    "id": "e16c2779-cc44-4d9c-98b0-8f475a3d6e0c",
+    "session_id": "session_58d8ad3527fb",
+    "tool_name": "boss_filter",
+    "created_at": "2026-10-23 13:57:01.927449",
+    "runner_id": "runner_66a3ef2a611343c18f2413582d38d557",
+    "verification": {
+      "status": "satisfied",
+      "evidence": [
+        "executor已核验实际按钮计数、选项与面板关闭；不可应用条件保留skipped结果"
+      ]
+    },
+    "native_hidden": false,
+    "recovery_state": "not_needed",
+    "steps_count": 0,
+    "observation_count": 0,
+    "observations": []
+  },
+  {
+    "id": "aa8d597d-f507-4aea-bb68-62ec8451def8",
+    "session_id": "session_58d8ad3527fb",
+    "tool_name": "boss_filter",
+    "created_at": "2026-10-23 14:33:19.535207",
+    "runner_id": "runner_386f2626342d4ed69754f974e2fc0364",
+    "verification": {
+      "status": "inconclusive",
+      "evidence": [
+        "filter_button_count=5; expected=unknown; panel_open=true"
+      ]
+    },
+    "native_hidden": false,
+    "recovery_state": "diagnosis_unavailable",
+    "steps_count": 0,
+    "observation_count": 2,
+    "observations": [
+      {
+        "branch": "step0.diagnose",
+        "mode": "page",
+        "http_status": 200,
+        "state": "completed",
+        "failure_stage": null,
+        "original_code": null,
+        "obstruction": "absent",
+        "goal_state": "not_satisfied"
+      },
+      {
+        "branch": "step0.diagnose.window",
+        "mode": "window",
+        "http_status": null,
+        "state": null,
+        "failure_stage": "window_capture_or_diagnosis",
+        "original_code": null,
+        "obstruction": null,
+        "goal_state": null
+      }
+    ]
+  },
+  {
+    "id": "59ca6d39-990c-4118-959b-52b8a6c64641",
+    "session_id": "session_6f5b69259d79",
+    "tool_name": "boss_list_jobs",
+    "created_at": "2026-10-23 15:46:49.985881",
+    "runner_id": "runner_83f552145a7f4260899987bf26136cd3",
+    "verification": {
+      "status": "inconclusive",
+      "evidence": []
+    },
+    "native_hidden": true,
+    "recovery_state": "diagnosis_unavailable",
+    "steps_count": 1,
+    "observation_count": 3,
+    "observations": [
+      {
+        "branch": "step0.diagnose",
+        "mode": "page",
+        "http_status": 200,
+        "state": "completed",
+        "failure_stage": null,
+        "original_code": null,
+        "obstruction": "present",
+        "goal_state": "inconclusive"
+      },
+      {
+        "branch": "step1.diagnose",
+        "mode": "page",
+        "http_status": 200,
+        "state": "completed",
+        "failure_stage": null,
+        "original_code": null,
+        "obstruction": "absent",
+        "goal_state": "inconclusive"
+      },
+      {
+        "branch": "step1.diagnose.window",
+        "mode": "window",
+        "http_status": null,
+        "state": null,
+        "failure_stage": "window_capture_or_diagnosis",
+        "original_code": null,
+        "obstruction": null,
+        "goal_state": null
+      }
+    ]
+  },
+  {
+    "id": "a5eb57e4-2b76-40f6-8db0-44cae1f49f9a",
+    "session_id": "session_6f5b69259d79",
+    "tool_name": "boss_filter_options",
+    "created_at": "2026-10-23 15:47:21.266158",
+    "runner_id": "runner_83f552145a7f4260899987bf26136cd3",
+    "verification": {
+      "status": "inconclusive",
+      "evidence": []
+    },
+    "native_hidden": true,
+    "recovery_state": "diagnosis_unavailable",
+    "steps_count": 0,
+    "observation_count": 2,
+    "observations": [
+      {
+        "branch": "step0.diagnose",
+        "mode": "page",
+        "http_status": 200,
+        "state": "completed",
+        "failure_stage": null,
+        "original_code": null,
+        "obstruction": "absent",
+        "goal_state": "inconclusive"
+      },
+      {
+        "branch": "step0.diagnose.window",
+        "mode": "window",
+        "http_status": null,
+        "state": null,
+        "failure_stage": "window_capture_or_diagnosis",
+        "original_code": null,
+        "obstruction": null,
+        "goal_state": null
+      }
+    ]
+  },
+  {
+    "id": "60c5c58d-95a3-4f4a-b9a1-debe19f86419",
+    "session_id": "session_6f5b69259d79",
+    "tool_name": "boss_filter_options",
+    "created_at": "2026-10-23 15:47:38.630271",
+    "runner_id": "runner_83f552145a7f4260899987bf26136cd3",
+    "verification": {
+      "status": "inconclusive",
+      "evidence": []
+    },
+    "native_hidden": true,
+    "recovery_state": "diagnosis_unavailable",
+    "steps_count": 0,
+    "observation_count": 2,
+    "observations": [
+      {
+        "branch": "step0.diagnose",
+        "mode": "page",
+        "http_status": 200,
+        "state": "completed",
+        "failure_stage": null,
+        "original_code": null,
+        "obstruction": "absent",
+        "goal_state": "inconclusive"
+      },
+      {
+        "branch": "step0.diagnose.window",
+        "mode": "window",
+        "http_status": null,
+        "state": null,
+        "failure_stage": "window_capture_or_diagnosis",
+        "original_code": null,
+        "obstruction": null,
+        "goal_state": null
+      }
+    ]
+  },
+  {
+    "id": "c495d0a9-19f1-4e08-a13d-1574f83285b7",
+    "session_id": "session_6f5b69259d79",
+    "tool_name": "boss_goto",
+    "created_at": "2026-10-23 15:47:52.125247",
+    "runner_id": "runner_83f552145a7f4260899987bf26136cd3",
+    "verification": {
+      "status": "inconclusive",
+      "evidence": []
+    },
+    "native_hidden": true,
+    "recovery_state": "diagnosis_unavailable",
+    "steps_count": 0,
+    "observation_count": 2,
+    "observations": [
+      {
+        "branch": "step0.diagnose",
+        "mode": "page",
+        "http_status": 200,
+        "state": "completed",
+        "failure_stage": null,
+        "original_code": null,
+        "obstruction": "unknown",
+        "goal_state": "not_satisfied"
+      },
+      {
+        "branch": "step0.diagnose.window",
+        "mode": "window",
+        "http_status": null,
+        "state": null,
+        "failure_stage": "window_capture_or_diagnosis",
+        "original_code": null,
+        "obstruction": null,
+        "goal_state": null
+      }
+    ]
+  },
+  {
+    "id": "6ce2a4da-14b4-45bc-ae6e-e8e400d0c4eb",
+    "session_id": "session_6f5b69259d79",
+    "tool_name": "boss_filter",
+    "created_at": "2026-10-23 15:49:43.998202",
+    "runner_id": "runner_dbdfad2bdfa04818b0f829d2de8bb776",
+    "verification": {
+      "status": "inconclusive",
+      "evidence": [
+        "fresh filter postcheck unavailable"
+      ]
+    },
+    "native_hidden": false,
+    "recovery_state": "diagnosis_unavailable",
+    "steps_count": 0,
+    "observation_count": 2,
+    "observations": [
+      {
+        "branch": "step0.diagnose",
+        "mode": "page",
+        "http_status": 200,
+        "state": "completed",
+        "failure_stage": null,
+        "original_code": null,
+        "obstruction": "absent",
+        "goal_state": "not_satisfied"
+      },
+      {
+        "branch": "step0.diagnose.window",
+        "mode": "window",
+        "http_status": null,
+        "state": null,
+        "failure_stage": "window_capture_or_diagnosis",
+        "original_code": null,
+        "obstruction": null,
+        "goal_state": null
+      }
+    ]
+  },
+  {
+    "id": "1331bb7b-84f6-4532-afaf-fa9ef6c0014a",
+    "session_id": "session_6f5b69259d79",
+    "tool_name": "boss_filter",
+    "created_at": "2026-10-23 15:49:57.303756",
+    "runner_id": "runner_dbdfad2bdfa04818b0f829d2de8bb776",
+    "verification": {
+      "status": "satisfied",
+      "evidence": [
+        "executor已核验实际按钮计数、选项与面板关闭；不可应用条件保留skipped结果"
+      ]
+    },
+    "native_hidden": false,
+    "recovery_state": "not_needed",
+    "steps_count": 0,
+    "observation_count": 0,
+    "observations": []
+  },
+  {
+    "id": "75ce0440-a826-4fd2-b02a-8c4b2f8c67b4",
+    "session_id": "session_6f5b69259d79",
+    "tool_name": "boss_resume_next",
+    "created_at": "2026-10-23 15:55:50.813804",
+    "runner_id": "runner_dbdfad2bdfa04818b0f829d2de8bb776",
+    "verification": {
+      "status": "inconclusive",
+      "evidence": []
+    },
+    "native_hidden": true,
+    "recovery_state": "diagnosis_unavailable",
+    "steps_count": 0,
+    "observation_count": 2,
+    "observations": [
+      {
+        "branch": "step0.diagnose",
+        "mode": "page",
+        "http_status": 200,
+        "state": "completed",
+        "failure_stage": null,
+        "original_code": null,
+        "obstruction": "absent",
+        "goal_state": "satisfied"
+      },
+      {
+        "branch": "step0.diagnose.window",
+        "mode": "window",
+        "http_status": null,
+        "state": null,
+        "failure_stage": "window_capture_or_diagnosis",
+        "original_code": null,
+        "obstruction": null,
+        "goal_state": null
+      }
+    ]
+  },
+  {
+    "id": "c3a603b2-8bdf-4324-935b-1ea2fee8e6bb",
+    "session_id": "session_6f5b69259d79",
+    "tool_name": "boss_resume_next",
+    "created_at": "2026-10-23 15:56:12.410031",
+    "runner_id": "runner_dbdfad2bdfa04818b0f829d2de8bb776",
+    "verification": {
+      "status": "inconclusive",
+      "evidence": []
+    },
+    "native_hidden": true,
+    "recovery_state": "diagnosis_unavailable",
+    "steps_count": 0,
+    "observation_count": 2,
+    "observations": [
+      {
+        "branch": "step0.diagnose",
+        "mode": "page",
+        "http_status": 200,
+        "state": "completed",
+        "failure_stage": null,
+        "original_code": null,
+        "obstruction": "absent",
+        "goal_state": "inconclusive"
+      },
+      {
+        "branch": "step0.diagnose.window",
+        "mode": "window",
+        "http_status": null,
+        "state": null,
+        "failure_stage": "window_capture_or_diagnosis",
+        "original_code": null,
+        "obstruction": null,
+        "goal_state": null
+      }
+    ]
+  },
+  {
+    "id": "1aa7833a-b5b8-4fe4-8f0e-c260934d9f14",
+    "session_id": "session_6f5b69259d79",
+    "tool_name": "boss_resume_batch",
+    "created_at": "2026-10-23 15:56:28.258358",
+    "runner_id": "runner_dbdfad2bdfa04818b0f829d2de8bb776",
+    "verification": {
+      "status": "inconclusive",
+      "evidence": []
+    },
+    "native_hidden": true,
+    "recovery_state": "diagnosis_unavailable",
+    "steps_count": 0,
+    "observation_count": 2,
+    "observations": [
+      {
+        "branch": "step0.diagnose",
+        "mode": "page",
+        "http_status": 200,
+        "state": "completed",
+        "failure_stage": null,
+        "original_code": null,
+        "obstruction": "absent",
+        "goal_state": "inconclusive"
+      },
+      {
+        "branch": "step0.diagnose.window",
+        "mode": "window",
+        "http_status": null,
+        "state": null,
+        "failure_stage": "window_capture_or_diagnosis",
+        "original_code": null,
+        "obstruction": null,
+        "goal_state": null
+      }
+    ]
+  },
+  {
+    "id": "3c68ecb5-c401-4239-902d-79ec707b789b",
+    "session_id": "session_6f5b69259d79",
+    "tool_name": "boss_filter",
+    "created_at": "2026-10-23 16:05:54.054825",
+    "runner_id": "runner_059ae40d76284c0ba0e0c48629345d2e",
+    "verification": {
+      "status": "inconclusive",
+      "evidence": [
+        "filter_button_count=7; expected=unknown; panel_open=true"
+      ]
+    },
+    "native_hidden": false,
+    "recovery_state": "diagnosis_unavailable",
+    "steps_count": 1,
+    "observation_count": 4,
+    "observations": [
+      {
+        "branch": "step0.diagnose",
+        "mode": "page",
+        "http_status": 200,
+        "state": "completed",
+        "failure_stage": null,
+        "original_code": null,
+        "obstruction": "present",
+        "goal_state": "inconclusive"
+      },
+      {
+        "branch": "step0.postcheck",
+        "mode": "page",
+        "http_status": 200,
+        "state": "completed",
+        "failure_stage": null,
+        "original_code": null,
+        "obstruction": "present",
+        "goal_state": "not_satisfied"
+      },
+      {
+        "branch": "step1.diagnose",
+        "mode": "page",
+        "http_status": 200,
+        "state": "completed",
+        "failure_stage": null,
+        "original_code": null,
+        "obstruction": "absent",
+        "goal_state": "not_satisfied"
+      },
+      {
+        "branch": "step1.diagnose.window",
+        "mode": "window",
+        "http_status": null,
+        "state": null,
+        "failure_stage": "window_capture_or_diagnosis",
+        "original_code": null,
+        "obstruction": null,
+        "goal_state": null
+      }
+    ]
+  },
+  {
+    "id": "601c8e3e-e69a-4933-b1c4-ded6b369b2c1",
+    "session_id": "session_6f5b69259d79",
+    "tool_name": "boss_filter",
+    "created_at": "2026-10-23 16:07:03.214549",
+    "runner_id": "runner_059ae40d76284c0ba0e0c48629345d2e",
+    "verification": {
+      "status": "inconclusive",
+      "evidence": [
+        "filter_button_count=7; expected=unknown; panel_open=true"
+      ]
+    },
+    "native_hidden": false,
+    "recovery_state": "diagnosis_unavailable",
+    "steps_count": 0,
+    "observation_count": 2,
+    "observations": [
+      {
+        "branch": "step0.diagnose",
+        "mode": "page",
+        "http_status": 200,
+        "state": "completed",
+        "failure_stage": null,
+        "original_code": null,
+        "obstruction": "absent",
+        "goal_state": "not_satisfied"
+      },
+      {
+        "branch": "step0.diagnose.window",
+        "mode": "window",
+        "http_status": null,
+        "state": null,
+        "failure_stage": "window_capture_or_diagnosis",
+        "original_code": null,
+        "obstruction": null,
+        "goal_state": null
+      }
+    ]
+  },
+  {
+    "id": "38cc072d-6922-4379-890f-a273da2c3071",
+    "session_id": "session_6f5b69259d79",
+    "tool_name": "boss_filter",
+    "created_at": "2026-10-23 16:08:00.013124",
+    "runner_id": "runner_059ae40d76284c0ba0e0c48629345d2e",
+    "verification": {
+      "status": "inconclusive",
+      "evidence": [
+        "filter_button_count=7; expected=unknown; panel_open=true"
+      ]
+    },
+    "native_hidden": false,
+    "recovery_state": "diagnosis_unavailable",
+    "steps_count": 0,
+    "observation_count": 2,
+    "observations": [
+      {
+        "branch": "step0.diagnose",
+        "mode": "page",
+        "http_status": 200,
+        "state": "completed",
+        "failure_stage": null,
+        "original_code": null,
+        "obstruction": "absent",
+        "goal_state": "inconclusive"
+      },
+      {
+        "branch": "step0.diagnose.window",
+        "mode": "window",
+        "http_status": null,
+        "state": null,
+        "failure_stage": "window_capture_or_diagnosis",
+        "original_code": null,
+        "obstruction": null,
+        "goal_state": null
+      }
+    ]
+  }
+]
