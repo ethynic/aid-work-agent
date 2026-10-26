@@ -631,6 +631,20 @@ prompt_drafts（草稿，每 Prompt 最多一条，未发布的修改）
 
 **关系**：`user_email_settings.user_id` → `users.user_id`（1:1）
 
+### 11.3a `tenant_email_settings` — 租户邮箱配置表
+
+租户级共用的企业邮箱 SMTP/IMAP 配置（密码加密存储），作为邮箱三层解析的
+第 2 层兜底：用户个人邮箱（`user_email_settings`）-> 租户邮箱 -> 报错提示。
+消费方：`src/skills/ai-lead-gen-1.0.0/scripts/mailbox_resolver.py`（AI获客发件与
+回复监控 IMAP 同源）。系统 .env 邮箱（SMTP_*/IMAP_*）仅用于平台级通知，不进入本表。
+
+**关键字段**：
+- `tenant_id` — 租户隔离（active 记录每租户一条）
+- `smtp_password` — 加密存储（encryption_manager），仅在脚本/工具层内存解密
+- `status` — active / inactive（软删除）
+
+**关系**：`tenant_email_settings.tenant_id` → `tenants.tenant_id`（1:1，active 态）
+
 ### 11.4 `data_connectors` — 数据连接器表
 
 数据分析智能体使用的外部数据库连接配置。
@@ -769,7 +783,8 @@ tenants（租户）
 ├── users（用户） ────┬── tokens（认证Token）
 │                     ├── sms_codes（验证码）
 │                     ├── remote_credentials（远程凭据）
-│                     └── user_email_settings（邮箱配置）
+│                     ├── user_email_settings（邮箱配置）
+│                     └── tenant_email_settings（租户邮箱配置）
 │
 ├── subscriptions（订阅） ────┬── payment_orders（支付订单）
 │                              └── agent_instances（数字员工实例）

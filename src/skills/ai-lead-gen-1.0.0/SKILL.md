@@ -1,0 +1,142 @@
+---
+name: ai-lead-gen
+description: >
+  AI 获客技能：B2B 目标客户开发与冷邮件外联全流程。从需求澄清（brief）开始，
+  检索目标客户名单（公司+联系人+邮箱），入库筛选后逐一撰写针对性邮件，
+  经半自动确认或全自动定时发送（SMTP），发送结果回写数据库，
+  客户回复自动接收并判定意向、有意向时通知用户。
+  适用于外贸开发、客户线索挖掘、cold outreach、lead generation、
+  邮件营销获客等场景。
+version: 1.0.0
+init_script: lead_db.py
+requires_tools: [web_search, web_fetch]
+metadata:
+  openclaw:
+    emoji: "🎯"
+    requires:
+      bins: ["python"]
+---
+
+# AI 获客（B2B 冷邮件外联）
+
+## 用途
+
+把一段公司介绍 / 产品介绍 / 需求描述，转化为一份可发送的目标客户名单、
+联系人清单和个性化外联邮件，并完成发送与回复跟进。
+
+本技能是**编排层**：决定搜什么、爬哪个 URL、按什么口径判、怎么写邮件、怎么发。
+实际检索与爬取**委托外层智能体**用 `web_search` / `web_fetch` 工具执行（见下文委托协议）。
+
+## 数据与身份（本系统改造点，与原包差异必读）
+
+1. **身份与数据库**：脚本由 `skill_execute` 在执行上下文中运行，
+   `AID_TENANT_ID` / `AID_USER_ID` 环境变量由系统注入（不可伪造、不进提示词）。
+   所有名单/联系人/邮件/回复数据存 PostgreSQL `bs_ai_lead_gen_*` 五表
+   （campaigns / leads / contacts / emails / replies，启动时自动建表），
+   **不要**使用原包的 workspace CSV 落盘存业务数据。
+2. **发件邮箱三层解析**（`mailbox_resolver.py`，发送脚本自动调用）：
+   用户个人邮箱（邮箱设置）-> 租户邮箱兜底 -> 两者皆无时脚本退出并提示用户去配置。
+   系统 .env 邮箱仅用于平台通知，**本技能禁止使用**。SMTP/IMAP 密码只在脚本内存中
+   解密，不落盘、不打印、不进对话上下文。
+3. **campaign 工作目录**：`storage/tenants/{tenant}/lead-gen/campaign_{id}/`
+   （brief.md、intel/、emails/、logs/、contact_targets.json）。退订黑名单在
+   租户级 `lead-gen/unsubscribed.csv`，跨 campaign 共享。
+4. **半自动 / 全自动同一条管线**，只差 campaign 的 `send_mode` 闸门：
+   - `review`（半自动）：approved 草稿经用户逐批确认后再导出队列发送；
+   - `auto`（全自动）：复用系统定时任务（scheduler）按 cron 以用户身份执行
+     发送编排，发送前闸门（限额/体检/黑名单）完全一致。
+
+## 铁律（违反会导致任务失败）
+
+1. **不猜测邮箱**。邮箱必须来自官网页面、邮箱验证工具或公司公开文档；
+   靠名字+域名拼出的邮箱一律标 `guessed`（confidence=low），入库闸门会直接拒收。
+2. **每个联系人只发一封**，且必须在首封里说明"如何拒绝"。
+   群发同一文案给同一公司多个联系人是明确禁止的。
+3. **合规优先**。欧盟/英国 GDPR 合法利益评估；美国 CAN-SPAM（退订链接+真实寄件地址）；
+   中国《个人信息保护法》；新加坡 PDPA；加拿大 CASL。见 `references/email-compliance.md`。
+4. **不采集敏感个人信息**（种族、宗教、政治倾向、健康、金融账户、工会成员身份）。
+   社媒只分析公开的商业相关内容。
+5. **发送量纪律**：每域 24h ≤ 3 封；campaign `daily_limit` 默认 20
+   （预热分档按累计已发：0-49→20/天，50-149→50，150-499→100，≥500→200）；
+   `daily_limit < 20` 时发送脚本直接拒发。
+6. **检索结果必须相关才可用**。搜索结果与查询无关（代理劫持特征）一律丢弃，
+   宁可失败上报，也不污染名单。见 `references/retrieval-layer.md`。
+7. **不编造邮箱**。官网抓不到就在 leads 里标 `reject_reason=no_email`，
+   把通用邮箱伪装成负责人邮箱属于严重错误。
+8. **发送前必须做域名体检**。SPF/DKIM/DMARC 未配好会静默进垃圾箱并损伤主域声誉。
+   用 `scripts/domain_check.py` 确认无失败项，优先用独立子域。见 `references/domain-warming.md`。
+9. **邮箱必须对口，不能只是"能发"**。招聘（hr@/jobs@）、财务、法务、公关邮箱与
+   公开窗口（info@/contact@）**都不得进入发送队列**。判定由 `scripts/email_rules.py`
+   统一负责，采集/入库/发送三道闸门强制执行。官网只有这些地址时不算"没有邮箱"，
+   按 `references/contact-discovery.md` 路径 2→5 继续找，全部无果才判 `no_email`。
+
+## 脚本清单（经 skill_execute 调用，均需 --campaign-id）
+
+| 脚本 | 用途 |
+|------|------|
+| `lead_db.py` | 业务数据读写（子命令见下表） |
+| `send_emails.py` | SMTP 发送引擎（限额/退订/退信分类/随机延迟） |
+| `mailbox_resolver.py` | 发件邮箱三层解析（单独运行可自检配置） |
+| `sender_profile.py` | 发件身份档案（from_name/退订说明/通信地址）与域名体检状态 |
+| `domain_check.py` | SPF/DKIM/DMARC 域名体检 |
+| `email_verify.py` | 邮箱格式/MX 校验 |
+| `email_rules.py` | 职能相关性判定（三道闸门共用口径） |
+
+`lead_db.py` 子命令：
+
+```bash
+python lead_db.py init --name N --brief-file F --target-region R [--send-mode review|auto]
+python lead_db.py set-target-config --campaign-id ID --json-file F   # contact_targets.json
+python lead_db.py set-send-mode --campaign-id ID review|auto
+python lead_db.py add-lead --campaign-id ID --json-file F              # 检索名单入库（自动去重）
+python lead_db.py set-status --campaign-id ID --company C --status S [reason]
+python lead_db.py add-contact --campaign-id ID --json-file F           # 联系人入库（闸门强制）
+python lead_db.py add-email-draft --campaign-id ID --contact-id CID \
+    --subject-a A --subject-b B --body-file F                          # 草稿（A/B 交替分组）
+python lead_db.py set-email-status --campaign-id ID --email-id EID --status S
+python lead_db.py export-send-queue --campaign-id ID                   # 生成 logs/send_queue.json
+python lead_db.py score / export / list-leads / list-contacts / show-campaign ...
+```
+
+## 检索 / 爬取委托协议
+
+流程走到需要检索/爬取的步骤（搜索名单、官网定位、联系人挖掘、社媒分析）时：
+
+1. 用 `SEARCH_TASK` / `SCRAPE_TASK` 的 JSON 结构明确写出要搜什么 / 爬哪个 URL /
+   按什么口径判（格式见 `references/retrieval-layer.md`）。
+2. 委托外层智能体：用 `web_search` 执行 `SEARCH_TASK`、用 `web_fetch` 执行
+   `SCRAPE_TASK`，结果贴回后本技能继续消费（判相关性 -> 入库）。
+3. 多个独立搜索任务可并行委托；每轮委托都要带上相关性判定口径。
+
+## 全流程 11 步
+
+1. **需求澄清（brief）**：按 `assets/brief_template.md` 多轮澄清，产出 brief.md
+   （产品/ICP/地域/决策人画像/CTA/数量），`lead_db.py init` 建 campaign 并存 brief。
+2. **目标配置**：`set-target-config` 写入 contact_targets.json（目标职能/排除职能/产品一句话），
+   三道闸门共用此口径。
+3. **客户名单检索**：委托 `web_search`（按目标国家/地区选当地引擎与行业名录关键词），
+   结果过相关性判定后 `add-lead` 入库（自动按公司名/官网去重）。
+4. **官网定位与筛选**：委托 `web_fetch` 核验官网有效性，打分（score）并
+   `set-status` 标 qualified/rejected（带 reject_reason）。
+5. **联系人挖掘**：委托 `web_fetch` 抓官网 contact/about/team 页与名录，
+   `add-contact` 入库。闸门自动拒收：无关职能/公开窗口/guessed 低置信。
+6. **社媒兴趣分析**（可选）：委托 `web_fetch` 读公开商业内容，写入联系人 notes。
+7. **撰写邮件**：`add-email-draft` 逐联系人写针对性草稿（必写 subject_a/subject_b
+   两版，各 ≤35 字符只差一个变量；公司简称放签名不进主题行）。
+8. **审阅闸门（review 模式）**：草稿置 approved 前必须经用户确认；
+   auto 模式按 campaign 配置的定时任务自动推进，但本步闸门规则一致。
+9. **发送准备**：`domain_check.py` 体检 + `sender_profile.py` 确认发件身份 +
+   `mailbox_resolver.py` 确认邮箱配置就绪 + `export-send-queue` 生成队列。
+10. **发送**：先 `send_emails.py --campaign-id ID --dry-run` 干跑复查
+    （无 BLOCK 才可发），再 `--limit 3` 小批量试发，最后全量
+    （可配 `--max-minutes` 分段）。发送结果自动回写 emails 表
+    （sent 含 message_id / failed / bounced），硬退信自动进退订名单。
+11. **回复跟进**：回信按 Reply-To 锚点归因到 campaign，LLM 判定意向
+    （interested/info_request/refused/irrelevant/unclear），有意向通知用户；
+    负面回复自动进退订名单（回复监控链路见数字员工设计文档 §9）。
+
+## 不要使用本技能
+
+- 已有明确结构化线索来源的 CRM 录入 -> 用对应业务功能
+- 营销群发（同一文案给大量既有订阅用户）-> 本技能是 1:1 个性化冷邮件外联
+- 邮件代收代发个人事务 -> 平台邮箱通知体系

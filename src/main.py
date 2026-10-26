@@ -1844,6 +1844,10 @@ app.include_router(subagent_template_file.router)
 from src.api import tenant_config_file
 app.include_router(tenant_config_file.router)
 
+# 租户邮箱设置 API（邮箱三层解析第 2 层兜底，租户管理员操作）
+from src.api import tenant_email_settings
+app.include_router(tenant_email_settings.router)
+
 # 租户数字员工实例 API（复制/定制/删除副本）
 from src.api import tenant_agent_instances
 app.include_router(tenant_agent_instances.router)
