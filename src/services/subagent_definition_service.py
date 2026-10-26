@@ -240,6 +240,11 @@ class SubagentDefinitionService:
         prompt = PromptRegistryService.get_prompt_by_scope(None, "subagent", agent_id)
         if prompt:
             PromptRegistryService.delete_prompt(str(prompt["id"]))
+        # invalidate_prompt 只按 prompt_id 清 CONTENT/LABEL，registry 缓存键按
+        # scope_id（agent_id）组织，必须单独失效，否则重建同 agent_id 后在
+        # TTL 内 resolve 命中旧 prompt_id，load_from_db 会跳过该智能体
+        from src.prompts.prompt_resolver import prompt_resolver
+        prompt_resolver.cache.invalidate_registry(None, "subagent", agent_id)
 
         return SubagentDefinitionDB.delete(agent_id)
 
