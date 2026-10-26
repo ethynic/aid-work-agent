@@ -746,7 +746,7 @@ class KnowledgeBaseService:
             logger.opt(exception=True).error(f"后端日志：文档上传失败: {error_str}")
             return {
                 "success": False,
-                "error": "文档上传失败，请稍后重试",
+                "error": "文档上传失败，请重新上传；若多次失败请联系管理员",
                 "debug": error_str,
                 "document_id": None
             }

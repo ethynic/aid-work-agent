@@ -20,6 +20,14 @@ _RETRYABLE_EXC = (
     requests.exceptions.ChunkedEncodingError,
 )
 
+# 可重试的阿里云业务层错误码前缀：InternalError.* 为服务端内部算力/管线抖动
+# （如 InternalError.Algo.Embedding_pipeline_Error），与请求内容无关，延迟重试即可恢复。
+# 其余业务错误（InvalidApiKey / InvalidParameter / 超限等）重试无意义，直接失败。
+_RETRYABLE_BUSINESS_ERROR_PREFIXES = ("InternalError",)
+
+# 业务错误重试前的等待秒数
+_BUSINESS_RETRY_DELAY_SECONDS = 2
+
 # 瞬时错误关键字（兜底匹配未被 isinstance 覆盖的子类或被包装异常）
 _TRANSIENT_KEYWORDS = (
     "connection aborted",
@@ -174,6 +182,33 @@ class TextEmbeddingV3Client:
                     )
         raise last_exc  # type: ignore[misc]
 
+    def _call_and_check_with_business_retry(self, texts):
+        """调用 SDK 并校验业务状态码；InternalError 类业务错误延迟重试 1 次
+
+        _call_dashscope_with_retry 只覆盖 HTTP 传输层瞬时异常；此处补充业务层：
+        阿里云 InternalError.*（如 InternalError.Algo.Embedding_pipeline_Error）
+        是服务端内部抖动，与请求内容无关，延迟 2s 重试 1 次可消除大部分偶发失败。
+        其余业务错误（鉴权/参数/超限等）直接抛出。同步方法，供 to_thread 调用。
+        """
+        resp = self._call_dashscope_with_retry(texts)
+        if resp.status_code == 200:
+            return resp
+
+        code = str(getattr(resp, "code", "") or "")
+        sanitized_msg = sanitize_error_info(resp.message)
+        if not code.startswith(_RETRYABLE_BUSINESS_ERROR_PREFIXES):
+            raise Exception(f"Embedding API 失败: {sanitized_msg}")
+
+        logger.warning(
+            f"后端日志：Embedding 业务错误 {code}（阿里云侧瞬时错误），"
+            f"{_BUSINESS_RETRY_DELAY_SECONDS}s 后重试 1 次: {sanitized_msg}"
+        )
+        time.sleep(_BUSINESS_RETRY_DELAY_SECONDS)
+        resp = self._call_dashscope_with_retry(texts)
+        if resp.status_code != 200:
+            raise Exception(f"Embedding API 失败: {sanitize_error_info(resp.message)}")
+        return resp
+
     async def _embed_single_batch(self, texts: List[str]) -> List[List[float]]:
         """
         单批次向量化（不拆分）
@@ -186,12 +221,9 @@ class TextEmbeddingV3Client:
         """
         try:
             # TextEmbedding.call 是同步 SDK，使用 to_thread 包装；
-            # _call_dashscope_with_retry 内部对 keep-alive 死连接等瞬时网络错误重试 2 次
-            resp = await asyncio.to_thread(self._call_dashscope_with_retry, texts)
-
-            if resp.status_code != 200:
-                sanitized_msg = sanitize_error_info(resp.message)
-                raise Exception(f"Embedding API 失败: {sanitized_msg}")
+            # _call_and_check_with_business_retry 内部对传输层瞬时网络错误重试 2 次、
+            # 对 InternalError 类业务错误延迟重试 1 次
+            resp = await asyncio.to_thread(self._call_and_check_with_business_retry, texts)
 
             # 累加 usage tokens，供调用方接入计费
             self.last_usage_tokens += _extract_usage_tokens(resp)
@@ -226,10 +258,7 @@ class TextEmbeddingV3Client:
         """
         if not text:
             return []
-        resp = self._call_dashscope_with_retry(text)
-        if resp.status_code != 200:
-            sanitized_msg = sanitize_error_info(resp.message)
-            raise Exception(f"Embedding API 失败: {sanitized_msg}")
+        resp = self._call_and_check_with_business_retry(text)
         # 累加 usage tokens
         self.last_usage_tokens += _extract_usage_tokens(resp)
         return resp.output["embeddings"][0]["embedding"]
