@@ -306,6 +306,22 @@ async def test_extra_tool_parameters_cannot_forward_headers_or_override_provider
     assert not result["success"]
 
 
+async def test_explicit_pdf_pages_cannot_be_silently_served_by_unbounded_remote_extract(isolated_config, monkeypatch):
+    remote = AsyncMock()
+    monkeypatch.setattr(fetch, "_remote_document", remote)
+    isolated_config.provider = "remote"
+    result = await fetch.fetch_public_document(URL, pdf_start_page=1, pdf_page_count=10)
+    assert result["debug"] == "pdf_page_selection_requires_native"
+    remote.assert_not_awaited()
+    isolated_config.provider = "auto"
+    native = AsyncMock(return_value={"success": False, "debug": "fetch_tls_failed"})
+    monkeypatch.setattr(fetch, "_native_document", native)
+    result = await fetch.fetch_public_document(URL, pdf_start_page=2, pdf_page_count=10)
+    assert result["debug"] == "fetch_tls_failed" and len(result["attempts"]) == 1
+    native.assert_awaited_once_with(URL, isolated_config.pdf_max_download_mb * 1024 * 1024, (2, 10))
+    remote.assert_not_awaited()
+
+
 async def test_real_executor_publishes_and_reads_remote_body_without_claiming_direct(wire, isolated_config, tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_RUNNER_STORAGE_ROOT", str(tmp_path / "storage"))
     context = ToolExecutionContext(tenant_id="routing", user_id="researcher", session_id="research")

@@ -115,3 +115,14 @@ Fetch提供auto/native/remote，缺省auto：原生成功立即返回，仅网�
 
 
 兼容契约：会话投影保留既有search_engine/response_time。Tavily answer保留为供应商生成摘要，明确answer_kind，预览最多700字符；超出部分完整保存到同一会话文件，附SHA并由Read分页，不能作为新增source或原始全文证据。
+
+
+## Read UTF-8兼容修复（2026-10-26）
+
+完整文件先严格UTF-8读取，成功且无NUL时保留原文，不让chardet的UTF-7猜测改写已验证UTF-8；不能只验证8192字节样本。含NUL时保留既有无BOM UTF-16/32兼容识别，其余探测及Office读取保持。本批不修改Agent主循环、控制工具或提示词装配。
+
+## 公开PDF显式页段读取（2026-10-26）
+
+web_fetch新增可选pdf_start_page（1起）/pdf_page_count（1..100，显式分页默认20）。不传参数仍沿原默认整篇读取与100页上限，超过时给出总页数及分页提示；保留原页码，返回实际起止/总页数/pdf_complete，元数据随会话来源保存。显式页段只走原生解析，HTML拒绝页段，远端不伪装指定PDF页。下载大小、SSRF/DNS/TLS、超时、解析隔离与取消边界保持。工具指南仅补分页说明，不包含新研究流程的通用行为提示。
+
+只含Read/PDF工具变更的隔离候选在现有HEAD上通过323项相关回归（0失败/跳过，17.52秒），包含工具装配、原Agent引擎/恢复及清理。research_progress、结束复核、域名出处门禁和通用搜索策略不在本批。

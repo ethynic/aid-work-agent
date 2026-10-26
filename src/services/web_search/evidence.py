@@ -68,6 +68,7 @@ def publish_research_result(payload: dict, *, provider=None) -> dict:
         metadata = {key: item[key] for key in (
             "url", "requested_url", "provider", "score", "published_at", "authority", "source",
             "final_url", "final_url_verified", "freshness", "notice",
+            "pdf_total_pages", "pdf_page_start", "pdf_page_end", "pdf_complete",
         ) if key in item}
         metadata.update({
             "provider": item.get("provider") or provider or payload.get("provider") or "direct_http",

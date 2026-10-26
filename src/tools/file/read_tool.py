@@ -262,11 +262,27 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
 
     def _read_with_auto_detection(self, path: Path) -> tuple:
         """自动检测编码并读取文件，返回 (content, encoding)"""
+        # 完整验证UTF-8，避免UTF-7误猜或采样截断多字节字符后破坏原文。
+        utf8_content = None
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                utf8_content = f.read()
+            if '\x00' not in utf8_content:
+                return utf8_content, 'utf-8'
+        except UnicodeDecodeError:
+            pass
+
         # 先读取前几KB用于检测
         with open(path, 'rb') as f:
             sample = f.read(8192)
 
         detected_encoding = self._detect_encoding(sample)
+
+        # NUL填充也可能是无BOM的宽字符文件，保留既有UTF-16/32识别。
+        if utf8_content is not None and not (
+            detected_encoding and detected_encoding.startswith(('utf-16', 'utf-32'))
+        ):
+            return utf8_content, 'utf-8'
 
         if detected_encoding:
             try:

@@ -131,18 +131,30 @@ def _parse_html(data: bytes, encoding: str | None, final_url: str) -> tuple[str,
     return title, body
 
 
-def _parse_pdf(data: bytes, final_url: str) -> tuple[str, str]:
+def _parse_pdf(data: bytes, final_url: str, page_selection=None) -> tuple[str, str, dict]:
     import fitz
 
     try:
         with fitz.open(stream=data, filetype="pdf") as document:
             if document.needs_pass:
                 raise _FetchError("pdf_password_protected")
-            if document.page_count > MAX_PDF_PAGES:
-                raise _FetchError("pdf_too_many_pages")
+            count = document.page_count
+            if page_selection is None:
+                if count > MAX_PDF_PAGES:
+                    raise _FetchError("pdf_too_many_pages", pdf_total_pages=count,
+                        retry_hint="使用pdf_start_page=1、pdf_page_count=20按页读取，再按实际目录继续；不要声称整份已读。")
+                start, end = 1, count
+            else:
+                start, limit = page_selection
+                if start > count:
+                    raise _FetchError("pdf_page_out_of_range", pdf_total_pages=count)
+                end = min(count, start + limit - 1)
+            if end - start + 1 > MAX_PDF_PAGES:
+                raise _FetchError("pdf_too_many_pages", pdf_total_pages=count)
             title = (document.metadata.get("title") or final_url)[:4096]
             pages, total, has_text = [], 0, False
-            for number, page in enumerate(document, 1):
+            for number in range(start, end + 1):
+                page = document.load_page(number - 1)
                 text = page.get_text().strip()
                 has_text = has_text or bool(text)
                 value = f"## Page {number}\n\n{text}"
@@ -152,7 +164,10 @@ def _parse_pdf(data: bytes, final_url: str) -> tuple[str, str]:
                 pages.append(value)
             if not has_text:
                 raise _FetchError("pdf_no_text")
-            return title, "\n\n".join(pages)
+            return title, "\n\n".join(pages), {
+                "pdf_total_pages": count, "pdf_page_start": start, "pdf_page_end": end,
+                "pdf_complete": start == 1 and end == count,
+            }
     except _FetchError:
         raise
     except Exception:
@@ -167,7 +182,7 @@ async def _write_parser_input(process, metadata: bytes, data: bytes) -> None:
 
 
 async def _parse_isolated(data: bytes, media_type: str, encoding: str | None, final_url: str,
-                          download_limit_bytes: int) -> tuple[str, str]:
+                          download_limit_bytes: int, page_selection=None) -> tuple[str, str, dict]:
     """Terminate document parsing on timeout/cancellation, including CPU-bound parsers.
 
     The nonblocking process-wide semaphore also works with different event loops.
@@ -182,6 +197,7 @@ async def _parse_isolated(data: bytes, media_type: str, encoding: str | None, fi
             "media_type": media_type, "encoding": encoding, "url": final_url,
             "max_text_chars": MAX_TEXT_CHARS, "max_pdf_pages": MAX_PDF_PAGES,
             "max_download_bytes": download_limit_bytes,
+            "page_selection": page_selection,
         }, ensure_ascii=True).encode("ascii")
         environment = {key: value for key, value in os.environ.items() if key.upper() in {
             "SYSTEMROOT", "WINDIR", "PATH", "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL",
@@ -211,12 +227,17 @@ async def _parse_isolated(data: bytes, media_type: str, encoding: str | None, fi
             raise _FetchError("document_parse_failed")
         if parsed.get("debug"):
             codes = {"access_challenge", "requires_rendering", "no_text", "text_too_large",
-                     "pdf_password_protected", "pdf_too_many_pages", "pdf_no_text", "pdf_parse_failed"}
-            raise _FetchError(parsed["debug"] if parsed["debug"] in codes else "document_parse_failed")
+                     "pdf_password_protected", "pdf_too_many_pages", "pdf_no_text", "pdf_parse_failed",
+                     "pdf_page_out_of_range"}
+            details = {key: parsed[key] for key in ("pdf_total_pages", "retry_hint") if key in parsed}
+            raise _FetchError(parsed["debug"] if parsed["debug"] in codes else "document_parse_failed", **details)
         title, content = parsed.get("title"), parsed.get("content")
         if not isinstance(title, str) or not isinstance(content, str) or len(content) > MAX_TEXT_CHARS:
             raise _FetchError("document_parse_failed")
-        return title, content
+        pdf_metadata = {key: parsed[key] for key in (
+            "pdf_total_pages", "pdf_page_start", "pdf_page_end", "pdf_complete",
+        ) if key in parsed}
+        return title, content, pdf_metadata
     finally:
         try:
             if process is None and creation is not None:
@@ -235,7 +256,7 @@ async def _parse_isolated(data: bytes, media_type: str, encoding: str | None, fi
             _PARSE_SLOTS.release()
 
 
-async def _fetch(url: str, pdf_limit_bytes: int) -> dict:
+async def _fetch(url: str, pdf_limit_bytes: int, page_selection=None) -> dict:
     current = _validate_url(url)
     for redirect in range(MAX_REDIRECTS + 1):
         ip = await _resolve_public_ip(current)
@@ -268,6 +289,8 @@ async def _fetch(url: str, pdf_limit_bytes: int) -> dict:
                 media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
                 if media_type not in ("text/html", "application/xhtml+xml", "application/pdf"):
                     raise _FetchError("unsupported_content_type")
+                if page_selection is not None and media_type != "application/pdf":
+                    raise _FetchError("pdf_page_selection_requires_pdf")
                 download_limit = pdf_limit_bytes if media_type == "application/pdf" else MAX_DOWNLOAD_BYTES
                 length = response.headers.get("content-length")
                 if length and length.isdigit() and int(length) > download_limit:
@@ -279,12 +302,14 @@ async def _fetch(url: str, pdf_limit_bytes: int) -> dict:
                     data.extend(chunk)
                 final_url = str(current)
                 encoding = response.charset_encoding
-        title, content = await _parse_isolated(bytes(data), media_type, encoding, final_url, download_limit)
+        title, content, pdf_metadata = await _parse_isolated(
+            bytes(data), media_type, encoding, final_url, download_limit, page_selection)
         kind = "direct_pdf" if media_type == "application/pdf" else "direct_html"
         return {"success": True, "results": [{
             "title": title, "url": final_url, "requested_url": url, "content": content,
             "content_kind": kind, "retrieved_at": datetime.now(timezone.utc).isoformat(),
             "final_url": final_url, "final_url_verified": True,
+            **pdf_metadata,
         }], "count": 1}
     raise _FetchError("too_many_redirects")
 
@@ -307,9 +332,9 @@ def _network_failure(error):
     return {**_failure(code), "stage": stage}
 
 
-async def _native_document(url, pdf_limit_bytes):
+async def _native_document(url, pdf_limit_bytes, page_selection=None):
     try:
-        return await _fetch(url, pdf_limit_bytes)
+        return await _fetch(url, pdf_limit_bytes, page_selection)
     except _FetchError as error:
         return {**_failure(error.code), **error.details}
     except httpx.TimeoutException:
@@ -330,24 +355,37 @@ async def _remote_document(url, config):
         timeout_seconds=config.total_timeout_seconds)
 
 
-async def fetch_public_document(url: str) -> dict:
+async def fetch_public_document(url: str, *, pdf_start_page=None, pdf_page_count=None) -> dict:
     """Read native documents or configured remote content without browser tools."""
     try:
         _validate_url(url)
     except _FetchError as error:
         return _failure(error.code)
+    page_selection = None
+    if pdf_start_page is not None or pdf_page_count is not None:
+        start = 1 if pdf_start_page is None else pdf_start_page
+        count = 20 if pdf_page_count is None else pdf_page_count
+        if type(start) is not int or start < 1 or type(count) is not int or not 1 <= count <= MAX_PDF_PAGES:
+            return _failure("invalid_pdf_page_selection")
+        page_selection = (start, count)
     attempts = []
     try:
         config = _runtime_config()
+        if page_selection is not None and config.provider == "remote":
+            return _failure("pdf_page_selection_requires_native")
         async with asyncio.timeout(config.total_timeout_seconds):
             if config.provider != "remote":
                 attempt = {"method": "native", "success": False, "debug": "in_progress", "stage": "native"}
                 attempts.append(attempt)
-                result = await _native_document(url, config.pdf_max_download_mb * 1024 * 1024)
+                if page_selection is None:
+                    result = await _native_document(url, config.pdf_max_download_mb * 1024 * 1024)
+                else:
+                    result = await _native_document(url, config.pdf_max_download_mb * 1024 * 1024, page_selection)
                 attempt.update(success=result["success"], debug=result.get("debug"), stage=result.get("stage"))
                 retryable = {"fetch_network_failed", "fetch_tls_failed", "fetch_connect_failed",
                     "fetch_response_failed", "fetch_timeout"}
-                if result["success"] or config.provider == "native" or result.get("debug") not in retryable:
+                if (result["success"] or page_selection is not None or config.provider == "native"
+                        or result.get("debug") not in retryable):
                     result["attempts"] = attempts
                     if not result["success"]:
                         result["requested_url"] = url
@@ -396,12 +434,13 @@ def _parser_worker() -> None:
         MAX_TEXT_CHARS = min(MAX_TEXT_CHARS, int(metadata["max_text_chars"]))
         MAX_PDF_PAGES = min(MAX_PDF_PAGES, int(metadata["max_pdf_pages"]))
         if metadata["media_type"] == "application/pdf":
-            title, content = _parse_pdf(data, metadata["url"])
+            title, content, pdf_metadata = _parse_pdf(data, metadata["url"], metadata.get("page_selection"))
         else:
             title, content = _parse_html(data, metadata.get("encoding"), metadata["url"])
-        payload = {"title": title, "content": content}
+            pdf_metadata = {}
+        payload = {"title": title, "content": content, **pdf_metadata}
     except _FetchError as error:
-        payload = {"debug": error.code}
+        payload = {"debug": error.code, **error.details}
     except Exception:
         payload = {"debug": "document_parse_failed"}
     output = json.dumps(payload, ensure_ascii=False).encode("utf-8")

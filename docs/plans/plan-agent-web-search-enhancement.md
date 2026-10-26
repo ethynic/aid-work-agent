@@ -4,6 +4,8 @@
 
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
+| Read UTF-8 | 已验证UTF-8优先，保留旧编码兼容 | ✅ 完成（2026-10-26） | 隔离工具候选323回归通过，用户已确认，仅工具切片 |
+| PDF页段 | 可选页段参数、原页码及来源元数据 | ✅ 完成（2026-10-26） | 默认路径兼容；隔离工具候选323回归通过，未部署 |
 | 首批提交 | 通用Search/Fetch、Read、模型完整性、50轮及Pro容量 | ✅ 完成（2026-10-23） | 隔离候选独立533通过/0跳过，CR及主控import通过；研究交付层排除，未部署 |
 | Phase 0 | 上游源码核对、现状审计与设计草案 | ✅ 完成（2026-10-13） | 源码及价格已核对；百度/智谱实测补充见调研 §9–10；博查单价及规模质量待核实 |
 | Phase 1A | 智谱独立搜索接入与兼容修复 | ✅ 完成（2026-10-13） | 80相关用例通过，修复后14例独立复测通过；CR已收口，同key真实Pro返回3条；未部署 |
@@ -117,3 +119,10 @@
 ```bash
 scripts/dev_test.sh tests/unit/tools/test_deepseek_search_tool.py tests/unit/tools/test_baidu_search_tool.py tests/unit/tools/test_search_tool.py tests/unit/tools/test_search_provider_independent.py tests/unit/tools/test_zhipu_search_tool.py tests/unit/tools/test_web_fetch_tool.py tests/unit/tools/test_remote_fetch_tool.py tests/unit/tools/test_fetch_service_routing.py tests/unit/tools/test_research_evidence.py tests/unit/tools/test_read_tool.py tests/unit/tools/test_tool_assembly.py tests/unit/test_research_completion_status.py tests/unit/test_agent_default_iterations.py tests/unit/test_llm_gateway_max_tokens.py tests/unit/test_config.py tests/unit/llm/test_provider_structural_validation.py tests/unit/llm/test_deepseek_provider.py tests/unit/test_qwen_provider_thinking_cache.py tests/integration/test_tool_execution.py -p no:cacheprovider -q
 ```
+
+
+## Read/PDF独立提交切片（2026-10-26）
+
+本批仅4个工具/服务生产文件与3个测试文件：read_tool.py/test_read_tool.py；web_search/fetch.py、web_search/evidence.py、search/fetch_tool.py与test_web_fetch_tool.py、test_fetch_service_routing.py。PDF工具通用研究提示不随分页提交，Agent主循环、Runtime、control_set及Search提示保持HEAD原样。
+
+基于1e7261c29e1f0f616f9000698463e9c87b65c193的独立候选中，两个新研究模块不存在，6个Agent执行/装配/策略文件与HEAD逐字一致。9相关测试文件323通过/0失败/0跳过（17.52秒），涵盖Read编码、原生/远端Fetch、来源投影、工具装配、Agent引擎/恢复/清理；设计见原设计新增的Read/PDF两节。用户已确认提交此工具切片；Agent执行流程和通用提示不提交，未部署。

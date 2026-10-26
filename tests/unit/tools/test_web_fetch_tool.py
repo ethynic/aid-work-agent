@@ -172,6 +172,68 @@ async def test_real_pdf_parser_preserves_page_numbers_and_original_text(network)
     assert source["content_kind"] == "direct_pdf"
     assert "## Page 1" in source["content"] and "## Page 2" in source["content"]
     assert "Sales bob@example.com" in source["content"]
+    assert source["pdf_complete"] is True and source["pdf_total_pages"] == 2
+    assert (source["pdf_page_start"], source["pdf_page_end"]) == (1, 2)
+
+
+async def test_large_pdf_can_read_selected_pages_without_raising_the_whole_document_limit(network):
+    network(content=pdf_bytes(*(f"Evidence on page {n}" for n in range(1, 102))), media_type="application/pdf")
+    refused = await fetch.fetch_public_document("https://factory.example/profile.pdf")
+    assert refused["debug"] == "pdf_too_many_pages" and refused["pdf_total_pages"] == 101
+    assert "pdf_start_page" in refused["retry_hint"]
+    result = await fetch.fetch_public_document("https://factory.example/profile.pdf", pdf_start_page=100, pdf_page_count=2)
+    source = result["results"][0]
+    assert source["content_kind"] == "direct_pdf" and source["pdf_complete"] is False
+    assert (source["pdf_total_pages"], source["pdf_page_start"], source["pdf_page_end"]) == (101, 100, 101)
+    assert "## Page 100" in source["content"] and "Evidence on page 101" in source["content"]
+    assert "Evidence on page 99" not in source["content"]
+
+
+async def test_pdf_tail_is_reported_as_actual_pages_and_out_of_range_is_not_empty_success(network):
+    network(content=pdf_bytes("one", "two", "three"), media_type="application/pdf")
+    result = await fetch.fetch_public_document("https://factory.example/profile.pdf", pdf_start_page=3, pdf_page_count=20)
+    source = result["results"][0]
+    assert source["pdf_page_end"] == 3 and source["pdf_complete"] is False
+    result = await fetch.fetch_public_document("https://factory.example/profile.pdf", pdf_start_page=4)
+    assert result["debug"] == "pdf_page_out_of_range" and result["pdf_total_pages"] == 3
+
+
+@pytest.mark.parametrize("options", [
+    {"pdf_start_page": 0}, {"pdf_start_page": True}, {"pdf_start_page": "1"},
+    {"pdf_page_count": 0}, {"pdf_page_count": 101}, {"pdf_page_count": 2.5},
+])
+async def test_invalid_page_selection_is_rejected_before_network(network, options):
+    requests, _, _, _ = network()
+    result = await fetch.fetch_public_document("https://factory.example/profile.pdf", **options)
+    assert result["debug"] == "invalid_pdf_page_selection" and not requests
+
+
+async def test_html_does_not_pretend_pdf_page_selection_was_honored(network):
+    network()
+    result = await fetch.fetch_public_document("https://factory.example/profile", pdf_start_page=1)
+    assert result["debug"] == "pdf_page_selection_requires_pdf"
+
+
+async def test_selected_pdf_pages_survive_real_tool_projection_and_read(network, tmp_path, monkeypatch):
+    from src.tools.executor import ToolExecutor
+    from src.tools.file.read_tool import ReadTool
+    from src.tools.registry import ToolRegistry
+
+    monkeypatch.setenv("AGENT_RUNNER_STORAGE_ROOT", str(tmp_path))
+    network(content=pdf_bytes("Old page", "Source evidence", "Other page"), media_type="application/pdf")
+    registry = ToolRegistry()
+    registry.register(fetch_tool.WebFetchTool())
+    registry.register(ReadTool())
+    executor = ToolExecutor(registry)
+    context = ToolExecutionContext(tenant_id="pdf-range", user_id="reader", session_id="selected")
+    result = await executor.execute("web_fetch", {"url": "https://factory.example/profile.pdf",
+        "pdf_start_page": 2, "pdf_page_count": 1}, context=context)
+    source = result["results"][0]
+    assert source["pdf_complete"] is False and source["pdf_total_pages"] == 3
+    assert source["pdf_page_start"] == source["pdf_page_end"] == 2
+    read = await executor.execute("read", {"file_path": source["body_file_path"]}, context=context)
+    assert "## Page 2" in read["content"] and "Source evidence" in read["content"]
+    assert "Old page" not in read["content"] and "Other page" not in read["content"]
 
 
 @pytest.mark.parametrize("content,code", [
@@ -456,7 +518,9 @@ async def test_httpcore_pins_tcp_but_verifies_original_tls_hostname(monkeypatch)
 def test_tool_discovery_schema_has_no_tenant_or_browser_parameters():
     tool = fetch_tool.WebFetchTool()
     assert tool.name == "web_fetch" and tool.catalog
-    assert set(tool.to_tool_definition()["input_schema"]["properties"]) == {"url"}
+    schema = tool.to_tool_definition()["input_schema"]
+    assert set(schema["properties"]) == {"url", "pdf_start_page", "pdf_page_count"}
+    assert schema["required"] == ["url"]
     assert "body_file_path" in tool.usage_guide and "source_id" in tool.usage_guide
     assert "research_validate" not in tool.usage_guide
 

@@ -13,6 +13,8 @@ from src.tools.context import current_tool_execution_context
 class WebFetchInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     url: str = Field(..., min_length=1, max_length=8192, description="公开网页或文字型PDF的完整http/https URL")
+    pdf_start_page: int | None = Field(None, ge=1, strict=True, description="PDF起始页（1起）；大PDF可指定页段读取，不代表整份已读")
+    pdf_page_count: int | None = Field(None, ge=1, le=100, strict=True, description="本次PDF读取页数（最多100）；启用分页但未指定时为20，可先读目录再定位相关页")
 
 
 class WebFetchTool(BaseTool):
@@ -27,6 +29,8 @@ class WebFetchTool(BaseTool):
         "direct_html/direct_pdf表示直接读取来源，不代表其中事实已核验。"
         "provider_fetch表示远端服务返回的正文，最终跳转URL/源站时间/PDF完整性可能未知，不能冒充本机直读或自动满足官网verified。"
         "动态页面、访问挑战、扫描PDF读取失败时应明确说明，不使用浏览器补读。"
+        "PDF超过整篇页数限制时用pdf_start_page/pdf_page_count分段，先读目录再定位相关页；"
+        "pdf_complete=false只证明所列页段可读，不等于整份完成。显式页段只走原生，远端正文不能伪装为指定PDF页。"
     )
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
@@ -35,7 +39,8 @@ class WebFetchTool(BaseTool):
             return {"success": False, "error": "缺少可信会话上下文", "debug": "missing_execution_context"}
         if not self.validate_parameters(**kwargs):
             return {"success": False, "error": "请输入有效的公开URL", "debug": "invalid_parameters"}
-        payload = await fetch_public_document(kwargs["url"])
+        page_options = {key: kwargs[key] for key in ("pdf_start_page", "pdf_page_count") if kwargs.get(key) is not None}
+        payload = await fetch_public_document(kwargs["url"], **page_options)
         if not payload.get("success"):
             return payload
         from src.services.web_search.evidence import publish_research_result
