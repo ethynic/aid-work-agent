@@ -111,13 +111,52 @@ def test_parse_interval_hours():
 async def test_scheduler_start_refuses_when_redis_down(scheduler):
     scheduler._redis.available = False
     assert await scheduler.start() is False
+    assert scheduler._task is None
 
 
 async def test_scheduler_start_single_copy(scheduler):
+    """单副本语义回归：首实例抢锁启动；第二实例锁被占时不再放弃启动（幽灵锁自愈
+    语义改写，原断言「抢锁失败返回 False」已按新行为更新）。"""
     assert await scheduler.start() is True
-    # 第二个实例同锁 → 空转返回 False（单副本）
     other = HongtaoIngestScheduler(redis=scheduler._redis)
-    assert await other.start() is False
+    other._service = _NoopService()
+    # 锁被占 → 仍启动驱动任务（循环内每 30s 重试接管），返回 True
+    assert await other.start() is True
+    assert other._task is not None and not other._task.done()
+    assert other._lock_key is not None  # 锁 key 保留供 _ensure_driver_lock 重试
+    await scheduler.stop()
+    await other.stop()
+
+
+async def test_scheduler_start_ghost_lock_creates_driver_task(scheduler):
+    """抢锁失败（强杀残留幽灵锁）→ 仍创建驱动任务并返回 True；未持锁的 stop()
+    可正常停机不抛错。"""
+    lock_key = scheduler._redis.make_key(sched_mod.DRIVER_LOCK_PREFIX)
+    scheduler._redis.locks[lock_key] = "ghost-replica"
+    try:
+        assert await scheduler.start() is True
+        assert scheduler._task is not None and not scheduler._task.done()
+        assert scheduler._lock_key == lock_key
+        await scheduler.stop()
+        assert scheduler._task is None
+        assert scheduler._lock_key is None
+        # 注：不在此断言幽灵锁保留——_FakeRedis.release_lock 为无条件 pop（真实
+        # redis_client 是 owner 比对后删除），owner 不匹配的释放保护由真实客户端保证
+    finally:
+        scheduler._redis.locks.pop(lock_key, None)
+
+
+async def test_scheduler_ghost_lock_takeover_after_release(scheduler):
+    """锁被占启动后，幽灵锁 TTL 过期消失 → _ensure_driver_lock 失锁重取接管成功。"""
+    lock_key = scheduler._redis.make_key(sched_mod.DRIVER_LOCK_PREFIX)
+    scheduler._redis.locks[lock_key] = "ghost-replica"
+    assert await scheduler.start() is True
+    # 续期失败（他人持有）→ 重取失败，锁 key 保留等待下轮
+    assert await scheduler._ensure_driver_lock() is False
+    # 幽灵锁过期消失（从替身删除模拟 TTL 到期）
+    del scheduler._redis.locks[lock_key]
+    assert await scheduler._ensure_driver_lock() is True
+    assert scheduler._redis.locks[lock_key] == scheduler._owner
     await scheduler.stop()
 
 

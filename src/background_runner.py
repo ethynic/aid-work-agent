@@ -198,8 +198,9 @@ async def _run():
     # 重启解耦；多副本下 LPOP 天然单消费者，配 RECAP_TASK_DEDUP 双保险）
     recap_consumer=asyncio.create_task(_recap_consumer())
 
-    # 5. wechat_mp 队列驱动 + 定时复核（WP7；单副本 Redis 锁，抢不到/Redis 不可用
-    # 时不启动；对齐 poller 模式 try/except，启动失败不影响 runner）
+    # 5. wechat_mp 队列驱动 + 定时复核（WP7；单副本 Redis 锁，抢不到时驱动任务
+    # 仍启动并循环重试接管（幽灵锁自愈）；Redis 不可用时拒绝启动。对齐 poller
+    # 模式 try/except，启动失败不影响 runner）
     _wmp_scheduler = None
     try:
         from src.wechat_mp.scheduler import WeChatMPScheduler

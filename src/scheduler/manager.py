@@ -3,6 +3,7 @@
 import asyncio
 import os
 import threading
+import time
 import traceback
 from datetime import datetime
 from typing import Optional, Dict
@@ -22,6 +23,8 @@ from src.core.cache_utils import CacheKeys
 _executor = ScheduledTaskExecutor()
 # 分布式锁 key（走 make_key 自动拼接 REDIS_KEY_PREFIX，避免裸键）
 _SCHEDULER_LOCK_KEY = redis_client.make_key(CacheKeys.SCHEDULER_LOCK, "manager")
+# 锁重试接管间隔（强杀残留幽灵锁场景：TTL 300s 过期后重试即可抢到）
+_LOCK_RETRY_SECONDS = 30
 
 
 def _ensure_any_session_scenario_registered() -> bool:
@@ -56,6 +59,8 @@ class ScheduledTaskManager:
         self._jobs: Dict[str, str] = {}  # task_id -> apscheduler job_id
         self._running = False
         self._lock_value: Optional[str] = None
+        # 锁重试接管线程（强杀残留幽灵锁场景）；None=未启动，启动成功后自然退出
+        self._retry_thread: Optional[threading.Thread] = None
         # reconcile 对账缓存：task_id -> 最近一次注册时的签名 tuple
         # 签名按 (schedule_type, cron, interval, status, updated_at) 计算，
         # 仅当签名变化时才重注册，避免每 30s 重置 interval 计时
@@ -72,12 +77,22 @@ class ScheduledTaskManager:
             self._lock_value = f"{os.getpid()}:{threading.current_thread().ident}"
             acquired = redis_client.acquire_lock(_SCHEDULER_LOCK_KEY, self._lock_value, ex=300)
             if not acquired:
-                logger.info("后端日志：定时任务调度器已在其他 worker 中运行，当前 worker 跳过启动")
+                # 锁被占：可能为强杀残留的幽灵锁（TTL 300s 过期后可接管），起后台
+                # 线程重试接管，不直接放弃（否则锁过期后无人再尝试，调度器永久停摆）
+                logger.info(
+                    f"后端日志：定时任务调度器锁被占（可能为强杀残留幽灵锁），"
+                    f"后台每 {_LOCK_RETRY_SECONDS}s 重试接管 lock_owner={self._lock_value}"
+                )
+                self._start_acquire_retry_thread()
                 return
         except Exception as e:
             logger.warning(f"后端日志：分布式锁获取失败，继续启动调度器: {e}")
             self._lock_value = None
 
+        self._start_scheduler_locked()
+
+    def _start_scheduler_locked(self):
+        """抢锁成功后的启动主体：构造调度器 → 加载注册任务 → 启动 → 系统任务。"""
         self._scheduler = BackgroundScheduler(
             timezone="Asia/Shanghai",
             job_defaults={
@@ -104,6 +119,34 @@ class ScheduledTaskManager:
         self._register_system_jobs()
 
         logger.info(f"后端日志：定时任务调度器已启动，已注册 {registered_count} 个活跃任务")
+
+    def _start_acquire_retry_thread(self):
+        """启动锁重试接管线程（已有存活线程则不重复起，防双跑）。"""
+        if self._retry_thread is not None and self._retry_thread.is_alive():
+            return
+        self._retry_thread = threading.Thread(
+            target=self._acquire_retry_loop,
+            args=(self._lock_value,),
+            daemon=True,
+            name="scheduler-lock-retry",
+        )
+        self._retry_thread.start()
+
+    def _acquire_retry_loop(self, lock_value: str):
+        """后台重试接管调度锁（幽灵锁残留场景）：锁 TTL 过期后 acquire 成功即补启动。
+
+        while not self._running 保证：补启动成功（或调度器已被其他途径启动）后
+        线程自然退出，不会在调度器运行期间重复抢锁导致双跑。
+        """
+        while not self._running:
+            time.sleep(_LOCK_RETRY_SECONDS)
+            try:
+                if redis_client.acquire_lock(_SCHEDULER_LOCK_KEY, lock_value, ex=300):
+                    self._lock_value = lock_value
+                    self._start_scheduler_locked()
+                    return
+            except Exception as e:  # noqa: BLE001 单轮异常不终止重试
+                logger.warning(f"后端日志：定时任务调度器锁重试接管失败（继续等待）: {e}")
 
     def _register_system_jobs(self):
         """注册系统级定时任务"""

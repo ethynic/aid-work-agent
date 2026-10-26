@@ -5,7 +5,8 @@
 挂载块（模块目录外无平台侵入）。
 
 - **单副本驱动锁**：`hongtao_shop_scheduler_lock`（TTL 300s 周期续期）；抢不到
-  → 空转返回；Redis 不可用 → 拒绝启动（不能无锁降级），runner 不因此挂掉。
+  （可能为强杀残留的幽灵锁）→ 仍启动驱动任务，循环内每 30s 重试接管；Redis
+  不可用 → 拒绝启动（不能无锁降级），runner 不因此挂掉。
 - **驱动协程**：非阻塞 lpop 唤醒（trigger_sync rpush）或 60s 兜底 → 领取轮：
   查有 queued run 的租户 → 逐租户 claim_and_run（Semaphore(4) 跨租户有限并发，
   单租户异常隔离）。唤醒丢失不丢任务（DB 队列唯一事实来源）。
@@ -69,7 +70,7 @@ class HongtaoIngestScheduler:
     # ==================== 生命周期 ====================
 
     async def start(self) -> bool:
-        """启动驱动（抢不到锁或 Redis 不可用 → 返回 False，runner 不受影响）。"""
+        """启动驱动；锁被占也启动驱动任务（循环内重试接管），Redis 不可用拒绝启动。"""
         if self._task is not None and not self._task.done():
             logger.bind(module="hongtao_shop").warning("hongtao_shop 调度器已在运行，跳过重复启动")
             return True
@@ -80,31 +81,33 @@ class HongtaoIngestScheduler:
             )
             return False
 
-        self._owner = uuid.uuid4().hex
-        self._lock_key = self._redis.make_key(DRIVER_LOCK_PREFIX)
-        acquired = await asyncio.to_thread(
-            self._redis.acquire_lock, self._lock_key, self._owner, DRIVER_LOCK_TTL_SECONDS
-        )
-        if not acquired:
-            logger.bind(module="hongtao_shop").info(
-                "hongtao_shop 调度器已在其他副本运行，本副本空转返回 owner={}", self._owner
-            )
-            self._lock_key = None
-            return False
-
         if self._service is None:
             from src.tenant_custom.hongtao_shop.service import HongtaoShopSyncService
 
             self._service = HongtaoShopSyncService()
 
+        self._owner = uuid.uuid4().hex
+        self._lock_key = self._redis.make_key(DRIVER_LOCK_PREFIX)
+        acquired = await asyncio.to_thread(
+            self._redis.acquire_lock, self._lock_key, self._owner, DRIVER_LOCK_TTL_SECONDS
+        )
         self._stop_event.clear()
         self._claim_requested = False
         self._redis_down_logged = False
         self._task = asyncio.create_task(self._run_loop(), name="hongtao-shop-scheduler")
-        logger.bind(module="hongtao_shop").info(
-            "hongtao_shop 调度器已启动 owner={} tick={}s 兜底={}s 并发={}",
-            self._owner, TICK_INTERVAL_SECONDS, IDLE_SCAN_SECONDS, TENANT_CONCURRENCY,
-        )
+        if acquired:
+            logger.bind(module="hongtao_shop").info(
+                "hongtao_shop 调度器已启动 owner={} tick={}s 兜底={}s 并发={}",
+                self._owner, TICK_INTERVAL_SECONDS, IDLE_SCAN_SECONDS, TENANT_CONCURRENCY,
+            )
+        else:
+            # 锁被占：可能为强杀残留的幽灵锁（TTL 过期后可接管）。不再放弃启动，
+            # 保留锁 key 交给 _run_loop 内 _ensure_driver_lock 的失锁自愈路径重试接管
+            logger.bind(module="hongtao_shop").info(
+                "hongtao_shop 调度器锁被占（可能为强杀残留幽灵锁），驱动任务已启动，"
+                "循环内每 {}s 重试接管 owner={}",
+                LOCK_RETRY_SECONDS, self._owner,
+            )
         return True
 
     async def stop(self) -> None:
