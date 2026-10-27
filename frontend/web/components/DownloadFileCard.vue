@@ -63,6 +63,7 @@
       </svg>
     </div>
   </button>
+  <WechatDownloadGuide v-model="showWechatGuide" />
 </template>
 
 <script setup lang="ts">
@@ -72,10 +73,11 @@ import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 import { useReplyResources } from '@/utils/replyResources'
 import { resolveApiUrl, saveDownloadUrl } from '@/platform/urlResolver'
 import { getAuthHeader } from '@/api/auth'
-import { triggerCompatibleDownload } from '@/utils/download'
+import { downloadViaBlob, resolveDownloadStrategy, triggerNativeDownload } from '@/utils/download'
 import { detectOfficePreviewKind, officePreviewMaxBytes } from '@/utils/officePreview'
 import { detectFileIconKind, type FileIconKind } from '@/utils/file'
 import FileTypeIcon from './FileTypeIcon.vue'
+import WechatDownloadGuide from './WechatDownloadGuide.vue'
 
 const props = defineProps<{ file: DownloadableFile }>()
 
@@ -83,23 +85,32 @@ const { openPreview } = useAttachmentPreview()
 const { resolver } = useReplyResources()
 
 const downloading = ref(false)
+const showWechatGuide = ref(false)
 
 async function handleDownload() {
   if (downloading.value) return
+  const url = resolver ? resolver(props.file.file_id, true) : resolveApiUrl(props.file.download_url)
+  // 策略见 utils/download.ts：微信引导 / 移动端小文件 blob / 其余原生
+  const strategy = resolveDownloadStrategy(props.file.file_size)
+  if (strategy === 'wechat_guide') {
+    showWechatGuide.value = true
+    return
+  }
   downloading.value = true
   try {
-    const url = resolver ? resolver(props.file.file_id, true) : resolveApiUrl(props.file.download_url)
-    if (window.agentDesktop) {
+    if (strategy === 'native' && window.agentDesktop) {
       await saveDownloadUrl(url, props.file.file_name, getAuthHeader())
       return
     }
-    // 微信内置浏览器（X5/XWeb）对 download 属性支持残缺：微信内整页导航交由
-    // 微信下载器/文件预览接管；非微信保持直链原生下载，浏览器下载管理器自带进度条
-    triggerCompatibleDownload(url, props.file.file_name)
+    if (strategy === 'native') {
+      triggerNativeDownload(url, props.file.file_name)
+      return
+    }
+    await downloadViaBlob(url, props.file.file_name)
   } catch (e) {
     console.error('文件下载失败:', e)
-    // Web fallback 保持现有浏览器下载行为；Desktop 不允许绕过受控保存能力。
-    if (!window.agentDesktop) window.open(resolver ? resolver(props.file.file_id, true) : props.file.download_url, '_blank')
+    // blob 失败回退原生导航；Desktop 不允许绕过受控保存能力。
+    if (!window.agentDesktop) window.open(url, '_blank')
   } finally {
     downloading.value = false
   }

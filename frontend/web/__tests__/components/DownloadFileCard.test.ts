@@ -15,6 +15,7 @@ import { server } from '../mocks/server'
 
 import DownloadFileCard from '@/components/DownloadFileCard.vue'
 import FileTypeIcon from '@/components/FileTypeIcon.vue'
+import WechatDownloadGuide from '@/components/WechatDownloadGuide.vue'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 import type { DownloadableFile } from '@/types'
 import { EXCEL_MAX_PREVIEW_BYTES, OFFICE_DOC_MAX_PREVIEW_BYTES } from '@/utils/officePreview'
@@ -182,8 +183,8 @@ describe('DownloadFileCard 点击行为', () => {
     expect(pptx.findComponent(FileTypeIcon).props('kind')).toBe('ppt')
   })
 
-  it('微信内置浏览器下载：整页导航到下载 URL，不走 anchor 原生下载', async () => {
-    // 微信/企业微信内置浏览器（X5/XWeb）对 download 属性支持残缺，直链被微信下载器 0B 接管
+  it('微信内置浏览器下载：弹「在浏览器打开」引导，不导航不建 anchor（WKWebView 无下载管道）', async () => {
+    // 微信/企业微信内置浏览器收到 attachment 响应会静默丢弃，任何下载方案都不可靠
     vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 wxwork/4.1.36 MicroMessenger/8.0.49 NetType/WIFI Language/zh_CN' })
     const originalLocation = window.location
     Object.defineProperty(window, 'location', {
@@ -192,15 +193,19 @@ describe('DownloadFileCard 点击行为', () => {
       configurable: true,
     })
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const fetchSpy = vi.spyOn(window, 'fetch').mockRejectedValue(new Error('不应发起 fetch'))
     try {
       // 下载 URL 由 download_url（resolver 场景下已带票据语义）决定，而非 file_id
       const file = makeFile({ file_id: 'file_wx_nav', download_url: '/api/files/file_wx_nav/download', file_name: '旧文档.doc', mime_type: 'application/msword', file_size: 1024 })
       const wrapper = mount(DownloadFileCard, { props: { file } })
       await wrapper.find('button').trigger('click')
       expect(previewAttachment.value).toBeNull()
-      expect(window.location.href).toBe('/api/files/file_wx_nav/download')
+      expect(window.location.href).toBe('')
       expect(clickSpy).not.toHaveBeenCalled()
+      // 引导弹层经 Teleport 渲染到 body，断言组件打开状态
+      expect(wrapper.findComponent(WechatDownloadGuide).props('modelValue')).toBe(true)
     } finally {
+      fetchSpy.mockRestore()
       clickSpy.mockRestore()
       Object.defineProperty(window, 'location', {
         value: originalLocation,

@@ -21,20 +21,54 @@ export function isWeChatBrowser(): boolean {
 }
 
 /**
- * 兼容下载入口
+ * 移动端下载策略（2026-10-27 分享页 Excel 下载事故沉淀）
  *
- * 微信内置浏览器（X5/XWeb 内核）对 HTML5 download 属性支持残缺：
- * a[download] 直链会被微信下载器接管并以 0B 失败。微信内改用整页导航，
- * 由微信自身的下载器/文件预览接管（响应已带 Content-Disposition: attachment，
- * 不会跳离页面；iOS 微信弹出内置文档预览供保存）；非微信保持原生直链下载，
- * 浏览器下载管理器自带进度条。
+ * 原生下载依赖浏览器自愿实现「attachment 响应 → 下载管理器」移交，移动端各壳
+ * 实现残缺：iOS 微信 WKWebView 收到 attachment 响应后静默丢弃；iOS Safari 成功
+ * 但无提示（文件进下载管理器）；部分国产安卓内核对 filename*-only 的
+ * Content-Disposition 解析失败直接放弃。服务端日志证实响应全部 200 完整传输。
+ *
+ * 策略（规范见 .claude/rules/backend_dev.md「下载接口规范」§2）：
+ * - wechat_guide：微信/企微内置浏览器无论大小一律引导「在浏览器打开」（WKWebView
+ *   无下载管道，任何技术方案都不可靠）
+ * - blob：非微信移动端且 <10MB → fetch+blob 绕开 attachment 移交环节（最可靠）；
+ *   大小未知也按 blob 处理（业务数据 size 几乎总有值）
+ * - native：PC 端、移动端 ≥10MB → 原生直链（常规移动浏览器可用，大文件不适合
+ *   整包进内存）
  */
-export function triggerCompatibleDownload(url: string, filename?: string): void {
-  if (isWeChatBrowser()) {
-    window.location.href = url
-    return
+export const MOBILE_BLOB_DOWNLOAD_MAX_BYTES = 10 * 1024 * 1024
+
+export type DownloadStrategy = 'native' | 'blob' | 'wechat_guide'
+
+export function isMobileBrowser(): boolean {
+  const ua = navigator.userAgent
+  return /iPhone|iPad|iPod|Android|Windows Phone|Mobile/i.test(ua)
+    || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)
+}
+
+export function resolveDownloadStrategy(sizeBytes?: number | null): DownloadStrategy {
+  if (isWeChatBrowser()) return 'wechat_guide'
+  if (isMobileBrowser() && (sizeBytes == null || sizeBytes < MOBILE_BLOB_DOWNLOAD_MAX_BYTES)) return 'blob'
+  return 'native'
+}
+
+/**
+ * 移动端小文件 fetch + blob 下载：绕开浏览器对 attachment 响应的移交环节，
+ * blob URL + a[download] 是浏览器必然支持的本地下载路径。仅限 <10MB 小文件。
+ */
+export async function downloadViaBlob(url: string, filename?: string, headers?: Record<string, string>): Promise<void> {
+  const resp = await fetch(url, { headers })
+  if (!resp.ok) {
+    throw new Error(`下载失败: ${resp.status}`)
   }
-  triggerNativeDownload(url, filename)
+  const blob = await resp.blob()
+  const objectUrl = URL.createObjectURL(blob)
+  try {
+    triggerNativeDownload(objectUrl, filename)
+  } finally {
+    // 立即 revoke 在部分移动内核会让未启动的下载中断，延迟到下一轮点击之后
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000)
+  }
 }
 
 /**
