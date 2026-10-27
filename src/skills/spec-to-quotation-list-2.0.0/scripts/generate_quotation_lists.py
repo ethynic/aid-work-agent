@@ -33,13 +33,13 @@ _thin = Side(style="thin", color="000000")
 BORDER = Border(left=_thin, right=_thin, top=_thin, bottom=_thin)
 
 HEADERS = [
-    ("A", "Control #\n编号"), ("B", "Category\n产品类别"),
-    ("C", "Description\n材料/产品名称与规格"), ("D", "Area / Location\n空间"),
+    ("A", "Control #\n编号"), ("B", "Description\n材料/产品名称与规格"),
+    ("C", "Area / Location\n区域"), ("D", ""),
     ("E", "Qty\n数量"), ("F", "UOM\n单位"), ("G", "Mfr / Vendor\n品牌/供应商"),
     ("H", "Image\n图片"), ("I", "Price\n单价"), ("J", "Amount\n合价"),
     ("K", "Qty Basis\n数量计算依据"), ("L", "Ref.\n依据章节/页码"),
 ]
-WIDTHS = {"A": 11, "B": 15, "C": 46, "D": 18, "E": 8, "F": 9, "G": 20,
+WIDTHS = {"A": 11, "B": 46, "C": 12, "D": 12, "E": 8, "F": 9, "G": 20,
           "H": 15, "I": 12, "J": 14, "K": 30, "L": 18}
 
 PARAM_SHEET = "参数 Parameters"
@@ -249,6 +249,7 @@ def write_header(ws, project, theme, by_all=False):
     for col,txt in HEADERS:
         c=ws["%s6"%col]; c.value=txt; c.font=Font(name=FONT,size=9,bold=True)
         c.alignment=Alignment(horizontal="left",vertical="center",wrap_text=True); c.fill=GREY; c.border=BORDER
+    ws.merge_cells("C6:D6")   # 区域列 C:D 合并（上游 quotation-pricing 解析口径）
     ws.row_dimensions[6].height=30
 
 def write_notes(wb, space, theme, scopes, whole=False):
@@ -290,7 +291,7 @@ def build_file(finder, space, theme, cats_sorted, project, precise, renderings, 
     """cats_sorted: [(category, [items])]。
     默认：本文件仅含这一个 (space, theme) 组合，一开头写 ◆ 空间抬头。
     file_space_label：跨空间合并的大类总文件（如「标识」「客用品与易耗品」不按空间拆分）时传入显示用标题，
-                      此时不写 ◆ 抬头行，D 列写每条自身的真实空间名。
+                      此时不写 ◆ 抬头行，区域列（C:D）写每条自身的真实空间名。
     """
     merged = bool(file_space_label)
     wb=openpyxl.Workbook()
@@ -322,9 +323,9 @@ def build_file(finder, space, theme, cats_sorted, project, precise, renderings, 
             _sp=it.get("space") or space
             _d=area_label(_sp) if merged else _sp.split(" ")[0]
             ws.cell(row=r,column=1,value=it.get("code"))
-            ws.cell(row=r,column=2,value=cat.split(" ")[0])   # 类别简称入 B 列，便于筛选
-            ws.cell(row=r,column=3,value=desc)
-            ws.cell(row=r,column=4,value=_d)
+            ws.cell(row=r,column=2,value=desc)
+            ws.cell(row=r,column=3,value=_d)
+            ws.merge_cells(start_row=r,start_column=3,end_row=r,end_column=4)   # 区域 C:D 合并
             ws.cell(row=r,column=6,value=it.get("uom"))
             ws.cell(row=r,column=7,value=it.get("vendor"))
             ws.cell(row=r,column=11,value=it.get("basis"))
@@ -380,7 +381,7 @@ def build_file(finder, space, theme, cats_sorted, project, precise, renderings, 
             "本文件为「%s」大类的全项目汇总报价，不按空间拆分，仅此一份（涵盖：%s）。"%(theme," / ".join(areas)),
             "按产品类别（%s）分区，各类别有「小计」，文件末有「合计总金额 Grand Total」公式。"
             % " / ".join(cat.split(" ")[0] for cat,_ in cats_sorted),
-            "每条 D 列标注其所属空间，便于询价后按空间拆分下单；数量由「参数 Parameters」页联动（填房量/面积后自动重算）；"
+            "每条区域列（C:D）标注其所属空间，便于询价后按空间拆分下单；数量由「参数 Parameters」页联动（填房量/面积后自动重算）；"
             "单价 I 列由供应商填写，J 列合价=E×I。",
         ]
         write_notes(wb, file_space_label, theme, scopes, whole=True)
