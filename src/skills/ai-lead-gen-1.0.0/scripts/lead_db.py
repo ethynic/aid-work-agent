@@ -36,6 +36,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from email_rules import assess_email, load_target_config  # noqa: E402
 
+# 平台 get_db_connection 默认 RealDictCursor（字典行），本脚本按元组语义取值
+# （下标/解包/dict(zip)），游标必须显式指定 NamedTupleCursor
+from psycopg2.extras import NamedTupleCursor  # noqa: E402
+
 VALID_STATUS = {"new", "qualified", "rejected", "contacted", "replied", "bounced"}
 LEAD_STATUS = {"new", "qualified", "rejected", "contacted"}
 VALID_SOURCE = {"official_site", "directory", "verified_pattern", "guessed", "manual"}
@@ -82,7 +86,7 @@ def init_tables():
 
     外键完整性由应用层保证（database_dev.md 禁止数据库外键）。
     """
-    with get_conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS bs_ai_lead_gen_campaigns (
                 id SERIAL PRIMARY KEY,
@@ -253,7 +257,7 @@ def cmd_init(args):
     if send_mode not in VALID_SEND_MODE:
         print(f"ERROR: send_mode 必须是 {'/'.join(sorted(VALID_SEND_MODE))}")
         return 1
-    with get_conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
         cur.execute(
             """
             INSERT INTO bs_ai_lead_gen_campaigns
@@ -279,7 +283,7 @@ def cmd_init(args):
 
 def cmd_set_target_config(args):
     tenant_id, _ = get_identity()
-    with get_conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
         get_campaign(cur, tenant_id, args.campaign_id)
     cfg = json.loads(Path(args.json_file).read_text(encoding="utf-8"))
     d = campaign_dir(tenant_id, args.campaign_id)
@@ -295,7 +299,7 @@ def cmd_set_send_mode(args):
     if args.send_mode not in VALID_SEND_MODE:
         print(f"ERROR: send_mode 必须是 {'/'.join(sorted(VALID_SEND_MODE))}")
         return 1
-    with get_conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
         get_campaign(cur, tenant_id, args.campaign_id)
         cur.execute(
             "UPDATE bs_ai_lead_gen_campaigns SET send_mode = %s, updated_at = CURRENT_TIMESTAMP "
@@ -309,7 +313,7 @@ def cmd_set_send_mode(args):
 
 def cmd_show_campaign(args):
     tenant_id, _ = get_identity()
-    with get_conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
         c = get_campaign(cur, tenant_id, args.campaign_id)
         cur.execute(
             "SELECT status, COUNT(*) FROM bs_ai_lead_gen_leads "
@@ -334,7 +338,7 @@ def cmd_add_lead(args):
     tenant_id, user_id = get_identity()
     entries = load_json_entries(args.json_file)
     added = skipped = 0
-    with get_conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
         get_campaign(cur, tenant_id, args.campaign_id)
         cur.execute(
             "SELECT company_name, website FROM bs_ai_lead_gen_leads "
@@ -388,7 +392,7 @@ def cmd_set_status(args):
         print(f"ERROR: status 必须是 {'/'.join(sorted(LEAD_STATUS))}")
         return 1
     target = norm_company(args.company)
-    with get_conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
         get_campaign(cur, tenant_id, args.campaign_id)
         cur.execute(
             "SELECT id, company_name FROM bs_ai_lead_gen_leads WHERE campaign_id = %s",
@@ -416,7 +420,7 @@ def cmd_add_contact(args):
     entries = load_json_entries(args.json_file)
     added = skipped = 0
     warnings, rejected = [], []
-    with get_conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
         get_campaign(cur, tenant_id, args.campaign_id)
         cur.execute(
             "SELECT id, company_name FROM bs_ai_lead_gen_leads WHERE campaign_id = %s",
@@ -550,7 +554,7 @@ def cmd_add_email_draft(args):
     if not body.strip():
         print("ERROR: 邮件正文为空")
         return 1
-    with get_conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
         get_campaign(cur, tenant_id, args.campaign_id)
         cur.execute(
             "SELECT id, email, name FROM bs_ai_lead_gen_contacts "
@@ -584,7 +588,7 @@ def cmd_set_email_status(args):
     if args.status not in VALID_EMAIL_STATUS:
         print(f"ERROR: status 必须是 {'/'.join(sorted(VALID_EMAIL_STATUS))}")
         return 1
-    with get_conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
         get_campaign(cur, tenant_id, args.campaign_id)
         cur.execute(
             "UPDATE bs_ai_lead_gen_emails SET status = %s, "
@@ -607,7 +611,7 @@ def cmd_set_email_status(args):
 def cmd_export_send_queue(args):
     """从 emails 表拉取 approved 草稿生成发送队列 JSON（供 send_emails.py 消费）。"""
     tenant_id, user_id = get_identity()
-    with get_conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
         c = get_campaign(cur, tenant_id, args.campaign_id)
         cur.execute(
             """
@@ -654,7 +658,7 @@ def cmd_export_send_queue(args):
 def cmd_score(args):
     tenant_id, _ = get_identity()
     from collections import Counter
-    with get_conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
         get_campaign(cur, tenant_id, args.campaign_id)
         cur.execute(
             "SELECT status, score, website FROM bs_ai_lead_gen_leads "
@@ -694,7 +698,7 @@ def cmd_score(args):
 
 def cmd_export(args):
     tenant_id, _ = get_identity()
-    with get_conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
         get_campaign(cur, tenant_id, args.campaign_id)
         cur.execute(
             "SELECT company_name, country, website, score, source, status "
@@ -743,7 +747,7 @@ def cmd_list(args, what):
                          ensure_ascii=False))
         return 1
     tenant_id, _ = get_identity()
-    with get_conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
         get_campaign(cur, tenant_id, args.campaign_id)
         if what == "leads":
             sql = ("SELECT company_name, country, website, status, COALESCE(score::text,'') "

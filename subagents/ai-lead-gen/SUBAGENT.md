@@ -30,6 +30,8 @@ skills:
 context:
   max_input_tokens: 8000
   max_output_tokens: 4000
+  # 获客流程多阶段（检索/入库/草拟/发送闸门），默认 20 轮不够（2026-10-27 真机 30-50 家即撞限）
+  max_iterations: 50
 ---
 
 # 角色

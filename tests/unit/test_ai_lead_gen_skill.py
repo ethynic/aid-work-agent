@@ -17,6 +17,7 @@ sys.path.insert(0, str(SKILL_DIR))
 import lead_db  # noqa: E402
 import mailbox_resolver  # noqa: E402
 import send_emails  # noqa: E402
+from psycopg2.extras import NamedTupleCursor  # noqa: E402
 
 
 # ---------- Fake DB harness ----------
@@ -27,15 +28,25 @@ class FakeCursor:
         self.fetchall_queue = []
         self.fetchone_queue = []
         self.rowcount = 0
+        # False 时模拟 RealDictCursor：行包装成字典（列名取 self.columns）
+        self.tuple_mode = True
+        self.columns = ["id"]
 
     def execute(self, sql, params=None):
         self.executed.append((" ".join(sql.split()), params))
 
+    def _wrap(self, row):
+        if self.tuple_mode or row is None:
+            return row
+        return dict(zip(self.columns, row))
+
     def fetchall(self):
-        return self.fetchall_queue.pop(0) if self.fetchall_queue else []
+        rows = self.fetchall_queue.pop(0) if self.fetchall_queue else []
+        return [self._wrap(r) for r in rows]
 
     def fetchone(self):
-        return self.fetchone_queue.pop(0) if self.fetchone_queue else None
+        row = self.fetchone_queue.pop(0) if self.fetchone_queue else None
+        return self._wrap(row)
 
     def __enter__(self):
         return self
@@ -49,7 +60,11 @@ class FakeConn:
         self.cur = FakeCursor()
         self.commits = 0
 
-    def cursor(self):
+    def cursor(self, cursor_factory=None):
+        # 模拟平台 get_db_connection 语义：不传 factory = RealDictCursor（字典行），
+        # 显式传 NamedTupleCursor = 元组行。技能脚本必须显式传 factory，
+        # 否则下标/解包取值全部错乱（2026-10-27 线上 KeyError: 0 回归防线）
+        self.cur.tuple_mode = cursor_factory is not None
         return self.cur
 
     def commit(self):
@@ -210,6 +225,71 @@ def test_cmd_list_dispatch_leads_and_contacts(monkeypatch):
     assert lead_db.cmd_list(args, "leads") == 0
     assert lead_db.cmd_list(args, "contacts") == 0
     assert lead_db.cmd_list(args, "bogus") == 1
+
+
+def test_get_campaign_cursor_semantics():
+    # 回归 2026-10-27：平台默认 RealDictCursor 的行是字典（迭代产出列名），
+    # get_campaign 的 dict(zip(cols,row)) 会把列名当值。所有调用方
+    # （lead_db 各子命令、send_emails.main 的 campaign 读取）都必须传 NamedTupleCursor
+    conn = FakeConn()
+    conn.cur.columns = ["id", "campaign_name", "send_mode", "status",
+                        "daily_limit", "reply_mailbox", "brief"]
+    conn.cur.fetchone_queue.append(campaign_row())
+
+    campaign = lead_db.get_campaign(
+        conn.cursor(NamedTupleCursor), "tenant_test", 7)
+    assert campaign["daily_limit"] == 25 and campaign["reply_mailbox"] is None
+
+    # 错误路径对照：默认字典游标下列名被当值（这是必须传 factory 的原因）
+    conn.cur.fetchone_queue.append(campaign_row())
+    bad = lead_db.get_campaign(conn.cursor(), "tenant_test", 7)
+    assert bad["daily_limit"] == "daily_limit"
+
+
+def test_cmd_init_reads_returning_id_as_tuple(monkeypatch, tmp_path, capsys):
+    # 回归 2026-10-27：平台默认 RealDictCursor 返回字典行，脚本未指定
+    # NamedTupleCursor 时 fetchone()[0] 抛 KeyError: 0，campaign 建不出来
+    conn = FakeConn()
+    conn.cur.fetchone_queue.append((42,))
+    monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
+    monkeypatch.setattr(lead_db, "campaign_dir", lambda t, c: tmp_path / "ws")
+    args = type("A", (), {"name": "c", "brief_file": None, "target_region": "",
+                          "send_mode": "review", "daily_limit": 20,
+                          "reply_mailbox": None})()
+    assert lead_db.cmd_init(args) == 0
+    out = capsys.readouterr().out
+    assert "campaign created: id=42" in out
+    # INSERT 后必须显式 commit（get_db_connection 退出时无条件 rollback）
+    assert conn.commits == 1
+
+
+def test_show_campaign_group_counts_with_tuple_rows(monkeypatch, capsys):
+    # GROUP BY 计数用 dict(fetchall())，要求行可按 (key, value) 对迭代（元组语义）
+    conn = FakeConn()
+    conn.cur.fetchone_queue.append(campaign_row())
+    conn.cur.fetchall_queue.append([("new", 3), ("qualified", 1)])
+    conn.cur.fetchall_queue.append([("draft", 2)])
+    monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
+    args = type("A", (), {"campaign_id": 7})()
+    assert lead_db.cmd_show_campaign(args) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["leads_by_status"] == {"new": 3, "qualified": 1}
+    assert out["emails_by_status"] == {"draft": 2}
+    assert out["campaign"]["id"] == 7
+
+
+def test_set_status_matches_company_by_tuple_unpack(monkeypatch):
+    # matched = [(i, n) for i, n in cur.fetchall()]：字典行会解包出列名而非值
+    conn = FakeConn()
+    conn.cur.fetchone_queue.append(campaign_row())
+    conn.cur.fetchall_queue.append([(11, "Acme Ltd")])
+    monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
+    args = type("A", (), {"campaign_id": 7, "company": "acme",
+                          "status": "qualified", "reason": None})()
+    assert lead_db.cmd_set_status(args) == 0
+    updates = [p for s, p in conn.cur.executed if s.startswith("UPDATE")]
+    assert updates and updates[0][-1] == 11
+    assert conn.commits == 1
 
 
 # ---------- mailbox_resolver ----------

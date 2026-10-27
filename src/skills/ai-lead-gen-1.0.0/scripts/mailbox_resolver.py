@@ -17,6 +17,10 @@ import os
 import sys
 from pathlib import Path
 
+# 平台 get_db_connection 默认 RealDictCursor（字典行），本模块按元组解包取值，
+# 游标必须显式指定 NamedTupleCursor
+from psycopg2.extras import NamedTupleCursor  # noqa: E402
+
 
 def _identity():
     tenant_id = (os.environ.get("AID_TENANT_ID")
@@ -69,7 +73,7 @@ def resolve_mailbox(tenant_id=None, user_id=None):
     tenant_id, user_id = tenant_id or _identity()[0], user_id or _identity()[1]
     if not tenant_id:
         raise RuntimeError("resolve_mailbox: 缺少租户身份（AID_TENANT_ID）")
-    with _conn() as conn, conn.cursor() as cur:
+    with _conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
         if user_id:
             cur.execute(
                 f"SELECT {_MAILBOX_COLUMNS} FROM user_email_settings "

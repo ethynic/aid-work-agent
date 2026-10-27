@@ -76,7 +76,8 @@ try:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from email_rules import assess_email, load_target_config
     from mailbox_resolver import resolve_mailbox_or_die
-    from lead_db import campaign_dir, get_conn, get_identity, get_campaign
+    from lead_db import (campaign_dir, get_conn, get_identity, get_campaign,
+                         NamedTupleCursor)
 except ImportError as e:  # pragma: no cover
     raise SystemExit(f"[错误] 无法导入同目录脚本：{e}\n"
                      f"请确认 scripts/ 下同时存在 email_rules.py / mailbox_resolver.py / lead_db.py 与 send_emails.py")
@@ -557,7 +558,7 @@ def main():
             raise SystemExit("队列项缺少 email_id —— 队列必须由 lead_db.py "
                              "export-send-queue 生成（含 email_id 供结果回写）")
 
-    with get_conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
         campaign = get_campaign(cur, tenant_id, campaign_id)
     cfg = build_cfg(campaign, mailbox, cdir)
 

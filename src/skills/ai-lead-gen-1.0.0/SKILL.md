@@ -69,6 +69,9 @@ metadata:
    公开窗口（info@/contact@）**都不得进入发送队列**。判定由 `scripts/email_rules.py`
    统一负责，采集/入库/发送三道闸门强制执行。官网只有这些地址时不算"没有邮箱"，
    按 `references/contact-discovery.md` 路径 2→5 继续找，全部无果才判 `no_email`。
+10. **数据库读写必须走 `lead_db.py`，禁止用 `python -c` 内联 SQL 直连数据库**。
+   内联 SQL 绕过去重、闸门与配额校验（每公司联系人上限、职能判定），且不受
+   可信身份校验保护。脚本执行报错时如实上报，由下一轮修正命令重试。
 
 ## 脚本清单（经 skill_execute 调用，均需 --campaign-id）
 
