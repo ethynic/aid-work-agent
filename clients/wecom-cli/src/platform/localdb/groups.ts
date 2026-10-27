@@ -106,7 +106,7 @@ export async function queryLocaldbGroups(
       const group = [...groups.values()][0]
       if (!group) throw new CodedOperationError('TARGET_NOT_FOUND', '本机已同步群中没有该完整群名')
       if (previous && previous.conversationId !== group.conversation_id) throw groupCursorError()
-      const data = await query(['--task', args.poll ? 'group-poll' : 'history', '--conv', group.conversation_id, '--limit', String(args.limit),
+      const data = await query(['--task', args.poll ? 'group-poll' : 'history', '--conv', group.conversation_id, '--limit', String(args.limit), '--account', current.account,
         ...(previous ? ['--after-id', String(previous.lastMessageId), '--anchor', previous.anchor] : []),
         ...(args.from === undefined ? [] : ['--since', String(args.from)]),
         ...(args.to === undefined ? [] : ['--until', String(args.to)])])

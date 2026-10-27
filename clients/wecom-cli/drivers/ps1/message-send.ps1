@@ -140,11 +140,13 @@ function Test-WeComTitleMatch {
     # （OCR 读不到标题 = 不匹配 → navigate_required，是合法分支而非错误）。
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string]$Title,
-        [Parameter(Mandatory)][string]$Expected
+        [Parameter(Mandatory)][string]$Expected,
+        [switch]$RequireWechat
     )
     $expected = $Expected -replace '@微信$', ''
     $tn = ConvertTo-WeComNormalized $Title
     $en = ConvertTo-WeComNormalized $expected
+    if ($RequireWechat) { return $tn -eq ($en + '@微信') }
     return ($tn -eq $en) -or $tn.StartsWith($en + '@') -or $tn.StartsWith($en + '（') -or $tn.StartsWith($en + '(')
 }
 
@@ -169,6 +171,7 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     $swTotal = [System.Diagnostics.Stopwatch]::StartNew()
     $timing = @{ precheck = 0; jev1 = 0; input_click = 0; typing = 0; title_recheck = 0; send_wait = 0; final_ocr = 0; jev2 = 0; total = 0 }
     $shots = New-Object System.Collections.ArrayList
+    $requireWechat = $Section -ne 'group' -and (($TargetName -match '@微信$') -or ($Section -eq 'contact' -and $Subtitle -eq '微信联系人'))
     $sectionMap = @{ contact = '联系人'; group = '群聊' }
     $sectionDesc = $Section
     if ($sectionMap.ContainsKey($Section)) { $sectionDesc = $sectionMap[$Section] + '（' + $Section + '）' }
@@ -218,7 +221,7 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     $stateLines += '任务：准备在目标会话的文本输入框中输入一条消息并发送。当前窗口可能已打开目标会话，也可能停留在别的会话。'
     $stateText = $stateLines -join "`n"
     $questions = @{
-        right_conversation = @{ type = 'choice'; instructions = '当前主窗口打开的会话是否就是目标会话？（按标题带内容与目标 name 判断）'; criteria = @{
+        right_conversation = @{ type = 'choice'; instructions = '当前主窗口打开的会话是否就是目标会话？同时核对标题姓名、目标section（群聊/联系人）和subtitle；同名联系人不能当作目标群，类型无法确认应选unclear'; criteria = @{
             yes = '标题带显示的就是目标会话'; no = '显示的是别的会话'; unclear = '证据不足无法判断' } }
         has_draft = @{ type = 'choice'; instructions = '底部文本输入区是否已有输入的草稿文本？（灰色占位符（如「发送消息」）不算草稿；工具栏图标行的碎字不算草稿）'; criteria = @{
             yes = '输入区有已输入的草稿文本'; no = '输入区干净（无草稿）' } }
@@ -261,12 +264,16 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
         $navReason = ('Jev 判定当前会话非目标（' + $jevRight + '，标题带 title=' + $title + '）')
     } else {
         # 降级：标题归一化规则匹配（同步骤 5 语义）
-        if (Test-WeComTitleMatch -Title $title -Expected $TargetName) {
+        if (Test-WeComTitleMatch -Title $title -Expected $TargetName -RequireWechat:$requireWechat) {
             $rightOk = $true
         } else {
             $navReason = ('标题归一化规则未命中（当前标题「' + $title + '」≠ 目标「' + $expectedName + '」）')
         }
         Write-DriverLog ('step2 right_conversation 降级规则：title=' + $title + ' 匹配=' + $rightOk)
+    }
+    # Jev cannot override the explicitly requested WeChat identity boundary.
+    if ($requireWechat -and -not (Test-WeComTitleMatch -Title $title -Expected $TargetName -RequireWechat)) {
+        Throw-DriverError 'UI_CHANGED' '当前标题未确认微信外部联系人，已中止；未输入或发送消息'
     }
     if (-not $rightOk) {
         # 非目标/无法判定：不做任何输入，交还 TS 编排（search+select 后二次调用本驱动）
@@ -393,7 +400,7 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     $title2 = Get-WeComTitleFromTokens -Tokens @(Get-WeComBandTokens -Boxes @($boxes2.boxes) -W $typed.w -H $typed.h -Band 'title')
     $timing.title_recheck = [int]($swTotal.ElapsedMilliseconds - $t0)
     Write-DriverLog ('step4 发送前复核 title=' + $title2)
-    if (-not (Test-WeComTitleMatch -Title $title2 -Expected $TargetName)) {
+    if (-not (Test-WeComTitleMatch -Title $title2 -Expected $TargetName -RequireWechat:$requireWechat)) {
         $cleared = Clear-WeComFocusedInput -Hwnd $mainHwnd
         Write-DriverLog ('step4 标题不一致，已清理自己刚输入的草稿（attach=' + $cleared + '）')
         Throw-DriverError 'UI_CHANGED' ('发送前复核：会话标题「' + $title2 + '」与目标「' + $expectedName + '」不一致，已清空自己刚输入的草稿并中止（防串消息，未按 Enter 发送）')
@@ -415,7 +422,7 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
         # 三选二/Jev 判定。否则「输入框空 + 气泡/列表含前缀」可能在非目标会话凑满两项，
         # 把别的会话的证据当成目标会话发送成功；不一致 → 无法确认（EXECUTION_UNKNOWN，
         # 绝不 ocr-bubble 成功），消息可能已发出，不自动重试
-        if (-not (Test-WeComTitleMatch -Title $title2 -Expected $TargetName)) {
+        if (-not (Test-WeComTitleMatch -Title $title2 -Expected $TargetName -RequireWechat:$requireWechat)) {
             Throw-DriverError 'EXECUTION_UNKNOWN' ('发送后校验无法确认：当前会话标题「' + $title2 + '」与目标「' + $expectedName + '」不一致，核验证据可能来自其他会话（不会自动重试，请人工核对）')
         }
         # step5/6 的核验前缀与 Jev 关联文本统一由下方 §5-6 按 $verifyText 计算（-ExpectedPrefix 优先，缺省 -Text）

@@ -4,7 +4,7 @@
 > 状态：✅ 已完成开发（决策 D1–D15 全部落地：`src/background_runner.py` 独立容器 `aid-agent-background`、Redis 抢锁启动、心跳文件、reconcile 对账；条目 20260721-1521 已移入 ideas_finished.md，本文保留作完成记录）
 > 设计文档：[background-runner-design.md](../infrastructure/background-runner-design.md)
 > 上级条目：[ideas.md](../ideas.md) #38、#20 社媒营销 S1 消费方
-> 关联：[publish-dispatcher-design.md](../system/digital-employee/publish-dispatcher-design.md) §8；循环迁移清单见本文 §3.8
+> 关联：[publish-dispatcher-design.md](../system/publish-dispatcher-design.md) §8；循环迁移清单见本文 §3.8
 
 ---
 

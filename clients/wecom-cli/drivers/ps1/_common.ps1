@@ -33,6 +33,7 @@ public class WeComWin32 {
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr hWnd, StringBuilder sb, int max);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassNameW(IntPtr hWnd, StringBuilder sb, int max);
+    [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
     [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
@@ -220,6 +221,19 @@ function Resolve-WeComMainWindow {
         if ($null -ne (Find-WeComLoginWindow)) {
             Throw-DriverError 'NOT_LOGGED_IN' '检测到企业微信登录二维码窗口（未登录），请先扫码登录后重试'
         }
+        $hidden = @($all | Where-Object {
+            $_.Class -eq 'WeWorkWindow' -and -not $_.Visible -and $_.Title -eq '企业微信' -and $_.W -ge 600 -and $_.H -ge 400
+        } | Sort-Object { $_.W * $_.H } -Descending)
+        if ($hidden.Count -gt 1 -and ($hidden[0].W * $hidden[0].H) -eq ($hidden[1].W * $hidden[1].H)) {
+            Throw-DriverError 'WINDOW_AMBIGUOUS' '多个隐藏企业微信主窗口，无法确认当前窗口'
+        }
+        if ($hidden.Count -gt 0 -and ($hidden.Count -eq 1 -or ($hidden[0].W * $hidden[0].H) -ne ($hidden[1].W * $hidden[1].H))) {
+            [void][WeComWin32]::ShowWindowAsync([IntPtr]$hidden[0].Hwnd, 9)
+            Start-Sleep -Milliseconds 200
+            $candidates = @(Get-WeComTopLevelWindows | Where-Object { $_.Hwnd -eq $hidden[0].Hwnd -and $_.Visible })
+        }
+    }
+    if ($candidates.Count -eq 0) {
         Throw-DriverError 'WECOM_NOT_FOUND' '未找到企业微信主窗口（WXWork.exe 未运行、主窗口不可见或已退到托盘；请先打开并登录企业微信）'
     }
     $sorted = @($candidates | Sort-Object { $_.W * $_.H } -Descending)
@@ -554,25 +568,13 @@ function Open-WeComSearchOverlay {
 }
 
 function Close-WeComSearchOverlay {
-    # 关闭搜索 overlay 恢复原状（best-effort）：先 PostMessage ESC 到 overlay，
-    # 仍在则点主窗口空白区（点面板外关面板）；最后清空搜索框残留查询词
+    # 清除已定位搜索框的查询词，客户端自然收起弹层；不发可能把主窗收进托盘的ESC。
     # （企微搜索框保留上次查询，不清会给下次搜索留残留）并复核。不抛错。
     param(
         [int64]$OverlayHwnd,
         [int64]$MainHwnd
     )
     try {
-        if ($OverlayHwnd -ne 0 -and [WeComWin32]::IsWindow([IntPtr]$OverlayHwnd)) {
-            Send-WeComEscape -Hwnd $OverlayHwnd
-            Start-Sleep -Milliseconds 400
-        }
-        if ($OverlayHwnd -ne 0 -and [WeComWin32]::IsWindow([IntPtr]$OverlayHwnd)) {
-            $main = Get-WeComWindowInfo ([IntPtr]$MainHwnd)
-            [void](Send-WeComClick -Hwnd $MainHwnd `
-                -ScreenX ([int]($main.X + $main.W * 0.6)) `
-                -ScreenY ([int]($main.Y + $main.H * 0.5)))
-            Start-Sleep -Milliseconds 300
-        }
         # 清空搜索框残留查询词（best-effort）：不给下次搜索留旧词
         [void](Clear-WeComSearchBox -MainHwnd $MainHwnd -BestEffort)
     } catch {}

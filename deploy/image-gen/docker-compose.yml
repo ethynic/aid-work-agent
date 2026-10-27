@@ -1,0 +1,42 @@
+# Qwen-Image-2.1 生图推理服务 —— 独立 compose，与 agent 主体（deploy/docker-compose.sim.yml 等）互不引用，
+# 不会随 agent 一起启停；仅手动 `docker compose -f deploy/image-gen/docker-compose.yml up -d` 启动。
+#
+# 需要 NVIDIA GPU（默认 cuda0 全部权重上 GPU，约需 13~15G 显存；不足时可设 SD_BACKEND=cpu 或换 Q4_K_M）。
+
+services:
+  image-gen:
+    build:
+      context: .
+      # 构建期 git clone/pip 走宿主代理（容器 network=host 时 127.0.0.1 可达 WSL 宿主代理）
+      network: host
+      args:
+        # 换显卡时按计算能力修改（RTX 4090=89, 30 系=86, 50 系=120）
+        CUDA_ARCH: "89"
+        HTTP_PROXY: ${IMAGE_BUILD_PROXY:-http://127.0.0.1:7897}
+        HTTPS_PROXY: ${IMAGE_BUILD_PROXY:-http://127.0.0.1:7897}
+        NO_PROXY: localhost,127.0.0.1
+    image: image-gen:latest
+    container_name: image-gen
+    restart: "no" # 手动启停，不随 docker/agent 自启
+    ports:
+      - "127.0.0.1:8290:8000" # 仅本机可访问；Windows 侧 http://localhost:8290
+    volumes:
+      - ${IMAGE_MODELS_DIR:-/home/ethynic/qwen-image-2.1/models}:/models:ro
+      - ${IMAGE_OUTPUTS_DIR:-/home/ethynic/qwen-image-2.1/outputs}:/outputs
+      # WSL2 专用：toolkit 未挂载宿主驱动库（/usr/lib/wsl/lib），须显式挂载并优先加载，
+      # 否则容器内 libcuda 版本过旧报 "CUDA driver version is insufficient"
+      - /usr/lib/wsl/lib:/usr/lib/wsl/lib:ro
+    # 配合上方挂载：启动前把 WSL 驱动库置顶 LD_LIBRARY_PATH（$$ 为 compose 转义）
+    command:
+      - bash
+      - -c
+      - export LD_LIBRARY_PATH=/usr/lib/wsl/lib:$$LD_LIBRARY_PATH && exec python3 -m uvicorn server:app --host 0.0.0.0 --port 8000
+    environment:
+      QUANT: ${IMAGE_GEN_QUANT:-Q8_0} # Q8_0 画质优先 / Q4_K_M 速度与显存优先
+      SD_BACKEND: ${SD_BACKEND:-cuda0}
+      JOB_TIMEOUT_SECONDS: "900"
+    # CDI 模式访问 GPU（WSL2 必需：legacy runtime 漏挂 /usr/lib/wsl/drivers 下的
+    # libnvdxgdmal/nvcubins，导致 cuInit 报 "driver version insufficient"）。
+    # 前置条件（root 执行一次）：nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+    devices:
+      - nvidia.com/gpu=all

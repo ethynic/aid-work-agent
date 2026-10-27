@@ -128,12 +128,14 @@ async def test_acquisition_sources_get_finite_turns_under_continuous_load():
     worker._acquisition_turn=0
     async def controls():return 'controls'
     async def timers():return 'timers'
+    async def continuous():return 'continuous'
     async def queued():return 'queued'
     worker._acquire_controls=controls
     worker._acquire_timers=timers
+    worker._acquire_continuous=continuous
     worker._acquire_queued=queued
-    picked=[await worker._acquire_next() for _ in range(9)]
-    assert picked==['controls','timers','queued']*3
+    picked=[await worker._acquire_next() for _ in range(12)]
+    assert picked==['controls','timers','continuous','queued']*3
 
 
 def test_explicit_recovery_of_uncommitted_sleep_is_a_failure_not_replay():

@@ -2,8 +2,8 @@
 
 > 日期：2026-07-21
 > 阶段：共享底座 S1（内容/广告共用）
-> 上级设计：[social-media-marketing-agent-design.md](social-media-marketing-agent-design.md) §5.3 发布状态机
-> 开发计划：[social-media-marketing-agent-dev-plan.md](social-media-marketing-agent-dev-plan.md) §4 S1
+> 上级设计：[social-media-marketing-agent-design.md](../subagent/social-media-marketing/social-media-marketing-agent-design.md) §5.3 发布状态机
+> 开发计划：[social-media-marketing-agent-dev-plan.md](../subagent/social-media-marketing/social-media-marketing-agent-dev-plan.md) §4 S1
 
 ## 1. 目标与边界
 
@@ -131,7 +131,7 @@ LIMIT %s;
 
 ## 8. 启动接入（独立后台运行时，不占用 HTTP worker）
 
-**Dispatcher 不注册进 main.py lifespan**，而是注册进**独立后台运行时**（[background-runner-design.md](../../infrastructure/background-runner-design.md)）的 APScheduler——后台定时任务与 HTTP worker 解耦，不占用 worker。
+**Dispatcher 不注册进 main.py lifespan**，而是注册进**独立后台运行时**（[background-runner-design.md](../infrastructure/background-runner-design.md)）的 APScheduler——后台定时任务与 HTTP worker 解耦，不占用 worker。
 
 - `src/background_runner.py`（后台运行时入口，mode `SERVER_MODE=background`）启动 `scheduled_task_manager`，在其 `_register_system_jobs()` 注册 Dispatcher 为 interval 系统任务。
 - HTTP worker（`main.py`）按 mode gating **不再启动调度器**（详见后台运行时设计 §7）。

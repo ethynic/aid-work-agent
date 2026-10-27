@@ -392,7 +392,7 @@ POST https://erp${APP_ID}.aidingyi.cn/api/v1/erp.module/module_data_update
 
 | 客户信息字段 | 跟进记录字段 | 说明 |
 |-------------|-------------|------|
-| `xingming` | `kehuxingming` | 客户姓名，**必须与客户记录的 `xingming` 完全一致**（原样取自客户记录，不要转写） |
+| `xingming` | `kehuxingming` | 传客户记录 `id` 字段的**数字值**（取客户列表 `data[].id` 或创建客户接口返回值），**不要传姓名字符串**。回显表格可显示客户名称，实际传参必须是数字 id |
 | `lianxiren` | `lianxiren` | 联系人 |
 | `lianxidianhua` | `lianxifangshi` | 联系电话（注意字段名不同） |
 | `weixinhao` | `weixinhao` | 微信号 |

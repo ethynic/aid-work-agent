@@ -1,6 +1,6 @@
 # 数据分析智能体设计文档
 
-> 关联设计：[知识库能力增强方案](../knowledge-base/knowledge-base-enhancement-design.md) §3.6
+> 关联设计：[知识库能力增强方案](../../system/knowledge-base/knowledge-base-enhancement-design.md) §3.6
 > 关联规范：[系统架构](../../../.claude/rules/architecture.md)、[数据库开发规范](../../../.claude/rules/database_dev.md)
 > 创建日期：2026-05-29
 > 最近更新：2026-10-20
@@ -3204,7 +3204,7 @@ D.allowed_agent_ids 非空 → D.tenant_id == T 且 A 在名单中
 
 「租户内共享」不新增跨租户共享授权；如果原来已开通跨租户知识共享，空名单继续按原有授权使用。将表改为限定智能体后，此表不再对其他租户运行时提供。配置界面显示这句影响说明，无需新增审批。
 
-与[栏目授权设计](../knowledge-base/subagent-kb-category-authorization-design.md) §4.4 的关系：保留数据分析工具的**栏目豁免**，新增表级名单限制；泛用 knowledge_base_search / knowledge_file_search 仍按既有栏目规则，再叠加表级名单。表级名单不能反向授予工具能力、栏目或智能体订阅权限。
+与[栏目授权设计](../../system/knowledge-base/subagent-kb-category-authorization-design.md) §4.4 的关系：保留数据分析工具的**栏目豁免**，新增表级名单限制；泛用 knowledge_base_search / knowledge_file_search 仍按既有栏目规则，再叠加表级名单。表级名单不能反向授予工具能力、栏目或智能体订阅权限。
 
 授权主体为**实际执行工具的智能体**。主智能体委托 A 后，A 可使用其获配表并向调用方返回业务分析结果，符合现有委托语义；本需求不扩展为「只有通过 A 的独立聊天入口才能获得结果」或终端用户数据权限。
 

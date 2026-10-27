@@ -70,16 +70,19 @@ import { mapExecutorError } from './errorMapping.js'
 import { readLocalState } from '../platform/localdb/matrix.js'
 import { probeCurrentAccount, checkCancelled } from '../platform/localdb/identity.js'
 import { resolveFocusConversation } from '../platform/localdb/unread.js'
+import { hasExternalWechatHint } from '../platform/localdb/contactScope.js'
 import { parseConversationRows } from '../platform/localdb/watch.js'
 import type { LocaldbReadDeps } from '../platform/localdb/readSession.js'
 import { decodeGroupCursor, groupCursorError } from '../platform/localdb/groupCursor.js'
 import { queryLocaldbGroups } from '../platform/localdb/groups.js'
+import { readBusinessSessions, sessionLocator } from '../platform/localdb/sessions.js'
 import { hash } from '../platform/localdb/access.js'
 
 /** dist/src/operations → 包根 drivers/ps1 */
 const DRIVER_PATH = fileURLToPath(new URL('../../../drivers/ps1/message-send.ps1', import.meta.url))
 
 export interface WecomMessageSendArgs {
+  session?: string
   target_ref?: string
   /** M11a 直达模式：按会话名定位（与 target_ref 二选一；内部 search + 身份校验转 ref） */
   target_name?: string
@@ -123,6 +126,8 @@ export function createWecomMessageSendOperation(
     artifactDirFn?: () => string | null
     /** P2 任务 3.4 本地库依赖（LocaldbReadDeps，测试注入 mock；缺省读真实状态/驱动） */
     localdb?: LocaldbReadDeps
+    /** Internal DB-resolved locator; never accepted from MCP tool arguments. */
+    resolvedSession?: { account: string; conversationId: string }
     /** 本地库核验轮询参数（缺省 3 次 × 1s；测试注入 0 延迟） */
     localdbVerifyPoll?: LocaldbVerifyPoll
     receiptCrypto?: ReceiptCrypto
@@ -140,6 +145,30 @@ export function createWecomMessageSendOperation(
   return {
     name: 'wecom_message_send',
     execute(args: WecomMessageSendArgs, ctx: OpContext): Promise<OperationResult> {
+      if (args && args.session !== undefined) {
+        return (async () => {
+          const prepared = await runWecomOperation('readonly', ctx, () => {
+            if (typeof args.session !== 'string' || !args.session.trim() || args.session.length > 2048) return 'session须为会话名称或读取返回的会话标识'
+            if (args.target_ref !== undefined || args.target_name !== undefined || args.group_cursor !== undefined || args.subtitle !== undefined) return 'session不能与旧目标参数同时传入'
+            if (typeof args.text !== 'string' || !args.text.trim() || args.text.length > MAX_TEXT_LENGTH) return 'text须为1–2000字非空消息'
+            return null
+          }, opCtx => readBusinessSessions({ sessions: [args.session!], single: true, limit: 1, metadataOnly: true }, opCtx, local))
+          if (!prepared.success) return prepared
+          const data = prepared.data
+          if (typeof data.title !== 'string' || !data.title.trim()) return {
+            ...prepared, success: false, code: 'TARGET_NOT_FOUND', message: '原会话存在但当前名称未取得，未发送消息',
+            data: { session: data.session, stage: 'resolve', recovery_action: 'refresh_original_session' },
+          }
+          const account = data.self_user_id as string
+          const conversationId = data.conversation_id as string
+          const ref = createRefFn(data.title, data.kind === 'group' ? 'group' : 'contact',
+            data.peer_platform === 'wechat' ? '微信联系人' : '', undefined, account)
+          const result = await createWecomMessageSendOperation({ ...deps, resolvedSession: { account, conversationId } })
+            .execute({ target_ref: ref, text: args.text }, ctx)
+          result.data.session = sessionLocator(account, conversationId)
+          return result
+        })()
+      }
       return runWecomOperation(
         'write',
         ctx,
@@ -185,7 +214,27 @@ export function createWecomMessageSendOperation(
           // M11a 直达模式：内部 search 身份定位转 ref（定位失败 effect=none 且注明未发送
           // 消息），定位成功后走与 ref 模式完全一致的既有链路
           let resolved: ResolvedByNameTarget | null = null
-          if (args.target_name !== undefined) {
+          const directState = getLocalState()
+          const directDbReady = directState?.mode === 'db' || (directState?.mode === 'ui' && directState.kind === 'transient')
+          if (directDbReady && args.target_name !== undefined) {
+            // Explicit external targets can be resolved from trusted DB evidence without opening search.
+            // The driver must still confirm the exact WeChat title before typing and Enter.
+            const current = await (local.probeAccountFn ?? probeCurrentAccount)(opCtx)
+            let conversationId = ''
+            await withSendSnapshot(current, opCtx, local, 'send-baseline', async query => {
+              const meta = await query(['--task', 'context', '--account', current.account])
+              if (meta.self_user_id !== current.account) throw new CodedOperationError('IDENTITY_UNCONFIRMED', '本人身份映射未确认')
+              conversationId = await resolveFocusConversation(query, args.target_name!, current.account,
+                bound ? 'group' : hasExternalWechatHint(args.target_name!, 'contact', args.subtitle) ? 'contact' : undefined,
+                hasExternalWechatHint(args.target_name!, 'contact', args.subtitle) ? '微信联系人' : args.subtitle)
+            })
+            resolved = {
+              name: args.target_name.trim(), subtitle: hasExternalWechatHint(args.target_name, 'contact', args.subtitle) ? '微信联系人' : '',
+              section: conversationId.startsWith('R:') ? '群聊' : '联系人',
+              target_ref: createRefFn(args.target_name.trim(), conversationId.startsWith('R:') ? 'group' : 'contact',
+                hasExternalWechatHint(args.target_name, 'contact', args.subtitle) ? '微信联系人' : '', undefined, current.account),
+            }
+          } else if (args.target_name !== undefined) {
             resolved = await resolveTargetByName(
               { runDriverFn, createRefFn, opCtx, root },
               args.target_name,
@@ -230,7 +279,11 @@ export function createWecomMessageSendOperation(
                 if (typeof meta.self_user_id !== 'string' || meta.self_user_id !== current.account || !Number.isSafeInteger(meta.schema_version)) {
                   throw new CodedOperationError('IDENTITY_UNCONFIRMED', '本人 sender_id 域身份未确认')
                 }
-                conversationId = await resolveFocusConversation(query, target.name, meta.self_user_id as string, bound ? 'group' : undefined)
+                conversationId = deps.resolvedSession?.conversationId ?? await resolveFocusConversation(query, target.name, meta.self_user_id as string,
+                  bound ? 'group' : target.type === 'contact' ? 'contact' : undefined, target.subtitle)
+                if (deps.resolvedSession && (current.account !== deps.resolvedSession.account || conversationId !== deps.resolvedSession.conversationId)) {
+                  throw new CodedOperationError('IDENTITY_UNCONFIRMED', '当前会话定位与原读取目标不一致，未发送消息')
+                }
                 if (bound && (bound.account !== current.account || bound.conversationId !== conversationId ||
                     bound.generation !== hash([sourceId, meta.schema_version]))) throw groupCursorError()
                 const row = parseConversationRows((await query(['--task', 'conversations'])).conversations)
@@ -246,7 +299,7 @@ export function createWecomMessageSendOperation(
               return { account: current.account, conversationId: conversationId!, baseline, anchor, sourceId: source, schema }
             } catch (err) {
               if (err instanceof CancelledError || (err instanceof CodedOperationError && err.code === 'CANCELLED')) throw err
-              if (bound) throw err
+              if (bound || deps.resolvedSession || hasExternalWechatHint(target.name, target.type, target.subtitle)) throw err
               checkCancelled(opCtx.signal)
               // 本地库不可用/resolve 失败：基线阶段未发送任何消息，完全回退老路径（零改动）
               opCtx.progress({ stage: 'execute', message: `本地库发送核验不可用（${err instanceof CodedOperationError ? err.code : 'LOCALDB_UNAVAILABLE'}），走驱动内 OCR 核验` })

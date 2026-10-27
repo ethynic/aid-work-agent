@@ -33,6 +33,13 @@ import { flagString, parseArgs, hasFlag } from './args.js'
 const USAGE = `aid-wecom — 企业微信操作 CLI / MCP Provider（M1）
 
 操作命令：
+  read-session --session <会话名或稳定标识> [--cursor <原游标>] [--limit N] [--json]
+  read-sessions [--sessions <JSON字符串数组>] [--cursor <原游标>] [--limit N] [--json]
+                            DB批量聊天记录与待回复候选，单批最多50条/16KiB
+  send --session <会话名或稳定标识> --text <文本> [--json]
+                            当前目标匹配时直接发送，不匹配才内部搜索选择
+
+兼容与诊断命令：
   poll-group --target-name <完整群名> [--cursor <原游标>] [--json]
                             本地库独立增量读取；首次历史仅作上下文，后续原样回传各群游标
   list-groups [--query <关键词>] [--limit N] [--json]
@@ -137,6 +144,7 @@ async function main(): Promise<number> {
     case 'send': {
       const { sendCommand } = await import('./commands/send.js')
       return sendCommand({
+        session: flagString(args, 'session'),
         groupCursor: flagString(args, 'group-cursor'),
         targetRef: flagString(args, 'target-ref'),
         targetName: flagString(args, 'target-name'),
@@ -179,6 +187,7 @@ async function main(): Promise<number> {
     case 'read-session': {
       const { readSessionCommand } = await import('./commands/readSession.js')
       return readSessionCommand({
+        session: flagString(args, 'session'),
         targetRef: flagString(args, 'target-ref'),
         targetName: flagString(args, 'target-name'),
         maxPages: flagString(args, 'max-pages'),
@@ -188,6 +197,10 @@ async function main(): Promise<number> {
         cursor: flagString(args, 'cursor'),
         json: hasFlag(args, 'json'),
       })
+    }
+    case 'read-sessions': {
+      const { readSessionsCommand } = await import('./commands/readSessions.js')
+      return readSessionsCommand(args)
     }
     case 'watch': {
       const { watchCommand } = await import('./commands/watch.js')

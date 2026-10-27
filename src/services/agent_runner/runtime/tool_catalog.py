@@ -18,6 +18,8 @@ class ToolCatalog:
         """
         # 1. 从 ToolRegistry 获取所有已注册工具的 schema
         tools = self.tool_registry.get_tool_definitions()
+        from src.local_tools.wecom_business import project_definitions
+        tools = project_definitions(tools)
 
         available_subagents = None
         if self.mode == AgentMode.MASTER:

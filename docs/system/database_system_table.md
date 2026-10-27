@@ -635,6 +635,20 @@ prompt_drafts（草稿，每 Prompt 最多一条，未发布的修改）
 
 **关系**：`user_email_settings.user_id` → `users.user_id`（1:1）
 
+### 11.3a `tenant_email_settings` — 租户邮箱配置表
+
+租户级共用的企业邮箱 SMTP/IMAP 配置（密码加密存储），作为邮箱三层解析的
+第 2 层兜底：用户个人邮箱（`user_email_settings`）-> 租户邮箱 -> 报错提示。
+消费方：`src/skills/ai-lead-gen-1.0.0/scripts/mailbox_resolver.py`（AI获客发件与
+回复监控 IMAP 同源）。系统 .env 邮箱（SMTP_*/IMAP_*）仅用于平台级通知，不进入本表。
+
+**关键字段**：
+- `tenant_id` — 租户隔离（active 记录每租户一条）
+- `smtp_password` — 加密存储（encryption_manager），仅在脚本/工具层内存解密
+- `status` — active / inactive（软删除）
+
+**关系**：`tenant_email_settings.tenant_id` → `tenants.tenant_id`（1:1，active 态）
+
 ### 11.4 `data_connectors` — 数据连接器表
 
 数据分析智能体使用的外部数据库连接配置。
@@ -710,6 +724,7 @@ events/outbox/audit/quota 等系统生成行 `user_id` 可 NULL。DDL 三处同�
 - `local_tool_operation_permits`：写动作短期一次性许可（绑定 invocation/device/claim/
   request_id/target_version/payload_hash/epoch/resource；token 只存 hash；
   quota_reservation 持 R9 预留凭据）。
+- 2026-10-27 WeCom未知入站恢复：原读取结果的私有`_wecom_inbound`只保存本批待处理位置，`_wecom_recovered`保存可重投影的恢复候选；客户端原文/迟到事实不改。`idx_lt_inv_wecom_inbound_pending`仅索引当前有待处理项的WeCom读取，按租户、用户、会话、原Runner/执行、设备及创建顺序有界扫描；消费后记录退出部分索引，不新增队列表。对应[W10计划](../plans/plan-wecom-cli-group-chat-experiment.md#w10-真机前综合收敛2026-10-27)。
 - `local_tool_invocations` v2 扩列：`provider_key`（NULL=旧聊天链路任何设备可领；非 NULL
   需设备能力含该 provider）、`business_kind`（'desktop_automation'）、`business_ref`、
   `dedupe_key`（部分唯一索引 (tenant_id, business_kind, dedupe_key) 幂等）、`deadline_at`
@@ -773,7 +788,8 @@ tenants（租户）
 ├── users（用户） ────┬── tokens（认证Token）
 │                     ├── sms_codes（验证码）
 │                     ├── remote_credentials（远程凭据）
-│                     └── user_email_settings（邮箱配置）
+│                     ├── user_email_settings（邮箱配置）
+│                     └── tenant_email_settings（租户邮箱配置）
 │
 ├── subscriptions（订阅） ────┬── payment_orders（支付订单）
 │                              └── agent_instances（数字员工实例）

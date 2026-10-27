@@ -115,7 +115,19 @@ try {
         exit 0
     }
 
-    # ③ 兜底：进程在但无任何可识别窗口（托盘隐藏等）→ offline
+    # Hidden main windows are tray sessions; keep DB reads independent of UI visibility.
+    $hidden = @($wins | Where-Object {
+        $_.Class -eq 'WeWorkWindow' -and $_.Title -eq '企业微信' -and $_.W -ge 600 -and $_.H -ge 400
+    } | Sort-Object { $_.W * $_.H } -Descending)
+    if ($hidden.Count -gt 0) {
+        if ($hidden.Count -gt 1 -and ($hidden[0].W * $hidden[0].H) -eq ($hidden[1].W * $hidden[1].H)) {
+            Write-DriverJson @{ ok = $true; data = @{ login_state = 'online'; window_pid = $null; window_error = 'WINDOW_AMBIGUOUS'; window_hidden = $true } }
+        } else {
+            Write-DriverJson @{ ok = $true; data = @{ login_state = 'online'; window_pid = $hidden[0].Pid; window_hidden = $true } }
+        }
+        exit 0
+    }
+    # No recognised main/login window: do not infer login from the process alone.
     Write-DriverJson @{ ok = $true; data = @{ login_state = 'offline' } }
     exit 0
 } catch {

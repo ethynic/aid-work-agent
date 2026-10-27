@@ -34,6 +34,7 @@ const TOOL_NAMES = [
   'wecom_probe',
   'wecom_message_send',
   'wecom_read_session',
+  'wecom_read_sessions',
   'wecom_unread_list',
 ] as const
 
@@ -54,14 +55,23 @@ function sleep(ms: number, signal?: AbortSignal): Promise<boolean> {
 
 export async function startFakeProvider(): Promise<void> {
   const server = new McpServer({ name: 'fake-provider', version: '0.0.1' })
+  const legacyWecom = process.env.FAKE_WECOM_LEGACY === '1'
 
   for (const name of TOOL_NAMES) {
+    if (legacyWecom && name === 'wecom_read_sessions') continue
     server.registerTool(
       name,
       {
         title: name,
         description: `fake ${name}`,
         inputSchema: {
+          ...(!legacyWecom ? {
+            session: z.string().optional(), sessions: z.array(z.string()).optional(),
+            cursor: z.string().optional(), limit: z.number().int().optional(),
+          } : {}),
+          target_name: z.string().optional(),
+          text: z.string().optional(),
+          call_log_file: z.string().optional(),
           durationMs: z.number().optional(),
           stepMs: z.number().optional(),
           crash: z.boolean().optional(),
@@ -73,6 +83,7 @@ export async function startFakeProvider(): Promise<void> {
         },
       },
       async (args, extra) => {
+        if (args.call_log_file) appendFileSync(args.call_log_file, JSON.stringify({ name, session: args.session, target_name: args.target_name }) + '\n')
         const runId = randomUUID()
         const isV2 = name.endsWith('_v2')
         const v2Write = isV2 && V2_WRITE_TOOLS.has(name)

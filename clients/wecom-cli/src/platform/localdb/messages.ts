@@ -50,12 +50,17 @@ export interface RawMessageRow {
   flag?: number | null
   text?: string | null
   trusted?: boolean
+  sender_name?: string | null
+  sender_platform?: 'wechat' | 'wecom' | 'unknown'
 }
 
 /** 归一消息（read-session 本地库通道消息契约：{side, kind?, text, time} + 增量可选字段） */
 export interface NormalizedMessage {
   /** 水位基元 = message_id（入库序）；游标推进依据 */
   msg_id: number
+  sender_id: string | null
+  sender_name: string | null
+  sender_platform: 'wechat' | 'wecom' | 'unknown'
   /** 同秒展示排序决胜键（P0 冻结）；缺省省略 */
   server_id?: string
   /** 方向 = sender_id 与本人账号严格相等；非字符串防御为 'peer' */
@@ -120,6 +125,9 @@ export function normalizeMessages(
     const isTextType = ct === 0 || ct === 2
     const msg: NormalizedMessage = {
       msg_id: row.message_id,
+      sender_id: typeof row.sender_id === 'string' ? row.sender_id : null,
+      sender_name: typeof row.sender_name === 'string' ? row.sender_name : null,
+      sender_platform: row.sender_platform === 'wechat' || row.sender_platform === 'wecom' ? row.sender_platform : 'unknown',
       side: row.sender_id === selfUserId ? 'self' : 'peer', // 严格相等不 trim；非字符串 → peer
       text: isTextType ? (typeof row.text === 'string' ? row.text : '') : placeholder,
       time: formatTimestamp(row.send_time),

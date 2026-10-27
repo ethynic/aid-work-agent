@@ -267,7 +267,8 @@ class WatchIncrementTest(unittest.TestCase):
         self.assertEqual(
             list(row.keys()),
             ['message_id', 'server_id', 'sequence', 'sender_id', 'conversation_id',
-             'content_type', 'send_time', 'flag', 'text', 'trusted'])
+             'content_type', 'send_time', 'flag', 'text', 'trusted',
+             'sender_name', 'sender_name_source', 'sender_platform'])
 
     def test_protocol_errors(self):
         """BAD_ARGS（缺参/坏水位文件）/ DB_UNREADABLE（缺库）/ SCHEMA_UNSUPPORTED。"""

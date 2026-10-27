@@ -335,7 +335,8 @@ class QueryMessagesTest(unittest.TestCase):
         payload = self.fx.query(['--task', 'messages', '--conv', CONV_S, '--limit', '1'])
         self.assertEqual(list(payload['messages'][0].keys()),
                          ['message_id', 'server_id', 'sequence', 'sender_id', 'conversation_id',
-                          'content_type', 'send_time', 'flag', 'text', 'trusted'])
+                          'content_type', 'send_time', 'flag', 'text', 'trusted',
+                          'sender_name', 'sender_name_source', 'sender_platform'])
 
     def test_alt_decrypt_filename(self):
         """decrypt 自然产物命名（message.dec.db）同样可定位。"""
@@ -723,6 +724,155 @@ class ResolveTest(unittest.TestCase):
         self.assertEqual([c['matched_column'] for c in payload['candidates']], ['name'])
         payload = fx.query(['--task', 'resolve', '--name', 'luwei-alias'])
         self.assertEqual(payload['candidates'], [])
+
+
+class ExternalResolveTest(unittest.TestCase):
+    """明确外部目标时才用关系及公司证据排除内部同名，未知证据必须阻断。"""
+
+    INTERNAL = '1688850000000099'
+    OTHER_EXTERNAL = '9007199254740993'
+
+    def setUp(self):
+        self._tmps = []
+
+    def tearDown(self):
+        for tmp in self._tmps:
+            tmp.cleanup()
+
+    def make_fx(self, *, relation_table=True, relation_column='user_id',
+                self_corp=11, peer_corp=22, internal_corp=11, relations=None,
+                second_external=False, duplicate_self=False, integer_ids=False):
+        tmp = tempfile.TemporaryDirectory(prefix='wecom-query-external-')
+        self._tmps.append(tmp)
+        fx = WorkdirFixture(tmp.name)
+        fx.add_message_db([msg_row(CONV_S, PEER, 2, 1700000000, text_content('external'))])
+        fx.add_session_db([(CONV_R1, '陆伟')])  # 同名群绝不可混入明确外部单聊。
+        conn = sqlite3.connect(os.path.join(fx.dir, 'user.db.dec.db'))
+        try:
+            conn.execute('CREATE TABLE user_table (id %s, name TEXT, alias TEXT, corp_id INTEGER)'
+                         % ('INTEGER' if integer_ids else 'TEXT'))
+            rows = [(SELF, '我自己', '', self_corp), (PEER, '陆伟', 'peer-alias', peer_corp),
+                    (self.INTERNAL, '陆伟', '', internal_corp)]
+            if second_external:
+                rows.append((self.OTHER_EXTERNAL, '陆伟', '', 33))
+            if duplicate_self:
+                rows.append((SELF, '重复本人', '', self_corp))
+            conn.executemany('INSERT INTO user_table VALUES (?,?,?,?)', rows)
+            if relation_table:
+                conn.execute('CREATE TABLE external_user_relation_v3 (%s INTEGER)' % relation_column)
+                values = [PEER] if relations is None else relations
+                if second_external:
+                    values = list(values) + [self.OTHER_EXTERNAL]
+                conn.executemany('INSERT INTO external_user_relation_v3 VALUES (?)', [(v,) for v in values])
+            conn.commit()
+        finally:
+            conn.close()
+        return fx
+
+    def resolve(self, fx, *, name='陆伟', external=True):
+        args = ['--task', 'resolve', '--name', name, '--account', SELF]
+        return fx.query(args + (['--external-only'] if external else []))
+
+    def assert_scope_unknown(self, fx):
+        payload = self.resolve(fx)
+        self.assertTrue(payload['ok'])
+        self.assertEqual(payload['sources']['user_table'], 'schema-unknown')
+        self.assertEqual(payload['candidates'], [], '未知证据不能消成唯一外部联系人')
+
+    def test_explicit_scope_excludes_internal_without_discarding_message_identity(self):
+        payload = self.resolve(self.make_fx())
+        self.assertTrue(payload['ok'])
+        self.assertFalse(payload['ambiguous'])
+        self.assertEqual(payload['sources'], {'user_table': 'ok'})
+        self.assertEqual([(c['user_id'], c['conversation_id'], c['contact_scope'])
+                          for c in payload['candidates']], [(PEER, CONV_S, 'external')])
+
+    def test_default_resolution_keeps_internal_and_group_ambiguity(self):
+        payload = self.resolve(self.make_fx(), external=False)
+        self.assertTrue(payload['ambiguous'])
+        self.assertEqual(len(payload['candidates']), 3)
+        self.assertTrue(any(c['conversation_id'] is None for c in payload['candidates']))
+        self.assertTrue(all('contact_scope' not in c for c in payload['candidates']))
+
+    def test_external_scope_alias_uses_same_proof(self):
+        payload = self.resolve(self.make_fx(), name='peer-alias')
+        self.assertEqual([c['user_id'] for c in payload['candidates']], [PEER])
+        self.assertEqual(payload['candidates'][0]['matched_column'], 'alias')
+
+    def test_two_external_people_remain_ambiguous_even_without_second_history(self):
+        payload = self.resolve(self.make_fx(second_external=True, integer_ids=True))
+        self.assertTrue(payload['ambiguous'])
+        by_user = {c['user_id']: c for c in payload['candidates']}
+        self.assertEqual(set(by_user), {PEER, self.OTHER_EXTERNAL})
+        self.assertIsNone(by_user[self.OTHER_EXTERNAL]['conversation_id'])
+        self.assertEqual(by_user[PEER]['conversation_id'], CONV_S)
+
+    def test_duplicate_relation_rows_do_not_multiply_candidates(self):
+        payload = self.resolve(self.make_fx(relations=[PEER, PEER], integer_ids=True))
+        self.assertFalse(payload['ambiguous'])
+        self.assertEqual(len(payload['candidates']), 1)
+        self.assertEqual(payload['candidates'][0]['user_id'], PEER)
+
+    def test_missing_relation_schema_is_unknown_not_empty_match(self):
+        self.assert_scope_unknown(self.make_fx(relation_table=False))
+        self.assert_scope_unknown(self.make_fx(relation_column='unverified_id'))
+
+    def test_missing_corp_column_does_not_reclassify_by_name_or_relation(self):
+        fx = self.make_fx()
+        conn = sqlite3.connect(os.path.join(fx.dir, 'user.db.dec.db'))
+        try:
+            conn.execute('ALTER TABLE user_table DROP COLUMN corp_id')
+            conn.commit()
+        finally:
+            conn.close()
+        self.assert_scope_unknown(fx)
+
+    def test_self_corp_must_be_present_and_uniquely_bound_to_account(self):
+        for value in (None, 0, '', 'unverified', 1.5):
+            with self.subTest(self_corp=value):
+                self.assert_scope_unknown(self.make_fx(self_corp=value))
+        self.assert_scope_unknown(self.make_fx(duplicate_self=True))
+        fx = self.make_fx()
+        conn = sqlite3.connect(os.path.join(fx.dir, 'user.db.dec.db'))
+        try:
+            conn.execute('DELETE FROM user_table WHERE id=?', (SELF,))
+            conn.commit()
+        finally:
+            conn.close()
+        self.assert_scope_unknown(fx)
+
+    def test_unknown_or_conflicting_candidate_evidence_cannot_produce_unique(self):
+        cases = [dict(peer_corp=None), dict(internal_corp=None), dict(peer_corp=11),
+                 dict(relations=[]), dict(relations=[PEER, self.INTERNAL]),
+                 dict(internal_corp=44)]
+        for kwargs in cases:
+            with self.subTest(kwargs=kwargs):
+                self.assert_scope_unknown(self.make_fx(**kwargs))
+
+    def test_zero_name_matches_is_allowed_only_after_scope_schema_validation(self):
+        payload = self.resolve(self.make_fx(), name='不存在')
+        self.assertEqual(payload['sources']['user_table'], 'ok')
+        self.assertEqual(payload['candidates'], [])
+        bad = self.resolve(self.make_fx(relation_table=False), name='不存在')
+        self.assertEqual(bad['sources']['user_table'], 'schema-unknown')
+
+    def test_external_flag_requires_resolve_and_account_before_opening_any_db(self):
+        for args in (['--task', 'resolve', '--name', '陆伟'],
+                     ['--task', 'messages', '--conv', CONV_S, '--account', SELF],
+                     ['--task', 'conversations', '--account', SELF],
+                     ['--task', 'last-per-conv', '--account', SELF],
+                     ['--task', 'context', '--account', SELF],
+                     ['--task', 'groups', '--account', SELF]):
+            with self.subTest(args=args):
+                result = drv.cmd_query(['--workdir', 'nonexistent-test-workdir'] + args + ['--external-only'])
+                self.assertEqual(result.get('error'), 'BAD_ARGS')
+
+    def test_external_scope_reaches_native_process_protocol(self):
+        fx = self.make_fx(integer_ids=True)
+        payload, _ = run_driver(['query', '--workdir', fx.dir, '--task', 'resolve',
+                                 '--name', '陆伟', '--account', SELF, '--external-only'])
+        self.assertTrue(payload['ok'])
+        self.assertEqual([c['user_id'] for c in payload['candidates']], [PEER])
 
 
 class QueryArgValidationTest(unittest.TestCase):

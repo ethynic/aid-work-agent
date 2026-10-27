@@ -24,6 +24,7 @@ import { runCliOperation } from '../render.js'
 import type { WecomReadSessionArgs } from '../../operations/readSession.js'
 
 export interface ReadSessionCommandOptions {
+  session?: string
   targetRef?: string
   targetName?: string
   maxPages?: string
@@ -38,6 +39,7 @@ export interface ReadSessionCommandOptions {
 export async function readSessionCommand(opts: ReadSessionCommandOptions): Promise<number> {
   // 数字参数原样转换；非法值（NaN）留给 operation 统一返回 INVALID_ARGUMENT
   const args: WecomReadSessionArgs = {
+    ...(opts.session === undefined ? {} : { session: opts.session }),
     ...(opts.targetRef !== undefined ? { target_ref: opts.targetRef } : {}),
     ...(opts.targetName !== undefined ? { target_name: opts.targetName } : {}),
     max_pages: opts.maxPages === undefined ? undefined : Number(opts.maxPages),

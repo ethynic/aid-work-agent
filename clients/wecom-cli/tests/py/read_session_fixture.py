@@ -106,6 +106,24 @@ def main():
             conn.executemany('INSERT INTO conversation_table VALUES(?,?)', [(CONV, 'Peer'), ('R:empty', 'Empty Group')])
         for logical in ('message', 'user', 'session'):
             encrypted(base, logical)
+    elif command == 'external-setup':
+        unread_setup(base)
+        with sqlite3.connect(base / 'user.plain.db') as conn:
+            conn.execute('ALTER TABLE user_table ADD COLUMN corp_id INTEGER')
+            conn.execute('UPDATE user_table SET corp_id=1 WHERE id=?', (SELF,))
+            conn.execute('UPDATE user_table SET corp_id=2 WHERE id=?', (PEER,))
+            conn.execute("INSERT INTO user_table(id,name,alias,remark,corp_id) VALUES('333','Peer','','',1)")
+            conn.execute('CREATE TABLE external_user_relation_v3(user_id INTEGER)')
+            conn.execute('INSERT INTO external_user_relation_v3 VALUES(?)', (PEER,))
+        encrypted(base, 'user')
+    elif command in ('external-duplicate', 'external-unknown'):
+        with sqlite3.connect(base / 'user.plain.db') as conn:
+            if command == 'external-duplicate':
+                conn.execute("INSERT INTO user_table(id,name,alias,remark,corp_id) VALUES('9007199254740995','Peer','','',3)")
+                conn.execute("INSERT INTO external_user_relation_v3 VALUES('9007199254740995')")
+            else:
+                conn.execute('DELETE FROM external_user_relation_v3 WHERE user_id=?', (PEER,))
+        encrypted(base, 'user')
     elif command == 'unread-setup':
         unread_setup(base)
     elif command in ('append', 'append-empty', 'replace', 'ack', 'reuse'):

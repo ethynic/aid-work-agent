@@ -8,6 +8,13 @@ from .lifecycle import local_operation_scope
 
 
 def _known(result, proxy=None):
+    if proxy is not None and getattr(proxy, 'provider_key', None) == 'wecom':
+        from .lifecycle import current_local_operation
+        from .wecom_flow import modern_call
+        operation = current_local_operation()
+        call = operation.owner.state.tools[operation.owner.call_id].call if operation else None
+        if call is not None and modern_call(proxy.name, call.arguments):
+            return result
     from .boss_visual_recovery import cli_owns_recovery
     if cli_owns_recovery(result):
         return result  # Preserve unknown as unknown; local recovery has already finished.
@@ -74,6 +81,10 @@ async def observed_model(owner, branch, ordinal, *, intent, invoke):
 
 
 async def run_base(proxy, operation, kwargs):
+    if getattr(proxy, 'provider_key', None) == 'wecom':
+        from .wecom_flow import modern_call, run
+        if modern_call(proxy.name, kwargs):
+            return await run(proxy, operation, kwargs)
     from .lifecycle import LocalOperationScope
     from .proxy_tool import BossOverlayInspectTool, BossOverlayDismissTool, settings, OVERLAY_HEAL_TOOL_NAME
     from src.services import overlay_heal_service

@@ -45,7 +45,7 @@ function Invoke-WeComJev { param($StateText,$Questions)
 }
 function Invoke-SendChatOcr { param($ImagePath,$Mode)
     if ($Mode -eq 'input') { return @{input_empty=$true;texts=@()} }
-    $title = 'fixture-group'
+    $title = $script:title
     if ($ImagePath -eq 'step2-typed.png' -and $script:changedTitle) { $title='other-group' }
     $boxes=@(@{text=$title;x0=426;y0=28;x1=580;y1=48},
         @{text='快速会议';x0=1023;y0=1153;x1=1093;y1=1173},
@@ -60,12 +60,14 @@ function Reset-Scenario {
     $script:actions=New-Object System.Collections.ArrayList
     $script:chordOk=$true;$script:searchChoice='T1';$script:right='yes';$script:draft='no'
     $script:inputChoice='B0';$script:withPlaceholder=$false;$script:readback=$false;$script:changedTitle=$false
+    $script:title='fixture-group'
     $script:searchState=@{State='empty';TokensRaw=@(@{text='Q';x0=186;y0=28;x1=213;y1=44},
         @{text='搜索';x0=208;y0=28;x1=241;y1=44},@{text='+';x0=368;y0=28;x1=385;y1=44});
         PlaceholderPos=@(224,36);ContentPos=$null}
 }
-function Run-Send($Multiline=$true) {
+function Run-Send($Multiline=$true,$External=$false) {
     $TargetName='fixture-group';$Subtitle='';$Section='group';$ExpectedPrefix=''
+    if ($External) { $TargetName='fixture-peer@微信';$Subtitle='微信联系人';$Section='contact' }
     $Text='fixture-message';if ($Multiline) { $Text+="`nsecond line" }
     $SkipVerify=$false;$VerifyOnly=$false
     try { & $body } catch { return $_.Exception.Message }
@@ -155,4 +157,20 @@ $failure=Run-Send $false
 Assert-True ($failure -like 'WECOMDRIVE|UI_CHANGED|*') 'changed conversation must still block send'
 Assert-True (@($actions | Where-Object {$_.kind -eq 'enter'}).Count -eq 0) 'title mismatch must never Enter'
 Assert-True (@($actions | Where-Object {$_.kind -eq 'clear-own-draft'}).Count -eq 1) 'only our newly typed draft is cleared on title mismatch'
-Write-Output 'PS_INPUT_LOCATOR_OK'
+# Execute the production body: a Jev yes must not override an internal/other external title.
+foreach ($wrongTitle in @('fixture-peer','fixture-peer@其他企业','fixture-peer（2）','fixture-peer-more@微信')) {
+    Reset-Scenario;$script:title=$wrongTitle
+    $failure=Run-Send $false $true
+    Assert-True ($failure -like 'WECOMDRIVE|UI_CHANGED|*') 'explicit WeChat scope must reject a non-WeChat title before input'
+    Assert-True (@($actions | Where-Object {$_.kind -in @('clipboard','text','enter','click')}).Count -eq 0) 'Jev yes cannot cause input or send to the wrong identity'
+}
+Reset-Scenario;$script:title='fixture-peer @微信'
+$failure=Run-Send $false $true
+Assert-True ($failure -eq 'TEST_ENTER_BOUNDARY') 'exact WeChat contact can reach the one-send boundary'
+Assert-True (@($actions | Where-Object {$_.kind -eq 'enter'}).Count -eq 1) 'valid external send reaches Enter exactly once'
+Reset-Scenario;$script:title='fixture-peer @微信';$script:changedTitle=$true
+$failure=Run-Send $false $true
+Assert-True ($failure -like 'WECOMDRIVE|UI_CHANGED|*') 'changing title after input still rejects Enter'
+Assert-True (@($actions | Where-Object {$_.kind -eq 'enter'}).Count -eq 0) 'external scope is rechecked immediately before Enter'
+Assert-True (@($actions | Where-Object {$_.kind -eq 'clear-own-draft'}).Count -eq 1) 'only this attempt own draft is cleared'
+Write-Output 'PS_INPUT_LOCATOR_OK external_cases=6'

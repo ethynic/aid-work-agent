@@ -58,6 +58,11 @@
         <div id="notification-channels" class="scroll-mt-4">
           <NotificationChannelSettings />
         </div>
+
+        <!-- 租户邮箱（邮箱三层解析第 2 层兜底，AI获客等数字员工发信用） -->
+        <div id="tenant-email" class="scroll-mt-4">
+          <TenantEmailSettings />
+        </div>
       </div>
     </div>
   </div>
@@ -69,6 +74,7 @@ import { useRoute, useRouter } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import LogoUpload from '@/components/ui/LogoUpload.vue'
 import NotificationChannelSettings from '@/components/notifications/NotificationChannelSettings.vue'
+import TenantEmailSettings from '@/components/email/TenantEmailSettings.vue'
 import { getTenantInfo, updateTenantInfo } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 

@@ -108,16 +108,37 @@
                        : 'border-gray-100 bg-gray-50/40 hover:border-gray-200']"
           >
             <!-- 完全受控：click.prevent 后由状态驱动勾选，超过 max_select 的点击
-                 不会在视觉上误显示为已选（服务端 max_select 权威，前端不制造假象） -->
+                 不会在视觉上误显示为已选（服务端 max_select 权威，前端不制造假象）。
+                 原生 input 仅保留语义与键盘焦点（sr-only），勾选视觉由下方自绘控件
+                 纯状态驱动——真机上浏览器对 radio/checkbox 的点击有激活/取消回滚，
+                 preventDefault 后原生勾选渲染与受控状态脱节，不能依赖 -->
             <input
               :type="currentQuestion.type === 'multi' ? 'checkbox' : 'radio'"
               :name="'ask-' + card.waitId + '-' + currentQuestion.id"
               :checked="isSelected(currentQuestion, option.key)"
               :disabled="!editable"
               :data-test="'option-' + option.key"
-              class="mt-0.5 h-4 w-4 shrink-0 accent-primary-600"
+              class="peer sr-only"
               @click.prevent="toggleOption(currentQuestion, option.key)"
             />
+            <span
+              aria-hidden="true"
+              :class="['mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center border transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-primary-400',
+                       currentQuestion.type === 'multi' ? 'rounded-[4px]' : 'rounded-full',
+                       isSelected(currentQuestion, option.key)
+                         ? 'border-primary-600 bg-primary-600'
+                         : 'border-gray-300 bg-white']"
+            >
+              <span
+                v-if="currentQuestion.type !== 'multi' && isSelected(currentQuestion, option.key)"
+                class="h-1.5 w-1.5 rounded-full bg-white"
+              ></span>
+              <svg
+                v-else-if="currentQuestion.type === 'multi' && isSelected(currentQuestion, option.key)"
+                viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="white" stroke-width="2.2"
+                stroke-linecap="round" stroke-linejoin="round"
+              ><path d="M3 8.5l3.2 3.2L13 5" /></svg>
+            </span>
             <span class="min-w-0">
               <span class="block text-sm font-medium text-gray-700">{{ option.label }}</span>
               <span v-if="option.description" class="mt-0.5 block text-xs leading-relaxed text-gray-500">{{ option.description }}</span>

@@ -7,6 +7,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261026-1744 | 测试入口隔离与Runtime断言收尾 | ✅ 已完成开发；隔离准入及自建库清理证明完成，旧断言校准，独测/CR通过。 | [设计](design/devtools/test-database-isolation-design.md) | [计划](plans/plan-test-database-isolation-runtime-assertions.md) |
 | 20261022-2109 | agent2 指定分支发布 | ✅ 已完成开发：支持特性分支固定SHA发布，独立测试及CR通过，待部署验收。 | [设计与计划](plans/plan-agent2-branch-deploy.md) | [计划](plans/plan-agent2-branch-deploy.md) |
 | 20261023-1624 | 旧版快捷选项整体退役 | ✅ 已完成开发；停用所有旧编号按钮，统一使用ask_user，待部署验收。 | [设计](system/design-ask-user-interactive-question.md#12-旧版快捷选项整体退役2026-10-23) | [计划](plans/plan-ask-user-interactive-question.md#8-2026-10-23旧版快捷选项整体退役) |
 | 20261015-1544 | Runtime跨电脑打包升级兼容 | ✅ 已完成开发：历史五根已固化，0.3.9升级及最终包启动通过，组合包完成。 | [设计](system/runtime-plugin-host-architecture-design.md#7-runtime-ui-与产品壳) | [计划](plans/plan-runtime-ui-boss-trial-bundle.md#phase17-跨电脑打包与直接升级2026-10-15) |
@@ -111,12 +112,12 @@
 | 20260518-2223 | 售后处理智能体 | 售后工单处理、退款退货流程自动化 | [设计](subagent/after-sales/after_sales_subagent_design.md) | — |
 | 20260525-1709 | 投诉处理智能体 | 投诉分类、处理建议、升级流程 | [设计](subagent/complaint-handling/complaint-agent-design.md) | [计划](subagent/complaint-handling/complaint-agent-dev-plan.md) |
 | 20260525-1713 | 客户跟进智能体 | ⏸️ 已下线（2026-10-14 由自动填表智能体取代）。内置文件级智能体，下线方式为 git rm `subagents/customer-followup/`（历史可恢复）；业务页面/数据表/技能保留不删。原功能：客户跟进任务管理、提醒、执行 | [设计](subagent/customer-followup/customer_followup_design.md) | — |
-| 20260610-1314 | 业务页面元数据注册表 | ✅ 已完成开发。 | [设计](system/digital-employee/page-metadata-registry-design.md) | [开发计划](system/digital-employee/page-metadata-registry-dev-plan.md) |
-| 20260602-1418 | 数据分析智能体 | ✅ 已完成开发。 | [设计](system/digital-employee/data-analysis-subagent-design.md) / [工具设计](system/digital-employee/smart-data-analysis-tool-design.md) | [工具开发计划](system/digital-employee/smart-data-analysis-tool-dev-plan.md) |
-| 20260602-1419 | 数据源导入功能 | ✅ 已完成开发。通用知识库扩展：上传 Excel/CSV → 解析 Sheet → LLM 推理 Schema → 用户审核 → 入库；连接外部数据库导入；管理已导入表 Schema 与关联。 | [设计§三~§五](system/digital-employee/data-analysis-subagent-design.md) | [计划](system/digital-employee/data-source-import-dev-plan.md) |
+| 20260610-1314 | 业务页面元数据注册表 | ✅ 已完成开发。 | [设计](system/page-metadata-registry-design.md) | [开发计划](system/digital-employee/page-metadata-registry-dev-plan.md) |
+| 20260602-1418 | 数据分析智能体 | ✅ 已完成开发。 | [设计](subagent/data-analysis/data-analysis-subagent-design.md) / [工具设计](subagent/data-analysis/smart-data-analysis-tool-design.md) | [工具开发计划](subagent/data-analysis/smart-data-analysis-tool-dev-plan.md) |
+| 20260602-1419 | 数据源导入功能 | ✅ 已完成开发。通用知识库扩展：上传 Excel/CSV → 解析 Sheet → LLM 推理 Schema → 用户审核 → 入库；连接外部数据库导入；管理已导入表 Schema 与关联。 | [设计§三~§五](subagent/data-analysis/data-analysis-subagent-design.md) | [计划](system/digital-employee/data-source-import-dev-plan.md) |
 | 20260610-1017 | 聊天附件数据分析 | ✅ 已完成开发。聊天中发送 Excel/CSV 附件自动注册到知识库并分析，共享 `schema_saver` 服务 + `upload_data_file` 工具（commit cfb0a78），`test_upload_shared.py` 覆盖。 | [设计](system/digital-employee/chat-attachment-data-analysis-design.md) | — |
 | 20260612-1648 | 数据分析工具返回结构优化 | ✅ 已完成开发。 | [设计](system/digital-employee/data-analysis-tool-result-redesign.md) | — |
-| 20260612-1649 | 工具消息持久化（事务性） | ✅ 已完成开发。修复工具结果跨 worker 丢失导致主智能体重跑分析的根因。 | [设计](system/digital-employee/tool-messages-persistence-design.md) | — |
+| 20260612-1649 | 工具消息持久化（事务性） | ✅ 已完成开发。修复工具结果跨 worker 丢失导致主智能体重跑分析的根因。 | [设计](system/tool-messages-persistence-design.md) | — |
 | 20260526-1411 | 订单处理智能体 | 订单自动化处理流程 | [设计](subagent/order-processing/design.md) | [计划](subagent/order-processing/dev_plan.md) |
 | 20260518-2224 | 内容生成通用设计 | 通用内容生成子智能体框架 | [设计](subagent/content_generate_universal_design.md) | — |
 | 20260623-0807 | 旅游报价价格解析性能优化 | ✅ 已完成开发。酒店、景点门票/项目、行程解析均已改为 DeepSeek V4 Pro 关闭推理；酒店用候选压缩短 prompt，景点保留 LLM 主路径并新增团队票优先后处理，行程解析补充无项目景点/活动名原样保留自检。 | [设计](system/design-travel-quote-price-parser-performance.md) | — |
@@ -138,6 +139,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261023-1226 | wecom CLI 三工具与持续恢复 | ✅ 已完成开发；身份投影、快路径及恢复独测/CR通过，待真机验收。 | [设计](design/wecom/wecom-cli-design.md#12-持续监控端到端收敛2026-10-27) | [开发计划](plans/plan-wecom-cli-group-chat-experiment.md) |
 | 20261015-1457 | Excel读取性能与正式库KB补迁 | ✅ 已完成开发；正式库240份已补迁，Excel修复独验96通过，代码未部署。 | [设计](tools/excel-read-performance-design.md) | [计划](plans/plan-excel-read-performance.md) |
 | 20261015-1516 | BOSS部分筛选项不可读时继续执行 | ✅ 已完成开发：跳过未匹配条件，独立测试与CR通过，待部署验收。 | [设计](design/recruiting/resume-job-matching-design.md) | [计划](plans/desktop-automation/plan-boss-partial-filter-discovery.md) |
 | 20261013-1410 | BOSS 会员筛选与聊天补充条件 | ✅ 已完成开发；会员滚动和聊天补充条件已通过真机验证。 | [设计](design/recruiting/resume-job-matching-design.md) | [开发计划](plans/desktop-automation/plan-boss-vip-dynamic-filters.md) |
@@ -187,7 +189,7 @@
 |---|------|------|---------|---------|
 | 20261008-1603 | 飞书、钉钉对话服务接入 AgentRunner | ✅ 已完成开发（待部署真机验收）：保留原渠道业务，仅接入独立 Runner 并传递可信渠道来源；两轮审核修复完成。 | [接入边界](system/agent-application-architecture-design.md#81-后续接入的固定边界) | [飞书](channel/feishu/implementation_plan.md#agentrunner-接入后续独立事项) / [钉钉](channel/dingtalk/implementation_plan.md#agentrunner-接入后续独立事项) / [审核](reviews/feishu-dingtalk-agentrunner-review-2026-10-09.md) |
 | 20261010-wecom-runner | 企业微信应用渠道接入 AgentRunner | ✅ 已完成开发，保留原渠道流程；待部署及真机验收。 | [接入设计](plans/plan-wecom-agent-runner-integration.md#2-接入设计) / [共同契约](system/runner-desktop-runtime-integration-contract.md) | [开发计划](plans/plan-wecom-agent-runner-integration.md) |
-| 20261009-1452 | 微信客服完整 Markdown 交付 | ✅ 已完成开发：默认原文前缀与原生完整 MD，仅正文图片考虑长图；待真机验收。 | [设计](channel/wecom_kf/wecom_kf_design.md#十四2026-10-09-长答复交付调整) | — |
+| 20261009-1452 | 微信客服完整 Markdown 交付 | ✅ 已完成开发：文件路径答复一律原文前缀呈现（2026-10-26 短表格前缀修订 §14.10），原生完整 MD；MD 渲染已真机部分验收。 | [设计](channel/wecom_kf/wecom_kf_design.md#十四2026-10-09-长答复交付调整) | — |
 | 20261008-1340 | 微信客服原渠道恢复与 AgentRunner 接入 | ✅ 已完成开发：原渠道接入独立 Runner，误重构已移除，迁移历史保留；agent2 已发布并真机验收通过（文本/语音/合并/取代）。 | [设计](system/agent-application-architecture-design.md) | [计划](plans/plan-wecom-kf-channel-restore.md) |
 | 20260916-1830 | 公众号自有号清单源（历史文章导入，主通道） | ✅ 已完成开发：租户扫码绑定自有号，定期拉「发表记录」清单走既有 URL 直采入库（首次回填上限+增量重叠即停，r3 修生产超量回填事故）；2026-10-09 验收通过。 | [设计](system/wechat-mp/wechat-mp-list-source-design.md) | — |
 | 20260914-1901 | 微信公众号内容入知识库 | ✅ 已完成开发：回调/URL 直采/手动粘贴/freepublish 接口对账多通道入库，图片 VL 解析（门禁放开+r2 白描指令/200 张护栏）、content_md 组装、500 字总结、按 token 计费；WP0–WP13 全交付，2026-10-09 验收通过。 | [设计](system/wechat-mp/wechat-mp-knowledge-ingestion-design.md) | — |

@@ -68,11 +68,15 @@ test('配置 wecom entry：providers 数组含 wecom，manifests 含独立摘要
   assert.equal(caps['provider_id'], 'ai.aidwork.boss-recruiting', 'boss 恒为第一个可用 provider（云端兼容）')
   const manifests = caps['provider_manifests'] as Record<string, Record<string, unknown>>
   assert.equal(manifests['wecom']!['provider_id'], 'ai.aidwork.wecom')
-  assert.equal(manifests['wecom']!['manifest_digest'], manifestDigestFor('wecom'))
+  assert.equal(manifests['wecom']!['manifest_digest'], 'b7c278721d218db6c6fd2a9f07a4c543403f4fbb597a0c8d345a8c7f59f35279', 'unverified entry retains the accepted eight-tool manifest')
   assert.notEqual(manifests['wecom']!['manifest_digest'], manifests['boss-recruiting']!['manifest_digest'])
   assert.equal(manifests['wecom']!['protocol_version'], 1)
   // M11b：wecom 工具能力按工具名上报（与 manifest 同源；粒度对齐 weixin_message_send_v2）
   const capabilities = caps['capabilities'] as string[]
+  assert.ok(!capabilities.includes('wecom_read_sessions'), 'a configured path does not prove the new plugin capability')
+  const verified = deviceCapabilities(makeConfig({ providers: { wecom: { entry: existingEntry } } }), true)
+  assert.ok((verified.capabilities as string[]).includes('wecom_read_sessions'))
+  assert.equal((verified.provider_manifests as Record<string, Record<string, unknown>>).wecom!.manifest_digest, manifestDigestFor('wecom'))
   for (const tool of ['wecom_probe', 'wecom_message_send', 'wecom_send_status', 'wecom_group_poll', 'wecom_send_image', 'wecom_send_file', 'wecom_read_session', 'wecom_unread_list']) {
     assert.ok(capabilities.includes(tool), `${tool} 应在 capabilities`)
   }

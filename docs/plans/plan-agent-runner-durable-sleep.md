@@ -1,5 +1,7 @@
 # 开发计划：AgentRunner 通用持久化休眠与自动唤醒
 
+2026-10-27增量实施：continuous运行中失租可信接续、任务依赖指纹v3、timer源暂时错误退避及死Worker模型调用保留unknown后续做，统一在[W10实施记录](plan-wecom-cli-group-chat-experiment.md#w10-真机前综合收敛2026-10-27)开发与独立验证；保留既有park/timer、会话claim、计费事实与停止优先级，不另建调度服务。真实部署与多天持续运行尚未验收。
+
 ## 开发进度
 
 | 阶段 | 内容 | 状态 | 完成记录 |

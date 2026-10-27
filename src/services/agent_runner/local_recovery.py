@@ -114,6 +114,40 @@ class LocalRecoveryProof:
         phase = LocalPhase(state.execution_id, fact.call.id, 'main', 0)
         ref = refs.get(phase.key(row['runner_id']))
         if ref is None:
+            from src.local_tools.wecom_flow import modern_call
+            if cls.provider_key == 'wecom' and modern_call(cls.name, arguments):
+                from .local_invocations import _execution, phase_binding
+                with self.connection_factory() as connection:
+                    cursor = connection.cursor()
+                    current = lock_runner(cursor, row['runner_id'])
+                    if (current['revision'] != row['revision'] or current['lease_valid']
+                            or current['status'] not in {'waiting', 'paused', 'interrupted'}
+                            or current.get('cancel_requested')):
+                        return False
+                    node = _execution(current['checkpoint'], state.execution_id, row['runner_id'])
+                    saved = (node.get('tools') or {}).get(fact.call.id) or {}
+                    # The bind transaction writes the main row and reference
+                    # together. No such row means this call has not sent/read
+                    # its main operation yet; its status query is read-only
+                    # and reconnects via the same deterministic dedupe key.
+                    if saved.get('call') != vars(fact.call) or phase_binding(cursor, current, phase) is not None:
+                        return False
+                    from src.local_tools.wecom_inbound import validate_read_phase
+                    from src.local_tools.wecom_flow import named_send,validate_resolve_phase,RESOLVE_BRANCH
+                    for key, extra in refs.items():
+                        if extra.get('tool_call_id') != fact.call.id:
+                            continue
+                        branch = LocalPhase(state.execution_id, fact.call.id, extra['branch'], extra['ordinal'])
+                        if key != branch.key(row['runner_id']):
+                            return False
+                        original = repository.get_invocation(extra['invocation_id'], row['tenant_id'])
+                        RunnerLocalLifecycle.validate_invocation(state.identity, row['runner_id'], branch, extra, original)
+                        if extra['branch'] == RESOLVE_BRANCH:
+                            if not named_send(cls.name,arguments) or not validate_resolve_phase(arguments,extra):
+                                return False
+                        else:
+                            validate_read_phase(row, state, fact, extra, original)
+                    return True
             from src.local_tools.proxy_tool import BossResumeNextTool
             if cls is not BossResumeNextTool:
                 return False
@@ -167,6 +201,16 @@ class LocalRecoveryProof:
                     arguments = {'receipt_id': scope['receipt_id']}
             except SendStatusScopeError as error:
                 raise RunnerError('LOCAL_PHASE_INTENT_CHANGED', 409) from error
+        from src.local_tools.wecom_flow import named_send,validate_resolve_phase,canonical_send_arguments,RESOLVE_BRANCH
+        requested_arguments = arguments
+        if named_send(cls.name,arguments):
+            resolved = refs.get(LocalPhase(state.execution_id,fact.call.id,RESOLVE_BRANCH,0).key(row['runner_id']))
+            if resolved is None or not validate_resolve_phase(arguments,resolved):
+                raise RunnerError('LOCAL_PHASE_INTENT_CHANGED',409)
+            original = repository.get_invocation(resolved['invocation_id'],row['tenant_id'])
+            arguments = canonical_send_arguments(arguments,original) if original else None
+            if arguments is None:
+                raise RunnerError('LOCAL_PHASE_INTENT_CHANGED',409)
         if (ref.get('request') or {}).get('arguments')!=arguments:
             raise RunnerError('LOCAL_PHASE_INTENT_CHANGED',409)
         original_device = ref['request']['device_id']
@@ -178,9 +222,12 @@ class LocalRecoveryProof:
                 continue
             phase = LocalPhase(state.execution_id,fact.call.id,ref['branch'],ref['ordinal'])
             request = ref.get('request') or {}
+            inbound = ref['branch'].startswith('wecom.inbound.') and cls.provider_key == 'wecom'
+            resolving = ref['branch'] == RESOLVE_BRANCH and named_send(cls.name,requested_arguments)
             if (key!=phase.key(row['runner_id']) or ref['ordinal']!=0
-                    or request.get('tool_name')!=allowed.get(ref['branch'])
+                    or request.get('tool_name')!=('wecom_read_session' if inbound or resolving else allowed.get(ref['branch']))
                     or request.get('device_id')!=original_device
+                    or resolving and not validate_resolve_phase(requested_arguments,ref)
                     or ref['branch'] in {'main','heal.retry'} and request.get('arguments')!=arguments
                     or ref['branch']=='heal.inspect' and request.get('arguments')!={}):
                 raise RunnerError('LOCAL_INVOCATION_OWNER_VERIFICATION_REQUIRED',409)
@@ -189,9 +236,17 @@ class LocalRecoveryProof:
                 RunnerLocalLifecycle.validate_invocation(state.identity,row['runner_id'],phase,ref,invocation)
             except CheckpointFailure as error:
                 raise RunnerError('LOCAL_INVOCATION_OWNER_VERIFICATION_REQUIRED',409) from error
+            if inbound:
+                from src.local_tools.wecom_inbound import validate_read_phase
+                validate_read_phase(row, state, fact, ref, invocation)
             invocation = repository.observed_invocation(invocation)
             if invocation['state']=='unknown' or invocation.get('effect')=='unknown':
-                return False
+                from src.local_tools.wecom_flow import modern_call, readonly_db_call
+                if not (request.get('provider_key') == 'wecom'
+                        and ((inbound or resolving) and readonly_db_call(request.get('tool_name'), request.get('arguments') or {})
+                             or ref['branch'] == 'main' and (readonly_db_call(cls.name, arguments)
+                             or cls.name == 'wecom_message_send' and modern_call(cls.name, arguments)))):
+                    return False
             if ref['branch']=='main' and invocation['state']=='failed':
                 from src.local_tools.durable_flow import healing_requires_verification
                 if healing_requires_verification(cls,invocation.get('error_code'),invocation.get('effect')):
@@ -276,8 +331,12 @@ def _cancel_facts(cursor, row, *, request):
                 (fact['invocation_id'], row['tenant_id']))
             invocation = dict(cursor.fetchone())
         invocation = repository.observed_invocation(invocation)
+        from src.local_tools.wecom_flow import readonly_db_call
+        safe_read = invocation.get('provider_key') == 'wecom' and readonly_db_call(
+            invocation.get('tool_name'), invocation.get('arguments_json') or {})
         facts.append({'kind':'local', 'holdable':phase is not None,
             'completion_known':repository.operation_completion_known(invocation),
+            'readonly_db': safe_read, 'provider_key': invocation.get('provider_key'),
             **{key:invocation.get(key) for key in ('id','state','effect','deadline_at')}})
     from .notify_audit import cancellation_facts
     facts.extend(cancellation_facts(row))
@@ -289,6 +348,8 @@ def _cancel_facts(cursor, row, *, request):
 def cancel_completion_status(facts, *, detached_local_wait=False):
     pending = False
     for fact in facts:
+        if fact.get('kind') == 'local' and fact.get('readonly_db'):
+            continue  # Logical cancellation grants no new UI operation or stop proof.
         if fact.get('kind')=='domain':
             if not fact['known']:
                 # Keep the original domain reason in its private HTTP fact;
@@ -318,9 +379,30 @@ def cancel_owned_invocations(connection_factory, attempt, *, request=True, compl
             row = lock_runner(cursor, attempt.runner_id, attempt)
             if not row['cancel_requested']:
                 raise CheckpointFailure('LOCAL_USER_CANCEL_NOT_REQUESTED')
+            original = row.get('checkpoint') or {}
+            marker = (original.get('execution') or {}).get('resources', {}).get('wecom_task_device') or {}
+            if marker.get('version') == 2:
+                devices = sorted({fact['request']['device_id'] for _, phase, fact in
+                    owned_invocations(original.get('execution') or {}, row['runner_id']) if phase is not None})
+                repository.lock_operation_admission(cursor, row['tenant_id'])
+                cursor.execute('SELECT id FROM local_tool_devices WHERE tenant_id=%s AND user_id=%s '
+                    'AND id=ANY(%s::uuid[]) ORDER BY id FOR UPDATE',
+                    (row['tenant_id'], row['user_id'], devices))
             facts = _cancel_facts(cursor,row,request=request)
             from .notify_audit import complete_cancellation_audits
             checkpoint = complete_cancellation_audits(cursor,row,attempt) if complete_audit else None
+            unresolved = [fact for fact in facts if fact.get('kind') == 'local'
+                and not fact['completion_known'] and not fact.get('readonly_db')]
+            if (marker.get('version') == 2 and unresolved
+                    and all(fact.get('provider_key') == 'wecom'
+                        and (fact.get('state') == 'unknown' or fact.get('effect') == 'unknown')
+                        for fact in unresolved)):
+                # User stop ends the cloud task. Preserve an exact physical
+                # hold, serialized with new device admission; only the existing
+                # Host resource proof can release that hold later.
+                checkpoint = copy.deepcopy(checkpoint if checkpoint is not None else original)
+                checkpoint['detached_local_wait'] = True
+                checkpoint['detached_local_invocations'] = sorted(str(fact['id']) for fact in unresolved)
             if checkpoint is not None:
                 cursor.execute('UPDATE agent_runners SET checkpoint=%s::jsonb,revision=revision+1,updated_at=clock_timestamp() WHERE runner_id=%s RETURNING *',
                     (capped_checkpoint_dumps(checkpoint),attempt.runner_id))

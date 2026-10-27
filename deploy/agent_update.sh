@@ -125,7 +125,7 @@ find . -type d -name "__pycache__" -exec chmod -R 777 {} + 2>/dev/null || true
 
 # 1.1 清除 Python 字节码缓存（避免旧代码运行）
 echo "[1.1] 清除 Python .pyc 缓存..."
-find . -type f -name "*.pyc" -delete
+find . -type f -name "*.pyc" -delete 2>/dev/null || true
 find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 
 # 2. 前端依赖安装（node_modules 已持久化在宿主机，增量安装，通常很快）

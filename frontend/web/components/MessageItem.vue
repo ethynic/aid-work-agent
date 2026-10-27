@@ -277,12 +277,14 @@ function toggleExpanded() {
   isExpanded.value = !isExpanded.value
 }
 
+/** 多数失败可自愈，过程反馈保持中性：不用红色、不用叉号，细节只写 console */
+function isProgressFailure(msg: ProgressMessage): boolean {
+  return msg.type === 'error' || (msg.type === 'tool_result' && msg.success === false)
+}
+
 function getProgressClass(msg: ProgressMessage): string {
-  if (msg.type === 'tool_result' && msg.success === false) {
-    return 'bg-danger-50 text-danger-600'
-  }
+  if (isProgressFailure(msg)) return 'bg-gray-100 text-gray-500'
   switch (msg.type) {
-    case 'error': return 'bg-danger-50 text-danger-600'
     case 'complete': return 'bg-success-50 text-success-600'
     case 'thinking': return 'bg-primary-50 text-primary-600'
     case 'tool_start': return 'bg-info-50 text-info-600'
@@ -292,11 +294,8 @@ function getProgressClass(msg: ProgressMessage): string {
 }
 
 function getProgressIcon(msg: ProgressMessage): string {
-  if (msg.type === 'tool_result' && msg.success === false) {
-    return '❌'
-  }
+  if (isProgressFailure(msg)) return ''
   switch (msg.type) {
-    case 'error': return '❌'
     case 'complete': return '✅'
     case 'thinking': return '🤔'
     case 'tool_start': return '🔧'
@@ -305,21 +304,20 @@ function getProgressIcon(msg: ProgressMessage): string {
   }
 }
 
+const PROGRESS_EMOJI = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}]/gu
+
 function formatProgressContent(msg: ProgressMessage): string {
   if (msg.type === 'tool_start' && msg.toolName) {
     return `🔧 需要调用工具【${msg.displayName || msg.toolName}】`
   }
   if (msg.type === 'tool_result' && msg.toolName) {
-    const success = msg.success !== false
     const name = msg.displayName || msg.toolName
-    const error = typeof msg.result?.error === 'string' ? msg.result.error : ''
-    return success
-      ? `✅ ${name}执行完成`
-      : `❌ ${name}执行失败${error ? `: ${error}` : ''}`
+    // 失败不展示错误详情（含堆栈），完整内容已输出到 console
+    return msg.success !== false ? `✅ ${name}执行完成` : `${name}未完成`
   }
 
-  const cleaned = msg.content.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim()
-  return cleaned.length > 100 ? cleaned.slice(0, 100) + '...' : cleaned
+  const cleaned = msg.content.replace(PROGRESS_EMOJI, ' ').replace(/\s+/g, ' ').trim()
+  return cleaned.length > 60 ? cleaned.slice(0, 60) + '...' : cleaned
 }
 
 const displayAttachments = computed<AttachmentInfo[]>(() => {

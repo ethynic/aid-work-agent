@@ -86,6 +86,19 @@ test('loadMatrix：默认路径可加载随代码发布的矩阵（仓库/dist �
   assert.equal(matrix.entries['5.0.11.6029']?.status, 'validated')
 })
 
+test('已验证的小版本复用既有算法，但不放行相邻未验证版本', () => {
+  const matrix = loadMatrix()
+  const current = lookupVersion(matrix, '5.0.13.6005')
+  const previous = lookupVersion(matrix, '5.0.12.6018')
+  assert.equal(current.status, 'validated')
+  assert.ok(current.entry && previous.entry)
+  for (const field of ['algorithm', 'page_size', 'key_form', 'scan_strategy', 'schema_profile'] as const) {
+    assert.equal(current.entry[field], previous.entry[field], `${field} 应复用已经真机复核的方案`)
+  }
+  assert.equal(lookupVersion(matrix, '5.0.13.6006').status, 'unknown')
+  assert.equal(lookupVersion(matrix, '5.0.13').status, 'unknown')
+})
+
 test('发行布局冒烟：临时目录只含 dist/src 树 + drivers（无 src）——dist 处的编译模块 loadMatrix 默认路径可加载；缺矩阵资产则 null', async () => {
   // 复刻发行包布局：打包器整拷 dist/src + drivers，不含源码 src。
   // 仓库内的默认路径测试覆盖不了发行场景，这里把编译后的 matrix.js 与矩阵资产放进隔离 stage

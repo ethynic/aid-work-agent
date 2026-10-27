@@ -252,6 +252,9 @@ test('端到端形态：py 行集 → 归一输出字段齐备（msg_id/server_i
   const { kind: _kind, ...rest1 } = out[0]!
   assert.deepEqual(rest1, {
     msg_id: 11,
+    sender_id: PEER,
+    sender_name: null,
+    sender_platform: 'unknown',
     server_id: 'srv-1',
     side: 'peer',
     text: '你好',
@@ -261,6 +264,9 @@ test('端到端形态：py 行集 → 归一输出字段齐备（msg_id/server_i
   const { kind: _kind2, ...rest2 } = out[1]!
   assert.deepEqual(rest2, {
     msg_id: 12,
+    sender_id: SELF,
+    sender_name: null,
+    sender_platform: 'unknown',
     server_id: 'srv-2',
     side: 'self',
     text: NON_TEXT_PLACEHOLDER,

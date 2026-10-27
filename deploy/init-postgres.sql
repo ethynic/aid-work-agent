@@ -702,6 +702,26 @@ CREATE TABLE IF NOT EXISTS user_email_settings (
 
 CREATE INDEX IF NOT EXISTS idx_user_email_settings_user ON user_email_settings(user_id);
 
+-- 租户邮箱设置（邮箱三层解析第 2 层兜底：用户个人邮箱 -> 租户邮箱 -> 报错提示）
+CREATE TABLE IF NOT EXISTS tenant_email_settings (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    email_address TEXT,
+    smtp_server TEXT,
+    smtp_port INTEGER,
+    smtp_user TEXT,
+    smtp_password TEXT,
+    smtp_encryption TEXT DEFAULT 'ssl',
+    imap_server TEXT,
+    imap_port INTEGER,
+    imap_encryption TEXT DEFAULT 'ssl',
+    status TEXT DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_tenant_email_settings_tenant ON tenant_email_settings(tenant_id);
+
 -- 数据连接器表（数据分析智能体）
 CREATE TABLE IF NOT EXISTS data_connectors (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1411,6 +1431,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_lt_invocations_dedupe
     WHERE business_kind IS NOT NULL AND dedupe_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_lt_inv_provider ON local_tool_invocations USING btree (tenant_id, provider_key, state);
 CREATE INDEX IF NOT EXISTS idx_lt_inv_lane_claim ON local_tool_invocations USING btree (tenant_id, device_id, state, execution_lane);
+-- Only unresolved identity reads participate; completed history stays out of this scan.
+CREATE INDEX IF NOT EXISTS idx_lt_inv_wecom_inbound_pending
+    ON local_tool_invocations (tenant_id, user_id, session_id,
+        (business_ref->>'runner_id'), (business_ref->>'execution_id'), device_id, created_at, id)
+    WHERE provider_key='wecom' AND business_kind='agent_runner'
+        AND state IN ('succeeded','unknown') AND tool_name IN ('wecom_read_session','wecom_read_sessions')
+        AND result_json->'_wecom_inbound'->>'version'='1'
+        AND jsonb_array_length(result_json->'_wecom_inbound'->'pending')>0;
 
 CREATE TABLE IF NOT EXISTS local_tool_events (
     id SERIAL,
@@ -5695,3 +5723,109 @@ CREATE TABLE IF NOT EXISTS chat_message_shares (
     password_hash TEXT,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+
+-- ==================== AI获客智能体业务表（bs_ai_lead_gen_*） ====================
+-- 名单/联系人/邮件/回复五表；与 src/skills/ai-lead-gen-1.0.0/scripts/lead_db.py
+-- init_tables() 同构（幂等 IF NOT EXISTS）。外键完整性应用层保证。
+CREATE TABLE IF NOT EXISTS bs_ai_lead_gen_campaigns (
+    id SERIAL PRIMARY KEY,
+    campaign_name TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    brief TEXT,
+    target_region TEXT,
+    send_mode TEXT DEFAULT 'review',
+    status TEXT DEFAULT 'draft',
+    daily_limit INT DEFAULT 20,
+    scheduler_task_id TEXT,
+    reply_mailbox TEXT,
+    send_mailbox_level TEXT,
+    product_refs TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_bs_ailg_campaigns_tenant ON bs_ai_lead_gen_campaigns(tenant_id);
+
+CREATE TABLE IF NOT EXISTS bs_ai_lead_gen_leads (
+    id SERIAL PRIMARY KEY,
+    campaign_id INT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    company_name TEXT,
+    country TEXT,
+    city TEXT,
+    website TEXT,
+    industry TEXT,
+    employees TEXT,
+    founded TEXT,
+    source TEXT,
+    source_url TEXT,
+    score INT,
+    status TEXT DEFAULT 'new',
+    reject_reason TEXT,
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_bs_ailg_leads_campaign ON bs_ai_lead_gen_leads(campaign_id);
+
+CREATE TABLE IF NOT EXISTS bs_ai_lead_gen_contacts (
+    id SERIAL PRIMARY KEY,
+    campaign_id INT NOT NULL,
+    lead_id INT,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    name TEXT,
+    title TEXT,
+    email TEXT,
+    email_source TEXT,
+    email_type TEXT,
+    email_function TEXT,
+    email_relevance TEXT,
+    confidence TEXT,
+    language TEXT,
+    phone TEXT,
+    linkedin TEXT,
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_bs_ailg_contacts_campaign ON bs_ai_lead_gen_contacts(campaign_id);
+
+CREATE TABLE IF NOT EXISTS bs_ai_lead_gen_emails (
+    id SERIAL PRIMARY KEY,
+    campaign_id INT NOT NULL,
+    contact_id INT,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    subject_a TEXT,
+    subject_b TEXT,
+    ab_group TEXT,
+    body TEXT,
+    status TEXT DEFAULT 'draft',
+    message_id TEXT,
+    sent_at TIMESTAMP,
+    error TEXT,
+    retry_count INT DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_bs_ailg_emails_campaign ON bs_ai_lead_gen_emails(campaign_id);
+
+CREATE TABLE IF NOT EXISTS bs_ai_lead_gen_replies (
+    id SERIAL PRIMARY KEY,
+    campaign_id INT NOT NULL,
+    contact_id INT,
+    email_id INT,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    from_addr TEXT,
+    subject TEXT,
+    body TEXT,
+    received_at TIMESTAMP,
+    intent TEXT,
+    intent_summary TEXT,
+    notified BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_bs_ailg_replies_campaign ON bs_ai_lead_gen_replies(campaign_id);

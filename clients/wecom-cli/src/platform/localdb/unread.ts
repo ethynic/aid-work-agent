@@ -38,6 +38,7 @@ import { logLocaldbEvent } from './log.js'
 import { checkCancelled, type CurrentAccount } from './identity.js'
 import { formatTimestamp, NON_TEXT_PLACEHOLDER } from './messages.js'
 import type { LocaldbReadDeps } from './readSession.js'
+import { hasExternalWechatHint } from './contactScope.js'
 
 export interface LocaldbUnreadArgs {
   /** focus 会话名列表（operation 层已校验非空数组；逐个 resolve，失败进 failed） */
@@ -132,12 +133,15 @@ export async function resolveFocusConversation(
   focus: string,
   selfUserId: string,
   targetType?: 'contact' | 'group',
+  subtitle?: string,
 ): Promise<string> {
   const name = focus.trim().replace(/@微信$/, '').trim()
   if (!name) throw new CodedOperationError('TARGET_NOT_FOUND', '会话名去除 @微信 后缀后为空，无法定位')
-  const resolved = await query(['--task', 'resolve', '--name', name, '--account', selfUserId])
+  const externalOnly = hasExternalWechatHint(focus, targetType, subtitle)
+  const resolved = await query(['--task', 'resolve', '--name', name, '--account', selfUserId,
+    ...(externalOnly ? ['--external-only'] : [])])
   const sources = resolved.sources as Record<string, unknown> | undefined
-  const required = targetType === 'contact' ? ['user_table']
+  const required = targetType === 'contact' || externalOnly ? ['user_table']
     : targetType === 'group' ? ['conversation_table'] : ['user_table', 'conversation_table']
   if (!sources || required.some(source => sources[source] !== 'ok')) {
     if (required.some(source => sources?.[source] === 'schema-unknown')) {
@@ -150,6 +154,9 @@ export async function resolveFocusConversation(
   for (const raw of Array.isArray(resolved.candidates) ? resolved.candidates : []) {
     if (!raw || typeof raw !== 'object') continue
     const row = raw as Record<string, unknown>
+    if (externalOnly && (row.source !== 'user_table' || row.contact_scope !== 'external')) {
+      throw new CodedOperationError('VERSION_UNSUPPORTED', '外部联系人身份来源不完整，不能绑定同名目标')
+    }
     const id = row.conversation_id
     if (row.source === 'user_table' && typeof row.user_id === 'string' && id === null && targetType !== 'group') {
       unresolvedUsers.add(row.user_id)

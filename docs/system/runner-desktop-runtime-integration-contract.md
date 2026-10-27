@@ -2,7 +2,7 @@
 
 > 契约 ID：`AID-RUNNER-DESKTOP-RUNTIME`
 >
-> 版本：`2.10`；日期：2026-10-26
+> 版本：`2.11`；日期：2026-10-27
 >
 > 状态：v2.0按用户逐条复核确定，替代v1.3的插件额外审批语义；候选0.3已有真实Host与Desktop消费验证，Windows隔离验收版已交付，尚未共同登记wire冻结。现有公开API以代码为基线；共享格式见第8.1节，任务binding、授权及资源占用wire仍待主导交付。隔离验收不代表生产发行或真实业务验收通过。
 >
@@ -15,6 +15,16 @@
 > 上位基线：[已完成 AgentRunner 架构](agent-application-architecture-design.md)、[Provider 规范](first-party-cli-mcp-provider-standard.md)
 
 ## 1. 适用范围与约束层级
+
+2026-10-27 W10实施登记（2.11）：[计划](../plans/plan-wecom-cli-group-chat-experiment.md#w10-真机前综合收敛2026-10-27)。不改Device API claim/permit、OperationResult、原release、收费及授权wire；增量是三项Agent工具和内部恢复语义。唯一写入者：主控维护契约/云proxy/文档；Runner实现角色维护持续恢复，CLI维护native/TS/MCP结果，Runtime维护共用core/Host；独立TEST/CR只读验证。
+
+- Agent仅`wecom_read_session(session,cursor?,limit?)`、`wecom_message_send(session,text)`、`wecom_read_sessions(sessions?,cursor?,limit?)`；MCP保留原调用共15项，Runtime受信9项。CLI生产`ws1`会话、`wb1`分页及`sender_platform`，云端透传，不自建平台算法；缺字段按unknown。CLI0.2.0的schema_digest为`sha256:3cc508ef7b22b0daf2050e5843da644e56165c50bcfb3f479b1835141daa82db`。新Runtime默认兼容旧8项，真实MCP schema证据核实后更新9项；新参数缺能力返回明确升级错误，协商暂时故障可重试，旧入参正常执行。
+- 私有`wecom_task_device` v2沿用原root/设备原子绑定，覆盖单聊/群聊现代调用；v1旧群调用继续兼容。`continuous_activation` v1是服务器可信接续来源，不替代权限或重放许可；任务依赖指纹v3仅将可验证匹配的旧v2迁移。暂停/取消优先，暂时源错误保留原wake并退避。
+- 命名发送先持久化内部`wecom.resolve`只读phase（native read_session的resolve_only），main只使用该原设备有效结果的canonical；Agent schema不含该参数，稳定ID发送无额外查询。解析阶段不读正文或推进cursor，恢复保原模型意图并验证原解析/main，unknown不因改用稳定ID而重放。
+- CLI读取消息保留不可变baseline/start_fence和未知身份的原消息恢复cursor。Runner仅在原invocation存私有`_wecom_inbound`待处理offset，当前结果与`_wecom_recovered`原子交接；checkpoint只存固定轮转位置，原调用/late_result/用量不改写。读unknown仅逻辑允许重读；外发unknown只读对账，不自动重放。
+- 既有Runtime恢复观察可带`provider_key=wecom`，能力名`runtime_recovery_wecom_v1`；不伪造BOSS页面，WeCom page为not_applicable。可信resource_stopped可释放原物理hold，不将未知消息变成成功。outbox原payload/endpoint保留，仅本地可选next_attempt_at和有界补投轮次；AbortSignal为进程内参数，未新增wire。已ACK且效果已知、证据一致的journal才按7天清理。
+- 生产/消费组合已覆盖旧调用、新schema、真实MCP只读协商及隔离Worker/SQL。签名发行包安装、真实业务UI、多天运行未验，不将源码组合通过当成正式部署验收。历史签名根不替换。
+
 
 2026-10-26 W6实施检查点：新增`wecom_group_poll` schema v1（target_name/cursor）及文本发送可选`group_cursor`，CLI唯一生产、MCP/Runtime第8项受信工具及云proxy共同消费；旧CLI缺能力在实际listTools门禁零调用拒绝，旧7工具普通调用不变。首次context不作new，后续账号/群/generation/anchor及原群名独立游标；不消费共享watch水位。监控root文本回复必须带原group_cursor、不得ref替代，其他媒体发送不在本轮授权范围；CLI发送前验证原账号/群/库且不可OCR降级。Runner checkpoint私有`resources.wecom_task_device` v1（原root identity/runner_id/device_id）在首次poll与invocation同事务原子固定，后续root/child WeCom沿原设备；运行时配置指纹升级拒绝旧Worker静默忽略。Device/H1/H3 wire与release/unknown/outbox语义不改，新工具只用于新版release。唯一写入：主控CLI/MCP/core及文档，backend角色云端配置/代理/Runner及后端验证，独立TEST/CR只读。详见[W6计划](../plans/plan-wecom-cli-group-chat-experiment.md#w6-配置智能体完整链路2026-10-26)；不部署、不恢复监听，不宣称真实群及多天验收完成。
 
@@ -362,6 +372,7 @@ H3可选automaticConnection只由新版独立Runtime preload开启。Device `/ru
 
 | 日期 | 版本 | 内容 | 状态 |
 |---|---|---|---|
+| 2026-10-27 | 2.11 | W10三业务工具、平台投影、continuous可信接续及WeCom原设备资源恢复；Device授权wire保持 | 开发、独测及CR通过；发行安装、真实发送和跨日运行未验 |
 | 2026-10-08 | 1.0 | 建立职责、接口边界、文件责任与H1～H4共同检查点，登记到双方设计/计划和AGENTS | 文档约束建立；双方实现/契约测试未完成，未向其他会话发送消息 |
 | 2026-10-08 | 1.1 | 根据用户转交的桌面定位，补充统一任务执行环境、本地批量计算、审批/计费与性能边界 | 兼容补充；新增wire schema及实现仍待H1～H4冻结，未向其他会话发送消息 |
 | 2026-10-08 | 1.2 | 用户确认同机/异机Runtime，补充目标设备选择、远端grant/产物、特定网络及长流程独占 | 本批Desktop工作流唯一文档写入者：共同契约、双方设计/计划的引用与交接、ideas桌面索引；无wire/代码变更，Runtime实现未代为验收 |

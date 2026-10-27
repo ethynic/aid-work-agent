@@ -583,7 +583,7 @@
           </div>
           <div class="col-span-4">
             <label class="text-sm text-muted mb-1 block">二维码标题</label>
-            <BaseInput v-model="kfForm.qr_title" maxlength="50" placeholder="如：爱定义 - 小蔡老师" />
+            <BaseInput v-model="kfForm.qr_title" maxlength="50" placeholder="如：小蔡老师" />
             <p class="mt-0.5 text-xs text-muted">显示在二维码图片上方，便于区分不同归属用户</p>
           </div>
           <div class="col-span-4">

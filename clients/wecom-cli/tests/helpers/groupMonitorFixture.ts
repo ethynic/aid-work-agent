@@ -8,6 +8,7 @@ import type { CurrentAccount } from '../../src/platform/localdb/identity.js'
 import type { LocaldbReadDeps } from '../../src/platform/localdb/readSession.js'
 import type { RunPowerShellDriverFn } from '../../src/platform/powershell.js'
 import { createWecomMessageSendOperation } from '../../src/operations/messageSend.js'
+import { createTargetRef, verifyTargetRef } from '../../src/platform/targetRef.js'
 
 const cliRoot = fileURLToPath(new URL('../../../', import.meta.url))
 export const fixturePython = join(cliRoot, '..', '..', 'venv', 'Scripts', 'python.exe')
@@ -49,9 +50,12 @@ export async function groupMonitorFixture(base: string, setup = true, searchSect
   }
   const artifacts = join(base, 'artifacts')
   mkdirSync(artifacts, { recursive: true })
-  const send = createWecomMessageSendOperation({ localdb: deps, artifactDirFn: () => artifacts,
+  const keyDir = join(base, 'refs')
+  const refDeps = { createRefFn: (name: string, type: string, subtitle = '', coords?: { x: number; y: number }, account?: string) => createTargetRef(name, type, subtitle, { keyDir, coords, account }),
+    verifyRefFn: (value: string) => verifyTargetRef(value, { keyDir }) }
+  const send = createWecomMessageSendOperation({ ...refDeps, localdb: deps, artifactDirFn: () => artifacts,
     runDriverFn: driver, localdbVerifyPoll: { attempts: 1, delayMs: 0 },
     receiptCrypto: { protect: async plain => Buffer.from(plain).toString('base64'),
       unprotect: async cipher => Buffer.from(cipher, 'base64').toString() } })
-  return { deps, current, send, calls, artifacts }
+  return { deps, current, send, calls, artifacts, refDeps }
 }

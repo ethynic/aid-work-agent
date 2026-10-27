@@ -63,6 +63,10 @@ def assemble_agent_tools(request: ToolAssemblyRequest) -> AgentToolBundle:
     config = request.subagent_config
     if request.role is not ToolAssemblyRole.MASTER and config is not None:
         allowed = list(config.get_allowed_tools())
+        # Batch reading replaces the old polling/list steps without granting writes.
+        from src.local_tools.wecom_business import LEGACY_READ_TOOLS
+        if set(allowed) & LEGACY_READ_TOOLS:
+            allowed = list(dict.fromkeys([*allowed, 'wecom_read_session', 'wecom_read_sessions']))
         from src.local_tools.manifest import LOCAL_PROXY_TOOL_NAMES
         proxy_names = set(allowed) & LOCAL_PROXY_TOOL_NAMES
         if proxy_names:

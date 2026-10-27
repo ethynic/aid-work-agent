@@ -1,5 +1,23 @@
 # wecom-cli（aid-wecom）
 
+Agent 业务面使用三个工具：`wecom_read_session(session, cursor?, limit?)`、`wecom_message_send(session, text)`、`wecom_read_sessions(sessions?, cursor?, limit?)`。读单聊和群复用同一接口；批量读取同时返回聊天内容与 `pending_sessions`，按消息标注 `sender_platform=wechat|wecom|unknown`。首次历史为 `baseline`，后续游标增量不能与历史回放混用；群里同事最后发言不会自动清除客户候选。
+
+`session` 可使用首次完整名称，后续优先原样回传读取结果中的稳定标识；它不因短期搜索 ref 到期要求重搜。批量默认每次最多 50 条、16KiB，`has_more` 分页继续，局部失败在 `failed` 返回并保留补读位置。发送先核对当前会话，匹配就直接发送，非目标才内部搜索选择；未知发送只读对账，不重发。原诊断/底层工具保留旧调用兼容，Agent 无需逐项编排它们。
+
+```bash
+aid-wecom read-session --session '会话名称' --json
+aid-wecom read-sessions --sessions '["会话甲","会话乙"]' --limit 50 --json
+aid-wecom send --session '<读取返回的session>' --text '消息' --json
+```
+
+当前平台来源：已实证的微信虚拟 corp 精确标为微信，本企业 corp 标为企微；其他尚无可靠类型来源时返回 `unknown`，不以“外部联系人”等同微信。系统消息及是否需要回复继续由消息类型与任务上下文判断。
+
+批量续读省略 `sessions` 时继承原游标目标；目标暂时缺失只列入该目标的 `failed`，其他会话继续。未知发送者候选同时返回 `unknown_messages[{msg_id,sender_id,baseline,recovery_cursor}]`，身份元数据补齐后用该行的 `session` 与 `recovery_cursor` 调用 `wecom_read_session(...,limit=1)`，可重读原消息而不重置监控进度。消息正文留在原读取结果中；恢复游标和整个响应共同受 16KiB 边界约束。
+
+每条消息的 `baseline` 由游标保留的启动水位判断，局部失败补读及字节分页不会改变历史/新增属性；单会话 `new_messages` 仅包含启动后的记录。候选同时保留 `history_message_ids/new_message_ids`，未知身份恢复沿用原启动水位。仅本轮尚未发布的中间 `wb1` 格式若既无启动水位、又已进入补读阶段，因无法准确重建历史边界而明确返回 `CURSOR_UNSUPPORTED` 并保留进度；原正式群游标格式不受影响。
+
+Runner 将首次按名称发送拆为内部只读定位与稳定会话发送：原生 MCP `wecom_read_session` 的 `resolve_only=true` 复用发送内部的 DB 元数据定位，不解析正文、不返回消息游标，因此超长最新消息不会阻塞定位。此参数不进入 Agent 三工具业务面；已获得稳定 `session` 的发送不增加定位调用。
+
 企业微信（WXWork.exe）操作 CLI / MCP Provider。整体骨架与 `clients/weixin-cli` 同范式：
 CLI 动词子命令与 MCP stdio server 共用同一 operation 层，UI 自动化下沉到
 `drivers/ps1`（DRIVER_JSON 进程协议）+ `drivers/py`（RapidOCR）。

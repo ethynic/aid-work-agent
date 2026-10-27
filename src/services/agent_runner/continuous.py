@@ -22,6 +22,28 @@ def enabled(envelope, intent=None):
             or (intent or {}).get('execution_mode') == 'continuous')
 
 
+def interrupted_candidate(row):
+    """Only an owned continuous interruption is an automatic recovery source."""
+    checkpoint = row.get('checkpoint') or {}
+    root = checkpoint.get('execution')
+    def manual_wait(node):
+        if (node.get('waiting') or {}).get('kind') in {
+                'clarification','child_clarification','human_assistance','continuous_guard'}:
+            return True
+        return any(manual_wait(child['checkpoint']) for child in node.get('children',{}).values()
+            if isinstance(child,dict) and isinstance(child.get('checkpoint'),dict) and child['checkpoint'].get('outcome') not in {
+                'completed','cancelled','failed','iteration_limit'})
+    return (row.get('status') == 'interrupted'
+        and row.get('source') == 'chat' and row.get('session_kind') == 'web'
+        and not row.get('cancel_requested') and not row.get('pause_requested')
+        and not row.get('resume_control_id') and not checkpoint.get('pending_finalization')
+        and enabled(checkpoint, row.get('input'))
+        and (root is None or isinstance(root,dict) and root.get('execution_id') == row.get('runner_id'))
+        and (root or {}).get('outcome') not in {'cancelled','failed','iteration_limit'}
+        and not (checkpoint.get('continuous_recovery') or {}).get('blocked')
+        and not manual_wait(root or {}))
+
+
 def feature_enabled(envelope):
     if enabled(envelope):
         return True

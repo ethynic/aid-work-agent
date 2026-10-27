@@ -868,7 +868,8 @@ QUERY_USAGE = ('用法：wecom_localdb.py query --workdir <dir> '
                '--task messages|send-messages|conversations|last-per-conv|resolve|groups|history '
                '[--conv <会话id>] [--after-id N] [--limit N] [--since <秒>] [--until <秒>] '
                '[--exclude-types <t[,t…]>] [--name <名称>] '
-               '[--with-names（仅 last-per-conv，须与 --account 同传）]')
+               '[--with-names（仅 last-per-conv，须与 --account 同传）] '
+               '[--external-only（仅 resolve，须与 --account 同传）]')
 
 # workdir 内解密库定位名：优先任务契约名 <logical>.db.dec.db，兼容 decrypt 自然产物名
 # <logical>.dec.db（_out_base 产物）。两命名都是显式约定，运行时确认存在才用。
@@ -1178,7 +1179,61 @@ def _history_user_names(workdir, user_ids):
             user.close()
 
 
-def _history_messages(rows, workdir):
+def _sender_platforms(workdir, user_ids, account=None):
+    """Exact current-account/WeChat virtual-corp facts; external relation is not platform."""
+    result = {uid: 'unknown' for uid in user_ids}
+    path = _resolve_dec_db(workdir, 'user')
+    if path is None or not user_ids:
+        return result
+    conn = _open_ro(path)
+    try:
+        if not {'id', 'corp_id'} <= set(_table_columns(conn, 'user_table')):
+            return result
+        # The client uses one virtual corp for personal WeChat accounts. Its
+        # meaning and current 5.0.13 rows were independently checked on 2026-10-27.
+        wechat_corp = '1970325134026788'
+        own_corp = None
+        if account:
+            own_rows = conn.execute('SELECT CAST(corp_id AS TEXT) FROM user_table WHERE CAST(id AS TEXT)=?',
+                                    (account,)).fetchall()
+            if len(own_rows) == 1 and isinstance(own_rows[0][0], str) and own_rows[0][0].isdigit() and int(own_rows[0][0]) > 0:
+                own_corp = own_rows[0][0]
+        wanted = sorted(set(user_ids))
+        for start in range(0, len(wanted), 400):
+            batch = wanted[start:start + 400]
+            placeholders = ','.join('?' for _ in batch)
+            found = {}
+            for uid, corp in conn.execute(
+                    'SELECT CAST(id AS TEXT), CAST(corp_id AS TEXT) FROM user_table '
+                    'WHERE CAST(id AS TEXT) IN (%s)' % placeholders, batch):
+                found.setdefault(uid, set()).add(corp)
+            for uid, corps in found.items():
+                if corps == {wechat_corp}:
+                    result[uid] = 'wechat'
+                elif own_corp and corps == {own_corp}:
+                    result[uid] = 'wecom'
+        return result
+    finally:
+        conn.close()
+
+
+def _annotate_senders(messages, workdir, account=None):
+    ids = {row.get('sender_id') for row in messages if isinstance(row.get('sender_id'), str)}
+    missing_names = {row.get('sender_id') for row in messages if 'sender_name_source' not in row and isinstance(row.get('sender_id'), str)}
+    names = _history_user_names(workdir, missing_names)
+    platforms = _sender_platforms(workdir, ids, account)
+    for message in messages:
+        uid = message.get('sender_id')
+        if 'sender_name_source' not in message:
+            message['sender_name'] = names.get(uid)
+            message['sender_name_source'] = 'user_table' if names.get(uid) else 'unresolved'
+        message['sender_platform'] = platforms.get(uid, 'unknown')
+        if account and uid == account:
+            message['sender_platform'] = 'wecom'
+    return messages
+
+
+def _history_messages(rows, workdir, account=None):
     projected = []
     user_ids = set()
     for row in rows:
@@ -1211,10 +1266,11 @@ def _history_messages(rows, workdir):
         message['mentions'] = mentions
         message['mentions_complete'] = complete
         messages.append(message)
+    _annotate_senders(messages, workdir, account)
     return messages, naming_incomplete
 
 
-def _query_group_poll(conn, conv, after_id, limit, anchor, workdir):
+def _query_group_poll(conn, conv, after_id, limit, anchor, workdir, account=None):
     """Stateless insertion-order pages; the first batch is context, never old work to replay."""
     if after_id is not None and after_id > 0:
         previous = conn.execute('SELECT %s FROM message_table WHERE message_id=? AND conversation_id=?'
@@ -1228,7 +1284,7 @@ def _query_group_poll(conn, conv, after_id, limit, anchor, workdir):
     selected = rows[:limit]
     if after_id is None:
         selected.reverse()
-    messages, incomplete = _history_messages(selected, workdir)
+    messages, incomplete = _history_messages(selected, workdir, account)
     # Keep a complete bounded JSON message for the model, rather than truncating
     # its JSON/text after a cursor was advanced. Large single rows fail loudly.
     total = 0
@@ -1255,7 +1311,7 @@ def _query_group_poll(conn, conv, after_id, limit, anchor, workdir):
             'invalid_time_count': 0, 'naming_incomplete': incomplete}
 
 
-def _query_history(conn, conv, limit, since, until, workdir=None):
+def _query_history(conn, conv, limit, since, until, workdir=None, account=None):
     """最近 N 条有效时间消息升序展示；发送时间相同以 message_id 保持稳定顺序。"""
     valid_time = ("typeof(send_time) = 'integer' "
                   'AND send_time >= 0 AND send_time <= 253402271999')
@@ -1274,7 +1330,7 @@ def _query_history(conn, conv, limit, since, until, workdir=None):
     sql += ' ORDER BY send_time DESC, message_id DESC LIMIT ?'
     params.append(limit + 1)
     rows = conn.execute(sql, params).fetchall()
-    messages, naming_incomplete = _history_messages(reversed(rows[:limit]), workdir)
+    messages, naming_incomplete = _history_messages(reversed(rows[:limit]), workdir, account)
     return {'ok': True, 'task': 'history', 'conversation_id': conv,
             'messages': messages, 'count': len(messages), 'has_more': len(rows) > limit,
             'invalid_time_count': invalid_time_count, 'naming_incomplete': naming_incomplete}
@@ -1464,34 +1520,69 @@ def _resolve_conversation_table(conn, name):
     return 'ok', candidates
 
 
-def _resolve_user_table(conn, name):
+def _corp_identifier(value):
+    """只接受已落库的正整数公司标识；空值/浮点/其他形态不能充当内外部证据。"""
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return str(value)
+    if (isinstance(value, str) and len(value) <= 19 and value.isascii() and
+            value.isdigit() and int(value) > 0):
+        return str(int(value))
+    return None
+
+
+def _resolve_user_table(conn, name, account=None, external_only=False):
     """人名 → user_table 精确匹配（name/别名/备注列运行时交集）。候选附 user_id（P0 实证
     列 id=消息 sender_id 域）；conversation_id 仅在表内有字面 conversation_id 列时给出，
     否则置 null——单聊会话 id（S:<from>_<to>）需结合本人账号组合，py 侧无法单独决定方向，
-    由 TS 消费侧完成（设计 §4.1 定位与消歧）。"""
+    由 TS 消费侧完成（设计 §4.1 定位与消歧）。external_only 以关系及公司证据收紧外部范围，
+    不推断微信类型；任一匹配人的证据未知或矛盾都返回 schema-unknown。"""
     columns = _table_columns(conn, 'user_table')
     if 'id' not in columns:
         return 'schema-unknown', []
     match_cols = [c for c in _USER_NAME_COLUMN_CANDIDATES if c in columns]
     if not match_cols:
         return 'schema-unknown', []
+    own_corp = None
+    if external_only:
+        if (not account or 'corp_id' not in columns or
+                'user_id' not in _table_columns(conn, 'external_user_relation_v3')):
+            return 'schema-unknown', []
+        own_rows = conn.execute('SELECT corp_id FROM user_table WHERE CAST(id AS TEXT)=?',
+                                (account,)).fetchall()
+        if len(own_rows) != 1 or _corp_identifier(own_rows[0][0]) is None:
+            return 'schema-unknown', []
+        own_corp = _corp_identifier(own_rows[0][0])
     conv_col = 'conversation_id' if 'conversation_id' in columns else None
     seen = set()
     candidates = []
     for col in match_cols:
         select_cols = [_qi('id')] + ([_qi(conv_col)] if conv_col else []) + [_qi(col)]
+        if external_only:
+            select_cols.extend([_qi('corp_id'),
+                                'EXISTS (SELECT 1 FROM external_user_relation_v3 AS er '
+                                'WHERE er.user_id = user_table.id)'])
         rows = conn.execute('SELECT %s FROM user_table WHERE %s = ?' % (', '.join(select_cols), _qi(col)),
                             (name,)).fetchall()
         for r in rows:
             if r[0] in seen:
                 continue  # 同一行命中多个名字列只出一个候选（按行去重）
             seen.add(r[0])
+            if external_only:
+                corp = _corp_identifier(r[-2])
+                relation = bool(r[-1])
+                if corp is None or (corp == own_corp and relation):
+                    return 'schema-unknown', []  # 未知或相互矛盾的证据不得消成唯一目标。
+                if corp == own_corp:
+                    continue  # 同公司且没有外部关系：明确内部证据，才允许排除。
+                if not relation:
+                    return 'schema-unknown', []  # 不同公司并不足以证明外部身份。
             candidates.append({
                 'source': 'user_table',
                 'conversation_id': str(r[1]) if conv_col and r[1] is not None else None,
                 'user_id': str(r[0]),
                 'name': r[2] if conv_col else r[1],
                 'matched_column': col,
+                **({'contact_scope': 'external'} if external_only else {}),
             })
     return 'ok', candidates
 
@@ -1514,21 +1605,25 @@ def _query_context(workdir, conn, account):
         user.close()
 
 
-def _query_resolve(workdir, name, account=None):
+def _query_resolve(workdir, name, account=None, external_only=False):
     """resolve 任务：群名经 session 库、人名经 user 库。对应 .dec.db 缺失 → 该来源标
     unavailable（不报错）；零候选 → ambiguous=false 空列表；多候选 → ambiguous=true 全返回。
-    message 解密库在位仍为 workdir 契约（缺失已在 cmd_query 报 DB_UNREADABLE）。"""
+    message 解密库在位仍为 workdir 契约（缺失已在 cmd_query 报 DB_UNREADABLE）。
+    external_only 只查询联系人；无实际会话的外部同名人仍参与身份消歧。"""
     candidates = []
     sources = {}
-    for source, logical, resolver in (('conversation_table', 'session', _resolve_conversation_table),
-                                      ('user_table', 'user', _resolve_user_table)):
+    resolvers = [('user_table', 'user', _resolve_user_table)] if external_only else [
+        ('conversation_table', 'session', _resolve_conversation_table),
+        ('user_table', 'user', _resolve_user_table)]
+    for source, logical, resolver in resolvers:
         db_path = _resolve_dec_db(workdir, logical)
         if db_path is None:
             sources[source] = 'unavailable'
             continue
         conn = _open_ro(db_path)
         try:
-            status, found = resolver(conn, name)
+            status, found = (resolver(conn, name, account, True) if external_only
+                             else resolver(conn, name))
         finally:
             conn.close()
         sources[source] = status
@@ -1579,11 +1674,15 @@ def _parse_query_args(args):
     until = None
     exclude_types = []
     with_names = False
+    external_only = False
     i = 0
     while i < len(args):
         arg = args[i]
         if arg == '--with-names':
             with_names = True
+            i += 1
+        elif arg == '--external-only':
+            external_only = True
             i += 1
         elif arg in ('--workdir', '--task', '--conv', '--name', '--account', '--anchor') and i + 1 < len(args):
             value = args[i + 1]
@@ -1647,6 +1746,8 @@ def _parse_query_args(args):
         return None
     if task == 'resolve' and not name:
         return None
+    if external_only and (task != 'resolve' or not account):
+        return None
     if task == 'context' and not account:
         return None
     if task == 'last-per-conv' and with_names and not account:
@@ -1680,7 +1781,309 @@ def _parse_query_args(args):
         if task == 'groups' and (conv is not None or since is not None):
             return None
     return (task, workdir, conv, after_id, limit, since, exclude_types, name, account,
-            anchor, with_names, until)
+            anchor, with_names, until, external_only)
+
+
+def cmd_sessions(workdir, account, request):
+    """One bounded DB snapshot read. Cursor state belongs to the caller, never watch state."""
+    if (not isinstance(request, dict) or set(request) - {'targets', 'state', 'limit', 'metadata_only'}
+            or type(request.get('limit', 50)) is not int or not 1 <= request.get('limit', 50) <= 50):
+        return {'ok': False, 'error': 'BAD_ARGS'}
+    targets = request.get('targets')
+    if targets is not None and (not isinstance(targets, list) or not 1 <= len(targets) <= 50):
+        return {'ok': False, 'error': 'BAD_ARGS'}
+    path = _resolve_dec_db(workdir, 'message')
+    if path is None:
+        return {'ok': False, 'error': 'DB_UNREADABLE'}
+    conn = _open_ro(path)
+    try:
+        context = _query_context(workdir, conn, account)
+        if not context.get('ok') or context.get('self_user_id') != account:
+            return {'ok': False, 'error': 'IDENTITY_UNCONFIRMED'}
+        cols = ', '.join(QUERY_MESSAGE_COLUMNS)
+        known = {r[0] for r in conn.execute('SELECT DISTINCT conversation_id FROM message_table')
+                 if isinstance(r[0], str) and (r[0].startswith('R:') or
+                    r[0].startswith('S:') and account in r[0][2:].split('_'))}
+        session_path = _resolve_dec_db(workdir, 'session')
+        if session_path:
+            session_conn = _open_ro(session_path)
+            try:
+                columns = _table_columns(session_conn, 'conversation_table')
+                id_col = _find_conversation_id_column(session_conn, 'conversation_table', columns)
+                if id_col:
+                    known.update(r[0] for r in session_conn.execute('SELECT %s FROM conversation_table' % _qi(id_col))
+                                 if isinstance(r[0], str) and (r[0].startswith('R:') or
+                                     r[0].startswith('S:') and account in r[0][2:].split('_')))
+            finally:
+                session_conn.close()
+        failed = []
+        selected = set()
+        state = request.get('state')
+        first = state is None
+        if first:
+            state = {'after_id': 0, 'anchor': '', 'retry': {}, 'unresolved': {}, 'context_after': ''}
+        if (not isinstance(state, dict) or set(state) - {'after_id', 'anchor', 'retry', 'unresolved', 'context_after', 'start_fence'}
+                or not {'after_id', 'anchor', 'retry', 'unresolved', 'context_after'} <= set(state)
+                or type(state.get('after_id')) is not int or state['after_id'] < 0
+                or not isinstance(state.get('anchor'), str)
+                or state.get('context_after') is not None and not isinstance(state.get('context_after'), str)
+                or not isinstance(state.get('retry'), dict) or not isinstance(state.get('unresolved'), dict)):
+            return {'ok': False, 'error': 'CURSOR_STALE'}
+        state = json.loads(json.dumps(state))
+        if 'start_fence' not in state:
+            if not first and state['context_after'] is None and state['retry']:
+                return {'ok': False, 'error': 'CURSOR_STALE'}
+            # Older cursors still in baseline retain the original floor; clean incremental cursors need no replay.
+            state['start_fence'] = state['after_id']
+        if type(state['start_fence']) is not int or not 0 <= state['start_fence'] <= 9007199254740991:
+            return {'ok': False, 'error': 'CURSOR_STALE'}
+        def valid_point(point):
+            return (isinstance(point, dict) and set(point) == {'after_id', 'anchor'}
+                    and type(point.get('after_id')) is int and 0 <= point['after_id'] <= 9007199254740991
+                    and isinstance(point.get('anchor'), str)
+                    and (point['anchor'] == '' if point['after_id'] == 0 else re.fullmatch(r'[0-9a-f]{64}', point['anchor']) is not None))
+        if (not valid_point({'after_id': state['after_id'], 'anchor': state['anchor']})
+                or any(not valid_point(point) for point in list(state['retry'].values()) + list(state['unresolved'].values()))):
+            return {'ok': False, 'error': 'CURSOR_STALE'}
+        after_id = state['after_id']
+        if not first and after_id:
+            anchor_row = conn.execute('SELECT %s FROM message_table WHERE message_id=?' % cols, (after_id,)).fetchone()
+            if anchor_row is None or _message_anchor(_message_row(anchor_row)) != state['anchor']:
+                return {'ok': False, 'error': 'CURSOR_STALE'}
+        global_latest = conn.execute('SELECT %s FROM message_table ORDER BY message_id DESC LIMIT 1' % cols).fetchone()
+        def before_point(message_id):
+            previous = conn.execute('SELECT %s FROM message_table WHERE message_id<? ORDER BY message_id DESC LIMIT 1' % cols,
+                                    (message_id,)).fetchone()
+            return ({'after_id': previous[0], 'anchor': _message_anchor(_message_row(previous))} if previous
+                    else {'after_id': 0, 'anchor': ''})
+        floor = _message_row(global_latest) if global_latest else None
+        floor_point = {'after_id': floor['message_id'] if floor else 0,
+                       'anchor': _message_anchor(floor) if floor else ''}
+        if first:
+            state.update(floor_point)
+            state['start_fence'] = floor_point['after_id']
+        baseline = state['context_after'] is not None
+        if targets is None:
+            selected = known
+        else:
+            for target in targets:
+                if not isinstance(target, dict) or set(target) - {'conversation_id', 'name'}:
+                    return {'ok': False, 'error': 'BAD_ARGS'}
+                key = json.dumps(target, sort_keys=True, ensure_ascii=False)
+                cid = target.get('conversation_id')
+                reason = None
+                if cid is not None:
+                    if not isinstance(cid, str) or cid not in known:
+                        reason = 'TARGET_NOT_FOUND'
+                elif isinstance(target.get('name'), str) and target['name'].strip():
+                    name = target['name'].strip()
+                    external = name.endswith('@微信')
+                    resolved = _query_resolve(workdir, name[:-3].strip() if external else name, account)
+                    matching = resolved.get('candidates', [])
+                    platform_unknown = False
+                    if external:
+                        matching = [r for r in matching if r.get('source') == 'user_table']
+                        platform = _sender_platforms(workdir, [r['user_id'] for r in matching], account)
+                        platform_unknown = any(platform.get(r['user_id']) == 'unknown' for r in matching)
+                        matching = [r for r in matching if platform.get(r['user_id']) == 'wechat']
+                    candidates = {r.get('conversation_id') for r in matching
+                                  if r.get('conversation_id') in known}
+                    unknown = any(r.get('conversation_id') is None for r in matching)
+                    if len(candidates) == 1 and not unknown:
+                        cid = next(iter(candidates))
+                    else:
+                        reason = 'TARGET_AMBIGUOUS' if len(candidates) + int(unknown) > 1 else 'TARGET_NOT_FOUND'
+                    if platform_unknown:
+                        reason = 'IDENTITY_UNCONFIRMED'
+                    if any(v != 'ok' for k, v in (resolved.get('sources') or {}).items()
+                           if k in (('user_table',) if external else ('user_table', 'conversation_table'))):
+                        reason = 'LOCALDB_UNAVAILABLE'
+                else:
+                    return {'ok': False, 'error': 'BAD_ARGS'}
+                if reason:
+                    failed.append({'target': target, 'code': reason, 'stage': 'resolve', 'effect': 'none'})
+                    state['unresolved'].setdefault(key, floor_point if first else {'after_id': after_id, 'anchor': state['anchor']})
+                    continue
+                selected.add(cid)
+                if key in state['unresolved']:
+                    state['retry'][cid] = state['unresolved'].pop(key)
+        if not selected:
+            state['context_after'] = None
+            return {'ok': True, 'sessions': [], 'pending_sessions': [], 'failed': failed,
+                    'state': state, 'has_more': False, 'baseline': first, 'self_user_id': account,
+                    'selected_sessions': []}
+        # A failed target owns its own lower bound; advancing other targets cannot lose it.
+        for cid, point in state['retry'].items():
+            if (not isinstance(cid, str) or not isinstance(point, dict)
+                    or type(point.get('after_id')) is not int or point['after_id'] < 0):
+                return {'ok': False, 'error': 'CURSOR_STALE'}
+            if point['after_id']:
+                row = conn.execute('SELECT %s FROM message_table WHERE message_id=?' % cols,
+                                   (point['after_id'],)).fetchone()
+                if row is None or _message_anchor(_message_row(row)) != point.get('anchor'):
+                    return {'ok': False, 'error': 'CURSOR_STALE'}
+        selected_list = sorted(selected)
+        placeholders = ','.join('?' for _ in selected_list)
+        retry_ids = set(state['retry']) & selected
+        clauses = []
+        params = []
+        normal_ids = [cid for cid in selected_list if cid not in retry_ids]
+        if normal_ids:
+            clauses.append('(conversation_id IN (%s)%s)' % (
+                ','.join('?' for _ in normal_ids), '' if first else ' AND message_id>?'))
+            params.extend(normal_ids)
+            if not first:
+                params.append(after_id)
+        for cid in sorted(retry_ids):
+            clauses.append('(conversation_id=? AND message_id>?)')
+            params.extend((cid, state['retry'][cid]['after_id']))
+        limit = request.get('limit', 50)
+        context_page = []
+        history_truncated = False
+        if baseline:
+            # Empty synchronized sessions have no startup context and must not delay live-message reads.
+            context_ids = {r[0] for r in conn.execute(
+                'SELECT DISTINCT conversation_id FROM message_table WHERE message_id<=?',
+                (state['start_fence'],))}
+            remaining = [cid for cid in selected_list if cid in context_ids and cid > state['context_after']]
+            context_page = remaining[:min(5, limit)]
+            per_session = max(1, limit // max(1, len(context_page)))
+            rows = []
+            for cid in context_page:
+                page = conn.execute('SELECT %s FROM message_table WHERE conversation_id=? AND message_id<=? '
+                                    'ORDER BY message_id DESC LIMIT ?' % cols,
+                                    (cid, state['after_id'], per_session + 1)).fetchall()
+                history_truncated = history_truncated or len(page) > per_session
+                rows.extend(reversed(page[:per_session]))
+        else:
+            rows = conn.execute('SELECT %s FROM message_table WHERE %s ORDER BY message_id ASC LIMIT ?'
+                                % (cols, ' OR '.join(clauses)), params + [limit + 1]).fetchall()
+        names, _ = _conversation_display_names(workdir, {r[4] for r in rows} | (selected if targets else set()), account)
+        details = []
+        peer_ids = {_peer_id_of(cid, account) for cid in selected_list if cid.startswith('S:')}
+        peer_platforms = _sender_platforms(workdir, peer_ids, account)
+        for cid in selected_list if targets else sorted({r[4] for r in rows}):
+            named = names.get(cid)
+            peer = _peer_id_of(cid, account) if cid.startswith('S:') else None
+            details.append({'conversation_id': cid, 'name': named.get('name') if isinstance(named, dict) else named,
+                'kind': 'group' if cid.startswith('R:') else 'private',
+                'peer_platform': peer_platforms.get(peer, 'unknown') if peer else 'unknown'})
+        output = {'ok': True, 'sessions': [], 'pending_sessions': [], 'failed': failed,
+                  'state': state, 'has_more': baseline and len(remaining) > len(context_page) or not baseline and len(rows) > limit,
+                  'baseline': baseline, 'history_truncated': history_truncated, 'self_user_id': account,
+                  'selected_sessions': selected_list, 'session_details': details}
+        if request.get('metadata_only') is True:
+            for detail in details:
+                if not detail['name']:
+                    continue
+                found = _query_resolve(workdir, detail['name'], account).get('candidates', [])
+                if detail['kind'] == 'group':
+                    found = [r for r in found if r.get('source') == 'conversation_table']
+                else:
+                    found = [r for r in found if r.get('source') == 'user_table']
+                    if detail['peer_platform'] == 'wechat':
+                        platform = _sender_platforms(workdir, [r['user_id'] for r in found], account)
+                        found = [r for r in found if platform.get(r['user_id']) != 'wecom']
+                identities = {(r.get('user_id'), r.get('conversation_id')) for r in found}
+                if len(identities) > 1:
+                    failed.append({'conversation_id': detail['conversation_id'], 'code': 'TARGET_AMBIGUOUS',
+                                   'stage': 'resolve', 'effect': 'none'})
+            return output
+        by_conv = {}
+        consumed = 0
+        stopped_context = None
+        context_points = {}
+        blocked_context = set()
+        parsed_messages, _ = _history_messages(rows[:limit], workdir, account)
+        for row, message in zip(rows[:limit], parsed_messages):
+            cid = message['conversation_id']
+            message['baseline'] = message['message_id'] <= state['start_fence']
+            if cid in blocked_context:
+                continue
+            named = names.get(cid)
+            name = named.get('name') if isinstance(named, dict) else named
+            session = by_conv.get(cid)
+            if session is None:
+                session = {'conversation_id': cid, 'name': name, 'kind': 'group' if cid.startswith('R:') else 'private',
+                           'messages': []}
+                by_conv[cid] = session
+                output['sessions'].append(session)
+            session['messages'].append(message)
+            # Internal enumeration metadata is not part of the bounded business result.
+            budget = {key: value for key, value in output.items()
+                      if key not in ('selected_sessions', 'session_details')}
+            if len(json.dumps(budget, ensure_ascii=False).encode('utf-8')) > 15000:
+                session['messages'].pop()
+                if not session['messages']:
+                    output['sessions'].remove(session)
+                    by_conv.pop(cid, None)
+                if not consumed or baseline and len(json.dumps(message, ensure_ascii=False).encode('utf-8')) > 12000:
+                    output['failed'].append({'conversation_id': cid, 'message_id': message['message_id'],
+                        'code': 'CONTENT_UNAVAILABLE', 'stage': 'read', 'effect': 'none'})
+                    state['retry'].setdefault(cid, before_point(message['message_id']) if baseline else
+                                              {'after_id': state['after_id'], 'anchor': state['anchor']})
+                    if baseline:
+                        blocked_context.add(cid)
+                    if cid not in retry_ids and not baseline:
+                        state['after_id'], state['anchor'] = message['message_id'], _message_anchor(_message_row(row))
+                    continue
+                output['has_more'] = True
+                stopped_context = cid
+                if baseline:
+                    state['retry'].setdefault(cid, context_points.get(cid) or before_point(message['message_id']))
+                break
+            consumed += 1
+            if baseline:
+                context_points[cid] = {'after_id': message['message_id'], 'anchor': _message_anchor(_message_row(row))}
+            if not baseline:
+                point = {'after_id': message['message_id'], 'anchor': _message_anchor(_message_row(row))}
+                if cid in state['retry']:
+                    state['retry'][cid] = point
+                elif message['message_id'] > state['after_id']:
+                    state.update(point)
+        if baseline:
+            completed_context = [cid for cid in context_page if stopped_context is None or cid <= stopped_context]
+            if completed_context:
+                state['context_after'] = completed_context[-1]
+            if not remaining or completed_context and completed_context[-1] == remaining[-1]:
+                state['context_after'] = None
+            output['has_more'] = state['context_after'] is not None or bool(state['retry'])
+        else:
+            for cid in list(state['retry']):
+                point = state['retry'][cid]
+                if cid in selected and conn.execute(
+                        'SELECT 1 FROM message_table WHERE conversation_id=? AND message_id>? AND message_id<=? LIMIT 1',
+                        (cid, point['after_id'], state['after_id'])).fetchone() is None:
+                    state['retry'].pop(cid)
+        for session in output['sessions']:
+            last_self = max((m['message_id'] for m in session['messages'] if m.get('sender_id') == account), default=-1)
+            candidates = [m['message_id'] for m in session['messages']
+                          if m.get('sender_id') != account and m.get('sender_platform') == 'wechat'
+                          and (session['kind'] == 'group' or m['message_id'] > last_self)
+                          and m.get('content_type') not in CONFIRMED_SYSTEM_TYPES]
+            unknown = [m['message_id'] for m in session['messages']
+                       if m.get('sender_id') != account and m.get('sender_platform') == 'unknown'
+                       and (session['kind'] == 'group' or m['message_id'] > last_self)
+                       and m.get('content_type') not in CONFIRMED_SYSTEM_TYPES]
+            if candidates or unknown:
+                output['pending_sessions'].append({'conversation_id': session['conversation_id'],
+                    'message_ids': candidates, 'unknown_sender_message_ids': unknown,
+                    'baseline': all(mid <= state['start_fence'] for mid in candidates + unknown),
+                    'new_message_ids': [mid for mid in candidates if mid > state['start_fence']],
+                    'history_message_ids': [mid for mid in candidates if mid <= state['start_fence']],
+                    'unknown_messages': [{'msg_id': m['message_id'], 'sender_id': m['sender_id'],
+                                          'baseline': m['baseline'],
+                                          'recovery_point': before_point(m['message_id'])}
+                                         for m in session['messages'] if m['message_id'] in unknown],
+                    'basis': ('history_customer_messages' if all(mid <= state['start_fence'] for mid in candidates)
+                              else 'new_customer_messages') if candidates else 'sender_platform_unknown'})
+        return output
+    except sqlite3.OperationalError as error:
+        return {'ok': False, 'error': 'SCHEMA_UNSUPPORTED' if 'no such table' in str(error) or 'no such column' in str(error) else 'SQL_ERROR'}
+    except sqlite3.Error:
+        return {'ok': False, 'error': 'DB_UNREADABLE'}
+    finally:
+        conn.close()
 
 
 def cmd_query(args):
@@ -1692,7 +2095,7 @@ def cmd_query(args):
     if parsed is None:
         return {'ok': False, 'error': 'BAD_ARGS', 'message': QUERY_USAGE}
     (task, workdir, conv, after_id, limit, since, exclude_extra, name, account,
-     anchor, with_names, until) = parsed
+     anchor, with_names, until, external_only) = parsed
     logical_db = 'session' if task == 'groups' else 'message'
     query_db = _resolve_dec_db(workdir, logical_db)
     if query_db is None:
@@ -1705,23 +2108,29 @@ def cmd_query(args):
         return {'ok': False, 'error': 'DB_UNREADABLE', 'detail': '解密库只读打开失败：%s' % e}
     try:
         if task == 'messages':
-            return _query_messages(conn, conv, after_id, limit, since, anchor)
+            data = _query_messages(conn, conv, after_id, limit, since, anchor)
+            if data.get('ok'):
+                _annotate_senders(data.get('messages', []), workdir, account)
+            return data
         if task == 'send-messages':
-            return _query_messages(conn, conv, after_id, limit, since, anchor,
+            data = _query_messages(conn, conv, after_id, limit, since, anchor,
                                    until=until, send_projection=True)
+            if data.get('ok'):
+                _annotate_senders(data.get('messages', []), workdir, account)
+            return data
         if task == 'groups':
             return _query_groups(conn, name, limit)
         if task == 'history':
-            return _query_history(conn, conv, limit, since, until, workdir)
+            return _query_history(conn, conv, limit, since, until, workdir, account)
         if task == 'group-poll':
-            return _query_group_poll(conn, conv, after_id, limit, anchor, workdir)
+            return _query_group_poll(conn, conv, after_id, limit, anchor, workdir, account)
         if task == 'context':
             return _query_context(workdir, conn, account)
         if task == 'conversations':
             return _query_conversations(conn)
         if task == 'last-per-conv':
             return _query_last_per_conv(conn, exclude_extra, workdir, account, with_names)
-        return _query_resolve(workdir, name, account)  # task == 'resolve'（参数解析已保证）
+        return _query_resolve(workdir, name, account, external_only)  # task == 'resolve'
     except sqlite3.OperationalError as e:
         # 缺表/缺列（sqlite3.OperationalError "no such table/column"）= 真实 schema 不支持：
         # 返回稳定错误码 SCHEMA_UNSUPPORTED（评审 v6），detail 保留原始消息（sqlite 消息
@@ -1904,7 +2313,11 @@ def cmd_watch(args):
     except sqlite3.Error as e:
         return {'ok': False, 'error': 'DB_UNREADABLE', 'detail': '解密库只读打开失败：%s' % e}
     try:
-        return _query_watch(conn, watermarks, limit, account, exclude_extra)
+        data = _query_watch(conn, watermarks, limit, account, exclude_extra)
+        if data.get('ok'):
+            for item in data.get('per_conversation', []):
+                _annotate_senders(item.get('messages', []), workdir, account)
+        return data
     except sqlite3.OperationalError as e:
         msg = str(e)
         if 'no such table' in msg or 'no such column' in msg:
@@ -2030,6 +2443,14 @@ def main():
         return
     if args and args[0] == 'query':
         emit(cmd_query(args[1:]), redact=False)  # query 无密钥参与，业务文本不走兜底脱敏
+        return
+    if len(args) == 5 and args[0] == 'sessions' and args[1] == '--workdir' and args[3] == '--account':
+        raw = sys.stdin.buffer.read(65537).decode('utf-8')
+        try:
+            request = json.loads(raw) if len(raw) <= 65536 else None
+        except ValueError:
+            request = None
+        emit(cmd_sessions(args[2], args[4], request), redact=False)
         return
     if args and args[0] == 'watch':
         emit(cmd_watch(args[1:]), redact=False)  # watch 同 query：业务文本不走兜底脱敏

@@ -13,6 +13,49 @@
 | MCP/Runtime对账 | W4新增只读工具接线 | ✅ 完成（2026-10-26） | PG63/TS32通过，单测173通过另2旧BOSS失败；CR无遗留 |
 | W6 配置智能体联动 | 配置→持续Runner→Runtime→CLI增量群读与回复 | ✅ 完成（2026-10-26） | 旧分支基线隔离PG76及CR通过；最新master组合验证另列下阶段 |
 | 最新Runtime整合 | 同步master的BOSS/Runtime修复并组合回归 | ✅ 完成（2026-10-26） | 1721707f整合验收版获授权提交；PG/Worker100与迁移34通过、CR通过；3旧Runtime断言保留 |
+| W10 综合收敛设计 | BOSS经验对照、平台识别及端到端恢复静态评审 | ✅ 完成（2026-10-27） | 确认R1～R12实际缺口，收敛六个业务验收；仅主控静态审查，不冒充独立CR |
+| W10 后续实现 | 三工具、身份与发送快路径、持续任务恢复 | ✅ 完成（2026-10-27） | 独立TEST及CR通过，最后别名P1/空页延迟P2闭环；未提交、部署或恢复监听 |
+
+## W10 真机前综合收敛（2026-10-27）
+
+### 本轮实施记录（当前状态，以此节为准）
+
+用户已授权开发、独立测试和CR，替代本节原始设计中的“只改文档”限制；禁止提交、部署、安装发行包及恢复监听。原始设计依据保留在设计§12，以下登记实施事实。
+
+| 阶段 | 内容 | 状态 | 完成记录 |
+|------|------|------|---------|
+| W10.1 | 来源实证与三工具契约 | ✅ 完成（2026-10-27） | 微信虚拟corp与本人企业已只读核实；其他corp不猜外部企微，返回unknown；Agent仅读/发/批量读三项 |
+| W10.2 | continuous与Runtime恢复 | ✅ 完成（2026-10-27） | 原任务可信接续、任务依赖指纹v3、暂时错误退避、outbox不阻塞心跳；保留原调用及用量事实 |
+| W10.3 | 批量读取、身份和发送快路径 | ✅ 完成（2026-10-27） | 稳定session/分页，局部失败不扩范围；未知身份原消息游标可恢复；当前会话匹配不搜索；托盘不算登出，常规清理不用Esc |
+| W10.4 | 未知发送与取消恢复 | ✅ 完成（2026-10-27） | 内部只读对账、目标间隔离与轮转；取消保留未知外发hold，原设备资源证明可释放hold但不伪造发送成功 |
+| W10.5 | 状态与证据保留 | ✅ 完成（2026-10-27） | 读取总量50条/16KiB；checkpoint仅保有界索引；已闭合journal按7天回收，unknown/未ACK保留 |
+| W10.6 | 独立TEST与CodeReview | ✅ 完成（2026-10-27） | 独测136单测/49PG基线及末轮增量通过，CR无遗留P0/P1/P2；真机边界另列 |
+
+**同步master与保全**：HEAD仍`349a10ab`；先无提交整合`5b54688d`，再增量整合远端`835a5010`，MERGE_HEAD已更新为后者，无未解决冲突。第二次整合先保存index/worktree二进制patch及全部未提交/未跟踪文件；普通路径三方应用，ideas两份索引分别合并index与worktree，保留原P6/P7/W9及本轮修改，无stash/reset/提交。两轮本机Temp备份保留。未运行任何更新部署脚本。
+
+**实现与兼容**：Agent公共参数仅`read_session(session,cursor?,limit?)`、`message_send(session,text)`、`read_sessions(sessions?,cursor?,limit?)`，旧MCP和已接受参数继续兼容。原生15项、Runtime受信9项与Agent三项是不同层级。CLI升`0.2.0`，避免同版本不同内容无法升级；schema_digest为`sha256:3cc508ef7b22b0daf2050e5843da644e56165c50bcfb3f479b1835141daa82db`。新Runtime先按旧8项上报，只读协商得到真实新schema后更新9项；旧插件仍可执行旧入参，新session/batch缺能力明确提示升级，协商传输失败下次可重试。复用原Device API、claim/permit、OperationResult和计费，不替换历史签名根。
+
+**恢复实现**：`continuous_trigger`由服务器可信来源接回同一根任务和逻辑会话；暂停/取消/guard优先。v3指纹仅绑定任务实际模型依赖，旧v2只有可验证匹配才迁移。暂时源错误2～32秒退避，保留原wake；死Worker的started模型调用保留为unknown事实，新调用单独结算。现代WeCom调用固定原设备v2，派发前中断能证明尚无main调用并续做；纯DB读取unknown可重读，原audit不改成成功。未知外发只读对账，最多每轮4项并轮转，不重放；独立目标继续。取消按root→admission→device→原invocation顺序取锁，逻辑结束与真实未知外发资源hold分开。
+
+**身份与遗漏恢复**：native按sender_id关联同快照用户资料；微信虚拟corp映射wechat，本人企业映射wecom，缺失或其他企业仍unknown。不能把external关系、昵称、UID前缀或消息中的“@微信”当平台证明。当前真实微信与内部成员来源已核实，尚无外部企微真人样本，不宣称全平台实机覆盖。批量结果保留同事上下文与待判断候选。未知消息附原生精确恢复游标，Runner在原invocation内存私有待处理offset，checkpoint仅存轮转位置；资料补齐后通过同一个read工具取原消息，连同本轮读取原子保存恢复候选，防止消息滑出窗口漏答或崩溃丢候选。保留每条原始baseline，新旧不随重试漂移。新增一个partial index支撑未闭合索引扫描，不新建表、身份服务或调度器。
+
+**测试范围与边界**：开发侧112单测、49真实PG均通过且无跳过，后者包括新Worker再次休眠、原用量/调用保留、首次读取、未知身份、派发前中断、用户取消/资源释放和并发锁。PG使用本任务loopback随机`aid_test_*`库，原安全建库/清理入口不变；本机PG无pgvector，仅在Temp harness排除无关embedding扩展/表/索引，未声称全量embedding schema验证。独立测试发现并修复HTTP响应体中断丢ACK证据、发送核验身份字段投影遗漏等问题，最终结果以W10.6及下段登记为准，不累加重复复测计数。
+
+**最终独立验收**：独立角色按冻结源码验证：后端基线136单测、49真实PG通过；最后named→canonical修复为10业务单测/7真实PG，另45相关单测/15相关PG通过。Runtime56项及真实CLI只读能力协商1项通过。CLI全量基线Python211通过/1正常平台跳过，Node101、真实MCP合成库3及滑出70条后的身份补读结果保留；最终metadata定位增量Node15/Python16/Agent隐藏字段1通过，v7原502会话回归等Python25/Node3通过。各批可能重叠，不相加冒充唯一用例数；未变模块复用原证据，不机械重跑全仓。
+
+最终CR发现的命名目标P1已闭合：仅首次named send派内部`wecom.resolve`纯元数据读取，持久原设备canonical后再发送；即使unknown没有data.session也按稳定目标保留pending。原ToolFact意图保留，新attempt复用原resolve/main，稳定ID发送不额外读取。`resolve_only`仅内部native参数，不暴露Agent，不读正文/不返回cursor，20KB正文不挡定位。另P2过滤启动fence前没有消息的历史上下文候选，500个空会话不再制造约100个空页；不改变批量范围/fence，原空会话的新消息下一次增量可见。未引入aliasmap、新表、新服务或全局冻结。
+
+独立CR最终通过，无未解决P0/P1/P2。CLI v7 45文件聚合`209d305eb00db326a809603858f8db6c7ef9e5a8929a071fdc8b2e095851a6a0`；Runtime18文件聚合`2c36f9fd056f931e45352bc27f749f71503ad47b48c00ace5764aa68d0974733`；Runner最后4文件的独测/审查哈希一致。具体命令、分批结果和源码指纹在本机`%TEMP%/wecom-w10-final-independent-evidence.json`，不提交聊天正文或账号。
+
+**真机衔接**：真实ProviderManager→CLI0.2.0→MCP只读协商已通过，业务调用为0；固定CLI/Runtime源码指纹记录在本机Temp。尚未制作并验证签名组合包安装升级、真实混合群外部企微分类、真实UI快路径发送或多天运行。下一次用户授权真机后用配置智能体走Web→Runner→Runtime→CLI，按V1～V6验证实际延迟、恢复和累计积分；安装/部署、发送/监听分别遵守明确授权。不要用原Temp售前脚本冒充产品Runner链路。
+
+**主控收尾**：最终CLI构建及version报告0.2.0/上述digest通过；103个任务相关变更Python AST通过，本地文档目标存在。CLI45/Runtime18冻结文件逐项一致，原35份未提交文件无丢失，W9隔离入口/测试保持原字节，原lock三处peer标记保留；仅本次版本字段按需更新。确认0个aid_test数据库/连接后停止本任务PG helper，端口已关闭、启动辅助进程exit0。无提交、推送、部署、真实发送或监听；master整合保持未提交merge。
+
+**本版提交授权（2026-10-27）**：用户明确要求提交并推送三工具、身份识别、发送快路径和Runner恢复，替代本节实施阶段的禁止提交/推送要求；仍禁止部署与恢复监听。提交前fetch两远程，origin/master仍835a5010，当前分支两远程均349a10ab、无分叉。提交包含已审查的master整合、P6/P7配套修复和本轮验证依赖的W9隔离入口，保持最终验收源码；原package-lock三处无关peer标记仅留本地，提交只更新CLI版本字段。复用相同代码/依赖/环境的独立TEST、CR、主控构建与AST结果，不重复运行未变化的测试。提交SHA及推送目标以实际Git结果为准。
+
+### 验收范围
+
+以[设计§12.6](../design/wecom/wecom-cli-design.md#126-实施契约与有限验收)的V1～V6为业务验收清单。隔离测试可验证恢复、不重放、计费及有界读取；真实UI、发行安装、外部企微样本和跨日增长另列实机范围。暂时缺失的身份只影响该条，不增加永久平台门禁；确定unknown的外发不自动重发，其他目标不被冻结。
 
 ## W6 配置智能体完整链路（2026-10-26）
 
@@ -207,7 +250,7 @@ node --test dist/tests/input-locator.test.js dist/tests/powershell-input.indepen
 | W6 | 真正Runner与Runtime持续任务联动 | 两配置prompt/model/tools经实际Gateway到Runtime/MCP/CLI合成库，换Worker续游标、竞争唤醒/停止/unknown及用量幂等独测通过；真实群/多天另验 | 隔离集成完成 |
 | W7 | 多任务共用企业微信设备 | 本轮只串行操作一个群。另验多会话任务与单任务多群，复用既有设备队列/锁，保证搜索/切群/发送的连续操作不相互串扰 | 待并发验收 |
 | W8 | 时延与读取故障恢复 | 约10秒轮询另计CLI耗时，实际单次发送约20–27秒，不能承诺10秒回复；记录各阶段时延并定位瓶颈。补CLI无结构化输出、断连后的游标保留和pending恢复 | 待处理 |
-| W9 | 测试入口强制隔离 | 根pytest session hooks与真实SkillLoader可能使用默认共享库清理/初始化；移除硬编码默认连接，所有自动写入前证明隔离，当前只在显式loopback随机aid_test验收 | 待单独修复 |
+| W9 | 测试入口强制隔离 | 按[独立计划](plan-test-database-isolation-runtime-assertions.md)完成无DB默认、精确库/清理证明及Runtime旧断言修复，独测/CR通过，真实Docker另验 | 已完成开发 |
 | W10 | 长期本机证据保留 | 新poll无持久水位/截图且解密产物清理；既有send/search artifact与receipt随操作增长，生产前确定保留/磁盘策略，不自动删除未知发送凭据 | 待运维策略 |
 
 W1的[历史补丁](patches/wecom-search-clipboard-recovery-pending.patch)已于2026-10-26应用并进一步修复，仅供追溯，不要对当前工作树重复应用。修复不持久化用户剪贴板原文，历史原内容未保存不能补称已找回。

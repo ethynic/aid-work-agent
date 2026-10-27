@@ -1,0 +1,84 @@
+{
+  "project": "Demo Hotel",
+  "files": [
+    "HappyRoom_家具软装.xlsx"
+  ],
+  "item_count": 3,
+  "items": [
+    {
+      "file": "HappyRoom_家具软装.xlsx",
+      "sheet": "HappyRoom_家具软装",
+      "row": 8,
+      "code": "HR-1601",
+      "area": "HappyRoom",
+      "title_cn_en": "单人沙发 Lounge Chair",
+      "spec_bullets": [
+        "• Fabric: velvet",
+        "• Size W700 D750 H800"
+      ],
+      "cn_note": "中文说明：客厅主沙发",
+      "scope": "Scope：乙供 Contractor",
+      "uom": "Each",
+      "qty_expr": "=5",
+      "brand": "TO BID",
+      "in_scope": true,
+      "unit_price": 1200,
+      "source": "知识库-KB",
+      "kb_match": "单人沙发 KF-201",
+      "spec_consistent": true,
+      "replacement_desc": null,
+      "replacement_image": null,
+      "note": null
+    },
+    {
+      "file": "HappyRoom_家具软装.xlsx",
+      "sheet": "HappyRoom_家具软装",
+      "row": 9,
+      "code": "HR-1602",
+      "area": "HappyRoom",
+      "title_cn_en": "双人沙发 2-Seat Sofa",
+      "spec_bullets": [
+        "• Fabric: linen",
+        "• Size W1800 D900 H850"
+      ],
+      "cn_note": "中文说明：客厅双人位",
+      "scope": "Scope：乙供 Contractor",
+      "uom": "Each",
+      "qty_expr": "=3",
+      "brand": "TO BID",
+      "in_scope": true,
+      "unit_price": 2600,
+      "source": "知识库-KB(替换)",
+      "kb_match": null,
+      "spec_consistent": false,
+      "replacement_desc": "原：布艺 W1800 → 替换：真皮 W1600（库存替代，需业主确认）",
+      "replacement_image": null,
+      "note": null
+    },
+    {
+      "file": "HappyRoom_家具软装.xlsx",
+      "sheet": "HappyRoom_家具软装",
+      "row": 10,
+      "code": "HR-1701",
+      "area": "HappyRoom",
+      "title_cn_en": "边几 Side Table",
+      "spec_bullets": [
+        "• Wood: oak",
+        "• Size W500 D500 H550"
+      ],
+      "cn_note": "中文说明：沙发旁边几",
+      "scope": "Scope：乙供 Contractor",
+      "uom": "Each",
+      "qty_expr": "=5",
+      "brand": "TO BID",
+      "in_scope": true,
+      "unit_price": 680,
+      "source": "AI建议参考价",
+      "kb_match": null,
+      "spec_consistent": null,
+      "replacement_desc": null,
+      "replacement_image": null,
+      "note": "大模型建议，非成交价，需复核"
+    }
+  ]
+}

@@ -1,12 +1,12 @@
-"""企业微信 Provider 6 工具云端注册测试（M11c，2026-09-29）
+"""企业微信 Provider 受信工具云端注册测试。
 
 覆盖：
 - catalog wecom 条目与 runtime manifest（clients/agent-tool-runtime/src/providers.ts
-  WECOM_TOOLS，M11b bdcd1233）逐字一致（全量 6 工具含 v1 写，照 boss 先例）
+  WECOM_TOOLS）逐字一致；Agent三工具投影另行验证，不删除旧调用能力。
 - is_tool_allowed 两态：wecom 能力设备放行 wecom 工具；boss-only 设备拒绝
 - proxy tool Input 校验：target_ref/target_name 二选一（XOR）、text/image_path/
   file_path 必填、max_pages/since_days 边界
-- 防双计费：6 工具 _tool_credit_price 全部为 0
+- 防双计费：受信工具 _tool_credit_price 全部为 0
 - 设备闸门：wecom 能力设备建 invocation 且行 provider_key='wecom'（claim 只派给
   wecom 能力设备）；boss-only 设备拒绝；多 Provider（boss+wecom）设备放行
 - boss 既有行为不回归：boss 工具在 boss 设备仍放行、invocation 行 provider_key 仍 NULL
@@ -26,6 +26,7 @@ from src.local_tools.proxy_tool import (
     WecomMessageSendTool,
     WecomProbeTool,
     WecomReadSessionTool,
+    WecomReadSessionsTool,
     WecomSendFileTool,
     WecomSendImageTool,
     WecomUnreadListTool,
@@ -49,6 +50,7 @@ WECOM_MANIFEST_TOOLS = [
     "wecom_unread_list",
     "wecom_send_status",
     "wecom_group_poll",
+    "wecom_read_sessions",
 ]
 
 WECOM_PROXY_CLASSES = [
@@ -60,6 +62,7 @@ WECOM_PROXY_CLASSES = [
     WecomUnreadListTool,
     WecomSendStatusTool,
     WecomGroupPollTool,
+    WecomReadSessionsTool,
 ]
 
 
@@ -118,7 +121,7 @@ class TestCatalogWecomEntry:
         assert entry["execution_target"] == "local_required"
 
     def test_wecom_tools_match_runtime_manifest_verbatim(self):
-        """6 工具清单与 runtime WECOM_TOOLS 逐字一致（含顺序；全量含 v1 写）"""
+        """新批量读取必须能派发，旧工具继续注册以执行已接受的调用。"""
         assert catalog.allowed_tools("wecom") == WECOM_MANIFEST_TOOLS
 
     def test_wecom_v1_write_tools_included(self):
@@ -145,12 +148,12 @@ class TestCatalogWecomEntry:
         assert catalog.get_provider_key_for_device({"provider_id": "ai.aidwork.wecom"}) == "wecom"
 
     def test_manifest_static_list_contains_wecom(self):
-        """manifest.py 静态清单含 6 工具（装配按名称交集注册）"""
+        """manifest.py 包含全部受信工具（装配按名称交集注册）。"""
         assert set(WECOM_MANIFEST_TOOLS) <= LOCAL_PROXY_TOOL_NAMES
 
 
 class TestWecomToolDefinitions:
-    def test_six_classes_registered(self):
+    def test_all_trusted_classes_registered(self):
         for cls in WECOM_PROXY_CLASSES:
             assert cls in LOCAL_PROXY_TOOL_CLASSES
         assert {c.name for c in WECOM_PROXY_CLASSES} == set(WECOM_MANIFEST_TOOLS)
@@ -171,7 +174,7 @@ class TestWecomToolDefinitions:
             assert tool.description
 
     def test_all_wecom_tools_zero_credit_price(self):
-        """防双计费：6 工具计价全部为 0（read_session 模型通道已计费、send 系 Phase 1 免工具积分）"""
+        """防双计费：受信工具均为0；模型通道按原实际用量结算。"""
         for cls in WECOM_PROXY_CLASSES:
             assert cls()._tool_credit_price() == 0.0
 

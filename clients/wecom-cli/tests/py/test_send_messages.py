@@ -36,8 +36,9 @@ class SendMessagesTest(unittest.TestCase):
     def test_complete_multisegment_text_is_usable_without_changing_old_messages(self):
         expected = 'line-one\nline-two \U0001f604\nlast'
         self.add_rows([self.row(text_parts('line-one\n', 'line-two \U0001f604', '\nlast'))])
-        before = self.query('--after-id', '0', task='messages')
-        sent = self.query('--after-id', '0')
+        self.fx.add_user_db([(fixtures.SELF, 'Synthetic Employee', '', '')])
+        before = self.query('--after-id', '0', '--account', fixtures.SELF, task='messages')
+        sent = self.query('--after-id', '0', '--account', fixtures.SELF)
         self.assertTrue(sent['ok'], sent)
         self.assertEqual(sent['task'], 'send-messages')
         self.assertEqual(sent['messages'][0]['text'], expected)
@@ -45,8 +46,13 @@ class SendMessagesTest(unittest.TestCase):
         self.assertFalse(before['messages'][0]['trusted'])
         self.assertNotEqual(before['messages'][0]['text'], expected)
         self.assertEqual(list(sent['messages'][0]), list(before['messages'][0]))
+        for key in ('sender_name', 'sender_name_source', 'sender_platform'):
+            self.assertEqual(sent['messages'][0][key], before['messages'][0][key],
+                             'send-body completeness must not fork the sender identity projection')
+        self.assertEqual(sent['messages'][0]['sender_name'], 'Synthetic Employee')
+        self.assertEqual(sent['messages'][0]['sender_platform'], 'wecom')
         self.assertEqual(sent['next_anchor'], before['next_anchor'])
-        self.assertEqual(before, self.query('--after-id', '0', task='messages'))
+        self.assertEqual(before, self.query('--after-id', '0', '--account', fixtures.SELF, task='messages'))
 
     def test_plain_type_zero_and_whitespace_are_preserved_exactly(self):
         expected = ' leading\r\n\U0001f604\ttrailing '

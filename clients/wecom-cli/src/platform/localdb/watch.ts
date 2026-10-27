@@ -345,6 +345,7 @@ export async function runLocaldbWatch(
             conversationId = await resolveFocusConversation(
               query, identity.name, selfUserId,
               identity.type === 'contact' || identity.type === 'group' ? identity.type : undefined,
+              identity.subtitle,
             )
             displayName = identity.name
             source = 'ref'

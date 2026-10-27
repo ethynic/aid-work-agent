@@ -115,7 +115,7 @@ python scripts/discover_structure.py --pdf <spec.pdf> [--items items.json] [--js
 }
 ```
 
-**`global_themes`（跨空间合并的大类）**：该大类全项目只生成 **1 份** `《大类名》.xlsx`（如 `标识.xlsx`），不再产出 `{space}_{theme}.xlsx`；文件内不写 ◆ 空间抬头，直接按 ■ 产品类别分区；每条 D 列仍标注其真实来源空间，便于询价后按空间反查下单。
+**`global_themes`（跨空间合并的大类）**：该大类全项目只生成 **1 份** `《大类名》.xlsx`（如 `标识.xlsx`），不再产出 `{space}_{theme}.xlsx`；文件内不写 ◆ 空间抬头，直接按 ■ 产品类别分区；每条区域列（C:D）仍标注其真实来源空间，便于询价后按空间反查下单。
 
 > `renames` 仅在用户重命名了扫描到的名称、而 items.json 里还用的是旧名时才需要；若你已经直接把 items.json 的 space/theme 改成确认名，可不写 renames。
 

@@ -20,6 +20,7 @@ import { runLocaldbPy } from './driver.js'
 import { logLocaldbEvent, type LocaldbLogEvent } from './log.js'
 import { checkCancelled, probeCurrentAccount, type CurrentAccount } from './identity.js'
 import { decodeCursor, encodeCursor, normalizeMessages, type RawMessageRow } from './messages.js'
+import { hasExternalWechatHint } from './contactScope.js'
 
 export interface LocaldbReadArgs {
   name: string
@@ -102,9 +103,11 @@ export async function readLocaldbSession(
     const generation = hash([sourceId, meta.schema_version])
     if (previous && previous.generation !== generation) throw cursorError()
     const name = args.name.trim().replace(/@微信$/, '').trim()
-    const resolved = await query(['--task', 'resolve', '--name', name, '--account', meta.self_user_id])
+    const externalOnly = hasExternalWechatHint(args.name, args.target?.type, args.target?.subtitle)
+    const resolved = await query(['--task', 'resolve', '--name', name, '--account', meta.self_user_id,
+      ...(externalOnly ? ['--external-only'] : [])])
     const sources = resolved.sources as Record<string, unknown> | undefined
-    const required = args.target?.type === 'contact' ? ['user_table']
+    const required = args.target?.type === 'contact' || externalOnly ? ['user_table']
       : args.target?.type === 'group' ? ['conversation_table'] : ['user_table', 'conversation_table']
     if (!sources || required.some(source => sources[source] !== 'ok')) {
       if (required.some(source => sources?.[source] === 'schema-unknown')) {
@@ -117,6 +120,9 @@ export async function readLocaldbSession(
     for (const raw of Array.isArray(resolved.candidates) ? resolved.candidates : []) {
       if (!raw || typeof raw !== 'object') continue
       const row = raw as Record<string, unknown>
+      if (externalOnly && (row.source !== 'user_table' || row.contact_scope !== 'external')) {
+        throw new CodedOperationError('VERSION_UNSUPPORTED', '外部联系人身份来源不完整，不能按同名目标读取')
+      }
       const id = row.conversation_id
       if (row.source === 'user_table' && typeof row.user_id === 'string' && id === null && args.target?.type !== 'group') {
         unresolvedUsers.add(row.user_id)
@@ -140,7 +146,7 @@ export async function readLocaldbSession(
     const target = [...candidates.values()][0]
     if (!target) throw new CodedOperationError('TARGET_NOT_FOUND', '完整检索后未找到已识别的目标会话')
     if (previous && previous.conversationId !== target.conversation_id) throw cursorError()
-    const params = ['--task', 'messages', '--conv', target.conversation_id, '--limit', String(args.limit ?? 100)]
+    const params = ['--task', 'messages', '--conv', target.conversation_id, '--limit', String(args.limit ?? 100), '--account', current.account]
     if (previous) params.push('--after-id', String(previous.lastMessageId), '--anchor', previous.anchor)
     if (args.sinceDays !== undefined) params.push('--since', String(Math.max(0, Math.floor(now() / 1000) - args.sinceDays * 86400)))
     const messages = await query(params)

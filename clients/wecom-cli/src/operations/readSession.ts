@@ -5,6 +5,7 @@
 import { readFile, stat } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { runWecomOperation, type OperationOutcome } from './context.js'
+import { readBusinessSessions, validateSessionRead } from '../platform/localdb/sessions.js'
 import { CancelledError, CodedOperationError, type OperationResult, type OpContext, WecomOperation } from './types.js'
 import { runPowerShellDriver, type RunPowerShellDriverFn } from '../platform/powershell.js'
 import { artifactDir } from '../platform/environment.js'
@@ -32,6 +33,7 @@ import {
 } from './navigate.js'
 
 import { probeCurrentAccount, checkCancelled, type CurrentAccount } from '../platform/localdb/identity.js'
+import { hasExternalWechatHint } from '../platform/localdb/contactScope.js'
 import { readLocaldbSession, LOCALDB_FALLBACK_CODES, type LocaldbReadDeps } from '../platform/localdb/readSession.js'
 import { readLocalState, writeLocalState } from '../platform/localdb/matrix.js'
 import { logLocaldbEvent } from '../platform/localdb/log.js'
@@ -42,6 +44,9 @@ import { mapExecutorError } from './errorMapping.js'
 const DRIVER_PATH = fileURLToPath(new URL('../../../drivers/ps1/read-session.ps1', import.meta.url))
 
 export interface WecomReadSessionArgs {
+  session?: string
+  /** Internal Runner resolution phase; not projected into the Agent's business schema. */
+  resolve_only?: boolean
   channel?: 'local-db' | 'ui'
   limit?: number
   cursor?: string
@@ -172,6 +177,16 @@ export function createWecomReadSessionOperation(
   return {
     name: 'wecom_read_session',
     execute(args: WecomReadSessionArgs, ctx: OpContext): Promise<OperationResult> {
+      if (args && args.session !== undefined) {
+        const input = { sessions: [args.session], cursor: args.cursor, limit: args.limit, single: true, metadataOnly: args.resolve_only === true }
+        return runWecomOperation('readonly', ctx, () => {
+          if (args.target_name !== undefined || args.target_ref !== undefined) return 'session与旧目标参数不可同时传入'
+          if (args.resolve_only !== undefined && typeof args.resolve_only !== 'boolean') return 'resolve_only须为布尔值'
+          if (args.resolve_only === true && args.cursor !== undefined) return '纯定位不接受cursor，也不推进消息进度'
+          if (args.channel !== undefined || args.max_pages !== undefined || args.since_days !== undefined) return 'session模式使用DB增量读取，仅接受session、cursor、limit'
+          return validateSessionRead(input)
+        }, opCtx => readBusinessSessions(input, opCtx, deps.localdb ?? {}))
+      }
       return runWecomOperation(
         'readonly',
         ctx,
@@ -179,6 +194,7 @@ export function createWecomReadSessionOperation(
           if (args === null || typeof args !== 'object' || Array.isArray(args)) {
             return '参数必须是对象（target_ref/target_name 二选一；max_pages/since_days 可选）'
           }
+          if (args.resolve_only !== undefined) return 'resolve_only仅用于session纯定位'
           if (args.channel !== undefined && args.channel !== 'local-db' && args.channel !== 'ui') return 'channel 必须为 local-db/ui'
           if (args.limit !== undefined && (!Number.isSafeInteger(args.limit) || args.limit < 1)) return 'limit 必须为正安全整数'
           if (args.cursor !== undefined && (typeof args.cursor !== 'string' || !args.cursor)) return 'cursor 必须为非空字符串'
@@ -449,6 +465,7 @@ export function createWecomReadSessionOperation(
           } catch (err) {
             if (err instanceof CancelledError || (err instanceof CodedOperationError && err.code === 'CANCELLED')) throw err
             checkCancelled(opCtx.signal)
+            if (hasExternalWechatHint(target?.name ?? args.target_name!, target?.type, target?.subtitle)) throw err
             if (!(err instanceof CodedOperationError) || !LOCALDB_FALLBACK_CODES.has(err.code) || args.channel === 'local-db') throw err
             if (args.cursor !== undefined) throw new CodedOperationError('CURSOR_UNSUPPORTED', '本次数据库通道不可用，原游标未推进；请稍后重试', 'none', {
               cursor: args.cursor, localdb_reason: err.code, ...err.data,

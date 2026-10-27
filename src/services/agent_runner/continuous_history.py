@@ -243,7 +243,7 @@ def retired_subtree(data):
 
 
 def retire_local_references(control,state,retire_all=False):
-    """Only positive original-invocation completion proof can retire a reference."""
+    """Retire closed DB reads or positively completed original invocations."""
     pending = {call.id for call in state.pending}
     protected = pending if retire_all else pending|set(list(state.tools)[-KEEP_FACTS:])|set(state.resources.get('round_tool_ids') or [])
     refs = state.resources.get('local_invocations') or {}
@@ -261,7 +261,10 @@ def retire_local_references(control,state,retire_all=False):
                 ([ref['invocation_id'] for ref in candidates.values()],state.identity.tenant_id,
                  state.identity.user_id,state.identity.session_id,control.attempt.runner_id))
             from src.local_tools.repository import operation_completion_known
-            completed = {str(row['id']) for row in cursor.fetchall() if operation_completion_known(dict(row))}
+            from src.local_tools.wecom_flow import readonly_db_call
+            completed = {str(row['id']) for row in cursor.fetchall()
+                if operation_completion_known(dict(row)) or (row['state']=='unknown'
+                    and readonly_db_call(row['tool_name'],row.get('arguments_json') or {}))}
         for key,ref in candidates.items():
             if ref['invocation_id'] in completed:
                 refs.pop(key,None)

@@ -481,7 +481,7 @@ test('静态核对（P2）：-VerifyOnly 分支的标题一致性检查存在且
   const src = readFileSync(fileURLToPath(new URL('../../drivers/ps1/message-send.ps1', import.meta.url)), 'utf8')
   const verifyTitleLog = src.indexOf("Write-DriverLog ('verify-only 当前标题 title='")
   assert.ok(verifyTitleLog > -1, '定位 -VerifyOnly 分支（标题 OCR 日志锚点）')
-  const check = src.indexOf('if (-not (Test-WeComTitleMatch -Title $title2 -Expected $TargetName)) {', verifyTitleLog)
+  const check = src.indexOf('if (-not (Test-WeComTitleMatch -Title $title2 -Expected $TargetName -RequireWechat:$requireWechat)) {', verifyTitleLog)
   assert.ok(check > verifyTitleLog, '标题一致性检查位于 -VerifyOnly 分支内（复用发送路径 Test-WeComTitleMatch 规则）')
   const ruleSection = src.indexOf('终态规则三选二')
   assert.ok(ruleSection > check, '标题一致性检查先于三选二/Jev 终态判定（防非目标会话的证据凑满两项）')

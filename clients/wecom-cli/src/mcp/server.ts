@@ -24,6 +24,11 @@ import { redactSensitive } from '../security/redaction.js'
  * server instructions（前 512 字符内含关键前提、副作用和写动作上限）
  */
 const INSTRUCTIONS =
+  '推荐业务入口仅三项：wecom_read_session(session,cursor?,limit?)读一个单聊或群；' +
+  'wecom_read_sessions(sessions?,cursor?,limit?)从DB批量读并返回待回复候选；wecom_message_send(session,text)发送。' +
+  'session原样使用读取返回的稳定标识，首次可用完整名称；发送先核对当前会话，非目标才内部搜索选择。' +
+  '消息sender_platform区分wechat/wecom/unknown，unknown不猜；原游标增量与baseline历史分开，失败目标单列。' +
+  '发送unknown保留原凭据仅只读对账，禁止再次发送。以下入口保留供旧调用兼容与内部恢复：' +
   '企业微信操作 Provider，仅 Windows。UI操作需企业微信已登录、交互桌面已解锁；本地库按自身条件检查。' +
   '写动作每次单目标，effect=unknown禁止重发。发送对账只读，查询成功不等于发送confirmed，不自动继续原任务。' +
   '发送会真实触达；多行文本、图片和文件发送会覆盖剪贴板且不恢复。' +

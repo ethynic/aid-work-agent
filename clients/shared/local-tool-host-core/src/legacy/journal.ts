@@ -6,7 +6,7 @@
  *   fsync（Windows 上 fs.fsyncSync(fd) 映射 FlushFileBuffers，同样保证崩溃后落盘）。
  * - 写入/fsync 失败 → 抛 JournalWriteError，调用方禁止执行该操作（终态
  *   JOURNAL_WRITE_FAILED/effect none）——无 journal 即无证据链，宁可不做。
- * - journal 只追加不删除（崩溃恢复排查依据）；permit_token/claim_token 不写入。
+ * - 活动/未知journal只追加；仅可信ACK闭合后按保留期回收，permit_token/claim_token不写入。
  */
 import { closeSync, fsyncSync, mkdirSync, openSync, writeSync } from 'node:fs'
 import path from 'node:path'

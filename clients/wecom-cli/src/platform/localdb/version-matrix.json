@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-10-22",
+  "updated_at": "2026-10-27",
   "entries": {
     "5.0.11.6029": {
       "status": "validated",
@@ -25,6 +25,18 @@
       "data_dir_pattern": "{documents}/WXWork/{user_id}",
       "schema_profile": "wecom-5.0.x",
       "notes": "5.0.11.6029 自动升级版本；方案未变（结构指纹跨账号恒定，keyscan+全链解密 integrity=ok 2026-10-22 doctor 确认）"
+    },
+    "5.0.13.6005": {
+      "status": "validated",
+      "verified_date": "2026-10-27",
+      "algorithm": "wxaes128cbc-nonlegacy",
+      "page_size": 4096,
+      "db_magic": "b3df88da44b8102f",
+      "key_form": "raw16-in-private-rw",
+      "scan_strategy": "dual-md5-sha256-oracle",
+      "data_dir_pattern": "{documents}/WXWork/{user_id}",
+      "schema_profile": "wecom-5.0.x",
+      "notes": "复用既有方案；2026-10-27 当前主窗口身份与结构指纹确认，维护者候选 doctor 解密108页及22帧WAL、integrity=ok、17会话查询通过；证据见 docs/plans/plan-wecom-cli-localdb.md P6"
     }
   }
 }

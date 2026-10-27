@@ -263,7 +263,7 @@ if tool_name == "skill_complete":
 | `docs/system/master-subagent/design_master_subagent.md` | 删除 `_active_skill_sessions` / `SkillSession` / `_handle_use_skill` 创建 session / skill_complete 排队延迟压缩 相关字段和流程描述 |
 | `docs/infrastructure/memory/memory_design.md` | 同上 |
 | `docs/infrastructure/memory/context_compression_design.md` | 删除「Skill 完成后压缩技能段」横向压缩描述 |
-| `docs/system/digital-employee/tool-messages-persistence-design.md` | 检查是否引用 skill_complete 压缩机制 |
+| `docs/system/tool-messages-persistence-design.md` | 检查是否引用 skill_complete 压缩机制 |
 | `docs/tools/http_api_adapter_design.md` | 删除「Skill 完成（skill_complete）」流程描述 |
 | `docs/system/prompt/prompt_system_refactor_design.md` | 删除 P2.3 中关于 use_skill → skill_execute → skill_complete 的描述 |
 | `docs/subagent/complaint-handling/complaint-agent-design.md` | 删除 use_skill → ... → skill_complete 流程描述 |

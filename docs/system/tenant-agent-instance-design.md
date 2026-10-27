@@ -2,7 +2,7 @@
 
 > 日期：2026-10-14
 > 状态：设计定稿
-> 关联：[AgentRunner 架构](../agent-application-architecture-design.md)、[数字员工栏目授权设计](knowledge-base/subagent-kb-category-authorization-design.md)
+> 关联：[AgentRunner 架构](./agent-application-architecture-design.md)、[数字员工栏目授权设计](knowledge-base/subagent-kb-category-authorization-design.md)
 
 ## 1. 背景与目标
 

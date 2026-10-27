@@ -5,6 +5,7 @@ import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWecomGroupPollOperation } from '../src/operations/groups.js'
+import { createWecomMessageSendOperation } from '../src/operations/messageSend.js'
 import { groupMonitorFixture, changeGroupFixture } from './helpers/groupMonitorFixture.js'
 import { decodeGroupCursor } from '../src/platform/localdb/groupCursor.js'
 import type { OpContext } from '../src/operations/types.js'
@@ -97,15 +98,34 @@ test('a scoped send writes the exact model text once to the original group and c
   } finally { rmSync(base, { recursive: true, force: true }) }
 })
 
-test('a same-name UI contact cannot borrow the DB group scope to reach a send driver', scope, async () => {
+test('a wrong current contact is checked first; contact-only search cannot become a group send', scope, async () => {
   const base = mkdtempSync(join(tmpdir(), 'wecom-contact-scope-'))
   try {
     const f = await groupMonitorFixture(base, true, '联系人')
     const first = await createWecomGroupPollOperation(f.deps).execute({ target_name: '合成群甲' }, ctx())
-    const result = await f.send.execute({ target_name: '合成群甲', group_cursor: first.data.cursor as string, text: '禁止串发' }, ctx())
+    let checks = 0
+    let searches = 0
+    const op = createWecomMessageSendOperation({ ...f.refDeps, localdb: f.deps, artifactDirFn: () => f.artifacts,
+      receiptCrypto: { protect: async plain => Buffer.from(plain).toString('base64'), unprotect: async value => Buffer.from(value, 'base64').toString() },
+      runDriverFn: async options => {
+        if (options.script.endsWith('message-send.ps1')) {
+          checks++
+          assert.ok(options.args?.includes('group'), 'driver must receive expected group type')
+          return { navigate_required: true, reason: 'current conversation is a contact, not the target group' }
+        }
+        if (options.script.endsWith('chat-search.ps1')) {
+          searches++
+          return { query: '合成群甲', items: [{ name: '合成群甲', subtitle: '', section: '联系人', x: 100, y: 100 }],
+            best_index: 0, overlay: { x: 0, y: 0, w: 400, h: 500 }, jev: { used: false } }
+        }
+        throw new Error('must not select or send to contact')
+      },
+    })
+    const result = await op.execute({ target_name: '合成群甲', group_cursor: first.data.cursor as string, text: '禁止串发' }, ctx())
     assert.equal(result.success, false)
     assert.equal(result.effect, 'none')
-    assert.equal(f.calls.filter(call => call === 'message-send.ps1').length, 0)
+    assert.equal(checks, 1, 'first invocation only checks current target and performs no input')
+    assert.equal(searches, 1, 'search happens only after the current-target mismatch')
   } finally { rmSync(base, { recursive: true, force: true }) }
 })
 

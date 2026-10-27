@@ -275,6 +275,7 @@ class RunnerWorker:
         self._cancel_scan_after = 0
         self._recovery_scan_after = 0
         self._timer_scan_after = 0
+        self._continuous_scan_after = 0
         self._acquisition_turn = 0
 
     async def _park(self,control,state,status):
@@ -447,8 +448,12 @@ class RunnerWorker:
                     and timer_activation.get('attempt')==row['attempt']
                     and timer_activation.get('action_started') is False
                     and bool(timer_activation.get('wait_id')))
+                continuous_activation=control.envelope.get('continuous_activation') or {}
+                trusted_continuous=(continuous_activation.get('version')==1
+                    and continuous_activation.get('attempt')==row['attempt']
+                    and continuous_activation.get('source_attempt')==row['attempt']-1)
                 resume_state = (ExecutionState.restore(control.envelope['execution'])
-                    if (control.envelope.get('applied_control_id') or trusted_timer)
+                    if (control.envelope.get('applied_control_id') or trusted_timer or trusted_continuous)
                     and control.envelope.get('execution') else None)
                 while True:
                     try:
@@ -833,7 +838,7 @@ class RunnerWorker:
             urgent=await asyncio.to_thread(priority,self.worker_id,self.config.lease_seconds)
             if urgent is not None:
                 return urgent
-        sources=(self._acquire_controls,self._acquire_timers,self._acquire_queued)
+        sources=(self._acquire_controls,self._acquire_timers,self._acquire_continuous,self._acquire_queued)
         for offset in range(len(sources)):
             index=(self._acquisition_turn+offset)%len(sources)
             acquired=await sources[index]()
@@ -845,6 +850,38 @@ class RunnerWorker:
 
     async def _acquire_queued(self):
         return await asyncio.to_thread(self.executions.acquire,self.worker_id,self.config.lease_seconds)
+
+    async def _acquire_continuous(self):
+        from .continuous import interrupted_candidate
+        from .recovery import RecoveryCoordinator
+        from .recovery_repository import RecoveryRepository
+        recovery=RecoveryRepository(self.repository.connection_factory)
+        candidates=await asyncio.to_thread(recovery.next_continuous_candidates,
+            after_queue_order=self._continuous_scan_after)
+        self._continuous_scan_after=candidates[-1]['queue_order'] if candidates else 0
+        for row in candidates:
+            if not interrupted_candidate(row):
+                continue
+            try:
+                affinity=getattr(self.tool_recovery,'affinity',None)
+                if affinity is not None and not await affinity(row):
+                    continue
+                prepared_source=await self.sources.prepare_execution(row) if self.sources is not None else None
+                prepared=await asyncio.to_thread(RecoveryCoordinator(self.authorizer,self.factory.profiles,
+                    tool_recovery=self.tool_recovery,attachment_resolver=self.factory.attachments,
+                    resource_directory=self.factory.resource_directory).prepare,row,
+                    prepared_source=prepared_source,continuous_trigger=True)
+                acquired=await asyncio.to_thread(recovery.claim_continuous,row,self.worker_id,
+                    self.config.lease_seconds,prepared.checkpoint,source_port=self.sources,
+                    prepared_source=prepared_source)
+                if acquired is not None:
+                    return acquired
+            except SourceUnavailable:
+                await asyncio.to_thread(recovery.defer_continuous,row,'SOURCE_RECOVERY_UNAVAILABLE')
+            except RunnerError as error:
+                await asyncio.to_thread(recovery.defer_continuous,row,error.code,
+                    blocked=error.code!='RECOVERY_TOOL_VERIFICATION_REQUIRED')
+        return None
 
     async def _acquire_controls(self):
         from .control_repository import ControlRepository
@@ -908,9 +945,12 @@ class RunnerWorker:
                     if claimed is not None:
                         return claimed
                 except SourceUnavailable as error:
-                    await asyncio.to_thread(timers.hold,row,'SOURCE_RECOVERY_UNAVAILABLE')
+                    await asyncio.to_thread(timers.defer,row,'SOURCE_RECOVERY_UNAVAILABLE')
                 except RunnerError as error:
-                    await asyncio.to_thread(timers.hold,row,error.code)
+                    if error.code=='RECOVERY_TOOL_VERIFICATION_REQUIRED':
+                        await asyncio.to_thread(timers.defer,row,error.code)
+                    else:
+                        await asyncio.to_thread(timers.hold,row,error.code)
         return None
 
 

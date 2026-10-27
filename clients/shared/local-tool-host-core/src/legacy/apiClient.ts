@@ -229,9 +229,17 @@ export class ApiClient {
         : /CERT|TLS|SSL/.test(String(cause)) || ['UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'UNABLE_TO_GET_ISSUER_CERT', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN'].includes(String(cause)) ? 'tls' : 'network'
       throw new NetworkError(`网络请求失败: ${detail}`, kind)
     }
+    let responseText: string
+    try {
+      responseText = await response.text()
+    } catch (err) {
+      if (opts.signal?.aborted) throw new AbortLoopError('请求被中止（Runtime 关闭）')
+      const detail = err instanceof Error ? err.message : String(err)
+      throw new NetworkError(`响应正文读取失败: ${detail}`)
+    }
     let parsed: Record<string, unknown> = {}
     try {
-      parsed = (await response.json()) as Record<string, unknown>
+      parsed = JSON.parse(responseText) as Record<string, unknown>
     } catch {
       // 非 JSON 响应按无 body 处理
     }
@@ -393,8 +401,8 @@ export class ApiClient {
     return { seq: Number(res['seq'] ?? 0), cancel: Boolean(res['cancel']) }
   }
 
-  async result(invocationId: string, payload: InvocationResultPayload): Promise<void> {
-    await this.post(`/api/local-tools/runtime/invocations/${invocationId}/result`, payload)
+  async result(invocationId: string, payload: InvocationResultPayload, signal?: AbortSignal): Promise<void> {
+    await this.post(`/api/local-tools/runtime/invocations/${invocationId}/result`, payload, { signal })
   }
 
   /** v2 写动作许可申请（Runtime 内部 API，不暴露给 LLM；§5.2） */
@@ -414,8 +422,8 @@ export class ApiClient {
   }
 
   /** v2 操作结果回传（持久 ACK 幂等；迟到只对账不改判） */
-  async operationResult(invocationId: string, payload: OperationResultPayload): Promise<OperationResultAck> {
-    const res = (await this.post(`/api/local-tools/runtime/invocations/${invocationId}/operation-result`, payload)) as Record<string, unknown>
+  async operationResult(invocationId: string, payload: OperationResultPayload, signal?: AbortSignal): Promise<OperationResultAck> {
+    const res = (await this.post(`/api/local-tools/runtime/invocations/${invocationId}/operation-result`, payload, { signal })) as Record<string, unknown>
     return {
       state: String(res['state'] ?? ''),
       effect: String(res['effect'] ?? ''),

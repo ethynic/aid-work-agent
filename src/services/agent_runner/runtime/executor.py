@@ -299,7 +299,7 @@ class RuntimeExecution:
                     self.state.resources.setdefault('business_iterations',self.state.iteration)
                     self.state.resources.setdefault('continuous_segment_start',self.state.resources['business_iterations'])
                 from ..profiles import MainProfileCatalog
-                from ..runtime_manifest import configuration_fingerprint
+                from ..runtime_manifest import configuration_fingerprint, configuration_matches
                 from ..adapter_contract import (ADAPTER_CONTRACT_VERSION, adapter_contract_mismatch)
                 # Restore gate for the persisted adapter contract version. This
                 # mirrors RECOVERY_CONFIGURATION_CHANGED below and backstops the
@@ -311,11 +311,12 @@ class RuntimeExecution:
                 # on the cancel-acquire path.
                 if state is not None and adapter_contract_mismatch(self.state.resources):
                     raise ValueError('RECOVERY_ADAPTER_VERSION_UNSUPPORTED')
-                _, profile_fingerprint = await asyncio.to_thread(
+                profile_config, profile_fingerprint = await asyncio.to_thread(
                     MainProfileCatalog().resolve,self.state.profile_id,self.state.identity.tenant_id)
-                fingerprint = await asyncio.to_thread(configuration_fingerprint,profile_fingerprint)
+                fingerprint = await asyncio.to_thread(configuration_fingerprint,profile_fingerprint,profile_config)
                 previous = self.state.resources.get('configuration_fingerprint')
-                if state is not None and previous != fingerprint:
+                if state is not None and not await asyncio.to_thread(
+                        configuration_matches,previous,profile_fingerprint,profile_config):
                     raise ValueError('RECOVERY_CONFIGURATION_CHANGED')
                 self.state.resources['configuration_fingerprint'] = fingerprint
                 # Stamp persists with the 'prepared' control.save below; child

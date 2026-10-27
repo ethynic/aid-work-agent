@@ -177,6 +177,19 @@ test('claim 路由：provider=wecom 的 invocation 路由到 wecom Provider 实�
   }
 })
 
+test('claim 路由：WeCom新增批量读取沿原invocation执行且不扩大写权限', async () => {
+  const stack = await startTestStack({ providerEntries: { wecom: fakeProviderEntry() } })
+  try {
+    const id = stack.cloud.enqueueInvocation('wecom_read_sessions', { durationMs: 20 }, { provider: 'wecom' })
+    await stack.cloud.waitFor(() => stack.cloud.getInvocation(id)?.state === 'succeeded', 10_000, 'batch read succeeded')
+    const result = stack.cloud.callsFor(id).find(call => call.type === 'result')!
+    assert.equal(result.payload.success, true)
+    assert.equal(result.payload.effect, 'none')
+    assert.equal((result.payload.data as Record<string, unknown>).echo_tool, 'wecom_read_sessions')
+    assert.equal(stack.cloud.callsFor(id).filter(call => call.type === 'started').length, 1)
+  } finally { await stack.stop() }
+})
+
 test('claim 路由：provider=wecom 未接入的工具（search/watch_poll）→ TOOL_NOT_ALLOWED', async () => {
   const stack = await startTestStack({
     providerEntries: { wecom: fakeProviderEntry() },

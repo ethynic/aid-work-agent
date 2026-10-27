@@ -1,0 +1,11 @@
+# web-search-pro 依赖
+# 安装：pip install -r requirements.txt
+# 渲染兜底还需下载浏览器内核：python -m playwright install chromium
+
+httpx>=0.27
+beautifulsoup4>=4.12
+lxml>=5.0
+
+# 可选：无头浏览器渲染兜底（scripts/render.py、pipeline.py 的 JS 站点路径）
+# 不安装也不影响 search / fetch / extract 与 pipeline 的非渲染路径
+playwright>=1.40

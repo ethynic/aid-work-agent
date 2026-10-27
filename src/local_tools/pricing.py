@@ -19,7 +19,7 @@ from src.config.settings import settings
 
 def tool_credit_price(tool_name: str) -> float:
     """工具单次积分价格：总开关关 → 0；未列入价目表 → default_credit_price（默认 0）"""
-    if tool_name in {'wecom_send_status', 'wecom_group_poll'}:
+    if tool_name in {'wecom_send_status', 'wecom_group_poll', 'wecom_read_sessions'}:
         return 0.0  # Local receipt reconciliation has no model or per-tool charge.
     cfg = settings.boss_tool_billing
     if not cfg.enabled:

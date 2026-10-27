@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { OperationResultAck, OperationResultPayload } from './apiClient.js'
 
@@ -41,4 +41,34 @@ export function hasJournalCompletionProof(home: string, filename: string): boole
       && proof.accepted_effect === proof.reported_effect && proof.journal_digest === digest(journal) && entries.length > 0
       && entries.every(entry => entry.invocation_id === id && entry.request_id === proof.request_id && entry.permit_id === proof.permit_id && entry.phase === 'may_have_started')
   } catch { return false }
+}
+
+/** Reclaim only closed evidence, seven days after its original ACK. Pending/unknown receipts remain intact. */
+export function pruneCompletedJournals(home: string, now = Date.now(), after = ''): { removed: number; failed: number; cursor: string } {
+  const directories = [join(home, 'journal'), join(home, 'completion-proofs')]
+  if (directories.some(directory => !existsSync(directory) || !lstatSync(directory).isDirectory() || lstatSync(directory).isSymbolicLink())) {
+    return { removed: 0, failed: 0, cursor: '' }
+  }
+  let removed = 0, failed = 0
+  const cutoff = now - 7 * 24 * 60 * 60 * 1000
+  const filenames = readdirSync(directories[0]!).filter(name => /^[A-Za-z0-9_-]+\.jsonl$/.test(name) && name > after).sort()
+  let examined = 0, cursor = ''
+  for (const filename of filenames) {
+    if (removed + failed >= 32 || examined >= 128) break
+    examined += 1
+    cursor = filename
+    const id = filename.slice(0, -6)
+    const journal = join(directories[0]!, filename), proof = join(directories[1]!, `${id}.json`)
+    try {
+      if (!existsSync(proof) || !lstatSync(journal).isFile() || lstatSync(journal).isSymbolicLink()
+          || !lstatSync(proof).isFile() || lstatSync(proof).isSymbolicLink() || lstatSync(proof).mtimeMs > cutoff
+          || existsSync(join(home, 'result-outbox', `${id}.json`))
+          || existsSync(join(home, 'result-outbox', 'legacy-v1', `${id}.json`))
+          || !hasJournalCompletionProof(home, filename)) continue
+      unlinkSync(journal)
+      unlinkSync(proof)
+      removed += 1
+    } catch { failed += 1 }
+  }
+  return { removed, failed, cursor: examined === filenames.length ? '' : cursor }
 }

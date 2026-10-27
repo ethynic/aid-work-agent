@@ -1,0 +1,16 @@
+# b2b-lead-gen 依赖
+# 安装：pip install -r requirements.txt
+
+# 注意（v3.0.0）：搜索与爬取已剥离为独立技能 web-search-pro，
+# 本技能不自带检索脚本，故不再需要 httpx/bs4/lxml。
+# 检索/爬取所需依赖见 web-search-pro 技能的 requirements.txt。
+
+# 可选：提高 SMTP 稳定性（scripts/send_emails.py 不强制依赖，缺失时回退 smtplib）
+# aiosmtplib>=3.0
+
+# agent-browser 技能另需（按其自身 SKILL.md）：
+#   Node.js 18+ / npm / 约 500MB 磁盘（Chromium）
+#   npm install -g agent-browser && agent-browser install
+#
+# 注意：宿主自带 WebSearch / WebFetch 时不需要任何检索依赖；
+# 本清单仅用于发送环节与本地邮箱校验的可选增强。

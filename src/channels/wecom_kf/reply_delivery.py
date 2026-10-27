@@ -229,15 +229,16 @@ async def prepare_reply(
             media_id = None
         if media_id:
             return {**delivery, "mode": "image", "media_id": media_id}
-    preview = None
+    summary = None
     if overflow and summary_mode == "llm":
-        preview = await _model_preview(markdown, record_service=record_service, question=question)
-    mode = "llm" if preview else "prefix" if overflow else "notice"
-    if preview is None:
-        preview = await asyncio.to_thread(build_prefix_preview, markdown, max_bytes=max_bytes) if overflow else FILE_NOTICE.strip()
-    elif len(preview.encode("utf-8")) > max_bytes:
-        mode = "prefix"
+        summary = await _model_preview(markdown, record_service=record_service, question=question)
+    preview = summary
+    if preview is None or len(preview.encode("utf-8")) > max_bytes:
+        # Every file-bound reply (overflow, table or image) presents the
+        # projected plain text; a bare notice remains only when it is empty.
         preview = await asyncio.to_thread(build_prefix_preview, markdown, max_bytes=max_bytes)
     if preview.strip() == FILE_NOTICE.strip():
         mode = "notice"
+    else:
+        mode = "llm" if preview is summary else "prefix"
     return {**delivery, "mode": mode, "text": preview}

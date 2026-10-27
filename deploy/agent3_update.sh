@@ -194,7 +194,7 @@ find . -type d -name "__pycache__" -exec chmod -R 777 {} + 2>/dev/null || true
 
 # 1.1 清除 Python 字节码缓存（避免旧代码运行）
 echo "[1.1] 清除 Python .pyc 缓存..."
-find . -type f -name "*.pyc" -delete
+find . -type f -name "*.pyc" -delete 2>/dev/null || true
 find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 
 # 2. 判断前端是否需要编译；需要时编译到 dist.new（后台，与后端重启并行）

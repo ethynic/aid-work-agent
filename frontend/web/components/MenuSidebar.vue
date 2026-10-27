@@ -979,7 +979,7 @@ const sidebarTitle = computed(() => {
     return tenant.value.company_name
   }
   // 非租户模式：显示默认名称
-  return '爱定义工作助理'
+  return '工作助理'
 })
 
 // 租户 Logo URL：有 logo_file_id 时拼接下载地址，否则返回 null（回退到电脑图标）

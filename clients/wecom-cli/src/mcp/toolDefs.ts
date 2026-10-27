@@ -99,7 +99,9 @@ export const TOOL_DEFS: WecomToolDef[] = [
     name: 'wecom_message_send',
     title: '企业微信发送文本消息',
     description:
-      '向 target_ref 指定的联系人/群聊发送 1 条文本消息（写动作，单次单目标单条，智能分发）。' +
+      '向session指定的单聊/群发送一条文本；session优先原样使用读取返回的稳定标识，首次也可完整名称。' +
+      '先检查当前会话是否目标，匹配直接发，不匹配才内部搜索选择；未知发送内部只读对账，不能再次发送。' +
+      '旧调用兼容：向 target_ref 指定的联系人/群聊发送 1 条文本消息（写动作，单次单目标单条，智能分发）。' +
       'target_ref 必须来自 wecom_chat_search（有效期 5 分钟，过期 TARGET_REF_STALE 需重新搜索）。' +
       'M11a 直达模式：改传 target_name（与 target_ref 二选一，可选 subtitle 消歧），内部自动 search 定位' +
       '（身份校验 + 唯一匹配，同名多候选无法消歧返回 TARGET_AMBIGUOUS），data 附 resolved_target。' +
@@ -118,6 +120,7 @@ export const TOOL_DEFS: WecomToolDef[] = [
       '本地库基线可用时，发送前保存加密凭据；结果或错误data.receipt_id供wecom_send_status只读对账，' +
       '不能因unknown再次调用发送。无receipt_id时须人工核对，不猜测凭据。',
     zodShape: {
+      session: z.string().min(1).max(2048).optional().describe('会话完整名称或读取返回的稳定session标识；与旧目标参数互斥'),
       target_ref: z.string().min(1).optional().describe('发送目标句柄（wecom_chat_search 返回的 target_ref；与 target_name 二选一）'),
       target_name: z.string().min(1).max(100).optional().describe('直达模式：按会话名（联系人/群名，可含 @微信 后缀）定位目标，内部自动 search 并做身份校验（同名多候选无法消歧返回 TARGET_AMBIGUOUS）；与 target_ref 二选一'),
       subtitle: z.string().max(100).optional().describe('直达模式可选消歧副标题（同名多候选时收紧匹配，如「微信联系人」）；仅 target_name 模式生效'),
@@ -205,13 +208,17 @@ export const TOOL_DEFS: WecomToolDef[] = [
     name: 'wecom_read_session',
     title: '企业微信读取会话消息',
     description:
-      '读取目标会话消息，effect=none，无出站消息。target_ref（搜索返回、有效5分钟）与target_name二选一，同名无法消歧返回TARGET_AMBIGUOUS。' +
+      '使用session读取一个单聊或群的DB聊天记录，返回稳定session、messages、cursor、has_more及发送者平台wechat/wecom/unknown。' +
+      '首次历史供上下文；后续原样传cursor读取增量，无UI搜索或额外模型token配置，单批最多50条/16KiB。' +
+      '旧调用兼容：读取目标会话消息，effect=none，无出站消息。target_ref（搜索返回、有效5分钟）与target_name二选一，同名无法消歧返回TARGET_AMBIGUOUS。' +
       'doctor已启用时优先本地库，默认最近100条；精确时间、消息ID和增量cursor，不切换会话或清角标，非文本占位。' +
       '可指定channel=local-db强制本地库（失败不回退）或ui；cursor绑定账号/会话/数据库代际，UI不能执行cursor。旧ref可用于UI，本地库要求账号绑定ref或target_name。' +
       '本地库不可用的普通首读可回退UI，返回原因与能力差异；取消、参数、账号/目标错误不回退。未初始化走UI并提示doctor。' +
       'UI保留model/ocr两种输出channel：配置服务端时模型解析按次计积分，余额不足或配置错误不降级；未配置或模型暂不可用走本地OCR。' +
       'UI按max_pages翻屏，可能自动搜索/切换会话并清除角标，时间/方向可能近似；数据含messages、channel及相应通道元数据。',
     zodShape: {
+      session: z.string().min(1).max(2048).optional().describe('会话完整名称或读取返回的稳定session；与旧target参数互斥'),
+      resolve_only: z.boolean().optional().describe('Runner内部纯定位阶段：只核验账号与目标元数据，不解析正文、不返回或推进消息cursor；Agent业务面不投影此参数'),
       target_ref: z.string().min(1).optional().describe('目标句柄（wecom_chat_search 返回的 target_ref；与 target_name 二选一）'),
       target_name: z.string().min(1).max(100).optional().describe('按会话名定位（可含@微信后缀）；本地库精确匹配并消歧，UI必要时内部search，歧义返回TARGET_AMBIGUOUS；与target_ref二选一'),
       channel: z.enum(['local-db', 'ui']).optional().describe('显式通道；缺省按doctor状态，本地库强制模式失败不回退'),
@@ -221,6 +228,21 @@ export const TOOL_DEFS: WecomToolDef[] = [
       since_days: z.number().int().min(1).optional().describe('本地库按精确发送时间过滤最近N天；UI仅OCR按分割线超龄早停，模型通道仍抓max_pages'),
     },
     annotations: { title: '企业微信读取会话消息', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  },
+  {
+    name: 'wecom_read_sessions',
+    title: '企业微信批量读取与待回复候选',
+    description: '从本机DB批量读取单聊/群消息并单列pending_sessions候选；不依赖未读角标，不搜索或切换窗口。' +
+      'sessions省略读取当前允许范围内已同步会话，指定则仅这些目标；原样回传cursor继续增量，各任务独立。' +
+      '首批baseline=true为历史上下文；后续客户新消息可触发判断。群同事最后发言不清空客户候选。' +
+      '返回发送者平台wechat/wecom/unknown，unknown不猜；failed仅影响对应会话。' +
+      'limit为整个响应预算，最多50条/16KiB；has_more先排空后休眠，候选是否已获答复由智能体结合上下文判断。',
+    zodShape: {
+      sessions: z.array(z.string().min(1).max(2048)).min(1).max(50).optional().describe('会话名称或读取返回的稳定标识；省略读取已同步会话'),
+      cursor: z.string().min(1).max(16384).optional().describe('上次批量读取的原游标，不自行构造或重置'),
+      limit: z.number().int().min(1).max(50).optional().describe('整个响应的消息条数预算，默认50'),
+    },
+    annotations: { title: '企业微信批量读取', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
     name: 'wecom_watch_poll',

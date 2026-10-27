@@ -311,12 +311,19 @@ print('是否拉起 agent:', any('src.core.agent' in m for m in new))
 
 **例外**：`/api/files/{file_id}`（inline 预览）不纳入限速 location，因为聊天图片会并发批量加载，`limit_conn` 并发限制会导致第 3 个请求直接 503、图片挂掉。小文件也基本不受 `limit_rate_after 1m` 影响。
 
-### 2. 前端触发下载必须走「原生下载」，需要认证的下载点走「下载票据」，禁止 fetch + blob
+### 2. 前端下载策略：PC / 大文件走「原生下载」，移动端小文件走 fetch + blob，微信内一律引导「用浏览器打开」
 
-`fetch + blob` 会把整个文件下载到内存后才弹保存框，期间用户零反馈（50MB 文件浏览器转圈超过 1 分钟）。前端统一使用 `frontend/web/utils/download.ts`：
+`fetch + blob` 会把整个文件下载到内存后才弹保存框，期间用户零反馈（50MB 文件浏览器转圈超过 1 分钟），因此**大文件与 PC 端禁止 fetch + blob**。但移动端存在另一面：原生下载依赖浏览器自愿实现「attachment 响应 → 下载管理器」的移交，移动端各壳实现残缺（2026-10-27 分享页 Excel 下载事故：服务端全部 200 完整传输，iOS 微信 WKWebView 收到后静默丢弃、iOS Safari 成功但无任何提示进下载管理器、国产安卓内核解析 filename* 失败放弃下载）。前端统一使用 `frontend/web/utils/download.ts` 的策略函数：
 
+- `resolveDownloadStrategy(sizeBytes)`：返回下载策略，调用方按策略分发
+  - `wechat_guide`：微信/企业微信内置浏览器（UA 含 MicroMessenger）——无论文件大小一律引导用户「右上角 ··· 在浏览器打开后下载」（WKWebView 无下载管道，任何技术方案都不可靠）
+  - `blob`：非微信移动端且文件 < `MOBILE_BLOB_DOWNLOAD_MAX_BYTES`（10MB，分享附件有 Office 预览门槛 10MB/20MB，超限文件极少）；大小未知也按 blob 处理（业务数据里 size 几乎总有值）→ `downloadViaBlob(url, filename, headers?)`
+  - `native`：PC 端、移动端 ≥10MB → `triggerNativeDownload(url, filename)` 直链下载（常规移动浏览器原生下载可用）
 - `triggerNativeDownload(url, filename)`：直链原生下载（免认证下载点，如 `/api/files/{file_id}/download`）
 - `downloadViaTicket(downloadPath, filename)`：先 `POST {downloadPath}_ticket`（带认证 header，毫秒级）换取短期 HMAC 票据，再原生下载 `{downloadPath}?ticket=xxx`
+- `downloadViaBlob(url, filename, headers?)`：移动端小文件专用 fetch + blob 下载，可带认证 header；仅限 <10MB，禁止用于大文件
+
+已接入策略的入口：分享页文件卡片 `DownloadFileCard.vue`、预览面板 `AttachmentPreviewPanel.vue`（分享上下文与普通对话上下文共用）。新增下载触发点时按同样方式接入，不要绕过策略函数直接拼 `<a>` 或 `window.location.href`。
 
 票据机制（`src/core/download_ticket.py`）：5 分钟有效、绑定下载路径 + tenant_id + user_id + role、无状态不落库（密钥取 `DOWNLOAD_TICKET_SECRET` 环境变量，缺省由 `DATABASE_URL` 派生）。`TenantContextMiddleware` 对带 `ticket` 的下载请求在认证 header 缺失时验签还原租户上下文（`_TICKET_DOWNLOAD_PATHS` 白名单，新增下载点需同步）；`require_admin` 类端点用 `_require_admin_or_ticket` 做票据兜底（参考 `src/api/tenant_config_file.py`）。
 
@@ -325,6 +332,8 @@ print('是否拉起 agent:', any('src.core.agent' in m for m in new))
 ### 3. 后端返回文件统一用 FileResponse / StreamingResponse
 
 流式返回，不要 `open(...).read()` 一次性读入内存再返回。
+
+**Content-Disposition 必须带 ASCII filename fallback**：Starlette 的 `FileResponse(filename=中文名)` 只发 `filename*=utf-8''...`（RFC 5987），部分国产移动内核解析不出文件名会直接放弃下载。非 ASCII 文件名需自构 disposition 头同时携带 `filename="ascii兜底"` + `filename*=utf-8''...`，参考 `src/api/message_share.py` 的 `content_disposition_header()`。
 
 ## API 接口命名规范
 接口名称应与 Python 方法名保持一致，使用具体、有明确指向性的命名：

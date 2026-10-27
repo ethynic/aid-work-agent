@@ -42,5 +42,18 @@ elif action == 'reuse-name':
         conn.execute("UPDATE conversation_table SET name='已改名' WHERE conversation_id='R:fixture-a'")
         conn.execute("INSERT INTO conversation_table VALUES('R:other', '合成群甲')")
     encrypted(base, 'session')
+elif action == 'session-visible':
+    item = json.loads(sys.argv[3])
+    with sqlite3.connect(base / 'session.plain.db') as conn:
+        conn.execute("DELETE FROM conversation_table WHERE conversation_id='R:fixture-b'")
+        if item['visible']:
+            conn.execute("INSERT INTO conversation_table VALUES('R:fixture-b','合成群乙')")
+    encrypted(base, 'session')
+elif action == 'verify-wechat-sender':
+    with sqlite3.connect(base / 'user.plain.db') as conn:
+        conn.execute('ALTER TABLE user_table ADD COLUMN corp_id INTEGER')
+        conn.execute('UPDATE user_table SET corp_id=? WHERE id=?', (12345, SELF))
+        conn.execute('UPDATE user_table SET corp_id=? WHERE id=?', (1970325134026788, PEER))
+    encrypted(base, 'user')
 else:
     raise ValueError('unknown fixture action')

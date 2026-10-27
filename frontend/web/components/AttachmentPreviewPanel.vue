@@ -214,6 +214,7 @@
         </a>
       </div>
     </div>
+    <WechatDownloadGuide v-model="showWechatGuide" />
   </div>
 </template>
 
@@ -236,9 +237,10 @@ import {
   DOCX_DEFAULT_PAGE_HEIGHT,
 } from '@/utils/officePreview'
 import { detectFileIconKind, type FileIconKind } from '@/utils/file'
-import { isWeChatBrowser } from '@/utils/download'
+import { downloadViaBlob, resolveDownloadStrategy } from '@/utils/download'
 import FileTypeIcon from './FileTypeIcon.vue'
 import PdfCanvasPreview from './PdfCanvasPreview.vue'
+import WechatDownloadGuide from './WechatDownloadGuide.vue'
 
 interface Props {
   attachment: AttachmentInfo | null
@@ -252,15 +254,29 @@ const emit = defineEmits<{
   (e: 'close'): void
 }>()
 
-// 下载点击：微信内置浏览器（X5/XWeb）对 download 属性支持残缺，
-// a[download] 直链被微信下载器 0B 接管；微信内整页导航交由微信下载器/文件预览
-// 接管（响应带 attachment 头，不跳离页面）。非微信保持原生直链，
-// 浏览器下载管理器自带进度条，且保留右键复制链接等 anchor 语义
+// 下载点击策略（见 utils/download.ts resolveDownloadStrategy）：
+// - 微信/企微内置浏览器：弹引导（WKWebView 无下载管道，任何方案都不可靠）
+// - 非微信移动端小文件：fetch+blob 绕开 attachment 移交环节
+// - 其余（PC、移动端大文件）：保持默认 <a> 导航，浏览器读 attachment 头下载，
+//   保留右键复制链接等 anchor 语义
+const showWechatGuide = ref(false)
+
 function onDownloadClick(event: MouseEvent) {
-  if (!isWeChatBrowser()) return
-  event.preventDefault()
   const fileId = props.attachment?.file_id
-  if (fileId) window.location.href = getFileDownloadUrl(fileId)
+  if (!fileId) return
+  const strategy = resolveDownloadStrategy(props.attachment?.size)
+  if (strategy === 'wechat_guide') {
+    event.preventDefault()
+    showWechatGuide.value = true
+    return
+  }
+  if (strategy !== 'blob') return
+  event.preventDefault()
+  const url = getFileDownloadUrl(fileId)
+  downloadViaBlob(url, props.attachment?.name).catch((e: unknown) => {
+    console.error('文件下载失败:', e)
+    window.location.href = url
+  })
 }
 
 const loading = ref(false)

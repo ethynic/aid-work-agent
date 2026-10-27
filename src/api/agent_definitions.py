@@ -252,7 +252,9 @@ async def list_tools_meta(request: Request):
     # trusted WeCom choices does not add them to any profile's allowed tools.
     from src.local_tools.catalog import allowed_tools
     from src.local_tools.proxy_tool import LOCAL_PROXY_TOOL_CLASSES
-    trusted = set(allowed_tools('wecom'))
+    from src.local_tools.wecom_business import BUSINESS_TOOLS
+    trusted = set(allowed_tools('wecom')) & BUSINESS_TOOLS
+    tools = [item for item in tools if not item['id'].startswith('wecom_') or item['id'] in trusted]
     existing = {item['id'] for item in tools}
     for cls in LOCAL_PROXY_TOOL_CLASSES:
         if cls.name in trusted and cls.name not in existing:

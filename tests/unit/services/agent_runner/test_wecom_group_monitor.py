@@ -176,6 +176,7 @@ async def test_admin_metadata_adds_only_trusted_wecom_choices_without_mutating_r
     monkeypatch.setattr(agent, 'master_agent', SimpleNamespace(tool_registry=registry))
     result = await agent_definitions.list_tools_meta(SimpleNamespace())
     names = {item['id'] for item in json.loads(result.body)['data']}
-    assert names == {'read', *allowed_tools('wecom')}
+    from src.local_tools.wecom_business import BUSINESS_TOOLS
+    assert names == {'read', *(set(allowed_tools('wecom')) & BUSINESS_TOOLS)}
     assert list(registry._tools) == ['read']
     assert not any(name.startswith('boss_') for name in names)

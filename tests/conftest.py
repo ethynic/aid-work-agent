@@ -15,6 +15,18 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+from scripts.testing_db_guard import (
+    TestDatabaseSafetyError, assert_database, prepare_pytest_environment,
+)
+
+try:
+    _TEST_DATABASE = prepare_pytest_environment()
+except TestDatabaseSafetyError as error:
+    raise pytest.UsageError(str(error)) from None
+
 
 # ============================================================
 # 在导入 src 模块之前 mock 外部依赖，防止 master_agent 初始化失败
@@ -38,18 +50,6 @@ sys.modules["src.knowledge.vector_db.vector_db"] = vector_db_mod
 
 # 在导入 src 模块之前设置测试环境变量
 os.environ.setdefault("LLM_PROVIDER", "qwen")
-
-# 尝试从 .env 文件加载 DATABASE_URL，如果不存在则使用 PostgreSQL 默认值
-from pathlib import Path
-from dotenv import load_dotenv
-project_root = Path(__file__).parent.parent
-env_path = project_root / ".env"
-if env_path.exists():
-    load_dotenv(env_path)
-
-# 如果 .env 中没有 DATABASE_URL，使用默认值
-os.environ.setdefault("DATABASE_URL", os.getenv("DATABASE_URL", "postgresql://aid_user:Aid_2026@192.168.195.89:5433/aid_work_agent"))
-
 
 # ============================================================
 # 临时目录 fixtures
@@ -184,19 +184,20 @@ _TEST_TENANT_WHERE = """(
 def _purge_test_tenants() -> int:
     """物理删除所有测试租户及其在全部含 tenant_id 列表中的数据，返回删除租户数。
 
-    DB 不可用时静默跳过（大量单测不依赖数据库，conftest 对所有测试生效）。
+    无显式测试库时不导入产品 DB、不初始化池。明确目标失败必须拒绝清理。
     """
+    if _TEST_DATABASE is None:
+        return 0
     try:
         import src.db.database as _db
         if getattr(_db, "_pg_connection_pool", None) is None:
             _db.init_postgres_pool()
         from src.db.database import get_db_connection
-    except Exception:
-        return 0
-    try:
         with get_db_connection() as conn:
             cur = conn.cursor()
-            cur.execute(f"SELECT tenant_id FROM tenants WHERE {_TEST_TENANT_WHERE}")
+            assert_database(cur, _TEST_DATABASE.database)
+            cur.execute('SET LOCAL search_path TO public')
+            cur.execute(f"SELECT tenant_id FROM public.tenants WHERE {_TEST_TENANT_WHERE}")
             tenant_ids = [r["tenant_id"] for r in cur.fetchall()]
             if not tenant_ids:
                 return 0
@@ -211,35 +212,40 @@ def _purge_test_tenants() -> int:
             for table in tables:
                 if table == "tenants":
                     continue
-                try:
-                    cur.execute(
-                        f"DELETE FROM {table} WHERE tenant_id = ANY(%s)", (tenant_ids,)
-                    )
-                except Exception:
-                    conn.rollback()
+                from psycopg2 import sql
+                cur.execute(sql.SQL('DELETE FROM {} WHERE tenant_id = ANY(%s)').format(
+                    sql.Identifier('public', table)), (tenant_ids,))
             cur.execute(
-                "DELETE FROM tenants WHERE tenant_id = ANY(%s)", (tenant_ids,)
+                "DELETE FROM public.tenants WHERE tenant_id = ANY(%s)", (tenant_ids,)
             )
             conn.commit()
             return len(tenant_ids)
+    except TestDatabaseSafetyError:
+        raise
     except Exception:
-        return 0
+        raise TestDatabaseSafetyError('TEST_DATABASE_CLEANUP_FAILED') from None
 
 
 def pytest_sessionstart(session):
     """开跑前清历史测试残留（上次中断/漏删的测试租户及其数据）"""
-    if session.config.option.collectonly:
+    if session.config.option.collectonly or _TEST_DATABASE is None:
         return
-    purged = _purge_test_tenants()
+    try:
+        purged = _purge_test_tenants()
+    except TestDatabaseSafetyError as error:
+        raise pytest.UsageError(str(error)) from None
     if purged:
         print(f"\n[conftest] 已清理历史测试租户残留 {purged} 个")
 
 
 def pytest_sessionfinish(session, exitstatus):
     """跑完后清本次测试数据（测试好了及时删除所有测试数据的兜底）"""
-    if session.config.option.collectonly:
+    if session.config.option.collectonly or _TEST_DATABASE is None:
         return
-    purged = _purge_test_tenants()
+    try:
+        purged = _purge_test_tenants()
+    except TestDatabaseSafetyError as error:
+        raise pytest.UsageError(str(error)) from None
     if purged:
         print(f"\n[conftest] 已清理本次测试租户 {purged} 个（含全部关联表数据）")
 

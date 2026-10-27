@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
@@ -11,6 +12,16 @@ from pydantic import BaseModel, Field
 from src.api.rate_limit import SlidingWindowRateLimiter
 from src.api.web_subject import owned_web_session
 from src.services.message_sharing.service import create_share, fail, get_share, shared_file, view_share
+
+
+def content_disposition_header(name: str, attachment: bool) -> str:
+    """Starlette 对非 ASCII 文件名只发 filename*（RFC 5987），部分国产移动内核
+    解析不出文件名会直接放弃下载；补 ASCII filename fallback（RFC 6266）。"""
+    kind = 'attachment' if attachment else 'inline'
+    fallback = ''.join(ch for ch in name if ch.isascii() and ch not in '"\\\r\n').strip() or 'download'
+    if fallback == name:
+        return f'{kind}; filename="{name}"'
+    return f'{kind}; filename="{fallback}"; filename*=utf-8\'\'{quote(name, safe="")}'
 
 
 router = APIRouter(tags=['回复分享'])
@@ -60,6 +71,7 @@ async def read_shared_file(share_key: str, file_id: str, ticket: str = '', downl
         headers['Content-Security-Policy'] = 'sandbox allow-scripts allow-downloads'
     if 'text' in info:
         return Response(info['text'], media_type=info.get('mime_type') or 'text/plain', headers=headers)
+    headers['Content-Disposition'] = content_disposition_header(info.get('name') or 'download', download)
     return FileResponse(info['path'], media_type=info.get('mime_type') or 'application/octet-stream',
         filename=info.get('name') or 'download', content_disposition_type='attachment' if download else 'inline',
         headers=headers)

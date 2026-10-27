@@ -27,12 +27,18 @@ def share_client(monkeypatch, tmp_path):
     monkeypatch.setattr(api._password_limiter, 'is_allowed', lambda key: True)
     folder = tmp_path / 'tenants' / 'tenant-a'
     folder.mkdir(parents=True)
-    for name in ('file_image.png', 'file_pdf.pdf', 'file_report.html', 'file_vector.svg'):
+    for name in ('file_image.png', 'file_pdf.pdf', 'file_report.html', 'file_vector.svg', 'file_xlsx.xlsx'):
         (folder / name).write_bytes(b'data')
     source['metadata']['downloadableFiles'] = [
         {'file_id': 'file_report', 'file_name': 'report.html', 'mime_type': 'text/html'},
-        {'file_id': 'file_vector', 'file_name': 'vector.svg', 'mime_type': 'image/svg+xml'}]
-    monkeypatch.setattr(service, 'get_file_asset', lambda file_id: None)
+        {'file_id': 'file_vector', 'file_name': 'vector.svg', 'mime_type': 'image/svg+xml'},
+        {'file_id': 'file_xlsx', 'file_name': '2026年8月明细表.xlsx',
+         'mime_type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}]
+    def file_asset(file_id):
+        if file_id == 'file_xlsx':
+            return {'name': '2026年8月明细表.xlsx', 'path': str(folder / 'file_xlsx.xlsx')}
+        return None
+    monkeypatch.setattr(service, 'get_file_asset', file_asset)
     original = service.resolve_scoped_uploaded_file
     monkeypatch.setattr(service, 'resolve_scoped_uploaded_file', lambda file_id, tenant_id, metadata=None:
         original(file_id, tenant_id, storage_root=tmp_path, metadata=metadata))
@@ -82,6 +88,25 @@ def test_active_document_new_tab_is_sandboxed_as_well_as_embedded_preview(share_
     base = '/api/public/reply-shares/' + created['share_key']
     result = share_client.post(base + '/view', json={}).json()
     for file in result['message']['downloadableFiles']:
+        if not file['file_name'].endswith(('.html', '.svg')):
+            continue  # CSP sandbox 仅对可执行文档类（html/svg）设置
         response = share_client.get(file['download_url'])
         assert response.status_code == 200
         assert response.headers['content-security-policy'] == 'sandbox allow-scripts allow-downloads'
+
+
+def test_download_disposition_has_ascii_fallback(share_client):
+    """中文名附件的 Content-Disposition 必须同时带 ASCII filename 与 filename*
+    （部分国产移动内核解析 filename*-only 会放弃下载，2026-10-27 分享下载事故）。"""
+    created = share_client.post('/api/sessions/session-a/messages/message-a/share', json={},
+        headers={'Authorization': 'Bearer test-principal', 'X-Tenant-Id': 'tenant-a'}).json()
+    base = '/api/public/reply-shares/' + created['share_key']
+    result = share_client.post(base + '/view', json={}).json()
+    entry = next(f for f in result['message']['downloadableFiles'] if f['file_name'].endswith('.xlsx'))
+    response = share_client.get(entry['download_url'] + '&download=1')
+    assert response.status_code == 200
+    disposition = response.headers['content-disposition']
+    assert disposition.startswith('attachment; filename="')
+    assert "filename*=utf-8''" in disposition
+    ascii_only = share_client.get(base + '/files/asset_1', params={'ticket': result['access_ticket'], 'download': '1'})
+    assert "filename*=" not in ascii_only.headers['content-disposition']

@@ -127,7 +127,7 @@ _process_tenant_wecom_kf_messages 新增 enter_session 分支：
   "contact_url": "https://work.weixin.qq.com/kf/kfcbf...?enc_scene=...",  // 新增：客服链接，创建后不可变
   "expire_at": "2026-12-31",          // 新增：到期日期（可空=不限）；到期日当天仍有效，次日 00:00 起拦截
   "credit_limit": 1000,               // 新增：积分消耗上限（0=无独立上限，跟随租户积分）；账号创建至今累计
-  "qr_title": "爱定义 - 小蔡老师"       // 新增：二维码标题（显示在二维码图片上方，区分不同员工）
+  "qr_title": "小蔡老师"       // 新增：二维码标题（显示在二维码图片上方，区分不同员工）
 }
 ```
 
