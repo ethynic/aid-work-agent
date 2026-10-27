@@ -81,16 +81,21 @@ def persist_now(trace):
     _do_persist(trace)
 
 
-def update_completion(trace_id, *, status, output, duration_ms):
-    """Finalizer retry updates outcome without replacing prior execution spans."""
+def update_completion(trace_id, *, status, output, duration_ms, error_message=None):
+    """Finalizer retry updates outcome without replacing prior execution spans.
+
+    error_message：失败终态时由调用方传入 runner result.error_code（如 ITERATION_LIMIT），
+    投影进 obs_traces.error_message，免去排查时翻 agent_runners 才能找到终态原因。
+    """
     try:
         from src.db.database import get_logs_connection
         with get_logs_connection() as cursor:
             cursor.execute('''UPDATE obs_traces SET status=%s,output=%s,
                 duration_ms=%s,
-                error_message=CASE WHEN %s IN ('completed','cancelled') THEN NULL ELSE error_message END,
+                error_message=CASE WHEN %s IN ('completed','cancelled') THEN NULL
+                    WHEN %s IS NOT NULL THEN %s ELSE error_message END,
                 updated_at=NOW() WHERE trace_id=%s''',
-                (status,output,duration_ms,status,trace_id))
+                (status,output,duration_ms,status,error_message,error_message,trace_id))
             updated = bool(cursor.rowcount)
             cursor.commit()
             return updated

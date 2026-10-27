@@ -31,11 +31,16 @@ function presentation(value: RunnerPresentation, timestamp: number): Partial<Cha
   for (const event of progress) {
     if (event.type !== 'tool_result' || !event.success) continue
     const result = event.result
-    if (result?.file_id && result.visible !== false && !files.has(result.file_id)) files.set(result.file_id, {
-      file_id: result.file_id, file_name: result.download_file_name || result.file_name || '未命名文件',
-      file_size: result.file_size || 0, download_url: result.download_url || `/api/files/${result.file_id}/download`,
-      mime_type: result.mime_type || '',
-    })
+    const batchFiles: Array<Record<string, any>> = Array.isArray(result?.files) ? result.files : []
+    const singleFiles = (!batchFiles.length && result?.file_id && result.visible !== false) ? [result] : []
+    for (const f of [...batchFiles, ...singleFiles]) {
+      if (!f?.file_id || f.visible === false || files.has(f.file_id)) continue
+      files.set(f.file_id, {
+        file_id: f.file_id, file_name: f.download_file_name || f.file_name || '未命名文件',
+        file_size: f.file_size || 0, download_url: f.download_url || `/api/files/${f.file_id}/download`,
+        mime_type: f.mime_type || '',
+      })
+    }
   }
   return { progressMessages: progress, downloadableFiles: Array.from(files.values()),
     verboseMessages: value.verboseMessages || [], browserAssistance: value.browserAssistance }

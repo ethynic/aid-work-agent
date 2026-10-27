@@ -1274,20 +1274,26 @@ export function useAgent() {
           const toolDisplayName = displayName || toolName
           if (success) {
             // 结构化消费者只依赖结果字段，不依赖生产该结果的工具名称。
-            if (result?.file_id && result.visible !== false) {
+            const batchFiles: Array<Record<string, any>> = Array.isArray(result?.files) ? result.files : []
+            const singleFile = (!batchFiles.length && result?.file_id && result.visible !== false)
+              ? [result] : []
+            const deliverableFiles = [...batchFiles, ...singleFile]
+              .filter(f => f?.file_id && f.visible !== false)
+            if (deliverableFiles.length) {
               const lastMsg = state.messages.value[state.messages.value.length - 1]
               if (lastMsg && lastMsg.role === 'assistant') {
                 if (!lastMsg.downloadableFiles) {
                   lastMsg.downloadableFiles = []
                 }
                 // 按 file_id 去重
-                if (!lastMsg.downloadableFiles.some(f => f.file_id === result.file_id)) {
+                for (const f of deliverableFiles) {
+                  if (lastMsg.downloadableFiles.some(x => x.file_id === f.file_id)) continue
                   lastMsg.downloadableFiles.push({
-                    file_id: result.file_id,
-                    file_name: result.download_file_name || result.file_name || '未命名文件',
-                    file_size: result.file_size || 0,
-                    download_url: result.download_url || `/api/files/${result.file_id}/download`,
-                    mime_type: result.mime_type || '',
+                    file_id: f.file_id,
+                    file_name: f.download_file_name || f.file_name || '未命名文件',
+                    file_size: f.file_size || 0,
+                    download_url: f.download_url || `/api/files/${f.file_id}/download`,
+                    mime_type: f.mime_type || '',
                   })
                 }
               }

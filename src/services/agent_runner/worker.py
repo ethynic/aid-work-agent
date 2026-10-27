@@ -654,11 +654,22 @@ class RunnerWorker:
             from types import SimpleNamespace
             runner = self.repository.get(runner_id)
             collector.trace.status = runner['status']
-            collector.trace.output = (runner.get('result') or {}).get('output') or control.snapshot.get('output') or ''
+            result = runner.get('result') or {}
+            collector.trace.output = result.get('output') or control.snapshot.get('output') or ''
+            # 失败终态把 runner result.error_code（如 ITERATION_LIMIT）投影进
+            # obs_traces.error_message：engine 正常走完限流路径时 collector 收不到
+            # error 事件，不投影则 obs_traces.error_message 恒为空，排查须翻 agent_runners。
+            # collector 已记录更具体错误（如 EXECUTION_INTERRUPTED）时不覆盖
+            error_code = result.get('error_code') if runner['status'] == 'failed' else None
+            if error_code and not collector.trace.error_message:
+                collector.trace.error_message = error_code
+            else:
+                error_code = None
             if finalization_retry:
                 from src.core.trace_persist import update_completion
                 update_completion(collector.trace.trace_id,status=runner['status'],output=collector.trace.output,
-                    duration_ms=((runner.get('checkpoint') or {}).get('pending_finalization') or {}).get('duration_ms',0))
+                    duration_ms=((runner.get('checkpoint') or {}).get('pending_finalization') or {}).get('duration_ms',0),
+                    error_message=error_code)
                 return
             envelope = runner.get('checkpoint') or {}
             from src.core.execution_usage import execution_token_usage
