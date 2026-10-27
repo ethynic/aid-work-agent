@@ -250,6 +250,7 @@ def test_cmd_init_reads_returning_id_as_tuple(monkeypatch, tmp_path, capsys):
     # 回归 2026-10-27：平台默认 RealDictCursor 返回字典行，脚本未指定
     # NamedTupleCursor 时 fetchone()[0] 抛 KeyError: 0，campaign 建不出来
     conn = FakeConn()
+    conn.cur.fetchone_queue.append((1,))   # 发件邮箱前置检查：租户层命中
     conn.cur.fetchone_queue.append((42,))
     monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
     monkeypatch.setattr(lead_db, "campaign_dir", lambda t, c: tmp_path / "ws")
@@ -261,6 +262,45 @@ def test_cmd_init_reads_returning_id_as_tuple(monkeypatch, tmp_path, capsys):
     assert "campaign created: id=42" in out
     # INSERT 后必须显式 commit（get_db_connection 退出时无条件 rollback）
     assert conn.commits == 1
+
+
+def test_cmd_init_fail_fast_without_mailbox(monkeypatch, capsys):
+    # 2026-10-27 trace 实证：未配置发件邮箱时整个流程走完才在发送阶段暴露。
+    # init 必须前置校验并拒绝创建（不 INSERT、不建目录）
+    conn = FakeConn()
+    conn.cur.fetchone_queue.append(None)   # 用户层无
+    conn.cur.fetchone_queue.append(None)   # 租户层无
+    monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
+    args = type("A", (), {"name": "c", "brief_file": None, "target_region": "",
+                          "send_mode": "review", "daily_limit": 20,
+                          "reply_mailbox": None})()
+    assert lead_db.cmd_init(args) == 1
+    out = capsys.readouterr().out
+    assert "尚未配置发件邮箱" in out
+    assert conn.commits == 0
+    # INSERT 未执行（前两条是邮箱检查 SELECT）
+    assert not any("INSERT INTO bs_ai_lead_gen_campaigns" in sql
+                   for sql, _ in conn.cur.executed)
+
+
+def test_add_email_draft_invalid_contact_lists_valid_ids(monkeypatch, tmp_path, capsys):
+    # 2026-10-27 trace 实证：LLM 盲猜 contact_id 连续 not found 空转。
+    # 报错必须回带本 campaign 有效 contact ID 清单
+    conn = FakeConn()
+    conn.cur.fetchone_queue.append(campaign_row(3))  # get_campaign 命中
+    conn.cur.fetchone_queue.append(None)   # contact 未命中
+    conn.cur.fetchall_queue.append([(5, "张三", "z@x.com"), (7, "李四", "l@y.com")])
+    monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
+    body = tmp_path / "body.txt"
+    body.write_text("hello", encoding="utf-8")
+    args = type("A", (), {"campaign_id": 3, "contact_id": 99, "subject_a": "a",
+                          "subject_b": "b", "body_file": str(body),
+                          "ab_group": None})()
+    assert lead_db.cmd_add_email_draft(args) == 1
+    out = capsys.readouterr().out
+    assert "not found" in out
+    assert '"id": 5' in out and "z@x.com" in out
+    assert conn.commits == 0
 
 
 def test_show_campaign_group_counts_with_tuple_rows(monkeypatch, capsys):

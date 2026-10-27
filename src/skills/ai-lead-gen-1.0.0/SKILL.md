@@ -74,6 +74,11 @@ metadata:
 10. **数据库读写必须走 `lead_db.py`，禁止用 `python -c` 内联 SQL 直连数据库**。
    内联 SQL 绕过去重、闸门与配额校验（每公司联系人上限、职能判定），且不受
    可信身份校验保护。脚本执行报错时如实上报，由下一轮修正命令重试。
+11. **禁止猜测任何数据库 ID**（campaign_id / contact_id / email_id / lead_id）。
+   ID 只能来自本会话内命令的真实输出（init / add-contact / add-email-draft 的
+   stdout）或 `list-contacts` / `list-leads` 的查询结果。拿不到 ID 就先跑
+   `list-contacts` 查，报错信息里返回的有效 ID 清单直接取用，**不得编造连续
+   编号去试**——历史实测盲猜 ID 连续 10 次 not found 空转烧掉大量迭代。
 
 ## 脚本清单（经 skill_execute 调用，均需 --campaign-id）
 
@@ -126,6 +131,8 @@ python lead_db.py score / export / list-leads / list-contacts / show-campaign ..
 
 1. **需求澄清（brief）**：按 `assets/brief_template.md` 多轮澄清，产出 brief.md
    （产品/ICP/地域/决策人画像/CTA/数量），`lead_db.py init` 建 campaign 并存 brief。
+   `init` 会**前置校验发件邮箱**（个人邮箱或租户邮箱任一已配置）：未配置时拒绝创建
+   并提示先去配置——这是刻意的 fail-fast，不要绕过，先引导用户/管理员配好邮箱再重跑。
 2. **目标配置**：`set-target-config` 写入 contact_targets.json（目标职能/排除职能/产品一句话），
    三道闸门共用此口径。
 3. **客户名单检索**：用 web-search-pro `pipeline.py search "<关键词>" --extract --json`
@@ -137,8 +144,10 @@ python lead_db.py score / export / list-leads / list-contacts / show-campaign ..
    抓官网 contact/about/team 页与名录（snippet 优先抽取 + 掩码还原），
    `add-contact` 入库。闸门自动拒收：无关职能/公开窗口/guessed 低置信。
 6. **社媒兴趣分析**（可选）：用 `pipeline.py urls` 读公开商业内容，写入联系人 notes。
-7. **撰写邮件**：`add-email-draft` 逐联系人写针对性草稿（必写 subject_a/subject_b
+7. **撰写邮件**：先 `list-contacts` 取本 campaign 真实 contact ID 清单，再
+   `add-email-draft` 逐联系人写针对性草稿（必写 subject_a/subject_b
    两版，各 ≤35 字符只差一个变量；公司简称放签名不进主题行）。
+   contact_id 无效时报错会返回有效 ID 清单，直接取用，不要继续猜。
 8. **审阅闸门（review 模式）**：草稿置 approved 前必须经用户确认；
    auto 模式按 campaign 配置的定时任务自动推进，但本步闸门规则一致。
 9. **发送准备**：`domain_check.py` 体检 + `sender_profile.py` 确认发件身份 +

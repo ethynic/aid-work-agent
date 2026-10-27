@@ -250,8 +250,31 @@ def get_campaign(cur, tenant_id, campaign_id):
     return dict(zip(cols, row))
 
 
+def _mailbox_configured(cur, tenant_id, user_id):
+    """发件邮箱三层解析的存在性检查（与 mailbox_resolver 同口径，只查不解密）。"""
+    if user_id:
+        cur.execute(
+            "SELECT 1 FROM user_email_settings "
+            "WHERE user_id = %s AND status = 'active'", (user_id,))
+        if cur.fetchone():
+            return True
+    cur.execute(
+        "SELECT 1 FROM tenant_email_settings "
+        "WHERE tenant_id = %s AND status = 'active'", (tenant_id,))
+    return cur.fetchone() is not None
+
+
 def cmd_init(args):
     tenant_id, user_id = get_identity()
+    # 发件邮箱前置校验（fail-fast）：2026-10-27 trace 实证，未配置发件邮箱时
+    # 整个 campaign 走完检索/撰写流程到发送阶段才暴露，白白烧掉数十轮迭代。
+    # 这里在 campaign 创建前就拦下，先把邮箱配好再开工。
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
+        if not _mailbox_configured(cur, tenant_id, user_id):
+            print("ERROR: 尚未配置发件邮箱，暂不创建 campaign（避免整个流程走完才在发送阶段失败）。")
+            print("  请先在「邮箱设置」配置个人邮箱，或联系租户管理员在企业设置页配置租户邮箱，")
+            print("  配置完成后重新执行本命令。")
+            return 1
     brief = Path(args.brief_file).read_text(encoding="utf-8") if args.brief_file else ""
     send_mode = args.send_mode
     if send_mode not in VALID_SEND_MODE:
@@ -562,7 +585,20 @@ def cmd_add_email_draft(args):
             (args.contact_id, args.campaign_id))
         row = cur.fetchone()
         if not row:
+            # 2026-10-27 trace 实证：LLM 盲猜 contact_id 1--10 连续 not found 空转。
+            # 报错必须回带本 campaign 有效 contact ID，供下一轮直接取用，禁止再猜。
+            cur.execute(
+                "SELECT id, name, email FROM bs_ai_lead_gen_contacts "
+                "WHERE campaign_id = %s ORDER BY id LIMIT 20",
+                (args.campaign_id,))
+            valid = [{"id": r[0], "name": r[1], "email": r[2]}
+                     for r in cur.fetchall()]
             print(f"ERROR: contact {args.contact_id} not found in campaign {args.campaign_id}")
+            if valid:
+                print("valid contact ids (勿猜测，直接从中选用):")
+                print(json.dumps(valid, ensure_ascii=False))
+            else:
+                print("campaign has no contacts yet; run add-contact first")
             return 1
         contact_id, email, name = row
         ab_group = _pick_ab_group(email, args.ab_group)

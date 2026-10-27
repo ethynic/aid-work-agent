@@ -999,19 +999,24 @@ Follow the instructions in the skill above to complete the user's task."""
                 script_name = script_path.name
                 # 使用正斜杠路径（Python在Windows上支持正斜杠）
                 script_abs_path = script_path.absolute().as_posix()
-                
-                # 替换 scripts/script_name 格式
-                if f"scripts/{script_name}" in command:
-                    command = command.replace(
-                        f"scripts/{script_name}",
-                        script_abs_path
-                    )
-                # 替换 ./scripts/script_name 格式
-                if f"./scripts/{script_name}" in command:
-                    command = command.replace(
-                        f"./scripts/{script_name}",
-                        script_abs_path
-                    )
+
+                # scripts/xxx 或 ./scripts/xxx → 绝对路径。
+                # 负向断言 (?<!/) 防止二次拼接：命令已含完整绝对路径
+                # （/app/.../scripts/xxx）时，`scripts/xxx` 前面是 `/`，不再替换
+                # （否则拼出 /app/src/skills/<skill>//app/... 双前缀，2026-10-27 trace 实证）
+                command = re.sub(
+                    rf"(?<!/)(?:\./)?scripts/{re.escape(script_name)}",
+                    script_abs_path,
+                    command,
+                )
+                # 裸文件名 → 绝对路径：如 `python lead_db.py init`，避免解析到
+                # 临时会话 cwd 报 No such file（同 trace 实证）。
+                # 前面不是路径字符（含已替换出的绝对路径中的 `/`）才替换
+                command = re.sub(
+                    rf"(?<![\w./-]){re.escape(script_name)}\b",
+                    script_abs_path,
+                    command,
+                )
         
         # 替换文件变量
         for filename in context.files.keys():

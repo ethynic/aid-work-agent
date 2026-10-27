@@ -94,3 +94,117 @@ class TestWebSearchProSkill:
             assert not insufficient
         finally:
             sys.path.pop(0)
+
+
+class TestBaiduProxyAndWarmCookies:
+    """百度通道渠道级代理 + cookie 预热（2026-10-27 风控治理）。"""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, monkeypatch):
+        sys.path.insert(0, str(SKILL_DIR / "scripts"))
+        monkeypatch.syspath_prepend(str(SKILL_DIR / "scripts"))
+        import web_search
+        self.ws = web_search
+        self.monkeypatch = monkeypatch
+        monkeypatch.setattr(web_search, "_baidu_warm_cookies", None)
+        monkeypatch.setattr(web_search, "BAIDU_PROXY", "http://u:p@127.0.0.1:18080")
+        yield
+        if sys.path[0] == str(SKILL_DIR / "scripts"):
+            sys.path.pop(0)
+
+    def test_channel_proxy_scope(self):
+        ws = self.ws
+        assert ws._channel_proxy("baidu") == ws.BAIDU_PROXY
+        assert ws._channel_proxy("baidu_m") == ws.BAIDU_PROXY
+        assert ws._channel_proxy("bing") is None
+        assert ws._channel_proxy("sogou") is None
+
+    def test_warm_cookies_cached_and_failure_tolerant(self):
+        ws = self.ws
+
+        class FakeClient:
+            def __init__(self, *a, **k):
+                self.cookies = {"BAIDUID": "abc123"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def get(self, *a, **k):
+                return None
+
+        self.monkeypatch.setattr(ws, "_client", lambda *a, **k: FakeClient())
+        assert ws._warm_baidu_cookies() == {"BAIDUID": "abc123"}
+        # 二次调用走缓存，不再发请求
+        assert ws._warm_baidu_cookies() == {"BAIDUID": "abc123"}
+
+        # 预热失败不抛异常，返回空 dict
+        self.monkeypatch.setattr(ws, "_baidu_warm_cookies", None)
+
+        def boom(*a, **k):
+            raise RuntimeError("down")
+
+        self.monkeypatch.setattr(ws, "_client", boom)
+        self.monkeypatch.setattr(ws, "_baidu_warm_cookies", None)
+        assert ws._warm_baidu_cookies() == {}
+
+    def test_proxy_fallback_to_direct_on_proxy_error(self):
+        """代理连接失败时回落直连，且 errors 如实记录。"""
+        ws = self.ws
+        calls = []
+
+        class FakeResp:
+            def raise_for_status(self):
+                return None
+
+            @property
+            def encoding(self):
+                return "utf-8"
+
+            @property
+            def text(self):
+                return "<html><body>page</body></html>"
+
+        def fake_fetch(url, verify=True, headers=None, proxy=None, cookies=None):
+            calls.append({"url": url, "proxy": proxy, "cookies": cookies})
+            if proxy:
+                raise ws.httpx.ProxyError("tunnel down")
+            return FakeResp().text
+
+        self.monkeypatch.setattr(ws, "fetch_raw", fake_fetch)
+        self.monkeypatch.setattr(ws, "_warm_baidu_cookies",
+                                 lambda verify=True, proxy=None: {"BAIDUID": "t"})
+
+        class _T:
+            time = ws.time.time
+            sleep = staticmethod(lambda s: None)
+
+        self.monkeypatch.setattr(ws, "time", _T)
+        res = ws.search("测试关键词", limit=3, engine="baidu")
+        # 至少一次走代理（抛错）+ 一次直连
+        assert any(c["proxy"] == ws.BAIDU_PROXY for c in calls)
+        assert any(c["proxy"] is None for c in calls)
+        # 回落有记录
+        assert any("回落直连" in e for e in res.get("errors", []))
+        # 百度通道请求携带预热 cookie
+        assert all(c["cookies"] for c in calls)
+
+    def test_non_baidu_channel_no_proxy_no_cookies(self):
+        ws = self.ws
+        calls = []
+
+        def fake_fetch(url, verify=True, headers=None, proxy=None, cookies=None):
+            calls.append({"proxy": proxy, "cookies": cookies})
+            return "<html><body>x</body></html>"
+
+        self.monkeypatch.setattr(ws, "fetch_raw", fake_fetch)
+
+        class _T:
+            time = ws.time.time
+            sleep = staticmethod(lambda s: None)
+
+        self.monkeypatch.setattr(ws, "time", _T)
+        ws.search("test keyword", limit=3, engine="bing")
+        assert calls and all(c["proxy"] is None and c["cookies"] is None for c in calls)
