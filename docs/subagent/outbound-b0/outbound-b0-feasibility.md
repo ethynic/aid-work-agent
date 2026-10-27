@@ -2,8 +2,8 @@
 
 > 日期：2026-07-21
 > 阶段：巡检商机 B0（M-巡检1 门槛任务）
-> 上级设计：[social-media-marketing-agent-design.md](social-media-marketing-agent-design.md) §7 / §14
-> 开发计划：[social-media-marketing-agent-dev-plan.md](social-media-marketing-agent-dev-plan.md) §5 B0
+> 上级设计：[social-media-marketing-agent-design.md](../social-media-marketing/social-media-marketing-agent-design.md) §7 / §14
+> 开发计划：[social-media-marketing-agent-dev-plan.md](../social-media-marketing/social-media-marketing-agent-dev-plan.md) §5 B0
 
 ## 0. 结论速览
 

@@ -2,7 +2,7 @@
 
 > 日期：2026-07-21
 > 状态：已落地（`src/background_runner.py` + `docker-compose.{prod,test,dev,local}.yml` 的 `aid-agent-background` 服务）
-> 关联消费方：[S1 发布调度执行框架](../system/digital-employee/publish-dispatcher-design.md)
+> 关联消费方：[S1 发布调度执行框架](../system/publish-dispatcher-design.md)
 
 ## 1. 背景与目标
 
@@ -104,7 +104,7 @@ S1 的 `PublishJobDispatcher` **注册到 background runner 的 APScheduler**（
 
 - `src/background_runner.py`：初始化资源 → `scheduled_task_manager.start()` → 在 `_register_system_jobs` 新增 `PublishJobDispatcher` interval 任务。
 - `main.py` lifespan：移除 `scheduled_task_manager.start()`（mode gating 后 worker 不启动）。
-- 对应更新 [publish-dispatcher-design.md](../system/digital-employee/publish-dispatcher-design.md) §8/§9。
+- 对应更新 [publish-dispatcher-design.md](../system/publish-dispatcher-design.md) §8/§9。
 
 ## 9. 配置
 

@@ -78,7 +78,7 @@
 
 ### S1 发布调度执行框架　⬜（内容/广告共用）
 
-> 详细设计：[publish-dispatcher-design.md](publish-dispatcher-design.md)（数据层零改动，纯 Dispatcher/Executor 代码）
+> 详细设计：[publish-dispatcher-design.md](../../system/publish-dispatcher-design.md)（数据层零改动，纯 Dispatcher/Executor 代码）
 
 - [ ] `PublishJobDispatcher`：APScheduler 每分钟扫描 `social_publish_jobs` 到期任务（promote SCHEDULED→QUEUED / recover 过期租约 / claim+execute）；
 - [ ] DB 原子领取（条件 UPDATE + lease_owner/lease_expires_at 租约），多 Worker 防重；

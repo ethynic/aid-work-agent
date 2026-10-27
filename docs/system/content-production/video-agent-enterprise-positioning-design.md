@@ -5,7 +5,7 @@
 > - [MVP 开发计划](../../plans/plan-video-gen-mvp.md)
 > - [工作日报调研](../../research/ai-agent-experience-daily-report-research.md)
 > - [组织知识沉淀调研](../../research/org-knowledge-sedimentation-research.md)
-> - [社媒营销智能体设计](../digital-employee/social-media-marketing-agent-design.md)
+> - [社媒营销智能体设计](../../subagent/social-media-marketing/social-media-marketing-agent-design.md)
 >
 > 创建日期：2026-08-06
 > 状态：📋 待评审
@@ -661,7 +661,7 @@ C 端看似便宜，但企业用 C 端工具的隐藏成本：
 
 - [工作日报调研](../../research/ai-agent-experience-daily-report-research.md)：Phase 3 协同落地，视频产出作为日报核心指标之一。
 - [组织知识沉淀调研](../../research/org-knowledge-sedimentation-research.md)：Phase 1-2 协同落地，提示词库作为组织知识沉淀的首个场景。
-- [社媒营销智能体](../digital-employee/social-media-marketing-agent-design.md)：Phase 5 协同落地，发布回流数据反哺提示词库。
+- [社媒营销智能体](../../subagent/social-media-marketing/social-media-marketing-agent-design.md)：Phase 5 协同落地，发布回流数据反哺提示词库。
 
 ---
 

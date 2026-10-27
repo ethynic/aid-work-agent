@@ -136,7 +136,7 @@ context:
 
 ### 添加业务页面
 
-详细设计见 [page-metadata-registry-design.md](../../docs/system/digital-employee/page-metadata-registry-design.md)。
+详细设计见 [page-metadata-registry-design.md](../../docs/system/page-metadata-registry-design.md)。
 
 开发一个新的业务数据页面，按以下顺序操作：
 
