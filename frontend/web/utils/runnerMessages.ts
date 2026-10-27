@@ -15,8 +15,9 @@ export function progressMessages(values: Record<string, unknown>[] | undefined, 
     const name = String(value.displayName || value.toolName || '')
     let content = String(value.content || value.data || '')
     if (type === 'tool_start' && !content) content = `🔧 需要调用工具【${name}】`
-    if (type === 'tool_result' && !content) content = value.success ? `✅ 【${name}】执行完成` : `❌ ${name}执行失败`
-    if (type === 'progress' && /^(🔧\s*正在执行|✅\s*.+执行完成$)/.test(content.trim())) return []
+    if (type === 'tool_result' && !content) content = value.success ? `✅ 【${name}】执行完成` : `${name}未完成`
+    // 冗余进度和失败预览只留后端日志：界面由中性工具结果承接，避免大段错误细节
+    if (type === 'progress' && /^(🔧\s*正在执行|✅\s*.+执行完成$|❌)/.test(content.trim())) return []
     return [{ type, content, timestamp: time(value.timestamp, timestamp),
       toolName: value.toolName as string | undefined, displayName: value.displayName as string | undefined,
       toolCallId: value.toolCallId as string | undefined, toolArgs: value.toolArgs as object | undefined,
@@ -84,7 +85,7 @@ export function runnerMessages(row: RunnerView): ChatMessage[] {
   }
   if (['completed', 'failed', 'cancelled'].includes(row.status) && !details.progressMessages?.some(item => ['complete', 'error'].includes(item.type))) {
     details.progressMessages?.push({ type: row.status === 'completed' ? 'complete' : 'error', timestamp: finished,
-      content: row.status === 'completed' ? '✅ 任务完成' : row.status === 'cancelled' ? '⚠️ 已停止' : `❌ ${row.result?.error_code || '执行失败'}` })
+      content: row.status === 'completed' ? '✅ 任务完成' : row.status === 'cancelled' ? '已停止' : '任务未完成' })
   }
   const inputs = snapshot.supplementalInputs || []
   const additions: ChatMessage[] = []

@@ -1195,8 +1195,11 @@ export function useAgent() {
         // onProgress - 工具执行进度，仅添加到执行详情
         (data) => {
           // 过滤冗余进度：工具开始/完成已有专门事件（tool_start/tool_result），
-          // 后端额外推送的「正在执行...」和「...执行完成」会重复刷屏，这里静默丢弃。
-          if (/^(🔧\s*正在执行|✅\s*.+执行完成$)/.test(data.trim())) {
+          // 后端额外推送的「正在执行...」「...执行完成」会重复刷屏，这里静默丢弃。
+          // 失败预览（❌ 开头，常含堆栈/日志）只写 console，界面由工具结果的中性状态承接。
+          const trimmed = data.trim()
+          if (/^(🔧\s*正在执行|✅\s*.+执行完成$|❌)/.test(trimmed)) {
+            if (trimmed.startsWith('❌')) console.warn('[Agent progress]', data)
             return
           }
           addProgress(state, data, 'progress')
