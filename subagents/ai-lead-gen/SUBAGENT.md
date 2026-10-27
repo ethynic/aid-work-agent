@@ -26,6 +26,7 @@ tools:
 skills:
   allowed:
     - ai-lead-gen
+    - web-search-pro
 
 context:
   max_input_tokens: 8000

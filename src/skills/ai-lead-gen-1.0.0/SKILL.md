@@ -25,7 +25,9 @@ metadata:
 联系人清单和个性化外联邮件，并完成发送与回复跟进。
 
 本技能是**编排层**：决定搜什么、爬哪个 URL、按什么口径判、怎么写邮件、怎么发。
-实际检索与爬取**委托外层智能体**用 `web_search` / `web_fetch` 工具执行（见下文委托协议）。
+实际检索与爬取按**降级链**委托执行：**默认直接用 `web-search-pro` 技能的
+`pipeline.py --extract` 管线**（检索+抓页+邮箱/电话抽取一站式，零 LLM 消耗）；
+平台 `web_search` / `web_fetch` 工具仅在管线全通道失败时兜底（见下文委托协议）。
 
 ## 数据与身份（本系统改造点，与原包差异必读）
 
@@ -107,9 +109,18 @@ python lead_db.py score / export / list-leads / list-contacts / show-campaign ..
 
 1. 用 `SEARCH_TASK` / `SCRAPE_TASK` 的 JSON 结构明确写出要搜什么 / 爬哪个 URL /
    按什么口径判（格式见 `references/retrieval-layer.md`）。
-2. 委托外层智能体：用 `web_search` 执行 `SEARCH_TASK`、用 `web_fetch` 执行
-   `SCRAPE_TASK`，结果贴回后本技能继续消费（判相关性 -> 入库）。
+2. 按降级链委托执行：
+   - **第一级（默认通道）**：`web-search-pro` 技能——**以 skill_name=web-search-pro
+     发起 skill_execute**，跑 `python scripts/pipeline.py search "<query>" --extract --json`
+     （名单检索/联系人挖掘一站式完成：检索→抓页→snippet 优先抽取邮箱/电话→掩码还原；
+     纯 HTTP 零 LLM 消耗，且不再把大段搜索摘要灌进对话上下文）。
+     不要在本技能的 skill_execute 里写这些命令——scripts/ 会被替换成本技能目录；
+   - **第二级（兜底）**：平台 `web_search`（web-search-pro 全通道失败时换通道搜摘要）、
+     `web_fetch`（直读已知 URL 补抓单页）；
+   - 两级都失败：换关键词/引擎重试一次，仍失败则如实上报，不编造。
 3. 多个独立搜索任务可并行委托；每轮委托都要带上相关性判定口径。
+4. **禁止用平台 `web_search` 做常规名单检索/联系人挖掘**——它只返回摘要且每次调用
+   计费，历史实测 23 次搜索仅换 4 个邮箱；仅在 web-search-pro 全通道失败时兜底使用。
 
 ## 全流程 11 步
 
@@ -117,13 +128,15 @@ python lead_db.py score / export / list-leads / list-contacts / show-campaign ..
    （产品/ICP/地域/决策人画像/CTA/数量），`lead_db.py init` 建 campaign 并存 brief。
 2. **目标配置**：`set-target-config` 写入 contact_targets.json（目标职能/排除职能/产品一句话），
    三道闸门共用此口径。
-3. **客户名单检索**：委托 `web_search`（按目标国家/地区选当地引擎与行业名录关键词），
+3. **客户名单检索**：用 web-search-pro `pipeline.py search "<关键词>" --extract --json`
+   （按目标国家/地区选当地引擎与行业名录关键词，挖名单加 `--companies-only`），
    结果过相关性判定后 `add-lead` 入库（自动按公司名/官网去重）。
-4. **官网定位与筛选**：委托 `web_fetch` 核验官网有效性，打分（score）并
-   `set-status` 标 qualified/rejected（带 reject_reason）。
-5. **联系人挖掘**：委托 `web_fetch` 抓官网 contact/about/team 页与名录，
+4. **官网定位与筛选**：用 `pipeline.py search "公司名"` 或 `urls` 模式核验官网有效性，
+   打分（score）并 `set-status` 标 qualified/rejected（带 reject_reason）。
+5. **联系人挖掘**：用 `pipeline.py urls "官网首页,contact页,about页" --extract --json`
+   抓官网 contact/about/team 页与名录（snippet 优先抽取 + 掩码还原），
    `add-contact` 入库。闸门自动拒收：无关职能/公开窗口/guessed 低置信。
-6. **社媒兴趣分析**（可选）：委托 `web_fetch` 读公开商业内容，写入联系人 notes。
+6. **社媒兴趣分析**（可选）：用 `pipeline.py urls` 读公开商业内容，写入联系人 notes。
 7. **撰写邮件**：`add-email-draft` 逐联系人写针对性草稿（必写 subject_a/subject_b
    两版，各 ≤35 字符只差一个变量；公司简称放签名不进主题行）。
 8. **审阅闸门（review 模式）**：草稿置 approved 前必须经用户确认；

@@ -1,9 +1,9 @@
 # b2b-lead-gen 依赖
 # 安装：pip install -r requirements.txt
 
-# 注意（v3.0.0）：搜索与爬取已剥离为独立技能 web-search / web-scrape，
-# 本技能不再自带 web_search.py / site_probe.py，故不再需要 httpx/bs4/lxml。
-# 检索/爬取所需依赖请见 web-search / web-scrape 技能各自的 requirements.txt。
+# 注意（v3.0.0）：搜索与爬取已剥离为独立技能 web-search-pro，
+# 本技能不自带检索脚本，故不再需要 httpx/bs4/lxml。
+# 检索/爬取所需依赖见 web-search-pro 技能的 requirements.txt。
 
 # 可选：提高 SMTP 稳定性（scripts/send_emails.py 不强制依赖，缺失时回退 smtplib）
 # aiosmtplib>=3.0

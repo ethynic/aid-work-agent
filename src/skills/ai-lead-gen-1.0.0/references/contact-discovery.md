@@ -20,9 +20,9 @@
 公开窗口和无关职能邮箱不算 —— 发过去既浪费额度，又拉低回复率，还可能因
 「骚扰无关部门」被举报。
 
-> **判定由 `email_rules.py` 统一负责**（本技能与 `web-scrape` 技能各打包一份，
-> 同一套口径）。采集（web-scrape 的 `site_probe.py`）、入库（`lead_db.py`）、
-> 发送（`send_emails.py`）、验证（`email_verify.py`）共用同一套口径，不各自为政。
+> **判定由 `email_rules.py` 统一负责**。采集（`web-search-pro` 技能的抽取管线）、
+> 入库（`lead_db.py`）、发送（`send_emails.py`）、验证（`email_verify.py`）
+> 共用同一套口径，不各自为政。
 
 判定分三个正交维度：
 
@@ -63,7 +63,7 @@
 
 | 闸门 | 位置 | 行为 |
 |---|---|---|
-| 采集 | `web-scrape` 技能（`site_probe.py`） | 无关职能邮箱直接剔除并单独报告；公开窗口保留在报告里但**不写进 contacts.csv** |
+| 采集 | `web-search-pro` 技能（`pipeline.py --extract`） | 无关职能邮箱直接剔除并单独报告；公开窗口保留在报告里但**不写进联系人库** |
 | 入库 | `lead_db.py add-contact` | `irrelevant` 与 `generic` 一律拒收，打印原因并提示继续找 |
 | 发送 | `send_emails.py` | 干跑阶段标 `BLOCK`；正式发送阶段**硬跳过**，不占用发送配额 |
 
@@ -89,7 +89,7 @@
 
 ### 什么算「官网没找到」
 
-`web-scrape` 技能（`site_probe.py`）会明确报出这三种情况，**都不是 no_email**：
+`web-search-pro` 技能的抽取管线会明确报出这三种情况，**都不是 no_email**：
 
 | 情况 | 脚本信号 | 该怎么办 |
 |---|---|---|
