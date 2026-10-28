@@ -5814,6 +5814,8 @@ CREATE TABLE IF NOT EXISTS bs_ai_lead_gen_replies (
     intent TEXT,
     intent_summary TEXT,
     notified BOOLEAN DEFAULT FALSE,
+    message_id TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_bs_ailg_replies_campaign ON bs_ai_lead_gen_replies(campaign_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_bs_ailg_replies_tenant_message ON bs_ai_lead_gen_replies(tenant_id, message_id) WHERE message_id IS NOT NULL;

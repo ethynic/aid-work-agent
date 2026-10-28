@@ -1,7 +1,8 @@
 """AI获客技能（ai-lead-gen-1.0.0）单元测试。
 
-覆盖：lead_db 身份/去重/五表建表/联系人入库闸门、mailbox_resolver 三层解析、
-send_emails 的 cfg 构建/结果回写/主题与限额纯函数。数据库一律 mock（FakeConn）。
+覆盖：lead_db 身份/去重/五表建表/联系人入库闸门、P2 定时任务绑定与每日汇总、
+mailbox_resolver 三层解析、send_emails 的 cfg 构建/结果回写/主题与限额纯函数、
+reply_monitor 归属/意图解析纯函数、leadgen 通知事件渲染。数据库一律 mock（FakeConn）。
 """
 
 import importlib.util
@@ -16,6 +17,7 @@ sys.path.insert(0, str(SKILL_DIR))
 
 import lead_db  # noqa: E402
 import mailbox_resolver  # noqa: E402
+import reply_monitor  # noqa: E402
 import send_emails  # noqa: E402
 from psycopg2.extras import NamedTupleCursor  # noqa: E402
 
@@ -77,9 +79,11 @@ class FakeConn:
         return False
 
 
-def campaign_row(campaign_id=7):
-    # get_campaign 列序：id, campaign_name, send_mode, status, daily_limit, reply_mailbox, brief
-    return (campaign_id, "测试活动", "review", "draft", 25, None, "brief")
+def campaign_row(campaign_id=7, scheduler_task_id=None):
+    # get_campaign 列序：id, campaign_name, send_mode, status, daily_limit,
+    # reply_mailbox, brief, user_id, scheduler_task_id
+    return (campaign_id, "测试活动", "review", "draft", 25, None, "brief",
+            "user_test", scheduler_task_id)
 
 
 @pytest.fixture(autouse=True)
@@ -233,7 +237,8 @@ def test_get_campaign_cursor_semantics():
     # （lead_db 各子命令、send_emails.main 的 campaign 读取）都必须传 NamedTupleCursor
     conn = FakeConn()
     conn.cur.columns = ["id", "campaign_name", "send_mode", "status",
-                        "daily_limit", "reply_mailbox", "brief"]
+                        "daily_limit", "reply_mailbox", "brief", "user_id",
+                        "scheduler_task_id"]
     conn.cur.fetchone_queue.append(campaign_row())
 
     campaign = lead_db.get_campaign(
@@ -495,3 +500,350 @@ def test_subagent_md_loadable():
     assert "skills:" in parts[1] and "ai-lead-gen" in parts[1]
     assert "AI获客" in parts[2]
     assert "system_prompt:" not in parts[1]
+
+
+# ---------- P2：bind/unbind scheduler（auto 模式） ----------
+
+def test_cmd_bind_scheduler_switches_to_auto(monkeypatch):
+    conn = FakeConn()
+    conn.cur.fetchone_queue.append(campaign_row(scheduler_task_id=None))
+    conn.cur.fetchone_queue.append(("task-1", "tenant_test", "user_test", "active"))
+    monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
+    args = type("A", (), {"campaign_id": 7, "task_id": "task-1"})()
+    assert lead_db.cmd_bind_scheduler(args) == 0
+    updates = [(s, p) for s, p in conn.cur.executed
+               if s.startswith("UPDATE bs_ai_lead_gen_campaigns")]
+    assert updates and updates[0][1][0] == "task-1"
+    assert "send_mode = 'auto'" in updates[0][0]
+    assert conn.commits == 1
+
+
+def test_cmd_bind_scheduler_rejects_cancelled_task(monkeypatch, capsys):
+    conn = FakeConn()
+    conn.cur.fetchone_queue.append(campaign_row())
+    conn.cur.fetchone_queue.append(("task-1", "tenant_test", "user_test", "cancelled"))
+    monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
+    args = type("A", (), {"campaign_id": 7, "task_id": "task-1"})()
+    assert lead_db.cmd_bind_scheduler(args) == 1
+    assert not any(s.startswith("UPDATE") for s, _ in conn.cur.executed)
+    assert conn.commits == 0
+
+
+def test_cmd_bind_scheduler_rejects_foreign_user(monkeypatch):
+    # 任务属主与执行用户不匹配时拒绝绑定（防同租户内绑错他人任务）
+    conn = FakeConn()
+    conn.cur.fetchone_queue.append(campaign_row())
+    conn.cur.fetchone_queue.append(("task-1", "tenant_test", "user_other", "active"))
+    monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
+    args = type("A", (), {"campaign_id": 7, "task_id": "task-1"})()
+    with pytest.raises(SystemExit):
+        lead_db.cmd_bind_scheduler(args)
+    assert not any(s.startswith("UPDATE") for s, _ in conn.cur.executed)
+    assert conn.commits == 0
+
+
+def test_cmd_bind_scheduler_activates_paused_task(monkeypatch):
+    # paused 任务绑定后若不激活，send_mode=auto 但任务静默不跑
+    conn = FakeConn()
+    conn.cur.fetchone_queue.append(campaign_row())
+    conn.cur.fetchone_queue.append(("task-1", "tenant_test", "user_test", "paused"))
+    monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
+    args = type("A", (), {"campaign_id": 7, "task_id": "task-1"})()
+    assert lead_db.cmd_bind_scheduler(args) == 0
+    scheduled = [(s, p) for s, p in conn.cur.executed
+                 if s.startswith("UPDATE scheduled_tasks")]
+    assert scheduled and "status = 'active'" in scheduled[0][0]
+    assert scheduled[0][1][1] == "task-1"
+    assert conn.commits == 1
+
+
+def test_cmd_unbind_scheduler_pauses_task(monkeypatch):
+    conn = FakeConn()
+    conn.cur.fetchone_queue.append(campaign_row(scheduler_task_id="task-1"))
+    conn.cur.fetchone_queue.append(("tenant_test", "user_test"))
+    monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
+    args = type("A", (), {"campaign_id": 7, "cancel": False})()
+    assert lead_db.cmd_unbind_scheduler(args) == 0
+    updates = [(s, p) for s, p in conn.cur.executed if s.startswith("UPDATE")]
+    assert updates[0][1][0] == "paused"                     # scheduled_tasks 置 paused
+    assert updates[1][1][0] is False                        # 不清除关联
+    assert "send_mode = 'review'" in updates[1][0]
+    assert conn.commits == 1
+
+
+def test_cmd_unbind_scheduler_cancel_clears_binding(monkeypatch):
+    conn = FakeConn()
+    conn.cur.fetchone_queue.append(campaign_row(scheduler_task_id="task-1"))
+    conn.cur.fetchone_queue.append(("tenant_test", "user_test"))
+    monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
+    args = type("A", (), {"campaign_id": 7, "cancel": True})()
+    assert lead_db.cmd_unbind_scheduler(args) == 0
+    updates = [(s, p) for s, p in conn.cur.executed if s.startswith("UPDATE")]
+    assert updates[0][1][0] == "cancelled"
+    assert updates[1][1][0] is True                         # scheduler_task_id 置 NULL
+
+
+def test_cmd_unbind_scheduler_without_binding_fails(monkeypatch, capsys):
+    conn = FakeConn()
+    conn.cur.fetchone_queue.append(campaign_row(scheduler_task_id=None))
+    monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
+    args = type("A", (), {"campaign_id": 7, "cancel": False})()
+    assert lead_db.cmd_unbind_scheduler(args) == 1
+    assert not any(s.startswith("UPDATE") for s, _ in conn.cur.executed)
+    assert conn.commits == 0
+
+
+def test_cmd_unbind_scheduler_rejects_foreign_user(monkeypatch):
+    # 与 bind 同口径：同租户内不能暂停/取消他人名下的定时任务
+    conn = FakeConn()
+    conn.cur.fetchone_queue.append(campaign_row(scheduler_task_id="task-1"))
+    conn.cur.fetchone_queue.append(("tenant_test", "user_other"))
+    monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
+    args = type("A", (), {"campaign_id": 7, "cancel": False})()
+    assert lead_db.cmd_unbind_scheduler(args) == 1
+    assert not any(s.startswith("UPDATE") for s, _ in conn.cur.executed)
+    assert conn.commits == 0
+
+
+# ---------- P2：每日汇总与通知 ----------
+
+SUMMARY_COUNTS = [(3,), (2,), (5,), (1,), (1,), (4,), (2,), (6,)]
+# 顺序：new_leads, new_contacts, emails_sent, emails_failed, emails_bounced,
+#       new_replies, interested_replies, awaiting_review
+
+
+def test_aggregate_daily_summary_counts():
+    conn = FakeConn()
+    conn.cur.fetchone_queue.extend(SUMMARY_COUNTS)
+    summary = lead_db.aggregate_daily_summary(
+        conn.cursor(NamedTupleCursor), 7, "2026-10-28")
+    assert summary == {
+        "summary_date": "2026-10-28", "new_leads": 3, "new_contacts": 2,
+        "emails_sent": 5, "emails_failed": 1, "emails_bounced": 1,
+        "new_replies": 4, "interested_replies": 2, "awaiting_review": 6,
+    }
+
+
+def test_cmd_daily_summary_builds_notification_params(monkeypatch, capsys):
+    conn = FakeConn()
+    conn.cur.fetchone_queue.append(campaign_row())
+    conn.cur.fetchone_queue.extend(SUMMARY_COUNTS)
+    captured = {}
+
+    def fake_publish(tenant_id, user_id, event_type, parameters,
+                     campaign_id, event_key, ttl_seconds=7 * 86400):
+        captured.update(t=tenant_id, u=user_id, et=event_type, p=parameters,
+                        cid=campaign_id, k=event_key, ttl=ttl_seconds)
+        return "ref-1"
+
+    monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
+    monkeypatch.setattr(lead_db, "publish_leadgen_notification", fake_publish)
+    args = type("A", (), {"campaign_id": 7, "date": "2026-10-28", "notify": True})()
+    assert lead_db.cmd_daily_summary(args) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["new_leads"] == 3 and out["awaiting_review"] == 6
+    assert captured["et"] == "leadgen.daily_summary"
+    assert captured["p"]["campaign_name"] == "测试活动"
+    assert captured["p"]["summary_date"] == "2026-10-28"
+    assert captured["k"].startswith("leadgen:daily:7:2026-10-28")
+    assert captured["ttl"] == 30 * 86400
+
+
+def test_publish_leadgen_notification_fails_soft(monkeypatch, capsys):
+    # 通知是增强不是闸门：notifications 模块不可用时只告警不抛出
+    import builtins
+    real_import = builtins.__import__
+
+    def broken_import(name, *a, **k):
+        if name.startswith("src.notifications"):
+            raise RuntimeError("notifications unavailable")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", broken_import)
+    params = {"campaign_name": "c", "summary_date": "2026-10-28",
+              "new_leads": 0, "new_contacts": 0, "emails_sent": 0,
+              "emails_failed": 0, "emails_bounced": 0, "new_replies": 0,
+              "interested_replies": 0, "awaiting_review": 0}
+    ref = lead_db.publish_leadgen_notification(
+        "tenant_test", "user_test", "leadgen.daily_summary", params, 7, "k")
+    assert ref is None
+    assert "WARN" in capsys.readouterr().out
+
+
+# ---------- P2：reply_monitor 纯函数 ----------
+
+def test_norm_message_id():
+    assert reply_monitor.norm_message_id("<abc@x.com>") == "abc@x.com"
+    assert reply_monitor.norm_message_id("  <a@b.c>  ") == "a@b.c"
+    assert reply_monitor.norm_message_id(None) == ""
+    assert reply_monitor.norm_message_id("") == ""
+
+
+def test_extract_reply_chain():
+    ids = reply_monitor.extract_reply_chain(
+        "<a@x.com>", "<root@x.com> <a@x.com>")
+    assert ids == ["a@x.com", "root@x.com"]          # 去重且保序
+    assert reply_monitor.extract_reply_chain(None, None) == []
+    # 少数客户端的裸 Message-ID（无尖括号）
+    bare = reply_monitor.extract_reply_chain("abc@x.com", None)
+    assert bare == ["abc@x.com"]
+
+
+def test_parse_intent_response_json():
+    content = '{"intent": "interested", "summary": "客户想了解报价"}'
+    assert reply_monitor.parse_intent_response(content) == ("interested", "客户想了解报价")
+    # 带前后噪音也能抽出 JSON
+    noisy = '好的，判定如下：{"intent": "refused", "summary": "要求停止联系"} 请知悉'
+    assert reply_monitor.parse_intent_response(noisy) == ("refused", "要求停止联系")
+
+
+def test_parse_intent_response_fallbacks():
+    # 非法 JSON 降级为 token 匹配
+    assert reply_monitor.parse_intent_response("intent: info_request")[0] == "info_request"
+    # 空 / 全无法识别 -> unclear
+    assert reply_monitor.parse_intent_response("")[0] == "unclear"
+    assert reply_monitor.parse_intent_response(None) == ("unclear", "自动判定无输出")
+    intent, summary = reply_monitor.parse_intent_response("看不懂说什么")
+    assert intent == "unclear" and summary == "看不懂说什么"
+
+
+def test_decide_actions():
+    assert reply_monitor.decide_actions("interested") == (True, False)
+    assert reply_monitor.decide_actions("info_request") == (True, False)
+    assert reply_monitor.decide_actions("refused") == (False, True)
+    assert reply_monitor.decide_actions("irrelevant") == (False, True)
+    assert reply_monitor.decide_actions("unclear") == (False, False)
+
+
+def _reply_msg(plain=None, html=None):
+    # 真实邮件按 bytes 解析；str 构造下非 ASCII payload 会被 raw-unicode-escape 损坏
+    parts = []
+    if plain is not None:
+        parts.append(('Content-Type: text/plain; charset="utf-8"\n\n' + plain).encode("utf-8"))
+    if html is not None:
+        parts.append(('Content-Type: text/html; charset="utf-8"\n\n' + html).encode("utf-8"))
+    boundary = "BOUND"
+    head = (f"Content-Type: multipart/alternative; boundary=\"{boundary}\"\n\n").encode("utf-8")
+    sep = f"\n--{boundary}\n".encode("utf-8")
+    tail = f"\n--{boundary}--\n".encode("utf-8")
+    import email as email_mod
+    return email_mod.message_from_bytes(head + b"".join(sep + p for p in parts) + tail)
+
+
+def test_pick_text_body_prefers_plain_and_strips_html():
+    msg = _reply_msg(plain="纯文本正文", html="<p>HTML</p>")
+    assert reply_monitor.pick_text_body(msg) == "纯文本正文"
+    html_only = _reply_msg(html="<p>你好</p><style>x{}</style><script>y()</script>")
+    assert "你好" in reply_monitor.pick_text_body(html_only)
+    assert "<p>" not in reply_monitor.pick_text_body(html_only)
+    assert "y()" not in reply_monitor.pick_text_body(html_only)
+
+
+def test_decode_mime_header_chinese():
+    raw = "=?utf-8?b?" + __import__("base64").b64encode("报价咨询".encode()).decode() + "?="
+    assert reply_monitor.decode_mime_header(raw) == "报价咨询"
+    assert reply_monitor.decode_mime_header(None) == ""
+
+
+def test_append_unsubscribed_dedup(tmp_path):
+    reply_monitor.append_unsubscribed(tmp_path, "A@x.com", "reply_refused")
+    reply_monitor.append_unsubscribed(tmp_path, "a@x.com", "reply_refused")  # 大小写去重
+    import csv
+    with open(tmp_path / "unsubscribed.csv", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 1
+    assert rows[0]["email"] == "a@x.com" and rows[0]["reason"] == "reply_refused"
+
+
+def test_attribute_header_message_id_priority_and_fallback():
+    email_by_mid = {"abc@x.com": 11}
+    contact_by_email = {"john@acme.com": {"contact_id": 5, "name": "John",
+                                          "lead_id": 9, "company": "Acme"}}
+    # In-Reply-To 命中已发 message_id 优先（即使发件人也是联系人）
+    h = {"in_reply_to": "<abc@x.com>", "references": "", "from_addr": "john@acme.com"}
+    assert reply_monitor.attribute_header(h, email_by_mid, contact_by_email) == \
+        {"matched_by": "message_id", "email_id": 11}
+    # 链上无命中 -> 退化为发件人邮箱匹配联系人
+    h2 = {"in_reply_to": "<unknown@x.com>", "references": "", "from_addr": "john@acme.com"}
+    attr2 = reply_monitor.attribute_header(h2, email_by_mid, contact_by_email)
+    assert attr2["matched_by"] == "from_email" and attr2["contact_id"] == 5
+    # 两者皆未命中 -> 非本 campaign 回复
+    h3 = {"in_reply_to": "", "references": "", "from_addr": "nobody@z.com"}
+    assert reply_monitor.attribute_header(h3, email_by_mid, contact_by_email) is None
+
+
+def test_judge_intent_failure_degrades_to_none(monkeypatch):
+    # P1 复审修复：LLM 异常降级 (None, 原因)——intent 保持 NULL 供下轮补判，
+    # 不抛异常回滚整批事务
+    monkeypatch.setitem(sys.modules, "src.llm.gateway", None)
+    monkeypatch.setitem(sys.modules, "src.services.session_record", None)
+    intent, summary = reply_monitor.judge_intent(
+        "tenant_test", "user_test", "a@b.c", "subject", "body")
+    assert intent is None
+    assert "自动判定失败" in summary
+
+
+def test_parse_received_converts_timezone_and_falls_back():
+    from datetime import datetime as dt_mod
+    # 带时区的 RFC Date：转本地时区后仍是合法时间字符串（避免按日聚合跨日偏移）
+    out = reply_monitor._parse_received("Tue, 28 Oct 2026 10:00:00 +0800")
+    dt_mod.strptime(out, "%Y-%m-%d %H:%M:%S")
+    # 无时区 naive 日期原样落库
+    out2 = reply_monitor._parse_received("Tue, 28 Oct 2026 10:00:00")
+    assert out2 == "2026-10-28 10:00:00"
+    # 解析失败兜底当前时间
+    assert reply_monitor._parse_received("garbage")
+
+
+# ---------- P2：通知事件注册与渲染 ----------
+
+class TestLeadgenNotificationEvents:
+    def _intent_params(self, **overrides):
+        base = dict(campaign_name="美国卫浴开发", company_name="Acme Ltd",
+                    contact_name="John", contact_email="john@acme.com",
+                    intent="interested", intent_summary="想了解报价与样品")
+        base.update(overrides)
+        return base
+
+    def _summary_params(self, **overrides):
+        base = dict(campaign_name="美国卫浴开发", summary_date="2026-10-28",
+                    new_leads=3, new_contacts=2, emails_sent=5, emails_failed=1,
+                    emails_bounced=1, new_replies=4, interested_replies=2,
+                    awaiting_review=6)
+        base.update(overrides)
+        return base
+
+    def test_events_registered_with_campaign_resource(self):
+        from src.notifications.events import EVENTS
+        for et in ("leadgen.reply_intent", "leadgen.daily_summary"):
+            d = EVENTS.definitions[et]
+            assert d.resource_type == "leadgen_campaign"
+            assert d.template_key in ("leadgen_reply_intent", "leadgen_daily_summary")
+
+    def test_reply_intent_intent_literal_validated(self):
+        import pydantic
+        from src.notifications.events import LeadGenReplyIntentParameters
+        with pytest.raises(pydantic.ValidationError):
+            LeadGenReplyIntentParameters(**self._intent_params(intent="maybe"))
+        p = LeadGenReplyIntentParameters(**self._intent_params(intent="info_request"))
+        assert p.intent == "info_request"
+
+    def test_reply_intent_render(self):
+        from src.notifications.events import render_inbox_text
+        title, body = render_inbox_text(
+            "leadgen.reply_intent", self._intent_params())
+        assert title == "客户回复意向提醒"
+        assert "美国卫浴开发" in body and "有意向" in body
+        assert "john@acme.com" in body and "想了解报价与样品" in body
+
+    def test_daily_summary_render_with_awaiting_review(self):
+        from src.notifications.events import render_inbox_text
+        title, body = render_inbox_text("leadgen.daily_summary", self._summary_params())
+        assert title == "AI获客每日汇总"
+        assert "待审阅确认" in body
+
+    def test_daily_summary_render_no_awaiting_review(self):
+        from src.notifications.events import render_inbox_text
+        _, body = render_inbox_text(
+            "leadgen.daily_summary", self._summary_params(awaiting_review=0))
+        assert "待审阅" not in body

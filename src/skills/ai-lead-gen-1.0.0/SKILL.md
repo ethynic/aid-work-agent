@@ -91,6 +91,7 @@ metadata:
 | `domain_check.py` | SPF/DKIM/DMARC 域名体检 |
 | `email_verify.py` | 邮箱格式/MX 校验 |
 | `email_rules.py` | 职能相关性判定（三道闸门共用口径） |
+| `reply_monitor.py` | 回复监控：IMAP 轮询 -> 归属 -> 去重 -> LLM 意图判定 -> 意向通知/退订 |
 
 `lead_db.py` 子命令：
 
@@ -105,6 +106,9 @@ python lead_db.py add-email-draft --campaign-id ID --contact-id CID \
     --subject-a A --subject-b B --body-file F                          # 草稿（A/B 交替分组）
 python lead_db.py set-email-status --campaign-id ID --email-id EID --status S
 python lead_db.py export-send-queue --campaign-id ID                   # 生成 logs/send_queue.json
+python lead_db.py bind-scheduler --campaign-id ID --task-id TID        # 绑定每日循环定时任务并切 auto
+python lead_db.py unbind-scheduler --campaign-id ID [--cancel]         # 暂停(或取消)任务并切回 review
+python lead_db.py daily-summary --campaign-id ID [--date D] [--notify] # 当日汇总 JSON（--notify 发站内信）
 python lead_db.py score / export / list-leads / list-contacts / show-campaign ...
 ```
 
@@ -158,7 +162,46 @@ python lead_db.py score / export / list-leads / list-contacts / show-campaign ..
     （sent 含 message_id / failed / bounced），硬退信自动进退订名单。
 11. **回复跟进**：回信按 Reply-To 锚点归因到 campaign，LLM 判定意向
     （interested/info_request/refused/irrelevant/unclear），有意向通知用户；
-    负面回复自动进退订名单（回复监控链路见数字员工设计文档 §9）。
+    负面回复自动进退订名单。日常由回复监控定时任务跑 `reply_monitor.py`
+    完成（见下节）；对话中被问「有人回复了吗」时可直接执行一次
+    `reply_monitor.py --campaign-id ID` 实时拉取。
+
+## 定时任务与回复监控（auto 模式 / P2）
+
+### 每日循环任务（auto 发送编排）
+
+用户在系统「定时任务」中创建每日任务（建议上午执行一次），task_prompt 使用固定模板：
+
+```
+委派给 ai-lead-gen 数字员工执行获客活动 campaign_id={ID} 的每日循环：
+1. 检索补充客户名单并入库（web-search-pro 管线，过相关性判定）
+2. 对 qualified 名单挖掘联系人并入库（闸门自动拒收）
+3. 为尚无草稿的联系人撰写针对性邮件草稿（subject_a/subject_b 两版）
+4. auto 模式自动推进：域名体检 -> export-send-queue -> send_emails.py
+   （先 --dry-run 无 BLOCK，再 --limit 3 试发，最后全量，限额系统强制）
+5. 收尾执行 daily-summary --campaign-id {ID} --notify 发送当日汇总通知
+```
+
+执行成功后用 `bind-scheduler --campaign-id ID --task-id <定时任务ID>` 绑定并切 auto；
+切回半自动用 `unbind-scheduler`（默认任务置 paused、send_mode 回 review），
+campaign 彻底不再循环时加 `--cancel` 直接取消任务。
+绑定/解绑只会操作当前租户当前用户名下的定时任务。
+
+### 回复监控任务（每小时）
+
+回复监控独立于每日循环，随 campaign 存在而存在（campaign 有在发或待回复状态即监控）。
+用户在「定时任务」中创建每小时任务，task_prompt 使用固定模板：
+
+```
+委派给 ai-lead-gen 数字员工执行获客活动 campaign_id={ID} 的回复监控：
+运行 reply_monitor.py --campaign-id {ID}（默认 limit 20 / 回看 14 天），
+按 stdout JSON 汇报：检查数、去重数、新回复数、意向分布、通知数、退订数。
+```
+
+脚本内部完成：IMAP 轮询发件邮箱（reply_mailbox，与发送同源）-> 按
+In-Reply-To/References 中已发 message_id（退化为发件人邮箱）归属 campaign ->
+按 Message-ID 幂等去重 -> LLM 意图判定（计费走后台用量）-> 有意向站内信+渠道通知、
+负面回复进退订名单、线索状态推进 replied。历史遗留 intent 为空的行会在每轮自动补判。
 
 ## 不要使用本技能
 

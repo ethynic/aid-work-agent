@@ -4189,3 +4189,9 @@
   statements: |
     DROP TABLE IF EXISTS bs_trade_specialist_customer_emails;
     DROP TABLE IF EXISTS bs_trade_specialist_matched_customers;
+- datetime: "2026-10-28 20:00:00"
+  remark: "AI获客（ai-lead-gen）P2 回复监控：bs_ai_lead_gen_replies 增加 message_id 列 + (tenant_id, message_id) 部分唯一索引，作为 IMAP 轮询幂等去重锚点（并发轮询下数据库层拦截重复入库）"
+  statements: |
+    ALTER TABLE bs_ai_lead_gen_replies ADD COLUMN IF NOT EXISTS message_id TEXT;
+    DROP INDEX IF EXISTS idx_bs_ailg_replies_message_id;
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_bs_ailg_replies_tenant_message ON bs_ai_lead_gen_replies(tenant_id, message_id) WHERE message_id IS NOT NULL;

@@ -60,6 +60,30 @@ class AbuseParameters(StrictDTO):
     show_tenant: bool = False  # 仅平台管理员投递时置 True（租户管理员即当前租户，无需显示）
 
 
+class LeadGenReplyIntentParameters(StrictDTO):
+    """AI获客：客户回复意向通知（producer=ai_lead_gen，recipient=campaign 属主用户）"""
+    campaign_name: str = Field(min_length=1, max_length=128)
+    company_name: str = Field(min_length=1, max_length=256)
+    contact_name: str = Field(min_length=1, max_length=128)
+    contact_email: str = Field(min_length=3, max_length=254)
+    intent: Literal['interested', 'info_request', 'refused', 'irrelevant', 'unclear']
+    intent_summary: str = Field(min_length=1, max_length=1000)
+
+
+class LeadGenDailySummaryParameters(StrictDTO):
+    """AI获客：每日循环执行汇总通知（design §8）"""
+    campaign_name: str = Field(min_length=1, max_length=128)
+    summary_date: str = Field(pattern=r'^\d{4}-\d{2}-\d{2}$')
+    new_leads: int = Field(ge=0, le=1e6)
+    new_contacts: int = Field(ge=0, le=1e6)
+    emails_sent: int = Field(ge=0, le=1e6)
+    emails_failed: int = Field(ge=0, le=1e6)
+    emails_bounced: int = Field(ge=0, le=1e6)
+    new_replies: int = Field(ge=0, le=1e6)
+    interested_replies: int = Field(ge=0, le=1e6)
+    awaiting_review: int = Field(ge=0, le=1e6)
+
+
 @dataclass(frozen=True)
 class EventDefinition:
     template_key: str
@@ -86,6 +110,15 @@ class EventRegistry:
 
 
 EVENTS=EventRegistry()
+
+LEADGEN_INTENT_LABELS = {
+    'interested': '有意向',
+    'info_request': '索取资料',
+    'refused': '婉拒',
+    'irrelevant': '无关',
+    'unclear': '待确认',
+}
+
 EVENTS.register('task.completed',EventDefinition('runner_terminal',TerminalParameters,'runner_result'))
 EVENTS.register('task.failed',EventDefinition('runner_terminal',TerminalParameters,'runner_result'))
 EVENTS.register('task.waiting_input',EventDefinition('runner_waiting_input',WaitingInputParameters,'runner_waiting'))
@@ -93,6 +126,8 @@ EVENTS.register('notification.test',EventDefinition('notification_test',TestPara
 EVENTS.register('billing.credit_low',EventDefinition('billing_credit_low',CreditLowParameters,'tenant_credit'))
 EVENTS.register('billing.tenant_expiry',EventDefinition('billing_tenant_expiry',TenantExpiryParameters,'tenant_profile'))
 EVENTS.register('abuse.rule_triggered',EventDefinition('abuse_rule_triggered',AbuseParameters,'abuse_event'))
+EVENTS.register('leadgen.reply_intent',EventDefinition('leadgen_reply_intent',LeadGenReplyIntentParameters,'leadgen_campaign'))
+EVENTS.register('leadgen.daily_summary',EventDefinition('leadgen_daily_summary',LeadGenDailySummaryParameters,'leadgen_campaign'))
 
 
 def render_inbox_text(event_type, parameters):
@@ -120,6 +155,24 @@ def render_inbox_text(event_type, parameters):
             f'{tenant_prefix}反滥用规则「{parameters["rule_name"]}」触发{mode}：'
             f'{parameters["subject_label"]} 在统计窗口{window_txt}内消耗 {parameters["window_credits"]:.1f} 积分，'
             f'阈值 {parameters["threshold_credits"]:.1f} 积分。')
+    if event_type == 'leadgen.reply_intent':
+        intent_label = LEADGEN_INTENT_LABELS.get(parameters['intent'], parameters['intent'])
+        return '客户回复意向提醒', (
+            f'获客活动「{parameters["campaign_name"]}」收到 '
+            f'{parameters["company_name"]} {parameters["contact_name"]}'
+            f'（{parameters["contact_email"]}）的回复，判定为「{intent_label}」：'
+            f'{parameters["intent_summary"]}')
+    if event_type == 'leadgen.daily_summary':
+        p = parameters
+        lines = [
+            f'获客活动「{p["campaign_name"]}」{p["summary_date"]} 汇总：',
+            f'新增客户 {p["new_leads"]}、有效联系人 {p["new_contacts"]}；',
+            f'发送 {p["emails_sent"]} 封（失败 {p["emails_failed"]}、退信 {p["emails_bounced"]}）；',
+            f'新回复 {p["new_replies"]} 条（有意向 {p["interested_replies"]} 条）。',
+        ]
+        if p['awaiting_review'] > 0:
+            lines.append(f'另有 {p["awaiting_review"]} 封草稿待审阅确认。')
+        return 'AI获客每日汇总', ''.join(lines)
     raise ValueError('NOTIFICATION_EVENT_UNSUPPORTED')
 
 

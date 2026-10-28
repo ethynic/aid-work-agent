@@ -17,6 +17,9 @@
   set-email-status --campaign-id ID --email-id EID --status S [--message-id M] [--error E]
   export-send-queue --campaign-id ID [--limit N]
   set-send-mode --campaign-id ID review|auto
+  bind-scheduler --campaign-id ID --task-id TID    # 绑定每日循环定时任务并切 auto
+  unbind-scheduler --campaign-id ID [--cancel]     # 暂停(或取消)任务并切回 review
+  daily-summary --campaign-id ID [--date D] [--notify]  # 当日汇总 JSON（--notify 发站内信）
   score --campaign-id ID
   export --campaign-id ID
   list-leads --campaign-id ID [--status S]
@@ -195,11 +198,16 @@ def init_tables():
                 intent TEXT,
                 intent_summary TEXT,
                 notified BOOLEAN DEFAULT FALSE,
+                message_id TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_bs_ailg_replies_campaign "
                     "ON bs_ai_lead_gen_replies(campaign_id)")
+        # 回复监控幂等去重锚点（P2）：并发轮询下按 (tenant, message_id) 唯一拦截重复入库
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_bs_ailg_replies_tenant_message "
+                    "ON bs_ai_lead_gen_replies(tenant_id, message_id) "
+                    "WHERE message_id IS NOT NULL")
         # get_db_connection 退出时无条件 rollback，DDL 必须显式提交
         conn.commit()
 
@@ -237,7 +245,8 @@ def norm_company(name):
 
 def get_campaign(cur, tenant_id, campaign_id):
     cur.execute(
-        "SELECT id, campaign_name, send_mode, status, daily_limit, reply_mailbox, brief "
+        "SELECT id, campaign_name, send_mode, status, daily_limit, reply_mailbox, brief, "
+        "user_id, scheduler_task_id "
         "FROM bs_ai_lead_gen_campaigns WHERE id = %s AND tenant_id = %s",
         (campaign_id, tenant_id),
     )
@@ -246,7 +255,7 @@ def get_campaign(cur, tenant_id, campaign_id):
         print(f"ERROR: campaign {campaign_id} not found in tenant {tenant_id}")
         sys.exit(1)
     cols = ["id", "campaign_name", "send_mode", "status", "daily_limit",
-            "reply_mailbox", "brief"]
+            "reply_mailbox", "brief", "user_id", "scheduler_task_id"]
     return dict(zip(cols, row))
 
 
@@ -352,6 +361,221 @@ def cmd_show_campaign(args):
         "leads_by_status": lead_counts,
         "emails_by_status": email_counts,
     }, ensure_ascii=False, indent=2, default=str))
+    return 0
+
+
+# ---------- 定时任务绑定（P2 auto 模式） ----------
+
+def _get_scheduler_task(cur, tenant_id, user_id, task_id):
+    """读取 scheduled_tasks 行并校验归属（租户 + 用户双匹配，防止绑错别人的任务）。"""
+    cur.execute(
+        "SELECT task_id, tenant_id, user_id, status FROM scheduled_tasks "
+        "WHERE task_id = %s", (task_id,))
+    row = cur.fetchone()
+    if not row:
+        print(f"ERROR: scheduled task {task_id} not found（先用 create_scheduled_task 工具创建）")
+        sys.exit(1)
+    task = dict(zip(["task_id", "tenant_id", "user_id", "status"], row))
+    if (task["tenant_id"] or "") != (tenant_id or ""):
+        print("ERROR: scheduled task 不属于当前租户，拒绝绑定")
+        sys.exit(1)
+    if user_id and task["user_id"] and task["user_id"] != user_id:
+        print("ERROR: scheduled task 不属于当前用户，拒绝绑定")
+        sys.exit(1)
+    return task
+
+
+def cmd_bind_scheduler(args):
+    """绑定每日循环定时任务：回写 scheduler_task_id 并切 send_mode=auto。
+
+    paused 任务绑定时顺带激活，否则 send_mode=auto 但任务静默不跑。
+    """
+    tenant_id, user_id = get_identity()
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
+        campaign = get_campaign(cur, tenant_id, args.campaign_id)
+        task = _get_scheduler_task(cur, tenant_id, user_id, args.task_id)
+        if task["status"] not in ("active", "paused"):
+            print(f"ERROR: scheduled task status={task['status']}，仅 active/paused 可绑定")
+            return 1
+        if task["status"] == "paused":
+            cur.execute(
+                "UPDATE scheduled_tasks SET status = 'active', "
+                "updated_at = %s WHERE task_id = %s",
+                (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), args.task_id),
+            )
+        cur.execute(
+            "UPDATE bs_ai_lead_gen_campaigns SET scheduler_task_id = %s, "
+            "send_mode = 'auto', updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = %s AND tenant_id = %s",
+            (args.task_id, args.campaign_id, tenant_id),
+        )
+        conn.commit()
+    print(json.dumps({"campaign_id": args.campaign_id,
+                      "scheduler_task_id": args.task_id,
+                      "send_mode": "auto"}, ensure_ascii=False))
+    return 0
+
+
+def cmd_unbind_scheduler(args):
+    """解绑定时任务并切回 review：默认暂停任务（保留关联可再绑定），
+    --cancel 时任务置 cancelled 并清除关联。"""
+    tenant_id, user_id = get_identity()
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
+        campaign = get_campaign(cur, tenant_id, args.campaign_id)
+        task_id = campaign.get("scheduler_task_id")
+        if not task_id:
+            print("campaign 未绑定定时任务")
+            return 1
+        cur.execute(
+            "SELECT tenant_id, user_id FROM scheduled_tasks WHERE task_id = %s",
+            (task_id,))
+        row = cur.fetchone()
+        if not row or (row[0] or "") != (tenant_id or ""):
+            print(f"ERROR: 绑定的定时任务 {task_id} 不属于当前租户，拒绝操作")
+            return 1
+        if user_id and row[1] and row[1] != user_id:
+            # 与 bind 同口径：同租户内也不能操作他人名下的定时任务
+            print(f"ERROR: 绑定的定时任务 {task_id} 不属于当前用户，拒绝操作")
+            return 1
+        new_task_status = "cancelled" if args.cancel else "paused"
+        cur.execute(
+            "UPDATE scheduled_tasks SET status = %s, updated_at = %s "
+            "WHERE task_id = %s",
+            (new_task_status, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), task_id),
+        )
+        cur.execute(
+            "UPDATE bs_ai_lead_gen_campaigns SET "
+            "scheduler_task_id = CASE WHEN %s THEN NULL ELSE scheduler_task_id END, "
+            "send_mode = 'review', updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = %s AND tenant_id = %s",
+            (bool(args.cancel), args.campaign_id, tenant_id),
+        )
+        conn.commit()
+    print(json.dumps({"campaign_id": args.campaign_id,
+                      "scheduler_task_id": task_id,
+                      "task_status": new_task_status,
+                      "send_mode": "review"}, ensure_ascii=False))
+    return 0
+
+
+# ---------- 每日汇总与通知（P2） ----------
+
+def aggregate_daily_summary(cur, campaign_id, date_str):
+    """聚合某日获客产出（date_str=YYYY-MM-DD）。只读，返回 dict。"""
+    def _count(sql, params):
+        cur.execute(sql, params)
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+
+    return {
+        "summary_date": date_str,
+        "new_leads": _count(
+            "SELECT COUNT(*) FROM bs_ai_lead_gen_leads "
+            "WHERE campaign_id = %s AND created_at::date = %s::date",
+            (campaign_id, date_str)),
+        "new_contacts": _count(
+            "SELECT COUNT(*) FROM bs_ai_lead_gen_contacts "
+            "WHERE campaign_id = %s AND created_at::date = %s::date",
+            (campaign_id, date_str)),
+        "emails_sent": _count(
+            "SELECT COUNT(*) FROM bs_ai_lead_gen_emails "
+            "WHERE campaign_id = %s AND status = 'sent' "
+            "AND COALESCE(sent_at, updated_at)::date = %s::date",
+            (campaign_id, date_str)),
+        "emails_failed": _count(
+            "SELECT COUNT(*) FROM bs_ai_lead_gen_emails "
+            "WHERE campaign_id = %s AND status = 'failed' "
+            "AND COALESCE(sent_at, updated_at)::date = %s::date",
+            (campaign_id, date_str)),
+        "emails_bounced": _count(
+            "SELECT COUNT(*) FROM bs_ai_lead_gen_emails "
+            "WHERE campaign_id = %s AND status = 'bounced' "
+            "AND COALESCE(sent_at, updated_at)::date = %s::date",
+            (campaign_id, date_str)),
+        "new_replies": _count(
+            "SELECT COUNT(*) FROM bs_ai_lead_gen_replies "
+            "WHERE campaign_id = %s AND received_at::date = %s::date",
+            (campaign_id, date_str)),
+        "interested_replies": _count(
+            "SELECT COUNT(*) FROM bs_ai_lead_gen_replies "
+            "WHERE campaign_id = %s AND received_at::date = %s::date "
+            "AND intent IN ('interested', 'info_request')",
+            (campaign_id, date_str)),
+        "awaiting_review": _count(
+            "SELECT COUNT(*) FROM bs_ai_lead_gen_emails "
+            "WHERE campaign_id = %s AND status = 'draft'",
+            (campaign_id,)),
+    }
+
+
+def publish_leadgen_notification(tenant_id, user_id, event_type, parameters,
+                                 campaign_id, event_key, ttl_seconds=7 * 86400):
+    """发布 AI获客站内信通知（src/notifications 事件机制，投递复用既有偏好配置）。
+
+    惰性导入：lead_db.py 是 SKILL.md init_script（SkillLoader 启动时 import），
+    通知模块只能在调用期加载。写入失败只告警不抛出（通知是增强不是闸门）。
+    """
+    try:
+        from datetime import timedelta
+        from src.notifications.events import publish_in_tx
+        from src.notifications.contracts import Subject
+
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT clock_timestamp() AS now")
+            now = cur.fetchone()["now"]
+            ref = publish_in_tx(
+                cur,
+                subject=Subject(user_id=user_id, tenant_id=tenant_id or None),
+                producer="ai_lead_gen",
+                event_type=event_type,
+                event_key=event_key,
+                resource_ref={"type": "leadgen_campaign", "id": str(campaign_id)},
+                parameters=parameters,
+                occurred_at=now,
+                accepted_at=now,
+                expires_at=now + timedelta(seconds=ttl_seconds),
+                category="task",
+                priority=0,
+                policy_key="accepted_before_enabled",
+            )
+            conn.commit()
+            return ref
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARN: 通知发布失败（不影响业务数据）: {exc}")
+        return None
+
+
+def cmd_daily_summary(args):
+    tenant_id, user_id = get_identity()
+    date_str = args.date or datetime.now().strftime("%Y-%m-%d")
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
+        campaign = get_campaign(cur, tenant_id, args.campaign_id)
+        summary = aggregate_daily_summary(cur, args.campaign_id, date_str)
+    summary["campaign_id"] = args.campaign_id
+    summary["campaign_name"] = campaign["campaign_name"]
+
+    if args.notify:
+        recipient = campaign.get("user_id") or user_id
+        params = {
+            "campaign_name": (campaign["campaign_name"] or "")[:128] or str(args.campaign_id),
+            "summary_date": date_str,
+            "new_leads": summary["new_leads"],
+            "new_contacts": summary["new_contacts"],
+            "emails_sent": summary["emails_sent"],
+            "emails_failed": summary["emails_failed"],
+            "emails_bounced": summary["emails_bounced"],
+            "new_replies": summary["new_replies"],
+            "interested_replies": summary["interested_replies"],
+            "awaiting_review": summary["awaiting_review"],
+        }
+        ref = publish_leadgen_notification(
+            tenant_id, recipient, "leadgen.daily_summary", params,
+            args.campaign_id,
+            event_key=f"leadgen:daily:{args.campaign_id}:{date_str}",
+            ttl_seconds=30 * 86400,
+        )
+        summary["notification_ref"] = ref
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -838,6 +1062,23 @@ def main():
     p.add_argument("--campaign-id", required=True, type=int)
     p.add_argument("send_mode")
     p.set_defaults(func=cmd_set_send_mode)
+
+    p = sub.add_parser("bind-scheduler")
+    p.add_argument("--campaign-id", required=True, type=int)
+    p.add_argument("--task-id", required=True)
+    p.set_defaults(func=cmd_bind_scheduler)
+
+    p = sub.add_parser("unbind-scheduler")
+    p.add_argument("--campaign-id", required=True, type=int)
+    p.add_argument("--cancel", action="store_true",
+                   help="任务置 cancelled 并清除关联（缺省仅暂停）")
+    p.set_defaults(func=cmd_unbind_scheduler)
+
+    p = sub.add_parser("daily-summary")
+    p.add_argument("--campaign-id", required=True, type=int)
+    p.add_argument("--date", default=None, help="YYYY-MM-DD，缺省今天")
+    p.add_argument("--notify", action="store_true", help="同时发布站内信汇总通知")
+    p.set_defaults(func=cmd_daily_summary)
 
     p = sub.add_parser("show-campaign")
     p.add_argument("--campaign-id", required=True, type=int)

@@ -45,6 +45,21 @@ context:
 全部经技能脚本读写 PostgreSQL `bs_ai_lead_gen_*` 五表；检索与网页读取委托你的
 `web_search` / `web_fetch` 工具执行（技能会给出 SEARCH_TASK / SCRAPE_TASK 委托格式）。
 
+## 定时任务（auto 模式与回复监控）
+
+半自动（review）与全自动（auto）是同一条管线，只差 campaign 的 send_mode 闸门。
+系统定时任务会以用户身份在本数字员工会话中执行 task_prompt，你收到的定时任务
+prompt 均以「委派给 ai-lead-gen 数字员工」开头，按其中的固定流程执行：
+
+- **每日循环任务**（auto 发送编排）：补名单 -> 挖联系人 -> 写草稿 -> auto 推进
+  发送（闸门全开）-> `daily-summary --notify` 发当日汇总通知。
+- **回复监控任务**（每小时）：运行 `reply_monitor.py --campaign-id {ID}` 拉取
+  新回复，按 stdout JSON 汇报检查数/去重数/新回复数/意向分布/通知数/退订数。
+
+绑定/解绑定时任务用技能的 `bind-scheduler` / `unbind-scheduler` 子命令
+（绑定即切 auto，解绑切回 review）；任务 ID 只能来自用户的定时任务列表或
+用户明确提供，不猜测。详细模板见 SKILL.md「定时任务与回复监控」一节。
+
 ## 工作纪律
 
 1. **先澄清再行动**。启动新获客任务时，按 brief 模板（assets/brief_template.md）
