@@ -57,3 +57,4 @@
 | 双环境 ERROR/WARNING 日志收集与处理清单（2026-10-19~10-26） | [报告](plans/log-error-review-20261026.md) | 📋 待逐项处理（2026-10-26 收集生产/测试，含上期闭环核对）：P1=生产 ERP module_listing_view 500 拖垮 external_push、APP_ID 缺配置扩大到 6 租户、计费 model 为空漏计费（42 条持续）；P1=测试一次性提醒任务 missed 永不送达；智谱余额已恢复，Kimi key 仍未换。 |
 | 企业微信本地库解密读取（local-db 通道）技术调研 | [调研](research/wecom-local-db-decrypt-research.md) | wecom-cli read-session 第三通道候选：本机 5.0.11.6029 全链路验证通过（wxSQLite3 aes128cbc + 只读内存提取密钥 + 副本解密）；8 步流水线按版本矩阵分派，算法/密钥形态/页布局任一随版本变化即失效，失效显式化不静默降级（2026-10-14）。 |
 | 无源码交付私有云——代码保护方案调研 | [调研](research/private-cloud-no-source-code-delivery.md) | 私有云交付不含源码（2026-10-22 调研完成，待实施）：核心逻辑 Cython 编译 + 其余 PyArmor + 技能/提示词加密；废弃 git pull 改离线镜像交付；Docker 无加密机制、载体更换不解决保密。 |
+| AI 获客「联系人手机号交付」合规调研 | [调研](research/lead-gen-contact-phone-compliance-research.md) | AI获客线索交付边界（2026-10-28 调研完成）：个人手机号属 PIPL 个人信息，聚合交付租户=向第三方提供，5000 条即刑事入罪门槛（扬州 9 人爬企业注册信息获刑案同场景）；建议分层交付——企业信息/公开商务联系方式（座机、企业邮箱）可给，个人手机号不抓不存不交付，确需走持牌数据商采购通道；判例原文待外部律师复核。 |
