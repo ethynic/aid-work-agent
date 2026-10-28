@@ -12,7 +12,7 @@ Agent Factory - 智能体工厂
     agent = factory.create_standalone_agent("hr-expert", memory)
 
     # 创建子智能体独立模式（入口级绑定）
-    agent = AgentFactory.create_standalone_subagent("trade-specialist", session_id)
+    agent = AgentFactory.create_standalone_subagent("ai-lead-gen", session_id)
 
     # 创建子智能体（被委派模式）
     subagent = factory.create_subagent("code-reviewer", memory, session_id, execution_id)

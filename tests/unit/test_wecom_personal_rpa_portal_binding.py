@@ -530,7 +530,7 @@ def test_register_client_platform_admin_with_x_tenant_id_writes_to_target_tenant
     resp = client.post(
         "/api/saas/wecom-personal-rpa/clients",
         headers={"X-Tenant-Id": "tenant_target_001"},
-        json={"name": "销售一组-客户机01", "min_version": "1.0.0", "subagent_type": "trade-specialist"},
+        json={"name": "销售一组-客户机01", "min_version": "1.0.0", "subagent_type": "ai-lead-gen"},
     )
 
     assert resp.status_code == 200, resp.text

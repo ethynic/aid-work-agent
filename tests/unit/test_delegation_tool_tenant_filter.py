@@ -79,7 +79,7 @@ class TestDelegationToolTenantFilter(unittest.TestCase):
         self.registry = SubagentRegistry()
         _register_subagents(self.registry, [
             _make_subagent_config("旅游咨询顾问", "travel-advisor", "旅游行业 AI 顾问"),
-            _make_subagent_config("外贸获客智能体", "trade-specialist", "海外潜在客户获取"),
+            _make_subagent_config("外贸获客智能体", "ai-lead-gen", "海外潜在客户获取"),
             _make_subagent_config("全筑合同归档自动化审核", "contract-audit", "合同审核"),
         ])
         # 预先 patch settings 为 MagicMock，避免 import 链触发真实配置；
@@ -108,7 +108,7 @@ class TestDelegationToolTenantFilter(unittest.TestCase):
         self.assertIsNotNone(delegate, "MASTER 模式必须有 delegate_to_subagent 工具")
         enum = delegate["input_schema"]["properties"]["subagent_name"]["enum"]
         # enum 取值为 dir_name（agent_id）
-        self.assertEqual(set(enum), {"travel-advisor", "trade-specialist", "contract-audit"})
+        self.assertEqual(set(enum), {"travel-advisor", "ai-lead-gen", "contract-audit"})
 
     def test_get_tools_filters_by_tenant_subscription(self):
         """【核心回归】租户上下文：委派工具的 enum 只包含租户订阅的子智能体"""
@@ -175,14 +175,14 @@ class TestDelegationToolTenantFilter(unittest.TestCase):
             "src.saas.db.subscription_db.SubscriptionDB.get_allowed_subagent_types",
             side_effect=lambda conn, tenant: {
                 "tenant_001": ["travel-advisor"],
-                "tenant_002": ["trade-specialist"],
+                "tenant_002": ["ai-lead-gen"],
             }[tenant],
         ):
             enum_a = _extract_delegate_tool(catalog_a._get_tools())["input_schema"]["properties"]["subagent_name"]["enum"]
             enum_b = _extract_delegate_tool(catalog_b._get_tools())["input_schema"]["properties"]["subagent_name"]["enum"]
 
         self.assertEqual(enum_a, ["travel-advisor"])
-        self.assertEqual(enum_b, ["trade-specialist"])
+        self.assertEqual(enum_b, ["ai-lead-gen"])
 
     def test_subagent_registry_direct_call_filters_correctly(self):
         """【回归保护】SubagentRegistry.get_delegation_tool_definition 直接传 available_subagents 的行为

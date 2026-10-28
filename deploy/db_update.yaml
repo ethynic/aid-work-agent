@@ -4184,3 +4184,8 @@
     );
     CREATE INDEX IF NOT EXISTS idx_bs_ailg_replies_campaign
         ON bs_ai_lead_gen_replies(campaign_id);
+- datetime: "2026-10-28 10:00:00"
+  remark: "trade-specialist 外贸获客智能体下线，DROP 两张业务表（客户/邮件）；新 AI获客智能体（ai-lead-gen）替代"
+  statements: |
+    DROP TABLE IF EXISTS bs_trade_specialist_customer_emails;
+    DROP TABLE IF EXISTS bs_trade_specialist_matched_customers;

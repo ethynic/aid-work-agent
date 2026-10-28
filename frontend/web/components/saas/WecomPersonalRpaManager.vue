@@ -271,7 +271,7 @@
         </div>
         <div>
           <label class="form-label">关联数字员工（可选）</label>
-          <BaseInput v-model="registerForm.subagent_type" placeholder="如：trade-specialist" />
+          <BaseInput v-model="registerForm.subagent_type" placeholder="如：ai-lead-gen" />
         </div>
       </div>
       <template #footer>

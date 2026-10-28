@@ -42,7 +42,7 @@ async def test_list_subagents_filters_by_target_tenant_for_platform_admin():
     """平台管理员代管租户时，应按目标租户订阅过滤，target_tenant_id 正确传递"""
     all_items = [
         _make_item("travel-consultant", "旅游咨询顾问"),
-        _make_item("trade-specialist", "外贸获客智能体"),
+        _make_item("ai-lead-gen", "外贸获客智能体"),
         _make_item("after-sales", "在线电商客服"),
     ]
 
@@ -83,7 +83,7 @@ async def test_list_subagents_no_tenant_context_returns_all_unfiltered():
     main 是否出现取决于注册表数据本身）"""
     all_items = [
         _make_item("travel-consultant", "旅游咨询顾问"),
-        _make_item("trade-specialist", "外贸获客智能体"),
+        _make_item("ai-lead-gen", "外贸获客智能体"),
     ]
 
     mock_registry = MagicMock()
@@ -106,7 +106,7 @@ async def test_list_subagents_no_tenant_context_returns_all_unfiltered():
     returned_ids = [item["agent_id"] for item in result["data"]]
     assert "main" not in returned_ids, "demo 分支已删，无租户上下文不再强制追加 main"
     assert "travel-consultant" in returned_ids
-    assert "trade-specialist" in returned_ids
+    assert "ai-lead-gen" in returned_ids
 
 
 @pytest.mark.asyncio

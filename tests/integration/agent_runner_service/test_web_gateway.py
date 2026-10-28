@@ -224,7 +224,7 @@ def test_web_public_auth_headers_cannot_replace_bridge_or_actor_and_private_data
 def test_web_lost_accepted_response_retry_survives_default_profile_change_and_submit_switch_off(gateways, actors, service_database):
     actor=actors["a"]
     subscription="web-default-"+uuid.uuid4().hex
-    profile="trade-specialist"
+    profile="ai-lead-gen"
     service_database.rows("INSERT INTO subscriptions(subscription_id,tenant_id,subagent_type,status,payment_status) VALUES (%s,%s,%s,'active','paid')",(subscription,actor.tenant_id,profile))
     service_database.rows("INSERT INTO user_agent_permissions(user_id,tenant_id,agent_id) VALUES (%s,%s,%s)",(actor.user_id,actor.tenant_id,profile))
     try:

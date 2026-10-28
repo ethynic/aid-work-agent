@@ -128,7 +128,7 @@ const currentSubagentId = computed(() => {
     if (segments[2] === 'chat' && segments.length >= 4) {
       return segments[3]
     }
-    // 检查第三段是否是已知的业务页面路由前缀（trade-specialist等），它就是 subagentId
+    // 第三段是业务页面路由前缀（如 travel-consultant），它就是 subagentId
     return segments[2]
   }
   return undefined

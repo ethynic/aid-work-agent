@@ -372,7 +372,7 @@ class TestListByTenant:
                 "outcome_id": "wo_2",
                 "tenant_id": "t1",
                 "user_id": "u1",
-                "subagent_id": "trade-specialist",
+                "subagent_id": "ai-lead-gen",
                 "session_id": "s2",
                 "channel": "wecom",
                 "summary": "成果2",
@@ -487,14 +487,14 @@ class TestListByTenant:
         mock_conn_factory.return_value = mock_conn
 
         WorkOutcomeDB.list_by_tenant(
-            tenant_id="t1", subagent_id="trade-specialist", page=1, page_size=10
+            tenant_id="t1", subagent_id="ai-lead-gen", page=1, page_size=10
         )
 
         sql_call = mock_cursor.execute.call_args_list[0]
         sql = sql_call[0][0]
         params = sql_call[0][1]
         assert "subagent_id = %s" in sql
-        assert "trade-specialist" in params
+        assert "ai-lead-gen" in params
 
 
 # ============== get_stats ==============
@@ -516,7 +516,7 @@ class TestGetStats:
         # fetchall 调用顺序：by_type / by_subagent / by_source / by_channel
         mock_cursor.fetchall.side_effect = [
             [{"outcome_type": "file", "cnt": 6}, {"outcome_type": "action", "cnt": 4}],  # by_type
-            [{"subagent": "main", "cnt": 7}, {"subagent": "trade-specialist", "cnt": 3}],  # by_subagent
+            [{"subagent": "main", "cnt": 7}, {"subagent": "ai-lead-gen", "cnt": 3}],  # by_subagent
             [{"source": "cp_realtime", "cnt": 6}, {"source": "scheduled_review", "cnt": 4}],  # by_source
             [{"channel": "web", "cnt": 8}, {"channel": "wecom", "cnt": 2}],  # by_channel
         ]
@@ -532,7 +532,7 @@ class TestGetStats:
         assert stats["by_type"]["file"] == 6
         assert stats["by_type"]["action"] == 4
         assert stats["by_subagent"]["main"] == 7
-        assert stats["by_subagent"]["trade-specialist"] == 3
+        assert stats["by_subagent"]["ai-lead-gen"] == 3
         assert stats["by_source"]["cp_realtime"] == 6
         assert stats["by_source"]["scheduled_review"] == 4
         assert stats["by_channel"]["web"] == 8

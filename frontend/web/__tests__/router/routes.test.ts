@@ -94,7 +94,6 @@ describe('entry route responsibilities', () => {
         "assets",
         "videos",
         "prompts",
-        "trade-specialist",
         "travel-consultant",
         "recruiting-operator",
         "customer-followup",

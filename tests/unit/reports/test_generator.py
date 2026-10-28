@@ -58,7 +58,7 @@ class TestGeneratePersonal:
             "records": [{"user_message": "查客户", "duration_ms": 5000, "execution_details": "{}"}],
             "dialog_count": 1,
             "credit_cost": 10,
-            "subagent_distribution": {"trade-specialist": 1},
+            "subagent_distribution": {"ai-lead-gen": 1},
             "tool_distribution": {"query_customer": 1},
             "source_distribution": {"chat": 1},
             "saved_minutes": 2.9,

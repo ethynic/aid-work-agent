@@ -86,7 +86,7 @@ describe('MyDigitalEmployees', () => {
       success: true,
       data: [
         { agent_id: 'main', name: 'CEO 智能体', description: '不应显示' },
-        { agent_id: 'trade-specialist', name: '外贸获客', description: '帮助外贸业务员找客户' },
+        { agent_id: 'ai-lead-gen', name: 'AI获客', description: '帮助外贸业务员找客户' },
         { agent_id: 'travel-consultant', name: '旅游顾问', description: '帮助规划旅游行程' },
       ],
     })
@@ -106,7 +106,7 @@ describe('MyDigitalEmployees', () => {
     expect(cards.length).toBe(2)
     // 不应出现 main 的内容
     expect(wrapper.text()).not.toContain('CEO 智能体')
-    expect(wrapper.text()).toContain('外贸获客')
+    expect(wrapper.text()).toContain('AI获客')
     expect(wrapper.text()).toContain('旅游顾问')
   })
 
@@ -141,7 +141,7 @@ describe('MyDigitalEmployees', () => {
     listSubagentsMock.mockResolvedValue({
       success: true,
       data: [
-        { agent_id: 'trade-specialist', name: '外贸获客', description: '外贸助手' },
+        { agent_id: 'ai-lead-gen', name: 'AI获客', description: '外贸助手' },
       ],
     })
 
@@ -158,7 +158,7 @@ describe('MyDigitalEmployees', () => {
     await card.trigger('click')
 
     expect(routerPush).toHaveBeenCalledTimes(1)
-    expect(routerPush).toHaveBeenCalledWith('/chat/trade-specialist')
+    expect(routerPush).toHaveBeenCalledWith('/chat/ai-lead-gen')
   })
 
   it('点击「立即使用」按钮也触发路由跳转（@click.stop 不应阻止按钮自身 click）', async () => {
@@ -243,7 +243,7 @@ describe('MyDigitalEmployees', () => {
     listSubagentsMock.mockResolvedValue({
       success: true,
       data: [
-        { agent_id: 'trade-specialist', name: '外贸获客', description: '外贸助手' },
+        { agent_id: 'ai-lead-gen', name: 'AI获客', description: '外贸助手' },
       ],
     })
 
@@ -264,7 +264,7 @@ describe('MyDigitalEmployees', () => {
     listSubagentsMock.mockResolvedValue({
       success: true,
       data: [
-        { agent_id: 'trade-specialist', name: '外贸获客', description: '外贸助手' },
+        { agent_id: 'ai-lead-gen', name: 'AI获客', description: '外贸助手' },
       ],
     })
 
@@ -294,7 +294,7 @@ describe('MyDigitalEmployees', () => {
     listSubagentsMock.mockResolvedValue({
       success: true,
       data: [
-        { agent_id: 'trade-specialist', name: '外贸获客', description: '外贸助手' },
+        { agent_id: 'ai-lead-gen', name: 'AI获客', description: '外贸助手' },
       ],
     })
 

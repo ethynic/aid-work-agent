@@ -90,7 +90,7 @@ class TestAggregatePersonal:
                 "credit_cost": 10,
                 "source_type": "chat",
                 "duration_ms": 5000,
-                "subagent_calls": json.dumps([{"subagent_id": "trade-specialist"}]),
+                "subagent_calls": json.dumps([{"subagent_id": "ai-lead-gen"}]),
                 "execution_details": json.dumps({
                     "tool_executions": [{"tool_name": "query_customer"}, {"tool_name": "search_documents"}]
                 }),
@@ -103,7 +103,7 @@ class TestAggregatePersonal:
                 "credit_cost": 5,
                 "source_type": "wecom",
                 "duration_ms": 8000,
-                "subagent_calls": json.dumps([{"subagent_id": "trade-specialist"}]),
+                "subagent_calls": json.dumps([{"subagent_id": "ai-lead-gen"}]),
                 "execution_details": json.dumps({
                     "tool_executions": [{"tool_name": "send_email"}]
                 }),
@@ -121,7 +121,7 @@ class TestAggregatePersonal:
 
         assert result["dialog_count"] == 2
         assert result["credit_cost"] == 15
-        assert result["subagent_distribution"] == {"trade-specialist": 2}
+        assert result["subagent_distribution"] == {"ai-lead-gen": 2}
         assert result["tool_distribution"] == {
             "query_customer": 1,
             "search_documents": 1,

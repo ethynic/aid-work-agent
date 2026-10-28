@@ -179,7 +179,7 @@ class TestChannelFactoryCreateFromTenantConfig:
                 "tenant_id": "tenant_001",
                 "channel_type": "wecom",
                 "config": {"corp_id": "wx222"},
-                "subagent_type": "trade-specialist",
+                "subagent_type": "ai-lead-gen",
                 "verified": 0,
             },
         ]
@@ -218,7 +218,7 @@ class TestChannelFactoryCreateFromTenantConfig:
             "tenant_id": "tenant_001",
             "channel_type": "wecom",
             "config": {"corp_id": "wx222"},
-            "subagent_type": "trade-specialist",
+            "subagent_type": "ai-lead-gen",
             "verified": 1,
         }
 
@@ -246,7 +246,7 @@ class TestChannelFactoryCreateFromTenantConfig:
                 assert id1 == "chan_aaa"
                 assert sub1 == "travel-consultant"
                 assert id2 == "chan_bbb"
-                assert sub2 == "trade-specialist"
+                assert sub2 == "ai-lead-gen"
 
 
 class TestChannelFactoryCacheIsolation:
@@ -273,7 +273,7 @@ class TestChannelFactoryCacheIsolation:
             "tenant_id": "tenant_x",
             "channel_type": "feishu",
             "config": {"app_id": "cli_b"},
-            "subagent_type": "trade-specialist",
+            "subagent_type": "ai-lead-gen",
             "verified": 1,
             "updated_at": _t2,
         }
@@ -310,7 +310,7 @@ class TestChannelFactoryCacheIsolation:
                 assert ret_a1[2] == "travel-consultant"
                 assert ret_b1[0] is adapter_b
                 assert ret_b1[1] == "chan_b"
-                assert ret_b1[2] == "trade-specialist"
+                assert ret_b1[2] == "ai-lead-gen"
 
                 # 两个三元组缓存槽都存在
                 assert ("tenant_x", "feishu", "chan_a") in channel_factory._ADAPTER_CACHE
@@ -351,7 +351,7 @@ class TestChannelFactoryCacheIsolation:
             "tenant_id": "tenant_x",
             "channel_type": "feishu",
             "config": {"app_id": "cli_b"},
-            "subagent_type": "trade-specialist",
+            "subagent_type": "ai-lead-gen",
             "verified": 1,
             "updated_at": _t1,
         }
@@ -422,7 +422,7 @@ class TestChannelFactoryCacheIsolation:
             "tenant_id": "tenant_x",
             "channel_type": "feishu",
             "config": {"app_id": "cli_b"},
-            "subagent_type": "trade-specialist",
+            "subagent_type": "ai-lead-gen",
             "verified": 0,
             "updated_at": _t1,
         }

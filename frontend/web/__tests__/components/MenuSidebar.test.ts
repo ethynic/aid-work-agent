@@ -106,9 +106,9 @@ import { http, HttpResponse } from 'msw'
 
 function makeSubagent(overrides: Partial<SubagentListItem> = {}): SubagentListItem {
   return {
-    agent_id: 'trade-specialist',
-    name: '外贸获客',
-    display_name: '外贸获客',
+    agent_id: 'ai-lead-gen',
+    name: 'AI获客',
+    display_name: 'AI获客',
     description: '外贸助手',
     type: 'builtin',
     business_pages: [
@@ -401,7 +401,7 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     expect(texts.some(t => t.includes('经验中心'))).toBe(false)
     expect(texts.some(t => t.includes('知识中心'))).toBe(false)
     expect(texts.some(t => t.includes('管理菜单'))).toBe(false)
-    expect(texts.some(t => t.includes('外贸获客'))).toBe(false) // 业务数据 trigger
+    expect(texts.some(t => t.includes('AI获客'))).toBe(false) // 业务数据 trigger
 
     // 新会话按钮和历史会话仍在
     expect(texts.some(t => t.includes('新会话'))).toBe(true)
@@ -424,7 +424,7 @@ describe('MenuSidebar - flyout 二级菜单', () => {
 
   it('业务数据跳转分支：对话界面 click 业务页应调用 window.open 而非 router.push', async () => {
     // 路由包含 /chat/，isChatPage=true -> 应走 window.open 分支
-    routeState.path = '/t/test-tenant/chat/trade-specialist'
+    routeState.path = '/t/test-tenant/chat/ai-lead-gen'
     tenantIsLoggedIn.value = true
     tenantAdmin.value = { username: 'admin', role: 'tenant_admin' }
     tenant.value = { company_name: '测试租户' }
@@ -436,8 +436,8 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     })
     await flushPromises()
 
-    // hover 业务数据 trigger（外贸获客）
-    const trigger = findButtonByText(wrapper, '外贸获客')
+    // hover 业务数据 trigger（AI获客）
+    const trigger = findButtonByText(wrapper, 'AI获客')
     expect(trigger).toBeTruthy()
     await trigger.trigger('mouseenter')
     await flushPromises()
@@ -455,7 +455,7 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     expect(windowOpenSpy).toHaveBeenCalledTimes(1)
     const url = windowOpenSpy.mock.calls[0][0] as string
     expect(url).toContain('/customers')
-    expect(url).toContain('expand_menu=trade-specialist')
+    expect(url).toContain('expand_menu=ai-lead-gen')
     expect(routerPush).not.toHaveBeenCalled()
 
     windowOpenSpy.mockRestore()

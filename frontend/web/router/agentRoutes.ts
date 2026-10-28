@@ -1,9 +1,5 @@
 import type { RouteRecordRaw } from 'vue-router'
 
-import CustomerInfo from '@/components/CustomerInfo.vue'
-import EmailRecords from '@/components/EmailRecords.vue'
-import MatchStats from '@/components/MatchStats.vue'
-
 export const agentRoutes: RouteRecordRaw[] = [
   {
     path: '/',
@@ -49,16 +45,6 @@ export const agentRoutes: RouteRecordRaw[] = [
       { path: 'assets', name: 'tenant-video-agent-assets', component: () => import('@/components/video-agent/AssetLibrary.vue') },
       { path: 'videos', name: 'tenant-video-agent-videos', component: () => import('@/components/video-agent/VideoLibrary.vue') },
       { path: 'prompts', name: 'tenant-video-agent-prompts', component: () => import('@/components/video-agent/PromptLibrary.vue') },
-      {
-        path: 'trade-specialist',
-        name: 'tenant-trade-specialist',
-        component: () => import('@/components/BaseBusinessLayout.vue'),
-        children: [
-          { path: 'customers', name: 'tenant-trade-specialist-customers', component: CustomerInfo },
-          { path: 'email-records', name: 'tenant-trade-specialist-email-records', component: EmailRecords },
-          { path: 'match-stats', name: 'tenant-trade-specialist-match-stats', component: MatchStats },
-        ]
-      },
       {
         path: 'travel-consultant',
         name: 'tenant-travel-consultant',

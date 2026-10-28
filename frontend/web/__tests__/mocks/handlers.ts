@@ -270,7 +270,7 @@ export const handlers = [
       return HttpResponse.json({
         success: true,
         subagents: [
-          { agent_id: 'trade-specialist', name: '外贸获客智能体' },
+          { agent_id: 'ai-lead-gen', name: 'AI获客智能体' },
           { agent_id: 'travel-consultant', name: '旅游咨询顾问' },
         ],
       })

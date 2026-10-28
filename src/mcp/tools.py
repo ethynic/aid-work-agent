@@ -12,8 +12,8 @@ MCP Tool Registry — MCP 工具注册表
       tools:
         - skill: order-core
           commands: [create-order, get-order, list-orders]
-        - skill: trade-customer
-          commands: [save-customer, search-customers]
+        - skill: baidu-search
+          commands: [search]
 """
 
 from dataclasses import dataclass, field

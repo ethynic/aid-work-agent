@@ -21,7 +21,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture
 def child_profile(actors, service_database):
-    profile = "trade-specialist"
+    profile = "ai-lead-gen"
     subscription = "runner-child-subscription-" + uuid.uuid4().hex
     service_database.rows("INSERT INTO subscriptions(subscription_id,tenant_id,subagent_type,status,payment_status) VALUES (%s,%s,%s,'active','paid')",
                           (subscription, actors["a"].tenant_id, profile))

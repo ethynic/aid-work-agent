@@ -326,8 +326,6 @@ mcp:
     enabled: ${MCP_AUTH_ENABLED:-true}
     api_keys: []                     # API Key 列表，或通过环境变量 MCP_API_KEYS 设置（逗号分隔）
   tools: []                          # 暴露的 skill/tool 列表，示例：
-  #  - skill: trade-customer
-  #    commands: [save-customer, search-customers]
   #  - skill: baidu-search
   #    commands: [search]
 

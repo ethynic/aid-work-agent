@@ -30,13 +30,6 @@ const BY_SUBAGENT: Record<string, SubagentGreeting> = {
       { label: '生成一段短视频', message: '我想生成一段短视频' },
     ],
   },
-  'trade-specialist': {
-    summary: '帮助您快速获取海外潜在客户资源，支持线索匹配、邮件营销与产品推荐。',
-    prompts: [
-      { label: '匹配海外客户', message: '帮我匹配海外潜在客户' },
-      { label: '写一封开发信', message: '帮我写一封外贸开发信' },
-    ],
-  },
   'travel-consultant': {
     summary: '提供行程建议、费用咨询与报价服务，覆盖国内与出境旅游咨询。',
     prompts: [
