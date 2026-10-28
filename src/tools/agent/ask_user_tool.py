@@ -72,6 +72,8 @@ class AskUserTool(BaseTool):
 
     # 控制工具：不进普通 registry，由 ToolControlSet 构造。
     catalog = False
+    # 提问类控制工具：scheduled 非交互执行（根+子）在装配层滤除（设计 §5.3）
+    interactive_only = True
     name = "ask_user"
     description = "向用户发起结构化提问表单（单选/多选/自由文本，1~5 题打包），阻塞等待用户作答"
     usage_guide = (

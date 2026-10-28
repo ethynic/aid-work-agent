@@ -4195,3 +4195,43 @@
     ALTER TABLE bs_ai_lead_gen_replies ADD COLUMN IF NOT EXISTS message_id TEXT;
     DROP INDEX IF EXISTS idx_bs_ailg_replies_message_id;
     CREATE UNIQUE INDEX IF NOT EXISTS ux_bs_ailg_replies_tenant_message ON bs_ai_lead_gen_replies(tenant_id, message_id) WHERE message_id IS NOT NULL;
+- datetime: "2026-10-28 21:00:00"
+  remark: "定时任务 Runner 化重建（Phase 1 清场）：DROP 旧三表（零存量用户无数据迁移），重建 scheduled_tasks；logs/deliveries 不再重建，执行历史 = agent_runners + 任务会话消息"
+  statements: |
+    DROP TABLE IF EXISTS scheduled_task_deliveries;
+    DROP TABLE IF EXISTS scheduled_task_logs;
+    DROP TABLE IF EXISTS scheduled_tasks;
+    CREATE TABLE IF NOT EXISTS scheduled_tasks (
+        id SERIAL PRIMARY KEY,
+        task_id TEXT UNIQUE NOT NULL,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        task_prompt TEXT NOT NULL,
+        attachments JSONB DEFAULT '[]',
+        profile_id TEXT NOT NULL DEFAULT 'main',
+        instance_id TEXT,
+        schedule_type TEXT NOT NULL,
+        cron_expression TEXT,
+        interval_seconds INTEGER,
+        run_at TIMESTAMP,
+        session_id TEXT UNIQUE NOT NULL,
+        notification_target_id TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        pause_reason TEXT,
+        next_due_at TIMESTAMP,
+        pending_occurrence_key TEXT,
+        pending_trigger TEXT,
+        pending_retry_at TIMESTAMP,
+        pending_snapshot JSONB,
+        last_run_at TIMESTAMP,
+        last_status TEXT,
+        total_runs INTEGER DEFAULT 0,
+        success_count INTEGER DEFAULT 0,
+        fail_count INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due ON scheduled_tasks(status, next_due_at);
+    CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_pending ON scheduled_tasks(pending_retry_at) WHERE pending_occurrence_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_owner ON scheduled_tasks(tenant_id, user_id, status);

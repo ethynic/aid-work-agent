@@ -5,7 +5,7 @@
    dir_name 与目录名一致（/chat/weixin-marketing 路由匹配）；
 2. 三工具经 Catalog 自动发现（discover_tool_classes 可见）；
 3. 子智能体 allowlist 装配：以 SUBAGENT.md 声明的 tools.allowed 装配后，
-   三专用工具在册、通用 create_scheduled_task 不在册（架构隔离）。
+   三专用工具在册（只允许专用链路，见 SUBAGENT.md 工具使用约束）。
 """
 
 from pathlib import Path
@@ -58,8 +58,6 @@ class TestSubagentMdSmoke:
         assert "真实发送副作用" in prompt       # 试发与正式发均为真实副作用
         assert "不" in prompt and "宣称成功" in prompt   # unknown：不宣称成功
         assert "人工" in prompt                # 转人工核对
-        # 不使用通用定时任务（路由约束的提示词侧防线）
-        assert "create_scheduled_task" in prompt
 
     def test_load_all_registers_weixin_marketing(self):
         """真实 loader 全目录加载冒烟：weixin-marketing 出现在注册结果中"""
@@ -125,8 +123,5 @@ class TestSubagentAllowlistAssembly:
         bundle = assemble_agent_tools(request)
         final = set(bundle.final_names)
         assert set(WEIXIN_TOOLS) <= final
-        # 架构隔离：微信营销子智能体拿不到通用定时任务工具
-        assert "create_scheduled_task" not in final
-        assert "manage_scheduled_task" not in final
         # unknown 处理兜底：转人工工具在册
         assert "transfer_to_human" in final

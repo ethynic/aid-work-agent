@@ -57,6 +57,12 @@ class BaseTool(ABC):
     # 有构造依赖的控制工具、渠道层工具（speech_to_text）、
     # 仅子智能体按需注册的工具（boss_* 本地代理）、测试替身/中间基类。
     catalog: bool = True
+    # 可见性标记（装配层过滤，definitions 与 dispatch 同一口径）：
+    # chat_only = 仅 web 对话（chat 来源）可见，渠道与 scheduled 执行滤除；
+    # interactive_only = 需要用户在线交互（ask_user/clarify 等提问类），
+    # scheduled 非交互执行（根+子）滤除（设计 §5.3）。
+    chat_only: bool = False
+    interactive_only: bool = False
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """子类定义时自动登记进 _CATALOG（仅收集类，不实例化）。

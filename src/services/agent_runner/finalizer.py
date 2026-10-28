@@ -28,7 +28,9 @@ class RunnerFinalizer:
             (runner['record_id'],runner['runner_id']))
         pending = any(receipt['phase'] in ('started','unknown')
             and receipt['price_snapshot'].get('covered_cost')!='resume_recognition' for receipt in receipts)
-        return 'pending' if pending else 'settled', delta
+        # cost 一并返回：finalize 把本次结算积分补进终态公共 result.credit_cost
+        # （设计 §5.5，chat/scheduled 通用；权威仍在 chat_records）。
+        return 'pending' if pending else 'settled', delta, cost
 
     def finalize(self, attempt):
         with self.connection_factory() as conn:
@@ -40,7 +42,7 @@ class RunnerFinalizer:
             result = (runner.get('checkpoint') or {}).get('pending_finalization')
             if not result or result.get('status') not in ('completed','failed','cancelled'):
                 raise CheckpointFailure('FINALIZATION_INTENT_NOT_SAVED')
-            settlement, delta = self._settle(cursor, runner, result)
+            settlement, delta, cost = self._settle(cursor, runner, result)
             snapshot,result=project_terminal_public_state(cursor,runner,result)
             # 已接入 Runner 的渠道以最终合并 owner 写入历史，
             # 避免 Runner 与渠道 process_and_persist 双写 channel_messages。
@@ -52,6 +54,7 @@ class RunnerFinalizer:
             if not cursor.fetchone():
                 raise CheckpointFailure('FINALIZE_CLAIM_OWNER_CHANGED')
             public_result = {key:result.get(key) for key in ('status','output','images','error_code')}
+            public_result['credit_cost'] = float(cost)
             from .control_repository import close_pending_controls
             close_pending_controls(cursor,runner['runner_id'],'CONTROL_EXECUTION_CLOSED')
             checkpoint = {**runner['checkpoint'],'released_attempt':release_proof(attempt,result['status'],'finalized')}
@@ -78,9 +81,15 @@ class RunnerFinalizer:
             # Queued cancellation has no execution record or started receipt.
             if not (runner.get('checkpoint') or {}).get('pending_finalization'):
                 return runner
-            settlement, delta = self._settle(cursor, runner, runner['checkpoint']['pending_finalization'])
-            cursor.execute('''UPDATE agent_runners SET settlement_status=%s,view_revision=view_revision+1,
-                updated_at=clock_timestamp() WHERE runner_id=%s RETURNING *''', (settlement,runner_id))
+            settlement, delta, cost = self._settle(cursor, runner, runner['checkpoint']['pending_finalization'])
+            # 补结算同步公开费用：迟到 receipt 累计进权威 chat_records 后，
+            # 公开 result.credit_cost 一并更新，避免展示永久少于实际扣费
+            result = dict(runner.get('result') or {})
+            result['credit_cost'] = float(cost)
+            cursor.execute('''UPDATE agent_runners SET settlement_status=%s,result=%s::jsonb,
+                view_revision=view_revision+1,
+                updated_at=clock_timestamp() WHERE runner_id=%s RETURNING *''',
+                (settlement, json.dumps(result, ensure_ascii=False), runner_id))
             runner = decoded(cursor.fetchone())
             runner = EventRepository.notify_in_tx(cursor,previous,after=runner)
             conn.commit()

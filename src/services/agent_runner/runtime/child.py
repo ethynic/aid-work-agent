@@ -100,11 +100,14 @@ class ChildExecution:
 
     def __init__(self, parent_identity, config, execution_id, parent_plan_manager=None,
                  ports_factory=None, history_reader=None, resource_directory=None, isolated_plan_facts=False,
-                 restored_state=None, restored_plan=None):
+                 restored_state=None, restored_plan=None, prompt_augmentations=()):
         from .profile import RuntimeResources
         from .executor import RuntimeExecution
         self.subagent_config, self.ports_factory = config, ports_factory
         self.restored_state = restored_state
+        # 根执行的 prompt_augmentations（含 scheduled 非交互指令）由 child_factory
+        # 传入，子执行上下文装配一致继承（设计 §5.3：根+子同一 augmentation）。
+        self.prompt_augmentations = tuple(prompt_augmentations or ())
         import hashlib
         from ..contracts import canonical_json
         self.profile_fingerprint = hashlib.sha256(canonical_json(config.model_dump(mode='json')).encode()).hexdigest()
@@ -116,7 +119,7 @@ class ChildExecution:
             parent_plan_manager=parent_plan_manager, mode=AgentMode.SUBAGENT,
             tenant_id=identity.tenant_id, user_id=identity.user_id,
             resource_directory=resource_directory, isolate_plan=True,session_kind=identity.session_kind,
-            plan_store=PlanFacts() if isolated_plan_facts else None)
+            plan_store=PlanFacts() if isolated_plan_facts else None, source=identity.source)
         if restored_plan is not None:
             from src.models.plan import ExecutionPlan
             resources.plan_manager._save_plan(identity.session_id,ExecutionPlan.model_validate(restored_plan))
@@ -152,9 +155,15 @@ class ChildExecution:
                 await self.runtime.control.authorize_dispatch()
         else:
             self.runtime.observer = CompatibilityObserver(task_record=task_record)
+        # 非交互指令经根执行的同一 request_context 通道进入子执行
+        # ContextAssembler（装配为受信补充 user 消息，设计 §5.3/v4 修正）。
+        request_context = None
+        if self.prompt_augmentations:
+            from src.core.request_context import AgentRequestContext
+            request_context = AgentRequestContext(prompt_augmentations=self.prompt_augmentations)
         events = []
         async for event in self.runtime.run(task_description, task_record=task_record, image_paths=image_paths,
-                                           state=self.restored_state):
+                                           state=self.restored_state, request_context=request_context):
             events.append(event)
             if progress_callback:
                 await progress_callback(event)
@@ -175,9 +184,10 @@ class ChildExecution:
 
 
 def child_factory(identity, ports_factory=None, history_reader=None, resource_directory=None,
-                  isolated_plan_facts=False):
+                  isolated_plan_facts=False, prompt_augmentations=()):
     def build(*, config, execution_id, parent_plan_manager=None, **kwargs):
         child_ports = ports_factory() if ports_factory else None
         return ChildExecution(identity, config, execution_id, parent_plan_manager, child_ports, history_reader,
-                              resource_directory, isolated_plan_facts)
+                              resource_directory, isolated_plan_facts,
+                              prompt_augmentations=prompt_augmentations)
     return build

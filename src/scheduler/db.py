@@ -1,584 +1,657 @@
-"""定时任务数据访问层"""
+"""定时任务数据访问层（v2 Runner 化重建，设计 §9）
+
+真源为 scheduled_tasks 单表：到期认领（claim_due 原子 UPDATE + 不可变提交
+快照）、manual pending 槽、occurrence_key 条件化的 clear/backoff、删除守卫
+事务、统计回写。执行历史不再有独立日志表——由 agent_runners + 任务会话
+（chat_sessions.metadata.scheduled_task 标记）消息构成。
+"""
 
 import json
 import uuid
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
-from src.db.database import get_db_connection, get_current_timestamp
-from src.scheduler.error_sanitizer import sanitize_scheduled_task_error
 
-# 补投尝试上限：达到后置 expired，避免按客户消息频率反复调用企微 API
-_MAX_DELIVERY_ATTEMPTS = 5
+from src.db.database import get_db_connection
+from src.db.models import generate_session_id
+
+# pause_reason 与 runner error_code 的映射（设计 §5.4：仅执行侧两类触发自动暂停）
+_PAUSE_REASON_BY_ERROR_CODE = {
+    "CREDIT_BLOCKED": "credit_blocked",
+    "PROFILE_FORBIDDEN": "profile_forbidden",
+}
 
 
-def _sanitize_error(error_msg: str) -> str:
-    """过滤敏感信息（统一委托独立脱敏模块，含引号/未闭合/截断保守遮蔽）"""
-    return sanitize_scheduled_task_error(error_msg)
+class ScheduledTaskBusyError(RuntimeError):
+    """任务会话存在非终态 runner，删除被守卫拒绝（调用方映射 409 引导重试）"""
+
+
+class ScheduledTaskNotAcceptable(RuntimeError):
+    """首次接单守卫失败（提交事务内，任务行 FOR UPDATE 锁下复核失配）。
+
+    reason 取值：task_missing（任务行不存在）/ not_active（已暂停或终态）/
+    pending_changed（pending 已被消费/替换为其他 occurrence）——与暂停/删除/
+    认领在行锁上串行化，消灭"暂停后首次接单"竞态（设计 §4.3）。
+    """
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def lock_for_acceptance_in_tx(cursor, task_id: str, occurrence_key: str) -> Dict[str, Any]:
+    """提交事务内的首次接单守卫（设计 §4.1/§4.3，调用方持有同一事务）。
+
+    - SELECT ... FOR UPDATE 锁任务行：与暂停/删除/认领（claim_due、
+      delete_with_session 同样先锁该行）串行化——暂停先提交则接单被拒；
+      接单先提交则暂停清 pending 属"已接单后清理"，语义正确；
+    - 校验 status='active' AND pending_occurrence_key == occurrence_key，
+      失配抛 ScheduledTaskNotAcceptable（携带原因）；
+    - 必须先于 agent_runners 的 INSERT 执行（行锁与插入同事务）。
+    """
+    cursor.execute("""SELECT task_id, tenant_id, user_id, status, pending_occurrence_key
+        FROM scheduled_tasks WHERE task_id = %s FOR UPDATE""", (task_id,))
+    row = cursor.fetchone()
+    if row is None:
+        raise ScheduledTaskNotAcceptable("task_missing")
+    task = dict(row)
+    if task["status"] != "active":
+        raise ScheduledTaskNotAcceptable("not_active")
+    if task["pending_occurrence_key"] != occurrence_key:
+        raise ScheduledTaskNotAcceptable("pending_changed")
+    return task
 
 
 class ScheduledTaskDB:
-    """定时任务数据库访问类"""
+    """定时任务数据库访问类（手写 SQL DAL，全参数化）"""
+
+    # ==================== 创建 / 查询 ====================
 
     @staticmethod
-    def create(user_id: str, name: str, description: str, task_prompt: str,
+    def create(*, user_id: str, tenant_id: str, name: str, task_prompt: str,
                schedule_type: str, cron_expression: str = None,
-               interval_seconds: int = None, session_id: str = None,
-               tenant_id: str = "") -> Optional[Dict[str, Any]]:
-        """创建定时任务
+               interval_seconds: int = None, run_at=None, attachments=None,
+               profile_id: str = "main", instance_id: str = None,
+               subagent_id: str = None, notification_target_id: str = None,
+               next_due_at=None) -> Dict[str, Any]:
+        """创建定时任务（同事务创建任务专属会话）。
 
-        tenant_id：任务属主租户（''=公共用户/无租户上下文）。
-        创建时必须落库，否则新任务在租户视图不可见。
+        - task_prompt 为自包含任务定义；attachments 为受权资源引用（file_id 等），
+          创建时固化，后续执行不再回读创建会话上下文；
+        - 任务专属会话（chat_sessions）是执行结果存储容器：metadata 写
+          {"scheduled_task": task_id} 标记，供任务视图识别与 chat 提交拒绝；
+        - next_due_at 等调度值由调用方（工具/API，Phase 4）计算后传入。
         """
         task_id = f"sched_{uuid.uuid4().hex[:12]}"
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        placeholder = "%s"
+        session_id = generate_session_id()
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute(f"""
+                # 1) 任务专属会话（与任务行同事务：任务落库则会话必然存在）
+                cursor.execute("""
+                    INSERT INTO chat_sessions
+                    (session_id, user_id, tenant_id, subagent_id, instance_id, title, metadata)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+                """, (session_id, user_id, tenant_id, subagent_id, instance_id,
+                      name, json.dumps({"scheduled_task": task_id})))
+                # 2) 任务行
+                cursor.execute("""
                     INSERT INTO scheduled_tasks
-                    (task_id, tenant_id, user_id, name, description, task_prompt,
-                     schedule_type, cron_expression, interval_seconds, session_id,
-                     status, created_at, updated_at)
-                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
-                            {placeholder}, {placeholder}, {placeholder}, {placeholder}, 'active', {placeholder}, {placeholder})
-                """, (task_id, tenant_id or "", user_id, name, description, task_prompt,
-                      schedule_type, cron_expression, interval_seconds, session_id,
-                      now, now))
+                    (task_id, tenant_id, user_id, name, task_prompt, attachments,
+                     profile_id, instance_id, schedule_type, cron_expression,
+                     interval_seconds, run_at, session_id, notification_target_id,
+                     status, next_due_at)
+                    VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s,
+                            %s, %s, 'active', %s)
+                """, (task_id, tenant_id, user_id, name, task_prompt,
+                      json.dumps(attachments or []),
+                      profile_id, instance_id, schedule_type, cron_expression,
+                      interval_seconds, run_at, session_id, notification_target_id,
+                      next_due_at))
+                cursor.execute(
+                    "SELECT * FROM scheduled_tasks WHERE task_id = %s", (task_id,))
+                row = cursor.fetchone()
                 conn.commit()
-                logger.info(f"后端日志：定时任务创建 task_id={task_id}, user_id={user_id}, name={name}")
-                return ScheduledTaskDB.get_by_id(task_id)
+                logger.info(f"后端日志：定时任务创建 task_id={task_id}, "
+                            f"user_id={user_id}, session_id={session_id}, name={name}")
+                return dict(row) if row else {}
             except Exception as e:
                 logger.opt(exception=True).error(f"后端日志：创建定时任务失败 {e}")
-                return None
+                raise
 
     @staticmethod
-    def get_by_id(task_id: str, tenant_id: Optional[str] = None,
+    def get_by_id(task_id: str, *, tenant_id: Optional[str] = None,
                   user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """根据任务ID获取定时任务
+        """根据任务 ID 获取定时任务。
 
-        tenant_id 可选：请求/工具链传入时 SQL 加租户（可叠加用户）条件，
-        越权行直接查不到（fail-closed，不泄露存在性）；
-        background runner / executor 内部调用不传（无请求上下文，保持全量行为）。
+        tenant_id/user_id 可选：传入时条件进 WHERE（越权行直接查不到，
+        fail-closed 不泄露存在性）；调度侧内部调用不传。
         """
-        placeholder = "%s"
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            if tenant_id is not None and user_id is not None:
-                cursor.execute(f"""
-                    SELECT * FROM scheduled_tasks
-                    WHERE task_id = {placeholder} AND tenant_id = {placeholder}
-                      AND user_id = {placeholder}
-                """, (task_id, tenant_id, user_id))
-            elif tenant_id is not None:
-                cursor.execute(f"""
-                    SELECT * FROM scheduled_tasks
-                    WHERE task_id = {placeholder} AND tenant_id = {placeholder}
-                """, (task_id, tenant_id))
-            else:
-                cursor.execute(f"SELECT * FROM scheduled_tasks WHERE task_id = {placeholder}", (task_id,))
+            conditions = ["task_id = %s"]
+            params: List[Any] = [task_id]
+            if tenant_id is not None:
+                conditions.append("tenant_id = %s")
+                params.append(tenant_id)
+            if user_id is not None:
+                conditions.append("user_id = %s")
+                params.append(user_id)
+            cursor.execute(
+                f"SELECT * FROM scheduled_tasks WHERE {' AND '.join(conditions)}",
+                tuple(params))
             row = cursor.fetchone()
             return dict(row) if row else None
 
     @staticmethod
-    def list_by_user(user_id: str, status: str = None, limit: int = 50,
-                     tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """获取用户的定时任务列表
-
-        tenant_id 可选：请求/工具链传入时 SQL 加租户条件（''=遗留未回填行，
-        在具体租户视图 fail-closed 不可见）；内部调用不传保持原行为。
-        """
-        placeholder = "%s"
+    def list_by_user(user_id: str, *, tenant_id: Optional[str] = None,
+                     status: Optional[str] = None,
+                     limit: int = 100) -> List[Dict[str, Any]]:
+        """获取用户的定时任务列表（tenant_id 可选：租户视图 fail-closed 过滤）"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            conditions = [f"user_id = {placeholder}"]
-            params = [user_id]
+            conditions = ["user_id = %s"]
+            params: List[Any] = [user_id]
             if status:
-                conditions.append(f"status = {placeholder}")
+                conditions.append("status = %s")
                 params.append(status)
             if tenant_id is not None:
-                conditions.append(f"tenant_id = {placeholder}")
+                conditions.append("tenant_id = %s")
                 params.append(tenant_id)
             params.append(limit)
             cursor.execute(f"""
                 SELECT * FROM scheduled_tasks
-                WHERE {" AND ".join(conditions)}
+                WHERE {' AND '.join(conditions)}
                 ORDER BY created_at DESC
-                LIMIT {placeholder}
+                LIMIT %s
             """, tuple(params))
             return [dict(row) for row in cursor.fetchall()]
 
     @staticmethod
-    def list_active() -> List[Dict[str, Any]]:
-        """获取所有活跃任务（启动时加载）"""
+    def count_by_user(user_id: str, status: str = "active",
+                      *, tenant_id: Optional[str] = None) -> int:
+        """统计用户的定时任务数量（max_tasks_per_user 上限用）"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            conditions = ["user_id = %s", "status = %s"]
+            params: List[Any] = [user_id, status]
+            if tenant_id is not None:
+                conditions.append("tenant_id = %s")
+                params.append(tenant_id)
+            cursor.execute(
+                f"SELECT COUNT(*) AS cnt FROM scheduled_tasks WHERE {' AND '.join(conditions)}",
+                tuple(params))
+            row = cursor.fetchone()
+            return row["cnt"] if row else 0
+
+    # ==================== 到期认领与 pending 交接 ====================
+
+    @staticmethod
+    def list_due(now, limit: int = 20) -> List[Dict[str, Any]]:
+        """列出已到期待认领任务（dispatch 循环扫描入口）。
+
+        条件三要素：active + next_due_at 到期 + 无 pending 占用（认领中任务
+        不重复进入候选）。"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT * FROM scheduled_tasks
                 WHERE status = 'active'
-                ORDER BY next_run_at ASC
-            """)
+                  AND next_due_at <= %s
+                  AND pending_occurrence_key IS NULL
+                ORDER BY next_due_at
+                LIMIT %s
+            """, (now, limit))
             return [dict(row) for row in cursor.fetchall()]
 
     @staticmethod
-    def list_all_for_reconcile() -> List[Dict[str, Any]]:
-        """获取所有未取消任务（active + paused），供 background reconcile 对账使用。
+    def claim_due(task_id: str, *, prompt_augmentations: Optional[list] = None,
+                  now: datetime = None) -> Optional[Dict[str, Any]]:
+        """原子认领到期任务（单短事务：锁行 → 校验/作废 → 派生参数 → 推进调度）。
 
-        返回字段包含 manual_trigger_at 和 updated_at，用于：
-        - 按 updated_at 变化判断是否需要重注册到 APScheduler
-        - 扫描 manual_trigger_at 非空的任务执行手动触发
+        **occurrence、下次执行时间、执行快照全部派生自锁定的当前任务行**
+        （同一份有效定义，调用方不传任何调度参数——扫描后发生改期的旧候选
+        不可能覆盖新调度）：
+        - SELECT 即校验（active + 到期 + 无 pending，DB 时钟）+ FOR UPDATE
+          行锁：与编辑/改期/暂停/删除串行化；不满足返回 None；
+        - once 已过执行宽限 → 置 expired 不执行（返回 None）；
+        - occurrence_key = 锁定行的 next_due_at（本次消费的 due），幂等键 =
+          '{task_id}:{occurrence_key}'；
+        - advance = compute_next_due(锁定行)（cron 从 now 合并、interval 锚定
+          相位、once 为 NULL）；
+        - 快照从锁定行构建（含 prompt_augmentations 非交互指令），重试原样
+          重建不重新生成。
         """
+        from src.scheduler.schedule import compute_next_due, once_expired
+
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT * FROM scheduled_tasks
-                WHERE status IN ('active', 'paused')
-                ORDER BY updated_at ASC
-            """)
-            return [dict(row) for row in cursor.fetchall()]
+                WHERE task_id = %s
+                  AND status = 'active'
+                  AND next_due_at <= now()
+                  AND pending_occurrence_key IS NULL
+                FOR UPDATE
+            """, (task_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            task = dict(row)
+            now = now or datetime.now()
+            if once_expired(task, now):
+                cursor.execute("""
+                    UPDATE scheduled_tasks SET status = 'expired', updated_at = now()
+                    WHERE task_id = %s AND status = 'active'
+                """, (task_id,))
+                conn.commit()
+                logger.info(f"后端日志：once 定时任务已过宽限作废 task_id={task_id}")
+                return None
+            occurrence_key = task["next_due_at"].isoformat()
+            advance_to = compute_next_due(task, now)
+            snapshot = {
+                "text": task["task_prompt"],
+                "attachments": task.get("attachments") or [],
+                "profile_id": task["profile_id"],
+                "instance_id": task.get("instance_id"),
+                "prompt_augmentations": prompt_augmentations or [],
+            }
+            cursor.execute("""
+                UPDATE scheduled_tasks SET
+                    next_due_at = %s,
+                    pending_occurrence_key = %s,
+                    pending_trigger = 'scheduled',
+                    pending_retry_at = now(),
+                    pending_snapshot = %s::jsonb,
+                    updated_at = now()
+                WHERE task_id = %s
+                RETURNING *
+            """, (advance_to, occurrence_key,
+                  json.dumps(snapshot, ensure_ascii=False), task_id))
+            updated = cursor.fetchone()
+            conn.commit()
+            if not updated:
+                return None
+            logger.info(f"后端日志：定时任务认领 task_id={task_id}, "
+                        f"occurrence_key={occurrence_key}, advance_to={advance_to}")
+            return dict(updated)
 
     @staticmethod
-    def request_manual_trigger(task_id: str, *, tenant_id: Optional[str] = None,
-                               user_id: Optional[str] = None) -> bool:
-        """标记任务为待手动触发（SET manual_trigger_at=NOW()）。
+    def submit_manual(task_id: str, *, occurrence_key: str,
+                      prompt_augmentations: Optional[list] = None) -> Optional[Dict[str, Any]]:
+        """写入 manual pending 槽（"立即执行一次"）。
 
-        由 API/工具调用，background reconcile ≤30s 内扫到并执行。
-        请求/工具链必须成对传 tenant_id+user_id（只传其一视为调用方身份不完整，
-        fail-closed 拒绝）；两者都不传走受信内部路径。
-        """
-        if (tenant_id is None) != (user_id is None):
-            return False
-        placeholder = "%s"
+        与 claim_due 同构：锁行校验（active + 无 pending）后在事务内从**当前
+        任务行**固化快照，但不推进 next_due_at——手动执行是额外一次真实执行，
+        recurring 不改节奏、once 不消费 run_at 额度；occurrence_key = uuid，
+        由调用方生成。"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            conditions = [f"task_id = {placeholder}", "status IN ('active', 'paused')"]
-            params = [task_id]
+            cursor.execute("""
+                SELECT * FROM scheduled_tasks
+                WHERE task_id = %s
+                  AND status = 'active'
+                  AND pending_occurrence_key IS NULL
+                FOR UPDATE
+            """, (task_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            task = dict(row)
+            snapshot = {
+                "text": task["task_prompt"],
+                "attachments": task.get("attachments") or [],
+                "profile_id": task["profile_id"],
+                "instance_id": task.get("instance_id"),
+                "prompt_augmentations": prompt_augmentations or [],
+            }
+            cursor.execute("""
+                UPDATE scheduled_tasks SET
+                    pending_occurrence_key = %s,
+                    pending_trigger = 'manual',
+                    pending_retry_at = now(),
+                    pending_snapshot = %s::jsonb,
+                    updated_at = now()
+                WHERE task_id = %s
+                RETURNING *
+            """, (occurrence_key, json.dumps(snapshot, ensure_ascii=False), task_id))
+            updated = cursor.fetchone()
+            conn.commit()
+            if not updated:
+                return None
+            logger.info(f"后端日志：定时任务手动执行入队 task_id={task_id}, "
+                        f"occurrence_key={occurrence_key}")
+            return dict(updated)
+
+    @staticmethod
+    def clear_pending(task_id: str, occurrence_key: str) -> bool:
+        """清除 pending 槽（提交成功 202 / 确定性拒绝暂停路径）。
+
+        必须带 occurrence_key 条件：迟到响应不得清掉他人刚写入的新 pending。"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE scheduled_tasks SET
+                    pending_occurrence_key = NULL,
+                    pending_trigger = NULL,
+                    pending_retry_at = NULL,
+                    pending_snapshot = NULL,
+                    updated_at = now()
+                WHERE task_id = %s AND pending_occurrence_key = %s
+            """, (task_id, occurrence_key))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    @staticmethod
+    def backoff_pending(task_id: str, occurrence_key: str,
+                        retry_seconds: int) -> bool:
+        """提交重试退避（5xx/网络未知：不当作确定未接单，按间隔重提）。
+
+        同样带 occurrence_key 条件，仅延长本次 pending 的重试时间。"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE scheduled_tasks SET
+                    pending_retry_at = now() + %s * interval '1 second',
+                    updated_at = now()
+                WHERE task_id = %s AND pending_occurrence_key = %s
+            """, (retry_seconds, task_id, occurrence_key))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    # ==================== 生命周期操作 ====================
+
+    @staticmethod
+    def pause(task_id: str, *, tenant_id: Optional[str] = None,
+              user_id: Optional[str] = None,
+              pause_reason: Optional[str] = None) -> bool:
+        """用户主动暂停任务：置 paused + pause_reason + 清空 pending 槽。
+
+        - 仅 active 可暂停（条件进 UPDATE）：completed/expired 终态不得经
+          暂停/恢复流程重新激活；
+        - tenant_id/user_id 可选：传入时归属条件进 UPDATE（对象级权限防 TOCTOU）；
+        - 已受理的 runner 继续执行到终态（persisted 重校验不要求 active）。
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            conditions = ["task_id = %s", "status = 'active'"]
+            params: List[Any] = [pause_reason, task_id]
             if tenant_id is not None:
-                conditions.extend([
-                    f"tenant_id = {placeholder}", f"user_id = {placeholder}"
-                ])
-                params.extend([tenant_id, user_id])
+                conditions.append("tenant_id = %s")
+                params.append(tenant_id)
+            if user_id is not None:
+                conditions.append("user_id = %s")
+                params.append(user_id)
             cursor.execute(f"""
-                UPDATE scheduled_tasks SET manual_trigger_at = NOW()
-                WHERE {" AND ".join(conditions)}
+                UPDATE scheduled_tasks SET
+                    status = 'paused',
+                    pause_reason = %s,
+                    pending_occurrence_key = NULL,
+                    pending_trigger = NULL,
+                    pending_retry_at = NULL,
+                    pending_snapshot = NULL,
+                    updated_at = now()
+                WHERE {' AND '.join(conditions)}
             """, tuple(params))
             conn.commit()
             return cursor.rowcount > 0
 
     @staticmethod
-    def clear_manual_trigger(task_id: str) -> bool:
-        """清除手动触发标记（执行完成后调用）"""
-        placeholder = "%s"
+    def pause_for_occurrence(task_id: str, occurrence_key: str,
+                             pause_reason: str) -> bool:
+        """提交结果触发的自动暂停（设计 §4.1 拒绝映射：402/403/422/409 等）。
+
+        与用户主动暂停区分：带 occurrence_key + active 条件——仅当该 occurrence
+        仍是当前 pending 时才暂停并清空。迟到的提交响应（用户已暂停→恢复→产生
+        新 pending）既不得覆盖新 pending/新状态，也不得再发布新的暂停通知
+        （返回 False 由调用方跳过通知）。"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE scheduled_tasks SET
+                    status = 'paused',
+                    pause_reason = %s,
+                    pending_occurrence_key = NULL,
+                    pending_trigger = NULL,
+                    pending_retry_at = NULL,
+                    pending_snapshot = NULL,
+                    updated_at = now()
+                WHERE task_id = %s
+                  AND status = 'active'
+                  AND pending_occurrence_key = %s
+            """, (pause_reason, task_id, occurrence_key))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    @staticmethod
+    def resume(task_id: str, *, next_due_at, tenant_id: Optional[str] = None,
+               user_id: Optional[str] = None) -> bool:
+        """恢复任务：置 active + 清 pause_reason + 重算 next_due_at。
+
+        仅 paused 可恢复（条件进 UPDATE）：completed/expired 终态不可复活，
+        避免 once 已消费额度的任务经 pause→resume 再次进入调度。"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            conditions = ["task_id = %s", "status = 'paused'"]
+            params: List[Any] = [next_due_at, task_id]
+            if tenant_id is not None:
+                conditions.append("tenant_id = %s")
+                params.append(tenant_id)
+            if user_id is not None:
+                conditions.append("user_id = %s")
+                params.append(user_id)
+            cursor.execute(f"""
+                UPDATE scheduled_tasks SET
+                    status = 'active',
+                    pause_reason = NULL,
+                    next_due_at = %s,
+                    updated_at = now()
+                WHERE {' AND '.join(conditions)}
+            """, tuple(params))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    @staticmethod
+    def update_schedule(task_id: str, *, schedule_type: str,
+                        cron_expression: Optional[str],
+                        interval_seconds: Optional[int], run_at,
+                        next_due_at, tenant_id: Optional[str] = None,
+                        user_id: Optional[str] = None) -> bool:
+        """改期专用：仅更新调度字段（schedule_type/cron/interval/run_at/next_due_at）。
+
+        编辑与调度解耦：任务内容编辑走 update_definition，不触碰调度字段。"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            conditions = ["task_id = %s"]
+            params: List[Any] = [schedule_type, cron_expression, interval_seconds,
+                                 run_at, next_due_at, task_id]
+            if tenant_id is not None:
+                conditions.append("tenant_id = %s")
+                params.append(tenant_id)
+            if user_id is not None:
+                conditions.append("user_id = %s")
+                params.append(user_id)
+            cursor.execute(f"""
+                UPDATE scheduled_tasks SET
+                    schedule_type = %s,
+                    cron_expression = %s,
+                    interval_seconds = %s,
+                    run_at = %s,
+                    next_due_at = %s,
+                    updated_at = now()
+                WHERE {' AND '.join(conditions)}
+            """, tuple(params))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    @staticmethod
+    def update_definition(task_id: str, *, name: Optional[str] = None,
+                          task_prompt: Optional[str] = None,
+                          attachments: Optional[list] = None,
+                          notification_target_id: Optional[str] = None,
+                          tenant_id: Optional[str] = None,
+                          user_id: Optional[str] = None) -> bool:
+        """编辑任务内容（name/task_prompt/attachments/notification_target_id 可选字段）。
+
+        只更新显式传入的字段，不触碰任何调度字段（编辑不影响已认领执行的
+        快照，也不重算 next_due_at）。"""
+        set_clauses = []
+        params: List[Any] = []
+        if name is not None:
+            set_clauses.append("name = %s")
+            params.append(name)
+        if task_prompt is not None:
+            set_clauses.append("task_prompt = %s")
+            params.append(task_prompt)
+        if attachments is not None:
+            set_clauses.append("attachments = %s::jsonb")
+            params.append(json.dumps(attachments))
+        if notification_target_id is not None:
+            set_clauses.append("notification_target_id = %s")
+            params.append(notification_target_id)
+        if not set_clauses:
+            return False
+        set_clauses.append("updated_at = now()")
+        conditions = ["task_id = %s"]
+        params.append(task_id)
+        if tenant_id is not None:
+            conditions.append("tenant_id = %s")
+            params.append(tenant_id)
+        if user_id is not None:
+            conditions.append("user_id = %s")
+            params.append(user_id)
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"""
-                UPDATE scheduled_tasks
-                SET manual_trigger_at = NULL
-                WHERE task_id = {placeholder}
+                UPDATE scheduled_tasks SET {', '.join(set_clauses)}
+                WHERE {' AND '.join(conditions)}
+            """, tuple(params))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    @staticmethod
+    def mark_once_expired(task_id: str) -> bool:
+        """once 任务过期作废（run_at 超过宽限仍未执行，认领时判定）"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE scheduled_tasks SET status = 'expired', updated_at = now()
+                WHERE task_id = %s AND status = 'active'
             """, (task_id,))
             conn.commit()
             return cursor.rowcount > 0
 
     @staticmethod
-    def update_schedule(task_id: str, cron_expression: str = None,
-                        interval_seconds: int = None, *,
-                        tenant_id: Optional[str] = None,
-                        user_id: Optional[str] = None) -> bool:
-        """更新任务调度配置。
-
-        请求/工具链必须成对传 tenant_id+user_id（只传其一 fail-closed 拒绝），
-        使对象级权限条件进入 UPDATE 本身以防 TOCTOU；两者都不传走受信内部路径。
-        """
-        from src.tools.scheduler.scheduled_task_tool import generate_cron_expression
-        if (tenant_id is None) != (user_id is None):
-            return False
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        placeholder = "%s"
+    def mark_completed(task_id: str) -> bool:
+        """显式置 completed（正常由 record_run_result 的 once 消费规则触发）"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            conditions = [f"task_id = {placeholder}"]
-            params = [cron_expression, interval_seconds, now, task_id]
-            if tenant_id is not None:
-                conditions.extend([
-                    f"tenant_id = {placeholder}", f"user_id = {placeholder}"
-                ])
-                params.extend([tenant_id, user_id])
-            cursor.execute(f"""
-                UPDATE scheduled_tasks
-                SET cron_expression = {placeholder}, interval_seconds = {placeholder}, updated_at = {placeholder}
-                WHERE {" AND ".join(conditions)}
-            """, tuple(params))
+            cursor.execute("""
+                UPDATE scheduled_tasks SET status = 'completed', updated_at = now()
+                WHERE task_id = %s AND status = 'active'
+            """, (task_id,))
             conn.commit()
             return cursor.rowcount > 0
 
-    @staticmethod
-    def update_status(task_id: str, status: str, *, tenant_id: Optional[str] = None,
-                      user_id: Optional[str] = None) -> bool:
-        """更新任务状态。
+    # ==================== 执行结果回写 ====================
 
-        请求/工具链必须成对传 tenant_id+user_id（只传其一 fail-closed 拒绝），
-        使对象级权限条件进入 UPDATE 本身以防 TOCTOU；
-        background runner 两者都不传走明确受信路径。
+    @staticmethod
+    def _record_run_result_in_tx(cursor, task_id: str, *, run_status: str,
+                                 trigger: str, error_code: Optional[str] = None,
+                                 finished_at=None) -> bool:
+        """统计回写（事务内版本，Phase 3 runner 终态事务复用）。
+
+        规则（设计 §5.4）：
+        - run_status 直接使用 Runner 终态（completed/failed/cancelled）：
+          completed 计成功、failed 计失败、cancelled 两者皆不计（仅 total_runs
+          与 last_status 呈现，取消不是失败也不是成功）；
+        - last_run_at/last_status/total_runs 回写；
+        - 仅 trigger=='scheduled' 且 schedule_type=='once' 置 completed
+          （manual 终态只计统计，不消费 once 额度）；
+        - recurring 且 error_code ∈ {CREDIT_BLOCKED, PROFILE_FORBIDDEN} 时置
+          paused + 对应 pause_reason（once 额度已消费，失败经 last_status 呈现）。
         """
-        if (tenant_id is None) != (user_id is None):
-            return False
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        placeholder = "%s"
+        pause_reason = _PAUSE_REASON_BY_ERROR_CODE.get(error_code or "")
+        finished_at = finished_at or datetime.now()
+        cursor.execute("""
+            UPDATE scheduled_tasks SET
+                total_runs = total_runs + 1,
+                success_count = success_count + CASE WHEN %s = 'completed' THEN 1 ELSE 0 END,
+                fail_count = fail_count + CASE WHEN %s = 'failed' THEN 1 ELSE 0 END,
+                last_run_at = %s,
+                last_status = %s,
+                status = CASE
+                    WHEN %s = 'scheduled' AND schedule_type = 'once' THEN 'completed'
+                    WHEN schedule_type <> 'once' AND %s IN ('CREDIT_BLOCKED', 'PROFILE_FORBIDDEN')
+                        THEN 'paused'
+                    ELSE status END,
+                pause_reason = CASE
+                    WHEN schedule_type <> 'once' AND %s IN ('CREDIT_BLOCKED', 'PROFILE_FORBIDDEN')
+                        THEN %s
+                    ELSE pause_reason END,
+                updated_at = now()
+            WHERE task_id = %s
+        """, (run_status, run_status, finished_at, run_status, trigger,
+              error_code, error_code, pause_reason, task_id))
+        return cursor.rowcount > 0
+
+    @staticmethod
+    def record_run_result(task_id: str, *, run_status: str, trigger: str,
+                          error_code: Optional[str] = None,
+                          finished_at=None) -> bool:
+        """执行结果统计回写（连接版，包装事务内版本）"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            if tenant_id is None:
-                cursor.execute(f"""
-                    UPDATE scheduled_tasks
-                    SET status = {placeholder}, updated_at = {placeholder}
-                    WHERE task_id = {placeholder}
-                """, (status, now, task_id))
-            else:
-                cursor.execute(f"""
-                    UPDATE scheduled_tasks
-                    SET status = {placeholder}, updated_at = {placeholder}
-                    WHERE task_id = {placeholder} AND tenant_id = {placeholder}
-                      AND user_id = {placeholder}
-                """, (status, now, task_id, tenant_id, user_id))
+            ok = ScheduledTaskDB._record_run_result_in_tx(
+                cursor, task_id, run_status=run_status, trigger=trigger,
+                error_code=error_code, finished_at=finished_at)
             conn.commit()
-            return cursor.rowcount > 0
+            if ok:
+                logger.info(f"后端日志：定时任务执行回写 task_id={task_id}, "
+                            f"run_status={run_status}, trigger={trigger}, "
+                            f"error_code={error_code}")
+            return ok
+
+    # ==================== 删除（事务守卫） ====================
 
     @staticmethod
-    def update_after_run(task_id: str, success: bool,
-                         result_summary: str = None) -> bool:
-        """任务执行后更新统计"""
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        placeholder = "%s"
+    def delete_with_session(task_id: str, *, tenant_id: str,
+                            user_id: str) -> Optional[Dict[str, Any]]:
+        """硬删除任务 + 任务会话 + 会话消息（单事务，设计 §4.3）。
+
+        守卫顺序：锁任务行（FOR UPDATE）→ 查任务会话非终态 runner → 有则抛
+        ScheduledTaskBusyError（409）；检查与删除同事务，接单事务持同一行锁
+        串行化，无"检查时无 runner、删除后才接单"窗口。"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(f"""
-                UPDATE scheduled_tasks
-                SET total_runs = total_runs + 1,
-                    success_count = success_count + {placeholder},
-                    fail_count = fail_count + {placeholder},
-                    last_run_at = {placeholder},
-                    updated_at = {placeholder}
-                WHERE task_id = {placeholder}
-            """, (1 if success else 0, 0 if success else 1, now, now, task_id))
-            conn.commit()
-            success_count = cursor.rowcount > 0
-            if success_count:
-                status = "success" if success else "failed"
-                logger.info(f"后端日志：定时任务执行{status} task_id={task_id}")
-            return success_count
-
-    @staticmethod
-    def delete(task_id: str, *, tenant_id: Optional[str] = None,
-               user_id: Optional[str] = None) -> bool:
-        """软删除（状态改为 cancelled），租户/用户条件语义同 update_status"""
-        return ScheduledTaskDB.update_status(
-            task_id, "cancelled", tenant_id=tenant_id, user_id=user_id
-        )
-
-    @staticmethod
-    def count_by_user(user_id: str, status: str = "active",
-                      tenant_id: Optional[str] = None) -> int:
-        """统计用户的定时任务数量（tenant_id 可选：请求/工具链传入时加租户条件）"""
-        placeholder = "%s"
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            conditions = [f"user_id = {placeholder}", f"status = {placeholder}"]
-            params = [user_id, status]
-            if tenant_id is not None:
-                conditions.append(f"tenant_id = {placeholder}")
-                params.append(tenant_id)
-            cursor.execute(f"""
-                SELECT COUNT(*) as cnt FROM scheduled_tasks
-                WHERE {" AND ".join(conditions)}
-            """, tuple(params))
+            cursor.execute("""
+                SELECT * FROM scheduled_tasks
+                WHERE task_id = %s
+                  AND tenant_id IS NOT DISTINCT FROM %s
+                  AND user_id = %s
+                FOR UPDATE
+            """, (task_id, tenant_id, user_id))
             row = cursor.fetchone()
-            return row["cnt"] if row else 0
-
-
-class ScheduledTaskLogDB:
-    """定时任务执行日志数据库访问类"""
-
-    @staticmethod
-    def create(task_id: str, user_id: str, session_id: str = None,
-               status: str = "success", trigger_type: str = "scheduled",
-               result_summary: str = None, result_detail: str = None,
-               error_message: str = None, error_trace: str = None,
-               duration_ms: int = 0, token_usage: int = 0,
-               started_at: str = None, completed_at: str = None,
-               tenant_id: str = "") -> Optional[Dict[str, Any]]:
-        """创建执行日志
-
-        tenant_id：随任务属主租户落库（''=公共用户或遗留未回填），
-        保证日志查询可按租户过滤。
-        """
-        log_id = f"slog_{uuid.uuid4().hex[:12]}"
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        placeholder = "%s"
-
-        # 过滤敏感信息
-        safe_result = result_summary or ""
-        safe_error = _sanitize_error(error_message or "")
-        safe_trace = _sanitize_error(error_trace or "")
-
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(f"""
-                    INSERT INTO scheduled_task_logs
-                    (log_id, tenant_id, task_id, user_id, session_id, status, trigger_type,
-                     result_summary, result_detail, error_message, error_trace,
-                     duration_ms, token_usage, started_at, completed_at, created_at)
-                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder},
-                            {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
-                """, (log_id, tenant_id or "", task_id, user_id, session_id, status, trigger_type,
-                      safe_result, result_detail, safe_error, safe_trace,
-                      duration_ms, token_usage, started_at or now, completed_at, now))
-                conn.commit()
-                logger.info(f"后端日志：定时任务日志创建 log_id={log_id}, task_id={task_id}, status={status}")
-                return ScheduledTaskLogDB.get_by_id(log_id)
-            except Exception as e:
-                logger.opt(exception=True).error(f"后端日志：创建定时任务日志失败 {e}")
+            if not row:
                 return None
+            task = dict(row)
+            session_id = task["session_id"]
 
-    @staticmethod
-    def get_by_id(log_id: str) -> Optional[Dict[str, Any]]:
-        """根据日志ID获取日志
-
-        返回数据库原始行：历史遗留行的 error 字段可能含明文凭据。本方法仅供
-        create() 内部回读（写入前已脱敏）；若新增调用方把结果返回给用户/LLM，
-        必须先过 sanitize_scheduled_task_log_rows。
-        """
-        placeholder = "%s"
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(f"SELECT * FROM scheduled_task_logs WHERE log_id = {placeholder}", (log_id,))
-            row = cursor.fetchone()
-            return dict(row) if row else None
-
-    @staticmethod
-    def list_by_task(task_id: str, limit: int = 100,
-                     tenant_id: Optional[str] = None,
-                     user_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """获取任务的执行日志
-
-        tenant_id 可选：请求/工具链传入时 SQL 加租户（可叠加用户）条件（fail-closed）；
-        内部调用不传保持原行为。
-        """
-        placeholder = "%s"
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            if tenant_id is not None and user_id is not None:
-                cursor.execute(f"""
-                    SELECT * FROM scheduled_task_logs
-                    WHERE task_id = {placeholder} AND tenant_id = {placeholder}
-                      AND user_id = {placeholder}
-                    ORDER BY created_at DESC
-                    LIMIT {placeholder}
-                """, (task_id, tenant_id, user_id, limit))
-            elif tenant_id is not None:
-                cursor.execute(f"""
-                    SELECT * FROM scheduled_task_logs
-                    WHERE task_id = {placeholder} AND tenant_id = {placeholder}
-                    ORDER BY created_at DESC
-                    LIMIT {placeholder}
-                """, (task_id, tenant_id, limit))
-            else:
-                cursor.execute(f"""
-                    SELECT * FROM scheduled_task_logs
-                    WHERE task_id = {placeholder}
-                    ORDER BY created_at DESC
-                    LIMIT {placeholder}
-                """, (task_id, limit))
-            return [dict(row) for row in cursor.fetchall()]
-
-    @staticmethod
-    def list_by_user(user_id: str, limit: int = 50,
-                     tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """获取用户的所有执行日志
-
-        tenant_id 可选：请求/工具链传入时 SQL 加租户条件；内部调用不传保持原行为。
-        """
-        placeholder = "%s"
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            if tenant_id is not None:
-                cursor.execute(f"""
-                    SELECT * FROM scheduled_task_logs
-                    WHERE user_id = {placeholder} AND tenant_id = {placeholder}
-                    ORDER BY created_at DESC
-                    LIMIT {placeholder}
-                """, (user_id, tenant_id, limit))
-            else:
-                cursor.execute(f"""
-                    SELECT * FROM scheduled_task_logs
-                    WHERE user_id = {placeholder}
-                    ORDER BY created_at DESC
-                    LIMIT {placeholder}
-                """, (user_id, limit))
-            return [dict(row) for row in cursor.fetchall()]
-
-    @staticmethod
-    def get_stats(task_id: str, *, tenant_id: Optional[str] = None,
-                  user_id: Optional[str] = None) -> Dict[str, Any]:
-        """获取任务的执行统计
-
-        请求/工具链必须成对传 tenant_id+user_id（只传其一视为调用方身份不完整，
-        fail-closed 返回零统计）；两者都不传走受信内部路径。
-        """
-        if (tenant_id is None) != (user_id is None):
-            return {"total_runs": 0, "success_count": 0, "fail_count": 0,
-                    "avg_duration_ms": 0, "success_rate": 0}
-        placeholder = "%s"
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            conditions = [f"task_id = {placeholder}"]
-            params = [task_id]
-            if tenant_id is not None:
-                conditions.extend([
-                    f"tenant_id = {placeholder}", f"user_id = {placeholder}"
-                ])
-                params.extend([tenant_id, user_id])
-            cursor.execute(f"""
-                SELECT
-                    COUNT(*) as total_runs,
-                    SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success_count,
-                    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as fail_count,
-                    COALESCE(AVG(CASE WHEN status = 'success' THEN duration_ms END), 0) as avg_duration_ms
-                FROM scheduled_task_logs
-                WHERE {" AND ".join(conditions)}
-            """, tuple(params))
-            row = cursor.fetchone()
-            if row:
-                return {
-                    "total_runs": row["total_runs"],
-                    "success_count": row["success_count"],
-                    "fail_count": row["fail_count"],
-                    "avg_duration_ms": round(row["avg_duration_ms"], 2),
-                    "success_rate": round(row["success_count"] / row["total_runs"] * 100, 1)
-                    if row["total_runs"] > 0 else 0
-                }
-            return {"total_runs": 0, "success_count": 0, "fail_count": 0,
-                    "avg_duration_ms": 0, "success_rate": 0}
-
-
-class ScheduledTaskDeliveryDB:
-    """定时任务待补投记录数据库访问类
-
-    记录渠道场景（如 wecom_kf）创建的定时任务的投递结果：直投成功记 sent，
-    直投失败/无直投机会记 pending，等客户下次来消息时补投。不建跨渠道抽象，
-    channel_type 仅登记事实来源，补投逻辑只对 wecom_kf 生效。
-    """
-
-    @staticmethod
-    def create_pending(task_id: str, tenant_id: str, user_id: str,
-                       channel_type: str, channel_chat_id: str,
-                       channel_user_id: str, session_id: str,
-                       content: str) -> Optional[Dict[str, Any]]:
-        """登记一条待补投记录"""
-        delivery_id = f"sdlv_{uuid.uuid4().hex[:12]}"
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute("""
-                    INSERT INTO scheduled_task_deliveries
-                    (delivery_id, task_id, tenant_id, user_id, channel_type,
-                     channel_chat_id, channel_user_id, session_id, content, status)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending')
-                """, (delivery_id, task_id, tenant_id or "", user_id or "",
-                      channel_type, channel_chat_id or "", channel_user_id or "",
-                      session_id or "", content or ""))
-                conn.commit()
-                return ScheduledTaskDeliveryDB.get_by_id(delivery_id)
-            except Exception as e:
-                logger.opt(exception=True).error(
-                    f"后端日志：创建定时任务待补投记录失败 task_id={task_id}, {e}")
-                return None
-
-    @staticmethod
-    def get_by_id(delivery_id: str) -> Optional[Dict[str, Any]]:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT * FROM scheduled_task_deliveries WHERE delivery_id = %s",
-                (delivery_id,))
-            row = cursor.fetchone()
-            return dict(row) if row else None
-
-    @staticmethod
-    def list_pending(tenant_id: str, channel_chat_id: str,
-                     channel_user_id: str) -> List[Dict[str, Any]]:
-        """列出某渠道联系人名下全部待补投记录（按创建时间升序，合并补投）"""
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
             cursor.execute("""
-                SELECT * FROM scheduled_task_deliveries
-                WHERE tenant_id = %s AND channel_type = 'wecom_kf'
-                  AND channel_chat_id = %s AND channel_user_id = %s
-                  AND status = 'pending'
-                ORDER BY created_at ASC
-                LIMIT 20
-            """, (tenant_id, channel_chat_id, channel_user_id))
-            rows = cursor.fetchall()
-            return [dict(r) for r in rows]
+                SELECT runner_id FROM agent_runners
+                WHERE session_id = %s
+                  AND status NOT IN ('completed', 'failed', 'cancelled')
+                LIMIT 1
+            """, (session_id,))
+            if cursor.fetchone():
+                raise ScheduledTaskBusyError("任务正在执行，稍后再试")
 
-    @staticmethod
-    def mark_sent(delivery_id: str) -> bool:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE scheduled_task_deliveries
-                SET status = 'sent', delivered_at = CURRENT_TIMESTAMP,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE delivery_id = %s
-            """, (delivery_id,))
+            cursor.execute("DELETE FROM chat_messages WHERE session_id = %s", (session_id,))
+            cursor.execute("DELETE FROM chat_sessions WHERE session_id = %s", (session_id,))
+            cursor.execute("DELETE FROM scheduled_tasks WHERE task_id = %s", (task_id,))
             conn.commit()
-            return cursor.rowcount > 0
-
-    @staticmethod
-    def mark_failed(delivery_id: str, error: str) -> bool:
-        """记录最近一次补投失败原因，保持 pending 等下次补投。
-
-        attempts 达 _MAX_DELIVERY_ATTEMPTS 后自动置 expired：连续多次补投
-        失败说明渠道侧持续不可达，不再按客户消息频率反复调用企微 API。
-        """
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE scheduled_task_deliveries
-                SET attempts = attempts + 1, last_error = %s,
-                    status = CASE WHEN attempts + 1 >= %s
-                                  THEN 'expired' ELSE status END,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE delivery_id = %s
-            """, ((error or "")[:500], _MAX_DELIVERY_ATTEMPTS, delivery_id))
-            conn.commit()
-            return cursor.rowcount > 0
-
-    @staticmethod
-    def expire_stale(older_than_days: int = 3) -> int:
-        """超过时限仍未补投的记录置 expired（客户 48 小时窗口早已关闭）"""
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE scheduled_task_deliveries
-                SET status = 'expired', updated_at = CURRENT_TIMESTAMP
-                WHERE status = 'pending'
-                  AND created_at < CURRENT_TIMESTAMP - (%s || ' days')::interval
-            """, (str(older_than_days),))
-            conn.commit()
-            return cursor.rowcount
-
-    @staticmethod
-    def cleanup_retention(keep_days: int = 7) -> int:
-        """清理已终结（sent/expired）超期记录"""
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                DELETE FROM scheduled_task_deliveries
-                WHERE status IN ('sent', 'expired')
-                  AND updated_at < CURRENT_TIMESTAMP - (%s || ' days')::interval
-            """, (str(keep_days),))
-            conn.commit()
-            return cursor.rowcount
+            logger.info(f"后端日志：定时任务已删除 task_id={task_id}, "
+                        f"session_id={session_id}")
+            return task

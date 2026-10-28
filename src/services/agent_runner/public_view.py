@@ -124,7 +124,9 @@ def _public_snapshot(value):
 def _public_result(value):
     if not isinstance(value, dict):
         return None
-    result = _display_fields(value, ('status', 'output', 'error_code'))
+    # credit_cost：终态结算后由 finalizer 补入（设计 §5.5，chat/scheduled 通用，
+    # 非敏感聚合值；权威仍在 chat_records）
+    result = _display_fields(value, ('status', 'output', 'error_code', 'credit_cost'))
     if 'images' in value:
         result['images'] = _public_images(value['images'])
     if isinstance(value.get('assistant_metadata'), dict):
@@ -133,7 +135,8 @@ def _public_result(value):
 
 
 def local_recovery_applicable(row):
-    if (row['session_kind'] != 'web' or row['source'] != 'chat'
+    # scheduled 与 chat 同样适用本地恢复投影（设备核对等外部条件等待）
+    if (row['session_kind'] != 'web' or row['source'] not in ('chat', 'scheduled')
             or row['status'] not in {'waiting', 'paused', 'interrupted'}
             or (row.get('checkpoint') or {}).get('detached_local_wait') is True
             or row.get('worker_id') is not None or row.get('lease_until') is not None):
@@ -183,8 +186,19 @@ def public_runner(row):
         "view_revision": row["view_revision"], "control_revision": row["control_revision"],
         "accepted_at": row["accepted_at"], "updated_at": row["updated_at"],
         "finished_at": row.get("finished_at"), "snapshot": _public_snapshot(row["public_snapshot"]),
+        # attempt：执行回合号（每次领取/恢复 +1，恢复回合键与任务视图展示用，
+        # 设计 §4.6/§5.5，通用非敏感补充）
+        "attempt": row.get("attempt"),
         "result": _public_result(row.get("result")),
     }
+    if row["source"] == "scheduled":
+        # scheduled 来源公开补充（设计 §5.5）：触发原因来自 input.request_data，
+        # 非敏感，运行中即可读（任务视图执行记录不依赖终态消息 metadata）。
+        scheduled = ((row.get("input") or {}).get("request_data") or {}).get("scheduled")
+        if isinstance(scheduled, dict):
+            projected = _display_fields(scheduled, ("task_id", "trigger"))
+            if projected:
+                value["scheduled"] = projected
     checkpoint = row.get('checkpoint') or {}
     verification = checkpoint.get('local_verification')
     if isinstance(verification, dict):
@@ -207,7 +221,14 @@ def public_runner(row):
         root = checkpoint.get('execution') or {}
         from src.local_tools.repository import owned_invocation_ids
         value['local_recovery_kind'] = 'original_operation' if owned_invocation_ids(root) else 'dispatch_unconfirmed'
-        value['local_recovery_actions'] = (['verify', 'stop', 'end'] if row.get('cancel_requested') else
-            ['verify', 'stop', 'resume', 'end']) if owned_invocation_ids(root) else (
-                ['end'] if row.get('cancel_requested') else ['resume', 'end'])
+        if row['source'] == 'scheduled':
+            # 操作矩阵（设计 §5.2）：scheduled 用户只有设备核对 verify/stop 与
+            # 独立 cancel 入口；resume/end 仍被控制矩阵与 end-waiting 门拒绝，
+            # 公开动作只宣称真实可执行的（避免"按钮可见、点击必失败"）
+            value['local_recovery_actions'] = (['verify', 'stop']
+                                               if owned_invocation_ids(root) else [])
+        else:
+            value['local_recovery_actions'] = (['verify', 'stop', 'end'] if row.get('cancel_requested') else
+                ['verify', 'stop', 'resume', 'end']) if owned_invocation_ids(root) else (
+                    ['end'] if row.get('cancel_requested') else ['resume', 'end'])
     return value

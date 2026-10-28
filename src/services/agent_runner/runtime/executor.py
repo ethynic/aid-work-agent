@@ -331,7 +331,8 @@ class RuntimeExecution:
                     return ports
                 self.resources.subagent_executor.child_factory = child_factory(
                     self.identity, ports_factory, self.history.reader, self.resources.resource_directory,
-                    self.resources.plan_manager.plan_store is not None)
+                    self.resources.plan_manager.plan_store is not None,
+                    prompt_augmentations=tuple(request_context.prompt_augmentations) if request_context else ())
             tool_context = await self._tool_context(request_context)
             controls = ControlToolAdapter(controls=self.resources._tool_controls, skills=self.skills,
                 registry=self.resources.skill_registry, plan_manager=self.resources.plan_manager,

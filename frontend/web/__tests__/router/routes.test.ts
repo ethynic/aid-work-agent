@@ -81,7 +81,6 @@ describe('entry route responsibilities', () => {
         "chat/:subagent",
         "all-sessions",
         "behavior-logs",
-        "scheduled-tasks",
         "token-usage",
         "recharge-records",
         "reply-styles",

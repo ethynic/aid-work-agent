@@ -35,9 +35,14 @@ def released_by(row, attempt):
                 'LOCAL_CANCEL_EFFECT_VERIFICATION_REQUIRED','LOCAL_CANCEL_DEADLINE_VERIFICATION_REQUIRED'})
     if status in {'completed','failed','cancelled'} and reason == 'finalized':
         pending = checkpoint.get('pending_finalization')
+        result = row.get('result')
         return (isinstance(pending,dict) and pending.get('status') == status
-            and isinstance(row.get('result'),dict)
-            and row['result'] == {key:pending.get(key) for key in ('status','output','images','error_code')})
+                and isinstance(result,dict)
+                # 释放证明只比较稳定执行结果字段；credit_cost 等结算展示字段
+                # 不参与执行权证明——否则正常收尾被误判为租约失效，终态后与
+                # 心跳重叠即抛 RUNNER_ATTEMPT_EXPIRED（影响所有来源）
+                and all(result.get(key) == pending.get(key)
+                        for key in ('status','output','images','error_code')))
     if status == 'paused' and reason == 'unstarted_pause':
         return (checkpoint.get('unstarted') is True and row.get('pause_requested') is True
             and not any(checkpoint.get(key) for key in ('execution','children','tools','pending_finalization')))

@@ -2,6 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager
+from typing import Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, FastAPI, Request, Query
@@ -176,8 +177,11 @@ def create_router(config=None, client=None):
     @router.get('/sessions/{session_id}/runners')
     async def session_runners(session_id: str, request: Request,
                               before_runner_id: str | None = Query(default=None,max_length=128),
+                              source: Literal['chat', 'scheduled'] = Query(default='chat'),
                               limit: int = Query(default=100,ge=1,le=100)):
-        params = {'limit':limit}
+        # source 透传：任务视图读取任务会话的 scheduled 执行记录（用户 token
+        # 经 runner 服务按行属主鉴权，网关不特判）；默认保持 chat 不变。
+        params = {'limit':limit, 'source':source}
         if before_runner_id is not None:
             params['before_runner_id'] = before_runner_id
         return await forward(request, 'GET', '/v1/sessions/web/'+quote(session_id,safe='')+'/runners', params=params)

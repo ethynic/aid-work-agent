@@ -39,7 +39,8 @@ class Agent:
             session_id=identity.session_id if identity else self.session_id, execution_id=self.execution_id,
             parent_plan_manager=self.parent_plan_manager, mode=self.mode,
             tenant_id=identity.tenant_id if identity else self._default_tenant_id,
-            user_id=identity.user_id if identity else self._default_user_id)
+            user_id=identity.user_id if identity else self._default_user_id,
+            source=identity.source if identity else 'chat')
 
     def __getattr__(self, name):
         if name not in {"llm", "memory", "prompt_manager", "style_manager", "skill_registry",

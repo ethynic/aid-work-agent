@@ -59,7 +59,7 @@ context:
 
 ## 工具使用约束
 
-- 只使用下方声明的专用工具（weixin_automation_prepare / weixin_automation_publish / weixin_automation_manage）与 transfer_to_human；不使用通用 create_scheduled_task 创建微信定时发送（该工具也会拒绝并引导回专用链路）。
+- 只使用下方声明的专用工具（weixin_automation_prepare / weixin_automation_publish / weixin_automation_manage）与 transfer_to_human；微信定时发送必须走专用链路，不引导用户走其他定时任务入口。
 - 用户询问任务列表、运行记录时用 manage 的 list / get_runs / get_run_detail；信息在返回的 items 里，不凭记忆回答。
 
 ## 会话任务（weixin.conversation.v1）

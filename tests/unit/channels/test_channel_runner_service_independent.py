@@ -510,7 +510,7 @@ def test_finalizer_settles_execution_once_releases_claim_and_leaves_integrated_c
     cursor.fetchone.side_effect = [{'owner_runner_id': 'runner'}, finished]
     finalizer = RunnerFinalizer(lambda: connection)
     with patch('src.services.agent_runner.finalizer.lock_runner', return_value=row), \
-            patch.object(finalizer, '_settle', return_value=('settled', 5)) as settle, \
+            patch.object(finalizer, '_settle', return_value=('settled', 5, 0.0)) as settle, \
             patch('src.services.agent_runner.finalizer.project_terminal_public_state', return_value=({}, row['checkpoint']['pending_finalization'])), \
             patch('src.services.agent_runner.finalizer.write_history') as history, \
             patch('src.services.agent_runner.control_repository.close_pending_controls'), \

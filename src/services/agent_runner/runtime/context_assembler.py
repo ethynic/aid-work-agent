@@ -29,7 +29,11 @@ class ContextAssembler:
             await asyncio.to_thread(self.skills._ensure_tenant_skills_loaded)
             await self.visibility.prime()
             events = []
-            if self.role != AgentMode.SUBAGENT:
+            # 零历史（设计 §5.5）：scheduled 执行的任务定义自包含，不读会话
+            # 历史/摘要——历次结果是展示账本，消息仅含本次任务 prompt 与
+            # 补充指令（prompt_augmentations），压缩阶段同样跳过。
+            zero_history = self.identity.source == 'scheduled'
+            if self.role != AgentMode.SUBAGENT and not zero_history:
                 if continuation is None:
                     await self.compression._run_compression_phase(self.identity.session_id)
                     if self.compression.event:
@@ -81,7 +85,7 @@ class ContextAssembler:
                 if messages and messages[-1].get("role") == "user":
                     messages.pop()
                 messages.append(incoming)
-            if self.role != AgentMode.SUBAGENT:
+            if self.role != AgentMode.SUBAGENT and not zero_history:
                 summary = await asyncio.to_thread(self.history.active_summary, self.identity.session_id)
                 if summary:
                     messages = [{"role": "user", "content": f"[📋 之前对话摘要]\n{summary}"},

@@ -1,7 +1,6 @@
-"""R47 架构隔离测试：src/weixin_marketing 不得依赖通用定时任务执行链
+"""R47 架构隔离测试：src/weixin_marketing 不得依赖通用定时任务链
 
-- 源码层（AST）：扫描全部模块 import/引用，禁止 src.tools.scheduler / src.scheduler、
-  ScheduledTaskExecutor / create_scheduled_task。
+- 源码层（AST）：扫描全部模块 import，禁止 src.tools.scheduler / src.scheduler。
 - 源码层（文本）：模块全部 .py 内容不得出现 'src.scheduler' / 'src.tools.scheduler'
   字样——可检出函数内懒 import（__import__/importlib 字符串形态）。
 - 运行时层：import src.weixin_marketing 全模块后 sys.modules 不含这两个包。
@@ -19,7 +18,6 @@ pytestmark = pytest.mark.unit
 MODULE_DIR = Path(__file__).parents[3] / "src" / "weixin_marketing"
 
 FORBIDDEN_PREFIXES = ("src.tools.scheduler", "src.scheduler")
-FORBIDDEN_NAMES = ("ScheduledTaskExecutor", "create_scheduled_task")
 
 
 def test_module_dir_exists():
@@ -41,10 +39,6 @@ def test_no_scheduler_imports_in_source():
                 module = node.module or ""
                 if module.startswith(FORBIDDEN_PREFIXES):
                     violations.append(f"{py_file.name}: from {module} import ...")
-            elif isinstance(node, ast.Name) and node.id in FORBIDDEN_NAMES:
-                violations.append(f"{py_file.name}: 引用 {node.id}")
-            elif isinstance(node, ast.Attribute) and node.attr in FORBIDDEN_NAMES:
-                violations.append(f"{py_file.name}: 属性引用 {node.attr}")
     assert not violations, violations
 
 

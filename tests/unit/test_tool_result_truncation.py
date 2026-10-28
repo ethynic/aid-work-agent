@@ -272,15 +272,15 @@ class TestEngineToolResultTruncation:
         name, args, _context = h.executor.calls[0]
         assert (name, args) == ("read", {"file_path": "sensitive/path.txt", "token": "raw-tok"})
 
-    async def test_scheduled_tool_uses_generic_plan_tracking(self):
-        """定时工具不再走提前旁路，统一执行并完成当前计划任务。"""
-        result = {"success": True, "name": "日报", "message": "已创建"}
+    async def test_report_tool_uses_generic_plan_tracking(self):
+        """普通工具不走提前旁路，统一执行并完成当前计划任务。"""
+        result = {"success": True, "name": "日报", "message": "已生成"}
         plan_manager = plan_manager_with_pending(task_id="task-1")
-        tool = FakeTool("create_scheduled_task", display_name="创建定时任务")
+        tool = FakeTool("report_tool", display_name="生成报表")
         h = make_dispatcher(tools=[tool], executor_results=[result],
                             plan_manager=plan_manager)
         model = Model(
-            completion("", [call("c1", "create_scheduled_task")]),
+            completion("", [call("c1", "report_tool")]),
             completion("完成"),
         )
         state = execution_state(session_id="sess")
@@ -301,15 +301,15 @@ class TestEngineToolResultTruncation:
         # 计划绑定按 state.identity.session_id 查询
         plan_manager.get_plan.assert_called_with("sess")
 
-    async def test_failed_scheduled_tool_marks_plan_failed_and_enters_llm(self):
-        """管理定时任务失败也走通用链：执行一次、失败计划、结果进入下一轮 LLM。"""
-        result = {"success": False, "error": "无权管理该任务"}
+    async def test_failed_tool_marks_plan_failed_and_enters_llm(self):
+        """普通工具失败也走通用链：执行一次、失败计划、结果进入下一轮 LLM。"""
+        result = {"success": False, "error": "无权生成该报表"}
         plan_manager = plan_manager_with_pending(task_id="task-2")
-        tool = FakeTool("manage_scheduled_task", display_name="管理定时任务")
+        tool = FakeTool("report_tool", display_name="生成报表")
         h = make_dispatcher(tools=[tool], executor_results=[result],
                             plan_manager=plan_manager)
         model = Model(
-            completion("", [call("scheduled-fail", "manage_scheduled_task")]),
+            completion("", [call("report-fail", "report_tool")]),
             completion("失败说明"),
         )
 
@@ -318,11 +318,11 @@ class TestEngineToolResultTruncation:
         assert len(h.executor.calls) == 1
         plan_manager.mark_task_completed.assert_not_called()
         plan_manager.mark_task_failed.assert_called_once_with(
-            "sess", "task-2", "无权管理该任务"
+            "sess", "task-2", "无权生成该报表"
         )
         result_event = next(event for event in events if event.get("type") == "tool_result")
         assert result_event["success"] is False
-        assert result_event["toolCallId"] == "scheduled-fail"
+        assert result_event["toolCallId"] == "report-fail"
         tool_msgs = tool_messages_of(model)
         assert json.loads(tool_msgs[0]["content"]) == result
 

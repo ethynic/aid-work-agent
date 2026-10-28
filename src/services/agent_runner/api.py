@@ -173,7 +173,7 @@ def create_app(*, config=None, manager=None):
     @app.get("/v1/sessions/{kind}/{session_id}/runners")
     async def list_session(kind: Literal["web", "channel"],
                            session_id: Annotated[str, Path(min_length=1, max_length=256)], request: Request,
-                           source: Literal["chat", "wecom_kf", "feishu", "dingtalk", "wecom"] = "chat",
+                           source: Literal["chat", "wecom_kf", "feishu", "dingtalk", "wecom", "scheduled"] = "chat",
                            profile_id: str = Query(default="main", min_length=1, max_length=128),
                            channel_user_id: str | None = Query(default=None, max_length=256),
                            channel_chat_id: str | None = Query(default=None, max_length=256),

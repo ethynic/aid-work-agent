@@ -499,7 +499,13 @@ agent_runner:
   web_service_id: "web"
   peers:
     web:
-      sources: ["chat", "wecom_kf", "feishu", "dingtalk", "wecom"]
+      # scheduled：Web 网关以 web 服务身份转发用户 token 只读/取消 scheduled
+      # runner（任务视图，设计 §5.2 操作范围矩阵）；提交仍仅 scheduler 服务身份。
+      sources: ["chat", "wecom_kf", "feishu", "dingtalk", "wecom", "scheduled"]
+    # 调度侧服务身份（background_runner dispatch 循环提交 scheduled 执行）；
+    # token 复用同一 .env 的 AGENT_RUNNER_WEB_SERVICE_TOKEN，无新增 env。
+    scheduler:
+      sources: ["scheduled"]
   host: "127.0.0.1"
   port: 8091
   lease_seconds: 30

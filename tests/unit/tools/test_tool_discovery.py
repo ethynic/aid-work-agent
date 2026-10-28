@@ -42,6 +42,9 @@ wechat_mp_sync / wechat_mp_sync_status，薄入口直调 src/wechat_mp/service.p
 工具 knowledge_base_search 替代，见 plan-unified-kb-resource-metadata.md）：
 两工具类标记 catalog=False 退出自动发现，转入 CATALOG_EXCLUDED_TOOLS；
 真机观察稳定后随 Phase 4b 删除工具文件并同步清理本清单。
+
+2026-10-28 移除定时任务两工具（Runner 化 Phase 1 清场，旧工具随旧实现
+整体删除；Phase 4 以新工具重建时同步登记，见 plan-scheduled-task-runner-refactor.md）。
 """
 
 import pytest
@@ -57,7 +60,6 @@ GOLDEN_TOOLS = [
     "browser_automation",
     "content_generate",
     "cp",
-    "create_scheduled_task",
     "edit",
     "email_process",
     "excel_process",
@@ -66,7 +68,6 @@ GOLDEN_TOOLS = [
     "http_api",
     "knowledge_base_search",
     "knowledge_file_search",
-    "manage_scheduled_task",
     "paddleocr_doc_parsing",
     "pdf_process",
     "ppt_process",

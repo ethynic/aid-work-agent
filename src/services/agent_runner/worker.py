@@ -161,7 +161,7 @@ class RuntimeFactory:
             execution_id=row['runner_id'], mode=AgentMode.MASTER if config is None else AgentMode.STANDALONE,
             tenant_id=principal.identity.tenant_id,user_id=principal.identity.user_id,
             resource_directory=self.resource_directory,isolate_plan=True,session_kind=principal.identity.session_kind,
-            plan_store=PlanFacts(),plan_scope=plan_scope)
+            plan_store=PlanFacts(),plan_scope=plan_scope,source=row['source'])
         from .business_plans import BusinessPlanRepository
         own_plan = (row.get('checkpoint') or {}).get('business_plan')
         if (row.get('checkpoint') or {}).get('execution'):
@@ -636,15 +636,16 @@ class RunnerWorker:
         user = UserDB.get_by_id(user_id)
         if not user:
             raise RunnerError('USER_UNAUTHORIZED',401)
-        if source is not None and source != 'chat':
+        if source is not None and source not in ('chat', 'scheduled'):
             # 渠道来源：自动注册账号的 username 是 feishu_xxx 等技术名，
             # name 优先 nickname（与渠道侧 agent_user_builder 一致），并携带
             # 渠道身份字段，避免技术名直接进入 prompt 的「## 当前用户」段。
+            # scheduled 来源的任务属主是普通 web 用户，走 username 优先分支。
             return User(user_id=user_id,
                 name=user.get('nickname') or user.get('username') or user.get('phone') or user_id,
                 phone=user.get('phone'),tenant_id=tenant_id,
                 channel_type=source,channel_user_id=channel_user_id)
-        # web 来源行为不变：username 优先，不带渠道字段
+        # web 来源（chat 与 scheduled）行为不变：username 优先，不带渠道字段
         return User(user_id=user_id,name=user.get('username') or user.get('phone') or user_id,
                     phone=user.get('phone'),tenant_id=tenant_id)
 

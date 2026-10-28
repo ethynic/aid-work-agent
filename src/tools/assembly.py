@@ -23,6 +23,8 @@ class ToolAssemblyRequest:
     skill_registry: Any
     skill_executor: Any
     subagent_registry: Any = None
+    # 非交互执行（scheduled）：控制工具装配滤除 interactive_only 提问工具
+    non_interactive: bool = False
 
 
 @dataclass
@@ -89,6 +91,7 @@ def assemble_agent_tools(request: ToolAssemblyRequest) -> AgentToolBundle:
         subagent_registry=request.subagent_registry,
         delegation_authorizer=DelegationAuthorizer(),
         allow_delegate=request.role is ToolAssemblyRole.MASTER,
+        non_interactive=request.non_interactive,
     ))
     return AgentToolBundle(
         registry=registry,

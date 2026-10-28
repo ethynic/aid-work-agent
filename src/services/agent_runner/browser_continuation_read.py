@@ -54,7 +54,8 @@ def native_continuation_events(authorization, target_tenant, continuation_id, af
         cursor.execute('SELECT * FROM agent_runners WHERE runner_id=%s', (wait['runner_id'],))
         raw = cursor.fetchone()
         runner = decoded(raw) if raw else None
-        if (runner is None or runner['session_kind'] != 'web' or runner['source'] != 'chat'
+        # 浏览器续读对 scheduled 开放（外部条件等待既有生命周期），归属检查不变
+        if (runner is None or runner['session_kind'] != 'web' or runner['source'] not in ('chat', 'scheduled')
                 or runner['tenant_id'] != wait['tenant_id'] or runner['user_id'] != wait['user_id']):
             raise _not_found()
         if (user['user_id'] != wait['user_id']

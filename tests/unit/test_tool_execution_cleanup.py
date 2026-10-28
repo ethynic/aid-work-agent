@@ -11,13 +11,13 @@ from src.core.agent_events import extract_downloadable_file
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ORDINARY_TOOL_NAMES = {
-    "create_scheduled_task",
-    "manage_scheduled_task",
     "content_generate",
     "web_search",
     "email_process",
     "read",
     "browser_automation",
+    "excel_process",
+    "pdf_process",
 }
 
 
