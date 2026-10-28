@@ -1800,6 +1800,8 @@ from src.api.agent_runner_web import router as agent_runner_web_router
 app.include_router(agent_runner_web_router)
 app.include_router(channels_api.router)
 app.include_router(customer_followup.router)
+from src.api.ai_lead_gen import router as ai_lead_gen_router
+app.include_router(ai_lead_gen_router)
 app.include_router(complaint_handling.router)
 app.include_router(after_sales.router)
 app.include_router(email_settings.router)

@@ -110,6 +110,19 @@ export const agentRoutes: RouteRecordRaw[] = [
           { path: 'event-sources', name: 'tenant-weixin-marketing-event-sources', component: () => import('@/components/weixinMarketing/EventSourceSettings.vue') },
         ]
       },
+      {
+        // AI获客业务数据页面（只读列表；page_metadata 状态 planned，验收后 published）
+        path: 'ai-lead-gen',
+        name: 'tenant-ai-lead-gen',
+        component: () => import('@/components/BaseBusinessLayout.vue'),
+        children: [
+          { path: 'campaigns', name: '获客活动', component: () => import('@/components/aiLeadGen/CampaignList.vue') },
+          { path: 'leads', name: '线索公司', component: () => import('@/components/aiLeadGen/LeadList.vue') },
+          { path: 'contacts', name: '联系人', component: () => import('@/components/aiLeadGen/ContactList.vue') },
+          { path: 'emails', name: '邮件记录', component: () => import('@/components/aiLeadGen/EmailList.vue') },
+          { path: 'replies', name: '回复记录', component: () => import('@/components/aiLeadGen/ReplyList.vue') },
+        ]
+      },
     ]
   }
 ]

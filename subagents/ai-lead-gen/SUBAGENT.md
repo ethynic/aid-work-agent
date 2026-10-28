@@ -28,6 +28,27 @@ skills:
     - ai-lead-gen
     - web-search-pro
 
+business_pages:
+  - id: campaigns
+    title: 获客活动
+    icon: "M12 22a10 10 0 100-20 10 10 0 000 20zm0-4a6 6 0 100-12 6 6 0 000 12zm0-8a2 2 0 100 4 2 2 0 000-4z"
+    route: /ai-lead-gen/campaigns
+  - id: leads
+    title: 线索公司
+    icon: "M3 21h18M5 21V7l7-4 7 4v14M9 9h.01M15 9h.01M9 13h.01M15 13h.01M9 17h.01M15 17h.01"
+    route: /ai-lead-gen/leads
+  - id: contacts
+    title: 联系人
+    icon: "M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM22 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"
+    route: /ai-lead-gen/contacts
+  - id: emails
+    title: 邮件记录
+    icon: "M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2zM22 6l-10 7L2 6"
+    route: /ai-lead-gen/emails
+  - id: replies
+    title: 回复记录
+    icon: "M3 10h10a8 8 0 018 8v2M3 10l6-6M3 10l6 6"
+    route: /ai-lead-gen/replies
 context:
   max_input_tokens: 8000
   max_output_tokens: 4000

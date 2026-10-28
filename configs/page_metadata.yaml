@@ -17,6 +17,8 @@ domains:
     label: 微信营销
   - id: tenant-management
     label: 企业管理
+  - id: ai-lead-gen
+    label: AI获客
 
 # icon 字段为统一的 SVG path 数据（24×24 viewBox，stroke 描边风格）
 # 由前端 MenuIcon 组件渲染
@@ -187,3 +189,43 @@ pages:
     icon: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10zM9 12l2 2 4-4"
     domain: tenant-management
     status: published
+
+  - page_id: ai-lead-gen-campaigns
+    title: 获客活动
+    description: 查看 AI 获客活动的名称、目标地区、发送模式（人工审核/全自动）、状态、日发送上限与回信邮箱
+    route: /ai-lead-gen/campaigns
+    icon: "M12 22a10 10 0 100-20 10 10 0 000 20zm0-4a6 6 0 100-12 6 6 0 000 12zm0-8a2 2 0 100 4 2 2 0 000-4z"
+    domain: ai-lead-gen
+    status: developing
+
+  - page_id: ai-lead-gen-leads
+    title: 线索公司
+    description: 查看 AI 获客检索到的目标公司线索：公司名称、国家城市、行业、来源、评分与合格/排除状态
+    route: /ai-lead-gen/leads
+    icon: "M3 21h18M5 21V7l7-4 7 4v14M9 9h.01M15 9h.01M9 13h.01M15 13h.01M9 17h.01M15 17h.01"
+    domain: ai-lead-gen
+    status: developing
+
+  - page_id: ai-lead-gen-contacts
+    title: 联系人
+    description: 查看从线索公司挖掘的联系人：姓名、职务、邮箱及其来源、置信度等邮箱质量信息
+    route: /ai-lead-gen/contacts
+    icon: "M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM22 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"
+    domain: ai-lead-gen
+    status: developing
+
+  - page_id: ai-lead-gen-emails
+    title: 邮件记录
+    description: 查看外发开发信记录：收件人、A/B 测试分组、邮件主题、发送状态、发送时间与错误信息，可查看正文
+    route: /ai-lead-gen/emails
+    icon: "M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2zM22 6l-10 7L2 6"
+    domain: ai-lead-gen
+    status: developing
+
+  - page_id: ai-lead-gen-replies
+    title: 回复记录
+    description: 查看客户回信及 AI 判定的意向分类（有意向/索要资料/拒绝等）、意图摘要与站内通知状态，可查看原文
+    route: /ai-lead-gen/replies
+    icon: "M3 10h10a8 8 0 018 8v2M3 10l6-6M3 10l6 6"
+    domain: ai-lead-gen
+    status: developing
