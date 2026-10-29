@@ -3086,7 +3086,7 @@ CREATE TABLE IF NOT EXISTS agent_runners (
     scope_key TEXT NOT NULL,
     session_kind TEXT NOT NULL CHECK (session_kind IN ('web','channel')),
     session_id TEXT NOT NULL,
-    actor_kind TEXT NOT NULL CHECK (actor_kind IN ('user','channel')),
+    actor_kind TEXT NOT NULL CHECK (actor_kind IN ('user', 'channel', 'system')),
     actor_id TEXT NOT NULL,
     user_id TEXT,
     service_id TEXT NOT NULL,

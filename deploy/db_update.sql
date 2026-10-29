@@ -920,3 +920,7 @@ ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS recovery_retry_at TIMESTAMP
 
 -- 2026-10-28 定时任务 Phase 4 评审：恢复回合重置列（用户 resume 开启新一轮有界恢复尝试）
 ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS recovery_reset_at TIMESTAMPTZ;
+
+-- 2026-10-29 定时任务 Runner 化：agent_runners.actor_kind 放宽允许 'system'（scheduled 调度身份）
+ALTER TABLE agent_runners DROP CONSTRAINT IF EXISTS agent_runners_actor_kind_check;
+ALTER TABLE agent_runners ADD CONSTRAINT agent_runners_actor_kind_check CHECK (actor_kind IN ('user', 'channel', 'system'));
