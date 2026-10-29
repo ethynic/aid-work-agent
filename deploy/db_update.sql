@@ -895,6 +895,8 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     pending_trigger TEXT,                      -- scheduled|manual
     pending_retry_at TIMESTAMP,                -- 提交重试时间
     pending_snapshot JSONB,                    -- 本次执行不可变提交快照（text/attachments/profile_id/instance_id/prompt_augmentations）
+    recovery_retry_at TIMESTAMP,               -- 恢复驱动退避（调度侧专用，NULL=立即可试；不复用 runner.updated_at）
+    recovery_reset_at TIMESTAMPTZ,
     last_run_at TIMESTAMP,
     last_status TEXT,
     total_runs INTEGER DEFAULT 0,
@@ -906,3 +908,15 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due ON scheduled_tasks(status, next_due_at);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_pending ON scheduled_tasks(pending_retry_at) WHERE pending_occurrence_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_owner ON scheduled_tasks(tenant_id, user_id, status);
+
+-- 2026-10-28 定时任务 Runner 化 Phase 3：task.paused / task.needs_action 通知进入
+-- task.* 默认事件集合（存量偏好行不回写，读取侧 _effective_event_types 兼容扩展；
+-- 此处仅对齐新行默认值）
+ALTER TABLE notification_preferences
+    ALTER COLUMN event_types SET DEFAULT '["task.completed","task.failed","task.waiting_input","task.paused","task.needs_action"]';
+
+-- 2026-10-28 定时任务 Phase 3 复核：恢复驱动退避列（调度侧专用，语义独立于 runner.updated_at）
+ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS recovery_retry_at TIMESTAMP;
+
+-- 2026-10-28 定时任务 Phase 4 评审：恢复回合重置列（用户 resume 开启新一轮有界恢复尝试）
+ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS recovery_reset_at TIMESTAMPTZ;

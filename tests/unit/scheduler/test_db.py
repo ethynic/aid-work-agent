@@ -304,40 +304,99 @@ class TestPause:
 
 
 class TestPauseForOccurrence:
+    @patch("src.scheduler.notify.publish_task_paused_in_tx")
     @patch("src.scheduler.db.get_db_connection")
-    def test_auto_pause_matches_current_occurrence(self, mock_conn):
-        """提交拒绝触发的自动暂停：occurrence 仍是当前 pending 时暂停并清空"""
-        cursor = _make_cursor(rowcount=1)
+    def test_auto_pause_matches_current_occurrence_and_notifies_in_tx(self, mock_conn,
+                                                                      mock_publish):
+        """提交拒绝触发的自动暂停：occurrence 仍是当前 pending 时暂停并清空；
+        通知与 pause 同事务（评审修正：分两事务会永久丢通知）。"""
+        task_row = {"task_id": "sched_abc123", "tenant_id": "tenant_1",
+                    "user_id": "user_1", "name": "日报", "notification_target_id": None}
+        cursor = _make_cursor(fetchone=[task_row], rowcount=1)
         _bind_conn(mock_conn, cursor)
 
-        ok = ScheduledTaskDB.pause_for_occurrence(
-            "sched_abc123", "occ-1", "credit_blocked")
+        ok = ScheduledTaskDB.pause_for_occurrence_with_notify(
+            "sched_abc123", "occ-1", "credit_blocked", "积分额度不足",
+            occurrence_notify_key="occ-1")
 
         assert ok is True
-        sql, params = cursor.execute.call_args[0]
-        assert "status = 'paused'" in sql
+        update_sql, update_params = cursor.execute.call_args_list[0].args
+        assert "status = 'paused'" in update_sql
         # 三重条件：active + 该 occurrence 仍是当前 pending
-        assert "status = 'active'" in sql
-        assert "pending_occurrence_key = %s" in sql
-        assert params == ("credit_blocked", "sched_abc123", "occ-1")
+        assert "status = 'active'" in update_sql
+        assert "pending_occurrence_key = %s" in update_sql
+        assert update_params == ("credit_blocked", "sched_abc123", "occ-1")
+        # 同事务通知（RETURNING 行直传，通知键含 occurrence）
+        mock_publish.assert_called_once()
+        assert mock_publish.call_args.args[2] == "积分额度不足"
+        assert mock_publish.call_args.kwargs["pause_reason"] == "credit_blocked"
+        assert mock_publish.call_args.kwargs["occurrence_key"] == "occ-1"
 
+    @patch("src.scheduler.notify.publish_task_paused_in_tx")
     @patch("src.scheduler.db.get_db_connection")
-    def test_stale_rejection_does_not_touch_new_pending(self, mock_conn):
+    def test_stale_rejection_does_not_touch_new_pending(self, mock_conn, mock_publish):
         """回归（评审 P1）：迟到拒绝（用户已暂停→恢复→新 pending）不得覆盖新状态
 
         WHERE 带 occurrence_key 条件，旧 occurrence 失配时 0 行命中返回 False，
-        调用方据此跳过暂停通知。"""
-        cursor = _make_cursor(rowcount=0)
+        不写通知（同事务回滚路径不存在）。"""
+        cursor = _make_cursor(fetchone=None)
         _bind_conn(mock_conn, cursor)
 
-        ok = ScheduledTaskDB.pause_for_occurrence(
-            "sched_abc123", "stale-occ", "credit_blocked")
+        ok = ScheduledTaskDB.pause_for_occurrence_with_notify(
+            "sched_abc123", "stale-occ", "credit_blocked", "积分额度不足")
 
         assert ok is False
-        sql, _ = cursor.execute.call_args[0]
+        sql, _ = cursor.execute.call_args_list[0].args
         assert "WHERE task_id = %s" in sql
         assert "AND status = 'active'" in sql
         assert "AND pending_occurrence_key = %s" in sql
+        mock_publish.assert_not_called()
+
+
+class TestPauseInterruptedWithNotify:
+    @patch("src.scheduler.notify.publish_task_paused_in_tx")
+    @patch("src.scheduler.db.get_db_connection")
+    def test_round_guard_checks_runner_attempt_before_pause(self, mock_conn, mock_publish):
+        """恢复耗尽/拒绝的回合保护（评审 P1）：事务内复核 runner 仍处于本扫描
+        所见 (runner_id, attempt) interrupted 态——过期决定不修改状态不通知。"""
+        task_row = {"task_id": "sched_abc123", "tenant_id": "tenant_1",
+                    "user_id": "user_1", "name": "日报", "notification_target_id": None}
+        # 锁定任务行 → runner 复核 0 行（已恢复/attempt 推进）→ 不暂停
+        cursor = _make_cursor(fetchone=[task_row, None])
+        _bind_conn(mock_conn, cursor)
+
+        ok = ScheduledTaskDB.pause_interrupted_with_notify(
+            "sched_abc123", "runner_1", 2, "执行中断且自动恢复失败")
+
+        assert ok is False
+        executed = [c.args[0] for c in cursor.execute.call_args_list]
+        # 锁序：先 runner（FOR UPDATE 稳定回合）再任务行——与终态链路同向
+        assert "FOR UPDATE" in executed[0]
+        assert "agent_runners" in executed[0]
+        assert "attempt = %s" in executed[0]
+        assert "status = 'interrupted'" in executed[0]
+        assert "cancel_requested = FALSE" in executed[0]
+        assert not any(sql.lstrip().startswith("UPDATE scheduled_tasks") for sql in executed)
+        mock_publish.assert_not_called()
+
+    @patch("src.scheduler.notify.publish_task_paused_in_tx")
+    @patch("src.scheduler.db.get_db_connection")
+    def test_round_guard_hit_pauses_and_notifies_in_tx(self, mock_conn, mock_publish):
+        cursor = _make_cursor(fetchone=[
+            {"ok": 1},
+            {"task_id": "sched_abc123", "tenant_id": "tenant_1", "user_id": "user_1",
+             "name": "日报", "notification_target_id": None}])
+        _bind_conn(mock_conn, cursor)
+
+        ok = ScheduledTaskDB.pause_interrupted_with_notify(
+            "sched_abc123", "runner_1", 2, "执行中断且自动恢复失败")
+
+        assert ok is True
+        executed = [c.args[0] for c in cursor.execute.call_args_list]
+        assert any("status = 'paused'" in sql for sql in executed)
+        mock_publish.assert_called_once()
+        assert mock_publish.call_args.kwargs["attempt"] == 2
+        assert mock_publish.call_args.kwargs["runner_id"] == "runner_1"
 
 
 class TestResume:
@@ -410,9 +469,11 @@ class TestRecordRunResult:
         sql, params = self._sql_and_params(cursor)
         assert "THEN 'paused'" in sql
         assert params[0] == "failed" and params[1] == "failed"
-        assert params[5] == error_code  # status CASE 的 error_code
-        assert params[6] == error_code  # pause_reason CASE 的 error_code
-        assert params[7] == reason      # 映射后的 pause_reason 值
+        assert params[5] == error_code   # status CASE 的 error_code
+        assert list(params[6:10]) == [error_code] * 4  # 四个 pending 清理 CASE
+        assert params[10] == error_code  # pause_reason CASE 的 IN 值
+        assert params[11] == reason      # 映射后的 pause_reason 值
+        assert params[12] == "sched_abc123"  # WHERE task_id（此前错绑 error_code）
 
     @patch("src.scheduler.db.get_db_connection")
     def test_completed_counts_success_failed_counts_fail(self, mock_conn):

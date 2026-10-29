@@ -158,10 +158,16 @@ class CompatibilityObserver:
 
 class RuntimeExecution:
     def __init__(self, resources, identity, *, control=None, observer=None, history_reader=None,
-                 tolerate_history_failure=False, legacy_clarification_authorizer=None, initial_followup_inputs=None):
+                 tolerate_history_failure=False, legacy_clarification_authorizer=None, initial_followup_inputs=None,
+                 profile_id=None, instance_id=None):
         self.resources, self.identity = resources, identity
         self.control = control or CompatibilityControl()
         self.observer = observer or CompatibilityObserver()
+        # 执行所属智能体身份（工具执行上下文继承用，设计 §3.2）：由 worker 从
+        # runner 行派生（profile_id 列 + input.instance_id）；子执行传各自
+        # subagent profile。仅作身份传递，不作为权限依据
+        self.profile_id = profile_id
+        self.instance_id = instance_id
         self.visibility = ProfileResolver(resources.subagent_registry, identity.tenant_id)
         self.catalog = ToolCatalog(resources.mode, resources.tool_registry, resources._tool_controls,
                                    self.visibility, resources.skill_registry)
@@ -209,7 +215,8 @@ class RuntimeExecution:
             session_id=self.identity.session_id, channel=self.identity.source,
             subagent_id=getattr(config, "dir_name", None), agent_execution_id=self.state.execution_id,
             request_data=request_context.request_data if request_context else {},
-            env_vars=env_vars, llm_gateway=self.resources.llm,infer_legacy_identity=False)
+            env_vars=env_vars, llm_gateway=self.resources.llm,infer_legacy_identity=False,
+            profile_id=self.profile_id, instance_id=self.instance_id)
 
     async def run(self, text, user=None, attachments=None, request_context=None,
                   extra_system_prompt=None, continuation=None, defer_names=None,

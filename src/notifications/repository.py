@@ -31,13 +31,19 @@ def unprotect(value):
 # task.* 用户任务事件的默认/兼容事件集合（五轮评审 P1-2）：存量偏好行的
 # event_types 为旧默认（仅 completed/failed）时，读取按等效集合兼容扩展
 # task.waiting_input；显式自定义集合不受影响，不回写行、不改开关事实。
+# Phase 3 追加 task.paused / task.needs_action（定时任务自动暂停与需要处理，
+# 设计 §8.1）：旧默认两元与旧 DDL 默认三元（waiting_input 尚无 paused）均
+# 兼容扩展到当前默认集合；显式自定义集合（含显式三元自定义——偏好接口未
+# 提供 event_types 编辑，三元只能来自旧 DDL 默认）不受影响。
 LEGACY_TASK_EVENT_TYPES = ('task.completed', 'task.failed')
-TASK_EVENT_TYPES = ('task.completed', 'task.failed', 'task.waiting_input')
+LEGACY_DEFAULT_TASK_EVENT_TYPES = ('task.completed', 'task.failed', 'task.waiting_input')
+TASK_EVENT_TYPES = ('task.completed', 'task.failed', 'task.waiting_input', 'task.paused',
+                    'task.needs_action')
 
 
 def _effective_event_types(stored):
     stored = tuple(stored or ())
-    if set(stored) == set(LEGACY_TASK_EVENT_TYPES):
+    if set(stored) in (set(LEGACY_TASK_EVENT_TYPES), set(LEGACY_DEFAULT_TASK_EVENT_TYPES)):
         return TASK_EVENT_TYPES
     return stored
 
@@ -241,6 +247,71 @@ class NotificationRepository:
                 AND recipient_user_id IS NULL ORDER BY created_at DESC''', (subject.scope_key,))
             return [public_target(row) for row in cursor.fetchall()]
 
+    def selectable_targets(self, subject):
+        """任务通知目标选项（Phase 3，设计 §3.3/§8.3）：普通用户可读——本人
+        个人目标（active）+ 本租户租户级目标（active）；只返回展示字段与
+        target_id 引用，不含凭据原文（configuration_display 走脱敏回显）。"""
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            self.guard(cursor, subject)
+            cursor.execute("""SELECT * FROM notification_targets
+                WHERE state='active' AND (
+                    (scope_key=%s AND recipient_user_id=%s)
+                    OR (recipient_user_id IS NULL AND scope_key=%s))
+                ORDER BY recipient_user_id NULLS FIRST, created_at DESC""",
+                (subject.scope_key, subject.user_id,
+                 'tenant:' + subject.tenant_id if subject.tenant_id else ''))
+            return [public_target(row) for row in cursor.fetchall()]
+
+    def task_event_deliveries(self, subject, task_id):
+        """任务视图投递状态（Phase 3，设计 §8.4）：该任务全部通知事件的
+        投递账（消息事件类型/时间 + 各目标 state/attempts/异常），供任务
+        视图展示；资源按任务行与其 runner（terminal/needs_action 事件）
+        归属当前用户。"""
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            self.guard(cursor, subject)
+            cursor.execute("""SELECT session_id FROM scheduled_tasks
+                WHERE task_id=%s AND user_id=%s
+                AND tenant_id IS NOT DISTINCT FROM %s""",
+                (task_id, subject.user_id, subject.tenant_id))
+            task = cursor.fetchone()
+            if not task:
+                raise NotificationError('NOTIFICATION_RESOURCE_UNAVAILABLE', 404)
+            cursor.execute("""SELECT runner_id FROM agent_runners
+                WHERE session_id=%s AND source='scheduled' AND user_id=%s""",
+                (task['session_id'], subject.user_id))
+            runner_ids = [row['runner_id'] for row in cursor.fetchall()]
+            cursor.execute("""SELECT m.notification_id,m.notification_ref,m.event_type,
+                    m.event_key,m.created_at,m.expansion_state,d.target_id,d.state,d.attempts,d.error_class,
+                    d.accepted_at,d.delivered_at,t.channel,t.provider
+                FROM notification_messages m
+                LEFT JOIN notification_deliveries d ON d.notification_id=m.notification_id
+                LEFT JOIN notification_targets t ON t.target_id=d.target_id
+                WHERE m.recipient_user_id=%s AND m.scope_key=%s
+                  AND (m.resource_ref->>'id'=%s OR m.resource_ref->>'id' = ANY(%s))
+                ORDER BY m.created_at DESC LIMIT 100""",
+                (subject.user_id, subject.scope_key, task_id, runner_ids))
+            events, by_ref = [], {}
+            for row in cursor.fetchall():
+                row = dict(row)
+                ref = row['notification_ref']
+                if ref not in by_ref:
+                    # expansion_state（Phase 5 二轮评审第 5 项）：pending=消息尚待
+                    # 异步展开（此时无 deliveries 不代表未配置外发），前端据此
+                    # 显示"投递准备中"并纳入 30s 刷新；expanded 且无 deliveries
+                    # 才是确认无外发目标。
+                    entry = {'notification_ref': ref, 'event_type': row['event_type'],
+                             'created_at': row['created_at'],
+                             'expansion_state': row['expansion_state'], 'deliveries': []}
+                    by_ref[ref] = entry
+                    events.append(entry)
+                if row['target_id']:
+                    by_ref[ref]['deliveries'].append(
+                        {key: row[key] for key in ('target_id', 'channel', 'provider',
+                         'state', 'attempts', 'error_class', 'accepted_at', 'delivered_at')})
+            return events
+
     def register_tenant_target(self, subject, body):
         from .contracts import TENANT_CHANNEL_PROVIDERS
         if body.provider not in TENANT_CHANNEL_PROVIDERS.get(body.channel, frozenset()):
@@ -443,7 +514,7 @@ class NotificationRepository:
             return {'notification_ref':ref,'event_type':message['event_type'],'resource':resource}
 
     INBOX_EVENT_TYPES = ('billing.credit_low','billing.tenant_expiry','abuse.rule_triggered',
-                         'task.waiting_input')
+                         'task.waiting_input','task.paused','task.needs_action')
 
     @staticmethod
     def _inbox_link(event_type, params, subject, notification_ref=None):
@@ -451,10 +522,13 @@ class NotificationRepository:
         提问等待通知复用既有通知解析入口 /notification?ref=——入口完成认证与
         resource 解析后带 _load_session/数字员工路由回原会话（五轮评审 P2-4：
         不自行拼 chat 路径，避免遗漏非默认数字员工路由）。"""
-        if event_type == 'task.waiting_input':
-            # 入口（NotificationEntry）以 tenant 查询参数选择 saas_token_{tenant}：
-            # 租户站内信必须携带 tenant，否则租户用户落在 portal 登录页
-            # （六轮评审 P2-1）；tenant 为空（portal 用户）时不带参数。
+        if event_type in ('task.waiting_input', 'task.paused', 'task.needs_action'):
+            # 提问等待与定时任务暂停通知复用既有通知解析入口 /notification?ref=
+            # ——入口完成认证与 resource 解析（task.paused 解析到任务行，
+            # Phase 5 前端据此路由任务视图）；入口（NotificationEntry）以
+            # tenant 查询参数选择 saas_token_{tenant}：租户站内信必须携带
+            # tenant，否则租户用户落在 portal 登录页（六轮评审 P2-1）；
+            # tenant 为空（portal 用户）时不带参数。
             ref = f'/notification?ref={notification_ref}' if notification_ref else None
             if not ref:
                 return None
@@ -572,14 +646,23 @@ class NotificationRepository:
                         # 租户级 IM target，webhook 将永不外发；event_key 去重保证同事件只投一次。
                         params_tenant = self._event_tenant(message) \
                             if message['policy_key'] == 'tenant_admin_event' else None
+                        # 任务级目标快照（Phase 3，设计 §3.3/§8.2）：事件参数含
+                        # notify_target_id 时**替代**默认偏好路由——个人偏好渠道
+                        # 不再重复投递（评审修正：此前双路由重复打扰，且显式个人
+                        # 目标被 prepare_send 偏好门控拦截）；站内信恒保留。
+                        snapshot_target_id = (message['parameters'] or {}).get('notify_target_id') \
+                            if isinstance(message['parameters'], dict) else None
                         cursor.execute('''SELECT t.*,p.enabled AS preference_enabled,p.enabled_since AS preference_since,
                                 p.event_types FROM notification_targets t LEFT JOIN notification_preferences p
                                 ON p.scope_key=t.scope_key AND p.recipient_user_id=t.recipient_user_id
                                 AND p.channel=t.channel AND p.provider=t.provider AND p.category=%s
-                            WHERE t.state='active' AND (
+                            WHERE t.state='active' AND ''' + (
+                                "t.target_id=%s" if snapshot_target_id else '''(
                                 (t.scope_key=%s AND (t.recipient_user_id=%s OR (t.recipient_user_id IS NULL AND t.tenant_id IS NOT NULL AND %s)))
-                                OR (t.recipient_user_id IS NULL AND t.tenant_id=%s))''',
-                            (message['category'],subject.scope_key,subject.user_id,include_tenant_targets,params_tenant))
+                                OR (t.recipient_user_id IS NULL AND t.tenant_id=%s))'''),
+                            ((message['category'], snapshot_target_id) if snapshot_target_id
+                             else (message['category'], subject.scope_key, subject.user_id,
+                                   include_tenant_targets, params_tenant)))
                         for target in cursor.fetchall():
                             adapter = self.registry.get(target['channel'],target['provider'])
                             if not adapter or not adapter.available() or message['schema_version'] not in adapter.capabilities.notification_schema_versions:
@@ -587,6 +670,14 @@ class NotificationRepository:
                             if message['policy_key'] == 'explicit_test_target':
                                 ref = message['resource_ref']
                                 eligible = target['target_id'] == ref['id'] and target['binding_version'] == ref['binding_version']
+                            elif snapshot_target_id is not None:
+                                # 任务级快照目标（Phase 3）：显式选择替代偏好路由
+                                # （设计 §3.3/§8.2）——不做偏好门控、事件类型集合
+                                # 与启用时序检查（受理后才启用的目标在长任务终态
+                                # 必须可达；enabled_since<=accepted 是普通聊天默认
+                                # 路由的门槛，评审复现误伤显式选择）；归属与当前
+                                # 有效性由查询 WHERE（state='active'+target_id）保证。
+                                eligible = True
                             elif target['recipient_user_id'] is None:
                                 # 租户级 target 无偏好行，不参与偏好门控。
                                 eligible = (message['policy_key'] == 'tenant_admin_event'
@@ -621,6 +712,13 @@ class NotificationRepository:
                                  target['binding_version'],protected(payload),delivery_state,error))
                             route.append({'target_id':target['target_id'],'channel':target['channel'],
                                           'provider':target['provider'],'binding_version':target['binding_version']})
+                        # 快照目标不存在（已硬删/换租户，主查询未命中）时在路由
+                        # 快照留痕；存在时主循环已按快照语义完成投递（替代偏好
+                        # 路由），此处不再二次展开。
+                        if snapshot_target_id is not None and not any(
+                                item.get('target_id') == snapshot_target_id for item in route):
+                            route.append({'target_id':snapshot_target_id,
+                                          'skipped':'target_not_found'})
                 cursor.execute('''UPDATE notification_messages SET expansion_state=%s,route_snapshot=%s::jsonb
                     WHERE notification_id=%s''', (state,json.dumps(route),message['notification_id']))
             conn.commit()
@@ -688,8 +786,19 @@ class NotificationRepository:
                         raise NotificationError('TARGET_SCOPE_MISMATCH')
                 except NotificationError:
                     reason = 'resource_revoked'
+                # 偏好门控豁免：任务级快照目标（设计 §3.3/§8.2——事件参数含
+                # notify_target_id 即用户显式选择，替代默认偏好路由）与显式测试
+                # 投递不参与偏好门控；expand 的 eligible 与此处准入同口径
+                # （评审修正：此前个人目标被偏好门控拦截成 skipped/preference_changed）。
+                try:
+                    event_parameters = unprotect(message['parameters_encrypted'])
+                except Exception:
+                    event_parameters = None
+                snapshot_selected = isinstance(event_parameters, dict) and bool(
+                    event_parameters.get('notify_target_id'))
                 if (not reason and target['recipient_user_id'] is not None
-                        and message['policy_key'] != 'explicit_test_target'):
+                        and message['policy_key'] != 'explicit_test_target'
+                        and not snapshot_selected):
                     cursor.execute('''SELECT * FROM notification_preferences WHERE scope_key=%s
                         AND recipient_user_id=%s AND category=%s AND channel=%s AND provider=%s''',
                         (subject.scope_key,subject.user_id,message['category'],target['channel'],target['provider']))

@@ -81,6 +81,7 @@ describe('entry route responsibilities', () => {
         "chat/:subagent",
         "all-sessions",
         "behavior-logs",
+        "tasks/:task_id",
         "token-usage",
         "recharge-records",
         "reply-styles",
@@ -102,6 +103,14 @@ describe('entry route responsibilities', () => {
         "ai-lead-gen",
       ]
     `)
+  })
+
+  it('resolves the scheduled task view route for tenant (Runner 化 Phase 5，设计 §6)', () => {
+    // 任务计划分组的任务项 / 通知跳转 / 旧聊天链接重定向统一进入任务视图
+    const router = createRouter({ history: createMemoryHistory(), routes: agentRoutes })
+    const resolved = router.resolve('/t/acme/tasks/sched_abc123')
+    expect(resolved.name).toBe('tenant-scheduled-task-view')
+    expect(resolved.params).toEqual({ tenant_id: 'acme', task_id: 'sched_abc123' })
   })
 
   it('keeps weixin marketing workbench list and routed run detail pages for tenant', () => {

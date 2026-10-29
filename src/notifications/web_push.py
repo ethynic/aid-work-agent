@@ -131,9 +131,22 @@ class WebPushAdapter:
         return hashlib.sha256(dto.endpoint.encode()).hexdigest()
 
     def render(self, message, target):
+        # task.paused/task.needs_action 参数以 task_name 映射标题（paused 无
+        # session_title 字段；needs_action 的 session_title 即任务名），event_kind
+        # 取 'paused'/'needs_action'，其余 task.* 事件沿用参数原字段（Phase 3，
+        # 设计 §8.1 全渠道渲染）。
+        if message['event_type'] == 'task.paused':
+            session_title = message['parameters']['task_name']
+            event_kind = 'paused'
+        elif message['event_type'] == 'task.needs_action':
+            session_title = message['parameters']['task_name']
+            event_kind = 'needs_action'
+        else:
+            session_title = message['parameters']['session_title']
+            event_kind = message['parameters']['event_kind']
         return {'schema_version':1, 'notification_ref':message['notification_ref'],
-                'session_title':message['parameters']['session_title'],
-                'event_kind':message['parameters']['event_kind'],
+                'session_title':session_title,
+                'event_kind':event_kind,
                 'installation_ref':target['installation_ref'],
                 'binding_version':target['binding_version'],
                 'expiry':int(message['expires_at'].timestamp())}

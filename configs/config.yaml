@@ -315,6 +315,10 @@ scheduler:
   execution_timeout: 300
   coalesce_missed: true
   misfire_grace_time: 300
+  # Runner 化 v2 调度循环（设计 §12；background_runner dispatch 使用）
+  poll_seconds: 15             # 到期扫描/手动执行/恢复驱动生效上限
+  submit_retry_seconds: 60     # Runner 不可达/未知响应的退避间隔
+  recovery_max_attempts: 3     # interrupted 恢复控制有界尝试次数
 
 # MCP Server 配置（Model Context Protocol）
 mcp:

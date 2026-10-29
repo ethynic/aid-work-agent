@@ -4224,6 +4224,8 @@
         pending_trigger TEXT,
         pending_retry_at TIMESTAMP,
         pending_snapshot JSONB,
+        recovery_retry_at TIMESTAMP,
+        recovery_reset_at TIMESTAMPTZ,
         last_run_at TIMESTAMP,
         last_status TEXT,
         total_runs INTEGER DEFAULT 0,
@@ -4235,3 +4237,16 @@
     CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due ON scheduled_tasks(status, next_due_at);
     CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_pending ON scheduled_tasks(pending_retry_at) WHERE pending_occurrence_key IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_owner ON scheduled_tasks(tenant_id, user_id, status);
+- datetime: "2026-10-28 22:00:00"
+  remark: "定时任务 Runner 化 Phase 3：notification_preferences event_types 默认值补 task.paused/task.needs_action（存量行不回写，读取侧兼容扩展）"
+  statements: |
+    ALTER TABLE notification_preferences
+        ALTER COLUMN event_types SET DEFAULT '["task.completed","task.failed","task.waiting_input","task.paused","task.needs_action"]';
+- datetime: "2026-10-28 22:30:00"
+  remark: "定时任务 Phase 3 复核：恢复驱动退避列（调度侧专用，语义独立于 runner.updated_at）"
+  statements: |
+    ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS recovery_retry_at TIMESTAMP;
+- datetime: "2026-10-28 23:10:00"
+  remark: "定时任务 Phase 4 评审：恢复回合重置列（用户 resume 开启新一轮有界恢复尝试）"
+  statements: |
+    ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS recovery_reset_at TIMESTAMPTZ;

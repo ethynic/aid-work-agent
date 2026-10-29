@@ -53,6 +53,12 @@ export interface ChatSession {
   updated_at: string
   /** 会话中存在等待用户回答的结构化提问（Phase 2 待答徽标） */
   waiting_input?: boolean
+  /** 列表行（SELECT *）携带的会话元数据；任务专属会话标记 metadata.scheduled_task（设计 §6） */
+  metadata?: Record<string, any>
+  /** 详情端点（GET /api/sessions/{id}）透出的任务专属会话标记：task_id | null。
+   * 任务会话经旧聊天链接/通知进入时的权威路由依据（Phase 5 二轮评审第 8 项）；
+   * 列表行不携带该字段（仍读 metadata）。 */
+  scheduled_task?: string | null
 }
 
 export interface ChatMessageRecord {
@@ -173,9 +179,12 @@ export async function deleteSession(sessionId: string): Promise<void> {
 
 /**
  * 获取会话消息
+ * limit：后端按 id 倒序取最近 N 条再正序返回（无游标分页）；默认 100。
  */
-export async function getSessionMessages(sessionId: string): Promise<{ messages: ChatMessageRecord[]; failed_message_ui?: FailedMessageUI }> {
-  const res = await fetch(`${API_BASE}/${sessionId}/messages`, {
+export async function getSessionMessages(sessionId: string, limit: number = 100, runnerId?: string): Promise<{ messages: ChatMessageRecord[]; failed_message_ui?: FailedMessageUI }> {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (runnerId) params.set('runner_id', runnerId)
+  const res = await fetch(`${API_BASE}/${sessionId}/messages?${params}`, {
     headers: { ...getAuthHeader() }
   })
   if (!res.ok) {

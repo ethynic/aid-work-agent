@@ -45,6 +45,12 @@ wechat_mp_sync / wechat_mp_sync_status，薄入口直调 src/wechat_mp/service.p
 
 2026-10-28 移除定时任务两工具（Runner 化 Phase 1 清场，旧工具随旧实现
 整体删除；Phase 4 以新工具重建时同步登记，见 plan-scheduled-task-runner-refactor.md）。
+
+2026-10-28 追加 web_fetch（网页抓取，src/tools/search/fetch_tool.py，黄金清单
+快照后新增的遗留未登记项，Phase 4 一并修复基线失败）；重建登记定时任务两工具
+（Runner 化 Phase 4，chat_only 仅 web 对话可见，渠道与 scheduled 执行经
+filter_source_visible_tools 滤除，见 plan-scheduled-task-runner-refactor.md）：
+create_scheduled_task / manage_scheduled_task。
 """
 
 import pytest
@@ -60,6 +66,7 @@ GOLDEN_TOOLS = [
     "browser_automation",
     "content_generate",
     "cp",
+    "create_scheduled_task",
     "edit",
     "email_process",
     "excel_process",
@@ -68,6 +75,7 @@ GOLDEN_TOOLS = [
     "http_api",
     "knowledge_base_search",
     "knowledge_file_search",
+    "manage_scheduled_task",
     "paddleocr_doc_parsing",
     "pdf_process",
     "ppt_process",
@@ -79,6 +87,7 @@ GOLDEN_TOOLS = [
     "submit_video_task",
     "transfer_to_human",
     "upload_data_file",
+    "web_fetch",
     "web_search",
     "wechat_mp_sync",
     "wechat_mp_sync_status",

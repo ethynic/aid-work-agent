@@ -1798,6 +1798,9 @@ from src.api.message_share import router as message_share_router
 app.include_router(message_share_router)
 from src.api.agent_runner_web import router as agent_runner_web_router
 app.include_router(agent_runner_web_router)
+# 定时任务管理 API（Runner 化 v2，Phase 4）
+from src.api.scheduled_task import router as scheduled_task_router
+app.include_router(scheduled_task_router)
 app.include_router(channels_api.router)
 app.include_router(customer_followup.router)
 from src.api.ai_lead_gen import router as ai_lead_gen_router

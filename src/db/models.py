@@ -858,6 +858,10 @@ class SessionDB:
     def list_by_user(user_id: str, page: int = 1, page_size: int = 20, tenant_id: str = None) -> Dict[str, Any]:
         """获取用户的会话列表（分页，优先从 Redis 缓存读取，TTL 30秒）
 
+        任务专属会话（metadata.scheduled_task）在 SQL 前置排除（Phase 5 二轮评审
+        第 3 项）：count 与列表同条件，total 与数据同口径；任务会话仍可经
+        get_by_id / 详情端点访问（通知/旧链接路由），仅不出现在普通列表。
+
         Args:
             user_id: 用户ID
             page: 页码，从1开始
@@ -871,30 +875,37 @@ class SessionDB:
 
         offset = (page - 1) * page_size
         placeholder = "%s"
+        # metadata 为 JSONB；无 metadata 的行 metadata->'scheduled_task' 为 NULL，
+        # IS NULL 同样成立（普通会话不受影响）
+        task_filter = "(metadata->'scheduled_task' IS NULL)"
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            # 先统计总数
+            # 先统计总数（与列表同条件）
             if tenant_id is not None:
                 cursor.execute(
-                    "SELECT COUNT(*) as cnt FROM chat_sessions WHERE user_id = %s AND tenant_id = %s",
+                    "SELECT COUNT(*) as cnt FROM chat_sessions "
+                    "WHERE user_id = %s AND tenant_id = %s AND " + task_filter,
                     (user_id, tenant_id)
                 )
                 total = cursor.fetchone()["cnt"]
                 cursor.execute(f"""
                     SELECT * FROM chat_sessions
                     WHERE user_id = {placeholder} AND tenant_id = {placeholder}
+                      AND {task_filter}
                     ORDER BY updated_at DESC
                     LIMIT {placeholder} OFFSET {placeholder}
                 """, (user_id, tenant_id, page_size, offset))
             else:
                 cursor.execute(
-                    "SELECT COUNT(*) as cnt FROM chat_sessions WHERE user_id = %s",
+                    "SELECT COUNT(*) as cnt FROM chat_sessions "
+                    "WHERE user_id = %s AND " + task_filter,
                     (user_id,)
                 )
                 total = cursor.fetchone()["cnt"]
                 cursor.execute(f"""
                     SELECT * FROM chat_sessions
                     WHERE user_id = {placeholder}
+                      AND {task_filter}
                     ORDER BY updated_at DESC
                     LIMIT {placeholder} OFFSET {placeholder}
                 """, (user_id, page_size, offset))
@@ -1191,6 +1202,7 @@ class MessageDB:
         limit: int = 100,
         roles: Optional[List[str]] = None,
         include_compacted: bool = False,
+        runner_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """获取会话的所有消息（优先从 Redis 缓存读取，TTL 60秒）
 
@@ -1201,17 +1213,24 @@ class MessageDB:
             include_compacted: 是否包含 compacted=true 的消息（v3.1）。
                 默认 False：前端展示和 Agent 重建 memory 都自动跳过被压缩的历史消息；
                 运维/审计场景可传 True 取回全部消息。
+            runner_id: 可选，只返回该 runner 写入的消息（write_history 落库时
+                metadata.runner_id；Phase 5 三轮评审：任务执行详情按 runner
+                先过滤再 limit，不受最近 N 条窗口限制）。
         """
-        # 生成缓存 key（角色 / include_compacted 不同会影响结果）
+        # 生成缓存 key（角色 / include_compacted / runner 过滤不同会影响结果）
         roles_str = "_".join(sorted(roles)) if roles else "all"
         compacted_flag = "1" if include_compacted else "0"
-        cached = get_cached(CacheKeys.SESSION_MSGS, session_id, str(limit), roles_str, compacted_flag)
+        runner_key = runner_id or "any"
+        cached = get_cached(CacheKeys.SESSION_MSGS, session_id, str(limit), roles_str, compacted_flag, runner_key)
         if cached is not None:
             return cached
 
         placeholder = "%s"
         # v3.1: 默认过滤掉 compacted=true 的消息（前端展示与 Agent memory 都跳过）
         compacted_clause = "" if include_compacted else " AND (compacted = FALSE OR compacted IS NULL)"
+        # chat_messages.metadata 列为 TEXT（非 JSONB，init-postgres.sql:76），
+        # ->> 需先 ::jsonb 转型（同 message_share_db 的既有写法）
+        runner_clause = " AND (metadata::jsonb)->>'runner_id' = " + placeholder if runner_id else ""
         with get_db_connection() as conn:
             cursor = conn.cursor()
             if roles:
@@ -1222,23 +1241,23 @@ class MessageDB:
                     SELECT * FROM (
                         SELECT * FROM chat_messages
                         WHERE session_id = {placeholder} AND role IN ({role_placeholders})
-                        {compacted_clause}
+                        {compacted_clause}{runner_clause}
                         ORDER BY id DESC
                         LIMIT {placeholder}
                     ) AS recent
                     ORDER BY id ASC
-                """, (session_id, *roles, limit))
+                """, (session_id, *roles, *( (runner_id,) if runner_id else () ), limit))
             else:
                 cursor.execute(f"""
                     SELECT * FROM (
                         SELECT * FROM chat_messages
                         WHERE session_id = {placeholder}
-                        {compacted_clause}
+                        {compacted_clause}{runner_clause}
                         ORDER BY id DESC
                         LIMIT {placeholder}
                     ) AS recent
                     ORDER BY id ASC
-                """, (session_id, limit))
+                """, (session_id, *( (runner_id,) if runner_id else () ), limit))
             messages = []
             for row in cursor.fetchall():
                 result = dict(row)
@@ -1253,7 +1272,7 @@ class MessageDB:
                 messages.append(result)
 
             # 写入缓存（TTL 60 秒，消息变化频率较高）
-            set_cached(CacheKeys.SESSION_MSGS, session_id, str(limit), roles_str, compacted_flag,
+            set_cached(CacheKeys.SESSION_MSGS, session_id, str(limit), roles_str, compacted_flag, runner_key,
                        value=messages, ttl=60)
             return messages
 

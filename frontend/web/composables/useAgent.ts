@@ -2,6 +2,7 @@ import { ref, computed, shallowReactive, type Ref } from 'vue'
 import type { ChatMessage, InputHintState, ProgressMessage, VerboseMessage } from '@/types'
 import type { AskForm, AskFormErrorItem, RunnerAnswerItem } from '@/api/runner'
 import { SSEManager, uploadFile, type UploadedFile } from '@/api/agent'
+import { notifyScheduledTasksChanged } from '@/api/scheduledTask'
 import { getSession, getSessionMessages, updateFailedMessageUI, type FailedMessageUI } from '@/api/session'
 import { RunnerClient, RunnerRequestError, runnerTerminal, runnerObservationComplete, type RunnerCapabilities, type RunnerControlIntent, type RunnerControlView, type RunnerSubmission, type RunnerView, type RunnerWait } from '@/api/runner'
 import { historyMessages, mergeRunnerMessages, visibleFailedMessages } from '@/utils/runnerMessages'
@@ -130,6 +131,19 @@ const currentFiles = ref<UploadedFile[]>([])
 
 function generateSessionId(): string {
   return 'session_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9)
+}
+
+// ---- 聊天 runner 终态 → 任务列表信号（Phase 5 二轮评审第 2 项） ----
+// 聊天中 create/manage_scheduled_task 工具的执行结果只出现在 runner 的
+// tool_result 里，不识别关键词：任一聊天 runner 终态落定即可能已变更任务集合，
+// 合并 5s bump scheduledTasksVersion（连续完成只触发一次侧栏刷新）。
+let scheduledTasksNotifyTimer: ReturnType<typeof setTimeout> | undefined
+function notifyChatRunnerTerminal() {
+  if (scheduledTasksNotifyTimer !== undefined) return
+  scheduledTasksNotifyTimer = setTimeout(() => {
+    scheduledTasksNotifyTimer = undefined
+    notifyScheduledTasksChanged()
+  }, 5_000)
 }
 
 /**
@@ -391,8 +405,13 @@ export function useAgent() {
       const verbose = assistant?.verboseMessages || []
       state.liveVerbose.value = state.isProcessing.value && !assistant?.content ? verbose[verbose.length - 1] || null : null
     }
-    if (previous && !runnerTerminal(previous.status) && runnerTerminal(row.status) && row.session.session_id !== sessionId.value) {
-      state.hasUnreadCompletion.value = true
+    if (previous && !runnerTerminal(previous.status) && runnerTerminal(row.status)) {
+      // 终态落定：聊天工具可能已创建/管理定时任务（不解析 tool_result），
+      // 合并 5s bump 任务列表信号（Phase 5 二轮评审第 2 项）
+      notifyChatRunnerTerminal()
+      if (row.session.session_id !== sessionId.value) {
+        state.hasUnreadCompletion.value = true
+      }
     }
     if (row.status === 'failed') runnerError(row.session.session_id,
       new Error(row.result?.error_code || 'RUNNER_EXECUTION_FAILED'), notify && previous?.status !== 'failed')

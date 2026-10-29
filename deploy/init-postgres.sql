@@ -448,6 +448,8 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     pending_trigger TEXT,                      -- scheduled|manual
     pending_retry_at TIMESTAMP,                -- 提交重试时间
     pending_snapshot JSONB,                    -- 本次执行不可变提交快照（text/attachments/profile_id/instance_id/prompt_augmentations）
+    recovery_retry_at TIMESTAMP,               -- 恢复驱动退避（调度侧专用，NULL=立即可试；不复用 runner.updated_at）
+    recovery_reset_at TIMESTAMPTZ,             -- 恢复回合重置（用户 resume 时置 now；rejected 计数只统计其后——恢复耗尽任务的新一轮有界尝试）
     last_run_at TIMESTAMP,
     last_status TEXT,
     total_runs INTEGER DEFAULT 0,
@@ -5474,7 +5476,7 @@ CREATE TABLE IF NOT EXISTS notification_preferences (
     channel TEXT,
     provider TEXT,
     enabled BOOLEAN DEFAULT FALSE,
-    event_types JSONB DEFAULT '["task.completed","task.failed","task.waiting_input"]',
+    event_types JSONB DEFAULT '["task.completed","task.failed","task.waiting_input","task.paused","task.needs_action"]',
     enabled_since TIMESTAMPTZ,
     updated_at TIMESTAMPTZ DEFAULT clock_timestamp(),
     PRIMARY KEY(scope_key,recipient_user_id,category,channel,provider),

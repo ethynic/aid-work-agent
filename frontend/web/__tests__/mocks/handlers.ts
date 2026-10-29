@@ -71,6 +71,29 @@ export const handlers = [
     return HttpResponse.json({ success: true })
   }),
 
+  // 定时任务端点（Runner 化 Phase 5：侧栏任务计划分组 / 任务视图）
+  http.get('/api/scheduled-tasks', ({ request }) => {
+    const auth = request.headers.get('Authorization')
+    if (!auth) {
+      return HttpResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+    return HttpResponse.json({
+      success: true,
+      data: {
+        tasks: [{
+          task_id: 'sched_mock1', user_id: 'u1', name: 'Mock 定时任务',
+          task_prompt: '每天汇总', attachments: [], profile_id: 'main',
+          schedule_type: 'daily', cron_expression: '0 9 * * *',
+          session_id: 's_sched_1', status: 'active',
+          next_due_at: '2026-01-02T01:00:00Z', total_runs: 3,
+          success_count: 3, fail_count: 0,
+          created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
+        }],
+        total: 1,
+      },
+    })
+  }),
+
   // 文件上传端点
   http.post('/api/upload', () => {
     return HttpResponse.json({

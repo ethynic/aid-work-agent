@@ -12,6 +12,11 @@ from .repository import protected
 class TerminalParameters(StrictDTO):
     session_title: str = Field(min_length=1,max_length=80)
     event_kind: Literal['completed','failed']
+    # scheduled 终态扩展（Phase 3 复核，设计 §8.2）：任务标识/名称与目标
+    # 快照；chat 来源缺省（可选字段，白名单不放宽 extra 校验）
+    task_id: str | None = Field(default=None, min_length=1, max_length=64)
+    task_name: str | None = Field(default=None, min_length=1, max_length=80)
+    notify_target_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class WaitingInputParameters(StrictDTO):
@@ -25,6 +30,32 @@ class WaitingInputParameters(StrictDTO):
     event_kind: Literal['waiting_input']
     question_title: str = Field(min_length=1,max_length=120)
     session_id: str = Field(min_length=1,max_length=64)
+
+
+class PausedParameters(StrictDTO):
+    """定时任务自动暂停通知参数（Phase 3，设计 §3.3/§8.1）。
+
+    notify_target_id 为事件生成时的目标快照（任务行当前
+    notification_target_id），后续任务改目标不影响已生成事件；
+    无目标时缺省，走用户个人偏好路由。
+    """
+    task_name: str = Field(min_length=1,max_length=80)
+    reason_label: str = Field(min_length=1,max_length=120)
+    task_id: str = Field(min_length=1,max_length=64)
+    notify_target_id: str | None = Field(default=None,min_length=1,max_length=128)
+
+
+class NeedsActionParameters(StrictDTO):
+    """scheduled 非提问类等待停车通知参数（Phase 3，设计 §8.1）。
+
+    与 PausedParameters 同构（session_title/event_kind 供 Web Push 模板），
+    action_label 说明要做什么（设备确认/人工处理），目标快照同规则。"""
+    session_title: str = Field(min_length=1,max_length=80)
+    event_kind: Literal['needs_action']
+    task_name: str = Field(min_length=1,max_length=80)
+    task_id: str = Field(min_length=1,max_length=64)
+    action_label: str = Field(min_length=1,max_length=120)
+    notify_target_id: str | None = Field(default=None,min_length=1,max_length=128)
 
 
 class TestParameters(StrictDTO):
@@ -122,6 +153,8 @@ LEADGEN_INTENT_LABELS = {
 EVENTS.register('task.completed',EventDefinition('runner_terminal',TerminalParameters,'runner_result'))
 EVENTS.register('task.failed',EventDefinition('runner_terminal',TerminalParameters,'runner_result'))
 EVENTS.register('task.waiting_input',EventDefinition('runner_waiting_input',WaitingInputParameters,'runner_waiting'))
+EVENTS.register('task.paused',EventDefinition('task_paused',PausedParameters,'scheduled_task'))
+EVENTS.register('task.needs_action',EventDefinition('task_needs_action',NeedsActionParameters,'runner_waiting'))
 EVENTS.register('notification.test',EventDefinition('notification_test',TestParameters,'notification_test'))
 EVENTS.register('billing.credit_low',EventDefinition('billing_credit_low',CreditLowParameters,'tenant_credit'))
 EVENTS.register('billing.tenant_expiry',EventDefinition('billing_tenant_expiry',TenantExpiryParameters,'tenant_profile'))
@@ -136,6 +169,14 @@ def render_inbox_text(event_type, parameters):
         return '等待你的回答', (
             f'「{parameters["session_title"]}」中的提问「{parameters["question_title"]}」'
             f'正在等待你的回答，请前往该会话处理。')
+    if event_type == 'task.paused':
+        return '定时任务已暂停', (
+            f'「{parameters["task_name"]}」已自动暂停：{parameters["reason_label"]}。'
+            f'请处理后前往任务视图手动恢复。')
+    if event_type == 'task.needs_action':
+        return '定时任务需要处理', (
+            f'定时任务「{parameters["task_name"]}」{parameters["action_label"]}，'
+            f'处理后执行将自动继续。')
     if event_type == 'billing.credit_low':
         return '积分即将耗尽提醒', (
             f'「{parameters["tenant_name"]}」近 7 天日均消耗 {parameters["daily_avg_credits"]:.1f} 积分，'

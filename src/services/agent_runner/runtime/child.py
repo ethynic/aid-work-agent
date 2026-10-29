@@ -129,7 +129,8 @@ class ChildExecution:
             control.profile_id = config.dir_name
             control.profile_fingerprint = self.profile_fingerprint
         self.runtime = RuntimeExecution(resources, identity, control=control, observer=observer,
-                                        history_reader=history_reader)
+                                        history_reader=history_reader,
+                                        profile_id=config.dir_name)
 
     async def execute_as_subagent(self, task_description, parent_session_id,
                                  task_record=None, progress_callback=None, image_paths=None):

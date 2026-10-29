@@ -17,7 +17,7 @@
 import asyncio
 from typing import Literal, Optional, List
 
-from fastapi import APIRouter, HTTPException, Path, Request
+from fastapi import Query, APIRouter, HTTPException, Path, Request
 from pydantic import BaseModel, Field
 from loguru import logger
 
@@ -167,7 +167,7 @@ async def update_session(request: Request, session_id: str, body: UpdateSessionR
 @router.delete("/{session_id}")
 @audit_action(BehaviorAction.DELETE, BehaviorResourceType.SESSION, id_arg="session_id")
 async def delete_session(request: Request, session_id: str):
-    """删除会话"""
+    """删除会话（定时任务专属会话受守卫拒绝，需经任务管理删除）"""
     user = get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="未登录")
@@ -178,6 +178,21 @@ async def delete_session(request: Request, session_id: str):
 
     if session["user_id"] != user["user_id"]:
         raise HTTPException(status_code=403, detail="无权访问此会话")
+
+    # 定时任务专属会话守卫（设计 §4.3/§6）：任务会话是任务行的执行结果存储
+    # 容器，单独删除会造成任务行悬挂；必须经任务管理（DELETE /api/scheduled-tasks）
+    # 的事务守卫删除（连同任务与消息）。metadata 为 JSONB，psycopg 返回 dict
+    # 或 None；缓存路径可能回放 JSON 字符串，按 runner 授权侧同口径归一化。
+    import json as _json
+    metadata = session.get("metadata")
+    if isinstance(metadata, str):
+        try:
+            metadata = _json.loads(metadata)
+        except (ValueError, TypeError):
+            metadata = None
+    if isinstance(metadata, dict) and metadata.get("scheduled_task"):
+        raise HTTPException(
+            status_code=409, detail="该会话是定时任务的执行记录，需通过任务管理删除")
 
     if SessionDB.delete(session_id):
         return {"success": True, "message": "会话已删除"}
@@ -197,18 +212,35 @@ async def get_session(request: Request, session_id: str):
             context = json.loads(context)
         except (ValueError, TypeError):
             context = None
+    # 任务专属会话权威标记（Phase 5 二轮评审第 8 项）：旧聊天链接/通知路由以
+    # 详情响应的 scheduled_task（= task_id，metadata JSONB；缓存路径可能是 JSON
+    # 字符串，按删除守卫同口径归一化）一次性判定，不再经任务列表匹配。
+    metadata = session.get('metadata')
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except (ValueError, TypeError):
+            metadata = None
+    scheduled_task = None
+    if isinstance(metadata, dict):
+        value = metadata.get('scheduled_task')
+        scheduled_task = value if isinstance(value, str) and value else None
     return {"session": {**{key: session.get(key) for key in (
         'session_id', 'user_id', 'tenant_id', 'title', 'subagent_id', 'instance_id',
-        'created_at', 'updated_at')}, 'context_data': context}}
+        'created_at', 'updated_at')}, 'context_data': context,
+        'scheduled_task': scheduled_task}}
 
 
 @router.get("/{session_id}/messages")
-async def list_messages(request: Request, session_id: str, limit: int = 100):
-    """获取会话的所有消息"""
+async def list_messages(request: Request, session_id: str, limit: int = 100,
+                        runner_id: Optional[str] = Query(default=None, max_length=128)):
+    """获取会话的所有消息；runner_id 可选——只返回该 runner 写入的消息
+    （先过滤再 limit，任务执行详情不受最近 N 条窗口限制，Phase 5 三轮评审）"""
     from src.api.web_subject import owned_web_session
     session = await asyncio.to_thread(owned_web_session, request.headers.get('Authorization',''),
                             request.headers.get('X-Tenant-Id'), session_id)
-    messages = await asyncio.to_thread(MessageDB.list_by_session, session_id, limit)
+    messages = await asyncio.to_thread(
+        MessageDB.list_by_session, session_id, limit, runner_id=runner_id)
     from src.api.message_projection import public_conversation_messages
     from src.services.chat_failed_messages import failed_message_ui
     return {"messages": public_conversation_messages(messages), "failed_message_ui": failed_message_ui(session)}

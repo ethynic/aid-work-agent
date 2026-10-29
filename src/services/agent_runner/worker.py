@@ -177,7 +177,9 @@ class RuntimeFactory:
         history = HistoryRepository(principal.identity)
         observer = DurableObserver(control,history,getattr(control,'trace_collector',None))
         runtime = RuntimeExecution(resources,principal.identity,control=control,observer=observer,history_reader=history,
-            initial_followup_inputs=(row.get('checkpoint') or {}).get('pending_root_inputs') or [])
+            initial_followup_inputs=(row.get('checkpoint') or {}).get('pending_root_inputs') or [],
+            profile_id=row.get('profile_id') or 'main',
+            instance_id=(row.get('input') or {}).get('instance_id'))
         from .runtime.child_recovery import ChildRecoveryAdapter
         runtime.child_recovery = ChildRecoveryAdapter(runtime,self.profiles)
         return runtime

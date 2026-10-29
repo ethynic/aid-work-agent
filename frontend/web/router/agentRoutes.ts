@@ -32,7 +32,8 @@ export const agentRoutes: RouteRecordRaw[] = [
       { path: 'chat/:subagent', name: 'tenant-chat-subagent', component: () => import('@/components/ChatContainer.vue') },
       { path: 'all-sessions', name: 'tenant-all-sessions', component: () => import('@/components/AllSessions.vue') },
       { path: 'behavior-logs', name: 'tenant-behavior-logs', component: () => import('@/components/saas/BehaviorLogs.vue'), props: { scope: 'tenant' } },
-      // 定时任务 Phase 1 清场：路由暂时下线，Phase 5 以任务视图重挂（见 plan-scheduled-task-runner-refactor.md）
+      // 定时任务执行视图（Runner 化 Phase 5 重挂，设计 §6）：任务会话不再出现聊天形态
+      { path: 'tasks/:task_id', name: 'tenant-scheduled-task-view', component: () => import('@/components/scheduled/TaskPlanView.vue') },
       { path: 'token-usage', name: 'tenant-token-usage', component: () => import('@/components/saas/TenantTokenUsage.vue') },
       { path: 'recharge-records', name: 'tenant-recharge-records', component: () => import('@/components/saas/TenantRechargeRecords.vue') },
       { path: 'reply-styles', name: 'tenant-reply-styles', component: () => import('@/components/saas/ReplyStyleManager.vue') },
