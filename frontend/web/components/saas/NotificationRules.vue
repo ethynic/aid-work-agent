@@ -13,7 +13,7 @@
     </AppHeader>
 
     <div class="flex-1 overflow-y-auto p-6">
-      <div class="max-w-4xl">
+      <div>
         <!-- 通知规则 -->
         <div class="bg-white rounded-xl shadow-sm border border-default p-6">
           <div class="flex items-start justify-between mb-4 gap-4">
@@ -36,7 +36,8 @@
           <div v-if="loading" class="text-center py-8 text-muted text-sm">加载中...</div>
 
           <template v-else>
-            <BaseTable :columns="columns" :data="filteredRules" row-key="rule_id">
+            <BaseTable :columns="columns" :data="pagedRules" row-key="rule_id">
+              <template #seq="{ index }">{{ seqNumber(index) }}</template>
               <template #event_type="{ row }">{{ eventLabel(row.event_type) }}</template>
               <template #conditions="{ row }">{{ conditionLabel(row as NotificationRule) }}</template>
               <template #recipient_mode="{ row }">{{ recipientLabel(row.recipient_mode) }}</template>
@@ -60,6 +61,13 @@
                 </div>
               </template>
             </BaseTable>
+
+            <BasePagination
+              v-model:currentPage="currentPage"
+              v-model:pageSize="pageSize"
+              :total="filteredRules.length"
+              class="mt-4"
+            />
           </template>
         </div>
       </div>
@@ -295,7 +303,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { inject } from 'vue'
 import AppHeader from '@/components/AppHeader.vue'
@@ -305,6 +313,7 @@ import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BaseTable, { type TableColumn } from '@/components/ui/BaseTable.vue'
+import BasePagination from '@/components/ui/BasePagination.vue'
 import {
   notificationsAPI,
   type NotificationRule,
@@ -334,6 +343,7 @@ const PROVIDER_OPTIONS = [
 ]
 
 const columns: TableColumn[] = [
+  { key: 'seq', label: '序号', width: '60px' },
   { key: 'name', label: '规则名称' },
   { key: 'event_type', label: '事件', width: '110px' },
   { key: 'conditions', label: '匹配范围' },
@@ -421,6 +431,24 @@ const filteredRules = computed(() => {
   if (scope) list = list.filter((r) => r.conditions?.scope === scope)
   if (kf) list = list.filter((r) => (r.conditions?.kf_config_ids || []).includes(kf))
   return list
+})
+
+// 前端切片分页：规则接口一次性返回全量，无需服务端分页
+const currentPage = ref(1)
+const pageSize = ref(20)
+const pagedRules = computed(() => {
+  const totalPages = Math.max(1, Math.ceil(filteredRules.value.length / pageSize.value))
+  const page = Math.min(currentPage.value, totalPages)
+  const start = (page - 1) * pageSize.value
+  return filteredRules.value.slice(start, start + pageSize.value)
+})
+
+function seqNumber(index: number): number {
+  return (currentPage.value - 1) * pageSize.value + index + 1
+}
+
+watch(() => route.query, () => {
+  currentPage.value = 1
 })
 
 const ruleTargets = computed(() => {
