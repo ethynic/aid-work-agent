@@ -43,9 +43,14 @@ export type NotificationErrorCode =
   | 'NOTIFICATION_TENANT_DISABLED'
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers: Record<string, string> = { ...getAuthHeader(), ...(init.headers as Record<string, string> || {}) }
+  // 租户上下文通知（定时任务等）存 tenant scope，平台管理员必须带 X-Tenant-Id
+  // 才能匹配到租户域通知（普通租户用户后端自行从 users.tenant_id 解析）
+  const m = window.location.pathname.match(/^\/t\/([^/]+)/)
+  if (m) headers['X-Tenant-Id'] = m[1]
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: { ...getAuthHeader(), ...(init.headers || {}) },
+    headers,
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
