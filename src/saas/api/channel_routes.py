@@ -2487,6 +2487,9 @@ async def _process_tenant_wecom_kf_messages(
                     "open_kfid": open_kfid,
                     "external_userid": unified_msg.user_id,
                     "kf_config": kf_config,
+                    # 所属渠道配置行 id（tenant_channel_configs.config_id），供
+                    # 留资通知规则 kf_config 层条件匹配
+                    "kf_config_id": config_id,
                     "session_id": session_id,
                     "tenant_id": tenant_id,
                     "user_id": user_id,

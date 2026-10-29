@@ -105,6 +105,7 @@ class LeadCaptureDB:
         assigned_to: Optional[str] = None,
         assignee_name: Optional[str] = None,
         session_id: Optional[str] = None,
+        event_publisher: Optional[Any] = None,
     ) -> Optional[Dict[str, Any]]:
         """写入一条留资线索，返回新记录（phone / other_contact 已解密）。
 
@@ -150,10 +151,21 @@ class LeadCaptureDB:
                     ),
                 )
                 row = cursor.fetchone()
-                conn.commit()
                 if row:
                     row["phone"] = _decrypt_contact_value(row.get("phone"))
                     row["other_contact"] = _decrypt_other_contact(row.get("other_contact"))
+                    if event_publisher:
+                        # 留资同事务发布通知事件（规则引擎，设计 §5.1）：
+                        # 发布失败不回滚留资，commit 前兜住异常
+                        try:
+                            event_publisher(cursor, dict(row))
+                        except Exception as e:
+                            # 不打异常体：校验错误文本可能携带明文联系方式（设计 §7）
+                            logger.warning(
+                                f"后端日志：留资通知事件发布失败（不影响留资）"
+                                f"lead_id={lead_id} 异常类型={type(e).__name__}"
+                            )
+                conn.commit()
                 return dict(row) if row else None
             except Exception as e:
                 conn.rollback()

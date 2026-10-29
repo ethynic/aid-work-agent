@@ -224,7 +224,10 @@
             <div class="bg-canvas rounded-lg p-3">
               <div class="flex items-center justify-between mb-2">
                 <span class="text-sm font-medium text-default">客服账号</span>
-                <BaseButton intent="ghost" size="sm" @click="openKfAccountCreate({ config_id: editingId })">+ 添加客服账号</BaseButton>
+                <div class="flex items-center gap-1">
+                  <BaseButton intent="ghost" size="sm" @click="goNotificationRules('channel')">通知规则</BaseButton>
+                  <BaseButton intent="ghost" size="sm" @click="openKfAccountCreate({ config_id: editingId })">+ 添加客服账号</BaseButton>
+                </div>
               </div>
               <div v-if="(kfAccountMap[editingId] || []).length === 0" class="text-xs text-muted text-center py-2">
                 尚未配置客服账号，点击右上角添加
@@ -244,6 +247,7 @@
                     <span class="text-xs text-muted">引流 {{ acc.referral_count }} 人</span>
                   </div>
                   <div class="flex items-center gap-1 flex-shrink-0">
+                    <BaseButton intent="ghost" size="sm" @click="goNotificationRules('kf_config')">通知规则</BaseButton>
                     <BaseButton intent="ghost" size="sm" @click="viewKfQr({ config_id: editingId }, acc)">二维码</BaseButton>
                     <BaseButton intent="ghost" size="sm" @click="openKfAccountEdit({ config_id: editingId }, acc)">编辑</BaseButton>
                     <BaseButton intent="danger-ghost" size="sm" @click="handleDeleteKfAccount({ config_id: editingId }, acc)">删除</BaseButton>
@@ -851,6 +855,15 @@ function tenantUserName(userId: string | null | undefined): string {
   const u = tenantUserMap.value[userId]
   if (!u) return '已删除用户'
   return u.nickname || u.username || u.phone || userId
+}
+
+// 客户留资通知规则深链：channel=渠道层（全部客服账号）；kf_config=当前客服账号层
+function goNotificationRules(scope: 'channel' | 'kf_config') {
+  const tenantId = route.params.tenant_id as string
+  const query: Record<string, string> = { event_type: 'lead.captured' }
+  if (scope === 'kf_config') query.kf_config = editingId.value || ''
+  else query.scope = 'channel'
+  router.push({ path: `/t/${tenantId}/notification-rules`, query })
 }
 
 async function loadTenantUsers() {

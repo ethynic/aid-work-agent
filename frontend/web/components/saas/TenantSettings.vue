@@ -54,9 +54,18 @@
           </button>
         </div>
 
-        <!-- 通知渠道（计费提醒 / 反滥用告警外发配置） -->
+        <!-- 通知规则入口（默认外发渠道与各事件通知规则已迁至独立页面） -->
         <div id="notification-channels" class="scroll-mt-4">
-          <NotificationChannelSettings />
+          <div
+            class="bg-white rounded-xl shadow-sm border border-default p-6 flex items-center justify-between gap-4 cursor-pointer hover:border-primary-300 transition-colors"
+            @click="goNotificationRules"
+          >
+            <div>
+              <h2 class="text-base font-semibold text-default">通知规则与外发渠道</h2>
+              <p class="text-xs text-muted mt-1">配置默认外发渠道，以及客户留资、积分提醒、到期提醒、滥用告警等事件的通知规则</p>
+            </div>
+            <span class="text-primary-600 text-sm whitespace-nowrap">前往配置 →</span>
+          </div>
         </div>
 
         <!-- 租户邮箱（邮箱三层解析第 2 层兜底，AI获客等数字员工发信用） -->
@@ -69,11 +78,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, inject, nextTick } from 'vue'
+import { ref, computed, onMounted, inject } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import LogoUpload from '@/components/ui/LogoUpload.vue'
-import NotificationChannelSettings from '@/components/notifications/NotificationChannelSettings.vue'
 import TenantEmailSettings from '@/components/email/TenantEmailSettings.vue'
 import { getTenantInfo, updateTenantInfo } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
@@ -171,12 +179,15 @@ async function handleSave() {
   }
 }
 
+function goNotificationRules() {
+  router.push(`/t/${tenantId.value}/notification-rules`)
+}
+
 onMounted(async () => {
   await loadSettings()
-  // 支持深链锚点（如防滥用中心「通知渠道」入口跳转）
+  // 旧 hash 深链重定向（如防滥用中心「通知渠道」入口）：通知配置已迁至独立页面
   if (route.hash === '#notification-channels') {
-    await nextTick()
-    document.getElementById('notification-channels')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    router.replace({ path: `/t/${tenantId.value}/notification-rules` })
   }
 })
 </script>

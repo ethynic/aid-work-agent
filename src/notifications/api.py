@@ -7,8 +7,8 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from loguru import logger
 
-from .contracts import (NotificationError, PreferenceRequest, RegisterTarget, Subject,
-                        TenantRegisterTarget, TestRequest)
+from .contracts import (NotificationError, PreferenceRequest, RegisterTarget, RuleCreate,
+                        RuleUpdate, Subject, TenantRegisterTarget, TestRequest)
 from .service import notification_repository
 
 
@@ -116,7 +116,37 @@ def create_router(config=None, repository=None, user_loader=None):
     @router.post('/tenant-targets')
     def register_tenant_target(body: TenantRegisterTarget, current: Subject = Depends(admin_subject)):
         enabled()
+        if body.rule_id:
+            # 规则级目标（规则引擎，设计 §10）：installation_ref 服务端生成，
+            # 允许同 provider 多个 active；同 digest 被租户级或其他规则占用时 409
+            return repository.register_rule_target(current, body)
         return repository.register_tenant_target(current, body)
+
+    # ---------- 通知规则（规则引擎，设计 §10） ----------
+
+    @router.get('/rules')
+    def list_rules(current: Subject = Depends(admin_subject)):
+        enabled()
+        return {'rules': repository.list_rules(current)}
+
+    @router.post('/rules')
+    def create_rule(body: RuleCreate, current: Subject = Depends(admin_subject)):
+        enabled()
+        return {'rule': repository.create_rule(current, body)}
+
+    @router.put('/rules/{rule_id}')
+    def update_rule(rule_id: str, body: RuleUpdate, current: Subject = Depends(admin_subject)):
+        enabled()
+        if not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', rule_id):
+            raise NotificationError('NOTIFICATION_RULE_NOT_FOUND', 404)
+        return {'rule': repository.update_rule(current, rule_id, body)}
+
+    @router.delete('/rules/{rule_id}')
+    def delete_rule(rule_id: str, current: Subject = Depends(admin_subject)):
+        enabled()
+        if not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', rule_id):
+            raise NotificationError('NOTIFICATION_RULE_NOT_FOUND', 404)
+        return repository.delete_rule(current, rule_id)
 
     @router.delete('/tenant-targets/{target_id}')
     def revoke_tenant_target(target_id: str, request: Request, current: Subject = Depends(admin_subject)):

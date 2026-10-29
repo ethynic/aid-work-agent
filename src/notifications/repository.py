@@ -3,6 +3,8 @@ import hashlib
 import json
 import random
 import uuid
+
+from loguru import logger
 from datetime import timedelta
 from urllib.parse import quote, urlsplit
 
@@ -10,13 +12,14 @@ from src.db.database import get_db_connection
 from src.db.encryption import encryption_manager
 
 from .authorization import assert_subject_in_tx, resource_in_tx
-from .contracts import NotificationError, Subject
+from .contracts import RULE_EVENT_POLICY_KEY, NotificationError, Subject
 
 TABLE_COLUMNS = {
     'notification_messages': 'notification_id notification_ref schema_version producer event_type event_key scope_key tenant_id recipient_user_id resource_ref template_key template_version parameters_encrypted occurred_at accepted_at expires_at category priority policy_key expansion_state route_snapshot read_at created_at',
-    'notification_targets': 'target_id scope_key tenant_id recipient_user_id channel provider installation_ref identity_digest target_schema_version configuration_encrypted binding_version state enabled_since verified_at created_at updated_at',
+    'notification_targets': 'target_id scope_key tenant_id recipient_user_id channel provider installation_ref identity_digest target_schema_version configuration_encrypted rule_id binding_version state enabled_since verified_at created_at updated_at',
     'notification_preferences': 'scope_key tenant_id recipient_user_id category channel provider enabled event_types enabled_since updated_at',
     'notification_deliveries': 'delivery_id notification_id target_id binding_version rendered_encrypted state attempts next_attempt_at owner lease_until claim_version error_class provider_acceptance_id accepted_at delivered_at displayed_at read_at created_at updated_at',
+    'notification_rules': 'rule_id tenant_id event_type name enabled is_system conditions recipient_mode include_default_target created_by created_at updated_at',
 }
 
 
@@ -69,7 +72,7 @@ def mask_tenant_configuration(channel, configuration):
 
 def public_target(row):
     target = {key:row[key] for key in ('target_id','installation_ref','binding_version','state','enabled_since',
-                                       'channel','provider')}
+                                       'channel','provider','rule_id')}
     if row.get('configuration_encrypted'):
         try:
             display = mask_tenant_configuration(row['channel'], unprotect(row['configuration_encrypted']))
@@ -99,6 +102,22 @@ def tenant_installation_ref(tenant_id):
 def lock_subject(cursor, subject):
     cursor.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
                    ('notification:subject:'+subject.scope_key+':'+subject.user_id,))
+
+
+# 规则引擎预置默认规则（设计 §4）：与 db_update 预置 INSERT 保持同一定义。
+# (event_type, name, conditions, recipient_mode)；预置规则 include_default_target=TRUE
+# （留资默认规则含租户级邮件渠道，旧邮件单发收编后能力不丢失，设计 §5.2）。
+PRESET_RULES = (
+    ('billing.credit_low', '积分提醒', {}, 'tenant_admins'),
+    ('billing.tenant_expiry', '到期提醒', {}, 'tenant_admins'),
+    ('abuse.rule_triggered', '滥用告警', {}, 'tenant_admins'),
+    ('lead.captured', '留资通知', {'scope': 'channel'}, 'kf_assignee'),
+)
+
+# 规则引擎可配置事件白名单（租户管理员 CRUD 边界；task.* 用户任务事件不进规则层）。
+RULE_EVENT_TYPES = frozenset({item[0] for item in PRESET_RULES})
+
+RULE_RECIPIENT_MODES = frozenset({'tenant_admins', 'kf_assignee'})
 
 
 class NotificationRepository:
@@ -145,10 +164,12 @@ class NotificationRepository:
                     raise RuntimeError('NOTIFICATION_SCHEMA_COLUMNS_REQUIRED')
         cursor.execute('''SELECT conname FROM pg_constraint WHERE conrelid IN
             ('notification_messages'::regclass,'notification_targets'::regclass,
-             'notification_preferences'::regclass,'notification_deliveries'::regclass)''')
+             'notification_preferences'::regclass,'notification_deliveries'::regclass,
+             'notification_rules'::regclass)''')
         names = {row['conname'] for row in cursor.fetchall()}
         if not {'notification_message_identity','notification_target_identity',
-                'notification_delivery_target','notification_preferences_pkey'}.issubset(names):
+                'notification_delivery_target','notification_preferences_pkey',
+                'notification_rules_pkey'}.issubset(names):
             raise RuntimeError('NOTIFICATION_SCHEMA_CONSTRAINTS_REQUIRED')
 
     def assert_schema(self):
@@ -340,6 +361,10 @@ class NotificationRepository:
             endpoint = cursor.fetchone()
             if endpoint and not tenant_owned(endpoint, subject):
                 raise NotificationError('NOTIFICATION_TARGET_OWNED', 409)
+            # 规则级 active 行占用同 digest 时拒绝（提示换地址或先撤销），
+            # 不允许租户级登记悄悄接管规则的投递目标
+            if endpoint and endpoint.get('rule_id') and endpoint['state'] == 'active':
+                raise NotificationError('NOTIFICATION_TARGET_OWNED', 409)
             cursor.execute('''SELECT * FROM notification_targets WHERE provider=%s AND installation_ref=%s
                 AND state='active' FOR UPDATE''', (body.provider, installation_ref))
             installation = cursor.fetchone()
@@ -357,8 +382,10 @@ class NotificationRepository:
                     raise NotificationError('NOTIFICATION_BINDING_CHANGED', 409)
                 old = unprotect(row['configuration_encrypted'])
                 changed = old != configuration or not active
+                # rule_id 一并清空：曾是规则级的行复活为租户级默认渠道时，
+                # 残留 rule_id 会被 delete_rule 级联撤销误伤
                 cursor.execute('''UPDATE notification_targets SET configuration_encrypted=%s,
-                    identity_digest=%s,state='active',binding_version=binding_version+%s,
+                    identity_digest=%s,state='active',rule_id=NULL,binding_version=binding_version+%s,
                     enabled_since=CASE WHEN state='active' THEN enabled_since ELSE clock_timestamp() END,
                     verified_at=clock_timestamp(),updated_at=clock_timestamp()
                     WHERE target_id=%s RETURNING *''', (protected(configuration),digest,int(changed),row['target_id']))
@@ -393,6 +420,241 @@ class NotificationRepository:
             cursor.execute('''UPDATE notification_deliveries SET state='skipped',error_class='target_revoked',
                 owner=NULL,lease_until=NULL,updated_at=clock_timestamp()
                 WHERE target_id=%s AND state IN ('pending','sending')''', (target_id,))
+            conn.commit()
+            return result
+
+    # ---------- 通知规则（规则引擎，设计 §3/§6/§10） ----------
+
+    @staticmethod
+    def _validate_rule_conditions(event_type, conditions):
+        """规则条件白名单校验，返回规范化 conditions。
+
+        lead.captured 支持 channel（全渠道）与 kf_config（指定客服账号）两层；
+        其余事件无条件（{}）。未知键一律拒绝，防止前端冗余字段静默失效。"""
+        if not isinstance(conditions, dict):
+            raise NotificationError('NOTIFICATION_RULE_CONDITIONS_INVALID', 400)
+        if event_type != 'lead.captured':
+            if conditions not in ({}, None):
+                raise NotificationError('NOTIFICATION_RULE_CONDITIONS_INVALID', 400)
+            return {}
+        scope = conditions.get('scope', 'channel')
+        if scope == 'channel':
+            if set(conditions) - {'scope'}:
+                raise NotificationError('NOTIFICATION_RULE_CONDITIONS_INVALID', 400)
+            return {'scope': 'channel'}
+        if scope != 'kf_config':
+            raise NotificationError('NOTIFICATION_RULE_CONDITIONS_INVALID', 400)
+        if set(conditions) - {'scope', 'kf_config_ids'}:
+            raise NotificationError('NOTIFICATION_RULE_CONDITIONS_INVALID', 400)
+        ids = conditions.get('kf_config_ids')
+        if (not isinstance(ids, list) or not ids or len(ids) > 100
+                or not all(isinstance(item, str) and 1 <= len(item) <= 64 for item in ids)):
+            raise NotificationError('NOTIFICATION_RULE_CONDITIONS_INVALID', 400)
+        return {'scope': 'kf_config', 'kf_config_ids': list(dict.fromkeys(ids))}
+
+    def _validate_rule_kf_configs(self, cursor, tenant_id, conditions):
+        """kf_config 层条件逐个校验客服账号归属本租户（tenant_channel_configs）。"""
+        for config_id in conditions.get('kf_config_ids', ()):
+            cursor.execute('SELECT 1 FROM tenant_channel_configs WHERE config_id=%s AND tenant_id=%s',
+                           (config_id, tenant_id))
+            if not cursor.fetchone():
+                raise NotificationError('NOTIFICATION_KF_CONFIG_INVALID', 400)
+
+    def _admin_rule(self, cursor, subject, rule_id, for_update=False):
+        cursor.execute('SELECT * FROM notification_rules WHERE rule_id=%s' +
+                       (' FOR UPDATE' if for_update else ''), (rule_id,))
+        rule = cursor.fetchone()
+        if not rule or rule['tenant_id'] != subject.tenant_id:
+            raise NotificationError('NOTIFICATION_RULE_NOT_FOUND', 404)
+        return rule
+
+    def list_rules(self, subject):
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            self.guard_admin(cursor, subject)
+            if subject.tenant_id is None:
+                raise NotificationError('NOTIFICATION_TENANT_REQUIRED', 400)
+            cursor.execute('''SELECT r.*,
+                    (SELECT COUNT(*) FROM notification_targets t
+                     WHERE t.rule_id=r.rule_id AND t.state='active') AS active_targets
+                FROM notification_rules r WHERE r.tenant_id=%s
+                ORDER BY r.created_at''', (subject.tenant_id,))
+            rows = cursor.fetchall()
+            conn.commit()
+            return [self._public_rule(row) for row in rows]
+
+    @staticmethod
+    def _public_rule(row):
+        return {'rule_id': row['rule_id'], 'event_type': row['event_type'], 'name': row['name'],
+                'enabled': row['enabled'], 'is_system': row['is_system'],
+                'conditions': row['conditions'] if isinstance(row['conditions'], dict) else {},
+                'recipient_mode': row['recipient_mode'],
+                'include_default_target': row['include_default_target'],
+                'created_by': row['created_by'], 'created_at': row['created_at'],
+                'updated_at': row['updated_at'],
+                'active_targets': row.get('active_targets', 0)}
+
+    def create_rule(self, subject, body):
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            self.guard_admin(cursor, subject)
+            if subject.tenant_id is None:
+                raise NotificationError('NOTIFICATION_TENANT_REQUIRED', 400)
+            if body.event_type not in RULE_EVENT_TYPES:
+                raise NotificationError('NOTIFICATION_RULE_EVENT_UNSUPPORTED', 400)
+            name = (body.name or '').strip()
+            if not 1 <= len(name) <= 64:
+                raise NotificationError('NOTIFICATION_RULE_NAME_INVALID', 400)
+            if body.recipient_mode not in RULE_RECIPIENT_MODES:
+                raise NotificationError('NOTIFICATION_RULE_RECIPIENT_INVALID', 400)
+            conditions = self._validate_rule_conditions(body.event_type, body.conditions or {})
+            if conditions.get('scope') == 'kf_config':
+                self._validate_rule_kf_configs(cursor, subject.tenant_id, conditions)
+            cursor.execute('''INSERT INTO notification_rules
+                (rule_id,tenant_id,event_type,name,enabled,is_system,conditions,recipient_mode,
+                 include_default_target,created_by) VALUES (%s,%s,%s,%s,%s,FALSE,%s::jsonb,%s,%s,%s)
+                ON CONFLICT (tenant_id,event_type,name) DO NOTHING RETURNING *''',
+                ('rule_'+uuid.uuid4().hex,subject.tenant_id,body.event_type,name,
+                 bool(body.enabled),json.dumps(conditions),body.recipient_mode,
+                 bool(body.include_default_target),subject.user_id))
+            row = cursor.fetchone()
+            if not row:
+                raise NotificationError('NOTIFICATION_RULE_EXISTS', 409)
+            result = self._public_rule(row)
+            conn.commit()
+            return result
+
+    def update_rule(self, subject, rule_id, body):
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            self.guard_admin(cursor, subject)
+            if subject.tenant_id is None:
+                raise NotificationError('NOTIFICATION_TENANT_REQUIRED', 400)
+            rule = self._admin_rule(cursor, subject, rule_id, for_update=True)
+            updates, params = [], []
+            if body.name is not None:
+                if rule['is_system']:
+                    # 预置规则名称承载前端识别语义，不允许改名
+                    raise NotificationError('NOTIFICATION_RULE_SYSTEM', 403)
+                name = body.name.strip()
+                if not 1 <= len(name) <= 64:
+                    raise NotificationError('NOTIFICATION_RULE_NAME_INVALID', 400)
+                cursor.execute(
+                    'SELECT 1 FROM notification_rules WHERE tenant_id=%s AND event_type=%s'
+                    ' AND name=%s AND rule_id<>%s',
+                    (subject.tenant_id, rule['event_type'], name, rule_id))
+                if cursor.fetchone():
+                    raise NotificationError('NOTIFICATION_RULE_EXISTS', 409)
+                updates.append('name=%s')
+                params.append(name)
+            if body.enabled is not None:
+                updates.append('enabled=%s')
+                params.append(bool(body.enabled))
+            if body.conditions is not None:
+                conditions = self._validate_rule_conditions(rule['event_type'], body.conditions)
+                if conditions.get('scope') == 'kf_config':
+                    self._validate_rule_kf_configs(cursor, subject.tenant_id, conditions)
+                updates.append('conditions=%s::jsonb')
+                params.append(json.dumps(conditions))
+            if body.recipient_mode is not None:
+                if body.recipient_mode not in RULE_RECIPIENT_MODES:
+                    raise NotificationError('NOTIFICATION_RULE_RECIPIENT_INVALID', 400)
+                updates.append('recipient_mode=%s')
+                params.append(body.recipient_mode)
+            if body.include_default_target is not None:
+                updates.append('include_default_target=%s')
+                params.append(bool(body.include_default_target))
+            if not updates:
+                raise NotificationError('NOTIFICATION_RULE_NOTHING_TO_UPDATE', 400)
+            updates.append('updated_at=clock_timestamp()')
+            params.append(rule_id)
+            cursor.execute('UPDATE notification_rules SET '+','.join(updates)+
+                           ' WHERE rule_id=%s RETURNING *', tuple(params))
+            result = self._public_rule(cursor.fetchone())
+            conn.commit()
+            return result
+
+    def delete_rule(self, subject, rule_id):
+        """删除自定义规则；is_system 拒绝。级联撤销规则级目标并跳过在途投递
+        （与 revoke_tenant_target 同款处理，设计 §6 决策 6）。"""
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            self.guard_admin(cursor, subject)
+            if subject.tenant_id is None:
+                raise NotificationError('NOTIFICATION_TENANT_REQUIRED', 400)
+            rule = self._admin_rule(cursor, subject, rule_id, for_update=True)
+            if rule['is_system']:
+                raise NotificationError('NOTIFICATION_RULE_SYSTEM', 403)
+            cursor.execute('DELETE FROM notification_rules WHERE rule_id=%s', (rule_id,))
+            cursor.execute('''SELECT target_id FROM notification_targets
+                WHERE rule_id=%s AND state='active' FOR UPDATE''', (rule_id,))
+            target_ids = [row['target_id'] for row in cursor.fetchall()]
+            if target_ids:
+                cursor.execute('''UPDATE notification_targets SET state='revoked',
+                    binding_version=binding_version+1,updated_at=clock_timestamp()
+                    WHERE target_id = ANY(%s)''', (target_ids,))
+                cursor.execute('''UPDATE notification_deliveries SET state='skipped',
+                    error_class='target_revoked',owner=NULL,lease_until=NULL,updated_at=clock_timestamp()
+                    WHERE target_id = ANY(%s) AND state IN ('pending','sending')''', (target_ids,))
+            conn.commit()
+            return {'rule_id': rule_id, 'revoked_targets': len(target_ids)}
+
+    def register_rule_target(self, subject, body):
+        """规则级外发目标登记（设计 §10）：installation_ref 服务端生成
+        （允许同 provider 多个 active）；同 digest 已被租户级或其他规则的
+        active 目标占用时 409。"""
+        from .contracts import TENANT_CHANNEL_PROVIDERS
+        if body.provider not in TENANT_CHANNEL_PROVIDERS.get(body.channel, frozenset()):
+            raise NotificationError('NOTIFICATION_PROVIDER_UNAVAILABLE', 503)
+        if subject.tenant_id is None:
+            raise NotificationError('NOTIFICATION_TENANT_REQUIRED', 400)
+        adapter = self.registry.get(body.channel, body.provider)
+        if not adapter or not adapter.available():
+            raise NotificationError('NOTIFICATION_PROVIDER_UNAVAILABLE', 503)
+        configuration = body.configuration.model_dump()
+        digest = adapter.validate_target(configuration)
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            self.guard_admin(cursor, subject)
+            cursor.execute('SELECT * FROM notification_rules WHERE rule_id=%s FOR UPDATE', (body.rule_id,))
+            rule = cursor.fetchone()
+            if not rule or rule['tenant_id'] != subject.tenant_id:
+                raise NotificationError('NOTIFICATION_RULE_NOT_FOUND', 404)
+            cursor.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
+                           ('notification:target:'+body.provider+':'+digest,))
+            # 同 digest 优先 active 行；非 active（撤销态）允许复活到本规则
+            cursor.execute('''SELECT * FROM notification_targets WHERE provider=%s AND identity_digest=%s
+                AND scope_key=%s ORDER BY CASE WHEN state='active' THEN 0 ELSE 1 END,
+                updated_at DESC FOR UPDATE''', (body.provider, digest, subject.scope_key))
+            endpoint = cursor.fetchone()
+            if endpoint and endpoint['state'] == 'active' and endpoint['rule_id'] != body.rule_id:
+                raise NotificationError('NOTIFICATION_TARGET_OWNED', 409)
+            row = endpoint
+            if row:
+                active = row['state'] == 'active'
+                if body.expected_binding_version is not None and body.expected_binding_version != row['binding_version']:
+                    raise NotificationError('NOTIFICATION_BINDING_CHANGED', 409)
+                if active and body.expected_binding_version is None:
+                    raise NotificationError('NOTIFICATION_BINDING_CHANGED', 409)
+                old = unprotect(row['configuration_encrypted'])
+                changed = old != configuration or not active
+                cursor.execute('''UPDATE notification_targets SET configuration_encrypted=%s,
+                    identity_digest=%s,rule_id=%s,state='active',binding_version=binding_version+%s,
+                    enabled_since=CASE WHEN state='active' THEN enabled_since ELSE clock_timestamp() END,
+                    verified_at=clock_timestamp(),updated_at=clock_timestamp()
+                    WHERE target_id=%s RETURNING *''',
+                    (protected(configuration),digest,body.rule_id,int(changed),row['target_id']))
+            else:
+                if body.expected_binding_version is not None:
+                    raise NotificationError('NOTIFICATION_BINDING_CHANGED', 409)
+                cursor.execute('''INSERT INTO notification_targets
+                    (target_id,scope_key,tenant_id,recipient_user_id,channel,provider,installation_ref,
+                     identity_digest,configuration_encrypted,rule_id)
+                    VALUES (%s,%s,%s,NULL,%s,%s,%s,%s,%s,%s) RETURNING *''',
+                    ('target_'+uuid.uuid4().hex,subject.scope_key,subject.tenant_id,
+                     body.channel,body.provider,'rule_'+body.rule_id+'_'+uuid.uuid4().hex[:8],
+                     digest,protected(configuration),body.rule_id))
+            result = public_target(cursor.fetchone())
             conn.commit()
             return result
 
@@ -514,7 +776,7 @@ class NotificationRepository:
             return {'notification_ref':ref,'event_type':message['event_type'],'resource':resource}
 
     INBOX_EVENT_TYPES = ('billing.credit_low','billing.tenant_expiry','abuse.rule_triggered',
-                         'task.waiting_input','task.paused','task.needs_action')
+                         'task.waiting_input','task.paused','task.needs_action','lead.captured')
 
     @staticmethod
     def _inbox_link(event_type, params, subject, notification_ref=None):
@@ -616,6 +878,138 @@ class NotificationRepository:
             conn.commit()
             return {'notification_ref':ref,'success':True}
 
+    @staticmethod
+    def _ensure_preset_rules_in_tx(cursor, tenant_id, event_type):
+        """预置规则惰性补插（设计 §4）：租户首次产生对应事件时按预置清单补齐，
+        幂等。该 (tenant, event_type) 已存在任意规则行（含停用）则不插——停用
+        事实不被覆盖。"""
+        cursor.execute('SELECT 1 FROM notification_rules WHERE tenant_id=%s AND event_type=%s LIMIT 1',
+                       (tenant_id, event_type))
+        if cursor.fetchone():
+            return
+        for event, name, conditions, mode in PRESET_RULES:
+            if event != event_type:
+                continue
+            cursor.execute('''INSERT INTO notification_rules
+                (rule_id,tenant_id,event_type,name,is_system,conditions,recipient_mode,include_default_target)
+                VALUES (%s,%s,%s,%s,TRUE,%s::jsonb,%s,TRUE)
+                ON CONFLICT (tenant_id,event_type,name) DO NOTHING''',
+                ('rule_preset_' + hashlib.md5((tenant_id + ':' + event).encode()).hexdigest(),
+                 tenant_id, event, name, json.dumps(conditions), mode))
+
+    def _tenant_rule_enabled(self, cursor, tenant_id, event_type):
+        self._ensure_preset_rules_in_tx(cursor, tenant_id, event_type)
+        cursor.execute('''SELECT 1 FROM notification_rules
+            WHERE tenant_id=%s AND event_type=%s AND enabled LIMIT 1''', (tenant_id, event_type))
+        return bool(cursor.fetchone())
+
+    @staticmethod
+    def _resolve_rule_recipients(cursor, recipient_mode, tenant_id, params):
+        """按 recipient_mode 解析接收人（设计 §6）：tenant_admins=租户全部管理员；
+        kf_assignee=事件参数归属员工（必须归属本租户且 active，防参数伪造跨租户通知）。"""
+        if recipient_mode == 'kf_assignee':
+            user_id = str(params.get('assignee_user_id') or '')
+            if not user_id:
+                return []
+            cursor.execute('''SELECT user_id FROM users
+                WHERE user_id=%s AND tenant_id=%s AND status='active' ''', (user_id, tenant_id))
+            row = cursor.fetchone()
+            return [row['user_id']] if row else []
+        cursor.execute('''SELECT user_id FROM users
+            WHERE tenant_id=%s AND role='tenant_admin' AND status='active' ''', (tenant_id,))
+        return [row['user_id'] for row in cursor.fetchall()]
+
+    @staticmethod
+    def _rule_event_targets(cursor, rule, tenant_id):
+        """规则命中后的外发目标：规则专属 target（同 provider 可多个）+ 可选
+        叠加租户级默认渠道 target（include_default_target）。"""
+        default_clause = ' OR rule_id IS NULL' if rule['include_default_target'] else ''
+        cursor.execute('''SELECT * FROM notification_targets
+            WHERE state='active' AND recipient_user_id IS NULL AND tenant_id=%s
+            AND (rule_id=%s''' + default_clause + ')', (tenant_id, rule['rule_id']))
+        return cursor.fetchall()
+
+    def _expand_rule_event(self, cursor, message):
+        """事件级消息展开（规则引擎，设计 §6）：匹配租户通知规则，每条命中规则
+        独立展开接收人（站内信消息）与外发目标（delivery），两层叠加都通知不去重；
+        无命中规则零投递、消息不滞留 pending。"""
+        route = []
+        if message['expires_at'] <= message['database_now']:
+            return 'expired', route
+        tenant_id = message['tenant_id']
+        if not tenant_id:
+            # 事件级消息必然归属租户，异常形态按展开完成处理避免反复重扫
+            return 'expanded', route
+        try:
+            message['parameters'] = unprotect(message['parameters_encrypted'])
+        except Exception:
+            message['parameters'] = {}
+        params = message['parameters'] if isinstance(message['parameters'], dict) else {}
+        self._ensure_preset_rules_in_tx(cursor, tenant_id, message['event_type'])
+        cursor.execute('''SELECT rule_id,name,conditions,recipient_mode,include_default_target
+            FROM notification_rules WHERE tenant_id=%s AND event_type=%s AND enabled
+            ORDER BY created_at,rule_id''', (tenant_id, message['event_type']))
+        rules = cursor.fetchall()
+        seen_targets = set()
+        for rule in rules:
+            conditions = rule['conditions'] if isinstance(rule['conditions'], dict) else {}
+            if conditions.get('scope') == 'kf_config':
+                # 客服账号层规则：事件 kf_config_id 命中账号列表才展开；渠道层
+                # （scope=channel）与无条件规则全量命中
+                if params.get('kf_config_id') not in (conditions.get('kf_config_ids') or []):
+                    continue
+            recipients = self._resolve_rule_recipients(cursor, rule['recipient_mode'], tenant_id, params)
+            recipient_ids = []
+            for user_id in recipients:
+                # 站内信消息直插 expanded（message 即信）：event_key 追加规则维度，
+                # 多规则命中同一接收人各留一条（"都通知"口径），唯一约束保证幂等
+                cursor.execute('''INSERT INTO notification_messages
+                    (notification_id,notification_ref,schema_version,producer,event_type,event_key,
+                     scope_key,tenant_id,recipient_user_id,resource_ref,template_key,template_version,
+                     parameters_encrypted,occurred_at,accepted_at,expires_at,category,priority,
+                     policy_key,expansion_state,route_snapshot)
+                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,1,%s,%s,%s,%s,%s,%s,%s,'expanded','[]'::jsonb)
+                    ON CONFLICT(scope_key,recipient_user_id,producer,event_key) DO NOTHING
+                    RETURNING notification_ref''',
+                    ('notification_'+uuid.uuid4().hex, uuid.uuid4().hex, message['schema_version'],
+                     message['producer'], message['event_type'],
+                     message['event_key'] + ':' + rule['rule_id'], 'tenant:'+tenant_id, tenant_id,
+                     user_id, json.dumps(message['resource_ref']), message['template_key'],
+                     message['parameters_encrypted'], message['occurred_at'], message['accepted_at'],
+                     message['expires_at'], message['category'], message['priority'], 'rule_recipient'))
+                if cursor.fetchone():
+                    recipient_ids.append(user_id)
+            target_rows = []
+            for target in self._rule_event_targets(cursor, rule, tenant_id):
+                if target['target_id'] in seen_targets:
+                    # 跨规则叠加的租户级默认 target 只投一次（怕丢线索不怕重复
+                    # 指多规则各自业务投递；同一 webhook 重复轰炸无业务意义）
+                    continue
+                adapter = self.registry.get(target['channel'],target['provider'])
+                if not adapter or not adapter.available() or message['schema_version'] not in adapter.capabilities.notification_schema_versions:
+                    continue
+                delivery_state,error = 'pending',None
+                try:
+                    payload = adapter.render(message, target)
+                    if len(json.dumps(payload,ensure_ascii=False).encode())>adapter.capabilities.payload_limit:
+                        raise ValueError('NOTIFICATION_PAYLOAD_TOO_LARGE')
+                except Exception as e:
+                    # 不打异常体：错误文本可能携带消息参数（含联系方式明文）
+                    logger.warning('后端日志：通知渲染失败 notification_id={} target_id={} 异常类型={}',
+                                   message['notification_id'], target['target_id'], type(e).__name__)
+                    payload,delivery_state,error = {},'failed','render_failure'
+                cursor.execute('''INSERT INTO notification_deliveries
+                    (delivery_id,notification_id,target_id,binding_version,rendered_encrypted,state,error_class)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(notification_id,target_id) DO NOTHING''',
+                    ('delivery_'+uuid.uuid4().hex,message['notification_id'],target['target_id'],
+                     target['binding_version'],protected(payload),delivery_state,error))
+                seen_targets.add(target['target_id'])
+                target_rows.append({'target_id':target['target_id'],'channel':target['channel'],
+                                    'provider':target['provider'],'binding_version':target['binding_version']})
+            route.append({'rule_id':rule['rule_id'],'rule_name':rule['name'],
+                          'recipients':recipient_ids,'targets':target_rows})
+        return 'expanded', route
+
     def expand(self):
         with self.connection_factory() as conn:
             cursor = conn.cursor()
@@ -625,6 +1019,11 @@ class NotificationRepository:
             messages = cursor.fetchall()
             for row in messages:
                 message = dict(row)
+                if message['policy_key'] == RULE_EVENT_POLICY_KEY:
+                    state, route = self._expand_rule_event(cursor, message)
+                    cursor.execute('''UPDATE notification_messages SET expansion_state=%s,route_snapshot=%s::jsonb
+                        WHERE notification_id=%s''', (state,json.dumps(route),message['notification_id']))
+                    continue
                 subject = Subject(message['recipient_user_id'],message['tenant_id'])
                 route = []
                 if message['expires_at'] <= message['database_now']:
@@ -646,6 +1045,15 @@ class NotificationRepository:
                         # 租户级 IM target，webhook 将永不外发；event_key 去重保证同事件只投一次。
                         params_tenant = self._event_tenant(message) \
                             if message['policy_key'] == 'tenant_admin_event' else None
+                        # 规则门控（设计 §5.2）：租户级 target 外发前查该事件在
+                        # 事件归属租户是否有 enabled 规则；预置规则被停用即停
+                        # 租户级外发（站内信不在此路径，不受影响）。global 平台
+                        # 兜底副本解析不出事件租户时保持现状路由。
+                        if message['policy_key'] == 'tenant_admin_event' and include_tenant_targets:
+                            gate_tenant = params_tenant or message['tenant_id']
+                            if gate_tenant and not self._tenant_rule_enabled(
+                                    cursor, gate_tenant, message['event_type']):
+                                include_tenant_targets = False
                         # 任务级目标快照（Phase 3，设计 §3.3/§8.2）：事件参数含
                         # notify_target_id 时**替代**默认偏好路由——个人偏好渠道
                         # 不再重复投递（评审修正：此前双路由重复打扰，且显式个人
@@ -703,7 +1111,10 @@ class NotificationRepository:
                                 payload = adapter.render(message, target)
                                 if len(json.dumps(payload,ensure_ascii=False).encode())>adapter.capabilities.payload_limit:
                                     raise ValueError('NOTIFICATION_PAYLOAD_TOO_LARGE')
-                            except Exception:
+                            except Exception as e:
+                                # 不打异常体：错误文本可能携带消息参数（含联系方式明文）
+                                logger.warning('后端日志：通知渲染失败 notification_id={} target_id={} 异常类型={}',
+                                               message['notification_id'], target['target_id'], type(e).__name__)
                                 payload,delivery_state,error = {},'failed','render_failure'
                             cursor.execute('''INSERT INTO notification_deliveries
                                 (delivery_id,notification_id,target_id,binding_version,rendered_encrypted,state,error_class)
@@ -768,24 +1179,33 @@ class NotificationRepository:
             elif message['expires_at'] <= message['database_now']:
                 reason = 'ttl_expired'
             else:
-                subject = Subject(message['recipient_user_id'],message['tenant_id'])
-                try:
-                    self.guard(cursor, subject)
-                    resource_in_tx(cursor, message)
-                    if target['recipient_user_id'] is None:
-                        # 租户级 target：正常路径要求与消息同 scope；平台管理员 global
-                        # 兜底副本按事件归属租户放行（与 expand 兜底路由同一边界，
-                        # 归属不符或无法判定一律拒绝，fail-closed）。
-                        about_tenant = self._event_tenant(message)
-                        if subject.tenant_id is None and about_tenant:
-                            if target['tenant_id'] != about_tenant:
+                if message['recipient_user_id'] is None:
+                    # 事件级消息（规则引擎，recipient NULL）：无个人主体可 guard，
+                    # 只校验 target 是租户级且与消息同租户（事件租户归属由 expand
+                    # 阶段的路由查询保证）；不符 fail-closed 记 skipped。
+                    if (target['recipient_user_id'] is not None
+                            or not message['tenant_id']
+                            or target['tenant_id'] != message['tenant_id']):
+                        reason = 'resource_revoked'
+                else:
+                    subject = Subject(message['recipient_user_id'],message['tenant_id'])
+                    try:
+                        self.guard(cursor, subject)
+                        resource_in_tx(cursor, message)
+                        if target['recipient_user_id'] is None:
+                            # 租户级 target：正常路径要求与消息同 scope；平台管理员 global
+                            # 兜底副本按事件归属租户放行（与 expand 兜底路由同一边界，
+                            # 归属不符或无法判定一律拒绝，fail-closed）。
+                            about_tenant = self._event_tenant(message)
+                            if subject.tenant_id is None and about_tenant:
+                                if target['tenant_id'] != about_tenant:
+                                    raise NotificationError('TARGET_SCOPE_MISMATCH')
+                            elif not tenant_owned(target, subject):
                                 raise NotificationError('TARGET_SCOPE_MISMATCH')
-                        elif not tenant_owned(target, subject):
+                        elif not owned(target, subject):
                             raise NotificationError('TARGET_SCOPE_MISMATCH')
-                    elif not owned(target, subject):
-                        raise NotificationError('TARGET_SCOPE_MISMATCH')
-                except NotificationError:
-                    reason = 'resource_revoked'
+                    except NotificationError:
+                        reason = 'resource_revoked'
                 # 偏好门控豁免：任务级快照目标（设计 §3.3/§8.2——事件参数含
                 # notify_target_id 即用户显式选择，替代默认偏好路由）与显式测试
                 # 投递不参与偏好门控；expand 的 eligible 与此处准入同口径

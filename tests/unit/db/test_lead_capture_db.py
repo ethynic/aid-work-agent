@@ -127,6 +127,49 @@ class TestCreate:
         assert result is None
         mock_conn.rollback.assert_called()
 
+    def test_create_calls_event_publisher_with_decrypted_record(self, mock_encryption):
+        """event_publisher 在解密后、commit 前调用（contact_summary 拿到明文联系方式）"""
+        from src.saas.db.lead_capture_db import LeadCaptureDB
+
+        mock_cursor, mock_conn = _mock_db(fetchone=dict(LEAD_ROW))
+        publisher = MagicMock()
+        with patch("src.saas.db.lead_capture_db.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            result = LeadCaptureDB.create(
+                tenant_id="tenant_001",
+                lead_id="lead_lc_abcdef123456",
+                contact_method="phone",
+                phone="13800138000",
+                event_publisher=publisher,
+            )
+
+        publisher.assert_called_once()
+        cursor_arg, record_arg = publisher.call_args.args
+        assert cursor_arg is mock_cursor
+        # 回调拿到的是解密后的明文（加密功能在同事务通知正文使用）
+        assert record_arg["phone"] == "13800138000"
+        mock_conn.commit.assert_called()
+
+    def test_create_publisher_exception_does_not_block(self, mock_encryption):
+        """event_publisher 抛异常被吞掉（通知失败不阻断留资），记录正常返回"""
+        from src.saas.db.lead_capture_db import LeadCaptureDB
+
+        mock_cursor, mock_conn = _mock_db(fetchone=dict(LEAD_ROW))
+        publisher = MagicMock(side_effect=RuntimeError("publish failed"))
+        with patch("src.saas.db.lead_capture_db.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            result = LeadCaptureDB.create(
+                tenant_id="tenant_001",
+                lead_id="lead_lc_abcdef123456",
+                contact_method="phone",
+                phone="13800138000",
+                event_publisher=publisher,
+            )
+
+        assert result is not None
+        assert result["phone"] == "13800138000"
+        mock_conn.commit.assert_called()
+
 
 class TestGetById:
     def test_get_by_id_with_tenant_filter(self, mock_encryption):

@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 SCHEMA_VERSION = 1
 EVENT_TYPES = frozenset({'task.completed', 'task.failed', 'notification.test',
                          'billing.credit_low', 'billing.tenant_expiry', 'abuse.rule_triggered'})
+# 规则引擎事件级消息 policy_key（设计 §2/§5）：recipient NULL，展开阶段按租户规则路由
+RULE_EVENT_POLICY_KEY = 'rule_event'
 
 
 class NotificationError(Exception):
@@ -71,6 +73,26 @@ class TenantRegisterTarget(StrictDTO):
     provider: Literal['feishu_bot', 'dingtalk_bot', 'wecom_bot', 'smtp']
     expected_binding_version: StrictInt | None = Field(default=None, ge=1)
     configuration: ImWebhookConfiguration | EmailConfiguration
+    # 规则级目标登记（规则引擎，设计 §10）：非空时目标挂到该规则下
+    rule_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class RuleCreate(StrictDTO):
+    """通知规则创建（规则引擎，设计 §10）；事件白名单与条件校验在 repository。"""
+    event_type: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=64)
+    conditions: dict = Field(default_factory=dict)
+    recipient_mode: Literal['tenant_admins', 'kf_assignee']
+    include_default_target: StrictBool = False
+    enabled: StrictBool = True
+
+
+class RuleUpdate(StrictDTO):
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    conditions: dict | None = None
+    recipient_mode: Literal['tenant_admins', 'kf_assignee'] | None = None
+    include_default_target: StrictBool | None = None
+    enabled: StrictBool | None = None
 
 
 @dataclass(frozen=True)

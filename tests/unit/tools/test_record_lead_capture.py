@@ -11,7 +11,7 @@
 """
 import pytest
 from contextlib import contextmanager
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 pytestmark = [pytest.mark.tools, pytest.mark.unit]
 
@@ -38,6 +38,7 @@ def _make_ctx(**overrides):
         "adapter": MagicMock(),
         "open_kfid": "kfAAA",
         "external_userid": "wx_ext_user_1",
+        "kf_config_id": "cfg_kf_1",
         "kf_config": {
             "name": "售前客服",
             "tenant_user_id": "emp_001",
@@ -52,7 +53,7 @@ def _make_ctx(**overrides):
 
 
 @contextmanager
-def _patch_execute(ctx, *, session_metadata=None, lead_db_return=_NO_LEAD, email_cred=None):
+def _patch_execute(ctx, *, session_metadata=None, lead_db_return=_NO_LEAD):
     """构造 record_lead_capture 执行的 mock 环境，yield (tool, mocks)。
 
     必须用 with 包裹调用方：patch 在 with 退出时才还原。
@@ -64,14 +65,14 @@ def _patch_execute(ctx, *, session_metadata=None, lead_db_return=_NO_LEAD, email
         "lead_id": "lead_lc_abcdef123456",
         "tenant_id": ctx["tenant_id"],
         "phone": "13800138000",
+        "channel_chat_id": ctx["open_kfid"],
     }
     mocks = {
         "get_session_by_id": MagicMock(return_value=session),
         "update_session": MagicMock(),
         "lead_db_create": MagicMock(return_value=lead_record),
         "get_user": MagicMock(return_value={"nickname": "李老师", "username": "lilaoshi"}),
-        "get_email_cred": MagicMock(return_value=email_cred),
-        "notify_send": AsyncMock(return_value=True),
+        "publish_event": MagicMock(return_value="notification_ref_1"),
     }
     with patch(
         "src.channels.wecom_kf.context.get_kf_context",
@@ -89,11 +90,8 @@ def _patch_execute(ctx, *, session_metadata=None, lead_db_return=_NO_LEAD, email
         "src.db.models.UserDB.get_by_id",
         mocks["get_user"],
     ), patch(
-        "src.db.email_credential.EmailCredentialDB.get_by_user",
-        mocks["get_email_cred"],
-    ), patch(
-        "src.services.notification_service.notification_service.send",
-        mocks["notify_send"],
+        "src.notifications.lead_producer.publish_lead_captured_in_tx",
+        mocks["publish_event"],
     ):
         yield RecordLeadCaptureTool(), mocks
 
@@ -286,62 +284,67 @@ class TestRecordLeadCaptureExecute:
         assert lead_state["contact_method"] == "phone"
 
     @pytest.mark.asyncio
-    async def test_success_phone_notifies_assigned_employee(self):
-        """成功留资（phone）且归属员工配置了邮箱 → 发送邮件通知"""
-        ctx = _make_ctx()
-        email_cred = {"email_address": "emp@example.com"}
-        with _patch_execute(ctx, email_cred=email_cred) as (tool, mocks):
-            result = await tool.execute(phone="13800138000")
-
-        assert result["success"] is True
-        mocks["notify_send"].assert_awaited_once()
-        msg = mocks["notify_send"].call_args.args[0]
-        assert msg.channel.value == "email"
-        assert msg.recipient == "emp@example.com"
-        assert "留资" in msg.title
-        assert "手机号" in msg.content
-        # 手机号不进通知正文（隐私）
-        assert "13800138000" not in str(msg.content)
-
-    @pytest.mark.asyncio
-    async def test_success_landline_notify_label(self):
-        """固话留资通知正文使用「固定电话」标签"""
-        ctx = _make_ctx()
-        email_cred = {"email_address": "emp@example.com"}
-        with _patch_execute(ctx, email_cred=email_cred) as (tool, mocks):
-            result = await tool.execute(landline="0571-88888888")
-
-        assert result["success"] is True
-        content = mocks["notify_send"].call_args[0][0].content
-        assert "固定电话" in content
-
-    @pytest.mark.asyncio
-    async def test_success_email_notify_label(self):
-        """邮箱留资通知正文使用「邮箱」标签"""
-        ctx = _make_ctx()
-        email_cred = {"email_address": "emp@example.com"}
-        with _patch_execute(ctx, email_cred=email_cred) as (tool, mocks):
-            result = await tool.execute(email="zhangsan@example.com")
-
-        assert result["success"] is True
-        content = mocks["notify_send"].call_args[0][0].content
-        assert "邮箱" in content
-
-    @pytest.mark.asyncio
-    async def test_success_no_email_skips_notify(self):
-        """归属员工未配置邮箱 → 留资成功但不发送通知"""
+    async def test_success_phone_publishes_event(self):
+        """成功留资（phone）→ 同事务发布 lead.captured 事件（通知由规则引擎展开）"""
         ctx = _make_ctx()
         with _patch_execute(ctx) as (tool, mocks):
             result = await tool.execute(phone="13800138000")
 
         assert result["success"] is True
-        mocks["notify_send"].assert_not_called()
+        publisher = mocks["lead_db_create"].call_args.kwargs["event_publisher"]
+        assert callable(publisher)
+        publisher(MagicMock(), mocks["lead_db_create"].return_value)
+        mocks["publish_event"].assert_called_once()
+        args, kwargs = mocks["publish_event"].call_args
+        assert args[1]["phone"] == "13800138000"
+        # kf_config_id 从会话上下文透传（供规则 kf_config 层匹配）
+        assert kwargs["kf_config_id"] == "cfg_kf_1"
+        assert kwargs["previous_captured_at"] is None
+
+    @pytest.mark.asyncio
+    async def test_success_landline_publishes_other_contact(self):
+        """固话留资：other_contact 明文随记录传给事件发布（规则引擎正文标签由模板渲染）"""
+        ctx = _make_ctx()
+        record = {
+            "lead_id": "lead_lc_abcdef123456",
+            "tenant_id": "tenant_001",
+            "channel_chat_id": "kfAAA",
+            "landline": "0571-88888888",
+            "other_contact": [{"type": "landline", "value": "0571-88888888"}],
+        }
+        with _patch_execute(ctx, lead_db_return=record) as (tool, mocks):
+            result = await tool.execute(landline="0571-88888888")
+
+        assert result["success"] is True
+        publisher = mocks["lead_db_create"].call_args.kwargs["event_publisher"]
+        publisher(MagicMock(), record)
+        args, _ = mocks["publish_event"].call_args
+        assert args[1]["other_contact"][0]["value"] == "0571-88888888"
+
+    @pytest.mark.asyncio
+    async def test_success_email_publishes_other_contact(self):
+        """邮箱留资：other_contact 明文随记录传给事件发布"""
+        ctx = _make_ctx()
+        record = {
+            "lead_id": "lead_lc_abcdef123456",
+            "tenant_id": "tenant_001",
+            "channel_chat_id": "kfAAA",
+            "email": "zhangsan@example.com",
+            "other_contact": [{"type": "email", "value": "zhangsan@example.com"}],
+        }
+        with _patch_execute(ctx, lead_db_return=record) as (tool, mocks):
+            result = await tool.execute(email="zhangsan@example.com")
+
+        assert result["success"] is True
+        publisher = mocks["lead_db_create"].call_args.kwargs["event_publisher"]
+        publisher(MagicMock(), record)
+        args, _ = mocks["publish_event"].call_args
+        assert args[1]["other_contact"][0]["value"] == "zhangsan@example.com"
 
     @pytest.mark.asyncio
     async def test_recapture_creates_new_lead_with_history_note(self):
-        """已留资客户再次留下联系方式 -> 视为新跟进需求，正常落库并通知（注明上次留资时间）"""
+        """已留资客户再次留下联系方式 -> 视为新跟进需求，正常落库并发布事件（注明上次留资时间）"""
         ctx = _make_ctx()
-        email_cred = {"email_address": "emp@example.com"}
         with _patch_execute(
             ctx,
             session_metadata={
@@ -352,19 +355,18 @@ class TestRecordLeadCaptureExecute:
                     "captured_at": "2026-08-21 10:00:00",
                 }
             },
-            email_cred=email_cred,
         ) as (tool, mocks):
             result = await tool.execute(phone="13800138000")
 
         assert result["success"] is True
-        # 正常落库新线索 + 更新会话状态 + 通知员工
+        # 正常落库新线索 + 更新会话状态
         mocks["lead_db_create"].assert_called_once()
         mocks["update_session"].assert_called_once()
-        mocks["notify_send"].assert_called_once()
-        # 通知正文注明上次留资时间，提示结合历史需求跟进
-        content = mocks["notify_send"].call_args[0][0].content
-        assert "2026-08-21 10:00:00" in content
-        assert "结合历史需求跟进" in content
+        # 事件发布携带上次留资时间，由模板渲染「结合历史需求跟进」文案
+        publisher = mocks["lead_db_create"].call_args.kwargs["event_publisher"]
+        publisher(MagicMock(), mocks["lead_db_create"].return_value)
+        _, kwargs = mocks["publish_event"].call_args
+        assert kwargs["previous_captured_at"] == "2026-08-21 10:00:00"
 
     @pytest.mark.asyncio
     async def test_lead_db_create_failure_returns_failure(self):

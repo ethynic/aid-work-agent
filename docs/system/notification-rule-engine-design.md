@@ -234,3 +234,15 @@ CREATE INDEX IF NOT EXISTS idx_notification_target_rule
 - 已开发未部署的管理员通知 Phase 1 代码需按 §6 调整发布/展开衔接（producer 现直接指定管理员收件人，改为统一走规则展开），改动面集中在展开函数，Phase 1 评审后确认；
 - `leadgen.reply_intent` 等已注册事件是否迁入规则层，待 AI获客真机验证后评估，本设计不阻塞；
 - 页面 domain 归属与菜单位置按 frontend-design 流程在开发期核定。
+
+## 14. 实施备注（2026-10-29 Phase 1/2 落地定版）
+
+实现中把设计文档的含糊处定版如下，与正文不一致处以本节为准：
+
+1. **停用预置 billing/abuse 规则只停租户级外发**（对 §5.2 的定版偏差）：billing/abuse 事件的 producer 调用保持现状（仍按管理员逐人发布站内信，policy_key='tenant_admin_event'），规则门控落在展开阶段——路由租户级外发目标前查该 (租户, 事件) 是否有 enabled 规则，无则跳过租户级 target 投递。即停用预置规则 = 不再外发 webhook/邮件，管理员站内信保留。平台级 global 兜底副本（X-Tenant-Id 代租户事件）解析不出租户时保持现状路由。
+2. **预置留资规则 include_default_target=TRUE**：依据 §5.2「默认规则含租户级邮件渠道，邮件能力不丢失」——收编旧邮件单发后，租户已配置的默认邮箱渠道在留资通知中继续生效；§6「自定义规则默认关」仅指租户新建规则的该开关默认值。
+3. **事件级消息幂等**：`lead.captured` 发布 recipient_user_id=NULL 的事件消息，幂等靠新增部分唯一索引 `notification_event_identity(scope_key, producer, event_key) WHERE recipient_user_id IS NULL`（NULL 不参与完整唯一约束）。
+4. **kf_config 条件的取值**：conditions.kf_config_ids 存 `tenant_channel_configs.config_id`（渠道配置行），登记接口逐个校验归属本租户；非 lead 事件 conditions 必须为空对象。
+5. **规则级目标登记**：installation_ref 服务端生成为 `rule_{rule_id}_{hex8}`（允许同 provider 多个 active）；同配置摘要（identity_digest）已被租户级或其他规则 active 目标占用时返回 409 NOTIFICATION_TARGET_OWNED；规则删除级联撤销其 active 目标并跳过在途投递。
+6. **预置规则惰性补插**：该 (租户, 事件) 已存在任意规则行（含停用）时不补插，避免覆盖管理员停用事实；新租户由展开阶段首次触达时按预置清单补插（ON CONFLICT DO NOTHING）。
+
