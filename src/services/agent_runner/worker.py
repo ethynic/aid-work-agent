@@ -161,7 +161,7 @@ class RuntimeFactory:
             execution_id=row['runner_id'], mode=AgentMode.MASTER if config is None else AgentMode.STANDALONE,
             tenant_id=principal.identity.tenant_id,user_id=principal.identity.user_id,
             resource_directory=self.resource_directory,isolate_plan=True,session_kind=principal.identity.session_kind,
-            plan_store=PlanFacts(),plan_scope=plan_scope)
+            plan_store=PlanFacts(),plan_scope=plan_scope,source=row['source'])
         from .business_plans import BusinessPlanRepository
         own_plan = (row.get('checkpoint') or {}).get('business_plan')
         if (row.get('checkpoint') or {}).get('execution'):
@@ -177,7 +177,9 @@ class RuntimeFactory:
         history = HistoryRepository(principal.identity)
         observer = DurableObserver(control,history,getattr(control,'trace_collector',None))
         runtime = RuntimeExecution(resources,principal.identity,control=control,observer=observer,history_reader=history,
-            initial_followup_inputs=(row.get('checkpoint') or {}).get('pending_root_inputs') or [])
+            initial_followup_inputs=(row.get('checkpoint') or {}).get('pending_root_inputs') or [],
+            profile_id=row.get('profile_id') or 'main',
+            instance_id=(row.get('input') or {}).get('instance_id'))
         from .runtime.child_recovery import ChildRecoveryAdapter
         runtime.child_recovery = ChildRecoveryAdapter(runtime,self.profiles)
         return runtime
@@ -701,15 +703,16 @@ class RunnerWorker:
         user = UserDB.get_by_id(user_id)
         if not user:
             raise RunnerError('USER_UNAUTHORIZED',401)
-        if source is not None and source != 'chat':
+        if source is not None and source not in ('chat', 'scheduled'):
             # 渠道来源：自动注册账号的 username 是 feishu_xxx 等技术名，
             # name 优先 nickname（与渠道侧 agent_user_builder 一致），并携带
             # 渠道身份字段，避免技术名直接进入 prompt 的「## 当前用户」段。
+            # scheduled 来源的任务属主是普通 web 用户，走 username 优先分支。
             return User(user_id=user_id,
                 name=user.get('nickname') or user.get('username') or user.get('phone') or user_id,
                 phone=user.get('phone'),tenant_id=tenant_id,
                 channel_type=source,channel_user_id=channel_user_id)
-        # web 来源行为不变：username 优先，不带渠道字段
+        # web 来源（chat 与 scheduled）行为不变：username 优先，不带渠道字段
         return User(user_id=user_id,name=user.get('username') or user.get('phone') or user_id,
                     phone=user.get('phone'),tenant_id=tenant_id)
 
@@ -724,7 +727,17 @@ class RunnerWorker:
                 # that newer attempt's totals into its stale collector.
                 return
             collector.trace.status = runner['status']
-            collector.trace.output = (runner.get('result') or {}).get('output') or control.snapshot.get('output') or ''
+            result = runner.get('result') or {}
+            collector.trace.output = result.get('output') or control.snapshot.get('output') or ''
+            # 失败终态把 runner result.error_code（如 ITERATION_LIMIT）投影进
+            # obs_traces.error_message：engine 正常走完限流路径时 collector 收不到
+            # error 事件，不投影则 obs_traces.error_message 恒为空，排查须翻 agent_runners。
+            # collector 已记录更具体错误（如 EXECUTION_INTERRUPTED）时不覆盖
+            error_code = result.get('error_code') if runner['status'] == 'failed' else None
+            if error_code and not collector.trace.error_message:
+                collector.trace.error_message = error_code
+            else:
+                error_code = None
             if collector.trace.trace_id == 'tr_'+runner_id+':'+str(control.attempt.number):
                 # Attempt traces contain local physical spans only. Cumulative
                 # billing lives in one stable chat_record, never copied into
@@ -744,7 +757,8 @@ class RunnerWorker:
             if finalization_retry:
                 from src.core.trace_persist import update_completion
                 update_completion(collector.trace.trace_id,status=runner['status'],output=collector.trace.output,
-                    duration_ms=((runner.get('checkpoint') or {}).get('pending_finalization') or {}).get('duration_ms',0))
+                    duration_ms=((runner.get('checkpoint') or {}).get('pending_finalization') or {}).get('duration_ms',0),
+                    error_message=error_code)
                 return
             envelope = runner.get('checkpoint') or {}
             from src.core.execution_usage import execution_token_usage

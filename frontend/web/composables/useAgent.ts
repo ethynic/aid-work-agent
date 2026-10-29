@@ -2,6 +2,7 @@ import { ref, computed, shallowReactive, type Ref } from 'vue'
 import type { ChatMessage, InputHintState, ProgressMessage, VerboseMessage } from '@/types'
 import type { AskForm, AskFormErrorItem, RunnerAnswerItem } from '@/api/runner'
 import { SSEManager, uploadFile, type UploadedFile } from '@/api/agent'
+import { notifyScheduledTasksChanged } from '@/api/scheduledTask'
 import { getSession, getSessionMessages, updateFailedMessageUI, type FailedMessageUI } from '@/api/session'
 import { RunnerClient, RunnerRequestError, runnerTerminal, runnerObservationComplete, runnerWaitLeaf, type RunnerCapabilities, type RunnerControlIntent, type RunnerControlView, type RunnerSubmission, type RunnerView, type RunnerWait } from '@/api/runner'
 import { historyMessages, mergeRunnerMessages, visibleFailedMessages } from '@/utils/runnerMessages'
@@ -134,6 +135,19 @@ const currentFiles = ref<UploadedFile[]>([])
 
 function generateSessionId(): string {
   return 'session_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9)
+}
+
+// ---- 聊天 runner 终态 → 任务列表信号（Phase 5 二轮评审第 2 项） ----
+// 聊天中 create/manage_scheduled_task 工具的执行结果只出现在 runner 的
+// tool_result 里，不识别关键词：任一聊天 runner 终态落定即可能已变更任务集合，
+// 合并 5s bump scheduledTasksVersion（连续完成只触发一次侧栏刷新）。
+let scheduledTasksNotifyTimer: ReturnType<typeof setTimeout> | undefined
+function notifyChatRunnerTerminal() {
+  if (scheduledTasksNotifyTimer !== undefined) return
+  scheduledTasksNotifyTimer = setTimeout(() => {
+    scheduledTasksNotifyTimer = undefined
+    notifyScheduledTasksChanged()
+  }, 5_000)
 }
 
 /**
@@ -439,8 +453,13 @@ export function useAgent() {
       const verbose = assistant?.verboseMessages || []
       state.liveVerbose.value = state.isProcessing.value && !assistant?.content ? verbose[verbose.length - 1] || null : null
     }
-    if (previous && !runnerTerminal(previous.status) && runnerTerminal(row.status) && row.session.session_id !== sessionId.value) {
-      state.hasUnreadCompletion.value = true
+    if (previous && !runnerTerminal(previous.status) && runnerTerminal(row.status)) {
+      // 终态落定：聊天工具可能已创建/管理定时任务（不解析 tool_result），
+      // 合并 5s bump 任务列表信号（Phase 5 二轮评审第 2 项）
+      notifyChatRunnerTerminal()
+      if (row.session.session_id !== sessionId.value) {
+        state.hasUnreadCompletion.value = true
+      }
     }
     if (row.status === 'failed') runnerError(row.session.session_id,
       new Error(row.result?.error_code || 'RUNNER_EXECUTION_FAILED'), notify && previous?.status !== 'failed')
@@ -1424,20 +1443,26 @@ export function useAgent() {
           const toolDisplayName = displayName || toolName
           if (success) {
             // 结构化消费者只依赖结果字段，不依赖生产该结果的工具名称。
-            if (result?.file_id && result.visible !== false) {
+            const batchFiles: Array<Record<string, any>> = Array.isArray(result?.files) ? result.files : []
+            const singleFile = (!batchFiles.length && result?.file_id && result.visible !== false)
+              ? [result] : []
+            const deliverableFiles = [...batchFiles, ...singleFile]
+              .filter(f => f?.file_id && f.visible !== false)
+            if (deliverableFiles.length) {
               const lastMsg = state.messages.value[state.messages.value.length - 1]
               if (lastMsg && lastMsg.role === 'assistant') {
                 if (!lastMsg.downloadableFiles) {
                   lastMsg.downloadableFiles = []
                 }
                 // 按 file_id 去重
-                if (!lastMsg.downloadableFiles.some(f => f.file_id === result.file_id)) {
+                for (const f of deliverableFiles) {
+                  if (lastMsg.downloadableFiles.some(x => x.file_id === f.file_id)) continue
                   lastMsg.downloadableFiles.push({
-                    file_id: result.file_id,
-                    file_name: result.download_file_name || result.file_name || '未命名文件',
-                    file_size: result.file_size || 0,
-                    download_url: result.download_url || `/api/files/${result.file_id}/download`,
-                    mime_type: result.mime_type || '',
+                    file_id: f.file_id,
+                    file_name: f.download_file_name || f.file_name || '未命名文件',
+                    file_size: f.file_size || 0,
+                    download_url: f.download_url || `/api/files/${f.file_id}/download`,
+                    mime_type: f.mime_type || '',
                   })
                 }
               }

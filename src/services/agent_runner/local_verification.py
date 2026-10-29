@@ -19,7 +19,9 @@ def verify_local(repository, principal, runner_id, request_id, *, stop_resources
         row = lock_runner(cursor, runner_id)
         repository.assert_owner(principal, row)
         checkpoint = row.get('checkpoint') or {}
-        if row['session_kind'] != 'web' or row['source'] != 'chat':
+        # 设备核对入口对 scheduled 开放（设计 §5.3：非提问类等待保留既有
+        # 生命周期，任务属主可处理设备确认/人工辅助），归属检查不变
+        if row['session_kind'] != 'web' or row['source'] not in ('chat', 'scheduled'):
             raise RunnerError('LOCAL_VERIFICATION_FORBIDDEN', 403)
         if (row.get('worker_id') is not None or row.get('lease_until') is not None
                 or checkpoint.get('detached_local_wait') and row['status'] not in {'completed', 'cancelled', 'failed'}):

@@ -212,7 +212,7 @@ async def _bill_resume_recognition(
 class LocalToolProxyTool(BaseTool):
     """LOCAL_REQUIRED 本地代理工具基类：云端创建 invocation，本机 Runtime 执行"""
 
-    # 不进自动目录：Assembly 仅按子智能体 allowed 列表注册（子类继承此标记）
+    # 候选实现由Assembly按受信目录/角色配置注册；Runtime再按actor设备能力投影。
     catalog = False
     execution_target = ExecutionTarget.LOCAL_REQUIRED
     category = "local_boss"

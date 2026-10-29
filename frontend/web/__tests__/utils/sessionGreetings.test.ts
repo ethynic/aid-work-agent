@@ -11,7 +11,7 @@ describe('greetingForSubagent', () => {
 
   it('每个已配置智能体都有非空摘要且恰有 2 个快捷按钮', () => {
     const types = [
-      'recruiting-operator', 'video-agent', 'trade-specialist', 'travel-consultant',
+      'recruiting-operator', 'video-agent', 'travel-consultant',
       'after-sales', 'competitor-research', 'complaint-handling', 'contract-archive-review',
       'customer-followup', 'order-processing', 'pre-sales', 'social-media-operations',
     ]

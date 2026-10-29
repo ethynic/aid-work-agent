@@ -74,6 +74,11 @@ metadata:
 10. **数据库读写必须走 `lead_db.py`，禁止用 `python -c` 内联 SQL 直连数据库**。
    内联 SQL 绕过去重、闸门与配额校验（每公司联系人上限、职能判定），且不受
    可信身份校验保护。脚本执行报错时如实上报，由下一轮修正命令重试。
+11. **禁止猜测任何数据库 ID**（campaign_id / contact_id / email_id / lead_id）。
+   ID 只能来自本会话内命令的真实输出（init / add-contact / add-email-draft 的
+   stdout）或 `list-contacts` / `list-leads` 的查询结果。拿不到 ID 就先跑
+   `list-contacts` 查，报错信息里返回的有效 ID 清单直接取用，**不得编造连续
+   编号去试**——历史实测盲猜 ID 连续 10 次 not found 空转烧掉大量迭代。
 
 ## 脚本清单（经 skill_execute 调用，均需 --campaign-id）
 
@@ -86,6 +91,7 @@ metadata:
 | `domain_check.py` | SPF/DKIM/DMARC 域名体检 |
 | `email_verify.py` | 邮箱格式/MX 校验 |
 | `email_rules.py` | 职能相关性判定（三道闸门共用口径） |
+| `reply_monitor.py` | 回复监控：IMAP 轮询 -> 归属 -> 去重 -> LLM 意图判定 -> 意向通知/退订 |
 
 `lead_db.py` 子命令：
 
@@ -100,6 +106,9 @@ python lead_db.py add-email-draft --campaign-id ID --contact-id CID \
     --subject-a A --subject-b B --body-file F                          # 草稿（A/B 交替分组）
 python lead_db.py set-email-status --campaign-id ID --email-id EID --status S
 python lead_db.py export-send-queue --campaign-id ID                   # 生成 logs/send_queue.json
+python lead_db.py bind-scheduler --campaign-id ID --task-id TID        # 绑定每日循环定时任务并切 auto
+python lead_db.py unbind-scheduler --campaign-id ID [--cancel]         # 暂停(或取消)任务并切回 review
+python lead_db.py daily-summary --campaign-id ID [--date D] [--notify] # 当日汇总 JSON（--notify 发站内信）
 python lead_db.py score / export / list-leads / list-contacts / show-campaign ...
 ```
 
@@ -126,6 +135,8 @@ python lead_db.py score / export / list-leads / list-contacts / show-campaign ..
 
 1. **需求澄清（brief）**：按 `assets/brief_template.md` 多轮澄清，产出 brief.md
    （产品/ICP/地域/决策人画像/CTA/数量），`lead_db.py init` 建 campaign 并存 brief。
+   `init` 会**前置校验发件邮箱**（个人邮箱或租户邮箱任一已配置）：未配置时拒绝创建
+   并提示先去配置——这是刻意的 fail-fast，不要绕过，先引导用户/管理员配好邮箱再重跑。
 2. **目标配置**：`set-target-config` 写入 contact_targets.json（目标职能/排除职能/产品一句话），
    三道闸门共用此口径。
 3. **客户名单检索**：用 web-search-pro `pipeline.py search "<关键词>" --extract --json`
@@ -137,8 +148,10 @@ python lead_db.py score / export / list-leads / list-contacts / show-campaign ..
    抓官网 contact/about/team 页与名录（snippet 优先抽取 + 掩码还原），
    `add-contact` 入库。闸门自动拒收：无关职能/公开窗口/guessed 低置信。
 6. **社媒兴趣分析**（可选）：用 `pipeline.py urls` 读公开商业内容，写入联系人 notes。
-7. **撰写邮件**：`add-email-draft` 逐联系人写针对性草稿（必写 subject_a/subject_b
+7. **撰写邮件**：先 `list-contacts` 取本 campaign 真实 contact ID 清单，再
+   `add-email-draft` 逐联系人写针对性草稿（必写 subject_a/subject_b
    两版，各 ≤35 字符只差一个变量；公司简称放签名不进主题行）。
+   contact_id 无效时报错会返回有效 ID 清单，直接取用，不要继续猜。
 8. **审阅闸门（review 模式）**：草稿置 approved 前必须经用户确认；
    auto 模式按 campaign 配置的定时任务自动推进，但本步闸门规则一致。
 9. **发送准备**：`domain_check.py` 体检 + `sender_profile.py` 确认发件身份 +
@@ -149,7 +162,46 @@ python lead_db.py score / export / list-leads / list-contacts / show-campaign ..
     （sent 含 message_id / failed / bounced），硬退信自动进退订名单。
 11. **回复跟进**：回信按 Reply-To 锚点归因到 campaign，LLM 判定意向
     （interested/info_request/refused/irrelevant/unclear），有意向通知用户；
-    负面回复自动进退订名单（回复监控链路见数字员工设计文档 §9）。
+    负面回复自动进退订名单。日常由回复监控定时任务跑 `reply_monitor.py`
+    完成（见下节）；对话中被问「有人回复了吗」时可直接执行一次
+    `reply_monitor.py --campaign-id ID` 实时拉取。
+
+## 定时任务与回复监控（auto 模式 / P2）
+
+### 每日循环任务（auto 发送编排）
+
+用户在系统「定时任务」中创建每日任务（建议上午执行一次），task_prompt 使用固定模板：
+
+```
+委派给 ai-lead-gen 数字员工执行获客活动 campaign_id={ID} 的每日循环：
+1. 检索补充客户名单并入库（web-search-pro 管线，过相关性判定）
+2. 对 qualified 名单挖掘联系人并入库（闸门自动拒收）
+3. 为尚无草稿的联系人撰写针对性邮件草稿（subject_a/subject_b 两版）
+4. auto 模式自动推进：域名体检 -> export-send-queue -> send_emails.py
+   （先 --dry-run 无 BLOCK，再 --limit 3 试发，最后全量，限额系统强制）
+5. 收尾执行 daily-summary --campaign-id {ID} --notify 发送当日汇总通知
+```
+
+执行成功后用 `bind-scheduler --campaign-id ID --task-id <定时任务ID>` 绑定并切 auto；
+切回半自动用 `unbind-scheduler`（默认任务置 paused、send_mode 回 review），
+campaign 彻底不再循环时加 `--cancel` 直接取消任务。
+绑定/解绑只会操作当前租户当前用户名下的定时任务。
+
+### 回复监控任务（每小时）
+
+回复监控独立于每日循环，随 campaign 存在而存在（campaign 有在发或待回复状态即监控）。
+用户在「定时任务」中创建每小时任务，task_prompt 使用固定模板：
+
+```
+委派给 ai-lead-gen 数字员工执行获客活动 campaign_id={ID} 的回复监控：
+运行 reply_monitor.py --campaign-id {ID}（默认 limit 20 / 回看 14 天），
+按 stdout JSON 汇报：检查数、去重数、新回复数、意向分布、通知数、退订数。
+```
+
+脚本内部完成：IMAP 轮询发件邮箱（reply_mailbox，与发送同源）-> 按
+In-Reply-To/References 中已发 message_id（退化为发件人邮箱）归属 campaign ->
+按 Message-ID 幂等去重 -> LLM 意图判定（计费走后台用量）-> 有意向站内信+渠道通知、
+负面回复进退订名单、线索状态推进 replied。历史遗留 intent 为空的行会在每轮自动补判。
 
 ## 不要使用本技能
 

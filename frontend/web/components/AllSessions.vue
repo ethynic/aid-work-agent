@@ -26,7 +26,7 @@
         >
           <div class="max-w-4xl mx-auto">
             <!-- Loading State（仅初次加载、列表为空时显示全屏加载中，避免追加加载时卸载列表） -->
-            <div v-if="isLoading && sessions.length === 0" class="flex items-center justify-center py-12">
+            <div v-if="isLoading && visibleSessions.length === 0" class="flex items-center justify-center py-12">
               <svg class="w-8 h-8 animate-spin text-primary-600" fill="none" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
@@ -35,11 +35,12 @@
             </div>
 
             <!-- Empty State -->
-            <div v-else-if="sessions.length === 0" class="flex flex-col items-center justify-center py-12">
+            <div v-else-if="visibleSessions.length === 0" class="flex flex-col items-center justify-center py-12">
               <svg class="w-16 h-16 text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
               </svg>
               <p class="text-gray-500 mb-2">暂无会话记录</p>
+              <p class="text-xs text-gray-400 mb-2">任务会话在侧栏「任务计划」中查看。</p>
               <button
                 @click="goToChat"
                 class="mt-4 px-4 py-2 bg-primary-600 hover:bg-primary-500 text-white rounded-lg transition-colors"
@@ -51,7 +52,7 @@
             <!-- Session List -->
             <div v-else class="space-y-1.5">
               <div
-                v-for="(session, index) in sessions"
+                v-for="(session, index) in visibleSessions"
                 :key="session.session_id"
                 :class="[
                   'group relative p-2.5 rounded-lg border transition-colors cursor-pointer',
@@ -121,7 +122,7 @@
               </div>
             </div>
 
-            <!-- Pagination（PC 端） -->
+            <!-- Pagination（PC 端）：后端已前置过滤任务会话，total 与数据同口径 -->
             <BasePagination
               v-if="!isMobile"
               :total="totalSessions"
@@ -146,7 +147,7 @@
           v-model="renameInput"
           @keyup.enter="confirmRename"
           type="text"
-          class="w-full px-4 py-2.5 bg-gray-50 border border-gray-300 rounded-lg text-gray-800 focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100"
+          class="w-full px-4 py-2.5 bg-gray-50 border border-gray-300 rounded-lg text-gray-800 text-sm focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100"
           placeholder="输入会话标题"
         />
         <div class="flex justify-end gap-3 mt-4">
@@ -183,7 +184,7 @@
     >
       <div class="max-w-4xl mx-auto">
         <!-- Loading State（仅初次加载、列表为空时显示全屏加载中） -->
-      <div v-if="isLoading && sessions.length === 0" class="flex items-center justify-center py-12">
+      <div v-if="isLoading && visibleSessions.length === 0" class="flex items-center justify-center py-12">
         <svg class="w-8 h-8 animate-spin text-primary-600" fill="none" viewBox="0 0 24 24">
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
           <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
@@ -192,11 +193,12 @@
       </div>
 
       <!-- Empty State -->
-      <div v-else-if="sessions.length === 0" class="flex flex-col items-center justify-center py-12">
+      <div v-else-if="visibleSessions.length === 0" class="flex flex-col items-center justify-center py-12">
         <svg class="w-16 h-16 text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
         </svg>
         <p class="text-gray-500 mb-2">暂无会话记录</p>
+        <p class="text-xs text-gray-400 mb-2">任务会话在侧栏「任务计划」中查看。</p>
         <button
           @click="goToChat"
           class="mt-4 px-4 py-2 bg-primary-600 hover:bg-primary-500 text-white rounded-lg transition-colors"
@@ -208,7 +210,7 @@
       <!-- Session List -->
       <div v-else class="space-y-1.5">
         <div
-          v-for="(session, index) in sessions"
+          v-for="(session, index) in visibleSessions"
           :key="session.session_id"
           :class="[
             'group relative p-2.5 rounded-lg border transition-colors cursor-pointer',
@@ -279,7 +281,7 @@
         </div>
       </div>
 
-      <!-- Pagination（PC 端） -->
+      <!-- Pagination（PC 端）：后端已前置过滤任务会话，total 与数据同口径 -->
       <BasePagination
         v-if="!isMobile"
         :total="totalSessions"
@@ -336,6 +338,7 @@ import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useSession } from '@/composables/useSession'
 import { useAgent } from '@/composables/useAgent'
 import { useMobile } from '@/composables/useMobile'
+import { scheduledTaskSessionMark } from '@/api/scheduledTask'
 
 const router = useRouter()
 const route = useRoute()
@@ -380,6 +383,11 @@ const renamingSessionId = ref<string | null>(null)
 // 手机端上划加载相关
 const scrollContainer = ref<HTMLElement | null>(null)
 const hasMore = computed(() => sessions.value.length < totalSessions.value)
+
+// 任务专属会话（metadata.scheduled_task 标记，设计 §6）从普通会话列表排除。
+// 后端 list_by_user 已前置过滤（Phase 5 二轮评审第 3 项：count 与列表同条件，
+// total 同口径），此处过滤仅作为对旧后端/30s 列表缓存的防御性兜底，正常为空集。
+const visibleSessions = computed(() => sessions.value.filter(session => !scheduledTaskSessionMark(session)))
 
 // 滚动到底部时加载下一页（仅手机端启用，PC 端使用分页器）
 async function handleScroll() {
@@ -549,11 +557,11 @@ function goToChat() {
   }
 }
 
-// 处理每页条数变化和翻页
-function onPageChange(page: number, size: number) {
+// 处理每页条数变化和翻页（后端同口径过滤后无需跳页补偿）
+async function onPageChange(page: number, size: number) {
   pageSize.value = size
   currentPage.value = page
-  loadSessions(page, true)
+  await loadSessions(page, true)
 }
 
 // 登出

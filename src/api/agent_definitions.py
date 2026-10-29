@@ -248,18 +248,11 @@ async def list_tools_meta(request: Request):
             "name": getattr(tool, 'display_name', None) or name,
             "description": getattr(tool, 'description', '') or '',
         })
-    # Local proxies are deliberately absent from the master registry. Listing
-    # trusted WeCom choices does not add them to any profile's allowed tools.
-    from src.local_tools.catalog import allowed_tools
-    from src.local_tools.proxy_tool import LOCAL_PROXY_TOOL_CLASSES
-    from src.local_tools.wecom_business import BUSINESS_TOOLS
-    trusted = set(allowed_tools('wecom')) & BUSINESS_TOOLS
-    tools = [item for item in tools if not item['id'].startswith('wecom_') or item['id'] in trusted]
-    existing = {item['id'] for item in tools}
-    for cls in LOCAL_PROXY_TOOL_CLASSES:
-        if cls.name in trusted and cls.name not in existing:
-            tools.append({'id': cls.name, 'name': cls.display_name, 'description': cls.description})
-    return _success(tools)
+    # Authoring lists known business choices, independent of device installation.
+    from src.local_tools.catalog import project_agent_definitions
+    projected = project_agent_definitions([{'name': item['id']} for item in tools])
+    visible = {item['name'] for item in projected}
+    return _success([item for item in tools if item['id'] in visible])
 
 
 @router.get("/meta/skills")

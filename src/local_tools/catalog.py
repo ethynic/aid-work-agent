@@ -9,11 +9,13 @@ from typing import Any, Dict, List, Optional
 
 TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
     "runtime-recovery": {"provider_id":"ai.aidwork.runtime-recovery", "min_provider_version":"1.0.0",
-        "execution_target":"local_required", "tools":["runtime_recovery_observe"]},
+        "execution_target":"local_required", "tools":["runtime_recovery_observe"], "agent_tools": []},
     "boss-recruiting": {
         "provider_id": "ai.aidwork.boss-recruiting",
         "min_provider_version": "1.0.0",
         "execution_target": "local_required",
+        "internal_tools": ["boss_overlay_inspect", "boss_overlay_dismiss"],
+        "device_independent_tools": ["boss_jobs_list", "boss_interview_notify"],
         "tools": [
             "boss_filter",
             "boss_filter_options",
@@ -86,6 +88,12 @@ TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
         "provider_id": "ai.aidwork.wecom",
         "min_provider_version": "1.0.0",
         "execution_target": "local_required",
+        "agent_tools": ["wecom_read_session", "wecom_message_send", "wecom_read_sessions"],
+        "agent_tool_aliases": {
+            "wecom_read_session": ["wecom_read_session", "wecom_read_sessions"],
+            "wecom_unread_list": ["wecom_read_session", "wecom_read_sessions"],
+            "wecom_group_poll": ["wecom_read_session", "wecom_read_sessions"],
+        },
         "tools": [
             "wecom_probe",
             "wecom_message_send",
@@ -109,6 +117,7 @@ TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
         "provider_id": "ai.aidwork.skill-runner",
         "min_provider_version": "1.0.0",
         "execution_target": "local_required",
+        "agent_tools": [],
         "tools": [
             "skill_script_run",
         ],
@@ -190,3 +199,31 @@ def is_tool_allowed(provider_key: Optional[str], tool_name: str) -> bool:
     if not provider_key:
         return False
     return tool_name in allowed_tools(provider_key)
+
+
+def agent_tools(provider_key: str) -> List[str]:
+    """Model-facing business surface; execution/recovery keep the full catalog."""
+    provider = TRUSTED_PROVIDERS.get(provider_key) or {}
+    internal = set(provider.get('internal_tools', []))
+    return [name for name in provider.get('agent_tools', provider.get('tools', []))
+            if name not in internal]
+
+
+def expand_agent_aliases(names) -> List[str]:
+    """Retain frozen legacy handlers while granting/revoking their business replacements."""
+    expanded = list(names)
+    for provider in TRUSTED_PROVIDERS.values():
+        for name in names:
+            expanded.extend(provider.get('agent_tool_aliases', {}).get(name, []))
+    return list(dict.fromkeys(expanded))
+
+
+def project_agent_definitions(definitions, device_tools=None):
+    """Project business definitions; None means availability is not being filtered."""
+    native = {name for provider in TRUSTED_PROVIDERS.values() for name in provider['tools']}
+    business = {name for key in TRUSTED_PROVIDERS for name in agent_tools(key)}
+    independent = {name for provider in TRUSTED_PROVIDERS.values()
+                   for name in provider.get('device_independent_tools', [])}
+    return [item for item in definitions
+            if item['name'] not in native or (item['name'] in business and (
+                device_tools is None or item['name'] in independent or item['name'] in device_tools))]

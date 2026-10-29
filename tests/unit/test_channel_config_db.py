@@ -93,7 +93,7 @@ class TestChannelConfigDBGetById:
             "tenant_id": "tenant_001",
             "channel_type": "wecom",
             "config": json.dumps({"corp_id": "wx123"}),
-            "subagent_type": "trade-specialist",
+            "subagent_type": "ai-lead-gen",
             "verified": 1,
         }
         mock_conn = MagicMock()
@@ -105,7 +105,7 @@ class TestChannelConfigDBGetById:
             result = ChannelConfigDB.get_by_id("chan_test123")
 
             assert result is not None
-            assert result["subagent_type"] == "trade-specialist"
+            assert result["subagent_type"] == "ai-lead-gen"
 
     def test_get_by_id_returns_null_subagent_type_when_not_set(self):
         """未设置 subagent_type 时返回 None"""
@@ -252,7 +252,7 @@ class TestChannelConfigDBListByTenant:
                 "tenant_id": "tenant_001",
                 "channel_type": "wecom",
                 "config": json.dumps({"corp_id": "wx222"}),
-                "subagent_type": "trade-specialist",
+                "subagent_type": "ai-lead-gen",
                 "verified": 1,
             },
         ]
@@ -266,7 +266,7 @@ class TestChannelConfigDBListByTenant:
 
             assert len(results) == 2
             assert results[0]["subagent_type"] == "travel-consultant"
-            assert results[1]["subagent_type"] == "trade-specialist"
+            assert results[1]["subagent_type"] == "ai-lead-gen"
 
 
 class TestChannelConfigDBUpdate:

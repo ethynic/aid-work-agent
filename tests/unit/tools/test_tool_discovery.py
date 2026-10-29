@@ -42,6 +42,15 @@ wechat_mp_sync / wechat_mp_sync_status，薄入口直调 src/wechat_mp/service.p
 工具 knowledge_base_search 替代，见 plan-unified-kb-resource-metadata.md）：
 两工具类标记 catalog=False 退出自动发现，转入 CATALOG_EXCLUDED_TOOLS；
 真机观察稳定后随 Phase 4b 删除工具文件并同步清理本清单。
+
+2026-10-28 移除定时任务两工具（Runner 化 Phase 1 清场，旧工具随旧实现
+整体删除；Phase 4 以新工具重建时同步登记，见 plan-scheduled-task-runner-refactor.md）。
+
+2026-10-28 追加 web_fetch（网页抓取，src/tools/search/fetch_tool.py，黄金清单
+快照后新增的遗留未登记项，Phase 4 一并修复基线失败）；重建登记定时任务两工具
+（Runner 化 Phase 4，chat_only 仅 web 对话可见，渠道与 scheduled 执行经
+filter_source_visible_tools 滤除，见 plan-scheduled-task-runner-refactor.md）：
+create_scheduled_task / manage_scheduled_task。
 """
 
 import pytest
@@ -75,9 +84,11 @@ GOLDEN_TOOLS = [
     "session_task_manage",
     "session_task_prepare",
     "session_task_publish",
+    "send_advisor_qr",
     "submit_video_task",
     "transfer_to_human",
     "upload_data_file",
+    "web_fetch",
     "web_search",
     "wechat_mp_sync",
     "wechat_mp_sync_status",

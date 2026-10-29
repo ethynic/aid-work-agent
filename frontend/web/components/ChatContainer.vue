@@ -113,6 +113,7 @@ import DurableTaskStatus from './chat/DurableTaskStatus.vue'
 
 import { useAgent } from '@/composables/useAgent'
 import { getSession } from '@/api/session'
+import { scheduledTaskSessionMark } from '@/api/scheduledTask'
 import { getAuthHeader } from '@/api/auth'
 import { sessionNavigationIntent } from '@/utils/chatSessionNavigation'
 import { quickPromptsForSubagent } from '@/utils/quickPrompts'
@@ -247,6 +248,10 @@ async function loadExistingSession(): Promise<boolean> {
     if (typeof requested !== 'string' || !/^[a-zA-Z0-9_-]{1,160}$/.test(requested)) throw new Error('原会话链接无效。')
     const session = await getSession(requested)
     if (!isCurrent()) return true
+    // 旧聊天链接打开任务专属会话 → 路由任务视图，不出现聊天形态（设计 §6）。
+    // 详情端点透出 metadata.scheduled_task（= task_id，Phase 5 二轮评审第 8 项）：
+    // 一次请求、权威判定，不再调任务列表按 session_id 匹配。
+    if (session?.scheduled_task) { redirectTaskView(session.scheduled_task); return true }
     if (!session || session.session_id !== requested || (session.tenant_id && session.tenant_id !== tenantId.value) ||
       (route.query.instance_id && session.instance_id !== route.query.instance_id)) throw new Error('原会话与当前租户或数字员工不匹配。')
     const sessionAgent = session.subagent_id || session.context_data?.subagent || 'main'
@@ -267,6 +272,13 @@ async function loadExistingSession(): Promise<boolean> {
 
 // 可用的数字员工列表（带缓存，避免重复请求）
 const { availableSubagents, loadAvailableSubagents } = useSubagentList()
+
+// 任务专属会话 → 任务视图重定向（旧聊天链接 / 会话切换入口兜底，设计 §6）
+function redirectTaskView(taskId: string) {
+  if (!tenantId.value) return
+  invalidateExistingSession()
+  router.replace(`/t/${tenantId.value}/tasks/${taskId}`)
+}
 
 // 获取租户ID（租户模式下从路径中提取）
 const tenantId = computed(() => {
@@ -706,6 +718,11 @@ watch(currentSessionId, async (newSessionId) => {
     skipNextSwitch.value = false
     return
   }
+  // 会话切换入口兜底：任务专属会话（metadata.scheduled_task）不进入聊天形态（设计 §6）
+  const taskMark = newSessionId
+    ? scheduledTaskSessionMark(sessions.value.find(item => item.session_id === newSessionId))
+    : null
+  if (taskMark) { redirectTaskView(taskMark); return }
   if (newSessionId) {
     await switchSession(newSessionId)
   } else {

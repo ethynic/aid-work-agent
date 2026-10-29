@@ -1,72 +1,25 @@
-"""定时任务调度管理器"""
+"""定时任务调度管理器（系统级 job 专用）
+
+v2 Runner 化重建（设计 §4）：用户定时任务不再经 APScheduler 注册/对账，
+改为 dispatch.py 到期循环 + 数据库原子认领（Phase 3 落地）。本模块保留
+Redis 锁 + 幽灵锁重试接管 + BackgroundScheduler 与全部系统级 job。
+"""
 
 import asyncio
 import os
 import threading
 import time
-from datetime import datetime, timedelta
-from typing import Any, Optional, Dict
+from datetime import datetime
+from typing import Optional
 
 from loguru import logger
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from src.scheduler.db import ScheduledTaskDB
-from src.scheduler.executor import ScheduledTaskExecutor
 from src.core.redis_client import redis_client
 from src.core.cache_utils import CacheKeys
 
-# 一次性任务过期宽限：与 job_defaults.misfire_grace_time 一致。
-# run_time 落在宽限内仍允许注册（APScheduler 会补跑）；超出宽限视为过期任务，
-# 显式作废（status=expired）而不是永远挂着——否则每次进程重启都会重注册一次
-# 过去时间的 DateTrigger，反复刷「Run time of job ... was missed」WARNING。
-_ONCE_MISFIRE_GRACE_SECONDS = 300
-
-# parse_run_datetime 兼容的时间格式（LLM 常见输出：缺秒 / T 分隔 / 斜杠日期）
-_RUN_AT_FORMATS = (
-    "%Y-%m-%d %H:%M:%S",
-    "%Y-%m-%d %H:%M",
-    "%Y/%m/%d %H:%M:%S",
-    "%Y/%m/%d %H:%M",
-)
-
-
-def parse_run_datetime(value: Any) -> Optional[datetime]:
-    """解析一次性任务执行时间为 naive 北京时间 datetime；不可解析返回 None。
-
-    工具层创建时已归一化为 "%Y-%m-%d %H:%M:%S"，这里兼容存量行与 LLM 变体输出；
-    带时区的时间换算到 Asia/Shanghai 后去时区（调度器时区即 Asia/Shanghai）。
-    """
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text:
-        return None
-    for fmt in _RUN_AT_FORMATS:
-        try:
-            return datetime.strptime(text, fmt)
-        except ValueError:
-            continue
-    try:
-        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if text.count(":") == 0:
-        # 纯日期串（fromisoformat 接受 "2026-10-20"）会解析成当天 00:00，
-        # 与创建端「必须向用户确认具体时间」口径不符，视为不可解析
-        return None
-    if dt.tzinfo is not None:
-        try:
-            from zoneinfo import ZoneInfo
-            dt = dt.astimezone(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
-        except Exception:
-            return None
-    return dt
-
-# 全局单例
-_executor = ScheduledTaskExecutor()
 # 分布式锁 key（走 make_key 自动拼接 REDIS_KEY_PREFIX，避免裸键）
 _SCHEDULER_LOCK_KEY = redis_client.make_key(CacheKeys.SCHEDULER_LOCK, "manager")
 # 锁重试接管间隔（强杀残留幽灵锁场景：TTL 300s 过期后重试即可抢到）
@@ -102,15 +55,10 @@ class ScheduledTaskManager:
 
     def __init__(self):
         self._scheduler: Optional[BackgroundScheduler] = None
-        self._jobs: Dict[str, str] = {}  # task_id -> apscheduler job_id
         self._running = False
         self._lock_value: Optional[str] = None
         # 锁重试接管线程（强杀残留幽灵锁场景）；None=未启动，启动成功后自然退出
         self._retry_thread: Optional[threading.Thread] = None
-        # reconcile 对账缓存：task_id -> 最近一次注册时的签名 tuple
-        # 签名按 (schedule_type, cron, interval, status, updated_at) 计算，
-        # 仅当签名变化时才重注册，避免每 30s 重置 interval 计时
-        self._reconcile_seen: Dict[str, tuple] = {}
 
     def start(self):
         """启动调度器（应用启动时调用）"""
@@ -138,7 +86,10 @@ class ScheduledTaskManager:
         self._start_scheduler_locked()
 
     def _start_scheduler_locked(self):
-        """抢锁成功后的启动主体：构造调度器 → 加载注册任务 → 启动 → 系统任务。"""
+        """抢锁成功后的启动主体：构造调度器 → 启动 → 注册系统任务。
+
+        用户定时任务不再在此加载（v2 由 dispatch.py 到期循环驱动，Phase 3）。
+        """
         self._scheduler = BackgroundScheduler(
             timezone="Asia/Shanghai",
             job_defaults={
@@ -148,27 +99,13 @@ class ScheduledTaskManager:
             }
         )
 
-        # 从 DB 加载所有 active 任务并注册
-        active_tasks = ScheduledTaskDB.list_active()
-        registered_count = 0
-        for task in active_tasks:
-            try:
-                if self._register_job(task):
-                    registered_count += 1
-                    # 启动注册后即记签名，否则首轮 reconcile 会把刚注册的任务
-                    # 再重注册一次（过期 once 任务因此每重启刷两条 missed）。
-                    # 作废任务不填：状态已置 expired，后续 reconcile 不再拉取
-                    self._reconcile_seen[task["task_id"]] = self._task_signature(task)
-            except Exception as e:
-                logger.opt(exception=True).error(f"后端日志：注册定时任务失败 task_id={task['task_id']}, {e}")
-
         self._scheduler.start()
         self._running = True
 
         # 注册系统级定时任务：每日记忆总结
         self._register_system_jobs()
 
-        logger.info(f"后端日志：定时任务调度器已启动，已注册 {registered_count} 个活跃任务")
+        logger.info("后端日志：定时任务调度器已启动（仅系统级 job；用户任务由 dispatch 循环驱动）")
 
     def _start_acquire_retry_thread(self):
         """启动锁重试接管线程（已有存活线程则不重复起，防双跑）。"""
@@ -266,20 +203,6 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.error(f"后端日志：注册防滥用策略扫描任务失败: {e}")
 
-        # ===== D11：reconcile 对账（每 30s 扫 scheduled_tasks 同步 APScheduler）=====
-        try:
-            self._scheduler.add_job(
-                self._reconcile,
-                IntervalTrigger(seconds=30),
-                id="job_system_reconcile",
-                name="Scheduled Tasks Reconcile",
-                max_instances=1,
-                coalesce=True,
-            )
-            logger.info("后端日志：已注册定时任务对账任务 (interval=30s)")
-        except Exception as e:
-            logger.error(f"后端日志：注册对账任务失败: {e}")
-
         # ===== D15：memory_cleanup（同步，interval）— 迁自 main.py _memory_cleanup_loop =====
         try:
             self._scheduler.add_job(
@@ -356,21 +279,6 @@ class ScheduledTaskManager:
             logger.info("后端日志：已注册工作成果复盘任务 (cron=02:30)")
         except Exception as e:
             logger.error(f"后端日志：注册工作成果复盘任务失败: {e}")
-
-        # ===== 定时任务补投记录清理（每日 04:45）=====
-        # pending 超 3 天置 expired（客户 48h 窗口早已关闭）；sent/expired 保留 7 天后清除
-        try:
-            self._scheduler.add_job(
-                self._run_delivery_cleanup,
-                CronTrigger(hour=4, minute=45, timezone="Asia/Shanghai"),
-                id="job_system_delivery_cleanup",
-                name="Scheduled Task Delivery Cleanup",
-                max_instances=1,
-                coalesce=True,
-            )
-            logger.info("后端日志：已注册定时任务补投记录清理任务 (cron=04:45)")
-        except Exception as e:
-            logger.error(f"后端日志：注册定时任务补投记录清理任务失败: {e}")
 
         # ===== 视频生成状态轮询（每 30s，只在 background_runner 进程跑）=====
         # 设计文档 docs/system/content-production/mvp-design.md §10
@@ -663,81 +571,6 @@ class ScheduledTaskManager:
                 logger.info(f"后端日志：防滥用策略扫描完成: {stats}")
         except Exception as e:
             logger.opt(exception=True).error(f"后端日志：防滥用策略扫描失败: {e}")
-
-    # ===== D11：reconcile 对账（核心）=====
-    def _reconcile(self):
-        """每 30s 扫描 scheduled_tasks，把 DB 状态同步到 APScheduler。
-
-        - active 任务：按签名（schedule_type/cron/interval/status/updated_at）变化重注册
-        - paused 任务：从 APScheduler 移除
-        - DB 已删除/取消的任务：从 APScheduler 移除
-        - manual_trigger_at 非空：立即执行一次再清空
-
-        幂等：按 updated_at 判变化，未变化不重注册（避免重置 interval 计时）。
-        """
-        try:
-            rows = ScheduledTaskDB.list_all_for_reconcile()
-            db_ids = set()
-            for t in rows:
-                tid = t["task_id"]
-                db_ids.add(tid)
-                # 单任务隔离：一条畸形任务（坏 cron / scheduler 异常）不得中断整轮对账，
-                # 否则会每 30s 卡住所有其他任务的注册/移除/触发。
-                try:
-                    sig = self._task_signature(t)
-                    if t.get("status") == "active":
-                        if self._reconcile_seen.get(tid) != sig:
-                            self._register_job(t)  # replace_existing=True 幂等
-                            self._reconcile_seen[tid] = sig
-                    else:
-                        # paused 等非 active 状态：从调度器移除
-                        if tid in self._jobs:
-                            self.remove_task(tid)
-                        self._reconcile_seen.pop(tid, None)
-
-                    # 手动触发：非空则立即执行一次，再清空标记
-                    if t.get("manual_trigger_at"):
-                        self._fire_once(tid, trigger_type="manual")
-                        try:
-                            ScheduledTaskDB.clear_manual_trigger(tid)
-                        except Exception as e:
-                            logger.opt(exception=True).error(f"后端日志：清除手动触发标记失败 task_id={tid}, {e}")
-                except Exception as e:
-                    logger.opt(exception=True).error(
-                        f"后端日志：reconcile 处理单任务失败 task_id={tid}（跳过该任务，继续对账）: {e}",
-                    )
-
-            # 清理 DB 中已不存在的任务（被 cancel/delete）
-            for tid in list(self._jobs.keys()):
-                if tid not in db_ids:
-                    self.remove_task(tid)
-                    self._reconcile_seen.pop(tid, None)
-        except Exception as e:
-            logger.opt(exception=True).error(f"后端日志：reconcile 对账失败: {e}")
-
-    def _fire_once(self, task_id: str, trigger_type: str = "manual"):
-        """立即执行一次任务（独立线程 + 新 event loop）。
-
-        抽自 trigger_task 的异步执行分支，供 reconcile 手动触发复用。
-        """
-        import threading
-
-        def _run():
-            loop = asyncio.new_event_loop()
-            try:
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(_executor.execute(task_id, trigger_type=trigger_type))
-            except Exception as e:
-                logger.opt(exception=True).error(
-                    f"后端日志：_fire_once 执行失败 task_id={task_id}, trigger={trigger_type}, {e}",
-                )
-            finally:
-                try:
-                    loop.close()
-                except Exception:
-                    pass
-
-        threading.Thread(target=_run, daemon=True).start()
 
     # ===== D15：memory_cleanup 回调（同步直调）=====
     def _run_memory_cleanup(self):
@@ -1100,21 +933,6 @@ class ScheduledTaskManager:
             except Exception:
                 pass
 
-    def _run_delivery_cleanup(self):
-        """补投记录清理（APScheduler 回调，后台线程执行）。
-
-        pending 超 3 天置 expired（渠道收发窗口早已关闭，补投无意义）；
-        sent/expired 终态记录保留 7 天后删除，控制表体积。
-        """
-        try:
-            from src.scheduler.db import ScheduledTaskDeliveryDB
-            expired = ScheduledTaskDeliveryDB.expire_stale(older_than_days=3)
-            deleted = ScheduledTaskDeliveryDB.cleanup_retention(keep_days=7)
-            if expired or deleted:
-                logger.info(f"后端日志：补投记录清理完成 expired={expired}, deleted={deleted}")
-        except Exception as e:
-            logger.opt(exception=True).error(f"后端日志：补投记录清理失败: {e}")
-
     # ===== 视频生成状态轮询回调（async，每 30s）=====
     def _run_video_gen_poll(self):
         """视频生成状态轮询（APScheduler 回调，后台线程执行）。
@@ -1187,7 +1005,6 @@ class ScheduledTaskManager:
             self._scheduler.shutdown(wait=True)
             self._scheduler = None
         self._running = False
-        self._jobs.clear()
 
         # 释放分布式锁
         if self._lock_value:
@@ -1198,118 +1015,6 @@ class ScheduledTaskManager:
             self._lock_value = None
 
         logger.info("后端日志：定时任务调度器已关闭")
-
-    def remove_task(self, task_id: str) -> bool:
-        """移除定时任务"""
-        job_id = self._jobs.get(task_id)
-        if not job_id or not self._scheduler:
-            return False
-
-        try:
-            self._scheduler.remove_job(job_id)
-            self._jobs.pop(task_id, None)
-            logger.info(f"后端日志：定时任务已移除 task_id={task_id}")
-            return True
-        except Exception as e:
-            logger.opt(exception=True).error(f"后端日志：移除定时任务失败 task_id={task_id}, {e}")
-            return False
-
-    @staticmethod
-    def _task_signature(t: dict) -> tuple:
-        """reconcile 变更判定签名（schedule_type/cron/interval/status/updated_at）"""
-        return (
-            t.get("schedule_type"),
-            t.get("cron_expression"),
-            t.get("interval_seconds"),
-            t.get("status"),
-            str(t.get("updated_at")),
-        )
-
-    def _register_job(self, task: dict) -> Optional[str]:
-        """注册单个任务到 APScheduler"""
-        task_id = task["task_id"]
-        schedule_type = task["schedule_type"]
-        cron_expression = task.get("cron_expression")
-        interval_seconds = task.get("interval_seconds")
-
-        # 移除旧 job（如果存在）
-        if task_id in self._jobs:
-            try:
-                self._scheduler.remove_job(self._jobs[task_id])
-            except Exception:
-                pass
-            self._jobs.pop(task_id, None)
-
-        # 构建 trigger
-        if schedule_type == "once":
-            # 一次性任务：cron_expression 存储执行时间 datetime。
-            # 缺失/不可解析/已过期（超出宽限）的任务永远无法正常触发，显式作废，
-            # 防止每次启动/对账重注册一个过去时间的 DateTrigger 反复刷 missed
-            run_time = parse_run_datetime(cron_expression)
-            if run_time is None:
-                ScheduledTaskDB.update_status(task_id, "expired")
-                logger.warning(
-                    f"后端日志：一次性任务缺少有效执行时间，已作废 "
-                    f"task_id={task_id}, cron_expression={cron_expression!r}"
-                )
-                return None
-            if run_time < datetime.now() - timedelta(seconds=_ONCE_MISFIRE_GRACE_SECONDS):
-                ScheduledTaskDB.update_status(task_id, "expired")
-                logger.warning(
-                    f"后端日志：一次性任务执行时间已过且超出宽限，已作废 "
-                    f"task_id={task_id}, run_time={run_time.strftime('%Y-%m-%d %H:%M:%S')}"
-                )
-                return None
-            if run_time <= datetime.now() and task.get("last_run_at"):
-                # 已执行过但未收尾（执行失败的 once 任务 update_after_run 会刷
-                # last_run_at 且 status 仍 active）：宽限内若再注册，APScheduler
-                # 会补跑过去时间的 DateTrigger，叠加 executor 的 60s 重试线程
-                # 造成重复执行/重复计费。执行过即不再补跑，直接作废。
-                ScheduledTaskDB.update_status(task_id, "expired")
-                logger.warning(
-                    f"后端日志：一次性任务已执行过且未成功收尾，不再补跑，已作废 "
-                    f"task_id={task_id}, run_time={run_time.strftime('%Y-%m-%d %H:%M:%S')}"
-                )
-                return None
-            trigger = DateTrigger(run_date=run_time)
-        elif schedule_type == "interval" and interval_seconds:
-            trigger = IntervalTrigger(seconds=interval_seconds)
-        elif cron_expression:
-            trigger = CronTrigger.from_crontab(cron_expression, timezone="Asia/Shanghai")
-        else:
-            logger.error(f"后端日志：定时任务缺少调度配置 task_id={task_id}")
-            return None
-
-        # 添加 job
-        job = self._scheduler.add_job(
-            self._execute_task,
-            trigger=trigger,
-            args=[task_id],
-            id=f"job_{task_id}",
-            name=task.get("name", task_id),
-            replace_existing=True,
-            max_instances=1,
-        )
-
-        job_id = job.id
-        self._jobs[task_id] = job_id
-        logger.info(f"后端日志：定时任务已注册 task_id={task_id}, job_id={job_id}, "
-                    f"schedule_type={schedule_type}")
-        return job_id
-
-    def _execute_task(self, task_id: str):
-        """任务执行入口（APScheduler 回调，在后台线程中执行）"""
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(_executor.execute(task_id, trigger_type="scheduled"))
-        except Exception as e:
-            logger.opt(exception=True).error(f"后端日志：定时任务执行异常 task_id={task_id}, {e}")
-        finally:
-            try:
-                loop.close()
-            except Exception:
-                pass
 
 
 # 全局单例

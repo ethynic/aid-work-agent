@@ -229,7 +229,7 @@ describe('RpaBindingPanel', () => {
     selectEl.dispatchEvent(new Event('change'))
     await flushPromises()
     const html = bodyHtml()
-    expect(html).toContain('trade-specialist')
+    expect(html).toContain('ai-lead-gen')
     expect(html).toContain('travel-consultant')
   })
 

@@ -36,13 +36,14 @@
 角色依赖组合，然后按固定顺序执行：
 
 1. 发现并实例化 Catalog 工具；
-2. 非 MASTER 仅在 allowed 命中轻量 manifest 时延迟加载 local proxy；
+2. MASTER及inherit角色按受信目录注册业务proxy，显式配置仍按allowed注册兼容实现；
 3. 应用 inherit/allowed/excluded；
 4. 构造 `ToolControlSet`；
 5. 返回 Registry、Controls 及发现/最终名称快照。
 
-MASTER 路径不得 import `src.local_tools.proxy_tool`。本地代理名称放在无 repository、
-service 依赖的 `src/local_tools/manifest.py`。
+2026-10-29通用装配修订（[W14计划](../plans/plan-wecom-cli-group-chat-experiment.md#w14-通用runtime业务工具自动装配2026-10-29)）：取代旧“MASTER不得加载proxy”和W13企微专门注册。现有`TRUSTED_PROVIDERS`的`agent_tools`可收敛业务面，`internal_tools`排除恢复原语，`device_independent_tools`保留混合provider内的纯云端实现；缺省业务面为受信工具，不生成不存在的工具实现。兼容读取别名同处登记，allowed/excluded按映射后使用。
+
+运行时在每次执行/恢复激活前，按可信actor的已选active设备上报provider投影已注册schema与usage guide，不新增实时探测或online/锁屏/繁忙前置门禁。未配对/未安装不会凭空创造工具，临时能力查询失败保留已知定义并明确状态未知；实际派发仍由原设备/插件错误说明恢复原因。安装变化在下一激活更新。旧调用恢复不依赖当前可见schema，不因换设备或短暂离线丢掉冻结执行器；配置指纹不纳入动态能力。已有域设备绑定由执行适配器传入provider→device覆盖，只作用于原域，不扩义为全局绑定。无actor的metadata实例不查询DB、不复用其他用户能力。
 
 ## 控制工具
 
@@ -70,7 +71,12 @@ email、browser、knowledge、cp、write、scheduled 不保存 tenant/user/sessi
 
 - 26 项工具名、排序、schema、控制工具顺序和模式过滤保持稳定。
 - tests/ 替身和失败模块的半注册类不能进入生产快照。
-- MASTER 装配后 local proxy 实现未被加载。
+- MASTER按目录装配业务候选，模型仅见当前actor设备能力范围；内部恢复不进模型，旧调用执行器仍可恢复。
 - A/B 并发身份隔离、异常 reset、嵌套和 batch 传播通过。
 - 空订阅不暴露 delegate，直接越权调用在 executor 前被拒绝。
 - 新增工具必须同步更新黄金清单并说明暴露面变化。
+
+
+### 服务端独立升级的既有配置兼容（2026-10-29）
+
+设备发现只决定自动新增业务工具，不删除已有显式allowed工具的模型可见性；两者按现有registry（已应用excluded）取并集，再排除内部原语。旧根provider_id与既有providers/manifests解析继续复用，不依赖新客户端。真实调用仍按原执行权限与设备实际状态处理，工具可见性不是新执行门禁。含纯云端分支的旧BOSS工具不应因缺少设备元数据而失去原可见性。测试/修复边界见[W14.5](../plans/plan-wecom-cli-group-chat-experiment.md#w145-服务端单独升级的旧端兼容复核2026-10-29)。

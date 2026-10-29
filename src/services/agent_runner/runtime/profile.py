@@ -15,15 +15,37 @@ from src.prompts import PromptManager
 from src.prompts.style_manager import get_style_manager
 from src.services.agent_runner.runtime.resource_cache import (
     cached_builtin_subagent_registry, cached_skill_registry)
-from src.tools.assembly import ToolAssemblyRequest, ToolAssemblyRole, assemble_agent_tools
+from src.tools.assembly import AgentToolBundle, ToolAssemblyRequest, ToolAssemblyRole, assemble_agent_tools
 from src.tools.executor import ToolExecutor
+
+
+def filter_source_visible_tools(tool_bundle: AgentToolBundle, source: str) -> AgentToolBundle:
+    """按执行来源过滤装配产物（设计 §5.3，机制与 interactive_only 同一装配层）。
+
+    非 chat 来源（渠道/scheduled）注销 chat_only 工具——仅 web 对话可见的
+    工具不进入渠道与定时执行（当前暂无工具声明，机制就位）；interactive_only
+    提问类控制工具已随 non_interactive 在 ToolControlSet 装配时滤除，
+    definitions 与 dispatch（controls.get）同一过滤点。
+    """
+    if source != 'chat':
+        chat_only_names = [name for name in tool_bundle.registry.list_tools()
+                           if getattr(tool_bundle.registry.get_tool(name), 'chat_only', False)]
+        if chat_only_names:
+            tool_bundle.registry.remove_many(chat_only_names)
+    return tool_bundle
 
 
 class RuntimeResources:
     def __init__(self, is_master=True, subagent_config=None, session_id=None,
                  execution_id=None, parent_plan_manager=None, mode=AgentMode.MASTER,
                  tenant_id=None, user_id=None, resource_directory=None, isolate_plan=False, session_kind='web',
-                 plan_store=None, plan_scope=None):
+                 plan_store=None, plan_scope=None, source='chat'):
+        # 执行来源驱动装配层工具可见性过滤（根+子一致，设计 §5.3）：
+        # - scheduled：非交互执行，滤除 interactive_only 提问类控制工具
+        #   （ask_user/clarify——definitions 与 dispatch 同一过滤点）；
+        # - 非 chat 来源（渠道/scheduled）：chat_only 工具（仅 web 对话可见，
+        #   当前暂无声明，机制就位）从 registry 注销。
+        non_interactive = source == 'scheduled'
         self.mode = AgentMode.SUBAGENT if mode == AgentMode.MASTER and not is_master else mode
         self.is_master = self.mode == AgentMode.MASTER
         self.subagent_config = subagent_config
@@ -64,7 +86,9 @@ class RuntimeResources:
         self._tool_bundle = assemble_agent_tools(ToolAssemblyRequest(
             role=ToolAssemblyRole(self.mode.value), subagent_config=subagent_config,
             plan_manager=self.plan_manager, skill_registry=self.skill_registry,
-            skill_executor=self.skill_executor, subagent_registry=self.subagent_registry))
+            skill_executor=self.skill_executor, subagent_registry=self.subagent_registry,
+            non_interactive=non_interactive))
+        filter_source_visible_tools(self._tool_bundle, source)
         self.tool_registry, self._tool_controls = self._tool_bundle.registry, self._tool_bundle.controls
         self.tool_executor = ToolExecutor(self.tool_registry)
         if self.is_master:

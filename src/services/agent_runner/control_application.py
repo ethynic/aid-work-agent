@@ -19,6 +19,16 @@ class ControlApplication:
             raise RunnerError('CONTROL_COMPLETION_FORBIDDEN',403)
         self.manager.authorizer.verify_service(credentials['service_id'],credentials['service_token'],None)
         row = self.manager.repository.get(runner_id)
+        if row.get('source') == 'scheduled':
+            # 控制操作范围矩阵（设计 §5.2）：用户（Bearer token）对 scheduled
+            # runner 不开放自由文本作答与控制动作（reply/pause/resume 一律
+            # SCHEDULED_CONTROL_FORBIDDEN，非交互要求覆盖所有控制入口）；仅
+            # scheduler 服务可提交无补充输入的 resume（恢复驱动 §4.6——携带
+            # answer/attachments 的 resume 同样拒绝，矩阵未放行补充输入）。
+            # 查询/订阅/cancel 走各自读取与专用端点，不经此处。
+            if (credentials.get('user_token') or request.action != 'resume'
+                    or request.answer.strip() or request.attachments):
+                raise RunnerError('SCHEDULED_CONTROL_FORBIDDEN',403)
         principal = self.manager._authorize_row(row,credentials)
         previous = self.controls.find_request(principal,runner_id,request)
         return row,principal,previous

@@ -28,6 +28,27 @@ skills:
     - ai-lead-gen
     - web-search-pro
 
+business_pages:
+  - id: campaigns
+    title: 获客活动
+    icon: "M12 22a10 10 0 100-20 10 10 0 000 20zm0-4a6 6 0 100-12 6 6 0 000 12zm0-8a2 2 0 100 4 2 2 0 000-4z"
+    route: /ai-lead-gen/campaigns
+  - id: leads
+    title: 线索公司
+    icon: "M3 21h18M5 21V7l7-4 7 4v14M9 9h.01M15 9h.01M9 13h.01M15 13h.01M9 17h.01M15 17h.01"
+    route: /ai-lead-gen/leads
+  - id: contacts
+    title: 联系人
+    icon: "M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM22 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"
+    route: /ai-lead-gen/contacts
+  - id: emails
+    title: 邮件记录
+    icon: "M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2zM22 6l-10 7L2 6"
+    route: /ai-lead-gen/emails
+  - id: replies
+    title: 回复记录
+    icon: "M3 10h10a8 8 0 018 8v2M3 10l6-6M3 10l6 6"
+    route: /ai-lead-gen/replies
 context:
   max_input_tokens: 8000
   max_output_tokens: 4000
@@ -44,6 +65,21 @@ context:
 你通过 `ai-lead-gen` 技能完成以上工作：业务数据（campaign/名单/联系人/邮件/回复）
 全部经技能脚本读写 PostgreSQL `bs_ai_lead_gen_*` 五表；检索与网页读取委托你的
 `web_search` / `web_fetch` 工具执行（技能会给出 SEARCH_TASK / SCRAPE_TASK 委托格式）。
+
+## 定时任务（auto 模式与回复监控）
+
+半自动（review）与全自动（auto）是同一条管线，只差 campaign 的 send_mode 闸门。
+系统定时任务会以用户身份在本数字员工会话中执行 task_prompt，你收到的定时任务
+prompt 均以「委派给 ai-lead-gen 数字员工」开头，按其中的固定流程执行：
+
+- **每日循环任务**（auto 发送编排）：补名单 -> 挖联系人 -> 写草稿 -> auto 推进
+  发送（闸门全开）-> `daily-summary --notify` 发当日汇总通知。
+- **回复监控任务**（每小时）：运行 `reply_monitor.py --campaign-id {ID}` 拉取
+  新回复，按 stdout JSON 汇报检查数/去重数/新回复数/意向分布/通知数/退订数。
+
+绑定/解绑定时任务用技能的 `bind-scheduler` / `unbind-scheduler` 子命令
+（绑定即切 auto，解绑切回 review）；任务 ID 只能来自用户的定时任务列表或
+用户明确提供，不猜测。详细模板见 SKILL.md「定时任务与回复监控」一节。
 
 ## 工作纪律
 

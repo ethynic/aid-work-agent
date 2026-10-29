@@ -43,6 +43,7 @@ pip install httpx beautifulsoup4 lxml
 
 import argparse
 import json
+import os
 import re
 import string
 import sys
@@ -119,7 +120,39 @@ CHANNEL_POLICY = {
 
 # ---------------------------------------------------------------- 网络基础
 
-def _client(verify=True):
+# 渠道级代理：百度通道可经办公网出口代理执行（服务器 IP 被百度风控标记时使用）。
+# 环境变量 WEBSEARCH_BAIDU_PROXY 形如 http://user:pass@host:port，未设置则直连。
+# 其他引擎不受影响；代理连接失败自动回落直连并在 errors 中如实记录。
+BAIDU_PROXY = os.environ.get("WEBSEARCH_BAIDU_PROXY", "").strip() or None
+PROXY_CHANNELS = ("baidu", "baidu_m")
+
+# 百度 cookie 预热缓存（进程级）：先访问首页获取 BAIDUID 再搜索，
+# 无 cookie 裸搜会显著提高被风控概率（实测裸搜直接导 wappass 验证码页）。
+_baidu_warm_cookies = None
+
+
+def _channel_proxy(name):
+    """返回该通道应使用的代理（未配置则 None=直连）。"""
+    return BAIDU_PROXY if name in PROXY_CHANNELS else None
+
+
+def _warm_baidu_cookies(verify=True, proxy=None):
+    """预热百度 cookie（BAIDUID 等）。失败不抛异常，返回空 dict 走原行为。"""
+    global _baidu_warm_cookies
+    if _baidu_warm_cookies is not None:
+        return _baidu_warm_cookies
+    cookies = {}
+    try:
+        with _client(verify, proxy=proxy) as c:
+            c.get("https://www.baidu.com/", headers=DEFAULT_HEADERS)
+            cookies = dict(c.cookies)
+    except Exception:
+        cookies = {}
+    _baidu_warm_cookies = cookies
+    return _baidu_warm_cookies
+
+
+def _client(verify=True, proxy=None, cookies=None):
     return httpx.Client(
         timeout=httpx.Timeout(connect=CONNECT_TIMEOUT, read=READ_TIMEOUT,
                               write=10.0, pool=CONNECT_TIMEOUT),
@@ -127,14 +160,20 @@ def _client(verify=True):
         headers=DEFAULT_HEADERS,
         verify=verify,
         http2=False,
+        proxy=proxy,
+        cookies=cookies or None,
     )
 
 
-def fetch_raw(url, verify=True, headers=None):
-    """抓取 URL 原始 HTML。失败抛异常由调用方处理。"""
+def fetch_raw(url, verify=True, headers=None, proxy=None, cookies=None):
+    """抓取 URL 原始 HTML。失败抛异常由调用方处理。
+
+    proxy/cookies 仅由调用方明确传入（当前仅百度搜索通道使用，
+    避免把百度 cookie 带到无关站点）。
+    """
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
-    with _client(verify) as c:
+    with _client(verify, proxy=proxy, cookies=cookies) as c:
         r = c.get(url, headers=headers or DEFAULT_HEADERS)
         r.raise_for_status()
         if not r.encoding or r.encoding.lower() == "iso-8859-1":
@@ -1213,6 +1252,12 @@ def search(query, limit=8, engine="auto", verify=True, companies_only=False):
             continue
         q_sent = urllib.parse.quote(_build_engine_query(query, name))
         policy = CHANNEL_POLICY.get(name, {"delay": 1.5, "retries": 1})
+        # 渠道级代理：百度通道支持经办公网代理执行；代理连接失败自动回落直连
+        ch_proxy = _channel_proxy(name)
+        # 百度通道先预热 cookie（BAIDUID），无 cookie 裸搜显著提高被风控概率
+        warm_cookies = None
+        if name in PROXY_CHANNELS:
+            warm_cookies = _warm_baidu_cookies(verify=verify, proxy=ch_proxy)
         # 总尝试 = 网络重试 + 分词漂移重试。漂移时重试同一引擎（并轻微扰动 rn），
         # 因为百度等结果非确定性，一次漂移不代表该引擎无正确结果。
         max_attempts = policy["retries"] + 1 + RELEVANCE_RETRIES
@@ -1230,7 +1275,18 @@ def search(query, limit=8, engine="auto", verify=True, companies_only=False):
             try:
                 # 移动端引擎（baidu_m）用移动 UA，否则用桌面 UA
                 hdrs = MOBILE_HEADERS if spec.get("mobile") else DEFAULT_HEADERS
-                html = fetch_raw(url, verify=verify, headers=hdrs)
+                try:
+                    html = fetch_raw(url, verify=verify, headers=hdrs,
+                                     proxy=ch_proxy, cookies=warm_cookies)
+                except (httpx.ProxyError, httpx.ConnectError,
+                        httpx.ConnectTimeout) as pe:
+                    if not ch_proxy:
+                        raise
+                    # 代理不可达：如实记录后回落直连（本次搜索内不再走代理）
+                    errors.append(f"{name}: 代理连接失败（{type(pe).__name__}），回落直连")
+                    ch_proxy = None
+                    html = fetch_raw(url, verify=verify, headers=hdrs,
+                                     cookies=warm_cookies)
                 # 跟随 JS 重定向（Cốc Cốc / Parsijoo 等）
                 html = _follow_js_redirect(html, url, verify=verify)
                 # 风控验证码/拦截页：不是正常结果，立即放弃本通道，转下一引擎/降级通道

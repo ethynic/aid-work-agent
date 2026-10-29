@@ -15,6 +15,130 @@
 | 最新Runtime整合 | 同步master的BOSS/Runtime修复并组合回归 | ✅ 完成（2026-10-26） | 1721707f整合验收版获授权提交；PG/Worker100与迁移34通过、CR通过；3旧Runtime断言保留 |
 | W10 综合收敛设计 | BOSS经验对照、平台识别及端到端恢复静态评审 | ✅ 完成（2026-10-27） | 确认R1～R12实际缺口，收敛六个业务验收；仅主控静态审查，不冒充独立CR |
 | W10 后续实现 | 三工具、身份与发送快路径、持续任务恢复 | ✅ 完成（2026-10-27） | 独立TEST及CR通过，最后别名P1/空页延迟P2闭环；未提交、部署或恢复监听 |
+| W11 组合验收包 | Runtime安装器、企微签名插件与隔离升级验证 | ✅ 完成（2026-10-28） | Runtime0.0.31/WeCom0.2.1；发行修复、实际隔离升级及独立TEST/CR通过；未提交/部署/监听 |
+| W12 最新master与本地容器 | 保全发行修复、整合新scheduled Runner及隔离本地验证 | ✅ 完成（2026-10-29） | 已整合12b7827c；独测/CR通过，本地登录与main真实模型已验，Runtime配对/企微实聊未验 |
+| W13 main企微工具装配 | 修复网页main缺少三工具并复验真实只读调用 | ✅ 完成（2026-10-29） | 装配/内部参数校验已修，独测及CR通过；Web实际DB读取5会话/5消息成功，无发送监听 |
+| W14 通用自动装配 | 复用受信目录与设备能力替换main企微特例 | ✅ 完成（2026-10-29） | 0.0.29/0.3.27旧包隔离机制验证及独立复核通过；真实业务UI/完整Worker发布未验 |
+
+## W14 通用Runtime业务工具自动装配（2026-10-29）
+
+用户要求取代W13的main企微特例，复用工具目录和设备能力，不加审批、探测、执行门禁。唯一写入者为主控；独立TEST/CR只读。行为设计同步到[工具装配设计](../tools/tool-auto-discovery-design.md)，本计划保留这次本地验收交接。
+
+- 现有`TRUSTED_PROVIDERS`同处声明模型业务面与内部工具，Assembly按目录注册既有实现，不按provider名称分支。main及inherit角色自动取得业务候选；显式allowed/excluded仍限定配置智能体，旧读取别名在同一目录兼容。
+- 每次执行/恢复激活，在构建prompt前从可信tenant/user的`list_devices`读取已上报能力，按selected且active设备投影schema与guide；离线/忙碌不抹工具，不加实时probe。安装/卸载在下一执行/恢复激活反映，不另加轮询。无actor不查询设备。能力查询暂时异常仅标记可用性未知，保留已知schema交给原执行链报错，不能使整个任务永久卡死。
+- registry保留执行候选，不把可见性变成新鉴权；原权限、claim/permit、冻结调用恢复和unknown不重放不改。动态设备能力不加入配置指纹。既有WeCom域任务pin只覆盖其provider，恢复沿原设备投影，其他provider仍用selected，不新建通用binding。
+- 纯云端BOSS职位/通知保持无需设备；内部弹层、恢复观察和skill原语不直接暴露。企微三个业务工具保持现行输入契约；非业务步骤不进模型。
+
+| 阶段 | 内容 | 状态 | 完成记录 |
+|------|------|------|---------|
+| W14.1 | 最小设计及原机制对照 | ✅ 完成（2026-10-29） | 复用受信目录、现有能力及域绑定，不新增wire/审批/指纹门禁 |
+| W14.2 | 通用装配与角色/能力投影 | ✅ 完成（2026-10-29） | main/inherit及配置元数据复用目录；schema/guide同源，原恢复执行器保留 |
+| W14.3 | 独立测试与CodeReview | ✅ 完成（2026-10-29） | 独测247通过/0失败/0跳过，含独立7补充；CR无P0/P1/P2，源码hash一致 |
+| W14.4 | 本地Web只读真实验证 | ✅ 完成（2026-10-29） | 新会话自动拿到企微/BOSS业务能力，实际DB读取3会话/3消息、失败0，原waiting保留 |
+
+### W14验证记录及交接
+
+- 主控定向自测87项通过。首次批次51通过/1失败，是既有目录已含runtime-recovery但测试仍断言4个provider的过期断言；按实际5项受信目录修正，本轮没有增删native provider或claim工具。
+- 独立TEST在只读工作树、无网络临时容器运行247项，0失败/错误/跳过，含独立7项：旧capabilities格式、并发actor隔离、查询故障不扩张显式profile、隐藏原发送仍走真实Dispatcher.recover(recover=True)、unknown保持及native目录字段不变。原生工具目录/版本逐项对照W14前快照。不是实际发送或多天验收。
+- TEST证据位于本机Temp `wecom-w14-test-der77ivb/FINAL-INDEPENDENT-TEST.json`，SHA256 `52267d85e0f2146d89aafcbae808cb34587225aca3aa397cdc87b088d3749df8`；CR位于`wecom-w14-independent-cr-7ls7t19w/review.json`及`review.md`，无未解决P0/P1/P2。主控最终复核12项源/测hash仍匹配TEST。
+- API/runner-api/runner-worker三个本地应用已重载且健康；PG/Redis及Windows Runtime未重启、原8000容器未操作。重载前6个completed、1个waiting，无queued/running；旧waiting澄清不自动回答或取消，更不启动监听。
+- 用真实actor作用域SQL和现有配对设备capabilities完成装配投影：BOSS24项业务候选、WeCom3项，未装Weixin不显示该provider本地工具；runtime-recovery/skill原语/弹层/企微非业务步骤均隐藏，能力查询未失败。只取元数据，不创建Runner/invocation或导出消息正文。证据Temp `wecom-w14-live-capabilities.json`。
+- 网页重载后回登录页，需正常验证码登录；用户于本会话明确选择“我自己登录，稍后通知”。截至本次交接，W14尚未通过网页发起真实模型读取，不以W13成功或后端元数据冒充新版Web验收。用户登录后在新会话发送一次有界只读请求，核实MAIN自动拿到BOSS/企微工具及真实Runner→Runtime读取；不操作BOSS、不发送、不监听、不触发原等待澄清任务。
+- 未提交、推送、部署agent2或恢复监听。代码保留原master整合及W11～W13未提交修改；能力刷新限定每次执行/恢复激活，任意第三方原生命令不会凭名字直接变成业务工具。
+
+## W13 main缺少企微三工具（2026-10-29）
+
+用户在本地Web已登录并自行配对Runtime后，要求开发助手操作网页复现“无法读取企微聊天记录”。本轮只读验证，不向企微发消息或创建监听，不提交、发布agent2。配对已实际完成：Runtime UI0.0.31，后台设备active/online/selected；第一次普通提问和随后明确只读要求均未调用CLI，模型实际查询了旧微信业务任务后误判必须开通会话存档。
+
+根因是`assemble_agent_tools`仅在非MASTER且配置显式允许时注册`catalog=False`的本地proxy；main只自动发现普通工具。旧测试甚至断言MASTER不导入local proxy，与[三工具设计](../design/wecom/wecom-cli-design.md#12-持续监控端到端收敛2026-10-27)及用户允许main使用Runtime的要求冲突。本轮选择现行三工具约定，替换该旧断言，不把所有BOSS/Weixin/内部恢复工具全量装到main。
+
+最小方案：MASTER显式注册既有`BUSINESS_TOOLS`三项，其他角色仍沿原allowed/excluded配置；不更改Device授权、设备选择、绑定、claim/permit、发送授权或wire，不新增预探测、配对审批与能力轮询门禁。工具实际执行仍检查已选设备及原权限。主控唯一维护装配、相关测试与文档；独立TEST/CR只读。相关代码自测与独立验证通过后仅重启本地应用进程（不重启PG/Redis/Windows Runtime），再在当前Web会话发一次有界只读请求验证真实链路，失败按真实错误处理，不用开发助手直读CLI代替。
+
+| 阶段 | 内容 | 状态 | 完成记录 |
+|------|------|------|---------|
+| W13.1 | Web复现及实际工具定位 | ✅ 完成（2026-10-29） | 网页原回答与新只读请求均缺少企微三工具，Runtime心跳正常 |
+| W13.2 | main装配与执行参数修复 | ✅ 完成（2026-10-29） | main显式三项，执行器只校验业务字段但原样传可信上下文；业务未知字段仍严格，纯normalize不改 |
+| W13.3 | 独立测试和CodeReview | ✅ 完成（2026-10-29） | 独测55装配/61执行器两批均通过；最终4主文件/7上下文hash和Web证据CR通过，无P0/P1/P2 |
+| W13.4 | Web→Runner→Runtime只读复验 | ✅ 完成（2026-10-29） | 实际DB通道5会话/5消息、失败0，wecom3/unknown2；17.49秒、唯一只读invocation，无发送/监听 |
+
+### W13第二个真实调用缺口与最终只读结果
+
+第一处装配修复加载后，模型已能看到并调用`wecom_read_sessions`，但Web暴露第二处实际代码问题：`LocalToolAdapter`为LOCAL_REQUIRED注入`_trusted_tenant_id/_trusted_user_id/_session_id/_progress_queue`，`ToolExecutor.execute`却将它们和业务参数一起传给`extra=forbid`的ReadSessionsInput，拒绝后没有到达Runtime。不能仅凭模型definition测试通过宣称端到端可用；两次参数拒绝都未产生本地invocation或聊天读取。
+
+最终窄修只在`ToolExecutor.execute`中为有InputModel的工具分出非`_`业务字段，validate/missing/errors及类型规范化使用该字典，再与原参数合并传给execute。内部队列等对象身份保持，未知公共字段仍被业务schema拒绝；无InputModel的旧路径不变，全局`normalize_provided_parameters`源码与HEAD逐字相同，冻结调用和恢复证明的纯业务规范没有放宽。没有把内部字段加到LLM schema，也没有为batch关闭extra检查。可信来源仍由原LocalToolAdapter覆盖租户/用户/会话，进度队列独立覆盖；不能把ToolCatalog的definition投影误写成其已预校验全部模型实参。
+
+验证分批登记，不重复累加：主控初批29自测；装配独测55项（真实RuntimeResources/discovery/Assembly/proxy/ToolCatalog）；主控追加6文件85项；执行器独测61项（实际LocalToolAdapter→ToolExecutor→真实WecomReadSessionsTool，只有设备/派发I/O边界mock）。全部0失败/跳过。独立实证包含limit字符串转int、进度对象原样、可信ContextVar、未知公共参数/非法limit在设备查找前拒绝，以及旧BOSS/恢复normalizer相邻回归。第一条sh入口因bash数组语法无法启动，纠正为原bash入口后通过，未按产品失败或通过计数。
+
+仅在本地无queued/running任务时先后两次重载API/Runner API/Worker，PG、Redis、Windows Runtime及配对记录不动，没有重新安装或额外配对。在用户现有Web会话中由main调用一次`wecom_read_sessions(limit=5)`，runner `runner_ca5b54ba015c4e42a181d4e56f3d9cd0` completed，17.491562秒；唯一本地invocation `cea7bdcb-d64b-4d79-a19d-9f4887a1f241` succeeded/OK，channel=local-db、navigated=false。原工具结果核对5会话/5消息、failed0、sender_platform wecom3/unknown2；本批wechat0，不声称已验该类别真人。pending候选1、has_more及history_truncated均true，按5条授权未继续翻页。网页与元数据计数一致，不导出正文、会话名或账号。
+
+证据：本机Temp `wecom-w13-live-read-metadata.json`与`wecom-w13-web-read-success.jpg`；装配独测`wecom-w13-test-hyrrqz8m/FINAL-INDEPENDENT-TEST.json` SHA256 `35980be8ed6d8844c59fa36648988998f8ef279d01ae28bcbb506cdd66e4ea16`，执行器补充`executor/FINAL-INDEPENDENT-TEST.json` SHA256 `2d69b8200aeb8bbb75eb6b29e61c09c9dd9bb17f9ff3a3de97b06fd23153fbf9`。只在本地应用加载修复，未提交或推送、部署agent2、企微发送或启动监听。模型把has_more自然语言解释为“同步范围之外”不严谨，后续说明应使用“当前范围还有后续页”，不以该描述为CLI实现事实，也不为此扩大本轮代码或阻挡首次只读验收。
+
+最终独立CR PASS，无未解决P0/P1/P2；报告本机Temp `wecom-w13-main-cr-toyv8noi/review.json` SHA256 `a8e1aceaf880394d138673f1a4726dd4c85a733ba089e524ae7558187dceb681`，MD `18432b3394cddef830690e028fbeef58e4059c53dca5d9093adb81c68a0f66f9`。审查同时核对真实工具返回与网页摘要一致、本批未涵盖微信来源，以及仅有一次本地只读调用。后续仅文档登记，生产源码冻结不变；不机械重跑已稳定测试或增加无关门禁。
+
+## W12 最新master整合与本地容器验证（2026-10-29）
+
+用户授权先同步最新master并在本地容器准备/验证，不部署agent2，不恢复真实监听或发送，不自动提交。沿用[设计§12](../design/wecom/wecom-cli-design.md#12-持续监控端到端收敛2026-10-27)，不增加另一套Runner、权限流程或工具协议。
+
+| 阶段 | 内容 | 状态 | 完成记录 |
+|------|------|------|---------|
+| W12.1 | 工作区保全与主线选择 | ✅ 完成（2026-10-29） | aa6885b4未提交42文件逐一备份核hash；origin/master12b7827c，github/master另有分叉，本轮仅采用origin |
+| W12.2 | 合并冲突与迁移水位 | ✅ 完成（2026-10-29） | 7处冲突解除；continuous/scheduled共存，追加13:46:35分支DDL补齐，121个合并Python AST通过 |
+| W12.3 | 本地容器与启动验证 | ✅ 完成（2026-10-29） | 新项目API18000、Runner API/Worker、PGvector/Redis及独立卷已运行；Web13000代理，原8000不变 |
+| W12.4 | 独立测试与审查 | ✅ 完成（2026-10-29） | 独测206无DB+53完整PG，0失败/跳过；Web28及最终build通过，独立CR无遗留P0/P1/P2 |
+| W12.5 | 本地账号与main真实模型 | ✅ 完成（2026-10-29） | 用户指定账号经正常密码/验证码登录；main真实Runner约8秒完成，一笔LLM用量已结算，0本地工具调用 |
+
+本地架构：浏览器→本地API→独立Runner API/Worker→本机Windows Runtime→已安装wecom CLI。API、Runner、PostgreSQL和Redis可运行在WSL Docker；企业微信客户端及其UI/DB依赖留在Windows，不尝试放Linux容器。使用新Compose项目和loopback端口，独立新库/卷及Redis，不借现有8000服务、业务库或其真实账号；先验证启动、schema和合成数据恢复，再由用户授权配置测试智能体、配对和真实聊天验收。没有模型密钥或测试账号时如实标记，不能用合成测试冒充配置智能体实机链路。
+
+本轮成功标准：保留上轮发行修复原字节和交付文件；解除7处冲突；新旧Runner语义共同通过相关定向独测及CR；本地测试环境的实际源码来自wecom工作树，数据库包含分支与master所需结构；能给出本地入口及下一步可执行的测试顺序。旧Runtime0.0.31与插件0.2.1是已验收的客户端固定包，不因服务器master整合静默改写旧包或报告；客户端内容未变可复用，后端整合需重新验证。
+
+### W12本地环境操作与实际边界
+
+配置入口：[deploy/docker-compose.wecom-local.yml](../../deploy/docker-compose.wecom-local.yml)。本机WSL发行版`Ubuntu-22.04`，项目名`aid-wecom-local`，应用镜像复用现有`aid-agent-api:latest`，实际代码挂载`/mnt/c/repos/aid-work-agent-wecom`。代码挂载沿用现有local Compose读写模式，日志/上传/存储独立卷；独立pytest容器另用只读代码及断网/loopback受限网络。原`aid-agent-api`仍挂主工作树、运行8000端口，本轮未替换或重启。
+
+私有配置已保存在Git忽略的`clients/agent-desktop/build/wecom-local/local.env`及`postgres.env`，不能提交、打印展开后的compose config或清理整个目录。前者只含本地新数据库连接、独立服务间令牌及从本机私有配置复用的5项模型配置；后者固定原3项PG参数，不带模型密钥，避免改模型时连带重建PG。未复制业务数据、用户账号、渠道凭据或真实Runtime配对。首次启动阶段未调用真实模型；后续用户指定账号与main真实模型补验见下文，不据此宣称企微业务通过。
+
+本地启动/查看/停止（PowerShell；只影响本项目，`stop`不删除卷）：
+
+```powershell
+wsl -d Ubuntu-22.04 --cd /mnt/c/repos/aid-work-agent-wecom --exec docker compose -f deploy/docker-compose.wecom-local.yml up -d
+wsl -d Ubuntu-22.04 --cd /mnt/c/repos/aid-work-agent-wecom --exec docker compose -f deploy/docker-compose.wecom-local.yml ps
+wsl -d Ubuntu-22.04 --cd /mnt/c/repos/aid-work-agent-wecom --exec docker compose -f deploy/docker-compose.wecom-local.yml stop
+```
+
+前端用现有Vite进程，工作目录`C:/repos/aid-work-agent-wecom/frontend`：
+
+```powershell
+$env:DEV_API_TARGET = 'http://127.0.0.1:18000'
+npm run dev -- --host 127.0.0.1 --port 13000 --strictPort
+```
+
+`DEV_API_TARGET`只覆盖开发代理，未设置时仍为原8000；没有改生产API地址或客户端协议。Web入口`http://127.0.0.1:13000/`，主API `http://127.0.0.1:18000`。真实探测：API `/health`与内部Runner API `/health`为200，Web SPA为HTML200，经Web访问未登录设备接口为401；Worker不监听HTTP，禁用其继承镜像的8000健康检查，按进程与真实DB连接记录验证，不能假报HTTP健康。PG与Redis不发布宿主端口；本地库`aid_wecom_local`含pgvector0.8.7，最终迁移水位`2026-10-29 13:46:35`，Runner/定时任务均0。
+
+Docker Hub/既有加速源在WSL daemon拉取时TLS超时，但Windows官方registry可访问；本次用一次性Temp helper从官方Hub取amd64 manifest `sha256:a97d77306ff47cc1d8add4d000cec2207da2e110746318df3137ce53c337ca30`，逐一核对16层压缩摘要与解压diff_id，导入本机后image config ID `sha256:f1447071e6c8449dcf4056aa0994c81d3566ce5ee232de36b04dc25696a116dd`一致。不是在产品中增加拉取代理、镜像管家或修改Docker全局设置；最终完整schema没有删掉向量部分。
+
+启动发现并修复三个本地配置接点：PG healthcheck限定TCP以避初始化socket误报；只读父代码挂载不能为新checkout创建嵌套卷挂载点，沿用原local读写模式；Worker不继承无关HTTP健康探测。主API首次缺模型配置而被已有视频模块导入拒绝，仅补本地真实模型配置，不扩改视频业务或伪造业务ready。
+
+测试设置偏差单列：主控首次用npm exec的prefix但工作目录仍为根目录，导致Vite alias缺失，改从frontend目录原入口重跑28项和build通过；补模型配置时共享env意外重建本项目PG，独立PG第一批连接中断作废，已停稳helper、拆分PG env并重新冷启三应用进程。只重跑受影响PG批；其随机`aid_test_*`残留由原隔离管理入口精确删除，未删其他库。后续PG ID已冻结，不能将此中断算为产品失败或计入通过数。
+
+后续真实业务验收顺序：本地测试租户/账号与main登录/模型现已补验；下一步在隔离Runtime测试配置中连接18000并安装现有0.2.1插件、完成本地配对；先只读校验会话与sender_platform，再由用户明确授权测试发送/恢复监听。Runtime配对、微信/外部企微真人样本及跨日监听仍未完成，不宣称完整售前链路通过。
+
+### W12本地账号与main补验（用户补充授权）
+
+用户提供本地登录凭据并允许使用内置main，故只在`aid_wecom_local`创建专用测试租户与tenant_admin，未复制agent2账号、智能体或数据库，也未写入真实Runtime配对。凭据经不回显输入传入临时验证进程，复用项目既有密码哈希；手机号、密码、令牌及密码hash不登记到文档或仓库。通过正常HTTP验证码和`/api/auth/unified-login`验证成功，没有改认证代码或使用万能凭证。
+
+专用测试租户建立后余额为0，接单被原`NO_CREDIT`机制拒绝；给该独立租户补1000本地测试积分后重试，未改收费或准入规则。唯一受理的短任务走`/api/chat/runners`，显式选择`main`，要求不调用工具仅回复固定连通性文字。真实流程queued→running→completed，约8.15秒；输出为“本地 main 链路正常。”，真实deepseek/deepseek-flash的一笔LLM receipt为observed且applied，结算8.4本地积分，local_tool_invocations为0。不是Mock模型或开发助手代答；此处不涉及企微消息。
+
+脱敏证据保留在本机Temp `wecom-w12-local-account-result.json`、`wecom-w12-main-smoke-result.json`、`wecom-w12-main-model-proof.json`；不保存登录令牌或明文密码。测试租户入口及租户代码已交给用户，账号使用本轮用户提供的凭据。仅本地fixture数据与实际API补验，无产品代码更改，原独测/CR源码冻结保持；没有再次触发部署、重跑不受影响测试、配对Runtime或恢复监听。
+
+### W12最终验证与保全记录
+
+独立TEST：14文件206项无DB，7文件53项完整真实PG（含vector），全部0失败/跳过；前者新断网只读容器经原`dev_test.sh`，后者经原`dev_test_isolated_db.py`在自有PG的loopback管理入口创建随机库。覆盖两个master水位补齐并保用量/积分、真实Worker/子树恢复、continuous可信接续、unknown与累计计费、归档分页及WeCom未知外发/入站恢复。中断批无效单列，不与重跑通过数累加；最终自有`aid_test_*`库0、连接0、运行中的临时pytest容器0。136目标文件加4安全入口共140个hash核对，聚合`0392906537a36eb3fc7006e1d2c6c49cb965b9f1cbfd2545d51b1704a3e9a002`。
+
+独测报告：本机Temp `wecom-w12-independent-test-3y05xbjl/FINAL-INDEPENDENT-TEST.json` SHA256 `088bafc7d1d6634ad906da6a1078458ad8e50c603688ffb28c3c9ad6a7e396d4`，同名MD `0ce10aae5cbed88ac8a81d94b5eca09d776de51163e6e965c51d45d806a7d422`。主控Web28、最终Vite改后build exit0、121合并Python AST及冷启动/HTTP/真实DB证据分别在Temp `wecom-w12-main-evidence.json`与`wecom-w12-local-startup.json`，不冒充登录态或完整实聊。
+
+最终CR PASS，无未解决P0/P1/P2；23个交汇/配置审查文件和独测140文件逐项一致。报告Temp `wecom-master-local-cr-mfdagbmm/review.json` SHA256 `7031986557de488fa720c65a83099aab0c022e51749001f657f0d30033c8a2b9`，MD `463be555402eca048acae690046fce09dff8cbc53ec6093793a74c27f13aac91`。只审本次合并接点及本地配置，不声称重审master全部无关功能或全仓测试通过。
+
+当前分支`feature/ask-user-question-card`仍HEAD `aa6885b4`，MERGE_HEAD `12b7827c`，冲突0；合并结果在index/worktree，未生成merge commit或推送。原42个未提交文件备份于本机Temp `wecom-master-local-20261029-9ds8mpa7`，其中40个clients发行源码/资产原字节均保留，文档仅本轮进度更新。两远程master分叉已登记，未把github独有通知修复混入origin基线。独立本地5服务和Vite保留运行，原8000 API容器ID/启动时间未变；无agent2或其他远程部署、真实Runtime配对/聊天/监听。后续停止仅按上文项目`stop`，不删卷或误停旧服务。
 
 ## W10 真机前综合收敛（2026-10-27）
 
@@ -56,6 +180,62 @@
 ### 验收范围
 
 以[设计§12.6](../design/wecom/wecom-cli-design.md#126-实施契约与有限验收)的V1～V6为业务验收清单。隔离测试可验证恢复、不重放、计费及有界读取；真实UI、发行安装、外部企微样本和跨日增长另列实机范围。暂时缺失的身份只影响该条，不增加永久平台门禁；确定unknown的外发不自动重发，其他目标不被冻结。
+
+## W11 Runtime与企微插件交付（2026-10-28）
+
+用户授权在wecom工作树生成最新Runtime安装器和wecom CLI插件，完成隔离验包、升级验证并交付安装文件；不部署agent2，不恢复监听。本轮不自动提交。源码基线`aa6885b4`，既有三工具/身份/恢复独立测试和CR结果复用，不重新开发产品业务。
+
+| 阶段 | 内容 | 状态 | 完成记录 |
+|------|------|------|---------|
+| W11.1 | 版本、旧包及信任基线 | ✅ 完成（2026-10-28） | 最终UI0.0.31/WeCom0.2.1；Host0.2.24/Core0.2.21/Native0.1.0，旧dev信任单列 |
+| W11.2 | 签名插件和Runtime构建 | ✅ 完成（2026-10-28） | 最终0.2.1/0.0.31构建及标准验包通过；含Crypto、缓存过滤及实际深目录启动修复 |
+| W11.3 | 隔离验包、库存和NSIS升级 | ✅ 完成（2026-10-28） | 最终真实NSIS30→31、身份/库存及WeCom20→21通过；332字符实际安装路径默认DB/MCP/PS OCR与EXE SMOKE通过 |
+| W11.4 | 独立审查、摘要与交付 | ✅ 完成（2026-10-28） | 最终源码/固定产物/安装说明CR通过，无遗留P0/P1/P2；交付目录含报告、SHA256与组合ZIP |
+
+沿用[当前打包手册](../ops/runtime-boss-release-guide.md)和[插件格式/资产规范](../../clients/runtime-plugin-packaging/README.md)，只将Provider换为wecom，不执行BOSS一键脚本或重打BOSS。本轮acceptance安装器仍是Windows NotSigned，插件有Ed25519发布者签名，不冒充production签名。最终UI0.0.31/WeCom0.2.1包含下述真实安装修复；Host0.2.24/Core0.2.21仅发行版本更新。`build-info.json`同时记录源码基线与本轮未提交的修复、版本和公开根变化。
+
+主控唯一处理修复、版本、构建、公开根登记与文档；独立TEST验证实际产物，独立CR只读检查源码/包与证据。初始ignored Python bytecode移入任务Temp，后改为复制阶段排除开发缓存；仅修改发行依赖和启动适配，不改聊天业务。原wecom lock的三处peer标记保留。
+
+验证分开登记：包验签/文件清单/搬迁Node和OCR；真实Host旧库存及合成配对保留；真实NSIS fixture旧安装器升级。基础doctor仅用标准验包器在Temp APPDATA做环境/进程只读检查，不带localdb、不扫密钥、不输入；readiness不是实际业务通过。独立NSIS使用`AIDWORK_RUNTIME_INSTALL_FIXTURE`的现有受限路径和HKCU子树，不动真实Runtime home/快捷方式，也不执行普通卸载器。
+
+
+### W11发行依赖修复（P1）
+
+独立TEST对首轮包内Python实际调用native解密，发现延迟导入的Crypto未随旧OCR依赖进入发行包；明文SQLite/OCR通过不能覆盖真实加密DB。原插件`7639f3de...71bc2`及原安装器`c3d73639...05afb`已撤回，归档在首批build/withheld-delivery，不再置于clients/release交付目录。
+
+最小修复只涉及原资产链：锁定与开发环境一致的pycryptodome3.23.0官方Windows x64 ABI3 wheel（PyPI官方SHA/URL已独立核对）并保LICENSE.rst；资产准备、企微签包、离线验包均使用嵌入Python执行AES-CBC已知向量/SQLite检查，避免复用旧OCR缓存带病出包。native解密算法、Runner、三工具schema均未改；独测最终仍须包内driver解独立生成的12KiB加密SQLite并比较完整行集。官方SelfTest含公开PEM向量，核对源wheel字节而不冒称本机秘密，也不为它新增拦截。
+
+未交付WeCom0.2/UI0.0.30保持版本，新输出/唯一签名key，历史20根保留追加第21根，随后缓存修复再追加第22根，未交付0.0.30完整snapshot随新候选更新，旧20根副本保留首批build。Hosttgz字节不变复用，安装器因嵌新根重新生成。最终NSIS使用第二份从真实0.0.29开始的全新fixture，不对已装首轮0.2候选强行同版本覆盖。
+
+### W11开发缓存修复（P2）
+
+Crypto修复候选`0965e6ba...3c62`已通过实际加密快照解密，但独立审查发现测试再次生成的drivers/py/__pycache__被原递归复制带入。该候选不交付；不再靠每次手动清缓存，改为现复制函数排除__pycache__/pyc/pyo，其余driver源字节/BOM不变。新增一项真实文件系统反证，打包定向9项通过，P2源码CR通过。最终候选使用新输出/唯一key及完整第22根重出，Runtime只因嵌入新根重新生成；既有Crypto正确性证据可复用，最终仍验证固定包字节和实际解密。
+
+### W11真实安装长路径修复
+
+真正装入fixture后解释器路径332字符，Node原spawn失败；仅namespace exe可启动但SQLite/Crypto原生库仍报路径过长。仅短EXE又不能覆盖cv2将别名realpath展开回长目录，故短目录/import通过不足以确认实际安装可用。
+
+最终窄修：一份bundled-only Python启动适配复用到TS DB及两处PS OCR。namespace起步可加载标准ctypes，DLL目录句柄保留，按系统现成短名表示sys.path；原realpath完整调用后仅对嵌入runtimeRoot内做兼容表示，driver/业务文件与严格/bytes语义保持。PS既有Win32类只增加GetShortPathNameW的只读查询，解决.Net NULL applicationName的EXE长度限制。无Crypto私有patch、无系统策略变更、无目录/缓存搬迁、新工具或业务门禁；未验证禁用短名的卷配置。
+
+预签独立实证：真实默认TS bridge在已装deep资产解密12KiB/6行成功（不注入spawn）；真实新Resolve查得现成alias并samefile确认；真实PS函数与共用bootstrap识别合成HELLO/123。runtimeRoot外realpath/Path.resolve、argv/stdin、Crypto懒加载均通过；新增1个真实协议测试，相关Node25项及包装9项通过，源码CR通过。CLI修复升0.2.1/UI0.0.31，Host/Core不变，已装0.2.0/0.0.30 fixture做正常更高版本升级，既有0.0.29→0.0.30证据另列，不改semver保护。
+
+### W11已核实的升级边界
+
+既有clean-generation安装只迁移可复用身份和验签插件，不迁移journal/outbox，旧home通常会清理。故本次不能宣称有未决本地操作的无缝热升级；说明要求正常退出并先收尾待回传，不增程序门禁，也不把same-home Host恢复误写成NSIS跨代际保留。独立TEST做实际反证并分别登记。
+
+找到的旧WeCom0.1实验档案与产品19根复用了同名key_id但公钥不同，产品正确拒绝；不替换历史公钥或把旧dev根加入客户安装器。真实发行库存迁移复用旧0.0.29组合包的BOSS0.3.27；最终WeCom0.2.1使用第23根，原22根完整保留，0.0.30历史快照不再改写。旧WeCom0.1→新包在其自带旧根加本次唯一新根的独立测试trust验证，只说明机械升级，不作为产品历史信任兼容。
+
+### W11最终交付与验证结论
+
+最终目录：`clients/release/AID-Work-Runtime-0.0.31-WeCom-0.2.1-20261028-111140/`，同名ZIP和`.sha256`旁置。安装器127004664字节、SHA256 `9ce7ab500e7e130b48a319f453e0047b4b3603fa34f2b426f9b8d72e21aa829c`；插件119178601字节、SHA256 `9718121713fcb34a7e080a2175755ae312fd14a44fef39583c89ea50ecf1773d`。只交付本版，前三候选留在build下WITHHELD，不混用其报告。基线aa6885b4，本轮发行修复、版本/公开根及文档仍未提交；原lock三peer标记保留。
+
+独立TEST冻结结论PASS_WITH_DISCLOSED_UPGRADE_BOUNDARIES：旧0.0.29→候选0.0.30与最终0.0.30→0.0.31实际NSIS分开登记；实际新ASAR经loopback核验合成身份/DPAPI及已发行BOSS库存，WeCom0.2.0→0.2.1按正常更高版本升级。迁移测试仅在NSIS已完成闲置核验后将stopLegacy替换为noop，不冒称真实云端部署。最终安装的332字符解释器路径、默认Node桥独立AES密文/SQLite六行、三个平台结果、manifest入口MCP三业务schema、包内真实PS OCR和安装EXE隔离SMOKE均通过，MCP业务调用与真实企微IO为0。标准doctor在非交互环境readiness=false单列，不充当业务ready。相关包装9项、Runtime包装/信任20项、CLI Node25项、Python协议1项按批登记，不累加重复验证。
+
+独测JSON SHA256 `9b3340013b79b7d7d2d5511d534d947527f7240a7030d40bcc81f3ec9b3b09f5`；MD `d2af79cf16fc9e4195b18d164bbbeda59d865ebb6ec0f57a12839e9a847a3d6a`。最终独立CR为PASS，无未解决P0/P1/P2；包内7471清单项/90源文件、Runtime3850输入/41Host源、公开根及29个本轮源码/元数据hash均核对。交付含脱敏独测报告、最终插件/Runtime/交付CR与安装说明；不附原始合成凭据、消息库或日志。
+
+隔离偏差如实保留：首轮MCP父logger漏设home可能向默认Runtime日志追加少量provider元数据，未读真实配对或执行业务/云请求，之后父子home严格隔离复验，真实日志不清理；末轮MCP测试误用导出模块入口，仅修测试入口按实际manifest补验。第一次清理专用Temp/HKCU fixture被自动审批以`blocked by policy`拒绝，未重试或换工具绕过；两份合成fixture保留，最终自有测试进程0。不得称全程无设置偏差或清理成功。
+
+未验边界：真实UI发送、混合群外部企微真人类型、Web→配置智能体→Runner业务链路、HTTP ACK补投、多天运行与禁用短名的卷配置。用户明确部署/监听前不启动这些动作；升级前先收尾任务及待回传，按安装说明退出旧Runtime、运行安装器，再导入插件ZIP。
 
 ## W6 配置智能体完整链路（2026-10-26）
 
@@ -355,3 +535,66 @@ proposal5已通过窄修独测/CR后精确应用，聚合`a19be208eff8da4902e72d
 主控本次检查：CLI build通过；定向Node/PS/群查询测试11通过、0失败、0跳过（无真实UI发送）；Web build及产物检查通过；62个变更Python文件语法编译通过；agent2脚本bash语法检查通过；待应用补丁git apply --check通过。没有为此次提交重启测试数据库或真实服务，不声称重新运行全部历史测试或完成正式集成验收。
 
 暂存后范围核验：相对既有合并基线的123条新增/更新路径与本任务明确清单完全一致。默认git diff --cached --check唯一提示是从master原样合入的济南部署文档EOF空行，未顺手修改；本任务范围无新增空白错误。仅CLI package-lock三处peer生成噪声留在工作区，未暂存。
+
+
+### W14本地Web最终验收（2026-10-29 15:31，北京时间）
+
+用户自行登录后指出原ask_user卡片选项导致白屏。实际定位为sr-only输入焦点的包含块错误，已按[ask实施计划§9](plan-ask-user-interactive-question.md#9-选项焦点滚动修复2026-10-29)窄修并独立验证；与工具装配/Runner权限无关。随后主控在新会话发出自然语言有界只读请求，不指定工具名，要求简述实际企微/BOSS能力并只读取3条。MAIN正确陈述两类能力并选择wecom_read_sessions，未执行任何BOSS操作。
+
+Runner `runner_3489164b16b04f7f9612fc24466f68d1` completed；唯一invocation `c5914698-70c7-42ff-b3b6-6067e448a962` succeeded/OK，channel=local-db、navigated=false，3会话/3消息、失败0，sender_platform=wecom2/unknown1/wechat0。任务总耗时23.744746秒，包含模型两次推理与本机调用，不是纯CLI耗时。没有正文或完整联系人标识写入本文。scheduled_tasks仍0，原会话仍6 completed/1 waiting，卡片未提交/忽略。
+
+证据本机Temp `wecom-w14-live-read-metadata.json`、`wecom-w14-web-read-success.jpg`。网页已返回原待答会话，所有临时选项草稿随卡片重新挂载清空，留给用户自行作答。更新取代前述“等待用户登录”的当时交接状态。W14独测247及CR对应源码hash未变化，ask局部修复另有48项独测/CR和Web完整构建；不机械重跑前一批。无提交、推送、agent2部署、真实发送或恢复监听；多天长期运行与真实微信来源样本不在本次有界读取验收结论内。
+
+
+### W14.5 服务端单独升级的旧端兼容复核（2026-10-29）
+
+用户指出仅发布后台而不升级客户机是否会隐藏原BOSS工具。静态查验确认旧Runtime的根provider_id=ai.aidwork.boss-recruiting仍受现有get_provider_keys_for_device支持，历史bdcd1233前的producer也已报providers/manifests/旧provider_id；不要求最新客户端。本轮native工具目录/版本及Device wire未变。
+
+但W14初版把设备可用性投影应用到显式allowed工具，缺设备能力记录/当前无对应provider时会把原本已配置的工具隐藏；boss_send_to还有不依赖设备的话术读取分支，这不是新增自动装配应施加的限制。此前247独测/CR未覆盖“显式配置仍保持旧可见性”，不以已通过的现代Runtime真机样本证明全部旧端。
+
+收窄方案：ToolCatalog接收已解析配置的allowed（含既有读别名映射），与设备自动发现的候选并集后统一经过原registry和业务目录投影；excluded仍已在Assembly移除，不可能复活。main/继承自动新增项继续按设备能力显示；显式旧工具保留可见，执行仍由原设备/权限/离线/不支持错误说明实际状态，不新增批准或执行绕过。每次执行用自身config，无全局能力缓存，不改冻结调用/指纹/设备wire。主控唯一修改两处运行时接线和回归，独立TEST及CR只读；不提交/部署/监听。
+
+| 阶段 | 内容 | 状态 | 完成记录 |
+|------|------|------|---------|
+| W14.5 | 旧端上报与显式配置可见性兼容 | ✅ 完成（2026-10-29） | 196个唯一独测通过，CR无P0/P1/P2；原生协议不变，未做旧端二进制真机验收 |
+
+
+W14.5实施补充：真实招聘配置链路回归又暴露轻量`manifest.py`漏掉早已存在于class/catalog/SUBAGENT配置的boss_lookup_candidates与boss_greet_selected；补入两名称使显式配置正确注册。没有改变Runtime/MCP/native claim工具清单。首次用例失败69通过/1失败正是该漏项，最终相关7文件自测87通过。测试只隔离不相关技能目录初始化，真实profile加载、Assembly和RuntimeExecution仍使用生产接线，避免用手工拼装ToolCatalog掩盖接线漏传。
+
+主控AST逐项比较W14前五个Provider的tools/provider_id/min_provider_version/execution_target，均未改；证据Temp `wecom-w14-compat-static-proof.json`。本次尚无旧客户端二进制真机执行，不以静态/协议回归声称任意历史版本都已验证。
+
+
+W14.5最终验证：主控相关7文件87通过；独立TEST初批195通过/1过期测试计数失败，确认W14前后proxy实现均35项且顺序未变后，仅把test_proxy_tool中的旧34断言/注释校准为35（wecom9）。独立补跑该文件28通过，按JUnit classname::name覆盖去重后最终196个唯一用例全部通过，0失败/错误/跳过，不把两个重叠批次相加。独立新增5项实际验证无设备时ToolExecutor可执行boss_send_to纯云话术分支且不选设备/不建外发、工具可见仍要求可信身份、inherit不误认显式配置、别名排除不复活写工具、轻量名称清单完整。此前独立7项恢复/隔离补充也重验通过。
+
+独测证据Temp `wecom-w14-compat-test-kzykpvgp/FINAL-INDEPENDENT-TEST.json`（SHA256 `95f3bd29a86f907a5b51b69aae3c292423729ed334c9da8fdb0443af51c6866b`），复审证据`wecom-w145-independent-cr-_xplqww7/review.json`及review.md，无P0/P1/P2。主控最终复核4本轮源/测及7上下文hash一致；新增旧计数修正不改变产品源码。两端协议/原生tool名单未改，现有标准旧provider_id无需新客户端可被识别；不把服务端协议/配置回归冒充所有历史旧Runtime二进制真机组合验收。
+
+本轮未安装/升级任何客户机、重启本地业务服务、提交、推送、部署或恢复监听。W14的现代Runtime Web读取证据与W14.5服务端旧配置/旧上报格式独立验证分开登记；实际发布仍需用户明确部署授权。
+
+
+### W14.6 Runtime 0.0.29＋BOSS 0.3.27隔离兼容验收（2026-10-29）
+
+用户要求仅验证这组旧包，不测试更早版本；禁止影响当前客户端、提交、部署或恢复监听。历史归档位于主工作树clients/release，只读解压到本机Temp，不运行NSIS安装器、不安装或重配真实设备。归档SHA256 `f1080050181fb050ed4aafee0b9fee268c6c4386122fc39ac0f50b934cf9c6d7`与登记一致。验收运行原包自带Node和编译Runtime core、签名BOSS MCP产物，不用当前源码重编旧包。
+
+隔离边界：独立Runtime home/APPDATA/LOCALAPPDATA、命名锁资源键、空CDP端口、仅虚构租户/账号的临时PostgreSQL与HTTP测试服务；不复用当前配对凭据/客户端目录/18000或8000业务服务。旧包只读工具无真实BOSS账号/浏览器，不执行写工具；未知外发仅用虚构冻结记录证明不重放。当前客户端PID/启动时间及配置文件hash前后核对。测试容器/进程为有界验收夹具，不复用业务卷；临时PG使用Docker自动匿名卷，业务测试数据库及自有容器退出时回收，不对无法证实归属的卷做删除，不宣称匿名卷已全部清理；不是发布现有环境。
+
+| 阶段 | 内容 | 状态 | 完成记录 |
+|------|------|------|---------|
+| W14.6a | 历史包及当前客户端基线 | ✅ 完成（2026-10-29） | 仅0.0.29/0.3.27，归档hash匹配，安装器只读提取，当前3个状态文件保护基线已存Temp |
+| W14.6b | 真实旧包能力/MCP/新服务端接线 | ✅ 完成（2026-10-29） | 原包Core0.2.20/Node22.23.3/MCP0.3.27；25项MCP、24项BOSS业务工具可见 |
+| W14.6c | 中断/ACK丢失/原调用恢复 | ✅ 完成（2026-10-29） | API重启/租约过期后同原调用恢复，attempt1→2 completed；虚构成功回执0.50只结算一次，unknown零执行 |
+| W14.6d | 隔离清理和证据复核 | ✅ 完成（2026-10-29） | 旧包7547文件、当前3状态文件/6进程不变；自有进程/容器退出，独立证据复核通过 |
+
+
+W14.6最终结论：仅运行用户指定的Runtime UI0.0.29（内置Core0.2.20、Node v22.23.3）与BOSS0.3.27原包产物。插件签名使用随包验收根核验通过，归档SHA与登记一致，7547个提取文件前后hash一致；没有用新源码重编旧包或运行安装器。
+
+最终1个组合场景PASS，0失败/错误/跳过，JUnit记录27.160秒。真实旧ApiClient/ProviderManager/runInvocation/ResultOutbox与当前Device路由和临时PG接线：MCP列出25工具，MAIN自动显示24个BOSS业务工具，真实招聘配置在缺cap记录时仍保留原工具。MCP只读进入受控无业务浏览器环境，实际返回CANCELLED/effect=none；这不是BOSS页面读取成功。结果落库后故意丢ACK，重启夹具API进程，旧core新进程仅补原/result、零Provider调用。
+
+原工具绑定后、进展尚未保存的冻结checkpoint（ToolFact.invocation_id可为空）通过原phase和结果id恢复；真实RunnerAuthorizer、RecoveryCoordinator、RecoveryRepository、AgentEngine、ToolDispatcher及Finalizer沿同runner/同invocation从attempt1到2，最终completed，没有重建调用或重复结算。checkpoint为夹具构造，租约由夹具设过期，恢复后的终答使用确定性模型夹具；未执行完整Worker进程发版。另用明确虚构成功回执经旧outbox/API验证0.50积分只结算一次；虚构旧unknown写回执仍unknown且零Provider调用，未执行发送。
+
+隔离复核：当前6个客户端进程的PID/路径/启动时间一致，3个客户端状态文件hash一致，测试旧Node剩余进程0，自有PG/API容器及测试数据库已退出/删除，原本地服务保留。匿名卷未做无归属删除，不宣称全部匿名卷清理；隔离文件保留证据。本轮未修改产品源码、升级客户机、重启当前服务、提交/推送/部署或恢复监听。前期夹具接口及生产前置假设修正的失败产物保留attempt-*目录，最终组合场景对应最终脚本，不把早期夹具错误当成产品缺陷或隐藏最终失败。
+
+证据根为本机Temp `legacy-runtime-compat-20261029-0bs4ieil`：FINAL-COMPATIBILITY-REPORT.json、old-artifact-inspection.json、combined-result.json、driver-summary.json、pytest.xml及独立复核independent-evidence-review/review.md/json。独立复核通过，无新P0/P1/P2，明确不把真实MCP受控取消、虚构成功/unknown回执扩大成真实BOSS业务或完整Worker发布验收。
+
+### W14 提交范围核对（2026-10-29）
+
+用户授权提交并推送通用工具装配、旧端兼容及提问卡片修复。一并结束此前已验证的`12b7827c` master合并，纳入必要的持续/定时Runner合并回归；W11发行包、打包源码及本地容器配置保留在工作区，不随本次提交。提交前fetch发现master已前进至`20f13c2ec`，本次保持已通过独测/CR/Web验证的组合，不将新的master变更混入验收结果。兼容源码13项与最终独测hash一致，卡片源码与独立48项验证hash一致；本次授权不包括部署或恢复监听。

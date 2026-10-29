@@ -30,7 +30,7 @@ from src.core.session_queue import session_queue
 from src.core.agent_events import extract_downloadable_file
 from src.models.message import UnifiedMessage
 from src.db.database import init_database, init_postgres_pool, close_postgres_pool
-from src.api import auth, session as session_api, customer, scheduled_task, email_settings
+from src.api import auth, session as session_api, email_settings
 from src.api import monitor as monitor_api
 from src.api import social_media as social_media_api
 from src.api import admin_subagent, subagent, subagent_extra, travel_quote
@@ -1798,12 +1798,15 @@ from src.api.message_share import router as message_share_router
 app.include_router(message_share_router)
 from src.api.agent_runner_web import router as agent_runner_web_router
 app.include_router(agent_runner_web_router)
+# 定时任务管理 API（Runner 化 v2，Phase 4）
+from src.api.scheduled_task import router as scheduled_task_router
+app.include_router(scheduled_task_router)
 app.include_router(channels_api.router)
-app.include_router(customer.router)
 app.include_router(customer_followup.router)
+from src.api.ai_lead_gen import router as ai_lead_gen_router
+app.include_router(ai_lead_gen_router)
 app.include_router(complaint_handling.router)
 app.include_router(after_sales.router)
-app.include_router(scheduled_task.router)
 app.include_router(email_settings.router)
 app.include_router(knowledge_router)
 from src.api.knowledge_tdoc import router as knowledge_tdoc_router

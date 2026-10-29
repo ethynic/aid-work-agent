@@ -93,7 +93,9 @@ class BrowserWebAuth:
         cursor.execute('SELECT * FROM agent_runners WHERE runner_id=%s', (run['runner_id'],))
         raw = cursor.fetchone()
         row = decoded(raw) if raw else None
-        if (not row or row['session_kind'] != 'web' or row['source'] != 'chat'
+        # 浏览器人工辅助授权对 scheduled 开放（设计 §5.3 外部条件等待保留
+        # 既有生命周期），runner/会话/属主归属检查不变
+        if (not row or row['session_kind'] != 'web' or row['source'] not in ('chat', 'scheduled')
                 or row['status'] in {'completed','failed','cancelled','iteration_limit'}
                 or any(row[key] != run[key] for key in ('tenant_id','user_id','session_id'))):
             raise RunnerError('BROWSER_RUN_OWNER_MISMATCH', 403)
@@ -201,7 +203,7 @@ class BrowserWebAuth:
         cursor.execute('SELECT * FROM agent_runners WHERE runner_id=%s FOR UPDATE',(run['runner_id'],))
         raw=cursor.fetchone()
         row=decoded(raw) if raw else None
-        if (not row or row['session_kind']!='web' or row['source']!='chat'
+        if (not row or row['session_kind']!='web' or row['source'] not in ('chat','scheduled')
                 or any(row[key]!=run[key] for key in ('tenant_id','user_id','session_id'))):
             raise RunnerError('BROWSER_RUN_OWNER_MISMATCH',403)
         keys=('runner_id','run_id','runner_execution_id','runner_tool_call_id',

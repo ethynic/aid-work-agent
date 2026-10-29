@@ -53,6 +53,12 @@ export interface ChatSession {
   updated_at: string
   /** 会话中存在等待用户回答的结构化提问（Phase 2 待答徽标） */
   waiting_input?: boolean
+  /** 列表行（SELECT *）携带的会话元数据；任务专属会话标记 metadata.scheduled_task（设计 §6） */
+  metadata?: Record<string, any>
+  /** 详情端点（GET /api/sessions/{id}）透出的任务专属会话标记：task_id | null。
+   * 任务会话经旧聊天链接/通知进入时的权威路由依据（Phase 5 二轮评审第 8 项）；
+   * 列表行不携带该字段（仍读 metadata）。 */
+  scheduled_task?: string | null
 }
 
 export interface ChatMessageRecord {
@@ -173,14 +179,17 @@ export async function deleteSession(sessionId: string): Promise<void> {
 
 /**
  * 获取会话消息
+ * 默认读取最近100条；指定Runner历史页时携带before_id继续向前读取。
  */
 export interface RunnerHistoryPageOptions { runner_id: string; before_id: string }
 export interface SessionMessagePage { messages: ChatMessageRecord[]; failed_message_ui?: FailedMessageUI;
   has_more?: boolean; next_cursor?: string }
 
-export async function getSessionMessages(sessionId: string, page?: RunnerHistoryPageOptions): Promise<SessionMessagePage> {
-  const query = page ? '?' + new URLSearchParams({ ...page, limit: '100' }) : ''
-  const res = await fetch(`${API_BASE}/${sessionId}/messages${query}`, {
+export async function getSessionMessages(sessionId: string, limitOrPage: number | RunnerHistoryPageOptions = 100, runnerId?: string): Promise<SessionMessagePage> {
+  const page = typeof limitOrPage === 'number' ? undefined : limitOrPage
+  const params = new URLSearchParams(page ? { ...page, limit: '100' } : { limit: String(limitOrPage) })
+  if (runnerId) params.set('runner_id', runnerId)
+  const res = await fetch(`${API_BASE}/${sessionId}/messages?${params}`, {
     headers: { ...getAuthHeader() }
   })
   if (!res.ok) {

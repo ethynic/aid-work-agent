@@ -860,3 +860,67 @@ CREATE TABLE IF NOT EXISTS bs_browser_resume_jobs (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_browser_runs_run_id ON bs_browser_runs(run_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_browser_assistance_id ON bs_browser_assistance_requests(assistance_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_browser_resume_job_id ON bs_browser_resume_jobs(job_id);
+
+-- ============================================================================
+-- 2026-10-28 定时任务 Runner 化重建（Phase 1 清场，设计 §9）
+-- 旧实现整体下线（零存量用户，无数据迁移）：DROP 旧三表，重建 scheduled_tasks。
+-- scheduled_task_logs / scheduled_task_deliveries 不再重建——执行历史 =
+-- agent_runners + 任务会话消息（chat_sessions.metadata.scheduled_task 标记）。
+-- 与 deploy/init-postgres.sql 定时任务表条目保持一致。
+-- ============================================================================
+DROP TABLE IF EXISTS scheduled_task_deliveries;
+DROP TABLE IF EXISTS scheduled_task_logs;
+DROP TABLE IF EXISTS scheduled_tasks;
+
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+    id SERIAL PRIMARY KEY,
+    task_id TEXT UNIQUE NOT NULL,              -- sched_ 前缀
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    task_prompt TEXT NOT NULL,                 -- 自包含任务定义
+    attachments JSONB DEFAULT '[]',            -- 受权资源引用，创建时固化
+    profile_id TEXT NOT NULL DEFAULT 'main',
+    instance_id TEXT,
+    schedule_type TEXT NOT NULL,               -- daily|weekly|monthly|interval|once
+    cron_expression TEXT,
+    interval_seconds INTEGER,
+    run_at TIMESTAMP,                          -- once 专用
+    session_id TEXT UNIQUE NOT NULL,           -- 任务专属会话（存储容器）
+    notification_target_id TEXT,               -- 可选：notification_targets 引用
+    status TEXT NOT NULL DEFAULT 'active',     -- active|paused|completed|expired
+    pause_reason TEXT,                         -- credit_blocked|profile_forbidden|tenant_unavailable|definition_invalid|submit_conflict|submit_rejected|interrupted
+    next_due_at TIMESTAMP,                     -- 周期依据
+    pending_occurrence_key TEXT,               -- 待提交触发标识（稳定）
+    pending_trigger TEXT,                      -- scheduled|manual
+    pending_retry_at TIMESTAMP,                -- 提交重试时间
+    pending_snapshot JSONB,                    -- 本次执行不可变提交快照（text/attachments/profile_id/instance_id/prompt_augmentations）
+    recovery_retry_at TIMESTAMP,               -- 恢复驱动退避（调度侧专用，NULL=立即可试；不复用 runner.updated_at）
+    recovery_reset_at TIMESTAMPTZ,
+    last_run_at TIMESTAMP,
+    last_status TEXT,
+    total_runs INTEGER DEFAULT 0,
+    success_count INTEGER DEFAULT 0,
+    fail_count INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due ON scheduled_tasks(status, next_due_at);
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_pending ON scheduled_tasks(pending_retry_at) WHERE pending_occurrence_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_owner ON scheduled_tasks(tenant_id, user_id, status);
+
+-- 2026-10-28 定时任务 Runner 化 Phase 3：task.paused / task.needs_action 通知进入
+-- task.* 默认事件集合（存量偏好行不回写，读取侧 _effective_event_types 兼容扩展；
+-- 此处仅对齐新行默认值）
+ALTER TABLE notification_preferences
+    ALTER COLUMN event_types SET DEFAULT '["task.completed","task.failed","task.waiting_input","task.paused","task.needs_action"]';
+
+-- 2026-10-28 定时任务 Phase 3 复核：恢复驱动退避列（调度侧专用，语义独立于 runner.updated_at）
+ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS recovery_retry_at TIMESTAMP;
+
+-- 2026-10-28 定时任务 Phase 4 评审：恢复回合重置列（用户 resume 开启新一轮有界恢复尝试）
+ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS recovery_reset_at TIMESTAMPTZ;
+
+-- 2026-10-29 定时任务 Runner 化：agent_runners.actor_kind 放宽允许 'system'（scheduled 调度身份）
+ALTER TABLE agent_runners DROP CONSTRAINT IF EXISTS agent_runners_actor_kind_check;
+ALTER TABLE agent_runners ADD CONSTRAINT agent_runners_actor_kind_check CHECK (actor_kind IN ('user', 'channel', 'system'));

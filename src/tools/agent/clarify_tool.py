@@ -25,6 +25,8 @@ class ClarifyTool(BaseTool):
 
     # 控制工具：不进普通 registry，由 ToolControlSet 构造。
     catalog = False
+    # 提问类控制工具：scheduled 非交互执行（根+子）在装配层滤除（设计 §5.3）
+    interactive_only = True
     name = "clarify"
     description = "当信息缺失时向用户询问澄清"
     usage_guide = (

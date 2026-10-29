@@ -425,91 +425,43 @@ CREATE TABLE IF NOT EXISTS tokens (
 CREATE INDEX IF NOT EXISTS idx_tokens_token ON tokens(token);
 CREATE INDEX IF NOT EXISTS idx_tokens_user ON tokens(user_id, expires_at);
 
--- 定时任务表
--- tenant_id：任务属主租户。''=公共用户（无租户上下文）或遗留未解析行；
--- 租户视图按 tenant_id 过滤时 '' 行 fail-closed 不可见。与 deploy/db_update.sql 对应增量节一致。
+-- 定时任务表（v2 Runner 化重建，见 docs/system/scheduled-task-runner-refactor-design.md §9）
 CREATE TABLE IF NOT EXISTS scheduled_tasks (
     id SERIAL PRIMARY KEY,
-    task_id TEXT UNIQUE NOT NULL,
-    tenant_id TEXT NOT NULL DEFAULT '',
-    user_id TEXT,
-    name TEXT,
-    description TEXT,
-    task_prompt TEXT,
-    schedule_type TEXT,
+    task_id TEXT UNIQUE NOT NULL,              -- sched_ 前缀
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    task_prompt TEXT NOT NULL,                 -- 自包含任务定义
+    attachments JSONB DEFAULT '[]',            -- 受权资源引用，创建时固化
+    profile_id TEXT NOT NULL DEFAULT 'main',
+    instance_id TEXT,
+    schedule_type TEXT NOT NULL,               -- daily|weekly|monthly|interval|once
     cron_expression TEXT,
     interval_seconds INTEGER,
-    session_id TEXT,
-    status TEXT DEFAULT 'active',
-    max_retries INTEGER DEFAULT 3,
-    retry_count INTEGER DEFAULT 0,
+    run_at TIMESTAMP,                          -- once 专用
+    session_id TEXT UNIQUE NOT NULL,           -- 任务专属会话（存储容器）
+    notification_target_id TEXT,               -- 可选：notification_targets 引用
+    status TEXT NOT NULL DEFAULT 'active',     -- active|paused|completed|expired
+    pause_reason TEXT,                         -- credit_blocked|profile_forbidden|tenant_unavailable|definition_invalid|submit_conflict|submit_rejected|interrupted
+    next_due_at TIMESTAMP,                     -- 周期依据
+    pending_occurrence_key TEXT,               -- 待提交触发标识（稳定）
+    pending_trigger TEXT,                      -- scheduled|manual
+    pending_retry_at TIMESTAMP,                -- 提交重试时间
+    pending_snapshot JSONB,                    -- 本次执行不可变提交快照（text/attachments/profile_id/instance_id/prompt_augmentations）
+    recovery_retry_at TIMESTAMP,               -- 恢复驱动退避（调度侧专用，NULL=立即可试；不复用 runner.updated_at）
+    recovery_reset_at TIMESTAMPTZ,             -- 恢复回合重置（用户 resume 时置 now；rejected 计数只统计其后——恢复耗尽任务的新一轮有界尝试）
     last_run_at TIMESTAMP,
-    next_run_at TIMESTAMP,
+    last_status TEXT,
     total_runs INTEGER DEFAULT 0,
     success_count INTEGER DEFAULT 0,
     fail_count INTEGER DEFAULT 0,
-    -- 手动触发标记：API/工具写入 NOW()，background reconcile 扫到后立即执行一次并清空
-    manual_trigger_at TIMESTAMP NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-
-CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_user ON scheduled_tasks(user_id, status, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_run_at, status);
-CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_tenant ON scheduled_tasks(tenant_id, status);
-
--- 定时任务执行日志表
--- tenant_id：随任务属主租户落库（''=公共用户或遗留未回填行），按任务链回填
-CREATE TABLE IF NOT EXISTS scheduled_task_logs (
-    id SERIAL PRIMARY KEY,
-    log_id TEXT UNIQUE NOT NULL,
-    tenant_id TEXT NOT NULL DEFAULT '',
-    task_id TEXT,
-    user_id TEXT,
-    session_id TEXT,
-    status TEXT,
-    trigger_type TEXT,
-    result_summary TEXT,
-    result_detail TEXT,
-    error_message TEXT,
-    error_trace TEXT,
-    duration_ms INTEGER DEFAULT 0,
-    token_usage INTEGER DEFAULT 0,
-    started_at TIMESTAMP,
-    completed_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_task ON scheduled_task_logs(task_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_user ON scheduled_task_logs(user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_tenant ON scheduled_task_logs(tenant_id, created_at DESC);
-
--- 定时任务待补投记录表
--- 渠道场景（wecom_kf）创建的定时任务执行成功后，若直投失败/无直投机会，
--- 记 pending 等客户下次来消息时补投；status: pending/sent/expired
-CREATE TABLE IF NOT EXISTS scheduled_task_deliveries (
-    id SERIAL PRIMARY KEY,
-    delivery_id TEXT UNIQUE NOT NULL,
-    tenant_id TEXT NOT NULL DEFAULT '',
-    task_id TEXT,
-    user_id TEXT,
-    channel_type TEXT,
-    channel_chat_id TEXT,
-    channel_user_id TEXT,
-    session_id TEXT,
-    content TEXT,
-    status TEXT DEFAULT 'pending',
-    attempts INTEGER DEFAULT 0,
-    last_error TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    delivered_at TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_scheduled_task_deliveries_target
-    ON scheduled_task_deliveries(tenant_id, channel_type, channel_chat_id, channel_user_id, status);
-CREATE INDEX IF NOT EXISTS idx_scheduled_task_deliveries_task
-    ON scheduled_task_deliveries(task_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due ON scheduled_tasks(status, next_due_at);
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_pending ON scheduled_tasks(pending_retry_at) WHERE pending_occurrence_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_owner ON scheduled_tasks(tenant_id, user_id, status);
 
 -- ============== 知识库表 ==============
 
@@ -2212,8 +2164,9 @@ CREATE TABLE IF NOT EXISTS bs_lead_capture_leads (
     customer_user_id TEXT,                 -- 微信侧 external_userid（老客户识别）
     channel_chat_id TEXT,                  -- open_kfid（来源客服账号）
     kf_account_name TEXT,                  -- 客服账号名快照
-    contact_method TEXT,                   -- phone | qr
+    contact_method TEXT,                   -- 主要联系方式类型：phone | landline | email（qr 为历史值，不再新写）
     phone TEXT,                            -- 手机号（加密存储）
+    other_contact JSONB,                   -- 其他联系方式（固定电话/邮箱，逐条加密：[{"type","value"}]）
     contact_name TEXT,                     -- 客户姓名（对话中抽取，可选）
     demand_summary TEXT,                   -- 需求摘要（对话中抽取，可选）
     source TEXT DEFAULT 'lead_capture',    -- 固定来源标识
@@ -3143,7 +3096,7 @@ CREATE TABLE IF NOT EXISTS agent_runners (
     scope_key TEXT NOT NULL,
     session_kind TEXT NOT NULL CHECK (session_kind IN ('web','channel')),
     session_id TEXT NOT NULL,
-    actor_kind TEXT NOT NULL CHECK (actor_kind IN ('user','channel')),
+    actor_kind TEXT NOT NULL CHECK (actor_kind IN ('user', 'channel', 'system')),
     actor_id TEXT NOT NULL,
     user_id TEXT,
     service_id TEXT NOT NULL,
@@ -5536,7 +5489,7 @@ CREATE TABLE IF NOT EXISTS notification_preferences (
     channel TEXT,
     provider TEXT,
     enabled BOOLEAN DEFAULT FALSE,
-    event_types JSONB DEFAULT '["task.completed","task.failed","task.waiting_input"]',
+    event_types JSONB DEFAULT '["task.completed","task.failed","task.waiting_input","task.paused","task.needs_action"]',
     enabled_since TIMESTAMPTZ,
     updated_at TIMESTAMPTZ DEFAULT clock_timestamp(),
     PRIMARY KEY(scope_key,recipient_user_id,category,channel,provider),
@@ -5826,6 +5779,8 @@ CREATE TABLE IF NOT EXISTS bs_ai_lead_gen_replies (
     intent TEXT,
     intent_summary TEXT,
     notified BOOLEAN DEFAULT FALSE,
+    message_id TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_bs_ailg_replies_campaign ON bs_ai_lead_gen_replies(campaign_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_bs_ailg_replies_tenant_message ON bs_ai_lead_gen_replies(tenant_id, message_id) WHERE message_id IS NOT NULL;

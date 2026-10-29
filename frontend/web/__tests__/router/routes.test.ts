@@ -81,7 +81,7 @@ describe('entry route responsibilities', () => {
         "chat/:subagent",
         "all-sessions",
         "behavior-logs",
-        "scheduled-tasks",
+        "tasks/:task_id",
         "token-usage",
         "recharge-records",
         "reply-styles",
@@ -94,15 +94,23 @@ describe('entry route responsibilities', () => {
         "assets",
         "videos",
         "prompts",
-        "trade-specialist",
         "travel-consultant",
         "recruiting-operator",
         "customer-followup",
         "complaint",
         "after-sales",
         "weixin-marketing",
+        "ai-lead-gen",
       ]
     `)
+  })
+
+  it('resolves the scheduled task view route for tenant (Runner 化 Phase 5，设计 §6)', () => {
+    // 任务计划分组的任务项 / 通知跳转 / 旧聊天链接重定向统一进入任务视图
+    const router = createRouter({ history: createMemoryHistory(), routes: agentRoutes })
+    const resolved = router.resolve('/t/acme/tasks/sched_abc123')
+    expect(resolved.name).toBe('tenant-scheduled-task-view')
+    expect(resolved.params).toEqual({ tenant_id: 'acme', task_id: 'sched_abc123' })
   })
 
   it('keeps weixin marketing workbench list and routed run detail pages for tenant', () => {
@@ -133,6 +141,30 @@ describe('entry route responsibilities', () => {
     expect(router.resolve('/t/acme/weixin-marketing/event-sources').name).toBe(
       'tenant-weixin-marketing-event-sources',
     )
+  })
+
+  it('keeps ai-lead-gen read-only business pages for tenant', () => {
+    // AI获客业务数据页面：5 个只读列表页，子路由 name 用中文供 BaseBusinessLayout 页头显示
+    const tenantChildren = agentRoutes.find((route) => route.path === '/t/:tenant_id')?.children ?? []
+    const leadGen = tenantChildren.find((route) => route.path === 'ai-lead-gen')
+    expect(leadGen?.children?.map((route) => route.path)).toEqual([
+      'campaigns',
+      'leads',
+      'contacts',
+      'emails',
+      'replies',
+    ])
+    expect(leadGen?.children?.map((route) => route.name)).toEqual([
+      '获客活动',
+      '线索公司',
+      '联系人',
+      '邮件记录',
+      '回复记录',
+    ])
+
+    const router = createRouter({ history: createMemoryHistory(), routes: agentRoutes })
+    expect(router.resolve('/t/acme/ai-lead-gen/campaigns').name).toBe('获客活动')
+    expect(router.resolve('/t/acme/ai-lead-gen/replies').name).toBe('回复记录')
   })
 
   it('keeps recruiting operator list pages and routed detail pages for tenant', () => {

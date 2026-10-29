@@ -5,8 +5,10 @@ from typing import Annotated
 from pydantic import BaseModel, Field
 
 
-BUSINESS_TOOLS = frozenset({'wecom_read_session', 'wecom_message_send', 'wecom_read_sessions'})
-LEGACY_READ_TOOLS = frozenset({'wecom_read_session', 'wecom_unread_list', 'wecom_group_poll'})
+from .catalog import agent_tools, get_provider
+
+BUSINESS_TOOLS = frozenset(agent_tools('wecom'))
+LEGACY_READ_TOOLS = frozenset(get_provider('wecom')['agent_tool_aliases'])
 
 
 class SessionInput(BaseModel):

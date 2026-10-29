@@ -2,7 +2,7 @@
 name: spec-to-quotation-list
 description: 把任意设计手册 / 设计规范 / FF&E 规范 / 材料 spec book PDF 转成中英双语「室内材料报价清单」Excel。采用分阶段交互工作流：先扫描文档动态发现「空间」与「大类」，交用户确认/调整（两个确认门）；都通过后，再按确认的结构（空间×大类）生成多份 Excel 清单。每份文件内按产品类别（建材/家具/灯具/窗帘/饰品/标识/洁具五金等）分区并带合计总金额公式；空间名一律用文档真实名称；无真实产品的大类/组合不生成文件；用户声明的大类可跨空间合并为一份全项目文件；供应商名录等非产品条目不进主表。This skill should be used when the user provides a design specification PDF (plus optionally an Excel template) and asks for a material / FF&E / interior quotation list, or asks to split a quotation list by space or category.
 metadata:
-  version: "2.0.1"
+  version: "2.0.2"
   author: aid-work-agent
 dependencies:
   - fitz
@@ -45,8 +45,12 @@ dependencies:
   下一步引用上一步产物时，显式写出 `$OUT/analysis.json` 等绝对路径，不要依赖"上一步的当前目录"。
 - 用户上传的 PDF 路径从会话附件上下文获取（绝对路径），直接传给脚本即可。
 - 大段 items.json / confirmed_structure.json 内容**不要内联在 bash 命令里**（转义和长度都易出错）：先用文件写入方式落盘（如 `cat > $OUT/items.json`，内容走 skill_execute 的代码块通道），复杂中文补丁写成 `.py` 文件执行。
-- 生成的 xlsx 交付给用户时，**逐个文件**调用 cp 工具注册下载：
-  `cp(source_file_path="$OUT/NN_空间_大类.xlsx", display_name="NN_空间_大类.xlsx", register_download=True)`
+- 生成的 xlsx 交付给用户时，**必须用批量模式一次 cp 调用交付全部文件**（逐个文件反复调用 cp 会成倍消耗执行轮数，大项目可能直接撞执行上限）：
+  ```json
+  cp(source_file_paths=["$OUT/01_大堂_硬装材料.xlsx", "$OUT/02_客房_家具软装.xlsx"],
+     display_names=["01_大堂_硬装材料.xlsx", "02_客房_家具软装.xlsx"])
+  ```
+  批量模式固定注册下载，无需传 register_download；`display_names` 与 `source_file_paths` 按序对应，避免用户看到临时文件名；禁用后缀等失败项会进返回的 `errors` 列表，不阻塞其余文件。
 
 ## 脚本
 
@@ -55,7 +59,7 @@ dependencies:
 | `scripts/analyze_pdf.py` | 识别项目名、**文档类型**（spec_book / schedule_driven / drawing_set）、章节结构、套数一览表候选页 |
 | `scripts/discover_structure.py` | **扫描发现引擎（阶段 1/2）**：扫 PDF 提出候选「空间」(含证据页码) 与候选「大类」，输出 `structure_proposal.json` + 可读提案，供用户确认/调整 |
 | `scripts/probe_pdf.py` | 逐页列出图片 xref/坐标与按行聚类的文字，用于图文配对 |
-| `scripts/merge_items.py` | 合并分批编写的条目分片（`$OUT/parts/*.json`）为完整 items.json，含 code 冲突 / 空维度 / 参数死引用硬校验 |
+| `scripts/merge_items.py` | 合并分批编写的条目分片（`$OUT/parts/*.json`）为完整 items.json，含 code 冲突 / 空维度 / 参数死引用硬校验；合并后打印 (space,theme) 条目数矩阵摘要（含 TBC 计数） |
 | `scripts/generate_quotation_lists.py` | **数据驱动生成引擎**：读 items.json（受 `--structure` 约束），动态发现空间/大类，生成 `{space}_{theme}.xlsx`（`global_themes` 里的大类则跨空间合并为 1 份 `《大类》.xlsx`），含产品类别分区、小计、合计总金额、参数页联动、说明页；支持 `--size-budget-mb` 体积预算自动降质 |
 | `scripts/validate.py` | 生成后自动校验：3 表结构、表头、数量联动参数页、合价公式、图片数、体积，输出「已算量/总条目」 |
 
@@ -135,6 +139,18 @@ python scripts/merge_items.py --parts-dir $OUT/parts --out $OUT/items.json
 
 若已有草稿 items.json，按确认结果做重命名/合并/拆分/增删即可。通读内容、配图、数量规则等细节见下「条目编写要点」。
 
+**省轮次纪律（必读）**：合并 → 生成 → 校验三步**串成一条 bash 命令、一次 skill_execute 执行**（`&&` 串联，任一步失败即停），不要每步单独一轮调用：
+
+```bash
+python scripts/merge_items.py --parts-dir $OUT/parts --out $OUT/items.json && \
+python scripts/generate_quotation_lists.py --pdf <spec.pdf> --items $OUT/items.json --out $OUT/excel \
+       --structure $OUT/confirmed_structure.json && \
+python scripts/validate.py $OUT/excel
+```
+
+- 脚本输出已自含全部结论（merge 的矩阵摘要、generate 的动态发现/结构约束两行、validate 的逐项校验与「已算量/总条目」汇总），**读完输出直接决策**，禁止再用 grep/head/tail 重跑或翻文件人工复核一遍。
+- 若矩阵摘要中某组合只有 TBC 条目，按「无真实产品不生成」约束调整结构或条目后再生成。
+
 > 此阶段可用 `discover_structure.py --items items.json` 再跑一次，核对 (空间×大类) 矩阵是否符合确认结果，作为生成前最后 sanity check。
 
 ### 4. 生成（受确认结构约束）
@@ -202,6 +218,14 @@ python scripts/validate.py $OUT/excel [--max-mb 20]
 5. **probe_pdf 只探查关键页**，不要 `--all` 全书探查（节省上下文）。
 
 ## 变更记录 Changelog
+
+### v2.0.2（2026-10-27）
+
+省执行轮次改造（生产 ITERATION_LIMIT 事故复盘：大项目逐文件 cp + 分步调用撞 max_iterations）：
+
+1. **批量交付**：xlsx 交付改用 cp 批量模式（`source_file_paths` + `display_names`）一次调用交付全部文件，替代逐个文件反复调用。
+2. **串联执行**：merge → generate → validate 串成一条 bash 命令一次 skill_execute 执行；脚本输出自含全部结论，禁止再用 grep/head/tail 重跑复核。
+3. **矩阵摘要**：`merge_items.py` 合并后打印 (space,theme) 条目数矩阵（含 TBC 计数），替代 LLM 临时写统计脚本。
 
 ### v2.0.1（2026-10-23）
 

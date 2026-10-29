@@ -1,45 +1,62 @@
-"""
-定时任务工具
+"""定时任务工具（v2 Runner 化重建，设计 §3/§10，Phase 4）
 
-提供创建和管理定时任务的能力，包含两个工具：
-- CreateScheduledTaskTool: 创建定时执行的任务（含 dry-run 验证）
-- ManageScheduledTaskTool: 管理已创建的定时任务（列表、暂停、恢复、取消、查看日志）
+两个 chat_only 工具（仅 web 对话可见，渠道与 scheduled 执行滤除）：
+- CreateScheduledTaskTool：创建自包含定时任务（无试跑、无同步等待 Runner，
+  创建即 active，首次执行在下一个调度点；由 background_runner 的 dispatch
+  循环认领并提交）；
+- ManageScheduledTaskTool：list/pause/resume/cancel/view/set_notify_target，
+  适配新状态机（pause 仅 active、resume 仅 paused、cancel 走事务守卫硬删）。
+
+本模块同时承载工具与 REST API 共用的纯校验/计算函数（generate_cron_expression /
+build_schedule_fields / compute_resume_due / format_schedule_description）。
 """
 
 import asyncio
-from datetime import datetime
-from typing import Any, Dict, Optional
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from src.scheduler.db import (ScheduledTaskBusyError, ScheduledTaskQuotaError,
+                             ScheduledTaskDB)
 from src.tools.base import BaseTool
-from src.tools.context import (
-    ToolExecutionContext,
-    current_tool_execution_context,
+from src.tools.context import ToolExecutionContext, current_tool_execution_context
+
+# ==================== 共享领域函数（scheduler.schedule） ====================
+# 评审修正：共享调度纯函数统一放 scheduler.schedule，工具与 API 共用，
+# 避免 API 反向依赖工具实现。本模块只保留工具侧行为编排。
+
+from src.scheduler.schedule import (  # noqa: F401（部分名称供既有测试/调用方直接导入）
+    ScheduleConfigError,
+    build_schedule_fields,
+    compute_resume_due,
+    format_schedule_description,
+    generate_cron_expression,
+    parse_run_at,
+    validate_task_attachments,
 )
-from src.scheduler.error_sanitizer import (
-    sanitize_scheduled_task_error,
-    sanitize_scheduled_task_log_rows,
-)
 
 
-def _resolve_runtime_tenant_id(context: Optional[ToolExecutionContext]) -> Optional[str]:
-    """解析工具调用的可信租户；未知身份绝不降级成公共租户。
-
-    优先取请求级工具执行上下文的 tenant_id（''=明确公共用户，由可信边界构造时注入）。
-    上下文缺失（None）时 fail-closed 返回 None，由调用方拒绝操作。
-    """
+def _resolve_runtime_tenant_id(context) -> "str|None":
+    """解析工具调用的可信租户；未知身份绝不降级成公共租户（fail-closed）"""
     return context.tenant_id if context else None
 
 
-# ==================== R56 路由约束：微信营销后台任务引导专用工具 ====================
+# 任务行中不进对话记录的调度侧内部字段（与 API _INTERNAL_FIELDS 同口径）
+_INTERNAL_FIELDS = ("pending_snapshot",)
+
+
+def _public_task(task):
+    """任务行对外投影：剥离调度侧内部交接字段（chat 记录不落库内部快照）"""
+    return {key: value for key, value in task.items() if key not in _INTERNAL_FIELDS}
+
+
+# ==================== R56 路由约束：微信营销定时任务引导专用工具 ====================
 # 设计原则是保守拦截：只有「微信营销域 + 调度词 + 发送动作」三类关键词同时命中，
 # 且没有明确指向其他渠道（邮件/短信/钉钉/飞书/企业微信）的词时才拒绝创建；
-# 任何不确定情况（如仅提"微信"、或发送目标是邮箱）一律放行走通用定时任务，
-# 避免误伤。拦截发生在 dry_run 之前（R56：确定微信任务不执行旧 dry_run）。
-
-_VALID_SCHEDULE_TYPES = {"daily", "weekly", "monthly", "interval", "once"}
+# 任何不确定情况（如仅提"微信"、或发送目标是邮箱）一律放行走通用定时任务。
+# （沿用 R56 定稿口径，与旧实现一致）
 
 _WEIXIN_MARKETING_DOMAIN_MARKERS = (
     "微信群发", "微信营销", "微信推送", "微信自动发送", "weixin_automation",
@@ -70,7 +87,7 @@ def _is_definite_weixin_marketing_task(*texts: str) -> bool:
 
 
 def _weixin_routing_rejection() -> Dict[str, Any]:
-    """确定的微信营销定时任务 → 结构化引导到专用工具（不创建、不 dry_run）"""
+    """确定的微信营销定时任务 → 结构化引导到专用工具（不创建）"""
     return {
         "success": False,
         "error": (
@@ -81,82 +98,45 @@ def _weixin_routing_rejection() -> Dict[str, Any]:
         "routed_tool": "weixin_automation_prepare",
         "guidance": (
             "微信营销任务请使用 weixin_automation_prepare 创建草稿"
-            "（无发送副作用，返回静态校验与未来触发预览），经用户明确确认后用 "
-            "weixin_automation_publish 发布；运行/试发/重试/暂停等用 "
-            "weixin_automation_manage。也可委派给「微信营销智能体」处理。"
+            "（无发送副作用），经用户明确确认后用 weixin_automation_publish 发布；"
+            "运行/试发/重试/暂停等用 weixin_automation_manage。"
         ),
     }
 
 
+# 上限为领域函数（schedule.py），API 与工具共用同一配置口径
+from src.scheduler.schedule import max_tasks_per_user as _max_tasks_per_user
+
+
+# ==================== 工具一：创建 ====================
+
 class CreateScheduledTaskInput(BaseModel):
     """创建定时任务参数"""
     name: str = Field(..., description="任务名称，简短描述（如：每日邮件检查）")
-    description: Optional[str] = Field("", description="任务的详细描述")
     task_prompt: str = Field(..., description=(
-        "独立可执行的提示词，不依赖对话上下文。应包含完整的任务指令、所有必要信息（收件人、文件路径、操作步骤等）。"
-        "如需专业领域能力，可在提示词中指示委派给子智能体。"
-        "示例：「1. 使用 email_process 读取未读邮件（action=read, unseen_only=true） 2. 将邮件列表汇总为文本 3. 使用 email_process 发送汇总到 zhangsan@company.com（action=send）」"
+        "自包含的任务定义（执行提示词），不依赖创建时的对话上下文。"
+        "必须包含完整任务指令、所有必要参数（收件人/路径/关键词等）、资料来源与输出要求；"
+        "文件等资料用 file_id 等受权引用固化；实时数据约定执行时获取；"
+        "可预见的无数据/空结果场景写明默认行为约定（如：无新增时输出「今日无新增数据」）。"
+        "如需专业领域能力，可在提示词中指示委派给对应子智能体。"
     ))
     schedule_type: str = Field(..., description="调度类型：daily每天, weekly每周, monthly每月, interval间隔, once一次性")
     time_config: Dict[str, Any] = Field(..., description=(
         "时间配置，必须从用户话语中解析，所有时间为北京时间。"
         "once 类型必填 run_at（格式 YYYY-MM-DD HH:MM:SS，必须是未来时间）；"
-        "daily/weekly/monthly 用 hour/minute（weekly 另需 day_of_week，monthly 另需 day）；"
+        "daily/weekly/monthly 必填 hour/minute（weekly 另需 day_of_week，monthly 另需 day）；"
         "interval 用 interval_hours"
     ))
-
-
-class ManageScheduledTaskInput(BaseModel):
-    """管理定时任务参数"""
-    action: str = Field(..., description="操作类型：list查看列表, pause暂停, resume恢复, cancel取消, view_logs查看执行日志")
-    task_id: Optional[str] = Field(None, description="任务ID（list 操作不需要）")
-
-
-def generate_cron_expression(schedule_type: str, time_config: dict) -> Optional[str]:
-    """根据调度类型和时间配置生成 cron 表达式或执行时间"""
-    if not time_config:
-        return None
-
-    if schedule_type == "daily":
-        hour = time_config.get("hour", 9)
-        minute = time_config.get("minute", 0)
-        return f"{minute} {hour} * * *"
-    elif schedule_type == "weekly":
-        day_map = {"mon": "1", "tue": "2", "wed": "3", "thu": "4", "fri": "5", "sat": "6", "sun": "0"}
-        day_of_week = day_map.get(time_config.get("day_of_week", "mon").lower(), "1")
-        hour = time_config.get("hour", 9)
-        minute = time_config.get("minute", 0)
-        return f"{minute} {hour} * * {day_of_week}"
-    elif schedule_type == "monthly":
-        day = time_config.get("day", 1)
-        hour = time_config.get("hour", 9)
-        minute = time_config.get("minute", 0)
-        return f"{minute} {hour} {day} * *"
-    elif schedule_type == "once":
-        return time_config.get("run_at", None)
-    elif schedule_type == "interval":
-        # interval 类型不需要 cron 表达式，用 interval_seconds
-        return None
-    return None
-
-
-def format_schedule_description(schedule_type: str, time_config: dict) -> str:
-    """生成调度描述文本"""
-    if not time_config:
-        return schedule_type
-    if schedule_type == "daily":
-        return f"每天 {time_config.get('hour', 9):02d}:{time_config.get('minute', 0):02d}"
-    elif schedule_type == "weekly":
-        day_names = {"mon": "周一", "tue": "周二", "wed": "周三", "thu": "周四", "fri": "周五", "sat": "周六", "sun": "周日"}
-        day = day_names.get(time_config.get("day_of_week", "mon").lower(), "周一")
-        return f"每{day} {time_config.get('hour', 9):02d}:{time_config.get('minute', 0):02d}"
-    elif schedule_type == "monthly":
-        return f"每月{time_config.get('day', 1)}日 {time_config.get('hour', 9):02d}:{time_config.get('minute', 0):02d}"
-    elif schedule_type == "interval":
-        return f"每隔 {time_config.get('interval_hours', 1)} 小时"
-    elif schedule_type == "once":
-        return f"一次性执行 {time_config.get('run_at', '未指定')}"
-    return schedule_type
+    attachments: Optional[List[Dict[str, Any]]] = Field(None, description=(
+        "受权资源引用（可选，数组）：任务依赖的文件等资料，每项含 "
+        "file_id/name/type(file|image)；随每次执行提交，由执行侧在属主存储"
+        "范围内解析。不要把附件信息塞进提示词文字来代替本字段"
+    ))
+    description: Optional[str] = Field("", description="任务的补充描述（可选）")
+    notify_target_id: Optional[str] = Field(None, description=(
+        "通知目标 ID（可选）：任务完成/失败/暂停通知投递到指定目标"
+        "（个人 Web Push 或租户级群机器人/邮件目标）；不填=站内信+个人偏好渠道"
+    ))
 
 
 class CreateScheduledTaskTool(BaseTool):
@@ -164,15 +144,22 @@ class CreateScheduledTaskTool(BaseTool):
 
     name = "create_scheduled_task"
     assembly_order = 100  # 兼容历史 Agent 注册顺序：定时工具位于普通工具之后
+    chat_only = True  # 仅 web 对话可见（渠道与 scheduled 执行滤除，设计 §10）
     description = (
-        "为用户创建定时执行的任务。当用户说「每天/每周/每月/定期/定时/每隔X小时」+ 某个操作时使用。"
-        "创建前会先执行一次验证，只有验证通过才会创建定时任务。"
-        "支持每天、每周、每月、间隔执行、一次性等模式。"
-        "一次性任务（schedule_type=once）必须在 time_config.run_at 提供未来的具体时间"
-        "（格式 YYYY-MM-DD HH:MM:SS，北京时间）；过去时间会被拒绝。"
-        "如果用户询问已创建的定时任务，使用 manage_scheduled_task 工具查看。"
-        "【重要】必须从用户话语中解析出具体的调度时间（北京时间）。"
-        "如果用户没有给出具体时间，必须先向用户确认后再调用，禁止自行猜测默认时间。"
+        "为用户创建定时执行的任务。当用户说「每天/每周/每月/定期/定时/每隔X小时/某个时间点」"
+        "+ 某个操作时使用。支持每天、每周、每月、间隔执行、一次性等模式。"
+        "【重要】必须从用户话语中解析出具体的调度时间（北京时间）；"
+        "如果用户没有给出具体时间（如只说'每天提醒我看邮件'没说几点），"
+        "必须先向用户确认后再调用，禁止自行猜测默认时间。"
+        "【重要】task_prompt 必须自包含、可独立执行：写入完整指令、必要参数、资料来源与输出要求；"
+        "禁止依赖对话隐含上下文（如'上面那个文件''按刚才说的办'）——"
+        "文件用 file_id 等受权引用写入任务；实时数据（邮件/订单等）约定执行时获取；"
+        "可预见的无数据/空结果场景写明默认行为（如'无新增数据时输出：今日无新增数据'）。"
+        "如需专业领域能力，在 task_prompt 中指示委派给对应子智能体。"
+        "一次性任务（schedule_type=once）必须在 time_config.run_at 提供未来的具体时间，"
+        "过去时间会被拒绝。可选 notify_target_id 指定完成通知投递目标。"
+        "创建即生效，首次执行在下一个调度点（无试跑）。"
+        "如果用户询问或管理已创建的定时任务，使用 manage_scheduled_task 工具。"
         "【限制】微信营销/微信群发类定时发送任务不适用本工具（会被拒绝），"
         "请使用 weixin_automation_prepare / weixin_automation_publish 专用工具。"
     )
@@ -182,196 +169,123 @@ class CreateScheduledTaskTool(BaseTool):
     InputModel = CreateScheduledTaskInput
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
-        """执行创建定时任务"""
-        from src.scheduler.executor import ScheduledTaskExecutor
-        from src.scheduler.db import ScheduledTaskDB
-
+        """创建定时任务：只写 DB（含专属任务会话），不试跑、不同步等待 Runner。"""
         name = kwargs.get("name", "")
         task_prompt = kwargs.get("task_prompt", "")
-        schedule_type = kwargs.get("schedule_type", "daily")
-        time_config = kwargs.get("time_config") or {}
+        schedule_type = kwargs.get("schedule_type", "")
+        time_config = dict(kwargs.get("time_config") or {})
         description = kwargs.get("description", "")
-
-        # LLM 解析时间时可能把数值字段以字符串传出（如 interval_hours="2"、hour="9"）。
-        # time_config 是 Dict[str, Any]，executor 的 InputModel 不会递归强转内部值，
-        # 且本工具由 agent 直接调用（绕过 executor），这里统一强转数值字段，
-        # 防止字符串乘法（interval_hours）与 :02d 格式化崩溃（hour/minute/day）
-        for key, default in (("interval_hours", 1), ("hour", 9), ("minute", 0), ("day", 1)):
-            if key in time_config:
-                try:
-                    time_config[key] = int(time_config[key])
-                except (TypeError, ValueError):
-                    time_config[key] = default
+        notify_target_id = kwargs.get("notify_target_id") or None
 
         context = current_tool_execution_context()
         user_id = context.user_id if context else None
         session_id = context.session_id if context else None
         tenant_id = _resolve_runtime_tenant_id(context)
 
-        # 必须有用户信息才能创建定时任务
+        # 身份三要素缺一不创建（任务创建必须发生在真实登录会话中）
         if not user_id:
             logger.warning("后端日志：创建定时任务失败，工具执行上下文缺少 user_id")
             return {"success": False, "error": "用户未登录，无法创建定时任务"}
         if tenant_id is None:
             return {"success": False, "error": "租户上下文缺失，无法创建定时任务"}
-
-        # 参数校验
+        if not session_id:
+            return {"success": False, "error": "会话上下文缺失，无法创建定时任务"}
         if not name or not task_prompt:
-            logger.warning(f"后端日志：创建定时任务参数校验失败 name空={not name}, task_prompt空={not task_prompt}")
             return {"success": False, "error": "缺少必要参数（name 或 task_prompt）"}
 
-        if not time_config:
-            logger.warning("后端日志：创建定时任务缺少时间配置 time_config 为空")
-            return {"success": False, "error": "缺少时间配置（time_config），请明确指定调度时间"}
-
-        if schedule_type not in _VALID_SCHEDULE_TYPES:
-            return {
-                "success": False,
-                "error": (
-                    f"不支持的调度类型: {schedule_type}，"
-                    "可选值：daily（每天）/ weekly（每周）/ monthly（每月）/ "
-                    "interval（间隔）/ once（一次性）"
-                ),
-            }
-
-        # 一次性任务：run_at 必填、必须可解析、必须是未来时间，并归一化为
-        # "%Y-%m-%d %H:%M:%S" 落库（调度器按该格式 strptime 构建 DateTrigger）。
-        # 不校验会产生创建即死的任务：无 run_at 永不注册；过去时间首次注册即 missed
-        if schedule_type == "once":
-            from src.scheduler.manager import parse_run_datetime
-
-            run_at_dt = parse_run_datetime(time_config.get("run_at"))
-            if run_at_dt is None:
-                return {
-                    "success": False,
-                    "error": (
-                        "一次性任务缺少有效执行时间：time_config.run_at 必填，"
-                        "格式 YYYY-MM-DD HH:MM:SS（北京时间），请向用户确认具体时间"
-                    ),
-                }
-            if run_at_dt <= datetime.now():
-                return {
-                    "success": False,
-                    "error": (
-                        f"执行时间 {run_at_dt.strftime('%Y-%m-%d %H:%M:%S')} 已经过去，"
-                        "无法创建一次性提醒，请向用户确认新的未来时间"
-                    ),
-                }
-            time_config["run_at"] = run_at_dt.strftime("%Y-%m-%d %H:%M:%S")
-
-        if len(task_prompt) > 2000:
-            logger.warning(f"后端日志：创建定时任务 task_prompt 超长 length={len(task_prompt)}")
-            return {"success": False, "error": "task_prompt 长度超过限制（最大2000字符）"}
-
-        # R56 路由约束：确定为微信营销定时发送任务时拒绝创建并引导专用工具。
-        # 放在 dry_run 与任何 DB 写入之前；检测保守（不确定不拦截），见函数注释。
+        # R56 路由约束：确定为微信营销定时发送任务时拒绝并引导专用工具
+        # （保守拦截，在任何 DB 写入之前）
         if _is_definite_weixin_marketing_task(name, description, task_prompt):
             return _weixin_routing_rejection()
 
-        # 检查用户最大任务数限制
-        max_tasks = 20
+        # 调度字段校验与计算（schedule_type 枚举 / 时间必填不猜测 / once 未来时间
+        # 与归一化 / 数值字段容错，全部收敛在 build_schedule_fields）
         try:
-            from src.config.settings import settings
-            if hasattr(settings, 'scheduler') and hasattr(settings.scheduler, 'max_tasks_per_user'):
-                max_tasks = settings.scheduler.max_tasks_per_user
+            cron_expression, interval_seconds, run_at, next_due_at = build_schedule_fields(
+                schedule_type, time_config)
+        except ScheduleConfigError as e:
+            logger.warning(f"后端日志：创建定时任务调度校验失败 user_id={user_id}, error={e}")
+            return {"success": False, "error": str(e)}
+
+        # 附件固化（评审 P1：受权资源引用必须在创建时落任务行，随每次执行
+        # 提交——写进提示词文字不能替代 Runner 的附件解析链路）
+        try:
+            attachments = validate_task_attachments(kwargs.get("attachments"))
+        except ScheduleConfigError as e:
+            return {"success": False, "error": str(e)}
+
+        # 通知目标归属校验（设计 §3.3/§8.3 同口径）：只允许本人个人目标或
+        # 本租户租户级目标——外发按 target_id 快照路由，写入口径必须校验
+        # 归属（LLM 幻觉/他租户 ID 一律拒绝，不落库待投递侧失败）
+        if notify_target_id and not await asyncio.to_thread(
+                ScheduledTaskDB.notify_target_visible, notify_target_id,
+                tenant_id=tenant_id, user_id=user_id):
+            logger.warning(f"后端日志：定时任务通知目标不可用 user_id={user_id}, "
+                           f"target={notify_target_id[:32]}")
+            return {"success": False,
+                    "error": "通知目标不存在或不可用；"
+                             "可先用 manage_scheduled_task 的 list_notify_targets 查询可选目标"}
+
+        # 每用户 active 上限：事务内落实（评审 P2：先计数后插入的两独立
+        # 事务存在并发绕过窗口——advisory lock 串行化，配额检查与插入同事务）
+        max_tasks = _max_tasks_per_user()
+
+        # 智能体上下文继承（设计 §3.2）：创建会话的 profile/instance 固化到任务行，
+        # 后续执行由该智能体自身执行；主智能体 profile_id='main'
+        profile_id = (getattr(context, "profile_id", None) or "main")
+        instance_id = getattr(context, "instance_id", None)
+        subagent_id = profile_id if profile_id != "main" else None
+
+        try:
+            task = await asyncio.to_thread(
+                ScheduledTaskDB.create,
+                user_id=user_id, tenant_id=tenant_id, name=name,
+                task_prompt=task_prompt, schedule_type=schedule_type,
+                cron_expression=cron_expression, interval_seconds=interval_seconds,
+                run_at=run_at, attachments=attachments,
+                profile_id=profile_id, instance_id=instance_id,
+                subagent_id=subagent_id, notification_target_id=notify_target_id,
+                next_due_at=next_due_at, max_active=max_tasks)
+        except ScheduledTaskQuotaError as e:
+            return {"success": False, "error": str(e)}
         except Exception:
-            pass
-
-        current_count = await asyncio.to_thread(
-            ScheduledTaskDB.count_by_user, user_id, "active", tenant_id=tenant_id
-        )
-        if current_count >= max_tasks:
-            logger.warning(
-                f"后端日志：定时任务达上限 user_id={user_id}, "
-                f"active_count={current_count}, max={max_tasks}"
-            )
-            return {
-                "success": False,
-                "error": f"您的定时任务已达上限（{max_tasks}个），请先取消不需要的任务",
-            }
-
-        # 生成 cron 表达式
-        cron_expression = generate_cron_expression(schedule_type, time_config)
-        interval_seconds = None
-        if schedule_type == "interval":
-            interval_seconds = time_config.get("interval_hours", 1) * 3600
-
-        # 试执行（dry run）：执行身份租户与随后创建的任务行租户保持一致
-        executor = ScheduledTaskExecutor()
-        try:
-            dry_run_result = await executor.dry_run(
-                user_id=user_id,
-                task_prompt=task_prompt,
-                user_input=description or name,
-                tenant_id=tenant_id,
-            )
-        except Exception as e:
-            # 诊断细节（脱敏后）走日志，不进 tool_result（spec §1.4 禁止 debug 字段）
+            # 诊断细节走日志；凭据类内容不进 tool_result
             logger.opt(exception=True).error(
-                f"后端日志：定时任务试执行异常 user_id={user_id}, "
-                f"error={sanitize_scheduled_task_error(str(e))}"
-            )
-            return {
-                "success": False,
-                "error": "任务验证过程出错，无法创建定时任务",
-            }
-
-        if not dry_run_result.get("success"):
-            # 失败原因（脱敏 + 截断）走日志：先脱敏再截断——先截断会把凭据切成
-            # 两半，后半段脱离键名后无法再被识别遮蔽
-            logger.error(
-                "后端日志：定时任务试执行失败 "
-                f"error={sanitize_scheduled_task_error(dry_run_result.get('error', '未知错误'))[:500]}"
-            )
-            return {
-                "success": False,
-                "error": "任务验证失败，当前无法完成此类定时任务",
-            }
-
-        # 试执行成功，创建定时任务
-        # 创建时必须写入租户（''=公共用户/无租户上下文），否则新任务在租户视图不可见
-        task = await asyncio.to_thread(
-            ScheduledTaskDB.create,
-            user_id=user_id,
-            name=name,
-            description=description,
-            task_prompt=task_prompt,
-            schedule_type=schedule_type,
-            cron_expression=cron_expression,
-            interval_seconds=interval_seconds,
-            session_id=session_id,
-            tenant_id=tenant_id,
-        )
-
+                f"后端日志：定时任务落库失败 user_id={user_id}, name={name}")
+            return {"success": False, "error": "创建定时任务失败（数据库错误）"}
         if not task:
-            logger.error(f"后端日志：定时任务落库失败 user_id={user_id}, name={name}")
             return {"success": False, "error": "创建定时任务失败（数据库错误）"}
 
-        # 注册到调度器由 background runner 的 reconcile 对账负责（≤30s 内自动注册），
-        # 本工具只写 DB，不做跨进程 manager 调用。
-
         schedule_description = format_schedule_description(schedule_type, time_config)
-        dry_run_preview = (dry_run_result.get("result") or "")[:200]
-
-        logger.info(f"后端日志：定时任务创建成功 task_id={task['task_id']}, user_id={user_id}, name={name}")
-
+        next_run_at = task.get("next_due_at") or next_due_at
         message = (f"定时任务已创建！名称：{name}，调度：{schedule_description}。"
-                   f"首次验证执行结果：{dry_run_preview}...")
-        # 渠道收发限制如实告知：wecom_kf 仅能在客户来消息后的窗口内回复，
-        # 提醒触发时若无直投机会，会在客户下次来消息时补投
-        if context and context.channel == "wecom_kf":
-            message += ("（温馨提示：提醒到点时会尽力发送给您；若当前微信客服会话"
-                        "不满足平台发送条件，提醒将在您下次发消息时送达）")
-
+                   f"创建即生效，首次执行在下一个调度点。")
+        logger.info(f"后端日志：定时任务创建成功 task_id={task['task_id']}, "
+                    f"user_id={user_id}, name={name}, next_due_at={next_run_at}")
         return {
             "success": True,
             "task_id": task["task_id"],
             "name": name,
             "schedule_description": schedule_description,
-            "next_run_at": task.get("next_run_at"),
-            "dry_run_result_preview": dry_run_preview,
-            "message": message
+            "next_run_at": str(next_run_at) if next_run_at else None,
+            "message": message,
         }
+
+
+# ==================== 工具二：管理 ====================
+
+class ManageScheduledTaskInput(BaseModel):
+    """管理定时任务参数"""
+    action: str = Field(..., description=(
+        "操作类型：list查看任务列表, pause暂停, resume恢复, cancel取消并删除, "
+        "view查看任务统计详情, set_notify_target设置通知目标, "
+        "list_notify_targets查询可选通知目标（创建任务选 notify_target_id 前先查）"
+    ))
+    task_id: Optional[str] = Field(None, description="任务ID（list 操作不需要）")
+    notify_target_id: Optional[str] = Field(None, description=(
+        "通知目标 ID（仅 set_notify_target 使用）：传入=设置该目标；"
+        "不传=清除恢复默认（站内信+个人偏好渠道）"
+    ))
 
 
 class ManageScheduledTaskTool(BaseTool):
@@ -379,21 +293,26 @@ class ManageScheduledTaskTool(BaseTool):
 
     name = "manage_scheduled_task"
     assembly_order = 100  # 兼容历史 Agent 注册顺序：定时工具位于普通工具之后
-    description = "管理用户的定时任务：查看列表、暂停、恢复、取消、查看执行日志。"
+    chat_only = True  # 仅 web 对话可见（渠道与 scheduled 执行滤除，设计 §10）
+    description = (
+        "管理用户的定时任务：查看列表（list）、暂停（pause）、恢复（resume）、"
+        "取消并删除（cancel）、查看任务统计（view）、设置/清除通知目标（set_notify_target）、"
+        "查询可选通知目标（list_notify_targets——创建任务选 notify_target_id 前先查询，"
+        "返回 target_id/渠道/展示名）。历次执行明细请在任务视图中查看（view 结果中附有指引）。"
+    )
     display_name = "管理定时任务"
     category = "scheduler"
     InputModel = ManageScheduledTaskInput
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
-        """执行管理定时任务"""
-        from src.scheduler.db import ScheduledTaskDB, ScheduledTaskLogDB
-
+        """管理定时任务（所有读写带 tenant+user 归属条件进 SQL）"""
         action = kwargs.get("action", "list")
         task_id = kwargs.get("task_id")
+        notify_target_id = kwargs.get("notify_target_id") or None
+
         context = current_tool_execution_context()
         user_id = context.user_id if context else None
         tenant_id = _resolve_runtime_tenant_id(context)
-
         if not user_id:
             logger.warning("后端日志：管理定时任务失败，工具执行上下文缺少 user_id")
             return {"success": False, "error": "用户未登录，无法操作定时任务"}
@@ -402,109 +321,178 @@ class ManageScheduledTaskTool(BaseTool):
 
         try:
             if action == "list":
-                # 与 API 列表一致的租户过滤：tenant_id='' 遗留行在具体租户视图不可见
-                tasks = await asyncio.to_thread(
-                    ScheduledTaskDB.list_by_user, user_id, tenant_id=tenant_id
-                )
-                if not tasks:
-                    return {"success": True, "message": "您还没有创建任何定时任务"}
-
-                task_list = []
-                for t in tasks:
-                    task_list.append(
-                        f"- **{t['name']}** (ID: {t['task_id']})\n"
-                        f"  状态: {t['status']} | 调度: {t['schedule_type']} | "
-                        f"执行: {t['total_runs']}次 (成功{t['success_count']}, 失败{t['fail_count']})\n"
-                        f"  创建时间: {t.get('created_at', '-')}"
-                    )
-                return {
-                    "success": True,
-                    "message": f"您共有 {len(tasks)} 个定时任务：\n\n" + "\n".join(task_list),
-                    "tasks": tasks
-                }
-
-            elif action in {"pause", "resume", "cancel", "view_logs"}:
+                return await self._list(user_id, tenant_id)
+            if action == "list_notify_targets":
+                return await self._list_notify_targets(tenant_id, user_id)
+            if action in {"pause", "resume", "cancel", "view", "set_notify_target"}:
                 if not task_id:
-                    action_labels = {
-                        "pause": "暂停", "resume": "恢复",
-                        "cancel": "取消", "view_logs": "查看日志",
-                    }
-                    return {
-                        "success": False,
-                        "error": f"请指定要{action_labels[action]}的任务ID",
-                    }
-
-                # task_id 可由模型/用户提供，所有读写前必须用当前执行上下文的
-                # user_id+tenant_id 校验所有权（条件进 SQL，越权行直接查不到），
-                # 不能只依赖不可枚举的 ID 作为权限边界。
+                    labels = {"pause": "暂停", "resume": "恢复", "cancel": "取消",
+                              "view": "查看", "set_notify_target": "设置通知目标"}
+                    return {"success": False,
+                            "error": f"请指定要{labels[action]}的任务ID（可用 list 查询）"}
+                # task_id 可由模型/用户提供：所有读写先用当前执行上下文的
+                # user_id+tenant_id 校验归属（条件进 SQL，越权行直接查不到）
                 task = await asyncio.to_thread(
-                    ScheduledTaskDB.get_by_id,
-                    task_id, tenant_id=tenant_id, user_id=user_id,
-                )
-                if not task or task.get("user_id") != user_id:
-                    return {
-                        "success": False,
-                        "permission_denied": True,
-                        "error": "任务不存在或无权操作",
-                    }
-
+                    ScheduledTaskDB.get_by_id, task_id,
+                    tenant_id=tenant_id, user_id=user_id)
+                if not task:
+                    return {"success": False, "permission_denied": True,
+                            "error": "任务不存在或无权操作"}
                 if action == "pause":
-                    # 只写 DB，background reconcile ≤30s 内同步到调度器；
-                    # 租户+用户条件进 UPDATE 本身，防止校验与写入之间的 TOCTOU
-                    updated = await asyncio.to_thread(
-                        ScheduledTaskDB.update_status,
-                        task_id, "paused", tenant_id=tenant_id, user_id=user_id,
-                    )
-                    if updated:
-                        return {"success": True, "message": f"任务 {task_id} 已暂停（≤30s 生效）"}
-                    return {"success": False, "error": "暂停失败，任务可能不存在或已暂停"}
-
+                    return await self._pause(task, tenant_id, user_id)
                 if action == "resume":
-                    updated = await asyncio.to_thread(
-                        ScheduledTaskDB.update_status,
-                        task_id, "active", tenant_id=tenant_id, user_id=user_id,
-                    )
-                    if updated:
-                        return {"success": True, "message": f"任务 {task_id} 已恢复（≤30s 生效）"}
-                    return {"success": False, "error": "恢复失败，任务可能不存在或未暂停"}
-
+                    return await self._resume(task, tenant_id, user_id)
                 if action == "cancel":
-                    deleted = await asyncio.to_thread(
-                        ScheduledTaskDB.delete,
-                        task_id, tenant_id=tenant_id, user_id=user_id,
-                    )
-                    if deleted:
-                        return {"success": True, "message": f"任务 {task_id} 已取消"}
-                    return {"success": False, "error": "取消失败，任务可能不存在"}
-
-                # view_logs：日志查询同样带租户+用户条件，与任务校验双层隔离
-                logs = await asyncio.to_thread(
-                    ScheduledTaskLogDB.list_by_task,
-                    task_id, 20, tenant_id=tenant_id, user_id=user_id,
-                )
-                if not logs:
-                    return {"success": True, "message": f"任务 {task_id} 暂无执行日志"}
-                # 历史日志兜底脱敏：遗留行的 error_message 可能含明文凭据，先净化
-                # 再进消息文本（新写入已脱敏，本操作幂等）；先脱敏再截断，
-                # 截断不会把明文凭据切成两段漏出
-                sanitize_scheduled_task_log_rows(logs)
-                log_list = []
-                for log in logs:
-                    status_icon = "✅" if log["status"] == "success" else "❌"
-                    log_list.append(
-                        f"{status_icon} [{log['started_at']}] {log['status']} | "
-                        f"耗时: {log.get('duration_ms', 0)}ms | "
-                        f"触发: {log.get('trigger_type', '-')}"
-                        + (f" | 错误: {log.get('error_message', '')[:100]}" if log.get("error_message") else "")
-                    )
-                return {
-                    "success": True,
-                    "message": f"任务 {task_id} 最近 {len(logs)} 条执行日志：\n\n" + "\n".join(log_list)
-                }
-
-            else:
-                return {"success": False, "error": f"不支持的操作: {action}"}
-
+                    return await self._cancel(task, tenant_id, user_id)
+                if action == "set_notify_target":
+                    return await self._set_notify_target(
+                        task, tenant_id, user_id, notify_target_id)
+                return self._view(task)
+            return {"success": False, "error": f"不支持的操作: {action}"}
+        except ScheduledTaskBusyError:
+            return {"success": False, "error": "任务正在执行，请稍后再试"}
+        except ScheduleConfigError as e:
+            return {"success": False, "error": str(e)}
         except Exception as e:
-            logger.opt(exception=True).error(f"后端日志：管理定时任务失败 action={action}, error={e}")
+            logger.opt(exception=True).error(
+                f"后端日志：管理定时任务失败 action={action}, task_id={task_id}, error={e}")
             return {"success": False, "error": "操作失败"}
+
+    # ==================== 各操作 ====================
+
+    @staticmethod
+    async def _list(user_id: str, tenant_id: str) -> Dict[str, Any]:
+        """任务列表摘要：名称/状态/调度/统计/下次执行"""
+        tasks = await asyncio.to_thread(
+            ScheduledTaskDB.list_by_user, user_id, tenant_id=tenant_id)
+        if not tasks:
+            return {"success": True, "message": "您还没有创建任何定时任务", "tasks": []}
+        lines = []
+        for t in tasks:
+            lines.append(
+                f"- **{t['name']}** (ID: {t['task_id']})\n"
+                f"  状态: {t['status']}" +
+                (f"（{t['pause_reason']}）" if t.get("pause_reason") else "") +
+                f" | 调度: {t['schedule_type']}"
+                f" | 执行: {t.get('total_runs', 0)}次"
+                f"（成功{t.get('success_count', 0)}, 失败{t.get('fail_count', 0)}）"
+                f" | 下次执行: {t.get('next_due_at') or '-'}"
+            )
+        return {
+            "success": True,
+            "message": f"您共有 {len(tasks)} 个定时任务：\n\n" + "\n".join(lines),
+            "tasks": [_public_task(t) for t in tasks],
+        }
+
+    @staticmethod
+    async def _list_notify_targets(tenant_id: str, user_id: str) -> Dict[str, Any]:
+        """可选通知目标列表（评审 P2：创建对话内完成目标选择的数据来源）"""
+        targets = await asyncio.to_thread(
+            ScheduledTaskDB.list_visible_notify_targets, tenant_id, user_id)
+        if not targets:
+            return {"success": True, "targets": [],
+                    "message": "暂无可用通知目标：个人目标可在通知设置中绑定浏览器推送，"
+                               "租户级目标（群机器人/邮件）由租户管理员配置"}
+        lines = [f"- {t['target_id']}（{t['channel']}/{t['provider']}"
+                 + (f"，{t['configuration_display']}" if t.get("configuration_display") else "")
+                 + "）" for t in targets]
+        return {"success": True, "targets": targets,
+                "message": ("可选通知目标（创建/设置任务通知时传 target_id）："
+                            + chr(10) + chr(10).join(lines))}
+
+    @staticmethod
+    async def _pause(task: Dict[str, Any], tenant_id: str, user_id: str) -> Dict[str, Any]:
+        """暂停任务：仅 active 可暂停（条件进 UPDATE），清空 pending 槽"""
+        updated = await asyncio.to_thread(
+            ScheduledTaskDB.pause, task["task_id"],
+            tenant_id=tenant_id, user_id=user_id)
+        if updated:
+            return {"success": True,
+                    "message": f"任务 {task['task_id']}（{task['name']}）已暂停"}
+        return {"success": False,
+                "error": f"暂停失败：任务当前状态为 {task['status']}，仅执行中（active）的任务可暂停"}
+
+    @staticmethod
+    async def _resume(task: Dict[str, Any], tenant_id: str, user_id: str) -> Dict[str, Any]:
+        """恢复任务：统一走 resume_recompute（单事务锁行重算 + once 过宽限
+        统一转 expired + 配额事务内检查 + 恢复回合重置，评审 P1/P2 修正）"""
+        try:
+            updated = await asyncio.to_thread(
+                ScheduledTaskDB.resume_recompute, task["task_id"],
+                max_active=_max_tasks_per_user(),
+                tenant_id=tenant_id, user_id=user_id)
+        except ScheduledTaskQuotaError as e:
+            return {"success": False, "error": str(e)}
+        except ValueError as e:
+            return {"success": False, "error": str(e)}
+        if not updated:
+            return {"success": False,
+                    "error": f"恢复失败：任务当前状态为 {task['status']}，仅已暂停（paused）的任务可恢复"}
+        if updated["status"] == "expired":
+            # once 过宽限的统一转换与回执（与 API 同一路径，不再分叉）
+            return {"success": True, "expired": True,
+                    "message": f"任务 {task['task_id']}（{task['name']}）的一次性执行时间已超过宽限，"
+                               "恢复操作已将其作废（expired）；如仍需执行请重新创建或改期"}
+        message = (f"任务 {task['task_id']}（{task['name']}）已恢复，"
+                   f"下次执行: {updated.get('next_due_at') or '-'}")
+        if task.get("pause_reason") == "interrupted":
+            message += "；已开启新一轮自动恢复尝试（此前恢复失败的中断执行）"
+        return {"success": True, "message": message}
+
+    @staticmethod
+    async def _cancel(task: Dict[str, Any], tenant_id: str, user_id: str) -> Dict[str, Any]:
+        """取消任务 = 硬删除（任务+任务会话+消息，事务守卫：非终态 runner 存在时 409）"""
+        deleted = await asyncio.to_thread(
+            ScheduledTaskDB.delete_with_session, task["task_id"],
+            tenant_id=tenant_id, user_id=user_id)
+        if not deleted:
+            # 并发删除（任务已在别处被删除）：如实提示，不谎报成功
+            return {"success": False, "error": "任务不存在或已被删除"}
+        return {"success": True,
+                "message": f"任务 {task['task_id']}（{task['name']}）已取消并删除（含任务会话）"}
+
+    @staticmethod
+    async def _set_notify_target(task: Dict[str, Any], tenant_id: str, user_id: str,
+                                 notify_target_id: Optional[str]) -> Dict[str, Any]:
+        """设置/清除通知目标（F4 清空语义：不传 notify_target_id = 清除恢复默认）"""
+        if notify_target_id:
+            if not await asyncio.to_thread(
+                    ScheduledTaskDB.notify_target_visible, notify_target_id,
+                    tenant_id=tenant_id, user_id=user_id):
+                return {"success": False,
+                        "error": "通知目标不存在或不可用；可选目标见任务视图的通知目标选择器"}
+            updated = await asyncio.to_thread(
+                ScheduledTaskDB.update_definition, task["task_id"],
+                notification_target_id=notify_target_id,
+                tenant_id=tenant_id, user_id=user_id)
+            if updated:
+                return {"success": True,
+                        "message": f"任务 {task['name']} 的通知目标已设置为 {notify_target_id}"}
+        else:
+            await asyncio.to_thread(
+                ScheduledTaskDB.update_definition, task["task_id"],
+                clear_fields=["notification_target_id"],
+                tenant_id=tenant_id, user_id=user_id)
+            return {"success": True,
+                    "message": f"任务 {task['name']} 的通知目标已清除，恢复默认（站内信+个人偏好渠道）"}
+        return {"success": False, "error": "设置通知目标失败"}
+
+    @staticmethod
+    def _view(task: Dict[str, Any]) -> Dict[str, Any]:
+        """任务统计详情 + 任务视图指引（历次执行结果不在本工具读取）"""
+        return {
+            "success": True,
+            "message": (
+                f"任务 {task['name']}（{task['task_id']}）统计：\n"
+                f"- 状态: {task['status']}" +
+                (f"（暂停原因: {task['pause_reason']}）" if task.get("pause_reason") else "") + "\n"
+                f"- 调度类型: {task['schedule_type']}"
+                f" | 下次执行: {task.get('next_due_at') or '-'}\n"
+                f"- 累计执行: {task.get('total_runs', 0)} 次"
+                f"（成功 {task.get('success_count', 0)}，失败 {task.get('fail_count', 0)}）\n"
+                f"- 最近执行: {task.get('last_run_at') or '-'}"
+                f"（结果: {task.get('last_status') or '-'}）\n"
+                "如需查看历次执行的结果明细、触发原因与费用，请打开任务计划中的任务视图。"
+            ),
+            "task": _public_task(task),
+        }

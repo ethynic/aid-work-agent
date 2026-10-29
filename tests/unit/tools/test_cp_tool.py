@@ -805,6 +805,164 @@ class TestCpToolRegisterDownload:
         assert len(visible_calls) == 1, f"visible=True 未被写入 redis: {hset_calls}"
 
 
+class TestCpToolBatchDelivery:
+    """批量交付（source_file_paths）测试"""
+
+    @pytest.fixture
+    def batch_sources(self, tmp_path):
+        """创建 3 个真实源文件，返回 (paths, files)"""
+        paths = []
+        for name in ("01_大堂_硬装.xlsx", "02_客房_家具.xlsx", "03_外墙_涂料.xlsx"):
+            f = tmp_path / name
+            f.write_bytes(b"xlsx-bytes-" + name.encode())
+            paths.append(str(f))
+        return paths
+
+    @staticmethod
+    def _tool():
+        from src.tools.file.cp_tool import CpTool
+        return CpTool()
+
+    @staticmethod
+    def _reg_side_effect(call_count):
+        """_register_download 动态响应：file_id 按调用序递增，file_name 回显 display_name"""
+        state = {"count": 0}
+
+        def _respond(file_path, display_name=None, visible=True):
+            i = state["count"]
+            state["count"] += 1
+            name = display_name or Path(file_path).name
+            return {"success": True, "file_id": f"file_batch_{i:03d}", "file_name": name,
+                    "file_size": 100 + i, "download_url": f"/api/files/file_batch_{i:03d}/download",
+                    "file_path": f"/tmp/upload/{name}", "visible": visible}
+
+        return _respond
+
+    @pytest.mark.asyncio
+    async def test_batch_all_success(self, tmp_path, batch_sources):
+        """批量全部成功：file_count、files 字段、display_names 按序生效"""
+        _set_test_context(user_id="u_batch", tenant_id="tenant_batch")
+        tool = self._tool()
+        names = ["大堂硬装材料清单.xlsx", "客房家具清单.xlsx", "外墙涂料清单.xlsx"]
+        with patch.object(tool, "_register_download") as reg:
+            reg.side_effect = self._reg_side_effect(3)
+            result = await tool.execute(
+                source_file_paths=batch_sources,
+                display_names=names,
+            )
+
+        assert result["success"] is True
+        assert result["file_count"] == 3
+        assert len(result["files"]) == 3
+        for idx, (f, name) in enumerate(zip(result["files"], names)):
+            assert f["file_id"] == f"file_batch_{idx:03d}"
+            assert f["download_url"] == f"/api/files/file_batch_{idx:03d}/download"
+            assert f["file_name"] == name
+            assert "resolved_source" not in f
+        # display_names 按序传入 _register_download
+        assert [c.args[1] for c in reg.call_args_list] == names
+
+    @pytest.mark.asyncio
+    async def test_batch_display_names_fallback_to_src_name(self, tmp_path, batch_sources):
+        """display_names 缺省项回退源文件名"""
+        _set_test_context(user_id="u_batch", tenant_id="tenant_batch")
+        tool = self._tool()
+        with patch.object(tool, "_register_download") as reg:
+            reg.side_effect = self._reg_side_effect(3)
+            result = await tool.execute(
+                source_file_paths=batch_sources,
+                display_names=["只有第一个有名字.xlsx"],
+            )
+
+        assert result["success"] is True
+        assert reg.call_args_list[0].args[1] == "只有第一个有名字.xlsx"
+        assert reg.call_args_list[1].args[1] == "02_客房_家具.xlsx"
+        assert reg.call_args_list[2].args[1] == "03_外墙_涂料.xlsx"
+
+    @pytest.mark.asyncio
+    async def test_batch_partial_failure(self, tmp_path, batch_sources):
+        """单个文件失败不阻塞：成功项照常返回，失败项进 errors"""
+        _set_test_context(user_id="u_batch", tenant_id="tenant_batch")
+        batch_sources.append(str(tmp_path / "not_exist_404.xlsx"))
+        tool = self._tool()
+        with patch.object(tool, "_register_download") as reg:
+            reg.side_effect = self._reg_side_effect(3)
+            result = await tool.execute(source_file_paths=batch_sources)
+
+        assert result["success"] is True
+        assert result["file_count"] == 3
+        assert len(result["errors"]) == 1
+        assert result["errors"][0]["source_file_path"] == str(tmp_path / "not_exist_404.xlsx")
+        assert "源文件不存在" in result["errors"][0]["error"]
+
+    @pytest.mark.asyncio
+    async def test_batch_all_failed(self, tmp_path):
+        """全部失败：success=False，errors 汇总"""
+        _set_test_context(user_id="u_batch", tenant_id="tenant_batch")
+        tool = self._tool()
+        result = await tool.execute(source_file_paths=[str(tmp_path / "a_404.xlsx"), str(tmp_path / "b_404.xlsx")])
+
+        assert result["success"] is False
+        assert "批量复制全部失败" in result["error"]
+        assert len(result["errors"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_batch_forbidden_extension_goes_to_errors(self, tmp_path, batch_sources):
+        """禁用后缀文件进 errors，不阻塞其余文件"""
+        _set_test_context(user_id="u_batch", tenant_id="tenant_batch")
+        py_file = tmp_path / "danger_script.py"
+        py_file.write_text("print('x')", encoding="utf-8")
+        tool = self._tool()
+        with patch.object(tool, "_register_download") as reg:
+            reg.side_effect = self._reg_side_effect(3)
+            result = await tool.execute(source_file_paths=batch_sources + [str(py_file)])
+
+        assert result["success"] is True
+        assert result["file_count"] == 3
+        assert len(result["errors"]) == 1
+        assert ".py" in result["errors"][0]["error"]
+
+    @pytest.mark.asyncio
+    async def test_batch_conflict_with_source_file_path(self):
+        """source_file_path 与 source_file_paths 同时提供 → 结构化失败"""
+        tool = self._tool()
+        result = await tool.execute(
+            source_file_path="/tmp/a.xlsx",
+            source_file_paths=["/tmp/b.xlsx"],
+        )
+        assert result["success"] is False
+        assert "不能同时提供" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_batch_conflict_with_file_path(self, tmp_path, batch_sources):
+        """批量模式 + file_path → 结构化失败（目标统一自动分配）"""
+        tool = self._tool()
+        result = await tool.execute(
+            source_file_paths=batch_sources,
+            file_path="output/x.xlsx",
+        )
+        assert result["success"] is False
+        assert "不支持 file_path" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_batch_visible_default_true(self, tmp_path, batch_sources):
+        """批量模式 visible 默认 True，逐个透传 _register_download"""
+        _set_test_context(user_id="u_batch", tenant_id="tenant_batch")
+        tool = self._tool()
+        with patch.object(tool, "_register_download") as reg:
+            reg.side_effect = self._reg_side_effect(3)
+            result = await tool.execute(source_file_paths=batch_sources)
+
+        assert result["success"] is True
+        assert all(c.kwargs.get("visible") is True for c in reg.call_args_list)
+
+    def test_get_display_name_batch_mode(self):
+        """批量模式动态显示名带数量"""
+        tool = self._tool()
+        name = tool.get_display_name(tool_args={"source_file_paths": ["a", "b", "c"]})
+        assert "3 个文件" in name
+
+
 class TestCpToolGetDisplayName:
     """get_display_name 动态显示名测试"""
 

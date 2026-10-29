@@ -31,7 +31,7 @@ describe('agentIcons', () => {
   })
 
   it('同一 agentId 多次调用应返回相同结果（稳定性）', () => {
-    const ids = ['trade-specialist', 'travel-consultant', 'customer-followup', 'complaint', 'after-sales', 'main']
+    const ids = ['ai-lead-gen', 'travel-consultant', 'customer-followup', 'complaint', 'after-sales', 'main']
     for (const id of ids) {
       const first = getAgentIconPath(id)
       // 调用 10 次，结果应一致
@@ -63,7 +63,7 @@ describe('agentIcons', () => {
     // 取 10 个差异较大的 agentId，至少应有 5 个不同 path
     const ids = [
       'a', 'b', 'c', 'd', 'e',
-      'trade-specialist', 'travel-consultant', 'complaint-handler',
+      'ai-lead-gen', 'travel-consultant', 'complaint-handler',
       'after-sales-service', 'customer-followup'
     ]
     const uniquePaths = new Set(ids.map(id => getAgentIconPath(id)))
@@ -71,7 +71,7 @@ describe('agentIcons', () => {
   })
 
   it('返回的 path 必定在 AGENT_ICON_PATHS 数组内', () => {
-    const ids = ['', 'main', 'trade-specialist', 'unknown-agent', 'another-one']
+    const ids = ['', 'main', 'ai-lead-gen', 'unknown-agent', 'another-one']
     for (const id of ids) {
       const path = getAgentIconPath(id)
       expect(AGENT_ICON_PATHS).toContain(path)

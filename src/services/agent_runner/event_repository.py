@@ -89,6 +89,11 @@ class EventRepository:
         if selected == 'terminal':
             from src.notifications.producer import publish_runner_terminal_in_tx
             publish_runner_terminal_in_tx(cursor, updated)
+            # scheduled 终态统计回写（设计 §5.4）：任务统计/once 收尾/自动
+            # 暂停与终态同事务，失败整体回滚（与通知生产者同语义）。
+            if updated.get('source') == 'scheduled':
+                from src.scheduler.hooks import record_scheduled_run_in_tx
+                record_scheduled_run_in_tx(cursor, updated)
         return updated, event
 
     @staticmethod

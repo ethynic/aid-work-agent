@@ -2,7 +2,8 @@
 
 LOCAL_PROXY_TOOL_NAMES = frozenset({
     "boss_filter", "boss_clear_filter", "boss_filter_options", "boss_goto",
-    "boss_greet", "boss_accept_resume", "boss_reject_current",
+    "boss_greet", "boss_lookup_candidates", "boss_greet_selected",
+    "boss_accept_resume", "boss_reject_current",
     "boss_interview_demo", "boss_list_jobs", "boss_select_job",
     "boss_jobs_list", "boss_resume_detail", "boss_resume_batch",
     "boss_resume_next",

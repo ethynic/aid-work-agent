@@ -88,6 +88,9 @@
           <p class="text-sm font-medium text-gray-700">
             {{ currentQuestion.prompt }}
             <span v-if="currentQuestion.required" class="text-danger-500">*</span>
+            <span v-if="multiMaxSelect" data-test="multi-max-hint" class="text-xs font-normal text-gray-400">
+              （最多选 {{ multiMaxSelect }} 个，已选 {{ selectedCount }} 个）
+            </span>
           </p>
         </div>
 
@@ -102,7 +105,7 @@
           <label
             v-for="option in currentQuestion.options || []"
             :key="option.key"
-            :class="['flex cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2 transition-colors',
+            :class="['relative flex cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2 transition-colors',
                      isSelected(currentQuestion, option.key)
                        ? 'border-primary-300 bg-primary-50/60'
                        : 'border-gray-100 bg-gray-50/40 hover:border-gray-200']"
@@ -337,6 +340,20 @@ watch(boundFormId, () => {
 watch(questionCount, count => { if (page.value >= count) page.value = Math.max(0, count - 1) })
 
 const isSelected = (question: AskFormQuestion, key: string) => (selections[question.id] || []).includes(key)
+
+// 多选上限提示：仅当上限真正约束可选数量（上限小于可选项数）时显示
+const multiMaxSelect = computed(() => {
+  const question = currentQuestion.value
+  if (!question || question.type !== 'multi') return 0
+  const max = question.max_select
+  const optionCount = question.options?.length ?? 0
+  if (typeof max !== 'number' || max <= 0 || optionCount <= max) return 0
+  return max
+})
+const selectedCount = computed(() => {
+  const question = currentQuestion.value
+  return question ? (selections[question.id] || []).length : 0
+})
 
 function toggleOption(question: AskFormQuestion, key: string) {
   if (!editable.value) return

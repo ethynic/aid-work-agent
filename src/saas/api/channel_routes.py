@@ -2704,17 +2704,6 @@ async def _process_tenant_wecom_kf_messages(
                 ):
                     continue
 
-                # 尽力投递补投：客户来消息（AI 可接待）时，把此前直投失败的
-                # 定时提醒合并补投；异常只记日志，不影响正常消息处理
-                try:
-                    from src.scheduler.delivery import deliver_pending_for_channel_user
-                    await deliver_pending_for_channel_user(
-                        tenant_id=tenant_id, open_kfid=open_kfid,
-                        external_userid=unified_msg.user_id, adapter=adapter)
-                except Exception as _delivery_err:
-                    logger.opt(exception=True).warning(
-                        f"后端日志：wecom_kf 补投钩子异常 session_id={session_id}, {_delivery_err}")
-
                 # 只替换对话执行，渠道业务和原会话队列保持原实现。
                 from src.channels.runner_agent import ChannelRunnerAgent
                 agent = ChannelRunnerAgent(source='wecom_kf', session_id=session_id,

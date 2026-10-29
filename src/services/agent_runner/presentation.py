@@ -20,7 +20,14 @@ def option_items(value):
 
 def tool_result_display(value):
     result = scalar_fields(value, ('success','error','message','summary','file_id','file_name',
-                                  'download_file_name','file_size','download_url','mime_type','visible'))
+                                  'download_file_name','file_size','download_url','mime_type','visible',
+                                  'file_count'))
+    if isinstance(value, dict) and isinstance(value.get('files'), list):
+        # 批量交付（cp source_file_paths）：每个文件的下载卡片字段逐项透传
+        result['files'] = [scalar_fields(item, ('file_id','file_name','download_file_name','file_size',
+                                                'download_url','mime_type','visible'))
+                           for item in value['files']
+                           if isinstance(item, dict)]
     if isinstance(value, dict) and isinstance(value.get('data'), dict):
         options = option_items(value['data'].get('options'))
         if len(options) >= 2:

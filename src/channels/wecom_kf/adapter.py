@@ -1028,16 +1028,11 @@ class WeComKfAdapter(ChannelAdapter):
         )
         return result.get("errcode", 0) == 0
 
-    async def send_text(self, text: str, user_id: str,
-                        open_kfid: Optional[str] = None) -> bool:
-        """发送纯文本消息（供回调流程直接调用）
-
-        open_kfid 显式传入时不读写共享的 current_open_kfid，供非回调链路
-        （如定时任务投递）并发安全使用；缺省沿用回调循环维护的值。
-        """
+    async def send_text(self, text: str, user_id: str) -> bool:
+        """发送纯文本消息（供回调流程直接调用）"""
         result = await self.api_client.send_msg(
             touser=user_id,
-            open_kfid=open_kfid or self.current_open_kfid,
+            open_kfid=self.current_open_kfid,
             msgtype="text",
             content={"content": text},
         )

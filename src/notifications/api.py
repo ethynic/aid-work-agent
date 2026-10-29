@@ -132,6 +132,20 @@ def create_router(config=None, repository=None, user_loader=None):
         enabled()
         return {'notification_ref':repository.tenant_test(current,body)}
 
+    @router.get('/selectable-targets')
+    def selectable_targets(current: Subject = Depends(subject)):
+        """任务通知目标选项（非管理员）：个人目标 + 租户级目标，无凭据。"""
+        enabled()
+        return {'targets': repository.selectable_targets(current)}
+
+    @router.get('/task-deliveries')
+    def task_deliveries(task_id: str, current: Subject = Depends(subject)):
+        """任务视图投递状态：该任务通知事件的投递账。"""
+        if not task_id or len(task_id) > 64:
+            raise NotificationError('NOTIFICATION_INVALID_REQUEST')
+        enabled()
+        return {'task_id': task_id, 'events': repository.task_event_deliveries(current, task_id)}
+
     @router.get('/inbox')
     def inbox(request: Request, current: Subject = Depends(subject)):
         enabled()

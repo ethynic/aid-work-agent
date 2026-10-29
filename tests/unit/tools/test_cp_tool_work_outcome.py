@@ -92,7 +92,7 @@ class TestRecordWorkOutcomeSuccess:
                 user_id="u1",
                 session_id="s_abc",
                 channel="web",
-                subagent_id="trade-specialist",
+                subagent_id="ai-lead-gen",
                 chat_record_id=123,
             )),
             patch("src.reports.work_outcome_db.WorkOutcomeDB.create") as mock_create,
@@ -107,7 +107,7 @@ class TestRecordWorkOutcomeSuccess:
         assert call_kwargs["user_id"] == "u1"
         assert call_kwargs["session_id"] == "s_abc"
         assert call_kwargs["channel"] == "web"
-        assert call_kwargs["subagent_id"] == "trade-specialist"
+        assert call_kwargs["subagent_id"] == "ai-lead-gen"
         assert call_kwargs["chat_record_id"] == 123
         assert call_kwargs["outcome_type"] == "file"
         assert call_kwargs["source"] == "cp_realtime"

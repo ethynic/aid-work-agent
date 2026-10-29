@@ -481,32 +481,33 @@ chunks_vec（向量）      chunks_fts（全文搜索）
 
 ---
 
-## 8. 定时任务
+## 8. 定时任务（v2 Runner 化重建）
+
+> 2026-10-28 随 Runner 化重构整体重建（[设计](scheduled-task-runner-refactor-design.md) §9）：旧 `scheduled_tasks`/`scheduled_task_logs`/`scheduled_task_deliveries` 三表已删除（功能零存量用户，无数据迁移）。**执行历史不再有独立日志表**——由 `agent_runners`（执行事实）+ 任务会话消息（`chat_sessions.metadata.scheduled_task` 标记）构成。
 
 ### 8.1 `scheduled_tasks` — 定时任务表
 
-用户配置的定时任务，支持 cron 表达式和固定间隔两种调度方式。
+用户定时任务的唯一真源：任务定义、调度规则、到期认领 pending 槽与执行统计。到期由 dispatch 循环原子认领（`claim_due` 单条 UPDATE），每次触发向 AgentRunner 提交持久任务执行。
 
 **关键字段**：
-- `schedule_type` — 调度类型（`cron` / `interval`）
-- `cron_expression` / `interval_seconds` — 调度规则
-- `status` — 任务状态（`active` / `paused` / `completed`）
-- `total_runs` / `success_count` / `fail_count` — 执行统计
-- `next_run_at` — 下次执行时间
+- `task_id` — `sched_` 前缀全局唯一标识；幂等键 = `{task_id}:{pending_occurrence_key}`
+- `tenant_id` / `user_id` — 任务属主（读写均带归属条件，fail-closed）
+- `name` / `task_prompt` — 任务名与自包含任务定义（不得依赖创建会话的隐含上下文）
+- `attachments` — JSONB 受权资源引用（file_id 等），创建时固化，随每次执行提交
+- `profile_id` / `instance_id` — 创建时从工具执行上下文继承的智能体身份
+- `schedule_type` — `daily` / `weekly` / `monthly` / `interval` / `once`
+- `cron_expression` / `interval_seconds` / `run_at` — 调度规则（`run_at` 为 once 专用）
+- `session_id` — UNIQUE，任务专属会话（chat_sessions 行，metadata 带 `scheduled_task` 标记），执行结果的存储容器
+- `notification_target_id` — 可选，`notification_targets` 引用（事件生成时快照进参数）
+- `status` — `active` / `paused` / `completed` / `expired`
+- `pause_reason` — `credit_blocked` / `profile_forbidden` / `tenant_unavailable` / `definition_invalid` / `submit_conflict` / `submit_rejected` / `interrupted`
+- `next_due_at` — 周期依据（认领时推进；once 认领后置 NULL）
+- `pending_occurrence_key` / `pending_trigger` / `pending_retry_at` / `pending_snapshot` — 待提交触发槽：稳定标识（scheduled=认领的 due 值，manual=uuid）、触发原因（`scheduled`/`manual`）、提交重试时间、本次执行不可变提交快照（text/attachments/profile_id/instance_id/prompt_augmentations）。所有 pending 变更（clear/backoff）必须带 `pending_occurrence_key` 条件
+- `last_run_at` / `last_status` / `total_runs` / `success_count` / `fail_count` — 执行统计（manual 与 scheduled 终态都计入；仅 `trigger='scheduled'` 终态消费 once 置 `completed`）
 
-**关系**：`scheduled_tasks.user_id` → `users.user_id`
+**索引**：`idx_scheduled_tasks_due(status, next_due_at)`（到期扫描）、`idx_scheduled_tasks_pending(pending_retry_at) WHERE pending_occurrence_key IS NOT NULL`（重试扫描，部分索引）、`idx_scheduled_tasks_owner(tenant_id, user_id, status)`（归属视图）。
 
-### 8.2 `scheduled_task_logs` — 定时任务执行日志表
-
-每次定时任务执行的详细记录。
-
-**关键字段**：
-- `status` — 执行状态
-- `trigger_type` — 触发方式
-- `duration_ms` / `token_usage` — 资源消耗
-- `result_summary` / `result_detail` — 执行结果
-
-**关系**：`scheduled_task_logs.task_id` → `scheduled_tasks.task_id`
+**关系**：`scheduled_tasks.user_id` → `users.user_id`；`scheduled_tasks.session_id` → `chat_sessions.session_id`；执行事实经会话关联 `agent_runners.session_id`。
 
 ---
 
@@ -810,7 +811,7 @@ tenants（租户）
 │                                                 ├── chunks_vec（向量）
 │                                                 └── chunks_fts（全文搜索）
 │
-├── scheduled_tasks（定时任务） ───────→ scheduled_task_logs（任务日志）
+├── scheduled_tasks（定时任务） ───────→ chat_sessions（任务专属会话，执行历史经 agent_runners）
 ├── data_connectors（数据连接器）
 ├── social_accounts（社媒平台账号） ──────┬── social_content_variants（平台内容版本）
 │                                        ├── social_publish_jobs（发布任务）

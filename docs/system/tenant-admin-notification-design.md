@@ -3,6 +3,7 @@
 > 日期：2026-10-10；版本：v0.2；状态：📋 设计完成，待评审
 > v0.2 评审简化：删除租户级偏好模型（四选一由 active target 推导）、email 收敛为单收件地址、credit_low 改月度幂等键、钉钉首期不支持加签；新增渠道配置帮助弹框（§7.1）
 > 上游基础设施：[统一通知基础设施设计](notification-infrastructure-design.md)（2026-10-10 已合入核心 + Web Push 适配器）
+> 演进说明：2026-10-28 起本设计的"管理员展开 + 租户级四选一目标"收编为[通知规则引擎](notification-rule-engine-design.md)的预置默认规则（tenant_admins 模式 + 租户级目标），实现以规则引擎设计为准；本文档三事件定义、模板参数与防轰炸策略仍有效
 > 关联设计：[系统级防滥用与限额设计](saas/anti-abuse-policy-design.md)（滥用告警是其事件出口）
 
 ## 1. 背景与目标

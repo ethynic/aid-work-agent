@@ -174,7 +174,7 @@ class TestFormatSessionForReview:
             session_id="s_abc",
             tenant_id="t1",
             user_id="u1",
-            subagent_id="trade-specialist",
+            subagent_id="ai-lead-gen",
             channel="web",
         )
         messages = [
@@ -187,7 +187,7 @@ class TestFormatSessionForReview:
         ]
         result = _format_session_for_review(messages, session)
         assert "s_abc" in result
-        assert "trade-specialist" in result
+        assert "ai-lead-gen" in result
         assert "web" in result
         assert "record_id=101" in result
         assert "帮我修改客户李明的订单地址" in result

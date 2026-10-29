@@ -94,4 +94,42 @@ export const notificationsAPI = {
 
   markRead: (notificationRef: string) =>
     request<{ success: boolean }>(`/inbox/${notificationRef}/read`, { method: 'POST' }),
+
+  /** 任务通知目标选项（非管理员可用，设计 §8.3）：个人 + 租户级目标，无凭据 */
+  selectableTargets: () =>
+    request<{ targets: TenantTarget[] }>('/selectable-targets'),
+
+  /** 任务视图投递状态（设计 §8.4）：该任务全部通知事件的投递账 */
+  taskDeliveries: (taskId: string) => {
+    const q = new URLSearchParams({ task_id: taskId })
+    return request<TaskDeliverySummary>(`/task-deliveries?${q.toString()}`)
+  },
+}
+
+export interface TaskDeliveryRecord {
+  target_id: string
+  channel: string
+  provider: string
+  /** pending / delivered / failed 等 */
+  state: string
+  attempts: number
+  error_class?: string | null
+  accepted_at?: string | null
+  delivered_at?: string | null
+}
+
+export interface TaskDeliveryEvent {
+  notification_ref: string
+  event_type: string
+  created_at: string
+  /** 消息展开状态（Phase 5 二轮评审第 5 项）：pending=消息已生成但异步展开
+   *  未完成（此时无 deliveries 不代表未配置外发）；expanded=已展开，无
+   *  deliveries 才是确认无外发目标 */
+  expansion_state?: string
+  deliveries: TaskDeliveryRecord[]
+}
+
+export interface TaskDeliverySummary {
+  task_id: string
+  events: TaskDeliveryEvent[]
 }

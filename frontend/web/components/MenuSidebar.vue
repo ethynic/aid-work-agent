@@ -282,7 +282,7 @@
       <span>历史会话</span>
     </div>
 
-    <!-- Session List - 会话列表（侧边栏唯一滚动区域） -->
+    <!-- Session List - 会话列表（侧边栏唯一滚动区域：普通会话 / 任务计划两组，设计 §6） -->
     <div v-show="showHistory" class="flex-1 min-h-0 overflow-y-auto px-2 pb-2">
       <div v-if="isLoading" class="p-4 text-center text-gray-500">
         <svg class="w-6 h-6 mx-auto animate-spin" fill="none" viewBox="0 0 24 24">
@@ -292,7 +292,7 @@
         <p class="mt-2 text-sm">加载中...</p>
       </div>
 
-      <div v-else-if="filteredSessions.length === 0" class="p-4 text-center text-gray-500">
+      <div v-else-if="filteredSessions.length === 0 && scheduledTasks.length === 0" class="p-4 text-center text-gray-500">
         <svg class="w-10 h-10 mx-auto mb-2 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
         </svg>
@@ -382,6 +382,43 @@
           <span>全部历史会话</span>
         </button>
       </div>
+
+        <!-- 任务计划分组（定时任务 Runner 化 Phase 5，设计 §6）：点击进入任务视图，非聊天页 -->
+        <template v-if="scheduledTasks.length > 0">
+          <div class="flex-shrink-0 px-5 py-2 mt-2 flex items-center gap-3 text-sm text-gray-600">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span>任务计划</span>
+          </div>
+          <div class="space-y-0.5">
+            <!-- button：Tab/Enter 键盘可达（评审 P2-10，替代 div+click） -->
+            <button
+              v-for="plan in scheduledTasks"
+              :key="plan.task_id"
+              type="button"
+              :class="[
+                'w-full text-left px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors border',
+                isTaskPlanActive(plan.task_id)
+                  ? 'bg-primary-50 border-primary-200'
+                  : 'hover:bg-gray-50 border-transparent'
+              ]"
+              @click="openTaskPlan(plan.task_id)"
+            >
+              <span class="flex items-center gap-2">
+                <span
+                  :class="[
+                    'w-2 h-2 rounded-full flex-shrink-0',
+                    plan.status === 'active' ? 'bg-success-500' : plan.status === 'paused' ? 'bg-warning-500' : 'bg-gray-300'
+                  ]"
+                  :title="taskPlanStatusLabel(plan)"
+                ></span>
+                <span class="flex-1 min-w-0 block text-sm text-gray-700 truncate">{{ plan.name }}</span>
+              </span>
+              <span class="mt-0.5 pl-4 block text-xs text-gray-400 truncate">{{ taskPlanSummary(plan) }}</span>
+            </button>
+          </div>
+        </template>
     </div>
 
     </div>
@@ -478,18 +515,6 @@
         </div>
 
         <div class="my-1 border-t border-gray-100"></div>
-
-        <!-- 我的定时任务（手机端隐藏：定时任务页面未适配手机端） -->
-        <button
-          v-if="!props.isMobile"
-          @click="showUserMenu = false; openScheduledTasks()"
-          class="w-full flex items-center gap-3 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 transition-colors"
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <span>我的定时任务</span>
-        </button>
 
         <!-- 设置（手机端隐藏：设置弹窗未适配手机端） -->
         <button
@@ -796,7 +821,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, reactive, onMounted } from 'vue'
+import { ref, computed, watch, watchEffect, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { onClickOutside } from '@vueuse/core'
 import { useSession } from '@/composables/useSession'
@@ -806,6 +831,10 @@ import { useTheme, type ThemeName } from '@/composables/useTheme'
 import { useDesktopUpdater } from '@/composables/useDesktopUpdater'
 import { notifySessionNavigation } from '@/utils/chatSessionNavigation'
 import { listConnectionSources, listChannels } from '@/api/saasTenant'
+import {
+  listScheduledTasks, describeSchedule, scheduledTaskSessionMark, scheduledTasksVersion,
+  SCHEDULED_STATUS_LABELS, type ScheduledTask,
+} from '@/api/scheduledTask'
 import SettingsDialog from './SettingsDialog.vue'
 import MenuIcon from './ui/MenuIcon.vue'
 import BusinessPageIcon from './ui/BusinessPageIcon.vue'
@@ -1123,9 +1152,100 @@ const filteredAvailableSubagents = computed(() => {
   return props.availableSubagents || []
 })
 
-// 永远显示该用户的所有历史会话，不按数字员工过滤
+// 永远显示该用户的所有历史会话，不按数字员工过滤；
+// 任务专属会话（metadata.scheduled_task 标记，设计 §6）从普通会话列表排除，
+// 改在「任务计划」分组展示（/api/sessions 列表行含 metadata，JSONB）
 const filteredSessions = computed(() => {
-  return sessions.value
+  return sessions.value.filter(session => !scheduledTaskSessionMark(session))
+})
+
+// ============== 任务计划分组（Runner 化 Phase 5，设计 §6） ==============
+const scheduledTasks = ref<ScheduledTask[]>([])
+// 上下文代际（评审 P2-5）：租户切换/登出后旧响应按代际丢弃，不写入新租户视图
+let scheduledTasksGeneration = 0
+// 可见性/焦点唤醒节流（评审 P2-5）：30s 内不重复拉取
+const SCHEDULED_TASKS_WAKE_THROTTLE_MS = 30_000
+let scheduledTasksLastLoad = 0
+
+async function loadScheduledTasks() {
+  if (!tenantIsLoggedIn.value) return
+  const generation = ++scheduledTasksGeneration
+  try {
+    const tasks = await listScheduledTasks()
+    if (generation !== scheduledTasksGeneration) return
+    scheduledTasks.value = tasks
+  } catch {
+    // 任务列表加载失败不阻塞侧栏（普通会话不受影响），下次路由/挂载/信号重试
+    if (generation !== scheduledTasksGeneration) return
+    scheduledTasks.value = []
+  } finally {
+    if (generation === scheduledTasksGeneration) scheduledTasksLastLoad = Date.now()
+  }
+}
+
+/** 可见性恢复/窗口聚焦时轻量刷新（节流 30s，评审 P2-5） */
+function refreshScheduledTasksOnWake() {
+  if (!tenantIsLoggedIn.value) return
+  if (Date.now() - scheduledTasksLastLoad < SCHEDULED_TASKS_WAKE_THROTTLE_MS) return
+  void loadScheduledTasks()
+}
+
+function onSidebarVisibilityChange() {
+  if (document.visibilityState === 'visible') refreshScheduledTasksOnWake()
+}
+
+function isTaskPlanActive(taskId: string): boolean {
+  return route.path === `/t/${tenantId.value}/tasks/${taskId}`
+}
+
+function openTaskPlan(taskId: string) {
+  if (!tenantId.value) return
+  router.push(`/t/${tenantId.value}/tasks/${taskId}`)
+  if (props.isMobile) emit('collapse')
+}
+
+function taskPlanStatusLabel(plan: ScheduledTask): string {
+  return SCHEDULED_STATUS_LABELS[plan.status] || plan.status
+}
+
+/** 任务计划行摘要：状态 + 下次执行（已暂停/终态不给下次时间） */
+function taskPlanSummary(plan: ScheduledTask): string {
+  const status = taskPlanStatusLabel(plan)
+  if (plan.status === 'active' && plan.next_due_at) {
+    const date = new Date(plan.next_due_at)
+    const time = Number.isNaN(date.getTime()) ? plan.next_due_at
+      : `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+    return `${status} · 下次 ${time}`
+  }
+  return `${status} · ${describeSchedule(plan)}`
+}
+
+// 登录后加载任务计划；进入/离开任务视图时刷新（状态与下次执行时间会变化）；
+// 任务视图内任何变更操作成功后 bump 领域信号（scheduledTasksVersion）即时刷新（评审 P2-5）；
+// 聊天 runner 终态落定同样 bump 该信号（useAgent 合并 5s，二轮评审第 2 项）。
+// 身份/租户切换（tenantId 或登录用户变化，含登录态保持不变的跨租户切换）：
+// 立即清空任务分组并递增 generation 使旧响应失效，不依赖下一次
+// loadScheduledTasks 才丢弃（二轮评审第 2 项：租户切换后旧任务残留）。
+watch(() => [tenantId.value, tenantAdmin.value?.user_id, tenantIsLoggedIn.value] as const, () => {
+  scheduledTasksGeneration += 1
+  scheduledTasks.value = []
+  scheduledTasksLastLoad = 0
+  if (tenantIsLoggedIn.value) void loadScheduledTasks()
+}, { immediate: true })
+watch(() => route.path, path => {
+  if (tenantIsLoggedIn.value && path.includes('/tasks/')) void loadScheduledTasks()
+})
+watch(scheduledTasksVersion, () => {
+  if (tenantIsLoggedIn.value) void loadScheduledTasks()
+})
+// 可见性恢复/聚焦轻量刷新（节流 30s）：覆盖其他标签页/设备上的任务变更
+onMounted(() => {
+  document.addEventListener('visibilitychange', onSidebarVisibilityChange)
+  window.addEventListener('focus', refreshScheduledTasksOnWake)
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', onSidebarVisibilityChange)
+  window.removeEventListener('focus', refreshScheduledTasksOnWake)
 })
 
 // 历史会话展示：默认显示前 N 条（桌面 10 / 移动 6），点击「展开更多」后在滚动区内展示全部
@@ -1254,7 +1374,6 @@ function goToAllSessions() {
 }
 
 // 监听登录状态，登录后加载会话
-import { watchEffect } from 'vue'
 watchEffect(async () => {
   if (tenantIsLoggedIn.value) {
     await loadSessions()
@@ -1411,11 +1530,6 @@ async function confirmRename() {
     renamingSessionId.value = null
     renameInput.value = ''
   }
-}
-
-// 我的定时任务
-function openScheduledTasks() {
-  window.open(`/t/${tenantId.value}/scheduled-tasks`, '_blank')
 }
 
 // 租户模式修改密码

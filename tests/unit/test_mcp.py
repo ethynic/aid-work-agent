@@ -101,13 +101,13 @@ class TestMCPToolRegistry:
         from src.mcp.tools import MCPToolRegistry
 
         mock_skill = MagicMock()
-        mock_skill.name = "trade-customer"
+        mock_skill.name = "demo-skill"
         mock_skill.description = "客户管理"
-        mock_skill.dir = Path("/fake/skills/trade-customer-1.0.0")
+        mock_skill.dir = Path("/fake/skills/demo-skill-1.0.0")
         script_path = mock_skill.dir / "scripts" / "save-customer.py"
         mock_skill.scripts = [script_path]
 
-        config = [{"skill": "trade-customer", "commands": ["save-customer"]}]
+        config = [{"skill": "demo-skill", "commands": ["save-customer"]}]
 
         with patch("src.mcp.tools.skill_registry") as mock_sr:
             mock_sr.get.return_value = mock_skill
@@ -117,7 +117,7 @@ class TestMCPToolRegistry:
             assert len(registry) == 1
             tool = registry.get_tool("save-customer")
             assert tool is not None
-            assert tool.skill_name == "trade-customer"
+            assert tool.skill_name == "demo-skill"
             assert "save-customer" in tool.script_command
 
     @pytest.mark.asyncio

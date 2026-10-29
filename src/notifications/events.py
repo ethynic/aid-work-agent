@@ -12,6 +12,11 @@ from .repository import protected
 class TerminalParameters(StrictDTO):
     session_title: str = Field(min_length=1,max_length=80)
     event_kind: Literal['completed','failed']
+    # scheduled 终态扩展（Phase 3 复核，设计 §8.2）：任务标识/名称与目标
+    # 快照；chat 来源缺省（可选字段，白名单不放宽 extra 校验）
+    task_id: str | None = Field(default=None, min_length=1, max_length=64)
+    task_name: str | None = Field(default=None, min_length=1, max_length=80)
+    notify_target_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class WaitingInputParameters(StrictDTO):
@@ -25,6 +30,32 @@ class WaitingInputParameters(StrictDTO):
     event_kind: Literal['waiting_input']
     question_title: str = Field(min_length=1,max_length=120)
     session_id: str = Field(min_length=1,max_length=64)
+
+
+class PausedParameters(StrictDTO):
+    """定时任务自动暂停通知参数（Phase 3，设计 §3.3/§8.1）。
+
+    notify_target_id 为事件生成时的目标快照（任务行当前
+    notification_target_id），后续任务改目标不影响已生成事件；
+    无目标时缺省，走用户个人偏好路由。
+    """
+    task_name: str = Field(min_length=1,max_length=80)
+    reason_label: str = Field(min_length=1,max_length=120)
+    task_id: str = Field(min_length=1,max_length=64)
+    notify_target_id: str | None = Field(default=None,min_length=1,max_length=128)
+
+
+class NeedsActionParameters(StrictDTO):
+    """scheduled 非提问类等待停车通知参数（Phase 3，设计 §8.1）。
+
+    与 PausedParameters 同构（session_title/event_kind 供 Web Push 模板），
+    action_label 说明要做什么（设备确认/人工处理），目标快照同规则。"""
+    session_title: str = Field(min_length=1,max_length=80)
+    event_kind: Literal['needs_action']
+    task_name: str = Field(min_length=1,max_length=80)
+    task_id: str = Field(min_length=1,max_length=64)
+    action_label: str = Field(min_length=1,max_length=120)
+    notify_target_id: str | None = Field(default=None,min_length=1,max_length=128)
 
 
 class TestParameters(StrictDTO):
@@ -60,6 +91,30 @@ class AbuseParameters(StrictDTO):
     show_tenant: bool = False  # 仅平台管理员投递时置 True（租户管理员即当前租户，无需显示）
 
 
+class LeadGenReplyIntentParameters(StrictDTO):
+    """AI获客：客户回复意向通知（producer=ai_lead_gen，recipient=campaign 属主用户）"""
+    campaign_name: str = Field(min_length=1, max_length=128)
+    company_name: str = Field(min_length=1, max_length=256)
+    contact_name: str = Field(min_length=1, max_length=128)
+    contact_email: str = Field(min_length=3, max_length=254)
+    intent: Literal['interested', 'info_request', 'refused', 'irrelevant', 'unclear']
+    intent_summary: str = Field(min_length=1, max_length=1000)
+
+
+class LeadGenDailySummaryParameters(StrictDTO):
+    """AI获客：每日循环执行汇总通知（design §8）"""
+    campaign_name: str = Field(min_length=1, max_length=128)
+    summary_date: str = Field(pattern=r'^\d{4}-\d{2}-\d{2}$')
+    new_leads: int = Field(ge=0, le=1e6)
+    new_contacts: int = Field(ge=0, le=1e6)
+    emails_sent: int = Field(ge=0, le=1e6)
+    emails_failed: int = Field(ge=0, le=1e6)
+    emails_bounced: int = Field(ge=0, le=1e6)
+    new_replies: int = Field(ge=0, le=1e6)
+    interested_replies: int = Field(ge=0, le=1e6)
+    awaiting_review: int = Field(ge=0, le=1e6)
+
+
 @dataclass(frozen=True)
 class EventDefinition:
     template_key: str
@@ -86,13 +141,26 @@ class EventRegistry:
 
 
 EVENTS=EventRegistry()
+
+LEADGEN_INTENT_LABELS = {
+    'interested': '有意向',
+    'info_request': '索取资料',
+    'refused': '婉拒',
+    'irrelevant': '无关',
+    'unclear': '待确认',
+}
+
 EVENTS.register('task.completed',EventDefinition('runner_terminal',TerminalParameters,'runner_result'))
 EVENTS.register('task.failed',EventDefinition('runner_terminal',TerminalParameters,'runner_result'))
 EVENTS.register('task.waiting_input',EventDefinition('runner_waiting_input',WaitingInputParameters,'runner_waiting'))
+EVENTS.register('task.paused',EventDefinition('task_paused',PausedParameters,'scheduled_task'))
+EVENTS.register('task.needs_action',EventDefinition('task_needs_action',NeedsActionParameters,'runner_waiting'))
 EVENTS.register('notification.test',EventDefinition('notification_test',TestParameters,'notification_test'))
 EVENTS.register('billing.credit_low',EventDefinition('billing_credit_low',CreditLowParameters,'tenant_credit'))
 EVENTS.register('billing.tenant_expiry',EventDefinition('billing_tenant_expiry',TenantExpiryParameters,'tenant_profile'))
 EVENTS.register('abuse.rule_triggered',EventDefinition('abuse_rule_triggered',AbuseParameters,'abuse_event'))
+EVENTS.register('leadgen.reply_intent',EventDefinition('leadgen_reply_intent',LeadGenReplyIntentParameters,'leadgen_campaign'))
+EVENTS.register('leadgen.daily_summary',EventDefinition('leadgen_daily_summary',LeadGenDailySummaryParameters,'leadgen_campaign'))
 
 
 def render_inbox_text(event_type, parameters):
@@ -101,6 +169,14 @@ def render_inbox_text(event_type, parameters):
         return '等待你的回答', (
             f'「{parameters["session_title"]}」中的提问「{parameters["question_title"]}」'
             f'正在等待你的回答，请前往该会话处理。')
+    if event_type == 'task.paused':
+        return '定时任务已暂停', (
+            f'「{parameters["task_name"]}」已自动暂停：{parameters["reason_label"]}。'
+            f'请处理后前往任务视图手动恢复。')
+    if event_type == 'task.needs_action':
+        return '定时任务需要处理', (
+            f'定时任务「{parameters["task_name"]}」{parameters["action_label"]}，'
+            f'处理后执行将自动继续。')
     if event_type == 'billing.credit_low':
         return '积分即将耗尽提醒', (
             f'「{parameters["tenant_name"]}」近 7 天日均消耗 {parameters["daily_avg_credits"]:.1f} 积分，'
@@ -120,6 +196,24 @@ def render_inbox_text(event_type, parameters):
             f'{tenant_prefix}反滥用规则「{parameters["rule_name"]}」触发{mode}：'
             f'{parameters["subject_label"]} 在统计窗口{window_txt}内消耗 {parameters["window_credits"]:.1f} 积分，'
             f'阈值 {parameters["threshold_credits"]:.1f} 积分。')
+    if event_type == 'leadgen.reply_intent':
+        intent_label = LEADGEN_INTENT_LABELS.get(parameters['intent'], parameters['intent'])
+        return '客户回复意向提醒', (
+            f'获客活动「{parameters["campaign_name"]}」收到 '
+            f'{parameters["company_name"]} {parameters["contact_name"]}'
+            f'（{parameters["contact_email"]}）的回复，判定为「{intent_label}」：'
+            f'{parameters["intent_summary"]}')
+    if event_type == 'leadgen.daily_summary':
+        p = parameters
+        lines = [
+            f'获客活动「{p["campaign_name"]}」{p["summary_date"]} 汇总：',
+            f'新增客户 {p["new_leads"]}、有效联系人 {p["new_contacts"]}；',
+            f'发送 {p["emails_sent"]} 封（失败 {p["emails_failed"]}、退信 {p["emails_bounced"]}）；',
+            f'新回复 {p["new_replies"]} 条（有意向 {p["interested_replies"]} 条）。',
+        ]
+        if p['awaiting_review'] > 0:
+            lines.append(f'另有 {p["awaiting_review"]} 封草稿待审阅确认。')
+        return 'AI获客每日汇总', ''.join(lines)
     raise ValueError('NOTIFICATION_EVENT_UNSUPPORTED')
 
 

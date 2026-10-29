@@ -4236,3 +4236,101 @@
             AND state IN ('succeeded','unknown') AND tool_name IN ('wecom_read_session','wecom_read_sessions')
             AND result_json->'_wecom_inbound'->>'version'='1'
             AND jsonb_array_length(result_json->'_wecom_inbound'->'pending')>0;
+- datetime: "2026-10-28 10:00:00"
+  remark: "trade-specialist 外贸获客智能体下线，DROP 两张业务表（客户/邮件）；新 AI获客智能体（ai-lead-gen）替代"
+  statements: |
+    DROP TABLE IF EXISTS bs_trade_specialist_customer_emails;
+    DROP TABLE IF EXISTS bs_trade_specialist_matched_customers;
+- datetime: "2026-10-28 20:00:00"
+  remark: "AI获客（ai-lead-gen）P2 回复监控：bs_ai_lead_gen_replies 增加 message_id 列 + (tenant_id, message_id) 部分唯一索引，作为 IMAP 轮询幂等去重锚点（并发轮询下数据库层拦截重复入库）"
+  statements: |
+    ALTER TABLE bs_ai_lead_gen_replies ADD COLUMN IF NOT EXISTS message_id TEXT;
+    DROP INDEX IF EXISTS idx_bs_ailg_replies_message_id;
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_bs_ailg_replies_tenant_message ON bs_ai_lead_gen_replies(tenant_id, message_id) WHERE message_id IS NOT NULL;
+- datetime: "2026-10-28 21:00:00"
+  remark: "定时任务 Runner 化重建（Phase 1 清场）：DROP 旧三表（零存量用户无数据迁移），重建 scheduled_tasks；logs/deliveries 不再重建，执行历史 = agent_runners + 任务会话消息"
+  statements: |
+    DROP TABLE IF EXISTS scheduled_task_deliveries;
+    DROP TABLE IF EXISTS scheduled_task_logs;
+    DROP TABLE IF EXISTS scheduled_tasks;
+    CREATE TABLE IF NOT EXISTS scheduled_tasks (
+        id SERIAL PRIMARY KEY,
+        task_id TEXT UNIQUE NOT NULL,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        task_prompt TEXT NOT NULL,
+        attachments JSONB DEFAULT '[]',
+        profile_id TEXT NOT NULL DEFAULT 'main',
+        instance_id TEXT,
+        schedule_type TEXT NOT NULL,
+        cron_expression TEXT,
+        interval_seconds INTEGER,
+        run_at TIMESTAMP,
+        session_id TEXT UNIQUE NOT NULL,
+        notification_target_id TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        pause_reason TEXT,
+        next_due_at TIMESTAMP,
+        pending_occurrence_key TEXT,
+        pending_trigger TEXT,
+        pending_retry_at TIMESTAMP,
+        pending_snapshot JSONB,
+        recovery_retry_at TIMESTAMP,
+        recovery_reset_at TIMESTAMPTZ,
+        last_run_at TIMESTAMP,
+        last_status TEXT,
+        total_runs INTEGER DEFAULT 0,
+        success_count INTEGER DEFAULT 0,
+        fail_count INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due ON scheduled_tasks(status, next_due_at);
+    CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_pending ON scheduled_tasks(pending_retry_at) WHERE pending_occurrence_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_owner ON scheduled_tasks(tenant_id, user_id, status);
+- datetime: "2026-10-28 22:00:00"
+  remark: "定时任务 Runner 化 Phase 3：notification_preferences event_types 默认值补 task.paused/task.needs_action（存量行不回写，读取侧兼容扩展）"
+  statements: |
+    ALTER TABLE notification_preferences
+        ALTER COLUMN event_types SET DEFAULT '["task.completed","task.failed","task.waiting_input","task.paused","task.needs_action"]';
+- datetime: "2026-10-28 22:30:00"
+  remark: "定时任务 Phase 3 复核：恢复驱动退避列（调度侧专用，语义独立于 runner.updated_at）"
+  statements: |
+    ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS recovery_retry_at TIMESTAMP;
+- datetime: "2026-10-28 23:10:00"
+  remark: "定时任务 Phase 4 评审：恢复回合重置列（用户 resume 开启新一轮有界恢复尝试）"
+  statements: |
+    ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS recovery_reset_at TIMESTAMPTZ;
+- datetime: "2026-10-29 12:00:00"
+  remark: "定时任务 Runner 化：agent_runners.actor_kind 放宽允许 system（scheduled 调度身份）"
+  statements: |
+    ALTER TABLE agent_runners DROP CONSTRAINT IF EXISTS agent_runners_actor_kind_check;
+    ALTER TABLE agent_runners ADD CONSTRAINT agent_runners_actor_kind_check CHECK (actor_kind IN ('user', 'channel', 'system'));
+- datetime: "2026-10-29 12:30:00"
+  remark: "留资口径调整：bs_lead_capture_leads 新增 other_contact JSONB 列存固定电话/邮箱（逐条加密），contact_method 语义扩展为 phone|landline|email（qr 为历史值不再新写），qr 发码拆分到独立工具 send_advisor_qr"
+  statements: |
+    ALTER TABLE bs_lead_capture_leads ADD COLUMN IF NOT EXISTS other_contact JSONB;
+- datetime: "2026-10-29 13:46:35"
+  remark: "合并最新master补齐持续Runner结构：兼容已越过分支休眠及WeCom待处理索引迁移的水位"
+  statements: |
+    ALTER TABLE agent_runners ADD COLUMN IF NOT EXISTS wake_at TIMESTAMPTZ;
+    CREATE INDEX IF NOT EXISTS idx_agent_runners_wake ON agent_runners(wake_at,runner_id)
+        WHERE status='waiting' AND wake_at IS NOT NULL;
+    ALTER TABLE chat_records
+        ALTER COLUMN total_token_count TYPE BIGINT,
+        ALTER COLUMN prompt_tokens TYPE BIGINT,
+        ALTER COLUMN completion_tokens TYPE BIGINT,
+        ALTER COLUMN cached_input_tokens TYPE BIGINT,
+        ALTER COLUMN agent_iterations TYPE BIGINT,
+        ALTER COLUMN duration_ms TYPE BIGINT,
+        ALTER COLUMN embedding_tokens TYPE BIGINT,
+        ALTER COLUMN asr_calls TYPE BIGINT;
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id ON chat_messages(session_id, id);
+    CREATE INDEX IF NOT EXISTS idx_lt_inv_wecom_inbound_pending
+        ON local_tool_invocations (tenant_id, user_id, session_id,
+            (business_ref->>'runner_id'), (business_ref->>'execution_id'), device_id, created_at, id)
+        WHERE provider_key='wecom' AND business_kind='agent_runner'
+            AND state IN ('succeeded','unknown') AND tool_name IN ('wecom_read_session','wecom_read_sessions')
+            AND result_json->'_wecom_inbound'->>'version'='1'
+            AND jsonb_array_length(result_json->'_wecom_inbound'->'pending')>0;

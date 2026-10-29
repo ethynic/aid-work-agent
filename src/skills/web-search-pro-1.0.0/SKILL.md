@@ -40,17 +40,24 @@ metadata:
 ## 环境与执行方式
 
 - 通过 `skill_execute` 执行，命令中写 `scripts/<脚本名>` 相对路径即可，
-  系统会自动替换为技能目录绝对路径，无需 cd。
+  系统会自动替换为技能目录绝对路径，无需 cd。不要写裸文件名（会解析到临时目录）
+  或 `/app/...` 绝对路径（会被二次拼接）。
 - 依赖 `httpx` / `beautifulsoup4` / `lxml` 已随容器镜像安装。
 - `render.py` / 管线渲染兜底需要 Playwright，**当前容器未安装**：渲染路径会以
   退出码 4 退出并提示，不影响 `search` / `fetch` / `extract` 和管线的非渲染路径。
   不要主动走渲染兜底；JS 站改由平台 web_fetch 或浏览器工具处理。
+- **百度通道代理（可选）**：环境变量 `WEBSEARCH_BAIDU_PROXY`
+  （形如 `http://user:pass@host:port`）设置后，baidu / baidu_m 通道经该代理执行
+  （用于服务器 IP 被百度风控标记时改走办公网出口）；代理连接失败自动回落直连
+  并在 errors 中如实记录，未设置时直连。百度通道已内置 cookie 预热
+  （先取 BAIDUID 再搜索），降低无 cookie 裸搜被风控的概率。
 
 ## 本环境引擎可用性（2026-10-27 服务器实测）
 
 | 通道 | 可用性 | 说明 |
 |---|---|---|
-| baidu / baidu_m / so(360) | ✅ | 中文主力通道 |
+| baidu / baidu_m | ⚠️ 动态风控 | 服务器 IP 已被标记时经代理通道执行（见上节） |
+| so(360) | ✅ | 中文主力通道 |
 | bing | ✅ | 海外与 site: 国别路由主力 |
 | sogou | ❌ HTTP 399 | 反爬拦服务器 IP |
 | google / ddg | ❌ | 服务器网络不可达 |

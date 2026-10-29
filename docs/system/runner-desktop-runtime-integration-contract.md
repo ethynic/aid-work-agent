@@ -16,7 +16,16 @@
 
 ## 1. 适用范围与约束层级
 
+2026-10-29 W14.5兼容纠正：现有显式allowed业务工具保留原模型可见性，设备capabilities只决定自动新增候选；旧provider_id继续兼容。Runtime/CLI/native工具名单、Device wire及执行权限不改，无需因此强制升级客户机。复用原registry/excluded/业务投影，详见[兼容计划](../plans/plan-wecom-cli-group-chat-experiment.md#w145-服务端单独升级的旧端兼容复核2026-10-29)；不改变2.11契约版本。
+
+2026-10-29 W14内部装配登记：[计划](../plans/plan-wecom-cli-group-chat-experiment.md#w14-通用runtime业务工具自动装配2026-10-29)。主控唯一维护目录/Assembly/Runtime投影，独立TEST/CR只读。复用已上报capabilities和原actor设备查询，不变Device wire、权限、冻结恢复/unknown、既有域绑定或配置指纹，因此契约仍2.11，不另造协议。候选实现与模型可见性分离；安装即授权原则保持，无新审批/探测门禁。
+
+
 2026-10-27 W10实施登记（2.11）：[计划](../plans/plan-wecom-cli-group-chat-experiment.md#w10-真机前综合收敛2026-10-27)。不改Device API claim/permit、OperationResult、原release、收费及授权wire；增量是三项Agent工具和内部恢复语义。唯一写入者：主控维护契约/云proxy/文档；Runner实现角色维护持续恢复，CLI维护native/TS/MCP结果，Runtime维护共用core/Host；独立TEST/CR只读验证。
+
+2026-10-29 W13装配纠正（仍2.11，无wire变更）：内置main同样显式装配既有三项WeCom业务proxy，配置智能体仍遵守原allowed/excluded；不全量开放BOSS、Weixin或内部恢复。原Device授权/绑定/claim/permit与三工具schema均不改。唯一写入者为本会话主控（装配与文档），独立TEST/CR验证；仅本地服务器重载和用户请求的只读Web复验，不自动发送或监听。见[W13计划](../plans/plan-wecom-cli-group-chat-experiment.md#w13-main缺少企微三工具2026-10-29)。
+
+W13实际执行接点：ToolExecutor的InputModel只校验/规范化公共业务字段，LocalToolAdapter注入的原可信上下文完整传给execute；无InputModel路径及纯normalize/冻结恢复证明不改。未增加LLM内部参数、放宽未知公共字段或修改Device wire，已用实际Web DB读取复验。
 
 - Agent仅`wecom_read_session(session,cursor?,limit?)`、`wecom_message_send(session,text)`、`wecom_read_sessions(sessions?,cursor?,limit?)`；MCP保留原调用共15项，Runtime受信9项。CLI生产`ws1`会话、`wb1`分页及`sender_platform`，云端透传，不自建平台算法；缺字段按unknown。CLI0.2.0的schema_digest为`sha256:3cc508ef7b22b0daf2050e5843da644e56165c50bcfb3f479b1835141daa82db`。新Runtime默认兼容旧8项，真实MCP schema证据核实后更新9项；新参数缺能力返回明确升级错误，协商暂时故障可重试，旧入参正常执行。
 - 私有`wecom_task_device` v2沿用原root/设备原子绑定，覆盖单聊/群聊现代调用；v1旧群调用继续兼容。`continuous_activation` v1是服务器可信接续来源，不替代权限或重放许可；任务依赖指纹v3仅将可验证匹配的旧v2迁移。暂停/取消优先，暂时源错误保留原wake并退避。

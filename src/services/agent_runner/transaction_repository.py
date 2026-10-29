@@ -19,10 +19,20 @@ def write_history(cursor, runner, result):
         raise CheckpointFailure('FINALIZE_SESSION_OWNER_CHANGED')
     cursor.execute('SELECT clock_timestamp() AS now')
     now = cursor.fetchone()['now']
+    user_metadata = {'attachments':runner['input'].get('attachments',[]),
+                     'accepted_at':runner['accepted_at'].isoformat()}
+    if runner.get('source') == 'scheduled':
+        # scheduled 来源投影 request_data.scheduled（task_id/trigger）进
+        # user 消息 metadata（设计 §5.5：任务视图展示触发原因用，非敏感）。
+        scheduled = ((runner['input'].get('request_data') or {}).get('scheduled'))
+        if isinstance(scheduled, dict):
+            projected = {key:scheduled[key] for key in ('task_id','trigger')
+                         if scheduled.get(key) is not None}
+            if projected:
+                user_metadata['scheduled'] = projected
     messages = [{'role':'user','content':runner['input']['text'],
                  'attachments':runner['input'].get('attachments',[]),
-                 'metadata':{'attachments':runner['input'].get('attachments',[]),
-                             'accepted_at':runner['accepted_at'].isoformat()}}]
+                 'metadata':user_metadata}]
     messages.extend(result.get('messages') or [])
     recorded_controls = {(message.get('metadata') or {}).get('control_id')
                          for message in messages if message.get('role')=='user'}

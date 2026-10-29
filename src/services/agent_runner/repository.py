@@ -65,6 +65,8 @@ class RunnerRepository:
                      execution_context=None, initial_checkpoint=None):
         identity=principal.identity
         runner_id='runner_'+uuid.uuid4().hex
+        if identity.source=='scheduled':
+            self._scheduled_acceptance_guard(cursor,principal,request)
         # 公开快照只存附件展示字段（control_repository.supplementalInputs 先例）；
         # 内联 content 仍在私有 input 列供 worker 装配，接口形状不变。
         snapshot={'input':{'message_id':runner_id+':user','text':request.text,
@@ -197,6 +199,30 @@ class RunnerRepository:
             row=EventRepository.notify_in_tx(cursor,previous,after=row)
             conn.commit()
             return row
+
+    @staticmethod
+    def _scheduled_acceptance_guard(cursor, principal, request):
+        """scheduled 首次接单守卫（设计 §4.1/§4.3，与 INSERT 同事务、先于其执行）。
+
+        幂等键 '{task_id}:{occurrence_key}'；对任务行 FOR UPDATE 复核
+        status='active' AND pending_occurrence_key==occurrence_key，与暂停/
+        删除/认领串行化。守卫失配但同键 runner 行已存在时是幂等重查（并发/
+        响应丢失重试），跳过守卫走 INSERT ON CONFLICT 返回原行；否则映射
+        409 SCHEDULED_TASK_NOT_ACCEPTABLE（dispatcher 按拒绝映射暂停任务）。
+        """
+        from src.scheduler.db import ScheduledTaskNotAcceptable, lock_for_acceptance_in_tx
+        task_id, _, occurrence_key = request.client_request_id.partition(':')
+        if not task_id or not occurrence_key:
+            raise RunnerError('INVALID_REQUEST', 422)
+        try:
+            lock_for_acceptance_in_tx(cursor, task_id, occurrence_key)
+        except ScheduledTaskNotAcceptable:
+            cursor.execute("""SELECT 1 FROM agent_runners WHERE scope_key=%s AND actor_kind=%s
+                AND actor_id=%s AND source=%s AND client_request_id=%s""",
+                (principal.scope_key, principal.actor_kind, principal.actor_id,
+                 principal.identity.source, request.client_request_id))
+            if cursor.fetchone() is None:
+                raise RunnerError('SCHEDULED_TASK_NOT_ACCEPTABLE', 409)
 
     @staticmethod
     def assert_owner(principal, row):

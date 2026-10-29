@@ -159,15 +159,22 @@ class CompatibilityObserver:
 
 class RuntimeExecution:
     def __init__(self, resources, identity, *, control=None, observer=None, history_reader=None,
-                 tolerate_history_failure=False, legacy_clarification_authorizer=None, initial_followup_inputs=None):
+                 tolerate_history_failure=False, legacy_clarification_authorizer=None, initial_followup_inputs=None,
+                 profile_id=None, instance_id=None):
         self.resources, self.identity = resources, identity
         self.control = control or CompatibilityControl()
         self.observer = observer or CompatibilityObserver()
+        # 执行所属智能体身份（工具执行上下文继承用，设计 §3.2）：由 worker 从
+        # runner 行派生（profile_id 列 + input.instance_id）；子执行传各自
+        # subagent profile。仅作身份传递，不作为权限依据
+        self.profile_id = profile_id
+        self.instance_id = instance_id
         self.visibility = ProfileResolver(resources.subagent_registry, identity.tenant_id)
         from ..continuous import supported
         self.supports_sleep = getattr(self.control,'durable_owner',False) and supported(identity.source,identity.session_kind)
         self.catalog = ToolCatalog(resources.mode, resources.tool_registry, resources._tool_controls,
-                                   self.visibility, resources.skill_registry, supports_sleep=self.supports_sleep)
+            self.visibility, resources.skill_registry, supports_sleep=self.supports_sleep,
+            configured_tools=resources.subagent_config.get_allowed_tools() if resources.subagent_config else ())
         self.skills = SkillSession(identity.tenant_id, resources.skill_registry, resources.memory)
         history_source = identity.source if identity.session_kind == "channel" else "chat"
         self.history = SessionHistory(resources.memory, history_source,
@@ -212,7 +219,24 @@ class RuntimeExecution:
             session_id=self.identity.session_id, channel=self.identity.source,
             subagent_id=getattr(config, "dir_name", None), agent_execution_id=self.state.execution_id,
             request_data=request_context.request_data if request_context else {},
-            env_vars=env_vars, llm_gateway=self.resources.llm,infer_legacy_identity=False)
+            env_vars=env_vars, llm_gateway=self.resources.llm,infer_legacy_identity=False,
+            profile_id=self.profile_id, instance_id=self.instance_id)
+
+    async def _prime_local_tools(self):
+        # The existing domain pin is not a global device selection policy.
+        root = self.control
+        while hasattr(root, 'parent_control'):
+            root = root.parent_control
+        provider_devices = {}
+        execution = getattr(root, 'envelope', {}).get('execution')
+        if execution is not None and getattr(root, 'durable_owner', False):
+            from ..wecom_device_binding import bound_device
+            device = bound_device(execution, root.attempt.runner_id,
+                {key: getattr(self.identity, key) for key in
+                 ('tenant_id', 'user_id', 'session_id', 'source', 'session_kind')})
+            if device is not None:
+                provider_devices['wecom'] = device
+        await self.catalog.prime_local_tools(self.identity, provider_devices)
 
     async def run(self, text, user=None, attachments=None, request_context=None,
                   extra_system_prompt=None, continuation=None, defer_names=None,
@@ -225,6 +249,7 @@ class RuntimeExecution:
         try:
             preparation_events = []
             if state is None:
+                await self._prime_local_tools()
                 self.state, preparation_events = await self.assembler.prepare(text,
                     execution_id=self.resources.execution_id, user=user, attachments=attachments,
                     request_context=request_context, extra_system_prompt=extra_system_prompt,
@@ -240,6 +265,7 @@ class RuntimeExecution:
                     raise ValueError("CHECKPOINT_PROFILE_MISMATCH")
                 await asyncio.to_thread(self.history.reader.assert_authorized)
                 self.state = state
+                await self._prime_local_tools()
                 await asyncio.to_thread(self.skills._ensure_tenant_skills_loaded)
                 await self.visibility.prime()
             if state is None and self.initial_followup_inputs:
@@ -363,7 +389,8 @@ class RuntimeExecution:
                     return ports
                 self.resources.subagent_executor.child_factory = child_factory(
                     self.identity, ports_factory, self.history.reader, self.resources.resource_directory,
-                    self.resources.plan_manager.plan_store is not None)
+                    self.resources.plan_manager.plan_store is not None,
+                    prompt_augmentations=tuple(request_context.prompt_augmentations) if request_context else ())
             tool_context = await self._tool_context(request_context)
             controls = ControlToolAdapter(controls=self.resources._tool_controls, skills=self.skills,
                 registry=self.resources.skill_registry, plan_manager=self.resources.plan_manager,

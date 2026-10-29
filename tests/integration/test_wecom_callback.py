@@ -333,7 +333,7 @@ class TestMultiWeComAppCallback:
             "tenant_id": "tenant_test",
             "channel_type": "wecom",
             "config": {},
-            "subagent_type": "trade-specialist",
+            "subagent_type": "ai-lead-gen",
             "verified": 1,
             "updated_at": datetime(2026, 9, 10),
         }
@@ -369,7 +369,7 @@ class TestMultiWeComAppCallback:
         assert id1 == "chan_travel"
         assert sub1 == "travel-consultant"
         assert id2 == "chan_trade"
-        assert sub2 == "trade-specialist"
+        assert sub2 == "ai-lead-gen"
 
     def test_tenant_channel_config_returns_subagent_type(self):
         """
@@ -393,7 +393,7 @@ class TestMultiWeComAppCallback:
                 "tenant_id": "tenant_test",
                 "channel_type": "wecom",
                 "config": '{"corp_id": "wx456"}',
-                "subagent_type": "trade-specialist",
+                "subagent_type": "ai-lead-gen",
                 "verified": 1,
             },
         ]
@@ -409,8 +409,8 @@ class TestMultiWeComAppCallback:
 
             assert len(results) == 2
             # 验证每个配置都包含 subagent_type 字段
-            assert results[0]["subagent_type"] in ["travel-consultant", "trade-specialist"]
-            assert results[1]["subagent_type"] in ["travel-consultant", "trade-specialist"]
+            assert results[0]["subagent_type"] in ["travel-consultant", "ai-lead-gen"]
+            assert results[1]["subagent_type"] in ["travel-consultant", "ai-lead-gen"]
             # 两个配置的 subagent_type 不同
             assert results[0]["subagent_type"] != results[1]["subagent_type"]
 

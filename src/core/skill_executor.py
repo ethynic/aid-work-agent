@@ -403,13 +403,6 @@ Follow the instructions in the skill above to complete the user's task."""
             env['PROJECT_ROOT'] = project_root
             env['SKILL_TMP_DIR'] = str(Path(project_root) / 'storage' / 'tmp')
 
-            # 后端日志：诊断子进程执行
-            is_trade_customer_cmd = "customer_manager" in command or "save-customer" in command or "save-customers" in command
-            if is_trade_customer_cmd:
-                logger.info(f"后端日志：[trade-customer诊断] _execute_command 准备执行子进程, workdir={workdir}")
-                cmd_preview = command[:500] if len(command) > 500 else command
-                logger.info(f"后端日志：[trade-customer诊断] 子进程命令: {cmd_preview}")
-
             prepare_child_process(env)
             process = await asyncio.create_subprocess_shell(
                 command,
@@ -429,18 +422,6 @@ Follow the instructions in the skill above to complete the user's task."""
                 )
                 duration = time.time() - start_time
                 observe_child_exit(process.returncode)
-
-                # 后端日志：诊断 trade-customer 子进程结果
-                if is_trade_customer_cmd:
-                    logger.info(f"后端日志：[trade-customer诊断] 子进程执行完成, returncode={process.returncode}, duration={duration:.2f}s")
-                    if stdout:
-                        stdout_preview = stdout.decode('utf-8', errors='replace')[:300]
-                        logger.info(f"后端日志：[trade-customer诊断] 子进程 stdout: {stdout_preview}")
-                    if stderr:
-                        stderr_preview = stderr.decode('utf-8', errors='replace')[:300]
-                        logger.info(f"后端日志：[trade-customer诊断] 子进程 stderr: {stderr_preview}")
-                    if process.returncode != 0:
-                        logger.error(f"后端日志：[trade-customer诊断] 子进程退出码非零! returncode={process.returncode}")
 
                 return ExecutionResult(
                     success=process.returncode == 0,
@@ -999,19 +980,24 @@ Follow the instructions in the skill above to complete the user's task."""
                 script_name = script_path.name
                 # 使用正斜杠路径（Python在Windows上支持正斜杠）
                 script_abs_path = script_path.absolute().as_posix()
-                
-                # 替换 scripts/script_name 格式
-                if f"scripts/{script_name}" in command:
-                    command = command.replace(
-                        f"scripts/{script_name}",
-                        script_abs_path
-                    )
-                # 替换 ./scripts/script_name 格式
-                if f"./scripts/{script_name}" in command:
-                    command = command.replace(
-                        f"./scripts/{script_name}",
-                        script_abs_path
-                    )
+
+                # scripts/xxx 或 ./scripts/xxx → 绝对路径。
+                # 负向断言 (?<!/) 防止二次拼接：命令已含完整绝对路径
+                # （/app/.../scripts/xxx）时，`scripts/xxx` 前面是 `/`，不再替换
+                # （否则拼出 /app/src/skills/<skill>//app/... 双前缀，2026-10-27 trace 实证）
+                command = re.sub(
+                    rf"(?<!/)(?:\./)?scripts/{re.escape(script_name)}",
+                    script_abs_path,
+                    command,
+                )
+                # 裸文件名 → 绝对路径：如 `python lead_db.py init`，避免解析到
+                # 临时会话 cwd 报 No such file（同 trace 实证）。
+                # 前面不是路径字符（含已替换出的绝对路径中的 `/`）才替换
+                command = re.sub(
+                    rf"(?<![\w./-]){re.escape(script_name)}\b",
+                    script_abs_path,
+                    command,
+                )
         
         # 替换文件变量
         for filename in context.files.keys():

@@ -167,16 +167,15 @@ def test_repeated_fact_retirement_keeps_five_latest_group_cursors_and_one_root_p
 
 
 @pytest.mark.asyncio
-async def test_admin_metadata_adds_only_trusted_wecom_choices_without_mutating_registry(monkeypatch):
+async def test_admin_metadata_projects_business_catalog_without_mutating_registry(monkeypatch):
     from src.api import agent_definitions
     from src.core import agent
-    from src.local_tools.catalog import allowed_tools
-    registry = SimpleNamespace(_tools={'read': SimpleNamespace(display_name='Read', description='read')})
+    original = ['read', 'wecom_read_session', 'wecom_probe', 'boss_filter', 'boss_overlay_inspect']
+    registry = SimpleNamespace(_tools={name: SimpleNamespace(display_name=name, description=name)
+                                      for name in original})
     monkeypatch.setattr(agent_definitions, '_require_admin', lambda request: None)
     monkeypatch.setattr(agent, 'master_agent', SimpleNamespace(tool_registry=registry))
     result = await agent_definitions.list_tools_meta(SimpleNamespace())
     names = {item['id'] for item in json.loads(result.body)['data']}
-    from src.local_tools.wecom_business import BUSINESS_TOOLS
-    assert names == {'read', *(set(allowed_tools('wecom')) & BUSINESS_TOOLS)}
-    assert list(registry._tools) == ['read']
-    assert not any(name.startswith('boss_') for name in names)
+    assert names == {'read', 'wecom_read_session', 'boss_filter'}
+    assert list(registry._tools) == original

@@ -473,7 +473,7 @@
                 <BaseBadge :intent="row.contact_method === 'qr' ? 'info' : 'neutral'">{{ getMethodLabel(row.contact_method) }}</BaseBadge>
               </template>
               <template #phone="{ row }">
-                <span :class="row.phone ? '' : 'text-muted'">{{ row.phone || '—' }}</span>
+                <span class="block truncate" :class="formatLeadContact(row) === '—' ? 'text-muted' : ''">{{ formatLeadContact(row) }}</span>
               </template>
               <template #intent_level="{ row }">
                 <BaseBadge :intent="getIntentInfo(row.intent_level).intent">{{ getIntentInfo(row.intent_level).label }}</BaseBadge>
@@ -509,8 +509,8 @@
             <div class="text-default">{{ leadDetail.contact_name || '-' }}</div>
           </div>
           <div>
-            <div class="text-muted text-xs mb-1">手机号</div>
-            <div class="text-default">{{ leadDetail.phone || '-' }}</div>
+            <div class="text-muted text-xs mb-1">联系方式</div>
+            <div class="text-default break-all whitespace-normal">{{ formatLeadContact(leadDetail) }}</div>
           </div>
           <div>
             <div class="text-muted text-xs mb-1">留资方式</div>
@@ -1034,8 +1034,27 @@ function getStageInfo(stage: string | null | undefined): { label: string; intent
 }
 function getMethodLabel(method: string | null | undefined): string {
   if (method === 'phone') return '手机号'
+  if (method === 'landline') return '固定电话'
+  if (method === 'email') return '邮箱'
   if (method === 'qr') return '顾问微信'
   return method || '-'
+}
+
+// 其他联系方式（other_contact：[{type, value}]，后端已解密）
+const otherContactTypeLabels: Record<string, string> = { landline: '固定电话', email: '邮箱' }
+function formatOtherContacts(list: any): string {
+  if (!Array.isArray(list) || list.length === 0) return ''
+  return list
+    .filter((c: any) => c?.value)
+    .map((c: any) => `${otherContactTypeLabels[c?.type] || c?.type || ''}：${c.value}`)
+    .join('；')
+}
+function formatLeadContact(row: any): string {
+  const parts: string[] = []
+  if (row?.phone) parts.push(row.phone)
+  const others = formatOtherContacts(row?.other_contact)
+  if (others) parts.push(others)
+  return parts.join('；') || '—'
 }
 
 // 客户意向度展示映射（与后端 LeadIntentLevel 枚举保持一致，lead_refresh 分析回写）
@@ -1188,7 +1207,7 @@ async function saveLeadStage() {
 const leadColumns = [
   { key: 'seq', label: '序号', width: '60px' },
   { key: 'contact_name', label: '客户姓名' },
-  { key: 'phone', label: '手机号' },
+  { key: 'phone', label: '联系方式' },
   { key: 'contact_method', label: '留资方式' },
   { key: 'kf_account_name', label: '客服账号', tooltip: (row: any) => row.kf_account_name || row.channel_chat_id || '-' },
   { key: 'assignee_name', label: '归属员工', tooltip: (row: any) => row.assignee_name || '-' },

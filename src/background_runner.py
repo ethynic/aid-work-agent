@@ -255,13 +255,31 @@ async def _run():
         await _billing_scheduler.start()
     except Exception as e:
         logger.opt(exception=True).error(
-            f"background runner: 通知调度器启动失败（不影响 runner 主流程）: {e}",
+            f"background runner: 通知调度器启动失败（不影响 runner 主流程）: {e}"
+        )
+
+    # 8. 定时任务调度循环（Runner 化 v2，设计 §4：到期 pending 重提 + 恢复
+    # 驱动 + 到期认领；DB 行锁与 occurrence_key 条件保证多实例安全，无需 Redis 锁；
+    # 循环内部自吞单轮异常，启动失败不影响 runner 其他任务）
+    _task_dispatcher = None
+    try:
+        from src.scheduler.dispatch import ScheduledTaskDispatcher
+        _task_dispatcher = ScheduledTaskDispatcher()
+        _task_dispatcher.start()
+    except Exception as e:
+        logger.opt(exception=True).error(
+            f"background runner: 定时任务调度循环启动失败（不影响 runner 主流程）: {e}"
         )
     logger.info("background runner 就绪")
 
     await _stop.wait()
     logger.info("background runner 收到停止信号，开始优雅停机")
 
+    if _task_dispatcher is not None:
+        try:
+            await _task_dispatcher.stop()
+        except Exception as e:
+            logger.opt(exception=True).error(f"background runner: 定时任务调度循环 stop error: {e}")
     if _notification_dispatcher is not None:
         await _notification_dispatcher.stop()
     if _billing_scheduler is not None:

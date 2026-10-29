@@ -3,6 +3,10 @@
 背景（生产故障）：docker 强杀旧容器后 Redis 单副本锁（TTL 300s）残留为幽灵锁，
 start() 抢锁失败即永久放弃，调度器停摆不自愈。修复后抢锁失败改为起后台线程，
 锁 TTL 过期后重试接管并补启动；Redis 异常分支保持既有 fail-open 行为不变。
+
+2026-10-28 Runner 化 Phase 1 适配：manager 瘦身为纯系统 job 后不再加载用户
+任务（ScheduledTaskDB.list_active 调用已删除），启动打桩仅需 BackgroundScheduler
+与 _register_system_jobs；锁与幽灵锁重试逻辑本身不变，本组用例继续覆盖。
 """
 
 from unittest.mock import MagicMock
@@ -21,9 +25,8 @@ def fast_retry(monkeypatch):
 
 @pytest.fixture()
 def patched_startup(monkeypatch):
-    """打桩启动主体依赖：APScheduler / DB 加载 / 系统任务注册。"""
+    """打桩启动主体依赖：APScheduler 构造与系统任务注册（不触 DB/真实注册）。"""
     monkeypatch.setattr(manager_mod, "BackgroundScheduler", lambda **kw: MagicMock())
-    monkeypatch.setattr(manager_mod.ScheduledTaskDB, "list_active", lambda: [])
     monkeypatch.setattr(ScheduledTaskManager, "_register_system_jobs", lambda self: None)
 
 

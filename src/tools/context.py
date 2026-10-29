@@ -32,6 +32,11 @@ class ToolExecutionContext:
     # 调用方智能体的 LLM 网关实例，供工具内部 LLM 调用跟随外层智能体模型配置
     #（如数据分析 AnalysisAgent）；无上下文的调用方（后台调度/渠道侧）为 None，由工具自行兜底
     llm_gateway: Optional[Any] = None
+    # 调用方智能体身份（Runner 化定时任务继承用，设计 §3.2）：profile_id 缺省
+    # 'main'（主智能体）；instance_id 为数字员工实例引用，仅实例化智能体执行时非空。
+    # 由 runtime executor 装配处从 runner 行派生，工具侧只读，不作为权限依据
+    profile_id: Optional[str] = None
+    instance_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "request_data", freeze_request_mapping(self.request_data))
@@ -83,6 +88,7 @@ class ExecutionContextFactory:
         *, tenant_id=None, user_id=None, session_id=None, channel=None,
         subagent_id=None, chat_record_id=None, agent_execution_id=None,
         tool_call_id=None, request_data=None, env_vars=None, llm_gateway=None,
+        profile_id=None, instance_id=None,
         infer_legacy_identity=True,
     ) -> ToolExecutionContext:
         if infer_legacy_identity and (tenant_id is None or user_id is None):
@@ -99,6 +105,10 @@ class ExecutionContextFactory:
             env_vars = parent.env_vars if parent else {}
         if llm_gateway is None:
             llm_gateway = parent.llm_gateway if parent else None
+        if profile_id is None:
+            profile_id = parent.profile_id if parent else None
+        if instance_id is None:
+            instance_id = parent.instance_id if parent else None
         return ToolExecutionContext(
             tenant_id=tenant_id, user_id=user_id, session_id=session_id,
             channel=channel, subagent_id=subagent_id,
@@ -107,6 +117,8 @@ class ExecutionContextFactory:
             request_data=request_data,
             env_vars=env_vars,
             llm_gateway=llm_gateway,
+            profile_id=profile_id,
+            instance_id=instance_id,
         )
 
     @staticmethod

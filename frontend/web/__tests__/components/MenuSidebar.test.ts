@@ -99,6 +99,8 @@ vi.mock('@/components/SettingsDialog.vue', () => ({
 
 import MenuSidebar from '@/components/MenuSidebar.vue'
 import type { SubagentListItem } from '@/api/subagent'
+import type { ScheduledTask } from '@/api/scheduledTask'
+import { notifyScheduledTasksChanged } from '@/api/scheduledTask'
 import { server } from '../mocks/server'
 import { http, HttpResponse } from 'msw'
 
@@ -106,9 +108,9 @@ import { http, HttpResponse } from 'msw'
 
 function makeSubagent(overrides: Partial<SubagentListItem> = {}): SubagentListItem {
   return {
-    agent_id: 'trade-specialist',
-    name: '外贸获客',
-    display_name: '外贸获客',
+    agent_id: 'ai-lead-gen',
+    name: 'AI获客',
+    display_name: 'AI获客',
     description: '外贸助手',
     type: 'builtin',
     business_pages: [
@@ -147,6 +149,140 @@ function findButtonByText(wrapper: any, text: string): any {
 function findFlyout(): HTMLElement | null {
   return document.body.querySelector('.z-\\[45\\]') as HTMLElement | null
 }
+
+
+describe('MenuSidebar - 任务计划分组（Runner 化 Phase 5，设计 §6）', () => {
+  let wrapper: ReturnType<typeof mount> | null = null
+
+  beforeEach(() => {
+    document.body.innerHTML = ''
+    vi.clearAllMocks()
+    loadSessionsMock.mockResolvedValue(undefined)
+    sessionsRef.value = []
+    tenantIsLoggedIn.value = false
+    tenantAdmin.value = null
+    tenant.value = null
+    routeState.path = '/'
+    routeState.params = {}
+    routeState.query = {}
+    routerPush.mockClear()
+    localStorage.setItem('saas_token', 'test_token_123')
+  })
+
+  afterEach(() => {
+    if (wrapper) {
+      wrapper.unmount()
+      wrapper = null
+    }
+    document.body.innerHTML = ''
+    localStorage.clear()
+  })
+
+  it('渲染任务计划分组并从普通会话列表排除任务专属会话', async () => {
+    sessionsRef.value = [
+      { session_id: 'n1', title: '普通会话', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
+      { session_id: 's_sched_1', title: '任务会话标题', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', metadata: { scheduled_task: 'sched_mock1' } },
+    ]
+    routeState.path = '/t/test-tenant/chat'
+    tenantIsLoggedIn.value = true
+    tenantAdmin.value = { username: 'admin', role: 'tenant_admin' }
+    tenant.value = { company_name: '测试租户' }
+    wrapper = mountSidebar()
+    await flushPromises()
+
+    // 任务计划分组来自 /api/scheduled-tasks（MSW handler 返回 Mock 定时任务）
+    expect(wrapper.text()).toContain('任务计划')
+    expect(wrapper.text()).toContain('Mock 定时任务')
+    // 普通会话保留；任务专属会话（metadata.scheduled_task）从历史会话列表排除
+    expect(wrapper.text()).toContain('普通会话')
+    expect(wrapper.text()).not.toContain('任务会话标题')
+
+    // 点击任务计划项 → 打开任务视图（非聊天页；按钮化后 Tab/Enter 键盘可达，评审 P2-10）
+    const planRow = wrapper.findAll('button').find((b: any) => b.text().includes('Mock 定时任务'))
+    expect(planRow).toBeTruthy()
+    await planRow!.trigger('click')
+    expect(routerPush).toHaveBeenCalledWith('/t/test-tenant/tasks/sched_mock1')
+  })
+
+  it('任务列表加载失败时不影响普通会话展示', async () => {
+    server.use(http.get('/api/scheduled-tasks', () => HttpResponse.json({ error: 'boom' }, { status: 500 })))
+    sessionsRef.value = [
+      { session_id: 'n1', title: '普通会话', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
+    ]
+    routeState.path = '/t/test-tenant/chat'
+    tenantIsLoggedIn.value = true
+    tenantAdmin.value = { username: 'admin', role: 'tenant_admin' }
+    tenant.value = { company_name: '测试租户' }
+    wrapper = mountSidebar()
+    await flushPromises()
+    expect(wrapper.text()).toContain('普通会话')
+    expect(wrapper.text()).not.toContain('任务计划')
+  })
+
+  it('租户切换：立即清空任务分组并丢弃旧租户的慢响应（二轮评审第 2 项）', async () => {
+    function taskOf(taskId: string, name: string): ScheduledTask {
+      return {
+        task_id: taskId, user_id: 'u1', name, task_prompt: 'p', attachments: [],
+        profile_id: 'main', schedule_type: 'daily', cron_expression: '0 9 * * *',
+        session_id: 's_' + taskId, status: 'active', total_runs: 0, success_count: 0,
+        fail_count: 0, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
+      } as ScheduledTask
+    }
+    // 租户 A 的响应悬挂；切换到 B 后 A 才返回——必须被代际丢弃，不污染 B 的分组
+    let resolveTenantA!: (value: unknown) => void
+    const tenantADeferred = new Promise(resolve => { resolveTenantA = resolve })
+    let currentTenant = 'a'
+    server.use(http.get('/api/scheduled-tasks', () => {
+      if (currentTenant === 'a') return tenantADeferred.then(() =>
+        HttpResponse.json({ success: true, data: { tasks: [taskOf('sched_a', '租户A任务ZZZ')], total: 1 } }))
+      return HttpResponse.json({ success: true, data: { tasks: [taskOf('sched_b', '租户B任务YYY')], total: 1 } })
+    }))
+    routeState.path = '/t/tenant-a/chat'
+    tenantIsLoggedIn.value = true
+    tenantAdmin.value = { user_id: 'u1', username: 'admin', role: 'tenant_admin' }
+    tenant.value = { company_name: '租户A' }
+    wrapper = mountSidebar()
+    await flushPromises()
+    // A 未返回：分组为空（无残留）
+    expect(wrapper.text()).not.toContain('任务计划')
+
+    // 切换租户（登录态保持 true，仅 tenantId 变化）：立即重载
+    currentTenant = 'b'
+    routeState.path = '/t/tenant-b/chat'
+    await nextTick()
+    await flushPromises()
+    expect(wrapper.text()).toContain('租户B任务YYY')
+
+    // A 的慢响应到达：旧代际，必须丢弃
+    resolveTenantA(null)
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('租户A任务ZZZ')
+    expect(wrapper.text()).toContain('租户B任务YYY')
+  })
+
+  it('scheduledTasksVersion bump（聊天 runner 终态信号）→ 任务分组刷新', async () => {
+    let taskName = '旧任务名'
+    server.use(http.get('/api/scheduled-tasks', () => HttpResponse.json({
+      success: true,
+      data: { tasks: [{ task_id: 'sched_v1', name: taskName } as any], total: 1 },
+    })))
+    routeState.path = '/t/test-tenant/chat'
+    tenantIsLoggedIn.value = true
+    tenantAdmin.value = { user_id: 'u1', username: 'admin', role: 'tenant_admin' }
+    tenant.value = { company_name: '测试租户' }
+    wrapper = mountSidebar()
+    await flushPromises()
+    expect(wrapper.text()).toContain('旧任务名')
+
+    // useAgent 在聊天 runner 终态落定后（合并 5s）bump 该信号 → 侧栏刷新
+    taskName = '新任务名'
+    notifyScheduledTasksChanged()
+    await nextTick()
+    await flushPromises()
+    expect(wrapper.text()).toContain('新任务名')
+    expect(wrapper.text()).not.toContain('旧任务名')
+  })
+})
 
 describe('MenuSidebar - flyout 二级菜单', () => {
   let wrapper: ReturnType<typeof mount> | null = null
@@ -401,7 +537,7 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     expect(texts.some(t => t.includes('经验中心'))).toBe(false)
     expect(texts.some(t => t.includes('知识中心'))).toBe(false)
     expect(texts.some(t => t.includes('管理菜单'))).toBe(false)
-    expect(texts.some(t => t.includes('外贸获客'))).toBe(false) // 业务数据 trigger
+    expect(texts.some(t => t.includes('AI获客'))).toBe(false) // 业务数据 trigger
 
     // 新会话按钮和历史会话仍在
     expect(texts.some(t => t.includes('新会话'))).toBe(true)
@@ -424,7 +560,7 @@ describe('MenuSidebar - flyout 二级菜单', () => {
 
   it('业务数据跳转分支：对话界面 click 业务页应调用 window.open 而非 router.push', async () => {
     // 路由包含 /chat/，isChatPage=true -> 应走 window.open 分支
-    routeState.path = '/t/test-tenant/chat/trade-specialist'
+    routeState.path = '/t/test-tenant/chat/ai-lead-gen'
     tenantIsLoggedIn.value = true
     tenantAdmin.value = { username: 'admin', role: 'tenant_admin' }
     tenant.value = { company_name: '测试租户' }
@@ -436,8 +572,8 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     })
     await flushPromises()
 
-    // hover 业务数据 trigger（外贸获客）
-    const trigger = findButtonByText(wrapper, '外贸获客')
+    // hover 业务数据 trigger（AI获客）
+    const trigger = findButtonByText(wrapper, 'AI获客')
     expect(trigger).toBeTruthy()
     await trigger.trigger('mouseenter')
     await flushPromises()
@@ -455,7 +591,7 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     expect(windowOpenSpy).toHaveBeenCalledTimes(1)
     const url = windowOpenSpy.mock.calls[0][0] as string
     expect(url).toContain('/customers')
-    expect(url).toContain('expand_menu=trade-specialist')
+    expect(url).toContain('expand_menu=ai-lead-gen')
     expect(routerPush).not.toHaveBeenCalled()
 
     windowOpenSpy.mockRestore()

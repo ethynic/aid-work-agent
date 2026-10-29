@@ -1,9 +1,5 @@
 import type { RouteRecordRaw } from 'vue-router'
 
-import CustomerInfo from '@/components/CustomerInfo.vue'
-import EmailRecords from '@/components/EmailRecords.vue'
-import MatchStats from '@/components/MatchStats.vue'
-
 export const agentRoutes: RouteRecordRaw[] = [
   {
     path: '/',
@@ -36,7 +32,8 @@ export const agentRoutes: RouteRecordRaw[] = [
       { path: 'chat/:subagent', name: 'tenant-chat-subagent', component: () => import('@/components/ChatContainer.vue') },
       { path: 'all-sessions', name: 'tenant-all-sessions', component: () => import('@/components/AllSessions.vue') },
       { path: 'behavior-logs', name: 'tenant-behavior-logs', component: () => import('@/components/saas/BehaviorLogs.vue'), props: { scope: 'tenant' } },
-      { path: 'scheduled-tasks', name: 'tenant-scheduled-tasks', component: () => import('@/components/ScheduledTasks.vue') },
+      // 定时任务执行视图（Runner 化 Phase 5 重挂，设计 §6）：任务会话不再出现聊天形态
+      { path: 'tasks/:task_id', name: 'tenant-scheduled-task-view', component: () => import('@/components/scheduled/TaskPlanView.vue') },
       { path: 'token-usage', name: 'tenant-token-usage', component: () => import('@/components/saas/TenantTokenUsage.vue') },
       { path: 'recharge-records', name: 'tenant-recharge-records', component: () => import('@/components/saas/TenantRechargeRecords.vue') },
       { path: 'reply-styles', name: 'tenant-reply-styles', component: () => import('@/components/saas/ReplyStyleManager.vue') },
@@ -49,16 +46,6 @@ export const agentRoutes: RouteRecordRaw[] = [
       { path: 'assets', name: 'tenant-video-agent-assets', component: () => import('@/components/video-agent/AssetLibrary.vue') },
       { path: 'videos', name: 'tenant-video-agent-videos', component: () => import('@/components/video-agent/VideoLibrary.vue') },
       { path: 'prompts', name: 'tenant-video-agent-prompts', component: () => import('@/components/video-agent/PromptLibrary.vue') },
-      {
-        path: 'trade-specialist',
-        name: 'tenant-trade-specialist',
-        component: () => import('@/components/BaseBusinessLayout.vue'),
-        children: [
-          { path: 'customers', name: 'tenant-trade-specialist-customers', component: CustomerInfo },
-          { path: 'email-records', name: 'tenant-trade-specialist-email-records', component: EmailRecords },
-          { path: 'match-stats', name: 'tenant-trade-specialist-match-stats', component: MatchStats },
-        ]
-      },
       {
         path: 'travel-consultant',
         name: 'tenant-travel-consultant',
@@ -122,6 +109,19 @@ export const agentRoutes: RouteRecordRaw[] = [
           { path: 'session-tasks/:taskId', name: 'tenant-weixin-session-task-detail', component: () => import('@/components/sessionTasks/TaskDetail.vue') },
           { path: 'runs/:runId', name: 'tenant-weixin-marketing-run-detail', component: () => import('@/components/weixinMarketing/RunDetail.vue') },
           { path: 'event-sources', name: 'tenant-weixin-marketing-event-sources', component: () => import('@/components/weixinMarketing/EventSourceSettings.vue') },
+        ]
+      },
+      {
+        // AI获客业务数据页面（只读列表；page_metadata 状态 planned，验收后 published）
+        path: 'ai-lead-gen',
+        name: 'tenant-ai-lead-gen',
+        component: () => import('@/components/BaseBusinessLayout.vue'),
+        children: [
+          { path: 'campaigns', name: '获客活动', component: () => import('@/components/aiLeadGen/CampaignList.vue') },
+          { path: 'leads', name: '线索公司', component: () => import('@/components/aiLeadGen/LeadList.vue') },
+          { path: 'contacts', name: '联系人', component: () => import('@/components/aiLeadGen/ContactList.vue') },
+          { path: 'emails', name: '邮件记录', component: () => import('@/components/aiLeadGen/EmailList.vue') },
+          { path: 'replies', name: '回复记录', component: () => import('@/components/aiLeadGen/ReplyList.vue') },
         ]
       },
     ]

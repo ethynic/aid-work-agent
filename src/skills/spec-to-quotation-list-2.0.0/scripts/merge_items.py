@@ -18,6 +18,9 @@
   * 同名 code 跨分片出现，或条目缺 code（新格式 code 必填）
   * 条目缺 space / theme / category（生成器会静默丢弃这类条目，提前报错）
   * qty_rule 引用的参数名不在 parameters 中，定位到条目 code
+
+合并成功后打印 (space,theme) 条目数矩阵摘要（含 TBC 计数），供生成前自查
+「无真实产品不生成」约束，无需再临时写统计脚本。
 """
 import argparse
 import glob
@@ -25,6 +28,7 @@ import json
 import os
 import re
 import sys
+from collections import Counter
 
 
 def load_parts(parts_dir):
@@ -79,7 +83,11 @@ def merge(parts):
             merged["parameters"][k] = meta
         for k in ("project", "disable_auto_image"):
             v = data.get(k)
-            if v and not merged.get(k):
+            if isinstance(v, dict) and isinstance(merged.get(k), dict):
+                # 逐字段取第一个非空值（v1.0.0 语义），后写分片只补缺失字段
+                for fk, fv in v.items():
+                    merged[k].setdefault(fk, fv)
+            elif v and not merged.get(k):
                 merged[k] = v
     return merged
 
@@ -103,6 +111,25 @@ def check_param_refs(merged):
     return bad
 
 
+def print_matrix(merged):
+    """打印 (space,theme) 条目数矩阵：替代让 LLM 临时写统计脚本（省一轮 skill_execute）。
+
+    tbc 计数帮助交付前自查「无真实产品不生成」约束——某组合全部是 TBC 占位时不应生成文件。
+    """
+    combos = Counter()
+    tbc = Counter()
+    for it in merged["items"]:
+        key = (it.get("space") or "?", it.get("theme") or "?")
+        combos[key] += 1
+        if it.get("tbc"):
+            tbc[key] += 1
+    print("(space, theme) 条目数矩阵：")
+    for (space, theme), n in sorted(combos.items(), key=lambda kv: (kv[0][0], kv[0][1])):
+        extra = "，TBC %d" % tbc[(space, theme)] if tbc[(space, theme)] else ""
+        print("  %s × %s：%d 条%s" % (space, theme, n, extra))
+    print("合计组合 %d 个、条目 %d 条" % (len(combos), len(merged["items"])))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--parts-dir", required=True, help="分片目录（*.json）")
@@ -124,6 +151,7 @@ def main():
         json.dump(merged, fh, ensure_ascii=False, indent=2)
     print("merged %d parts -> %s  (条目 %d，参数 %d)"
           % (len(parts), args.out, n_items, len(merged["parameters"])))
+    print_matrix(merged)
 
 
 if __name__ == "__main__":

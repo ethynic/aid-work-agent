@@ -48,7 +48,11 @@ export interface RunnerView {
     supplementalInputs?: RunnerSupplementalInput[];
     clarificationQuestions?: { message_id: string; wait_id: string; text: string; created_at: string }[];
     input?: { message_id: string; text: string; attachments: UploadedFile[] } }
-  result?: { status: string; output?: string; images?: ImageRef[]; error_code?: string; assistant_metadata?: RunnerPresentation } | null
+  result?: { status: string; output?: string; images?: ImageRef[]; error_code?: string; credit_cost?: number; assistant_metadata?: RunnerPresentation } | null
+  /** scheduled 来源公开投影（设计 §5.5）：任务视图展示触发原因 */
+  scheduled?: { task_id: string; trigger: 'scheduled' | 'manual' } | null
+  /** 恢复回合标识（公开补充，scheduled 任务视图展示） */
+  attempt?: number
 }
 export interface RunnerSubmission {
   execution_mode?: 'continuous'
@@ -204,8 +208,16 @@ export class RunnerClient {
     }
     void poll()
   }
-  list(sid: string, headers: Record<string, string>, before?: string) {
-    return this.request<RunnerPage>('/sessions/' + encodeURIComponent(sid) + '/runners' + (before ? '?before_runner_id=' + encodeURIComponent(before) : ''), headers)
+  list(sid: string, headers: Record<string, string>, before?: string, source?: 'chat' | 'scheduled', limit?: number) {
+    // source 透传（网关 /sessions/{sid}/runners?source=）：任务视图读取任务会话的
+    // scheduled 执行记录；缺省保持 chat（既有聊天行为不变）。limit 1-100（网关
+    // 校验），任务视图首页按需分页（评审 P2-11）。
+    const params = new URLSearchParams()
+    if (before) params.set('before_runner_id', before)
+    if (source) params.set('source', source)
+    if (limit) params.set('limit', String(limit))
+    const query = params.toString()
+    return this.request<RunnerPage>('/sessions/' + encodeURIComponent(sid) + '/runners' + (query ? '?' + query : ''), headers)
   }
   observe(id: string, headers: Record<string, string>, onView: (view: RunnerView) => void, onError: (error: Error) => void) {
     if (this.observers.has(id)) return

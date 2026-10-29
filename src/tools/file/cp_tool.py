@@ -26,9 +26,20 @@ from src.services.files.download_registry import recover_original_display_name
 class CpInput(BaseModel):
     """文件复制参数"""
 
-    source_file_path: str = Field(
-        ...,
-        description="源文件路径，绝对路径或项目根目录相对路径。源文件必须在项目根目录内。",
+    source_file_path: Optional[str] = Field(
+        None,
+        description="源文件路径，绝对路径或项目根目录相对路径。源文件必须在项目根目录内。"
+        "与 source_file_paths 二选一。",
+    )
+    source_file_paths: Optional[List[str]] = Field(
+        None,
+        description="批量模式：多个源文件路径列表，一次调用全部复制并注册下载。"
+        "与 source_file_path 二选一；批量模式不支持 file_path。",
+    )
+    display_names: Optional[List[str]] = Field(
+        None,
+        description="批量模式下各文件的显示文件名（与 source_file_paths 按序对应）。"
+        "缺省项使用源文件名。单文件模式请用 display_name。",
     )
     file_path: Optional[str] = Field(
         None,
@@ -150,25 +161,33 @@ class CpTool(BaseTool):
 cp(source_file_path="/tmp/quote_xxx.xlsx", display_name="研学旅游报价单.xlsx")
 → 将源文件复制到下载目录，自动注册下载，默认对用户可见可下载
 
+cp(source_file_paths=["/tmp/out/01_大堂_硬装材料.xlsx", "/tmp/out/02_客房_家具软装.xlsx"],
+   display_names=["01_大堂_硬装材料.xlsx", "02_客房_家具软装.xlsx"])
+→ 批量交付：一次调用复制全部文件并逐个注册下载，每个文件都会出现下载卡片
+
 cp(source_file_path="src/skills/xxx/assets/template.html", file_path="ppt/index.html")
 → 将源文件复制到指定输出目录，自动注册下载
 
 参数：
-- source_file_path：源文件绝对路径或项目根目录相对路径。源可来自系统 /tmp、
+- source_file_path：单文件模式的源文件路径，绝对路径或项目根目录相对路径。源可来自系统 /tmp、
   skill 生成的临时文件、工具会话目录、项目内文件等位置；
   但不得访问其他租户的存储目录（storage/tenants/ 下仅限当前租户）。
-- file_path：目标路径。不传时自动分配下载目录路径（推荐）。
+- source_file_paths：批量模式的多个源文件路径（与 source_file_path 二选一）。
+  交付多个生成文件（如按空间拆分的报价清单 Excel）时必须用批量模式一次交付，
+  不要逐个文件反复调用。批量模式不支持 file_path，目标统一自动分配。
+- display_names：批量模式各文件的显示文件名（与 source_file_paths 按序对应）。
+- file_path：目标路径（仅单文件模式）。不传时自动分配下载目录路径（推荐）。
   · 相对路径自动落到当前租户附件目录（storage/tenants/{tenant_id}/conversation/）内，
     历史的 storage/、output/ 等前缀会被自动剥离。
 - register_download：默认 True，复制后自动注册下载。
 - visible：默认 True，注册的文件在前端对话中展示下载卡片。
   仅当作为中间过程文件不需要展示时设为 False。
-- display_name：注册下载时的显示文件名（交付给用户时应提供）。
+- display_name：单文件模式注册下载时的显示文件名（交付给用户时应提供）。
   必须使用用户能理解的业务文件名，默认才使用源文件名。
 
 任何需要复制文件内容的场景都用本工具：拷贝模板生成新文件、复制用户上传文件、
-把工具/skill 生成的文件注册到下载系统等。交付用户的文件必须传 display_name，
-避免前端展示临时文件名。零 token 消耗（不读源文件内容到上下文）。
+把工具/skill 生成的文件注册到下载系统等。交付用户的文件必须传 display_name /
+display_names，避免前端展示临时文件名。零 token 消耗（不读源文件内容到上下文）。
 
 重要约束（避免误用）：
 - 源路径必须是本地真实存在的文件（如 /tmp/xxx.xlsx、storage/.../xxx.pdf）。
@@ -189,6 +208,9 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="ppt/index.
     def get_display_name(self, tool_args=None) -> str:
         base = self.display_name
         if tool_args:
+            batch = tool_args.get("source_file_paths") or []
+            if batch:
+                return f"{base}（批量 {len(batch)} 个文件）"
             src = tool_args.get("source_file_path") or ""
             if src:
                 return f"{base}「{Path(src).name}」"
@@ -467,13 +489,85 @@ cp(source_file_path="src/skills/xxx/assets/template.html", file_path="ppt/index.
         }
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
-        source_file_path = kwargs["source_file_path"]
-        file_path = kwargs.get("file_path")
-        overwrite = kwargs.get("overwrite", False)
-        register_download = kwargs.get("register_download", True)
-        display_name = kwargs.get("display_name")
+        batch_paths = kwargs.get("source_file_paths")
+        if batch_paths:
+            return await self._execute_batch(**kwargs)
+
+        source_file_path = kwargs.get("source_file_path")
+        if not source_file_path:
+            return {
+                "success": False,
+                "error": "缺少源文件路径：请提供 source_file_path（单文件）或 source_file_paths（批量）",
+            }
+        return await self._copy_single(
+            source_file_path=source_file_path,
+            file_path=kwargs.get("file_path"),
+            overwrite=kwargs.get("overwrite", False),
+            register_download=kwargs.get("register_download", True),
+            display_name=kwargs.get("display_name"),
+            visible=kwargs.get("visible", True),
+        )
+
+    async def _execute_batch(self, **kwargs) -> Dict[str, Any]:
+        """批量交付：一次调用复制多个文件并逐个注册下载。
+
+        单个文件失败不阻塞其余文件（部分成功也返回，errors 列出失败项）；
+        全部失败时 success=False。
+        """
+        batch_paths = kwargs.get("source_file_paths") or []
+        if kwargs.get("source_file_path"):
+            return {
+                "success": False,
+                "error": "source_file_path 与 source_file_paths 不能同时提供",
+            }
+        if kwargs.get("file_path"):
+            return {
+                "success": False,
+                "error": "批量模式不支持 file_path（目标统一自动分配），请去掉该参数",
+            }
+
+        display_names = kwargs.get("display_names") or []
         visible = kwargs.get("visible", True)
 
+        files: List[Dict[str, Any]] = []
+        errors: List[Dict[str, Any]] = []
+        for idx, source_file_path in enumerate(batch_paths):
+            display_name = display_names[idx] if idx < len(display_names) else None
+            result = await self._copy_single(
+                source_file_path=source_file_path,
+                file_path=None,
+                overwrite=False,
+                register_download=True,
+                display_name=display_name,
+                visible=visible,
+            )
+            if result.get("success") is False:
+                errors.append({"source_file_path": source_file_path, "error": result.get("error")})
+            else:
+                files.append(result)
+
+        if not files:
+            detail = "; ".join(e.get("error") or "" for e in errors)
+            return {"success": False, "error": f"批量复制全部失败: {detail}", "errors": errors}
+
+        result: Dict[str, Any] = {
+            "success": True,
+            "file_count": len(files),
+            "files": files,
+        }
+        if errors:
+            result["errors"] = errors
+        return result
+
+    async def _copy_single(
+        self,
+        source_file_path: str,
+        file_path: Optional[str],
+        overwrite: bool,
+        register_download: bool,
+        display_name: Optional[str],
+        visible: bool,
+    ) -> Dict[str, Any]:
         try:
             # 1. 解析源路径
             src = self._resolve_source(source_file_path)

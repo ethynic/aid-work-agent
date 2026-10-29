@@ -332,6 +332,14 @@ sequenceDiagram
 
 当前工作树的weixin-cli `Open-WeixinChat`仍先打开搜索框并定位，不能将本树视作用户提到的新版本已验收证明；本设计直接按用户要求确定“当前匹配直发、否则搜索”的行为，不因此修改无关Weixin代码。
 
+2026-10-29本地验证补充：沿用主API、独立Runner API/Worker和既有Device接口，服务器组件可放本机WSL Docker，Windows Runtime/企业微信仍留在Windows，通过loopback发布的本地主API连接。使用独立Compose项目、PostgreSQL/Redis及持久卷，不替换现有8000容器或复用其业务库；先做合成数据与重启恢复验证，真实账号配对/发送另按用户授权。复用现有应用镜像并挂载本工作树代码，不新增调度器、模拟产品工具或永久测试门禁；完整初始化使用带pgvector的数据库，不删正式schema中的向量部分凑启动。实施与结果统一登记[W12](../../plans/plan-wecom-cli-group-chat-experiment.md#w12-最新master整合与本地容器验证2026-10-29)。
+
+2026-10-29 W14通用装配取代下段W13临时特例：业务面统一登记既有受信目录，main与inherit按目录加载候选，再按可信actor设备能力投影；显式allowed/excluded继续有效，旧调用恢复不依赖模型可见性。[通用设计](../../tools/tool-auto-discovery-design.md)、[W14计划](../../plans/plan-wecom-cli-group-chat-experiment.md#w14-通用runtime业务工具自动装配2026-10-29)。企微仍三项，无额外配对/审批。
+
+2026-10-29 main装配纠正：三项业务工具同样适用于内置主智能体main，不限于显式配置的业务子智能体。main在既有Assembly显式注册三项既有proxy，其他角色保持allowed/excluded；内部恢复和其他provider不因此全量开放。模型可见工具不等于具备本机执行权限，实际调用仍走原设备/账号/claim/permit；不加新的配对或预探测流程。真实Web复现发现原“MASTER绝不加载本地proxy”旧测试与此约定冲突，采用现行三工具要求并替换为“仅装配三项、保留原执行身份”的回归，详见[W13](../../plans/plan-wecom-cli-group-chat-experiment.md#w13-main缺少企微三工具2026-10-29)。
+
+同轮执行参数纠正：LOCAL_REQUIRED框架注入的可信身份、会话和进度对象不属于模型业务入参，ToolExecutor仅对公共业务字段做InputModel校验/规范化，然后合并原上下文执行。未知公共字段仍按原schema拒绝，纯normalize函数及冻结恢复证明不改；不得为了适配把内部字段加到模型定义或关闭业务extra校验。该接点已通过真实Web→Runner→Runtime→CLI的DB只读验证，未发送或监听。
+
 - **错误可判断**：复用OperationResult的success/code/message/effect及既有invocation标识，在data诊断中说明失败阶段、原始原因和可用恢复动作。搜索没找到、尚未输入、输入后未按发送、按发送后未确认必须区分；不要统一包装成“发送失败请重试”。不另造重复的顶层错误协议或大量新错误枚举。
 - **恢复内聚**：搜索/选择/目标刷新/当前会话判断、发送核验和send-status由CLI与Runner原调用适配器负责。正常发送尽量在当前调用内完成确认；超时后由原任务恢复分支继续只读核对。Agent无需先probe再search/select，也不需要在被挂起后自己调用第4个对账工具。
 - **不掩盖未知**：工具对外至少明确“确定未发送”“客户端已确认记录”“可能已发送，待核对”。沿现有effect/核验数据表达，不把客户端记录说成送达/已读；unknown不得自动重发。可以自动恢复的未发送错误内部有限重试，真正草稿/登录/账号不符给具体操作提示，已识别的其他会话继续处理。

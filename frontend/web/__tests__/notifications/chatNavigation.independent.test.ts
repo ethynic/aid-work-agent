@@ -59,6 +59,7 @@ async function harness() {
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/t/:tenant/chat', name: 'tenant-chat', component: ChatContainer },
     { path: '/t/:tenant/chat/:subagent', name: 'tenant-chat-subagent', component: ChatContainer },
+    { path: '/t/:tenant/tasks/:task_id', name: 'tenant-task-view', component: { template: '<div>task view</div>' } },
   ] })
   await router.push('/t/tenant-one/chat?_load_session=notification-session&runner_id=original-runner&_sid=do-not-send')
   await router.isReady()
@@ -147,6 +148,15 @@ describe('independent actual chat/sidebar notification navigation', () => {
     pending.resolve(originalSession); await flushPromises()
     expect(useSession().currentSessionId.value).toBe(validSession.session_id)
     expect(useSession().sessions.value.some(session => session.session_id === originalSession.session_id)).toBe(false)
+    expect(agent.switch).not.toHaveBeenCalledWith(originalSession.session_id)
+  })
+
+  it('routes a task session opened via legacy link to the task view by the scheduled_task marker', async () => {
+    // 二轮评审第 8 项：详情接口返回 scheduled_task（权威标记）→ 任务视图，不出现聊天形态
+    network.getSession.mockResolvedValueOnce({ ...originalSession, scheduled_task: 'sched-9' })
+    const { router } = await harness()
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/t/tenant-one/tasks/sched-9')
     expect(agent.switch).not.toHaveBeenCalledWith(originalSession.session_id)
   })
 })

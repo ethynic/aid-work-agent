@@ -16,6 +16,10 @@ class ControlToolDependencies:
     subagent_registry: Any = None
     delegation_authorizer: Any = None
     allow_delegate: bool = False
+    # 非交互执行（scheduled 根+子）：装配时滤除 interactive_only 提问类
+    # 控制工具（ask_user/clarify）——definitions 与 dispatch（controls.get）
+    # 同一过滤点，LLM 不可见即不可调用（设计 §5.3）。
+    non_interactive: bool = False
 
 
 class ToolControlSet:
@@ -46,6 +50,8 @@ class ToolControlSet:
             AgentSleepTool(),
             UseSkillTool(dependencies.skill_registry),
         )
+        if dependencies.non_interactive:
+            tools = tuple(tool for tool in tools if not getattr(tool, "interactive_only", False))
         self._tools = {tool.name: tool for tool in tools}
         self._delegate: Optional[BaseTool] = None
 
@@ -66,9 +72,11 @@ class ToolControlSet:
         return self._tools.get(name)
 
     def definitions(self, *, available_subagents: Optional[Sequence[str]]) -> list[dict]:
+        # 非交互装配下 clarify/ask_user 不在 _tools，按现存名称跳过（防 KeyError）
         definitions = [
             self._tools[name].to_tool_definition()
             for name in ("skill_execute", "create_plan", "clarify", "ask_user", "agent_sleep")
+            if name in self._tools
         ]
         definitions.append(self._dependencies.skill_registry.get_skill_tool_definition())
         if self._delegate is not None:
@@ -84,6 +92,8 @@ class ToolControlSet:
     ) -> str:
         guides = []
         for name in ("skill_execute", "create_plan", "clarify", "ask_user"):
+            if name not in self._tools:
+                continue
             guide = self._tools[name].get_usage_guide()
             if guide:
                 guides.append(f"### {name}\n{guide}")

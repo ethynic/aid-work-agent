@@ -101,6 +101,11 @@ class RunnerManager:
         self.authorizer.verify_service(credentials["service_id"], credentials["service_token"], None)
         row = self.repository.get(runner_id)
         principal = self._authorize_row(row, credentials)
+        if row['source'] == 'scheduled' and not credentials.get('user_token'):
+            # 设计 §5.2 操作矩阵：scheduled 的取消仅限用户（任务视图"取消
+            # 当前执行"）；调度服务身份只有无补充输入的 resume（恢复驱动
+            # 不做时间取消），不得经通用 cancel 端点取消
+            raise RunnerError('SCHEDULED_CONTROL_FORBIDDEN', 403)
         return public_runner(self.repository.cancel(principal, runner_id))
 
     def verify_local(self, runner_id, request_id, credentials, *, stop_resources=False):

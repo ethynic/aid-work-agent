@@ -315,6 +315,10 @@ scheduler:
   execution_timeout: 300
   coalesce_missed: true
   misfire_grace_time: 300
+  # Runner 化 v2 调度循环（设计 §12；background_runner dispatch 使用）
+  poll_seconds: 15             # 到期扫描/手动执行/恢复驱动生效上限
+  submit_retry_seconds: 60     # Runner 不可达/未知响应的退避间隔
+  recovery_max_attempts: 3     # interrupted 恢复控制有界尝试次数
 
 # MCP Server 配置（Model Context Protocol）
 mcp:
@@ -326,8 +330,6 @@ mcp:
     enabled: ${MCP_AUTH_ENABLED:-true}
     api_keys: []                     # API Key 列表，或通过环境变量 MCP_API_KEYS 设置（逗号分隔）
   tools: []                          # 暴露的 skill/tool 列表，示例：
-  #  - skill: trade-customer
-  #    commands: [save-customer, search-customers]
   #  - skill: baidu-search
   #    commands: [search]
 
@@ -503,7 +505,13 @@ agent_runner:
   web_service_id: "web"
   peers:
     web:
-      sources: ["chat", "wecom_kf", "feishu", "dingtalk", "wecom"]
+      # scheduled：Web 网关以 web 服务身份转发用户 token 只读/取消 scheduled
+      # runner（任务视图，设计 §5.2 操作范围矩阵）；提交仍仅 scheduler 服务身份。
+      sources: ["chat", "wecom_kf", "feishu", "dingtalk", "wecom", "scheduled"]
+    # 调度侧服务身份（background_runner dispatch 循环提交 scheduled 执行）；
+    # token 复用同一 .env 的 AGENT_RUNNER_WEB_SERVICE_TOKEN，无新增 env。
+    scheduler:
+      sources: ["scheduled"]
   host: "127.0.0.1"
   port: 8091
   lease_seconds: 30
