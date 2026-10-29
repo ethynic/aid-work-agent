@@ -2155,8 +2155,9 @@ CREATE TABLE IF NOT EXISTS bs_lead_capture_leads (
     customer_user_id TEXT,                 -- 微信侧 external_userid（老客户识别）
     channel_chat_id TEXT,                  -- open_kfid（来源客服账号）
     kf_account_name TEXT,                  -- 客服账号名快照
-    contact_method TEXT,                   -- phone | qr
+    contact_method TEXT,                   -- 主要联系方式类型：phone | landline | email（qr 为历史值，不再新写）
     phone TEXT,                            -- 手机号（加密存储）
+    other_contact JSONB,                   -- 其他联系方式（固定电话/邮箱，逐条加密：[{"type","value"}]）
     contact_name TEXT,                     -- 客户姓名（对话中抽取，可选）
     demand_summary TEXT,                   -- 需求摘要（对话中抽取，可选）
     source TEXT DEFAULT 'lead_capture',    -- 固定来源标识

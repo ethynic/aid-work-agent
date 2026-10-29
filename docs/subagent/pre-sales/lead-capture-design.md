@@ -315,3 +315,14 @@ wecom_kf 会话本质是**一次性触点**：会话结束，微信侧客户就"
 - after-sales 回归纯售后的具体清理范围（与租户渠道账号切换联动）
 
 （原遗留项关闭：线索表已定名 `bs_lead_capture_leads`（规范例外已登记）；AGENT_TOOLS 为遗留提法，schema 由 InputModel 自动收集、无需维护；TTL 方案已定为显式 `ttl_seconds=PERMANENT_TTL`。）
+
+## 十六、2026-10-29 修订：qr 不算留资 + 联系方式类型扩展
+
+> 背景：客户索要顾问二维码后可能并未添加顾问微信，qr 线索对顾问无可执行动作，属无效线索；手机号之外，固定电话/邮箱同为有效联系方式。
+
+1. **qr 不再算留资**：客户索要顾问二维码只触发发码动作，由独立工具 `send_advisor_qr` 承担（校验客服账号 `employee_qr_file_id` 配置 -> 读取 `ImageRef` -> 随回复下发图片）；不写线索表、不发通知、不改会话 `lead_capture` 状态机。`send_advisor_qr` 失败（未配置/资产缺失）时降级引导客户留联系方式。
+2. **联系方式类型扩展**：`contact_method` 语义从 `phone | qr` 扩展为 `phone | landline | email`（qr 为历史值，存量数据保留展示、不再新写），由工具按 `phone > landline > email` 优先级派生。
+3. **存储**：`phone` 列仍只存手机号（加密）；新增 `other_contact` JSONB 列存固定电话/邮箱，逐条加密为 `[{"type": "landline"|"email", "value": "<密文>"}]`，读取时解密。迁移见 `deploy/db_update.yaml` 2026-10-29 条目。
+4. **提示词**：pre-sales SUBAGENT.md 留资方式改为「留联系方式（手机号/固定电话/邮箱）或转人工」；「二维码表述硬约束」的工具名全部改为 `send_advisor_qr`，语义改为发码动作；`pre-sales-api` 技能 `requires_tools` 增加 `send_advisor_qr`。
+5. **下游不变**：external_push 的 `lead_phone` 仍取 `phone` 列（固话/邮箱线索该列为空 -> 推送留空）；lead_refresh 对未留资会话 no-op 的口径不变（qr-only 会话从此不触发分析，符合新口径）；前端留资页保留 qr 历史标签。
+6. **部署注意（存量数字员工副本）**：技能 `requires_tools` 自动补全只在保存数字员工时触发（`SubagentDefinitionService.apply_skill_requirements`），存量副本实例的工具配置已锁定（见配置收敛锁定机制），部署后需在管理后台重新保存对应数字员工（或批量补 tools 配置），否则 `send_advisor_qr` 不会出现在副本工具列表，发码请求会因工具不存在而失败。

@@ -9,7 +9,7 @@ metadata:
     requires:
       bins: ["python"]
 # 依赖的工具与 recap 任务：自定义数字员工勾选此技能时自动补全（见 subagent_definition_service.apply_skill_requirements）
-requires_tools: [record_lead_capture, http_api, transfer_to_human, get_channel_user_info]
+requires_tools: [record_lead_capture, send_advisor_qr, http_api, transfer_to_human, get_channel_user_info]
 requires_recap:
   - name: external_push
     when: every_round

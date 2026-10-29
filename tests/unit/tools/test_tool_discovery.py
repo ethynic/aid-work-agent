@@ -84,6 +84,7 @@ GOLDEN_TOOLS = [
     "session_task_manage",
     "session_task_prepare",
     "session_task_publish",
+    "send_advisor_qr",
     "submit_video_task",
     "transfer_to_human",
     "upload_data_file",

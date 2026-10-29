@@ -25,20 +25,25 @@ LEAD_STAGES = ("new", "contacting", "converted", "abandoned")
 # 客户意向度枚举（lead_refresh 判定回写，非法值拒绝入库）
 LEAD_INTENT_LEVELS = LeadIntentLevel.all_values()
 
+# 联系方式类型枚举（contact_method）：新写仅接受三值；qr 为历史值仅存量读取
+LEAD_CONTACT_METHODS = ("phone", "landline", "email")
+# 存量数据可能出现的类型（读取/展示兼容，create 拒绝）
+LEAD_CONTACT_METHODS_LEGACY = LEAD_CONTACT_METHODS + ("qr",)
 
-def _encrypt_phone(phone: Optional[str]) -> Optional[str]:
-    """手机号加密落库；空值原样返回。"""
-    if not phone:
+
+def _encrypt_contact_value(value: Optional[str]) -> Optional[str]:
+    """联系方式值（手机号/固话/邮箱）加密落库；空值原样返回。"""
+    if not value:
         return None
     try:
-        return encryption_manager.encrypt(str(phone).strip())
+        return encryption_manager.encrypt(str(value).strip())
     except Exception as e:
-        logger.error(f"后端日志：留资手机号加密失败: {e}")
+        logger.error(f"后端日志：留资联系方式加密失败: {e}")
         raise
 
 
-def _decrypt_phone(encrypted: Optional[str]) -> Optional[str]:
-    """解密手机号；空值/非密文原样返回。"""
+def _decrypt_contact_value(encrypted: Optional[str]) -> Optional[str]:
+    """解密联系方式值；空值/非密文原样返回。"""
     if not encrypted:
         return None
     try:
@@ -46,6 +51,37 @@ def _decrypt_phone(encrypted: Optional[str]) -> Optional[str]:
     except Exception:
         # 兼容历史明文数据（加密功能上线前写入的）
         return encrypted
+
+
+def _encrypt_other_contact(
+    landline: Optional[str], email: Optional[str]
+) -> Optional[List[Dict[str, str]]]:
+    """固话/邮箱逐条加密为 other_contact JSONB 结构；均空返回 None。"""
+    entries = []
+    if landline:
+        entries.append({"type": "landline", "value": _encrypt_contact_value(landline)})
+    if email:
+        entries.append({"type": "email", "value": _encrypt_contact_value(email)})
+    return entries or None
+
+
+def _decrypt_other_contact(
+    raw: Any,
+) -> Optional[List[Dict[str, str]]]:
+    """解密 other_contact JSONB 各条目 value；结构异常原样返回（不阻断读取）。"""
+    if not raw:
+        return None
+    try:
+        entries = json.loads(raw) if isinstance(raw, str) else raw
+        result = []
+        for item in entries:
+            d = dict(item)
+            d["value"] = _decrypt_contact_value(d.get("value"))
+            result.append(d)
+        return result
+    except Exception as e:
+        logger.warning(f"后端日志：other_contact 解密失败: {e}")
+        return None
 
 
 class LeadCaptureDB:
@@ -62,14 +98,27 @@ class LeadCaptureDB:
         kf_account_name: Optional[str] = None,
         contact_method: str,
         phone: Optional[str] = None,
+        landline: Optional[str] = None,
+        email: Optional[str] = None,
         contact_name: Optional[str] = None,
         demand_summary: Optional[str] = None,
         assigned_to: Optional[str] = None,
         assignee_name: Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        """写入一条留资线索，返回新记录（phone 已解密）。"""
-        encrypted_phone = _encrypt_phone(phone) if contact_method == "phone" else None
+        """写入一条留资线索，返回新记录（phone / other_contact 已解密）。
+
+        contact_method 为主要联系方式类型（phone | landline | email；qr 仅历史值）。
+        phone 只存手机号；固话/邮箱加密后存 other_contact JSONB。
+        """
+        if contact_method not in LEAD_CONTACT_METHODS:  # qr 为历史值，create 不接受
+            logger.warning(
+                f"后端日志：留资线索拒绝非法联系方式类型 contact_method={contact_method}"
+            )
+            return None
+        encrypted_phone = _encrypt_contact_value(phone) if contact_method == "phone" else None
+        # 固话/邮箱恒入 other_contact（多项同时提供时不丢失），phone 列只存手机号
+        encrypted_other = _encrypt_other_contact(landline, email)
         with get_db_connection() as conn:
             cursor = conn.cursor()
             try:
@@ -77,9 +126,10 @@ class LeadCaptureDB:
                     """
                     INSERT INTO bs_lead_capture_leads
                     (lead_id, tenant_id, user_id, customer_user_id, channel_chat_id,
-                     kf_account_name, contact_method, phone, contact_name, demand_summary,
+                     kf_account_name, contact_method, phone, other_contact,
+                     contact_name, demand_summary,
                      assigned_to, assignee_name, session_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING *
                     """,
                     (
@@ -91,6 +141,7 @@ class LeadCaptureDB:
                         kf_account_name,
                         contact_method,
                         encrypted_phone,
+                        json.dumps(encrypted_other, ensure_ascii=False) if encrypted_other else None,
                         contact_name,
                         demand_summary,
                         assigned_to,
@@ -101,7 +152,8 @@ class LeadCaptureDB:
                 row = cursor.fetchone()
                 conn.commit()
                 if row:
-                    row["phone"] = _decrypt_phone(row.get("phone"))
+                    row["phone"] = _decrypt_contact_value(row.get("phone"))
+                    row["other_contact"] = _decrypt_other_contact(row.get("other_contact"))
                 return dict(row) if row else None
             except Exception as e:
                 conn.rollback()
@@ -129,7 +181,8 @@ class LeadCaptureDB:
             if not row:
                 return None
             d = dict(row)
-            d["phone"] = _decrypt_phone(d.get("phone"))
+            d["phone"] = _decrypt_contact_value(d.get("phone"))
+            d["other_contact"] = _decrypt_other_contact(d.get("other_contact"))
             return d
 
     @staticmethod
@@ -194,7 +247,8 @@ class LeadCaptureDB:
             leads = []
             for row in cursor.fetchall():
                 d = dict(row)
-                d["phone"] = _decrypt_phone(d.get("phone"))
+                d["phone"] = _decrypt_contact_value(d.get("phone"))
+                d["other_contact"] = _decrypt_other_contact(d.get("other_contact"))
                 leads.append(d)
 
         return {"leads": leads, "total": total, "page": page, "page_size": page_size}
@@ -337,7 +391,7 @@ class LeadCaptureDB:
             )
             total = cursor.fetchone()["cnt"]
 
-            # 按留资方式分组（手机号 vs 二维码）
+            # 按主要联系方式类型分组（phone/landline/email + 历史 qr）
             cursor.execute(
                 f"""
                 SELECT contact_method, COUNT(*) AS count

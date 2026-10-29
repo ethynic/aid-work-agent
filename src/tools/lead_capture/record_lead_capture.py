@@ -1,7 +1,10 @@
 """客户留资记录工具
 
-供 Agent 在微信客服售前咨询场景调用：将客户手机号或"选择添加顾问微信"
-记入留资线索表（bs_lead_capture_leads），并把会话状态机置为已留资。
+供 Agent 在微信客服售前咨询场景调用：将客户留下的联系方式（手机号/固定电话/
+邮箱）记入留资线索表（bs_lead_capture_leads），并把会话状态机置为已留资。
+
+客户索要顾问二维码不属于留资（客户可能并未添加顾问微信，线索无法跟进），
+发码动作由独立工具 send_advisor_qr 承担。
 
 渠道隔离完全由 execute 段的 get_kf_context() 判断：非微信客服渠道返回友好
 失败提示。catalog=True 进入工具目录，靠工具内 get_kf_context 渠道隔离兜底
@@ -19,16 +22,22 @@ from src.tools.base import BaseTool
 
 # 中国大陆手机号：1 开头 11 位数字
 _PHONE_RE = re.compile(r"^1[3-9]\d{9}$")
+# 固定电话：区号（3-4 位，0 开头）+ 号码（7-8 位），区号与号码间连字符可选
+_LANDLINE_RE = re.compile(r"^0\d{2,3}-?\d{7,8}$")
+# 邮箱：宽松校验（本地部分@域名，域名至少含一个点）
+_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+# 主要联系方式类型派生优先级（同时提供多项时取最靠前的作为 contact_method）
+_CONTACT_METHOD_PRIORITY = ("phone", "landline", "email")
+
+# 联系方式类型 -> 中文标签（通知正文用）
+_CONTACT_LABELS = {"phone": "手机号", "landline": "固定电话", "email": "邮箱"}
 
 
 class RecordLeadCaptureInput(BaseModel):
-    contact_method: str = Field(
-        ...,
-        description="留资方式：phone（客户提供了手机号）| qr（客户选择添加顾问微信）",
-    )
-    phone: Optional[str] = Field(
-        None, description="客户手机号，contact_method=phone 时必填"
-    )
+    phone: Optional[str] = Field(None, description="客户手机号（11 位数字）")
+    landline: Optional[str] = Field(None, description="客户固定电话（含区号，如 0571-88888888）")
+    email: Optional[str] = Field(None, description="客户电子邮箱")
     contact_name: Optional[str] = Field(
         None, description="客户姓名（对话中提取，可选）"
     )
@@ -40,26 +49,25 @@ class RecordLeadCaptureInput(BaseModel):
 class RecordLeadCaptureTool(BaseTool):
     """客户留资记录工具
 
-    收集到客户手机号或客户选择添加顾问微信时调用，记录线索。已留资客户再次
-    明确要求留资（加微信/留手机号）视为新的跟进需求，正常登记（不防重）。
+    收集到客户任一联系方式（手机号/固定电话/邮箱）时调用，记录线索。已留资
+    客户再次明确要求留资视为新的跟进需求，正常登记（不防重）。
     """
 
     name = "record_lead_capture"
     description = (
-        "为客户登记留资（记录线索），在售前咨询场景下收集到客户手机号、"
-        "或客户选择添加顾问微信时调用。\n\n"
+        "为客户登记留资（记录线索），在售前咨询场景下收集到客户联系方式时调用。\n\n"
         "适用场景：\n"
-        "- 客户主动留下手机号，或同意客服稍后电话联系\n"
-        "- 客户主动要求添加顾问微信/企微，或选择扫码添加\n"
+        "- 客户主动留下手机号、固定电话或电子邮箱，或同意客服稍后电话/邮件联系\n"
         "- 已按判定规则识别为有意向客户并完成需求收集\n\n"
         "注意事项：\n"
-        "- 客户已留资过但仍明确要求留资（再次留下手机号或要求加微信）："
+        "- phone / landline / email 至少提供一项，按客户实际提供的情况填写\n"
+        "- 客户已留资过但仍明确要求留资（再次留下联系方式）："
         "视为新的跟进需求，正常登记并通知员工（注明上次留资时间）\n"
         "- 客户未明确要求留资时，不要重复引导客户留资\n"
-        "- 工具返回失败（如未配置顾问二维码）时，降级仅引导客户留下手机号\n"
-        "- 调用成功后提示客户：客服会尽快联系。contact_method=qr 时顾问二维码图片"
-        "已随回复自动发送给客户，无需再引导客户添加微信或复制/下载该图片\n"
-        "- 成功结果会返回 assignee_phone（归属员工手机号），供外部系统委托登录使用；"
+        "- 客户索要顾问二维码不属于留资，使用 send_advisor_qr 工具发送，"
+        "不要为索要二维码的客户调用本工具\n"
+        "- 调用成功后提示客户：客服会尽快联系。成功结果会返回 "
+        "assignee_phone（归属员工手机号），供外部系统委托登录使用；"
         "未返回说明归属员工未配置手机号"
     )
     usage_guide = ""
@@ -69,16 +77,11 @@ class RecordLeadCaptureTool(BaseTool):
     catalog = True
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
-        contact_method = kwargs.get("contact_method")
-        phone = kwargs.get("phone")
+        phone = (kwargs.get("phone") or "").strip() or None
+        landline = (kwargs.get("landline") or "").strip() or None
+        email = (kwargs.get("email") or "").strip() or None
         contact_name = kwargs.get("contact_name")
         demand_summary = kwargs.get("demand_summary")
-
-        if contact_method not in ("phone", "qr"):
-            return {
-                "success": False,
-                "error": "留资方式 contact_method 必须是 phone 或 qr",
-            }
 
         from src.channels.wecom_kf.context import get_kf_context
 
@@ -91,6 +94,18 @@ class RecordLeadCaptureTool(BaseTool):
                 "hint": "此工具仅在微信客服渠道下有效，请勿继续尝试留资",
             }
 
+        if not (phone or landline or email):
+            return {
+                "success": False,
+                "error": "请先向客户确认至少一项联系方式（手机号/固定电话/邮箱），再登记留资",
+                "hint": "phone / landline / email 至少提供一项",
+            }
+
+        contact_method = self._derive_contact_method(phone, landline, email)
+        error = self._validate_contact(contact_method, phone, landline, email)
+        if error:
+            return error
+
         kf_config = ctx.get("kf_config", {}) or {}
         session_id = ctx.get("session_id", "")
         tenant_id = ctx.get("tenant_id", "")
@@ -100,25 +115,9 @@ class RecordLeadCaptureTool(BaseTool):
         if not session_id or not tenant_id:
             return {"success": False, "error": "缺少必要的会话上下文"}
 
-        # 手机号校验（contact_method=phone 必填）
-        if contact_method == "phone":
-            phone = (phone or "").strip()
-            if not phone:
-                return {
-                    "success": False,
-                    "error": "请先向客户确认手机号，再登记留资",
-                    "hint": "contact_method=phone 时必须提供客户手机号",
-                }
-            if not _PHONE_RE.match(phone):
-                return {
-                    "success": False,
-                    "error": "手机号格式不正确，请重新向客户确认",
-                    "hint": "手机号应为 11 位数字且以 1 开头",
-                }
-
         from src.channels.session import channel_session_manager
 
-        # 已留资客户再次明确要求留资（加微信/留手机号）视为新的跟进需求，正常登记；
+        # 已留资客户再次明确要求留资（再次留联系方式）视为新的跟进需求，正常登记；
         # 仅记录上次留资时间用于通知正文，让员工结合历史需求跟进（不拒绝、不防重）。
         # 客户未明确要求时，由 Agent 引导策略避免重复引导留资，工具不在本层判断。
         try:
@@ -129,41 +128,6 @@ class RecordLeadCaptureTool(BaseTool):
         session_metadata = (session or {}).get("metadata") or {}
         lead_state = session_metadata.get("lead_capture") or {}
         previous_captured_at = lead_state.get("captured_at")
-
-        # contact_method=qr 时先校验顾问二维码可用性，再落库：
-        # 未配置或读取失败必须「无副作用降级」，避免写入一条无二维码可发的 qr 线索。
-        qr_ref = None
-        if contact_method == "qr":
-            employee_qr_file_id = kf_config.get("employee_qr_file_id")
-            if not employee_qr_file_id:
-                logger.info(
-                    f"留资(qr)降级为手机号：未配置顾问二维码 "
-                    f"tenant={tenant_id}, open_kfid={open_kfid}"
-                )
-                return {
-                    "success": False,
-                    "error": "当前客服账号未配置顾问二维码，请仅引导客户留下手机号",
-                    "hint": "请改为引导客户留下手机号，并说明客服会尽快联系",
-                }
-            try:
-                from src.core.image_asset import get_image_registry
-
-                qr_ref = await get_image_registry().get_ref_by_file_id(
-                    employee_qr_file_id
-                )
-            except Exception as e:
-                logger.warning(f"读取顾问二维码失败 open_kfid={open_kfid}: {e}")
-                qr_ref = None
-            if not qr_ref:
-                logger.info(
-                    f"留资(qr)降级为手机号：顾问二维码资产缺失 "
-                    f"tenant={tenant_id}, open_kfid={open_kfid}"
-                )
-                return {
-                    "success": False,
-                    "error": "顾问二维码读取失败，请仅引导客户留下手机号",
-                    "hint": "请改为引导客户留下手机号，并说明客服会尽快联系",
-                }
 
         lead_id = f"lead_lc_{uuid.uuid4().hex[:12]}"
         assigned_to = kf_config.get("tenant_user_id")
@@ -181,7 +145,9 @@ class RecordLeadCaptureTool(BaseTool):
             channel_chat_id=open_kfid,
             kf_account_name=kf_account_name,
             contact_method=contact_method,
-            phone=phone if contact_method == "phone" else None,
+            phone=phone,
+            landline=landline,
+            email=email,
             contact_name=contact_name,
             demand_summary=demand_summary,
             assigned_to=assigned_to,
@@ -210,32 +176,62 @@ class RecordLeadCaptureTool(BaseTool):
         except Exception as e:
             logger.warning(f"留资后更新会话状态失败 session={session_id}: {e}")
 
-        # 通知归属员工（注明上次留资时间，回头客场景）；qr 时随回复下发顾问二维码
+        # 通知归属员工（注明上次留资时间，回头客场景）
         await self._notify_lead_capture(
             lead_id, tenant_id, assigned_to, assignee_name, contact_method,
             previous_captured_at=previous_captured_at,
         )
-        if contact_method == "qr":
-            logger.info(
-                f"客户留资成功(qr): lead_id={lead_id}, tenant={tenant_id}, "
-                f"open_kfid={open_kfid}"
-            )
-            return {
-                "success": True,
-                "message": "已为客户登记留资，顾问二维码图片已随本次回复发送给客户，"
-                "请勿再次复制或下载该二维码文件",
-                "images": [qr_ref.model_dump()],
-                "assignee_phone": assignee_phone,
-            }
         logger.info(
             f"客户留资成功: lead_id={lead_id}, tenant={tenant_id}, "
-            f"method=phone, open_kfid={open_kfid}"
+            f"method={contact_method}, open_kfid={open_kfid}"
         )
         return {
             "success": True,
             "message": "已登记客户留资，请告知客户客服会尽快联系",
             "assignee_phone": assignee_phone,
         }
+
+    @staticmethod
+    def _derive_contact_method(
+        phone: Optional[str],
+        landline: Optional[str],
+        email: Optional[str],
+    ) -> str:
+        """按优先级派生主要联系方式类型：phone > landline > email。"""
+        provided = {
+            "phone": bool(phone),
+            "landline": bool(landline),
+            "email": bool(email),
+        }
+        return next(m for m in _CONTACT_METHOD_PRIORITY if provided[m])
+
+    @staticmethod
+    def _validate_contact(
+        contact_method: str,
+        phone: Optional[str],
+        landline: Optional[str],
+        email: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """校验各联系方式格式，非法返回失败响应，合法返回 None。"""
+        if phone and not _PHONE_RE.match(phone):
+            return {
+                "success": False,
+                "error": "手机号格式不正确，请重新向客户确认",
+                "hint": "手机号应为 11 位数字且以 1 开头",
+            }
+        if landline and not _LANDLINE_RE.match(landline):
+            return {
+                "success": False,
+                "error": "固定电话格式不正确，请重新向客户确认",
+                "hint": "固定电话应为区号（0 开头 3-4 位）+ 号码（7-8 位），如 0571-88888888",
+            }
+        if email and not _EMAIL_RE.match(email):
+            return {
+                "success": False,
+                "error": "邮箱格式不正确，请重新向客户确认",
+                "hint": "邮箱应包含 @ 和域名，如 name@example.com",
+            }
+        return None
 
     @staticmethod
     async def _notify_lead_capture(
@@ -274,7 +270,7 @@ class RecordLeadCaptureTool(BaseTool):
 
             now = datetime.now()
             is_work_time = now.weekday() < 5 and 9 <= now.hour < 18
-            method_label = "手机号" if contact_method == "phone" else "顾问微信"
+            method_label = _CONTACT_LABELS.get(contact_method, contact_method)
             work_note = "" if is_work_time else "（当前为非工作时间，请于下一个工作日跟进）"
             previous_note = ""
             if previous_captured_at:

@@ -4255,3 +4255,7 @@
   statements: |
     ALTER TABLE agent_runners DROP CONSTRAINT IF EXISTS agent_runners_actor_kind_check;
     ALTER TABLE agent_runners ADD CONSTRAINT agent_runners_actor_kind_check CHECK (actor_kind IN ('user', 'channel', 'system'));
+- datetime: "2026-10-29 12:30:00"
+  remark: "留资口径调整：bs_lead_capture_leads 新增 other_contact JSONB 列存固定电话/邮箱（逐条加密），contact_method 语义扩展为 phone|landline|email（qr 为历史值不再新写），qr 发码拆分到独立工具 send_advisor_qr"
+  statements: |
+    ALTER TABLE bs_lead_capture_leads ADD COLUMN IF NOT EXISTS other_contact JSONB;

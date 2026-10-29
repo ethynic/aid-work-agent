@@ -93,7 +93,7 @@ class TestCreate:
         mock_conn.commit.assert_called()
 
     def test_create_phone_none_not_encrypted(self, mock_encryption):
-        """contact_method 非 phone 或 phone 为空时，不加密直接落 None"""
+        """contact_method 非 phone 且 phone 为空时，不加密直接落 None（qr 已不被 create 接受）"""
         from src.saas.db.lead_capture_db import LeadCaptureDB
 
         mock_cursor, mock_conn = _mock_db(fetchone=None)
@@ -101,8 +101,8 @@ class TestCreate:
             mock_get_db.return_value.__enter__.return_value = mock_conn
             LeadCaptureDB.create(
                 tenant_id="tenant_001",
-                lead_id="lead_lc_qr123456",
-                contact_method="qr",
+                lead_id="lead_lc_landline1234",
+                contact_method="landline",
             )
 
         insert_args = mock_cursor.execute.call_args[0][1]
