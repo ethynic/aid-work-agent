@@ -270,8 +270,14 @@
           <p>3. 粘贴到上方输入框（暂不支持加签方式，请使用自定义关键词）</p>
         </template>
         <template v-else-if="newTarget.provider === 'wecom_bot'">
-          <p>1. 在企业微信中打开目标群聊 → 右上角「...」→ <b>群机器人</b> → 添加机器人 → <b>新创建一个机器人</b></p>
-          <p>2. 创建后复制 <b>Webhook 地址</b> 粘贴到上方输入框</p>
+          <p>企业微信中不叫「群机器人」，而是<b>「消息推送」</b>，且仅支持内部群（外部群不支持）。分两步配置：</p>
+          <p class="mt-2"><b>第一步：开启成员创建权限</b>（超级管理员操作，一次即可）</p>
+          <p>1. 用公司企业微信<b>超级管理员</b>账号登录 Web 端管理后台 → 左侧【应用管理】</p>
+          <p>2. 进入「消息推送」应用 → 将自己的账号（以及其他需要的员工）添加到<b>可创建成员白名单</b>；企业微信侧退出重进后生效</p>
+          <p class="mt-2"><b>第二步：在群聊中创建推送</b></p>
+          <p>1. 打开目标<b>内部群聊</b> → 右上角群聊设置「...」→ <b>消息推送</b> → 点击添加 → 选择<b>新建</b></p>
+          <p>2. 为推送起一个名字（如「积分提醒」），创建成功后系统会生成 <b>Webhook 地址</b></p>
+          <p>3. 复制 <b>Webhook 地址</b> 粘贴到上方输入框</p>
         </template>
         <template v-else-if="newTarget.provider === 'smtp'">
           <p>填写接收通知的<b>邮箱地址</b>即可，无需任何配置（发件由平台统一邮箱发出）。</p>
@@ -306,6 +312,7 @@ import {
 } from '@/api/notifications'
 import { listChannels } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
+import { useToast } from 'vue-toastification'
 
 const EVENT_OPTIONS = [
   { value: 'lead.captured', label: '客户留资' },
@@ -338,6 +345,7 @@ const columns: TableColumn[] = [
 
 const route = useRoute()
 const router = useRouter()
+const toast = useToast()
 const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, logout: tenantLogout } = useTenantAuth()
 
 const effectiveIsLoggedIn = computed(() => tenantIsLoggedIn.value)
@@ -710,6 +718,7 @@ async function handleTargetTest(t: TenantTarget) {
     })
     targetMessage.value = '测试通知已发送，请到对应渠道查收'
     targetMessageType.value = 'success'
+    toast.success('测试消息已发送，请查收')
   } catch (e) {
     showError(e, '测试发送失败')
   } finally {
