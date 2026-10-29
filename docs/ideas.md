@@ -26,6 +26,7 @@
 | 20261021-2200 | 私有云生产环境部署指南 | ✅ 已完成（2026-10-21） | 新增 [deploy/生产环境部署指南.md](../deploy/生产环境部署指南.md)：面向客户私有云全新部署的通用 playbook，综合 243 独占迁移档案与济南诺度混部实例（摸底决策、Docker/codeup 三通道、sparse-checkout、PG 绑址、.env 必改项、宝塔 TLS、发布后事项、验收清单、两例踩坑速查）。 | [部署指南](../deploy/生产环境部署指南.md) | — |
 | 20261026-1130 | 调度器幽灵锁自愈修复（发版强杀后后台调度器永久罢工） | 🔧 部分完成（开发+测试+CR 完成，待提交发版） | 2026-10-21 生产发版强杀旧容器致 4 个后台调度器 Redis 锁未释放，新容器一次性抢锁失败即永久放弃（宏陶商城同步停摆 44h）。修复：三个 asyncio 调度器（hongtao_shop/wechat_mp/tencent_docs）抢锁失败仍启动驱动任务循环重试接管；manager.py 抢锁失败起 30s 重试线程。47 用例 + 1649 回归通过，CR 无 P0/P1。 | [事故复盘](incidents/scheduler-ghost-lock-stall-20261021.md) | — |
 | 20261028-1255 | 外发邮箱配置指南（域名 DNS 侧） | ✅ 已完成（2026-10-28） | 新增 [docs/ops/outbound-email-dns-setup-guide.md](ops/outbound-email-dns-setup-guide.md)：面向租户外发邮件域名配置的实操指南，沉淀 tulin.cn 体检实战——SPF/DKIM/DMARC/MX 四记录要点（163 免费企业邮 + 阿里云解析逐步操作）、MX 主机记录误填子域致主域收信中断、权威 DNS 与公共缓存验证口径、DMARC 报告解读与 p 策略升级路径、缺 DKIM 决策参考与验收清单。 | [指南](ops/outbound-email-dns-setup-guide.md) | — |
+| 20261029-1800 | agent3 在线开发环境拆库启用 | 🔧 部署验证中 | commit d928fc4b：agent3 独立库 aid_work_agent3/logs3（自 agent2 复制）+ runner 容器名参数化 + background3 + test2dev.sh 整库单向同步（test→dev，渠道配置各环境独立）。 | —（见 [服务器部署现状.md §5.2](../deploy/服务器部署现状.md)） | — |
 
 ## 系统功能
 
