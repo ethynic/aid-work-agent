@@ -125,9 +125,9 @@ CREATE INDEX IF NOT EXISTS idx_notification_target_rule
 
 事件参数（StrictDTO 严格校验，参照 `leadgen.reply_intent` 注册模式）：
 
-`lead_id`、`contact_method`（phone/landline/email，2026-10-29 起客户索要顾问二维码不再算留资，qr 为历史值）、`phone`（仅 phone 方式，明文，见 §7）、`contact_name`、`demand_summary`、`kf_config_id`（事件所属客服账号，账号层规则匹配依据）、`kf_account_name`、`assignee_user_id`（= 线索 `assigned_to`，`kf_assignee` 展开依据）、`assignee_name`、`previous_captured_at`（回头客场景，可空）。
+`lead_id`、`contact_method`（phone/landline/email，2026-10-29 起客户索要顾问二维码不再算留资，qr 为历史值）、`contact_summary`（发布方由 phone/landline/email 非空项拼接的联系方式串，如「手机号 138xxxx、邮箱 a@b.com」——客户可同时留多种联系方式，全量拼接不做单值截断；明文，见 §7）、`contact_name`、`demand_summary`、`kf_config_id`（事件所属客服账号，账号层规则匹配依据）、`kf_account_name`、`assignee_user_id`（= 线索 `assigned_to`，`kf_assignee` 展开依据）、`assignee_name`、`previous_captured_at`（回头客场景，可空）。
 
-模板 `lead_captured`：`客户「{contact_name}」通过{手机号/固定电话/邮箱}留资（客服账号 {kf_account_name}），需求摘要：{demand_summary}，请及时跟进。`（`previous_captured_at` 非空追加"该客户此前已于 X 留资"；非工作时间追加"当前为非工作时间，请于下一个工作日跟进"——沿用现有通知侧按服务器时间判断的逻辑，迁入模板渲染）。
+模板 `lead_captured`：`微信客户「{contact_name}」通过{contact_summary}留资（客服账号 {kf_account_name}），需求摘要：{demand_summary}，请及时跟进。`（留资时间不单独入模板——通知落账/投递时间与留资时间仅差秒级；`previous_captured_at` 非空追加"该客户此前已于 X 留资"；非工作时间追加"当前为非工作时间，请于下一个工作日跟进"——沿用现有通知侧按服务器时间判断的逻辑，迁入模板渲染）。
 
 ### 5.2 发布点
 
@@ -151,11 +151,11 @@ CREATE INDEX IF NOT EXISTS idx_notification_target_rule
 
 多规则命中同一事件时各自独立投递（幂等键含规则区分：`event_key` 追加规则维度由展开器内部处理，对发布方透明）。
 
-## 7. 内容与手机号明文口径
+## 7. 内容与联系方式明文口径
 
-留资通知必须携带**完整手机号**（销售要打电话），与本系统"敏感信息不明文返回"原则存在表面冲突，显式声明豁免口径：
+留资通知必须携带**完整联系方式**（销售要打电话/发邮件），与本系统"敏感信息不明文返回"原则存在表面冲突，显式声明豁免口径：
 
-- **豁免范围**：仅 `lead.captured` 事件的 `phone` 参数，经模板渲染后投递到**租户管理员配置的内部目标**（自有群机器人 webhook / 自有邮箱），属业务必需的内部对接，非向外部第三方披露；
+- **豁免范围**：仅 `lead.captured` 事件的 `contact_summary` 参数（含完整手机号/固话/邮箱），经模板渲染后投递到**租户管理员配置的内部目标**（自有群机器人 webhook / 自有邮箱），属业务必需的内部对接，非向外部第三方披露；
 - **不变的部分**：参数落库走 `parameters_encrypted` 加密（既有机制）；日志不落明文手机号（仅 lead_id/tenant_id/分类，既有口径）；不进 LLM 上下文（通知是纯模板渲染，无模型调用）；`notification_ref` 不授予资源访问权限（既有口径）；
 - **投递边界**：目标只能是通知系统登记的 target（严格校验的 webhook/邮箱，防 SSRF 既有机制覆盖），不接受任意 URL。
 
