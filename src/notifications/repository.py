@@ -156,10 +156,10 @@ class NotificationRepository:
             actual = {row['attname']:row['typname'] for row in cursor.fetchall()}
             for column in columns.split():
                 expected = ('timestamptz' if column.endswith('_at') or column in ('enabled_since','lease_until')
-                            else 'jsonb' if column in ('resource_ref','route_snapshot','event_types')
+                            else 'jsonb' if column in ('resource_ref','route_snapshot','event_types','conditions')
                             else 'int8' if column in ('binding_version','claim_version')
                             else 'int4' if column in ('schema_version','target_schema_version','template_version','priority','attempts')
-                            else 'bool' if column == 'enabled' else 'text')
+                            else 'bool' if column in ('enabled','is_system','include_default_target') else 'text')
                 if actual.get(column) != expected:
                     raise RuntimeError('NOTIFICATION_SCHEMA_COLUMNS_REQUIRED')
         cursor.execute('''SELECT conname FROM pg_constraint WHERE conrelid IN
