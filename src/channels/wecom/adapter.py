@@ -303,7 +303,10 @@ class WeComAdapter(ChannelAdapter):
             content["media_id"] = root.findtext("MediaId", "")
             content["file_name"] = root.findtext("FileName", "")
         elif msg_type == "voice":
+            # Recognition 为微信服务端识别结果（需应用开通语音识别权限），为空时
+            # 由渠道层（channel_routes）下载语音调阿里云 ASR 识别
             content["text"] = root.findtext("Recognition", "") or "[语音消息]"
+            content["is_voice"] = True
             content["media_id"] = root.findtext("MediaId", "")
             content["voice_format"] = root.findtext("Format", "")
         elif msg_type == "video" or msg_type == "shortvideo":

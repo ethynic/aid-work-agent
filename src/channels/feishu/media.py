@@ -4,12 +4,14 @@
 支持：
 - 下载用户发送的图片（通过 image_key）
 - 下载用户发送的文件（通过 file_key）
+- 下载用户发送的语音（通过 message_id + fileKey）
 - 上传图片（获取 image_key）
 - 上传文件（获取 file_key）
 
 官方 API：
 - 下载图片 GET /open-apis/im/v1/images/{image_key}?image_type=message|avatar
 - 下载文件 GET /open-apis/im/v1/files/{file_key}
+- 下载消息资源（语音等） GET /open-apis/im/v1/messages/{message_id}/resources/{file_key}?type=file
 - 上传图片 POST /open-apis/im/v1/images  (multipart: image_type + image)
 - 上传文件 POST /open-apis/im/v1/files   (multipart: file_type + file_name + file)
 
@@ -221,6 +223,70 @@ class FeishuMedia:
 
         except Exception as e:
             logger.error(f"[Feishu] 下载文件异常: file_key={file_key}, {e}")
+            return None
+
+    async def download_voice(
+        self, message_id: str, file_key: Optional[str] = None, save_dir: Optional[str] = None
+    ) -> Optional[Tuple[str, bytes]]:
+        """
+        下载飞书语音消息（opus 格式）
+
+        GET /open-apis/im/v1/messages/{message_id}/resources/{file_key}?type=file
+        音频/视频类消息资源走消息资源接口（而非 /im/v1/files）；
+        音频消息 content 无 file_key 时按飞书文档用 message_id 作为 file_key。
+
+        Args:
+            message_id: 飞书消息 ID
+            file_key: 音频消息 content 中的 fileKey（缺失时用 message_id）
+            save_dir: 保存目录（不传走租户 conversation 目录）
+
+        Returns:
+            (local_path, audio_bytes) 或 None（失败时）
+        """
+        resource_key = file_key or message_id
+        try:
+            access_token = await self._get_access_token()
+            url = (
+                f"{FEISHU_BASE_URL}/open-apis/im/v1/messages/{message_id}"
+                f"/resources/{resource_key}"
+            )
+            headers = {"Authorization": f"Bearer {access_token}"}
+            params = {"type": "file"}
+
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.get(url, headers=headers, params=params)
+
+                if response.status_code != 200:
+                    logger.error(
+                        f"[Feishu] 下载语音失败: HTTP {response.status_code}, "
+                        f"message_id={message_id}, resource_key={resource_key}, "
+                        f"body={response.text[:200]}"
+                    )
+                    return None
+
+                content_type = response.headers.get("Content-Type", "")
+                if "application/json" in content_type:
+                    logger.error(
+                        f"[Feishu] 下载语音失败（返回 JSON 错误）: message_id={message_id}, "
+                        f"resource_key={resource_key}, resp={response.text[:200]}"
+                    )
+                    return None
+
+                save_dir_resolved = self._resolve_save_dir(save_dir)
+                local_path = os.path.join(
+                    save_dir_resolved, _sanitize_filename(f"voice_{message_id}.opus")
+                )
+                with open(local_path, "wb") as f:
+                    f.write(response.content)
+
+                logger.info(
+                    f"[Feishu] 语音已下载: message_id={message_id} -> {local_path} "
+                    f"({len(response.content)} bytes)"
+                )
+                return local_path, response.content
+
+        except Exception as e:
+            logger.error(f"[Feishu] 下载语音异常: message_id={message_id}, {e}")
             return None
 
     async def upload_image(

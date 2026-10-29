@@ -127,6 +127,16 @@ class TestParseMessage:
         msg = await adapter.parse_message({"body": VOICE_XML})
         assert msg.text == "语音转文字内容"
         assert msg.content["media_id"] == "media_voice_001"
+        assert msg.content["is_voice"] is True
+
+    @pytest.mark.asyncio
+    async def test_parse_voice_without_recognition_marks_placeholder(self, adapter):
+        """Recognition 为空时保持语音占位（渠道层调 ASR 识别）"""
+        xml = VOICE_XML.replace("<Recognition>语音转文字内容</Recognition>", "")
+        msg = await adapter.parse_message({"body": xml})
+        assert msg.text == "[语音消息]"
+        assert msg.content["is_voice"] is True
+        assert msg.content["media_id"] == "media_voice_001"
 
     @pytest.mark.asyncio
     async def test_parse_preserves_raw_xml(self, adapter):

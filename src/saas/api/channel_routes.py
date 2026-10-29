@@ -318,6 +318,48 @@ def _get_file_extension(msgtype: str, filename: str = "") -> str:
     return ext_map.get(msgtype, "")
 
 
+def _normalize_audio_for_asr(
+    content: bytes, content_type: str, log_tag: str = "[audio]", log_id: str = ""
+) -> tuple:
+    """
+    将渠道下载的原始语音字节规范化为可提交阿里云 ASR 的格式。
+
+    - magic bytes 识别真实格式（渠道自报格式可能不准）
+    - SILK（微信手机端专有格式，阿里云 ASR 不支持）解码为 WAV
+    - 无文件头的原始 PCM 包装为 WAV（浏览器播放 + ASR 提交都需要）
+
+    Args:
+        log_tag: 日志前缀（沿用调用方渠道 tag，保持日志 grep 口径）
+        log_id: 日志中的 media_id/message_id 标识
+
+    Returns:
+        (content, audio_format, sample_rate)
+    """
+    from src.utils.audio_format import (
+        detect_audio_format,
+        wrap_pcm_as_wav,
+        decode_silk_to_wav,
+    )
+    log_id = log_id[:8] if log_id else "-"
+    detected_format, detected_sample_rate = detect_audio_format(content, content_type)
+    if detected_format in ("silk_v3", "silk_v2"):
+        try:
+            content = decode_silk_to_wav(content, sample_rate=16000)
+            detected_format = "wav"
+            detected_sample_rate = 16000
+            logger.info("{} SILK 语音已解码为 WAV: media_id={}", log_tag, log_id)
+        except Exception as e:
+            logger.warning(
+                "{} SILK 解码失败，保留原格式: media_id={}, error={}",
+                log_tag, log_id, e,
+            )
+    elif detected_format not in {"amr", "amr-wb", "wav", "mp3", "opus", "aac", "silk_v3", "silk_v2", "flac"}:
+        content = wrap_pcm_as_wav(content, sample_rate=detected_sample_rate or 16000)
+        detected_format = "wav"
+        detected_sample_rate = 16000
+    return content, detected_format, detected_sample_rate
+
+
 async def _download_and_build_attachments(
     api_client, msg: dict, session_id: str, tenant_id: str
 ) -> list:
@@ -362,28 +404,9 @@ async def _download_and_build_attachments(
     detected_format = None
     detected_sample_rate = None
     if msgtype == "voice":
-        from src.utils.audio_format import (
-            detect_audio_format,
-            wrap_pcm_as_wav,
-            decode_silk_to_wav,
+        content, detected_format, detected_sample_rate = _normalize_audio_for_asr(
+            content, content_type, log_tag="[wecom_kf]", log_id=media_id
         )
-        detected_format, detected_sample_rate = detect_audio_format(content, content_type)
-        # SILK 是微信手机端专有格式（阿里云 ASR 不支持），需解码为 WAV
-        if detected_format in ("silk_v3", "silk_v2"):
-            try:
-                content = decode_silk_to_wav(content, sample_rate=16000)
-                detected_format = "wav"
-                detected_sample_rate = 16000
-                logger.info("[wecom_kf] SILK 语音已解码为 WAV: media_id={}", media_id[:8])
-            except Exception as e:
-                logger.warning("[wecom_kf] SILK 解码失败，保留原格式: media_id={}, error={}", media_id[:8], e)
-        # voice_format=1 请求返回原始 PCM（无文件头），magic bytes 检测会 fallback 为 mp3/pcm，
-        # 此处通过排除法识别：既不是已知有头格式、也不是 Content-Type 匹配到的格式时，
-        # 视为来自微信 voice_format=1 的原始 PCM，包装为 WAV 以便浏览器播放和 ASR 提交。
-        elif detected_format not in {"amr", "amr-wb", "wav", "mp3", "opus", "aac", "silk_v3", "silk_v2", "flac"}:
-            content = wrap_pcm_as_wav(content, sample_rate=detected_sample_rate or 16000)
-            detected_format = "wav"
-            detected_sample_rate = 16000
         # 实际扩展名以检测结果为准
         ext_for_format = {
             "amr": ".amr",
@@ -551,6 +574,62 @@ async def _transcribe_voice_with_asr(
         return "[语音消息]"
 
 
+async def _transcribe_channel_voice(
+    message,
+    tenant_id: str,
+    download_audio,
+    log_tag: str,
+) -> bool:
+    """
+    渠道语音消息统一 ASR 处理（wecom / dingtalk / feishu，对齐 wecom_kf 语音链路）。
+
+    仅处理内容仍为 "[语音消息]" 占位的语音消息（wecom Recognition 非空时直接用
+    微信识别文本，不下载不 ASR）。识别成功时将 message.text 替换为
+    "[ASR识别结果] 识别文本"（对齐 wecom_kf 落库/入对话口径），并把语音元信息
+    合入 raw_message.voice_meta 随 user_metadata 持久化。
+
+    Args:
+        message: UnifiedMessage（parse_message 已标记 content.is_voice）
+        tenant_id: 租户 ID（当前下载闭包已自行处理租户归档，此参数预留）
+        download_audio: 无参异步函数，返回 (audio_bytes, content_type, extra_meta) 或 None
+        log_tag: 日志前缀
+
+    Returns:
+        True 表示识别成功（调用方需补 ASR 计费并放开 record 落库）；
+        False 表示非语音/下载失败/识别失败（保持现状，skip_save=True）
+    """
+    if not (message.content.get("is_voice") and message.text == "[语音消息]"):
+        return False
+    try:
+        downloaded = await download_audio()
+    except Exception as e:
+        logger.warning(f"[{log_tag}] 语音下载异常: message_id={message.message_id}, error={e}")
+        downloaded = None
+    if not downloaded:
+        logger.warning(f"[{log_tag}] 语音下载失败，保持语音占位: message_id={message.message_id}")
+        return False
+
+    audio_bytes, content_type, extra_meta = downloaded
+    content, audio_format, sample_rate = _normalize_audio_for_asr(
+        audio_bytes, content_type, log_tag=f"[{log_tag}]", log_id=message.message_id
+    )
+    audio_b64 = base64.b64encode(content).decode("ascii")
+    asr_text = await _transcribe_voice_with_asr(audio_b64, audio_format, sample_rate)
+    if asr_text.startswith("[语音消息"):
+        return False
+
+    message.content["text"] = f"[ASR识别结果] {asr_text}"
+    message.raw_message = {
+        **(message.raw_message or {}),
+        "voice_meta": {
+            **(extra_meta or {}),
+            "audio_format": audio_format,
+            "sample_rate": sample_rate,
+        },
+    }
+    return True
+
+
 async def _process_tenant_wecom_background(
     tenant_id: str,
     message,
@@ -606,6 +685,21 @@ async def _process_tenant_wecom_background(
                 await adapter.send_text(reply_text, message.user_id)
             return
 
+        # 语音消息：渠道侧调阿里云 ASR 转文字（对齐 wecom_kf 语音链路）。
+        # ASR 在 start_record 之前调用，工具内部计费因无当前 record 恒为 no-op，
+        # 识别成功后由 start_record 之后的外层 add_asr_usage 补计（不与主循环双计）。
+        async def _download_wecom_voice():
+            result = await adapter.media.download_media(message.content.get("media_id", ""))
+            if not result:
+                return None
+            audio_bytes, filename, content_type = result
+            # wecom 媒体模块已按租户附件规范落盘 conversation 目录，此处只登记文件名
+            return audio_bytes, content_type, {"voice_file_name": filename}
+
+        asr_success = await _transcribe_channel_voice(
+            message, tenant_id, _download_wecom_voice, "[Tenant WeCom]"
+        )
+
         # 记录用户消息 —— P0-2：推迟到 process_and_persist 内统一写入
 
         # 只替换对话执行，渠道业务和原会话队列保持原实现。
@@ -623,7 +717,17 @@ async def _process_tenant_wecom_background(
             source_type="wecom",
         )
         # 入口仅使用平台语音识别文本，无独立用量；模型/工具费用由 Runner 结算。
-        record_service.skip_save = True
+        # 语音消息 ASR 识别成功时需落库 ASR 用量（见下方 add_asr_usage），故不跳过
+        record_service.skip_save = not asr_success
+
+        # ASR 计费（按次计费，识别成功才计费；必须在 start_record 之后）：
+        # 渠道侧 ASR 在 start_record 之前调用，SpeechToTextTool 内部计费因无当前
+        # record 恒为 no-op，需在此处外层补计。agent 主循环路径由工具内部计费，不双计。
+        if asr_success:
+            try:
+                record_service.add_asr_usage(calls=1)
+            except Exception:
+                logger.opt(exception=True).debug("Failed to record ASR usage")
 
         # 处理消息 + 持久化（P0-1 / P0-2 统一在 process_and_persist 内完成）
         send_response = channel_session_manager.make_send_response(
@@ -992,6 +1096,23 @@ async def _process_tenant_dingtalk_background(
                 await adapter.send_text(reply_text, reply_target, conversation_type)
             return
 
+        # 语音消息：渠道侧调阿里云 ASR 转文字（对齐 wecom_kf 语音链路）。
+        # ASR 在 start_record 之前调用，工具内部计费因无当前 record 恒为 no-op，
+        # 识别成功后由 start_record 之后的外层 add_asr_usage 补计（不与主循环双计）。
+        async def _download_dingtalk_voice():
+            result = await adapter.media.download_file(
+                message.content.get("download_code", ""), adapter.robot_code
+            )
+            if not result:
+                return None
+            # 钉钉媒体模块已按租户规范落盘，直接复用 local_path
+            local_path, audio_bytes = result
+            return audio_bytes, "", {"voice_local_path": local_path}
+
+        asr_success = await _transcribe_channel_voice(
+            message, tenant_id, _download_dingtalk_voice, "[Tenant DingTalk]"
+        )
+
         # 记录用户消息 —— P0-2：推迟到 process_and_persist 内统一写入
 
         # 只替换对话执行，渠道业务和原会话队列保持原实现。
@@ -1010,7 +1131,17 @@ async def _process_tenant_dingtalk_background(
         )
         # KF 同款归属：渠道侧无独立入口用量，模型/工具费用由 Runner 结算；
         # 跳过零用量 chat_record，避免对话数/耗时统计重复计算。
-        record_service.skip_save = True
+        # 语音消息 ASR 识别成功时需落库 ASR 用量（见下方 add_asr_usage），故不跳过
+        record_service.skip_save = not asr_success
+
+        # ASR 计费（按次计费，识别成功才计费；必须在 start_record 之后）：
+        # 渠道侧 ASR 在 start_record 之前调用，SpeechToTextTool 内部计费因无当前
+        # record 恒为 no-op，需在此处外层补计。agent 主循环路径由工具内部计费，不双计。
+        if asr_success:
+            try:
+                record_service.add_asr_usage(calls=1)
+            except Exception:
+                logger.opt(exception=True).debug("Failed to record ASR usage")
 
         # 处理消息 + 持久化（P0-1 / P0-2 统一在 process_and_persist 内完成）
         # 发送回复：单聊用 userId，群聊用 openConversationId
@@ -1164,6 +1295,24 @@ async def _process_tenant_feishu_background(
                 await adapter.send_text(reply_text, message.user_id)
             return
 
+        # 语音消息：渠道侧调阿里云 ASR 转文字（对齐 wecom_kf 语音链路）。
+        # ASR 在 start_record 之前调用，工具内部计费因无当前 record 恒为 no-op，
+        # 识别成功后由 start_record 之后的外层 add_asr_usage 补计（不与主循环双计）。
+        async def _download_feishu_voice():
+            # 飞书音频消息 content 可能无 fileKey，下载接口用 message_id 兜底
+            result = await adapter.media.download_voice(
+                message.message_id, message.content.get("file_key") or None
+            )
+            if not result:
+                return None
+            # 飞书媒体模块已按租户规范落盘，直接复用 local_path
+            local_path, audio_bytes = result
+            return audio_bytes, "", {"voice_local_path": local_path}
+
+        asr_success = await _transcribe_channel_voice(
+            message, tenant_id, _download_feishu_voice, "[Tenant Feishu]"
+        )
+
         # 记录用户消息 —— P0-2：推迟到 process_and_persist 内统一写入
 
         # 只替换对话执行，渠道业务和原会话队列保持原实现。
@@ -1182,7 +1331,17 @@ async def _process_tenant_feishu_background(
         )
         # KF 同款归属：渠道侧无独立入口用量，模型/工具费用由 Runner 结算；
         # 跳过零用量 chat_record，避免对话数/耗时统计重复计算。
-        record_service.skip_save = True
+        # 语音消息 ASR 识别成功时需落库 ASR 用量（见下方 add_asr_usage），故不跳过
+        record_service.skip_save = not asr_success
+
+        # ASR 计费（按次计费，识别成功才计费；必须在 start_record 之后）：
+        # 渠道侧 ASR 在 start_record 之前调用，SpeechToTextTool 内部计费因无当前
+        # record 恒为 no-op，需在此处外层补计。agent 主循环路径由工具内部计费，不双计。
+        if asr_success:
+            try:
+                record_service.add_asr_usage(calls=1)
+            except Exception:
+                logger.opt(exception=True).debug("Failed to record ASR usage")
 
         # 处理消息 + 持久化（P0-1 / P0-2 统一在 process_and_persist 内完成）
         send_response = channel_session_manager.make_send_response(

@@ -481,6 +481,17 @@ class FeishuAdapter(ChannelAdapter):
             msg_type = MessageType.FILE
             msg_content["file_key"] = content.get("file_key", "")
             msg_content["file_name"] = content.get("file_name", "")
+        elif message_type_str == "audio":
+            # 语音消息：转文字由渠道层（channel_routes）调阿里云 ASR 完成，
+            # 对齐 wecom_kf 语音约定（message_type 保持 TEXT）。
+            # 下载走消息资源接口，file_key 缺失时用 message_id 兜底
+            logger.info(f"[Feishu] 收到语音消息: message_id={message_id}, content={content}")
+            msg_content["text"] = "[语音消息]"
+            msg_content["is_voice"] = True
+            msg_content["file_key"] = content.get("file_key", content.get("fileKey", ""))
+            msg_content["duration_millisecond"] = content.get(
+                "durationMillisecond", content.get("duration_millisecond", 0)
+            )
         else:
             # 其他类型降级为文本
             msg_content["text"] = f"[{message_type_str} 消息]"
