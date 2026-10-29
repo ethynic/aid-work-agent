@@ -54,20 +54,6 @@
           </button>
         </div>
 
-        <!-- 通知规则入口（默认外发渠道与各事件通知规则已迁至独立页面） -->
-        <div id="notification-channels" class="scroll-mt-4">
-          <div
-            class="bg-white rounded-xl shadow-sm border border-default p-6 flex items-center justify-between gap-4 cursor-pointer hover:border-primary-300 transition-colors"
-            @click="goNotificationRules"
-          >
-            <div>
-              <h2 class="text-base font-semibold text-default">通知规则与外发渠道</h2>
-              <p class="text-xs text-muted mt-1">配置默认外发渠道，以及客户留资、积分提醒、到期提醒、滥用告警等事件的通知规则</p>
-            </div>
-            <span class="text-primary-600 text-sm whitespace-nowrap">前往配置 →</span>
-          </div>
-        </div>
-
         <!-- 租户邮箱（邮箱三层解析第 2 层兜底，AI获客等数字员工发信用） -->
         <div id="tenant-email" class="scroll-mt-4">
           <TenantEmailSettings />
@@ -177,10 +163,6 @@ async function handleSave() {
   } finally {
     saving.value = false
   }
-}
-
-function goNotificationRules() {
-  router.push(`/t/${tenantId.value}/notification-rules`)
 }
 
 onMounted(async () => {

@@ -5486,6 +5486,8 @@ CREATE TABLE IF NOT EXISTS notification_rules (
     is_system BOOLEAN NOT NULL DEFAULT FALSE,
     conditions JSONB NOT NULL DEFAULT '{}',
     recipient_mode TEXT NOT NULL CHECK (recipient_mode IN ('tenant_admins','kf_assignee')),
+    -- 历史列：db_update 2026-10-29 15:50:00 块已删除（默认渠道概念移除），
+    -- 保留定义仅为重放历史增量块（13:00:00 预置 INSERT 引用本列）
     include_default_target BOOLEAN NOT NULL DEFAULT FALSE,
     created_by TEXT,
     created_at TIMESTAMPTZ DEFAULT clock_timestamp(),

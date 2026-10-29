@@ -73,8 +73,8 @@ class TenantRegisterTarget(StrictDTO):
     provider: Literal['feishu_bot', 'dingtalk_bot', 'wecom_bot', 'smtp']
     expected_binding_version: StrictInt | None = Field(default=None, ge=1)
     configuration: ImWebhookConfiguration | EmailConfiguration
-    # 规则级目标登记（规则引擎，设计 §10）：非空时目标挂到该规则下
-    rule_id: str | None = Field(default=None, min_length=1, max_length=64)
+    # 规则级目标登记（规则引擎，设计 §10）：目标恒挂到具体规则下
+    rule_id: str = Field(min_length=1, max_length=64)
 
 
 class RuleCreate(StrictDTO):
@@ -83,7 +83,6 @@ class RuleCreate(StrictDTO):
     name: str = Field(min_length=1, max_length=64)
     conditions: dict = Field(default_factory=dict)
     recipient_mode: Literal['tenant_admins', 'kf_assignee']
-    include_default_target: StrictBool = False
     enabled: StrictBool = True
 
 
@@ -91,7 +90,6 @@ class RuleUpdate(StrictDTO):
     name: str | None = Field(default=None, min_length=1, max_length=64)
     conditions: dict | None = None
     recipient_mode: Literal['tenant_admins', 'kf_assignee'] | None = None
-    include_default_target: StrictBool | None = None
     enabled: StrictBool | None = None
 
 

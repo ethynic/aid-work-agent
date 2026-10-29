@@ -4309,3 +4309,7 @@
         'lead.captured', '留资通知', TRUE, '{"scope": "channel"}'::jsonb, 'kf_assignee', TRUE
     FROM tenants t WHERE t.status = 'active'
     ON CONFLICT (tenant_id,event_type,name) DO NOTHING;
+- datetime: "2026-10-29 15:50:00"
+  remark: "通知规则页面改版：删除「默认渠道」概念——notification_rules 去掉 include_default_target 列；租户级事件外发改走启用规则的规则级 target（存量 rule_id IS NULL 目标保留供任务通知，不再参与规则外发）"
+  statements: |
+    ALTER TABLE notification_rules DROP COLUMN IF EXISTS include_default_target;

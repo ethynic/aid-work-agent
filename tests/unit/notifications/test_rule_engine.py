@@ -63,11 +63,10 @@ def rule_event_message(**over):
     return message
 
 
-def rule_row(rule_id='rule_1', name='留资通知', conditions=None, mode='kf_assignee',
-             include_default=False):
+def rule_row(rule_id='rule_1', name='留资通知', conditions=None, mode='kf_assignee'):
     return {'rule_id': rule_id, 'name': name,
             'conditions': conditions if conditions is not None else {'scope': 'channel'},
-            'recipient_mode': mode, 'include_default_target': include_default}
+            'recipient_mode': mode}
 
 
 def target_row(target_id='target_1', rule_id='rule_1'):
@@ -176,15 +175,14 @@ class TestExpandRuleEvent:
                                 assignee_row=None)
         assert state['recipient_messages'] == 0
 
-    def test_include_default_target_dedupe_across_rules(self):
-        rules = [rule_row(rule_id='rule_1', include_default=True),
-                 rule_row(rule_id='rule_2', include_default=True)]
+    def test_each_rule_delivers_own_targets(self):
+        rules = [rule_row(rule_id='rule_1'), rule_row(rule_id='rule_2')]
         state = run_rule_expand(
             [rule_event_message()], rules=rules,
             assignee_row={'user_id': 'emp1'},
-            target_pages=[[target_row('target_rule1', 'rule_1'), target_row('target_default', None)],
-                          [target_row('target_default', None)]])
-        # 租户级默认 target 跨规则命中只投一次
+            target_pages=[[target_row('target_rule1', 'rule_1')],
+                          [target_row('target_rule2', 'rule_2')]])
+        # 每条规则只投递自己的规则级目标（默认渠道概念已移除）
         assert state['deliveries'] == 2
 
     def test_expired_message_not_expanded(self):
@@ -196,9 +194,9 @@ class TestExpandRuleEvent:
 
 
 class TestBillingRuleGate:
-    def _run_tenant_expand(self, enabled_rule_row):
+    def _run_tenant_expand(self, enabled_rule_ids):
         """复用旧邮件通知路径（tenant_admin_event）验证规则门控：
-        无 enabled 规则时租户级 target 不参与路由。"""
+        外发目标限定该事件启用规则的规则级 target（默认渠道已移除）。"""
         registry = MagicMock()
         registry.get.return_value = StubAdapter()
         repo = make_repo(registry)
@@ -220,10 +218,10 @@ class TestBillingRuleGate:
                     accepted_at=datetime(2026, 10, 10), created_at=datetime(2026, 10, 10),
                     expires_at=datetime(2026, 10, 11), priority=0,
                     database_now=datetime(2026, 10, 10, 12, 0))]
-            elif 'AND enabled LIMIT 1' in sql:
-                cursor.fetchone = lambda: enabled_rule_row
             elif 'SELECT 1 FROM notification_rules' in sql:
                 cursor.fetchone = lambda: {'ok': 1}
+            elif 'SELECT rule_id FROM notification_rules' in sql:
+                cursor.fetchall = lambda: [{'rule_id': r} for r in enabled_rule_ids]
             elif 'FROM users' in sql:
                 cursor.fetchone = lambda: {'user_id': 'admin1', 'tenant_id': T1,
                                            'role': 'tenant_admin', 'status': 'active'}
@@ -231,7 +229,7 @@ class TestBillingRuleGate:
                 cursor.fetchone = lambda: {'ok': 1}
             elif 'FROM notification_targets' in sql:
                 state['targets_params'] = params
-                cursor.fetchall = lambda: [target_row('target_tenant', None)]
+                cursor.fetchall = lambda: [target_row('target_tenant', 'rule_preset_1')]
 
         cursor.execute.side_effect = execute_dispatch
         conn = MagicMock()
@@ -245,15 +243,15 @@ class TestBillingRuleGate:
         repo.expand()
         return state
 
-    def test_disabled_rule_blocks_tenant_target(self):
-        state = self._run_tenant_expand(None)
-        # include_tenant_targets SQL 参数被门控置 False（参数序：category,
-        # scope_key, user_id, include_tenant_targets, params_tenant）
-        assert state['targets_params'][3] is False
+    def test_no_enabled_rule_blocks_tenant_target(self):
+        state = self._run_tenant_expand([])
+        # 无启用规则时外发目标过滤参数为空列表（参数序：category, scope_key,
+        # user_id, tenant_rule_ids, params_tenant, tenant_rule_ids）
+        assert state['targets_params'][3] == []
 
-    def test_enabled_rule_keeps_tenant_target(self):
-        state = self._run_tenant_expand({'ok': 1})
-        assert state['targets_params'][3] is True
+    def test_enabled_rule_routes_to_rule_targets(self):
+        state = self._run_tenant_expand(['rule_preset_1'])
+        assert state['targets_params'][3] == ['rule_preset_1']
 
 
 class TestPresetRulesEnsure:

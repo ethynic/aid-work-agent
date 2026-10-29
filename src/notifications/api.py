@@ -114,13 +114,11 @@ def create_router(config=None, repository=None, user_loader=None):
         return {'targets':repository.tenant_targets(current)}
 
     @router.post('/tenant-targets')
-    def register_tenant_target(body: TenantRegisterTarget, current: Subject = Depends(admin_subject)):
+    def register_tenant_rule_target(body: TenantRegisterTarget, current: Subject = Depends(admin_subject)):
         enabled()
-        if body.rule_id:
-            # 规则级目标（规则引擎，设计 §10）：installation_ref 服务端生成，
-            # 允许同 provider 多个 active；同 digest 被租户级或其他规则占用时 409
-            return repository.register_rule_target(current, body)
-        return repository.register_tenant_target(current, body)
+        # 规则级目标（规则引擎，设计 §10）：installation_ref 服务端生成，
+        # 允许同 provider 多个 active；同 digest 已被其他规则占用时 409
+        return repository.register_rule_target(current, body)
 
     # ---------- 通知规则（规则引擎，设计 §10） ----------
 

@@ -13,10 +13,7 @@
     </AppHeader>
 
     <div class="flex-1 overflow-y-auto p-6">
-      <div class="max-w-4xl space-y-6">
-        <!-- 默认外发渠道（租户级目标：未命中规则级目标时按此投递） -->
-        <NotificationChannelSettings />
-
+      <div class="max-w-4xl">
         <!-- 通知规则 -->
         <div class="bg-white rounded-xl shadow-sm border border-default p-6">
           <div class="flex items-start justify-between mb-4 gap-4">
@@ -44,11 +41,8 @@
               <template #conditions="{ row }">{{ conditionLabel(row as NotificationRule) }}</template>
               <template #recipient_mode="{ row }">{{ recipientLabel(row.recipient_mode) }}</template>
               <template #active_targets="{ row }">
-                {{ row.active_targets > 0 ? `${row.active_targets} 个规则级` : '' }}
-                <span v-if="row.include_default_target" class="text-muted">
-                  {{ row.active_targets > 0 ? ' + 默认渠道' : '默认渠道' }}
-                </span>
-                <span v-if="row.active_targets === 0 && !row.include_default_target" class="text-muted">仅站内信</span>
+                <span v-if="row.active_targets > 0">{{ row.active_targets }} 个外发目标</span>
+                <span v-else class="text-muted">仅站内信</span>
               </template>
               <template #enabled="{ row }">
                 <BaseBadge :intent="row.enabled ? 'success' : 'neutral'">
@@ -87,7 +81,9 @@
           </div>
           <div>
             <label class="block text-sm text-default mb-1">事件类型 <span class="text-danger-500">*</span></label>
-            <BaseSelect v-model="form.event_type" :options="eventTypeOptions" :disabled="!!editing" />
+            <BaseSelect v-model="form.event_type" :disabled="!!editing">
+              <option v-for="opt in EVENT_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+            </BaseSelect>
             <p v-if="editing" class="text-xs text-muted mt-1">事件类型创建后不可修改</p>
           </div>
         </div>
@@ -153,18 +149,9 @@
         <div class="grid grid-cols-2 gap-4">
           <div>
             <label class="block text-sm text-default mb-1">站内信接收人</label>
-            <BaseSelect v-model="form.recipient_mode" :options="recipientOptions" />
-          </div>
-          <div>
-            <label class="block text-sm text-default mb-1">外发</label>
-            <label class="flex items-center gap-2 text-sm text-default h-10 cursor-pointer">
-              <input
-                type="checkbox"
-                v-model="form.include_default_target"
-                class="w-3.5 h-3.5 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
-              />
-              叠加默认外发渠道（上方「通知渠道」配置）
-            </label>
+            <BaseSelect v-model="form.recipient_mode">
+              <option v-for="opt in RECIPIENT_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+            </BaseSelect>
           </div>
         </div>
 
@@ -180,45 +167,78 @@
           </label>
         </div>
 
-        <!-- 规则级外发目标（编辑已有规则时） -->
-        <div v-if="editing" class="border-t border-default pt-4">
+        <!-- 外发目标（新增模式入本地队列，保存规则后逐个登记） -->
+        <div class="border-t border-default pt-4">
           <div class="flex items-center justify-between mb-2">
-            <label class="block text-sm text-default">规则级外发目标</label>
-            <BaseButton v-if="!addingTarget" size="sm" intent="secondary" @click="addingTarget = true">添加目标</BaseButton>
+            <label class="block text-sm text-default">外发目标</label>
+            <BaseButton v-if="!addingTarget" size="sm" intent="secondary" @click="startAddingTarget">添加目标</BaseButton>
           </div>
           <p class="text-xs text-muted mb-3">
-            仅该规则命中的事件投递到这些目标；同一地址已被其他规则或默认渠道使用时会提示冲突。
+            仅该规则命中的事件投递到这些目标（群机器人 / 邮箱）；不配置则仅发站内信。同一地址在同一租户只能挂在一条规则下。
           </p>
 
-          <div v-if="ruleTargets.length === 0 && !addingTarget" class="text-xs text-muted py-2">
-            暂无规则级目标{{ form.include_default_target ? '，外发走默认渠道' : '' }}
-          </div>
-          <div v-for="t in ruleTargets" :key="t.target_id"
-            class="flex items-center justify-between py-2 border-b border-default last:border-b-0 gap-2">
-            <div class="min-w-0 text-sm text-default">
-              <span class="font-medium">{{ providerLabel(t.provider) }}</span>
-              <span v-if="t.configuration_display" class="text-xs text-muted ml-2 break-all">{{ t.configuration_display }}</span>
+          <!-- 编辑模式：已保存目标 -->
+          <template v-if="editing">
+            <div v-if="ruleTargets.length === 0 && !addingTarget" class="text-xs text-muted py-2">
+              暂无外发目标，仅发站内信
             </div>
-            <div class="flex gap-2 flex-shrink-0">
-              <BaseButton size="sm" intent="ghost" :disabled="testingId === t.target_id" @click="handleTargetTest(t)">
-                {{ testingId === t.target_id ? '发送中...' : '测试' }}
-              </BaseButton>
-              <BaseButton size="sm" intent="danger-ghost" @click="handleTargetRevoke(t)">停用</BaseButton>
+            <div v-for="t in ruleTargets" :key="t.target_id"
+              class="flex items-center justify-between py-2 border-b border-default last:border-b-0 gap-2">
+              <div class="min-w-0 text-sm text-default">
+                <span class="font-medium">{{ providerLabel(t.provider) }}</span>
+                <span v-if="t.configuration_display" class="text-xs text-muted ml-2 break-all">{{ t.configuration_display }}</span>
+              </div>
+              <div class="flex gap-2 flex-shrink-0">
+                <BaseButton size="sm" intent="ghost" :disabled="testingId === t.target_id" @click="handleTargetTest(t)">
+                  {{ testingId === t.target_id ? '发送中...' : '测试' }}
+                </BaseButton>
+                <BaseButton size="sm" intent="danger-ghost" @click="handleTargetRevoke(t)">停用</BaseButton>
+              </div>
             </div>
-          </div>
+          </template>
+          <!-- 新增模式：待登记队列 -->
+          <template v-else>
+            <div v-if="pendingTargets.length === 0 && !addingTarget" class="text-xs text-muted py-2">
+              暂无外发目标，仅发站内信
+            </div>
+            <div v-for="(t, i) in pendingTargets" :key="i"
+              class="flex items-center justify-between py-2 border-b border-default last:border-b-0 gap-2">
+              <div class="min-w-0 text-sm text-default">
+                <span class="font-medium">{{ providerLabel(t.provider) }}</span>
+                <span class="text-xs text-muted ml-2 break-all">{{ t.configValue }}</span>
+              </div>
+              <BaseButton size="sm" intent="danger-ghost" class="flex-shrink-0" @click="removePendingTarget(i)">移除</BaseButton>
+            </div>
+            <p v-if="pendingTargets.length > 0" class="text-xs text-muted mt-1">目标将在规则保存后逐个登记</p>
+          </template>
 
           <div v-if="addingTarget" class="mt-3 space-y-3 bg-gray-50 rounded-lg p-3">
             <div class="grid grid-cols-2 gap-2">
-              <BaseSelect v-model="newTarget.provider" :options="providerOptions" />
-              <BaseInput v-model="newTarget.configValue"
-                :placeholder="newTarget.provider === 'smtp' ? 'name@example.com' : 'https://...'" />
+              <div>
+                <label class="block text-sm text-default mb-1">目标类型</label>
+                <BaseSelect v-model="newTarget.provider">
+                  <option v-for="opt in PROVIDER_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                </BaseSelect>
+              </div>
+              <div>
+                <label class="block text-sm text-default mb-1">
+                  {{ newTarget.provider === 'smtp' ? '收件邮箱地址' : '机器人 Webhook 地址' }}
+                </label>
+                <BaseInput v-model="newTarget.configValue"
+                  :placeholder="newTarget.provider === 'smtp' ? 'name@example.com' : 'https://...'" />
+              </div>
             </div>
+            <button
+              type="button"
+              @click="helpOpen = true"
+              class="text-xs text-primary-600 hover:text-primary-700 underline"
+            >如何获取 webhook？</button>
             <p v-if="targetMessage" class="text-xs"
               :class="targetMessageType === 'success' ? 'text-success-600' : 'text-danger-600'">{{ targetMessage }}</p>
             <div class="flex justify-end gap-2">
               <BaseButton size="sm" intent="secondary" @click="cancelAddingTarget">取消</BaseButton>
               <BaseButton size="sm" :disabled="savingTarget" @click="handleTargetSave">
-                {{ savingTarget ? '保存中...' : '保存目标' }}
+                {{ savingTarget ? '保存中...' : editing ? '保存目标' : '添加' }}
               </BaseButton>
             </div>
           </div>
@@ -235,6 +255,36 @@
         <BaseButton :disabled="saving" @click="handleSave">{{ saving ? '保存中...' : '保存' }}</BaseButton>
       </template>
     </BaseModal>
+
+    <!-- 帮助弹框 -->
+    <BaseModal v-model="helpOpen" title="如何获取机器人 Webhook" size="md">
+      <div class="space-y-3 text-sm text-default leading-relaxed">
+        <template v-if="newTarget.provider === 'feishu_bot'">
+          <p>1. 在飞书中打开目标群聊 → 群设置 → <b>群机器人</b> → 添加机器人 → <b>自定义机器人</b></p>
+          <p>2. 复制生成的 <b>Webhook 地址</b> 粘贴到上方输入框</p>
+          <p>3. 安全设置选择「自定义关键词」，关键词填 <b>通知</b>（通知内容自动包含该词）</p>
+        </template>
+        <template v-else-if="newTarget.provider === 'dingtalk_bot'">
+          <p>1. 在钉钉中打开目标群聊 → 群设置 → <b>机器人</b> → 添加机器人 → <b>自定义（通过 Webhook 接入）</b></p>
+          <p>2. 安全设置勾选「自定义关键词」，关键词填 <b>通知</b>，完成创建后复制 <b>Webhook 地址</b></p>
+          <p>3. 粘贴到上方输入框（暂不支持加签方式，请使用自定义关键词）</p>
+        </template>
+        <template v-else-if="newTarget.provider === 'wecom_bot'">
+          <p>1. 在企业微信中打开目标群聊 → 右上角「...」→ <b>群机器人</b> → 添加机器人 → <b>新创建一个机器人</b></p>
+          <p>2. 创建后复制 <b>Webhook 地址</b> 粘贴到上方输入框</p>
+        </template>
+        <template v-else-if="newTarget.provider === 'smtp'">
+          <p>填写接收通知的<b>邮箱地址</b>即可，无需任何配置（发件由平台统一邮箱发出）。</p>
+          <p class="text-xs text-muted">提示：请留意邮箱的垃圾邮件 / 订阅邮件分组。</p>
+        </template>
+        <template v-else>
+          <p>请先选择目标类型，将显示对应的配置指引。</p>
+        </template>
+      </div>
+      <template #footer>
+        <BaseButton intent="secondary" @click="helpOpen = false">我知道了</BaseButton>
+      </template>
+    </BaseModal>
   </div>
 </template>
 
@@ -249,7 +299,6 @@ import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BaseTable, { type TableColumn } from '@/components/ui/BaseTable.vue'
-import NotificationChannelSettings from '@/components/notifications/NotificationChannelSettings.vue'
 import {
   notificationsAPI,
   type NotificationRule,
@@ -282,7 +331,7 @@ const columns: TableColumn[] = [
   { key: 'event_type', label: '事件', width: '110px' },
   { key: 'conditions', label: '匹配范围' },
   { key: 'recipient_mode', label: '站内信接收人', width: '120px' },
-  { key: 'active_targets', label: '外发', width: '140px' },
+  { key: 'active_targets', label: '外发', width: '120px' },
   { key: 'enabled', label: '状态', width: '90px' },
   { key: 'actions', label: '操作', width: '120px', thAlign: 'center' },
 ]
@@ -339,6 +388,8 @@ const addingTarget = ref(false)
 const savingTarget = ref(false)
 const targetMessage = ref('')
 const targetMessageType = ref<'success' | 'error'>('success')
+const helpOpen = ref(false)
+const pendingTargets = ref<{ provider: string; configValue: string }[]>([])
 
 const form = reactive({
   name: '',
@@ -346,14 +397,9 @@ const form = reactive({
   scope: 'channel' as 'channel' | 'kf_config',
   kf_config_ids: [] as string[],
   recipient_mode: 'kf_assignee' as 'kf_assignee' | 'tenant_admins',
-  include_default_target: false,
   enabled: true,
 })
 const newTarget = reactive({ provider: 'feishu_bot', configValue: '' })
-
-const eventTypeOptions = EVENT_OPTIONS
-const recipientOptions = RECIPIENT_OPTIONS
-const providerOptions = PROVIDER_OPTIONS
 
 const queryFiltered = computed(() =>
   !!(route.query.event_type || route.query.scope || route.query.kf_config))
@@ -413,7 +459,7 @@ function showError(e: any, fallback = '操作失败') {
     NOTIFICATION_RULE_NOT_FOUND: '规则不存在或已被删除',
     NOTIFICATION_RULE_NOTHING_TO_UPDATE: '没有需要保存的修改',
     NOTIFICATION_RULE_RECIPIENT_INVALID: '接收人模式不合法',
-    NOTIFICATION_TARGET_OWNED: '该地址已被其他规则或默认渠道使用，请换地址或先停用原目标',
+    NOTIFICATION_TARGET_OWNED: '该地址已被其他规则使用，请换地址或先停用原规则上的目标',
     NOTIFICATION_PROVIDER_UNAVAILABLE: '渠道暂不可用，请稍后重试',
     NOTIFICATION_BINDING_CHANGED: '配置已被其他操作修改，请刷新后重试',
     NOTIFICATION_TEST_RATE_LIMITED: '发送过于频繁，请 1 分钟后再试',
@@ -463,13 +509,13 @@ function resetForm() {
   form.scope = 'channel'
   form.kf_config_ids = []
   form.recipient_mode = 'kf_assignee'
-  form.include_default_target = false
   form.enabled = true
 }
 
 function openCreate() {
   editing.value = null
   resetForm()
+  pendingTargets.value = []
   // 深链预填：?event_type=lead.captured&scope=channel 或 &kf_config=<config_id>
   const et = route.query.event_type as string | undefined
   if (et && EVENT_OPTIONS.some((e) => e.value === et)) form.event_type = et
@@ -495,10 +541,10 @@ function openEdit(rule: NotificationRule) {
   form.scope = c.scope === 'kf_config' ? 'kf_config' : 'channel'
   form.kf_config_ids = [...(c.kf_config_ids || [])]
   form.recipient_mode = rule.recipient_mode
-  form.include_default_target = rule.include_default_target
   form.enabled = rule.enabled
   message.value = ''
   addingTarget.value = false
+  pendingTargets.value = []
   newTarget.provider = 'feishu_bot'
   newTarget.configValue = ''
   showModal.value = true
@@ -531,19 +577,31 @@ async function handleSave() {
         enabled: form.enabled,
         conditions: buildConditions(),
         recipient_mode: form.recipient_mode,
-        include_default_target: form.include_default_target,
       }
       if (!editing.value.is_system) body.name = form.name.trim()
       await notificationsAPI.updateRule(editing.value.rule_id, body)
     } else {
-      await notificationsAPI.createRule({
+      const created = await notificationsAPI.createRule({
         event_type: form.event_type,
         name: form.name.trim(),
         conditions: buildConditions(),
         recipient_mode: form.recipient_mode,
-        include_default_target: form.include_default_target,
         enabled: form.enabled,
       })
+      // 逐个登记外发目标；失败保留弹框切到编辑态，可继续补登记
+      for (let i = 0; i < pendingTargets.value.length; i++) {
+        const t = pendingTargets.value[i]
+        try {
+          await registerTargetForRule(created.rule.rule_id, t.provider, t.configValue)
+        } catch (e) {
+          editing.value = created.rule
+          pendingTargets.value = pendingTargets.value.slice(i)
+          await loadData()
+          showError(e, '规则已保存，但外发目标登记失败')
+          return
+        }
+      }
+      pendingTargets.value = []
     }
     showModal.value = false
     await loadData()
@@ -571,6 +629,17 @@ function cancelAddingTarget() {
   targetMessage.value = ''
 }
 
+function startAddingTarget() {
+  addingTarget.value = true
+  newTarget.provider = 'feishu_bot'
+  newTarget.configValue = ''
+  targetMessage.value = ''
+}
+
+function removePendingTarget(index: number) {
+  pendingTargets.value.splice(index, 1)
+}
+
 const PROVIDER_CHANNELS: Record<string, { channel: string; configKey: string }> = {
   feishu_bot: { channel: 'im_webhook', configKey: 'webhook_url' },
   dingtalk_bot: { channel: 'im_webhook', configKey: 'webhook_url' },
@@ -578,19 +647,36 @@ const PROVIDER_CHANNELS: Record<string, { channel: string; configKey: string }> 
   smtp: { channel: 'email', configKey: 'email_address' },
 }
 
+function registerTargetForRule(ruleId: string, provider: string, configValue: string) {
+  const p = PROVIDER_CHANNELS[provider]
+  if (!p) return Promise.reject(new Error('UNKNOWN_PROVIDER'))
+  return notificationsAPI.registerTenantTarget({
+    channel: p.channel,
+    provider,
+    configuration: { [p.configKey]: configValue },
+    rule_id: ruleId,
+  })
+}
+
 async function handleTargetSave() {
-  if (!editing.value || !newTarget.configValue.trim()) return
+  if (!newTarget.configValue.trim()) return
   const p = PROVIDER_CHANNELS[newTarget.provider]
   if (!p) return
+  if (!editing.value) {
+    if (pendingTargets.value.some(
+        (t) => t.provider === newTarget.provider && t.configValue === newTarget.configValue.trim())) {
+      targetMessage.value = '该目标已在待添加列表中'
+      targetMessageType.value = 'error'
+      return
+    }
+    pendingTargets.value.push({ provider: newTarget.provider, configValue: newTarget.configValue.trim() })
+    cancelAddingTarget()
+    return
+  }
   savingTarget.value = true
   targetMessage.value = ''
   try {
-    await notificationsAPI.registerTenantTarget({
-      channel: p.channel,
-      provider: newTarget.provider,
-      configuration: { [p.configKey]: newTarget.configValue.trim() },
-      rule_id: editing.value.rule_id,
-    })
+    await registerTargetForRule(editing.value.rule_id, newTarget.provider, newTarget.configValue.trim())
     cancelAddingTarget()
     const targetsRes = await notificationsAPI.listTenantTargets()
     allTargets.value = targetsRes.targets

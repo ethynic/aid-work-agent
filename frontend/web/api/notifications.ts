@@ -25,7 +25,6 @@ export interface NotificationRule {
   /** scope=channel（全部渠道）/ kf_config（指定客服账号 kf_config_ids=config_id 列表） */
   conditions: { scope?: 'channel' | 'kf_config'; kf_config_ids?: string[] }
   recipient_mode: 'tenant_admins' | 'kf_assignee'
-  include_default_target: boolean
   created_by: string | null
   created_at: string
   updated_at: string
@@ -37,7 +36,6 @@ export interface RuleSaveBody {
   enabled?: boolean
   conditions?: NotificationRule['conditions']
   recipient_mode?: NotificationRule['recipient_mode']
-  include_default_target?: boolean
 }
 
 export interface InboxItem {
@@ -90,8 +88,8 @@ export const notificationsAPI = {
     provider: string
     configuration: Record<string, string>
     expected_binding_version?: number
-    /** 传入时登记为规则级外发目标（installation_ref 服务端生成） */
-    rule_id?: string
+    /** 目标挂载的规则（规则级外发目标，installation_ref 服务端生成） */
+    rule_id: string
   }) =>
     request<TenantTarget>('/tenant-targets', {
       method: 'POST',
@@ -107,7 +105,6 @@ export const notificationsAPI = {
     name: string
     conditions?: NotificationRule['conditions']
     recipient_mode: NotificationRule['recipient_mode']
-    include_default_target?: boolean
     enabled?: boolean
   }) =>
     request<{ rule: NotificationRule }>('/rules', {

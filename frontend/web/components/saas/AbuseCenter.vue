@@ -281,7 +281,7 @@ function onPolicySaved() {
 }
 
 function goNotificationChannels() {
-  router.push(`/t/${tenantId.value}/settings#notification-channels`)
+  router.push(`/t/${tenantId.value}/notification-rules`)
 }
 
 // ============== 用量监控 ==============
