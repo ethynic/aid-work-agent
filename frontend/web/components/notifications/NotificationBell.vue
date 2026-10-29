@@ -1,5 +1,6 @@
 <template>
-  <div class="relative">
+  <!-- wrapper z-50：按钮与面板均在遮罩层（z-40）之上，面板打开时仍可点击铃铛关闭 -->
+  <div class="relative z-50">
     <button
       @click="togglePanel"
       class="relative p-2 min-w-[40px] min-h-[40px] flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors flex-shrink-0"
@@ -17,7 +18,7 @@
 
     <div
       v-if="panelOpen"
-      class="absolute right-0 top-full mt-2 w-[21rem] max-w-[calc(100vw-2rem)] bg-white border border-gray-200 rounded-lg shadow-lg z-50 flex flex-col max-h-[70vh]"
+      class="absolute right-0 top-full mt-2 w-[21rem] max-w-[calc(100vw-2rem)] bg-white border border-gray-200 rounded-lg shadow-lg z-[60] flex flex-col max-h-[70vh]"
     >
       <div class="flex items-center justify-between px-4 py-2.5 border-b border-gray-100 flex-shrink-0">
         <span class="text-sm font-semibold text-gray-800">站内通知</span>
@@ -49,9 +50,9 @@
         </button>
       </div>
     </div>
-
-    <div v-if="panelOpen" class="fixed inset-0 z-40" @click="panelOpen = false"></div>
   </div>
+  <!-- 遮罩层：在 wrapper 之外（fixed 定位不依赖父级），z-40 低于 wrapper 的 z-50 -->
+  <div v-if="panelOpen" class="fixed inset-0 z-40" @click="panelOpen = false"></div>
 </template>
 
 <script setup lang="ts">

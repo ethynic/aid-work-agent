@@ -32,7 +32,7 @@
       </div>
 
       <!-- Digital Employee Selector -->
-      <div v-if="shouldShowSelector || showReadonlyLabel" class="relative flex-shrink-0 ml-4">
+      <div v-if="shouldShowSelector || showReadonlyLabel" class="relative flex-shrink-0 ml-4 z-50">
         <!-- 选择框（多个选项时） -->
         <div v-if="shouldShowSelector" class="relative">
           <button
