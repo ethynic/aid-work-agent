@@ -9,11 +9,16 @@
 # 用户环境（configs/config.yaml 为三环境共享挂载，agent_runner.enabled 当前为本地验证态 true），
 # 一切启动/回退都必须由用户当场明确授权后按 deploy/agent-runner-deploy-checklist.md 执行。
 #
-# 三个宿主路径/网络变量经 .env 或命令行注入（默认值对齐生产 docker-compose.prod.yml）：
-#   AGENT_RUNNER_NETWORK          容器网络：prod=aid-network / test=aid-network2 / dev=aid-network3
-#   AGENT_RUNNER_UPLOADS_HOST_DIR 上传宿主目录（与目标环境主 compose 的 uploads 挂载同一路径）
-#   AGENT_RUNNER_STORAGE_HOST_DIR 产物宿主目录（与目标环境主 compose 的 storage 挂载同一路径）
-# 这三个变量仅参与 compose 插值，src/config/settings.py 不读取（应用读取的 AGENT_RUNNER_* 见
+# 宿主路径/网络/容器名变量经 .env 或命令行注入（默认值对齐生产 docker-compose.prod.yml）：
+#   AGENT_RUNNER_NETWORK            容器网络：prod=aid-network / test=aid-network2 / dev=aid-network3
+#   AGENT_RUNNER_UPLOADS_HOST_DIR   上传宿主目录（与目标环境主 compose 的 uploads 挂载同一路径）
+#   AGENT_RUNNER_STORAGE_HOST_DIR   产物宿主目录（与目标环境主 compose 的 storage 挂载同一路径）
+#   AGENT_RUNNER_API_CONTAINER      runner-api 容器名（默认 aid-runner-api）
+#   AGENT_RUNNER_WORKER_CONTAINER   runner-worker 容器名（默认 aid-runner-worker）
+# 同一宿主机多环境并存时（如 254 上 agent2/agent3 都启用 runner），必须在各环境 .env
+# 设置不同的容器名（如 *3 后缀），否则 container_name 冲突无法同时启动。网络是各环境
+# 独立 bridge，服务名（runner-api/runner-worker）不跨网络解析，无需差异化。
+# 这些变量仅参与 compose 插值，src/config/settings.py 不读取（应用读取的 AGENT_RUNNER_* 见
 # settings.py 的 env 覆盖段，二者命名不冲突）。
 
 services:
@@ -25,7 +30,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: aid-agent-api:latest
-    container_name: aid-runner-api
+    container_name: ${AGENT_RUNNER_API_CONTAINER:-aid-runner-api}
     restart: unless-stopped
     # 轻量 FastAPI 面（不加载 Agent 运行时），1G 上限留足余量
     mem_limit: 1g
@@ -94,7 +99,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: aid-agent-api:latest
-    container_name: aid-runner-worker
+    container_name: ${AGENT_RUNNER_WORKER_CONTAINER:-aid-runner-worker}
     restart: unless-stopped
     mem_limit: 6g
     shm_size: 512m

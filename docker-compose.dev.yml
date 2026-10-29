@@ -1,6 +1,11 @@
 # AID Work Agent 在线开发环境。用于各种第三方系统对接的调试，本地开发环境无法提供回调链接。发版周期是随时。
-# 注意1，本环境的数据库和在线测试环境（docker-compose.test.yml）共用一个数据库（aid_work_agent2）。
-# 注意2，本环境没有 background_runner 后台服务（如果本环境启用 background_runner，会和在线测试环境的 background_runner 处理同一个数据库的定时任务 `scheduled_tasks` 表，可能导致双触发、来回增删job等问题），本环境如果提交后台任务，会由在线测试环境的 background_runner 处理。
+# 注意1，本环境使用独立数据库 aid_work_agent3 / aid_work_logs3（2026-10-29 拆库，
+# 此前与在线测试环境共用 aid_work_agent2 导致 Runner lease 池跨环境抢任务而停用）。
+# 测试数据通过 deploy/test2dev.sh 从 aid_work_agent2 单向同步，渠道配置各环境独立。
+# 注意2，本环境有独立的 background_runner（aid-agent-background3），只处理本环境库的
+# scheduled_tasks 等定时任务，与 agent2 互不干扰（拆库前共库双触发是当年不加 background 的原因）。
+# 注意3，uploads/storage 宿主目录仍与测试环境共享（agent2_uploads / agent2_storage），
+# test2dev.sh 同步来的数据引用的附件文件直接可见，无需复制附件。
 
 services:
   # FastAPI 后端服务
@@ -32,10 +37,6 @@ services:
       - DEBUG=${DEBUG:-false}
       # 其他配置
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      # 本环境与测试环境共用 aid_work_agent2 库，跳过 db_update.yaml 增量应用与水位推进；
-      # 开发分支的增量块由测试环境（agent2）部署时应用，避免提前推进共享水位导致其被跳过。
-      # 注意：将来若新增会调 init_database() 的服务（如 background/runner worker），必须同样加此变量
-      - DB_UPDATE_SKIP=1
 
     # Volume 挂载 - 实现代码热更新
     volumes:
@@ -79,6 +80,52 @@ services:
       start_period: 60s
     
     # 日志配置
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 后台定时任务服务：只处理本环境库（aid_work_agent3）的 scheduled_tasks 等定时任务。
+  # 2026-10-29 拆库后与 agent2 的 background（处理 aid_work_agent2）彻底隔离，恢复部署。
+  # 健康检查的 .bg_runner_alive 心跳文件路径固定为 storage/.bg_runner_alive，而本环境
+  # storage 与 agent2 共享宿主目录，两环境心跳写同一文件——本健康检查可能被 agent2 的
+  # 心跳掩盖（反之亦然），background3 实际状态以 docker logs aid-agent-background3 为准。
+  aid-agent-background:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aid-agent-api:latest
+    container_name: aid-agent-background3
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - SERVER_MODE=background
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    entrypoint: ["sh", "-c"]
+    command: ["/usr/local/bin/fix_tmp.sh && exec gosu appuser python -m src.background_runner"]
+    volumes:
+      - .:/app
+      - ./log:/app/log
+      - ./configs:/app/configs
+      - ./skills:/app/skills
+      # 与本环境主 API 共享业务存储（测试/开发共用 agent2_* 宿主目录）
+      - /var/www/qb3_upload/agent2_uploads:/app/uploads
+      - /var/www/qb3_upload/agent2_storage:/app/storage
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          mode: 1777
+          size: 200m
+    networks:
+      - aid-network3
+    healthcheck:
+      test: ["CMD-SHELL", "test -n \"$$(find /app/storage/.bg_runner_alive -mmin -2 2>/dev/null)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
     logging:
       driver: "json-file"
       options:
