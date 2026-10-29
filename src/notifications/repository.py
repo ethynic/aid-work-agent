@@ -556,8 +556,9 @@ class NotificationRepository:
                 active = row['state'] == 'active'
                 if body.expected_binding_version is not None and body.expected_binding_version != row['binding_version']:
                     raise NotificationError('NOTIFICATION_BINDING_CHANGED', 409)
-                if active and body.expected_binding_version is None:
-                    raise NotificationError('NOTIFICATION_BINDING_CHANGED', 409)
+                # expected_binding_version 未传时允许接管/幂等登记：active 的旧默认渠道行
+                # （rule_id IS NULL）由规则登记改绑（设计 §10 承诺），同规则重复添加同一
+                # webhook 走无变更更新。阻断会出现「又删又加必报绑定冲突」的回归。
                 old = unprotect(row['configuration_encrypted'])
                 changed = old != configuration or not active
                 cursor.execute('''UPDATE notification_targets SET configuration_encrypted=%s,
