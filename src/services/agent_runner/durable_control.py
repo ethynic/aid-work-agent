@@ -176,7 +176,7 @@ class DurableControl:
 
     async def project(self, state, event):
         async with self.lock:
-            from src.core.agent_events import extract_downloadable_file
+            from src.core.agent_events import extract_downloadable_files
             kind = event.get('type')
             call_id = event.get('toolCallId')
             if kind == 'tool_start' and call_id:
@@ -186,8 +186,7 @@ class DurableControl:
                     (time.monotonic()-self.tool_started.pop(call_id))*1000)
             if kind in {'progress','tool_result','tool_start','thinking','clarification'}:
                 self.envelope.setdefault('presentation',{}).setdefault('progressMessages',[]).append(copy.deepcopy(event))
-                file = extract_downloadable_file(event)
-                if file:
+                for file in extract_downloadable_files(event):
                     self.envelope['presentation'].setdefault('downloadableFiles',[]).append(file)
             elif kind == 'verbose':
                 entries = self.envelope.setdefault('presentation',{}).setdefault('verboseMessages',[])

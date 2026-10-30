@@ -147,12 +147,19 @@
               <!-- 输出摘要 / 实时进度 -->
               <div v-if="executionBodyText(row) && !expanded[row.runner_id]" class="mt-1.5">
                 <p class="text-sm text-gray-600 line-clamp-2 whitespace-pre-wrap">{{ executionSummary(row) }}</p>
-                <p v-if="executionImages(row).length" class="text-xs text-gray-400">含 {{ executionImages(row).length }} 张图片，点击「查看详情」查看。</p>
+                <p v-if="executionImages(row).length || executionDownloadableFiles(row).length" class="text-xs text-gray-400">
+                  含 {{ executionImages(row).length }} 张图片、{{ executionDownloadableFiles(row).length }} 个文件，点击「查看详情」查看。
+                </p>
               </div>
-              <!-- 展开详情：完整文本 + 图片 + 执行过程 + 会话消息（评审 P2-4） -->
+              <!-- 展开详情：完整文本 + 图片 + 下载文件 + 执行过程 + 会话消息（评审 P2-4） -->
               <div v-if="expanded[row.runner_id]" class="mt-2 space-y-2">
                 <div v-if="executionBodyText(row)" class="text-gray-700 leading-relaxed markdown-content prose-sm prose-slate max-w-none" v-html="renderedOutput(row)"></div>
                 <ImageGallery v-if="executionImages(row).length" :images="executionImages(row)" />
+                <!-- 下载文件卡片（复用聊天页 DownloadFileCard，评审：agent 生成的附件不可下载） -->
+                <div v-if="executionDownloadableFiles(row).length" class="space-y-2">
+                  <p class="text-xs text-gray-400">生成文件（点击下载）</p>
+                  <DownloadFileCard v-for="file in executionDownloadableFiles(row)" :key="file.file_id" :file="file" />
+                </div>
                 <details v-if="executionProgress(row).length" class="text-sm">
                   <summary class="cursor-pointer select-none text-xs text-gray-500">执行过程（{{ executionProgress(row).length }} 步）</summary>
                   <ul class="mt-1 space-y-0.5">
@@ -402,6 +409,7 @@ import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import ImageGallery from '@/components/ui/ImageGallery.vue'
+import DownloadFileCard from '@/components/DownloadFileCard.vue'
 import { RunnerClient, runnerObservationComplete, runnerTerminal, type RunnerView } from '@/api/runner'
 import {
   describeSchedule, getScheduledTask, pauseScheduledTask, resumeScheduledTask,
@@ -561,13 +569,19 @@ function executionSummary(row: RunnerView): string {
 function executionImages(row: RunnerView): ImageRef[] {
   return row.result?.images || row.snapshot?.images || []
 }
+/** 可下载文件（agent 生成的附件）：从 runner 公开快照读取 downloadableFiles */
+interface DownloadableFile { file_id: string; file_name: string; file_size: number; download_url: string; mime_type?: string }
+function executionDownloadableFiles(row: RunnerView): DownloadableFile[] {
+  const files = row.snapshot?.downloadableFiles || row.result?.downloadableFiles
+  return Array.isArray(files) ? files as DownloadableFile[] : []
+}
 /** 执行过程消息（评审 P2-4）：复用 runnerMessages 的公开投影映射 */
 function executionProgress(row: RunnerView) {
   const display: { progressMessages?: Record<string, unknown>[] } = { ...(row.result?.assistant_metadata || {}), ...row.snapshot }
   return progressMessages(display.progressMessages, Date.parse(row.accepted_at) || Date.now())
 }
 function hasExpandableDetail(row: RunnerView): boolean {
-  return !!(executionBodyText(row) || executionImages(row).length || executionProgress(row).length)
+  return !!(executionBodyText(row) || executionImages(row).length || executionDownloadableFiles(row).length || executionProgress(row).length)
 }
 function renderedOutput(row: RunnerView): string {
   return renderMarkdown(executionBodyText(row))

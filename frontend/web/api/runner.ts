@@ -48,7 +48,7 @@ export interface RunnerView {
     supplementalInputs?: RunnerSupplementalInput[];
     clarificationQuestions?: { message_id: string; wait_id: string; text: string; created_at: string }[];
     input?: { message_id: string; text: string; attachments: UploadedFile[] } }
-  result?: { status: string; output?: string; images?: ImageRef[]; error_code?: string; credit_cost?: number; assistant_metadata?: RunnerPresentation } | null
+  result?: { status: string; output?: string; images?: ImageRef[]; error_code?: string; credit_cost?: number; assistant_metadata?: RunnerPresentation; downloadableFiles?: DownloadableFile[] } | null
   /** scheduled 来源公开投影（设计 §5.5）：任务视图展示触发原因 */
   scheduled?: { task_id: string; trigger: 'scheduled' | 'manual' } | null
   /** 恢复回合标识（公开补充，scheduled 任务视图展示） */

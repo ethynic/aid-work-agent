@@ -52,26 +52,63 @@ def make_verbose_event(event_id: str, data: str, source: str) -> Dict[str, Any]:
     )
 
 
+def _normalize_downloadable_file(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """将工具结果中的原始文件条目归一为公开下载卡片格式。"""
+    if not raw.get("file_id") or raw.get("visible") is False:
+        return None
+    return {
+        "file_id": raw["file_id"],
+        "file_name": (
+            raw.get("download_file_name")
+            or raw.get("file_name")
+            or "未命名文件"
+        ),
+        "file_size": raw.get("file_size", 0),
+        "download_url": raw.get("download_url", ""),
+        "mime_type": raw.get("mime_type", ""),
+    }
+
+
 def extract_downloadable_file(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """从成功的工具结果事件中提取可下载文件，不依赖工具名称。"""
+    """从成功的工具结果事件中提取**单个**可下载文件（单文件工具的旧格式）。
+
+    多文件工具（如 analyze_data 返回 result.files 数组）请用
+    extract_downloadable_files。
+    """
     if event.get("type") != "tool_result" or event.get("success") is not True:
         return None
     result = event.get("result")
     if not isinstance(result, dict):
         return None
-    if not result.get("file_id") or result.get("visible") is False:
-        return None
-    return {
-        "file_id": result["file_id"],
-        "file_name": (
-            result.get("download_file_name")
-            or result.get("file_name")
-            or "未命名文件"
-        ),
-        "file_size": result.get("file_size", 0),
-        "download_url": result.get("download_url", ""),
-        "mime_type": result.get("mime_type", ""),
-    }
+    return _normalize_downloadable_file(result)
+
+
+def extract_downloadable_files(event: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """从成功的工具结果事件中提取**全部**可下载文件。
+
+    同时覆盖两种返回格式：
+    - 单文件：result.file_id 在 result 顶层（旧格式，如 generate_file）
+    - 多文件：result.files 为文件数组（analyze_data 等分析工具）
+    """
+    if event.get("type") != "tool_result" or event.get("success") is not True:
+        return []
+    result = event.get("result")
+    if not isinstance(result, dict):
+        return []
+    files: List[Dict[str, Any]] = []
+    # 多文件格式（result.files 数组）
+    raw_files = result.get("files")
+    if isinstance(raw_files, list):
+        for raw in raw_files:
+            if isinstance(raw, dict):
+                file = _normalize_downloadable_file(raw)
+                if file:
+                    files.append(file)
+    # 单文件格式（result 顶层 file_id），去重后追加
+    single = _normalize_downloadable_file(result)
+    if single and single["file_id"] not in {f["file_id"] for f in files}:
+        files.append(single)
+    return files
 
 
 def make_image_event(
