@@ -69,6 +69,7 @@ storage/
 | 图片资产（通用） | `tenants/{id}/images/{yyyy-mm}/` | 磁盘+Redis | 是 | ImageRegistry 管理的非知识库图片（工具生成/上传/Web 抓取），TTL 24h |
 | 知识库图片资产 | `tenants/{id}/knowledge/images/` | 磁盘+Redis | 是 | 知识库关联图片（景点封面、文档内嵌图等），永久存储 |
 | 输出文件 | `output/` | 磁盘 | 待实现 | 生成的报表、演示文稿等 |
+| 技能草稿临时文件 | `storage/tmp/`（见 §3.13） | 磁盘 | 否 | 技能脚本草稿，7 天兜底清理 |
 
 ---
 
@@ -194,6 +195,7 @@ ImageRegistry 统一管理的非知识库图片资产，所有「工具生成 / 
 
 ### 3.12 微信营销图片素材（2026-09-10 登记，P4-A）
 
+
 微信营销自动化内容包的 image 块引用的图片素材（用户经工作台上传，MIME 以 PIL 头字节实测为准）。
 
 **路径**：`storage/tenants/{tenant_id}/weixin-marketing/`（写入经 `get_tenant_storage_abs_path(tenant_id, "weixin-marketing", ...)`，storage_ref 登记该绝对路径——V-P2-1）
@@ -205,6 +207,14 @@ ImageRegistry 统一管理的非知识库图片资产，所有「工具生成 / 
 间隔，默认 3600s，`enabled` 门控）；被引用素材受删除保护（409 ASSET_IN_USE）直到解引用。
 **调用方**：`src/weixin_marketing/assets.py`（上传/列表/详情/删除/清理/Runtime 下载校验链）
 **规范依据**：[微信场景设计 §6](../design/weixin/weixin-marketing-automation-design.md)（内容包与素材规则；实施计划已注销）
+
+### 3.13 技能草稿临时文件（2026-10-30 登记）
+
+技能脚本（travel-quote excel_export、spec2quote 等）的跨平台临时草稿目录。
+
+**路径**：`storage/tmp/`（skill_executor 注入 `SKILL_TMP_DIR` 环境变量，`src/core/skill_executor.py`；含 `quote_*`、`spec2quote_*` 工作子目录与 uuid 命名 xlsx 草稿）
+**租户隔离**：无（系统级草稿目录；交付件由 cp_tool 复制到 `tenants/{tenant_id}/` 后交付，草稿本身不被 documents / file_assets / Redis 引用）
+**清理**：APScheduler 每日 03:45 兜底清理 mtime 超 7 天的文件与工作目录（`src/scheduler/manager.py` `_run_skill_tmp_cleanup`），与 skill_ws 残留清理同策略
 
 ---
 
@@ -284,6 +294,8 @@ class StorageConfig(BaseModel):
 | 清理类型 | 触发方式 | 说明 |
 |---------|---------|------|
 | 知识图文件删除 | 手动删除文档时 | `delete_document()` 同步删除文件并清理空目录 |
+| 技能草稿清理 | APScheduler 每日 03:45 | `storage/tmp/` mtime 超 7 天的文件与工作目录（§3.13） |
+| 技能工作目录清理 | APScheduler 每日 03:30 | `tenants/*/temp/skill_ws_*` 超 3 天残留目录 |
 | 错误日志清理 | 手动端点 | 保留 30 天，清理 `log/agent` 下的错误日志 |
 
 ### 7.2 缺失的清理机制

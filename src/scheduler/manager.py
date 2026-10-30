@@ -312,6 +312,22 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.error(f"后端日志：注册技能工作目录清理任务失败: {e}")
 
+        # ===== storage/tmp 技能草稿清理（每日 03:45，保留 7 天）=====
+        # SKILL_TMP_DIR：技能脚本（travel-quote/spec2quote 等）的草稿目录，
+        # 交付件会 cp 到租户目录，草稿本身无引用，按 mtime 兜底清理
+        try:
+            self._scheduler.add_job(
+                self._run_skill_tmp_cleanup,
+                CronTrigger(hour=3, minute=45, timezone="Asia/Shanghai"),
+                id="job_system_skill_tmp_cleanup",
+                name="Skill Tmp Cleanup",
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("后端日志：已注册技能草稿目录清理任务 (cron=03:45)")
+        except Exception as e:
+            logger.error(f"后端日志：注册技能草稿目录清理任务失败: {e}")
+
         # ===== 用户行为审计日志清理（每日 04:00）=====
         # 设计文档 docs/system/user-behavior-audit-log-design.md §6.2：
         # 按 behavior_log.retention_days（默认 180 天）分批删除过期日志，每批 1 万行避免长锁
@@ -667,6 +683,48 @@ class ScheduledTaskManager:
             return cleaned
         except Exception as e:
             logger.opt(exception=True).error(f"后端日志：skill_ws 残留清理任务异常: {e}")
+            return 0
+
+    # ===== storage/tmp 技能草稿清理回调（同步，mtime 7 天兜底）=====
+    def _run_skill_tmp_cleanup(self):
+        """清理 storage/tmp 下超过 7 天的技能草稿文件与工作目录（APScheduler 回调）。
+
+        SKILL_TMP_DIR 由 skill_executor 注入给技能脚本做临时草稿；
+        交付件经 cp_tool 复制到租户目录，草稿本身不被任何表/Redis 引用，
+        按 mtime 兜底清理（与 skill_ws_cleanup 同策略：mtime 随最后写入更新）。
+        """
+        try:
+            import shutil
+            import time
+            from pathlib import Path
+
+            tmp_root = Path("storage/tmp")
+            if not tmp_root.is_dir():
+                return 0
+
+            max_age_seconds = 7 * 24 * 3600  # 7 天
+            now = time.time()
+            cleaned = 0
+            for entry in tmp_root.iterdir():
+                if entry == tmp_root:
+                    continue
+                try:
+                    # 目录 mtime 随最后写入更新；超过 7 天视为无活跃使用的残留
+                    if now - entry.stat().st_mtime <= max_age_seconds:
+                        continue
+                    if entry.is_dir():
+                        shutil.rmtree(entry, ignore_errors=True)
+                    else:
+                        entry.unlink()
+                    cleaned += 1
+                    logger.info(f"后端日志：清理过期技能草稿 {entry}")
+                except Exception as e:
+                    logger.warning(f"后端日志：清理技能草稿失败 {entry}: {e}")
+            if cleaned > 0:
+                logger.info(f"后端日志：storage/tmp 技能草稿清理完成，共清理 {cleaned} 项")
+            return cleaned
+        except Exception as e:
+            logger.opt(exception=True).error(f"后端日志：storage/tmp 技能草稿清理任务异常: {e}")
             return 0
 
     # ===== 用户行为日志清理回调（同步，分批删除避免长锁）=====
