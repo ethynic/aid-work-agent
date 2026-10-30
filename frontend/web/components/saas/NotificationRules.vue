@@ -567,6 +567,10 @@ function openCreate() {
   editing.value = null
   resetForm()
   pendingTargets.value = []
+  addingTarget.value = false
+  newTarget.provider = 'feishu_bot'
+  newTarget.configValue = ''
+  targetMessage.value = ''
   // 深链预填：?event_type=lead.captured&scope=channel 或 &kf_config=<config_id>
   const et = route.query.event_type as string | undefined
   if (et && EVENT_OPTIONS.some((e) => e.value === et)) form.event_type = et
@@ -632,7 +636,23 @@ async function handleSave() {
       }
       if (!editing.value.is_system) body.name = form.name.trim()
       await notificationsAPI.updateRule(editing.value.rule_id, body)
+      // 添加目标子表单开着且有内容时随保存一并登记，避免静默丢弃；
+      // 登记失败保留弹框（规则本身已保存），可点「保存目标」重试
+      if (addingTarget.value && newTarget.configValue.trim()) {
+        try {
+          await registerTargetForRule(editing.value.rule_id, newTarget.provider, newTarget.configValue.trim())
+          cancelAddingTarget()
+        } catch (e) {
+          await loadData()
+          showError(e, '规则已保存，但外发目标登记失败')
+          return
+        }
+      }
     } else {
+      if (addingTarget.value && newTarget.configValue.trim()) {
+        pendingTargets.value.push({ provider: newTarget.provider, configValue: newTarget.configValue.trim() })
+        cancelAddingTarget()
+      }
       const created = await notificationsAPI.createRule({
         event_type: form.event_type,
         name: form.name.trim(),
