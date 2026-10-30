@@ -3,7 +3,7 @@ name: ai-lead-gen
 description: >
   AI 获客技能：B2B 目标客户开发与冷邮件外联全流程。从需求澄清（brief）开始，
   检索目标客户名单（公司+联系人+邮箱），入库筛选后逐一撰写针对性邮件，
-  经半自动确认或全自动定时发送（SMTP），发送结果回写数据库，
+  邮箱就绪后自动批量发送或经定时任务发送（SMTP），发送结果回写数据库，
   客户回复自动接收并判定意向、有意向时通知用户。
   适用于外贸开发、客户线索挖掘、cold outreach、lead generation、
   邮件营销获客等场景。
@@ -43,10 +43,11 @@ metadata:
 3. **campaign 工作目录**：`storage/tenants/{tenant}/lead-gen/campaign_{id}/`
    （brief.md、intel/、emails/、logs/、contact_targets.json）。退订黑名单在
    租户级 `lead-gen/unsubscribed.csv`，跨 campaign 共享。
-4. **半自动 / 全自动同一条管线**，只差 campaign 的 `send_mode` 闸门：
-   - `review`（半自动）：approved 草稿经用户逐批确认后再导出队列发送；
-   - `auto`（全自动）：复用系统定时任务（scheduler）按 cron 以用户身份执行
-     发送编排，发送前闸门（限额/体检/黑名单）完全一致。
+4. **对话内 / 定时同一条管线**，只差 campaign 的 `send_mode` 编排方式：
+   - `review`（对话内编排）：在当前对话中完成发送编排，邮箱就绪后直接批量发送；
+   - `auto`（定时编排）：复用系统定时任务（scheduler）按 cron 以用户身份执行
+     同样的发送编排。两种模式均**不做邮件预览、不做逐批确认**，发送前闸门
+     （限额/体检/黑名单/职能对口）完全一致，技术细节只写 logs 不进对话。
 
 ## 铁律（违反会导致任务失败）
 
@@ -131,10 +132,45 @@ python lead_db.py score / export / list-leads / list-contacts / show-campaign ..
 4. **禁止用平台 `web_search` 做常规名单检索/联系人挖掘**——它只返回摘要且每次调用
    计费，历史实测 23 次搜索仅换 4 个邮箱；仅在 web-search-pro 全通道失败时兜底使用。
 
-## 全流程 11 步
+## 用户沟通口径（问卷回显 / 发送汇报）
 
-1. **需求澄清（brief）**：按 `assets/brief_template.md` 多轮澄清，产出 brief.md
-   （产品/ICP/地域/决策人画像/CTA/数量），`lead_db.py init` 建 campaign 并存 brief。
+与用户的对话输出遵守以下口径，避免内部变量 dump 和技术细节外泄：
+
+1. **问卷回显格式**：分行展示、不用 Q1/Q2 编号，默认值后给修改口子：
+
+   ```
+   已记录你的需求：
+   · 目标地域：中国大陆
+   · 目标行业：卫浴建材
+   · 企业规模：不限（要限定直接说，如「50 人以上」）
+   · 决策人：不限（默认优先创始人 / 采购 / 业务负责人）
+
+   确认无误回复「开始」，我立即开始检索客户名单；要调整直接说要改哪项。
+   ```
+
+2. **不展示邮件预览**。邮件是批量发送（单批可达上百封），不做逐封预览、
+   不展示正文、不解释 A/B 主题概念——A/B 两版主题仅内部交替分组，
+   用于发送后效果统计。收件人入库、草稿撰写完成后直接置 approved 推进发送，
+   不请求用户逐批确认。SPF/DKIM/DMARC 体检、dry-run、发件分组等技术细节
+   只写 `logs/` 供事后排查，不进对话。
+
+3. **发送后大白话汇报**，固定顺序：
+   - 发给谁：本次发送 N 封（覆盖哪些行业，代表公司举 2-3 例）
+   - 结果：成功 / 失败 / 退信各多少，退信率高时给一句建议
+   - 主题效果：两版主题各发一半，哪版暂回复更好（样本少时注明「暂不足定论」）
+   - 下一步：回复监控自动运行中，有客户回复会立即通知你
+
+4. **每轮结尾给下一步预期**：明确一句「你回复 X 之后我会做 Y」
+   （如「回复『开始』，我就先检索名单，完成后给你筛选结果」），
+   动作词要短、可直接执行，不要让用户写自然语言长句。
+
+## 全流程 10 步
+
+1. **需求澄清（brief）**：问卷只**必问两项**——目标国家/地区、目标行业；
+   企业规模、决策人职位等其余字段默认「不限」并按上下文合理默认填写，
+   不发起连环追问（用户主动描述了规模/决策人/CTA 等信息时照常落 brief）。
+   回显格式与确认方式见「用户沟通口径」。产出 brief.md 后
+   `lead_db.py init` 建 campaign 并存 brief。
    `init` 会**前置校验发件邮箱**（个人邮箱或租户邮箱任一已配置）：未配置时拒绝创建
    并提示先去配置——这是刻意的 fail-fast，不要绕过，先引导用户/管理员配好邮箱再重跑。
 2. **目标配置**：`set-target-config` 写入 contact_targets.json（目标职能/排除职能/产品一句话），
@@ -150,17 +186,19 @@ python lead_db.py score / export / list-leads / list-contacts / show-campaign ..
 6. **社媒兴趣分析**（可选）：用 `pipeline.py urls` 读公开商业内容，写入联系人 notes。
 7. **撰写邮件**：先 `list-contacts` 取本 campaign 真实 contact ID 清单，再
    `add-email-draft` 逐联系人写针对性草稿（必写 subject_a/subject_b
-   两版，各 ≤35 字符只差一个变量；公司简称放签名不进主题行）。
+   两版，各 ≤35 字符只差一个变量；公司简称放签名不进主题行），
+   写完直接 `set-email-status` 置 approved——**不做邮件预览、不等用户确认**。
    contact_id 无效时报错会返回有效 ID 清单，直接取用，不要继续猜。
-8. **审阅闸门（review 模式）**：草稿置 approved 前必须经用户确认；
-   auto 模式按 campaign 配置的定时任务自动推进，但本步闸门规则一致。
-9. **发送准备**：`domain_check.py` 体检 + `sender_profile.py` 确认发件身份 +
+8. **发送准备**：`domain_check.py` 体检 + `sender_profile.py` 确认发件身份 +
    `mailbox_resolver.py` 确认邮箱配置就绪 + `export-send-queue` 生成队列。
-10. **发送**：先 `send_emails.py --campaign-id ID --dry-run` 干跑复查
-    （无 BLOCK 才可发），再 `--limit 3` 小批量试发，最后全量
-    （可配 `--max-minutes` 分段）。发送结果自动回写 emails 表
-    （sent 含 message_id / failed / bounced），硬退信自动进退订名单。
-11. **回复跟进**：回信按 Reply-To 锚点归因到 campaign，LLM 判定意向
+   体检/队列等技术结果只写 logs，不向用户展开。
+9. **发送**：先 `send_emails.py --campaign-id ID --dry-run` 干跑复查
+   （无 BLOCK 才可发），再 `--limit 3` 小批量试发，最后全量
+   （可配 `--max-minutes` 分段）。对话内编排（review）与定时编排（auto）
+   都直接推进，不逐批确认。发送结果自动回写 emails 表
+   （sent 含 message_id / failed / bounced），硬退信自动进退订名单。
+   发送完成后按「用户沟通口径」大白话汇报。
+10. **回复跟进**：回信按 Reply-To 锚点归因到 campaign，LLM 判定意向
     （interested/info_request/refused/irrelevant/unclear），有意向通知用户；
     负面回复自动进退订名单。日常由回复监控定时任务跑 `reply_monitor.py`
     完成（见下节）；对话中被问「有人回复了吗」时可直接执行一次
@@ -183,7 +221,7 @@ python lead_db.py score / export / list-leads / list-contacts / show-campaign ..
 ```
 
 执行成功后用 `bind-scheduler --campaign-id ID --task-id <定时任务ID>` 绑定并切 auto；
-切回半自动用 `unbind-scheduler`（默认任务置 paused、send_mode 回 review），
+切回对话内编排用 `unbind-scheduler`（默认任务置 paused、send_mode 回 review），
 campaign 彻底不再循环时加 `--cancel` 直接取消任务。
 绑定/解绑只会操作当前租户当前用户名下的定时任务。
 
