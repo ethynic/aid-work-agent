@@ -11,8 +11,6 @@
 - 单会话超时 30s（asyncio.wait_for）
 - 跳过消息数 <2 的会话
 - 失败的会话只记日志，不阻塞整批任务
-
-复盘任务执行日志写入 log/temp/work_outcome_review.log（按 backend_dev.md tlog 规范）。
 """
 
 import asyncio
@@ -24,7 +22,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
-from src.core.temp_logger import tlog
 from src.db.database import get_db_connection
 from src.reports.summarizer import get_lite_model
 from src.reports.work_outcome_db import WorkOutcomeDB
@@ -91,20 +88,9 @@ async def run_daily_review(target_date: Optional[date] = None) -> str:
     logger.info(
         f"工作成果复盘开始: batch_id={batch_id}, date={target_date}"
     )
-    tlog(
-        "work_outcome_review",
-        "复盘任务启动: batch_id={bid}, date={d}",
-        bid=batch_id,
-        d=target_date.isoformat(),
-    )
 
     # 1. 扫描当日所有有对话的会话
     sessions = await _list_active_sessions_on_date(target_date)
-    tlog(
-        "work_outcome_review",
-        "扫描到 {n} 个有对话的会话",
-        n=len(sessions),
-    )
 
     # 1.5 跳过 tenant_id 为空的会话（复盘仅对租户有效）
     # SQL 已过滤 tenant_id IS NOT NULL，此处 Python 侧双保险，防止残留脏数据/空串
@@ -113,11 +99,6 @@ async def run_daily_review(target_date: Optional[date] = None) -> str:
     if skipped_no_tenant:
         logger.info(
             f"工作成果复盘跳过 {skipped_no_tenant} 个无租户会话（tenant_id 为空）"
-        )
-        tlog(
-            "work_outcome_review",
-            "跳过 {n} 个无租户会话: tenant_id 为空",
-            n=skipped_no_tenant,
         )
     sessions = valid_sessions
 
@@ -129,12 +110,6 @@ async def run_daily_review(target_date: Optional[date] = None) -> str:
         has_file = await asyncio.to_thread(_has_file_outcome, s.session_id)
         if not has_file:
             candidate_sessions.append(s)
-    tlog(
-        "work_outcome_review",
-        "过滤后候选会话数={n}（已跳过 {skip} 个有文件型成果的会话）",
-        n=len(candidate_sessions),
-        skip=len(sessions) - len(candidate_sessions),
-    )
 
     # 3. 并发调小模型分析
     semaphore = asyncio.Semaphore(_MAX_CONCURRENCY)
@@ -181,24 +156,11 @@ async def run_daily_review(target_date: Optional[date] = None) -> str:
                     f"工作成果复盘超时({_SESSION_TIMEOUT_SEC}s): "
                     f"session={session.session_id}"
                 )
-                tlog(
-                    "work_outcome_review",
-                    "会话复盘超时: session={sid}",
-                    sid=session.session_id,
-                    level="WARNING",
-                )
                 return 0
             except Exception as e:
                 failed_sessions += 1
                 logger.opt(exception=True).error(
                     f"工作成果复盘失败: session={session.session_id}, {e}",
-                )
-                tlog(
-                    "work_outcome_review",
-                    "会话复盘失败: session={sid}, err={e}",
-                    sid=session.session_id,
-                    e=str(e)[:200],
-                    level="ERROR",
                 )
                 return 0
 
@@ -208,14 +170,6 @@ async def run_daily_review(target_date: Optional[date] = None) -> str:
     logger.info(
         f"工作成果复盘完成: batch_id={batch_id}, "
         f"候选={len(candidate_sessions)}, 产出={total_outcomes}, 失败={failed_sessions}"
-    )
-    tlog(
-        "work_outcome_review",
-        "复盘任务完成: batch_id={bid}, 候选={cand}, 产出={out}, 失败={fail}",
-        bid=batch_id,
-        cand=len(candidate_sessions),
-        out=total_outcomes,
-        fail=failed_sessions,
     )
     return batch_id
 
