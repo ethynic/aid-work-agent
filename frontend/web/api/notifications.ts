@@ -10,8 +10,32 @@ export interface TenantTarget {
   enabled_since: string | null
   channel: string
   provider: string
+  /** 规则级目标所属规则（规则引擎，设计 §10）；租户级目标缺省 */
+  rule_id?: string | null
   /** 配置回显（webhook 脱敏如 https://open.feishu.cn/****ab12；邮箱完整），解密失败时缺省 */
   configuration_display?: string
+}
+
+export interface NotificationRule {
+  rule_id: string
+  event_type: string
+  name: string
+  enabled: boolean
+  is_system: boolean
+  /** scope=channel（全部渠道）/ kf_config（指定客服账号 kf_config_ids=config_id 列表） */
+  conditions: { scope?: 'channel' | 'kf_config'; kf_config_ids?: string[] }
+  recipient_mode: 'tenant_admins' | 'kf_assignee'
+  created_by: string | null
+  created_at: string
+  updated_at: string
+  active_targets: number
+}
+
+export interface RuleSaveBody {
+  name?: string
+  enabled?: boolean
+  conditions?: NotificationRule['conditions']
+  recipient_mode?: NotificationRule['recipient_mode']
 }
 
 export interface InboxItem {
@@ -64,11 +88,42 @@ export const notificationsAPI = {
     provider: string
     configuration: Record<string, string>
     expected_binding_version?: number
+    /** 目标挂载的规则（规则级外发目标，installation_ref 服务端生成） */
+    rule_id: string
   }) =>
     request<TenantTarget>('/tenant-targets', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+    }),
+
+  /** 通知规则列表（含每规则 active 外发目标数） */
+  listRules: () => request<{ rules: NotificationRule[] }>('/rules'),
+
+  createRule: (body: {
+    event_type: string
+    name: string
+    conditions?: NotificationRule['conditions']
+    recipient_mode: NotificationRule['recipient_mode']
+    enabled?: boolean
+  }) =>
+    request<{ rule: NotificationRule }>('/rules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+
+  updateRule: (ruleId: string, body: RuleSaveBody) =>
+    request<{ rule: NotificationRule }>(`/rules/${ruleId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+
+  /** 删除自定义规则（is_system 拒绝），级联撤销规则级目标 */
+  deleteRule: (ruleId: string) =>
+    request<{ rule_id: string; revoked_targets: number }>(`/rules/${ruleId}`, {
+      method: 'DELETE',
     }),
 
   revokeTenantTarget: (targetId: string, bindingVersion: number) =>

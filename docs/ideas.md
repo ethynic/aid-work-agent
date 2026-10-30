@@ -26,6 +26,7 @@
 | 20261021-2200 | 私有云生产环境部署指南 | ✅ 已完成（2026-10-21） | 新增 [deploy/生产环境部署指南.md](../deploy/生产环境部署指南.md)：面向客户私有云全新部署的通用 playbook，综合 243 独占迁移档案与济南诺度混部实例（摸底决策、Docker/codeup 三通道、sparse-checkout、PG 绑址、.env 必改项、宝塔 TLS、发布后事项、验收清单、两例踩坑速查）。 | [部署指南](../deploy/生产环境部署指南.md) | — |
 | 20261026-1130 | 调度器幽灵锁自愈修复（发版强杀后后台调度器永久罢工） | 🔧 部分完成（开发+测试+CR 完成，待提交发版） | 2026-10-21 生产发版强杀旧容器致 4 个后台调度器 Redis 锁未释放，新容器一次性抢锁失败即永久放弃（宏陶商城同步停摆 44h）。修复：三个 asyncio 调度器（hongtao_shop/wechat_mp/tencent_docs）抢锁失败仍启动驱动任务循环重试接管；manager.py 抢锁失败起 30s 重试线程。47 用例 + 1649 回归通过，CR 无 P0/P1。 | [事故复盘](incidents/scheduler-ghost-lock-stall-20261021.md) | — |
 | 20261028-1255 | 外发邮箱配置指南（域名 DNS 侧） | ✅ 已完成（2026-10-28） | 新增 [docs/ops/outbound-email-dns-setup-guide.md](ops/outbound-email-dns-setup-guide.md)：面向租户外发邮件域名配置的实操指南，沉淀 tulin.cn 体检实战——SPF/DKIM/DMARC/MX 四记录要点（163 免费企业邮 + 阿里云解析逐步操作）、MX 主机记录误填子域致主域收信中断、权威 DNS 与公共缓存验证口径、DMARC 报告解读与 p 策略升级路径、缺 DKIM 决策参考与验收清单。 | [指南](ops/outbound-email-dns-setup-guide.md) | — |
+| 20261029-1800 | agent3 在线开发环境拆库启用 | 🔧 部署验证中 | commit d928fc4b：agent3 独立库 aid_work_agent3/logs3（自 agent2 复制）+ runner 容器名参数化 + background3 + test2dev.sh 整库单向同步（test→dev，渠道配置各环境独立）。 | —（见 [服务器部署现状.md §5.2](../deploy/服务器部署现状.md)） | — |
 
 ## 系统功能
 
@@ -40,7 +41,7 @@
 | 20261008-runtime-plugin-host | Runtime 执行环境、插件宿主与可视化客户端 | 🔧 部分完成 | A1～A3完成；隔离验收包已交付，待人工及正式发行，第三方暂不开发；新增 v2 写路径泛化阶段（BOSS B3 依赖，待开发）。 | [唯一架构](system/runtime-plugin-host-architecture-design.md) / [共同契约](system/runner-desktop-runtime-integration-contract.md) / [接口](../contracts/runtime-host/v1/README.md) | [统一计划](plans/plan-runtime-plugin-host.md) |
 | 20261010-1642 | 系统级防滥用与限额 | 🔧 部分完成（Phase 1 开发完成，未部署） | Phase 1 观察闭环已完成：abuse_policies/abuse_events 两表、引擎 src/services/anti_abuse/（绑定匹配 user > channel（按 users.source 渠道类型） > tenant 兜底 > 平台默认）、定时扫描（300s）+ 事件 1h 去重 + 站内信通知（abuse.rule_triggered）、渠道入口 users.status 停用拦截（fail-open）、防滥用中心页（用量监控/禁用记录/触发记录 + 策略编辑）、用户停用/启用接口。Runner 链路 status 检查缺口登记 Phase 2 统一拦截点解决。 | [设计](system/saas/anti-abuse-policy-design.md) | — |
 | 20261010-1930 | 租户管理员通知（计费提醒 / 反滥用告警） | 🔧 部分完成（Phase 1 开发完成，未部署） | 复用统一通知基础设施：站内信恒开兜底 + 外发渠道（飞书/企微/钉钉/邮件）四选一；三事件 billing.credit_low（7 天用量推算，月度幂等）/ billing.tenant_expiry（30/7/1 天档）/ abuse.rule_triggered（Phase 2 挂反滥用 warn_threshold）；管理员逐人展开 + 租户级外发目标（同事件多管理员仅投一次），不新建表。启用需 configs/config.yaml notifications.tenant_events_enabled=true。 | [设计](system/tenant-admin-notification-design.md) | — |
-| 20261028-1600 | 通知规则引擎（留资/转人工业务通知 + 通知配置统一） | 📋 设计完成，待评审 | wecom_kf 留资/转人工升级通知业务负责人：在通知核心上引入规则层（notification_rules 新表 + targets 加 rule_id），事件按租户规则匹配展开（接收人模式 tenant_admins/kf_assignee），规则级多 webhook/邮箱多选多、可按客服账号分流不同群机器人；收编已实现的租户管理员通知（billing/abuse 成为预置默认规则）与旧留资邮件单发；新增 kf.transfer_unanswered 超时未接待升级事件（企微自带即时通知不重复，窗口默认 5 分钟规则可配，定时扫描器判定，多窗口分级升级）；新建「通知规则」页面从企业设置迁出通知配置 + 客服账号弹框深链。 | [设计](system/notification-rule-engine-design.md) | — |
+| 20261028-1600 | 通知规则引擎（留资业务通知 + 通知配置统一） | 🔧 部分完成（Phase 1/2 开发完成，未部署） | 规则层按租户规则展开事件通知，收编留资旧邮件单发与管理员通知（预置规则），新建「通知规则」页面 + 渠道/客服账号深链；定版偏差见设计 §14。 | [设计](system/notification-rule-engine-design.md) | — |
 | 20260908-2229 | 外部系统入口（SSO 打开第三方系统） | 🔧 部分完成（Phase 1 开发完成，待真机联调） | 连接中心「外部系统」入口 + SSO 通用契约（direct_url/ticket_redirect/token_param）打开第三方系统；Phase 1 完成待真机联调。 | [方案](system/external-system-entry-design.md) | — |
 | 20261028-1430 | 连接器运行时（统一工具入口与三种转接器） | 📋 设计完成，待开发 | 四决策全部与用户定稿（2026-10-28）：统一工具入口+三种转接器（飞书 SDK 直连先行/文档驱动基于 http_api 增强/MCP 最后）；x-aid- 扩展命名；外部 MCP 反向能力默认关（单向供给定位）。与连接中心（管理平面）配套，飞书为第一连接器。 | [设计](system/connector-runtime-design.md) / [连接中心设计](system/connection-center-design.md) / [调研](research/connector-architecture-feishu-research.md) | — |
 
@@ -87,6 +88,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261029-1200 | 飞书/钉钉/企业微信渠道语音输入（阿里云 ASR） | 🔧 部分完成（开发+单测完成，待部署真机验证） | 复刻 wecom_kf 语音链路到三渠道：下载音频 -> 规范化 -> ASR 转文字入对话，计费对齐 KF；飞书/钉钉下载接口待实测。 | — | — |
 | 20261029-1140 | 留资口径调整（qr 不算留资 + 联系方式类型扩展） | 🔧 开发中 | qr 发码拆独立工具 send_advisor_qr；contact_method 扩展为手机号/固话/邮箱，other_contact JSONB 逐条加密存储。 | [设计](subagent/pre-sales/lead-capture-design.md)（§十六修订） | — |
 | 20260910-1259 | 留资线索动态刷新（lead_refresh：意向度 + 需求分条 + 人工归属） | 🔧 部分完成 | **Phase 1 开发+单测完成（2026-09-16），待部署真机验证；Phase 2 §9.5 人工期对话推送（external_push_human：节流推送 + 转人工字段 + 跟进汇总摘要同步 + 不要求留资）开发+单测完成（2026-09-16）**。触发：2026-09-10 产品需求——留资后客户继续交流（智能体轮次 + 转人工期）仅落 `channel_messages`，线索行不再更新，运营页看不到最新客户状态。2026-10-23 补充：新增租户级守卫，对接外部 CRM（qbweb3.1）的租户跳过意向度分析（`load_sso_configs` 非空即 no-op，与前端隐藏留资线索 Tab 同口径，见设计文档 §9.7）。 | [设计](subagent/pre-sales/lead-capture-refresh-design.md) | — |
 | 20261012-1200 | wecom_kf 并发限频修复（sync_msg 45009 重试 + 拉取去重） | 🔧 部分完成（开发+单测完成，待部署） | 2026-10-11 演示事故修复：约 20 用户同时进入触发微信 sync_msg 限频 47 秒全失败，积压 31 条串行排空，首批用户端到端等 1-3 分钟。修复：45009 指数退避重试 + 同一 open_kfid 拉取任务去重合并。 | [事故复盘](incidents/wecom-kf-sync-msg-45009-incident.md) | — |

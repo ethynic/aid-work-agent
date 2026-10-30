@@ -6,13 +6,13 @@ from pathlib import Path
 from .contracts import canonical_json
 
 
-def legacy_configuration_fingerprint(profile_fingerprint):
-    """Recognize an unchanged v2 checkpoint; never infer an unknown old hash."""
+def legacy_configuration_fingerprint(profile_fingerprint, *, version=2):
+    """Recognize unchanged master v1 and branch v2 checkpoints exactly."""
     from src.config.settings import settings
     root = Path(__file__).resolve().parents[2] / 'prompts'
     prompts = {str(path.relative_to(root)):hashlib.sha256(path.read_bytes()).hexdigest()
                for path in sorted(root.rglob('*')) if path.is_file() and path.suffix in {'.md','.yaml','.yml','.txt','.py'}}
-    private = {'version':2,'profile_fingerprint':profile_fingerprint,
+    private = {'version':version,'profile_fingerprint':profile_fingerprint,
                'llm':settings.llm.model_dump(mode='json'),
                'agent':settings.agent.model_dump(mode='json'),'prompt_files':prompts}
     return hashlib.sha256(canonical_json(private).encode()).hexdigest()
@@ -52,5 +52,7 @@ def configuration_fingerprint(profile_fingerprint, profile_config=None):
 def configuration_matches(stored, profile_fingerprint, profile_config=None):
     if stored == configuration_fingerprint(profile_fingerprint, profile_config):
         return True
-    # v2 had no dependency manifest. Only an exact match can migrate safely.
-    return stored == legacy_configuration_fingerprint(profile_fingerprint)
+    # Legacy checkpoints had no dependency manifest. Accept their exact hashes;
+    # merely deploying this server must not invalidate an unchanged old task.
+    return any(stored == legacy_configuration_fingerprint(profile_fingerprint, version=version)
+               for version in (1, 2))

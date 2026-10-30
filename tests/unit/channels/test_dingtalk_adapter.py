@@ -232,7 +232,7 @@ class TestDingTalkAdapterParseMessage:
 
     @pytest.mark.asyncio
     async def test_parse_audio_message(self, adapter):
-        """音频消息解析"""
+        """音频消息解析：语音占位 + is_voice 标记（TEXT 类型，对齐 wecom_kf 约定）"""
         raw = {
             "msgtype": "audio",
             "audio": {"downloadCode": "dl_audio", "fileName": "test.mp3"},
@@ -243,7 +243,10 @@ class TestDingTalkAdapterParseMessage:
             "senderNick": "用户",
         }
         msg = await adapter.parse_message(raw)
-        assert msg.message_type == MessageType.FILE
+        assert msg.message_type == MessageType.TEXT
+        assert msg.text == "[语音消息]"
+        assert msg.content["is_voice"] is True
+        assert msg.content["download_code"] == "dl_audio"
 
     @pytest.mark.asyncio
     async def test_parse_empty_message_returns_none(self, adapter):

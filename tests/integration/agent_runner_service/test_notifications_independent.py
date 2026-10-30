@@ -347,18 +347,30 @@ class TenantWebhookAdapter:
         return {'ref': message['notification_ref']}
 
 
+def _insert_rule(service_database, rule_id, tenant_id):
+    """规则级目标登记依赖 notification_rules 行（register_rule_target 校验归属）。"""
+    service_database.rows(
+        '''INSERT INTO notification_rules (rule_id,tenant_id,event_type,name,recipient_mode)
+           VALUES (%s,%s,'billing.credit_low','测试规则','tenant_admins')''',
+        (rule_id, tenant_id))
+
+
 def test_tenant_targets_share_webhook_across_tenants(boundary_repo, actors, service_database):
-    """平台管理员用一个群机器人接收多租户告警：不同租户可注册同一 Webhook。"""
+    """不同租户可用同一群机器人 Webhook（各自规则级目标，installation_ref 独立）。"""
     from src.notifications.contracts import TenantRegisterTarget
     boundary_repo.registry.register(TenantWebhookAdapter())
     admin_a, admin_b = actors['a'], actors['b']
     service_database.rows("UPDATE users SET role='tenant_admin' WHERE user_id=ANY(%s)",
                           ([admin_a.user_id, admin_b.user_id],))
-    body = TenantRegisterTarget(channel='im_webhook', provider='feishu_bot',
-                                configuration={'webhook_url': 'https://open.feishu.cn/open-apis/bot/v2/hook/shared-token'})
+    _insert_rule(service_database, 'rule_test_a', admin_a.tenant_id)
+    _insert_rule(service_database, 'rule_test_b', admin_b.tenant_id)
+    body_a = TenantRegisterTarget(channel='im_webhook', provider='feishu_bot', rule_id='rule_test_a',
+                                  configuration={'webhook_url': 'https://open.feishu.cn/open-apis/bot/v2/hook/shared-token'})
+    body_b = TenantRegisterTarget(channel='im_webhook', provider='feishu_bot', rule_id='rule_test_b',
+                                  configuration={'webhook_url': 'https://open.feishu.cn/open-apis/bot/v2/hook/shared-token'})
     try:
-        first = boundary_repo.register_tenant_target(Subject(admin_a.user_id, admin_a.tenant_id), body)
-        second = boundary_repo.register_tenant_target(Subject(admin_b.user_id, admin_b.tenant_id), body)
+        first = boundary_repo.register_rule_target(Subject(admin_a.user_id, admin_a.tenant_id), body_a)
+        second = boundary_repo.register_rule_target(Subject(admin_b.user_id, admin_b.tenant_id), body_b)
         assert first['target_id'] != second['target_id']
         rows = service_database.rows(
             'SELECT target_id,tenant_id FROM notification_targets WHERE target_id=ANY(%s)',
@@ -369,24 +381,82 @@ def test_tenant_targets_share_webhook_across_tenants(boundary_repo, actors, serv
     finally:
         service_database.rows('DELETE FROM notification_targets WHERE scope_key=ANY(%s)',
                               (['tenant:' + admin_a.tenant_id, 'tenant:' + admin_b.tenant_id],))
+        service_database.rows('DELETE FROM notification_rules WHERE rule_id=ANY(%s)',
+                              (['rule_test_a', 'rule_test_b'],))
 
 
 def test_tenant_target_same_tenant_rebinds_active_row(boundary_repo, actors, service_database):
-    """同租户重复注册同一 Webhook 走改绑更新，不产生第二行。"""
-    from src.notifications.contracts import ImWebhookConfiguration, TenantRegisterTarget
+    """同租户同规则重复注册同一 Webhook 走改绑更新，不产生第二行；
+    携带过期 expected_binding_version 的并发登记被 CAS 拒绝。"""
+    from src.notifications.contracts import TenantRegisterTarget
     boundary_repo.registry.register(TenantWebhookAdapter())
     admin = actors['a']
     service_database.rows("UPDATE users SET role='tenant_admin' WHERE user_id=%s", (admin.user_id,))
-    body = TenantRegisterTarget(channel='im_webhook', provider='feishu_bot',
+    _insert_rule(service_database, 'rule_test_a', admin.tenant_id)
+    body = TenantRegisterTarget(channel='im_webhook', provider='feishu_bot', rule_id='rule_test_a',
                                 configuration={'webhook_url': 'https://open.feishu.cn/open-apis/bot/v2/hook/tenant-a-token'})
     try:
-        first = boundary_repo.register_tenant_target(Subject(admin.user_id, admin.tenant_id), body)
-        rotated = body.model_copy(update={
-            'expected_binding_version': first['binding_version'],
-            'configuration': ImWebhookConfiguration(webhook_url='https://open.feishu.cn/open-apis/bot/v2/hook/tenant-a-rotated')})
-        second = boundary_repo.register_tenant_target(Subject(admin.user_id, admin.tenant_id), rotated)
+        first = boundary_repo.register_rule_target(Subject(admin.user_id, admin.tenant_id), body)
+        second = boundary_repo.register_rule_target(Subject(admin.user_id, admin.tenant_id), body)
         assert second['target_id'] == first['target_id']
-        assert second['binding_version'] == first['binding_version'] + 1
+        assert second['binding_version'] == first['binding_version']
+        stale = body.model_copy(update={
+            'expected_binding_version': first['binding_version'] + 1})
+        with pytest.raises(NotificationError, match='NOTIFICATION_BINDING_CHANGED'):
+            boundary_repo.register_rule_target(Subject(admin.user_id, admin.tenant_id), stale)
     finally:
         service_database.rows('DELETE FROM notification_targets WHERE scope_key=%s',
                               ('tenant:' + admin.tenant_id,))
+        service_database.rows('DELETE FROM notification_rules WHERE rule_id=%s', ('rule_test_a',))
+
+
+def test_tenant_target_legacy_default_row_takeover_without_binding_version(boundary_repo, actors, service_database):
+    """前端登记恒不传 expected_binding_version：active 的旧默认渠道行（rule_id IS NULL）
+    必须能被规则登记接管改绑，不得误报 NOTIFICATION_BINDING_CHANGED。"""
+    from src.notifications.contracts import TenantRegisterTarget
+    from src.notifications.repository import protected
+    boundary_repo.registry.register(TenantWebhookAdapter())
+    admin = actors['a']
+    service_database.rows("UPDATE users SET role='tenant_admin' WHERE user_id=%s", (admin.user_id,))
+    _insert_rule(service_database, 'rule_test_a', admin.tenant_id)
+    webhook = 'https://open.feishu.cn/open-apis/bot/v2/hook/legacy-default-hook'
+    digest = hashlib.sha256(webhook.encode()).hexdigest()
+    service_database.rows(
+        '''INSERT INTO notification_targets
+           (target_id,scope_key,tenant_id,channel,provider,installation_ref,identity_digest,
+            configuration_encrypted,rule_id,state)
+           VALUES (%s,%s,%s,'im_webhook','feishu_bot','legacy_install',%s,%s,NULL,'active')''',
+        ('target_legacy', 'tenant:' + admin.tenant_id, admin.tenant_id, digest,
+         protected({'webhook_url': webhook})))
+    body = TenantRegisterTarget(channel='im_webhook', provider='feishu_bot', rule_id='rule_test_a',
+                                configuration={'webhook_url': webhook})
+    try:
+        result = boundary_repo.register_rule_target(Subject(admin.user_id, admin.tenant_id), body)
+        assert result['target_id'] == 'target_legacy'
+        row = service_database.rows(
+            'SELECT rule_id,state FROM notification_targets WHERE target_id=%s', ('target_legacy',))[0]
+        assert row['rule_id'] == 'rule_test_a' and row['state'] == 'active'
+    finally:
+        service_database.rows('DELETE FROM notification_targets WHERE scope_key=%s',
+                              ('tenant:' + admin.tenant_id,))
+        service_database.rows('DELETE FROM notification_rules WHERE rule_id=%s', ('rule_test_a',))
+
+
+def test_tenant_target_same_rule_readd_without_binding_version_idempotent(boundary_repo, actors, service_database):
+    """同规则重复添加同一 Webhook（不传 expected_binding_version）幂等成功，不报绑定冲突。"""
+    from src.notifications.contracts import TenantRegisterTarget
+    boundary_repo.registry.register(TenantWebhookAdapter())
+    admin = actors['a']
+    service_database.rows("UPDATE users SET role='tenant_admin' WHERE user_id=%s", (admin.user_id,))
+    _insert_rule(service_database, 'rule_test_a', admin.tenant_id)
+    body = TenantRegisterTarget(channel='im_webhook', provider='feishu_bot', rule_id='rule_test_a',
+                                configuration={'webhook_url': 'https://open.feishu.cn/open-apis/bot/v2/hook/readd-hook'})
+    try:
+        first = boundary_repo.register_rule_target(Subject(admin.user_id, admin.tenant_id), body)
+        second = boundary_repo.register_rule_target(Subject(admin.user_id, admin.tenant_id), body)
+        assert second['target_id'] == first['target_id']
+        assert second['binding_version'] == first['binding_version']
+    finally:
+        service_database.rows('DELETE FROM notification_targets WHERE scope_key=%s',
+                              ('tenant:' + admin.tenant_id,))
+        service_database.rows('DELETE FROM notification_rules WHERE rule_id=%s', ('rule_test_a',))

@@ -258,17 +258,21 @@ fi
 docker compose "${COMPOSE_FILES[@]}" up -d --force-recreate --remove-orphans --wait
 
 # 4. 施加资源限制（docker compose 非 swarm 会忽略 deploy.resources，改用 docker update
-#    显式施加 cgroup 限制；资源值在本脚本内维护，为唯一来源；本环境无 background）
+#    显式施加 cgroup 限制；资源值在本脚本内维护，为唯一来源）
+#    runner 容器名从 .env 读取（2026-10-29 拆库启用后 agent3 与 agent2 并存，容器名
+#    加 3 后缀；未配置时回退默认名）。硬编码旧名会把限制误施到 agent2 的同名容器。
 #    runner-api 为轻量 IO 进程给 0.5C/512M；runner-worker 执行负载给 1C/1G。
 #    容器不存在时（未启用 overlay 的分支）docker update 报错忽略。
 echo "[4] 施加容器资源限制..."
+RUNNER_API_CONTAINER="$(grep -E '^AGENT_RUNNER_API_CONTAINER=' .env 2>/dev/null | cut -d= -f2- || true)"
+RUNNER_API_CONTAINER="${RUNNER_API_CONTAINER:-aid-runner-api}"
+RUNNER_WORKER_CONTAINER="$(grep -E '^AGENT_RUNNER_WORKER_CONTAINER=' .env 2>/dev/null | cut -d= -f2- || true)"
+RUNNER_WORKER_CONTAINER="${RUNNER_WORKER_CONTAINER:-aid-runner-worker}"
 docker update --cpus 1 --memory 1G --memory-reservation 512M aid-agent-api3
-for c in aid-runner-api; do
-    docker update --cpus 0.5 --memory 512M --memory-reservation 256M "$c" 2>/dev/null \
-        || echo "  跳过 $c（不存在）"
-done
-docker update --cpus 1 --memory 1G --memory-reservation 512M aid-runner-worker 2>/dev/null \
-    || echo "  跳过 aid-runner-worker（不存在）"
+docker update --cpus 0.5 --memory 512M --memory-reservation 256M "$RUNNER_API_CONTAINER" 2>/dev/null \
+    || echo "  跳过 $RUNNER_API_CONTAINER（不存在）"
+docker update --cpus 1 --memory 1G --memory-reservation 512M "$RUNNER_WORKER_CONTAINER" 2>/dev/null \
+    || echo "  跳过 $RUNNER_WORKER_CONTAINER（不存在）"
 
 # 5. 修复容器内 /tmp 权限（python:3.11-slim 的 /tmp 是 tmpfs 且默认 755，
 #    Dockerfile 的 chmod 不生效，entrypoint 已处理；此处作为运行时兜底）

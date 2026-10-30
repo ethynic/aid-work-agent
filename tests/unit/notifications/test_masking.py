@@ -25,11 +25,13 @@ class TestMaskTenantConfiguration:
     def test_public_target_includes_display(self):
         row = {'target_id': 't', 'installation_ref': 'i', 'binding_version': 1, 'state': 'active',
                'enabled_since': None, 'channel': 'im_webhook', 'provider': 'feishu_bot',
+               'rule_id': None,
                'configuration_encrypted': protected({'webhook_url': 'https://open.feishu.cn/hook/abcd1234'})}
         assert public_target(row)['configuration_display'] == 'https://open.feishu.cn/****1234'
 
     def test_public_target_web_push_no_display(self):
         row = {'target_id': 't', 'installation_ref': 'i', 'binding_version': 1, 'state': 'active',
                'enabled_since': None, 'channel': 'web_push', 'provider': 'web_push',
+               'rule_id': None,
                'configuration_encrypted': protected({'endpoint': 'https://push.example.com'})}
         assert 'configuration_display' not in public_target(row)

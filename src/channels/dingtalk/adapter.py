@@ -322,9 +322,19 @@ class DingTalkAdapter(ChannelAdapter):
             msg_content["download_code"] = file_info.get("downloadCode", "")
             msg_content["file_name"] = file_info.get("fileName", "")
 
-        elif msg_type in ("video", "audio"):
+        elif msg_type == "audio":
+            # 语音消息：转文字由渠道层（channel_routes）调阿里云 ASR 完成，
+            # 对齐 wecom_kf 语音约定（message_type 保持 TEXT）
+            unified_msg_type = MessageType.TEXT
+            media_info = raw_message.get("audio", {})
+            msg_content["text"] = "[语音消息]"
+            msg_content["is_voice"] = True
+            msg_content["download_code"] = media_info.get("downloadCode", "")
+            msg_content["file_name"] = media_info.get("fileName", "")
+
+        elif msg_type == "video":
             unified_msg_type = MessageType.FILE
-            media_info = raw_message.get(msg_type, {})
+            media_info = raw_message.get("video", {})
             msg_content["download_code"] = media_info.get("downloadCode", "")
             msg_content["file_name"] = media_info.get("fileName", "")
 

@@ -16,6 +16,8 @@
 
 ## 1. 适用范围与约束层级
 
+2026-10-30 W15服务端升级兼容：配置指纹仍写v3，恢复精确兼容master v1及分支v2；招聘profile保留master原配置，最新迁移水位后幂等补齐既有结构。仅服务端内部兼容，不改Device/Host/Provider wire、旧BOSS工具或执行权限，不要求客户机因此升级；契约仍2.11。主控唯一写入，独测/CR分别验证旧服务端checkpoint与真实存量库，见[W15计划](../plans/plan-wecom-cli-group-chat-experiment.md#w15-最小修复实施计划2026-10-30)。
+
 2026-10-29 W14.5兼容纠正：现有显式allowed业务工具保留原模型可见性，设备capabilities只决定自动新增候选；旧provider_id继续兼容。Runtime/CLI/native工具名单、Device wire及执行权限不改，无需因此强制升级客户机。复用原registry/excluded/业务投影，详见[兼容计划](../plans/plan-wecom-cli-group-chat-experiment.md#w145-服务端单独升级的旧端兼容复核2026-10-29)；不改变2.11契约版本。
 
 2026-10-29 W14内部装配登记：[计划](../plans/plan-wecom-cli-group-chat-experiment.md#w14-通用runtime业务工具自动装配2026-10-29)。主控唯一维护目录/Assembly/Runtime投影，独立TEST/CR只读。复用已上报capabilities和原actor设备查询，不变Device wire、权限、冻结恢复/unknown、既有域绑定或配置指纹，因此契约仍2.11，不另造协议。候选实现与模型可见性分离；安装即授权原则保持，无新审批/探测门禁。

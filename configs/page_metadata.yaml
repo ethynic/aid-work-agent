@@ -189,6 +189,13 @@ pages:
     icon: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10zM9 12l2 2 4-4"
     domain: tenant-management
     status: published
+  - page_id: notification-rules
+    title: 通知规则
+    description: 配置各业务事件（客户留资/积分提醒/到期提醒/滥用告警）的通知规则：站内信接收人、匹配的客服账号范围与外发渠道目标，含默认外发渠道设置
+    route: /notification-rules
+    icon: "M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0"
+    domain: tenant-management
+    status: developing
 
   - page_id: ai-lead-gen-campaigns
     title: 获客活动

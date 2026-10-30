@@ -1,0 +1,14 @@
+{
+  "commit": "10b57975909968afd0fa4db699f04dead1d8aeaf",
+  "purpose": "Frozen real master inputs for cross-server-upgrade recovery, no client IO",
+  "files": {
+    "runtime_manifest.py": {
+      "source": "src/services/agent_runner/runtime_manifest.py",
+      "sha256": "d7340ef3ab3342672a09176da278e4c1118df8db02715c7f260a2627fe6061f9"
+    },
+    "recruiting-operator/SUBAGENT.md": {
+      "source": "subagents/recruiting-operator/SUBAGENT.md",
+      "sha256": "7e18d339196181a3137beec872cb6514cb9c92f8d39cbf0e08910466962ba5f8"
+    }
+  }
+}

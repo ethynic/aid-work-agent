@@ -175,3 +175,4 @@ test_uploads/office_preview/
 .playwright-mcp/
 deploy/codex_readonly
 .claude/settings.local.json
+ext_package/

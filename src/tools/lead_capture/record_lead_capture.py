@@ -30,9 +30,6 @@ _EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 # 主要联系方式类型派生优先级（同时提供多项时取最靠前的作为 contact_method）
 _CONTACT_METHOD_PRIORITY = ("phone", "landline", "email")
 
-# 联系方式类型 -> 中文标签（通知正文用）
-_CONTACT_LABELS = {"phone": "手机号", "landline": "固定电话", "email": "邮箱"}
-
 
 class RecordLeadCaptureInput(BaseModel):
     phone: Optional[str] = Field(None, description="客户手机号（11 位数字）")
@@ -136,7 +133,9 @@ class RecordLeadCaptureTool(BaseTool):
         kf_account_name = kf_config.get("name", "")
 
         from src.saas.db.lead_capture_db import LeadCaptureDB
+        from src.notifications.lead_producer import publish_lead_captured_in_tx
 
+        kf_config_id = ctx.get("kf_config_id") or ""
         record = LeadCaptureDB.create(
             tenant_id=tenant_id,
             lead_id=lead_id,
@@ -153,6 +152,13 @@ class RecordLeadCaptureTool(BaseTool):
             assigned_to=assigned_to,
             assignee_name=assignee_name,
             session_id=session_id,
+            # 留资同事务发布 lead.captured 事件（规则引擎按租户规则展开通知，
+            # 收编旧邮件单发路径）；发布失败在 DB 层吞掉，不影响留资结果
+            event_publisher=lambda cursor, rec: publish_lead_captured_in_tx(
+                cursor, rec,
+                kf_config_id=kf_config_id,
+                previous_captured_at=previous_captured_at,
+            ),
         )
         if not record:
             return {"success": False, "error": "留资记录保存失败，请稍后重试"}
@@ -176,11 +182,6 @@ class RecordLeadCaptureTool(BaseTool):
         except Exception as e:
             logger.warning(f"留资后更新会话状态失败 session={session_id}: {e}")
 
-        # 通知归属员工（注明上次留资时间，回头客场景）
-        await self._notify_lead_capture(
-            lead_id, tenant_id, assigned_to, assignee_name, contact_method,
-            previous_captured_at=previous_captured_at,
-        )
         logger.info(
             f"客户留资成功: lead_id={lead_id}, tenant={tenant_id}, "
             f"method={contact_method}, open_kfid={open_kfid}"
@@ -232,68 +233,6 @@ class RecordLeadCaptureTool(BaseTool):
                 "hint": "邮箱应包含 @ 和域名，如 name@example.com",
             }
         return None
-
-    @staticmethod
-    async def _notify_lead_capture(
-        lead_id: str,
-        tenant_id: str,
-        assigned_to: Optional[str],
-        assignee_name: Optional[str],
-        contact_method: str,
-        previous_captured_at: Optional[str] = None,
-    ) -> None:
-        """留资成功后即时通知归属员工（复用 notification_service 邮件通知）。
-
-        设计 §4.3：通知侧按服务器时间判断工作时间，非工作时间留资的邮件正文
-        提示次日跟进。员工邮箱取 user_email_settings.email_address，未配置则
-        跳过。通知失败不影响留资结果，仅记录日志。
-
-        previous_captured_at：该客户此前留资时间，非空时在通知正文注明，
-        提示员工结合历史需求跟进（回头客场景）。
-        """
-        try:
-            if not assigned_to:
-                return
-            from src.db.email_credential import EmailCredentialDB
-
-            cred = EmailCredentialDB.get_by_user(assigned_to)
-            email = (cred or {}).get("email_address")
-            if not email:
-                logger.info(f"留资通知跳过（员工未配置邮箱）: assigned_to={assigned_to}")
-                return
-
-            from src.services.notification_service import (
-                NotificationChannel,
-                NotificationMessage,
-                notification_service,
-            )
-
-            now = datetime.now()
-            is_work_time = now.weekday() < 5 and 9 <= now.hour < 18
-            method_label = _CONTACT_LABELS.get(contact_method, contact_method)
-            work_note = "" if is_work_time else "（当前为非工作时间，请于下一个工作日跟进）"
-            previous_note = ""
-            if previous_captured_at:
-                previous_note = (
-                    f"该客户此前已于 {previous_captured_at} 留资，"
-                    f"请结合历史需求跟进。"
-                )
-            msg = NotificationMessage(
-                title=f"[客户留资] 新线索 {lead_id[:12]}",
-                content=(
-                    f"归属员工「{assignee_name or '-'}」：客户已通过{method_label}"
-                    f"方式留资，线索号 {lead_id}，请及时跟进。{previous_note}{work_note}"
-                ),
-                urgency="medium",
-                recipient=email,
-                channel=NotificationChannel.EMAIL,
-                metadata={"lead_id": lead_id, "tenant_id": tenant_id},
-            )
-            ok = await notification_service.send(msg)
-            if not ok:
-                logger.warning(f"留资通知发送失败 lead_id={lead_id}, recipient={email}")
-        except Exception as e:
-            logger.warning(f"留资通知异常 lead_id={lead_id}: {e}")
 
     @staticmethod
     def _resolve_employee_name(assigned_to: Optional[str]) -> Optional[str]:

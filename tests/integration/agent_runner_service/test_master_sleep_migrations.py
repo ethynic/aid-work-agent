@@ -9,7 +9,9 @@ pytestmark = pytest.mark.integration
 COUNTERS = ('total_token_count', 'prompt_tokens', 'completion_tokens', 'cached_input_tokens',
             'agent_iterations', 'duration_ms', 'embedding_tokens', 'asr_calls')
 PATH = Path(__file__).resolve().parents[3] / 'deploy/db_update.yaml'
-MASTER_WATERMARKS = ('2026-10-26 15:00:00', '2026-10-29 12:30:00')
+# This fixture has the latest master notification schema. Earlier watermarks
+# need their actual old schemas, not a forged date on the current schema.
+MASTER_WATERMARK = '2026-10-29 15:50:00'
 
 
 def structures(database):
@@ -21,8 +23,7 @@ def structures(database):
             'idx_lt_inv_wecom_inbound_pending') ORDER BY indexname""")
 
 
-@pytest.mark.parametrize('master_watermark', MASTER_WATERMARKS)
-def test_master_watermark_upgrade_restores_sleep_schema_and_retains_usage(service_database, master_watermark):
+def test_master_watermark_upgrade_restores_sleep_schema_and_retains_usage(service_database):
     from src.db.database import _apply_db_updates, _load_db_update_blocks
     blocks = _load_db_update_blocks(PATH)
     expected = structures(service_database)
@@ -39,15 +40,22 @@ def test_master_watermark_upgrade_restores_sleep_schema_and_retains_usage(servic
             cursor.execute('INSERT INTO chat_records(record_id,total_token_count,credit_cost) VALUES(%s,123,7.25)', (record,))
             cursor.execute('ALTER TABLE _db_update_applied ADD COLUMN IF NOT EXISTS last_datetime TEXT')
             cursor.execute("""INSERT INTO _db_update_applied(id,file_hash,last_datetime) VALUES('db_update','',%s)
-                ON CONFLICT(id) DO UPDATE SET last_datetime=EXCLUDED.last_datetime""", (master_watermark,))
+                ON CONFLICT(id) DO UPDATE SET last_datetime=EXCLUDED.last_datetime""", (MASTER_WATERMARK,))
         assert structures(service_database) != expected
         with service_database.connect() as connection:
             _apply_db_updates(connection, PATH)
+        assert service_database.rows("SELECT last_datetime FROM _db_update_applied WHERE id='db_update'")[0]['last_datetime'] == blocks[-1]['datetime']
         assert structures(service_database) == expected
+        from src.services.agent_runner.repository import RunnerRepository
+        # Ordinary BOSS workers require this schema even with sleep disabled.
+        RunnerRepository(service_database.connect).assert_schema()
         # Prove both ordinary restart and forced logical reapplication are safe.
         for force in (False, True):
             if force:
-                service_database.rows("UPDATE _db_update_applied SET last_datetime=%s WHERE id='db_update'", (master_watermark,))
+                # Reapply this feature's catch-up, not retired notification DDL
+                # whose old seed columns were intentionally dropped by master.
+                service_database.rows("UPDATE _db_update_applied SET last_datetime=%s WHERE id='db_update'",
+                                      (MASTER_WATERMARK,))
             with service_database.connect() as connection:
                 _apply_db_updates(connection, PATH)
             assert structures(service_database) == expected

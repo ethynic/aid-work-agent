@@ -5464,6 +5464,7 @@ CREATE TABLE IF NOT EXISTS notification_targets (
     identity_digest TEXT,
     target_schema_version INTEGER DEFAULT 1,
     configuration_encrypted TEXT,
+    rule_id TEXT,
     binding_version BIGINT DEFAULT 1,
     state TEXT DEFAULT 'active',
     enabled_since TIMESTAMPTZ DEFAULT clock_timestamp(),
@@ -5481,6 +5482,58 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_active_installation
     ON notification_targets(provider,installation_ref) WHERE state='active';
 CREATE INDEX IF NOT EXISTS idx_notification_target_recipient
     ON notification_targets(scope_key,recipient_user_id,channel,provider,state);
+CREATE INDEX IF NOT EXISTS idx_notification_target_rule
+    ON notification_targets(rule_id,state);
+-- 事件级消息（规则引擎，recipient_user_id 为 NULL）：event_key 幂等靠本部分唯一索引
+-- （完整唯一约束含 recipient 列，PostgreSQL 中 NULL 互不相等无法去重）。
+CREATE UNIQUE INDEX IF NOT EXISTS notification_event_identity
+    ON notification_messages(scope_key,producer,event_key) WHERE recipient_user_id IS NULL;
+-- 通知规则引擎：租户级"哪类事件 + 什么层级/条件 + 通知谁 + 发到哪"（设计 §3.1）。
+CREATE TABLE IF NOT EXISTS notification_rules (
+    rule_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    name TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    is_system BOOLEAN NOT NULL DEFAULT FALSE,
+    conditions JSONB NOT NULL DEFAULT '{}',
+    recipient_mode TEXT NOT NULL CHECK (recipient_mode IN ('tenant_admins','kf_assignee')),
+    -- 历史列：db_update 2026-10-29 15:50:00 块已删除（默认渠道概念移除），
+    -- 保留定义仅为重放历史增量块（13:00:00 预置 INSERT 引用本列）
+    include_default_target BOOLEAN NOT NULL DEFAULT FALSE,
+    created_by TEXT,
+    created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+    updated_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+    UNIQUE(tenant_id,event_type,name)
+);
+CREATE INDEX IF NOT EXISTS idx_notification_rules_lookup
+    ON notification_rules(tenant_id,event_type) WHERE enabled;
+COMMENT ON TABLE notification_rules IS 'AID_NOTIFICATION_SCHEMA_V1';
+-- 预置通知规则（is_system）：与 db_update 增量块保持一致
+INSERT INTO notification_rules
+    (rule_id,tenant_id,event_type,name,is_system,conditions,recipient_mode,include_default_target)
+SELECT 'rule_preset_' || md5(t.tenant_id || ':billing.credit_low'), t.tenant_id,
+    'billing.credit_low', '积分提醒', TRUE, '{}'::jsonb, 'tenant_admins', TRUE
+FROM tenants t WHERE t.status = 'active'
+ON CONFLICT (tenant_id,event_type,name) DO NOTHING;
+INSERT INTO notification_rules
+    (rule_id,tenant_id,event_type,name,is_system,conditions,recipient_mode,include_default_target)
+SELECT 'rule_preset_' || md5(t.tenant_id || ':billing.tenant_expiry'), t.tenant_id,
+    'billing.tenant_expiry', '到期提醒', TRUE, '{}'::jsonb, 'tenant_admins', TRUE
+FROM tenants t WHERE t.status = 'active'
+ON CONFLICT (tenant_id,event_type,name) DO NOTHING;
+INSERT INTO notification_rules
+    (rule_id,tenant_id,event_type,name,is_system,conditions,recipient_mode,include_default_target)
+SELECT 'rule_preset_' || md5(t.tenant_id || ':abuse.rule_triggered'), t.tenant_id,
+    'abuse.rule_triggered', '滥用告警', TRUE, '{}'::jsonb, 'tenant_admins', TRUE
+FROM tenants t WHERE t.status = 'active'
+ON CONFLICT (tenant_id,event_type,name) DO NOTHING;
+INSERT INTO notification_rules
+    (rule_id,tenant_id,event_type,name,is_system,conditions,recipient_mode,include_default_target)
+SELECT 'rule_preset_' || md5(t.tenant_id || ':lead.captured'), t.tenant_id,
+    'lead.captured', '留资通知', TRUE, '{"scope": "channel"}'::jsonb, 'kf_assignee', TRUE
+FROM tenants t WHERE t.status = 'active'
+ON CONFLICT (tenant_id,event_type,name) DO NOTHING;
 CREATE TABLE IF NOT EXISTS notification_preferences (
     scope_key TEXT,
     tenant_id TEXT,
@@ -5565,12 +5618,25 @@ BEGIN
         ('notification_targets','identity_digest','text'),
         ('notification_targets','target_schema_version','int4'),
         ('notification_targets','configuration_encrypted','text'),
+        ('notification_targets','rule_id','text'),
         ('notification_targets','binding_version','int8'),
         ('notification_targets','state','text'),
         ('notification_targets','enabled_since','timestamptz'),
         ('notification_targets','verified_at','timestamptz'),
         ('notification_targets','created_at','timestamptz'),
         ('notification_targets','updated_at','timestamptz'),
+        ('notification_rules','rule_id','text'),
+        ('notification_rules','tenant_id','text'),
+        ('notification_rules','event_type','text'),
+        ('notification_rules','name','text'),
+        ('notification_rules','enabled','bool'),
+        ('notification_rules','is_system','bool'),
+        ('notification_rules','conditions','jsonb'),
+        ('notification_rules','recipient_mode','text'),
+        ('notification_rules','include_default_target','bool'),
+        ('notification_rules','created_by','text'),
+        ('notification_rules','created_at','timestamptz'),
+        ('notification_rules','updated_at','timestamptz'),
         ('notification_preferences','scope_key','text'),
         ('notification_preferences','tenant_id','text'),
         ('notification_preferences','recipient_user_id','text'),

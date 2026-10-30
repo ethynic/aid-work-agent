@@ -1036,6 +1036,8 @@ const adminSubMenuItems = computed(() => {
     { path: `${base}/behavior-logs`, label: '行为日志', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4' },
     // 防滥用中心：盾牌+对勾
     { path: `${base}/abuse-center`, label: '防滥用中心', icon: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10zM9 12l2 2 4-4' },
+    // 通知规则：铃铛
+    { path: `${base}/notification-rules`, label: '通知规则', icon: 'M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 01-3.4 0' },
   ]
 })
 

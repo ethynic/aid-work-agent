@@ -4225,7 +4225,6 @@
     );
     CREATE INDEX IF NOT EXISTS idx_bs_ailg_replies_campaign
         ON bs_ai_lead_gen_replies(campaign_id);
-
 - datetime: "2026-10-27 17:32:37"
   remark: "WeCom未知入站恢复仅扫描当前待处理读取，避免长期任务反复扫描已完成历史"
   statements: |
@@ -4311,8 +4310,85 @@
   remark: "留资口径调整：bs_lead_capture_leads 新增 other_contact JSONB 列存固定电话/邮箱（逐条加密），contact_method 语义扩展为 phone|landline|email（qr 为历史值不再新写），qr 发码拆分到独立工具 send_advisor_qr"
   statements: |
     ALTER TABLE bs_lead_capture_leads ADD COLUMN IF NOT EXISTS other_contact JSONB;
+- datetime: "2026-10-29 13:00:00"
+  remark: "通知规则引擎：notification_rules 表（含 include_default_target）+ notification_targets.rule_id + 事件消息部分唯一索引 + 预置规则四条（管理员三事件与留资）"
+  statements: |
+    CREATE TABLE IF NOT EXISTS notification_rules (
+        rule_id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        name TEXT NOT NULL,
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        is_system BOOLEAN NOT NULL DEFAULT FALSE,
+        conditions JSONB NOT NULL DEFAULT '{}',
+        recipient_mode TEXT NOT NULL CHECK (recipient_mode IN ('tenant_admins','kf_assignee')),
+        include_default_target BOOLEAN NOT NULL DEFAULT FALSE,
+        created_by TEXT,
+        created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+        updated_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+        UNIQUE(tenant_id,event_type,name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_notification_rules_lookup
+        ON notification_rules(tenant_id,event_type) WHERE enabled;
+    ALTER TABLE notification_targets ADD COLUMN IF NOT EXISTS rule_id TEXT;
+    CREATE INDEX IF NOT EXISTS idx_notification_target_rule
+        ON notification_targets(rule_id,state);
+    CREATE UNIQUE INDEX IF NOT EXISTS notification_event_identity
+        ON notification_messages(scope_key,producer,event_key) WHERE recipient_user_id IS NULL;
+    COMMENT ON TABLE notification_rules IS 'AID_NOTIFICATION_SCHEMA_V1';
+    INSERT INTO notification_rules
+        (rule_id,tenant_id,event_type,name,is_system,conditions,recipient_mode,include_default_target)
+    SELECT 'rule_preset_' || md5(t.tenant_id || ':billing.credit_low'), t.tenant_id,
+        'billing.credit_low', '积分提醒', TRUE, '{}'::jsonb, 'tenant_admins', TRUE
+    FROM tenants t WHERE t.status = 'active'
+    ON CONFLICT (tenant_id,event_type,name) DO NOTHING;
+    INSERT INTO notification_rules
+        (rule_id,tenant_id,event_type,name,is_system,conditions,recipient_mode,include_default_target)
+    SELECT 'rule_preset_' || md5(t.tenant_id || ':billing.tenant_expiry'), t.tenant_id,
+        'billing.tenant_expiry', '到期提醒', TRUE, '{}'::jsonb, 'tenant_admins', TRUE
+    FROM tenants t WHERE t.status = 'active'
+    ON CONFLICT (tenant_id,event_type,name) DO NOTHING;
+    INSERT INTO notification_rules
+        (rule_id,tenant_id,event_type,name,is_system,conditions,recipient_mode,include_default_target)
+    SELECT 'rule_preset_' || md5(t.tenant_id || ':abuse.rule_triggered'), t.tenant_id,
+        'abuse.rule_triggered', '滥用告警', TRUE, '{}'::jsonb, 'tenant_admins', TRUE
+    FROM tenants t WHERE t.status = 'active'
+    ON CONFLICT (tenant_id,event_type,name) DO NOTHING;
+    INSERT INTO notification_rules
+        (rule_id,tenant_id,event_type,name,is_system,conditions,recipient_mode,include_default_target)
+    SELECT 'rule_preset_' || md5(t.tenant_id || ':lead.captured'), t.tenant_id,
+        'lead.captured', '留资通知', TRUE, '{"scope": "channel"}'::jsonb, 'kf_assignee', TRUE
+    FROM tenants t WHERE t.status = 'active'
+    ON CONFLICT (tenant_id,event_type,name) DO NOTHING;
 - datetime: "2026-10-29 13:46:35"
   remark: "合并最新master补齐持续Runner结构：兼容已越过分支休眠及WeCom待处理索引迁移的水位"
+  statements: |
+    ALTER TABLE agent_runners ADD COLUMN IF NOT EXISTS wake_at TIMESTAMPTZ;
+    CREATE INDEX IF NOT EXISTS idx_agent_runners_wake ON agent_runners(wake_at,runner_id)
+        WHERE status='waiting' AND wake_at IS NOT NULL;
+    ALTER TABLE chat_records
+        ALTER COLUMN total_token_count TYPE BIGINT,
+        ALTER COLUMN prompt_tokens TYPE BIGINT,
+        ALTER COLUMN completion_tokens TYPE BIGINT,
+        ALTER COLUMN cached_input_tokens TYPE BIGINT,
+        ALTER COLUMN agent_iterations TYPE BIGINT,
+        ALTER COLUMN duration_ms TYPE BIGINT,
+        ALTER COLUMN embedding_tokens TYPE BIGINT,
+        ALTER COLUMN asr_calls TYPE BIGINT;
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id ON chat_messages(session_id, id);
+    CREATE INDEX IF NOT EXISTS idx_lt_inv_wecom_inbound_pending
+        ON local_tool_invocations (tenant_id, user_id, session_id,
+            (business_ref->>'runner_id'), (business_ref->>'execution_id'), device_id, created_at, id)
+        WHERE provider_key='wecom' AND business_kind='agent_runner'
+            AND state IN ('succeeded','unknown') AND tool_name IN ('wecom_read_session','wecom_read_sessions')
+            AND result_json->'_wecom_inbound'->>'version'='1'
+            AND jsonb_array_length(result_json->'_wecom_inbound'->'pending')>0;
+- datetime: "2026-10-29 15:50:00"
+  remark: "通知规则页面改版：删除「默认渠道」概念——notification_rules 去掉 include_default_target 列；租户级事件外发改走启用规则的规则级 target（存量 rule_id IS NULL 目标保留供任务通知，不再参与规则外发）"
+  statements: |
+    ALTER TABLE notification_rules DROP COLUMN IF EXISTS include_default_target;
+- datetime: "2026-10-30 10:00:00"
+  remark: "W15升级兼容：为已完成最新master通知规则迁移的存量库补齐持续Runner结构"
   statements: |
     ALTER TABLE agent_runners ADD COLUMN IF NOT EXISTS wake_at TIMESTAMPTZ;
     CREATE INDEX IF NOT EXISTS idx_agent_runners_wake ON agent_runners(wake_at,runner_id)

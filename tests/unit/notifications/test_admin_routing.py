@@ -11,7 +11,6 @@ from src.notifications.contracts import AdapterCapabilities, Subject
 from src.notifications.repository import (
     NotificationRepository,
     protected,
-    tenant_installation_ref,
 )
 
 
@@ -62,7 +61,7 @@ def tenant_target():
     return {'target_id': 'target_1', 'scope_key': 'tenant:t1', 'tenant_id': 't1',
             'recipient_user_id': None, 'state': 'active', 'binding_version': 1,
             'channel': 'im_webhook', 'provider': 'feishu_bot',
-            'installation_ref': tenant_installation_ref('t1'),
+            'installation_ref': 'tenant_a1b2c3d4e5',
             'enabled_since': datetime(2026, 1, 1), 'preference_enabled': None,
             'preference_since': None, 'event_types': None}
 
@@ -114,8 +113,9 @@ def global_billing_message(admin_id, event_key):
 
 
 class TestExpandTenantDedupe:
-    def _run_expand(self, messages, dedupe_hits, user_row=None):
-        """dedupe_hits: 去重查询依次返回的假值列表（None=无已有投递）。"""
+    def _run_expand(self, messages, dedupe_hits, user_row=None, enabled_rules=('rule_preset_1',)):
+        """dedupe_hits: 去重查询依次返回的假值列表（None=无已有投递）；
+        enabled_rules: 租户事件规则门控查询返回的启用规则（空列表=外发停发）。"""
         repo = NotificationRepository.__new__(NotificationRepository)
         repo.config = NotificationsConfig(batch_size=10)
         registry = MagicMock()
@@ -134,6 +134,8 @@ class TestExpandTenantDedupe:
                                                        'role': 'tenant_admin', 'status': 'active'}
             elif "FROM tenants WHERE tenant_id=%s AND status='active'" in sql:
                 cursor.fetchone = lambda: {'ok': 1}
+            elif 'SELECT rule_id FROM notification_rules' in sql:
+                cursor.fetchall = lambda: [{'rule_id': r} for r in enabled_rules]
             elif 'FROM notification_targets' in sql:
                 state['targets_sql'] = sql
                 state['targets_params'] = params
@@ -208,7 +210,7 @@ class TestExpandTenantDedupe:
         assert 't.tenant_id IS NOT NULL' in state['targets_sql']
 
 
-class TestRegisterTenantTarget:
+class TestRegisterRuleTarget:
     def test_platform_admin_without_tenant_rejected(self):
         from src.notifications.contracts import NotificationError
         repo = NotificationRepository.__new__(NotificationRepository)
@@ -220,6 +222,7 @@ class TestRegisterTenantTarget:
         class Body:
             channel = 'im_webhook'
             provider = 'feishu_bot'
+            rule_id = 'rule_1'
 
             class configuration:
                 @staticmethod
@@ -227,7 +230,7 @@ class TestRegisterTenantTarget:
                     return {}
 
         with pytest.raises(NotificationError, match='NOTIFICATION_TENANT_REQUIRED'):
-            repo.register_tenant_target(Subject('p1', None), Body())
+            repo.register_rule_target(Subject('p1', None), Body())
 
 
 class TestPrepareSendTenantTarget:

@@ -1,5 +1,7 @@
 # AgentRunner 通用持久化休眠与自动唤醒设计
 
+2026-10-30 W15升级兼容收尾：维持当前配置指纹v3，精确兼容master的原v1及分支v2，不放宽真实配置漂移；内置招聘profile保持master原文件，避免WeCom改动阻断存量BOSS任务。最新master迁移水位已至10月29日15:50，补齐DDL必须作为更晚的幂等新块追加，不能重写旧块或只验证fresh库。无Device/Host/公开API字段变化，开发主控唯一维护，独立测试/CR分别验证。实施与证据见[W15计划](../plans/plan-wecom-cli-group-chat-experiment.md#w15-最小修复实施计划2026-10-30)。
+
 2026-10-26最新master整合兼容补记：master增量迁移已推进到10月26日，原10月22日sleep/BIGINT/history索引块在存量环境会被单一last_datetime跳过；保留历史不改，追加17:00同结构幂等补齐块，正常启动/强制重放均须保持已有用量及积分行。fresh init结构不变，不修改迁移框架。实际验证、未提交合并状态及新旧Runner语义处理统一见[WeCom整合计划](../plans/plan-wecom-cli-group-chat-experiment.md#最新master与runtime核查2026-10-26用户追问后补核)，不能用全新库通过代替master水位升级证明。
 
 > 日期：2026-10-22；状态：本地开发、独立测试及CodeReview完成，master已整合；尚未提交或部署。最新修复、独立验证及历史Windows环境问题处理见开发计划第17节，未宣称真实企微多天验收通过。
