@@ -7,6 +7,7 @@
 
 | 故障主题 | 文档 | 摘要 |
 |---------|------|------|
+| Runner 终态事务永久失败致 30 秒重试风暴（243 生产） | [runner-finalize-orphan-retry-storm-20261030.md](runner-finalize-orphan-retry-storm-20261030.md) | 2026-10-30 周巡检发现：会话与 chat_records 被删致 `write_history` 抛 `FINALIZE_SESSION_OWNER_CHANGED`，finalizing 行的异常分支只调 no-op 的 `interrupt_attempt`，租约过期后被反复领取、每 30 秒重试一次累计 1809 次；当日 14:00 事务终结止血，修复 = finalizer 有限重试（5 次）+ 孤儿放弃（释放 claim/回执/租约），待发版 |
 | 数字员工实例入口普通用户消息 403 与数据分析「没有数据」误报 | [tenant-instance-agent-403-incident-20261026.md](tenant-instance-agent-403-incident-20261026.md) | 2026-10-26 agent2：授权按实例 ID 写 user_agent_permissions、runner `_profile` 归并 base 后查询致 PROFILE_FORBIDDEN 403（修复=权限查询兼容实例/base 双 ID，已开发待提交）；10-23「没有数据」为主智能体会话按名单看不到受限数据表（设计内），403 修复后经实例入口即正常 |
 | 诺度wecom_kf客户发消息红色感叹号（腾讯侧未收消息） | [wecom-kf-customer-send-failure-20261025.md](wecom-kf-customer-send-failure-20261025.md) | 2026-10-25 15:00起：我方回调/sync/出站全正常，客户消息未进腾讯系统（10-25 14:38后仅enter_session无text/voice）；servicer/list对全部kfid报95000，疑企微后台「通过API管理」被关；排查中待诺度管理员反馈 |
 | 发版强杀残留 Redis 锁致后台调度器全部永久罢工（宏陶商城同步停摆 44h） | [scheduler-ghost-lock-stall-20261021.md](scheduler-ghost-lock-stall-20261021.md) | 2026-10-21 生产发版：旧容器 7s 内被强杀未释放调度锁，新容器启动一次性抢锁失败即永久放弃，hongtao_shop/wechat_mp/腾讯文档/主定时任务 4 个调度器全灭且不自愈；修复 = 抢锁失败仍启动驱动循环自愈接管 |

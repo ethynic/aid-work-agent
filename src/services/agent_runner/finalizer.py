@@ -16,6 +16,15 @@ from .application_public_projection import project_terminal_public_state
 
 
 class RunnerFinalizer:
+    # Deterministic failures: retrying the same transaction can never succeed
+    # (the session/record row is gone or re-owned, the tenant no longer exists,
+    # or usage cost would regress). Abandon immediately instead of burning
+    # FINALIZE_MAX_FAILURES lease cycles.
+    FINALIZE_DETERMINISTIC_ERRORS = frozenset({
+        'FINALIZE_SESSION_OWNER_CHANGED', 'FINALIZE_CLAIM_OWNER_CHANGED',
+        'RECORD_OWNER_MISMATCH', 'BILLING_TENANT_NOT_FOUND', 'USAGE_COST_REGRESSION'})
+    FINALIZE_MAX_FAILURES = 5
+
     def __init__(self, connection_factory=get_db_connection):
         self.connection_factory = connection_factory
 
@@ -107,6 +116,91 @@ class RunnerFinalizer:
             runner = EventRepository.notify_in_tx(cursor,previous,after=runner)
             conn.commit()
         self._after_commit(runner, delta)
+        return runner
+
+    def finalize_failed(self, attempt, error):
+        """Terminal exit for a finalizing row whose transaction keeps failing.
+
+        A finalizing row is re-leased forever otherwise: interrupt is a no-op for
+        it and every retry raises the same error. Retry in place up to
+        FINALIZE_MAX_FAILURES, then abandon to a terminal state so the claim,
+        receipts and leases are released.
+        """
+        cause = str(error)
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            try:
+                runner = lock_runner(cursor, attempt.runner_id, attempt)
+            except CheckpointFailure:
+                # Lost ownership: another attempt owns the row now.
+                return None
+            if runner['status'] != 'finalizing':
+                # Nothing committed here: the caller keeps its normal path.
+                return None
+            checkpoint = runner.get('checkpoint') or {}
+            failures = int(checkpoint.get('finalize_failures') or 0) + 1
+            if cause in self.FINALIZE_DETERMINISTIC_ERRORS or failures >= self.FINALIZE_MAX_FAILURES:
+                return self._abandon(cursor, conn, attempt, runner, cause)
+            checkpoint = {**checkpoint,'finalize_failures':failures,'last_finalize_error':cause}
+            cursor.execute('''UPDATE agent_runners SET checkpoint=%s::jsonb,revision=revision+1,
+                view_revision=view_revision+1,updated_at=clock_timestamp()
+                WHERE runner_id=%s AND attempt=%s''',
+                (capped_checkpoint_dumps(checkpoint),runner['runner_id'],attempt.number))
+            conn.commit()
+            logger.warning('AgentRunner finalize retry runner={} attempt={} failures={} error={}',
+                           runner['runner_id'],attempt.number,failures,cause)
+            return runner
+
+    def _abandon(self, cursor, conn, attempt, runner, cause):
+        previous = runner
+        pending = (runner.get('checkpoint') or {}).get('pending_finalization') or {}
+        # A completed run whose history could not be committed is not a
+        # completed run from the public record's point of view; only an
+        # explicit user cancellation keeps its status.
+        status = 'cancelled' if pending.get('status') == 'cancelled' else 'failed'
+        result = {'status':status,'output':pending.get('output') or '',
+                  'images':pending.get('images') or [],
+                  'error_code':pending.get('error_code') or cause,'credit_cost':0.0}
+        from .control_repository import close_pending_controls
+        close_pending_controls(cursor,runner['runner_id'],'CONTROL_EXECUTION_CLOSED')
+        cursor.execute('DELETE FROM agent_runner_session_claims WHERE owner_runner_id=%s',(runner['runner_id'],))
+        cursor.execute('''UPDATE agent_runner_usage_receipts SET applied=TRUE,applied_at=clock_timestamp()
+            WHERE runner_id=%s AND NOT applied''',(runner['runner_id'],))
+        # The projection reads related rows; isolate it so a failure cannot
+        # abort this terminal transaction.
+        cursor.execute('SAVEPOINT finalize_abandon')
+        try:
+            snapshot,_ = project_terminal_public_state(cursor,runner,result)
+            cursor.execute('RELEASE SAVEPOINT finalize_abandon')
+        except Exception:
+            cursor.execute('ROLLBACK TO SAVEPOINT finalize_abandon')
+            logger.opt(exception=True).warning('AgentRunner abandon projection failed runner={}',runner['runner_id'])
+            snapshot = dict(runner.get('public_snapshot') or {})
+            snapshot.pop('browserAssistance',None)
+        checkpoint = {**(runner.get('checkpoint') or {}),
+                      'released_attempt':release_proof(attempt,status,'finalized'),
+                      'finalize_abandoned':cause}
+        cursor.execute('''UPDATE agent_runners SET status=%s,result=%s::jsonb,settlement_status='settled',
+            checkpoint=%s::jsonb,public_snapshot=%s::jsonb,
+            worker_id=NULL,lease_until=NULL,pause_requested=FALSE,resume_control_id=NULL,
+            revision=revision+1,view_revision=view_revision+1,
+            updated_at=clock_timestamp(),finished_at=clock_timestamp() WHERE runner_id=%s RETURNING *''',
+            (status,json.dumps(result,ensure_ascii=False),capped_checkpoint_dumps(checkpoint),
+             capped_snapshot_dumps(snapshot),runner['runner_id']))
+        runner = decoded(cursor.fetchone())
+        # Event fan-out is not terminal authority: keep it from rolling back
+        # the only exit this row will get.
+        cursor.execute('SAVEPOINT finalize_abandon_event')
+        try:
+            runner = EventRepository.notify_in_tx(cursor,previous,after=runner)
+            cursor.execute('RELEASE SAVEPOINT finalize_abandon_event')
+        except Exception:
+            cursor.execute('ROLLBACK TO SAVEPOINT finalize_abandon_event')
+            logger.opt(exception=True).warning('AgentRunner abandon event failed runner={}',previous['runner_id'])
+        conn.commit()
+        logger.error('AgentRunner finalize abandoned runner={} attempt={} status={} error={}',
+                     previous['runner_id'],attempt.number,status,cause)
+        self._after_commit(runner, None)
         return runner
 
     def settle_pending_usage(self, runner_id):

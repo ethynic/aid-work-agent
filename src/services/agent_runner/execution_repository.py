@@ -35,6 +35,11 @@ def released_by(row, attempt):
             and blocked.get('error_code') in {'LOCAL_CANCEL_ACK_PENDING',
                 'LOCAL_CANCEL_EFFECT_VERIFICATION_REQUIRED','LOCAL_CANCEL_DEADLINE_VERIFICATION_REQUIRED'})
     if status in {'completed','failed','cancelled'} and reason == 'finalized':
+        if checkpoint.get('finalize_abandoned'):
+            # 放弃路径归一化了 result（output/images or 兜底、error_code 取本次
+            # 错误码、completed 降级 failed），不满足与 pending 的逐键比较；
+            # 证明字段（attempt/worker/status）已在上文核验，行已终态即认可释放。
+            return True
         pending = checkpoint.get('pending_finalization')
         result = row.get('result')
         return (isinstance(pending,dict) and pending.get('status') == status

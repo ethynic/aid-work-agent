@@ -626,23 +626,29 @@ class RunnerWorker:
                         collector.on_llm_failure(fact)
                 except Exception as trace_error:
                     logger.debug('AgentRunner llm failure span skipped kind={}',type(trace_error).__name__)
-            # Storage/transport failures preserve the most recent committed facts;
-            # a finalizing row retries its transaction and never reenters the Loop.
+            # Storage/transport failures preserve the most recent committed facts.
+            # A finalizing row has no other terminal exit (interrupt is a no-op
+            # for it), so the finalizer owns the retry/abandon decision; without
+            # it the row is re-leased every lease expiry and stops forever.
             try:
-                if (getattr(error,'authoritative_storage_failure',False) or scope.fatal_error is not None
-                        or row['status']=='finalizing' or had_active_children):
-                    await self._preserve_duration(attempt, control)
-                    await asyncio.to_thread(self.executions.interrupt_attempt,attempt,
-                        **({'public_verification':error.public_verification} if getattr(error,'public_verification',None) else {}))
-                else:
-                    scope.check()
-                    state = runtime.state if runtime else None
-                    result = execution_result(state,'failed','EXECUTION_FAILED')
-                    result['duration_ms'] = int((time.monotonic()-started)*1000)
-                    result['assistant_metadata'] = copy.deepcopy(control.envelope.get('presentation') or {})
-                    await control.stage(state,result)
-                    scope.check()
-                    await asyncio.to_thread(self.finalizer.finalize,attempt)
+                settled = None
+                if row['status']=='finalizing' or getattr(error,'authoritative_storage_failure',False):
+                    settled = await asyncio.to_thread(self.finalizer.finalize_failed,attempt,error)
+                if settled is None:
+                    if (getattr(error,'authoritative_storage_failure',False) or scope.fatal_error is not None
+                            or row['status']=='finalizing' or had_active_children):
+                        await self._preserve_duration(attempt, control)
+                        await asyncio.to_thread(self.executions.interrupt_attempt,attempt,
+                            **({'public_verification':error.public_verification} if getattr(error,'public_verification',None) else {}))
+                    else:
+                        scope.check()
+                        state = runtime.state if runtime else None
+                        result = execution_result(state,'failed','EXECUTION_FAILED')
+                        result['duration_ms'] = int((time.monotonic()-started)*1000)
+                        result['assistant_metadata'] = copy.deepcopy(control.envelope.get('presentation') or {})
+                        await control.stage(state,result)
+                        scope.check()
+                        await asyncio.to_thread(self.finalizer.finalize,attempt)
             except Exception:
                 pass
             logger.opt(exception=True).error('AgentRunner attempt stopped runner={}',row['runner_id'])
