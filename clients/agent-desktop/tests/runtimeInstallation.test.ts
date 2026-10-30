@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -100,9 +101,103 @@ test('installer generation changes invalidate previously registered executable t
     writeFileSync(path.resolve(path.dirname(f.options.hostEntry), '../../../runtime-installation.id'), secondId)
     const second = await prepareRuntimeInstallation(f.options)
     assert.equal(second.home, secondHome); assert.equal(f.stops, 2)
-    await assert.rejects(selectRuntimeConnection(f.options, first.home), /登记无效/)
+    await assert.rejects(selectRuntimeConnection(f.options, path.join(f.root, 'foreign-home')), /登记无效/)
   } finally { f.clean() }
 })
+test('compatible binary replacement retains the same home, device, plugin state and unacknowledged results', async () => {
+  const f = fixture(); let migrations = 0
+  f.options.migratePlugins = async () => { migrations++ }
+  try {
+    const first = await prepareRuntimeInstallation(f.options)
+    const facts = new Map([
+      ['config.json', JSON.stringify({ ...f.config, providers: { 'boss-recruiting': { entry: 'retained-boss-entry' } }, sessionTasks: true })],
+      ['credentials.bin', await f.protect('a'.repeat(64))], ['plugins/inventory.json', '{"version":1,"records":[]}'],
+      ['journal/old.jsonl', '{"invocation_id":"old","phase":"may_have_started"}'], ['result-outbox/old.json', '{"invocation_id":"old","effect":"unknown"}'],
+    ])
+    for (const [name, value] of facts) {
+      const file = path.join(first.home, name); mkdirSync(path.dirname(file), { recursive: true }); writeFileSync(file, value)
+    }
+    writeFileSync(f.options.hostEntry, 'trusted newer binary')
+    const upgraded = await prepareRuntimeInstallation(f.options)
+    assert.equal(upgraded.home, first.home); assert.equal(upgraded.installationId, first.installationId)
+    assert.equal(upgraded.fresh, false); assert.equal(f.stops, 1); assert.equal(migrations, 1)
+    for (const [name, value] of facts) assert.equal(readFileSync(path.join(upgraded.home, name), 'utf8'), value)
+  } finally { f.clean() }
+})
+test('another installer account changing the machine-wide stamp does not migrate this user paired home', async () => {
+  const f = fixture()
+  try {
+    const first = await prepareRuntimeInstallation(f.options)
+    mkdirSync(path.join(first.home, 'result-outbox'))
+    writeFileSync(path.join(first.home, 'result-outbox/old.json'), 'original unacknowledged result')
+    writeFileSync(path.resolve(path.dirname(f.options.hostEntry), '../../../runtime-installation.id'), randomUUID())
+    const updated = await prepareRuntimeInstallation(f.options)
+    assert.equal(updated.home, first.home)
+    assert.equal(updated.installationId, first.installationId)
+    assert.equal(updated.fresh, false)
+    assert.equal(readFileSync(path.join(first.home, 'result-outbox/old.json'), 'utf8'), 'original unacknowledged result')
+    assert.equal(f.stops, 1, 'A compatible stamp change does not run legacy migration or replay old tasks')
+  } finally { f.clean() }
+})
+
+test('default offline identity verification retains locally valid credentials', async t => {
+  const f = fixture()
+  try {
+    writeFileSync(path.join(f.options.legacyHome, 'config.json'), JSON.stringify(f.config))
+    writeFileSync(path.join(f.options.legacyHome, 'credentials.bin'), await f.protect('a'.repeat(64)))
+    t.mock.method(globalThis, 'fetch', async () => { throw new Error('isolated temporary network failure') })
+    const installed = await prepareRuntimeInstallation({ ...f.options, verifyIdentity: undefined })
+    assert.equal(installed.migrated, true, 'A transport failure does not establish that the device was revoked')
+    assert.deepEqual(JSON.parse(readFileSync(path.join(installed.home, 'config.json'), 'utf8')), f.config)
+    assert.equal(await f.options.unprotect(readFileSync(path.join(installed.home, 'credentials.bin'), 'utf8')), 'a'.repeat(64))
+  } finally { f.clean() }
+})
+test('real Finalize and Main preparation share upgrade and explicit clean-reinstall semantics without touching live installation', { skip: process.platform !== 'win32' }, async () => {
+  const id = randomUUID(), root = path.join(os.tmpdir(), `aid-runtime-install-fixture-${id}`)
+  const appData = path.join(root, 'appData'), install = path.join(root, 'install')
+  const f = fixture()
+  try {
+    mkdirSync(appData, { recursive: true }); mkdirSync(install)
+    const options = { ...f.options, userDataPath: path.join(appData, 'aidwork-runtime-app-acceptance'), legacyHome: path.join(appData, 'aidwork-tool-runtime-acceptance'), hostEntry: path.join(install, 'resources/runtime/host/managed-entry.js') }
+    mkdirSync(options.legacyHome); mkdirSync(path.dirname(options.hostEntry), { recursive: true }); writeFileSync(options.hostEntry, 'trusted fixture')
+    writeFileSync(path.join(options.legacyHome, 'config.json'), JSON.stringify(f.config))
+    writeFileSync(path.join(options.legacyHome, 'credentials.bin'), await f.protect('a'.repeat(64)))
+    const script = path.resolve('scripts/runtime-clean-install.ps1')
+    const finalize = (clean = false) => {
+      const installationId = execFileSync(path.join(process.env.WINDIR ?? 'C:/Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+        ['-NoProfile', '-NonInteractive', '-File', script, '-Mode', 'Finalize', '-AppId', options.appId, '-InstallDirectory', install, '-FixtureRegistryId', id, ...(clean ? ['-Clean'] : [])],
+        { encoding: 'utf8', windowsHide: true, timeout: 15_000, env: { ...process.env, APPDATA: appData } }).trim()
+      writeFileSync(path.join(install, 'runtime-installation.id'), installationId)
+      return installationId
+    }
+    const firstId = finalize(), first = await prepareRuntimeInstallation(options)
+    assert.equal(first.home, path.join(options.userDataPath, 'rt'))
+    mkdirSync(path.join(first.home, 'journal')); writeFileSync(path.join(first.home, 'journal/old.jsonl'), 'unknown original send')
+    assert.equal(finalize(), firstId)
+    const upgraded = await prepareRuntimeInstallation(options)
+    assert.equal(upgraded.home, first.home); assert.equal(upgraded.fresh, false)
+    assert.notEqual(finalize(true), firstId)
+    const clean = await prepareRuntimeInstallation(options)
+    assert.notEqual(clean.home, first.home); assert.equal(clean.fresh, true); assert.equal(clean.migrated, true)
+    assert.deepEqual(JSON.parse(readFileSync(path.join(clean.home, 'config.json'), 'utf8')), f.config)
+    assert.equal(readFileSync(path.join(first.home, 'journal/old.jsonl'), 'utf8'), 'unknown original send')
+  } finally { f.clean(); rmSync(root, { recursive: true, force: true }) }
+})
+test('pending registration cannot select a retired short home after an explicit clean replacement', async () => {
+  const f = fixture()
+  try {
+    const original = await prepareRuntimeInstallation(f.options)
+    writeFileSync(path.join(original.home, 'management-secret.bin'), 'corrupt')
+    mkdirSync(path.join(original.home, 'journal'))
+    writeFileSync(path.join(original.home, 'journal/unknown.jsonl'), 'original unknown send')
+    const replacement = await rotateRuntimeConnection(f.options, original.home)
+    await assert.rejects(selectRuntimeConnection(f.options, original.home), /旧连接已被替换/,
+      'An unfinished registration must not undo Clean by selecting its retired short path')
+    assert.equal(await selectRuntimeConnection(f.options, replacement), replacement)
+    assert.equal(readFileSync(path.join(original.home, 'management-secret.bin'), 'utf8'), 'corrupt', 'Retiring a path does not erase old evidence')
+  } finally { f.clean() }
+})
+
 test('corrupt readable pointer is rebuilt using the trusted installation id and protected previous identity', async () => {
   const f = fixture()
   try {

@@ -1,4 +1,5 @@
 ﻿; Installation uses CurrentUser callbacks even when the file-copy section elevates.
+!include "FileFunc.nsh"
 !ifdef BUILD_UNINSTALLER
   !define RUNTIME_GUARD_FUNCTION "un.runtimeCheckAppRunning"
 !else
@@ -258,7 +259,15 @@
       !insertmacro runtimeReadFixture
       InitPluginsDir
       File /oname=$PLUGINSDIR\runtime-clean-install.ps1 "${RUNTIME_CLEAN_INSTALL_SOURCE}"
-      nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\runtime-clean-install.ps1" -Mode "$R7" -AppId "${APP_ID}" -InstallDirectory "$INSTDIR" -FixtureRegistryId "$R6"'
+      StrCpy $R5 ""
+      ${GetParameters} $R2
+      ClearErrors
+      ${GetOptions} $R2 "/Clean" $R3
+      ${IfNot} ${Errors}
+        StrCpy $R5 "-Clean"
+      ${EndIf}
+      ClearErrors
+      nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\runtime-clean-install.ps1" -Mode "$R7" -AppId "${APP_ID}" -InstallDirectory "$INSTDIR" -FixtureRegistryId "$R6" $R5'
       Pop $R0
       Pop $R1
     FunctionEnd

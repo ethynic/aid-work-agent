@@ -1,10 +1,10 @@
 import { execFile } from 'node:child_process'
-import { join } from 'node:path'
+import { join, toNamespacedPath } from 'node:path'
 import { ManagementError, canonicalJson, type RuntimeManifest } from '@aid/local-tool-host-core'
 
 function readOnlyCommand(node: string, root: string, entry: string, args: string[], env: Record<string, string>): Promise<{ code: number; value: Record<string, unknown> }> {
   return new Promise((resolve, reject) => execFile(node, [join(root, entry), ...args],
-    { cwd: root, env, windowsHide: true, shell: false, timeout: 5000, maxBuffer: 2 * 1024 ** 2, encoding: 'utf8' },
+    { cwd: toNamespacedPath(root), env, windowsHide: true, shell: false, timeout: 5000, maxBuffer: 2 * 1024 ** 2, encoding: 'utf8' },
     (error, stdout) => {
       if (error && (typeof error.code !== 'number' || error.killed)) { reject(new ManagementError(9, '插件只读诊断未完成，请检查本机运行条件')); return }
       try {

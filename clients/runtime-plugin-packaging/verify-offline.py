@@ -24,8 +24,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--directory', type=Path, required=True)
     parser.add_argument('--node', type=Path, required=True)
+    parser.add_argument('--trust-roots', type=Path, help='Explicit public publisher trust; defaults to the isolated test package root')
     args = parser.parse_args()
-    trust = args.directory / 'ISOLATED-TEST-TRUST-ROOT.json'
+    trust = args.trust_roots if args.trust_roots is not None else args.directory / 'ISOLATED-TEST-TRUST-ROOT.json'
     summaries = []
     for archive in sorted(args.directory.glob('*.aidplugin.zip')):
         with tempfile.TemporaryDirectory(prefix='aid-offline-smoke-') as temp:

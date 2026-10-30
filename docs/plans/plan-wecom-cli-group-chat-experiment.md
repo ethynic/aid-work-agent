@@ -97,7 +97,7 @@
 
 ### W12本地环境操作与实际边界
 
-配置入口：[deploy/docker-compose.wecom-local.yml](../../deploy/docker-compose.wecom-local.yml)。本机WSL发行版`Ubuntu-22.04`，项目名`aid-wecom-local`，应用镜像复用现有`aid-agent-api:latest`，实际代码挂载`/mnt/c/repos/aid-work-agent-wecom`。代码挂载沿用现有local Compose读写模式，日志/上传/存储独立卷；独立pytest容器另用只读代码及断网/loopback受限网络。原`aid-agent-api`仍挂主工作树、运行8000端口，本轮未替换或重启。
+历史验收使用本机临时`deploy/docker-compose.wecom-local.yml`，不是正式部署配置。2026-10-30按用户要求将master工作区的未跟踪副本移至仓库外`%LOCALAPPDATA%/AidWorkBuild/local-validation/archive/`，不纳入源码；原wecom工作树实际配置及运行容器未改。日常开发沿原8000/master挂载，不另建长期环境；下列命令保留当时记录，不作为当前master启动说明。本机WSL发行版`Ubuntu-22.04`，项目名`aid-wecom-local`，应用镜像复用现有`aid-agent-api:latest`，实际代码挂载`/mnt/c/repos/aid-work-agent-wecom`。代码挂载沿用现有local Compose读写模式，日志/上传/存储独立卷；独立pytest容器另用只读代码及断网/loopback受限网络。原`aid-agent-api`仍挂主工作树、运行8000端口，本轮未替换或重启。
 
 私有配置已保存在Git忽略的`clients/agent-desktop/build/wecom-local/local.env`及`postgres.env`，不能提交、打印展开后的compose config或清理整个目录。前者只含本地新数据库连接、独立服务间令牌及从本机私有配置复用的5项模型配置；后者固定原3项PG参数，不带模型密钥，避免改模型时连带重建PG。未复制业务数据、用户账号、渠道凭据或真实Runtime配对。首次启动阶段未调用真实模型；后续用户指定账号与main真实模型补验见下文，不据此宣称企微业务通过。
 

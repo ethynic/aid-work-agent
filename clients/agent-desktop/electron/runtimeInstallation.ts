@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -72,8 +72,17 @@ function readPointer(root: string): Pointer | null {
   return record
 }
 function assertHome(root: string, home: string, id: string) {
+  if (!path.isAbsolute(home)) throw new Error('Runtime安装目录登记无效')
+  if (same(home, path.join(path.dirname(root), 'rt'))) return
+  if (path.isAbsolute(home) && same(path.dirname(home), path.join(path.dirname(root), 'connections')) && uuid.test(path.basename(home))) return
   const parent = path.join(root, 'generations', id, 'connections')
   if (!path.isAbsolute(home) || !same(path.dirname(home), parent) || !uuid.test(path.basename(home))) throw new Error('Runtime安装目录登记无效')
+}
+function allocateHome(root: string): string {
+  const stable = path.join(path.dirname(root), 'rt')
+  assertDirectory(stable)
+  if (readdirSync(stable).length === 0) return stable
+  const home = path.join(path.dirname(root), 'connections', randomUUID()); assertDirectory(home); return home
 }
 function packageKey(options: RuntimeInstallationOptions): string {
   return createHash('sha256').update(path.resolve(options.hostEntry).toLowerCase()).update(readFileSync(options.hostEntry)).digest('hex')
@@ -159,7 +168,10 @@ async function migratePlugins(options: RuntimeInstallationOptions, source: strin
       bytes = readFileSync(archive)
       const pkg = await verifyOfflinePackage(bytes, trust, platform)
       if (pkg.envelope.provider_id !== record.plugin_id) continue
-    } catch { continue }
+    } catch {
+      console.warn(`[runtime-installation] 插件迁移未完成，请重新安装兼容离线包：${record.plugin_id}`)
+      continue
+    }
     // Import the verified archive into new payloads and fresh metadata. Never
     // copy old payload directories, plugin cache, journals or unfinished ops.
     try {
@@ -169,11 +181,9 @@ async function migratePlugins(options: RuntimeInstallationOptions, source: strin
         if (item) await store.disable(item.installation_id)
       }
     } catch {
-      // A failed plugin transaction must not poison the fresh Host. Keep its
-      // bytes isolated for diagnostics and rebuild an empty current inventory.
-      const pluginRoot = path.join(target, 'plugins')
-      if (existsSync(pluginRoot)) renameSync(pluginRoot, path.join(target, 'plugins-isolated-' + randomUUID()))
-      store = new PluginStore(storeOptions); await store.initialize()
+      // Store commits atomically. Keep packages already migrated successfully;
+      // failure of another plugin cannot remove the customer's working BOSS tools.
+      console.warn(`[runtime-installation] 插件迁移未完成，请重新安装兼容离线包：${record.plugin_id}`)
     }
   }
 }
@@ -192,19 +202,22 @@ export async function prepareRuntimeInstallation(options: RuntimeInstallationOpt
     // generation. Directory/permission/link errors still propagate explicitly.
     current = null
   }
-  if (!id && current) throw new Error('当前文件尚未登记安装代际，请使用正式安装包安装最新版客户端')
   const installDirectory = path.resolve(path.dirname(options.hostEntry), '../../..')
+  if (!id && current) {
+    if (!current.installDirectory || !same(current.installDirectory, installDirectory)) throw new Error('该安装已被新版替代，请打开最新安装的客户端')
+    id = current.id
+  }
   let priorHome = options.legacyHome
   if (id && current && id !== current.id) {
     // Per-machine upgrades can be installed by a different Windows account.
-    // The stamp at the same installed directory is authoritative for that
-    // directory; a different/older checkout cannot adopt the newest pointer.
+    // A new machine-wide stamp must not move another user's existing paired
+    // home. Explicit Clean has already replaced that user's pointer in Finalize.
     if (!existsSync(stamp) || !current.installDirectory || !same(current.installDirectory, installDirectory)) throw new Error('该安装已被新版替代，请打开最新安装的客户端')
-    priorHome = current.home; current = null
+    id = current.id
   }
   if (!current) {
     id ??= randomUUID()
-    const home = path.join(root, 'generations', id, 'connections', randomUUID()); assertDirectory(home)
+    const home = allocateHome(root)
     current = { version: 2, id, home, priorHome, initialized: false, installDirectory }
     atomic(path.join(root, 'current.json'), JSON.stringify(current))
   } else id ??= current.id
@@ -228,7 +241,7 @@ export async function prepareRuntimeInstallation(options: RuntimeInstallationOpt
 export async function rotateRuntimeConnection(options: RuntimeInstallationOptions, currentHome: string): Promise<string> {
   const root = runtimeInstallationMetadata(options), current = readPointer(root)
   if (!current || !same(current.home, currentHome)) throw new Error('连接已被另一个客户端更新，请刷新连接状态')
-  const home = path.join(root, 'generations', current.id, 'connections', randomUUID()); assertDirectory(home)
+  const home = path.join(path.dirname(root), 'connections', randomUUID()); assertDirectory(home)
   await migratePlugins(options, currentHome, home)
   atomic(path.join(root, 'current.json'), JSON.stringify({ ...current, home, priorHome: currentHome, initialized: true }))
   // The current registration may still reference the former home; cleanup
@@ -240,6 +253,7 @@ export async function rotateRuntimeConnection(options: RuntimeInstallationOption
 export async function selectRuntimeConnection(options: RuntimeInstallationOptions, target: string): Promise<string> {
   const root = runtimeInstallationMetadata(options), current = readPointer(root)
   if (!current) throw new Error('当前安装尚未登记')
+  if (current.priorHome && same(target, current.priorHome) && !same(target, current.home)) throw new Error('旧连接已被替换，请继续使用新的连接目录')
   assertHome(root, target, current.id)
   if (!existsSync(target)) throw new Error('已分配的新连接目录不存在')
   assertDirectory(target)
@@ -261,6 +275,13 @@ export async function cleanupRuntimePreviousHome(options: RuntimeInstallationOpt
         if (record.home && same(record.home, source)) return 'retained'
       } catch { return 'retained' }
     }
+    // Retired control state can be removed, but task facts and unacknowledged
+    // results belong to their original identity even after a clean replacement.
+    for (const name of ['journal', 'outbox', 'result-outbox', 'session-tasks', 'process-supervision', 'host-running.json', 'identity-reconciliation.bin', 'invocation-fences']) {
+      if (existsSync(path.join(source, name))) return 'retained'
+    }
+    const replaceable = new Set(['config.json', 'credentials.bin', 'management-secret.bin', 'management-operations.json', 'management-retired-request-keys.bin', 'plugins'])
+    if (readdirSync(source).some(name => !replaceable.has(name))) return 'retained'
     // Absolute exact range verified above. Node rm removes a junction itself;
     // it does not recursively delete targets outside this product-owned root.
     rmSync(source, { recursive: true, force: true })
@@ -270,6 +291,8 @@ export async function cleanupRuntimePreviousHome(options: RuntimeInstallationOpt
 function ownedHome(root: string, source: string, legacy: string): boolean {
   if (!path.isAbsolute(source)) return false
   if (same(source, legacy)) return true
+  if (same(source, path.join(path.dirname(root), 'rt'))) return true
+  if (same(path.dirname(source), path.join(path.dirname(root), 'connections')) && uuid.test(path.basename(source))) return true
   const relative = path.relative(path.join(root, 'generations'), source).split(path.sep)
   return relative.length === 3 && uuid.test(relative[0]!) && relative[1] === 'connections' && uuid.test(relative[2]!)
 }

@@ -311,6 +311,8 @@ selection_ref为不可猜测随机引用，绑定选择它的受信窗口/平台
 
 ### 13.3 凭证、单实例与drain
 
+2026-10-30简化实施补充：本节现有监管/凭据事实保留；“持久事实恢复完成才管理可用”不能扩展为所有旧任务结案后才能安装/重新连接。公共安装壳优先覆盖升级保留原home，真实活动停止与未知事实保留分开处理；不新增另一套恢复监管。S1～S4源码已通过独测/CR，按[Runtime设计第13节](runtime-plugin-host-architecture-design.md#13-安装升级简化目标2026-10-30)与唯一计划执行，完整Desktop不另写实现；本轮未运行安装器或替换客户机。
+
 Windows共享Runtime凭证继续使用既有CurrentUser DPAPI，`credentials.bin`保持CLI格式；Desktop账户safeStorage及hydrate白名单不扩展为设备凭证。管理去重secret由Host侧平台adapter复用既有DPAPI能力，独立存入Runtime home的`management-secret.bin`；随机secret在Host实例保护下首次原子创建，普通重启不轮换。OS保护不可用、文件损坏或用户不符时明确失败，不降级明文、不自动删旧secret；现有operation/journal/outbox仍保留。去重摘要算法与恢复校验由Runtime管理实现负责，本节不另造加密或请求摘要协议。
 
 单实例有三层且用途不同：两产品各自应用锁防重复UI；规范化runtime home/Windows用户范围的Host实例锁覆盖CLI、Runtime App和Desktop的普通领取；原桌面资源锁继续覆盖同交互桌面Provider/后台动作，沿用原锁名。Host锁由core持有至安全退出，不能用Electron产品锁或现有sessionTasks锁替代。旧CLI不支持通用Host锁/管理时，先确认外置占用并显示冲突/迁移状态；无法证明已停止，不开启第二领取者。

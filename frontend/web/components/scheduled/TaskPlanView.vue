@@ -572,8 +572,38 @@ function executionImages(row: RunnerView): ImageRef[] {
 /** 可下载文件（agent 生成的附件）：从 runner 公开快照读取 downloadableFiles */
 interface DownloadableFile { file_id: string; file_name: string; file_size: number; download_url: string; mime_type?: string }
 function executionDownloadableFiles(row: RunnerView): DownloadableFile[] {
+  // 优先从公开快照的 downloadableFiles 读取（新执行的正常路径）
   const files = row.snapshot?.downloadableFiles || row.result?.downloadableFiles
-  return Array.isArray(files) ? files as DownloadableFile[] : []
+  if (Array.isArray(files) && files.length > 0) return files as DownloadableFile[]
+  // 兜底：从 progressMessages 的 tool_result 事件中提取（旧执行的回填路径——
+  // 后端修复前 downloada bleFiles 未捕获，但 progressMessages 里有 result.files）
+  const messages = row.snapshot?.progressMessages || row.result?.assistant_metadata?.progressMessages
+  if (!Array.isArray(messages)) return []
+  const extracted: DownloadableFile[] = []
+  const seen = new Set<string>()
+  for (const msg of messages) {
+    if (msg?.type !== 'tool_result' || msg?.success !== true) continue
+    const result = msg?.result
+    if (!result || typeof result !== 'object') continue
+    const rawFiles = (result as Record<string, unknown>).files
+    if (!Array.isArray(rawFiles)) continue
+    for (const raw of rawFiles) {
+      if (!raw || typeof raw !== 'object') continue
+      const f = raw as Record<string, unknown>
+      const fileId = f.file_id
+      if (typeof fileId !== 'string' || !fileId || seen.has(fileId)) continue
+      if (f.visible === false) continue
+      seen.add(fileId)
+      extracted.push({
+        file_id: fileId,
+        file_name: String(f.file_name || f.download_file_name || '未命名文件'),
+        file_size: Number(f.file_size) || 0,
+        download_url: String(f.download_url || `/api/files/${fileId}/download`),
+        mime_type: String(f.mime_type || ''),
+      })
+    }
+  }
+  return extracted
 }
 /** 执行过程消息（评审 P2-4）：复用 runnerMessages 的公开投影映射 */
 function executionProgress(row: RunnerView) {

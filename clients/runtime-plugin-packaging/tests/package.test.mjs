@@ -30,6 +30,57 @@ test('test packaging refuses known key ids before generating a random signer or 
   }
 })
 
+test('offline verification accepts a stable authorized publisher and keeps production separate from test trust', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'aid-stable-publisher-verification-'))
+  try {
+    const pair = generateKeyPairSync('ed25519')
+    const manifest = { manifest_version: 1, provider_id: 'ai.aidwork.boss-recruiting', provider_version: '1.2.3', tools: [] }
+    const payload = await zipBytes([['runtime-manifest.json', Buffer.from(canonicalize(manifest))]])
+    const built = await createOfflinePackage(payload, manifest, { release_id: 'boss-1.2.3', key_id: 'stable-fixture', created_at: '2026-10-30T00:00:00Z' }, pair.privateKey.export({ format: 'pem', type: 'pkcs8' }))
+    const paths = ['envelope.json', 'payload.zip', 'manifest.json', 'trust.json'].map(file => join(home, file))
+    writeFileSync(paths[0], JSON.stringify(built.envelope)); writeFileSync(paths[1], payload); writeFileSync(paths[2], JSON.stringify(manifest))
+    const root = { key_id: 'stable-fixture', public_key: pair.publicKey.export({ format: 'pem', type: 'spki' }), providers: ['ai.aidwork.boss-recruiting'], test_only: false }
+    const verifier = resolve(dirname(fileURLToPath(import.meta.url)), '../verify-signature.mjs')
+    for (const profile of ['acceptance', 'production']) {
+      writeFileSync(paths[3], JSON.stringify({ schemaVersion: 1, profile, roots: [root] }))
+      const result = spawnSync(process.execPath, [verifier, ...paths], { encoding: 'utf8' })
+      assert.equal(result.status, 0, result.stderr); assert.match(result.stdout, /SIGNATURE_OK/)
+    }
+    for (const [profile, changed] of [['production', { test_only: true }], ['acceptance', { providers: ['ai.aidwork.wecom'] }]]) {
+      writeFileSync(paths[3], JSON.stringify({ schemaVersion: 1, profile, roots: [{ ...root, ...changed }] }))
+      const result = spawnSync(process.execPath, [verifier, ...paths], { encoding: 'utf8' })
+      assert.notEqual(result.status, 0, 'A valid signature cannot broaden its Provider scope or admit test roots into production')
+    }
+  } finally { rmSync(home, { recursive: true, force: true }) }
+})
+
+test('Python offline smoke uses explicit stable public roots and retains the isolated-test default', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'aid-stable-offline-smoke-'))
+  try {
+    const pair = generateKeyPairSync('ed25519')
+    const reported = { provider_id: 'ai.aidwork.boss-recruiting', provider_version: '1.2.3',
+      entrypoint: ['dist/src/cli/index.js', 'mcp', '--stdio'], tools: [], schema_digest: 'fixture', protocol: 'mcp', transport: 'stdio' }
+    const cli = Buffer.from(`console.log(JSON.stringify(process.argv.includes('doctor') ? {success:false,runtime_readiness:{ready:false,reason:'fixture not logged in'}} : ${JSON.stringify(reported)})); if(process.argv.includes('doctor')) process.exitCode=1`)
+    const manifest = { ...reported, manifest_version: 1, distribution: { required_files: [{ path: 'dist/src/cli/index.js', size: cli.length, sha256: sha256(cli) }] } }
+    const payload = await zipBytes([['runtime-manifest.json', Buffer.from(JSON.stringify(manifest))], ['dist/src/cli/index.js', cli]])
+    const built = await createOfflinePackage(payload, manifest, { release_id: 'boss-1.2.3', key_id: 'stable-fixture', created_at: '2026-10-30T00:00:00Z' }, pair.privateKey.export({ format: 'pem', type: 'pkcs8' }))
+    const output = join(home, 'plugins'); mkdirSync(output)
+    writeFileSync(join(output, 'boss-fixture.aidplugin.zip'), built.archive)
+    const root = { key_id: 'stable-fixture', public_key: pair.publicKey.export({ format: 'pem', type: 'spki' }), providers: [reported.provider_id], test_only: false }
+    const stable = join(home, 'public.json')
+    writeFileSync(stable, JSON.stringify({ schemaVersion: 1, profile: 'production', roots: [root] }))
+    const verifier = resolve(dirname(fileURLToPath(import.meta.url)), '../verify-offline.py')
+    for (const explicit of [true, false]) {
+      if (!explicit) writeFileSync(join(output, 'ISOLATED-TEST-TRUST-ROOT.json'), JSON.stringify({ schemaVersion: 1, profile: 'acceptance', roots: [{ ...root, test_only: true }] }))
+      const result = spawnSync('python', [verifier, '--directory', output, '--node', process.execPath, ...(explicit ? ['--trust-roots', stable] : [])], { encoding: 'utf8', timeout: 30_000, windowsHide: true })
+      assert.equal(result.status, 0, result.stderr)
+      const summaries = JSON.parse(result.stdout)
+      assert.equal(summaries[0].payload_unchanged, true, 'A publisher check must never mutate signed payload files')
+      assert.equal(summaries[0].runtime_readiness.ready, false, 'Not logged in remains a successful package smoke with truthful readiness')
+    }
+  } finally { rmSync(home, { recursive: true, force: true }) }
+})
+
 test('required files describes actual relocated payload bytes and rejects directory links', () => {
   const home = mkdtempSync(join(tmpdir(), 'aid-package-files-'))
   try {

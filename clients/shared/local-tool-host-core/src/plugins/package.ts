@@ -120,23 +120,70 @@ export async function readSafeZip(bytes: Buffer, limits = PACKAGE_LIMITS): Promi
   return files
 }
 
+function verifyEnvelope(bytes: Buffer, trust: PublisherTrust[]): ReleaseEnvelope {
+  const envelope = json(bytes) as ReleaseEnvelope
+  if (!envelope || typeof envelope !== 'object' || envelope.envelope_version !== 1 || envelope.package_format !== 'zip'
+    || envelope.signature_algorithm !== 'Ed25519' || typeof envelope.provider_id !== 'string') invalid()
+  if (!(FIRST_PARTY_PROVIDERS as readonly string[]).includes(envelope.provider_id)) throw new ManagementError(3, '当前仅支持第一方CLI离线插件包')
+  const trusted = trust.find(key => key.key_id === envelope.publisher_key_id && key.providers.includes(envelope.provider_id))
+  if (!trusted || typeof envelope.signature !== 'string' || !/^base64:[A-Za-z0-9+/]{86}==$/.test(envelope.signature)) invalid('插件发布者不受信任或签名无效')
+  const publicKey = publisherPublicKey(trusted.public_key)
+  const { signature, ...unsigned } = envelope
+  if (publicKey.asymmetricKeyType !== 'ed25519' || !verify(null, Buffer.from(canonicalJson(unsigned)), publicKey, Buffer.from(signature.slice(7), 'base64'))) invalid('插件签名无效')
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(envelope.provider_release_id)
+    || !semver.valid(envelope.provider_version) || !semver.valid(envelope.min_runtime_version)
+    || (envelope.max_runtime_version !== null && !semver.valid(envelope.max_runtime_version))
+    || !Number.isFinite(Date.parse(envelope.created_at))
+    || !Number.isSafeInteger(envelope.package_size) || envelope.package_size < 1 || envelope.package_size > PACKAGE_LIMITS.archive
+    || !/^sha256:[0-9a-f]{64}$/.test(envelope.package_digest) || !/^sha256:[0-9a-f]{64}$/.test(envelope.manifest_digest)) invalid()
+  return envelope
+}
+
+/** Read only the signed identity of a retained release; never inflate its large payload. */
+export async function readSignedEnvelope(file: string, trust: PublisherTrust[]): Promise<ReleaseEnvelope> {
+  const archive = await new Promise<yauzl.ZipFile>((resolve, reject) => yauzl.open(file,
+    { lazyEntries: true, validateEntrySizes: true, strictFileNames: true }, (error, zip) => error ? reject(error) : resolve(zip!)))
+  let envelope: Buffer | undefined
+  const names = new Set<string>()
+  try {
+    await new Promise<void>((resolve, reject) => {
+      let failed = false
+      const fail = (error: unknown) => { if (!failed) { failed = true; archive.close(); reject(error) } }
+      archive.on('error', fail); archive.on('end', resolve)
+      archive.on('entry', (entry: yauzl.Entry) => {
+        void (async () => {
+          const mode = entry.externalFileAttributes >>> 16
+          if (!['envelope.json', 'payload.zip'].includes(entry.fileName) || names.has(entry.fileName)
+            || entry.generalPurposeBitFlag & 1 || mode & 0o7000
+            || ((mode & 0o170000) !== 0 && (mode & 0o170000) !== 0o100000)) invalid()
+          names.add(entry.fileName)
+          if (entry.fileName === 'envelope.json') {
+            if (entry.uncompressedSize > 65536) invalid()
+            const stream = await new Promise<NodeJS.ReadableStream>((accept, deny) => archive.openReadStream(entry, (error, value) => error ? deny(error) : accept(value!)))
+            const chunks: Buffer[] = []; let size = 0
+            for await (const chunk of stream as AsyncIterable<Buffer>) {
+              size += chunk.length
+              if (size > 65536) { (stream as import('node:stream').Readable).destroy(); invalid() }
+              chunks.push(chunk)
+            }
+            if (size !== entry.uncompressedSize) invalid()
+            envelope = Buffer.concat(chunks)
+          }
+          archive.readEntry()
+        })().catch(fail)
+      })
+      archive.readEntry()
+    })
+    if (names.size !== 2 || !envelope) invalid()
+    return verifyEnvelope(envelope, trust)
+  } finally { archive.close() }
+}
+
 export async function verifyOfflinePackage(bytes: Buffer, trust: PublisherTrust[], platform: PackagePlatform): Promise<VerifiedPackage> {
   try {
     const outer = await readSafeZip(bytes, { ...PACKAGE_LIMITS, entries: 2, expanded: PACKAGE_LIMITS.archive + 65536, file: PACKAGE_LIMITS.archive })
     if (outer.size !== 2 || !outer.has('envelope.json') || !outer.has('payload.zip') || outer.get('envelope.json')!.length > 65536) invalid()
-    const envelope = json(outer.get('envelope.json')!) as ReleaseEnvelope
-    if (!envelope || typeof envelope !== 'object' || envelope.envelope_version !== 1 || envelope.package_format !== 'zip'
-      || envelope.signature_algorithm !== 'Ed25519' || typeof envelope.provider_id !== 'string') invalid()
-    if (!(FIRST_PARTY_PROVIDERS as readonly string[]).includes(envelope.provider_id)) throw new ManagementError(3, '当前仅支持第一方CLI离线插件包')
-    const trusted = trust.find(key => key.key_id === envelope.publisher_key_id && key.providers.includes(envelope.provider_id))
-    if (!trusted || typeof envelope.signature !== 'string' || !/^base64:[A-Za-z0-9+/]{86}==$/.test(envelope.signature)) invalid('插件发布者不受信任或签名无效')
-    const publicKey = publisherPublicKey(trusted.public_key)
-    const { signature, ...unsigned } = envelope
-    if (publicKey.asymmetricKeyType !== 'ed25519' || !verify(null, Buffer.from(canonicalJson(unsigned)), publicKey, Buffer.from(signature.slice(7), 'base64'))) invalid('插件签名无效')
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(envelope.provider_release_id)
-      || !semver.valid(envelope.provider_version) || !semver.valid(envelope.min_runtime_version)
-      || (envelope.max_runtime_version !== null && !semver.valid(envelope.max_runtime_version))
-      || !Number.isFinite(Date.parse(envelope.created_at))) invalid()
+    const envelope = verifyEnvelope(outer.get('envelope.json')!, trust)
     if (envelope.platform !== platform.platform || envelope.arch !== platform.arch
       || semver.lt(platform.runtime_version, envelope.min_runtime_version)
       || (envelope.max_runtime_version !== null && semver.gt(platform.runtime_version, envelope.max_runtime_version))) invalid('插件平台或Runtime版本不兼容')

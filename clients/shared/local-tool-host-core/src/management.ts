@@ -36,6 +36,7 @@ export interface HostAdapter {
   refreshPlugins?(): Promise<void>
   observePlugins?(listener: () => void): void
   preparePluginImport?(params: Record<string, string>, context: { instance_id: string }): Promise<PreparedPluginImport>
+  cleanupPluginImports?(retained: readonly string[]): Promise<void> | void
   canChangePlugins?(method?: string): Promise<boolean>
   mutatePlugin?(method: string, params: Record<string, string>, context: { instance_id: string; prepared_import?: PreparedPluginImport }): Promise<void>
 }
@@ -201,6 +202,7 @@ export class RuntimeHost {
         renameSync(host.markerFile, join(lease.home, `host-interrupted-${randomUUID()}.json`))
         host.state = 'stopped'; host.recovered = true
       }
+      await host.cleanupPluginImports()
       return host
     } catch (error) {
       const failure = error instanceof ManagementError ? error : new ManagementError(11, failureMessage)
@@ -228,11 +230,19 @@ export class RuntimeHost {
     const device = this.startupFailure ? this.recoveryDevice : this.adapter.device()
     return { instance_id: this.instanceId, revision: this.revision, supervisor: this.supervisor,
       state: this.state, connection: this.connection, ...(device ? { device } : {}),
-      ...(['reconciling', 'blocked'].includes(this.state) ? { blocked_reason: this.startupFailure?.message ?? '旧版本异常退出。请正常重启 Windows，Runtime 将自动核对并恢复；配对与执行记录保留。' } : {}) }
+      ...(['reconciling', 'blocked'].includes(this.state) ? { blocked_reason: this.startupFailure?.message ?? '旧执行尚未确认停止，请停止 Runtime 后重试；原配对和任务结果保留，不会重复执行。' } : {}) }
   }
   /** Local composition metadata; deliberately absent from strict H1 state schema. */
   get recoveredAfterInterruption(): boolean { return this.recovered }
   private persist(): void { atomicWrite(this.operationsFile, JSON.stringify(this.operations)) }
+
+  private async cleanupPluginImports(): Promise<void> {
+    if (this.startupFailure || this.closed || this.closing || this.accepting.size) return
+    const retained = Object.values(this.operations).filter(entry => ['running', 'reconciling'].includes(entry.operation.status))
+      .flatMap(entry => entry.prepared_import ? [entry.prepared_import.snapshot_id] : [])
+    try { await this.adapter.cleanupPluginImports?.(retained) }
+    catch { console.warn('插件临时文件未能清理，请检查目录权限；安装和原管理结果仍保留') }
+  }
 
   async request(input: unknown): Promise<Record<string, unknown>> {
     const raw = input as Record<string, unknown> | null
@@ -247,7 +257,6 @@ export class RuntimeHost {
         case 'getState': result = this.getState(); break
         case 'plugins.list': {
           if (this.startupFailure) throw this.startupFailure
-          await this.adapter.refreshPlugins?.()
           const plugins = this.adapter.plugins?.() ?? []
           result = { instance_id: this.instanceId, revision: this.revision, plugins }; break
         }
@@ -277,7 +286,10 @@ export class RuntimeHost {
           }
           const promise = this.acceptMutation(request, key, digest)
           this.accepting.set(key, { digest, promise })
-          try { result = { ...await promise } } finally { this.accepting.delete(key) }
+          try { result = { ...await promise } } finally {
+            this.accepting.delete(key)
+            if (request.method === 'plugins.import') await this.cleanupPluginImports()
+          }
         }
       }
       return { ...base, code: 0, error: '', result }
@@ -319,6 +331,7 @@ export class RuntimeHost {
         }
       }
       this.persist(); this.changed()
+      if (preparedImport) await this.cleanupPluginImports()
     }).catch(() => { this.state = 'blocked'; this.changed() })
     return operation
   }
@@ -342,19 +355,17 @@ export class RuntimeHost {
   private async mutate(request: Request, preparedImport?: PreparedPluginImport): Promise<void> {
     if (this.recoveryRegistered && request.method !== 'stop') throw new ManagementError(11, '重启恢复已登记，已停止接受新执行；请正常重启Windows后继续恢复')
     if (request.method.startsWith('plugins.')) {
+      if (this.state === 'reconciling' && !this.ownsExecution) await this.mutate({ ...request, method: 'stop' })
       if (!['running', 'stopped'].includes(this.state)) throw new ManagementError(11, 'Runtime执行事实尚需核对')
       const restart = this.state === 'running'
       if (restart) await this.mutate({ ...request, method: 'stop' })
       if (this.adapter.canChangePlugins && !(await this.adapter.canChangePlugins(request.method))) {
         if (restart) await this.mutate({ ...request, method: 'start' })
-        throw new ManagementError(11, '旧插件执行或会话任务尚未结案，请先完成原任务核对')
+        throw new ManagementError(11, '插件仍有活动执行，请停止相关执行后重试；原安装已保留')
       }
       let failure: unknown
       try { await this.adapter.mutatePlugin!(request.method, request.params, { instance_id: this.instanceId, ...(preparedImport ? { prepared_import: preparedImport } : {}) }); this.changed() }
-      catch (error) {
-        if (error instanceof ManagementError && error.code === 11) { this.state = 'reconciling'; this.changed(); throw error }
-        failure = error
-      }
+      catch (error) { failure = error }
       // Safe stop closed every execution lane before active release changes. Retained old
       // release files/outbox remain available; restart admits only the new truthful inventory.
       if (restart) await this.mutate({ ...request, method: 'start' })
@@ -394,7 +405,15 @@ export class RuntimeHost {
         break
       case 'stop':
         if (this.state === 'stopped') return
-        if (this.state === 'blocked' || (this.state === 'reconciling' && !this.ownsExecution)) throw new ManagementError(11, '旧执行停止事实尚需核对')
+        if (this.state === 'blocked') throw new ManagementError(11, '执行环境初始化失败，请检查连接或重新安装；原记录已保留')
+        if (this.state === 'reconciling' && !this.ownsExecution) {
+          if (!existsSync(this.markerFile) || !await this.adapter.recoverPreviousExecution?.(readFileSync(this.markerFile, 'utf8'))) {
+            throw new ManagementError(11, '旧执行尚未确认停止，请停止原Runtime后重试；不会重发旧任务')
+          }
+          renameSync(this.markerFile, join(this.lease.home, `host-interrupted-${randomUUID()}.json`))
+          this.state = 'stopped'; this.recovered = true; this.changed()
+          return
+        }
         this.state = 'draining'; this.changed()
         try { await this.adapter.stop() } catch { this.state = 'reconciling'; this.changed(); throw new ManagementError(11, '执行停止事实尚需核对') }
         rmSync(this.markerFile, { force: true })

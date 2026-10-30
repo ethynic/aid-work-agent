@@ -77,8 +77,8 @@ function fixture() {
   const namespace = `Software\\AidWorkRuntimeCleanInstallFixtures\\${id}`
   const baseline = ordinaryRegistryFingerprint(env)
   return { id, root, appData, install, env,
-    run() {
-      const result = spawnSync(installer, ['/S', '/D=' + install], { env, windowsHide: true, encoding: 'utf8', timeout: 120000 })
+    run(args = []) {
+      const result = spawnSync(installer, ['/S', ...args, '/D=' + install], { env, windowsHide: true, encoding: 'utf8', timeout: 120000 })
       assert.equal(result.error, undefined); assert.equal(result.status, 0, 'final NSIS install failed')
       const checks = execFileSync(powershell, ['-NoProfile','-NonInteractive','-Command', `$k=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${namespace}\\BuilderInstall');if(!$k -or $k.GetValue('InstallLocation') -ne '${install}'){exit 2};$k.Dispose();$k=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${namespace}\\BuilderUninstall');if(!$k -or $null -ne $k.GetValue('UninstallString') -or $null -ne $k.GetValue('QuietUninstallString')){exit 3};$k.Dispose();'ISOLATED_BUILDER_REGISTRY_PASS'`], { env, windowsHide:true, encoding:'utf8' }).trim()
       assert.equal(checks, 'ISOLATED_BUILDER_REGISTRY_PASS')
@@ -92,28 +92,42 @@ function fixture() {
     } }
 }
 
-test('final NSIS installer performs ten isolated reinstalls despite corrupt old state', { skip }, async () => {
+test('final NSIS installer preserves a compatible home and only explicit Clean allocates a new home', { skip }, async () => {
   assert.equal(path.isAbsolute(installer), true)
   console.log('FINAL_INSTALLER_SHA256 ' + createHash('sha256').update(fs.readFileSync(installer)).digest('hex'))
-  const f = fixture(), ids = new Set(), homes = new Set()
+  const f = fixture()
   const metadata = path.join(f.appData, 'aidwork-runtime-app-acceptance/installation-v2')
-  let previous
+  const pointer = path.join(metadata, 'current.json')
   try {
-    for (let attempt = 0; attempt < 10; attempt++) {
-      f.run()
-      const current = JSON.parse(fs.readFileSync(path.join(metadata, 'current.json'), 'utf8'))
-      assert.equal(current.version, 2); assert.equal(current.initialized, false)
-      assert.equal(fs.readFileSync(path.join(f.install, 'runtime-installation.id'), 'utf8').trim(), current.id)
-      assert.equal(fs.existsSync(path.join(f.install, 'AID Work Runtime 验收版.exe')), true)
-      assert.equal(path.relative(metadata, current.home).startsWith('..'), false)
-      assert.deepEqual(fs.readdirSync(current.home), [])
-      if (previous && attempt !== 5) assert.equal(current.priorHome, previous)
-      ids.add(current.id); homes.add(current.home); previous = current.home
-      for (const name of ['config.json','credentials.bin','management-secret.bin','management-operations.json','host-running.json','journal','outbox']) fs.writeFileSync(path.join(current.home, name), '{broken old bytes')
-      if (attempt === 4) fs.writeFileSync(path.join(metadata, 'current.json'), '{broken old pointer')
-      console.log(`FINAL_NSIS_REINSTALL_PASS ${attempt + 1}`)
+    f.run()
+    const initial = JSON.parse(fs.readFileSync(pointer, 'utf8'))
+    assert.equal(initial.version, 2); assert.equal(initial.initialized, false)
+    assert.equal(initial.home, path.join(f.appData, 'aidwork-runtime-app-acceptance', 'rt'))
+    assert.deepEqual(fs.readdirSync(initial.home), [])
+    const retained = { ...initial, initialized: true }
+    fs.writeFileSync(pointer, JSON.stringify(retained))
+    const facts = ['config.json', 'credentials.bin', 'journal/unknown.json', 'outbox/pending.json']
+    const before = {}
+    for (const name of facts) {
+      const file = path.join(initial.home, name)
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      fs.writeFileSync(file, 'isolated retained fact: ' + name)
+      before[name] = fs.readFileSync(file)
     }
-    assert.equal(ids.size, 10); assert.equal(homes.size, 10)
+    f.run()
+    const upgraded = JSON.parse(fs.readFileSync(pointer, 'utf8'))
+    assert.equal(upgraded.id, retained.id); assert.equal(upgraded.home, retained.home)
+    assert.equal(upgraded.initialized, true, 'ordinary binary replacement must preserve the initialized connection')
+    assert.equal(fs.readFileSync(path.join(f.install, 'runtime-installation.id'), 'utf8').trim(), retained.id)
+    for (const name of facts) assert.deepEqual(fs.readFileSync(path.join(initial.home, name)), before[name])
+    f.run(['/Clean'])
+    const clean = JSON.parse(fs.readFileSync(pointer, 'utf8'))
+    assert.notEqual(clean.id, retained.id); assert.notEqual(clean.home, retained.home)
+    assert.equal(clean.initialized, false); assert.equal(clean.priorHome, retained.home)
+    assert.equal(path.dirname(clean.home), path.join(f.appData, 'aidwork-runtime-app-acceptance', 'connections'))
+    assert.deepEqual(fs.readdirSync(clean.home), [])
+    for (const name of facts) assert.deepEqual(fs.readFileSync(path.join(initial.home, name)), before[name], 'Clean must retain old identity facts rather than transfer or erase unknown work')
+    console.log('FINAL_NSIS_PRESERVE_AND_EXPLICIT_CLEAN_PASS')
   } finally { f.clean() }
 })
 

@@ -3,7 +3,7 @@ import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readF
 import { dirname, join, resolve } from 'node:path'
 import semver from 'semver'
 import { ManagementError, type PluginSummary } from '../management.js'
-import { extractVerifiedPackage, FIRST_PARTY_PROVIDERS, PACKAGE_LIMITS, verifyOfflinePackage, type PackagePlatform, type PublisherTrust, type RuntimeManifest, type VerifiedPackage } from './package.js'
+import { extractVerifiedPackage, FIRST_PARTY_PROVIDERS, PACKAGE_LIMITS, readSignedEnvelope, verifyOfflinePackage, type PackagePlatform, type PublisherTrust, type ReleaseEnvelope, type RuntimeManifest, type VerifiedPackage } from './package.js'
 
 interface Installation {
   installation_id: string; plugin_id: string; release_id: string; version: string
@@ -34,7 +34,7 @@ function atomicWrite(file: string, contents: Buffer | string): void {
   try { renameSync(temporary, file) } finally { rmSync(temporary, { force: true }) }
 }
 
-/** Host drains execution before calling a mutation. Old releases remain immutable and retained. */
+/** Host drains execution before mutations. Keep the current and previous release. */
 export class PluginStore {
   private readonly root: string
   private readonly releases: string
@@ -43,7 +43,8 @@ export class PluginStore {
   private records: Installation[] = []
   private states = new Map<string, ReleaseState>()
   private initialized = false
-  private blocked = false
+  private pendingWarning: string | undefined
+  private cleanupWarning: string | undefined
   private queue: Promise<unknown> = Promise.resolve()
 
   constructor(private readonly options: PluginStoreOptions) {
@@ -60,7 +61,6 @@ export class PluginStore {
     if (this.initialized) return
     rejectLinks(this.releases); rejectLinks(this.inventory); rejectLinks(this.pending)
     mkdirSync(this.releases, { recursive: true })
-    if (existsSync(this.pending)) reconcile()
     if (existsSync(this.inventory)) {
       try {
         if (!lstatSync(this.inventory).isFile() || lstatSync(this.inventory).size > 1024 * 1024) reconcile()
@@ -85,6 +85,9 @@ export class PluginStore {
     for (const record of this.records) {
       if (!record.uninstalled) this.states.set(record.installation_id, await this.checkRelease(record))
     }
+    // The atomic inventory is the commit point. A leftover installation intent
+    // does not replay work or invalidate either the old or new committed release.
+    try { this.clearPending() } catch { /* Keep the committed release usable; retry cleanup before any plugin write. */ }
     this.initialized = true
   }
 
@@ -92,11 +95,12 @@ export class PluginStore {
     this.assertAvailable()
     return this.records.filter(record => !record.uninstalled).map(record => {
       const state = this.states.get(record.installation_id)
+      const reason = [state?.reason, this.pendingWarning, this.cleanupWarning].filter(Boolean).join('；')
       return {
         installation_id: record.installation_id, plugin_id: record.plugin_id,
         display_name: state?.manifest?.display_name ?? record.plugin_id, release_id: record.release_id,
         version: record.version, enabled: record.enabled, ready: state?.ready ?? false,
-        ...(state?.reason ? { reason: state.reason } : {}),
+        ...(reason ? { reason } : {}),
       }
     })
   }
@@ -115,16 +119,16 @@ export class PluginStore {
     })
   }
 
-  resolveEntries(legacy: Record<string, string>, bootstrapKeys: readonly string[] = []): Record<string, string> {
+  resolveEntries(legacy: Record<string, string>, _bootstrapKeys: readonly string[] = []): Record<string, string> {
     this.assertAvailable()
     const entries = { ...legacy }
     for (const record of this.records) {
       const key = LEGACY_KEYS[record.plugin_id]!
       delete entries[key]
       const state = this.states.get(record.installation_id)
-      // Trusted composition can permit a verified Provider to bootstrap its app.
-      // Readiness stays diagnostic; integrity/version failure never has a manifest.
-      if (!record.uninstalled && record.enabled && state?.manifest && (state.ready || bootstrapKeys.includes(key))) {
+      // App login/window readiness is diagnostic. Verified installed tools remain
+      // discoverable so a call can explain how to restore the business app.
+      if (!record.uninstalled && record.enabled && state?.manifest) {
         entries[key] = join(this.releases, record.directory, 'payload', state.manifest.entrypoint[0]!)
       }
     }
@@ -135,18 +139,21 @@ export class PluginStore {
     // Freeze the selected byte snapshot before the first await; callers retain their own Buffer.
     const snapshot = Buffer.from(bytes)
     return this.serialize(async () => {
+      this.clearPending()
       const pkg = await verifyOfflinePackage(snapshot, this.options.trust, this.options.platform)
+      await this.assertRetainedRelease(pkg)
       const previous = this.records.find(record => record.plugin_id === pkg.envelope.provider_id)
       if (previous) {
         if (previous.release_id === pkg.envelope.provider_release_id) {
           if (previous.package_digest !== pkg.envelope.package_digest || previous.manifest_digest !== pkg.envelope.manifest_digest) throw new ManagementError(8, '同一发布版本的内容发生变化')
           if (!previous.uninstalled) {
-            const before = JSON.stringify(this.list()); this.states.set(previous.installation_id, await this.checkRelease(previous))
+            const before = JSON.stringify(this.list()); const state = await this.checkRelease(previous)
+            this.states.set(previous.installation_id, state)
             if (before !== JSON.stringify(this.list())) this.options.onChanged?.()
-            return
+            if (state.manifest) return
+            // The selected bytes are trusted and identical, but installed files
+            // are damaged. Re-extract to a fresh release before switching active.
           }
-        } else if (!semver.gt(pkg.envelope.provider_version, previous.version)) {
-          throw new ManagementError(8, '插件升级必须使用更高版本，不能覆盖同版本或降级')
         }
       }
       const directory = randomUUID()
@@ -170,6 +177,7 @@ export class PluginStore {
         this.states.set(installation.installation_id, { manifest: pkg.manifest, ...readiness })
         this.options.onChanged?.()
       })
+      await this.cleanupOldReleases(installation.plugin_id, previous?.directory)
     })
   }
 
@@ -179,9 +187,10 @@ export class PluginStore {
 
   private async change(id: string, action: 'enable' | 'disable' | 'uninstall'): Promise<void> {
     return this.serialize(async () => {
+      this.clearPending()
       const record = this.records.find(item => item.installation_id === id)
       if (!record || (record.uninstalled && action !== 'uninstall')) throw new ManagementError(1, '插件安装实例不存在')
-      if (record.uninstalled) return
+      if (record.uninstalled) { await this.cleanupOldReleases(record.plugin_id); return }
       if (action === 'disable' && !record.enabled) return
       const state = action === 'enable' ? await this.checkRelease(record) : undefined
       if (action === 'enable' && record.enabled) {
@@ -194,10 +203,11 @@ export class PluginStore {
         if (state) this.states.set(id, state)
         this.options.onChanged?.()
       })
+      if (action === 'uninstall') await this.cleanupOldReleases(record.plugin_id)
     })
   }
 
-  private assertAvailable(): void { if (!this.initialized || this.blocked) reconcile() }
+  private assertAvailable(): void { if (!this.initialized) reconcile() }
   private serialize<T>(work: () => Promise<T>): Promise<T> {
     const task = this.queue.then(async () => { this.assertAvailable(); rejectLinks(this.releases); rejectLinks(this.inventory); rejectLinks(this.pending); return work() })
     this.queue = task.catch(() => undefined)
@@ -208,11 +218,58 @@ export class PluginStore {
     this.records = records
   }
   private async transaction(action: string, id: string, work: () => Promise<void>): Promise<void> {
-    if (existsSync(this.pending)) { this.blocked = true; reconcile() }
     atomicWrite(this.pending, JSON.stringify({ version: 1, action, installation_id: id }))
     try { await work() } finally {
-      try { rejectLinks(this.pending); rmSync(this.pending) } catch { this.blocked = true; reconcile() }
+      this.clearPending()
     }
+  }
+  private clearPending(): void {
+    try { rejectLinks(this.pending); rmSync(this.pending, { force: true }); this.pendingWarning = undefined }
+    catch {
+      this.pendingWarning = '插件中断标记无法清理，请检查插件目录权限；安装状态以已提交清单为准'
+      throw new ManagementError(11, this.pendingWarning)
+    }
+  }
+  private async assertRetainedRelease(pkg: VerifiedPackage): Promise<void> {
+    // Reuse retained signed archives, not an ever-growing release history. Once
+    // S4 removes an unused archive, this store does not reconstruct its identity.
+    for (const entry of readdirSync(this.releases, { withFileTypes: true })) {
+      if (!uuid.test(entry.name) || !entry.isDirectory() || entry.isSymbolicLink()) continue
+      let envelope: ReleaseEnvelope
+      try {
+        const file = join(this.releases, entry.name, 'archive.zip'); rejectLinks(file)
+        const stat = lstatSync(file)
+        if (!stat.isFile() || stat.size > PACKAGE_LIMITS.archive) continue
+        envelope = await readSignedEnvelope(file, this.options.trust)
+      } catch { continue } // Damage to an inactive archive cannot block other installs.
+      if (envelope.provider_id === pkg.envelope.provider_id && envelope.provider_release_id === pkg.envelope.provider_release_id
+        && (envelope.package_digest !== pkg.envelope.package_digest || envelope.manifest_digest !== pkg.envelope.manifest_digest)) {
+        throw new ManagementError(8, '同一发布版本的内容发生变化')
+      }
+    }
+  }
+  private async cleanupOldReleases(provider: string, previous?: string): Promise<void> {
+    // Only the owning Host's drained mutation path calls this. Historical unknown
+    // receipts have no release index and never authorize replay or pin every package.
+    const keep = new Set(this.records.filter(record => !record.uninstalled).map(record => record.directory))
+    if (previous) keep.add(previous)
+    this.cleanupWarning = undefined
+    try {
+      for (const entry of readdirSync(this.releases, { withFileTypes: true })) {
+        if (!uuid.test(entry.name) || !entry.isDirectory() || entry.isSymbolicLink() || keep.has(entry.name)) continue
+        const directory = resolve(this.releases, entry.name)
+        if (dirname(directory) !== this.releases) continue
+        let envelope: ReleaseEnvelope | undefined
+        try {
+          const archive = join(directory, 'archive.zip'); rejectLinks(archive)
+          if (lstatSync(archive).size <= PACKAGE_LIMITS.archive) envelope = await readSignedEnvelope(archive, this.options.trust)
+        } catch { /* An unreferenced incomplete staging directory is also reclaimable. */ }
+        if (envelope && envelope.provider_id !== provider) continue
+        rejectLinks(directory)
+        rmSync(directory, { recursive: true, force: true })
+      }
+    } catch { this.cleanupWarning = '旧插件包未能清理，请检查目录权限；当前安装和任务结果保留' }
+    if (this.cleanupWarning) { console.warn(this.cleanupWarning); this.options.onChanged?.() }
   }
   private async checkRelease(record: Installation): Promise<ReleaseState> {
     try {

@@ -190,6 +190,15 @@
       "providers": [
         "ai.aidwork.wecom"
       ]
+    },
+    {
+      "key_id": "aidwork-acceptance-cli-v1",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA39GA/Kzi32B2mI4uuZvfGjKKdrLhsY1Y5tsqKUOHQYk=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.boss-recruiting",
+        "ai.aidwork.wecom"
+      ],
+      "test_only": true
     }
   ],
   "profile": "acceptance"

@@ -4,6 +4,7 @@
   [string]$InstallDirectory,
   [int]$ExcludePid = 0,
   [switch]$RequireIdle,
+  [switch]$Clean,
   [Parameter(DontShow = $true)][string]$FixtureRegistryId
 )
 $ErrorActionPreference = 'Stop'
@@ -198,19 +199,36 @@ try {
     $null = [IO.Directory]::CreateDirectory($metadata)
     $current = [IO.Path]::Combine($metadata,'current.json')
     $prior = [IO.Path]::Combine($appData,$identity.home)
+    $reuse = $null
     if ([IO.File]::Exists($current)) {
       try {
         $old = [IO.File]::ReadAllText((SafePath $current)) | ConvertFrom-Json
         $expected = [IO.Path]::Combine($metadata,'generations', [string]$old.id, 'connections')
-        if ($old.version -eq 2 -and $old.id -match '\A[0-9a-f-]{36}\z' -and [string]::Equals([IO.Path]::GetDirectoryName($old.home),$expected,[StringComparison]::OrdinalIgnoreCase) -and
-          [IO.Path]::GetFileName($old.home) -match '\A[0-9a-f-]{36}\z') { $prior = SafePath $old.home }
+        $connectionHome = [IO.Path]::Combine($userData,'connections')
+        $ownedHome = [string]::Equals($old.home,[IO.Path]::Combine($userData,'rt'),[StringComparison]::OrdinalIgnoreCase) -or
+          (([string]::Equals([IO.Path]::GetDirectoryName($old.home),$expected,[StringComparison]::OrdinalIgnoreCase) -or
+            [string]::Equals([IO.Path]::GetDirectoryName($old.home),$connectionHome,[StringComparison]::OrdinalIgnoreCase)) -and
+            [IO.Path]::GetFileName($old.home) -match '\A[0-9a-f-]{36}\z')
+        if ($old.version -eq 2 -and $old.id -match '\A[0-9a-f-]{36}\z' -and $old.initialized -is [bool] -and $ownedHome) {
+          $prior = SafePath $old.home
+          if (-not $Clean) { $reuse = $old }
+        }
       } catch { # Damaged old pointer is not a prerequisite for clean installation.
       }
     }
-    $id = [Guid]::NewGuid().ToString()
-    $generationHome = SafePath ([IO.Path]::Combine($metadata,'generations',$id,'connections',[Guid]::NewGuid().ToString()))
-    $null = [IO.Directory]::CreateDirectory($generationHome)
-    WriteAtomic $current (@{version=2;id=$id;home=$generationHome;priorHome=$prior;initialized=$false;installDirectory=$InstallDirectory} | ConvertTo-Json -Compress)
+    if ($reuse) {
+      # Compatible program replacement keeps device identity, plugins and task facts.
+      $id = $reuse.id
+      WriteAtomic $current (@{version=2;id=$id;home=$reuse.home;priorHome=$reuse.priorHome;initialized=$reuse.initialized;installDirectory=$InstallDirectory} | ConvertTo-Json -Compress)
+    } else {
+      $id = [Guid]::NewGuid().ToString()
+      $generationHome = SafePath ([IO.Path]::Combine($userData,'rt'))
+      if ([IO.Directory]::Exists($generationHome) -and [IO.Directory]::EnumerateFileSystemEntries($generationHome).GetEnumerator().MoveNext()) {
+        $generationHome = SafePath ([IO.Path]::Combine($userData,'connections',[Guid]::NewGuid().ToString()))
+      }
+      $null = [IO.Directory]::CreateDirectory($generationHome)
+      WriteAtomic $current (@{version=2;id=$id;home=$generationHome;priorHome=$prior;initialized=$false;installDirectory=$InstallDirectory} | ConvertTo-Json -Compress)
+    }
     Write-Output $id
   } else {
     $failure = 'FRESH_HOST_CHECK_FAILED'

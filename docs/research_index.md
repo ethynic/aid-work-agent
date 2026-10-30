@@ -6,6 +6,7 @@
 
 | 调研主题 | 文档 | 关联功能 |
 |---------|------|---------|
+| Runtime 与 CLI 安装升级简化评估 | [评估](research/runtime-cli-install-upgrade-simplicity-review.md) | 2026-10-30：审查安装、任务恢复、验包与信任耦合，建议覆盖升级优先、重装白名单保留配置。 |
 | BOSS CLI 视觉识别与恢复真机实验 | [实验记录](research/boss-visual-recovery-machine-experiments.md) | 累计126次实调；霍接收预览关闭故障链通过，视觉20倍。 |
 | ZCode / DeepSeek Harness 搜索工具与中文检索增强 | [调研](research/agent-web-search-harness-research.md) | Agent 公网搜索：国内源、批量查询、时效过滤与正文核验。 |
 | Codex、DeepSeek Harness、Hermes 桌面执行架构对比 | [调研](research/desktop-agent-harness-architecture-research.md) | 桌面 Agent：共用云端 Runner、本机文件/程序与批处理执行边界。 |

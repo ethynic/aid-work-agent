@@ -79,14 +79,14 @@
     <section class="runtime-panel" aria-labelledby="plugins-title">
       <div class="runtime-section-heading"><h2 id="plugins-title">第一方插件</h2><button v-if="controller.supportsPlugins" type="button" class="primary-button runtime-primary" :disabled="cannotAct || view.pluginsDirty" @click="controller.importPackage()">安装 / 升级离线包</button></div>
       <p v-if="!controller.supportsPlugins" class="runtime-muted">{{ needsRecovery ? '当前故障状态下暂不读取插件列表，原安装资料会保留。先按上方连接处理步骤恢复。' : '当前 Runtime 尚未提供第一方插件管理能力。' }}</p>
-      <p v-else class="runtime-muted">选择已签名的 BOSS、微信或企业微信离线包。安装成功后默认启用，软件登录等条件决定是否就绪。</p>
+      <p v-else class="runtime-muted">选择已签名的 BOSS、微信或企业微信兼容离线包，可安装、重装或回退版本。就绪状态为最近检查结果，实际调用会报告当前运行条件。</p>
       <p v-if="view.selectionLabel" class="runtime-muted">已选择：{{ view.selectionLabel }}</p>
       <p v-if="view.plugins && !view.plugins.plugins.length" class="runtime-empty">尚未安装插件。设备连接与插件安装可分别完成。</p>
       <p v-else-if="controller.supportsPlugins && !view.plugins" class="runtime-muted">{{ view.connected ? (view.refreshing ? '正在读取插件列表…' : '插件列表未能读取，请刷新或按连接处理步骤检查。') : '连接后查看已安装插件。' }}</p>
       <ul v-if="view.plugins" class="runtime-plugin-list">
         <li v-for="plugin in view.plugins.plugins" :key="plugin.installation_id">
           <div class="runtime-plugin-heading"><h3>{{ plugin.display_name }}</h3><span class="runtime-muted">{{ plugin.version || '版本未知' }}</span></div>
-          <p class="runtime-plugin-state"><span>{{ plugin.enabled ? '已启用' : '已停用' }}</span><span :class="plugin.ready ? 'ready' : 'pending'">{{ plugin.ready ? '已就绪' : '未就绪' }}</span></p>
+          <p class="runtime-plugin-state"><span>{{ plugin.enabled ? '已启用' : '已停用' }}</span><span :class="plugin.ready ? 'ready' : 'pending'">{{ plugin.ready ? '最近检查：已就绪' : '最近检查：未就绪' }}</span></p>
           <p v-if="plugin.reason" class="runtime-muted">{{ plugin.reason }}</p>
           <div v-if="controller.supportsPlugins" class="runtime-actions">
             <button type="button" class="runtime-secondary" :disabled="cannotAct || view.pluginsDirty" @click="controller.mutate(plugin.enabled ? 'plugins.disable' : 'plugins.enable', { installation_id: plugin.installation_id })">{{ plugin.enabled ? '停用' : '启用' }}</button>

@@ -1,14 +1,48 @@
-﻿# 按 docs/ops/runtime-boss-release-guide.md 第 2-9 节组合的一键执行脚本（配套入口，文档为语义权威）。
+﻿# 按 docs/ops/runtime-boss-release-guide.md 所述独立组件打包入口（配套入口，文档为语义权威）。
 # stage 9 内置文件占用自愈：workspace 内编辑器/索引器对刚复制文件的短暂监视锁
 # （2026-10-21 实跑两次复现，RM API 实证占用者为 VS Code 文件 watcher）会导致
 # Compress-Archive PermissionDenied——失败时用 Restart Manager 诊断占用者并退避重试。
+param(
+    [ValidateSet('Both', 'Runtime', 'Boss')][string]$Component = 'Both',
+    [Alias('Profile')][ValidateSet('acceptance', 'production')][string]$ReleaseProfile = 'acceptance',
+    [string]$Signer,
+    [string]$TrustRoots,
+    [string]$ReleaseId,
+    [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$')][string]$RuntimeVersion,
+    [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$')][string]$BossVersion,
+    [switch]$Plan
+)
 $ErrorActionPreference = 'Stop'
-# 本脚本预期使用 Windows 自带 bsdtar（System32	ar.exe）；从 Git Bash 会话启动时 GNU tar 在 PATH
-# 更前，会把 C:\ 绝对路径当远程主机（"Cannot connect to C"）——把 System32 前置修正解析顺序
-$env:PATH = "$env:SystemRoot\System32;" + $env:PATH
-$repo = (& git rev-parse --show-toplevel).Trim()
-if ($LASTEXITCODE -ne 0) { throw '请在 aid-work-agent 仓库内执行' }
+$repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../..'))
+$includeRuntime = $Component -ne 'Boss'
+$includeBoss = $Component -ne 'Runtime'
+if ($includeBoss -and [string]::IsNullOrWhiteSpace($Signer)) { throw 'BOSS 发布需要 -Signer 指定稳定外部签名者；隔离随机测试包请使用 package.mjs --test' }
+if ([string]::IsNullOrWhiteSpace($TrustRoots)) {
+    if ($ReleaseProfile -eq 'production') { throw '生产构建需要 -TrustRoots 指定正式公开信任根' }
+    $TrustRoots = Join-Path $repo 'clients/runtime-plugin-packaging/trust/acceptance-roots.json'
+}
+$TrustRoots = [IO.Path]::GetFullPath($TrustRoots)
+if ($includeBoss) { $Signer = [IO.Path]::GetFullPath($Signer) }
+function Read-Version {
+    param([string]$Directory)
+    (Get-Content -LiteralPath (Join-Path $repo "$Directory/package.json") -Raw -Encoding UTF8 | ConvertFrom-Json).version
+}
+$uiVersion = if ($includeRuntime -and $RuntimeVersion) { $RuntimeVersion } else { Read-Version 'clients/agent-desktop' }
+$bossVersion = if ($includeBoss -and $BossVersion) { $BossVersion } else { Read-Version 'clients/boss-resume-assistant' }
+if ($includeBoss -and [string]::IsNullOrWhiteSpace($ReleaseId)) { $ReleaseId = "boss-$bossVersion" }
+if ($Plan) {
+    [ordered]@{
+        component = $Component; profile = $ReleaseProfile; runtime = $includeRuntime; boss = $includeBoss
+        versions = [ordered]@{ runtime = $uiVersion; boss = $bossVersion }
+        signing = if ($includeBoss) { 'external-stable' } else { 'not_selected' }
+        releaseId = $ReleaseId; trustRoots = $TrustRoots
+        steps = @('shared-build', 'fixed-node') + $(if ($includeBoss) { @('boss-build', 'sign-plugin', 'verify-plugin') } else { @() }) + $(if ($includeRuntime) { @('runtime-build', 'package-installer', 'verify-runtime') } else { @() }) + @('delivery-zip')
+    } | ConvertTo-Json -Depth 5
+    return
+}
+# Plan returns before external tools, version writes, output creation or private-key access.
 Set-Location -LiteralPath $repo
+$env:PATH = "$env:SystemRoot\System32;" + $env:PATH
 $npmExe = (Get-Command npm.cmd -ErrorAction Stop).Source
 $nodeExe = (Get-Command node.exe -ErrorAction Stop).Source
 $pythonExe = (Get-Command python.exe -ErrorAction Stop).Source
@@ -27,10 +61,6 @@ function Invoke-NpmAt {
 function Write-Utf8 {
     param([string]$Path, [string]$Text)
     [IO.File]::WriteAllText($Path, $Text, (New-Object Text.UTF8Encoding($false)))
-}
-function Read-Version {
-    param([string]$Directory)
-    (Get-Content -LiteralPath (Join-Path $repo "$Directory/package.json") -Raw -Encoding UTF8 | ConvertFrom-Json).version
 }
 # 文件占用者诊断（Restart Manager API，与资源管理器「文件正在使用」同源）
 $LockFinderSource = @'
@@ -150,142 +180,147 @@ Invoke-Checked 'tar.exe' @('--version')
 $env:ELECTRON_MIRROR = 'https://npmmirror.com/mirrors/electron/'
 $env:ELECTRON_BUILDER_BINARIES_MIRROR = 'https://npmmirror.com/mirrors/electron-builder-binaries/'
 
-Write-Host '[stage 2] 版本与新批次'
-$bumpPackages = @('clients/agent-desktop', 'clients/boss-resume-assistant')
-foreach ($directory in $bumpPackages) {
-    Invoke-NpmAt $directory @('version', 'patch', '--no-git-tag-version', '--ignore-scripts')
+Write-Host '[stage 2] 独立组件版本与新批次'
+# No implicit patch bump: versions change only for the selected component and explicit input.
+if ($includeRuntime -and $RuntimeVersion -and (Read-Version 'clients/agent-desktop') -ne $RuntimeVersion) {
+    Invoke-NpmAt 'clients/agent-desktop' @('version', $RuntimeVersion, '--no-git-tag-version', '--ignore-scripts')
 }
-$uiVersion = Read-Version 'clients/agent-desktop'
+if ($includeBoss -and $BossVersion -and (Read-Version 'clients/boss-resume-assistant') -ne $BossVersion) {
+    Invoke-NpmAt 'clients/boss-resume-assistant' @('version', $BossVersion, '--no-git-tag-version', '--ignore-scripts')
+}
 $hostVersion = Read-Version 'clients/agent-tool-runtime'
 $coreVersion = Read-Version 'clients/shared/local-tool-host-core'
 $nativeVersion = Read-Version 'clients/shared/win32-native-input'
-$bossVersion = Read-Version 'clients/boss-resume-assistant'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$batchName = "AID-Work-Runtime-$uiVersion-BOSS-$bossVersion-$stamp"
+$parts = @('AID-Work')
+if ($includeRuntime) { $parts += "Runtime-$uiVersion" }
+if ($includeBoss) { $parts += "BOSS-$bossVersion" }
+$batchName = ($parts + $stamp) -join '-'
 $buildRoot = Join-Path $repo "clients/agent-desktop/build/$batchName"
 $releaseRoot = Join-Path $repo 'clients/release'
 $deliveryRoot = Join-Path $releaseRoot $batchName
 $zipPath = Join-Path $releaseRoot "$batchName.zip"
 $pluginDir = Join-Path $buildRoot 'plugins'
 $hostDir = Join-Path $buildRoot 'host'
-$registryPath = Join-Path $repo 'clients/runtime-plugin-packaging/trust/acceptance-roots.json'
-$snapshotPath = Join-Path $repo "clients/runtime-plugin-packaging/trust/history/runtime-$uiVersion.roots.json"
-if ((Test-Path -LiteralPath $buildRoot) -or (Test-Path -LiteralPath $deliveryRoot) -or
-    (Test-Path -LiteralPath $zipPath) -or (Test-Path -LiteralPath $snapshotPath)) {
-    throw '批次或该 UI 版本的发布快照已存在，请核对版本并使用新批次'
+if ((Test-Path -LiteralPath $buildRoot) -or (Test-Path -LiteralPath $deliveryRoot) -or (Test-Path -LiteralPath $zipPath)) {
+    throw '本批次输出已存在，请使用新批次，不覆盖交付文件'
 }
-New-Item -ItemType Directory -Path $buildRoot, $hostDir -Force | Out-Null
-New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
+New-Item -ItemType Directory -Path $buildRoot, $releaseRoot -Force | Out-Null
 $sourceBaseCommit = (& git rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0) { throw '读取源码提交失败' }
-Write-Host "batch=$batchName base=$sourceBaseCommit ui=$uiVersion host=$hostVersion boss=$bossVersion"
+Write-Host "batch=$batchName base=$sourceBaseCommit component=$Component profile=$ReleaseProfile"
 
-Write-Host '[stage 3] 依赖安装与构建'
-# clients/shared 是 npm workspace 根：依赖提升到 shared 根，必须从根一次性安装
-# （逐成员 ci 会把根 node_modules 重装成单个成员的依赖集，互相冲掉——koffi 曾因此丢失）
+Write-Host '[stage 3] 所选组件依赖与构建'
+# shared is the workspace root; do not repeatedly replace its hoisted dependencies.
 Invoke-NpmAt 'clients/shared' @('ci', '--ignore-scripts')
-Invoke-NpmAt 'clients/agent-tool-runtime' @('ci', '--ignore-scripts')
-Invoke-NpmAt 'clients/boss-resume-assistant' @('ci', '--ignore-scripts')
-Invoke-NpmAt 'clients/runtime-plugin-packaging' @('ci', '--ignore-scripts')
-Invoke-NpmAt 'frontend' @('ci')
-Invoke-NpmAt 'clients/agent-desktop' @('ci')
+Invoke-NpmAt 'clients/shared/win32-native-input' @('run', 'build')
 Invoke-NpmAt 'clients/shared/local-tool-host-core' @('run', 'build')
-Invoke-NpmAt 'clients/boss-resume-assistant' @('run', 'build:main')
+if ($includeBoss) {
+    Invoke-NpmAt 'clients/boss-resume-assistant' @('ci', '--ignore-scripts')
+    Invoke-NpmAt 'clients/runtime-plugin-packaging' @('ci', '--ignore-scripts')
+    Invoke-NpmAt 'clients/boss-resume-assistant' @('run', 'build:main')
+}
+if ($includeRuntime) {
+    Invoke-NpmAt 'clients/agent-tool-runtime' @('ci', '--ignore-scripts')
+    Invoke-NpmAt 'frontend' @('ci')
+    Invoke-NpmAt 'clients/agent-desktop' @('ci')
+}
 Invoke-Checked $nodeExe @('clients/agent-desktop/scripts/prepare-runtime.mjs', '--node-only')
-$nodeSpec = Get-Content -LiteralPath 'clients/agent-desktop/scripts/runtime-node-resources.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+$nodeSpec = Get-Content -LiteralPath (Join-Path $repo 'clients/agent-desktop/scripts/runtime-node-resources.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $fixedNode = Join-Path $repo "clients/agent-desktop/build/runtime-cache/node-v$($nodeSpec.version)-win-x64/node.exe"
 Invoke-Checked $fixedNode @('--version')
+$deliveryFilesToCopy = @()
 
-Write-Host '[stage 4] 签署 BOSS 插件并登记公钥'
-$testKeyId = "aid-isolated-boss-$($bossVersion.Replace('.', '-'))-$stamp"
-Invoke-Checked $nodeExe @(
-    'clients/runtime-plugin-packaging/package.mjs', '--test', '--provider', 'boss',
-    '--test-key-id', $testKeyId, '--node', $fixedNode, '--npm-cli', $npmCli,
-    '--output', $pluginDir
-)
-$pluginPath = Join-Path $pluginDir "boss-$bossVersion-dev.aidplugin.zip"
-$newRootPath = Join-Path $pluginDir 'ISOLATED-TEST-TRUST-ROOT.json'
-$newRoot = Get-Content -LiteralPath $newRootPath -Raw -Encoding UTF8 | ConvertFrom-Json
-$newRoot.roots[0].providers = @('ai.aidwork.boss-recruiting')
-Write-Utf8 $newRootPath (($newRoot | ConvertTo-Json -Depth 10) + "`n")
-Invoke-Checked $nodeExe @(
-    'clients/runtime-plugin-packaging/register-publisher-trust.mjs', '--input', $newRootPath
-)
-Copy-Item -LiteralPath $registryPath -Destination $snapshotPath
-
-Write-Host '[stage 5] Host tgz 与 Runtime 安装器'
-Invoke-NpmAt 'clients/agent-tool-runtime' @('pack', '--pack-destination', $hostDir)
-$hostPackage = Join-Path $hostDir "agent-tool-runtime-$hostVersion.tgz"
-$hostSha = (Get-FileHash -LiteralPath $hostPackage -Algorithm SHA256).Hash.ToLowerInvariant()
-Invoke-Checked $nodeExe @(
-    'clients/agent-desktop/scripts/prepare-runtime.mjs', '--profile', 'acceptance',
-    '--host-package', $hostPackage, '--host-sha256', $hostSha, '--trust-roots', $registryPath
-)
-Invoke-NpmAt 'clients/agent-desktop' @('run', 'runtime:package:acceptance')
-Invoke-NpmAt 'clients/agent-desktop' @('run', 'runtime:verify')
-$runtimeOutput = Join-Path $repo 'clients/agent-desktop/build/runtime-release/acceptance'
-$runtimeManifestPath = Join-Path $runtimeOutput 'runtime-release-manifest.json'
-$runtimeManifest = Get-Content -LiteralPath $runtimeManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-$installerPath = Join-Path $runtimeOutput $runtimeManifest.fileName
-if ($runtimeManifest.version -ne $uiVersion -or $runtimeManifest.hostPackageSha256 -ne $hostSha) {
-    throw '安装器版本或 Host 输入与本批不符'
+if ($includeBoss) {
+    Write-Host '[stage 4] 使用稳定发布者签署 BOSS 插件'
+    Invoke-Checked $nodeExe @(
+        'clients/runtime-plugin-packaging/package.mjs', '--provider', 'boss',
+        '--signer', $Signer, '--release-id', $ReleaseId, '--node', $fixedNode,
+        '--npm-cli', $npmCli, '--output', $pluginDir
+    )
+    $pluginPath = Join-Path $pluginDir "boss-$bossVersion.aidplugin.zip"
+    $deliveryFilesToCopy += @($pluginPath, "$pluginPath.manifest.json")
 }
 
-Write-Host '[stage 6] 插件验包与原生模块加载验证'
-$pluginReportPath = Join-Path $buildRoot 'plugin-verification.json'
-Invoke-Checked $pythonExe @(
-    'clients/runtime-plugin-packaging/verify-offline.py', '--directory', $pluginDir, '--node', $fixedNode
-) | Tee-Object -FilePath $pluginReportPath
-$outerCheck = Join-Path $buildRoot 'plugin-check/outer'
-$payloadCheck = Join-Path $buildRoot 'plugin-check/payload'
-Expand-Archive -LiteralPath $pluginPath -DestinationPath $outerCheck
-Expand-Archive -LiteralPath (Join-Path $outerCheck 'payload.zip') -DestinationPath $payloadCheck
-$nativeModule = Join-Path $payloadCheck 'node_modules/@aid/win32-native-input/dist/index.js'
-$nativeModuleUri = ([Uri]$nativeModule).AbsoluteUri
-Invoke-Checked $fixedNode @('--input-type=module', '-e',
-    "const m = await import(process.argv[1]); m.createKoffiApi(); console.log('NATIVE_INPUT_LOAD_OK');", $nativeModuleUri)
+$hostSha = $null
+$runtimeManifest = $null
+if ($includeRuntime) {
+    Write-Host '[stage 5] Host 与 Runtime 安装器'
+    New-Item -ItemType Directory -Path $hostDir -Force | Out-Null
+    Invoke-NpmAt 'clients/agent-tool-runtime' @('pack', '--pack-destination', $hostDir)
+    $hostPackage = Join-Path $hostDir "agent-tool-runtime-$hostVersion.tgz"
+    $hostSha = (Get-FileHash -LiteralPath $hostPackage -Algorithm SHA256).Hash.ToLowerInvariant()
+    Invoke-Checked $nodeExe @(
+        'clients/agent-desktop/scripts/prepare-runtime.mjs', '--profile', $ReleaseProfile,
+        '--host-package', $hostPackage, '--host-sha256', $hostSha, '--trust-roots', $TrustRoots
+    )
+    Invoke-NpmAt 'clients/agent-desktop' @('run', "runtime:package:$ReleaseProfile")
+    # package-runtime-win already verifies this profile's exact output directory.
+    $runtimeOutput = Join-Path $repo "clients/agent-desktop/build/runtime-release/$ReleaseProfile"
+    $runtimeManifestPath = Join-Path $runtimeOutput 'runtime-release-manifest.json'
+    $runtimeManifest = Get-Content -LiteralPath $runtimeManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $installerPath = Join-Path $runtimeOutput $runtimeManifest.fileName
+    if ($runtimeManifest.version -ne $uiVersion -or $runtimeManifest.hostPackageSha256 -ne $hostSha) { throw '安装器版本或 Host 输入与本批不符' }
+    $deliveryFilesToCopy += @($installerPath, $runtimeManifestPath)
+}
 
-Write-Host '[stage 7] 打包定向测试'
-Invoke-NpmAt 'clients/runtime-plugin-packaging' @('test')
-Invoke-NpmAt 'clients/agent-desktop' @('run', 'runtime:test:packaging')
+if ($includeBoss) {
+    Write-Host '[stage 6] 插件验包与原生模块加载验证'
+    $pluginReportPath = Join-Path $buildRoot 'plugin-verification.json'
+    Invoke-Checked $pythonExe @('clients/runtime-plugin-packaging/verify-offline.py', '--directory', $pluginDir,
+        '--node', $fixedNode, '--trust-roots', $TrustRoots) | Tee-Object -FilePath $pluginReportPath
+    $outerCheck = Join-Path $buildRoot 'plugin-check/outer'
+    $payloadCheck = Join-Path $buildRoot 'plugin-check/payload'
+    Expand-Archive -LiteralPath $pluginPath -DestinationPath $outerCheck
+    Expand-Archive -LiteralPath (Join-Path $outerCheck 'payload.zip') -DestinationPath $payloadCheck
+    $nativeModuleUri = ([Uri](Join-Path $payloadCheck 'node_modules/@aid/win32-native-input/dist/index.js')).AbsoluteUri
+    Invoke-Checked $fixedNode @('--input-type=module', '-e',
+        "const m = await import(process.argv[1]); m.createKoffiApi(); console.log('NATIVE_INPUT_LOAD_OK');", $nativeModuleUri)
+    $deliveryFilesToCopy += $pluginReportPath
+}
 
-Write-Host '[stage 8] 复制交付文件与说明'
+Write-Host '[stage 7] 所选组件打包定向测试'
+if ($includeBoss) { Invoke-NpmAt 'clients/runtime-plugin-packaging' @('test') }
+if ($includeRuntime) { Invoke-NpmAt 'clients/agent-desktop' @('run', 'runtime:test:packaging') }
+
+Write-Host '[stage 8] 交付文件与公开说明'
 New-Item -ItemType Directory -Path $deliveryRoot | Out-Null
-foreach ($file in @($installerPath, $pluginPath, "$pluginPath.manifest.json", $runtimeManifestPath, $pluginReportPath)) {
-    Copy-Item -LiteralPath $file -Destination $deliveryRoot
-}
-Copy-Item -LiteralPath $registryPath -Destination (Join-Path $deliveryRoot 'acceptance-roots.json')
-Copy-Item -LiteralPath $snapshotPath -Destination $deliveryRoot
+foreach ($file in $deliveryFilesToCopy) { Copy-Item -LiteralPath $file -Destination $deliveryRoot }
+Copy-Item -LiteralPath $TrustRoots -Destination (Join-Path $deliveryRoot "$ReleaseProfile-roots.json")
 $sourceState = @(& git status --porcelain --untracked-files=normal)
 if ($LASTEXITCODE -ne 0) { throw '读取源码状态失败' }
 $buildInfo = [ordered]@{
-    schemaVersion = 1; batch = $batchName; profile = 'acceptance'
+    schemaVersion = 1; batch = $batchName; profile = $ReleaseProfile; component = $Component
     builtAt = (Get-Date).ToString('o'); baseCommit = $sourceBaseCommit; workingTree = $sourceState
     versions = [ordered]@{ ui = $uiVersion; host = $hostVersion; core = $coreVersion; nativeInput = $nativeVersion; boss = $bossVersion; node = $nodeSpec.version }
-    hostPackageSha256 = $hostSha; buildInputSha256 = $runtimeManifest.buildInputSha256
+    hostPackageSha256 = $hostSha; buildInputSha256 = if ($runtimeManifest) { $runtimeManifest.buildInputSha256 } else { $null }
     verification = [ordered]@{
-        runtimePackage = 'passed'; runtimeVerify = 'passed'; pluginOffline = 'passed'; nativeInputLoad = 'passed'
+        runtimePackage = if ($includeRuntime) { 'passed' } else { 'not_selected' }
+        runtimeVerify = if ($includeRuntime) { 'passed' } else { 'not_selected' }
+        pluginOffline = if ($includeBoss) { 'passed' } else { 'not_selected' }
+        nativeInputLoad = if ($includeBoss) { 'passed' } else { 'not_selected' }
         nsisInstallation = 'not_run'; oldInventoryUpgrade = 'not_run'; runtimeUiSmoke = 'not_run'; bossBusiness = 'not_run'; visualRecovery = 'not_run'
     }
 }
 Write-Utf8 (Join-Path $deliveryRoot 'build-info.json') (($buildInfo | ConvertTo-Json -Depth 12) + "`n")
+$instructions = @()
+if ($includeRuntime) {
+    $instructions += '1. 正常退出自己正在使用的 Runtime 后，运行本包 EXE；兼容配置与配对沿用，安装器不自动更新 BOSS 插件。'
+}
+if ($includeBoss) {
+    $instructions += "通过 Runtime 的离线包安装入口导入 boss-$bossVersion.aidplugin.zip，不要解压插件。只更新插件时无需重装已满足要求且信任该发布者的 Runtime。"
+}
 $readme = @"
-# Runtime 与 BOSS 安装说明
+# Runtime / BOSS 离线交付说明
 
-本批：$batchName。Runtime UI $uiVersion，Host $hostVersion，BOSS $bossVersion。
-Windows x64 验收安装器未做 Windows 代码签名；BOSS 插件已做发布者签名。
+本批：$batchName；组件：$Component；发行配置：$ReleaseProfile。
+$(if ($ReleaseProfile -eq 'acceptance') { 'Windows 验收安装器未做正式代码签名；插件仍有 Ed25519 发布者签名。' } else { 'Windows 安装器与插件按正式配置签名。' })
+$($instructions -join "`n")
 
-1. 在原 Windows 用户下，从托盘正常退出旧 Runtime；有执行任务时先正常收尾。
-2. 运行本 ZIP 内的 Runtime EXE，沿用原安装位置及用户资料，不删除配对、插件或执行记录。
-3. 打开 Runtime，用"安装 / 升级离线包"导入本 ZIP 内的 boss-$bossVersion-dev.aidplugin.zip；插件不要解压。
-4. 已配对用户沿用原身份；首次使用在 Web 生成配对码，在 Runtime 填服务器根地址和配对码。
-5. 准备原有调试 Chrome 并登录 BOSS，确认插件版本/启用状态，启动执行并在 Web 选定同一设备。
-
-Runtime 安装器不自动更新 BOSS 插件，第 3 步不可遗漏。客户机无需安装源码、Node、npm 或 Python。
-视觉恢复复用 Runtime 配对的服务器和设备身份，不需要额外 token 或环境变量；后台须有配套设备视觉 API，按后台 20 倍规则结算。服务器发布另行安排，本包不会部署后台。
-acceptance-roots.json 是公开验签资料，已包含在安装器中，无需客户手工导入。
-本批自动验包与实际安装、业务实测的范围见 build-info.json；not_run 不表示已经通过。
-默认本验收 Runtime 日志：%APPDATA%\aidwork-tool-runtime-acceptance\logs\runtime.log。
+已有客户的旧 Runtime 和 BOSS 满足原需求即可继续使用，无需随服务端升级。本包不会安装软件、部署后台或执行聊天/招聘业务。
+首次使用在 Web 获取配对码；已配对用户保留原服务器和身份。业务工具仍需在使用时登录对应软件。
+$ReleaseProfile-roots.json 是公开验签资料，不含私钥。新发布者必须被目标 Runtime 信任；本包不承诺旧客户端认识未曾交付的新根。
+本批实际验证范围见 build-info.json，not_selected / not_run 均不表示已通过。
 "@
 Write-Utf8 (Join-Path $deliveryRoot '先读我.md') ($readme + "`n")
 

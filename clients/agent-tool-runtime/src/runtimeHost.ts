@@ -1,5 +1,5 @@
 import { recoveryObservation } from './recoveryObservation.js'
-import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID, randomBytes } from 'node:crypto'
 import { ApiClient } from './apiClient.js'
 import { registrationBlocksExecution } from './connectionRegistration.js'
@@ -127,18 +127,21 @@ export class LegacyExecution implements HostAdapter {
     this.providers?.stopAdmission()
   }
   plugins() { return this.pluginStore?.list() ?? [] }
+  cleanupPluginImports(retained: readonly string[]): void {
+    const directory = join(this.home, 'management-imports')
+    if (!existsSync(directory)) return
+    if (lstatSync(directory).isSymbolicLink()) throw new Error('插件暂存目录需要检查')
+    const keep = new Set(retained.map(id => `${id}.zip`))
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.zip$/.test(entry.name) || keep.has(entry.name)) continue
+      if (entry.isFile() && !entry.isSymbolicLink()) rmSync(join(directory, entry.name), { force: true })
+    }
+  }
   async refreshPlugins() { await this.pluginStore?.refresh() }
   async canChangePlugins(method?: string): Promise<boolean> {
-    // Import verifies a higher release and retains the old immutable directory.
-    // It cannot replay an old invocation or clear the identity fence. Destructive
-    // changes remain blocked, as do any unresolved durable v2/session facts below.
-    if (existsSync(join(this.home, 'identity-reconciliation.bin')) && method !== 'plugins.import') return false
-    for (const name of ['journal', 'session-tasks']) {
-      const directory = join(this.home, name); const files = existsSync(directory) ? readdirSync(directory) : []
-      if (name === 'journal' && !files.every(file => hasJournalCompletionProof(this.home, file))) return false
-      if (name === 'session-tasks' && !(await Promise.all(files.map(file => hasSessionCompletion(join(directory, file), file, { protect: dpapiProtect, unprotect: dpapiUnprotect })))).every(Boolean)) return false
-    }
-    return true
+    // Management drains these execution lanes before switching a release. Historical
+    // journals/outbox stay authoritative, but do not prevent unrelated maintenance.
+    return !this.loop && !this.engine && !this.providers && !this.runPromise && !this.sessionGuard
   }
   async initialize(): Promise<void> {
     configureRuntimeHome(this.home)
@@ -375,9 +378,7 @@ export class LegacyExecution implements HostAdapter {
   }
   private resolveEntries(config: RuntimeConfig | null): Record<string, string> {
     const entries = resolveProviderEntries(config)
-    // BOSS operations already ensureDebugChrome and enforce their own page/login
-    // gates. Removing the verified entry before Chrome opens deadlocks boss_goto.
-    return this.pluginStore?.resolveEntries(entries, ['boss-recruiting']) ?? entries
+    return this.pluginStore?.resolveEntries(entries) ?? entries
   }
   private effectiveConfig(config: RuntimeConfig | null, entries = this.resolveEntries(config)): RuntimeConfig {
     return { ...(config ?? { server: '', device_id: '' }), bossCliEntry: undefined, providers: Object.fromEntries(Object.entries(entries).map(([key, entry]) => [key, { ...config?.providers?.[key], entry }])) }

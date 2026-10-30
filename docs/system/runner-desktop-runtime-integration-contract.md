@@ -16,6 +16,18 @@
 
 ## 1. 适用范围与约束层级
 
+2026-10-30 S5验收授权登记：仅在现有acceptance fixture/隔离构建副本内打包与实际安装升级，原0.0.29＋BOSS0.3.27为升级基线，当前客户机不替换；公开固定验收签名者首次登记并保留旧根，wire/授权/恢复事实语义不变，契约仍2.11。主控唯一维护版本/锁、构建修复及公开根；独测执行自有fixture，CR只读验证边界与输入，进度唯一见[计划12.8](../plans/plan-runtime-plugin-host.md#128-s5打包与隔离安装验收2026-10-30)。未授权提交、部署或恢复监听，SMOKE与普通Main恢复的验证范围分别记录。
+
+S5完成登记：最终Runtime0.0.32（Host0.2.25/Core0.2.22）、BOSS0.3.28与WeCom0.2.2验包/实际隔离安装通过；原0.0.29/0.3.27覆盖后的配置配对、已装core原结果补传/防重复及fresh/Clean通过，旧原始H1导入长cwd缺陷修复仅在新Runtime，不改旧端协议。原23公开根保留，首次追加固定验收发布者，非生产信任降级；契约仍2.11。仅FakeCloud/无副作用Provider及实际插件工具发现，普通Main自启/UAC/生产签名/真实业务计费未验；现用客户端未替换，自有fixture与测试认证材料已清理，证据范围见上述唯一计划。
+
+2026-10-30 S3/S4完成登记：安装/home布局、稳定签名独立组件及受管包清理沿v2 pointer/原注册协议，H1/H3/Device/Provider字段和契约2.11不变。core HostAdapter仅增加可选内部cleanupPluginImports回调，不是wire方法，持久终态后释放自有冻结ZIP、保留未终结输入和轻量去重证据。独测114场景及旧0.0.29＋BOSS0.3.27两批真实MCP只读兼容通过，四项CR修订复审无遗留。唯一结果与旧Python/归档范围见[计划12.7](../plans/plan-runtime-plugin-host.md#127-s3s4实施登记2026-10-30)。旧根/服务端不变；未提交、安装、部署或恢复监听，S5实装未授权。
+
+2026-10-30 S1/S2实施登记：复用core store/inventory、原Host停止证明与管理operation，解除可读历史记录的全局插件维护阻塞；通用已安装能力发现、缓存列表、可信同包修复/明确回退完成独测与CR。包格式与H1/H3/Device/Provider字段未变，契约保持2.11，不新增恢复协议/服务；真实secret损坏仍走原只读故障出口。主控维护management/Runtime/页面说明，限定开发者维护store/package及其测试；独测/CR只读验证76场景及旧0.0.29＋BOSS0.3.27两批实际MCP只读兼容。唯一结果见[计划12.6](../plans/plan-runtime-plugin-host.md#126-s1s2实施与验证2026-10-30)。下段为S0方案登记，覆盖安装/短路径/签名清理仍未实施；未提交、安装、部署或恢复监听。
+
+2026-10-30 安装升级简化候选（仅文档，未实施）：[Runtime设计第13节](runtime-plugin-host-architecture-design.md#13-安装升级简化目标2026-10-30)与[统一计划第12节](../plans/plan-runtime-plugin-host.md#12-安装升级简化实施计划2026-10-30)为本轮唯一目标/进度。兼容覆盖升级保留原home/身份，不强制新代际；干净重装才白名单迁移。历史unknown保留原身份事实且禁重放，但不普遍阻塞安装/连接；真实未停止执行仍约束资源替换。插件readiness与已安装能力发现分离，优先复用原H1字段/store，不新建恢复服务或状态协议。
+
+当前契约仍2.11，H1/H3/Device/Provider schema未改，本文不宣称目标已落地。实施主控统一维护core/Runtime/公共Desktop安装接线；后续独立测试与CR只读验证。服务端不预计变更，旧协议1/2/3、原BOSS工具/授权/回执/计费保持；Runtime0.0.29＋BOSS0.3.27无需升级/重配对。若实施确需wire变更，先登记具体可选字段/缺省值及旧端证据，不能借简化暗改共同接口。下文旧代际、全局历史结案和仅允许升版本的要求，如与该候选相冲突，保留为旧实现记录，以Runtime设计第13节作为后续实施依据；原执行授权与未知不重放边界继续生效。
+
 2026-10-30 W16客户端打包收尾：驱动缓存过滤、WeCom包内AES依赖与Windows长路径启动不改变Device/Host/Provider wire或BOSS工具，历史验收根保留，仅追加WeCom验收根。契约仍2.11，不要求已交付旧客户端升级；新增功能沿原能力协商，不新增门禁。主控唯一修改打包/CLI/bootstrap，独立测试及CR只读验证0.0.29＋BOSS0.3.27与长路径合成场景，见[W16计划](../plans/plan-wecom-cli-group-chat-experiment.md#w16-master客户端打包改动复核2026-10-30)。
 
 2026-10-30 W15服务端升级兼容：配置指纹仍写v3，恢复精确兼容master v1及分支v2；招聘profile保留master原配置，最新迁移水位后幂等补齐既有结构。仅服务端内部兼容，不改Device/Host/Provider wire、旧BOSS工具或执行权限，不要求客户机因此升级；契约仍2.11。主控唯一写入，独测/CR分别验证旧服务端checkpoint与真实存量库，见[W15计划](../plans/plan-wecom-cli-group-chat-experiment.md#w15-最小修复实施计划2026-10-30)。

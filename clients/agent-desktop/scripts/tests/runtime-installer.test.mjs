@@ -22,7 +22,7 @@ function fixture() {
   const env = { ...process.env, APPDATA: appData, AIDWORK_RUNTIME_INSTALL_FIXTURE: id }
   delete env.PSModulePath
   return { root, appData, install, id, namespace, env,
-    run(mode) { return execFileSync(powershell, ['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',script,'-Mode',mode,'-AppId','cn.aidingyi.agent.runtime.acceptance','-InstallDirectory',install,'-FixtureRegistryId',id], { encoding:'utf8', windowsHide:true, env, timeout:30000 }).trim() },
+    run(mode, args = []) { return execFileSync(powershell, ['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',script,'-Mode',mode,'-AppId','cn.aidingyi.agent.runtime.acceptance','-InstallDirectory',install,'-FixtureRegistryId',id,...args], { encoding:'utf8', windowsHide:true, env, timeout:30000 }).trim() },
     ps(command) { return execFileSync(powershell, ['-NoProfile','-Command',command], { encoding:'utf8', windowsHide:true, env, timeout:30000 }).trim() },
     cleanup() {
       this.ps(`[Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree('${namespace}',$false)`)
@@ -47,25 +47,37 @@ async function exited(item) {
   finally { clearTimeout(timer) }
 }
 
-test('each reinstall allocates a fresh generation, preserving prior identity source and stable unknown registration', {skip}, () => {
+test('normal overwrite retains identity and facts, while explicit clean reinstall allocates a separate short home', {skip}, () => {
   const f=fixture()
   try {
     const metadata=path.join(f.appData,'aidwork-runtime-app-acceptance/installation-v2')
-    const ids=new Set(), homes=new Set()
-    let previous=path.join(f.appData,'aidwork-tool-runtime-acceptance')
-    for(let i=0;i<10;i++) {
-      const id=f.run('Finalize')
-      assert.match(id,/^[a-f0-9-]{36}$/)
-      const pointer=JSON.parse(fs.readFileSync(path.join(metadata,'current.json'),'utf8'))
-      assert.equal(pointer.id,id); assert.equal(pointer.initialized,false)
-      assert.equal(pointer.priorHome,previous)
-      assert.equal(fs.existsSync(pointer.home),true)
-      assert.deepEqual(fs.readdirSync(pointer.home),[])
-      ids.add(id); homes.add(pointer.home); previous=pointer.home
-      fs.writeFileSync(path.join(metadata,'clean-registration.bin'),'protected unknown registration')
-    }
-    assert.equal(ids.size,10); assert.equal(homes.size,10)
+    const id=f.run('Finalize')
+    assert.match(id,/^[a-f0-9-]{36}$/)
+    const file=path.join(metadata,'current.json'), pointer=JSON.parse(fs.readFileSync(file,'utf8'))
+    assert.equal(pointer.home,path.join(f.appData,'aidwork-runtime-app-acceptance/rt'))
+    pointer.initialized=true; fs.writeFileSync(file,JSON.stringify(pointer))
+    fs.writeFileSync(path.join(pointer.home,'old-unknown-result'),'original fact')
+    fs.writeFileSync(path.join(metadata,'clean-registration.bin'),'protected unknown registration')
+    assert.equal(f.run('Finalize'),id)
+    assert.deepEqual(JSON.parse(fs.readFileSync(file,'utf8')),pointer)
+    const newId=f.run('Finalize',['-Clean'])
+    const clean=JSON.parse(fs.readFileSync(file,'utf8'))
+    assert.notEqual(newId,id); assert.notEqual(clean.home,pointer.home)
+    assert.equal(clean.priorHome,pointer.home); assert.equal(clean.initialized,false)
+    assert.equal(fs.readFileSync(path.join(pointer.home,'old-unknown-result'),'utf8'),'original fact')
     assert.equal(fs.readFileSync(path.join(metadata,'clean-registration.bin'),'utf8'),'protected unknown registration')
+  } finally { f.cleanup() }
+})
+test('an existing delivered generation layout is retained during a compatible overwrite', {skip}, () => {
+  const f=fixture()
+  try {
+    const metadata=path.join(f.appData,'aidwork-runtime-app-acceptance/installation-v2'), id=randomUUID()
+    const home=path.join(metadata,'generations',id,'connections',randomUUID())
+    fs.mkdirSync(home,{recursive:true})
+    const old={version:2,id,home,priorHome:null,initialized:true,installDirectory:f.install}
+    fs.writeFileSync(path.join(metadata,'current.json'),JSON.stringify(old))
+    assert.equal(f.run('Finalize'),id)
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(metadata,'current.json'),'utf8')),old)
   } finally { f.cleanup() }
 })
 test('corrupt old pointer does not block installer allocation', {skip}, () => {
