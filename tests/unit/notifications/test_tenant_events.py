@@ -1,11 +1,9 @@
-"""租户通知公共件：站内信渲染模板、租户级 installation_ref 确定性、tenant_owned 判定。"""
-import hashlib
-
+"""租户通知公共件：站内信渲染模板、tenant_owned 判定。"""
 import pytest
 
 from src.notifications.contracts import Subject
 from src.notifications.events import render_inbox_text, render_message_text
-from src.notifications.repository import tenant_installation_ref, tenant_owned
+from src.notifications.repository import tenant_owned
 
 CREDIT_LOW = {'tenant_name': '宏陶', 'daily_avg_credits': 5.0,
               'estimated_days': 2, 'remaining_credits': 10.0}
@@ -59,23 +57,6 @@ class TestRenderMessageText:
     def test_billing_events_fall_through_to_inbox_render(self):
         title, _ = render_message_text('billing.credit_low', CREDIT_LOW)
         assert title == '积分即将耗尽提醒'
-
-
-class TestTenantInstallationRef:
-    def test_deterministic_and_namespaced(self):
-        ref = tenant_installation_ref('t1')
-        again = tenant_installation_ref('t1')
-        other = tenant_installation_ref('t2')
-        assert ref == again
-        assert ref != other
-        assert ref.startswith('tenant_')
-        digest = ref[len('tenant_'):]
-        assert len(digest) == 40
-        int(digest, 16)  # 十六进制
-
-    def test_matches_construction_formula(self):
-        expected = 'tenant_' + hashlib.sha256(b'tenant_target:t1').hexdigest()[:40]
-        assert tenant_installation_ref('t1') == expected
 
 
 class TestTenantOwned:

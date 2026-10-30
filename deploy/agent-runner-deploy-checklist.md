@@ -112,9 +112,12 @@ agent2（test）与 agent3（dev）共用业务库 `aid_work_agent2`（`deploy/�
 **同一数据库同一时刻只允许一个环境常驻 runner-worker**，
 否则两环境 worker 会在同一 lease 池上跨环境分摊任务。启动前也核查旧 KF 容器已完成收尾。
 
-> **2026-10-15 起 agent3 环境已停用**（共库 + lease 池跨环境抢任务，见 `服务器部署现状.md` §1.2），
-> 本条共库风险随之解除。恢复启用 agent3 的前置条件：先为其新建独立业务库（与
-> `aid_work_agent2` 分离），再回到本清单核查。
+> **2026-10-15 起 agent3 环境曾停用**（共库 + lease 池跨环境抢任务，见 `服务器部署现状.md` §1.2）。
+> **2026-10-29 已拆库恢复启用**：agent3 改用独立库 `aid_work_agent3`/`aid_work_logs3`（自
+> agent2 库全量复制），`.env` 已切库，本条共库风险解除；两环境 runner 容器名已参数化隔离
+> （agent3 侧 `AGENT_RUNNER_*_CONTAINER` 加 `3` 后缀，见 overlay 头部说明）。测试数据经
+> `deploy/test2dev.sh` 单向同步（test → dev），**不得**反向同步；若未来任何环境重新指回
+> 对方库，必须先回到本条核查。
 
 ### ④ 令牌与 peer 检查（凭据不入文档/日志）
 

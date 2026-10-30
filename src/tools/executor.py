@@ -98,9 +98,11 @@ class ToolExecutor:
                 }
         
         # 参数验证
-        if not tool.validate_parameters(**parameters):
-            missing = tool.get_missing_parameters(**parameters)
-            validation_errors = tool.get_validation_errors(**parameters)
+        validation_parameters = ({key: value for key, value in parameters.items() if not key.startswith('_')}
+                                 if tool.InputModel is not None else parameters)
+        if not tool.validate_parameters(**validation_parameters):
+            missing = tool.get_missing_parameters(**validation_parameters)
+            validation_errors = tool.get_validation_errors(**validation_parameters)
             if validation_errors:
                 # 优先给出可读的具体错误（含类型错误），避免误导性的"缺少必需参数: []"
                 error_msg = f"参数校验失败: {'; '.join(validation_errors)}"
@@ -121,7 +123,7 @@ class ToolExecutor:
         # 内部注入参数（_trusted_tenant_id/_progress_queue 等）原样保留。
         if tool.InputModel is not None:
             try:
-                parameters = normalize_provided_parameters(tool, parameters)
+                parameters = {**parameters, **normalize_provided_parameters(tool, validation_parameters)}
             except Exception:
                 # validate_parameters 已保证 InputModel 可构造，此处仅兜底
                 logger.opt(exception=True).warning(f"工具参数类型规范化失败: {tool_name}")

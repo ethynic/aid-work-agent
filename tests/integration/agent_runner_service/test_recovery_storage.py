@@ -162,7 +162,12 @@ def test_queued_pause_acknowledgement_then_resume_keeps_original_fifo_position(
     owned = execution.acquire("fifo-head-owner", 30)
     checkpoint = {"unstarted": True, "execution_context": {"fixture": "accepted-config"}}
     parked = recovery.acknowledge_pause(attempt(owned), owned["revision"], checkpoint, {})
-    assert parked["status"] == "paused" and parked["checkpoint"] == checkpoint
+    assert parked["status"] == "paused"
+    assert {key:parked['checkpoint'][key] for key in checkpoint} == checkpoint
+    # A committed release proof lets the heartbeat distinguish parking from
+    # lease loss. The accepted unstarted input remains unchanged beneath it.
+    from src.services.agent_runner.execution_repository import released_by
+    assert released_by(parked,attempt(owned))
     assert parked["worker_id"] is None and parked["lease_until"] is None
     consumed = controls.get(principal, row["runner_id"], pause["control_id"])
     assert consumed["status"] == "consumed" and consumed["consumed_attempt"] == owned["attempt"]

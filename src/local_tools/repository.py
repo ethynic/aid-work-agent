@@ -33,6 +33,37 @@ class DeviceOperationUnresolved(ValueError):
     """A detached cloud wait grants no permission to reuse an unsettled desktop."""
 
 
+def _send_status_scope(cursor, invocation, *, dispatch=False):
+    if invocation.get('tool_name') != 'wecom_send_status' and invocation.get('business_kind') != 'wecom_send_status':
+        return None
+    from .wecom_send_status import invocation_scope, SendStatusScopeError
+    try:
+        return invocation_scope(cursor, invocation, dispatch=dispatch)
+    except SendStatusScopeError as error:
+        raise DeviceOperationUnresolved('WECOM_SEND_SCOPE_INVALID') from error
+
+
+def _reject_undispatched_send_status(cursor, invocation, expected_state):
+    """Retire only this read before dispatch; do not leave an invalid queued head."""
+    message = '原发送对账来源已失效，未派发只读核对；原发送结果与等待状态保持不变。'
+    result = {'success': False, 'code': 'WECOM_SEND_SCOPE_INVALID', 'message': message,
+              'data': None, 'retryable': False}
+    from .wecom_send_status import no_dispatch_marker, NO_DISPATCH
+    marker = no_dispatch_marker(cursor, invocation)
+    if marker is not None:
+        result[NO_DISPATCH] = marker
+    cursor.execute('''UPDATE local_tool_invocations SET state='failed',effect='none',
+        error_code='WECOM_SEND_SCOPE_INVALID',error_message=%s,result_json=%s,
+        finished_at=COALESCE(finished_at,NOW()),lease_expires_at=NULL
+        WHERE id=%s AND tenant_id=%s AND tool_name='wecom_send_status'
+          AND state=%s AND started_at IS NULL RETURNING id''',
+        (message, Json(result), invocation['id'], invocation['tenant_id'], expected_state))
+    if cursor.fetchone() is not None:
+        cursor.execute('''INSERT INTO local_tool_events (invocation_id,tenant_id,seq,stage,message)
+            SELECT %s,%s,COALESCE(MAX(seq),0)+1,'failed',%s FROM local_tool_events WHERE invocation_id=%s''',
+            (invocation['id'], invocation['tenant_id'], message, invocation['id']))
+
+
 PREEXECUTION_RESULT_CODES = ('NOT_LOGGED_IN', 'TOOL_NOT_ALLOWED', 'PROVIDER_NOT_AVAILABLE',
     'PROTOCOL_NOT_SUPPORTED', 'DESKTOP_NOT_INTERACTIVE', 'DESKTOP_RESOURCE_BUSY')
 COMPLETED_NONE_RESULT_CODES = (*PREEXECUTION_RESULT_CODES, 'INVALID_ARGUMENT', 'CHROME_UNAVAILABLE',
@@ -65,6 +96,10 @@ def owned_invocation_ids(execution):
 def operation_completion_known(invocation):
     if invocation.get('state') == 'cancelled' and invocation.get('claimed_at') is None:
         return True
+    if invocation.get('tool_name') == 'wecom_send_status':
+        from .wecom_send_status import no_dispatch_completion_known
+        if no_dispatch_completion_known(invocation):
+            return True
     observed = observed_invocation(invocation)
     result = observed.get('result_json') or {}
     return result_proves_completion(result.get('success'),
@@ -93,7 +128,7 @@ def assert_device_stop_available(cursor, tenant_id, device_id, *, exclude=None, 
         raise DeviceOperationUnresolved('LOCAL_RECOVERY_BUSY')
 
 
-def assert_device_operations_settled(cursor, tenant_id, device_id, *, observation=None):
+def assert_device_operations_settled(cursor, tenant_id, device_id, *, observation=None, send_status=None):
     if observation is not None:
         if observation.get('version') == 3:
             assert_device_stop_available(cursor, tenant_id, device_id, exclude=observation.get('invocation_id'))
@@ -104,7 +139,8 @@ def assert_device_operations_settled(cursor, tenant_id, device_id, *, observatio
     assert_device_stop_available(cursor, tenant_id, device_id, stop_only=True)
     # Only explicit end-waiting holds participate; legacy unknown history does
     # not unexpectedly quarantine a device. The caller holds the device lock.
-    cursor.execute("""SELECT i.id,i.state,i.effect,i.result_json,i.error_code,i.claimed_at,r.checkpoint
+    cursor.execute("""SELECT i.id,i.state,i.effect,i.result_json,i.error_code,i.claimed_at,
+        i.tool_name,i.provider_key,i.business_kind,i.business_ref,i.arguments_json,i.device_id,i.started_at,r.checkpoint
         FROM local_tool_invocations i
         JOIN agent_runners r ON r.runner_id=i.business_ref->>'runner_id'
         AND r.tenant_id=i.tenant_id
@@ -129,6 +165,8 @@ def assert_device_operations_settled(cursor, tenant_id, device_id, *, observatio
             held = owned_invocation_ids(checkpoint.get('execution') or {})
         if str(invocation['id']) in checkpoint.get('verified_local_invocations', []):
             continue
+        if send_status is not None and str(invocation['id']) == send_status['send_invocation_id']:
+            continue  # Only the revalidated read of this receipt; its original hold remains unchanged.
         if (observation and checkpoint.get('execution', {}).get('execution_id') == observation.get('runner_id')
                 and str(invocation['id']) in observation['original_invocation_ids']):
             continue
@@ -776,13 +814,18 @@ def create_invocation_in_tx(
     if not lock_active_device(cursor, tenant_id, device_id):
         raise DeviceOperationUnresolved('LOCAL_DEVICE_NOT_READY')
     observation = None
+    send_status = None
     if business_kind == 'agent_runner_recovery':
         from .recovery_observation import observation_scope
         observation = observation_scope(cursor, dict(tenant_id=tenant_id,user_id=user_id,session_id=session_id,
             device_id=device_id,tool_name=tool_name,arguments_json=arguments,provider_key=provider_key,business_kind=business_kind,business_ref=business_ref))
         if not observation:
             raise DeviceOperationUnresolved('LOCAL_VERIFICATION_BINDING_INVALID')
-    assert_device_operations_settled(cursor, tenant_id, device_id, observation=observation)
+    if tool_name == 'wecom_send_status' or business_kind == 'wecom_send_status':
+        send_status = _send_status_scope(cursor, dict(tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            device_id=device_id, tool_name=tool_name, arguments_json=arguments, provider_key=provider_key,
+            business_kind=business_kind, business_ref=business_ref))
+    assert_device_operations_settled(cursor, tenant_id, device_id, observation=observation, send_status=send_status)
     if tool_name == 'boss_resume_next':
         # Lock the parent in the same transaction as insertion. Competing calls
         # cannot fork the cursor, without changing the Runner's own dedupe key.
@@ -1035,7 +1078,16 @@ def claim_next(
             conn.commit()
             return None
         from .recovery_observation import observation_scope
-        assert_device_operations_settled(cursor, tenant_id, device_id, observation=observation_scope(cursor, row, dispatch=True))
+        try:
+            send_status = _send_status_scope(cursor, row, dispatch=True)
+        except DeviceOperationUnresolved as error:
+            if row.get('tool_name') != 'wecom_send_status' or str(error) != 'WECOM_SEND_SCOPE_INVALID':
+                raise
+            _reject_undispatched_send_status(cursor, row, 'queued')
+            conn.commit()
+            return None
+        assert_device_operations_settled(cursor, tenant_id, device_id,
+            observation=observation_scope(cursor, row, dispatch=True), send_status=send_status)
         cursor.execute(
             """
             UPDATE local_tool_invocations
@@ -1068,10 +1120,19 @@ def mark_started(invocation_id: str, tenant_id: str, claim_token_hash: str) -> O
             return None
         from .recovery_observation import observation_scope
         observation = observation_scope(cursor, owner, dispatch=True)
+        try:
+            send_status = _send_status_scope(cursor, owner, dispatch=True)
+        except DeviceOperationUnresolved as error:
+            if owner.get('tool_name') != 'wecom_send_status' or str(error) != 'WECOM_SEND_SCOPE_INVALID':
+                raise
+            if owner.get('state') == 'claimed':
+                _reject_undispatched_send_status(cursor, owner, 'claimed')
+            conn.commit()
+            return None  # Never acknowledge /started after rejecting its read scope.
         if (owner.get('business_kind') == 'agent_runner_recovery'
                 and (owner.get('business_ref') or {}).get('version') == 3 and observation is None):
             return None
-        assert_device_operations_settled(cursor, tenant_id, str(owner['device_id']), observation=observation)
+        assert_device_operations_settled(cursor, tenant_id, str(owner['device_id']), observation=observation, send_status=send_status)
         cursor.execute(
             """
             UPDATE local_tool_invocations

@@ -53,7 +53,7 @@ def end_waiting(repository, principal, runner_id):
                 and not fact['holdable'] for fact in facts):
             raise RunnerError('LOCAL_END_WAIT_NOT_APPLICABLE', 409)
         held = sorted(str(fact['id']) for fact in facts if fact.get('kind') == 'local'
-            and not fact['completion_known'])
+            and not fact['completion_known'] and not fact.get('readonly_db'))
         checkpoint = ({**checkpoint, 'ended_undispatched_wait': True} if undispatched else
             {**checkpoint, 'detached_local_wait': True, 'detached_local_invocations': held})
         checkpoint.pop('cancel_completion_blocked', None)

@@ -27,6 +27,8 @@ interface OutboxMetadata {
   attempts: number
   last_attempt_at?: string
   last_error?: string
+  /** Local retry schedule; original payload/claim identity remains unchanged. */
+  next_attempt_at?: string
   /** 确定性 4xx 后置 true（R21）：停止主动重试、启动重投跳过、条目永不删除（供对账） */
   gave_up?: boolean
   gave_up_at?: string
@@ -109,12 +111,13 @@ export class ResultOutbox {
   }
 
   /** 失败后回写尝试计数（tmp+rename 原子） */
-  markAttempt(invocationId: string, error?: string): void {
+  markAttempt(invocationId: string, error?: string, retryAfterMs?: number): void {
     const entry = this.load(invocationId)
     if (!entry) return
     entry.attempts += 1
     entry.last_attempt_at = new Date().toISOString()
     entry.last_error = error?.slice(0, 300)
+    if (retryAfterMs !== undefined) entry.next_attempt_at = new Date(Math.min(Date.now() + retryAfterMs, 8_640_000_000_000_000)).toISOString()
     this.writeEntry(entry)
   }
 
@@ -212,6 +215,16 @@ export interface DeliverOptions {
   emit?: (message: string) => void
 }
 
+export interface ReplayOptions extends DeliverOptions {
+  /** Bound the whole replay pass, rather than retrying every queued entry during startup. */
+  maxEntries?: number
+  /** The current invocation owns its own result delivery until it drains. */
+  canReplay?: (invocationId: string) => boolean
+}
+
+const activeDeliveries = new Map<string, Promise<OutboxOutcome>>()
+const deliveryKey = (outbox: ResultOutbox, entry: OutboxEntry) => `${path.resolve(outbox.dir)}:${entry.invocation_id}`
+
 /**
  * 发送单个 outbox 条目（终态回传与启动重投共用，R21 语义）：
  * - 2xx → 删除条目（唯一删除路径）；
@@ -220,7 +233,21 @@ export interface DeliverOptions {
  * - 设备撤销 → 放弃保留（fail-loud，不标 gave_up——非服务端裁决）；
  * - 5xx/网络失败 → 指数退避重试（条目保留）。
  */
-export async function deliverOutboxEntry(
+export function deliverOutboxEntry(
+  api: ApiClient,
+  outbox: ResultOutbox,
+  entry: OutboxEntry,
+  opts: DeliverOptions = {},
+): Promise<OutboxOutcome> {
+  const key = deliveryKey(outbox, entry)
+  const active = activeDeliveries.get(key)
+  if (active) return active
+  const delivery = deliverOriginalOutboxEntry(api, outbox, entry, opts).finally(() => activeDeliveries.delete(key))
+  activeDeliveries.set(key, delivery)
+  return delivery
+}
+
+async function deliverOriginalOutboxEntry(
   api: ApiClient,
   outbox: ResultOutbox,
   entry: OutboxEntry,
@@ -236,9 +263,9 @@ export async function deliverOutboxEntry(
     attempt += 1
     try {
       if (entry.endpoint === 'result') {
-        await api.result(entry.invocation_id, entry.payload)
+        await api.result(entry.invocation_id, entry.payload, opts.shutdownSignal)
       } else if (entry.endpoint === 'operation-result') {
-        const ack = await api.operationResult(entry.invocation_id, entry.payload)
+        const ack = await api.operationResult(entry.invocation_id, entry.payload, opts.shutdownSignal)
         // Persist original ACK evidence before deleting the only pending receipt.
         recordOperationAck(path.dirname(outbox.dir), entry.invocation_id, entry.payload, ack)
       } else {
@@ -264,12 +291,12 @@ export async function deliverOutboxEntry(
         return 'gave-up'
       }
       // 网络失败 / 5xx：保留条目退避重试
-      outbox.markAttempt(entry.invocation_id, err instanceof ApiError ? `HTTP ${err.status}` : err instanceof Error ? err.name : 'UnknownError')
+      const delay = Math.max(backoff, err instanceof ApiError ? err.retryAfterMs ?? 0 : 0)
+      outbox.markAttempt(entry.invocation_id, err instanceof ApiError ? `HTTP ${err.status}` : err instanceof Error ? err.name : 'UnknownError', delay)
       if (attempt >= maxAttempts) {
         logError(`invocation ${entry.invocation_id} v2 终态重投 ${attempt} 次未成功（outbox 条目保留，稍后再投）`)
         return 'retry-exhausted'
       }
-      const delay = Math.max(backoff, err instanceof ApiError ? err.retryAfterMs ?? 0 : 0)
       emit(`终态回传失败（网络/服务暂不可用），${delay}ms 后重试原结果`)
       const proceed = await backoffSleep(delay, opts.shutdownSignal)
       if (!proceed) {
@@ -301,29 +328,43 @@ export interface ReplaySummary {
 export async function replayPendingOutbox(
   api: ApiClient,
   outbox: ResultOutbox,
-  opts: DeliverOptions = {},
+  opts: ReplayOptions = {},
 ): Promise<ReplaySummary> {
+  if (opts.maxEntries !== undefined && (!Number.isSafeInteger(opts.maxEntries) || opts.maxEntries < 1)) {
+    throw new Error('Invalid outbox replay batch size')
+  }
   const pending = outbox.loadAll()
   if (pending.length === 0) return { acked: 0, rejected: 0, kept: 0, skippedGaveUp: 0 }
-  const replayable = pending.filter((entry) => !entry.gave_up)
+  const replayable = pending.filter((entry) => !entry.gave_up).sort((a, b) =>
+    a.attempts - b.attempts || String(a.last_attempt_at ?? a.created_at ?? '').localeCompare(String(b.last_attempt_at ?? b.created_at ?? '')))
   const skipped = pending.filter((entry) => entry.gave_up)
+  const emit = opts.emit ?? logInfo
   if (skipped.length > 0) {
     // 汇总日志（供对账）：逐条列出跳过条目与回执摘要白名单字段（不含 claim/permit token）
-    logInfo(`result outbox 启动重投：${pending.length} 条 pending，其中 ${skipped.length} 条已 gave_up（跳过重投、条目保留待对账）`)
+    emit(`result outbox 重投：${pending.length} 条 pending，其中 ${skipped.length} 条已 gave_up（跳过重投、条目保留待对账）`)
     for (const entry of skipped) {
-      logInfo(
+      emit(
         `result outbox gave_up 条目（跳过）invocation=${entry.invocation_id} attempts=${entry.attempts}` +
           ` reason=${entry.gave_up_reason ?? '-'} 回执摘要: ${receiptSummary(entry.payload)}`,
       )
     }
   } else {
-    logInfo(`result outbox 启动重投：${pending.length} 条 pending`)
+    emit(`result outbox 重投：${pending.length} 条 pending`)
   }
   if (replayable.length === 0) return { acked: 0, rejected: 0, kept: 0, skippedGaveUp: skipped.length }
   let acked = 0
   let rejected = 0
   let kept = 0
+  let attempted = 0
   for (const entry of replayable) {
+    if (opts.shutdownSignal?.aborted || attempted >= (opts.maxEntries ?? Number.POSITIVE_INFINITY)
+        || opts.canReplay?.(entry.invocation_id) === false
+        || activeDeliveries.has(deliveryKey(outbox, entry))
+        || entry.next_attempt_at && Date.parse(entry.next_attempt_at) > Date.now()) {
+      kept += 1
+      continue
+    }
+    attempted += 1
     try {
       const outcome = await deliverOutboxEntry(api, outbox, entry, opts)
       // gave-up 二义（确定性拒绝已标记 gave_up / 设备撤销未标记）：以条目磁盘状态归类

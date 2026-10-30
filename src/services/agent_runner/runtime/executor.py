@@ -93,8 +93,9 @@ class ModelAdapter:
                 self._message_has_image_references(message) for message in messages):
             messages = self._resolve_image_references(state)
         with execution_call(state.execution_id, call_id):
+            from ..continuous_context import context_prompt
             response = await self.gateway.chat_with_tools(
-                system_prompt=state.system_prompt, messages=messages, tools=tools)
+                system_prompt=state.system_prompt+context_prompt(state), messages=messages, tools=tools)
         response = dict(response)
         response.setdefault("model", self.gateway.get_model_name())
         response.setdefault("provider", self.gateway.get_provider_name())
@@ -169,8 +170,11 @@ class RuntimeExecution:
         self.profile_id = profile_id
         self.instance_id = instance_id
         self.visibility = ProfileResolver(resources.subagent_registry, identity.tenant_id)
+        from ..continuous import supported
+        self.supports_sleep = getattr(self.control,'durable_owner',False) and supported(identity.source,identity.session_kind)
         self.catalog = ToolCatalog(resources.mode, resources.tool_registry, resources._tool_controls,
-                                   self.visibility, resources.skill_registry)
+            self.visibility, resources.skill_registry, supports_sleep=self.supports_sleep,
+            configured_tools=resources.subagent_config.get_allowed_tools() if resources.subagent_config else ())
         self.skills = SkillSession(identity.tenant_id, resources.skill_registry, resources.memory)
         history_source = identity.source if identity.session_kind == "channel" else "chat"
         self.history = SessionHistory(resources.memory, history_source,
@@ -218,6 +222,22 @@ class RuntimeExecution:
             env_vars=env_vars, llm_gateway=self.resources.llm,infer_legacy_identity=False,
             profile_id=self.profile_id, instance_id=self.instance_id)
 
+    async def _prime_local_tools(self):
+        # The existing domain pin is not a global device selection policy.
+        root = self.control
+        while hasattr(root, 'parent_control'):
+            root = root.parent_control
+        provider_devices = {}
+        execution = getattr(root, 'envelope', {}).get('execution')
+        if execution is not None and getattr(root, 'durable_owner', False):
+            from ..wecom_device_binding import bound_device
+            device = bound_device(execution, root.attempt.runner_id,
+                {key: getattr(self.identity, key) for key in
+                 ('tenant_id', 'user_id', 'session_id', 'source', 'session_kind')})
+            if device is not None:
+                provider_devices['wecom'] = device
+        await self.catalog.prime_local_tools(self.identity, provider_devices)
+
     async def run(self, text, user=None, attachments=None, request_context=None,
                   extra_system_prompt=None, continuation=None, defer_names=None,
                   deferred_call_id=None, verbose_config=None, verbose_state=None,
@@ -229,6 +249,7 @@ class RuntimeExecution:
         try:
             preparation_events = []
             if state is None:
+                await self._prime_local_tools()
                 self.state, preparation_events = await self.assembler.prepare(text,
                     execution_id=self.resources.execution_id, user=user, attachments=attachments,
                     request_context=request_context, extra_system_prompt=extra_system_prompt,
@@ -244,6 +265,7 @@ class RuntimeExecution:
                     raise ValueError("CHECKPOINT_PROFILE_MISMATCH")
                 await asyncio.to_thread(self.history.reader.assert_authorized)
                 self.state = state
+                await self._prime_local_tools()
                 await asyncio.to_thread(self.skills._ensure_tenant_skills_loaded)
                 await self.visibility.prime()
             if state is None and self.initial_followup_inputs:
@@ -280,8 +302,30 @@ class RuntimeExecution:
                         reply_workspaces.append(workspace)
             owned_state = self.state
             if getattr(self.control,'durable_owner',False):
+                root_control = self.control
+                while hasattr(root_control,'parent_control'):
+                    root_control = root_control.parent_control
+                if state is None and 'business_round_policy' not in getattr(root_control,'envelope',{}):
+                    config = self.resources.subagent_config
+                    self.state.max_iterations = config.get_max_iterations(default=20) if config else 20
+                policy = getattr(root_control,'envelope',{}).get('continuous')
+                if policy is not None and (not isinstance(policy,dict) or policy.get('version')!=1):
+                    raise ValueError('RECOVERY_CONTINUOUS_VERSION_UNSUPPORTED')
+                from ..continuous import enabled
+                if self.supports_sleep:
+                    identity_version = self.state.resources.get('tool_identity_version')
+                    if ('tool_identity_version' in self.state.resources
+                            and (type(identity_version) is not int or identity_version != 1)):
+                        raise ValueError('RECOVERY_TOOL_IDENTITY_VERSION_UNSUPPORTED')
+                    self.state.resources['durable_sleep_version'] = 1
+                    self.state.resources['tool_identity_version'] = 1
+                if enabled(
+                        getattr(root_control,'envelope',{}), getattr(root_control,'intent',{})):
+                    self.state.resources['continuous_enabled'] = True
+                    self.state.resources.setdefault('business_iterations',self.state.iteration)
+                    self.state.resources.setdefault('continuous_segment_start',self.state.resources['business_iterations'])
                 from ..profiles import MainProfileCatalog
-                from ..runtime_manifest import configuration_fingerprint
+                from ..runtime_manifest import configuration_fingerprint, configuration_matches
                 from ..adapter_contract import (ADAPTER_CONTRACT_VERSION, adapter_contract_mismatch)
                 # Restore gate for the persisted adapter contract version. This
                 # mirrors RECOVERY_CONFIGURATION_CHANGED below and backstops the
@@ -293,11 +337,12 @@ class RuntimeExecution:
                 # on the cancel-acquire path.
                 if state is not None and adapter_contract_mismatch(self.state.resources):
                     raise ValueError('RECOVERY_ADAPTER_VERSION_UNSUPPORTED')
-                _, profile_fingerprint = await asyncio.to_thread(
+                profile_config, profile_fingerprint = await asyncio.to_thread(
                     MainProfileCatalog().resolve,self.state.profile_id,self.state.identity.tenant_id)
-                fingerprint = await asyncio.to_thread(configuration_fingerprint,profile_fingerprint)
+                fingerprint = await asyncio.to_thread(configuration_fingerprint,profile_fingerprint,profile_config)
                 previous = self.state.resources.get('configuration_fingerprint')
-                if state is not None and previous != fingerprint:
+                if state is not None and not await asyncio.to_thread(
+                        configuration_matches,previous,profile_fingerprint,profile_config):
                     raise ValueError('RECOVERY_CONFIGURATION_CHANGED')
                 self.state.resources['configuration_fingerprint'] = fingerprint
                 # Stamp persists with the 'prepared' control.save below; child
@@ -307,6 +352,12 @@ class RuntimeExecution:
                     from .child_recovery import ChildRecoveryAdapter
                     self.child_recovery = ChildRecoveryAdapter(self,MainProfileCatalog())
                 if state is not None:
+                    if self.state.role.value != 'subagent' and not self.control.command():
+                        # Restored descendants are still checkpoint data here;
+                        # compact before child adapters create live objects.
+                        from ..continuous_lifecycle import before_dispatch
+                        await self.control._authorize_execution(self.state.profile_id)
+                        await before_dispatch(self.control,self.state,quiescent=True)
                     continued = await self.child_recovery.restore_orphaned_children(self.state)
                     if not continued:
                         await self.control.save(self.state,'restored_children')

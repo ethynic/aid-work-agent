@@ -5,7 +5,7 @@ import uuid
 from typing import Literal
 
 from pydantic import Field
-from .contracts import SCHEMA_VERSION, StrictDTO
+from .contracts import RULE_EVENT_POLICY_KEY, SCHEMA_VERSION, StrictDTO
 from .repository import protected
 
 
@@ -115,6 +115,25 @@ class LeadGenDailySummaryParameters(StrictDTO):
     awaiting_review: int = Field(ge=0, le=1e6)
 
 
+class LeadCapturedParameters(StrictDTO):
+    """留资通知事件参数（规则引擎，设计 §5.1）。
+
+    contact_summary 为发布方拼接的完整联系方式串（客户可同时留多种联系方式，
+    全量拼接不截断，明文豁免口径见设计 §7）；assignee_user_id 为线索归属员工
+    （kf_assignee 接收人展开依据，可空——无归属时仅外发不站内信）。
+    """
+    lead_id: str = Field(min_length=1, max_length=64)
+    contact_method: Literal['phone', 'landline', 'email']
+    contact_summary: str = Field(min_length=1, max_length=500)
+    contact_name: str = Field(default='', max_length=128)
+    demand_summary: str = Field(default='', max_length=1000)
+    kf_config_id: str = Field(min_length=1, max_length=64)
+    kf_account_name: str = Field(min_length=1, max_length=128)
+    assignee_user_id: str = Field(default='', max_length=64)
+    assignee_name: str = Field(default='', max_length=128)
+    previous_captured_at: str = Field(default='', max_length=32)
+
+
 @dataclass(frozen=True)
 class EventDefinition:
     template_key: str
@@ -161,6 +180,17 @@ EVENTS.register('billing.tenant_expiry',EventDefinition('billing_tenant_expiry',
 EVENTS.register('abuse.rule_triggered',EventDefinition('abuse_rule_triggered',AbuseParameters,'abuse_event'))
 EVENTS.register('leadgen.reply_intent',EventDefinition('leadgen_reply_intent',LeadGenReplyIntentParameters,'leadgen_campaign'))
 EVENTS.register('leadgen.daily_summary',EventDefinition('leadgen_daily_summary',LeadGenDailySummaryParameters,'leadgen_campaign'))
+EVENTS.register('lead.captured',EventDefinition('lead_captured',LeadCapturedParameters,'lead_capture_lead'))
+
+
+def _non_work_time_note(now=None):
+    """非工作时间提示（设计 §5.1：沿用旧通知侧按服务器时间判断的口径，
+    迁入模板渲染；渲染时刻即站内信读取/投递执行时刻）。"""
+    from datetime import datetime
+    now = now or datetime.now()
+    if now.weekday() < 5 and 9 <= now.hour < 18:
+        return ''
+    return '当前为非工作时间，请于下一个工作日跟进。'
 
 
 def render_inbox_text(event_type, parameters):
@@ -214,6 +244,16 @@ def render_inbox_text(event_type, parameters):
         if p['awaiting_review'] > 0:
             lines.append(f'另有 {p["awaiting_review"]} 封草稿待审阅确认。')
         return 'AI获客每日汇总', ''.join(lines)
+    if event_type == 'lead.captured':
+        name = parameters.get('contact_name') or '未署名'
+        demand = parameters.get('demand_summary') or '未提供'
+        body = (f'微信客户「{name}」通过{parameters["contact_summary"]}留资'
+                f'（客服账号 {parameters["kf_account_name"]}），'
+                f'需求摘要：{demand}，请及时跟进。')
+        if parameters.get('previous_captured_at'):
+            body += f'该客户此前已于 {parameters["previous_captured_at"]} 留资，请结合历史需求跟进。'
+        body += _non_work_time_note()
+        return '客户留资提醒', body
     raise ValueError('NOTIFICATION_EVENT_UNSUPPORTED')
 
 
@@ -250,4 +290,38 @@ def publish_in_tx(cursor, *, subject, producer, event_type, event_key, resource_
     cursor.execute('''SELECT notification_ref FROM notification_messages
         WHERE scope_key=%s AND recipient_user_id=%s AND producer=%s AND event_key=%s''',
         (subject.scope_key,subject.user_id,producer,event_key))
+    return cursor.fetchone()['notification_ref']
+
+
+def publish_event_in_tx(cursor, *, producer, event_type, event_key, tenant_id, resource_ref,
+                        parameters, occurred_at, accepted_at, expires_at, category='task',
+                        priority=0, policy_key=RULE_EVENT_POLICY_KEY, registry=EVENTS):
+    """事件级消息发布（规则引擎，设计 §2/§5）：只提交"发生了什么"，接收人与
+    外发由展开阶段按租户通知规则决定（recipient_user_id 为 NULL）。
+
+    幂等：完整唯一约束含 recipient 列，NULL 互不相等，改命中部分唯一索引
+    notification_event_identity(scope_key,producer,event_key) WHERE recipient_user_id IS NULL。
+    仅租户 scope（事件必然归属具体租户）。"""
+    definition,parameters=registry.validate(event_type,parameters,resource_ref)
+    if (not producer or len(producer)>128 or not event_key or len(event_key)>512
+            or not tenant_id or expires_at<=occurred_at):
+        raise ValueError('NOTIFICATION_INTENT_INVALID')
+    identifier,ref='notification_'+uuid.uuid4().hex,uuid.uuid4().hex
+    scope_key='tenant:'+tenant_id
+    cursor.execute('''INSERT INTO notification_messages
+        (notification_id,notification_ref,schema_version,producer,event_type,event_key,
+         scope_key,tenant_id,recipient_user_id,resource_ref,template_key,template_version,
+         parameters_encrypted,occurred_at,accepted_at,expires_at,category,priority,policy_key)
+        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,NULL,%s::jsonb,%s,1,%s,%s,%s,%s,%s,%s,%s)
+        ON CONFLICT(scope_key,producer,event_key) WHERE recipient_user_id IS NULL DO NOTHING
+        RETURNING notification_ref''',
+        (identifier,ref,SCHEMA_VERSION,producer,event_type,event_key,scope_key,tenant_id,
+         json.dumps(resource_ref),definition.template_key,
+         protected(parameters),occurred_at,accepted_at,expires_at,category,priority,policy_key))
+    created=cursor.fetchone()
+    if created:
+        return created['notification_ref']
+    cursor.execute('''SELECT notification_ref FROM notification_messages
+        WHERE scope_key=%s AND recipient_user_id IS NULL AND producer=%s AND event_key=%s''',
+        (scope_key,producer,event_key))
     return cursor.fetchone()['notification_ref']

@@ -1,5 +1,7 @@
 # 系统核心表用途与关系
 
+2026-10-30 W15存量升级登记：`agent_runners.wake_at`、八项`chat_records`累计BIGINT字段及历史/WeCom待处理索引的结构不变；针对已完成master 2026-10-29 15:50迁移的环境，在2026-10-30 10:00追加幂等补齐块，避免旧水位跳过。须验证真实master存量库升级及重复执行保留计量/积分；不修改迁移框架。见[W15计划](../plans/plan-wecom-cli-group-chat-experiment.md#w15-最小修复实施计划2026-10-30)。
+
 > 本文档介绍智能体系统核心数据表的用途和相互关系，仅覆盖非 `bs_` 前缀的系统表。
 > `bs_` 开头的业务表由各子智能体自行管理，不在此文档范围内。
 
@@ -180,6 +182,8 @@
 
 两个表存在内容冗余但设计合理，服务于不同业务目的。
 
+2026-10-22长期归档消费增量（本地独测及CR通过，未部署）：`chat_messages`新增复合索引`idx_chat_messages_session_id(session_id,id)`，用于同会话受权runner归档的有界ID历史分页，标准/Nuodu初始化与`db_update.yaml`幂等升级同步。新分页直接读取PG，原最近消息/Redis缓存入口保持；在SQL中先过滤不可展示工具声明，再取有限窗口。读取协议及独测状态见[休眠计划第17节](../plans/plan-agent-runner-durable-sleep.md#17-复审修复与验证2026-10-22)。
+
 ### 3.3 `chat_records` — 会话记录表
 
 每次完整对话（用户输入 → AI 回复）的处理记录，是计费和审计的核心数据源。
@@ -189,9 +193,11 @@
 - `model` / `provider` — 使用的大模型和提供商
 - `agent_iterations` — 智能体循环迭代次数
 - `subagent_calls` — 子智能体调用记录（JSON）
-- `duration_ms` — 对话耗时
-- `status` — 执行状态（`completed` / `failed` / `cancelled`）
+- `duration_ms` — 对话耗时；持久Runner记录累计活跃attempt毫秒，不含park后的休眠
+- `status` — 执行状态（`completed` / `failed` / `cancelled`；持久Runner增量结算期间可为`running`）
 - `source_type` — 来源类型（`chat` 网页端 / `wecom` / `dingtalk` / `feishu` / `wecom_kf` 等渠道端）
+
+2026-10-22长期任务复审修复（本地独测及CR通过，未部署）：`total_token_count`、`prompt_tokens`、`completion_tokens`、`cached_input_tokens`、`agent_iterations`、`duration_ms`、`embedding_tokens`、`asr_calls`由INTEGER扩大为BIGINT，避免同一record跨长期attempt累计溢出。两套初始化DDL及`db_update.yaml`的原位幂等迁移已在隔离PG验证，原数据、价格和record归属不变；实际独测/CR状态见[休眠计划第17节](../plans/plan-agent-runner-durable-sleep.md#17-复审修复与验证2026-10-22)。
 
 **关系**：
 - `chat_records.user_id` → `users.user_id`
@@ -721,6 +727,7 @@ events/outbox/audit/quota 等系统生成行 `user_id` 可 NULL。DDL 三处同�
 - `local_tool_operation_permits`：写动作短期一次性许可（绑定 invocation/device/claim/
   request_id/target_version/payload_hash/epoch/resource；token 只存 hash；
   quota_reservation 持 R9 预留凭据）。
+- 2026-10-27 WeCom未知入站恢复：原读取结果的私有`_wecom_inbound`只保存本批待处理位置，`_wecom_recovered`保存可重投影的恢复候选；客户端原文/迟到事实不改。`idx_lt_inv_wecom_inbound_pending`仅索引当前有待处理项的WeCom读取，按租户、用户、会话、原Runner/执行、设备及创建顺序有界扫描；消费后记录退出部分索引，不新增队列表。对应[W10计划](../plans/plan-wecom-cli-group-chat-experiment.md#w10-真机前综合收敛2026-10-27)。
 - `local_tool_invocations` v2 扩列：`provider_key`（NULL=旧聊天链路任何设备可领；非 NULL
   需设备能力含该 provider）、`business_kind`（'desktop_automation'）、`business_ref`、
   `dedupe_key`（部分唯一索引 (tenant_id, business_kind, dedupe_key) 幂等）、`deadline_at`
@@ -865,6 +872,8 @@ DDL 同步维护于 `deploy/init-postgres.sql` 与 `deploy/db_update.yaml`
 （`2026-10-01 20:45:58`）；服务启动只检查 schema，不自动迁移或启动渠道/调度。
 开发计划：[AgentRunner](../plans/plan-agent-runner-service.md)。公开订阅 events 属 M5，
 不与计费 receipts 共表。本节记录实际 schema，worker/计费状态能力以计划阶段验收为准。
+
+2026-10-22持久化休眠增量（本地开发，未部署）：`agent_runners.wake_at TIMESTAMPTZ NULL`是数据库时钟调度投影，部分索引`idx_agent_runners_wake(wake_at,runner_id) WHERE status='waiting' AND wake_at IS NOT NULL`；DDL同步`deploy/init-postgres.sql`与`deploy/nuodu/init-postgres.sql`，增量落`deploy/db_update.yaml`。原行锁下与checkpoint的`durable_sleep.version=1`等待事实原子提交，消费/取消清空，阻断清调度投影但保留原deadline，pause不靠TTL释放会话claim；不新增timer表。continuous当前策略保存在原checkpoint，原input/digest不回写，累计积分来自唯一record及原收据；非终态结算分组累计复用`chat_records.usage_breakdown`内版本化扩展，不另建费用表。详情与验收唯一见[休眠计划](../plans/plan-agent-runner-durable-sleep.md)。
 
 | 表 | 字段与职责 |
 |---|---|

@@ -1,5 +1,23 @@
 # wecom-cli（aid-wecom）
 
+Agent 业务面使用三个工具：`wecom_read_session(session, cursor?, limit?)`、`wecom_message_send(session, text)`、`wecom_read_sessions(sessions?, cursor?, limit?)`。读单聊和群复用同一接口；批量读取同时返回聊天内容与 `pending_sessions`，按消息标注 `sender_platform=wechat|wecom|unknown`。首次历史为 `baseline`，后续游标增量不能与历史回放混用；群里同事最后发言不会自动清除客户候选。
+
+`session` 可使用首次完整名称，后续优先原样回传读取结果中的稳定标识；它不因短期搜索 ref 到期要求重搜。批量默认每次最多 50 条、16KiB，`has_more` 分页继续，局部失败在 `failed` 返回并保留补读位置。发送先核对当前会话，匹配就直接发送，非目标才内部搜索选择；未知发送只读对账，不重发。原诊断/底层工具保留旧调用兼容，Agent 无需逐项编排它们。
+
+```bash
+aid-wecom read-session --session '会话名称' --json
+aid-wecom read-sessions --sessions '["会话甲","会话乙"]' --limit 50 --json
+aid-wecom send --session '<读取返回的session>' --text '消息' --json
+```
+
+当前平台来源：已实证的微信虚拟 corp 精确标为微信，本企业 corp 标为企微；其他尚无可靠类型来源时返回 `unknown`，不以“外部联系人”等同微信。系统消息及是否需要回复继续由消息类型与任务上下文判断。
+
+批量续读省略 `sessions` 时继承原游标目标；目标暂时缺失只列入该目标的 `failed`，其他会话继续。未知发送者候选同时返回 `unknown_messages[{msg_id,sender_id,baseline,recovery_cursor}]`，身份元数据补齐后用该行的 `session` 与 `recovery_cursor` 调用 `wecom_read_session(...,limit=1)`，可重读原消息而不重置监控进度。消息正文留在原读取结果中；恢复游标和整个响应共同受 16KiB 边界约束。
+
+每条消息的 `baseline` 由游标保留的启动水位判断，局部失败补读及字节分页不会改变历史/新增属性；单会话 `new_messages` 仅包含启动后的记录。候选同时保留 `history_message_ids/new_message_ids`，未知身份恢复沿用原启动水位。仅本轮尚未发布的中间 `wb1` 格式若既无启动水位、又已进入补读阶段，因无法准确重建历史边界而明确返回 `CURSOR_UNSUPPORTED` 并保留进度；原正式群游标格式不受影响。
+
+Runner 将首次按名称发送拆为内部只读定位与稳定会话发送：原生 MCP `wecom_read_session` 的 `resolve_only=true` 复用发送内部的 DB 元数据定位，不解析正文、不返回消息游标，因此超长最新消息不会阻塞定位。此参数不进入 Agent 三工具业务面；已获得稳定 `session` 的发送不增加定位调用。
+
 企业微信（WXWork.exe）操作 CLI / MCP Provider。整体骨架与 `clients/weixin-cli` 同范式：
 CLI 动词子命令与 MCP stdio server 共用同一 operation 层，UI 自动化下沉到
 `drivers/ps1`（DRIVER_JSON 进程协议）+ `drivers/py`（RapidOCR）。
@@ -33,7 +51,7 @@ aid-wecom send-file (--target-ref <ref> | --target-name <会话名>) --file <本
                                             # 写动作：向目标发送 1 个文件（扩展名不限
                                             # ≤100MB；文件契约见 send-file 章节；--target-name 同 M11a 直达模式）
 aid-wecom unread [--name <名>] [--json]     # 未读会话快照（只读，不开会话不清角标）
-aid-wecom read-session (--target-ref <ref> | --target-name <会话名>) [--max-pages N] [--since-days N] [--json]
+aid-wecom read-session (--target-ref <ref> | --target-name <会话名>) [--channel local-db|ui] [--limit N] [--cursor <cursor>] [--max-pages N] [--since-days N] [--json]
                                             # 读会话消息（只读内容；进入会话会清除该会话未读角标；
                                             # 智能分发进会话 + 滚动截屏；M10b 双通道解析：配置
                                             # AID_WECOM_SERVER_URL+TOKEN 时走服务端模型通道（按次
@@ -71,6 +89,39 @@ aid-wecom version [--json]                  # 版本 + provider manifest（含 s
 - **待真机复验**：本机开发态已登录，need_login 分支（登出/断网凭据失效场景）未真机实测，
   代码按 wecom-personal-rpa `wecom-ops.ps1` get_login_state 先例实现（小窗判定 +
   CopyFromScreen 截图 base64）；上线前需登出企微复验二维码可见性与 hint 判定。
+
+## 本地库读取（P1b）
+
+### 群关键词搜索、群列表及时间线（P4）
+
+以下命令直接查询当前登录账号的本地数据库，不使用截图/OCR/Jev，不切换会话或清除未读。复用版本矩阵、账号确认和可信快照；缺库或不兼容时明确失败，不回退视觉。列表范围是**本机已同步群**，包含无聊天记录的群，不能视为企业全部群或当前成员资格清单。
+
+```powershell
+# 按群名关键词作字面子串匹配，过滤后最多返回10个（%/_不作通配符）
+node dist/src/cli/index.js list-groups --query "测试" --limit 10 --json
+# 列出最多20个群，按群名和会话ID稳定排序
+node dist/src/cli/index.js list-groups --limit 20 --json
+# 取最近100条，再按发送时间从早到晚排列
+node dist/src/cli/index.js read-group --target-name "新劳务云系统项目沟通群" --limit 100 --json
+# 时间闭区间内最近100条，仍按时间升序；未写时区时固定按北京时间
+node dist/src/cli/index.js read-group --target-name "新劳务云系统项目沟通群" --from-time "2026-10-01 00:00:00" --to-time "2026-10-22 23:59:59" --limit 100 --json
+```
+
+对应 MCP 工具为 `wecom_group_list({query?,limit?})` 与 `wecom_group_read({target_name,limit?,from_time?,to_time?})`。完整群名精确匹配，仅在群中消歧；多个同名群返回 `TARGET_AMBIGUOUS`。时间须完整到秒，也接受 `2026-10-22T12:00:00+08:00` / `2026-10-22T04:00:00Z`，起止两端均包含。只有单侧时间也可查询。
+
+两种查询默认 `limit=100`，返回 `count` 和 `has_more`；`has_more=true` 表示数量被限制，消息查询保留区间内最近 N 条。消息按 `send_time` 升序，同秒按 `msg_id` 升序；`sender_id` 保持字符串，`time` 固定北京时间，`send_time` 和输出的 `from_time/to_time` 为 Unix 秒。没有消息成功返回空数组，异常时间不进入时间线并以 `invalid_time_count` 明示（当前群总异常数）；非文本消息仍占位，`parse_trusted` 表示正文解析可信性，人工输出会给不可信文本加上 `[正文解析待核验]`。本命令不返回增量游标。
+
+原 `search` / `wecom_chat_search` 仍使用界面搜索；需要本地库搜群请使用 `list-groups`。新增工具进入本 Provider 的标准 MCP 发现面；本批不修改旧 D1 Runtime 的静态工具清单，也未发布或安装新版 Runtime 插件。
+
+群消息显示姓名并保留字符串 `sender_id`，`sender_name` 从当前账号本地用户表精确映射；查无姓名时为 `null`，人工输出显示 `未知用户(ID)`，不会按同名推断身份。`sender_name_source` 标明 `user_table/unresolved`，顶层 `naming_incomplete` 明示姓名缺口。
+
+文本消息按本地有序片段拼接，恢复普通文字、多次 `@成员`、`@所有人` 以及引用前文。`mentions:[{kind,user_id,name,name_source}]` 仅记录结构化提及，引用文字中的字面 `@` 不冒充真实提及；提及优先使用消息内历史显示名，缺名时才按ID补用户表姓名。`mentions_complete=false` 或 `parse_trusted=false` 表示未知/损坏片段等解析缺口；无法识别的片段明确占位，不能视为完整正文。引用前文按消息里的原始文字保留，不猜引用作者ID；非文本消息仍不解析实体内容。既有 read-session 增量游标和 watch 锚点语义保持不变。
+
+运行 `aid-wecom doctor --localdb` 确认版本与账号后，`read-session` 优先读取本地库，首次默认最近 100 条，后续将返回的 `data.cursor` 原样传入 `--cursor` 续读；`--limit` 控制每批条数。游标绑定当前账号、会话及数据库代际，不能交给 UI 通道或跨账号复用。
+
+`--channel local-db` 强制本地库且失败不回退，`--channel ui` 使用既有 UI 链路。未初始化仍可走 UI；普通首读的通道故障可回退 UI并显示原因，取消、参数、账号或目标错误不回退。带账号的 ref 必须与当前账号一致；旧 ref 继续用于 UI，本地库要求新 ref 或 `--target-name`。本地库不切会话、不清角标，非文本仅占位。
+
+本地库输出 `channel=local-db`、精确时间、`msg_id/parse_trusted/cursor`；UI继续输出 `model/ocr`，由 `--max-pages` 控制翻屏，其时间和方向可能近似，没有数据库游标，且可能清除角标。模型收费与余额/配置错误不降级规则保持。当前正式矩阵仅含已验证版本；未验证版本不扫描，真实切号、退出登录、锁屏与同会话UI对比仍待验收。
 
 ## 新消息跟踪（M3：unread / read-session / watch；M9 read 改名 + 智能分发；M10b 双通道）
 
@@ -523,3 +574,17 @@ npm install
 npm run typecheck   # tsc --noEmit
 npm test            # build + node --test（全 mock，不需要真实企微）
 ```
+
+## 不确定发送结果的只读恢复
+
+本地库基线可用的文本发送在调用发送驱动前写入DPAPI CurrentUser加密凭据，并通过checkpoint进度和最终结果/错误的`data.receipt_id`提供ID。调用方应保存ID；`effect=unknown/partial`或进程退出没有原结果时，不要再次调用send，改为：
+
+```powershell
+node dist/src/cli/index.js send-status --receipt-id <原receipt_id> --json
+```
+
+该命令只读本地库，不切群、不输入、不发送。`data.send_status=confirmed`只表示原账号、会话、源代际及基线之后、原时间窗内有唯一可信全文匹配记录，不代表对方已收到/已读，也不能区分窗口内人工发送的同文。`unknown`仍可能已发出，应稍后只读核查或人工判断，不得自动重发。凭据缺失/损坏、换账号/库、锚失效、歧义或扫描达到上限均不推断未发送。
+
+明确无发送动作的阶段会删除凭据（如checkpoint取消、导航前检查、写前拒绝）；删除失败立即停止，`receipt_invalidation_failed=true`的ID不可用于自动确认。驱动中超时/取消/unknown保留证据用于只读核对。
+
+凭据位于既有`artifacts/send-*/send-receipt.dpapi`，一个发送阶段一个小文件；清理该证据目录后无法恢复。不要将密文或原始群消息上传日志。只有旧OCR路径的发送没有可重建本地证明，不产生receipt。MCP同时暴露`wecom_send_status({receipt_id})`，沿用CLI同一只读operation；Runtime受信清单追加此只读工具，并在调用前核实际Provider能力，旧CLI提示升级而不重发。云端代理接收`send_invocation_id`，服务端从原发送可信结果提取receipt，核对同主体/会话/固定原设备后派发；不允许用模型自报receipt绕过权限或其他设备hold。对账调用本身0积分，模型实际用量照常计费；查询成功仍须看`data.send_status`，不自动改变原unknown/hold或解除原Runner核验等待。新真实发送、多天持续任务及正式发行升级仍待后续验收，不改原Runtime结果补传设施。

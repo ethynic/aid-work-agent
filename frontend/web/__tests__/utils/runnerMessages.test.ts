@@ -3,6 +3,25 @@ import { historyMessages, mergeRunnerMessages, runnerMessages, visibleFailedMess
 import { runnerView } from '../mocks/runnerView'
 
 describe('Runner display merges durable facts with existing messages', () => {
+  it('keeps archived continuous history when its checkpoint only projects a recent window', () => {
+    const row = runnerView({ execution_mode:'continuous', status:'waiting', snapshot:{ input:{ message_id:'runner-A:user', text:'监控消息', attachments:[] }, output:'本轮结果' } })
+    const history = historyMessages([{ message_id:'runner-A:history:5', role:'assistant', content:'上一轮已处理',
+      created_at:'2026-10-01T12:00:00Z', metadata:{ runner_id:'runner-A', runner_queue_order:1 } }] as any)
+    const first = mergeRunnerMessages(history,[row])
+    expect(first.map(message => message.content)).toEqual(['监控消息','上一轮已处理','本轮结果'])
+    const second = mergeRunnerMessages(first,[row])
+    expect(second.map(message => message.content)).toEqual(first.map(message => message.content))
+    expect(second[second.length-1]?.messageId).toBe('runner-A:final')
+  })
+  it('keeps persisted supplemental input after ordinary sleep history is compacted, without retaining rejected transient input', () => {
+    const row = runnerView({ status:'waiting', snapshot:{ history_version:1, input:{ message_id:'runner-A:user', text:'监控', attachments:[] } } })
+    const history = historyMessages([{ message_id:'control_original:user', role:'user', content:'只回复重要消息',
+      created_at:'2026-10-01T12:00:00Z', metadata:{ runner_id:'runner-A', runner_queue_order:1 } }] as any)
+    const temporary = { role:'user' as const, content:'未受理补充', runnerId:'runner-A', messageId:'control_rejected:user' }
+    const result = mergeRunnerMessages([...history,temporary],[row])
+    expect(result.map(message => message.content)).toEqual(['监控','只回复重要消息',''])
+    expect(result[result.length-1]?.messageId).toBe('runner-A:final')
+  })
   it.each(['running', 'failed', 'cancelled'] as const)('retry %s does not remove the failed source before success', status => {
     const source = runnerView({ status: 'failed' })
     const retry = runnerView({ runner_id: 'retry', client_request_id: 'retry-key', status, queue_order: 2 })

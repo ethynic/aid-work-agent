@@ -16,10 +16,12 @@ import { runCliOperation } from '../render.js'
 import type { WecomMessageSendArgs } from '../../operations/messageSend.js'
 
 export interface SendCommandOptions {
+  session?: string
   targetRef?: string
   targetName?: string
   subtitle?: string
   text?: string
+  groupCursor?: string
   /** true 时 stdout 最后一行输出 OperationResult JSON */
   json?: boolean
 }
@@ -30,10 +32,12 @@ export async function sendCommand(opts: SendCommandOptions): Promise<number> {
     console.error('⚠️ 写操作：将向目标发送 1 条消息；发送后校验失败不会自动重试（effect=unknown 时请人工核对）')
   }
   const args: WecomMessageSendArgs = {
+    ...(opts.session === undefined ? {} : { session: opts.session }),
     ...(opts.targetRef !== undefined ? { target_ref: opts.targetRef } : {}),
     ...(opts.targetName !== undefined ? { target_name: opts.targetName } : {}),
     ...(opts.subtitle !== undefined ? { subtitle: opts.subtitle } : {}),
     text: opts.text as string,
+    ...(opts.groupCursor === undefined ? {} : { group_cursor: opts.groupCursor }),
   }
   return runCliOperation(entry.operation, args, { exclusive: true, json: opts.json })
 }

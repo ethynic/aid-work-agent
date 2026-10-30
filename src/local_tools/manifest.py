@@ -2,7 +2,8 @@
 
 LOCAL_PROXY_TOOL_NAMES = frozenset({
     "boss_filter", "boss_clear_filter", "boss_filter_options", "boss_goto",
-    "boss_greet", "boss_accept_resume", "boss_reject_current",
+    "boss_greet", "boss_lookup_candidates", "boss_greet_selected",
+    "boss_accept_resume", "boss_reject_current",
     "boss_interview_demo", "boss_list_jobs", "boss_select_job",
     "boss_jobs_list", "boss_resume_detail", "boss_resume_batch",
     "boss_resume_next",
@@ -15,4 +16,5 @@ LOCAL_PROXY_TOOL_NAMES = frozenset({
     # catalog TRUSTED_PROVIDERS['wecom'] 逐字一致
     "wecom_probe", "wecom_message_send", "wecom_send_image",
     "wecom_send_file", "wecom_read_session", "wecom_unread_list",
+    "wecom_send_status", "wecom_group_poll", "wecom_read_sessions",
 })

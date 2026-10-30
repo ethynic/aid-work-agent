@@ -34,7 +34,7 @@ class RunnerRepository:
                 cursor.execute("SELECT to_regclass(%s) AS name", (name,))
                 if not cursor.fetchone()["name"]:
                     raise RuntimeError("AGENT_RUNNER_SCHEMA_REQUIRED")
-            cursor.execute('SELECT event_seq,event_floor_seq FROM agent_runners LIMIT 0')
+            cursor.execute('SELECT event_seq,event_floor_seq,wake_at FROM agent_runners LIMIT 0')
             from src.notifications.repository import NotificationRepository
             NotificationRepository.assert_schema_in_tx(cursor)
 
@@ -74,6 +74,11 @@ class RunnerRepository:
                             for key in ('file_id','name','type','mime_type','size')}
                            for item in request.attachments]},
             'progress':None,'output':'','images':[]}
+        checkpoint = dict(initial_checkpoint if initial_checkpoint is not None else
+            ({'execution_context':execution_context} if execution_context is not None else {}))
+        checkpoint.setdefault('business_round_policy',{'version':1,'default_max_iterations':50})
+        if request.execution_mode == 'continuous':
+            checkpoint['continuous'] = {'version':1,'enabled':True,'source':'creation','policy_revision':1}
         cursor.execute("""INSERT INTO agent_runners
             (runner_id, tenant_id, scope_key, session_kind, session_id, actor_kind, actor_id, user_id,
              service_id, source, client_request_id, input_digest, input, profile_id, profile_fingerprint,
@@ -85,7 +90,7 @@ class RunnerRepository:
             identity.user_id, principal.service_id, identity.source, request.client_request_id,
             request.digest(), json.dumps(request.intent(), ensure_ascii=False), resolved_profile_id or request.profile_id,
             profile_fingerprint, "record_" + uuid.uuid4().hex, capped_snapshot_dumps(snapshot),
-            capped_checkpoint_dumps(initial_checkpoint if initial_checkpoint is not None else ({'execution_context':execution_context} if execution_context is not None else {}))))
+            capped_checkpoint_dumps(checkpoint)))
         row = cursor.fetchone()
         created = row is not None
         if row is None:
@@ -186,7 +191,7 @@ class RunnerRepository:
             if row['cancel_requested'] or row['status'] in ('completed','failed','cancelled'):
                 from .control_repository import close_pending_controls
                 close_pending_controls(cursor,runner_id,'CONTROL_EXECUTION_CLOSED')
-                cursor.execute('''UPDATE agent_runners SET resume_control_id=NULL,pause_requested=FALSE
+                cursor.execute('''UPDATE agent_runners SET resume_control_id=NULL,pause_requested=FALSE,wake_at=NULL
                     WHERE runner_id=%s RETURNING *''',(runner_id,))
                 row = decoded(cursor.fetchone())
             from .application_public_projection import sync_public_display

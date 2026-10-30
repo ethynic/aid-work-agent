@@ -25,6 +25,9 @@ class RunnerManager:
             return public_runner(existing), False
         if not accept_new:
             raise RunnerError('WEB_SUBMISSIONS_DISABLED', 503)
+        if request.execution_mode is not None:
+            from .continuous import assert_continuous_supported
+            assert_continuous_supported(request.source, request.session.kind)
         # 单请求字节闸在入口拒绝（413 背压），不落任何行；已受理的幂等重放不受影响。
         from .persistence_limits import assert_intent_within_request_limit
         assert_intent_within_request_limit(request.intent(), code='REQUEST_TOO_LARGE')

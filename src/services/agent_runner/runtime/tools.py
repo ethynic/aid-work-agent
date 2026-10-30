@@ -11,7 +11,7 @@ from .history_projection import waiting_messages
 
 
 def owns_plan_task(name):
-    return name not in {'create_plan','clarify','use_skill','skill_complete'}
+    return name not in {'create_plan','clarify','ask_user','agent_sleep','use_skill','skill_complete'}
 
 
 class ToolDispatcher:
@@ -50,6 +50,13 @@ class ToolDispatcher:
         return result
 
     async def recover(self, state, call):
+        if call.name == 'agent_sleep':
+            # An armed wait is completed by the trusted claim transaction. A
+            # dispatch intent without that commit is safe, but was never slept.
+            from ..durable_sleep import recover_uncommitted
+            fact = state.tools[call.id]
+            if recover_uncommitted(state,fact):
+                return DispatchResult(fact.result,success=False,preserve_content=True)
         if call.id in state.children and self.child_recovery is not None:
             result = await self.child_recovery.recover(state,call)
             await self._finish_plan_task(state,call,result)

@@ -949,7 +949,7 @@ def _build_user_message(
     meta: Dict[str, str],
 ) -> str:
     user_token = meta.get("user_token_name", _DEFAULT_USER_TOKEN_NAME)
-    lead_phone = ctx.get("lead_phone") or "（客户未留资，留空，不得用其他号码冒充）"
+    lead_phone = ctx.get("lead_phone") or "（客户未留手机号，留空，不得用其他号码冒充）"
     from src.tools.channel.channel_user_info import GENDER_LABELS
 
     gender = int(ctx.get("gender") or 0)

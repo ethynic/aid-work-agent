@@ -91,23 +91,23 @@ CREATE TABLE IF NOT EXISTS chat_records (
     user_id TEXT,
     user_message TEXT,
     assistant_message TEXT,
-    total_token_count INTEGER DEFAULT 0,
-    prompt_tokens INTEGER DEFAULT 0,
-    completion_tokens INTEGER DEFAULT 0,
-    cached_input_tokens INTEGER DEFAULT 0,
+    total_token_count BIGINT DEFAULT 0,
+    prompt_tokens BIGINT DEFAULT 0,
+    completion_tokens BIGINT DEFAULT 0,
+    cached_input_tokens BIGINT DEFAULT 0,
     model TEXT,
     provider TEXT,
     execution_details TEXT,
-    agent_iterations INTEGER DEFAULT 0,
+    agent_iterations BIGINT DEFAULT 0,
     subagent_calls TEXT,
     status TEXT DEFAULT 'completed',
     error_message TEXT,
-    duration_ms INTEGER DEFAULT 0,
+    duration_ms BIGINT DEFAULT 0,
     source_type TEXT DEFAULT 'chat',
     credit_cost NUMERIC(12,2) NOT NULL DEFAULT 0.00,
     -- LLM 计费接入改造（2026-08-12）：embedding/ASR/视频提示词 等扩展计费维度
-    embedding_tokens INTEGER DEFAULT 0,   -- 累加该轮交互中所有 embedding 调用的 input token
-    asr_calls INTEGER DEFAULT 0,          -- 累加该轮交互中所有 ASR 调用次数（阿里云 NLS 按次计费）
+    embedding_tokens BIGINT DEFAULT 0,   -- 累加该轮交互中所有 embedding 调用的 input token
+    asr_calls BIGINT DEFAULT 0,          -- 累加该轮交互中所有 ASR 调用次数（阿里云 NLS 按次计费）
     usage_breakdown JSONB,                -- 详细分项明细 JSON（chat/embedding/asr/vision 各自 token 与 credit）
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -160,6 +160,7 @@ CREATE INDEX IF NOT EXISTS idx_channel_messages_session ON channel_messages(sess
 -- v3.2.1 P2-1：chat_messages 表同样需要 (session_id, created_at) 索引，
 -- 供 MessageDB.count_messages_by_session（压缩阈值快路径）走索引扫描
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created ON chat_messages(session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id ON chat_messages(session_id, id);
 
 -- 会话内上下文压缩摘要表（mid-term memory）
 -- 每次压缩产生一行，旧的 summary 置为 superseded，永不删除
@@ -3105,6 +3106,7 @@ CREATE TABLE IF NOT EXISTS agent_runners (
     attempt INTEGER NOT NULL DEFAULT 0,
     worker_id TEXT,
     lease_until TIMESTAMPTZ,
+    wake_at TIMESTAMPTZ,
     revision BIGINT NOT NULL DEFAULT 0,
     view_revision BIGINT NOT NULL DEFAULT 0,
     control_revision BIGINT NOT NULL DEFAULT 0,
@@ -3123,6 +3125,8 @@ CREATE TABLE IF NOT EXISTS agent_runners (
 CREATE INDEX IF NOT EXISTS idx_agent_runners_queue ON agent_runners(status,queue_order);
 CREATE INDEX IF NOT EXISTS idx_agent_runners_session ON agent_runners(scope_key,session_kind,session_id,queue_order);
 CREATE INDEX IF NOT EXISTS idx_agent_runners_lease ON agent_runners(lease_until) WHERE status IN ('running','finalizing');
+CREATE INDEX IF NOT EXISTS idx_agent_runners_wake ON agent_runners(wake_at,runner_id)
+    WHERE status='waiting' AND wake_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS agent_runner_session_claims (
     scope_key TEXT NOT NULL,

@@ -78,7 +78,8 @@ def _public_waiting(value):
     if not isinstance(value, dict):
         return None
     result = _display_fields(value, ('kind', 'question', 'tool_call_id', 'execution_id',
-        'invocation_id', 'assistance_id', 'child_status','wait_id','target_execution_id'))
+        'invocation_id', 'assistance_id', 'child_status','wait_id','target_execution_id',
+        'seconds','reason','wake_at','version'))
     if isinstance(value.get('missing_info'), list):
         result['missing_info'] = [item for item in value['missing_info'] if isinstance(item, str)]
     if isinstance(value.get('form'), dict):
@@ -90,7 +91,11 @@ def _public_waiting(value):
 
 def _public_snapshot(value):
     value = value if isinstance(value, dict) else {}
-    result = _display_fields(value, ('progress', 'output', 'iteration', 'imagesPlacement'))
+    result = _display_fields(value, ('progress', 'output', 'iteration', 'business_iterations', 'imagesPlacement'))
+    if value.get('history_version') == 1:
+        result['history_version'] = 1
+    if type(value.get('history_revision')) is int and value['history_revision']>=0:
+        result['history_revision'] = value['history_revision']
     result.update(_public_presentation(value))
     if 'images' in value:
         result['images'] = _public_images(value['images'])
@@ -201,6 +206,17 @@ def public_runner(row):
                 value["scheduled"] = projected
     checkpoint = row.get('checkpoint') or {}
     verification = checkpoint.get('local_verification')
+    from .continuous import enabled
+    if enabled(checkpoint,row.get('input')):
+        value['execution_mode'] = 'continuous'
+    usage = row.get('public_snapshot',{}).get('usage')
+    if isinstance(usage,dict):
+        value['usage'] = _display_fields(usage,('task_credits','session_credits','pending','updated_at'))
+    blocked = checkpoint.get('sleep_blocked')
+    if isinstance(blocked,dict) and isinstance(blocked.get('error_code'),str):
+        code = blocked['error_code']
+        value['sleep_blocked'] = {'error_code':code if len(code)<=128 and code.replace('_','').isalnum()
+            else 'SLEEP_RECOVERY_BLOCKED'}
     if isinstance(verification, dict):
         value['local_verification'] = {key: verification.get(key) for key in
             ('invocation_id', 'state', 'resource_stopped', 'page_observed', 'target_relation', 'error_code', 'stop_error_code')}

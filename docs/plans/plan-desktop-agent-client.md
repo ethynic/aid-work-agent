@@ -1,5 +1,13 @@
 # Agent 桌面客户端 v3 开发计划
 
+2026-10-26 W6检查点：沿[共同契约2.10](../system/runner-desktop-runtime-integration-contract.md)由Runner固定持续群聊原设备，Runtime新增只读轮询及group_cursor发送门禁；本轮不改Desktop UI、公开binding或Device wire。唯一进度见[W6计划](plan-wecom-cli-group-chat-experiment.md#w6-配置智能体完整链路2026-10-26)，隔离链路验证不等于Desktop发布验收，禁止部署或恢复监听。
+
+2026-10-26 wecom对账检查点：按[共同契约2.9 §5.7](../system/runner-desktop-runtime-integration-contract.md#57-wecom发送对账接线2026-10-26)追加业务工具wecom_send_status schema v1，沿原只读operation与固定原发送/设备scope；MCP/core主控、local_tools后端角色各自限域写入，实际范围/结果唯一登记在[wecom计划](plan-wecom-cli-group-chat-experiment.md#2026-10-26-mcp与runtime发送对账接线)。Device/Host/H3/Runner公开wire、原unknown/hold及outbox不变，不自动解除verification等待；旧CLI明确拒绝新能力并保留旧六工具。本地接线及独立TEST/CR已完成（PG63、TS32、单测173通过另2旧BOSS基线失败）；无提交/部署，真实群聊、长期运行及新Desktop UI未验收。
+
+2026-10-22休眠检查点：按[共同契约2.8 §5.6](../system/runner-desktop-runtime-integration-contract.md#56-通用持久化休眠增量2026-10-22)由Runner工作流唯一维护接单/能力/timer/累计积分与Web消费者，进度见[休眠计划](plan-agent-runner-durable-sleep.md#13-本轮实施基线与共同检查点)。公开API major仍为1；Desktop缺新能力时不创建continuous或盲目resume timer，查询/取消仍可用。新Desktop壳消费适配需另行组合验证，本轮不声称Desktop UI已支持。
+
+2026-10-22复审修复兼容检查点：Runner私有工具代次/累计BIGINT及历史产物退休由同一修复角色负责；snapshot可选history_revision仅为历史更新水位，Web拉取既有历史，旧消费者可忽略，Device/Host不变。实现与独测/CR结论统一见[休眠计划第17节](plan-agent-runner-durable-sleep.md#17-复审修复与验证2026-10-22)，本地Runner/Web独测及CR已通过，未部署；本条不宣称Desktop或真机Runtime已验收。
+
 2026-10-20恢复检查点：按共同契约2.5保留独立v2页面观察，Web新增显式停止旧工具进程并解锁设备动作，可能关闭Runtime启动的浏览器；其他任务真实活动时不停止，不重发原任务。v3受管边界可覆盖存量无generation未知BOSS调用，页面目标不可核验不阻断资源停止。恢复开发智能体唯一写代码/文档，源码及dist冻结，独立120项及宽窄UI通过，CR无阻断；唯一进度见[BOSS恢复计划Phase10](plan-boss-resume-next-recovery-fix.md)。未发行或部署。
 
 2026-10-20恢复增量检查点：按[共同契约恢复增量](../system/runner-desktop-runtime-integration-contract.md#2026-10-20-本地未知调用恢复与web结束等待兼容增量)开发Web结束等待、迟到回执对账与设备冲突阻断；唯一代码写入者为恢复开发子智能体，无Desktop壳或Device wire变更。进度与独立验证唯一记录在[BOSS恢复计划Phase 6～8](plan-boss-resume-next-recovery-fix.md)，本计划仅引用。

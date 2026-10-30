@@ -12,6 +12,8 @@ import { deviceCapabilities, RUNTIME_VERSION } from './config.js'
 import { runInvocation, type RunnerDeps } from './invocationRunner.js'
 import { manifestDigest } from './manifestVerifier.js'
 import { replayPendingOutbox } from './resultOutbox.js'
+import { pruneCompletedJournals } from './completionProof.js'
+import { dirname } from 'node:path'
 import { logError, logInfo } from './log.js'
 
 export interface PollLoopOptions {
@@ -51,6 +53,10 @@ export class PollLoop {
   private readonly runnerShutdown = new AbortController()
   private stopped = false
   private runningInvocation = false
+  private runningInvocationId: string | null = null
+  private replayPromise: Promise<void> | null = null
+  private nextEvidenceCleanupAt = 0
+  private evidenceCleanupCursor = ''
   private accepting = true
 
   constructor(options: PollLoopOptions) {
@@ -93,25 +99,40 @@ export class PollLoop {
   private claimPromise: Promise<void> | null = null
 
   async run(): Promise<void> {
-    // v2 结果 outbox 启动重投（§5.3/R14：pending 条目用原 claim 身份重投；仅 2xx 持久
-    // ACK 才删除条目，确定性 4xx 标记 gave_up 保留待对账、跳过重投）。有界尝试，仍失败
-    // 的条目保留磁盘，不阻塞主循环启动。
+    // Begin heartbeats/admission immediately. Old receipts are drained in bounded,
+    // single-flight passes after successful heartbeats, using their original claims.
+    this.claimPromise = this.claimLoop()
+    try {
+      await Promise.all([this.heartbeatLoop(), this.claimPromise])
+    } finally {
+      await this.replayPromise
+    }
+  }
+
+  private replayResults(): void {
     const outbox = this.opts.runnerDeps.resultOutbox
-    if (outbox) {
+    if (!outbox || this.replayPromise || this.stopped) return
+    this.replayPromise = (async () => {
       try {
         await replayPendingOutbox(this.opts.api, outbox, {
           retryBaseMs: this.opts.backoffBaseMs,
           retryMaxMs: this.opts.backoffMaxMs,
-          maxAttempts: 5,
+          maxAttempts: 1,
+          maxEntries: 8,
+          canReplay: id => id !== this.runningInvocationId,
           shutdownSignal: this.controller.signal,
-          emit: (msg) => this.emit(msg),
+          emit: () => {},
         })
+        if (!this.stopped && Date.now() >= this.nextEvidenceCleanupAt) {
+          this.nextEvidenceCleanupAt = Date.now() + 60 * 60 * 1000
+          const cleanup = pruneCompletedJournals(dirname(outbox.dir), Date.now(), this.evidenceCleanupCursor)
+          this.evidenceCleanupCursor = cleanup.cursor
+          if (cleanup.failed) logError(`已闭合journal清理失败 ${cleanup.failed} 条，保留其余证据`)
+        }
       } catch (err) {
-        logError(`result outbox 启动重投异常（不阻塞主循环）: ${err instanceof Error ? err.message : String(err)}`)
+        logError(`result outbox 重投异常（保留原回执）: ${err instanceof Error ? err.message : String(err)}`)
       }
-    }
-    this.claimPromise = this.claimLoop()
-    await Promise.all([this.heartbeatLoop(), this.claimPromise])
+    })().finally(() => { this.replayPromise = null })
   }
 
   private emit(msg: string): void {
@@ -132,6 +153,7 @@ export class PollLoop {
         }, this.controller.signal)
         backoff = backoffBaseMs
         this.opts.onConnection?.('online')
+        this.replayResults()
         if (!hb.selected) {
           this.emit('心跳成功（提示：当前设备未被 Web 端选定，任务不会下发到本设备）')
         }
@@ -187,6 +209,7 @@ export class PollLoop {
       // A successful claim response is already accepted even if stop raced with its return.
       if (this.stopped) break
       this.runningInvocation = true
+      this.runningInvocationId = inv.invocation_id
       this.emit(`领取 invocation ${inv.invocation_id} tool=${inv.tool_name}`)
       this.opts.onInvocationStart?.(inv)
       try {
@@ -201,6 +224,7 @@ export class PollLoop {
         logError(`invocation ${inv.invocation_id} 执行器异常: ${err instanceof Error ? err.message : String(err)}`)
       } finally {
         this.runningInvocation = false
+        this.runningInvocationId = null
         this.opts.onInvocationEnd?.(inv)
       }
     }

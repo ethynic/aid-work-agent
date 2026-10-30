@@ -66,7 +66,7 @@ def _patch_repo(devices, invocation=None, events=None):
 
 class TestToolDefinitions:
     def test_all_tools_local_required(self):
-        """32 个 proxy 工具全部 LOCAL_REQUIRED，名称与受信 manifest（boss+wecom 两 Provider）一致
+        """35 个 proxy 工具全部 LOCAL_REQUIRED，名称与受信 manifest（boss+wecom 两 Provider）一致
 
         boss工具：含 Phase 3 新增的 boss_list_jobs / boss_select_job / boss_jobs_list、
         面试通知 Phase 1 的 boss_interview_notify、沟通会话只读能力
@@ -77,9 +77,9 @@ class TestToolDefinitions:
         boss_open_detail / boss_greet_detail / boss_close_detail（2026-09-28 筛选主路径）
         为纯代理注册。
         boss_lookup_candidates / boss_greet_selected 为重名候选查询与确认发送。
-        wecom 6 个（M11c，2026-09-29）：企业微信 Provider 纯代理工具，category=local_wecom。
+        wecom 9 个：企业微信 Provider 纯代理工具，category=local_wecom。
         """
-        assert len(LOCAL_PROXY_TOOL_CLASSES) == 32
+        assert len(LOCAL_PROXY_TOOL_CLASSES) == 35
         assert LOCAL_PROXY_TOOL_NAMES == (
             set(catalog.allowed_tools("boss-recruiting")) | set(catalog.allowed_tools("wecom"))
         )

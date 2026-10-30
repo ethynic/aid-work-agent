@@ -131,11 +131,18 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.Probe' -Body {
                 qr_status_hint = $hint
             }
         }
-        return @{
-            login_state = 'offline'
-            main_window = $null
-            current_page = $null
+        # A recognised hidden main window belongs to the logged-in tray session.
+        $hidden = @($all | Where-Object {
+            $_.Class -eq 'WeWorkWindow' -and $_.Title -eq '企业微信' -and $_.W -ge 600 -and $_.H -ge 400
+        } | Sort-Object { $_.W * $_.H } -Descending)
+        if ($hidden.Count -gt 0) {
+            if ($hidden.Count -gt 1 -and ($hidden[0].W * $hidden[0].H) -eq ($hidden[1].W * $hidden[1].H)) {
+                Throw-DriverError 'WINDOW_AMBIGUOUS' '多个隐藏企业微信主窗口，无法确认当前窗口'
+            }
+            return @{ login_state = 'online'; window_hidden = $true; current_page = $null
+                main_window = @{ hwnd = [int64]$hidden[0].Hwnd; x = [int]$hidden[0].X; y = [int]$hidden[0].Y; w = [int]$hidden[0].W; h = [int]$hidden[0].H } }
         }
+        return @{ login_state = 'offline'; main_window = $null; current_page = $null }
     }
 
     $sorted = @($candidates | Sort-Object { $_.W * $_.H } -Descending)

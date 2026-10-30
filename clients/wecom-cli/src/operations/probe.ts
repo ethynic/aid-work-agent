@@ -132,6 +132,7 @@ export function createWecomProbeOperation(
                 : 'offline'
             data.login_state = state
             data.main_window = win.main_window ?? null
+            data.window_hidden = win.window_hidden === true
             data.current_page = win.current_page ?? null
             // E5：need_login 附登录窗二维码与状态提示（qr 只随本结果走 stdout，不写日志/不存 artifact）
             if (state === 'need_login') {

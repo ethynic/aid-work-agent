@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 from unittest.mock import patch
-import builtins
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -99,20 +99,25 @@ def test_assembly_order_preserves_explicit_compatibility_priority():
     assert bundle.final_names == ("probe", "a_late_probe")
 
 
-def test_master_assembly_never_imports_local_proxy(monkeypatch):
-    original_import = builtins.__import__
+def test_master_assembles_catalog_business_candidates_without_internal_steps():
+    from src.local_tools.catalog import TRUSTED_PROVIDERS, agent_tools
+    from src.local_tools.manifest import LOCAL_PROXY_TOOL_NAMES
+    from src.local_tools.wecom_business import BUSINESS_TOOLS
+    from src.tools.base import ExecutionTarget
 
-    def guarded_import(name, *args, **kwargs):
-        if name == "src.local_tools.proxy_tool":
-            raise AssertionError("MASTER 不得加载 local proxy 实现")
-        return original_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", guarded_import)
     with patch("src.tools.assembly.discover_tool_classes", return_value={"probe": AssemblyProbeTool}):
         bundle = assemble_agent_tools(request(
             ToolAssemblyRole.MASTER, subagent_registry=object()
         ))
-    assert bundle.final_names == ("probe",)
+    business = {name for key in TRUSTED_PROVIDERS for name in agent_tools(key)}
+    assert set(bundle.final_names) & LOCAL_PROXY_TOOL_NAMES == business & LOCAL_PROXY_TOOL_NAMES
+    assert {name for name in bundle.final_names if name.startswith('wecom_')} == BUSINESS_TOOLS
+    assert "probe" in bundle.final_names
+    for name in BUSINESS_TOOLS:
+        tool = bundle.registry.get_tool(name)
+        assert tool.execution_target is ExecutionTarget.LOCAL_REQUIRED
+        properties = tool.to_tool_definition()["input_schema"]["properties"]
+        assert not {"target_ref", "target_name", "resolve_only", "send_invocation_id"} & properties.keys()
 
 
 def test_non_master_controls_cannot_bind_delegate():
@@ -125,3 +130,37 @@ def test_non_master_controls_cannot_bind_delegate():
         bundle.controls.bind_delegate(
             subagent_registry=object(), subagent_executor=object()
         )
+
+
+@pytest.mark.asyncio
+async def test_wecom_batch_executor_validates_business_fields_and_preserves_injected_context():
+    from src.local_tools.proxy_tool import WecomReadSessionsTool
+    from src.tools.executor import ToolExecutor
+    from src.services.agent_runner.runtime.local_tools import ProgressQueue
+
+    tool = WecomReadSessionsTool()
+    registry = ToolRegistry()
+    registry.register(tool)
+    progress = ProgressQueue(maxsize=1)
+    injected = {'_trusted_tenant_id': 'tenant', '_trusted_user_id': 'user',
+                '_session_id': 'session', '_progress_queue': progress}
+    with patch.object(tool, 'execute', AsyncMock(return_value={'success': True})) as dispatch:
+        result = await ToolExecutor(registry).execute(tool.name, {'limit': '5', **injected})
+    assert result['success']
+    assert dispatch.await_args.kwargs == {'limit': 5, **injected}
+    assert dispatch.await_args.kwargs['_progress_queue'] is progress
+
+
+@pytest.mark.asyncio
+async def test_wecom_batch_executor_still_rejects_unknown_business_fields_before_dispatch():
+    from src.local_tools.proxy_tool import WecomReadSessionsTool
+    from src.tools.executor import ToolExecutor
+
+    tool = WecomReadSessionsTool()
+    registry = ToolRegistry()
+    registry.register(tool)
+    with patch.object(tool, 'execute', AsyncMock()) as dispatch:
+        result = await ToolExecutor(registry).execute(tool.name, {'limit': 5, 'target_name': 'ignored scope',
+            '_trusted_tenant_id': 'tenant', '_trusted_user_id': 'user', '_session_id': 'session'})
+    assert not result['success'] and any('target_name' in item for item in result['validation_errors'])
+    dispatch.assert_not_awaited()

@@ -6,7 +6,7 @@ import type { AskForm, AskFormErrorItem, BrowserHumanAssistance, DownloadableFil
 export type { AskForm, AskFormErrorItem, RunnerAnswerItem } from '@/types'
 
 export type RunnerStatus = RunnerEventStatus
-export interface RunnerWait { kind: string; wait_id?: string; target_execution_id?: string; question?: string; form?: AskForm; child_wait?: RunnerWait }
+export interface RunnerWait { kind: string; wait_id?: string; target_execution_id?: string; question?: string; form?: AskForm; child_wait?: RunnerWait; wake_at?: string; seconds?: number; reason?: string }
 export interface RunnerSupplementalInput { control_id: string; client_request_id: string; message_id: string; text: string; wait_id?: string | null; accepted_at: string; attachments?: UploadedFile[]; form?: AskForm; answers?: RunnerAnswerItem[] }
 export interface RunnerControlIntent { client_request_id: string; action: 'pause' | 'resume' | 'reply'; target_execution_id?: string; wait_id?: string; answer?: string; attachments?: UploadedFile[]; answers?: RunnerAnswerItem[]; skip?: boolean }
 export interface RunnerControlView { control_id: string; runner_id: string; client_request_id: string;
@@ -19,6 +19,9 @@ export interface RunnerPresentation {
   imagesPlacement?: ImageRef['placement']
 }
 export interface RunnerView {
+  sleep_blocked?: { error_code: string }
+  execution_mode?: 'continuous'
+  usage?: { task_credits: number; session_credits: number; pending: boolean; updated_at: string | null }
   local_recovery?: boolean
   local_recovery_kind?: 'original_operation' | 'dispatch_unconfirmed'
   local_recovery_actions?: Array<'verify' | 'stop' | 'resume' | 'end'>
@@ -41,7 +44,7 @@ export interface RunnerView {
   accepted_at: string
   updated_at: string
   finished_at?: string | null
-  snapshot: RunnerPresentation & { output?: string; images?: ImageRef[]; waiting?: RunnerWait;
+  snapshot: RunnerPresentation & { output?: string; images?: ImageRef[]; waiting?: RunnerWait; iteration?: number; business_iterations?: number; history_version?: 1; history_revision?: number;
     supplementalInputs?: RunnerSupplementalInput[];
     clarificationQuestions?: { message_id: string; wait_id: string; text: string; created_at: string }[];
     input?: { message_id: string; text: string; attachments: UploadedFile[] } }
@@ -52,6 +55,7 @@ export interface RunnerView {
   attempt?: number
 }
 export interface RunnerSubmission {
+  execution_mode?: 'continuous'
   client_request_id: string
   message: string
   session_id: string
@@ -60,7 +64,13 @@ export interface RunnerSubmission {
   instance_id?: string | null
   video_params?: Record<string, unknown> | null
 }
-export interface RunnerCapabilities { web_enabled: boolean; observe_existing?: boolean; contract_version: number; transport: string; events_supported?: boolean; ask_structured_answers?: boolean }
+export interface RunnerCapabilities { web_enabled: boolean; observe_existing?: boolean; contract_version: number; transport: string; events_supported?: boolean; ask_structured_answers?: boolean; durable_sleep_v1?: boolean; continuous_execution_v1?: boolean }
+
+export function runnerWaitLeaf(wait?: RunnerWait): RunnerWait | undefined {
+  let depth = 64
+  while (wait?.kind === 'child_wait' && depth-- > 0) wait = wait.child_wait
+  return wait?.kind === 'child_wait' ? undefined : wait
+}
 export interface RunnerPage { runners: RunnerView[]; active_runners: RunnerView[]; has_more: boolean; next_cursor: string | null }
 export class RunnerRequestError extends Error {
   /** 422 表单校验的逐题明细（设计 §5.7），经 BFF 原样透传；其余错误为 undefined */

@@ -5,8 +5,8 @@ from . import catalog
 ONLINE_THRESHOLD_SECONDS = 30
 
 
-def device_ready_error(device, tool_name, now):
-    if not device.get('selected') or device.get('status') != 'active':
+def device_ready_error(device, tool_name, now, *, require_selected=True):
+    if (require_selected and not device.get('selected')) or device.get('status') != 'active':
         return 'not_selected'
     last_seen = device.get('last_seen_at')
     if not last_seen:

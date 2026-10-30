@@ -77,7 +77,7 @@ class ChildRecoveryAdapter:
         if restored.outcome == Outcome.PAUSED:
             return DispatchResult(None,success=False,wait={
                 'kind':'child_wait','tool_call_id':call.id,'execution_id':restored.execution_id,
-                'child_status':'paused'})
+                'child_wait':restored.waiting,'child_status':'paused'})
         if restored.outcome != Outcome.COMPLETED:
             return DispatchResult({'success':False,'error':restored.error_code or restored.outcome.value},success=False)
         return DispatchResult({'success':True,'execution_id':restored.execution_id,

@@ -173,6 +173,7 @@ def init_saas_tables(conn):
             kf_account_name TEXT,
             contact_method TEXT,
             phone TEXT,
+            other_contact JSONB,
             contact_name TEXT,
             demand_summary TEXT,
             source TEXT DEFAULT 'lead_capture',

@@ -2,24 +2,12 @@
  * AI获客智能体 — 业务数据查询 API（只读）
  */
 
-import { getTenantScopedKey } from './tenantStorage'
-import { credentialGet } from '@/platform/credentialStore'
+import { getAuthHeader } from './auth'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 function getAuthHeaders(): Record<string, string> {
-  const tenantMatch = window.location.pathname.match(/^\/t\/([^/]+)/)
-  const token = import.meta.env.VITE_DESKTOP_TARGET === 'true'
-    ? credentialGet(getTenantScopedKey('saas_token'))
-    : localStorage.getItem('token')
-  const tenantId = import.meta.env.VITE_DESKTOP_TARGET === 'true'
-    ? (tenantMatch?.[1] || '')
-    : (localStorage.getItem('tenantId') || '')
-  const headers: Record<string, string> = {}
-  if (token) headers['Authorization'] = `Bearer ${token}`
-  if (tenantId) headers['X-Tenant-Id'] = tenantId
-  headers['Content-Type'] = 'application/json'
-  return headers
+  return { ...getAuthHeader(), 'Content-Type': 'application/json' }
 }
 
 // --- 类型定义 ---

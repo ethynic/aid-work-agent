@@ -49,3 +49,30 @@ test('page failure reports page unavailable and stop unknown separately', async 
   assert.equal(value.resource_stopped, false)
   assert.deepEqual(value.page_summary, { observed: false, page_kind: 'unavailable', result: 'unknown' })
 })
+
+test('WeCom recovery uses the existing managed pool proof without requiring or probing BOSS', async () => {
+  let stopped = 0
+  const providers = { async recoverIdlePool(action: () => Promise<unknown>) { return action() },
+    get() { throw new Error('WeCom recovery must not open a BOSS page') } } as unknown as ProviderSet
+  const request = { ...args(), version: 3, provider_key: 'wecom', stop_resources: true }
+  const result = await recoveryObservation(providers, { async stopManagedResources() {
+    stopped++; return { stop_evidence: 'supervised_device_boundary', resource_scope: 'managed_provider_pool', runtime_generation: 'fixture-generation' }
+  } } as any).callTool('runtime_recovery_observe', request, {})
+  const value = result.data!.recovery_observation as Record<string, unknown>
+  assert.equal(stopped, 1); assert.equal(result.success, true); assert.equal(result.effect, 'none')
+  assert.equal(value.resource_stopped, true); assert.equal(value.provider_scope, 'wecom')
+  assert.equal(value.target_relation, 'not_applicable'); assert.equal(value.browser_target_ref, null)
+  assert.deepEqual(value.page_summary, { observed: false, page_kind: 'not_applicable', result: 'unknown' })
+  assert.deepEqual(value.original_invocation_ids, request.original_invocation_ids)
+  assert.equal(value.send_status, undefined, 'resource stop cannot claim the original message was sent')
+})
+
+test('WeCom busy pool remains unproved without touching BOSS or pretending another account can recover it', async () => {
+  const providers = { async recoverIdlePool() { throw new Error('LOCAL_RECOVERY_BUSY') },
+    get() { throw new Error('wrong provider') } } as unknown as ProviderSet
+  const result = await recoveryObservation(providers, {} as any).callTool('runtime_recovery_observe',
+    { ...args(), version: 3, provider_key: 'wecom', stop_resources: true }, {})
+  const value = result.data!.recovery_observation as Record<string, unknown>
+  assert.equal(result.success, false); assert.equal(value.resource_stopped, false)
+  assert.equal(value.stop_error_code, 'LOCAL_RECOVERY_BUSY'); assert.equal(value.provider_scope, 'wecom')
+})

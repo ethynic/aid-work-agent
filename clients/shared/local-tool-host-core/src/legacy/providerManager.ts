@@ -9,6 +9,8 @@
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import type { Tool } from '@modelcontextprotocol/sdk/types.js'
+import { randomUUID } from 'node:crypto'
 import { logError, logInfo, logProviderChunk } from './log.js'
 import { decodeProviderResult } from './providerResult.js'
 
@@ -61,6 +63,19 @@ export interface ProviderOptions {
 /** Per-transport unread stdio budget; parsed objects and process RSS are not bounded by this. */
 export const MCP_STDIO_MAX_BUFFER_BYTES = 128 * 1024 * 1024
 const MCP_STDIO_MIN_BUFFER_BYTES = 1024 * 1024
+const WECOM_BUSINESS_TOOLS = ['wecom_read_session', 'wecom_message_send', 'wecom_read_sessions']
+
+/** Only the new argument shapes need negotiation; legacy calls keep their original path. */
+function wecomBusinessTools(tools: Tool[]): ReadonlySet<string> {
+  return new Set(tools.filter(tool => {
+    const props = tool.inputSchema.properties as Record<string, { type?: string; items?: { type?: string } }> | undefined
+    if (tool.name === 'wecom_read_sessions') return props?.sessions?.type === 'array' && props.sessions.items?.type === 'string'
+      && props.cursor?.type === 'string' && props.limit?.type === 'integer'
+    if (tool.name === 'wecom_read_session') return props?.session?.type === 'string'
+    if (tool.name === 'wecom_message_send') return props?.session?.type === 'string' && props.text?.type === 'string'
+    return false
+  }).map(tool => tool.name))
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -84,6 +99,9 @@ export class ProviderManager {
   private busy = false
   private shuttingDown = false
   private resumeNextSupported: boolean | undefined
+  private sendStatusSupported: boolean | undefined
+  private groupPollSupported: boolean | undefined
+  private groupSendSupported: boolean | undefined
   private readonly providerEnv: Record<string, string>
   private readonly nodeExecutable: string
   private readonly baseEnv: Record<string, string>
@@ -91,6 +109,9 @@ export class ProviderManager {
   private transportFailure: string | null = null
   private transportGeneration = 0
   private readonly prepareLaunch: ProviderOptions['prepareLaunch']
+  private starting: Promise<void> | null = null
+  private wecomTools: ReadonlySet<string> | undefined
+  private wecomInspection: Promise<ReadonlySet<string>> | null = null
 
   constructor(entry: string, opts: ProviderOptions = {}) {
     this.entry = entry
@@ -119,6 +140,13 @@ export class ProviderManager {
 
   /** 启动 Provider（已运行则复用；崩溃后自动 respawn） */
   async ensureStarted(): Promise<void> {
+    if (this.starting) return this.starting
+    const starting = this.start()
+    this.starting = starting
+    try { await starting } finally { if (this.starting === starting) this.starting = null }
+  }
+
+  private async start(): Promise<void> {
     if (this.shuttingDown) throw new ProviderCrashError('ProviderManager 正在关闭，不再启动 Provider')
     if (this.client && !this.crashed) return
     await this.disposeDead()
@@ -185,6 +213,24 @@ export class ProviderManager {
     logInfo(`Provider 已启动 pid=${transport.pid ?? '?'} entry=${this.entry}`)
   }
 
+  get wecomBusinessReady(): boolean {
+    return Boolean(this.isRunning && WECOM_BUSINESS_TOOLS.every(name => this.wecomTools?.has(name)))
+  }
+
+  /** Read-only MCP discovery shares the existing process and retries on the next ordinary heartbeat after transport failure. */
+  async inspectWecomBusinessTools(): Promise<ReadonlySet<string>> {
+    if (this.wecomInspection) return this.wecomInspection
+    const inspection = (async () => {
+      await this.ensureStarted()
+      if (this.wecomTools) return this.wecomTools
+      const listed = await this.client!.listTools({}, { timeout: 5000 })
+      this.wecomTools = wecomBusinessTools(listed.tools)
+      return this.wecomTools
+    })()
+    this.wecomInspection = inspection
+    try { return await inspection } finally { if (this.wecomInspection === inspection) this.wecomInspection = null }
+  }
+
   /**
    * 调用 Provider 工具，返回 structuredContent（boss OperationResult 形态）。
    * Provider 崩溃 → ProviderCrashError；并发占用 → ProviderBusyError。
@@ -195,8 +241,58 @@ export class ProviderManager {
     }
     this.busy = true
     try {
+      if (name === 'wecom_read_sessions' || (['wecom_read_session', 'wecom_message_send'].includes(name) && args.session !== undefined)) {
+        let supported: ReadonlySet<string>
+        try { supported = await this.inspectWecomBusinessTools() }
+        catch { return {
+          success: false, code: 'PROVIDER_NOT_AVAILABLE', effect: 'none', retryable: true, run_id: randomUUID(),
+          message: '企业微信插件能力读取未完成，可重试连接；尚未执行读取、搜索或发送',
+        } }
+        if (!supported.has(name)) return {
+          success: false, code: 'TOOL_NOT_SUPPORTED', effect: 'none', retryable: false, run_id: randomUUID(),
+          message: '当前企业微信插件不支持该会话接口，请升级企业微信插件后继续；未执行读取、搜索或发送',
+        }
+      }
       await this.ensureStarted()
       const client = this.client!
+      if (name === 'wecom_group_poll' || (name === 'wecom_message_send' && args.group_cursor !== undefined)) {
+        const poll = name === 'wecom_group_poll'
+        const cached = poll ? this.groupPollSupported : this.groupSendSupported
+        let supported = cached
+        if (supported === undefined) {
+          const listed = await client.listTools({}, { signal: opts.signal, timeout: opts.timeoutMs ?? 30_000 })
+          const tool = listed.tools.find(item => item.name === name)
+          const schema = tool?.inputSchema
+          const props = schema?.properties as Record<string, { type?: string }> | undefined
+          const required = schema?.required ?? []
+          supported = poll
+            ? required.length === 1 && required[0] === 'target_name' && props?.['target_name']?.type === 'string'
+              && props?.['cursor']?.type === 'string' && tool?.annotations?.readOnlyHint === true
+            : required.length === 1 && required[0] === 'text' && props?.['group_cursor']?.type === 'string'
+              && props?.['target_name']?.type === 'string' && tool?.annotations?.readOnlyHint === false
+          if (poll) this.groupPollSupported = supported
+          else this.groupSendSupported = supported
+        }
+        if (!supported) return { success: false, code: 'TOOL_NOT_ALLOWED', effect: 'none', retryable: false,
+          run_id: randomUUID(), message: '当前企业微信插件缺少持续群聊的游标或发送目标校验能力，请升级插件；未执行调用' }
+      }
+      // A trusted Runtime may be newer than its installed WeCom CLI. Only this new read
+      // capability needs a preflight; legacy tools retain their existing lazy call path.
+      if (name === 'wecom_send_status') {
+        if (this.sendStatusSupported === undefined) {
+          const listed = await client.listTools({}, { signal: opts.signal, timeout: opts.timeoutMs ?? 30_000 })
+          const tool = listed.tools.find(item => item.name === name)
+          const schema = tool?.inputSchema
+          const properties = schema?.properties as Record<string, { type?: string }> | undefined
+          this.sendStatusSupported = schema?.required?.length === 1 && schema.required[0] === 'receipt_id'
+            && properties?.['receipt_id']?.type === 'string' && tool?.annotations?.readOnlyHint === true
+        }
+        if (!this.sendStatusSupported) return {
+          success: false, code: 'TOOL_NOT_ALLOWED', effect: 'none', retryable: false,
+          run_id: randomUUID(), data: { send_status: 'unknown' },
+          message: '当前企业微信插件不支持只读发送对账，请升级插件；未发送或重发消息，原发送结果仍未知',
+        }
+      }
       // A new Runtime may still have an older BOSS CLI installed. Reject before
       // callTool rather than turning an unknown-tool error into unknown effect.
       if (name === 'boss_resume_next') {
@@ -238,7 +334,11 @@ export class ProviderManager {
   }
 
   private async disposeDead(): Promise<void> {
+    this.wecomTools = undefined
     this.resumeNextSupported = undefined
+    this.sendStatusSupported = undefined
+    this.groupPollSupported = undefined
+    this.groupSendSupported = undefined
     if (!this.client && !this.transport) return
     const pid = this.transport?.pid ?? null
     try {
@@ -256,6 +356,9 @@ export class ProviderManager {
   async shutdown(): Promise<void> {
     this.shuttingDown = true
     await this.disposeDead()
+    // A heartbeat may still be connecting; its transport is closed above before
+    // resource-stop can certify that this manager has no remaining launch.
+    await this.starting?.catch(() => {})
   }
 
   async waitForIdle(): Promise<void> {

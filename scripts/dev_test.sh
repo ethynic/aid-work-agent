@@ -31,14 +31,41 @@ BROWSER_REDIS_PORT="${AID_TEST_BROWSER_REDIS_PORT:-44635}"
 # Global scheduler tests must not scan a developer's shared database. This mode
 # creates and initializes a disposable database before starting a fresh pytest.
 TEST_ENTRY=(-m pytest)
+ISOLATED_DB=0
 if [[ "${1:-}" == "--isolated-db" ]]; then
   shift
+  ISOLATED_DB=1
   TEST_ENTRY=(scripts/dev_test_isolated_db.py)
 fi
 
 RUN_IN_CONTAINER=0
 if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${CONTAINER_NAME}$"; then
   RUN_IN_CONTAINER=1
+fi
+
+# An old running container can otherwise execute its unguarded business-DB
+# conftest. Compare only the three safety entry files, without changing it.
+if [[ ${RUN_IN_CONTAINER} -eq 1 ]]; then
+  SCRIPT_DIRECTORY="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+  if ! AID_TEST_SOURCE_HASHES="$(python "${SCRIPT_DIRECTORY}/testing_db_guard.py" --source-hashes)"; then
+    echo 'dev_test.sh: host Python and current test-safety sources are required.' >&2
+    exit 2
+  fi
+  export AID_TEST_SOURCE_HASHES
+  if ! docker exec -i -e AID_TEST_SOURCE_HASHES "${CONTAINER_NAME}" python -c \
+    'import hashlib,json,os,pathlib,sys; expected=json.loads(os.environ["AID_TEST_SOURCE_HASHES"]); ok=all(pathlib.Path(p).is_file() and hashlib.sha256(pathlib.Path(p).read_bytes().replace(b"\r\n",b"\n")).hexdigest()==h for p,h in expected.items()); sys.exit(0 if ok else 2)'; then
+    echo 'dev_test.sh: container test-safety files differ from this checkout; use the current workspace. No tests or helpers started.' >&2
+    exit 2
+  fi
+  if [[ ${ISOLATED_DB} -eq 1 ]]; then
+    python "${SCRIPT_DIRECTORY}/testing_db_guard.py" --validate-admin || exit 2
+    export DATABASE_URL
+  else
+    # Normal container tests are deliberately DB-free; never inherit the
+    # container's business DSN. SQL tests use explicit --isolated-db instead.
+    export DATABASE_URL=''
+  fi
+  export LOGS_DATABASE_URL=''
 fi
 
 # Any pytest argument mentioning real_browser selects those tests (pytest.ini
@@ -102,7 +129,7 @@ if [[ ${RUN_IN_CONTAINER} -eq 1 ]]; then
   if [[ ${HELPER_WANTED} -eq 1 ]]; then
     start_helper
   fi
-  docker exec -i "${CONTAINER_NAME}" python "${TEST_ENTRY[@]}" "$@" || STATUS=$?
+  docker exec -i -e DATABASE_URL -e LOGS_DATABASE_URL "${CONTAINER_NAME}" python "${TEST_ENTRY[@]}" "$@" || STATUS=$?
   if [[ ${HELPER_WANTED} -eq 1 ]]; then
     stop_helper
   fi

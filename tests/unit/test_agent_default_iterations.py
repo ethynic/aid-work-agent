@@ -1,4 +1,4 @@
-"""Main agents get room for multi-step work without overriding explicit profile limits."""
+"""All ordinary roles default to fifty rounds; explicit profile limits still win."""
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 import pytest
@@ -6,7 +6,7 @@ from src.core.agent_engine.contracts import AgentMode, Identity
 from src.services.agent_runner.runtime.context_assembler import ContextAssembler
 
 @pytest.mark.parametrize("mode,explicit,expected", [
-    (AgentMode.MASTER,None,50), (AgentMode.STANDALONE,None,20), (AgentMode.SUBAGENT,None,20),
+    (AgentMode.MASTER,None,50), (AgentMode.STANDALONE,None,50), (AgentMode.SUBAGENT,None,50),
     (AgentMode.MASTER,7,7), (AgentMode.STANDALONE,7,7), (AgentMode.SUBAGENT,9,9),
 ])
 async def test_main_default_expands_without_replacing_profile_limits(mode, explicit, expected):

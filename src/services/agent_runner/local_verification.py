@@ -68,10 +68,17 @@ def verify_local(repository, principal, runner_id, request_id, *, stop_resources
             (device_id, row['tenant_id'], row['user_id']))
         device = cursor.fetchone()
         required_capability = STOP_CAPABILITY if stop_resources else CAPABILITY
+        providers = {(item.get('provider_key') or 'boss-recruiting') for item in originals}
+        if len(providers) != 1 or not providers <= {'boss-recruiting', 'wecom'}:
+            raise RunnerError('LOCAL_VERIFICATION_PROVIDER_UNSUPPORTED', 409)
+        provider = next(iter(providers))
+        if provider == 'wecom' and 'runtime_recovery_wecom_v1' not in (
+                ((device or {}).get('capabilities_json') or {}).get('capabilities') or []):
+            raise RunnerError('LOCAL_VERIFICATION_RUNTIME_UPGRADE_REQUIRED', 409)
         if not device or required_capability not in ((device['capabilities_json'] or {}).get('capabilities') or []):
             raise RunnerError('LOCAL_VERIFICATION_RUNTIME_UPGRADE_REQUIRED', 409)
         if stop_resources:
-            if any((item.get('provider_key') or 'boss-recruiting') != 'boss-recruiting' for item in originals):
+            if any((item.get('provider_key') or 'boss-recruiting') != provider for item in originals):
                 raise RunnerError('LOCAL_RECOVERY_PROVIDER_UNSUPPORTED', 409)
             try:
                 local.assert_device_stop_available(cursor, row['tenant_id'], device_id)
@@ -101,6 +108,8 @@ def verify_local(repository, principal, runner_id, request_id, *, stop_resources
         version = 3 if stop_resources else 2
         arguments = {'version': version, 'scope_id': scope_id, 'device_id': device_id, 'original_invocation_ids': ids,
             'browser_target_ref': None if target_unavailable else next(iter(targets), None)}
+        if provider == 'wecom':
+            arguments['provider_key'] = 'wecom'
         if stop_resources:
             arguments['stop_resources'] = True
             if target_unavailable:

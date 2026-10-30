@@ -37,6 +37,7 @@ function makeOp(
   tempDirs.push(dir)
   const op = createWecomChatSearchOperation({
     runDriverFn,
+    accountFn: async () => null,
     createRefFn,
     artifactDirFn: () => dir,
   })
@@ -219,4 +220,41 @@ test('v2：target_ref 真实签发含 overlay 相对坐标；老式无坐标 ref
   const oldId = verifyTargetRef(oldRef, { keyDir })
   assert.equal(oldId.x, undefined)
   assert.equal(oldId.y, undefined)
+})
+
+test('账号ref只在搜索前后直接证据一致时签发；切号或缺证据保留legacy', async () => {
+  for (const afterAccount of ['account-a', 'account-b', null]) {
+    const dir = mkdtempSync(join(tmpdir(), 'wecom-search-binding-'))
+    tempDirs.push(dir)
+    let probes = 0
+    const op = createWecomChatSearchOperation({
+      artifactDirFn: () => dir,
+      accountFn: async () => ++probes === 1 ? 'account-a' : afterAccount,
+      createRefFn: (name, type, subtitle, coords, account) => createTargetRef(name, type, subtitle, { keyDir: dir, coords, account }),
+      runDriverFn: async () => ({ items: [{ name: 'Synthetic', section: '联系人' }], best_index: 0 }),
+    })
+    const result = await op.execute({ query: 'Synthetic' }, silentCtx())
+    assert.equal(result.success, true)
+    const ref = (result.data.best as { target_ref: string }).target_ref
+    assert.equal(verifyTargetRef(ref, { keyDir: dir }).account, afterAccount === 'account-a' ? 'account-a' : undefined)
+    assert.equal(result.data.target_ref_account_bound, afterAccount === 'account-a')
+  }
+
+  const dir = mkdtempSync(join(tmpdir(), 'wecom-search-cancel-'))
+  tempDirs.push(dir)
+  const controller = new AbortController()
+  let probes = 0
+  let signed = false
+  const op = createWecomChatSearchOperation({
+    artifactDirFn: () => dir,
+    accountFn: async () => {
+      if (++probes === 2) controller.abort()
+      return 'account-a'
+    },
+    createRefFn: () => { signed = true; return 'unexpected' },
+    runDriverFn: async () => ({ items: [{ name: 'Synthetic', section: '联系人' }], best_index: 0 }),
+  })
+  const result = await op.execute({ query: 'Synthetic' }, { signal: controller.signal, progress: () => {} })
+  assert.equal(result.code, 'CANCELLED', '异步账号探针成功时的取消仍阻止结果签发')
+  assert.equal(signed, false)
 })

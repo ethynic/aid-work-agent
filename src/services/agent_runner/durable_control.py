@@ -32,10 +32,17 @@ class DurableControl:
 
     def capture_duration(self, envelope=None):
         envelope = self.envelope if envelope is None else envelope
+        durations = envelope.pop('attempt_durations_ms',{})
+        previous_attempt = envelope.get('duration_attempt')
+        if previous_attempt is None:
+            envelope['completed_duration_ms'] = sum(value for key,value in durations.items()
+                if str(key)!=str(self.attempt.number))
+        elif previous_attempt != self.attempt.number:
+            envelope['completed_duration_ms'] = envelope.get('execution_duration_ms',0)
+        envelope['duration_attempt'] = self.attempt.number
         if self.active_attempt:
-            envelope.setdefault('attempt_durations_ms', {})[str(self.attempt.number)] = max(
-                0, int((time.monotonic()-self.started_at)*1000))
-        envelope['execution_duration_ms'] = sum(envelope.get('attempt_durations_ms', {}).values())
+            envelope['execution_duration_ms'] = envelope.get('completed_duration_ms',0) + max(
+                0,int((time.monotonic()-self.started_at)*1000))
         return envelope['execution_duration_ms']
 
     async def _authorize_execution(self, profile_id=None):
@@ -51,6 +58,8 @@ class DurableControl:
 
     async def authorize_dispatch(self, profile_id=None):
         self._check_usage()
+        from .continuous_lifecycle import before_dispatch
+        await before_dispatch(self)
         if self.stopped:
             raise LeaseLost('RUNNER_WORKER_STOPPED')
         await self._authorize_execution(profile_id)
@@ -88,6 +97,10 @@ class DurableControl:
                 if control_id in inputs:
                     inputs[control_id] = 'appended'
         self.envelope['execution'] = state.checkpoint()
+        if state.resources.get('history_version') == 1:
+            self.snapshot['history_version'] = 1
+            self.snapshot['history_revision'] = sum(state.resources.get(key,0) for key in
+                ('history_offset','artifact_history_offset','archived_child_count'))
         self.snapshot.update(output=state.output, images=copy.deepcopy(state.images),
                              waiting=copy.deepcopy(state.waiting), iteration=state.iteration)
         return copy.deepcopy(self.envelope), copy.deepcopy(self.snapshot)
@@ -127,7 +140,12 @@ class DurableControl:
             raise LeaseLost('RUNNER_WORKER_STOPPED')
         try:
             if boundary in {'before_model','before_tool','child.before_model','child.before_tool'}:
+                from .continuous_lifecycle import before_dispatch
                 await self._authorize_execution()
+                await before_dispatch(self,state)
+                activation = self.envelope.get('timer_activation')
+                if activation:
+                    activation['action_started'] = True
             if self.plan_manager is not None:
                 plan = await asyncio.to_thread(self.plan_manager.get_plan,state.identity.session_id)
                 self.envelope['business_plan'] = plan.model_dump(mode='json') if plan is not None else None
@@ -195,15 +213,41 @@ class DurableControl:
             self._check_usage()
             if self.stopped:
                 raise LeaseLost('RUNNER_WORKER_STOPPED')
+            from .continuous_lifecycle import before_park
+            await before_park(self,state)
             checkpoint, snapshot = self._capture(state)
-            if status == 'paused' and self.pause_requested:
+            if status == 'paused' and self.pause_requested and not getattr(self,'credit_paused',False):
                 from .recovery_repository import RecoveryRepository
                 row = await asyncio.to_thread(RecoveryRepository(self.repository.connection_factory).acknowledge_pause,
                     self.attempt,self.revision,checkpoint,snapshot)
             else:
-                row = await asyncio.to_thread(self.repository.park, self.attempt,
-                    self.revision, status, checkpoint, snapshot)
+                try:
+                    row = await asyncio.to_thread(self.repository.park, self.attempt,
+                        self.revision, status, checkpoint, snapshot)
+                except Exception as error:
+                    from .contracts import RunnerError
+                    if not isinstance(error,RunnerError) or error.code!='SLEEP_UNSAFE_BOUNDARY':
+                        raise
+                    # A failed safe-point check is a failed sleep, never a
+                    # timer and never proof that uncertain siblings completed.
+                    from .durable_sleep import nodes
+                    from src.core.agent_engine.contracts import ExecutionState,Outcome
+                    for node in nodes(checkpoint['execution']):
+                        wait=node.get('waiting') or {}
+                        if wait.get('kind')=='timer':
+                            node['tools'][wait['tool_call_id']].update(phase='completed',success=False,
+                                result={'success':False,'error_code':'SLEEP_UNSAFE_BOUNDARY'})
+                            node['waiting']=None
+                    state=ExecutionState.restore(checkpoint['execution'])
+                    state.outcome=Outcome.WAITING
+                    state.waiting={'kind':'verification','reason':'SLEEP_UNSAFE_BOUNDARY'}
+                    checkpoint,snapshot=self._capture(state)
+                    checkpoint.pop('durable_sleep',None)
+                    row=await asyncio.to_thread(self.repository.park,self.attempt,self.revision,
+                        'waiting',checkpoint,snapshot)
             self.revision = row['revision']
+            self.envelope = copy.deepcopy(row['checkpoint'])
+            self.snapshot = copy.deepcopy(row['public_snapshot'])
             return row
 
     async def stage(self, state, result):

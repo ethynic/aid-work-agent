@@ -1277,6 +1277,36 @@ class MessageDB:
             return messages
 
     @staticmethod
+    def list_runner_history_page(session_id: str, runner_id: str, *, before_id: int = 0,
+                                 limit: int = 100) -> Dict[str, Any]:
+        """Read a bounded display window directly from PG, bypassing old cache.
+
+        Zero selects the newest page. A positive message ID is the exclusive
+        upper bound for an earlier page; new appends cannot move that page.
+        """
+        before_clause = 'AND id<%s' if before_id else ''
+        parameters = [session_id,runner_id]
+        if before_id:
+            parameters.append(before_id)
+        parameters.append(limit+1)
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"""SELECT * FROM chat_messages
+                WHERE session_id=%s AND role IN ('user','assistant')
+                    AND metadata::jsonb->>'runner_id'=%s {before_clause}
+                    AND (metadata::jsonb->'tool_calls' IS NULL
+                        OR metadata::jsonb->'tool_calls' IN ('null'::jsonb,'[]'::jsonb))
+                ORDER BY id DESC LIMIT %s""",parameters)
+            rows = [dict(row) for row in cursor.fetchall()]
+            has_more = len(rows)>limit
+            rows = list(reversed(rows[:limit]))
+            next_cursor = str(rows[0]['id']) if rows else str(before_id)
+            for row in rows:
+                if row.get('metadata'):
+                    row['metadata'] = json.loads(row['metadata'])
+            return {'messages':rows,'has_more':has_more,'next_cursor':next_cursor}
+
+    @staticmethod
     def count_messages_by_session(session_id: str, include_compacted: bool = False) -> int:
         """统计会话消息条数（v3.2 新增，用于压缩阈值快路径检查）。
 

@@ -23,6 +23,9 @@ class Reply:
     completion_tokens: int = 7
     cached_tokens: int = 0
     status: int = 200
+    # External model fixture may derive a response from the actual HTTP input;
+    # it still has no Runner/store access and cannot manufacture tool results.
+    produce: object = None
     reported_usage: object = _DEFAULT_USAGE
     release: threading.Event | None = None
     arrived: threading.Event = field(default_factory=threading.Event)
@@ -107,6 +110,8 @@ class ProviderPeer:
                             peer._errors.append("provider-gate-timeout")
                         self.respond(504, {"error": "fixture gate timed out"})
                         return
+                    if reply.produce is not None:
+                        reply = reply.produce(json.loads(json.dumps(request)))
                     if reply.status != 200:
                         self.respond(reply.status, {"error": "fixture provider failure"})
                         return

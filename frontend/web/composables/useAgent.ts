@@ -4,7 +4,7 @@ import type { AskForm, AskFormErrorItem, RunnerAnswerItem } from '@/api/runner'
 import { SSEManager, uploadFile, type UploadedFile } from '@/api/agent'
 import { notifyScheduledTasksChanged } from '@/api/scheduledTask'
 import { getSession, getSessionMessages, updateFailedMessageUI, type FailedMessageUI } from '@/api/session'
-import { RunnerClient, RunnerRequestError, runnerTerminal, runnerObservationComplete, type RunnerCapabilities, type RunnerControlIntent, type RunnerControlView, type RunnerSubmission, type RunnerView, type RunnerWait } from '@/api/runner'
+import { RunnerClient, RunnerRequestError, runnerTerminal, runnerObservationComplete, runnerWaitLeaf, type RunnerCapabilities, type RunnerControlIntent, type RunnerControlView, type RunnerSubmission, type RunnerView, type RunnerWait } from '@/api/runner'
 import { historyMessages, mergeRunnerMessages, visibleFailedMessages } from '@/utils/runnerMessages'
 import { clientCanonicalText } from '@/utils/askForm'
 import { useToast } from 'vue-toastification'
@@ -49,6 +49,10 @@ interface SessionStreamState {
   controlIssue?: string
   submitTimer?: ReturnType<typeof setTimeout>
   runnerGeneration: number
+  historyWindow: Ref<{ runnerId: string; revision: number; nextCursor: string; hasMore: boolean; older: boolean; loading: boolean; error?: string } | undefined>
+  historyRefresh?: Promise<void>
+  historyRetry?: ReturnType<typeof setTimeout>
+  historyFailures: number
   submitFailures: number
   submitSelecting: boolean
   runnerDiscoveryLoaded: boolean
@@ -173,6 +177,8 @@ function getStreamState(sid: string): SessionStreamState {
       controlViews: shallowReactive(new Map<string, RunnerControlView>()),
       liveControlKeys: new Set(),
       runnerGeneration: 0,
+      historyWindow: ref(undefined),
+      historyFailures: 0,
       submitFailures: 0,
       submitSelecting: false,
       runnerDiscoveryLoaded: false,
@@ -202,6 +208,44 @@ const inputHintState = computed<InputHintState>({
 })
 
 export function useAgent() {
+  const durableTask = computed(() => {
+    const state = getStreamState(sessionId.value)
+    void state.messages.value
+    void state.isProcessing.value
+    const rows = [...state.runnerViews.values()].sort((a,b) => b.queue_order-a.queue_order)
+    return rows.find(row => !runnerTerminal(row.status)
+      && (row.execution_mode === 'continuous' || runnerWaitLeaf(row.snapshot.waiting)?.kind === 'timer'))
+      || (rows[0]?.execution_mode === 'continuous' ? rows[0] : undefined)
+  })
+  const durableTaskBusy = ref(false)
+  async function controlDurableTask(action: 'pause' | 'resume' | 'cancel') {
+    const row = durableTask.value
+    const sid = sessionId.value
+    const state = getStreamState(sid)
+    if (!row || durableTaskBusy.value || state.pendingControl || row.resume_requested
+      || row.cancel_requested || runnerTerminal(row.status)) return
+    const wait = runnerWaitLeaf(row.snapshot.waiting)
+    if (action === 'resume' && !(row.status === 'paused' && !wait
+      || wait?.kind === 'continuous_guard' && wait.wait_id && wait.target_execution_id && ['waiting','paused'].includes(row.status)
+      || wait?.kind === 'timer' && wait.wait_id && wait.target_execution_id)) return
+    const headers = getEffectiveAuthHeader()
+    const generation = state.runnerGeneration
+    durableTaskBusy.value = true
+    try {
+      if (action === 'cancel') {
+        const updated = await state.runnerClient.cancel(row.runner_id, headers)
+        if (currentRunnerContext(state,sid,generation,headers)) observeRunner(state,updated,headers)
+      } else {
+        const body: RunnerControlIntent = { client_request_id:crypto.randomUUID(), action,
+          ...(action === 'resume' && (wait?.kind === 'timer' || wait?.kind === 'continuous_guard')
+            ? { wait_id:wait.wait_id, target_execution_id:wait.target_execution_id } : {}) }
+        state.pendingControl = { runnerId:row.runner_id, body }
+        await submitControl(state,row.runner_id,body,headers)
+      }
+    } catch {
+      if (currentRunnerContext(state,sid,generation,headers)) runnerError(sid,new Error('暂时无法确认任务操作，请刷新状态后重试。'))
+    } finally { durableTaskBusy.value = false }
+  }
   const localRecovery = computed(() => {
     const state = getStreamState(sessionId.value)
     void state.messages.value
@@ -302,6 +346,8 @@ export function useAgent() {
 
   function detachRunner(state: SessionStreamState) {
     state.runnerGeneration++
+    clearTimeout(state.historyRetry)
+    state.historyRefresh = undefined
     state.runnerClient.detach()
     clearTimeout(state.submitTimer)
     state.pendingRunner = undefined
@@ -392,13 +438,15 @@ export function useAgent() {
     state.runnerViews.set(row.runner_id, row)
     reconcileAskConflicts(state, row)
     projectRunnerMessages(state)
+    void refreshArchivedHistory(state,row.session.session_id)
     const active = Array.from(state.runnerViews.values()).filter(item => !runnerTerminal(item.status))
     state.isProcessing.value = state.submitSelecting || !!state.pendingRunner || !!state.pendingControl
       || active.some(item => item.resume_requested || ['queued', 'running', 'finalizing'].includes(item.status))
     const ordered = [...state.runnerViews.values()].sort((a, b) => a.queue_order - b.queue_order)
     const latest = ordered[ordered.length - 1]
     if (latest) {
-      const assistant = state.messages.value.find(message => message.runnerId === latest.runner_id && message.role === 'assistant')
+      const currentId = latest.runner_id + (latest.execution_mode === 'continuous' || latest.snapshot.history_version === 1 ? ':final' : ':assistant')
+      const assistant = state.messages.value.find(message => message.messageId === currentId && message.role === 'assistant')
       state.currentResponse.value = assistant?.content || ''
       state.progressMessages.value = assistant?.progressMessages || []
       state.inputHintState.value = state.isProcessing.value ? (assistant?.content ? 'responding' : 'thinking') : 'idle'
@@ -415,6 +463,106 @@ export function useAgent() {
     }
     if (row.status === 'failed') runnerError(row.session.session_id,
       new Error(row.result?.error_code || 'RUNNER_EXECUTION_FAILED'), notify && previous?.status !== 'failed')
+  }
+
+  function latestHistoryRunner(state: SessionStreamState) {
+    return [...state.runnerViews.values()].filter(row => (row.snapshot.history_revision || 0) > 0)
+      .sort((a,b) => b.queue_order-a.queue_order)[0]
+  }
+
+  async function refreshArchivedHistory(state: SessionStreamState, sid: string) {
+    const row = latestHistoryRunner(state)
+    const window = state.historyWindow.value
+    if (!row || window?.older || state.historyRefresh
+      || window?.runnerId === row.runner_id && window.revision >= (row.snapshot.history_revision || 0)) return
+    await readHistoryWindow(state,sid,row,'0',false,true)
+  }
+
+  async function readHistoryWindow(state: SessionStreamState, sid: string, row: RunnerView,
+      beforeId: string, older: boolean, automatic = false) {
+    const generation = state.runnerGeneration
+    const headers = getEffectiveAuthHeader()
+    if (!currentRunnerContext(state,sid,generation,headers) || state.historyRefresh) return
+    clearTimeout(state.historyRetry)
+    const previous = state.historyWindow.value
+    const window = previous || { runnerId: row.runner_id, revision: 0, nextCursor: '0', hasMore: false, older: false, loading: false }
+    state.historyWindow.value = window
+    window.loading = true
+    window.error = undefined
+    const revision = row.snapshot.history_revision || 0
+    let failed = false
+    const refresh = (async () => {
+      const result = await getSessionMessages(sid,{ runner_id: row.runner_id, before_id: beforeId })
+      if (!currentRunnerContext(state,sid,generation,headers)) return
+      const next = result.next_cursor
+      if (typeof result.has_more !== 'boolean' || !Array.isArray(result.messages) || result.messages.length > 100
+        || typeof next !== 'string' || !/^(0|[1-9][0-9]{0,18})$/.test(next)
+        || BigInt(next) > BigInt('9223372036854775807')
+        || result.has_more && (next === '0' || beforeId !== '0' && BigInt(next) >= BigInt(beforeId))) throw new Error('历史分页响应无效')
+      const fresh = historyMessages(result.messages)
+      const keep = new Set(fresh.map(message => message.messageId))
+      const liveInputs = new Set((row.snapshot.supplementalInputs || []).map(input => input.message_id))
+      const retired = new Set([row.runner_id,previous?.runnerId].filter(Boolean))
+      // Replace one finite archive page. Keep original Runner projections,
+      // optimistic input and accepted live controls outside that display page.
+      state.messages.value = state.messages.value.filter(message => !retired.has(message.runnerId)
+        || keep.has(message.messageId) || liveInputs.has(message.messageId || '')
+        || !(message.messageId?.startsWith(message.runnerId + ':history:')
+          || message.runnerHistory && message.role === 'user' && message.messageId?.startsWith('control_')))
+      const existing = new Map(state.messages.value.map(message => [message.messageId,message]))
+      for (const persisted of fresh) {
+        const current = existing.get(persisted.messageId)
+        if (!current) {
+          state.messages.value.push(persisted)
+          existing.set(persisted.messageId,persisted)
+        } else {
+          current.runnerHistory = true
+          current.runnerId ||= persisted.runnerId
+          current.queueOrder ??= persisted.queueOrder
+          current.attachments ||= persisted.attachments
+          for (const key of ['images','downloadableFiles'] as const) {
+            if (persisted[key]?.length && !current[key]?.length) Object.assign(current,{ [key]: persisted[key] })
+          }
+        }
+      }
+      Object.assign(window,{ runnerId:row.runner_id, nextCursor:next, hasMore:result.has_more, older,
+        revision:older ? previous?.revision || 0 : revision })
+      state.historyFailures = 0
+      projectRunnerMessages(state)
+    })()
+    state.historyRefresh = refresh
+    try { await refresh }
+    catch {
+      failed = true
+      if (currentRunnerContext(state,sid,generation,headers)) {
+        state.historyFailures++
+        window.error = '历史记录暂时加载失败，请重试。已保存的内容未丢失。'
+      }
+    }
+    finally {
+      if (state.historyRefresh === refresh) state.historyRefresh = undefined
+      if (currentRunnerContext(state,sid,generation,headers)) {
+        window.loading = false
+        // Touch the ref after plain-object mutation so the existing shallow
+        // session state also updates loading/error presentation immediately.
+        state.historyWindow.value = { ...window }
+        const latest = latestHistoryRunner(state)
+        if (!window.older && (failed && automatic || !failed && latest
+          && (latest.runner_id !== window.runnerId || (latest.snapshot.history_revision || 0) > window.revision))) {
+          const delay = failed ? Math.min(30000,2000 * 2 ** Math.min(state.historyFailures-1,4)) : 0
+          state.historyRetry = setTimeout(() => void refreshArchivedHistory(state,sid),delay)
+        }
+      }
+    }
+  }
+
+  const durableHistory = computed(() => getStreamState(sessionId.value).historyWindow.value)
+  async function loadDurableHistory(action: 'older' | 'latest') {
+    const sid = sessionId.value, state = getStreamState(sid), window = state.historyWindow.value
+    if (state.historyRefresh || window?.loading) return
+    const row = action === 'older' && window ? state.runnerViews.get(window.runnerId) : latestHistoryRunner(state)
+    if (!row || action === 'older' && (!window?.hasMore || window.nextCursor === '0')) return
+    await readHistoryWindow(state,sid,row,action === 'older' ? window!.nextCursor : '0',action === 'older')
   }
 
   function projectRunnerMessages(state: SessionStreamState) {
@@ -1044,8 +1192,10 @@ export function useAgent() {
     let resumeWait = parked?.snapshot.waiting
     let waitDepth = 64
     while (resumeWait?.kind === 'child_wait' && waitDepth-- > 0) resumeWait = resumeWait.child_wait
-    const canResume = !!parked && ['paused','interrupted'].includes(parked.status)
-      && !resumeWait
+    const timerResume = resumeWait?.kind === 'timer' && !!resumeWait.wait_id && !!resumeWait.target_execution_id
+    const guardResume = !!parked && ['paused','waiting'].includes(parked.status) && resumeWait?.kind === 'continuous_guard'
+      && !!resumeWait.wait_id && !!resumeWait.target_execution_id
+    const canResume = !!parked && (['paused','interrupted'].includes(parked.status) && !resumeWait || timerResume || guardResume)
     if (parked && (canReply || canResume) && !parked.resume_requested) {
       if (parked.local_recovery && !canReply) {
         runnerError(effectiveSessionId,new Error(LOCAL_RECOVERY_MESSAGES.instruction))
@@ -1055,8 +1205,8 @@ export function useAgent() {
       const files = currentFiles.value.filter(file => file.file_id)
       const body: RunnerControlIntent = JSON.parse(JSON.stringify({ client_request_id:generateSessionId(),
         action:canReply ? 'reply' : 'resume',
-        wait_id:canReply ? leaf!.wait_id : undefined,
-        target_execution_id:canReply ? leaf!.target_execution_id : undefined,answer:content,
+        wait_id:canReply ? leaf!.wait_id : timerResume || guardResume ? resumeWait!.wait_id : undefined,
+        target_execution_id:canReply ? leaf!.target_execution_id : timerResume || guardResume ? resumeWait!.target_execution_id : undefined,answer:content,
         attachments:files.length ? files : undefined }))
       state.pendingControl = { runnerId:parked.runner_id,body }
       state.isProcessing.value = true
@@ -1590,6 +1740,11 @@ export function useAgent() {
     liveVerbose,
     error,
     runnerFeedback,
+    durableTask,
+    durableHistory,
+    loadDurableHistory,
+    durableTaskBusy,
+    controlDurableTask,
     localRecovery,
     localRecoveryBusy,
     localVerificationMessage,

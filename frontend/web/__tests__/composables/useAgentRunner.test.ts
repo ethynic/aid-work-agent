@@ -1033,4 +1033,146 @@ describe('Existing useAgent public interface with durable Runner transport', () 
     await second; await flush()
     expect(external.legacy).not.toHaveBeenCalled()
   })
+  it('resumes the original timer leaf and never creates another task', async () => {
+    const row = runnerView({ status:'waiting', execution_mode:'continuous', snapshot:{ waiting:{ kind:'child_wait',
+      child_wait:{ kind:'timer', wait_id:'timer-original', target_execution_id:'child-original', wake_at:'2026-10-22T12:00:10Z' } } } })
+    await send('A',row)
+    expect(agent.durableTask.value?.runner_id).toBe(row.runner_id)
+    const task = agent.controlDurableTask('resume')
+    await flush()
+    const submitted = request('/runners/runner-A/controls','POST')
+    const body = JSON.parse(submitted.body!)
+    expect(body).toMatchObject({ action:'resume', wait_id:'timer-original', target_execution_id:'child-original' })
+    submitted.respond({ success:true, runner:runnerView({ view_revision:2, execution_mode:'continuous' }), control:{
+      runner_id:row.runner_id, control_id:'control-timer', client_request_id:body.client_request_id, action:'resume', status:'consumed' } })
+    await task; await flush()
+    expect(network.requests.filter(item => item.method === 'POST' && item.url.endsWith('/runners'))).toHaveLength(1)
+    expect(external.legacy).not.toHaveBeenCalled()
+  })
+
+  it('routes supplemental input into the same sleeping task with its original wait identity', async () => {
+    await send('A',runnerView({ status:'waiting', snapshot:{ waiting:{ kind:'timer', wait_id:'timer-original', target_execution_id:'root-original' } } }))
+    const task = agent.sendMessage('只回复重要消息',null,'A')
+    await flush()
+    const submitted = request('/runners/runner-A/controls','POST')
+    const body = JSON.parse(submitted.body!)
+    expect(body).toMatchObject({ action:'resume', answer:'只回复重要消息', wait_id:'timer-original', target_execution_id:'root-original' })
+    submitted.respond({ success:true, runner:runnerView({ view_revision:2 }), control:{ runner_id:'runner-A', control_id:'supplement',
+      client_request_id:body.client_request_id, action:'resume', status:'consumed' } })
+    await task; await flush()
+    expect(network.requests.filter(item => item.method === 'POST' && item.url.endsWith('/runners'))).toHaveLength(1)
+  })
+
+
+  it('loads archived artifact references after a history revision without replacing optimistic input', async () => {
+    await send(); external.history.mockClear()
+    agent.messages.value.push({ role: 'user', content: 'in-flight input', timestamp: Date.now(), messageId: 'optimistic-input' })
+    external.history.mockResolvedValue({ has_more: false, next_cursor: '10', through_id: '10', messages: [{ message_id: 'runner-A:history:artifacts:0',
+      role: 'assistant', content: '', created_at: '2026-10-22T00:00:00Z', metadata: {
+        runner_id: 'runner-A', runner_queue_order: 1, images: [{ file_id: 'archived-image', download_url: '/images/old' }],
+        downloadableFiles: [{ file_id: 'archived-file', file_name: 'old.xlsx', download_url: '/files/old' }],
+      } }] })
+    request('/runners/runner-A').respond({ success: true, runner: runnerView({ view_revision: 2,
+      snapshot: { history_version: 1, history_revision: 1, images: [{ file_id: 'current-image', download_url: '/images/new', display_name: 'new.png', mime_type: 'image/png', size_bytes: 1, source: 'tool_generated', usage: 'inline', placement: 'after_text' }] } }) })
+    await flush()
+    expect(external.history).toHaveBeenCalledTimes(1)
+    expect(agent.messages.value.find(item => item.messageId === 'runner-A:history:artifacts:0')?.downloadableFiles?.[0]?.file_id).toBe('archived-file')
+    expect(agent.messages.value.some(item => item.messageId === 'optimistic-input')).toBe(true)
+    await vi.advanceTimersByTimeAsync(1000)
+    request('/runners/runner-A').respond({ success: true, runner: runnerView({ view_revision: 3,
+      snapshot: { history_version: 1, history_revision: 1 } }) })
+    await flush()
+    expect(external.history).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries a failed history read without accepting its revision and discards it after account changes', async () => {
+    await send(); external.history.mockClear()
+    let resolveHistory!: (result: any) => void
+    const late = new Promise(resolve => { resolveHistory = resolve })
+    external.history.mockRejectedValueOnce(new Error('temporary history failure')).mockImplementationOnce(() => late)
+    request('/runners/runner-A').respond({ success: true, runner: runnerView({ view_revision: 2,
+      snapshot: { history_version: 1, history_revision: 1 } }) })
+    await flush()
+    expect(external.history).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(external.history).toHaveBeenCalledTimes(2)
+    external.token = 'fictional-B'
+    await emptySwitch('B')
+    resolveHistory({ has_more: false, next_cursor: '10', through_id: '10', messages: [{ message_id: 'runner-A:history:artifacts:0', role: 'assistant',
+      content: 'old-account-artifact', metadata: { runner_id: 'runner-A' } }] })
+    await flush()
+    expect(agent.messages.value).toEqual([])
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(external.history).toHaveBeenCalledTimes(3)
+  })
+
+
+  it('retries a failed latest window against the newest revision without a growing catch-up batch', async () => {
+    await send(); external.history.mockClear()
+    external.history.mockRejectedValueOnce(new Error('latest page failed'))
+      .mockResolvedValue({ messages: [], has_more: false, next_cursor: '200' })
+    request('/runners/runner-A').respond({ success: true, runner: runnerView({ view_revision: 2,
+      snapshot: { history_version: 1, history_revision: 1 } }) })
+    await flush()
+    expect(external.history).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1000)
+    request('/runners/runner-A').respond({ success: true, runner: runnerView({ view_revision: 3,
+      snapshot: { history_version: 1, history_revision: 2 } }) })
+    await flush()
+    expect(external.history).toHaveBeenCalledTimes(2)
+    expect(external.history.mock.calls[1]?.[1]).toEqual({ runner_id: 'runner-A', before_id: '0' })
+  })
+
+  it('upgrades a same-ID live control input to persistent history before its projection retires', async () => {
+    await send(); external.history.mockClear()
+    external.history.mockResolvedValue({ has_more: false, next_cursor: '20', through_id: '20', messages: [{
+      message_id: 'control_kept:user', role: 'user', content: 'persisted rule', created_at: '2026-10-22T00:00:00Z',
+      metadata: { runner_id: 'runner-A', runner_queue_order: 1, control_id: 'control_kept' } }] })
+    request('/runners/runner-A').respond({ success: true, runner: runnerView({ view_revision: 2,
+      snapshot: { history_version: 1, history_revision: 1, supplementalInputs: [{ control_id: 'control_kept',
+        client_request_id: 'input-key', message_id: 'control_kept:user', text: 'persisted rule', accepted_at: '2026-10-22T00:00:00Z' }] } }) })
+    await flush()
+    expect(agent.messages.value.find(item => item.messageId === 'control_kept:user')?.runnerHistory).toBe(true)
+    await vi.advanceTimersByTimeAsync(1000)
+    request('/runners/runner-A').respond({ success: true, runner: runnerView({ view_revision: 3,
+      snapshot: { history_version: 1, history_revision: 1, supplementalInputs: [] } }) })
+    await flush()
+    expect(agent.messages.value.find(item => item.messageId === 'control_kept:user')?.content).toBe('persisted rule')
+  })
+
+
+  it('keeps a finite archive window and the actual current assistant through 200 updates and older-page browsing', async () => {
+    await send(); external.history.mockClear()
+    const page = (offset: number) => ({ has_more: true, next_cursor: String(offset + 1), messages: Array.from({ length: 100 }, (_, index) => ({
+      message_id: 'runner-A:history:' + (offset + index), role: 'assistant', content: 'archive-' + (offset + index),
+      created_at: '2026-10-22T00:00:00Z', metadata: { runner_id: 'runner-A', runner_queue_order: 1 } })) })
+    for (let turn = 1; turn <= 200; turn++) {
+      external.history.mockResolvedValue(page(turn * 100))
+      if (turn > 1) await vi.advanceTimersByTimeAsync(1000)
+      request('/runners/runner-A').respond({ success: true, runner: runnerView({ execution_mode: 'continuous', view_revision: turn + 1,
+        snapshot: { output: 'current-' + turn, history_version: 1, history_revision: turn,
+          progressMessages: [{ type: 'thinking', data: 'latest progress' }] } }) })
+      await flush()
+      expect(agent.messages.value.filter(item => item.messageId?.startsWith('runner-A:history:'))).toHaveLength(100)
+      expect(agent.messages.value.length).toBeLessThanOrEqual(102)
+      expect(agent.currentResponse.value).toBe('current-' + turn)
+      expect(agent.progressMessages.value[0]?.content).toBe('latest progress')
+    }
+    external.history.mockResolvedValue(page(100))
+    await agent.loadDurableHistory('older'); await flush()
+    expect(agent.durableHistory.value?.older).toBe(true)
+    const before = external.history.mock.calls.length
+    await vi.advanceTimersByTimeAsync(1000)
+    request('/runners/runner-A').respond({ success: true, runner: runnerView({ execution_mode: 'continuous', view_revision: 202,
+      snapshot: { output: 'live while browsing', history_version: 1, history_revision: 201 } }) })
+    await flush()
+    expect(external.history).toHaveBeenCalledTimes(before)
+    expect(agent.messages.value.some(item => item.content === 'archive-100')).toBe(true)
+    external.history.mockResolvedValue(page(30000))
+    await agent.loadDurableHistory('latest'); await flush()
+    expect(agent.durableHistory.value?.older).toBe(false)
+    expect(agent.messages.value.some(item => item.content === 'archive-100')).toBe(false)
+    expect(agent.messages.value.length).toBeLessThanOrEqual(102)
+  })
+
 })

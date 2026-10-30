@@ -37,6 +37,7 @@ function makeSearchOp(
   const dir = mkdtempSync(join(tmpdir(), 'wecom-chat-search-test-'))
   tempDirs.push(dir)
   return createWecomChatSearchOperation({
+    accountFn: async () => null,
     runDriverFn,
     createRefFn: createRefFn ?? ((name, type, subtitle) => `ref:${type}:${name}:${subtitle ?? ''}`),
     artifactDirFn: () => dir,
@@ -135,6 +136,9 @@ function makeSendOp(runDriverFn: RunPowerShellDriverFn, verifyRefFn?: (ref: stri
     runDriverFn,
     verifyRefFn: verifyRefFn ?? (() => TARGET),
     artifactDirFn: () => dir,
+    // P2 任务 3.4：显式置空本地库状态——本段锁定「本地库不可用 → 老路径零改动」契约，
+    // 不依赖测试机真实 localdb-state.json
+    localdb: { readStateFn: () => null },
   })
   return { op, dir }
 }

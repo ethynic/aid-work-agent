@@ -36,6 +36,13 @@ export type ErrorCode =
   | 'TARGET_NOT_FOUND'
   | 'TARGET_AMBIGUOUS'
   | 'TARGET_REF_STALE'
+  // 本地库只读通道；身份/游标语义失败不允许自动改走 UI。
+  | 'IDENTITY_UNCONFIRMED'
+  | 'CURSOR_UNSUPPORTED'
+  | 'VERSION_UNSUPPORTED'
+  | 'KEY_SCAN_FAILED'
+  | 'SNAPSHOT_UNSTABLE'
+  | 'LOCALDB_UNAVAILABLE'
   // 生命周期
   | 'BUSY'
   | 'CANCELLED'
@@ -106,10 +113,13 @@ export class CodedOperationError extends Error {
 }
 
 /**
- * 可重试错误码（retryable 只对写动作开始前的环境型失败开放；
+ * 可重试错误码（环境失败及本地库只读通道不可用可以重试；
  * 写动作 unknown/partial 一律 false）。
  */
-const RETRYABLE_CODES: ReadonlySet<ResultCode> = new Set(['BUSY', 'WECOM_NOT_FOUND', 'NOT_LOGGED_IN'])
+const RETRYABLE_CODES: ReadonlySet<ResultCode> = new Set([
+  'BUSY', 'WECOM_NOT_FOUND', 'NOT_LOGGED_IN',
+  'VERSION_UNSUPPORTED', 'KEY_SCAN_FAILED', 'SNAPSHOT_UNSTABLE', 'LOCALDB_UNAVAILABLE',
+])
 
 export function okResult(runId: string, message: string, effect: Effect, data: Record<string, unknown> = {}): OperationResult {
   return { success: true, code: 'OK', message, effect, data, retryable: false, run_id: runId }

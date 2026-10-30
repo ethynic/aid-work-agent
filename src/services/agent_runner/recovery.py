@@ -28,7 +28,22 @@ class RecoveryCoordinator:
         self.attachment_resolver = attachment_resolver
         self.resource_directory = resource_directory
 
-    def prepare(self, row, control, *, prepared_source=None):
+    def prepare(self, row, control=None, *, prepared_source=None, timer_trigger=False,
+                continuous_trigger=False):
+        manual = not (timer_trigger or continuous_trigger)
+        if continuous_trigger:
+            from .continuous import interrupted_candidate, assert_continuous_supported
+            if timer_trigger or control is not None or not interrupted_candidate(row):
+                raise RunnerError('CONTINUOUS_RECOVERY_SOURCE_INVALID',409)
+            assert_continuous_supported(row['source'], row['session_kind'])
+        elif timer_trigger:
+            from .durable_sleep import replayable_activation,validate_armed
+            if row['status']=='waiting':
+                validate_armed(row)
+            elif row['status']!='interrupted' or not replayable_activation(row):
+                raise RunnerError('SLEEP_TIMER_MISMATCH',409)
+        elif control is None:
+            raise RunnerError('RECOVERY_CONTROL_REQUIRED',409)
         kwargs={'prepared_source':prepared_source} if prepared_source is not None else {}
         principal = self.authorizer.authorize_persisted(row,**kwargs)
         self.authorizer.assert_credit(principal)
@@ -36,10 +51,27 @@ class RecoveryCoordinator:
         if fingerprint != row['profile_fingerprint']:
             raise RunnerError('RECOVERY_PROFILE_CHANGED',409)
         checkpoint = copy.deepcopy(row.get('checkpoint') or {})
+        policy=checkpoint.get('continuous')
+        if policy is not None and (not isinstance(policy,dict)
+                or type(policy.get('version')) is not int or policy.get('version')!=1):
+            raise RunnerError('RECOVERY_CONTINUOUS_VERSION_UNSUPPORTED',409)
+        timer=checkpoint.get('durable_sleep') or {}
+        if timer:
+            from src.config.settings import settings
+            if type(timer.get('version')) is not int or timer.get('version')!=1:
+                raise RunnerError('RECOVERY_SLEEP_VERSION_UNSUPPORTED',409)
+            if not settings.agent_runner.durable_sleep_enabled:
+                raise RunnerError('DURABLE_SLEEP_DISABLED',409)
         if checkpoint.get('pending_finalization'):
             raise RunnerError('RECOVERY_FINALIZATION_PENDING',409)
         states = {}
-        from .runtime_manifest import configuration_fingerprint
+        from .runtime_manifest import configuration_fingerprint, configuration_matches
+
+        if continuous_trigger and checkpoint.get('execution') is None:
+            # The claim transaction separately proves there are no admitted IO
+            # receipts. No execution existed to restore before initial prepare.
+            checkpoint['continuous_recovery'] = {'version':1,'source_attempt':row['attempt']}
+            return PreparedRecovery(checkpoint,states,principal)
 
         def validate(data, *, execution_id, fingerprint=None, active=True, business_plan=None):
             try:
@@ -69,8 +101,9 @@ class RecoveryCoordinator:
                 # boundary as configuration_fingerprint and stay unvalidated.
                 if adapter_contract_mismatch(state.resources):
                     raise RunnerError('RECOVERY_ADAPTER_VERSION_UNSUPPORTED',409)
-                if state.resources.get('configuration_fingerprint') != configuration_fingerprint(current):
+                if not configuration_matches(state.resources.get('configuration_fingerprint'), current, config):
                     raise RunnerError('RECOVERY_CONFIGURATION_CHANGED',409)
+                state.resources['configuration_fingerprint'] = configuration_fingerprint(current, config)
                 if state.profile_id != row['profile_id']:
                     self.authorizer.authorize_child_profile(principal,state.profile_id)
                 workspace = state.resources.get('workspace')
@@ -139,6 +172,8 @@ class RecoveryCoordinator:
             return state
 
         if checkpoint.get('unstarted'):
+            if timer_trigger:
+                raise RunnerError('SLEEP_TIMER_MISMATCH',409)
             if checkpoint.get('execution'):
                 raise RunnerError('CHECKPOINT_TREE_INVALID',409)
             if control['action'] != 'resume':
@@ -150,16 +185,44 @@ class RecoveryCoordinator:
         else:
             root = validate(checkpoint.get('execution'),execution_id=row['runner_id'],
                             fingerprint=row['profile_fingerprint'],business_plan=checkpoint.get('business_plan'))
-            if control['action']=='reply':
+            if timer_trigger and row['status']=='waiting':
+                from .durable_sleep import complete_sleep
+                complete_sleep(row,states,checkpoint,trigger='timer')
+            elif manual and control['action']=='resume' and (checkpoint.get('durable_sleep') or {}).get('phase')=='armed':
+                from .durable_sleep import complete_sleep
+                from .control_repository import ControlRepository
+                from types import SimpleNamespace
+                ControlRepository.assert_wait(row,SimpleNamespace(action='resume',
+                    wait_id=control['payload'].get('wait_id'),
+                    target_execution_id=control['payload'].get('target_execution_id')))
+                complete_sleep(row,states,checkpoint,trigger='user_resume')
+            if manual and control['action']=='resume':
+                guards = [state for state in states.values() if (state.waiting or {}).get('kind')=='continuous_guard']
+                if guards:
+                    from .control_repository import ControlRepository
+                    from types import SimpleNamespace
+                    request = SimpleNamespace(action='resume',wait_id=control['payload'].get('wait_id'),
+                        target_execution_id=control['payload'].get('target_execution_id'))
+                    ControlRepository.assert_wait(row,request)
+                    target = next((state for state in guards if state.execution_id==request.target_execution_id
+                        and state.waiting.get('wait_id')==request.wait_id),None)
+                    if target is None:
+                        raise RunnerError('CONTROL_WAIT_STALE',409)
+                    target.resources['continuous_segment_start']=target.resources.get('business_iterations',target.iteration)
+                    target.waiting=None
+            if manual and control['action']=='reply':
                 self._apply_reply(row,control,root,states,checkpoint)
-            elif control['action']=='browser_complete':
+            elif manual and control['action']=='browser_complete':
                 if self.tool_recovery is None:
                     raise RunnerError('RECOVERY_TOOL_VERIFICATION_REQUIRED',409)
                 self.tool_recovery.apply_completion(row,control,states)
-            elif self._has_resume_input(control):
+            elif manual and self._has_resume_input(control):
                 if root.outcome in {Outcome.FAILED,Outcome.CANCELLED,Outcome.ITERATION_LIMIT}:
                     raise RunnerError('RECOVERY_ROOT_STATE_VERIFICATION_REQUIRED',409)
-                if root.iteration >= root.max_iterations:
+                used=root.resources.get('business_iterations',root.iteration)
+                if root.resources.get('continuous_enabled'):
+                    used-=root.resources.get('continuous_segment_start',0)
+                if used >= root.max_iterations:
                     raise RunnerError('CONTINUATION_LIMIT_REACHED',409)
                 root.followup_messages.append(self._user_message(row,control))
                 root.resources.setdefault('continuation_inputs',{})[control['control_id']] = 'queued'
@@ -167,12 +230,22 @@ class RecoveryCoordinator:
                 self._remember_input(checkpoint,control)
             for state in states.values():
                 from .aggregate_tree import child_tree_finished
+                if continuous_trigger:
+                    # This attempt has lost ownership. Its unobserved model IO
+                    # remains uncertain usage, rather than a live operation that
+                    # could prevent every future durable sleep.
+                    for fact in state.model_calls:
+                        if fact.get('phase') == 'started':
+                            fact['phase'] = 'unknown'
                 stopped = state.outcome in {Outcome.COMPLETED,Outcome.FAILED,Outcome.CANCELLED,Outcome.ITERATION_LIMIT}
                 facts = list(state.tools.values()) if stopped else [state.tools.get(call.id) for call in state.pending]
                 for fact in facts:
                     if fact is None:
                         raise RunnerError('CHECKPOINT_TOOL_FACT_MISSING',409)
                     if fact.phase in ('dispatching','waiting') and fact.call.id not in state.children:
+                        from .durable_sleep import recover_uncommitted
+                        if recover_uncommitted(state,fact):
+                            continue
                         if self.tool_recovery is None or not self.tool_recovery.can_restore(row,state,fact):
                             raise RunnerError('RECOVERY_TOOL_VERIFICATION_REQUIRED',409)
                 if stopped and child_tree_finished(state.checkpoint()):
@@ -187,14 +260,20 @@ class RecoveryCoordinator:
                     # command and silently restart its own model steps.
                     raise RunnerError('RECOVERY_CHILD_STATE_VERIFICATION_REQUIRED',409)
                 state.outcome = Outcome.RUNNING
-            if self._has_resume_input(control) and root.outcome==Outcome.COMPLETED:
+            if manual and self._has_resume_input(control) and root.outcome==Outcome.COMPLETED:
                 # Keep completed steps and child facts; the restore-only adapter
                 # drains original descendants before this root's next iteration.
                 root.resources['root_execution_outcome'] = 'completed'
                 root.outcome = Outcome.RUNNING
             self._capture(root,states)
             checkpoint['execution'] = root.checkpoint()
-        checkpoint['applied_control_id'] = control['control_id']
+        if manual:
+            checkpoint['applied_control_id'] = control['control_id']
+            checkpoint.pop('continuous_recovery',None)
+        elif continuous_trigger:
+            checkpoint['continuous_recovery'] = {'version':1, 'source_attempt':row['attempt']}
+        checkpoint.pop('sleep_blocked',None)
+        checkpoint.pop('sleep_retry',None)
         return PreparedRecovery(checkpoint,states,principal)
 
     @staticmethod
@@ -237,6 +316,8 @@ class RecoveryCoordinator:
         fact = target.tools.get(wait.get('tool_call_id'))
         if fact is None or fact.phase!='waiting':
             raise RunnerError('CONTROL_WAIT_STALE',409)
+        from .continuous import apply_confirmation
+        apply_confirmation(row,control,target,states,checkpoint,wait,fact)
         attachments = payload.get('attachments') or []
         if attachments:
             if self.attachment_resolver is None:

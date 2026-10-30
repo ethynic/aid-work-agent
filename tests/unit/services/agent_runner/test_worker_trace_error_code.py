@@ -18,7 +18,7 @@ pytestmark = pytest.mark.unit
 
 def _worker(runner_row):
     worker = object.__new__(RunnerWorker)
-    worker.repository = SimpleNamespace(get=lambda runner_id: runner_row)
+    worker.repository = SimpleNamespace(get=lambda runner_id: {"attempt": 1, **runner_row})
     return worker
 
 
@@ -32,7 +32,7 @@ def _collector():
 
 
 def _control():
-    return SimpleNamespace(snapshot={})
+    return SimpleNamespace(snapshot={}, attempt=SimpleNamespace(number=1))
 
 
 def _failed_runner(error_code='ITERATION_LIMIT'):

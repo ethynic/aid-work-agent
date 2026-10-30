@@ -193,6 +193,7 @@ export async function resolveTargetByName(
     runDriverFn: cfg.runDriverFn,
     createRefFn: cfg.createRefFn,
     artifactDirFn: () => cfg.root,
+    accountFn: async () => null, // 内部临时 UI ref，不用于跨调用 DB 读取。
   })
   const searchRes = await searchOp.execute({ query, type: 'any' }, cfg.opCtx)
   if (!searchRes.success) {
@@ -344,6 +345,7 @@ export async function runStageWithNavigation(cfg: StageNavigationConfig): Promis
       runDriverFn: cfg.runDriverFn,
       createRefFn: cfg.createRefFn,
       artifactDirFn: () => cfg.root,
+      accountFn: async () => null, // 内部临时 UI ref，不用于跨调用 DB 读取。
     })
     const searchRes = await searchOp.execute({ query, type: searchType }, cfg.opCtx)
     if (!searchRes.success) {

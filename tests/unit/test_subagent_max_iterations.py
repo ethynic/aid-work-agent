@@ -11,18 +11,18 @@ def _config(context=None) -> SubagentConfig:
 
 class TestGetMaxIterations:
     def test_default_when_missing(self):
-        assert _config().get_max_iterations() == 20
+        assert _config().get_max_iterations() == 50
 
     def test_valid_value(self):
         assert _config({"max_iterations": 60}).get_max_iterations() == 60
 
     @pytest.mark.parametrize("raw", [None, "abc", [], 1.5])
     def test_invalid_type_falls_back(self, raw):
-        assert _config({"max_iterations": raw}).get_max_iterations() == 20
+        assert _config({"max_iterations": raw}).get_max_iterations() == 50
 
     def test_zero_and_negative_fall_back(self):
-        assert _config({"max_iterations": 0}).get_max_iterations() == 20
-        assert _config({"max_iterations": -5}).get_max_iterations() == 20
+        assert _config({"max_iterations": 0}).get_max_iterations() == 50
+        assert _config({"max_iterations": -5}).get_max_iterations() == 50
 
     def test_above_max_is_clamped(self):
         assert _config({"max_iterations": 500}).get_max_iterations() == 100

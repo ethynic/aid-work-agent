@@ -72,6 +72,7 @@ class RunnerSubmit(SessionQuery):
     request_data: dict[str, Any] = Field(default_factory=dict)
     instance_id: Optional[str] = Field(default=None, max_length=256)
     routing_policy: Literal["explicit", "default_single"] = "explicit"
+    execution_mode: Optional[Literal["continuous"]] = None
 
     def intent(self):
         data = self.model_dump(mode="json")
@@ -84,6 +85,8 @@ class RunnerSubmit(SessionQuery):
             data.pop("instance_id")
         if data["routing_policy"] == "explicit":
             data.pop("routing_policy")
+        if data["execution_mode"] is None:
+            data.pop("execution_mode")
         for attachment in data["attachments"]:
             if attachment["size"] is None:
                 attachment.pop("size")
@@ -91,6 +94,12 @@ class RunnerSubmit(SessionQuery):
 
     def digest(self):
         return hashlib.sha256(canonical_json(self.intent()).encode("utf-8")).hexdigest()
+
+    def transport(self):
+        data = self.model_dump(mode='json')
+        if self.execution_mode is None:
+            data.pop('execution_mode')
+        return data
 
 
 def canonical_json(value):

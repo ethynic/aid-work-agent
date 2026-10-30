@@ -38,6 +38,9 @@
           <div class="flex-1 overflow-hidden">
             <MessageList
               :messages="messages"
+              :history="durableHistory"
+              :follow-latest="!durableHistory?.older"
+              @history="loadDurableHistory"
               :is-processing="isProcessing"
               :input-hint-state="inputHintState"
               :subagent-name="currentSubagentName"
@@ -48,6 +51,7 @@
 
           <!-- Input Area -->
           <div class="flex-shrink-0 border-t border-gray-200 bg-white p-2 md:p-4 pb-[max(0.5rem,env(safe-area-inset-bottom))] shadow-sticky z-10">
+            <DurableTaskStatus v-if="durableTask" :row="durableTask" :busy="durableTaskBusy" @control="controlDurableTask" />
             <div v-if="localRecovery" role="status" class="mb-3 rounded-lg border border-warning-200 bg-warning-50 p-3 text-sm text-gray-700">
               <p v-if="localRecovery.local_recovery_kind === 'dispatch_unconfirmed'">原任务的派发状态待核对。可以核对并继续，或结束旧等待后在本会话继续交流；已有成果会保留。</p>
               <p v-else-if="!localRecovery.local_verification?.resource_stopped">原本机操作需要核对。请保持原执行电脑的 Runtime 连接，以便回传结果。只读核验仅观察页面，不能据此确认旧执行停止或原操作成功，不会重复原操作；结束等待后可以继续对话。</p>
@@ -105,6 +109,7 @@ import AppHeader from './AppHeader.vue'
 import MenuSidebar from './MenuSidebar.vue'
 import AttachmentPreviewPanel from './AttachmentPreviewPanel.vue'
 import BaseButton from './ui/BaseButton.vue'
+import DurableTaskStatus from './chat/DurableTaskStatus.vue'
 
 import { useAgent } from '@/composables/useAgent'
 import { getSession } from '@/api/session'
@@ -147,6 +152,11 @@ const {
   inputHintState,
   isWaitingHuman,
   runnerFeedback,
+  durableTask,
+  durableTaskBusy,
+  durableHistory,
+  loadDurableHistory,
+  controlDurableTask,
   localRecovery,
   localRecoveryBusy,
   localVerificationMessage,

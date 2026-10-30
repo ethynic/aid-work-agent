@@ -148,6 +148,11 @@ class LocalInvocationRepository:
                 or fact.get('phase') not in {'dispatching', 'waiting'}):
             raise LeaseLost('LOCAL_TOOL_NOT_DISPATCHED')
 
+        from .wecom_device_binding import bind_or_validate
+        if tool_name == 'wecom_group_poll' and (fact.get('call') or {}).get('name') != tool_name:
+            raise LeaseLost('WECOM_TASK_POLL_OWNER_MISMATCH')
+        pinned = bind_or_validate(checkpoint, row, tool_name, provider_key, device_id, arguments)
+
         # A pre-existing row without its atomic checkpoint is an invariant
         # failure, never evidence that it is safe to enqueue another IO.
         key = phase.key(attempt.runner_id)
@@ -163,11 +168,16 @@ class LocalInvocationRepository:
         device = cursor.fetchone()
         if not device:
             raise LeaseLost('LOCAL_DEVICE_OWNER_MISMATCH')
-        if device_policy is not None:
+        if pinned or device_policy is not None:
             # last_seen_at is TIMESTAMP, populated from NOW() in this DB
             # session. Compare wall clocks in that same session timezone.
             cursor.execute('SELECT clock_timestamp()::timestamp AS now')
-            reason = device_policy(dict(device), cursor.fetchone()['now'])
+            now = cursor.fetchone()['now']
+            if pinned:
+                from src.local_tools.device_policy import device_ready_error
+                reason = device_ready_error(dict(device), tool_name, now, require_selected=False)
+            else:
+                reason = device_policy(dict(device), now)
             if reason is not None:
                 raise DeviceOperationUnresolved('LOCAL_DEVICE_' + reason.upper())
         key = phase.key(attempt.runner_id)

@@ -499,6 +499,8 @@ agent_runner:
   # 本地容器验证（2026-10-04）：Web 闭环走 Runner；令牌明文仅在 .env。
   enabled: true
   web_enabled: true
+  # 同池 API/worker 全部升级并完成隔离验收后才显式开启。
+  durable_sleep_enabled: false
   api_url: "http://127.0.0.1:8091"
   web_service_id: "web"
   peers:

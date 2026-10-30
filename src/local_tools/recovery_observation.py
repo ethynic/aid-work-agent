@@ -43,8 +43,11 @@ def observation_scope(cursor, invocation, *, dispatch=False):
     if (arguments.get('version') != binding['version'] or arguments.get('scope_id') != binding.get('scope_id')
             or arguments.get('device_id') != binding['device_id'] or arguments.get('original_invocation_ids') != ids):
         return None
-    if binding['version'] == 3 and (arguments.get('stop_resources') is not True
-            or any((item.get('provider_key') or 'boss-recruiting') != 'boss-recruiting' for item in originals)):
+    provider = arguments.get('provider_key', 'boss-recruiting')
+    if provider not in {'boss-recruiting', 'wecom'} or any(
+            (item.get('provider_key') or 'boss-recruiting') != provider for item in originals):
+        return None
+    if binding['version'] == 3 and arguments.get('stop_resources') is not True:
         return None
     return {**binding, 'invocation_id': str(invocation['id']) if invocation.get('id') else None}
 
@@ -108,6 +111,17 @@ def write_result(invocation_id, tenant_id, claim_token_hash, success, code, mess
                 else observation.get('target_relation') == 'original' and observation.get('browser_target_ref') == target if target
                 else observation.get('target_relation') == 'current_unbound')
             and (page_observed or page_failed))
+        wecom = (row.get('arguments_json') or {}).get('provider_key') == 'wecom'
+        if wecom:
+            envelope_valid = (effect == 'none' and isinstance(observation, dict)
+                and observation.get('version') == version and version in {2, 3}
+                and observation.get('provider_scope') == 'wecom'
+                and observation.get('scope_id') == binding.get('scope_id')
+                and observation.get('device_id') == binding['device_id']
+                and observation.get('original_invocation_ids') == binding['original_invocation_ids']
+                and observation.get('target_relation') == 'not_applicable'
+                and observation.get('browser_target_ref') is None
+                and summary == {'observed': False, 'page_kind': 'not_applicable', 'result': 'unknown'})
         # Accept in-flight pre-upgrade v1 receipts without redefining their proof.
         # v2 pure observation cannot manufacture stop evidence for an unbound old call.
         stop_valid = (envelope_valid and version == 1 and observation.get('resource_stopped') is True
@@ -123,7 +137,7 @@ def write_result(invocation_id, tenant_id, claim_token_hash, success, code, mess
             'LOCAL_RECOVERY_PROCESS_CHECK_UNAVAILABLE'}
         read_valid = (envelope_valid and version in {2, 3} and observation.get('resource_stopped') is False
             and observation.get('stop_error_code') in stop_errors)
-        valid = bool((stop_valid or read_valid) and page_observed)
+        valid = bool((stop_valid or read_valid) and (page_observed or wecom and envelope_valid))
         # No arbitrary Provider text/page content enters the public projection.
         checkpoint = dict(runner['checkpoint'] or {})
         current = checkpoint.get('local_verification') or {}
@@ -131,7 +145,7 @@ def write_result(invocation_id, tenant_id, claim_token_hash, success, code, mess
                 for key in ('runner_id', 'version', 'scope_id', 'request_id', 'device_id', 'original_invocation_ids'))):
             state = 'succeeded' if valid else 'failed'
             checkpoint['local_verification'] = {**current, 'state': state,
-                'resource_stopped': bool(stop_valid), 'page_observed': bool(valid),
+                'resource_stopped': bool(stop_valid), 'page_observed': bool(valid and not wecom),
                 'stop_error_code': observation.get('stop_error_code') if read_valid else None,
                 'page_summary': summary if valid else None,
                 'target_relation': observation.get('target_relation') if envelope_valid else None,

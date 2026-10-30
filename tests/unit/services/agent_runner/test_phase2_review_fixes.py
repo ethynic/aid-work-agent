@@ -232,12 +232,15 @@ def test_settle_pending_usage_updates_public_credit_cost():
 
     row = {"runner_id": "run_1", "status": "completed",
            "result": {"status": "completed", "credit_cost": 0.5},
+           "public_snapshot": {"progress": "done"},
            "checkpoint": {"pending_finalization": {"status": "completed"}}}
     finalizer = RunnerFinalizer(connection_factory=_factory)
     with patch.object(finalizer_mod, "lock_runner", return_value=row), \
             patch.object(finalizer_mod, "decoded", lambda value: value), \
             patch.object(RunnerFinalizer, "_settle",
                          return_value=("settled", Decimal("0.75"), Decimal("1.25"))), \
+            patch("src.services.agent_runner.usage_projection.usage_in_tx",
+                  return_value={"task_credits": 1.25, "session_credits": 3.75, "pending": False}), \
             patch.object(finalizer_mod.EventRepository, "notify_in_tx",
                          staticmethod(lambda cursor, before, after=None, **kw: after)), \
             patch.object(RunnerFinalizer, "_after_commit", staticmethod(lambda *a, **k: None)):
@@ -247,6 +250,9 @@ def test_settle_pending_usage_updates_public_credit_cost():
     assert "result=%s::jsonb" in update[0]
     assert json.loads(update[1][1])["credit_cost"] == 1.25
     assert json.loads(update[1][1])["status"] == "completed"  # 其余结果字段保留
+    snapshot = json.loads(update[1][2])
+    assert snapshot["progress"] == "done"
+    assert snapshot["usage"]["task_credits"] == 1.25  # 累计积分投影与终态费用同次更新
 
 
 class _RecordingCursor:

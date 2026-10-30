@@ -1,6 +1,6 @@
 {
   "name": "aid-wecom",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "企业微信操作 CLI / MCP Provider（M1 骨架：operation 契约 + CLI + MCP stdio + probe/add-customer 驱动）",
   "type": "module",
@@ -8,10 +8,11 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.main.json",
-    "build:main": "tsc -p tsconfig.main.json",
+    "build": "tsc -p tsconfig.main.json && node scripts/copy-matrix.mjs",
+    "build:main": "tsc -p tsconfig.main.json && node scripts/copy-matrix.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.main.json",
     "test": "npm run build:main && node scripts/run-tests.mjs",
+    "test:py": "..\\..\\venv\\Scripts\\python.exe -m unittest discover -s tests/py -v",
     "cli": "npm run build:main && node dist/src/cli/index.js"
   },
   "dependencies": {

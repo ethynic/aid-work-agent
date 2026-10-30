@@ -1,0 +1,87 @@
+--- a/clients/wecom-cli/drivers/ps1/_common.ps1
++++ b/clients/wecom-cli/drivers/ps1/_common.ps1
+@@ -964 +964 @@
+-        $writtenSeq=[uint32]0
++        $lockedWriteStamp=[uint32]0
+@@ -967,2 +967,4 @@
+-                $original.empty,$sentinel,$false,[ref]$writtenSeq)) { $result.reason='clipboard_changed';return $result }
+-        $sentinelSeq=$writtenSeq
++                $original.empty,$sentinel,$false,[ref]$lockedWriteStamp)) { $result.reason='clipboard_changed';return $result }
++        # lockedWriteStamp is not a receipt: CloseClipboard may publish synthesized formats.
++        # Certify the published unique nonce with a stable read and our exact hidden owner.
++        $publishedSeq=[WeComWin32]::GetClipboardSequenceNumber()
+@@ -970 +972,5 @@
+-        if ($check.text -cne $sentinel -or $sentinelSeq -ne [WeComWin32]::GetClipboardSequenceNumber()) { return $result }
++        $publishedOwner=[WeComWin32]::GetClipboardOwner()
++        $publishedAfter=[WeComWin32]::GetClipboardSequenceNumber()
++        if ($check.empty -or $check.text -cne $sentinel -or
++                $publishedOwner -ne $window.Handle -or $publishedSeq -ne $publishedAfter) { return $result }
++        $sentinelSeq=$publishedSeq
+@@ -977,3 +983,2 @@
+-            $seq=[WeComWin32]::GetClipboardSequenceNumber();$copyPid=0
+-            [void][WeComWin32]::GetWindowThreadProcessId([WeComWin32]::GetClipboardOwner(),[ref]$copyPid)
+-            if ($seq -ne $sentinelSeq -and $copyPid -eq $ownerPid) {
++            $seq=[WeComWin32]::GetClipboardSequenceNumber()
++            if ($seq -ne $sentinelSeq) {
+@@ -981 +986,4 @@
+-                if ($observed.text -cne $sentinel -and $seq -eq [WeComWin32]::GetClipboardSequenceNumber()) {
++                $copyPid=0
++                [void][WeComWin32]::GetWindowThreadProcessId([WeComWin32]::GetClipboardOwner(),[ref]$copyPid)
++                $copyAfter=[WeComWin32]::GetClipboardSequenceNumber()
++                if ($copyPid -eq $ownerPid -and $observed.text -cne $sentinel -and $seq -eq $copyAfter) {
+@@ -1001,2 +1009,8 @@
+-                $ours=($seq -eq $sentinelSeq -and $current.text -ceq $sentinel) -or
+-                    ($null -ne $copySeq -and $seq -eq $copySeq -and $current.text -ceq $copied)
++                $currentOwner=[WeComWin32]::GetClipboardOwner()
++                $stable=($seq -eq [WeComWin32]::GetClipboardSequenceNumber())
++                # Even a failed receipt/close may leave our nonce. Retire it only with our
++                # exact owner and a stable current snapshot; native CAS rechecks before writing.
++                $nonceOwned=($null -ne $window -and -not $current.empty -and
++                    $currentOwner -eq $window.Handle -and $current.text -ceq $sentinel)
++                $ours=$stable -and ($nonceOwned -or
++                    ($null -ne $copySeq -and $seq -eq $copySeq -and $current.text -ceq $copied))
+@@ -1004 +1018 @@
+-                    $writtenSeq=[uint32]0
++                    $lockedWriteStamp=[uint32]0
+@@ -1006 +1020 @@
+-                        $current.empty,$original.text,$original.empty,[ref]$writtenSeq)
++                        $current.empty,$original.text,$original.empty,[ref]$lockedWriteStamp)
+--- a/clients/wecom-cli/tests/ps1/search-input-regression.ps1
++++ b/clients/wecom-cli/tests/ps1/search-input-regression.ps1
+@@ -12 +12,2 @@
+- public static int Owner, Exchanges, RaceOnExchange, FailOnExchange;
++ public static int Owner, Exchanges, RaceOnExchange, FailOnExchange, PublishAdvance, FailAfterWriteOnExchange;
++ public static bool ForeignOwnerAfterWrite;
+@@ -25 +26,5 @@
+-  Text=next;Empty=nextEmpty;NonText=false;Owner=99;Sequence++;written=Sequence;return true;
++  Text=next;Empty=nextEmpty;NonText=false;Owner=99;Sequence++;written=Sequence;
++  Sequence+=(uint)PublishAdvance; // CloseClipboard publishes synthesized formats after the out stamp.
++  if(Exchanges==1 && ForeignOwnerAfterWrite) {Owner=777;Sequence++;}
++  if(Exchanges==FailAfterWriteOnExchange)throw new InvalidOperationException("CLIPBOARD_CLOSE_FAILED");
++  return true;
+@@ -50,0 +56,4 @@
++ if($script:advanceOnReceiptRead-and$script:clipboardReads-eq2){[WeComWin32]::Sequence++}
++ if($script:raceOnReceiptRead-and$script:clipboardReads-eq2){
++  [WeComWin32]::Text='external-write';[WeComWin32]::Owner=777;[WeComWin32]::Sequence++
++ }
+@@ -77,0 +87 @@
++ [WeComWin32]::PublishAdvance=0;[WeComWin32]::FailAfterWriteOnExchange=0;[WeComWin32]::ForeignOwnerAfterWrite=$false
+@@ -82,0 +93 @@
++ $script:advanceOnReceiptRead=$false;$script:raceOnReceiptRead=$false
+@@ -96,0 +108,16 @@
++
++Reset-Case;[WeComWin32]::PublishAdvance=3
++$result=Invoke-EchoProbe
++Assert-True ($result.matched-and$result.restored-and[WeComWin32]::Text-ceq'original-text') 'Close publication sequence advances must not invalidate fresh copy or abandon the saved clipboard'
++Reset-Case;$script:advanceOnReceiptRead=$true
++$result=Invoke-EchoProbe
++Assert-True (-not$result.matched-and$result.restored-and$actions.Count-eq0-and[WeComWin32]::Text-ceq'original-text') 'unstable receipt must block copying but its still-owned unique nonce must be retired'
++Reset-Case;$script:raceOnReceiptRead=$true
++$result=Invoke-EchoProbe
++Assert-True (-not$result.matched-and-not$result.restored-and$actions.Count-eq0-and[WeComWin32]::Text-ceq'external-write') 'foreign write during receipt must prevent copying and must never be restored over'
++Reset-Case;[WeComWin32]::ForeignOwnerAfterWrite=$true
++$result=Invoke-EchoProbe
++Assert-True (-not$result.matched-and-not$result.restored-and$actions.Count-eq0-and[WeComWin32]::Owner-eq777) 'identical nonce under another owner must not establish a receipt or permit restoration'
++Reset-Case;[WeComWin32]::FailAfterWriteOnExchange=1;[WeComWin32]::PublishAdvance=3
++$result=Invoke-EchoProbe
++Assert-True (-not$result.matched-and$result.restored-and$result.reason-eq'clipboard_close_failed'-and[WeComWin32]::Text-ceq'original-text') 'a close fault after writing must stay explicit while finally recovers our owned unique nonce'

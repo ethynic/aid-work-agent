@@ -144,7 +144,7 @@ export function machineFingerprint(): string {
  * 按字典序——首个可用 provider 即旧 provider_id 兼容字段的取值来源，顺序漂移会改变
  * 上报字节与云端 catalog 归属，不可依赖对象插入顺序的隐式行为。
  */
-export function deviceCapabilities(config?: RuntimeConfig | null): Record<string, unknown> {
+export function deviceCapabilities(config?: RuntimeConfig | null, wecomBusinessReady = false): Record<string, unknown> {
   const cfg = config === undefined ? loadConfig() : config
   const entries = resolveProviderEntries(cfg)
   const skillsPython = typeof cfg?.skills?.python === 'string' && cfg.skills.python !== '' ? cfg.skills.python : null
@@ -162,7 +162,9 @@ export function deviceCapabilities(config?: RuntimeConfig | null): Record<string
   for (const key of available) {
     // D5：上报/摘要统一读**实际生效** manifest（含 v2Send 显式协商变体）——
     // 运行时校验、能力上报与摘要计算三者同源，显式开启 v2 后不再上报旧 v1 摘要
-    const manifest = effectiveManifestFor(key) ?? TRUSTED_MANIFESTS[key]!
+    const current = effectiveManifestFor(key) ?? TRUSTED_MANIFESTS[key]!
+    const manifest = key === 'wecom' && !wecomBusinessReady
+      ? { ...current, tools: current.tools.filter(name => name !== 'wecom_read_sessions') } : current
     manifests[key] = {
       provider_id: manifest.provider_id,
       manifest_digest: manifestDigestOf(manifest),
@@ -188,7 +190,7 @@ export function deviceCapabilities(config?: RuntimeConfig | null): Record<string
   // search/select/watch_poll/add_customer 不出现）；Provider 未安装（无 entry）不上报
   if (available.includes('wecom')) {
     const effectiveWecom = effectiveManifestFor('wecom')
-    if (effectiveWecom) capabilities.push(...effectiveWecom.tools)
+    if (effectiveWecom) capabilities.push(...effectiveWecom.tools.filter(name => wecomBusinessReady || name !== 'wecom_read_sessions'))
   }
   return {
     providers: available,

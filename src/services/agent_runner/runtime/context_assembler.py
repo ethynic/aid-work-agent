@@ -101,7 +101,7 @@ class ContextAssembler:
                 messages.append({"role": "user", "content": injection})
             state = ExecutionState(identity=self.identity, execution_id=execution_id or f"ae_{uuid.uuid4().hex}",
                 role=self.role, system_prompt=prompt, messages=messages, initial_len=len(messages),
-                max_iterations=self.profile_config.get_max_iterations() if self.profile_config else (50 if self.role == AgentMode.MASTER else 20),
+                max_iterations=self.profile_config.get_max_iterations() if self.profile_config else 50,
                 profile_id=getattr(self.profile_config, "dir_name", "main"),
                 profile_version=getattr(self.profile_config, "version", None))
             if not continuation and workspace:

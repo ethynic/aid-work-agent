@@ -377,3 +377,8 @@ agent2 trace `tr_runner_fad11fadee904df98a5851c0a5bc4880` 同时展示 ask_user 
 - ask_user/AskForm 及其既有提交、忽略、等待、答案绑定和已答回显不变。不新增数据库或协议字段，不改 Runtime/Device/binding/授权契约。
 
 实施及验证见[计划§8](../plans/plan-ask-user-interactive-question.md#8-2026-10-23旧版快捷选项整体退役)。范围修订后已按工具装配高风险流程完成开发、独立测试与独立CR；Web构建通过，旧方案验证未复用为新范围通过结论。部署和真实浏览器/真机验收仍待执行。
+
+
+### Web选项焦点定位补充（2026-10-29）
+
+使用sr-only原生radio/checkbox配合自绘勾选时，选项label必须提供局部定位上下文，避免absolute隐藏输入获得焦点后把外层聊天布局滚出可视区域。保持原受控选择和提交流程；不以全局滚动补偿或禁用键盘焦点掩盖问题。真实复现与验证见[实施计划§9](../plans/plan-ask-user-interactive-question.md#9-选项焦点滚动修复2026-10-29)。

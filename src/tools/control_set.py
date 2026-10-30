@@ -27,6 +27,7 @@ class ToolControlSet:
         from src.tools.agent.ask_user_tool import AskUserTool
         from src.tools.agent.clarify_tool import ClarifyTool
         from src.tools.agent.present_options_tool import PresentOptionsTool
+        from src.tools.agent.sleep_tool import AgentSleepTool
         from src.tools.plan.create_plan_tool import CreatePlanTool
         from src.tools.skill.skill_execute_tool import SkillExecuteTool
         from src.tools.skill.use_skill_tool import UseSkillTool
@@ -46,6 +47,7 @@ class ToolControlSet:
             ClarifyTool(),
             AskUserTool(),
             PresentOptionsTool(),
+            AgentSleepTool(),
             UseSkillTool(dependencies.skill_registry),
         )
         if dependencies.non_interactive:
@@ -73,7 +75,7 @@ class ToolControlSet:
         # 非交互装配下 clarify/ask_user 不在 _tools，按现存名称跳过（防 KeyError）
         definitions = [
             self._tools[name].to_tool_definition()
-            for name in ("skill_execute", "create_plan", "clarify", "ask_user")
+            for name in ("skill_execute", "create_plan", "clarify", "ask_user", "agent_sleep")
             if name in self._tools
         ]
         definitions.append(self._dependencies.skill_registry.get_skill_tool_definition())

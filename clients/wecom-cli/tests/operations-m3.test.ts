@@ -130,6 +130,7 @@ function makeReadOp(
 ) {
   const dir = tempDir('wecom-read-session-test-')
   return createWecomReadSessionOperation({
+    localdb: { readStateFn: () => null },
     runDriverFn,
     verifyRefFn: extra.verifyRefFn ?? (() => TARGET),
     createRefFn: extra.createRefFn,
@@ -531,6 +532,8 @@ function makeWatchOp(opts: {
     statePathFn: () => join(opts.stateDir, 'watch-state.json'),
     artifactDirFn: () => opts.artifact,
     nowFn: () => new Date('2026-08-31T12:00:00Z'),
+    // P2 任务 3.2：显式置空本地库状态——本段锁定 UI 通道契约，不依赖测试机真实 localdb-state.json
+    localdb: { readStateFn: () => null },
   })
   return { op, calls }
 }
@@ -768,6 +771,8 @@ test('watch_poll：直点行未命中（navigate_required）→ 智能分发 sea
     nowFn: () => new Date('2026-08-31T12:00:00Z'),
     verifyRefFn: (ref) => verifyTargetRef(ref, { keyDir }),
     createRefFn: (name, type, subtitle, coords) => createTargetRef(name, type, subtitle, { keyDir, coords }),
+    // P2 任务 3.2：显式置空本地库状态（同上，UI 通道契约不依赖测试机真实 localdb-state.json）
+    localdb: { readStateFn: () => null },
   })
   const r = await op.execute({}, silentCtx())
   assert.equal(r.success, true)

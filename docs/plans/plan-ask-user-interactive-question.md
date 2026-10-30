@@ -13,6 +13,7 @@
 | Phase 2 | 同源待答可达性（提问通知 + 会话待答标识） | ✅ 开发完成（2026-10-14） | `task.waiting_input` 通知生产者挂 park 事务尾（chat/web 用户自有 runner 且 waiting(form) 才通知；event_key=runner:wait 去重，同 wait 重复 park 不重发）；`resource_in_tx` 增 `runner_waiting` 分支（点击解析回原会话带 `_load_session`）；站内信 INBOX 纳入该事件（渲染+跳转链接）；SW 白名单/文案更新；会话列表 `waiting_input` 徽标（查询异常降级无徽标，列表缓存 TTL 30s 内）。验证：notifications 单元 138 过（含 9 例 waiting 生产者新用例；web_push 8 例为先存环境）、后端 3417+集成 33、前端 642 与基线一致。主控单角色自验（子智能体额度冻结期）；后续修正已完成代码复审；真机验收待授权。埋点以最新 Phase 3 记录为准 |
 | Phase 3 | 增强项（按需） | ✅ 开发完成（2026-10-14） | legacy SSE form 透传（clarification 帧携带 form，旧页面作答方式不变）；生命周期埋点 MVP（[ask] produced 与事务提交后的 consumed；结构化及文字作答均计入，skipped 来自 payload.skip；recover_ms 表示控制受理至消费完成的时长，不是用户作答时长）；capabilities 已由 Phase 1 ask_structured_answers 覆盖（无多维度协商需求，无遗留）；expires_at 超时语义**暂缓**——需先冻结监管/取消/计费产品口径（设计 §5.5），未实现任何自动超时 |
 | Phase 4 | 旧版快捷选项整体退役，统一使用 ask_user | ✅ 完成（2026-10-23） | 自测后端58+静态8/前端73；独立后端84/前端82通过；Web构建与CR通过，待部署及真机验收，见§8 |
+| 交互修复 | 选项焦点导致聊天区域白屏 | ✅ 完成（2026-10-29） | label局部定位修复，独立48项/CR与Web构建通过；原卡片选择/取消/翻页真机通过，未提交答案 |
 
 合并验证（2026-10-14）：功能分支 `89f60ccb` 与 master `a805eb24` 整合；保留双方数据库迁移与网络搜索任务索引。Web 构建通过，独立前端定向回归 35 项通过，契约检查 7 项及 85 个 fixture 通过，42 个 Python 文件语法与 4 个关键模块导入通过；当前环境缺少 pytest，后端完整测试未重跑，未执行部署或真实渠道验收。
 
@@ -207,3 +208,15 @@
 - 独立CR已复核无阻断。发现的旧工具静态测试断言、运行时 skill Changelog 和建筑供应链子智能体旧提示均已修正；全仓 `subagents`/`src/skills` 无旧工具推荐，前端无旧消费链。`git diff --check` 通过。
 - 提交前已 fetch 并快进同步远程 3 个提交；仅对重叠的 ideas.md 单文件临时保存并恢复，保留其他任务工作区改动。本任务提交时只暂存自身文件及共享索引的自身条目。
 - 未部署，未改现场任务；真实浏览器及 agent2 同形 trace 验收待执行。
+
+
+## 9. 选项焦点滚动修复（2026-10-29）
+
+本地Web用户反馈ask_user无法选择，点击选项后聊天区域白屏。主控在现有待答卡片点击“先别发”实际复现：侧栏仍在，聊天DOM和选项选择状态保留，没有捕获JS错误；DOM几何显示外层overflow-hidden的main.scrollTop=3466，聊天子树整体y为负。原因是原生input采用absolute的sr-only，而label未建立定位上下文，焦点自动滚动定位到远处输入框。
+
+最小修复只给选项label增加relative，使radio/checkbox的隐藏原生输入框落在对应可见标签内。保留click.prevent及自绘勾选、选择/自定义内容/分页与原结构化提交，不新增scroll处理器、焦点补偿、状态或门禁。唯一源码写入者为主控；独立验证只读。验证当前长历史待答卡片鼠标选择/取消、键盘、分页与输入不白屏，不点提交，不消费原wait，不发送消息或启动监听。开发/独验完成后回填结果。
+
+
+验证结论（2026-10-29）：主控在原长历史待答页面复验第三单选已可见勾选、空格取消、分页第二题选中均正常；修后label position=relative，隐藏input位于label内，两层main.scrollTop均为0，聊天header/输入框保留。原生checked受原click.prevent控制的旧行为不扩改，以现有自绘勾选和选择状态为准。未点击提交/忽略，原waiting未消费。验收图在本机Temp `ask-focus-fixed-20261029.jpg`。
+
+`npm run build`通过类型检查、web依赖边界、Vite及发行产物验证；仅原chunk大小/空chunk和Browserslist旧数据提示，未改相邻构建配置。独立角色运行QuestionCard/askForm/runnerAskMessages/useAgentAsk四文件48项，0失败/错误/跳过，CR无P0/P1/P2。证据Temp `ask-focus-independent-t6h4mn82/review.json`，QuestionCard源码SHA256 `28a1b18e29586dc1200541fb6ad837cfb3e54853b3869a792e46b2e07aaebf65`；最终主控hash复核匹配。未提交/部署、发送或恢复监听。

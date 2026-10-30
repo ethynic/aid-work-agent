@@ -25,7 +25,7 @@ async def synchronous_web_reply(request, body=None, *, config=None, client=None)
         arguments = {'authorization':request.headers.get('Authorization',''),
                      'tenant':request.headers.get('X-Tenant-Id')}
         accepted = await client.request('POST', '/v1/runners', **arguments,
-            body=body.runner_request().model_dump(mode='json'), accept_new=config.web_enabled)
+            body=body.runner_request().transport(), accept_new=config.web_enabled)
         row = accepted['runner']
         if not isinstance(row.get('profile_id'),str) or not row['profile_id']:
             raise RunnerError('RUNNER_SERVICE_INVALID_RESPONSE', 502)

@@ -1,6 +1,6 @@
 /**
- * Provider manifest 注册表：boss 21 工具逐项一致、历史 digest 兼容锚点、weixin/wecom
- * 白名单与写集合（M11b：wecom 接入 6 工具，digest 独立计算）。
+ * Provider manifest 注册表：boss 25 工具逐项一致、历史 digest 兼容锚点、weixin/wecom
+ * 白名单与写集合（wecom兼容旧工具并补批量读取，Agent面由云端收敛）。
  */
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
@@ -14,8 +14,11 @@ const BOSS_DIGEST_BASELINE = '322acbcb1a74724c54917c0ff88fe1fb106253077b176d234b
 const BOSS_DIGEST_WITH_CONTINUATION = '9bef64b53e3ed2c35a903c96490553c3a0f705e35f4f6b2edf7c849dd958f216'
 const BOSS_DIGEST_WITH_SELECTION = 'f1b9dd6d72cc7afa1d462ea56cefb7b269d96a594f4b4f064465febcc9ed522f'
 const BOSS_DIGEST_WITH_OPEN_DETAIL = '93eccd9f4b9168343b5283cc650d643f0413c6b8cbb9fbedcdf4b15aa3be140c'
+/** 详情操作与只读恢复探测均已发布的当前工具集；历史锚点继续独立保留。 */
+const BOSS_DIGEST_WITH_RECOVERY_PROBE = 'ef0b8cf5a875cf8cb3dacf3aa65b8d857f39b35c07d7f7af24b7c84090d16644'
 
 const BOSS_TOOLS_EXPECTED = [
+  'boss_recovery_probe',
   'boss_filter',
   'boss_clear_filter',
   'boss_filter_options',
@@ -59,7 +62,7 @@ const BOSS_WRITE_TOOLS_EXPECTED = new Set([
   'boss_resume_next',
 ])
 
-test('boss manifest：24 个工具包含已实现的详情操作（顺序与集合）', () => {
+test('boss manifest：25 个工具包含只读恢复探测和详情操作（顺序与集合）', () => {
   const boss = getProviderManifest('boss-recruiting')!
   assert.deepEqual([...boss.tools], BOSS_TOOLS_EXPECTED)
   assert.equal(boss.provider_id, 'ai.aidwork.boss-recruiting')
@@ -80,15 +83,19 @@ test('boss 写集合：详情打招呼保持外部写属性，关闭详情无外
 
 test('boss digest：新增精确选择工具锚点固定，移除新增工具仍匹配历史基线', () => {
   assert.equal(manifestDigest(), manifestDigestFor('boss-recruiting'))
+  assert.equal(manifestDigestFor('boss-recruiting'), BOSS_DIGEST_WITH_RECOVERY_PROBE)
+  // Recovery probing was introduced after these releases. Project only its
+  // addition away, keeping the original historical hashes as compatibility proof.
+  const boss = getProviderManifest('boss-recruiting')!
+  const historicalTools = boss.tools.filter(tool => tool !== 'boss_recovery_probe')
   const prior = JSON.stringify({ provider_id: TRUSTED_MANIFEST.provider_id,
-    tools: [...TRUSTED_MANIFEST.tools].filter(tool => !['boss_open_detail', 'boss_greet_detail', 'boss_close_detail'].includes(tool)).sort(), execution_target: 'local_required' })
+    tools: historicalTools.filter(tool => !['boss_open_detail', 'boss_greet_detail', 'boss_close_detail'].includes(tool)).sort(), execution_target: 'local_required' })
   assert.equal(createHash('sha256').update(prior).digest('hex'), BOSS_DIGEST_WITH_SELECTION)
   assert.notEqual(manifestDigestFor('boss-recruiting'), BOSS_DIGEST_WITH_SELECTION)
-  const boss = getProviderManifest('boss-recruiting')!
   const beforeDetailActions = JSON.stringify({ provider_id: boss.provider_id,
-    tools: boss.tools.filter(tool => !['boss_greet_detail', 'boss_close_detail'].includes(tool)).sort(), execution_target: boss.execution_target })
+    tools: historicalTools.filter(tool => !['boss_greet_detail', 'boss_close_detail'].includes(tool)).sort(), execution_target: boss.execution_target })
   assert.equal(createHash('sha256').update(beforeDetailActions).digest('hex'), BOSS_DIGEST_WITH_OPEN_DETAIL)
-  const preSelectionTools = boss.tools.filter((tool) => !['boss_open_detail', 'boss_greet_detail', 'boss_close_detail', 'boss_lookup_candidates', 'boss_greet_selected'].includes(tool))
+  const preSelectionTools = historicalTools.filter((tool) => !['boss_open_detail', 'boss_greet_detail', 'boss_close_detail', 'boss_lookup_candidates', 'boss_greet_selected'].includes(tool))
   const preSelection = JSON.stringify({ provider_id: boss.provider_id, tools: [...preSelectionTools].sort(), execution_target: boss.execution_target })
   assert.equal(createHash('sha256').update(preSelection).digest('hex'), BOSS_DIGEST_WITH_CONTINUATION)
   const legacy = JSON.stringify({ provider_id: boss.provider_id,
@@ -138,14 +145,17 @@ test('weixin v2 会话变体：仅显式协商后生效（setManifestOverride）
   assert.ok(!isToolAllowedFor(reverted, 'weixin_message_send_v2'))
 })
 
-test('wecom manifest：M11b 接入 6 工具清单一致，仅三个发送工具为写，v1 独占桌面锁', () => {
+test('wecom manifest：批量读取与旧工具兼容，写集合不扩大，v1 独占桌面锁', () => {
   const wecom = getProviderManifest('wecom')!
   assert.deepEqual([...wecom.tools], [
     'wecom_probe',
     'wecom_message_send',
+    'wecom_send_status',
+    'wecom_group_poll',
     'wecom_send_image',
     'wecom_send_file',
     'wecom_read_session',
+    'wecom_read_sessions',
     'wecom_unread_list',
   ])
   assert.equal(wecom.provider_id, 'ai.aidwork.wecom')
@@ -179,5 +189,11 @@ test('白名单：跨 Provider 工具不串道，未知 provider 无 manifest', 
   assert.ok(!isToolAllowedFor(weixin, 'wecom_message_send'), 'weixin manifest 不得放行 wecom 工具')
   assert.ok(!isToolAllowed('weixin_message_send'), '兼容 isToolAllowed 仍按 boss 白名单判断')
   assert.equal(getProviderManifest('nope-unknown'), undefined)
-  assert.equal(Object.keys(TRUSTED_MANIFESTS).length, 4)
+  assert.deepEqual(Object.keys(TRUSTED_MANIFESTS).sort(), ['boss-recruiting', 'runtime-recovery', 'skill-runner', 'wecom', 'weixin'])
+  const recovery = getProviderManifest('runtime-recovery')!
+  assert.ok(isToolAllowedFor(recovery, 'runtime_recovery_observe'))
+  assert.equal(isWriteToolFor(recovery, 'runtime_recovery_observe'), false)
+  assert.equal(isWriteToolFor(boss, 'boss_recovery_probe'), false)
+  assert.ok(!isToolAllowedFor(recovery, 'boss_greet'))
+  assert.ok(!isToolAllowedFor(boss, 'runtime_recovery_observe'))
 })

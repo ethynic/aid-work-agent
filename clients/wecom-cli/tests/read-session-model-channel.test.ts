@@ -140,6 +140,7 @@ function makeOp(
   } = {},
 ) {
   return createWecomReadSessionOperation({
+    localdb: { readStateFn: () => null },
     runDriverFn,
     verifyRefFn: extra.verifyRefFn ?? (() => TARGET),
     createRefFn: extra.createRefFn,

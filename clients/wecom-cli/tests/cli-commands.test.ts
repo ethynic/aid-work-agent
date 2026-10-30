@@ -14,6 +14,11 @@ import { fileURLToPath } from 'node:url'
 const DIST_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const CLI = path.join(DIST_ROOT, 'src', 'cli', 'index.js')
 
+// 测试密闭性（评审附带项，与 SESSIONNAME 注入同族）：本文件的 write 类 CLI 子进程
+// （send/select/read-session/add-customer）为 exclusive——与并行测试文件的同类子进程
+// 共用默认 session 命名管道时互相 BUSY（exit 1 ≠ 预期退出码）；按文件隔离 mutex scope。
+process.env.AID_WECOM_MUTEX_SCOPE = 'test-cli-commands'
+
 function runCli(args: string[], extraEnv: Record<string, string> = {}): { status: number | null; stdout: string; stderr: string } {
   const r = spawnSync(process.execPath, [CLI, ...args], {
     encoding: 'utf8',
@@ -24,7 +29,9 @@ function runCli(args: string[], extraEnv: Record<string, string> = {}): { status
 }
 
 test('doctor --json：结构化输出（success/checks/artifact_dir），退出码与 success 一致', () => {
-  const { status, stdout } = runCli(['doctor', '--json'])
+  // SESSIONNAME 注入（评审附带项）：交互会话判定不得依赖宿主 env——评审环境无该变量时
+  // 会误判非交互会话导致 gate 失败；子进程 env 注入后测试密闭（非 win32 上该变量不参与判定）
+  const { status, stdout } = runCli(['doctor', '--json'], { SESSIONNAME: 'Console' })
   const report = JSON.parse(stdout) as {
     success: boolean
     checks: Array<{ name: string; ok: boolean; severity: 'gate' | 'info'; detail: string }>
@@ -51,7 +58,8 @@ test('doctor --json：结构化输出（success/checks/artifact_dir），退出�
 })
 
 test('probe --json（驱动桩）：结构化 OperationResult，退出码 0（win32 交互会话）', () => {
-  const { status, stdout } = runCli(['probe', '--json'], { AID_WECOM_TEST_DRIVER_STUB: '1' })
+  // SESSIONNAME 注入（评审附带项）：不依赖宿主 env（同 doctor --json 用例说明）
+  const { status, stdout } = runCli(['probe', '--json'], { AID_WECOM_TEST_DRIVER_STUB: '1', SESSIONNAME: 'Console' })
   const parsed = JSON.parse(stdout.trim().split('\n').pop()!)
   assert.equal(typeof parsed.success, 'boolean')
   assert.equal(typeof parsed.run_id, 'string')

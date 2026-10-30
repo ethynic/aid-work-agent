@@ -33,6 +33,7 @@ public class WeComWin32 {
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr hWnd, StringBuilder sb, int max);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassNameW(IntPtr hWnd, StringBuilder sb, int max);
+    [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
     [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
@@ -41,6 +42,95 @@ public class WeComWin32 {
     [DllImport("user32.dll")] public static extern short VkKeyScanW(char ch);
     [DllImport("user32.dll")] public static extern uint MapVirtualKeyW(uint code, uint mapType);
     [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr v);
+    [DllImport("user32.dll")] public static extern uint GetClipboardSequenceNumber();
+    [DllImport("user32.dll")] public static extern IntPtr GetClipboardOwner();
+    [DllImport("user32.dll")] static extern bool OpenClipboard(IntPtr owner);
+    [DllImport("user32.dll")] static extern bool CloseClipboard();
+    [DllImport("user32.dll")] static extern uint EnumClipboardFormats(uint format);
+    [DllImport("user32.dll")] static extern IntPtr GetClipboardData(uint format);
+    [DllImport("user32.dll")] static extern bool EmptyClipboard();
+    [DllImport("user32.dll")] static extern IntPtr SetClipboardData(uint format, IntPtr data);
+    [DllImport("kernel32.dll")] static extern IntPtr GlobalAlloc(uint flags, UIntPtr bytes);
+    [DllImport("kernel32.dll")] static extern IntPtr GlobalLock(IntPtr memory);
+    [DllImport("kernel32.dll")] static extern bool GlobalUnlock(IntPtr memory);
+    [DllImport("kernel32.dll")] static extern UIntPtr GlobalSize(IntPtr memory);
+    [DllImport("kernel32.dll")] static extern IntPtr GlobalFree(IntPtr memory);
+    [DllImport("edputil.dll")] static extern int EdpGetEnterpriseIdForClipboard(out IntPtr enterpriseId);
+    [DllImport("kernel32.dll")] static extern IntPtr GetProcessHeap();
+    [DllImport("kernel32.dll")] static extern bool HeapFree(IntPtr heap, uint flags, IntPtr memory);
+    public static bool IsPersonalClipboard() {
+        IntPtr enterpriseId = IntPtr.Zero;
+        try {
+            return EdpGetEnterpriseIdForClipboard(out enterpriseId) == 0 && enterpriseId == IntPtr.Zero;
+        } catch (DllNotFoundException) { return false; }
+        catch (EntryPointNotFoundException) { return false; }
+        finally {
+            if (enterpriseId != IntPtr.Zero && !HeapFree(GetProcessHeap(), 0, enterpriseId))
+                throw new InvalidOperationException("CLIPBOARD_PROTECTION_CHECK_FAILED");
+        }
+    }
+    static IntPtr AllocateClipboardText(string text) {
+        byte[] bytes = Encoding.Unicode.GetBytes(text + "\0");
+        IntPtr memory = GlobalAlloc(2, (UIntPtr)bytes.Length);
+        if (memory == IntPtr.Zero) throw new InvalidOperationException("CLIPBOARD_ALLOC_FAILED");
+        try {
+            IntPtr address = GlobalLock(memory);
+            if (address == IntPtr.Zero) throw new InvalidOperationException("CLIPBOARD_LOCK_FAILED");
+            try { Marshal.Copy(bytes, 0, address, bytes.Length); }
+            finally { GlobalUnlock(memory); }
+            return memory;
+        } catch { GlobalFree(memory); throw; }
+    }
+    public static bool ExchangeClipboardText(IntPtr owner, uint expectedSequence, string expectedText,
+            bool expectedEmpty, string nextText, bool nextEmpty, out uint writtenSequence) {
+        writtenSequence = expectedSequence;
+        IntPtr memory = IntPtr.Zero;
+        IntPtr rollback = IntPtr.Zero;
+        bool opened = false;
+        try {
+            // Allocate before taking the short clipboard lock. No delayed rendering or OLE call under it.
+            if (!nextEmpty) {
+                memory = AllocateClipboardText(nextText);
+                if (!expectedEmpty) rollback = AllocateClipboardText(expectedText);
+            }
+            if (!OpenClipboard(owner)) return false;
+            opened = true;
+            if (GetClipboardSequenceNumber() != expectedSequence) return false;
+            if (expectedEmpty) {
+                if (EnumClipboardFormats(0) != 0) return false;
+            } else {
+                IntPtr previous = GetClipboardData(13); // CF_UNICODETEXT
+                if (previous == IntPtr.Zero || GlobalSize(previous).ToUInt64() < (ulong)expectedText.Length * 2 + 2)
+                    return false;
+                IntPtr address = GlobalLock(previous);
+                if (address == IntPtr.Zero) return false;
+                try {
+                    if (!String.Equals(Marshal.PtrToStringUni(address, expectedText.Length), expectedText,
+                            StringComparison.Ordinal) || Marshal.ReadInt16(address, checked(expectedText.Length * 2)) != 0)
+                        return false;
+                } finally { GlobalUnlock(previous); }
+            }
+            // Compare and replace share one OpenClipboard lifetime: external writes cannot be overwritten.
+            if (!EmptyClipboard()) throw new InvalidOperationException("CLIPBOARD_WRITE_FAILED");
+            if (!nextEmpty) {
+                if (SetClipboardData(13, memory) == IntPtr.Zero) {
+                    // One bounded recovery under the same lock; no external write can be overwritten.
+                    // Failure still escapes: even this recovery may fail during an OS clipboard fault.
+                    if (rollback != IntPtr.Zero && SetClipboardData(13, rollback) != IntPtr.Zero)
+                        rollback = IntPtr.Zero;
+                    throw new InvalidOperationException("CLIPBOARD_WRITE_FAILED");
+                }
+                memory = IntPtr.Zero; // OS now owns this HGLOBAL.
+            }
+            writtenSequence = GetClipboardSequenceNumber();
+            return true;
+        } finally {
+            bool closed = !opened || CloseClipboard();
+            if (memory != IntPtr.Zero) GlobalFree(memory);
+            if (rollback != IntPtr.Zero) GlobalFree(rollback);
+            if (!closed) throw new InvalidOperationException("CLIPBOARD_CLOSE_FAILED");
+        }
+    }
     public struct RECT { public int Left, Top, Right, Bottom; }
     public struct POINT { public int X, Y; }
 }
@@ -131,6 +221,19 @@ function Resolve-WeComMainWindow {
         if ($null -ne (Find-WeComLoginWindow)) {
             Throw-DriverError 'NOT_LOGGED_IN' '检测到企业微信登录二维码窗口（未登录），请先扫码登录后重试'
         }
+        $hidden = @($all | Where-Object {
+            $_.Class -eq 'WeWorkWindow' -and -not $_.Visible -and $_.Title -eq '企业微信' -and $_.W -ge 600 -and $_.H -ge 400
+        } | Sort-Object { $_.W * $_.H } -Descending)
+        if ($hidden.Count -gt 1 -and ($hidden[0].W * $hidden[0].H) -eq ($hidden[1].W * $hidden[1].H)) {
+            Throw-DriverError 'WINDOW_AMBIGUOUS' '多个隐藏企业微信主窗口，无法确认当前窗口'
+        }
+        if ($hidden.Count -gt 0 -and ($hidden.Count -eq 1 -or ($hidden[0].W * $hidden[0].H) -ne ($hidden[1].W * $hidden[1].H))) {
+            [void][WeComWin32]::ShowWindowAsync([IntPtr]$hidden[0].Hwnd, 9)
+            Start-Sleep -Milliseconds 200
+            $candidates = @(Get-WeComTopLevelWindows | Where-Object { $_.Hwnd -eq $hidden[0].Hwnd -and $_.Visible })
+        }
+    }
+    if ($candidates.Count -eq 0) {
         Throw-DriverError 'WECOM_NOT_FOUND' '未找到企业微信主窗口（WXWork.exe 未运行、主窗口不可见或已退到托盘；请先打开并登录企业微信）'
     }
     $sorted = @($candidates | Sort-Object { $_.W * $_.H } -Descending)
@@ -465,25 +568,13 @@ function Open-WeComSearchOverlay {
 }
 
 function Close-WeComSearchOverlay {
-    # 关闭搜索 overlay 恢复原状（best-effort）：先 PostMessage ESC 到 overlay，
-    # 仍在则点主窗口空白区（点面板外关面板）；最后清空搜索框残留查询词
+    # 清除已定位搜索框的查询词，客户端自然收起弹层；不发可能把主窗收进托盘的ESC。
     # （企微搜索框保留上次查询，不清会给下次搜索留残留）并复核。不抛错。
     param(
         [int64]$OverlayHwnd,
         [int64]$MainHwnd
     )
     try {
-        if ($OverlayHwnd -ne 0 -and [WeComWin32]::IsWindow([IntPtr]$OverlayHwnd)) {
-            Send-WeComEscape -Hwnd $OverlayHwnd
-            Start-Sleep -Milliseconds 400
-        }
-        if ($OverlayHwnd -ne 0 -and [WeComWin32]::IsWindow([IntPtr]$OverlayHwnd)) {
-            $main = Get-WeComWindowInfo ([IntPtr]$MainHwnd)
-            [void](Send-WeComClick -Hwnd $MainHwnd `
-                -ScreenX ([int]($main.X + $main.W * 0.6)) `
-                -ScreenY ([int]($main.Y + $main.H * 0.5)))
-            Start-Sleep -Milliseconds 300
-        }
         # 清空搜索框残留查询词（best-effort）：不给下次搜索留旧词
         [void](Clear-WeComSearchBox -MainHwnd $MainHwnd -BestEffort)
     } catch {}
@@ -695,7 +786,13 @@ function Get-WeComSearchBoxState {
     if ($placeholder) { $phPos = @([int](($placeholder.x0 + $placeholder.x1) / 2), [int](($placeholder.y0 + $placeholder.y1) / 2)) }
     $ctPos = $null
     if ($content.Count -gt 0) {
-        $c0 = $content[0]
+        # OCR order can put the search icon before text. Prefer a real text-body
+        # anchor; retain the old combined-icon/text fallback for Focus callers.
+        $body = @($content | Where-Object {
+            $center = @([int](($_.x0 + $_.x1) / 2), [int](($_.y0 + $_.y1) / 2))
+            $_.x0 -ge 200 -and (Test-WeComSearchBoxAnchor $_ $center 'content')
+        })
+        $c0 = if ($body.Count -gt 0) { $body[0] } else { $content[0] }
         $ctPos = @([int](($c0.x0 + $c0.x1) / 2), [int](($c0.y0 + $c0.y1) / 2))
     }
     return [pscustomobject]@{
@@ -709,23 +806,25 @@ function Get-WeComSearchBoxState {
 }
 
 function Clear-WeComSearchBoxV2 {
-    # V2 清空（前提：搜索框已聚焦，即 Focus-WeComSearchBox 之后调用）：
-    # attachstate Ctrl+A（VK 'A'=0x41 全选）→ 150ms → WM_KEYDOWN VK_DELETE(0x2E) →
-    # 50ms → WM_KEYUP → 300ms。副作用：清空会关闭已打开的搜索 overlay（企微行为）。
-    # 复核（必须 empty）由调用方做：清不空 UI_CHANGED fail-closed。
-    # 返回 $true=按键序列已发出；$false=attach 失败（复核大概率不过，由调用方判）。
+    # 主窗口 HWND 或一次点击不能证明 Qt 内部编辑焦点；禁止 Ctrl+A/Delete 盲清当前焦点。
+    # 空搜索是无操作成功；其余只在已实证搜索 ROI/内容锚点匹配时点击专属清空点并回读。
+    # 未确认布局时保守中止，不能以键盘兜底损伤聊天草稿。
     param([Parameter(Mandatory)][int64]$MainHwnd)
-    $ok = Send-WeComAttachChordKey -Hwnd $MainHwnd -Vk 0x41
-    Start-Sleep -Milliseconds 150
-    Initialize-WeComWin32
-    $scan = [WeComWin32]::MapVirtualKeyW([uint32]0x2E, 0)
-    $lpDown = [IntPtr](1 -bor ($scan -shl 16))
-    $lpUp = [IntPtr](1 -bor ($scan -shl 16) -bor 0xC0000000L)
-    [void][WeComWin32]::PostMessageW([IntPtr]$MainHwnd, 0x0100, [IntPtr]0x2E, $lpDown)
-    Start-Sleep -Milliseconds 50
-    [void][WeComWin32]::PostMessageW([IntPtr]$MainHwnd, 0x0101, [IntPtr]0x2E, $lpUp)
+    $before = Get-WeComWindowInfo ([IntPtr]$MainHwnd)
+    $state = Get-WeComSearchBoxState -MainHwnd $MainHwnd -Tag 'safe-clear'
+    if ($state.State -eq 'empty') { return $true }
+    $main = Get-WeComWindowInfo ([IntPtr]$MainHwnd)
+    if (-not (Test-WeComSearchWindowUnchanged $before $main) -or -not (Test-WeComSearchBoxLayout $state)) {
+        Throw-DriverError 'UI_CHANGED' '搜索框布局或内容锚点无法确认，未清除任何内容；请人工清空搜索框后重试'
+    }
+    # 1086/1280 宽的真机搜索文本框右端均为 (337,38)；布局锚点不符时不套用该标定。
+    [void](Send-WeComClick -Hwnd $MainHwnd -ScreenX ($main.X + 337) -ScreenY ($main.Y + 38))
     Start-Sleep -Milliseconds 300
-    return $ok
+    $after = Get-WeComSearchBoxState -MainHwnd $MainHwnd -Tag 'safe-cleared'
+    if ($after.State -ne 'empty' -or -not (Test-WeComSearchWindowUnchanged $main (Get-WeComWindowInfo ([IntPtr]$MainHwnd)))) {
+        Throw-DriverError 'UI_CHANGED' '点击搜索专属清空位置后未确认搜索为空，已中止且未使用键盘清理；请人工检查'
+    }
+    return $true
 }
 
 function Get-WeComChatAreaTitle {
@@ -803,18 +902,197 @@ function Invoke-WeComJev {
     }
 }
 
+function Test-WeComSearchBoxAnchor($Token, $Position, [string]$Kind) {
+    if ($null -eq $Position -or $Position.Count -ne 2) { return $false }
+    # 已有截图标定的搜索文本框内部（窗口坐标）；排除左上角角标及右侧 + 按钮。
+    # 中心必须对应 Get-WeComSearchBoxState 返回的原始占位符/内容锚点，不接受任意裁切 token。
+    $cx = [int](($Token.x0 + $Token.x1) / 2)
+    $cy = [int](($Token.y0 + $Token.y1) / 2)
+    if ($cx -ne $Position[0] -or $cy -ne $Position[1] -or
+            $Token.x0 -lt 175 -or $Token.x1 -gt 355 -or
+            $Token.y0 -lt 20 -or $Token.y1 -gt 58) { return $false }
+    $text = [string]$Token.text
+    if ($Kind -eq 'placeholder') { return ($text -match '^搜[索素粟]?$') }
+    return ($text.Length -ge 1 -and $text.Length -le 12 -and $Token.x1 -ge 212 -and
+        $text -notmatch '^搜[索素粟]?$' -and $text -notmatch '^[xX×+十士]$')
+}
+
+function Test-WeComSearchBoxLayout($State) {
+    # 原始内容/占位符锚点 + 同行唯一右邻 + 共同限定已实测的固定搜索 ROI。
+    # OCR 可漏识 ×，因此不能用 has_content 或识别 × 作为清理前提。
+    $anchors = @($State.TokensRaw | Where-Object {
+        # A blinking caret can split/merge the clear cross into the text box.
+        # Only the observed explicit trailing cross may extend into its ROI.
+        $ordinary = $_.x1 -le 330
+        $mergedCross = $_.text -match '\S.*×\s*$' -and $_.x1 -ge 331 -and $_.x1 -le 350
+        $_.x0 -ge 200 -and ($ordinary -or $mergedCross) -and
+            (Test-WeComSearchBoxAnchor $_ $State.ContentPos 'content')
+    })
+    $plus = @($State.TokensRaw | Where-Object {
+        $_.text -match '^[+十士]$' -and $_.x0 -ge 360 -and $_.x1 -le 395 -and
+        $_.y0 -ge 20 -and $_.y1 -le 58
+    })
+    if ($anchors.Count -ne 1 -or $plus.Count -ne 1) { return $false }
+    return ([Math]::Abs(($anchors[0].y0 + $anchors[0].y1 - $plus[0].y0 - $plus[0].y1) / 2) -le 10)
+}
+
+function Test-WeComSearchWindowUnchanged($Before, $After) {
+    return ($Before.Pid -gt 0 -and $Before.Pid -eq $After.Pid -and $Before.Hwnd -eq $After.Hwnd -and
+        $After.Class -eq 'WeWorkWindow' -and $After.Visible -and
+        $Before.X -eq $After.X -and $Before.Y -eq $After.Y -and $Before.W -eq $After.W -and $Before.H -eq $After.H)
+}
+
+function Get-WeComPlainClipboard {
+    Add-Type -AssemblyName System.Windows.Forms
+    $data = [Windows.Forms.Clipboard]::GetDataObject()
+    if ($null -eq $data -or @($data.GetFormats($false)).Count -eq 0) {
+        # OLE can briefly report no data just after a native write, even at the same
+        # clipboard sequence. Refresh once; callers still require stable provenance.
+        Start-Sleep -Milliseconds 25
+        $data = [Windows.Forms.Clipboard]::GetDataObject()
+    }
+    if ($null -eq $data) { return @{empty=$true;text=''} }
+    $formats=@($data.GetFormats($false))
+    if ($formats.Count -eq 0) { return @{empty=$true;text=''} }
+    $extra=@($formats | Where-Object {
+        $_ -notin @('UnicodeText','Text','OEMText','System.String','Locale')
+    })
+    if (-not [Windows.Forms.Clipboard]::ContainsText()) { throw 'CLIPBOARD_NOT_PLAIN_TEXT' }
+    if ($extra.Count -gt 0) {
+        # A system EDP marker alone does not prove enterprise ownership. Ask Windows;
+        # never discard a real identity, unknown policy or other non-text formats.
+        if ($extra.Count -ne 1 -or $extra[0] -ne 'EnterpriseDataProtectionId') { throw 'CLIPBOARD_NOT_PLAIN_TEXT' }
+        Initialize-WeComWin32
+        if (-not [WeComWin32]::IsPersonalClipboard()) { throw 'CLIPBOARD_NOT_PLAIN_TEXT' }
+    }
+    return @{empty=$false;text=[Windows.Forms.Clipboard]::GetText()}
+}
+
+function New-WeComClipboardOwner {
+    Add-Type -AssemblyName System.Windows.Forms
+    # An undisplayed owner HWND is required by EmptyClipboard/SetClipboardData; never Show/Focus it.
+    return New-Object Windows.Forms.Control
+}
+
+function Test-WeComSearchClipboardEcho {
+    param([int64]$MainHwnd, [string]$Query, [int]$TimeoutMs = 1500)
+    $result = @{matched=$false;copied_length=$null;reason='clipboard_unavailable';restored=$false}
+    $original=$null;$touched=$false;$copied=$null;$copySeq=$null;$sentinelSeq=$null;$window=$null;$copyRequested=$false
+    $sentinel='AidWecomSearchEcho:' + [guid]::NewGuid().ToString('N')
+    try {
+        if ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') { return $result }
+        $before=Get-WeComWindowInfo ([IntPtr]$MainHwnd)
+        $state=Get-WeComSearchBoxState -MainHwnd $MainHwnd -Tag 'copy-check'
+        if ($state.State -eq 'empty' -or -not (Test-WeComSearchBoxLayout $state) -or
+                -not (Test-WeComSearchWindowUnchanged $before (Get-WeComWindowInfo ([IntPtr]$MainHwnd)))) {
+            $result.reason='search_layout_changed';return $result
+        }
+        $originalSeq=[WeComWin32]::GetClipboardSequenceNumber()
+        $original=Get-WeComPlainClipboard
+        $ownerPid=0
+        [void][WeComWin32]::GetWindowThreadProcessId([IntPtr]$MainHwnd,[ref]$ownerPid)
+        if ($ownerPid -le 0) { $result.reason='search_window_changed';return $result }
+        $window=New-WeComClipboardOwner
+        $lockedWriteStamp=[uint32]0
+        $touched=$true
+        if (-not [WeComWin32]::ExchangeClipboardText($window.Handle,$originalSeq,$original.text,
+                $original.empty,$sentinel,$false,[ref]$lockedWriteStamp)) { $result.reason='clipboard_changed';return $result }
+        # lockedWriteStamp is not a receipt: CloseClipboard may publish synthesized formats.
+        # Certify the published unique nonce with a stable read and our exact hidden owner.
+        $publishedSeq=[WeComWin32]::GetClipboardSequenceNumber()
+        $check=Get-WeComPlainClipboard
+        $publishedOwner=[WeComWin32]::GetClipboardOwner()
+        $publishedAfter=[WeComWin32]::GetClipboardSequenceNumber()
+        if ($check.empty -or $check.text -cne $sentinel -or
+                $publishedOwner -ne $window.Handle -or $publishedSeq -ne $publishedAfter) { return $result }
+        $sentinelSeq=$publishedSeq
+        if (-not (Test-WeComSearchWindowUnchanged $before (Get-WeComWindowInfo ([IntPtr]$MainHwnd)))) { return $result }
+        if (-not (Send-WeComAttachChordKey -Hwnd $MainHwnd -Vk 0x41)) { return $result }
+        Start-Sleep -Milliseconds 100
+        $copyRequested=$true
+        if (-not (Send-WeComAttachChordKey -Hwnd $MainHwnd -Vk 0x43)) { return $result }
+        $deadline=[DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+        while ([DateTime]::UtcNow -lt $deadline) {
+            $seq=[WeComWin32]::GetClipboardSequenceNumber()
+            if ($seq -ne $sentinelSeq) {
+                $observed=Get-WeComPlainClipboard
+                $copyPid=0
+                [void][WeComWin32]::GetWindowThreadProcessId([WeComWin32]::GetClipboardOwner(),[ref]$copyPid)
+                $copyAfter=[WeComWin32]::GetClipboardSequenceNumber()
+                if ($copyPid -eq $ownerPid -and $observed.text -cne $sentinel -and $seq -eq $copyAfter) {
+                    if ($observed.empty -or $observed.text.Length -eq 0) {
+                        # An empty OLE snapshot cannot certify this nonempty search query.
+                        $result.reason='clipboard_copy_read_failed'
+                    } else {
+                        $copied=$observed.text;$copySeq=$seq
+                        $result.copied_length=$copied.Length
+                        $result.matched=([string]::Equals($copied,$Query,[StringComparison]::Ordinal) -and
+                            (Test-WeComSearchWindowUnchanged $before (Get-WeComWindowInfo ([IntPtr]$MainHwnd))))
+                        $result.reason='copied'
+                        break
+                    }
+                }
+            }
+            Start-Sleep -Milliseconds 75
+        }
+    } catch {
+        $result.matched=$false
+        $result.reason=if ($_.Exception.Message -match 'CLIPBOARD_WRITE_FAILED') { 'clipboard_write_failed' }
+            elseif ($_.Exception.Message -match 'CLIPBOARD_CLOSE_FAILED') { 'clipboard_close_failed' }
+            elseif ($copyRequested) { 'clipboard_copy_read_failed' } else { 'clipboard_unavailable' }
+    }
+    finally {
+        if ($touched -and $null -ne $original) {
+            try {
+                $seq=[WeComWin32]::GetClipboardSequenceNumber();$current=Get-WeComPlainClipboard
+                $currentOwner=[WeComWin32]::GetClipboardOwner()
+                $stable=($seq -eq [WeComWin32]::GetClipboardSequenceNumber())
+                # Even a failed receipt/close may leave our nonce. Retire it only with our
+                # exact owner and a stable current snapshot; native CAS rechecks before writing.
+                $nonceOwned=($null -ne $window -and -not $current.empty -and
+                    $currentOwner -eq $window.Handle -and $current.text -ceq $sentinel)
+                $ours=$stable -and ($nonceOwned -or
+                    ($null -ne $copySeq -and $seq -eq $copySeq -and $current.text -ceq $copied))
+                if ($ours) {
+                    $lockedWriteStamp=[uint32]0
+                    $result.restored=[WeComWin32]::ExchangeClipboardText($window.Handle,$seq,$current.text,
+                        $current.empty,$original.text,$original.empty,[ref]$lockedWriteStamp)
+                }
+            } catch {
+                $result.matched=$false;$result.restored=$false
+                $result.reason=if ($_.Exception.Message -match 'CLIPBOARD_WRITE_FAILED') { 'clipboard_write_failed' }
+                    elseif ($_.Exception.Message -match 'CLIPBOARD_CLOSE_FAILED') { 'clipboard_close_failed' } else { 'clipboard_restore_failed' }
+            }
+            if (-not $result.restored) {
+                $result.matched=$false
+                if ($result.reason -eq 'clipboard_copy_read_failed') {
+                    # Copy may already have replaced the saved value, but no copy receipt was proved.
+                    $result.reason='clipboard_restore_failed'
+                } elseif ($result.reason -notin @('clipboard_write_failed','clipboard_close_failed','clipboard_restore_failed')) {
+                    if ($stable -and $current.empty -and $null -ne $window -and $currentOwner -eq $window.Handle) {
+                        $result.reason='clipboard_restore_failed'
+                    } else { $result.reason='clipboard_changed' }
+                }
+            }
+        }
+        if ($null -ne $window) {
+            try { $window.Dispose() } catch { $result.matched=$false;$result.reason='clipboard_close_failed' }
+        }
+    }
+    return $result
+}
+
 function Focus-WeComSearchBox {
-    # 聚焦主窗口搜索框（三级链，2026-09-28 真机验证）：
-    # 1) 主路径：attachstate Ctrl+F（全后台 ~250ms）；
-    # 2) attach 失败 → 裁切 OCR 顶部布局 → Jev 选 token → 点击其中心；
+    # 聚焦主窗口搜索框：Ctrl+F 发出不证明焦点已转移，仍按搜索框 OCR 锚点显式点击。
+    # 1) attachstate Ctrl+F（best-effort）；
+    # 2) 裁切 OCR 顶部布局 → Jev 选搜索框 token → 点击其中心；
     # 3) Jev 不可用 → 规则：点击占位符 token 中心（token 匹配 搜[索素粟]）；
     #    占位符不可见（框内有残留内容）时点首个内容 token 中心（同在框内）。
     # 聚焦是否真正成功由调用方输入后的 OCR 回读兜底校验（此处不做二次确认）。
-    # 返回聚焦方法 'ctrl_f' | 'jev_click' | 'placeholder_click'；三级全失败 → UI_CHANGED。
+    # 返回聚焦方法 'jev_click' | 'placeholder_click'；无可靠搜索框锚点 → UI_CHANGED。
     param([Parameter(Mandatory)][int64]$MainHwnd)
     if (Send-WeComAttachChordKey -Hwnd $MainHwnd -Vk 0x46) {
         Start-Sleep -Milliseconds 150
-        return 'ctrl_f'
     }
     $main = Get-WeComWindowInfo ([IntPtr]$MainHwnd)
     $sb = Get-WeComSearchBoxState -MainHwnd $MainHwnd -Tag 'focus'
@@ -825,15 +1103,23 @@ function Focus-WeComSearchBox {
             $tk = $tokens[$i]
             $cx = [int](($tk.x0 + $tk.x1) / 2); $cy = [int](($tk.y0 + $tk.y1) / 2)
             $lines += ('T{0}: text={1} x0={2} x1={3} y0={4} y1={5} center=({6},{7})' -f $i, $tk.text, $tk.x0, $tk.x1, $tk.y0, $tk.y1, $cx, $cy)
+            $anchorOk = Test-WeComSearchBoxAnchor $tk $sb.PlaceholderPos 'placeholder'
+            if (-not $anchorOk -and $sb.State -eq 'has_content') {
+                $anchorOk = Test-WeComSearchBoxAnchor $tk $sb.ContentPos 'content'
+            }
+            if (-not $anchorOk) { continue }
             $crit[('T' + $i)] = ('OCR文本「' + $tk.text + '」中心坐标')
         }
         $stateText = '企业微信主窗口顶部区域 OCR 结果（窗口像素坐标）：' + "`n" + ($lines -join "`n") + "`n" + '任务：点击搜索输入框以聚焦它（准备输入搜索关键词）。'
-        $r = Invoke-WeComJev -StateText $stateText -Questions @{
-            click_which = @{ type = 'choice'; instructions = '点击哪个位置可以聚焦搜索输入框？'; criteria = $crit }
+        $r = @{ used = $false }
+        if ($crit.Count -gt 0) {
+            $r = Invoke-WeComJev -StateText $stateText -Questions @{
+                click_which = @{ type = 'choice'; instructions = '点击哪个位置可以聚焦搜索输入框？'; criteria = $crit }
+            }
         }
         if ($r.used -and $r.answers.click_which.choice -match '^T(\d+)$') {
             $idx = [int]$Matches[1]
-            if ($idx -lt $tokens.Count) {
+            if ($idx -lt $tokens.Count -and $crit.ContainsKey(('T' + $idx))) {
                 $tk = $tokens[$idx]
                 $clickX = [int]($main.X + ($tk.x0 + $tk.x1) / 2)
                 $clickY = [int]($main.Y + ($tk.y0 + $tk.y1) / 2)
@@ -842,22 +1128,22 @@ function Focus-WeComSearchBox {
                 return 'jev_click'
             }
         }
-        $pos = $sb.PlaceholderPos
-        if ($null -eq $pos) { $pos = $sb.ContentPos }
-        if ($null -ne $pos) {
-            [void](Send-WeComClick -Hwnd $MainHwnd -ScreenX ([int]($main.X + $pos[0])) -ScreenY ([int]($main.Y + $pos[1])))
+        $fallback = @(0..($tokens.Count - 1) | Where-Object { $crit.ContainsKey(('T' + $_)) })
+        if ($fallback.Count -gt 0) {
+            $tk = $tokens[$fallback[0]]
+            [void](Send-WeComClick -Hwnd $MainHwnd -ScreenX ([int]($main.X + ($tk.x0 + $tk.x1) / 2)) -ScreenY ([int]($main.Y + ($tk.y0 + $tk.y1) / 2)))
             Start-Sleep -Milliseconds 400
             return 'placeholder_click'
         }
     }
-    Throw-DriverError 'UI_CHANGED' '无法聚焦搜索框（attachstate Ctrl+F 失败且 OCR 降级路径均不可用），页面结构可能已变化'
+    Throw-DriverError 'UI_CHANGED' '无法可靠定位搜索框占位符或内容锚点，已中止且未清除任何内容；页面结构可能已变化'
 }
 
 # ---------- M6：发送 V2 共享助手（message-send 用；只增不改，M1-M5 函数不动） ----------
 
 function Clear-WeComFocusedInput {
-    # 清空当前聚焦的文本输入框内容（attachstate Ctrl+A 全选 + VK_DELETE 删除，与
-    # Clear-WeComSearchBoxV2 同款原语）。M6 message-send 发送前会话复核失败时，用它清理
+    # 清空当前聚焦的文本输入框内容（attachstate Ctrl+A 全选 + VK_DELETE 删除）。
+    # M6 message-send 发送前会话复核失败时，用它清理
     # **自己刚输入**的会话草稿（防把文字留给错误会话）——只清自己输入的内容，
     # 绝不用于清除用户草稿（用户草稿场景一律 UI_CHANGED 中止，不触碰）。
     # 前提：目标输入框已聚焦（M6 驱动先点输入框并完成逐字输入，焦点确定在输入区）。

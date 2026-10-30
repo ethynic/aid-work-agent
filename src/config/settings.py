@@ -714,6 +714,7 @@ class AgentRunnerLimitsConfig(BaseModel):
 class AgentRunnerConfig(BaseModel):
     enabled: bool = False
     web_enabled: bool = False
+    durable_sleep_enabled: bool = False
     api_url: str = "http://127.0.0.1:8091"
     web_service_id: str = "web"
     # 服务间明文凭据：主 API 与 runner-api 共用同一 .env 注入，恒等比较即验证。
@@ -1015,6 +1016,8 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         runner_cfg["web_service_id"] = os.environ["AGENT_RUNNER_WEB_SERVICE_ID"]
     if os.getenv("AGENT_RUNNER_ENABLED") is not None:
         runner_cfg["enabled"] = os.getenv("AGENT_RUNNER_ENABLED", "").lower() in ("true", "1", "yes")
+    if os.getenv('AGENT_RUNNER_DURABLE_SLEEP_ENABLED') is not None:
+        runner_cfg['durable_sleep_enabled'] = os.environ['AGENT_RUNNER_DURABLE_SLEEP_ENABLED'].lower() in ('true','1','yes')
     browser_owner = runner_cfg.setdefault('browser_owner', {})
     if os.getenv('AGENT_RUNNER_BROWSER_OWNER_ENABLED') is not None:
         browser_owner['enabled'] = os.environ['AGENT_RUNNER_BROWSER_OWNER_ENABLED'].lower() in ('true','1','yes')

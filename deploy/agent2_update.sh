@@ -1,5 +1,43 @@
 #!/bin/bash
 
+# 先解析完整函数体，避免检出目标版本覆盖本脚本后，Bash 从新文件的旧偏移继续读取。
+main() {
+# 参数必须在身份检查、Git 配置和凭据修复之前验证。
+DEPLOY_BRANCH="master"
+BRANCH_SET=false
+SHOW_HELP=false
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --branch)
+            if [ "$BRANCH_SET" = true ] || [ "$#" -lt 2 ] || [ -z "$2" ] || [[ "$2" == -* ]]; then
+                echo "错误：--branch 只能指定一次，且必须提供 origin 分支名。" >&2
+                return 1
+            fi
+            DEPLOY_BRANCH="$2"
+            BRANCH_SET=true
+            shift 2
+            ;;
+        --help|-h)
+            SHOW_HELP=true
+            shift
+            ;;
+        *)
+            echo "错误：未知参数：$1。使用 --help 查看用法。" >&2
+            return 1
+            ;;
+    esac
+done
+if [[ "$DEPLOY_BRANCH" == refs/* ]] || ! git check-ref-format --branch "$DEPLOY_BRANCH" >/dev/null 2>&1 \
+   || ! git check-ref-format "refs/heads/$DEPLOY_BRANCH" >/dev/null 2>&1; then
+    echo "错误：请提供合法的 origin 分支名，不接受 tag、SHA 或完整 ref。" >&2
+    return 1
+fi
+if [ "$SHOW_HELP" = true ]; then
+    echo "用法：bash $0 [--branch <origin分支名>] [--help]"
+    echo "默认发布 origin/master；例如 --branch feature/ask-user-question-card。"
+    return 0
+fi
+
 # 禁止以 root/sudo 运行（2026-10-19 事故防护）：
 # sudo 会保留 HOME=/home/ubuntu，root 身份的 git/写文件操作还会把仓库 .git 内部
 # 文件改成 root 属主，导致 ubuntu 后续免密 fetch 失败、git 反复索要密码。
@@ -89,8 +127,31 @@ echo "[1] 拉取最新代码..."
 cd "/var/www/agent2"
 OLD_HEAD=$(git rev-parse HEAD)
 echo "更新前版本: $(git log -1 --format='%cd %s' --date='format:%Y-%m-%d %H:%M:%S')"
-git fetch --all
-git reset --hard origin/master
+# 不自动 stash/clean/reset，避免覆盖人工修改；忽略文件由 checkout 的保护检查处理。
+if ! WORKTREE_STATUS=$(git status --porcelain --untracked-files=all); then
+    echo "错误：无法检查发布目录状态，发布已中止。" >&2
+    exit 1
+fi
+if [ -n "$WORKTREE_STATUS" ]; then
+    echo "错误：发布目录存在未提交修改或未跟踪文件，请先人工处理。" >&2
+    exit 1
+fi
+echo "发布分支: origin/$DEPLOY_BRANCH"
+# 显式请求源 ref：远端已删除但本地仍有缓存时也必须失败，绝不回退 master。
+if ! git fetch --no-tags origin "+refs/heads/$DEPLOY_BRANCH:refs/remotes/origin/$DEPLOY_BRANCH"; then
+    echo "错误：无法获取 origin/$DEPLOY_BRANCH，发布已中止。" >&2
+    exit 1
+fi
+if ! TARGET_SHA=$(git rev-parse --verify "refs/remotes/origin/$DEPLOY_BRANCH^{commit}"); then
+    echo "错误：远程分支提交不可解析，发布已中止。" >&2
+    exit 1
+fi
+echo "发布提交: $TARGET_SHA"
+# detached HEAD 保留原本地分支指针；不覆盖目标版本路径上的 ignored 文件。
+if ! git checkout --detach --no-overwrite-ignore "$TARGET_SHA"; then
+    echo "错误：无法安全检出目标提交，发布已中止。" >&2
+    exit 1
+fi
 echo "更新后版本: $(git log -1 --format='%cd %s' --date='format:%Y-%m-%d %H:%M:%S')"
 NEW_HEAD=$(git rev-parse HEAD)
 find . -type d -name "__pycache__" -exec chmod -R 777 {} + 2>/dev/null || true
@@ -263,3 +324,7 @@ echo "更新完成！"
 echo "=========================================="
 ELAPSED=$(( $(date +%s) - START_TS ))
 echo "总耗时: $(( ELAPSED / 60 )) 分 $(( ELAPSED % 60 )) 秒"
+
+}
+
+{ main "$@"; exit $?; }

@@ -24,16 +24,29 @@ import { redactSensitive } from '../security/redaction.js'
  * server instructions（前 512 字符内含关键前提、副作用和写动作上限）
  */
 const INSTRUCTIONS =
-  '企业微信操作 Provider。工具：wecom_probe（只读环境/登录态探测）、' +
+  '推荐业务入口仅三项：wecom_read_session(session,cursor?,limit?)读一个单聊或群；' +
+  'wecom_read_sessions(sessions?,cursor?,limit?)从DB批量读并返回待回复候选；wecom_message_send(session,text)发送。' +
+  'session原样使用读取返回的稳定标识，首次可用完整名称；发送先核对当前会话，非目标才内部搜索选择。' +
+  '消息sender_platform区分wechat/wecom/unknown，unknown不猜；原游标增量与baseline历史分开，失败目标单列。' +
+  '发送unknown保留原凭据仅只读对账，禁止再次发送。以下入口保留供旧调用兼容与内部恢复：' +
+  '企业微信操作 Provider，仅 Windows。UI操作需企业微信已登录、交互桌面已解锁；本地库按自身条件检查。' +
+  '写动作每次单目标，effect=unknown禁止重发。发送对账只读，查询成功不等于发送confirmed，不自动继续原任务。' +
+  '发送会真实触达；多行文本、图片和文件发送会覆盖剪贴板且不恢复。' +
+  '工具：wecom_probe（只读环境/登录态探测）、' +
+  'wecom_group_poll（只读：独立游标增量群读，首次历史仅作上下文，发送带原group_cursor）、' +
+  'wecom_send_status（只读：用原发送receipt_id对账；查询成功不等于发送confirmed，unknown禁止重发）、' +
+  'wecom_group_list（本地库群关键词搜索/列群，limit控制数量）、' +
+  'wecom_group_read（本地库读群消息，支持时间范围，最近N条按时间升序；两工具不切会话、不清未读）、' +
   'wecom_chat_search（只读搜索联系人/群聊，返回带 target_ref 的候选）、' +
   'wecom_message_send（写：向 target_ref/target_name 目标发送 1 条文本消息；target_name 直达模式内部自动 search 定位）、' +
   'wecom_send_image（写：向 target_ref 目标发送 1 张本地图片，image_path 须为本机绝对路径且 ≤20MB，调用方负责落盘）、' +
   'wecom_add_customer（写：按手机号检索并发送添加客户邀请，confirm 必须显式为 true）、' +
-  'wecom_unread_list（只读：未读会话快照）、' +
-  'wecom_read_session（读：按 target_ref/target_name 读取会话消息，进会话会清除该会话未读角标；' +
+  'wecom_unread_list（只读：未读/待回复会话快照；本地库=待回复判定可发现已读未回复，UI=角标快照）,' +
+  'wecom_read_session（读：按 target_ref/target_name 读取会话消息；本地库不切会话，UI进入会话会清除角标；' +
   '模型通道按次计费，未配置或不可用走本地 OCR）、' +
-  'wecom_watch_poll（读：新消息跟踪单轮，返回增量消息事件；会清除被读会话的未读角标并推进本机水位）。' +
-  '前提：仅 Windows（win32-x64）；需要已登录且未锁屏的企业微信 Windows 客户端（WXWork.exe）与交互桌面会话。' +
+  'wecom_watch_poll（读：新消息跟踪单轮，返回增量消息事件；本地库通道不清角标零 UI 副作用，' +
+  'UI 通道读取候选会话会清除其未读角标并推进本机文本水位）。' +
+  '前提：仅 Windows（win32-x64），企业微信已运行登录；UI自动化需要交互桌面且未锁屏。本地库按身份/版本/密钥等自身条件检查，锁屏真实可用性仍待验收。' +
   '副作用预告：自动化全链路纯 PostMessage 后台注入，不移动真实光标、不使用 SendInput 键鼠注入（企微 5.0.9 会丢弃）；' +
   'target_ref 有效期 5 分钟，过期请重新搜索；' +
   '写动作单次单目标，结果 effect=unknown 时系统不会自动重试，请人工确认。' +

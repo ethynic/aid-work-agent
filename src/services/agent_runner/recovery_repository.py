@@ -31,6 +31,108 @@ class RecoveryRepository:
     def __init__(self, connection_factory=get_db_connection):
         self.connection_factory = connection_factory
 
+    def next_continuous_candidates(self, *, after_queue_order=0, limit=16):
+        if type(limit) is not int or not 1 <= limit <= 32:
+            raise ValueError('RECOVERY_CANDIDATE_LIMIT_INVALID')
+        with self.connection_factory() as connection:
+            cursor = connection.cursor()
+            cursor.execute('''SELECT r.* FROM agent_runners r
+                WHERE r.status='interrupted' AND r.source='chat' AND r.session_kind='web'
+                AND NOT r.cancel_requested AND NOT r.pause_requested AND r.resume_control_id IS NULL
+                AND (r.lease_until IS NULL OR r.lease_until<=clock_timestamp())
+                AND (r.checkpoint->'continuous'->>'enabled'='true' OR r.input->>'execution_mode'='continuous')
+                AND COALESCE(r.checkpoint->'continuous_recovery'->>'blocked','false')<>'true'
+                AND (r.checkpoint->'continuous_recovery'->>'retry_at' IS NULL
+                    OR (r.checkpoint->'continuous_recovery'->>'retry_at')::timestamptz<=clock_timestamp())
+                AND EXISTS (SELECT 1 FROM agent_runner_session_claims c
+                    WHERE c.scope_key=r.scope_key AND c.session_kind=r.session_kind
+                    AND c.session_id=r.session_id AND c.owner_runner_id=r.runner_id)
+                AND r.queue_order>%s ORDER BY r.queue_order LIMIT %s''', (after_queue_order, limit))
+            return [decoded(item) for item in cursor.fetchall()]
+
+    def claim_continuous(self, expected, worker_id, lease_seconds, checkpoint, *, source_port=None,
+                         prepared_source=None):
+        """CAS a server-authorized continuation without manufacturing a control."""
+        from .continuous import interrupted_candidate
+        marker = checkpoint.get('continuous_recovery') or {}
+        if (lease_seconds <= 0 or marker.get('version') != 1
+                or marker.get('source_attempt') != expected['attempt']):
+            raise ValueError('CONTINUOUS_RECOVERY_CHECKPOINT_MISMATCH')
+        with self.connection_factory() as connection:
+            cursor = connection.cursor()
+            row = lock_runner(cursor, expected['runner_id'])
+            if (not interrupted_candidate(row) or row['lease_valid']
+                    or row['revision'] != expected['revision']
+                    or row['control_revision'] != expected['control_revision']):
+                return None
+            lock_original_claim(cursor, row)
+            cursor.execute('SELECT clock_timestamp() AS database_now')
+            now = cursor.fetchone()['database_now']
+            retry_at = (row.get('checkpoint',{}).get('continuous_recovery') or {}).get('retry_at')
+            if retry_at is not None:
+                from datetime import datetime
+                if datetime.fromisoformat(retry_at)>now:
+                    return None
+            if checkpoint.get('execution') is None:
+                cursor.execute('''SELECT 1 FROM agent_runner_usage_receipts WHERE runner_id=%s
+                    UNION ALL SELECT 1 FROM local_tool_invocations
+                    WHERE business_kind='agent_runner' AND business_ref->>'runner_id'=%s LIMIT 1''',
+                    (row['runner_id'],row['runner_id']))
+                if cursor.fetchone():
+                    raise RunnerError('RECOVERY_TOOL_VERIFICATION_REQUIRED',409)
+            if source_port is not None:
+                source_port.authorize_row_in_tx(cursor,row,execute=True,prepared=prepared_source)
+            number = row['attempt'] + 1
+            checkpoint = copy.deepcopy(checkpoint)
+            checkpoint.pop('continuous_recovery',None)
+            checkpoint.pop('timer_activation',None)
+            checkpoint.pop('applied_control_id',None)
+            checkpoint['continuous_activation'] = {'version':1, 'attempt':number,
+                'source_attempt':row['attempt']}
+            snapshot = project_public_snapshot(cursor,row,checkpoint=checkpoint,
+                snapshot={**row.get('public_snapshot',{}),'waiting':None,
+                    'progress':'正在接续原持续任务。'},status='running')
+            cursor.execute('''UPDATE agent_runners SET status='running',attempt=%s,worker_id=%s,
+                lease_until=clock_timestamp()+(%s*INTERVAL '1 second'),checkpoint=%s::jsonb,
+                public_snapshot=%s::jsonb,wake_at=NULL,revision=revision+1,view_revision=view_revision+1,
+                updated_at=clock_timestamp() WHERE runner_id=%s RETURNING *''',
+                (number,worker_id,lease_seconds,capped_checkpoint_dumps(checkpoint),
+                 capped_snapshot_dumps(snapshot),row['runner_id']))
+            result = sync_public_display(cursor,decoded(cursor.fetchone()),advance_view=False)
+            result = EventRepository.notify_in_tx(cursor,row,after=result)
+            if source_port is not None:
+                source_port.authorize_row_in_tx(cursor,result,execute=True,prepared=prepared_source)
+            lock_runner(cursor,row['runner_id'],Attempt(row['runner_id'],worker_id,number),dispatch=True)
+            connection.commit()
+            return result
+
+    def defer_continuous(self, expected, error_code, *, blocked=False):
+        from .continuous import interrupted_candidate
+        with self.connection_factory() as connection:
+            cursor = connection.cursor()
+            row = lock_runner(cursor,expected['runner_id'])
+            if (not interrupted_candidate(row) or row['lease_valid']
+                    or row['revision'] != expected['revision']
+                    or row['control_revision'] != expected['control_revision']):
+                return False
+            checkpoint = copy.deepcopy(row.get('checkpoint') or {})
+            attempts = min(5, (checkpoint.get('continuous_recovery') or {}).get('attempts',0)+1)
+            cursor.execute("SELECT clock_timestamp()+(%s*INTERVAL '1 second') AS retry_at", (2 ** attempts,))
+            retry_at = cursor.fetchone()['retry_at'].isoformat()
+            checkpoint['continuous_recovery'] = {'version':1,'error_code':error_code,
+                'blocked':blocked,'attempts':attempts,'retry_at':retry_at}
+            snapshot = {**row.get('public_snapshot',{}),'progress':
+                ('原持续任务已保留，继续前需处理：'+error_code if blocked else
+                 '原持续任务已保留，暂时无法接续，将自动重试。')}
+            cursor.execute('''UPDATE agent_runners SET checkpoint=%s::jsonb,public_snapshot=%s::jsonb,
+                revision=revision+1,view_revision=view_revision+1,updated_at=clock_timestamp()
+                WHERE runner_id=%s RETURNING *''', (capped_checkpoint_dumps(checkpoint),
+                    capped_snapshot_dumps(snapshot),row['runner_id']))
+            result = sync_public_display(cursor,decoded(cursor.fetchone()),advance_view=False)
+            EventRepository.notify_in_tx(cursor,row,after=result)
+            connection.commit()
+            return True
+
     def next_candidate(self):
         rows = self.next_candidates()
         return rows[0] if rows else None
@@ -91,6 +193,16 @@ class RecoveryRepository:
                 raise RunnerError('RECOVERY_FINALIZATION_PENDING',409)
             if recovery_port is not None:
                 recovery_port.assert_claim_in_tx(cursor,row,control,worker_id=worker_id)
+            checkpoint=copy.deepcopy(checkpoint)
+            checkpoint.pop('timer_activation',None)
+            timer=checkpoint.get('durable_sleep') or {}
+            if timer.get('phase')=='consumed' and timer.get('trigger')=='user_resume':
+                from .durable_sleep import nodes
+                cursor.execute('SELECT clock_timestamp() AS database_now')
+                timer['woke_at']=cursor.fetchone()['database_now'].isoformat()
+                for node in nodes(checkpoint['execution']):
+                    if node.get('execution_id')==timer.get('execution_id'):
+                        node['tools'][timer['tool_call_id']]['result']['woke_at']=timer['woke_at']
             number = row['attempt'] + 1
             cursor.execute('''UPDATE agent_runner_controls SET status='consumed',consumed_attempt=%s,
                 consumed_at=clock_timestamp() WHERE control_id=%s AND status='accepted'
@@ -98,7 +210,7 @@ class RecoveryRepository:
             consumed_at = (cursor.fetchone() or {}).get('consumed_at')
             cursor.execute('''UPDATE agent_runners SET status='running',attempt=%s,worker_id=%s,
                 lease_until=clock_timestamp()+(%s*INTERVAL '1 second'),checkpoint=%s::jsonb,
-                pause_requested=FALSE,resume_control_id=NULL,revision=revision+1,
+                pause_requested=FALSE,resume_control_id=NULL,wake_at=NULL,revision=revision+1,
                 control_revision=control_revision+1,view_revision=view_revision+1,updated_at=clock_timestamp()
                 WHERE runner_id=%s RETURNING *''',
                 (number,worker_id,lease_seconds,capped_checkpoint_dumps(checkpoint),runner_id))
@@ -202,14 +314,22 @@ class RecoveryRepository:
             cursor.execute('''UPDATE agent_runner_controls SET status='consumed',consumed_attempt=%s,
                 consumed_at=clock_timestamp() WHERE runner_id=%s AND action='pause' AND status='accepted' ''',
                 (attempt.number,attempt.runner_id))
-            checkpoint = {**checkpoint,'released_attempt':release_proof(attempt,'paused',
+            from .durable_sleep import preserve_activation_fence
+            checkpoint = {**preserve_activation_fence(row,checkpoint),'released_attempt':release_proof(attempt,'paused',
                 'unstarted_pause' if checkpoint.get('unstarted') is True else 'parked')}
+            wake_at=row.get('wake_at')
+            from .durable_sleep import sleep_leaf,arm_in_tx
+            if sleep_leaf(checkpoint) is not None:
+                wake_at=arm_in_tx(cursor,row,checkpoint)
+                root = checkpoint['execution']
+                snapshot={**(snapshot or {}),'waiting':copy.deepcopy(root.get('waiting')),
+                    'business_iterations':(root.get('resources') or {}).get('business_iterations',root.get('iteration',0))}
             snapshot = merge_control_projection(snapshot,row.get('public_snapshot'))
             snapshot = project_public_snapshot(cursor,row,checkpoint=checkpoint,snapshot=snapshot,status='paused')
             cursor.execute('''UPDATE agent_runners SET status='paused',worker_id=NULL,lease_until=NULL,
                 checkpoint=%s::jsonb,public_snapshot=%s::jsonb,revision=revision+1,
-                view_revision=view_revision+1,updated_at=clock_timestamp() WHERE runner_id=%s RETURNING *''',
-                (capped_checkpoint_dumps(checkpoint),capped_snapshot_dumps(snapshot),attempt.runner_id))
+                wake_at=%s,view_revision=view_revision+1,updated_at=clock_timestamp() WHERE runner_id=%s RETURNING *''',
+                (capped_checkpoint_dumps(checkpoint),capped_snapshot_dumps(snapshot),wake_at,attempt.runner_id))
             result = decoded(cursor.fetchone())
             result = sync_public_display(cursor,result,advance_view=False)
             result = EventRepository.notify_in_tx(cursor,row,after=result)

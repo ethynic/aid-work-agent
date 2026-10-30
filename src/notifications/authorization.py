@@ -29,6 +29,16 @@ def resource_in_tx(cursor, message):
     if ref['type'] in ('tenant_credit', 'tenant_profile', 'abuse_event'):
         # 租户级事件：resource 即租户本身，可见性由接收人管理员身份与租户隔离校验保证。
         return {'type': ref['type'], 'id': ref['id'], 'tenant_id': subject.tenant_id}
+    if ref['type'] == 'lead_capture_lead':
+        # 留资通知（规则引擎，设计 §5.1）：仅线索归属员工可见
+        cursor.execute('''SELECT lead_id,tenant_id,contact_method,contact_name,demand_summary,
+            kf_account_name,assigned_to,assignee_name,created_at FROM bs_lead_capture_leads
+            WHERE lead_id=%s AND tenant_id=%s AND assigned_to=%s''',
+            (ref['id'], subject.tenant_id, subject.user_id))
+        row = cursor.fetchone()
+        if not row:
+            raise NotificationError('NOTIFICATION_RESOURCE_UNAVAILABLE', 404)
+        return {**dict(row), 'type': ref['type']}
     if ref['type'] == 'scheduled_task':
         # 定时任务暂停通知（Phase 3，设计 §8.2）：任务行存在且归属接收人即可
         # 解析（通知到达时任务必然 paused，用户恢复后点击历史通知不应 404，

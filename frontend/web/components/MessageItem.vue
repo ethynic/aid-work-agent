@@ -254,7 +254,7 @@ const { liveVerbose, sessionId } = useAgent()
 const MessageShareDialog = defineAsyncComponent(() => import('./chat/MessageShareDialog.vue'))
 const showShareDialog = ref(false)
 // Runner projections can reuse an intermediate history ID; share the final view shown here.
-const shareMessageId = computed(() => props.message.runnerId && props.message.runnerActive !== undefined
+const shareMessageId = computed(() => props.message.messageId?.endsWith(':final') ? props.message.messageId : props.message.runnerId && props.message.runnerActive !== undefined
   ? props.message.runnerId + ':assistant' : props.message.messageId!)
 const canShare = computed(() => getRuntime().target === 'web' && !!sessionId?.value && !!props.message.messageId
   && !props.isProcessing && !props.message.runnerActive && !props.message.questionCard

@@ -150,8 +150,9 @@ class TestSkillRunnerProviderEntry:
         assert catalog.get_provider("weixin")["provider_id"] == WEIXIN_PROVIDER_ID
         assert catalog.get_provider("wecom")["provider_id"] == "ai.aidwork.wecom"
         assert catalog.get_provider("nonexistent") is None
-        # 预期条目数（skill-runner 为第 4 个，2026-10 M2）
-        assert len(catalog.TRUSTED_PROVIDERS) == 4
+        # Recovery is an internal provider, alongside the business/skill entries.
+        assert set(catalog.TRUSTED_PROVIDERS) == {
+            'boss-recruiting', 'weixin', 'wecom', 'skill-runner', 'runtime-recovery'}
 
     def test_device_capabilities_with_skills_resolves_skill_runner(self):
         """设备心跳上报（capabilities 含 skill-runner + skills 已安装清单）的解析：

@@ -15,12 +15,15 @@ import { createWecomAddCustomerOperation } from './addCustomer.js'
 import { createWecomChatSearchOperation } from './chatSearch.js'
 import { createWecomChatSelectOperation } from './chatSelect.js'
 import { createWecomMessageSendOperation } from './messageSend.js'
+import { createWecomSendStatusOperation } from './sendStatus.js'
 import { createWecomProbeOperation } from './probe.js'
 import { createWecomReadSessionOperation } from './readSession.js'
+import { createWecomReadSessionsOperation } from './readSessions.js'
 import { createWecomSendFileOperation } from './sendFile.js'
 import { createWecomSendImageOperation } from './sendImage.js'
 import { createWecomUnreadListOperation } from './unreadList.js'
 import { createWecomWatchPollOperation } from './watchPoll.js'
+import { createWecomGroupListOperation, createWecomGroupReadOperation, createWecomGroupPollOperation } from './groups.js'
 import type { WecomOperation } from './types.js'
 
 export interface OperationEntry {
@@ -39,11 +42,16 @@ export const OPERATIONS: Record<string, OperationEntry> = {
   wecom_chat_search: { operation: createWecomChatSearchOperation(), cli: { write: false } },
   wecom_chat_select: { operation: createWecomChatSelectOperation(), cli: { write: true } },
   wecom_message_send: { operation: createWecomMessageSendOperation(), cli: { write: true } },
+  wecom_send_status: { operation: createWecomSendStatusOperation(), cli: { write: false } },
   wecom_send_image: { operation: createWecomSendImageOperation(), cli: { write: true } },
   wecom_send_file: { operation: createWecomSendFileOperation(), cli: { write: true } },
   wecom_unread_list: { operation: createWecomUnreadListOperation(), cli: { write: false } },
   wecom_read_session: { operation: createWecomReadSessionOperation(), cli: { write: false } },
+  wecom_read_sessions: { operation: createWecomReadSessionsOperation(), cli: { write: false } },
   wecom_watch_poll: { operation: createWecomWatchPollOperation(), cli: { write: false } },
+  wecom_group_list: { operation: createWecomGroupListOperation(), cli: { write: false } },
+  wecom_group_read: { operation: createWecomGroupReadOperation(), cli: { write: false } },
+  wecom_group_poll: { operation: createWecomGroupPollOperation(), cli: { write: false } },
 }
 
 export const OPERATION_NAMES = Object.keys(OPERATIONS)

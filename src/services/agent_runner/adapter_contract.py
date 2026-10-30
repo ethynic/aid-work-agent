@@ -34,4 +34,7 @@ def adapter_contract_supported(version):
 
 def adapter_contract_mismatch(resources):
     """True 当持久版本未知/被淘汰（或被篡改成非整数）；缺字段按基线放行。"""
-    return not adapter_contract_supported(persisted_adapter_contract_version(resources))
+    if not adapter_contract_supported(persisted_adapter_contract_version(resources)):
+        return True
+    feature=(resources or {}).get('durable_sleep_version')
+    return feature is not None and (type(feature) is not int or feature!=1)

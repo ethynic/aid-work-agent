@@ -63,17 +63,24 @@ def assemble_agent_tools(request: ToolAssemblyRequest) -> AgentToolBundle:
         registry.register(cls())
 
     config = request.subagent_config
+    from src.local_tools.catalog import TRUSTED_PROVIDERS, agent_tools, expand_agent_aliases
+    if request.role is ToolAssemblyRole.MASTER or (config and config.tools.get('inherit', False)):
+        business_names = {name for key in TRUSTED_PROVIDERS for name in agent_tools(key)}
+        from src.local_tools.proxy_tool import LOCAL_PROXY_TOOL_CLASSES
+        for cls in LOCAL_PROXY_TOOL_CLASSES:
+            if cls.name in business_names and not registry.has_tool(cls.name):
+                registry.register(cls())
     if request.role is not ToolAssemblyRole.MASTER and config is not None:
-        allowed = list(config.get_allowed_tools())
+        allowed = expand_agent_aliases(config.get_allowed_tools())
         from src.local_tools.manifest import LOCAL_PROXY_TOOL_NAMES
         proxy_names = set(allowed) & LOCAL_PROXY_TOOL_NAMES
         if proxy_names:
             from src.local_tools.proxy_tool import LOCAL_PROXY_TOOL_CLASSES
             for cls in LOCAL_PROXY_TOOL_CLASSES:
-                if cls.name in proxy_names:
+                if cls.name in proxy_names and not registry.has_tool(cls.name):
                     registry.register(cls())
 
-        excluded = list(config.get_excluded_tools())
+        excluded = expand_agent_aliases(config.get_excluded_tools())
         if config.tools.get("inherit", False):
             registry.remove_many(excluded)
         elif allowed:

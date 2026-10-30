@@ -248,7 +248,11 @@ async def list_tools_meta(request: Request):
             "name": getattr(tool, 'display_name', None) or name,
             "description": getattr(tool, 'description', '') or '',
         })
-    return _success(tools)
+    # Authoring lists known business choices, independent of device installation.
+    from src.local_tools.catalog import project_agent_definitions
+    projected = project_agent_definitions([{'name': item['id']} for item in tools])
+    visible = {item['name'] for item in projected}
+    return _success([item for item in tools if item['id'] in visible])
 
 
 @router.get("/meta/skills")

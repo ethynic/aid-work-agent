@@ -20,6 +20,31 @@ class ControlToolAdapter:
     async def execute(self, state, call):
         args = json.loads(json.dumps(call.arguments))
         name = call.name
+        if name == 'agent_sleep':
+            from src.config.settings import settings
+            from src.tools.agent.sleep_tool import SleepInput
+            from pydantic import ValidationError
+            if (not self.durable_owner or state.identity.source!='chat'
+                    or state.identity.session_kind!='web'
+                    or not settings.agent_runner.durable_sleep_enabled):
+                yield DispatchResult({'success':False,'error_code':'DURABLE_SLEEP_UNSUPPORTED'},success=False)
+                return
+            try:
+                validated = SleepInput.model_validate(args)
+            except ValidationError:
+                yield DispatchResult({'success':False,'error_code':'SLEEP_ARGUMENT_INVALID'},success=False)
+                return
+            state.resources['durable_sleep_version'] = 1
+            yield DispatchResult({'success':True},wait={'kind':'timer','version':1,
+                'tool_call_id':call.id,'seconds':validated.seconds,'reason':validated.reason})
+            return
+        confirm_continuous = name == 'ask_user' and args.get('purpose') == 'confirm_continuous'
+        if confirm_continuous:
+            from ..continuous import supported, confirmation_arguments
+            if not self.durable_owner or not supported(state.identity.source, state.identity.session_kind):
+                yield DispatchResult({'success': False, 'error_code': 'CONTINUOUS_SOURCE_UNSUPPORTED'}, success=False)
+                return
+            args = confirmation_arguments()
         if name == "skill_complete":
             yield DispatchResult({"success": True, "message": "skill_complete 已废弃，无需调用"})
             return
@@ -107,8 +132,13 @@ class ControlToolAdapter:
                                 form.get('form_id'),
                                 getattr(state, 'identity', None) and state.identity.session_id,
                                 state.role)
-                    yield DispatchResult(result, wait={"kind": "clarification",
-                        "question": question, "form": form, "tool_call_id": call.id})
+                    wait = {"kind": "clarification", "question": question,
+                        "form": form, "tool_call_id": call.id}
+                    if confirm_continuous:
+                        wait['continuous_confirmation'] = {'version': 1, 'purpose': 'confirm_continuous',
+                            'execution_id': state.execution_id, 'tool_call_id': call.id,
+                            'form_id': form['form_id'], 'question_id': 'q1', 'positive_key': 'q1o1'}
+                    yield DispatchResult(result, wait=wait)
                     return
         elif name == "delegate_to_subagent":
             execution_id = result.get("execution_id")

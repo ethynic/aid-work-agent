@@ -20,17 +20,53 @@ class RunnerFinalizer:
         self.connection_factory = connection_factory
 
     def _settle(self, cursor, runner, result):
-        receipts = UsageRepository.facts_in_tx(cursor, runner['runner_id'])
-        cost, totals, breakdown = grouped_cost(receipts)
+        from .continuous import feature_enabled
+        feature = feature_enabled(runner.get('checkpoint'))
+        if feature:
+            cursor.execute('SELECT usage_breakdown FROM chat_records WHERE record_id=%s FOR UPDATE',(runner['record_id'],))
+            record = cursor.fetchone()
+            previous = (record or {}).get('usage_breakdown') or {}
+            if isinstance(previous,str):
+                previous = json.loads(previous)
+            previous = previous.get('runner_accumulator')
+            from .usage_pricing import accumulate_cost
+            cost,totals,breakdown = accumulate_cost(UsageRepository.observed_in_tx(
+                cursor,runner['runner_id'],unapplied_only=previous is not None),previous)
+        else:
+            receipts = UsageRepository.facts_in_tx(cursor, runner['runner_id'])
+            cost, totals, breakdown = grouped_cost(receipts)
         delta = settle_record(cursor, runner, result, cost, totals, breakdown)
         cursor.execute('''UPDATE agent_runner_usage_receipts SET applied=TRUE,record_id=%s,applied_at=clock_timestamp()
             WHERE runner_id=%s AND phase IN ('observed','no_usage') AND NOT applied''',
             (runner['record_id'],runner['runner_id']))
-        pending = any(receipt['phase'] in ('started','unknown')
-            and receipt['price_snapshot'].get('covered_cost')!='resume_recognition' for receipt in receipts)
+        cursor.execute('''SELECT EXISTS(SELECT 1 FROM agent_runner_usage_receipts WHERE runner_id=%s
+            AND NOT applied AND phase IN ('started','unknown')
+            AND price_snapshot->>'covered_cost' IS DISTINCT FROM 'resume_recognition') AS pending''',(runner['runner_id'],))
+        pending = cursor.fetchone()['pending']
         # cost 一并返回：finalize 把本次结算积分补进终态公共 result.credit_cost
         # （设计 §5.5，chat/scheduled 通用；权威仍在 chat_records）。
         return 'pending' if pending else 'settled', delta, cost
+
+    def settle_active(self, attempt):
+        """Charge the original record without finalizing history or releasing its claim."""
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            runner = lock_runner(cursor, attempt.runner_id, attempt)
+            previous = runner
+            state = (runner.get('checkpoint') or {}).get('execution') or {}
+            result = {'status':runner['status'],'output':state.get('output',''),
+                'duration_ms':(runner.get('checkpoint') or {}).get('execution_duration_ms',0)}
+            settlement, delta, _ = self._settle(cursor, runner, result)
+            from .usage_projection import usage_in_tx
+            snapshot = {**runner['public_snapshot'], 'usage':usage_in_tx(cursor,runner,settlement)}
+            cursor.execute('''UPDATE agent_runners SET settlement_status=%s,public_snapshot=%s::jsonb,
+                view_revision=view_revision+1,updated_at=clock_timestamp() WHERE runner_id=%s RETURNING *''',
+                (settlement,capped_snapshot_dumps(snapshot),runner['runner_id']))
+            runner = decoded(cursor.fetchone())
+            runner = EventRepository.notify_in_tx(cursor,previous,after=runner)
+            conn.commit()
+        self._after_commit(runner,delta)
+        return runner
 
     def finalize(self, attempt):
         with self.connection_factory() as conn:
@@ -44,6 +80,8 @@ class RunnerFinalizer:
                 raise CheckpointFailure('FINALIZATION_INTENT_NOT_SAVED')
             settlement, delta, cost = self._settle(cursor, runner, result)
             snapshot,result=project_terminal_public_state(cursor,runner,result)
+            from .usage_projection import usage_in_tx
+            snapshot['usage'] = usage_in_tx(cursor,runner,settlement)
             # 已接入 Runner 的渠道以最终合并 owner 写入历史，
             # 避免 Runner 与渠道 process_and_persist 双写 channel_messages。
             if runner['source'] not in ('wecom_kf', 'feishu', 'dingtalk', 'wecom'):
@@ -82,14 +120,16 @@ class RunnerFinalizer:
             if not (runner.get('checkpoint') or {}).get('pending_finalization'):
                 return runner
             settlement, delta, cost = self._settle(cursor, runner, runner['checkpoint']['pending_finalization'])
+            from .usage_projection import usage_in_tx
+            snapshot = {**runner['public_snapshot'],'usage':usage_in_tx(cursor,runner,settlement)}
             # 补结算同步公开费用：迟到 receipt 累计进权威 chat_records 后，
             # 公开 result.credit_cost 一并更新，避免展示永久少于实际扣费
             result = dict(runner.get('result') or {})
             result['credit_cost'] = float(cost)
-            cursor.execute('''UPDATE agent_runners SET settlement_status=%s,result=%s::jsonb,
+            cursor.execute('''UPDATE agent_runners SET settlement_status=%s,result=%s::jsonb,public_snapshot=%s::jsonb,
                 view_revision=view_revision+1,
                 updated_at=clock_timestamp() WHERE runner_id=%s RETURNING *''',
-                (settlement, json.dumps(result, ensure_ascii=False), runner_id))
+                (settlement,json.dumps(result,ensure_ascii=False),capped_snapshot_dumps(snapshot),runner_id))
             runner = decoded(cursor.fetchone())
             runner = EventRepository.notify_in_tx(cursor,previous,after=runner)
             conn.commit()
@@ -123,7 +163,11 @@ class RunnerFinalizer:
             from src.core.trace_persist import update_total_cost, update_user_message_id
             record = ChatRecordDB.get_by_id(runner['record_id'])
             if record:
-                update_total_cost('tr_'+runner['runner_id'],float(record.get('credit_cost') or 0))
-                update_user_message_id('tr_'+runner['runner_id'],runner['runner_id']+':user')
+                from .continuous import feature_enabled
+                feature = feature_enabled(runner.get('checkpoint'))
+                trace_id = 'tr_'+runner['runner_id']+(':'+str(runner['attempt']) if feature else '')
+                if not feature:
+                    update_total_cost(trace_id,float(record.get('credit_cost') or 0))
+                update_user_message_id(trace_id,runner['runner_id']+':user')
         except Exception:
             logger.opt(exception=True).warning('AgentRunner committed trace projection unavailable')

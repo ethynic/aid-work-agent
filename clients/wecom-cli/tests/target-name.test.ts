@@ -114,14 +114,16 @@ function makeOp(kind: OpKind, keyDir: string, root: string, mock: DriverMock): A
   const shared = { runDriverFn: makeRunDriver(mock), artifactDirFn: () => root, ...realDeps(keyDir) }
   switch (kind) {
     case 'send':
-      return createWecomMessageSendOperation(shared)
+      // P2 任务 3.4：显式置空本地库状态（锁定老路径契约，不依赖测试机真实 localdb-state.json）
+      return createWecomMessageSendOperation({ ...shared, localdb: { readStateFn: () => null } })
     case 'send-image':
       return createWecomSendImageOperation(shared)
     case 'send-file':
       return createWecomSendFileOperation(shared)
     case 'read-session':
       // env 不配置 SERVER_URL → OCR 通道直连（不触网），聚焦 target-name 定位语义
-      return createWecomReadSessionOperation({ ...shared, env: {} as NodeJS.ProcessEnv })
+      return createWecomReadSessionOperation({
+    localdb: { readStateFn: () => null }, ...shared, env: {} as NodeJS.ProcessEnv })
   }
 }
 

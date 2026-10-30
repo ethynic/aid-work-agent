@@ -8,6 +8,13 @@ from .lifecycle import local_operation_scope
 
 
 def _known(result, proxy=None):
+    if proxy is not None and getattr(proxy, 'provider_key', None) == 'wecom':
+        from .lifecycle import current_local_operation
+        from .wecom_flow import modern_call
+        operation = current_local_operation()
+        call = operation.owner.state.tools[operation.owner.call_id].call if operation else None
+        if call is not None and modern_call(proxy.name, call.arguments):
+            return result
     from .boss_visual_recovery import cli_owns_recovery
     if cli_owns_recovery(result):
         return result  # Preserve unknown as unknown; local recovery has already finished.
@@ -25,7 +32,16 @@ async def poll_operation(proxy, operation, arguments, *, tenant_id, user_id, ses
     original = await operation.owner.saved_phase(branch=operation.branch,ordinal=operation.ordinal)
     if original is not None:
         request, invocation = original['request'],original['invocation']
-        if (request['arguments']!=arguments or request['tool_name']!=proxy.name
+        compared_arguments = arguments
+        from .proxy_tool import WecomSendStatusTool
+        if type(proxy) is WecomSendStatusTool:
+            from .wecom_send_status import SendStatusScopeError, rejected_before_dispatch
+            try:
+                compared_arguments = request['arguments'] if rejected_before_dispatch(invocation, arguments, request) else (
+                    await proxy.native_arguments(tenant_id, user_id, session_id, arguments, request['device_id']))
+            except SendStatusScopeError as error:
+                raise LocalContinuationRequired('LOCAL_PHASE_INTENT_CHANGED', str(invocation['id'])) from error
+        if (request['arguments']!=compared_arguments or request['tool_name']!=proxy.name
                 or expected_device_id is not None and request['device_id']!=expected_device_id):
             raise LocalContinuationRequired('LOCAL_PHASE_INTENT_CHANGED',str(invocation['id']))
         proxy._push_progress(progress_queue,{'type':'started','invocation_id':str(invocation['id']),
@@ -65,6 +81,10 @@ async def observed_model(owner, branch, ordinal, *, intent, invoke):
 
 
 async def run_base(proxy, operation, kwargs):
+    if getattr(proxy, 'provider_key', None) == 'wecom':
+        from .wecom_flow import modern_call, run
+        if modern_call(proxy.name, kwargs):
+            return await run(proxy, operation, kwargs)
     from .lifecycle import LocalOperationScope
     from .proxy_tool import BossOverlayInspectTool, BossOverlayDismissTool, settings, OVERLAY_HEAL_TOOL_NAME
     from src.services import overlay_heal_service

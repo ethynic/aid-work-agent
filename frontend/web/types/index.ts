@@ -60,6 +60,8 @@ export interface RunnerFailureState {
 }
 
 export interface ChatMessage {
+  /** 已从持久化会话历史加载，用于保留持续任务已归档的补充输入。 */
+  runnerHistory?: boolean
   messageId?: string
   runnerId?: string
   clientRequestId?: string

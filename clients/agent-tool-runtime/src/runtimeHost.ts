@@ -18,7 +18,7 @@ import { loadDeviceToken } from './credentials.js'
 import { checkDesktopInteractive } from './desktopCheck.js'
 import { deriveResourceKey } from './desktopLock.js'
 import { PollLoop } from './pollLoop.js'
-import { ProviderSet } from './providerManager.js'
+import { ProviderSet, type ProviderManager } from './providerManager.js'
 import { runInvocation } from './invocationRunner.js'
 import { ResultOutbox, resultOutboxDir } from './resultOutbox.js'
 import { SessionTaskEngine } from './sessionTasks/engine.js'
@@ -260,10 +260,20 @@ export class LegacyExecution implements HostAdapter {
     logInfo(`[runtime] providers: ${Object.keys(entries).join(', ')}`)
     // v2 写路径数据目录（journal/ + result-outbox/，跟随 runtime home；启动重投共用同一 outbox 实例）
     const dataDir = runtimeHomeDir()
-    const recoveryReady = Boolean(entries['boss-recruiting'] && existsSync(resolve(dirname(entries['boss-recruiting']), '../main/operations/bossRecoveryProbe.js')))
+    const bossRecoveryReady = Boolean(entries['boss-recruiting'] && existsSync(resolve(dirname(entries['boss-recruiting']), '../main/operations/bossRecoveryProbe.js')))
+    const wecomRecoveryReady = Boolean(entries.wecom && this.supervision.enabled)
+    const recoveryReady = bossRecoveryReady || wecomRecoveryReady
     const capabilities = () => {
-      const value = deviceCapabilities(this.effectiveConfig(config))
+      let wecom: ProviderManager | undefined
+      if (entries.wecom && !this.stopping) {
+        try { wecom = providers.get('wecom') } catch { /* The existing recovery operation temporarily owns the pool. */ }
+      }
+      // Discovery never delays heartbeat/claim and cannot invoke a business tool.
+      // A failed transport is retried by the next heartbeat, without another worker.
+      void wecom?.inspectWecomBusinessTools().catch(() => {})
+      const value = deviceCapabilities(this.effectiveConfig(config), wecom?.wecomBusinessReady)
       if (recoveryReady && this.supervision.enabled) value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_stop_v1']
+      if (wecomRecoveryReady) value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_wecom_v1']
       if (recoveryReady) { value.providers = [...(value.providers as string[]), 'runtime-recovery']; value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_observe_v2'] }
       return value
     }
@@ -272,7 +282,11 @@ export class LegacyExecution implements HostAdapter {
       runnerDeps: {
         providers,
         beforeProviderCall: async (inv) => {
-          if ((inv.provider ?? 'boss-recruiting') === 'boss-recruiting' && inv.tool_name !== 'boss_recovery_probe') await this.supervision.noteBusinessExecution()
+          const provider = inv.provider ?? 'boss-recruiting'
+          if (provider === 'boss-recruiting' && inv.tool_name !== 'boss_recovery_probe'
+              || provider === 'wecom' && !['wecom_probe', 'wecom_send_status'].includes(inv.tool_name)) {
+            await this.supervision.noteBusinessExecution()
+          }
         },
         ...(skillRunner ? { skillRunner } : {}),
         ...(recoveryReady ? { recoveryObservation: recoveryObservation(providers, this.supervision) } : {}),

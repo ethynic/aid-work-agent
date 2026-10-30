@@ -44,12 +44,38 @@ class UsageRepository:
         validate_start(call_id,owner,purpose,boundary,domain_authorization)
         snapshot = price_snapshot
         runner = lock_runner(cursor, attempt.runner_id, attempt, dispatch=True)
+        from .continuous import feature_enabled
+        feature = feature_enabled(runner.get('checkpoint'))
+        if feature:
+            # A tool may make several physical model requests without returning
+            # to the Engine. Settle its preceding observations at this boundary.
+            from .finalizer import RunnerFinalizer
+            RunnerFinalizer()._settle(cursor,runner,{'status':runner['status'],
+                'output':((runner.get('checkpoint') or {}).get('execution') or {}).get('output',''),
+                'duration_ms':(runner.get('checkpoint') or {}).get('execution_duration_ms',0)})
+            from src.config.settings import settings
+            if runner.get('tenant_id') is not None and not settings.deployment.private_cloud:
+                cursor.execute('SELECT credit_balance FROM tenants WHERE tenant_id=%s FOR UPDATE',(runner['tenant_id'],))
+                tenant = cursor.fetchone()
+                if tenant is None or tenant['credit_balance'] <= 0:
+                    from .ownership import StopRequested
+                    error = StopRequested('pause')
+                    error.credit_blocked = True
+                    raise error
         if domain_authorization is not None:
             if owner!='llm':
                 raise CheckpointFailure('DOMAIN_MODEL_PURPOSE_INVALID')
             from .domain_usage import assert_physical_authorization
             purpose = assert_physical_authorization(cursor,runner,attempt,domain_authorization,
                 execution_id=execution_id,tool_call_id=tool_call_id,purpose=purpose,call_id=call_id,provider=provider,model=model)
+        activation = (runner.get('checkpoint') or {}).get('timer_activation')
+        if (isinstance(activation,dict) and activation.get('version')==1
+                and activation.get('attempt')==attempt.number and activation.get('action_started') is False):
+            # Summary/inline provider requests are physical actions too, even
+            # when no Engine model fact has been appended yet. Commit the fence
+            # atomically with their receipt; an unknown call cannot auto-bridge.
+            cursor.execute('''UPDATE agent_runners SET checkpoint=jsonb_set(checkpoint,
+                '{timer_activation,action_started}','true'::jsonb) WHERE runner_id=%s''',(runner['runner_id'],))
         cursor.execute("""INSERT INTO agent_runner_usage_receipts
             (receipt_id,runner_id,tenant_id,scope_key,call_id,execution_id,tool_call_id,authorized_attempt,
              owner,purpose,billing_boundary,provider,model,price_snapshot)
@@ -63,6 +89,9 @@ class UsageRepository:
             # Reusing a call identity is never permission to repeat its remote
             # operation. Recovery queries this original fact instead.
             raise CheckpointFailure("USAGE_CALL_ALREADY_DISPATCHED")
+        # Receipt/record/tenant locks may have outlived the lease while the root
+        # lock prevented heartbeat renewal. A started row is not new IO permit.
+        lock_runner(cursor, attempt.runner_id, attempt, dispatch=True)
         return result
 
     def observe(self, attempt, receipt_id, usage, *, provider=None, model=None, request_id=None):
@@ -123,6 +152,17 @@ class UsageRepository:
     def facts_in_tx(cursor, runner_id):
         cursor.execute("SELECT * FROM agent_runner_usage_receipts WHERE runner_id=%s ORDER BY receipt_id FOR UPDATE", (runner_id,))
         return [receipt_row(row) for row in cursor.fetchall()]
+
+    @staticmethod
+    def observed_in_tx(cursor, runner_id, *, unapplied_only=True):
+        condition = ' AND NOT applied' if unapplied_only else ''
+        cursor.execute("SELECT * FROM agent_runner_usage_receipts WHERE runner_id=%s AND phase='observed'"
+            +condition+' ORDER BY receipt_id FOR UPDATE',(runner_id,))
+        while True:
+            rows = cursor.fetchmany(256)
+            if not rows:
+                return
+            yield from (receipt_row(row) for row in rows)
 
 
 def validate_start(call_id,owner,purpose,boundary,domain_authorization):

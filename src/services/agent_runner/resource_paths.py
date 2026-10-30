@@ -25,7 +25,7 @@ def validate_workspaces(resource_directory, state):
             raise RunnerError('RECOVERY_RESOURCE_SCOPE_INVALID', 409)
 
 
-def cleanup_workspaces(resource_directory, identity, checkpoint):
+def cleanup_workspaces(resource_directory, identity, checkpoint, *, strict=False):
     """Delete only proven execution-owned resources, after terminal commit."""
     import shutil
     from loguru import logger
@@ -33,20 +33,26 @@ def cleanup_workspaces(resource_directory, identity, checkpoint):
     if not isinstance(execution_id,str) or not execution_id:
         return
     expected = workspace_directory(resource_directory,identity,execution_id)
+    complete = True
     resources = checkpoint.get('resources') or {}
     for artifact in resources.get('image_artifacts') or []:
         # 引用产物与 workspace 同一 owner 命名空间：只删登记且包含性可证的文件。
         if not isinstance(artifact,dict):
+            complete = False
             continue
         path = Path(str(artifact.get('path') or ''))
         if (not path.name.startswith('image_') or path.is_symlink()
                 or path.resolve().parent!=expected
                 or any(parent.is_symlink() for parent in path.parents)):
             logger.warning('AgentRunner resource cleanup skipped code=RESOURCE_SCOPE_INVALID')
+            complete = False
             continue
         try:
             path.unlink(missing_ok=True)
         except OSError:
+            if strict:
+                raise
+            complete = False
             logger.opt(exception=True).warning('AgentRunner image artifact cleanup unavailable')
     for value in [resources.get('workspace'), *resources.get('reply_workspaces',[])]:
         if not value:
@@ -56,6 +62,16 @@ def cleanup_workspaces(resource_directory, identity, checkpoint):
                 or not path.name.startswith('skill_ws_')
                 or any(parent.is_symlink() for parent in path.parents)):
             logger.warning('AgentRunner resource cleanup skipped code=RESOURCE_SCOPE_INVALID')
+            complete = False
             continue
         if path.is_dir():
             shutil.rmtree(path)
+        elif path.exists():
+            complete = False
+
+    if strict and complete:
+        try:
+            expected.rmdir()
+        except FileNotFoundError:
+            pass
+    return complete
