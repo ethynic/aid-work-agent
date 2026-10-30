@@ -2,7 +2,7 @@
 
 共用基类：pinned HTTPS（域名白名单 + 公网地址解析校验，复用 web_push 出站防护）、
 SendResult 规范化（限流 -> retryable，URL 失效 -> target_invalid）。
-安全约定：机器人安全设置使用「自定义关键词」，外发文本统一带【AI工作台通知】前缀命中。
+安全约定：机器人安全设置使用「自定义关键词」，外发文本统一带【AI通知】前缀命中。
 """
 import hashlib
 import http.client
@@ -45,7 +45,7 @@ class ImWebhookAdapterBase:
         from .events import render_message_text
         title, body = render_message_text(message['event_type'], message['parameters'])
         return {'schema_version': 1, 'notification_ref': message['notification_ref'],
-                'text': f'【AI工作台通知】{title}\n{body}'}
+                'text': f'【AI通知】{title}\n{body}'}
 
     def _request_body(self, text):
         raise NotImplementedError

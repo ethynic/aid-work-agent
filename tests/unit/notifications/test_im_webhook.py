@@ -65,7 +65,7 @@ class TestRender:
             'tenant_name': '宏陶', 'daily_avg_credits': 5.0, 'estimated_days': 2,
             'remaining_credits': 10.0}}
         payload = FeishuBotAdapter().render(message, {})
-        assert payload['text'].startswith('【AI工作台通知】')
+        assert payload['text'].startswith('【AI通知】')
         assert '积分即将耗尽提醒' in payload['text']
         assert payload['notification_ref'] == 'ref1'
 
@@ -151,7 +151,7 @@ class TestSend:
         monkeypatch.setattr(im_webhook, 'public_addresses',
                             lambda host: list(addresses or ['93.184.216.34']))
         result = FeishuBotAdapter(timeout_seconds=7).send(
-            {'webhook_url': FEISHU_URL}, {'text': '【AI工作台通知】测试'}, 20)
+            {'webhook_url': FEISHU_URL}, {'text': '【AI通知】测试'}, 20)
         return result, created
 
     def test_accepted(self, monkeypatch):
