@@ -253,7 +253,7 @@ def render_inbox_text(event_type, parameters):
         name = (parameters.get('customer_nickname')
                 or parameters.get('contact_name') or '未署名')
         demand = parameters.get('demand_summary') or '未提供'
-        body = (f'微信客户「{name}」通过{parameters["contact_summary"]}留资'
+        body = (f'微信客户「{name}」通过{parameters["contact_summary"]} 留资'
                 f'（客服账号 {parameters["kf_account_name"]}），'
                 f'需求摘要：{demand}，请及时跟进。')
         if parameters.get('previous_captured_at'):
