@@ -409,6 +409,16 @@ class TestLeadCapturedContract:
         _, body = render_inbox_text('lead.captured', lead_params(contact_name='', demand_summary=''))
         assert '未署名' in body and '未提供' in body
 
+    def test_render_template_prefers_nickname_over_contact_name(self):
+        """微信昵称优先展示（固定可检索标识）；contact_name 为对话提取姓名仅作兜底"""
+        _, body = render_inbox_text('lead.captured', lead_params(
+            customer_nickname='微信小孙', contact_name='孙先生'))
+        assert '微信客户「微信小孙」' in body
+
+    def test_render_template_falls_back_to_contact_name_without_nickname(self):
+        _, body = render_inbox_text('lead.captured', lead_params(customer_nickname=''))
+        assert '微信客户「张三」' in body
+
 
 class TestRuleConditionsValidation:
     def test_non_lead_event_rejects_conditions(self):

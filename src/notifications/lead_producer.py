@@ -19,6 +19,7 @@ _CONTACT_LABELS = {'phone': '手机号', 'landline': '固定电话', 'email': '�
 _CLIP_LIMITS = {
     'contact_summary': 500,
     'contact_name': 128,
+    'customer_nickname': 128,
     'demand_summary': 1000,
     'kf_account_name': 128,
     'assignee_name': 128,
@@ -44,9 +45,10 @@ def build_contact_summary(record):
 
 
 def publish_lead_captured_in_tx(cursor, record, *, kf_config_id, previous_captured_at=None,
-                                config=None):
+                                config=None, customer_nickname=''):
     """LeadCaptureDB.create 的 event_publisher 回调入口；调用方负责兜住异常
-    （通知失败不影响留资结果，与旧邮件通知同口径）。"""
+    （通知失败不影响留资结果，与旧邮件通知同口径）。customer_nickname 为微信
+    昵称（渠道侧固定标识，通知展示优先于对话中提取的 contact_name）。"""
     if config is None:
         from src.config.settings import settings
         config = settings.notifications
@@ -57,6 +59,7 @@ def publish_lead_captured_in_tx(cursor, record, *, kf_config_id, previous_captur
         'contact_method': record.get('contact_method'),
         'contact_summary': build_contact_summary(record),
         'contact_name': record.get('contact_name') or '',
+        'customer_nickname': customer_nickname or record.get('customer_nickname') or '',
         'demand_summary': record.get('demand_summary') or '',
         # kf_config_id 缺失时退化为 open_kfid（channel 层规则不受影响，
         # kf_config 层规则按 ID 不匹配自然跳过）

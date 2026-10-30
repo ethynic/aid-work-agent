@@ -136,6 +136,7 @@ class RecordLeadCaptureTool(BaseTool):
         from src.notifications.lead_producer import publish_lead_captured_in_tx
 
         kf_config_id = ctx.get("kf_config_id") or ""
+        customer_nickname = self._resolve_customer_nickname(ctx, ctx.get("user_id"))
         record = LeadCaptureDB.create(
             tenant_id=tenant_id,
             lead_id=lead_id,
@@ -158,6 +159,7 @@ class RecordLeadCaptureTool(BaseTool):
                 cursor, rec,
                 kf_config_id=kf_config_id,
                 previous_captured_at=previous_captured_at,
+                customer_nickname=customer_nickname,
             ),
         )
         if not record:
@@ -233,6 +235,27 @@ class RecordLeadCaptureTool(BaseTool):
                 "hint": "邮箱应包含 @ 和域名，如 name@example.com",
             }
         return None
+
+    @staticmethod
+    def _resolve_customer_nickname(ctx: Dict[str, Any], user_id: Optional[str]) -> str:
+        """解析客户微信昵称，供留资通知展示（外部可检索的固定标识）。
+
+        优先用本条消息已取好的渠道客户信息；缺失时兜底查 users 表昵称
+        （自动注册时已写入微信昵称）。失败返回空串，不影响留资。
+        """
+        try:
+            info = ctx.get("channel_user_info") or {}
+            nickname = (info.get("nickname") or "").strip()
+            if nickname:
+                return nickname
+            if user_id:
+                from src.db.models import UserDB
+
+                user = UserDB.get_by_id(user_id) or {}
+                return (user.get("nickname") or "").strip()
+        except Exception as e:
+            logger.warning(f"解析客户微信昵称失败: {e}")
+        return ""
 
     @staticmethod
     def _resolve_employee_name(assigned_to: Optional[str]) -> Optional[str]:

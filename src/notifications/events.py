@@ -126,6 +126,9 @@ class LeadCapturedParameters(StrictDTO):
     contact_method: Literal['phone', 'landline', 'email']
     contact_summary: str = Field(min_length=1, max_length=500)
     contact_name: str = Field(default='', max_length=128)
+    # 微信昵称（渠道侧固定标识，便于员工在微信内定位客户）；contact_name 为
+    # 对话中提取的姓名，客户口述（如「孙先生」）在外部系统不可检索
+    customer_nickname: str = Field(default='', max_length=128)
     demand_summary: str = Field(default='', max_length=1000)
     kf_config_id: str = Field(min_length=1, max_length=64)
     open_kfid: str = Field(default='', max_length=64)
@@ -246,7 +249,9 @@ def render_inbox_text(event_type, parameters):
             lines.append(f'另有 {p["awaiting_review"]} 封草稿待审阅确认。')
         return 'AI获客每日汇总', ''.join(lines)
     if event_type == 'lead.captured':
-        name = parameters.get('contact_name') or '未署名'
+        # 优先显示微信昵称（外部可检索的固定标识），对话中提取的姓名作兜底
+        name = (parameters.get('customer_nickname')
+                or parameters.get('contact_name') or '未署名')
         demand = parameters.get('demand_summary') or '未提供'
         body = (f'微信客户「{name}」通过{parameters["contact_summary"]}留资'
                 f'（客服账号 {parameters["kf_account_name"]}），'

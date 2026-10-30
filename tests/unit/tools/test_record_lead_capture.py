@@ -46,6 +46,12 @@ def _make_ctx(**overrides):
         "session_id": "sess_1",
         "tenant_id": "tenant_001",
         "user_id": "tenant_user_1",
+        "channel_user_info": {
+            "nickname": "微信小孙",
+            "avatar": "",
+            "gender": 1,
+            "wx_unionid": "",
+        },
         "lead_capture": None,
     }
     ctx.update(overrides)
@@ -300,6 +306,21 @@ class TestRecordLeadCaptureExecute:
         # kf_config_id 从会话上下文透传（供规则 kf_config 层匹配）
         assert kwargs["kf_config_id"] == "cfg_kf_1"
         assert kwargs["previous_captured_at"] is None
+        # 微信昵称优先取渠道客户信息（通知展示用，固定可检索标识）
+        assert kwargs["customer_nickname"] == "微信小孙"
+
+    @pytest.mark.asyncio
+    async def test_nickname_falls_back_to_user_record(self):
+        """渠道客户信息缺昵称时兜底查 users 表昵称"""
+        ctx = _make_ctx(channel_user_info={"nickname": "", "avatar": "", "gender": 0, "wx_unionid": ""})
+        with _patch_execute(ctx) as (tool, mocks):
+            result = await tool.execute(phone="13800138000")
+
+        assert result["success"] is True
+        publisher = mocks["lead_db_create"].call_args.kwargs["event_publisher"]
+        publisher(MagicMock(), mocks["lead_db_create"].return_value)
+        _, kwargs = mocks["publish_event"].call_args
+        assert kwargs["customer_nickname"] == "李老师"
 
     @pytest.mark.asyncio
     async def test_success_landline_publishes_other_contact(self):
