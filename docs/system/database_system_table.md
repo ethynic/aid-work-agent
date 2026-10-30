@@ -213,6 +213,8 @@
 - `status` — 处理状态（`unprocessed` / `processed` / `ignored`）
 - `processed_by` / `processed_at` — 处理人和时间
 
+**清理**：APScheduler 每日 00:30 分批删除超 15 天记录（`src/scheduler/manager.py` `_run_log_error_cleanup`，走 `idx_log_error_timestamp` 索引）；平台管理员手动清理端点（`src/api/admin_error_logs.py`）保留 30 天口径不变。
+
 ### 3.5 网页会话 vs 渠道会话
 
 系统存在两套会话存储体系，服务不同的接入场景。

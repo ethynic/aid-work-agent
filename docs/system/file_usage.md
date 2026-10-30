@@ -296,6 +296,9 @@ class StorageConfig(BaseModel):
 | 知识图文件删除 | 手动删除文档时 | `delete_document()` 同步删除文件并清理空目录 |
 | 技能草稿清理 | APScheduler 每日 03:45 | `storage/tmp/` mtime 超 7 天的文件与工作目录（§3.13） |
 | 技能工作目录清理 | APScheduler 每日 03:30 | `tenants/*/temp/skill_ws_*` 超 3 天残留目录 |
+| 日志文件清理 | APScheduler 每日 00:30 | `log/` 下按文件名日期清理超 15 天分片（`src/core/log_retention.py`；此前仅启动时清理） |
+| 错误日志 DB 清理 | APScheduler 每日 00:30 | `log_error` 表分批删除超 15 天记录（平台管理员手动端点保留 30 天口径不变） |
+| tlog 临时日志清理 | APScheduler 每周六 04:50 | 清空 `log/temp/` 全部临时主题日志 |
 | 错误日志清理 | 手动端点 | 保留 30 天，清理 `log/agent` 下的错误日志 |
 
 ### 7.2 缺失的清理机制

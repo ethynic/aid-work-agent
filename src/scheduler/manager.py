@@ -328,6 +328,53 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.error(f"后端日志：注册技能草稿目录清理任务失败: {e}")
 
+        # ===== 日志文件清理（每日 00:30，保留 15 天）=====
+        # cleanup_old_logs 此前仅启动时执行一次，长期不重启的容器日志分片会持续累积，
+        # 改由调度器每日兜底（清理逻辑多 worker 幂等，见 src/core/log_retention.py）
+        try:
+            self._scheduler.add_job(
+                self._run_log_file_cleanup,
+                CronTrigger(hour=0, minute=30, timezone="Asia/Shanghai"),
+                id="job_system_log_file_cleanup",
+                name="Log File Cleanup",
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("后端日志：已注册日志文件清理任务 (cron=00:30)")
+        except Exception as e:
+            logger.error(f"后端日志：注册日志文件清理任务失败: {e}")
+
+        # ===== log_error 数据库错误日志清理（每日 00:30，保留 15 天）=====
+        # log_error 表按 timestamp 走 idx_log_error_timestamp 索引分批删除，避免长锁
+        try:
+            self._scheduler.add_job(
+                self._run_log_error_cleanup,
+                CronTrigger(hour=0, minute=30, timezone="Asia/Shanghai"),
+                id="job_system_log_error_cleanup",
+                name="DB Error Log Cleanup",
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("后端日志：已注册 log_error 数据库错误日志清理任务 (cron=00:30)")
+        except Exception as e:
+            logger.error(f"后端日志：注册 log_error 数据库错误日志清理任务失败: {e}")
+
+        # ===== log/temp 临时主题日志清理（每周六 04:50 全量清空）=====
+        # tlog 文件名无日期，不命中 log_retention 的日期清理模式，按周全删兜底；
+        # 调试规范要求 bug 修复后删除 tlog 调用，残留文件由本任务定期回收
+        try:
+            self._scheduler.add_job(
+                self._run_temp_log_cleanup,
+                CronTrigger(day_of_week="sat", hour=4, minute=50, timezone="Asia/Shanghai"),
+                id="job_system_temp_log_cleanup",
+                name="Temp Log Cleanup",
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("后端日志：已注册 log/temp 临时日志清理任务 (cron=周六 04:50)")
+        except Exception as e:
+            logger.error(f"后端日志：注册 log/temp 临时日志清理任务失败: {e}")
+
         # ===== 用户行为审计日志清理（每日 04:00）=====
         # 设计文档 docs/system/user-behavior-audit-log-design.md §6.2：
         # 按 behavior_log.retention_days（默认 180 天）分批删除过期日志，每批 1 万行避免长锁
@@ -725,6 +772,97 @@ class ScheduledTaskManager:
             return cleaned
         except Exception as e:
             logger.opt(exception=True).error(f"后端日志：storage/tmp 技能草稿清理任务异常: {e}")
+            return 0
+
+    # ===== 日志文件清理回调（同步）=====
+    def _run_log_file_cleanup(self):
+        """清理 log/ 下超过保留期（15 天）的日志分片文件（APScheduler 回调）。"""
+        try:
+            from src.core.log_retention import cleanup_old_logs
+
+            deleted = cleanup_old_logs()
+            if deleted:
+                logger.info(f"后端日志：日志文件清理完成，删除 {deleted} 个过期分片")
+            return deleted
+        except Exception as e:
+            logger.opt(exception=True).error(f"后端日志：日志文件清理任务异常: {e}")
+            return 0
+
+    # ===== log_error 数据库错误日志清理回调（同步，分批删除避免长锁）=====
+    def _run_log_error_cleanup(self, retention_days: int = 15):
+        """删除 log_error 表超过保留期（默认 15 天）的记录（APScheduler 回调）。
+
+        分批删除（每批 1 万行）避免长事务长锁；平台管理员手动清理端点
+        （src/api/admin_error_logs.py）保留 30 天口径不变。
+        """
+        from src.db.database import get_db_connection
+
+        started_at = datetime.now()
+        total_deleted = 0
+        batch_size = 10000
+        try:
+            while True:
+                with get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """
+                        DELETE FROM log_error
+                        WHERE id IN (
+                            SELECT id FROM log_error
+                            WHERE timestamp < NOW() - (%s * INTERVAL '1 day')
+                            LIMIT %s
+                        )
+                        """,
+                        (retention_days, batch_size),
+                    )
+                    deleted = cursor.rowcount
+                    conn.commit()
+                total_deleted += deleted
+                if deleted < batch_size:
+                    break
+            elapsed = (datetime.now() - started_at).total_seconds()
+            if total_deleted:
+                logger.info(
+                    f"后端日志：log_error 错误日志清理完成，删除 {total_deleted} 行"
+                    f"（保留 {retention_days} 天），耗时 {elapsed:.1f}s"
+                )
+            return total_deleted
+        except Exception as e:
+            logger.opt(exception=True).error(
+                f"后端日志：log_error 错误日志清理失败（已删除 {total_deleted} 行）: {e}"
+            )
+            return total_deleted
+
+    # ===== log/temp 临时主题日志清理回调（每周六全量清空）=====
+    def _run_temp_log_cleanup(self):
+        """清空 log/temp/ 下全部 tlog 临时日志（APScheduler 回调，每周六凌晨）。
+
+        tlog 每次写入都是独立 open/append/close，删除后进行中的调试写入
+        会自动重建文件继续记，不影响排查。
+        """
+        try:
+            import shutil
+            from pathlib import Path
+
+            temp_root = Path("log/temp")
+            if not temp_root.is_dir():
+                return 0
+
+            cleaned = 0
+            for entry in temp_root.iterdir():
+                try:
+                    if entry.is_dir():
+                        shutil.rmtree(entry, ignore_errors=True)
+                    else:
+                        entry.unlink()
+                    cleaned += 1
+                except Exception as e:
+                    logger.warning(f"后端日志：清理临时日志失败 {entry}: {e}")
+            if cleaned:
+                logger.info(f"后端日志：log/temp 临时日志清理完成，共清理 {cleaned} 项")
+            return cleaned
+        except Exception as e:
+            logger.opt(exception=True).error(f"后端日志：log/temp 临时日志清理任务异常: {e}")
             return 0
 
     # ===== 用户行为日志清理回调（同步，分批删除避免长锁）=====
