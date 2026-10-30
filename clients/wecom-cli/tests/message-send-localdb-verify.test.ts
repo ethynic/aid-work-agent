@@ -621,7 +621,7 @@ test('同文歧义、时间窗外相同文本和扫描上限都保持unknown', w
         const after = Number(params[params.indexOf('--after-id') + 1])
         const messages = Array.from({ length: mode === 'limit' ? 50 : mode === 'ambiguous' ? 2 : 1 }, (_, i) => ({
           message_id: after + i + 1, conversation_id: receipt.conversationId, sender_id: SELF,
-          text: receipt.text, trusted: true, send_time: mode === 'outside' ? receipt.until + 1 : receipt.since + 1,
+          content_type: 2, text: receipt.text, trusted: true, send_time: mode === 'outside' ? receipt.until + 1 : receipt.since + 1,
         }))
         return { ok: true, raw_last_line: '', data: { ok: true, conversation_id: receipt.conversationId, messages,
           next_cursor_id: messages.at(-1)!.message_id, next_anchor: 'a'.repeat(64) } }
@@ -632,6 +632,25 @@ test('同文歧义、时间窗外相同文本和扫描上限都保持unknown', w
       assert.equal((r.data.reconciliation as {reason: string}).reason,
         mode === 'limit' ? 'scan_limit' : mode === 'ambiguous' ? 'ambiguous' : 'not_observed')
       assert.equal(pages, mode === 'limit' ? 20 : 1)
+    }
+  } finally { f.close() }
+})
+
+test('可读卡片和系统事件即使同文且trusted也不能确认普通文本发送', windows, async () => {
+  const f = await fixture()
+  try {
+    const id = await unknownReceipt(f)
+    const receipt = await loadSendReceipt(f.artifactRoot, id)
+    for (const ct of [80, 1001, 2]) {
+      const localdb: LocaldbReadDeps = { ...f.deps, runPyFn: async (params, opts) => {
+        if (params[params.indexOf('--task') + 1] !== 'send-messages') return runLocaldbPy(params, opts)
+        return { ok: true, raw_last_line: '', data: { ok: true, conversation_id: receipt.conversationId,
+          messages: [{ message_id: receipt.baseline + 1, conversation_id: receipt.conversationId,
+            sender_id: SELF, content_type: ct, text: receipt.text, trusted: true, send_time: receipt.since + 1 }] } }
+      } }
+      const r = await createWecomSendStatusOperation({ artifactDirFn: () => f.artifactRoot, localdb })
+        .execute({ receipt_id: id }, silentCtx())
+      assert.equal(r.data.send_status, ct === 2 ? 'confirmed' : 'unknown', `content_type=${ct}`)
     }
   } finally { f.close() }
 })

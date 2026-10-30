@@ -98,7 +98,8 @@ export async function verifySendReceipt(receipt: SendReceipt, ctx: OpContext, lo
         after = row.message_id as number
         diagnostic.rows++
         if (row.trusted !== true) diagnostic.untrusted++
-        if (row.trusted === true && row.sender_id === receipt.account && row.text === receipt.text &&
+        if ((row.content_type === 0 || row.content_type === 2) &&
+          row.trusted === true && row.sender_id === receipt.account && row.text === receipt.text &&
           typeof row.send_time === 'number' && row.send_time >= receipt.since && row.send_time <= receipt.until) matches.push(after)
       }
       if (res.messages.length < SEND_VERIFY_PAGE_SIZE) {

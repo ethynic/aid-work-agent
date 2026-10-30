@@ -687,10 +687,10 @@ def _parse_keyscan_args(args):
 
 # P0 观察确认的系统/控制类 content_type 最小排除表（不参与待回复判定；P3 全量表再扩）。
 # 只影响 last-per-conv 任务与 TS 待回复判定，不影响 messages 任务返回。
-CONFIRMED_SYSTEM_TYPES = (1017, 38, 31)
+CONFIRMED_SYSTEM_TYPES = (1017, 38, 31, 1001, 1002, 1006, 1022)
 
-# P0 冻结的文本类型：type=2 文本 protobuf 包装、type=0 顶层单字段；其余类型语义未确认
-# （1011/1017/38/31 等仅确认存在），不参与文本提取（占位语义由 TS C9b 决定）。
+# 普通文本类型：type=2 文本 protobuf 包装、type=0 顶层单字段。
+# 其他已确认的卡片/系统类型只用于阅读，不改变旧文本锚点或纯文本发送确认。
 _TEXT_CONTENT_TYPES = (0, 2)
 
 
@@ -831,7 +831,8 @@ def extract_content(content, content_type):
     - type 0/2：先严格解析已知包装（_strict_extract，长度精确覆盖校验）→ {text, trusted:True}；
       严格失败 → 递归找可打印 UTF-8（_recursive_text）→ {text, trusted:False}；
       仍无 → {None, False}。
-    - 非 0/2 类型 → {None, False}（占位与 kind 语义由 TS C9b 决定）。
+    - type 80：已确认的 sections Markdown 卡片；系统事件按已确认的类型/路径读取。
+      未确认类型保留 {None, False}，不从任意二进制片段猜正文。
     - content 兼容 bytes/bytearray/memoryview/str（str 按 UTF-8 编码后同路径）/None。"""
     if isinstance(content, str):
         content = content.encode('utf-8')
@@ -843,9 +844,28 @@ def extract_content(content, content_type):
         ct = int(content_type)
     except (TypeError, ValueError):
         return {'text': None, 'trusted': False}
+    data = bytes(content)
+    if ct == 80:
+        return _card_content(data)
+    if ct == 1001:
+        name = _readable_utf8(data)
+        return {'text': '群名变更为“%s”' % name if name else '群名变更', 'trusted': name is not None}
+    if ct == 1002:
+        return {'text': '群成员邀请通知', 'trusted': False}
+    if ct == 1006:
+        return {'text': '群消息推送设置变更', 'trusted': False}
+    if ct == 1022:
+        outer, outer_complete = _history_fields(data)
+        payloads = [value for number, wire, value in outer if (number, wire) == (1, 2)]
+        if len(payloads) == 1:
+            inner, inner_complete = _history_fields(payloads[0])
+            texts = [_readable_utf8(value) for number, wire, value in inner if (number, wire) == (2, 2)]
+            if len(texts) == 1 and texts[0] is not None:
+                return {'text': texts[0], 'trusted': outer_complete and inner_complete
+                        and len(outer) == 1 and len(inner) == 1}
+        return {'text': '群机器人提示', 'trusted': False}
     if ct not in _TEXT_CONTENT_TYPES:
         return {'text': None, 'trusted': False}
-    data = bytes(content)
     strict = _strict_extract(data, ct)
     if strict is not None:
         return {'text': strict, 'trusted': True}
@@ -853,6 +873,61 @@ def extract_content(content, content_type):
     if fallback is not None:
         return {'text': fallback, 'trusted': False}
     return {'text': None, 'trusted': False}
+
+
+def _readable_utf8(data):
+    try:
+        text = data.decode('utf-8')
+    except UnicodeDecodeError:
+        return None
+    return text if _is_printable_text(text) else None
+
+
+def _card_content(data):
+    """只读取实证的 root.4.1 sections 文本，root.1 Markdown 可作可读回退。"""
+    fields, complete = _history_fields(data)
+    summaries = [_readable_utf8(value) for number, wire, value in fields if (number, wire) == (1, 2)]
+    fallback = next((text for text in summaries if text is not None), None)
+    cards = [value for number, wire, value in fields if (number, wire) == (4, 2)]
+    # 实证 root.5 为 scalar 元数据，不是缺失的可见正文。
+    complete = complete and len(summaries) == 1 and len(cards) == 1
+    complete = complete and all((number, wire) in ((1, 2), (4, 2), (5, 0)) for number, wire, _ in fields)
+    texts = []
+    for card in cards:
+        envelope, envelope_complete = _history_fields(card)
+        bodies = [value for number, wire, value in envelope if (number, wire) == (1, 2)]
+        complete = complete and envelope_complete and len(bodies) == 1
+        complete = complete and all((number, wire) in ((1, 2), (2, 2)) for number, wire, _ in envelope)
+        for body in bodies:
+            try:
+                document = json.loads(body.decode('utf-8'))
+            except (UnicodeDecodeError, ValueError):
+                complete = False
+                continue
+            if not isinstance(document, dict) or document.get('msgtype') != 'sections':
+                complete = False
+                continue
+            sections = document.get('sections')
+            if not isinstance(sections, list) or not sections:
+                complete = False
+                continue
+            for section in sections:
+                if not isinstance(section, dict):
+                    complete = False
+                    continue
+                text = section.get('text')
+                if (section.get('type') != 'basic' or not isinstance(text, dict)
+                        or text.get('type') != 'markdown' or not isinstance(text.get('content'), str)
+                        or not _is_printable_text(text['content'])):
+                    complete = False
+                    continue
+                texts.append(text['content'])
+                # 未支持的组件/字段可能携带可见内容，不把部分正文称为完整。
+                complete = complete and not section.get('components') and not section.get('fields')
+    text = '\n\n'.join(texts) if texts else fallback
+    if not complete and fallback is not None:
+        text = fallback
+    return {'text': text, 'trusted': complete and bool(texts)}
 
 
 # ---------- query 模式（C8 读库查询；对 workdir 内已解密明文库做只读 SQL，任务 1.8） ----------
@@ -922,6 +997,9 @@ def _message_row(row):
 def _message_anchor(row):
     # 服务端确认可能补齐 server_id/sequence；包装字段不是稳定消息身份。
     fields = [row.get(k) for k in ('message_id', 'sender_id', 'conversation_id', 'send_time', 'text')]
+    # 旧 v2/wb1 游标的非文本正文始终为 None；新增阅读解码不改变既有锚点。
+    if row.get('content_type') not in _TEXT_CONTENT_TYPES:
+        fields[-1] = None
     return hashlib.sha256(json.dumps(fields, separators=(',', ':')).encode('utf-8')).hexdigest()
 
 
@@ -1141,7 +1219,8 @@ def _send_message_row(row):
     """发送确认只信完整纯文本片段；不改变旧消息正文或游标锚点。"""
     message = _message_row(row)
     parts, complete = _history_content(row[-1], message['content_type'], message)
-    message['trusted'] = complete and all(isinstance(part, str) for part in parts)
+    message['trusted'] = (message['content_type'] in _TEXT_CONTENT_TYPES and complete
+                          and all(isinstance(part, str) for part in parts))
     if message['trusted']:
         message['text'] = ''.join(parts)
     return message
@@ -2056,7 +2135,9 @@ def cmd_sessions(workdir, account, request):
                         (cid, point['after_id'], state['after_id'])).fetchone() is None:
                     state['retry'].pop(cid)
         for session in output['sessions']:
-            last_self = max((m['message_id'] for m in session['messages'] if m.get('sender_id') == account), default=-1)
+            last_self = max((m['message_id'] for m in session['messages']
+                             if m.get('sender_id') == account
+                             and m.get('content_type') not in CONFIRMED_SYSTEM_TYPES), default=-1)
             candidates = [m['message_id'] for m in session['messages']
                           if m.get('sender_id') != account and m.get('sender_platform') == 'wechat'
                           and (session['kind'] == 'group' or m['message_id'] > last_self)

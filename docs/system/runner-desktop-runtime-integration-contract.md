@@ -1,5 +1,7 @@
 # AgentRunner / Desktop / Runtime 共同集成契约
 
+2026-10-30 WeCom 消息读取共同检查点：沿用2.11与现有三工具输入，仅扩展已验证的本地消息类型。Markdown正文通过原text返回，可选text_format=markdown；系统事件使用kind=system、system=true及既有timeline方向，不算个人发言。旧Runtime/服务端无需升级即可透传，旧插件保持原能力，不新增能力门禁。旧v2/wb1游标摘要与普通文本发送对账语义保持；本任务主控唯一维护TS归一/消费与文档，解码开发角色唯一维护Python驱动，测试/CR只读独立验证。实施与验收记录见[本地库计划P9](../plans/plan-wecom-cli-localdb.md#p9-机器人markdown与群系统事件读取2026-10-30)，未安装新版插件前不宣称客户端已获得新能力。
+
 > 契约 ID：`AID-RUNNER-DESKTOP-RUNTIME`
 >
 > 版本：`2.11`；日期：2026-10-27

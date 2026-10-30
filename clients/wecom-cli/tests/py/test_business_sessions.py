@@ -78,6 +78,15 @@ class BusinessSessionsTest(unittest.TestCase):
         group = next(s for s in data['sessions'] if s['conversation_id'] == CONV_R1)
         self.assertEqual([m['sender_platform'] for m in group['messages']], ['wechat', 'wecom'])
 
+    def test_group_system_tail_is_not_a_customer_message_or_reply(self):
+        self.append([msg_row(CONV_R1, PEER, 2, 110, text_content('customer still needs help')),
+                     msg_row(CONV_R1, SELF, 1001, 111, '新群名'.encode('utf-8')),
+                     msg_row(CONV_R1, SELF, 1006, 112, b'internal-setting-id')])
+        data = self.read(targets=[{'conversation_id': CONV_R1}], limit=50)
+        self.assertTrue(data['ok'], data)
+        self.assertEqual(data['pending_sessions'][0]['message_ids'], [3, 5])
+        self.assertEqual(data['sessions'][0]['messages'][-2]['text'], '群名变更为“新群名”')
+
     def test_incremental_new_old_customer_is_returned_without_unread_badge(self):
         first = self.read(limit=50)
         self.append([msg_row(CONV_S, PEER, 2, 104, text_content('new question'))])

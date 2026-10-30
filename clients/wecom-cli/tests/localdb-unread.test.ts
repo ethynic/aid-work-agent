@@ -102,6 +102,26 @@ test('待回复双向判定：尾部系统消息不清除对方待回复，也�
   } finally { f.close() }
 })
 
+test('待回复摘要展示已解码Markdown，不再丢为非文本占位', windows, async () => {
+  const f = await fixture()
+  try {
+    const markdown = '【客户请求】\n> 请协助安排演示'
+    const deps: LocaldbReadDeps = { ...f.deps, runPyFn: async (params, opts) => {
+      const r = await runLocaldbPy(params, opts)
+      if (params[params.indexOf('--task') + 1] === 'last-per-conv' && r.data) {
+        const rows = r.data.conversations as Array<Record<string, unknown>>
+        const part = rows.find(c => c.conversation_id === CONV)!.last_participating as Record<string, unknown>
+        part.content_type = 80
+        part.text = markdown
+      }
+      return r
+    } }
+    const r = await readLocaldbUnread({}, ctx(), f.current, deps)
+    const main = (r.data!.conversations as UnrepliedConversation[]).find(c => c.conversation_id === CONV)!
+    assert.equal(main.last_text_preview, markdown)
+  } finally { f.close() }
+})
+
 test('自会话排除：S:self_self 永不出现', windows, async () => {
   const f = await fixture()
   try {

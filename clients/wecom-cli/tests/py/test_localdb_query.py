@@ -453,7 +453,7 @@ class LastPerConvTest(unittest.TestCase):
         # 追加 999：回退越过 999，且 1017 仍被基础表排除 → 落到 message_id=2
         payload = self.fx.query(['--task', 'last-per-conv', '--exclude-types', '999'])
         c = self.conv(payload, CONV_S)
-        self.assertEqual(payload['exclude_types'], [31, 38, 999, 1017])
+        self.assertEqual(payload['exclude_types'], [31, 38, 999, 1001, 1002, 1006, 1017, 1022])
         self.assertEqual(c['last_participating']['message_id'], 2)
 
     def test_participating_row_projection(self):
@@ -928,7 +928,7 @@ class QueryArgValidationTest(unittest.TestCase):
             self.assertEqual(payload['error'], 'SQL_ERROR', task)
 
     def test_confirmed_system_types_frozen(self):
-        self.assertEqual(drv.CONFIRMED_SYSTEM_TYPES, (1017, 38, 31))
+        self.assertEqual(drv.CONFIRMED_SYSTEM_TYPES, (1017, 38, 31, 1001, 1002, 1006, 1022))
 
 
 def run_driver(args, stdin_text=None):

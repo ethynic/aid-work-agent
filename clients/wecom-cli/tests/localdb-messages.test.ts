@@ -73,7 +73,7 @@ test('时间格式化：秒 → YYYY-MM-DD HH:MM:SS 本地时区；非法值显�
   assert.equal(bad!.time, '')
 })
 
-test('kind 映射：0/2 → text + 正文；其余类型占位 + kind 省略（v1 不猜未确认语义）', () => {
+test('普通文本保留正文；未确认类型保留占位且省略kind', () => {
   const out = normalizeMessages(
     [
       row({ message_id: 1, content_type: 2, text: '你好' }),
@@ -102,9 +102,9 @@ test('kind 映射：0/2 → text + 正文；其余类型占位 + kind 省略（v
 })
 
 test('排除表：CONFIRMED_SYSTEM_TYPES 冻结值、isParticipating、system 标注', () => {
-  assert.deepEqual([...CONFIRMED_SYSTEM_TYPES], [1017, 38, 31])
+  assert.deepEqual([...CONFIRMED_SYSTEM_TYPES], [1017, 38, 31, 1001, 1002, 1006, 1022])
   assert.equal(CURSOR_VERSION, 'v2')
-  for (const ct of [1017, 38, 31]) {
+  for (const ct of [1017, 38, 31, 1001, 1002, 1006, 1022]) {
     assert.equal(isParticipating(ct), false, String(ct))
   }
   for (const ct of [0, 2, 999, 1011]) {
@@ -124,9 +124,8 @@ test('排除表：CONFIRMED_SYSTEM_TYPES 冻结值、isParticipating、system �
     SELF,
   )
   assert.deepEqual(out.map((m) => m.system ?? false), [true, true, true, false])
-  // 系统类同样占位 + kind 省略
-  assert.equal(out[0]!.text, NON_TEXT_PLACEHOLDER)
-  assert.equal(out[0]!.kind, undefined)
+  assert.equal(out[0]!.kind, 'system')
+  assert.equal(out[0]!.side, 'timeline')
 })
 
 test('parse_trusted 透传：py 标注原样保留，不因占位/文本改变', () => {
@@ -140,6 +139,31 @@ test('parse_trusted 透传：py 标注原样保留，不因占位/文本改变',
     SELF,
   )
   assert.deepEqual(out.map((m) => m.parse_trusted), [true, false, false, false])
+})
+
+test('机器人Markdown保留段落和引用；系统事件与同文普通发言按类型区分', () => {
+  const markdown = '【面试通知】\n工程师岗位\n\n> 候选人甲 · 明天14:00\n> 请安排面试'
+  const event = '群名变更：客户服务群'
+  const out = normalizeMessages([
+    row({ message_id: 1, content_type: 80, text: markdown, trusted: true }),
+    row({ message_id: 2, sender_id: SELF, content_type: 1001, text: event }),
+    row({ message_id: 3, sender_id: SELF, content_type: 2, text: event }),
+    row({ message_id: 4, content_type: 80, text: '已知段落', trusted: false }),
+    row({ message_id: 5, content_type: 80, text: null, trusted: false }),
+  ], SELF)
+  assert.equal(out[0]!.text, markdown)
+  assert.equal(out[0]!.kind, 'text')
+  assert.equal(out[0]!.text_format, 'markdown')
+  assert.equal(out[1]!.side, 'timeline', '本人改群名也不是本人发言')
+  assert.equal(out[1]!.kind, 'system')
+  assert.equal(out[1]!.system, true)
+  assert.equal(out[1]!.sender_id, SELF, '仍保留事件发起人')
+  assert.equal(out[2]!.side, 'self', '不能按正文关键词把正常聊天误判系统事件')
+  assert.equal(out[2]!.kind, 'text')
+  assert.equal(out[2]!.system, undefined)
+  assert.equal(out[3]!.text, '已知段落')
+  assert.equal(out[3]!.parse_trusted, false)
+  assert.equal(out[4]!.text, NON_TEXT_PLACEHOLDER)
 })
 
 test('展示排序：时间升序；同秒 server_id 决胜；迟到回退重排；msg_id 稳定兜底', () => {
@@ -246,9 +270,7 @@ test('端到端形态：py 行集 → 归一输出字段齐备（msg_id/server_i
     ],
     SELF,
   )
-  // kind 省略 = 键不存在（非 undefined 键），单独断言
-  assert.equal('kind' in out[1]!, false)
-  assert.equal(out[1]!.kind, undefined)
+  assert.equal(out[1]!.kind, 'system')
   const { kind: _kind, ...rest1 } = out[0]!
   assert.deepEqual(rest1, {
     msg_id: 11,
@@ -268,8 +290,8 @@ test('端到端形态：py 行集 → 归一输出字段齐备（msg_id/server_i
     sender_name: null,
     sender_platform: 'unknown',
     server_id: 'srv-2',
-    side: 'self',
-    text: NON_TEXT_PLACEHOLDER,
+    side: 'timeline',
+    text: '[系统通知]',
     time: localStamp(1700000000),
     parse_trusted: false,
     system: true,

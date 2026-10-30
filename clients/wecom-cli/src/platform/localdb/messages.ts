@@ -4,10 +4,8 @@
  * 输入行来自 py query 模式（drivers/py/wecom_localdb.py task=messages，按 message_id 升序
  * = 入库序/水位序）。本组件三件事：
  *  1. 契约归一：side / kind / text / time / parse_trusted + 系统类标注（system）。
- *     类型语义按 P0 冻结最小集：content_type 0/2 → 文本（kind='text'，text=py 提取正文）；
- *     其余类型【一律】占位 '[非文本消息]' 且 kind 省略——P0 只确认了 0/2 的文本语义，
- *     1011/1017/38/31 等仅确认存在、语义未确认，v1 不猜（P3 全量语义表落地后再升级为
- *     结构化表示；对齐设计 §4.1"占位 + kind 省略"决策，不做 OCR 补读）。
+ *     0/2为普通文本，80为已验证Markdown卡片，系统类型为timeline事件；
+ *     其余未验证类型保留非文本占位，不做OCR补读（设计P9）。
  *  2. 展示排序：时间升序；同秒以 server_id 决胜（P0 冻结：sequence/server_id 同秒递增），
  *     仍并列以 msg_id（入库序）稳定兜底。入库序（py 返回序）与展示序在此分离——游标推进
  *     只依据 py 的 next_cursor_id（返回集最大 message_id），与本组件展示排序无关（评审
@@ -18,7 +16,7 @@
  *     非零水位携带消息稳定字段摘要，检测同文件重建后的水位复用。
  *
  * 防御语义（对 py 输出不信任的显式边界）：
- * - side：sender_id 与 selfUserId 严格字符串相等（不 trim；大小写敏感），非字符串一律 'peer'。
+ * - side：系统事件为timeline；其他记录按sender_id与selfUserId严格字符串相等判定。
  * - isParticipating：排除表命中 → false；非数值 content_type → false（无法判定的类型保守
  *   不驱动自动回复）；其余数值类型 → true（排除表是"已确认系统类"的最小表，P3 再扩）。
  * - time：send_time 非有限非负数 → ''（数据异常显式留空，不臆造时间）；格式
@@ -28,9 +26,9 @@
  * - 无有效 message_id（非安全整数）的行丢弃；非对象行跳过。
  */
 
-/** P0 观察确认的系统/控制类 content_type 最小排除表（不参与待回复判定；P3 全量表再扩）。
+/** 实证确认的系统/控制类content_type（P0及P9；不参与待回复判定）。
  * 与 py 侧 CONFIRMED_SYSTEM_TYPES（drivers/py/wecom_localdb.py）保持同值，两处均为冻结契约。 */
-export const CONFIRMED_SYSTEM_TYPES: readonly number[] = [1017, 38, 31]
+export const CONFIRMED_SYSTEM_TYPES: readonly number[] = [1017, 38, 31, 1001, 1002, 1006, 1022]
 
 /** v1 非文本占位文案（设计 §4.1：占位 + kind 省略） */
 export const NON_TEXT_PLACEHOLDER = '[非文本消息]'
@@ -63,17 +61,17 @@ export interface NormalizedMessage {
   sender_platform: 'wechat' | 'wecom' | 'unknown'
   /** 同秒展示排序决胜键（P0 冻结）；缺省省略 */
   server_id?: string
-  /** 方向 = sender_id 与本人账号严格相等；非字符串防御为 'peer' */
-  side: 'self' | 'peer'
-  /** v1 仅文本映射 'text'；其余类型占位且省略（语义未确认不猜） */
+  /** 系统事件为timeline；个人发言方向由sender_id判定。 */
+  side: 'self' | 'peer' | 'timeline'
   kind?: 'text' | 'image' | 'file' | 'system'
+  text_format?: 'markdown'
   /** 文本正文 / 非文本占位 / 文本提取失败留空（parse_trusted=false 供消费侧识别） */
   text: string
   /** 'YYYY-MM-DD HH:MM:SS' 本地时区；send_time 非法 → '' */
   time: string
   /** py 内容提取可信标注：false = 递归兜底结果或非文本（正文不可作精确匹配依据） */
   parse_trusted: boolean
-  /** 排除表类型（已确认系统/控制类）标注；仅供待回复判定消费，缺省 = 非系统 */
+  /** 已确认系统/控制类标注；缺省 = 非系统 */
   system?: boolean
 }
 
@@ -84,6 +82,19 @@ export interface NormalizeDeps {
 
 function isSafeInt(v: unknown): v is number {
   return typeof v === 'number' && Number.isSafeInteger(v)
+}
+
+/** 会话正文与待回复摘要共用已确认类型的可读文本，不显示未解析的原始载荷。 */
+export function readableMessageText(
+  row: { content_type?: unknown; text?: unknown },
+  placeholder = NON_TEXT_PLACEHOLDER,
+): string {
+  const ct = row.content_type
+  const text = typeof row.text === 'string' ? row.text : ''
+  if (ct === 0 || ct === 2) return text
+  if (ct === 80 && text.length > 0) return text
+  if (isSafeInt(ct) && CONFIRMED_SYSTEM_TYPES.includes(ct)) return text || '[系统通知]'
+  return placeholder
 }
 
 /**
@@ -123,19 +134,25 @@ export function normalizeMessages(
     if (!isSafeInt(row.message_id) || row.message_id < 0) continue // 无有效水位字段 → 丢弃
     const ct = isSafeInt(row.content_type) ? row.content_type : null
     const isTextType = ct === 0 || ct === 2
+    const isSystem = ct !== null && CONFIRMED_SYSTEM_TYPES.includes(ct)
+    const isMarkdown = ct === 80 && typeof row.text === 'string' && row.text.length > 0
     const msg: NormalizedMessage = {
       msg_id: row.message_id,
       sender_id: typeof row.sender_id === 'string' ? row.sender_id : null,
       sender_name: typeof row.sender_name === 'string' ? row.sender_name : null,
       sender_platform: row.sender_platform === 'wechat' || row.sender_platform === 'wecom' ? row.sender_platform : 'unknown',
-      side: row.sender_id === selfUserId ? 'self' : 'peer', // 严格相等不 trim；非字符串 → peer
-      text: isTextType ? (typeof row.text === 'string' ? row.text : '') : placeholder,
+      side: isSystem ? 'timeline' : row.sender_id === selfUserId ? 'self' : 'peer',
+      text: readableMessageText(row, placeholder),
       time: formatTimestamp(row.send_time),
       parse_trusted: row.trusted === true,
     }
     if (typeof row.server_id === 'string' && row.server_id.length > 0) msg.server_id = row.server_id
-    if (isTextType) msg.kind = 'text' // 其余类型 kind 省略（占位语义，设计 §4.1）
-    if (ct !== null && !isParticipating(ct)) msg.system = true
+    if (isTextType || isMarkdown) msg.kind = 'text'
+    if (isMarkdown) msg.text_format = 'markdown'
+    if (isSystem) {
+      msg.kind = 'system'
+      msg.system = true
+    }
     out.push(msg)
   }
   out.sort((a, b) => {

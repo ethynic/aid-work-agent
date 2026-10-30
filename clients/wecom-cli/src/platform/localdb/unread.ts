@@ -36,7 +36,7 @@ import { readLocalState, writeLocalState, type LocalDbState } from './matrix.js'
 import { runLocaldbPy } from './driver.js'
 import { logLocaldbEvent } from './log.js'
 import { checkCancelled, type CurrentAccount } from './identity.js'
-import { formatTimestamp, NON_TEXT_PLACEHOLDER } from './messages.js'
+import { formatTimestamp, NON_TEXT_PLACEHOLDER, readableMessageText } from './messages.js'
 import type { LocaldbReadDeps } from './readSession.js'
 import { hasExternalWechatHint } from './contactScope.js'
 
@@ -89,9 +89,7 @@ const PREVIEW_MAX_CHARS = 100
 
 /** 待回复行的正文预览：文本类型取 py 提取正文，其余类型占位（与 C9b 占位语义一致） */
 function previewText(row: Record<string, unknown>): string {
-  const ct = row.content_type
-  const isText = ct === 0 || ct === 2
-  const text = isText && typeof row.text === 'string' && row.text.length > 0 ? row.text : NON_TEXT_PLACEHOLDER
+  const text = readableMessageText(row) || NON_TEXT_PLACEHOLDER
   return text.length > PREVIEW_MAX_CHARS ? text.slice(0, PREVIEW_MAX_CHARS) + '…' : text
 }
 
