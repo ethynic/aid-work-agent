@@ -378,11 +378,29 @@ class NotificationRepository:
         return {'scope': 'kf_config', 'kf_config_ids': list(dict.fromkeys(ids))}
 
     def _validate_rule_kf_configs(self, cursor, tenant_id, conditions):
-        """kf_config 层条件逐个校验客服账号归属本租户（tenant_channel_configs）。"""
-        for config_id in conditions.get('kf_config_ids', ()):
-            cursor.execute('SELECT 1 FROM tenant_channel_configs WHERE config_id=%s AND tenant_id=%s',
-                           (config_id, tenant_id))
-            if not cursor.fetchone():
+        """kf_config 层条件逐个校验归属本租户：允许渠道 config_id（渠道层，
+        存量语义）或该租户 wecom_kf 渠道 config JSON 内的客服账号 open_kfid
+        （账号级）。"""
+        ids = conditions.get('kf_config_ids', ())
+        cursor.execute("SELECT config_id, config FROM tenant_channel_configs"
+                       " WHERE tenant_id=%s AND channel_type='wecom_kf'", (tenant_id,))
+        valid_ids = set()
+        for row in cursor.fetchall():
+            valid_ids.add(row['config_id'])
+            try:
+                config = json.loads(row['config']) if isinstance(row['config'], str) else (row['config'] or {})
+            except (TypeError, ValueError):
+                continue
+            kf_account = (config or {}).get('kf_account')
+            if not isinstance(kf_account, list):
+                continue
+            for kf in kf_account:
+                if isinstance(kf, dict):
+                    open_kfid = kf.get('open_kfid')
+                    if open_kfid:
+                        valid_ids.add(open_kfid)
+        for config_id in ids:
+            if config_id not in valid_ids:
                 raise NotificationError('NOTIFICATION_KF_CONFIG_INVALID', 400)
 
     def _admin_rule(self, cursor, subject, rule_id, for_update=False):
@@ -521,8 +539,10 @@ class NotificationRepository:
 
     def register_rule_target(self, subject, body):
         """规则级外发目标登记（设计 §10）：installation_ref 服务端生成
-        （允许同 provider 多个 active）；同 digest 已被其他规则的 active
-        目标占用时 409（旧默认渠道行 rule_id IS NULL 允许接管改绑）。"""
+        （允许同 provider 多个 active）。同一地址允许挂到多条规则（多账号
+        通知同一群）：行选取优先本规则已有行（幂等/换配置/复活），其次
+        接管旧默认渠道行（rule_id IS NULL，概念已移除），否则新插一行；
+        不再因其他规则占用同一 digest 而 409。"""
         from .contracts import TENANT_CHANNEL_PROVIDERS
         if body.provider not in TENANT_CHANNEL_PROVIDERS.get(body.channel, frozenset()):
             raise NotificationError('NOTIFICATION_PROVIDER_UNAVAILABLE', 503)
@@ -542,23 +562,27 @@ class NotificationRepository:
                 raise NotificationError('NOTIFICATION_RULE_NOT_FOUND', 404)
             cursor.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
                            ('notification:target:'+body.provider+':'+digest,))
-            # 同 digest 优先 active 行；非 active（撤销态）允许复活到本规则；
-            # 旧默认渠道行（rule_id IS NULL，概念已移除）允许被规则登记接管改绑
+            # 行选取：本规则已有行（active 优先）→ 幂等登记/换配置/复活；
+            # 否则旧默认渠道行（rule_id IS NULL）接管改绑（设计 §10 承诺）；
+            # 否则新插一行（同 digest 多规则各行独立投递）
             cursor.execute('''SELECT * FROM notification_targets WHERE provider=%s AND identity_digest=%s
-                AND scope_key=%s ORDER BY CASE WHEN state='active' THEN 0 ELSE 1 END,
-                updated_at DESC FOR UPDATE''', (body.provider, digest, subject.scope_key))
-            endpoint = cursor.fetchone()
-            if (endpoint and endpoint['state'] == 'active'
-                    and endpoint['rule_id'] is not None and endpoint['rule_id'] != body.rule_id):
-                raise NotificationError('NOTIFICATION_TARGET_OWNED', 409)
-            row = endpoint
+                AND scope_key=%s AND rule_id=%s
+                ORDER BY CASE WHEN state='active' THEN 0 ELSE 1 END,
+                updated_at DESC LIMIT 1 FOR UPDATE''',
+                (body.provider, digest, subject.scope_key, body.rule_id))
+            row = cursor.fetchone()
+            if row is None:
+                cursor.execute('''SELECT * FROM notification_targets WHERE provider=%s AND identity_digest=%s
+                    AND scope_key=%s AND rule_id IS NULL AND state='active'
+                    ORDER BY updated_at DESC LIMIT 1 FOR UPDATE''',
+                    (body.provider, digest, subject.scope_key))
+                row = cursor.fetchone()
             if row:
                 active = row['state'] == 'active'
                 if body.expected_binding_version is not None and body.expected_binding_version != row['binding_version']:
                     raise NotificationError('NOTIFICATION_BINDING_CHANGED', 409)
-                # expected_binding_version 未传时允许接管/幂等登记：active 的旧默认渠道行
-                # （rule_id IS NULL）由规则登记改绑（设计 §10 承诺），同规则重复添加同一
-                # webhook 走无变更更新。阻断会出现「又删又加必报绑定冲突」的回归。
+                # expected_binding_version 未传时允许接管/幂等登记/复活：
+                # 阻断会出现「又删又加必报绑定冲突」的回归。
                 old = unprotect(row['configuration_encrypted'])
                 changed = old != configuration or not active
                 cursor.execute('''UPDATE notification_targets SET configuration_encrypted=%s,
@@ -868,9 +892,12 @@ class NotificationRepository:
         for rule in rules:
             conditions = rule['conditions'] if isinstance(rule['conditions'], dict) else {}
             if conditions.get('scope') == 'kf_config':
-                # 客服账号层规则：事件 kf_config_id 命中账号列表才展开；渠道层
-                # （scope=channel）与无条件规则全量命中
-                if params.get('kf_config_id') not in (conditions.get('kf_config_ids') or []):
+                # kf_config 层规则：事件 kf_config_id（渠道级，存量条件）或
+                # open_kfid（账号级）命中 ID 列表才展开；渠道层（scope=channel）
+                # 与无条件规则全量命中
+                ids = conditions.get('kf_config_ids') or []
+                if (params.get('kf_config_id') not in ids
+                        and params.get('open_kfid') not in ids):
                     continue
             recipients = self._resolve_rule_recipients(cursor, rule['recipient_mode'], tenant_id, params)
             recipient_ids = []

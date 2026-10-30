@@ -247,7 +247,7 @@
                     <span class="text-xs text-muted">引流 {{ acc.referral_count }} 人</span>
                   </div>
                   <div class="flex items-center gap-1 flex-shrink-0">
-                    <BaseButton intent="ghost" size="sm" @click="goNotificationRules('kf_config')">通知规则</BaseButton>
+                    <BaseButton intent="ghost" size="sm" @click="goNotificationRules('kf_config', acc.open_kfid)">通知规则</BaseButton>
                     <BaseButton intent="ghost" size="sm" @click="viewKfQr({ config_id: editingId }, acc)">二维码</BaseButton>
                     <BaseButton intent="ghost" size="sm" @click="openKfAccountEdit({ config_id: editingId }, acc)">编辑</BaseButton>
                     <BaseButton intent="danger-ghost" size="sm" @click="handleDeleteKfAccount({ config_id: editingId }, acc)">删除</BaseButton>
@@ -857,13 +857,14 @@ function tenantUserName(userId: string | null | undefined): string {
   return u.nickname || u.username || u.phone || userId
 }
 
-// 客户留资通知规则深链：channel=渠道层（全部客服账号）；kf_config=当前客服账号层
-function goNotificationRules(scope: 'channel' | 'kf_config') {
+// 客户留资通知规则深链（新开页）：channel=渠道层（全部客服账号）；kf_config=指定客服账号（open_kfid）
+function goNotificationRules(scope: 'channel' | 'kf_config', openKfid?: string) {
   const tenantId = route.params.tenant_id as string
   const query: Record<string, string> = { event_type: 'lead.captured' }
-  if (scope === 'kf_config') query.kf_config = editingId.value || ''
+  if (scope === 'kf_config') query.kf_config = openKfid || ''
   else query.scope = 'channel'
-  router.push({ path: `/t/${tenantId}/notification-rules`, query })
+  const { href } = router.resolve({ path: `/t/${tenantId}/notification-rules`, query })
+  window.open(href, '_blank')
 }
 
 async function loadTenantUsers() {

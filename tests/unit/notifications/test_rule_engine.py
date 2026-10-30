@@ -1,5 +1,6 @@
 """通知规则引擎（设计 v0.3）：事件级消息展开、两层规则匹配、接收人展开、
 外发目标去重、billing 规则门控、预置规则惰性补插、规则 CRUD 边界。"""
+import json
 from contextlib import contextmanager
 from datetime import datetime
 from unittest.mock import MagicMock
@@ -42,7 +43,8 @@ def lead_params(**over):
     params = {'lead_id': 'lead1', 'contact_method': 'phone',
               'contact_summary': '手机号 13800000000、邮箱 a@b.com',
               'contact_name': '张三', 'demand_summary': '咨询报价',
-              'kf_config_id': 'chan_a', 'kf_account_name': '售前客服',
+              'kf_config_id': 'chan_a', 'open_kfid': '',
+              'kf_account_name': '售前客服',
               'assignee_user_id': 'emp1', 'assignee_name': '李四',
               'previous_captured_at': ''}
     params.update(over)
@@ -185,6 +187,39 @@ class TestExpandRuleEvent:
         # 每条规则只投递自己的规则级目标（默认渠道概念已移除）
         assert state['deliveries'] == 2
 
+    def test_kf_config_rule_matches_by_open_kfid(self):
+        rule = rule_row(rule_id='rule_kf', conditions={'scope': 'kf_config',
+                                                       'kf_config_ids': ['wk_acc1']})
+        message = rule_event_message(
+            parameters_encrypted=protected(lead_params(open_kfid='wk_acc1')))
+        state = run_rule_expand(
+            [message], rules=[rule],
+            assignee_row={'user_id': 'emp1'}, target_pages=[[target_row()]])
+        assert state['recipient_messages'] == 1
+        assert state['deliveries'] == 1
+
+    def test_kf_config_rule_skips_other_open_kfid(self):
+        rule = rule_row(rule_id='rule_kf', conditions={'scope': 'kf_config',
+                                                       'kf_config_ids': ['wk_acc2']})
+        message = rule_event_message(
+            parameters_encrypted=protected(lead_params(open_kfid='wk_acc1')))
+        state = run_rule_expand([message], rules=[rule],
+                                assignee_row={'user_id': 'emp1'})
+        assert state['recipient_messages'] == 0
+        assert state['deliveries'] == 0
+
+    def test_legacy_channel_condition_matches_despite_open_kfid(self):
+        # 存量条件存渠道 config_id：事件携带 open_kfid 后仍按 kf_config_id 命中
+        rule = rule_row(rule_id='rule_kf', conditions={'scope': 'kf_config',
+                                                       'kf_config_ids': ['chan_a']})
+        message = rule_event_message(
+            parameters_encrypted=protected(lead_params(open_kfid='wk_acc1')))
+        state = run_rule_expand(
+            [message], rules=[rule],
+            assignee_row={'user_id': 'emp1'}, target_pages=[[target_row()]])
+        assert state['recipient_messages'] == 1
+        assert state['deliveries'] == 1
+
     def test_expired_message_not_expanded(self):
         message = rule_event_message(expires_at=NOW)
         state = run_rule_expand([message], rules=[rule_row()],
@@ -302,6 +337,24 @@ class TestLeadCapturedContract:
             'contact_summary': '手机号 13800000000', 'kf_config_id': 'chan_a',
             'kf_account_name': '售前客服'})
         assert params.contact_name == '' and params.assignee_user_id == ''
+        assert params.open_kfid == ''
+
+    def test_producer_sets_open_kfid(self, monkeypatch):
+        from src.notifications import lead_producer
+        captured = {}
+
+        def fake_publish(cursor, **kwargs):
+            captured.update(kwargs)
+            return 'ref1'
+
+        monkeypatch.setattr(lead_producer, 'publish_event_in_tx', fake_publish)
+        lead_producer.publish_lead_captured_in_tx(
+            MagicMock(),
+            {'tenant_id': T1, 'lead_id': 'lead1', 'contact_method': 'phone',
+             'contact_summary': '手机号 13800000000', 'channel_chat_id': 'wk_acc1'},
+            kf_config_id='chan_a')
+        assert captured['parameters']['open_kfid'] == 'wk_acc1'
+        assert captured['parameters']['kf_config_id'] == 'chan_a'
 
     def test_publish_event_in_tx_rejects_unknown_event(self):
         cursor = MagicMock()
@@ -379,6 +432,45 @@ class TestRuleConditionsValidation:
     def test_lead_default_scope_is_channel(self):
         assert NotificationRepository._validate_rule_conditions(
             'lead.captured', {}) == {'scope': 'channel'}
+
+
+class TestKfConfigOwnershipValidation:
+    """kf_config 层条件归属校验：渠道 config_id（存量语义）与客服账号
+    open_kfid（账号级）均需归属本租户。"""
+
+    @staticmethod
+    def _cursor_with_configs(rows):
+        cursor = MagicMock()
+        cursor.fetchall = lambda: rows
+        return cursor
+
+    def test_channel_config_id_accepted(self):
+        cursor = self._cursor_with_configs(
+            [{'config_id': 'chan_a', 'config': json.dumps({'kf_account': []})}])
+        NotificationRepository._validate_rule_kf_configs(
+            make_repo(), cursor, T1, {'kf_config_ids': ['chan_a']})
+
+    def test_open_kfid_accepted(self):
+        cursor = self._cursor_with_configs(
+            [{'config_id': 'chan_a',
+              'config': json.dumps({'kf_account': [{'open_kfid': 'wk_acc1'}]})}])
+        NotificationRepository._validate_rule_kf_configs(
+            make_repo(), cursor, T1, {'kf_config_ids': ['wk_acc1']})
+
+    def test_foreign_open_kfid_rejected(self):
+        cursor = self._cursor_with_configs(
+            [{'config_id': 'chan_a',
+              'config': json.dumps({'kf_account': [{'open_kfid': 'wk_acc1'}]})}])
+        with pytest.raises(NotificationError, match='NOTIFICATION_KF_CONFIG_INVALID'):
+            NotificationRepository._validate_rule_kf_configs(
+                make_repo(), cursor, T1, {'kf_config_ids': ['wk_other']})
+
+    def test_corrupt_config_rejected(self):
+        cursor = self._cursor_with_configs(
+            [{'config_id': 'chan_a', 'config': 'not-json'}])
+        with pytest.raises(NotificationError, match='NOTIFICATION_KF_CONFIG_INVALID'):
+            NotificationRepository._validate_rule_kf_configs(
+                make_repo(), cursor, T1, {'kf_config_ids': ['wk_acc1']})
 
 
 class TestDeleteRule:

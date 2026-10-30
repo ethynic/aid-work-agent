@@ -22,6 +22,7 @@ _CLIP_LIMITS = {
     'demand_summary': 1000,
     'kf_account_name': 128,
     'assignee_name': 128,
+    'open_kfid': 64,
 }
 
 
@@ -60,6 +61,9 @@ def publish_lead_captured_in_tx(cursor, record, *, kf_config_id, previous_captur
         # kf_config_id 缺失时退化为 open_kfid（channel 层规则不受影响，
         # kf_config 层规则按 ID 不匹配自然跳过）
         'kf_config_id': kf_config_id or record.get('channel_chat_id') or '',
+        # 客服账号级规则匹配依据（渠道级 kf_config_id 保留渠道层语义，
+        # 存量条件兼容两层）
+        'open_kfid': record.get('channel_chat_id') or '',
         'kf_account_name': record.get('kf_account_name') or '',
         'assignee_user_id': record.get('assigned_to') or '',
         'assignee_name': record.get('assignee_name') or '',

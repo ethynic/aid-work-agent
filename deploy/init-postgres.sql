@@ -5471,7 +5471,7 @@ CREATE TABLE IF NOT EXISTS notification_targets (
     verified_at TIMESTAMPTZ DEFAULT clock_timestamp(),
     created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
     updated_at TIMESTAMPTZ DEFAULT clock_timestamp(),
-    CONSTRAINT notification_target_identity UNIQUE(provider,identity_digest,scope_key),
+    CONSTRAINT notification_target_identity UNIQUE(provider,identity_digest,scope_key,rule_id),
     CONSTRAINT notification_target_scope CHECK (
         (tenant_id IS NULL AND scope_key='global') OR
         (tenant_id IS NOT NULL AND scope_key='tenant:' || tenant_id)),

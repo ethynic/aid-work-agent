@@ -4410,3 +4410,8 @@
             AND state IN ('succeeded','unknown') AND tool_name IN ('wecom_read_session','wecom_read_sessions')
             AND result_json->'_wecom_inbound'->>'version'='1'
             AND jsonb_array_length(result_json->'_wecom_inbound'->'pending')>0;
+- datetime: "2026-10-30 11:20:00"
+  remark: "通知规则放开同 webhook 挂多条规则（多客服账号通知同一群）：notification_targets 端点唯一约束放宽为含 rule_id，同 digest 不同规则各行独立投递"
+  statements: |
+    ALTER TABLE notification_targets DROP CONSTRAINT IF EXISTS notification_target_identity;
+    ALTER TABLE notification_targets ADD CONSTRAINT notification_target_identity UNIQUE(provider, identity_digest, scope_key, rule_id);

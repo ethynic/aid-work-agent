@@ -128,6 +128,7 @@ class LeadCapturedParameters(StrictDTO):
     contact_name: str = Field(default='', max_length=128)
     demand_summary: str = Field(default='', max_length=1000)
     kf_config_id: str = Field(min_length=1, max_length=64)
+    open_kfid: str = Field(default='', max_length=64)
     kf_account_name: str = Field(min_length=1, max_length=128)
     assignee_user_id: str = Field(default='', max_length=64)
     assignee_name: str = Field(default='', max_length=128)

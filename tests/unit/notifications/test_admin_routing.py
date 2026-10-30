@@ -233,6 +233,123 @@ class TestRegisterRuleTarget:
             repo.register_rule_target(Subject('p1', None), Body())
 
 
+class TestRegisterRuleTargetMultiRule:
+    """同 webhook 挂多条规则（2026-10-30 放开）：本规则已有行幂等/复活优先，
+    其次接管 rule_id IS NULL 旧默认渠道行，否则新插行；不再因其他规则
+    占用同一 digest 而 409。"""
+
+    WEBHOOK = {'webhook_url': 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=x'}
+
+    def _target_row(self, rule_id, state='active', configuration=None):
+        return {'target_id': 'target_x', 'scope_key': 'tenant:t1', 'tenant_id': 't1',
+                'recipient_user_id': None, 'channel': 'im_webhook', 'provider': 'feishu_bot',
+                'installation_ref': 'inst1', 'identity_digest': 'digest1',
+                'configuration_encrypted': protected(
+                    configuration if configuration is not None else {'webhook_url': 'https://old.example.com/1'}),
+                'rule_id': rule_id, 'state': state, 'binding_version': 5,
+                'target_schema_version': 1, 'enabled_since': datetime(2026, 1, 1),
+                'verified_at': datetime(2026, 1, 1), 'created_at': datetime(2026, 1, 1),
+                'updated_at': datetime(2026, 1, 1)}
+
+    def _run_register(self, rule_id='rule_1', own_row=None, null_row=None):
+        class DigestAdapter(StubAdapter):
+            def validate_target(self, configuration):
+                return 'digest1'
+
+        repo = NotificationRepository.__new__(NotificationRepository)
+        repo.config = NotificationsConfig()
+        registry = MagicMock()
+        registry.get.return_value = DigestAdapter()
+        repo.registry = registry
+
+        webhook = dict(self.WEBHOOK)
+
+        class Configuration:
+            @staticmethod
+            def model_dump():
+                return dict(webhook)
+
+        body_rule_id = rule_id
+
+        class Body:
+            channel = 'im_webhook'
+            provider = 'feishu_bot'
+            rule_id = body_rule_id
+            expected_binding_version = None
+            configuration = Configuration()
+
+        executed = {'update': 0, 'insert': 0, 'update_rule_id': None,
+                    'update_changed': None, 'update_state_active': False}
+        cursor = MagicMock()
+
+        def execute_dispatch(sql, params=None):
+            if 'FROM users' in sql:
+                cursor.fetchone = lambda: {'user_id': 'admin1', 'tenant_id': 't1',
+                                           'role': 'tenant_admin', 'status': 'active'}
+            elif "FROM tenants WHERE tenant_id=%s AND status='active'" in sql:
+                cursor.fetchone = lambda: {'ok': 1}
+            elif 'FROM notification_rules' in sql:
+                cursor.fetchone = lambda: {'rule_id': rule_id, 'tenant_id': 't1'}
+            elif 'rule_id IS NULL' in sql:
+                cursor.fetchone = (lambda: null_row) if null_row is not None else (lambda: None)
+            elif 'FROM notification_targets' in sql:
+                cursor.fetchone = (lambda: own_row) if own_row is not None else (lambda: None)
+            elif 'UPDATE notification_targets' in sql:
+                executed['update'] += 1
+                executed['update_rule_id'] = params[2]
+                executed['update_changed'] = params[3]
+                executed['update_state_active'] = "state='active'" in sql
+                cursor.fetchone = lambda: {
+                    'target_id': 'target_x', 'installation_ref': 'inst1',
+                    'binding_version': 6, 'state': 'active',
+                    'enabled_since': datetime(2026, 1, 1), 'channel': 'im_webhook',
+                    'provider': 'feishu_bot', 'rule_id': rule_id}
+            elif 'INSERT INTO notification_targets' in sql:
+                executed['insert'] += 1
+                cursor.fetchone = lambda: {
+                    'target_id': 'target_new', 'installation_ref': 'inst_new',
+                    'binding_version': 1, 'state': 'active',
+                    'enabled_since': datetime(2026, 1, 1), 'channel': 'im_webhook',
+                    'provider': 'feishu_bot', 'rule_id': rule_id}
+
+        cursor.execute.side_effect = execute_dispatch
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+
+        @contextmanager
+        def factory():
+            yield conn
+
+        repo.connection_factory = factory
+        result = repo.register_rule_target(Subject('admin1', 't1'), Body())
+        return result, executed
+
+    def test_second_rule_same_webhook_inserts_new_row(self):
+        _, executed = self._run_register(rule_id='rule_2', own_row=None, null_row=None)
+        assert executed['insert'] == 1
+        assert executed['update'] == 0
+
+    def test_same_rule_readd_updates_in_place(self):
+        _, executed = self._run_register(
+            rule_id='rule_1', own_row=self._target_row('rule_1', configuration=self.WEBHOOK))
+        assert executed['update'] == 1
+        assert executed['insert'] == 0
+        assert executed['update_changed'] == 0
+
+    def test_same_rule_revoked_row_revived(self):
+        _, executed = self._run_register(
+            rule_id='rule_1', own_row=self._target_row('rule_1', state='revoked'))
+        assert executed['update'] == 1
+        assert executed['update_changed'] == 1
+        assert executed['update_state_active']
+
+    def test_legacy_null_row_taken_over(self):
+        _, executed = self._run_register(
+            rule_id='rule_1', own_row=None, null_row=self._target_row(None))
+        assert executed['update'] == 1
+        assert executed['update_rule_id'] == 'rule_1'
+
+
 class TestPrepareSendTenantTarget:
     """prepare_send 租户级 target scope 校验：global 兜底副本按事件归属租户放行（fail-closed）。"""
 

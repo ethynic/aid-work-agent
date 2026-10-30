@@ -102,7 +102,7 @@
           <div class="grid grid-cols-2 gap-2">
             <button
               type="button"
-              @click="form.scope = 'channel'; form.kf_config_ids = []"
+              @click="form.scope = 'channel'; form.kf_config_id = ''"
               :class="[
                 'px-3 py-2 rounded-lg border text-sm transition-colors text-left',
                 form.scope === 'channel'
@@ -132,22 +132,12 @@
               客服账号（来自渠道配置的微信客服）<span class="text-danger-500">*</span>
             </label>
             <div v-if="kfConfigOptions.length === 0" class="text-xs text-muted py-2">
-              暂无微信客服渠道配置，请先到「渠道接入」添加
+              暂无微信客服账号，请先到「渠道接入」添加
             </div>
-            <div v-else class="space-y-1 max-h-40 overflow-y-auto border border-default rounded-lg p-2">
-              <label
-                v-for="opt in kfConfigOptions" :key="opt.value"
-                class="flex items-center gap-2 text-sm text-default cursor-pointer py-1"
-              >
-                <input
-                  type="checkbox"
-                  :value="opt.value"
-                  v-model="form.kf_config_ids"
-                  class="w-3.5 h-3.5 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
-                />
-                {{ opt.label }}
-              </label>
-            </div>
+            <BaseSelect v-else v-model="form.kf_config_id">
+              <option value="">请选择客服账号</option>
+              <option v-for="opt in kfSelectOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+            </BaseSelect>
           </div>
         </div>
         <div v-else-if="form.event_type" class="text-xs text-muted">
@@ -182,7 +172,7 @@
             <BaseButton v-if="!addingTarget" size="sm" intent="secondary" @click="startAddingTarget">添加目标</BaseButton>
           </div>
           <p class="text-xs text-muted mb-3">
-            仅该规则命中的事件投递到这些目标（群机器人 / 邮箱）；不配置则仅发站内信。同一地址在同一租户只能挂在一条规则下。
+            仅该规则命中的事件投递到这些目标（群机器人 / 邮箱）；不配置则仅发站内信。同一地址可挂到多条规则（同一事件命中多条规则时会各通知一次）。
           </p>
 
           <!-- 编辑模式：已保存目标 -->
@@ -319,7 +309,7 @@ import {
   type NotificationRule,
   type TenantTarget,
 } from '@/api/notifications'
-import { listChannels } from '@/api/saasTenant'
+import { listChannels, listKfAccounts } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useToast } from 'vue-toastification'
 
@@ -396,6 +386,19 @@ const saving = ref(false)
 const rules = ref<NotificationRule[]>([])
 const allTargets = ref<TenantTarget[]>([])
 const kfConfigOptions = ref<{ value: string; label: string }[]>([])
+const channelNameMap = ref<Record<string, string>>({})
+
+// 编辑存量规则回显：条件 ID 不在当前账号选项（已删除账号/存量渠道层 config_id）
+// 时注入临时选项，避免下拉框视觉空白
+const kfSelectOptions = computed(() => {
+  const opts = [...kfConfigOptions.value]
+  const current = form.kf_config_id
+  if (current && !opts.some((o) => o.value === current)) {
+    const ch = channelNameMap.value[current]
+    opts.unshift({ value: current, label: ch ? `微信客服渠道：${ch}` : `${current}（已失效）` })
+  }
+  return opts
+})
 
 const showModal = ref(false)
 const editing = ref<NotificationRule | null>(null)
@@ -413,7 +416,7 @@ const form = reactive({
   name: '',
   event_type: 'lead.captured',
   scope: 'channel' as 'channel' | 'kf_config',
-  kf_config_ids: [] as string[],
+  kf_config_id: '',
   recipient_mode: 'kf_assignee' as 'kf_assignee' | 'tenant_admins',
   enabled: true,
 })
@@ -476,8 +479,13 @@ function conditionLabel(rule: NotificationRule): string {
   const c = rule.conditions || {}
   if (rule.event_type !== 'lead.captured') return '全部（租户级）'
   if (c.scope === 'kf_config' && (c.kf_config_ids || []).length > 0) {
-    const names = c.kf_config_ids!.map(
-      (id) => kfConfigOptions.value.find((o) => o.value === id)?.label || id)
+    const names = c.kf_config_ids!.map((id) => {
+      const acc = kfConfigOptions.value.find((o) => o.value === id)
+      if (acc) return acc.label
+      // 存量渠道层条件（config_id）：显示渠道名
+      const ch = channelNameMap.value[id]
+      return ch ? `微信客服渠道：${ch}` : id
+    })
     return `客服账号：${names.join('、')}`
   }
   return '全部客服账号'
@@ -530,12 +538,19 @@ async function loadData() {
 
 async function loadKfConfigs() {
   try {
-    const res = await listChannels()
-    kfConfigOptions.value = (res.channels || [])
-      .filter((c: any) => c.channel_type === 'wecom_kf')
-      .map((c: any) => ({ value: c.config_id, label: c.name || c.config_id }))
+    const [accountsRes, channelsRes] = await Promise.all([
+      listKfAccounts().catch(() => null),
+      listChannels().catch(() => null),
+    ])
+    const channels = channelsRes?.channels || []
+    channelNameMap.value = {}
+    for (const c of channels) channelNameMap.value[c.config_id] = c.name || c.config_id
+    kfConfigOptions.value = (accountsRes?.accounts || []).map((acc: any) => ({
+      value: acc.open_kfid,
+      label: `${acc.name || acc.open_kfid}（${channelNameMap.value[acc.config_id] || acc.config_id}）`,
+    }))
   } catch {
-    // 渠道列表加载失败不阻断页面，客服账号层选项显示为空并提示
+    // 账号列表加载失败不阻断页面，客服账号层选项显示为空并提示
   }
 }
 
@@ -543,7 +558,7 @@ function resetForm() {
   form.name = ''
   form.event_type = 'lead.captured'
   form.scope = 'channel'
-  form.kf_config_ids = []
+  form.kf_config_id = ''
   form.recipient_mode = 'kf_assignee'
   form.enabled = true
 }
@@ -559,7 +574,7 @@ function openCreate() {
   if (kf) {
     form.event_type = form.event_type || 'lead.captured'
     form.scope = 'kf_config'
-    form.kf_config_ids = [kf]
+    form.kf_config_id = kf
   } else if ((route.query.scope as string) === 'channel') {
     form.scope = 'channel'
   }
@@ -575,7 +590,8 @@ function openEdit(rule: NotificationRule) {
   form.event_type = rule.event_type
   const c = rule.conditions || {}
   form.scope = c.scope === 'kf_config' ? 'kf_config' : 'channel'
-  form.kf_config_ids = [...(c.kf_config_ids || [])]
+  // 存量多账号条件编辑保存后收敛为第一个（编辑弹框为单选下拉）
+  form.kf_config_id = (c.kf_config_ids || [])[0] || ''
   form.recipient_mode = rule.recipient_mode
   form.enabled = rule.enabled
   message.value = ''
@@ -589,7 +605,7 @@ function openEdit(rule: NotificationRule) {
 function buildConditions(): NotificationRule['conditions'] {
   if (form.event_type !== 'lead.captured') return {}
   if (form.scope === 'kf_config') {
-    return { scope: 'kf_config', kf_config_ids: [...form.kf_config_ids] }
+    return { scope: 'kf_config', kf_config_ids: form.kf_config_id ? [form.kf_config_id] : [] }
   }
   return { scope: 'channel' }
 }
@@ -601,8 +617,8 @@ async function handleSave() {
     messageType.value = 'error'
     return
   }
-  if (form.event_type === 'lead.captured' && form.scope === 'kf_config' && form.kf_config_ids.length === 0) {
-    message.value = '请至少选择一个客服账号'
+  if (form.event_type === 'lead.captured' && form.scope === 'kf_config' && !form.kf_config_id) {
+    message.value = '请选择客服账号'
     messageType.value = 'error'
     return
   }
