@@ -158,7 +158,8 @@
                 <!-- 下载文件卡片（复用聊天页 DownloadFileCard，评审：agent 生成的附件不可下载） -->
                 <div v-if="executionDownloadableFiles(row).length" class="space-y-2">
                   <p class="text-xs text-gray-400">生成文件（点击下载）</p>
-                  <DownloadFileCard v-for="file in executionDownloadableFiles(row)" :key="file.file_id" :file="file" />
+                  <!-- download-only：本页未挂载 AttachmentPreviewPanel，图片/Office 一律直接下载 -->
+                  <DownloadFileCard v-for="file in executionDownloadableFiles(row)" :key="file.file_id" :file="file" download-only />
                 </div>
                 <details v-if="executionProgress(row).length" class="text-sm">
                   <summary class="cursor-pointer select-none text-xs text-gray-500">执行过程（{{ executionProgress(row).length }} 步）</summary>

@@ -146,6 +146,38 @@ describe('DownloadFileCard 点击行为', () => {
     })
   })
 
+  it('图片默认（聊天页）走预览分支', () => {
+    const wrapper = mount(DownloadFileCard, { props: { file: makeFile({ file_id: 'file_img', file_name: '图表.png', mime_type: 'image/png', file_size: 40960 }) } })
+    expect(isPreviewVariant(wrapper)).toBe(true)
+  })
+})
+
+describe('DownloadFileCard.downloadOnly —— 无预览面板页面强制下载（任务视图）', () => {
+  beforeEach(() => closePreview())
+
+  it('downloadOnly 图片不再走预览分支（渲染下载图标）', () => {
+    const wrapper = mount(DownloadFileCard, { props: { file: makeFile({ file_id: 'file_img_dl', file_name: '图表.png', mime_type: 'image/png', file_size: 40960 }), downloadOnly: true } })
+    expect(isPreviewVariant(wrapper)).toBe(false)
+  })
+
+  it('downloadOnly 小体积 xlsx 不再走预览分支', () => {
+    const wrapper = mount(DownloadFileCard, { props: { file: makeFile({ file_id: 'file_xlsx_dl', file_size: 5 * MB }), downloadOnly: true } })
+    expect(isPreviewVariant(wrapper)).toBe(false)
+  })
+
+  it('downloadOnly 点击不打开预览面板（直接进入下载路径）', async () => {
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    try {
+      const file = makeFile({ file_id: 'file_png_click', file_name: '图表.png', mime_type: 'image/png', file_size: 40960 })
+      const wrapper = mount(DownloadFileCard, { props: { file, downloadOnly: true } })
+      await wrapper.find('button').trigger('click')
+      expect(previewAttachment.value).toBeNull()
+      expect(clickSpy).toHaveBeenCalled()
+    } finally {
+      clickSpy.mockRestore()
+    }
+  })
+
   it('超限 Excel 点击直接下载，不打开面板', async () => {
     const file = makeFile({ file_id: 'file_oversize', file_name: '超大.xlsx', file_size: OFFICE_DOC_MAX_PREVIEW_BYTES })
     const wrapper = mount(DownloadFileCard, { props: { file } })

@@ -195,6 +195,7 @@
                     v-for="file in getDownloadableFiles(msg)"
                     :key="file.file_id"
                     :file="file"
+                    download-only
                   />
                 </div>
               </div>

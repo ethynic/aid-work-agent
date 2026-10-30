@@ -79,7 +79,9 @@ import { detectFileIconKind, type FileIconKind } from '@/utils/file'
 import FileTypeIcon from './FileTypeIcon.vue'
 import WechatDownloadGuide from './WechatDownloadGuide.vue'
 
-const props = defineProps<{ file: DownloadableFile }>()
+// downloadOnly：预览面板仅挂在聊天布局（ChatContainer）；任务视图等未挂载
+// 预览面板的页面必须传此属性，否则可预览类型点击会静默无响应
+const props = defineProps<{ file: DownloadableFile; downloadOnly?: boolean }>()
 
 const { openPreview } = useAttachmentPreview()
 const { resolver } = useReplyResources()
@@ -125,6 +127,7 @@ const mime = computed(() => props.file.mime_type || '')
 
 // 判断是否可预览（HTML、PDF、图片、Markdown、Office 三格式）
 const isPreviewable = computed(() => {
+  if (props.downloadOnly) return false
   if (['html', 'htm'].includes(ext.value) || mime.value === 'text/html') return true
   if (ext.value === 'pdf' || mime.value === 'application/pdf') return true
   if (mime.value.startsWith('image/') || ['png', 'jpg', 'jpeg', 'gif'].includes(ext.value)) return true
