@@ -391,3 +391,5 @@ W15/W16证据源见[WeCom既有计划](plan-wecom-cli-group-chat-experiment.md#w
 本轮与此前W11未跟踪交付目录、整包及sidecar已迁至仓库外`%LOCALAPPDATA%/AidWorkBuild/deliveries/`，验收JSON随交付保存，不纳入源码。新版整包SHA保持e73a5e942551f18917ab382da122bfa00aa40a079367cee7865c9879c46db57b；历史已跟踪手册/证据、运行配置及签名者不删除，不按扩展名批量清JSON。
 
 仅只读核验本地容器：原8000挂载当前master且开启src热重载；18000独立验收项目仍挂旧wecom工作树。主工作区未跟踪Compose副本移至仓库外本机归档，不加入正式配置；既有运行容器/卷/配对和旧工作树的实际Compose未改。Vite差异只是可选DEV_API_TARGET开发代理，默认仍8000，生产构建不使用server.proxy、不需新增生产env；该既有本地开发改动不随本次Runtime提交。日常开发继续使用原master本地环境，未来停用/切换额外容器另按明确指示操作。
+
+提交归属核对：本任务原暂存46个路径，在共享master工作区被另一并发提交`63bce640710f94e12e7b6289f3fb02d4de10bc0d`带入并已发布；其标题为scheduler任务，额外包含`frontend/web/components/scheduled/TaskPlanView.vue`。本任务46路径无遗漏，Runtime实际源码与S5已验收版本一致，但不能称这次形成了独立Runtime源码提交，也不把另一任务文件纳入本轮CR/验收结论。保留已发布历史，不重写或强推；随后仅对本计划补充提交归属说明，使用限定文件提交避免再次带入共享暂存内容。Vite、AGENTS及其他未提交任务仍保留原状，打包产物均不在提交中。
