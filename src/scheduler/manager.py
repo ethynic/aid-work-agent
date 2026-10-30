@@ -375,6 +375,39 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.error(f"后端日志：注册 log/temp 临时日志清理任务失败: {e}")
 
+        # ===== 追踪库保留清理（每日 01:30，obs_* 表均保留 30 天）=====
+        # init-postgres-logs.sql 的 TimescaleDB retention 策略从未生效（hypertable 化
+        # 被主键不含分区时间列阻断，异常被 DO 块吞掉），由本任务应用层分批删除兜底，
+        # 防止三个日志库（aid_work_logs/logs2/logs3）容量无限增长
+        try:
+            self._scheduler.add_job(
+                self._run_trace_retention_cleanup,
+                CronTrigger(hour=1, minute=30, timezone="Asia/Shanghai"),
+                id="job_system_trace_retention_cleanup",
+                name="Trace Retention Cleanup",
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("后端日志：已注册追踪库保留清理任务 (cron=01:30)")
+        except Exception as e:
+            logger.error(f"后端日志：注册追踪库保留清理任务失败: {e}")
+
+        # ===== 追踪库 VACUUM（每周日 05:30）=====
+        # 每日删除产生死元组，autovacuum 之外每周全表 VACUUM ANALYZE 一次，
+        # 保证空间复用与统计信息新鲜
+        try:
+            self._scheduler.add_job(
+                self._run_logs_db_vacuum,
+                CronTrigger(day_of_week="sun", hour=5, minute=30, timezone="Asia/Shanghai"),
+                id="job_system_logs_db_vacuum",
+                name="Logs DB Vacuum",
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("后端日志：已注册追踪库 VACUUM 任务 (cron=周日 05:30)")
+        except Exception as e:
+            logger.error(f"后端日志：注册追踪库 VACUUM 任务失败: {e}")
+
         # ===== 用户行为审计日志清理（每日 04:00）=====
         # 设计文档 docs/system/user-behavior-audit-log-design.md §6.2：
         # 按 behavior_log.retention_days（默认 180 天）分批删除过期日志，每批 1 万行避免长锁
@@ -832,6 +865,114 @@ class ScheduledTaskManager:
                 f"后端日志：log_error 错误日志清理失败（已删除 {total_deleted} 行）: {e}"
             )
             return total_deleted
+
+    # ===== 追踪库保留清理回调（同步，按 trace 分批删除避免长事务）=====
+    def _run_trace_retention_cleanup(self, retention_days: int = 30, score_retention_days: int = 30):
+        """删除追踪库超过保留期的 obs_traces/obs_spans/obs_scores（均 30 天）。
+
+        spans 与 traces 同事务写入（trace_persist._do_persist），无孤儿 span；
+        按 trace_id 分批：先删该批 spans（走 idx_obs_spans_trace）再删 traces。
+        多进程同时触发幂等；返回删除行数合计。
+        """
+        from src.db.database import LOGS_DATABASE_URL, _logs_connection_pool, get_logs_connection
+
+        if not LOGS_DATABASE_URL or _logs_connection_pool is None:
+            return 0
+
+        started_at = datetime.now()
+        batch_size = 1000
+        traces_deleted = 0
+        spans_deleted = 0
+        scores_deleted = 0
+        try:
+            while True:
+                with get_logs_connection() as cur:
+                    cur.execute(
+                        """
+                        SELECT trace_id FROM obs_traces
+                        WHERE created_at < NOW() - (%s * INTERVAL '1 day')
+                        LIMIT %s
+                        """,
+                        (retention_days, batch_size),
+                    )
+                    trace_ids = [row["trace_id"] for row in cur.fetchall()]
+                    if not trace_ids:
+                        break
+                    cur.execute("DELETE FROM obs_spans WHERE trace_id = ANY(%s)", (trace_ids,))
+                    spans_deleted += cur.rowcount
+                    cur.execute("DELETE FROM obs_traces WHERE trace_id = ANY(%s)", (trace_ids,))
+                    traces_deleted += cur.rowcount
+                    cur.commit()
+                if len(trace_ids) < batch_size:
+                    break
+
+            # obs_scores 行数极小，直接按 created_at 分批删除
+            while True:
+                with get_logs_connection() as cur:
+                    cur.execute(
+                        """
+                        DELETE FROM obs_scores
+                        WHERE id IN (
+                            SELECT id FROM obs_scores
+                            WHERE created_at < NOW() - (%s * INTERVAL '1 day')
+                            LIMIT %s
+                        )
+                        """,
+                        (score_retention_days, batch_size),
+                    )
+                    deleted = cur.rowcount
+                    scores_deleted += deleted
+                    cur.commit()
+                if deleted < batch_size:
+                    break
+
+            elapsed = (datetime.now() - started_at).total_seconds()
+            if traces_deleted or spans_deleted or scores_deleted:
+                logger.info(
+                    f"后端日志：追踪库保留清理完成，删除 obs_traces {traces_deleted} 行、"
+                    f"obs_spans {spans_deleted} 行、obs_scores {scores_deleted} 行"
+                    f"（保留 {retention_days}/{score_retention_days} 天），耗时 {elapsed:.1f}s"
+                )
+            return traces_deleted + spans_deleted + scores_deleted
+        except Exception as e:
+            logger.opt(exception=True).error(
+                f"后端日志：追踪库保留清理失败"
+                f"（已删除 traces={traces_deleted} spans={spans_deleted} scores={scores_deleted}）: {e}"
+            )
+            return traces_deleted + spans_deleted + scores_deleted
+
+    # ===== 追踪库 VACUUM 回调（每周日）=====
+    def _run_logs_db_vacuum(self):
+        """对追踪库 obs_* 表执行 VACUUM ANALYZE（APScheduler 回调）。
+
+        VACUUM 不能在事务块内执行，绕过 get_logs_connection 直接取池连接
+        （autocommit）；statement_timeout 临时置 0 防大表 VACUUM 被池默认 30s
+        截断，该连接用后即弃不归还超时配置。
+        """
+        from src.db.database import LOGS_DATABASE_URL, _logs_connection_pool
+
+        if not LOGS_DATABASE_URL or _logs_connection_pool is None:
+            return False
+
+        conn = None
+        try:
+            conn = _logs_connection_pool.getconn()
+            conn.autocommit = True
+            cur = conn.cursor()
+            cur.execute("SET statement_timeout = 0")
+            for table in ("obs_spans", "obs_traces", "obs_scores"):
+                cur.execute(f"VACUUM (ANALYZE) {table}")
+            logger.info("后端日志：追踪库 VACUUM ANALYZE 完成")
+            return True
+        except Exception as e:
+            logger.opt(exception=True).error(f"后端日志：追踪库 VACUUM 任务异常: {e}")
+            return False
+        finally:
+            if conn:
+                try:
+                    _logs_connection_pool.putconn(conn, close=True)
+                except Exception:
+                    pass
 
     # ===== log/temp 临时主题日志清理回调（每周六全量清空）=====
     def _run_temp_log_cleanup(self):

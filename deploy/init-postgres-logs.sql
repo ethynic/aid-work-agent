@@ -1,6 +1,14 @@
 -- 可观测性追踪库初始化脚本
 -- 在独立数据库（aid_work_logs2）中执行
 -- 设计文档：docs/infrastructure/observability-design.md §二
+--
+-- 注意（2026-10-30）：下方 DO 块中的 create_hypertable / compression / retention
+-- 策略在现网从未生效——obs_traces/obs_spans 主键（trace_id/span_id）不含分区时间列，
+-- 违反 TimescaleDB「唯一索引必须包含分区列」约束，create_hypertable 失败且异常被
+-- 本文件 DO 块吞掉（RAISE NOTICE）。数据过期现由应用层调度清理兜底：
+-- src/scheduler/manager.py 的 _run_trace_retention_cleanup（每日 01:30，obs_* 均保留 30 天）
+-- 与 _run_logs_db_vacuum（每周日 05:30）。后续若做 hypertable 化，需同步重写
+-- trace_persist.py 的 ON CONFLICT (trace_id/span_id) upsert。
 
 -- TimescaleDB 扩展（需要超级用户权限，不存在时跳过）
 DO $$ BEGIN

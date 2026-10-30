@@ -1498,16 +1498,29 @@ async def run_alert_evaluation():
 
 ## 八、数据生命周期管理
 
-> TimescaleDB 自动管理压缩和过期，无需额外的清理定时任务。
+> **2026-10-30 修订**：TimescaleDB 自动压缩/过期策略**从未生效**。设计按 Hypertable 假设，但
+> `obs_traces` / `obs_spans` 主键（trace_id / span_id）不含分区时间列，`create_hypertable`
+> 被 TimescaleDB 唯一索引约束拒绝，且异常被 `init-postgres-logs.sql` DO 块吞掉——三环境
+> （aid_work_logs / logs2 / logs3）实测 0 个 hypertable、0 条 retention/compression 策略。
+> hypertable 化需重写 `trace_persist.py` 的 `ON CONFLICT (trace_id/span_id)` upsert（主键
+> 改复合键后失效），成本高暂缓；现由应用层调度任务兜底清理（`src/scheduler/manager.py`）：
+>
+> - 每日 01:30 `_run_trace_retention_cleanup`：分批删除 30 天前 obs_traces/obs_spans
+>   （按 trace_id 批量，先删 spans 走 idx_obs_spans_trace 再删 traces）与 obs_scores（均 30 天）
+> - 每周日 05:30 `_run_logs_db_vacuum`：三张 obs 表 VACUUM ANALYZE，回收死元组空间
+> - `LOGS_DATABASE_URL` 未配置或连接池未初始化时两个任务自动跳过
+>
+> 存量行为（2026-10-30 实测）：生产 obs_spans 446MB / 3.3 万行，增速约 55MB/周；
+> 保留策略上线后稳态约 30 天增量（约 240MB）+ 索引。
 
 ### 8.1 数据保留与压缩策略
 
-| 表 | 未压缩保留 | 压缩策略 | 过期策略 |
-|------|-----------|---------|---------|
-| `obs_traces` | 7 天（热查询） | 7 天后列式压缩，按 tenant_id 分段（90%+ 缩减） | 90 天后 DROP chunk |
-| `obs_spans` | 7 天（热查询） | 7 天后列式压缩，按 trace_id 分段 | 90 天后 DROP chunk |
-| `obs_scores` | 30 天（热查询） | 30 天后列式压缩，按 score_name 分段 | 180 天后 DROP chunk |
-| JSONL 日志文件 | 7 天 | loguru rotation 已配置 | — |
+| 表 | 设计目标 | 实际现状（2026-10-30） |
+|------|---------|----------------------|
+| `obs_traces` | 90 天过期 + 7 天列式压缩 | 普通表，应用层每日删除 30 天前数据（用户裁决 2026-10-30），无压缩 |
+| `obs_spans` | 90 天过期 + 7 天列式压缩 | 普通表，应用层每日删除 30 天前数据（用户裁决 2026-10-30），无压缩 |
+| `obs_scores` | 180 天过期 + 30 天列式压缩 | 普通表，应用层每日删除 30 天前数据（用户裁决 2026-10-30，当前空表） |
+| JSONL 日志文件 | 7 天 | loguru rotation 已配置 |
 
 ### 8.2 存储量估算
 
