@@ -824,7 +824,8 @@ def main():
     ap.add_argument("--blacklist", action="store_true", help="查询黑名单")
     ap.add_argument("--dns-timeout", type=int, default=20,
                     help="单次 DNS 查询等待秒数，默认 20。网络慢时可调大")
-    ap.add_argument("--json", action="store_true", help="输出 JSON")
+    ap.add_argument("--json", action="store_true",
+                    help="输出 JSON；该模式正常完成恒 exit 0，是否达标看 summary.fail")
     a = ap.parse_args()
 
     global DNS_TIMEOUT
@@ -849,6 +850,10 @@ def main():
     print(json.dumps(rep, ensure_ascii=False, indent=2) if a.json
           else format_report(rep))
     s = rep["summary"]
+    # --json 的消费方是 LLM（skill_execute），结论看 JSON 的 summary；
+    # 检测完成即 exit 0，避免非零退出码被投影层误记为 failed（tr_runner_3a12186 案）。
+    if a.json:
+        return 0
     if s["fail"]:
         return 2
     # 全部未判定时退出码不能是 0，否则脚本调用方会误以为域名已达标。

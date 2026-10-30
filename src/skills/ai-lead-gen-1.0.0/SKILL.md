@@ -81,15 +81,15 @@ metadata:
    `list-contacts` 查，报错信息里返回的有效 ID 清单直接取用，**不得编造连续
    编号去试**——历史实测盲猜 ID 连续 10 次 not found 空转烧掉大量迭代。
 
-## 脚本清单（经 skill_execute 调用，均需 --campaign-id）
+## 脚本清单（经 skill_execute 调用；仅 `lead_db.py` 与 `send_emails.py` 需要 --campaign-id，其余为账号级或单目标脚本）
 
 | 脚本 | 用途 |
 |------|------|
 | `lead_db.py` | 业务数据读写（子命令见下表） |
 | `send_emails.py` | SMTP 发送引擎（限额/退订/退信分类/随机延迟） |
 | `mailbox_resolver.py` | 发件邮箱三层解析（单独运行可自检配置） |
-| `sender_profile.py` | 发件身份档案（from_name/退订说明/通信地址）与域名体检状态 |
-| `domain_check.py` | SPF/DKIM/DMARC 域名体检 |
+| `sender_profile.py` | 发件身份档案（from_name/退订说明/通信地址）与域名体检状态；账号级，子命令 status/save/reset，**不接 --campaign-id** |
+| `domain_check.py` | SPF/DKIM/DMARC 域名体检；`--json` 模式正常完成恒 exit 0，是否达标看 `summary.fail` |
 | `email_verify.py` | 邮箱格式/MX 校验 |
 | `email_rules.py` | 职能相关性判定（三道闸门共用口径） |
 | `reply_monitor.py` | 回复监控：IMAP 轮询 -> 归属 -> 去重 -> LLM 意图判定 -> 意向通知/退订 |
