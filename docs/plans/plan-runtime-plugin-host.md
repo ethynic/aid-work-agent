@@ -23,6 +23,7 @@
 | 简化 S3 | 覆盖升级/离线配置与干净重装 | ✅ 完成（2026-10-30） | PS→TS真实隔离组合及旧注册续接通过；原home/事实保留，未实际安装 |
 | 简化 S4 | 稳定签名、短路径与受管旧包清理 | ✅ 完成（2026-10-30） | 独立组件/稳定签名/受管清理通过；114场景独测及CR无遗留，未发行 |
 | 简化 S5 | 最终安装包与客户机升级验收 | ✅ 完成（2026-10-30） | 最终R2隔离升级/新装/Clean与实际Host恢复通过；原0.0.29/0.3.27配置配对保留 |
+| 本地环境统一 | 原8000/master接入Web、Runner与现有Runtime | ✅ 完成（2026-10-30） | 复用原本地PG/Redis/卷；master三应用与Web API只读链路通过，旧三应用已停 |
 
 
 2026-10-26完整master整合：wecom工作树已将1721707f（含历史信任根>16修复、共享窗口恢复及BOSS0.3.27）整合为未提交merge，W6未提交修改保留。Runtime/CLI/BOSS/Web构建及独立组合验证完成，CR无新增未决问题，3项旧Runtime清单/digest断言仍失败；升级水位幂等补齐另经真实存量PG验收。结果唯一见[WeCom整合计划](plan-wecom-cli-group-chat-experiment.md#最新master与runtime核查2026-10-26用户追问后补核)，未部署、安装或恢复监听，不等于已安装版本验收。
@@ -393,3 +394,29 @@ W15/W16证据源见[WeCom既有计划](plan-wecom-cli-group-chat-experiment.md#w
 仅只读核验本地容器：原8000挂载当前master且开启src热重载；18000独立验收项目仍挂旧wecom工作树。主工作区未跟踪Compose副本移至仓库外本机归档，不加入正式配置；既有运行容器/卷/配对和旧工作树的实际Compose未改。Vite差异只是可选DEV_API_TARGET开发代理，默认仍8000，生产构建不使用server.proxy、不需新增生产env；该既有本地开发改动不随本次Runtime提交。日常开发继续使用原master本地环境，未来停用/切换额外容器另按明确指示操作。
 
 提交归属核对：本任务原暂存46个路径，在共享master工作区被另一并发提交`63bce640710f94e12e7b6289f3fb02d4de10bc0d`带入并已发布；其标题为scheduler任务，额外包含`frontend/web/components/scheduled/TaskPlanView.vue`。本任务46路径无遗漏，Runtime实际源码与S5已验收版本一致，但不能称这次形成了独立Runtime源码提交，也不把另一任务文件纳入本轮CR/验收结论。保留已发布历史，不重写或强推；随后仅对本计划补充提交归属说明，使用限定文件提交避免再次带入共享暂存内容。Vite、AGENTS及其他未提交任务仍保留原状，打包产物均不在提交中。
+
+## 13. 本地8000/master统一验证（2026-10-30）
+
+用户明确授权将本地Web/Runner统一至原8000/master开发环境，处理配对及测试数据后停止18000临时应用，验证Runtime＋WeCom；后续明确直接复用18000已有本地数据库，不搬库/新建库。保留PG/Redis作为本地依赖，仅停止旧API、Runner API/Worker三应用。禁止agent2部署和恢复监听，本轮不自动提交。产品wire/恢复协议不改，复用原Runner overlay及连接切换。
+
+只读核对发现原8000的.env实际连接远端agent2库，先前统计的20租户/六个历史招聘记录/两项定时均属该远端库；因此立即作废“在原连接启动worker/清理任务”的方案，未写入、导出或部署远端数据库。原本机aid-postgres为呼叫中心且缺pgvector，不修改或复用该库。直接使用aid-wecom-local-postgres-1及原卷，保留本地1测试租户、2会话/32消息、8个已完成Runner和3个成功调用，无待执行/定时任务。只备份该本地PG及storage/uploads/log，原.env备份于仓库外，不复制远端数据。
+
+原master本地Compose通过extends复用现有Runner两服务，使用同镜像、master源码和.env；加入已有aid-wecom-local_local网络，以postgres/redis原DNS直接连接本地依赖，三应用复用原storage/uploads/log external卷，不再搬数据。仅本地进程沿原开发模式用root直接Python入口，避免生产gosu与旧root数据卷权限差异，不全仓chown；生产overlay不改。.env同时切换主库及追踪库（均指向原本地postgres/aid_wecom_local，追踪库未禁用）、Redis及Runner内部地址/服务令牌，不留下远端数据库连接。先停旧worker再启master worker，避免同库混跑。配对沿现有UI分配新home、验签迁移插件，8000签发替换身份；新配对自动start，因此先验证本地任务均终态。Web切后端后使用保留的本地测试租户、新建验证会话。
+
+验收：8000健康及Runner真实接单/完成，Web只读任务实际调用Runtime/WeCom并获得消息身份字段，检查无send及continuous任务；原历史状态不因新测试被重放。旧三个应用stop，不删除容器/卷，PG/Redis保留供master使用；不对旧项目执行down -v。回退材料保存在`%LOCALAPPDATA%/AidWorkBuild/local-environment-migration/20261030-114912/`，本地PG备份1139475字节、1459项TOC并已核对容器/宿主SHA；配套文件备份596917字节，凭据及原始数据库内容不输出或纳Git。主控实施，独立角色只读方案及最终结果核查；当前进展与未测边界在本节收尾登记。
+
+实施结果：aid-agent-api（8000）、aid-runner-api-local、aid-runner-worker-local均健康且/app挂master；旧aid-wecom-local-api/runner-api/runner-worker已停止，18000关闭。原PG/Redis及卷保持运行，重启策略设为unless-stopped以作为持久本机依赖；未改共享呼叫中心PG或任何agent2服务。备份的原.env指远端，仅供人工对照，不自动恢复后启动worker。
+
+一次真实schema缺口已仅本地修复：旧测试库水位2026-10-29 13:46:35越过后来合入的通知规则13:00批次，缺notification_rules及targets.rule_id，Runner首次启动报NOTIFICATION_SCHEMA_COLUMNS_REQUIRED。按原deploy/db_update.yaml补执行该13:00幂等批次，再复用原增量更新器，无自建迁移器/改水位跳过错误；严格通知五表版本、列类型及约束验证通过。初次补齐到10:00，最终独测时随当前master迁移已到2026-10-30 11:20:00。未据此宣称所有历史库升级组合已重测，跨分支漏过旧时间批次是后续升级需注意的事实。
+
+当前master Web为http://127.0.0.1:13001/，API代理8000，实际从master/frontend启动；旧13000 Vite来自旧工作树，停止该进程的命令被自动审批以blocked by policy拒绝，没有绕过强杀，仍开放但不再作为测试入口。3000当时已占用，未碰占用者。13001的/health是SPA HTML，不能当后端健康证明；8000/health及实际/api请求另验。新浏览器入口通过open_in_codex返回queued，不称已自动完成登录或浏览器点击回归。
+
+主控经13001的Web API用原本地测试用户创建新会话，main智能体实际接单runner_286f858a2b71494eb5f12843bdd325dc，attempt=1、completed/settled；唯一wecom_read_sessions调用succeeded、effect=none、code=OK，读回两条sender_platform=wecom。未输出姓名/聊天正文，也未发送、建立continuous或定时监听。样本只有wecom，不称本次覆盖了真人微信/混合群全部分类。现库9个completed、4个succeeded、3会话/36消息，与原8/3和2/32加本次验证一致，不冒称逐行比对全部历史备份。
+
+Runtime沿原已安装客户端完成替换配对，旧设备revoked/unselected，新设备active/selected；没有安装S5新包。UI切换后管理连接显示陈旧，正常File/Exit再开恢复；Sky启动一度缺SESSIONNAME，query session核实当前进程SessionID1确属Console Active后，仅为启动的原Runtime进程设Console，不伪造交互或绕过锁屏。最终UI为运行中/在线、WeCom0.2.1已就绪，BOSS0.3.27保留。一次性配对/测试auth辅助文件及内存上下文已清除，原设备凭据沿DPAPI保持。
+
+独立只读验收报告在上述仓库外目录INDEPENDENT-LOCAL-ENVIRONMENT-AUDIT.json/md；JSON SHA256为0a7f594848638bc1887d5c0f6822b2c6f35db4771fd05158e874ed8fe3757685，Markdown SHA256为94fc87eaac1c3d8d3a1f0ab104ec3f6ed2870332674d7c96c5a5edfbad6f85f6。独测未取得token、未重复执行任务，独立核对本地连接/实际卷、原三服务停止、精确Runner/读取结果与身份字段、通知schema、活跃设备心跳及全库send/continuous/活动Runner/wake均0，结果通过。schema差异与旧13000仍开放如实披露。独立CR已核对限定三文件diff、报告摘要、Compose继承/实际卷及外部依赖生命周期，无阻断；主控核对报告SHA、三个应用healthy和定向diff检查，一次性凭据助手文件已移除。未提交、部署agent2或恢复监听。
+
+本机日常启动沿原入口docker compose -f docker-compose.local.yml up -d --no-build；源码直接挂master，API按src热重载，Runner Python模块修改后用同Compose重启对应Runner进程生效，不承诺worker自动热重载。保留的本地数据依赖及external卷不要按临时环境清除；以后无需再启动旧18000三应用。
+
+2026-10-30用户后续授权提交与推送本次本地环境统一配置/文档，替代上文历史“本轮不自动提交”状态，仍禁止agent2部署和恢复监听。提交前fetch并快进同步master至5b8504aa，本任务三文件以外七个已有跟踪文件改动摘要保持，其他未跟踪任务不动；只提交docker-compose.local.yml、本计划及ideas对应索引行。私密.env、数据库/卷、备份、验收JSON及既有Vite开发差异均不提交。配置与前轮独测/CR状态一致，整合后只补Compose解析、关键Runner模块import和本地健康检查，不重复执行企微业务或监听。

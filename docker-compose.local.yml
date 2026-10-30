@@ -26,8 +26,12 @@ services:
       - WATCHFILES_FORCE_POLLING=true
     volumes:
       - .:/app
+      - local-agent-storage:/app/storage
+      - local-agent-uploads:/app/uploads
+      - local-agent-logs:/app/log
     networks:
       - aid-network
+      - local-agent-data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -44,6 +48,50 @@ services:
     entrypoint: []
     command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir src --no-access-log
 
+  # 复用公共 Runner 定义；开发进程与 API 一样直接读取 master 挂载。
+  runner-api:
+    extends:
+      file: docker-compose.agent-runner.yml
+      service: runner-api
+    user: "0"
+    entrypoint: []
+    command: [python, -m, src.services.agent_runner.bootstrap, --host, "0.0.0.0", --port, "8091"]
+    volumes:
+      - local-agent-storage:/app/storage
+      - local-agent-uploads:/app/uploads
+      - local-agent-logs:/app/log
+    networks:
+      - local-agent-data
+
+  runner-worker:
+    extends:
+      file: docker-compose.agent-runner.yml
+      service: runner-worker
+    user: "0"
+    entrypoint: []
+    command: [python, -m, src.services.agent_runner.worker]
+    volumes:
+      - local-agent-storage:/app/storage
+      - local-agent-uploads:/app/uploads
+      - local-agent-logs:/app/log
+    networks:
+      - local-agent-data
+
 networks:
   aid-network:
     driver: bridge
+  # 保留已有本机测试库及 Redis，不再建立第二套应用服务或数据库。
+  local-agent-data:
+    external: true
+    name: aid-wecom-local_local
+
+volumes:
+  local-agent-storage:
+    external: true
+    name: aid-wecom-local_storage
+  local-agent-uploads:
+    external: true
+    name: aid-wecom-local_uploads
+  local-agent-logs:
+    external: true
+    name: aid-wecom-local_logs
