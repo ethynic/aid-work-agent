@@ -2115,6 +2115,13 @@ def send_sms_code(phone: str) -> bool:
     发送短信验证码
 
     使用配置的短信通道真实发送短信。
+
+    计费豁免（billing_audit.md §3.8）：本函数仅服务登录 /phone/send-code 与
+    重置密码 /reset-password/send-code 两个平台级认证场景，视为平台运营自身
+    成本，不向租户计费（用户点"忘记密码"不应被收费）。发送时用户身份尚未
+    确立、也无可信租户归属，不具备 fail-closed 计费前提。除此之外的任何短信
+    发送点（Agent 对话触发、租户业务通知）禁止复用本函数，必须走
+    sms-verification 技能的计费链路（_record_sms_billing 落账扣减）。
     """
     from src.sms.manager import sms_manager
 

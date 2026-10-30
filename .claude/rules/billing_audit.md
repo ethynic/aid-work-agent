@@ -1,8 +1,8 @@
 # 计费审计规范
 
-> **适用范围**：所有涉及 LLM / Embedding / ASR / 视频生成 调用的代码改动--新增调用点、重构调用方、修改计费逻辑、定期计费审计。
+> **适用范围**：所有涉及 LLM / Embedding / ASR / 视频生成 / 短信发送 调用的代码改动--新增调用点、重构调用方、修改计费逻辑、定期计费审计。
 >
-> **背景**：2026-08-14 计费缺失审计发现项目存在 18 处真实缺口（详见 [llm-billing-gap-audit.md](../../docs/plans/llm-billing-gap-audit.md)）。根因是审计方法论盲区 + 服务/工具/管理后台多入口边界盲区。本规范把审计 checklist 固化为开发流程的一部分，**每次计费相关改动必须执行**，避免下次审计再次遗漏。
+> **背景**：2026-08-14 计费缺失审计发现项目存在 18 处真实缺口（详见 [llm-billing-gap-audit.md](../../docs/plans/llm-billing-gap-audit.md)），2026-10-30 全量复检确认已全部修复关闭；同日复检把短信发送纳入审计范围并发现 1 处缺口（见 §5）。根因是审计方法论盲区 + 服务/工具/管理后台多入口边界盲区。本规范把审计 checklist 固化为开发流程的一部分，**每次计费相关改动必须执行**，避免下次审计再次遗漏。
 
 ---
 
@@ -11,6 +11,7 @@
 | 场景 | 执行范围 |
 |------|---------|
 | 新增 LLM/Embedding/ASR/视频调用点 | 该调用点 + 同模块相邻调用点 |
+| 新增短信发送调用点 / 新接短信通道 | 该调用点 + `sms_manager.send` 全部调用方 |
 | 重构调用方（如把同步改异步、把直接调用改 wrapper） | 该调用点 + 所有调用方 |
 | 修改计费函数（`record_background_llm_usage` / `add_embedding_usage` / `add_asr_usage` / `_record_*_billing`） | 全量回归（执行 §3 checklist） |
 | 定期计费审计（每季度或大版本前） | 全量执行 §3 checklist |
@@ -32,7 +33,7 @@
 
 ---
 
-## 3. 计费审计 Checklist（核心，7 步）
+## 3. 计费审计 Checklist（核心，8 步）
 
 ### 3.1 全量 LLM 调用扫描
 
@@ -109,6 +110,21 @@ grep -rn "calculate_video_credit_cost\|video_agent\.service\|VideoChatService" s
 | 已在事件循环内的同步代码 | 重构为 `async def` 或用 `asyncio.run_coroutine_threadsafe` |
 
 **反例**（[followup_manager.py:364](../../src/skills/followup-tracking-1.0.0/scripts/followup_manager.py)）：同步 `def _evaluate_with_llm` 中 `result = llm_gateway.chat(...)`（无 await），返回 coroutine 对象，`result.get("content", "")` 抛 `AttributeError`，被 `except Exception` 吞掉返回默认评分。**LLM 实际从未执行**，既漏计费又坏功能。
+
+### 3.8 全量短信发送扫描
+
+```bash
+grep -rn "sms_manager\.send\|sender\.send\|send_sms\|SmsSender" src/ --include="*.py" \
+  | grep -v "test_\|/tests/\|src/sms/"
+```
+
+短信成本与 token 无关，**按条计费**（固定积分/条，当前 `SMS_CREDIT_COST=1.0`），核对要点与 LLM 不同：
+
+1. **唯一发送出口**：所有真实发信必须经 `SmsManager.send`（`src/sms/manager.py`）。通道实现类（`src/sms/{aliyun,tencent,zhutong}.py`）只负责发送不自行计费；新增通道时同样不在此层计费。扫描对象是 `sms_manager.send` / `sender.send` 的**调用方**。
+2. **租户归属判定**：服务于某个租户的短信（Agent 对话触发的验证码、租户业务通知）**必须对该租户计费**，归属从 `AID_*` 环境变量（skill_executor 注入，fail-closed）或 `request.state` 取，**不信任 LLM/请求参数**。确实无租户归属的短信（如平台运营自身通知）可不计费，但调用点必须**显式注释说明归属判定与豁免理由**，不得静默漏计。
+3. **发送前余额预检**：积分余额不足时拒绝发送（短信发出后无法撤回，不能先发后补账）。
+4. **bypass / 私有云分支**：`settings.sms.qb_sms_code` bypass（未购通道，不真实发信）与 `PRIVATE_CLOUD=true`（客户自购通道）不落账——这两类分流必须在调用方显式出现并注释，防止把"跳过发信"误当"已计费"。
+5. **落账时机**：真实发送成功后落账 `chat_records`（独立 `source_type`，如 `sms_verification`），`ChatRecordDB.create` 同事务扣减 `tenants.credit_balance`；落账失败只记错误日志（短信已无法撤回），不向用户报错。
 
 ---
 
@@ -217,25 +233,65 @@ async def _call_aliyun_asr(self, ...):
 
 **关键**：工具内部计费后，**必须删除** `channel_routes.py:2174` 的外层 `add_asr_usage` 调用，否则渠道侧语音消息会双计。
 
+### 4.5 短信计费（标准模式）
+
+参考实现：`src/skills/sms-verification-1.0.0/scripts/sms_cli.py` 的 `_record_sms_billing` / `_check_credit_balance` / `_resolve_billing_identity`。新增短信发送点直接复用该套函数，不自建口径：
+
+```python
+# 1) 身份 fail-closed：仅取 skill_executor 注入的 AID_* 环境变量（或 request.state），
+#    取不到租户身份时必须拒绝发送，防止计费落空
+identity = _resolve_billing_identity()   # {tenant_id, user_id, session_id}
+if not identity["tenant_id"]:
+    return {"success": False, "error": "无法确认租户身份，短信发送被拒绝"}
+
+# 2) 余额预检：credit_balance 不足 1 积分时拦截（发送前，非发送后）
+blocked = _check_credit_balance(identity["tenant_id"])
+if blocked:
+    return blocked
+
+# 3) 真实发送（sms_manager.send；bypass/私有云分支在更早处分流，不进入这里）
+result = sms_manager.send(mobile, template_params={...})
+if result and result.get("code") == 200:
+    # 4) 落账：chat_records 审计记录 + 同事务扣减 tenants.credit_balance；
+    #    落账失败只记日志（短信已发出，无法撤回）
+    _record_sms_billing(mobile, identity)
+```
+
+关键语义：
+- `ChatRecordDB.create(source_type="sms_verification", credit_cost=SMS_CREDIT_COST)` 内部已原子扣减 `tenants.credit_balance`，不要再手写 UPDATE 扣减（会双扣）
+- bypass（`qb_sms_code` 已配置且无通道）不发信也不落账；私有云（`PRIVATE_CLOUD=true`，客户自购通道）发信但不落账，调用方分流
+- 手机号进日志/落库描述必须脱敏（`_mask_mobile`：`138****0000`）
+
 ---
 
-## 5. 已知计费缺口索引（截至 2026-08-14）
+## 5. 已知计费缺口索引
+
+### 5.1 2026-08-14 审计（18 处）——2026-10-30 复检已全部修复关闭
 
 详见 [llm-billing-gap-audit.md](../../docs/plans/llm-billing-gap-audit.md)：
 
 | 类别 | 数量 | 状态 |
 |------|------|------|
-| 主循环工具内 LLM 调用 | 9 处 | 待修复 |
-| 管理后台 API LLM 路由 | 3 处 | 待修复 |
-| 对话内 RAG embedding | 1 处 | 待修复 |
-| 数据 schema 管理 embedding | 3 处 | 待修复（交叉核对新增） |
-| ASR 工具入口 | 1 处 | 待修复（交叉核对新增，关键漏洞） |
-| 离线运维脚本 embedding | 1 处 | 待修复（交叉核对新增） |
+| 主循环工具内 LLM 调用 | 9 处 | ✅ 已修复 |
+| 管理后台 API LLM 路由 | 3 处 | ✅ 已修复（`record_admin_llm_usage` 收口） |
+| 对话内 RAG embedding | 1 处 | ✅ 已修复（hybrid_retriever 条件累加 + 无 record 兜底） |
+| 数据 schema 管理 embedding | 3 处 | ✅ 已修复（`record_admin_embedding_usage`） |
+| ASR 工具入口 | 1 处 | ✅ 已修复（计费移入工具内部，渠道侧按需外补，不双计） |
+| 离线运维脚本 embedding | 1 处 | ✅ 已修复（backfill_hotel_info_name.py 已补独立落库） |
 | **合计** | **18 处** | |
 
-潜在风险（未启用，启用前需补计费）：
-- `intent_engine.recognize()` - 死路径
-- `gateway.stream_chat()` - 无业务调用点
+### 5.2 2026-10-30 复检新增（短信维度）
+
+| 调用点 | 场景 | 裁决 | 状态 |
+|--------|------|------|------|
+| `send_sms_code`（`src/db/models.py:2113`） | 登录 `/phone/send-code` 与重置密码 `/reset-password/send-code` 的平台认证验证码真实发信 | 用户裁决：登录/重置密码是平台级功能（参照主流互联网平台惯例），不计入租户费用；已在函数 docstring 显式注释豁免（2026-10-30），并约束其他短信发送点禁止复用该函数 | ✅ 豁免（注释已落地） |
+
+已计费短信点（对照）：`sms-verification` 技能 `sms_cli.py`（AID_* fail-closed 身份 + 余额预检 + `_record_sms_billing` 落账，source_type=sms_verification）。**后续新增短信发送点一律走 §4.5 标准模式，禁止复用 `send_sms_code`。**
+
+潜在风险（未启用/依赖单入口，扩展前需补计费）：
+- `gateway.stream_chat()` - 无业务调用点，启用流式前需在 chunk 累积 loop 补计费
+- `parse_association_evidence_with_llm`（`association_enrichment_ui.py:73`）- 死代码无调用方；接线时需补计费
+- association 富化链路条件 E 依赖 `association_enrichment_ui` 唯一安装 `install_usage_recorder`——新增直接调用 `enrich_one()` 的入口会静默漏计，新入口必须同样包 recorder
 
 ---
 
@@ -251,6 +307,7 @@ async def _call_aliyun_asr(self, ...):
 - Embedding 调用扫描：N 处命中
 - ASR 调用扫描：N 处命中
 - 视频生成扫描：N 处命中
+- 短信发送扫描：N 处命中（§3.8）
 
 ## 已正确计费调用点（N 处）
 | 调用点 | 计费方式 | 满足条件 |
