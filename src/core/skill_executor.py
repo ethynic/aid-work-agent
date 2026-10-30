@@ -82,7 +82,10 @@ class SkillExecutionContext:
         self.start_time = time.time()
     
     def add_file(self, filename: str, content: bytes):
-        """添加文件到上下文"""
+        """添加文件到上下文（键名拒绝绝对路径与 .. 段，防止写出执行目录）"""
+        normalized = filename.replace("\\", "/")
+        if os.path.isabs(normalized) or ".." in Path(normalized).parts:
+            raise ValueError(f"SKILL_FILE_NAME_ESCAPES_WORKDIR: {filename}")
         self.files[filename] = content
     
     def get_file_path(self, filename: str) -> Path:
@@ -589,6 +592,7 @@ Follow the instructions in the skill above to complete the user's task."""
         user_id: Optional[str] = None,
         stdin_content: Optional[bytes] = None,
         env_extra: Optional[Dict[str, str]] = None,
+        workdir: Optional[Union[str, Path]] = None,
         *, context=None, tenant_id=None, env_vars=None,
     ) -> ExecutionResult:
         """
@@ -603,6 +607,9 @@ Follow the instructions in the skill above to complete the user's task."""
             user_id: 用户ID
             stdin_content: 通过 stdin 传递给子进程的内容
             env_extra: 额外注入子进程的环境变量（如子智能体 LLM 覆盖）
+            workdir: 调用方指定的工作目录（须先经租户边界校验，如租户 conversation
+                目录）。提供时命令在其中执行且**不清理**该目录，支持多步技能跨调用
+                复用文件；缺省时沿用一次性临时目录并在执行后删除。
 
         Returns:
             执行结果
@@ -644,15 +651,20 @@ Follow the instructions in the skill above to complete the user's task."""
         environment = await asyncio.to_thread(self.environment, skill_name, context=context,
             tenant_id=tenant_id, env_vars=env_vars, env_extra=env_extra)
 
-        # 创建执行上下文
-        workdir = self._create_workdir(skill_name, session_id)
+        # 创建执行上下文；caller-provided workdir 不 cleanup（绝不 rmtree 租户目录）
+        owned_workdir = workdir is None
+        if owned_workdir:
+            resolved_workdir = self._create_workdir(skill_name, session_id)
+        else:
+            resolved_workdir = Path(workdir).resolve()
+            resolved_workdir.mkdir(parents=True, exist_ok=True)
         context = SkillExecutionContext(
             skill_name=skill_name,
-            workdir=workdir,
+            workdir=resolved_workdir,
             session_id=session_id,
             user_id=user_id,
         )
-        
+
         context.environment = environment
 
         # 添加文件
@@ -700,11 +712,12 @@ Follow the instructions in the skill above to complete the user's task."""
             return result
             
         finally:
-            # 清理上下文
+            # 清理上下文（caller-provided workdir 属租户/草稿目录，绝不 rmtree）
             if context_id in self._active_contexts:
                 del self._active_contexts[context_id]
-            context.cleanup()
-    
+            if owned_workdir:
+                context.cleanup()
+
     async def execute_skill_script(
         self,
         skill_name: str,

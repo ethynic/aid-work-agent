@@ -8,6 +8,7 @@ SkillExecuteTool - 在技能上下文中执行命令
 
 import base64
 import json
+import os
 import re
 from typing import Dict, Any, Optional
 from pathlib import Path
@@ -27,6 +28,33 @@ class SkillExecuteInput(BaseModel):
     session_id: Optional[str] = Field(None, description="会话ID")
     user_id: Optional[str] = Field(None, description="用户ID（可选）")
     workdir: Optional[str] = Field(None, description="工作目录（可选）")
+
+
+_WORKDIR_REJECT_MSG = (
+    "workdir 参数被拒绝：仅允许当前租户存储目录（storage/tenants/{tid}/）"
+    "或 storage/tmp 技能草稿目录。若要引用刚写入的文件，请改用文件的完整绝对路径，"
+    "或省略 workdir 让命令在默认临时目录执行。"
+)
+
+
+def _validate_workdir(workdir: str, tenant_id: Optional[str]) -> bool:
+    """校验 skill_execute 的 workdir 参数（fail-closed，租户边界）。
+
+    允许：当前租户存储目录（storage/tenants/{tid}/，含 legacy uploads 双轨）、
+    storage/tmp 技能草稿目录。无租户上下文时仅允许 storage/tmp。
+    """
+    from src.core.storage import is_tenant_owned_file
+
+    try:
+        real = os.path.realpath(workdir)
+    except Exception:
+        return False
+    tmp_root = os.path.realpath(os.path.join("storage", "tmp"))
+    if real == tmp_root or real.startswith(tmp_root + os.sep):
+        return True
+    if tenant_id and is_tenant_owned_file(workdir, tenant_id):
+        return True
+    return False
 
 
 class SkillExecuteTool(BaseTool):
@@ -248,6 +276,22 @@ class SkillExecuteTool(BaseTool):
                         resolved_tenant_id = real_session_id[:idx]
                         break
 
+        # workdir 校验（fail-closed）：schema 承诺了该参数，必须真实生效——
+        # 否则 LLM 以为在指定目录执行（相对文件名解析到一次性临时目录报
+        # FileNotFoundError，白烧迭代，2026-10-30 trace tr_runner_2eb58fcd 实证）
+        if workdir:
+            if not _validate_workdir(workdir, resolved_tenant_id):
+                logger.warning(
+                    f"[安全防护] skill_execute workdir 参数越界，已拦截: "
+                    f"skill={skill_name}, tenant={resolved_tenant_id or '无'}, "
+                    f"workdir={workdir}"
+                )
+                return {
+                    "success": False,
+                    "error": _WORKDIR_REJECT_MSG,
+                    "skill_name": skill_name,
+                }
+
         if content_text:
             # 支持字符串或列表类型，列表时转为 JSON 字符串
             if isinstance(content_text, list):
@@ -334,6 +378,7 @@ class SkillExecuteTool(BaseTool):
                 user_id=real_user_id,
                 stdin_content=stdin_content,
                 env_extra=self.llm_env,
+                workdir=workdir or None,
                 context=tool_context,
             )
 
