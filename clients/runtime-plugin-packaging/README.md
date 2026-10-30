@@ -21,11 +21,17 @@
 
 ## 微信 / 企业微信的 OCR 资产（BOSS-only 跳过）
 
-`ocr-assets.lock.json` 固定 CPython 3.12.10 embed-amd64、18 份官方 PyPI wheels、Microsoft VC Runtime 14.44.35211 和构建机解包工具的版本/原始 SHA256/来源。Python 摘要来自官方 Sigstore bundle；wheel 摘要来自官方 PyPI release metadata。所有 wheel 包内许可证/模型保留，Python LICENSE 和 Microsoft CRT license 一并交付。MSVC exe 另外核对 Microsoft Authenticode；仅解包 CAB，绝不运行其安装器。构建用的 7-Zip 不进入客户机包。
+`ocr-assets.lock.json` 固定 CPython 3.12.10 embed-amd64、19 份官方 PyPI wheels、Microsoft VC Runtime 14.44.35211 和构建机解包工具的版本/原始 SHA256/来源。Python 摘要来自官方 Sigstore bundle；wheel 摘要来自官方 PyPI release metadata。所有 wheel 包内许可证/模型保留，Python LICENSE 和 Microsoft CRT license 一并交付。MSVC exe 另外核对 Microsoft Authenticode；仅解包 CAB，绝不运行其安装器。构建用的 7-Zip 不进入客户机包。
+
+企微本地库解密延迟使用 `Crypto.Cipher.AES`，发行依赖包含锁定的 pycryptodome 3.23.0 Windows x64 ABI3 wheel及许可证。仅SQLite查询/OCR成功不能证明能解密；资产准备、企微签包及离线验包均验证包内AES-CBC与SQLite，交付还用包内driver解密独立生成的合成加密快照。复用旧OCR目录缺Crypto时应在签包前准确失败，不能借用系统Python掩盖缺依赖。
 
 `prepare-ocr.py` 下载并校验所有字节，产生 `assets/ocr-python-final`。内部 Python 自带通用 `msvcp140.dll`/`msvcp140_1.dll` 等 CRT 文件，不依赖本机 System32 中已有的 VC Redistributable。RapidOCR/ORT/OpenCV/Pillow 初始化在复制后的目录内验证。Windows 系统 API/DLL、PowerShell 和目标业务软件仍是平台条件。
 
 发行包里的所有 Python 调用使用 `-I -B`，忽略开发 Python 环境且不向签名 payload 写入 `__pycache__`。微信 history/Win32 底座已迁入 drivers，运行不再读取 experiments。仅没有 runtime-manifest 的开发 checkout 保留旧仓库 venv 回退；已安装包缺内部 OCR 则明确失败。
+
+复制drivers时排除开发机重生成的`__pycache__`、`.pyc`和`.pyo`，保留其余源文件原始字节；无需在每轮测试后手动清空开发缓存。
+
+企微0.2.1的TS本地库与两个PS OCR调用共用包内python_bootstrap.py，处理实际安装布局的Windows进程/原生DLL长路径。仅嵌入Python启用，DLL句柄保留至退出，只读选取系统现成短路径，realpath兼容表示限runtime目录；业务文件/argv/stdin及退出码保持，不导入Crypto、不复制缓存或调整系统策略。签包后还须在实际已装深目录以默认TS桥解密合成快照、实际PS OCR识别合成图片；短目录/import成功不替代该检查。无现成短名的卷设置未宣称经过验证，代码不增加可用性门禁。
 
 ## 隔离验收包与信任根
 

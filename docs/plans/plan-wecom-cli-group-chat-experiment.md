@@ -22,6 +22,7 @@
 | W15 master可发布评估 | 仅升级服务端时的旧BOSS与历史任务兼容 | ✅ 完成（2026-10-30） | 修复前发现历史指纹、招聘profile及迁移水位三处阻塞，后续兼容收尾已闭环 |
 | W15 兼容收尾 | 修复升级边界后复评 | ✅ 完成（2026-10-30） | 整合10b579759；独测49项unit/15项PG、CR通过，三项升级阻塞闭环；提交合并见末尾，未部署 |
 | W15 提交与合并 | 特性分支推送及master整合 | ✅ 完成（2026-10-30） | 特性分支1b0759cd已双远程推送；master保留两边历史并完成合并核验，未部署监听 |
+| W16 客户端打包归拢复核 | master上验证旧Runtime/BOSS与发行改动并提交 | ✅ 完成（2026-10-30） | 主控60项、独测3专项/5批Windows实测及CR通过；仅本任务定向提交，未部署监听 |
 
 ## W14 通用Runtime业务工具自动装配（2026-10-29）
 
@@ -669,3 +670,41 @@ master整合保留origin/master `10b579759`、本地/GitHub master `a92f9761`及
 合并预览树`0bf2987b0147e99ad8daea0aca5feee059b8df2e`与暂存合并结果一致；隔离构建/测试日志位于本机Temp `wecom-master-frontend-20261030-p13ce3e7`，主工作区备份为`master-before-wecom-merge-20261030-q7zso8jv`。主分支合并提交及推送编号以本轮Git记录为准。后续开发位置为`C:/repos/aid-work-agent`的master；WeCom工作树原有发行包/本地配置修改继续原地保留。未执行部署、客户端升级、真实业务发送或监听。
 
 主工作区最终复核：W15冻结7项字节不变，另1项`provenance.json`仅Git将CRLF标准化为LF，解析JSON及源文件清单完全相同；该换行差异不改变产品或fixture语义。合并后在主工作区源码只读、无网络容器重新执行4项跨版本恢复用例全部通过，未启动现有服务。
+
+### master工作区归拢与长期兼容原则（2026-10-30）
+
+用户再次要求确保本会话改动都在master，并明确已交付客户的Runtime＋CLI够用即可，不要求随服务端或新功能统一升级。已确认特性分支及本轮合并提交均为master祖先；master后续已有其他功能提交，未覆盖或回退这些更新。
+
+此前保留在WeCom工作树的20个已跟踪文件修改和22个未跟踪文件（客户端发行/打包、验收包及本地环境配置）已原样归拢到master工作区，逐文件SHA256一致；42个目标均无已有改动冲突，修改前已备份目标及主工作区原有改动，WeCom原副本未删除。证据为本机Temp `master-uncommitted-consolidation-20261030-s2y6t6js/migration.json`。归拢仅移动工作内容，不提交、不重建安装包、不安装客户端、不部署、不启动监听；这些遗留调整未因此获得新版本的集成验收结论。
+
+兼容经验已纳入master的`AGENTS.md`及`.claude/rules/backend_dev.md`：服务端单独升级须保持已交付旧客户端的工具/任务恢复/回执/计费可用；新能力沿原协商按需启用，缺能力仅影响相应新功能，不加全局升级门禁。验证面向实际已交付组合与本次变更边界，不逐代穷举历史版本。规则及本次归拢内容保持未提交，既有主工作区改动保留。
+
+## W16 master客户端打包改动复核（2026-10-30）
+
+用户授权独立测试与CodeReview通过后，把本批客户端打包修改和旧客户端兼容规范提交、推送到master；不部署、不安装客户机、不恢复监听。主控是产品及仓库测试唯一写入者，独立测试/CR只读并各自报告，不扩展为整项目回归。
+
+### 范围与最小方案
+
+- 保留19个客户端源码/版本/锁文件改动，两个WeCom bootstrap源/测试及0.0.30/0.0.31验收根历史快照。驱动资产排除Python字节缓存；WeCom包内依赖锁补AES，构建和只读验包检查包内AES/SQLite；Windows长路径沿已有只读namespace/短名处理，不改系统策略或设备协议。
+- 历史BOSS签名根、原manifest/schema与工具面保持；验收根仅追加WeCom发布者，不撤销已有根。旧Runtime0.0.29＋BOSS0.3.27继续作为已交付组合验证，客户不需要因为服务端更新而安装新包。新功能按现有能力协商使用，不另加全局版本门禁。
+- 旧0.0.31/WeCom0.2.1安装目录和报告来自先前W11验收，不把它们当当前master重新构建的新产物；留作历史资料，不将过时二进制/验收报告纳入本次源码提交。`frontend/vite.config.ts`、本地compose及搜索/研究/视频相关改动不属于提交范围。AGENTS仅提交本任务新增兼容原则，保留原有未提交规则内容。
+- 延用W15匹配产品hash的服务端恢复/PG证据；新增打包/历史信任根、bootstrap、真实旧包只读core/MCP及独立长路径嵌入Python/AES/OCR验证。缺陷按最小范围修复，定向重跑受影响项，独测及CR均通过后主控核对最终源码/提交清单并推送当前master。
+
+| 阶段 | 内容 | 状态 | 完成记录 |
+|---|---|---|---|
+| W16.1 | 归拢diff与提交边界 | ✅ 完成（2026-10-30） | master3f3ba365，23项客户端源码/历史根纳入；排除旧产物、本地配置及其他用户改动 |
+| W16.2 | 主控定向验证/必要修复 | ✅ 完成（2026-10-30） | packaging9/Runtime打包20/driver30/bootstrap1共60项通过；WeCom构建及Runtime typecheck通过 |
+| W16.3 | 独立测试与CodeReview | ✅ 完成（2026-10-30） | 独立3专项/5批Windows实测通过，23源码freeze一致，CR无P0/P1/P2；现场Provider退出原因不明单列 |
+| W16.4 | 定向提交与推送 | ✅ 完成（2026-10-30） | 仅29项任务文件，AGENTS/索引按任务hunk暂存；提交编号以本轮Git记录为准，禁止部署监听 |
+
+W16主控自测证据位于本机Temp `wecom-w16-root-tests-izpb63ob/summary.json`及各命令日志；60项互不重复、0失败/跳过，编译后的临时dist不提交。23项源码冻结清单为`wecom-w16-freeze-current.json`。独立CR已核对相同23项、版本/锁、旧根保留与新WeCom根范围，无P0/P1/P2；该阶段尚待真实旧包及长路径独测，最终结果见下文，未以主控自测代替。
+
+### W16最终验收与提交范围（2026-10-30）
+
+- 独立Node专项3项、Windows真实验证5批通过，不与主控60项或历史W15用例相加。旧Runtime0.0.29原包Node22/Core0.2.20实际加载BOSS0.3.27，当前信任登记验原签名通过，真实MCP列出25工具、映射24项业务工具，业务调用0。原19个根逐项保留，新增4根仅WeCom验收，不要求旧客户升级。
+- 用当前prepare-ocr和当前lock在自有Temp重建资产，23份缓存下载逐一hash核验、无联网，实际嵌入Python验证OCR/SQLite/AES。随后在363字符中文/空格路径，执行当前driver.ts独立转译副本的真实defaultSpawn→bootstrap，OCR/AES/SQLite及argv/stdin均通过；嵌入Python退出码7保持，实际PS查询既有97字符短路径并ProcessStart成功，未创建新alias或改系统策略。
+- 原旧包7559文件、新payload3878文件、当前配对/DPAPI等3个状态文件前后hash一致，零pycache污染，最终23源码hash与独测/CR一致。旧包与新资产的计数范围分别留在证据中，不与历史W14的不同目录清单混计。
+- 夹具边界：额外直接用Python subprocess、不指定applicationName启动超长exe遇Win206，修正自有harness的executable后通过；实际产品Node默认spawn已直接通过，未因此改产品或加门禁。原master ignored OCR缓存与新lock不匹配，未把旧缓存冒充新包，而是在独立目录重建并实测。旧0.0.31验收二进制不当作当前master重构建；以后实际重新交付须正常使用新版本号，不覆盖旧同号包，不意味着要求现有客户升级。
+- 现场观察：Runtime相关进程8→7，已核实Runtime Host本身仍在，退出的是一个原Provider子Node，日志未确定原因。测试及CR核对关闭链路只操作自有ProviderSet/client/transport/PID，无向该现场PID发信号或写已安装目录的路径；没有确定的产品/隔离缺陷，也不能据代码审查声称绝无干扰或全进程不变。该观察单列保留，未扩大OS排查、重启、修复或恢复监听。
+- 独测证据：本机Temp `runtime-w16-independent-test-inyl4703/FINAL-INDEPENDENT-TEST.json/md`，JSON SHA256 `29874f18cc9cc45ae40cb779f4f4e89e1d2eccb6d4d54a02e14f6f405407d64a`。CR证据 `wecom-w16-independent-cr-rcgimeui/review.json/md`及`process-boundary-addendum.json`，无遗留P0/P1/P2。源码/规则/设计审查通过，不以CR代替实测；W15已匹配的服务端恢复及真实PG证据按原范围复用，未冒称本批重跑。
+- 提交仅23项客户端源码/版本/锁/历史公开根、两份兼容规则、三份设计/契约/计划及任务索引，共29个路径。AGENTS原有“禁止过度设计”用户hunk及索引内B2B用户条目保持未暂存；旧安装目录/二进制/报告、本地vite/compose及其他研究/视频不提交。仅提交推送当前master，不部署、不安装、不发送业务消息、不恢复监听；主工作区其余改动保留。

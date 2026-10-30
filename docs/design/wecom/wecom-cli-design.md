@@ -1,5 +1,7 @@
 # wecom-cli：第一方企业微信操作 CLI / MCP Provider 设计
 
+2026-10-30 W16发行收尾：只修正包内Python/AES依赖、字节缓存排除与Windows长路径启动；旧BOSS/Runtime协议及历史验收根保持，新增根仅限WeCom。客户端够用不强制升级，新能力按现有能力协商，不加全局版本门禁。历史W11安装产物不冒充当前master的新构建。主控维护源码，独测/CR分别验证已交付0.0.29＋0.3.27原包及隔离长路径；详见[W16计划](../../plans/plan-wecom-cli-group-chat-experiment.md#w16-master客户端打包改动复核2026-10-30)。
+
 > 状态：✅ 已实现并持续维护（2026-10-09 按当前代码整合撰写）
 >
 > 上位规范：[第一方 CLI / MCP Provider 架构与开发规范](../../system/first-party-cli-mcp-provider-standard.md)

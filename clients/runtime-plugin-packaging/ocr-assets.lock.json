@@ -168,6 +168,15 @@
       "sha256": "4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6",
       "license": "",
       "source": "https://pypi.org/project/colorama/0.4.6/"
+    },
+    {
+      "name": "pycryptodome",
+      "version": "3.23.0",
+      "filename": "pycryptodome-3.23.0-cp37-abi3-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/54/2f/e97a1b8294db0daaa87012c24a7bb714147c7ade7656973fd6c736b484ff/pycryptodome-3.23.0-cp37-abi3-win_amd64.whl",
+      "sha256": "c75b52aacc6c0c260f204cbdd834f76edc9fb0d8e0da9fbf8352ef58202564e2",
+      "license": "BSD, Public Domain",
+      "source": "https://pypi.org/project/pycryptodome/3.23.0/"
     }
   ],
   "msvc": {

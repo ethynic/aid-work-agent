@@ -109,7 +109,12 @@ def main():
         shutil.copyfile(ROOT / 'ocr-assets.lock.json', stage / 'asset-provenance.json')
         env = {k: v for k, v in os.environ.items() if k not in ('PYTHONPATH', 'PYTHONHOME')}
         subprocess.run([str(stage / 'python.exe'), '-I', '-B', '-c',
-                        'from rapidocr_onnxruntime import RapidOCR; from PIL import Image; import onnxruntime; RapidOCR(); print("OCR_BUNDLE_OK")'],
+                        'from rapidocr_onnxruntime import RapidOCR; from PIL import Image; import onnxruntime; '
+                        'from Crypto.Cipher import AES; import sqlite3; '
+                        'encrypted=AES.new(bytes(16),AES.MODE_CBC,bytes(16)).encrypt(bytes(16)); '
+                        'assert encrypted.hex()=="66e94bd4ef8a2c3b884cfa59ca342b2e"; '
+                        'assert AES.new(bytes(16),AES.MODE_CBC,bytes(16)).decrypt(encrypted)==bytes(16); '
+                        'RapidOCR(); print("OCR_SQLITE_AES_BUNDLE_OK")'],
                        cwd=stage, env=env, check=True, timeout=90)
         shutil.copytree(stage, output)
     print('Verified embedded OCR distribution created:', output)

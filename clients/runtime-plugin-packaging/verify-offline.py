@@ -71,9 +71,16 @@ def main():
             if (stage / 'ocr-python').exists():
                 code = "from PIL import Image,ImageDraw,ImageFont; from rapidocr_onnxruntime import RapidOCR; import sys,json; im=Image.new('RGB',(700,160),'white'); ImageDraw.Draw(im).text((25,40),'Runtime 123',fill='black',font=ImageFont.truetype(sys.argv[1],48)); result,_=RapidOCR()(im); assert result and any('Runtime' in x[1] for x in result); print('SYNTHETIC_OCR_OK')"
                 subprocess.run([str(stage / 'ocr-python/python.exe'), '-I', '-B', '-c', code, str(windows / 'Fonts/arial.ttf')], cwd=stage, env=env, check=True, timeout=90, capture_output=True)
+            if manifest['provider_id'] == 'ai.aidwork.wecom':
+                code = ('from Crypto.Cipher import AES; import sqlite3; '
+                        'encrypted=AES.new(bytes(16),AES.MODE_CBC,bytes(16)).encrypt(bytes(16)); '
+                        'assert encrypted.hex()=="66e94bd4ef8a2c3b884cfa59ca342b2e"; '
+                        'assert AES.new(bytes(16),AES.MODE_CBC,bytes(16)).decrypt(encrypted)==bytes(16)')
+                subprocess.run([str(stage / 'ocr-python/python.exe'), '-I', '-B', '-c', code],
+                               cwd=stage, env=env, check=True, timeout=30, capture_output=True)
             if snapshot(stage) != before:
                 raise ValueError('Read-only smoke mutated signed payload')
-            summaries.append({'archive': archive.name, 'sha256': digest(archive), 'size': archive.stat().st_size, 'files': len(before), 'tools': len(manifest['tools']), 'doctor_exit': doctor.returncode, 'runtime_readiness': report['runtime_readiness'], 'payload_unchanged': True, 'synthetic_ocr': (stage / 'ocr-python').exists()})
+            summaries.append({'archive': archive.name, 'sha256': digest(archive), 'size': archive.stat().st_size, 'files': len(before), 'tools': len(manifest['tools']), 'doctor_exit': doctor.returncode, 'runtime_readiness': report['runtime_readiness'], 'payload_unchanged': True, 'synthetic_ocr': (stage / 'ocr-python').exists(), 'wecom_sqlite_aes': manifest['provider_id'] == 'ai.aidwork.wecom'})
     print(json.dumps(summaries, ensure_ascii=True, indent=2))
 
 

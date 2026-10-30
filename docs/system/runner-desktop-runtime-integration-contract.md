@@ -16,6 +16,8 @@
 
 ## 1. 适用范围与约束层级
 
+2026-10-30 W16客户端打包收尾：驱动缓存过滤、WeCom包内AES依赖与Windows长路径启动不改变Device/Host/Provider wire或BOSS工具，历史验收根保留，仅追加WeCom验收根。契约仍2.11，不要求已交付旧客户端升级；新增功能沿原能力协商，不新增门禁。主控唯一修改打包/CLI/bootstrap，独立测试及CR只读验证0.0.29＋BOSS0.3.27与长路径合成场景，见[W16计划](../plans/plan-wecom-cli-group-chat-experiment.md#w16-master客户端打包改动复核2026-10-30)。
+
 2026-10-30 W15服务端升级兼容：配置指纹仍写v3，恢复精确兼容master v1及分支v2；招聘profile保留master原配置，最新迁移水位后幂等补齐既有结构。仅服务端内部兼容，不改Device/Host/Provider wire、旧BOSS工具或执行权限，不要求客户机因此升级；契约仍2.11。主控唯一写入，独测/CR分别验证旧服务端checkpoint与真实存量库，见[W15计划](../plans/plan-wecom-cli-group-chat-experiment.md#w15-最小修复实施计划2026-10-30)。
 
 2026-10-29 W14.5兼容纠正：现有显式allowed业务工具保留原模型可见性，设备capabilities只决定自动新增候选；旧provider_id继续兼容。Runtime/CLI/native工具名单、Device wire及执行权限不改，无需因此强制升级客户机。复用原registry/excluded/业务投影，详见[兼容计划](../plans/plan-wecom-cli-group-chat-experiment.md#w145-服务端单独升级的旧端兼容复核2026-10-29)；不改变2.11契约版本。

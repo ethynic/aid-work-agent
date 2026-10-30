@@ -1,7 +1,7 @@
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign } from 'node:crypto'
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import canonicalize from 'canonicalize'
@@ -69,6 +69,12 @@ export function copyProviderScriptAssets(name, source, target) {
   for (const file of readdirSync(source).filter(file => file.endsWith('.ps1') || dependencies.includes(file))) cpSync(join(source, file), join(target, file))
 }
 
+/** Local Python test runs must not change the signed driver payload. */
+export function copyProviderDriverAssets(source, target) {
+  cpSync(source, target, { recursive: true,
+    filter: file => basename(file) !== '__pycache__' && !/\.(?:pyc|pyo)$/i.test(file) })
+}
+
 const NATIVE_INPUT_SPEC = 'file:../shared/win32-native-input'
 
 /**
@@ -118,7 +124,7 @@ async function buildProvider(name, options, signer) {
       // BOSS needs approved PowerShell drivers, not developer live probes.
       if (assets === 'scripts') {
         copyProviderScriptAssets(name, join(source, assets), join(stage, assets))
-      } else cpSync(join(source, assets), join(stage, assets), { recursive: true })
+      } else copyProviderDriverAssets(join(source, assets), join(stage, assets))
     }
     if (definition.ocr) {
       const ocr = resolve(options.ocr ?? join(root, 'assets/ocr-python-final'))
@@ -127,6 +133,13 @@ async function buildProvider(name, options, signer) {
       cpSync(ocr, join(stage, 'ocr-python'), { recursive: true })
       const env = { ...process.env }; delete env.PYTHONHOME; delete env.PYTHONPATH
       execFileSync(join(stage, 'ocr-python/python.exe'), ['-I', '-B', '-c', 'from rapidocr_onnxruntime import RapidOCR; from PIL import Image; RapidOCR(); print("OCR_BUNDLE_OK")'], { cwd: stage, env, timeout: 90000 })
+      if (name === 'wecom') {
+        // Native DB decryption imports Crypto lazily; plain SQLite/OCR checks
+        // cannot prove a reused embedded distribution can decrypt a snapshot.
+        execFileSync(join(stage, 'ocr-python/python.exe'), ['-I', '-B', '-c',
+          'from Crypto.Cipher import AES; import sqlite3; encrypted=AES.new(bytes(16),AES.MODE_CBC,bytes(16)).encrypt(bytes(16)); assert encrypted.hex()=="66e94bd4ef8a2c3b884cfa59ca342b2e"; assert AES.new(bytes(16),AES.MODE_CBC,bytes(16)).decrypt(encrypted)==bytes(16); print("WECOM_SQLITE_AES_BUNDLE_OK")'],
+        { cwd: stage, env, timeout: 30000 })
+      }
     }
     cpSync(join(source, 'package.json'), join(stage, 'package.json'))
     cpSync(join(source, 'package-lock.json'), join(stage, 'package-lock.json'))

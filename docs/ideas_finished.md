@@ -7,7 +7,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
-| 20261023-1226 | wecom CLI 三工具与持续恢复 | ✅ 已完成开发；master升级兼容已修，真实旧任务/存量库独测及CR通过。 | [设计](design/wecom/wecom-cli-design.md#12-持续监控端到端收敛2026-10-27) | [开发计划](plans/plan-wecom-cli-group-chat-experiment.md) |
+| 20261023-1226 | wecom CLI 三工具与持续恢复 | ✅ 已完成开发；打包兼容复核完成，旧包验签/MCP、长路径及CR通过。 | [设计](design/wecom/wecom-cli-design.md#12-持续监控端到端收敛2026-10-27) | [开发计划](plans/plan-wecom-cli-group-chat-experiment.md) |
 | 20261013-1434 | 结构化提问交互（ask_user 提问卡片） | ✅ 已完成开发；选项焦点白屏已修，独立48项/CR、构建及原卡片实测通过。 | [设计](system/design-ask-user-interactive-question.md) | [实施计划](plans/plan-ask-user-interactive-question.md) |
 | 20261026-1744 | 测试入口隔离与Runtime断言收尾 | ✅ 已完成开发；隔离准入及自建库清理证明完成，旧断言校准，独测/CR通过。 | [设计](design/devtools/test-database-isolation-design.md) | [计划](plans/plan-test-database-isolation-runtime-assertions.md) |
 | 20261022-2109 | agent2 指定分支发布 | ✅ 已完成开发：支持特性分支固定SHA发布，独立测试及CR通过，待部署验收。 | [设计与计划](plans/plan-agent2-branch-deploy.md) | [计划](plans/plan-agent2-branch-deploy.md) |

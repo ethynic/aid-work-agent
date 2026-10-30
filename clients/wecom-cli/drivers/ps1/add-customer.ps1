@@ -73,8 +73,9 @@ function Invoke-AddCustomerOcr([string]$ImagePath, [string]$Mode) {
     if (-not (Test-Path $ocrScript)) { Throw-DriverError 'INTERNAL_ERROR' ('未找到 OCR 脚本：' + $ocrScript) }
     if (-not (Test-Path $pythonExe)) { Throw-DriverError 'CONFIG_MISSING' ('未找到 OCR Python：' + $pythonExe) }
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $pythonExe
-    $psi.Arguments = ('-I -B "' + $ocrScript + '" "' + $ImagePath + '" ' + $Mode)
+    $psi.FileName = if ($pythonExe.StartsWith('\\?\')) { $pythonExe } elseif ($pythonExe.StartsWith('\\')) { '\\?\UNC\' + $pythonExe.Substring(2) } else { '\\?\' + $pythonExe }
+    $bootstrap = Join-Path $script:DriverPs1Dir '..\py\python_bootstrap.py'
+    $psi.Arguments = ('-I -B "' + $bootstrap + '" "' + $ocrScript + '" "' + $ImagePath + '" ' + $Mode)
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true

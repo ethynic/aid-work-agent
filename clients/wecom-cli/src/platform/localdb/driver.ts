@@ -27,7 +27,7 @@
  */
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, toNamespacedPath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 /** 解释器覆盖环境变量名 */
@@ -44,6 +44,7 @@ export const LOCALDB_JSON_PREFIX = 'LOCALDB_JSON:'
  * 打包登记关系留组合任务，见开发计划）。
  */
 const PY_DRIVER_PATH = fileURLToPath(new URL('../../../../drivers/py/wecom_localdb.py', import.meta.url))
+const PY_BOOTSTRAP_PATH = fileURLToPath(new URL('../../../../drivers/py/python_bootstrap.py', import.meta.url))
 
 export interface ResolveLocaldbPythonDeps {
   /** 环境变量替身（缺省 process.env） */
@@ -108,7 +109,9 @@ export type LocaldbPySpawnFn = (
 
 /** 缺省 spawn：隐藏窗口、三管道、AbortSignal 交给 node spawn 原生透传（abort → kill + error） */
 const defaultSpawn: LocaldbPySpawnFn = (file, args, opts) =>
-  spawn(file, args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], signal: opts.signal })
+  spawn(process.platform === 'win32' ? toNamespacedPath(file) : file,
+    process.platform === 'win32' ? [...args.slice(0, 2), PY_BOOTSTRAP_PATH, ...args.slice(2)] : args,
+    { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], signal: opts.signal })
 
 export interface RunLocaldbPyOpts {
   /** 写入子进程 stdin 的文本（decrypt 模式的密钥 hex；密钥通道，不进参数/错误/日志） */

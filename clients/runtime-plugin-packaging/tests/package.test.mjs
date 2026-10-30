@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict'
 import { generateKeyPairSync, verify } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, cpSync, existsSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, cpSync, existsSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 import canonicalize from 'canonicalize'
-import { createOfflinePackage, copyProviderScriptAssets, filesUnder, sha256, zipBytes, main, stageNativeInputDependency } from '../package.mjs'
+import { createOfflinePackage, copyProviderScriptAssets, copyProviderDriverAssets, filesUnder, sha256, zipBytes, main, stageNativeInputDependency } from '../package.mjs'
 
 test('release signature binds inner payload and full canonical manifest, with no self hash', async () => {
   const pair = generateKeyPairSync('ed25519')
@@ -56,7 +56,7 @@ test('PowerShell OCR paths relocate, prefer bundled interpreter, and fail closed
       const script = `. '${join(pkg, 'drivers/ps1/_common.ps1').replaceAll("'", "''")}'; ${resolver}`
       let result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true })
       assert.equal(result.status, 0, result.stderr)
-      assert.equal(result.stdout.trim(), python)
+      assert.equal(realpathSync.native(result.stdout.trim()), realpathSync.native(python))
       rmSync(python)
       writeFileSync(join(pkg, 'runtime-manifest.json'), '{}')
       result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true })
@@ -118,6 +118,26 @@ test('non-BOSS script staging retains its PowerShell-only asset policy', () => {
       const target = join(home, provider)
       copyProviderScriptAssets(provider, source, target)
       assert.deepEqual(filesUnder(target).map(file => file.path), ['driver.ps1'])
+    }
+  } finally { rmSync(home, { recursive: true, force: true }) }
+})
+
+test('signed drivers keep source bytes while local Python bytecode never enters the release', () => {
+  const home = mkdtempSync(join(tmpdir(), 'aid-driver-source-assets-'))
+  try {
+    const source = join(home, 'source'), payload = join(home, 'payload')
+    mkdirSync(join(source, 'py/__pycache__'), { recursive: true })
+    mkdirSync(join(source, 'ps1'))
+    writeFileSync(join(source, 'py/session.py'), 'current source')
+    writeFileSync(join(source, 'ps1/driver.ps1'), '\ufeff# current driver')
+    writeFileSync(join(source, 'schema.json'), '{}')
+    writeFileSync(join(source, 'py/__pycache__/session.cpython-312.pyc'), 'stale developer bytecode')
+    writeFileSync(join(source, 'py/legacy.pyo'), 'stale optimized bytecode')
+    writeFileSync(join(source, 'py/legacy.PYC'), 'stale bytecode')
+    copyProviderDriverAssets(source, payload)
+    assert.deepEqual(filesUnder(payload).map(file => file.path), ['ps1/driver.ps1', 'py/session.py', 'schema.json'])
+    for (const file of filesUnder(payload)) {
+      assert.equal(file.sha256, sha256(readFileSync(join(source, file.path))))
     }
   } finally { rmSync(home, { recursive: true, force: true }) }
 })

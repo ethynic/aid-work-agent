@@ -25,6 +25,7 @@ using System;
 using System.Text;
 using System.Runtime.InteropServices;
 public class WeComWin32 {
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode)] public static extern uint GetShortPathNameW(string path, StringBuilder buffer, uint length);
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
     [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);
     [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr hWndParent, EnumWindowsProc cb, IntPtr lParam);
@@ -597,8 +598,9 @@ function Invoke-WeComChatOcr {
     # python 根本未执行且 $LASTEXITCODE 为空（2026-09-04 真机实测）。直启进程绕开该机制，
     # 且 stderr 可留存诊断。
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $pythonExe
-    $psi.Arguments = ('-I -B "' + $ocrScript + '" "' + $ImagePath + '" ' + $Mode)
+    $psi.FileName = if ($pythonExe.StartsWith('\\?\')) { $pythonExe } elseif ($pythonExe.StartsWith('\\')) { '\\?\UNC\' + $pythonExe.Substring(2) } else { '\\?\' + $pythonExe }
+    $bootstrap = Join-Path $script:DriverPs1Dir '..\py\python_bootstrap.py'
+    $psi.Arguments = ('-I -B "' + $bootstrap + '" "' + $ocrScript + '" "' + $ImagePath + '" ' + $Mode)
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
@@ -1249,7 +1251,18 @@ function Invoke-DriverMain {
 function Resolve-WeComOcrPython {
     $packageRoot = [IO.Path]::GetFullPath((Join-Path $script:DriverPs1Dir '..\..'))
     $bundled = Join-Path $packageRoot 'ocr-python\python.exe'
-    if (Test-Path -LiteralPath $bundled -PathType Leaf) { return $bundled }
+    if (Test-Path -LiteralPath $bundled -PathType Leaf) {
+        # .NET ProcessStart passes a NULL application name; an existing OS alias
+        # keeps that executable within its Win32 limit. Never create an alias.
+        Initialize-WeComWin32
+        $needed = [WeComWin32]::GetShortPathNameW($bundled, $null, 0)
+        if ($needed -gt 0) {
+            $buffer = New-Object System.Text.StringBuilder ([int]$needed)
+            $copied = [WeComWin32]::GetShortPathNameW($bundled, $buffer, $needed)
+            if ($copied -gt 0 -and $copied -lt $needed) { return $buffer.ToString() }
+        }
+        return $bundled
+    }
     if (Test-Path -LiteralPath (Join-Path $packageRoot 'runtime-manifest.json')) {
         Throw-DriverError 'CONFIG_MISSING' '发行包缺少内部 OCR Python，请重新安装完整插件'
     }

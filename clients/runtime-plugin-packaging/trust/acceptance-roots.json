@@ -158,6 +158,38 @@
       "providers": [
         "ai.aidwork.boss-recruiting"
       ]
+    },
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-wecom-0-2-0-20261028-100529",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAwSFJPPOXeikccO4zrD1Twz9siYiNizRSJ0FvGxFljJ0=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.wecom"
+      ]
+    },
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-wecom-0-2-0-20261028-102514",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAHawBQ59f8koPPoNCqDbtDrSaKobT27leRXvPmW5oSH0=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.wecom"
+      ]
+    },
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-wecom-0-2-0-20261028-103132",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAMIXeYSm+hc3nI0lXJRpypUZiZO/jvteS/WvpHOOwDAA=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.wecom"
+      ]
+    },
+    {
+      "test_only": true,
+      "key_id": "aid-isolated-wecom-0-2-1-20261028-111140",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAZwZAd1JrnHATf3aXSbzKna6Xti296xzc7CDZ1WS0WSA=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.wecom"
+      ]
     }
   ],
   "profile": "acceptance"
