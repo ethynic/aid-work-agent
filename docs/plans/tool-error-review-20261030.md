@@ -57,9 +57,11 @@ ai-lead-gen 会话中 LLM 执行 `lead_db.py`、`sites_*.txt` 报 `FileNotFoundE
 - 顺手收口 `add_file` files 键名逃逸（拒绝绝对路径与 `..` 段，CodeReview P2 建议）。
 - 单测 43 绿（`tests/unit/test_skill_executor_path.py` 含 symlink/逃逸/跨调用复用边界）+ 独立测试与独立 CodeReview 通过（CodeReview 另有 3 项 P2 观察项：cwd 依赖 `configured_storage_root` 未来分叉、设备路由分支静默忽略 workdir、workdir 指向文件时文案不友好）。
 
-### T3（P1，修复待部署）web-search-pro 通道无结果/风控
+### T3（P1）web-search-pro 通道无结果/风控
 
-skill_execute 中 15+ 次失败为搜索引擎通道全灭：`baidu 命中风控验证码`、`so/baidu_m/sogou 第4次结果不相关`。与已知结论一致（百度风控为行为级动态；151 tinyproxy 代理代码待提交部署，254 .env 须配代理）。**本期数据确认部署后需复查该项是否收敛**。
+skill_execute 中 15+ 次失败为搜索引擎通道全灭：`baidu 命中风控验证码`、`so/baidu_m/sogou 第4次结果不相关`。与已知结论一致（百度风控为行为级动态；151 tinyproxy 代理代码待提交部署，254 .env 须配代理）。
+
+**2026-10-30 复查（已收敛）**：151 代理链路全通（151 tinyproxy / 反向隧道 254:127.0.0.1:18080 / socat forwarder 192.168.48.1:18080 / agent2、agent3 容器 env 均已配 `WEBSEARCH_BAIDU_PROXY`），容器内实测 baidu 通道返回真实结果无验证码。数据佐证：agent2 容器 10-30 14:45 带 env 重启后，baidu 风控失败不再出现（10-28~10-30 白天的失败均发生在容器 env 注入前，走 254 直连被标 IP）。**剩余为不同性质失败**：so/bing「第4次结果不相关（疑似分词漂移）」是 SERP 相关性清洗门槛对泛查询（如「有限公司 联系我们 运营总监」）严格，非风控，观察项不改动。
 
 ### T4（P2）http_api 环境变量未配置即调用
 
@@ -73,6 +75,6 @@ skill_execute 中 15+ 次失败为搜索引擎通道全灭：`baidu 命中风控
 
 - [ ] T1 部署 7385c1bb 并验证 ITERATION_LIMIT 收敛
 - [ ] T2 代码已修（workdir 生效 + 绝对路径拼接 5a329a49）；待生产 243 部署 5a329a49 + 本次修复，并用 ai-lead-gen 真实会话回归
-- [ ] T3 部署 151 代理后复查 web-search 失败率
+- [x] T3 已复查（2026-10-30）：baidu 风控经 151 代理已收敛（容器 env 注入后零复发）；so/bing 分词漂移类为清洗门槛观察项
 - [ ] T4 观察不改动
 - [ ] T5 T1/上下文压缩落地后复查单会话成本
