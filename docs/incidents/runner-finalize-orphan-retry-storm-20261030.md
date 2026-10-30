@@ -84,9 +84,9 @@
   - `python3 -m py_compile` 通过；止血后线上日志与 DB 状态已核对（见 §5）。
   - 集成测试 `tests/integration/agent_runner_service/test_finalizer_abandon.py`（7 用例，隔离库 `--isolated-db` 全部通过）：归属类错误立即放弃、确定性结算错误（3 个参数化）立即放弃、可重试错误 5 次后放弃且 `finalize_failures` 1→4 递增、放弃后回执 applied 且 `released_by`/心跳干净关闭、无权限调用零副作用。
   - 回归：`test_storage.py` + `test_worker_released_heartbeat.py` + `test_recovery_storage.py`（41 通过）、`test_continuous_settlement.py` + `test_runner_event_settlement.py` + `test_incident_trace_retry.py`（13 通过 1 失败）、`test_worker.py`（10 通过 1 失败）。
-- 遗留失败（stash 改动后复跑确认与本次修复无关，均为存量问题）：
-  - `test_runner_event_settlement.py::test_real_terminal_event_fault_rolls_back_...`：`settle_pending_usage` 同步公开 `credit_cost` 后测试仍断言 `result` 与终态逐键相等（0.1 vs 0.2），断言未随补结算改动更新。
-  - `test_worker.py::test_two_real_workers_run_different_sessions_and_preserve_same_session_fifo`：改动前同样失败，原因未查，登记待单独排查。
+- 遗留失败处置（stash 改动后复跑确认与本次修复无关，均为存量问题，2026-10-30 当日已修）：
+  - `test_runner_event_settlement.py::test_real_terminal_event_fault_rolls_back_...`：`settle_pending_usage` 同步公开 `credit_cost`（376cfc33）后测试断言未更新。已改断言：`result` 除 `credit_cost`（0.1 -> 0.2）外与终态逐键相等。
+  - `test_worker.py::test_two_real_workers_run_different_sessions_and_preserve_same_session_fifo`：460620f0（user 消息改用提交时刻）的副作用——重叠提交时 web 历史按 created_at 排序会出现 `user1, user2, 回复1, 回复2`。按产品决定保证回合块顺序：`write_history` 对 web 会话把主 user 消息时间戳钳制到会话已有消息最大时间之后（顺序提交场景仍显示真实发送时间，460620f0 目标不变）。
 
 ## 8. 遗留与后续建议
 

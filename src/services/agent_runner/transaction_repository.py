@@ -19,6 +19,17 @@ def write_history(cursor, runner, result):
         raise CheckpointFailure('FINALIZE_SESSION_OWNER_CHANGED')
     cursor.execute('SELECT clock_timestamp() AS now')
     now = cursor.fetchone()['now']
+    # 回合块顺序：上一轮未终结时提交的后续回合，其提交时刻早于上一轮回复的
+    # 落库时刻，而 web 历史按 created_at 排序。主 user 消息钳制到会话已有消息
+    # 之后，保证每个回复紧跟自己的问题；顺序提交场景 accepted_at 更晚，仍显示
+    # 真实发送时间（460620f0 的修复目标不变）。会话行已 FOR UPDATE，MAX 可靠。
+    user_floor = None
+    if runner['session_kind'] == 'web':
+        cursor.execute('SELECT MAX(created_at) AS latest FROM chat_messages WHERE session_id=%s',(session_id,))
+        latest = cursor.fetchone()['latest']
+        if latest is not None:
+            user_floor = max(runner['accepted_at'].replace(tzinfo=None),
+                             latest.replace(tzinfo=None)+timedelta(microseconds=1))
     user_metadata = {'attachments':runner['input'].get('attachments',[]),
                      'accepted_at':runner['accepted_at'].isoformat()}
     if runner.get('source') == 'scheduled':
@@ -79,7 +90,7 @@ def write_history(cursor, runner, result):
             content = json.dumps(content,ensure_ascii=False)
         # 主 user 消息用任务提交时刻（用户实际发送时间）；tool/assistant 仍用落库时刻
         if index == 0:
-            created = runner['accepted_at'].replace(tzinfo=None)
+            created = user_floor if user_floor is not None else runner['accepted_at'].replace(tzinfo=None)
         else:
             created = now.replace(tzinfo=None)+timedelta(microseconds=index)
         normalized.append({'message_id':message_id,'role':message['role'],'content':content,

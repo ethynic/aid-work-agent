@@ -64,8 +64,11 @@ def test_real_terminal_event_fault_rolls_back_fee_history_claim_then_late_usage_
     usage.observe(authority, late['receipt_id'], {'prompt_tokens': 1000, 'completion_tokens': 0})
     settled = finalizer.settle_pending_usage(identifier)
     assert settled['status'] == 'completed' and settled['settlement_status'] == 'settled'
-    for key in ('attempt', 'revision', 'checkpoint', 'result', 'worker_id', 'lease_until', 'finished_at'):
+    for key in ('attempt', 'revision', 'checkpoint', 'worker_id', 'lease_until', 'finished_at'):
         assert settled[key] == terminal[key]
+    # 补结算同步公开费用（376cfc33）：迟到回执累计进权威 chat_records 后，
+    # 公开 result.credit_cost 一并更新（0.1 -> 0.2），其余展示字段不变。
+    assert settled['result'] == {**terminal['result'], 'credit_cost': 0.2}
     assert page(service_database, identifier)['events'][-1]['kind'] == 'settlement_changed'
     assert sum(event['kind'] == 'terminal' for event in page(service_database, identifier)['events']) == 1
     assert service_database.rows('SELECT * FROM chat_messages WHERE session_id=%s ORDER BY message_id', (actors['a'].session_id,)) == history
