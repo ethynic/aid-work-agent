@@ -142,7 +142,7 @@ async def run(proxy, operation, kwargs):
                 if blocked_key in pending else '上一条发送已确认，本次没有再次发送；请按最新会话内容判断后续回复。'),
             'data': {'session': target, 'send_invocation_id': blocked['invocation_id'], 'reconciled_sends': resolutions}}
     recovery = []
-    reading = proxy.name in {'wecom_read_session', 'wecom_read_sessions'}
+    reading = proxy.name in {'wecom_read_session', 'wecom_read_sessions'} and not arguments.get('attachment')
     if reading:
         from .wecom_inbound import before_read
         from .proxy_tool import WecomReadSessionTool

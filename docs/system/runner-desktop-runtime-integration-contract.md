@@ -1,10 +1,12 @@
 # AgentRunner / Desktop / Runtime 共同集成契约
 
+2026-10-31 P10附件实施检查点（2.12，可选扩展）：沿原三业务工具，`wecom_read_session`新增可选`attachment={message_id,offset?,max_bytes?}`，offset为文本字节位置、max_bytes默认4096/上限8192；旧输入含义不变。时间线只增加图片/文件类型及可选附件元数据，不默认读取内容；按需结果不推进时间线游标。图片使用原OperationResult内部`data.attachment.image`的有界标准MCP图片块跨原Device result/outbox传输，云端立即消费字节并转ImageRegistry/ImageRef与既有Runner图片资源引用，不将Base64/客户机路径混入模型文字。复用已有结果传输，不新增API、资源服务、授权或调度框架。CLI唯一写入者为附件CLI开发角色；云端proxy/结果消费/模型装配由桥接开发角色唯一维护；主控维护Runtime现有能力协商、契约与文档；独测/CR只读。缺新附件能力只返回该新请求不可用，旧Runtime0.0.29＋BOSS0.3.27普通工具/上报/恢复/计费不改、不强制升级。具体结果约定与组合验证见[计划P10](../plans/plan-wecom-cli-localdb.md#p10-图片与文件时间线及按需读取2026-10-30设计草案)。源码已通过独立测试与CR，验收范围见计划；用户后续授权仅本任务提交推送，不安装、部署或恢复监听。
+
 2026-10-30 WeCom 消息读取共同检查点：沿用2.11与现有三工具输入，仅扩展已验证的本地消息类型。Markdown正文通过原text返回，可选text_format=markdown；系统事件使用kind=system、system=true及既有timeline方向，不算个人发言。旧Runtime/服务端无需升级即可透传，旧插件保持原能力，不新增能力门禁。旧v2/wb1游标摘要与普通文本发送对账语义保持；本任务主控唯一维护TS归一/消费与文档，解码开发角色唯一维护Python驱动，测试/CR只读独立验证。实施与验收记录见[本地库计划P9](../plans/plan-wecom-cli-localdb.md#p9-机器人markdown与群系统事件读取2026-10-30)，未安装新版插件前不宣称客户端已获得新能力。
 
 > 契约 ID：`AID-RUNNER-DESKTOP-RUNTIME`
 >
-> 版本：`2.11`；日期：2026-10-27
+> 版本：`2.12`；日期：2026-10-31
 >
 > 状态：v2.0按用户逐条复核确定，替代v1.3的插件额外审批语义；候选0.3已有真实Host与Desktop消费验证，Windows隔离验收版已交付，尚未共同登记wire冻结。现有公开API以代码为基线；共享格式见第8.1节，任务binding、授权及资源占用wire仍待主导交付。隔离验收不代表生产发行或真实业务验收通过。
 >

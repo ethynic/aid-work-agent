@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 from .catalog import agent_tools, get_provider
@@ -17,11 +17,28 @@ class SessionInput(BaseModel):
         description='读取结果返回的原会话标识；首次也可用完整会话名。单聊和群均适用，不自行拼目标句柄。')
 
 
+class AttachmentReadInput(BaseModel):
+    model_config = {'extra': 'forbid'}
+    message_id: int = Field(..., gt=0, strict=True,
+        description='原会话读取返回的附件msg_id，不按文件名猜测。')
+    offset: int | None = Field(None, ge=0, strict=True, description='文本附件起始字节；首次省略。')
+    max_bytes: int | None = Field(None, ge=1, le=8192, strict=True,
+        description='本次最多文本字节，默认4096；按next_offset继续。')
+
+
 class ReadInput(SessionInput):
     cursor: str | None = Field(None, min_length=1, max_length=16384,
         description='该会话上次返回的增量游标，原样回传；首次省略，历史仅作上下文。')
     limit: int | None = Field(None, ge=1, le=50,
         description='本批最多消息数；has_more时继续读取，未返回的消息不推进。')
+    attachment: AttachmentReadInput | None = Field(None,
+        description='按消息ID展开该条附件，不推进聊天游标；图片交给视觉模型，文本按字节分页。')
+
+    @model_validator(mode='after')
+    def _attachment_cursor(self):
+        if self.attachment is not None and self.cursor is not None:
+            raise ValueError('附件展开与聊天cursor不能同时指定；保留原cursor用于后续聊天增量读取。')
+        return self
 
 
 class SendInput(SessionInput):

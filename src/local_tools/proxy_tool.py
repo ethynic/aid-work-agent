@@ -38,6 +38,7 @@ from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple
 
 from loguru import logger
 from pydantic import BaseModel, Field, StrictBool, WithJsonSchema, field_validator, model_validator
+from .wecom_business import AttachmentReadInput
 
 from src.config.settings import settings
 from src.db.client_binding_db import ClientUsageLogDB
@@ -2679,6 +2680,8 @@ class WecomSendFileTool(WecomLocalToolProxyTool):
 
 class WecomReadSessionInput(WecomTargetInput):
     session: Optional[str] = Field(None, min_length=1, max_length=2048)
+    attachment: Optional[Annotated[Dict[str, Any], WithJsonSchema(AttachmentReadInput.model_json_schema())]] = Field(None,
+        description='读取指定消息的附件内容，不推进聊天游标。')
     cursor: Optional[str] = Field(None, min_length=1, max_length=16384)
     limit: Optional[int] = Field(None, ge=1, le=50)
     resolve_only: Optional[bool] = Field(None, description='内部目标定位阶段，不读取聊天正文')
@@ -2698,6 +2701,19 @@ class WecomReadSessionInput(WecomTargetInput):
         ),
     )
 
+    @model_validator(mode='after')
+    def _attachment_read(self):
+        if self.attachment is not None and (self.cursor is not None or self.resolve_only):
+            raise ValueError('附件展开不能同时指定cursor或resolve_only。')
+        return self
+
+    @field_validator('attachment')
+    @classmethod
+    def _attachment_input(cls, value):
+        # ToolExecutor preserves supplied fields via getattr; keep the native
+        # invocation argument JSON-shaped rather than passing a nested model.
+        return AttachmentReadInput(**value).model_dump(exclude_none=True) if value is not None else None
+
 
 class WecomReadSessionTool(WecomLocalToolProxyTool):
     """企业微信读取会话消息（只读内容，纯代理本机执行；进会话清角标为客户端固有副作用）。"""
@@ -2710,6 +2726,9 @@ class WecomReadSessionTool(WecomLocalToolProxyTool):
         '消息含sender_id/name/sender_platform，wechat为微信、wecom为企微、unknown不得猜。'
         '首次历史仅作上下文，监听只处理后续新消息，用户要求补旧待办时按其范围处理。'
         '根据已选智能体角色、发言人平台及上下文决定回复，不把未读角标当是否已回复。'
+        '附件时间线只含元数据；需要理解图片/文件时以attachment.message_id指定原msg_id展开。'
+        '图片展开后才可按实际图像回答；文本按offset/max_bytes分段，has_more时按next_offset继续，'
+        '不把未查看附件当已理解，也不逐次展开全部历史附件。附件读取不推进聊天cursor。'
         '无需先probe、搜索或选择；没有新消息时agent_sleep，保留游标后继续。')
     InputModel = WecomReadSessionInput
     from .wecom_business import ReadInput as agent_input_model

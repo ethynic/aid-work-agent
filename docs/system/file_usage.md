@@ -67,6 +67,8 @@ storage/
 | 长期记忆文件 | `tenants/{tenant_id}/memory/` | 磁盘 | 是 | 长期记忆存储文件 |
 | 子智能体配置 | `subagents/{dir}/extra_{tenant_id}.md` | 磁盘 | 是 | 子智能体租户级额外配置 |
 | 图片资产（通用） | `tenants/{id}/images/{yyyy-mm}/` | 磁盘+Redis | 是 | ImageRegistry 管理的非知识库图片（工具生成/上传/Web 抓取），TTL 24h |
+| 本机CLI按需附件图 | 同上ImageRegistry目录，临时入口为`tenants/{id}/temp/wecom_{uuid12}.*` | 磁盘+原资源登记 | 是 | WeCom只在按消息请求时经原Runtime结果传图片；注册ImageRef后删除临时入口，不全量搬运会话附件 |
+| Runner附件恢复副本 | 既有Runner resource_directory下`workspaces/{owner}/image_{sha256}.*` | 执行owner磁盘+checkpoint引用 | 是 | AttachmentAssembler保存`source=local_attachment`副本，历史压缩后回收无引用项，终态沿原资源清理；初始用户图不受影响，见[本地库P10](../plans/plan-wecom-cli-localdb.md#p10-图片与文件时间线及按需读取2026-10-30设计草案) |
 | 知识库图片资产 | `tenants/{id}/knowledge/images/` | 磁盘+Redis | 是 | 知识库关联图片（景点封面、文档内嵌图等），永久存储 |
 | 输出文件 | `output/` | 磁盘 | 待实现 | 生成的报表、演示文稿等 |
 | 技能草稿临时文件 | `storage/tmp/`（见 §3.13） | 磁盘 | 否 | 技能脚本草稿，7 天兜底清理 |

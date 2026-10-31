@@ -979,6 +979,209 @@ def _table_columns(conn, table):
     return [r[1] for r in conn.execute('PRAGMA table_info(%s)' % table).fetchall()]
 
 
+# ---------- P10 attachments: metadata on the timeline, bytes only on explicit read ----------
+
+_ATTACHMENT_IMAGE_BYTES = 5 * 1024 * 1024
+_ATTACHMENT_TEXT_EXTENSIONS = {'.md', '.markdown', '.txt', '.csv', '.tsv', '.json', '.jsonl',
+                               '.log', '.xml', '.yaml', '.yml', '.html', '.htm', '.ini'}
+
+
+def _attachment_fields(content):
+    fields, _ = _history_fields(bytes(content or b''))
+    return fields
+
+
+def _attachment_descriptor(content, content_type):
+    fields = _attachment_fields(content)
+    result = {'kind': 'image' if content_type == 101 else 'file', 'status': 'not_cached'}
+    sizes = [v for n, w, v in fields if n == 4 and w == 0 and isinstance(v, int) and v >= 0]
+    if sizes:
+        result['size_bytes'] = sizes[0]
+    if content_type == 102:
+        names = [_readable_utf8(v) for n, w, v in fields if (n, w) == (2, 2)]
+        if len(names) == 1 and names[0]:
+            result['name'] = names[0]
+    return result
+
+
+def _attachment_cache_path(content, content_type, account_dir, send_time):
+    """Use the client's exact resource mapping. Never infer images from time or filename."""
+    if not isinstance(account_dir, str) or not os.path.isdir(account_dir):
+        return None
+    root = os.path.realpath(account_dir)
+    cache = os.path.realpath(os.path.join(root, 'Cache'))
+    if os.path.commonpath([root, cache]) != root:
+        return None
+    fields = _attachment_fields(content)
+    resources = []
+    for number in ((3, 26) if content_type == 101 else (3,)):
+        resources.extend(t for n, w, v in fields if (n, w) == (number, 2)
+                         for t in [_readable_utf8(v)] if t)
+    folder = 'Image' if content_type == 101 else 'File'
+    month = time.strftime('%Y-%m', time.localtime(send_time)) if type(send_time) is int and send_time >= 0 else ''
+
+    def cached(name):
+        if not isinstance(name, str) or not name:
+            return None
+        name = name.replace('\\', os.sep).replace('/', os.sep)
+        for candidate in [os.path.join(root, name), os.path.join(cache, name),
+                          os.path.join(cache, folder, name), os.path.join(cache, folder, month, name)]:
+            candidate = os.path.realpath(candidate)
+            try:
+                if os.path.commonpath([cache, candidate]) == cache and os.path.isfile(candidate):
+                    return candidate
+            except ValueError:
+                continue
+        return None
+
+    mapping_dir = os.path.join(root, 'CacheMapping')
+    try:
+        mapping_files = sorted(entry.path for entry in os.scandir(mapping_dir)
+                               if entry.name.endswith('.db') and entry.is_file(follow_symlinks=False))
+    except OSError:
+        mapping_files = []
+    # Resource preference (clear image before thumbnail) is independent of DB file order.
+    for resource in resources:
+        for path in mapping_files:
+            connection = None
+            try:
+                connection = _open_ro(path)
+                rows = connection.execute('SELECT file_name FROM mapping WHERE key=?', (resource,)).fetchall()
+                for (name,) in rows:
+                    found = cached(name)
+                    if found:
+                        return found
+            except (sqlite3.Error, OSError):
+                continue
+            finally:
+                if connection is not None:
+                    connection.close()
+    # Some downloaded text files have no mapping row. A bounded exact-name + size +
+    # digest fallback is sufficient for those files; it does not scan the account tree.
+    if content_type == 102:
+        descriptor = _attachment_descriptor(content, content_type)
+        name, size = descriptor.get('name'), descriptor.get('size_bytes')
+        digests = {t.lower() for n, w, v in fields if w == 2 for t in [_readable_utf8(v)]
+                   if t and re.fullmatch(r'[0-9a-fA-F]{32}', t)}
+        if (name and not any(ch in name for ch in '/\\:') and type(size) is int
+                and size <= 16 * 1024 * 1024 and digests):
+            for relative in (os.path.join('File', month, name), os.path.join('File', name)):
+                found = cached(relative)
+                if found and os.path.getsize(found) == size:
+                    digest = hashlib.md5()
+                    with open(found, 'rb') as stream:
+                        for chunk in iter(lambda: stream.read(65536), b''):
+                            digest.update(chunk)
+                    if digest.hexdigest() in digests:
+                        return found
+    return None
+
+
+def _attachment_image_info(path, *, verify=False):
+    from PIL import Image
+    try:
+        with Image.open(path) as image:
+            info = {'width': image.width, 'height': image.height,
+                    'mime_type': Image.MIME.get(image.format, 'application/octet-stream')}
+            if verify:
+                image.verify()
+            return info
+    except (Image.DecompressionBombError, SyntaxError):
+        # These are image parser failures, not failures of the neighboring chat history.
+        raise ValueError('ATTACHMENT_IMAGE_UNREADABLE') from None
+
+
+def _describe_attachment(content, content_type, account_dir, send_time):
+    descriptor = _attachment_descriptor(content, content_type)
+    try:
+        path = _attachment_cache_path(content, content_type, account_dir, send_time)
+        if path:
+            descriptor.update(status='available', size_bytes=os.path.getsize(path))
+            if content_type == 101:
+                descriptor.update(_attachment_image_info(path))
+            else:
+                import mimetypes
+                descriptor['mime_type'] = mimetypes.guess_type(descriptor.get('name', path))[0] or 'application/octet-stream'
+    except (OSError, ValueError, ImportError):
+        descriptor['status'] = 'unreadable'
+    return descriptor
+
+
+def _read_attachment(conn, conversation_id, account_dir, request):
+    """Explicit exact message read; never advances a conversation cursor."""
+    if (not isinstance(request, dict) or set(request) - {'message_id', 'offset', 'max_bytes'}
+            or type(request.get('message_id')) is not int or not 1 <= request['message_id'] <= 9007199254740991
+            or type(request.get('offset', 0)) is not int or not 0 <= request.get('offset', 0) <= 9007199254740991
+            or type(request.get('max_bytes', 4096)) is not int or not 1 <= request.get('max_bytes', 4096) <= 8192):
+        return {'ok': False, 'error': 'BAD_ARGS'}
+    mid = request['message_id']
+    row = conn.execute('SELECT content_type,content,send_time FROM message_table '
+                       'WHERE conversation_id=? AND message_id=?', (conversation_id, mid)).fetchone()
+    if row is None:
+        return {'ok': True, 'attachment': {'message_id': mid, 'status': 'not_found'}}
+    ct, content, stamp = row
+    if ct not in (101, 102):
+        return {'ok': True, 'attachment': {'message_id': mid, 'status': 'unsupported'}}
+    result = {'message_id': mid, **_attachment_descriptor(content, ct)}
+    try:
+        path = _attachment_cache_path(content, ct, account_dir, stamp)
+        if not path:
+            return {'ok': True, 'attachment': result}
+        size = os.path.getsize(path)
+        result.update(size_bytes=size, status='available')
+        if ct == 101:
+            if size > _ATTACHMENT_IMAGE_BYTES:
+                result['status'] = 'too_large'
+            else:
+                import base64
+                result.update(_attachment_image_info(path, verify=True))
+                mime = result['mime_type']
+                if mime not in ('image/jpeg', 'image/png', 'image/webp', 'image/gif'):
+                    result['status'] = 'unsupported'
+                else:
+                    with open(path, 'rb') as stream:
+                        data = stream.read(_ATTACHMENT_IMAGE_BYTES + 1)
+                    if len(data) > _ATTACHMENT_IMAGE_BYTES:
+                        result['status'] = 'too_large'
+                    else:
+                        result.update(mime_type=mime, image={'type': 'image', 'mimeType': mime,
+                                                          'data': base64.b64encode(data).decode('ascii')})
+        elif os.path.splitext(result.get('name', path))[1].lower() not in _ATTACHMENT_TEXT_EXTENSIONS:
+            result['status'] = 'unsupported'
+        else:
+            import codecs
+            offset, budget = request.get('offset', 0), request.get('max_bytes', 4096)
+            if offset > size:
+                result['status'] = 'invalid_offset'
+            else:
+                with open(path, 'rb') as stream:
+                    stream.seek(offset)
+                    raw = stream.read(budget + 4)
+                # Generated continuation offsets are UTF-8 boundaries. If a caller
+                # requests another offset, report the invalid range rather than guess.
+                decoder = codecs.getincrementaldecoder('utf-8')('strict')
+                chunk = raw[:budget]
+                text = decoder.decode(chunk, final=offset + len(chunk) >= size)
+                consumed = len(chunk) - len(decoder.getstate()[0])
+                if consumed == 0 and raw:
+                    for extra in raw[budget:]:
+                        text += decoder.decode(bytes([extra]), final=False)
+                        consumed += 1
+                        if text:
+                            consumed = budget + consumed
+                            break
+                    else:
+                        raise UnicodeDecodeError('utf-8', raw, 0, len(raw), 'incomplete character')
+                if offset == 0:
+                    text = text.removeprefix('\ufeff')
+                next_offset = offset + consumed
+                result.update(text=text, offset=offset, next_offset=next_offset, has_more=next_offset < size,
+                              mime_type='text/markdown' if os.path.splitext(result.get('name', path))[1].lower() in ('.md', '.markdown') else 'text/plain')
+    except (OSError, ValueError, ImportError):
+        result['status'] = 'unreadable'
+    return {'ok': True, 'attachment': result}
+
+
 def _message_row(row):
     """message_table 行 → C8 契约投影（content 就地提取为 text/trusted，不输出原始 bytes）。"""
     rec = dict(zip(QUERY_MESSAGE_COLUMNS, row))
@@ -991,7 +1194,10 @@ def _message_row(row):
     del rec['content']
     order = ('message_id', 'server_id', 'sequence', 'sender_id', 'conversation_id',
              'content_type', 'send_time', 'flag', 'text', 'trusted')
-    return {k: rec.get(k) for k in order}
+    result = {k: rec.get(k) for k in order}
+    if rec['content_type'] in (101, 102):
+        result['attachment'] = _attachment_descriptor(row[-1], rec['content_type'])
+    return result
 
 
 def _message_anchor(row):
@@ -1865,7 +2071,7 @@ def _parse_query_args(args):
 
 def cmd_sessions(workdir, account, request):
     """One bounded DB snapshot read. Cursor state belongs to the caller, never watch state."""
-    if (not isinstance(request, dict) or set(request) - {'targets', 'state', 'limit', 'metadata_only'}
+    if (not isinstance(request, dict) or set(request) - {'targets', 'state', 'limit', 'metadata_only', 'account_dir', 'attachment'}
             or type(request.get('limit', 50)) is not int or not 1 <= request.get('limit', 50) <= 50):
         return {'ok': False, 'error': 'BAD_ARGS'}
     targets = request.get('targets')
@@ -2051,6 +2257,11 @@ def cmd_sessions(workdir, account, request):
                   'state': state, 'has_more': baseline and len(remaining) > len(context_page) or not baseline and len(rows) > limit,
                   'baseline': baseline, 'history_truncated': history_truncated, 'self_user_id': account,
                   'selected_sessions': selected_list, 'session_details': details}
+        if request.get('attachment') is not None:
+            if request.get('metadata_only') or request.get('state') is not None or len(selected_list) != 1 or failed:
+                return {'ok': False, 'error': failed[0]['code'] if failed else 'BAD_ARGS'}
+            result = _read_attachment(conn, selected_list[0], request.get('account_dir'), request['attachment'])
+            return {**result, 'selected_sessions': selected_list, 'session_details': details}
         if request.get('metadata_only') is True:
             for detail in details:
                 if not detail['name']:
@@ -2075,6 +2286,9 @@ def cmd_sessions(workdir, account, request):
         blocked_context = set()
         parsed_messages, _ = _history_messages(rows[:limit], workdir, account)
         for row, message in zip(rows[:limit], parsed_messages):
+            if message.get('content_type') in (101, 102):
+                message['attachment'] = _describe_attachment(row[-1], message['content_type'],
+                    request.get('account_dir'), message.get('send_time'))
             cid = message['conversation_id']
             message['baseline'] = message['message_id'] <= state['start_fence']
             if cid in blocked_context:

@@ -210,6 +210,7 @@ export const TOOL_DEFS: WecomToolDef[] = [
     description:
       '使用session读取一个单聊或群的DB聊天记录，返回稳定session、messages、cursor、has_more及发送者平台wechat/wecom/unknown。' +
       '首次历史供上下文；后续原样传cursor读取增量，无UI搜索或额外模型token配置，单批最多50条/16KiB。' +
+      '图片/文件在时间线返回附件信息；需要内容时传attachment.message_id按需读取，文本以字节offset/max_bytes分页、图片返回实际图片内容，不推进时间线cursor。' +
       '旧调用兼容：读取目标会话消息，effect=none，无出站消息。target_ref（搜索返回、有效5分钟）与target_name二选一，同名无法消歧返回TARGET_AMBIGUOUS。' +
       'doctor已启用时优先本地库，默认最近100条；精确时间、消息ID和增量cursor，不切换会话或清角标，非文本占位。' +
       '可指定channel=local-db强制本地库（失败不回退）或ui；cursor绑定账号/会话/数据库代际，UI不能执行cursor。旧ref可用于UI，本地库要求账号绑定ref或target_name。' +
@@ -218,6 +219,11 @@ export const TOOL_DEFS: WecomToolDef[] = [
       'UI按max_pages翻屏，可能自动搜索/切换会话并清除角标，时间/方向可能近似；数据含messages、channel及相应通道元数据。',
     zodShape: {
       session: z.string().min(1).max(2048).optional().describe('会话完整名称或读取返回的稳定session；与旧target参数互斥'),
+      attachment: z.object({
+        message_id: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+        offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+        max_bytes: z.number().int().min(1).max(8192).optional(),
+      }).strict().nullish().describe('按原消息ID读取附件；省略或null均为普通时间线读取。offset/max_bytes用于UTF-8文本字节分页，使用返回next_offset续读。须有session，不与cursor混用。'),
       resolve_only: z.boolean().optional().describe('Runner内部纯定位阶段：只核验账号与目标元数据，不解析正文、不返回或推进消息cursor；Agent业务面不投影此参数'),
       target_ref: z.string().min(1).optional().describe('目标句柄（wecom_chat_search 返回的 target_ref；与 target_name 二选一）'),
       target_name: z.string().min(1).max(100).optional().describe('按会话名定位（可含@微信后缀）；本地库精确匹配并消歧，UI必要时内部search，歧义返回TARGET_AMBIGUOUS；与target_ref二选一'),

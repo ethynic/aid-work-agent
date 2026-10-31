@@ -11,7 +11,8 @@ import type { LocaldbReadDeps } from './readSession.js'
 
 export const SESSION_READ_LIMIT = 50
 export const SESSION_RESULT_BYTES = 16 * 1024
-export interface SessionReadArgs { sessions?: string[]; cursor?: string; limit?: number; single?: boolean; metadataOnly?: boolean }
+export interface AttachmentRead { message_id: number; offset?: number; max_bytes?: number }
+export interface SessionReadArgs { sessions?: string[]; cursor?: string; limit?: number; single?: boolean; metadataOnly?: boolean; attachment?: AttachmentRead }
 interface Locator { account: string; conversation_id: string }
 interface Cursor { account: string; generation: string; single: boolean; scope: string[] | null; state: Record<string, unknown>;
   targets?: ({ conversation_id: string } | { name: string })[] | null; requested?: string[] | null }
@@ -39,6 +40,14 @@ export function validateSessionRead(args: SessionReadArgs): string | null {
   if (args.single && args.sessions?.length !== 1) return '单会话读取须提供一个session'
   if (args.limit !== undefined && (!Number.isInteger(args.limit) || args.limit < 1 || args.limit > SESSION_READ_LIMIT)) return 'limit须为1–50的整数（整个响应批次）'
   if (args.cursor !== undefined && (typeof args.cursor !== 'string' || !args.cursor.startsWith('wb1.') || args.cursor.length > 16384)) return 'cursor须为原读取返回的游标'
+  if (args.attachment !== undefined) {
+    const a = args.attachment
+    if (!args.single || args.cursor !== undefined || args.metadataOnly) return '附件读取只用于单会话，不接受cursor或纯定位参数'
+    if (!a || typeof a !== 'object' || Array.isArray(a) || Object.keys(a).some(k => !['message_id', 'offset', 'max_bytes'].includes(k)) ||
+      !Number.isSafeInteger(a.message_id) || a.message_id < 1 ||
+      (a.offset !== undefined && (!Number.isSafeInteger(a.offset) || a.offset < 0)) ||
+      (a.max_bytes !== undefined && (!Number.isInteger(a.max_bytes) || a.max_bytes < 1 || a.max_bytes > 8192))) return 'attachment须含正整数message_id，可选offset>=0与max_bytes=1..8192'
+  }
   return null
 }
 
@@ -83,16 +92,31 @@ export async function readBusinessSessions(args: SessionReadArgs, ctx: OpContext
     let limit = args.limit ?? SESSION_READ_LIMIT
     for (;;) {
       const raw = await runPy(['sessions', '--workdir', work.dir, '--account', current.account], {
-        signal: ctx.signal, stdin: JSON.stringify({ targets, state: previous?.state, limit, metadata_only: args.metadataOnly }),
+        signal: ctx.signal, stdin: JSON.stringify({ targets, state: previous?.state, limit: args.attachment ? 1 : limit,
+          metadata_only: args.metadataOnly, attachment: args.attachment, account_dir: current.dataDir.dir }),
       })
       checkCancelled(ctx.signal)
       const data = raw.data
       if (!raw.ok || !data || data.ok !== true) {
-        const code = data?.error === 'CURSOR_STALE' ? 'CURSOR_UNSUPPORTED' : data?.error === 'IDENTITY_UNCONFIRMED' ? 'IDENTITY_UNCONFIRMED' : data?.error === 'SCHEMA_UNSUPPORTED' ? 'VERSION_UNSUPPORTED' : 'LOCALDB_UNAVAILABLE'
+        const code = data?.error === 'CURSOR_STALE' ? 'CURSOR_UNSUPPORTED' : data?.error === 'IDENTITY_UNCONFIRMED' ? 'IDENTITY_UNCONFIRMED'
+          : data?.error === 'SCHEMA_UNSUPPORTED' ? 'VERSION_UNSUPPORTED' : data?.error === 'TARGET_AMBIGUOUS' ? 'TARGET_AMBIGUOUS'
+            : data?.error === 'TARGET_NOT_FOUND' ? 'TARGET_NOT_FOUND' : data?.error === 'BAD_ARGS' ? 'INVALID_ARGUMENT' : 'LOCALDB_UNAVAILABLE'
         throw new CodedOperationError(code, '本地库会话读取未完成，原游标未推进；请按原因恢复后继续', 'none',
           { stage: 'read', cause: data?.error ?? 'DRIVER_UNAVAILABLE', recovery_action: 'retry_original_read' })
       }
       const selected = data.selected_sessions as string[] | undefined
+      if (args.attachment) {
+        const id = selected?.[0]
+        if (!id) {
+          const failed = data.failed as { code: ErrorCode }[] | undefined
+          throw new CodedOperationError(failed?.[0]?.code ?? 'TARGET_NOT_FOUND', '附件目标会话尚未定位', 'none',
+            { stage: 'resolve', recovery_action: 'resolve_original_session' })
+        }
+        if (!data.attachment || typeof data.attachment !== 'object') throw unavailable('附件读取未返回原消息结果')
+        outcome = { message: '已读取目标消息附件状态', data: { channel: 'local-db', navigated: false,
+          session: sessionLocator(current.account, id), attachment: data.attachment } }
+        break
+      }
       const sessions = (data.sessions as { conversation_id: string; messages: RawMessageRow[]; name: string | null; kind: string }[]).map(row => {
         const byId = new Map(row.messages.map(message => [message.message_id, message as RawMessageRow & { mentions?: unknown[]; mentions_complete?: boolean; sender_name_source?: string; baseline?: boolean }]))
         return { ...row, session: sessionLocator(current.account, row.conversation_id),

@@ -33,7 +33,7 @@ import { flagString, parseArgs, hasFlag } from './args.js'
 const USAGE = `aid-wecom — 企业微信操作 CLI / MCP Provider（M1）
 
 操作命令：
-  read-session --session <会话名或稳定标识> [--cursor <原游标>] [--limit N] [--json]
+  read-session --session <会话名或稳定标识> [--cursor <原游标>] [--limit N] [--attachment <JSON>] [--json]
   read-sessions [--sessions <JSON字符串数组>] [--cursor <原游标>] [--limit N] [--json]
                             DB批量聊天记录与待回复候选，单批最多50条/16KiB
   send --session <会话名或稳定标识> --text <文本> [--json]
@@ -195,6 +195,7 @@ async function main(): Promise<number> {
         channel: flagString(args, 'channel'),
         limit: flagString(args, 'limit'),
         cursor: flagString(args, 'cursor'),
+        attachment: flagString(args, 'attachment'),
         json: hasFlag(args, 'json'),
       })
     }

@@ -4,7 +4,7 @@
  * 输入行来自 py query 模式（drivers/py/wecom_localdb.py task=messages，按 message_id 升序
  * = 入库序/水位序）。本组件三件事：
  *  1. 契约归一：side / kind / text / time / parse_trusted + 系统类标注（system）。
- *     0/2为普通文本，80为已验证Markdown卡片，系统类型为timeline事件；
+ *     0/2为普通文本，80为已验证Markdown卡片，101/102为附件元数据，系统类型为timeline事件；
  *     其余未验证类型保留非文本占位，不做OCR补读（设计P9）。
  *  2. 展示排序：时间升序；同秒以 server_id 决胜（P0 冻结：sequence/server_id 同秒递增），
  *     仍并列以 msg_id（入库序）稳定兜底。入库序（py 返回序）与展示序在此分离——游标推进
@@ -50,6 +50,17 @@ export interface RawMessageRow {
   trusted?: boolean
   sender_name?: string | null
   sender_platform?: 'wechat' | 'wecom' | 'unknown'
+  attachment?: AttachmentMetadata
+}
+
+export interface AttachmentMetadata {
+  kind: 'image' | 'file'
+  status: string
+  name?: string
+  mime_type?: string
+  size_bytes?: number
+  width?: number
+  height?: number
 }
 
 /** 归一消息（read-session 本地库通道消息契约：{side, kind?, text, time} + 增量可选字段） */
@@ -65,6 +76,7 @@ export interface NormalizedMessage {
   side: 'self' | 'peer' | 'timeline'
   kind?: 'text' | 'image' | 'file' | 'system'
   text_format?: 'markdown'
+  attachment?: AttachmentMetadata
   /** 文本正文 / 非文本占位 / 文本提取失败留空（parse_trusted=false 供消费侧识别） */
   text: string
   /** 'YYYY-MM-DD HH:MM:SS' 本地时区；send_time 非法 → '' */
@@ -86,13 +98,18 @@ function isSafeInt(v: unknown): v is number {
 
 /** 会话正文与待回复摘要共用已确认类型的可读文本，不显示未解析的原始载荷。 */
 export function readableMessageText(
-  row: { content_type?: unknown; text?: unknown },
+  row: { content_type?: unknown; text?: unknown; attachment?: unknown },
   placeholder = NON_TEXT_PLACEHOLDER,
 ): string {
   const ct = row.content_type
   const text = typeof row.text === 'string' ? row.text : ''
   if (ct === 0 || ct === 2) return text
   if (ct === 80 && text.length > 0) return text
+  if (ct === 101) return '[图片]'
+  if (ct === 102) {
+    const attachment = row.attachment as AttachmentMetadata | undefined
+    return typeof attachment?.name === 'string' ? `[文件] ${attachment.name}` : '[文件]'
+  }
   if (isSafeInt(ct) && CONFIRMED_SYSTEM_TYPES.includes(ct)) return text || '[系统通知]'
   return placeholder
 }
@@ -149,6 +166,10 @@ export function normalizeMessages(
     if (typeof row.server_id === 'string' && row.server_id.length > 0) msg.server_id = row.server_id
     if (isTextType || isMarkdown) msg.kind = 'text'
     if (isMarkdown) msg.text_format = 'markdown'
+    if (ct === 101 || ct === 102) {
+      msg.kind = ct === 101 ? 'image' : 'file'
+      if (row.attachment) msg.attachment = row.attachment
+    }
     if (isSystem) {
       msg.kind = 'system'
       msg.system = true

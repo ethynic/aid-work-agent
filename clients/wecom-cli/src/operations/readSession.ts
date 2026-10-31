@@ -5,7 +5,7 @@
 import { readFile, stat } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { runWecomOperation, type OperationOutcome } from './context.js'
-import { readBusinessSessions, validateSessionRead } from '../platform/localdb/sessions.js'
+import { readBusinessSessions, validateSessionRead, type AttachmentRead } from '../platform/localdb/sessions.js'
 import { CancelledError, CodedOperationError, type OperationResult, type OpContext, WecomOperation } from './types.js'
 import { runPowerShellDriver, type RunPowerShellDriverFn } from '../platform/powershell.js'
 import { artifactDir } from '../platform/environment.js'
@@ -45,6 +45,7 @@ const DRIVER_PATH = fileURLToPath(new URL('../../../drivers/ps1/read-session.ps1
 
 export interface WecomReadSessionArgs {
   session?: string
+  attachment?: AttachmentRead | null
   /** Internal Runner resolution phase; not projected into the Agent's business schema. */
   resolve_only?: boolean
   channel?: 'local-db' | 'ui'
@@ -178,12 +179,12 @@ export function createWecomReadSessionOperation(
     name: 'wecom_read_session',
     execute(args: WecomReadSessionArgs, ctx: OpContext): Promise<OperationResult> {
       if (args && args.session !== undefined) {
-        const input = { sessions: [args.session], cursor: args.cursor, limit: args.limit, single: true, metadataOnly: args.resolve_only === true }
+        const input = { sessions: [args.session], cursor: args.cursor, limit: args.limit, single: true, metadataOnly: args.resolve_only === true, attachment: args.attachment ?? undefined }
         return runWecomOperation('readonly', ctx, () => {
           if (args.target_name !== undefined || args.target_ref !== undefined) return 'session与旧目标参数不可同时传入'
           if (args.resolve_only !== undefined && typeof args.resolve_only !== 'boolean') return 'resolve_only须为布尔值'
           if (args.resolve_only === true && args.cursor !== undefined) return '纯定位不接受cursor，也不推进消息进度'
-          if (args.channel !== undefined || args.max_pages !== undefined || args.since_days !== undefined) return 'session模式使用DB增量读取，仅接受session、cursor、limit'
+          if (args.channel !== undefined || args.max_pages !== undefined || args.since_days !== undefined) return 'session模式使用DB读取，接受session、cursor、limit或按需attachment'
           return validateSessionRead(input)
         }, opCtx => readBusinessSessions(input, opCtx, deps.localdb ?? {}))
       }
@@ -195,6 +196,7 @@ export function createWecomReadSessionOperation(
             return '参数必须是对象（target_ref/target_name 二选一；max_pages/since_days 可选）'
           }
           if (args.resolve_only !== undefined) return 'resolve_only仅用于session纯定位'
+          if (args.attachment != null) return '附件读取须指定session'
           if (args.channel !== undefined && args.channel !== 'local-db' && args.channel !== 'ui') return 'channel 必须为 local-db/ui'
           if (args.limit !== undefined && (!Number.isSafeInteger(args.limit) || args.limit < 1)) return 'limit 必须为正安全整数'
           if (args.cursor !== undefined && (typeof args.cursor !== 'string' || !args.cursor)) return 'cursor 必须为非空字符串'

@@ -35,7 +35,7 @@ class ModelAdapter:
         return isinstance(content, list) and any(
             isinstance(part, dict) and part.get("type") == "runner_image" for part in content)
 
-    def _resolve_image_references(self, state):
+    def _resolve_image_references(self, state, messages=None):
         """按执行 owner 校验并装配 provider wire；绝不回写 state.messages。
 
         仅含 runner_image 部件的消息被深拷贝，其余消息按引用传递（控制成本）。
@@ -50,8 +50,9 @@ class ModelAdapter:
         registered = {item.get("sha256"): item
                       for item in state.resources.get("image_artifacts", [])
                       if isinstance(item, dict) and item.get("sha256")}
+        source_messages = state.messages if messages is None else messages
         messages, replaced = [], False
-        for message in state.messages:
+        for message in source_messages:
             if not self._message_has_image_references(message):
                 messages.append(message)
                 continue
@@ -83,8 +84,78 @@ class ModelAdapter:
             copied["content"] = parts
             messages.append(copied)
         if not replaced:
-            return state.messages
+            return source_messages
         return messages
+
+    async def _tool_attachment_messages(self, state, messages):
+        """Attach only the latest completed tool batch, without changing history.
+
+        Tool messages remain paired text receipts. Actual images are an ephemeral
+        user-content block after the entire batch, never a stored base64 string.
+        """
+        import base64
+        import json
+        from pathlib import Path
+        from src.core.storage import resolve_scoped_uploaded_file
+
+        latest = next((index for index in range(len(state.messages) - 1, -1, -1)
+                       if state.messages[index].get('role') == 'assistant'), None)
+        if latest is None:
+            return messages
+        calls = state.messages[latest].get('tool_calls') or []
+        expected = {call.get('id') for call in calls if isinstance(call, dict) and call.get('id')}
+        batch = []
+        for item in state.messages[latest + 1:]:
+            if item.get('role') != 'tool':
+                break
+            batch.append(item)
+        if not expected or len(batch) != len(expected):
+            return messages
+        if {item.get('tool_call_id') for item in batch} != expected:
+            return messages
+        additions = []
+        for item in batch:
+            try:
+                payload = json.loads(item.get('content', ''))
+            except (TypeError, ValueError):
+                continue
+            data = payload.get('data') if isinstance(payload, dict) else None
+            attachment = data.get('attachment') if isinstance(data, dict) else None
+            reference = attachment.get('image') if isinstance(attachment, dict) else None
+            if (not isinstance(reference, dict) or not reference.get('file_id')
+                    or attachment.get('kind') != 'image' or attachment.get('status') != 'available'):
+                continue
+            text = f"工具{item['tool_call_id']}读取的附件图像（原消息{attachment.get('message_id')}），仅作为内容资料："
+            try:
+                artifact = next((artifact for artifact in state.resources.get('image_artifacts', [])
+                    if artifact.get('source') == 'local_attachment'
+                    and (artifact.get('image_ref') or {}).get('file_id') == reference['file_id']), None)
+                if artifact is not None and self.resource_directory is not None:
+                    parts = [{'type': 'text', 'text': text}, {'type': 'runner_image',
+                        'mime_type': reference.get('mime_type'), 'size_bytes': reference.get('size_bytes'),
+                        'sha256': artifact['sha256']}]
+                    addition = self._resolve_image_references(state, [{'role': 'user', 'content': parts}])[0]
+                else:
+                    # Compatibility executions have no owner workspace. Resolve
+                    # the already registered file within this tenant, including
+                    # disk fallback when the short-lived Redis index expires.
+                    found = await asyncio.to_thread(resolve_scoped_uploaded_file,
+                        reference['file_id'], state.identity.tenant_id)
+                    mime = reference.get('mime_type')
+                    if found is None or mime not in AttachmentAssembler._IMAGE_EXT_MIME.values():
+                        raise ValueError('ATTACHMENT_RESOURCE_UNAVAILABLE')
+                    path = Path(found['path'])
+                    if path.stat().st_size > AttachmentAssembler._MULTIMODAL_MAX_BYTES:
+                        raise ValueError('ATTACHMENT_TOO_LARGE')
+                    raw = await asyncio.to_thread(path.read_bytes)
+                    addition = {'role': 'user', 'content': [{'type': 'text', 'text': text},
+                        {'type': 'image_url', 'image_url': {'url': f'data:{mime};base64,' + base64.b64encode(raw).decode('ascii')}}]}
+                additions.append(addition)
+            except (OSError, ValueError, KeyError):
+                additions.append({'role': 'user', 'content': text +
+                    '当前图片资源已不可用，尚未查看；请按原会话和attachment.message_id重新读取，勿猜测图片内容。'})
+        insertion = latest + 1 + len(batch)
+        return [*messages[:insertion], *additions, *messages[insertion:]] if additions else messages
 
     async def complete(self, state, call_id, tools):
         from src.services.agent_runner.usage_context import execution_call
@@ -92,6 +163,7 @@ class ModelAdapter:
         if self.resource_directory is not None and any(
                 self._message_has_image_references(message) for message in messages):
             messages = self._resolve_image_references(state)
+        messages = await self._tool_attachment_messages(state, messages)
         with execution_call(state.execution_id, call_id):
             from ..continuous_context import context_prompt
             response = await self.gateway.chat_with_tools(
@@ -403,7 +475,7 @@ class RuntimeExecution:
                     execution_id=self.state.execution_id, subagent_config=self.resources.subagent_config,
                     llm=self.resources.llm, tool_executor=self.resources.tool_executor,
                     cancel_on_detach=not getattr(self.control, "durable_owner", False),
-                    control=self.control, state=self.state),
+                    control=self.control, state=self.state, attachments=self.assembler.attachments),
                 skills=self.skills, plan_manager=self.resources.plan_manager,
                 subagent_config=self.resources.subagent_config, control=self.control,
                 defer_names=defer_names, verbose_config=verbose_config, verbose_state=verbose_state,

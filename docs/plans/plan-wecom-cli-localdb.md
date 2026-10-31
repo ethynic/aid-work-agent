@@ -4,10 +4,41 @@
 
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
+| P10 | 图片与文件时间线及按需读取 | ✅ 完成（2026-10-31） | 独测/CR、匿名跨层与旧包工具兼容通过；未安装，实际Web待验 |
 | P9 | 机器人Markdown与群系统事件读取 | ✅ 完成（2026-10-30） | 独立TS101、Python全套及专项复测/CR通过；真机只读9条正确分类，尚未安装 |
 | P6 | 5.0.13.6005 小版本兼容复核与精确登记 | ✅ 完成（2026-10-27） | 独立82项及发行布局4断言、CR、正常CLI doctor通过；同名目标边界后由P7修复；未提交部署 |
 | P7 | 显式外部联系人约束消歧 | ✅ 完成（2026-10-27） | 首轮独测TS122/Py91、修复复测18+9及CR复审通过；真机DB读取增量及3次无搜索发送/精确对账通过；未提交部署 |
 | P8 | 单聊/群聊发言人微信与企微平台识别 | 🔧 进行中 | 字段及原消息恢复已实现并独测；外部企微真人样本与W10最终复审待补 |
+
+### P10 图片与文件时间线及按需读取（2026-10-30，设计草案）
+
+用户已于2026-10-31授权在master实施本节，走独立测试和CodeReview，暂不提交、安装、部署或恢复监听。master已快进至924f3b7f，重叠索引文档三路合并保留原工作区修改。详见[设计P10](../design/wecom/wecom-cli-localdb-design.md#p10-图片与文件时间线及按需读取2026-10-30设计草案)。
+
+实施约定：单会话读取增加可选`attachment={message_id,offset?,max_bytes?}`；offset为文本字节位置，默认0，max_bytes默认4096、上限8192。按需结果位于`data.attachment`，含原message_id/kind/name/mime_type/size_bytes/status，文本返回text/offset/next_offset/has_more，图片内部以标准MCP image块经原Device结果/outbox传输后消费为服务器ImageRef/Runner资源引用；模型文本不保留Base64或本机路径。图片默认沿现有5MiB界限，一次一张，不全量展开大文件；新能力不可用仅影响该附件读取。共同契约2.12已登记唯一写入者和旧端兼容；开发/独立验证结果见下，不将源码验收当作安装版或真实Web验收。
+
+| 阶段 | 最小交付与验证意图 | 状态 |
+|------|--------------------|------|
+| P10.1 识别与定位 | 101/102归一为图片/文件时间线，按当前账号的消息资源key→现有CacheMapping→实际缓存定位，缺失仅影响附件；旧非文本anchor和文本读写保持。用匿名样本验证多清晰度缓存、同名文件及图片缓存重编码差异，不将消息MD5相等加成统一门禁 | ✅ 完成（2026-10-31） |
+| P10.2 按需展开 | 在原会话读取工具复用会话标识+msg_id指定附件，UTF-8文本按字节片段返回并明确续读位置，图片按需读清晰缓存；不新增工具集合、附件索引服务或默认全文模型摘要 | ✅ 完成（2026-10-31） |
+| P10.3 Runtime与模型贯通 | 实施前核对已有资源接收能力并登记最小可选共同接口，补齐本机实际图片内容到任务资源/视觉装配的缺口，不能以本机路径字符串冒充模型可读图片；旧Runtime+BOSS与旧WeCom输入保持可用 | ✅ 完成（2026-10-31） |
+| P10.4 独立验证 | 定向测试与CR，核对单附件失败不阻断时间线、同消息按需续读/重启恢复不重放、重复轮询不自动展开全部附件；匿名跨层验证实际图片进入模型wire与文件片段，再以本机源码只读验证缓存定位。当前禁止安装，实际新版客户端Web/真实模型用量后续另验。安装/发送/部署/监听另依用户授权 | ✅ 完成（2026-10-31） |
+
+调查基线（2026-10-30）：单聊图片101、文件102均已入库，旧CLI仍占位；本地文件18562字节，摘要匹配消息元数据并可UTF-8读取。图片通过只读CacheMapping精确key关联到1080×2400清晰JPEG与210×467缩略JPEG，已实际打开清晰图；图片缓存体积/摘要与原始资源信息不完全相同，不将该差异直接当错误。当时仅只读调查，未改产品代码；后续实施以本节2026-10-31验收为准。未下载附件自动获取、PDF/Office等格式解析不属于当前能力。
+
+
+
+#### P10开发与验收（2026-10-31）
+
+- 实现：原三工具与OperationResult/Device result/outbox不变；只读工具可选attachment参数，null按省略兼容。时间线只有附件元数据，101/102按原资源映射定位，UTF-8按字节续读；大文件不全文装入模型。未缓存/不支持/损坏/过大仅为单附件状态。历史v2/wb1锚点、普通文本发送对账与原平台字段保持。
+- 内容传输：显式图片读取的私有MCP图片块经原Runtime结果传输，LocalToolAdapter在正常/恢复出口注册ImageRegistry并留下原owner副本。公开结果仅ImageRef；ModelAdapter在最新完整tool批次后临时插入实际视觉输入、保留后续用户补充，不回写Base64到checkpoint。原invocation/outbox仍保留单次有界原传输内容；没有新上传API、资源表、监听器或恢复框架。source=local_attachment副本随原continuous_history压缩回收，初始用户图片不动。
+- 独立测试：7个CLI与3个core受影响TS套件119项全通过、0跳过；最终nullable修订另定向CLI附件7项/core3项共10项全通过。CLI最终Python全套233项中232通过、1既有平台条件跳过。云桥、附件回收、旧master跨版本恢复、连续生命周期及匿名跨层pipeline共49项通过、0跳过。结果不叠加计算重复复测；开发者更广135项TS及最终桥接17项自测另有记录，不冒作独测计数。
+- 匿名跨层：真实加密三库/CacheMapping→CLI operation→stdio MCP→Runtime runInvocation/resultOutbox→云端代理终态映射→LocalToolAdapter→真实ImageRegistry磁盘登记/owner副本→ModelAdapter。Device HTTP/SQL/Redis与远端模型为替身，未使用业务库；模型RecordingGateway收到与CLI图片逐字节一致的image_url输入，checkpoint只有引用。故意503丢ACK后第二次结果payload相同，未重新读取/发送；文本只取1024字节片段、has_more/next_offset正确。初次该模块被父PG fixture跳过，已明确为本模块无SQL组件测试覆盖无关init_db_pool，最终主控1项和独立49项批次均实际执行通过，不将早期skip计通过。
+- 已交付组合：独立在新匿名Temp home加载原Runtime0.0.29的Node22.23.3/Core0.2.20和原BOSS0.3.27，MCP只读列出25工具与历史逐项一致，业务调用0、3个归档检查文件hash不变；当前客户端未操作。普通BOSS无新增能力查询，旧WeCom仅附件请求可用性单独处理，旧工具、原配置恢复/用量通路不要求升级。
+- CR：独立通过，无遗留阻断项。已修Pillow DecompressionBombError/SyntaxError逃逸整批问题、完整tool块后的用户补充导致漏图，以及新Optional null与MCP/core协商对齐。Native嵌套Pydantic归一为JSON字典，避免恢复请求中混入模型对象；附件展开绕过inbound扫描，不推进/重置监听游标。
+- 本机只读：使用master源码CLI，已有微信单聊返回图片/文件available；图片按需取得554249字节JPEG，文件18562字节可分片（1024字节首片，next_offset=1024、has_more=true），两种展开均无timeline cursor，navigated=false。没有搜索切会话、发送、安装或恢复监听，不冒称现用旧插件已经支持。
+- 环境限制：当前shell无Docker，Python按仓库安全入口等价使用venv无DB模式。既有test_artifact_refs.py的test_symlinked_artifact_is_rejected实际因Windows创建symlink权限不足WinError1314失败于fixture；未修改该测试，开发相关回归26通过/1排除，不声称这项已通过。独测本任务49项自身均通过；Pydantic弃用警告为既有。8个早期匿名Temp fixture清理被自动审批以blocked by policy拒绝，未提供更多理由，已停止且未绕过，真实客户数据与客户端未受影响。
+- 交付：构建与本任务diff检查通过。用户后续授权仅本任务提交并推送master，共享索引中的其他任务条目及原暂存AGENTS修改保持隔离；未安装、部署或恢复监听。新版客户端实际Web/真实LLM视觉用量验证留给后续安装授权，不扩大本轮匿名隔离结果。
+
 
 ### P9 机器人Markdown与群系统事件读取（2026-10-30）
 

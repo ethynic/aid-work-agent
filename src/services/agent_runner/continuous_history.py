@@ -62,6 +62,7 @@ def archive_and_compact(control, state):
     retire_local_references(control,state)
     archive_artifacts(control,state)
     compact_facts(state,retire_resources=lambda data: retire_child_resources(control,state,data))
+    retire_attachment_resources(control,state)
     # Public progress and display-only controls are projections, not authority.
     for source in (control.envelope.get('presentation',{}),control.snapshot):
         for key in ('progressMessages','verboseMessages','clarificationQuestions'):
@@ -71,6 +72,63 @@ def archive_and_compact(control, state):
     durations = control.envelope.get('tool_durations')
     if isinstance(durations,dict):
         control.envelope['tool_durations'] = {key:value for key,value in durations.items() if key in retained}
+
+
+def retire_attachment_resources(control,state):
+    """Retire attachment owner copies after their model/recovery references leave the window."""
+    import json
+    from .resource_paths import cleanup_workspaces
+    resource_directory = getattr(control,'resource_directory',None)
+    if resource_directory is None:
+        return
+    live = set()
+    nodes = []
+
+    def references(value):
+        if isinstance(value,str):
+            try:
+                value = json.loads(value)
+            except (ValueError,TypeError):
+                return
+        if isinstance(value,dict):
+            if isinstance(value.get('file_id'),str):
+                live.add(value['file_id'])
+            for item in value.values():
+                if isinstance(item,(dict,list)):
+                    references(item)
+        elif isinstance(value,list):
+            for item in value:
+                references(item)
+
+    def visit(node):
+        nodes.append(node)
+        for message in node.get('messages',[]) + node.get('followup_messages',[]):
+            references(message.get('content'))
+        for fact in node.get('tools',{}).values():
+            references(fact.get('result'))
+        for child in node.get('children',{}).values():
+            if isinstance(child.get('checkpoint'),dict):
+                visit(child['checkpoint'])
+
+    checkpoint = {'execution_id':state.execution_id,'messages':state.messages,
+                  'followup_messages':state.followup_messages,
+                  'tools':{key:{'result':fact.result} for key,fact in state.tools.items()},
+                  'resources':state.resources,'children':state.children}
+    visit(checkpoint)
+    for node in nodes:
+        resources = node.get('resources') or {}
+        artifacts = resources.get('image_artifacts') or []
+        kept = [item for item in artifacts if item.get('source') != 'local_attachment'
+                or (item.get('image_ref') or {}).get('file_id') in live]
+        kept_paths = {item.get('path') for item in kept}
+        for item in artifacts:
+            if item in kept:
+                continue
+            if item.get('path') not in kept_paths and not cleanup_workspaces(resource_directory,state.identity,
+                    {'execution_id':node['execution_id'],'resources':{'image_artifacts':[item]}}):
+                kept.append(item)  # A temporary filesystem error must not lose cleanup ownership.
+        if artifacts:
+            resources['image_artifacts'] = kept
 
 
 def compact_facts(state,retire_resources=None):

@@ -111,6 +111,7 @@ export class ProviderManager {
   private readonly prepareLaunch: ProviderOptions['prepareLaunch']
   private starting: Promise<void> | null = null
   private wecomTools: ReadonlySet<string> | undefined
+  private wecomAttachmentReadSupported: boolean | undefined
   private wecomInspection: Promise<ReadonlySet<string>> | null = null
 
   constructor(entry: string, opts: ProviderOptions = {}) {
@@ -225,6 +226,12 @@ export class ProviderManager {
       if (this.wecomTools) return this.wecomTools
       const listed = await this.client!.listTools({}, { timeout: 5000 })
       this.wecomTools = wecomBusinessTools(listed.tools)
+      const read = listed.tools.find(tool => tool.name === 'wecom_read_session')
+      const props = read?.inputSchema.properties as Record<string, unknown> | undefined
+      type AttachmentSchema = { type?: string; properties?: Record<string, { type?: string }>; anyOf?: AttachmentSchema[] }
+      const attachment = props?.attachment as AttachmentSchema | undefined
+      const object = attachment?.type === 'object' ? attachment : attachment?.anyOf?.find(item => item.type === 'object')
+      this.wecomAttachmentReadSupported = object?.properties?.message_id?.type === 'integer'
       return this.wecomTools
     })()
     this.wecomInspection = inspection
@@ -251,6 +258,10 @@ export class ProviderManager {
         if (!supported.has(name)) return {
           success: false, code: 'TOOL_NOT_SUPPORTED', effect: 'none', retryable: false, run_id: randomUUID(),
           message: '当前企业微信插件不支持该会话接口，请升级企业微信插件后继续；未执行读取、搜索或发送',
+        }
+        if (name === 'wecom_read_session' && args.attachment != null && !this.wecomAttachmentReadSupported) return {
+          success: false, code: 'TOOL_NOT_SUPPORTED', effect: 'none', retryable: false, run_id: randomUUID(),
+          message: '当前企业微信插件暂不支持读取附件内容；普通会话读取和发送仍可使用',
         }
       }
       await this.ensureStarted()
@@ -335,6 +346,7 @@ export class ProviderManager {
 
   private async disposeDead(): Promise<void> {
     this.wecomTools = undefined
+    this.wecomAttachmentReadSupported = undefined
     this.resumeNextSupported = undefined
     this.sendStatusSupported = undefined
     this.groupPollSupported = undefined

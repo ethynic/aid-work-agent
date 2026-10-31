@@ -14,11 +14,12 @@ class ProgressQueue(asyncio.Queue):
         super().put_nowait(item)
 class LocalToolAdapter:
     def __init__(self, *, session_id, execution_id, subagent_config, llm, tool_executor, cancel_on_detach=True,
-                 control=None, state=None):
+                 control=None, state=None, attachments=None):
         self.session_id, self.execution_id = session_id, execution_id
         self.subagent_config, self.llm, self.tool_executor = subagent_config, llm, tool_executor
         self.cancel_on_detach = cancel_on_detach
         self.control, self.state = control, state
+        self.attachments = attachments
     async def _run_local_required_tool(
         self,
         tool_name: str,
@@ -117,7 +118,13 @@ class LocalToolAdapter:
                 if text:
                     yield ("progress", text)
             try:
-                yield ("result", await task)
+                result = await task
+                if tool_name == 'wecom_read_session':
+                    from src.local_tools.wecom_attachments import materialize_attachment
+                    result = await materialize_attachment(result, tool_args, tenant_id=tenant_id,
+                        user_id=user_id, tool_call_id=context.tool_call_id,
+                        state=self.state, assembler=self.attachments)
+                yield ("result", result)
             except LocalContinuationRequired as error:
                 yield ("verification", {"kind":"verification", "error_code":error.code,
                     "invocation_id":error.invocation_id, "tool_call_id":context.tool_call_id})
