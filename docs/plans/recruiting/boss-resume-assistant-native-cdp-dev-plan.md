@@ -11,7 +11,7 @@
 | C1 | 沟通混排现场与原实现核对 | ✅ 完成（2026-11-02） | 广告/真实条目结构已取证，搜索跨document污染与未选联系人误报WRONG_PAGE已确认 |
 | C2 | 搜索范围、会话条目和状态语义修正 | ✅ 完成（2026-11-02） | 统一真实条目/姓名字段、doc0搜索、输入值及完整头部姓名，不新增恢复 |
 | C3 | 独立测试、CR及本机回归 | ✅ 完成（2026-11-02） | 自测67、独测254＋9探针、CR通过；广告保留搜索2次及读取真机通过，置顶只做fixture |
-| R1 | BOSS0.3.29提交、签名出包与验包 | 🔧 进行中 | 用户11-02明确授权先提交再打包，仅插件，不安装或部署 |
+| R1 | BOSS0.3.29提交、签名出包与验包 | ✅ 完成（2026-11-02） | 148f7945已推送；签名/独立重编译/Runtime0.0.33准入通过，仅插件，未安装部署 |
 
 本区登记2026-10-31修复增量，历史Phase状态保留在下文，不据历史测试数推定新修复已验收。
 
@@ -568,3 +568,14 @@ npm run build
 用户明确授权先提交再打包。只提交本次widget无关普通输入、沟通混排/搜索/完整姓名修复、测试及关联方案/取证文档；工作区其他任务及预暂存改动保留。BOSS版本从0.3.28升为0.3.29，共享原生输入随插件payload重新构建，不重打Runtime。
 
 从实际源码提交运行统一`release-batch.ps1 -Component Boss -BossVersion 0.3.29`，复用现有稳定验收发布者与公开信任根；不生成随机根、不安装插件或修改客户机。签名、required_files、重定位version/doctor、原生模块加载及修复源码/编译产物核对后登记最终路径与摘要；仍属acceptance插件，不能称生产签名发行。当前用户已获得的Runtime0.0.33构建与本批BOSS分别留存，不重新覆盖其包。
+
+### R1完成记录
+
+- **提交**：`148f79452d2356136952da420fd3a0d02b258def`，已推送当前master配置的origin两个push目标（Codeup与GitHub）；原暂存AGENTS.md及其他任务改动保留。本次提交前fetch确认与origin/master一致，主控typecheck及CLI version0.3.29通过，沿用前述独测/CR和真机证据。
+- **实际出包**：统一脚本`-Component Boss -BossVersion 0.3.29 -ReleaseId boss-0.3.29 -SourceRef 148f79452d2356136952da420fd3a0d02b258def`，固定Node22.23.3/ABI127、现有稳定外部签名者。脚本exit0，未构建Runtime/WeCom。沿统一入口只覆盖6份既有构建/验包脚本，业务输入全部来自该提交；构建路径在仓库外Temp。
+- **交付**：`%LOCALAPPDATA%/AidWorkBuild/deliveries/AID-Work-BOSS-0.3.29-20261102-105534/boss-0.3.29.aidplugin.zip`，5,387,192字节，SHA256 `ab6126fb386c6ac8c64d50cf6ca3f7ef7828ebb4eb0e245326a995b6368c76cc`。同目录含原公开根、manifest、build-info、验包报告、说明和SHA256SUMS；旁边组合ZIP含全部交付文件，客户应在离线插件入口选择其中的aidplugin.zip。
+- **脚本及主控验包**：验签、3,738文件清单（3,737 required_files＋manifest）、CLI version0.3.29、doctor_exit0/ready=true、NATIVE_INPUT_LOAD_OK；打包测试及4项release入口测试通过。主控核对6项SHA256SUMS和组合ZIP全部成员逐字节一致。
+- **独立发行物验收**：117个源文件与提交逐字节一致，独立重新编译的112个生产JS与包内逐字节一致，涵盖全部指定BOSS定位/输入模块及共享`contentViewport`；模块/25operations/Koffi FFI加载通过。正式交付包与冻结产物同摘要。实际Runtime0.0.33（EXE ProductVersion0.0.33.0）/Core0.2.22沿原verifyOfflinePackage完成验签和准入，25项BOSS工具与实际Core许可表完全一致。
+- **边界**：本批为既有acceptance发布者签名的验收插件，不改根、不生成随机key，不是生产签名发行。仅准备安装文件；未安装插件、替换Runtime、部署或发送消息。独立验包不替代此前真机业务验证，既有全量测试限制不变。
+
+[持久发行摘要](../../incidents/evidence/boss-widget-stuck-hidden-20261030/boss-0.3.29-release-20261102.json)记录源码/关键编译文件摘要及最终包校验。详细构建与独立报告留在本机`.tmp/boss-chat-mixed-20261102/`和外部交付目录，私钥未入库或交付。

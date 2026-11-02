@@ -1,0 +1,150 @@
+{
+  "at": "2026-11-02T02:59:55.623910+00:00",
+  "source_commit": "148f79452d2356136952da420fd3a0d02b258def",
+  "provider": "ai.aidwork.boss-recruiting",
+  "provider_version": "0.3.29",
+  "provider_release_id": "boss-0.3.29-boss",
+  "publisher": "aidwork-acceptance-cli-v1",
+  "profile": "acceptance",
+  "component": "Boss",
+  "artifact": {
+    "filename": "boss-0.3.29.aidplugin.zip",
+    "bytes": 5387192,
+    "sha256": "ab6126fb386c6ac8c64d50cf6ca3f7ef7828ebb4eb0e245326a995b6368c76cc"
+  },
+  "delivery_zip": {
+    "filename": "AID-Work-BOSS-0.3.29-20261102-105534.zip",
+    "sha256": "1495f87bcd2cf6a875b18cfc245021120bf31133cbbba5ccbab526843b0dc16f",
+    "all_members_match_delivery": true
+  },
+  "build_exit_code": 0,
+  "main_validation": {
+    "sha256sums_files_checked": 6,
+    "plugin_manifest_files": 3738,
+    "doctor_exit_code": 0,
+    "doctor_ready": true,
+    "native_input_load": "passed",
+    "runtime_not_rebuilt": true
+  },
+  "independent_validation": {
+    "checks": {
+      "commitSource": true,
+      "publicTrustMatchesRegisteredHistory": true,
+      "signatureRequiredFilesAndRuntimeCompatibility": true,
+      "runtimeBossToolsAdmission": true,
+      "independentRebuildEqualsPackagedJavaScript": true,
+      "packagedCliVersion": true,
+      "packagedMainAndNativeModulesLoad": true,
+      "deliveryIdentical": true,
+      "nativeFfiBindingsLoad": true
+    },
+    "source_files_match_commit": 117,
+    "production_javascript_files_recompiled_and_equal": 112,
+    "required_files": 3737,
+    "tools": 25,
+    "runtime_product_version": "0.0.33.0",
+    "runtime_core_version": "0.2.22",
+    "exact_runtime_boss_tool_admission": "passed",
+    "key_source_hashes": [
+      {
+        "file": "clients/boss-resume-assistant/src/main/boss/ChatOpenExecutor.ts",
+        "sha256": "650932a1d686fbfde40b23a62d59647be88d1bf02f6d61af55400ffb42d5a10e",
+        "match": true
+      },
+      {
+        "file": "clients/boss-resume-assistant/src/main/boss/ChatReadExecutor.ts",
+        "sha256": "3d52101a34826698a78ec6f6e90f889edf4396776c893f1c31be7ece916f5f2a",
+        "match": true
+      },
+      {
+        "file": "clients/boss-resume-assistant/src/main/boss/ChatSearchExecutor.ts",
+        "sha256": "575b1743fd1efbb69cb6b5bccb1ca5832cb0faf47d794332fa337267613faab0",
+        "match": true
+      },
+      {
+        "file": "clients/boss-resume-assistant/src/main/input/WinMouseClicker.ts",
+        "sha256": "5d72654dcb47731754d89590b60c7954dd04109b22261df974cbcdcb3ebad7fb",
+        "match": true
+      },
+      {
+        "file": "clients/boss-resume-assistant/src/main/operations/bossContext.ts",
+        "sha256": "5e8cf05d4848964c6cba20c3c08ae4f82176c387099a76285e59c8ce1ba841e0",
+        "match": true
+      },
+      {
+        "file": "clients/boss-resume-assistant/src/main/operations/errorMapping.ts",
+        "sha256": "3e3d32fbd76058f62ee0b29461770ecc1b4758a325392b1460bd9091f938fb8c",
+        "match": true
+      },
+      {
+        "file": "clients/shared/win32-native-input/src/bindings/contentViewport.ts",
+        "sha256": "5c947bc53fa8813578458b0876d59da06ce0d330b772aacc58a3e43475ab9e19",
+        "match": true
+      },
+      {
+        "file": "clients/shared/win32-native-input/src/physical.ts",
+        "sha256": "f1512b4f225ad6907878c846c8c31134ba714a88430f9726c3a1d54de06900c1",
+        "match": true
+      },
+      {
+        "file": "clients/shared/win32-native-input/src/sequence.ts",
+        "sha256": "49efe9ded4a86c9239221fd04555c9254a59491f41f2fe8d2cccdd15d941240b",
+        "match": true
+      }
+    ],
+    "key_compiled_hashes": [
+      {
+        "file": "dist/src/main/boss/ChatOpenExecutor.js",
+        "sha256": "565fbe6ccbda31a77b03063dac24ee6931bdb20f41ddc7b390f57a347e55284d",
+        "match": true
+      },
+      {
+        "file": "dist/src/main/boss/ChatReadExecutor.js",
+        "sha256": "0acc5965ee598f38f7fc381c9118387f1e82ae71c188b25cab56938e0c7d83ab",
+        "match": true
+      },
+      {
+        "file": "dist/src/main/boss/ChatSearchExecutor.js",
+        "sha256": "4a43e62bab5eba51a60bb7cb18ba184fe85da7ac7edd90aeffaa5d7771ddfa17",
+        "match": true
+      },
+      {
+        "file": "dist/src/main/input/WinMouseClicker.js",
+        "sha256": "171f3f99f560a400f0fe4d5255f62085d103fe9839a1b6d8908560bc37f1985e",
+        "match": true
+      },
+      {
+        "file": "dist/src/main/operations/bossContext.js",
+        "sha256": "7e6989e16b716805bc373b188481df9a19e6a6fef22870a698c1c052e5085eed",
+        "match": true
+      },
+      {
+        "file": "dist/src/main/operations/errorMapping.js",
+        "sha256": "b35e69a284aca667b79949d8a13a6695c4348ec85f7ab2770390bc3b54d6be3a",
+        "match": true
+      },
+      {
+        "file": "node_modules/@aid/win32-native-input/dist/bindings/contentViewport.js",
+        "sha256": "84513468bb7bd8083ee88118a84701de07482c9abe41892decbae0016c4b93c3",
+        "match": true
+      },
+      {
+        "file": "node_modules/@aid/win32-native-input/dist/physical.js",
+        "sha256": "245bd6132ea980cfaed3b413bb3f80778bc3667b9b1be1e9eda0d04eca642b17",
+        "match": true
+      },
+      {
+        "file": "node_modules/@aid/win32-native-input/dist/sequence.js",
+        "sha256": "2a3f4c546c03b8a70ad44ecda1db531a656f4f2e84a517e3aa2451494fe0904b",
+        "match": true
+      }
+    ],
+    "report_sha256": "8a6afae9e72ae52b13e57ba7242fdf25907573ddb03bed21f7f4487e2be787d2"
+  },
+  "boundaries": [
+    "No plugin installation, runtime replacement or deployment.",
+    "No mouse input or business message sending performed in artifact checks.",
+    "Acceptance publisher reused; no new trust root or signing key.",
+    "Prior live functional tests and unrelated full-suite limitations remain documented in the original development plan."
+  ]
+}
