@@ -14,25 +14,34 @@
     <div v-if="!controller.automaticConnection && view.connected && view.stateDirty && !view.refreshing && view.error" class="inline-notice warning" role="status">设备状态未能完整读取，请按连接处理步骤检查。<button v-if="controller.supportsRecovery && !controller.automaticConnection" type="button" class="status-action" @click="showRecovery">查看连接处理步骤</button></div>
 
     <section v-if="controller.automaticConnection && !firstPairing" class="runtime-panel runtime-connection" aria-labelledby="connection-summary">
-      <div class="runtime-section-heading">
-        <div><h2 id="connection-summary">{{ connectionTitle }}</h2><p class="runtime-muted">{{ connectionHint }}</p></div>
-        <span class="runtime-connection-badge" role="status" :class="{ ready: online }">{{ online ? '已连接' : connectionStatus }}</span>
+      <div class="runtime-connection-header">
+        <div class="runtime-connection-heading">
+          <div class="runtime-connection-title"><h2 id="connection-summary">{{ connectionTitle }}</h2><span v-if="view.state?.device" class="runtime-device-name">{{ view.state.device.name || '这台电脑' }}</span></div>
+          <p class="runtime-muted">{{ connectionHint }}</p>
+        </div>
+        <div class="runtime-actions runtime-connection-actions">
+          <span class="runtime-connection-badge" role="status" :class="{ ready: online }">{{ online ? '已连接' : connectionStatus }}</span>
+          <button v-if="connectionFault" type="button" class="runtime-secondary" :disabled="view.connecting || view.busy || recovery.busy" @click="retryConnection">{{ recovery.busy || view.connecting ? '正在检查…' : '重试连接' }}</button>
+          <button v-if="connectionFault" type="button" class="runtime-secondary" :disabled="recovery.busy || view.busy" @click="togglePairing">{{ pairExpanded ? '取消重新配对' : '重新配对' }}</button>
+          <button v-if="view.state?.device && view.state.state === 'stopped'" type="button" class="primary-button runtime-primary" :disabled="cannotAct" @click="controller.mutate('start')">启动执行</button>
+          <button v-if="view.state?.device && ['starting', 'running', 'reconciling'].includes(view.state.state)" type="button" class="runtime-secondary" :disabled="cannotStop" @click="controller.mutate('stop')">停止执行</button>
+        </div>
       </div>
-      <p v-if="view.state?.device" class="runtime-device-name">{{ view.state.device.name || '这台电脑' }}</p>
       <p v-if="recovery.error" class="field-error" role="alert">{{ recovery.error }}</p>
       <p v-if="recovery.newDevice && recovery.diagnosis?.service_verified" class="runtime-muted" role="status">{{ recovery.diagnosis.summary }}</p>
       <p v-if="recovery.diagnosis && !recovery.diagnosis.service_verified" class="runtime-muted">{{ recovery.diagnosis.summary }}</p>
-      <div class="runtime-actions">
-        <button v-if="connectionFault" type="button" class="runtime-secondary" :disabled="view.connecting || view.busy || recovery.busy" @click="retryConnection">{{ recovery.busy || view.connecting ? '正在检查…' : '重试连接' }}</button>
-        <button v-if="connectionFault" type="button" class="runtime-secondary" :disabled="recovery.busy || view.busy" @click="togglePairing">{{ pairExpanded ? '取消重新配对' : '重新配对' }}</button>
-        <button v-if="view.state?.device && view.state.state === 'stopped'" type="button" class="primary-button runtime-primary" :disabled="cannotAct" @click="controller.mutate('start')">启动执行</button>
-        <button v-if="view.state?.device && ['starting', 'running', 'reconciling'].includes(view.state.state)" type="button" class="runtime-secondary" :disabled="cannotStop" @click="controller.mutate('stop')">停止执行</button>
-      </div>
       <details v-if="view.state" class="runtime-details"><summary>连接详情</summary>
-        <dl class="runtime-facts"><div v-if="props.port.connectionInfo" class="runtime-server-fact"><dt>服务器地址</dt><dd>{{ view.server || '暂不可读取' }}</dd></div><div><dt>服务连接</dt><dd>{{ connectionLabels[view.state.connection] }}</dd></div><div><dt>执行状态</dt><dd>{{ stateLabels[view.state.state] }}</dd></div><div v-if="view.state.device"><dt>设备编号</dt><dd>{{ view.state.device.device_id }}</dd></div></dl>
+        <dl class="runtime-connection-facts">
+          <div v-if="props.port.connectionInfo" class="runtime-server-fact"><dt>服务器地址</dt><dd>{{ view.server || '暂不可读取' }}</dd></div>
+          <div><dt>服务连接</dt><dd>{{ connectionLabels[view.state.connection] }}</dd></div>
+          <div v-if="view.state.device"><dt>设备编号</dt><dd class="runtime-device-id">{{ view.state.device.device_id }}</dd></div>
+          <div><dt>执行状态</dt><dd>{{ stateLabels[view.state.state] }}</dd></div>
+        </dl>
         <p v-if="view.state.blocked_reason" class="runtime-muted">{{ view.state.blocked_reason }}</p>
-        <p class="runtime-muted">关闭窗口后仍在后台运行；需要退出时，请使用托盘菜单。</p>
-        <button type="button" class="runtime-secondary" :disabled="recovery.busy || view.busy || view.connecting" @click="togglePairing">{{ pairExpanded ? '收起配对设置' : '更换服务器 / 重新配对' }}</button>
+        <div class="runtime-connection-footer">
+          <p class="runtime-muted">关闭窗口后仍在后台运行；需要退出时，请使用托盘菜单。</p>
+          <button type="button" class="runtime-secondary" :disabled="recovery.busy || view.busy || view.connecting" @click="togglePairing">{{ pairExpanded ? '收起配对设置' : '更换服务器 / 重新配对' }}</button>
+        </div>
       </details>
     </section>
 
@@ -236,11 +245,23 @@ onUnmounted(() => { form.pairing_code = ''; recoveryForm.pairing_code = ''; cont
 .runtime-page .home-heading h1 { font-size: 32px; }
 .runtime-connection-badge { flex-shrink: 0; padding: 5px 10px; border: 1px solid var(--d-line); color: var(--d-text-muted); border-radius: var(--d-radius); }
 .runtime-connection-badge.ready { border-color: var(--d-ready); color: var(--d-ready); }
-.runtime-device-name { font-size: 18px; }
-.runtime-details { margin-top: 20px; color: var(--d-text-muted); }
+.runtime-connection-header { display: flex; align-items: center; justify-content: space-between; gap: 16px 24px; }
+.runtime-connection-heading { min-width: 0; }
+.runtime-connection-title { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; }
+.runtime-connection-title h2 { margin: 0; font: 500 18px var(--d-font-display); }
+.runtime-device-name { min-width: 0; padding: 2px 8px; border: 1px solid var(--d-line); border-radius: var(--d-radius); color: var(--d-text-muted); font-size: 12px; overflow-wrap: anywhere; }
+.runtime-connection-heading > .runtime-muted { margin: 6px 0 0; font-size: 13px; }
+.runtime-actions.runtime-connection-actions { align-items: center; flex-shrink: 0; margin: 0; }
+.runtime-details { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--d-line); color: var(--d-text-muted); }
 .runtime-details summary { width: fit-content; cursor: pointer; }
-.runtime-details dd { overflow-wrap: anywhere; }
-.runtime-server-fact { grid-column: 1 / -1; }
+.runtime-details summary:focus-visible { outline: 2px solid var(--d-focus); outline-offset: 3px; }
+.runtime-connection-facts { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 12px 32px; margin: 16px 0; font-size: 13px; }
+.runtime-connection-facts > div { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 12px; align-items: baseline; }
+.runtime-connection-facts dt { color: var(--d-text-muted); }
+.runtime-connection-facts dd { min-width: 0; margin: 0; color: var(--d-text); overflow-wrap: anywhere; }
+.runtime-device-id { font-family: var(--d-font-mono); font-size: 12px; }
+.runtime-connection-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 24px; }
+.runtime-connection-footer > .runtime-muted { margin: 0; font-size: 12px; }
 .runtime-pair-panel { padding-top: 24px; }
 .runtime-panel { margin-top: 24px; padding: 24px; border: 1px solid var(--d-line); background: var(--d-surface); }
 .runtime-section-heading, .runtime-plugin-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
@@ -271,4 +292,5 @@ onUnmounted(() => { form.pairing_code = ''; recoveryForm.pairing_code = ''; cont
 .runtime-operation-id { color: var(--d-text-muted); font: 11px var(--d-font-mono); overflow-wrap: anywhere; }
 .runtime-recovery-steps { padding-left: 24px; line-height: 1.8; overflow-wrap: anywhere; }.runtime-confirm { display: flex; align-items: center; gap: 8px; }
 @media (max-width: 620px) { .runtime-panel { padding: 16px; }.runtime-section-heading { align-items: flex-start; flex-direction: column; }.runtime-facts { grid-template-columns: 1fr; }.runtime-page { padding: 20px; } }
+@media (max-width: 760px) { .runtime-connection-header { flex-wrap: wrap; }.runtime-connection-facts { grid-template-columns: minmax(0, 1fr); } }
 </style>
