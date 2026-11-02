@@ -137,15 +137,24 @@ class TestReorderMessages:
         assert roles == ["user", "assistant", "user"], f"system 应被跳过，实际 {roles}"
         assert all(m["content"] != "[已转人工] 该次请求已处理完成。" for m in out)
 
-    def test_reasoning_content_preserved(self):
+    @pytest.mark.parametrize("reasoning", ["", "思考"])
+    def test_reasoning_content_preserved(self, reasoning):
         """DeepSeek 思考模式的 reasoning_content 在 assistant 消息上保留。"""
         history = [
-            {"role": "assistant", "content": "", "tool_calls": [_tc("c1")], "reasoning_content": "思考"},
+            {"role": "assistant", "content": "", "tool_calls": [_tc("c1")], "reasoning_content": reasoning},
             {"role": "tool", "tool_call_id": "c1", "content": "r1"},
         ]
         out = Agent._reorder_messages_for_llm(history)
         asst = next(m for m in out if m["role"] == "assistant")
-        assert asst["reasoning_content"] == "思考"
+        assert asst["reasoning_content"] == reasoning
+
+    @pytest.mark.parametrize("dangling_call", [True, False])
+    def test_empty_reasoning_kept_when_rebuilding_plain_assistant(self, dangling_call):
+        message = {"role": "assistant", "content": "answer", "reasoning_content": ""}
+        if dangling_call:
+            message["tool_calls"] = [_tc("missing-result")]
+        assert Agent._reorder_messages_for_llm([message]) == [{
+            "role": "assistant", "content": "answer", "reasoning_content": ""}]
 
     def test_real_scrambled_session_shape(self):
         """复刻本次 bug 的乱序形态（多 assistant + 散落 tool + 夹入 user）必须输出合法序列。"""

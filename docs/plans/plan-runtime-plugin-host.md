@@ -6,10 +6,11 @@
 >
 > 更新：2026-10-30。简化目标见设计第13节、计划第12节。唯一架构：[Runtime 设计](../system/runtime-plugin-host-architecture-design.md)；当前共同契约2.11；本轮不改wire，旧记录保留原版本。本计划整合旧 M1/M2 及 Runtime M0.4，不再维护独立阶段文档。
 >
-> 2026-10-31增量：用户要求将诊断留存与一键导出内置客户端，列为后续必做，详见第14节；本轮只规划，诊断D1～D3尚未开发，不改变上方其他任务的交付/授权记录。
+> 2026-11-02更新：第15节U1界面/日志源码独测与CR通过；用户取消App签名，保留显式unsigned发行。第14节通用查看导出已实现，BOSS专用跨层采样与实包验收仍待，不改变历史交付或安装授权。
 
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
+| U1 | Runtime静默刷新、简化界面、日志入口与未签名发行 | ✅ 完成（2026-11-02） | 0.0.36含截图三项优化，94独测/CR及实际EXE通过；已授权本次提交，未部署 |
 | 设计/共享格式 | 当前架构、契约、schema/fixture | ✅ 完成（2026-10-09） | 架构v2.0、格式候选0.3；共同wire冻结另列 |
 | 第一部分 A1 | 共用核心、管理端、CLI与受管入口 | ✅ 完成（2026-10-09） | 实际Host/DPAPI/停止/兼容验证；H1共同冻结待确认 |
 | 第一部分 A2 | 三第一方离线包与安装管理 | ✅ 完成（2026-10-09） | 隔离签名实包、真实安装/重启/MCP验证；正式发行输入另列 |
@@ -27,9 +28,9 @@
 | 简化 S5 | 最终安装包与客户机升级验收 | ✅ 完成（2026-10-30） | 最终R2隔离升级/新装/Clean与实际Host恢复通过；原0.0.29/0.3.27配置配对保留 |
 | 本地环境统一 | 原8000/master接入Web、Runner与现有Runtime | ✅ 完成（2026-10-30） | 复用原本地PG/Redis/卷；master三应用与Web API只读链路通过，旧三应用已停 |
 | 诊断 D0 | 内置留存与一键导出方案/计划 | ✅ 完成（2026-10-31） | 用户明确列为后续必做；设计第14节，尚未编码 |
-| 诊断 D1 | 调用/目标/原生窗口关联与有界留存 | 📋 待开发 | 不依赖临时目录；不改变输入、授权或业务结果 |
-| 诊断 D2 | Runtime内一键导出脱敏诊断包 | 📋 待开发 | 公共core/Main/UI，离线和Host故障仍可导出 |
-| 诊断 D3 | 独测/CR、真实发行包与故障包验收 | 📋 待开发 | 当前临时采集附件不替代产品能力或故障修复 |
+| 诊断 D1 | 调用/目标/原生窗口关联与有界留存 | 🔧 进行中 | 通用Main留存及旧Host安全投影完成，BOSS专用窗口关联待开发 |
+| 诊断 D2 | Runtime内查看/导出脱敏诊断包 | ✅ 完成（2026-11-02，0.0.34） | 包内collector/Main/yazl匿名ZIP通过；未执行安装或真实业务 |
+| 诊断 D3 | 独测/CR、真实发行包与故障包验收 | 🔧 进行中 | U1源码与实际包内匿名验收通过；专用采样和真实安装/故障未验 |
 
 
 2026-10-26完整master整合：wecom工作树已将1721707f（含历史信任根>16修复、共享窗口恢复及BOSS0.3.27）整合为未提交merge，W6未提交修改保留。Runtime/CLI/BOSS/Web构建及独立组合验证完成，CR无新增未决问题，3项旧Runtime清单/digest断言仍失败；升级水位幂等补齐另经真实存量PG验收。结果唯一见[WeCom整合计划](plan-wecom-cli-group-chat-experiment.md#最新master与runtime核查2026-10-26用户追问后补核)，未部署、安装或恢复监听，不等于已安装版本验收。
@@ -429,7 +430,7 @@ Runtime沿原已安装客户端完成替换配对，旧设备revoked/unselected�
 
 ## 14. 内置诊断留存与一键导出开发计划（2026-10-31）
 
-**优先级：P1，用户明确要求后续补齐的必做项；当前只做规划，不编码。** 纳入后续 Runtime 稳定性迭代，具体版本/日期待排，不能因临时脚本已经交付而关闭本项。若延期，必须保留顶部D1～D3待开发状态与未交付原因，不能静默降为可选优化。
+**优先级：P1，用户明确要求补齐的必做项；2026-11-02已按第15节实施通用查看导出与Main留存，专用跨层取证及实包仍未完成。** 纳入后续 Runtime 稳定性迭代，具体版本/日期待排，不能因临时脚本已经交付而关闭本项。若延期，必须保留顶部D1～D3待开发状态与未交付原因，不能静默降为可选优化。
 
 设计唯一来源：[Runtime架构第14节](../system/runtime-plugin-host-architecture-design.md#14-客户端内置诊断留存与一键导出2026-10-31待开发)。事故输入：[BOSS隐藏窗口复盘](../incidents/boss-agent2-widget-stuck-hidden-20261030.md)。[临时取证附件](plan-boss-widget-incident-evidence-collection.md)只服务当前事故，不是永久客户端架构。
 
@@ -439,7 +440,7 @@ Runtime沿原已安装客户端完成替换配对，旧设备revoked/unselected�
 |------|----------------|---------|
 | D0 方案登记 | 在既有架构、统一计划与ideas登记必做项，区分现有文件日志和待开发产品能力 | 本轮仅文档完成，D1～D3仍待开发 |
 | D1 自动留证 | 复用调用ID/版本及log-health；BOSS写attach/目标摘要/恢复阶段，共享native写拒绝时的窗口父链/可见性/实际op，Runtime关联并持久化有界元数据 | 受控故障能产生完整关联链；刷新换widget、跨调用重attach、后台与真正遮挡可区分；没有证据的时段保留未知 |
-| D2 内置导出 | core只读采集投影＋公共Main保存/ZIP＋Runtime页入口；选择故障时段并生成摘要、manifest、结构化证据，源失败可见 | 客户只需客户端内导出一个文件，离线/未配对/Host故障/业务进行中均可读已有数据；不需外置PS脚本或管理员权限 |
+| D2 内置导出 | U1已实现安全投影＋Main保存ZIP＋Runtime查看入口；客户端实包验收待后续授权，完整D1专用采样仍待开发 | 客户只需客户端内导出一个文件，离线/未配对/Host故障/业务进行中均可读已有数据；不需外置PS脚本或管理员权限 |
 | D3 验证交付 | 独立测试、独立CR、实际客户端包和隔离安装/升级；故障包字段核对、隐私哨兵与性能边界验证 | 按14.3矩阵提供证据；旧0.0.29＋BOSS0.3.27原功能保留；发行/部署授权与源码完成分别登记 |
 
 D1和D2形成同一交付闭环：既不能只有按钮没有故障关联字段，也不能只有详细日志仍要求客户找目录。新增诊断不依赖网络或付费模型，不为取证取得输入权限、阻塞在途调用或改变业务重试预算。
@@ -471,3 +472,102 @@ D1和D2形成同一交付闭环：既不能只有按钮没有故障关联字段�
 2026-10-31只核对源码事实并更新设计/计划/索引：已有文件日志和home定位继续复用；自动关联留存、客户端一键导出及真实产品验收均未开发。未新增代码、共同接口、自动化日程或部署动作。
 
 后续开始开发先重读共同契约和本节，登记接口唯一写入者及兼容消费，按D1→D2→D3落实。保存目标、实际日志保留量与Main/Host通信方式以实施前代码核对为准，不借诊断绕开既有安装、授权、unknown或签名规则；客户部署须用户当场明确指示。
+
+
+## 15. Runtime界面简化与正式发行准备（2026-11-02）
+
+设计唯一来源：[架构第15节](../system/runtime-plugin-host-architecture-design.md#15-runtime界面简化与正式发行准备2026-11-02)，日志复用第14节并明确分阶段范围。用户已选官网图标；了解Web TLS证书不可替代代码证书后，已明确取消应用签名，本轮无需申请证书。本轮不提交、安装、部署或恢复监听，不改客户机现用状态。
+
+| 阶段 | 内容及验收 | 状态 |
+|------|------------|------|
+| U1.1 界面与刷新 | 首次配对/覆盖沿用/故障重连三态；常规刷新不插横幅/丢焦点；详细管理信息折叠 | ✅ 完成（2026-11-02） |
+| U1.2 日志查看导出 | 独立Main入口、有界脱敏投影、离线/Host故障可查看和导出；原始业务文本不入包 | ✅ 完成（2026-11-02，源码） |
+| U1.3 历史隔离复核 | 旧Runtime/BOSS能力与覆盖配对保持；旧历史不拦新连接，真实在途动作不重放 | ✅ 完成（2026-11-02） |
+| U1.4 品牌与未签名发行 | 官网品牌图标与显式unsigned打包/验包；用户取消应用签名，不改变插件验签或产品身份 | ✅ 完成（2026-11-02，0.0.34实包） |
+| U1.5 独立验收 | 定向UI/IPC/日志/启动兼容测试＋独立CR，模拟port视觉核验，不碰现用客户端 | ✅ 完成（2026-11-02，源码） |
+| U1.6 Runtime安装器 | 用户追加授权仅打Runtime0.0.34，显式U1选源、实包验原两插件，不安装或重打插件 | ✅ 完成（2026-11-02） |
+| U1.7 正常切换服务器 | 正常连接详情提供更换服务器入口，复用原配对表单/协议；显式提交才切换 | ✅ 完成（2026-11-02，0.0.35实包） |
+| U1.8 截图优化 | 去除Runtime菜单、显示实际服务器地址、紧凑全宽插件列表；独立验证并打包036 | ✅ 完成（2026-11-02） |
+
+主控唯一维护RuntimeManagementPage/controller/RuntimeApp、UI测试与图标及icon打包接线；日志开发角色唯一维护core collector/安全事件、Main/preload/bridge日志类型及对应测试；独测与CR只读。接口先完成共同契约登记；现有wire不变、logs新增可选端口，旧bridge缺口只影响日志新功能。不扩BOSS/native专用窗口采样，不把第14节完整D1～D3误记全部交付。旧端验证只覆盖实际交付0.0.29＋BOSS0.3.27及本次受影响组合，禁止逐代扩测试。
+
+
+### 15.1 实施与验证记录
+
+- 主控UI自测74项；日志开发Core4＋Desktop3＋既有诊断13共20项通过。独立首轮138项，另有真实匿名生产collector组合：rt、connections/UUID、旧generations三布局，Host执行/HTTP/HTTPS/net/fetch哨兵全部0，导出ZIP仅summary/manifest/events，个人信息/业务正文/凭据/路径哨兵均不入包，源文件与pointer不变。
+- CR指出缺少安装版本，已补App/Host/Core与未知null；UI/summary明确当前安装版本不代表旧事件当时版本。连接状态徽章补role=status；日志入口由用户打开时滚动/聚焦，常规状态刷新不抢焦点。正常不存在轮转日志只在详情登记，不作为故障警告。
+- 日志源每份tail上限512KiB，最多500安全事件；Main固定生命周期2×1MiB轮转，旧runtime.log沿既有5MiB规则，不宣称已保证7天完整留存。D1里的BOSS attach/HWND/loader采样未开发，第14节整体仍部分完成。无新恢复框架/业务门禁；查看导出不启动/停止任务、不联网。
+- 静态历史复核：完整旧管理operation、journal/outbox不全局拦新连接；独立RuntimeCleanConnection重配对用新home。活动管理secret损坏、真进程未停止和本次注册未完成仍分别处理，不删除历史unknown或重放。覆盖升级保留原身份/home的现有回归保持。
+- 视觉：仅工作区外mock port预览，headless Edge验证首次/在线/离线/blocked四态及720×600窗口，无JS错误/横溢出；定时刷新2200ms后输入及焦点保持、无刷新横幅，正常在线无配对/重连按钮；用户打开日志及模拟导出反馈正常。截图与visual-report在 `%TEMP%/aid-runtime-u1-preview/`。未把模拟状态说成真实客户机连接或保存框验收。
+- Web生产build、Desktop最终build/依赖边界/产物验证通过；打包政策和日志7项、打包24项定向通过。ICO经实际builder converter识别256无fallback，原三帧保留；高DPI清晰度受原48像素来源限制。
+- 用户取消签名后，新增显式Unsigned不改正式/验收身份或插件信任，兼容旧manifest默认；隔离overlay仅11份打包文件，不含U1业务源码，避免误交付HEAD旧UI。此轮未生成新Runtime安装器，既有0.0.33交付包不包含本轮U1源码；后续打包需准确选源及新版本。
+- 最终独立补测31项：versions真实ZIP、未知值、unsigned匿名归档11overlay/原业务WIP排除、ICO原帧保留通过。CR末轮另发现首次配对promise失败时摘要卡片被隐藏，修正后错误及重试入口可见且只请求一次；root核出public favicon在真实aidagent协议不能直读，改为Vite assets并增加实际bundle/协议回归，不扩大协议白名单。受影响最终page17＋renderer4共21项独测通过，0失败/0跳过；CR复审无遗留。额外最终日志3项及产品/IPC/签名/日志18项主控核验通过；完整App build最终为3manifest/45模块。
+- 独立证据 `%TEMP%/aid-runtime-u1-test-4b87123182fe4d1690cc5045bf87cace/` 包含 independent-test-report、anonymous-combination-report、tail-independent-report、final-two-regressions-report；视觉最终4态品牌图均加载成功，无JS错或横溢出，自己的预览server已停止。现场原Runtime四进程31892/31924/31932/33152仍保持09:41启动时间。
+- 当前客户端进程/配置不动，不提交、重新打包、安装、部署或恢复监听。本轮完成源码功能和独立验证，不冒称新功能已经进入此前0.0.33安装包。
+
+
+### 15.2 U1安装器打包（2026-11-02，用户追加授权）
+
+仅打新Runtime0.0.34，已交付BOSS0.3.29和WeCom0.2.4包复用，不重新签署/构建插件，不提交、安装、部署或恢复监听。Core新增诊断实现从0.2.22升0.2.23；Host打包组合从0.2.25升0.2.26，对应package/lock同步，不覆盖旧交付版本。沿当前已安装acceptance的appId/home/公开根保持可覆盖升级，不把App不签名误改为生产插件根放行，也不切换客户机身份。
+
+以master46636779独立Git归档为基线，仅将上轮已审查U1 Main/Core/UI/测试/图标及本轮版本/打包文件逐项冻结叠加；额外记录source-overlay.json与源文件SHA，工作区通知规则/数据库/其他文档/Vite开发设置等改动均排除。复用release-batch内部WorkspacePrepared入口构建Runtime-only；交付build-info如实注明U1业务源码叠加，不沿用packaging-only说明。已有固定Node官方ZIP仅作为cache复制，仍由原摘要校验；不复制旧dist/node_modules或已安装客户端。独测/CR只读核对实际EXE与配套插件，优先复用同源功能证据。
+
+
+#### 15.2最终交付与独立验包
+
+- 构建副本 `%TEMP%/aid-runtime-u1-package-abbdc67b/workspace`：源归档HEAD466367794fbcf6d6d4ebf70ac2e55c3cb25e9e6b，4284常规归档文件/36明确overlay独立逐项核对，无其他WIP，构建后overlay零漂移；四份lock与UI0.0.34/Host0.2.26/Core0.2.23一致。
+- 复用现有release-batch Runtime-only内部入口，全部流程exit0；24项打包测试和隔离副本11项日志/renderer/签名政策测试通过、0跳过。原runtime verifier验证3815受管资源、实际NotSigned、固定Node22.23.3/ABI127、安装身份与source fingerprint通过。
+- EXE：`%LOCALAPPDATA%/AidWorkBuild/deliveries/AID-Work-Runtime-0.0.34-20261102-112104/AID-Work-Runtime-0.0.34-win-x64-acceptance-unsigned.exe`，127125991字节；SHA256 `2be036770e3ec766883611b3f59ba80c1aee25e0828177c71313186421a4832c`。沿现用acceptance身份而非新生产目录；Windows签名明确NotSigned，不改插件签名或test_only。
+- 独测用7za纯解档实际EXE，3818项resources及app.asar内29份dist摘要与冻结构建完全一致；EXE内Node/Core/24公开根验原BOSS0.3.29（3738文件）及WeCom0.2.4（7472文件）签名/清单通过，保留WeCom3业务工具和旧BOSS25工具；两原插件字节不改、不重新打包或捆绑。原插件SHA分别 `ab6126fb386c6ac8c64d50cf6ca3f7ef7828ebb4eb0e245326a995b6368c76cc`、`f16407dedaf1217301d2fcb85b2d112d4d6d20de24e33a893d297a8c2b95796d`。
+- 实际ASAR runtimeLogs/yazl及EXE内Core在匿名home成功生成安全ZIP，版本34/26/23正确、隐私哨兵排除、网络0、Host未启动；renderer图标及允许协议路径通过。实际NSIS和主程序PE均有官方16/32/48/256图标，rcedit规范化部分mask尾部但像素一致；没有用仓库dist冒充包内功能。
+- 交付目录含11文件/10项SHA：EXE、原release manifest、实际来源manifest、公开根、build-info、使用说明及4份核验/来源报告。最终完整ZIP为同级 `AID-Work-Runtime-0.0.34-20261102-112104-verified.zip`，127178752字节；SHA256 `e96bfce2a2c37a9f05d92b9bcd8a60e40915dd70724459b731fe180ef509e20f`。独测/CR最终目录/ZIP逐文件字节和旁校验和通过。原脚本先生成的无verified草稿ZIP保留且不交付；它不含后补独测报告，最终包以verified为准，EXE本体始终不变。
+- 交付build-info准确记录U1业务source overlay，并把两插件标为复用验包而非本批构建，未选插件版本null。不写packaging-only虚假来源。最终独测证据 `%TEMP%/aid-runtime034-test-bcd3fe2a5fb34c87b0bfc11c13546d0a/` 的actual-exe-runtime、exe-integrity-branding、source-provenance、final-delivery-report；原始报告已放交付目录，最终ZIP核验报告留外部以免封包后改写。
+- 未运行安装器、覆盖当前客户端、重配对、调用真实业务、部署或监听；未提交。本轮只交付可供用户安装的文件，未将NSIS执行/真实客户机升级和Web业务写成通过。后续提交必须只暂存本任务内容，工作区其它任务仍保留。
+
+
+### 15.3 正常连接切换到测试服务器（2026-11-02）
+
+按设计15.5补UI遗漏，不改配对后端/恢复流程。主控唯一维护RuntimeManagementPage及定向测试/后续版本，独立验证者只读做测试与CR。当前0.0.34已交付不能覆盖同版本重发；更新UI安装器使用0.0.35，Host0.2.26/Core0.2.23与原两插件复用。实际服务器切换需用户在新版客户端填写目标地址及该服务器生成的一次性码，本轮不替用户写客户端配置或切换真实身份。
+
+
+#### 15.3验证与交付结果
+
+- 普通风险UI修复，主控开发＋一个独立验证角色完成测试和CR：feature77项（page19）0失败/跳过。新回归证明健康状态详情入口可达、预填设备名并聚焦服务地址；打开与取消均无reconfigure/stop/pair，取消清code；提交仅一次register_new，使用目标server/code，不硬编码agent2。
+- Headless Edge模拟port实际点击详情/设置/取消/再次提交：打开和取消请求0，取消码清空，目标server仅提交一次，无JS错；可视检查表单/焦点与用户操作相符。临时预览server已停止。测试服务器从仓库登记核对为https://agent2.aidingyi.cn，只读health返回HTTP200；没有请求配对或替用户切换真实服务器，用户需在该后台生成目标码。
+- Runtime0.0.35沿034冻结源码，仅Page/test与UI package/lock四项改变，其余32份overlay原hash不变。Core/Host5份JSON在工作树仅CRLF变化，JSON与换行规范后内容相同，构建继续用034已验证原字节并在source-overlay.origin登记。构建副本 `%TEMP%/aid-runtime035-package-1642da5e/workspace`，HEAD46636779归档同034，未混入其它WIP。
+- 原打包流程exit0，24项打包测试全过；Desktop编译/边界/3manifest/45模块验证通过。实际EXE `AID-Work-Runtime-0.0.35-win-x64-acceptance-unsigned.exe` 为127126187字节，SHA256 `3e82f8bfededd81dfd4497c6411c6f77f6a41245217ffc33c9c6162973b40443`，NotSigned，沿既有acceptance身份/home。无插件重打。
+- 独立7za只解档EXE确认新详情/表单代码进入实际renderer，29份dist与冻结编译一致；实际Core54文件、Node、24根、Main/preload/Electron及app依赖与034逐字节相同，因此明确复用034的两插件验签/清单与日志ZIP组合证据。runtime仅重编native supervisor、其build-info、resource-manifest三项变化；源/script/compiler/policy与034不变且新EXE摘要符合build-info。没有把源码dist当实物或把复用说成重跑。
+- 交付 `%LOCALAPPDATA%/AidWorkBuild/deliveries/AID-Work-Runtime-0.0.35-20261102-114037/`，10文件/9项SHA；同级最终`AID-Work-Runtime-0.0.35-20261102-114037-verified.zip`为127178103字节、SHA256 `cc78dd74fed04e4bb5e7cbb26889eed445b014107acd2211775f1bda2338080c`。独立目录/ZIP逐文件字节与摘要通过，旧脚本原始草稿ZIP不交付。
+- 沿用户先前Downloads交付目标，035复制到 `C:/Users/PC/Downloads/AID-Work-Installers-20261102-111012/`，旧034保留于其previous-runtime-0.0.34备份目录（摘要仍2be036…），没有删除。原BOSS0.3.29/WeCom0.2.4字节不变，SHA256SUMS更新为当前三安装文件；独立复核通过。证据在 `%TEMP%/aid-runtime035-test-0ea188cccf0e4263926e70b22909bd58/` 的source-test-review、source-difference、actual-exe-difference、final-delivery-downloads-report，原前三份随包。
+- 未执行安装或真实服务器切换，未提交、部署或恢复监听；当前已安装客户端由用户后续选择覆盖035并在页面输入目标服务器码。
+
+
+### 15.4 截图优化与Runtime0.0.36（2026-11-02）
+
+用户截图标注为三项：不显示Windows菜单栏、连接详情需可识别服务地址、插件列表减少竖向留白且利用右侧空间。设计15.6为本轮唯一边界，root维护UI/Main/read-only metadata/菜单与测试、版本和打包，独测/CR只读。新H3可选connectionInfo只显示origin，沿已有可信sender与活动home，不更改配对/执行行为；旧bridge保留。
+
+成功标准：正常Desktop菜单不变、Runtime Windows无顶部菜单；实际配置地址可见并随切换更新，配置中凭据/其它字段不跨IPC，读取失败不拦执行；1156宽插件同一行、720窄窗无横溢出，启停/卸载确认语义保留；036实际包包含这些修改，现有BOSS/WeCom包复用，不安装/提交/部署/监听。
+
+
+#### 15.4实施验证记录
+
+- 只移除Runtime Windows应用菜单，普通Desktop和macOS菜单保持原状；新增可选connectionInfo通过原可信sender，读取实际活动home的config.json并只返回HTTP(S) origin。账号、令牌、密码及URL路径/query/hash不跨IPC，不启动Host或联网，失败返回null；前端读取独立于主状态刷新，不拖慢连接和插件操作。
+- 插件列表改为名称/版本、状态、操作紧凑列，使用窗口完整宽度；原启停、卸载确认及状态含义保持。mock port + Headless Edge核对1156宽面板1092/右边距32/每行68px、720宽每行79px，均无横溢出或JS错误；连接详情显示实际port返回的地址，自己的预览服务已停止。
+- 独立测试feature81项＋编译后菜单/metadata/security13项共94项通过，0失败/0跳过。匿名实际编译Main回调验证可信sender、固定home/无客户端路径输入、活动home变化及损坏/超限配置，网络和Host调用0、配置不变。Windows测试进程不能创建文件symlink（EPERM），没有将该项声称为真实覆盖；代码沿普通文件校验并拒绝symbolic link，不扩展修复框架。
+- Web生产build（1143模块）、Desktop编译/边界和3manifest/45模块验证通过，原release-batch Runtime-only全部exit0、24项打包测试全通过。独立源码审查无阻断项；HEAD46636779归档4284文件与43明确overlay逐项一致，仅13项相对035变动/新增，排除其它未提交工作。Core0.2.23/Host0.2.26和两插件保持，UI独立升0.0.36，不覆盖旧版本重发。
+
+- 实际EXE纯解档后3818份资源与冻结构建字节一致，29份ASAR dist对应编译产物；新Main/platform/preload/helper四模块、地址及紧凑CSS进入实际包。实际ASAR匿名回调再次验证可信frame、固定home、投影及菜单，未访问客户机配置、联网或启动Host。Core54文件/Node/24根/app依赖/logs均与035一致，明确复用034原两插件验签/日志证据；非伪称插件重新实测或构建。独立来源CR核对3845项manifest input和43overlay零漂移，无遗留项。
+- Runtime EXE为127126631字节，SHA256 `652984f2cd29a1df91bf336fdee6e411b11f9fc9990fdbc7e143272b2f421aa2`，实际Authenticode为NotSigned；沿原acceptance身份/home，不改变插件信任与生产服务器配置。交付目录 `%LOCALAPPDATA%/AidWorkBuild/deliveries/AID-Work-Runtime-0.0.36-20261102-115859/`，完整归档以同级`-verified.zip`为准；附冻结源清单和独测/CR/实际ASAR/视觉报告，原无verified草稿不作交付。
+- 新EXE已复制至 `C:/Users/PC/Downloads/AID-Work-Installers-20261102-111012/`，顶层三份安装文件SHA逐项复核；旧035核对摘要后移动至previous-runtime-0.0.35，原033/034备份和两个插件原包不动。当前客户端未被停止或安装覆盖，未真实配对/换服务器、提交、部署或恢复监听；NSIS实际执行与业务测试仍未运行。
+
+- 最终完整归档`AID-Work-Runtime-0.0.36-20261102-115859-verified.zip`为127182708字节，SHA256 `0767de13931f3eb9cfe787f2a5dc10ad0c29ac8cdf9c280a428825ef580cb1b5`；交付目录14文件/13项SHA，文档如实区分mock视觉/实际ASAR匿名核验与未执行安装业务。来源及实际包报告见`%TEMP%/aid-runtime036-package-0c84221d/independent-review-report.json`与`%TEMP%/aid-runtime036-test-88a2e14a5d3c41999d12511098be9714/`，主要报告随完整归档交付。
+
+- 最终独测只读复核通过：verified ZIP与目录14文件逐字节相同、13项摘要及旁SHA正确，随包报告引用可解析；Downloads三项摘要及033/034/035备份均保持预期。`final-delivery-report.json`留在036独测Temp目录，未封包后改写交付材料。
+
+### 15.5 本会话提交前核对（2026-11-02）
+
+用户授权提交并推送本会话及BOSS相关修改，agent2由用户自行发布；助手不部署、安装或恢复监听。master已fetch并与origin/master同步于94269b35。BOSS0.3.29业务修复及交付说明已分别在148f7945、46636779，不重复改动插件或版本。
+
+当前43份Runtime选源与036冻结清单核对为38份字节相同、5份package/lock仅换行不同，无业务源码漂移，可复用上述独测与CR。主控对当前工作区重跑Desktop完整build（3 manifest/45模块）和发布脚本/配套验包/Runtime打包/插件打包36项测试，均通过、0跳过；Runner受影响import亦通过，修复证据见[休眠计划第18节](plan-agent-runner-durable-sleep.md#18-deepseek-空思考字段修复2026-11-02)。
+
+只读运行中安装文件版本为0.0.36，本次提交不引入超出已交付036的客户端代码，也不重打BOSS0.3.29或WeCom0.2.4；本次服务端Runner修复不需要客户端更新。通知/定时任务、搜索及其它任务WIP保留，公共索引仅暂存本任务条目。

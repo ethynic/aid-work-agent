@@ -1,5 +1,15 @@
 # AgentRunner / Desktop / Runtime 共同集成契约
 
+2026-11-02 U1.8共同检查点：新增可选本机H3 runtimeHost.connectionInfo返回{server:string|null}，只读Main实际活动home并投影HTTP(S) origin，无凭据/路径/业务、无网络或Host启动，失败不拦主流程。主控唯一写Main/preload/Controller/UI/菜单及打包，独测/CR只读；H1/Device/Provider与旧bridge语义不变，契约仍2.12。UI0.0.36，Host0.2.26/Core0.2.23保持；独立94测试/CR、实际EXE匿名IPC和来源核验通过。未安装、切换真实服务器、提交、部署或监听。见[计划15.4](../plans/plan-runtime-plugin-host.md#154-截图优化与runtime00362026-11-02)。
+
+2026-11-02 U1.7：UI0.0.35仅补正常状态连接详情里的服务器切换入口，沿原register_new/confirmed和真实执行停止规则，不改Main/Host/Device/H1 schema或权限。Core0.2.23/Host0.2.26保持，实际包相同Core/Node/roots/依赖复用034兼容证据；独立77测试/CR与035实包/Downloads校验通过。未实际安装、切服务器、提交、部署或监听，契约仍2.12；见[统一计划15.3](../plans/plan-runtime-plugin-host.md#153-正常连接切换到测试服务器2026-11-02)。
+
+2026-11-02 U1实包授权：仅构建Runtime UI0.0.34/Host0.2.26/Core0.2.23，沿当前acceptance安装身份、插件根与H1/Device语义，App不签名；显式隔离叠加已审查U1，复用BOSS0.3.29/WeCom0.2.4现包验兼容。主控唯一维护版本/打包，独测与CR只读；不安装、提交、部署或监听。契约仍2.12，见[统一计划15.2](../plans/plan-runtime-plugin-host.md#152-u1安装器打包2026-11-02用户追加授权)。
+
+2026-11-02 U1界面/日志实施检查点：主控唯一维护Runtime页面/controller/图标，日志角色唯一维护core只读collector/Main/preload及可选agentDesktop.logs端口，TEST/CR只读。logs仅固定读取/导出本地安全诊断，不经Host管理请求、不联网或产生业务调用；不新增H1/Device/binding schema，契约仍2.12。旧bridge无logs仅缺新日志功能，旧Runtime0.0.29＋BOSS0.3.27原能力保留。沿现有Clean/installation路径，不重写恢复框架；用户已取消App签名，显式unsigned不改插件验签/产品身份，旧安装清单默认兼容。U1源码及追加授权的0.0.34实包独测/CR通过，两现有插件配套验签通过；未安装、部署、监听或提交。见[统一计划15](../plans/plan-runtime-plugin-host.md#15-runtime界面简化与正式发行准备2026-11-02)。
+
+2026-11-02 P12出包闭环登记：仅扩展构建入口的Wecom/RuntimeWecom组件、隔离输出、缓存过滤及实际配套验证，不改Runtime/Device/binding或插件签名格式，契约仍2.12。脚本角色唯一维护出包与核验helper，主控维护文档/版本/实际构建，独测与CR只读。实际交付Runtime内置根/Core/三业务工具必须能接纳本批WeCom，不以额外测试根冒充安装前提满足；旧BOSS原功能及独立组件升级原则不变。见[计划P12](../plans/plan-wecom-cli-localdb.md#p12-统一打包脚本与可安装配套交付2026-11-02)，不授予安装、部署、监听或提交权限。
+
 2026-10-31 P10附件实施检查点（2.12，可选扩展）：沿原三业务工具，`wecom_read_session`新增可选`attachment={message_id,offset?,max_bytes?}`，offset为文本字节位置、max_bytes默认4096/上限8192；旧输入含义不变。时间线只增加图片/文件类型及可选附件元数据，不默认读取内容；按需结果不推进时间线游标。图片使用原OperationResult内部`data.attachment.image`的有界标准MCP图片块跨原Device result/outbox传输，云端立即消费字节并转ImageRegistry/ImageRef与既有Runner图片资源引用，不将Base64/客户机路径混入模型文字。复用已有结果传输，不新增API、资源服务、授权或调度框架。CLI唯一写入者为附件CLI开发角色；云端proxy/结果消费/模型装配由桥接开发角色唯一维护；主控维护Runtime现有能力协商、契约与文档；独测/CR只读。缺新附件能力只返回该新请求不可用，旧Runtime0.0.29＋BOSS0.3.27普通工具/上报/恢复/计费不改、不强制升级。具体结果约定与组合验证见[计划P10](../plans/plan-wecom-cli-localdb.md#p10-图片与文件时间线及按需读取2026-10-30设计草案)。源码已通过独立测试与CR，验收范围见计划；用户后续授权仅本任务提交推送，不安装、部署或恢复监听。
 
 2026-10-30 WeCom 消息读取共同检查点：沿用2.11与现有三工具输入，仅扩展已验证的本地消息类型。Markdown正文通过原text返回，可选text_format=markdown；系统事件使用kind=system、system=true及既有timeline方向，不算个人发言。旧Runtime/服务端无需升级即可透传，旧插件保持原能力，不新增能力门禁。旧v2/wb1游标摘要与普通文本发送对账语义保持；本任务主控唯一维护TS归一/消费与文档，解码开发角色唯一维护Python驱动，测试/CR只读独立验证。实施与验收记录见[本地库计划P9](../plans/plan-wecom-cli-localdb.md#p9-机器人markdown与群系统事件读取2026-10-30)，未安装新版插件前不宣称客户端已获得新能力。

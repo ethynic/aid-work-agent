@@ -24,6 +24,47 @@ function create(port: RuntimeManagementPort, timeout = 1000) { const controller 
 afterEach(() => { controllers.forEach((controller) => controller.dispose()); controllers.length = 0; vi.useRealTimers() })
 
 describe('Runtime production consumer', () => {
+  it('refreshes the configured server independently without blocking the Host when metadata fails', async () => {
+    const { port } = makePort()
+    port.connectionInfo = vi.fn(async () => ({ server: 'https://first.example' }))
+    const controller = create(port)
+    await controller.connect()
+    expect(controller.view.server).toBe('https://first.example')
+    port.connectionInfo = vi.fn(async () => ({ server: 'https://second.example' }))
+    await controller.refresh()
+    expect(controller.view.server).toBe('https://second.example')
+    port.connectionInfo = vi.fn(async () => { throw Error('fixture-metadata-unavailable') })
+    await controller.refresh()
+    expect(controller.view.server).toBeNull()
+    expect(controller.view.error).toBe('')
+    expect(controller.view.connected).toBe(true)
+  })
+  it('keeps connection and plugin state available while the optional address read is pending', async () => {
+    const { port } = makePort()
+    const pending = deferred<{ server: string | null }>()
+    port.connectionInfo = () => pending.promise
+    const controller = create(port)
+    await controller.connect()
+    expect(controller.view.connected).toBe(true)
+    expect(controller.view.plugins?.plugins).toHaveLength(1)
+    expect(controller.view.refreshing).toBe(false)
+    pending.resolve({ server: 'https://loaded.example' }); await flushPromises()
+    expect(controller.view.server).toBe('https://loaded.example')
+  })
+  it('does not display a late server address from a superseded connection', async () => {
+    const old = makePort(), next = makePort()
+    const pending = deferred<{ server: string | null }>()
+    old.port.connectionInfo = () => pending.promise
+    next.port.connectionInfo = async () => ({ server: 'https://current.example' })
+    const controller = create(old.port)
+    const previous = controller.connect()
+    await flushPromises()
+    await controller.connect(next.port)
+    pending.resolve({ server: 'https://old.example' })
+    await previous
+    expect(controller.view.server).toBe('https://current.example')
+  })
+
   it('automatically reconnects the page after a background connection replaces its Host', async () => {
     vi.useFakeTimers()
     const { port, disconnect } = makePort()

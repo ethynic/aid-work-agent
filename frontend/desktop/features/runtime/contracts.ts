@@ -3,6 +3,7 @@ export interface ManagementRequest { request_id: string; method: ManagementMetho
 /** H3 supplies this port from the trusted preload; no executable, path or business invocation. */
 export interface RuntimeManagementPort {
   readonly automaticConnection?: boolean
+  connectionInfo?(): Promise<{ server: string | null }>
   request(request: ManagementRequest): Promise<unknown>
   observe(listener: (event: unknown) => void): () => void
   onDisconnect?(listener: () => void): () => void

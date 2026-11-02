@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { assertPackageInvocation, assertReleaseSigning, expectedSignature, isValidReleaseVersion } from '../electron/releasePolicy.js'
+import { assertPackageInvocation, assertReleaseSigning, expectedSignature, isValidReleaseVersion, runtimeSigningMode } from '../electron/releasePolicy.js'
 
 test('release version accepts SemVer and rejects mutable/non-version labels', () => {
   assert.equal(isValidReleaseVersion('1.2.3'), true)
@@ -24,4 +24,11 @@ test('release packaging fails closed without a signing certificate while dev is 
   assert.doesNotThrow(() => assertReleaseSigning('release', { CSC_LINK: 'certificate-reference' }))
   assert.equal(expectedSignature('dev'), 'NotSigned')
   assert.equal(expectedSignature('release'), 'Valid')
+})
+
+test('Runtime can explicitly ship unsigned without changing production identity or legacy manifest defaults', () => {
+  assert.equal(runtimeSigningMode('production', 'unsigned'), 'unsigned')
+  assert.equal(runtimeSigningMode('production'), 'signed', 'An older signed production manifest keeps its original meaning')
+  assert.equal(runtimeSigningMode('acceptance'), 'unsigned')
+  assert.throws(() => runtimeSigningMode('production', 'unknown'), /invalid/)
 })

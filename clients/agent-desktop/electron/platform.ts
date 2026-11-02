@@ -6,7 +6,8 @@ export function resolvePlatformWindowOptions(platform: NodeJS.Platform): Readonl
     : {}
 }
 
-export function applicationMenuTemplate(platform: NodeJS.Platform): MenuItemConstructorOptions[] {
+export function applicationMenuTemplate(platform: NodeJS.Platform, productKind: 'desktop' | 'runtime' = 'desktop'): MenuItemConstructorOptions[] {
+  if (productKind === 'runtime' && platform === 'win32') return []
   const common: MenuItemConstructorOptions[] = [{ role: 'fileMenu' }, { role: 'editMenu' }, { role: 'viewMenu' }, { role: 'windowMenu' }]
   return platform === 'darwin' ? [{ role: 'appMenu' }, ...common] : common
 }

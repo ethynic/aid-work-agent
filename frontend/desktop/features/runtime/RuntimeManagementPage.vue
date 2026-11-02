@@ -2,17 +2,41 @@
   <section class="workspace-page runtime-page" aria-labelledby="runtime-title">
     <div class="page-kicker">RUNTIME</div>
     <div class="home-heading">
-      <div><h1 id="runtime-title">本机执行环境</h1><p>连接企业服务并管理本机第一方插件。</p></div>
-      <button type="button" class="runtime-secondary" :disabled="view.connecting || view.busy || recovery.busy" @click="controller.connect()">{{ view.connecting ? '连接中…' : view.connected ? '重新连接管理服务' : '连接管理服务' }}</button>
+      <div><h1 id="runtime-title">{{ controller.automaticConnection ? '连接这台电脑' : '本机执行环境' }}</h1><p>{{ controller.automaticConnection ? '在网页安排任务，由这台电脑执行。' : '连接企业服务并管理本机第一方插件。' }}</p></div>
+      <button v-if="!controller.automaticConnection" type="button" class="runtime-secondary" :disabled="view.connecting || view.busy || recovery.busy" @click="controller.connect()">{{ view.connecting ? '连接中…' : view.connected ? '重新连接管理服务' : '连接管理服务' }}</button>
+      <button v-if="controller.automaticConnection" type="button" class="runtime-secondary" :aria-expanded="logsVisible" @click="toggleLogs">{{ logsVisible ? '收起日志' : '查看日志' }}</button>
     </div>
 
-    <div v-if="view.error" class="inline-notice error" role="alert">{{ view.error }} <button v-if="view.retryAvailable" type="button" class="status-action" :disabled="view.busy || recovery.busy" @click="controller.retry()">查询原请求结果</button><button v-if="controller.supportsRecovery" type="button" class="status-action" @click="showRecovery">查看连接处理步骤</button></div>
-    <div v-else-if="view.state?.state === 'blocked'" class="inline-notice error" role="alert">{{ view.state.blocked_reason || '本机管理状态异常，请按下方步骤处理。' }}<button v-if="controller.supportsRecovery" type="button" class="status-action" @click="showRecovery">查看连接处理步骤</button></div>
-    <div v-if="view.connected && view.refreshing" class="inline-notice warning" role="status">正在读取设备状态，请稍候。<button type="button" class="status-action" :disabled="recovery.busy || view.busy" @click="controller.refresh()">重新刷新</button></div>
+    <div v-if="view.error" class="inline-notice error" role="alert">{{ view.error }} <button v-if="view.retryAvailable" type="button" class="status-action" :disabled="view.busy || recovery.busy" @click="controller.retry()">查询原请求结果</button><button v-if="controller.supportsRecovery && !controller.automaticConnection" type="button" class="status-action" @click="showRecovery">查看连接处理步骤</button></div>
+    <div v-else-if="!controller.automaticConnection && view.state?.state === 'blocked'" class="inline-notice error" role="alert">{{ view.state.blocked_reason || '本机管理状态异常，请按下方步骤处理。' }}<button v-if="controller.supportsRecovery && !controller.automaticConnection" type="button" class="status-action" @click="showRecovery">查看连接处理步骤</button></div>
+    <!-- Background refresh retains the current content and focus. -->
 
-    <div v-if="view.connected && view.stateDirty && !view.refreshing" class="inline-notice warning" role="status">设备状态未能完整读取，请按连接处理步骤检查。<button v-if="controller.supportsRecovery" type="button" class="status-action" @click="showRecovery">查看连接处理步骤</button></div>
+    <div v-if="!controller.automaticConnection && view.connected && view.stateDirty && !view.refreshing && view.error" class="inline-notice warning" role="status">设备状态未能完整读取，请按连接处理步骤检查。<button v-if="controller.supportsRecovery && !controller.automaticConnection" type="button" class="status-action" @click="showRecovery">查看连接处理步骤</button></div>
 
-    <section v-if="controller.supportsRecovery" ref="recoveryPanel" class="runtime-panel" aria-labelledby="recovery-title" aria-live="polite" tabindex="-1">
+    <section v-if="controller.automaticConnection && !firstPairing" class="runtime-panel runtime-connection" aria-labelledby="connection-summary">
+      <div class="runtime-section-heading">
+        <div><h2 id="connection-summary">{{ connectionTitle }}</h2><p class="runtime-muted">{{ connectionHint }}</p></div>
+        <span class="runtime-connection-badge" role="status" :class="{ ready: online }">{{ online ? '已连接' : connectionStatus }}</span>
+      </div>
+      <p v-if="view.state?.device" class="runtime-device-name">{{ view.state.device.name || '这台电脑' }}</p>
+      <p v-if="recovery.error" class="field-error" role="alert">{{ recovery.error }}</p>
+      <p v-if="recovery.newDevice && recovery.diagnosis?.service_verified" class="runtime-muted" role="status">{{ recovery.diagnosis.summary }}</p>
+      <p v-if="recovery.diagnosis && !recovery.diagnosis.service_verified" class="runtime-muted">{{ recovery.diagnosis.summary }}</p>
+      <div class="runtime-actions">
+        <button v-if="connectionFault" type="button" class="runtime-secondary" :disabled="view.connecting || view.busy || recovery.busy" @click="retryConnection">{{ recovery.busy || view.connecting ? '正在检查…' : '重试连接' }}</button>
+        <button v-if="connectionFault" type="button" class="runtime-secondary" :disabled="recovery.busy || view.busy" @click="togglePairing">{{ pairExpanded ? '取消重新配对' : '重新配对' }}</button>
+        <button v-if="view.state?.device && view.state.state === 'stopped'" type="button" class="primary-button runtime-primary" :disabled="cannotAct" @click="controller.mutate('start')">启动执行</button>
+        <button v-if="view.state?.device && ['starting', 'running', 'reconciling'].includes(view.state.state)" type="button" class="runtime-secondary" :disabled="cannotStop" @click="controller.mutate('stop')">停止执行</button>
+      </div>
+      <details v-if="view.state" class="runtime-details"><summary>连接详情</summary>
+        <dl class="runtime-facts"><div v-if="props.port.connectionInfo" class="runtime-server-fact"><dt>服务器地址</dt><dd>{{ view.server || '暂不可读取' }}</dd></div><div><dt>服务连接</dt><dd>{{ connectionLabels[view.state.connection] }}</dd></div><div><dt>执行状态</dt><dd>{{ stateLabels[view.state.state] }}</dd></div><div v-if="view.state.device"><dt>设备编号</dt><dd>{{ view.state.device.device_id }}</dd></div></dl>
+        <p v-if="view.state.blocked_reason" class="runtime-muted">{{ view.state.blocked_reason }}</p>
+        <p class="runtime-muted">关闭窗口后仍在后台运行；需要退出时，请使用托盘菜单。</p>
+        <button type="button" class="runtime-secondary" :disabled="recovery.busy || view.busy || view.connecting" @click="togglePairing">{{ pairExpanded ? '收起配对设置' : '更换服务器 / 重新配对' }}</button>
+      </details>
+    </section>
+
+    <section v-if="controller.supportsRecovery && !controller.automaticConnection" ref="recoveryPanel" class="runtime-panel" aria-labelledby="recovery-title" aria-live="polite" tabindex="-1">
       <div class="runtime-section-heading"><h2 id="recovery-title">{{ controller.automaticConnection ? '连接状态' : '连接检查与恢复' }}</h2><button v-if="!controller.automaticConnection && !recoveryDetailsVisible" type="button" class="status-action" @click="showRecovery">查看处理步骤</button><button type="button" class="runtime-secondary" :disabled="recovery.busy || view.busy" @click="controller.diagnoseConnection()">{{ recovery.busy ? '正在检查…' : controller.automaticConnection ? '检查连接' : '检查连接并给出处理方式' }}</button></div>
       <div v-if="recoveryDetailsVisible">
       <p v-if="controller.automaticConnection" class="runtime-muted">有效配置自动复用；重新配对会自动切换新连接。旧版本历史状态不影响本次连接。</p>
@@ -48,7 +72,7 @@
       </div>
     </section>
 
-    <section class="runtime-panel" aria-labelledby="connection-title">
+    <section v-if="!controller.automaticConnection" class="runtime-panel" aria-labelledby="connection-title">
       <div class="runtime-section-heading"><h2 id="connection-title">设备连接</h2><button type="button" class="status-action" :disabled="!view.connected || recovery.busy || view.busy" @click="controller.refresh()">刷新状态</button></div>
       <p v-if="!view.state" class="runtime-muted">{{ view.connected ? '正在读取设备状态…' : '管理连接未建立。' }}</p>
       <template v-else>
@@ -58,48 +82,50 @@
           <div><dt>设备</dt><dd>{{ view.state.device?.name || view.state.device?.device_id || (needsRecovery ? '原配对信息暂不可读，请按上方步骤检查' : '尚未配对') }}</dd></div>
         </dl>
         <div v-if="view.state.state === 'draining'" class="inline-notice warning" role="status">正在停止领取并等待已接受的任务收尾。等待时间较长时可以刷新操作进度。</div>
-        <div v-if="view.state.state === 'reconciling' || view.state.state === 'blocked'" class="inline-notice warning" role="status">{{ view.state.blocked_reason || '执行事实需要核对，请保留当前设备身份及执行记录。' }}<button v-if="controller.supportsRecovery" type="button" class="status-action" @click="showRecovery">查看连接处理步骤</button></div>
+        <div v-if="view.state.state === 'reconciling' || view.state.state === 'blocked'" class="inline-notice warning" role="status">{{ view.state.blocked_reason || '执行事实需要核对，请保留当前设备身份及执行记录。' }}<button v-if="controller.supportsRecovery && !controller.automaticConnection" type="button" class="status-action" @click="showRecovery">查看连接处理步骤</button></div>
         <div class="runtime-actions">
           <button class="primary-button runtime-primary" type="button" :disabled="cannotAct || view.state.state !== 'stopped' || !view.state.device" @click="controller.mutate('start')">启动执行</button>
           <button class="runtime-secondary" type="button" :disabled="cannotStop || !['starting', 'running', 'reconciling'].includes(view.state.state)" @click="controller.mutate('stop')">停止执行</button>
         </div>
       </template>
-      <form v-if="controller.automaticConnection || !controller.supportsRecovery || view.state?.state === 'stopped'" class="runtime-pair-form" @submit.prevent="pair">
-        <div class="runtime-section-heading"><h3>{{ view.state?.device ? '更换设备配对' : '配对设备' }}</h3></div>
-        <p v-if="controller.automaticConnection" class="runtime-muted">输入网页生成的配对码即可连接。重新配对将停止本机旧执行，自动启用新设备；旧任务不会转移或重复执行。</p>
-        <p v-else class="runtime-muted">执行运行时，临时网络中断会自动重试；已停止需启动执行，待核对或已阻断需处理对应原因。配对会生成新的设备编号，名称可沿用；完成后需在网页中选定新设备。配对前需停止执行，未确认的旧任务仍保留在原设备。</p>
-        <div class="field"><label for="runtime-server">服务地址</label><input id="runtime-server" v-model.trim="form.server" type="url" placeholder="https://企业服务地址" autocomplete="url" required :disabled="!canPair"></div>
-        <div class="field"><label for="runtime-device-name">设备名称</label><input id="runtime-device-name" v-model.trim="form.device_name" maxlength="100" placeholder="例如 招聘工作电脑" autocomplete="off" required :disabled="!canPair"></div>
-        <div class="field"><label for="runtime-pairing-code">一次性配对码</label><input id="runtime-pairing-code" v-model.trim="form.pairing_code" type="password" autocomplete="off" placeholder="输入管理员提供的配对码" required :disabled="!canPair"></div>
-        <button type="submit" class="primary-button runtime-primary" :disabled="!canPair">{{ view.busy ? '处理中…' : '确认配对' }}</button>
-      </form>
+
     </section>
 
 
+      <form v-if="showPairForm" ref="pairPanel" class="runtime-pair-form runtime-panel runtime-pair-panel" @submit.prevent="pair">
+        <div class="runtime-section-heading"><h3>{{ view.state?.device ? '更换服务器或重新配对' : '首次连接' }}</h3></div>
+        <p v-if="controller.automaticConnection" class="runtime-muted">{{ firstPairing ? '在网页的设备管理中生成配对码，填入下方即可连接。' : '请填写目标服务器地址和该服务器生成的配对码。确认后切换连接，原任务记录保留，不会自动重放。' }}</p>
+        <p v-else class="runtime-muted">执行运行时，临时网络中断会自动重试；已停止需启动执行，待核对或已阻断需处理对应原因。配对会生成新的设备编号，名称可沿用；完成后需在网页中选定新设备。配对前需停止执行，未确认的旧任务仍保留在原设备。</p>
+        <div class="field"><label for="runtime-server">服务地址</label><input id="runtime-server" ref="pairServer" v-model.trim="form.server" type="url" placeholder="https://企业服务地址" autocomplete="url" required :disabled="!canPair"></div>
+        <div class="field"><label for="runtime-device-name">设备名称</label><input id="runtime-device-name" v-model.trim="form.device_name" maxlength="100" placeholder="例如 办公室电脑" autocomplete="off" required :disabled="!canPair"></div>
+        <div class="field"><label for="runtime-pairing-code">一次性配对码</label><input id="runtime-pairing-code" v-model.trim="form.pairing_code" type="password" autocomplete="off" placeholder="输入网页生成的配对码" required :disabled="!canPair"></div>
+        <div class="runtime-actions"><button type="submit" class="primary-button runtime-primary" :disabled="!canPair">{{ view.busy ? '处理中…' : '确认配对' }}</button><button v-if="controller.automaticConnection && pairExpanded" type="button" class="runtime-secondary" :disabled="recovery.busy || view.busy" @click="togglePairing">取消</button></div>
+      </form>
+
     <section class="runtime-panel" aria-labelledby="plugins-title">
-      <div class="runtime-section-heading"><h2 id="plugins-title">第一方插件</h2><button v-if="controller.supportsPlugins" type="button" class="primary-button runtime-primary" :disabled="cannotAct || view.pluginsDirty" @click="controller.importPackage()">安装 / 升级离线包</button></div>
+      <div class="runtime-section-heading"><h2 id="plugins-title">插件</h2><button v-if="controller.supportsPlugins" type="button" class="primary-button runtime-primary" :disabled="cannotAct || !view.plugins" @click="controller.importPackage()">安装 / 升级离线包</button></div>
       <p v-if="!controller.supportsPlugins" class="runtime-muted">{{ needsRecovery ? '当前故障状态下暂不读取插件列表，原安装资料会保留。先按上方连接处理步骤恢复。' : '当前 Runtime 尚未提供第一方插件管理能力。' }}</p>
-      <p v-else class="runtime-muted">选择已签名的 BOSS、微信或企业微信兼容离线包，可安装、重装或回退版本。就绪状态为最近检查结果，实际调用会报告当前运行条件。</p>
+      <p v-else class="runtime-muted">{{ controller.automaticConnection ? '安装插件后，即可在网页使用对应的本机工具。' : '选择已签名的兼容离线包，可安装、重装或回退。就绪状态为最近检查结果。' }}</p>
       <p v-if="view.selectionLabel" class="runtime-muted">已选择：{{ view.selectionLabel }}</p>
       <p v-if="view.plugins && !view.plugins.plugins.length" class="runtime-empty">尚未安装插件。设备连接与插件安装可分别完成。</p>
       <p v-else-if="controller.supportsPlugins && !view.plugins" class="runtime-muted">{{ view.connected ? (view.refreshing ? '正在读取插件列表…' : '插件列表未能读取，请刷新或按连接处理步骤检查。') : '连接后查看已安装插件。' }}</p>
       <ul v-if="view.plugins" class="runtime-plugin-list">
         <li v-for="plugin in view.plugins.plugins" :key="plugin.installation_id">
-          <div class="runtime-plugin-heading"><h3>{{ plugin.display_name }}</h3><span class="runtime-muted">{{ plugin.version || '版本未知' }}</span></div>
+          <div class="runtime-plugin-info"><div class="runtime-plugin-heading"><h3>{{ plugin.display_name }}</h3><span class="runtime-muted">{{ plugin.version || '版本未知' }}</span></div><p v-if="plugin.reason" class="runtime-muted">{{ plugin.reason }}</p></div>
           <p class="runtime-plugin-state"><span>{{ plugin.enabled ? '已启用' : '已停用' }}</span><span :class="plugin.ready ? 'ready' : 'pending'">{{ plugin.ready ? '最近检查：已就绪' : '最近检查：未就绪' }}</span></p>
-          <p v-if="plugin.reason" class="runtime-muted">{{ plugin.reason }}</p>
-          <div v-if="controller.supportsPlugins" class="runtime-actions">
-            <button type="button" class="runtime-secondary" :disabled="cannotAct || view.pluginsDirty" @click="controller.mutate(plugin.enabled ? 'plugins.disable' : 'plugins.enable', { installation_id: plugin.installation_id })">{{ plugin.enabled ? '停用' : '启用' }}</button>
-            <button type="button" class="runtime-secondary runtime-danger" :disabled="cannotAct || view.pluginsDirty" @click="confirmRemoval = plugin.installation_id">卸载</button>
+          <div v-if="controller.supportsPlugins" class="runtime-actions runtime-plugin-actions">
+            <button type="button" class="runtime-secondary" :disabled="cannotAct || !view.plugins" @click="controller.mutate(plugin.enabled ? 'plugins.disable' : 'plugins.enable', { installation_id: plugin.installation_id })">{{ plugin.enabled ? '停用' : '启用' }}</button>
+            <button type="button" class="runtime-secondary runtime-danger" :disabled="cannotAct || !view.plugins" @click="confirmRemoval = plugin.installation_id">卸载</button>
           </div>
           <div v-if="confirmRemoval === plugin.installation_id" class="inline-notice warning" role="alert">
             确认卸载 {{ plugin.display_name }}？执行记录和未确认结果会保留。
-            <div class="runtime-actions"><button class="runtime-secondary runtime-danger" type="button" :disabled="cannotAct || view.pluginsDirty" @click="uninstall(plugin.installation_id)">确认卸载</button><button class="runtime-secondary" type="button" @click="confirmRemoval = ''">取消</button></div>
+            <div class="runtime-actions"><button class="runtime-secondary runtime-danger" type="button" :disabled="cannotAct || !view.plugins" @click="uninstall(plugin.installation_id)">确认卸载</button><button class="runtime-secondary" type="button" @click="confirmRemoval = ''">取消</button></div>
           </div>
         </li>
       </ul>
     </section>
-    <section v-if="view.operation" class="runtime-panel" aria-labelledby="operation-title" aria-live="polite">
+    <div v-if="logsVisible" ref="logsPanel" tabindex="-1"><RuntimeLogsPanel :logs="logs" /></div>
+    <section v-if="view.operation && (!controller.automaticConnection || view.operation.status !== 'succeeded')" class="runtime-panel" aria-labelledby="operation-title" aria-live="polite">
       <div class="runtime-section-heading"><h2 id="operation-title">管理操作</h2><button class="status-action" type="button" :disabled="!view.connected" @click="controller.refreshOperation()">刷新进度</button></div>
       <p>{{ operationLabels[view.operation.operation] }} · {{ operationStatusLabels[view.operation.status] }}</p>
       <p v-if="view.operation.message" class="runtime-muted">{{ view.operation.message }}</p>
@@ -113,13 +139,55 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { RuntimeController } from './controller'
 import type { RuntimeManagementPort, ConnectionRecoveryInput } from './contracts'
+import type { RuntimeLogsPort } from './logContracts'
+import RuntimeLogsPanel from './RuntimeLogsPanel.vue'
 
-const props = defineProps<{ port: RuntimeManagementPort }>()
+const props = defineProps<{ port: RuntimeManagementPort; logs?: RuntimeLogsPort }>()
 const controller = new RuntimeController(props.port)
 const view = controller.view
 const recovery = controller.recovery
 const recoveryPanel = ref<HTMLElement | null>(null)
 const recoveryExpanded = ref(false)
+const logsVisible = ref(false)
+const logsPanel = ref<HTMLElement | null>(null)
+async function toggleLogs() {
+  logsVisible.value = !logsVisible.value
+  if (logsVisible.value) { await nextTick(); logsPanel.value?.scrollIntoView?.({ block: 'start' }); logsPanel.value?.focus({ preventScroll: true }) }
+}
+const pairExpanded = ref(false)
+const pairPanel = ref<HTMLFormElement | null>(null)
+const pairServer = ref<HTMLInputElement | null>(null)
+async function togglePairing() {
+  pairExpanded.value = !pairExpanded.value
+  if (!pairExpanded.value) { form.pairing_code = ''; return }
+  if (!form.device_name) form.device_name = view.state?.device?.name || ''
+  await nextTick()
+  pairPanel.value?.scrollIntoView?.({ block: 'start' })
+  pairServer.value?.focus({ preventScroll: true })
+}
+const logs = computed(() => props.logs)
+const online = computed(() => view.state?.connection === 'online' && !['blocked', 'reconciling'].includes(view.state.state))
+const pendingConnection = computed(() => ['CONNECTING', 'REGISTRATION_PENDING', 'REGISTRATION_CLEANUP_PENDING'].includes(recovery.diagnosis?.category || ''))
+const connectionFault = computed(() => !!recovery.error || !!view.error || ['offline', 'revoked'].includes(view.state?.connection || '') || ['blocked', 'reconciling'].includes(view.state?.state || '') || (!!recovery.diagnosis && !recovery.diagnosis.service_verified && !pendingConnection.value))
+const firstPairing = computed(() => !!view.state && !view.state.device && view.state.connection === 'unpaired' && !connectionFault.value && !pendingConnection.value)
+const showPairForm = computed(() => controller.automaticConnection ? pairExpanded.value || (!!view.state && !view.state.device && view.state.connection === 'unpaired' && !pendingConnection.value) : !controller.supportsRecovery || view.state?.state === 'stopped')
+const connectionStatus = computed(() => connectionFault.value ? '需要处理' : view.connecting || pendingConnection.value || view.state?.connection === 'connecting' ? '连接中' : view.state?.device ? '已暂停' : '未连接')
+const connectionTitle = computed(() => online.value ? '已连接企业服务' : connectionFault.value ? '连接需要检查' : view.state?.device ? '设备已配对' : '连接企业服务')
+const connectionHint = computed(() => {
+  if (online.value) return '保持客户端运行，即可从网页使用这台电脑。'
+  if (view.state?.state === 'blocked') return '本机运行状态需要检查，可以查看连接详情或导出日志。'
+  if (view.state?.state === 'reconciling') return '上次执行结果需要核对，原记录保留，不会自动重复执行。'
+  if (view.state?.connection === 'revoked') return '设备授权已失效，请在网页生成新的配对码。'
+  if (connectionFault.value) return '请检查服务地址和网络。运行中的连接会自动重试，原配对仍会保留。'
+  if (pendingConnection.value) return '正在完成连接，请稍候，无需再次输入配对码。'
+  if (view.state?.device) return '原配对已保留，启动执行即可继续使用。'
+  return view.connecting || !view.state ? '正在读取本机连接信息…' : '首次使用只需完成一次配对。'
+})
+async function retryConnection() {
+  if (!view.connected) await controller.connect()
+  else if (controller.supportsRecovery) await controller.diagnoseConnection()
+  else await controller.refresh()
+}
 const needsRecovery = computed(() => !!view.error || view.state?.state === 'blocked' || view.state?.state === 'reconciling' || view.state?.connection === 'revoked')
 const recoveryDetailsVisible = computed(() => recoveryExpanded.value || needsRecovery.value || recovery.busy || !!recovery.diagnosis || !!recovery.error)
 const recoveryMode = ref<ConnectionRecoveryInput['mode'] | ''>('')
@@ -127,8 +195,8 @@ const recoveryConfirmed = ref(false)
 const recoveryForm = reactive({ server: '', device_name: '', pairing_code: '' })
 const form = reactive({ server: '', device_name: '', pairing_code: '' })
 const confirmRemoval = ref('')
-const cannotAct = computed(() => !view.connected || view.busy || recovery.busy || view.retryAvailable || view.operation?.status === 'running' || view.stateDirty)
-const cannotStop = computed(() => !view.connected || view.busy || recovery.busy || view.retryAvailable || view.operation?.status === 'running' || view.stateDirty)
+const cannotAct = computed(() => !view.connected || view.busy || recovery.busy || view.retryAvailable || view.operation?.status === 'running' || (view.stateDirty && !!view.error))
+const cannotStop = computed(() => !view.connected || view.busy || recovery.busy || view.retryAvailable || view.operation?.status === 'running' || (view.stateDirty && !!view.error))
 const canPair = computed(() => controller.automaticConnection ? !recovery.busy && !view.busy && !view.connecting : !cannotAct.value && view.state?.state === 'stopped')
 const stateLabels = { stopped: '已停止', starting: '启动中', running: '运行中', draining: '收尾中', reconciling: '待核对', blocked: '已阻断' }
 const connectionLabels = { unpaired: '未配对', connecting: '连接中', online: '在线', offline: '离线', revoked: '授权已撤回' }
@@ -140,6 +208,7 @@ async function pair() {
   form.pairing_code = ''
   if (controller.supportsRegistration) await controller.reconfigureConnection({ mode: 'register_new', confirmed: true, ...params })
   else await controller.mutate('pair', params)
+  if (recovery.diagnosis?.service_verified || view.operation?.operation === 'pair' && view.operation.status === 'succeeded') pairExpanded.value = false
 }
 async function uninstall(installationId: string) {
   confirmRemoval.value = ''
@@ -163,7 +232,16 @@ onUnmounted(() => { form.pairing_code = ''; recoveryForm.pairing_code = ''; cont
 </script>
 
 <style scoped>
-.runtime-page { max-width: 1100px; }
+.runtime-page { max-width: none; width: 100%; padding: 28px 32px; }
+.runtime-page .home-heading h1 { font-size: 32px; }
+.runtime-connection-badge { flex-shrink: 0; padding: 5px 10px; border: 1px solid var(--d-line); color: var(--d-text-muted); border-radius: var(--d-radius); }
+.runtime-connection-badge.ready { border-color: var(--d-ready); color: var(--d-ready); }
+.runtime-device-name { font-size: 18px; }
+.runtime-details { margin-top: 20px; color: var(--d-text-muted); }
+.runtime-details summary { width: fit-content; cursor: pointer; }
+.runtime-details dd { overflow-wrap: anywhere; }
+.runtime-server-fact { grid-column: 1 / -1; }
+.runtime-pair-panel { padding-top: 24px; }
 .runtime-panel { margin-top: 24px; padding: 24px; border: 1px solid var(--d-line); background: var(--d-surface); }
 .runtime-section-heading, .runtime-plugin-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .runtime-section-heading h2 { font: 500 20px var(--d-font-display); margin: 0; }
@@ -178,8 +256,17 @@ onUnmounted(() => { form.pairing_code = ''; recoveryForm.pairing_code = ''; cont
 .runtime-secondary:disabled { color: var(--d-text-muted); opacity: .6; cursor: not-allowed; }
 .runtime-danger { color: var(--d-danger); }
 .runtime-pair-form { display: grid; gap: 16px; margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--d-line); }.runtime-pair-form .runtime-muted { margin: 0; }
-.runtime-plugin-list { padding: 0; margin: 16px 0 0; list-style: none; }.runtime-plugin-list > li { padding: 20px 0; border-top: 1px solid var(--d-line); }.runtime-plugin-list > li:last-child { padding-bottom: 0; }
-.runtime-plugin-state { display: flex; gap: 18px; margin: 10px 0; }.runtime-empty { padding: 24px 0 0; color: var(--d-text-muted); }
+.runtime-plugin-list { padding: 0; margin: 12px 0 0; list-style: none; }
+.runtime-plugin-list > li { display: grid; grid-template-columns: minmax(160px, 1fr) auto auto; align-items: center; gap: 10px 24px; padding: 14px 0; border-top: 1px solid var(--d-line); }
+.runtime-plugin-list > li:last-child { padding-bottom: 0; }
+.runtime-plugin-info { min-width: 0; }.runtime-plugin-info > .runtime-muted { margin: 4px 0 0; }
+.runtime-plugin-heading { justify-content: flex-start; flex-wrap: wrap; gap: 8px 12px; }
+.runtime-plugin-state { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 0; }
+.runtime-plugin-actions { margin: 0; }
+.runtime-plugin-list .inline-notice { grid-column: 1 / -1; }
+.runtime-empty { padding: 16px 0 0; color: var(--d-text-muted); }
+@media (max-width: 760px) { .runtime-plugin-list > li { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 14px; }.runtime-plugin-state { grid-column: 1; }.runtime-plugin-actions { grid-column: 2; grid-row: 1 / span 2; } }
+@media (max-width: 480px) { .runtime-plugin-list > li { grid-template-columns: minmax(0, 1fr); }.runtime-plugin-actions { grid-column: 1; grid-row: auto; } }
 .runtime-page > .inline-notice { margin-top: 20px; }.runtime-plugin-list .inline-notice { margin-top: 14px; }
 .runtime-operation-id { color: var(--d-text-muted); font: 11px var(--d-font-mono); overflow-wrap: anywhere; }
 .runtime-recovery-steps { padding-left: 24px; line-height: 1.8; overflow-wrap: anywhere; }.runtime-confirm { display: flex; align-items: center; gap: 8px; }

@@ -182,11 +182,13 @@ test('signed drivers keep source bytes while local Python bytecode never enters 
     writeFileSync(join(source, 'py/session.py'), 'current source')
     writeFileSync(join(source, 'ps1/driver.ps1'), '\ufeff# current driver')
     writeFileSync(join(source, 'schema.json'), '{}')
+    writeFileSync(join(source, 'python312.zip'), 'locked standard library archive')
     writeFileSync(join(source, 'py/__pycache__/session.cpython-312.pyc'), 'stale developer bytecode')
     writeFileSync(join(source, 'py/legacy.pyo'), 'stale optimized bytecode')
     writeFileSync(join(source, 'py/legacy.PYC'), 'stale bytecode')
     copyProviderDriverAssets(source, payload)
-    assert.deepEqual(filesUnder(payload).map(file => file.path), ['ps1/driver.ps1', 'py/session.py', 'schema.json'])
+    assert.deepEqual(filesUnder(payload).map(file => file.path), ['ps1/driver.ps1', 'py/session.py', 'python312.zip', 'schema.json'])
+    assert.equal(existsSync(join(source, 'py/__pycache__/session.cpython-312.pyc')), true, 'Filtering a release must not delete shared OCR input caches')
     for (const file of filesUnder(payload)) {
       assert.equal(file.sha256, sha256(readFileSync(join(source, file.path))))
     }

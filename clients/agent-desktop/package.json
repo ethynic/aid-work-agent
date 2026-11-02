@@ -1,6 +1,6 @@
 {
   "name": "aid-agent-desktop",
-  "version": "0.0.32",
+  "version": "0.0.36",
   "private": true,
   "type": "module",
   "main": "dist/electron/main.js",
@@ -17,17 +17,20 @@
     "runtime:prepare": "node scripts/prepare-runtime.mjs",
     "runtime:package:acceptance": "npm run build && node scripts/package-runtime-win.mjs acceptance",
     "runtime:package:production": "npm run build && node scripts/package-runtime-win.mjs production",
+    "runtime:package:production:unsigned": "npm run build && node scripts/package-runtime-win.mjs production --unsigned",
     "runtime:verify": "node scripts/verify-runtime-package.mjs",
     "runtime:test:packaging": "node --test scripts/tests/runtime-packaging.test.mjs",
     "runtime:test:import": "node --test scripts/tests/runtime-host-import.test.mjs"
   },
   "dependencies": {
-    "electron-updater": "^6.8.3"
+    "electron-updater": "^6.8.3",
+    "yazl": "3.3.1"
   },
   "devDependencies": {
     "@aid/local-tool-host-core": "file:../shared/local-tool-host-core",
     "@electron/asar": "^4.2.0",
     "@types/node": "^24.0.0",
+    "@types/yazl": "3.3.1",
     "electron": "43.1.0",
     "electron-builder": "^26.15.3",
     "js-yaml": "^4.1.0",

@@ -45,7 +45,7 @@ def reorder_history(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     "content": content,
                     "tool_calls": kept_tc,
                 }
-                if msg.get("reasoning_content"):
+                if isinstance(msg.get("reasoning_content"), str):
                     asst_msg["reasoning_content"] = msg["reasoning_content"]
                 messages.append(asst_msg)
                 for tc, tool_msg in matched:
@@ -64,7 +64,7 @@ def reorder_history(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 )
                 if content:
                     asst_msg = {"role": "assistant", "content": content}
-                    if msg.get("reasoning_content"):
+                    if isinstance(msg.get("reasoning_content"), str):
                         asst_msg["reasoning_content"] = msg["reasoning_content"]
                     messages.append(asst_msg)
         elif role == "tool":
@@ -74,7 +74,7 @@ def reorder_history(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             # 普通 assistant 消息，跳过空 content
             if content:
                 asst_msg = {"role": "assistant", "content": content}
-                if msg.get("reasoning_content"):
+                if isinstance(msg.get("reasoning_content"), str):
                     asst_msg["reasoning_content"] = msg["reasoning_content"]
                 messages.append(asst_msg)
         elif role == "system":

@@ -264,12 +264,12 @@ class DeepSeekProvider(BaseLLMProvider):
         if choices:
             message = choices[0].get("message") or {}
             content = message.get("content", "")
-            reasoning_content = message.get("reasoning_content", "")
+            reasoning_content = message.get("reasoning_content")
             tool_calls = message.get("tool_calls", [])
             finish_reason = choices[0].get("finish_reason", "stop")
         else:
             content = ""
-            reasoning_content = ""
+            reasoning_content = None
             tool_calls = []
             finish_reason = "stop"
 
@@ -286,7 +286,8 @@ class DeepSeekProvider(BaseLLMProvider):
             "_provider_usage_reported": isinstance(response.get("usage"), dict) and "prompt_tokens" in response["usage"] and "completion_tokens" in response["usage"],
         }
 
-        if reasoning_content:
+        # Empty thinking text is still a returned field required on the next tool round.
+        if isinstance(reasoning_content, str):
             result["reasoning_content"] = reasoning_content
 
         if tool_calls:
@@ -342,10 +343,10 @@ class DeepSeekProvider(BaseLLMProvider):
                     "content": str(content) if not isinstance(content, str) else content,
                     "tool_calls": msg.get("tool_calls", [])
                 }
-                if msg.get("reasoning_content"):
+                if isinstance(msg.get("reasoning_content"), str):
                     assistant_msg["reasoning_content"] = msg["reasoning_content"]
                 formatted.append(assistant_msg)
-            elif role == "assistant" and msg.get("reasoning_content"):
+            elif role == "assistant" and isinstance(msg.get("reasoning_content"), str):
                 formatted.append({
                     "role": "assistant",
                     "content": str(content) if not isinstance(content, str) else content,

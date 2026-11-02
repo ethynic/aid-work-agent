@@ -130,7 +130,7 @@ async function buildProvider(name, options, signer) {
       const ocr = resolve(options.ocr ?? join(root, 'assets/ocr-python-final'))
       if (!existsSync(join(ocr, 'python.exe')) || existsSync(join(ocr, 'pyvenv.cfg')) || !existsSync(join(ocr, 'asset-provenance.json')) || !existsSync(join(ocr, 'msvcp140.dll')) || !existsSync(join(ocr, 'msvcp140_1.dll'))) throw new Error('Verified embedded OCR input with app-local CRT required')
       filesUnder(ocr) // reject links before copying or executing
-      cpSync(ocr, join(stage, 'ocr-python'), { recursive: true })
+      copyProviderDriverAssets(ocr, join(stage, 'ocr-python'))
       const env = { ...process.env }; delete env.PYTHONHOME; delete env.PYTHONPATH
       execFileSync(join(stage, 'ocr-python/python.exe'), ['-I', '-B', '-c', 'from rapidocr_onnxruntime import RapidOCR; from PIL import Image; RapidOCR(); print("OCR_BUNDLE_OK")'], { cwd: stage, env, timeout: 90000 })
       if (name === 'wecom') {

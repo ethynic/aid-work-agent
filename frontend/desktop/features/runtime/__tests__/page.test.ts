@@ -5,14 +5,14 @@ import type { ConnectionDiagnosis, ManagementRequest, RuntimeManagementPort } fr
 
 const wrappers: VueWrapper[] = []
 afterEach(() => { wrappers.forEach((wrapper) => wrapper.unmount()); wrappers.length = 0; localStorage.clear(); document.body.innerHTML = '' })
-function mountPage(options: { features?: string[]; state?: string; ready?: boolean; version?: string; pairReject?: boolean; recovery?: boolean; registration?: ConnectionDiagnosis | null } = {}) {
+function mountPage(options: { features?: string[]; state?: string; ready?: boolean; version?: string; pairReject?: boolean; recovery?: boolean; registration?: ConnectionDiagnosis | null; automatic?: boolean; connection?: string; unpaired?: boolean; server?: string | null } = {}) {
   const requests: ManagementRequest[] = []
   const port: RuntimeManagementPort = {
     request: vi.fn(async (request) => {
       requests.push(request)
       const base = { request_id: request.request_id, method: request.method, code: 0, error: '' }
       if (request.method === 'describe') return { ...base, result: { api_major: 1, host_version: '0.2.14', features: options.features ?? ['events', 'first_party_plugins'], instance_id: 'host-one', revision: 1 } }
-      if (request.method === 'getState') return { ...base, result: { instance_id: 'host-one', revision: 1, state: options.state ?? 'stopped', supervisor: 'runtime_app', connection: 'offline', device: { device_id: 'device-one', name: '测试设备' }, ...(options.state === 'reconciling' ? { blocked_reason: '历史执行事实缺少结案证明' } : {}) } }
+      if (request.method === 'getState') return { ...base, result: { instance_id: 'host-one', revision: 1, state: options.state ?? 'stopped', supervisor: 'runtime_app', connection: options.connection ?? 'offline', ...(!options.unpaired ? { device: { device_id: 'device-one', name: '测试设备' } } : {}), ...(options.state === 'reconciling' ? { blocked_reason: '历史执行事实缺少结案证明' } : {}) } }
       if (request.method === 'plugins.list') return { ...base, result: { instance_id: 'host-one', revision: 1, plugins: [{ installation_id: 'installed-one', plugin_id: 'weixin', display_name: '微信', release_id: 'opaque-release', enabled: true, ready: options.ready ?? false, reason: '请登录微信', ...(options.version ? { version: options.version } : {}) }] } }
       if (request.method === 'pair' && options.pairReject) return { ...base, code: 11, error: '历史执行事实缺少结案证明', result: null }
       return { ...base, result: { operation_id: 'operation-one', operation: request.method.replace('plugins.', ''), status: 'succeeded', code: 0, error: '' } }
@@ -20,6 +20,8 @@ function mountPage(options: { features?: string[]; state?: string; ready?: boole
     observe: vi.fn(() => vi.fn()),
     choosePackage: vi.fn(async () => ({ selection_ref: 'selection-one', label: '微信离线包.zip' })),
   }
+  if ('server' in options) port.connectionInfo = vi.fn(async () => ({ server: options.server ?? null }))
+  if (options.automatic) Object.defineProperty(port, 'automaticConnection', { value: true })
   if (options.recovery) {
     port.diagnoseConnection = vi.fn(async () => ({ version: 1, category: 'CONFIG_INVALID', summary: '原连接配置格式损坏', steps: ['重新配置并使用新配对码。', '完成后在网页选定新设备。'], service_verified: false, can_preserve: false, can_reconfigure: true, requires_reboot: false }))
     port.reconfigureConnection = vi.fn(async () => ({ version: 1, status: 'action_required', new_device: false, diagnosis: { version: 1, category: 'NETWORK_FAILED', summary: '无法连接企业服务', steps: ['检查网络与服务地址，恢复后检查连接。'], service_verified: false, can_preserve: false, can_reconfigure: true, requires_reboot: false } }))
@@ -44,6 +46,7 @@ describe('Runtime management page', () => {
     await flushPromises()
     expect(automatic.text()).not.toContain('完成连接配置')
     expect(automatic.text()).not.toContain('登记重启恢复')
+    await button(automatic, '重新配对').trigger('click')
     await automatic.get('#runtime-server').setValue('https://service.example')
     await automatic.get('#runtime-device-name').setValue('新设备')
     await automatic.get('#runtime-pairing-code').setValue('new-pair-code')
@@ -51,8 +54,100 @@ describe('Runtime management page', () => {
     expect(port.reconfigureConnection).toHaveBeenCalledOnce()
     expect(port.reconfigureConnection).toHaveBeenCalledWith({ mode: 'register_new', confirmed: true,
       server: 'https://service.example', device_name: '新设备', pairing_code: 'new-pair-code' })
+    expect(automatic.find('#runtime-pairing-code').exists()).toBe(false)
+    await button(automatic, '重新配对').trigger('click')
     expect(automatic.get('#runtime-pairing-code').element).toHaveProperty('value', '')
     expect(automatic.text()).toContain('新设备已连接')
+  })
+  it('reuses an upgraded paired device without showing pairing or reconnect controls while healthy', async () => {
+    const { wrapper, requests } = mountPage({ automatic: true, connection: 'online', state: 'running', registration: null })
+    await flushPromises()
+    expect(wrapper.text()).toContain('已连接企业服务')
+    expect(wrapper.find('#runtime-pairing-code').exists()).toBe(false)
+    expect(wrapper.findAll('button').some(b => ['重试连接', '重新配对', '重新连接管理服务'].includes(b.text()))).toBe(false)
+    expect(requests.some(r => r.method === 'pair' || r.method === 'stop')).toBe(false)
+  })
+  it('lets a healthy connection open and cancel server settings without changing its identity', async () => {
+    const { wrapper, port, requests } = mountPage({ automatic: true, connection: 'online', state: 'running', registration: null, recovery: true })
+    await flushPromises()
+    const settings = button(wrapper, '更换服务器 / 重新配对')
+    expect(settings.element.closest('details')).not.toBeNull()
+    expect(wrapper.find('#runtime-server').exists()).toBe(false)
+    await settings.trigger('click'); await flushPromises()
+    expect(document.activeElement).toBe(wrapper.get('#runtime-server').element)
+    expect(wrapper.get('#runtime-device-name').element).toHaveProperty('value', '测试设备')
+    await wrapper.get('#runtime-pairing-code').setValue('fixture-cancel-code')
+    await button(wrapper, '取消').trigger('click'); await flushPromises()
+    expect(wrapper.find('#runtime-server').exists()).toBe(false)
+    expect(port.reconfigureConnection).not.toHaveBeenCalled()
+    expect(requests.some(r => r.method === 'stop' || r.method === 'pair')).toBe(false)
+    await button(wrapper, '更换服务器 / 重新配对').trigger('click'); await flushPromises()
+    expect(wrapper.get('#runtime-pairing-code').element).toHaveProperty('value', '')
+  })
+  it('switches servers only on explicit submit, using the target server pairing code once', async () => {
+    const { wrapper, port } = mountPage({ automatic: true, connection: 'online', state: 'running', registration: null, recovery: true })
+    await flushPromises()
+    port.reconfigureConnection = vi.fn(async () => ({ version: 1, status: 'complete', new_device: true, diagnosis: { version: 1, category: 'VERIFIED', summary: '新服务器已连接', steps: [], service_verified: true, can_preserve: false, can_reconfigure: true, requires_reboot: false } }))
+    await button(wrapper, '更换服务器 / 重新配对').trigger('click'); await flushPromises()
+    await wrapper.get('#runtime-server').setValue('https://test-server.example')
+    await wrapper.get('#runtime-pairing-code').setValue('fixture-target-code')
+    expect(port.reconfigureConnection).not.toHaveBeenCalled()
+    await wrapper.get('.runtime-pair-form').trigger('submit'); await flushPromises()
+    expect(port.reconfigureConnection).toHaveBeenCalledExactlyOnceWith({ mode: 'register_new', confirmed: true, server: 'https://test-server.example', device_name: '测试设备', pairing_code: 'fixture-target-code' })
+    expect(wrapper.find('#runtime-pairing-code').exists()).toBe(false)
+    expect(wrapper.text()).toContain('新服务器已连接')
+    expect(localStorage.length).toBe(0)
+  })
+  it('identifies the configured server in details instead of displaying an unsubmitted address draft', async () => {
+    const { wrapper } = mountPage({ automatic: true, connection: 'online', state: 'running', registration: null, server: 'https://current.example:8443' })
+    await flushPromises()
+    expect(wrapper.get('.runtime-server-fact').text()).toContain('https://current.example:8443')
+    await button(wrapper, '更换服务器 / 重新配对').trigger('click'); await flushPromises()
+    await wrapper.get('#runtime-server').setValue('https://draft.example')
+    expect(wrapper.get('.runtime-server-fact').text()).toContain('https://current.example:8443')
+    expect(wrapper.get('.runtime-server-fact').text()).not.toContain('draft.example')
+  })
+  it('shows a single first-connection form for an unpaired device', async () => {
+    const { wrapper } = mountPage({ automatic: true, connection: 'unpaired', unpaired: true, registration: null })
+    await flushPromises()
+    expect(wrapper.findAll('.runtime-pair-form')).toHaveLength(1)
+    expect(wrapper.find('#runtime-server').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('管理连接')
+    expect(wrapper.text()).not.toContain('登记重启恢复')
+  })
+  it('shows an uncertain first-pairing failure and recovery action instead of silently clearing the code', async () => {
+    const { wrapper, port } = mountPage({ automatic: true, connection: 'unpaired', unpaired: true, registration: null, recovery: true })
+    await flushPromises()
+    port.reconfigureConnection = vi.fn(async () => { throw Error('fixture-unconfirmed') })
+    await wrapper.get('#runtime-server').setValue('https://service.example')
+    await wrapper.get('#runtime-device-name').setValue('首次设备')
+    await wrapper.get('#runtime-pairing-code').setValue('fixture-once')
+    await wrapper.get('.runtime-pair-form').trigger('submit'); await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('恢复请求的结果尚未确认')
+    expect(button(wrapper, '重试连接').exists()).toBe(true)
+    expect(port.reconfigureConnection).toHaveBeenCalledOnce()
+    expect(wrapper.get('#runtime-pairing-code').element).toHaveProperty('value', '')
+  })
+  it('keeps content, focus and input stable during a background status refresh', async () => {
+    vi.useFakeTimers()
+    try {
+      const { wrapper, port } = mountPage({ automatic: true, connection: 'unpaired', unpaired: true, registration: null })
+      await flushPromises()
+      const input = wrapper.get('#runtime-device-name')
+      await input.setValue('我的电脑'); (input.element as HTMLInputElement).focus()
+      const oldRequest = port.request
+      let finish!: () => void
+      const gate = new Promise<void>(resolve => { finish = resolve })
+      port.request = vi.fn(async request => { await gate; return oldRequest(request) })
+      vi.mocked(port.observe).mock.calls[0]![0]({ event: 'state_changed', instance_id: 'host-one', revision: 1 })
+      await vi.advanceTimersByTimeAsync(101); await flushPromises()
+      expect(wrapper.text()).not.toContain('正在读取设备状态')
+      expect(wrapper.get('#runtime-device-name').element).toBe(input.element)
+      expect(document.activeElement).toBe(input.element)
+      expect(input.element).toHaveProperty('value', '我的电脑')
+      expect(wrapper.get('#runtime-pairing-code').attributes()).not.toHaveProperty('disabled')
+      finish(); await flushPromises()
+    } finally { vi.useRealTimers() }
   })
   it('uses explicit register_new only when the staged registration capability is present', async () => {
     const { wrapper, port } = mountPage({ state: 'blocked', recovery: true, registration: null }); await flushPromises()

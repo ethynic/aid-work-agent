@@ -3,6 +3,21 @@ import { pathToFileURL } from 'node:url'
 import type { RuntimeSupervisor } from './runtimeSupervisor.js'
 import type { ConnectionDiagnosis, ConnectionRecoveryResult } from './runtimeConnectionRecovery.js'
 import { resumeRuntimeAtLogin } from './runtimeStartup.js'
+import { lstatSync, readFileSync } from 'node:fs'
+
+/** Read only the active server's public origin; never return credentials or other configuration. */
+export function readRuntimeConnectionInfo(home: string | null): { server: string | null } {
+  if (!home) return { server: null }
+  try {
+    const file = join(home, 'config.json')
+    const stat = lstatSync(file)
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65_536) return { server: null }
+    const config = JSON.parse(readFileSync(file, 'utf8').replace(/^\uFEFF/, ''))
+    if (typeof config?.server !== 'string') return { server: null }
+    const url = new URL(config.server)
+    return { server: ['http:', 'https:'].includes(url.protocol) ? url.origin : null }
+  } catch { return { server: null } }
+}
 
 const issue = (category: string, summary: string, service_verified = false): ConnectionDiagnosis => ({ version: 1, category, summary,
   steps: [], service_verified, can_preserve: false, can_reconfigure: true, requires_reboot: false })

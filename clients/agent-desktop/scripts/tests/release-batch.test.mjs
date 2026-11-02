@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tmpdir } from 'node:os'
 import test from 'node:test'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..')
@@ -22,6 +23,8 @@ test('release plan selects components independently and never edits versions or 
   assert.equal(runtime.runtime, true); assert.equal(runtime.boss, false)
   assert.equal(runtime.versions.runtime, '2.3.4')
   assert.ok(!runtime.steps.includes('sign-plugin'), 'Runtime-only packaging must not replace the BOSS signer or package')
+  const unsigned = runPlan('-Component', 'Runtime', '-Profile', 'production', '-TrustRoots', 'C:/isolated-fixture/public-roots.json', '-Unsigned')
+  assert.equal(unsigned.runtimeSigning, 'unsigned', 'Windows signing may be omitted explicitly without changing the product profile')
   const both = runPlan('-Signer', 'C:/isolated-fixture/not-read.json', '-RuntimeVersion', '2.3.4', '-BossVersion', '1.2.3')
   assert.deepEqual(both.versions, { runtime: '2.3.4', boss: '1.2.3' }, 'Component versions do not have to move together')
   files.forEach((file, i) => assert.deepEqual(readFileSync(resolve(root, file)), before[i], 'Plan must return before package writes or trust registration'))
@@ -36,4 +39,46 @@ test('ordinary BOSS packaging requires a stable signer instead of silently inven
   assert.doesNotMatch(readFileSync(script, 'utf8'), /@\('run',\s*'runtime:verify'\)/, 'A production-only batch must not run the verifier whose default directory is acceptance; packaging already verifies its exact output')
   const packager = readFileSync(resolve(root, 'clients/agent-desktop/scripts/package-runtime-win.mjs'), 'utf8')
   assert.match(packager, /\['scripts\/verify-runtime-package\.mjs', output\]/, 'The selected profile is checked by the existing package command')
+})
+
+test('WeCom delivery is independent of BOSS and can include its required Runtime', () => {
+  const args = ['-Signer', 'C:/isolated-fixture/not-read.json', '-WecomVersion', '3.4.5']
+  const plugin = runPlan('-Component', 'Wecom', ...args)
+  assert.equal(plugin.wecom, true); assert.equal(plugin.runtime, false); assert.equal(plugin.boss, false)
+  assert.equal(plugin.wecomVersion, '3.4.5'); assert.equal(plugin.releaseId, 'wecom-3.4.5')
+  assert.ok(!plugin.steps.includes('boss-build'))
+  const pair = runPlan('-Component', 'RuntimeWecom', '-RuntimeVersion', '4.5.6', ...args)
+  assert.equal(pair.runtime, true); assert.equal(pair.boss, false)
+  assert.ok(pair.steps.includes('verify-target-runtime'))
+  assert.equal(pair.isolated, true)
+  assert.ok(!pair.outputDirectory.includes('clients/release'), 'Deliveries must not pollute the development workspace')
+  const defaults = runPlan('-Component', 'RuntimeWecom', '-Signer', 'C:/isolated-fixture/not-read.json')
+  assert.equal(defaults.versions.runtime, null)
+  assert.equal(defaults.wecomVersion, null)
+  assert.equal(defaults.releaseId, null, 'Plan must not mistake uncommitted workspace versions for isolated SourceRef input')
+  assert.match(defaults.versionDefaults, /SourceRef/)
+})
+
+test('isolated source extraction preserves real git archive Chinese filenames and bytes', () => {
+  const home = mkdtempSync(resolve(tmpdir(), 'aid-release-unicode-'))
+  try {
+    const source = resolve(home, 'source'), target = resolve(home, 'target'), archive = resolve(home, 'source.tar')
+    mkdirSync(resolve(source, '文档'), { recursive: true }); mkdirSync(target)
+    const content = Buffer.from('机器人 Markdown 通知与附件')
+    writeFileSync(resolve(source, '文档/读取说明.md'), content)
+    const git = args => execFileSync('git', ['-C', source, ...args], { windowsHide: true, stdio: 'pipe' })
+    git(['init']); git(['add', '.']); git(['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'fixture'])
+    git(['archive', '--format=tar', `--output=${archive}`, 'HEAD'])
+    const extraction = readFileSync(script, 'utf8').match(/function Expand-SourceArchive \{[\s\S]*?\r?\n\}/)?.[0]
+    assert.ok(extraction, 'Exercise the production extraction function, including its encoding choice')
+    const literal = text => `'${text.replaceAll("'", "''")}'`
+    execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `${extraction}\nExpand-SourceArchive ${literal(archive)} ${literal(target)}`], { windowsHide: true, stdio: 'pipe' })
+    assert.deepEqual(readFileSync(resolve(target, '文档/读取说明.md')), content)
+    assert.match(readFileSync(script, 'utf8'), /\$isolatedRoot = Join-Path \$env:TEMP/, 'The production dependency build must use the tested Temp area; final deliveries use AidWorkBuild')
+    const dependency = resolve(target, 'clients/shared/native-input'), link = resolve(target, 'clients/shared/node_modules/@aid/native-input')
+    mkdirSync(dependency, { recursive: true }); mkdirSync(dirname(link), { recursive: true })
+    writeFileSync(resolve(dependency, 'package.json'), '{}')
+    symlinkSync(dependency, link, 'junction')
+    assert.equal(existsSync(resolve(link, 'package.json')), true, 'A clean build must resolve npm workspace dependencies through real junctions')
+  } finally { rmSync(home, { recursive: true, force: true }) }
 })

@@ -13,3 +13,9 @@ test('Windows driver preserves native window controls and last-window quit', () 
   assert.notEqual(applicationMenuTemplate('win32')[0]?.role, 'appMenu')
   assert.equal(shouldQuitWhenAllWindowsClosed('win32'), true)
 })
+
+test('Windows Runtime has no application menu while Desktop and macOS retain their controls', () => {
+  assert.deepEqual(applicationMenuTemplate('win32', 'runtime'), [])
+  assert.equal(applicationMenuTemplate('win32', 'desktop')[0]?.role, 'fileMenu')
+  assert.equal(applicationMenuTemplate('darwin', 'runtime')[0]?.role, 'appMenu')
+})

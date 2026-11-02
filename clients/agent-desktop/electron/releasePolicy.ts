@@ -19,3 +19,10 @@ export function assertPackageInvocation(mode: string, extraArguments: readonly s
 export function expectedSignature(mode: string): 'Valid' | 'NotSigned' {
   return mode === 'release' ? 'Valid' : 'NotSigned'
 }
+
+/** Product identity and Windows signing are separate; old manifests retain their defaults. */
+export function runtimeSigningMode(profile: string, mode?: unknown): 'signed' | 'unsigned' {
+  if (mode === undefined) return profile === 'production' ? 'signed' : 'unsigned'
+  if (mode !== 'signed' && mode !== 'unsigned') throw new Error('Runtime signing mode invalid')
+  return mode
+}

@@ -11,6 +11,8 @@
 软提示、不保证生效）。
 """
 
+import pytest
+
 from src.llm.providers.deepseek import DeepSeekProvider
 
 
@@ -68,3 +70,31 @@ def test_parse_response_tolerates_null_body():
     assert parsed["content"] == ""
     assert parsed["finish_reason"] == "stop"
     assert parsed["usage"]["total_tokens"] == 0
+
+
+@pytest.mark.parametrize("reasoning", ["", "private reasoning"])
+@pytest.mark.parametrize("with_tools", [True, False])
+def test_actual_reasoning_string_survives_parse_and_next_request(reasoning, with_tools):
+    """DeepSeek requires its returned field even when a tool round has no thinking text."""
+    provider = _make_provider()
+    message = {"role": "assistant", "content": "answer", "reasoning_content": reasoning}
+    if with_tools:
+        message["tool_calls"] = [{"id": "read-1", "type": "function", "function": {
+            "name": "wecom_read_session", "arguments": "{}"}}]
+    parsed = provider._parse_response({"choices": [{"message": message}]})
+    assert parsed["reasoning_content"] == reasoning
+    wire = provider._format_messages([{**parsed, "role": "assistant"}])[0]
+    assert wire["reasoning_content"] == reasoning
+
+
+@pytest.mark.parametrize("metadata", [{}, {"reasoning_content": None}])
+@pytest.mark.parametrize("with_tools", [True, False])
+def test_legacy_or_non_thinking_messages_do_not_get_fabricated_reasoning(metadata, with_tools):
+    provider = _make_provider()
+    message = {"role": "assistant", "content": "old answer", **metadata}
+    if with_tools:
+        message["tool_calls"] = [{"id": "old-1", "type": "function", "function": {
+            "name": "read", "arguments": "{}"}}]
+    parsed = provider._parse_response({"choices": [{"message": message}]})
+    assert "reasoning_content" not in parsed
+    assert "reasoning_content" not in provider._format_messages([message])[0]

@@ -4,11 +4,66 @@
 
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
+| P12 | 统一打包脚本与Runtime＋WeCom配套交付 | ✅ 完成（2026-11-02） | 一键实包36项、独测/CR及EXE内资源与ZIP核验通过；未安装或提交 |
+| P11 | WeCom0.2.3插件出包与旧Runtime隔离兼容 | ✅ 完成（2026-11-02） | 清洁r2独测/复核通过；旧原根不信任、批量工具限制已明确，未安装 |
 | P10 | 图片与文件时间线及按需读取 | ✅ 完成（2026-10-31） | 独测/CR、匿名跨层与旧包工具兼容通过；未安装，实际Web待验 |
 | P9 | 机器人Markdown与群系统事件读取 | ✅ 完成（2026-10-30） | 独立TS101、Python全套及专项复测/CR通过；真机只读9条正确分类，尚未安装 |
 | P6 | 5.0.13.6005 小版本兼容复核与精确登记 | ✅ 完成（2026-10-27） | 独立82项及发行布局4断言、CR、正常CLI doctor通过；同名目标边界后由P7修复；未提交部署 |
 | P7 | 显式外部联系人约束消歧 | ✅ 完成（2026-10-27） | 首轮独测TS122/Py91、修复复测18+9及CR复审通过；真机DB读取增量及3次无搜索发送/精确对账通过；未提交部署 |
-| P8 | 单聊/群聊发言人微信与企微平台识别 | 🔧 进行中 | 字段及原消息恢复已实现并独测；外部企微真人样本与W10最终复审待补 |
+| P8 | 单聊/群聊发言人微信与企微平台识别 | ✅ 完成（2026-11-02） | 字段及原消息恢复已实现并独测；外部企微真人样本与W10最终复审待补 |
+
+### P12 统一打包脚本与可安装配套交付（2026-11-02）
+
+用户明确要求解决“单插件不能直接在现用Runtime安装测试”及重复人工打包问题。按[设计P12](../design/wecom/wecom-cli-localdb-design.md#p12-统一出包与可安装配套交付2026-11-02)扩展原release-batch，不改Runtime信任产品机制，不新增框架。
+
+| 阶段 | 内容与完成标准 | 状态 |
+|------|----------------|------|
+| P12.1 脚本收敛 | Wecom/RuntimeWecom、独立版本、自动隔离源码/外部输出、OCR缓存自动过滤；Both/Runtime/Boss原入口保持 | ✅ 完成（2026-11-02） |
+| P12.2 配套核验 | 使用实际打包Runtime根与Core验WeCom及三工具受信清单，不以测试参数绕过安装前提；单插件模式说明目标依赖 | ✅ 完成（2026-11-02，EXE内资源实测通过） |
+| P12.3 独立验证 | 定向测试与CodeReview，包含Plan只读、旧入口、源码污染排除、缓存过滤和信任/工具匹配真实问题 | ✅ 完成（2026-11-02，16项及CR） |
+| P12.4 实包交付 | 脚本生成Runtime0.0.33＋WeCom0.2.4安装文件/说明/报告/SHA并独立验包；不实际安装/部署/监听 | ✅ 完成（2026-11-02） |
+
+唯一代码写入者为本轮脚本开发角色（release-batch/helper、package.mjs及定向测试），主控维护文档、选定版本元数据并执行实包；独立TEST/CR只读。构建输入master ab6aebb8加本任务脚本/元数据，工作区其他BOSS/native改动不纳入；不新增公钥、不重新签发旧版本，不提交代码。
+
+#### P12实际出包与验证记录（2026-11-02）
+
+- 来源：master `ab6aebb8734e3bed5d3a5dcf201c0a4ef6078c34`；仅叠加6份本任务打包代码/测试，显式设置UI0.0.33、WeCom0.2.4，独立比对236份业务源码与归档字节一致。当前工作区其他BOSS/native修改未混入，不构建或交付BOSS。
+- 实跑命令：`powershell.exe -NoProfile -NonInteractive -File clients/agent-desktop/scripts/release-batch.ps1 -Component RuntimeWecom -RuntimeVersion 0.0.33 -WecomVersion 0.2.4 -Signer <稳定外部签名者配置> -OcrDirectory <已验证ocr-python-final>`。最终exit0，构建副本 `%TEMP%/aid-release-87c694ac/workspace`，交付 `%LOCALAPPDATA%/AidWorkBuild/deliveries/AID-Work-Runtime-0.0.33-WeCom-0.2.4-20261102-102005/` 及同名ZIP。
+- 两处真实构建问题已修入入口：bsdtar无法展开部分中文Git路径，改用已有Python UTF-8 tarfile并验证真实中文归档；AidWorkBuild目录的workspace junction无法被Node22/24跟随，同fixture在Temp正常，构建副本移Temp，交付仍集中持久目录。不改业务tsconfig、共享代码或新增链接修复框架。
+- 独立测试：16项定向通过，匿名完整wrapper验证中文还原/业务WIP排除/参数转发及Plan零副作用；最终实际脚本的11项packager＋4项release-batch＋1项目标Runtime＋20项Runtime打包，共36项通过、0跳过。独立CodeReview v4复审通过。目标核验从实际Core配置导出运行版本0.2.22（Core0.2.22、Host0.2.25、UI0.0.33分别记录），不猜版本；既有迁移消费Host版本的差异仅记录，不扩本轮修改。
+- 插件：`wecom-0.2.4.aidplugin.zip`，119183388字节，SHA256 `f16407dedaf1217301d2fcb85b2d112d4d6d20de24e33a893d297a8c2b95796d`；7471项required_files＋manifest共7472文件、15项MCP工具；OCR缓存0，python312.zip与原输入一致；合成OCR/SQLite/AES与搬迁smoke通过。离线doctor准确报告无交互桌面条件ready=false，不当成真实客户端登录或业务通过。
+- 安装器：`AID-Work-Runtime-0.0.33-win-x64-acceptance-unsigned.exe`，SHA256 `5735db922497f61eae648dc2b6d74b0f75ce90df2752e34fb38a3554bf052a4b`；原安装器验包通过。独测用7za纯解档（不执行），3814项resources与win-unpacked逐项摘要一致；使用EXE实际内含Node22.23.3/ABI127、Core、24根验本批插件签名/完整清单及三个业务工具通过，未用额外根参数绕过。
+- 旧端：新24根逐对象保留旧19根、BOSS原25工具allowlist完整；旧Runtime0.0.29＋BOSS0.3.27匿名home只listTools仍25项、0业务调用、Provider正常关闭，旧关键归档文件摘要不变。原旧根对新WeCom发布者仍明确拒绝，不改变旧端、不要求旧BOSS客户升级。用户使用本批新WeCom需先更新本批配套Runtime。
+- ZIP：246685797字节，SHA256 `aeab0040a6514ff512529541319de3a9ba7a8a89f254d50c858ef6ea5b080c41`；内含安装器、签名插件、公开根、说明、build-info、原验包及目标兼容报告、SHA256SUMS，未放私钥。独立最终核验10文件、9项SHA256SUMS及ZIP逐项字节一致、ZIP旁校验和正确，说明与not_run边界一致，结论通过。独立证据位于 `%TEMP%/aid-release-test-ed96b2c0e2eb457db82fb3c7a99efa88/` 的 actual-source-provenance、actual-pair-verification、actual-runtime-core-report、final-delivery-report 等脱敏报告。
+- 未执行NSIS、PluginStore.import、覆盖升级、配对/UI smoke、真实聊天/招聘、部署或监听；当前客户端未停。只证明包与配套安装前提，不把它说成已安装或已完成真实Web验收；未提交。
+
+### P11 WeCom0.2.3插件出包与旧Runtime隔离兼容（2026-11-02）
+
+用户仅授权最新WeCom插件出包、隔离验包和旧Runtime兼容验证并交付安装文件，不安装、部署、恢复监听或提交。使用现有runtime-plugin-packaging单Provider入口，不新建发布框架；WeCom源码package/lock从已交付0.2.2增为0.2.3，旧签名包不覆盖。构建输入为master ab6aebb8的git archive加这两份版本元数据，工作区外独立构建，排除当前BOSS/native等未提交修改。复用已登记稳定验收发布者，不新建/替换公钥；最终包为acceptance用途，不冒充正式生产发行。
+
+| 阶段 | 验收与范围 | 状态 |
+|------|------------|------|
+| P11.1 出包 | 固定Node22.23.3、锁定生产依赖及已验证嵌入Python/OCR/AES，生成唯一0.2.3签名包与来源/校验和 | ✅ 完成（2026-11-02） |
+| P11.2 隔离验包 | 实际包签名/文件清单、搬迁version/doctor、包内Pillow/SQLite/AES及合成附件读取；不依赖主机Python掩盖缺包 | ✅ 完成（2026-11-02） |
+| P11.3 旧端兼容 | 旧原始信任表结果、旧核心显式新根的格式/既有入口执行能力、原BOSS工具可用性分别登记，不改旧根造通过 | ✅ 完成（2026-11-02） |
+| P11.4 交付 | 独立测试/Review与校验和；安装文件、说明和脱敏报告位于工作区外deliveries，实际安装及Web另待授权 | ✅ 完成（2026-11-02） |
+
+预审已证实的限制：原Runtime0.0.29内置信任19根，无当前稳定发布者aidwork-acceptance-cli-v1；原根应准确拒绝该新包。旧Core0.2.20包格式/min_runtime兼容，但其WeCom受信工具仅6项，不含read_sessions/send_status/group_poll，不能宣称完整新三工具均可用。当前本机安装Host0.2.24/Core0.2.21有23根，也未包含该发布者。以上只读确认不修改原客户端；普通旧BOSS客户无需因此升级，新包使用者的信任/功能前提须如实说明。最终验包与兼容结论见下；不把预期拒绝或能力缺失改造成虚假成功。
+
+
+
+#### P11最终安装包与验证（2026-11-02）
+
+- 交付：`%LOCALAPPDATA%/AidWorkBuild/deliveries/WeCom-CLI-0.2.3-20261102/wecom-0.2.3.aidplugin.zip`，119183381字节；SHA256 `f5ef7e637df6ced38e11981e0a4beb812aa9a17df0054f088df7ab2bdfbed380`。同目录包含安装说明、build-info、verification-report、完整公开根快照及校验和。发布者沿用aidwork-acceptance-cli-v1，release_id=cli-0.2.3-20261102-r2-wecom，acceptance用途，不改已登记根或生产信任。
+- 输入：ab6aebb8的隔离Git归档，只有WeCom package/lock两份版本元数据覆盖为0.2.3；工作区BOSS/native等脏改动未混入。独立比对165源码文件精确匹配、16份PS1仅Git EOL差异且UTF-8/BOM等价，75份dist/src和15份drivers与本次隔离编译/源码一致。未提交元数据修改，不安装或部署。
+- 清洁构建：r1基础功能和签名通过，但独测发现复用OCR构建目录后来生成的70份PIL缓存；r1未交付，保留废弃候选证据。仅在新OCR副本忽略__pycache__/.pyc/.pyo，保留python312.zip标准库原字节；原始资产、packager、业务源码均不改。新目录产生不可变r2，7471公共payload文件与r1逐项字节相同，差异仅70缓存删除及manifest更新，因此按同源条件复用功能结果，不追加恢复/清理框架。
+- 最终r2独立验包：签名、7471项required_files大小/摘要（payload含manifest共7472文件）、15项MCP工具、搬迁version0.2.3、结构化doctor、合成OCR、SQLite/AES及payload不变检查通过。隔离doctor exit1/ready=false准确表示没有交互桌面，未当作真实登录失败或缺原生依赖。未混入私钥/签名配置/真实业务资料或驱动缓存。
+- 真实包内功能：包内Python/driver解密匿名加密三库，旧Node22/Core0.2.20经MCP调用原read_session读取缓存图片，扩展名与实际PNG不同仍正确识别；10页UTF-8文件完整重组。13次旧runInvocation、14次result中包含一次故意503丢ACK，补投图片原payload相同、零桌面输入；这些功能在r1实测、在r2以严格不变的源码/依赖和重跑基础smoke复用，不误记为两套独立重复通过。
+- 旧端安装/执行边界：原Runtime0.0.29的19根实际验包准确拒绝新发布者；仅将已有当前24根作为隔离verify函数参数时旧核心签名/格式/清单通过，未修改旧根/Store或安装。旧受信6工具允许原read_session附件通路；新read_sessions可在MCP发现/直接调用，但旧runInvocation准确TOOL_NOT_ALLOWED，不能宣称旧Host能执行全部15项。旧核心128MiB接收参数已核至实际SDK消费点，未把源码容量界限说成5MiB图实传。
+- 原BOSS：Runtime0.0.29＋BOSS0.3.27在新匿名home只读列出原25工具，与旧清单一致，0业务调用、3项归档检查文件hash不变，Provider已关闭。没有把该检查扩大成真实招聘页面或生产任务验收；不要求满足原需求的旧BOSS客户升级。
+- 现用客户端：只读发现Host0.2.24/Core0.2.21的23根没有该发布者，其工具清单含read_sessions，但直接导入新包仍将因信任前提不满足而失败，未实际安装尝试。既有0.0.32验收组合ZIP的公开信任快照已确认含该发布者；是否升级和实际安装、Web附件理解、真实模型用量须用户后续授权，不借本次打包修改客户机配置。
+- 独立测试与Review最终均通过，且醒目保留上述兼容限制。明细位于工作区外本批wecom-package构建目录，交付目录verification-report为脱敏摘要。未运行安装器、Store.import、部署、发送或恢复监听；未提交代码。
+
 
 ### P10 图片与文件时间线及按需读取（2026-10-30，设计草案）
 

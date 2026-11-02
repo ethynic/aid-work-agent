@@ -5,6 +5,7 @@ import path from 'node:path'
 import { extractAll, listPackage } from '@electron/asar'
 import { desktopRoot, filesUnder, nodeFacts, assertRegisteredPublisherTrust, assertNoSensitiveAssets, validateReleaseInputs, verifyHostDependencyGraph, authenticodeStatus } from './prepare-runtime.mjs'
 import { resolveProductConfiguration } from '../dist/electron/productConfiguration.js'
+import { runtimeSigningMode } from '../dist/electron/releasePolicy.js'
 
 const output = path.resolve(process.argv[2] ?? path.join(desktopRoot, 'build/runtime-release/acceptance'))
 const manifest = JSON.parse(readFileSync(path.join(output, 'runtime-release-manifest.json'), 'utf8'))
@@ -16,7 +17,7 @@ const installer = path.join(output, manifest.fileName)
 const bytes = readFileSync(installer)
 if (bytes.length !== manifest.size || createHash('sha256').update(bytes).digest('hex') !== manifest.sha256) throw new Error('Runtime installer bytes differ from manifest')
 const signatureStatus = authenticodeStatus(installer)
-if (signatureStatus !== manifest.signatureStatus || manifest.signatureStatus !== (manifest.profile === 'production' ? 'Valid' : 'NotSigned')) throw new Error('Runtime installer signature policy mismatch')
+if (signatureStatus !== manifest.signatureStatus || manifest.signatureStatus !== (runtimeSigningMode(manifest.profile, manifest.signingMode) === 'signed' ? 'Valid' : 'NotSigned')) throw new Error('Runtime installer signature policy mismatch')
 const resources = path.join(output, 'win-unpacked/resources')
 assertNoSensitiveAssets(resources)
 const product = resolveProductConfiguration({ resourcesPath: resources, isPackaged: true, appDataPath: path.resolve(output, 'identity-validation') })

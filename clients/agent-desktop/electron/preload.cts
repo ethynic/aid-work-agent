@@ -59,6 +59,7 @@ const runtimeHost = readArgument('aidagent-runtime-enabled') === '1' ? Object.fr
   choosePackage: (input: unknown) => ipcRenderer.invoke('desktop:runtime:choose-package', input) as Promise<unknown>,
   ...(runtime.productKind === 'runtime' ? {
     automaticConnection: true,
+    connectionInfo: () => ipcRenderer.invoke('desktop:runtime:connection-info') as Promise<{ server: string | null }>,
     diagnoseConnection: () => ipcRenderer.invoke('desktop:runtime:diagnose-connection') as Promise<unknown>,
     registrationStatus: () => ipcRenderer.invoke('desktop:runtime:registration-status') as Promise<unknown>,
     reconfigureConnection: (input: unknown) => ipcRenderer.invoke('desktop:runtime:reconfigure-connection', input) as Promise<unknown>,
@@ -74,4 +75,8 @@ const runtimeHost = readArgument('aidagent-runtime-enabled') === '1' ? Object.fr
     return () => ipcRenderer.removeListener('desktop:runtime:disconnected', listener)
   },
 }) : undefined
-contextBridge.exposeInMainWorld('agentDesktop', Object.freeze({ version: 3 as const, runtime, startup, credentials, system, updates, runtimeHost }))
+const logs = readArgument('aidagent-runtime-enabled') === '1' ? Object.freeze({
+  read: (input?: unknown) => ipcRenderer.invoke('desktop:logs:read', input) as Promise<unknown>,
+  export: (input?: unknown) => ipcRenderer.invoke('desktop:logs:export', input) as Promise<unknown>,
+}) : undefined
+contextBridge.exposeInMainWorld('agentDesktop', Object.freeze({ version: 3 as const, runtime, startup, credentials, system, updates, runtimeHost, logs }))

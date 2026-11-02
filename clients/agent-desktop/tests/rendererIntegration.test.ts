@@ -1,7 +1,19 @@
 import assert from 'node:assert/strict'
-import { readFile, stat } from 'node:fs/promises'
+import { readFile, readdir, stat } from 'node:fs/promises'
 import path from 'node:path'
 import test from 'node:test'
+import { mapSchemeRequest } from '../electron/security.js'
+
+test('Runtime品牌图标进入真实renderer assets且能经桌面自定义协议读取', async () => {
+  const assets = path.resolve('dist/renderer/assets')
+  const files = await readdir(assets)
+  const icons = files.filter(file => /^runtime-.+\.ico$/.test(file))
+  assert.equal(icons.length, 1, 'Public-root favicon paths are rejected by the desktop protocol; the renderer must bundle its brand asset')
+  assert.deepEqual(mapSchemeRequest(`aidagent://app/assets/${icons[0]}`), { kind: 'file', relativePath: `assets/${icons[0]}` })
+  await stat(path.join(assets, icons[0]!))
+  const entry = files.find(file => /^desktop-.+\.js$/.test(file))!
+  assert.ok((await readFile(path.join(assets, entry), 'utf8')).includes(`/assets/${icons[0]}`))
+})
 
 test('桌面壳装载独立 Desktop renderer，而不是 Web 回退入口', async () => {
   const html = await readFile(path.resolve('dist/renderer/index.html'), 'utf8')

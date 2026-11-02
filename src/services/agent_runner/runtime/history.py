@@ -57,7 +57,7 @@ class SessionHistory:
                         }
                         if meta.get("tool_calls"):
                             entry["tool_calls"] = meta["tool_calls"]
-                        if meta.get("reasoning_content"):
+                        if isinstance(meta.get("reasoning_content"), str):
                             entry["reasoning_content"] = meta["reasoning_content"]
                         history_messages.append(entry)
                     else:
@@ -131,7 +131,7 @@ class SessionHistory:
                     }
                     if meta.get("tool_calls"):
                         entry["tool_calls"] = meta["tool_calls"]
-                    if meta.get("reasoning_content"):
+                    if isinstance(meta.get("reasoning_content"), str):
                         entry["reasoning_content"] = meta["reasoning_content"]
                     history.append(entry)
                 else:  # user / system

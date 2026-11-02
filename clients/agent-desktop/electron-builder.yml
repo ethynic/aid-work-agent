@@ -23,6 +23,7 @@ files:
   - dist/electron/runtimeSelection.js
   - dist/electron/runtimeStartup.js
   - dist/electron/runtimeUpdate.js
+  - dist/electron/runtimeLogs.js
   - dist/renderer/**/*
   - package.json
   - "!**/*.map"

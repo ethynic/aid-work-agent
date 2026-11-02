@@ -6,7 +6,7 @@ class RejectedManagementRequest extends Error {}
 export class RuntimeController {
   readonly recovery = reactive({ busy: false, diagnosis: null as ConnectionDiagnosis | null, error: '', newDevice: false, registered: false })
   private recoverySequence = 0
-  readonly view = reactive({ connected: false, connecting: false, refreshing: false, state: null as HostState | null, plugins: null as PluginList | null, description: null as Description | null, stateDirty: true, pluginsDirty: true, error: '', operation: null as ManagementOperation | null, busy: false, retryAvailable: false, selectionLabel: '' })
+  readonly view = reactive({ connected: false, connecting: false, refreshing: false, server: null as string | null, state: null as HostState | null, plugins: null as PluginList | null, description: null as Description | null, stateDirty: true, pluginsDirty: true, error: '', operation: null as ManagementOperation | null, busy: false, retryAvailable: false, selectionLabel: '' })
   private generation = 0
   private instance = ''
   private knownInstance = ''
@@ -164,7 +164,7 @@ export class RuntimeController {
     this.stateFailed = false; this.listFailed = false
     this.operationQuery = 0; this.appliedOperationQuery = 0
     if (clearIntent) { this.intent = undefined; this.knownInstance = ''; this.view.operation = null; this.view.selectionLabel = '' }
-    Object.assign(this.view, { connected: false, connecting: false, refreshing: false, state: null, plugins: null, description: null, stateDirty: true, pluginsDirty: true, busy: false, retryAvailable: false })
+    Object.assign(this.view, { connected: false, connecting: false, refreshing: false, server: null, state: null, plugins: null, description: null, stateDirty: true, pluginsDirty: true, busy: false, retryAvailable: false })
   }
   dispose() { this.disposed = true; clearTimeout(this.automaticTimer); ++this.recoverySequence; this.recovery.busy = false; this.resetConnection(true) }
   private message(error: unknown) { return error instanceof Error ? error.message : 'Runtime 管理操作失败' }
@@ -216,10 +216,19 @@ export class RuntimeController {
     if (list.revision < this.watermark || (list.revision === this.view.plugins?.revision && sequence < this.appliedList)) return
     this.view.plugins = list; this.appliedList = sequence; this.listFailed = false; this.advance(list.revision)
   }
+  private async refreshConnectionInfo() {
+    if (!this.port.connectionInfo) return
+    const generation = this.generation
+    try {
+      const info = await this.port.connectionInfo()
+      if (generation === this.generation) this.view.server = typeof info?.server === 'string' ? info.server : null
+    } catch { if (generation === this.generation) this.view.server = null }
+  }
   refresh(): Promise<void> {
     if (!this.view.connected) return Promise.resolve()
     if (this.refreshPromise) return this.refreshPromise
     const generation = this.generation
+    void this.refreshConnectionInfo()
     this.view.refreshing = true
     const current = Promise.allSettled([this.refreshState(), this.refreshPlugins()]).then((results) => {
       if (generation !== this.generation) return

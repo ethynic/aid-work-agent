@@ -79,15 +79,12 @@ function readPointerHome(userDataPath: string): { home: string | null; error: st
   // 形状校验（对齐 ownedHome 的 relative 三段规则 + assertHome 的绝对路径要求）
   const relative = path.relative(path.join(userDataPath, 'installation-v2', 'generations'), home)
   const parts = relative.split(path.sep)
+  const stableHome = path.resolve(home).toLowerCase() === path.resolve(userDataPath, 'rt').toLowerCase()
+  const connectionHome = path.resolve(path.dirname(home)).toLowerCase() === path.resolve(userDataPath, 'connections').toLowerCase() && UUID.test(path.basename(home))
   const shapeOk =
     path.isAbsolute(home)
-    && relative !== ''
-    && !relative.startsWith('..')
-    && !path.isAbsolute(relative)
-    && parts.length === 3
-    && UUID.test(parts[0] ?? '')
-    && parts[1] === 'connections'
-    && UUID.test(parts[2] ?? '')
+    && (stableHome || connectionHome || (relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative)
+      && parts.length === 3 && UUID.test(parts[0] ?? '') && parts[1] === 'connections' && UUID.test(parts[2] ?? '')))
   if (!shapeOk) return { home: null, error: 'pointer-home-outside-generations' }
   return { home, error: null }
 }

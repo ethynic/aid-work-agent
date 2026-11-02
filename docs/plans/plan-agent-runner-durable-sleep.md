@@ -16,6 +16,7 @@
 | Phase 4 | 澄清启用持续、累计积分与长期正确性 | ✅ 完成（2026-10-22） | 原策略确认/账本/历史幂等及有界容量独测通过，无任务积分上限 |
 | Phase 5 | 独立验证、CR、发布前检查与验收材料 | ✅ 完成（2026-10-22） | 六项及追加边界修复；最终独测/CR/主控检查通过，结果见第17节；未提交或部署 |
 | 后续验收 | agent2/真实Runtime与wecom、持续时长观察 | 📋 待开发 | 尚未提交、推送或部署；需用户后续明确指示后进行，不代表多天已验 |
+| 空思考字段修复 | DeepSeek 空字符串跨调用、休眠恢复及历史重载保留 | ✅ 完成（2026-11-02） | 定向自测、独立测试及CR通过，见第18节；未提交、部署或恢复监听 |
 
 2026-10-26配置智能体持续群聊联动在[W6计划](plan-wecom-cli-group-chat-experiment.md#w6-配置智能体完整链路2026-10-26)完成隔离开发验收：复用现有sleep/continuous/history与用量，补独立群游标、配置入口和原设备固定；独测PG76通过，CR问题均闭环。隔离新Worker/Runtime/MCP验证不等于真实群或多天验收；旧pytest入口安全风险单独登记W9。此次不提交、部署或恢复监听。
 
@@ -455,3 +456,31 @@ Chrome仅本机Vite/headless Chrome，所有/api请求abort。未验证真实多
 ### 收尾核验（2026-10-23）
 
 主控最终检查通过：24个冻结文件内容与freeze4逐项一致；相关文档围栏和新增本地链接有效，索引仅将本功能移动至已完成；范围内git diff --check通过，无未解决merge路径，分支、HEAD和原MERGE_HEAD保持。关联Runtime计划中2个旧打包产物链接目标缺失，经修复前树对照确认原已存在，未改动或将其声称为可用。任务临时PG已成功关闭。独立测试与CR结论均为通过；未提交、推送、部署或运行真实企微自动回复。
+
+
+## 18. DeepSeek 空思考字段修复（2026-11-02）
+
+- 基线：master 已 fast-forward 到 `94269b35`，保留其他任务的未提交修改；本次只修改模型消息链路及定向测试/文档。
+- 根因：agent2 两次 sleep 与三次读取均成功；提供商实际返回 `reasoning_content: ""`，后续请求丢失该字段而报 HTTP 400，非人工操作企业微信导致。
+- 实施：解析、Engine 构建、重排、Web/渠道历史重载和新进程短期记忆 cache miss 均以字符串存在性判断保留原值。checkpoint/metadata 现有结构不变，不伪造缺失字段，不增加重试、门禁或恢复框架。
+- 兼容：不改 Runtime/Device/BOSS 接口、工具装配或计费；旧消息没有该字段仍按原路径处理，思考内容仅在私有历史与模型请求内流转。
+- 复现及自测：修复前新增回归 8 失败/24 通过，失败均为空字段丢失；修复后定向 100 通过。CR发现 short_term cache miss 同类遗漏，补修一行及8项用例后该文件15项通过，受影响 import 和范围内 diff 检查通过。
+- 独立测试：首批41项通过；最终 short_term 修复后记忆与恢复定向36项通过；均0失败/0跳过。另以真实 `DeepSeekProvider.chat` 及 HTTP JSON 序列化验证6轮模型调用、2次 JSON 休眠恢复、3次读取，仅 MockTransport 替代网络，空字段保留，工具与用量回调未重放。主控与独测有重叠，不将批次数相加宣称唯一用例数。
+- 独立CR：发现的 cache miss 遗漏已修复并复审通过，无待修问题；私有历史归档已有按 key 保留逻辑，公开投影不变，无需额外恢复设施。
+- 验证边界：本次无数据库/schema/Device wire 变更；旧 BOSS 检查点恢复、用量、旧 SSE 回归通过，不等同重新执行 Runtime 0.0.29+BOSS 0.3.27 二进制验收。未访问业务数据库、真实 DeepSeek 或 agent2 验收，不声称实库账本或多天运行已验证。旧非Runner写入入口与数据分析子Agent的同类判断不属于本次执行链路，未扩展修改。
+- 状态：开发及独立验证完成。未提交、安装、部署或恢复监听，agent2 尚未应用本修复；原失败任务未重启，也未补造已丢失的历史字段。
+
+2026-11-02后续授权：用户要求将本会话与BOSS相关修改提交推送后自行发布agent2。本次提交前核对master及origin/master均为94269b35，受影响import重验通过；不改已验证源码，不自动部署或重启任务。客户端无需为本Runner修复升级，Runtime036交付同源核对见[Runtime计划15.5](plan-runtime-plugin-host.md#155-本会话提交前核对2026-11-02)。
+
+本次命令均在宿主机 `venv/Scripts/python.exe` 对应环境执行；仅为测试进程设置 `REDIS_ENABLED=false`、`PYTHONIOENCODING=utf-8` 并将 venv Scripts 前置 PATH，未改客户端或服务配置：
+
+```bash
+# 主控100项（short_term补修前；其余源码与最终一致）
+bash scripts/dev_test.sh tests/unit/llm/test_deepseek_provider.py tests/unit/test_build_messages.py tests/unit/services/agent_runner/test_deepseek_reasoning_roundtrip.py tests/unit/test_agent_engine_acceptance.py tests/unit/test_agent_engine_resume_input.py tests/unit/services/agent_runner/test_durable_sleep.py tests/unit/services/agent_runner/test_durable_sleep_independent.py -p no:cacheprovider -q --tb=short
+# 独立首批41项（roundtrip当时7项）
+bash scripts/dev_test.sh tests/unit/services/agent_runner/test_deepseek_reasoning_roundtrip.py tests/unit/services/agent_runner/test_master_upgrade_compatibility.py tests/unit/test_execution_usage.py tests/unit/services/agent_runner/test_model_phase_outcome.py tests/unit/services/agent_runner/test_legacy_stream_bridge.py tests/unit/channels/test_channel_context_servicer_role.py -p no:cacheprovider -q --tb=short
+# 独立最终36项（roundtrip最终15项，包含short_term补修）
+bash scripts/dev_test.sh tests/unit/services/agent_runner/test_deepseek_reasoning_roundtrip.py tests/unit/test_memory.py tests/unit/test_mid_term/test_agent_reload_memory.py -p no:cacheprovider -q --tb=short
+```
+
+独立HTTP证据脚本保存在仓库外 `C:/Users/PC/AppData/Local/Temp/aid-deepseek-independent-20261102/independent-provider-http.py`，SHA256 `967f2aed90a2a9ab78acd19d151df819ede58babaa9e8f1aee4c9ad593715ba8`。当时以 PowerShell here-string 传给 venv Python 执行退出0；同环境可用 `Get-Content -Raw <该文件> | venv/Scripts/python.exe -` 复核。脚本未加入产品，也未连接客户端。

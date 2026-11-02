@@ -11,8 +11,9 @@ import { DesktopUpdater, type UpdateAdapter } from './desktopUpdater.js'
 import { resolveUpdateConfiguration } from './updateConfiguration.js'
 import { resolveProductConfiguration } from './productConfiguration.js'
 import { RuntimeSupervisor } from './runtimeSupervisor.js'
+import { RuntimeLogs } from './runtimeLogs.js'
 import { RuntimeConnectionRecovery } from './runtimeConnectionRecovery.js'
-import { RuntimeCleanConnection } from './runtimeCleanConnection.js'
+import { RuntimeCleanConnection, readRuntimeConnectionInfo } from './runtimeCleanConnection.js'
 import { cleanupRuntimePreviousHome, prepareRuntimeInstallation, rotateRuntimeConnection, selectRuntimeConnection } from './runtimeInstallation.js'
 import { RuntimeSelections } from './runtimeSelection.js'
 import { RuntimeStartup, runtimeLoginLaunch, resumeRuntimeAtLogin } from './runtimeStartup.js'
@@ -96,6 +97,16 @@ let runtimeTray: Tray | null = null
 let quitting = false
 let exitAllowed = false
 let exitPending = false
+const runtimeLogs = product.runtimeEnabled ? new RuntimeLogs({
+  appVersion: app.getVersion(),
+  hostEntry: product.hostEntry, desktopDirectory: path.join(app.getPath('userData'), 'logs'),
+  home: () => runtimeSupervisor ? product.runtimeHome : null, appDataPath: productAppData,
+  profile: { profile: product.profile, userDataDir: path.basename(app.getPath('userData')), legacyHomeDir: path.basename(product.runtimeHome!) },
+  chooseSave: async defaultPath => {
+    const selection = await dialog.showSaveDialog({ title: '导出客户端诊断', defaultPath, filters: [{ name: '诊断包', extensions: ['zip'] }] })
+    return selection.canceled ? null : selection.filePath ?? null
+  },
+}) : null
 
 function attachRuntimeSupervisor(home: string): void {
   product.runtimeHome = home
@@ -154,6 +165,7 @@ async function fetchDownload(url: string, headers: Record<string, string>): Prom
 }
 
 function logLifecycle(event: string, detail?: string): void {
+  runtimeLogs?.record(event)
   const suffix = detail ? `:${detail.replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 80)}` : ''
   console.error(`AGENT_DESKTOP:${event}${suffix}`)
 }
@@ -189,6 +201,16 @@ function registerDesktopIpc(): void {
       throw new Error('desktop IPC sender rejected')
     }
   }
+  ipcMain.handle('desktop:logs:read', (event, input: unknown) => {
+    assertTrustedSender(event)
+    if (!runtimeLogs) throw new Error('当前产品没有本机日志功能')
+    return runtimeLogs.read(input)
+  })
+  ipcMain.handle('desktop:logs:export', (event, input: unknown) => {
+    assertTrustedSender(event)
+    if (!runtimeLogs) throw new Error('当前产品没有本机日志功能')
+    return runtimeLogs.export(input)
+  })
   ipcMain.handle('desktop:runtime:request', async (event, request: unknown) => {
     assertTrustedSender(event)
     if (!runtimeSupervisor) throw new Error('当前产品没有本机Runtime管理能力')
@@ -201,6 +223,11 @@ function registerDesktopIpc(): void {
       try { await updateIntent?.clear() } catch { logLifecycle('runtime-update-intent-clear-failed') }
     }
     return reply
+  })
+  ipcMain.handle('desktop:runtime:connection-info', event => {
+    assertTrustedSender(event)
+    if (product.kind !== 'runtime') throw new Error('当前产品没有Runtime连接信息')
+    return readRuntimeConnectionInfo(product.runtimeHome)
   })
   ipcMain.handle('desktop:runtime:diagnose-connection', async event => {
     assertTrustedSender(event)
@@ -371,6 +398,7 @@ async function createWindow(): Promise<BrowserWindow> {
     minHeight: 500,
     show: !smokeMode && !loginLaunch,
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#111827' : '#ffffff',
+    ...(product.kind === 'runtime' ? { icon: path.join(rendererRoot, 'favicon.ico') } : {}),
     ...resolvePlatformWindowOptions(process.platform),
     webPreferences: {
       ...createSecureWebPreferences(preloadPath),
@@ -472,37 +500,43 @@ if (!hasSingleInstanceLock) {
     contentSecurityPolicy = createContentSecurityPolicy(apiBaseUrl)
     logLifecycle('api-configuration-loaded', configuration.source)
     nativeTheme.themeSource = 'system'
-    Menu.setApplicationMenu(Menu.buildFromTemplate(applicationMenuTemplate(process.platform)))
+    const menuTemplate = applicationMenuTemplate(process.platform, product.kind)
+    Menu.setApplicationMenu(menuTemplate.length ? Menu.buildFromTemplate(menuTemplate) : null)
     initializeDesktopUpdater()
     let cleanInstallation: Awaited<ReturnType<typeof prepareRuntimeInstallation>> | undefined
-    if (product.runtimeEnabled && product.nodeExecutable && product.hostEntry && product.runtimeHome) {
-      const legacyHome = product.runtimeHome
-      if (product.kind === 'runtime') {
-        const installationOptions = { legacyHome, userDataPath: app.getPath('userData'), appId: product.appId,
-          node: product.nodeExecutable, hostEntry: product.hostEntry, executable: process.execPath,
-          ...(smokeMode ? { stopLegacy: async () => {} } : {}) }
-        cleanInstallation = await prepareRuntimeInstallation(installationOptions)
-        attachRuntimeSupervisor(cleanInstallation.home)
-        const pendingCleanup = new Set<string>()
-        runtimeConnectionRecovery = new RuntimeCleanConnection({ metadataHome: cleanInstallation.metadataHome,
-          hostEntry: product.hostEntry, legacyHome, previousHome: cleanInstallation.priorHome,
-          home: () => product.runtimeHome!, supervisor: () => runtimeSupervisor!,
-          beforeChange: async () => { await runtimeSelections?.invalidate(); await updateIntent?.clear() },
-          afterChange: async () => {
-            for (const home of pendingCleanup) await cleanupRuntimePreviousHome(installationOptions, home).catch(() => 'cleanup_failed')
-            pendingCleanup.clear()
-          },
-          replaceHome: async target => {
-            await runtimeSupervisor!.exitForReplacement()
-            pendingCleanup.add(product.runtimeHome!)
-            const home = target
-              ? await selectRuntimeConnection(installationOptions, target).catch(async () => rotateRuntimeConnection(installationOptions, product.runtimeHome!))
-              : await rotateRuntimeConnection(installationOptions, product.runtimeHome!)
-            attachRuntimeSupervisor(home)
-            return home
-          } })
-        await runtimeConnectionRecovery.resume()
-      } else attachRuntimeSupervisor(legacyHome)
+    try {
+      if (product.runtimeEnabled && product.nodeExecutable && product.hostEntry && product.runtimeHome) {
+        const legacyHome = product.runtimeHome
+        if (product.kind === 'runtime') {
+          const installationOptions = { legacyHome, userDataPath: app.getPath('userData'), appId: product.appId,
+            node: product.nodeExecutable, hostEntry: product.hostEntry, executable: process.execPath,
+            ...(smokeMode ? { stopLegacy: async () => {} } : {}) }
+          cleanInstallation = await prepareRuntimeInstallation(installationOptions)
+          attachRuntimeSupervisor(cleanInstallation.home)
+          const pendingCleanup = new Set<string>()
+          runtimeConnectionRecovery = new RuntimeCleanConnection({ metadataHome: cleanInstallation.metadataHome,
+            hostEntry: product.hostEntry, legacyHome, previousHome: cleanInstallation.priorHome,
+            home: () => product.runtimeHome!, supervisor: () => runtimeSupervisor!,
+            beforeChange: async () => { await runtimeSelections?.invalidate(); await updateIntent?.clear() },
+            afterChange: async () => {
+              for (const home of pendingCleanup) await cleanupRuntimePreviousHome(installationOptions, home).catch(() => 'cleanup_failed')
+              pendingCleanup.clear()
+            },
+            replaceHome: async target => {
+              await runtimeSupervisor!.exitForReplacement()
+              pendingCleanup.add(product.runtimeHome!)
+              const home = target
+                ? await selectRuntimeConnection(installationOptions, target).catch(async () => rotateRuntimeConnection(installationOptions, product.runtimeHome!))
+                : await rotateRuntimeConnection(installationOptions, product.runtimeHome!)
+              attachRuntimeSupervisor(home)
+              return home
+            } })
+          await runtimeConnectionRecovery.resume()
+        } else attachRuntimeSupervisor(legacyHome)
+      }
+    } catch {
+      // Existing local logs remain available even when Host initialization fails.
+      logLifecycle('runtime-host-initialization-failed')
     }
     registerDesktopIpc()
     await registerRendererProtocol()

@@ -293,7 +293,7 @@ class AgentEngine:
                         orders.update({call.id:[state.iteration,index] for index,call in enumerate(calls)})
                     content = response.get("content") or ""
                     message = {"role": "assistant", "content": content}
-                    if response.get("reasoning_content"):
+                    if isinstance(response.get("reasoning_content"), str):
                         message["reasoning_content"] = response["reasoning_content"]
                     if calls:
                         message["tool_calls"] = [call.message_call() for call in calls]

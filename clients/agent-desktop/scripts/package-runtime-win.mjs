@@ -5,10 +5,11 @@ import { spawnSync } from 'node:child_process'
 import { desktopRoot, resourcesRoot, filesUnder, nodeFacts, assertRegisteredPublisherTrust, assertNoSensitiveAssets, verifyHostDependencyGraph, runtimeNodeSignExclusion, authenticodeStatus } from './prepare-runtime.mjs'
 import { load as loadYaml } from 'js-yaml'
 import { resolveProductConfiguration } from '../dist/electron/productConfiguration.js'
-import { assertReleaseSigning } from '../dist/electron/releasePolicy.js'
+import { assertReleaseSigning, runtimeSigningMode } from '../dist/electron/releasePolicy.js'
 
 const profile = process.argv[2]
-if (!['acceptance', 'production'].includes(profile) || process.argv.length !== 3) throw new Error('Use package-runtime-win.mjs acceptance|production; run prepare-runtime first')
+if (!['acceptance', 'production'].includes(profile) || process.argv.length > 4 || (process.argv.length === 4 && process.argv[3] !== '--unsigned')) throw new Error('Use package-runtime-win.mjs acceptance|production [--unsigned]; run prepare-runtime first')
+const signingMode = runtimeSigningMode(profile, process.argv[3] === '--unsigned' ? 'unsigned' : undefined)
 process.chdir(desktopRoot)
 const source = JSON.parse(readFileSync(path.join(resourcesRoot, 'config/runtime-product.json'), 'utf8'))
 if (source.productKind !== 'runtime' || source.profile !== profile) throw new Error('Prepared Runtime product/profile does not match packaging invocation')
@@ -16,7 +17,7 @@ const product = resolveProductConfiguration({ resourcesPath: resourcesRoot, isPa
 assertRegisteredPublisherTrust(JSON.parse(readFileSync(product.trustRootsPath, 'utf8')), profile)
 assertNoSensitiveAssets(resourcesRoot)
 nodeFacts(product.nodeExecutable)
-assertReleaseSigning(profile === 'production' ? 'release' : 'dev', process.env)
+assertReleaseSigning(signingMode === 'signed' ? 'release' : 'dev', process.env)
 const sourceManifest = JSON.parse(readFileSync(path.join(resourcesRoot, 'runtime/resource-manifest.json'), 'utf8'))
 const actual = filesUnder(resourcesRoot).filter(file => file.path !== 'runtime/resource-manifest.json')
 if (JSON.stringify(actual) !== JSON.stringify(sourceManifest.files) || sourceManifest.profile !== profile) throw new Error('Prepared Runtime resources changed; rerun preparation with approved inputs')
@@ -29,7 +30,8 @@ mkdirSync(output, { recursive: true })
 const buildConfiguration = path.join(output, 'builder-config.json')
 const installerInclude = path.join(output, 'runtime-installer-generated.nsh')
 writeFileSync(installerInclude, `!define RUNTIME_CLEAN_INSTALL_SOURCE "${path.join(desktopRoot, 'scripts/runtime-clean-install.ps1')}"\n!include "${path.join(desktopRoot, 'scripts/runtime-installer.nsh')}"\n`)
-const artifactName = `AID-Work-Runtime-${pkg.version}-win-x64-${profile}${profile === 'acceptance' ? '-unsigned' : ''}.exe`
+const artifactName = `AID-Work-Runtime-${pkg.version}-win-x64-${profile}${signingMode === 'unsigned' ? '-unsigned' : ''}.exe`
+const runtimeIcon = path.join(desktopRoot, 'assets/runtime.ico')
 writeFileSync(buildConfiguration, JSON.stringify({
   extends: path.join(desktopRoot, 'electron-builder.yml'), appId: product.appId, productName: product.productName,
   directories: { output }, protocols: [], publish: null,
@@ -37,19 +39,21 @@ writeFileSync(buildConfiguration, JSON.stringify({
     { from: path.join(resourcesRoot, 'config'), to: 'config' },
     { from: path.join(resourcesRoot, 'runtime'), to: 'runtime' },
   ],
-  win: { artifactName, signExts: [runtimeNodeSignExclusion] }, forceCodeSigning: profile === 'production',
-  nsis: { include: installerInclude },
+  win: { artifactName, icon: runtimeIcon, signExts: [runtimeNodeSignExclusion] }, forceCodeSigning: signingMode === 'signed',
+  nsis: { include: installerInclude, installerIcon: runtimeIcon, uninstallerIcon: runtimeIcon },
 }, null, 2) + '\n')
 const inputs = [...filesUnder(resourcesRoot).map(file => ({ path: `resources/${file.path}`, sha256: file.sha256 })),
   ...filesUnder(path.join(desktopRoot, 'dist')).filter(file => !file.path.startsWith('tests/')).map(file => ({ path: `dist/${file.path}`, sha256: file.sha256 })),
-  ...['package.json', 'package-lock.json', 'electron-builder.yml', 'scripts/prepare-runtime.mjs', 'scripts/runtime-node-resources.json', 'scripts/package-runtime-win.mjs', 'scripts/verify-runtime-package.mjs', 'scripts/runtime-installer.nsh', 'scripts/runtime-clean-install.ps1', 'scripts/runtime-installation-check.mjs'].map(file => ({ path: file, sha256: createHash('sha256').update(readFileSync(file)).digest('hex') })),
+  ...['package.json', 'package-lock.json', 'electron-builder.yml', 'assets/runtime.ico', 'scripts/prepare-runtime.mjs', 'scripts/runtime-node-resources.json', 'scripts/package-runtime-win.mjs', 'scripts/verify-runtime-package.mjs', 'scripts/runtime-installer.nsh', 'scripts/runtime-clean-install.ps1', 'scripts/runtime-installation-check.mjs'].map(file => ({ path: file, sha256: createHash('sha256').update(readFileSync(file)).digest('hex') })),
 ]
 const buildInputSha256 = createHash('sha256').update(JSON.stringify(inputs)).digest('hex')
 const whitelist = loadYaml(readFileSync('electron-builder.yml', 'utf8')).files
 if (!Array.isArray(whitelist) || !whitelist.includes('dist/renderer/**/*')) throw new Error('Runtime app file whitelist missing renderer')
 const packagedInputs = inputs.filter(item => item.path.startsWith('resources/') || item.path.startsWith('dist/renderer/') || (item.path.startsWith('dist/') && whitelist.includes(item.path)))
+const builderEnvironment = { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: signingMode === 'signed' ? 'true' : 'false' }
+if (signingMode === 'unsigned') for (const name of ['CSC_LINK', 'WIN_CSC_LINK', 'CSC_KEY_PASSWORD', 'WIN_CSC_KEY_PASSWORD']) delete builderEnvironment[name]
 const builder = spawnSync(process.execPath, [path.join(desktopRoot, 'node_modules/electron-builder/out/cli/cli.js'), '--win', 'nsis', '--x64', '--config', buildConfiguration], {
-  stdio: 'inherit', windowsHide: true, env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: profile === 'production' ? 'true' : 'false' },
+  stdio: 'inherit', windowsHide: true, env: builderEnvironment,
 })
 if (builder.error) throw builder.error
 if (builder.status !== 0) throw new Error('Runtime electron-builder failed')
@@ -61,9 +65,9 @@ const installer = path.join(output, artifactName)
 if (!existsSync(installer)) throw new Error('Runtime installer missing')
 const bytes = readFileSync(installer)
 const signatureStatus = authenticodeStatus(installer)
-if (signatureStatus !== (profile === 'production' ? 'Valid' : 'NotSigned')) throw new Error('Runtime installer signature/profile mismatch')
+if (signatureStatus !== (signingMode === 'signed' ? 'Valid' : 'NotSigned')) throw new Error('Runtime installer signature/mode mismatch')
 writeFileSync(path.join(output, 'runtime-release-manifest.json'), JSON.stringify({
-  schemaVersion: 1, profile, appId: product.appId, productName: product.productName, version: pkg.version,
+  schemaVersion: 1, profile, signingMode, appId: product.appId, productName: product.productName, version: pkg.version,
   platform: 'win32', arch: 'x64', fileName: artifactName, size: bytes.length,
   sha256: createHash('sha256').update(bytes).digest('hex'), signatureStatus, buildInputSha256,
   hostPackageSha256: sourceManifest.hostPackageSha256, inputs, packagedInputs,

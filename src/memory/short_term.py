@@ -148,7 +148,7 @@ class ShortTermMemory:
                 msg: Dict[str, Any] = {"role": "assistant", "content": content}
                 if meta.get("tool_calls"):
                     msg["tool_calls"] = meta["tool_calls"]
-                if meta.get("reasoning_content"):
+                if isinstance(meta.get("reasoning_content"), str):
                     msg["reasoning_content"] = meta["reasoning_content"]
                 messages.append(msg)
             elif role == "tool":
