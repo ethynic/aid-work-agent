@@ -78,18 +78,20 @@ class TenantRegisterTarget(StrictDTO):
 
 
 class RuleCreate(StrictDTO):
-    """通知规则创建（规则引擎，设计 §10）；事件白名单与条件校验在 repository。"""
+    """通知规则创建（规则引擎，设计 §10）；事件白名单与条件校验在 repository。
+
+    task_owner 仅用于 scheduled.task 聚合规则（站内信恒发任务属主，仅占位）。"""
     event_type: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=64)
     conditions: dict = Field(default_factory=dict)
-    recipient_mode: Literal['tenant_admins', 'kf_assignee']
+    recipient_mode: Literal['tenant_admins', 'kf_assignee', 'task_owner']
     enabled: StrictBool = True
 
 
 class RuleUpdate(StrictDTO):
     name: str | None = Field(default=None, min_length=1, max_length=64)
     conditions: dict | None = None
-    recipient_mode: Literal['tenant_admins', 'kf_assignee'] | None = None
+    recipient_mode: Literal['tenant_admins', 'kf_assignee', 'task_owner'] | None = None
     enabled: StrictBool | None = None
 
 

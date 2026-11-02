@@ -55,6 +55,9 @@ export interface ScheduledTask {
   session_id: string
   status: ScheduledTaskStatus
   pause_reason?: string | null
+  /** 任务选用的通知规则（scheduled.task 聚合规则，任务级选用；发布侧快照 notify_rule_id） */
+  notification_rule_id?: string | null
+  /** 旧列（存量任务直选渠道目标，发布侧兜底快照；写入口已下线，仅读回显） */
   notification_target_id?: string | null
   next_due_at?: string | null
   last_run_at?: string | null
@@ -88,9 +91,9 @@ export interface UpdateDefinitionPayload {
   name?: string
   task_prompt?: string
   attachments?: ScheduledTaskAttachment[]
-  notification_target_id?: string
-  /** 显式清除通知目标（恢复默认：站内信 + 个人偏好渠道）；与 notification_target_id 互斥 */
-  clear_notification_target?: boolean
+  notification_rule_id?: string
+  /** 显式清除通知规则（恢复默认：站内信 + 个人偏好渠道）；与 notification_rule_id 互斥 */
+  clear_notification_rule?: boolean
 }
 
 export class ScheduledTaskRequestError extends Error {
@@ -164,7 +167,7 @@ export async function updateScheduledTaskSchedule(taskId: string, payload: Updat
   })
 }
 
-/** 编辑任务内容/附件/通知目标（不动调度字段；空白 name/prompt 422） */
+/** 编辑任务内容/附件/通知规则（不动调度字段；空白 name/prompt 422） */
 export async function updateScheduledTaskDefinition(taskId: string, payload: UpdateDefinitionPayload): Promise<ScheduledTask> {
   const value = await request<TaskResponse>(`/${encodeURIComponent(taskId)}`, {
     method: 'PUT',

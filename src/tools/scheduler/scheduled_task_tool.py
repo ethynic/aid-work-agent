@@ -4,7 +4,7 @@
 - CreateScheduledTaskTool：创建自包含定时任务（无试跑、无同步等待 Runner，
   创建即 active，首次执行在下一个调度点；由 background_runner 的 dispatch
   循环认领并提交）；
-- ManageScheduledTaskTool：list/pause/resume/cancel/view/set_notify_target，
+- ManageScheduledTaskTool：list/pause/resume/cancel/view/set_notify_rule，
   适配新状态机（pause 仅 active、resume 仅 paused、cancel 走事务守卫硬删）。
 
 本模块同时承载工具与 REST API 共用的纯校验/计算函数（generate_cron_expression /
@@ -133,9 +133,9 @@ class CreateScheduledTaskInput(BaseModel):
         "范围内解析。不要把附件信息塞进提示词文字来代替本字段"
     ))
     description: Optional[str] = Field("", description="任务的补充描述（可选）")
-    notify_target_id: Optional[str] = Field(None, description=(
-        "通知目标 ID（可选）：任务完成/失败/暂停通知投递到指定目标"
-        "（个人 Web Push 或租户级群机器人/邮件目标）；不填=站内信+个人偏好渠道"
+    notification_rule_id: Optional[str] = Field(None, description=(
+        "通知规则 ID（可选）：任务通知投递走租户管理员在通知规则页配置的"
+        "「定时任务通知」规则（决定外发渠道与事件范围）；不填=站内信+个人偏好渠道"
     ))
 
 
@@ -157,7 +157,8 @@ class CreateScheduledTaskTool(BaseTool):
         "可预见的无数据/空结果场景写明默认行为（如'无新增数据时输出：今日无新增数据'）。"
         "如需专业领域能力，在 task_prompt 中指示委派给对应子智能体。"
         "一次性任务（schedule_type=once）必须在 time_config.run_at 提供未来的具体时间，"
-        "过去时间会被拒绝。可选 notify_target_id 指定完成通知投递目标。"
+        "过去时间会被拒绝。可选 notification_rule_id 指定定时任务通知规则"
+        "（先用 manage_scheduled_task 的 list_notify_rules 查询可选规则）。"
         "创建即生效，首次执行在下一个调度点（无试跑）。"
         "如果用户询问或管理已创建的定时任务，使用 manage_scheduled_task 工具。"
         "【限制】微信营销/微信群发类定时发送任务不适用本工具（会被拒绝），"
@@ -175,7 +176,7 @@ class CreateScheduledTaskTool(BaseTool):
         schedule_type = kwargs.get("schedule_type", "")
         time_config = dict(kwargs.get("time_config") or {})
         description = kwargs.get("description", "")
-        notify_target_id = kwargs.get("notify_target_id") or None
+        notification_rule_id = kwargs.get("notification_rule_id") or None
 
         context = current_tool_execution_context()
         user_id = context.user_id if context else None
@@ -214,17 +215,17 @@ class CreateScheduledTaskTool(BaseTool):
         except ScheduleConfigError as e:
             return {"success": False, "error": str(e)}
 
-        # 通知目标归属校验（设计 §3.3/§8.3 同口径）：只允许本人个人目标或
-        # 本租户租户级目标——外发按 target_id 快照路由，写入口径必须校验
-        # 归属（LLM 幻觉/他租户 ID 一律拒绝，不落库待投递侧失败）
-        if notify_target_id and not await asyncio.to_thread(
-                ScheduledTaskDB.notify_target_visible, notify_target_id,
-                tenant_id=tenant_id, user_id=user_id):
-            logger.warning(f"后端日志：定时任务通知目标不可用 user_id={user_id}, "
-                           f"target={notify_target_id[:32]}")
+        # 通知规则归属校验（写侧 fail-closed）：只允许本租户 enabled 的
+        # scheduled.task 规则——外发按 notify_rule_id 快照路由到规则级目标，
+        # 写入口径必须校验归属（LLM 幻觉/他租户 ID 一律拒绝，不落库待投递侧失败）
+        if notification_rule_id and not await asyncio.to_thread(
+                ScheduledTaskDB.notify_rule_visible, notification_rule_id,
+                tenant_id=tenant_id):
+            logger.warning(f"后端日志：定时任务通知规则不可用 user_id={user_id}, "
+                           f"rule={notification_rule_id[:32]}")
             return {"success": False,
-                    "error": "通知目标不存在或不可用；"
-                             "可先用 manage_scheduled_task 的 list_notify_targets 查询可选目标"}
+                    "error": "通知规则不存在或不可用；"
+                             "可先用 manage_scheduled_task 的 list_notify_rules 查询可选规则"}
 
         # 每用户 active 上限：事务内落实（评审 P2：先计数后插入的两独立
         # 事务存在并发绕过窗口——advisory lock 串行化，配额检查与插入同事务）
@@ -244,7 +245,7 @@ class CreateScheduledTaskTool(BaseTool):
                 cron_expression=cron_expression, interval_seconds=interval_seconds,
                 run_at=run_at, attachments=attachments,
                 profile_id=profile_id, instance_id=instance_id,
-                subagent_id=subagent_id, notification_target_id=notify_target_id,
+                subagent_id=subagent_id, notification_rule_id=notification_rule_id,
                 next_due_at=next_due_at, max_active=max_tasks)
         except ScheduledTaskQuotaError as e:
             return {"success": False, "error": str(e)}
@@ -278,12 +279,12 @@ class ManageScheduledTaskInput(BaseModel):
     """管理定时任务参数"""
     action: str = Field(..., description=(
         "操作类型：list查看任务列表, pause暂停, resume恢复, cancel取消并删除, "
-        "view查看任务统计详情, set_notify_target设置通知目标, "
-        "list_notify_targets查询可选通知目标（创建任务选 notify_target_id 前先查）"
+        "view查看任务统计详情, set_notify_rule设置通知规则, "
+        "list_notify_rules查询可选通知规则（创建任务选 notification_rule_id 前先查）"
     ))
     task_id: Optional[str] = Field(None, description="任务ID（list 操作不需要）")
-    notify_target_id: Optional[str] = Field(None, description=(
-        "通知目标 ID（仅 set_notify_target 使用）：传入=设置该目标；"
+    notification_rule_id: Optional[str] = Field(None, description=(
+        "通知规则 ID（仅 set_notify_rule 使用）：传入=设置该规则；"
         "不传=清除恢复默认（站内信+个人偏好渠道）"
     ))
 
@@ -296,9 +297,9 @@ class ManageScheduledTaskTool(BaseTool):
     chat_only = True  # 仅 web 对话可见（渠道与 scheduled 执行滤除，设计 §10）
     description = (
         "管理用户的定时任务：查看列表（list）、暂停（pause）、恢复（resume）、"
-        "取消并删除（cancel）、查看任务统计（view）、设置/清除通知目标（set_notify_target）、"
-        "查询可选通知目标（list_notify_targets——创建任务选 notify_target_id 前先查询，"
-        "返回 target_id/渠道/展示名）。历次执行明细请在任务视图中查看（view 结果中附有指引）。"
+        "取消并删除（cancel）、查看任务统计（view）、设置/清除通知规则（set_notify_rule）、"
+        "查询可选通知规则（list_notify_rules——创建任务选 notification_rule_id 前先查询，"
+        "返回 rule_id/规则名/事件范围/外发渠道）。历次执行明细请在任务视图中查看（view 结果中附有指引）。"
     )
     display_name = "管理定时任务"
     category = "scheduler"
@@ -308,7 +309,7 @@ class ManageScheduledTaskTool(BaseTool):
         """管理定时任务（所有读写带 tenant+user 归属条件进 SQL）"""
         action = kwargs.get("action", "list")
         task_id = kwargs.get("task_id")
-        notify_target_id = kwargs.get("notify_target_id") or None
+        notification_rule_id = kwargs.get("notification_rule_id") or None
 
         context = current_tool_execution_context()
         user_id = context.user_id if context else None
@@ -322,12 +323,12 @@ class ManageScheduledTaskTool(BaseTool):
         try:
             if action == "list":
                 return await self._list(user_id, tenant_id)
-            if action == "list_notify_targets":
-                return await self._list_notify_targets(tenant_id, user_id)
-            if action in {"pause", "resume", "cancel", "view", "set_notify_target"}:
+            if action == "list_notify_rules":
+                return await self._list_notify_rules(tenant_id)
+            if action in {"pause", "resume", "cancel", "view", "set_notify_rule"}:
                 if not task_id:
                     labels = {"pause": "暂停", "resume": "恢复", "cancel": "取消",
-                              "view": "查看", "set_notify_target": "设置通知目标"}
+                              "view": "查看", "set_notify_rule": "设置通知规则"}
                     return {"success": False,
                             "error": f"请指定要{labels[action]}的任务ID（可用 list 查询）"}
                 # task_id 可由模型/用户提供：所有读写先用当前执行上下文的
@@ -344,9 +345,9 @@ class ManageScheduledTaskTool(BaseTool):
                     return await self._resume(task, tenant_id, user_id)
                 if action == "cancel":
                     return await self._cancel(task, tenant_id, user_id)
-                if action == "set_notify_target":
-                    return await self._set_notify_target(
-                        task, tenant_id, user_id, notify_target_id)
+                if action == "set_notify_rule":
+                    return await self._set_notify_rule(
+                        task, tenant_id, notification_rule_id)
                 return self._view(task)
             return {"success": False, "error": f"不支持的操作: {action}"}
         except ScheduledTaskBusyError:
@@ -385,19 +386,19 @@ class ManageScheduledTaskTool(BaseTool):
         }
 
     @staticmethod
-    async def _list_notify_targets(tenant_id: str, user_id: str) -> Dict[str, Any]:
-        """可选通知目标列表（评审 P2：创建对话内完成目标选择的数据来源）"""
-        targets = await asyncio.to_thread(
-            ScheduledTaskDB.list_visible_notify_targets, tenant_id, user_id)
-        if not targets:
-            return {"success": True, "targets": [],
-                    "message": "暂无可用通知目标：个人目标可在通知设置中绑定浏览器推送，"
-                               "租户级目标（群机器人/邮件）由租户管理员配置"}
-        lines = [f"- {t['target_id']}（{t['channel']}/{t['provider']}"
-                 + (f"，{t['configuration_display']}" if t.get("configuration_display") else "")
-                 + "）" for t in targets]
-        return {"success": True, "targets": targets,
-                "message": ("可选通知目标（创建/设置任务通知时传 target_id）："
+    async def _list_notify_rules(tenant_id: str) -> Dict[str, Any]:
+        """可选通知规则列表（评审 P2：创建对话内完成规则选择的数据来源）"""
+        rules = await asyncio.to_thread(
+            ScheduledTaskDB.list_visible_notify_rules, tenant_id)
+        if not rules:
+            return {"success": True, "rules": [],
+                    "message": "暂无可用通知规则：请租户管理员在通知规则页配置"
+                               "「定时任务通知」规则（含外发群机器人/邮箱目标）"}
+        lines = [f"- {r['rule_id']}（{r['name']}，外发目标 "
+                 + (", ".join(f"{t['channel']}/{t['provider']}" for t in r.get("targets") or [])
+                    or "无（仅站内信）") + "）" for r in rules]
+        return {"success": True, "rules": rules,
+                "message": ("可选通知规则（创建/设置任务通知时传 rule_id）："
                             + chr(10) + chr(10).join(lines))}
 
     @staticmethod
@@ -452,30 +453,31 @@ class ManageScheduledTaskTool(BaseTool):
                 "message": f"任务 {task['task_id']}（{task['name']}）已取消并删除（含任务会话）"}
 
     @staticmethod
-    async def _set_notify_target(task: Dict[str, Any], tenant_id: str, user_id: str,
-                                 notify_target_id: Optional[str]) -> Dict[str, Any]:
-        """设置/清除通知目标（F4 清空语义：不传 notify_target_id = 清除恢复默认）"""
-        if notify_target_id:
+    async def _set_notify_rule(task: Dict[str, Any], tenant_id: str,
+                               notification_rule_id: Optional[str]) -> Dict[str, Any]:
+        """设置/清除通知规则（F4 清空语义：不传 notification_rule_id = 清除恢复默认）"""
+        user_id = task["user_id"]
+        if notification_rule_id:
             if not await asyncio.to_thread(
-                    ScheduledTaskDB.notify_target_visible, notify_target_id,
-                    tenant_id=tenant_id, user_id=user_id):
+                    ScheduledTaskDB.notify_rule_visible, notification_rule_id,
+                    tenant_id=tenant_id):
                 return {"success": False,
-                        "error": "通知目标不存在或不可用；可选目标见任务视图的通知目标选择器"}
+                        "error": "通知规则不存在或不可用；可选规则见任务编辑的通知规则选择器"}
             updated = await asyncio.to_thread(
                 ScheduledTaskDB.update_definition, task["task_id"],
-                notification_target_id=notify_target_id,
+                notification_rule_id=notification_rule_id,
                 tenant_id=tenant_id, user_id=user_id)
             if updated:
                 return {"success": True,
-                        "message": f"任务 {task['name']} 的通知目标已设置为 {notify_target_id}"}
+                        "message": f"任务 {task['name']} 的通知规则已设置为 {notification_rule_id}"}
         else:
             await asyncio.to_thread(
                 ScheduledTaskDB.update_definition, task["task_id"],
-                clear_fields=["notification_target_id"],
+                clear_fields=["notification_rule_id"],
                 tenant_id=tenant_id, user_id=user_id)
             return {"success": True,
-                    "message": f"任务 {task['name']} 的通知目标已清除，恢复默认（站内信+个人偏好渠道）"}
-        return {"success": False, "error": "设置通知目标失败"}
+                    "message": f"任务 {task['name']} 的通知规则已清除，恢复默认（站内信+个人偏好渠道）"}
+        return {"success": False, "error": "设置通知规则失败"}
 
     @staticmethod
     def _view(task: Dict[str, Any]) -> Dict[str, Any]:

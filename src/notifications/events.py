@@ -13,9 +13,12 @@ class TerminalParameters(StrictDTO):
     session_title: str = Field(min_length=1,max_length=80)
     event_kind: Literal['completed','failed']
     # scheduled 终态扩展（Phase 3 复核，设计 §8.2）：任务标识/名称与目标
-    # 快照；chat 来源缺省（可选字段，白名单不放宽 extra 校验）
+    # 快照；chat 来源缺省（可选字段，白名单不放宽 extra 校验）。
+    # notify_rule_id 为任务选用通知规则的快照（规则优先，notify_target_id
+    # 仅存量任务兜底，两者互斥由生产者保证）
     task_id: str | None = Field(default=None, min_length=1, max_length=64)
     task_name: str | None = Field(default=None, min_length=1, max_length=80)
+    notify_rule_id: str | None = Field(default=None, min_length=1, max_length=128)
     notify_target_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
@@ -35,13 +38,14 @@ class WaitingInputParameters(StrictDTO):
 class PausedParameters(StrictDTO):
     """定时任务自动暂停通知参数（Phase 3，设计 §3.3/§8.1）。
 
-    notify_target_id 为事件生成时的目标快照（任务行当前
-    notification_target_id），后续任务改目标不影响已生成事件；
-    无目标时缺省，走用户个人偏好路由。
+    notify_rule_id / notify_target_id 为事件生成时的快照（规则优先，目标
+    仅存量任务兜底，取自任务行当前值），后续任务改绑定不影响已生成事件；
+    均无时缺省，走用户个人偏好路由。
     """
     task_name: str = Field(min_length=1,max_length=80)
     reason_label: str = Field(min_length=1,max_length=120)
     task_id: str = Field(min_length=1,max_length=64)
+    notify_rule_id: str | None = Field(default=None,min_length=1,max_length=128)
     notify_target_id: str | None = Field(default=None,min_length=1,max_length=128)
 
 
@@ -49,12 +53,13 @@ class NeedsActionParameters(StrictDTO):
     """scheduled 非提问类等待停车通知参数（Phase 3，设计 §8.1）。
 
     与 PausedParameters 同构（session_title/event_kind 供 Web Push 模板），
-    action_label 说明要做什么（设备确认/人工处理），目标快照同规则。"""
+    action_label 说明要做什么（设备确认/人工处理），绑定快照同规则。"""
     session_title: str = Field(min_length=1,max_length=80)
     event_kind: Literal['needs_action']
     task_name: str = Field(min_length=1,max_length=80)
     task_id: str = Field(min_length=1,max_length=64)
     action_label: str = Field(min_length=1,max_length=120)
+    notify_rule_id: str | None = Field(default=None,min_length=1,max_length=128)
     notify_target_id: str | None = Field(default=None,min_length=1,max_length=128)
 
 

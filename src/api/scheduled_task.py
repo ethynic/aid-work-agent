@@ -243,22 +243,22 @@ class UpdateDefinitionRequest(BaseModel):
     name: Optional[str] = Field(None, description="任务名称")
     task_prompt: Optional[str] = Field(None, description="自包含任务定义")
     attachments: Optional[List[Dict[str, Any]]] = Field(None, description="受权资源引用（file_id 等）")
-    notification_target_id: Optional[str] = Field(None, description="通知目标 ID")
-    clear_notification_target: bool = Field(
-        False, description="显式清除通知目标（恢复默认：站内信+个人偏好渠道）")
+    notification_rule_id: Optional[str] = Field(None, description="通知规则 ID（scheduled.task 规则）")
+    clear_notification_rule: bool = Field(
+        False, description="显式清除通知规则（恢复默认：站内信+个人偏好渠道）")
 
 
 @router.put("/{task_id}")
 async def update_task(request: Request, task_id: str, body: UpdateDefinitionRequest):
-    """编辑任务内容/附件/通知目标（F4：clear_notification_target=true 显式清空）"""
+    """编辑任务内容/附件/通知规则（F4：clear_notification_rule=true 显式清空）"""
     identity = await _request_identity(request)
     user_id, tenant_id = identity
     await _owned_task(request, task_id, identity)
-    clear_fields = ["notification_target_id"] if body.clear_notification_target else None
-    if body.clear_notification_target and body.notification_target_id:
+    clear_fields = ["notification_rule_id"] if body.clear_notification_rule else None
+    if body.clear_notification_rule and body.notification_rule_id:
         raise HTTPException(
             status_code=422,
-            detail="notification_target_id 与 clear_notification_target 互斥")
+            detail="notification_rule_id 与 clear_notification_rule 互斥")
     if body.name is not None and not body.name.strip():
         raise HTTPException(status_code=422, detail="任务名称不能为空白")
     if body.task_prompt is not None and not body.task_prompt.strip():
@@ -268,16 +268,16 @@ async def update_task(request: Request, task_id: str, body: UpdateDefinitionRequ
             body.attachments = validate_task_attachments(body.attachments)
         except ScheduleConfigError as e:
             raise HTTPException(status_code=422, detail=str(e))
-    if body.notification_target_id and not await asyncio.to_thread(
-            ScheduledTaskDB.notify_target_visible, body.notification_target_id,
-            tenant_id=tenant_id, user_id=user_id):
-        # 归属校验（设计 §3.3/§8.3 同口径）：只允许本人个人/本租户租户级目标
-        raise HTTPException(status_code=422, detail="通知目标不存在或不可用")
+    if body.notification_rule_id and not await asyncio.to_thread(
+            ScheduledTaskDB.notify_rule_visible, body.notification_rule_id,
+            tenant_id=tenant_id):
+        # 归属校验（写侧 fail-closed）：只允许本租户 enabled 的 scheduled.task 规则
+        raise HTTPException(status_code=422, detail="通知规则不存在或不可用")
     updated = await asyncio.to_thread(
         ScheduledTaskDB.update_definition, task_id,
         name=body.name, task_prompt=body.task_prompt,
         attachments=body.attachments,
-        notification_target_id=body.notification_target_id,
+        notification_rule_id=body.notification_rule_id,
         clear_fields=clear_fields,
         tenant_id=tenant_id, user_id=user_id)
     if not updated:

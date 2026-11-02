@@ -326,6 +326,9 @@ class TestPauseForOccurrence:
         assert "status = 'active'" in update_sql
         assert "pending_occurrence_key = %s" in update_sql
         assert update_params == ("credit_blocked", "sched_abc123", "occ-1")
+        # RETURNING 带通知绑定快照列（规则优先，旧目标兜底，供 notify 快照）
+        assert "notification_rule_id" in update_sql
+        assert "notification_target_id" in update_sql
         # 同事务通知（RETURNING 行直传，通知键含 occurrence）
         mock_publish.assert_called_once()
         assert mock_publish.call_args.args[2] == "积分额度不足"

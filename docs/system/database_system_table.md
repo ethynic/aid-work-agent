@@ -502,7 +502,8 @@ chunks_vec（向量）      chunks_fts（全文搜索）
 - `schedule_type` — `daily` / `weekly` / `monthly` / `interval` / `once`
 - `cron_expression` / `interval_seconds` / `run_at` — 调度规则（`run_at` 为 once 专用）
 - `session_id` — UNIQUE，任务专属会话（chat_sessions 行，metadata 带 `scheduled_task` 标记），执行结果的存储容器
-- `notification_target_id` — 可选，`notification_targets` 引用（事件生成时快照进参数）
+- `notification_target_id` — 旧列，`notification_targets` 引用（存量任务直选渠道目标；发布侧继续快照 `notify_target_id` 兜底，写入口已下线）
+- `notification_rule_id` — 可选，`notification_rules` 引用（`scheduled.task` 聚合规则，任务级选用；事件生成时快照 `notify_rule_id` 进参数，展开侧按规则级 targets 投递）
 - `status` — `active` / `paused` / `completed` / `expired`
 - `pause_reason` — `credit_blocked` / `profile_forbidden` / `tenant_unavailable` / `definition_invalid` / `submit_conflict` / `submit_rejected` / `interrupted`
 - `next_due_at` — 周期依据（认领时推进；once 认领后置 NULL）

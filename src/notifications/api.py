@@ -166,6 +166,13 @@ def create_router(config=None, repository=None, user_loader=None):
         enabled()
         return {'targets': repository.selectable_targets(current)}
 
+    @router.get('/task-rules')
+    def task_rules(current: Subject = Depends(subject)):
+        """定时任务可选用通知规则（普通用户只读）：本租户 enabled 的
+        scheduled.task 规则 + 渠道目标脱敏摘要，供任务编辑弹窗选择。"""
+        enabled()
+        return {'rules': repository.list_task_rules(current)}
+
     @router.get('/task-deliveries')
     def task_deliveries(task_id: str, current: Subject = Depends(subject)):
         """任务视图投递状态：该任务通知事件的投递账。"""

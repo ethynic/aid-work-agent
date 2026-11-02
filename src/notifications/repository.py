@@ -107,10 +107,19 @@ PRESET_RULES = (
     ('lead.captured', '留资通知', {'scope': 'channel'}, 'kf_assignee'),
 )
 
-# 规则引擎可配置事件白名单（租户管理员 CRUD 边界；task.* 用户任务事件不进规则层）。
-RULE_EVENT_TYPES = frozenset({item[0] for item in PRESET_RULES})
+# 规则引擎可配置事件白名单（租户管理员 CRUD 边界；task.* 用户任务事件不进
+# 事件级规则匹配）。scheduled.task 为规则专用聚合类型：仅进创建白名单，不进
+# PRESET_RULES（不预置）、不注册进 EVENTS 发布注册表、不参与 _expand_rule_event
+# 常规匹配——由具体任务选用后经参数快照 notify_rule_id 在 expand 用户级路径路由
+# （仅被任务选定时生效，不对全租户任务自动生效）。
+SCHEDULED_TASK_RULE_TYPE = 'scheduled.task'
+RULE_EVENT_TYPES = frozenset({item[0] for item in PRESET_RULES} | {SCHEDULED_TASK_RULE_TYPE})
 
-RULE_RECIPIENT_MODES = frozenset({'tenant_admins', 'kf_assignee'})
+RULE_RECIPIENT_MODES = frozenset({'tenant_admins', 'kf_assignee', 'task_owner'})
+
+# scheduled.task 规则 conditions.events 值域：4 类任务事件（缺省=全部）
+SCHEDULED_TASK_RULE_EVENTS = ('task.completed', 'task.failed', 'task.paused',
+                              'task.needs_action')
 
 
 class NotificationRepository:
@@ -277,6 +286,31 @@ class NotificationRepository:
                  'tenant:' + subject.tenant_id if subject.tenant_id else ''))
             return [public_target(row) for row in cursor.fetchall()]
 
+    def list_task_rules(self, subject):
+        """定时任务可选用通知规则（普通用户只读）：本租户 enabled 的
+        scheduled.task 规则 + 规则级渠道目标脱敏摘要。规则的创建与外发
+        目标配置在租户管理员规则页；此处仅供任务编辑弹窗选择，仅返回
+        rule_id/name/conditions 与目标展示字段，不含凭据原文。"""
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            self.guard(cursor, subject)
+            if subject.tenant_id is None:
+                raise NotificationError('NOTIFICATION_TENANT_REQUIRED', 400)
+            cursor.execute('''SELECT rule_id,name,conditions FROM notification_rules
+                WHERE tenant_id=%s AND event_type=%s AND enabled
+                ORDER BY created_at,rule_id''',
+                (subject.tenant_id, SCHEDULED_TASK_RULE_TYPE))
+            rules = cursor.fetchall()
+            result = []
+            for rule in rules:
+                cursor.execute('''SELECT * FROM notification_targets
+                    WHERE rule_id=%s AND state='active' ORDER BY created_at''',
+                    (rule['rule_id'],))
+                result.append({'rule_id': rule['rule_id'], 'name': rule['name'],
+                               'conditions': rule['conditions'] if isinstance(rule['conditions'], dict) else {},
+                               'targets': [public_target(row) for row in cursor.fetchall()]})
+            return result
+
     def task_event_deliveries(self, subject, task_id):
         """任务视图投递状态（Phase 3，设计 §8.4）：该任务全部通知事件的
         投递账（消息事件类型/时间 + 各目标 state/attempts/异常），供任务
@@ -355,9 +389,22 @@ class NotificationRepository:
         """规则条件白名单校验，返回规范化 conditions。
 
         lead.captured 支持 channel（全渠道）与 kf_config（指定客服账号）两层；
-        其余事件无条件（{}）。未知键一律拒绝，防止前端冗余字段静默失效。"""
+        scheduled.task 支持 {events}（4 类任务事件子集，缺省=全部）；其余事件
+        无条件（{}）。未知键一律拒绝，防止前端冗余字段静默失效。"""
         if not isinstance(conditions, dict):
             raise NotificationError('NOTIFICATION_RULE_CONDITIONS_INVALID', 400)
+        if event_type == SCHEDULED_TASK_RULE_TYPE:
+            if set(conditions) - {'events'}:
+                raise NotificationError('NOTIFICATION_RULE_CONDITIONS_INVALID', 400)
+            events = conditions.get('events')
+            if events is None or events == []:
+                return {}
+            if (not isinstance(events, list)
+                    or not all(isinstance(item, str) and item in SCHEDULED_TASK_RULE_EVENTS
+                               for item in events)):
+                raise NotificationError('NOTIFICATION_RULE_CONDITIONS_INVALID', 400)
+            # 去重保序（值域 4 项，去重后自然 1-4 项）
+            return {'events': list(dict.fromkeys(events))}
         if event_type != 'lead.captured':
             if conditions not in ({}, None):
                 raise NotificationError('NOTIFICATION_RULE_CONDITIONS_INVALID', 400)
@@ -376,6 +423,18 @@ class NotificationRepository:
                 or not all(isinstance(item, str) and 1 <= len(item) <= 64 for item in ids)):
             raise NotificationError('NOTIFICATION_RULE_CONDITIONS_INVALID', 400)
         return {'scope': 'kf_config', 'kf_config_ids': list(dict.fromkeys(ids))}
+
+    @staticmethod
+    def _validate_rule_recipient_mode(event_type, recipient_mode):
+        """接收人模式按事件类型校验：scheduled.task 固定 task_owner（仅占位
+        枚举——站内信恒发任务属主，规则只决定外发渠道与事件过滤，不参与
+        _resolve_rule_recipients 接收人解析）；其余事件沿用租户管理员/
+        线索归属员工两枚举，task_owner 不落到事件级规则。"""
+        if event_type == SCHEDULED_TASK_RULE_TYPE:
+            if recipient_mode != 'task_owner':
+                raise NotificationError('NOTIFICATION_RULE_RECIPIENT_INVALID', 400)
+        elif recipient_mode not in RULE_RECIPIENT_MODES or recipient_mode == 'task_owner':
+            raise NotificationError('NOTIFICATION_RULE_RECIPIENT_INVALID', 400)
 
     def _validate_rule_kf_configs(self, cursor, tenant_id, conditions):
         """kf_config 层条件逐个校验归属本租户：允许渠道 config_id（渠道层，
@@ -447,8 +506,7 @@ class NotificationRepository:
             name = (body.name or '').strip()
             if not 1 <= len(name) <= 64:
                 raise NotificationError('NOTIFICATION_RULE_NAME_INVALID', 400)
-            if body.recipient_mode not in RULE_RECIPIENT_MODES:
-                raise NotificationError('NOTIFICATION_RULE_RECIPIENT_INVALID', 400)
+            self._validate_rule_recipient_mode(body.event_type, body.recipient_mode)
             conditions = self._validate_rule_conditions(body.event_type, body.conditions or {})
             if conditions.get('scope') == 'kf_config':
                 self._validate_rule_kf_configs(cursor, subject.tenant_id, conditions)
@@ -498,8 +556,7 @@ class NotificationRepository:
                 updates.append('conditions=%s::jsonb')
                 params.append(json.dumps(conditions))
             if body.recipient_mode is not None:
-                if body.recipient_mode not in RULE_RECIPIENT_MODES:
-                    raise NotificationError('NOTIFICATION_RULE_RECIPIENT_INVALID', 400)
+                self._validate_rule_recipient_mode(rule['event_type'], body.recipient_mode)
                 updates.append('recipient_mode=%s')
                 params.append(body.recipient_mode)
             if not updates:
@@ -946,6 +1003,53 @@ class NotificationRepository:
                           'recipients':recipient_ids,'targets':target_rows})
         return 'expanded', route
 
+    def _append_delivery(self, cursor, message, target, route):
+        """渲染并落一条外发投递行（payload 上限、ON CONFLICT DO NOTHING、
+        route 留痕）；适配器不可用或渲染失败不抛错。偏好路由、任务级目标
+        快照与任务级规则快照共用同一渲染与落库语义。"""
+        adapter = self.registry.get(target['channel'],target['provider'])
+        if not adapter or not adapter.available() or message['schema_version'] not in adapter.capabilities.notification_schema_versions:
+            return
+        delivery_state,error = 'pending',None
+        try:
+            payload = adapter.render(message, target)
+            if len(json.dumps(payload,ensure_ascii=False).encode())>adapter.capabilities.payload_limit:
+                raise ValueError('NOTIFICATION_PAYLOAD_TOO_LARGE')
+        except Exception as e:
+            # 不打异常体：错误文本可能携带消息参数（含联系方式明文）
+            logger.warning('后端日志：通知渲染失败 notification_id={} target_id={} 异常类型={}',
+                           message['notification_id'], target['target_id'], type(e).__name__)
+            payload,delivery_state,error = {},'failed','render_failure'
+        cursor.execute('''INSERT INTO notification_deliveries
+            (delivery_id,notification_id,target_id,binding_version,rendered_encrypted,state,error_class)
+            VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(notification_id,target_id) DO NOTHING''',
+            ('delivery_'+uuid.uuid4().hex,message['notification_id'],target['target_id'],
+             target['binding_version'],protected(payload),delivery_state,error))
+        route.append({'target_id':target['target_id'],'channel':target['channel'],
+                      'provider':target['provider'],'binding_version':target['binding_version']})
+
+    def _expand_task_rule_snapshot(self, cursor, message, rule_id, route):
+        """任务级规则快照展开（定时任务接入通知规则）：按快照规则取规则级
+        targets 投递（替代偏好路由，与 notify_target_id 快照同语义，跳过偏好
+        门控）。规则已删除/非本租户、已停用或事件被 conditions.events 过滤时
+        仅 route 留痕 skipped——任务已显式选规则，不回退偏好路由。"""
+        cursor.execute('''SELECT rule_id,name,enabled,conditions FROM notification_rules
+            WHERE rule_id=%s AND tenant_id=%s''', (rule_id, message['tenant_id']))
+        rule = cursor.fetchone()
+        if not rule:
+            route.append({'rule_id': rule_id, 'skipped': 'rule_not_found'})
+            return
+        if not rule['enabled']:
+            route.append({'rule_id': rule_id, 'skipped': 'rule_disabled'})
+            return
+        conditions = rule['conditions'] if isinstance(rule['conditions'], dict) else {}
+        events = conditions.get('events') or []
+        if events and message['event_type'] not in events:
+            route.append({'rule_id': rule_id, 'skipped': 'rule_event_filtered'})
+            return
+        for target in self._rule_event_targets(cursor, rule, message['tenant_id']):
+            self._append_delivery(cursor, message, target, route)
+
     def expand(self):
         with self.connection_factory() as conn:
             cursor = conn.cursor()
@@ -995,19 +1099,31 @@ class NotificationRepository:
                                 tenant_rule_ids = [row['rule_id'] for row in cursor.fetchall()]
                                 if not tenant_rule_ids:
                                     include_tenant_targets = False
-                        # 任务级目标快照（Phase 3，设计 §3.3/§8.2）：事件参数含
-                        # notify_target_id 时**替代**默认偏好路由——个人偏好渠道
-                        # 不再重复投递（评审修正：此前双路由重复打扰，且显式个人
-                        # 目标被 prepare_send 偏好门控拦截）；站内信恒保留。
-                        snapshot_target_id = (message['parameters'] or {}).get('notify_target_id') \
+                        # 任务级规则快照（定时任务接入通知规则）：事件参数含
+                        # notify_rule_id 时按任务选用的通知规则路由外发——取
+                        # 规则级 targets 投递（替代偏好路由，与目标快照同为
+                        # 显式选择语义，跳过偏好门控）；规则停用/删除或事件被
+                        # conditions.events 过滤时 route 留痕 skipped，不回退
+                        # 偏好路由（任务已显式选规则，静默回退会造成通知去向
+                        # 与用户预期不符）。站内信恒保留。
+                        snapshot_rule_id = (message['parameters'] or {}).get('notify_rule_id') \
                             if isinstance(message['parameters'], dict) else None
-                        # 租户级事件外发 target 限定启用规则的规则级 target；
-                        # 测试投递不限（具体目标由 resource_ref 资格检查锁定）。
-                        if message['policy_key'] == 'tenant_admin_event':
-                            tenant_cond, tenant_cond_params = 't.rule_id=ANY(%s)', (tenant_rule_ids,)
+                        if snapshot_rule_id:
+                            self._expand_task_rule_snapshot(cursor, message, snapshot_rule_id, route)
                         else:
-                            tenant_cond, tenant_cond_params = 'TRUE', ()
-                        cursor.execute('''SELECT t.*,p.enabled AS preference_enabled,p.enabled_since AS preference_since,
+                            # 任务级目标快照（Phase 3，设计 §3.3/§8.2）：事件参数含
+                            # notify_target_id 时**替代**默认偏好路由——个人偏好渠道
+                            # 不再重复投递（评审修正：此前双路由重复打扰，且显式个人
+                            # 目标被 prepare_send 偏好门控拦截）；站内信恒保留。
+                            snapshot_target_id = (message['parameters'] or {}).get('notify_target_id') \
+                                if isinstance(message['parameters'], dict) else None
+                            # 租户级事件外发 target 限定启用规则的规则级 target；
+                            # 测试投递不限（具体目标由 resource_ref 资格检查锁定）。
+                            if message['policy_key'] == 'tenant_admin_event':
+                                tenant_cond, tenant_cond_params = 't.rule_id=ANY(%s)', (tenant_rule_ids,)
+                            else:
+                                tenant_cond, tenant_cond_params = 'TRUE', ()
+                            cursor.execute('''SELECT t.*,p.enabled AS preference_enabled,p.enabled_since AS preference_since,
                                 p.event_types FROM notification_targets t LEFT JOIN notification_preferences p
                                 ON p.scope_key=t.scope_key AND p.recipient_user_id=t.recipient_user_id
                                 AND p.channel=t.channel AND p.provider=t.provider AND p.category=%s
@@ -1018,65 +1134,46 @@ class NotificationRepository:
                             ((message['category'], snapshot_target_id) if snapshot_target_id
                              else (message['category'], subject.scope_key, subject.user_id,
                                    *tenant_cond_params, params_tenant, *tenant_cond_params)))
-                        for target in cursor.fetchall():
-                            adapter = self.registry.get(target['channel'],target['provider'])
-                            if not adapter or not adapter.available() or message['schema_version'] not in adapter.capabilities.notification_schema_versions:
-                                continue
-                            if message['policy_key'] == 'explicit_test_target':
-                                ref = message['resource_ref']
-                                eligible = target['target_id'] == ref['id'] and target['binding_version'] == ref['binding_version']
-                            elif snapshot_target_id is not None:
-                                # 任务级快照目标（Phase 3）：显式选择替代偏好路由
-                                # （设计 §3.3/§8.2）——不做偏好门控、事件类型集合
-                                # 与启用时序检查（受理后才启用的目标在长任务终态
-                                # 必须可达；enabled_since<=accepted 是普通聊天默认
-                                # 路由的门槛，评审复现误伤显式选择）；归属与当前
-                                # 有效性由查询 WHERE（state='active'+target_id）保证。
-                                eligible = True
-                            elif target['recipient_user_id'] is None:
-                                # 租户级 target 无偏好行，不参与偏好门控。
-                                eligible = (message['policy_key'] == 'tenant_admin_event'
-                                    and target['enabled_since'] <= message['accepted_at'])
-                            else:
-                                eligible = (target['preference_enabled'] and target['preference_since'] is not None
-                                    and target['preference_since'] <= message['accepted_at']
-                                    and target['enabled_since'] <= message['accepted_at']
-                                    and message['event_type'] in _effective_event_types(target['event_types']))
-                            if not eligible:
-                                continue
-                            if message['policy_key'] == 'tenant_admin_event' and target['recipient_user_id'] is None:
-                                # 租户级事件每个管理员各有一条 message，同一租户级 target
-                                # 只需投递一次：按 event_key 查已有投递，命中则跳过
-                                cursor.execute('''SELECT 1 FROM notification_deliveries d
-                                    JOIN notification_messages m ON m.notification_id=d.notification_id
-                                    WHERE d.target_id=%s AND m.event_key=%s LIMIT 1''',
-                                    (target['target_id'],message['event_key']))
-                                if cursor.fetchone():
+                            for target in cursor.fetchall():
+                                if message['policy_key'] == 'explicit_test_target':
+                                    ref = message['resource_ref']
+                                    eligible = target['target_id'] == ref['id'] and target['binding_version'] == ref['binding_version']
+                                elif snapshot_target_id is not None:
+                                    # 任务级快照目标（Phase 3）：显式选择替代偏好路由
+                                    # （设计 §3.3/§8.2）——不做偏好门控、事件类型集合
+                                    # 与启用时序检查（受理后才启用的目标在长任务终态
+                                    # 必须可达；enabled_since<=accepted 是普通聊天默认
+                                    # 路由的门槛，评审复现误伤显式选择）；归属与当前
+                                    # 有效性由查询 WHERE（state='active'+target_id）保证。
+                                    eligible = True
+                                elif target['recipient_user_id'] is None:
+                                    # 租户级 target 无偏好行，不参与偏好门控。
+                                    eligible = (message['policy_key'] == 'tenant_admin_event'
+                                        and target['enabled_since'] <= message['accepted_at'])
+                                else:
+                                    eligible = (target['preference_enabled'] and target['preference_since'] is not None
+                                        and target['preference_since'] <= message['accepted_at']
+                                        and target['enabled_since'] <= message['accepted_at']
+                                        and message['event_type'] in _effective_event_types(target['event_types']))
+                                if not eligible:
                                     continue
-                            delivery_state,error = 'pending',None
-                            try:
-                                payload = adapter.render(message, target)
-                                if len(json.dumps(payload,ensure_ascii=False).encode())>adapter.capabilities.payload_limit:
-                                    raise ValueError('NOTIFICATION_PAYLOAD_TOO_LARGE')
-                            except Exception as e:
-                                # 不打异常体：错误文本可能携带消息参数（含联系方式明文）
-                                logger.warning('后端日志：通知渲染失败 notification_id={} target_id={} 异常类型={}',
-                                               message['notification_id'], target['target_id'], type(e).__name__)
-                                payload,delivery_state,error = {},'failed','render_failure'
-                            cursor.execute('''INSERT INTO notification_deliveries
-                                (delivery_id,notification_id,target_id,binding_version,rendered_encrypted,state,error_class)
-                                VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(notification_id,target_id) DO NOTHING''',
-                                ('delivery_'+uuid.uuid4().hex,message['notification_id'],target['target_id'],
-                                 target['binding_version'],protected(payload),delivery_state,error))
-                            route.append({'target_id':target['target_id'],'channel':target['channel'],
-                                          'provider':target['provider'],'binding_version':target['binding_version']})
-                        # 快照目标不存在（已硬删/换租户，主查询未命中）时在路由
-                        # 快照留痕；存在时主循环已按快照语义完成投递（替代偏好
-                        # 路由），此处不再二次展开。
-                        if snapshot_target_id is not None and not any(
-                                item.get('target_id') == snapshot_target_id for item in route):
-                            route.append({'target_id':snapshot_target_id,
-                                          'skipped':'target_not_found'})
+                                if message['policy_key'] == 'tenant_admin_event' and target['recipient_user_id'] is None:
+                                    # 租户级事件每个管理员各有一条 message，同一租户级 target
+                                    # 只需投递一次：按 event_key 查已有投递，命中则跳过
+                                    cursor.execute('''SELECT 1 FROM notification_deliveries d
+                                        JOIN notification_messages m ON m.notification_id=d.notification_id
+                                        WHERE d.target_id=%s AND m.event_key=%s LIMIT 1''',
+                                        (target['target_id'],message['event_key']))
+                                    if cursor.fetchone():
+                                        continue
+                                self._append_delivery(cursor, message, target, route)
+                            # 快照目标不存在（已硬删/换租户，主查询未命中）时在路由
+                            # 快照留痕；存在时主循环已按快照语义完成投递（替代偏好
+                            # 路由），此处不再二次展开。
+                            if snapshot_target_id is not None and not any(
+                                    item.get('target_id') == snapshot_target_id for item in route):
+                                route.append({'target_id':snapshot_target_id,
+                                              'skipped':'target_not_found'})
                 cursor.execute('''UPDATE notification_messages SET expansion_state=%s,route_snapshot=%s::jsonb
                     WHERE notification_id=%s''', (state,json.dumps(route),message['notification_id']))
             conn.commit()

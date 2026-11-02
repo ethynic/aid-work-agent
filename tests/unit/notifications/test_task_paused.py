@@ -44,6 +44,15 @@ class TestPausedParameters:
             "task_name": "每日日报", "reason_label": "积分额度不足",
             "task_id": "sched_abc123"}).notify_target_id is None
 
+    def test_valid_parameters_with_optional_rule(self):
+        value = PausedParameters.model_validate({
+            "task_name": "每日日报", "reason_label": "积分额度不足",
+            "task_id": "sched_abc123", "notify_rule_id": "rule_1"})
+        assert value.model_dump()["notify_rule_id"] == "rule_1"
+        assert PausedParameters.model_validate({
+            "task_name": "每日日报", "reason_label": "积分额度不足",
+            "task_id": "sched_abc123"}).notify_rule_id is None
+
     @pytest.mark.parametrize("payload", [
         {"task_name": "", "reason_label": "x", "task_id": "t"},        # 空名称
         {"task_name": "x" * 81, "reason_label": "x", "task_id": "t"},  # 名称超 80
@@ -51,6 +60,8 @@ class TestPausedParameters:
         {"task_name": "t", "reason_label": "x", "task_id": ""},        # 空 task_id
         {"task_name": "t", "reason_label": "x", "task_id": "t",
          "notify_target_id": "y" * 129},                                # 目标超 128
+        {"task_name": "t", "reason_label": "x", "task_id": "t",
+         "notify_rule_id": "y" * 129},                                  # 规则超 128
         {"task_name": "t", "reason_label": "x"},                        # 缺 task_id
     ])
     def test_invalid_parameters_rejected(self, payload):
@@ -152,6 +163,36 @@ class TestPublishTaskPaused:
         kwargs = mock_publish.call_args.kwargs
         assert "notify_target_id" not in kwargs["parameters"]
         assert kwargs["event_key"] == "paused:sched_abc123:interrupted:attempt:2"
+
+    @patch("src.notifications.events.publish_in_tx")
+    @patch("src.scheduler.notify.get_db_connection")
+    def test_rule_snapshot_preferred_over_legacy_target(self, mock_conn, mock_publish):
+        """定时任务接入通知规则：任务行同时有规则与旧目标时只快照 notify_rule_id
+        （规则优先，旧列仅无规则的存量任务兜底）。"""
+        mock_publish.return_value = "ref"
+        mock_conn.return_value.__enter__.return_value = _capturing_conn()
+        task = dict(_TASK, notification_rule_id="rule_9")
+
+        publish_task_paused(task, "积分额度不足", occurrence_key="k1",
+                            pause_reason="credit_blocked")
+
+        kwargs = mock_publish.call_args.kwargs
+        assert kwargs["parameters"]["notify_rule_id"] == "rule_9"
+        assert "notify_target_id" not in kwargs["parameters"]
+
+    @patch("src.notifications.events.publish_in_tx")
+    @patch("src.scheduler.notify.get_db_connection")
+    def test_no_binding_when_both_unset(self, mock_conn, mock_publish):
+        """无规则且无旧目标：不带任何快照字段（走个人偏好路由）"""
+        mock_publish.return_value = "ref"
+        mock_conn.return_value.__enter__.return_value = _capturing_conn()
+        task = dict(_TASK, notification_target_id=None)
+
+        publish_task_paused(task, "积分额度不足", pause_reason="credit_blocked")
+
+        kwargs = mock_publish.call_args.kwargs
+        assert "notify_rule_id" not in kwargs["parameters"]
+        assert "notify_target_id" not in kwargs["parameters"]
 
     @patch("src.notifications.events.publish_in_tx")
     @patch("src.scheduler.notify.get_db_connection")

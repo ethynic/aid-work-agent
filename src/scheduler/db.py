@@ -77,7 +77,7 @@ class ScheduledTaskDB:
                schedule_type: str, cron_expression: str = None,
                interval_seconds: int = None, run_at=None, attachments=None,
                profile_id: str = "main", instance_id: str = None,
-               subagent_id: str = None, notification_target_id: str = None,
+               subagent_id: str = None, notification_rule_id: str = None,
                next_due_at=None, max_active: int = None) -> Dict[str, Any]:
         """创建定时任务（同事务创建任务专属会话）。
 
@@ -119,14 +119,14 @@ class ScheduledTaskDB:
                     INSERT INTO scheduled_tasks
                     (task_id, tenant_id, user_id, name, task_prompt, attachments,
                      profile_id, instance_id, schedule_type, cron_expression,
-                     interval_seconds, run_at, session_id, notification_target_id,
+                     interval_seconds, run_at, session_id, notification_rule_id,
                      status, next_due_at)
                     VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s,
                             %s, %s, 'active', %s)
                 """, (task_id, tenant_id, user_id, name, task_prompt,
                       json.dumps(attachments or []),
                       profile_id, instance_id, schedule_type, cron_expression,
-                      interval_seconds, run_at, session_id, notification_target_id,
+                      interval_seconds, run_at, session_id, notification_rule_id,
                       next_due_at))
                 cursor.execute(
                     "SELECT * FROM scheduled_tasks WHERE task_id = %s", (task_id,))
@@ -205,59 +205,63 @@ class ScheduledTaskDB:
             return row["cnt"] if row else 0
 
     @staticmethod
-    def list_visible_notify_targets(tenant_id: str, user_id: str) -> List[Dict[str, Any]]:
-        """用户可选通知目标列表（Phase 4，与 notify_target_visible 同口径）：
-        本人个人目标（active）+ 本租户租户级目标（active）；返回展示字段
-        （configuration_display 走通知模块脱敏回显），不含凭据原文。"""
+    def list_visible_notify_rules(tenant_id: str) -> List[Dict[str, Any]]:
+        """用户可选通知规则列表（与 notify_rule_visible 同口径）：本租户
+        enabled 的 scheduled.task 规则 + 规则级渠道目标脱敏摘要（configuration_display
+        走通知模块脱敏回显），不含凭据原文。规则的配置在租户管理员规则页。"""
         from src.notifications.repository import mask_tenant_configuration, unprotect
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            scope = f"tenant:{tenant_id}" if tenant_id else "global"
-            cursor.execute("""SELECT target_id, channel, provider, state,
-                    configuration_encrypted FROM notification_targets
-                WHERE state='active' AND (
-                    (scope_key=%s AND recipient_user_id=%s)
-                    OR (recipient_user_id IS NULL AND scope_key=%s))
-                ORDER BY recipient_user_id NULLS FIRST, created_at DESC""",
-                (scope, user_id, scope))
-            targets = []
-            for row in cursor.fetchall():
-                item = {"target_id": row["target_id"], "channel": row["channel"],
-                        "provider": row["provider"], "state": row["state"]}
-                try:
-                    display = mask_tenant_configuration(
-                        row["channel"], unprotect(row["configuration_encrypted"]))
-                    if display:
-                        item["configuration_display"] = display
-                except Exception:
-                    pass
-                targets.append(item)
-            return targets
+            cursor.execute("""SELECT rule_id, name, conditions FROM notification_rules
+                WHERE tenant_id=%s AND event_type='scheduled.task' AND enabled
+                ORDER BY created_at, rule_id""", (tenant_id,))
+            rules = []
+            for rule in cursor.fetchall():
+                item = {"rule_id": rule["rule_id"], "name": rule["name"],
+                        "conditions": rule["conditions"] if isinstance(rule["conditions"], dict) else {}}
+                cursor.execute("""SELECT target_id, channel, provider,
+                        configuration_encrypted FROM notification_targets
+                    WHERE rule_id=%s AND state='active' ORDER BY created_at""",
+                    (rule["rule_id"],))
+                targets = []
+                for target in cursor.fetchall():
+                    entry = {"target_id": target["target_id"], "channel": target["channel"],
+                             "provider": target["provider"]}
+                    try:
+                        display = mask_tenant_configuration(
+                            target["channel"], unprotect(target["configuration_encrypted"]))
+                        if display:
+                            entry["configuration_display"] = display
+                    except Exception:
+                        pass
+                    targets.append(entry)
+                item["targets"] = targets
+                rules.append(item)
+            return rules
 
     @staticmethod
-    def notify_target_visible(target_id: str, *, tenant_id: Optional[str],
-                              user_id: str) -> bool:
-        """通知目标是否为该用户可选（设计 §3.3/§8.3，与 selectable_targets
-        同口径）：本人个人目标（active）或本租户租户级目标（active）。
+    def notify_rule_visible(rule_id: str, *, tenant_id: Optional[str]) -> bool:
+        """通知规则是否为该租户任务可选：本租户 enabled 的 scheduled.task
+        规则（规则由租户管理员配置，租户内任务均可选用）。
 
-        创建/编辑/设置通知目标时校验——外发展开按 target_id 快照路由，
-        目标归属必须写入口径（写侧校验），不得依赖投递侧兜底：否则引用
-        他租户/他人目标 ID 会把任务通知投递到不可达目标之外的他租户渠道。
-        租户缺失（platform_admin 未带 X-Tenant-Id）fail-closed 拒绝。"""
-        if not target_id or not isinstance(target_id, str) or len(target_id) > 128:
+        创建/编辑/设置通知规则时校验——外发展开按 notify_rule_id 快照路由
+        到规则级目标，归属必须写入口径（写侧校验），不得依赖投递侧兜底：
+        否则引用他租户规则 ID 会把任务通知投递到其他租户的渠道。租户缺失
+        （platform_admin 未带 X-Tenant-Id）fail-closed 拒绝。"""
+        if not rule_id or not isinstance(rule_id, str) or len(rule_id) > 128:
             return False
-        if not tenant_id or not user_id:
+        if not tenant_id:
             return False
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT 1 FROM notification_targets
-                WHERE target_id = %s
-                  AND state = 'active'
-                  AND scope_key = %s
-                  AND (recipient_user_id = %s OR recipient_user_id IS NULL)
+                SELECT 1 FROM notification_rules
+                WHERE rule_id = %s
+                  AND tenant_id = %s
+                  AND event_type = 'scheduled.task'
+                  AND enabled
                 LIMIT 1
-            """, (target_id, 'tenant:' + tenant_id, user_id))
+            """, (rule_id, tenant_id))
             return cursor.fetchone() is not None
 
     # ==================== 到期认领与 pending 交接 ====================
@@ -319,7 +323,7 @@ class ScheduledTaskDB:
             cursor.execute("""
                 SELECT r.runner_id, r.session_id, r.attempt,
                        t.task_id, t.tenant_id, t.user_id, t.name,
-                       t.notification_target_id, t.recovery_reset_at
+                       t.notification_rule_id, t.recovery_reset_at
                 FROM agent_runners r
                 JOIN scheduled_tasks t ON t.session_id = r.session_id
                 WHERE r.source = 'scheduled'
@@ -605,7 +609,8 @@ class ScheduledTaskDB:
                 WHERE task_id = %s
                   AND status = 'active'
                   AND pending_occurrence_key = %s
-                RETURNING task_id, tenant_id, user_id, name, notification_target_id
+                RETURNING task_id, tenant_id, user_id, name,
+                    notification_rule_id, notification_target_id
             """, (pause_reason, task_id, occurrence_key))
             row = cursor.fetchone()
             if not row:
@@ -805,17 +810,17 @@ class ScheduledTaskDB:
     def update_definition(task_id: str, *, name: Optional[str] = None,
                           task_prompt: Optional[str] = None,
                           attachments: Optional[list] = None,
-                          notification_target_id: Optional[str] = None,
+                          notification_rule_id: Optional[str] = None,
                           clear_fields: Optional[List[str]] = None,
                           tenant_id: Optional[str] = None,
                           user_id: Optional[str] = None) -> bool:
-        """编辑任务内容（name/task_prompt/attachments/notification_target_id 可选字段）。
+        """编辑任务内容（name/task_prompt/attachments/notification_rule_id 可选字段）。
 
         只更新显式传入的字段，不触碰任何调度字段（编辑不影响已认领执行的
         快照，也不重算 next_due_at）。
 
         clear_fields 为显式清空语义（F4，Phase 1 CR 遗留）：可选值目前仅
-        "notification_target_id"——命中的字段置 NULL 而非跳过，供"恢复默认
+        "notification_rule_id"——命中的字段置 NULL 而非跳过，供"恢复默认
         通知路由（站内 + 个人偏好）"路径使用；与同名字段的显式传值互斥由
         调用方保证（字段在 clear_fields 命中时以清空为准）。
         """
@@ -831,16 +836,16 @@ class ScheduledTaskDB:
             set_clauses.append("attachments = %s::jsonb")
             params.append(json.dumps(attachments))
         cleared = set(clear_fields or [])
-        if notification_target_id is not None and "notification_target_id" not in cleared:
-            set_clauses.append("notification_target_id = %s")
-            params.append(notification_target_id)
+        if notification_rule_id is not None and "notification_rule_id" not in cleared:
+            set_clauses.append("notification_rule_id = %s")
+            params.append(notification_rule_id)
         if cleared:
-            unknown = cleared - {"notification_target_id"}
+            unknown = cleared - {"notification_rule_id"}
             if unknown:
                 raise ValueError(
-                    f"INVALID_CLEAR_FIELDS: {sorted(unknown)}，可选值仅 notification_target_id")
-            if "notification_target_id" in cleared:
-                set_clauses.append("notification_target_id = NULL")
+                    f"INVALID_CLEAR_FIELDS: {sorted(unknown)}，可选值仅 notification_rule_id")
+            if "notification_rule_id" in cleared:
+                set_clauses.append("notification_rule_id = NULL")
         if not set_clauses:
             return False
         set_clauses.append("updated_at = now()")

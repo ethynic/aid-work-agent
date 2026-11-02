@@ -192,7 +192,7 @@
         <div class="bg-white border border-gray-200 rounded-lg">
           <div class="px-4 py-3 border-b border-gray-100 flex items-center gap-2">
             <h2 class="text-sm font-medium text-gray-700">通知投递</h2>
-            <span class="text-xs text-gray-400">当前目标：{{ notificationTargetLabel }}</span>
+            <span class="text-xs text-gray-400">当前规则：{{ notificationRuleLabel }}</span>
           </div>
           <div v-if="deliveriesState === 'loading' && !deliveries.length" class="p-6 text-center text-sm text-gray-500">正在加载通知记录…</div>
           <div v-else-if="deliveriesState === 'error'" class="p-6 text-center text-sm">
@@ -365,14 +365,16 @@
           </div>
         </div>
         <div>
-          <label :for="`${uid}-edit-target`" class="block text-sm text-gray-600 mb-1">通知目标</label>
-          <BaseSelect :id="`${uid}-edit-target`" v-model="editModal.notificationTarget" size="sm" :disabled="targetsLoading">
+          <label :for="`${uid}-edit-rule`" class="block text-sm text-gray-600 mb-1">通知规则</label>
+          <BaseSelect :id="`${uid}-edit-rule`" v-model="editModal.notificationRule" size="sm" :disabled="rulesLoading">
             <option value="">默认（站内信 + 个人偏好渠道）</option>
-            <option v-for="target in selectableTargets" :key="target.target_id" :value="target.target_id">
-              {{ targetLabel(target) }}
+            <option v-for="rule in taskRuleOptions" :key="rule.rule_id" :value="rule.rule_id">
+              {{ ruleLabel(rule) }}
             </option>
           </BaseSelect>
-          <p class="mt-1 text-xs text-gray-400">通知事件：任务完成 / 失败 / 暂停 / 需要处理；已生成事件不受后续修改影响。</p>
+          <p class="mt-1 text-xs text-gray-400">
+            通知事件：任务完成 / 失败 / 暂停 / 需要处理（以所选规则的事件范围为准）；已生成事件不受后续修改影响。规则由租户管理员在通知规则页配置。
+          </p>
         </div>
       </div>
       <template #footer>
@@ -419,7 +421,7 @@ import {
   SCHEDULED_PAUSE_REASON_LABELS, SCHEDULED_STATUS_LABELS,
   type ScheduledTask, type ScheduledTaskAttachment, type ScheduledTaskScheduleType,
 } from '@/api/scheduledTask'
-import { notificationsAPI, type TenantTarget, type TaskDeliveryEvent } from '@/api/notifications'
+import { notificationsAPI, type TaskDeliveryEvent, type TaskNotifyRule } from '@/api/notifications'
 import { uploadFile } from '@/api/agent'
 import { getSessionMessages, type ChatMessageRecord } from '@/api/session'
 import { useTenantAuth } from '@/composables/useTenantAuth'
@@ -512,11 +514,15 @@ const profileLabel = computed(() => {
   return matched?.display_name || matched?.name || profile
 })
 
-const notificationTargetLabel = computed(() => {
-  const targetId = task.value?.notification_target_id
-  if (!targetId) return '默认（站内信 + 个人偏好渠道）'
-  const target = selectableTargets.value.find(item => item.target_id === targetId)
-  return target ? targetLabel(target) : `已选择目标（${targetId.slice(0, 8)}…）`
+const notificationRuleLabel = computed(() => {
+  const ruleId = task.value?.notification_rule_id
+  if (ruleId) {
+    const rule = taskRuleOptions.value.find(item => item.rule_id === ruleId)
+    return rule ? ruleLabel(rule) : `已选用规则（${ruleId.slice(0, 8)}…）`
+  }
+  // 旧列仅存量任务兜底（写入口已下线）：继续按原渠道投递，不在本页编辑
+  if (task.value?.notification_target_id) return '已配置旧通知目标（继续按原渠道投递）'
+  return '默认（站内信 + 个人偏好渠道）'
 })
 
 // ==================== 执行记录展示 ====================
@@ -971,9 +977,9 @@ function resetPage() {
   // 弹窗代际递增：重置后遗留的上传回调全部失效（评审二轮第 4 项）
   editModalGeneration += 1
   uploadingPlaceholders.value = []
-  // 通知目标选项随页面上下文清空（评审二轮第 7 项：切租户/任务不残留）
-  selectableTargets.value = []
-  targetsLoading.value = false
+  // 通知规则选项随页面上下文清空（评审二轮第 7 项：切租户/任务不残留）
+  taskRuleOptions.value = []
+  rulesLoading.value = false
   actionBusy.value = false
   task.value = null
   error.value = ''
@@ -1181,10 +1187,10 @@ const editModal = reactive({
   name: '',
   taskPrompt: '',
   attachments: [] as ScheduledTaskAttachment[],
-  notificationTarget: '',
+  notificationRule: '',
 })
-const selectableTargets = ref<TenantTarget[]>([])
-const targetsLoading = ref(false)
+const taskRuleOptions = ref<TaskNotifyRule[]>([])
+const rulesLoading = ref(false)
 /** 上传中的附件占位（评审二轮第 4 项）：key 唯一标识一次上传，成功后移除并入列表 */
 const uploadingPlaceholders = ref<{ key: string; name: string }[]>([])
 // “上传中”唯一事实来源 = 当前弹窗代际的占位列表（评审三轮第 1 项：
@@ -1193,10 +1199,16 @@ const attachmentUploading = computed(() => uploadingPlaceholders.value.length > 
 /** 编辑弹窗代际：每次打开递增；上传回调携带并校验，关闭/重开后的旧回调丢弃（防污染） */
 let editModalGeneration = 0
 
-function targetLabel(target: TenantTarget): string {
-  const channelLabels: Record<string, string> = { web_push: '浏览器推送', wecom_bot: '企微机器人', dingtalk_bot: '钉钉机器人', feishu_bot: '飞书机器人' }
-  const channel = channelLabels[target.provider] || channelLabels[target.channel] || target.channel
-  return target.configuration_display ? `${channel} · ${target.configuration_display}` : channel
+/** 通知规则选项展示：规则名 + 外发渠道摘要（无目标=仅站内信）；渠道名与规则页 PROVIDER_OPTIONS 同口径 */
+const PROVIDER_LABELS: Record<string, string> = {
+  feishu_bot: '飞书群机器人',
+  dingtalk_bot: '钉钉群机器人',
+  wecom_bot: '企微群机器人',
+  smtp: '邮件',
+}
+function ruleLabel(rule: TaskNotifyRule): string {
+  const channels = rule.targets.map(t => PROVIDER_LABELS[t.provider] || t.provider).join('、')
+  return channels ? `${rule.name}（${channels}）` : `${rule.name}（仅站内信）`
 }
 
 async function openEdit() {
@@ -1208,21 +1220,21 @@ async function openEdit() {
   editModal.name = current.name
   editModal.taskPrompt = current.task_prompt
   editModal.attachments = (current.attachments || []).map(att => ({ ...att }))
-  editModal.notificationTarget = current.notification_target_id || ''
+  editModal.notificationRule = current.notification_rule_id || ''
   editModal.show = true
-  // 通知目标每次打开都重新查询（评审二轮第 7 项）：租户/登录切换后不残留旧
-  // 租户选项；加载中下拉禁用（BaseSelect :disabled="targetsLoading"）
+  // 通知规则每次打开都重新查询（评审二轮第 7 项）：租户/登录切换后不残留旧
+  // 租户选项；加载中下拉禁用（BaseSelect :disabled="rulesLoading"）
   const c = ctx
-  selectableTargets.value = []
-  targetsLoading.value = true
+  taskRuleOptions.value = []
+  rulesLoading.value = true
   try {
-    const value = await notificationsAPI.selectableTargets()
+    const value = await notificationsAPI.taskRules()
     if (!isLive(c)) return
-    selectableTargets.value = value?.targets || []
+    taskRuleOptions.value = value?.rules || []
   } catch {
-    if (isLive(c)) selectableTargets.value = []
+    if (isLive(c)) taskRuleOptions.value = []
   } finally {
-    if (isLive(c)) targetsLoading.value = false
+    if (isLive(c)) rulesLoading.value = false
   }
 }
 
@@ -1289,18 +1301,18 @@ async function handleEditSave() {
   }
   actionBusy.value = true
   try {
-    // 通知目标 diff（评审 P2-9）：仅在目标实际变更时提交该字段，
-    // 未变更的保存不再被「目标已失效」错误阻塞
-    const previousTarget = task.value?.notification_target_id || ''
-    const nextTarget = editModal.notificationTarget
-    const targetChanged = nextTarget !== previousTarget
+    // 通知规则 diff（评审 P2-9）：仅在规则实际变更时提交该字段，
+    // 未变更的保存不再被「规则已失效」错误阻塞
+    const previousRule = task.value?.notification_rule_id || ''
+    const nextRule = editModal.notificationRule
+    const ruleChanged = nextRule !== previousRule
     const updated = await updateScheduledTaskDefinition(c.taskId, {
       name: editModal.name.trim(),
       task_prompt: editModal.taskPrompt.trim(),
       attachments: editModal.attachments,
-      // F4 清空语义：从有目标切回默认时显式 clear（与设置目标互斥）
-      ...(targetChanged && nextTarget ? { notification_target_id: nextTarget } : {}),
-      ...(targetChanged && !nextTarget && previousTarget ? { clear_notification_target: true } : {}),
+      // F4 清空语义：从有规则切回默认时显式 clear（与设置规则互斥）
+      ...(ruleChanged && nextRule ? { notification_rule_id: nextRule } : {}),
+      ...(ruleChanged && !nextRule && previousRule ? { clear_notification_rule: true } : {}),
     })
     if (!isLive(c)) return
     task.value = updated

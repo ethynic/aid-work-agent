@@ -15,24 +15,28 @@ def _user_owned_web_runner(runner):
 
 
 def _scheduled_parameters(cursor, runner, event_kind):
-    """scheduled 事件参数：会话标题（=任务名）+ session_id/task_id/目标快照
-    （设计 §8.2：notify_target_id 在事件生成时从任务行快照，加密存储不可变）。"""
+    """scheduled 事件参数：会话标题（=任务名）+ session_id/task_id/绑定快照
+    （设计 §8.2：notify_rule_id/notify_target_id 在事件生成时从任务行快照，
+    规则优先、目标仅存量任务兜底，加密存储不可变）。"""
     cursor.execute('''SELECT title FROM chat_sessions WHERE session_id=%s AND user_id=%s
         AND tenant_id IS NOT DISTINCT FROM %s''', (runner['session_id'], runner['user_id'],
                                                    runner['tenant_id']))
     session = cursor.fetchone()
     if not session:
         return None
-    cursor.execute('''SELECT notification_target_id,name FROM scheduled_tasks
-        WHERE session_id=%s''', (runner['session_id'],))
+    cursor.execute('''SELECT notification_rule_id,notification_target_id,name
+        FROM scheduled_tasks WHERE session_id=%s''', (runner['session_id'],))
     task = cursor.fetchone()
     scheduled_meta = ((runner.get('input') or {}).get('request_data') or {}).get('scheduled') or {}
     parameters = {'session_title': session_title(session['title']),
                   'event_kind': event_kind,
                   'task_id': str(scheduled_meta.get('task_id') or '')[:64],
                   'task_name': session_title((task or {}).get('name') or session['title'])}
+    rule_id = (task or {}).get('notification_rule_id')
     target_id = (task or {}).get('notification_target_id')
-    if target_id:
+    if rule_id:
+        parameters['notify_rule_id'] = str(rule_id)[:128]
+    elif target_id:
         parameters['notify_target_id'] = str(target_id)[:128]
     return parameters
 

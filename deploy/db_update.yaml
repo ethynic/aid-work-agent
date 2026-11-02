@@ -4415,3 +4415,7 @@
   statements: |
     ALTER TABLE notification_targets DROP CONSTRAINT IF EXISTS notification_target_identity;
     ALTER TABLE notification_targets ADD CONSTRAINT notification_target_identity UNIQUE(provider, identity_digest, scope_key, rule_id);
+- datetime: "2026-11-02 12:00:00"
+  remark: "定时任务通知接入通知规则：scheduled_tasks 新增 notification_rule_id（任务级选用规则，替代旧 notification_target_id 直选渠道）"
+  statements: |
+    ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS notification_rule_id TEXT;

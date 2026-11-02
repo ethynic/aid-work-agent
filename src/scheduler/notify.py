@@ -35,9 +35,10 @@ def publish_task_paused_in_tx(cursor, task, reason_label, *, occurrence_key=None
                               attempt=None, runner_id=None, pause_reason=None):
     """事务内版本：调用方持有 pause 状态变更的同一事务，commit 由调用方负责。
 
-    - task：任务行 dict（含 task_id/tenant_id/user_id/name/notification_target_id）；
-    - notify_target_id 事件生成时快照（设计 §3.3）：从任务行读取存入参数，
-      任务后续改目标不影响已生成事件；
+    - task：任务行 dict（含 task_id/tenant_id/user_id/name/notification_rule_id）；
+    - notify_rule_id / notify_target_id 事件生成时快照（设计 §3.3）：规则优先，
+      目标仅为存量任务兜底——从任务行读取存入参数，任务后续改绑定不影响
+      已生成事件；
     - 接收人 = 任务属主 Subject(user_id, tenant_id)。
     """
     from src.config.settings import settings
@@ -51,9 +52,13 @@ def publish_task_paused_in_tx(cursor, task, reason_label, *, occurrence_key=None
         "reason_label": str(reason_label or "")[:120] or "任务已暂停",
         "task_id": task["task_id"],
     }
-    target_id = task.get("notification_target_id")
-    if target_id:
-        parameters["notify_target_id"] = str(target_id)[:128]
+    rule_id = task.get("notification_rule_id")
+    if rule_id:
+        parameters["notify_rule_id"] = str(rule_id)[:128]
+    else:
+        target_id = task.get("notification_target_id")
+        if target_id:
+            parameters["notify_target_id"] = str(target_id)[:128]
     cursor.execute("SELECT clock_timestamp() AS now")
     now = cursor.fetchone()["now"]
     ref = publish_in_tx(

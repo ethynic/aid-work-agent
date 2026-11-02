@@ -441,7 +441,8 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     interval_seconds INTEGER,
     run_at TIMESTAMP,                          -- once 专用
     session_id TEXT UNIQUE NOT NULL,           -- 任务专属会话（存储容器）
-    notification_target_id TEXT,               -- 可选：notification_targets 引用
+    notification_target_id TEXT,               -- 旧列（存量任务直选渠道目标，发布侧兜底快照，写入口已下线）
+    notification_rule_id TEXT,                 -- 可选：notification_rules 引用（scheduled.task 规则，任务级选用）
     status TEXT NOT NULL DEFAULT 'active',     -- active|paused|completed|expired
     pause_reason TEXT,                         -- credit_blocked|profile_forbidden|tenant_unavailable|definition_invalid|submit_conflict|submit_rejected|interrupted
     next_due_at TIMESTAMP,                     -- 周期依据

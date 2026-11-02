@@ -13,6 +13,7 @@ from src.notifications.contracts import AdapterCapabilities, Subject
 from src.notifications.events import LeadCapturedParameters, publish_event_in_tx, render_inbox_text
 from src.notifications.repository import (
     PRESET_RULES,
+    RULE_EVENT_TYPES,
     NotificationRepository,
     protected,
 )
@@ -444,6 +445,77 @@ class TestRuleConditionsValidation:
             'lead.captured', {}) == {'scope': 'channel'}
 
 
+class TestScheduledTaskRuleConditions:
+    """scheduled.task 聚合规则：conditions 可选 {events}（4 类任务事件值域，
+    缺省=全部）；仅进创建白名单，不预置、不注册进发布事件表。"""
+
+    def test_missing_events_means_all(self):
+        assert NotificationRepository._validate_rule_conditions(
+            'scheduled.task', {}) == {}
+
+    def test_empty_events_normalized_to_all(self):
+        assert NotificationRepository._validate_rule_conditions(
+            'scheduled.task', {'events': []}) == {}
+
+    def test_events_subset_deduped_in_order(self):
+        assert NotificationRepository._validate_rule_conditions(
+            'scheduled.task',
+            {'events': ['task.failed', 'task.completed', 'task.failed']}
+        ) == {'events': ['task.failed', 'task.completed']}
+
+    def test_all_four_events_allowed(self):
+        assert NotificationRepository._validate_rule_conditions(
+            'scheduled.task',
+            {'events': ['task.completed', 'task.failed', 'task.paused', 'task.needs_action']}
+        ) == {'events': ['task.completed', 'task.failed', 'task.paused', 'task.needs_action']}
+
+    def test_out_of_domain_event_rejected(self):
+        # task.waiting_input 是聊天提问事件，不在定时任务规则值域
+        with pytest.raises(NotificationError, match='NOTIFICATION_RULE_CONDITIONS_INVALID'):
+            NotificationRepository._validate_rule_conditions(
+                'scheduled.task', {'events': ['task.waiting_input']})
+
+    def test_non_string_event_rejected(self):
+        with pytest.raises(NotificationError, match='NOTIFICATION_RULE_CONDITIONS_INVALID'):
+            NotificationRepository._validate_rule_conditions(
+                'scheduled.task', {'events': ['task.completed', 1]})
+
+    def test_unknown_keys_rejected(self):
+        with pytest.raises(NotificationError, match='NOTIFICATION_RULE_CONDITIONS_INVALID'):
+            NotificationRepository._validate_rule_conditions(
+                'scheduled.task', {'events': ['task.completed'], 'scope': 'channel'})
+
+    def test_in_whitelist_but_not_preset(self):
+        # 不预置（租户管理员按需创建）、不对全租户任务自动生效
+        assert 'scheduled.task' in RULE_EVENT_TYPES
+        assert 'scheduled.task' not in {item[0] for item in PRESET_RULES}
+
+    def test_not_registered_as_publishable_event(self):
+        from src.notifications.events import EVENTS
+        assert 'scheduled.task' not in EVENTS.definitions
+
+
+class TestScheduledTaskRuleRecipientMode:
+    """scheduled.task 固定 task_owner（占位枚举）；其余事件沿用两枚举。"""
+
+    def test_task_rule_rejects_legacy_modes(self):
+        with pytest.raises(NotificationError, match='NOTIFICATION_RULE_RECIPIENT_INVALID'):
+            NotificationRepository._validate_rule_recipient_mode('scheduled.task', 'tenant_admins')
+        with pytest.raises(NotificationError, match='NOTIFICATION_RULE_RECIPIENT_INVALID'):
+            NotificationRepository._validate_rule_recipient_mode('scheduled.task', 'kf_assignee')
+
+    def test_task_rule_accepts_task_owner(self):
+        NotificationRepository._validate_rule_recipient_mode('scheduled.task', 'task_owner')
+
+    def test_other_events_reject_task_owner(self):
+        with pytest.raises(NotificationError, match='NOTIFICATION_RULE_RECIPIENT_INVALID'):
+            NotificationRepository._validate_rule_recipient_mode('lead.captured', 'task_owner')
+
+    def test_other_events_keep_legacy_modes(self):
+        NotificationRepository._validate_rule_recipient_mode('lead.captured', 'kf_assignee')
+        NotificationRepository._validate_rule_recipient_mode('billing.credit_low', 'tenant_admins')
+
+
 class TestKfConfigOwnershipValidation:
     """kf_config 层条件归属校验：渠道 config_id（存量语义）与客服账号
     open_kfid（账号级）均需归属本租户。"""
@@ -547,3 +619,140 @@ class TestDeleteRule:
         state = self._run_delete(rule)
         assert state['deleted'] == 1
         assert state['revoked_targets'] == 1
+
+
+class TestExpandTaskRuleSnapshot:
+    """任务级规则快照路由（expand 用户级路径）：参数含 notify_rule_id 时按
+    规则级 targets 投递（替代偏好路由）；停用/删除/事件被过滤仅留痕 skipped；
+    无规则时 notify_target_id 存量分支不回归。"""
+
+    def _rule_snapshot_message(self, **param_over):
+        parameters = {'task_name': '日报', 'reason_label': '积分额度不足',
+                      'task_id': 'sched_1', 'notify_rule_id': 'rule_9'}
+        parameters.update(param_over)
+        for key, value in list(parameters.items()):
+            if value is None:
+                del parameters[key]
+        return {'notification_id': 'notification_r1', 'notification_ref': 'refr1',
+                'recipient_user_id': 'user_1', 'tenant_id': T1,
+                'scope_key': 'tenant:' + T1, 'schema_version': 1,
+                'policy_key': 'accepted_before_enabled', 'category': 'task',
+                'event_type': 'task.paused', 'event_key': 'paused:sched_1:credit:k1',
+                'parameters_encrypted': protected(parameters),
+                'resource_ref': {'type': 'scheduled_task', 'id': 'sched_1'},
+                'template_key': 'task_paused', 'producer': 'scheduler',
+                'accepted_at': NOW, 'created_at': NOW,
+                'expires_at': datetime(2026, 10, 30), 'occurred_at': NOW,
+                'priority': 0, 'database_now': NOW}
+
+    def _run_expand(self, message, rule_row_value, target_pages=()):
+        registry = MagicMock()
+        registry.get.return_value = StubAdapter()
+        repo = make_repo(registry)
+        cursor = MagicMock()
+        pages = iter(target_pages)
+        state = {'deliveries': 0, 'rule_params': None, 'target_params': None,
+                 'preference_query_ran': False, 'route_updates': []}
+
+        def execute_dispatch(sql, params=None):
+            if "expansion_state='pending'" in sql:
+                cursor.fetchall = lambda: [message]
+            elif 'UPDATE notification_messages SET expansion_state=%s' in sql:
+                state['route_updates'].append(params)
+            elif 'FROM users' in sql:
+                cursor.fetchone = lambda: {'user_id': 'user_1', 'tenant_id': T1,
+                                           'role': 'tenant_user', 'status': 'active'}
+            elif "FROM tenants WHERE tenant_id=%s AND status='active'" in sql:
+                cursor.fetchone = lambda: {'ok': 1}
+            elif 'FROM scheduled_tasks' in sql:
+                cursor.fetchone = lambda: {'task_id': 'sched_1', 'session_id': 's1',
+                                           'name': '日报', 'status': 'paused'}
+            elif 'FROM notification_rules' in sql:
+                # 规则快照查询（rule_id + 本租户限定）
+                state['rule_params'] = params
+                cursor.fetchone = lambda: rule_row_value
+            elif 'FROM notification_targets t' in sql:
+                # 偏好/目标快照主查询：规则快照分支不应触达
+                state['preference_query_ran'] = True
+            elif 'FROM notification_targets' in sql:
+                # 规则级目标查询（_rule_event_targets）
+                state['target_params'] = params
+                try:
+                    page = next(pages)
+                except StopIteration:
+                    page = []
+                cursor.fetchall = lambda: page
+            elif 'INSERT INTO notification_deliveries' in sql:
+                state['deliveries'] += 1
+
+        cursor.execute.side_effect = execute_dispatch
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+
+        @contextmanager
+        def factory():
+            yield conn
+
+        repo.connection_factory = factory
+        repo.expand()
+        return state
+
+    @staticmethod
+    def _rule(enabled=True, conditions=None):
+        return {'rule_id': 'rule_9', 'name': '值班通知', 'enabled': enabled,
+                'conditions': conditions if conditions is not None else {},
+                'recipient_mode': 'task_owner'}
+
+    @staticmethod
+    def _rule_target():
+        return {'target_id': 'target_rule', 'scope_key': 'tenant:' + T1, 'tenant_id': T1,
+                'recipient_user_id': None, 'state': 'active', 'binding_version': 1,
+                'channel': 'im_webhook', 'provider': 'feishu_bot', 'rule_id': 'rule_9',
+                'installation_ref': 'x', 'enabled_since': datetime(2026, 1, 1)}
+
+    def test_enabled_rule_delivers_to_rule_targets(self):
+        state = self._run_expand(self._rule_snapshot_message(), self._rule(),
+                                 target_pages=[[self._rule_target()]])
+        assert state['deliveries'] == 1
+        # 规则查询限定本租户；目标查询为规则级（tenant + rule_id）
+        assert state['rule_params'] == ('rule_9', T1)
+        assert state['target_params'] == (T1, 'rule_9')
+        # 规则快照替代偏好路由：偏好主查询不应执行
+        assert state['preference_query_ran'] is False
+        route = json.loads(state['route_updates'][0][1])
+        assert route == [{'target_id': 'target_rule', 'channel': 'im_webhook',
+                          'provider': 'feishu_bot', 'binding_version': 1}]
+
+    def test_disabled_rule_marks_route_skipped(self):
+        state = self._run_expand(self._rule_snapshot_message(), self._rule(enabled=False))
+        assert state['deliveries'] == 0
+        route = json.loads(state['route_updates'][0][1])
+        assert route == [{'rule_id': 'rule_9', 'skipped': 'rule_disabled'}]
+
+    def test_missing_rule_marks_route_skipped(self):
+        """规则已删除或归属他租户：查不到即留痕 rule_not_found，不抛错"""
+        state = self._run_expand(self._rule_snapshot_message(), None)
+        assert state['deliveries'] == 0
+        route = json.loads(state['route_updates'][0][1])
+        assert route == [{'rule_id': 'rule_9', 'skipped': 'rule_not_found'}]
+
+    def test_filtered_event_marks_route_skipped(self):
+        """规则 events 子集不含本事件：留痕 rule_event_filtered，不投递"""
+        rule = self._rule(conditions={'events': ['task.completed']})
+        state = self._run_expand(self._rule_snapshot_message(), rule)
+        assert state['deliveries'] == 0
+        route = json.loads(state['route_updates'][0][1])
+        assert route == [{'rule_id': 'rule_9', 'skipped': 'rule_event_filtered'}]
+
+    def test_event_in_subset_delivers(self):
+        rule = self._rule(conditions={'events': ['task.paused', 'task.needs_action']})
+        state = self._run_expand(self._rule_snapshot_message(), rule,
+                                 target_pages=[[self._rule_target()]])
+        assert state['deliveries'] == 1
+
+    def test_rule_without_targets_zero_deliveries(self):
+        """规则启用但无外发目标：仅站内信（无 delivery、无留痕）"""
+        state = self._run_expand(self._rule_snapshot_message(), self._rule())
+        assert state['deliveries'] == 0
+        route = json.loads(state['route_updates'][0][1])
+        assert route == []

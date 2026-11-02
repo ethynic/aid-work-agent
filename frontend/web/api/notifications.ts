@@ -22,13 +22,23 @@ export interface NotificationRule {
   name: string
   enabled: boolean
   is_system: boolean
-  /** scope=channel（全部渠道）/ kf_config（指定客服账号 kf_config_ids=config_id 列表） */
-  conditions: { scope?: 'channel' | 'kf_config'; kf_config_ids?: string[] }
-  recipient_mode: 'tenant_admins' | 'kf_assignee'
+  /** scope=channel（全部渠道）/ kf_config（指定客服账号 kf_config_ids=config_id 列表）；
+   *  scheduled.task 聚合规则用 events（任务事件子集，缺省全部） */
+  conditions: { scope?: 'channel' | 'kf_config'; kf_config_ids?: string[]; events?: string[] }
+  /** task_owner 仅用于 scheduled.task 规则（占位：站内信恒发任务属主） */
+  recipient_mode: 'tenant_admins' | 'kf_assignee' | 'task_owner'
   created_by: string | null
   created_at: string
   updated_at: string
   active_targets: number
+}
+
+/** 定时任务可选用通知规则（GET /task-rules 普通用户只读）：规则 + 渠道目标脱敏摘要 */
+export interface TaskNotifyRule {
+  rule_id: string
+  name: string
+  conditions: { events?: string[] }
+  targets: TenantTarget[]
 }
 
 export interface RuleSaveBody {
@@ -158,6 +168,11 @@ export const notificationsAPI = {
   /** 任务通知目标选项（非管理员可用，设计 §8.3）：个人 + 租户级目标，无凭据 */
   selectableTargets: () =>
     request<{ targets: TenantTarget[] }>('/selectable-targets'),
+
+  /** 定时任务可选用通知规则（普通用户只读）：本租户 enabled 的 scheduled.task
+   *  规则 + 渠道目标脱敏摘要，供任务编辑弹窗选择 */
+  taskRules: () =>
+    request<{ rules: TaskNotifyRule[] }>('/task-rules'),
 
   /** 任务视图投递状态（设计 §8.4）：该任务全部通知事件的投递账 */
   taskDeliveries: (taskId: string) => {

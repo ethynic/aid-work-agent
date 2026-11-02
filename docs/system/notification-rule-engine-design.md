@@ -246,3 +246,12 @@ CREATE INDEX IF NOT EXISTS idx_notification_target_rule
 5. **规则级目标登记**：installation_ref 服务端生成为 `rule_{rule_id}_{hex8}`（允许同 provider 多个 active）；同配置摘要（identity_digest）已被租户级或其他规则 active 目标占用时返回 409 NOTIFICATION_TARGET_OWNED；规则删除级联撤销其 active 目标并跳过在途投递。
 6. **预置规则惰性补插**：该 (租户, 事件) 已存在任意规则行（含停用）时不补插，避免覆盖管理员停用事实；新租户由展开阶段首次触达时按预置清单补插（ON CONFLICT DO NOTHING）。
 
+## 15. 定时任务通知规则扩展（2026-11-02）
+
+定时任务通知从"任务直选渠道目标（`scheduled_tasks.notification_target_id` → `notification_targets`）"切换为"任务选用通知规则"。设计要点（详见[开发计划](../plans/plan-scheduled-task-notification-rules.md)）：
+
+1. **规则专用聚合类型 `scheduled.task`**（展示名"定时任务通知"）：仅进规则创建白名单，**不注册进 EVENTS 发布注册表**，不参与 `_expand_rule_event` 常规匹配。conditions 可选 `{events: [...]}`（值域 4 个 task.* 事件，缺省全部）；recipient_mode 固定新枚举 `task_owner`（规则只决定外发渠道+事件过滤，站内信恒发任务属主）。
+2. **任务级绑定生效**：`scheduled_tasks` 新列 `notification_rule_id`；任务事件发布仍走用户级 `publish_in_tx`（属主站内信不变），参数快照 `notify_rule_id`；展开阶段快照命中时按该规则取规则级 targets 投递（跳过偏好门控），规则停用/删除/事件被过滤时 route_snapshot 留痕 skipped。未被任务选用的 `scheduled.task` 规则不产生任何投递。
+3. **存量兼容**：任务无规则但旧列 `notification_target_id` 非空时继续快照 `notify_target_id` 走旧路由（存量任务外发不失效）；写入口（REST 编辑、聊天工具创建/管理）统一切换为规则字段，旧写字段移除。
+4. 普通用户新增只读接口 `GET /api/notifications/task-rules`（本租户 enabled 的 `scheduled.task` 规则 + 渠道目标脱敏摘要），供任务编辑下拉选用；规则 CRUD 仍仅租户管理员。
+

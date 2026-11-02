@@ -8,7 +8,7 @@
  * - P2-4 执行结果完整展示（图片渲染 + 会话消息详情）
  * - P2-6 interval 分钟精度预填（4500s → 75 分钟）
  * - P2-7 附件上传（复用 uploadFile，上传后组装 AttachmentRef）
- * - P2-9 通知目标未变更时不提交目标字段
+ * - P2-9 通知规则未变更时不提交规则字段
  * - P2-12 取消按钮绑定行级 runner_id（多 active 时顶部不给单一取消）
  * - P2-13 通知投递三态（失败可重试 / 空 / 有记录）
  *
@@ -112,7 +112,7 @@ vi.mock('@/api/scheduledTask', async () => {
 })
 
 const taskDeliveriesMock = vi.hoisted(() => vi.fn())
-const selectableTargetsMock = vi.hoisted(() => vi.fn())
+const taskRulesMock = vi.hoisted(() => vi.fn())
 
 vi.mock('@/api/notifications', async () => {
   const actual = await vi.importActual<any>('@/api/notifications')
@@ -121,7 +121,7 @@ vi.mock('@/api/notifications', async () => {
     notificationsAPI: {
       ...(actual.notificationsAPI || {}),
       taskDeliveries: taskDeliveriesMock,
-      selectableTargets: selectableTargetsMock,
+      taskRules: taskRulesMock,
     },
   }
 })
@@ -204,7 +204,7 @@ describe('TaskPlanView - 评审修复回归', () => {
     runnerObserveMock.mockReset()
     runnerCancelMock.mockReset()
     taskDeliveriesMock.mockReset().mockResolvedValue({ task_id: 'task-1', events: [] })
-    selectableTargetsMock.mockReset().mockResolvedValue({ targets: [] })
+    taskRulesMock.mockReset().mockResolvedValue({ rules: [] })
     getSessionMessagesMock.mockReset().mockResolvedValue({ messages: [] })
     uploadFileMock.mockReset()
   })
@@ -357,11 +357,11 @@ describe('TaskPlanView - 评审修复回归', () => {
     expect(runnerCancelMock).toHaveBeenCalledWith('r-new', expect.anything())
   })
 
-  it('P2-9 编辑保存：通知目标未变更时不提交目标字段', async () => {
-    const task = makeTask({ notification_target_id: 'tgt-1' })
+  it('P2-9 编辑保存：通知规则未变更时不提交规则字段', async () => {
+    const task = makeTask({ notification_rule_id: 'rule-1' })
     getScheduledTaskMock.mockResolvedValue(task)
-    selectableTargetsMock.mockResolvedValue({
-      targets: [{ target_id: 'tgt-1', installation_ref: 'i1', binding_version: 1, state: 'active', enabled_since: null, channel: 'bot', provider: 'wecom_bot' }],
+    taskRulesMock.mockResolvedValue({
+      rules: [{ rule_id: 'rule-1', name: '值班通知', conditions: {}, targets: [] }],
     })
     updateDefinitionMock.mockResolvedValue(task)
     wrapper = mount(TaskPlanView)
@@ -381,8 +381,8 @@ describe('TaskPlanView - 评审修复回归', () => {
     expect(updateDefinitionMock).toHaveBeenCalledTimes(1)
     const payload = updateDefinitionMock.mock.calls[0][1] as Record<string, unknown>
     expect(payload.name).toBe('数据汇总任务')
-    expect('notification_target_id' in payload).toBe(false)
-    expect('clear_notification_target' in payload).toBe(false)
+    expect('notification_rule_id' in payload).toBe(false)
+    expect('clear_notification_rule' in payload).toBe(false)
   })
 
   it('P2-13 通知投递三态：失败可重试 → 空 → 有记录', async () => {
@@ -551,22 +551,22 @@ describe('TaskPlanView - 评审修复回归', () => {
     expect(bodyText()).not.toContain('旧弹窗附件.pdf')
   })
 
-  it('二轮-7 编辑弹窗每次打开都重新查询通知目标选项', async () => {
-    selectableTargetsMock.mockResolvedValue({ targets: [] })
+  it('二轮-7 编辑弹窗每次打开都重新查询通知规则选项', async () => {
+    taskRulesMock.mockResolvedValue({ rules: [] })
     wrapper = mount(TaskPlanView)
     await flushPromises()
     const editButton = wrapper.findAll('button').find(b => b.text() === '编辑')
 
     await editButton!.trigger('click')
     await flushPromises()
-    expect(selectableTargetsMock).toHaveBeenCalledTimes(1)
+    expect(taskRulesMock).toHaveBeenCalledTimes(1)
 
     bodyButton('取消')!.click()
     await flushPromises()
     await editButton!.trigger('click')
     await flushPromises()
     // 不因列表已非空而跳过（租户切换后旧选项不残留）
-    expect(selectableTargetsMock).toHaveBeenCalledTimes(2)
+    expect(taskRulesMock).toHaveBeenCalledTimes(2)
   })
 
   it('二轮-5 通知四态：待展开 / 确认无外发 / 有投递，待展开纳入自动刷新提示', async () => {
@@ -650,7 +650,7 @@ describe('TaskPlanView - 评审修复回归', () => {
   it('三轮-1 旧上传完成不得解除新上传的保存限制（占位派生）', async () => {
     const task = makeTask()
     getScheduledTaskMock.mockResolvedValue(task)
-    selectableTargetsMock.mockResolvedValue({ targets: [] })
+    taskRulesMock.mockResolvedValue({ rules: [] })
     wrapper = mount(TaskPlanView)
     await flushPromises()
 

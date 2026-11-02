@@ -36,7 +36,7 @@ def _task_row(**overrides):
         "next_due_at": datetime(2026, 10, 29, 9, 0),
         "pending_occurrence_key": None, "pending_trigger": None,
         "pending_retry_at": None, "pending_snapshot": {"text": "内部快照"},
-        "notification_target_id": None,
+        "notification_rule_id": None, "notification_target_id": None,
         "total_runs": 3, "success_count": 2, "fail_count": 1,
         "last_run_at": datetime(2026, 10, 28, 9, 0), "last_status": "completed",
         "created_at": datetime(2026, 10, 20, 9, 0), "updated_at": datetime(2026, 10, 28, 9, 0),
@@ -72,9 +72,9 @@ class TestListAndStats:
         # 内部交接字段不外泄
         for task in body["data"]["tasks"]:
             assert "pending_snapshot" not in task
-            # 任务行字段完整性（session_id/pause_reason/last_status/next_due_at/通知目标）
+            # 任务行字段完整性（session_id/pause_reason/last_status/next_due_at/通知规则）
             for key in ("session_id", "pause_reason", "last_status", "next_due_at",
-                        "notification_target_id"):
+                        "notification_rule_id"):
                 assert key in task
 
     def test_stats_aggregates(self, client, monkeypatch):
@@ -242,26 +242,26 @@ class TestEditEndpoints:
         ScheduledTaskDB.update_schedule.assert_not_called()
         assert resp.json()["data"]["name"] == "新名"
 
-    def test_definition_edit_clear_notification_target(self, client, monkeypatch):
-        """F4 清空语义：clear_notification_target=true → clear_fields 清空"""
+    def test_definition_edit_clear_notification_rule(self, client, monkeypatch):
+        """F4 清空语义：clear_notification_rule=true → clear_fields 清空"""
         monkeypatch.setattr(ScheduledTaskDB, "get_by_id",
                             MagicMock(side_effect=[_task_row(), _task_row()]))
         monkeypatch.setattr(ScheduledTaskDB, "update_definition",
                             MagicMock(return_value=True))
         resp = client.put("/api/scheduled-tasks/sched_abc123",
-                          headers=_AUTH, json={"clear_notification_target": True})
+                          headers=_AUTH, json={"clear_notification_rule": True})
         assert resp.status_code == 200
         kwargs = ScheduledTaskDB.update_definition.call_args.kwargs
-        assert kwargs["clear_fields"] == ["notification_target_id"]
-        assert kwargs["notification_target_id"] is None
+        assert kwargs["clear_fields"] == ["notification_rule_id"]
+        assert kwargs["notification_rule_id"] is None
 
     def test_definition_edit_set_and_clear_mutually_exclusive(self, client, monkeypatch):
         monkeypatch.setattr(ScheduledTaskDB, "get_by_id",
                             MagicMock(return_value=_task_row()))
         resp = client.put("/api/scheduled-tasks/sched_abc123",
                           headers=_AUTH,
-                          json={"notification_target_id": "nt_1",
-                                "clear_notification_target": True})
+                          json={"notification_rule_id": "nr_1",
+                                "clear_notification_rule": True})
         assert resp.status_code == 422
 
     def test_definition_edit_no_fields_422(self, client, monkeypatch):
@@ -271,17 +271,17 @@ class TestEditEndpoints:
                           headers=_AUTH, json={})
         assert resp.status_code == 422
 
-    def test_definition_edit_invisible_notify_target_422(self, client, monkeypatch):
-        """归属校验：不可见通知目标（他租户/幻觉 ID）→ 422，不更新"""
+    def test_definition_edit_invisible_notify_rule_422(self, client, monkeypatch):
+        """归属校验：不可见通知规则（他租户/幻觉 ID）→ 422，不更新"""
         monkeypatch.setattr(ScheduledTaskDB, "get_by_id",
                             MagicMock(return_value=_task_row()))
-        monkeypatch.setattr(ScheduledTaskDB, "notify_target_visible",
+        monkeypatch.setattr(ScheduledTaskDB, "notify_rule_visible",
                             MagicMock(return_value=False))
         monkeypatch.setattr(ScheduledTaskDB, "update_definition", MagicMock())
         resp = client.put("/api/scheduled-tasks/sched_abc123",
-                          headers=_AUTH, json={"notification_target_id": "t_foreign"})
+                          headers=_AUTH, json={"notification_rule_id": "r_foreign"})
         assert resp.status_code == 422
-        assert "通知目标" in resp.json()["detail"]
+        assert "通知规则" in resp.json()["detail"]
         ScheduledTaskDB.update_definition.assert_not_called()
 
     def test_definition_edit_deleted_after_update_404(self, client, monkeypatch):
@@ -342,22 +342,22 @@ class TestUpdateDefinitionClearFields:
 
         with patch("src.scheduler.db.get_db_connection", fake_conn):
             ok = ScheduledTaskDB.update_definition(
-                "sched_1", notification_target_id="nt_1",
-                clear_fields=["notification_target_id"],
+                "sched_1", notification_rule_id="nr_1",
+                clear_fields=["notification_rule_id"],
                 tenant_id="tenant_1", user_id="user_1")
         assert ok is True
         sql = cursor.execute.call_args.args[0]
         params = cursor.execute.call_args.args[1]
-        assert "notification_target_id = NULL" in sql
-        # 显式传入的 nt_1 不再作为参数出现（清空优先）
-        assert "nt_1" not in params
+        assert "notification_rule_id = NULL" in sql
+        # 显式传入的 nr_1 不再作为参数出现（清空优先）
+        assert "nr_1" not in params
 
     def test_clear_fields_unknown_value_rejected(self):
         with pytest.raises(ValueError, match="INVALID_CLEAR_FIELDS"):
             ScheduledTaskDB.update_definition("sched_1", clear_fields=["name"])
 
     def test_set_without_clear_keeps_value(self):
-        """设置路径（无 clear_fields）：notification_target_id 正常落参数"""
+        """设置路径（无 clear_fields）：notification_rule_id 正常落参数"""
         from unittest.mock import MagicMock, patch
         from contextlib import contextmanager
 
@@ -370,19 +370,19 @@ class TestUpdateDefinitionClearFields:
 
         with patch("src.scheduler.db.get_db_connection", fake_conn):
             ok = ScheduledTaskDB.update_definition(
-                "sched_1", notification_target_id="nt_1",
+                "sched_1", notification_rule_id="nr_1",
                 tenant_id="tenant_1", user_id="user_1")
         assert ok is True
         params = cursor.execute.call_args.args[1]
-        assert "nt_1" in params
+        assert "nr_1" in params
         assert "NULL" not in cursor.execute.call_args.args[0].replace("updated_at = now()", "")
 
 
-# ==================== 通知目标归属校验（DAL） ====================
+# ==================== 通知规则归属校验（DAL） ====================
 
-class TestNotifyTargetVisible:
-    def _run(self, monkeypatch, fetchone_result, target_id="target_x",
-             tenant_id="tenant_1", user_id="user_1"):
+class TestNotifyRuleVisible:
+    def _run(self, monkeypatch, fetchone_result, rule_id="rule_x",
+             tenant_id="tenant_1"):
         cursor = MagicMock()
         cursor.fetchone.return_value = fetchone_result
 
@@ -391,19 +391,20 @@ class TestNotifyTargetVisible:
             yield MagicMock(cursor=MagicMock(return_value=cursor))
 
         monkeypatch.setattr("src.scheduler.db.get_db_connection", fake_conn)
-        return ScheduledTaskDB.notify_target_visible(
-            target_id, tenant_id=tenant_id, user_id=user_id), cursor
+        return ScheduledTaskDB.notify_rule_visible(
+            rule_id, tenant_id=tenant_id), cursor
 
-    def test_visible_target_scoped_to_own_tenant(self, monkeypatch):
+    def test_visible_rule_scoped_to_own_tenant(self, monkeypatch):
         ok, cursor = self._run(monkeypatch, {"1": 1})
         assert ok is True
         sql, params = cursor.execute.call_args.args
-        # 同口径限定：active + 本人/本租户 scope（不含他租户目标）
-        assert "state = 'active'" in sql and "scope_key = %s" in sql
-        assert "recipient_user_id = %s OR recipient_user_id IS NULL" in sql
-        assert params[1] == "tenant:tenant_1"
+        # 同口径限定：本租户 + scheduled.task + enabled（不含他租户/停用规则）
+        assert "tenant_id = %s" in sql
+        assert "event_type = 'scheduled.task'" in sql
+        assert "enabled" in sql
+        assert params == ("rule_x", "tenant_1")
 
-    def test_invisible_target_false(self, monkeypatch):
+    def test_invisible_rule_false(self, monkeypatch):
         ok, _ = self._run(monkeypatch, None)
         assert ok is False
 
@@ -411,9 +412,9 @@ class TestNotifyTargetVisible:
         # 租户缺失（platform_admin 未带 X-Tenant-Id）与超长/空 ID 直接拒绝
         ok, cursor = self._run(monkeypatch, {"1": 1}, tenant_id=None)
         assert ok is False and not cursor.execute.called
-        ok, cursor = self._run(monkeypatch, {"1": 1}, target_id="x" * 129)
+        ok, cursor = self._run(monkeypatch, {"1": 1}, rule_id="x" * 129)
         assert ok is False and not cursor.execute.called
-        ok, cursor = self._run(monkeypatch, {"1": 1}, target_id="")
+        ok, cursor = self._run(monkeypatch, {"1": 1}, rule_id="")
         assert ok is False and not cursor.execute.called
 
 

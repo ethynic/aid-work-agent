@@ -29,7 +29,7 @@ def test_terminal_message_uses_server_snapshot_and_stable_key():
     assert 'ON CONFLICT(scope_key,recipient_user_id,producer,event_key)' in statement
     assert args[5]=='terminal:runner'
     assert unprotect(args[11])=={'session_title':'项目名称','event_kind':'completed',
-        'task_id':None,'task_name':None,'notify_target_id':None}
+        'task_id':None,'task_name':None,'notify_rule_id':None,'notify_target_id':None}
     assert '项目名称' not in str(args)
 
 
@@ -38,3 +38,27 @@ def test_outbox_insert_failure_is_not_swallowed():
     cursor.execute.side_effect=[None,RuntimeError('db-failure')]
     with pytest.raises(RuntimeError):
         publish_runner_terminal_in_tx(cursor,runner(),NotificationsConfig())
+
+
+def scheduled_runner():
+    row=runner()
+    row.update(source='scheduled',actor_kind='system',actor_id='scheduler',
+        input={'request_data':{'scheduled':{'task_id':'sched_1','trigger':'scheduled'}}})
+    return row
+
+
+def test_scheduled_parameters_prefer_rule_over_legacy_target():
+    """定时任务接入通知规则：任务行有 notification_rule_id 时快照 notify_rule_id；
+    旧 notification_target_id 仅在无规则的存量任务上兜底（两者互斥）。"""
+    from src.notifications.producer import _scheduled_parameters
+    cursor=MagicMock()
+    cursor.fetchone.side_effect=[{'title':'每日日报'},
+        {'notification_rule_id':'rule_1','notification_target_id':'target_9','name':'每日日报'}]
+    params=_scheduled_parameters(cursor,scheduled_runner(),'completed')
+    assert params['notify_rule_id']=='rule_1'
+    assert 'notify_target_id' not in params
+    cursor.fetchone.side_effect=[{'title':'每日日报'},
+        {'notification_rule_id':None,'notification_target_id':'target_9','name':'每日日报'}]
+    params=_scheduled_parameters(cursor,scheduled_runner(),'completed')
+    assert params['notify_target_id']=='target_9'
+    assert 'notify_rule_id' not in params

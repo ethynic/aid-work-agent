@@ -3,10 +3,10 @@
 覆盖（plan-scheduled-task-runner-refactor.md Phase 4）：
 - 纯函数：build_schedule_fields 校验全集（缺时间/once 过去与归一化/枚举/数值
   容错/越界）、compute_resume_due（interval 锚点/cron/once 宽限）
-- create：上下文缺一不创建、profile/instance 继承、notify_target_id 透传、
+- create：上下文缺一不创建、profile/instance 继承、notification_rule_id 透传、
   每用户上限、R56 拦截与放行、无 prompt 长度上限
 - manage：list 摘要/pause/resume（once 过宽限提示）/cancel（BusyError 友好
-  提示）/view/set_notify_target 设置与清除（F4）/越权 fail-closed
+  提示）/view/set_notify_rule 设置与清除（F4）/list_notify_rules/越权 fail-closed
 """
 
 from datetime import datetime, timedelta
@@ -41,7 +41,7 @@ def _created_row(**overrides):
         "session_id": "sess_task_1", "name": "每日日报", "status": "active",
         "schedule_type": "daily", "cron_expression": "0 9 * * *",
         "interval_seconds": None, "run_at": None, "next_due_at": None,
-        "notification_target_id": None, "pause_reason": None,
+        "notification_rule_id": None, "pause_reason": None,
         "total_runs": 0, "success_count": 0, "fail_count": 0,
         "last_run_at": None, "last_status": None,
     }
@@ -255,35 +255,35 @@ class TestCreateScheduledTaskTool:
         assert kwargs["instance_id"] == "inst_9"
         assert kwargs["subagent_id"] == "data-analysis"
 
-    async def test_notify_target_id_passthrough(self):
+    async def test_notification_rule_id_passthrough(self):
         tool = CreateScheduledTaskTool()
         with patch.object(ScheduledTaskDB, "count_by_user", return_value=0), \
-             patch.object(ScheduledTaskDB, "notify_target_visible",
+             patch.object(ScheduledTaskDB, "notify_rule_visible",
                           return_value=True) as mock_visible, \
              patch.object(ScheduledTaskDB, "create", return_value=_created_row()) as mock_create:
             with _scope():
                 result = await tool.execute(
-                    **_CREATE_KWARGS, notify_target_id="ntarget_1")
+                    **_CREATE_KWARGS, notification_rule_id="nrule_1")
         assert result["success"] is True
         kwargs = mock_create.call_args.kwargs
-        assert kwargs["notification_target_id"] == "ntarget_1"
-        # 归属校验同口径（本人个人/本租户租户级目标）
-        assert mock_visible.call_args.args[0] == "ntarget_1"
+        assert kwargs["notification_rule_id"] == "nrule_1"
+        # 归属校验同口径（本租户 enabled 的 scheduled.task 规则）
+        assert mock_visible.call_args.args[0] == "nrule_1"
         assert mock_visible.call_args.kwargs["tenant_id"] == "tenant_1"
-        assert mock_visible.call_args.kwargs["user_id"] == "user_1"
 
-    async def test_notify_target_invisible_rejected_before_db_write(self):
-        """通知目标归属校验：不可见目标（他租户/幻觉 ID）拒绝，不落库"""
+    async def test_notification_rule_invisible_rejected_before_db_write(self):
+        """通知规则归属校验：不可见规则（他租户/幻觉 ID）拒绝，不落库"""
         tool = CreateScheduledTaskTool()
-        with patch.object(ScheduledTaskDB, "notify_target_visible",
+        with patch.object(ScheduledTaskDB, "notify_rule_visible",
                           return_value=False), \
              patch.object(ScheduledTaskDB, "count_by_user") as mock_count, \
              patch.object(ScheduledTaskDB, "create") as mock_create:
             with _scope():
                 result = await tool.execute(
-                    **_CREATE_KWARGS, notify_target_id="target_other_tenant")
+                    **_CREATE_KWARGS, notification_rule_id="rule_other_tenant")
         assert result["success"] is False
-        assert "通知目标不存在或不可用" in result["error"]
+        assert "通知规则不存在或不可用" in result["error"]
+        assert "list_notify_rules" in result["error"]
         mock_count.assert_not_called()
         mock_create.assert_not_called()
 
@@ -528,50 +528,75 @@ class TestManageScheduledTaskTool:
         assert "credit_blocked" in result["message"]
         assert "任务视图" in result["message"]
 
-    async def test_set_notify_target_sets(self):
+    async def test_set_notify_rule_sets(self):
         tool = ManageScheduledTaskTool()
         with patch.object(ScheduledTaskDB, "get_by_id", return_value=_created_row()), \
-             patch.object(ScheduledTaskDB, "notify_target_visible",
+             patch.object(ScheduledTaskDB, "notify_rule_visible",
                           return_value=True), \
              patch.object(ScheduledTaskDB, "update_definition",
                           return_value=True) as mock_update:
             with _scope():
                 result = await tool.execute(
-                    action="set_notify_target", task_id="sched_1",
-                    notify_target_id="ntarget_2")
+                    action="set_notify_rule", task_id="sched_1",
+                    notification_rule_id="nrule_2")
         assert result["success"] is True
-        assert mock_update.call_args.kwargs["notification_target_id"] == "ntarget_2"
+        assert mock_update.call_args.kwargs["notification_rule_id"] == "nrule_2"
         assert "clear_fields" not in mock_update.call_args.kwargs or \
             mock_update.call_args.kwargs.get("clear_fields") is None
 
-    async def test_set_notify_target_invisible_rejected(self):
-        """设置路径归属校验：不可见目标拒绝（不更新）"""
+    async def test_set_notify_rule_invisible_rejected(self):
+        """设置路径归属校验：不可见规则拒绝（不更新）"""
         tool = ManageScheduledTaskTool()
         with patch.object(ScheduledTaskDB, "get_by_id", return_value=_created_row()), \
-             patch.object(ScheduledTaskDB, "notify_target_visible",
+             patch.object(ScheduledTaskDB, "notify_rule_visible",
                           return_value=False), \
              patch.object(ScheduledTaskDB, "update_definition") as mock_update:
             with _scope():
                 result = await tool.execute(
-                    action="set_notify_target", task_id="sched_1",
-                    notify_target_id="target_foreign")
+                    action="set_notify_rule", task_id="sched_1",
+                    notification_rule_id="rule_foreign")
         assert result["success"] is False
-        assert "通知目标不存在或不可用" in result["error"]
+        assert "通知规则不存在或不可用" in result["error"]
         mock_update.assert_not_called()
 
-    async def test_set_notify_target_clears_via_clear_fields(self):
-        """F4 清空语义：不传 notify_target_id = 清除恢复默认（clear_fields）"""
+    async def test_set_notify_rule_clears_via_clear_fields(self):
+        """F4 清空语义：不传 notification_rule_id = 清除恢复默认（clear_fields）"""
         tool = ManageScheduledTaskTool()
         with patch.object(ScheduledTaskDB, "get_by_id", return_value=_created_row()), \
              patch.object(ScheduledTaskDB, "update_definition",
                           return_value=True) as mock_update:
             with _scope():
-                result = await tool.execute(action="set_notify_target", task_id="sched_1")
+                result = await tool.execute(action="set_notify_rule", task_id="sched_1")
         assert result["success"] is True
         assert "恢复默认" in result["message"]
         kwargs = mock_update.call_args.kwargs
-        assert kwargs["clear_fields"] == ["notification_target_id"]
-        assert kwargs.get("notification_target_id") is None
+        assert kwargs["clear_fields"] == ["notification_rule_id"]
+        assert kwargs.get("notification_rule_id") is None
+
+    async def test_list_notify_rules_summarizes_rules_and_targets(self):
+        """list_notify_rules：规则 + 外发渠道摘要（创建对话内选规则的数据来源）"""
+        tool = ManageScheduledTaskTool()
+        rules = [{"rule_id": "nrule_1", "name": "值班通知",
+                  "conditions": {"events": ["task.completed"]},
+                  "targets": [{"target_id": "t1", "channel": "im_webhook",
+                               "provider": "feishu_bot"}]}]
+        with patch.object(ScheduledTaskDB, "list_visible_notify_rules",
+                          return_value=rules) as mock_list:
+            with _scope():
+                result = await tool.execute(action="list_notify_rules")
+        assert result["success"] is True
+        assert result["rules"] == rules
+        assert "nrule_1" in result["message"] and "im_webhook/feishu_bot" in result["message"]
+        assert mock_list.call_args.args[0] == "tenant_1"
+
+    async def test_list_notify_rules_empty_guides_to_admin(self):
+        tool = ManageScheduledTaskTool()
+        with patch.object(ScheduledTaskDB, "list_visible_notify_rules",
+                          return_value=[]):
+            with _scope():
+                result = await tool.execute(action="list_notify_rules")
+        assert result["success"] is True
+        assert "租户管理员" in result["message"]
 
     async def test_foreign_task_invisible(self):
         """越权行查不到（归属条件进 SQL）：get_by_id 返回 None → 无权操作"""

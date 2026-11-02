@@ -140,6 +140,28 @@
             </BaseSelect>
           </div>
         </div>
+        <!-- 定时任务通知：4 类任务事件复选（缺省全选），仅被任务选用后生效 -->
+        <div v-else-if="form.event_type === 'scheduled.task'">
+          <label class="block text-sm text-default mb-1">通知事件</label>
+          <div class="flex flex-wrap gap-3">
+            <label
+              v-for="opt in TASK_EVENT_OPTIONS"
+              :key="opt.value"
+              class="flex items-center gap-1.5 text-sm text-default cursor-pointer"
+            >
+              <input
+                type="checkbox"
+                :checked="form.taskEvents.includes(opt.value)"
+                @change="toggleTaskEvent(opt.value)"
+                class="w-3.5 h-3.5 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
+              />
+              {{ opt.label }}
+            </label>
+          </div>
+          <p class="text-xs text-muted mt-2">
+            该规则不会自动对全租户任务生效——需在定时任务编辑的「通知规则」中被任务选用后才生效。
+          </p>
+        </div>
         <div v-else-if="form.event_type" class="text-xs text-muted">
           {{ eventLabel(form.event_type) }} 为租户级事件，无需匹配条件
         </div>
@@ -147,9 +169,14 @@
         <div class="grid grid-cols-2 gap-4">
           <div>
             <label class="block text-sm text-default mb-1">站内信接收人</label>
-            <BaseSelect v-model="form.recipient_mode">
+            <!-- scheduled.task 站内信恒发任务属主（占位只读，规则只决定外发渠道） -->
+            <BaseSelect v-if="form.event_type !== 'scheduled.task'" v-model="form.recipient_mode">
               <option v-for="opt in RECIPIENT_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
             </BaseSelect>
+            <div v-else class="px-3 py-2 rounded-lg border border-default bg-gray-50 text-sm text-default">
+              任务属主
+              <span class="block text-xs text-muted mt-0.5">站内信固定发送给任务属主，不可更改</span>
+            </div>
           </div>
         </div>
 
@@ -315,14 +342,25 @@ import { useToast } from 'vue-toastification'
 
 const EVENT_OPTIONS = [
   { value: 'lead.captured', label: '客户留资' },
+  { value: 'scheduled.task', label: '定时任务通知' },
   { value: 'billing.credit_low', label: '积分提醒' },
   { value: 'billing.tenant_expiry', label: '到期提醒' },
   { value: 'abuse.rule_triggered', label: '滥用告警' },
 ]
 
+/** scheduled.task 聚合规则的 conditions.events 值域（缺省=全部勾选） */
+const TASK_EVENT_OPTIONS = [
+  { value: 'task.completed', label: '任务完成' },
+  { value: 'task.failed', label: '任务失败' },
+  { value: 'task.paused', label: '任务已暂停' },
+  { value: 'task.needs_action', label: '需要处理' },
+]
+const ALL_TASK_EVENT_VALUES = TASK_EVENT_OPTIONS.map((opt) => opt.value)
+
 const RECIPIENT_OPTIONS = [
   { value: 'kf_assignee', label: '线索归属员工' },
   { value: 'tenant_admins', label: '租户管理员' },
+  { value: 'task_owner', label: '任务属主' },
 ]
 
 const PROVIDER_OPTIONS = [
@@ -417,7 +455,9 @@ const form = reactive({
   event_type: 'lead.captured',
   scope: 'channel' as 'channel' | 'kf_config',
   kf_config_id: '',
-  recipient_mode: 'kf_assignee' as 'kf_assignee' | 'tenant_admins',
+  // scheduled.task 规则勾选的任务事件（缺省全选，与后端缺省=全部一致）
+  taskEvents: [...ALL_TASK_EVENT_VALUES] as string[],
+  recipient_mode: 'kf_assignee' as 'kf_assignee' | 'tenant_admins' | 'task_owner',
   enabled: true,
 })
 const newTarget = reactive({ provider: 'feishu_bot', configValue: '' })
@@ -467,6 +507,12 @@ function eventLabel(eventType: string): string {
   return EVENT_OPTIONS.find((e) => e.value === eventType)?.label || eventType
 }
 
+function toggleTaskEvent(value: string) {
+  const index = form.taskEvents.indexOf(value)
+  if (index >= 0) form.taskEvents.splice(index, 1)
+  else form.taskEvents.push(value)
+}
+
 function recipientLabel(mode: string): string {
   return RECIPIENT_OPTIONS.find((r) => r.value === mode)?.label || mode
 }
@@ -477,6 +523,11 @@ function providerLabel(provider: string): string {
 
 function conditionLabel(rule: NotificationRule): string {
   const c = rule.conditions || {}
+  if (rule.event_type === 'scheduled.task') {
+    const events = c.events || []
+    if (!events.length) return '全部任务事件'
+    return events.map((e) => TASK_EVENT_OPTIONS.find((o) => o.value === e)?.label || e).join('、')
+  }
   if (rule.event_type !== 'lead.captured') return '全部（租户级）'
   if (c.scope === 'kf_config' && (c.kf_config_ids || []).length > 0) {
     const names = c.kf_config_ids!.map((id) => {
@@ -559,6 +610,7 @@ function resetForm() {
   form.event_type = 'lead.captured'
   form.scope = 'channel'
   form.kf_config_id = ''
+  form.taskEvents = [...ALL_TASK_EVENT_VALUES]
   form.recipient_mode = 'kf_assignee'
   form.enabled = true
 }
@@ -583,6 +635,7 @@ function openCreate() {
     form.scope = 'channel'
   }
   if (form.event_type === 'lead.captured') form.recipient_mode = 'kf_assignee'
+  else if (form.event_type === 'scheduled.task') form.recipient_mode = 'task_owner'
   else form.recipient_mode = 'tenant_admins'
   message.value = ''
   showModal.value = true
@@ -596,6 +649,9 @@ function openEdit(rule: NotificationRule) {
   form.scope = c.scope === 'kf_config' ? 'kf_config' : 'channel'
   // 存量多账号条件编辑保存后收敛为第一个（编辑弹框为单选下拉）
   form.kf_config_id = (c.kf_config_ids || [])[0] || ''
+  // scheduled.task：无 events（缺省全部）按全选回显，否则按存量子集
+  const storedEvents = (c.events || []).filter((e) => ALL_TASK_EVENT_VALUES.includes(e))
+  form.taskEvents = storedEvents.length ? [...storedEvents] : [...ALL_TASK_EVENT_VALUES]
   form.recipient_mode = rule.recipient_mode
   form.enabled = rule.enabled
   message.value = ''
@@ -607,6 +663,11 @@ function openEdit(rule: NotificationRule) {
 }
 
 function buildConditions(): NotificationRule['conditions'] {
+  if (form.event_type === 'scheduled.task') {
+    // 全选=缺省全部（规范化 {}，与后端口径一致）；否则仅存勾选子集
+    if (form.taskEvents.length >= ALL_TASK_EVENT_VALUES.length) return {}
+    return { events: ALL_TASK_EVENT_VALUES.filter((e) => form.taskEvents.includes(e)) }
+  }
   if (form.event_type !== 'lead.captured') return {}
   if (form.scope === 'kf_config') {
     return { scope: 'kf_config', kf_config_ids: form.kf_config_id ? [form.kf_config_id] : [] }
@@ -623,6 +684,11 @@ async function handleSave() {
   }
   if (form.event_type === 'lead.captured' && form.scope === 'kf_config' && !form.kf_config_id) {
     message.value = '请选择客服账号'
+    messageType.value = 'error'
+    return
+  }
+  if (form.event_type === 'scheduled.task' && form.taskEvents.length === 0) {
+    message.value = '请至少选择一个通知事件'
     messageType.value = 'error'
     return
   }
