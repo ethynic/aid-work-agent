@@ -9,6 +9,7 @@
 | Runtime 与 CLI 安装升级简化评估 | [评估](research/runtime-cli-install-upgrade-simplicity-review.md) | 2026-10-30：审查安装、任务恢复、验包与信任耦合，建议覆盖升级优先、重装白名单保留配置。 |
 | BOSS CLI 视觉识别与恢复真机实验 | [实验记录](research/boss-visual-recovery-machine-experiments.md) | 累计126次实调；霍接收预览关闭故障链通过，视觉20倍。 |
 | ZCode / DeepSeek Harness 搜索工具与中文检索增强 | [调研](research/agent-web-search-harness-research.md) | Read/PDF修复保留，实验研究流程已撤回；旧Pro实测不作Flash验收。 |
+| WorkBuddy B2B 获客 skill 兼容性与能力评估 | [调研](research/b2b-lead-gen-workbuddy-compatibility-research.md) / [实验计划](plans/plan-b2b-harness-probe.md) | 完整Skill复跑已停止；当前收敛到Search/Fetch组件验收。 |
 | Codex、DeepSeek Harness、Hermes 桌面执行架构对比 | [调研](research/desktop-agent-harness-architecture-research.md) | 桌面 Agent：共用云端 Runner、本机文件/程序与批处理执行边界。 |
 | Desktop 本地与服务端工具执行分工调研 | [调研](research/desktop-agent-local-vs-server-tool-execution-research.md) | 桌面客户端 v3 / Runtime 插件宿主：本地/服务端双文件执行器、DeviceFileRef 与路由边界；结论已被桌面 v3 设计（§8）与 Phase 2/3 计划吸收，旧 Coordinator 路线作废。 |
 | 基础设施差距分析 | [enterprise-agent-infrastructure-gap-analysis.md](research/enterprise-agent-infrastructure-gap-analysis.md) | 整体规划 |
