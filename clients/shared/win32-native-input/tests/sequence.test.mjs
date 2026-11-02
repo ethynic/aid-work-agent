@@ -33,6 +33,8 @@ function makeFakeWorld(options = {}) {
     calls: [],
     sleeps: [],
     chrome: options.chrome ?? [],
+    contentRects: new Map(),
+    contentClosed: 0,
     refuseDpiEnter: options.refuseDpiEnter ?? false,
     refuseDpiRestore: options.refuseDpiRestore ?? false,
     loseDpiContextAt: null, // 第 N 次 setCursorPos 后外部丢失 DPI 上下文
@@ -66,6 +68,17 @@ function makeFakeWorld(options = {}) {
       const w = state.windows.get(hwnd)
       return w ? { ...w.rect } : undefined
     },
+    openContentViewport(hwnd) {
+      return {
+        readRect() {
+          if (state.contentMissing) throw new Error('Expected exactly one visible browser content document; found 0; input refused')
+          const window = state.windows.get(hwnd)
+          return { ...(state.contentRects.get(hwnd) ?? { ...window.rect, top: window.rect.top + 40 }) }
+        },
+        close() { state.contentClosed++ },
+      }
+    },
+    getFocusedWindow() { return state.focus ?? state.foreground },
     getPhysicalCursorPos() {
       state.readCount = (state.readCount ?? 0) + 1
       // 第 N 次回读时光标被用户挪走 1px（发生在 move 的回读校验之后/悬停期间）
@@ -248,6 +261,69 @@ function standardWorld(extra = {}) {
 
 const VP = { cssW: 1917, cssH: 1039 }
 
+test('a changed observation after cursor settles refuses before DOWN and releases the content observation', async () => {
+  const { world } = standardWorld()
+  await assert.rejects(performPhysicalInput({ api: world.api, sleep: world.sleep, log: () => {},
+    verifyObservation: async () => { throw new Error('page viewport changed; input refused') } },
+  { x: 100, y: 100, ...VP, cdpPort: undefined }), /page viewport changed/)
+  assert.ok(!world.state.calls.includes('LEFTDOWN'))
+  assert.equal(world.state.contentClosed, 1)
+})
+
+test('same-process owned popup covering content remains a refusal, never a valid input host', async () => {
+  const { world, win } = standardWorld()
+  world.addWindow({ owner: win, title: 'browser popup', pid: 7000, topmost: true,
+    rect: { left: 0, top: 40, right: 1920, bottom: 1080 } })
+  await assert.rejects(runClick(world), /落点仍被遮挡/)
+  assert.ok(!world.state.calls.includes('LEFTDOWN'))
+})
+
+test('content geometry changes during hover: refuse instead of stretching old DOM coordinates', async () => {
+  const { world, win } = standardWorld()
+  const originalSleep = world.sleep
+  world.sleep = async ms => { await originalSleep(ms); if (ms === 500) world.state.contentRects.set(win,
+    { left: 20, top: 40, right: 1920, bottom: 1080 }) }
+  await assert.rejects(runClick(world), /Browser content geometry changed/)
+  assert.ok(!world.state.calls.includes('LEFTDOWN'))
+})
+
+test('keyboard focus changes after click: stop typing with UNKNOWN rather than send to a different field/window', async () => {
+  const { world, win } = standardWorld()
+  let reads = 0
+  world.api.getFocusedWindow = () => ++reads > 1 ? 999 : win
+  await assert.rejects(runClick(world, { text: '中', op: 'clickAndType' }), error => error.kind === 'BOSS_INPUT_UNKNOWN'
+    && /Keyboard focus changed/.test(error.message))
+  assert.deepEqual(world.state.typed, [])
+  assert.ok(world.state.calls.includes('LEFTUP'))
+})
+
+test('content observation cleanup failure after a click retains UNKNOWN and restores DPI', async () => {
+  const { world } = standardWorld()
+  const open = world.api.openContentViewport
+  world.api.openContentViewport = win => ({ ...open(win), close() { throw new Error('COM cleanup failed') } })
+  await assert.rejects(runClick(world), error => error.kind === 'BOSS_INPUT_UNKNOWN' && error.message.startsWith('[BOSS_INPUT_UNKNOWN]'))
+  assert.ok(world.state.calls.includes('LEFTUP'))
+  assert.equal(world.state.dpi, -1)
+})
+
+test('negative screen coordinates use nearest-even rounding on a left/upper display', async () => {
+  const { world, win } = standardWorld()
+  world.state.windows.get(win).rect = { left: -200, top: -300, right: -100, bottom: -160 }
+  const result = await runClick(world, { x: 3, y: 3, cssW: 200, cssH: 200 })
+  assert.ok(result.output.includes('目标屏幕坐标: (-198, -258)'))
+})
+
+test('drag never waits for CDP after DOWN; native guards remain active while the button is held', async () => {
+  const { world } = standardWorld()
+  let checks = 0
+  await performPhysicalInput({ api: world.api, sleep: world.sleep, log: () => {}, verifyObservation: async () => {
+    checks++
+    assert.ok(!world.state.calls.includes('LEFTDOWN'), 'Observation check must complete before holding the mouse')
+  } }, { x: 100, y: 100, ...VP, dragX: 200, dragY: 200, op: 'drag' })
+  assert.equal(checks, 1)
+  assert.ok(world.state.calls.includes('LEFTUP'))
+})
+
 async function runClick(world, request = {}, log = () => {}) {
   return performPhysicalInput(
     { api: world.api, sleep: world.sleep, log },
@@ -334,7 +410,7 @@ test('落点被遮挡：抬窗重试后仍遮挡 → REFUSED exit 2，绝不按�
     assert.equal(error.kind, 'REFUSED')
     assert.match(error.message, /落点仍被遮挡/)
     assert.match(error.message, /cursor_match=0; ownership_match=0/)
-    assert.match(error.message, /widget=0x[0-9a-f]+; hit=0x[0-9a-f]+; foreground=0x[0-9a-f]+/)
+    assert.match(error.message, /browser=\d+; hit=\d+; foreground=\d+/)
     return true
   })
   assert.ok(!world.state.calls.includes('LEFTDOWN'), '守卫拒绝绝不盲点')
@@ -373,7 +449,7 @@ test('悬停后用户挪动光标 → 光标守卫拒绝（两项谓词），不
     assert.ok(error instanceof NativeInputError)
     assert.equal(error.exitCode, 1)
     assert.notEqual(error.kind, 'BOSS_INPUT_UNKNOWN', '输入开始前的失败不是效果未知')
-    assert.match(error.message, /Cursor or render-widget ownership changed/)
+    assert.match(error.message, /Cursor or browser-content ownership changed/)
     assert.match(error.message, /cursor_match=0/)
     assert.match(error.message, /expected_screen=\(959,540\)/)
     assert.match(error.message, /actual_cursor=\(960,540\)/)
@@ -402,7 +478,7 @@ test('拖动：16 步插值 + 双端点几何校验 + 路径守卫 + finally 释
 test('拖动期间窗口几何变化 → BOSS_INPUT_UNKNOWN（输入已开始）且左键已释放', async () => {
   const { world, rw } = standardWorld()
   world.state.onBeforeDragStep = () => {
-    world.state.windows.get(rw).rect = { left: 0, top: 40, right: 1024, bottom: 768 }
+    world.state.contentRects.set(world.state.foreground, { left: 0, top: 40, right: 1024, bottom: 768 })
     world.state.onBeforeDragStep = null
   }
   await assert.rejects(
@@ -414,14 +490,14 @@ test('拖动期间窗口几何变化 → BOSS_INPUT_UNKNOWN（输入已开始）
       assert.ok(error instanceof NativeInputError)
       assert.equal(error.kind, 'BOSS_INPUT_UNKNOWN')
       assert.equal(error.exitCode, 1)
-      assert.match(error.message, /\[BOSS_INPUT_UNKNOWN\] 拖动期间窗口几何变化/)
+      assert.match(error.message, /\[BOSS_INPUT_UNKNOWN\] Browser content geometry changed/)
       return true
     },
   )
   assert.ok(world.state.calls.includes('LEFTDOWN') && world.state.calls.includes('LEFTUP'), 'finally 释放左键')
 })
 
-test('拖动终点被遮挡 → 按下前拒绝（BOSS_INPUT_UNKNOWN 会计边界：MarkInputStarted 之后）', async () => {
+test('拖动终点被遮挡 → 按下前拒绝，不标记已投递', async () => {
   const { world } = standardWorld()
   // topmost 面板遮挡拖动终点区域（抬窗也压不过 topmost）
   world.addWindow({ title: '面板', rect: { left: 1000, top: 500, right: 1200, bottom: 700 }, z: 1, topmost: true })
@@ -431,22 +507,22 @@ test('拖动终点被遮挡 → 按下前拒绝（BOSS_INPUT_UNKNOWN 会计边�
       { x: 500, y: 600, cssW: VP.cssW, cssH: VP.cssH, dragX: 1000, dragY: 600, op: 'drag' },
     ),
     (error) => {
-      assert.match(error.message, /\[BOSS_INPUT_UNKNOWN\] 拖动终点被遮挡/)
-      assert.equal(error.kind, 'BOSS_INPUT_UNKNOWN')
+      assert.match(error.message, /^拖动终点被遮挡/)
+      assert.equal(error.kind, 'FAILED')
       return true
     },
   )
   assert.ok(!world.state.calls.includes('LEFTDOWN'), '终点校验在按下之前，不产生按下')
 })
 
-test('非法拖动参数：仅一端坐标 → BOSS_INPUT_UNKNOWN（ps1 在 MarkInputStarted 之后校验）', async () => {
+test('非法拖动参数：仅一端坐标 → 投递前拒绝，不报UNKNOWN', async () => {
   const { world } = standardWorld()
   await assert.rejects(
     performPhysicalInput(
       { api: world.api, sleep: world.sleep, log: () => {} },
       { x: 500, y: 600, cssW: VP.cssW, cssH: VP.cssH, dragX: 600, op: 'drag' },
     ),
-    (error) => error instanceof NativeInputError && error.kind === 'BOSS_INPUT_UNKNOWN' && /拖动终点必须同时提供/.test(error.message),
+    (error) => error instanceof NativeInputError && error.kind === 'FAILED' && /拖动终点必须同时提供/.test(error.message),
   )
   assert.ok(!world.state.calls.includes('LEFTDOWN'))
 })
@@ -495,7 +571,7 @@ function boundChromeWorld(processes) {
   return { world, win, rw }
 }
 
-test('绑定widget暂时隐藏：重新枚举新可见实例后输入，不复用隐藏HWND', async () => {
+test('绑定widget隐藏：不探测、不等待辅助窗口，按内容区输入', async () => {
   const { world, win, rw } = boundChromeWorld([{ pid: 3131, exeName: 'chrome.exe', commandLine: 'chrome.exe --remote-debugging-port=9333' }])
   world.state.windows.get(rw).visible = false
   let probes = 0
@@ -508,23 +584,22 @@ test('绑定widget暂时隐藏：重新枚举新可见实例后输入，不复�
   const logs = []
   await performPhysicalInput({ api: world.api, sleep: world.sleep, log: line => logs.push(line) },
     { x: 100, y: 100, cssW: VP.cssW, cssH: VP.cssH, cdpPort: 9333 })
-  assert.equal(probes, 3)
+  assert.equal(probes, 0)
   assert.equal(world.state.calls.filter(call => call === 'LEFTDOWN').length, 1)
-  assert.ok(logs.some(line => line.includes('boss-input-discovery') && line.includes('visible=0')))
+  assert.ok(logs.some(line => line.includes('boss-input-discovery') && line.includes('content_rect=')))
   assert.ok(logs.every(line => !line.includes('BOSS直聘 - Google Chrome')), '诊断不得记录窗口标题')
 })
 
-test('绑定widget持续隐藏：有界重新枚举后仍以exit2零输入拒绝', async () => {
+test('绑定widget持续隐藏：仍能正常点击，不以辅助状态否决真实输入', async () => {
   const { world, rw } = boundChromeWorld([{ pid: 3131, exeName: 'chrome.exe', commandLine: 'chrome.exe --remote-debugging-port=9333' }])
   world.state.windows.get(rw).visible = false
   let probes = 0
   const enumerate = world.api.enumChildWindows
   world.api.enumChildWindows = (parent, visit) => { probes++; return enumerate(parent, visit) }
-  await assert.rejects(performPhysicalInput({ api: world.api, sleep: world.sleep, log: () => {} },
-    { x: 100, y: 100, cssW: VP.cssW, cssH: VP.cssH, cdpPort: 9333 }),
-  error => error.exitCode === 2 && /render widget hidden; input refused/.test(error.message))
-  assert.ok(probes > 1 && probes <= 8, '探测应等待短暂widget重建，但持续故障不得无限等待')
-  assert.ok(!world.state.calls.includes('LEFTDOWN'))
+  await performPhysicalInput({ api: world.api, sleep: world.sleep, log: () => {} },
+    { x: 100, y: 100, cssW: VP.cssW, cssH: VP.cssH, cdpPort: 9333 })
+  assert.equal(probes, 0)
+  assert.ok(world.state.calls.includes('LEFTDOWN'))
 })
 
 test('绑定模式：唯一调试 Chrome → 绑定找窗 → 前台 → 输入；命令行匹配语义与 ps1 一致', async () => {
@@ -679,17 +754,18 @@ test('窗口未找到（非绑定）→ exit 1，零输入', async () => {
   })
 })
 
-test('render widget 不可见（非绑定）→ exit 1；主窗在后台提示切前台', async () => {
+test('内容区无法确认（非绑定）→ exit 1；不猜坐标', async () => {
   const { world, rw } = standardWorld()
   world.state.windows.get(rw).visible = false
+  world.state.contentMissing = true
   await assert.rejects(runClick(world), (error) => {
     assert.equal(error.exitCode, 1)
-    assert.match(error.message, /渲染子窗口不可见/)
+    assert.match(error.message, /visible browser content document/)
     return true
   })
 })
 
-test('render widget 选取面积最大者（多个可见 Chrome_RenderWidgetHostHWND）', async () => {
+test('多个legacy widget不参与内容区定位，避免小辅助窗把坐标映射带偏', async () => {
   const world = makeFakeWorld()
   const win = world.addWindow({ title: 'BOSS直聘 - Google Chrome', rect: { left: 0, top: 0, right: 1920, bottom: 1080 } })
   // 先注册一个小的可见 widget（96px 高），真正的大 widget 后注册——面积最大语义
@@ -702,10 +778,12 @@ test('render widget 选取面积最大者（多个可见 Chrome_RenderWidgetHost
   assert.equal(world.api.windowFromPoint(959, 540), big)
 })
 
-test('全部 render widget 隐藏时回退第一个隐藏的并拒绝（不可见）', async () => {
+test('全部legacy widget隐藏仍走内容区；关闭当前输入的内容观察', async () => {
   const { world, rw } = standardWorld()
   world.state.windows.get(rw).visible = false
-  await assert.rejects(runClick(world), /渲染子窗口不可见/)
+  await runClick(world)
+  assert.equal(world.state.contentClosed, 1)
+  assert.ok(world.state.calls.includes('LEFTDOWN'))
 })
 
 // ---- 进程命令行正则语义 ----

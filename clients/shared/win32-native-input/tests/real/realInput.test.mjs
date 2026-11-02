@@ -93,7 +93,7 @@ test('真实输入：Chrome 点击键入读回 / 光标断言 / 拖动 / 遮挡�
     const box = api.getWindowRect(rw)
     const cssW = box.right - box.left
     const cssH = box.bottom - box.top
-    const resolveTarget = () => ({ win, rw })
+    const resolveTarget = () => ({ win })
 
     // === 1. 点击 + 逐字键入（中文/emoji/英文混合）；title 读回 ===
     const out = await performPhysicalInput(

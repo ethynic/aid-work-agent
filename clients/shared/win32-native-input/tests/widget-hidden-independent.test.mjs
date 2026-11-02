@@ -13,9 +13,14 @@ function world() {
     getCurrentThreadId: () => 1,
     getWindowRect: (id) => id === 10 ? { left: 0, top: 0, right: 1400, bottom: 1000 }
       : { left: 100, top: 80, right: 1300, bottom: 880 },
+    openContentViewport: () => ({ readRect() {
+      if (state.missingContent) throw new Error('Content document unavailable; input refused')
+      return { left: 100, top: 80, right: 1300, bottom: 880 }
+    }, close() { state.closed = (state.closed ?? 0) + 1 } }),
+    getFocusedWindow: () => state.foreground,
     getPhysicalCursorPos: () => ({ ...state.cursor }),
     setCursorPos(x, y) { state.cursor = { x, y }; return true },
-    windowFromPoint: () => state.children.find(id => state.visible.has(id)) ?? 0,
+    windowFromPoint: () => state.children.find(id => state.visible.has(id)) ?? 10,
     enumWindows(visit) { visit(10); return true },
     enumChildWindows(parent, visit) { assert.equal(parent, 10); state.enumerations++; state.children.forEach(visit); return true },
     isWindowVisible: (id) => state.visible.has(id),
@@ -45,31 +50,33 @@ function world() {
   return { state, context, request }
 }
 
-test('independent: absent widget is re-enumerated after activation, then exactly one business input is delivered', async () => {
+test('absent widget does not block a known content point or start discovery retries', async () => {
   const { state, context, request } = world()
   context.sleep = async ms => {
     state.sleeps.push(ms)
     if (ms === 200) { state.children = [21]; state.visible.add(21) }
   }
   await performPhysicalInput(context, request)
-  assert.equal(state.enumerations, 2)
+  assert.equal(state.enumerations, 0)
   assert.deepEqual(state.events, ['down', 'up'])
   assert.deepEqual(state.cursor, { x: 400, y: 280 })
   assert.equal(state.dpi, -1)
 })
 
-test('independent: permanent missing widget refuses with bounded waits and no physical events', async () => {
+test('missing content geometry refuses without input and cannot become execution unknown', async () => {
   const { state, context, request } = world()
+  state.missingContent = true
   await assert.rejects(performPhysicalInput(context, request), error => error.exitCode === 2
-    && /render widget unavailable; input refused/.test(error.message)
+    && /Content document unavailable; input refused/.test(error.message)
     && !error.message.includes('BOSS_INPUT_UNKNOWN'))
-  assert.equal(state.enumerations, 7)
-  assert.equal(state.sleeps.filter(ms => ms === 200).length, 6)
+  assert.equal(state.enumerations, 0)
+  assert.equal(state.sleeps.filter(ms => ms === 200).length, 0)
+  assert.equal(state.closed, 1)
   assert.deepEqual(state.events, [])
   assert.equal(state.dpi, -1)
 })
 
-test('independent: defunct hidden widget cannot prevent discovery of the valid visible widget behind it', async () => {
+test('defunct hidden widget geometry cannot influence the content point', async () => {
   const { state, context, request } = world()
   state.children = [30, 31]
   state.visible.add(31)
@@ -77,45 +84,57 @@ test('independent: defunct hidden widget cannot prevent discovery of the valid v
   context.api.getWindowRect = id => id === 30 ? { left: 0, top: 0, right: 0, bottom: 0 } : readRect(id)
   await performPhysicalInput(context, request)
   assert.deepEqual(state.events, ['down', 'up'])
-  assert.equal(state.enumerations, 1)
+  assert.equal(state.enumerations, 0)
 })
 
-test('independent: cancellation during new widget wait cannot deliver a click even if a widget becomes available', async () => {
+test('cancellation while moving cannot deliver a click even with valid content geometry', async () => {
   const { state, context, request } = world()
   const abort = new AbortController()
   context.signal = abort.signal
   context.sleep = async ms => {
     state.sleeps.push(ms)
-    if (ms === 200) { state.children = [22]; state.visible.add(22); abort.abort() }
+    if (ms === 25) { state.children = [22]; state.visible.add(22); abort.abort() }
   }
   await assert.rejects(performPhysicalInput(context, request), error => error.exitCode === 2
     && !error.message.includes('BOSS_INPUT_UNKNOWN'))
-  assert.equal(state.enumerations, 1)
+  assert.equal(state.enumerations, 0)
   assert.deepEqual(state.events, [])
   assert.equal(state.dpi, -1)
 })
 
-test('independent: explicit target resolver remains one-shot and does not opt into Chrome discovery retries', async () => {
+test('explicit content resolver remains one-shot and does not opt into discovery retries', async () => {
   const { state, context, request } = world()
   let resolutions = 0
-  const custom = { ...request, cdpPort: undefined, resolveTarget() { resolutions++; return { win: 10, rw: 29 } } }
-  await assert.rejects(performPhysicalInput(context, custom), /不可见/)
+  state.missingContent = true
+  const custom = { ...request, cdpPort: undefined, resolveTarget() { resolutions++; return { win: 10 } } }
+  await assert.rejects(performPhysicalInput(context, custom), /Content document unavailable/)
   assert.equal(resolutions, 1)
   assert.equal(state.enumerations, 0)
   assert.equal(state.sleeps.filter(ms => ms === 200).length, 0)
   assert.deepEqual(state.events, [])
 })
 
-test('independent: foreground ownership loss while waiting still refuses all input', async () => {
+test('foreground ownership loss while moving still refuses all input', async () => {
   const { state, context, request } = world()
   context.api.getAncestor = id => id === 99 ? 99 : 10
   context.api.getWindowThreadProcessId = id => ({ thread: 1, pid: id === 99 ? 999 : 123 })
   context.sleep = async ms => {
     state.sleeps.push(ms)
-    if (ms === 200) { state.children = [24]; state.visible.add(24); state.foreground = 99 }
+    if (ms === 25) { state.children = [24]; state.visible.add(24); state.foreground = 99 }
   }
   await assert.rejects(performPhysicalInput(context, request), error => error.exitCode === 2
     && /not foreground/.test(error.message))
   assert.deepEqual(state.events, [])
-  assert.equal(state.enumerations, 1)
+  assert.equal(state.enumerations, 0)
+})
+
+test('hidden widget is irrelevant to both keyboard typing and wheel input', async () => {
+  for (const extra of [{ text: '中😊', op: 'clickAndType' }, { wheelDeltaY: -120, notches: 2, op: 'wheel' }]) {
+    const { state, context, request } = world()
+    state.children = [21]
+    await performPhysicalInput(context, { ...request, ...extra })
+    assert.equal(state.enumerations, 0)
+    assert.deepEqual(state.events, extra.text ? ['down', 'up', 'type', 'type', 'type'] : ['wheel', 'wheel'])
+    assert.equal(state.closed, 1)
+  }
 })

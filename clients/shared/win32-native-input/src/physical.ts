@@ -1,12 +1,90 @@
 /**
- * BossPhysicalInput.cs 的 1:1 移植（一条守卫不删）。
+ * Physical-coordinate primitives and browser content guards (design §10.11).
  *
- * - 页面坐标对物理 HWND 矩形线性映射；不推断、不缓存 DPI 乘数。
+ * - 页面坐标映射到UIA内容区物理矩形；legacy辅助函数不参与普通输入序列。
  * - 每次操作用 per-thread PMv2 DPI 上下文包裹；进入失败、上下文丢失、恢复失败均
  *   直接拒绝输入，绝不静默回退到虚拟化坐标。
  * - MarkInputStarted 之后的失败信息带 [BOSS_INPUT_UNKNOWN] 前缀（效果未知会计）。
  */
-import type { GuardDiagnostics, NativeApi, Point, Rect } from './types.js'
+import type { ContentViewport, GuardDiagnostics, NativeApi, Point, Rect } from './types.js'
+
+/** Nearest-even rounding, including negative physical coordinates. */
+export function psInt(value: number): number {
+  const floor = Math.floor(value)
+  const diff = value - floor
+  if (diff < 0.5) return floor
+  if (diff > 0.5) return floor + 1
+  return floor % 2 === 0 ? floor : floor + 1
+}
+
+/** The page's physical content region, never a legacy renderer HWND. */
+export class ContentTarget {
+  readonly rect: Rect
+  private readonly windowRect: Rect
+
+  constructor(private readonly api: NativeApi, readonly win: number, private readonly content: ContentViewport,
+    private readonly width: number, private readonly height: number) {
+    this.windowRect = readRect(api, win)
+    this.rect = content.readRect()
+    const r = this.rect, w = this.windowRect
+    if (![width, height, r.left, r.top, r.right, r.bottom].every(Number.isFinite) || width <= 0 || height <= 0
+      || r.right <= r.left || r.bottom <= r.top || r.left < w.left || r.top < w.top || r.right > w.right || r.bottom > w.bottom) {
+      throw new Error('Invalid browser content viewport geometry; input refused')
+    }
+    // A viewport uses uniform scaling. Reject old layout dimensions after resize,
+    // rather than stretching them independently into a different content shape.
+    const sx = (r.right - r.left) / width, sy = (r.bottom - r.top) / height
+    if (Math.abs(sx - sy) * Math.min(width, height) > 2) {
+      throw new Error('Page viewport no longer matches browser content geometry; input refused')
+    }
+  }
+
+  requireGeometry(): void {
+    requirePhysicalContext(this.api)
+    if (!this.ownsWindow(this.api.getForegroundWindow())) {
+      throw new Error('Debug Chrome is not foreground; observation/input refused')
+    }
+    const same = (a: Rect, b: Rect) => a.left === b.left && a.top === b.top && a.right === b.right && a.bottom === b.bottom
+    if (!same(readRect(this.api, this.win), this.windowRect) || !same(this.content.readRect(), this.rect)) {
+      throw new Error('Browser content geometry changed; input refused')
+    }
+  }
+
+  point(x: number, y: number): Point {
+    this.requireGeometry()
+    if (![x, y].every(Number.isFinite) || x < 0 || y < 0 || x >= this.width || y >= this.height) {
+      throw new Error('Page point outside browser content viewport; input refused')
+    }
+    // Keep the existing nearest-even rounding, then check the actual pixel.
+    const point = { x: psInt(this.rect.left + x * (this.rect.right - this.rect.left) / this.width),
+      y: psInt(this.rect.top + y * (this.rect.bottom - this.rect.top) / this.height) }
+    if (!this.contains(point.x, point.y)) throw new Error('Screen point outside browser content viewport; input refused')
+    return point
+  }
+
+  ownsWindow(hwnd: number): boolean {
+    return hwnd !== 0 && this.api.getAncestor(hwnd, 2) === this.win
+      && this.api.getWindowThreadProcessId(hwnd).pid === this.api.getWindowThreadProcessId(this.win).pid
+  }
+
+  private contains(x: number, y: number): boolean {
+    return x >= this.rect.left && y >= this.rect.top && x < this.rect.right && y < this.rect.bottom
+  }
+
+  hit(x: number, y: number): boolean {
+    this.requireGeometry()
+    return this.contains(x, y) && this.ownsWindow(this.api.windowFromPoint(x, y))
+  }
+
+  requireCursor(x: number, y: number): void {
+    const cursor = readCursor(this.api)
+    const cursorMatch = cursor.x === x && cursor.y === y
+    const ownershipMatch = this.hit(x, y)
+    if (!cursorMatch || !ownershipMatch) {
+      throw new Error(`Cursor or browser-content ownership changed; input refused; expected_screen=(${x},${y}); actual_cursor=(${cursor.x},${cursor.y}); hit=${this.api.windowFromPoint(x, y)}; browser=${this.win}; cursor_match=${Number(cursorMatch)}; ownership_match=${Number(ownershipMatch)}`)
+    }
+  }
+}
 
 /** PER_MONITOR_AWARE_V2（DPI_AWARENESS_CONTEXT 的 -4 句柄值） */
 const PER_MONITOR_AWARE_V2 = -4

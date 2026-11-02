@@ -17,6 +17,7 @@ export interface FixtureNode {
   cls?: string
   /** #text 的文本内容（仅 tag='#text'） */
   text?: string
+  inputValue?: string
   /** 额外属性（如 SVG path 的 d="M12 214..."——数字片段进 strings 表但不是文本节点） */
   attrs?: Record<string, string>
   bounds?: [number, number, number, number]
@@ -42,9 +43,11 @@ export function buildChatSnapshot(rootChildren: FixtureNode[]): DomSnapshot {
   const layoutNodeIndex: number[] = []
   const layoutBounds: Array<[number, number, number, number]> = []
 
+  const inputValue = { index: [] as number[], value: [] as number[] }
   const append = (node: FixtureNode, parent: number): number => {
     const nodeIndex = nodeValue.length
     parentIndex.push(parent)
+    if (node.tag === 'INPUT') { inputValue.index.push(nodeIndex); inputValue.value.push(node.inputValue === undefined ? -1 : stringIndexOf(node.inputValue)) }
     if (node.tag === '#text') {
       nodeValue.push(stringIndexOf(node.text ?? ''))
       nodeNameIdx.push(stringIndexOf('#text'))
@@ -84,6 +87,7 @@ export function buildChatSnapshot(rootChildren: FixtureNode[]): DomSnapshot {
       {
         nodes: {
           nodeValue,
+          inputValue,
           contentDocumentIndex: { index: [], value: [] },
           parentIndex,
           nodeName: nodeNameIdx,
@@ -134,7 +138,7 @@ export function conversationItem(opts: {
     })
   }
   const nameRowY = opts.y + 15
-  children.push({ tag: '#text', text: opts.name, bounds: [264, nameRowY, 45, 17] })
+  children.push({ tag: 'SPAN', cls: 'geek-name', bounds: [264, nameRowY, 45, 17], children: [{ tag: '#text', text: opts.name, bounds: [264, nameRowY, 45, 17] }] })
   if (opts.job) children.push({ tag: '#text', text: opts.job, bounds: [313, nameRowY + 2, 88, 14] })
   if (opts.time) {
     // 真机时间文本带换行缩进："\n                    10:42\n                "（trim 后才是时间）

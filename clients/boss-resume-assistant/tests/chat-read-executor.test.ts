@@ -248,7 +248,7 @@ test('contact 给定且未打开任何会话：仍走名单校验（找不到 �
   const snap = buildChatSnapshot([
     { tag: 'DIV', cls: 'user-list', bounds: [188, 196, 359, 1088], children: [
       { tag: 'DIV', cls: 'geek-item', bounds: [198, 300, 339, 74], children: [
-        { tag: '#text', text: '李雷', bounds: [264, 315, 30, 17] },
+        { tag: 'SPAN', cls: 'geek-name', bounds: [264,315,30,17], children: [{ tag: '#text', text: '李雷', bounds: [264,315,30,17] }] },
       ] },
     ] },
   ])
@@ -259,7 +259,7 @@ test('contact 给定且未打开任何会话：仍走名单校验（找不到 �
   })
 })
 
-test('user-list 容器缺失：回退未读算法会话项全集找姓名', async () => {
+test('user-list 容器缺失：不把全页其它类似组件作为会话', async () => {
   // 无 user-list 容器，只有带徽章的会话项（badge → 高 60~100 DIV 祖先）——名单来自未读项
   const snap = buildChatSnapshot([
     { tag: 'DIV', cls: 'conversation-message', bounds: [548, 277, 680, 812], children: [
@@ -281,10 +281,10 @@ test('user-list 容器缺失：回退未读算法会话项全集找姓名', asyn
     ] },
   ])
   const r = await executorOf(snap).read()
-  assert.deepEqual(r.unread, [{ name: '赵六', count: 4, time: '昨天', lastPreview: '收到，谢谢' }])
+  assert.deepEqual(r.unread, [])
   await assert.rejects(executorOf(snap).read({ contact: '钱七' }), (err: unknown) => {
     assert.ok(err instanceof ChatReadError)
-    assert.match(err.message, /可用联系人：赵六/)
+    assert.match(err.message, /列表为空或不可读/)
     return true
   })
 })

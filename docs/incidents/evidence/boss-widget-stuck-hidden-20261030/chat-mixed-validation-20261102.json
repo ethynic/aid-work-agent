@@ -1,0 +1,133 @@
+{
+  "at": "2026-11-02T02:50:19.915201+00:00",
+  "scope": "BOSS chat mixed conversation list and main-document search; compiled workspace CLI, Node 22.23.3; no install/deploy",
+  "production_sources": {
+    "clients/boss-resume-assistant/src/main/boss/ChatReadExecutor.ts": "acfc8d97470e90da1a886afde62c092966ba63ff25fc7a9bca475f9572a961cd",
+    "clients/boss-resume-assistant/src/main/boss/ChatOpenExecutor.ts": "711d9070bdad137c30e4cc8c3ec07f2f7432b3318e799bb12da2db9981457ffb",
+    "clients/boss-resume-assistant/src/main/boss/ChatSearchExecutor.ts": "423b463d5e23b416d2754442926b51b6099f1bcc922fbc682bbd2f44751e7db3",
+    "clients/boss-resume-assistant/src/main/boss/domSnapshot.ts": "cc884e2db3fc56f1a0689ba13e05906e50f513d2e1c9557564368b85bb2f8732",
+    "clients/boss-resume-assistant/src/main/operations/errorMapping.ts": "7622b2df5f8808f2ad6cd9e3c37440b1a4b7ab0b150b32235c28db21eb73077d"
+  },
+  "independent_test": {
+    "at": "2026-11-02T02:49:04.662Z",
+    "role": "independent test",
+    "node": "22.23.3",
+    "finalRegression": {
+      "files": [
+        "chat-mixed-layout",
+        "chat-open-executor",
+        "chat-read-executor",
+        "chat-search-executor",
+        "chat-send-executor",
+        "chat-reject-executor",
+        "boss-open-chat",
+        "boss-read-chat",
+        "boss-send-to",
+        "page-navigator",
+        "operations-result",
+        "page-operation-independent",
+        "local-operation-recovery",
+        "local-operation-recovery-independent",
+        "reject-tail-refill-independent"
+      ],
+      "tests": 254,
+      "passed": 254,
+      "failed": 0,
+      "skipped": 0,
+      "exitCode": 0,
+      "log": ".tmp/boss-chat-mixed-20261102/independent-regression-final.log"
+    },
+    "extraProbes": {
+      "tests": 9,
+      "passed": 9,
+      "failed": 0,
+      "skipped": 0,
+      "exitCode": 0,
+      "log": ".tmp/boss-chat-mixed-20261102/independent-probes-final.log"
+    },
+    "initialFinding": {
+      "tests": 239,
+      "passed": 236,
+      "failed": 3,
+      "reason": "Legacy chatActionFixture had bare name text rather than observed geek-name field; fixture corrected by developer, then affected regression rerun green."
+    },
+    "limitations": [
+      "No real-browser, mouse, message send, pin state change, install or deployment performed by independent tester.",
+      "Pinned layout simulated using actual conversation row structure and extra pin label; real pinned customer variant remains live acceptance scope.",
+      "Full suite was not run; prior full-suite failures outside these affected modules are not claimed fixed."
+    ]
+  },
+  "live_regression": {
+    "at": "2026-11-02T02:48:32.403Z",
+    "sent_messages": 0,
+    "steps": [
+      {
+        "operation": "boss_open_chat",
+        "success": true,
+        "code": "OK",
+        "via": "search",
+        "header_matches": true,
+        "pathname": "/web/chat/index",
+        "ad_present": true,
+        "same_target": true
+      },
+      {
+        "operation": "boss_open_chat",
+        "success": true,
+        "code": "OK",
+        "via": "search",
+        "header_matches": true,
+        "pathname": "/web/chat/index",
+        "ad_present": true,
+        "same_target": true
+      },
+      {
+        "operation": "boss_read_chat",
+        "success": true,
+        "code": "OK",
+        "messages": 3,
+        "unread": 38
+      }
+    ],
+    "initial": {
+      "pathname": "/web/chat/index",
+      "documents": 3,
+      "ad_present": true,
+      "contacts": 40
+    },
+    "success": true
+  },
+  "developer_validation": {
+    "build:main": "passed",
+    "typecheck": "passed",
+    "related_tests": {
+      "total": 67,
+      "passed": 67,
+      "failed": 0,
+      "skipped": 0
+    },
+    "initial_red_mixed_tests": {
+      "total": 4,
+      "failed": 3,
+      "passed": 1
+    }
+  },
+  "review": {
+    "role": "independent CodeReview",
+    "open_P0_P1_P2": 0,
+    "result": "passed"
+  },
+  "observed_failures_before_final_validation": [
+    "One physical cursor read-back mismatch refused the first click before input; new observation used for manual regression rerun, no new automatic recovery.",
+    "Initial standard search reached the selected contact but legacy header parser read only the first text fragment. Unique observed name-box subtree now merged in DOM order; complete identity still checked.",
+    "Independent first adjacent regression: 3 reject confirmation tests failed because legacy chatActionFixture lacked observed geek-name field; fixture corrected and final adjacent regression rerun."
+  ],
+  "limitations": [
+    "Real pinned customer layout not sampled; structural pin/reorder/wrapper fixtures only.",
+    "No outgoing message, greeting, invitation or candidate status change; complete sending flow not live tested.",
+    "Full test suite not rerun; prior unrelated failures and MCP cleanup hang not claimed resolved.",
+    "This verifies local chat behavior; not proof that ads caused the original October 30 widget-hidden incident.",
+    "No commit, client package install or deployment."
+  ],
+  "privacy": "No candidate identities, message bodies, full snapshots, resume data or credentials stored in this evidence file."
+}

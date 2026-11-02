@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-31",
+  "scope": "BOSS ordinary physical input: widget-independent content viewport mapping",
+  "implementation": {
+    "input_channel": "Windows SetCursorPos / mouse_event / SendInput Unicode",
+    "coordinate_source": "Existing DOMSnapshot page points and viewport, mapped to UIA outermost Document physical RECT",
+    "guards": [
+      "bound target activation",
+      "unique browser/main window",
+      "fresh CDP viewport before/after snapshot and before commit",
+      "content boundary and main-root/pid hit",
+      "foreground/cursor/geometry",
+      "keyboard focus",
+      "cancellation and LEFTUP/DPI finally",
+      "UNKNOWN after input starts"
+    ],
+    "widget_enumeration_or_visibility_required": false,
+    "new_recovery_mechanism": false,
+    "server_or_wire_changes": false
+  },
+  "source_hashes": {
+    "clients/shared/win32-native-input/src/bindings/contentViewport.ts": "5c947bc53fa8813578458b0876d59da06ce0d330b772aacc58a3e43475ab9e19",
+    "clients/shared/win32-native-input/src/bindings/koffi.ts": "73deed8c27883ea3e8503c9adc15401e7bbbc0ce471446684f729850f4d14f32",
+    "clients/shared/win32-native-input/src/physical.ts": "f1512b4f225ad6907878c846c8c31134ba714a88430f9726c3a1d54de06900c1",
+    "clients/shared/win32-native-input/src/sequence.ts": "49efe9ded4a86c9239221fd04555c9254a59491f41f2fe8d2cccdd15d941240b",
+    "clients/shared/win32-native-input/src/types.ts": "d6ec17d96af270c22b87428d53f4f5ce3f7d671f7a7be6c6244fd112cd0118f7",
+    "clients/shared/win32-native-input/src/index.ts": "07111a439812522022b7c7ccd10927c15b079efff6380a07d76259791f8b9435",
+    "clients/boss-resume-assistant/src/main/input/WinMouseClicker.ts": "5d72654dcb47731754d89590b60c7954dd04109b22261df974cbcdcb3ebad7fb",
+    "clients/boss-resume-assistant/src/main/operations/bossContext.ts": "5e8cf05d4848964c6cba20c3c08ae4f82176c387099a76285e59c8ce1ba841e0"
+  },
+  "independent_source_hashes_match": true,
+  "runtime_versions": {
+    "development_and_independent": "Node 24.13.0 win32-x64",
+    "release_runtime": "Node 22.23.3 win32-x64; native54/BOSS153/cold-real1 passed"
+  },
+  "results": [
+    {
+      "file": "node22-native.log",
+      "sha256": "d9dc2acdbfaa50cf4509dfa5bde62810e69cf896cbd692bf90ab11c1b532df15",
+      "tests": 54,
+      "passed": 54,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "file": "node22-boss.log",
+      "sha256": "fba9855d64bc28bf3ab426efc3e938efbe4e7b20a88cbc28cdbea568b1b8f60b",
+      "tests": 153,
+      "passed": 153,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "file": "node22-cold-real.log",
+      "sha256": "66b7de78f1309c47700ea39cbd03bf347e89f6eae16648f9b88d68125392e510",
+      "tests": 1,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "file": "final-cold-real.log",
+      "sha256": "69b938c07a148afcff1d4362a52f8be4d30f97850ae965ba08fdc6d2b0874393",
+      "tests": 1,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "file": "independent-final-native.log",
+      "sha256": "f5a600649d656949fbeee0de7f5cfadd2722a3267294614c087b1d6b1ce22902",
+      "tests": 54,
+      "passed": 54,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "file": "independent-final-boss.log",
+      "sha256": "33bceaaf5bb13a00b250d15bf89a219fcea5ce13262776b49280f0d717ffce71",
+      "tests": 153,
+      "passed": 153,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "file": "independent-final-extra.log",
+      "sha256": "1de60528560ddaf001ef16f0c6bbb90e675337a47e21b1af8e4b58c1697f2c8d",
+      "tests": 10,
+      "passed": 10,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "file": "independent-final-real-cold-hidden.log",
+      "sha256": "53701b8b02dcec1ba59af64c5ddd1cdcc9cb6aee4540fdd9177206f1a858566b",
+      "tests": 1,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "file": "independent-final-real-zoom-drag.log",
+      "sha256": "ce045a2fb52eb40a163b80370b0e3670292e6743d1d21a3f2f93ee63c812fe88",
+      "tests": 1,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "file": "independent-final-real-guards-fixed.log",
+      "sha256": "7051d369d3a8c6c24040bd4d66760f5f515c531e8620dcdfc05b192d9b4314b8",
+      "tests": 1,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0
+    }
+  ],
+  "counts_note": "Repeated runs/scenarios are listed separately, never added into a unique total.",
+  "real_input_evidence": {
+    "cold_uia": "All fixture legacy HWNDs hidden before first UIA read; fresh pre/post enumeration also hidden. Menu/filter click, Chinese+emoji typing and actual wheel succeeded.",
+    "independent_fresh_enumerations": 11,
+    "device_scale": 1.5,
+    "browser_zoom": "Two actual Ctrl+Plus chords; fresh CSS viewport 824x871.333374 to 659.200012x697.066711",
+    "drag": "Fixture DOM observed button-held pointermove, not only final cursor position",
+    "resource_probe": "25 UIA open/read/close iterations and repeated close without exception; not a long-duration leak proof",
+    "scope": "Dedicated temporary profiles/local HTTP fixtures only; no customer BOSS interaction"
+  },
+  "review": {
+    "unresolved_p0_p1_p2": 0,
+    "resolved_p2": [
+      "negative half-pixel rounding",
+      "UNKNOWN after COM cleanup failure",
+      "CDP wait while drag button held"
+    ],
+    "report_sha256": "3901ea3bcf552f3c3610474c1386ec0aed4e95d513351edc4ca94e9204b75b98",
+    "independent_test_report_sha256": "f2cc2c9e60d1f83204b4b72dba269f310258574f8969184c87e73283af4f86be"
+  },
+  "full_suite": {
+    "passed": false,
+    "completed": false,
+    "task_fixture_failures": "Updated browser-page-recovery external metric stubs; affected tests pass in final153.",
+    "baseline_comparison": "Isolated dist copies: restore the task-modified BOSS production TS files from HEAD and transpile with the same current dependencies; not a whole-repository HEAD build.",
+    "old_failures": "Both copies: 12 tests,7 pass,5 fail (2 ancestor-scroll +3 manifest); identical assertions.",
+    "mcp": "initialize passes 1/1 on both; one concurrent-single-flight test times out on both at hanging TCP fixture close, before snapshot/input. Whole conformance not completed.",
+    "ab_report_sha256": "375729d86762cbcd34a72c86dd9805138b783cd9d15d40c0cacfb3d2943a8f33",
+    "mcp_ab_report_sha256": "ede2f273dd9c6374f25599445f882028ad0ec0989a7b777ce27d147a3b80812f"
+  },
+  "limitations": [
+    "No real customer BOSS business acceptance or replay of the original Chrome hiding trigger.",
+    "Isolated fixture has a fixed root viewport with long scrollable region and iframe; not arbitrary long root documents.",
+    "Device scale and browser zoom were changed only for test Chrome; no system DPI/monitor topology changes tested.",
+    "UIA geometry correctness does not replace domain target uniqueness or business postconditions.",
+    "Initial send-to search ambiguity, goto exception fallback and Runtime built-in diagnostics are outside this implementation."
+  ],
+  "delivery": {
+    "code_complete": true,
+    "git_committed": false,
+    "deployed": false,
+    "new_signed_release_created": false,
+    "customer_client_replaced": false
+  }
+}

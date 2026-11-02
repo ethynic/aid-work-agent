@@ -370,6 +370,8 @@ LLM 输入使用 Markdown，必须包含岗位知识版本和候选人字段来�
 
 ### 10.3 双通道点击执行
 
+**2026-10-31 输入定位修正（取代旧 legacy widget 换算/命中要求）**：普通 Win32 点击、滚轮、点击后键入及拖动统一采用 §10.11 的顶层网页内容区物理矩形。历史 `Chrome_RenderWidgetHostHWND` 可见性与精确 HWND 命中不再作为输入条件；输入通道仍为 Windows 真实事件，领域定位及结果核验不变。
+
 真机实证（2026-08-05，见 §16 决策 8）：BOSS 反作弊 SDK 对 CDP 合成鼠标事件**选择性拦截**，浏览类操作放行、筛选类控件拦截。因此点击执行分双通道：
 
 - **定位统一走 CDP DOMSnapshot**：元素文本 → 结构化坐标（含 iframe owner 偏移累加），禁止大模型估算坐标。
@@ -379,8 +381,8 @@ LLM 输入使用 Markdown，必须包含岗位知识版本和候选人字段来�
 
 Win32 通道实现要点：
 
-- **坐标换算**：DOMSnapshot layout bounds 即 device px（与截图 PNG 尺寸一致）；点击前 `GetWindowRect(Chrome_RenderWidgetHostHWND)` 实时取渲染视口屏幕矩形，`scale = 视口宽 / 截图宽` 换算屏幕坐标（自动覆盖 150% DPI 缩放），**窗口可变必须每次校准**。
-- **落点守卫**：点击前 `WindowFromPoint` 必须归属 `Chrome_RenderWidgetHostHWND`；不是则 `SetWindowPos` 抬窗重试一次，仍失败 fail-loud 进入 `PAUSED`，不盲点。（防「幽灵按钮」：会话终端渲染的截图影像会被误当目标；防遮挡窗口吃点击。）
+- **坐标换算**：page点和viewport使用同一口径，按UIA顶层Document的物理内容矩形比例映射；不读取legacy widget矩形，不固定乘除DPI。每次输入重新观察，见§10.11。
+- **落点守卫**：点击前落点须在当前内容区域，`WindowFromPoint`的根窗为原主窗并核对PID；保留前台/光标/几何检查及原有一次抬窗，不要求命中指定辅助HWND。（防截图影像及其他窗口/owned popup吃点击。）
 - **动作**：`SetCursorPos + mouse_event`（不用 SendInput 绝对坐标，多显示器需 VIRTUALDESK 标志有坑）；拟人分步移动（10 步/300ms）→ 悬停 500ms → down/up。
 - **用户提示**：Win32 点击借用真实光标（约 1s），执行期间 CLI 必须提示用户手离鼠标。
 
@@ -437,6 +439,19 @@ Win32 通道实现要点：
 - **通道（2026-08-26 用户定调：点击/输入第一优先 Win32，防爬是关键）**：所有点击（搜索图标/结果卡片/发送按钮等）走 Win32（deps.click）；键盘输入走 Win32 `clickAndType`（一次 ps1 调用原子完成：拟人点击聚焦 500ms → SendInput KEYEVENTF_UNICODE 逐字真实键入 200ms/字，中文走 wScan 全 16 位——keybd_event 的 bScan 单字节装不下中文；§17 坑10 的「禁 SendInput」仅指鼠标绝对坐标）。CDP `typeChar` 通道已移除。**回退记录**：2026-08-24 曾因误判「Win32 DPI 换算偏差」把搜索入口/搜索框聚焦/结果卡片/激活点全改 CDP 点击——后经用户澄清实为**窗口被移动、输入框不在可见范围**所致（§17 坑22），换算本身无偏差，2026-08-26 全部回退 Win32 并真机复验（搜索找人 + dry-run 输入链路通过，245/245 测试绿）。永不 Runtime.*/Playwright（methodPolicy 白名单）。
 - **为什么用搜索找人定位会话**：会话列表**可滚动**（`CHAT_LIST_SCROLL_POINT={x:550,y:900}` + CDP `mouseWheel` + `ResumeConsentExecutor.listSignatureOf` 判到底，接受简历场景已真机验证有效），并非不能滚。但已知姓名精确找人时，搜索（`ChatSearchExecutor`）比"滚动逐屏翻找 + 文本匹配"更直接可靠——滚动翻找必须正确用 `listSignatureOf`（cx<850 全文本 y 签名）判到底，若误用局部人名序列会混入导航/推荐卡片标签误判"到底"提前退出（本次实验曾因此误判，实为诊断方法错而非滚动失效）。搜索与滚动互补，非"滚动失效才搜索"。
 
+### 10.6.1 沟通页混排与搜索定位修正（2026-11-02）
+
+用户反馈沟通列表首位/中部可插广告，也可含置顶会话。11-02只读现场确认`user-list`中首块为`batch-chat-intention`推广组件，后续才是`geek-item-wrap → geek-item → geek-name`；不能假设首项或最上方短文本是联系人。参照推荐页按真实卡片结构识别业务对象的原则，不维护广告文案黑名单，不把广告/分隔组件当列表结束。
+
+- **页面与选中状态分开**：页面身份继续按原target URL的`/web/chat/index`判定，广告/置顶不改变页面身份；未选会话或指定联系人未打开按已有UI_CHANGED说明状态，不再用WRONG_PAGE诱导重复切页。真正URL不符仍WRONG_PAGE；不新增wire错误码或恢复层。
+- **真实会话条目**：在已有ChatReadExecutor内统一提取主文档真实`user-list`子树下的完整class token `geek-item`及其`geek-name`姓名字段。推广块、外部同名文本、wrapper及置顶提示不当姓名；置顶会话仍为真实条目，排序不作为身份。同名真实会话保持歧义拒绝，点击绑定对应条目可见范围；读联系人、未读列表与打开会话共用条目定义。
+- **当前搜索组件**：入口、输入框、联系人分类/结果定位均限定沟通页主文档，复用已实测组件与文本/几何定位；不能把后台推荐iframe的图标/文本算入候选。输入落地优先检查定位到的INPUT的inputValue（含空值-1），不以全页同字出现冒充成功；已验证的contenteditable兼容也须限制到输入区域。
+- **结果身份**：搜索结果定位后仍须fresh会话头部等于目标，错误目标不能到发送步骤。11-02现场姓名高亮拆为普通文本＋`hightrare`子节点，原最左文本法截断末字；现在合并头部唯一可见`name-box`内的文本（DOM顺序），多个姓名框返回不可读，旧无该字段的布局保留原解析。只修有现场和测试支撑的定位点，不扩大失败重试范围。
+
+前期回归已区分：原快照全document搜索入口61–64候选、仅主文档唯一；这证明跨文档污染，但尚未证明广告就是该歧义的唯一原因。现场无选中会话时URL仍是chat，现有错误映射将其报告WRONG_PAGE，属于状态语义错误。具体实施与独立验证见[原计划§17](../../plans/recruiting/boss-resume-assistant-native-cdp-dev-plan.md#17-沟通页混排与搜索定位修正2026-11-02)。不改原生输入宿主、服务端或已交付旧客户端。
+
+**开发与验收**：主控相关67项、独立相邻254项及9个额外探针通过，独立CR无未解决P0/P1/P2。本机广告保留，标准`boss_open_chat`两次均`via=search`且完整姓名后验通过，`boss_read_chat`成功，URL及target未变。真实置顶变体尚未采样，只做结构fixture；未真发消息，未提交或部署。[脱敏证据](../../incidents/evidence/boss-widget-stuck-hidden-20261030/chat-mixed-validation-20261102.json)。
+
 ### 10.7 职位切换（list-jobs / select-job）
 
 推荐牛人页与沟通页顶部都有职位选择器（招聘者多职位切换，看不同职位的牛人/沟通）。真机实验 2026-08-13（推荐牛人页，窗口 1249x1277）：
@@ -482,8 +497,8 @@ Win32 通道实现要点：
 - **多副本坑**：同一消息文本同时存在于左列表预览（x≈264，含「[送达]」前缀）与聊天气泡；
   同名候选人还可能出现在 doc2 推荐 iframe。必须限定 doc[0] + `.conversation-message` 子树。
 - **未读清单**：左列表 `SPAN.badge-count > #text` 纯数字（x≈243 固定列），**含视口外全量可读**
-  （实测 37 徽章，26 个在视口外；列表容器高 8580 未虚拟化）；徽章向上找高 60~100 的 DIV
-  祖先=会话项，项内 x≈264 短文本=姓名、x≈497=时间、第二行=最后一条预览。左导航「沟通」
+  （实测 37 徽章，26 个在视口外；列表容器高 8580 未虚拟化）；当前按§10.6.1，徽章必须属于
+  `user-list`下真实`geek-item`，姓名来自`geek-name`，避免广告徽章及置顶标签污染。左导航「沟通」
   总徽章（如 214）须 exact 匹配（includes 会命中几十个 SVG path 数据）。
 - **头部识别带** `.base-info-single-container`：姓名/年龄经验/在线简历/附件简历 tab/经历/
   沟通职位/期望全可读。
@@ -495,7 +510,7 @@ Win32 通道实现要点：
   未命中 fail-loud 返回可用姓名列表，**不自动点击切换**（切换属写操作走既有点击链路）。
 - 返回 `{ contact, messages: [{sender:'me'|'them'|'system', text, ts?, read?}], unread:
   [{name, count, time?, lastPreview?}], totalUnreadBadge? }`。
-- fail-loud：面板容器缺失（不在沟通页/未开会话）、姓名未命中、文本节点不在 .text-content
+- fail-loud：错误URL返回WRONG_PAGE；未选会话或姓名未命中返回UI_CHANGED。文本节点不在 .text-content
   内（结构漂移）。**每会话切换后 nodeIndex 全变，必须 fresh snapshot，禁缓存**。
 
 **待后续真机验证**：长会话历史是否虚拟化裁剪（需滚动加载）；「对方未读」status-unread
@@ -507,9 +522,29 @@ CLI `open-chat <姓名>` / MCP `boss_open_chat`（contact 必填）：切换到�
 
 - **already**：头部（`.base-info-single-container`，与 read-chat 共享 `headerContactOf`）已是目标 → 零点击返回。
 - **search**：ChatSearchExecutor.openContact（§10.6 链路）；成功后**身份校验**（fresh snapshot 头部 === 目标，CR 修复：openContact 只证明"进入了某个对话"，错卡会开别人会话）——不符则带原因进兜底。
-- **list 兜底**：先 Escape+400ms 清残留搜索浮层（否则列表被遮挡，Win32 点击会点浮层）；doc[0] 左列表区（x∈[188,548)）找唯一姓名文本 → 视口外先 CDP mouseWheel 滚动（`.user-list` 容器 bounds 中心，方向按目标 y，≤15 轮每轮重定位）→ Win32 点击（姓名中心 x+60 行热区）→ 轮询 500ms×8 头部校验。
+- **list 兜底**：先 Escape+400ms 清残留搜索浮层（否则列表被遮挡，Win32 点击会点浮层）；doc[0] `.user-list`内匹配唯一真实`geek-item`的`geek-name` → 页面视口或列表裁剪范围外先滚动（容器 bounds 中心，方向按目标 y，≤15 轮每轮重定位）→ Win32 点击该行中心→ 轮询 500ms×8 头部校验。
 - fail-loud：不存在（附可用联系人名单）/同名多命中列坐标/两路都失败汇总/头部 4s 未切换。
 - **已知注意**：clearInput 作用于"当前聚焦元素"，聚焦竞态且焦点恰在聊天输入框时 ctrl+a+Delete 会清未发送草稿（readonly 工具的 UI 副作用，真机未观察到，标注待验）。
+
+### 10.11 解除物理输入对 legacy widget 的依赖（2026-10-31）
+
+关联[10-30事故复盘第16节](../../incidents/boss-agent2-widget-stuck-hidden-20261030.md#16-客户回收元数据同一目标整窗原生点击可用2026-10-31)、[原开发计划第16节](../../plans/recruiting/boss-resume-assistant-native-cdp-dev-plan.md#16-普通物理输入内容区定位修正2026-10-31)。已完成实现及独立隔离验证；11-02本机真实BOSS导航/筛选/读简历/原生键入通过，标准会话搜索仍定位失败，持续隐藏触发未复现；具体范围与局限以计划W3/W4为准。
+
+**前提核验**：原日志 goto 的 L7933–7965、filter_options 的 L8321–8358/L8568–8605 均在 DOMSnapshot 读取、按钮定位及页面坐标参数校验成功后进入 native click，才因 widget hidden 在 discover 阶段拒绝；wheel 同样在取得详情区域后被拒。历史未保存 x/y 与快照响应，不能追认旧屏幕换算正确。首次 send-to 搜索入口42候选歧义不属于本修复。
+
+**唯一输入路径**：DOMSnapshot 定位对象与页面坐标 → Windows UI Automation 获取已绑定 Chrome 主窗的唯一顶层 Document 内容区物理 RECT → 页面坐标按传入视口比例映射到内容 RECT → 校验实际落点 → 现有 SetCursorPos/mouse_event/SendInput。UIA 只读内容区几何，不读取候选文本、不执行网页脚本、不引入新恢复器或 CDP 输入兜底。禁止用主窗底边或固定工具栏高度猜内容原点，禁止继续读取隐藏 widget 矩形。
+
+**内容区定位**：共享 native 包通过现有 koffi 调用 Windows UIA COM；从指定主窗的 ControlView 遍历，遇 Document 后停止深入，排除内嵌 iframe；可见顶层 Document 必须唯一、正尺寸且位于主窗内，多候选不选最大者碰运气。UIA 的 RECT 为物理屏幕坐标，不再额外乘显示 DPI。每次输入重新获取，返回的 COM 引用与初始化计数在 finally 释放，不缓存跨调用 HWND 或内容矩形。
+
+**保留的有效检查**：原绑定 target 激活、唯一调试浏览器/主窗、物理 DPI 上下文、页面点/视口合法且在内容边界内、前台为原主窗、WindowFromPoint 的根窗为原主窗（不接受同 PID 的另一窗或 owned popup）、光标回读、输入前及拖动/滚轮过程中的内容和窗口几何稳定。生产session用Page.getLayoutMetrics在快照前后确认同一CSS视口，输入开始前及鼠标移动/悬停后再次核验，拒绝旧布局坐标；拖动按下后只做原生几何/光标/前台/取消检查，不持左键等待CDP。键入保留原子聚焦、GetGUIThreadInfo焦点及逐字前台检查；取消、LEFTUP finally 和输入已开始后的 UNKNOWN 语义保持。不根据辅助类名是否存在/可见拒绝，也不等待它重建。已存在的落点遮挡抬窗一次保留，本轮不叠加恢复层。
+
+**验收条件**：独立测试 Chrome 中包含长页和 iframe，主动隐藏测试 legacy HWND 后，实际点击、中文/emoji键入、滚轮及拖动仍能完成并核验结果；不同页面坐标/显示比例正确换算；另窗/同浏览器弹窗遮挡、移动或缩放导致观察失效、光标被改动时拒绝，投递后的异常准确 UNKNOWN。不得用 mock 的成功返回替代真实输入证明。BOSS 真机业务与事故底层触发尚未复现，不将隔离验证写成客户现场已修复。
+
+**已有预验证**：独立 Chrome app 长页含 iframe 的顶层 Document 为 `[18,41,1267,1374]`；手动API隐藏该测试 Chrome legacy HWND 后，UIA 仍返回相同矩形，探查约34ms。只操作测试profile，已清理；原始摘要 `.tmp/boss-widget-incident-review-20261031/uia-hidden-probe.json`。该实验仅证明几何读取不依赖其可见性，不是完整输入验收。
+
+**完成验证**：最终正式回归在首次UIA之前即隐藏辅助HWND，fresh枚举确认输入前后所有当前legacy HWND仍隐藏，而菜单/筛选点击、中文emoji键入与真实滚轮完成；独立deviceScale1.5及实际浏览器zoom后同样成功，另核验真实拖动收到按键态pointermove。新增代码未回退CDP输入，未等待/恢复widget。源代码清理异常、负坐标及拖动持键边界经独立审查修正并回归，详见计划W3。
+
+**11-02真实业务补证**：标准操作完成往返切页、筛选面板探查、3条件提交以及1份简历的4段滚动拼接并确认到底；键入组件单项在真实搜索框中通过。标准open-chat仍因跨document入口候选歧义失败，未到键入；临时主文档限定探针不作为产品修复，也不把输入组件通过外推为完整发消息链可用。原职位/筛选已恢复，详见计划W4和[真机摘要](../../incidents/evidence/boss-widget-stuck-hidden-20261030/real-boss-regression-20261102.json)。
 
 ## 11. 状态机与恢复
 

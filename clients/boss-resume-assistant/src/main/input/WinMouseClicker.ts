@@ -2,13 +2,13 @@
  * Win32 真实物理输入通道（设计文档 §10.3 通道 2）。
  *
  * 仅 native：共享包 @aid/win32-native-input 进程内 FFI（koffi）直调 Win32，
- * 守卫/拟人序列/逐字键入/分段计时是原 PowerShell 输入脚本的 1:1 移植。
+ * 拟人序列/逐字键入/分段计时沿用既有实现；内容区定位按设计 §10.11，独立于legacy widget。
  * 2026-10-21 用户决策（docs/plans/plan-recruiting-error-containment-and-input-performance.md）：
  * 不长期维护双通道，PowerShell 输入回退脚本（点击/滚轮）已删除——
  * koffi 会话加载失败直接抛 WinClickError（fail-loud），不再静默回退。
  *
  * 语义：page 坐标（DOMSnapshot device px）+ 页面截图尺寸 →
- * 屏幕坐标实时校准（GetWindowRect）→ WindowFromPoint 落点守卫 → 拟人移动点击。
+ * UIA顶层内容区物理矩形映射 → WindowFromPoint根窗/内容边界守卫 → 拟人移动点击。
  * 守卫失败（落点被遮挡）exit 2，本类转为 WinClickError fail-loud，绝不盲点；
  * 物理输入开始后的失败带 [BOSS_INPUT_UNKNOWN]（效果未知）；
  * NativeInputError exitCode 1/2 → WinClickError 同码（与原 ps1 语义一致）。
@@ -52,7 +52,7 @@ export interface NativeInputSession {
     notches?: number
     cdpPort?: number
     op?: string
-  }, signal?: AbortSignal): Promise<{ output: string[] }>
+  }, signal?: AbortSignal, verifyObservation?: () => Promise<void>): Promise<{ output: string[] }>
 }
 
 /** 原生会话加载器（单测注入 fake 用；默认动态 import 共享包） */
@@ -68,7 +68,7 @@ const defaultNativeOpener: NativeInputOpener = async () => {
     throw new Error(`koffi 加载失败: ${error instanceof Error ? error.message : String(error)}`)
   }
   return {
-    perform: (request, signal) => mod.performPhysicalInput({ api, signal }, request),
+    perform: (request, signal, verifyObservation) => mod.performPhysicalInput({ api, signal, verifyObservation }, request),
   }
 }
 
@@ -87,6 +87,7 @@ interface PhysicalRequest {
 export class WinMouseClicker {
   private readonly cdpPort?: number
   private readonly beforeInput?: () => Promise<void>
+  private readonly verifyObservation?: () => Promise<void>
   private readonly nativeOpener: NativeInputOpener
   private readonly signal?: AbortSignal
   /** 原生会话缓存（含失败的 Promise：fail-loud 抛错，不重试加载、不回退） */
@@ -95,12 +96,14 @@ export class WinMouseClicker {
   constructor(opts: {
     cdpPort?: number
     beforeInput?: () => Promise<void>
+    verifyObservation?: () => Promise<void>
     nativeOpener?: NativeInputOpener
     signal?: AbortSignal
   } = {}) {
     if (opts.cdpPort !== undefined && (!Number.isInteger(opts.cdpPort) || opts.cdpPort < 1 || opts.cdpPort > 65535 || !opts.beforeInput)) throw new WinClickError('绑定真实输入需要合法调试端口与标签激活方法', 2)
     this.cdpPort = opts.cdpPort
     this.beforeInput = opts.beforeInput
+    this.verifyObservation = opts.verifyObservation
     this.nativeOpener = opts.nativeOpener ?? defaultNativeOpener
     this.signal = opts.signal
   }
@@ -169,7 +172,8 @@ export class WinMouseClicker {
     const session = await this.openNative()
     try {
       if (this.signal?.aborted) throw new CancelledError()
-      await session.perform(this.toNativeRequest(request), this.signal)
+      await this.verifyObservation?.()
+      await session.perform(this.toNativeRequest(request), this.signal, this.verifyObservation)
     } catch (error) {
       if (error instanceof CancelledError) throw error
       const mapped = toWinClickError(error)
@@ -211,7 +215,10 @@ export class WinMouseClicker {
     if (this.signal?.aborted) throw new CancelledError()
     if (!this.beforeInput) return
     try { await this.beforeInput() }
-    catch { throw new WinClickError('STALE_OBSERVATION: 无法激活原 BOSS 标签，未投递物理输入', 2) }
+    catch (error) {
+      if (error instanceof WinClickError) throw error
+      throw new WinClickError('STALE_OBSERVATION: 无法激活原 BOSS 标签，未投递物理输入', 2)
+    }
   }
 
   /** 坐标/视口合法性校验（click 与 clickAndType 共用），非法即抛 WinClickError，绝不盲点 */
@@ -228,6 +235,7 @@ export class WinMouseClicker {
 
 /** 原生错误 → WinClickError（exit code 与原 ps1 语义一致：0/1/2） */
 function toWinClickError(error: unknown): WinClickError {
+  if (error instanceof WinClickError) return error
   const native = error as { name?: string; exitCode?: 1 | 2; message?: string }
   if (native && typeof native === 'object' && native.name === 'NativeInputError' && (native.exitCode === 1 || native.exitCode === 2)) {
     return new WinClickError(native.message ?? '原生输入失败', native.exitCode)

@@ -1,15 +1,15 @@
 /**
- * win-click.ps1 完整输入流程的 1:1 进程内移植（语义权威来源，一条守卫不删）。
+ * Windows physical input: DOM page point → UIA content viewport → screen.
+ * 2026-10-31: legacy renderer HWND discovery/visibility is no longer an input condition.
  *
  * 与 ps1 的对应关系：
  * - 绑定模式（cdpPort>0）：按 cmdline 唯一性定位调试 Chrome → BossWindowExperiment.Find(pid) →
  *   Foreground(win) → 400ms → RequireForeground(win)；非绑定：EnumWindows 标题关键字找窗。
  * - 非绑定窗口最小化则 SW_RESTORE+400ms；AttachThreadInput 挂前台线程抬前台 → 解挂 → 400ms。
- * - FindRenderWidget：可见且面积最大的 Chrome_RenderWidgetHostHWND（回退第一个隐藏的）。
- * - 坐标换算：widget 物理矩形按 CssW/CssH 线性缩放（PowerShell [int] 的银行家舍入一并保真）。
- * - 落点守卫：WindowFromPoint 不属于目标 widget → 抬窗（HWND_TOP）+300ms+重算重试一次，
+ * - 坐标换算：唯一顶层 Document 的物理矩形按 CssW/CssH 比例映射。
+ * - 落点守卫：WindowFromPoint 根窗不是原主窗 → 抬窗（HWND_TOP）+300ms+复核一次，
  *   仍失败按 REFUSED(exit 2) 拒绝（不盲点，附守卫取证）。
- * - 拟人移动：10 步 SetCursorPos（25ms/步）+500ms 悬停 → RequireCursorOnWidget → MarkInputStarted →
+ * - 拟人移动：10 步 SetCursorPos（25ms/步）+500ms 悬停 → 内容区/光标/视口核验 → MarkInputStarted →
  *   LEFTDOWN+70ms → 拖动 16 步（每步前台校验/光标守卫/双端点重算且几何变化即失败/路径遮挡守卫）→ finally LEFTUP。
  * - clickAndType：点击后 500ms 逐字 SendInput KEYEVENTF_UNICODE（200ms/字，UTF-16 code unit 逐个，
  *   与 ps1 ToCharArray 一致），每字前前台校验；点击与键入同任务原子完成。
@@ -20,12 +20,10 @@
 import { NativeInputError } from './errors.js'
 import {
   DpiPhysicalScope,
+  ContentTarget,
   moveCursor,
-  occlusionDiagnostics,
-  pointOnWidget,
+  psInt,
   readCursor,
-  readRect,
-  requireCursorOnWidget,
 } from './physical.js'
 import { findBrowserPidByDebugPort } from './processes.js'
 import { SegmentTimer } from './timing.js'
@@ -35,7 +33,8 @@ import type {
   PhysicalInputRequest,
   PhysicalInputResult,
 } from './types.js'
-import { boundFind, boundForeground, findRenderWidget, findWindowByTitle, requireBoundForeground } from './windows.js'
+import { boundFind, boundForeground, findWindowByTitle, requireBoundForeground } from './windows.js'
+import type { ContentViewport } from './types.js'
 
 const HWND_TOP = 0
 const SWP_NOSIZE = 0x0001
@@ -50,6 +49,8 @@ export interface SequenceContext {
   log?: LogSink
   /** Invocation cancellation; not serialized with the physical request. */
   signal?: AbortSignal
+  /** Read-only observation freshness check immediately before OS input. */
+  verifyObservation?: () => Promise<void>
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
@@ -57,22 +58,7 @@ const defaultLog: LogSink = (line) => {
   try { process.stderr.write(line + '\n') } catch { /* 日志失败不影响业务结果 */ }
 }
 
-/** PowerShell [int] 的银行家舍入（坐标换算/插值保真；.5 边界取偶） */
-export function psInt(value: number): number {
-  const floor = Math.floor(value)
-  const diff = value - floor
-  if (diff < 0.5) return floor
-  if (diff > 0.5) return floor + 1
-  return floor % 2 === 0 ? floor : floor + 1
-}
-
-/** ps1 Get-ScreenPoint：widget 物理矩形按 CssW/CssH 线性缩放（每次调用实时 ReadRect） */
-function screenPoint(api: NativeApi, rw: number, cssW: number, cssH: number, px: number, py: number): { x: number; y: number } {
-  const r = readRect(api, rw)
-  const vw = r.right - r.left
-  const vh = r.bottom - r.top
-  return { x: psInt(r.left + px * (vw / cssW)), y: psInt(r.top + py * (vh / cssH)) }
-}
+export { psInt } from './physical.js'
 
 /** 执行一次物理输入。成功返回输出行；失败抛 NativeInputError（exitCode 对应 ps1 退出码 0/1/2）。 */
 export async function performPhysicalInput(ctx: SequenceContext, request: PhysicalInputRequest): Promise<PhysicalInputResult> {
@@ -108,10 +94,11 @@ export async function performPhysicalInput(ctx: SequenceContext, request: Physic
   }
 
   let scope: DpiPhysicalScope | undefined
+  let content: ContentViewport | undefined
   try {
     scope = DpiPhysicalScope.enter(api)
     let win = 0
-    let rw = 0
+    let target: ContentTarget
     // 自定义目标定位只调用一次（默认 Chrome 语义按阶段分别找主窗/widget）
     const customTarget = request.resolveTarget?.(api)
 
@@ -148,52 +135,37 @@ export async function performPhysicalInput(ctx: SequenceContext, request: Physic
       if (bound) requireBoundForeground(api, win)
     })
 
-    // ---- 窗口探查：render widget + 坐标换算（ps1 191~197）----
+    // ---- Fresh top-level content viewport; no widget enumeration or wait. ----
     let sx = 0
     let sy = 0
     await timer.measureAsync('discover', async () => {
-      // Activation can precede Chromium's visible widget recreation. Re-enumerate
-      // the bound window for 1.2s; never hold on to its hidden fallback HWND.
-      for (let probe = 0; ; probe++) {
-        ctx.signal?.throwIfAborted()
-        if (bound) requireBoundForeground(api, win)
-        rw = customTarget ? customTarget.rw : findRenderWidget(api, win, (hwnd, visible, rect) => {
-          log(`[boss-input-discovery] phase=discover probe=${probe} window=${win} widget=${hwnd} pid=${api.getWindowThreadProcessId(hwnd).pid} visible=${Number(visible)} rect=${rect ? `${rect.left},${rect.top},${rect.right},${rect.bottom}` : 'unavailable'} foreground=${api.getForegroundWindow()} minimized=${Number(api.isIconic(win))}`)
-        })
-        if (rw && api.isWindowVisible(rw) || !bound || customTarget || probe >= 6) break
-        log(`[boss-input-discovery] phase=wait probe=${probe} window=${win} reason=${rw ? 'hidden' : 'unavailable'}`)
-        await sleep(200)
-      }
-      if (rw === 0) {
-        if (bound) throw new NativeInputError('STALE_OBSERVATION: render widget unavailable; input refused', 2, 'STALE_OBSERVATION')
-        throw new NativeInputError('未找到 Chrome 渲染子窗口（窗口已还原仍无渲染子窗口）', 1, 'FAILED')
-      }
-      if (!api.isWindowVisible(rw)) {
-        if (bound) throw new NativeInputError('STALE_OBSERVATION: render widget hidden; input refused', 2, 'STALE_OBSERVATION')
-        throw new NativeInputError('渲染子窗口不可见：BOSS 标签页可能在后台，请切换到前台后重试', 1, 'FAILED')
-      }
-      const target = screenPoint(api, rw, request.cssW, request.cssH, request.x, request.y)
-      sx = target.x
-      sy = target.y
+      ctx.signal?.throwIfAborted()
+      if (bound) requireBoundForeground(api, win)
+      content = api.openContentViewport(win)
+      target = new ContentTarget(api, win, content, request.cssW, request.cssH)
+      const point = target.point(request.x, request.y)
+      sx = point.x
+      sy = point.y
+      const r = target.rect
+      log(`[boss-input-discovery] phase=discover window=${win} content_rect=${r.left},${r.top},${r.right},${r.bottom} expected_screen=${sx},${sy} foreground=${api.getForegroundWindow()}`)
       output.push(`目标屏幕坐标: (${sx}, ${sy})`)
     })
 
     // ---- 落点守卫：抬窗重试一次，仍遮挡 exit 2（ps1 199~211）----
     await timer.measureAsync('guard', async () => {
-      if (!pointOnWidget(api, rw, sx, sy)) {
+      if (!target.hit(sx, sy)) {
         output.push('落点被其他窗口遮挡，抬窗重试')
         if (bound) requireBoundForeground(api, win)
         api.setWindowPos(win, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
         await sleep(300)
-        const retry = screenPoint(api, rw, request.cssW, request.cssH, request.x, request.y)
+        const retry = target.point(request.x, request.y)
         sx = retry.x
         sy = retry.y
-        if (!pointOnWidget(api, rw, sx, sy)) {
+        if (!target.hit(sx, sy)) {
           // 守卫取证：两项谓词 + 预期坐标 + 目标 widget/命中/前台 HWND（无标题/页面内容）
-          const d = occlusionDiagnostics(api, rw, sx, sy)
           const detail =
-            `expected_screen=(${d.expectedX},${d.expectedY}); widget=0x${(d.widget >>> 0).toString(16)}` +
-            `; hit=0x${((d.hit ?? 0) >>> 0).toString(16)}; foreground=0x${((d.foreground ?? 0) >>> 0).toString(16)}` +
+            `expected_screen=(${sx},${sy}); browser=${win}` +
+            `; hit=${api.windowFromPoint(sx, sy)}; foreground=${api.getForegroundWindow()}` +
             `; cursor_match=0; ownership_match=0`
           log(`[boss-input-guard] kind=occlusion op=${op} ${detail}`)
           throw new NativeInputError(`落点仍被遮挡（WindowFromPoint 校验失败），中止点击; ${detail}`, 2, 'REFUSED', detail)
@@ -217,8 +189,8 @@ export async function performPhysicalInput(ctx: SequenceContext, request: Physic
         await sleep(25)
       }
       await sleep(500)
-      const expected = screenPoint(api, rw, request.cssW, request.cssH, request.x, request.y)
-      requireCursorOnWidget(api, rw, expected.x, expected.y)
+      const expected = target.point(request.x, request.y)
+      target.requireCursor(expected.x, expected.y)
     })
     if (bound) requireBoundForeground(api, win)
 
@@ -228,9 +200,11 @@ export async function performPhysicalInput(ctx: SequenceContext, request: Physic
       const notches = request.notches ?? 6
       await timer.measureAsync('wheel', async () => {
         for (let i = 1; i <= notches; i++) {
+          await ctx.verifyObservation?.()
           if (bound) requireBoundForeground(api, win)
-          const expected = screenPoint(api, rw, request.cssW, request.cssH, request.x, request.y)
-          requireCursorOnWidget(api, rw, expected.x, expected.y)
+          ctx.signal?.throwIfAborted()
+          const expected = target.point(request.x, request.y)
+          target.requireCursor(expected.x, expected.y)
           scope!.markInputStarted()
           api.mouseEventWheel(request.wheelDeltaY!)
           if (i < notches) await sleep(150)
@@ -246,7 +220,9 @@ export async function performPhysicalInput(ctx: SequenceContext, request: Physic
     let leftHeld = false
     try {
       await timer.measureAsync('press', async () => {
-        scope!.markInputStarted()
+        await ctx.verifyObservation?.()
+        ctx.signal?.throwIfAborted()
+        target.requireCursor(sx, sy)
         const { dragX, dragY } = request
         const dragging = dragX !== undefined || dragY !== undefined
         if ((dragX !== undefined) !== (dragY !== undefined)) throw new Error('拖动终点必须同时提供 X/Y')
@@ -254,9 +230,10 @@ export async function performPhysicalInput(ctx: SequenceContext, request: Physic
           if ((request.text?.length ?? 0) > 0 || dragX! > request.cssW || dragY! > request.cssH) {
             throw new Error('非法拖动参数')
           }
-          dragEnd = screenPoint(api, rw, request.cssW, request.cssH, dragX!, dragY!)
-          if (!pointOnWidget(api, rw, dragEnd.x, dragEnd.y)) throw new Error('拖动终点被遮挡')
+          dragEnd = target.point(dragX!, dragY!)
+          if (!target.hit(dragEnd.x, dragEnd.y)) throw new Error('拖动终点被遮挡')
         }
+        scope!.markInputStarted()
         leftHeld = true
         api.mouseEventLeftDown()
         await sleep(70)
@@ -269,19 +246,20 @@ export async function performPhysicalInput(ctx: SequenceContext, request: Physic
           let lastY = sy
           for (let step = 1; step <= 16; step++) {
             if (bound) requireBoundForeground(api, win)
-            requireCursorOnWidget(api, rw, lastX, lastY)
-            const liveStart = screenPoint(api, rw, request.cssW, request.cssH, request.x, request.y)
-            const liveEnd = screenPoint(api, rw, request.cssW, request.cssH, request.dragX!, request.dragY!)
+            ctx.signal?.throwIfAborted()
+            target.requireCursor(lastX, lastY)
+            const liveStart = target.point(request.x, request.y)
+            const liveEnd = target.point(request.dragX!, request.dragY!)
             if (liveStart.x !== sx || liveStart.y !== sy || liveEnd.x !== dragEnd!.x || liveEnd.y !== dragEnd!.y) {
               throw new Error('拖动期间窗口几何变化')
             }
             lastX = psInt(sx + (dragEnd!.x - sx) * step / 16)
             lastY = psInt(sy + (dragEnd!.y - sy) * step / 16)
-            if (!pointOnWidget(api, rw, lastX, lastY)) throw new Error('拖动路径被遮挡')
+            if (!target.hit(lastX, lastY)) throw new Error('拖动路径被遮挡')
             moveCursor(api, lastX, lastY)
             await sleep(25)
           }
-          requireCursorOnWidget(api, rw, lastX, lastY)
+          target.requireCursor(lastX, lastY)
           output.push('已拖动')
         })
       } else {
@@ -298,9 +276,14 @@ export async function performPhysicalInput(ctx: SequenceContext, request: Physic
     if (text !== undefined && text.length > 0) {
       await timer.measureAsync('type', async () => {
         await sleep(500)
+        const focus = api.getFocusedWindow()
+        if (!target.ownsWindow(focus)) throw new Error('Keyboard focus left browser content; input refused')
         // UTF-16 code unit 逐个（与 ps1 ToCharArray 一致，emoji 代理项成对发送由应用重组）
         for (let i = 0; i < text.length; i++) {
           if (bound) requireBoundForeground(api, win)
+          ctx.signal?.throwIfAborted()
+          target.requireGeometry()
+          if (api.getFocusedWindow() !== focus) throw new Error('Keyboard focus changed; input stopped')
           api.typeUnicode(text.charCodeAt(i))
           await sleep(200)
         }
@@ -317,10 +300,12 @@ export async function performPhysicalInput(ctx: SequenceContext, request: Physic
     // 收尾：DPI 上下文恢复（ps1 finally Dispose）。失败顶替在途异常（ps1 字面语义），
     // 统一收敛为 NativeInputError exit 1；inputStarted 后的消息自带 [BOSS_INPUT_UNKNOWN] 前缀。
     try {
-      timer.measure('finalize', () => scope?.dispose())
+      timer.measure('finalize', () => { try { content?.close() } finally { scope?.dispose() } })
     } catch (disposeError) {
       const raw = disposeError instanceof Error ? disposeError.message : String(disposeError)
-      throw new NativeInputError(raw, 1, raw.startsWith('[BOSS_INPUT_UNKNOWN]') ? 'BOSS_INPUT_UNKNOWN' : 'FAILED')
+      const unknown = scope?.inputStarted || raw.startsWith('[BOSS_INPUT_UNKNOWN]')
+      throw new NativeInputError(unknown && !raw.startsWith('[BOSS_INPUT_UNKNOWN]') ? `[BOSS_INPUT_UNKNOWN] ${raw}` : raw,
+        1, unknown ? 'BOSS_INPUT_UNKNOWN' : 'FAILED')
     } finally {
       log(timer.summaryLine(op, completed))
     }

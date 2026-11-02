@@ -30,6 +30,7 @@ import {
   boundsCenter,
   indexedValues,
 } from './domSnapshot.js'
+import { snapshotNodeVisible } from './SnapshotVisibility.js'
 import { viewportOf } from './FilterSetter.js'
 import { locateSendButton } from './ChatSendExecutor.js'
 import { CancelledError } from '../operations/types.js'
@@ -128,10 +129,11 @@ export class ChatSearchExecutor {
     const svgs: NodeHit[] = []
     const batchTexts: Array<{ cx: number; top: number; left: number; right: number }> = []
 
-    snap.documents.forEach((document) => {
+    snap.documents.slice(0, 1).forEach((document) => {
       const nameByNode = new Map(indexedValues(document.nodes.nodeName, 'nodeName'))
       const valueByNode = new Map(indexedValues(document.nodes.nodeValue, 'nodeValue'))
       document.layout.nodeIndex.forEach((nodeIndex, layoutIndex) => {
+        if (!snapshotNodeVisible(snap, 0, nodeIndex)) return
         const b = document.layout.bounds[layoutIndex]
         if (!b || b[2]! <= 0 || b[3]! <= 0) return
         const nn = String(snap.strings[nameByNode.get(nodeIndex) ?? -1] ?? '')
@@ -323,10 +325,37 @@ export class ChatSearchExecutor {
     return { point: null, count: 0 }
   }
 
-  /** 姓名字符在页面 strings 中的缺失清单（逐字节点反爬形态：每个字符是独立单字字符串） */
-  private missingCharsOf(snap: DomSnapshot, name: string): string[] {
-    const charsPresent = new Set(snap.strings.filter((s) => typeof s === 'string' && s.trim().length === 1))
-    return [...new Set(name.split(''))].filter((ch) => !charsPresent.has(ch))
+  /** 校验当前搜索框的内容；页面其它文字/后台文档不构成输入成功证据。 */
+  private missingCharsOf(snap: DomSnapshot, name: string, entry: ClickPoint): string[] {
+    const field = this.findSearchField(snap, entry)
+    const doc = snap.documents[0]
+    if (!field.point || !doc) return [name]
+    const names = new Map(indexedValues(doc.nodes.nodeName, 'nodeName'))
+    const values = new Map(indexedValues(doc.nodes.inputValue ?? [], 'inputValue'))
+    const target = doc.layout.nodeIndex.find((node, i) => {
+      const b = doc.layout.bounds[i]!
+      return snap.strings[names.get(node) ?? -1] === 'INPUT'
+        && Math.abs(b[0]! + b[2]! / 2 - field.point!.x) < 1
+        && Math.abs(b[1]! + b[3]! / 2 - field.point!.y) < 1
+    })
+    if (target !== undefined) {
+      const value = snap.strings[values.get(target) ?? -1] ?? ''
+      return value === name ? [] : [name]
+    }
+    // 旧 contenteditable 形态只认可输入条内的文本，不接受全页字符覆盖。
+    const fieldBounds = doc.layout.bounds.find((b) => isFieldShape(b as [number, number, number, number], viewportOf(snap))
+      && Math.abs(b[0]! + b[2]! / 2 - field.point!.x) < 1 && Math.abs(b[1]! + b[3]! / 2 - field.point!.y) < 1)
+    if (!fieldBounds) return [name]
+    const textValues = new Map(indexedValues(doc.nodes.nodeValue, 'nodeValue'))
+    const text = doc.layout.nodeIndex.flatMap((node, i) => {
+      const b = doc.layout.bounds[i]!
+      return snap.strings[names.get(node) ?? -1] === '#text' && b[2]! > 0 && b[3]! > 0
+        && b[0]! >= fieldBounds[0]! && b[1]! >= fieldBounds[1]!
+        && b[0]! + b[2]! <= fieldBounds[0]! + fieldBounds[2]! && b[1]! + b[3]! <= fieldBounds[1]! + fieldBounds[3]!
+        && snapshotNodeVisible(snap, 0, node)
+        ? [{ x: b[0]!, text: snap.strings[textValues.get(node) ?? -1] ?? '' }] : []
+    }).sort((a, b) => a.x - b.x).map((t) => t.text).join('').trim()
+    return text === name ? [] : [name]
   }
 
   /**
@@ -347,7 +376,7 @@ export class ChatSearchExecutor {
     await this.deps.clickAndType(firstBox, viewport, name)
     await this.sleep(SEARCH_RESULT_DELAY)
     let snapTyped = await this.deps.snapshot()
-    let missing = this.missingCharsOf(snapTyped, name)
+    let missing = this.missingCharsOf(snapTyped, name, entry)
     if (missing.length === 0) return snapTyped
 
     if (!this.deps.clearInput || !(this.deps.ordinaryRetry?.() ?? true)) {
@@ -367,7 +396,7 @@ export class ChatSearchExecutor {
     await this.deps.clickAndType(box.point, viewportOf(snapRetry), name)
     await this.sleep(SEARCH_RESULT_DELAY)
     snapTyped = await this.deps.snapshot()
-    missing = this.missingCharsOf(snapTyped, name)
+    missing = this.missingCharsOf(snapTyped, name, entry)
     if (missing.length > 0) {
       throw new ChatSearchError(
         `搜索姓名「${name}」未落地（页面未见输入字符 ${JSON.stringify(missing)}）：已清空重试一次仍失败，搜索框未聚焦或输入被拦，请人工查看`,
@@ -381,10 +410,11 @@ export class ChatSearchExecutor {
   private collectFieldLike(snap: DomSnapshot): Array<[number, number, number, number]> {
     const viewport = viewportOf(snap)
     const out: Array<[number, number, number, number]> = []
-    for (const document of snap.documents) {
+    for (const document of snap.documents.slice(0, 1)) {
       if (!document?.nodes?.nodeName || !document.layout) continue
       const nameByNode = new Map(indexedValues(document.nodes.nodeName, 'nodeName'))
       document.layout.nodeIndex.forEach((nodeIndex, layoutIndex) => {
+        if (!snapshotNodeVisible(snap, 0, nodeIndex)) return
         const b = document.layout.bounds[layoutIndex]
         if (!b || b[2]! <= 0 || b[3]! <= 0) return
         const nn = String(snap.strings[nameByNode.get(nodeIndex) ?? -1] ?? '')
@@ -396,13 +426,14 @@ export class ChatSearchExecutor {
     return out
   }
 
-  /** 全部文档可见 INPUT 的 bounds 列表 */
+  /** 主文档可见 INPUT 的 bounds 列表 */
   private collectVisibleInputs(snap: DomSnapshot): Array<[number, number, number, number]> {
     const out: Array<[number, number, number, number]> = []
-    for (const document of snap.documents) {
+    for (const document of snap.documents.slice(0, 1)) {
       if (!document?.nodes?.nodeName || !document.layout) continue
       const nameByNode = new Map(indexedValues(document.nodes.nodeName, 'nodeName'))
       document.layout.nodeIndex.forEach((nodeIndex, layoutIndex) => {
+        if (!snapshotNodeVisible(snap, 0, nodeIndex)) return
         if (snap.strings[nameByNode.get(nodeIndex) ?? -1] !== 'INPUT') return
         const b = document.layout.bounds[layoutIndex]
         if (!b || b[2]! <= 0 || b[3]! <= 0) return
@@ -430,7 +461,7 @@ export class ChatSearchExecutor {
     const yMax = contacts.y + Math.max(60, viewport.height * 0.06)
     const xBand = viewport.width * 0.25
     const hits: ClickPoint[] = []
-    snap.documents.forEach((document, documentIndex) => {
+    snap.documents.slice(0, 1).forEach((document, documentIndex) => {
       let offset: { x: number; y: number }
       try {
         offset = accumulateOwnerOffset(snap, documentIndex)
@@ -439,6 +470,7 @@ export class ChatSearchExecutor {
       }
       const valueByNode = new Map(indexedValues(document.nodes.nodeValue, 'nodeValue'))
       document.layout.nodeIndex.forEach((ni, li) => {
+        if (!snapshotNodeVisible(snap, 0, ni)) return
         const si = valueByNode.get(ni)
         const t = si !== undefined ? snap.strings[si] : ''
         if (typeof t !== 'string') return
@@ -456,19 +488,20 @@ export class ChatSearchExecutor {
     return { point: hits.length === 1 ? hits[0]! : null, count: hits.length }
   }
 
-  /** 「联系人」分类标签中心（结果项定位锚点）：全文档可见精确命中取最上方；无命中返回 null */
+  /** 「联系人」分类标签中心（结果项定位锚点）：主文档可见精确命中取最上方；无命中返回 null */
   private contactsLabelCenter(snap: DomSnapshot): { x: number; y: number } | null {
     let best: { x: number; y: number } | null = null
     snap.strings.forEach((s, stringIndex) => {
       if (s.trim() !== '联系人') return
-      snap.documents.forEach((document, documentIndex) => {
+      snap.documents.slice(0, 1).forEach((document, documentIndex) => {
         let offset: { x: number; y: number }
         try {
           offset = accumulateOwnerOffset(snap, documentIndex)
         } catch {
           return
         }
-        for (const { bounds } of findNodesByString(document, stringIndex)) {
+        for (const { bounds, nodeIndex } of findNodesByString(document, stringIndex)) {
+          if (!snapshotNodeVisible(snap, 0, nodeIndex)) continue
           if (bounds[2] <= 0 || bounds[3] <= 0) continue
           const c = boundsCenter(bounds)
           const p = { x: offset.x + c.x - (document.scrollOffsetX ?? 0), y: offset.y + c.y - (document.scrollOffsetY ?? 0) }

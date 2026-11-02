@@ -92,13 +92,13 @@ test('contact 空白字符串 → INVALID_ARGUMENT，且不连 Chrome', async ()
   assert.deepEqual(f.calls, [])
 })
 
-test('联系人不存在（搜索无入口 + 列表 0 命中）→ WRONG_PAGE 可重试，文案列可用联系人', async () => {
+test('联系人不存在（搜索无入口 + 列表 0 命中）→ UI_CHANGED 不可重试，文案列可用联系人', async () => {
   const f = fakeFactory(CHAT_URL)
   const op = createBossOpenChatOperation(f.factory)
   const r = await op.execute({ contact: '张三丰' }, silentCtx())
   assert.equal(r.success, false)
-  assert.equal(r.code, 'WRONG_PAGE')
-  assert.equal(r.retryable, true)
+  assert.equal(r.code, 'UI_CHANGED')
+  assert.equal(r.retryable, false)
   assert.equal(r.effect, 'none')
   assert.match(r.message, /会话列表中不存在「张三丰」/)
   assert.match(r.message, /可用联系人/)

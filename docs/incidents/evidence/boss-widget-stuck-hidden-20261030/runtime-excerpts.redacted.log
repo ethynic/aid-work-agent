@@ -1,0 +1,113 @@
+# runtime 日志关键节选（脱敏）——2026-10-30 BOSS 渲染子窗口粘滞隐藏事故
+# 来源：客户机 %APPDATA%/aidwork-tool-runtime/logs/runtime.log（用户提供副本），行号为该文件原始行号
+# 时间为 UTC（Z），北京时间 = UTC+8；仅截取与根因相关行，无候选人隐私内容
+# 窗口 4662058 = 调试 Chrome 的 BOSS 主窗（pid=33272）；widget 69212272 = 主页面渲染子窗口（约1674x884）
+
+## [1] 10:58:31 会话1 boss_greet 成功——最后一次健康枚举（主 widget 可见）
+2026-10-30T02:58:31.922Z [boss-input-discovery] phase=discover probe=0 window=4662058 widget=34676444 pid=33272 visible=0 rect=360,49,1840,93 foreground=4662058 minimized=0
+2026-10-30T02:58:31.922Z [boss-input-discovery] phase=discover probe=0 window=4662058 widget=598126 pid=33272 visible=0 rect=1099,93,1100,94 foreground=4662058 minimized=0
+2026-10-30T02:58:31.923Z [boss-input-discovery] phase=discover probe=0 window=4662058 widget=69212272 pid=33272 visible=1 rect=245,95,1919,979 foreground=4662058 minimized=0
+2026-10-30T02:58:32.728Z [boss-perf] tool=win32-native-input op=click ok=1 total_ms=1395 activate_ms=474 discover_ms=1 guard_ms=0 move_ms=825 press_ms=94 finalize_ms=0
+2026-10-30T02:58:34.392Z [boss-perf] tool=boss_greet run_id*** ok=1 total_ms=5066 connect_ms=16 body_ms=4958 close_ms=13 body{n=1,total_ms=4958,max_ms=4958} win32:click{n=1,total_ms=1409,max_ms=1409} snapshot{n=4,total_ms=448,max_ms=117} connect{n=1,total_ms=16,max_ms=16} cdp:mouseWheel{n=1,total_ms=16,max_ms=16} close{n=1,total_ms=13,max_ms=13} cdp:getUrl{n=1,total_ms=1,max_ms=1}
+2026-10-30T02:58:34.394Z [runtime][INFO] [runtime-perf] invoca*** tool=boss_greet provider=boss-recruiting started_ms=274 lock_wait_ms=1 lock_prep_ms=0 provider_call_ms=5080
+2026-10-30T02:58:34.395Z [boss-mcp] tool=boss_greet run_id*** success=true code=OK effect=applied elapsed_ms=5074
+
+## [2] 11:06:06 新会话 goto#1——主 widget 从枚举中消失（仅剩窄条+1px 两个隐藏 widget），7 次探测后拒绝
+2026-10-30T03:06:06.441Z [runtime][INFO] 领取 invocation 8c3663b5-aed5-4a1c-b4f1-68aac9c1ed51 tool=boss_goto
+2026-10-30T03:06:06.737Z [runtime][INFO] invocation 8c3663b5-aed5-4a1c-b4f1-68aac9c1ed51 已开始执行 tool=boss_goto
+2026-10-30T03:06:07.425Z [boss-input-discovery] phase=discover probe=0 window=4662058 widget=34676444 pid=33272 visible=0 rect=360,49,1840,93 foreground=4662058 minimized=0
+2026-10-30T03:06:07.426Z [boss-input-discovery] phase=discover probe=0 window=4662058 widget=598126 pid=33272 visible=0 rect=1099,93,1100,94 foreground=4662058 minimized=0
+2026-10-30T03:06:07.426Z [boss-input-discovery] phase=wait probe=0 window=4662058 reason=hidden
+2026-10-30T03:06:07.635Z [boss-input-discovery] phase=discover probe=1 window=4662058 widget=34676444 pid=33272 visible=0 rect=360,49,1840,93 foreground=4662058 minimized=0
+2026-10-30T03:06:07.636Z [boss-input-discovery] phase=discover probe=1 window=4662058 widget=598126 pid=33272 visible=0 rect=1099,93,1100,94 foreground=4662058 minimized=0
+2026-10-30T03:06:07.637Z [boss-input-discovery] phase=wait probe=1 window=4662058 reason=hidden
+
+(probes 2-4 同上略)
+2026-10-30T03:06:08.254Z [boss-input-discovery] phase=wait probe=4 window=4662058 reason=hidden
+2026-10-30T03:06:08.458Z [boss-input-discovery] phase=discover probe=5 window=4662058 widget=34676444 pid=33272 visible=0 rect=360,49,1840,93 foreground=4662058 minimized=0
+2026-10-30T03:06:08.459Z [boss-input-discovery] phase=discover probe=5 window=4662058 widget=598126 pid=33272 visible=0 rect=1099,93,1100,94 foreground=4662058 minimized=0
+2026-10-30T03:06:08.459Z [boss-input-discovery] phase=wait probe=5 window=4662058 reason=hidden
+2026-10-30T03:06:08.665Z [boss-input-discovery] phase=discover probe=6 window=4662058 widget=34676444 pid=33272 visible=0 rect=360,49,1840,93 foreground=4662058 minimized=0
+2026-10-30T03:06:08.666Z [boss-input-discovery] phase=discover probe=6 window=4662058 widget=598126 pid=33272 visible=0 rect=1099,93,1100,94 foreground=4662058 minimized=0
+2026-10-30T03:06:08.674Z [boss-perf] tool=win32-native-input op=click ok=0 total_ms=1721 activate_ms=472 discover_ms=1240 finalize_ms=0
+2026-10-30T03:06:08.675Z [boss-op] 失败 run_id*** code=UI_CHANGED message=STALE_OBSERVATION: render widget hidden; input refused
+
+## [3] 11:06:50 goto#2——主 widget 回到枚举但 visible=0（rect 与会话1相同），仍拒绝
+2026-10-30T03:06:50.003Z [boss-input-discovery] phase=discover probe=0 window=4662058 widget=69212272 pid=33272 visible=0 rect=245,95,1919,979 foreground=4662058 minimized=0
+2026-10-30T03:06:50.004Z [boss-input-discovery] phase=discover probe=0 window=4662058 widget=34676444 pid=33272 visible=0 rect=360,49,1840,93 foreground=4662058 minimized=0
+2026-10-30T03:06:50.005Z [boss-input-discovery] phase=discover probe=0 window=4662058 widget=598126 pid=33272 visible=0 rect=1099,93,1100,94 foreground=4662058 minimized=0
+2026-10-30T03:06:50.005Z [boss-input-discovery] phase=wait probe=0 window=4662058 reason=hidden
+2026-10-30T03:06:50.006Z [boss-input-discovery] phase=discover probe=1 window=4662058 widget=69212272 pid=33272 visible=0 rect=245,95,1919,979 foreground=4662058 minimized=0
+2026-10-30T03:06:50.006Z [boss-input-discovery] phase=discover probe=1 window=4662058 widget=34676444 pid=33272 visible=0 rect=360,49,1840,93 foreground=4662058 minimized=0
+2026-10-30T03:06:50.007Z [boss-input-discovery] phase=discover probe=1 window=4662058 widget=598126 pid=33272 visible=0 rect=1099,93,1100,94 foreground=4662058 minimized=0
+2026-10-30T03:06:50.012Z [boss-input-discovery] phase=wait probe=1 window=4662058 reason=hidden
+2026-10-30T03:06:50.091Z [boss-input-discovery] phase=discover probe=2 window=4662058 widget=69212272 pid=33272 visible=0 rect=245,95,1919,979 foreground=4662058 minimized=0
+2026-10-30T03:06:50.091Z [boss-input-discovery] phase=discover probe=2 window=4662058 widget=34676444 pid=33272 visible=0 rect=360,49,1840,93 foreground=4662058 minimized=0
+2026-10-30T03:06:50.092Z [boss-input-discovery] phase=discover probe=2 window=4662058 widget=598126 pid=33272 visible=0 rect=1099,93,1100,94 foreground=4662058 minimized=0
+2026-10-30T03:06:50.093Z [boss-input-discovery] phase=wait probe=2 window=4662058 reason=hidden
+2026-10-30T03:06:50.298Z [boss-input-discovery] phase=discover probe=3 window=4662058 widget=69212272 pid=33272 visible=0 rect=245,95,1919,979 foreground=4662058 minimized=0
+
+## [4] 11:07:33 goto#3 via=already 成功（用户已手动切页，纯 URL 校验零输入）
+2026-10-30T03:07:33.480Z [runtime][INFO] invocation 56ed6228-85b6-46ba-8a55-559276c77fc1 终态已 ACK（result），outbox 条目已删除
+2026-10-30T03:07:36.243Z [runtime][INFO] 领取 invocation 694d525d-081b-4cd1-b358-a4bbda37cca7 tool=boss_list_jobs
+2026-10-30T03:07:36.489Z [runtime][INFO] invocation 694d525d-081b-4cd1-b358-a4bbda37cca7 已开始执行 tool=boss_list_jobs
+
+## [5] 11:07:37 boss_list_jobs——用户真实点击过页面后主 widget 依然隐藏
+2026-10-30T03:07:37.337Z [boss-input-discovery] phase=discover probe=0 window=4662058 widget=69212272 pid=33272 visible=0 rect=245,95,1919,979 foreground=4662058 minimized=0
+2026-10-30T03:07:37.338Z [boss-input-discovery] phase=discover probe=0 window=4662058 widget=34676444 pid=33272 visible=0 rect=360,49,1840,93 foreground=4662058 minimized=0
+2026-10-30T03:07:37.338Z [boss-input-discovery] phase=discover probe=0 window=4662058 widget=598126 pid=33272 visible=0 rect=1099,93,1100,94 foreground=4662058 minimized=0
+2026-10-30T03:07:37.340Z [boss-input-discovery] phase=wait probe=0 window=4662058 reason=hidden
+2026-10-30T03:07:37.544Z [boss-input-discovery] phase=discover probe=1 window=4662058 widget=69212272 pid=33272 visible=0 rect=245,95,1919,979 foreground=4662058 minimized=0
+2026-10-30T03:07:37.544Z [boss-input-discovery] phase=discover probe=1 window=4662058 widget=34676444 pid=33272 visible=0 rect=360,49,1840,93 foreground=4662058 minimized=0
+2026-10-30T03:07:37.545Z [boss-input-discovery] phase=discover probe=1 window=4662058 widget=598126 pid=33272 visible=0 rect=1099,93,1100,94 foreground=4662058 minimized=0
+2026-10-30T03:07:37.546Z [boss-input-discovery] phase=wait probe=1 window=4662058 reason=hidden
+2026-10-30T03:07:37.752Z [boss-input-discovery] phase=discover probe=2 window=4662058 widget=69212272 pid=33272 visible=0 rect=245,95,1919,979 foreground=4662058 minimized=0
+2026-10-30T03:07:37.753Z [boss-input-discovery] phase=discover probe=2 window=4662058 widget=34676444 pid=33272 visible=0 rect=360,49,1840,93 foreground=4662058 minimized=0
+2026-10-30T03:07:37.753Z [boss-input-discovery] phase=discover probe=2 window=4662058 widget=598126 pid=33272 visible=0 rect=1099,93,1100,94 foreground=4662058 minimized=0
+2026-10-30T03:07:37.754Z [boss-input-discovery] phase=wait probe=2 window=4662058 reason=hidden
+2026-10-30T03:07:37.959Z [boss-input-discovery] phase=discover probe=3 window=4662058 widget=69212272 pid=33272 visible=0 rect=245,95,1919,979 foreground=4662058 minimized=0
+2026-10-30T03:07:37.960Z [boss-input-discovery] phase=discover probe=3 window=4662058 widget=34676444 pid=33272 visible=0 rect=360,49,1840,93 foreground=4662058 minimized=0
+2026-10-30T03:07:37.961Z [boss-input-discovery] phase=discover probe=3 window=4662058 widget=598126 pid=33272 visible=0 rect=1099,93,1100,94 foreground=4662058 minimized=0
+2026-10-30T03:07:37.962Z [boss-input-discovery] phase=wait probe=3 window=4662058 reason=hidden
+2026-10-30T03:07:38.164Z [boss-input-discovery] phase=discover probe=4 window=4662058 widget=69212272 pid=33272 visible=0 rect=245,95,1919,979 foreground=4662058 minimized=0
+2026-10-30T03:07:38.165Z [boss-input-discovery] phase=discover probe=4 window=4662058 widget=34676444 pid=33272 visible=0 rect=360,49,1840,93 foreground=4662058 minimized=0
+2026-10-30T03:07:38.166Z [boss-input-discovery] phase=discover probe=4 window=4662058 widget=598126 pid=33272 visible=0 rect=1099,93,1100,94 foreground=4662058 minimized=0
+2026-10-30T03:07:38.166Z [boss-input-discovery] phase=wait probe=4 window=4662058 reason=hidden
+2026-10-30T03:07:38.368Z [boss-input-discovery] phase=discover probe=5 window=4662058 widget=69212272 pid=33272 visible=0 rect=245,95,1919,979 foreground=4662058 minimized=0
+2026-10-30T03:07:38.369Z [boss-input-discovery] phase=discover probe=5 window=4662058 widget=34676444 pid=33272 visible=0 rect=360,49,1840,93 foreground=4662058 minimized=0
+2026-10-30T03:07:38.370Z [boss-input-discovery] phase=discover probe=5 window=4662058 widget=598126 pid=33272 visible=0 rect=1099,93,1100,94 foreground=4662058 minimized=0
+2026-10-30T03:07:38.371Z [boss-input-discovery] phase=wait probe=5 window=4662058 reason=hidden
+
+## [6] 11:09:25 filter_options#2——rect 变为 212,92（用户在 11:08:14-11:09:25 间手动移动过窗口），widget 依然隐藏
+2026-10-30T03:09:25.448Z [boss-input-discovery] phase=discover probe=0 window=4662058 widget=69212272 pid=33272 visible=0 rect=212,92,1886,976 foreground=4662058 minimized=0
+2026-10-30T03:09:25.449Z [boss-input-discovery] phase=discover probe=0 window=4662058 widget=34676444 pid=33272 visible=0 rect=327,46,1807,90 foreground=4662058 minimized=0
+2026-10-30T03:09:25.450Z [boss-input-discovery] phase=discover probe=0 window=4662058 widget=598126 pid=33272 visible=0 rect=1066,90,1067,91 foreground=4662058 minimized=0
+2026-10-30T03:09:25.451Z [boss-input-discovery] phase=wait probe=0 window=4662058 reason=hidden
+2026-10-30T03:09:25.651Z [boss-input-discovery] phase=discover probe=1 window=4662058 widget=69212272 pid=33272 visible=0 rect=212,92,1886,976 foreground=4662058 minimized=0
+2026-10-30T03:09:25.652Z [boss-input-discovery] phase=discover probe=1 window=4662058 widget=34676444 pid=33272 visible=0 rect=327,46,1807,90 foreground=4662058 minimized=0
+2026-10-30T03:09:25.652Z [boss-input-discovery] phase=discover probe=1 window=4662058 widget=598126 pid=33272 visible=0 rect=1066,90,1067,91 foreground=4662058 minimized=0
+2026-10-30T03:09:25.653Z [boss-input-discovery] phase=wait probe=1 window=4662058 reason=hidden
+2026-10-30T03:09:25.885Z [boss-input-discovery] phase=discover probe=2 window=4662058 widget=69212272 pid=33272 visible=0 rect=212,92,1886,976 foreground=4662058 minimized=0
+
+## [7] 11:10:03 resume_batch 首卡=李宇（即弹层挡住的那位），点击被拒——用户看到的"一直点第一个简历"
+2026-10-30T03:10:03.399Z [boss-batch] 卡片[李宇] 失败：STALE_OBSERVATION: render widget hidden; input refused
+2026-10-30T03:10:03.400Z [boss-batch] 批量结束：尝试 1 张，成功 0 份，失败 1 个
+2026-10-30T03:10:03.402Z [boss-op] 失败 run_id*** code=UI_CHANGED message=STALE_OBSERVATION: render widget hidden; input refused
+
+## [8] 11:10:13-28 恢复链：CDP 输入可用，boss_overlay_dismiss ok=1（弹层被 CDP 关掉）
+2026-10-30T03:10:28.316Z [boss-perf] tool=boss_overlay_dismiss run_id*** ok=1 total_ms=2581 connect_ms=9 body_ms=2470 close_ms=16 body{n=1,total_ms=2470,max_ms=2470} cdp:screenshot{n=1,total_ms=1555,max_ms=1555} cdp:clickBrowse{n=1,total_ms=18,max_ms=18} close{n=1,total_ms=16,max_ms=16} connect{n=1,total_ms=9,max_ms=9} cdp:getUrl{n=2,total_ms=2,max_ms=1}
+
+## [9] 11:10:39 dismiss 成功后主目标重试——物理点击仍被拒（恢复链按设计重试了，不是没续跑）
+2026-10-30T03:10:39.408Z [boss-batch] 卡片[李宇] 失败：STALE_OBSERVATION: render widget hidden; input refused
+2026-10-30T03:10:39.409Z [boss-batch] 批量结束：尝试 1 张，成功 0 份，失败 1 个
+2026-10-30T03:10:39.409Z [boss-op] 失败 run_id*** code=UI_CHANGED message=STALE_OBSERVATION: render widget hidden; input refused
+2026-10-30T03:10:39.410Z [boss-cdp] id=15 session=browser method=Target.detachFromTarget event=- stage=send
+2026-10-30T03:10:39.412Z [runtime][INFO] [runtime-perf] invoca*** tool=boss_resume_batch provider=boss-recruiting started_ms=249 lock_wait_ms=1 lock_prep_ms=0 provider_call_ms=38350
+
+## [10] 11:11:28-40 第二轮 dismiss ok=1 → CDP 点击（疑似只读开卡把详情又点开）→ 最终拒绝，调用失败
+2026-10-30T03:11:28.114Z [boss-perf] tool=boss_overlay_dismiss run_id*** ok=1 total_ms=5676 connect_ms=17 body_ms=5561 close_ms=2 body{n=1,total_ms=5561,max_ms=5561} connect{n=1,total_ms=17,max_ms=17} close{n=1,total_ms=2,max_ms=2} cdp:getUrl{n=2,total_ms=1,max_ms=1} cdp:activateTarget{n=1,total_ms=1,max_ms=1}
+2026-10-30T03:11:34.457Z [boss-perf] tool=boss_overlay_inspect run_id*** ok=1 total_ms=6607 connect_ms=9 body_ms=6506 close_ms=1 body{n=1,total_ms=6506,max_ms=6506} connect{n=1,total_ms=9,max_ms=9} cdp:getUrl{n=2,total_ms=2,max_ms=1} cdp:activateTarget{n=1,total_ms=1,max_ms=1} close{n=1,total_ms=1,max_ms=1}
+2026-10-30T03:11:39.997Z [boss-batch] 卡片[李宇] 失败：STALE_OBSERVATION: render widget hidden; input refused
+2026-10-30T03:11:39.998Z [boss-batch] 批量结束：尝试 1 张，成功 0 份，失败 1 个
+2026-10-30T03:11:39.998Z [boss-op] 失败 run_id*** code=UI_CHANGED message=STALE_OBSERVATION: render widget hidden; input refused
+2026-10-30T03:11:40.011Z [boss-mcp] tool=boss_resume_batch run_id*** success=false code=UI_CHANGED effect=none elapsed_ms=56468

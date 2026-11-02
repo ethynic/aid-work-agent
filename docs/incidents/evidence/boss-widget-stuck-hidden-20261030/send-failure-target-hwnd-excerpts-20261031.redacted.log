@@ -1,0 +1,192 @@
+# Original runtime(2).log; UTC timestamps; L numbers are 1-based source lines.
+# Selection is limited to protocol metadata, native geometry, perf and search-entry ambiguity.
+# session= is an attach-session hash prefix; no targetId is present.
+L7663 2026-10-30T02:58:29.339Z [boss-cdp] id=1 session=browser method=Target.getTargets event=- stage=send
+L7664 2026-10-30T02:58:29.340Z [boss-cdp] id=1 session=browser method=Target.getTargets event=- stage=ack elapsed_ms=1
+L7665 2026-10-30T02:58:29.341Z [boss-cdp] id=2 session=browser method=Target.attachToTarget event=- stage=send
+L7666 2026-10-30T02:58:29.342Z [boss-cdp] id=2 session=browser method=Target.attachToTarget event=- stage=ack elapsed_ms=1
+L7667 2026-10-30T02:58:29.345Z [boss-cdp] id=3 session=browser method=Target.getTargets event=- stage=send
+L7668 2026-10-30T02:58:29.346Z [boss-cdp] id=3 session=browser method=Target.getTargets event=- stage=ack elapsed_ms=0
+L7669 2026-10-30T02:58:29.347Z [boss-cdp] id=4 session=149145c9c0 method=DOMSnapshot.captureSnapshot event=- stage=send
+L7670 2026-10-30T02:58:29.407Z [boss-cdp] id=4 session=149145c9c0 method=DOMSnapshot.captureSnapshot event=- stage=ack elapsed_ms=62
+L7671 2026-10-30T02:58:29.421Z [boss-cdp] id=5 session=browser method=Target.getTargets event=- stage=send
+L7672 2026-10-30T02:58:29.421Z [boss-cdp] id=5 session=browser method=Target.getTargets event=- stage=ack elapsed_ms=1
+L7673 2026-10-30T02:58:29.422Z [boss-cdp] id=6 session=149145c9c0 method=DOMSnapshot.captureSnapshot event=- stage=send
+L7674 2026-10-30T02:58:29.527Z [boss-cdp] id=6 session=149145c9c0 method=DOMSnapshot.captureSnapshot event=- stage=ack elapsed_ms=106
+L7683 2026-10-30T02:58:31.922Z [boss-input-discovery] phase=discover probe=0 window=4662058 widget=34676444 pid=33272 visible=0 rect=360,49,1840,93 foreground=4662058 minimized=0
+L7684 2026-10-30T02:58:31.922Z [boss-input-discovery] phase=discover probe=0 window=4662058 widget=598126 pid=33272 visible=0 rect=1099,93,1100,94 foreground=4662058 minimized=0
+L7685 2026-10-30T02:58:31.923Z [boss-input-discovery] phase=discover probe=0 window=4662058 widget=69212272 pid=33272 visible=1 rect=245,95,1919,979 foreground=4662058 minimized=0
+L7686 2026-10-30T02:58:32.728Z [boss-perf] tool=win32-native-input op=click ok=1 total_ms=1395 activate_ms=474 discover_ms=1 guard_ms=0 move_ms=825 press_ms=94 finalize_ms=0
+L7687 2026-10-30T02:58:34.241Z [boss-cdp] id=11 session=149145c9c0 method=DOMSnapshot.captureSnapshot event=- stage=send
+L7688 2026-10-30T02:58:34.355Z [boss-cdp] id=11 session=149145c9c0 method=DOMSnapshot.captureSnapshot event=- stage=ack elapsed_ms=114
+L7689 2026-10-30T02:58:34.379Z [boss-cdp] id=12 session=browser method=Target.detachFromTarget event=- stage=send
+L7690 2026-10-30T02:58:34.390Z [boss-cdp] id=12 session=browser method=Target.detachFromTarget event=- stage=ack elapsed_ms=12
+L7691 2026-10-30T02:58:34.392Z [boss-perf] tool=boss_greet run_id*** ok=1 total_ms=5066 connect_ms=16 body_ms=4958 close_ms=13 body{n=1,total_ms=4958,max_ms=4958} win32:click{n=1,total_ms=1409,max_ms=1409} snapshot{n=4,total_ms=448,max_ms=117} connect{n=1,total_ms=16,max_ms=16} cdp:mouseWheel{n=1,total_ms=16,max_ms=16} close{n=1,total_ms=13,max_ms=13} cdp:getUrl{n=1,total_ms=1,max_ms=1}
+L7693 2026-10-30T02:58:34.395Z [boss-mcp] tool=boss_greet run_id*** success=true code=OK effect=applied elapsed_ms=5074
+L7697 2026-10-30T02:59:18.042Z [boss-cdp] id=1 session=browser method=Target.getTargets event=- stage=send
+L7698 2026-10-30T02:59:18.043Z [boss-cdp] id=1 session=browser method=Target.getTargets event=- stage=ack elapsed_ms=2
+L7699 2026-10-30T02:59:18.044Z [boss-cdp] id=2 session=browser method=Target.attachToTarget event=- stage=send
+L7700 2026-10-30T02:59:18.045Z [boss-cdp] id=2 session=browser method=Target.attachToTarget event=- stage=ack elapsed_ms=1
+L7701 2026-10-30T02:59:18.047Z [boss-cdp] id=3 session=browser method=Target.getTargets event=- stage=send
+L7702 2026-10-30T02:59:18.048Z [boss-cdp] id=3 session=browser method=Target.getTargets event=- stage=ack elapsed_ms=0
+L7703 2026-10-30T02:59:18.049Z [boss-cdp] id=4 session=1f03ab8ab6 method=DOMSnapshot.captureSnapshot event=- stage=send
+L7704 2026-10-30T02:59:18.118Z [boss-cdp] id=4 session=1f03ab8ab6 method=DOMSnapshot.captureSnapshot event=- stage=ack elapsed_ms=70
+L7705 2026-10-30T02:59:18.130Z [boss-cdp] id=5 session=browser method=Target.getTargets event=- stage=send
+L7706 2026-10-30T02:59:18.131Z [boss-cdp] id=5 session=browser method=Target.getTargets event=- stage=ack elapsed_ms=0
+L7707 2026-10-30T02:59:18.132Z [boss-cdp] id=6 session=browser method=Target.getTargets event=- stage=send
+L7708 2026-10-30T02:59:18.133Z [boss-cdp] id=6 session=browser method=Target.getTargets event=- stage=ack elapsed_ms=1
+L7709 2026-10-30T02:59:18.134Z [boss-cdp] id=7 session=1f03ab8ab6 method=DOMSnapshot.captureSnapshot event=- stage=send
+L7710 2026-10-30T02:59:18.204Z [boss-cdp] id=7 session=1f03ab8ab6 method=DOMSnapshot.captureSnapshot event=- stage=ack elapsed_ms=72
+L7711 2026-10-30T02:59:18.205Z [boss-cdp] id=8 session=browser method=Target.activateTarget event=- stage=send
+L7712 2026-10-30T02:59:18.216Z [boss-cdp] id=8 session=browser method=Target.activateTarget event=- stage=ack elapsed_ms=12
+L7713 2026-10-30T02:59:18.702Z [boss-input-discovery] phase=discover probe=0 window=4662058 widget=34676444 pid=33272 visible=0 rect=360,49,1840,93 foreground=4662058 minimized=0
+L7714 2026-10-30T02:59:18.703Z [boss-input-discovery] phase=discover probe=0 window=4662058 widget=598126 pid=33272 visible=0 rect=1099,93,1100,94 foreground=4662058 minimized=0
+L7715 2026-10-30T02:59:18.704Z [boss-input-discovery] phase=discover probe=0 window=4662058 widget=69212272 pid=33272 visible=1 rect=245,95,1919,979 foreground=4662058 minimized=0
+L7716 2026-10-30T02:59:19.625Z [boss-perf] tool=win32-native-input op=click ok=1 total_ms=1408 activate_ms=483 discover_ms=1 guard_ms=0 move_ms=826 press_ms=96 finalize_ms=0
+L7717 2026-10-30T02:59:21.134Z [boss-cdp] id=9 session=browser method=Target.getTargets event=- stage=send
+L7718 2026-10-30T02:59:21.135Z [boss-cdp] id=9 session=browser method=Target.getTargets event=- stage=ack elapsed_ms=2
+L7719 2026-10-30T02:59:21.137Z [boss-cdp] id=10 session=1f03ab8ab6 method=DOMSnapshot.captureSnapshot event=- stage=send
+L7720 2026-10-30T02:59:21.213Z [boss-cdp] id=10 session=1f03ab8ab6 method=DOMSnapshot.captureSnapshot event=- stage=ack elapsed_ms=76
+L7721 2026-10-30T02:59:21.231Z [boss-cdp] id=11 session=1f03ab8ab6 method=Input.dispatchKeyEvent event=- stage=send
+L7722 2026-10-30T02:59:21.233Z [boss-cdp] id=11 session=1f03ab8ab6 method=Input.dispatchKeyEvent event=- stage=ack elapsed_ms=2
+L7723 2026-10-30T02:59:21.234Z [boss-cdp] id=12 session=1f03ab8ab6 method=Input.dispatchKeyEvent event=- stage=send
+L7724 2026-10-30T02:59:21.235Z [boss-cdp] id=12 session=1f03ab8ab6 method=Input.dispatchKeyEvent event=- stage=ack elapsed_ms=1
+L7725 2026-10-30T02:59:21.643Z [boss-cdp] id=13 session=1f03ab8ab6 method=DOMSnapshot.captureSnapshot event=- stage=send
+L7726 2026-10-30T02:59:21.746Z [boss-cdp] id=13 session=1f03ab8ab6 method=DOMSnapshot.captureSnapshot event=- stage=ack elapsed_ms=80
+L7727 2026-10-30T02:59:21.747Z [boss-op] 失败 run_id*** code=UI_CHANGED message=顶栏搜索入口候选 42 个无法唯一定位（锚点1个[批量@(656,171) 候选5 簇3 | svg邻近 2个 聚簇2] 小图标42 svg8），请人工查看
+L7728 2026-10-30T02:59:21.748Z [boss-cdp] id=14 session=browser method=Target.detachFromTarget event=- stage=send
+L7729 2026-10-30T02:59:21.748Z [boss-cdp] id=14 session=browser method=Target.detachFromTarget event=- stage=ack elapsed_ms=0
+L7730 2026-10-30T02:59:21.749Z [boss-perf] tool=boss_send_to run_id*** ok=0 total_ms=3699 connect_ms=10 body_ms=3602 close_ms=1 body{n=1,total_ms=3602,max_ms=3602} win32:click{n=1,total_ms=1420,max_ms=1420} snapshot{n=3,total_ms=228,max_ms=80} connect{n=1,total_ms=10,max_ms=10} cdp:getUrl{n=3,total_ms=3,max_ms=2} cdp:escape{n=1,total_ms=3,max_ms=3} close{n=1,total_ms=1,max_ms=1}
+L7731 2026-10-30T02:59:21.750Z [boss-cdp] id=1 session=browser method=Target.getTargets event=- stage=send
+L7732 2026-10-30T02:59:21.751Z [boss-cdp] id=1 session=browser method=Target.getTargets event=- stage=ack elapsed_ms=1
+L7733 2026-10-30T02:59:21.752Z [boss-cdp] id=2 session=browser method=Target.attachToTarget event=- stage=send
+L7734 2026-10-30T02:59:21.752Z [boss-cdp] id=2 session=browser method=Target.attachToTarget event=- stage=ack elapsed_ms=1
+L7735 2026-10-30T02:59:21.753Z [boss-cdp] id=3 session=browser method=Target.getTargets event=- stage=send
+L7736 2026-10-30T02:59:21.753Z [boss-cdp] id=3 session=browser method=Target.getTargets event=- stage=ack elapsed_ms=1
+L7737 2026-10-30T02:59:21.754Z [boss-cdp] id=4 session=3fa27ea8a6 method=DOMSnapshot.captureSnapshot event=- stage=send
+L7738 2026-10-30T02:59:21.838Z [boss-cdp] id=4 session=3fa27ea8a6 method=DOMSnapshot.captureSnapshot event=- stage=ack elapsed_ms=95
+L7739 2026-10-30T02:59:21.862Z [boss-cdp] id=5 session=browser method=Target.getTargets event=- stage=send
+L7740 2026-10-30T02:59:21.864Z [boss-cdp] id=5 session=browser method=Target.getTargets event=- stage=ack elapsed_ms=3
+L7752 2026-10-30T02:59:39.410Z [boss-cdp] id=1 session=browser method=Target.getTargets event=- stage=send
+L7753 2026-10-30T02:59:39.411Z [boss-cdp] id=1 session=browser method=Target.getTargets event=- stage=ack elapsed_ms=1
+L7754 2026-10-30T02:59:39.412Z [boss-cdp] id=2 session=browser method=Target.attachToTarget event=- stage=send
+L7755 2026-10-30T02:59:39.413Z [boss-cdp] id=2 session=browser method=Target.attachToTarget event=- stage=ack elapsed_ms=0
+L7756 2026-10-30T02:59:39.416Z [boss-cdp] id=3 session=browser method=Target.getTargets event=- stage=send
+L7757 2026-10-30T02:59:39.417Z [boss-cdp] id=3 session=browser method=Target.getTargets event=- stage=ack elapsed_ms=1
+L7758 2026-10-30T02:59:39.418Z [boss-cdp] id=4 session=565a5e2c3f method=DOMSnapshot.captureSnapshot event=- stage=send
+L7759 2026-10-30T02:59:39.501Z [boss-cdp] id=4 session=565a5e2c3f method=DOMSnapshot.captureSnapshot event=- stage=ack elapsed_ms=84
+L7765 2026-10-30T02:59:39.611Z [boss-cdp] id=7 session=565a5e2c3f method=Input.dispatchKeyEvent event=- stage=ack elapsed_ms=1
+L7766 2026-10-30T02:59:39.612Z [boss-cdp] id=8 session=565a5e2c3f method=Input.dispatchKeyEvent event=- stage=send
+L7767 2026-10-30T02:59:39.612Z [boss-cdp] id=8 session=565a5e2c3f method=Input.dispatchKeyEvent event=- stage=ack elapsed_ms=1
+L7768 2026-10-30T02:59:40.027Z [boss-cdp] id=9 session=565a5e2c3f method=DOMSnapshot.captureSnapshot event=- stage=send
+L7769 2026-10-30T02:59:40.105Z [boss-cdp] id=9 session=565a5e2c3f method=DOMSnapshot.captureSnapshot event=- stage=ack elapsed_ms=77
+L7770 2026-10-30T02:59:40.109Z [boss-op] 失败 run_id*** code=UI_CHANGED message=顶栏搜索入口候选 42 个无法唯一定位（锚点1个[批量@(656,171) 候选5 簇3 | svg邻近 2个 聚簇2] 小图标42 svg8），请人工查看
+L7771 2026-10-30T02:59:40.110Z [boss-cdp] id=10 session=browser method=Target.detachFromTarget event=- stage=send
+L7773 2026-10-30T02:59:40.128Z [boss-cdp] id=10 session=browser method=Target.detachFromTarget event=- stage=ack elapsed_ms=1
+L7774 2026-10-30T02:59:40.129Z [boss-perf] tool=boss_send_to run_id*** ok=0 total_ms=706 connect_ms=6 body_ms=588 close_ms=2 body{n=1,total_ms=588,max_ms=588} snapshot{n=2,total_ms=155,max_ms=78} connect{n=1,total_ms=6,max_ms=6} cdp:getUrl{n=1,total_ms=2,max_ms=2} cdp:escape{n=1,total_ms=2,max_ms=2} close{n=1,total_ms=2,max_ms=2}
+L7775 2026-10-30T02:59:40.131Z [boss-mcp] tool=boss_send_to run_id*** success=false code=UI_CHANGED effect=none elapsed_ms=22078
+L7909 2026-10-30T03:01:07.974Z [boss-cdp] id=1 session=browser method=Target.getTargets event=- stage=send
+L7910 2026-10-30T03:01:07.975Z [boss-cdp] id=1 session=browser method=Target.getTargets event=- stage=ack elapsed_ms=1
+L7911 2026-10-30T03:01:07.976Z [boss-cdp] id=2 session=browser method=Target.attachToTarget event=- stage=send
+L7912 2026-10-30T03:01:07.976Z [boss-cdp] id=2 session=browser method=Target.attachToTarget event=- stage=ack elapsed_ms=1
+L7913 2026-10-30T03:01:07.978Z [boss-cdp] id=3 session=browser method=Target.getTargets event=- stage=send
+L7914 2026-10-30T03:01:07.979Z [boss-cdp] id=3 session=browser method=Target.getTargets event=- stage=ack elapsed_ms=0
+L7915 2026-10-30T03:01:07.980Z [boss-cdp] id=4 session=e43d8ee4c8 method=DOMSnapshot.captureSnapshot event=- stage=send
+L7916 2026-10-30T03:01:08.050Z [boss-cdp] id=4 session=e43d8ee4c8 method=DOMSnapshot.captureSnapshot event=- stage=ack elapsed_ms=84
+L7917 2026-10-30T03:01:08.063Z [boss-cdp] id=5 session=browser method=Target.getTargets event=- stage=send
+L7918 2026-10-30T03:01:08.064Z [boss-cdp] id=5 session=browser method=Target.getTargets event=- stage=ack elapsed_ms=1
+L7919 2026-10-30T03:01:08.064Z [boss-cdp] id=6 session=browser method=Target.detachFromTarget event=- stage=send
+L7921 2026-10-30T03:01:08.067Z [boss-cdp] id=6 session=browser method=Target.detachFromTarget event=- stage=ack elapsed_ms=1
+L7922 2026-10-30T03:01:08.068Z [boss-perf] tool=boss_goto run_id*** ok=1 total_ms=109 connect_ms=6 body_ms=1 close_ms=2 connect{n=1,total_ms=6,max_ms=6} close{n=1,total_ms=2,max_ms=2} cdp:getUrl{n=1,total_ms=1,max_ms=1} body{n=1,total_ms=1,max_ms=1}
+L7923 2026-10-30T03:01:08.069Z [boss-mcp] tool=boss_goto run_id*** success=true code=OK effect=none elapsed_ms=109
+L7927 2026-10-30T03:06:06.747Z [boss-cdp] id=1 session=browser method=Target.getTargets event=- stage=send
+L7928 2026-10-30T03:06:06.748Z [boss-cdp] id=1 session=browser method=Target.getTargets event=- stage=ack elapsed_ms=1
+L7929 2026-10-30T03:06:06.749Z [boss-cdp] id=2 session=browser method=Target.attachToTarget event=- stage=send
+L7930 2026-10-30T03:06:06.749Z [boss-cdp] id=2 session=browser method=Target.attachToTarget event=- stage=ack elapsed_ms=1
+L7931 2026-10-30T03:06:06.753Z [boss-cdp] id=3 session=browser method=Target.getTargets event=- stage=send
+L7932 2026-10-30T03:06:06.754Z [boss-cdp] id=3 session=browser method=Target.getTargets event=- stage=ack elapsed_ms=1
+L7933 2026-10-30T03:06:06.754Z [boss-cdp] id=4 session=1373ead119 method=DOMSnapshot.captureSnapshot event=- stage=send
+L7934 2026-10-30T03:06:06.835Z [boss-cdp] id=4 session=1373ead119 method=DOMSnapshot.captureSnapshot event=- stage=ack elapsed_ms=81
+L7935 2026-10-30T03:06:06.846Z [boss-cdp] id=5 session=browser method=Target.getTargets event=- stage=send
+L7936 2026-10-30T03:06:06.847Z [boss-cdp] id=5 session=browser method=Target.getTargets event=- stage=ack elapsed_ms=0
+L7937 2026-10-30T03:06:06.848Z [boss-cdp] id=6 session=1373ead119 method=DOMSnapshot.captureSnapshot event=- stage=send
+L7938 2026-10-30T03:06:06.934Z [boss-cdp] id=6 session=1373ead119 method=DOMSnapshot.captureSnapshot event=- stage=ack elapsed_ms=88
+L7939 2026-10-30T03:06:06.935Z [boss-cdp] id=7 session=browser method=Target.activateTarget event=- stage=send
+L7940 2026-10-30T03:06:06.952Z [boss-cdp] id=7 session=browser method=Target.activateTarget event=- stage=ack elapsed_ms=17
+L7941 2026-10-30T03:06:07.425Z [boss-input-discovery] phase=discover probe=0 window=4662058 widget=34676444 pid=33272 visible=0 rect=360,49,1840,93 foreground=4662058 minimized=0
+L7942 2026-10-30T03:06:07.426Z [boss-input-discovery] phase=discover probe=0 window=4662058 widget=598126 pid=33272 visible=0 rect=1099,93,1100,94 foreground=4662058 minimized=0
+L7943 2026-10-30T03:06:07.426Z [boss-input-discovery] phase=wait probe=0 window=4662058 reason=hidden
+L7944 2026-10-30T03:06:07.635Z [boss-input-discovery] phase=discover probe=1 window=4662058 widget=34676444 pid=33272 visible=0 rect=360,49,1840,93 foreground=4662058 minimized=0
+L7945 2026-10-30T03:06:07.636Z [boss-input-discovery] phase=discover probe=1 window=4662058 widget=598126 pid=33272 visible=0 rect=1099,93,1100,94 foreground=4662058 minimized=0
+L7946 2026-10-30T03:06:07.637Z [boss-input-discovery] phase=wait probe=1 window=4662058 reason=hidden
+L7947 2026-10-30T03:06:07.839Z [boss-input-discovery] phase=discover probe=2 window=4662058 widget=34676444 pid=33272 visible=0 rect=360,49,1840,93 foreground=4662058 minimized=0
+L7948 2026-10-30T03:06:07.840Z [boss-input-discovery] phase=discover probe=2 window=4662058 widget=598126 pid=33272 visible=0 rect=1099,93,1100,94 foreground=4662058 minimized=0
+L7949 2026-10-30T03:06:07.840Z [boss-input-discovery] phase=wait probe=2 window=4662058 reason=hidden
+L7950 2026-10-30T03:06:08.043Z [boss-input-discovery] phase=discover probe=3 window=4662058 widget=34676444 pid=33272 visible=0 rect=360,49,1840,93 foreground=4662058 minimized=0
+L7951 2026-10-30T03:06:08.044Z [boss-input-discovery] phase=discover probe=3 window=4662058 widget=598126 pid=33272 visible=0 rect=1099,93,1100,94 foreground=4662058 minimized=0
+L7952 2026-10-30T03:06:08.044Z [boss-input-discovery] phase=wait probe=3 window=4662058 reason=hidden
+L7953 2026-10-30T03:06:08.253Z [boss-input-discovery] phase=discover probe=4 window=4662058 widget=34676444 pid=33272 visible=0 rect=360,49,1840,93 foreground=4662058 minimized=0
+L7954 2026-10-30T03:06:08.253Z [boss-input-discovery] phase=discover probe=4 window=4662058 widget=598126 pid=33272 visible=0 rect=1099,93,1100,94 foreground=4662058 minimized=0
+L7955 2026-10-30T03:06:08.254Z [boss-input-discovery] phase=wait probe=4 window=4662058 reason=hidden
+L7956 2026-10-30T03:06:08.458Z [boss-input-discovery] phase=discover probe=5 window=4662058 widget=34676444 pid=33272 visible=0 rect=360,49,1840,93 foreground=4662058 minimized=0
+L7957 2026-10-30T03:06:08.459Z [boss-input-discovery] phase=discover probe=5 window=4662058 widget=598126 pid=33272 visible=0 rect=1099,93,1100,94 foreground=4662058 minimized=0
+L7958 2026-10-30T03:06:08.459Z [boss-input-discovery] phase=wait probe=5 window=4662058 reason=hidden
+L7959 2026-10-30T03:06:08.665Z [boss-input-discovery] phase=discover probe=6 window=4662058 widget=34676444 pid=33272 visible=0 rect=360,49,1840,93 foreground=4662058 minimized=0
+L7960 2026-10-30T03:06:08.666Z [boss-input-discovery] phase=discover probe=6 window=4662058 widget=598126 pid=33272 visible=0 rect=1099,93,1100,94 foreground=4662058 minimized=0
+L7961 2026-10-30T03:06:08.674Z [boss-perf] tool=win32-native-input op=click ok=0 total_ms=1721 activate_ms=472 discover_ms=1240 finalize_ms=0
+L7963 2026-10-30T03:06:08.676Z [boss-cdp] id=8 session=browser method=Target.detachFromTarget event=- stage=send
+L7964 2026-10-30T03:06:08.676Z [boss-cdp] id=8 session=browser method=Target.detachFromTarget event=- stage=ack elapsed_ms=0
+L7965 2026-10-30T03:06:08.677Z [boss-perf] tool=boss_goto run_id*** ok=0 total_ms=1934 connect_ms=6 body_ms=1829 close_ms=1 body{n=1,total_ms=1829,max_ms=1829} win32:click{n=1,total_ms=1739,max_ms=1739} snapshot{n=1,total_ms=88,max_ms=88} connect{n=1,total_ms=6,max_ms=6} close{n=1,total_ms=1,max_ms=1} cdp:getUrl{n=1,total_ms=0,max_ms=0}
+L8009 2026-10-30T03:06:49.028Z [boss-cdp] id=1 session=browser method=Target.getTargets event=- stage=send
+L8010 2026-10-30T03:06:49.029Z [boss-cdp] id=1 session=browser method=Target.getTargets event=- stage=ack elapsed_ms=0
+L8011 2026-10-30T03:06:49.031Z [boss-cdp] id=2 session=browser method=Target.attachToTarget event=- stage=send
+L8012 2026-10-30T03:06:49.031Z [boss-cdp] id=2 session=browser method=Target.attachToTarget event=- stage=ack elapsed_ms=0
+L8013 2026-10-30T03:06:49.032Z [boss-cdp] id=3 session=browser method=Target.getTargets event=- stage=send
+L8014 2026-10-30T03:06:49.032Z [boss-cdp] id=3 session=browser method=Target.getTargets event=- stage=ack elapsed_ms=1
+L8015 2026-10-30T03:06:49.033Z [boss-cdp] id=4 session=fcf1857fce method=DOMSnapshot.captureSnapshot event=- stage=send
+L8016 2026-10-30T03:06:49.985Z [boss-cdp] id=4 session=fcf1857fce method=DOMSnapshot.captureSnapshot event=- stage=ack elapsed_ms=95
+L8017 2026-10-30T03:06:49.986Z [boss-cdp] id=5 session=browser method=Target.getTargets event=- stage=send
+L8018 2026-10-30T03:06:49.987Z [boss-cdp] id=5 session=browser method=Target.getTargets event=- stage=ack elapsed_ms=1
+L8019 2026-10-30T03:06:50.000Z [boss-cdp] id=6 session=fcf1857fce method=DOMSnapshot.captureSnapshot event=- stage=send
+L8020 2026-10-30T03:06:50.001Z [boss-cdp] id=6 session=fcf1857fce method=DOMSnapshot.captureSnapshot event=- stage=ack elapsed_ms=96
+L8837 2026-10-30T03:10:13.761Z [boss-cdp] id=12 session=f513e65e0f method=Input.dispatchMouseEvent event=mousePressed stage=send
+L8838 2026-10-30T03:10:13.766Z [boss-cdp] id=12 session=f513e65e0f method=Input.dispatchMouseEvent event=mousePressed stage=ack elapsed_ms=5
+L8839 2026-10-30T03:10:13.767Z [boss-cdp] id=13 session=f513e65e0f method=Input.dispatchMouseEvent event=mouseReleased stage=send
+L8840 2026-10-30T03:10:13.799Z [boss-cdp] id=13 session=f513e65e0f method=Input.dispatchMouseEvent event=mouseReleased stage=ack elapsed_ms=32
+L8841 2026-10-30T03:10:14.405Z [boss-cdp] id=14 session=f513e65e0f method=DOMSnapshot.captureSnapshot event=- stage=send
+L8842 2026-10-30T03:10:14.521Z [boss-cdp] id=14 session=f513e65e0f method=DOMSnapshot.captureSnapshot event=- stage=ack elapsed_ms=116
+L8843 2026-10-30T03:10:14.531Z [boss-cdp] id=15 session=f513e65e0f method=DOMSnapshot.captureSnapshot event=- stage=send
+L8844 2026-10-30T03:10:14.648Z [boss-cdp] id=15 session=f513e65e0f method=DOMSnapshot.captureSnapshot event=- stage=ack elapsed_ms=117
+L8845 2026-10-30T03:10:14.658Z [boss-cdp] id=16 session=browser method=Target.activateTarget event=- stage=send
+L8846 2026-10-30T03:10:14.661Z [boss-cdp] id=16 session=browser method=Target.activateTarget event=- stage=ack elapsed_ms=3
+L8874 2026-10-30T03:10:16.330Z [boss-perf] tool=win32-native-input op=wheel ok=0 total_ms=1665 activate_ms=428 discover_ms=1237 finalize_ms=0
+L8968 2026-10-30T03:10:36.764Z [boss-cdp] id=10 session=1d1c0bf7ce method=Input.dispatchMouseEvent event=mousePressed stage=send
+L8969 2026-10-30T03:10:36.791Z [boss-cdp] id=10 session=1d1c0bf7ce method=Input.dispatchMouseEvent event=mousePressed stage=ack elapsed_ms=25
+L8970 2026-10-30T03:10:36.793Z [boss-cdp] id=11 session=1d1c0bf7ce method=Input.dispatchMouseEvent event=mouseReleased stage=send
+L8971 2026-10-30T03:10:36.818Z [boss-cdp] id=11 session=1d1c0bf7ce method=Input.dispatchMouseEvent event=mouseReleased stage=ack elapsed_ms=29
+L8972 2026-10-30T03:10:37.430Z [boss-cdp] id=12 session=1d1c0bf7ce method=DOMSnapshot.captureSnapshot event=- stage=send
+L8973 2026-10-30T03:10:38.416Z [boss-cdp] id=12 session=1d1c0bf7ce method=DOMSnapshot.captureSnapshot event=- stage=ack elapsed_ms=137
+L9005 2026-10-30T03:10:39.407Z [boss-perf] tool=win32-native-input op=wheel ok=0 total_ms=1684 activate_ms=446 discover_ms=1238 finalize_ms=0
+L9163 2026-10-30T03:10:57.134Z [boss-cdp] id=12 session=34a890adf2 method=Input.dispatchMouseEvent event=mousePressed stage=send
+L9164 2026-10-30T03:10:57.140Z [boss-cdp] id=12 session=34a890adf2 method=Input.dispatchMouseEvent event=mousePressed stage=ack elapsed_ms=5
+L9165 2026-10-30T03:10:57.141Z [boss-cdp] id=13 session=34a890adf2 method=Input.dispatchMouseEvent event=mouseReleased stage=send
+L9166 2026-10-30T03:10:57.164Z [boss-cdp] id=13 session=34a890adf2 method=Input.dispatchMouseEvent event=mouseReleased stage=ack elapsed_ms=24
+L9167 2026-10-30T03:10:58.568Z [boss-cdp] id=14 session=34a890adf2 method=DOMSnapshot.captureSnapshot event=- stage=send
+L9168 2026-10-30T03:10:58.569Z [boss-cdp] id=14 session=34a890adf2 method=DOMSnapshot.captureSnapshot event=- stage=ack elapsed_ms=154
+L9202 2026-10-30T03:11:00.517Z [boss-perf] tool=win32-native-input op=wheel ok=0 total_ms=1668 activate_ms=433 discover_ms=1234 finalize_ms=0
+L9255 2026-10-30T03:11:23.052Z [boss-cdp] id=5 session=browser method=Target.getTargets event=- stage=send
+L9256 2026-10-30T03:11:23.053Z [boss-cdp] id=5 session=browser method=Target.getTargets event=- stage=ack elapsed_ms=1
+L9257 2026-10-30T03:11:23.054Z [boss-cdp] id=6 session=browser method=Target.activateTarget event=- stage=send
+L9258 2026-10-30T03:11:23.055Z [boss-cdp] id=6 session=browser method=Target.activateTarget event=- stage=ack elapsed_ms=1
+L9259 2026-10-30T03:11:24.467Z [boss-cdp] id=7 session=browser method=Target.getTargets event=- stage=send
+L9260 2026-10-30T03:11:24.468Z [boss-cdp] id=7 session=browser method=Target.getTargets event=- stage=ack elapsed_ms=0
+L9261 2026-10-30T03:11:28.112Z [boss-cdp] id=8 session=browser method=Target.detachFromTarget event=- stage=send
+L9262 2026-10-30T03:11:28.113Z [boss-cdp] id=8 session=browser method=Target.detachFromTarget event=- stage=ack elapsed_ms=1
+L9263 2026-10-30T03:11:28.114Z [boss-perf] tool=boss_overlay_dismiss run_id*** ok=1 total_ms=5676 connect_ms=17 body_ms=5561 close_ms=2 body{n=1,total_ms=5561,max_ms=5561} connect{n=1,total_ms=17,max_ms=17} close{n=1,total_ms=2,max_ms=2} cdp:getUrl{n=2,total_ms=1,max_ms=1} cdp:activateTarget{n=1,total_ms=1,max_ms=1}
+L9301 2026-10-30T03:11:38.519Z [boss-cdp] id=10 session=4ce6710fb1 method=Input.dispatchMouseEvent event=mousePressed stage=send
+L9302 2026-10-30T03:11:38.520Z [boss-cdp] id=10 session=4ce6710fb1 method=Input.dispatchMouseEvent event=mousePressed stage=ack elapsed_ms=7
+L9303 2026-10-30T03:11:38.520Z [boss-cdp] id=11 session=4ce6710fb1 method=Input.dispatchMouseEvent event=mouseReleased stage=send
+L9304 2026-10-30T03:11:38.521Z [boss-cdp] id=11 session=4ce6710fb1 method=Input.dispatchMouseEvent event=mouseReleased stage=ack elapsed_ms=29
+L9305 2026-10-30T03:11:38.522Z [boss-cdp] id=12 session=4ce6710fb1 method=DOMSnapshot.captureSnapshot event=- stage=send
+L9306 2026-10-30T03:11:38.522Z [boss-cdp] id=12 session=4ce6710fb1 method=DOMSnapshot.captureSnapshot event=- stage=ack elapsed_ms=168
+L9338 2026-10-30T03:11:39.996Z [boss-perf] tool=win32-native-input op=wheel ok=0 total_ms=1679 activate_ms=441 discover_ms=1238 finalize_ms=0

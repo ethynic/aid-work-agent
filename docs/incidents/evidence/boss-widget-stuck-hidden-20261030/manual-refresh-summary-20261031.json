@@ -1,0 +1,280 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-31",
+  "experiment": "User manually refreshed BOSS chat page with ordinary F5, then returned to recommendation; completion confirmed by user",
+  "sampling": {
+    "started_at": "2026-10-31T06:47:25.509Z",
+    "ended_at": "2026-10-31T06:48:19.298Z",
+    "count": 1755,
+    "changes": 21,
+    "max_gap_ms": 35,
+    "input_sent": 0,
+    "activation_sent": 0,
+    "persisted_records": 22,
+    "raw_sha256": "1dd194fcf1c618f22573512c7b0613ce4e695912b9c94c4d7c3569ad6ee088ce"
+  },
+  "browser_pid": 49296,
+  "window": "72660",
+  "old_widget": "18946916",
+  "new_widget": "60824230",
+  "first_new_widget": {
+    "at": "2026-10-31T06:47:54.939Z",
+    "foreground": "72660",
+    "selected": "18946916",
+    "selected_visible": true,
+    "old_widget": {
+      "hwnd": "18946916",
+      "valid": true,
+      "class": "Chrome_RenderWidgetHostHWND",
+      "pid": 49296,
+      "parent": "72660",
+      "root": "72660",
+      "visible": true,
+      "own_ws_visible": true,
+      "rect": {
+        "left": 1140,
+        "top": 106,
+        "right": 2550,
+        "bottom": 1372
+      }
+    },
+    "new_widget": {
+      "hwnd": "60824230",
+      "valid": true,
+      "class": "Chrome_RenderWidgetHostHWND",
+      "pid": 49296,
+      "parent": "72660",
+      "root": "72660",
+      "visible": false,
+      "own_ws_visible": false,
+      "rect": {
+        "left": 1140,
+        "top": 106,
+        "right": 2550,
+        "bottom": 1372
+      }
+    },
+    "content_center_hits": [
+      "18946916"
+    ]
+  },
+  "first_selected_new_widget": {
+    "at": "2026-10-31T06:47:55.036Z",
+    "foreground": "72660",
+    "selected": "60824230",
+    "selected_visible": true,
+    "old_widget": {
+      "hwnd": "18946916",
+      "valid": false,
+      "class": "",
+      "pid": 0,
+      "parent": "0",
+      "root": "0",
+      "visible": false,
+      "own_ws_visible": false
+    },
+    "new_widget": {
+      "hwnd": "60824230",
+      "valid": true,
+      "class": "Chrome_RenderWidgetHostHWND",
+      "pid": 49296,
+      "parent": "72660",
+      "root": "72660",
+      "visible": true,
+      "own_ws_visible": true,
+      "rect": {
+        "left": 1140,
+        "top": 106,
+        "right": 2550,
+        "bottom": 1372
+      }
+    },
+    "content_center_hits": [
+      "60824230"
+    ]
+  },
+  "first_old_handle_invalid": {
+    "at": "2026-10-31T06:47:55.036Z",
+    "foreground": "72660",
+    "selected": "60824230",
+    "selected_visible": true,
+    "old_widget": {
+      "hwnd": "18946916",
+      "valid": false,
+      "class": "",
+      "pid": 0,
+      "parent": "0",
+      "root": "0",
+      "visible": false,
+      "own_ws_visible": false
+    },
+    "new_widget": {
+      "hwnd": "60824230",
+      "valid": true,
+      "class": "Chrome_RenderWidgetHostHWND",
+      "pid": 49296,
+      "parent": "72660",
+      "root": "72660",
+      "visible": true,
+      "own_ws_visible": true,
+      "rect": {
+        "left": 1140,
+        "top": 106,
+        "right": 2550,
+        "bottom": 1372
+      }
+    },
+    "content_center_hits": [
+      "60824230"
+    ]
+  },
+  "selected_widget_unavailable_records": 0,
+  "observed_minimized": false,
+  "final_state": {
+    "at": "2026-10-31T06:48:19.298Z",
+    "foreground": "10028804",
+    "selected": "60824230",
+    "selected_visible": true,
+    "old_widget": {
+      "hwnd": "18946916",
+      "valid": false,
+      "class": "",
+      "pid": 0,
+      "parent": "0",
+      "root": "0",
+      "visible": false,
+      "own_ws_visible": false
+    },
+    "new_widget": {
+      "hwnd": "60824230",
+      "valid": true,
+      "class": "Chrome_RenderWidgetHostHWND",
+      "pid": 49296,
+      "parent": "72660",
+      "root": "72660",
+      "visible": true,
+      "own_ws_visible": true,
+      "rect": {
+        "left": 1140,
+        "top": 106,
+        "right": 2550,
+        "bottom": 1372
+      }
+    },
+    "content_center_hits": [
+      "60824230"
+    ]
+  },
+  "selection_and_identity_transitions": [
+    {
+      "at": "2026-10-31T06:47:25.512Z",
+      "foreground": "10028804",
+      "selected": "18946916",
+      "selected_visible": true,
+      "old_widget": {
+        "hwnd": "18946916",
+        "valid": true,
+        "class": "Chrome_RenderWidgetHostHWND",
+        "pid": 49296,
+        "parent": "72660",
+        "root": "72660",
+        "visible": true,
+        "own_ws_visible": true,
+        "rect": {
+          "left": 1140,
+          "top": 106,
+          "right": 2550,
+          "bottom": 1372
+        }
+      },
+      "new_widget": null,
+      "content_center_hits": [
+        "18946916"
+      ]
+    },
+    {
+      "at": "2026-10-31T06:47:54.939Z",
+      "foreground": "72660",
+      "selected": "18946916",
+      "selected_visible": true,
+      "old_widget": {
+        "hwnd": "18946916",
+        "valid": true,
+        "class": "Chrome_RenderWidgetHostHWND",
+        "pid": 49296,
+        "parent": "72660",
+        "root": "72660",
+        "visible": true,
+        "own_ws_visible": true,
+        "rect": {
+          "left": 1140,
+          "top": 106,
+          "right": 2550,
+          "bottom": 1372
+        }
+      },
+      "new_widget": {
+        "hwnd": "60824230",
+        "valid": true,
+        "class": "Chrome_RenderWidgetHostHWND",
+        "pid": 49296,
+        "parent": "72660",
+        "root": "72660",
+        "visible": false,
+        "own_ws_visible": false,
+        "rect": {
+          "left": 1140,
+          "top": 106,
+          "right": 2550,
+          "bottom": 1372
+        }
+      },
+      "content_center_hits": [
+        "18946916"
+      ]
+    },
+    {
+      "at": "2026-10-31T06:47:55.036Z",
+      "foreground": "72660",
+      "selected": "60824230",
+      "selected_visible": true,
+      "old_widget": {
+        "hwnd": "18946916",
+        "valid": false,
+        "class": "",
+        "pid": 0,
+        "parent": "0",
+        "root": "0",
+        "visible": false,
+        "own_ws_visible": false
+      },
+      "new_widget": {
+        "hwnd": "60824230",
+        "valid": true,
+        "class": "Chrome_RenderWidgetHostHWND",
+        "pid": 49296,
+        "parent": "72660",
+        "root": "72660",
+        "visible": true,
+        "own_ws_visible": true,
+        "rect": {
+          "left": 1140,
+          "top": 106,
+          "right": 2550,
+          "bottom": 1372
+        }
+      },
+      "content_center_hits": [
+        "60824230"
+      ]
+    }
+  ],
+  "verdict": "Widget replacement observed; selector adopted the new visible HWND; no persistent hidden rejection reproduced",
+  "limits": [
+    "F5 and page selection were performed manually; CDP reload/URL/loader/target evidence was unavailable.",
+    "Polling and non-atomic Win32 reads cannot exclude sub-35ms transitions or identify exact creation/destruction times.",
+    "No product native click, wheel or complete filtering operation was executed by the sampler.",
+    "One local ordinary-refresh trial does not establish the incident cause or behavior of every Chrome version."
+  ],
+  "raw_evidence": ".tmp/boss-widget-switch-20261030/manual-refresh-20261031-1447.jsonl"
+}

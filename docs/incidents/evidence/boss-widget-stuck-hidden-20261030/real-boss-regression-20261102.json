@@ -1,0 +1,319 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-02",
+  "timezone": "Asia/Shanghai",
+  "scope": "Main-controller regression against the real BOSS login in the existing persistent Chrome profile; workspace CLI with the widget-independent fix, not an installed-plugin upgrade.",
+  "runtime": "Node 22.23.3 win32-x64",
+  "source_hashes": {
+    "clients/shared/win32-native-input/src/bindings/contentViewport.ts": "5c947bc53fa8813578458b0876d59da06ce0d330b772aacc58a3e43475ab9e19",
+    "clients/shared/win32-native-input/src/bindings/koffi.ts": "73deed8c27883ea3e8503c9adc15401e7bbbc0ce471446684f729850f4d14f32",
+    "clients/shared/win32-native-input/src/physical.ts": "f1512b4f225ad6907878c846c8c31134ba714a88430f9726c3a1d54de06900c1",
+    "clients/shared/win32-native-input/src/sequence.ts": "49efe9ded4a86c9239221fd04555c9254a59491f41f2fe8d2cccdd15d941240b",
+    "clients/shared/win32-native-input/src/types.ts": "d6ec17d96af270c22b87428d53f4f5ce3f7d671f7a7be6c6244fd112cd0118f7",
+    "clients/shared/win32-native-input/src/index.ts": "07111a439812522022b7c7ccd10927c15b079efff6380a07d76259791f8b9435",
+    "clients/boss-resume-assistant/src/main/input/WinMouseClicker.ts": "5d72654dcb47731754d89590b60c7954dd04109b22261df974cbcdcb3ebad7fb",
+    "clients/boss-resume-assistant/src/main/operations/bossContext.ts": "5e8cf05d4848964c6cba20c3c08ae4f82176c387099a76285e59c8ce1ba841e0"
+  },
+  "source_matches_20261031_verified_implementation": true,
+  "prerequisites": {
+    "doctor_ready": true,
+    "original_page": "/web/chat/index",
+    "recommend_baseline_filter_count": 0,
+    "target_id": "B56B7A26D60ADF498995606B16F65634"
+  },
+  "operations": {
+    "boss_filter_options": {
+      "success": true,
+      "code": "OK",
+      "effect": "none",
+      "run_id": "a03f0a48-e0ff-42e8-a0d6-a8f42b806b25",
+      "verification": "satisfied",
+      "readable_rows": 13,
+      "private_result_sha256": "7d1285c7816c0ab5bf7b56d19e6687e80fa97425a8f4b4f3cb5691a4b5e7820e"
+    },
+    "boss_list_jobs": {
+      "success": true,
+      "code": "OK",
+      "effect": "none",
+      "run_id": "149c4553-0480-4086-83d7-437add657c8b",
+      "verification": "satisfied",
+      "jobs_count": 3,
+      "private_result_sha256": "135959e55e415028aea1c1114b95f139f2953daf9c2dc30d5417d92c7a00be94"
+    },
+    "boss_filter": {
+      "success": true,
+      "code": "OK",
+      "effect": "applied",
+      "run_id": "232a7b06-a318-4055-b8e3-c611765c1aa5",
+      "verification": "satisfied",
+      "filter_count": 3,
+      "applied_rows": [
+        {
+          "label": "经验要求",
+          "options": [
+            "3-5年"
+          ]
+        },
+        {
+          "label": "学历要求",
+          "options": [
+            "本科"
+          ]
+        },
+        {
+          "label": "薪资待遇",
+          "options": [
+            "10-20K"
+          ]
+        }
+      ],
+      "private_result_sha256": "ee2d868466d825a3e61654bfd60feb8cb9b4e3b06507303a1a14b0e8ae80e62b"
+    },
+    "boss_resume_batch": {
+      "success": true,
+      "code": "OK",
+      "effect": "none",
+      "run_id": "6b4e58db-3a27-4eaa-9524-2ec33e867a8e",
+      "verification": "satisfied",
+      "resumes_count": 1,
+      "failures_count": 0,
+      "attempted": 1,
+      "stop_reason": "limit_reached",
+      "private_result_sha256": "18cda737476d70fdf68b8476881857ed5bb8a1336269d3b34819e63f19fd377a"
+    },
+    "boss_open_chat": {
+      "success": false,
+      "code": "UI_CHANGED",
+      "effect": "none",
+      "run_id": "96e7ec5c-9310-41e0-9064-540de6abe4ad",
+      "verification": "inconclusive",
+      "error_kind": "search_entry_ambiguous",
+      "candidate_count": 64,
+      "input_reached": false,
+      "private_result_sha256": "4b9269ca26ea9cee7673e46d9b1b4ea0c86ac1b2dffff792873d58f5d7a7b224"
+    },
+    "boss_goto": {
+      "success": true,
+      "code": "OK",
+      "effect": "none",
+      "run_id": "b4466b80-eb71-4389-8a93-bb15d6b11b2d",
+      "verification": "satisfied",
+      "private_result_sha256": "049681c22084194f656bd53116d749bd39ce6e88140ffb8fbce094f6e47190d0"
+    },
+    "boss_clear_filter": {
+      "success": true,
+      "code": "OK",
+      "effect": "applied",
+      "run_id": "ff51a09e-d618-4d1b-9a5b-48b2bd1a4f28",
+      "verification": "satisfied",
+      "filter_count": 0,
+      "private_result_sha256": "41957feb7e83605385c54035a4f784db1c48c0bf68cac231396047a33d367138"
+    }
+  },
+  "native_input_calls": [
+    {
+      "step": "filter-options",
+      "op": "click",
+      "ok": 1,
+      "total_ms": 1483
+    },
+    {
+      "step": "filter-options",
+      "op": "click",
+      "ok": 1,
+      "total_ms": 1386
+    },
+    {
+      "step": "list-jobs",
+      "op": "click",
+      "ok": 1,
+      "total_ms": 1384
+    },
+    {
+      "step": "list-jobs",
+      "op": "click",
+      "ok": 1,
+      "total_ms": 1435
+    },
+    {
+      "step": "filter",
+      "op": "click",
+      "ok": 1,
+      "total_ms": 1376
+    },
+    {
+      "step": "filter",
+      "op": "click",
+      "ok": 1,
+      "total_ms": 1395
+    },
+    {
+      "step": "filter",
+      "op": "click",
+      "ok": 1,
+      "total_ms": 1429
+    },
+    {
+      "step": "filter",
+      "op": "click",
+      "ok": 1,
+      "total_ms": 1350
+    },
+    {
+      "step": "filter",
+      "op": "click",
+      "ok": 1,
+      "total_ms": 1357
+    },
+    {
+      "step": "filter",
+      "op": "click",
+      "ok": 1,
+      "total_ms": 1401
+    },
+    {
+      "step": "resume",
+      "op": "click",
+      "ok": 1,
+      "total_ms": 1389
+    },
+    {
+      "step": "resume",
+      "op": "wheel",
+      "ok": 1,
+      "total_ms": 8397
+    },
+    {
+      "step": "resume",
+      "op": "wheel",
+      "ok": 1,
+      "total_ms": 1301
+    },
+    {
+      "step": "resume",
+      "op": "wheel",
+      "ok": 1,
+      "total_ms": 1311
+    },
+    {
+      "step": "resume",
+      "op": "wheel",
+      "ok": 1,
+      "total_ms": 1291
+    },
+    {
+      "step": "resume",
+      "op": "wheel",
+      "ok": 1,
+      "total_ms": 1288
+    },
+    {
+      "step": "resume",
+      "op": "wheel",
+      "ok": 1,
+      "total_ms": 1313
+    },
+    {
+      "step": "goto-chat",
+      "op": "click",
+      "ok": 1,
+      "total_ms": 1428
+    },
+    {
+      "step": "typing",
+      "op": "clickAndType",
+      "ok": 1,
+      "total_ms": 2286
+    },
+    {
+      "step": "typing",
+      "op": "click",
+      "ok": 1,
+      "total_ms": 1343
+    },
+    {
+      "step": "goto-recommend-final",
+      "op": "click",
+      "ok": 1,
+      "total_ms": 1383
+    },
+    {
+      "step": "clear-filter",
+      "op": "click",
+      "ok": 1,
+      "total_ms": 1425
+    },
+    {
+      "step": "clear-filter",
+      "op": "click",
+      "ok": 1,
+      "total_ms": 1355
+    },
+    {
+      "step": "clear-filter",
+      "op": "click",
+      "ok": 1,
+      "total_ms": 1335
+    }
+  ],
+  "resume_metadata": {
+    "segments": 4,
+    "bottom_reached": true,
+    "image_width": 774,
+    "image_height": 3714,
+    "suspect_seams": 0,
+    "image_count": 1
+  },
+  "keyboard_component_probe": {
+    "at": "2026-11-02T02:30:01.124Z",
+    "scope": "Native typing component only; standard open-chat locator already failed",
+    "standard_open_chat_passed": false,
+    "full_snapshot_candidates": 62,
+    "main_document_candidates": 1,
+    "input_value_encoding": {
+      "kind": "number",
+      "numeric_index": -1
+    },
+    "native_typing_passed": true,
+    "typed_value_verified": true,
+    "query_length": 2,
+    "query_cleared": true,
+    "pathname_after": "/web/chat/index",
+    "search_layer_closed": true,
+    "success": true
+  },
+  "search_finding": {
+    "standard_operation_passed": false,
+    "all_documents": 3,
+    "all_document_candidates": "62–64",
+    "main_document_only_candidates": 1,
+    "main_document_entry_point": {
+      "x": 539.53125,
+      "y": 141
+    },
+    "conclusion": "Including other documents makes the search-entry locator ambiguous in this snapshot. Main-document-only narrowing was used in a temporary component test, not applied to product code.",
+    "input_value": "Typed generic non-personal test query, verified exact field inputValue, cleared and closed without opening a contact or sending a message."
+  },
+  "restored": {
+    "same_target": true,
+    "same_job": true,
+    "filter_count": 0,
+    "search_query_cleared": true,
+    "search_layer_closed": true,
+    "final_page": "/web/chat/recommend",
+    "browser_left_open": true
+  },
+  "boundaries": {
+    "production_code_modified": false,
+    "installed_plugin_replaced": false,
+    "git_committed": false,
+    "deployed": false,
+    "candidate_messages_sent": 0,
+    "greetings_sent": 0,
+    "interview_invitations_sent": 0,
+    "cloud_resume_ingestion": false,
+    "historical_hidden_trigger_reproduced": false,
+    "standard_search_failed": true
+  },
+  "evidence_note": "Private local result files, contact selection and screenshots stay in ignored .tmp. This summary omits candidate identities, message bodies, images and credentials."
+}

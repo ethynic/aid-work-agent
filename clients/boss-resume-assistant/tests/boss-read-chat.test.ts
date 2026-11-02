@@ -9,7 +9,7 @@ import { createBossReadChatOperation } from '../src/main/operations/bossReadChat
 import type { BossSession } from '../src/main/operations/bossContext.js'
 import type { OpContext } from '../src/main/operations/types.js'
 import type { DomSnapshot } from '../src/main/boss/domSnapshot.js'
-import { yangSnapshot } from './chatReadFixture.js'
+import { yangSnapshot, buildChatSnapshot, conversationItem } from './chatReadFixture.js'
 
 function silentCtx(): OpContext {
   return { signal: new AbortController().signal, progress: () => {} }
@@ -92,23 +92,33 @@ test('contact=当前会话姓名 → 正常读取', async () => {
   assert.equal(r.data.contact, '杨鸿杰')
 })
 
-test('contact=列表中存在但未打开 → WRONG_PAGE（可重试），文案含「存在但未打开」与「不自动切换」', async () => {
+test('contact=列表中存在但未打开 → UI_CHANGED（不可重试），文案含「存在但未打开」与「不自动切换」', async () => {
   const f = fakeFactory(yangSnapshot(), CHAT_URL)
   const op = createBossReadChatOperation(f.factory)
   const r = await op.execute({ contact: '席彬玮' }, silentCtx())
   assert.equal(r.success, false)
-  assert.equal(r.code, 'WRONG_PAGE')
-  assert.equal(r.retryable, true)
+  assert.equal(r.code, 'UI_CHANGED')
+  assert.equal(r.retryable, false)
   assert.match(r.message, /会话「席彬玮」存在但未打开/)
   assert.match(r.message, /不自动切换/)
 })
 
-test('contact=不存在 → WRONG_PAGE，文案列可用联系人', async () => {
+test('contact=不存在 → UI_CHANGED，文案列可用联系人', async () => {
   const f = fakeFactory(yangSnapshot(), CHAT_URL)
   const op = createBossReadChatOperation(f.factory)
   const r = await op.execute({ contact: '张三丰' }, silentCtx())
   assert.equal(r.success, false)
-  assert.equal(r.code, 'WRONG_PAGE')
+  assert.equal(r.code, 'UI_CHANGED')
   assert.match(r.message, /可用联系人/)
   assert.match(r.message, /杨鸿杰/)
+})
+
+test('沟通页广告混排且尚未选会话：UI_CHANGED，不能误报离开沟通页',async()=>{
+ const snap=buildChatSnapshot([{tag:'DIV',cls:'user-list',bounds:[208,196,359,1050],children:[
+   {tag:'DIV',cls:'batch-chat-intention',bounds:[218,196,339,76],children:[{tag:'#text',text:'广告',bounds:[240,210,40,20]}]},
+   conversationItem({y:274,name:'测试联系人'}),
+ ]}])
+ const f=fakeFactory(snap,CHAT_URL),r=await createBossReadChatOperation(f.factory).execute({},silentCtx())
+ assert.equal(r.code,'UI_CHANGED');assert.equal(r.retryable,false);assert.match(r.message,/未打开会话/)
+ assert.deepEqual(f.calls,['getUrl','snapshot','close'])
 })

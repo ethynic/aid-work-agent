@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-31",
+  "experiment": "Second manual round retry; read-only Win32 sampling",
+  "started_at_utc": "2026-10-31T06:24:42.639Z",
+  "last_state_change_at_utc": "2026-10-31T06:38:48.613Z",
+  "summary_written_at_utc": "2026-10-31T06:38:55.4723761Z",
+  "sample_count": 27812,
+  "max_sample_gap_ms": 33,
+  "persisted_state_records": 25,
+  "selection_states": [
+    "18946916/True"
+  ],
+  "unique_widget_identity_parent_visibility_states": 1,
+  "widget_state": "14556052/72660/72660/False/False;18946916/72660/72660/True/True;32119484/72660/72660/False/False;72680/72660/72660/False/False;72704/72660/72660/False/False",
+  "foreground_transitions": [
+    {
+      "at_utc": "2026-10-31T06:24:42.639Z",
+      "boss_foreground": false
+    },
+    {
+      "at_utc": "2026-10-31T06:35:46.319Z",
+      "boss_foreground": true
+    },
+    {
+      "at_utc": "2026-10-31T06:38:48.613Z",
+      "boss_foreground": false
+    }
+  ],
+  "foreground_content_center_hit_widgets": [
+    "18946916"
+  ],
+  "observed_minimized": false,
+  "input_sent": 0,
+  "activation_sent": 0,
+  "cdp_available": false,
+  "verdict": "No sustained widget hiding, replacement or reparenting recorded; exact chat-page background sequence not independently established",
+  "limits": [
+    "User confirmed completion while sampler was active.",
+    "No intermediate foreground-to-background-to-foreground cycle was recorded during the final BOSS foreground period.",
+    "CDP URL, target identity and browser version unavailable.",
+    "Polling cannot exclude transitions shorter than the sampling gap.",
+    "No native input or business operation executed by the sampler."
+  ],
+  "raw_evidence": ".tmp/boss-widget-switch-20261030/manual-round2-retry-20261031.jsonl"
+}

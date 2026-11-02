@@ -37,6 +37,7 @@ async function fixture(t: TestContext, saved?: BrowserPageContext) {
   })
   if (saved) await updateBrowserTarget(ref, port, original, b => ({ ...b, page_context: saved }))
   const state = { missing: false, connectFails: false, current: original, url: entry,
+    viewport: { width: 800, height: 600 },
     created: 0, closed: 0, job: 'Default job', selected: [] as string[], filters: [] as unknown[],
     pendingAttach: [] as boolean[], createUrl: entry, loadingSnapshots: 0, snapshots: 0, navigations: [] as NavTarget[],
     onSnapshot: undefined as (() => void) | undefined, toolbar: '筛选', jobReadable: true,
@@ -62,13 +63,15 @@ async function fixture(t: TestContext, saved?: BrowserPageContext) {
   t.mock.method(CdpGateway.prototype, 'getTargetId', () => state.current)
   t.mock.method(CdpGateway.prototype, 'getBrowserInstanceId', () => 'b'.repeat(64))
   t.mock.method(CdpGateway.prototype, 'getTargets', async () => [{ targetId: state.current, type: 'page', title: '', url: state.url }])
+  t.mock.method(CdpGateway.prototype, 'getPageMetrics', async () => ({ ...state.viewport }))
+  t.mock.method(CdpGateway.prototype, 'activateTarget', async () => {})
   t.mock.method(CdpGateway.prototype, 'captureDomSnapshot', async () => {
     state.snapshots++
     state.onSnapshot?.()
     return state.loadingSnapshots-- > 0 ? { documents: [], strings: [] } : { ...snapshot, strings: [state.toolbar] }
   })
   t.mock.method(CdpGateway.prototype, 'close', async () => { state.closed++ })
-  t.mock.method(WinMouseClicker.prototype, 'click', async () => { assert.fail('factory must not send unguarded native input') })
+  const clickMock = t.mock.method(WinMouseClicker.prototype, 'click', async () => { assert.fail('factory must not send unguarded native input') })
   t.mock.method(JobSwitcher.prototype, 'locateJobBox', (snap: DomSnapshot) => {
     if (!snap.strings.length || !state.jobReadable) throw new JobSwitchError('fixture toolbar still loading')
     return { name: state.job, city: '', salary: '', point: { x: 0, y: 0 }, pending: false }
@@ -87,8 +90,53 @@ async function fixture(t: TestContext, saved?: BrowserPageContext) {
   })
   const ctx: OpContext = { browserTargetRef: ref, cdpPort: port, recoverBrowserTarget: true,
     signal: new AbortController().signal, progress() {} }
-  return { state, ref, port, original, ctx }
+  return { state, ref, port, original, ctx, clickMock }
 }
+
+test('production factory: resize during snapshot cannot certify stale coordinates', async t => {
+  const f = await fixture(t)
+  const session = await defaultSessionFactory(f.ctx)
+  f.state.onSnapshot = () => { f.state.viewport.width += 100 }
+  try { await assert.rejects(session.snapshot(), /读取页面期间视口变化/) }
+  finally { await session.close() }
+})
+
+test('production factory: resize or browser zoom after snapshot refuses before native input', async t => {
+  const f = await fixture(t)
+  f.clickMock.mock.restore()
+  let inputs = 0
+  t.mock.method(WinMouseClicker.prototype as unknown as { openNative(): Promise<unknown> }, 'openNative', async () => ({
+    perform: async () => { inputs++; return { output: [] } },
+  }))
+  const session = await defaultSessionFactory(f.ctx)
+  try {
+    await session.snapshot()
+    // Proportional change: aspect-ratio-only validation cannot catch this.
+    f.state.viewport = { width: 640, height: 480 }
+    await assert.rejects(session.click({ x: 100, y: 100 }, { width: 800, height: 600 }), /page viewport changed/)
+    assert.equal(inputs, 0)
+  } finally { await session.close() }
+})
+
+test('production factory: final observation check reaches the native boundary after movement', async t => {
+  const f = await fixture(t)
+  f.clickMock.mock.restore()
+  let commits = 0
+  t.mock.method(WinMouseClicker.prototype as unknown as { openNative(): Promise<unknown> }, 'openNative', async () => ({
+    perform: async (_request: unknown, _signal: unknown, verify: () => Promise<void>) => {
+      f.state.viewport.width += 50
+      await verify() // Simulate the final post-hover callback; must fail before DOWN.
+      commits++
+      return { output: [] }
+    },
+  }))
+  const session = await defaultSessionFactory(f.ctx)
+  try {
+    await session.snapshot()
+    await assert.rejects(session.click({ x: 100, y: 100 }, { width: 800, height: 600 }), /page viewport changed/)
+    assert.equal(commits, 0)
+  } finally { await session.close() }
+})
 
 test('healthy old binding reads normally without any optional page context', async t => {
   const f = await fixture(t)

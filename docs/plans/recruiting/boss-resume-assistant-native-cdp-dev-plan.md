@@ -1,5 +1,20 @@
 # BOSS 简历筛选助手原生 CDP 开发计划
 
+## 开发进度
+
+| 阶段 | 内容 | 状态 | 完成记录 |
+|------|------|------|---------|
+| W1 | 事故定位前提及内容区几何可行性 | ✅ 完成（2026-10-31） | 菜单/筛选定位后才被拒；隔离Chrome隐藏legacy后UIA内容矩形仍可读 |
+| W2 | 普通物理输入解除widget依赖 | ✅ 完成（2026-10-31） | UIA内容区映射统一四类输入；保留视口/命中/焦点/几何检查，无新增恢复 |
+| W3 | 独立测试与CodeReview | ✅ 完成（2026-10-31） | native54/BOSS相关153/独立反例10通过，隔离冷启动/缩放/拖动真验，CR三项P2关闭；全量旧失败及挂起见下文 |
+| W4 | 本机真实BOSS回归与结果登记 | ✅ 完成（2026-11-02） | 导航、筛选、1份简历读取/滚轮及原生键入通过；标准会话搜索定位失败，非全业务验收通过 |
+| C1 | 沟通混排现场与原实现核对 | ✅ 完成（2026-11-02） | 广告/真实条目结构已取证，搜索跨document污染与未选联系人误报WRONG_PAGE已确认 |
+| C2 | 搜索范围、会话条目和状态语义修正 | ✅ 完成（2026-11-02） | 统一真实条目/姓名字段、doc0搜索、输入值及完整头部姓名，不新增恢复 |
+| C3 | 独立测试、CR及本机回归 | ✅ 完成（2026-11-02） | 自测67、独测254＋9探针、CR通过；广告保留搜索2次及读取真机通过，置顶只做fixture |
+| R1 | BOSS0.3.29提交、签名出包与验包 | 🔧 进行中 | 用户11-02明确授权先提交再打包，仅插件，不安装或部署 |
+
+本区登记2026-10-31修复增量，历史Phase状态保留在下文，不据历史测试数推定新修复已验收。
+
 > 状态：🔧 Phase 1～9 代码全部完成（CLI 形态）；Phase 10 进行中——12.1/12.2 已完成（CLI `filter` 真机验证通过），剩 12.2 YAML 集成 / 12.3 付费误判修复 / 12.4 写动作验证  
 > 日期：2026-07-22（Phase 7/8/9 完成于 2026-08-04，Phase 10 新增于 2026-08-05）  
 > ⚠️ **2026-08-05 路线收敛**：Electron GUI（renderer/主进程壳/IPC/preload/打包链路）、spawn 模式 ChromeLauncher、探索期探针脚本、`spikes/boss-native-cdp/` 已全部删除，CLI 为唯一产品形态。本文 Phase 1/8 等章节中 GUI、IPC、Electron 打包相关描述仅作历史记录，不再有效；以设计文档 §16 决策 6/7/8 为准。
@@ -441,3 +456,115 @@ npm run build
 - [x] Phase 10.1/10.2：WinMouseClicker + FilterSetter 产品化，CLI `filter` 子命令真机端到端验证通过（208/208 测试绿，2026-08-05）。
 - [ ] Phase 10 剩余：YAML 筛选集成（12.2）、付费误判修复 + 假数据清理（12.3）、写动作通道验证（12.4）。
 - [ ] Phase 7/8 真机端到端验证（写动作通道归属、全流程）。
+
+## 16. 普通物理输入内容区定位修正（2026-10-31）
+
+用户已授权设计、开发与独立验证，未授权提交、部署或替换客户客户端。唯一方案见[原设计§10.11](../../design/recruiting/boss-resume-assistant-native-cdp-design.md#1011-解除物理输入对-legacy-widget-的依赖2026-10-31)；关联[事故复盘](../../incidents/boss-agent2-widget-stuck-hidden-20261030.md)。这是普通输入路径修正，不增加widget恢复、CDP输入或导航兜底。
+
+### W1：前提与验证边界
+
+- 原日志及对应源码证明推荐菜单、筛选按钮已定位并进入native click；隐藏拒绝早于屏幕坐标换算。详情滚轮也已取得区域，故本次并非CDP无法读元素。
+- 具体历史坐标及像素未保存，不宣称其正确；通过新路径的隔离真输入验证补足。搜索入口歧义属于另一问题。
+- 共享native包不改Device/Host/Provider wire、既有binding或授权，无服务端变化；旧客户端原工具保持不变。本轮属于插件内部实现，现有签名包与在途release不热换。
+
+### W2：开发范围
+
+- 原生边界增加只读UIA顶层内容视口获取；明确释放COM资源。不枚举或等待legacy widget，不缓存跨操作矩形。
+- 同一序列统一处理click/wheel/clickAndType/drag的坐标、边界、前台、光标、根窗命中及几何稳定检查；保留输入投递前/后的错误会计和LEFTUP。
+- 视口/内容定位不成立时准确拒绝，不能退回隐藏widget或猜工具栏高度；有限几何日志不包含候选文本。
+- 更新WinMouseClicker和开发说明中旧的“一条守卫不删/必须可见widget”说明，使实现与唯一设计一致。
+
+### W3：验证与交付
+
+- 主控定向单测和构建：shared native与BOSS输入调用相关回归，涉及Runtime的编译检查；不全量重复无关后端测试。
+- 独立Chrome自有profile长页/iframe，隐藏legacy HWND后真实点击、滚动、中文/emoji键入和拖动；验证屏幕坐标、浏览器zoom/DPI比例及内容区域边界。
+- 反例：外窗及同浏览器owned popup遮挡、几何/视口变化、光标移动、取消、投递后故障不得伪报零输入或重放。
+- 高风险流程：主控开发/自测→独立TEST与独立CR→主控复核。记录真实命令、通过/失败/跳过及BOSS现场未验边界；源改动后重验受影响部分。
+
+### 完成记录与验收边界（2026-10-31）
+
+**已实现**：`@aid/win32-native-input`以UIA顶层Document物理矩形替换旧widget定位/等待；click、wheel、clickAndType、drag共享内容边界与根窗命中守卫。生产BOSS session在DOMSnapshot前后记录稳定CSS视口，输入前和鼠标悬停后复核，不能把缩放/resize后的旧坐标继续投递；拖动DOWN后不再等待CDP。内容观察按操作释放，GetGUIThreadInfo确认键盘焦点，LEFTUP/DPI及UNKNOWN边界保留。自有测试resolver只返回主窗，所有路径在激活后统一获取UIA内容观察，没有增加就绪重试。
+
+| 验证 | 命令/范围 | 结果 |
+|---|---|---|
+| 共享输入单测 | `cd clients/shared/win32-native-input; npm test` | 主控及独测最终54/54，0失败/跳过 |
+| BOSS相关回归 | `node --test dist/tests/{browser-page-recovery,win-mouse-clicker,page-navigator,boss-context-perf,filter-setter,filter-edit-resume,resume-batch}.test.js`（实际逐文件传参） | 独测153/153，0失败/跳过；包含3项默认工厂视口失效闭包测试 |
+| 独立反例 | `.tmp/boss-widget-incident-review-20261031/content-input-independent-probe.mjs` | 10/10；覆盖外窗/owned popup、视口/几何失效、光标、焦点、滚轮/拖动UNKNOWN及释放 |
+| 冷启动真实输入 | `AID_WIN32_REAL_INPUT=1`后执行`node --test dist/tests/native-content-viewport.real.test.js` | 主控升级后的正式用例1/1；第一次UIA前即隐藏全部legacy HWND，投递前/后fresh枚举防新建可见widget假通过，菜单/筛选、中文emoji及滚轮均实际生效 |
+| 缩放与拖动 | 独测临时测试副本：deviceScale=1.5，真实Ctrl+Plus两次，再fresh DOMSnapshot定位 | 输入及拖动1/1；CSS视口824×871.333→659.200×697.067，滚轮有真实正scrollTop，拖动区域收到按键态pointermove，25轮UIA open/read/close无异常 |
+| 既有真实守卫回归 | `AID_WIN32_REAL_INPUT=1; node --test tests/real/realInput.test.mjs` | 最终1/1，中文emoji、拖动、topmost遮挡拒绝；只操作自有Chrome/profile及测试遮挡窗 |
+| 构建/类型检查 | BOSS `npm run build:main`、`npm run typecheck`；Runtime `npm run typecheck` | 主控通过；不启动服务或替换客户端 |
+| 独立CR | 阅读本任务全部diff与新文件；纯内存缺陷重验 | 无未解决P0/P1/P2；修正负屏幕坐标舍入、输入后COM清理UNKNOWN、持左键等待CDP三项P2 |
+| 发行运行时复验 | 直接使用`clients/runtime-plugin-packaging/assets/node/node-v22.23.3-win-x64/node.exe`运行上述native两文件、BOSS七文件及正式冷UIA真实用例 | 主控54/54、153/153、1/1通过，均0失败/跳过；其余开发/独测环境Node24.13.0 |
+
+**失败及修正如实登记**：旧真实测试曾因resolver在激活前打开UIA出现`found 0`，统一为激活后discover读取，未加等待；修正后真实守卫用例通过。scale1.5曾使scrollTop出现小数，旧“正整数字符串”断言失败，正式测试改验证有限正数后通过。这两项不记录为初次即全绿。
+
+**全量不绿**：主控尝试`npm test`，旧browser-page-recovery夹具缺新getPageMetrics stub引入的失败已补齐并在相关回归中通过。其余祖先滚动2项、manifest3项失败，经独立角色在隔离副本恢复本任务两处BOSS生产代码为HEAD后A/B，均12项中7通过5失败且断言相同；MCP initialize两侧各1/1，但MCP并发单飞用例两侧均在悬挂TCP夹具`hang.close`清理超时，未进入本轮snapshot/输入。主控已结束自有挂起全量测试进程树；未完整验证整个conformance文件，不声称BOSS全量测试全绿，也不扩大本轮修理这些旧问题。
+
+原始日志、独测报告、CR及A/B对照保留`.tmp/boss-widget-incident-review-20261031/`。可持久复核的摘要及最终生产源码SHA256见[验收摘要](../../incidents/evidence/boss-widget-stuck-hidden-20261030/content-input-validation-20261031.json)。相关测试范围及旧失败以本节为准，不把重复运行相加当独立测试总数。
+
+**交付范围**：代码开发完成，已更新原设计及本计划；未提交Git、生成新签名发行包、部署或替换客户机。隔离网页根视口固定、内含长滚动区域和iframe，匹配BOSS主要页面结构；不宣称任意根长文档/所有Chrome版本已验证。客户BOSS真实筛选与简历业务尚未验收，首次搜索入口歧义及最初隐藏触发原因未在本轮修复。
+
+### W4：本机真实BOSS回归（2026-11-02）
+
+**范围与版本**：用户授权打开BOSS进行真机回归。沿既有持久Chrome profile启动，用户手动登录后执行；使用工作区修复源码重新编译的CLI及发行Node22.23.3。8个生产源码SHA256均与10-31已独立验证的实现相同，未更换已安装Runtime/插件。本轮只做主控真机验证和文档登记，没有新增产品代码；不借用之前独测角色冒称本轮独立验收。
+
+| 项目 | 实际结果 |
+|---|---|
+| 环境与登录 | doctor全部通过；仅一个BOSS target，初始为沟通页 |
+| 沟通→推荐牛人 | 标准boss_goto原生菜单点击成功，URL确认recommend |
+| 筛选档位探查 | 标准boss_filter_options取得13行条件，面板收起后验满足 |
+| 职位下拉 | 标准boss_list_jobs取得3个职位，下拉收起后验满足；未切换原职位 |
+| 筛选设置 | 标准boss_filter实际设置3–5年、本科、10–20K，applied_rows逐项一致、filter_count=3、面板关闭 |
+| 简历与真实滚轮 | 标准boss_resume_batch(limit=1)尝试1份、成功1份、失败0；4段拼接774×3714，bottom_reached=true、无可疑接缝，详情已关闭 |
+| 推荐→沟通→推荐 | 两次标准boss_goto均为menu路径，URL后验满足 |
+| **标准打开会话/搜索** | **未通过**：boss_open_chat报UI_CHANGED，顶栏搜索入口64候选，未执行原生键入；不得以其他已通过输入单项替代这条业务链的失败 |
+| 真实键入原语单项 | 临时探针只把可见主文档交给现有定位器，唯一找到搜索入口/输入框；通过同一session.clickAndType键入非个人测试词，目标INPUT.inputValue精确一致，随后清空并关闭搜索栏。仅记为Win32键入组件通过，标准搜索操作仍失败 |
+| 恢复现场 | 原target与职位不变，筛选恢复为0项，搜索无残留，页面最终停在推荐牛人；Chrome保持打开 |
+
+**搜索定位缺陷进一步缩小**：同一真实快照有3个document，现有定位器遍历全部文档时出现62–64候选，仅主文档时返回唯一入口(539.53125,141)，与截图中的列表搜索按钮一致。这支持其他文档的图标污染定位候选；不能据此承诺只改一个过滤条件就能修好完整搜索/发消息链，后续还需验证输入、结果选择和联系人身份后验。本轮未修改该定位器，不增加临时恢复机制。
+
+键入探针最初误把全部INPUT值当成目标搜索框状态，继而遇到空inputValue的-1哨兵，均在实际键入前断言停止；改为对准确INPUT节点读取value及处理空值后，真实键入/清空/关闭后验通过。这些属于本轮临时测试探针调整，不记录成标准open-chat已恢复。
+
+**留存**：[脱敏真机回归摘要](../../incidents/evidence/boss-widget-stuck-hidden-20261030/real-boss-regression-20261102.json)，含源摘要、业务结果及保留步骤日志中的24条成功原生调用；该数字不包含被临时探针覆盖的早期试跑日志，不当作全时段总量。原截图、简历、联系人参数及详细结果只保留本机忽略目录`.tmp/boss-real-regression-20261102/`，不提交候选资料或消息内容。
+
+**边界**：没有发送消息、打招呼、邀约或标记候选人；未把简历上传云端识别/入库。未人为隐藏真实BOSS widget或复现原事故的持续隐藏触发；该分支仍引用W3隔离证据。未安装、部署或提交。普通原生输入真机回归通过，**标准会话搜索和完整发送业务未通过验收**。
+
+## 17. 沟通页混排与搜索定位修正（2026-11-02）
+
+方案唯一来源：[原设计§10.6.1](../../design/recruiting/boss-resume-assistant-native-cdp-design.md#1061-沟通页混排与搜索定位修正2026-11-02)。用户补充当前首位广告及其他用户置顶布局，按正常列表混排支持；不要求用户关广告/取消置顶来迁就程序。主控开发自测，独立TEST与独立CR复核；涉及发消息目标身份按高风险验证，但真机不发消息。
+
+### 范围与成功条件
+
+1. 页面仍按原URL判断；广告/未选联系人不报成离开沟通页。错误URL仍拒绝。
+2. 真实会话条目与姓名字段正向识别共用于读联系人、未读项和列表点击；首位/中间广告及同名诱饵不进入候选，置顶条目不丢失，真正同名联系人不擅自消歧。
+3. 搜索各阶段限定主文档，排除后台iframe诱饵；输入实际值与目标一致才继续，不用全页单字兜底假成功。
+4. 标准boss_open_chat本机成功定位并验证联系人头部；无发送、打招呼、标记或邀约。无法确认身份时原语不得继续发送。
+5. 不修改Device/Host/Provider wire、授权或原生输入实现，不增加恢复/重试层；旧客户端能力不受服务端升级影响。
+
+### 实施与验证
+
+- 先补失败用例：广告首项/夹在会话间、广告同名和数字徽章、置顶提示在姓名前、置顶排序变化、wrapper子串诱饵、主文档外搜索/联系人诱饵、INPUT完整值/空值、无已选会话。
+- 只更新ChatSearchExecutor/ChatReadExecutor/ChatOpenExecutor及必要错误映射；复用现有domSnapshot/可见性工具。回归read/open/send-to操作接线，确认联系人后验和UNKNOWN不变。
+- 使用脱敏结构fixture或最小构造器，不提交真实联系人、消息、简历或整份strings表。原始现场快照仅保留忽略目录`.tmp/boss-chat-mixed-20261102/`。
+- 开发自测后独立TEST与CR；修复问题后重验受影响用例。BOSS真实回归仅打开已有会话、搜索/清空及状态核对，不执行外发。
+
+### 完成记录（2026-11-02）
+
+- **实现**：读名单、未读徽章和列表打开共享`user-list → geek-item → geek-name`正向定义，完整class token排除wrapper/top子串；真实同名保持歧义拒绝。行中心同时受页面视口与列表裁剪范围约束。搜索入口/输入框/联系人标签/结果只读doc0，原生INPUT精确核对inputValue（空值-1）；旧DIV只认可框内完整文本。联系人未选/未找到映射UI_CHANGED，真正URL不符仍WRONG_PAGE。
+- **真机新增缺陷**：搜索实际进入目标，但头部姓名被拆为两个文本节点，旧解析只读前段并误判错人。现场确认唯一`name-box`内普通文本＋`hightrare`，改按DOM顺序合并；歧义姓名框不放行，发送前身份绑定检查保留。
+- **主控验证**：`npm run build:main`、`npm run typecheck`通过；Node22.23.3对chat-mixed-layout/chat-search-executor/chat-open-executor/chat-read-executor/boss-open-chat/boss-read-chat六文件测试67/67，0失败/跳过。
+- **独立TEST**：15文件254/254、9个额外反例探针全部通过，0失败/跳过。范围包括open/read/search/send/reject、boss-send-to、page navigator、operation结果/恢复编排、reject补尾；详细文件和源码摘要见脱敏证据。首轮3个reject正向确认失败源于旧chatActionFixture缺真实`geek-name`，修正夹具后最终回归通过，没有放宽生产识别。
+- **独立CR**：无未解决P0/P1/P2；复核name-box身份合并、列表裁剪和错误码，提醒真实置顶未采样，已明确边界。CR后仅补过时注释，主控再次build/typecheck及67项验证通过。
+- **标准真机链路**：首位`batch-chat-intention`广告保持；同一target、3个document、40个真实联系人。两次`boss_open_chat`均`via=search`，完整头部姓名等于各自目标，URL仍为`/web/chat/index`，随后`boss_read_chat`返回3条消息、38个未读会话。未发送消息、打招呼、邀约或标记；最终停在沟通页已有会话，查询结果层已收起。
+- **失败如实登记**：首次点击因物理光标回读不符在按键前拒绝，重采后手动再跑；其后搜索真实进入目标但旧header解析截断，修正后标准链路通过。没有叠加自动恢复或把中间失败写成首次全绿。
+- **交付边界**：置顶只验证结构构造，真实客户置顶变体仍待现场验收；完整外发未真机测试。未重跑全量npm test，不声称此前五项无关失败和MCP清理挂起已修复。没有新增服务端能力或wire，未提交、安装或部署。
+
+持久证据：[沟通混排与搜索验收摘要](../../incidents/evidence/boss-widget-stuck-hidden-20261030/chat-mixed-validation-20261102.json)。原始快照、联系人、消息及输入日志仅在本机忽略目录`.tmp/boss-chat-mixed-20261102/`，不提交。
+
+
+## 18. BOSS 0.3.29 插件发行（2026-11-02）
+
+用户明确授权先提交再打包。只提交本次widget无关普通输入、沟通混排/搜索/完整姓名修复、测试及关联方案/取证文档；工作区其他任务及预暂存改动保留。BOSS版本从0.3.28升为0.3.29，共享原生输入随插件payload重新构建，不重打Runtime。
+
+从实际源码提交运行统一`release-batch.ps1 -Component Boss -BossVersion 0.3.29`，复用现有稳定验收发布者与公开信任根；不生成随机根、不安装插件或修改客户机。签名、required_files、重定位version/doctor、原生模块加载及修复源码/编译产物核对后登记最终路径与摘要；仍属acceptance插件，不能称生产签名发行。当前用户已获得的Runtime0.0.33构建与本批BOSS分别留存，不重新覆盖其包。

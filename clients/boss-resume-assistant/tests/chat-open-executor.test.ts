@@ -54,6 +54,7 @@ const BOX = () => yangSnapshot({ searchAnchor: true, extra: [{ tag: 'INPUT', cls
 /** 搜索结果浮层：联系人标签 + 公司名 + 姓名逐字节点 */
 const RESULTS = () => yangSnapshot({
   extra: [
+    { tag: 'INPUT', bounds: [248, 126, 240, 30], inputValue: '张三' },
     { tag: '#text', text: '联系人', bounds: [206, 173, 60, 26] },
     { tag: '#text', text: '_测试公司', bounds: [304, 210, 200, 16] },
     { tag: '#text', text: '张', bounds: [300, 188, 16, 16] },
@@ -104,7 +105,7 @@ test('搜索进入错会话（头部≠目标）→ 视同搜索失败不报成�
   assert.deepEqual(r.clicks, [
     { x: 520, y: 141 },
     { x: 404, y: 218 },
-    { x: 346.5, y: 453.5 },
+    { x: 367.5, y: 467 },
   ])
   assert.equal(r.clickAndTypes.length, 1)
 })
@@ -159,7 +160,7 @@ test('视口外目标：mouseWheel 滚动（锚点=容器 bounds 中心）→ �
   // wheel 锚点来自 .user-list 容器 bounds [188,196,359,1088] 中心 (367.5,740) 取整；目标在下方 → deltaY 正
   assert.deepEqual(r.wheels, [{ x: 368, y: 740, deltaY: 600 }])
   // 滚动后周天一 name @(264,515,45,17) 中心 (286.5,523.5)，点击 x+60
-  assert.deepEqual(r.clicks[r.clicks.length - 1], { x: 346.5, y: 523.5 })
+  assert.deepEqual(r.clicks[r.clicks.length - 1], { x: 367.5, y: 537 })
 })
 
 test('视口外且未注入 mouseWheel → fail-loud，不点击列表项', async () => {

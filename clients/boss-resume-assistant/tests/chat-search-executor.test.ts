@@ -27,7 +27,7 @@ const BATCH_ANCHOR: SnapItem = { text: '批量', bounds: [510, 171, 26, 15] }
 const ICON_DIV: [number, number, number, number] = [503, 124, 34, 34]
 const SEARCH_ENTRY_HIT: ClickPoint = { x: 520, y: 141 }
 
-function searchSnap(opts: { items?: SnapItem[]; layout?: [number, number, number, number][]; divs?: [number, number, number, number][]; svgs?: [number, number, number, number][]; noAnchor?: boolean } = {}): DomSnapshot {
+function searchSnap(opts: { inputValue?: string; items?: SnapItem[]; layout?: [number, number, number, number][]; divs?: [number, number, number, number][]; svgs?: [number, number, number, number][]; noAnchor?: boolean } = {}): DomSnapshot {
   const strings: string[] = ['', 'INPUT', '#text', 'DIV', 'svg']
   const idx: number[] = [0]
   const values: number[] = [0]
@@ -38,13 +38,13 @@ function searchSnap(opts: { items?: SnapItem[]; layout?: [number, number, number
     if (si < 0) { strings.push(item.text); si = strings.length - 1 }
     idx.push(idx.length); values.push(si); names.push(2); bounds.push(item.bounds)
   }
-  for (const b of opts.layout ?? []) { idx.push(idx.length); values.push(0); names.push(1); bounds.push(b) }
+  for (const b of opts.layout ?? (opts.inputValue !== undefined ? [SEARCH_BOX] : [])) { idx.push(idx.length); values.push(0); names.push(1); bounds.push(b) }
   for (const b of opts.noAnchor ? (opts.divs ?? []) : [...(opts.divs ?? []), ICON_DIV]) { idx.push(idx.length); values.push(0); names.push(3); bounds.push(b) }
   for (const b of opts.svgs ?? []) { idx.push(idx.length); values.push(0); names.push(4); bounds.push(b) }
   return {
     strings,
     documents: [{
-      nodes: { nodeValue: { index: idx, value: values }, nodeName: { index: idx, value: names }, contentDocumentIndex: { index: [], value: [] } },
+      nodes: { inputValue: { index: names.flatMap((n,i)=>n===1?[i]:[]), value: names.filter(n=>n===1).map(()=>opts.inputValue === undefined ? -1 : (strings.push(opts.inputValue)-1)) }, nodeValue: { index: idx, value: values }, nodeName: { index: idx, value: names }, contentDocumentIndex: { index: [], value: [] } },
       layout: { nodeIndex: idx, bounds },
       scrollOffsetY: 0,
     }],
@@ -95,7 +95,7 @@ test('正常找人：点搜索图标 → 搜索框 → 输入姓名 → 点结�
     snapshot: snapshotQueue([
       searchSnap(), // snap0：点图标前
       searchSnap({ layout: [SEARCH_BOX] }), // snap1：搜索框弹出
-      searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }), // snap2：联系人标签 + 结果项公司名
+      searchSnap({ inputValue: NAME, items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }), // snap2：联系人标签 + 结果项公司名
       searchSnap({ items: [{ text: '发送', bounds: SEND_BTN }] }), // snap3：进入对话
     ]),
     click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
@@ -120,7 +120,7 @@ test('INPUT 原位变形：点击前是 DIV 收缩条，点击后原位变 INPUT
     snapshot: snapshotQueue([
       searchSnap({ divs: [MORPH_DIV] }), // snap0：点前只有 DIV 收缩条（无 INPUT）
       searchSnap({ layout: [MORPH_INPUT] }), // snap1：原位变形为 INPUT（与 DIV 几乎同位置）
-      searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
+      searchSnap({ inputValue: NAME, items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
       searchSnap({ items: [{ text: '发送', bounds: SEND_BTN }] }),
     ]),
     click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
@@ -141,7 +141,7 @@ test('INPUT 原位变形失败模式回归：变形后页面同时存在旧收�
       searchSnap({ divs: [MORPH_DIV] }),
       // snap1：INPUT 原位出现，包裹容器 DIV（339 宽）仍在——diff 会误判"新增 2 个"，直接识别只认 INPUT
       searchSnap({ layout: [MORPH_INPUT], divs: [MORPH_DIV] }),
-      searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
+      searchSnap({ inputValue: NAME, items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
       searchSnap({ items: [{ text: '发送', bounds: SEND_BTN }] }),
     ]),
     click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
@@ -157,7 +157,7 @@ test('多 INPUT：仅一个与搜索入口 y 相邻（|Δy|≤80）→ 取该唯
     snapshot: snapshotQueue([
       searchSnap(),
       searchSnap({ layout: [SEARCH_BOX, FAR_INPUT] }),
-      searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
+      searchSnap({ inputValue: NAME, items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
       searchSnap({ items: [{ text: '发送', bounds: SEND_BTN }] }),
     ]),
     click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
@@ -186,7 +186,7 @@ test('0 INPUT 回退：DIV 输入条形态唯一命中（旧版 contenteditable 
     snapshot: snapshotQueue([
       searchSnap(),
       searchSnap({ divs: [DIV_FIELD] }), // 无 INPUT，只有 DIV 形态输入条
-      searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
+      searchSnap({ inputValue: NAME, items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
       searchSnap({ items: [{ text: '发送', bounds: SEND_BTN }] }),
     ]),
     click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
@@ -206,7 +206,7 @@ test('输入未落地（聚焦竞态）→ clearInput 清空重试一次成功',
       searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '稍', bounds: [300, 188, 16, 16] }, { text: '后', bounds: [318, 188, 16, 16] }] }),
       searchSnap({ layout: [SEARCH_BOX] }), // snap3（清空后重定位）：搜索框仍在
       // snap4（第二次输入后）：姓名 3/3 字符出现 + 联系人标签 + 结果公司名
-      searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
+      searchSnap({ inputValue: NAME, items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
       searchSnap({ items: [{ text: '发送', bounds: SEND_BTN }] }),
     ]),
     click: r.click, clickAndType: r.clickAndType, clearInput: r.clearInput, sleep: r.sleep,
@@ -282,7 +282,7 @@ test('搜索后无结果项公司名（搜索无结果）→ ChatSearchError，�
     snapshot: snapshotQueue([
       searchSnap(),
       searchSnap({ layout: [SEARCH_BOX] }),
-      searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }), // snap2：只有联系人标签，无公司名
+      searchSnap({ inputValue: NAME, items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }), // snap2：只有联系人标签，无公司名
     ]),
     click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
   })
@@ -295,7 +295,7 @@ test('搜索后无结果项公司名（搜索无结果）→ ChatSearchError，�
 test('搜索后无「联系人」标签（浮层未开/异常）→ ChatSearchError', async () => {
   const r = recorder()
   const executor = new ChatSearchExecutor({
-    snapshot: snapshotQueue([searchSnap(), searchSnap({ layout: [SEARCH_BOX] }), searchSnap({ items: [{ text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] })]),
+    snapshot: snapshotQueue([searchSnap(), searchSnap({ layout: [SEARCH_BOX] }), searchSnap({ inputValue: NAME, items: [{ text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] })]),
     click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
   })
   await assert.rejects(executor.openContact({ name: NAME }), /未在结果列表找到该姓名的可见项/)
@@ -309,7 +309,7 @@ test('多个结果项公司名（多个匹配）→ ChatSearchError（无法唯�
       searchSnap(),
       searchSnap({ layout: [SEARCH_BOX] }),
       // snap2：2 个公司名（2 个结果项）
-      searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_甲公司', bounds: COMPANY }, { text: '_乙公司', bounds: [304, 242, 200, 16] }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
+      searchSnap({ inputValue: NAME, items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_甲公司', bounds: COMPANY }, { text: '_乙公司', bounds: [304, 242, 200, 16] }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
     ]),
     click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
   })
@@ -323,7 +323,7 @@ test('点结果项后未进入对话（无发送按钮）→ ChatSearchError', a
     snapshot: snapshotQueue([
       searchSnap(),
       searchSnap({ layout: [SEARCH_BOX] }),
-      searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
+      searchSnap({ inputValue: NAME, items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
       searchSnap(), // snap3：未进入对话，无发送按钮
     ]),
     click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
@@ -361,7 +361,7 @@ test('findSearchBox 按 nodeName=INPUT 过滤：多个大 DIV 满足几何但只
     snapshot: snapshotQueue([
       searchSnap(),
       searchSnap({ layout: [SEARCH_BOX], divs: [[192, 124, 311, 34], [192, 124, 339, 34], [192, 124, 263, 36]] }),
-      searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
+      searchSnap({ inputValue: NAME, items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
       searchSnap({ items: [{ text: '发送', bounds: SEND_BTN }] }),
     ]),
     click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,
@@ -393,7 +393,7 @@ test('真机嵌套形态：容器 DIV 34x34 + 内部 svg 13x13 双命中 → 聚
     snapshot: snapshotQueue([
       searchSnap({ svgs: [NESTED_SVG] }), // 默认锚（批量+DIV 容器）+ 嵌套 svg 同时在位
       searchSnap({ layout: [SEARCH_BOX], svgs: [NESTED_SVG] }),
-      searchSnap({ items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
+      searchSnap({ inputValue: NAME, items: [{ text: '联系人', bounds: CONTACTS_LABEL }, { text: '_测试公司', bounds: COMPANY }, { text: '张', bounds: [300, 188, 16, 16] }, { text: '三', bounds: [318, 188, 16, 16] }] }),
       searchSnap({ items: [{ text: '发送', bounds: SEND_BTN }] }),
     ]),
     click: r.click, clickAndType: r.clickAndType, sleep: r.sleep,

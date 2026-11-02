@@ -70,7 +70,7 @@ const gw = new CdpGateway(); await gw.connect('http://127.0.0.1:9222')
 - **CSS 背景图标抓不到**：如搜索图标，DOMSnapshot 无节点无文本 → 让用户把鼠标移上去，用 Win32 `GetCursorPos` 读屏幕坐标反算 page 坐标校准。
 - **虚拟列表/特殊渲染文本抓不到**：少数元素（如 §10.5 InterviewDemo 的约面试日期下拉）确实视口内 0 命中 → 靠相邻可见文本**锚点 + 固定偏移**定位。但**先排除"延时不够"**：搜索结果/职位下拉等异步渲染控件，等够延时（见上条）就有 bounds，不是真盲区——曾误判搜索结果卡片人名"抓不到"，实为 sleep 太早。
 - **沟通页内嵌推荐 iframe**（§17 坑17）：DOM 里有推荐牛人全量节点（「打招呼」「筛选」都在），按文本存在性判页面会误判 → **用 URL 校验**（推荐=`/web/chat/recommend`，沟通=`/web/chat/index`）。
-- **多 render widget**：Chrome 一个窗口有多个 `Chrome_RenderWidgetHostHWND`，`FindRenderWidget` 必须取可见实例（§17 坑14）。
+- **内容区定位（2026-10-31修正）**：普通输入不再读取/等待 `Chrome_RenderWidgetHostHWND`；共享native包用UIA唯一顶层Document获取内容区物理矩形，见设计§10.11。辅助窗口隐藏不等于页面不可交互。
 - **PowerShell .ps1 必须 UTF-8 BOM**（中文标题/参数）；中文参数勿经 bash 内联传递。
 - **WinMouseClicker 借真实光标**约 1 秒，调用前必须提示用户手离鼠标。
 - **展开类控件（下拉/面板）点击后必须等渲染完再 snapshot**：下拉/面板异步渲染，项的 layout bounds 需时间出现。snapshot 太早 → 项无 bounds → **误判为"DOMSnapshot 盲区"**（职位下拉曾因此误判，实为等不够）。不同控件等待不同：筛选面板 `ensurePanelOpen` sleep 1200ms、职位下拉需 2500ms——**等不够就再多等/重 snapshot，别急着判盲区**。
@@ -110,10 +110,10 @@ const gw = new CdpGateway(); await gw.connect('http://127.0.0.1:9222')
 
 ```
 page 坐标（Executor 计算）  = accumulateOwnerOffset(docIdx) + boundsCenter(bounds) − scrollOffset
-屏幕坐标（native 输入内）   = RenderWidget 矩形 Left/Top + page × (视口宽高 ÷ CssW,CssH)
+屏幕坐标（native 输入内）   = UIA顶层Document物理矩形 Left/Top + page × (内容区物理宽高 ÷ 传入视口宽高)
 ```
 
-- **DPI 坑（§17 坑7，勿再犯）**：DOMSnapshot bounds 是 device px（150% 缩放屏 = 虚拟 px × 1.5）。native 层用 `scale = 视口宽/CssW` 实时比例换算，自动覆盖任意 DPI——**绝不做固定 ÷1.5**，窗口几何每次都可能变，`GetWindowRect(Chrome_RenderWidgetHostHWND)` 必须每次实时取、不缓存。
+- **DPI/缩放**：page与传入viewport保持同口径；UIA内容矩形已是物理屏幕坐标，按宽高比例映射，不额外乘/除固定DPI。每次input新观察，输入前复核CDP视口和原生内容/主窗几何，变化则重新观察，不能把旧点拉伸到新布局。
 - **scrollOffset 坑（§17 坑16）**：iframe 文档内滚动后 bounds 不变、`scrollOffsetY` 变——不减滚动偏移，滚动后新露出的元素会被永远当成视口外（表现为"一直滚但一个都不点"）。
 - **隐藏 iframe 坑**：后台标签页/隐藏 iframe 的 owner 无可见 bounds，`accumulateOwnerOffset` 抛错，必须 try/catch 跳过该 document。
 
@@ -121,10 +121,10 @@ page 坐标（Executor 计算）  = accumulateOwnerOffset(docIdx) + boundsCenter
 
 业务层唯一入口 `WinMouseClicker.click(point, viewport)`（`BossSession.click` 同款）——**调用方只传 page 坐标和视口尺寸**，其余全部内置（`@aid/win32-native-input` koffi FFI；2026-10-21 起 PowerShell 输入回退脚本已删，仅 native 单通道）：
 
-1. 按标题关键字找 Chrome 窗口（`FindWindowByTitle`）；多个 `Chrome_RenderWidgetHostHWND` 取**可见**实例（§17 坑14）。
-2. 最小化先 `SW_RESTORE`（最小化时 render widget 被销毁，枚举不到）；`AttachThreadInput` + `SetForegroundWindow` 破前台锁（后台进程直接 SetForegroundWindow 被静默拒绝）。
-3. `GetWindowRect(renderWidget)` 实时取视口矩形，按比例换算屏幕坐标（覆盖 DPI）。
-4. `WindowFromPoint` 落点守卫：落点必须归属 render widget（防遮挡窗口吃点击/会话终端里的"幽灵按钮"截图影像）；失败 `SetWindowPos` 抬窗重算重试一次，仍败 exit 2 → `WinClickError` fail-loud，**绝不盲点**。
+1. 按原调试端口唯一定位Chrome进程/主窗，激活原CDP target；非绑定调用保留标题找窗。
+2. 最小化先 `SW_RESTORE`；`AttachThreadInput` + `SetForegroundWindow` 处理前台锁，不等待legacy widget重建。
+3. UIA读取唯一可见顶层Document内容矩形（不深入iframe），按传入page/viewport比例映射屏幕位置；不得猜工具栏高度。
+4. `WindowFromPoint` 落点必须在内容矩形内且根窗为原主窗，拒绝其他窗口/同浏览器owned popup；前台、几何及光标回读保持。原有遮挡抬窗一次保留，不新增恢复层，也不要求命中某个指定辅助HWND。
 5. 拟人动作：`SetCursorPos` 分 10 步移动（每步 25ms）→ 悬停 500ms → `mouse_event` LEFTDOWN/70ms/LEFTUP。
 
 约束：统一 `SetCursorPos + mouse_event`，**禁 SendInput 绝对坐标**（多显示器需 VIRTUALDESK 标志有坑）；借真实光标约 1s，调用前必须提示用户手离鼠标；读取链路/实验残余 ps1 文件必须 UTF-8 BOM。

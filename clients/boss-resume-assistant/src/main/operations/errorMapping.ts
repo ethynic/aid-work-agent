@@ -64,18 +64,9 @@ const FILTER_ARG_MARKERS = ['行为单选', '未提供任何筛选条件']
 
 /**
  * ChatReadError 前置类标记（§10.9）：未打开会话 / 会话存在但未切换 / 联系人不存在。
- * 属「页面状态与预期不符」而非页面改版——按 WRONG_PAGE 处理（可重试：用户打开/切换会话后再读即可）
+ * 页面仍是沟通页，按 UI_CHANGED 处理；避免编排误以为离开沟通页而重复切页。
  */
 const CHAT_READ_PRECONDITION_MARKERS = ['未打开会话', '存在但未打开', '不存在']
-
-/**
- * ChatOpenError 前置类标记（2026-08-27）：「会话列表中不存在」属联系人/页面状态问题——
- * WRONG_PAGE 可重试（用户确认姓名/创建会话后重试）；其余（同名多命中/滚动失败/头部未切换）
- * 是切换未生效或结构异常 → UI_CHANGED（不可自动重试，人工查看）。
- * 注意 ChatOpenError 的判定块必须在 POST_WRITE_VERIFY_MARKERS 之前（其文案会内嵌搜索失败
- * 原因，可能含写后校验标记词，但本 operation 是 readonly，不应误判 EXECUTION_UNKNOWN）。
- */
-const CHAT_OPEN_PRECONDITION_MARKERS = ['会话列表中不存在']
 
 /**
  * DetailGreetError 前置类标记（2026-09-28 详情页打招呼三件套）：详情未打开 / 姓名与预期
@@ -142,20 +133,11 @@ export function mapExecutorError(err: unknown): MappedError {
   if (err instanceof FilterSetError && FILTER_ARG_MARKERS.some((m) => message.includes(m))) {
     return { code: 'INVALID_ARGUMENT', message }
   }
+  // 已在沟通页但未选会话/联系人不存在，不代表离开沟通页；禁止诱导编排重复切页。
   if (err instanceof ChatReadError && CHAT_READ_PRECONDITION_MARKERS.some((m) => message.includes(m))) {
-    return { code: 'WRONG_PAGE', message }
-  }
-  if (err instanceof ChatOpenError) {
-    // 前置类（会话列表中不存在）→ WRONG_PAGE 可重试（确认姓名/创建会话后重试）；
-    // 其余（同名多命中/滚动失败/头部未切换）→ UI_CHANGED（不可自动重试，人工查看）。
-    // 本块必须在 POST_WRITE_VERIFY_MARKERS 之前：ChatOpenError 的兜底文案会内嵌搜索路径失败
-    // 原因（可能含「未关闭」等写后校验标记词），但 open-chat 是 readonly 无外部写效应，
-    // 不能被误判为 EXECUTION_UNKNOWN
-    if (CHAT_OPEN_PRECONDITION_MARKERS.some((m) => message.includes(m))) {
-      return { code: 'WRONG_PAGE', message }
-    }
     return { code: 'UI_CHANGED', message }
   }
+  if (err instanceof ChatOpenError) return { code: 'UI_CHANGED', message }
   if (err instanceof OverlayDismissError) {
     // 白名单违规（「立即领取」类）→ INVALID_ARGUMENT（编排契约错误，重试无意义）；
     // 未找到控件/点击后未关闭 → UI_CHANGED（弹层状态异常，人工查看）

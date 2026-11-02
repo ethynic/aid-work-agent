@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-30",
+  "experiment": "User manually switched recommendation to chat and back; Win32 observation only",
+  "started_at_utc": "2026-10-30T09:13:31.206Z",
+  "last_recorded_at_utc": "2026-10-30T09:15:16.257Z",
+  "sample_count": 3839,
+  "max_sample_gap_ms": 47,
+  "persisted_state_records": 38,
+  "selection_states": [
+    "18946916/True"
+  ],
+  "unique_widget_identity_parent_visibility_states": 1,
+  "widget_state": "14556052/72660/72660/False/False;18946916/72660/72660/True/True;32119484/72660/72660/False/False;72680/72660/72660/False/False;72704/72660/72660/False/False",
+  "foreground_records": 30,
+  "foreground_content_center_hit_widgets": [
+    "18946916"
+  ],
+  "observed_minimized": false,
+  "input_sent": 0,
+  "activation_sent": 0,
+  "cdp_available": false,
+  "limits": [
+    "Page switches were confirmed by the user; CDP URL and Chrome version could not be independently sampled.",
+    "Polling cannot exclude transitions shorter than the sampling gap.",
+    "No native input or business operation success was tested."
+  ],
+  "raw_evidence": ".tmp/boss-widget-switch-20261030/manual-round1.jsonl"
+}

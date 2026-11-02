@@ -10,9 +10,9 @@
  *    视同搜索失败，进列表兜底，绝不静默报成功；
  * 3) list：只读预探无搜索入口直接用列表；搜索正常返回但明确进入错会话才消费一次重试切列表。先 pressEscape 清场
  *    （搜索失败时浮层常残留，会话列表被搜索浮层替换或遮挡——直接按列表坐标点击会点在浮层上，
- *    可能误开别人的会话），再重新 snapshot 在 doc[0] 会话列表列（x∈[188,548)）找目标姓名文本
- *    （trim 全等）：唯一命中 → Win32 点击（姓名中心 x+60，2026-08-27 真机探针验证点击行可切换
- *    头部）；视口外 → CDP mouseWheel 滚动到可见再点；点击后轮询头部切换校验。
+ *    可能误开别人的会话），再重新 snapshot 在 doc[0] 的 user-list 下找真实条目的 geek-name
+ *    （trim 全等）：唯一命中 → Win32 点击行中心；列表裁剪范围外先滚动到可见再点，
+ *    点击后轮询完整头部姓名校验。
  *
  * 失败语义（fail-loud）：列表 0 命中（附可用联系人名单 + 搜索失败原因）、同名多命中（列坐标）、
  * 滚动不生效、头部未切换——全部抛 ChatOpenError，绝不盲点。两路都失败时汇总两路错误。
@@ -21,11 +21,10 @@ import {
   type DomSnapshot,
   type ClickPoint,
   classOf,
-  indexedValues,
 } from './domSnapshot.js'
 import { viewportOf } from './FilterSetter.js'
 import { ChatSearchExecutor } from './ChatSearchExecutor.js'
-import { headerContactOf, conversationListNamesOf } from './ChatReadExecutor.js'
+import { headerContactOf, conversationListNamesOf, conversationItemsOf } from './ChatReadExecutor.js'
 import { CancelledError } from '../operations/types.js'
 import { PagePostconditionError } from '../operations/pageOperation.js'
 
@@ -66,8 +65,6 @@ export interface ChatOpenResult {
 /** 会话列表列的 x 带（真机列表 x∈[188,547] 姓名 x≈264，右界 548=聊天面板起点；
  *  x 带同时排除右侧消息区/头部的同名文本） */
 const LIST_NAME_X_RANGE: readonly [number, number] = [188, 548]
-/** 列表项点击点：姓名中心 x 右移 60px 落到行中部（2026-08-27 真机探针验证有效） */
-const LIST_CLICK_DX = 60
 /** 视口外目标的最大滚动轮数 */
 const SCROLL_ROUNDS_MAX = 15
 /** 每轮滚动后等列表重排（ms） */
@@ -157,7 +154,7 @@ export class ChatOpenExecutor {
     let target = hit.points[0]!
     let viewport = viewportOf(snap)
     let rounds = 0
-    while (!this.inViewport(target, viewport)) {
+    while (!this.inViewport(target, viewport, hit.listBounds)) {
       if (!this.deps.mouseWheel) {
         throw new ChatOpenError(`会话「${contact}」在列表视口外且本环境无滚动原语，无法自动定位，请人工滚动列表后重试${note}`)
       }
@@ -165,7 +162,7 @@ export class ChatOpenExecutor {
         throw new ChatOpenError(`滚动 ${SCROLL_ROUNDS_MAX} 轮后「${contact}」仍未进入视口（列表可能未按预期滚动），请人工查看${note}`)
       }
       // 方向按目标 y：目标在视口下方 → 向下滚（deltaY 正）；上方 → 向上滚
-      const deltaY = target.y > viewport.height ? SCROLL_STEP : -SCROLL_STEP
+      const deltaY = target.y >= Math.min(viewport.height, hit.listBounds![1] + hit.listBounds![3]) ? SCROLL_STEP : -SCROLL_STEP
       const anchor = this.listScrollAnchor(snap)
       await this.deps.mouseWheel(anchor.x, anchor.y, deltaY)
       await this.sleep(SCROLL_SETTLE)
@@ -179,9 +176,9 @@ export class ChatOpenExecutor {
       viewport = viewportOf(snap)
     }
 
-    // Win32 点击列表项（姓名中心 x+60 = 行中部；真实鼠标，2026-08-27 真机探针验证）
+    // Win32 点击真实会话行中心；后续 fresh 头部验证目标身份。
     if (this.deps.signal?.aborted) throw new CancelledError('已取消：点击会话列表项时中止')
-    await this.deps.click({ x: target.x + LIST_CLICK_DX, y: target.y }, viewport)
+    await this.deps.click({ x: target.x, y: target.y }, viewport)
 
     // 校验：轮询头部切换为 contact（点击已发出的「写后校验」，超时 fail-loud 请人工查看）
     let lastHeader = ''
@@ -200,29 +197,17 @@ export class ChatOpenExecutor {
     )
   }
 
-  /** doc[0] 会话列表列内目标姓名的可见文本命中（trim 全等 + x∈[188,548) + 有 bounds），返回各命中中心 */
-  private locateListName(snap: DomSnapshot, name: string): { points: ClickPoint[]; count: number } {
-    const document = snap.documents[0]
-    if (!document?.nodes?.nodeValue || !document.layout) return { points: [], count: 0 }
-    const valueByNode = new Map(indexedValues(document.nodes.nodeValue, 'nodeValue'))
-    const points: ClickPoint[] = []
-    document.layout.nodeIndex.forEach((nodeIndex, layoutIndex) => {
-      const stringIndex = valueByNode.get(nodeIndex)
-      if (stringIndex === undefined) return
-      const text = snap.strings[stringIndex]
-      if (typeof text !== 'string' || text.trim() !== name) return
-      const b = document.layout.bounds[layoutIndex]
-      if (!b || b[2]! <= 0 || b[3]! <= 0) return
-      const x = b[0]!
-      if (x < LIST_NAME_X_RANGE[0] || x >= LIST_NAME_X_RANGE[1]) return
-      points.push({ x: x + b[2]! / 2, y: b[1]! + b[3]! / 2 })
-    })
-    return { points, count: points.length }
+  /** 只匹配真实会话的姓名字段；返回行中心和列表裁剪边界。 */
+  private locateListName(snap: DomSnapshot, name: string): { points: ClickPoint[]; count: number; listBounds?: [number, number, number, number] } {
+    const items = conversationItemsOf(snap).filter((item) => item.name === name)
+    const points = items.map((item) => item.point)
+    return { points, count: points.length, listBounds: items[0]?.listBounds }
   }
 
-  /** 点是否在视口内（中心 y 落在 (0, height) 开区间；点击越界会被 Win32 层拒绝） */
-  private inViewport(point: ClickPoint, viewport: { width: number; height: number }): boolean {
-    return point.y > 0 && point.y < viewport.height
+  /** 同时检查页面视口和列表裁剪范围，避免点击已滚入工具栏下方的旧行坐标。 */
+  private inViewport(point: ClickPoint, viewport: { width: number; height: number }, list?: [number, number, number, number]): boolean {
+    return !!list && point.x > Math.max(0, list[0]) && point.x < Math.min(viewport.width, list[0] + list[2])
+      && point.y > Math.max(0, list[1]) && point.y < Math.min(viewport.height, list[1] + list[3])
   }
 
   /**
@@ -236,7 +221,7 @@ export class ChatOpenExecutor {
       let best: [number, number, number, number] | null = null
       document.layout.nodeIndex.forEach((nodeIndex, layoutIndex) => {
         const cls = classOf(snap, 0, nodeIndex)
-        if (!cls || !cls.includes('user-list')) return
+        if (!cls || !cls.split(/\s+/).includes('user-list')) return
         const b = document.layout.bounds[layoutIndex]
         if (!b || b[2]! <= 0 || b[3]! <= 0) return
         if (best === null || b[2]! * b[3]! > best[2]! * best[3]!) best = [b[0]!, b[1]!, b[2]!, b[3]!]

@@ -9,11 +9,16 @@
  */
 import koffi from 'koffi'
 import type { NativeApi, ProcessEntry, Rect } from '../types.js'
+import { openContentViewport } from './contentViewport.js'
 
 // ---- 结构体（x64 布局）----
 
 const WniPOINT = koffi.struct('WniPOINT', { x: 'long', y: 'long' })
 const WniRECT = koffi.struct('WniRECT', { left: 'long', top: 'long', right: 'long', bottom: 'long' })
+const WniGUIThreadInfo = koffi.struct('WniGUIThreadInfo', {
+  cbSize: 'uint32', flags: 'uint32', hwndActive: 'intptr', hwndFocus: 'intptr', hwndCapture: 'intptr',
+  hwndMenuOwner: 'intptr', hwndMoveSize: 'intptr', hwndCaret: 'intptr', rcCaret: WniRECT,
+})
 const WniMOUSEINPUT = koffi.struct('WniMOUSEINPUT', {
   dx: 'long', dy: 'long', mouseData: 'uint32', dwFlags: 'uint32', time: 'uint32', dwExtraInfo: 'uintptr',
 })
@@ -65,6 +70,7 @@ export function createKoffiApi(): NativeApi {
   const getPhysicalCursorPos = user32.func('bool __stdcall GetPhysicalCursorPos(_Out_ WniPOINT *pt)')
   const setCursorPos = user32.func('bool __stdcall SetCursorPos(int x, int y)')
   const windowFromPoint = user32.func('intptr __stdcall WindowFromPoint(WniPOINT pt)')
+  const getGUIThreadInfo = user32.func('int32 __stdcall GetGUIThreadInfo(uint32 thread, _Inout_ WniGUIThreadInfo *info)')
 
   // 窗口枚举 / 属性
   const enumWindows = user32.func('bool __stdcall EnumWindows(WniEnumWindowsProc *cb, intptr lParam)')
@@ -154,6 +160,13 @@ export function createKoffiApi(): NativeApi {
     },
     setCursorPos: (x, y) => setCursorPos(x, y),
     windowFromPoint: (x, y) => Number(windowFromPoint({ x, y })),
+    openContentViewport,
+    getFocusedWindow: () => {
+      const info = { cbSize: koffi.sizeof(WniGUIThreadInfo), flags: 0, hwndActive: 0, hwndFocus: 0, hwndCapture: 0,
+        hwndMenuOwner: 0, hwndMoveSize: 0, hwndCaret: 0, rcCaret: { left: 0, top: 0, right: 0, bottom: 0 } }
+      if (!getGUIThreadInfo(0, info)) throw new Error('Cannot read keyboard focus; input refused')
+      return Number(info.hwndFocus)
+    },
 
     enumWindows: (visit) => enumWindows((hwnd: bigint | number) => visit(Number(hwnd)), 0),
     enumChildWindows: (parent, visit) => enumChildWindows(parent, (hwnd: bigint | number) => visit(Number(hwnd)), 0),

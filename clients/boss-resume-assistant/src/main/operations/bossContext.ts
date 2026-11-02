@@ -10,7 +10,7 @@ import { CdpGateway, type DomSnapshotOptions } from '../cdp/CdpGateway.js'
 import { CdpConnectionError } from '../cdp/errors.js'
 import { DEFAULT_CDP_PORT } from '../chrome/ChromeAttacher.js'
 import { ensureDebugChrome, runningChromeProfile, DEFAULT_DEBUG_PROFILE_DIR, DEFAULT_INITIAL_URL } from '../chrome/ChromeLauncher.js'
-import { WinMouseClicker } from '../input/WinMouseClicker.js'
+import { WinMouseClicker, WinClickError } from '../input/WinMouseClicker.js'
 import type { DomSnapshot, ClickPoint } from '../boss/domSnapshot.js'
 import { randomUUID } from 'node:crypto'
 import {
@@ -164,7 +164,13 @@ export function withAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<
 export const defaultSessionFactory: BossSessionFactory = async (ctx) => {
   const endpoint = `http://127.0.0.1:${ctx.cdpPort ?? DEFAULT_CDP_PORT}`
   const gw = new CdpGateway({ timeoutMs: 10000 })
-  const clicker = new WinMouseClicker({ cdpPort: ctx.cdpPort ?? DEFAULT_CDP_PORT, beforeInput: () => gw.activateTarget(), signal: ctx.signal })
+  let observedViewport: { width: number; height: number } | undefined
+  const clicker = new WinMouseClicker({ cdpPort: ctx.cdpPort ?? DEFAULT_CDP_PORT, beforeInput: () => gw.activateTarget(), verifyObservation: async () => {
+    const current = await gw.getPageMetrics()
+    if (!observedViewport || current.width !== observedViewport.width || current.height !== observedViewport.height) {
+      throw new WinClickError('STALE_OBSERVATION: page viewport changed; input refused', 2)
+    }
+  }, signal: ctx.signal })
   const binding = ctx.browserTargetRef ? await resolveBrowserTarget(ctx.browserTargetRef, ctx.cdpPort ?? DEFAULT_CDP_PORT) : undefined
   let rebuilt = false
   let launched = false
@@ -211,7 +217,17 @@ export const defaultSessionFactory: BossSessionFactory = async (ctx) => {
     throw err
   }
   const session: BossSession = {
-    snapshot: async (opts) => (await gw.captureDomSnapshot(opts)) as DomSnapshot,
+    snapshot: async (opts) => {
+      observedViewport = undefined
+      const before = await gw.getPageMetrics()
+      const snapshot = await gw.captureDomSnapshot(opts) as DomSnapshot
+      const after = await gw.getPageMetrics()
+      if (before.width !== after.width || before.height !== after.height) {
+        throw new CodedOperationError('UI_CHANGED', '读取页面期间视口变化，请重新观察后操作')
+      }
+      observedViewport = after
+      return snapshot
+    },
     click: (point, viewport) => clicker.click(point, viewport),
     drag: (from, to, viewport) => clicker.drag(from, to, viewport),
     clickBrowse: async (point) => {

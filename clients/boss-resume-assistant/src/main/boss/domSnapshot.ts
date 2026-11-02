@@ -19,6 +19,8 @@ export interface DomSnapshot {
 export interface DomDocument {
   nodes: {
     nodeValue: SparseOrDense<number>
+    /** 原生 INPUT/TEXTAREA 当前值；RareStringData 中 -1 表示空值。 */
+    inputValue?: SparseOrDense<number>
     contentDocumentIndex: SparseOrDense<number>
     /** DOMSnapshot 恒返回的父节点索引（nodeIndex → parent nodeIndex），探针的容器级消歧用 */
     parentIndex?: SparseOrDense<number>

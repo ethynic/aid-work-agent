@@ -5,8 +5,7 @@
  * 单元测试注入内存 fake（不发任何真实输入）。所有 HWND/句柄用 JS number 表示
  * （Win64 HANDLE 在实际取值范围内可安全落在 Number 精度内，绑定层负责归一化）。
  *
- * 语义权威来源：clients/boss-resume-assistant/scripts/win-click.ps1 与
- * BossPhysicalInput.cs / BossWindowExperiment.cs（1:1 移植，一条守卫不删）。
+ * 输入语义：docs/design/recruiting/boss-resume-assistant-native-cdp-design.md §10.11。
  */
 
 /** 物理屏幕矩形（GetWindowRect 语义，left/top 为屏幕坐标） */
@@ -21,6 +20,12 @@ export interface Rect {
 export interface Point {
   x: number
   y: number
+}
+
+/** Per-input UIA top-level Document observation; caller must close in finally. */
+export interface ContentViewport {
+  readRect(): Rect
+  close(): void
 }
 
 /** 进程快照条目（Toolhelp32 语义） */
@@ -44,6 +49,9 @@ export interface NativeApi {
   // ---- 几何 / 光标 / 命中（物理坐标，需在 PMv2 线程上下文内调用）----
   /** GetWindowRect：失败返回 undefined */
   getWindowRect(hwnd: number): Rect | undefined
+  openContentViewport(hwnd: number): ContentViewport
+  /** GUI-thread keyboard focus, not the window under the mouse. */
+  getFocusedWindow(): number
   /** GetPhysicalCursorPos：失败返回 undefined */
   getPhysicalCursorPos(): Point | undefined
   setCursorPos(x: number, y: number): boolean
@@ -134,10 +142,10 @@ export interface PhysicalInputRequest {
   /** 计时行 op 字段（click/drag/clickAndType） */
   op?: string
   /**
-   * 目标窗口定位（默认 Chrome 语义：标题找主窗 + Chrome_RenderWidgetHostHWND 面积最大子窗）。
+   * 目标窗口定位（默认 Chrome 语义：标题/端口找主窗 + UIA顶层Document内容区）。
    * 供真实输入测试等复用方以自有目标窗口驱动同一套守卫/序列。
    */
-  resolveTarget?: (api: NativeApi) => { win: number; rw: number }
+  resolveTarget?: (api: NativeApi) => { win: number }
 }
 
 /** 输入结果（与 ps1 stdout 行对应的输出收集） */

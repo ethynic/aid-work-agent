@@ -1,0 +1,1289 @@
+{
+  "schema_version": 1,
+  "review_date": "2026-10-31",
+  "source": {
+    "filename": "runtime(2).log",
+    "sha256": "48360eb92c153cdfe9f83001f748f51facba93d043adbcf077aa5db5966cd4e1",
+    "line_count": 9375
+  },
+  "interval": {
+    "from": "2026-10-30T02:58:29.000Z",
+    "until": "2026-10-30T03:11:41.000Z"
+  },
+  "last_visible_widget": {
+    "line": 7715,
+    "at": "2026-10-30T02:59:18.704Z",
+    "kind": "widget",
+    "connection": 2,
+    "probe": 0,
+    "window": "4662058",
+    "widget": "69212272",
+    "pid": "33272",
+    "visible": 1,
+    "rect": "245,95,1919,979",
+    "foreground": "4662058",
+    "minimized": 0
+  },
+  "first_failed_probe": [
+    {
+      "line": 7941,
+      "at": "2026-10-30T03:06:07.425Z",
+      "kind": "widget",
+      "connection": 12,
+      "probe": 0,
+      "window": "4662058",
+      "widget": "34676444",
+      "pid": "33272",
+      "visible": 0,
+      "rect": "360,49,1840,93",
+      "foreground": "4662058",
+      "minimized": 0
+    },
+    {
+      "line": 7942,
+      "at": "2026-10-30T03:06:07.426Z",
+      "kind": "widget",
+      "connection": 12,
+      "probe": 0,
+      "window": "4662058",
+      "widget": "598126",
+      "pid": "33272",
+      "visible": 0,
+      "rect": "1099,93,1100,94",
+      "foreground": "4662058",
+      "minimized": 0
+    }
+  ],
+  "visibility_observation_bracket_seconds": 408.721,
+  "first_hidden_failure": {
+    "line": 7962,
+    "at": "2026-10-30T03:06:08.675Z",
+    "kind": "failure",
+    "type": "render_widget_hidden",
+    "connection": 12
+  },
+  "observed_windows": [
+    "4662058"
+  ],
+  "observed_pids": [
+    "33272"
+  ],
+  "observed_widgets": [
+    "34676444",
+    "598126",
+    "69212272"
+  ],
+  "quiet_interval": {
+    "from_exclusive": "2026-10-30T03:01:08.069Z",
+    "until_exclusive": "2026-10-30T03:06:06.441Z",
+    "line_count": 1,
+    "discovery_count": 0
+  },
+  "identity_field_line_count": 0,
+  "cdp_summary": {
+    "connection_blocks": 48,
+    "send_count": 493,
+    "ack_count": 493,
+    "timeout_count": 0,
+    "page_navigate_send_count": 0
+  },
+  "connections": [
+    {
+      "index": 1,
+      "from_line": 7663,
+      "to_line": 7690,
+      "at": "2026-10-30T02:58:29.339Z",
+      "end_at": "2026-10-30T02:58:34.390Z",
+      "domain_tools": [
+        "boss_greet"
+      ],
+      "session_tags": [
+        "149145c9c0"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [
+        {
+          "at": "2026-10-30T02:58:29.830Z",
+          "line": 7677,
+          "method": "Input.dispatchMouseEvent",
+          "event": "mouseWheel"
+        }
+      ],
+      "native": [
+        {
+          "line": 7686,
+          "at": "2026-10-30T02:58:32.728Z",
+          "kind": "native",
+          "connection": 1,
+          "op": "click",
+          "ok": 1
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "from_line": 7697,
+      "to_line": 7729,
+      "at": "2026-10-30T02:59:18.042Z",
+      "end_at": "2026-10-30T02:59:21.748Z",
+      "domain_tools": [
+        "boss_send_to"
+      ],
+      "session_tags": [
+        "1f03ab8ab6"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [
+        {
+          "at": "2026-10-30T02:59:21.231Z",
+          "line": 7721,
+          "method": "Input.dispatchKeyEvent",
+          "event": "-"
+        },
+        {
+          "at": "2026-10-30T02:59:21.234Z",
+          "line": 7723,
+          "method": "Input.dispatchKeyEvent",
+          "event": "-"
+        }
+      ],
+      "native": [
+        {
+          "line": 7716,
+          "at": "2026-10-30T02:59:19.625Z",
+          "kind": "native",
+          "connection": 2,
+          "op": "click",
+          "ok": 1
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "from_line": 7731,
+      "to_line": 7750,
+      "at": "2026-10-30T02:59:21.750Z",
+      "end_at": "2026-10-30T02:59:39.406Z",
+      "domain_tools": [
+        "boss_overlay_inspect"
+      ],
+      "session_tags": [
+        "3fa27ea8a6"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 0,
+      "input_events": [],
+      "native": []
+    },
+    {
+      "index": 4,
+      "from_line": 7752,
+      "to_line": 7773,
+      "at": "2026-10-30T02:59:39.410Z",
+      "end_at": "2026-10-30T02:59:40.128Z",
+      "domain_tools": [
+        "boss_send_to"
+      ],
+      "session_tags": [
+        "565a5e2c3f"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 0,
+      "input_events": [
+        {
+          "at": "2026-10-30T02:59:39.610Z",
+          "line": 7764,
+          "method": "Input.dispatchKeyEvent",
+          "event": "-"
+        },
+        {
+          "at": "2026-10-30T02:59:39.612Z",
+          "line": 7766,
+          "method": "Input.dispatchKeyEvent",
+          "event": "-"
+        }
+      ],
+      "native": []
+    },
+    {
+      "index": 5,
+      "from_line": 7779,
+      "to_line": 7799,
+      "at": "2026-10-30T02:59:43.208Z",
+      "end_at": "2026-10-30T02:59:43.953Z",
+      "domain_tools": [
+        "boss_open_chat"
+      ],
+      "session_tags": [
+        "f7bd4768d2"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 0,
+      "input_events": [
+        {
+          "at": "2026-10-30T02:59:43.425Z",
+          "line": 7791,
+          "method": "Input.dispatchKeyEvent",
+          "event": "-"
+        },
+        {
+          "at": "2026-10-30T02:59:43.446Z",
+          "line": 7793,
+          "method": "Input.dispatchKeyEvent",
+          "event": "-"
+        }
+      ],
+      "native": []
+    },
+    {
+      "index": 6,
+      "from_line": 7801,
+      "to_line": 7820,
+      "at": "2026-10-30T02:59:43.961Z",
+      "end_at": "2026-10-30T03:00:00.941Z",
+      "domain_tools": [
+        "boss_overlay_inspect"
+      ],
+      "session_tags": [
+        "ba820f4750"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 0,
+      "input_events": [],
+      "native": []
+    },
+    {
+      "index": 7,
+      "from_line": 7822,
+      "to_line": 7838,
+      "at": "2026-10-30T03:00:00.946Z",
+      "end_at": "2026-10-30T03:00:22.946Z",
+      "domain_tools": [
+        "boss_overlay_inspect"
+      ],
+      "session_tags": [
+        "058aa03f1e"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [],
+      "native": []
+    },
+    {
+      "index": 8,
+      "from_line": 7844,
+      "to_line": 7864,
+      "at": "2026-10-30T03:00:26.655Z",
+      "end_at": "2026-10-30T03:00:27.972Z",
+      "domain_tools": [
+        "boss_open_chat"
+      ],
+      "session_tags": [
+        "9315c59c42"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 0,
+      "input_events": [
+        {
+          "at": "2026-10-30T03:00:26.871Z",
+          "line": 7856,
+          "method": "Input.dispatchKeyEvent",
+          "event": "-"
+        },
+        {
+          "at": "2026-10-30T03:00:26.879Z",
+          "line": 7858,
+          "method": "Input.dispatchKeyEvent",
+          "event": "-"
+        }
+      ],
+      "native": []
+    },
+    {
+      "index": 9,
+      "from_line": 7866,
+      "to_line": 7885,
+      "at": "2026-10-30T03:00:27.973Z",
+      "end_at": "2026-10-30T03:00:47.859Z",
+      "domain_tools": [
+        "boss_overlay_inspect"
+      ],
+      "session_tags": [
+        "056e46eeb8"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 0,
+      "input_events": [],
+      "native": []
+    },
+    {
+      "index": 10,
+      "from_line": 7887,
+      "to_line": 7902,
+      "at": "2026-10-30T03:00:47.860Z",
+      "end_at": "2026-10-30T03:01:03.394Z",
+      "domain_tools": [
+        "boss_overlay_inspect"
+      ],
+      "session_tags": [
+        "9cf4365bd3"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [],
+      "native": []
+    },
+    {
+      "index": 11,
+      "from_line": 7909,
+      "to_line": 7921,
+      "at": "2026-10-30T03:01:07.974Z",
+      "end_at": "2026-10-30T03:01:08.067Z",
+      "domain_tools": [
+        "boss_goto"
+      ],
+      "session_tags": [
+        "e43d8ee4c8"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 0,
+      "input_events": [],
+      "native": []
+    },
+    {
+      "index": 12,
+      "from_line": 7927,
+      "to_line": 7964,
+      "at": "2026-10-30T03:06:06.747Z",
+      "end_at": "2026-10-30T03:06:08.676Z",
+      "domain_tools": [
+        "boss_goto"
+      ],
+      "session_tags": [
+        "1373ead119"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [],
+      "native": [
+        {
+          "line": 7961,
+          "at": "2026-10-30T03:06:08.674Z",
+          "kind": "native",
+          "connection": 12,
+          "op": "click",
+          "ok": 0
+        }
+      ]
+    },
+    {
+      "index": 13,
+      "from_line": 7966,
+      "to_line": 7985,
+      "at": "2026-10-30T03:06:08.683Z",
+      "end_at": "2026-10-30T03:06:30.574Z",
+      "domain_tools": [
+        "boss_overlay_inspect"
+      ],
+      "session_tags": [
+        "35a054ebc6"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 0,
+      "input_events": [],
+      "native": []
+    },
+    {
+      "index": 14,
+      "from_line": 7987,
+      "to_line": 8002,
+      "at": "2026-10-30T03:06:30.582Z",
+      "end_at": "2026-10-30T03:06:46.282Z",
+      "domain_tools": [
+        "boss_overlay_inspect"
+      ],
+      "session_tags": [
+        "fe9c722058"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [],
+      "native": []
+    },
+    {
+      "index": 15,
+      "from_line": 8009,
+      "to_line": 8053,
+      "at": "2026-10-30T03:06:49.028Z",
+      "end_at": "2026-10-30T03:06:50.925Z",
+      "domain_tools": [
+        "boss_goto"
+      ],
+      "session_tags": [
+        "fcf1857fce"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [],
+      "native": [
+        {
+          "line": 8050,
+          "at": "2026-10-30T03:06:50.923Z",
+          "kind": "native",
+          "connection": 15,
+          "op": "click",
+          "ok": 0
+        }
+      ]
+    },
+    {
+      "index": 16,
+      "from_line": 8055,
+      "to_line": 8074,
+      "at": "2026-10-30T03:06:50.933Z",
+      "end_at": "2026-10-30T03:07:00.176Z",
+      "domain_tools": [
+        "boss_overlay_inspect"
+      ],
+      "session_tags": [
+        "f460271dc8"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 0,
+      "input_events": [],
+      "native": []
+    },
+    {
+      "index": 17,
+      "from_line": 8076,
+      "to_line": 8091,
+      "at": "2026-10-30T03:07:00.178Z",
+      "end_at": "2026-10-30T03:07:14.520Z",
+      "domain_tools": [
+        "boss_overlay_inspect"
+      ],
+      "session_tags": [
+        "4b5f431fc6"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [],
+      "native": []
+    },
+    {
+      "index": 18,
+      "from_line": 8098,
+      "to_line": 8110,
+      "at": "2026-10-30T03:07:33.309Z",
+      "end_at": "2026-10-30T03:07:33.403Z",
+      "domain_tools": [
+        "boss_goto"
+      ],
+      "session_tags": [
+        "9f92544af0"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 0,
+      "input_events": [],
+      "native": []
+    },
+    {
+      "index": 19,
+      "from_line": 8116,
+      "to_line": 8162,
+      "at": "2026-10-30T03:07:36.498Z",
+      "end_at": "2026-10-30T03:07:38.581Z",
+      "domain_tools": [
+        "boss_list_jobs"
+      ],
+      "session_tags": [
+        "97d561b127"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [],
+      "native": [
+        {
+          "line": 8159,
+          "at": "2026-10-30T03:07:38.579Z",
+          "kind": "native",
+          "connection": 19,
+          "op": "click",
+          "ok": 0
+        }
+      ]
+    },
+    {
+      "index": 20,
+      "from_line": 8164,
+      "to_line": 8214,
+      "at": "2026-10-30T03:07:39.598Z",
+      "end_at": "2026-10-30T03:07:41.656Z",
+      "domain_tools": [
+        "boss_list_jobs"
+      ],
+      "session_tags": [
+        "d176f89836"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [],
+      "native": [
+        {
+          "line": 8211,
+          "at": "2026-10-30T03:07:41.653Z",
+          "kind": "native",
+          "connection": 20,
+          "op": "click",
+          "ok": 0
+        }
+      ]
+    },
+    {
+      "index": 21,
+      "from_line": 8216,
+      "to_line": 8266,
+      "at": "2026-10-30T03:07:43.669Z",
+      "end_at": "2026-10-30T03:07:46.006Z",
+      "domain_tools": [
+        "boss_list_jobs"
+      ],
+      "session_tags": [
+        "d48b92ad6c"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [],
+      "native": [
+        {
+          "line": 8263,
+          "at": "2026-10-30T03:07:46.004Z",
+          "kind": "native",
+          "connection": 21,
+          "op": "click",
+          "ok": 0
+        }
+      ]
+    },
+    {
+      "index": 22,
+      "from_line": 8268,
+      "to_line": 8287,
+      "at": "2026-10-30T03:07:46.009Z",
+      "end_at": "2026-10-30T03:07:53.430Z",
+      "domain_tools": [
+        "boss_overlay_inspect"
+      ],
+      "session_tags": [
+        "fff0df5ce8"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 0,
+      "input_events": [],
+      "native": []
+    },
+    {
+      "index": 23,
+      "from_line": 8289,
+      "to_line": 8304,
+      "at": "2026-10-30T03:07:53.434Z",
+      "end_at": "2026-10-30T03:08:04.065Z",
+      "domain_tools": [
+        "boss_overlay_inspect"
+      ],
+      "session_tags": [
+        "d6deb99bb3"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [],
+      "native": []
+    },
+    {
+      "index": 24,
+      "from_line": 8311,
+      "to_line": 8357,
+      "at": "2026-10-30T03:08:06.810Z",
+      "end_at": "2026-10-30T03:08:08.820Z",
+      "domain_tools": [
+        "boss_filter_options"
+      ],
+      "session_tags": [
+        "03eaacf761"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [],
+      "native": [
+        {
+          "line": 8354,
+          "at": "2026-10-30T03:08:08.818Z",
+          "kind": "native",
+          "connection": 24,
+          "op": "click",
+          "ok": 0
+        }
+      ]
+    },
+    {
+      "index": 25,
+      "from_line": 8359,
+      "to_line": 8409,
+      "at": "2026-10-30T03:08:09.827Z",
+      "end_at": "2026-10-30T03:08:11.869Z",
+      "domain_tools": [
+        "boss_filter_options"
+      ],
+      "session_tags": [
+        "17c52253d5"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [],
+      "native": [
+        {
+          "line": 8406,
+          "at": "2026-10-30T03:08:11.866Z",
+          "kind": "native",
+          "connection": 25,
+          "op": "click",
+          "ok": 0
+        }
+      ]
+    },
+    {
+      "index": 26,
+      "from_line": 8411,
+      "to_line": 8461,
+      "at": "2026-10-30T03:08:13.877Z",
+      "end_at": "2026-10-30T03:08:15.989Z",
+      "domain_tools": [
+        "boss_filter_options"
+      ],
+      "session_tags": [
+        "e1af88ea56"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [],
+      "native": [
+        {
+          "line": 8458,
+          "at": "2026-10-30T03:08:15.987Z",
+          "kind": "native",
+          "connection": 26,
+          "op": "click",
+          "ok": 0
+        }
+      ]
+    },
+    {
+      "index": 27,
+      "from_line": 8463,
+      "to_line": 8482,
+      "at": "2026-10-30T03:08:15.990Z",
+      "end_at": "2026-10-30T03:08:21.336Z",
+      "domain_tools": [
+        "boss_overlay_inspect"
+      ],
+      "session_tags": [
+        "7d7b338b3f"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 0,
+      "input_events": [],
+      "native": []
+    },
+    {
+      "index": 28,
+      "from_line": 8484,
+      "to_line": 8500,
+      "at": "2026-10-30T03:08:21.342Z",
+      "end_at": "2026-10-30T03:08:31.028Z",
+      "domain_tools": [
+        "boss_overlay_inspect"
+      ],
+      "session_tags": [
+        "7382599667"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [],
+      "native": []
+    },
+    {
+      "index": 29,
+      "from_line": 8506,
+      "to_line": 8552,
+      "at": "2026-10-30T03:09:24.734Z",
+      "end_at": "2026-10-30T03:09:27.126Z",
+      "domain_tools": [
+        "boss_filter_options"
+      ],
+      "session_tags": [
+        "b691bac639"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [],
+      "native": [
+        {
+          "line": 8549,
+          "at": "2026-10-30T03:09:27.124Z",
+          "kind": "native",
+          "connection": 29,
+          "op": "click",
+          "ok": 0
+        }
+      ]
+    },
+    {
+      "index": 30,
+      "from_line": 8554,
+      "to_line": 8604,
+      "at": "2026-10-30T03:09:27.707Z",
+      "end_at": "2026-10-30T03:09:29.799Z",
+      "domain_tools": [
+        "boss_filter_options"
+      ],
+      "session_tags": [
+        "20a95edce8"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [],
+      "native": [
+        {
+          "line": 8601,
+          "at": "2026-10-30T03:09:29.798Z",
+          "kind": "native",
+          "connection": 30,
+          "op": "click",
+          "ok": 0
+        }
+      ]
+    },
+    {
+      "index": 31,
+      "from_line": 8606,
+      "to_line": 8656,
+      "at": "2026-10-30T03:09:31.835Z",
+      "end_at": "2026-10-30T03:09:33.887Z",
+      "domain_tools": [
+        "boss_filter_options"
+      ],
+      "session_tags": [
+        "d94ae9724a"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [],
+      "native": [
+        {
+          "line": 8653,
+          "at": "2026-10-30T03:09:33.884Z",
+          "kind": "native",
+          "connection": 31,
+          "op": "click",
+          "ok": 0
+        }
+      ]
+    },
+    {
+      "index": 32,
+      "from_line": 8658,
+      "to_line": 8677,
+      "at": "2026-10-30T03:09:33.893Z",
+      "end_at": "2026-10-30T03:09:45.573Z",
+      "domain_tools": [
+        "boss_overlay_inspect"
+      ],
+      "session_tags": [
+        "843e07072a"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 0,
+      "input_events": [],
+      "native": []
+    },
+    {
+      "index": 33,
+      "from_line": 8679,
+      "to_line": 8695,
+      "at": "2026-10-30T03:09:45.578Z",
+      "end_at": "2026-10-30T03:09:56.950Z",
+      "domain_tools": [
+        "boss_overlay_inspect"
+      ],
+      "session_tags": [
+        "9adeacdde0"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [],
+      "native": []
+    },
+    {
+      "index": 34,
+      "from_line": 8701,
+      "to_line": 8753,
+      "at": "2026-10-30T03:10:01.072Z",
+      "end_at": "2026-10-30T03:10:03.403Z",
+      "domain_tools": [
+        "boss_resume_batch"
+      ],
+      "session_tags": [
+        "23fd348569"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [],
+      "native": [
+        {
+          "line": 8748,
+          "at": "2026-10-30T03:10:03.393Z",
+          "kind": "native",
+          "connection": 34,
+          "op": "click",
+          "ok": 0
+        }
+      ]
+    },
+    {
+      "index": 35,
+      "from_line": 8755,
+      "to_line": 8811,
+      "at": "2026-10-30T03:10:04.414Z",
+      "end_at": "2026-10-30T03:10:08.771Z",
+      "domain_tools": [
+        "boss_resume_batch"
+      ],
+      "session_tags": [
+        "17b53cb59b"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [],
+      "native": [
+        {
+          "line": 8806,
+          "at": "2026-10-30T03:10:08.768Z",
+          "kind": "native",
+          "connection": 35,
+          "op": "click",
+          "ok": 0
+        }
+      ]
+    },
+    {
+      "index": 36,
+      "from_line": 8813,
+      "to_line": 8879,
+      "at": "2026-10-30T03:10:10.802Z",
+      "end_at": "2026-10-30T03:10:16.336Z",
+      "domain_tools": [
+        "boss_resume_batch"
+      ],
+      "session_tags": [
+        "f513e65e0f"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [
+        {
+          "at": "2026-10-30T03:10:13.761Z",
+          "line": 8837,
+          "method": "Input.dispatchMouseEvent",
+          "event": "mousePressed"
+        },
+        {
+          "at": "2026-10-30T03:10:13.767Z",
+          "line": 8839,
+          "method": "Input.dispatchMouseEvent",
+          "event": "mouseReleased"
+        }
+      ],
+      "native": [
+        {
+          "line": 8874,
+          "at": "2026-10-30T03:10:16.330Z",
+          "kind": "native",
+          "connection": 36,
+          "op": "wheel",
+          "ok": 0
+        }
+      ]
+    },
+    {
+      "index": 37,
+      "from_line": 8881,
+      "to_line": 8900,
+      "at": "2026-10-30T03:10:16.343Z",
+      "end_at": "2026-10-30T03:10:25.736Z",
+      "domain_tools": [
+        "boss_overlay_inspect"
+      ],
+      "session_tags": [
+        "c4d1144e9c"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 0,
+      "input_events": [],
+      "native": []
+    },
+    {
+      "index": 38,
+      "from_line": 8902,
+      "to_line": 8925,
+      "at": "2026-10-30T03:10:25.742Z",
+      "end_at": "2026-10-30T03:10:28.315Z",
+      "domain_tools": [
+        "boss_overlay_dismiss"
+      ],
+      "session_tags": [
+        "22c436b332"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 0,
+      "input_events": [
+        {
+          "at": "2026-10-30T03:10:27.936Z",
+          "line": 8920,
+          "method": "Input.dispatchMouseEvent",
+          "event": "mousePressed"
+        },
+        {
+          "at": "2026-10-30T03:10:27.937Z",
+          "line": 8922,
+          "method": "Input.dispatchMouseEvent",
+          "event": "mouseReleased"
+        }
+      ],
+      "native": []
+    },
+    {
+      "index": 39,
+      "from_line": 8927,
+      "to_line": 8946,
+      "at": "2026-10-30T03:10:28.322Z",
+      "end_at": "2026-10-30T03:10:33.779Z",
+      "domain_tools": [
+        "boss_overlay_inspect"
+      ],
+      "session_tags": [
+        "45da070dd5"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 0,
+      "input_events": [],
+      "native": []
+    },
+    {
+      "index": 40,
+      "from_line": 8948,
+      "to_line": 9011,
+      "at": "2026-10-30T03:10:33.786Z",
+      "end_at": "2026-10-30T03:10:39.419Z",
+      "domain_tools": [
+        "boss_resume_batch"
+      ],
+      "session_tags": [
+        "1d1c0bf7ce"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [
+        {
+          "at": "2026-10-30T03:10:36.764Z",
+          "line": 8968,
+          "method": "Input.dispatchMouseEvent",
+          "event": "mousePressed"
+        },
+        {
+          "at": "2026-10-30T03:10:36.793Z",
+          "line": 8970,
+          "method": "Input.dispatchMouseEvent",
+          "event": "mouseReleased"
+        }
+      ],
+      "native": [
+        {
+          "line": 9005,
+          "at": "2026-10-30T03:10:39.407Z",
+          "kind": "native",
+          "connection": 40,
+          "op": "wheel",
+          "ok": 0
+        }
+      ]
+    },
+    {
+      "index": 41,
+      "from_line": 9017,
+      "to_line": 9079,
+      "at": "2026-10-30T03:10:43.557Z",
+      "end_at": "2026-10-30T03:10:46.732Z",
+      "domain_tools": [
+        "boss_resume_batch"
+      ],
+      "session_tags": [
+        "14db9b4a88"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [
+        {
+          "at": "2026-10-30T03:10:44.010Z",
+          "line": 9034,
+          "method": "Input.dispatchKeyEvent",
+          "event": "-"
+        },
+        {
+          "at": "2026-10-30T03:10:44.013Z",
+          "line": 9036,
+          "method": "Input.dispatchKeyEvent",
+          "event": "-"
+        }
+      ],
+      "native": [
+        {
+          "line": 9074,
+          "at": "2026-10-30T03:10:46.728Z",
+          "kind": "native",
+          "connection": 41,
+          "op": "click",
+          "ok": 0
+        }
+      ]
+    },
+    {
+      "index": 42,
+      "from_line": 9081,
+      "to_line": 9137,
+      "at": "2026-10-30T03:10:47.905Z",
+      "end_at": "2026-10-30T03:10:52.077Z",
+      "domain_tools": [
+        "boss_resume_batch"
+      ],
+      "session_tags": [
+        "db00b73ae7"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [],
+      "native": [
+        {
+          "line": 9132,
+          "at": "2026-10-30T03:10:52.074Z",
+          "kind": "native",
+          "connection": 42,
+          "op": "click",
+          "ok": 0
+        }
+      ]
+    },
+    {
+      "index": 43,
+      "from_line": 9139,
+      "to_line": 9207,
+      "at": "2026-10-30T03:10:54.087Z",
+      "end_at": "2026-10-30T03:11:00.521Z",
+      "domain_tools": [
+        "boss_resume_batch"
+      ],
+      "session_tags": [
+        "34a890adf2"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [
+        {
+          "at": "2026-10-30T03:10:57.134Z",
+          "line": 9163,
+          "method": "Input.dispatchMouseEvent",
+          "event": "mousePressed"
+        },
+        {
+          "at": "2026-10-30T03:10:57.141Z",
+          "line": 9165,
+          "method": "Input.dispatchMouseEvent",
+          "event": "mouseReleased"
+        }
+      ],
+      "native": [
+        {
+          "line": 9202,
+          "at": "2026-10-30T03:11:00.517Z",
+          "kind": "native",
+          "connection": 43,
+          "op": "wheel",
+          "ok": 0
+        }
+      ]
+    },
+    {
+      "index": 44,
+      "from_line": 9209,
+      "to_line": 9228,
+      "at": "2026-10-30T03:11:00.526Z",
+      "end_at": "2026-10-30T03:11:11.158Z",
+      "domain_tools": [
+        "boss_overlay_inspect"
+      ],
+      "session_tags": [
+        "bed9bc6ae4"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 0,
+      "input_events": [],
+      "native": []
+    },
+    {
+      "index": 45,
+      "from_line": 9230,
+      "to_line": 9245,
+      "at": "2026-10-30T03:11:11.162Z",
+      "end_at": "2026-10-30T03:11:23.042Z",
+      "domain_tools": [
+        "boss_overlay_inspect"
+      ],
+      "session_tags": [
+        "6a1dc3c865"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [],
+      "native": []
+    },
+    {
+      "index": 46,
+      "from_line": 9247,
+      "to_line": 9262,
+      "at": "2026-10-30T03:11:23.043Z",
+      "end_at": "2026-10-30T03:11:28.113Z",
+      "domain_tools": [
+        "boss_overlay_dismiss"
+      ],
+      "session_tags": [
+        "cf6750a3c6"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [],
+      "native": []
+    },
+    {
+      "index": 47,
+      "from_line": 9264,
+      "to_line": 9279,
+      "at": "2026-10-30T03:11:28.114Z",
+      "end_at": "2026-10-30T03:11:34.456Z",
+      "domain_tools": [
+        "boss_overlay_inspect"
+      ],
+      "session_tags": [
+        "bbb5be6b4e"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [],
+      "native": []
+    },
+    {
+      "index": 48,
+      "from_line": 9281,
+      "to_line": 9344,
+      "at": "2026-10-30T03:11:34.461Z",
+      "end_at": "2026-10-30T03:11:40.009Z",
+      "domain_tools": [
+        "boss_resume_batch"
+      ],
+      "session_tags": [
+        "4ce6710fb1"
+      ],
+      "attach_count": 1,
+      "detach_count": 1,
+      "activate_count": 1,
+      "input_events": [
+        {
+          "at": "2026-10-30T03:11:38.519Z",
+          "line": 9301,
+          "method": "Input.dispatchMouseEvent",
+          "event": "mousePressed"
+        },
+        {
+          "at": "2026-10-30T03:11:38.520Z",
+          "line": 9303,
+          "method": "Input.dispatchMouseEvent",
+          "event": "mouseReleased"
+        }
+      ],
+      "native": [
+        {
+          "line": 9338,
+          "at": "2026-10-30T03:11:39.996Z",
+          "kind": "native",
+          "connection": 48,
+          "op": "wheel",
+          "ok": 0
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "Session tags are SHA256(sessionId) prefixes, not targetId or HWND.",
+    "No targetId/browser_target_ref/browser instance values or target-HWND map appear in the incident-date log.",
+    "No HWND observations between the last healthy send-to click and the first failure probe.",
+    "Current repository source explains control flow but the incident payload was not byte-compared this review.",
+    "No candidate messages, names, response bodies or credentials included."
+  ]
+}

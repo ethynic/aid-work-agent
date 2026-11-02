@@ -5,6 +5,16 @@ import type { NativeInputSession } from '../src/main/input/WinMouseClicker.js'
 
 const VP = { width: 1917, height: 1905 }
 
+test('viewport changed after observation: refuse without native input or activation-recovery misclassification', async () => {
+  const requests: object[] = []
+  const clicker = new WinMouseClicker({ cdpPort: 9333, beforeInput: async () => {},
+    verifyObservation: async () => { throw new WinClickError('STALE_OBSERVATION: page viewport changed; input refused', 2) },
+    nativeOpener: async () => recordingSession(requests) })
+  await assert.rejects(clicker.click({ x: 10, y: 10 }, VP), error => error instanceof WinClickError
+    && error.exitCode === 2 && error.message === 'STALE_OBSERVATION: page viewport changed; input refused')
+  assert.deepEqual(requests, [])
+})
+
 /** 记录 perform 请求的 fake 原生会话（默认成功） */
 function recordingSession(requests: object[], impl?: (r: object) => Promise<{ output: string[] }>): NativeInputSession {
   return {

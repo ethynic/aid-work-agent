@@ -7,6 +7,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261102-1037 | BOSS沟通混排与搜索定位修复 | ✅ 已完成开发；广告混排、搜索及完整姓名验证修复，独测/CR与本机回归通过。 | [原设计§10.6.1](design/recruiting/boss-resume-assistant-native-cdp-design.md#1061-沟通页混排与搜索定位修正2026-11-02) | [原计划§17](plans/recruiting/boss-resume-assistant-native-cdp-dev-plan.md#17-沟通页混排与搜索定位修正2026-11-02) |
 | 20261023-1226 | wecom CLI 三工具与持续恢复 | ✅ 已完成开发；打包兼容复核完成，旧包验签/MCP、长路径及CR通过。 | [设计](design/wecom/wecom-cli-design.md#12-持续监控端到端收敛2026-10-27) | [开发计划](plans/plan-wecom-cli-group-chat-experiment.md) |
 | 20261013-1434 | 结构化提问交互（ask_user 提问卡片） | ✅ 已完成开发；选项焦点白屏已修，独立48项/CR、构建及原卡片实测通过。 | [设计](system/design-ask-user-interactive-question.md) | [实施计划](plans/plan-ask-user-interactive-question.md) |
 | 20261026-1744 | 测试入口隔离与Runtime断言收尾 | ✅ 已完成开发；隔离准入及自建库清理证明完成，旧断言校准，独测/CR通过。 | [设计](design/devtools/test-database-isolation-design.md) | [计划](plans/plan-test-database-isolation-runtime-assertions.md) |
@@ -53,6 +54,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |------|------|------|---------|---------|
+| 20261031-1800 | BOSS普通物理输入解除widget依赖 | ✅ 已完成开发；本机导航/筛选/读简历通过，搜索修复另见对应条目，未部署。 | [原设计§10.11](design/recruiting/boss-resume-assistant-native-cdp-design.md#1011-解除物理输入对-legacy-widget-的依赖2026-10-31) / [复盘](incidents/boss-agent2-widget-stuck-hidden-20261030.md) | [原计划§16](plans/recruiting/boss-resume-assistant-native-cdp-dev-plan.md#16-普通物理输入内容区定位修正2026-10-31) |
 | 20261022-1956 | Agent 通用持久化休眠与自动唤醒 | ✅ 已完成开发：恢复与容量边界修复，独立测试及CR通过，未部署。 | [设计](system/agent-runner-durable-sleep-design.md) | [开发计划](plans/plan-agent-runner-durable-sleep.md) |
 | 20261012-1544 | trace 观测 span 计时精确化 | ✅ 已完成开发（提交与部署待授权）：span 改用引擎侧墙钟计时并立即闭合，失败 LLM 与恢复路径补 span；历史数据不回填。 | — | [开发计划](plans/traceobs-timing-precision.md) |
 | 20261010-1638 | 统一通知基础设施与 Web 推送 | ✅ 已完成开发：统一通知底座与Web推送通过内外部终审，真实到达待环境验收。 | [统一设计](system/notification-infrastructure-design.md) / [Web设计](system/web-task-push-notification-design.md) | [开发计划](plans/plan-web-task-push-notification.md) |

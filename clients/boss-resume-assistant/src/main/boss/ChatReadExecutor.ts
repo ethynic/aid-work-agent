@@ -17,7 +17,7 @@
  * - 多副本坑：同一消息文本同时存在于左列表预览与聊天气泡，必须限定 doc[0] +
  *   `.conversation-message` 子树；LIST_MAX_X=850 几何分界在聊天面板失效（面板起点 x=548）。
  * - 未读徽章：左列表 `SPAN.badge-count > #text` 纯数字，**含视口外全量可读**（列表未虚拟化）；
- *   徽章向上找 bounds 高 60~100 的 DIV 祖先 = 会话项（.geek-item），项内 x≈264=姓名、
+ *   徽章必须位于 user-list 下真实 geek-item 内，姓名读取 geek-name 字段；
  *   x≈497=时间、第二行 x≈264=最后一条预览（可能拆成 "[送达]" + 正文两个同排文本节点）。
  * - 左导航「沟通」总徽章（如 214）：x<188 区域 trim 后**全等**匹配 /^\d+$/ 的可见文本——
  *   禁用 includes（会命中几十个 SVG path 的 d 属性数据，同样进了 strings 表）。
@@ -28,6 +28,7 @@ import {
   indexedValues,
   parentMapOf,
 } from './domSnapshot.js'
+import { snapshotNodeVisible } from './SnapshotVisibility.js'
 
 export interface ChatMessage {
   /** 发送方：me=我方（item-myself）/ them=对方（item-friend）/ system=系统卡片（item-system） */
@@ -75,10 +76,6 @@ const MAX_GROUP_CLIMB = 16
 const TIME_ROW_MAX_HEIGHT = 24
 /** 时间行几何判定：行宽 ≥ 消息区宽的比例（真机 620/680≈0.91） */
 const TIME_ROW_MIN_WIDTH_RATIO = 0.8
-/** 会话项 DIV 高度区间（真机 geek-item 高 74） */
-const ITEM_HEIGHT_RANGE: readonly [number, number] = [60, 100]
-/** 姓名长度上限（会话项首行短文本过滤，职位名如「PHP 开发工程师」11 字被排除） */
-const ITEM_NAME_MAX_CHARS = 8
 /** 未读项时间列的 x 下限（真机时间在 x≈497 右列；姓名 x≈264 / 职位 x≈313） */
 const ITEM_TIME_MIN_X = 450
 /** 未读项预览列的 x 区间（真机 x≈264；[送达] 前缀可能拆成独立文本节点同排拼接） */
@@ -87,8 +84,6 @@ const ITEM_PREVIEW_X_RANGE: readonly [number, number] = [240, 320]
 const NAV_MAX_X = 188
 /** 首行内视为同一行的 y 容差（真机姓名 y=445 / 职位+时间 y=447 同排） */
 const ROW_Y_TOLERANCE = 6
-/** 会话项徽章向上找 DIV 祖先的层数（真机 #text→SPAN→DIV 名字区→geek-item 约 4 层） */
-const MAX_ITEM_CLIMB = 12
 
 /**
  * 时间行文本判定：真机消息组的时间分隔行为「MM-DD HH:MM」（如 "08-25 18:13"）；
@@ -343,10 +338,17 @@ function readMessages(ctx: DocCtx, areaNode: number): ChatMessage[] {
   })
 }
 
-/** 头部识别带 .base-info-single-container 内 y 最小、x 最小的文本 = 联系人姓名（真机姓名在最左上） */
+/** 头部优先合并唯一 name-box 中的姓名；旧版无该字段时读取原最左上文本。 */
 function readContactName(ctx: DocCtx): string {
-  const { nodeIndex } = findClassDiv(ctx, 'base-info-single-container')
-  if (nodeIndex < 0) return ''
+  const { nodeIndex, count } = findClassDiv(ctx, 'base-info-single-container')
+  if (count !== 1) return ''
+  // 实测姓名高亮会拆为普通文本 + hightrare 子节点，不能只读最左文本。
+  const nameBoxes = [...ctx.classes.keys()].filter((n) => hasClass(ctx, n, 'name-box') && isWithin(ctx, n, nodeIndex)
+    && snapshotNodeVisible(ctx.snapshot, 0, n))
+  if (nameBoxes.length > 1) return ''
+  if (nameBoxes.length === 1) {
+    return textsInSubtree(ctx, nameBoxes[0]!).sort((a, b) => a.nodeIndex - b.nodeIndex).map((t) => t.text).join('').trim()
+  }
   const texts = textsInSubtree(ctx, nodeIndex)
   if (texts.length === 0) return ''
   const minY = texts.reduce((m, t) => Math.min(m, t.bounds[1]), Infinity)
@@ -355,32 +357,34 @@ function readContactName(ctx: DocCtx): string {
   return topRow[0]!.text.trim()
 }
 
-/** 未读会话项定位：badge-count（子树纯数字文本）→ 向上找高 60~100 的 DIV 祖先 */
+/** 沟通列表允许广告和置顶分组；只识别实测的业务条目，不按位置/高度推断。 */
+function hasClass(ctx: DocCtx, node: number, token: string): boolean {
+  return ctx.classes.get(node)?.split(/\s+/).includes(token) ?? false
+}
+
+function conversationItemNodes(ctx: DocCtx): number[] {
+  const roots = [...ctx.classes.keys()].filter((n) => {
+    const b = boundsOf(ctx, n)
+    return hasClass(ctx, n, 'user-list') && b && b[2] > 0 && b[3] > 0 && snapshotNodeVisible(ctx.snapshot, 0, n)
+  })
+  if (roots.length !== 1) return []
+  return [...ctx.classes.keys()].filter((n) => {
+    const b = boundsOf(ctx, n)
+    return hasClass(ctx, n, 'geek-item') && isWithin(ctx, n, roots[0]!)
+      && b && b[2] > 0 && b[3] > 0 && snapshotNodeVisible(ctx.snapshot, 0, n)
+  })
+}
+
+/** 未读徽章必须属于真实会话；广告内即使有数字徽章也不计入。 */
 function locateUnreadItems(ctx: DocCtx): Array<{ nodeIndex: number; count: number; bounds: [number, number, number, number] }> {
-  const out: Array<{ nodeIndex: number; count: number; bounds: [number, number, number, number] }> = []
-  for (const badgeNode of ctx.classes.keys()) {
-    if (!classContains(ctx, badgeNode, 'badge-count')) continue
-    // 徽章子树第一个可见文本须为纯数字（「新」「首充礼」等非数字徽章跳过）
-    const badgeTexts = textsInSubtree(ctx, badgeNode)
-    if (badgeTexts.length === 0) continue
-    const value = badgeTexts[0]!.text.trim()
-    if (!/^\d+$/.test(value)) continue
-    // 向上找 bounds 高 60~100 的 DIV 祖先 = 会话项（左导航「沟通」总徽章等无此祖先 → 跳过）
-    let cur: number | undefined = badgeNode
-    for (let i = 0; i < MAX_ITEM_CLIMB && cur !== undefined && ctx.parents; i++) {
-      const next = ctx.parents.get(cur)
-      if (next === undefined || next === cur) break
-      cur = next
-      const b = boundsOf(ctx, cur)
-      if (b && isDiv(ctx, cur) && b[3] >= ITEM_HEIGHT_RANGE[0] && b[3] <= ITEM_HEIGHT_RANGE[1]) {
-        if (!out.some((item) => item.nodeIndex === cur)) {
-          out.push({ nodeIndex: cur, count: Number(value), bounds: b })
-        }
-        break
-      }
-    }
-  }
-  return out
+  return conversationItemNodes(ctx).flatMap((nodeIndex) => {
+    const badges = [...ctx.classes.keys()].filter((n) => hasClass(ctx, n, 'badge-count') && isWithin(ctx, n, nodeIndex))
+    const values = badges.flatMap((n) => {
+      const text = textsInSubtree(ctx, n).map((t) => t.text.trim()).join('')
+      return /^\d+$/.test(text) && snapshotNodeVisible(ctx.snapshot, 0, n) ? [Number(text)] : []
+    })
+    return values.length === 1 ? [{ nodeIndex, count: values[0]!, bounds: boundsOf(ctx, nodeIndex)! }] : []
+  })
 }
 
 /** 会话项内可见文本（排除徽章子树——count 徽章文本不参与姓名/时间/预览解析） */
@@ -393,15 +397,13 @@ function itemTextsExcludingBadges(ctx: DocCtx, itemNode: number): TextNode[] {
   )
 }
 
-/** 项内姓名：y 最小行的 x 最小短文本（≤8 字；真机首行姓名 x≈264 在最左，职位名更长更靠右） */
+/** 姓名只取实测 geek-name 字段，置顶标签/职位/预览均不参与。 */
 function readItemName(ctx: DocCtx, itemNode: number): string | null {
-  const texts = itemTextsExcludingBadges(ctx, itemNode)
-  if (texts.length === 0) return null
-  const minY = texts.reduce((m, t) => Math.min(m, t.bounds[1]), Infinity)
-  const topRow = texts.filter((t) => t.bounds[1] <= minY + ROW_Y_TOLERANCE && t.text.trim().length <= ITEM_NAME_MAX_CHARS)
-  if (topRow.length === 0) return null
-  topRow.sort((a, b) => a.bounds[0] - b.bounds[0])
-  return topRow[0]!.text.trim()
+  const fields = [...ctx.classes.keys()].filter((n) => hasClass(ctx, n, 'geek-name') && isWithin(ctx, n, itemNode)
+    && snapshotNodeVisible(ctx.snapshot, 0, n))
+  if (fields.length !== 1) return null
+  const text = textsInSubtree(ctx, fields[0]!).map((t) => t.text.trim()).join('')
+  return text || null
 }
 
 /** 项内时间：右列（x≥450，真机 x≈497）y 最小的文本（真机为含换行缩进的 " 10:42"，trim） */
@@ -419,7 +421,8 @@ function readItemTime(ctx: DocCtx, itemNode: number): string | undefined {
 function readItemPreview(ctx: DocCtx, itemNode: number): string | undefined {
   const texts = itemTextsExcludingBadges(ctx, itemNode)
   if (texts.length === 0) return undefined
-  const minY = texts.reduce((m, t) => Math.min(m, t.bounds[1]), Infinity)
+  const nameField = [...ctx.classes.keys()].find((n) => hasClass(ctx, n, 'geek-name') && isWithin(ctx, n, itemNode))
+  const minY = nameField === undefined ? Infinity : Math.min(...textsInSubtree(ctx, nameField).map((t) => t.bounds[1]))
   const lowerRows = texts.filter(
     (t) => t.bounds[1] > minY + ROW_Y_TOLERANCE && t.bounds[0] >= ITEM_PREVIEW_X_RANGE[0] && t.bounds[0] < ITEM_PREVIEW_X_RANGE[1],
   )
@@ -458,24 +461,29 @@ function readTotalBadge(ctx: DocCtx): number | undefined {
   )
 }
 
-/** 会话列表全部联系人姓名：.user-list 容器子树内 class 含 geek-item 的节点逐个解析（容器缺失时回退未读项全集），按出现顺序去重 */
+/** 列表读取和点击共享同一条目/姓名识别，保留真实同名条目以便调用方拒绝歧义。 */
+export function conversationItemsOf(snapshot: DomSnapshot): Array<{ name: string; point: { x: number; y: number }; bounds: [number, number, number, number]; listBounds: [number, number, number, number] }> {
+  const document = snapshot.documents[0]
+  if (!document) return []
+  const ctx = buildCtx(snapshot, document)
+  const items = conversationItemNodes(ctx)
+  if (items.length === 0) return []
+  const root = [...ctx.classes.keys()].find((n) => hasClass(ctx, n, 'user-list') && isWithin(ctx, items[0]!, n))!
+  const listBounds = boundsOf(ctx, root)!
+  return items.flatMap((node) => {
+    const name = readItemName(ctx, node), bounds = boundsOf(ctx, node)!
+    return name === null ? [] : [{ name, bounds, listBounds: [listBounds[0] - (document.scrollOffsetX ?? 0), listBounds[1] - (document.scrollOffsetY ?? 0), listBounds[2], listBounds[3]] as [number, number, number, number], point: {
+      x: bounds[0] + bounds[2] / 2 - (document.scrollOffsetX ?? 0),
+      y: bounds[1] + bounds[3] / 2 - (document.scrollOffsetY ?? 0),
+    } }]
+  })
+}
+
 function listContactNames(ctx: DocCtx): string[] {
-  const names: string[] = []
-  const itemNodes: number[] = []
-  const listRoot = findClassDiv(ctx, 'user-list').nodeIndex // <0 时下方子树过滤自动放行全部 geek-item
-  const collect = (nodeIndex: number) => {
-    if (itemNodes.includes(nodeIndex)) return
-    itemNodes.push(nodeIndex)
-    const name = readItemName(ctx, nodeIndex)
-    if (name !== null && !names.includes(name)) names.push(name)
-  }
-  for (const nodeIndex of ctx.classes.keys()) {
-    if (!classContains(ctx, nodeIndex, 'geek-item')) continue
-    if (listRoot >= 0 && !isWithin(ctx, nodeIndex, listRoot)) continue
-    collect(nodeIndex)
-  }
-  for (const item of locateUnreadItems(ctx)) collect(item.nodeIndex)
-  return names
+  return [...new Set(conversationItemNodes(ctx).flatMap((n) => {
+    const name = readItemName(ctx, n)
+    return name === null ? [] : [name]
+  }))]
 }
 
 export class ChatReadExecutor {
