@@ -505,9 +505,17 @@ def test_finalizer_settles_execution_once_releases_claim_and_leaves_integrated_c
     connection.__enter__.return_value.cursor.return_value = cursor
     row = {'source': source, 'runner_id': 'runner', 'record_id': 'record', 'status': 'finalizing',
         'scope_key': 'tenant:tenant', 'session_kind': 'channel' if source != 'chat' else 'web',
-        'session_id': 'session', 'checkpoint': {'pending_finalization': {'status': 'completed', 'output': 'answer'}}}
+        'session_id': 'session', 'tenant_id': 'tenant', 'user_id': 'user', 'public_snapshot': {},
+        'checkpoint': {'pending_finalization': {'status': 'completed', 'output': 'answer'}}}
     finished = {**row, 'status': 'completed'}
-    cursor.fetchone.side_effect = [{'owner_runner_id': 'runner'}, finished]
+    # finalize 流程内真实执行 usage_in_tx：用量 SUM → clock_timestamp →
+    # claim RETURNING → 终态 UPDATE RETURNING，依次消费。
+    cursor.fetchone.side_effect = [
+        {'task_credits': 0.0, 'session_credits': 0.0},
+        {'now': datetime.now()},
+        {'owner_runner_id': 'runner'},
+        finished,
+    ]
     finalizer = RunnerFinalizer(lambda: connection)
     with patch('src.services.agent_runner.finalizer.lock_runner', return_value=row), \
             patch.object(finalizer, '_settle', return_value=('settled', 5, 0.0)) as settle, \
@@ -525,12 +533,24 @@ def test_finalizer_settles_execution_once_releases_claim_and_leaves_integrated_c
 def test_fresh_runner_schema_and_original_channel_do_not_require_retired_native_pipeline():
     from src.services.agent_runner.repository import RunnerRepository
     from src.channels.wecom_kf.api_client import WeComKfApiClient
+    from src.notifications.repository import NotificationRepository, TABLE_COLUMNS
     cursor, connection = MagicMock(), MagicMock()
     connection.__enter__.return_value.cursor.return_value = cursor
     cursor.fetchone.side_effect = lambda: {'name': cursor.execute.call_args.args[1][0]}
-    RunnerRepository(lambda: connection).assert_schema()
+    # assert_schema 同时联动校验 notification schema（runner API 依赖）；列类型/
+    # 约束深校验由真库集成测试（agent_runner_service/test_notifications*.py）覆盖，
+    # 此处仅保留存在性检查以固化「新部署需要 notification 表」的依赖事实。
+    def notification_existence_only(check_cursor):
+        for table in TABLE_COLUMNS:
+            check_cursor.execute('SELECT to_regclass(%s) AS name', (table,))
+            if not check_cursor.fetchone()['name']:
+                raise RuntimeError('NOTIFICATION_SCHEMA_REQUIRED')
+    with patch.object(NotificationRepository, 'assert_schema_in_tx',
+                      staticmethod(notification_existence_only)):
+        RunnerRepository(lambda: connection).assert_schema()
     queried = [call.args[1][0] for call in cursor.execute.call_args_list if 'to_regclass' in call.args[0]]
-    assert queried and all(name.startswith('agent_runner') for name in queried)
+    assert queried and all(name.startswith(('agent_runner', 'notification_')) for name in queried)
+    assert {'agent_runners', 'notification_messages'} <= set(queried)
     assert not hasattr(WeComKfApiClient, 'enable_native_writes')
     for module in ('ingress_worker', 'admission_worker', 'delivery', 'context_worker', 'voice_media'):
         assert importlib.util.find_spec('src.channels.wecom_kf.' + module) is None
@@ -539,7 +559,8 @@ def test_fresh_runner_schema_and_original_channel_do_not_require_retired_native_
     # 历史 DDL 必须累积保留；运行时依赖不能靠删建表记录来掩盖。
     for table in ('wecom_kf_inbox', 'wecom_kf_deliveries', 'wecom_kf_wire_operations'):
         assert table in schema
-    assert schema.rstrip().endswith('ALTER TABLE IF EXISTS agent_runner_session_claims DROP COLUMN IF EXISTS gate;')
+    # 语句级保留检查：后续 DDL 追加在文件尾部属正常累积，不要求它必须是最后一行。
+    assert 'ALTER TABLE IF EXISTS agent_runner_session_claims DROP COLUMN IF EXISTS gate;' in schema
 
 
 @pytest.mark.asyncio
