@@ -2,6 +2,7 @@
 知识库服务 - 文档上传、解析、向量化的业务逻辑
 """
 
+import asyncio
 import os
 import json
 import uuid
@@ -9,6 +10,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 from loguru import logger
+from psycopg2 import extras as pg_extras
 
 from src.core.text_sanitizer import sanitize_text
 from src.knowledge.parsers.parser_factory import parser_factory
@@ -642,68 +644,22 @@ class KnowledgeBaseService:
             # 读取摘要 LLM usage（供计费）
             summary_usage = self._last_summary_usage
 
-            # 5. 保存到数据库
-            with self._get_db_connection() as conn:
-                cursor = conn.cursor()
-
-                # 获取文件扩展名
-                ext = Path(file_filename).suffix.lower().lstrip('.')
-
-                # 插入文档记录（PostgreSQL 使用 RETURNING 获取 ID）
-                doc_uuid = f"doc_{uuid.uuid4().hex[:12]}"
-                cursor.execute("""
-                    INSERT INTO documents (
-                        user_id, tenant_id, title, source_type, sub_category, file_type, file_path,
-                        file_size, total_chunks, embedding_model,
-                        raw_text, metadata, summary, uuid
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id
-                """, (
-                    user_id,
-                    tenant_id,
-                    file_filename,
-                    source_type or "file",
-                    sub_category,
-                    ext,
-                    file_path,
-                    os.path.getsize(file_path) if os.path.exists(file_path) else 0,
-                    len(chunks),
-                    "text-embedding-v3",
-                    parse_result.text if parse_result.text else None,
-                    json.dumps(parse_result.metadata) if parse_result.metadata else None,
-                    summary or None,
-                    doc_uuid
-                ))
-                # row 是 dict: {"id": ...}，对应 RETURNING id
-                doc_id = cursor.fetchone()["id"]
-
-                # 插入 chunks
-                chunk_ids = []
-                for chunk in chunks:
-                    chunk_uuid = f"chunk_{uuid.uuid4().hex[:12]}"
-                    cursor.execute("""
-                        INSERT INTO chunks (doc_id, chunk_index, text, tokens, metadata, uuid)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        RETURNING id
-                    """, (
-                        doc_id,
-                        chunk["index"],
-                        chunk["text"],
-                        chunk["tokens"],
-                        json.dumps({**chunk.get("metadata", {}),
-                                    "char_count": len(chunk["text"])}),
-                        chunk_uuid
-                    ))
-                    # row 是 dict: {"id": ...}，对应 RETURNING id
-                    chunk_ids.append(cursor.fetchone()["id"])
-
-                # 插入向量（复用同一个数据库连接，避免锁冲突）
-                vector_db = get_vector_db(dimension=1024, conn=conn)
-                await vector_db.insert(chunk_ids, embeddings)
-
-                # FTS5 触发器会自动处理，无需手动插入
-
-                conn.commit()
+            # 5. 保存到数据库（同步 psycopg2 写入整体移入工作线程，避免大文件
+            #    （万级 chunk + 数百 MB 向量 SQL）阻塞事件循环触发 gunicorn WORKER TIMEOUT）
+            doc_id = await asyncio.to_thread(
+                self._persist_document_sync,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                file_filename=file_filename,
+                source_type=source_type,
+                sub_category=sub_category,
+                file_path=file_path,
+                chunks=chunks,
+                embeddings=embeddings,
+                raw_text=parse_result.text,
+                metadata=parse_result.metadata,
+                summary=summary,
+            )
 
             logger.info(f"后端日志：文档上传成功，doc_id={doc_id}, 文件={file_filename}, chunks={len(chunks)}")
 
@@ -750,6 +706,94 @@ class KnowledgeBaseService:
                 "debug": error_str,
                 "document_id": None
             }
+
+    def _persist_document_sync(
+        self,
+        *,
+        user_id: Optional[int],
+        tenant_id: Optional[str],
+        file_filename: str,
+        source_type: Optional[str],
+        sub_category: Optional[str],
+        file_path: str,
+        chunks: List[Dict[str, Any]],
+        embeddings: List[List[float]],
+        raw_text: Optional[str],
+        metadata: Optional[Dict[str, Any]],
+        summary: Optional[str],
+    ) -> int:
+        """同步落库：文档 + chunks + 向量（同一事务）。
+
+        仅供 upload_document 通过 asyncio.to_thread 调用：万级 chunk 的逐条 INSERT
+        与向量批量写入是纯阻塞 IO，留在事件循环里会阻塞整个 worker。
+        """
+        with self._get_db_connection() as conn:
+            cursor = conn.cursor()
+
+            # 获取文件扩展名
+            ext = Path(file_filename).suffix.lower().lstrip('.')
+
+            # 插入文档记录（PostgreSQL 使用 RETURNING 获取 ID）
+            doc_uuid = f"doc_{uuid.uuid4().hex[:12]}"
+            cursor.execute("""
+                INSERT INTO documents (
+                    user_id, tenant_id, title, source_type, sub_category, file_type, file_path,
+                    file_size, total_chunks, embedding_model,
+                    raw_text, metadata, summary, uuid
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (
+                user_id,
+                tenant_id,
+                file_filename,
+                source_type or "file",
+                sub_category,
+                ext,
+                file_path,
+                os.path.getsize(file_path) if os.path.exists(file_path) else 0,
+                len(chunks),
+                "text-embedding-v3",
+                raw_text if raw_text else None,
+                json.dumps(metadata) if metadata else None,
+                summary or None,
+                doc_uuid
+            ))
+            # row 是 dict: {"id": ...}，对应 RETURNING id
+            doc_id = cursor.fetchone()["id"]
+
+            # 插入 chunks（批量：单条多 VALUES 语句减少数千次往返）
+            # RETURNING 不保证顺序与输入一致，按 uuid 回查 id，避免 chunk 与向量错配
+            chunk_rows = []
+            chunk_uuids = []
+            for chunk in chunks:
+                chunk_uuid = f"chunk_{uuid.uuid4().hex[:12]}"
+                chunk_uuids.append(chunk_uuid)
+                chunk_rows.append((
+                    doc_id,
+                    chunk["index"],
+                    chunk["text"],
+                    chunk["tokens"],
+                    json.dumps({**chunk.get("metadata", {}),
+                                "char_count": len(chunk["text"])}),
+                    chunk_uuid
+                ))
+            inserted = pg_extras.execute_values(
+                cursor,
+                "INSERT INTO chunks (doc_id, chunk_index, text, tokens, metadata, uuid) "
+                "VALUES %s RETURNING id, uuid",
+                chunk_rows,
+                page_size=500,
+                fetch=True,
+            )
+            id_by_uuid = {row["uuid"]: row["id"] for row in inserted}
+            chunk_ids = [id_by_uuid[u] for u in chunk_uuids]
+
+            # 插入向量（复用同一个数据库连接，避免锁冲突）
+            vector_db = get_vector_db(dimension=1024, conn=conn)
+            vector_db.insert_sync(chunk_ids, embeddings)
+
+            conn.commit()
+        return doc_id
 
     async def delete_document(self, doc_id: int, tenant_id: Optional[str] = None, global_view: bool = False) -> Dict[str, Any]:
         """删除文档

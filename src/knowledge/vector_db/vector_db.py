@@ -3,6 +3,7 @@
 PostgreSQL + pgvector
 """
 
+import asyncio
 import json
 from typing import List, Tuple, Optional
 
@@ -22,6 +23,10 @@ class VectorDatabase:
 
     async def insert(self, chunk_ids: List[int], embeddings: List[List[float]]) -> None:
         """插入向量"""
+        raise NotImplementedError
+
+    def insert_sync(self, chunk_ids: List[int], embeddings: List[List[float]]) -> None:
+        """同步插入向量（供工作线程/同步调用方直接使用）"""
         raise NotImplementedError
 
     async def search(
@@ -128,7 +133,18 @@ class VectorDBPostgreSQL(VectorDatabase):
         return get_pooled_connection()
 
     async def insert(self, chunk_ids: List[int], embeddings: List[List[float]]) -> None:
-        """批量插入向量"""
+        """批量插入向量
+
+        psycopg2 写入是同步阻塞的，万级 chunk（大 Excel/PDF）会产生数百 MB SQL
+        并持续数十秒，直接在事件循环里执行会触发 gunicorn WORKER TIMEOUT/SIGKILL，
+        因此放入工作线程执行。
+        """
+        if not chunk_ids:
+            return
+        await asyncio.to_thread(self.insert_sync, chunk_ids, embeddings)
+
+    def insert_sync(self, chunk_ids: List[int], embeddings: List[List[float]]) -> None:
+        """同步批量插入向量（供工作线程或同步调用方直接使用）"""
         if not chunk_ids:
             return
 

@@ -278,11 +278,10 @@ class TestExcelParserRowChunking:
         assert "YD0001 | 速干T恤" in result.text
 
 
-def _make_db_mocks(chunk_count: int):
-    """构造 upload_document 依赖的数据库 mock，fetchone 依次返回 doc_id + chunk_id"""
+def _make_db_mocks():
+    """构造 upload_document 依赖的数据库 mock（documents INSERT 返回 doc_id）"""
     cursor = MagicMock()
-    ids = [{"id": 100}] + [{"id": 200 + i} for i in range(chunk_count)]
-    cursor.fetchone.side_effect = ids
+    cursor.fetchone.return_value = {"id": 100}
     cursor.fetchall.return_value = []
     conn = MagicMock()
     conn.cursor.return_value = cursor
@@ -290,6 +289,14 @@ def _make_db_mocks(chunk_count: int):
     cm.__enter__.return_value = conn
     cm.__exit__.return_value = False
     return cm, conn
+
+
+def _capture_chunk_inserts(store):
+    """替代 psycopg2 execute_values：捕获批量行并按 uuid 返回 id"""
+    def fake(cur, sql, rows, page_size=100, fetch=False):
+        store.extend(rows)
+        return [{"id": 200 + i, "uuid": row[5]} for i, row in enumerate(rows)]
+    return fake
 
 
 class TestUploadDocumentPrecomputedBypass:
@@ -312,12 +319,15 @@ class TestUploadDocumentPrecomputedBypass:
         fake_parser.parse = AsyncMock(return_value=ParseResult(
             text="原始文本", metadata={}, precomputed_chunks=precomputed))
 
-        cm, conn = _make_db_mocks(len(precomputed))
+        cm, conn = _make_db_mocks()
+        chunk_rows = []
 
         with patch("src.knowledge.service.parser_factory.get_parser", return_value=fake_parser), \
              patch("src.config.settings.get_embedding_api_key", return_value="sk-test"), \
              patch("src.knowledge.service.TextEmbeddingV3Client") as mock_emb, \
              patch("src.knowledge.service.get_vector_db") as mock_vdb, \
+             patch("src.knowledge.service.pg_extras.execute_values",
+                   side_effect=_capture_chunk_inserts(chunk_rows)), \
              patch("src.knowledge.service.ChatRecordDB.create"), \
              patch.object(KnowledgeBaseService, "_validate_sub_category"), \
              patch.object(KnowledgeBaseService, "_get_db_connection", return_value=cm), \
@@ -325,7 +335,7 @@ class TestUploadDocumentPrecomputedBypass:
             mock_emb.return_value.embed_batch = AsyncMock(return_value=[[0.0] * 4, [0.0] * 4])
             mock_emb.return_value.reset_usage = MagicMock()
             mock_emb.return_value.last_usage_tokens = 10
-            mock_vdb.return_value.insert = AsyncMock()
+            mock_vdb.return_value.insert_sync = MagicMock()
 
             service = KnowledgeBaseService()
             result = await service.upload_document(
@@ -334,13 +344,10 @@ class TestUploadDocumentPrecomputedBypass:
 
         assert result["success"] is True
         assert result["total_chunks"] == 2
-        cursor = conn.cursor.return_value
-        # 找到 chunks INSERT 语句的调用，校验文本前缀与 metadata 合并
-        insert_calls = [c for c in cursor.execute.call_args_list
-                        if "INSERT INTO chunks" in c.args[0]]
-        assert len(insert_calls) == 2
-        first_text = insert_calls[0].args[1][2]
-        first_meta = json.loads(insert_calls[0].args[1][4])
+        # 批量写入：一次 execute_values 携带全部行，校验文本前缀与 metadata 合并
+        assert len(chunk_rows) == 2
+        first_text = chunk_rows[0][2]
+        first_meta = json.loads(chunk_rows[0][4])
         assert first_text.startswith("文档标题：商品表.xlsx\n")
         assert "SKU编号: YD0001" in first_text
         assert first_meta["chunk_type"] == "excel_row"
@@ -359,12 +366,15 @@ class TestUploadDocumentPrecomputedBypass:
         fake_parser.parse = AsyncMock(return_value=ParseResult(
             text="第一段。\n\n第二段。", metadata={}))
 
-        cm, conn = _make_db_mocks(1)
+        cm, conn = _make_db_mocks()
+        chunk_rows = []
 
         with patch("src.knowledge.service.parser_factory.get_parser", return_value=fake_parser), \
              patch("src.config.settings.get_embedding_api_key", return_value="sk-test"), \
              patch("src.knowledge.service.TextEmbeddingV3Client") as mock_emb, \
              patch("src.knowledge.service.get_vector_db") as mock_vdb, \
+             patch("src.knowledge.service.pg_extras.execute_values",
+                   side_effect=_capture_chunk_inserts(chunk_rows)), \
              patch("src.knowledge.service.ChatRecordDB.create"), \
              patch.object(KnowledgeBaseService, "_validate_sub_category"), \
              patch.object(KnowledgeBaseService, "_get_db_connection", return_value=cm), \
@@ -372,7 +382,7 @@ class TestUploadDocumentPrecomputedBypass:
             mock_emb.return_value.embed_batch = AsyncMock(return_value=[[0.0] * 4])
             mock_emb.return_value.reset_usage = MagicMock()
             mock_emb.return_value.last_usage_tokens = 5
-            mock_vdb.return_value.insert = AsyncMock()
+            mock_vdb.return_value.insert_sync = MagicMock()
 
             service = KnowledgeBaseService()
             result = await service.upload_document(
@@ -380,11 +390,8 @@ class TestUploadDocumentPrecomputedBypass:
                 tenant_id="t1", source_type="file")
 
         assert result["success"] is True
-        cursor = conn.cursor.return_value
-        insert_calls = [c for c in cursor.execute.call_args_list
-                        if "INSERT INTO chunks" in c.args[0]]
-        assert len(insert_calls) == 1
-        meta = json.loads(insert_calls[0].args[1][4])
-        assert meta == {"char_count": len(insert_calls[0].args[1][2])}
+        assert len(chunk_rows) == 1
+        meta = json.loads(chunk_rows[0][4])
+        assert meta == {"char_count": len(chunk_rows[0][2])}
         # 老路径文件名前缀仍在首个 chunk（TextChunker 会把换行归一为空格）
-        assert insert_calls[0].args[1][2].startswith("文档标题：普通文档.txt ")
+        assert chunk_rows[0][2].startswith("文档标题：普通文档.txt ")

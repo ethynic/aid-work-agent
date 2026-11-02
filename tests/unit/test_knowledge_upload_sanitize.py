@@ -16,11 +16,10 @@ pytestmark = pytest.mark.unit
 from src.knowledge.parsers import ParsedChunk, ParseResult
 
 
-def _make_db_mocks(chunk_count: int):
-    """构造 upload_document 依赖的数据库 mock，fetchone 依次返回 doc_id + chunk_id"""
+def _make_db_mocks():
+    """构造 upload_document 依赖的数据库 mock（documents INSERT 返回 doc_id）"""
     cursor = MagicMock()
-    ids = [{"id": 100}] + [{"id": 200 + i} for i in range(chunk_count)]
-    cursor.fetchone.side_effect = ids
+    cursor.fetchone.return_value = {"id": 100}
     cursor.fetchall.return_value = []
     conn = MagicMock()
     conn.cursor.return_value = cursor
@@ -28,6 +27,14 @@ def _make_db_mocks(chunk_count: int):
     cm.__enter__.return_value = conn
     cm.__exit__.return_value = False
     return cm, conn
+
+
+def _capture_chunk_inserts(store):
+    """替代 psycopg2 execute_values：捕获批量行并按 uuid 返回 id"""
+    def fake(cur, sql, rows, page_size=100, fetch=False):
+        store.extend(rows)
+        return [{"id": 200 + i, "uuid": row[5]} for i, row in enumerate(rows)]
+    return fake
 
 
 def _assert_utf8_encodable(text: str):
@@ -50,12 +57,15 @@ class TestUploadDocumentSanitizeSurrogates:
         fake_parser = MagicMock()
         fake_parser.parse = AsyncMock(return_value=ParseResult(text=dirty_text, metadata={}))
 
-        cm, conn = _make_db_mocks(1)
+        cm, conn = _make_db_mocks()
+        chunk_rows = []
 
         with patch("src.knowledge.service.parser_factory.get_parser", return_value=fake_parser), \
              patch("src.config.settings.get_embedding_api_key", return_value="sk-test"), \
              patch("src.knowledge.service.TextEmbeddingV3Client") as mock_emb, \
              patch("src.knowledge.service.get_vector_db") as mock_vdb, \
+             patch("src.knowledge.service.pg_extras.execute_values",
+                   side_effect=_capture_chunk_inserts(chunk_rows)), \
              patch("src.knowledge.service.ChatRecordDB.create"), \
              patch.object(KnowledgeBaseService, "_validate_sub_category"), \
              patch.object(KnowledgeBaseService, "_get_db_connection", return_value=cm), \
@@ -63,7 +73,7 @@ class TestUploadDocumentSanitizeSurrogates:
             mock_emb.return_value.embed_batch = AsyncMock(return_value=[[0.0] * 4])
             mock_emb.return_value.reset_usage = MagicMock()
             mock_emb.return_value.last_usage_tokens = 5
-            mock_vdb.return_value.insert = AsyncMock()
+            mock_vdb.return_value.insert_sync = MagicMock()
 
             service = KnowledgeBaseService()
             result = await service.upload_document(
@@ -78,10 +88,9 @@ class TestUploadDocumentSanitizeSurrogates:
         raw_text = doc_insert.args[1][10]
         _assert_utf8_encodable(raw_text)
         assert "脏字符结尾" in raw_text
-        # chunks 文本同样清洗
-        chunk_insert = [c for c in cursor.execute.call_args_list
-                        if "INSERT INTO chunks" in c.args[0]][0]
-        _assert_utf8_encodable(chunk_insert.args[1][2])
+        # chunks 文本同样清洗（批量写入的行数据）
+        assert len(chunk_rows) == 1
+        _assert_utf8_encodable(chunk_rows[0][2])
         # 传给 embedding 的文本也已清洗
         emb_texts = mock_emb.return_value.embed_batch.await_args.args[0]
         for t in emb_texts:
@@ -102,12 +111,15 @@ class TestUploadDocumentSanitizeSurrogates:
         fake_parser.parse = AsyncMock(return_value=ParseResult(
             text=None, metadata={}, precomputed_chunks=precomputed))
 
-        cm, conn = _make_db_mocks(1)
+        cm, conn = _make_db_mocks()
+        chunk_rows = []
 
         with patch("src.knowledge.service.parser_factory.get_parser", return_value=fake_parser), \
              patch("src.config.settings.get_embedding_api_key", return_value="sk-test"), \
              patch("src.knowledge.service.TextEmbeddingV3Client") as mock_emb, \
              patch("src.knowledge.service.get_vector_db") as mock_vdb, \
+             patch("src.knowledge.service.pg_extras.execute_values",
+                   side_effect=_capture_chunk_inserts(chunk_rows)), \
              patch("src.knowledge.service.ChatRecordDB.create"), \
              patch.object(KnowledgeBaseService, "_validate_sub_category"), \
              patch.object(KnowledgeBaseService, "_get_db_connection", return_value=cm), \
@@ -115,7 +127,7 @@ class TestUploadDocumentSanitizeSurrogates:
             mock_emb.return_value.embed_batch = AsyncMock(return_value=[[0.0] * 4])
             mock_emb.return_value.reset_usage = MagicMock()
             mock_emb.return_value.last_usage_tokens = 5
-            mock_vdb.return_value.insert = AsyncMock()
+            mock_vdb.return_value.insert_sync = MagicMock()
 
             service = KnowledgeBaseService()
             result = await service.upload_document(
@@ -123,9 +135,7 @@ class TestUploadDocumentSanitizeSurrogates:
                 tenant_id="t1", source_type="file")
 
         assert result["success"] is True
-        cursor = conn.cursor.return_value
-        chunk_insert = [c for c in cursor.execute.call_args_list
-                        if "INSERT INTO chunks" in c.args[0]][0]
-        first_text = chunk_insert.args[1][2]
+        assert len(chunk_rows) == 1
+        first_text = chunk_rows[0][2]
         _assert_utf8_encodable(first_text)
         assert "字段A: 值一" in first_text
