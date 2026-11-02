@@ -46,6 +46,12 @@ services:
     image: aid-agent-api:latest
     container_name: aid-runner-api1
     restart: "no"                    # 仿真按需启停，不随机自启
+    # 主 API 健康后再启动：db_update 增量迁移在主 API 启动过程执行，runner 启动即
+    # assert_schema，并发重建时先断言会撞上未迁移的表/列而秒退（2026-11-02 agent1
+    # 实撞 wake_at 列）。跨文件 depends_on 在同一 compose 项目内按服务名解析。
+    depends_on:
+      api:
+        condition: service_healthy
     mem_limit: 1g
     shm_size: 128m
     env_file:

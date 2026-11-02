@@ -160,6 +160,12 @@ docker logs aid-runner-api --tail 100; docker logs aid-runner-worker --tail 100
 curl http://localhost:8000/health   # 主 API
 ```
 
+overlay 已给 runner-api 声明 `depends_on: aid-agent-api: condition: service_healthy`
+（2026-11-02 agent1 事故固化：db_update 迁移在主 API 启动过程应用，runner 启动即
+assert_schema，compose 并发重建时先断言会撞上未迁移的表/列秒退，实撞
+`agent_runners.wake_at` 列）。经 compose 启动时主 API 先转 healthy，迁移即已应用；
+仅服务器重启按 restart policy 自启不经 compose 编排，此时无待应用迁移，不受影响。
+
 ## 3. 回退步骤（授权后）
 
 - 停新增服务：`docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml stop runner-worker runner-api`。
