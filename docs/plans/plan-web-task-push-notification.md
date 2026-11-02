@@ -67,6 +67,8 @@
 
 以下为交付准备，未执行服务器迁移、配置变更或重启。部署仍须用户明确指示目标环境。
 
+> agent2 实际启用操作步骤见 [deploy/web-push-agent2.md](../../deploy/web-push-agent2.md)（2026-11-02 基于 agent2 现状核查编写：代码/表/SW 均已就绪，仅缺 WEB_PUSH 配置；Edge/Firefox/Apple 端点连通，Chrome FCM 被墙）。
+
 1. 保持 `notifications.enabled=false` 和 `notifications.web_push.enabled=false`，按既有迁移流程执行 `2026-10-10 17:10:00` 块。初始化 SQL 与增量块同义；运行进程只核验 v1，不建表、不覆盖不兼容 schema。更新包含固定 `pywebpush==2.1.2` 的依赖。API、Runner 与 background_runner 使用相同数据库、EncryptionManager 配置及通知设置；只在专用 background_runner 运行 dispatcher。
 2. VAPID 使用秘密环境注入 `WEB_PUSH_VAPID_PRIVATE_KEY`，公开部分使用 `WEB_PUSH_VAPID_PUBLIC_KEY`、`WEB_PUSH_VAPID_KEY_ID` 和联系地址 `WEB_PUSH_VAPID_SUBJECT`；不能把私钥写进仓库、日志或验收截图。确认公私钥匹配及 `mailto:`/HTTPS 联系地址。核心/provider 环境开关分别为 `NOTIFICATIONS_ENABLED`、`WEB_PUSH_ENABLED`，默认均关闭。
 3. 按实测 provider 配置 `notifications.web_push.allowed_hosts`，只接受允许的 HTTPS/443 公网 endpoint。DNS 校验与真实 TLS 连接绑定同次地址，不跟随重定向、不使用环境代理。必须分别验证部署服务器至供应商、用户浏览器至供应商的网络；未经验证不能靠放宽内网限制解决连通问题。`allowed_tenants=null` 表示允许符合权限的租户；空列表不启用任何租户，全局管理员 scope 独立核验。
