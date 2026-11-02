@@ -19,9 +19,10 @@ from src.config.settings import settings
 _last_images = ContextVar("legacy_agent_response_images", default=())
 
 class AgentResponse(str):
-    def __new__(cls, text, images=()):
+    def __new__(cls, text, images=(), files=()):
         result = super().__new__(cls, text)
         result.images = tuple(dict(image) for image in images)
+        result.files = tuple(dict(file) for file in files)
         return result
 
 class Agent:

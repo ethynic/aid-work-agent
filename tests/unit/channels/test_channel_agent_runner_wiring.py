@@ -272,6 +272,34 @@ async def test_real_entry_completes_through_actual_service(
     assert entry_env.records[-1].skip_save is True
 
 
+# ---------- completed：snapshot.downloadableFiles → 渠道文件投递 ----------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("channel", ["feishu", "dingtalk", "wecom"])
+async def test_real_entry_delivers_downloadable_files_from_snapshot(
+    bridge, entry_env, channel
+):
+    # Runner 路径不回传 tool_result 事件；文件从 public snapshot 投影带回
+    bridge.repository.snapshot = {"downloadableFiles": [
+        {"file_id": "file-x", "file_name": "方案.xlsx", "file_size": 10,
+         "download_url": "/api/files/file-x/download", "mime_type": ""},
+    ]}
+    event = entry_env.install(channel)
+
+    await entry_env.entry(channel)("tenant", event, config_id="config")
+
+    entry_env.adapter.send_message.assert_awaited_once()
+    response = entry_env.adapter.send_message.await_args.args[0]
+    assert [f.file_id for f in response.downloadable_files] == ["file-x"]
+    assert response.downloadable_files[0].file_name == "方案.xlsx"
+
+    # 落库 assistant metadata 同步携带 downloadableFiles（历史消息渲染数据源）
+    entry_env.batch_write.assert_called_once()
+    batch = entry_env.batch_write.call_args.args[2]
+    assert batch[3]["metadata"]["downloadableFiles"][0]["file_id"] == "file-x"
+
+
 # ---------- failed：执行失败 → 非空失败提示，不写历史、不触发 recap ----------
 
 

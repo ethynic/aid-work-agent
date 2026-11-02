@@ -1297,6 +1297,23 @@ class ChannelSessionManager:
             except Exception:
                 agent_images = []
 
+            # Runner 路径不产生 tool_result 事件（collect_files_callback 收集不到），
+            # 可下载文件由 ChannelRunnerAgent 从 snapshot.downloadableFiles 带回，
+            # 此处合并进 downloadable_files；本地路径 files 恒为空，不受影响。
+            try:
+                _result_files = list(getattr(result.response_text, "files", []) or [])
+            except Exception:
+                _result_files = []
+            _known_file_ids = {f.get("file_id") for f in downloadable_files}
+            for _file in _result_files:
+                if (
+                    isinstance(_file, dict)
+                    and _file.get("file_id")
+                    and _file["file_id"] not in _known_file_ids
+                ):
+                    downloadable_files.append(dict(_file))
+                    _known_file_ids.add(_file["file_id"])
+
             delivery_metadata: Dict[str, Any] = {}
             delivery_preparation_failed = False
             if prepare_response is not None and _ask_segments is None:

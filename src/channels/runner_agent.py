@@ -222,7 +222,14 @@ class ChannelRunnerAgent:
                     if progress_callback and row['status']=='completed':
                         history = await self._request('GET', f'/v1/runners/{runner_id}/channel-result')
                         await emit({'type':'tool_messages', 'messages':history.get('messages') or []})
-                    return AgentResponse(result.get('output') or '', result.get('images') or snapshot.get('images') or [])
+                    # 可下载文件：Runner 路径不回传 tool_result 事件，渠道侧
+                    # collect_files_callback 收集不到；从 public snapshot 投影
+                    # （public_view._public_presentation 白名单 5 字段）读取。
+                    files = [item for item in snapshot.get('downloadableFiles') or []
+                             if isinstance(item, dict) and item.get('file_id')]
+                    return AgentResponse(result.get('output') or '',
+                                         result.get('images') or snapshot.get('images') or [],
+                                         files)
                 if row['status']=='waiting':
                     wait = _clarification_wait(snapshot.get('waiting')) or {}
                     if reply_wait_id and wait.get('wait_id') != reply_wait_id:
