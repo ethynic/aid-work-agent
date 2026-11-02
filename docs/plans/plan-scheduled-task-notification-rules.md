@@ -64,3 +64,7 @@
 1. `pytest tests/unit/notifications/ tests/unit/scheduler/ tests/unit/api/test_scheduled_task_api.py tests/unit/tools/scheduler/test_scheduled_task_tool.py -m unit`
 2. `cd frontend && npx vitest run`（相关用例）
 3. 行为验证（测试内覆盖）：管理员建 `scheduled.task` 规则挂 webhook → 任务选规则 → task.paused 发布 → expand 后 delivery 落规则 target；规则停用留痕 skipped；存量 `notification_target_id` 任务继续按旧渠道投递
+
+## 已知修复
+
+- 2026-11-02：新增规则弹框中手动把事件类型从默认「客户留资」切换为「定时任务通知」时，`recipient_mode` 未联动（保持 `kf_assignee`），保存被后端 `NOTIFICATION_RULE_RECIPIENT_INVALID` 拒绝（页面提示「接收人模式不合法」）。修复：`NotificationRules.vue` 给 `form.event_type` 加 watcher 联动设置 `recipient_mode`（编辑态跳过，避免覆盖存量规则值）；新增组件回归测试 `NotificationRules.recipientMode.test.ts`（切换为 scheduled.task 提交 task_owner、切回其他类型回落 tenant_admins）。

@@ -494,6 +494,15 @@ watch(() => route.query, () => {
   currentPage.value = 1
 })
 
+// 事件类型切换时联动接收人模式（scheduled.task 固定 task_owner，接收人下拉已隐藏）；
+// 编辑态事件类型锁定不动，跳过以免覆盖存量规则值
+watch(() => form.event_type, (et) => {
+  if (editing.value) return
+  if (et === 'lead.captured') form.recipient_mode = 'kf_assignee'
+  else if (et === 'scheduled.task') form.recipient_mode = 'task_owner'
+  else form.recipient_mode = 'tenant_admins'
+})
+
 const ruleTargets = computed(() => {
   if (!editing.value) return []
   return allTargets.value.filter(
