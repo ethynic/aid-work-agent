@@ -55,6 +55,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |------|------|------|---------|---------|
+| 20261027-1600 | 定时任务重构（Runner 化） | ✅ 已完成开发；6 Phase 完成、agent2 浏览器 E2E 10/10、附件下载修复验证通过，生产部署待授权；过程计划文档已清理。 | [设计](system/scheduled-task-runner-refactor-design.md) | — |
 | 20261022-1956 | Agent 通用持久化休眠与自动唤醒 | ✅ 已完成开发：DeepSeek空思考字段恢复修复，独测及CR通过，未部署。 | [设计](system/agent-runner-durable-sleep-design.md) | [开发计划](plans/plan-agent-runner-durable-sleep.md) |
 | 20261031-1800 | BOSS普通物理输入解除widget依赖 | ✅ 已完成开发；本机导航/筛选/读简历通过，搜索修复另见对应条目，未部署。 | [原设计§10.11](design/recruiting/boss-resume-assistant-native-cdp-design.md#1011-解除物理输入对-legacy-widget-的依赖2026-10-31) / [复盘](incidents/boss-agent2-widget-stuck-hidden-20261030.md) | [原计划§16](plans/recruiting/boss-resume-assistant-native-cdp-dev-plan.md#16-普通物理输入内容区定位修正2026-10-31) |
 | 20261012-1544 | trace 观测 span 计时精确化 | ✅ 已完成开发（提交与部署待授权）：span 改用引擎侧墙钟计时并立即闭合，失败 LLM 与恢复路径补 span；历史数据不回填。 | — | [开发计划](plans/traceobs-timing-precision.md) |

@@ -248,7 +248,7 @@ CREATE INDEX IF NOT EXISTS idx_notification_target_rule
 
 ## 15. 定时任务通知规则扩展（2026-11-02）
 
-定时任务通知从"任务直选渠道目标（`scheduled_tasks.notification_target_id` → `notification_targets`）"切换为"任务选用通知规则"。设计要点（详见[开发计划](../plans/plan-scheduled-task-notification-rules.md)）：
+定时任务通知从"任务直选渠道目标（`scheduled_tasks.notification_target_id` → `notification_targets`）"切换为"任务选用通知规则"。设计要点（同步登记于[定时任务重构设计 §3.3/§8](scheduled-task-runner-refactor-design.md)）：
 
 1. **规则专用聚合类型 `scheduled.task`**（展示名"定时任务通知"）：仅进规则创建白名单，**不注册进 EVENTS 发布注册表**，不参与 `_expand_rule_event` 常规匹配。conditions 可选 `{events: [...]}`（值域 4 个 task.* 事件，缺省全部）；recipient_mode 固定新枚举 `task_owner`（规则只决定外发渠道+事件过滤，站内信恒发任务属主）。
 2. **任务级绑定生效**：`scheduled_tasks` 新列 `notification_rule_id`；任务事件发布仍走用户级 `publish_in_tx`（属主站内信不变），参数快照 `notify_rule_id`；展开阶段快照命中时按该规则取规则级 targets 投递（跳过偏好门控），规则停用/删除/事件被过滤时 route_snapshot 留痕 skipped。未被任务选用的 `scheduled.task` 规则不产生任何投递。

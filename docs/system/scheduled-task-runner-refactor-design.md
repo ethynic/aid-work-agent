@@ -13,7 +13,7 @@
 1. **执行引擎 = AgentRunner 服务**：每次触发向 Runner 提交持久任务，复用中断恢复、防双执行、可观测快照、trace；
 2. **计费 = Runner 结算链**：usage receipts → `chat_records(source_type='scheduled')` → 租户积分原子扣减；
 3. **任务视图**：独立"任务计划"分组 + 任务执行视图，历次执行的时间、触发原因、状态、结果、用量可追溯；
-4. **通知 = 统一通知基础设施**：完成/失败/自动暂停/需要处理接入统一通知，任务可选择具体通知目标。
+4. **通知 = 统一通知基础设施**：完成/失败/自动暂停/需要处理接入统一通知。2026-11-02 起外发路由由"任务直选渠道目标"改为"任务选用通知规则"（`scheduled.task` 聚合类型，见 §3.3/§8 与[通知规则引擎设计 §15](notification-rule-engine-design.md#15-定时任务通知规则扩展2026-11-02)）。
 
 **v3 关键修正**（相对 v2，二次评审）：
 
@@ -89,12 +89,12 @@ flowchart LR
 - 主智能体会话创建的任务由主智能体执行（prompt 内指示委派）；不支持跨智能体指派（本期范围取舍）；
 - 授权链每次提交重查 profile 订阅与用户授权，失效即 PROFILE_FORBIDDEN → 暂停（§4.1）。
 
-### 3.3 通知目标选择
+### 3.3 通知规则选用（2026-11-02 更新）
 
-- 任务创建/编辑时可指定具体通知目标：**个人 Web Push 或租户级飞书/企微/钉钉群机器人、邮件目标**。任务行只保存 `notification_target_id` 引用，不复制 webhook/密钥；
-- **目标选项读取**：新增符合既有使用范围的非管理员读取接口（返回名称、provider、目标引用等展示信息，不暴露凭据）——供工具选项与前端选择器；
-- 默认不选外发目标 = 站内信 + 用户个人偏好渠道；**不默认预选租户群机器人**；
-- **目标在事件生成时快照**（写入事件参数，随参数加密存储不可变）：投递展开按快照路由并校验目标当前仍有效（失效记投递异常，不影响执行与结算）；事件生成后修改任务目标不影响已生成事件；
+- 任务创建/编辑不再直选渠道目标，改为**选用一条租户通知规则**（`scheduled.task` 聚合类型：规则勾选任务事件子集并挂渠道目标；任务行保存 `notification_rule_id`，旧 `notification_target_id` 列保留作存量兜底）。完整设计见[通知规则引擎设计 §15](notification-rule-engine-design.md#15-定时任务通知规则扩展2026-11-02)；
+- **规则选项读取**：`GET /api/notifications/task-rules`（本租户 enabled 的 `scheduled.task` 规则 + 渠道目标脱敏摘要，不暴露凭据）——供工具选项与前端选择器；规则 CRUD 仍仅租户管理员；
+- 默认不选规则 = 站内信 + 用户个人偏好渠道；**不默认预选租户群机器人**；
+- **通知路由在事件生成时快照**（不可变）：投递展开按快照路由并校验目标当前仍有效（失效记投递异常，不影响执行与结算）；事件生成后修改任务规则/目标不影响已生成事件；
 - 群机器人外发只发任务名、状态与**可访问的任务视图入口链接**；完整结果留在任务视图。
 
 ## 4. 调度模型：到期认领 + 持久交接
@@ -264,13 +264,13 @@ RunnerSubmit(
 **任务执行视图**（一个任务一个长期视图）：
 
 - 头部：任务说明、调度规则、状态（pause_reason 映射文案）、下次执行时间；
-- 操作区：暂停、恢复、改期、编辑（任务内容/附件/通知目标）、立即执行一次、**取消当前执行**（对非终态 runner 经网关调 runner cancel）、删除（409 引导重试）；
+- 操作区：暂停、恢复、改期、编辑（任务内容/附件/通知规则）、立即执行一次、**取消当前执行**（对非终态 runner 经网关调 runner cancel）、删除（409 引导重试）；
 - 执行记录列表：以 agent_runners 为执行事实——`scheduled.trigger`（触发原因，运行中来自公开投影）、accepted_at/finished_at（时间）、status、result.output 或 error_code 映射文案（**执行前失败、空输出同样成记录**）；费用 `result.credit_cost`；
 - 当前执行进度：经网关订阅该 runner 事件流（source='scheduled' 用户 token 只读）；
 - 通知投递状态：按任务资源查询通知投递（§8.4 轻量查询接口）；
 - 无自由聊天输入框；定时执行只更新任务数据，不切换用户当前页面。
 
-**编辑与调度解耦**：仅调度规则字段（schedule_type/cron/interval/run_at）变更才重算 `next_due_at`（从 now 起算）；任务内容/附件/通知目标编辑**不触碰调度**。
+**编辑与调度解耦**：仅调度规则字段（schedule_type/cron/interval/run_at）变更才重算 `next_due_at`（从 now 起算）；任务内容/附件/通知规则编辑**不触碰调度**。
 
 ## 7. 计费与配额
 
@@ -290,15 +290,15 @@ RunnerSubmit(
 
 - **不触发 needs_action 的等待**：remote_tool（远程结果等待）、子执行等待（child_wait）等系统自行推进的正常状态**仅更新任务视图进度**，不外发通知——"存在子执行等待"本身不构成人工处理要求，避免后台自主执行被通知噪声打扰；
 - scheduled 提问等待不存在（工具过滤 + 上下文注入）；普通聊天的 `task.waiting_input`（提问语义）保持不变；
-- **全部事件参数统一快照 `notify_target_id`**（terminal / paused / needs_action 一致）：`task.needs_action` = `{task_name, action_label, task_id, notify_target_id?}`，`task.paused` = `{task_name, reason_label, task_id, notify_target_id?}`——否则完成通知能到所选机器人而暂停/需处理通知退回个人偏好；
+- **全部事件参数统一快照通知路由**（terminal / paused / needs_action 一致）：参数含 `notify_rule_id`（任务选用规则时）或 `notify_target_id`（存量任务兜底）——如 `task.needs_action` = `{task_name, action_label, task_id, notify_rule_id?/notify_target_id?}`——否则完成通知能到所选渠道而暂停/需处理通知退回个人偏好；
 - `task.needs_action` 的 action_label 按等待类型给出**要做什么**（"需要在设备上确认操作""需要人工处理登录"等）；event_key 含 runner_id 与本次停车标识，按停车事件幂等（ON CONFLICT 去重）；文案说明动作指引并提供实际可处理入口（设备侧入口/任务视图状态）；
 - scheduled 完成/失败/暂停/需要处理全部纳入站内信查询、偏好默认事件集合与全渠道渲染（站内文案、Web Push 模板、外发文本）。
 
 ### 8.2 资源契约与目标路由（统一）
 
 - scheduled 相关事件统一资源：terminal 与 needs_action 为 `{'type':'runner_result'|'runner_waiting','id':runner_id}`（沿用既有注册），task.paused 为 `{'type':'scheduled_task','id':task_id}`；
-- **目标路由统一经"资源→任务行"解析**：runner_result/runner_waiting 经 `agent_runners.session_id → scheduled_tasks`，scheduled_task 直接命中；命中任务行且事件参数含快照 `notify_target_id` → 向该目标投递外发（校验目标当前有效，失效记投递异常）；无快照目标 → 用户个人偏好路由；站内信恒开；
-- 参数中的 `notify_target_id` 在**事件生成时快照**（加密存储、不可变），任务后续改目标不影响已生成事件；
+- **目标路由统一经"资源→任务行"解析**：runner_result/runner_waiting 经 `agent_runners.session_id → scheduled_tasks`，scheduled_task 直接命中；命中后按事件参数快照路由——含 `notify_rule_id`：校验规则 enabled 且事件在其 conditions 内，取规则级渠道目标投递（规则停用/删除/事件被过滤记 route_snapshot skipped），跳过偏好门控；含 `notify_target_id`（存量兜底）：向该目标投递外发（校验目标当前有效，失效记投递异常）；两者皆无 → 用户个人偏好路由；站内信恒开；
+- 参数中的通知路由（`notify_rule_id`/`notify_target_id`）在**事件生成时快照**（不可变），任务后续改规则/目标不影响已生成事件；
 - 外发机器人文案携带任务视图入口链接（复用通知系统链接基准配置）。
 
 ### 8.3 目标选项读取
@@ -354,17 +354,17 @@ CREATE INDEX idx_scheduled_tasks_owner ON scheduled_tasks(tenant_id, user_id, st
 
 ### REST（`/api/scheduled-tasks`）
 
-列表（+session_id/pause_reason/last_status/next_due_at/notification_target_id）、详情、pause（清 pending）、resume（重算 due）、delete（§4.3 事务守卫）、trigger（manual pending 槽）、编辑（任务内容/附件/通知目标不动调度；调度规则变更重算 due）。删除 logs/get_user_logs。读写维持 tenant+user 条件进 SQL。
+列表（+session_id/pause_reason/last_status/next_due_at/notification_rule_id，存量任务回退 notification_target_id）、详情、pause（清 pending）、resume（重算 due）、delete（§4.3 事务守卫）、trigger（manual pending 槽）、编辑（任务内容/附件/通知规则不动调度；调度规则变更重算 due）。删除 logs/get_user_logs。读写维持 tenant+user 条件进 SQL。
 
 ### 工具（`src/tools/scheduler/scheduled_task_tool.py`）
 
 - 两工具 `chat_only`；
-- create：保留产品校验（时间必填不猜测 / once 未来时间 / 每用户上限 / R56 引导）；**无长度上限**（服从请求容量闸）；描述要求自包含 + 按相关性的默认行为约定；profile/instance 继承；可选 `notify_target_id`（经 §8.3 读取接口供选项）；创建即 active + 计算首 due；
-- manage：list/pause/resume/cancel 适配新状态机；view 改为任务统计 + 最近执行摘要 + 指引任务视图；支持修改通知目标。
+- create：保留产品校验（时间必填不猜测 / once 未来时间 / 每用户上限 / R56 引导）；**无长度上限**（服从请求容量闸）；描述要求自包含 + 按相关性的默认行为约定；profile/instance 继承；可选 `notification_rule_id`（经 task-rules 只读接口供选项）；创建即 active + 计算首 due；
+- manage：list/pause/resume/cancel 适配新状态机；view 改为任务统计 + 最近执行摘要 + 指引任务视图；支持修改通知规则（list_notify_rules/set_notify_rule）。
 
 ### 前端
 
-任务计划分组 + 任务执行视图（§6）；通知目标选择器（§8.3）；通知点击 → 任务视图；旧聊天链接路由（§6）；`ScheduledTasks.vue` 改造为操作区基础。
+任务计划分组 + 任务执行视图（§6）；通知规则选择（task-rules 接口）；通知点击 → 任务视图；旧聊天链接路由（§6）；`ScheduledTasks.vue` 改造为操作区基础。
 
 ## 11. 代码变更清单
 
@@ -377,7 +377,7 @@ CREATE INDEX idx_scheduled_tasks_owner ON scheduled_tasks(tenant_id, user_id, st
 
 **Runner 服务（增量）**：contracts source 枚举；authorization `_scheduled` 三语义 + 提交事务内接单守卫（行锁复核 status+pending）；chat 提交任务会话拒绝；零历史；非交互：prompt_augmentations 注入（根+子）+ `interactive_only` 工具过滤；`chat_only` 过滤；write_history 投影；public_runner 增 `scheduled`/`credit_cost`；event_repository terminal 挂 hooks；waiting 停车挂 needs_action 生产；settings peers。
 
-**通知（增量）**：producer scheduled terminal/needs_action 分支；注册 `task.needs_action`（参数/文案/偏好默认集合/全渠道渲染）；参数快照 `notify_target_id`；expand 资源→任务统一路由 + 快照目标投递；目标选项读取接口（非管理员）；投递状态查询接口；外发带任务入口链接。
+**通知（增量）**：producer scheduled terminal/needs_action 分支；注册 `task.needs_action`（参数/文案/偏好默认集合/全渠道渲染）；参数快照 `notify_rule_id`/`notify_target_id`（规则优先、旧目标兜底）；expand 资源→任务统一路由 + 规则/目标投递；task-rules 只读接口（非管理员）；投递状态查询接口；外发带任务入口链接。
 
 **其他**：`background_runner.py` 启动循环与恢复驱动；session 删除守卫；config scheduler 节；`database_system_table.md` §8。
 
@@ -421,7 +421,7 @@ scheduler:
 2. 到点执行及子执行不向用户发起提问；**任务输出为"请求补充信息"的用例不通过验收**；无数据等场景按约定输出；
 3. 任务位于独立分组，执行视图无聊天输入框；旧聊天链接打开任务会话路由到任务视图；普通 chat 提交被拒；定时执行不切换当前页面；
 4. 每次执行的时间、触发原因、状态、结果、计费可追溯（含执行前失败与空输出，运行中可见触发原因）；
-5. 所选通知目标收到通知（含任务入口链接），点击进入任务视图；未选择时不外发租户群；事件生成后改目标不影响已生成事件；
+5. 所选通知规则的渠道目标收到通知（含任务入口链接），点击进入任务视图；未选用规则时不外发租户群；事件生成后改规则/目标不影响已生成事件；
 6. 认领后崩溃、提交响应丢失、worker 中断均不静默丢执行、不重复计费；编辑任务不改变已认领执行的提交内容；
 7. 暂停只停未来调度（已受理执行跑完）；手动执行不改 interval 节奏、不消费 once；删除遵守守卫；
 8. interrupted 执行被恢复驱动接续（resume 控制被消费）；无法恢复时任务暂停并通知，用户可取消该执行后恢复任务。

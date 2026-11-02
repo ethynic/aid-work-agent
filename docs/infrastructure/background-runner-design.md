@@ -3,6 +3,8 @@
 > 日期：2026-07-21
 > 状态：已落地（`src/background_runner.py` + `docker-compose.{prod,test,dev,local}.yml` 的 `aid-agent-background` 服务）
 > 关联消费方：[S1 发布调度执行框架](../system/publish-dispatcher-design.md)
+>
+> **2026-10-28 更新**：用户定时任务已随[定时任务重构（Runner 化）](../system/scheduled-task-runner-refactor-design.md)改为 `src/scheduler/dispatch.py` 到期循环提交 Runner（同进程，不再经 APScheduler/executor）。本文"用户 cron 任务经 APScheduler 迁移"的表述为迁移当时现状，系统任务部分仍然有效。
 
 ## 1. 背景与目标
 
@@ -61,7 +63,7 @@
     └── python -m src.background_runner
           └── BackgroundScheduler（Redis 锁单实例）
                 ├── 系统任务：每日记忆总结 / 上下文压缩扫描
-                ├── 用户 cron 任务（ScheduledTaskExecutor，lazy 加载 master_agent）
+                ├── 用户定时任务（原 ScheduledTaskExecutor 槽位，lazy 加载 master_agent；2026-10-28 起 Runner 化为 dispatch 到期循环）
                 ├── 迁入循环：memory_cleanup / dedup_cleanup / wecom_kf_timeout / rpa_archive_poller
                 └── S1 发布调度：PublishJobDispatcher（每分钟）
 ```
@@ -82,7 +84,7 @@
 |------|------|------|
 | PublishJobDispatcher（S1） | background runner | **P0（本期随 S1）** |
 | 每日记忆总结 / 上下文压缩扫描 | background runner | P0（已是 APScheduler 系统任务，随进程迁移） |
-| 用户 cron 任务（ScheduledTaskExecutor） | background runner | P0（已是 APScheduler，随进程迁移） |
+| 用户定时任务（原 ScheduledTaskExecutor） | background runner | P0 随进程迁移；2026-10-28 起 Runner 化为 dispatch 到期循环（见[定时任务重构设计](../system/scheduled-task-runner-refactor-design.md)） |
 | memory_cleanup / dedup_cleanup / wecom_kf_timeout / rpa_archive_poller（#38 的 5 循环） | background runner | P1（#38 迁移工作，独立于 S1） |
 | instance_lock_cleanup | 删除（#38 已定） | P1 |
 | session_queue heartbeat watchdog | 留在 HTTP worker（与 request 生命周期绑定） | 不动 |

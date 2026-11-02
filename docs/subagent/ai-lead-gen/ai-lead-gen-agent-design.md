@@ -54,8 +54,8 @@ trade-specialist 是 4 个月前的演示性质实现，与本智能体是**替�
     → storage/tenants/{tid}/lead-gen/{campaign}/ （brief、情报、草稿等工作产物）
 
 定时链路（全自动模式）
-  → src/scheduler（ScheduledTaskDB + APScheduler，每日 cron）
-    → ScheduledTaskExecutor 以用户身份在 cron 会话执行 task_prompt
+  → src/scheduler（scheduled_tasks 持久化 + dispatch 到期循环，2026-10-28 起 Runner 化）
+    → Runner 以 scheduled 来源在独立任务会话执行 task_prompt
       → 同一条获客管线（auto 闸门：跳过人工确认）
       → 完成后 notification_service 汇总通知（站内信 + 渠道）
 
@@ -241,9 +241,9 @@ send_mode 闸门
 
 ## 8. 定时任务与全自动循环（需求 5）
 
-复用 `src/scheduler/`（ScheduledTaskDB 持久化 + APScheduler + ScheduledTaskExecutor）：
+复用 `src/scheduler/`（scheduled_tasks 持久化 + dispatch 到期循环提交 Runner，2026-10-28 Runner 化）：
 
-- 用户切换 auto 模式时，通过现有 scheduler 工具创建每日 cron 任务，task_prompt 固定模板："执行获客活动 {campaign_name} 的每日循环：按 brief 搜索补充名单 → 挖掘联系人 → 撰写邮件 → 按 send_mode=auto 发送 → 汇总今日结果"，执行身份为创建用户，落 cron 专属会话
+- 用户切换 auto 模式时，通过现有 scheduler 工具创建每日 cron 任务，task_prompt 固定模板："执行获客活动 {campaign_name} 的每日循环：按 brief 搜索补充名单 → 挖掘联系人 → 撰写邮件 → 按 send_mode=auto 发送 → 汇总今日结果"，执行身份为创建用户，落任务专属会话
 - campaign 的 `scheduler_task_id` 回写关联；切回 review 模式时暂停对应任务
 - 执行结束由管线末段触发汇总通知（§9）：新增客户 N、有效联系人 M、发送 X、失败/退信 Y、新回复 K、有意向 Z
 - 长耗时风险：一轮完整循环含大量搜索/抓取，受 Runner 轮次上限约束；首轮实测确定单日循环的名单批次上限（源包纪律：每轮 30～50 家候选、并发 ≤3），必要时拆分"上午搜索/下午发送"两个 cron 任务

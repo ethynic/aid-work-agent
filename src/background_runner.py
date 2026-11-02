@@ -1,7 +1,8 @@
 """独立后台运行时（SERVER_MODE=background）
 
 承载：
-- APScheduler（系统任务 + 用户定时任务 + reconcile 对账），在其后台线程跑
+- APScheduler（系统任务），在其后台线程跑；用户定时任务由 src/scheduler/dispatch.py
+  到期循环提交 Runner（asyncio 兄弟任务，不经 APScheduler，2026-10-28 Runner 化）
 - wecom_personal_rpa 服务端会话存档兜底轮询（asyncio 兄弟任务，内部自带 Redis 锁）
 - recap 轮后任务消费者（API worker 入队 Redis，本进程执行，与 HTTP worker 重启解耦）
 - wechat_mp 队列驱动 + 定时复核调度（WP7，asyncio 兄弟任务，内部自带单副本 Redis 锁）
