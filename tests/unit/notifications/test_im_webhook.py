@@ -75,6 +75,23 @@ class TestRender:
         payload = DingtalkBotAdapter().render(message, {})
         assert '通知渠道测试' in payload['text']
 
+    def test_render_terminal_task_completed(self):
+        """scheduled 终态带 task_name，外发渲染不再抛 NOTIFICATION_EVENT_UNSUPPORTED"""
+        message = {'notification_ref': 'ref3', 'event_type': 'task.completed', 'parameters': {
+            'session_title': '2026-11-02 各渠道销售日报', 'event_kind': 'completed',
+            'task_id': 'sched_1', 'task_name': '昨日各渠道销售情况播报'}}
+        payload = FeishuBotAdapter().render(message, {})
+        assert '任务执行完成' in payload['text']
+        assert '昨日各渠道销售情况播报' in payload['text']
+
+    def test_render_terminal_chat_source_falls_back_to_session_title(self):
+        """chat 来源无 task_name，退回 session_title"""
+        message = {'notification_ref': 'ref4', 'event_type': 'task.failed', 'parameters': {
+            'session_title': '帮我看下数据', 'event_kind': 'failed'}}
+        payload = WecomBotAdapter().render(message, {})
+        assert '任务执行失败' in payload['text']
+        assert '帮我看下数据' in payload['text']
+
 
 class TestInterpret:
     @pytest.mark.parametrize('raw,expected', [

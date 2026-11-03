@@ -204,6 +204,13 @@ def _non_work_time_note(now=None):
 
 def render_inbox_text(event_type, parameters):
     """站内信标题与正文按事件模板渲染；仅做纯文本插值，参数已过严格模型。"""
+    if event_type == 'task.completed':
+        # 任务名称优先（定时任务）；chat 来源或存量参数无 task_name，退回会话标题
+        name = parameters.get('task_name') or parameters['session_title']
+        return '任务执行完成', f'「{name}」已执行完成，请查看执行结果。'
+    if event_type == 'task.failed':
+        name = parameters.get('task_name') or parameters['session_title']
+        return '任务执行失败', f'「{name}」执行失败，请查看执行详情。'
     if event_type == 'task.waiting_input':
         return '等待你的回答', (
             f'「{parameters["session_title"]}」中的提问「{parameters["question_title"]}」'
