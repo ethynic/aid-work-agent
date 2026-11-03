@@ -60,7 +60,9 @@
         <span>
           {{ submitFailure?.kind === 'retrying'
             ? '发送状态确认中，正在自动重试'
-            : '消息未发送成功' }}
+            : submitFailure
+              ? '消息发送失败，请重试或删除后重新发送'
+              : '任务执行失败，请重试重新发起任务' }}
         </span>
       </div>
     </div>

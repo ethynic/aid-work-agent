@@ -52,8 +52,8 @@ describe('MessageItem 提交失败态渲染', () => {
   it('definitive 失败渲染错误文案与重试按钮，点击触发幂等重试闭包', async () => {
     const retry = vi.fn()
     const { wrapper } = mountFailed({ kind: 'definitive', message: '积分不足，请充值后重试。', attempts: 0, retry })
-    expect(wrapper.find('[role="alert"]').text()).toContain('消息未发送成功')
-    expect(wrapper.find('[role="alert"]').text()).toBe('消息未发送成功')
+    expect(wrapper.find('[role="alert"]').text()).toContain('消息发送失败')
+    expect(wrapper.find('[role="alert"]').text()).toBe('消息发送失败，请重试或删除后重新发送')
     expect(wrapper.find('[role="alert"]').classes()).toContain('text-muted')
     const button = wrapper.find('button[aria-label="重试消息"]')
     expect(button.text()).toBe('')
@@ -119,7 +119,7 @@ describe('MessageItem 提交失败态渲染', () => {
     const message = reactive({ role: 'user' as const, content: '上海的', timestamp: Date.now(),
       runnerFailure: { message: '服务暂时不可用，请稍后重试。', retry, retrying: false, remove: vi.fn() } })
     const wrapper = mount(MessageItem, { props: { message } })
-    expect(wrapper.find('[role="alert"]').text()).toContain('消息未发送成功')
+    expect(wrapper.find('[role="alert"]').text()).toContain('任务执行失败')
     expect(wrapper.find('.message-ai-wrapper').exists()).toBe(false)
     await wrapper.find('button[aria-label="重试消息"]').trigger('click')
     expect(retry).toHaveBeenCalledTimes(1)

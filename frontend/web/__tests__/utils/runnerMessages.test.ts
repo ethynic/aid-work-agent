@@ -64,7 +64,8 @@ describe('Runner display merges durable facts with existing messages', () => {
       content: '', created_at: first.accepted_at, metadata: { runner_id: 'runner-A' } }])
     const messages = mergeRunnerMessages(restored, [first, second])
     expect(messages.map(message => message.role)).toEqual(['user', 'user'])
-    expect(messages.every(message => message.runnerFailure?.message.includes('请稍后重试'))).toBe(true)
+    expect(messages.every(message => message.runnerFailure?.message.includes('任务执行失败'))).toBe(true)
+    expect(messages.some(message => message.runnerFailure?.message.includes('EXECUTION_FAILED'))).toBe(true)
     expect(messages.some(message => message.content.includes('EXECUTION_FAILED'))).toBe(false)
   })
 

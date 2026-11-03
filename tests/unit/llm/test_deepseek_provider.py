@@ -89,8 +89,9 @@ def test_actual_reasoning_string_survives_parse_and_next_request(reasoning, with
 
 @pytest.mark.parametrize("metadata", [{}, {"reasoning_content": None}])
 @pytest.mark.parametrize("with_tools", [True, False])
-def test_legacy_or_non_thinking_messages_do_not_get_fabricated_reasoning(metadata, with_tools):
-    provider = _make_provider()
+def test_thinking_disabled_does_not_fabricate_reasoning(metadata, with_tools):
+    """思考关闭（chat_lite 等）不伪造 reasoning_content，保持历史行为。"""
+    provider = _make_provider(enable_thinking=False)
     message = {"role": "assistant", "content": "old answer", **metadata}
     if with_tools:
         message["tool_calls"] = [{"id": "old-1", "type": "function", "function": {
@@ -98,3 +99,21 @@ def test_legacy_or_non_thinking_messages_do_not_get_fabricated_reasoning(metadat
     parsed = provider._parse_response({"choices": [{"message": message}]})
     assert "reasoning_content" not in parsed
     assert "reasoning_content" not in provider._format_messages([message])[0]
+
+
+@pytest.mark.parametrize("with_tools", [True, False])
+def test_thinking_enabled_fills_missing_reasoning_for_cross_provider_history(with_tools):
+    """回归（2026-11-03 生产 ai-quotation 事故）：failover 链 deepseek->qwen 中
+    qwen 完成的轮次（assistant 消息）不含 reasoning_content，下一轮回到链首
+    deepseek 时 thinking 模式以 400 拒绝（must be passed back）。思考开启时
+    必须对缺失该字段的 assistant 消息补空串；tool_calls 与 content 原样保留。"""
+    provider = _make_provider()
+    message = {"role": "assistant", "content": "qwen 回复"}
+    if with_tools:
+        message["tool_calls"] = [{"id": "call-1", "type": "function", "function": {
+            "name": "skill_execute", "arguments": "{}"}}]
+    wire = provider._format_messages([message])[0]
+    assert wire["reasoning_content"] == ""
+    assert wire["content"] == "qwen 回复"
+    if with_tools:
+        assert wire["tool_calls"] == message["tool_calls"]

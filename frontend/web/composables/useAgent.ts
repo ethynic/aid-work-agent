@@ -686,6 +686,14 @@ export function useAgent() {
     const message = optimisticAssistant(state, body.client_request_id)
     if (!message) return
     const generation = state.runnerGeneration
+    console.log('前端日志：消息提交失败', {
+      kind: definitive ? 'definitive' : 'retrying',
+      status: issue instanceof RunnerRequestError ? issue.status : undefined,
+      code: issue instanceof RunnerRequestError ? issue.code : issue.name,
+      detail: issue.message,
+      client_request_id: body.client_request_id,
+      session_id: body.session_id,
+    })
     message.submitFailure = {
       kind: definitive ? 'definitive' : 'retrying',
       message: runnerIssueText(issue),

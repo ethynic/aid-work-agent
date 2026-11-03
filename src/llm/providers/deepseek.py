@@ -323,8 +323,13 @@ class DeepSeekProvider(BaseLLMProvider):
         """
         格式化消息，保留 reasoning_content 以兼容 DeepSeek 思考模式。
 
-        DeepSeek 思考模式要求：如果 assistant 消息包含 reasoning_content，
-        必须在后续请求中原样传回，否则 API 返回 400 错误。
+        DeepSeek 思考模式要求：assistant 消息必须携带 reasoning_content 并在
+        后续请求中原样传回，缺失会被 API 以 400 拒绝（The `reasoning_content`
+        in the thinking mode must be passed back to the API）。跨提供商
+        failover 历史（qwen/zhipu 完成的轮次）不含该字段，因此思考开启时对
+        缺失的 assistant 消息补空串兜底——deepseek 自身也可能返回空思考串，
+        空串是 API 接受形态（2026-11-03 生产 ai-quotation 事故）。思考关闭
+        时不伪造，保持历史行为。
         """
         formatted = []
         for msg in messages:
@@ -337,21 +342,19 @@ class DeepSeekProvider(BaseLLMProvider):
                     "tool_call_id": msg.get("tool_call_id", ""),
                     "content": json.dumps(content, ensure_ascii=False) if isinstance(content, dict) else (content if isinstance(content, str) else str(content)),
                 })
-            elif role == "assistant" and "tool_calls" in msg:
-                assistant_msg = {
-                    "role": "assistant",
-                    "content": str(content) if not isinstance(content, str) else content,
-                    "tool_calls": msg.get("tool_calls", [])
-                }
+            elif role == "assistant":
+                assistant_msg: Dict[str, Any] = {"role": "assistant"}
+                if "tool_calls" in msg:
+                    assistant_msg["tool_calls"] = msg.get("tool_calls", [])
+                if isinstance(content, (str, list)):
+                    assistant_msg["content"] = content
+                else:
+                    assistant_msg["content"] = str(content)
                 if isinstance(msg.get("reasoning_content"), str):
                     assistant_msg["reasoning_content"] = msg["reasoning_content"]
+                elif self.enable_thinking:
+                    assistant_msg["reasoning_content"] = ""
                 formatted.append(assistant_msg)
-            elif role == "assistant" and isinstance(msg.get("reasoning_content"), str):
-                formatted.append({
-                    "role": "assistant",
-                    "content": str(content) if not isinstance(content, str) else content,
-                    "reasoning_content": msg["reasoning_content"],
-                })
             elif isinstance(content, list):
                 formatted.append({"role": role, "content": content})
             else:

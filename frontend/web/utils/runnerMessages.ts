@@ -130,7 +130,14 @@ export function runnerMessages(row: RunnerView): ChatMessage[] {
   ]
   if (row.status === 'failed') {
     const input = [...messages].reverse().find(message => message.role === 'user')
-    if (input) input.runnerFailure = { message: '服务暂时不可用，请稍后重试。' }
+    if (input) {
+      const errorCode = row.result?.error_code || 'EXECUTION_FAILED'
+      input.runnerFailure = { message: `任务执行失败（${errorCode}），请重试。` }
+      console.log('前端日志：任务执行失败', {
+        runner_id: row.runner_id, error_code: errorCode,
+        result_status: row.result?.status, session_id: row.session?.session_id,
+      })
+    }
   }
   const assistant: ChatMessage = { ...common, role: 'assistant', messageId: row.runner_id + (row.execution_mode === 'continuous' || snapshot.history_version === 1 ? ':final' : ':assistant'),
       content: row.result?.output ?? snapshot.output ?? '', timestamp: finished,
