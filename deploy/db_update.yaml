@@ -4419,3 +4419,9 @@
   remark: "定时任务通知接入通知规则：scheduled_tasks 新增 notification_rule_id（任务级选用规则，替代旧 notification_target_id 直选渠道）"
   statements: |
     ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS notification_rule_id TEXT;
+- datetime: "2026-11-03 15:00:00"
+  remark: "通知规则 recipient_mode 放宽支持 task_owner——定时任务通知（scheduled.task）事件固定任务属主接收，存量库 check 约束未随代码放宽导致保存报 CheckViolation（NOTIFICATION_UNAVAILABLE）"
+  statements: |
+    ALTER TABLE notification_rules DROP CONSTRAINT IF EXISTS notification_rules_recipient_mode_check;
+    ALTER TABLE notification_rules ADD CONSTRAINT notification_rules_recipient_mode_check
+        CHECK (recipient_mode IN ('tenant_admins','kf_assignee','task_owner'));

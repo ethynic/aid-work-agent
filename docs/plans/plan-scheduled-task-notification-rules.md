@@ -68,3 +68,4 @@
 ## 已知修复
 
 - 2026-11-02：新增规则弹框中手动把事件类型从默认「客户留资」切换为「定时任务通知」时，`recipient_mode` 未联动（保持 `kf_assignee`），保存被后端 `NOTIFICATION_RULE_RECIPIENT_INVALID` 拒绝（页面提示「接收人模式不合法」）。修复：`NotificationRules.vue` 给 `form.event_type` 加 watcher 联动设置 `recipient_mode`（编辑态跳过，避免覆盖存量规则值）；新增组件回归测试 `NotificationRules.recipientMode.test.ts`（切换为 scheduled.task 提交 task_owner、切回其他类型回落 tenant_admins）。
+- 2026-11-03：agent2 实测保存定时任务规则报 503 `NOTIFICATION_UNAVAILABLE`，根因是 DB check 约束 `notification_rules_recipient_mode_check` 未随代码放宽（仍限 `tenant_admins/kf_assignee`），`task_owner` 落库 CheckViolation 被通知 API 兜底 503。修复：db_update 追加 "2026-11-03 15:00:00" 幂等块（DROP+ADD 约束含 `task_owner`），init-postgres.sql CREATE TABLE 同步；agent2 测试库已手动执行同 SQL 验证通过（insert+rollback）。
