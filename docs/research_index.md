@@ -6,6 +6,7 @@
 
 | 调研主题 | 文档 | 关联功能 |
 |---------|------|---------|
+| 「社会治理智能体」技术要求评估 | [评估](research/social-governance-agent-requirement-assessment.md) | 2026-11-03：高校采购标书 vs 本项目能力对照；约 60% 吻合可投，缺口为工作流编排与知识空间，投标前需定应对策略。 |
 | Runtime 与 CLI 安装升级简化评估 | [评估](research/runtime-cli-install-upgrade-simplicity-review.md) | 2026-10-30：审查安装、任务恢复、验包与信任耦合，建议覆盖升级优先、重装白名单保留配置。 |
 | BOSS CLI 视觉识别与恢复真机实验 | [实验记录](research/boss-visual-recovery-machine-experiments.md) | 累计126次实调；霍接收预览关闭故障链通过，视觉20倍。 |
 | ZCode / DeepSeek Harness 搜索工具与中文检索增强 | [调研](research/agent-web-search-harness-research.md) | Read/PDF修复保留，实验研究流程已撤回；旧Pro实测不作Flash验收。 |
