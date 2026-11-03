@@ -145,11 +145,14 @@ def setup_logging(
     )
 
     # 添加控制台处理器
+    # diagnose=False：loguru 默认会在异常堆栈每帧打印局部变量值，
+    # 用户邮箱密码、token 等敏感凭据会以明文进入日志，必须关闭
     logger.add(
         sys.stdout,
         format=console_format,
         level=log_level,
         colorize=True,
+        diagnose=False,
         filter=lambda record: not _is_http_audit(record),
     )
 
@@ -171,6 +174,7 @@ def setup_logging(
         format=file_format,
         level=log_level,
         enqueue=True,
+        diagnose=False,
         filter=lambda record: not _is_http_audit(record),
     )
 
@@ -180,6 +184,7 @@ def setup_logging(
         format=file_format,
         level="ERROR",
         enqueue=True,
+        diagnose=False,
         filter=lambda record: not _is_http_audit(record),
     )
 
