@@ -2,6 +2,7 @@
  * 数字员工 API（只读）
  */
 import { getAuthHeader } from '@/api/auth'
+import type { QuickPrompt } from '@/utils/quickPrompts'
 
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/subagents`
 
@@ -36,6 +37,8 @@ export interface SubagentListItem {
   status?: string           // 实例状态：idle/busy
   avatar?: string           // 头像
   created_at?: string       // 副本实例创建时间（排序用）
+  greeting_summary?: string           // 新会话空态摘要（租户实例覆盖）
+  greeting_prompts?: QuickPrompt[]    // 新会话快捷按钮（租户实例覆盖）
   [key: string]: any        // 允许其他字段
 }
 

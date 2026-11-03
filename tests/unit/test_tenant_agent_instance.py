@@ -318,6 +318,30 @@ class TestBuildTenantInstanceItems:
             items = svc.build_tenant_instance_items("t1", {"sales-t1-ab12"})
         assert [i["agent_id"] for i in items] == ["sales-t1-ab12"]
 
+    def test_greeting_override_passed_through(self):
+        prompts = [{"label": "订车", "message": "帮我订车"}]
+        rows = [_row("sales-t1-ab12", "sales",
+                     greeting_summary="定制摘要", greeting_prompts=prompts)]
+        fake_agent = type("A", (), {})()
+        fake_agent.subagent_registry = type("R", (), {})()
+        fake_agent.subagent_registry.get = lambda _id: None
+        with patch.object(svc.TenantAgentInstanceDB, "list_by_tenant", return_value=rows), \
+             patch("src.core.agent.get_master_agent", return_value=fake_agent):
+            items = svc.build_tenant_instance_items("t1", {"sales"})
+        assert items[0]["greeting_summary"] == "定制摘要"
+        assert items[0]["greeting_prompts"] == prompts
+
+    def test_greeting_absent_not_in_item(self):
+        rows = [_row("sales-t1-ab12", "sales")]
+        fake_agent = type("A", (), {})()
+        fake_agent.subagent_registry = type("R", (), {})()
+        fake_agent.subagent_registry.get = lambda _id: None
+        with patch.object(svc.TenantAgentInstanceDB, "list_by_tenant", return_value=rows), \
+             patch("src.core.agent.get_master_agent", return_value=fake_agent):
+            items = svc.build_tenant_instance_items("t1", {"sales"})
+        assert "greeting_summary" not in items[0]
+        assert "greeting_prompts" not in items[0]
+
 
 # ============== apply_direct_customization_overrides ==============
 
@@ -354,6 +378,24 @@ class TestApplyDirectCustomizationOverrides:
             result = svc.apply_direct_customization_overrides("t1", items)
         assert result[0]["name"] == "销售助手"
         assert result[0]["description"] == "父定义简介"
+
+    def test_greeting_override_merged_into_base_item(self):
+        prompts = [{"label": "订车", "message": "帮我订车"}]
+        rows = [_row("sales", "sales",
+                     greeting_summary="直用定制摘要", greeting_prompts=prompts)]
+        items = [{"agent_id": "sales", "name": "销售助手", "description": "父定义简介"}]
+        with patch.object(svc.TenantAgentInstanceDB, "list_by_tenant", return_value=rows):
+            result = svc.apply_direct_customization_overrides("t1", items)
+        assert result[0]["greeting_summary"] == "直用定制摘要"
+        assert result[0]["greeting_prompts"] == prompts
+
+    def test_greeting_absent_not_merged(self):
+        rows = [_row("sales", "sales")]
+        items = [{"agent_id": "sales", "name": "销售助手", "description": "父定义简介"}]
+        with patch.object(svc.TenantAgentInstanceDB, "list_by_tenant", return_value=rows):
+            result = svc.apply_direct_customization_overrides("t1", items)
+        assert "greeting_summary" not in result[0]
+        assert "greeting_prompts" not in result[0]
 
     def test_db_error_returns_items_unchanged(self):
         items = [{"agent_id": "sales", "name": "销售助手"}]

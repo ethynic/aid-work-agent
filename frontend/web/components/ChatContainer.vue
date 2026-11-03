@@ -384,10 +384,26 @@ const currentSubagentName = computed(() => currentSubagent.value?.name || null)
 // 后端 LLM 生成的空态摘要（仅静态配置未命中时异步拉取，Redis 缓存 7 天）
 const llmGreeting = ref<SubagentGreeting | null>(null)
 
+// 租户实例的 greeting 覆盖（列表接口随条目下发，保存定制后 handleAgentChanged 会刷新列表）
+const instanceGreeting = computed<SubagentGreeting | null>(() => {
+  const cur = currentSubagent.value as any
+  if (!cur) return null
+  const summary = (cur.greeting_summary || '').trim()
+  const prompts = Array.isArray(cur.greeting_prompts) ? cur.greeting_prompts : []
+  if (!summary && prompts.length === 0) return null
+  return {
+    summary: summary || DEFAULT_GREETING.summary,
+    prompts: prompts.length > 0 ? prompts : DEFAULT_GREETING.prompts,
+  }
+})
+
 // 会话空态摘要 + 快捷按钮：
-// 1. 静态配置（12 个内置智能体人工配置）优先，不发请求
-// 2. 未配置的智能体先用 description + 通用按钮兜底渲染，同时异步请求后端 LLM 生成，成功后替换
+// 1. 租户实例覆盖（定制页保存的简介/快捷按钮）最高优先
+// 2. 静态配置（12 个内置智能体人工配置）次之，不发请求
+// 3. 未配置的智能体先用 description + 通用按钮兜底渲染，同时异步请求后端 LLM 生成，成功后替换
 const emptyStateGreeting = computed<SubagentGreeting>(() => {
+  const instance = instanceGreeting.value
+  if (instance) return instance
   const config = greetingForSubagent(currentSubagentType.value)
   if (config) return config
   if (llmGreeting.value) return llmGreeting.value
@@ -397,12 +413,13 @@ const emptyStateGreeting = computed<SubagentGreeting>(() => {
   }
 })
 
-// 监听智能体类型：静态配置未命中时向后端请求空态摘要（用递增序号防止旧请求覆盖新智能体）
+// 监听智能体类型：无实例覆盖且静态配置未命中时向后端请求空态摘要（用递增序号防止旧请求覆盖新智能体）
 let greetingFetchSeq = 0
 watch(currentSubagentType, async (type) => {
   const seq = ++greetingFetchSeq
   llmGreeting.value = null
   if (!type) return
+  if (instanceGreeting.value) return  // 租户实例覆盖已随列表下发，不发请求
   if (greetingForSubagent(type)) return  // 静态配置命中不发请求
   try {
     const res = await getSubagentGreeting(type)

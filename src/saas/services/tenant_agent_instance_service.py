@@ -297,6 +297,11 @@ def apply_direct_customization_overrides(
             item["display_name"] = row["display_name"]
         if row.get("description"):
             item["description"] = row["description"]
+        # greeting 覆盖随列表下发：前端空态问候直接同步使用，不再依赖 greeting API（静态配置会遮蔽）
+        if row.get("greeting_summary"):
+            item["greeting_summary"] = row["greeting_summary"]
+        if isinstance(row.get("greeting_prompts"), list) and row["greeting_prompts"]:
+            item["greeting_prompts"] = row["greeting_prompts"]
     return items
 
 
@@ -345,6 +350,11 @@ def build_tenant_instance_items(tenant_id: str, allowed_ids: Any) -> List[Dict[s
             item["chat_toolbar"] = base_cfg.chat_toolbar
         if base_cfg is not None and base_cfg.upload_accept:
             item["upload_accept"] = base_cfg.upload_accept
+        # greeting 覆盖随列表下发（同 apply_direct_customization_overrides）
+        if row.get("greeting_summary"):
+            item["greeting_summary"] = row["greeting_summary"]
+        if isinstance(row.get("greeting_prompts"), list) and row["greeting_prompts"]:
+            item["greeting_prompts"] = row["greeting_prompts"]
         items.append(item)
     return items
 

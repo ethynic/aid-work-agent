@@ -6,6 +6,7 @@
 import { getTenantScopedKey } from './tenantStorage'
 import { credentialGet } from '@/platform/credentialStore'
 import { triggerNativeDownload } from '@/utils/download'
+import type { QuickPrompt } from '@/utils/quickPrompts'
 
 // 复用 saasTenant 的 getSaasAuthHeader
 function getTokenKey(): string {
@@ -52,6 +53,8 @@ export interface AgentItem {
   subagent_type?: string // 子智能体类型
   status?: string       // 实例状态：idle/busy
   avatar?: string       // 头像
+  greeting_summary?: string           // 新会话空态摘要（租户实例覆盖）
+  greeting_prompts?: QuickPrompt[]    // 新会话快捷按钮（租户实例覆盖）
   [key: string]: any  // 允许其他字段
 }
 
