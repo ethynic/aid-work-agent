@@ -18,6 +18,7 @@ from src.knowledge.retriever.tenant_range import (
     resolve_category_scope,
 )
 from src.core.image_asset import get_image_registry
+from src.tools.knowledge.search_context import FORMAT, chunk_fingerprint, fingerprint
 from src.db.database import get_db_connection
 from loguru import logger
 
@@ -63,6 +64,12 @@ class KnowledgeBaseTool(BaseTool):
         "doc_metadata 仅含 raw_payload（业务原始数据：价格表/项目表/图片 file_id 等"
         "未写入正文的字段，可据 file_id 写 ![图片](file_id:xxx) 嵌图）；"
         "带封面的文档另含 cover_image（含 file_id 等图片引用信息，可用于行程图集/封面展示）。"
+        "每次调用都会重新检索。matched_count 是本次命中片段数，count 是本次 results 实际返回数。"
+        "already_in_context_chunks 所列片段正文及信息、already_in_context_documents 所列文档资料"
+        "（包括 raw_payload）已完整在当前上下文中，本次确认相同后省略；仅这些历史内容获本次确认。"
+        "matched_count>0 且 count=0 表示命中内容已在上下文，仍须查看 documents 是否有更新资料；"
+        "两者都为零才是未命中。回答时以本次新资料为准，勿推断其他旧知识仍有效。"
+        "invalid_history_documents 是当前授权已确认失效的历史文档标识，勿使用其旧内容。"
         "若已知文件名/文档标题、需要读取整个文件，先用 knowledge_file_search 定位拿到 file_path，再用 read 读取。"
     )
     display_name = "搜索知识库"
@@ -103,9 +110,10 @@ class KnowledgeBaseTool(BaseTool):
             conn=None
         )
 
-    def _load_shared_ranges(self, tenant_id: str, subagent_id: str, source_type: Optional[str]) -> List[tuple]:
+    def _load_shared_ranges(self, tenant_id: str, subagent_id: str, source_type: Optional[str], *, strict: bool = False) -> List[tuple]:
         """委托权威实现（tenant_range.load_shared_ranges），保留方法便于调用方与测试复用"""
-        return load_shared_ranges(tenant_id, subagent_id, source_type)
+        return (load_shared_ranges(tenant_id, subagent_id, source_type, strict=True)
+                if strict else load_shared_ranges(tenant_id, subagent_id, source_type))
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """
@@ -149,7 +157,12 @@ class KnowledgeBaseTool(BaseTool):
             agent_id = context.subagent_id or MAIN_AGENT_ID
 
         # 栏目授权收口（收窄 / 拒绝）；未配置精细授权时行为与现状完全一致
-        source_type, rejection = resolve_category_scope(tenant_id, subagent_id, source_type)
+        try:
+            source_type, rejection, authorized = resolve_category_scope(
+                tenant_id, subagent_id, source_type, strict=True, include_authorized=True)
+        except Exception:
+            logger.opt(exception=True).error("后端日志：知识库栏目授权读取失败")
+            return {"success": False, "error": "知识库授权暂时无法核实", "results": [], "count": 0}
         if rejection:
             return {
                 "success": False,
@@ -162,12 +175,15 @@ class KnowledgeBaseTool(BaseTool):
         # 构造共享检索范围：仅子智能体 + 租户模式生效（主智能体 subagent_id 为空，恒为空）。
         # source_type 为授权收窄 list 时共享侧不过滤栏目（精确对本身已约束；
         # load_shared_ranges 的 source_type 参数仅支持 str 等值过滤）。
-        shared_ranges = []
-        if tenant_id and subagent_id:
-            shared_ranges = self._load_shared_ranges(
-                tenant_id, subagent_id,
-                source_type if isinstance(source_type, str) else None,
-            )
+        try:
+            shared_ranges = []
+            if tenant_id and subagent_id:
+                all_shared_ranges = self._load_shared_ranges(tenant_id, subagent_id, None, strict=True)
+                shared_ranges = ([item for item in all_shared_ranges if item[1] == source_type]
+                                 if isinstance(source_type, str) and source_type else all_shared_ranges)
+        except Exception:
+            logger.opt(exception=True).error("后端日志：知识库共享授权读取失败")
+            return {"success": False, "error": "知识库授权暂时无法核实", "results": [], "count": 0}
 
         logger.info(f"后端日志：知识库检索 tenant_id={tenant_id}, subagent_id={subagent_id}, query={query}, source_type={source_type}, shared_ranges={shared_ranges}")
 
@@ -293,13 +309,55 @@ class KnowledgeBaseTool(BaseTool):
                 formatted_results = []
                 documents_out = {}
 
+            matched_count = len(formatted_results)
+            inventory = context.knowledge_search_inventory if context else None
+            known_chunks, known_documents, known_scopes = inventory if inventory is not None else (
+                frozenset(), frozenset(), frozenset())
+            knowledge_scopes = {
+                str(doc_id): {"owner_tenant_id": (doc_tenant_ids.get(doc_id)
+                                                  if doc_tenant_ids.get(doc_id) != tenant_id else None),
+                              "source_type": doc_source_types.get(doc_id)}
+                for doc_id in {r["doc_id"] for r in results}
+            } if results else {}
+            invalid_history = []
+            if tenant_id and subagent_id:
+                for doc_id, owner, category in sorted(known_scopes, key=lambda item: (item[0], str(item[1]), item[2])):
+                    if (owner and owner != tenant_id and (owner, category) not in all_shared_ranges
+                            or (not owner or owner == tenant_id) and authorized is not None and category not in authorized):
+                        invalid_history.append({"doc_id": doc_id})
+            already_chunks = []
+            fresh_results = []
+            for chunk in formatted_results:
+                digest = chunk_fingerprint(chunk)
+                chunk["fingerprint"] = digest
+                marker = (str(chunk["doc_id"]), chunk["chunk_index"], digest)
+                if marker in known_chunks:
+                    already_chunks.append({"doc_id": chunk["doc_id"], "chunk_index": chunk["chunk_index"], "fingerprint": digest})
+                else:
+                    fresh_results.append(chunk)
+            document_fingerprints = {doc_id: fingerprint(doc) for doc_id, doc in documents_out.items()}
+            already_documents = []
+            for doc_id in list(documents_out):
+                digest = document_fingerprints[doc_id]
+                if (doc_id, digest) in known_documents:
+                    already_documents.append({"doc_id": doc_id, "fingerprint": digest})
+                    del documents_out[doc_id]
+                    del document_fingerprints[doc_id]
+
             # _no_truncate: 检索结果每条含完整文本，保头保尾截断会丢失排名靠后的
             # 中间结果（LLM 无法看到完整候选集）。声明不截断，让 LLM 看到全部结果。
             return {
                 "success": True,
                 "documents": documents_out,
-                "results": formatted_results,
-                "count": len(formatted_results),
+                "document_fingerprints": document_fingerprints,
+                "results": fresh_results,
+                "count": len(fresh_results),
+                "matched_count": matched_count,
+                "already_in_context_chunks": already_chunks,
+                "already_in_context_documents": already_documents,
+                "invalid_history_documents": invalid_history,
+                "knowledge_scopes": knowledge_scopes,
+                "_knowledge_result_format": FORMAT,
                 "_no_truncate": True
             }
 

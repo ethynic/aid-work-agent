@@ -1,6 +1,7 @@
 # 知识库能力增强开发计划
 
 > 关联设计：[知识库能力增强方案设计文档](./knowledge-base-enhancement-design.md)
+> 独立增量计划：[知识库多轮检索新鲜度与结果去重](../../plans/plan-knowledge-search-freshness.md)（2026-11-04；不并入本文 Phase 1/2）
 > 文档索引：[ideas.md §系统功能 #5](../../ideas.md)
 > 创建日期：2026-06-04
 > 状态：Phase 0 已完成并上线（详见设计文档 §5.0）；Phase 1-2 待开发

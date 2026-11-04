@@ -144,7 +144,7 @@ async def test_kb_search_same_doc_multiple_chunks_doc_info_once():
         "raw_payload": {"pics": ["https://x/1.jpg"]}}
     # 片段条目只含片段级字段
     for item in result["results"]:
-        assert set(item.keys()) == {"text", "doc_id", "score", "chunk_index", "metadata"}
+        assert set(item.keys()) == {"text", "doc_id", "score", "chunk_index", "metadata", "fingerprint"}
     assert len([i for i in result["results"] if i["doc_id"] == 7]) == 2
 
 
@@ -508,6 +508,30 @@ async def test_kb_search_no_source_type_narrows_to_authorized():
     assert call_kwargs["shared_ranges"] == []
 
 
+async def test_kb_search_empty_source_type_keeps_authorized_shared_ranges():
+    """模型传空字符串仍表示未指定栏目，不能漏检已授权的共享知识。"""
+    from src.tools.context import ToolExecutionContext, tool_execution_scope
+
+    tool = KnowledgeBaseTool()
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve = AsyncMock(return_value=[])
+    tool._retriever = mock_retriever
+    mock_cm = _auth_db_mock([
+        {"source_type": "industry", "owner_tenant_id": "A"},
+        {"source_type": "tech", "owner_tenant_id": "A"},
+    ])
+    mock_cm.__enter__.return_value.cursor.return_value.fetchone.return_value["share_owners"] = ["A"]
+
+    with tool_execution_scope(ToolExecutionContext(tenant_id="B", subagent_id="subagent")), \
+            patch("src.db.database.get_db_connection", return_value=mock_cm):
+        result = await tool.execute(query="资料", source_type="")
+
+    assert result["success"] is True
+    assert mock_retriever.retrieve.await_args.kwargs["source_type"] == ""
+    assert mock_retriever.retrieve.await_args.kwargs["shared_ranges"] == [
+        ("A", "industry"), ("A", "tech")]
+
+
 # ============================================================
 # cover_image 增强（Phase 3：聊天封面图从 attraction_search 专属
 # 泛化为知识库文档通用能力，设计 §4 D4）
@@ -675,7 +699,7 @@ async def test_kb_search_passes_trusted_agent_id():
 
     tool, mock_retriever = _kb_tool_with_retriever()
     ctx = ToolExecutionContext(tenant_id="tenant_test1", subagent_id="data-analysis")
-    with tool_execution_scope(ctx):
+    with tool_execution_scope(ctx), patch("src.db.database.get_db_connection", return_value=_auth_db_mock([])):
         await tool.execute(query="任意")
 
     assert mock_retriever.retrieve.await_args.kwargs["agent_id"] == "data-analysis"

@@ -188,6 +188,9 @@ class ToolDispatcher:
             else:
                 tool = self.registry.get_tool(execution_call.name)
                 context = self.control_tools.context.derive(tool_call_id=call.id, agent_execution_id=state.execution_id)
+                if execution_call.name == "knowledge_base_search":
+                    from src.tools.knowledge.search_context import context_inventory
+                    context = context.derive(knowledge_search_inventory=context_inventory(state.messages))
                 if tool and getattr(tool, "execution_target", None) == ExecutionTarget.LOCAL_REQUIRED:
                     result = None
                     async for kind, payload in self.local._run_local_required_tool(

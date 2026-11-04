@@ -3,6 +3,7 @@
 > 关联文档：[企业级 2B 智能体平台基础设施建设差距分析报告](../../research/enterprise-agent-infrastructure-gap-analysis.md) §2.3
 > 技术调研：[企业知识库 RAG 系统前沿技术调研](../../research/enterprise-knowledge-base-rag-research.md)
 > 文档索引：[ideas.md §系统功能 #5](../../ideas.md)
+> 多轮检索增量：[知识库多轮检索新鲜度与结果去重设计](knowledge-search-freshness-design.md)（2026-11-04，独立实施）
 > 创建日期：2026-05-28
 > 状态：Phase 0 已完成并上线（2026-06，详见 §5.0）；Phase 1-2 待开发
 
@@ -1488,3 +1489,7 @@ knowledge:
 | 知识库健康度检测 | §3.8 | 第三阶段（按需） |
 | 结构化数据问答（Text-to-SQL） | §3.6 | 第三阶段（按需） |
 | 文档自动同步 | §3.7 | 第三阶段（按需） |
+
+## 十、多轮检索结果的新鲜度（2026-11-04 增量）
+
+同一会话的历史工具结果及摘要可能使模型沿用旧知识。已确认的增量方案为每次调用 `knowledge_base_search` 都实际检索，排序后裁剪本轮上下文已有的相同片段和文档信息；不建立知识分类版本表或数据库触发器。历史消息本期不改写，以保持模型缓存前缀；工具调用依赖提示词与人工场景验收，授权撤销的历史消息强隔离另列后续事项。完整决策、边界和验收见[专项设计](knowledge-search-freshness-design.md)及[实施计划](../../plans/plan-knowledge-search-freshness.md)；本增量不改变上文既有 Phase 1/2 排期。

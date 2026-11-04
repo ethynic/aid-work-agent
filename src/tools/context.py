@@ -40,6 +40,8 @@ class ToolExecutionContext:
     # 服务端注入的 skill_execute 允许工作目录（如 Runner 执行附件工作区），
     # 仅经 derive() 在可信边界注入，LLM 不可伪造；_validate_workdir 据此放行前缀
     skill_workdir: Optional[str] = None
+    # Only the Runner supplies this from model-visible, paired tool messages.
+    knowledge_search_inventory: Optional[Any] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "request_data", freeze_request_mapping(self.request_data))

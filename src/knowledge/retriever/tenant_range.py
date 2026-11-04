@@ -23,6 +23,7 @@ def load_shared_ranges(
     tenant_id: Optional[str],
     subagent_id: Optional[str],
     source_type: Optional[str] = None,
+    *, strict: bool = False,
 ) -> List[Tuple[str, str]]:
     """读取已启用共享分类：数字员工级启用（subagent_knowledge_sources）∩ 租户级授权
     （tenant_knowledge_shares），返回精确 (from_tenant_id, source_type) 对。
@@ -47,6 +48,8 @@ def load_shared_ranges(
             row = cursor.fetchone()
     except Exception as e:
         logger.warning(f"后端日志：加载共享检索范围失败: {e}")
+        if strict:
+            raise
         return []
 
     if not row:
@@ -102,6 +105,7 @@ def resolve_source_types_by_file(owner: str, filename: str) -> List[str]:
 def load_authorized_source_types(
     tenant_id: Optional[str],
     subagent_id: Optional[str],
+    *, strict: bool = False,
 ) -> Optional[List[str]]:
     """读取本租户自有授权栏目集合（subagent_knowledge_sources 中 owner_tenant_id 为空的项）。
 
@@ -126,6 +130,8 @@ def load_authorized_source_types(
             row = cursor.fetchone()
     except Exception as e:
         logger.warning(f"后端日志：加载栏目授权失败: {e}")
+        if strict:
+            raise
         return None
     sources = (row["sources"] if row else None) or []
     owned = []
@@ -167,7 +173,9 @@ def resolve_category_scope(
     tenant_id: Optional[str],
     subagent_id: Optional[str],
     requested_source_type: Optional[str],
-) -> Tuple[Optional[Union[str, List[str]]], Optional[Dict[str, Any]]]:
+    *, strict: bool = False,
+    include_authorized: bool = False,
+) -> tuple:
     """按本租户栏目授权收口检索范围（knowledge_base_search / knowledge_file_search 共用）。
 
     授权语义见 load_authorized_source_types。共享范围不受自有授权影响，
@@ -181,19 +189,24 @@ def resolve_category_scope(
           build_tenant_range_conditions 对 list 生成 source_type = ANY(%s)。
         - rejection: 传参未授权时的拒绝响应 dict（含各授权栏目文档数），无拒绝为 None。
     """
-    authorized = load_authorized_source_types(tenant_id, subagent_id)
+    authorized = (load_authorized_source_types(tenant_id, subagent_id, strict=True)
+                  if strict else load_authorized_source_types(tenant_id, subagent_id))
+
+    def result(source_type, rejection):
+        return (source_type, rejection, authorized) if include_authorized else (source_type, rejection)
+
     if authorized is None:
-        return requested_source_type, None
+        return result(requested_source_type, None)
 
     if requested_source_type:
         if requested_source_type in authorized:
-            return requested_source_type, None
+            return result(requested_source_type, None)
         counts = count_active_documents_by_source_types(tenant_id, authorized)
         logger.info(
             f"后端日志：知识库检索栏目未授权 tenant_id={tenant_id}, subagent_id={subagent_id}, "
             f"requested={requested_source_type}, authorized={authorized}"
         )
-        return None, {
+        return result(None, {
             "note": (
                 f"栏目 {requested_source_type} 未授权，本次检索已拒绝。"
                 f"当前数字员工仅可检索以下知识库栏目，请从中选择后重试：\n"
@@ -203,10 +216,10 @@ def resolve_category_scope(
                 {"source_type": st, "doc_count": counts.get(st, 0)}
                 for st in authorized
             ],
-        }
+        })
 
     # 未传 source_type：收窄为授权栏目集合
-    return list(authorized), None
+    return result(list(authorized), None)
 
 
 def build_active_document_condition(alias: str = "d") -> str:
