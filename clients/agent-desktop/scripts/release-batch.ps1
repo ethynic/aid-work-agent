@@ -411,7 +411,7 @@ if ($includeBoss) {
 }
 if ($includeWecom) {
     $instructions += "通过 Runtime 离线包入口导入 wecom-$selectedWecomVersion.aidplugin.zip，不要解压插件。"
-    $instructions += if ($targetVerification -eq 'passed') { '已按目标 Runtime 的实际公开信任根和三业务工具清单验证可导入与调用；未安装或执行聊天业务。' } else { '未指定目标 Runtime，本插件未验证特定客户机可导入；先用 -TargetRuntimeResources 核验，或用 -Component RuntimeWecom 生成配套安装器。' }
+    $instructions += if ($targetVerification -eq 'passed') { '已核对目标 Runtime 的公开信任根、签名及四项必需工具静态兼容前提；实际导入和调用待安装联调。' } else { '未指定目标 Runtime，本插件未验证特定客户机可导入；先用 -TargetRuntimeResources 核验，或用 -Component RuntimeWecom 生成配套安装器。' }
 }
 $readme = @"
 # Runtime / CLI 离线交付说明

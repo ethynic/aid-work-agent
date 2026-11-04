@@ -1,6 +1,6 @@
 # Runtime 与 CLI 插件构建及 ZIP 交付手册
 
-> 维护日期：2026-11-02。当前入口是 [release-batch.ps1](../../clients/agent-desktop/scripts/release-batch.ps1)。
+> 维护日期：2026-11-05。当前入口是 [release-batch.ps1](../../clients/agent-desktop/scripts/release-batch.ps1)。
 > 本文覆盖源码出包，不授予安装、部署或提交权限。旧批次报告是历史证据，不拼接成新发布步骤。
 
 ## 1. 交付形态和目录
@@ -55,11 +55,11 @@ powershell.exe -NoProfile -File clients/agent-desktop/scripts/release-batch.ps1 
 # 本次两者确实都更新，仍分别指定版本。
 powershell.exe -NoProfile -File clients/agent-desktop/scripts/release-batch.ps1 -Component Both -Signer C:\secure-build\boss-signer.json -RuntimeVersion 0.0.32 -BossVersion 0.3.28
 
-# WeCom 配套交付：实际生成的 Runtime 必须信任该插件，并支持三业务工具；不构建 BOSS。
-powershell.exe -NoProfile -File clients/agent-desktop/scripts/release-batch.ps1 -Component RuntimeWecom -Signer C:\secure-build\cli-signer.json -RuntimeVersion 0.0.33 -WecomVersion 0.2.4 -OcrDirectory C:\build-assets\ocr-python-final
+# WeCom 配套交付：实际生成的 Runtime 必须信任该插件，并支持四项必需工具；不构建 BOSS。
+powershell.exe -NoProfile -File clients/agent-desktop/scripts/release-batch.ps1 -Component RuntimeWecom -Signer C:\secure-build\cli-signer.json -RuntimeVersion 0.0.38 -WecomVersion 0.2.5 -OcrDirectory C:\build-assets\ocr-python-final
 
 # 已有 Runtime 满足要求时，只更新 WeCom；目标目录只读核验，不安装或改写信任根。
-powershell.exe -NoProfile -File clients/agent-desktop/scripts/release-batch.ps1 -Component Wecom -Signer C:\secure-build\cli-signer.json -WecomVersion 0.2.4 -OcrDirectory C:\build-assets\ocr-python-final -TargetRuntimeResources C:\target-runtime\resources
+powershell.exe -NoProfile -File clients/agent-desktop/scripts/release-batch.ps1 -Component Wecom -Signer C:\secure-build\cli-signer.json -WecomVersion 0.2.5 -OcrDirectory C:\build-assets\ocr-python-final -TargetRuntimeResources C:\target-runtime\resources
 
 # 正式产品沿生产身份与正式公开根；默认签名。用户明确选择未签名时加 -Unsigned。
 powershell.exe -NoProfile -File clients/agent-desktop/scripts/release-batch.ps1 -Component Both -Profile production -Signer C:\secure-build\boss-signer.json -TrustRoots C:\secure-build\production-roots.json -RuntimeVersion 0.0.32 -BossVersion 0.3.28
@@ -89,7 +89,7 @@ python clients/runtime-plugin-packaging/verify-offline.py --directory <插件目
 
 build-info 分别记录所选组件验证与 `not_selected` / `not_run`。运行 NSIS、客户机升级、配对和真实招聘动作应另有授权与独立证据；普通出包脚本不会运行安装器、后台部署或业务调用。
 
-WeCom 增加安装前提核验：从目标 Runtime 的实际资源读取公开根，调用其现有 Core `verifyOfflinePackage`，使用目标 Core 配置导出的实际运行版本及嵌入式 Node 事实（与 Host 的 PluginStore 调用一致，Host/Core 包版本另列），并核对 `wecom_read_session`、`wecom_read_sessions`、`wecom_message_send`。配套模式使用本批 `win-unpacked/resources`，单插件模式使用指定资源或本机默认已安装资源；没有目标时明确标记未核验。目标不兼容则停止交付并建议配套出包，不注入根、不放宽工具清单、不影响旧 BOSS。此检查不等同于已执行安装。既有迁移代码另取 Host 包版本，与运行时消费点不一致；本轮沿实际 PluginStore 语义，不顺带改迁移产品行为。
+WeCom 增加安装前提核验：从目标 Runtime 的实际资源读取公开根，调用其现有 Core `verifyOfflinePackage`，使用目标 Core 配置导出的实际运行版本及嵌入式 Node 事实（与 Host 的 PluginStore 调用一致，Host/Core 包版本另列），并核对 `wecom_read_session`、`wecom_read_sessions`、`wecom_message_send`、`wecom_session_directory`。配套模式使用本批 `win-unpacked/resources`，单插件模式使用指定资源或本机默认已安装资源；没有目标时明确标记未核验。目标不兼容则停止交付并建议配套出包，不注入根、不放宽工具清单、不影响旧 BOSS。此检查不等同于已执行安装。既有迁移代码另取 Host 包版本，与运行时消费点不一致；本轮沿实际 PluginStore 语义，不顺带改迁移产品行为。
 
 ## 8. 安装和升级说明
 

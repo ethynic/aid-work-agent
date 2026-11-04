@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-export const WECOM_BUSINESS_TOOLS = ['wecom_read_session', 'wecom_read_sessions', 'wecom_message_send']
+export const WECOM_BUSINESS_TOOLS = ['wecom_read_session', 'wecom_read_sessions', 'wecom_message_send', 'wecom_session_directory']
 
 // Read only the target's public resources. Do not import a plugin or modify its trust store.
 export async function verifyPluginRuntime(resources, packagePath) {

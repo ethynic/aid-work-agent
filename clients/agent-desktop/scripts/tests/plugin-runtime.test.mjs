@@ -44,11 +44,11 @@ test('installation preflight uses the target public roots and Host tools, not th
     assert.equal(report.hostVersion, '0.2.25')
     assert.equal(report.coreVersion, '0.2.10')
     assert.deepEqual(readFileSync(pkg), before, 'Preflight must not extract/import or rewrite signed bytes')
-    // A separate resource tree models an old Host whose allowlist lacks the batch-read tool.
+    // A separate resource tree models an old Host whose allowlist lacks the new directory tool.
     const old = join(home, 'old'); mkdirSync(old)
     const { cpSync } = await import('node:fs'); cpSync(join(home, 'host'), join(old, 'host'), { recursive: true })
     cpSync(join(home, 'node'), join(old, 'node'), { recursive: true }); cpSync(roots, join(old, 'trust-roots.json'))
-    writeFileSync(join(old, 'host/node_modules/@aid/local-tool-host-core/dist/legacy/providers.js'), `export const getProviderManifest=()=>({tools:['wecom_read_session','wecom_message_send']})`)
-    await assert.rejects(verifyPluginRuntime(old, pkg), /wecom_read_sessions/)
+    writeFileSync(join(old, 'host/node_modules/@aid/local-tool-host-core/dist/legacy/providers.js'), `export const getProviderManifest=()=>({tools:['wecom_read_session','wecom_read_sessions','wecom_message_send']})`)
+    await assert.rejects(verifyPluginRuntime(old, pkg), /wecom_session_directory/)
   } finally { rmSync(home, { recursive: true, force: true }) }
 })
