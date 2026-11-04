@@ -89,7 +89,30 @@
                   <BaseButton v-if="isSearchMode" size="sm" intent="secondary" @click="clearSearch">显示全部</BaseButton>
                 </div>
                 <div class="page-toolbar-right">
-                  <BaseButton v-if="tenantId" intent="secondary" class="ml-4" @click="showAuthMatrix = true">访问授权</BaseButton>
+                  <!-- 外部文档导入：数据驱动，单项渲染为按钮，多项自动变下拉 -->
+                  <template v-if="tenantId">
+                    <BaseButton v-if="importSources.length === 1" intent="secondary" @click="goImportSource(importSources[0])">外部文档导入</BaseButton>
+                    <div v-else-if="importSources.length > 1" class="relative">
+                      <BaseButton intent="secondary" @click="showImportMenu = !showImportMenu">
+                        外部文档导入
+                        <svg class="w-3.5 h-3.5 ml-1 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </BaseButton>
+                      <div v-if="showImportMenu" class="absolute right-0 top-full mt-1 w-44 bg-surface rounded-lg border border-default shadow-lg py-1 z-20">
+                        <button
+                          v-for="src in importSources"
+                          :key="src.key"
+                          class="w-full px-3 py-2 text-left text-sm text-default hover:bg-surface-hover transition-colors"
+                          @click="goImportSource(src)"
+                        >
+                          {{ src.label }}
+                        </button>
+                      </div>
+                      <div v-if="showImportMenu" class="fixed inset-0 z-10" @click="showImportMenu = false"></div>
+                    </div>
+                  </template>
+                  <BaseButton v-if="tenantId" intent="secondary" @click="showAuthMatrix = true">访问授权</BaseButton>
                   <BaseButton :disabled="selectedArr.length === 0" intent="secondary" @click="openMoveModal">移动 ({{ selectedArr.length }})</BaseButton>
                   <BaseButton :disabled="selectedArr.length === 0" intent="danger" @click="handleBatchDelete">批量删除 ({{ selectedArr.length }})</BaseButton>
                   <BaseButton @click="openUploadModal">上传文档</BaseButton>
@@ -816,6 +839,17 @@ const isDeleting = ref(false)
 // ========== 访问授权矩阵 ==========
 const showAuthMatrix = ref(false)
 const tenantId = computed(() => String(route.params.tenant_id || ''))
+
+// ========== 外部文档导入入口（数据驱动：单项渲染为按钮，多项自动变下拉） ==========
+const showImportMenu = ref(false)
+const importSources = computed(() => [
+  { key: 'tdoc', label: '腾讯文档', to: `/t/${tenantId.value}/knowledge/tdoc-imports` },
+])
+
+function goImportSource(src: { to: string }) {
+  showImportMenu.value = false
+  router.push(src.to)
+}
 const topLevelCategories = computed(() => categories.value.filter(c => c.parent_id == null))
 
 // ========== 移动文档 ==========

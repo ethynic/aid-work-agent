@@ -12,7 +12,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, useAttrs } from 'vue'
 import { input } from '@/variants/input'
 
 const props = withDefaults(defineProps<{
@@ -35,7 +35,13 @@ defineEmits<{
   blur: [e: FocusEvent]
 }>()
 
-const classes = computed(() =>
-  input({ state: props.state, size: props.size })
-)
+const attrs = useAttrs()
+
+// 父组件传入宽度类（如 w-[400px]）时去掉 variant 的 w-full，
+// 否则编译后 CSS 中 w-full 排在后面会把父传宽度覆盖掉（与 BaseSelect 同模式）
+const classes = computed(() => {
+  const base = input({ state: props.state, size: props.size })
+  const extra = (attrs.class as string) || ''
+  return extra.trim() ? base.replace('w-full', '').trim() + ' ' + extra : base
+})
 </script>
