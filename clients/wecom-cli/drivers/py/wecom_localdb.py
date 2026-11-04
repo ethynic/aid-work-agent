@@ -1621,6 +1621,98 @@ def _query_history(conn, conv, limit, since, until, workdir=None, account=None):
             'invalid_time_count': invalid_time_count, 'naming_incomplete': naming_incomplete}
 
 
+def _tz_day_bounds(date_text, tz_name):
+    """业务日 'YYYY-MM-DD' + IANA 时区 → 半开 [start,end) epoch 秒；非法返回 None。"""
+    import re as _re
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    if not _re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_text or ''):
+        return None
+    try:
+        local = datetime.fromisoformat(date_text)
+        tz = ZoneInfo(tz_name or 'Asia/Shanghai')
+    except Exception:
+        return None
+    start = local.replace(tzinfo=tz)
+    end = (local + timedelta(days=1)).replace(tzinfo=tz)
+    import calendar
+    return int(start.timestamp()), int(end.timestamp())
+
+
+def _query_day_messages(conn, conv, limit, *, date, tz_name, include_context, start, end,
+                        context_start, context_msg_id, max_msg_id, after_send_time,
+                        after_msg_id, workdir=None, account=None):
+    """日期模式 keyset 分页（wecom-conversation 设计 §4.1/§4.2）。
+
+    - 首次（带 --date）：解析 [start,end)，固定本次可见最大 message_id 与
+      snapshot_at；include_context 时取该日零点前最近 100 条，背景起点保存
+      完整 (send_time, message_id) 复合边界（评审 P2-13：同秒不多取），
+      与当日消息合并按 (send_time, message_id) 升序分页；
+    - 续页：显式携带首轮固定的范围/上界/快照与页尾键，不得重新取截止时间；
+    - 晚同步（message_id > 上界）与无效时间记录不进入本页，由下次读取纳入。
+    """
+    import time as _time
+    valid_time = ("typeof(send_time) = 'integer' "
+                  'AND send_time >= 0 AND send_time <= 253402271999')
+    snapshot_at = None
+    if date is not None:
+        bounds = _tz_day_bounds(date, tz_name)
+        if bounds is None:
+            return {'ok': False, 'error': 'BAD_ARGS', 'detail': 'date/tz 非法'}
+        start, end = bounds
+        snapshot_at = int(_time.time())
+        row = conn.execute(
+            'SELECT MAX(message_id) FROM message_table WHERE conversation_id = ?', (conv,)).fetchone()
+        max_msg_id = row[0] if row and row[0] is not None else 0
+        if include_context:
+            boundary = conn.execute(
+                ('SELECT send_time, message_id FROM message_table WHERE conversation_id = ? AND %s '
+                 'AND send_time < ? ORDER BY send_time DESC, message_id DESC LIMIT 100')
+                % valid_time, (conv, start)).fetchall()
+            if boundary:
+                context_start, context_msg_id = boundary[-1][0], boundary[-1][1]
+            else:
+                # 零点前无消息：不存在背景下界（评审二 P1-1）——context_start 保持
+                # None，floor 自然落回日期窗口起点；不伪造背景 ID。
+                context_start, context_msg_id = None, None
+        else:
+            context_start, context_msg_id = None, None
+    # 背景边界为闭含复合键：包含边界消息本身及同秒更大 ID（即"最近100条"整组），
+    # 不纳入同秒更小 ID 的第 101 条之前的记录；无背景下界时 floor=窗口起点。
+    sql = ('SELECT %s FROM message_table WHERE conversation_id = ? AND %s '
+           'AND send_time < ? AND message_id <= ?'
+           % (', '.join(QUERY_MESSAGE_COLUMNS), valid_time))
+    params = [conv, end, max_msg_id]
+    if context_start is not None and context_msg_id is not None:
+        sql += ' AND (send_time > ? OR (send_time = ? AND message_id >= ?))'
+        params.extend([context_start, context_start, context_msg_id])
+    else:
+        sql += ' AND send_time >= ?'
+        params.append(start)
+    if after_send_time is not None and after_msg_id is not None:
+        sql += ' AND (send_time > ? OR (send_time = ? AND message_id > ?))'
+        params.extend([after_send_time, after_send_time, after_msg_id])
+    sql += ' ORDER BY send_time ASC, message_id ASC LIMIT ?'
+    params.append(limit + 1)
+    rows = conn.execute(sql, params).fetchall()
+    has_more = len(rows) > limit
+    page = rows[:limit]
+    messages, naming_incomplete = _history_messages(page, workdir, account)
+    invalid_time_count = conn.execute(
+        'SELECT COUNT(*) FROM message_table WHERE conversation_id = ? AND NOT (%s)'
+        % valid_time, (conv,)).fetchone()[0]
+    last = page[-1] if page else None
+    return {'ok': True, 'task': 'day-messages', 'conversation_id': conv,
+            'messages': messages, 'count': len(messages), 'has_more': has_more,
+            'start_utc': start, 'end_utc': end, 'context_start': context_start,
+            'context_msg_id': context_msg_id,
+            'include_context': bool(include_context), 'snapshot_at': snapshot_at,
+            'max_message_id': max_msg_id,
+            'next_send_time': last[6] if last else after_send_time,
+            'next_message_id': last[0] if last else after_msg_id,
+            'invalid_time_count': invalid_time_count, 'naming_incomplete': naming_incomplete}
+
+
 def _peer_id_of(conv_id, account):
     """S: 会话 id（S:<a>_<b>）解析对方用户 id（与 account 相异的一端；自会话取 account 本身）；
     解析失败 → None（调用方按无名处理，不猜）。"""
@@ -1960,15 +2052,34 @@ def _parse_query_args(args):
     exclude_types = []
     with_names = False
     external_only = False
+    date = None
+    tz_name = None
+    include_context = False
+    start = None
+    end = None
+    context_start = None
+    context_msg_id = None
+    max_msg_id = None
+    after_send_time = None
+    after_msg_id = None
     i = 0
     while i < len(args):
         arg = args[i]
         if arg == '--with-names':
             with_names = True
             i += 1
+        elif arg == '--include-context':
+            include_context = True
+            i += 1
         elif arg == '--external-only':
             external_only = True
             i += 1
+        elif arg in ('--date', '--tz') and i + 1 < len(args):
+            if arg == '--date':
+                date = args[i + 1]
+            else:
+                tz_name = args[i + 1]
+            i += 2
         elif arg in ('--workdir', '--task', '--conv', '--name', '--account', '--anchor') and i + 1 < len(args):
             value = args[i + 1]
             if arg == '--workdir':
@@ -1991,6 +2102,30 @@ def _parse_query_args(args):
                 return None
             if after_id < 0:
                 return None
+            i += 2
+        elif arg in ('--start', '--end', '--context-start', '--context-msg-id',
+                     '--max-msg-id', '--after-send-time', '--after-msg-id') and i + 1 < len(args):
+            key = arg[2:].replace('-', '_')
+            try:
+                value = int(args[i + 1])
+            except ValueError:
+                return None
+            if value < 0:
+                return None
+            if key == 'start':
+                start = value
+            elif key == 'end':
+                end = value
+            elif key == 'context_start':
+                context_start = value
+            elif key == 'context_msg_id':
+                context_msg_id = value
+            elif key == 'max_msg_id':
+                max_msg_id = value
+            elif key == 'after_send_time':
+                after_send_time = value
+            else:
+                after_msg_id = value
             i += 2
         elif arg == '--limit' and i + 1 < len(args):
             try:
@@ -2025,10 +2160,30 @@ def _parse_query_args(args):
     if not workdir or not task:
         return None
     if task not in ('messages', 'send-messages', 'conversations', 'last-per-conv', 'resolve', 'context',
-                    'groups', 'history', 'group-poll'):
+                    'groups', 'history', 'group-poll', 'day-messages'):
         return None
     if task in ('messages', 'send-messages') and not conv:
         return None
+    if task == 'day-messages':
+        # 日期模式：首次带 date（可选 tz/include-context）；续页显式携带首轮
+        # 固定的范围/上界与页尾键，不允许混用旧参数。
+        if (not conv or not conv.startswith('R:') and not conv.startswith('S:')
+                or with_names or exclude_types or after_id is not None or anchor is not None
+                or since is not None or until is not None or external_only or name is not None
+                or limit < 1 or limit >= 9223372036854775807):
+            return None
+        if date is not None:
+            if (start is not None or end is not None or context_start is not None
+                    or max_msg_id is not None or after_send_time is not None or after_msg_id is not None):
+                return None
+        else:
+            if (start is None or end is not None and end <= start
+                    or (after_send_time is None) != (after_msg_id is None)):
+                return None
+            # 复合背景边界必须成对出现；无背景下界（零点前无消息）时两个参数
+            # 都省略、include_context 仍可继续当日分页（评审二 P1-1）。
+            if (context_start is not None) != (context_msg_id is not None):
+                return None
     if task == 'resolve' and not name:
         return None
     if external_only and (task != 'resolve' or not account):
@@ -2066,7 +2221,9 @@ def _parse_query_args(args):
         if task == 'groups' and (conv is not None or since is not None):
             return None
     return (task, workdir, conv, after_id, limit, since, exclude_types, name, account,
-            anchor, with_names, until, external_only)
+            anchor, with_names, until, external_only, date, tz_name, include_context,
+            start, end, context_start, context_msg_id, max_msg_id, after_send_time,
+            after_msg_id)
 
 
 def cmd_sessions(workdir, account, request):
@@ -2390,7 +2547,9 @@ def cmd_query(args):
     if parsed is None:
         return {'ok': False, 'error': 'BAD_ARGS', 'message': QUERY_USAGE}
     (task, workdir, conv, after_id, limit, since, exclude_extra, name, account,
-     anchor, with_names, until, external_only) = parsed
+     anchor, with_names, until, external_only, date, tz_name, include_context,
+     start, end, context_start, context_msg_id, max_msg_id, after_send_time,
+     after_msg_id) = parsed
     logical_db = 'session' if task == 'groups' else 'message'
     query_db = _resolve_dec_db(workdir, logical_db)
     if query_db is None:
@@ -2417,6 +2576,14 @@ def cmd_query(args):
             return _query_groups(conn, name, limit)
         if task == 'history':
             return _query_history(conn, conv, limit, since, until, workdir, account)
+        if task == 'day-messages':
+            data = _query_day_messages(conn, conv, limit, date=date, tz_name=tz_name,
+                                       include_context=include_context, start=start, end=end,
+                                       context_start=context_start, context_msg_id=context_msg_id,
+                                       max_msg_id=max_msg_id, after_send_time=after_send_time,
+                                       after_msg_id=after_msg_id,
+                                       workdir=workdir, account=account)
+            return data
         if task == 'group-poll':
             return _query_group_poll(conn, conv, after_id, limit, anchor, workdir, account)
         if task == 'context':

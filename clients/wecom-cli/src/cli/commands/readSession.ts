@@ -5,6 +5,11 @@
  *   aid-wecom read-session --target-ref <ref> [--max-pages N] [--since-days N] [--json]
  *   aid-wecom read-session --target-name <会话名> [--max-pages N] [--since-days N] [--json]
  *
+ * 日期模式（wecom-conversation 设计 §4.1，稳定 session 单会话）：
+ *   aid-wecom read-session --session <ws1.…> --date YYYY-MM-DD [--timezone IANA]
+ *                          [--include-context] [--limit N] [--cursor <wd1.…>] [--json]
+ * 续页只传返回的日期 cursor（wd1.），date/时区/背景参数省略即继承原范围。
+ *
  * --target-name 直达模式：CLI 内部自动 search 定位（身份校验 + 唯一匹配，歧义拒绝），
  * data 附 resolved_target；其余契约与 --target-ref 模式一致。
  *
@@ -35,6 +40,9 @@ export interface ReadSessionCommandOptions {
   limit?: string
   cursor?: string
   attachment?: string
+  date?: string
+  timezone?: string
+  includeContext?: boolean
   /** true 时 stdout 最后一行输出 OperationResult JSON */
   json?: boolean
 }
@@ -61,6 +69,9 @@ export async function readSessionCommand(opts: ReadSessionCommandOptions): Promi
     ...(opts.limit !== undefined ? { limit: Number(opts.limit) } : {}),
     ...(opts.cursor !== undefined ? { cursor: opts.cursor } : {}),
     ...(opts.attachment === undefined ? {} : { attachment }),
+    ...(opts.date !== undefined ? { date: opts.date } : {}),
+    ...(opts.timezone !== undefined ? { timezone: opts.timezone } : {}),
+    ...(opts.includeContext === true ? { include_context: true } : {}),
   }
   console.error('ℹ️ 若使用 UI 通道，进入会话会清除未读角标；本地库读取不切换会话')
   return runCliOperation(getOperationEntry('wecom_read_session').operation, args, { exclusive: true, json: opts.json })

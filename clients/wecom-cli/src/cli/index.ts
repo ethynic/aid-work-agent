@@ -22,6 +22,7 @@
  *   node dist/src/cli/index.js send-file (--target-ref <ref> | --target-name <会话名>) --file <本地绝对路径> [--json]
  *   node dist/src/cli/index.js unread [--name <名>] [--channel local-db|ui] [--focus <名1,名2>] [--json]
  *   node dist/src/cli/index.js read-session (--target-ref <ref> | --target-name <会话名>) [--channel local-db|ui] [--limit N] [--cursor <cursor>] [--max-pages N] [--since-days N] [--json]
+ *   node dist/src/cli/index.js read-session --session <ws1.…> (--date YYYY-MM-DD | --cursor <wd1.…>) [--timezone IANA] [--include-context] [--limit N] [--json]
  *   node dist/src/cli/index.js watch [--interval 秒] [--once] [--channel local-db|ui] [--focus <名1,名2>]
  *   node dist/src/cli/index.js add-customer --phone <11位手机号> --yes [--json]
  *   node dist/src/cli/index.js mcp --stdio
@@ -34,6 +35,7 @@ const USAGE = `aid-wecom — 企业微信操作 CLI / MCP Provider（M1）
 
 操作命令：
   read-session --session <会话名或稳定标识> [--cursor <原游标>] [--limit N] [--attachment <JSON>] [--json]
+  read-session --session <ws1.稳定标识> (--date YYYY-MM-DD | --cursor <wd1.日期游标>) [--timezone IANA] [--include-context] [--limit N≤100] [--json]  （日期模式：续页只传日期游标）
   read-sessions [--sessions <JSON字符串数组>] [--cursor <原游标>] [--limit N] [--json]
                             DB批量聊天记录与待回复候选，单批最多50条/16KiB
   send --session <会话名或稳定标识> --text <文本> [--json]
@@ -196,6 +198,9 @@ async function main(): Promise<number> {
         limit: flagString(args, 'limit'),
         cursor: flagString(args, 'cursor'),
         attachment: flagString(args, 'attachment'),
+        date: flagString(args, 'date'),
+        timezone: flagString(args, 'timezone'),
+        includeContext: hasFlag(args, 'include-context'),
         json: hasFlag(args, 'json'),
       })
     }

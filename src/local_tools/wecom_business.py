@@ -28,16 +28,29 @@ class AttachmentReadInput(BaseModel):
 
 class ReadInput(SessionInput):
     cursor: str | None = Field(None, min_length=1, max_length=16384,
-        description='该会话上次返回的增量游标，原样回传；首次省略，历史仅作上下文。')
-    limit: int | None = Field(None, ge=1, le=50,
-        description='本批最多消息数；has_more时继续读取，未返回的消息不推进。')
+        description='该会话上次返回的增量游标，原样回传；首次省略，历史仅作上下文。'
+                    '日期模式返回独立日期游标（wd1.），续页原样回传。')
+    limit: int | None = Field(None, ge=1, le=100,
+        description='本批最多消息数；has_more时继续读取，未返回的消息不推进。日期模式每页默认100条。')
     attachment: AttachmentReadInput | None = Field(None,
         description='按消息ID展开该条附件，不推进聊天游标；图片交给视觉模型，文本按字节分页。')
+    date: str | None = Field(None, pattern=r'^\d{4}-\d{2}-\d{2}$',
+        description='日期模式：按业务日读取该会话（YYYY-MM-DD）；只用于稳定session的单会话，'
+                    '与attachment分开使用；不传date保持增量含义。')
+    timezone: str | None = Field(None, min_length=1, max_length=64,
+        description='日期模式IANA时区，缺省Asia/Shanghai；续页省略以继承原范围。')
+    include_context: bool | None = Field(None,
+        description='日期模式背景：true首次带该日零点前最近100条，与当日消息共同分页；'
+                    '首次缺省false，续页省略继承原值。')
 
     @model_validator(mode='after')
     def _attachment_cursor(self):
         if self.attachment is not None and self.cursor is not None:
             raise ValueError('附件展开与聊天cursor不能同时指定；保留原cursor用于后续聊天增量读取。')
+        if self.attachment is not None and self.date is not None:
+            raise ValueError('日期模式与附件展开分开使用。')
+        if self.date is not None and self.session is not None and not self.session.startswith('ws1.'):
+            raise ValueError('日期模式只用于稳定会话标识（ws1.）的单会话读取。')
         return self
 
 

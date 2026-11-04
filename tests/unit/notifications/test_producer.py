@@ -29,7 +29,9 @@ def test_terminal_message_uses_server_snapshot_and_stable_key():
     assert 'ON CONFLICT(scope_key,recipient_user_id,producer,event_key)' in statement
     assert args[5]=='terminal:runner'
     assert unprotect(args[11])=={'session_title':'项目名称','event_kind':'completed',
-        'task_id':None,'task_name':None,'notify_rule_id':None,'notify_target_id':None}
+        'task_id':None,'task_name':None,'notify_rule_id':None,'notify_target_id':None,
+        'daily_report_date':None,'daily_report_link':None,
+        'daily_report_summary':None,'daily_report_missing':None}
     assert '项目名称' not in str(args)
 
 

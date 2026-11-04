@@ -242,3 +242,31 @@ test('native input dependency: no declaration stays untouched; declared one is r
     assert.ok(!readFileSync(join(ready, 'package.json'), 'utf8').includes('../shared'))
   } finally { rmSync(home, { recursive: true, force: true }) }
 })
+
+test('ocr-assets lock carries tzdata for wecom day-mode ZoneInfo (review 2 P1-2)', () => {
+  const lock = JSON.parse(readFileSync(new URL('../ocr-assets.lock.json', import.meta.url), 'utf8'))
+  const tzdata = lock.wheels.find((wheel) => wheel.name === 'tzdata')
+  assert.ok(tzdata, 'tzdata wheel must be pinned: Windows embeddable Python has no IANA tzdata and wecom day mode (_tz_day_bounds) needs ZoneInfo')
+  assert.match(tzdata.filename, /^tzdata-\d+\.\d+(\.\d+)?-py2\.py3-none-any\.whl$/)
+  assert.match(tzdata.url, /^https:\/\/files\.pythonhosted\.org\//)
+  assert.match(tzdata.sha256, /^[0-9a-f]{64}$/)
+  const prepare = readFileSync(new URL('../prepare-ocr.py', import.meta.url), 'utf8')
+  // 最终便携解释器冒烟必须断言日期入口（ZoneInfo + 日期边界数学）
+  assert.match(prepare, /ZoneInfo\("Asia\/Shanghai"\)/)
+  assert.match(prepare, /assert int\(end\.timestamp\(\)\)-int\(start\.timestamp\(\)\)==86400/)
+})
+
+test('wecom release closure verifies date/IANA capability end to end (review 3 P1-5)', () => {
+  const pkg = readFileSync(new URL('../package.mjs', import.meta.url), 'utf8')
+  const verify = readFileSync(new URL('../verify-offline.py', import.meta.url), 'utf8')
+  const batch = readFileSync(new URL('../../agent-desktop/scripts/release-batch.ps1', import.meta.url), 'utf8')
+  // 最终打包冒烟：WeCom 专属 day-mode 断言（OCR/AES 之外的第三项）
+  assert.match(pkg, /WECOM_DAYMODE_BUNDLE_OK/)
+  assert.match(pkg, /ZoneInfo\("Asia\/Shanghai"\)/)
+  // 离线验包：缺 tzdata 时明确指向 prepare 刷新
+  assert.match(verify, /refresh assets via prepare-ocr\.py/)
+  assert.match(verify, /ZoneInfo\("Asia\/Shanghai"\)/)
+  // 发行批次入口：打包前预检嵌入式解释器 tzdata 能力
+  assert.match(batch, /prepare-ocr\.py 刷新 ocr-python-final/)
+  assert.match(batch, /ZoneInfo\("Asia\/Shanghai"\)/)
+})

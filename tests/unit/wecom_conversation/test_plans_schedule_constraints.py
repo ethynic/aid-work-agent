@@ -52,7 +52,14 @@ def _mock_service_layers(monkeypatch):
     plans 内为函数级 `from . import service`——逐属性 patch 源模块。"""
     monkeypatch.setattr("src.wecom_conversation.service.valid_timezone",
                         lambda name: True)
-    monkeypatch.setattr("src.wecom_conversation.service.find_suitable_plan",
+    # 评审四：来源解析与候选计划演进后的 service 层隔离（定位/登记/候选）。
+    monkeypatch.setattr(
+        "src.wecom_conversation.service.conversations_for_locators",
+        lambda *a, **k: [])
+    monkeypatch.setattr(
+        "src.wecom_conversation.service.candidate_plans_for_source",
+        lambda *a, **k: [])
+    monkeypatch.setattr("src.wecom_conversation.plans.resolve_runner_source_device",
                         lambda *a, **k: None)
     monkeypatch.setattr(
         "src.wecom_conversation.service.enroll_conversations_for_plan",

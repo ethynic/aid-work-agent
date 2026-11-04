@@ -114,6 +114,13 @@ def main():
                         'encrypted=AES.new(bytes(16),AES.MODE_CBC,bytes(16)).encrypt(bytes(16)); '
                         'assert encrypted.hex()=="66e94bd4ef8a2c3b884cfa59ca342b2e"; '
                         'assert AES.new(bytes(16),AES.MODE_CBC,bytes(16)).decrypt(encrypted)==bytes(16); '
+                        # wecom 日期模式依赖（评审二 P1-2）：最终便携解释器必须携带
+                        # IANA 时区数据（tzdata wheel），并验证日期入口等价逻辑。
+                        'from zoneinfo import ZoneInfo; from datetime import datetime, timedelta; '
+                        'tz=ZoneInfo("Asia/Shanghai"); '
+                        'start=datetime(2026,11,4,tzinfo=tz); '
+                        'end=(datetime(2026,11,4)+timedelta(days=1)).replace(tzinfo=tz); '
+                        'assert int(end.timestamp())-int(start.timestamp())==86400; '
                         'RapidOCR(); print("OCR_SQLITE_AES_BUNDLE_OK")'],
                        cwd=stage, env=env, check=True, timeout=90)
         shutil.copytree(stage, output)

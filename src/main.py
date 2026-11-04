@@ -1976,6 +1976,11 @@ app.include_router(boss_conversation_api.router)
 from src.api import external_systems  # noqa: E402
 app.include_router(external_systems.router)
 
+# 企微关注会话业务（bs_wecom 三表 + 关注/同步/时间线/日报/按需附件；采集沿原 Runner，
+# 见 docs/design/wecom/wecom-conversation-operations-design.md）
+from src.wecom_conversation import api as wecom_conversation_api  # noqa: E402
+app.include_router(wecom_conversation_api.router)
+
 # 微信公众号回调端点（产品版 WP4：/api/wechat-mp/callback/{config_id}，每配置独立 token，
 # 见 docs/system/wechat-mp/wechat-mp-knowledge-ingestion-design.md §4）
 from src.wechat_mp import callback as wechat_mp_callback  # noqa: E402

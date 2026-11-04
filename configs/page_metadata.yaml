@@ -19,6 +19,8 @@ domains:
     label: 企业管理
   - id: ai-lead-gen
     label: AI获客
+  - id: wecom-conversation
+    label: 企微会话
 
 # icon 字段为统一的 SVG path 数据（24×24 viewBox，stroke 描边风格）
 # 由前端 MenuIcon 组件渲染
@@ -235,4 +237,20 @@ pages:
     route: /ai-lead-gen/replies
     icon: "M3 10h10a8 8 0 018 8v2M3 10l6-6M3 10l6 6"
     domain: ai-lead-gen
+    status: developing
+
+  - page_id: wecom-conversation-center
+    title: 企微会话
+    description: 企微会话旁路聊天日志：会话列表与时间线同页，进入定位最新、向上滚动按批加载（最近1000条）；附件仅元数据展示
+    route: /wecom-conversations
+    icon: "M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"
+    domain: wecom-conversation
+    status: developing
+
+  - page_id: wecom-conversation-daily
+    title: 企微日报
+    description: 企微会话日报工作台：按日期切换，展示当日概览、咨询分类、已处理、待人工跟进与值得关注；支持生成/重算
+    route: /wecom-conversations/daily
+    icon: "M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2zM9 16l2 2 4-4"
+    domain: wecom-conversation
     status: developing

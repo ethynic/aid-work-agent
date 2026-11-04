@@ -1,10 +1,52 @@
 """Attempt-owned Boss overlay continuation; legacy proxy flow remains separate."""
 
+import asyncio
 import hashlib
 import json
 
 from .durable_flow import LocalContinuationRequired, requires_healing, healing_requires_verification
 from .lifecycle import local_operation_scope
+
+
+def _wecom_task_device_hint(proxy):
+    """Trusted per-task device from the accepted request data (R05).
+
+    request_data 只能由服务端受信提交写入（Web 网关/调度器均不透传任意字段），
+    经 ToolExecutionContext 到达工具执行；绑定提示不是模型权限。
+    AgentRequestContext 会把 request_data 冻结为 MappingProxyType，
+    判断必须走 Mapping 而不是 dict。
+    """
+    try:
+        from collections.abc import Mapping
+
+        from src.tools.context import current_tool_execution_context
+        context = current_tool_execution_context()
+        data = getattr(context, 'request_data', None)
+        device_id = data.get('wecom_task_device') if isinstance(data, Mapping) else None
+        return str(device_id) if device_id else None
+    except Exception:
+        return None
+
+
+async def _ready_device_by_id(proxy, tenant_id, user_id, device_id):
+    """Resolve the bound device with the same readiness gates as selected-device dispatch."""
+    from datetime import datetime, timezone
+
+    from . import repository
+    from .device_policy import device_ready_error
+
+    devices = await asyncio.to_thread(repository.list_devices, tenant_id, user_id)
+    device = next((item for item in devices if str(item.get('id')) == str(device_id)), None)
+    if device is None:
+        return None, '设备不属于当前账号或已解绑'
+    if device.get('status') != 'active':
+        return None, '设备已停用'
+    ready_error = device_ready_error(device, proxy.name, datetime.now(timezone.utc))
+    if ready_error == 'offline':
+        return None, '设备离线（Runtime 未运行或不可达）'
+    if ready_error == 'unsupported':
+        return None, proxy.unsupported_provider_message
+    return device, None
 
 
 def _known(result, proxy=None):
@@ -57,7 +99,18 @@ async def poll_operation(proxy, operation, arguments, *, tenant_id, user_id, ses
     error = proxy._validate_args({key: value for key, value in arguments.items() if key not in {'_boss_target_ref', '_boss_expected_contact_ref'}})
     if error:
         return {'success':False,'code':'INVALID_ARGS','message':error}
-    device, error = await proxy._find_ready_device(tenant_id,user_id)
+    bound_task_device = _wecom_task_device_hint(proxy) if getattr(proxy, 'provider_key', None) == 'wecom' else None
+    if bound_task_device:
+        # Trusted task device ownership (R05): business-submitted tasks carry the
+        # original device in request_data; refuse instead of silently switching.
+        device, error = await _ready_device_by_id(proxy, tenant_id, user_id, bound_task_device)
+        if device is None:
+            return {'success':False,'code':'DEVICE_UNAVAILABLE','effect':'none',
+                'recovery_action':'connect_original_device',
+                'message':f'本任务绑定的原设备当前不可用（{error or "设备不在线"}）。'
+                          '请在原设备启动 Runtime 并保持选定后再继续；本任务不会改用其他电脑。'}
+    else:
+        device, error = await proxy._find_ready_device(tenant_id,user_id)
     if device is None:
         return {'success':False,'code':'DEVICE_UNAVAILABLE','effect':'none',
             'recovery_action':'connect_original_device',

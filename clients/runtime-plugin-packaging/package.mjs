@@ -139,6 +139,16 @@ async function buildProvider(name, options, signer) {
         execFileSync(join(stage, 'ocr-python/python.exe'), ['-I', '-B', '-c',
           'from Crypto.Cipher import AES; import sqlite3; encrypted=AES.new(bytes(16),AES.MODE_CBC,bytes(16)).encrypt(bytes(16)); assert encrypted.hex()=="66e94bd4ef8a2c3b884cfa59ca342b2e"; assert AES.new(bytes(16),AES.MODE_CBC,bytes(16)).decrypt(encrypted)==bytes(16); print("WECOM_SQLITE_AES_BUNDLE_OK")'],
         { cwd: stage, env, timeout: 30000 })
+        // wecom 日期模式（评审三 P1-5）：发行入口必须验证日期/IANA 能力——
+        // 复用旧 ocr-python-final（无 tzdata）时在此明确失败并指向 prepare 刷新，
+        // 不把旧资产打成"验证通过"的新 WeCom 插件，不新增客户机版本门禁。
+        execFileSync(join(stage, 'ocr-python/python.exe'), ['-I', '-B', '-c',
+          'from zoneinfo import ZoneInfo; from datetime import datetime, timedelta; '
+          + 'tz=ZoneInfo("Asia/Shanghai"); '
+          + 'start=datetime(2026,11,4,tzinfo=tz); '
+          + 'end=(datetime(2026,11,4)+timedelta(days=1)).replace(tzinfo=tz); '
+          + 'assert int(end.timestamp())-int(start.timestamp())==86400; print("WECOM_DAYMODE_BUNDLE_OK")'],
+        { cwd: stage, env, timeout: 30000 })
       }
     }
     cpSync(join(source, 'package.json'), join(stage, 'package.json'))

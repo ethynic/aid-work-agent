@@ -177,6 +177,16 @@
       "sha256": "c75b52aacc6c0c260f204cbdd834f76edc9fb0d8e0da9fbf8352ef58202564e2",
       "license": "BSD, Public Domain",
       "source": "https://pypi.org/project/pycryptodome/3.23.0/"
+    },
+    {
+      "name": "tzdata",
+      "version": "2025.3",
+      "filename": "tzdata-2025.3-py2.py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/c7/b0/003792df09decd6849a5e39c28b513c06e84436a54440380862b5aeff25d/tzdata-2025.3-py2.py3-none-any.whl",
+      "sha256": "06a47e5700f3081aab02b2e513160914ff0694bce9947d6b76ebd6bf57cfc5d1",
+      "license": "Apache-2.0",
+      "source": "https://pypi.org/project/tzdata/2025.3/",
+      "purpose": "zoneinfo IANA 时区数据（wecom 日期模式 _tz_day_bounds 依赖；Windows 便携 Python 不自带）"
     }
   ],
   "msvc": {

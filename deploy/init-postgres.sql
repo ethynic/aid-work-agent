@@ -5853,3 +5853,106 @@ CREATE TABLE IF NOT EXISTS bs_ai_lead_gen_replies (
 );
 CREATE INDEX IF NOT EXISTS idx_bs_ailg_replies_campaign ON bs_ai_lead_gen_replies(campaign_id);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_bs_ailg_replies_tenant_message ON bs_ai_lead_gen_replies(tenant_id, message_id) WHERE message_id IS NOT NULL;
+
+-- ============================================================================
+-- 企微会话旁路日志业务表（bs_wecom_*，2026-11-03 原地重构；与
+-- src/wecom_conversation/tables.py 同源，设计 §3.2/§5.2/§6 冻结唯一键；bs_ 业务表
+-- 遵守 tenant_id/user_id/created_at 规范列，无外键/触发器；is_followed/
+-- collection_runner_id/last_read_invocation_id/generation_*/handling 为旧未交付
+-- 列兼容保留，不再承担业务语义）
+-- ============================================================================
+
+-- 记录范围会话（唯一键 tenant+user+账号+原会话ID；行存在即在记录范围）
+CREATE TABLE IF NOT EXISTS bs_wecom_conversations (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    source_account_id TEXT NOT NULL,
+    source_conversation_id TEXT NOT NULL,
+    session_locator TEXT NOT NULL,
+    name TEXT,
+    kind TEXT,
+    peer_platform TEXT,
+    device_id UUID,
+    is_followed BOOLEAN NOT NULL DEFAULT TRUE,
+    followed_at TIMESTAMPTZ,
+    timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+    collection_runner_id TEXT,
+    last_read_invocation_id UUID,
+    last_checked_at TIMESTAMPTZ,
+    last_archived_at TIMESTAMPTZ,
+    enroll_reasons JSONB,
+    daily_plan_task_id TEXT,
+    coverage JSONB,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    UNIQUE (tenant_id, user_id, source_account_id, source_conversation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_bs_wecom_conversations_owner
+    ON bs_wecom_conversations (tenant_id, user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bs_wecom_conversations_plan
+    ON bs_wecom_conversations (tenant_id, user_id, daily_plan_task_id);
+
+-- 归档消息（唯一键 tenant+会话+来源代次+原msg_id；同文同秒不同原ID不合并）
+CREATE TABLE IF NOT EXISTS bs_wecom_messages (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    conversation_id BIGINT NOT NULL,
+    source_generation TEXT NOT NULL,
+    source_message_id BIGINT NOT NULL,
+    server_id TEXT,
+    source_invocation_id UUID,
+    sender_id TEXT,
+    sender_name TEXT,
+    name_source TEXT,
+    sender_platform TEXT NOT NULL DEFAULT 'unknown',
+    sender_side TEXT NOT NULL,
+    kind TEXT,
+    text TEXT,
+    text_format TEXT,
+    system BOOLEAN NOT NULL DEFAULT FALSE,
+    parse_trusted BOOLEAN NOT NULL DEFAULT FALSE,
+    baseline BOOLEAN NOT NULL DEFAULT FALSE,
+    sent_at TIMESTAMPTZ,
+    source_time_text TEXT,
+    source_fields JSONB,
+    attachment_ref JSONB,
+    send_origin TEXT,
+    origin_evidence JSONB,
+    send_invocation_id UUID,
+    handling TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    UNIQUE (tenant_id, conversation_id, source_generation, source_message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_bs_wecom_messages_timeline
+    ON bs_wecom_messages (tenant_id, conversation_id, sent_at, id);
+
+-- 每日总结（唯一键 tenant+会话+业务日期；每会话每天展示最新一份，按首轮
+-- snapshot_at 新鲜度更新，不建报告版本表）
+CREATE TABLE IF NOT EXISTS bs_wecom_daily_summaries (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    conversation_id BIGINT NOT NULL,
+    business_date DATE NOT NULL,
+    timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+    generation_runner_id TEXT,
+    generation_started_at TIMESTAMPTZ,
+    generation_status TEXT NOT NULL DEFAULT 'refreshing',
+    last_error TEXT,
+    refreshed_at TIMESTAMPTZ,
+    refresh_invocation_id UUID,
+    input_watermark BIGINT,
+    snapshot_at TIMESTAMPTZ,
+    generated_at TIMESTAMPTZ,
+    source_runner_id TEXT,
+    coverage JSONB,
+    summary JSONB,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    UNIQUE (tenant_id, conversation_id, business_date)
+);
+CREATE INDEX IF NOT EXISTS idx_bs_wecom_daily_summaries_range
+    ON bs_wecom_daily_summaries (tenant_id, user_id, business_date DESC);

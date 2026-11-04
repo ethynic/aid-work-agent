@@ -282,6 +282,10 @@ test('端到端形态：py 行集 → 归一输出字段齐备（msg_id/server_i
     text: '你好',
     time: localStamp(1700000000),
     parse_trusted: true,
+    content_type: 2,
+    send_time: 1700000000,
+    sequence: 1,
+    flag: 0,
   })
   const { kind: _kind2, ...rest2 } = out[1]!
   assert.deepEqual(rest2, {
@@ -295,5 +299,127 @@ test('端到端形态：py 行集 → 归一输出字段齐备（msg_id/server_i
     time: localStamp(1700000000),
     parse_trusted: false,
     system: true,
+    content_type: 1017,
+    send_time: 1700000000,
+    sequence: 2,
   })
+})
+
+// ============ observed_chat 片段与日期模式校验（wecom-conversation 设计 §3.1.1/§4.1） ============
+
+import { buildObservedChat } from '../src/operations/messageSend.js'
+import { dayPlaceholderMessage, validateSessionRead } from '../src/platform/localdb/sessions.js'
+
+test('buildObservedChat：优先确认命中并按预算装邻近记录，装不下标 truncated', () => {
+  const rows = [
+    { message_id: 1, sender_id: 'acc', content_type: 2, send_time: 100, conversation_id: 'R:g' },
+    { message_id: 2, sender_id: 'peer', content_type: 2, send_time: 101, conversation_id: 'R:g' },
+    { message_id: 3, sender_id: 'acc', content_type: 2, send_time: 102, conversation_id: 'R:g' },
+  ]
+  const fragment = buildObservedChat(rows as never, 'acc', 'R:g', 'gen1', 3, false)
+  assert.ok(fragment)
+  assert.equal(fragment.session, 'ws1.' + Buffer.from(JSON.stringify({ account: 'acc', conversation_id: 'R:g' })).toString('base64url'))
+  assert.equal(fragment.source_generation, 'gen1')
+  assert.equal(fragment.confirmed_message_id, 3)
+  assert.equal((fragment.messages as unknown[]).length, 3)
+  assert.equal(fragment.truncated, undefined)
+  // 超预算：P0 冻结包装正文（0a..08 00 12..0a..utf8）保证真实字节大小
+  const varint = (n: number): number[] => {
+    const out: number[] = []
+    for (;;) {
+      const b7 = n & 0x7f
+      n >>>= 7
+      if (n) out.push(b7 | 0x80)
+      else { out.push(b7); return out }
+    }
+  }
+  const wrapText = (text: string): Buffer => {
+    const raw = Buffer.from(text, 'utf8')
+    const inner = Buffer.from([0x0a, ...varint(raw.length), ...raw])
+    const mid = Buffer.from([0x08, 0x00, 0x12, ...varint(inner.length), ...inner])
+    return Buffer.from([0x0a, ...varint(mid.length), ...mid])
+  }
+  const big = [
+    { message_id: 1, sender_id: 'acc', content_type: 2, send_time: 100, conversation_id: 'R:g', content: wrapText('确认命中的正文') },
+    ...Array.from({ length: 40 }, (_, index) => ({
+      message_id: 2 + index, sender_id: 'peer', content_type: 2, send_time: 101 + index,
+      conversation_id: 'R:g', content: wrapText('邻近记录'.repeat(60)),
+    })),
+  ]
+  const truncated = buildObservedChat(big as never, 'acc', 'R:g', 'gen1', 1, false)
+  assert.ok(truncated)
+  assert.equal(truncated.truncated, true)
+  assert.ok((truncated.messages as { msg_id: number }[]).length < big.length)
+  assert.equal((truncated.messages as { msg_id: number }[])[0]!.msg_id, 1) // 确认命中优先保留
+})
+
+test('buildObservedChat：空窗口/组装失败整体省略，不影响原发送结论', () => {
+  assert.equal(buildObservedChat([], 'acc', 'R:g', 'gen1', null, false), null)
+})
+
+// 评审三 P2-6：正文降级保留身份——占位由归一消息展开，仅替换正文/引用字段。
+// readSessionDay 内联使用同构（spread placeholder + 文案/unreadable_reason），
+// 这里用与实现一致的字段集合断言防护回归。
+test('正文降级占位保留发言人/平台/原类型/ID/时间', () => {
+  const normalized = {
+    msg_id: 7, sender_id: 'acc', sender_name: 'Known Customer', sender_platform: 'wechat',
+    server_id: 'srv-7', side: 'self', kind: 'text', text: '巨'.repeat(20000),
+    time: '2026-11-04 10:00:00', parse_trusted: true, content_type: 2, send_time: 100,
+    mentions: [], mentions_complete: false, sender_name_source: 'user_table',
+  } as never
+  const downgraded = dayPlaceholderMessage(normalized) as Record<string, unknown>
+  for (const key of ['msg_id', 'sender_id', 'sender_name', 'sender_platform', 'server_id',
+    'side', 'kind', 'content_type', 'send_time', 'time']) {
+    assert.equal(downgraded[key], (normalized as Record<string, unknown>)[key], key)
+  }
+  // 合成占位正文不可信（评审四 P2-2）：原消息可信，占位必须置 false
+  assert.equal((normalized as Record<string, unknown>).parse_trusted, true)
+  assert.equal(downgraded.parse_trusted, false)
+  assert.match(String(downgraded.text), /超出单页大小限制/)
+})
+
+test('validateSessionRead 日期模式：单会话+稳定标识才可用；续页不能用增量游标', () => {
+  assert.equal(validateSessionRead({ sessions: ['ws1.x'], single: true, date: '2026-11-03' }), null)
+  assert.equal(validateSessionRead({ sessions: ['ws1.x'], single: true, date: '2026-11-03', include_context: true, timezone: 'Asia/Shanghai', limit: 100 }), null)
+  assert.match(validateSessionRead({ sessions: ['群名'], single: true, date: '2026-11-03' }) ?? '', /稳定会话标识/)
+  assert.match(validateSessionRead({ sessions: ['ws1.x'], single: true, date: '2026/11/03' }) ?? '', /YYYY-MM-DD/)
+  assert.match(validateSessionRead({ sessions: ['ws1.x'], single: true, date: '2026-11-03', attachment: { message_id: 1 } }) ?? '', /分开使用/)
+  assert.match(validateSessionRead({ sessions: ['ws1.x'], single: true, date: '2026-11-03', cursor: 'wb1.abc' }) ?? '', /日期读取返回的游标/)
+  assert.match(validateSessionRead({ sessions: ['ws1.x', 'ws1.y'], date: '2026-11-03' }) ?? '', /稳定会话标识/)
+  assert.match(validateSessionRead({ sessions: ['ws1.x'], single: true, include_context: true }) ?? '', /日期模式可用/)
+})
+
+test('validateSessionRead：仅 wd1 游标的续页按日期模式受理（评审 P1-2）', () => {
+  assert.equal(validateSessionRead({ sessions: ['ws1.x'], single: true, cursor: 'wd1.eyJhIjoxfQ' }), null)
+  assert.match(validateSessionRead({ sessions: ['ws1.x'], single: true, cursor: 'wd1.abc', limit: 101 }) ?? '', /limit/)
+  assert.match(validateSessionRead({ sessions: ['ws1.x'], single: true, cursor: 'wd1.abc', attachment: { message_id: 1 } }) ?? '', /分开使用/)
+})
+
+test('buildObservedChat：首条超预算不再无条件装入（评审 P2-20）', () => {
+  const varint2 = (n: number): number[] => {
+    const out: number[] = []
+    for (;;) {
+      const b7 = n & 0x7f
+      n >>>= 7
+      if (n) out.push(b7 | 0x80)
+      else { out.push(b7); return out }
+    }
+  }
+  const wrap2 = (text: string): Buffer => {
+    const raw = Buffer.from(text, 'utf8')
+    const inner = Buffer.from([0x0a, ...varint2(raw.length), ...raw])
+    const mid = Buffer.from([0x08, 0x00, 0x12, ...varint2(inner.length), ...inner])
+    return Buffer.from([0x0a, ...varint2(mid.length), ...mid])
+  }
+  const huge = [{
+    message_id: 1, sender_id: 'acc', sender_name: '本人', content_type: 2, send_time: 100,
+    conversation_id: 'R:g', text: '巨'.repeat(12000), parse_trusted: true,
+  }]
+  // 确认命中单条也超预算：整体省略（评审 P2-20 允许"装不下省略"），
+  // 发送结论不受影响；窗口本身有截断时保留带缺口标注的空片段。
+  assert.equal(buildObservedChat(huge as never, 'acc', 'R:g', 'gen1', 1, false), null)
+  const marker = buildObservedChat(huge as never, 'acc', 'R:g', 'gen1', 1, true)
+  assert.ok(marker)
+  assert.equal((marker.messages as unknown[]).length, 0)
+  assert.equal(marker.truncated, true)
 })

@@ -20,6 +20,12 @@ class TerminalParameters(StrictDTO):
     task_name: str | None = Field(default=None, min_length=1, max_length=80)
     notify_rule_id: str | None = Field(default=None, min_length=1, max_length=128)
     notify_target_id: str | None = Field(default=None, min_length=1, max_length=128)
+    # 企微日报计划终态扩展（wecom-conversation 设计 §5.4）：服务端构造的
+    # 日报日期链接与结果摘要；普通任务缺省，不将模型输出当跳转地址。
+    daily_report_date: str | None = Field(default=None, pattern=r'^\d{4}-\d{2}-\d{2}$')
+    daily_report_link: str | None = Field(default=None, min_length=1, max_length=512)
+    daily_report_summary: str | None = Field(default=None, min_length=1, max_length=200)
+    daily_report_missing: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class WaitingInputParameters(StrictDTO):
@@ -227,6 +233,12 @@ def render_inbox_text(event_type, parameters):
         outcome = '已完成' if parameters['event_kind'] == 'completed' else '执行失败'
         if parameters.get('task_id'):
             body = f'定时任务「{parameters.get("task_name") or parameters["session_title"]}」{outcome}。'
+            if parameters.get('daily_report_date'):
+                body += f'\n企微会话日报（{parameters["daily_report_date"]}）：{parameters.get("daily_report_summary") or "见日报页面"}'
+                if parameters.get('daily_report_missing'):
+                    body += f'；未完成：{parameters["daily_report_missing"]}'
+                if parameters.get('daily_report_link'):
+                    body += f'\n查看日报：{parameters["daily_report_link"]}'
             return '定时任务执行结果', body
         name = parameters.get('task_name') or parameters['session_title']
         return '任务执行结果', f'「{name}」中的任务{outcome}。'

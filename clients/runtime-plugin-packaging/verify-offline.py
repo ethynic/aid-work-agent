@@ -79,6 +79,18 @@ def main():
                         'assert AES.new(bytes(16),AES.MODE_CBC,bytes(16)).decrypt(encrypted)==bytes(16)')
                 subprocess.run([str(stage / 'ocr-python/python.exe'), '-I', '-B', '-c', code],
                                cwd=stage, env=env, check=True, timeout=30, capture_output=True)
+                # wecom 日期/IANA 能力（评审三 P1-5）：离线验包同样验证——旧
+                # ocr-python-final（无 tzdata）在此失败，指向 prepare 刷新资产。
+                daymode = ('from zoneinfo import ZoneInfo; from datetime import datetime, timedelta; '
+                           'tz=ZoneInfo("Asia/Shanghai"); '
+                           'start=datetime(2026,11,4,tzinfo=tz); '
+                           'end=(datetime(2026,11,4)+timedelta(days=1)).replace(tzinfo=tz); '
+                           'assert int(end.timestamp())-int(start.timestamp())==86400')
+                probe = subprocess.run([str(stage / 'ocr-python/python.exe'), '-I', '-B', '-c', daymode],
+                                       cwd=stage, env=env, timeout=30, capture_output=True)
+                if probe.returncode != 0:
+                    raise ValueError('WeCom date/IANA capability missing in embedded python; '
+                                     'refresh assets via prepare-ocr.py (tzdata wheel) before packaging')
             if snapshot(stage) != before:
                 raise ValueError('Read-only smoke mutated signed payload')
             summaries.append({'archive': archive.name, 'sha256': digest(archive), 'size': archive.stat().st_size, 'files': len(before), 'tools': len(manifest['tools']), 'doctor_exit': doctor.returncode, 'runtime_readiness': report['runtime_readiness'], 'payload_unchanged': True, 'synthetic_ocr': (stage / 'ocr-python').exists(), 'wecom_sqlite_aes': manifest['provider_id'] == 'ai.aidwork.wecom'})

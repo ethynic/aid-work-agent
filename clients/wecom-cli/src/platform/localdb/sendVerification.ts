@@ -1,6 +1,6 @@
 /** Send-only projection and bounded read-only reconciliation; never invokes a UI driver. */
 import { CodedOperationError, type OpContext } from '../../operations/types.js'
-import { admitLocaldbVersion, prepareDecryptedDbs, unavailable } from './access.js'
+import { admitLocaldbVersion, hash, prepareDecryptedDbs, unavailable } from './access.js'
 import { readLocalState, writeLocalState } from './matrix.js'
 import { runLocaldbPy } from './driver.js'
 import { logLocaldbEvent } from './log.js'
@@ -67,11 +67,22 @@ export interface SendCheck {
   rows: number
   untrusted: number
   message_id?: number
+  /** 原发送源库代次（hash([sourceId, schema])，凭据事实派生；核对前已验证与当前一致） */
+  source_generation: string
+  /**
+   * 同次核验快照已读到的窗口记录（含各方消息；observed_chat 片段的唯一输入，
+   * 不为片段额外读库/轮询）。装不下时截断并置 observed_truncated——片段始终
+   * 仅为局部观察（设计 §3.1.1）。
+   */
+  observed?: Record<string, unknown>[]
+  observed_truncated?: boolean
 }
 
 /** Bound work per snapshot; a cap is unknown, never evidence that nothing was sent. */
 export const SEND_VERIFY_PAGE_SIZE = 50
 export const SEND_VERIFY_MAX_PAGES = 20
+/** observed 片段窗口行上限（超出部分截断；结果预算在组装侧收敛）。 */
+export const OBSERVED_WINDOW_ROW_CAP = 120
 
 export async function verifySendReceipt(receipt: SendReceipt, ctx: OpContext, local: LocaldbReadDeps): Promise<SendCheck> {
   const current = await (local.probeAccountFn ?? probeCurrentAccount)(ctx)
@@ -81,10 +92,13 @@ export async function verifySendReceipt(receipt: SendReceipt, ctx: OpContext, lo
     const meta = await query(['--task', 'context', '--account', current.account])
     if (meta.self_user_id !== receipt.account) throw new CodedOperationError('IDENTITY_UNCONFIRMED', '本人身份映射未确认')
     if (sourceId !== receipt.sourceId || meta.schema_version !== receipt.schema) throw unavailable('源库代际已变化，不能确认原发送结果')
+    const sourceGeneration = hash([receipt.sourceId, receipt.schema])
     let after = receipt.baseline
     let anchor = receipt.anchor
     const matches: number[] = []
     const diagnostic = { pages: 0, rows: 0, untrusted: 0 }
+    const observed: Record<string, unknown>[] = []
+    let observedTruncated = false
     for (let page = 0; page < SEND_VERIFY_MAX_PAGES; page++) {
       const res = await query(['--task', 'send-messages', '--conv', receipt.conversationId,
         '--after-id', String(after), ...(after > 0 ? ['--anchor', anchor] : []),
@@ -98,18 +112,23 @@ export async function verifySendReceipt(receipt: SendReceipt, ctx: OpContext, lo
         after = row.message_id as number
         diagnostic.rows++
         if (row.trusted !== true) diagnostic.untrusted++
+        if (observed.length < OBSERVED_WINDOW_ROW_CAP) observed.push(row)
+        else observedTruncated = true
         if ((row.content_type === 0 || row.content_type === 2) &&
           row.trusted === true && row.sender_id === receipt.account && row.text === receipt.text &&
           typeof row.send_time === 'number' && row.send_time >= receipt.since && row.send_time <= receipt.until) matches.push(after)
       }
       if (res.messages.length < SEND_VERIFY_PAGE_SIZE) {
         return matches.length === 1
-          ? { status: 'confirmed', reason: 'matched', ...diagnostic, message_id: matches[0]! }
-          : { status: 'unknown', reason: matches.length > 1 ? 'ambiguous' : 'not_observed', ...diagnostic }
+          ? { status: 'confirmed', reason: 'matched', ...diagnostic, message_id: matches[0]!, source_generation: sourceGeneration,
+              observed, ...(observedTruncated ? { observed_truncated: true } : {}) }
+          : { status: 'unknown', reason: matches.length > 1 ? 'ambiguous' : 'not_observed', ...diagnostic, source_generation: sourceGeneration,
+              observed, ...(observedTruncated ? { observed_truncated: true } : {}) }
       }
       if (res.next_cursor_id !== after || typeof res.next_anchor !== 'string' || !/^[a-f0-9]{64}$/.test(res.next_anchor)) throw unavailable('发送核验分页锚点无效')
       anchor = res.next_anchor
     }
-    return { status: 'unknown', reason: 'scan_limit', ...diagnostic }
+    return { status: 'unknown', reason: 'scan_limit', ...diagnostic, source_generation: sourceGeneration,
+      observed, ...(observedTruncated ? { observed_truncated: true } : {}) }
   })
 }

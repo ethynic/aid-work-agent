@@ -2683,9 +2683,15 @@ class WecomReadSessionInput(WecomTargetInput):
     attachment: Optional[Annotated[Dict[str, Any], WithJsonSchema(AttachmentReadInput.model_json_schema())]] = Field(None,
         description='读取指定消息的附件内容，不推进聊天游标。')
     cursor: Optional[str] = Field(None, min_length=1, max_length=16384)
-    limit: Optional[int] = Field(None, ge=1, le=50)
+    limit: Optional[int] = Field(None, ge=1, le=100)
     resolve_only: Optional[bool] = Field(None, description='内部目标定位阶段，不读取聊天正文')
     channel: Optional[str] = Field(None, pattern='^(local-db|ui)$')
+    date: Optional[str] = Field(None, pattern=r'^\d{4}-\d{2}-\d{2}$',
+        description='日期模式：按业务日读取（YYYY-MM-DD）；只用于稳定session的单会话，与attachment/resolve_only分开。')
+    timezone: Optional[str] = Field(None, min_length=1, max_length=64,
+        description='日期模式IANA时区，缺省Asia/Shanghai；续页省略以继承原范围。')
+    include_context: Optional[bool] = Field(None,
+        description='日期模式背景：true首次带该日零点前最近100条，与当日消息共同分页；首次缺省false，续页省略继承。')
     max_pages: Optional[int] = Field(
         None,
         ge=1,
@@ -2705,6 +2711,10 @@ class WecomReadSessionInput(WecomTargetInput):
     def _attachment_read(self):
         if self.attachment is not None and (self.cursor is not None or self.resolve_only):
             raise ValueError('附件展开不能同时指定cursor或resolve_only。')
+        if self.date is not None and (self.attachment is not None or self.resolve_only):
+            raise ValueError('日期模式与附件展开/纯定位分开使用。')
+        if self.date is not None and self.session is not None and not self.session.startswith('ws1.'):
+            raise ValueError('日期模式只用于稳定会话标识（ws1.）的单会话读取。')
         return self
 
     @field_validator('attachment')
@@ -2723,6 +2733,9 @@ class WecomReadSessionTool(WecomLocalToolProxyTool):
     description = (
         '从本机数据库读取一个单聊或群，不发送、不搜索切换UI。session首次可用完整名称，'
         '后续用结果稳定会话标识；cursor原样回传取得增量，has_more时先继续排空。'
+        '日期模式：传date按业务日读取（timezone缺省Asia/Shanghai），每页默认100条按时间升序稳定分页；'
+        'include_context=true首次带该日零点前最近100条背景；续页只传返回的日期cursor，参数省略继承原范围；'
+        '日期读取不推进增量cursor、不产生待回复候选。'
         '消息含sender_id/name/sender_platform，wechat为微信、wecom为企微、unknown不得猜。'
         '首次历史仅作上下文，监听只处理后续新消息，用户要求补旧待办时按其范围处理。'
         '根据已选智能体角色、发言人平台及上下文决定回复，不把未读角标当是否已回复。'

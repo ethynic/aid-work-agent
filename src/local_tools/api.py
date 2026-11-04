@@ -58,6 +58,24 @@ def _http_error(status_code: int, error: str, exc: Optional[Exception] = None) -
     return HTTPException(status_code=status_code, detail=detail)
 
 
+_wecom_log_tasks: set = set()
+
+
+def _spawn_wecom_log_callback(row: Dict[str, Any]) -> None:
+    """企微旁路日志回调的 fire-and-forget 派发（保持强引用防 GC；回调自身不抛出）。"""
+    async def _run():
+        from src.wecom_conversation import logsink
+        await logsink.on_result_accepted(dict(row))
+
+    try:
+        task = asyncio.create_task(_run())
+        _wecom_log_tasks.add(task)
+        task.add_done_callback(_wecom_log_tasks.discard)
+    except Exception as error:
+        logger.warning(f"后端日志：企微旁路日志回调派发失败 invocation={row.get('id')} "
+                       f"error={type(error).__name__}")
+
+
 async def _current_user_and_tenant(request: Request) -> tuple:
     """Web API 鉴权：用户 token + middleware 解析的租户上下文"""
     user = await asyncio.to_thread(get_current_user, request)
@@ -461,6 +479,16 @@ async def runtime_result(
         )
         if not row:
             raise _http_error(404, "invocation 不存在或 claim token 不匹配")
+        # 企微旁路日志（设计 §3.1）：原结果已接受并持久化之后的尽力异步回调，
+        # 不进入本响应事务、不影响 ACK/Agent 结果/计费；失败允许丢失。
+        # 迟到成功（原机制持久 state=unknown + _late_result）复用已有
+        # observed_invocation 可信完成视图纳入旁路登记；原 unknown 事实不改写
+        # （评审二 P1-7）。
+        if row.get("provider_key") == "wecom":
+            from src.local_tools.repository import observed_invocation
+            view = observed_invocation(dict(row))
+            if view.get("state") == "succeeded":
+                _spawn_wecom_log_callback(view)
         # data_bytes：与客户端「终态已回传 data_bytes=」行比对，定位回传链路丢/裁 data（2026-09-10 排障整改）
         data_bytes = len(json.dumps(body.data).encode("utf-8")) if body.data else 0
         logger.info(

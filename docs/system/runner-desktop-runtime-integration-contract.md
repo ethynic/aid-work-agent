@@ -1,5 +1,7 @@
 # AgentRunner / Desktop / Runtime 共同集成契约
 
+2026-11-03企微会话定稿检查点（设计独立复核通过、待实施）：原`wecom_read_session`加性扩展可选`date/timezone/include_context`（日期模式v1）；背景首次默认false，true固定带日期零点前100条，与当日消息共同分页，续页省略继承cursor值。发送结果可选`observed_chat`沿同次核验已读快照提供，具体结构见设计3.1.1；普通读取用原返回消息。成功读发结果经原Runtime接口、设备身份、outbox/ACK上报，服务器受理原结果后尽力异步保存，原ACK/Agent结果不等待日志；旧字段缺省正常，不因日志改判unknown或重发。首次补录和日报复用待开发的小型日期适配，补录无模型调用、HTTP日志回调不等待分页。日报沿原设备/账号绑定管理同来源多会话，固定内部模板复用所选模型；原计划终态通知加性日期链接与结果摘要，普通通知保持。记录持续保留，1000条仅限前端；附件本轮只有元信息，原件/新恢复优化另见后续计划。唯一开发路线为按定稿原地重构，不为本功能未交付内部协议保留双路径；已交付Runtime0.0.29/BOSS0.3.27原工具/恢复/上报/计费保持。未来开发角色唯一维护本任务CLI/MCP/服务端生产消费，独测/CR只读；实施前按本契约核对生产者/消费者及已交付组合。唯一依据见[设计](../design/wecom/wecom-conversation-operations-design.md)与[本轮计划](../plans/plan-wecom-conversation-operations.md)。
+
 2026-11-02 U1.8共同检查点：新增可选本机H3 runtimeHost.connectionInfo返回{server:string|null}，只读Main实际活动home并投影HTTP(S) origin，无凭据/路径/业务、无网络或Host启动，失败不拦主流程。主控唯一写Main/preload/Controller/UI/菜单及打包，独测/CR只读；H1/Device/Provider与旧bridge语义不变，契约仍2.12。UI0.0.36，Host0.2.26/Core0.2.23保持；独立94测试/CR、实际EXE匿名IPC和来源核验通过。未安装、切换真实服务器、提交、部署或监听。见[计划15.4](../plans/plan-runtime-plugin-host.md#154-截图优化与runtime00362026-11-02)。
 
 2026-11-02 U1.7：UI0.0.35仅补正常状态连接详情里的服务器切换入口，沿原register_new/confirmed和真实执行停止规则，不改Main/Host/Device/H1 schema或权限。Core0.2.23/Host0.2.26保持，实际包相同Core/Node/roots/依赖复用034兼容证据；独立77测试/CR与035实包/Downloads校验通过。未实际安装、切服务器、提交、部署或监听，契约仍2.12；见[统一计划15.3](../plans/plan-runtime-plugin-host.md#153-正常连接切换到测试服务器2026-11-02)。

@@ -4425,6 +4425,100 @@
     ALTER TABLE notification_rules DROP CONSTRAINT IF EXISTS notification_rules_recipient_mode_check;
     ALTER TABLE notification_rules ADD CONSTRAINT notification_rules_recipient_mode_check
         CHECK (recipient_mode IN ('tenant_admins','kf_assignee','task_owner'));
+- datetime: "2026-11-02 16:30:00"
+  remark: "企微关注会话业务三表（bs_wecom_conversations/messages/daily_summaries）：关注同步、消息归档唯一键与日报唯一键；与 src/wecom_conversation/tables.py 同源"
+  statements: |
+    CREATE TABLE IF NOT EXISTS bs_wecom_conversations (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        source_account_id TEXT NOT NULL,
+        source_conversation_id TEXT NOT NULL,
+        session_locator TEXT NOT NULL,
+        name TEXT,
+        kind TEXT,
+        peer_platform TEXT,
+        device_id UUID,
+        is_followed BOOLEAN NOT NULL DEFAULT TRUE,
+        followed_at TIMESTAMPTZ,
+        timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+        collection_runner_id TEXT,
+        last_read_invocation_id UUID,
+        last_checked_at TIMESTAMPTZ,
+        last_archived_at TIMESTAMPTZ,
+        coverage JSONB,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        UNIQUE (tenant_id, user_id, source_account_id, source_conversation_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_bs_wecom_conversations_owner
+        ON bs_wecom_conversations (tenant_id, user_id, is_followed, updated_at DESC);
+    CREATE TABLE IF NOT EXISTS bs_wecom_messages (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        conversation_id BIGINT NOT NULL,
+        source_generation TEXT NOT NULL,
+        source_message_id BIGINT NOT NULL,
+        server_id TEXT,
+        source_invocation_id UUID,
+        sender_id TEXT,
+        sender_name TEXT,
+        name_source TEXT,
+        sender_platform TEXT NOT NULL DEFAULT 'unknown',
+        sender_side TEXT NOT NULL,
+        kind TEXT,
+        text TEXT,
+        text_format TEXT,
+        system BOOLEAN NOT NULL DEFAULT FALSE,
+        parse_trusted BOOLEAN NOT NULL DEFAULT FALSE,
+        baseline BOOLEAN NOT NULL DEFAULT FALSE,
+        sent_at TIMESTAMPTZ,
+        source_time_text TEXT,
+        source_fields JSONB,
+        attachment_ref JSONB,
+        send_origin TEXT,
+        origin_evidence JSONB,
+        send_invocation_id UUID,
+        handling TEXT,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        UNIQUE (tenant_id, conversation_id, source_generation, source_message_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_bs_wecom_messages_timeline
+        ON bs_wecom_messages (tenant_id, conversation_id, sent_at, id);
+    CREATE TABLE IF NOT EXISTS bs_wecom_daily_summaries (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        conversation_id BIGINT NOT NULL,
+        business_date DATE NOT NULL,
+        timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+        generation_runner_id TEXT,
+        generation_started_at TIMESTAMPTZ,
+        generation_status TEXT NOT NULL DEFAULT 'refreshing',
+        last_error TEXT,
+        refreshed_at TIMESTAMPTZ,
+        refresh_invocation_id UUID,
+        input_watermark BIGINT,
+        coverage JSONB,
+        summary JSONB,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        UNIQUE (tenant_id, conversation_id, business_date)
+    );
+    CREATE INDEX IF NOT EXISTS idx_bs_wecom_daily_summaries_range
+        ON bs_wecom_daily_summaries (tenant_id, user_id, business_date DESC);
+- datetime: "2026-11-03 15:00:00"
+  remark: "企微旁路日志原地重构：记录范围/日报计划列（enroll_reasons/daily_plan_task_id/snapshot_at/generated_at/source_runner_id），旧未交付列兼容保留不删除；与 src/wecom_conversation/tables.py 同源"
+  statements: |
+    ALTER TABLE bs_wecom_conversations ADD COLUMN IF NOT EXISTS enroll_reasons JSONB;
+    ALTER TABLE bs_wecom_conversations ADD COLUMN IF NOT EXISTS daily_plan_task_id TEXT;
+    ALTER TABLE bs_wecom_daily_summaries ADD COLUMN IF NOT EXISTS snapshot_at TIMESTAMPTZ;
+    ALTER TABLE bs_wecom_daily_summaries ADD COLUMN IF NOT EXISTS generated_at TIMESTAMPTZ;
+    ALTER TABLE bs_wecom_daily_summaries ADD COLUMN IF NOT EXISTS source_runner_id TEXT;
+    CREATE INDEX IF NOT EXISTS idx_bs_wecom_conversations_plan
+        ON bs_wecom_conversations (tenant_id, user_id, daily_plan_task_id);
 - datetime: "2026-11-03 18:00:00"
   remark: "定时任务时间窗（设计 §15）：scheduled_tasks 新增可选 start_at/ends_at（循环任务窗口判定 start_at<=触发点<ends_at，旧行 NULL=无限期，无数据回填）；租户任务上限复用 tenants.settings.scheduler.max_tasks_per_user 不新增表"
   statements: |

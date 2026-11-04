@@ -333,3 +333,13 @@ agent2 实测两次休眠和三次企微读取成功后，DeepSeek 因下一轮�
 只修复已有数据的保留：提供商解析、Engine 消息构建、历史重排、Web/渠道历史重载及短期记忆 cache miss 均保留实际返回的字符串（包括 `""`），缺失或 null 不补造。现有 checkpoint 和私有历史 metadata 已能保存空字符串，沿用原存储、休眠和恢复机制；不改变 schema、客户端协议、计费或公开消息投影，不增加重试与恢复框架。
 
 验证覆盖空字符串多轮工具调用、持久化休眠恢复、历史重载及未带该字段的旧消息；模型请求必须保留字段，公开结果不暴露思考内容。实施及独立验证见[开发计划第18节](../plans/plan-agent-runner-durable-sleep.md#18-deepseek-空思考字段修复2026-11-02)。
+
+## 12. Web关闭与持续任务插话（2026-11-02，待实施）
+
+用户再次确认：任务受理后，关闭Web或关掉浏览器电脑应不影响后台Runner；只需服务端与Runtime所在电脑在线。现有Worker/DB架构已按此执行，Web只作提交/控制/订阅，关闭视图不能调用cancel。前端当前仍把后台运行与输入忙态混用，输入禁用是实际缺口，不代表后台任务必须依赖网页常开。
+
+运行中插话不能只解除disabled：当前resume/reply仅面向parked状态。拟沿原controls加性受理普通input，由Worker在决策点向followup_messages应用；sleep沿原timer唤醒，普通补充不绕过ask_user或未知写恢复边界。scheduled非交互规则保留，旧Runtime/BOSS wire不改。本节为后续方向，实施范围统一见[独立后续计划F4](../plans/plan-wecom-conversation-followups.md#5-f4原web交互后置需求)，不属于本轮日志/日报实施或验收，不宣称已通过真机验证。
+
+同轮补充业务动态：现有continuous根执行已经能发中间response并继续运行，但当前Web主要显示同一输出气泡与技术进度。后续考虑沿原事件/历史水位逐条展示业务动态，重要结果落库后可重连读取，空轮询保持安静；中间汇报不终结持续任务。本轮不深化实现，待讨论范围见[后续计划F4](../plans/plan-wecom-conversation-followups.md#5-f4原web交互后置需求)。
+
+2026-11-03用户逐条确认后的优先级：先按[本轮计划L1～L5](../plans/plan-wecom-conversation-operations.md)完成旁路日志三表、自动范围、元信息展示及多会话日报；本节交互、第九条恢复优化和附件原件统一另见[后续计划](../plans/plan-wecom-conversation-followups.md)，不作为本轮前置。

@@ -5,7 +5,7 @@
 import { readFile, stat } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { runWecomOperation, type OperationOutcome } from './context.js'
-import { readBusinessSessions, validateSessionRead, type AttachmentRead } from '../platform/localdb/sessions.js'
+import { readBusinessSessions, readSessionDay, validateSessionRead, type AttachmentRead } from '../platform/localdb/sessions.js'
 import { CancelledError, CodedOperationError, type OperationResult, type OpContext, WecomOperation } from './types.js'
 import { runPowerShellDriver, type RunPowerShellDriverFn } from '../platform/powershell.js'
 import { artifactDir } from '../platform/environment.js'
@@ -58,6 +58,12 @@ export interface WecomReadSessionArgs {
   max_pages?: number
   /** 最近 N 天；DB 按 send_time 过滤，UI 按既有模型/OCR规则处理。 */
   since_days?: number
+  /** 日期模式：按业务日读取该会话（YYYY-MM-DD）；与 attachment/resolve_only 分开使用。 */
+  date?: string
+  /** 日期模式时区（IANA），缺省 Asia/Shanghai。 */
+  timezone?: string
+  /** 日期模式背景：true 带该日零点前最近 100 条，与当日消息共同分页；首次缺省 false。 */
+  include_context?: boolean
 }
 
 export interface SessionMessage {
@@ -179,11 +185,29 @@ export function createWecomReadSessionOperation(
     name: 'wecom_read_session',
     execute(args: WecomReadSessionArgs, ctx: OpContext): Promise<OperationResult> {
       if (args && args.session !== undefined) {
+        // 日期模式（设计 §4.1，评审 P1-2）：显式 date 或 wd1 日期游标都进入日期
+        // 分支——标准续页只传 cursor，不能落回普通增量分支。
+        const isDayMode = args.date !== undefined || (typeof args.cursor === 'string' && args.cursor.startsWith('wd1.'))
+        if (isDayMode) {
+          const requestDate = args.date
+          const requestSession = args.session
+          const dayInput = { session: requestSession, date: requestDate, timezone: args.timezone,
+            include_context: args.include_context, limit: args.limit, cursor: args.cursor }
+          return runWecomOperation('readonly', ctx, () => {
+            if (args.target_name !== undefined || args.target_ref !== undefined) return 'session与旧目标参数不可同时传入'
+            if (args.resolve_only === true) return '日期模式不用于纯定位'
+            if (args.attachment != null) return '日期模式与附件读取分开使用'
+            if (args.channel !== undefined || args.max_pages !== undefined || args.since_days !== undefined) return '日期模式接受session、date、timezone、include_context、cursor或limit'
+            return validateSessionRead({ sessions: [requestSession], single: true, date: requestDate,
+              timezone: args.timezone, include_context: args.include_context, limit: args.limit, cursor: args.cursor })
+          }, opCtx => readSessionDay(dayInput, opCtx, deps.localdb ?? {}))
+        }
         const input = { sessions: [args.session], cursor: args.cursor, limit: args.limit, single: true, metadataOnly: args.resolve_only === true, attachment: args.attachment ?? undefined }
         return runWecomOperation('readonly', ctx, () => {
           if (args.target_name !== undefined || args.target_ref !== undefined) return 'session与旧目标参数不可同时传入'
           if (args.resolve_only !== undefined && typeof args.resolve_only !== 'boolean') return 'resolve_only须为布尔值'
           if (args.resolve_only === true && args.cursor !== undefined) return '纯定位不接受cursor，也不推进消息进度'
+          if (args.timezone !== undefined || args.include_context !== undefined) return 'timezone/include_context仅在date日期模式可用'
           if (args.channel !== undefined || args.max_pages !== undefined || args.since_days !== undefined) return 'session模式使用DB读取，接受session、cursor、limit或按需attachment'
           return validateSessionRead(input)
         }, opCtx => readBusinessSessions(input, opCtx, deps.localdb ?? {}))
@@ -197,6 +221,7 @@ export function createWecomReadSessionOperation(
           }
           if (args.resolve_only !== undefined) return 'resolve_only仅用于session纯定位'
           if (args.attachment != null) return '附件读取须指定session'
+          if (args.date !== undefined || args.timezone !== undefined || args.include_context !== undefined) return 'date/timezone/include_context 仅用于session日期模式，与旧目标参数不可同时使用'
           if (args.channel !== undefined && args.channel !== 'local-db' && args.channel !== 'ui') return 'channel 必须为 local-db/ui'
           if (args.limit !== undefined && (!Number.isSafeInteger(args.limit) || args.limit < 1)) return 'limit 必须为正安全整数'
           if (args.cursor !== undefined && (typeof args.cursor !== 'string' || !args.cursor)) return 'cursor 必须为非空字符串'

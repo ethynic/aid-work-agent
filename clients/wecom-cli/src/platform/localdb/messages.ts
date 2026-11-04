@@ -85,6 +85,14 @@ export interface NormalizedMessage {
   parse_trusted: boolean
   /** 已确认系统/控制类标注；缺省 = 非系统 */
   system?: boolean
+  /** 加性原字段（A0 业务归档；旧消费端忽略）：py 行原生 content_type；无法判定时省略 */
+  content_type?: number
+  /** 原生 send_time（秒）；非安全整数时省略，展示时间仍以 time 为准 */
+  send_time?: number
+  /** 原生 sequence（同秒排序决胜事实）；缺失时省略 */
+  sequence?: number
+  /** 原生 flag；缺失时省略 */
+  flag?: number
 }
 
 export interface NormalizeDeps {
@@ -164,6 +172,10 @@ export function normalizeMessages(
       parse_trusted: row.trusted === true,
     }
     if (typeof row.server_id === 'string' && row.server_id.length > 0) msg.server_id = row.server_id
+    if (ct !== null) msg.content_type = ct
+    if (isSafeInt(row.send_time) && row.send_time >= 0) msg.send_time = row.send_time
+    if (isSafeInt(row.sequence)) msg.sequence = row.sequence
+    if (isSafeInt(row.flag)) msg.flag = row.flag
     if (isTextType || isMarkdown) msg.kind = 'text'
     if (isMarkdown) msg.text_format = 'markdown'
     if (ct === 101 || ct === 102) {

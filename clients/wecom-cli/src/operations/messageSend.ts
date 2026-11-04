@@ -76,10 +76,78 @@ import type { LocaldbReadDeps } from '../platform/localdb/readSession.js'
 import { decodeGroupCursor, groupCursorError } from '../platform/localdb/groupCursor.js'
 import { queryLocaldbGroups } from '../platform/localdb/groups.js'
 import { readBusinessSessions, sessionLocator } from '../platform/localdb/sessions.js'
+import { normalizeMessages, type RawMessageRow } from '../platform/localdb/messages.js'
 import { hash } from '../platform/localdb/access.js'
 
 /** dist/src/operations → 包根 drivers/ps1 */
 const DRIVER_PATH = fileURLToPath(new URL('../../../drivers/ps1/message-send.ps1', import.meta.url))
+
+/** observed_chat 片段字节预算（设计 §3.1.1：按结果预算装入，装不下省略并注明缺口） */
+const OBSERVED_CHAT_BUDGET_BYTES = 6 * 1024
+/** 片段包装（游标/字段名/confirmed 标注）计入预算的固定开销（评审 P2-20） */
+const ENVELOPE_OVERHEAD_BYTES = 256
+
+/**
+ * 发送核验片段 observed_chat（设计 §3.1.1）：只复用同次核验已读快照的窗口记录，
+ * 不为日志额外读库/操作UI/延长轮询。优先本次确认的出站记录与邻近记录；装不下
+ * 的记录省略并标 truncated。片段是可选数据扩展：组装失败由调用方整体省略，
+ * 不改变原发送结论（confirmed/unknown 均不含糊）。
+ */
+export function buildObservedChat(
+  windowRows: Record<string, unknown>[],
+  account: string,
+  conversationId: string,
+  sourceGeneration: string,
+  confirmedMessageId: number | null,
+  windowTruncated: boolean,
+): Record<string, unknown> | null {
+  try {
+    const normalized = normalizeMessages(windowRows as unknown as RawMessageRow[], account)
+    if (normalized.length === 0) return null
+    const size = (value: unknown) => Buffer.byteLength(JSON.stringify(value), 'utf8')
+    // 选择顺序：确认命中优先，其后向两侧邻近扩展；未确认时取窗口尾部（最新邻近）。
+    let order: typeof normalized
+    if (confirmedMessageId !== null) {
+      const hit = normalized.findIndex(message => message.msg_id === confirmedMessageId)
+      if (hit >= 0) {
+        order = [normalized[hit]!]
+        for (let distance = 1; order.length < normalized.length; distance++) {
+          if (hit - distance >= 0) order.push(normalized[hit - distance]!)
+          if (hit + distance < normalized.length) order.push(normalized[hit + distance]!)
+        }
+      } else {
+        order = normalized
+      }
+    } else {
+      order = [...normalized].reverse()
+    }
+    const kept: typeof normalized = []
+    let used = ENVELOPE_OVERHEAD_BYTES  // 片段包装（session/source_generation/字段名）计入预算
+    for (const message of order) {
+      const bytes = size(message)
+      if (used + bytes > OBSERVED_CHAT_BUDGET_BYTES) break  // 首条同样受预算约束
+      kept.push(message)
+      used += bytes
+    }
+    if (kept.length === 0) {
+      // 确认命中的正文也装不下：整体省略（logsink 仍可用回执精确归因），不伪装完整
+      return windowTruncated ? { session: sessionLocator(account, conversationId),
+        source_generation: sourceGeneration, messages: [], ...(confirmedMessageId !== null
+          ? { confirmed_message_id: confirmedMessageId } : {}), truncated: true } : null
+    }
+    const truncated = windowTruncated || kept.length < normalized.length
+    kept.sort((a, b) => a.msg_id - b.msg_id)
+    return {
+      session: sessionLocator(account, conversationId),
+      source_generation: sourceGeneration,
+      messages: kept,
+      ...(confirmedMessageId !== null ? { confirmed_message_id: confirmedMessageId } : {}),
+      ...(truncated ? { truncated: true } : {}),
+    }
+  } catch {
+    return null  // 片段组装失败整体省略，不影响原结果
+  }
+}
 
 export interface WecomMessageSendArgs {
   session?: string
@@ -392,12 +460,17 @@ export function createWecomMessageSendOperation(
               // 本地库核验（短轮询等待落库；轮询参数可注入）
               let localHit: number | null = null
               let dbVerifyFailed: string | null = null
+              let observedWindow: { rows: Record<string, unknown>[]; truncated: boolean; generation: string } | null = null
               for (let attempt = 1; attempt <= Math.max(1, poll.attempts); attempt++) {
                 if (attempt > 1) await sleepAbortable(poll.delayMs, opCtx.signal)
                 try {
                   const check = await verifySendReceipt(receipt!, opCtx, local)
-                  diagnostics.push(check)
+                  const { observed, observed_truncated: observedTruncated, ...lean } = check
+                  diagnostics.push(lean)
                   localHit = check.message_id ?? null
+                  if (observed && observed.length > 0) {
+                    observedWindow = { rows: observed, truncated: observedTruncated === true, generation: check.source_generation }
+                  }
                   if (check.status === 'confirmed') break
                 } catch (err) {
                   if (err instanceof CancelledError || (err instanceof CodedOperationError && err.code === 'CANCELLED')) throw err
@@ -441,6 +514,15 @@ export function createWecomMessageSendOperation(
                 screenshot_paths: Array.isArray(data.screenshot_paths)
                   ? data.screenshot_paths.filter((p): p is string => typeof p === 'string')
                   : [],
+                // 可选 observed_chat（设计 §3.1.1）：复用同次核验已读快照；缺失/组装失败
+                // 整体省略，不改变原发送结论。confirmed 时带精确命中ID供 Agent 代发标注。
+                ...(observedWindow !== null
+                  ? (() => {
+                      const fragment = buildObservedChat(observedWindow.rows, plan.account, plan.conversationId,
+                        observedWindow.generation, localHit, observedWindow.truncated)
+                      return fragment !== null ? { observed_chat: fragment } : {}
+                    })()
+                  : {}),
               }
 
               if (localHit !== null) {
@@ -450,7 +532,8 @@ export function createWecomMessageSendOperation(
                   data: {
                     ...baseData,
                     verification: 'local-record' as const,
-                    verification_detail: { method: 'local-record' as const, message_id: localHit },
+                    verification_detail: { method: 'local-record' as const, message_id: localHit,
+                      source_generation: hash([plan.sourceId, plan.schema]) },
                   },
                 }
               }

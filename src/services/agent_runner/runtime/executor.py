@@ -2,6 +2,7 @@
 
 import asyncio
 import copy
+from collections.abc import Mapping
 import shutil
 from loguru import logger
 from src.core.agent_engine import AgentEngine, Outcome
@@ -294,7 +295,7 @@ class RuntimeExecution:
             env_vars=env_vars, llm_gateway=self.resources.llm,infer_legacy_identity=False,
             profile_id=self.profile_id, instance_id=self.instance_id)
 
-    async def _prime_local_tools(self):
+    async def _prime_local_tools(self, request_data=None):
         # The existing domain pin is not a global device selection policy.
         root = self.control
         while hasattr(root, 'parent_control'):
@@ -308,6 +309,13 @@ class RuntimeExecution:
                  ('tenant_id', 'user_id', 'session_id', 'source', 'session_kind')})
             if device is not None:
                 provider_devices['wecom'] = device
+        if 'wecom' not in provider_devices:
+            # Trusted per-task device (business-submitted request_data; not writable
+            # by web/scheduler submitters) so tool visibility matches the dispatch
+            # device instead of the user's currently selected one.
+            hint = request_data.get('wecom_task_device') if isinstance(request_data, Mapping) else None
+            if hint:
+                provider_devices['wecom'] = str(hint)
         await self.catalog.prime_local_tools(self.identity, provider_devices)
 
     async def run(self, text, user=None, attachments=None, request_context=None,
@@ -321,7 +329,7 @@ class RuntimeExecution:
         try:
             preparation_events = []
             if state is None:
-                await self._prime_local_tools()
+                await self._prime_local_tools(request_context.request_data if request_context else None)
                 self.state, preparation_events = await self.assembler.prepare(text,
                     execution_id=self.resources.execution_id, user=user, attachments=attachments,
                     request_context=request_context, extra_system_prompt=extra_system_prompt,
@@ -337,7 +345,7 @@ class RuntimeExecution:
                     raise ValueError("CHECKPOINT_PROFILE_MISMATCH")
                 await asyncio.to_thread(self.history.reader.assert_authorized)
                 self.state = state
-                await self._prime_local_tools()
+                await self._prime_local_tools(request_context.request_data if request_context else None)
                 await asyncio.to_thread(self.skills._ensure_tenant_skills_loaded)
                 await self.visibility.prime()
             if state is None and self.initial_followup_inputs:
@@ -468,14 +476,15 @@ class RuntimeExecution:
                 registry=self.resources.skill_registry, plan_manager=self.resources.plan_manager,
                 clarification_store=self.clarification, context=tool_context,
                 user_input=text, task_record=task_record,
-                durable_owner=getattr(self.control,'durable_owner',False))
-            dispatcher = ToolDispatcher(catalog=self.catalog, registry=self.resources.tool_registry,
-                executor=self.resources.tool_executor, control_tools=controls,
-                local=LocalToolAdapter(session_id=self.identity.session_id,
+                durable_owner=getattr(self.control, "durable_owner", False))
+            local_adapter = LocalToolAdapter(session_id=self.identity.session_id,
                     execution_id=self.state.execution_id, subagent_config=self.resources.subagent_config,
                     llm=self.resources.llm, tool_executor=self.resources.tool_executor,
                     cancel_on_detach=not getattr(self.control, "durable_owner", False),
-                    control=self.control, state=self.state, attachments=self.assembler.attachments),
+                    control=self.control, state=self.state, attachments=self.assembler.attachments)
+            dispatcher = ToolDispatcher(catalog=self.catalog, registry=self.resources.tool_registry,
+                executor=self.resources.tool_executor, control_tools=controls,
+                local=local_adapter,
                 skills=self.skills, plan_manager=self.resources.plan_manager,
                 subagent_config=self.resources.subagent_config, control=self.control,
                 defer_names=defer_names, verbose_config=verbose_config, verbose_state=verbose_state,
@@ -488,6 +497,20 @@ class RuntimeExecution:
                 await self.control.save(self.state,'prepared')
                 resources_committed = True
             engine_started = True
+            # 企微会话局部业务适配（设计 §5.1）：受信业务描述仅由服务器构造
+            # （补录/日报计划提交），普通任务不携带；固定顺序由程序保证，
+            # 不进入模型驱动循环。
+            business_descriptor = None
+            if request_context is not None and isinstance(request_context.request_data, Mapping):
+                candidate = request_context.request_data.get('wecom_conversation_business')
+                if isinstance(candidate, Mapping):
+                    business_descriptor = dict(candidate)
+            if business_descriptor is not None:
+                from .wecom_business_flow import run_wecom_business
+                async for event in run_wecom_business(self, business_descriptor, local_adapter,
+                                                      request_context):
+                    yield event
+                return
             async for event in AgentEngine().run(self.state,
                 ModelAdapter(self.resources.llm, defer_names, deferred_call_id,
                              resource_directory=self.resources.resource_directory), dispatcher,

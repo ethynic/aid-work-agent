@@ -14,6 +14,54 @@ def _user_owned_web_runner(runner):
                 runner['actor_kind'] == 'user' and runner['actor_id'] == runner['user_id'])))
 
 
+def _wecom_daily_terminal_extras(cursor, runner, task, event_kind):
+    """企微日报计划终态附加参数（wecom-conversation 设计 §5.4，评审 P1-12）。
+
+    仅识别本模块创建的计划标记（task_prompt 首行）。日期与完成/缺失事实取
+    **本次执行持久化**的 checkpoint.resources.wecom_daily_result（业务分支在
+    保存报告后写入），不按通知生成时间猜测"昨天"、不数历史库存报告；缺该
+    事实（非本轮执行/旧数据）时不附日报参数。链接为服务端构造的日报页面
+    路径，不取模型输出。
+    """
+    try:
+        from src.wecom_conversation.plans import parse_plan_prompt
+        config = parse_plan_prompt((task or {}).get('task_prompt') or '')
+    except Exception:
+        return {}
+    if not config or config.get('kind') != 'daily':
+        return {}
+    task_id = (task or {}).get('task_id')
+    if not task_id:
+        return {}
+    result = (((runner.get('checkpoint') or {}).get('execution') or {})
+              .get('resources', {}).get('wecom_daily_result'))
+    if not isinstance(result, dict):
+        return {}
+    business_date = result.get('business_date')
+    if not isinstance(business_date, str) or len(business_date) != 10:
+        return {}
+    completed = [item.get('name') for item in result.get('completed') or []
+                 if isinstance(item, dict) and item.get('name')]
+    failed = [item for item in result.get('failed') or []
+              if isinstance(item, dict) and item.get('name')]
+    extras = {'daily_report_date': business_date,
+              'daily_report_link': (f'/t/{runner["tenant_id"]}/wecom-conversations/daily'
+                                    f'?date={business_date}&task_id={task_id}')}
+    if event_kind == 'completed':
+        extras['daily_report_summary'] = f'本次已生成 {len(completed)} 个会话日报'
+        if failed:
+            # 正常部分失败（整体 completed、事实含 failed 明细）不能让通知生产
+            # 抛 TypeError（通知生产位于 Runner 终态事务内，评审二 P1-4）。
+            names = '、'.join(str(item.get('name') or '?') for item in failed)[:120]
+            extras['daily_report_missing'] = f'本次未完成 {len(failed)} 个会话：{names}'
+    elif failed:
+        # 全部失败（终态 failed）：失败通知本身表达结果，仍附日期链接便于
+        # 查看旧日报；不虚构"已生成"。
+        names = '、'.join(str(item.get('name') or '?') for item in failed)[:120]
+        extras['daily_report_missing'] = f'本次未完成 {len(failed)} 个会话：{names}'
+    return extras
+
+
 def _scheduled_parameters(cursor, runner, event_kind):
     """scheduled 事件参数：会话标题（=任务名）+ session_id/task_id/绑定快照
     （设计 §8.2：notify_rule_id/notify_target_id 在事件生成时从任务行快照，
@@ -24,14 +72,16 @@ def _scheduled_parameters(cursor, runner, event_kind):
     session = cursor.fetchone()
     if not session:
         return None
-    cursor.execute('''SELECT notification_rule_id,notification_target_id,name
+    cursor.execute('''SELECT task_id,notification_rule_id,notification_target_id,name,task_prompt
         FROM scheduled_tasks WHERE session_id=%s''', (runner['session_id'],))
     task = cursor.fetchone()
     scheduled_meta = ((runner.get('input') or {}).get('request_data') or {}).get('scheduled') or {}
     parameters = {'session_title': session_title(session['title']),
                   'event_kind': event_kind,
-                  'task_id': str(scheduled_meta.get('task_id') or '')[:64],
+                  'task_id': str(scheduled_meta.get('task_id') or (task or {}).get('task_id') or '')[:64],
                   'task_name': session_title((task or {}).get('name') or session['title'])}
+    if event_kind in ('completed', 'failed'):
+        parameters.update(_wecom_daily_terminal_extras(cursor, runner, task, event_kind))
     rule_id = (task or {}).get('notification_rule_id')
     target_id = (task or {}).get('notification_target_id')
     if rule_id:

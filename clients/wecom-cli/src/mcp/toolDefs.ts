@@ -210,7 +210,10 @@ export const TOOL_DEFS: WecomToolDef[] = [
     description:
       '使用session读取一个单聊或群的DB聊天记录，返回稳定session、messages、cursor、has_more及发送者平台wechat/wecom/unknown。' +
       '首次历史供上下文；后续原样传cursor读取增量，无UI搜索或额外模型token配置，单批最多50条/16KiB。' +
-      '图片/文件在时间线返回附件信息；需要内容时传attachment.message_id按需读取，文本以字节offset/max_bytes分页、图片返回实际图片内容，不推进时间线cursor。' +
+      '日期模式：传date按业务日读取该会话（YYYY-MM-DD，timezone缺省Asia/Shanghai），每页默认100条，按时间升序稳定分页；' +
+      'include_context=true首次带该日零点前最近100条背景，与当日消息共同分页，背景保留原时间；续页只传cursor，日期/时区/背景参数省略继承原范围；' +
+      '日期读取返回read_window（start_utc/end_utc/snapshot_at）且不推进增量cursor、不产生待回复候选。' +
+      '图片/文件在时间线返回附件信息；附件内容本轮仅元数据展示，需要内容时传attachment.message_id按需读取，文本以字节offset/max_bytes分页、图片返回实际图片内容，不推进时间线cursor。' +
       '旧调用兼容：读取目标会话消息，effect=none，无出站消息。target_ref（搜索返回、有效5分钟）与target_name二选一，同名无法消歧返回TARGET_AMBIGUOUS。' +
       'doctor已启用时优先本地库，默认最近100条；精确时间、消息ID和增量cursor，不切换会话或清角标，非文本占位。' +
       '可指定channel=local-db强制本地库（失败不回退）或ui；cursor绑定账号/会话/数据库代际，UI不能执行cursor。旧ref可用于UI，本地库要求账号绑定ref或target_name。' +
@@ -225,11 +228,14 @@ export const TOOL_DEFS: WecomToolDef[] = [
         max_bytes: z.number().int().min(1).max(8192).optional(),
       }).strict().nullish().describe('按原消息ID读取附件；省略或null均为普通时间线读取。offset/max_bytes用于UTF-8文本字节分页，使用返回next_offset续读。须有session，不与cursor混用。'),
       resolve_only: z.boolean().optional().describe('Runner内部纯定位阶段：只核验账号与目标元数据，不解析正文、不返回或推进消息cursor；Agent业务面不投影此参数'),
+      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('日期模式：按业务日读取（YYYY-MM-DD）。只用于稳定session的单会话读取，与attachment/resolve_only分开；不传date保持增量读取含义'),
+      timezone: z.string().min(1).max(64).optional().describe('日期模式IANA时区，缺省Asia/Shanghai；仅date模式可用，续页省略以继承原范围'),
+      include_context: z.boolean().optional().describe('日期模式背景：true首次带该日零点前最近100条，与当日消息共同分页；首次缺省false，续页省略继承原值'),
       target_ref: z.string().min(1).optional().describe('目标句柄（wecom_chat_search 返回的 target_ref；与 target_name 二选一）'),
       target_name: z.string().min(1).max(100).optional().describe('按会话名定位（可含@微信后缀）；本地库精确匹配并消歧，UI必要时内部search，歧义返回TARGET_AMBIGUOUS；与target_ref二选一'),
       channel: z.enum(['local-db', 'ui']).optional().describe('显式通道；缺省按doctor状态，本地库强制模式失败不回退'),
-      limit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional().describe('本地库最多返回条数，默认100；UI仍由max_pages控制，不承诺数据库分页'),
-      cursor: z.string().min(1).optional().describe('上次本地库返回的增量游标；绑定账号、会话和代际，UI不支持'),
+      limit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional().describe('本地库最多返回条数，默认100；日期模式每页默认100条、上限100（超出会被服务端拒绝）；UI仍由max_pages控制，不承诺数据库分页'),
+      cursor: z.string().min(1).optional().describe('上次本地库返回的增量游标；绑定账号、会话和代际，UI不支持。日期模式返回独立日期游标（wd1），续页原样回传'),
       max_pages: z.number().int().min(1).max(10).optional().describe('最多向上翻几屏（含底部当前屏，默认 1，上限 10）'),
       since_days: z.number().int().min(1).optional().describe('本地库按精确发送时间过滤最近N天；UI仅OCR按分割线超龄早停，模型通道仍抓max_pages'),
     },

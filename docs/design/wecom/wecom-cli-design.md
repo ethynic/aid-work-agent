@@ -15,6 +15,8 @@
 
 ## 1. 定位
 
+2026-11-03最新收敛：[旁路聊天日志与按日日报](wecom-conversation-operations-design.md)拟由成功读取/发送结果经原Runtime通路触发服务器异步保存；Agent不保存、不读取业务消息表。需要日报或成功回复的会话自动记录并持续保留；日期模式可选include_context带零点前100条，默认100条/页，前端最多浏览最近1000条。同来源一个计划管理多个会话，固定内部模板使用本次CLI数据，原定时通知发送日期日报链接。本轮附件只定元信息协议及展示，Agent明确暂不支持原件读取、依据文本回复；原件/预览与第九条恢复优化移到[后续计划](../../plans/plan-wecom-conversation-followups.md)。撤销旧归档前置/采集接管/刷新证明，保留三工具与旧Runtime/BOSS公开语义。[本轮计划](../../plans/plan-wecom-conversation-operations.md)。
+
 `wecom-cli` 是项目第三个第一方 CLI：独立、可分发的 Windows MCP Provider
 （provider_id `ai.aidwork.wecom`，可执行 `aid-wecom`，stdio transport，`local_required`，
 平台 `win32-x64`），操作已登录的企业微信 Windows 客户端（WXWork.exe，5.0.9 系实测）。
