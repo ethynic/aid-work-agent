@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from src.db.database import get_db_connection
+from .special_plans import ordinary_task_prompt_allowed, ordinary_task_sql, special_plan_marker
 from src.db.models import generate_session_id
 
 # pause_reason 与 runner error_code 的映射（设计 §5.4：仅执行侧两类触发自动暂停）
@@ -100,6 +101,8 @@ class ScheduledTaskDB:
         """
         task_id = f"sched_{uuid.uuid4().hex[:12]}"
         session_id = generate_session_id()
+        if not ordinary_task_prompt_allowed(task_prompt):
+            raise ValueError('专属计划标记只能通过所属业务页面创建')
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -109,9 +112,9 @@ class ScheduledTaskDB:
                 if max_active is not None:
                     cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
                                    (f"scheduled_tasks:quota:{tenant_id}:{user_id}",))
-                    cursor.execute("""SELECT count(*) AS cnt FROM scheduled_tasks
+                    cursor.execute(f"""SELECT count(*) AS cnt FROM scheduled_tasks
                         WHERE user_id=%s AND tenant_id IS NOT DISTINCT FROM %s
-                          AND status='active'""", (user_id, tenant_id))
+                          AND status='active' AND {ordinary_task_sql()}""", (user_id, tenant_id))
                     if cursor.fetchone()["cnt"] >= max_active:
                         raise ScheduledTaskQuotaError(
                             f"定时任务已达上限（{max_active}个），请先取消不需要的任务")
@@ -178,7 +181,7 @@ class ScheduledTaskDB:
         """获取用户的定时任务列表（tenant_id 可选：租户视图 fail-closed 过滤）"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            conditions = ["user_id = %s"]
+            conditions = ["user_id = %s", ordinary_task_sql()]
             params: List[Any] = [user_id]
             if status:
                 conditions.append("status = %s")
@@ -201,7 +204,7 @@ class ScheduledTaskDB:
         """统计用户的定时任务数量（max_tasks_per_user 上限用）"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            conditions = ["user_id = %s", "status = %s"]
+            conditions = ["user_id = %s", "status = %s", ordinary_task_sql()]
             params: List[Any] = [user_id, status]
             if tenant_id is not None:
                 conditions.append("tenant_id = %s")
@@ -492,6 +495,27 @@ class ScheduledTaskDB:
                 return None
             occurrence_key = task["next_due_at"].isoformat()
             advance_to = compute_next_due(task, now)
+            from src.wecom_conversation.plans import freeze_scheduled_plan_in_tx
+            descriptor, scope_error = freeze_scheduled_plan_in_tx(cursor, task)
+            if scope_error:
+                from src.scheduler.notify import publish_task_paused_in_tx
+                reason_label = ('当前计划没有可总结的会话，请在每日总结页面添加会话后恢复'
+                                if scope_error == 'scope_empty' else '企微计划定义校验未通过')
+                cursor.execute(
+                    '''UPDATE scheduled_tasks SET status='paused', pause_reason=%s,
+                           pending_occurrence_key=NULL, pending_trigger=NULL,
+                           pending_retry_at=NULL, pending_snapshot=NULL,
+                           updated_at=now()
+                       WHERE task_id=%s RETURNING task_id,tenant_id,user_id,name,
+                           notification_rule_id,notification_target_id''',
+                    (scope_error, task_id))
+                paused = cursor.fetchone()
+                publish_task_paused_in_tx(cursor, dict(paused), reason_label,
+                                          occurrence_key=occurrence_key,
+                                          pause_reason=scope_error)
+                conn.commit()
+                logger.warning(f'后端日志：企微专属计划暂停 task_id={task_id} reason={scope_error}')
+                return None
             snapshot = {
                 "text": task["task_prompt"],
                 "attachments": task.get("attachments") or [],
@@ -499,6 +523,8 @@ class ScheduledTaskDB:
                 "instance_id": task.get("instance_id"),
                 "prompt_augmentations": prompt_augmentations or [],
             }
+            if descriptor is not None:
+                snapshot['wecom_conversation_business'] = descriptor
             cursor.execute("""
                 UPDATE scheduled_tasks SET
                     next_due_at = %s,
@@ -533,13 +559,14 @@ class ScheduledTaskDB:
         也不重新激活自动调度；once 的 completed/expired 行为不变。"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT * FROM scheduled_tasks
                 WHERE task_id = %s
                   AND (status = 'active'
                        OR (status = 'completed' AND schedule_type <> 'once'
                            AND ends_at IS NOT NULL))
                   AND pending_occurrence_key IS NULL
+                  AND {ordinary_task_sql()}
                 FOR UPDATE
             """, (task_id,))
             row = cursor.fetchone()
@@ -650,7 +677,8 @@ class ScheduledTaskDB:
     @staticmethod
     def pause(task_id: str, *, tenant_id: Optional[str] = None,
               user_id: Optional[str] = None,
-              pause_reason: Optional[str] = None) -> bool:
+              pause_reason: Optional[str] = None,
+              allow_special: bool = False) -> bool:
         """用户主动暂停任务：置 paused + pause_reason + 清空 pending 槽。
 
         - 仅 active 可暂停（条件进 UPDATE）：completed/expired 终态不得经
@@ -661,6 +689,8 @@ class ScheduledTaskDB:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             conditions = ["task_id = %s", "status = 'active'"]
+            if not allow_special:
+                conditions.append(ordinary_task_sql())
             params: List[Any] = [pause_reason, task_id]
             if tenant_id is not None:
                 conditions.append("tenant_id = %s")
@@ -805,7 +835,7 @@ class ScheduledTaskDB:
     def resume_recompute(task_id: str, *, max_active: int = None,
                          tenant_id: Optional[str] = None,
                          user_id: Optional[str] = None,
-                         now=None) -> Dict[str, Any]:
+                         now=None, allow_special: bool = False) -> Dict[str, Any]:
         """恢复任务（工具与 API 共用的唯一路径，评审 P1/P2 修正）。
 
         单事务：配额 advisory lock → FOR UPDATE 锁定当前任务行 → **按锁定行
@@ -822,8 +852,11 @@ class ScheduledTaskDB:
         返回更新后的任务行 dict；不可恢复（非 paused/不存在/越权）返回 None；
         配额超限抛 ScheduledTaskQuotaError；调度字段损坏抛 ValueError。"""
         from datetime import datetime as _dt
+        from datetime import timedelta as _timedelta
+        from zoneinfo import ZoneInfo as _ZoneInfo
         from src.scheduler.schedule import compute_resume_due, ScheduleConfigError
 
+        supplied_now = now is not None
         now = now or _dt.now()
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -842,15 +875,23 @@ class ScheduledTaskDB:
                 conn.commit()
                 return None
             task = dict(row)
+            is_special = special_plan_marker(task.get('task_prompt')) is not None
+            if is_special and not allow_special:
+                conn.commit()
+                return None
+            if is_special and not supplied_now:
+                now = _dt.now(_ZoneInfo('Asia/Shanghai')).replace(tzinfo=None)
             # 配额锁按任务属主（与 create 同 key：advisory 与行锁无环——
             # create 不持既有任务行锁，resume 持本行后取 advisory 不成环）
-            if max_active is not None:
+            if max_active is not None and not is_special:
                 cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
                                (f"scheduled_tasks:quota:{task['tenant_id']}:{task['user_id']}",))
             try:
                 next_due_at, will_expire_once, window_finished = compute_resume_due(task, now)
             except ScheduleConfigError as error:
                 raise ValueError(str(error)) from error
+            if is_special and task['schedule_type'] == 'interval':
+                next_due_at = now + _timedelta(seconds=task['interval_seconds'])
             if will_expire_once:
                 # once 已过宽限：明确状态转换为 expired（设计 §4.3 定稿；
                 # 两入口同一回执，不再以"恢复后将被作废"或 409 强制改期分叉）
@@ -871,10 +912,11 @@ class ScheduledTaskDB:
                 conn.commit()
                 logger.info(f"后端日志：任务恢复时时间窗已结束，转 completed task_id={task_id}")
                 return dict(updated) if updated else None
-            if max_active is not None:
-                cursor.execute("""SELECT count(*) AS cnt FROM scheduled_tasks
+            if max_active is not None and not is_special:
+                cursor.execute(f"""SELECT count(*) AS cnt FROM scheduled_tasks
                     WHERE user_id=%s AND tenant_id IS NOT DISTINCT FROM %s
-                      AND status='active' AND task_id<>%s""",
+                      AND status='active' AND task_id<>%s
+                      AND {ordinary_task_sql()}""",
                     (task["user_id"], task["tenant_id"], task_id))
                 if cursor.fetchone()["cnt"] >= max_active:
                     raise ScheduledTaskQuotaError(
@@ -906,7 +948,7 @@ class ScheduledTaskDB:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             conditions = ["task_id = %s",
-                          "status NOT IN ('completed', 'expired')"]
+                          "status NOT IN ('completed', 'expired')", ordinary_task_sql()]
             params: List[Any] = [schedule_type, cron_expression, interval_seconds,
                                  run_at, next_due_at, start_at, ends_at, task_id]
             if tenant_id is not None:
@@ -953,6 +995,8 @@ class ScheduledTaskDB:
         if name is not None:
             set_clauses.append("name = %s")
             params.append(name)
+        if task_prompt is not None and not ordinary_task_prompt_allowed(task_prompt):
+            raise ValueError('专属计划标记只能通过所属业务页面写入')
         if task_prompt is not None:
             set_clauses.append("task_prompt = %s")
             params.append(task_prompt)
@@ -973,7 +1017,7 @@ class ScheduledTaskDB:
         if not set_clauses:
             return False
         set_clauses.append("updated_at = now()")
-        conditions = ["task_id = %s"]
+        conditions = ["task_id = %s", ordinary_task_sql()]
         params.append(task_id)
         if tenant_id is not None:
             conditions.append("tenant_id = %s")
@@ -1111,11 +1155,12 @@ class ScheduledTaskDB:
         串行化，无"检查时无 runner、删除后才接单"窗口。"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT * FROM scheduled_tasks
                 WHERE task_id = %s
                   AND tenant_id IS NOT DISTINCT FROM %s
                   AND user_id = %s
+                  AND {ordinary_task_sql()}
                 FOR UPDATE
             """, (task_id, tenant_id, user_id))
             row = cursor.fetchone()

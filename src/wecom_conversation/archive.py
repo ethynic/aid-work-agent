@@ -145,7 +145,7 @@ def _scoped_rows(cursor, tenant_id, user_id, locators):
     if not locators:
         return {}
     cursor.execute(
-        '''SELECT id, session_locator, timezone, coverage FROM bs_wecom_conversations
+        '''SELECT id, session_locator, timezone, coverage, device_id FROM bs_wecom_conversations
            WHERE tenant_id=%s AND user_id=%s AND session_locator = ANY(%s)''',
         (tenant_id, user_id, sorted(locators)))
     return {row['session_locator']: dict(row) for row in cursor.fetchall()}
@@ -211,6 +211,9 @@ def store_read_result(connection_factory, tenant_id, user_id, result_data, argum
     with connection_factory() as connection:
         cursor = connection.cursor()
         scoped = _scoped_rows(cursor, tenant_id, user_id, {row['locator'] for row in sessions})
+        scoped = {locator: row for locator, row in scoped.items()
+                  if not row.get('device_id') or device_id is None
+                  or str(row['device_id']) == str(device_id)}
         if not scoped:
             return {'conversations': 0, 'messages': 0}
         generation = plan['generation']
@@ -241,7 +244,8 @@ def store_read_result(connection_factory, tenant_id, user_id, result_data, argum
     return {'conversations': len(ordered_rows), 'messages': total}
 
 
-def store_send_fragment(connection_factory, tenant_id, user_id, fragment, *, invocation_id):
+def store_send_fragment(connection_factory, tenant_id, user_id, fragment, *, invocation_id,
+                        device_id=None):
     """发送核验片段 observed_chat → 旁路保存（设计 §3.1.1）。
 
     只消费片段已读到的标准原消息；`confirmed_message_id` 仅在原 DB 核验精确
@@ -275,7 +279,8 @@ def store_send_fragment(connection_factory, tenant_id, user_id, fragment, *, inv
     with connection_factory() as connection:
         cursor = connection.cursor()
         scoped = _scoped_rows(cursor, tenant_id, user_id, [locator])
-        if not scoped:
+        if not scoped or (scoped[locator].get('device_id') and device_id is not None
+                          and str(scoped[locator]['device_id']) != str(device_id)):
             return {'conversations': 0, 'messages': 0}
         conversation = scoped[locator]
         values = [_message_row_values(tenant_id, user_id, conversation['id'], generation,
@@ -289,7 +294,7 @@ def store_send_fragment(connection_factory, tenant_id, user_id, fragment, *, inv
     return {'conversations': 1, 'messages': len(mapped)}
 
 
-def store_reconciled_sends(connection_factory, tenant_id, user_id, reconciled):
+def store_reconciled_sends(connection_factory, tenant_id, user_id, reconciled, *, device_id=None):
     """只读对账确认（wecom_send_status confirmed）→ 补写已存消息的代发归因。"""
     if not isinstance(reconciled, list) or not reconciled:
         return {'attributed': 0}
@@ -298,6 +303,9 @@ def store_reconciled_sends(connection_factory, tenant_id, user_id, reconciled):
     with connection_factory() as connection:
         cursor = connection.cursor()
         scoped = _scoped_rows(cursor, tenant_id, user_id, locators)
+        scoped = {locator: row for locator, row in scoped.items()
+                  if not row.get('device_id') or device_id is None
+                  or str(row['device_id']) == str(device_id)}
         if not scoped:
             return {'attributed': 0}
         ids = {locator: row['id'] for locator, row in scoped.items()}

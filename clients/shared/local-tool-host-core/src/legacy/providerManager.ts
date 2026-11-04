@@ -102,6 +102,7 @@ export class ProviderManager {
   private sendStatusSupported: boolean | undefined
   private groupPollSupported: boolean | undefined
   private groupSendSupported: boolean | undefined
+  private directorySupported: boolean | undefined
   private readonly providerEnv: Record<string, string>
   private readonly nodeExecutable: string
   private readonly baseEnv: Record<string, string>
@@ -218,6 +219,10 @@ export class ProviderManager {
     return Boolean(this.isRunning && WECOM_BUSINESS_TOOLS.every(name => this.wecomTools?.has(name)))
   }
 
+  get wecomDirectoryReady(): boolean {
+    return this.isRunning && this.directorySupported === true
+  }
+
   /** Read-only MCP discovery shares the existing process and retries on the next ordinary heartbeat after transport failure. */
   async inspectWecomBusinessTools(): Promise<ReadonlySet<string>> {
     if (this.wecomInspection) return this.wecomInspection
@@ -226,6 +231,12 @@ export class ProviderManager {
       if (this.wecomTools) return this.wecomTools
       const listed = await this.client!.listTools({}, { timeout: 5000 })
       this.wecomTools = wecomBusinessTools(listed.tools)
+      const directory = listed.tools.find(tool => tool.name === 'wecom_session_directory')
+      const directoryProps = directory?.inputSchema.properties as Record<string, { type?: string }> | undefined
+      this.directorySupported = directory?.annotations?.readOnlyHint === true &&
+        directoryProps?.mode?.type === 'string' && directoryProps?.session?.type === 'string' &&
+        (directoryProps?.sessions as { type?: string; items?: { type?: string } } | undefined)?.type === 'array' &&
+        (directoryProps?.sessions as { items?: { type?: string } } | undefined)?.items?.type === 'string'
       const read = listed.tools.find(tool => tool.name === 'wecom_read_session')
       const props = read?.inputSchema.properties as Record<string, unknown> | undefined
       type AttachmentSchema = { type?: string; properties?: Record<string, { type?: string }>; anyOf?: AttachmentSchema[] }
@@ -248,14 +259,14 @@ export class ProviderManager {
     }
     this.busy = true
     try {
-      if (name === 'wecom_read_sessions' || (['wecom_read_session', 'wecom_message_send'].includes(name) && args.session !== undefined)) {
+      if (name === 'wecom_read_sessions' || name === 'wecom_session_directory' || (['wecom_read_session', 'wecom_message_send'].includes(name) && args.session !== undefined)) {
         let supported: ReadonlySet<string>
         try { supported = await this.inspectWecomBusinessTools() }
         catch { return {
           success: false, code: 'PROVIDER_NOT_AVAILABLE', effect: 'none', retryable: true, run_id: randomUUID(),
           message: '企业微信插件能力读取未完成，可重试连接；尚未执行读取、搜索或发送',
         } }
-        if (!supported.has(name)) return {
+        if (name === 'wecom_session_directory' ? !this.directorySupported : !supported.has(name)) return {
           success: false, code: 'TOOL_NOT_SUPPORTED', effect: 'none', retryable: false, run_id: randomUUID(),
           message: '当前企业微信插件不支持该会话接口，请升级企业微信插件后继续；未执行读取、搜索或发送',
         }
@@ -346,6 +357,7 @@ export class ProviderManager {
 
   private async disposeDead(): Promise<void> {
     this.wecomTools = undefined
+    this.directorySupported = undefined
     this.wecomAttachmentReadSupported = undefined
     this.resumeNextSupported = undefined
     this.sendStatusSupported = undefined

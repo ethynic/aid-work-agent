@@ -1,118 +1,137 @@
-"""企微计划入口的调度约束测试（§15 四轮评审 P1，2026-11-04，全 mock 无 DB）。
+"""D2 dedicated plan timing and accepted scope facts (no external database)."""
 
-覆盖：
-- cron 直传粒度：分钟级（'* * * * *'、'*/30 * * * *'）被拒，'0 * * * *'
-  （每小时）合法——否则该入口可绕过整数小时最短间隔规则；
-- 时间窗不丢失：time_config 带 start_at/ends_at 时随 create 落库；
-- 每人活跃上限：create 传租户有效 max_active；达上限时ensure_daily_plan
-  转换为用户可见的 ConversationServiceError（409），补录路径异常由调用方
-  兜底记录（既有行为）。
-"""
-
+from datetime import date, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from src.wecom_conversation import plans
-from src.wecom_conversation.service import ConversationServiceError
+from src.scheduler.special_plans import (first_line_sql, ordinary_task_prompt_allowed,
+                                         ordinary_task_sql)
 
 
-class TestCronGranularity:
-    """到结束时间停止的前提是窗口能落库；分钟级 cron 则直接拒绝创建。"""
-
-    @pytest.mark.parametrize("cron", ["* * * * *", "*/30 * * * *", "*/5 * * * *"])
-    def test_minute_level_cron_rejected(self, cron):
-        with pytest.raises(ValueError, match="粒度过细|至多每小时一次"):
-            plans._schedule_fields({"schedule_type": "daily",
-                                    "cron_expression": cron})
-
-    def test_hourly_cron_accepted(self):
-        fields = plans._schedule_fields({"schedule_type": "daily",
-                                         "cron_expression": "0 * * * *"})
-        assert fields["cron_expression"] == "0 * * * *"
-        assert fields["start_at"] is None and fields["ends_at"] is None
-
-    def test_daily_cron_still_accepted(self):
-        fields = plans._schedule_fields({"schedule_type": "daily",
-                                         "cron_expression": "0 9 * * *"})
-        assert fields["next_due_at"] is not None
+def test_today_interval_waits_a_complete_period_and_rejects_other_frequencies():
+    before = datetime.now(plans.ZoneInfo('Asia/Shanghai')).replace(tzinfo=None)
+    schedule = plans.daily_plan_schedule('today', interval_hours=3)
+    after = datetime.now(plans.ZoneInfo('Asia/Shanghai')).replace(tzinfo=None)
+    assert schedule['schedule_type'] == 'interval'
+    assert schedule['interval_seconds'] == 3 * 3600
+    assert before + timedelta(hours=3) <= schedule['next_due_at'] <= after + timedelta(hours=3)
+    for hours in (0, 25, 1.5, True):
+        with pytest.raises(ValueError):
+            plans.daily_plan_schedule('today', interval_hours=hours)
+    with pytest.raises(ValueError):
+        plans.daily_plan_schedule('today', interval_hours=1, hour=2)
 
 
-def _plan_kwargs():
-    return dict(tenant_id="tenant_1", user_id="user_1",
-                locators=["ws1:acc/session-1"], schedule={
-                    "schedule_type": "daily",
-                    "time_config": {"hour": 9, "minute": 0,
-                                    "start_at": "2026-11-01 00:00:00",
-                                    "ends_at": "2026-12-01 00:00:00"}})
+def test_yesterday_defaults_to_shanghai_two_am_only():
+    schedule = plans.daily_plan_schedule('yesterday')
+    assert schedule['schedule_type'] == 'daily'
+    assert schedule['cron_expression'] == '0 2 * * *'
+    assert schedule['next_due_at'] > datetime.now(plans.ZoneInfo('Asia/Shanghai')).replace(tzinfo=None)
+    with pytest.raises(ValueError):
+        plans.daily_plan_schedule('yesterday', interval_hours=1)
 
 
-def _mock_service_layers(monkeypatch):
-    """隔离 wecom service 层（定位/登记），保证用例只验证调度约束。
-    plans 内为函数级 `from . import service`——逐属性 patch 源模块。"""
-    monkeypatch.setattr("src.wecom_conversation.service.valid_timezone",
-                        lambda name: True)
-    # 评审四：来源解析与候选计划演进后的 service 层隔离（定位/登记/候选）。
-    monkeypatch.setattr(
-        "src.wecom_conversation.service.conversations_for_locators",
-        lambda *a, **k: [])
-    monkeypatch.setattr(
-        "src.wecom_conversation.service.candidate_plans_for_source",
-        lambda *a, **k: [])
-    monkeypatch.setattr("src.wecom_conversation.plans.resolve_runner_source_device",
-                        lambda *a, **k: None)
-    monkeypatch.setattr(
-        "src.wecom_conversation.service.enroll_conversations_for_plan",
-        lambda *a, **k: [("conv", True)])
-    monkeypatch.setattr("src.wecom_conversation.adapters.decode_locator",
-                        lambda item: ("acc", "session-1"))
-    monkeypatch.setattr(plans, "_schedule_backfill_for", lambda *a, **k: None)
+def test_today_edit_restarts_full_interval_under_plan_lock(monkeypatch):
+    """编辑时从该次保存时点重算，不沿旧 next_due_at 立刻触发。"""
+    config = plans.daily_plan_config(account='acc1', device='device-a',
+                                     target_day='today', scope_mode='all')
+    existing = {'task_id': 'sched-one', 'task_prompt': plans.plan_prompt('daily', config),
+                'status': 'active', 'notification_rule_id': None}
+    connection = MagicMock()
+    cursor = connection.__enter__.return_value.cursor.return_value
+    cursor.fetchall.return_value = [existing]
+    cursor.fetchone.return_value = existing
+
+    class Clock:
+        current = datetime(2026, 11, 4, 12)
+
+        @classmethod
+        def now(cls, tz):
+            return cls.current.replace(tzinfo=tz)
+
+    monkeypatch.setattr(plans, 'datetime', Clock)
+    with patch('src.db.database.get_db_connection', return_value=connection):
+        plans.save_daily_plan('tenant-a', 'user-a', create=False, account='acc1',
+                              device='device-a', target_day='today', scope_mode='all',
+                              conversation_ids=[], interval_hours=3)
+        Clock.current = datetime(2026, 11, 4, 14)
+        plans.save_daily_plan('tenant-a', 'user-a', create=False, account='acc1',
+                              device='device-a', target_day='today', scope_mode='all',
+                              conversation_ids=[], interval_hours=3)
+    updates = [call.args[1] for call in cursor.execute.call_args_list
+               if 'UPDATE scheduled_tasks SET task_prompt=' in call.args[0]]
+    assert all(first_line_sql() in call.args[0]
+               for call in cursor.execute.call_args_list
+               if 'SELECT * FROM scheduled_tasks WHERE tenant_id=' in call.args[0])
+    assert [params[4] for params in updates] == [datetime(2026, 11, 4, 15),
+                                                  datetime(2026, 11, 4, 17)]
+    assert connection.__enter__.return_value.commit.call_count == 2
 
 
-class TestDailyPlanConstraints:
-    def test_window_and_quota_passed_to_create(self, monkeypatch):
-        """窗口随 create 落库（不丢 start_at/ends_at）；max_active 用租户有效值。"""
-        _mock_service_layers(monkeypatch)
-        created = {}
+class ScopeCursor:
+    def __init__(self, ids):
+        self.ids = ids
+        self.queries = []
 
-        def fake_create(**kwargs):
-            created.update(kwargs)
-            return {"task_id": "sched_new", "status": "active"}
+    def execute(self, sql, params=None):
+        self.queries.append((sql, params))
 
-        with patch("src.scheduler.db.ScheduledTaskDB.create",
-                   side_effect=fake_create), \
-             patch("src.scheduler.schedule.max_tasks_per_user", return_value=7) as max_mock:
-            result = plans.ensure_daily_plan(**_plan_kwargs())
-        assert result["created"] is True
-        from datetime import datetime
-        assert created["start_at"] == datetime(2026, 11, 1)
-        assert created["ends_at"] == datetime(2026, 12, 1)
-        assert created["max_active"] == 7
-        max_mock.assert_called_once_with("tenant_1")
+    def fetchone(self):
+        return {'business_day': date(2026, 11, 4)}
 
-    def test_quota_exceeded_raises_service_error(self, monkeypatch):
-        """达上限：create 抛 QuotaError → 用户可见 409（不静默绕过配额）。"""
-        from src.scheduler.db import ScheduledTaskQuotaError
-        _mock_service_layers(monkeypatch)
-        with patch("src.scheduler.db.ScheduledTaskDB.create",
-                   side_effect=ScheduledTaskQuotaError("定时任务已达上限（7个）")), \
-             patch("src.scheduler.schedule.max_tasks_per_user", return_value=7):
-            with pytest.raises(ConversationServiceError) as error:
-                plans.ensure_daily_plan(**_plan_kwargs())
-        assert error.value.code == "TASK_QUOTA_EXCEEDED"
-        assert error.value.status == 409
-        assert "上限" in str(error.value)
+    def fetchall(self):
+        return [{'id': item} for item in self.ids]
 
-    def test_backfill_once_uses_quota_too(self, monkeypatch):
-        """首录补录（once）同样传租户上限——once 在执行前也是 active 占名额。"""
-        _ensure_session = MagicMock()
-        monkeypatch.setattr(plans, "_ensure_session_committed", _ensure_session)
-        created = {}
-        with patch("src.scheduler.db.ScheduledTaskDB.create",
-                   side_effect=lambda **kw: created.update(kw) or {"task_id": "t"}), \
-             patch("src.scheduler.schedule.max_tasks_per_user", return_value=5):
-            plans.schedule_backfill_task(
-                "tenant_1", "user_1",
-                {"session_locator": "ws1:acc/s1", "timezone": "Asia/Shanghai",
-                 "name": "客户会话", "id": 1}, device_id=None)
-        assert created["max_active"] == 5
+
+def _task(scope_mode, target_day='yesterday'):
+    config = plans.daily_plan_config(account='acc1', device='device-a',
+                                     target_day=target_day, scope_mode=scope_mode)
+    return {'task_id': 'sched_one', 'tenant_id': 'tenant-a', 'user_id': 'user-a',
+            'task_prompt': plans.plan_prompt('daily', config)}
+
+
+def test_claim_snapshot_freezes_selected_scope_and_business_date():
+    cursor = ScopeCursor([3, 7])
+    descriptor, error = plans.freeze_scheduled_plan_in_tx(cursor, _task('selected'))
+    assert error is None
+    assert descriptor == {
+        'schema_version': 2, 'kind': 'daily', 'trigger': 'scheduled',
+        'task_id': 'sched_one', 'business_date': '2026-11-03',
+        'timezone': 'Asia/Shanghai', 'account': 'acc1', 'device': 'device-a',
+        'conversation_ids': [3, 7]}
+    sql, params = cursor.queries[-1]
+    assert 'daily_plan_task_id=%s' in sql
+    assert params == ('tenant-a', 'user-a', 'acc1', 'device-a', 'sched_one')
+
+
+def test_dynamic_all_uses_same_source_without_membership_and_empty_pauses():
+    cursor = ScopeCursor([])
+    descriptor, error = plans.freeze_scheduled_plan_in_tx(cursor, _task('all', 'today'))
+    assert error == 'scope_empty'
+    assert descriptor['business_date'] == '2026-11-04'
+    assert descriptor['conversation_ids'] == []
+    sql, params = cursor.queries[-1]
+    assert 'daily_plan_task_id' not in sql
+    assert params == ('tenant-a', 'user-a', 'acc1', 'device-a')
+
+
+def test_retired_backfill_marker_does_not_enter_business_descriptor():
+    assert plans.parse_plan_prompt('[wecom-conversation:backfill]{"device":"d"}') is None
+    with pytest.raises(ValueError):
+        plans.plan_prompt('backfill', {'device': 'd'})
+
+
+def test_reserved_first_line_is_rejected_even_with_whitespace_or_invalid_json():
+    """普通入口不可伪造专属计划；退役补录也不得重新变为普通定义。"""
+    for marker in ('[wecom-conversation:daily]', '[wecom-conversation:backfill]'):
+        for leading in (' \t', '\v\f', '\u3000'):
+            assert not ordinary_task_prompt_allowed(f'{leading}{marker}not-json\nbody')
+    assert ordinary_task_prompt_allowed('普通日报任务')
+    sql = ordinary_task_sql()
+    assert 'ltrim(split_part(' in sql
+    assert '[wecom-conversation:daily]' in sql
+    assert '[wecom-conversation:backfill]' not in sql
+    assert all(f'chr({point})' in first_line_sql()
+               for point in (11, 12, 160, 12288))

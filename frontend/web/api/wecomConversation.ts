@@ -104,7 +104,7 @@ export interface AttachmentIndex {
 
 export interface DailySummaryBody {
   overview?: string
-  categories?: { topic?: string; count?: number; detail?: string }[]
+  categories?: SummaryItem[]
   handled?: SummaryItem[]
   pending_human?: SummaryItem[]
   noteworthy?: SummaryItem[]
@@ -114,6 +114,7 @@ export interface DailySummaryBody {
 export interface SummaryItem {
   topic?: string
   detail?: string
+  count?: number
   evidence?: number[]
 }
 
@@ -128,8 +129,9 @@ export interface DailyPlan {
   last_run_at: string | null
   last_status: string | null
   conversation_count: number
-  config: { timezone?: string; device?: string; account?: string }
   notification_rule_id: string | null
+  next_due_at: string | null
+  config: { timezone?: string; device?: string; account?: string; target_day?: 'today' | 'yesterday'; scope_mode?: 'all' | 'selected' }
 }
 
 export interface DailyReportEntry {
@@ -154,8 +156,11 @@ export interface RunnerAccept {
 
 // --- 会话与时间线 ---
 
-export function listConversations(): Promise<{ conversations: WecomConversation[] }> {
-  return request('GET', '/conversations')
+export function listConversations(options: { limit?: number; offset?: number } = {}): Promise<{ conversations: WecomConversation[] }> {
+  const query = new URLSearchParams()
+  if (options.limit) query.set('limit', String(options.limit))
+  if (options.offset) query.set('offset', String(options.offset))
+  return request('GET', `/conversations${query.size ? `?${query}` : ''}`)
 }
 
 export function getConversation(id: number): Promise<{ conversation: WecomConversation }> {
@@ -190,34 +195,107 @@ export function listDailyPlans(): Promise<{ plans: DailyPlan[] }> {
   return request('GET', '/daily-plans')
 }
 
-export function createDailyPlan(body: {
-  session_locators: string[]
-  schedule: { schedule_type: string; cron_expression?: string; interval_seconds?: number; run_at?: string }
-  profile_id?: string
-  timezone?: string
-  device_id?: string
-  requirements?: string
-  notification_rule_id?: string
-}, clientRequestId?: string): Promise<{ plan: DailyPlan; created: boolean }> {
-  return request('POST', '/daily-plans', { ...body, client_request_id: clientRequestId })
+export interface DirectoryConversation {
+  session: string
+  name: string | null
+  kind: string
+  peer_platform: string
+  same_name?: boolean
+  added?: boolean
+  conversation_id?: number
 }
 
-export interface DailyGenerationFact {
-  runner_id: string | null
-  status: string | null
+export interface DirectoryPage {
+  device_id: string
+  self_user_id: string
+  source_generation: string
+  conversations: DirectoryConversation[]
+  next_cursor: string | null
+}
+
+export function listDirectory(options: { query?: string; cursor?: string; limit?: number } = {}): Promise<DirectoryPage> {
+  const query = new URLSearchParams()
+  if (options.query) query.set('query', options.query)
+  if (options.cursor) query.set('cursor', options.cursor)
+  query.set('limit', String(options.limit ?? 30))
+  return request('GET', `/directory?${query}`)
+}
+
+export function previewDirectory(session: string): Promise<{ device_id: string; self_user_id: string; source_generation: string; messages: { text?: string | null; sender_name?: string | null }[] }> {
+  return request('GET', `/directory/preview?${new URLSearchParams({ session })}`)
+}
+
+export function addConversations(sessions: string[], expected?: { expected_device_id: string; expected_source_generation: string }): Promise<{ conversations: WecomConversation[]; added_count: number }> {
+  return request('POST', '/conversations/add', { sessions, ...expected })
+}
+
+export interface DailyPlanWrite {
+  target_day: 'today' | 'yesterday'
+  scope_mode: 'all' | 'selected'
+  conversation_ids: number[]
+  hour?: number
+  minute?: number
+  interval_hours?: number
+}
+
+export function getDailyPlan(): Promise<{ plan: DailyPlan | null }> {
+  return request('GET', '/daily-plan')
+}
+
+export function saveDailyPlan(body: DailyPlanWrite, exists: boolean): Promise<{ plan: DailyPlan }> {
+  return request(exists ? 'PUT' : 'POST', exists ? '/daily-plan' : '/daily-plans', body)
+}
+
+export function pauseDailyPlan(): Promise<{ status: string }> {
+  return request('POST', '/daily-plan/pause')
+}
+
+export function resumeDailyPlan(): Promise<{ plan: DailyPlan }> {
+  return request('POST', '/daily-plan/resume')
+}
+
+export interface DailyExecutionTarget {
+  conversation_id: number
+  name: string | null
+  status: string
+  phase: string
+  reason_label: string | null
+  started_at: string | null
+  finished_at: string | null
+  error_code: string | null
+  diagnostic: string
+}
+
+export interface DailyExecution {
+  runner_id: string
+  status: string
+  accepted_at: string
   finished_at: string | null
   business_date: string
+  trigger: string
   task_id: string | null
-  scope_conversation_ids: number[]
-  completed: { conversation_id: number; name: string }[]
-  failed: { conversation_id: number; name: string; code?: string }[]
+  target_count: number
+  error_code: string | null
+  targets?: DailyExecutionTarget[]
 }
 
-export function dailyReports(businessDate: string, options: { conversationIds?: number[]; taskId?: string } = {}): Promise<{ business_date: string; reports: DailyReportEntry[]; last_generation: DailyGenerationFact | null }> {
+export function dailyReports(businessDate: string, options: { conversationIds?: number[]; taskId?: string; cursor?: number; limit?: number } = {}): Promise<{ business_date: string; reports: DailyReportEntry[]; has_more: boolean; next_cursor: number | null; last_generation: DailyExecution | null }> {
   const query = new URLSearchParams({ business_date: businessDate })
   if (options.conversationIds?.length) query.set('conversation_ids', options.conversationIds.join(','))
   if (options.taskId) query.set('task_id', options.taskId)
+  if (options.cursor != null) query.set('cursor', String(options.cursor))
+  query.set('limit', String(options.limit ?? 200))
   return request('GET', `/daily-reports?${query.toString()}`)
+}
+
+export function listDailyExecutions(businessDate: string, cursor?: string): Promise<{ executions: DailyExecution[]; has_more: boolean; next_cursor: string | null }> {
+  const query = new URLSearchParams({ business_date: businessDate, limit: '30' })
+  if (cursor) query.set('cursor', cursor)
+  return request('GET', `/daily-reports/executions?${query}`)
+}
+
+export function getDailyExecution(runnerId: string): Promise<{ execution: DailyExecution }> {
+  return request('GET', `/daily-reports/executions/${encodeURIComponent(runnerId)}`)
 }
 
 export function listDailySummaries(conversationId: number, beforeDate?: string, limit = 30): Promise<{ summaries: unknown[] }> {
@@ -228,13 +306,8 @@ export function listDailySummaries(conversationId: number, beforeDate?: string, 
 }
 
 export function generateDailyReport(body: {
-  business_date: string
-  plan_task_id?: string
-  conversation_ids?: number[]
+  conversation_ids: number[]
   client_request_id?: string
-  timezone?: string
-  device_id?: string
-  profile_id?: string
 }): Promise<RunnerAccept & { business_date: string }> {
   return request('POST', '/daily-reports/generate', body)
 }

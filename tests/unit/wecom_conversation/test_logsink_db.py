@@ -1,7 +1,7 @@
 """结果受理回调真实链路测试（隔离库，评审要求：真实结果回调及提交事务）。
 
 不 mock 登记函数：_handle_send/_handle_send_status 走真实连接、真实 SQL，
-验证 范围登记→计划并入事务→首录补录任务提交→片段入库→对账归因。
+验证范围登记、片段入库与对账归因；登记不创建计划或补录任务。
 """
 
 import asyncio
@@ -48,14 +48,13 @@ def _send_row(tenant_id, user_id, locator, device_id=None, observed=True, title=
 
 
 @pytest.mark.asyncio
-async def test_successful_send_registers_scope_schedules_backfill_and_stores_fragment(tenant_id):
+async def test_successful_send_registers_scope_without_backfill_and_stores_fragment(tenant_id):
     user_id = 'user-1'
     device = uuid.uuid4()
     locator = _locator()
     row = _send_row(tenant_id, user_id, locator, device_id=device)
     await logsink._handle_send(row)
 
-    conversation = service.get_conversation(tenant_id, user_id, None) if False else None
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -69,34 +68,30 @@ async def test_successful_send_registers_scope_schedules_backfill_and_stores_fra
         backfills = [dict(item) for item in cursor.fetchall()]
     assert stored['session_locator'] == locator
     assert stored['enroll_reasons'] == ['agent_replied']
-    assert len(backfills) == 1  # 首次登记提交一次补录
-    assert backfills[0]['task_prompt'].startswith('[wecom-conversation:backfill]')
+    assert backfills == []  # 自动登记不提交补录
     # 片段入库 + 精确代发标注
     messages = service.list_messages(tenant_id, user_id, stored['id'])
     by_mid = {message['source_message_id']: message for message in messages}
     assert set(by_mid) == {31, 32}
     assert by_mid[32]['send_origin'] == 'agent'
     assert by_mid[32]['origin_evidence']['method'] == 'send_receipt'
-    # 清理补录任务（tenant fixture 不清 scheduled_tasks 的 LIKE 行? conftest 清 scheduled_tasks）
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('DELETE FROM scheduled_tasks WHERE tenant_id=%s', (tenant_id,))
-        conn.commit()
 
 
 @pytest.mark.asyncio
-async def test_send_joins_existing_same_source_plan_within_transaction(tenant_id):
-    """同来源已有计划时，登记+并入同事务持久化（评审 P2-9/P1-7）。"""
+async def test_send_does_not_change_selected_plan_membership(tenant_id):
+    """Agent 新会话自动进入记录范围，自选计划成员仍由页面配置决定。"""
     import uuid as _uuid
     user_id = 'user-1'
     device = _uuid.uuid4()
     locator = _locator()
-    created = plans.ensure_daily_plan(
-        tenant_id, user_id, locators=[locator],
-        schedule={'schedule_type': 'daily', 'cron_expression': '0 8 * * *'},
-        profile_id='main', timezone_name='Asia/Shanghai', device_id=device)
-    plan_task_id = created['plan']['task_id']
-    # 新会话（同账号+同设备）经发送回调登记后应并入该计划
+    with get_db_connection() as conn:
+        first, _ = archive.register_scope(conn, tenant_id, user_id, locator,
+                                          device_id=device, reason='manual_add')
+        conn.commit()
+    created = plans.save_daily_plan(
+        tenant_id, user_id, create=True, account='acc1', device=device,
+        target_day='yesterday', scope_mode='selected', conversation_ids=[first['id']])
+    plan_task_id = created['task_id']
     locator2 = _locator('acc1', 'R:joinme')
     await logsink._handle_send(_send_row(tenant_id, user_id, locator2, device_id=device,
                                          title='新会话', observed=False))
@@ -104,7 +99,8 @@ async def test_send_joins_existing_same_source_plan_within_transaction(tenant_id
     joined = service.get_conversation(
         tenant_id, user_id,
         _single_id(tenant_id, user_id, 'R:joinme'))
-    assert joined['daily_plan_task_id'] == plan_task_id
+    assert joined['daily_plan_task_id'] is None
+    assert service.get_conversation(tenant_id, user_id, first['id'])['daily_plan_task_id'] == plan_task_id
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('DELETE FROM scheduled_tasks WHERE tenant_id=%s', (tenant_id,))
@@ -122,11 +118,12 @@ def _single_id(tenant_id, user_id, conversation):
 
 
 @pytest.mark.asyncio
-async def test_repeat_send_does_not_duplicate_scope_or_backfill(tenant_id):
+async def test_repeat_send_does_not_duplicate_scope_or_create_backfill(tenant_id):
     user_id = 'user-1'
     locator = _locator()
-    await logsink._handle_send(_send_row(tenant_id, user_id, locator, device_id=uuid.uuid4()))
-    await logsink._handle_send(_send_row(tenant_id, user_id, locator, device_id=uuid.uuid4()))
+    device = uuid.uuid4()
+    await logsink._handle_send(_send_row(tenant_id, user_id, locator, device_id=device))
+    await logsink._handle_send(_send_row(tenant_id, user_id, locator, device_id=device))
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -137,7 +134,7 @@ async def test_repeat_send_does_not_duplicate_scope_or_backfill(tenant_id):
             '''SELECT count(*) AS c FROM scheduled_tasks
                WHERE tenant_id=%s AND user_id=%s AND task_prompt LIKE %s''',
             (tenant_id, user_id, '[wecom-conversation:backfill]%'))
-        assert cursor.fetchone()['c'] == 1  # 幂等：不重复建补录
+        assert cursor.fetchone()['c'] == 0
         cursor.execute('DELETE FROM scheduled_tasks WHERE tenant_id=%s', (tenant_id,))
         conn.commit()
 
@@ -193,7 +190,7 @@ async def test_send_status_confirmed_registers_scope_and_attributes_original(ten
         conn.commit()
     assert stored['session_locator'] == locator
     assert stored['enroll_reasons'] == ['agent_replied']
-    assert backfills == 1
+    assert backfills == 0
     messages = service.list_messages(tenant_id, user_id, stored['id'])
     assert len(messages) == 1
     assert messages[0]['send_origin'] == 'agent'  # 对账确认补精确标注
@@ -224,7 +221,7 @@ def _conversation_id(tenant_id, user_id):
 
 
 @pytest.mark.asyncio
-async def test_late_success_registers_scope_and_schedules_backfill(tenant_id):
+async def test_late_success_registers_scope_without_backfill(tenant_id):
     """评审二 P1-7：持久 unknown + _late_result 成功 → observed_invocation 视图
     参与旁路登记/首录补录；原 unknown 事实不改写。"""
     user_id = 'user-1'

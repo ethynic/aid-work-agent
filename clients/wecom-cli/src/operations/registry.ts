@@ -19,6 +19,7 @@ import { createWecomSendStatusOperation } from './sendStatus.js'
 import { createWecomProbeOperation } from './probe.js'
 import { createWecomReadSessionOperation } from './readSession.js'
 import { createWecomReadSessionsOperation } from './readSessions.js'
+import { createWecomSessionDirectoryOperation } from './sessionDirectory.js'
 import { createWecomSendFileOperation } from './sendFile.js'
 import { createWecomSendImageOperation } from './sendImage.js'
 import { createWecomUnreadListOperation } from './unreadList.js'
@@ -48,6 +49,7 @@ export const OPERATIONS: Record<string, OperationEntry> = {
   wecom_unread_list: { operation: createWecomUnreadListOperation(), cli: { write: false } },
   wecom_read_session: { operation: createWecomReadSessionOperation(), cli: { write: false } },
   wecom_read_sessions: { operation: createWecomReadSessionsOperation(), cli: { write: false } },
+  wecom_session_directory: { operation: createWecomSessionDirectoryOperation(), cli: { write: false } },
   wecom_watch_poll: { operation: createWecomWatchPollOperation(), cli: { write: false } },
   wecom_group_list: { operation: createWecomGroupListOperation(), cli: { write: false } },
   wecom_group_read: { operation: createWecomGroupReadOperation(), cli: { write: false } },

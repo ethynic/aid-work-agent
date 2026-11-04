@@ -145,7 +145,7 @@ test('weixin v2 会话变体：仅显式协商后生效（setManifestOverride）
   assert.ok(!isToolAllowedFor(reverted, 'weixin_message_send_v2'))
 })
 
-test('wecom manifest：批量读取与旧工具兼容，写集合不扩大，v1 独占桌面锁', () => {
+test('wecom manifest：页面目录进入受信调用白名单，旧业务工具与写集合保持兼容', () => {
   const wecom = getProviderManifest('wecom')!
   assert.deepEqual([...wecom.tools], [
     'wecom_probe',
@@ -156,12 +156,14 @@ test('wecom manifest：批量读取与旧工具兼容，写集合不扩大，v1 
     'wecom_send_file',
     'wecom_read_session',
     'wecom_read_sessions',
+    'wecom_session_directory',
     'wecom_unread_list',
   ])
   assert.equal(wecom.provider_id, 'ai.aidwork.wecom')
   assert.equal(wecom.execution_target, 'local_required')
   assert.equal(wecom.protocol_version, 1)
   assert.equal(wecom.shared_lock_capable, false)
+  assert.equal(isWriteToolFor(wecom, 'wecom_session_directory'), false, '页面目录只读；Agent 可见工具由云端目录决定')
   for (const tool of wecom.tools) {
     const expected = tool === 'wecom_message_send' || tool === 'wecom_send_image' || tool === 'wecom_send_file'
     assert.equal(isWriteToolFor(wecom, tool), expected, `${tool} 写属性不符（读类 probe/unread/read_session 不进写集合）`)

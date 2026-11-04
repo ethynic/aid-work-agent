@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from src.local_tools import catalog
+from src.local_tools import catalog, manifest
 from src.local_tools.proxy_tool import (
     LOCAL_PROXY_TOOL_CLASSES,
     LOCAL_PROXY_TOOL_NAMES,
@@ -66,27 +66,20 @@ def _patch_repo(devices, invocation=None, events=None):
 
 class TestToolDefinitions:
     def test_all_tools_local_required(self):
-        """35 个 proxy 工具全部 LOCAL_REQUIRED，名称与受信 manifest（boss+wecom 两 Provider）一致
-
-        boss工具：含 Phase 3 新增的 boss_list_jobs / boss_select_job / boss_jobs_list、
-        面试通知 Phase 1 的 boss_interview_notify、沟通会话只读能力
-        boss_read_chat / boss_open_chat（boss-cli 0.2.4）与弹层自愈原语
-        boss_overlay_inspect / boss_overlay_dismiss（0.2.6，仅供自愈编排内部调用）；
-        其中 boss_jobs_list / boss_interview_notify 是混合模式（云端执行逻辑 + 代理注册），
-        execution_target 仍 LOCAL_REQUIRED。详情页打招呼三件套
-        boss_open_detail / boss_greet_detail / boss_close_detail（2026-09-28 筛选主路径）
-        为纯代理注册。
-        boss_lookup_candidates / boss_greet_selected 为重名候选查询与确认发送。
-        wecom 9 个：企业微信 Provider 纯代理工具，category=local_wecom。
-        """
-        assert len(LOCAL_PROXY_TOOL_CLASSES) == 35
-        assert LOCAL_PROXY_TOOL_NAMES == (
-            set(catalog.allowed_tools("boss-recruiting")) | set(catalog.allowed_tools("wecom"))
-        )
+        """每个已注册 proxy 唯一，且与轻量 manifest 和受信 Provider 清单一致。"""
+        registered = {cls.name for cls in LOCAL_PROXY_TOOL_CLASSES}
+        boss = set(catalog.allowed_tools("boss-recruiting"))
+        wecom = set(catalog.allowed_tools("wecom"))
+        assert len(registered) == len(LOCAL_PROXY_TOOL_CLASSES)
+        assert registered == LOCAL_PROXY_TOOL_NAMES == manifest.LOCAL_PROXY_TOOL_NAMES
+        assert registered == boss | wecom
+        assert boss.isdisjoint(wecom)
+        assert "wecom_session_directory" in registered
+        assert "wecom_session_directory" not in catalog.agent_tools("wecom")
         for cls in LOCAL_PROXY_TOOL_CLASSES:
             tool = cls()
             assert tool.execution_target == ExecutionTarget.LOCAL_REQUIRED
-            assert tool.category in ("local_boss", "local_wecom")
+            assert tool.category == ("local_wecom" if tool.name in wecom else "local_boss")
             assert tool.display_name
             assert tool.description
 

@@ -246,14 +246,10 @@ class ScheduledTaskDispatcher:
                 "trigger": task_row.get("pending_trigger") or "scheduled",
             }},
         }
-        # 企微会话业务计划/补录任务的受信描述注入（普通任务无标记不受影响；
-        # 由服务器构造，普通提交方不可自写 request_data，设计 §5.1）。
-        try:
-            from src.wecom_conversation.plans import augment_submission
-            augment_submission(body)
-        except Exception:
-            logger.opt(exception=True).warning(
-                f"后端日志：企微业务描述注入失败 task_id={task_row.get('task_id')}")
+        descriptor = snapshot.get('wecom_conversation_business')
+        if isinstance(descriptor, dict):
+            body['request_data']['wecom_conversation_business'] = descriptor
+            body['request_data']['wecom_task_device'] = descriptor['device']
         return body
 
     async def _submit_pending(self, task_row: Dict[str, Any]) -> None:

@@ -79,6 +79,25 @@ def interrupted_row(**kw):
 # ==================== 提交映射闭合表（设计 §4.1） ====================
 
 class TestSubmitMapping:
+    def test_frozen_daily_descriptor_reuses_same_body_for_retry(self):
+        """网络重试只读 pending，不按最新计划成员重建目标或改变幂等输入。"""
+        descriptor = {'schema_version': 2, 'kind': 'daily', 'trigger': 'scheduled',
+                      'task_id': 'sched_abc123', 'business_date': '2026-11-03',
+                      'timezone': 'Asia/Shanghai', 'account': 'acc1',
+                      'device': 'device-a', 'conversation_ids': [3, 7]}
+        row = pending_task(pending_snapshot={
+            'text': '专属日报', 'attachments': [], 'profile_id': 'main',
+            'instance_id': None, 'prompt_augmentations': [],
+            'wecom_conversation_business': descriptor})
+
+        first = ScheduledTaskDispatcher._build_submit_body(row)
+        second = ScheduledTaskDispatcher._build_submit_body(row)
+
+        assert first == second
+        assert first['request_data']['wecom_conversation_business'] == descriptor
+        assert first['request_data']['wecom_task_device'] == 'device-a'
+        assert first['client_request_id'] == 'sched_abc123:2026-10-28T09:00:00'
+
     @pytest.mark.asyncio
     async def test_success_clears_pending_with_key_condition(self):
         db, client = MagicMock(spec=ScheduledTaskDB), AsyncMock()

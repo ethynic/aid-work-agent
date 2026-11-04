@@ -2608,6 +2608,119 @@ def cmd_query(args):
         conn.close()
 
 
+def cmd_directory(workdir, account, request):
+    """Read-only synchronized conversation catalog; never reads or writes monitor state."""
+    if not isinstance(request, dict) or request.get('mode') not in ('list', 'preview', 'resolve'):
+        return {'ok': False, 'error': 'BAD_ARGS'}
+    message_path = _resolve_dec_db(workdir, 'message')
+    session_path = _resolve_dec_db(workdir, 'session')
+    if not message_path or not session_path:
+        return {'ok': False, 'error': 'DB_UNREADABLE'}
+    try:
+        msg = _open_ro(message_path)
+        session = _open_ro(session_path)
+        try:
+            identity = _query_context(workdir, msg, account)
+            if not identity.get('ok'):
+                return identity
+            columns = _table_columns(session, 'conversation_table')
+            id_col = _find_conversation_id_column(session, 'conversation_table', columns)
+            if not id_col or 'name' not in columns:
+                return {'ok': False, 'error': 'SCHEMA_UNSUPPORTED'}
+            ids = {row[0] for row in msg.execute('SELECT DISTINCT conversation_id FROM message_table')}
+            ids.update(row[0] for row in session.execute('SELECT %s FROM conversation_table' % _qi(id_col)))
+            ids = {cid for cid in ids if isinstance(cid, str) and
+                   (cid.startswith('R:') or cid.startswith('S:') and account in cid[2:].split('_'))}
+            if request['mode'] == 'resolve':
+                wanted = request.get('conversation_ids')
+                if (not isinstance(wanted, list) or not 1 <= len(wanted) <= 50 or
+                        any(not isinstance(cid, str) or cid not in ids for cid in wanted)):
+                    return {'ok': False, 'error': 'TARGET_NOT_FOUND'}
+                names, unavailable = _conversation_display_names(workdir, wanted, account)
+                if unavailable:
+                    return {'ok': False, 'error': 'SCHEMA_UNSUPPORTED'}
+                peers = {_peer_id_of(cid, account) for cid in wanted if cid.startswith('S:')}
+                platforms = _sender_platforms(workdir, peers - {None}, account)
+                resolved = []
+                for cid in wanted:
+                    named = names.get(cid)
+                    name = named.get('name') if isinstance(named, dict) else named
+                    peer = _peer_id_of(cid, account) if cid.startswith('S:') else None
+                    resolved.append({'conversation_id': cid, 'name': name[:64] if name else None,
+                                     'kind': 'group' if cid.startswith('R:') else 'private',
+                                     'peer_platform': platforms.get(peer, 'unknown') if peer else 'unknown'})
+                return {'ok': True, 'self_user_id': account, 'resolved_targets': resolved}
+            if request['mode'] == 'preview':
+                cid = request.get('conversation_id')
+                if cid not in ids:
+                    return {'ok': False, 'error': 'TARGET_NOT_FOUND'}
+                limit = request.get('limit', 3)
+                if type(limit) is not int or not 1 <= limit <= 3:
+                    return {'ok': False, 'error': 'BAD_ARGS'}
+                cols = ', '.join(QUERY_MESSAGE_COLUMNS)
+                rows = msg.execute('SELECT %s FROM message_table WHERE conversation_id=? '
+                                   'ORDER BY message_id DESC LIMIT ?' % cols, (cid, limit)).fetchall()
+                messages, _ = _history_messages(list(reversed(rows)), workdir, account)
+                preview = [{'msg_id': row.get('message_id'), 'send_time': row.get('send_time'),
+                            'sender_name': (row.get('sender_name') or '')[:100],
+                            'sender_platform': row.get('sender_platform', 'unknown'),
+                            'text': (row.get('text') or '')[:256]}
+                           for row in messages]
+                return {'ok': True, 'self_user_id': account, 'messages': preview}
+            query = request.get('query', '')
+            after = request.get('after', '')
+            limit = request.get('limit', 20)
+            if (not isinstance(query, str) or len(query) > 100 or not isinstance(after, str)
+                    or len(after) > 512 or type(limit) is not int or not 1 <= limit <= 50):
+                return {'ok': False, 'error': 'BAD_ARGS'}
+            sorted_ids = sorted(ids)
+            names = {}
+            unavailable = False
+            for start in range(0, len(sorted_ids), 400):
+                part, missing = _conversation_display_names(workdir, sorted_ids[start:start + 400], account)
+                names.update(part)
+                unavailable = unavailable or missing
+            if unavailable:
+                return {'ok': False, 'error': 'SCHEMA_UNSUPPORTED'}
+            rows = []
+            for cid in sorted_ids:
+                named = names.get(cid)
+                name = named.get('name') if isinstance(named, dict) else named
+                matches = named.get('match_names', []) if isinstance(named, dict) else [name]
+                if cid <= after or query and not any(query.casefold() in value.casefold()
+                                                     for value in matches if isinstance(value, str)):
+                    continue
+                rows.append({'conversation_id': cid, 'name': name[:64] if name else None,
+                             'kind': 'group' if cid.startswith('R:') else 'private'})
+                if len(rows) > limit:
+                    break
+            page = rows[:limit]
+            peers = {_peer_id_of(row['conversation_id'], account) for row in page
+                     if row['kind'] == 'private'}
+            platforms = _sender_platforms(workdir, peers - {None}, account)
+            for row in page:
+                peer = _peer_id_of(row['conversation_id'], account) if row['kind'] == 'private' else None
+                row['peer_platform'] = platforms.get(peer, 'unknown') if peer else 'unknown'
+            counts = {}
+            for cid in ids:
+                named = names.get(cid)
+                name = named.get('name') if isinstance(named, dict) else named
+                if name:
+                    label = name[:64]
+                    counts[label] = counts.get(label, 0) + 1
+            for row in page:
+                row['same_name'] = bool(row['name'] and counts[row['name']] > 1)
+            return {'ok': True, 'self_user_id': account, 'conversations': page,
+                    'next_after': page[-1]['conversation_id'] if len(rows) > limit else None}
+        finally:
+            msg.close()
+            session.close()
+    except sqlite3.OperationalError as error:
+        return {'ok': False, 'error': 'SCHEMA_UNSUPPORTED' if 'no such' in str(error) else 'SQL_ERROR'}
+    except sqlite3.Error:
+        return {'ok': False, 'error': 'DB_UNREADABLE'}
+
+
 # ---------- watch 模式（P2 任务 3.2：watch_poll 本地库通道的多会话增量查询） ----------
 
 WATCH_USAGE = ('用法：wecom_localdb.py watch --workdir <dir> --watermarks <json文件路径> '
@@ -2913,6 +3026,14 @@ def main():
         except ValueError:
             request = None
         emit(cmd_sessions(args[2], args[4], request), redact=False)
+        return
+    if len(args) == 5 and args[0] == 'directory' and args[1] == '--workdir' and args[3] == '--account':
+        raw = sys.stdin.buffer.read(131073)
+        try:
+            request = json.loads(raw.decode('utf-8')) if len(raw) <= 131072 else None
+        except (ValueError, UnicodeDecodeError):
+            request = None
+        emit(cmd_directory(args[2], args[4], request), redact=False)
         return
     if args and args[0] == 'watch':
         emit(cmd_watch(args[1:]), redact=False)  # watch 同 query：业务文本不走兜底脱敏

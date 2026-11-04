@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from src.scheduler.db import (ScheduledTaskBusyError, ScheduledTaskQuotaError,
                              ScheduledTaskDB)
+from src.scheduler.special_plans import ordinary_task_prompt_allowed, special_plan_marker
 from src.tools.base import BaseTool
 from src.tools.context import ToolExecutionContext, current_tool_execution_context
 
@@ -203,6 +204,8 @@ class CreateScheduledTaskTool(BaseTool):
             return {"success": False, "error": "会话上下文缺失，无法创建定时任务"}
         if not name or not task_prompt:
             return {"success": False, "error": "缺少必要参数（name 或 task_prompt）"}
+        if not ordinary_task_prompt_allowed(task_prompt):
+            return {"success": False, "error": "专属计划只能在每日总结页面创建"}
 
         # R56 路由约束：确定为微信营销定时发送任务时拒绝并引导专用工具
         # （保守拦截，在任何 DB 写入之前）
@@ -352,6 +355,8 @@ class ManageScheduledTaskTool(BaseTool):
                 if not task:
                     return {"success": False, "permission_denied": True,
                             "error": "任务不存在或无权操作"}
+                if special_plan_marker(task.get('task_prompt')):
+                    return {"success": False, "error": "该计划请到每日总结页面管理"}
                 if action == "pause":
                     return await self._pause(task, tenant_id, user_id)
                 if action == "resume":

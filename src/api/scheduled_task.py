@@ -24,6 +24,7 @@ from src.scheduler.schedule import (
     min_interval_hours,
     validate_task_attachments,
 )
+from src.scheduler.special_plans import ordinary_task_prompt_allowed, special_plan_marker
 
 router = APIRouter(prefix="/api/scheduled-tasks", tags=["定时任务"])
 
@@ -69,6 +70,8 @@ async def _owned_task(request: Request, task_id: str,
         ScheduledTaskDB.get_by_id, task_id, tenant_id=tenant_id, user_id=user_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在或无权操作")
+    if special_plan_marker(task.get('task_prompt')):
+        raise HTTPException(status_code=409, detail="该计划请到每日总结页面管理")
     return task
 
 
@@ -311,6 +314,8 @@ async def update_task(request: Request, task_id: str, body: UpdateDefinitionRequ
         raise HTTPException(status_code=422, detail="任务名称不能为空白")
     if body.task_prompt is not None and not body.task_prompt.strip():
         raise HTTPException(status_code=422, detail="任务定义（task_prompt）不能为空白")
+    if body.task_prompt is not None and not ordinary_task_prompt_allowed(body.task_prompt):
+        raise HTTPException(status_code=422, detail="专属计划标记只能通过所属业务页面写入")
     if body.attachments is not None:
         try:
             body.attachments = validate_task_attachments(body.attachments)

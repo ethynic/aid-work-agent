@@ -107,6 +107,7 @@ const WECOM_TOOLS = [
   'wecom_send_file',
   'wecom_read_session',
   'wecom_read_sessions',
+  'wecom_session_directory',
   'wecom_unread_list',
 ] as const
 

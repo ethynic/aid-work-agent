@@ -6,8 +6,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import type { PathLike } from 'node:fs'
 import { join } from 'node:path'
 import {
+  bundledPythonNeedsNamespace,
   DEFAULT_LOCALDB_PY_TIMEOUT_MS,
   LOCALDB_JSON_PREFIX,
   LOCALDB_PYTHON_ENV_VAR,
@@ -417,4 +419,17 @@ test('resolveLocaldbPython：无 env → 仓库 venv 优先于打包 ocr-python�
   assert.equal(resolveLocaldbPython({ env: {}, packageRoot: 'C:\\pk', existsFn: (p) => p === bundled }), bundled)
   // 全不可用 → null
   assert.equal(resolveLocaldbPython({ env: {}, packageRoot: 'C:\\pk', existsFn: () => false }), null)
+})
+
+test('Windows Python 启动路径仅在打包标记存在时使用命名空间', () => {
+  const python = join('C:\\pk', 'ocr-python', 'python.exe')
+  const marker = join('C:\\pk', 'ocr-python', 'asset-provenance.json')
+  const seen: string[] = []
+  const existsFn = (path: PathLike) => {
+    seen.push(String(path))
+    return String(path) === marker
+  }
+  assert.equal(bundledPythonNeedsNamespace(python, existsFn), true)
+  assert.deepEqual(seen, [marker])
+  assert.equal(bundledPythonNeedsNamespace(python, () => false), false)
 })

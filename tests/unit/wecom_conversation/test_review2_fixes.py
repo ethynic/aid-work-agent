@@ -1,14 +1,12 @@
 """评审二（第二轮 CR）修复的定向测试。
 
 - 空背景续页（py 驱动已在 clients 测试覆盖；这里测 TS 侧语义相关服务端不受影响）；
-- time_config 归一比较（评审二 P2-5）；
 - 显式时区更新/未指定保留（评审二 P2-6，隔离库）；
 - 手动生成会话清单写入受信描述（评审二 P1-3，替身边界）；
 - 部分失败通知生产（评审二 P1-4，真实 publish 入口）。
 """
 import base64
 import json
-import uuid
 from datetime import datetime, timezone as _tz
 from unittest.mock import MagicMock, patch
 
@@ -31,43 +29,7 @@ def archive_register_scope(tenant_id, user_id, locator, **kwargs):
     return row
 
 
-# ---------- 评审二 P2-5：time_config 归一比较 ----------
-
-def test_time_config_daily_differs_from_existing_cron_plan():
-    """旧计划 08:00，本次 daily/time_config={hour:9,minute:0} → 不复用。"""
-    plan_row = {'schedule_type': 'daily', 'cron_expression': '0 8 * * *',
-                'task_prompt': plans.plan_prompt('daily', {'timezone': 'Asia/Shanghai'})}
-    schedule = plans._normalized_schedule(
-        {'schedule_type': 'daily', 'time_config': {'hour': 9, 'minute': 0}})
-    assert plans._explicit_config_differs(plan_row, schedule, None, '', None) is True
-
-
-def test_time_config_daily_same_time_reuses():
-    """time_config 与现有 cron 表达同一时刻 → 复用。"""
-    plan_row = {'schedule_type': 'daily', 'cron_expression': '0 9 * * *',
-                'task_prompt': plans.plan_prompt('daily', {'timezone': 'Asia/Shanghai'})}
-    schedule = plans._normalized_schedule(
-        {'schedule_type': 'daily', 'time_config': {'hour': 9, 'minute': 0}})
-    assert plans._explicit_config_differs(plan_row, schedule, None, '', None) is False
-
-
-def test_interval_time_config_differs():
-    plan_row = {'schedule_type': 'interval', 'interval_seconds': 86400,
-                'task_prompt': plans.plan_prompt('daily', {'timezone': 'Asia/Shanghai'})}
-    schedule = plans._normalized_schedule(
-        {'schedule_type': 'interval', 'time_config': {'interval_hours': 2}})
-    assert plans._explicit_config_differs(plan_row, schedule, None, '', None) is True
-
-
-def test_cross_kind_time_config_vs_interval_plan():
-    plan_row = {'schedule_type': 'interval', 'interval_seconds': 7200,
-                'task_prompt': plans.plan_prompt('daily', {'timezone': 'Asia/Shanghai'})}
-    schedule = plans._normalized_schedule(
-        {'schedule_type': 'daily', 'time_config': {'hour': 9, 'minute': 0}})
-    assert plans._explicit_config_differs(plan_row, schedule, None, '', None) is True
-
-
-# ---------- 评审二 P1-3：手动生成会话清单写入受信描述 ----------
+# ---------- 评审二 P1-3：手动清单 ----------
 
 @pytest.mark.usefixtures("db_ready")
 @pytest.mark.asyncio
@@ -86,38 +48,13 @@ async def test_manual_report_with_conversation_ids_only_carries_list(tenant_id):
          patch.object(plans, '_ensure_session_committed', lambda *a, **k: None):
         await plans.submit_manual_report(
             'Bearer x', tenant_id, user_id,
-            conversation_ids=[conversation['id']], business_date='2026-11-04')
+            conversation_ids=[conversation['id']], account='acc1', device_id='device-a',
+            business_date='2026-11-04')
     descriptor = captured['body']['request_data'][plans.DESCRIPTOR_KEY]
     assert descriptor['conversation_ids'] == [conversation['id']]
     assert 'task_id' not in descriptor  # 仅清单：无计划范围兜底
-
-
-@pytest.mark.usefixtures("db_ready")
-@pytest.mark.asyncio
-async def test_manual_report_plan_subset_list_overrides_plan_scope(tenant_id):
-    user_id = 'user-1'
-    device = uuid.uuid4()
-    made = plans.ensure_daily_plan(
-        tenant_id, user_id, locators=[_locator('acc1', 'R:p1'), _locator('acc1', 'R:p2')],
-        schedule={'schedule_type': 'daily', 'cron_expression': '0 8 * * *'},
-        profile_id='main', timezone_name='Asia/Shanghai', device_id=device)
-    plan_task_id = made['plan']['task_id']
-    first_id = made['conversations'][0]['id']
-    captured = {}
-
-    class _Client:
-        async def request(self, method, path, *, authorization, tenant, body, accept_new):
-            captured['body'] = body
-            return {'runner': {'runner_id': 'run-x'}, 'created': True}
-
-    with patch.object(plans, '_runner_client', lambda: _Client()), \
-         patch.object(plans, '_ensure_session_committed', lambda *a, **k: None):
-        await plans.submit_manual_report(
-            'Bearer x', tenant_id, user_id, plan_task_id=plan_task_id,
-            conversation_ids=[first_id], business_date='2026-11-04')
-    descriptor = captured['body']['request_data'][plans.DESCRIPTOR_KEY]
-    assert descriptor['task_id'] == plan_task_id
-    assert descriptor['conversation_ids'] == [first_id]  # 子集优先于整计划（flow 先读清单）
+    assert captured['body']['profile_id'] == 'main'
+    assert 'instance_id' not in captured['body']
 
 
 # ---------- 评审二 P1-4：部分失败的真实通知生产入口 ----------
@@ -145,6 +82,37 @@ def _runner_with_daily_result(event_kind='completed', completed=('群A',), faile
             'finished_at': datetime(2026, 11, 4, 8, 5, tzinfo=_tz.utc),
             'checkpoint': {'execution': {'resources': {'wecom_daily_result': result}}},
             'input': {'request_data': {'scheduled': {'task_id': 'sched_daily_x'}}}}
+
+
+def test_scheduled_failure_before_business_checkpoint_keeps_date_link():
+    """定时受理事实已冻结日期，业务前失败也应给页面链接且不虚报生成数。"""
+    from src.notifications.producer import _wecom_daily_terminal_extras
+
+    runner = _runner_with_daily_result(event_kind='failed')
+    runner['checkpoint'] = {}
+    runner['input']['request_data']['wecom_conversation_business'] = {
+        'schema_version': 2, 'kind': 'daily', 'trigger': 'scheduled',
+        'task_id': 'sched_daily_x', 'business_date': '2026-11-03',
+        'conversation_ids': [1, 2]}
+    extras = _wecom_daily_terminal_extras(None, runner,
+                                          _daily_plan_task_row(), 'failed')
+    assert extras['daily_report_date'] == '2026-11-03'
+    assert 'date=2026-11-03' in extras['daily_report_link']
+    assert 'daily_report_summary' not in extras
+
+
+def test_all_superseded_notification_preserves_link_without_claiming_saved():
+    """Completed execution with newer reports uses existing notification fields truthfully."""
+    from src.notifications.producer import _wecom_daily_terminal_extras
+
+    runner = _runner_with_daily_result(completed=())
+    result = runner['checkpoint']['execution']['resources']['wecom_daily_result']
+    result['superseded'] = [{'conversation_id': 1, 'name': '群A'}]
+    extras = _wecom_daily_terminal_extras(None, runner,
+                                          _daily_plan_task_row(), 'completed')
+    assert extras['daily_report_summary'] == '本次已生成 0 个会话日报'
+    assert '本次未覆盖 1 个会话：群A' in extras['daily_report_missing']
+    assert 'date=2026-11-03' in extras['daily_report_link']
 
 
 def test_partial_failure_notification_lists_failed_names():

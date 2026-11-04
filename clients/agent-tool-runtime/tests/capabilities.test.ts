@@ -11,7 +11,7 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 const existingEntry = fileURLToPath(new URL('./helpers/fakeProvider.js', import.meta.url))
 import { deviceCapabilities, resolveProviderEntries, type RuntimeConfig } from '../src/config.js'
-import { manifestDigestFor } from '../src/providers.js'
+import { manifestDigestFor, manifestDigestOf, TRUSTED_MANIFESTS } from '../src/providers.js'
 
 function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return { server: 'http://127.0.0.1:1', device_id: 'dev-1', bossCliEntry: existingEntry, ...overrides }
@@ -74,9 +74,14 @@ test('配置 wecom entry：providers 数组含 wecom，manifests 含独立摘要
   // M11b：wecom 工具能力按工具名上报（与 manifest 同源；粒度对齐 weixin_message_send_v2）
   const capabilities = caps['capabilities'] as string[]
   assert.ok(!capabilities.includes('wecom_read_sessions'), 'a configured path does not prove the new plugin capability')
+  assert.ok(!capabilities.includes('wecom_session_directory'), 'a configured path does not prove the picker capability')
   const verified = deviceCapabilities(makeConfig({ providers: { wecom: { entry: existingEntry } } }), true)
   assert.ok((verified.capabilities as string[]).includes('wecom_read_sessions'))
-  assert.equal((verified.provider_manifests as Record<string, Record<string, unknown>>).wecom!.manifest_digest, manifestDigestFor('wecom'))
+  assert.ok(!(verified.capabilities as string[]).includes('wecom_session_directory'))
+  assert.equal((verified.provider_manifests as Record<string, Record<string, unknown>>).wecom!.manifest_digest,
+    manifestDigestOf({ ...TRUSTED_MANIFESTS.wecom!, tools: TRUSTED_MANIFESTS.wecom!.tools.filter(name => name !== 'wecom_session_directory') }))
+  const directoryVerified = deviceCapabilities(makeConfig({ providers: { wecom: { entry: existingEntry } } }), true, true)
+  assert.equal((directoryVerified.provider_manifests as Record<string, Record<string, unknown>>).wecom!.manifest_digest, manifestDigestFor('wecom'))
   for (const tool of ['wecom_probe', 'wecom_message_send', 'wecom_send_status', 'wecom_group_poll', 'wecom_send_image', 'wecom_send_file', 'wecom_read_session', 'wecom_unread_list']) {
     assert.ok(capabilities.includes(tool), `${tool} 应在 capabilities`)
   }

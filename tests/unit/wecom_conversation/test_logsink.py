@@ -1,7 +1,7 @@
 """结果受理回调路由测试（纯 mock；真实 SQL 见 test_archive/test_service_sql）。
 
-覆盖设计 §3.1：只处理 wecom+成功结果；读取/发送/对账各走正确分支；首次
-登记触发补录提交；异常不外抛。
+覆盖设计 §3.1：只处理 wecom+成功结果；读取/发送/对账各走正确分支；
+明确监控目标在空消息时登记，目录和日期读取不纳入；异常不外抛。
 """
 
 import base64
@@ -63,6 +63,120 @@ async def test_attachment_and_resolve_reads_are_skipped():
     store.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_agent_explicit_empty_targets_enroll_but_scan_and_daily_do_not():
+    one = _locator(conversation='R:empty')
+    two = _locator(conversation='S:acc1_peer')
+    registered = []
+
+    def register(connection, tenant, user, locator, **kwargs):
+        registered.append((locator, kwargs['reason']))
+        return {'id': len(registered)}, True
+
+    batch = _row(tool='wecom_read_sessions', arguments={'sessions': ['空群', '空单聊']},
+                 data={'channel': 'local-db', 'self_user_id': 'acc1', 'sessions': [],
+                       'resolved_targets': [{'session': one, 'kind': 'group'},
+                                            {'session': two, 'kind': 'private'}]})
+    batch['business_kind'] = 'agent_runner'
+    scan = _row(tool='wecom_read_sessions', arguments={}, data=batch['result_json']['data'])
+    scan['business_kind'] = 'agent_runner'
+    daily = _row(arguments={'date': '2026-11-04'},
+                 data={'channel': 'local-db', 'self_user_id': 'acc1', 'session': one})
+    daily['business_kind'] = 'agent_runner'
+    with patch.object(logsink, '_open_connection', lambda: _NullConn()), \
+         patch.object(logsink.archive, 'register_scope', register), \
+         patch.object(logsink.archive, 'store_read_result', lambda *a, **k: {'messages': 0}):
+        for row in (batch, scan, daily):
+            await logsink.on_result_accepted(row)
+    assert registered == [(one, 'agent_monitor'), (two, 'agent_monitor')]
+
+
+@pytest.mark.asyncio
+async def test_agent_single_empty_read_enrolls_only_original_stable_target():
+    original = _locator(conversation='R:original')
+    extra = _locator(conversation='R:extra')
+    registered = []
+    def register(connection, tenant, user, locator, **kwargs):
+        registered.append(locator)
+        return {'id': 1}, True
+    valid = _row(arguments={'session': original}, data={
+        'channel': 'local-db', 'self_user_id': 'acc1', 'session': original, 'messages': []})
+    valid['business_kind'] = 'agent_runner'
+    forged = _row(arguments={'session': original}, data={
+        'channel': 'local-db', 'self_user_id': 'acc1', 'session': extra, 'messages': []})
+    forged['business_kind'] = 'agent_runner'
+    with patch.object(logsink, '_open_connection', lambda: _NullConn()), \
+         patch.object(logsink.archive, 'register_scope', register), \
+         patch.object(logsink.archive, 'store_read_result', lambda *a, **k: {'messages': 0}):
+        await logsink.on_result_accepted(valid)
+        await logsink.on_result_accepted(forged)
+    assert registered == [original]
+
+
+def test_other_device_cannot_rebind_or_archive_same_locator():
+    """设备 B 的已接受结果不能改绑设备 A 的会话，也不能混入 A 的消息日志。"""
+    locator = _locator()
+    other_device = 'device-a'
+    source = _row(arguments={'session': locator}, data={
+        'channel': 'local-db', 'self_user_id': 'acc1', 'session': locator, 'messages': []})
+    source['business_kind'] = 'agent_runner'
+    source['device_id'] = 'device-b'
+
+    class BoundCursor:
+        def execute(self, sql, params=None):
+            if 'SELECT device_id FROM bs_wecom_conversations' in sql:
+                self.one = {'device_id': other_device}
+            elif 'SELECT id, session_locator' in sql:
+                self.many = [{'id': 1, 'session_locator': locator,
+                              'timezone': 'Asia/Shanghai', 'coverage': None,
+                              'device_id': other_device}]
+            elif 'pg_advisory_xact_lock' not in sql:
+                raise AssertionError(f'unexpected write: {sql}')
+
+        def fetchone(self):
+            return getattr(self, 'one', None)
+
+        def fetchall(self):
+            return getattr(self, 'many', [])
+
+    class BoundConnection:
+        def cursor(self):
+            return BoundCursor()
+
+        def commit(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    factory = lambda: BoundConnection()
+    plan = {'generation': 'gen1', 'sessions': [
+        {'locator': locator, 'messages': []}]}
+    with patch.object(logsink, '_open_connection', factory), \
+         patch.object(logsink.archive, 'register_scope') as register, \
+         patch.object(logsink.archive, 'extract_archive_plan', return_value=plan), \
+         patch.object(logsink.archive, 'map_message',
+                      return_value={'source_message_id': 1, 'sender_side': 'peer'}), \
+         patch.object(logsink.archive, 'execute_values') as insert:
+        logsink._register_read_targets(source, source['result_json']['data'],
+                                       source['arguments_json'])
+        logsink._register_from_send(source, locator=locator, reason='agent_replied')
+        read = logsink.archive.store_read_result(
+            factory, 't1', 'u1', source['result_json']['data'],
+            source['arguments_json'], device_id='device-b', invocation_id=str(source['id']))
+        send = logsink.archive.store_send_fragment(
+            factory, 't1', 'u1', {'session': locator, 'source_generation': 'gen1',
+                                  'messages': [{'msg_id': 1}]},
+            device_id='device-b', invocation_id=str(source['id']))
+    register.assert_not_called()
+    insert.assert_not_called()
+    assert read == {'conversations': 0, 'messages': 0}
+    assert send == {'conversations': 0, 'messages': 0}
+
+
 class _NullCursor:
     def execute(self, *a, **k):
         pass
@@ -105,35 +219,29 @@ async def test_successful_send_registers_scope_and_consumes_fragment():
         return {'id': 1, 'session_locator': loc, 'timezone': 'Asia/Shanghai',
                 'device_id': None}, True
 
-    backfills = []
-
     with patch.object(logsink.archive, 'register_scope', fake_register), \
          patch.object(logsink.archive, 'store_send_fragment',
                       lambda *a, **k: fragment_saved.update(a[3]) or {'messages': 0}), \
-         patch.object(logsink, '_schedule_backfill',
-                      lambda *a, **k: backfills.append(a)), \
          patch.object(logsink, '_open_connection', lambda: _NullConn()):
         await logsink.on_result_accepted(row)
     assert registered['reason'] == 'agent_replied'
     assert fragment_saved.get('session') == locator
-    assert backfills  # 首次登记触发补录提交接点
+    assert registered['reason'] == 'agent_replied'
 
 
 @pytest.mark.asyncio
-async def test_repeat_send_does_not_reschedule_backfill():
+async def test_repeat_send_does_not_create_another_scope():
     locator = _locator()
     row = _row(tool='wecom_message_send', data={'session': locator})
-    backfills = []
+    calls = []
 
     def fake_register(connection, tenant, user, loc, **kwargs):
         return {'id': 1, 'session_locator': loc, 'timezone': 'Asia/Shanghai'}, False
 
     with patch.object(logsink.archive, 'register_scope', fake_register), \
-         patch.object(logsink, '_schedule_backfill',
-                      lambda *a, **k: backfills.append(a)), \
          patch.object(logsink, '_open_connection', lambda: _NullConn()):
         await logsink.on_result_accepted(row)
-    assert backfills == []  # 已在范围：不重复提交补录
+    assert calls == []  # 回调不提交补录任务
 
 
 @pytest.mark.asyncio
@@ -181,7 +289,6 @@ async def test_send_status_confirmed_consumes_original_observed_chat():
 
     with patch('src.db.database.get_db_connection', lambda: FakeConn()), \
          patch.object(logsink.archive, 'register_scope', fake_register), \
-         patch.object(logsink, '_schedule_backfill', lambda *a, **k: None), \
          patch.object(logsink.archive, 'store_reconciled_sends',
                       lambda *a, **k: {'attributed': 0}), \
          patch.object(logsink.archive, 'store_send_fragment',

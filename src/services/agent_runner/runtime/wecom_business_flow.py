@@ -43,7 +43,6 @@ DIRECT_SUMMARY_CHAR_LIMIT = 12000
 # 保证归并轮数严格收敛；背景提要独立有界（评审二 P2-9）。
 SYNTHESIS_INPUT_CHAR_LIMIT = 24000
 BACKGROUND_FEED_CHAR_LIMIT = 6000
-RAW_FALLBACK_CHAR_LIMIT = 20000
 
 DEFAULT_TIMEZONE = 'Asia/Shanghai'
 
@@ -79,6 +78,28 @@ class WecomBusinessFlowError(_RunnerError):
     def __init__(self, code, message):
         super().__init__(code, 500)
         Exception.__init__(self, message)
+
+
+class WecomSourceError(WecomBusinessFlowError):
+    """A fixed account/device mismatch stops the whole accepted execution."""
+
+
+async def _save_fact(control, state, boundary):
+    try:
+        await control.save(state, boundary)
+    except CheckpointFailure:
+        raise
+    except Exception as error:
+        raise CheckpointFailure('WECOM_CHECKPOINT_FAILED') from error
+
+
+async def _emit_progress(observer, state, message):
+    try:
+        await observer.event(state, make_event('progress', data=message))
+    except CheckpointFailure:
+        raise
+    except Exception as error:
+        raise CheckpointFailure('WECOM_PROGRESS_CHECKPOINT_FAILED') from error
 
 
 def _tz(name):
@@ -177,7 +198,70 @@ def _summary_input(conversation_name, business_date, tz_name, day_messages, back
     return chr(10).join(lines)
 
 
-async def _read_tool_page(execution, local_adapter, control, state, base_context, args):
+async def _verify_device_before_daily(execution, descriptor):
+    """Check the accepted device; the first invocation pins it atomically."""
+    control = execution.control
+    if not getattr(control, 'durable_owner', False):
+        return
+    root = control
+    while hasattr(root, 'parent_control'):
+        root = root.parent_control
+    from src.services.agent_runner.wecom_device_binding import bound_device
+    from src.local_tools import repository
+    from src.local_tools.device_policy import device_ready_error
+    identity = {key: getattr(execution.identity, key) for key in
+                ('tenant_id', 'user_id', 'session_id', 'source', 'session_kind')}
+    original = bound_device(root.envelope['execution'], root.attempt.runner_id, identity)
+    device_id = str(descriptor.get('device'))
+    if original is not None and original != device_id:
+        raise WecomSourceError('WECOM_SOURCE_MISMATCH', '当前执行设备与受理来源不符')
+    devices = await asyncio.to_thread(repository.list_devices,
+                                      execution.identity.tenant_id,
+                                      execution.identity.user_id)
+    device = next((row for row in devices if str(row.get('id')) == device_id), None)
+    if (device is None or device_ready_error(device, READ_TOOL,
+            datetime.now(_tz('UTC')), require_selected=False)):
+        raise WecomSourceError('DEVICE_UNAVAILABLE', '受理设备离线、已失权或不支持日期读取')
+
+
+async def _verify_read_source(execution, descriptor, result, fact, args, expected_locator):
+    """The result proves account; the durable invocation proves device."""
+    identity_codes = {'IDENTITY_UNCONFIRMED', 'WECOM_TASK_DEVICE_CHANGED',
+                      'DEVICE_UNAVAILABLE', 'LOCAL_DEVICE_UNSUPPORTED',
+                      'LOCAL_DEVICE_OFFLINE', 'SNAPSHOT_UNSTABLE',
+                      'CURSOR_UNSUPPORTED', 'NOT_LOGGED_IN', 'WECOM_NOT_FOUND'}
+    data = result.get('data') if isinstance(result, dict) else None
+    if (isinstance(data, dict) and data.get('self_user_id') is not None
+            and data['self_user_id'] != descriptor.get('account')):
+        raise WecomSourceError('WECOM_SOURCE_MISMATCH', '日期读取账号与受理来源不符')
+    if isinstance(result, dict) and not result.get('success'):
+        if result.get('code') in identity_codes:
+            raise WecomSourceError(str(result['code']), '本地来源身份未通过核验')
+        return
+    if (not isinstance(data, dict) or data.get('self_user_id') != descriptor.get('account')
+            or data.get('session') != expected_locator):
+        raise WecomSourceError('WECOM_SOURCE_MISMATCH', '日期读取账号或会话与受理来源不符')
+    control = execution.control
+    if not getattr(control, 'durable_owner', False):
+        return
+    from src.local_tools import repository
+    invocation_id = result.get('invocation_id') or fact.invocation_id
+    if not invocation_id:
+        raise CheckpointFailure('WECOM_INVOCATION_FACT_MISSING')
+    try:
+        invocation = await asyncio.to_thread(repository.get_invocation,
+                                             str(invocation_id), execution.identity.tenant_id)
+    except Exception as error:
+        raise CheckpointFailure('WECOM_INVOCATION_FACT_UNAVAILABLE') from error
+    if (invocation is None or str(invocation.get('device_id')) != str(descriptor.get('device'))
+            or invocation.get('user_id') != execution.identity.user_id
+            or invocation.get('tool_name') != READ_TOOL
+            or invocation.get('session_id') != execution.identity.session_id):
+        raise WecomSourceError('WECOM_SOURCE_MISMATCH', '日期读取执行设备与受理来源不符')
+
+
+async def _read_tool_page(execution, local_adapter, control, state, base_context, args,
+                          source=None, expected_locator=None):
     """经既有工具端口执行一次日期读取，建立完整工具调用事实与身份。
 
     沿用引擎/派发器的调用生命周期（评审 P1-1）：注册 ToolFact → 持久化
@@ -192,7 +276,7 @@ async def _read_tool_page(execution, local_adapter, control, state, base_context
     state.tools[call_id] = ToolFact(call)
     fact = state.tools[call_id]
     fact.phase = 'dispatching'
-    await control.save(state, 'before_tool')
+    await _save_fact(control, state, 'before_tool')
     context = base_context.derive(tool_call_id=call_id, agent_execution_id=state.execution_id)
     cancel_check = lambda: control.command() in ('cancel', 'pause')  # noqa: E731
     result = None
@@ -203,7 +287,7 @@ async def _read_tool_page(execution, local_adapter, control, state, base_context
         if kind == 'invocation':
             fact.invocation_id = payload
             try:
-                await control.save(state, 'tool_invocation')
+                await _save_fact(control, state, 'tool_invocation')
             except Exception as error:
                 raise CheckpointFailure('INVOCATION_CHECKPOINT_FAILED') from error
         elif kind == 'result':
@@ -229,12 +313,14 @@ async def _read_tool_page(execution, local_adapter, control, state, base_context
     state.messages.append({'role': 'tool', 'tool_call_id': call_id,
                            'content': json.dumps(result, ensure_ascii=False, default=str)[:2000]})
     fact.result_recorded = True
-    await control.save(state, 'tool_completed')
+    await _save_fact(control, state, 'tool_completed')
+    if source and source.get('schema_version') == 2:
+        await _verify_read_source(execution, source, result, fact, args, expected_locator)
     return result
 
 
 async def _iterate_day_pages(execution, local_adapter, control, state, base_context,
-                             observer, locator, business_date, tz_name):
+                             observer, locator, business_date, tz_name, source=None):
     """顺序遍历一个会话的业务日分页；只有明确排空才正常结束（评审 P1-8）。"""
     args = {'session': locator, 'date': business_date, 'timezone': tz_name,
             'include_context': True, 'limit': PAGE_LIMIT}
@@ -242,7 +328,11 @@ async def _iterate_day_pages(execution, local_adapter, control, state, base_cont
     while True:
         if control.command() in ('cancel', 'pause'):
             raise _StopFlow(control.command())
-        result = await _read_tool_page(execution, local_adapter, control, state, base_context, args)
+        result = await _read_tool_page(execution, local_adapter, control, state,
+                                       base_context, args, source, locator)
+        command = control.command()
+        if command in ('cancel', 'pause'):
+            raise _StopFlow(command)
         if not isinstance(result, dict) or not result.get('success'):
             code = result.get('code') if isinstance(result, dict) else None
             raise WecomBusinessFlowError(
@@ -275,7 +365,7 @@ async def _model_call(execution, system_prompt, user_text):
     fact = {'call_id': call_id, 'execution_id': state.execution_id,
             'iteration': state.iteration, 'phase': 'started'}
     state.model_calls.append(fact)
-    await control.save(state, 'before_model')
+    await _save_fact(control, state, 'before_model')
     from ..usage_context import execution_call
     with execution_call(state.execution_id, call_id):
         response = await execution.resources.llm.chat_with_tools(
@@ -287,29 +377,52 @@ async def _model_call(execution, system_prompt, user_text):
     fact.update(phase='completed', usage=response.get('usage') or {},
                 model=response.get('model', ''), provider=response.get('provider', ''),
                 response=response, applied=True)
-    await control.save(state, 'model_usage')
-    await observer.model_usage(state, dict(fact))
+    await _save_fact(control, state, 'model_usage')
+    try:
+        await observer.model_usage(state, dict(fact))
+    except CheckpointFailure:
+        raise
+    except Exception as error:
+        raise CheckpointFailure('WECOM_USAGE_FACT_FAILED') from error
+    if response.get('finish_reason') != 'stop':
+        raise WecomBusinessFlowError('WECOM_SUMMARY_TRUNCATED',
+                                     '日报模型未正常完成，未保存不完整输出')
     return response.get('content') or ''
 
 
-def _parse_summary_json(text):
-    """模型输出 → 报告 JSON；解析失败保留原文（评审 P2-16：如实标注截断）。"""
+def _parse_summary_json(text, *, chunk=False):
+    """Accept only complete structured JSON; partial text is not a saved report."""
     if not isinstance(text, str) or not text.strip():
         return None
-    candidate = text.strip()
-    start, end = candidate.find('{'), candidate.rfind('}')
-    if start >= 0 and end > start:
-        candidate = candidate[start:end + 1]
     try:
-        value = json.loads(candidate)
-        if isinstance(value, dict):
-            return value
+        value = json.loads(text.strip())
     except ValueError:
-        pass
-    truncated = len(text) > RAW_FALLBACK_CHAR_LIMIT
-    return {'overview': text.strip()[:RAW_FALLBACK_CHAR_LIMIT],
-            'notes': ('模型输出非结构化 JSON，已按原文保留'
-                      + ('；超长部分截断' if truncated else ''))}
+        return None
+    if not isinstance(value, dict):
+        return None
+    if chunk:
+        if (not isinstance(value.get('digest'), str) or not value['digest'].strip()
+                or not isinstance(value.get('items'), list)):
+            return None
+        return value
+    if not isinstance(value.get('overview'), str) or not value['overview'].strip():
+        return None
+    if any(not isinstance(value.get(key), list)
+           for key in ('categories', 'handled', 'pending_human', 'noteworthy')):
+        return None
+    if 'notes' in value and not isinstance(value['notes'], str):
+        return None
+    for key in ('categories', 'handled', 'pending_human', 'noteworthy'):
+        for item in value[key]:
+            if not isinstance(item, dict) or not isinstance(item.get('topic'), str) \
+                    or not isinstance(item.get('detail'), str):
+                return None
+            if key == 'categories':
+                if type(item.get('count')) is not int or item['count'] < 0:
+                    return None
+            elif not isinstance(item.get('evidence'), list):
+                return None
+    return value
 
 
 def _requirements_text(descriptor):
@@ -349,7 +462,9 @@ async def _analyze_conversation(execution, descriptor, conversation, business_da
         direct_input += f'\n计划特殊关注要求：{requirements}'
     if not day_messages:
         # 成功空日（设计 §5.2）：整段日期范围排空且无当日记录。
-        return {'summary': {'overview': '本轮未读到该日记录。', 'notes': '日期范围已排空，无当日消息'},
+        return {'summary': {'overview': '当日无消息', 'categories': [],
+                            'handled': [], 'pending_human': [], 'noteworthy': [],
+                            'notes': '日期范围已排空，无当日消息'},
                 'day_count': 0, 'background_count': len(background_messages)}
     if len(direct_input) <= DIRECT_SUMMARY_CHAR_LIMIT:
         content = await _model_call(execution, SUMMARY_SYSTEM_TEMPLATE, direct_input)
@@ -370,7 +485,7 @@ async def _analyze_conversation(execution, descriptor, conversation, business_da
         if requirements:
             chunk += f'\n计划特殊关注要求：{requirements}'
         content = await _model_call(execution, CHUNK_SYSTEM_TEMPLATE, chunk)
-        parsed = _parse_summary_json(content)
+        parsed = _parse_summary_json(content, chunk=True)
         if not isinstance(parsed, dict):
             raise WecomBusinessFlowError('WECOM_SUMMARY_INVALID', f'分组 {index + 1} 模型输出无效')
         digests.append(json.dumps(parsed, ensure_ascii=False))
@@ -395,7 +510,7 @@ async def _analyze_conversation(execution, descriptor, conversation, business_da
                                     f'以下中间结论超出单组预算（{per_item_cap} 字符），'
                                     '请压缩为同结构 JSON（保留证据 msg_id 与关键事实，丢弃冗余引述），'
                                     '总长不超过预算：\n' + digest)
-        parsed = _parse_summary_json(content)
+        parsed = _parse_summary_json(content, chunk=True)
         if not isinstance(parsed, dict):
             raise WecomBusinessFlowError('WECOM_SUMMARY_INVALID', '中间结论压缩输出无效')
         compressed = json.dumps(parsed, ensure_ascii=False)
@@ -429,7 +544,7 @@ async def _analyze_conversation(execution, descriptor, conversation, business_da
                                         '以下同会话中间结论需要合并压缩为一份同结构 JSON'
                                         f'（保留证据 msg_id 与关键事实），总长不超过 {per_item_cap} 字符：\n'
                                         + merge_input)
-            parsed = _parse_summary_json(content)
+            parsed = _parse_summary_json(content, chunk=True)
             if not isinstance(parsed, dict):
                 raise WecomBusinessFlowError('WECOM_SUMMARY_INVALID', '中间结论归并输出无效')
             merged_digest = json.dumps(parsed, ensure_ascii=False)
@@ -439,7 +554,7 @@ async def _analyze_conversation(execution, descriptor, conversation, business_da
                                             f'以下合并结论仍超出单组预算（{per_item_cap} 字符），'
                                             '请进一步压缩为同结构 JSON（保留证据 msg_id），'
                                             '总长不超过预算：\n' + merged_digest)
-                parsed = _parse_summary_json(content)
+                parsed = _parse_summary_json(content, chunk=True)
                 if not isinstance(parsed, dict):
                     raise WecomBusinessFlowError('WECOM_SUMMARY_INVALID', '中间结论压缩输出无效')
                 merged_digest = json.dumps(parsed, ensure_ascii=False)
@@ -467,11 +582,18 @@ def _resolve_conversations(execution, descriptor):
     identity = execution.identity
     conversation_ids = descriptor.get('conversation_ids')
     conversations = []
+    if descriptor.get('schema_version') == 2 and (not isinstance(conversation_ids, list)
+                                                  or not conversation_ids):
+        raise WecomBusinessFlowError('WECOM_BUSINESS_TARGET_EMPTY', '本次执行缺少冻结会话清单')
     if isinstance(conversation_ids, list) and conversation_ids:
         for item in conversation_ids:
             row = service.get_conversation(identity.tenant_id, identity.user_id, int(item))
             if row is None:
                 raise WecomBusinessFlowError('CONVERSATION_NOT_FOUND', f'会话不存在：{item}')
+            if descriptor.get('schema_version') == 2 and (
+                    row.get('source_account_id') != descriptor.get('account')
+                    or str(row.get('device_id')) != str(descriptor.get('device'))):
+                raise WecomBusinessFlowError('WECOM_SOURCE_MISMATCH', '会话来源与冻结计划不符')
             conversations.append(row)
         return conversations
     task_id = descriptor.get('task_id')
@@ -520,6 +642,8 @@ async def _run_daily(execution, descriptor, local_adapter, base_context):
     tz_name = _tz_name(descriptor)
     business_date = _descriptor_date(descriptor)
     conversations = await asyncio.to_thread(_resolve_conversations, execution, descriptor)
+    if descriptor.get('schema_version') == 2:
+        await _verify_device_before_daily(execution, descriptor)
     runner_id = None
     root = control
     while hasattr(root, 'parent_control'):
@@ -527,20 +651,30 @@ async def _run_daily(execution, descriptor, local_adapter, base_context):
     attempt = getattr(root, 'attempt', None)
     if attempt is not None:
         runner_id = getattr(attempt, 'runner_id', None)
-    completed, failed = [], []
-    for conversation in conversations:
+    progress = {'schema_version': 1, 'business_date': business_date,
+                'scope_conversation_ids': [row['id'] for row in conversations],
+                'items': [{'conversation_id': row['id'], 'status': 'not_started',
+                           'phase': 'queued', 'started_at': None, 'finished_at': None,
+                           'error_code': None} for row in conversations]}
+    state.resources['wecom_daily_progress'] = progress
+    await _save_fact(control, state, 'daily_scope')
+    completed, failed, superseded = [], [], []
+    for index, conversation in enumerate(conversations):
         if control.command() in ('cancel', 'pause'):
             raise _StopFlow(control.command())
         name = conversation.get('name') or conversation.get('session_locator')
+        item = progress['items'][index]
+        item.update(status='running', phase='reading',
+                    started_at=datetime.now(_tz('UTC')).isoformat())
+        await _save_fact(control, state, 'daily_conversation_started')
         try:
-            await observer.event(state, make_event('progress',
-                data=f'开始生成会话「{name}」{business_date} 的日报'))
+            await _emit_progress(observer, state, f'开始生成会话「{name}」{business_date} 的日报')
             pages, notes = [], ''
             snapshot_at = None
             async for data in _iterate_day_pages(execution, local_adapter, control,
                                                  state, base_context, observer,
                                                  conversation['session_locator'],
-                                                 business_date, tz_name):
+                                                 business_date, tz_name, descriptor):
                 pages.append(data)
                 window = data.get('read_window') or {}
                 if snapshot_at is None and isinstance(window.get('snapshot_at'), int):
@@ -553,33 +687,58 @@ async def _run_daily(execution, descriptor, local_adapter, base_context):
                 # 排空但缺首轮快照：按缺口记录，不用当前时间补造（评审 P1-8）。
                 raise WecomBusinessFlowError(
                     'WECOM_DAY_SNAPSHOT_MISSING', '日期读取结果缺少首轮快照时点（snapshot_at）')
+            item['phase'] = 'analyzing'
+            await _save_fact(control, state, 'daily_conversation_analyzing')
             analysis = await _analyze_conversation(execution, descriptor, conversation,
                                                    business_date, tz_name, pages, notes)
-            await _save_report(execution, conversation, business_date, analysis,
-                               snapshot_at, runner_id)
+            item['phase'] = 'saving'
+            await _save_fact(control, state, 'daily_conversation_saving')
+            saved = await _save_report(execution, conversation, business_date, analysis,
+                                       snapshot_at, runner_id)
+            if not saved['applied']:
+                superseded.append({'conversation_id': conversation['id'], 'name': name})
+                item.update(status='superseded', phase='superseded',
+                            finished_at=datetime.now(_tz('UTC')).isoformat())
+                await _save_fact(control, state, 'daily_conversation_superseded')
+                await _emit_progress(observer, state,
+                                     f'会话「{name}」{business_date} 已有更新的日报，本次未覆盖')
+                continue
             completed.append((conversation, name))
-            await observer.event(state, make_event('progress',
-                data=f'会话「{name}」{business_date} 日报已保存'))
+            item.update(status='completed', phase='completed',
+                        finished_at=datetime.now(_tz('UTC')).isoformat())
+            await _save_fact(control, state, 'daily_conversation_completed')
+            await _emit_progress(observer, state, f'会话「{name}」{business_date} 日报已保存')
         except _StopFlow:
             raise
         except (CheckpointFailure, asyncio.CancelledError):
             raise  # 权威存储/取消异常不当作单会话失败吞掉（评审 P1-1）
+        except WecomSourceError:
+            raise
         except WecomBusinessFlowError as error:
             # 单会话业务缺口：记录并继续其他会话（设计 §5.1）；失败不冒充空日。
             failed.append({'conversation_id': conversation['id'], 'name': name,
                            'code': error.code})
+            item.update(status='failed', finished_at=datetime.now(_tz('UTC')).isoformat(),
+                        error_code=error.code)
+            await _save_fact(control, state, 'daily_conversation_failed')
             logger.warning(f'后端日志：企微日报单会话失败 conversation={conversation.get("id")} '
-                           f'date={business_date} code={error.code}')
-            await observer.event(state, make_event('progress',
-                data=f'会话「{name}」日报生成失败（{error.code}），继续其他会话'))
+                           f'runner={runner_id} date={business_date} phase={item["phase"]} code={error.code}')
+            await _emit_progress(observer, state,
+                                 f'会话「{name}」日报生成失败（{error.code}），继续其他会话')
         except Exception as error:
+            if getattr(error, 'authoritative_storage_failure', False):
+                raise
+            code = type(error).__name__
             failed.append({'conversation_id': conversation['id'], 'name': name,
-                           'code': type(error).__name__})
+                           'code': code})
+            item.update(status='failed', finished_at=datetime.now(_tz('UTC')).isoformat(),
+                        error_code=code)
+            await _save_fact(control, state, 'daily_conversation_failed')
             logger.opt(exception=True).warning(
                 f'后端日志：企微日报单会话失败 conversation={conversation.get("id")} '
-                f'date={business_date} error={type(error).__name__}')
-            await observer.event(state, make_event('progress',
-                data=f'会话「{name}」日报生成失败（{type(error).__name__}），继续其他会话'))
+                f'runner={runner_id} date={business_date} phase={item["phase"]} code={code}')
+            await _emit_progress(observer, state,
+                                 f'会话「{name}」日报生成失败（{code}），继续其他会话')
     # 本次执行事实（评审三 P1-4）：稳定 conversation_id + 本次目标范围 + 逐会话
     # 结果；成功、部分失败、全部失败都先落事实再终态，通知/页面/投影共用。
     execution.state.resources['wecom_daily_result'] = {
@@ -589,10 +748,11 @@ async def _run_daily(execution, descriptor, local_adapter, base_context):
         'completed': [{'conversation_id': conversation['id'], 'name': name}
                       for conversation, name in completed],
         'failed': failed,
+        'superseded': superseded,
         'runner_id': runner_id,
     }
-    await control.save(state, 'daily_result')
-    if conversations and not completed:
+    await _save_fact(control, state, 'daily_result')
+    if conversations and not completed and not superseded:
         # 全部失败也是执行事实（已先落 checkpoint）；终态如实失败，旧日报保留。
         raise WecomBusinessFlowError('WECOM_DAILY_ALL_FAILED',
                                      f'全部会话日报生成失败：{json.dumps(failed, ensure_ascii=False)[:500]}')

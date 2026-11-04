@@ -19,9 +19,9 @@ def _wecom_daily_terminal_extras(cursor, runner, task, event_kind):
 
     仅识别本模块创建的计划标记（task_prompt 首行）。日期与完成/缺失事实取
     **本次执行持久化**的 checkpoint.resources.wecom_daily_result（业务分支在
-    保存报告后写入），不按通知生成时间猜测"昨天"、不数历史库存报告；缺该
-    事实（非本轮执行/旧数据）时不附日报参数。链接为服务端构造的日报页面
-    路径，不取模型输出。
+    保存报告后写入），不按通知生成时间猜测"昨天"、不数历史库存报告；
+    业务前失败时仅从已受理 input 取日期，不虚构完成数量。链接为服务端构造
+    的日报页面路径，不取模型输出。
     """
     try:
         from src.wecom_conversation.plans import parse_plan_prompt
@@ -35,25 +35,35 @@ def _wecom_daily_terminal_extras(cursor, runner, task, event_kind):
         return {}
     result = (((runner.get('checkpoint') or {}).get('execution') or {})
               .get('resources', {}).get('wecom_daily_result'))
-    if not isinstance(result, dict):
-        return {}
-    business_date = result.get('business_date')
+    result = result if isinstance(result, dict) else {}
+    accepted = ((runner.get('input') or {}).get('request_data') or {}).get(
+        'wecom_conversation_business')
+    accepted = accepted if isinstance(accepted, dict) else {}
+    business_date = result.get('business_date') or accepted.get('business_date')
     if not isinstance(business_date, str) or len(business_date) != 10:
         return {}
     completed = [item.get('name') for item in result.get('completed') or []
                  if isinstance(item, dict) and item.get('name')]
     failed = [item for item in result.get('failed') or []
               if isinstance(item, dict) and item.get('name')]
+    superseded = [item for item in result.get('superseded') or []
+                  if isinstance(item, dict) and item.get('name')]
     extras = {'daily_report_date': business_date,
               'daily_report_link': (f'/t/{runner["tenant_id"]}/wecom-conversations/daily'
                                     f'?date={business_date}&task_id={task_id}')}
-    if event_kind == 'completed':
+    if event_kind == 'completed' and result:
         extras['daily_report_summary'] = f'本次已生成 {len(completed)} 个会话日报'
-        if failed:
+        if failed or superseded:
             # 正常部分失败（整体 completed、事实含 failed 明细）不能让通知生产
             # 抛 TypeError（通知生产位于 Runner 终态事务内，评审二 P1-4）。
-            names = '、'.join(str(item.get('name') or '?') for item in failed)[:120]
-            extras['daily_report_missing'] = f'本次未完成 {len(failed)} 个会话：{names}'
+            details = []
+            if failed:
+                names = '、'.join(str(item.get('name') or '?') for item in failed)[:80]
+                details.append(f'本次未完成 {len(failed)} 个会话：{names}')
+            if superseded:
+                names = '、'.join(str(item.get('name') or '?') for item in superseded)[:80]
+                details.append(f'已有更新日报，本次未覆盖 {len(superseded)} 个会话：{names}')
+            extras['daily_report_missing'] = '；'.join(details)[:200]
     elif failed:
         # 全部失败（终态 failed）：失败通知本身表达结果，仍附日期链接便于
         # 查看旧日报；不虚构"已生成"。

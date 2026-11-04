@@ -2773,6 +2773,43 @@ class WecomReadSessionsTool(WecomLocalToolProxyTool):
         return result
 
 
+class WecomSessionDirectoryInput(BaseModel):
+    model_config = {'extra': 'forbid'}
+    mode: Literal['list', 'preview', 'resolve']
+    query: Optional[str] = Field(None, max_length=100)
+    cursor: Optional[str] = Field(None, max_length=4096)
+    limit: Optional[int] = Field(None, ge=1, le=50)
+    session: Optional[str] = Field(None, min_length=1, max_length=2048)
+    sessions: Optional[List[str]] = Field(None, min_length=1, max_length=50)
+
+    @model_validator(mode='after')
+    def _mode_fields(self):
+        if self.mode == 'preview':
+            if not self.session or not self.session.startswith('ws1.') or self.sessions is not None or self.query is not None or self.cursor is not None or self.limit is not None and self.limit > 3:
+                raise ValueError('预览须指定稳定会话标识，最多3条')
+        elif self.mode == 'resolve':
+            if not self.sessions or self.session is not None or self.query is not None or self.cursor is not None or self.limit is not None or any(not value.startswith('ws1.') for value in self.sessions):
+                raise ValueError('核验须指定1–50个稳定会话标识')
+        elif self.session is not None or self.sessions is not None:
+            raise ValueError('列表模式不接受session')
+        return self
+
+
+class WecomSessionDirectoryTool(WecomLocalToolProxyTool):
+    name = 'wecom_session_directory'
+    display_name = '企业微信会话目录'
+    description = '每日总结页面专用的本地只读会话目录与预览，不进入模型工具集。'
+    InputModel = WecomSessionDirectoryInput
+    timeout_seconds = 180
+
+    def _validate_args(self, args):
+        try:
+            self.InputModel.model_validate(args)
+        except ValueError:
+            return '会话目录参数无效'
+        return None
+
+
 class WecomUnreadListInput(BaseModel):
     name: Optional[str] = Field(None, max_length=100, description="可选：按会话名子串过滤")
 
@@ -2928,6 +2965,7 @@ LOCAL_PROXY_TOOL_CLASSES = (
     WecomSendFileTool,
     WecomReadSessionTool,
     WecomReadSessionsTool,
+    WecomSessionDirectoryTool,
     WecomUnreadListTool,
     WecomSendStatusTool,
     WecomGroupPollTool,

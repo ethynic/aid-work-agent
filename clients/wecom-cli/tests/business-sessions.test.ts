@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWecomReadSessionOperation } from '../src/operations/readSession.js'
 import { createWecomReadSessionsOperation } from '../src/operations/readSessions.js'
+import { createWecomSessionDirectoryOperation } from '../src/operations/sessionDirectory.js'
 import { createWecomMessageSendOperation } from '../src/operations/messageSend.js'
 import { createWecomSendStatusOperation } from '../src/operations/sendStatus.js'
 import { CodedOperationError } from '../src/operations/types.js'
@@ -14,6 +15,28 @@ import type { OpContext } from '../src/operations/types.js'
 
 const ctx = (): OpContext => ({ signal: new AbortController().signal, progress() {} })
 const windows = { skip: process.platform !== 'win32' }
+
+test('picker directory lists empty targets without monitor cursor and validates selected stable IDs', windows, async () => {
+  const base = mkdtempSync(join(tmpdir(), 'wecom-directory-'))
+  try {
+    const f = await groupMonitorFixture(base)
+    const op = createWecomSessionDirectoryOperation(f.deps)
+    const first = await op.execute({ mode: 'list', limit: 1 }, ctx())
+    assert.equal(first.success, true, first.message)
+    const second = await op.execute({ mode: 'list', limit: 1, cursor: first.data.next_cursor as string }, ctx())
+    assert.equal(second.success, true, second.message)
+    const rows = [...(first.data.conversations as { session: string }[]), ...(second.data.conversations as { session: string }[])]
+    assert.equal(rows.length, 2)
+    assert.ok(rows.every(row => row.session.startsWith('ws1.')))
+    assert.equal(first.data.cursor, undefined, 'catalog must not produce a monitoring cursor')
+    const empty = rows.find(row => row.session !== (first.data.conversations as { session: string }[])[0]!.session)!
+    const preview = await op.execute({ mode: 'preview', session: empty.session }, ctx())
+    assert.equal(preview.success, true, preview.message)
+    const resolved = await op.execute({ mode: 'resolve', sessions: rows.map(row => row.session) }, ctx())
+    assert.deepEqual((resolved.data.resolved_targets as { session: string }[]).map(row => row.session), rows.map(row => row.session))
+    assert.deepEqual(f.calls, [], 'picker cannot navigate or send')
+  } finally { rmSync(base, { recursive: true, force: true }) }
+})
 
 test('one read API handles groups, stable session survives rename, independent cursors keep new records', windows, async () => {
   const base = mkdtempSync(join(tmpdir(), 'wecom-business-'))

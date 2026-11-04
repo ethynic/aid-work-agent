@@ -110,6 +110,23 @@ def test_pin_is_root_only_and_wecom_scope_cannot_fall_back_to_name_or_media():
     assert not bind_or_validate(checkpoint, row, 'boss_goto', None, 'other', {})
 
 
+def test_v2_daily_first_bind_uses_accepted_device_even_after_selection_changes():
+    """The row locked by invocation bind fixes A; a caller cannot bind selected B."""
+    row, checkpoint = task()
+    row['input'] = {'request_data': {
+        'wecom_task_device': 'device-a',
+        'wecom_conversation_business': {'schema_version': 2, 'kind': 'daily',
+                                        'device': 'device-a'}}}
+    with pytest.raises(DeviceOperationUnresolved):
+        bind_or_validate(checkpoint, row, 'wecom_read_session', 'wecom',
+                         'device-b', {'session': 'ws1.one'})
+    assert checkpoint['execution']['resources'] == {}
+    assert bind_or_validate(checkpoint, row, 'wecom_read_session', 'wecom',
+                            'device-a', {'session': 'ws1.one'})
+    assert bound_device(checkpoint['execution'], row['runner_id'],
+                        checkpoint['execution']['identity']) == 'device-a'
+
+
 @pytest.mark.asyncio
 async def test_monitor_uses_original_nonselected_device_but_never_migrates_when_offline():
     tool = WecomGroupPollTool()

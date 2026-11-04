@@ -104,6 +104,7 @@ TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
             "wecom_send_status",
             "wecom_group_poll",
             "wecom_read_sessions",
+            "wecom_session_directory",
         ],
     },
     # 通用 Skill 脚本执行 Provider（M2，docs/system/runtime-plugin-host-architecture-design.md 第9节）：

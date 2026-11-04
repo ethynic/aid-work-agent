@@ -27,7 +27,7 @@
  */
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { join, toNamespacedPath } from 'node:path'
+import { dirname, join, toNamespacedPath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 /** 解释器覆盖环境变量名 */
@@ -107,9 +107,14 @@ export type LocaldbPySpawnFn = (
   opts: { signal?: AbortSignal },
 ) => LocaldbPyChild
 
+/** 打包 Python 有 asset-provenance，才需要长路径命名空间；开发 venv 的原生轮子需要普通路径。 */
+export function bundledPythonNeedsNamespace(file: string, existsFn = existsSync): boolean {
+  return existsFn(join(dirname(file), 'asset-provenance.json'))
+}
+
 /** 缺省 spawn：隐藏窗口、三管道、AbortSignal 交给 node spawn 原生透传（abort → kill + error） */
 const defaultSpawn: LocaldbPySpawnFn = (file, args, opts) =>
-  spawn(process.platform === 'win32' ? toNamespacedPath(file) : file,
+  spawn(process.platform === 'win32' && bundledPythonNeedsNamespace(file) ? toNamespacedPath(file) : file,
     process.platform === 'win32' ? [...args.slice(0, 2), PY_BOOTSTRAP_PATH, ...args.slice(2)] : args,
     { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], signal: opts.signal })
 

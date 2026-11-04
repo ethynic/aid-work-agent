@@ -1,11 +1,27 @@
 """Private root-owned device pin for group monitoring; never model authority."""
 
 import copy
+from collections.abc import Mapping
 
 from .ownership import LeaseLost
 
 RESOURCE = 'wecom_task_device'
 IDENTITY_FIELDS = ('tenant_id', 'user_id', 'session_id', 'source', 'session_kind')
+
+
+def accepted_daily_device(request_data):
+    """Only a server-accepted v2 daily descriptor can fix first dispatch."""
+    if not isinstance(request_data, Mapping):
+        return None
+    descriptor = request_data.get('wecom_conversation_business')
+    if (not isinstance(descriptor, Mapping) or descriptor.get('schema_version') != 2
+            or descriptor.get('kind') != 'daily'):
+        return None
+    device = descriptor.get('device')
+    if (not isinstance(device, str) or not device
+            or request_data.get(RESOURCE) != device):
+        raise LeaseLost('WECOM_DAILY_DEVICE_INVALID')
+    return device
 
 
 def bound_device(root, runner_id, identity):
@@ -30,8 +46,12 @@ def bind_or_validate(checkpoint, row, tool_name, provider_key, device_id, argume
     root = checkpoint['execution']
     identity = {key: row[key] for key in IDENTITY_FIELDS}
     original = bound_device(root, row['runner_id'], identity)
+    daily_device = accepted_daily_device((row.get('input') or {}).get('request_data'))
     modern = tool_name == 'wecom_read_sessions' or bool(arguments.get('session'))
     from src.local_tools.repository import DeviceOperationUnresolved
+
+    if daily_device is not None and daily_device != str(device_id):
+        raise DeviceOperationUnresolved('WECOM_TASK_DEVICE_CHANGED')
     if original is not None and original != str(device_id):
         raise DeviceOperationUnresolved('WECOM_TASK_DEVICE_CHANGED')
     marker = root.get('resources', {}).get(RESOURCE) or {}
@@ -50,4 +70,4 @@ def bind_or_validate(checkpoint, row, tool_name, provider_key, device_id, argume
         root.setdefault('resources', {})[RESOURCE] = {
             'version': 2 if modern else 1, 'runner_id': row['runner_id'], 'identity': copy.deepcopy(identity),
             'device_id': str(device_id)}
-    return original is not None
+    return original is not None or daily_device is not None

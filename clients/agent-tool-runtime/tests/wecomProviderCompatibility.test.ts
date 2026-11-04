@@ -15,9 +15,13 @@ for (const legacy of [true, false]) test(`WeCom ${legacy ? 'old' : 'new'} plugin
   t.after(() => manager.shutdown())
   const config: RuntimeConfig = { server: 'https://fixture.invalid', device_id: 'fixture', providers: { wecom: { entry: fakeProviderEntry() } } }
   assert.ok(!(deviceCapabilities(config).capabilities as string[]).includes('wecom_read_sessions'), 'an entry alone does not prove batch support')
+  assert.ok(!(deviceCapabilities(config).capabilities as string[]).includes('wecom_session_directory'), 'an entry alone does not prove picker support')
   await Promise.all([manager.inspectWecomBusinessTools(), manager.ensureStarted()])
-  const capabilities = deviceCapabilities(config, manager.wecomBusinessReady)
+  const capabilities = deviceCapabilities(config, manager.wecomBusinessReady, manager.wecomDirectoryReady)
   assert.equal((capabilities.capabilities as string[]).includes('wecom_read_sessions'), !legacy)
+  assert.equal((capabilities.capabilities as string[]).includes('wecom_session_directory'), false)
+  const directory = await manager.callTool('wecom_session_directory', { mode: 'list' })
+  assert.equal(directory.code, 'TOOL_NOT_SUPPORTED', 'older CLI keeps old tools while picker is unavailable')
   for (const name of ['wecom_read_session', 'wecom_message_send']) {
     const result = await manager.callTool(name, { target_name: 'fixture', text: 'fixture', durationMs: 1, call_log_file: callLog })
     assert.equal(result.success, true, 'legacy arguments must remain usable with both releases')
@@ -52,6 +56,18 @@ test('a failed capability connection is a safe pre-send failure and the next cal
   const second = await manager.callTool('wecom_message_send', { session: 'fixture', text: 'fixture', durationMs: 1 })
   assert.equal(second.success, true)
   assert.equal(launches, 2, 'a transient startup failure is not cached as missing capability')
+})
+
+test('directory is advertised only after actual MCP schema inspection and leaves old reads available', async t => {
+  const manager = new ProviderManager(fakeProviderEntry(), { env: { FAKE_WECOM_DIRECTORY: '1' } })
+  t.after(() => manager.shutdown())
+  const config: RuntimeConfig = { server: 'https://fixture.invalid', device_id: 'fixture', providers: { wecom: { entry: fakeProviderEntry() } } }
+  assert.equal(manager.wecomDirectoryReady, false)
+  await manager.inspectWecomBusinessTools()
+  assert.equal(manager.wecomDirectoryReady, true)
+  assert.ok((deviceCapabilities(config, manager.wecomBusinessReady, manager.wecomDirectoryReady).capabilities as string[]).includes('wecom_session_directory'))
+  assert.equal((await manager.callTool('wecom_session_directory', { mode: 'list' })).success, true)
+  assert.equal((await manager.callTool('wecom_read_session', { session: 'fixture' })).success, true)
 })
 
 test('shutdown waits for an in-flight discovery launch to close before resource-stop can finish', async () => {

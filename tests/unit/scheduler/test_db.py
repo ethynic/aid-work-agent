@@ -16,7 +16,7 @@
 """
 
 import json
-from datetime import datetime
+from datetime import date, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -71,6 +71,79 @@ _TASK_ROW_FULL = dict(
 
 
 class TestClaimDue:
+    @patch('src.scheduler.db.get_db_connection')
+    def test_daily_claim_uses_lock_acquisition_day_across_midnight(self, mock_conn):
+        """23:59 开始事务、等行锁跨零点：冻结日应取锁后的实时时钟。"""
+        from src.wecom_conversation.plans import daily_plan_config, plan_prompt
+
+        config = daily_plan_config(account='acc1', device='device-a',
+                                   target_day='today', scope_mode='all')
+        task = dict(_TASK_ROW_FULL, task_prompt=plan_prompt('daily', config))
+        updated = dict(task, pending_occurrence_key=_DUE.isoformat())
+        cursor = _make_cursor(fetchone=[task, {'business_day': date(2026, 11, 5)}, updated],
+                              fetchall=[{'id': 3}])
+        _bind_conn(mock_conn, cursor)
+
+        ScheduledTaskDB.claim_due('sched_abc123', now=datetime(2026, 11, 4, 23, 59, 59))
+
+        statements = [call.args[0] for call in cursor.execute.call_args_list]
+        assert 'FOR UPDATE' in statements[0]
+        assert "clock_timestamp() AT TIME ZONE 'Asia/Shanghai'" in statements[1]
+        assert 'now() AT TIME ZONE' not in statements[1]
+        snapshot = json.loads(cursor.execute.call_args.args[1][2])
+        assert snapshot['wecom_conversation_business']['business_date'] == '2026-11-05'
+
+    @patch("src.scheduler.db.get_db_connection")
+    def test_daily_claim_freezes_date_and_selected_ids_in_pending_snapshot(self, mock_conn):
+        """认领时同一锁定事务固化清单，后续增删成员不改变本次 Runner 目标。"""
+        from src.wecom_conversation.plans import daily_plan_config, plan_prompt
+
+        config = daily_plan_config(account='acc1', device='device-a',
+                                   target_day='yesterday', scope_mode='selected')
+        task = dict(_TASK_ROW_FULL, task_prompt=plan_prompt('daily', config))
+        updated = dict(task, pending_occurrence_key=_DUE.isoformat())
+        cursor = _make_cursor(fetchone=[task, {'business_day': date(2026, 11, 4)}, updated],
+                              fetchall=[{'id': 3}, {'id': 7}])
+        _bind_conn(mock_conn, cursor)
+
+        result = ScheduledTaskDB.claim_due('sched_abc123', now=datetime(2026, 11, 4, 10))
+
+        assert result is not None
+        claim_sql, claim_params = cursor.execute.call_args.args
+        snapshot = json.loads(claim_params[2])
+        assert snapshot['wecom_conversation_business'] == {
+            'schema_version': 2, 'kind': 'daily', 'trigger': 'scheduled',
+            'task_id': 'sched_abc123', 'business_date': '2026-11-03',
+            'timezone': 'Asia/Shanghai', 'account': 'acc1', 'device': 'device-a',
+            'conversation_ids': [3, 7]}
+        assert 'pending_snapshot = %s::jsonb' in claim_sql
+        assert 'FOR UPDATE' in cursor.execute.call_args_list[0].args[0]
+        assert mock_conn.return_value.__enter__.return_value.commit.call_count == 1
+
+    @patch("src.scheduler.notify.publish_task_paused_in_tx")
+    @patch("src.scheduler.db.get_db_connection")
+    def test_daily_empty_scope_pauses_and_notifies_in_claim_transaction(self, mock_conn, notify):
+        """空范围不能排队产生假成功；暂停与通知须在一次提交内完成。"""
+        from src.wecom_conversation.plans import daily_plan_config, plan_prompt
+
+        config = daily_plan_config(account='acc1', device='device-a',
+                                   target_day='today', scope_mode='all')
+        task = dict(_TASK_ROW_FULL, task_prompt=plan_prompt('daily', config))
+        paused = dict(task, status='paused', notification_rule_id=None)
+        cursor = _make_cursor(fetchone=[task, {'business_day': date(2026, 11, 4)}, paused],
+                              fetchall=[])
+        _bind_conn(mock_conn, cursor)
+
+        assert ScheduledTaskDB.claim_due('sched_abc123', now=datetime(2026, 11, 4, 10)) is None
+
+        pause_sql, pause_params = cursor.execute.call_args.args
+        assert "status='paused'" in pause_sql
+        assert 'pending_snapshot=NULL' in pause_sql
+        assert pause_params == ('scope_empty', 'sched_abc123')
+        notify.assert_called_once()
+        assert notify.call_args.kwargs['pause_reason'] == 'scope_empty'
+        assert mock_conn.return_value.__enter__.return_value.commit.call_count == 1
+
     @patch("src.scheduler.db.get_db_connection")
     def test_claim_locks_row_and_derives_all_params_from_current_row(self, mock_conn):
         """认领单事务：条件 SELECT FOR UPDATE → occurrence/推进/快照全部派生自锁定行"""
@@ -403,6 +476,30 @@ class TestPauseInterruptedWithNotify:
 
 
 class TestResume:
+    @patch('src.scheduler.db.get_db_connection')
+    def test_daily_today_resume_waits_full_interval_without_ordinary_quota(self, mock_conn):
+        """专属计划恢复于上海时间 12:00 时，3 小时计划首次到期应为 15:00。"""
+        from src.wecom_conversation.plans import daily_plan_config, plan_prompt
+
+        config = daily_plan_config(account='acc1', device='device-a',
+                                   target_day='today', scope_mode='all')
+        now = datetime(2026, 11, 4, 12)
+        task = dict(_TASK_ROW_FULL, status='paused', schedule_type='interval',
+                    interval_seconds=10800, next_due_at=datetime(2026, 11, 3, 9),
+                    task_prompt=plan_prompt('daily', config))
+        cursor = _make_cursor(fetchone=[task, dict(task, status='active')])
+        _bind_conn(mock_conn, cursor)
+
+        result = ScheduledTaskDB.resume_recompute('sched_abc123', now=now,
+                                                   max_active=1, allow_special=True)
+
+        assert result['status'] == 'active'
+        update_sql, params = cursor.execute.call_args.args
+        assert "status='active'" in update_sql
+        assert params[0] == datetime(2026, 11, 4, 15)
+        assert not any('SELECT count(*) AS cnt' in call.args[0]
+                       for call in cursor.execute.call_args_list)
+
     @patch("src.scheduler.db.get_db_connection")
     def test_resume_only_from_paused(self, mock_conn):
         """恢复仅限 paused 来源（评审 P2）：completed/expired 终态不可复活，
@@ -587,6 +684,26 @@ class TestDeleteWithSession:
 # ==================== create ====================
 
 class TestCreate:
+    @patch('src.scheduler.db.get_db_connection')
+    def test_ordinary_quota_count_excludes_daily_inside_create_transaction(self, mock_conn):
+        """专属 active 行不占普通任务创建名额，计数与插入共用事务。"""
+        cursor = _make_cursor(fetchone=[{'cnt': 0}, dict(_TASK_ROW)])
+        _bind_conn(mock_conn, cursor)
+
+        ScheduledTaskDB.create(user_id='user_1', tenant_id='tenant_1',
+                               name='普通任务', task_prompt='发送周报',
+                               schedule_type='daily', max_active=1)
+
+        statements = [call.args[0] for call in cursor.execute.call_args_list]
+        count_index = next(index for index, sql in enumerate(statements)
+                           if 'SELECT count(*) AS cnt' in sql)
+        insert_index = next(index for index, sql in enumerate(statements)
+                            if 'INSERT INTO scheduled_tasks' in sql)
+        assert count_index < insert_index
+        assert '[wecom-conversation:daily]' in statements[count_index]
+        assert '[wecom-conversation:backfill]' not in statements[count_index]
+        mock_conn.return_value.__enter__.return_value.commit.assert_called_once()
+
     @patch("src.scheduler.db.get_db_connection")
     def test_create_inserts_session_and_task_in_one_tx(self, mock_conn):
         """同事务：先插任务专属会话（metadata 含 scheduled_task 标记），再插任务行"""
@@ -633,6 +750,19 @@ class TestCreate:
 # ==================== list_due / get_by_id 归属条件 ====================
 
 class TestQueryConditions:
+    @patch('src.scheduler.db.get_db_connection')
+    def test_ordinary_list_filters_daily_before_limit(self, mock_conn):
+        """专属行不能占满普通任务列表页，过滤必须写入 SQL 的 LIMIT 前。"""
+        cursor = _make_cursor(fetchall=[])
+        _bind_conn(mock_conn, cursor)
+
+        assert ScheduledTaskDB.list_by_user('user_1', tenant_id='tenant_1', limit=1) == []
+
+        sql, params = cursor.execute.call_args.args
+        assert sql.index('[wecom-conversation:daily]') < sql.index('LIMIT %s')
+        assert '[wecom-conversation:backfill]' not in sql
+        assert params[-1] == 1
+
     @patch("src.scheduler.db.get_db_connection")
     def test_list_due_filters_active_due_and_idle(self, mock_conn):
         """到期扫描三条件：active + next_due_at 到期 + 无 pending 占用"""

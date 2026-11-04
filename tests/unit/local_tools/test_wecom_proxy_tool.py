@@ -27,6 +27,7 @@ from src.local_tools.proxy_tool import (
     WecomProbeTool,
     WecomReadSessionTool,
     WecomReadSessionsTool,
+    WecomSessionDirectoryTool,
     WecomSendFileTool,
     WecomSendImageTool,
     WecomUnreadListTool,
@@ -51,6 +52,7 @@ WECOM_MANIFEST_TOOLS = [
     "wecom_send_status",
     "wecom_group_poll",
     "wecom_read_sessions",
+    "wecom_session_directory",
 ]
 
 WECOM_PROXY_CLASSES = [
@@ -63,6 +65,7 @@ WECOM_PROXY_CLASSES = [
     WecomSendStatusTool,
     WecomGroupPollTool,
     WecomReadSessionsTool,
+    WecomSessionDirectoryTool,
 ]
 
 

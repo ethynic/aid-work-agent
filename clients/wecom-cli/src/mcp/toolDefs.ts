@@ -242,6 +242,20 @@ export const TOOL_DEFS: WecomToolDef[] = [
     annotations: { title: '企业微信读取会话消息', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   {
+    name: 'wecom_session_directory',
+    title: '企业微信会话目录',
+    description: '每日总结页面专用只读本地会话目录与最近三条预览；不推进监控游标。',
+    zodShape: {
+      mode: z.enum(['list', 'preview', 'resolve']),
+      query: z.string().max(100).optional(),
+      cursor: z.string().max(4096).optional(),
+      limit: z.number().int().min(1).max(50).optional(),
+      session: z.string().min(1).max(2048).optional(),
+      sessions: z.array(z.string().min(1).max(2048)).min(1).max(50).optional(),
+    },
+    annotations: { title: '企业微信会话目录', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
     name: 'wecom_read_sessions',
     title: '企业微信批量读取与待回复候选',
     description: '从本机DB批量读取单聊/群消息并单列pending_sessions候选；不依赖未读角标，不搜索或切换窗口。' +

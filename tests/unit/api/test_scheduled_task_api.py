@@ -223,6 +223,33 @@ class TestLifecycleEndpoints:
         assert resp.status_code == 404
 
 
+@pytest.mark.parametrize('method,path,body', [
+    ('GET', '/sched_abc123', None),
+    ('POST', '/sched_abc123/pause', None),
+    ('POST', '/sched_abc123/resume', None),
+    ('POST', '/sched_abc123/trigger', None),
+    ('DELETE', '/sched_abc123', None),
+    ('PUT', '/sched_abc123/schedule',
+     {'schedule_type': 'daily', 'time_config': {'hour': 9, 'minute': 0}}),
+    ('PUT', '/sched_abc123', {'name': '改名', 'clear_notification_rule': True}),
+])
+def test_known_daily_task_id_cannot_use_generic_routes(client, monkeypatch,
+                                                        method, path, body):
+    """已知 task_id 也不得通过通用详情、改期、通知、触发或删除绕过专属页面。"""
+    row = _task_row(task_prompt=' \t[wecom-conversation:daily]{"schema_version":2}')
+    monkeypatch.setattr(ScheduledTaskDB, 'get_by_id', MagicMock(return_value=row))
+    writes = {}
+    for name in ('pause', 'resume_recompute', 'submit_manual', 'delete_with_session',
+                 'update_schedule', 'update_definition', 'notify_rule_visible'):
+        writes[name] = MagicMock()
+        monkeypatch.setattr(ScheduledTaskDB, name, writes[name])
+    response = client.request(method, '/api/scheduled-tasks' + path,
+                              headers=_AUTH, json=body)
+    assert response.status_code == 409
+    for write in writes.values():
+        write.assert_not_called()
+
+
 # ==================== 编辑与改期（内容/调度解耦） ====================
 
 class TestEditEndpoints:

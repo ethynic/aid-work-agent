@@ -408,6 +408,26 @@ class TestCreateScheduledTaskTool:
 # ==================== 工具二：manage ====================
 
 class TestManageScheduledTaskTool:
+    @pytest.mark.parametrize('action',
+                             ['view', 'pause', 'resume', 'cancel', 'set_notify_rule'])
+    async def test_known_daily_task_id_blocks_all_generic_actions(self, action):
+        """模型拿到专属 ID 仍无法查看或修改该计划，写入方法不得被调用。"""
+        tool = ManageScheduledTaskTool()
+        row = _created_row(task_prompt='\f[wecom-conversation:daily]{"schema_version":2}')
+        with patch.object(ScheduledTaskDB, 'get_by_id', return_value=row), \
+             patch.object(ScheduledTaskDB, 'pause') as pause, \
+             patch.object(ScheduledTaskDB, 'resume_recompute') as resume, \
+             patch.object(ScheduledTaskDB, 'delete_with_session') as delete, \
+             patch.object(ScheduledTaskDB, 'update_definition') as update, \
+             patch.object(ScheduledTaskDB, 'notify_rule_visible') as notify:
+            with _scope():
+                result = await tool.execute(action=action, task_id='sched_abc123',
+                                            notification_rule_id='rule-1')
+        assert result['success'] is False
+        assert '每日总结页面' in result['error']
+        for write in (pause, resume, delete, update, notify):
+            write.assert_not_called()
+
     async def test_list_summary(self):
         tool = ManageScheduledTaskTool()
         rows = [_created_row(task_id="sched_1", name="任务A", status="active",

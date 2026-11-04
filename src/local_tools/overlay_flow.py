@@ -28,7 +28,27 @@ def _wecom_task_device_hint(proxy):
         return None
 
 
-async def _ready_device_by_id(proxy, tenant_id, user_id, device_id):
+def _accepted_daily_device_hint(operation, tenant_id, user_id, session_id):
+    """Use request data only for the matching durable Runner owner."""
+    from collections.abc import Mapping
+
+    from src.services.agent_runner.wecom_device_binding import accepted_daily_device
+    from src.tools.context import current_tool_execution_context
+
+    context = current_tool_execution_context()
+    owner = operation.owner
+    identity = owner.state.identity
+    if (context is None or context.tenant_id != tenant_id or context.user_id != user_id
+            or context.session_id != session_id or identity.tenant_id != tenant_id
+            or identity.user_id != user_id or identity.session_id != session_id
+            or identity.session_kind != 'web'
+            or identity.source not in ('chat', 'scheduled')
+            or not isinstance(context.request_data, Mapping)):
+        return None
+    return accepted_daily_device(context.request_data)
+
+
+async def _ready_device_by_id(proxy, tenant_id, user_id, device_id, *, require_selected=True):
     """Resolve the bound device with the same readiness gates as selected-device dispatch."""
     from datetime import datetime, timezone
 
@@ -41,7 +61,8 @@ async def _ready_device_by_id(proxy, tenant_id, user_id, device_id):
         return None, '设备不属于当前账号或已解绑'
     if device.get('status') != 'active':
         return None, '设备已停用'
-    ready_error = device_ready_error(device, proxy.name, datetime.now(timezone.utc))
+    ready_error = device_ready_error(device, proxy.name, datetime.now(timezone.utc),
+                                    require_selected=require_selected)
     if ready_error == 'offline':
         return None, '设备离线（Runtime 未运行或不可达）'
     if ready_error == 'unsupported':
@@ -99,16 +120,23 @@ async def poll_operation(proxy, operation, arguments, *, tenant_id, user_id, ses
     error = proxy._validate_args({key: value for key, value in arguments.items() if key not in {'_boss_target_ref', '_boss_expected_contact_ref'}})
     if error:
         return {'success':False,'code':'INVALID_ARGS','message':error}
-    bound_task_device = _wecom_task_device_hint(proxy) if getattr(proxy, 'provider_key', None) == 'wecom' else None
+    daily_device = (_accepted_daily_device_hint(operation, tenant_id, user_id, session_id)
+                    if getattr(proxy, 'provider_key', None) == 'wecom' else None)
+    bound_task_device = daily_device or (
+        _wecom_task_device_hint(proxy) if getattr(proxy, 'provider_key', None) == 'wecom' else None)
     if bound_task_device:
         # Trusted task device ownership (R05): business-submitted tasks carry the
         # original device in request_data; refuse instead of silently switching.
-        device, error = await _ready_device_by_id(proxy, tenant_id, user_id, bound_task_device)
+        device, error = await _ready_device_by_id(proxy, tenant_id, user_id,
+                                                 bound_task_device,
+                                                 require_selected=daily_device is None)
         if device is None:
             return {'success':False,'code':'DEVICE_UNAVAILABLE','effect':'none',
                 'recovery_action':'connect_original_device',
                 'message':f'本任务绑定的原设备当前不可用（{error or "设备不在线"}）。'
-                          '请在原设备启动 Runtime 并保持选定后再继续；本任务不会改用其他电脑。'}
+                          + ('请在原设备启动 Runtime 后再继续；本任务不会改用其他电脑。'
+                             if daily_device else
+                             '请在原设备启动 Runtime 并保持选定后再继续；本任务不会改用其他电脑。')}
     else:
         device, error = await proxy._find_ready_device(tenant_id,user_id)
     if device is None:

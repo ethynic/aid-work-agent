@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, time, timedelta, timezone as dt_timezone
 from zoneinfo import ZoneInfo
 
@@ -87,6 +88,23 @@ def get_conversation_in_tx(cursor, tenant_id, user_id, conversation_id):
     return row
 
 
+def report_conversations(tenant_id, user_id, conversation_ids, *, account, device_id):
+    """Validate a manual report's selected scope with one owner-bound read."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            '''SELECT id, source_account_id, device_id FROM bs_wecom_conversations
+               WHERE tenant_id=%s AND user_id=%s AND id=ANY(%s::bigint[])''',
+            (tenant_id, user_id, conversation_ids))
+        rows = {row['id']: row for row in cursor.fetchall()}
+    if len(rows) != len(conversation_ids):
+        raise ConversationServiceError('CONVERSATION_NOT_FOUND', '会话不存在或无权访问', 404)
+    if any(row['source_account_id'] != account or str(row['device_id']) != str(device_id)
+           for row in rows.values()):
+        raise ConversationServiceError('PLAN_SOURCE_MISMATCH', '所选会话不属于当前企微账号或设备', 409)
+    return list(conversation_ids)
+
+
 def conversations_for_locators(tenant_id, user_id, locators):
     """按稳定标识取已登记会话行（计划来源解析用；缺行不补建）。"""
     decoded = [decode_locator(locator) for locator in locators]
@@ -104,6 +122,34 @@ def conversations_for_locators(tenant_id, user_id, locators):
     for item in rows:
         item['coverage'] = _json(item.get('coverage'))
         item['enroll_reasons'] = _json(item.get('enroll_reasons'))
+    return rows
+
+
+def add_verified_conversations(tenant_id, user_id, targets, *, account, device_id):
+    """Atomically enroll CLI-verified targets without moving an existing device binding."""
+    from . import archive
+    rows = []
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT pg_advisory_xact_lock(hashtext(%s), hashtext(%s))',
+                       (str(tenant_id), str(user_id)))
+        for target in targets:
+            locator = target['session']
+            decoded = decode_locator(locator)
+            if decoded is None or decoded[0] != account:
+                raise ConversationServiceError('IDENTITY_UNCONFIRMED', '会话不属于当前企业微信账号', 409)
+            cursor.execute(
+                '''SELECT device_id FROM bs_wecom_conversations
+                   WHERE tenant_id=%s AND user_id=%s AND source_account_id=%s AND source_conversation_id=%s''',
+                (tenant_id, user_id, *decoded))
+            existing = cursor.fetchone()
+            if existing and existing['device_id'] and str(existing['device_id']) != str(device_id):
+                raise ConversationServiceError('DEVICE_MISMATCH', '会话已绑定其他设备，未更换来源', 409)
+            row, created = archive.register_scope(conn, tenant_id, user_id, locator,
+                name=target.get('name'), kind=target.get('kind'),
+                peer_platform=target.get('peer_platform'), device_id=device_id, reason='manual_add')
+            rows.append({'conversation': row, 'created': created})
+        conn.commit()
     return rows
 
 
@@ -230,29 +276,37 @@ def get_daily_summary(tenant_id, user_id, conversation_id, business_date):
         return _summary_row(cursor.fetchone())
 
 
-def daily_summaries_for_date(tenant_id, user_id, business_date, *, conversation_ids=None):
-    """日报工作台按日期聚合：该用户记录范围会话在指定业务日的报告（含缺失）。"""
+def daily_summaries_for_date(tenant_id, user_id, business_date, *, conversation_ids=None,
+                             after_id=None, limit=50):
+    """Stable ID-keyset page of enrolled conversations, including missing reports."""
+    conditions = ['c.tenant_id=%s', 'c.user_id=%s']
+    values = [business_date, tenant_id, user_id]
+    if after_id is not None:
+        conditions.append('c.id > %s')
+        values.append(after_id)
+    if conversation_ids is not None:
+        conditions.append('c.id=ANY(%s::bigint[])')
+        values.append(conversation_ids)
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            '''SELECT c.id AS conversation_id, c.name, c.timezone, c.daily_plan_task_id,
+            f'''SELECT c.id AS conversation_id, c.name, c.timezone, c.daily_plan_task_id,
                       s.summary, s.coverage, s.snapshot_at, s.generated_at, s.source_runner_id,
                       s.updated_at AS report_updated_at
                FROM bs_wecom_conversations c
                LEFT JOIN bs_wecom_daily_summaries s
                  ON s.conversation_id = c.id AND s.business_date = %s
                 AND s.tenant_id = c.tenant_id AND s.user_id = c.user_id
-               WHERE c.tenant_id=%s AND c.user_id=%s
-               ORDER BY c.updated_at DESC LIMIT 500''',
-            (business_date, tenant_id, user_id))
+               WHERE {' AND '.join(conditions)}
+               ORDER BY c.id LIMIT %s''', (*values, limit + 1))
         rows = [_row(item) for item in cursor.fetchall()]
-    if conversation_ids is not None:
-        wanted = set(conversation_ids)
-        rows = [item for item in rows if item['conversation_id'] in wanted]
+    has_more = len(rows) > limit
+    rows = rows[:limit]
     for item in rows:
         item['summary'] = _json(item.get('summary'))
         item['coverage'] = _json(item.get('coverage'))
-    return rows
+    return {'reports': rows, 'has_more': has_more,
+            'next_cursor': rows[-1]['conversation_id'] if has_more else None}
 
 
 def last_daily_generation(tenant_id, user_id, business_date, *, task_id=None):
@@ -301,6 +355,116 @@ def last_daily_generation(tenant_id, user_id, business_date, *, task_id=None):
     }
 
 
+def _safe_execution_code(value):
+    return value if isinstance(value, str) and re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,127}', value) else None
+
+
+def _daily_execution_row(row):
+    descriptor = _json(row.get('descriptor')) or {}
+    return {'runner_id': row['runner_id'], 'status': row['status'],
+            'accepted_at': row['accepted_at'].isoformat(),
+            'finished_at': row['finished_at'].isoformat() if row.get('finished_at') else None,
+            'business_date': descriptor.get('business_date'),
+            'trigger': descriptor.get('trigger') or ('scheduled' if descriptor.get('task_id') else 'manual'),
+            'task_id': descriptor.get('task_id'),
+            'target_count': len(descriptor.get('conversation_ids') or []),
+            'error_code': _safe_execution_code(row.get('error_code'))}
+
+
+def list_daily_executions(tenant_id, user_id, business_date, *, before=None, limit=30,
+                          task_id=None):
+    """Accepted input is the source of truth, including queue cancellation."""
+    conditions = ["tenant_id=%s", "user_id=%s",
+                  "input->'request_data'->'wecom_conversation_business'->>'kind'='daily'",
+                  "input->'request_data'->'wecom_conversation_business'->>'business_date'=%s"]
+    values = [tenant_id, user_id, str(business_date)]
+    if task_id is not None:
+        conditions.append("input->'request_data'->'wecom_conversation_business'->>'task_id'=%s")
+        values.append(task_id)
+    if before is not None:
+        conditions.append('(accepted_at,runner_id)<(%s,%s)')
+        values.extend(before)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            f'''SELECT runner_id,status,accepted_at,finished_at,
+                       input->'request_data'->'wecom_conversation_business' AS descriptor,
+                       checkpoint->'execution'->'resources'->'wecom_daily_progress' AS progress,
+                       result->>'error_code' AS error_code
+                FROM agent_runners WHERE {' AND '.join(conditions)}
+                ORDER BY accepted_at DESC,runner_id DESC LIMIT %s''',
+            (*values, limit + 1))
+        rows = [_row(item) for item in cursor.fetchall()]
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    return {'executions': [_daily_execution_row(row) for row in rows],
+            'has_more': has_more,
+            'next_cursor': (rows[-1]['accepted_at'].isoformat(), rows[-1]['runner_id'])
+            if has_more else None}
+
+
+def get_daily_execution(tenant_id, user_id, runner_id):
+    """Join accepted scope, checkpoint and current report attribution for one run."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            '''SELECT runner_id,status,accepted_at,finished_at,
+                      input->'request_data'->'wecom_conversation_business' AS descriptor,
+                      checkpoint->'execution'->'resources'->'wecom_daily_progress' AS progress,
+                      result->>'error_code' AS error_code
+               FROM agent_runners WHERE runner_id=%s AND tenant_id=%s AND user_id=%s
+                 AND input->'request_data'->'wecom_conversation_business'->>'kind'='daily' ''',
+            (runner_id, tenant_id, user_id))
+        row = _row(cursor.fetchone())
+        if row is None:
+            return None
+        descriptor = _json(row.get('descriptor')) or {}
+        ids = descriptor.get('conversation_ids') or []
+        cursor.execute(
+            '''SELECT c.id,c.name,s.source_runner_id FROM bs_wecom_conversations c
+               LEFT JOIN bs_wecom_daily_summaries s
+                 ON s.conversation_id=c.id AND s.tenant_id=c.tenant_id
+                AND s.user_id=c.user_id AND s.business_date=%s
+               WHERE c.tenant_id=%s AND c.user_id=%s AND c.id=ANY(%s::bigint[])''',
+            (descriptor.get('business_date'), tenant_id, user_id, ids))
+        current = {item['id']: item for item in cursor.fetchall()}
+    execution = _daily_execution_row(row)
+    progress = _json(row.get('progress')) or {}
+    facts = {item.get('conversation_id'): item for item in progress.get('items') or []
+             if isinstance(item, dict) and type(item.get('conversation_id')) is int}
+    terminal = row['status'] in ('completed', 'failed', 'cancelled')
+    targets = []
+    for conversation_id in ids:
+        fact = facts.get(conversation_id) or {}
+        status = fact.get('status') or 'not_started'
+        phase = fact.get('phase') or 'queued'
+        if status not in ('completed', 'failed', 'superseded'):
+            if terminal and current.get(conversation_id, {}).get('source_runner_id') == runner_id:
+                status = 'completed_reconciled'
+            elif terminal and phase == 'saving':
+                status = 'result_unverified'
+            elif terminal and status == 'running':
+                status = 'interrupted'
+            elif terminal:
+                status = 'not_executed'
+        code = _safe_execution_code(fact.get('error_code'))
+        targets.append({'conversation_id': conversation_id,
+                        'name': current.get(conversation_id, {}).get('name'),
+                        'status': status, 'phase': phase,
+                        'reason_label': ('结果待核对／执行事实保存失败'
+                                         if status == 'result_unverified' else
+                                         '已有更新的日报，本次未覆盖' if status == 'superseded'
+                                         else None),
+                        'started_at': fact.get('started_at'),
+                        'finished_at': fact.get('finished_at'),
+                        'error_code': code,
+                        'diagnostic': '|'.join(str(value or '-') for value in
+                                               (execution['accepted_at'], runner_id,
+                                                conversation_id, code))})
+    execution['targets'] = targets
+    return execution
+
+
 def save_daily_report(tenant_id, user_id, conversation_id, business_date, payload, *,
                       snapshot_at, generated_at, source_runner_id=None):
     """程序按会话+业务日期 UPSERT 日报（设计 §5.2）。
@@ -340,9 +504,10 @@ def save_daily_report(tenant_id, user_id, conversation_id, business_date, payloa
         row = _summary_row(cursor.fetchone())
         conn.commit()
     if row is None:
-        # 新鲜度条件未命中：返回现存行（旧数据晚完成不覆盖新数据）
-        return get_daily_summary(tenant_id, user_id, conversation_id, business_date)
-    return row
+        # 新鲜度条件未命中：仍可读现存报告，但不能当作本次写入成功。
+        return {'report': get_daily_summary(tenant_id, user_id, conversation_id,
+                                            business_date), 'applied': False}
+    return {'report': row, 'applied': True}
 
 
 # ==================== 日报计划（设计 §5.1；执行沿现有定时任务） ====================

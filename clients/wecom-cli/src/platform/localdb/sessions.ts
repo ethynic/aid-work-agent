@@ -330,10 +330,14 @@ export async function readBusinessSessions(args: SessionReadArgs, ctx: OpContext
       const encodeCursor = (cursor: Cursor) => 'wb1.' + Buffer.from(JSON.stringify(cursor)).toString('base64url')
       const failed = data.failed as { target?: { conversation_id: string } | { name: string }; code: ErrorCode; stage?: string }[]
       const scope = targets ? [...new Set([...(previous?.scope ?? []), ...(selected ?? sessions.map(row => row.conversation_id))])] : null
+      // Stable locators are recoverable from scope. Repeating all 50 originals in
+      // cursor.targets/requested can exceed the result budget even with no messages.
+      const stableScope = scope !== null && failed.every(row => row.stage !== 'resolve') &&
+        (previous ? previous.requested === null : args.sessions?.every(value => value.startsWith('ws1.')) === true)
       const cursor = encodeCursor({ account: current.account, generation, single: !!args.single, scope,
-        targets: targets ? [...(selected ?? []).map(conversation_id => ({ conversation_id })),
+        targets: stableScope ? null : targets ? [...(selected ?? []).map(conversation_id => ({ conversation_id })),
           ...failed.filter(row => row.stage === 'resolve' && row.target).map(row => row.target!)] : null,
-        requested: previous?.requested ?? args.sessions ?? null, state: data.state as Record<string, unknown> })
+        requested: stableScope ? null : previous?.requested ?? args.sessions ?? null, state: data.state as Record<string, unknown> })
       const pending = (data.pending_sessions as { conversation_id: string; unknown_messages?: {
         msg_id: number; sender_id: string; recovery_point: { after_id: number; anchor: string } }[] }[]).map(row => ({ ...row,
         session: sessionLocator(current.account, row.conversation_id),
@@ -345,6 +349,14 @@ export async function readBusinessSessions(args: SessionReadArgs, ctx: OpContext
         self_user_id: current.account, source_generation: generation,
         baseline: data.baseline, history_truncated: data.history_truncated,
         sessions, pending_sessions: pending, failed: data.failed, cursor, has_more: data.has_more }
+      if (!args.single && targets) {
+        const details = data.session_details as { conversation_id: string; name: string | null; kind: string; peer_platform: string }[] | undefined
+        result.resolved_targets = (details ?? []).map(row => ({ session: sessionLocator(current.account, row.conversation_id),
+          name: row.name, kind: row.kind, peer_platform: row.peer_platform }))
+        if (Buffer.byteLength(JSON.stringify(result), 'utf8') > SESSION_RESULT_BYTES - 512) {
+          result.resolved_targets = (details ?? []).map(row => ({ session: sessionLocator(current.account, row.conversation_id) }))
+        }
+      }
       if (args.single) {
         delete result.sessions
         const row = sessions[0]

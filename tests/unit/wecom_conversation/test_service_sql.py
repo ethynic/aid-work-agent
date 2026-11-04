@@ -50,16 +50,19 @@ def test_save_daily_report_freshness_prefers_newer_snapshot(tenant_id):
     first = service.save_daily_report(
         tenant_id, user_id, conversation['id'], '2026-11-01',
         {'summary': {'overview': '新快照'}}, snapshot_at=late, generated_at=late)
-    assert first['summary']['overview'] == '新快照'
+    assert first['applied'] is True
+    assert first['report']['summary']['overview'] == '新快照'
     stale = service.save_daily_report(
         tenant_id, user_id, conversation['id'], '2026-11-01',
         {'summary': {'overview': '旧数据晚完成'}}, snapshot_at=early, generated_at=datetime.now(timezone.utc))
-    assert stale['summary']['overview'] == '新快照'  # 旧数据晚完成不覆盖新数据
+    assert stale['applied'] is False
+    assert stale['report']['summary']['overview'] == '新快照'  # 旧数据晚完成不覆盖新数据
     same_snapshot = service.save_daily_report(
         tenant_id, user_id, conversation['id'], '2026-11-01',
         {'summary': {'overview': '同快照重算'}}, snapshot_at=late,
         generated_at=datetime.now(timezone.utc))
-    assert same_snapshot['summary']['overview'] == '同快照重算'  # 同快照按生成时间更新
+    assert same_snapshot['applied'] is True
+    assert same_snapshot['report']['summary']['overview'] == '同快照重算'  # 同快照按生成时间更新
 
 
 def test_daily_summaries_for_date_includes_missing_conversations(tenant_id):
@@ -71,7 +74,7 @@ def test_daily_summaries_for_date_includes_missing_conversations(tenant_id):
         {'summary': {'overview': 'ok'}, 'coverage': {'day_count': 3}},
         snapshot_at=datetime(2026, 11, 3, 1, 0, tzinfo=timezone.utc),
         generated_at=datetime(2026, 11, 3, 1, 5, tzinfo=timezone.utc))
-    rows = service.daily_summaries_for_date(tenant_id, user_id, '2026-11-02')
+    rows = service.daily_summaries_for_date(tenant_id, user_id, '2026-11-02')['reports']
     by_id = {row['conversation_id']: row for row in rows}
     assert by_id[with_plan['id']]['summary']['overview'] == 'ok'
     assert by_id[without['id']]['summary'] is None  # 缺失会话如实展示

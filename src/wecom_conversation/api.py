@@ -7,8 +7,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
+import json
 import uuid
 from datetime import date as date_type
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Query, Request
 
@@ -24,6 +29,134 @@ router = APIRouter(prefix="/api/wecom-conversations", tags=["wecom-conversations
 
 def _service_error(exc: service.ConversationServiceError):
     return _err(exc.status, str(exc), exc.code)
+
+
+async def _directory_device(tenant_id, user_id):
+    from src.local_tools.proxy_tool import WecomSessionDirectoryTool
+    tool = WecomSessionDirectoryTool()
+    device, error = await tool._find_ready_device(tenant_id, user_id)
+    if device is None:
+        if error and '不支持企业微信操作' in error:
+            return tool, None, _err(409, '当前选定设备缺少会话目录能力，请安装最新版 Runtime 和 CLI', 'TOOL_NOT_SUPPORTED')
+        return tool, None, _err(409, error or '当前选定设备不可用', 'DEVICE_UNAVAILABLE')
+    capabilities = (device.get('capabilities_json') or {}).get('capabilities') or []
+    if tool.name not in capabilities:
+        return tool, None, _err(409, '当前选定设备缺少会话目录能力，请安装最新版 Runtime 和 CLI', 'TOOL_NOT_SUPPORTED')
+    return tool, device, None
+
+
+async def _directory_call(tool, tenant_id, user_id, device, arguments):
+    result = await tool._dispatch_and_wait(tenant_id, user_id, None, device, arguments, None)
+    if not result.get('success'):
+        code = result.get('code') or 'DIRECTORY_UNAVAILABLE'
+        message = ('当前设备缺少会话目录能力，请安装最新版 Runtime 和 CLI' if code in
+                   ('TOOL_NOT_SUPPORTED', 'TOOL_NOT_ALLOWED', 'LOCAL_DEVICE_UNSUPPORTED') else
+                   result.get('message') or '本地会话目录读取失败')
+        return None, _err(409, message, code)
+    data = result.get('data')
+    if not isinstance(data, dict) or data.get('schema_version') != 1 or not data.get('self_user_id'):
+        return None, _err(409, '本地会话目录结果不完整，请升级企业微信插件', 'DIRECTORY_SCHEMA_INVALID')
+    return data, None
+
+
+@router.get('/directory')
+async def list_local_directory(request: Request, query: str = Query('', max_length=100),
+                               cursor: str | None = Query(None, max_length=4096),
+                               limit: int = Query(20, ge=1, le=50)):
+    try:
+        tenant_id, user_id = await _current_user_and_tenant(request)
+        tool, device, error = await _directory_device(tenant_id, user_id)
+        if error:
+            return error
+        data, error = await _directory_call(tool, tenant_id, user_id, device,
+                                             {'mode': 'list', 'query': query, 'limit': limit,
+                                              **({'cursor': cursor} if cursor else {})})
+        if error:
+            return error
+        conversations = data.get('conversations')
+        if not isinstance(conversations, list):
+            return _err(409, '本地会话目录结果不完整，请升级企业微信插件', 'DIRECTORY_SCHEMA_INVALID')
+        known = await asyncio.to_thread(service.conversations_for_locators, tenant_id, user_id,
+                                        [row['session'] for row in conversations])
+        by_locator = {row['session_locator']: row for row in known}
+        for row in conversations:
+            existing = by_locator.get(row['session'])
+            row['added'] = existing is not None
+            if existing is not None:
+                row['conversation_id'] = existing['id']
+        return _ok({'device_id': str(device['id']), **data})
+    except SessionTaskError as exc:
+        return _from_service_error(exc)
+
+
+@router.get('/directory/preview')
+async def preview_local_conversation(request: Request, session: str = Query(..., max_length=2048)):
+    try:
+        tenant_id, user_id = await _current_user_and_tenant(request)
+        tool, device, error = await _directory_device(tenant_id, user_id)
+        if error:
+            return error
+        data, error = await _directory_call(tool, tenant_id, user_id, device,
+                                             {'mode': 'preview', 'session': session, 'limit': 3})
+        if error:
+            return error
+        return _ok({'device_id': str(device['id']), **data})
+    except SessionTaskError as exc:
+        return _from_service_error(exc)
+
+
+@router.post('/conversations/add')
+async def add_local_conversations(request: Request):
+    try:
+        tenant_id, user_id = await _current_user_and_tenant(request)
+        body = await request.json()
+        sessions = body.get('sessions') if isinstance(body, dict) else None
+        if not isinstance(sessions, list) or not sessions or any(
+                not isinstance(value, str) or not value.startswith('ws1.') or len(value) > 2048 for value in sessions):
+            return _err(400, '请选择本地目录返回的稳定会话标识', 'VALIDATION_FAILED')
+        expected_device = body.get('expected_device_id')
+        expected_generation = body.get('expected_source_generation')
+        if any(value is not None and (not isinstance(value, str) or not value or len(value) > 256)
+               for value in (expected_device, expected_generation)):
+            return _err(400, '目录来源预期值无效', 'VALIDATION_FAILED')
+        sessions = list(dict.fromkeys(sessions))
+        tool, device, error = await _directory_device(tenant_id, user_id)
+        if error:
+            return error
+        if expected_device is not None and expected_device != str(device['id']):
+            return _err(409, '选定设备已改变，请重新打开添加会话', 'DEVICE_MISMATCH')
+        account = generation = None
+        targets = []
+        for start in range(0, len(sessions), 50):
+            current, ready_error = await tool._find_ready_device(tenant_id, user_id)
+            if current is None or str(current['id']) != str(device['id']):
+                return _err(409, '选定设备已改变，请重新打开添加会话', 'DEVICE_MISMATCH')
+            chunk = sessions[start:start + 50]
+            data, error = await _directory_call(tool, tenant_id, user_id, device,
+                                                 {'mode': 'resolve', 'sessions': chunk})
+            if error:
+                return error
+            if account is None:
+                account, generation = data['self_user_id'], data.get('source_generation')
+                if expected_generation is not None and expected_generation != generation:
+                    return _err(409, '企微本地库已变化，请重新搜索会话', 'IDENTITY_UNCONFIRMED')
+            if account != data['self_user_id'] or generation != data.get('source_generation') or not generation:
+                return _err(409, '企微账号或本地库在添加期间改变，请重试', 'IDENTITY_UNCONFIRMED')
+            resolved = data.get('resolved_targets')
+            if not isinstance(resolved, list) or [row.get('session') for row in resolved if isinstance(row, dict)] != chunk:
+                return _err(409, '本地会话核验结果不完整，未添加任何会话', 'DIRECTORY_SCHEMA_INVALID')
+            targets.extend(resolved)
+        current, ready_error = await tool._find_ready_device(tenant_id, user_id)
+        if current is None or str(current['id']) != str(device['id']):
+            return _err(409, '选定设备已改变，请重新打开添加会话', 'DEVICE_MISMATCH')
+        rows = await asyncio.to_thread(service.add_verified_conversations, tenant_id, user_id,
+                                       targets, account=account, device_id=str(device['id']))
+        return _ok({'conversations': [item['conversation'] for item in rows],
+                    'added_count': sum(item['created'] for item in rows)})
+    except service.ConversationServiceError as exc:
+        return _service_error(exc)
+    except SessionTaskError as exc:
+        return _from_service_error(exc)
 
 
 @router.get("/conversations")
@@ -115,27 +248,13 @@ async def get_message(message_id: int, request: Request):
 
 @router.get("/daily-plans")
 async def list_daily_plans(request: Request):
-    """当前用户的企微日报计划（scheduled_tasks 行 + 会话数）。"""
+    """Compatibility projection for the daily summary page: zero or one plan."""
     try:
         tenant_id, user_id = await _current_user_and_tenant(request)
-
-        def _load():
-            from src.db.database import get_db_connection
-            with get_db_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    '''SELECT t.*, (SELECT count(*) FROM bs_wecom_conversations c
-                                    WHERE c.daily_plan_task_id = t.task_id
-                                      AND c.tenant_id = t.tenant_id AND c.user_id = t.user_id) AS conversation_count
-                       FROM scheduled_tasks t
-                       WHERE t.tenant_id=%s AND t.user_id=%s AND t.status != 'deleted'
-                         AND t.task_prompt LIKE %s
-                       ORDER BY t.created_at DESC LIMIT 100''',
-                    (tenant_id, user_id, plans.DAILY_MARKER + '%'))
-                return [dict(row) for row in cursor.fetchall()]
-
-        rows = await asyncio.to_thread(_load)
-        return _ok({'plans': [_public_plan(row) for row in rows]})
+        row = await asyncio.to_thread(plans.get_daily_plan, tenant_id, user_id)
+        return _ok({'plans': [_public_plan(row)] if row else []})
+    except service.ConversationServiceError as exc:
+        return _service_error(exc)
     except SessionTaskError as exc:
         return _from_service_error(exc)
 
@@ -150,44 +269,119 @@ def _public_plan(row):
 
 @router.post("/daily-plans")
 async def create_daily_plan(request: Request):
-    """建立/扩展日报计划：同来源复用合适计划，一个计划管理多个会话。
+    """Create the user's one page-owned daily summary plan."""
+    return await _write_daily_plan(request, create=True)
 
-    会话以稳定 ws1 标识登记（Agent 引导或用户选择均可）；明确拒绝日报则不
-    安排（前端不调用本接口）。
-    """
+
+@router.put('/daily-plan')
+async def update_daily_plan(request: Request):
+    return await _write_daily_plan(request, create=False)
+
+
+@router.get('/daily-plan')
+async def get_daily_plan(request: Request):
     try:
         tenant_id, user_id = await _current_user_and_tenant(request)
-        body = await request.json()
-        locators = body.get('session_locators')
-        if not isinstance(locators, list) or not locators or len(locators) > 50:
-            return _err(400, 'session_locators 必须为 1–50 个稳定会话标识（ws1.）', 'VALIDATION_FAILED')
-        schedule = body.get('schedule')
-        if not isinstance(schedule, dict) or not schedule.get('schedule_type'):
-            return _err(400, 'schedule 缺少 schedule_type', 'VALIDATION_FAILED')
-        profile_id = body.get('profile_id')
-        if profile_id is not None and (not isinstance(profile_id, str) or not (1 <= len(profile_id) <= 128)):
-            return _err(400, 'profile_id 取值非法', 'VALIDATION_FAILED')
-        result = await asyncio.to_thread(
-            plans.ensure_daily_plan, tenant_id, user_id, locators=locators,
-            schedule=schedule, profile_id=profile_id,
-            timezone_name=body.get('timezone'), device_id=body.get('device_id'),
-            requirements=body.get('requirements') or '',
-            instance_id=body.get('instance_id'),
-            notification_rule_id=body.get('notification_rule_id'))
-        return _ok({'plan': _public_plan(result['plan']), 'created': result['created'],
-                    'conversations': result['conversations']}, status_code=201)
+        row = await asyncio.to_thread(plans.get_daily_plan, tenant_id, user_id)
+        return _ok({'plan': _public_plan(row) if row else None})
     except service.ConversationServiceError as exc:
         return _service_error(exc)
     except SessionTaskError as exc:
         return _from_service_error(exc)
-    except ValueError as exc:
-        return _err(400, str(exc), 'SCHEDULE_INVALID')
+
+
+async def _write_daily_plan(request: Request, *, create: bool):
+    try:
+        tenant_id, user_id = await _current_user_and_tenant(request)
+        body = await request.json()
+        if not isinstance(body, dict) or set(body) - {
+                'target_day', 'scope_mode', 'conversation_ids', 'hour', 'minute',
+                'interval_hours', 'notification_rule_id'}:
+            return _err(400, '计划配置字段无效', 'VALIDATION_FAILED')
+        tool, device, error = await _directory_device(tenant_id, user_id)
+        if error:
+            return error
+        identity, error = await _directory_call(
+            tool, tenant_id, user_id, device, {'mode': 'list', 'limit': 1})
+        if error:
+            return error
+        current, _ = await tool._find_ready_device(tenant_id, user_id)
+        if current is None or str(current['id']) != str(device['id']):
+            return _err(409, '选定设备已改变，请重试', 'DEVICE_MISMATCH')
+        row = await asyncio.to_thread(
+            plans.save_daily_plan, tenant_id, user_id, create=create,
+            account=identity['self_user_id'], device=str(device['id']),
+            target_day=body.get('target_day', 'yesterday'),
+            scope_mode=body.get('scope_mode'),
+            conversation_ids=body.get('conversation_ids') or [],
+            hour=body.get('hour'), minute=body.get('minute'),
+            interval_hours=body.get('interval_hours'),
+            notification_rule_id=body.get('notification_rule_id'),
+            notification_rule_supplied='notification_rule_id' in body)
+        return _ok({'plan': _public_plan(row)}, status_code=201 if create else 200)
+    except service.ConversationServiceError as exc:
+        return _service_error(exc)
+    except SessionTaskError as exc:
+        return _from_service_error(exc)
+
+
+@router.post('/daily-plan/pause')
+async def pause_daily_plan(request: Request):
+    from src.scheduler.db import ScheduledTaskDB
+    try:
+        tenant_id, user_id = await _current_user_and_tenant(request)
+        plan = await asyncio.to_thread(plans.get_daily_plan, tenant_id, user_id)
+        if plan is None:
+            return _err(404, '每日总结计划不存在', 'PLAN_NOT_FOUND')
+        changed = await asyncio.to_thread(ScheduledTaskDB.pause, plan['task_id'],
+                                          tenant_id=tenant_id, user_id=user_id,
+                                          allow_special=True)
+        if not changed:
+            return _err(409, '计划当前状态不可暂停', 'PLAN_STATE_CONFLICT')
+        return _ok({'status': 'paused'})
+    except service.ConversationServiceError as exc:
+        return _service_error(exc)
+    except SessionTaskError as exc:
+        return _from_service_error(exc)
+
+
+@router.post('/daily-plan/resume')
+async def resume_daily_plan(request: Request):
+    from src.scheduler.db import ScheduledTaskDB
+    try:
+        tenant_id, user_id = await _current_user_and_tenant(request)
+        plan = await asyncio.to_thread(plans.get_daily_plan, tenant_id, user_id)
+        if plan is None:
+            return _err(404, '每日总结计划不存在', 'PLAN_NOT_FOUND')
+        config = plans.parse_plan_prompt(plan['task_prompt']) or {}
+        tool, device, error = await _directory_device(tenant_id, user_id)
+        if error:
+            return error
+        identity, error = await _directory_call(
+            tool, tenant_id, user_id, device, {'mode': 'list', 'limit': 1})
+        if error:
+            return error
+        if (config.get('account') != identity['self_user_id']
+                or str(config.get('device')) != str(device['id'])):
+            return _err(409, '计划绑定的企微账号或设备与当前选定来源不符', 'PLAN_SOURCE_MISMATCH')
+        updated = await asyncio.to_thread(ScheduledTaskDB.resume_recompute,
+                                          plan['task_id'], tenant_id=tenant_id,
+                                          user_id=user_id, allow_special=True)
+        if not updated:
+            return _err(409, '计划当前状态不可恢复', 'PLAN_STATE_CONFLICT')
+        return _ok({'plan': _public_plan(updated)})
+    except service.ConversationServiceError as exc:
+        return _service_error(exc)
+    except SessionTaskError as exc:
+        return _from_service_error(exc)
 
 
 @router.get("/daily-reports")
 async def daily_reports(request: Request, business_date: date_type,
-                        conversation_ids: str | None = Query(None, max_length=500),
-                        task_id: str | None = Query(None, max_length=64)):
+                        conversation_ids: str | None = None,
+                        task_id: str | None = Query(None, max_length=64),
+                        cursor: int | None = Query(None, ge=0),
+                        limit: int = Query(50, ge=1, le=200)):
     """日报工作台按日期聚合：记录范围会话在指定业务日的报告（含缺失会话），
     附本次执行逐会话事实（带 task_id 时按该计划范围取最新事实；评审三 P1-4）。"""
     try:
@@ -200,15 +394,56 @@ async def daily_reports(request: Request, business_date: date_type,
                 return _err(400, 'conversation_ids 取值非法', 'VALIDATION_FAILED')
 
         def _load():
-            rows = service.daily_summaries_for_date(tenant_id, user_id, business_date,
-                                                    conversation_ids=wanted)
-            generation = service.last_daily_generation(tenant_id, user_id, business_date,
-                                                       task_id=task_id or None)
-            return rows, generation
+            page = service.daily_summaries_for_date(tenant_id, user_id, business_date,
+                                                    conversation_ids=wanted,
+                                                    after_id=cursor, limit=limit)
+            latest = service.list_daily_executions(tenant_id, user_id, business_date,
+                                                   limit=1, task_id=task_id or None)
+            generation = (service.get_daily_execution(tenant_id, user_id,
+                          latest['executions'][0]['runner_id']) if latest['executions'] else None)
+            return page, generation
 
-        rows, generation = await asyncio.to_thread(_load)
-        return _ok({'business_date': str(business_date), 'reports': rows,
+        page, generation = await asyncio.to_thread(_load)
+        return _ok({'business_date': str(business_date), **page,
                     'last_generation': generation})
+    except SessionTaskError as exc:
+        return _from_service_error(exc)
+
+
+@router.get('/daily-reports/executions')
+async def daily_report_executions(request: Request, business_date: date_type,
+                                  cursor: str | None = Query(None, max_length=512),
+                                  limit: int = Query(30, ge=1, le=100)):
+    try:
+        tenant_id, user_id = await _current_user_and_tenant(request)
+        before = None
+        if cursor:
+            try:
+                value = json.loads(base64.urlsafe_b64decode(cursor + '=' * (-len(cursor) % 4)))
+                before = (datetime.fromisoformat(value['accepted_at']), value['runner_id'])
+                if not isinstance(before[1], str) or not 1 <= len(before[1]) <= 128:
+                    raise ValueError('invalid runner')
+            except (ValueError, KeyError, TypeError, UnicodeDecodeError, binascii.Error):
+                return _err(400, '执行记录游标无效', 'VALIDATION_FAILED')
+        page = await asyncio.to_thread(service.list_daily_executions, tenant_id, user_id,
+                                       business_date, before=before, limit=limit)
+        if page['next_cursor']:
+            accepted_at, runner_id = page['next_cursor']
+            page['next_cursor'] = base64.urlsafe_b64encode(json.dumps({
+                'accepted_at': accepted_at, 'runner_id': runner_id}).encode()).decode().rstrip('=')
+        return _ok({'business_date': str(business_date), **page})
+    except SessionTaskError as exc:
+        return _from_service_error(exc)
+
+
+@router.get('/daily-reports/executions/{runner_id}')
+async def daily_report_execution(request: Request, runner_id: str):
+    try:
+        tenant_id, user_id = await _current_user_and_tenant(request)
+        row = await asyncio.to_thread(service.get_daily_execution, tenant_id, user_id, runner_id)
+        if row is None:
+            return _err(404, '执行记录不存在或无权查看', 'EXECUTION_NOT_FOUND')
+        return _ok({'execution': row})
     except SessionTaskError as exc:
         return _from_service_error(exc)
 
@@ -228,33 +463,41 @@ async def list_daily_summaries(conversation_id: int, request: Request,
 
 @router.post("/daily-reports/generate")
 async def generate_daily_report(request: Request):
-    """手动生成/重算：一个计划或一组会话在指定业务日的日报（沿现有 Runner）。"""
+    """Update selected conversations for Shanghai today in one Runner."""
     try:
         tenant_id, user_id = await _current_user_and_tenant(request)
         body = await request.json()
-        business_date = body.get('business_date')
-        if not isinstance(business_date, str) or len(business_date) != 10:
-            return _err(400, 'business_date 须为 YYYY-MM-DD', 'VALIDATION_FAILED')
-        try:
-            date_type.fromisoformat(business_date)
-        except ValueError:
-            return _err(400, 'business_date 须为 YYYY-MM-DD', 'VALIDATION_FAILED')
+        if not isinstance(body, dict) or set(body) - {'conversation_ids', 'client_request_id'}:
+            return _err(400, '手动更新仅接受会话 ID 和请求 ID', 'VALIDATION_FAILED')
         conversation_ids = body.get('conversation_ids')
-        if conversation_ids is not None and (not isinstance(conversation_ids, list)
-                                             or not conversation_ids or len(conversation_ids) > 50):
-            return _err(400, 'conversation_ids 必须为 1–50 个业务会话ID', 'VALIDATION_FAILED')
+        if (not isinstance(conversation_ids, list) or not conversation_ids
+                or any(type(item) is not int or item <= 0 for item in conversation_ids)):
+            return _err(400, 'conversation_ids 须为非空业务会话 ID 清单', 'VALIDATION_FAILED')
+        conversation_ids = list(dict.fromkeys(conversation_ids))
         client_request_id = body.get('client_request_id')
         if client_request_id is not None and (not isinstance(client_request_id, str)
                                               or not (1 <= len(client_request_id) <= 128)):
             return _err(400, 'client_request_id 须为 1–128 字符', 'VALIDATION_FAILED')
+        tool, device, error = await _directory_device(tenant_id, user_id)
+        if error:
+            return error
+        identity, error = await _directory_call(
+            tool, tenant_id, user_id, device, {'mode': 'list', 'limit': 1})
+        if error:
+            return error
+        current, _ = await tool._find_ready_device(tenant_id, user_id)
+        if current is None or str(current['id']) != str(device['id']):
+            return _err(409, '选定设备已改变，请重试', 'DEVICE_MISMATCH')
+        await asyncio.to_thread(service.report_conversations, tenant_id, user_id,
+                                conversation_ids, account=identity['self_user_id'],
+                                device_id=str(device['id']))
+        business_date = datetime.now(ZoneInfo('Asia/Shanghai')).date().isoformat()
         try:
             submitted = await plans.submit_manual_report(
                 request.headers.get('Authorization', ''), tenant_id, user_id,
                 conversation_ids=conversation_ids,
-                plan_task_id=body.get('plan_task_id'), business_date=business_date,
-                client_request_id=client_request_id or None,
-                timezone_name=body.get('timezone'), device_id=body.get('device_id'),
-                profile_id=body.get('profile_id'))
+                account=identity['self_user_id'], device_id=str(device['id']),
+                business_date=business_date, client_request_id=client_request_id or None)
         except RunnerError as exc:
             return _runner_error_response(exc)
         return _ok({'business_date': business_date, **submitted})

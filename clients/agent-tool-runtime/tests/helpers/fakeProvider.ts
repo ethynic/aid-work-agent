@@ -35,6 +35,7 @@ const TOOL_NAMES = [
   'wecom_message_send',
   'wecom_read_session',
   'wecom_read_sessions',
+  'wecom_session_directory',
   'wecom_unread_list',
 ] as const
 
@@ -59,12 +60,14 @@ export async function startFakeProvider(): Promise<void> {
 
   for (const name of TOOL_NAMES) {
     if (legacyWecom && name === 'wecom_read_sessions') continue
+    if (name === 'wecom_session_directory' && process.env.FAKE_WECOM_DIRECTORY !== '1') continue
     server.registerTool(
       name,
       {
         title: name,
         description: `fake ${name}`,
         inputSchema: {
+          ...(name === 'wecom_session_directory' ? { mode: z.string() } : {}),
           ...(!legacyWecom ? {
             session: z.string().optional(), sessions: z.array(z.string()).optional(),
             cursor: z.string().optional(), limit: z.number().int().optional(),
@@ -81,6 +84,7 @@ export async function startFakeProvider(): Promise<void> {
           permit_token: z.string().optional(),
           clicks_file: z.string().optional(),
         },
+        ...(name === 'wecom_session_directory' ? { annotations: { readOnlyHint: true } } : {}),
       },
       async (args, extra) => {
         if (args.call_log_file) appendFileSync(args.call_log_file, JSON.stringify({ name, session: args.session, target_name: args.target_name }) + '\n')
