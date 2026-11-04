@@ -63,15 +63,23 @@ class ControlToolAdapter:
             if blocked:
                 yield DispatchResult(blocked, success=False)
                 return
-            args.update(session_id=state.identity.session_id, user_id=state.identity.user_id,
-                        workdir=state.resources.get("workspace"))
+            # 仅在 LLM 未提供有效 workdir（缺省或显式 null）时兜底注入执行工作区；
+            # 显式传参不被覆盖（2026-11-04 trace tr_runner_a7392491 事故：无条件
+            # 覆盖 + 工具层 fail-closed 校验叠加，导致带附件工作区的执行中
+            # skill_execute 全拒）
+            if args.get("workdir") is None:
+                args["workdir"] = state.resources.get("workspace")
+            args["session_id"] = state.identity.session_id
+            args["user_id"] = state.identity.user_id
             args["command"] = args.get("command") or None
         elif name == "delegate_to_subagent":
             args.update(session_id=state.identity.session_id, user_id=state.identity.user_id)
             yield make_event("progress", data=f"🚀 正在调用{args.get('subagent_name', '')}子智能体处理任务...")
 
         tool = self.controls.get(name)
-        with tool_execution_scope(self.context.derive(tool_call_id=call.id)):
+        with tool_execution_scope(self.context.derive(
+                tool_call_id=call.id,
+                skill_workdir=state.resources.get("workspace") if name == "skill_execute" else None)):
             result = await tool.execute(**args)
         success = result.get("success", True) if isinstance(result, dict) else True
         if name == "create_plan":

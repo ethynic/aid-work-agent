@@ -37,6 +37,9 @@ class ToolExecutionContext:
     # 由 runtime executor 装配处从 runner 行派生，工具侧只读，不作为权限依据
     profile_id: Optional[str] = None
     instance_id: Optional[str] = None
+    # 服务端注入的 skill_execute 允许工作目录（如 Runner 执行附件工作区），
+    # 仅经 derive() 在可信边界注入，LLM 不可伪造；_validate_workdir 据此放行前缀
+    skill_workdir: Optional[str] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "request_data", freeze_request_mapping(self.request_data))

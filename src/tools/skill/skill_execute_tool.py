@@ -31,17 +31,24 @@ class SkillExecuteInput(BaseModel):
 
 
 _WORKDIR_REJECT_MSG = (
-    "workdir 参数被拒绝：仅允许当前租户存储目录（storage/tenants/{tid}/）"
-    "或 storage/tmp 技能草稿目录。若要引用刚写入的文件，请改用文件的完整绝对路径，"
+    "workdir 参数被拒绝：仅允许当前租户存储目录（storage/tenants/{tid}/）、"
+    "storage/tmp 技能草稿目录，或当前执行的服务端工作区（如系统上下文中给出的"
+    "附件工作区路径）。若要引用刚写入的文件，请改用文件的完整绝对路径，"
     "或省略 workdir 让命令在默认临时目录执行。"
 )
 
 
-def _validate_workdir(workdir: str, tenant_id: Optional[str]) -> bool:
+def _validate_workdir(
+    workdir: str,
+    tenant_id: Optional[str],
+    execution_workspace: Optional[str] = None,
+) -> bool:
     """校验 skill_execute 的 workdir 参数（fail-closed，租户边界）。
 
     允许：当前租户存储目录（storage/tenants/{tid}/，含 legacy uploads 双轨）、
-    storage/tmp 技能草稿目录。无租户上下文时仅允许 storage/tmp。
+    storage/tmp 技能草稿目录、本次执行的服务端注入工作区（execution_workspace，
+    如 Runner 附件工作区——用户上传文件暂存处，是技能命令的正确执行目录）。
+    无租户上下文时仅允许 storage/tmp 与注入工作区。
     """
     from src.core.storage import is_tenant_owned_file
 
@@ -52,6 +59,13 @@ def _validate_workdir(workdir: str, tenant_id: Optional[str]) -> bool:
     tmp_root = os.path.realpath(os.path.join("storage", "tmp"))
     if real == tmp_root or real.startswith(tmp_root + os.sep):
         return True
+    if execution_workspace:
+        try:
+            ws_root = os.path.realpath(execution_workspace)
+        except Exception:
+            ws_root = None
+        if ws_root and (real == ws_root or real.startswith(ws_root + os.sep)):
+            return True
     if tenant_id and is_tenant_owned_file(workdir, tenant_id):
         return True
     return False
@@ -278,9 +292,14 @@ class SkillExecuteTool(BaseTool):
 
         # workdir 校验（fail-closed）：schema 承诺了该参数，必须真实生效——
         # 否则 LLM 以为在指定目录执行（相对文件名解析到一次性临时目录报
-        # FileNotFoundError，白烧迭代，2026-10-30 trace tr_runner_2eb58fcd 实证）
+        # FileNotFoundError，白烧迭代，2026-10-30 trace tr_runner_2eb58fcd 实证）。
+        # execution_workspace 为服务端经 ToolExecutionContext 注入的允许目录
+        # （Runner 附件工作区），LLM 不可伪造
         if workdir:
-            if not _validate_workdir(workdir, resolved_tenant_id):
+            injected_workspace = None
+            if tool_context is not None:
+                injected_workspace = tool_context.skill_workdir
+            if not _validate_workdir(workdir, resolved_tenant_id, injected_workspace):
                 logger.warning(
                     f"[安全防护] skill_execute workdir 参数越界，已拦截: "
                     f"skill={skill_name}, tenant={resolved_tenant_id or '无'}, "

@@ -325,29 +325,7 @@ class TestValidateWorkdir:
 
         assert result["success"] is False
         assert _WORKDIR_REJECT_MSG in result["error"]
-        tool.skill_executor.execute_skill_command.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_execute_passes_valid_workdir_to_executor(self, monkeypatch, tmp_path):
-        from src.tools.skill.skill_execute_tool import SkillExecuteTool
-        import src.tools.context as tools_context
-
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(tools_context, "current_tool_execution_context", lambda: None)
-
-        workdir = tmp_path / "storage" / "tmp" / "session_x"
-        workdir.mkdir(parents=True)
-
-        executor = MagicMock()
-        executor.execute_skill_command = AsyncMock(
-            return_value=ExecutionResult(success=True, stdout="ok", stderr="", exit_code=0, duration=0)
-        )
-        tool = SkillExecuteTool(skill_executor=executor, skill_registry=MagicMock())
-        result = await tool.execute(skill="demo", command="python x.py", workdir=str(workdir))
-
-        assert result["success"] is True
-        kwargs = executor.execute_skill_command.await_args.kwargs
-        assert kwargs["workdir"] == str(workdir)
 
     def test_symlink_escape_rejected(self, storage_layout, tmp_path):
         """symlink 指向租户目录外：realpath 解析后必须拒绝（防双重解析缺口）"""
@@ -400,3 +378,117 @@ class TestValidateWorkdir:
         assert result["success"] is True
         kwargs = executor.execute_skill_command.await_args.kwargs
         assert kwargs["workdir"] is None
+
+
+class TestExecutionWorkspaceAllowlist:
+    """服务端注入的执行工作区（Runner 附件工作区）放行（2026-11-04
+    trace tr_runner_a7392491 事故：注入工作区不在白名单，skill_execute 全拒）。"""
+
+    @pytest.fixture
+    def ws_layout(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        workspace = tmp_path / "storage" / "agent_runner" / "workspaces" / "exec-hash"
+        workspace.mkdir(parents=True)
+        other = tmp_path / "storage" / "tenants" / "other" / "conversation"
+        other.mkdir(parents=True)
+        return SimpleNamespace(workspace=workspace, other=other)
+
+    def test_workspace_itself_allowed_without_tenant(self, ws_layout):
+        from src.tools.skill.skill_execute_tool import _validate_workdir
+
+        assert _validate_workdir(str(ws_layout.workspace), None, str(ws_layout.workspace)) is True
+
+    def test_workspace_subpath_allowed(self, ws_layout):
+        from src.tools.skill.skill_execute_tool import _validate_workdir
+
+        sub = ws_layout.workspace / "skill_ws_abc"
+        assert _validate_workdir(str(sub), None, str(ws_layout.workspace)) is True
+        # traversal 逃逸到工作区外仍然拒绝
+        escape = str(ws_layout.workspace / ".." / ".." / "tenants" / "other")
+        assert _validate_workdir(escape, None, str(ws_layout.workspace)) is False
+
+    def test_injection_does_not_legitimize_outside_paths(self, ws_layout):
+        """注入工作区只放行该前缀，不放宽其他路径的租户规则。"""
+        from src.tools.skill.skill_execute_tool import _validate_workdir
+
+        assert _validate_workdir(str(ws_layout.other), "tenant_abc", str(ws_layout.workspace)) is False
+        assert _validate_workdir("/app/src", "tenant_abc", str(ws_layout.workspace)) is False
+
+    @pytest.mark.asyncio
+    async def test_tool_honors_injected_workspace(self, tmp_path, ws_layout):
+        """工具层经 ToolExecutionContext.skill_workdir 放行 runner 注入工作区。"""
+        from src.tools.skill.skill_execute_tool import SkillExecuteTool
+        from src.tools.context import ToolExecutionContext, tool_execution_scope
+
+        executor = MagicMock()
+        executor.execute_skill_command = AsyncMock(
+            return_value=MagicMock(
+                success=True, stdout="ok", stderr="", exit_code=0,
+                duration=0.1, timed_out=False, error=None,
+            )
+        )
+        registry = MagicMock()
+        registry.get.return_value = MagicMock()
+        tool = SkillExecuteTool(skill_executor=executor, skill_registry=registry)
+
+        ctx = ToolExecutionContext(
+            tenant_id="tenant_abc", user_id="u1", session_id="s1",
+            skill_workdir=str(ws_layout.workspace))
+        with tool_execution_scope(ctx):
+            result = await tool.execute(
+                skill="demo", command="pwd; ls", workdir=str(ws_layout.workspace / "skill_ws_1"))
+
+        assert result.get("success") is True
+        executor.execute_skill_command.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_tool_rejects_outside_even_with_injection(self, monkeypatch, tmp_path, ws_layout):
+        from src.tools.skill.skill_execute_tool import (
+            _WORKDIR_REJECT_MSG,
+            SkillExecuteTool,
+        )
+        from src.tools.context import ToolExecutionContext, tool_execution_scope
+
+        executor = MagicMock()
+        executor.execute_skill_command = AsyncMock(
+            return_value=MagicMock(
+                success=True, stdout="ok", stderr="", exit_code=0,
+                duration=0.1, timed_out=False, error=None,
+            )
+        )
+        registry = MagicMock()
+        registry.get.return_value = MagicMock()
+        tool = SkillExecuteTool(skill_executor=executor, skill_registry=registry)
+
+        ctx = ToolExecutionContext(
+            tenant_id="tenant_abc", user_id="u1", session_id="s1",
+            skill_workdir=str(ws_layout.workspace))
+        with tool_execution_scope(ctx):
+            result = await tool.execute(
+                skill="demo", command="pwd; ls", workdir=str(ws_layout.other))
+
+        assert result["success"] is False
+        assert _WORKDIR_REJECT_MSG in result["error"]
+        executor.execute_skill_command.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_execute_passes_valid_workdir_to_executor(self, monkeypatch, tmp_path):
+        from src.tools.skill.skill_execute_tool import SkillExecuteTool
+        import src.tools.context as tools_context
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(tools_context, "current_tool_execution_context", lambda: None)
+
+        workdir = tmp_path / "storage" / "tmp" / "session_x"
+        workdir.mkdir(parents=True)
+
+        executor = MagicMock()
+        executor.execute_skill_command = AsyncMock(
+            return_value=ExecutionResult(success=True, stdout="ok", stderr="", exit_code=0, duration=0)
+        )
+        tool = SkillExecuteTool(skill_executor=executor, skill_registry=MagicMock())
+        result = await tool.execute(skill="demo", command="python x.py", workdir=str(workdir))
+
+        assert result["success"] is True
+        kwargs = executor.execute_skill_command.await_args.kwargs
+        assert kwargs["workdir"] == str(workdir)
