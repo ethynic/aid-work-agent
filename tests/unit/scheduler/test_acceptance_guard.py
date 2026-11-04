@@ -54,3 +54,38 @@ def test_guard_failures_carry_reason(row, reason):
         lock_for_acceptance_in_tx(cursor, "sched_x1", _OCCURRENCE)
     assert error.value.reason == reason
     assert isinstance(error.value, RuntimeError)
+
+
+# ==================== 时间窗自动完成行的 manual 接单（设计 §15.2.4） ====================
+
+def test_guard_passes_on_window_completed_recurring_row():
+    """因时间窗自动完成的循环任务（completed + 非 once + 设有 ends_at）：
+    manual 触发的接单放行（不受时间窗限制）。"""
+    cursor = MagicMock()
+    cursor.fetchone.return_value = dict(
+        _ROW, status="completed", schedule_type="interval",
+        ends_at="2026-12-01 00:00:00", pending_occurrence_key="manual-uuid")
+    task = lock_for_acceptance_in_tx(cursor, "sched_x1", "manual-uuid")
+    assert task["status"] == "completed"
+
+
+def test_guard_rejects_completed_once_row():
+    """once 的 completed 行为不变：终态不可接单（额度已消费）。"""
+    cursor = MagicMock()
+    cursor.fetchone.return_value = dict(
+        _ROW, status="completed", schedule_type="once",
+        ends_at=None, pending_occurrence_key=_OCCURRENCE)
+    with pytest.raises(ScheduledTaskNotAcceptable) as error:
+        lock_for_acceptance_in_tx(cursor, "sched_x1", _OCCURRENCE)
+    assert error.value.reason == "not_active"
+
+
+def test_guard_rejects_completed_without_window():
+    """无时间窗的 completed 行（非窗口收尾来源）不放行 manual 接单。"""
+    cursor = MagicMock()
+    cursor.fetchone.return_value = dict(
+        _ROW, status="completed", schedule_type="interval",
+        ends_at=None, pending_occurrence_key=_OCCURRENCE)
+    with pytest.raises(ScheduledTaskNotAcceptable) as error:
+        lock_for_acceptance_in_tx(cursor, "sched_x1", _OCCURRENCE)
+    assert error.value.reason == "not_active"

@@ -311,6 +311,7 @@ scheduler:
   enabled: true
   timezone: "Asia/Shanghai"
   max_tasks_per_user: 5
+  min_interval_hours: 1        # interval 最短间隔（整数小时，只能调高；硬下限 1，不接受小数）
   default_max_retries: 3
   execution_timeout: 300
   coalesce_missed: true

@@ -73,12 +73,24 @@
           </div>
         </div>
 
+        <!-- §15 评审 P2：通知直达落地横幅（manual_rejected 带 notice_ref 时展示被拒原因） -->
+        <div v-if="noticeBanner" class="bg-warning-50 border border-warning-200 rounded-lg p-3 flex items-start gap-2" role="alert">
+          <svg class="w-5 h-5 flex-shrink-0 text-warning-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+          <div class="flex-1 min-w-0 text-sm text-warning-700">
+            <p class="font-medium">{{ noticeBanner.title }}</p>
+            <p class="mt-0.5 whitespace-pre-wrap">{{ noticeBanner.body }}</p>
+          </div>
+          <button class="text-warning-600 hover:text-warning-700 text-xs flex-shrink-0" @click="noticeBanner = null">知道了</button>
+        </div>
+
         <!-- 操作区（按状态条件显示，设计 §6） -->
         <div class="bg-white border border-gray-200 rounded-lg p-3 md:p-4 flex flex-wrap items-center gap-2">
           <BaseButton v-if="task.status === 'active'" intent="secondary" size="sm" :disabled="actionBusy" @click="handlePause">暂停</BaseButton>
           <BaseButton v-if="task.status === 'paused'" intent="primary" size="sm" :disabled="actionBusy" @click="handleResume">恢复</BaseButton>
-          <BaseButton v-if="task.status === 'active'" intent="secondary" size="sm" :disabled="actionBusy" @click="handleTrigger">立即执行一次</BaseButton>
-          <BaseButton intent="secondary" size="sm" :disabled="actionBusy" @click="openReschedule">改期</BaseButton>
+          <!-- §15：active 与因时间窗自动完成的循环任务可手动执行（不受时间窗限制，不改自动计划） -->
+          <BaseButton v-if="canManualTrigger" intent="secondary" size="sm" :disabled="actionBusy" @click="handleTrigger">立即执行一次</BaseButton>
+          <!-- §15（评审 P2）：仅 active/paused 可改期——后端对终态 409，按钮同步隐藏避免填表后才失败 -->
+          <BaseButton v-if="task.status === 'active' || task.status === 'paused'" intent="secondary" size="sm" :disabled="actionBusy" @click="openReschedule">改期</BaseButton>
           <BaseButton intent="secondary" size="sm" :disabled="actionBusy" @click="openEdit">编辑</BaseButton>
           <!-- 仅恰好 1 个执行时提供无歧义的顶部取消（评审 P2-12）；多个时行内分别取消 -->
           <BaseButton v-if="activeRunners.length === 1" intent="danger-ghost" size="sm" :disabled="actionBusy" @click="handleCancelRunner(activeRunners[0].runner_id)">取消当前执行</BaseButton>
@@ -116,7 +128,7 @@
             暂无执行记录，任务到期后自动执行；「立即执行一次」可手动触发。
           </div>
           <div v-else class="divide-y divide-gray-100">
-            <div v-for="row in executions" :key="row.runner_id" class="px-4 py-3">
+            <div v-for="row in executions" :id="`runner-${row.runner_id}`" :key="row.runner_id" class="px-4 py-3 scroll-mt-24">
               <!-- 执行行：触发原因 / 时间 / 状态 / 费用 / attempt -->
               <div class="flex items-center gap-2 flex-wrap text-sm">
                 <BaseBadge :intent="triggerIntent(row)" size="sm">{{ triggerLabel(row) }}</BaseBadge>
@@ -299,10 +311,35 @@
           </div>
         </div>
         <div v-if="rescheduleModal.scheduleType === 'interval'">
-          <!-- 分钟精度输入：秒级间隔（如 4500s=75 分钟）不再被小时字段四舍五入静默改期（评审 P2-6） -->
-          <label :for="`${uid}-interval-minutes`" class="block text-sm text-gray-600 mb-1">间隔（分钟）</label>
-          <BaseInput :id="`${uid}-interval-minutes`" v-model="rescheduleModal.intervalMinutes" type="number" min="0.5" step="0.5" size="sm" placeholder="如 75" />
-          <p v-if="intervalMinutesHint" class="mt-1 text-xs text-gray-400">{{ intervalMinutesHint }}</p>
+          <!-- §15：间隔只接受整数小时（不低于系统最短间隔），后端为最终校验 -->
+          <label :for="`${uid}-interval-hours`" class="block text-sm text-gray-600 mb-1">间隔（整数小时）</label>
+          <BaseInput :id="`${uid}-interval-hours`" v-model="rescheduleModal.intervalHours" type="number" min="1" step="1" size="sm" placeholder="如 2" />
+          <p class="mt-1 text-xs text-gray-400">须为不低于 {{ limits?.min_interval_hours ?? 1 }} 的整数小时，不支持分钟或小数。</p>
+          <p v-if="intervalHoursError" class="mt-1 text-xs text-danger-600">{{ intervalHoursError }}</p>
+        </div>
+        <!-- §15 时间窗：仅循环类型可设起止（once 隐藏）；可只填一端 -->
+        <div v-if="rescheduleModal.scheduleType !== 'once'" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label :for="`${uid}-window-start`" class="block text-sm text-gray-600 mb-1">有效期起（可选）</label>
+            <input
+              :id="`${uid}-window-start`"
+              v-model="rescheduleModal.windowStart"
+              type="datetime-local"
+              step="1"
+              class="w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-lg text-sm text-gray-800 focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500"
+            />
+          </div>
+          <div>
+            <label :for="`${uid}-window-end`" class="block text-sm text-gray-600 mb-1">有效期止（可选）</label>
+            <input
+              :id="`${uid}-window-end`"
+              v-model="rescheduleModal.windowEnd"
+              type="datetime-local"
+              step="1"
+              class="w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-lg text-sm text-gray-800 focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500"
+            />
+            <p class="mt-1 text-xs text-gray-400">含起点、不含终点；窗口结束后任务自动完成，仍可「立即执行一次」。</p>
+          </div>
         </div>
         <div v-if="rescheduleModal.scheduleType === 'once'">
           <label :for="`${uid}-run-at`" class="block text-sm text-gray-600 mb-1">执行时间（须为未来时间）</label>
@@ -402,7 +439,7 @@
  * - 任务操作走 /api/scheduled-tasks（pause/resume/trigger/schedule/definition/delete）；
  * - 普通用户无回复/继续控制权限（矩阵），本视图不提供任何输入入口。
  */
-import { computed, inject, onBeforeUnmount, onMounted, reactive, ref, shallowReactive, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowReactive, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import AppHeader from '@/components/AppHeader.vue'
@@ -415,13 +452,15 @@ import ImageGallery from '@/components/ui/ImageGallery.vue'
 import DownloadFileCard from '@/components/DownloadFileCard.vue'
 import { RunnerClient, runnerObservationComplete, runnerTerminal, type RunnerView } from '@/api/runner'
 import {
-  describeSchedule, getScheduledTask, pauseScheduledTask, resumeScheduledTask,
-  deleteScheduledTask, triggerScheduledTask, updateScheduledTaskSchedule,
-  updateScheduledTaskDefinition, notifyScheduledTasksChanged, ScheduledTaskRequestError,
-  SCHEDULED_PAUSE_REASON_LABELS, SCHEDULED_STATUS_LABELS,
-  type ScheduledTask, type ScheduledTaskAttachment, type ScheduledTaskScheduleType,
+  describeSchedule, getScheduledTask, getScheduledTaskLimits, pauseScheduledTask,
+  resumeScheduledTask, deleteScheduledTask, triggerScheduledTask,
+  updateScheduledTaskSchedule, updateScheduledTaskDefinition, notifyScheduledTasksChanged,
+  ScheduledTaskRequestError, SCHEDULED_PAUSE_REASON_LABELS, SCHEDULED_STATUS_LABELS,
+  type ScheduledTask, type ScheduledTaskAttachment, type ScheduledTaskLimits,
+  type ScheduledTaskScheduleType,
 } from '@/api/scheduledTask'
 import { notificationsAPI, type TaskDeliveryEvent, type TaskNotifyRule } from '@/api/notifications'
+import { notificationRequest } from '@/notifications/api'
 import { uploadFile } from '@/api/agent'
 import { getSessionMessages, type ChatMessageRecord } from '@/api/session'
 import { useTenantAuth } from '@/composables/useTenantAuth'
@@ -453,6 +492,15 @@ const error = ref('')
 const actionBusy = ref(false)
 const deliveries = ref<TaskDeliveryEvent[]>([])
 const deliveriesState = ref<'loading' | 'error' | 'loaded'>('loading')
+/** 调度约束阈值（§15：最短间隔/活跃上限即时提示，后端为最终校验） */
+const limits = ref<ScheduledTaskLimits | null>(null)
+
+/** §15 评审 P2：通知直达落地文案（manual_rejected 的 reason 等） */
+const noticeBanner = ref<{ title: string; body: string } | null>(null)
+
+/** §15：active 与因时间窗自动完成的循环任务可手动执行；once 终态不可 */
+const canManualTrigger = computed(() => !!task.value && (task.value.status === 'active'
+  || (task.value.status === 'completed' && task.value.schedule_type !== 'once' && !!task.value.ends_at)))
 
 // ==================== 页面上下文隔离（评审 P1-1） ====================
 
@@ -932,13 +980,15 @@ function deliveryEventLabel(eventType: string): string {
   const labels: Record<string, string> = {
     'task.completed': '任务完成', 'task.failed': '任务失败',
     'task.paused': '任务暂停', 'task.needs_action': '需要处理',
+    'task.manual_rejected': '手动执行未成功',
   }
   return labels[eventType] || ''
 }
 function deliveryEventIntent(eventType: string): 'success' | 'danger' | 'warning' | 'neutral' {
   if (eventType === 'task.completed') return 'success'
   if (eventType === 'task.failed') return 'danger'
-  if (eventType === 'task.paused' || eventType === 'task.needs_action') return 'warning'
+  if (eventType === 'task.paused' || eventType === 'task.needs_action'
+    || eventType === 'task.manual_rejected') return 'warning'
   return 'neutral'
 }
 function deliveryChannelLabel(d: { channel: string; provider: string }): string {
@@ -980,6 +1030,8 @@ function resetPage() {
   // 通知规则选项随页面上下文清空（评审二轮第 7 项：切租户/任务不残留）
   taskRuleOptions.value = []
   rulesLoading.value = false
+  // 阈值随租户上下文重取（§15：上限含租户覆盖值，切租户不残留）
+  limits.value = null
   actionBusy.value = false
   task.value = null
   error.value = ''
@@ -988,6 +1040,12 @@ function resetPage() {
 async function loadAll(c: PageContext) {
   loading.value = true
   try {
+    // §15 阈值并行加载（失败/未完成不阻塞页面，表单回退默认提示值 1）
+    if (!limits.value) {
+      void getScheduledTaskLimits().then(value => {
+        if (isLive(c)) limits.value = value
+      }).catch(() => { /* 后端校验为准 */ })
+    }
     await loadTask(c)
     if (!isLive(c)) return
     if (task.value) {
@@ -998,11 +1056,60 @@ async function loadAll(c: PageContext) {
       } catch { /* 轮询兜底 */ }
       await Promise.all([loadRunners(c), loadDeliveries(c)])
       if (!isLive(c)) return
+      // §15.5 通知直达：定位查询参数指定的执行行（不在首页 20 条时按 ID 单独读取）
+      const focusRunnerId = typeof route.query.runner_id === 'string' ? route.query.runner_id : ''
+      if (focusRunnerId) await focusRunnerFromQuery(c, focusRunnerId)
+      // §15 评审 P2：notice_ref → 展示该通知文案（含手动执行被拒原因）
+      const noticeRef = typeof route.query.notice_ref === 'string' ? route.query.notice_ref : ''
+      if (noticeRef) void loadNoticeBanner(c, noticeRef)
       scheduleDiscovery(c)
     }
   } finally {
     if (isLive(c)) loading.value = false
   }
+}
+
+/** §15 评审 P2：按通知 ref 拉取站内信同款文案（经归属核验接口），校验
+ * 资源确属当前任务后展示横幅；失败静默（不阻塞任务页）。 */
+async function loadNoticeBanner(c: PageContext, noticeRef: string): Promise<void> {
+  try {
+    const result = await notificationRequest<{
+      event_type: string
+      resource?: { task_id?: string | null } | null
+      title?: string
+      body?: string
+    }>(`/messages/${encodeURIComponent(noticeRef)}`, {}, headers())
+    if (!isLive(c) || !result?.title || !result?.body) return
+    if (result.resource?.task_id && result.resource.task_id !== c.taskId) return
+    noticeBanner.value = { title: result.title, body: result.body }
+  } catch { /* 通知已清理或无权读取：不展示横幅 */ }
+}
+
+/** §15.5 通知直达本次执行：按 runner_id 定位执行行。不在已加载列表（首页
+ * 20 条之外）时经 Runner 单条读取接口获取，校验返回的 session_id 与任务
+ * 会话一致后纳入列表、展开并滚动定位；无权限/不存在时如实反馈。 */
+async function focusRunnerFromQuery(c: PageContext, runnerId: string): Promise<void> {
+  if (!runners.has(runnerId)) {
+    try {
+      const view = await runnerClient.get(runnerId, headers())
+      if (!isLive(c)) return
+      if (view.session?.session_id !== task.value?.session_id) {
+        toast.error('指定的执行记录不属于本任务。')
+        return
+      }
+      applyRunnerView(view)
+      maybeObserve(c, view)
+    } catch {
+      if (isLive(c)) toast.error('指定的执行记录不存在或暂不可用。')
+      return
+    }
+  }
+  if (!isLive(c)) return
+  expanded[runnerId] = true
+  const row = runners.get(runnerId)
+  if (row) void ensureSessionMessages(c, row)
+  await nextTick()
+  document.getElementById(`runner-${runnerId}`)?.scrollIntoView({ block: 'center' })
 }
 
 // ==================== 任务操作 ====================
@@ -1034,6 +1141,8 @@ async function handleResume() {
     if (!isLive(c)) return
     // once 过宽限：恢复操作已将任务作废（expired）——如实展示回执（设计 §4.5）
     if (result?.expired) toast.warning(result.message || '该一次性任务已超过执行宽限，恢复操作已将其作废。')
+    // §15：时间窗已结束：恢复操作已收尾（completed），不再自动执行
+    else if (result?.completed) toast.warning(result.message || '该任务的执行时间窗已结束，恢复操作已将其收尾。')
     else toast.success('任务已恢复')
     notifyScheduledTasksChanged()
     await loadTask(c)
@@ -1093,17 +1202,44 @@ const rescheduleModal = reactive({
   scheduleType: 'daily' as ScheduledTaskScheduleType,
   // 时间字段按字符串绑定（BaseSelect 契约），提交时整数化校验
   hour: '9', minute: '0', dayOfWeek: 'mon', day: '1',
-  /** 间隔按分钟输入（秒级精度不丢失，评审 P2-6）；提交换算 interval_hours */
-  intervalMinutes: '60', runAt: '',
+  /** §15：间隔只接受整数小时（数字字符串绑定），提交前即时校验 */
+  intervalHours: '1', runAt: '',
+  /** §15 时间窗（datetime-local 绑定，提交归一为 YYYY-MM-DD HH:MM:SS） */
+  windowStart: '', windowEnd: '',
 })
 
-/** 间隔换算回显：输入分钟 → 实际小时，用户确认前可见 */
-const intervalMinutesHint = computed(() => {
-  const minutes = parseFloat(rescheduleModal.intervalMinutes)
-  if (!Number.isFinite(minutes) || minutes <= 0) return ''
-  const hours = Math.round((minutes / 60) * 10000) / 10000
-  return `当前间隔：${minutes} 分钟（= ${hours} 小时）`
+/** 间隔即时校验（后端为最终校验）；存量非整小时间隔时提示必须改输入，不静默替换 */
+const intervalHoursError = computed(() => {
+  const raw = rescheduleModal.intervalHours.trim()
+  if (!raw) {
+    const seconds = task.value?.interval_seconds
+    if (rescheduleModal.scheduleType === 'interval' && seconds && seconds > 0 && seconds % 3600 !== 0) {
+      return `原间隔 ${Math.round((seconds / 60) * 100) / 100} 分钟不再支持，请输入整数小时`
+    }
+    return ''
+  }
+  const value = Number(raw)
+  const min = limits.value?.min_interval_hours ?? 1
+  if (!Number.isInteger(value) || value < 1) return '间隔必须为不低于 1 的整数小时'
+  if (value < min) return `不能低于当前最短间隔 ${min} 小时`
+  return ''
 })
+
+/** datetime-local（YYYY-MM-DDTHH:mm[:ss]）↔ 后端契约（YYYY-MM-DD HH:MM:SS）。
+ * 浏览器（及 jsdom）可能把值归一化带毫秒尾巴（如 :30.000）——先剥掉再校验。 */
+function toBackendTime(value: string): string | null {
+  const trimmed = (value || '').trim()
+  if (!trimmed) return null
+  const normalized = trimmed.replace('T', ' ').replace(/\.\d{1,3}$/, '')
+  if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(normalized)) return null
+  return normalized.length === 16 ? normalized + ':00' : normalized
+}
+
+/** 回显保留秒数（评审 P2：slice(0,16) 曾把 08:00:30 截成 08:00 改变首点）；
+ * 无秒的值保持分钟精度，提交时补 :00。 */
+function toDatetimeLocal(value?: string | null): string {
+  return (value || '').replace('T', ' ').replace(' ', 'T').slice(0, 19)
+}
 
 function openReschedule() {
   const current = task.value
@@ -1120,15 +1256,17 @@ function openReschedule() {
   const cronDayNames: Record<string, string> = { '0': 'mon', '1': 'tue', '2': 'wed', '3': 'thu', '4': 'fri', '5': 'sat', '6': 'sun' }
   rescheduleModal.dayOfWeek = cronDayNames[parts[4] || ''] || 'mon'
   rescheduleModal.day = parts.length >= 3 ? String(parseInt(parts[2]) || 1) : '1'
-  // 分钟精度预填：4500s → 75 分钟，不再被小时字段舍入（评审 P2-6）
+  // §15：整数小时预填；存量非整小时间隔（如 4500s=75 分钟）不再支持——
+  // 置空并提示必须输入整数小时，避免静默改写为新值（CR P1-3）
   const seconds = current.interval_seconds
-  if (seconds && seconds > 0) {
-    const minutes = seconds / 60
-    rescheduleModal.intervalMinutes = String(Number.isInteger(minutes) ? minutes : Math.round(minutes * 100) / 100)
+  if (seconds && seconds > 0 && seconds % 3600 === 0) {
+    rescheduleModal.intervalHours = String(seconds / 3600)
   } else {
-    rescheduleModal.intervalMinutes = '60'
+    rescheduleModal.intervalHours = ''
   }
   rescheduleModal.runAt = current.run_at || ''
+  rescheduleModal.windowStart = toDatetimeLocal(current.start_at)
+  rescheduleModal.windowEnd = toDatetimeLocal(current.ends_at)
   rescheduleModal.show = true
 }
 
@@ -1142,22 +1280,36 @@ function buildTimeConfig(): Record<string, unknown> {
     if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(normalized)) throw new Error('执行时间格式不正确')
     return { run_at: normalized.length === 16 ? normalized + ':00' : normalized }
   }
+  // §15 时间窗：循环类型可只填一端；起止同填时前端即时校验先后，后端为最终校验
+  const config: Record<string, unknown> = {}
+  const startAt = toBackendTime(rescheduleModal.windowStart)
+  const endsAt = toBackendTime(rescheduleModal.windowEnd)
+  if (rescheduleModal.windowStart.trim() && !startAt) throw new Error('有效期起格式不正确')
+  if (rescheduleModal.windowEnd.trim() && !endsAt) throw new Error('有效期止格式不正确')
+  if (startAt && endsAt && startAt >= endsAt) throw new Error('有效期起必须早于有效期止')
+  if (startAt) config.start_at = startAt
+  if (endsAt) config.ends_at = endsAt
   if (type === 'interval') {
-    const minutes = parseFloat(rescheduleModal.intervalMinutes)
-    if (!Number.isFinite(minutes) || minutes <= 0) throw new Error('间隔分钟数必须为正数')
-    return { interval_hours: minutes / 60 }
+    const raw = rescheduleModal.intervalHours.trim()
+    if (!raw) throw new Error('请输入间隔小时数（须为整数小时）')
+    const hours = Number(raw)
+    const min = limits.value?.min_interval_hours ?? 1
+    if (!Number.isInteger(hours) || hours < 1) throw new Error('间隔必须为整数小时（如 1、2、6）')
+    if (hours < min) throw new Error(`间隔不能低于当前最短间隔 ${min} 小时`)
+    config.interval_hours = hours
+    return config
   }
   const hour = parseInt(rescheduleModal.hour, 10)
   const minute = parseInt(rescheduleModal.minute, 10)
   if (!Number.isInteger(hour) || hour < 0 || hour > 23) throw new Error('小时取值须为 0-23')
   if (!Number.isInteger(minute) || minute < 0 || minute > 59) throw new Error('分钟取值须为 0-59')
-  if (type === 'weekly') return { day_of_week: rescheduleModal.dayOfWeek, hour, minute }
+  if (type === 'weekly') return { ...config, day_of_week: rescheduleModal.dayOfWeek, hour, minute }
   if (type === 'monthly') {
     const day = parseInt(rescheduleModal.day, 10)
     if (!Number.isInteger(day) || day < 1 || day > 31) throw new Error('日期取值须为 1-31')
-    return { day, hour, minute }
+    return { ...config, day, hour, minute }
   }
-  return { hour, minute }
+  return { ...config, hour, minute }
 }
 
 async function handleReschedule() {

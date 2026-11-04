@@ -440,6 +440,8 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     cron_expression TEXT,
     interval_seconds INTEGER,
     run_at TIMESTAMP,                          -- once 专用
+    start_at TIMESTAMP,                        -- 循环任务可选时间窗起点（NULL=无窗口，旧行均为 NULL）
+    ends_at TIMESTAMP,                         -- 循环任务可选时间窗终点（NULL=无限期；窗口判定 start_at <= 触发点 < ends_at）
     session_id TEXT UNIQUE NOT NULL,           -- 任务专属会话（存储容器）
     notification_target_id TEXT,               -- 旧列（存量任务直选渠道目标，发布侧兜底快照，写入口已下线）
     notification_rule_id TEXT,                 -- 可选：notification_rules 引用（scheduled.task 规则，任务级选用）
@@ -5543,7 +5545,7 @@ CREATE TABLE IF NOT EXISTS notification_preferences (
     channel TEXT,
     provider TEXT,
     enabled BOOLEAN DEFAULT FALSE,
-    event_types JSONB DEFAULT '["task.completed","task.failed","task.waiting_input","task.paused","task.needs_action"]',
+    event_types JSONB DEFAULT '["task.completed","task.failed","task.waiting_input","task.paused","task.needs_action","task.manual_rejected"]',
     enabled_since TIMESTAMPTZ,
     updated_at TIMESTAMPTZ DEFAULT clock_timestamp(),
     PRIMARY KEY(scope_key,recipient_user_id,category,channel,provider),

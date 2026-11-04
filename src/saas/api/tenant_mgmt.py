@@ -9,6 +9,7 @@ SaaS 企业信息管理 API
 """
 
 import asyncio
+import json
 import os
 import re
 import tempfile
@@ -172,6 +173,104 @@ async def list_tenants(request: Request, page: int = 1, page_size: int = 20):
     # 补充续费状态计算列：日均使用积分 / 预估可用天数 / 是否待续费
     enrich_tenants_with_renewal(result["tenants"])
     return {"success": True, **result}
+
+
+# ============== 计划任务设置（租户管理员，设计 §15.2.6） ==============
+
+def _tenant_scheduler_override(tenant_id: str):
+    """读取 tenants.settings.scheduler.max_tasks_per_user 覆盖值（正整数或 None）"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT settings FROM tenants WHERE tenant_id = %s", (tenant_id,))
+        row = cursor.fetchone()
+    settings = row["settings"] if row else None
+    if isinstance(settings, str):
+        settings = json.loads(settings or "{}")
+    override = ((settings or {}) if isinstance(settings, dict) else {}).get("scheduler", {}).get("max_tasks_per_user")
+    if isinstance(override, bool) or not isinstance(override, int) or override <= 0:
+        return None
+    return override
+
+
+class TenantSchedulerSettingsRequest(BaseModel):
+    """计划任务设置更新：只允许每人活跃任务上限（正整数保存覆盖值，null 清除）"""
+    max_tasks_per_user: Optional[int] = Field(None, ge=1, le=10000,
+                                              description="本租户每人活跃任务上限（正整数）；传 null 清除覆盖恢复全局默认")
+
+
+def _require_tenant_admin_role(admin: dict):
+    """计划任务设置为租户管理员专用（设计 §15.3）。require_admin 只认证不校验
+    角色（普通 user 也返回通过），此处显式复核——防止普通用户越权改全租户配额。"""
+    if admin.get("role") not in ("tenant_admin", "platform_admin"):
+        raise HTTPException(status_code=403, detail="仅租户管理员可访问计划任务设置")
+
+
+@router.get("/me/scheduler")
+async def get_tenant_scheduler(request: Request):
+    """计划任务设置（设计 §15.2.6）：全局最短间隔（只读，配置文件管理）+
+    本租户每人活跃任务上限（覆盖值可编辑，无覆盖时为配置默认值）"""
+    from src.scheduler.schedule import max_tasks_per_user, min_interval_hours
+
+    admin = require_admin(request)
+    _require_tenant_admin_role(admin)
+    tenant_id = admin.get("tenant_id")
+    if not tenant_id:
+        raise HTTPException(status_code=403, detail="缺少租户上下文")
+    return {"success": True, "data": {
+        "min_interval_hours": min_interval_hours(),
+        "max_tasks_per_user": _tenant_scheduler_override(tenant_id),
+        "effective_max_tasks_per_user": max_tasks_per_user(tenant_id),
+    }}
+
+
+@router.patch("/me/scheduler")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.TENANT)
+async def update_tenant_scheduler(request: Request, body: TenantSchedulerSettingsRequest):
+    """更新本租户每人活跃任务上限（设计 §15.2.6，租户管理员专用）。
+
+    只写 tenants.settings.scheduler.max_tasks_per_user（事务内 JSON 整体更新，
+    保留其他租户设置键）：正整数保存覆盖值、null 清除覆盖恢复配置默认。
+    降低上限不改动已有任务状态，超额时仅拒绝新建/恢复。"""
+    admin = require_admin(request)
+    _require_tenant_admin_role(admin)
+    tenant_id = admin.get("tenant_id")
+    if not tenant_id:
+        raise HTTPException(status_code=403, detail="缺少租户上下文")
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT settings FROM tenants WHERE tenant_id = %s FOR UPDATE",
+                           (tenant_id,))
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="企业不存在")
+            settings = row["settings"]
+            if isinstance(settings, str):
+                settings = json.loads(settings or "{}")
+            settings = settings if isinstance(settings, dict) else {}
+            scheduler_settings = settings.get("scheduler")
+            scheduler_settings = scheduler_settings if isinstance(scheduler_settings, dict) else {}
+            if body.max_tasks_per_user is None:
+                scheduler_settings.pop("max_tasks_per_user", None)
+            else:
+                scheduler_settings["max_tasks_per_user"] = int(body.max_tasks_per_user)
+            if scheduler_settings:
+                settings["scheduler"] = scheduler_settings
+            else:
+                settings.pop("scheduler", None)
+            cursor.execute("UPDATE tenants SET settings = %s WHERE tenant_id = %s",
+                           (json.dumps(settings, ensure_ascii=False), tenant_id))
+            conn.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.opt(exception=True).error(f"更新租户计划任务设置失败 tenant_id={tenant_id} {e}")
+        raise HTTPException(status_code=500, detail="保存失败，请稍后重试")
+    logger.info(f"Tenant scheduler settings updated: tenant_id={tenant_id}, "
+                f"max_tasks_per_user={'(cleared)' if body.max_tasks_per_user is None else body.max_tasks_per_user}")
+    return {"success": True, "data": {
+        "max_tasks_per_user": _tenant_scheduler_override(tenant_id),
+    }}
 
 
 # ============== 平台管理员 - 租户 CRUD ==============

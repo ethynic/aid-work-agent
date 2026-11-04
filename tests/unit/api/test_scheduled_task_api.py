@@ -310,10 +310,53 @@ class TestEditEndpoints:
         assert kwargs["schedule_type"] == "interval"
         assert kwargs["interval_seconds"] == 21600
         assert kwargs["cron_expression"] is None
-        assert before + timedelta(hours=6) <= kwargs["next_due_at"] <= \
-            datetime.now() + timedelta(hours=6)
+        # §15.2.3：不设起点时首个计划点=当前时刻（此后每隔 N 小时）
+        assert before <= kwargs["next_due_at"] <= datetime.now()
+        assert kwargs["start_at"] is None and kwargs["ends_at"] is None
         data = resp.json()["data"]
         assert data["interval_seconds"] == 21600 and data["next_due_at"] is not None
+
+    def test_schedule_update_concurrent_completion_409(self, client, monkeypatch):
+        """评审 P1（并发）：读取时 active、UPDATE 时已被终态钩子置 completed
+        ——UPDATE 状态条件零行命中，重读区分 409（不把竞态当成功返回）。"""
+        monkeypatch.setattr(ScheduledTaskDB, "get_by_id", MagicMock(
+            side_effect=[_task_row(),                       # 前置归属读取（active）
+                         _task_row(status="completed")]))   # 零行更新后的状态重读
+        monkeypatch.setattr(ScheduledTaskDB, "update_schedule",
+                            MagicMock(return_value=False))  # 状态条件未命中
+        resp = client.put("/api/scheduled-tasks/sched_abc123/schedule",
+                          headers=_AUTH,
+                          json={"schedule_type": "daily",
+                                "time_config": {"hour": 9, "minute": 0}})
+        assert resp.status_code == 409
+        assert "不能改期" in resp.json()["detail"]
+
+    def test_schedule_update_zero_row_without_row_404(self, client, monkeypatch):
+        """零行更新且重读不到行（并发删除/越权）：404 不泄露存在性。"""
+        monkeypatch.setattr(ScheduledTaskDB, "get_by_id", MagicMock(
+            side_effect=[_task_row(), None]))
+        monkeypatch.setattr(ScheduledTaskDB, "update_schedule",
+                            MagicMock(return_value=False))
+        resp = client.put("/api/scheduled-tasks/sched_abc123/schedule",
+                          headers=_AUTH,
+                          json={"schedule_type": "daily",
+                                "time_config": {"hour": 9, "minute": 0}})
+        assert resp.status_code == 404
+
+    def test_schedule_update_on_terminal_status_409(self, client, monkeypatch):
+        """终态（completed/expired）拒绝改期：completed 行不进到期扫描也无法
+        恢复，改期会"成功落库但调度永不生效"（CR P2-5）。"""
+        for status in ("completed", "expired"):
+            monkeypatch.setattr(ScheduledTaskDB, "get_by_id",
+                                MagicMock(return_value=_task_row(status=status)))
+            monkeypatch.setattr(ScheduledTaskDB, "update_schedule",
+                                MagicMock(return_value=True))
+            resp = client.put("/api/scheduled-tasks/sched_abc123/schedule",
+                              headers=_AUTH,
+                              json={"schedule_type": "daily",
+                                    "time_config": {"hour": 9, "minute": 0}})
+            assert resp.status_code == 409, status
+            ScheduledTaskDB.update_schedule.assert_not_called()
 
     def test_schedule_update_invalid_config_422(self, client, monkeypatch):
         monkeypatch.setattr(ScheduledTaskDB, "get_by_id",
@@ -468,3 +511,117 @@ class TestSessionDeleteGuard:
         resp = session_client.delete("/api/sessions/sess_normal", headers=_AUTH)
         assert resp.status_code == 200
         session_api.SessionDB.delete.assert_called_once_with("sess_normal")
+
+
+# ==================== 时间窗 / 阈值 / completed 手动执行（设计 §15，2026-11-03） ====================
+
+class TestScheduleConstraints:
+    def test_limits_returns_thresholds_with_tenant_effective_value(self, client, monkeypatch):
+        """GET /limits：回传最短间隔与租户有效任务上限（前端不再硬编码第二套值）"""
+        monkeypatch.setattr(scheduled_task_api, "min_interval_hours", lambda: 2)
+        effective = MagicMock(return_value=8)
+        monkeypatch.setattr(scheduled_task_api, "max_tasks_per_user", effective)
+        resp = client.get("/api/scheduled-tasks/limits", headers=_AUTH)
+        assert resp.status_code == 200
+        assert resp.json()["data"] == {"min_interval_hours": 2, "max_tasks_per_user": 8}
+        # 有效上限按当前租户解析（企业设置覆盖值优先在后端领域函数内完成）
+        effective.assert_called_once_with("tenant_1")
+
+    def test_limits_route_registered_before_dynamic_task_id(self):
+        """路由顺序回归：/limits 必须先于 /{task_id} 注册"""
+        paths = [route.path for route in scheduled_task_api.router.routes]
+        assert paths.index("/api/scheduled-tasks/limits") \
+            < paths.index("/api/scheduled-tasks/{task_id}")
+
+    def test_schedule_update_with_window_passes_bounds(self, client, monkeypatch):
+        """改期带时间窗：start_at/ends_at 与调度定义同事务更新；未来起点时
+        首个计划点=窗内首个匹配点（2027-01-01 09:00，确定于当前日期）"""
+        monkeypatch.setattr(ScheduledTaskDB, "get_by_id",
+                            MagicMock(return_value=_task_row()))
+        monkeypatch.setattr(ScheduledTaskDB, "update_schedule",
+                            MagicMock(return_value=True))
+        resp = client.put("/api/scheduled-tasks/sched_abc123/schedule",
+                          headers=_AUTH,
+                          json={"schedule_type": "daily",
+                                "time_config": {"hour": 9, "minute": 0,
+                                                "start_at": "2027-01-01 00:00:00",
+                                                "ends_at": "2027-02-01 00:00:00"}})
+        assert resp.status_code == 200
+        kwargs = ScheduledTaskDB.update_schedule.call_args.kwargs
+        assert kwargs["start_at"] == datetime(2027, 1, 1)
+        assert kwargs["ends_at"] == datetime(2027, 2, 1)
+        assert kwargs["next_due_at"] == datetime(2027, 1, 1, 9, 0)
+        data = resp.json()["data"]
+        assert data["start_at"] == "2027-01-01T00:00:00"
+
+    def test_schedule_update_window_without_trigger_point_422(self, client, monkeypatch):
+        """窗口内无可执行触发点（窗口已整体过去）：422 明确回执"""
+        monkeypatch.setattr(ScheduledTaskDB, "get_by_id",
+                            MagicMock(return_value=_task_row()))
+        resp = client.put("/api/scheduled-tasks/sched_abc123/schedule",
+                          headers=_AUTH,
+                          json={"schedule_type": "daily",
+                                "time_config": {"hour": 9, "minute": 0,
+                                                "start_at": "2020-11-01 00:00:00",
+                                                "ends_at": "2020-12-01 00:00:00"}})
+        assert resp.status_code == 422
+        assert "时间窗" in resp.json()["detail"]
+
+    def test_schedule_update_fractional_interval_422(self, client, monkeypatch):
+        """0.5 小时（分钟精度）与 1.5 小时改期均被拒绝（§15.2.5）"""
+        monkeypatch.setattr(ScheduledTaskDB, "get_by_id",
+                            MagicMock(return_value=_task_row()))
+        for bad in (0.5, 1.5):
+            resp = client.put("/api/scheduled-tasks/sched_abc123/schedule",
+                              headers=_AUTH,
+                              json={"schedule_type": "interval",
+                                    "time_config": {"interval_hours": bad}})
+            assert resp.status_code == 422, bad
+
+    def test_once_with_window_rejected_422(self, client, monkeypatch):
+        """once 不接受窗口字段（run_at 自带单次语义，宽限规则不变）"""
+        monkeypatch.setattr(ScheduledTaskDB, "get_by_id",
+                            MagicMock(return_value=_task_row()))
+        resp = client.put("/api/scheduled-tasks/sched_abc123/schedule",
+                          headers=_AUTH,
+                          json={"schedule_type": "once",
+                                "time_config": {"run_at": "2026-12-01 09:00:00",
+                                                "ends_at": "2026-12-02 00:00:00"}})
+        assert resp.status_code == 422
+        assert "once" in resp.json()["detail"]
+
+    def test_trigger_allows_window_completed_recurring(self, client, monkeypatch):
+        """§15.2.4：时间窗自动完成的循环任务可「立即执行一次」（不改自动计划点）"""
+        monkeypatch.setattr(ScheduledTaskDB, "get_by_id",
+                            MagicMock(return_value=_task_row(
+                                status="completed", schedule_type="interval",
+                                interval_seconds=7200,
+                                ends_at=datetime(2026, 10, 27))))
+        monkeypatch.setattr(ScheduledTaskDB, "submit_manual",
+                            MagicMock(return_value=_task_row(pending_trigger="manual")))
+        resp = client.post("/api/scheduled-tasks/sched_abc123/trigger", headers=_AUTH)
+        assert resp.status_code == 200
+        ScheduledTaskDB.submit_manual.assert_called_once()
+
+    def test_trigger_rejects_completed_once(self, client, monkeypatch):
+        """once 的 completed 终态不可手动执行（额度已消费）"""
+        monkeypatch.setattr(ScheduledTaskDB, "get_by_id",
+                            MagicMock(return_value=_task_row(
+                                status="completed", schedule_type="once",
+                                run_at=datetime(2026, 10, 20))))
+        monkeypatch.setattr(ScheduledTaskDB, "submit_manual",
+                            MagicMock(return_value=None))
+        resp = client.post("/api/scheduled-tasks/sched_abc123/trigger", headers=_AUTH)
+        assert resp.status_code == 409
+
+    def test_resume_window_finished_returns_completed_receipt(self, client, monkeypatch):
+        """恢复时窗口已结束：任务转 completed，回执说明不再自动执行（§15.2.4）"""
+        monkeypatch.setattr(ScheduledTaskDB, "get_by_id",
+                            MagicMock(return_value=_task_row(status="paused")))
+        monkeypatch.setattr(ScheduledTaskDB, "resume_recompute",
+                            MagicMock(return_value=_task_row(status="completed",
+                                                             next_due_at=None)))
+        resp = client.post("/api/scheduled-tasks/sched_abc123/resume", headers=_AUTH)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["completed"] is True and "时间窗" in body["message"]

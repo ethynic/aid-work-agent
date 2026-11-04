@@ -33,6 +33,10 @@ NON_INTERACTIVE_AUGMENTATION = (
 # token 复用同一 .env 的 AGENT_RUNNER_WEB_SERVICE_TOKEN）。
 SCHEDULER_SERVICE_ID = "scheduler"
 
+# 窗口收尾（completed）任务的中断执行：不可 pause 也不可 resume 重置回合，
+# 恢复尝试耗尽后按小时级低频重试（额度类拒绝可随充值自愈），避免每轮空转。
+COMPLETED_RECOVERY_BACKOFF_SECONDS = 3600
+
 # pause_reason → 用户可见 reason_label（task.paused 通知正文用）。
 PAUSE_REASON_LABELS = {
     "credit_blocked": "积分额度不足",
@@ -187,11 +191,12 @@ class ScheduledTaskDispatcher:
         logger.info("后端日志：定时任务调度循环停止")
 
     async def run_once(self):
-        """单轮：①到期 pending 重提 ②恢复驱动 ③认领新 due（认领成功产生的
-        pending 由本轮③内立即提交，失败走退避进入下轮①）。
+        """单轮：⓪时间窗收尾 ①到期 pending 重提 ②恢复驱动 ③认领新 due
+        （认领成功产生的 pending 由本轮③内立即提交，失败走退避进入下轮①）。
 
         同步 DAL 经 asyncio.to_thread 执行（评审修正：DB/连接池变慢时不得
         阻塞共享后台事件循环的其他消费者）；HTTP 保持异步。"""
+        await self._finalize_window_ended()
         now = datetime.now()
         pending_rows = await asyncio.to_thread(
             self._db.list_pending, now, self.config.pending_batch_size)
@@ -204,6 +209,18 @@ class ScheduledTaskDispatcher:
         await self._resume_interrupted()
         await self._claim_and_hold(now)
 
+    async def _finalize_window_ended(self) -> None:
+        """时间窗收尾扫描（设计 §15.2.4）：窗口已结束且无 pending、无会话
+        非终态 Runner 的 active 任务置 completed——最后一次窗内执行的终态
+        通常由钩子直接收尾，本扫描兜底停机跨窗等边界，不补跑旧触发点。"""
+        try:
+            finished = await asyncio.to_thread(self._db.finalize_window_ended, 50)
+            if finished:
+                logger.info(f"后端日志：时间窗结束任务收尾 completed "
+                            f"count={len(finished)}")
+        except Exception as e:
+            logger.opt(exception=True).error(f"后端日志：时间窗收尾扫描异常 {e}")
+
     # ==================== 提交路径（设计 §4.1） ====================
 
     @staticmethod
@@ -214,7 +231,7 @@ class ScheduledTaskDispatcher:
         '{task_id}:{occurrence_key}'（响应丢失同键重试返回原 runner）；
         request_data.scheduled.trigger 取 pending_trigger（manual 槽同路径）。"""
         snapshot = task_row.get("pending_snapshot") or {}
-        return {
+        body = {
             "source": "scheduled",
             "session": {"kind": "web", "session_id": task_row["session_id"]},
             "client_request_id":
@@ -229,6 +246,15 @@ class ScheduledTaskDispatcher:
                 "trigger": task_row.get("pending_trigger") or "scheduled",
             }},
         }
+        # 企微会话业务计划/补录任务的受信描述注入（普通任务无标记不受影响；
+        # 由服务器构造，普通提交方不可自写 request_data，设计 §5.1）。
+        try:
+            from src.wecom_conversation.plans import augment_submission
+            augment_submission(body)
+        except Exception:
+            logger.opt(exception=True).warning(
+                f"后端日志：企微业务描述注入失败 task_id={task_row.get('task_id')}")
+        return body
 
     async def _submit_pending(self, task_row: Dict[str, Any]) -> None:
         """提交单个 pending 任务并按闭合表映射结果（全部用户可见）。"""
@@ -266,6 +292,15 @@ class ScheduledTaskDispatcher:
                 task_id, key, reason,
                 PAUSE_REASON_LABELS.get(reason, reason),
                 occurrence_notify_key=key):
+            # 窗口收尾（completed）行的 manual pending：不可 pause、保持
+            # completed——清理 pending 并同事务写 task.manual_rejected 通知，
+            # 创建者可见失败（评审 P1；非该类行条件不命中返回 False）
+            if self._db.reject_manual_pending_with_notify(
+                    task_id, key, PAUSE_REASON_LABELS.get(reason, reason)):
+                logger.opt(exception=error).error(
+                    f"后端日志：窗口收尾任务手动执行被确定性拒绝，已通知创建者 "
+                    f"task_id={task_id}, occurrence_key={key}, reason={reason}")
+                return
             # 迟到拒绝（任务已非 active，或 pending 已被替换）：
             # ①不覆盖状态、不发布通知；②按 key 条件清理残留槽——once 定时
             # 执行先完成置 completed 后，尚未受理的 manual pending 会被接单
@@ -334,7 +369,18 @@ class ScheduledTaskDispatcher:
         n_budget = await asyncio.to_thread(
             self._db.count_rejected_resumes, runner_id, attempt,
             row.get("recovery_reset_at"))
-        if n_budget >= self.config.recovery_max_attempts:
+        n_sequence = await asyncio.to_thread(
+            self._db.count_rejected_resumes, runner_id, attempt)
+        # 尝试耗尽仅适用于可暂停的任务；completed（窗口收尾）行不可 pause 也
+        # 不可 resume（recovery_reset_at 无法重置，耗尽判定永不解除）——跳过
+        # 耗尽暂停分支继续真实恢复控制（§15.2.4：manual 中断执行仍需恢复
+        # 驱动；控制被拒时在 _handle_resume_error 按小时级退避，额度类拒绝
+        # 可自愈）。拒绝总量达到阈值后降为**小时级低频真实尝试**（评审 P1：
+        # 只退避不尝试会让拒绝条件消失后也无法自愈），防止逐轮轰炸。
+        capped = (row.get("status") == "completed"
+                  and n_sequence >= self.config.recovery_max_attempts * 3)
+        if n_budget >= self.config.recovery_max_attempts \
+                and row.get("status") != "completed":
             # 尝试耗尽：任务 paused(interrupted) + 通知——pause 与通知同事务，
             # 且带回合保护：事务内复核 runner 仍处于本扫描所见 (runner_id,
             # attempt) 中断态（评审 P1：扫描结果过期时旧决定不得覆盖新状态、
@@ -347,8 +393,6 @@ class ScheduledTaskDispatcher:
                 logger.error(f"后端日志：定时任务恢复尝试耗尽已暂停 task_id={task_id}, "
                              f"runner_id={runner_id}, attempt={attempt}")
             return
-        n_sequence = await asyncio.to_thread(
-            self._db.count_rejected_resumes, runner_id, attempt)
         key = self._resume_control_key(runner_id, attempt, n_sequence)
         body = {"action": "resume", "client_request_id": key,
                 "answer": "", "attachments": []}  # 无补充输入（矩阵未放行）
@@ -357,7 +401,16 @@ class ScheduledTaskDispatcher:
                 "POST", f"/v1/runners/{runner_id}/controls",
                 authorization=None, body=body)
         except Exception as error:
+            row["_capped"] = capped  # transient 退避分级见 _handle_resume_error
             await self._handle_resume_error(row, error)
+            return
+        if capped:
+            # 阈值行受理后小时级限频：到期继续真实尝试，拒绝条件消失（如
+            # 充值）即可自愈；期间用户仍可在任务视图取消该执行。
+            await asyncio.to_thread(
+                self._db.defer_recovery, task_id, COMPLETED_RECOVERY_BACKOFF_SECONDS)
+            logger.info(f"后端日志：completed 任务恢复控制低频重试已受理 "
+                        f"task_id={task_id}, runner_id={runner_id}, attempt={attempt}")
             return
         # 受理成功（202，含幂等命中既有控制）：等待 worker 领取消费，本回合结束。
         logger.info(f"后端日志：定时任务恢复控制已受理 task_id={task_id}, "
@@ -370,9 +423,12 @@ class ScheduledTaskDispatcher:
         if _is_transient(error) or code == "RUNNER_RESUME_PENDING":
             # 不消耗次数：网络未知同键下轮重试（带退避）；RESUME_PENDING 是
             # 已有受理待消费的控制（等待 worker 领取），不是失败。退避为
-            # 任务级 recovery_retry_at（列表过滤即跳过，不动 runner 状态）。
-            await asyncio.to_thread(self._db.defer_recovery,
-                                    task_id, self.config.submit_retry_seconds)
+            # 任务级 recovery_retry_at（列表过滤即跳过，不动 runner 状态）；
+            # capped（completed 行拒绝总量达阈值）降为小时级，与真实尝试
+            # 频率一致（评审 P1）。
+            backoff = (COMPLETED_RECOVERY_BACKOFF_SECONDS if row.get("_capped")
+                       else self.config.submit_retry_seconds)
+            await asyncio.to_thread(self._db.defer_recovery, task_id, backoff)
             return
         if code in ("RUNNER_NOT_PARKED", "RUNNER_NOT_FOUND", "CONTROL_EXECUTION_CLOSED"):
             # runner 已离开 interrupted（自行恢复/终态/被取消）或已不存在：
@@ -382,7 +438,8 @@ class ScheduledTaskDispatcher:
             return
         # 受理前确定性拒绝（控制记录创建之前校验，无 rejected 落账，不等待、
         # 不无限重复提交）：402/403 类按原因暂停，其余 paused(interrupted)。
-        # 回合保护 + 通知同事务（同耗尽路径）。
+        # 回合保护 + 通知同事务（同耗尽路径）。completed 的窗口收尾任务不
+        # 改回 paused（设计 §15.2.4），退避后由恢复驱动继续尝试。
         reason = _PAUSE_REASON_BY_CODE.get(code, "interrupted")
         paused = await asyncio.to_thread(
             self._db.pause_interrupted_with_notify,
@@ -391,5 +448,11 @@ class ScheduledTaskDispatcher:
             pause_reason=reason)
         if paused:
             logger.opt(exception=error).error(
-                f"后端日志：定时任务恢复控制被确定性拒绝 task_id={task_id}, "
+                f"后端日志：恢复控制被确定性拒绝 task_id={task_id}, "
                 f"runner_id={runner_id}, reason={reason}")
+        elif row.get("status") == "completed":
+            await asyncio.to_thread(
+                self._db.defer_recovery, task_id, COMPLETED_RECOVERY_BACKOFF_SECONDS)
+            logger.opt(exception=error).error(
+                f"后端日志：completed 任务恢复控制被确定性拒绝，小时级退避后重试 "
+                f"task_id={task_id}, runner_id={runner_id}, reason={reason}")

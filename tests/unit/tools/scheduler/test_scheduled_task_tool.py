@@ -62,21 +62,22 @@ _CREATE_KWARGS = dict(
 class TestBuildScheduleFields:
     def test_daily_generates_cron_and_strictly_future_due(self):
         now = datetime(2026, 10, 28, 10, 0, 0)
-        cron, interval, run_at, due = build_schedule_fields(
+        cron, interval, run_at, due, start_at, ends_at = build_schedule_fields(
             "daily", {"hour": 9, "minute": 30}, now=now)
         assert cron == "30 9 * * *"
         assert interval is None and run_at is None
+        assert start_at is None and ends_at is None
         # 10:00 的下一次 09:30 在次日，且严格大于 now（+1µs 精确边界语义）
         assert due == datetime(2026, 10, 29, 9, 30, 0)
 
     def test_daily_at_exact_now_advances_strictly(self):
         """now 恰等于触发时刻（09:30:00）时推进到次日（不得返回等于 now 的时间）"""
         now = datetime(2026, 10, 28, 9, 30, 0)
-        _, _, _, due = build_schedule_fields("daily", {"hour": 9, "minute": 30}, now=now)
+        _, _, _, due, _, _ = build_schedule_fields("daily", {"hour": 9, "minute": 30}, now=now)
         assert due == datetime(2026, 10, 29, 9, 30, 0)
 
     def test_weekly_validates_day_of_week(self):
-        _, _, _, due = build_schedule_fields(
+        _, _, _, due, _, _ = build_schedule_fields(
             "weekly", {"day_of_week": "FRI", "hour": 18, "minute": 0},
             now=datetime(2026, 10, 28, 10, 0, 0))
         assert due == datetime(2026, 10, 30, 18, 0, 0)
@@ -106,44 +107,46 @@ class TestBuildScheduleFields:
 
     def test_string_numeric_fields_coerced(self):
         """数值字段 str→int 容错（LLM 常见输出形态）"""
-        cron, interval, _, _ = build_schedule_fields(
+        cron, interval, _, _, _, _ = build_schedule_fields(
             "daily", {"hour": "9", "minute": "30"})
         assert cron == "30 9 * * *"
-        _, interval, _, due = build_schedule_fields(
+        # §15：整数字符串小时可用；首个计划点=当前时刻（此后每隔 N 小时）
+        _, interval, _, due, _, _ = build_schedule_fields(
             "interval", {"interval_hours": "2"}, now=datetime(2026, 10, 28, 10, 0, 0))
         assert interval == 7200
-        assert due == datetime(2026, 10, 28, 12, 0, 0)
+        assert due == datetime(2026, 10, 28, 10, 0, 0)
 
     def test_interval_missing_or_nonpositive_rejected(self):
         with pytest.raises(ScheduleConfigError, match="先向用户确认具体时间"):
             build_schedule_fields("interval", {})
-        with pytest.raises(ScheduleConfigError, match="正数"):
+        with pytest.raises(ScheduleConfigError, match="整数小时"):
             build_schedule_fields("interval", {"interval_hours": 0})
 
-    def test_interval_fractional_hours_honored(self):
-        """interval 小数小时不截断：1.5 小时=5400s（str 形态同规则），非法值拒绝"""
+    def test_interval_fractional_hours_rejected(self):
+        """§15.2.5：interval 只接受整数小时——0.5/1.5（含 str 形态）拒绝，
+        避免 1800s/5400s 绕过最短间隔；非数字串拒绝。"""
         now = datetime(2026, 10, 28, 10, 0, 0)
-        _, interval, _, due = build_schedule_fields(
-            "interval", {"interval_hours": 1.5}, now=now)
-        assert interval == 5400
-        assert due == now + timedelta(seconds=5400)
-        _, interval, _, _ = build_schedule_fields(
-            "interval", {"interval_hours": "1.5"}, now=now)
-        assert interval == 5400
-        with pytest.raises(ScheduleConfigError, match="数字"):
+        with pytest.raises(ScheduleConfigError, match="整数小时"):
+            build_schedule_fields("interval", {"interval_hours": 1.5}, now=now)
+        with pytest.raises(ScheduleConfigError, match="整数小时"):
+            build_schedule_fields("interval", {"interval_hours": "1.5"}, now=now)
+        with pytest.raises(ScheduleConfigError, match="整数小时"):
             build_schedule_fields("interval", {"interval_hours": "abc"}, now=now)
 
-    def test_interval_due_is_now_plus_seconds(self):
+    def test_interval_first_due_is_now(self):
+        """§15.2.3：不设起点时创建即生效——当前时刻为首个计划点（此后每隔
+        N 小时），不再顺延一个完整间隔。"""
         now = datetime(2026, 10, 28, 10, 0, 0)
-        _, interval, run_at, due = build_schedule_fields(
+        _, interval, run_at, due, start_at, ends_at = build_schedule_fields(
             "interval", {"interval_hours": 1}, now=now)
         assert interval == 3600 and run_at is None
-        assert due == now + timedelta(hours=1)
+        assert due == now
+        assert start_at is None and ends_at is None
 
     def test_once_future_normalized(self):
         """once 未来时间：归一化 "%Y-%m-%d %H:%M:%S"，next_due_at = run_at"""
         now = datetime(2026, 10, 28, 10, 0, 0)
-        cron, interval, run_at, due = build_schedule_fields(
+        cron, interval, run_at, due, _, _ = build_schedule_fields(
             "once", {"run_at": "2026-12-01 09:30:00"}, now=now)
         assert cron is None and interval is None
         assert run_at == "2026-12-01 09:30:00"
@@ -172,31 +175,35 @@ class TestBuildScheduleFields:
 
 class TestComputeResumeDue:
     def test_interval_reanchors_at_now(self):
+        """§15.2.3：恢复时刻为首个新计划点（恰在恢复点重启周期，不补跑）"""
         task = {"schedule_type": "interval", "interval_seconds": 3600,
                 "next_due_at": datetime(2026, 10, 1, 0, 0, 0)}
         now = datetime(2026, 10, 28, 10, 0, 0)
-        due, will_expire = compute_resume_due(task, now=now)
-        assert due == now + timedelta(hours=1)
-        assert will_expire is False
+        due, will_expire, window_finished = compute_resume_due(task, now=now)
+        assert due == now
+        assert will_expire is False and window_finished is False
 
     def test_cron_takes_next_after_now(self):
         task = {"schedule_type": "daily", "cron_expression": "0 9 * * *",
                 "next_due_at": datetime(2026, 10, 1, 9, 0, 0)}
-        due, will_expire = compute_resume_due(task, now=datetime(2026, 10, 28, 10, 0, 0))
+        due, will_expire, window_finished = compute_resume_due(
+            task, now=datetime(2026, 10, 28, 10, 0, 0))
         assert due == datetime(2026, 10, 29, 9, 0, 0)
-        assert will_expire is False
+        assert will_expire is False and window_finished is False
 
     def test_once_future_keeps_run_at(self):
         task = {"schedule_type": "once", "run_at": datetime(2026, 12, 1, 9, 0, 0)}
-        due, will_expire = compute_resume_due(task, now=datetime(2026, 10, 28, 10, 0, 0))
+        due, will_expire, window_finished = compute_resume_due(
+            task, now=datetime(2026, 10, 28, 10, 0, 0))
         assert due == datetime(2026, 12, 1, 9, 0, 0)
-        assert will_expire is False
+        assert will_expire is False and window_finished is False
 
     def test_once_past_grace_flags_expiry(self):
         """once run_at 超过 10 分钟宽限：恢复后将被认领侧作废（提示用户）"""
         task = {"schedule_type": "once", "run_at": datetime(2026, 10, 28, 8, 0, 0)}
-        due, will_expire = compute_resume_due(task, now=datetime(2026, 10, 28, 10, 0, 0))
-        assert will_expire is True
+        due, will_expire, window_finished = compute_resume_due(
+            task, now=datetime(2026, 10, 28, 10, 0, 0))
+        assert will_expire is True and window_finished is False
 
     def test_interval_invalid_schedule_rejected(self):
         task = {"schedule_type": "interval", "interval_seconds": 0,
@@ -223,7 +230,8 @@ class TestCreateScheduledTaskTool:
         tool = CreateScheduledTaskTool()
         with patch.object(ScheduledTaskDB, "count_by_user", return_value=0), \
              patch("src.tools.scheduler.scheduled_task_tool.build_schedule_fields",
-                  return_value=("0 9 * * *", None, None, datetime(2026, 10, 29, 9, 0))),              patch.object(ScheduledTaskDB, "create",
+                  return_value=("0 9 * * *", None, None, datetime(2026, 10, 29, 9, 0),
+                                None, None)),              patch.object(ScheduledTaskDB, "create",
                           return_value=_created_row(next_due_at=datetime(2026, 10, 29, 9, 0))) as mock_create:
             with _scope():
                 result = await tool.execute(**_CREATE_KWARGS)
@@ -236,6 +244,7 @@ class TestCreateScheduledTaskTool:
         assert kwargs["interval_seconds"] is None
         assert kwargs["run_at"] is None
         assert kwargs["next_due_at"] == datetime(2026, 10, 29, 9, 0)
+        assert kwargs["start_at"] is None and kwargs["ends_at"] is None  # §15 时间窗透传
         # 默认主智能体：profile_id='main'，不落 subagent_id
         assert kwargs["profile_id"] == "main"
         assert kwargs["subagent_id"] is None
@@ -298,6 +307,17 @@ class TestCreateScheduledTaskTool:
         assert "上限" in result["error"]
         # 配额走 create 事务内（max_active 传入），不再前置独立计数
         assert mock_create.call_args.kwargs.get("max_active") == 5
+
+    async def test_tenant_effective_max_passed_to_create(self):
+        """§15.2.6：创建使用本租户有效上限（企业设置覆盖值优先于配置默认）"""
+        tool = CreateScheduledTaskTool()
+        with patch("src.tools.scheduler.scheduled_task_tool._max_tasks_per_user",
+                   return_value=8) as mock_max,              patch.object(ScheduledTaskDB, "create",
+                          return_value=_created_row()) as mock_create:
+            with _scope():
+                await tool.execute(**_CREATE_KWARGS)
+        mock_max.assert_called_once_with("tenant_1")
+        assert mock_create.call_args.kwargs.get("max_active") == 8
 
     async def test_missing_time_config_rejected_with_ask_user_hint(self):
         tool = CreateScheduledTaskTool()
@@ -449,6 +469,19 @@ class TestManageScheduledTaskTool:
         assert result["success"] is True
         assert "next_due_at" not in mock_rr.call_args.kwargs
         assert mock_rr.call_args.kwargs.get("max_active") == 5
+
+    async def test_resume_window_finished_completes(self):
+        """§15.2.4：恢复时时间窗已结束 → completed 回执（不补跑，仍可手动执行）"""
+        tool = ManageScheduledTaskTool()
+        task = _created_row(status="paused", schedule_type="interval",
+                            interval_seconds=3600, ends_at=datetime(2026, 10, 27))
+        with patch.object(ScheduledTaskDB, "get_by_id", return_value=task),              patch.object(ScheduledTaskDB, "resume_recompute",
+                          return_value=dict(task, status="completed",
+                                            pause_reason=None, next_due_at=None)):
+            with _scope():
+                result = await tool.execute(action="resume", task_id="sched_1")
+        assert result["success"] is True and result.get("completed") is True
+        assert "时间窗" in result["message"]
 
     async def test_resume_once_past_grace_expires_unified(self):
         """once 过宽限：统一转换为 expired（与 API 同一路径，回执明确）。"""

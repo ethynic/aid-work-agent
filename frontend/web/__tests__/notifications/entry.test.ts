@@ -81,6 +81,15 @@ describe('notification click entry', () => {
     expect(router.currentRoute.value.path).toBe('/t/tenant-1/tasks/sched_pause1')
     expect(findTask).not.toHaveBeenCalled()
   })
+  it('routes manual_rejected to the task view with notice_ref for the reason banner', async () => {
+    localStorage.setItem('saas_token_tenant-1', 'fake-test-token')
+    request.mockResolvedValue({ event_type: 'task.manual_rejected',
+      resource: { tenant_id: 'tenant-1', task_id: 'sched-1' } })
+    const { router } = await entry('/notification?ref=ref-mr&tenant=tenant-1')
+    expect(router.currentRoute.value.path).toBe('/t/tenant-1/tasks/sched-1')
+    expect(router.currentRoute.value.query).toEqual({ notice_ref: 'ref-mr' })
+  })
+
   it('routes runner-result scheduled notifications by the resource scheduled_task_id marker', async () => {
     // runner_result/runner_waiting 资源由资源解析透出 scheduled_task_id（二轮评审第 8 项）：
     // 直接路由任务视图，不再调任务列表匹配

@@ -68,6 +68,21 @@ class TestParameters(StrictDTO):
     event_kind: Literal['test']
 
 
+class ManualRejectedParameters(StrictDTO):
+    """窗口收尾（completed）任务「立即执行一次」提交被确定性拒绝的通知参数
+    （评审 P1：保持 completed 状态，但创建者必须能看到失败）。
+
+    与 PausedParameters 同构（task_id/reason_label），另带 session_title/
+    event_kind 供 Web Push 模板（与 NeedsActionParameters 同模式）。"""
+    session_title: str = Field(min_length=1, max_length=80)
+    event_kind: Literal['manual_rejected']
+    task_name: str = Field(min_length=1, max_length=80)
+    task_id: str = Field(min_length=1, max_length=64)
+    reason_label: str = Field(min_length=1, max_length=120)
+    notify_rule_id: str | None = Field(default=None, min_length=1, max_length=128)
+    notify_target_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+
 class CreditLowParameters(StrictDTO):
     tenant_name: str = Field(min_length=1, max_length=128)
     daily_avg_credits: float = Field(ge=0, le=1e12)
@@ -183,6 +198,7 @@ EVENTS.register('task.failed',EventDefinition('runner_terminal',TerminalParamete
 EVENTS.register('task.waiting_input',EventDefinition('runner_waiting_input',WaitingInputParameters,'runner_waiting'))
 EVENTS.register('task.paused',EventDefinition('task_paused',PausedParameters,'scheduled_task'))
 EVENTS.register('task.needs_action',EventDefinition('task_needs_action',NeedsActionParameters,'runner_waiting'))
+EVENTS.register('task.manual_rejected',EventDefinition('task_manual_rejected',ManualRejectedParameters,'scheduled_task'))
 EVENTS.register('notification.test',EventDefinition('notification_test',TestParameters,'notification_test'))
 EVENTS.register('billing.credit_low',EventDefinition('billing_credit_low',CreditLowParameters,'tenant_credit'))
 EVENTS.register('billing.tenant_expiry',EventDefinition('billing_tenant_expiry',TenantExpiryParameters,'tenant_profile'))
@@ -204,13 +220,20 @@ def _non_work_time_note(now=None):
 
 def render_inbox_text(event_type, parameters):
     """站内信标题与正文按事件模板渲染；仅做纯文本插值，参数已过严格模型。"""
-    if event_type == 'task.completed':
-        # 任务名称优先（定时任务）；chat 来源或存量参数无 task_name，退回会话标题
+    if event_type in ('task.completed', 'task.failed'):
+        # 终态文案按来源区分（评审 P2）：scheduled 生产者必带 task_id，
+        # 普通聊天终态不带——不把聊天完成显示成"定时任务"（取代远程 d30901b4
+        # 的简化分支：chat 终态退回会话标题，scheduled 终态用任务名）。
+        outcome = '已完成' if parameters['event_kind'] == 'completed' else '执行失败'
+        if parameters.get('task_id'):
+            body = f'定时任务「{parameters.get("task_name") or parameters["session_title"]}」{outcome}。'
+            return '定时任务执行结果', body
         name = parameters.get('task_name') or parameters['session_title']
-        return '任务执行完成', f'「{name}」已执行完成，请查看执行结果。'
-    if event_type == 'task.failed':
-        name = parameters.get('task_name') or parameters['session_title']
-        return '任务执行失败', f'「{name}」执行失败，请查看执行详情。'
+        return '任务执行结果', f'「{name}」中的任务{outcome}。'
+    if event_type == 'task.manual_rejected':
+        return '手动执行未成功', (
+            f'「{parameters["task_name"]}」的「立即执行一次」未提交成功：'
+            f'{parameters["reason_label"]}。任务保持已完成状态，可在任务视图重试。')
     if event_type == 'task.waiting_input':
         return '等待你的回答', (
             f'「{parameters["session_title"]}」中的提问「{parameters["question_title"]}」'
@@ -280,6 +303,51 @@ def render_message_text(event_type, parameters):
     if event_type == 'notification.test':
         return '通知渠道测试', '这是一条测试通知，收到即表示外发渠道配置有效。'
     return render_inbox_text(event_type, parameters)
+
+
+def scheduled_result_link(message):
+    """scheduled 终态通知的「查看本次执行结果」绝对链接（设计 §15.5）。
+
+    - 仅 scheduled 终态（task.completed/failed 且 parameters 带 task_id——
+      scheduled 生产者必带，普通聊天终态不带）生成链接；聊天终态返回 None
+      不误导到任务页；
+    - 链接是登录后定位符（/notification?ref=... 复用既有归属核验入口），
+      不授予访问权；未配置 app.public_base_url 时不拼假地址，记录配置缺口
+      并按原文本投递。
+    """
+    if message.get('event_type') not in ('task.completed', 'task.failed'):
+        return None
+    parameters = message.get('parameters')
+    if not isinstance(parameters, dict) or not parameters.get('task_id'):
+        return None
+    from urllib.parse import quote
+    from src.config.settings import settings
+    base = (getattr(settings.app, 'public_base_url', '') or '').strip().rstrip('/')
+    if not base:
+        _log_public_base_url_gap()
+        return None
+    ref = str(message.get('notification_ref') or '')
+    if not ref:
+        return None
+    path = f'/notification?ref={quote(ref, safe="")}'
+    tenant_id = message.get('tenant_id')
+    if tenant_id:
+        path += f'&tenant={quote(str(tenant_id), safe="")}'
+    return base + path
+
+
+# public_base_url 配置缺口只告警一次（每次外发渲染都打日志会刷屏；nit 修正）
+_public_base_url_gap_logged = False
+
+
+def _log_public_base_url_gap():
+    global _public_base_url_gap_logged
+    if _public_base_url_gap_logged:
+        return
+    _public_base_url_gap_logged = True
+    from loguru import logger
+    logger.warning('后端日志：app.public_base_url 未配置，完成/失败通知外发不带'
+                   '「查看本次执行结果」链接（通知本身仍投递；配置后新事件生效）')
 
 
 def publish_in_tx(cursor, *, subject, producer, event_type, event_key, resource_ref, parameters,

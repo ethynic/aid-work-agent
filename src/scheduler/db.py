@@ -52,15 +52,22 @@ def lock_for_acceptance_in_tx(cursor, task_id: str, occurrence_key: str) -> Dict
       接单先提交则暂停清 pending 属"已接单后清理"，语义正确；
     - 校验 status='active' AND pending_occurrence_key == occurrence_key，
       失配抛 ScheduledTaskNotAcceptable（携带原因）；
+    - 例外（设计 §15.2.4）：因时间窗自动完成的循环任务
+      （status='completed' 且非 once 且设有 ends_at）允许 manual 触发接单；
+      scheduled 自动接单仍要求 active，once 终态不变；
     - 必须先于 agent_runners 的 INSERT 执行（行锁与插入同事务）。
     """
-    cursor.execute("""SELECT task_id, tenant_id, user_id, status, pending_occurrence_key
+    cursor.execute("""SELECT task_id, tenant_id, user_id, status, schedule_type,
+        ends_at, pending_occurrence_key
         FROM scheduled_tasks WHERE task_id = %s FOR UPDATE""", (task_id,))
     row = cursor.fetchone()
     if row is None:
         raise ScheduledTaskNotAcceptable("task_missing")
     task = dict(row)
-    if task["status"] != "active":
+    acceptable = task["status"] == "active" or (
+        task["status"] == "completed" and task.get("schedule_type") != "once"
+        and task.get("ends_at") is not None)
+    if not acceptable:
         raise ScheduledTaskNotAcceptable("not_active")
     if task["pending_occurrence_key"] != occurrence_key:
         raise ScheduledTaskNotAcceptable("pending_changed")
@@ -78,7 +85,8 @@ class ScheduledTaskDB:
                interval_seconds: int = None, run_at=None, attachments=None,
                profile_id: str = "main", instance_id: str = None,
                subagent_id: str = None, notification_rule_id: str = None,
-               next_due_at=None, max_active: int = None) -> Dict[str, Any]:
+               next_due_at=None, start_at=None, ends_at=None,
+               max_active: int = None) -> Dict[str, Any]:
         """创建定时任务（同事务创建任务专属会话）。
 
         - task_prompt 为自包含任务定义；attachments 为受权资源引用（file_id 等），
@@ -119,15 +127,15 @@ class ScheduledTaskDB:
                     INSERT INTO scheduled_tasks
                     (task_id, tenant_id, user_id, name, task_prompt, attachments,
                      profile_id, instance_id, schedule_type, cron_expression,
-                     interval_seconds, run_at, session_id, notification_rule_id,
-                     status, next_due_at)
+                     interval_seconds, run_at, start_at, ends_at, session_id,
+                     notification_rule_id, status, next_due_at)
                     VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s,
-                            %s, %s, 'active', %s)
+                            %s, %s, %s, %s, 'active', %s)
                 """, (task_id, tenant_id, user_id, name, task_prompt,
                       json.dumps(attachments or []),
                       profile_id, instance_id, schedule_type, cron_expression,
-                      interval_seconds, run_at, session_id, notification_rule_id,
-                      next_due_at))
+                      interval_seconds, run_at, start_at, ends_at, session_id,
+                      notification_rule_id, next_due_at))
                 cursor.execute(
                     "SELECT * FROM scheduled_tasks WHERE task_id = %s", (task_id,))
                 row = cursor.fetchone()
@@ -317,12 +325,17 @@ class ScheduledTaskDB:
         终态；用户主动 pause 的任务**已受理的中断执行仍继续恢复**（定稿：
         暂停只阻止未来调度，不阻断已受理执行——与 persisted 不要求 active
         同一语义），credit/profile 暂停同理不拦恢复（执行本就在推进）。
+        例外（设计 §15.2.4）：因时间窗自动完成的循环任务（completed + 非
+        once + 设有 ends_at）的 manual 中断执行仍需恢复驱动——恢复候选不排
+        除该类行（结果仍回写统计），但恢复耗尽不得把 completed 改回 paused
+        （由调度侧退避处理）。expired/once-completed 仍排除。
         recovery_retry_at 为调度侧恢复退避（NULL=立即可试，首次恢复不延迟）。"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT r.runner_id, r.session_id, r.attempt,
-                       t.task_id, t.tenant_id, t.user_id, t.name,
+                       t.task_id, t.tenant_id, t.user_id, t.name, t.status,
+                       t.schedule_type, t.ends_at,
                        t.notification_rule_id, t.recovery_reset_at
                 FROM agent_runners r
                 JOIN scheduled_tasks t ON t.session_id = r.session_id
@@ -331,12 +344,49 @@ class ScheduledTaskDB:
                   AND (r.lease_until IS NULL OR r.lease_until <= now())
                   AND r.cancel_requested = FALSE
                   AND NOT (t.status = 'paused' AND t.pause_reason IS NOT DISTINCT FROM 'interrupted')
-                  AND t.status NOT IN ('completed', 'expired')
+                  AND (t.status NOT IN ('completed', 'expired')
+                       OR (t.status = 'completed' AND t.schedule_type <> 'once'
+                           AND t.ends_at IS NOT NULL))
                   AND (t.recovery_retry_at IS NULL OR t.recovery_retry_at <= now())
                 ORDER BY r.updated_at
                 LIMIT %s
             """, (limit,))
             return [dict(row) for row in cursor.fetchall()]
+
+    @staticmethod
+    def finalize_window_ended(limit: int = 50) -> List[str]:
+        """轻量收尾（设计 §15.2.4）：窗口已结束且无 pending、无会话非终态
+        Runner 的 active 任务置 completed（停机跨窗/认领时跳过的旧触发点不补跑）。
+
+        最后一次窗内执行通常由终态钩子（无后续计划点）直接置 completed；
+        本扫描兜底覆盖"执行终态时窗口尚未耗尽推进结果"等边界（如执行中断
+        恢复后 next_due_at 仍为过期 due）。返回收尾的 task_id 列表。"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE scheduled_tasks t SET
+                    status = 'completed',
+                    next_due_at = NULL,
+                    updated_at = now()
+                WHERE t.task_id IN (
+                    SELECT task_id FROM scheduled_tasks
+                    WHERE status = 'active'
+                      AND ends_at IS NOT NULL
+                      AND ends_at <= now()
+                      AND pending_occurrence_key IS NULL
+                    ORDER BY task_id
+                    LIMIT %s
+                    FOR UPDATE SKIP LOCKED
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM agent_runners r
+                    WHERE r.session_id = t.session_id
+                      AND r.status NOT IN ('completed', 'failed', 'cancelled'))
+                RETURNING t.task_id
+            """, (limit,))
+            rows = cursor.fetchall()
+            conn.commit()
+            return [row["task_id"] for row in rows]
 
     @staticmethod
     def defer_recovery(task_id: str, retry_seconds: int) -> None:
@@ -431,6 +481,15 @@ class ScheduledTaskDB:
                 conn.commit()
                 logger.info(f"后端日志：once 定时任务已过宽限作废 task_id={task_id}")
                 return None
+            ends_at = task.get("ends_at")
+            if ends_at is not None and (now >= ends_at or task["next_due_at"] >= ends_at):
+                # 时间窗已结束（或计划点已出窗，如停机跨过 ends_at）：不补发旧
+                # 触发点（设计 §15.2.4）。行已在锁内且无 pending，收尾由调度侧
+                # finalize_window_ended 扫描统一置 completed，本事务不认领。
+                conn.commit()
+                logger.info(f"后端日志：定时任务时间窗已结束，跳过认领待收尾 "
+                            f"task_id={task_id}, ends_at={ends_at}")
+                return None
             occurrence_key = task["next_due_at"].isoformat()
             advance_to = compute_next_due(task, now)
             snapshot = {
@@ -465,16 +524,21 @@ class ScheduledTaskDB:
                       prompt_augmentations: Optional[list] = None) -> Optional[Dict[str, Any]]:
         """写入 manual pending 槽（"立即执行一次"）。
 
-        与 claim_due 同构：锁行校验（active + 无 pending）后在事务内从**当前
-        任务行**固化快照，但不推进 next_due_at——手动执行是额外一次真实执行，
-        recurring 不改节奏、once 不消费 run_at 额度；occurrence_key = uuid，
-        由调用方生成。"""
+        与 claim_due 同构：锁行校验后在事务内从**当前任务行**固化快照，但不
+        推进 next_due_at——手动执行是额外一次真实执行，recurring 不改节奏、
+        once 不消费 run_at 额度；occurrence_key = uuid，由调用方生成。
+
+        可执行状态（设计 §15.2.4）：active，或因时间窗自动完成的循环任务
+        （completed + 非 once + 设有 ends_at）——manual 触发不受时间窗限制，
+        也不重新激活自动调度；once 的 completed/expired 行为不变。"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT * FROM scheduled_tasks
                 WHERE task_id = %s
-                  AND status = 'active'
+                  AND (status = 'active'
+                       OR (status = 'completed' AND schedule_type <> 'once'
+                           AND ends_at IS NOT NULL))
                   AND pending_occurrence_key IS NULL
                 FOR UPDATE
             """, (task_id,))
@@ -542,6 +606,44 @@ class ScheduledTaskDB:
             """, (retry_seconds, task_id, occurrence_key))
             conn.commit()
             return cursor.rowcount > 0
+
+    @staticmethod
+    def reject_manual_pending_with_notify(task_id: str, occurrence_key: str,
+                                          reason_label: str) -> bool:
+        """窗口收尾（completed）行 manual pending 的确定性拒绝收尾（评审 P1）。
+
+        任务保持 completed（不改回 paused、不复活自动调度），仅清理该
+        occurrence 的 pending 槽，并在**同一事务**内写 task.manual_rejected
+        通知账本——创建者由此看到「立即执行一次」未提交成功（站内信恒有，
+        任务视图重试）。条件不命中（非该类行/pending 已被替换）返回 False，
+        由调用方走既有迟到拒绝清理。"""
+        from src.scheduler.notify import publish_task_manual_rejected_in_tx
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE scheduled_tasks SET
+                    pending_occurrence_key = NULL,
+                    pending_trigger = NULL,
+                    pending_retry_at = NULL,
+                    pending_snapshot = NULL,
+                    updated_at = now()
+                WHERE task_id = %s
+                  AND pending_occurrence_key = %s
+                  AND status = 'completed'
+                  AND schedule_type <> 'once'
+                  AND ends_at IS NOT NULL
+                RETURNING task_id, tenant_id, user_id, name,
+                    notification_rule_id, notification_target_id
+            """, (task_id, occurrence_key))
+            row = cursor.fetchone()
+            if not row:
+                conn.commit()
+                return False
+            publish_task_manual_rejected_in_tx(
+                cursor, dict(row), reason_label, occurrence_key=occurrence_key)
+            conn.commit()
+            return True
 
     # ==================== 生命周期操作 ====================
 
@@ -710,6 +812,8 @@ class ScheduledTaskDB:
         的当前调度定义**重算 next_due_at（消灭"入口先算后写覆盖并发改期"）→
         - once 已过执行宽限：统一转换 status='expired'（定稿 §4.3，两入口
           同一回执，不再各自为 409/提示分叉）；
+        - 时间窗已结束（无窗内后续计划点）：置 completed，不补跑（设计
+          §15.2.4——含"最后一个窗内点执行中断后用户才恢复"等边界）；
         - 配额：恢复使 active 数 +1，与创建同规则事务内检查（评审 P2）；
         - 恢复成功：置 active + 清 pause_reason + recovery_reset_at=now()
           （给恢复耗尽的任务开启新一轮有界恢复尝试——历史控制记录保留，
@@ -744,7 +848,7 @@ class ScheduledTaskDB:
                 cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
                                (f"scheduled_tasks:quota:{task['tenant_id']}:{task['user_id']}",))
             try:
-                next_due_at, will_expire_once = compute_resume_due(task, now)
+                next_due_at, will_expire_once, window_finished = compute_resume_due(task, now)
             except ScheduleConfigError as error:
                 raise ValueError(str(error)) from error
             if will_expire_once:
@@ -756,6 +860,16 @@ class ScheduledTaskDB:
                 updated = cursor.fetchone()
                 conn.commit()
                 logger.info(f"后端日志：once 任务恢复时已过宽限，转 expired task_id={task_id}")
+                return dict(updated) if updated else None
+            if window_finished:
+                # 时间窗已结束：恢复动作收尾为 completed，不补跑（设计 §15.2.4）
+                cursor.execute("""UPDATE scheduled_tasks SET status='completed',
+                    pause_reason=NULL, next_due_at=NULL, recovery_reset_at=now(),
+                    updated_at=now()
+                    WHERE task_id=%s RETURNING *""", (task_id,))
+                updated = cursor.fetchone()
+                conn.commit()
+                logger.info(f"后端日志：任务恢复时时间窗已结束，转 completed task_id={task_id}")
                 return dict(updated) if updated else None
             if max_active is not None:
                 cursor.execute("""SELECT count(*) AS cnt FROM scheduled_tasks
@@ -777,16 +891,24 @@ class ScheduledTaskDB:
     def update_schedule(task_id: str, *, schedule_type: str,
                         cron_expression: Optional[str],
                         interval_seconds: Optional[int], run_at,
-                        next_due_at, tenant_id: Optional[str] = None,
+                        next_due_at, start_at=None, ends_at=None,
+                        tenant_id: Optional[str] = None,
                         user_id: Optional[str] = None) -> bool:
-        """改期专用：仅更新调度字段（schedule_type/cron/interval/run_at/next_due_at）。
+        """改期专用：仅更新调度字段（schedule_type/cron/interval/run_at/
+        start_at/ends_at/next_due_at——时间窗与调度定义同事务更新，避免窗口
+        和 next_due_at 脱节）。
 
-        编辑与调度解耦：任务内容编辑走 update_definition，不触碰调度字段。"""
+        编辑与调度解耦：任务内容编辑走 update_definition，不触碰调度字段。
+        状态条件进 UPDATE（评审 P1：API 先读后写存在竞态——最后一次窗内执行
+        在读取与更新之间置 completed 时，改期仍写入 next_due_at 但 completed
+        行不再被调度，接口却返回成功）：终态行不更新，返回 False 由调用方
+        区分回执。"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            conditions = ["task_id = %s"]
+            conditions = ["task_id = %s",
+                          "status NOT IN ('completed', 'expired')"]
             params: List[Any] = [schedule_type, cron_expression, interval_seconds,
-                                 run_at, next_due_at, task_id]
+                                 run_at, next_due_at, start_at, ends_at, task_id]
             if tenant_id is not None:
                 conditions.append("tenant_id = %s")
                 params.append(tenant_id)
@@ -800,6 +922,8 @@ class ScheduledTaskDB:
                     interval_seconds = %s,
                     run_at = %s,
                     next_due_at = %s,
+                    start_at = %s,
+                    ends_at = %s,
                     updated_at = now()
                 WHERE {' AND '.join(conditions)}
             """, tuple(params))
@@ -898,7 +1022,7 @@ class ScheduledTaskDB:
                                  finished_at=None) -> bool:
         """统计回写（事务内版本，Phase 3 runner 终态事务复用）。
 
-        规则（设计 §5.4）：
+        规则（设计 §5.4 + §15.2.4 时间窗收尾）：
         - run_status 直接使用 Runner 终态（completed/failed/cancelled）：
           completed 计成功、failed 计失败、cancelled 两者皆不计（仅 total_runs
           与 last_status 呈现，取消不是失败也不是成功）；
@@ -906,7 +1030,10 @@ class ScheduledTaskDB:
         - 仅 trigger=='scheduled' 且 schedule_type=='once' 置 completed
           （manual 终态只计统计，不消费 once 额度）；
         - recurring 且 error_code ∈ {CREDIT_BLOCKED, PROFILE_FORBIDDEN} 时置
-          paused + 对应 pause_reason（once 额度已消费，失败经 last_status 呈现）。
+          paused + 对应 pause_reason（once 额度已消费，失败经 last_status 呈现；
+          已 completed 的窗口收尾行不改回 paused——manual 失败只呈现统计）；
+        - 计划执行终态且无后续计划点（next_due_at IS NULL 的非 once 行，
+          即认领最后一次窗内点时推进结果出窗）：置 completed（时间窗收尾）。
         """
         pause_reason = _PAUSE_REASON_BY_ERROR_CODE.get(error_code or "")
         finished_at = finished_at or datetime.now()
@@ -919,30 +1046,40 @@ class ScheduledTaskDB:
                 last_status = %s,
                 status = CASE
                     WHEN %s = 'scheduled' AND schedule_type = 'once' THEN 'completed'
-                    WHEN schedule_type <> 'once' AND %s IN ('CREDIT_BLOCKED', 'PROFILE_FORBIDDEN')
+                    WHEN schedule_type <> 'once' AND status <> 'completed'
+                        AND %s IN ('CREDIT_BLOCKED', 'PROFILE_FORBIDDEN')
                         THEN 'paused'
+                    WHEN %s = 'scheduled' AND schedule_type <> 'once'
+                        AND next_due_at IS NULL THEN 'completed'
                     ELSE status END,
                 pending_occurrence_key = CASE
-                    WHEN schedule_type <> 'once' AND %s IN ('CREDIT_BLOCKED', 'PROFILE_FORBIDDEN')
+                    WHEN schedule_type <> 'once' AND status <> 'completed'
+                        AND %s IN ('CREDIT_BLOCKED', 'PROFILE_FORBIDDEN')
                         THEN NULL ELSE pending_occurrence_key END,
                 pending_trigger = CASE
-                    WHEN schedule_type <> 'once' AND %s IN ('CREDIT_BLOCKED', 'PROFILE_FORBIDDEN')
+                    WHEN schedule_type <> 'once' AND status <> 'completed'
+                        AND %s IN ('CREDIT_BLOCKED', 'PROFILE_FORBIDDEN')
                         THEN NULL ELSE pending_trigger END,
                 pending_retry_at = CASE
-                    WHEN schedule_type <> 'once' AND %s IN ('CREDIT_BLOCKED', 'PROFILE_FORBIDDEN')
+                    WHEN schedule_type <> 'once' AND status <> 'completed'
+                        AND %s IN ('CREDIT_BLOCKED', 'PROFILE_FORBIDDEN')
                         THEN NULL ELSE pending_retry_at END,
                 pending_snapshot = CASE
-                    WHEN schedule_type <> 'once' AND %s IN ('CREDIT_BLOCKED', 'PROFILE_FORBIDDEN')
+                    WHEN schedule_type <> 'once' AND status <> 'completed'
+                        AND %s IN ('CREDIT_BLOCKED', 'PROFILE_FORBIDDEN')
                         THEN NULL ELSE pending_snapshot END,
                 pause_reason = CASE
-                    WHEN schedule_type <> 'once' AND %s IN ('CREDIT_BLOCKED', 'PROFILE_FORBIDDEN')
+                    WHEN schedule_type <> 'once' AND status <> 'completed'
+                        AND %s IN ('CREDIT_BLOCKED', 'PROFILE_FORBIDDEN')
                         THEN %s
+                    WHEN %s = 'scheduled' AND schedule_type <> 'once'
+                        AND next_due_at IS NULL THEN NULL
                     ELSE pause_reason END,
                 updated_at = now()
             WHERE task_id = %s
         """, (run_status, run_status, finished_at, run_status, trigger,
-              error_code, error_code, error_code, error_code, error_code,
-              error_code, pause_reason, task_id))
+              error_code, trigger, error_code, error_code, error_code,
+              error_code, error_code, pause_reason, trigger, task_id))
         return cursor.rowcount > 0
 
     @staticmethod

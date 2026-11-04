@@ -21,6 +21,7 @@ from src.scheduler.schedule import (
     ScheduleConfigError,
     build_schedule_fields,
     max_tasks_per_user,
+    min_interval_hours,
     validate_task_attachments,
 )
 
@@ -110,6 +111,18 @@ async def get_user_stats(request: Request):
     }}
 
 
+@router.get("/limits")
+async def get_task_limits(request: Request):
+    """调度约束阈值（普通用户可读；路由须置于 /{task_id} 动态路由之前）：
+    当前最短间隔（整数小时）与该租户有效的每人活跃任务上限（企业设置
+    覆盖值优先，无覆盖时为配置默认值），供前端即时提示，后端校验为准。"""
+    _, tenant_id = await _request_identity(request)
+    return {"success": True, "data": {
+        "min_interval_hours": min_interval_hours(),
+        "max_tasks_per_user": max_tasks_per_user(tenant_id),
+    }}
+
+
 @router.get("/{task_id}")
 async def get_task(request: Request, task_id: str):
     """获取任务详情"""
@@ -138,13 +151,14 @@ async def pause_task(request: Request, task_id: str):
 @router.post("/{task_id}/resume")
 async def resume_task(request: Request, task_id: str):
     """恢复任务（统一走 resume_recompute：事务内锁行重算 + once 过宽限统一
-    转 expired + 配额检查 + 恢复回合重置——与工具同一转换路径）"""
+    转 expired + 时间窗已结束转 completed + 配额检查 + 恢复回合重置——
+    与工具同一转换路径）"""
     identity = await _request_identity(request)
     task = await _owned_task(request, task_id, identity)
     try:
         updated = await asyncio.to_thread(
             ScheduledTaskDB.resume_recompute, task_id,
-            max_active=max_tasks_per_user(),
+            max_active=max_tasks_per_user(task.get("tenant_id")),
             tenant_id=identity[1], user_id=identity[0])
     except (ScheduleConfigError, ValueError) as e:
         logger.error(f"后端日志：恢复定时任务重算 due 失败 task_id={task_id}")
@@ -160,6 +174,11 @@ async def resume_task(request: Request, task_id: str):
         return {"success": True, "expired": True,
                 "message": "该一次性任务的执行时间已超过宽限，恢复操作已将其作废"
                            "（expired）；如仍需执行请重新创建或改期"}
+    if updated["status"] == "completed":
+        # 时间窗已结束：恢复动作收尾为 completed，不补跑（设计 §15.2.4）
+        return {"success": True, "completed": True,
+                "message": "该任务的执行时间窗已结束，恢复操作已将其收尾"
+                           "（completed），不再自动执行；如需单次执行可使用「立即执行一次」"}
     return {"success": True, "message": "任务已恢复",
             "data": {"next_due_at": updated.get("next_due_at")}}
 
@@ -185,7 +204,11 @@ async def delete_task(request: Request, task_id: str):
 
 @router.post("/{task_id}/trigger")
 async def trigger_task(request: Request, task_id: str):
-    """立即执行一次（manual pending 槽；不改 next_due_at，≤poll 间隔由循环提交）"""
+    """立即执行一次（manual pending 槽；不改 next_due_at，≤poll 间隔由循环提交）。
+
+    不受时间窗限制（设计 §15.2.4）：active 任务与因时间窗自动完成的循环
+    任务（completed + 非 once + 设有 ends_at）均可触发，也不改变自动计划点；
+    once 终态与其他不可执行状态 409。"""
     from src.scheduler.dispatch import NON_INTERACTIVE_AUGMENTATION
     identity = await _request_identity(request)
     await _owned_task(request, task_id, identity)
@@ -195,7 +218,9 @@ async def trigger_task(request: Request, task_id: str):
         prompt_augmentations=[NON_INTERACTIVE_AUGMENTATION])
     if not updated:
         raise HTTPException(
-            status_code=409, detail="任务不在可执行状态（非 active 或已有待提交执行）")
+            status_code=409,
+            detail="任务不在可执行状态（仅执行中与因时间窗完成的循环任务可手动执行，"
+                   "或已有待提交执行）")
     return {"success": True, "message": "已触发执行（稍后由调度循环提交，可在任务视图查看进度）"}
 
 
@@ -205,19 +230,30 @@ class UpdateScheduleRequest(BaseModel):
     """改期请求：仅调度字段变更（重算 next_due_at），不动任务内容"""
     schedule_type: str = Field(..., description="调度类型：daily/weekly/monthly/interval/once")
     time_config: Dict[str, Any] = Field(..., description=(
-        "时间配置：once 必填 run_at（未来时间）；daily/weekly/monthly 用 hour/minute"
-        "（weekly 另需 day_of_week，monthly 另需 day）；interval 用 interval_hours"
+        "时间配置：once 必填 run_at（未来时间，不接受时间窗）；daily/weekly/monthly "
+        "用 hour/minute（weekly 另需 day_of_week，monthly 另需 day），可选 "
+        "start_at/ends_at（YYYY-MM-DD HH:MM:SS，北京时间，窗口含起点不含终点）；"
+        "interval 用 interval_hours（不低于最短间隔的整数小时）"
     ))
 
 
 @router.put("/{task_id}/schedule")
 async def update_task_schedule(request: Request, task_id: str, body: UpdateScheduleRequest):
-    """改期：更新调度字段 + 重算 next_due_at（paused 任务改期后经 resume 生效）"""
+    """改期：更新调度字段 + 重算 next_due_at（paused 任务改期后经 resume 生效）。
+
+    终态（completed/expired）拒绝改期（CR P2-5）：completed 行不进到期扫描
+    也无法恢复，改期会"成功落库但调度永不生效"；expired once 同理。"""
     identity = await _request_identity(request)
     user_id, tenant_id = identity
-    await _owned_task(request, task_id, identity)
+    task = await _owned_task(request, task_id, identity)
+    if task["status"] in ("completed", "expired"):
+        raise HTTPException(
+            status_code=409,
+            detail=(f"任务当前状态为 {task['status']}，不能改期；"
+                    "如需继续执行请新建任务（窗口结束后仍可「立即执行一次」）"))
     try:
-        cron_expression, interval_seconds, run_at, next_due_at = build_schedule_fields(
+        (cron_expression, interval_seconds, run_at, next_due_at,
+         start_at, ends_at) = build_schedule_fields(
             body.schedule_type, body.time_config or {})
     except ScheduleConfigError as e:
         raise HTTPException(status_code=422, detail=str(e))
@@ -225,8 +261,18 @@ async def update_task_schedule(request: Request, task_id: str, body: UpdateSched
         ScheduledTaskDB.update_schedule, task_id,
         schedule_type=body.schedule_type, cron_expression=cron_expression,
         interval_seconds=interval_seconds, run_at=run_at,
-        next_due_at=next_due_at, tenant_id=tenant_id, user_id=user_id)
+        next_due_at=next_due_at, start_at=start_at, ends_at=ends_at,
+        tenant_id=tenant_id, user_id=user_id)
     if not updated:
+        # 零行更新：并发状态下 task_id+归属命中的行已转终态（UPDATE 带状态
+        # 条件，评审 P1），重读行状态区分 409 与 404，不把竞态当成功返回
+        fresh = await asyncio.to_thread(
+            ScheduledTaskDB.get_by_id, task_id, tenant_id=tenant_id, user_id=user_id)
+        if fresh and fresh["status"] in ("completed", "expired"):
+            raise HTTPException(
+                status_code=409,
+                detail=(f"任务当前状态为 {fresh['status']}，不能改期；"
+                        "如需继续执行请新建任务（窗口结束后仍可「立即执行一次」）"))
         raise HTTPException(status_code=404, detail="任务不存在或无权操作")
     logger.info(f"后端日志：定时任务调度已更新 task_id={task_id}, "
                 f"schedule_type={body.schedule_type}, next_due_at={next_due_at}")
@@ -235,7 +281,9 @@ async def update_task_schedule(request: Request, task_id: str, body: UpdateSched
                      "cron_expression": cron_expression,
                      "interval_seconds": interval_seconds,
                      "run_at": run_at,
-                     "next_due_at": next_due_at}}
+                     "next_due_at": next_due_at,
+                     "start_at": start_at,
+                     "ends_at": ends_at}}
 
 
 class UpdateDefinitionRequest(BaseModel):

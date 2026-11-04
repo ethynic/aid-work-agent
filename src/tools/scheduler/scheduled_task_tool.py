@@ -123,9 +123,13 @@ class CreateScheduledTaskInput(BaseModel):
     schedule_type: str = Field(..., description="调度类型：daily每天, weekly每周, monthly每月, interval间隔, once一次性")
     time_config: Dict[str, Any] = Field(..., description=(
         "时间配置，必须从用户话语中解析，所有时间为北京时间。"
-        "once 类型必填 run_at（格式 YYYY-MM-DD HH:MM:SS，必须是未来时间）；"
-        "daily/weekly/monthly 必填 hour/minute（weekly 另需 day_of_week，monthly 另需 day）；"
-        "interval 用 interval_hours"
+        "once 类型必填 run_at（格式 YYYY-MM-DD HH:MM:SS，必须是未来时间），不接受时间窗；"
+        "daily/weekly/monthly 必填 hour/minute（weekly 另需 day_of_week，monthly 另需 day），"
+        "可选 start_at/ends_at（格式 YYYY-MM-DD HH:MM:SS）限定执行时间窗，"
+        "窗口含起点不含终点（如「11月整月」= 2026-11-01 00:00:00 至 2026-12-01 00:00:00）；"
+        "interval 用 interval_hours，只接受不低于最短间隔（默认 1）的整数小时，"
+        "不支持分钟/小数；设 start_at 时在开始时刻首次执行，之后每隔 N 小时。"
+        "起止时间不明确（如只说「一个月内」）时必须先向用户确认具体日期和时刻"
     ))
     attachments: Optional[List[Dict[str, Any]]] = Field(None, description=(
         "受权资源引用（可选，数组）：任务依赖的文件等资料，每项含 "
@@ -157,7 +161,13 @@ class CreateScheduledTaskTool(BaseTool):
         "可预见的无数据/空结果场景写明默认行为（如'无新增数据时输出：今日无新增数据'）。"
         "如需专业领域能力，在 task_prompt 中指示委派给对应子智能体。"
         "一次性任务（schedule_type=once）必须在 time_config.run_at 提供未来的具体时间，"
-        "过去时间会被拒绝。可选 notification_rule_id 指定定时任务通知规则"
+        "过去时间会被拒绝。循环任务可在 time_config.start_at/ends_at 限定执行时间窗"
+        "（北京时间 YYYY-MM-DD HH:MM:SS，可只填一端，窗口含起点不含终点），"
+        "窗口结束后任务自动完成；「立即执行一次」不受时间窗限制也不改变自动计划。"
+        "间隔任务只支持整数小时（如 1、2、6），低于系统最短间隔（默认 1 小时）会被拒绝。"
+        "每用户同时保持执行中（active）的任务数有上限（默认 5，以企业设置为准），"
+        "暂停的任务不占名额。"
+        "可选 notification_rule_id 指定定时任务通知规则"
         "（先用 manage_scheduled_task 的 list_notify_rules 查询可选规则）。"
         "创建即生效，首次执行在下一个调度点（无试跑）。"
         "如果用户询问或管理已创建的定时任务，使用 manage_scheduled_task 工具。"
@@ -200,10 +210,11 @@ class CreateScheduledTaskTool(BaseTool):
             return _weixin_routing_rejection()
 
         # 调度字段校验与计算（schedule_type 枚举 / 时间必填不猜测 / once 未来时间
-        # 与归一化 / 数值字段容错，全部收敛在 build_schedule_fields）
+        # 与归一化 / 数值字段容错 / 时间窗与整数小时校验，全部收敛在
+        # build_schedule_fields）
         try:
-            cron_expression, interval_seconds, run_at, next_due_at = build_schedule_fields(
-                schedule_type, time_config)
+            (cron_expression, interval_seconds, run_at, next_due_at,
+             start_at, ends_at) = build_schedule_fields(schedule_type, time_config)
         except ScheduleConfigError as e:
             logger.warning(f"后端日志：创建定时任务调度校验失败 user_id={user_id}, error={e}")
             return {"success": False, "error": str(e)}
@@ -228,8 +239,9 @@ class CreateScheduledTaskTool(BaseTool):
                              "可先用 manage_scheduled_task 的 list_notify_rules 查询可选规则"}
 
         # 每用户 active 上限：事务内落实（评审 P2：先计数后插入的两独立
-        # 事务存在并发绕过窗口——advisory lock 串行化，配额检查与插入同事务）
-        max_tasks = _max_tasks_per_user()
+        # 事务存在并发绕过窗口——advisory lock 串行化，配额检查与插入同事务）；
+        # 有效值优先取本租户的企业设置覆盖值（设计 §15.2.6）
+        max_tasks = _max_tasks_per_user(tenant_id)
 
         # 智能体上下文继承（设计 §3.2）：创建会话的 profile/instance 固化到任务行，
         # 后续执行由该智能体自身执行；主智能体 profile_id='main'
@@ -246,7 +258,8 @@ class CreateScheduledTaskTool(BaseTool):
                 run_at=run_at, attachments=attachments,
                 profile_id=profile_id, instance_id=instance_id,
                 subagent_id=subagent_id, notification_rule_id=notification_rule_id,
-                next_due_at=next_due_at, max_active=max_tasks)
+                next_due_at=next_due_at, start_at=start_at, ends_at=ends_at,
+                max_active=max_tasks)
         except ScheduledTaskQuotaError as e:
             return {"success": False, "error": str(e)}
         except Exception:
@@ -416,11 +429,12 @@ class ManageScheduledTaskTool(BaseTool):
     @staticmethod
     async def _resume(task: Dict[str, Any], tenant_id: str, user_id: str) -> Dict[str, Any]:
         """恢复任务：统一走 resume_recompute（单事务锁行重算 + once 过宽限
-        统一转 expired + 配额事务内检查 + 恢复回合重置，评审 P1/P2 修正）"""
+        统一转 expired + 时间窗已结束转 completed + 配额事务内检查 + 恢复
+        回合重置，评审 P1/P2 修正）"""
         try:
             updated = await asyncio.to_thread(
                 ScheduledTaskDB.resume_recompute, task["task_id"],
-                max_active=_max_tasks_per_user(),
+                max_active=_max_tasks_per_user(task.get("tenant_id") or tenant_id),
                 tenant_id=tenant_id, user_id=user_id)
         except ScheduledTaskQuotaError as e:
             return {"success": False, "error": str(e)}
@@ -434,6 +448,12 @@ class ManageScheduledTaskTool(BaseTool):
             return {"success": True, "expired": True,
                     "message": f"任务 {task['task_id']}（{task['name']}）的一次性执行时间已超过宽限，"
                                "恢复操作已将其作废（expired）；如仍需执行请重新创建或改期"}
+        if updated["status"] == "completed":
+            # 时间窗已结束：恢复动作收尾为 completed，不补跑（设计 §15.2.4）
+            return {"success": True, "completed": True,
+                    "message": f"任务 {task['task_id']}（{task['name']}）的执行时间窗已结束，"
+                               "恢复操作已将其收尾（completed），不再自动执行；"
+                               "如需单次执行可使用「立即执行一次」"}
         message = (f"任务 {task['task_id']}（{task['name']}）已恢复，"
                    f"下次执行: {updated.get('next_due_at') or '-'}")
         if task.get("pause_reason") == "interrupted":

@@ -472,11 +472,13 @@ class TestRecordRunResult:
         sql, params = self._sql_and_params(cursor)
         assert "THEN 'paused'" in sql
         assert params[0] == "failed" and params[1] == "failed"
-        assert params[5] == error_code   # status CASE 的 error_code
-        assert list(params[6:10]) == [error_code] * 4  # 四个 pending 清理 CASE
-        assert params[10] == error_code  # pause_reason CASE 的 IN 值
-        assert params[11] == reason      # 映射后的 pause_reason 值
-        assert params[12] == "sched_abc123"  # WHERE task_id（此前错绑 error_code）
+        assert params[5] == error_code   # paused CASE 的 error_code
+        assert params[6] == "scheduled"  # 窗口收尾分支的 trigger（不命中）
+        assert list(params[7:11]) == [error_code] * 4  # 四个 pending 清理 CASE
+        assert params[11] == error_code  # pause_reason CASE 的 IN 值
+        assert params[12] == reason      # 映射后的 pause_reason 值
+        assert params[13] == "scheduled"  # pause_reason 窗口清理分支的 trigger
+        assert params[14] == "sched_abc123"  # WHERE task_id（此前错绑 error_code）
 
     @patch("src.scheduler.db.get_db_connection")
     def test_completed_counts_success_failed_counts_fail(self, mock_conn):
@@ -520,7 +522,7 @@ class TestRecordRunResult:
             "sched_abc123", run_status="completed", trigger="scheduled") is True
         sql, params = self._sql_and_params(cursor)
         # 无 error_code：IN 列表参数为 None（不命中），pause_reason 写入值为 None
-        assert params[5] is None and params[6] is None and params[7] is None
+        assert params[5] is None and params[7] is None and params[8] is None
         assert ("success_count = success_count + CASE WHEN %s = 'completed' THEN 1 ELSE 0 END"
                 in sql)
 
@@ -619,7 +621,8 @@ class TestCreate:
         assert "INSERT INTO scheduled_tasks" in task_sql
         assert task_params[0].startswith("sched_")
         assert task_params[0] == metadata["scheduled_task"]
-        assert task_params[12] == session_id
+        assert task_params[12] is None and task_params[13] is None  # start_at/ends_at（未传）
+        assert task_params[14] == session_id
         assert "'active'" in task_sql
         assert task_params[4] == "生成日报"
         # 单事务：一次 commit
@@ -660,3 +663,190 @@ class TestQueryConditions:
         assert "task_id = %s" in sql
         assert "tenant_id = %s" in sql and "user_id = %s" in sql
         assert params == ("sched_abc123", "tenant_1", "user_1")
+
+
+# ==================== 时间窗与窗口收尾（设计 §15，2026-11-03） ====================
+
+class TestClaimWindow:
+    @patch("src.scheduler.db.get_db_connection")
+    def test_claim_skips_when_window_already_ended(self, mock_conn):
+        """停机跨过 ends_at：认领时不补发旧触发点（不写 pending），待调度
+        扫描收尾——避免窗口结束后仍执行过期计划点。"""
+        row = dict(_TASK_ROW_FULL, ends_at=datetime(2026, 10, 28, 9, 0, 30))
+        cursor = _make_cursor(fetchone=[row])
+        _bind_conn(mock_conn, cursor)
+
+        result = ScheduledTaskDB.claim_due(
+            "sched_abc123", now=datetime(2026, 10, 28, 9, 5, 0))
+
+        assert result is None
+        # 只有一次条件 SELECT，无 UPDATE（不认领、不推进）
+        assert cursor.execute.call_count == 1
+        mock_conn.return_value.__enter__.return_value.commit.assert_called_once()
+
+    @patch("src.scheduler.db.get_db_connection")
+    def test_claim_skips_when_occurrence_outside_window(self, mock_conn):
+        """待认领计划点已出窗（ends_at 之后）：同样不认领。"""
+        row = dict(_TASK_ROW_FULL,
+                   next_due=datetime(2026, 10, 28, 9, 0, 0),
+                   ends_at=datetime(2026, 10, 28, 8, 30, 0))
+        cursor = _make_cursor(fetchone=[row])
+        _bind_conn(mock_conn, cursor)
+
+        assert ScheduledTaskDB.claim_due(
+            "sched_abc123", now=datetime(2026, 10, 28, 9, 5, 0)) is None
+        assert cursor.execute.call_count == 1
+
+    @patch("src.scheduler.db.get_db_connection")
+    def test_claim_last_window_point_sets_null_next_due(self, mock_conn):
+        """最后一个窗内点认领：推进结果出窗 → next_due_at 置 NULL，任务保留
+        active 与 pending，待该次执行终态由钩子收尾 completed。"""
+        row = dict(_TASK_ROW_FULL,
+                   next_due=datetime(2026, 10, 28, 9, 0, 0),
+                   ends_at=datetime(2026, 10, 28, 10, 0, 0))
+        updated_row = dict(row, pending_occurrence_key="2026-10-28T09:00:00")
+        cursor = _make_cursor(fetchone=[row, updated_row])
+        _bind_conn(mock_conn, cursor)
+
+        result = ScheduledTaskDB.claim_due(
+            "sched_abc123", now=datetime(2026, 10, 28, 9, 0, 30))
+
+        assert result is not None
+        update_sql, params = cursor.execute.call_args.args
+        # 推进：锚点 09:00 + 1h = 10:00 >= ends_at 10:00 → NULL
+        assert params[0] is None
+        assert "next_due_at = %s" in update_sql
+        assert "pending_occurrence_key = %s" in update_sql
+
+
+class TestSubmitManualWindow:
+    @patch("src.scheduler.db.get_db_connection")
+    def test_manual_allowed_on_window_completed_recurring(self, mock_conn):
+        """§15.2.4：因时间窗自动完成的循环任务允许手动执行（不受窗口限制）"""
+        row = dict(_TASK_ROW_FULL, status="completed", schedule_type="interval",
+                   ends_at=datetime(2026, 10, 27, 0, 0, 0))
+        updated = dict(row, pending_trigger="manual")
+        cursor = _make_cursor(fetchone=[row, updated])
+        _bind_conn(mock_conn, cursor)
+
+        result = ScheduledTaskDB.submit_manual("sched_abc123", occurrence_key="m1")
+        assert result is not None
+        select_sql = cursor.execute.call_args_list[0].args[0]
+        assert "status = 'completed' AND schedule_type <> 'once'" in select_sql
+        assert "ends_at IS NOT NULL" in select_sql
+
+    @patch("src.scheduler.db.get_db_connection")
+    def test_manual_rejected_on_completed_once(self, mock_conn):
+        """once 的 completed 行为不变：不可手动执行（额度已消费）"""
+        cursor = _make_cursor(fetchone=None)
+        _bind_conn(mock_conn, cursor)
+        assert ScheduledTaskDB.submit_manual(
+            "sched_abc123", occurrence_key="m1") is None
+        assert cursor.execute.call_count == 1
+
+    @patch("src.scheduler.db.get_db_connection")
+    def test_manual_rejected_on_completed_without_window(self, mock_conn):
+        """无窗口的 completed 行不放行 manual（仅窗口收尾的循环任务例外）"""
+        cursor = _make_cursor(fetchone=None)
+        _bind_conn(mock_conn, cursor)
+        assert ScheduledTaskDB.submit_manual(
+            "sched_abc123", occurrence_key="m1") is None
+
+
+class TestResumeWindowFinished:
+    @patch("src.scheduler.db.get_db_connection")
+    def test_resume_when_window_finished_completes(self, mock_conn):
+        """恢复时窗口已结束：置 completed（next_due_at=NULL、清 pause_reason），
+        不补跑——含"最后一个窗内点中断后用户才恢复"的边界。"""
+        row = dict(_TASK_ROW_FULL, status="paused", schedule_type="interval",
+                   interval_seconds=7200, ends_at=datetime(2026, 10, 27, 0, 0, 0),
+                   next_due=None)
+        updated = dict(row, status="completed")
+        cursor = _make_cursor(fetchone=[row, updated])
+        _bind_conn(mock_conn, cursor)
+
+        result = ScheduledTaskDB.resume_recompute(
+            "sched_abc123", max_active=5, now=datetime(2026, 10, 28, 9, 0, 0))
+
+        assert result is not None and result["status"] == "completed"
+        update_sql, params = cursor.execute.call_args.args
+        assert "status='completed'" in update_sql
+        assert "next_due_at=NULL" in update_sql
+        assert "pause_reason=NULL" in update_sql
+
+
+class TestUpdateScheduleTerminalGuard:
+    """评审 P1：改期 UPDATE 带状态条件——终态行不更新（避免"返回成功但任务
+    永不执行"的并发窗口：API 读 active 后、UPDATE 前被终态钩子置 completed）。"""
+
+    @patch("src.scheduler.db.get_db_connection")
+    def test_update_schedule_sql_guards_terminal_status(self, mock_conn):
+        cursor = _make_cursor(rowcount=1)
+        _bind_conn(mock_conn, cursor)
+        ok = ScheduledTaskDB.update_schedule(
+            "sched_abc123", schedule_type="daily", cron_expression="0 9 * * *",
+            interval_seconds=None, run_at=None,
+            next_due_at=datetime(2026, 11, 1, 9, 0), tenant_id="tenant_1",
+            user_id="user_1")
+        assert ok is True
+        sql, params = cursor.execute.call_args.args
+        assert "status NOT IN ('completed', 'expired')" in sql
+        assert params[7] == "sched_abc123"  # task_id（调度值×7 后、归属参数前）
+
+
+class TestRejectManualPendingWithNotify:
+    """评审 P1：窗口收尾任务 manual 提交被确定性拒绝——保持 completed、清
+    pending、同事务写 task.manual_rejected 通知（创建者可见失败）。"""
+
+    @patch("src.scheduler.db.get_db_connection")
+    def test_hit_clears_pending_and_publishes_in_tx(self, mock_conn):
+        row = dict(_TASK_ROW, status="completed", schedule_type="interval",
+                   notification_rule_id=None, notification_target_id=None)
+        cursor = _make_cursor(fetchone=row)
+        _bind_conn(mock_conn, cursor)
+        with patch("src.scheduler.notify.publish_task_manual_rejected_in_tx") as pub:
+            ok = ScheduledTaskDB.reject_manual_pending_with_notify(
+                "sched_abc123", "m-uuid-1", "积分额度不足")
+        assert ok is True
+        sql, params = cursor.execute.call_args.args
+        assert "pending_occurrence_key = NULL" in sql
+        assert "status = 'completed'" in sql
+        assert "schedule_type <> 'once'" in sql
+        assert "ends_at IS NOT NULL" in sql
+        assert params == ("sched_abc123", "m-uuid-1")
+        pub.assert_called_once()
+        # 通知在清理同一事务内（单次 commit 覆盖两步）
+        mock_conn.return_value.__enter__.return_value.commit.assert_called_once()
+
+    @patch("src.scheduler.db.get_db_connection")
+    def test_miss_returns_false_without_publish(self, mock_conn):
+        cursor = _make_cursor(fetchone=None)
+        _bind_conn(mock_conn, cursor)
+        with patch("src.scheduler.notify.publish_task_manual_rejected_in_tx") as pub:
+            ok = ScheduledTaskDB.reject_manual_pending_with_notify(
+                "sched_abc123", "m-gone", "积分额度不足")
+        assert ok is False
+        pub.assert_not_called()
+
+
+class TestFinalizeWindowEnded:
+    @patch("src.scheduler.db.get_db_connection")
+    def test_finalize_updates_only_ended_active_rows_without_runners(self, mock_conn):
+        """轻量收尾扫描：仅窗口已结束 + 无 pending + 会话无非终态 runner 的
+        active 行置 completed。"""
+        cursor = _make_cursor(fetchall=[{"task_id": "sched_abc123"}], rowcount=1)
+        _bind_conn(mock_conn, cursor)
+
+        result = ScheduledTaskDB.finalize_window_ended(limit=50)
+
+        assert result == ["sched_abc123"]
+        sql, params = cursor.execute.call_args.args
+        assert "status = 'active'" in sql
+        assert "ends_at IS NOT NULL" in sql
+        assert "ends_at <= now()" in sql
+        assert "pending_occurrence_key IS NULL" in sql
+        assert "NOT EXISTS" in sql
+        assert "r.status NOT IN ('completed', 'failed', 'cancelled')" in sql
+        assert "status = 'completed'" in sql
+        assert "next_due_at = NULL" in sql  # CR P2-8：不残留过期 due
+        assert params == (50,)

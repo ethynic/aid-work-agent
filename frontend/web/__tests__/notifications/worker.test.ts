@@ -42,6 +42,37 @@ describe('Web push worker privacy and routing', () => {
     await sw.dispatch('push', { data: { json: () => payload } })
     expect(sw.showNotification).not.toHaveBeenCalled()
   })
+  it.each([
+    ['paused', '每日日报已自动暂停', '点击查看暂停原因，处理后可恢复'],
+    ['needs_action', '每日日报需要处理', '点击查看需要处理的事项，处理后自动继续'],
+  ])('shows %s wording and opens the notification entry on click', async (kind, title, body) => {
+    const sw = worker(active)
+    await sw.dispatch('push', { data: { json: () => ({ ...payload, event_kind: kind, session_title: '每日日报' }) } })
+    expect(sw.showNotification).toHaveBeenCalledWith(title,
+      expect.objectContaining({ body, data: { ref: 'notification-1', tenant: 'tenant-1' } }))
+    const shown = sw.showNotification.mock.calls[0][1]
+    const close = vi.fn()
+    await sw.dispatch('notificationclick', { notification: { close, data: shown.data } })
+    expect(sw.openWindow).toHaveBeenCalledWith('https://agent.example.test/notification?ref=notification-1&tenant=tenant-1')
+  })
+
+  it('shows manual_rejected wording and routes the click to the notification entry', async () => {
+    // §15 评审 P2：窗口收尾任务手动执行被拒——推送文案 + 点击经
+    // /notification?ref= 归属核验入口（Entry 路由任务视图）
+    const sw = worker(active)
+    await sw.dispatch('push', { data: { json: () => ({ ...payload, event_kind: 'manual_rejected', session_title: '每日日报' }) } })
+    expect(sw.showNotification).toHaveBeenCalledWith('每日日报手动执行未成功',
+      expect.objectContaining({
+        body: '点击查看失败原因，可在任务视图重试',
+        data: { ref: 'notification-1', tenant: 'tenant-1' },
+      }))
+    const shown = sw.showNotification.mock.calls[0][1]
+    const close = vi.fn()
+    await sw.dispatch('notificationclick', { notification: { close, data: shown.data } })
+    expect(close).toHaveBeenCalled()
+    expect(sw.openWindow).toHaveBeenCalledWith('https://agent.example.test/notification?ref=notification-1&tenant=tenant-1')
+  })
+
   it('opens only the fixed same-origin notification entry', async () => {
     const sw = worker(active), close = vi.fn()
     await sw.dispatch('notificationclick', { notification: { close, data: { ref: 'notification-1', tenant: 'tenant-1', url: 'https://evil.example' } } })

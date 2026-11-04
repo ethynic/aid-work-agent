@@ -4425,3 +4425,8 @@
     ALTER TABLE notification_rules DROP CONSTRAINT IF EXISTS notification_rules_recipient_mode_check;
     ALTER TABLE notification_rules ADD CONSTRAINT notification_rules_recipient_mode_check
         CHECK (recipient_mode IN ('tenant_admins','kf_assignee','task_owner'));
+- datetime: "2026-11-03 18:00:00"
+  remark: "定时任务时间窗（设计 §15）：scheduled_tasks 新增可选 start_at/ends_at（循环任务窗口判定 start_at<=触发点<ends_at，旧行 NULL=无限期，无数据回填）；租户任务上限复用 tenants.settings.scheduler.max_tasks_per_user 不新增表"
+  statements: |
+    ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS start_at TIMESTAMP;
+    ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS ends_at TIMESTAMP;

@@ -144,6 +144,41 @@ class TestSubmitMapping:
         db.pause_for_occurrence_with_notify.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_completed_window_manual_rejection_notifies_creator(self):
+        """评审 P1：窗口收尾任务 manual 提交被确定性拒绝——pending 清理与
+        task.manual_rejected 通知同事务；不再只写服务端日志。"""
+        db, client = MagicMock(spec=ScheduledTaskDB), AsyncMock()
+        task_row = pending_task(status="completed", schedule_type="interval",
+                                ends_at="2026-11-01 00:00:00",
+                                pending_trigger="manual")
+        db.pause_for_occurrence_with_notify.return_value = False  # 非 active，不可暂停
+        db.reject_manual_pending_with_notify.return_value = True
+        client.request.side_effect = RunnerError("CREDIT_BLOCKED", 402)
+        dispatcher = make_dispatcher(db=db, client=client)
+
+        await dispatcher._submit_pending(task_row)
+
+        db.reject_manual_pending_with_notify.assert_called_once_with(
+            "sched_abc123", task_row["pending_occurrence_key"], "积分额度不足")
+        db.clear_pending.assert_not_called()  # 通知路径已清理，不再重复 clear
+
+    @pytest.mark.asyncio
+    async def test_manual_rejection_notify_miss_falls_back_to_stale_clear(self):
+        """通知清理条件不命中（并发替换 pending 等）：回退既有迟到清理。"""
+        db, client = MagicMock(spec=ScheduledTaskDB), AsyncMock()
+        task_row = pending_task(status="active", pending_trigger="manual")
+        db.pause_for_occurrence_with_notify.return_value = False
+        db.reject_manual_pending_with_notify.return_value = False
+        db.clear_pending.return_value = True
+        client.request.side_effect = RunnerError("CREDIT_BLOCKED", 402)
+        dispatcher = make_dispatcher(db=db, client=client)
+
+        await dispatcher._submit_pending(task_row)
+
+        db.clear_pending.assert_called_once_with(
+            "sched_abc123", task_row["pending_occurrence_key"])
+
+    @pytest.mark.asyncio
     async def test_stale_manual_pending_after_once_completed_is_cleared(self):
         """once 边界（评审 P2）：定时执行先完成置 completed，尚未受理的 manual
         pending 被接单守卫拒绝且任务已非 active——pause 必然 False，残留槽按
@@ -154,6 +189,7 @@ class TestSubmitMapping:
         # 第一轮返回待提交行；clear_pending 后第二轮不再返回（真实库行为）
         db.list_pending.side_effect = [[manual], []]
         db.pause_for_occurrence_with_notify.return_value = False  # 任务 completed
+        db.reject_manual_pending_with_notify.return_value = False  # once 行不命中
         db.clear_pending.return_value = True
         client.request.side_effect = RunnerError("SCHEDULED_TASK_NOT_ACCEPTABLE", 409)
         dispatcher = make_dispatcher(db=db, client=client)
@@ -579,3 +615,123 @@ class TestCountRejectedResumesRealSql:
         sql, _ = cursor.execute.call_args.args
         assert "accepted_at >= %s" in sql
         assert "created_at" not in sql
+
+
+# ==================== 时间窗收尾与 completed 状态的中断恢复（设计 §15.2.4） ====================
+
+class TestWindowFinalizeAndCompletedRecovery:
+    @pytest.mark.asyncio
+    async def test_run_once_finalizes_window_ended_tasks_first(self):
+        """单轮第⓪步：时间窗收尾扫描（异常不中断整轮）"""
+        db, client = MagicMock(spec=ScheduledTaskDB), AsyncMock()
+        db.finalize_window_ended.return_value = ["sched_a", "sched_b"]
+        db.list_pending.return_value = []
+        db.list_due.return_value = []
+        db.list_interrupted.return_value = []
+        dispatcher = make_dispatcher(db=db, client=client)
+
+        await dispatcher.run_once()
+
+        db.finalize_window_ended.assert_called_once_with(50)
+        db.list_pending.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_finalize_scan_error_does_not_break_round(self):
+        db, client = MagicMock(spec=ScheduledTaskDB), AsyncMock()
+        db.finalize_window_ended.side_effect = RuntimeError("db down")
+        db.list_pending.return_value = []
+        db.list_due.return_value = []
+        db.list_interrupted.return_value = []
+        dispatcher = make_dispatcher(db=db, client=client)
+
+        await dispatcher.run_once()  # 不抛出
+
+        db.list_pending.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_completed_window_task_exhaustion_still_sends_real_control(self):
+        """窗口自动完成任务的 manual 中断执行：recovery_reset_at 无法重置、
+        不可 pause——耗尽判定不适用，继续发真实 resume 控制（CR P1-2：此前
+        defer 循环永不再真正重试）。"""
+        db, client = MagicMock(spec=ScheduledTaskDB), AsyncMock()
+        db.list_pending.return_value = []
+        db.list_due.return_value = []
+        db.list_interrupted.return_value = [
+            interrupted_row(status="completed", schedule_type="interval",
+                            ends_at="2026-11-01 00:00:00")]
+        db.count_rejected_resumes.return_value = 3  # >= recovery_max_attempts
+        dispatcher = make_dispatcher(db=db, client=client)
+
+        await dispatcher.run_once()
+
+        db.pause_interrupted_with_notify.assert_not_called()
+        client.request.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_completed_window_task_total_cap_still_tries_hourly(self):
+        """completed 行拒绝总量达阈值（3×max）：降为小时级**真实尝试**而非
+        放弃（评审 P1：只退避不尝试，拒绝条件消失后无法自愈）——本轮仍发
+        恢复控制，受理后 defer 3600 限频；不逐轮轰炸。"""
+        db, client = MagicMock(spec=ScheduledTaskDB), AsyncMock()
+        db.list_pending.return_value = []
+        db.list_due.return_value = []
+        db.list_interrupted.return_value = [
+            interrupted_row(status="completed", schedule_type="interval",
+                            ends_at="2026-11-01 00:00:00")]
+        db.count_rejected_resumes.return_value = 9  # >= 3 * recovery_max_attempts
+        dispatcher = make_dispatcher(db=db, client=client)
+
+        await dispatcher.run_once()
+
+        client.request.assert_awaited_once()  # 真实尝试，不因阈值放弃
+        db.pause_interrupted_with_notify.assert_not_called()
+        db.defer_recovery.assert_called_once_with("sched_abc123", 3600)
+
+    @pytest.mark.asyncio
+    async def test_completed_window_capped_recovers_after_condition_restored(self):
+        """评审 P1 自愈链路：达到阈值（402 额度拒绝 9 次）→ 每小时真实尝试；
+        条件恢复（充值后 402 消失）→ 下一次小时级尝试的控制被受理 →
+        worker 消费恢复执行（runner 离开 interrupted，不再进入候选）。"""
+        row = interrupted_row(status="completed", schedule_type="interval",
+                              ends_at="2026-11-01 00:00:00")
+        db, client = MagicMock(spec=ScheduledTaskDB), AsyncMock()
+        db.count_rejected_resumes.return_value = 9
+        db.pause_interrupted_with_notify.return_value = False
+        dispatcher = make_dispatcher(db=db, client=client)
+
+        # 第一轮：条件仍未恢复——控制被 402 拒绝，小时级退避（真实尝试已发出）
+        client.request.side_effect = RunnerError("CREDIT_BLOCKED", 402)
+        await dispatcher._resume_one(dict(row))
+        client.request.assert_awaited_once()
+        db.defer_recovery.assert_called_once_with("sched_abc123", 3600)
+
+        # 第二轮（退避到期后）：条件已恢复——控制受理成功，无暂停
+        client.request = AsyncMock()  # 202 受理
+        db.defer_recovery.reset_mock()
+        db.pause_interrupted_with_notify.reset_mock()
+        await dispatcher._resume_one(dict(row))
+        client.request.assert_awaited_once()
+        db.pause_interrupted_with_notify.assert_not_called()
+        db.defer_recovery.assert_called_once_with("sched_abc123", 3600)
+        # 此后 worker 消费控制恢复执行，runner 离开 interrupted，
+        # list_interrupted 不再返回该行（由 runner 状态保证，无需调度侧清理）
+
+    @pytest.mark.asyncio
+    async def test_completed_window_task_deterministic_resume_rejection_defers(self):
+        """受理前确定性拒绝（如 402）：completed 行不改回 paused，小时级退避
+        后重试（额度类拒绝可随充值自愈）。"""
+        db, client = MagicMock(spec=ScheduledTaskDB), AsyncMock()
+        db.list_pending.return_value = []
+        db.list_due.return_value = []
+        db.list_interrupted.return_value = [
+            interrupted_row(status="completed", schedule_type="daily",
+                            ends_at="2026-11-01 00:00:00")]
+        db.count_rejected_resumes.return_value = 0
+        db.pause_interrupted_with_notify.return_value = False
+        client.request.side_effect = RunnerError("CREDIT_BLOCKED", 402)
+        dispatcher = make_dispatcher(db=db, client=client)
+
+        await dispatcher.run_once()
+
+        db.pause_interrupted_with_notify.assert_called_once()
+        db.defer_recovery.assert_called_once_with("sched_abc123", 3600)

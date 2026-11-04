@@ -299,7 +299,7 @@ RunnerSubmit(
 - scheduled 相关事件统一资源：terminal 与 needs_action 为 `{'type':'runner_result'|'runner_waiting','id':runner_id}`（沿用既有注册），task.paused 为 `{'type':'scheduled_task','id':task_id}`；
 - **目标路由统一经"资源→任务行"解析**：runner_result/runner_waiting 经 `agent_runners.session_id → scheduled_tasks`，scheduled_task 直接命中；命中后按事件参数快照路由——含 `notify_rule_id`：校验规则 enabled 且事件在其 conditions 内，取规则级渠道目标投递（规则停用/删除/事件被过滤记 route_snapshot skipped），跳过偏好门控；含 `notify_target_id`（存量兜底）：向该目标投递外发（校验目标当前有效，失效记投递异常）；两者皆无 → 用户个人偏好路由；站内信恒开；
 - 参数中的通知路由（`notify_rule_id`/`notify_target_id`）在**事件生成时快照**（不可变），任务后续改规则/目标不影响已生成事件；
-- 外发机器人文案携带任务视图入口链接（复用通知系统链接基准配置）。
+- 外发机器人文案携带任务视图入口链接（原设计要求，现有实现尚未写入外发文本）；2026-11-03 的单次结果定位方案见 §15.5。
 
 ### 8.3 目标选项读取
 
@@ -441,3 +441,52 @@ scheduler:
 11. 停机错过多周期：cron 从 now 合并一次；interval 相位不漂移；
 12. terminal 钩子、needs_action 生产与通知同事务：任一失败整体回滚；
 13. 非交互过滤一致性：提问工具对 scheduled 根/子执行 definitions 与 dispatch 同时不可见；prompt_augmentation 到达根与子执行上下文。
+
+## 15. 时间窗、最短间隔与用户任务数（2026-11-03 待开发扩展）
+
+本节是在现有 Runner 化调度上增量扩展；实现以本节为准。实施计划见 [定时任务调度约束开发计划](../plans/plan-scheduled-task-schedule-constraints.md)。
+
+### 15.1 现状与范围
+
+- 当前 `daily/weekly/monthly/interval` 没有起止时间，无法表达“一个月内每天 09:00”；`once` 自带单次 `run_at`，不加时间窗。
+- `build_schedule_fields` 目前只要求 `interval_hours > 0`，因此小于 1 小时可入库；前端改期也只要求分钟数大于零。
+- `scheduler.max_tasks_per_user: 5` 已存在，`ScheduledTaskDB.create` 与 `resume_recompute` 在事务中只统计 `active`。因此“完全无限制”与代码事实不符。本次保留“活跃任务数”口径，并让租户管理员在企业设置中调整本租户每人的上限；配置文件值作为未设置租户覆盖值时的默认值。
+
+### 15.2 产品语义
+
+1. 循环任务可选 `start_at`、`ends_at`（北京时间 `YYYY-MM-DD HH:MM:SS`，可只填一端）；两端都填须 `start_at < ends_at`。时间窗按 **`start_at <= 计划触发点 < ends_at`** 判定；“11 月整月”传 `2026-11-01 00:00:00` 至 `2026-12-01 00:00:00`。结束边界不含，避免 00:00 属于两段。精确时间由创建对话确认，不猜测“一个月”的起止含义。
+2. 仅给 `daily/weekly/monthly/interval` 增加时间窗；不填时保持无限期循环。创建或改期必须从当前时间起、在窗内至少存在一个触发点；否则返回明确校验错误。`start_at` 可以早于当前时间，此时 interval 从当前时间首次触发，固定时刻规则取下一个有效点；过去的点不补跑。
+3. `interval` 设了未来 `start_at` 时，**开始时刻就是首次计划触发点**，之后每隔 N 小时；不设未来起点时，创建即生效，首次计划触发点取当前时间，再每隔 N 小时。实际执行受调度扫描间隔与 Runner 接单延迟影响，不承诺墙钟秒级同步。暂停后恢复仍按现有规则从恢复时间重新开始（恢复时刻为首个新计划点），不补跑暂停期间的点；`daily/weekly/monthly` 沿用 cron，在起点之后寻找窗内首个匹配点，起点恰好命中时允许该点，已过去的点不补跑。
+4. 窗口限制**自动计划触发点**，不截断已经受理的 Runner 执行。到期认领时若已过 `ends_at`，不再补发旧触发点；最后一个窗内点认领后保留 `active` 直到该次提交与执行终态，再置 `completed`。若该次提交进入重试或确定性拒绝，仍走现有 pending/paused 路径，不提前清理或伪造成功；用户恢复时若窗口已结束，置 `completed`，不补跑。无 pending、无非终态 Runner 且窗口已结束的任务由调度扫描收尾。`trigger`“立即执行一次”是用户主动操作，**不受时间窗限制**，也不改变 `next_due_at`、interval 锚点或窗口字段；对已因时间窗结束而自动完成的循环任务同样允许手动执行一次，仍按现有归属、任务会话和 Runner 接单规则执行，手动执行不重新激活自动调度。暂停任务仍须先恢复，once 的 completed/expired 行为不变。
+5. `interval` 只接受**整数小时**（1、2、3……；数字或整数字符串），不接受分钟、秒或 1.5 小时；`scheduler.min_interval_hours` 默认 1，也只接受 ≥1 的整数，配置只能把最短间隔调高，不能突破 1 小时硬下限。新建和改期在 `build_schedule_fields` 统一校验 `interval_hours >= min_interval_hours`；持久字段继续用现有 `interval_seconds = interval_hours × 3600`，无需迁移列类型。`daily/weekly/monthly` 固定日历规则每日至多一次，不受该配置影响。
+6. 每用户**活跃任务**上限默认仍为 5，计数范围保持同租户、同用户的 `active`；暂停、完成、过期任务不占名额，恢复暂停任务会重新占名额。有效值优先读该租户的企业设置覆盖值，未设置时读 `scheduler.max_tasks_per_user`；两处只接受正整数。租户管理员在“企业设置 → 计划任务”修改本租户的上限，修改后影响新建与恢复；配置文件仍可修改无租户覆盖值时的默认数字。降低上限不自动暂停或删除已有任务；人数已超额时只拒绝新增/恢复，待活跃数降到上限以下再放行。创建和恢复沿用现有用户 advisory transaction lock，确保并发操作不能越限；不另建配额表或叠加第二套全局限额。
+
+### 15.3 技术改动点
+
+| 层 | 改动 |
+|---|---|
+| 数据库 | `scheduled_tasks` 增 `start_at TIMESTAMP NULL`、`ends_at TIMESTAMP NULL`；在 `deploy/init-postgres.sql` 与 `deploy/db_update.yaml` 同步，`docs/system/database_system_table.md` 登记。旧行均为 NULL，无数据回填。租户上限复用现有 `tenants.settings` JSON 文本中的 `scheduler.max_tasks_per_user`，不增加独立表。 |
+| 领域函数 | `src/scheduler/schedule.py` 的 `build_schedule_fields` 接收可选起止时间并返回持久字段；共用创建/改期校验和窗内首个触发点计算。`compute_next_due`、`compute_resume_due` 在窗口结束时返回无后续计划点；首次/恢复的 interval 计划点取起点/恢复时刻，后续按原相位推进；间隔值只接受整数小时。 |
+| 存储与调度 | `ScheduledTaskDB.create/update_schedule` 保存两列；`claim_due` 在锁定任务行后判定结束边界、推进窗内下次时间，保留现有 pending 快照与接单守卫。`dispatch` 扫描可收尾的过窗任务；终态钩子在最后一次计划执行完成后置 `completed`。调整 `resume_recompute` 的过窗状态转换与计数逻辑。窗口 completed 行的 manual 执行须同步适配 `submit_manual`、首次接单、提交拒绝清理、interrupted 恢复候选和终态回写；只让该类 manual 通行，不让 scheduled 自动任务复活或因手动失败把 completed 改为 paused。 |
+| 入口与界面 | `create_scheduled_task.time_config` 和 `PUT /api/scheduled-tasks/{id}/schedule` 的 `time_config` 增可选 `start_at/ends_at`，`once` 不接受；工具说明写明时间窗与整数小时。公开任务投影、`frontend/web/api/scheduledTask.ts`、任务视图改期弹窗和调度摘要回显两列；`GET /api/scheduled-tasks/limits` 回传当前最短间隔与租户有效任务上限供普通用户查看（路由置于 `/{task_id}` 之前）。前端仅做即时提示，后端领域函数是最终校验。 |
+| 租户设置与任务数 | `src/saas/api/tenant_mgmt.py` 增管理员专用 `GET/PATCH /api/saas/tenants/me/scheduler`，只读写 `tenants.settings.scheduler.max_tasks_per_user`，保留其他 settings 键；`frontend/web/components/saas/TenantSettings.vue` 加“计划任务”区域，显示只读的全局最短间隔及可编辑的每人活跃任务上限。`src/scheduler/schedule.py` 统一解析租户覆盖值→配置默认值；创建/恢复都用有效值与现有 active COUNT、advisory lock。 |
+
+### 15.4 验收边界
+
+- 整月每日 09:00 只产生窗内计划点；起点恰在 09:00、终点恰在 09:00、跨月与停机后过窗均有明确结果；最后一次执行仍可完成、记录用量和通知。
+- 0.5 小时、1.5 小时、分钟或秒输入、非法配置被拒；1 小时及更大的整数小时可用；配置提高后创建/改期按新值校验，存量短周期任务不被静默改写或停止，修改其调度时须满足新值。interval 有未来起点时恰在起点触发首次计划，恢复时恰在恢复点重启周期。
+- 默认同租户同用户第 6 个 active 任务拒绝；暂停释放名额，恢复重新占名额；完成/过期/删除释放名额；租户管理员修改上限只影响本租户，配置默认值只影响无覆盖租户；并发创建/恢复不能突破有效上限。
+- 无时间窗的既有任务与一次性任务继续沿用原行为；“立即执行一次”在窗前、窗内、窗后均可用且不挪动自动计划点；已受理执行、待提交重试及通知/计费链路不因窗口结束丢失。
+
+### 15.5 通知直达本次执行结果（2026-11-03 追加）
+
+**接收人范围已确认**：只有任务创建者需要查看结果。通知即使外发到群机器人，其他群成员点击链接也不能读取任务内容。
+
+| 候选 | 技术事实 | 结论 |
+|---|---|---|
+| 每次执行结果的登录后链接 | `task.completed/failed` 已以 `runner_id` 作 `resource_ref`，每次执行各有唯一 `notification_ref`；`/notification?ref=...&tenant=...` 已处理登录与属主核验，但当前只跳到任务视图，没有定位执行行。 | **采用**：复用通知入口，核验后带 `runner_id` 打开该任务的具体执行记录。 |
+| Web 单条回复的无密码分享 | `/share/reply/{share_key}` 是独立、可匿名读取的回复副本，未设置自动失效；自动为每次任务执行创建并发到群里，会让持有链接的任何人读到回复及其文件。 | 不用于自动通知。用户主动分享某条回复仍走现有分享功能。 |
+
+**链接与页面行为**：完成/失败通知在站内信、邮件、群机器人中给出“查看本次执行结果”入口。外发文本用既有 `app.public_base_url` 拼绝对地址 `/notification?ref=<notification_ref>&tenant=<tenant_id>`；Web Push 继续带 `notification_ref` 打开同一入口，不把结果正文或分享密钥塞进推送。通知入口调用既有 `GET /api/notifications/messages/{ref}` 核验接收账号和资源归属后，针对 scheduled `runner_result` 转到 `/t/<tenant_id>/tasks/<task_id>?runner_id=<runner_id>`。任务视图按 `runner_id` 获取指定 Runner（即使已不在首页 20 条里），复核它属于当前任务会话，展开并定位这一次的状态、结果或失败原因；普通聊天通知及暂停/需要处理通知继续原路由。
+
+**边界**：链接只是定位符，不授予访问权；未登录先登录，非创建者/跨租户/任务已删除时如实提示无权或资源不存在。外发地址依赖已配置的 `app.public_base_url`，部署验收须检查其可达且指向当前 Web 站点；缺失时不拼错误地址，投递仍按现有文本完成并记录配置缺口。通知引用随现有通知账本保留策略清理后将无法再解析，任务尚存在时创建者仍可从任务视图查历史执行；不为通知链接新建公开分享表或永久访问令牌。

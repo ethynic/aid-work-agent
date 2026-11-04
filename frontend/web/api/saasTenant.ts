@@ -134,6 +134,39 @@ export async function updateTenantInfo(data: { company_name?: string; contact_na
   return res.json()
 }
 
+// ==================== 计划任务设置（§15：本租户每人活跃任务上限） ====================
+
+export interface TenantSchedulerSettings {
+  min_interval_hours: number
+  /** 本租户覆盖值（null=未设置，使用全局默认） */
+  max_tasks_per_user: number | null
+  /** 当前生效值（覆盖值优先，否则配置默认） */
+  effective_max_tasks_per_user: number
+}
+
+export async function getTenantScheduler(): Promise<TenantSchedulerSettings> {
+  const res = await fetch(`${API_BASE}/tenants/me/scheduler`, {
+    headers: getSaasAuthHeader()
+  })
+  if (!res.ok) throw new Error('获取计划任务设置失败')
+  const data = await res.json()
+  return data?.data || { min_interval_hours: 1, max_tasks_per_user: null, effective_max_tasks_per_user: 5 }
+}
+
+export async function updateTenantScheduler(maxTasksPerUser: number | null): Promise<{ max_tasks_per_user: number | null }> {
+  const res = await fetch(`${API_BASE}/tenants/me/scheduler`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
+    body: JSON.stringify({ max_tasks_per_user: maxTasksPerUser })
+  })
+  const data = await res.json().catch(() => null)
+  if (!res.ok) {
+    const detail = typeof data?.detail === 'string' ? data.detail : '保存失败'
+    throw new Error(detail)
+  }
+  return data?.data || { max_tasks_per_user: null }
+}
+
 export async function listTenants(params?: {
   page?: number
   page_size?: number

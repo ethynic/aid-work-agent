@@ -501,6 +501,7 @@ chunks_vec（向量）      chunks_fts（全文搜索）
 - `profile_id` / `instance_id` — 创建时从工具执行上下文继承的智能体身份
 - `schedule_type` — `daily` / `weekly` / `monthly` / `interval` / `once`
 - `cron_expression` / `interval_seconds` / `run_at` — 调度规则（`run_at` 为 once 专用）
+- `start_at` / `ends_at` — 循环任务可选时间窗（2026-11-03，设计 §15）：窗口判定 `start_at <= 计划触发点 < ends_at`（结束边界不含）；旧行均为 NULL 表示无限期，无数据回填。窗口只限制自动计划触发点，已受理执行不受截断；窗口耗尽后由终态钩子/调度扫描置 `completed`，manual 触发不受窗口限制。租户级每人活跃任务上限存于 `tenants.settings.scheduler.max_tasks_per_user`（JSON 覆盖值，无覆盖时取配置默认）
 - `session_id` — UNIQUE，任务专属会话（chat_sessions 行，metadata 带 `scheduled_task` 标记），执行结果的存储容器
 - `notification_target_id` — 旧列，`notification_targets` 引用（存量任务直选渠道目标；发布侧继续快照 `notify_target_id` 兜底，写入口已下线）
 - `notification_rule_id` — 可选，`notification_rules` 引用（`scheduled.task` 聚合规则，任务级选用；事件生成时快照 `notify_rule_id` 进参数，展开侧按规则级 targets 投递）

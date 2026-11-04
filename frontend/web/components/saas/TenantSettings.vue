@@ -54,6 +54,51 @@
           </button>
         </div>
 
+        <!-- 计划任务设置（§15：本租户每人活跃任务上限；全局最短间隔只读） -->
+        <div id="tenant-scheduler" class="scroll-mt-4">
+          <div class="bg-white rounded-xl shadow-sm border border-default p-6 space-y-4">
+            <div>
+              <h2 class="text-base font-semibold text-default">计划任务</h2>
+              <p class="mt-1 text-sm text-muted">本租户成员创建与恢复定时任务时生效的全局约束。</p>
+            </div>
+            <div v-if="schedulerLoading" class="text-sm text-muted">加载计划任务设置…</div>
+            <template v-else-if="scheduler">
+              <div>
+                <label class="block text-sm text-default mb-1">最短执行间隔（全局，只读）</label>
+                <input type="text" :value="`${scheduler.min_interval_hours} 小时（整数）`" disabled
+                  class="w-full px-3 py-2 bg-surface-hover border border-hover rounded-lg text-muted" />
+                <p class="mt-1 text-xs text-muted">间隔任务只接受不低于该值的整数小时；由平台配置管理，租户不可修改。</p>
+              </div>
+              <div>
+                <label for="tenant-scheduler-max-tasks" class="block text-sm text-default mb-1">每人活跃任务上限</label>
+                <div class="flex items-center gap-2">
+                  <input id="tenant-scheduler-max-tasks" v-model="schedulerMaxTasks" type="number" min="1" step="1"
+                    class="w-32 px-3 py-2 bg-surface-hover border border-hover rounded-lg text-default focus:outline-none focus:border-primary-400"
+                    :disabled="schedulerSaving" />
+                  <button @click="handleSaveScheduler" :disabled="schedulerSaving"
+                    class="px-4 py-2 bg-primary-500 hover:bg-primary-600 disabled:bg-surface-hover text-white rounded-lg text-sm font-medium transition-colors">
+                    {{ schedulerSaving ? '保存中…' : '保存' }}
+                  </button>
+                  <button v-if="scheduler.max_tasks_per_user !== null" @click="handleResetScheduler" :disabled="schedulerSaving"
+                    class="px-4 py-2 border border-hover hover:bg-surface-hover text-default rounded-lg text-sm transition-colors">
+                    恢复默认
+                  </button>
+                </div>
+                <p class="mt-1 text-xs text-muted">
+                  当前生效：{{ scheduler.effective_max_tasks_per_user }} 个/人
+                  {{ scheduler.max_tasks_per_user === null ? '（未设置覆盖，使用全局默认）' : '（本租户覆盖值）' }}。
+                  暂停/完成/过期任务不占名额；调低上限不影响已有任务，超额时仅限制新建与恢复。
+                </p>
+              </div>
+            </template>
+            <div v-else class="text-sm text-danger-600">计划任务设置加载失败，请刷新重试。</div>
+            <div v-if="schedulerMessage" class="p-3 rounded-lg text-sm"
+              :class="schedulerMessageType === 'success' ? 'bg-success-50 border border-success-200 text-success-600' : 'bg-danger-50 border border-danger-200 text-danger-600'">
+              {{ schedulerMessage }}
+            </div>
+          </div>
+        </div>
+
         <!-- 租户邮箱（邮箱三层解析第 2 层兜底，AI获客等数字员工发信用） -->
         <div id="tenant-email" class="scroll-mt-4">
           <TenantEmailSettings />
@@ -69,7 +114,7 @@ import { useRoute, useRouter } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import LogoUpload from '@/components/ui/LogoUpload.vue'
 import TenantEmailSettings from '@/components/email/TenantEmailSettings.vue'
-import { getTenantInfo, updateTenantInfo } from '@/api/saasTenant'
+import { getTenantInfo, updateTenantInfo, getTenantScheduler, updateTenantScheduler, type TenantSchedulerSettings } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const route = useRoute()
@@ -167,9 +212,64 @@ async function handleSave() {
 
 onMounted(async () => {
   await loadSettings()
+  void loadSchedulerSettings()
   // 旧 hash 深链重定向（如防滥用中心「通知渠道」入口）：通知配置已迁至独立页面
   if (route.hash === '#notification-channels') {
     router.replace({ path: `/t/${tenantId.value}/notification-rules` })
   }
 })
+
+// ==================== 计划任务设置（§15：每人活跃任务上限） ====================
+
+const scheduler = ref<TenantSchedulerSettings | null>(null)
+const schedulerLoading = ref(true)
+const schedulerSaving = ref(false)
+const schedulerMaxTasks = ref('')
+const schedulerMessage = ref('')
+const schedulerMessageType = ref<'success' | 'error'>('success')
+
+async function loadSchedulerSettings() {
+  schedulerLoading.value = true
+  try {
+    const value = await getTenantScheduler()
+    scheduler.value = value
+    schedulerMaxTasks.value = String(value.max_tasks_per_user ?? value.effective_max_tasks_per_user)
+  } catch {
+    scheduler.value = null
+  } finally {
+    schedulerLoading.value = false
+  }
+}
+
+async function handleSaveScheduler() {
+  const value = Number(schedulerMaxTasks.value.trim())
+  if (!Number.isInteger(value) || value < 1) {
+    schedulerMessage.value = '每人活跃任务上限必须为正整数'
+    schedulerMessageType.value = 'error'
+    return
+  }
+  await saveSchedulerOverride(value)
+}
+
+async function handleResetScheduler() {
+  await saveSchedulerOverride(null)
+}
+
+async function saveSchedulerOverride(value: number | null) {
+  schedulerSaving.value = true
+  schedulerMessage.value = ''
+  try {
+    await updateTenantScheduler(value)
+    const fresh = await getTenantScheduler()
+    scheduler.value = fresh
+    schedulerMaxTasks.value = String(fresh.max_tasks_per_user ?? fresh.effective_max_tasks_per_user)
+    schedulerMessage.value = value === null ? '已恢复默认（使用全局默认上限）' : '已保存'
+    schedulerMessageType.value = 'success'
+  } catch (e: any) {
+    schedulerMessage.value = e?.message || '保存失败'
+    schedulerMessageType.value = 'error'
+  } finally {
+    schedulerSaving.value = false
+  }
+}
 </script>

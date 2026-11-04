@@ -38,15 +38,21 @@ def unprotect(value):
 # 设计 §8.1）：旧默认两元与旧 DDL 默认三元（waiting_input 尚无 paused）均
 # 兼容扩展到当前默认集合；显式自定义集合（含显式三元自定义——偏好接口未
 # 提供 event_types 编辑，三元只能来自旧 DDL 默认）不受影响。
+# 2026-11-04 追加 task.manual_rejected（§15 评审 P1：窗口收尾任务手动执行被
+# 拒通知）：旧默认五元（DDL DEFAULT 曾为该五元）同样兼容扩展，存量偏好行
+# 与已部署库的新建行（DEFAULT 未迁移）都能投递新事件。
 LEGACY_TASK_EVENT_TYPES = ('task.completed', 'task.failed')
 LEGACY_DEFAULT_TASK_EVENT_TYPES = ('task.completed', 'task.failed', 'task.waiting_input')
+LEGACY_DEFAULT_TASK_EVENT_TYPES_V2 = ('task.completed', 'task.failed', 'task.waiting_input',
+                                      'task.paused', 'task.needs_action')
 TASK_EVENT_TYPES = ('task.completed', 'task.failed', 'task.waiting_input', 'task.paused',
-                    'task.needs_action')
+                    'task.needs_action', 'task.manual_rejected')
 
 
 def _effective_event_types(stored):
     stored = tuple(stored or ())
-    if set(stored) in (set(LEGACY_TASK_EVENT_TYPES), set(LEGACY_DEFAULT_TASK_EVENT_TYPES)):
+    if set(stored) in (set(LEGACY_TASK_EVENT_TYPES), set(LEGACY_DEFAULT_TASK_EVENT_TYPES),
+                       set(LEGACY_DEFAULT_TASK_EVENT_TYPES_V2)):
         return TASK_EVENT_TYPES
     return stored
 
@@ -777,18 +783,32 @@ class NotificationRepository:
             if not message:
                 raise NotificationError('NOTIFICATION_NOT_FOUND', 404)
             resource = resource_in_tx(cursor, message)
-            return {'notification_ref':ref,'event_type':message['event_type'],'resource':resource}
+            result = {'notification_ref':ref,'event_type':message['event_type'],'resource':resource}
+            # 站内信同款标题/正文（§15 评审 P2：推送点击落地页可展示通知文案，
+            # 如手动执行被拒的原因；仅模板渲染文本，不含原始参数对象）
+            try:
+                from .events import render_inbox_text
+                params = unprotect(message['parameters_encrypted'])
+                title, body = render_inbox_text(message['event_type'], params)
+                result['title'], result['body'] = title, body
+            except Exception:
+                pass
+            return result
 
     INBOX_EVENT_TYPES = ('billing.credit_low','billing.tenant_expiry','abuse.rule_triggered',
-                         'task.waiting_input','task.paused','task.needs_action','lead.captured')
+                         'task.completed','task.failed','task.waiting_input','task.paused',
+                         'task.needs_action','task.manual_rejected','lead.captured')
 
     @staticmethod
     def _inbox_link(event_type, params, subject, notification_ref=None):
         """点击站内信的跳转地址；abuse 告警跳防滥用中心并定位到该用户明细；
         提问等待通知复用既有通知解析入口 /notification?ref=——入口完成认证与
         resource 解析后带 _load_session/数字员工路由回原会话（五轮评审 P2-4：
-        不自行拼 chat 路径，避免遗漏非默认数字员工路由）。"""
-        if event_type in ('task.waiting_input', 'task.paused', 'task.needs_action'):
+        不自行拼 chat 路径，避免遗漏非默认数字员工路由）。task.completed/
+        failed（§15.5）同样经通知入口：scheduled 终态解析 runner_result 后由
+        前端带 runner_id 定位任务视图的本次执行行，普通聊天终态回原会话。"""
+        if event_type in ('task.waiting_input', 'task.paused', 'task.needs_action',
+                          'task.completed', 'task.failed', 'task.manual_rejected'):
             # 提问等待与定时任务暂停通知复用既有通知解析入口 /notification?ref=
             # ——入口完成认证与 resource 解析（task.paused 解析到任务行，
             # Phase 5 前端据此路由任务视图）；入口（NotificationEntry）以

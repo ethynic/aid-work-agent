@@ -9,6 +9,12 @@
 - once：无下次（None），过期判定见 once_expired（20261026-1530 修复语义：
   超过宽限的 once 不执行直接作废）。
 
+时间窗（设计 §15.2）：循环任务可选 start_at/ends_at（naive 本地时间），
+窗口判定 start_at <= 计划触发点 < ends_at（结束边界不含，避免 00:00 属于
+两段）。compute_next_due 推进结果出窗（>= ends_at）时返回 None——无后续
+计划点，认领侧保留 active 至该次执行终态再置 completed；手动执行不受窗口
+限制。旧行两列为 NULL 表示无限期循环，行为不变。
+
 时间约定：任务行时间为 naive 的本地时间（Asia/Shanghai），cron 计算经
 ZoneInfo 转换后还原为 naive。
 """
@@ -22,13 +28,26 @@ TIMEZONE = "Asia/Shanghai"
 # once 过期宽限（run_at 已过仍超过该窗口 → 认领时作废不执行）
 ONCE_EXPIRY_GRACE = timedelta(minutes=10)
 
+# interval 最短间隔硬下限（小时）：配置只能调高不能突破（设计 §15.2.5）
+MIN_INTERVAL_HOURS_FLOOR = 1
 
-def compute_next_due(task: dict, now: datetime = None) -> datetime:
+
+def _window_next_due(advance, task):
+    """推进结果按结束边界截断：出窗（>= ends_at）返回 None（无后续计划点）。"""
+    ends_at = task.get("ends_at")
+    if ends_at is not None and advance >= ends_at:
+        return None
+    return advance
+
+
+def compute_next_due(task: dict, now: datetime = None):
     """按任务的当前调度定义计算认领后的下一次执行时间。
 
     - task 为 scheduled_tasks 行（dict）：schedule_type / cron_expression /
-      interval_seconds / next_due_at（本次消费的 due，interval 的节奏锚点）；
+      interval_seconds / next_due_at（本次消费的 due，interval 的节奏锚点）/
+      start_at / ends_at（可选时间窗）；
     - now 缺省取本地当前时间；返回 naive 本地时间；once 返回 None；
+      窗口耗尽（推进结果 >= ends_at）同样返回 None；
     - 调度数据非法（interval<=0、cron 不可解析）抛 ValueError——认领事务
       中止不消费 occurrence，由调用方记录（创建端校验为正道）。
     """
@@ -43,7 +62,7 @@ def compute_next_due(task: dict, now: datetime = None) -> datetime:
         advance = task["next_due_at"] + timedelta(seconds=seconds)
         while advance <= now:
             advance += timedelta(seconds=seconds)
-        return advance
+        return _window_next_due(advance, task)
     # daily/weekly/monthly 均编译为 cron 表达式
     from apscheduler.triggers.cron import CronTrigger
     tz = ZoneInfo(TIMEZONE)
@@ -55,7 +74,17 @@ def compute_next_due(task: dict, now: datetime = None) -> datetime:
     aware = trigger.get_next_fire_time(None, base)
     if aware is None:
         raise ValueError("INVALID_CRON_SCHEDULE")
-    return aware.astimezone(tz).replace(tzinfo=None)
+    advance = aware.astimezone(tz).replace(tzinfo=None)
+    start_at = task.get("start_at")
+    if start_at is not None and advance < start_at:
+        # 窗口起点在未来：取窗内首个匹配点（起点恰好命中时允许该点，
+        # -1µs 基准与 now 推进同技巧）；已过去的点不补跑由 now 基准保证
+        aware = trigger.get_next_fire_time(
+            None, start_at.replace(tzinfo=tz) - timedelta(microseconds=1))
+        if aware is None:
+            raise ValueError("INVALID_CRON_SCHEDULE")
+        advance = aware.astimezone(tz).replace(tzinfo=None)
+    return _window_next_due(advance, task)
 
 
 def once_expired(task: dict, now: datetime = None) -> bool:
@@ -158,16 +187,78 @@ def generate_cron_expression(schedule_type, time_config):
     return None
 
 
+def _parse_window_bounds(schedule_type, time_config):
+    """解析并校验可选时间窗 start_at/ends_at（设计 §15.2.1/15.2.2）。
+
+    返回 (start_at, ends_at) naive datetime（未填为 None）：
+    - 仅循环类型接受窗口字段，once 一律拒绝（其 run_at 自带单次语义）；
+    - 两端都填须 start_at < ends_at；格式与 run_at 一致
+      （YYYY-MM-DD HH:MM:SS，北京时间），不可解析直接拒绝不猜测。
+    """
+    start_raw = time_config.get("start_at")
+    ends_raw = time_config.get("ends_at")
+    if schedule_type == "once" and (start_raw or ends_raw):
+        raise ScheduleConfigError(
+            "一次性任务（once）不支持 start_at/ends_at 时间窗，"
+            "请只提供 run_at（未来具体时间）")
+    start_at = ends_at = None
+    if start_raw:
+        start_at = parse_run_at(start_raw)
+        if start_at is None:
+            raise ScheduleConfigError(
+                "start_at 格式不合法：须为 YYYY-MM-DD HH:MM:SS（北京时间），"
+                "请向用户确认具体起止时间")
+    if ends_raw:
+        ends_at = parse_run_at(ends_raw)
+        if ends_at is None:
+            raise ScheduleConfigError(
+                "ends_at 格式不合法：须为 YYYY-MM-DD HH:MM:SS（北京时间），"
+                "请向用户确认具体起止时间")
+    if start_at is not None and ends_at is not None and start_at >= ends_at:
+        raise ScheduleConfigError(
+            f"时间窗无效：start_at（{start_at.strftime('%Y-%m-%d %H:%M:%S')}）必须早于 "
+            f"ends_at（{ends_at.strftime('%Y-%m-%d %H:%M:%S')}）")
+    return start_at, ends_at
+
+
+def _coerce_interval_hours(interval_hours):
+    """interval_hours → 整数小时（设计 §15.2.5：只接受整数小时，数字或整数字符串；
+    拒绝布尔、小数、分钟/秒等输入），非法抛 ScheduleConfigError。"""
+    if isinstance(interval_hours, bool):
+        raise ScheduleConfigError(
+            "interval 的 interval_hours 必须为整数小时（如 1、2），不接受布尔值")
+    if isinstance(interval_hours, float):
+        if not interval_hours.is_integer():
+            raise ScheduleConfigError(
+                "interval 只支持整数小时（1、2、3……），不支持小数（如 1.5）或分钟/秒；"
+                "请向用户确认具体间隔")
+        return int(interval_hours)
+    if isinstance(interval_hours, int):
+        return interval_hours
+    if isinstance(interval_hours, str):
+        stripped = interval_hours.strip()
+        try:
+            return int(stripped)
+        except ValueError:
+            raise ScheduleConfigError(
+                "interval 只支持整数小时（数字或整数字符串，如 2 或 \"2\"），"
+                f"不接受: {interval_hours!r}") from None
+    raise ScheduleConfigError(
+        "interval 的 interval_hours 必须为整数小时，请向用户确认具体间隔")
+
+
 def build_schedule_fields(schedule_type, time_config, now=None):
     """完整校验并生成调度字段与首次到期时间（创建/改期共用）。
 
-    返回 (cron_expression, interval_seconds, run_at, next_due_at)：
-    - once：run_at 归一化字符串，next_due_at = run_at（datetime）；
-    - interval：next_due_at = now + interval_seconds（首锚点；float 小时
-      支持，非有限/非正数拒绝——评审修正：NaN/inf 曾抛未转换异常）；
-    - daily/weekly/monthly：cron 分支 now 之后严格下一次（+1µs 精确边界）。
+    返回 (cron_expression, interval_seconds, run_at, next_due_at, start_at, ends_at)：
+    - once：run_at 归一化字符串，next_due_at = run_at（datetime），无时间窗；
+    - interval：interval_hours 只接受 >= 配置阈值（且 >=1 硬下限）的整数小时；
+      设未来 start_at 时首点 = 开始时刻，否则首点 = 当前时刻（创建/改期即生效）；
+    - daily/weekly/monthly：cron 分支 now 之后严格下一次（+1µs 精确边界），
+      未来 start_at 时取窗内首个匹配点（起点恰好命中允许该点）；
+    - 时间窗：循环类型可选 start_at/ends_at，必须从当前时间起、在窗内至少
+      存在一个触发点（否则拒绝）；过去的点不补跑。
     """
-    from math import isfinite
     now = now or datetime.now()
     if schedule_type not in _VALID_SCHEDULE_TYPES:
         raise ScheduleConfigError(
@@ -176,6 +267,7 @@ def build_schedule_fields(schedule_type, time_config, now=None):
     if not time_config:
         raise ScheduleConfigError("缺少时间配置（time_config），必须先向用户确认具体时间")
     _coerce_int_time_fields(time_config)
+    start_at, ends_at = _parse_window_bounds(schedule_type, time_config)
 
     if schedule_type == "once":
         run_at_dt = parse_run_at(time_config.get("run_at"))
@@ -187,39 +279,53 @@ def build_schedule_fields(schedule_type, time_config, now=None):
             raise ScheduleConfigError(
                 f"执行时间 {run_at_dt.strftime('%Y-%m-%d %H:%M:%S')} 已经过去，"
                 "无法创建一次性任务，请向用户确认新的未来时间")
-        return None, None, run_at_dt.strftime("%Y-%m-%d %H:%M:%S"), run_at_dt
+        return None, None, run_at_dt.strftime("%Y-%m-%d %H:%M:%S"), run_at_dt, None, None
 
     if schedule_type == "interval":
-        interval_hours = _require(time_config, "interval_hours", "interval")
-        try:
-            hours = float(interval_hours)
-        except (TypeError, ValueError):
+        hours = _coerce_interval_hours(_require(time_config, "interval_hours", "interval"))
+        min_hours = min_interval_hours()
+        if hours < MIN_INTERVAL_HOURS_FLOOR or hours < min_hours:
             raise ScheduleConfigError(
-                "interval 的 interval_hours 必须为数字（小时），"
-                "请向用户确认具体间隔") from None
-        if not (isfinite(hours) and hours > 0):
-            raise ScheduleConfigError("interval 的 interval_hours 必须为正数（有限，单位小时）")
-        interval_seconds = int(round(hours * 3600))
-        if interval_seconds <= 0:
-            raise ScheduleConfigError("interval 的 interval_hours 必须为正数（小时）")
-        return None, interval_seconds, None, now + timedelta(seconds=interval_seconds)
+                f"interval 只支持整数小时，且不能低于当前最短间隔 {min_hours} 小时"
+                "（硬下限 1 小时）；请向用户确认具体间隔")
+        interval_seconds = hours * 3600
+        # 开始时刻首次触发：未来 start_at 即首点；否则创建/改期时刻即首点
+        #（start_at 已过去时同当前时间起算，不补跑过去的点）
+        next_due = start_at if (start_at is not None and start_at > now) else now
+        if ends_at is not None and next_due >= ends_at:
+            raise ScheduleConfigError(
+                "时间窗内没有可执行的触发点：首个触发点（"
+                f"{next_due.strftime('%Y-%m-%d %H:%M:%S')}）已不在 ends_at 之前，"
+                "请调整起止时间")
+        return None, interval_seconds, None, next_due, start_at, ends_at
 
     cron_expression = generate_cron_expression(schedule_type, time_config)
     try:
         next_due = compute_next_due({"schedule_type": schedule_type,
                                      "cron_expression": cron_expression,
-                                     "next_due_at": None}, now)
+                                     "next_due_at": None,
+                                     "start_at": start_at, "ends_at": ends_at}, now)
     except ValueError:
         raise ScheduleConfigError("调度配置不可解析，请向用户确认具体时间") from None
-    return cron_expression, None, None, next_due
+    if next_due is None:
+        raise ScheduleConfigError(
+            "时间窗内没有可执行的触发点：从当前时间起到 ends_at 之间不存在"
+            "该调度规则的触发点，请调整起止时间或调度规则")
+    return cron_expression, None, None, next_due, start_at, ends_at
 
 
 def compute_resume_due(task, now=None):
-    """恢复任务时按**当前任务行**重算 next_due_at（设计 §4.3：不补跑停用期间）。
+    """恢复任务时按**当前任务行**重算 next_due_at（设计 §4.3/§15.2.3）。
 
-    返回 (next_due_at, will_expire_once)：
-    - cron：now 之后下一次；interval：now 为新锚点；once：保持 run_at，
-      超过执行宽限时 will_expire_once=True（统一转换：resume 事务内置 expired）。
+    返回 (next_due_at, will_expire_once, window_finished)：
+    - interval：恢复时刻为新首点（恰在恢复点重启周期，不补跑停用期间）；
+      未来 start_at 在恢复时刻之后时取 start_at 为首点（窗口判定
+      start_at <= 触发点对 interval 同样成立，CR P2-4）；
+    - cron：now 之后下一次（未来 start_at 时取窗内首个匹配点）；
+    - once：保持 run_at，超过执行宽限时 will_expire_once=True（统一转换：
+      resume 事务内置 expired）；
+    - 时间窗已结束（无窗内后续点）：window_finished=True，next_due_at=None
+      ——resume_recompute 统一置 completed，不补跑（设计 §15.2.4）。
     在 resume_recompute 事务内对锁定行调用（评审修正：入口各自先算后写会
     覆盖并发改期）。"""
     now = now or datetime.now()
@@ -228,27 +334,46 @@ def compute_resume_due(task, now=None):
         seconds = task.get("interval_seconds") or 0
         if seconds <= 0:
             raise ScheduleConfigError("任务的 interval_seconds 非法，无法恢复，请重建任务")
-        return now + timedelta(seconds=seconds), False
+        ends_at = task.get("ends_at")
+        if ends_at is not None and now >= ends_at:
+            return None, False, True
+        start_at = task.get("start_at")
+        next_due = start_at if (start_at is not None and start_at > now) else now
+        return next_due, False, False
     if schedule_type == "once":
         run_at = task.get("run_at") or task.get("next_due_at")
-        return run_at, once_expired(task, now)
+        return run_at, once_expired(task, now), False
     next_due = compute_next_due(task, now)
-    return next_due, False
+    if next_due is None:
+        return None, False, True
+    return next_due, False, False
 
 
 def format_schedule_description(schedule_type, time_config):
     """生成调度描述文本（创建回执/列表摘要展示用）"""
     if not time_config:
         return schedule_type
+    window = ""
+    if schedule_type != "once":
+        parts = []
+        if time_config.get("start_at"):
+            parts.append(f"{time_config['start_at']} 起")
+        if time_config.get("ends_at"):
+            parts.append(f"至 {time_config['ends_at']}")
+        if parts:
+            window = f"（{'，'.join(parts)}）"
     if schedule_type == "daily":
-        return f"每天 {time_config.get('hour', 9):02d}:{time_config.get('minute', 0):02d}"
+        return (f"每天 {time_config.get('hour', 9):02d}:{time_config.get('minute', 0):02d}"
+                + window)
     if schedule_type == "weekly":
-        day = _WEEKDAY_NAMES.get(str(time_config.get("day_of_week", "mon")).lower(), "周一")
-        return f"每{day} {time_config.get('hour', 9):02d}:{time_config.get('minute', 0):02d}"
+        day = _WEEKDAY_NAMES.get(str(time_config.get('day_of_week', 'mon')).lower(), "周一")
+        return (f"每{day} {time_config.get('hour', 9):02d}:{time_config.get('minute', 0):02d}"
+                + window)
     if schedule_type == "monthly":
-        return f"每月{time_config.get('day', 1)}日 {time_config.get('hour', 9):02d}:{time_config.get('minute', 0):02d}"
+        return (f"每月{time_config.get('day', 1)}日 "
+                f"{time_config.get('hour', 9):02d}:{time_config.get('minute', 0):02d}" + window)
     if schedule_type == "interval":
-        return f"每隔 {time_config.get('interval_hours', 1)} 小时"
+        return f"每隔 {time_config.get('interval_hours', 1)} 小时" + window
     if schedule_type == "once":
         return f"一次性执行 {time_config.get('run_at', '未指定')}"
     return schedule_type
@@ -281,11 +406,57 @@ def validate_task_attachments(attachments):
     return normalized
 
 
-def max_tasks_per_user() -> int:
-    """每用户 active 任务上限（现行产品配置，默认 5；创建与恢复共用）"""
+def max_tasks_per_user(tenant_id: str = None) -> int:
+    """每用户 active 任务上限的有效值（设计 §15.2.6，创建与恢复共用）。
+
+    优先读取租户覆盖值 tenants.settings.scheduler.max_tasks_per_user
+    （只接受正整数，非法/缺失回落），未设置时取 configs/config.yaml 的
+    scheduler.max_tasks_per_user（默认 5）。tenant 覆盖值读取失败时回落
+    配置默认值并记录日志——不因设置读取失败中断创建/恢复主流程。"""
+    default = 5
     try:
         from src.config.settings import settings
         value = int(settings.scheduler.max_tasks_per_user)
-        return value if value > 0 else 5
+        if value > 0:
+            default = value
     except Exception:
-        return 5
+        pass
+    if not tenant_id:
+        return default
+    try:
+        import json as _json
+        from src.db.database import get_db_connection
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT settings FROM tenants WHERE tenant_id = %s", (tenant_id,))
+            row = cursor.fetchone()
+        settings_json = row["settings"] if row else None
+        if isinstance(settings_json, str):
+            settings_json = _json.loads(settings_json or "{}")
+        override = ((settings_json or {}).get("scheduler") or {}).get("max_tasks_per_user")
+        if isinstance(override, bool) or not isinstance(override, int) or override <= 0:
+            return default
+        return override
+    except Exception:
+        # 覆盖值读取失败按配置默认值处理（不中断创建/恢复主流程；租户覆盖值
+        # 高于或低于默认均可能，回落值以更保守的全局默认为准）
+        from loguru import logger
+        logger.warning(f"后端日志：读取租户任务上限覆盖值失败，使用配置默认值 {default}")
+        return default
+
+
+def min_interval_hours() -> int:
+    """interval 最短间隔（小时，设计 §15.2.5）：配置只能调高，硬下限 1。
+
+    configs/config.yaml scheduler.min_interval_hours 只接受 >=1 的整数；
+    缺失、非法（小数/布尔/小于 1）一律回落 1，不放大也不放宽。"""
+    try:
+        from src.config.settings import settings
+        value = getattr(getattr(settings, "scheduler", None),
+                        "min_interval_hours", MIN_INTERVAL_HOURS_FLOOR)
+        if isinstance(value, bool) or not isinstance(value, int) \
+                or value < MIN_INTERVAL_HOURS_FLOOR:
+            return MIN_INTERVAL_HOURS_FLOOR
+        return value
+    except Exception:
+        return MIN_INTERVAL_HOURS_FLOOR

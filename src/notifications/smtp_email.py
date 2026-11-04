@@ -37,8 +37,13 @@ class SmtpEmailAdapter:
         return hashlib.sha256(('smtp:'+address).encode()).hexdigest()
 
     def render(self, message, target):
-        from .events import render_message_text
+        from .events import render_message_text, scheduled_result_link
         title, body = render_message_text(message['event_type'], message['parameters'])
+        # scheduled 终态附「查看本次执行结果」登录后链接（设计 §15.5；链接仅
+        # 属主可读，普通聊天终态与未配置 public_base_url 时不附加）
+        link = scheduled_result_link(message)
+        if link:
+            body = f'{body}\n\n查看本次执行结果：{link}'
         return {'schema_version': 1, 'notification_ref': message['notification_ref'],
                 'subject': title,
                 'body': f'{body}\n\n（此邮件由平台自动发送，请勿回复）'}

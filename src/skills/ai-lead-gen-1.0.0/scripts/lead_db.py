@@ -388,7 +388,9 @@ def _get_scheduler_task(cur, tenant_id, user_id, task_id):
 def cmd_bind_scheduler(args):
     """绑定每日循环定时任务：回写 scheduler_task_id 并切 send_mode=auto。
 
-    paused 任务绑定时顺带激活，否则 send_mode=auto 但任务静默不跑。
+    paused 任务绑定时顺带激活，否则 send_mode=auto 但任务静默不跑。激活统一
+    走 resume_recompute（§15 评审 P1）：直接 UPDATE status 会绕过每人活跃
+    上限、时间窗结束判定与 next_due_at 重算。
     """
     tenant_id, user_id = get_identity()
     with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
@@ -398,11 +400,27 @@ def cmd_bind_scheduler(args):
             print(f"ERROR: scheduled task status={task['status']}，仅 active/paused 可绑定")
             return 1
         if task["status"] == "paused":
-            cur.execute(
-                "UPDATE scheduled_tasks SET status = 'active', "
-                "updated_at = %s WHERE task_id = %s",
-                (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), args.task_id),
-            )
+            from src.scheduler.db import ScheduledTaskDB, ScheduledTaskQuotaError
+            from src.scheduler.schedule import max_tasks_per_user
+            try:
+                resumed = ScheduledTaskDB.resume_recompute(
+                    args.task_id, max_active=max_tasks_per_user(tenant_id),
+                    tenant_id=tenant_id, user_id=user_id)
+            except ScheduledTaskQuotaError as error:
+                print(f"ERROR: 恢复任务失败（活跃任务已达上限）：{error}")
+                return 1
+            except ValueError as error:
+                print(f"ERROR: 恢复任务失败：{error}")
+                return 1
+            if not resumed:
+                print("ERROR: 任务已不在 paused 状态（并发变更），请重试绑定")
+                return 1
+            if resumed["status"] == "completed":
+                print("ERROR: 任务执行时间窗已结束（completed），不能绑定激活；请新建任务")
+                return 1
+            if resumed["status"] == "expired":
+                print("ERROR: 一次性任务已超过执行宽限（expired），不能绑定激活；请新建任务")
+                return 1
         cur.execute(
             "UPDATE bs_ai_lead_gen_campaigns SET scheduler_task_id = %s, "
             "send_mode = 'auto', updated_at = CURRENT_TIMESTAMP "

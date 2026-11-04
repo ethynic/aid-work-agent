@@ -5,8 +5,9 @@
  * - 全部端点要求 Authorization Bearer + X-Tenant-Id（getAuthHeader 按路径自动附带）；
  * - 任务行公开投影不含 pending_snapshot；旧字段 description/max_retries/retry_count 已删除；
  * - 执行历史不在本 API——任务视图经 Runner 网关（api/runner.ts，source='scheduled'）读取；
- * - 409 语义：pause 非 active / resume 非 paused / trigger 非 active 或 pending 占用 /
- *   delete 有活跃 runner；resume once 过宽限返回 {success, expired:true, message}。
+ * - 409 语义：pause 非 active / resume 非 paused / trigger 不可执行状态或 pending 占用 /
+ *   delete 有活跃 runner；resume once 过宽限返回 {success, expired:true, message}，
+ *   resume 时间窗已结束返回 {success, completed:true, message}（§15）。
  */
 
 import { ref } from 'vue'
@@ -51,6 +52,9 @@ export interface ScheduledTask {
   cron_expression?: string | null
   interval_seconds?: number | null
   run_at?: string | null
+  /** 循环任务可选时间窗（北京时间，NULL=无窗口；判定 start_at <= 触发点 < ends_at） */
+  start_at?: string | null
+  ends_at?: string | null
   /** 任务专属会话（执行结果存储容器，metadata.scheduled_task 标记） */
   session_id: string
   status: ScheduledTaskStatus
@@ -81,10 +85,17 @@ export interface ScheduledTaskUserStats {
 
 export interface UpdateSchedulePayload {
   schedule_type: ScheduledTaskScheduleType
-  /** once 必填 run_at（YYYY-MM-DD HH:MM:SS，未来时间）；daily/weekly/monthly 用
-   *  hour/minute（weekly 另需 day_of_week: mon..sun，monthly 另需 day: 1-31）；
-   *  interval 用 interval_hours（正数，支持小数） */
+  /** once 必填 run_at（YYYY-MM-DD HH:MM:SS，未来时间，不接受时间窗）；
+   *  daily/weekly/monthly 用 hour/minute（weekly 另需 day_of_week: mon..sun，
+   *  monthly 另需 day: 1-31），可选 start_at/ends_at（YYYY-MM-DD HH:MM:SS，
+   *  窗口含起点不含终点）；interval 用 interval_hours（≥最短间隔的整数小时） */
   time_config: Record<string, unknown>
+}
+
+/** 调度约束阈值（GET /api/scheduled-tasks/limits）：后端为最终校验 */
+export interface ScheduledTaskLimits {
+  min_interval_hours: number
+  max_tasks_per_user: number
 }
 
 export interface UpdateDefinitionPayload {
@@ -119,7 +130,7 @@ async function request<T>(path: string, init: RequestInit = {}, headers?: Record
 interface ListResponse { success: boolean; data: { tasks: ScheduledTask[]; total: number } }
 interface TaskResponse { success: boolean; data: ScheduledTask; message?: string }
 interface StatsResponse { success: boolean; data: ScheduledTaskUserStats }
-interface ResumeResponse { success: boolean; expired?: boolean; message?: string; data?: { next_due_at?: string | null } }
+interface ResumeResponse { success: boolean; expired?: boolean; completed?: boolean; message?: string; data?: { next_due_at?: string | null } }
 
 /** 任务列表（可按状态过滤）。headers 可显式传入（/notification 入口等非 /t/ 路径下使用） */
 export async function listScheduledTasks(status?: string, headers?: Record<string, string>): Promise<ScheduledTask[]> {
@@ -130,6 +141,12 @@ export async function listScheduledTasks(status?: string, headers?: Record<strin
 
 export async function getScheduledTaskStats(): Promise<ScheduledTaskUserStats> {
   const value = await request<StatsResponse>('/stats')
+  return value.data
+}
+
+/** 调度约束阈值（最短间隔小时数与租户有效的每人活跃任务上限），供表单即时提示 */
+export async function getScheduledTaskLimits(): Promise<ScheduledTaskLimits> {
+  const value = await request<{ success: boolean; data: ScheduledTaskLimits }>('/limits')
   return value.data
 }
 
@@ -153,7 +170,8 @@ export async function deleteScheduledTask(taskId: string): Promise<void> {
   await request<{ success: boolean }>(`/${encodeURIComponent(taskId)}`, { method: 'DELETE' })
 }
 
-/** 立即执行一次（manual pending 槽，不改 next_due_at；非 active/pending 占用时 409） */
+/** 立即执行一次（manual pending 槽，不改 next_due_at；不受时间窗限制——active
+ *  与因时间窗自动完成的循环任务可触发（§15），其余不可执行状态/pending 占用 409） */
 export async function triggerScheduledTask(taskId: string): Promise<void> {
   await request<{ success: boolean }>(`/${encodeURIComponent(taskId)}/trigger`, { method: 'POST' })
 }
@@ -197,31 +215,46 @@ export const SCHEDULED_STATUS_LABELS: Record<string, string> = {
   expired: '已过期',
 }
 
-/** 调度规则人类可读描述（设计 §6 头部展示） */
-export function describeSchedule(task: Pick<ScheduledTask, 'schedule_type' | 'cron_expression' | 'interval_seconds' | 'run_at'>): string {
+/** 调度规则人类可读描述（设计 §6 头部展示；循环任务附有效期，§15） */
+export function describeSchedule(task: Pick<ScheduledTask, 'schedule_type' | 'cron_expression' | 'interval_seconds' | 'run_at' | 'start_at' | 'ends_at'>): string {
   const weekNames: Record<string, string> = { mon: '周一', tue: '周二', wed: '周三', thu: '周四', fri: '周五', sat: '周六', sun: '周日' }
   // APScheduler 编号（后端 _WEEKDAY_CRON_MAP）：0=周一 … 6=周日
   const cronNumbers: Record<string, string> = { '0': '周一', '1': '周二', '2': '周三', '3': '周四', '4': '周五', '5': '周六', '6': '周日' }
   const parts = (task.cron_expression || '').split(' ').filter(Boolean)
   const time = parts.length >= 2 ? `${parts[1].padStart(2, '0')}:${parts[0].padStart(2, '0')}` : ''
+  const window = scheduleWindowText(task)
   switch (task.schedule_type) {
-    case 'daily': return parts.length >= 2 ? `每天 ${time}` : '每天'
+    case 'daily': return (parts.length >= 2 ? `每天 ${time}` : '每天') + window
     case 'weekly': {
       // cron 顺序：分 时 日 月 周 —— 周字段是 parts[4]（APScheduler 编号 0=周一→sun 映射兜底）
       const day = weekNames[parts[4] || ''] || cronNumbers[parts[4] || ''] || ''
-      return parts.length >= 5 ? `每${day} ${time}` : '每周'
+      return (parts.length >= 5 ? `每${day} ${time}` : '每周') + window
     }
-    case 'monthly': return parts.length >= 3 ? `每月 ${parts[2]} 日 ${time}` : '每月'
+    case 'monthly': return (parts.length >= 3 ? `每月 ${parts[2]} 日 ${time}` : '每月') + window
     case 'interval': {
       const seconds = task.interval_seconds || 0
-      if (seconds > 0 && seconds % 86400 === 0) return `每隔 ${seconds / 86400} 天`
-      if (seconds > 0 && seconds % 3600 === 0) return `每隔 ${seconds / 3600} 小时`
-      if (seconds > 0 && seconds % 60 === 0) return `每隔 ${seconds / 60} 分钟`
-      return seconds > 0 ? `每隔 ${seconds} 秒` : '间隔执行'
+      let base = '间隔执行'
+      if (seconds > 0 && seconds % 86400 === 0) base = `每隔 ${seconds / 86400} 天`
+      else if (seconds > 0 && seconds % 3600 === 0) base = `每隔 ${seconds / 3600} 小时`
+      else if (seconds > 0 && seconds % 60 === 0) base = `每隔 ${seconds / 60} 分钟`
+      else if (seconds > 0) base = `每隔 ${seconds} 秒`
+      return base + window
     }
     case 'once': return task.run_at ? `一次性 ${task.run_at.replace('T', ' ')}` : '一次性'
     default: return task.schedule_type
   }
+}
+
+/** 时间窗展示片段："（2026-11-01 00:00 起，至 2026-12-01 00:00）"；无窗口返回空串 */
+export function scheduleWindowText(task: Pick<ScheduledTask, 'start_at' | 'ends_at'>): string {
+  const parts: string[] = []
+  if (task.start_at) parts.push(`${formatWindowBound(task.start_at)} 起`)
+  if (task.ends_at) parts.push(`至 ${formatWindowBound(task.ends_at)}`)
+  return parts.length ? `（${parts.join('，')}）` : ''
+}
+
+function formatWindowBound(value: string): string {
+  return (value || '').replace('T', ' ').slice(0, 16)
 }
 
 // ==================== 任务会话识别（设计 §6 单一标记来源） ====================

@@ -81,3 +81,47 @@ def publish_task_paused(task, reason_label, **kwargs):
         ref = publish_task_paused_in_tx(cursor, task, reason_label, **kwargs)
         conn.commit()
         return ref
+
+
+def publish_task_manual_rejected_in_tx(cursor, task, reason_label, *, occurrence_key):
+    """task.manual_rejected 通知（评审 P1：窗口收尾任务的 manual 提交被确定性
+    拒绝时，completed 状态保持不变，但创建者必须收到可见失败）。
+
+    与 pending 清理同一事务（同 publish_task_paused_in_tx 模式：分两事务时
+    进程在两步之间退出会丢通知且无重产路径）。event_key 按 occurrence_key
+    幂等——同一 manual 槽的重复拒绝不重复投递。"""
+    from datetime import timedelta
+    from loguru import logger
+
+    from src.config.settings import settings
+    from src.notifications.contracts import Subject
+    from src.notifications.events import publish_in_tx
+
+    subject = Subject(task["user_id"], task.get("tenant_id"))
+    task_name = str(task.get("name") or "")[:80] or task["task_id"]
+    parameters = {
+        "session_title": task_name,
+        "event_kind": "manual_rejected",
+        "task_name": task_name,
+        "task_id": task["task_id"],
+        "reason_label": str(reason_label or "")[:120] or "提交被拒绝",
+    }
+    rule_id = task.get("notification_rule_id")
+    if rule_id:
+        parameters["notify_rule_id"] = str(rule_id)[:128]
+    else:
+        target_id = task.get("notification_target_id")
+        if target_id:
+            parameters["notify_target_id"] = str(target_id)[:128]
+    cursor.execute("SELECT clock_timestamp() AS now")
+    now = cursor.fetchone()["now"]
+    ref = publish_in_tx(
+        cursor, subject=subject, producer="scheduler",
+        event_type="task.manual_rejected",
+        event_key=f"manual-rejected:{task['task_id']}:{occurrence_key}",
+        resource_ref={"type": "scheduled_task", "id": task["task_id"]},
+        parameters=parameters, occurred_at=now, accepted_at=now,
+        expires_at=now + timedelta(seconds=settings.notifications.ttl_seconds))
+    logger.info(f"后端日志：task.manual_rejected 通知已入账 task_id={task['task_id']}, "
+                f"ref={ref}")
+    return ref

@@ -42,10 +42,16 @@ class ImWebhookAdapterBase:
         return endpoint_parts(url, list(self.provider_hosts))
 
     def render(self, message, target):
-        from .events import render_message_text
+        from .events import render_message_text, scheduled_result_link
         title, body = render_message_text(message['event_type'], message['parameters'])
+        text = f'【AI通知】{title}\n{body}'
+        # scheduled 终态附「查看本次执行结果」登录后链接（设计 §15.5；链接仅
+        # 属主可读，普通聊天终态与未配置 public_base_url 时不附加）
+        link = scheduled_result_link(message)
+        if link:
+            text += f'\n查看本次执行结果：{link}'
         return {'schema_version': 1, 'notification_ref': message['notification_ref'],
-                'text': f'【AI通知】{title}\n{body}'}
+                'text': text}
 
     def _request_body(self, text):
         raise NotImplementedError

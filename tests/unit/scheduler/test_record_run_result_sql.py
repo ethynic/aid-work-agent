@@ -16,7 +16,7 @@ from src.scheduler.db import ScheduledTaskDB
 
 _COLUMNS = ("task_id TEXT PRIMARY KEY, schedule_type TEXT, status TEXT, "
             "pause_reason TEXT, pending_occurrence_key TEXT, pending_trigger TEXT, "
-            "pending_retry_at TEXT, pending_snapshot TEXT, "
+            "pending_retry_at TEXT, pending_snapshot TEXT, next_due_at TEXT, "
             "total_runs INTEGER DEFAULT 0, success_count INTEGER DEFAULT 0, "
             "fail_count INTEGER DEFAULT 0, last_run_at TEXT, last_status TEXT, "
             "updated_at TEXT")
@@ -36,10 +36,11 @@ def _execute_real_sql(run_status, trigger, error_code=None, row=None):
     conn.execute("CREATE TABLE scheduled_tasks (" + _COLUMNS + ")")
     conn.execute("INSERT INTO scheduled_tasks (task_id, schedule_type, status, "
                  "pending_occurrence_key, pending_trigger, pending_retry_at, "
-                 "pending_snapshot) VALUES (?,?,?,?,?,?,?)",
+                 "pending_snapshot, next_due_at) VALUES (?,?,?,?,?,?,?,?)",
                  ("sched_1", row["schedule_type"], row.get("status", "active"),
                   row.get("pending_occurrence_key"), row.get("pending_trigger"),
-                  row.get("pending_retry_at"), row.get("pending_snapshot")))
+                  row.get("pending_retry_at"), row.get("pending_snapshot"),
+                  row.get("next_due_at")))
     # psycopg2 风格 %s → sqlite ?（逐个替换，避开 %% 转义）；now() 为
     # PostgreSQL 方言，sqlite 用 CURRENT_TIMESTAMP 等价替换（语义相同）
     import re as _re
@@ -90,8 +91,9 @@ def test_recurring_plain_success_keeps_pending():
     row = _execute_real_sql(
         "completed", "scheduled",
         row={"schedule_type": "interval", "status": "active",
+             "next_due_at": "2026-10-29 09:00:00",
              "pending_occurrence_key": "next_occ", "pending_trigger": "scheduled"})
-    assert row["status"] == "active"             # 成功不暂停
+    assert row["status"] == "active"             # 成功不暂停（窗口未耗尽：next_due_at 非空）
     # 下一 occurrence 的 pending 不被误清
     assert row["pending_occurrence_key"] == "next_occ"
     assert row["pending_trigger"] == "scheduled"
@@ -105,3 +107,59 @@ def test_once_error_keeps_completed_not_paused():
     assert row["status"] == "completed"
     assert row["pause_reason"] is None
     assert row["last_status"] == "failed"
+
+
+# ==================== 时间窗收尾（设计 §15.2.4，2026-11-03） ====================
+
+def test_last_scheduled_run_with_no_next_due_completes():
+    """认领最后一次窗内点后 next_due_at 已置 NULL：该次 scheduled 终态收尾
+    completed——避免"窗口耗尽任务永远停在 active"；同时清理 pause_reason
+    残留（CR P2-8：paused 行经终态收尾不再带暂停原因展示）。"""
+    row = _execute_real_sql(
+        "completed", "scheduled",
+        row={"schedule_type": "interval", "status": "paused",
+             "pause_reason": "credit_blocked", "next_due_at": None})
+    assert row["status"] == "completed"
+    assert row["pause_reason"] is None
+    assert row["total_runs"] == 1 and row["success_count"] == 1
+
+
+def test_manual_run_does_not_complete_window_task():
+    """manual 终态不触发窗口收尾（收尾只认 scheduled 计划执行终态）：
+    最后窗内点仍在执行时，并发的手动执行不得提前改状态。"""
+    row = _execute_real_sql(
+        "completed", "manual",
+        row={"schedule_type": "interval", "status": "active", "next_due_at": None})
+    assert row["status"] == "active"
+
+
+def test_completed_row_manual_credit_blocked_stays_completed():
+    """窗口自动完成的任务上手动执行失败（CREDIT_BLOCKED）：不得把 completed
+    改回 paused，统计照常回写（§15.2.4——manual 失败只呈现统计）。"""
+    row = _execute_real_sql(
+        "failed", "manual", error_code="CREDIT_BLOCKED",
+        row={"schedule_type": "interval", "status": "completed",
+             "pending_occurrence_key": "m1", "pending_trigger": "manual",
+             "next_due_at": None})
+    assert row["status"] == "completed"
+    assert row["pause_reason"] is None
+    assert row["fail_count"] == 1 and row["last_status"] == "failed"
+
+
+def test_credit_blocked_takes_precedence_over_window_completion():
+    """最后一次窗内执行以 CREDIT_BLOCKED 失败：仍走 paused+通知（不伪造成功，
+    用户处理后恢复时窗口若已结束再收尾 completed）。"""
+    row = _execute_real_sql(
+        "failed", "scheduled", error_code="CREDIT_BLOCKED",
+        row={"schedule_type": "daily", "status": "active", "next_due_at": None})
+    assert row["status"] == "paused"
+    assert row["pause_reason"] == "credit_blocked"
+
+
+def test_next_due_present_keeps_active():
+    """常规循环（next_due_at 非空）：scheduled 终态不改状态（既有回归）。"""
+    row = _execute_real_sql(
+        "completed", "scheduled",
+        row={"schedule_type": "daily", "status": "active",
+             "next_due_at": "2026-10-29 09:00:00"})
+    assert row["status"] == "active"

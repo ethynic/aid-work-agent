@@ -20,8 +20,8 @@ import { notificationRequest, NotificationApiError } from './api'
 import { notificationReturnUrl } from './returnUrl'
 
 // scheduled 事件（设计 §8.2）：terminal（runner_result）/needs_action（runner_waiting）/
-// paused（scheduled_task）统一路由任务视图，不进聊天形态（设计 §6）
-const SCHEDULED_TASK_EVENTS = new Set(['task.completed', 'task.failed', 'task.needs_action', 'task.paused'])
+// paused、manual_rejected（scheduled_task）统一路由任务视图，不进聊天形态（设计 §6）
+const SCHEDULED_TASK_EVENTS = new Set(['task.completed', 'task.failed', 'task.needs_action', 'task.paused', 'task.manual_rejected'])
 
 const route = useRoute(), router = useRouter()
 const loading = ref(true), error = ref(''), retryable = ref(false)
@@ -54,7 +54,17 @@ async function resolve(): Promise<void> {
     if (SCHEDULED_TASK_EVENTS.has(result.event_type)) {
       const taskId = resource.task_id || resource.scheduled_task_id
       if (taskId) {
-        await router.replace({ path: `/t/${encodeURIComponent(resource.tenant_id)}/tasks/${encodeURIComponent(taskId)}` })
+        // §15.5 直达本次执行：runner_result（completed/failed）带 runner_id
+        // 定位到任务视图的具体执行行；manual_rejected 带 notice_ref 让任务
+        // 视图展示通知文案（含被拒原因）；其余保持任务视图原路由
+        const query: Record<string, string> = {}
+        if ((result.event_type === 'task.completed' || result.event_type === 'task.failed')
+          && resource.runner_id) query.runner_id = resource.runner_id
+        if (result.event_type === 'task.manual_rejected') query.notice_ref = String(route.query.ref)
+        await router.replace({
+          path: `/t/${encodeURIComponent(resource.tenant_id)}/tasks/${encodeURIComponent(taskId)}`,
+          ...(Object.keys(query).length ? { query } : {}),
+        })
         return
       }
       // task.completed/task.failed 是 chat 与 scheduled runner 共用的事件名

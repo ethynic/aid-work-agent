@@ -10,6 +10,8 @@ import json
 import sys
 from pathlib import Path
 
+import unittest
+
 import pytest
 
 SKILL_DIR = Path(__file__).resolve().parents[2] / "src" / "skills" / "ai-lead-gen-1.0.0" / "scripts"
@@ -542,21 +544,6 @@ def test_cmd_bind_scheduler_rejects_foreign_user(monkeypatch):
     assert conn.commits == 0
 
 
-def test_cmd_bind_scheduler_activates_paused_task(monkeypatch):
-    # paused 任务绑定后若不激活，send_mode=auto 但任务静默不跑
-    conn = FakeConn()
-    conn.cur.fetchone_queue.append(campaign_row())
-    conn.cur.fetchone_queue.append(("task-1", "tenant_test", "user_test", "paused"))
-    monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
-    args = type("A", (), {"campaign_id": 7, "task_id": "task-1"})()
-    assert lead_db.cmd_bind_scheduler(args) == 0
-    scheduled = [(s, p) for s, p in conn.cur.executed
-                 if s.startswith("UPDATE scheduled_tasks")]
-    assert scheduled and "status = 'active'" in scheduled[0][0]
-    assert scheduled[0][1][1] == "task-1"
-    assert conn.commits == 1
-
-
 def test_cmd_unbind_scheduler_pauses_task(monkeypatch):
     conn = FakeConn()
     conn.cur.fetchone_queue.append(campaign_row(scheduler_task_id="task-1"))
@@ -847,3 +834,69 @@ class TestLeadgenNotificationEvents:
         _, body = render_inbox_text(
             "leadgen.daily_summary", self._summary_params(awaiting_review=0))
         assert "待审阅" not in body
+
+
+# ---------- §15 评审 P1：绑定激活不得绕过配额/时间窗（走 resume_recompute） ----------
+
+def _paused_task_row():
+    # _get_scheduler_task 列序：task_id, tenant_id, user_id, status
+    return ("task-1", "tenant_test", "user_test", "paused")
+
+
+def test_cmd_bind_scheduler_paused_uses_resume_recompute(monkeypatch):
+    """paused 绑定：经 resume_recompute 激活（带租户有效上限与归属），不再
+    直接 UPDATE status。"""
+    conn = FakeConn()
+    conn.cur.fetchone_queue.append(campaign_row())
+    conn.cur.fetchone_queue.append(_paused_task_row())
+    monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
+    resumed = {"task_id": "task-1", "status": "active",
+               "next_due_at": "2026-11-05 09:00:00"}
+    resume_mock = unittest.mock.MagicMock(return_value=resumed)
+    max_mock = unittest.mock.MagicMock(return_value=5)
+    with unittest.mock.patch("src.scheduler.db.ScheduledTaskDB.resume_recompute", resume_mock), \
+         unittest.mock.patch("src.scheduler.schedule.max_tasks_per_user", max_mock):
+        args = type("A", (), {"campaign_id": 7, "task_id": "task-1"})()
+        assert lead_db.cmd_bind_scheduler(args) == 0
+    resume_mock.assert_called_once_with(
+        "task-1", max_active=5, tenant_id="tenant_test", user_id="user_test")
+    # 直接改 status 的 SQL 不再出现
+    assert not any("SET status" in s for s, _ in conn.cur.executed)
+    assert conn.commits == 1  # campaign 绑定仍单事务提交
+
+
+def test_cmd_bind_scheduler_quota_exceeded_fails_without_binding(monkeypatch, capsys):
+    """恢复达上限：绑定失败、不写 campaign（不绕过每人活跃任务上限）。"""
+    from src.scheduler.db import ScheduledTaskQuotaError
+    conn = FakeConn()
+    conn.cur.fetchone_queue.append(campaign_row())
+    conn.cur.fetchone_queue.append(_paused_task_row())
+    monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
+    with unittest.mock.patch(
+            "src.scheduler.db.ScheduledTaskDB.resume_recompute",
+            side_effect=ScheduledTaskQuotaError("定时任务已达上限（5个）")), \
+         unittest.mock.patch("src.scheduler.schedule.max_tasks_per_user", return_value=5):
+        args = type("A", (), {"campaign_id": 7, "task_id": "task-1"})()
+        assert lead_db.cmd_bind_scheduler(args) == 1
+    assert not any(s.startswith("UPDATE bs_ai_lead_gen_campaigns")
+                   for s, _ in conn.cur.executed)
+    assert conn.commits == 0
+    assert "上限" in capsys.readouterr().out
+
+
+def test_cmd_bind_scheduler_window_completed_rejected(monkeypatch, capsys):
+    """任务时间窗已结束（resume 转 completed）：拒绝绑定，不写 campaign。"""
+    conn = FakeConn()
+    conn.cur.fetchone_queue.append(campaign_row())
+    conn.cur.fetchone_queue.append(_paused_task_row())
+    monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
+    with unittest.mock.patch(
+            "src.scheduler.db.ScheduledTaskDB.resume_recompute",
+            return_value={"task_id": "task-1", "status": "completed",
+                          "next_due_at": None}), \
+         unittest.mock.patch("src.scheduler.schedule.max_tasks_per_user", return_value=5):
+        args = type("A", (), {"campaign_id": 7, "task_id": "task-1"})()
+        assert lead_db.cmd_bind_scheduler(args) == 1
+    assert not any(s.startswith("UPDATE bs_ai_lead_gen_campaigns")
+                   for s, _ in conn.cur.executed)
+    assert "时间窗已结束" in capsys.readouterr().out

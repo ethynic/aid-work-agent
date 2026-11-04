@@ -6,7 +6,7 @@
  * - P1-2 新执行发现（10s 轮询 mock 出新 runner → 并入并 observe）
  * - P2-3 双缓存收敛（list 返回更高 revision 的新终态值刷新后展示；旧投影被拒）
  * - P2-4 执行结果完整展示（图片渲染 + 会话消息详情）
- * - P2-6 interval 分钟精度预填（4500s → 75 分钟）
+ * - P2-6(§15) interval 整数小时预填与阈值即时校验
  * - P2-7 附件上传（复用 uploadFile，上传后组装 AttachmentRef）
  * - P2-9 通知规则未变更时不提交规则字段
  * - P2-12 取消按钮绑定行级 runner_id（多 active 时顶部不给单一取消）
@@ -82,6 +82,7 @@ vi.mock('@/api/runner', async () => {
     list = runnerListMock
     observe = runnerObserveMock
     cancel = runnerCancelMock
+    get = runnerGetMock
     capabilities = vi.fn().mockResolvedValue({ web_enabled: false, observe_existing: false, contract_version: 1, transport: 'runner_poll' })
     installCapabilities = vi.fn()
     detach = vi.fn()
@@ -89,6 +90,13 @@ vi.mock('@/api/runner', async () => {
   return { ...actual, RunnerClient: MockRunnerClient }
 })
 
+const notificationRequestMock = vi.hoisted(() => vi.fn())
+vi.mock('@/notifications/api', async () => {
+  const actual = await vi.importActual<any>('@/notifications/api')
+  return { ...actual, notificationRequest: notificationRequestMock }
+})
+
+const runnerGetMock = vi.hoisted(() => vi.fn())
 const getScheduledTaskMock = vi.hoisted(() => vi.fn())
 const pauseMock = vi.hoisted(() => vi.fn())
 const resumeMock = vi.hoisted(() => vi.fn())
@@ -97,11 +105,15 @@ const deleteMock = vi.hoisted(() => vi.fn())
 const updateScheduleMock = vi.hoisted(() => vi.fn())
 const updateDefinitionMock = vi.hoisted(() => vi.fn())
 
+const getScheduledTaskLimitsMock = vi.hoisted(() => vi.fn(
+  () => Promise.resolve({ min_interval_hours: 1, max_tasks_per_user: 5 })))
+
 vi.mock('@/api/scheduledTask', async () => {
   const actual = await vi.importActual<any>('@/api/scheduledTask')
   return {
     ...actual,
     getScheduledTask: getScheduledTaskMock,
+    getScheduledTaskLimits: getScheduledTaskLimitsMock,
     pauseScheduledTask: pauseMock,
     resumeScheduledTask: resumeMock,
     deleteScheduledTask: deleteMock,
@@ -416,7 +428,11 @@ describe('TaskPlanView - 评审修复回归', () => {
     expect(wrapper.text()).toContain('有投递进行中')
   })
 
-  it('P2-6 interval 改期分钟精度预填：4500s → 75 分钟（不再被小时舍入）', async () => {
+  it('P2-6(§15) interval 改期为整数小时：整小时预填、非整数即时校验不提交', async () => {
+    // 7200s → 预填 2 小时（整数小时口径取代旧分钟精度，§15.2.5）
+    getScheduledTaskMock.mockResolvedValue(makeTask({
+      schedule_type: 'interval', interval_seconds: 7200, cron_expression: null,
+    }))
     wrapper = mount(TaskPlanView)
     await flushPromises()
     const reschedule = wrapper.findAll('button').find(b => b.text() === '改期')
@@ -424,11 +440,24 @@ describe('TaskPlanView - 评审修复回归', () => {
     await reschedule!.trigger('click')
     await flushPromises()
 
-    const input = document.querySelector('#task-plan-interval-minutes') as HTMLInputElement | null
+    const input = document.querySelector('#task-plan-interval-hours') as HTMLInputElement | null
     expect(input).toBeTruthy()
-    expect(input!.value).toBe('75')
+    expect(input!.value).toBe('2')
+    // 阈值提示展示最短间隔口径（limits mock：1 小时）
     const modalText = Array.from(document.querySelectorAll('p')).map(p => p.textContent).join('\n')
-    expect(modalText).toContain('1.25 小时')
+    expect(modalText).toContain('整数小时')
+
+    // 非整数小时（0.5）：即时校验报错，不发起提交（后端为最终校验）
+    input!.value = '0.5'
+    input!.dispatchEvent(new Event('input'))
+    await nextTick()
+    const confirm = Array.from(document.querySelectorAll('button'))
+      .find(b => (b.textContent || '').trim() === '确认修改') as HTMLButtonElement | undefined
+    expect(confirm).toBeTruthy()
+    await confirm!.click()
+    await flushPromises()
+    expect(updateScheduleMock).not.toHaveBeenCalled()
+    expect(toastError).toHaveBeenCalled()
   })
 
   it('P2-7 编辑弹窗添加附件：上传返回 file_id 组装 AttachmentRef', async () => {
@@ -704,5 +733,159 @@ describe('TaskPlanView - 评审修复回归', () => {
     const calls = getSessionMessagesMock.mock.calls
     const lastCall = calls[calls.length - 1]
     expect(lastCall?.[2]).toBe('r1')
+  })
+
+  it('§15(CR P1-3) 存量非整小时间隔：预填为空并提示，不再静默改写为 1 小时', async () => {
+    getScheduledTaskMock.mockResolvedValue(makeTask({ interval_seconds: 4500 }))
+    wrapper = mount(TaskPlanView)
+    await flushPromises()
+    const reschedule = wrapper.findAll('button').find(b => b.text() === '改期')
+    await reschedule!.trigger('click')
+    await flushPromises()
+
+    const input = document.querySelector('#task-plan-interval-hours') as HTMLInputElement | null
+    expect(input).toBeTruthy()
+    expect(input!.value).toBe('')  // 不预填 1，避免静默把 75 分钟改成 1 小时
+    // 提示原间隔不再支持；空值提交被阻止
+    const modalText = Array.from(document.querySelectorAll('p')).map(p => p.textContent).join('\n')
+    expect(modalText).toContain('75 分钟不再支持')
+    const confirm = Array.from(document.querySelectorAll('button'))
+      .find(b => (b.textContent || '').trim() === '确认修改') as HTMLButtonElement | undefined
+    await confirm!.click()
+    await flushPromises()
+    expect(updateScheduleMock).not.toHaveBeenCalled()
+    expect(toastError).toHaveBeenCalled()
+  })
+
+  it('§15 窗口自动完成的循环任务显示「立即执行一次」并可触发', async () => {
+    getScheduledTaskMock.mockResolvedValue(makeTask({
+      status: 'completed', schedule_type: 'interval', interval_seconds: 7200,
+      ends_at: '2026-01-15T00:00:00', next_due_at: null,
+    }))
+    runnerListMock.mockResolvedValue(emptyPage)
+    wrapper = mount(TaskPlanView)
+    await flushPromises()
+
+    const trigger = wrapper.findAll('button').find(b => b.text() === '立即执行一次')
+    expect(trigger).toBeTruthy()
+    await trigger!.trigger('click')
+    await flushPromises()
+    expect(triggerMock).toHaveBeenCalledWith('task-1')
+  })
+
+  it('§15(四轮P2) notice_ref 落地横幅展示通知文案（含被拒原因）；资源不符不展示', async () => {
+    notificationRequestMock.mockReset().mockResolvedValue({
+      event_type: 'task.manual_rejected',
+      resource: { task_id: 'task-1' },
+      title: '手动执行未成功',
+      body: '「数据汇总任务」的「立即执行一次」未提交成功：积分额度不足。任务保持已完成状态，可在任务视图重试。',
+    })
+    routeState.query = { notice_ref: 'ref-mr' }
+    wrapper = mount(TaskPlanView)
+    await flushPromises()
+
+    expect(notificationRequestMock).toHaveBeenCalledWith(
+      '/messages/ref-mr', expect.anything(), expect.anything())
+    expect(wrapper.text()).toContain('手动执行未成功')
+    expect(wrapper.text()).toContain('积分额度不足')
+
+    // 资源不属当前任务：不展示横幅
+    notificationRequestMock.mockReset().mockResolvedValue({
+      event_type: 'task.manual_rejected',
+      resource: { task_id: 'sched-other' },
+      title: '手动执行未成功', body: '别的任务的原因',
+    })
+    routeState.query = { notice_ref: 'ref-other' }
+    wrapper = mount(TaskPlanView)
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('别的任务的原因')
+  })
+
+  it('§15(评审P2) 终态任务不显示「改期」按钮（active/paused 可见）', async () => {
+    // completed：窗口收尾仍可手动执行，但不可改期（后端 409，按钮同步隐藏）
+    getScheduledTaskMock.mockResolvedValue(makeTask({
+      status: 'completed', ends_at: '2026-01-15T00:00:00', next_due_at: null,
+    }))
+    wrapper = mount(TaskPlanView)
+    await flushPromises()
+    const buttons = wrapper.findAll('button').map(b => b.text())
+    expect(buttons).not.toContain('改期')
+    expect(buttons).toContain('立即执行一次')
+
+    // expired 同理
+    getScheduledTaskMock.mockResolvedValue(makeTask({ status: 'expired' }))
+    wrapper = mount(TaskPlanView)
+    await flushPromises()
+    expect(wrapper.findAll('button').map(b => b.text())).not.toContain('改期')
+
+    // active 保留改期入口
+    getScheduledTaskMock.mockResolvedValue(makeTask({ status: 'active' }))
+    wrapper = mount(TaskPlanView)
+    await flushPromises()
+    expect(wrapper.findAll('button').map(b => b.text())).toContain('改期')
+  })
+
+  it('§15(评审P2) 时间窗回显保留秒数：08:00:30 不被截成 08:00，未修改提交沿用原值', async () => {
+    getScheduledTaskMock.mockResolvedValue(makeTask({
+      schedule_type: 'interval', interval_seconds: 7200, cron_expression: null,
+      start_at: '2026-01-02T08:00:30', ends_at: '2026-02-01T00:00:00',
+    }))
+    updateScheduleMock.mockResolvedValue(undefined)
+    wrapper = mount(TaskPlanView)
+    await flushPromises()
+    const reschedule = wrapper.findAll('button').find(b => b.text() === '改期')
+    await reschedule!.trigger('click')
+    await flushPromises()
+
+    const start = document.querySelector('#task-plan-window-start') as HTMLInputElement | null
+    expect(start).toBeTruthy()
+    // jsdom 归一化会补 .000 或省略全零秒——以 startsWith 断言秒信息不丢
+    expect(start!.value.startsWith('2026-01-02T08:00:30')).toBe(true)
+    const end = document.querySelector('#task-plan-window-end') as HTMLInputElement | null
+    expect(end!.value.startsWith('2026-02-01T00:00')).toBe(true)
+
+    const confirm = Array.from(document.querySelectorAll('button'))
+      .find(b => (b.textContent || '').trim() === '确认修改') as HTMLButtonElement | undefined
+    await confirm!.click()
+    await flushPromises()
+    // 未修改时间窗：提交沿用原始秒值（首次触发点不因编辑漂移）
+    expect(updateScheduleMock).toHaveBeenCalledWith('task-1', expect.objectContaining({
+      time_config: expect.objectContaining({
+        start_at: '2026-01-02 08:00:30', ends_at: '2026-02-01 00:00:00',
+      }),
+    }))
+  })
+
+  it('§15.5 runner_id 深链：不在首页列表时按 ID 单条读取，校验会话归属后展开定位', async () => {
+    const target = makeRunner({ runner_id: 'r-old', status: 'completed',
+      result: { status: 'completed', output: '旧执行结果' } })
+    getScheduledTaskMock.mockResolvedValue(makeTask())
+    runnerListMock.mockResolvedValue(pageOf([]))  // 首页 20 条不含目标执行
+    runnerGetMock.mockReset().mockResolvedValue(target)
+    getSessionMessagesMock.mockResolvedValue({ messages: [] })
+    routeState.query = { runner_id: 'r-old' }
+    wrapper = mount(TaskPlanView)
+    await flushPromises()
+
+    // 按 ID 单条读取并校验会话归属（target.session_id = sess-1 = 任务会话）
+    expect(runnerGetMock).toHaveBeenCalledWith('r-old', expect.anything())
+    expect(wrapper.text()).toContain('旧执行结果')
+    // 展开态已置位（定位行自动展开）
+    const detailButton = wrapper.findAll('button').find(b => b.text() === '收起')
+    expect(detailButton).toBeTruthy()
+  })
+
+  it('§15.5 runner_id 深链：会话归属不符时如实反馈不注入列表', async () => {
+    const foreign = makeRunner({ runner_id: 'r-foreign',
+      session: { kind: 'web', session_id: 'sess-other' } })
+    getScheduledTaskMock.mockResolvedValue(makeTask())
+    runnerListMock.mockResolvedValue(emptyPage)
+    runnerGetMock.mockReset().mockResolvedValue(foreign)
+    routeState.query = { runner_id: 'r-foreign' }
+    wrapper = mount(TaskPlanView)
+    await flushPromises()
+
+    expect(toastError).toHaveBeenCalledWith('指定的执行记录不属于本任务。')
+    expect(wrapper.text()).not.toContain('r-foreign')
   })
 })
