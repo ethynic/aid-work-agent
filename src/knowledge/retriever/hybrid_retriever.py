@@ -46,6 +46,18 @@ class HybridRetriever:
     # FTS5 查询最大长度，超过则提取关键词
     FTS_QUERY_MAX_LENGTH = 30
 
+    # 精确型号检索：产品编码（TJ1890027 / TFD2300P / 26002 等）在向量化后极易被
+    # 长商品正文稀释，且 plainto_tsquery 对多词查询是 AND 语义，型号常被
+    # "配套/子母砖" 等通用词拖出候选集。命中型号时单独做精确子串检索，并以
+    # 高于向量+全文的组合权重进入 RRF，保证型号所在片段优先返回。
+    EXACT_TOKEN_PATTERN = re.compile(
+        r"(?<![A-Za-z0-9])(?:[A-Za-z]{1,6}\d{3,}[A-Za-z0-9]*|\d{5,})(?![A-Za-z0-9])"
+    )
+    EXACT_TOKEN_WEIGHT = 1.5
+    EXACT_TOKEN_MAX = 4
+    # 表格类文档的整行可能被固定长度切分到相邻片段，命中片段前后各取一块补全上下文
+    EXACT_NEIGHBOR_MAX = 4
+
     # 停用词表（常见但无实际意义的词）
     STOP_WORDS = {
         "的", "了", "是", "在", "有", "和", "与", "或", "等", "及",
@@ -178,6 +190,29 @@ class HybridRetriever:
             global_view=global_view, agent_id=agent_id,
         )
 
+        # 3.5 精确型号检索（命中产品编码时保证型号所在片段不被语义检索稀释）
+        exact_rows = self._exact_search(
+            query, top_k=top_k * 2,
+            tenant_id=tenant_id, source_type=source_type,
+            sub_categories=sub_categories, shared_ranges=shared_ranges,
+            global_view=global_view, agent_id=agent_id,
+        )
+        exact_results = [(row["id"], 0.0) for row in exact_rows]
+        if exact_rows:
+            exact_results += [
+                (cid, 0.0)
+                for cid in self._neighbor_chunk_ids(
+                    exact_rows, self.EXACT_NEIGHBOR_MAX,
+                )
+            ]
+            logger.info(
+                "后端日志：[检索策略] 精确型号命中 tokens={0}, 命中片段={1}, "
+                "含邻居补充={2}".format(
+                    self._extract_exact_tokens(query),
+                    len(exact_rows), len(exact_results),
+                )
+            )
+
         # 后端日志：步骤3-FTS5全文检索详情
         logger.info(
             f"后端日志：[检索调优] 步骤3-FTS5检索: fts_query='{fts_query}', "
@@ -185,22 +220,24 @@ class HybridRetriever:
             + (", " + ", ".join(f"(chunk_id={cid}, bm25={score:.4f})" for cid, score in fts_results[:5]) if fts_results else "")
         )
 
-        # 4. 两种检索均无结果 → 直接返回空
-        if not vector_results and not fts_results:
+        # 4. 三路检索均无结果 → 直接返回空
+        if not vector_results and not fts_results and not exact_results:
             logger.info(f"后端日志：混合检索无结果，查询={query}, 最佳向量相似度={best_vector_sim:.4f}")
             return []
 
-        # 5. 加权 RRF 融合
+        # 5. 加权 RRF 融合（精确型号单列一路，权重高于其余两路组合）
         fused = self._weighted_rrf_fusion(
             vector_results, fts_results,
             k=self.RRF_K,
             vector_weight=self.VECTOR_WEIGHT,
-            fts_weight=self.FTS_WEIGHT
+            fts_weight=self.FTS_WEIGHT,
+            exact_results=exact_results,
+            exact_weight=self.EXACT_TOKEN_WEIGHT,
         )
 
         # 后端日志：步骤5-RRF融合详情
         logger.info(
-            f"后端日志：[检索调优] 步骤5-RRF融合(RRF_K={self.RRF_K}, vec_w={self.VECTOR_WEIGHT}, fts_w={self.FTS_WEIGHT}): "
+            f"后端日志：[检索调优] 步骤5-RRF融合(RRF_K={self.RRF_K}, vec_w={self.VECTOR_WEIGHT}, fts_w={self.FTS_WEIGHT}, exact_w={self.EXACT_TOKEN_WEIGHT}): "
             f"融合结果数={len(fused)}"
             + ", " + ", ".join(f"(chunk_id={cid}, rrf={score:.6f})" for cid, score in fused[:10])
         )
@@ -235,16 +272,22 @@ class HybridRetriever:
                 f"原始分数范围=[{raw_min:.6f}, {raw_max:.6f}], 归一化后: {norm_details}"
             )
 
-        # 8. 相关度截断：保留前 min_keep 个 + 高分结果
+        # 8. 相关度截断：保留前 min_keep 个 + 高分结果；精确型号命中不参与截断
+        # （min-max 归一化会把靠后的精确命中压到阈值以下，如产品详情 + 型号明细表）
+        exact_ids = {cid for cid, _ in exact_results}
         final_results = [
             (cid, score) for rank, (cid, score) in enumerate(normalized)
-            if rank < self.MIN_KEEP_RESULTS or score >= self.RELEVANCE_THRESHOLD
+            if cid in exact_ids
+            or rank < self.MIN_KEEP_RESULTS
+            or score >= self.RELEVANCE_THRESHOLD
         ]
 
         # 后端日志：步骤8-相关度截断详情
         truncated = [
             (cid, score) for rank, (cid, score) in enumerate(normalized)
-            if rank >= self.MIN_KEEP_RESULTS and score < self.RELEVANCE_THRESHOLD
+            if rank >= self.MIN_KEEP_RESULTS
+            and score < self.RELEVANCE_THRESHOLD
+            and cid not in exact_ids
         ]
         logger.info(
             f"后端日志：[检索调优] 步骤8-RELEVANCE_THRESHOLD截断(>={self.RELEVANCE_THRESHOLD}, min_keep={self.MIN_KEEP_RESULTS}): "
@@ -289,6 +332,169 @@ class HybridRetriever:
 
         # 用 OR 连接关键词（FTS5 语法：匹配任一关键词即可）
         return " OR ".join(keywords)
+
+    @classmethod
+    def _extract_exact_tokens(cls, query: str) -> List[str]:
+        """提取查询中的产品型号/编码（去重、大写、限量）"""
+        tokens: List[str] = []
+        for match in cls.EXACT_TOKEN_PATTERN.finditer(query or ""):
+            token = match.group(0).upper()
+            if token not in tokens:
+                tokens.append(token)
+            if len(tokens) >= cls.EXACT_TOKEN_MAX:
+                break
+        return tokens
+
+    def _exact_search(
+        self,
+        query: str,
+        top_k: int,
+        tenant_id: Optional[str] = None,
+        source_type: Optional[str] = None,
+        sub_categories: Optional[List[str]] = None,
+        shared_ranges: Optional[List[Tuple[str, str]]] = None,
+        global_view: bool = False,
+        agent_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """精确型号子串检索，返回命中片段（含 doc_id/chunk_index 供邻居补全）"""
+        tokens = self._extract_exact_tokens(query)
+        if not tokens:
+            return []
+
+        # tokens 只含 [A-Z0-9]，不含 LIKE 通配符，可直接构造 pattern
+        patterns = [f"%{token}%" for token in tokens]
+        hit_exprs = " + ".join(
+            ["(CASE WHEN c.text ILIKE %s THEN 1 ELSE 0 END)"] * len(patterns)
+        )
+        # 参数顺序按 SQL 文本占位符出现顺序：SELECT 中的每个 CASE pattern 在
+        # WHERE 的 ILIKE ANY 之前，故先展开 patterns，再放整个数组
+        params: List[Any] = list(patterns) + [patterns]
+
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+            if tenant_id:
+                range_sql, range_params = build_tenant_range_conditions(
+                    tenant_id, source_type, shared_ranges,
+                )
+                scope_sql, scope_params = agent_scope_document_filter_sql(
+                    agent_id, tenant_id, alias="d",
+                )
+                params += range_params + scope_params
+                sub_cat_sql = ""
+                if sub_categories:
+                    sub_cat_sql = " AND d.sub_category = ANY(%s)"
+                    params.append(sub_categories)
+                params.append(top_k)
+                cursor.execute(f"""
+                    SELECT c.id, c.doc_id, c.chunk_index, d.title AS doc_title, ({hit_exprs}) AS hits
+                    FROM chunks c
+                    JOIN documents d ON c.doc_id = d.id
+                    WHERE c.text ILIKE ANY(%s::text[])
+                      AND ({range_sql})
+                      AND {scope_sql}{sub_cat_sql}
+                      AND {build_active_document_condition("d")}
+                    ORDER BY hits DESC, c.doc_id, c.chunk_index
+                    LIMIT %s
+                """, params)
+            elif global_view:
+                source_type_condition = " AND d.source_type = %s" if source_type else ""
+                if source_type:
+                    params.append(source_type)
+                params.append(top_k)
+                cursor.execute(f"""
+                    SELECT c.id, c.doc_id, c.chunk_index, d.title AS doc_title, ({hit_exprs}) AS hits
+                    FROM chunks c
+                    JOIN documents d ON c.doc_id = d.id
+                    WHERE c.text ILIKE ANY(%s::text[]){source_type_condition}
+                      AND {build_active_document_condition("d")}
+                    ORDER BY hits DESC, c.doc_id, c.chunk_index
+                    LIMIT %s
+                """, params)
+            else:
+                source_type_condition = " AND d.source_type = %s" if source_type else ""
+                if source_type:
+                    params.append(source_type)
+                params.append(top_k)
+                cursor.execute(f"""
+                    SELECT c.id, c.doc_id, c.chunk_index, d.title AS doc_title, ({hit_exprs}) AS hits
+                    FROM chunks c
+                    JOIN documents d ON c.doc_id = d.id
+                    WHERE c.text ILIKE ANY(%s::text[])
+                      AND d.tenant_id IS NULL{source_type_condition}
+                      AND {build_active_document_condition("d")}
+                    ORDER BY hits DESC, c.doc_id, c.chunk_index
+                    LIMIT %s
+                """, params)
+
+            rows = [dict(row) for row in cursor.fetchall()]
+            # 标题即型号的片段（产品详情页）优先，其次按 token 命中数、文档顺序
+            for row in rows:
+                title = (row.get("doc_title") or "").upper()
+                row["_title_hits"] = sum(1 for token in tokens if token in title)
+            rows.sort(key=lambda row: (-row["_title_hits"], -row["hits"], row["doc_id"], row["chunk_index"]))
+            return rows
+        except Exception as e:
+            logger.warning(f"后端日志：精确型号检索失败: {e}")
+            return []
+        finally:
+            if not self._external_conn:
+                return_pooled_connection(conn)
+
+    def _neighbor_chunk_ids(
+        self,
+        exact_rows: List[Dict[str, Any]],
+        max_extra: int,
+    ) -> List[int]:
+        """补全精确命中片段的前后相邻片段（表格整行可能跨块切断）"""
+        if not exact_rows or max_extra <= 0:
+            return []
+
+        hit_ids = {row["id"] for row in exact_rows}
+        pairs: List[Tuple[int, int]] = []
+        for row in exact_rows:
+            doc_id = row["doc_id"]
+            chunk_index = row["chunk_index"]
+            if chunk_index > 0:
+                pairs.append((doc_id, chunk_index - 1))
+            pairs.append((doc_id, chunk_index + 1))
+
+        # 去重并保持命中顺序，避免相邻对重复查询
+        seen = set()
+        unique_pairs = []
+        for pair in pairs:
+            if pair not in seen:
+                seen.add(pair)
+                unique_pairs.append(pair)
+        if not unique_pairs:
+            return []
+
+        placeholders = ",".join(["(%s,%s)"] * len(unique_pairs))
+        params: List[Any] = [v for pair in unique_pairs for v in pair]
+
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cursor.execute(
+                f"SELECT id, doc_id, chunk_index FROM chunks "
+                f"WHERE (doc_id, chunk_index) IN ({placeholders})",
+                params,
+            )
+            rows = cursor.fetchall()
+        except Exception as e:
+            logger.warning(f"后端日志：精确命中邻居片段查询失败: {e}")
+            return []
+        finally:
+            if not self._external_conn:
+                return_pooled_connection(conn)
+
+        order = {pair: idx for idx, pair in enumerate(unique_pairs)}
+        rows = sorted(
+            (row for row in rows if row["id"] not in hit_ids),
+            key=lambda row: order.get((row["doc_id"], row["chunk_index"]), len(order)),
+        )
+        return [row["id"] for row in rows[:max_extra]]
 
     def _fts_search(self, query: str, top_k: int, tenant_id: Optional[str] = None, source_type: Optional[str] = None, sub_categories: Optional[List[str]] = None, shared_ranges: Optional[List[Tuple[str, str]]] = None, global_view: bool = False, agent_id: Optional[str] = None) -> List[Tuple[int, float]]:
         """全文检索（PostgreSQL tsvector）"""
@@ -388,7 +594,9 @@ class HybridRetriever:
         fts_results: List[Tuple[int, float]],
         k: int = 60,
         vector_weight: float = 0.7,
-        fts_weight: float = 0.3
+        fts_weight: float = 0.3,
+        exact_results: Optional[List[Tuple[int, float]]] = None,
+        exact_weight: float = 0.0,
     ) -> List[Tuple[int, float]]:
         """
         加权 RRF（Reciprocal Rank Fusion）融合
@@ -399,6 +607,8 @@ class HybridRetriever:
             k: RRF 参数（通常 60）
             vector_weight: 向量检索权重（0-1）
             fts_weight: FTS5 权重（0-1）
+            exact_results: [(chunk_id, _), ...] 精确型号命中片段
+            exact_weight: 精确型号权重；大于其余权重之和时保证命中片段排在前面
 
         Returns:
             [(chunk_id, fused_score), ...]
@@ -414,6 +624,11 @@ class HybridRetriever:
         for rank, (chunk_id, _) in enumerate(fts_results):
             rrf_score = 1 / (k + rank + 1)
             scores[chunk_id] = scores.get(chunk_id, 0) + rrf_score * fts_weight
+
+        # 精确型号检索：命中片段优先
+        for rank, (chunk_id, _) in enumerate(exact_results or []):
+            rrf_score = 1 / (k + rank + 1)
+            scores[chunk_id] = scores.get(chunk_id, 0) + rrf_score * exact_weight
 
         # 按融合分数排序
         sorted_results = sorted(scores.items(), key=lambda x: x[1], reverse=True)
