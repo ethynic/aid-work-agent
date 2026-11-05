@@ -582,10 +582,10 @@ def _resolve_conversations(execution, descriptor):
     identity = execution.identity
     conversation_ids = descriptor.get('conversation_ids')
     conversations = []
-    if descriptor.get('schema_version') == 2 and (not isinstance(conversation_ids, list)
+    if descriptor.get('schema_version') == 2 and (not isinstance(conversation_ids, (list, tuple))
                                                   or not conversation_ids):
         raise WecomBusinessFlowError('WECOM_BUSINESS_TARGET_EMPTY', '本次执行缺少冻结会话清单')
-    if isinstance(conversation_ids, list) and conversation_ids:
+    if isinstance(conversation_ids, (list, tuple)) and conversation_ids:
         for item in conversation_ids:
             row = service.get_conversation(identity.tenant_id, identity.user_id, int(item))
             if row is None:

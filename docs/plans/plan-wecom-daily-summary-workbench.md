@@ -9,7 +9,7 @@
 | D2 | 单一专属计划、通用任务排除与配额 | ✅ 完成（2026-11-04） | 主控评审放行；2.14 契约、独测 225＋22＋5 项通过、11 项跳过；真实 PG/真机留 D5 |
 | D3 | 逐会话执行记录、API 与报告查询 | ✅ 完成（2026-11-04） | 主控评审放行；2.15 契约、旧工具清单断言已修、独测/CR 通过；真实 PG/真机留 D5 |
 | D4 | 每日总结页面及配置抽屉 | ✅ 完成（2026-11-05） | 主控复评放行；独测前端 34 项、目录 API 5 项通过，CR 无阻断；真实链路留 D5 |
-| D5 | 独立测试、CodeReview 与本地联调 | 🔧 进行中 | 配套 Runtime＋WeCom 出包及静态兼容检查通过；真实 PG、安装调用和旧客户机组合待验收 |
+| D5 | 独立测试、CodeReview 与本地联调 | 🔧 进行中 | agent2 手动日报首轮失败已定位并本地修复；待发布复测、真实 PG 和旧客户机组合验收 |
 
 设计依据：[企业微信会话旁路日志、查询与按日日报设计](../design/wecom/wecom-conversation-operations-design.md)。原旁路日志、日期读取及初版页面的实施记录仍见[原计划](plan-wecom-conversation-operations.md)；本计划只追踪 2026-11-04 逐项确认的新开发内容。开发时先核对[Runner / Desktop / Runtime 共同契约](../system/runner-desktop-runtime-integration-contract.md)与仓库相关后端、前端、测试、数据库规则。文档完成不代表功能已实现、提交、部署或真机验收。
 
@@ -115,3 +115,5 @@
 **agent2 真机验收发行准备（2026-11-05）**：功能源码已提交，发行元数据把 Runtime UI／Host／Core／WeCom 分别升为 `0.0.38`／`0.2.27`／`0.2.24`／`0.2.5`，同步各消费方 package lock。WeCom 配套验包要求目标 Runtime 和插件同时包含 `wecom_session_directory`，交付说明列出四项必需工具。用已提交功能源码 `34a34f4fb283b383e55dc6b29fc3eb00009ce09c` 和当前打包脚本覆盖，在本机 `release-batch.ps1 -Component RuntimeWecom -ReleaseProfile acceptance` 完成隔离出包；`build-info.json` 明示 packaging-only working tree overlay，不将产物称为原始提交的纯净构建。修复了 Windows PowerShell 5.1 日期预检引号丢失与 Runtime 资源重命名短暂 `EPERM`；独立测试、独立 CR 无剩余 P0/P1/P2，发行脚本定向 5/5、插件打包 13/13、Runtime 打包 20/20 通过。
 
 交付目录为 `%LOCALAPPDATA%/AidWorkBuild/deliveries/AID-Work-Runtime-0.0.38-WeCom-0.2.5-20261105-095139/`，含 `AID-Work-Runtime-0.0.38-win-x64-acceptance-unsigned.exe`、`wecom-0.2.5.aidplugin.zip`、验包报告及 `SHA256SUMS.txt`；同名组合 ZIP 的 SHA-256 为 `713eb25c8414ab58b36c5896a1b0667d8074d14bd6867858f9330f432c08ef3a`。本批 Runtime 打包/验包、WeCom 离线验包和目标 Runtime 的发布者信任及四工具静态兼容检查均通过。离线 `doctor_exit=1`、`runtime_readiness=false` 是本构建会话没有满足桌面运行条件，不能当作已验证真实企微登录。未安装客户端、未部署 agent2；真实 Runner→Runtime→CLI、账号切换、旧 BOSS 客户机组合与隔离 PostgreSQL 仍待 D5 真机验收。
+
+**agent2 手动日报试测与本地修复（2026-11-05）**：用户已自行部署 agent2 并安装本机 Runtime＋WeCom CLI；会话目录可读。手动更新执行 `runner_b59d6d9b0b2645729feefe707fa9ba7c` 失败，码 `WECOM_BUSINESS_TARGET_EMPTY`，两项目标均在 `queued` 未执行。只读查询 agent2 的 `agent_runners` 确认受理 `input` 与 `checkpoint.execution_context` 各有 2 个 `conversation_ids`，但没有逐会话 progress；未读取会话正文或凭据。Worker 的 `AgentRequestContext` 将列表深冻结为 tuple，业务流原先只接受 list，导致读取前误判为空；该故障在服务端，非 Runtime/CLI 提取失败。本地目标解析现接受 list/tuple，仍按租户、用户、账号和设备逐项核验，空 tuple 继续拒绝。主控定向回归 77 passed；独立测试 86 passed、1 skipped（无隔离 PostgreSQL），旧代码对新测试确实失败；独立 CR 无 P0/P1/P2。修复尚未部署，agent2 仍运行原提交，未声称本次日报已成功；待用户明确部署后重试手动总结并继续验收 D5。

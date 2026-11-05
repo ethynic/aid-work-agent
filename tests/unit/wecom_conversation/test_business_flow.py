@@ -13,6 +13,7 @@ from unittest.mock import patch
 import pytest
 
 from src.core.agent_engine.contracts import AgentMode, CheckpointFailure, ExecutionState, Identity, Outcome
+from src.core.request_context import AgentRequestContext
 from src.services.agent_runner.runtime import wecom_business_flow as flow
 
 
@@ -34,6 +35,23 @@ def test_v2_scheduled_scope_requires_frozen_ids_and_same_source():
         with pytest.raises(flow.WecomBusinessFlowError, match='冻结会话清单'):
             flow._resolve_conversations(execution, {**descriptor, 'conversation_ids': []})
         live_scope.assert_not_called()
+
+
+def test_manual_scope_survives_runner_request_context_freeze():
+    """A manually accepted scope must reach execution after request data is frozen."""
+    execution = SimpleNamespace(identity=SimpleNamespace(tenant_id='tenant-a', user_id='user-a'))
+    accepted = {'schema_version': 2, 'kind': 'daily', 'trigger': 'manual',
+                'account': 'acc1', 'device': 'device-a', 'conversation_ids': [7, 8]}
+    context = AgentRequestContext(request_data={'wecom_conversation_business': accepted})
+    descriptor = dict(context.request_data['wecom_conversation_business'])
+    assert descriptor['conversation_ids'] == (7, 8)
+    rows = {item: {'id': item, 'source_account_id': 'acc1', 'device_id': 'device-a'}
+            for item in (7, 8)}
+    with patch('src.wecom_conversation.service.get_conversation',
+               side_effect=lambda tenant, user, item: rows[item]):
+        assert [row['id'] for row in flow._resolve_conversations(execution, descriptor)] == [7, 8]
+    with pytest.raises(flow.WecomBusinessFlowError, match='冻结会话清单'):
+        flow._resolve_conversations(execution, {**descriptor, 'conversation_ids': ()})
 
 
 def _page(messages, start=1000, end=1000 + 86400, snapshot=1790000000, has_more=False, cursor=None):
