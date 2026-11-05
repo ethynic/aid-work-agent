@@ -230,14 +230,23 @@ class ChannelFactory:
         从 DB 读取配置，返回 (cfg, used_config_id)。
 
         优先按 config_id 精确查找；其次取已验证的配置；最后取第一条。
+        config 为空 dict 的行视为不可用（仿真同步置空凭证 / 未填写的半成品配置），
+        直接返回 None，避免进入 adapter 构造后报缺参 TypeError 刷 ERROR 日志。
         """
         if config_id:
             cfg = ChannelConfigDB.get_by_id(config_id)
             if cfg and cfg.get("tenant_id") == tenant_id and cfg.get("channel_type") == channel_type:
+                if not cfg.get("config"):
+                    logger.info(
+                        f"[ChannelFactory] 渠道配置为空，跳过创建 adapter: "
+                        f"tenant={tenant_id}, type={channel_type}, config={config_id}"
+                    )
+                    return None, None
                 return cfg, config_id
             return None, None
 
         configs = ChannelConfigDB.list_by_tenant(tenant_id, channel_type)
+        configs = [c for c in configs if c.get("config")]
         if not configs:
             return None, None
 

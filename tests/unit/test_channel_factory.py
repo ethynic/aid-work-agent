@@ -117,6 +117,78 @@ class TestChannelFactoryCreateFromTenantConfig:
             assert cfg_id is None
             assert subagent is None
 
+    async def test_create_by_config_id_empty_config_returns_none(self):
+        """config 为空 dict（仿真同步置空凭证 / 半成品配置）时返回 None，不构造 adapter"""
+        from src.saas.services.channel_factory import ChannelFactory
+
+        mock_cfg = {
+            "config_id": "chan_empty",
+            "tenant_id": "tenant_001",
+            "channel_type": "wecom_kf",
+            "config": {},
+            "subagent_type": None,
+            "verified": 0,
+        }
+
+        with patch("src.saas.services.channel_factory.ChannelConfigDB") as mock_db:
+            mock_db.get_by_id.return_value = mock_cfg
+
+            with patch.object(ChannelFactory, "create_adapter") as mock_create:
+                adapter, cfg_id, subagent = await ChannelFactory.create_from_tenant_config(
+                    tenant_id="tenant_001",
+                    channel_type="wecom_kf",
+                    config_id="chan_empty",
+                )
+
+                mock_create.assert_not_called()
+                assert adapter is None
+                assert cfg_id is None
+                assert subagent is None
+
+    async def test_create_without_config_id_skips_empty_configs(self):
+        """列表分支：仅有空 config 行时返回 None；空行之后的有效行仍可被选中"""
+        from src.saas.services.channel_factory import ChannelFactory
+
+        empty_cfg = {
+            "config_id": "chan_empty",
+            "tenant_id": "tenant_001",
+            "channel_type": "wecom_kf",
+            "config": {},
+            "subagent_type": None,
+            "verified": 0,
+        }
+        filled_cfg = {
+            "config_id": "chan_filled",
+            "tenant_id": "tenant_001",
+            "channel_type": "wecom_kf",
+            "config": {"corp_id": "ww123", "secret": "s"},
+            "subagent_type": "pre-sales",
+            "verified": 0,
+        }
+
+        with patch("src.saas.services.channel_factory.ChannelConfigDB") as mock_db:
+            # 仅空行：返回 None
+            mock_db.list_by_tenant.return_value = [empty_cfg]
+            adapter, cfg_id, subagent = await ChannelFactory.create_from_tenant_config(
+                tenant_id="tenant_001",
+                channel_type="wecom_kf",
+            )
+            assert adapter is None
+            assert cfg_id is None
+            assert subagent is None
+
+            # 空行 + 有效行：跳过空行，选中有效行
+            mock_db.list_by_tenant.return_value = [empty_cfg, filled_cfg]
+            mock_adapter = MagicMock()
+            with patch.object(ChannelFactory, "create_adapter", return_value=mock_adapter):
+                adapter, cfg_id, subagent = await ChannelFactory.create_from_tenant_config(
+                    tenant_id="tenant_001",
+                    channel_type="wecom_kf",
+                )
+                assert adapter is mock_adapter
+                assert cfg_id == "chan_filled"
+                assert subagent == "pre-sales"
+
     async def test_create_by_config_id_not_found_returns_none(self):
         """config_id 不存在时，返回 None"""
         from src.saas.services.channel_factory import ChannelFactory
