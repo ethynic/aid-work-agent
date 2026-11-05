@@ -46,6 +46,59 @@ beforeEach(() => {
 afterEach(() => { wrapper?.unmount(); wrapper = null; focusHost?.remove(); focusHost = null; vi.restoreAllMocks() })
 
 describe('每日总结工作台', () => {
+  it('新版日报只展示概览、文本跟进和已发生异常，保留消息证据', async () => {
+    api.dailyReports.mockResolvedValue({ reports: [{ ...report(1, '孙晨咨询优惠和女鞋，确认购买两双。'),
+      summary: { overview: '孙晨咨询优惠和女鞋，确认购买两双。',
+        pending_human: [{ detail: '确认颜色和收件方式。', evidence: [1980, 1981] }],
+        anomalies: [{ detail: '欢迎语重复、截断。', evidence: [1970] }] },
+      coverage: { day_count: 15 }, generated_at: '2026-11-05T11:57:24',
+      snapshot_at: '2026-11-05T11:56:38', source_runner_id: 'runner-saved' }],
+      has_more: false, next_cursor: null, last_generation: null })
+    wrapper = mount(WecomConversationDaily, { global: { provide: { toggleSidebar: () => {} }, stubs: { AppHeader: true } } })
+    await flushPromises()
+    const card = wrapper.find('article')
+    expect(card.find('h4').classes()).toContain('text-xl')
+    expect(card.text()).toContain('当日 15 条消息')
+    expect(card.text()).toContain('确认颜色和收件方式。')
+    expect(card.text()).toContain('欢迎语重复、截断。')
+    expect(card.findAll('h5').map(heading => heading.text())).toEqual(['当日概览', '待跟进', '异常'])
+    expect(card.text()).not.toContain('咨询与问题分类')
+    expect(card.find('button[title="在会话记录中定位消息 1970"]').exists()).toBe(true)
+    expect(card.find('details').attributes('open')).toBeUndefined()
+  })
+
+  it('旧版已保存报告在只读日期仍能看到原有分类和已处理内容', async () => {
+    api.dailyReports.mockResolvedValue({ reports: [{ ...report(1, '旧版概览'),
+      summary: { overview: '旧版概览', categories: [{ topic: '咨询', count: 1, detail: '店铺活动' }],
+        handled: [{ topic: '回复', detail: '已告知活动', evidence: [1971] }],
+        pending_human: [], noteworthy: [] } }],
+      has_more: false, next_cursor: null, last_generation: null })
+    wrapper = mount(WecomConversationDaily, { global: { provide: { toggleSidebar: () => {} }, stubs: { AppHeader: true } } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('咨询 ×1：店铺活动')
+    expect(wrapper.text()).toContain('回复：已告知活动')
+  })
+
+  it('只有寒暄的日报只显示无实质内容，不空挂跟进和异常标题', async () => {
+    api.dailyReports.mockResolvedValue({ reports: [{ ...report(1, '当日无实质内容'),
+      summary: { overview: '当日无实质内容', pending_human: [], anomalies: [] } }],
+      has_more: false, next_cursor: null, last_generation: null })
+    wrapper = mount(WecomConversationDaily, { global: { provide: { toggleSidebar: () => {} }, stubs: { AppHeader: true } } })
+    await flushPromises()
+    expect(wrapper.find('article').text()).toContain('当日无实质内容')
+    expect(wrapper.findAll('article h5').map(heading => heading.text())).toEqual(['当日概览'])
+  })
+
+  it('跨日生成的报告在辅助信息中保留日期', async () => {
+    api.dailyReports.mockResolvedValue({ reports: [{ ...report(1, '跨日报告'),
+      generated_at: '2020-01-02T11:57:24', snapshot_at: '2020-01-01T23:56:38' }],
+      has_more: false, next_cursor: null, last_generation: null })
+    wrapper = mount(WecomConversationDaily, { global: { provide: { toggleSidebar: () => {} }, stubs: { AppHeader: true } } })
+    await flushPromises()
+    expect(wrapper.find('article header').text()).toContain('生成于 2020/1/2')
+    expect(wrapper.find('article header').text()).toContain('读取截至 2020/1/1')
+  })
+
   it('添加目录只在单聊显示会话级平台，群聊不显示 unknown', async () => {
     api.listDirectory.mockResolvedValue({ device_id: 'device-a', self_user_id: 'account-a', source_generation: 'gen-a',
       conversations: [

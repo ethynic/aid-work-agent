@@ -47,25 +47,26 @@ BACKGROUND_FEED_CHAR_LIMIT = 6000
 DEFAULT_TIMEZONE = 'Asia/Shanghai'
 
 # 固定内部总结模板（设计 §5.3）：不套用对客寒暄/服务范围拒答话术。
-SUMMARY_SYSTEM_TEMPLATE = '''你是企业微信会话日报分析引擎，负责把一个会话当日聊天记录整理为结构化日报。只依据给出的当日消息与背景，不得编造；内容缺口要如实说明。
+SUMMARY_SYSTEM_TEMPLATE = '''你是企业微信会话日报分析引擎，负责把一个会话当日聊天记录整理为简洁、可读的日报。只依据给出的消息，不得编造。
 
 输出必须是合法 JSON（UTF-8，不带其它文字），结构：
 {
-  "overview": "当日概览（3-6句）",
-  "categories": [{"topic": "咨询/问题主题", "count": 数量, "detail": "简要说明"}],
-  "handled": [{"topic": "已处理事项", "detail": "处理经过与结果", "evidence": [消息ID]}],
-  "pending_human": [{"topic": "待人工跟进", "detail": "原因与建议", "evidence": [消息ID]}],
-  "noteworthy": [{"topic": "值得关注", "detail": "风险/机会/异常", "evidence": [消息ID]}],
-  "notes": "内容缺口或读取限制说明（无则省略）"
+  "overview": "当日概览",
+  "pending_human": [{"detail": "需本账号或团队跟进的下一步", "evidence": [消息ID]}],
+  "anomalies": [{"detail": "已发生且需关注的异常", "evidence": [消息ID]}],
+  "notes": "确实影响理解的读取缺口（无则省略）"
 }
 判定纪律：
-- "已处理"必须有明确处理事实（如对方确认、问题解决）；仅收到回复不能认定已解决；无明确结果的列入 pending_human 并标注待确认；
+- 根据当日实际消息判断内容，不按会话名称预设主题。每件相对独立的实质事情写一句；同一人连续咨询并推进的同一件事合并表述，不拆成分类统计，也不固定句数。只有寒暄、普通系统通知等无实质内容时，overview 写“当日无实质内容”，其余列表为空；
+- overview 只交代主要事情及进展；pending_human 只写本账号或团队确需继续处理的具体下一步，不重复概览经过，不把群友之间尚未回复的交流自动变成待办；
+- anomalies 只收录消息中已发生且需关注的问题，不写泛泛风险、商机、正常操作或无关的系统通知；没有异常则为空列表；
+- 只描述本会话中可见的事实。“群内未见下单记录”不等于订单未完成，不推断私聊、外部系统或未给出的状态；不为凑内容追加通用建议或说明；
 - evidence 使用输入中每条消息标注的 msg_id；没有消息依据的条目不要写；
 - 附件未展开时只依据文本与元数据，不得假装已看过图片/文件内容；
 - 背景消息（早于当日窗口，输入中明确标注）只作上下文，不计入当日事项。'''
 
-CHUNK_SYSTEM_TEMPLATE = '''你是企业微信会话日报的分组分析引擎。对给出的一组当日消息产出紧凑的中间结论，供最终日报合成使用。只依据给出的消息，不编造。输出 JSON：
-{"digest": "本组要点（5-10句）", "items": [{"topic": "...", "kind": "handled|pending|noteworthy|category", "detail": "...", "evidence": [msg_id]}]}'''
+CHUNK_SYSTEM_TEMPLATE = '''你是企业微信会话日报的分组分析引擎。对一组当日消息提取紧凑的中间结论，供最终日报合成使用。按实际内容合并同一件事，只保留实质进展、明确待跟进事项和已发生异常；不要分类计数、重复叙述或推断会话外状态。只依据给出的消息，不编造。输出 JSON：
+{"digest": "每件独立事情一句话", "items": [{"kind": "event|pending|anomaly", "detail": "...", "evidence": [msg_id]}]}'''
 
 
 from ..contracts import RunnerError as _RunnerError
@@ -408,19 +409,16 @@ def _parse_summary_json(text, *, chunk=False):
     if not isinstance(value.get('overview'), str) or not value['overview'].strip():
         return None
     if any(not isinstance(value.get(key), list)
-           for key in ('categories', 'handled', 'pending_human', 'noteworthy')):
+           for key in ('pending_human', 'anomalies')):
         return None
     if 'notes' in value and not isinstance(value['notes'], str):
         return None
-    for key in ('categories', 'handled', 'pending_human', 'noteworthy'):
+    for key in ('pending_human', 'anomalies'):
         for item in value[key]:
-            if not isinstance(item, dict) or not isinstance(item.get('topic'), str) \
-                    or not isinstance(item.get('detail'), str):
+            if not isinstance(item, dict) or not isinstance(item.get('detail'), str) \
+                    or not item['detail'].strip() or not isinstance(item.get('evidence'), list):
                 return None
-            if key == 'categories':
-                if type(item.get('count')) is not int or item['count'] < 0:
-                    return None
-            elif not isinstance(item.get('evidence'), list):
+            if any(type(msg_id) is not int for msg_id in item['evidence']):
                 return None
     return value
 
@@ -462,9 +460,11 @@ async def _analyze_conversation(execution, descriptor, conversation, business_da
         direct_input += f'\n计划特殊关注要求：{requirements}'
     if not day_messages:
         # 成功空日（设计 §5.2）：整段日期范围排空且无当日记录。
-        return {'summary': {'overview': '当日无消息', 'categories': [],
-                            'handled': [], 'pending_human': [], 'noteworthy': [],
-                            'notes': '日期范围已排空，无当日消息'},
+        empty_summary = {'overview': '当日无消息' if not notes else '当日无可确认的消息',
+                         'pending_human': [], 'anomalies': []}
+        if notes:
+            empty_summary['notes'] = notes
+        return {'summary': empty_summary,
                 'day_count': 0, 'background_count': len(background_messages)}
     if len(direct_input) <= DIRECT_SUMMARY_CHAR_LIMIT:
         content = await _model_call(execution, SUMMARY_SYSTEM_TEMPLATE, direct_input)

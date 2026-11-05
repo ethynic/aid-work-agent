@@ -10,6 +10,7 @@
 | D3 | 逐会话执行记录、API 与报告查询 | ✅ 完成（2026-11-04） | 主控评审放行；2.15 契约、旧工具清单断言已修、独测/CR 通过；真实 PG/真机留 D5 |
 | D4 | 每日总结页面及配置抽屉 | ✅ 完成（2026-11-05） | 主控复评放行；独测前端 34 项、目录 API 5 项通过，CR 无阻断；真实链路留 D5 |
 | D5 | 独立测试、CodeReview 与本地联调 | 🔧 进行中 | agent2 手动日报首轮失败已定位并本地修复；待发布复测、真实 PG 和旧客户机组合验收 |
+| D6 | 日报内容精简与总结卡片排版 | ✅ 完成（2026-11-05） | 后端全量 40 项及最终定向 4 项、前端 26 项、构建和双视口实拍通过；独立审查无阻断，真机文风留 D5 |
 
 设计依据：[企业微信会话旁路日志、查询与按日日报设计](../design/wecom/wecom-conversation-operations-design.md)。原旁路日志、日期读取及初版页面的实施记录仍见[原计划](plan-wecom-conversation-operations.md)；本计划只追踪 2026-11-04 逐项确认的新开发内容。开发时先核对[Runner / Desktop / Runtime 共同契约](../system/runner-desktop-runtime-integration-contract.md)与仓库相关后端、前端、测试、数据库规则。文档完成不代表功能已实现、提交、部署或真机验收。
 
@@ -117,3 +118,13 @@
 交付目录为 `%LOCALAPPDATA%/AidWorkBuild/deliveries/AID-Work-Runtime-0.0.38-WeCom-0.2.5-20261105-095139/`，含 `AID-Work-Runtime-0.0.38-win-x64-acceptance-unsigned.exe`、`wecom-0.2.5.aidplugin.zip`、验包报告及 `SHA256SUMS.txt`；同名组合 ZIP 的 SHA-256 为 `713eb25c8414ab58b36c5896a1b0667d8074d14bd6867858f9330f432c08ef3a`。本批 Runtime 打包/验包、WeCom 离线验包和目标 Runtime 的发布者信任及四工具静态兼容检查均通过。离线 `doctor_exit=1`、`runtime_readiness=false` 是本构建会话没有满足桌面运行条件，不能当作已验证真实企微登录。未安装客户端、未部署 agent2；真实 Runner→Runtime→CLI、账号切换、旧 BOSS 客户机组合与隔离 PostgreSQL 仍待 D5 真机验收。
 
 **agent2 手动日报试测与本地修复（2026-11-05）**：用户已自行部署 agent2 并安装本机 Runtime＋WeCom CLI；会话目录可读。手动更新执行 `runner_b59d6d9b0b2645729feefe707fa9ba7c` 失败，码 `WECOM_BUSINESS_TARGET_EMPTY`，两项目标均在 `queued` 未执行。只读查询 agent2 的 `agent_runners` 确认受理 `input` 与 `checkpoint.execution_context` 各有 2 个 `conversation_ids`，但没有逐会话 progress；未读取会话正文或凭据。Worker 的 `AgentRequestContext` 将列表深冻结为 tuple，业务流原先只接受 list，导致读取前误判为空；该故障在服务端，非 Runtime/CLI 提取失败。本地目标解析现接受 list/tuple，仍按租户、用户、账号和设备逐项核验，空 tuple 继续拒绝。主控定向回归 77 passed；独立测试 86 passed、1 skipped（无隔离 PostgreSQL），旧代码对新测试确实失败；独立 CR 无 P0/P1/P2。修复尚未部署，agent2 仍运行原提交，未声称本次日报已成功；待用户明确部署后重试手动总结并继续验收 D5。
+
+## 8. D6：日报内容精简与总结卡片排版
+
+用户确认每个会话的日报采用“当日概览、待跟进、异常”三块。概览按实际聊天内容将同一件事合并，每件相对独立的实质事情一句，不预设句数或按会话名称套模板；不再生成咨询分类次数和已处理流水。待跟进仅列本账号或团队需要继续处理的具体下一步，为纯文本列表，不做状态跟踪。异常只列已发生且需关注的问题，无则隐藏。保留消息证据 ID；只依据本会话可见事实，不推断私聊、订单或外部系统状态。只有寒暄或普通系统通知时，显示“当日无实质内容”。概览说进展，待跟进说下一步，避免复述。
+
+前端总结卡片按已确认的静态预览调整：会话名为清楚的卡片标题，消息数与生成/读取时间收进次要信息行，三个正文区域分隔，失败原因保留在卡片中，阶段、时间和执行 ID 可展开查看。原 `summary` JSONB 中的旧版报告不迁移、不丢字段；已保存旧报告按原字段可读，新生成报告使用新三块结构。此阶段不修改 Runtime、CLI、Scheduler、数据库表或已保存的原消息。
+
+**验证**：新结构 JSON 可解析并保存，旧结构不能冒充新版模型结果；空日不调用模型，低内容日按规则输出；新报告页面只有三个区域、证据可定位，旧报告的已存内容仍能阅读；失败诊断入口不丢；前端定向测试与生产构建通过，桌面和窄屏布局完成视觉检查。独立验证与 CodeReview 结论登记在本节和顶部进度表，真机生成质量留 D5 验收。
+
+**完成记录（2026-11-05）**：后端 `test_business_flow.py` 在初版改动后 40 passed；补上空日读取缺口后，受影响的 `-k "empty or summary"` 最终 4 passed、37 deselected。前端最终工作台 26 passed，`npm run build` 通过。使用本地 Vite、系统 Chrome 和受控 API 响应查看 1280px 桌面与 375px 窄屏，均无页面横向溢出；修复窄屏状态徽标换行。独立验证者复跑前端原状态 24 passed、后端筛选 3 passed，审查最终差异与空区块过滤后未发现 P0/P1/P2；最终新增用例及微调由主控复测。`git diff --check` 通过。真实模型是否稳定遵循精简规则尚需发布后在 agent2 用实际会话重算检验；本阶段未部署。

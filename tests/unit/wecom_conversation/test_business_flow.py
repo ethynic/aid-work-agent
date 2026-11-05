@@ -71,8 +71,7 @@ def _background_message(msg_id, send_time=500):
 
 
 def _summary(overview, **overrides):
-    value = {'overview': overview, 'categories': [], 'handled': [],
-             'pending_human': [], 'noteworthy': []}
+    value = {'overview': overview, 'pending_human': [], 'anomalies': []}
     value.update(overrides)
     return json.dumps(value, ensure_ascii=False)
 
@@ -288,6 +287,17 @@ async def test_daily_empty_day_saves_explicit_empty_report():
         await _collect(flow.run_wecom_business(execution, {'kind': 'daily'}, adapter))
     assert saved and saved[0][1]['overview'] == '当日无消息'
     assert llm.calls == []
+
+
+@pytest.mark.asyncio
+async def test_empty_day_with_unreadable_timestamps_keeps_read_gap_visible():
+    """无法确认日期的记录可能属于当天，不能断言当天完全没有消息。"""
+    result = await flow._analyze_conversation(
+        None, {}, {'name': '项目群'}, '2026-11-02', 'Asia/Shanghai', [_page([])],
+        notes='1 条记录无有效时间未纳入')
+    assert result['summary']['overview'] == '当日无可确认的消息'
+    assert '无有效时间' in result['summary']['notes']
+    assert result['summary']['pending_human'] == result['summary']['anomalies'] == []
 
 
 @pytest.mark.asyncio
@@ -617,6 +627,20 @@ async def test_summary_parser_rejects_non_json_and_missing_structure():
     assert flow._parse_summary_json(_digest('group result')) is None
     assert flow._parse_summary_json(_digest('group result'), chunk=True)['digest'] == 'group result'
     assert flow._parse_summary_json(_summary('ok'))['overview'] == 'ok'
+
+
+def test_summary_contract_keeps_only_actionable_followups_and_observed_anomalies():
+    """新报告不再要求分类计数；无证据或旧结构不能冒充成功日报。"""
+    concise = _summary('孙晨咨询优惠和女鞋，确认两双并获报价。',
+                       pending_human=[{'detail': '确认颜色及收件方式。', 'evidence': [1980, 1981]}],
+                       anomalies=[{'detail': '欢迎语重复、截断。', 'evidence': [1970]}])
+    parsed = flow._parse_summary_json(concise)
+    assert parsed['pending_human'][0]['evidence'] == [1980, 1981]
+    assert parsed['anomalies'][0]['detail'] == '欢迎语重复、截断。'
+    assert flow._parse_summary_json(_summary('ok', anomalies=[{'detail': '缺证据'}])) is None
+    legacy = json.dumps({'overview': '旧报告', 'categories': [], 'handled': [],
+                         'pending_human': [], 'noteworthy': []}, ensure_ascii=False)
+    assert flow._parse_summary_json(legacy) is None
 
 
 def test_render_message_projection_keeps_required_facts():

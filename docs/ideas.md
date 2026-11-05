@@ -78,7 +78,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20261104-2038 | 企微会话每日总结工作台与专属定时配置 | 🔧 部分完成 | agent2 手动日报失败已定位并本地修复，待部署复测。 | [设计](design/wecom/wecom-conversation-operations-design.md) | [计划](plans/plan-wecom-daily-summary-workbench.md) |
+| 20261104-2038 | 企微会话每日总结工作台与专属定时配置 | 🔧 部分完成 | 日报三块内容与卡片排版已开发验证，待发布及真机复测。 | [设计](design/wecom/wecom-conversation-operations-design.md) | [计划](plans/plan-wecom-daily-summary-workbench.md) |
 | 20261103-1508 | 企微附件原件与持续任务后续优化 | 📋 待开发（用户暂缓） | 附件原件、预览及Runner恢复交互另行实施，不阻塞日志日报。 | [设计边界](design/wecom/wecom-conversation-operations-design.md#8-后置范围与验收原则) | [后续计划](plans/plan-wecom-conversation-followups.md) |
 | 20261102-1430 | 企微旁路聊天日志、前端与按日日报 | 🔧 部分完成（工作台由新计划接续） | 旁路日志与日期读取已有初版实现；日报页面及计划按新方案重做。 | [设计](design/wecom/wecom-conversation-operations-design.md) | [历史计划](plans/plan-wecom-conversation-operations.md) / [新计划](plans/plan-wecom-daily-summary-workbench.md) |
 | 20261018-1736 | wecom-cli 登录引导增强（自动拉起 + 二维码直返） | 💡 灵感 | 三态验收发现：need_login 态 probe 已返回登录二维码 base64，缺口是 WECOM_NOT_FOUND（进程未启动）时不自动拉起企微——增加自动启动后把二维码转交 agent 引导用户扫码。 | [验收记录](plans/wecom-cli-localdb-three-state-acceptance.md) | — |

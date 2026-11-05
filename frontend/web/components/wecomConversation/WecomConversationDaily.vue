@@ -45,7 +45,7 @@
 
           <section class="px-4 py-5 border-b border-default" aria-label="本次总结的会话">
             <div class="flex items-center justify-between gap-3 mb-3">
-              <h3 class="text-sm font-semibold text-default m-0">本次总结的会话</h3>
+              <h3 class="text-base font-semibold text-default m-0">本次总结的会话</h3>
               <BaseButton v-if="isToday" intent="secondary" @click="openAdd">＋ 添加会话</BaseButton>
             </div>
             <div v-if="conversationsLoaded && !conversations.length" class="text-sm text-muted py-3">
@@ -66,41 +66,53 @@
 
           <section class="px-4 py-5" aria-label="总结内容">
             <div class="flex items-center justify-between gap-3 mb-3">
-              <h3 class="text-sm font-semibold text-default m-0">总结内容</h3>
+              <h3 class="text-lg font-semibold text-default m-0">总结内容</h3>
               <BaseButton intent="ghost" @click="toggleExecutions">{{ showExecutions ? '收起执行记录' : '查看执行记录' }}</BaseButton>
             </div>
             <div v-if="conversationsLoaded && !conversations.length" class="text-sm text-muted py-6 text-center">添加会话后可在这里查看每日总结。</div>
             <div v-else class="space-y-3">
-              <article v-for="entry in reports" :key="entry.conversation_id" class="rounded-lg border border-default p-4">
-                <div class="flex items-center gap-2 flex-wrap mb-2">
-                  <h4 class="text-sm font-semibold text-default m-0">{{ entry.name || `会话 #${entry.conversation_id}` }}</h4>
-                  <BaseBadge :intent="badgeIntent(targetFor(entry.conversation_id)?.status, !!entry.summary)">{{ targetLabel(targetFor(entry.conversation_id)?.status, !!entry.summary) }}</BaseBadge>
-                  <span class="text-xs text-muted">{{ coverageText(entry) }}</span>
+              <article v-for="entry in reports" :key="entry.conversation_id" class="rounded-xl border border-default overflow-hidden bg-surface">
+                <header class="px-5 py-4 bg-gray-50 border-b border-default flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <h4 class="text-xl font-semibold text-default m-0 break-words">{{ entry.name || `会话 #${entry.conversation_id}` }}</h4>
+                    <p class="text-xs text-muted m-0 mt-1">{{ coverageText(entry) }}</p>
+                  </div>
+                  <BaseBadge class="shrink-0 whitespace-nowrap" :intent="badgeIntent(targetFor(entry.conversation_id)?.status, !!entry.summary)">{{ targetLabel(targetFor(entry.conversation_id)?.status, !!entry.summary) }}</BaseBadge>
+                </header>
+                <div v-if="isUnsuccessfulTarget(targetFor(entry.conversation_id)?.status)"
+                  class="mx-5 mt-4 rounded-lg border border-warning-200 bg-warning-50 px-4 py-3 text-sm text-warning-700">
+                  <p class="m-0">本次执行：{{ targetReason(targetFor(entry.conversation_id), displayExecution).label }}
+                    <span v-if="targetReason(targetFor(entry.conversation_id), displayExecution).code"> · 错误码 {{ targetReason(targetFor(entry.conversation_id), displayExecution).code }}</span>
+                    <span v-if="entry.summary && entry.source_runner_id !== displayExecution?.runner_id">；下方为此前保存的成功报告。</span>
+                  </p>
+                  <details class="mt-1 text-xs text-muted"><summary class="cursor-pointer">查看执行时间和诊断编号</summary>
+                    <p class="m-0 mt-1 break-all">阶段 {{ targetFor(entry.conversation_id)?.phase }} · {{ formatTime(targetFor(entry.conversation_id)?.finished_at || targetFor(entry.conversation_id)?.started_at) }} · 执行 {{ displayExecution?.runner_id }}</p>
+                  </details>
                 </div>
-                <p v-if="isUnsuccessfulTarget(targetFor(entry.conversation_id)?.status)"
-                  class="text-xs text-warning-700 mb-2">
-                  本次执行：{{ targetReason(targetFor(entry.conversation_id), displayExecution).label }}
-                  <span v-if="targetReason(targetFor(entry.conversation_id), displayExecution).code"> · 错误码 {{ targetReason(targetFor(entry.conversation_id), displayExecution).code }}</span>
-                  <span v-if="entry.summary && entry.source_runner_id !== displayExecution?.runner_id">；下方为此前保存的成功报告。</span>
-                  <span class="text-muted"> · 阶段 {{ targetFor(entry.conversation_id)?.phase }} · {{ formatTime(targetFor(entry.conversation_id)?.finished_at || targetFor(entry.conversation_id)?.started_at) }} · 执行 {{ displayExecution?.runner_id }}</span>
-                </p>
-                <p v-if="!entry.summary" class="text-sm text-muted m-0 py-3">该日期暂无已保存报告。</p>
-                <div v-else class="space-y-3 text-sm text-default">
-                  <p class="text-xs text-muted m-0">已保存报告 · 执行 {{ entry.source_runner_id || '来源未记录' }} · 生成于 {{ formatTime(entry.generated_at) }}</p>
-                  <div><h5 class="text-xs font-medium text-muted mb-1">当日概览</h5><p class="whitespace-pre-wrap m-0">{{ entry.summary.overview || '—' }}</p></div>
-                  <div v-for="section in summarySections(entry.summary)" :key="section.key" v-show="section.items.length">
-                    <h5 class="text-xs font-medium text-muted mb-1">{{ section.title }}</h5>
-                    <ul class="m-0 pl-5 space-y-1">
-                      <li v-for="(item, index) in section.items" :key="index">
-                        {{ item.topic }}<template v-if="item.count"> ×{{ item.count }}</template>：{{ item.detail }}
-                        <span v-if="item.evidence?.length" class="text-xs text-muted">证据：
+                <p v-if="!entry.summary" class="text-sm text-muted m-0 px-5 py-6">该日期暂无已保存报告。</p>
+                <div v-else class="px-5 py-5 md:px-7 text-default">
+                  <section class="md:grid md:grid-cols-[7rem_minmax(0,1fr)] gap-5 pb-5">
+                    <h5 class="text-sm font-semibold text-default m-0 mb-2 md:mb-0">当日概览</h5>
+                    <p class="text-[15px] leading-7 whitespace-pre-wrap m-0">{{ entry.summary.overview || '—' }}</p>
+                  </section>
+                  <section v-for="section in summarySections(entry.summary)" :key="section.key"
+                    class="md:grid md:grid-cols-[7rem_minmax(0,1fr)] gap-5 border-t border-default py-5 last:pb-0">
+                    <h5 class="text-sm font-semibold text-default m-0 mb-2 md:mb-0">{{ section.title }}</h5>
+                    <ul class="m-0 pl-5 space-y-2">
+                      <li v-for="(item, index) in section.items" :key="index" class="text-[15px] leading-7"
+                        :class="section.key === 'anomalies' ? 'list-none -ml-5 pl-3 border-l-[3px] border-warning-500' : ''">
+                        <template v-if="item.topic">{{ item.topic }}<template v-if="item.count"> ×{{ item.count }}</template>：</template>{{ item.detail }}
+                        <span v-if="item.evidence?.length" class="text-xs text-muted ml-2">证据
                           <button v-for="msgId in evidenceIds(item)" :key="msgId" class="underline hover:text-primary-700 mr-1"
                             :title="`在会话记录中定位消息 ${msgId}`" @click="jumpToMessage(entry.conversation_id, msgId)">{{ msgId }}</button>
                         </span>
                       </li>
                     </ul>
-                  </div>
-                  <p v-if="entry.summary.notes" class="text-xs text-muted m-0">说明：{{ entry.summary.notes }}</p>
+                  </section>
+                  <p v-if="entry.summary.notes" class="text-xs text-muted m-0 pt-5">说明：{{ entry.summary.notes }}</p>
+                  <details v-if="entry.source_runner_id" class="text-xs text-muted mt-4"><summary class="cursor-pointer">报告信息</summary>
+                    <p class="m-0 mt-1 break-all">已保存报告 · 执行 {{ entry.source_runner_id }} · 生成于 {{ formatTime(entry.generated_at) }}</p>
+                  </details>
                 </div>
               </article>
             </div>
@@ -454,24 +466,34 @@ function badgeIntent(status?: string, hasReport = false): 'success' | 'warning' 
 }
 function executionStatus(status: string): string { return ({ queued: '排队中', running: '执行中', completed: '已完成', failed: '失败', cancelled: '已取消', paused: '已暂停' } as Record<string, string>)[status] || status }
 function formatTime(value?: string | null): string { return value ? new Date(value).toLocaleString('zh-CN') : '—' }
+function formatClock(value?: string | null): string { return value ? new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }) : '—' }
+function formatReportTime(value: string): string {
+  const time = new Date(value)
+  const localDate = `${time.getFullYear()}-${String(time.getMonth() + 1).padStart(2, '0')}-${String(time.getDate()).padStart(2, '0')}`
+  return localDate === businessDate.value ? formatClock(value) : formatTime(value)
+}
 function formatDue(value: string): string { return `${value.replace('T', ' ').slice(0, 16)}（北京时间）` }
 function coverageText(entry: DailyReportEntry): string {
-  const coverage = (entry.coverage || {}) as { day_count?: number; background_count?: number }
+  const coverage = (entry.coverage || {}) as { day_count?: number }
   const parts: string[] = []
   if (typeof coverage.day_count === 'number') parts.push(`当日 ${coverage.day_count} 条消息`)
-  if (coverage.background_count) parts.push(`背景 ${coverage.background_count} 条`)
-  if (entry.snapshot_at) parts.push(`读取截至 ${formatTime(entry.snapshot_at)}`)
-  if (entry.generated_at) parts.push(`生成于 ${formatTime(entry.generated_at)}`)
+  if (entry.generated_at) parts.push(`生成于 ${formatReportTime(entry.generated_at)}`)
+  if (entry.snapshot_at) parts.push(`读取截至 ${formatReportTime(entry.snapshot_at)}`)
   return parts.join(' · ')
 }
 function evidenceIds(item: SummaryItem) { return (item.evidence || []).slice(0, 8) }
 function summarySections(summary: DailyReportEntry['summary']) {
+  if (Array.isArray(summary?.anomalies)) return [
+    { key: 'pending_human', title: '待跟进', items: summary?.pending_human || [] },
+    { key: 'anomalies', title: '异常', items: summary.anomalies },
+  ].filter(section => section.items.length)
+  // 历史报告保留原字段，避免只读日期的既有内容在新版页面消失。
   return [
     { key: 'categories', title: '咨询与问题分类', items: summary?.categories || [] },
     { key: 'handled', title: '已处理事项', items: summary?.handled || [] },
     { key: 'pending_human', title: '待人工跟进', items: summary?.pending_human || [] },
     { key: 'noteworthy', title: '值得关注', items: summary?.noteworthy || [] },
-  ]
+  ].filter(section => section.items.length)
 }
 function jumpToMessage(conversationId: number, msgId: number) {
   router.push({ name: 'tenant-wecom-conversations', query: { conversation: String(conversationId), msg: String(msgId) } })
