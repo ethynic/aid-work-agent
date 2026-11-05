@@ -46,6 +46,22 @@ beforeEach(() => {
 afterEach(() => { wrapper?.unmount(); wrapper = null; focusHost?.remove(); focusHost = null; vi.restoreAllMocks() })
 
 describe('每日总结工作台', () => {
+  it('添加目录只在单聊显示会话级平台，群聊不显示 unknown', async () => {
+    api.listDirectory.mockResolvedValue({ device_id: 'device-a', self_user_id: 'account-a', source_generation: 'gen-a',
+      conversations: [
+        { session: 'R:group', name: '项目群', kind: 'group', peer_platform: 'unknown', added: false },
+        { session: 'S:single', name: '客户单聊', kind: 'single', peer_platform: 'wechat', added: false },
+      ], next_cursor: null })
+    wrapper = mount(WecomConversationDaily, { global: { provide: { toggleSidebar: () => {} }, stubs: { AppHeader: true } } })
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text().includes('添加会话'))!.trigger('click')
+    await flushPromises()
+    const dialog = document.body.querySelector('[role="dialog"]')!
+    expect(dialog.textContent).toContain('R:group')
+    expect(dialog.textContent).not.toContain('unknown')
+    expect(dialog.textContent).toContain('S:single · wechat')
+  })
+
   it('读完超过 200 个会话后才允许默认全选提交，一次 Runner 含完整范围', async () => {
     const second = deferred<{ reports: ReturnType<typeof report>[]; has_more: boolean; next_cursor: null; last_generation: null }>()
     api.dailyReports.mockResolvedValueOnce({ reports: Array.from({ length: 200 }, (_, index) => report(index + 1, '已保存')),

@@ -192,6 +192,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261105-1011 | 企微群聊目录平台标签 | ✅ 已完成开发；群聊不显示会话级平台，仅微信发言人显示标记，待真机视觉验收。 | [设计](design/wecom/wecom-conversation-operations-design.md#621-后续任务群聊平台标签与逐消息发言人) | [计划](plans/plan-wecom-group-platform-label.md) |
 | 20261008-1603 | 飞书、钉钉对话服务接入 AgentRunner | ✅ 已完成开发（待部署真机验收）：保留原渠道业务，仅接入独立 Runner 并传递可信渠道来源；两轮审核修复完成。 | [接入边界](system/agent-application-architecture-design.md#81-后续接入的固定边界) | [飞书](channel/feishu/implementation_plan.md#agentrunner-接入后续独立事项) / [钉钉](channel/dingtalk/implementation_plan.md#agentrunner-接入后续独立事项) / [审核](reviews/feishu-dingtalk-agentrunner-review-2026-10-09.md) |
 | 20261010-wecom-runner | 企业微信应用渠道接入 AgentRunner | ✅ 已完成开发，保留原渠道流程；待部署及真机验收。 | [接入设计](plans/plan-wecom-agent-runner-integration.md#2-接入设计) / [共同契约](system/runner-desktop-runtime-integration-contract.md) | [开发计划](plans/plan-wecom-agent-runner-integration.md) |
 | 20261009-1452 | 微信客服完整 Markdown 交付 | ✅ 已完成开发：文件路径答复一律原文前缀呈现（2026-10-26 短表格前缀修订 §14.10），原生完整 MD；MD 渲染已真机部分验收。 | [设计](channel/wecom_kf/wecom_kf_design.md#十四2026-10-09-长答复交付调整) | — |

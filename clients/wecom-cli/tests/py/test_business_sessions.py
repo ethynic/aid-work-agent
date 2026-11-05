@@ -78,6 +78,15 @@ class BusinessSessionsTest(unittest.TestCase):
         group = next(s for s in data['sessions'] if s['conversation_id'] == CONV_R1)
         self.assertEqual([m['sender_platform'] for m in group['messages']], ['wechat', 'wecom'])
 
+    def test_group_messages_keep_explicit_platform_without_guessing_unknown_sender(self):
+        """The Agent can identify WeChat senders from each returned group message."""
+        self.append([msg_row(CONV_R1, '300', 2, 104, text_content('external colleague'))])
+        data = self.read(targets=[{'conversation_id': CONV_R1}], limit=50)
+        self.assertTrue(data['ok'], data)
+        group = next(s for s in data['sessions'] if s['conversation_id'] == CONV_R1)
+        self.assertEqual([m['sender_platform'] for m in group['messages']],
+                         ['wechat', 'wecom', 'unknown'])
+
     def test_group_system_tail_is_not_a_customer_message_or_reply(self):
         self.append([msg_row(CONV_R1, PEER, 2, 110, text_content('customer still needs help')),
                      msg_row(CONV_R1, SELF, 1001, 111, '新群名'.encode('utf-8')),

@@ -94,7 +94,7 @@
               >
                 <div class="text-xs text-muted mb-0.5" :class="message.sender_side === 'self' ? 'text-right' : ''">
                   <span class="font-medium">{{ displaySender(message) }}</span>
-                  <span v-if="message.sender_platform !== 'unknown'" class="ml-1">({{ message.sender_platform === 'wechat' ? '微信' : '企微' }})</span>
+                  <span v-if="message.sender_platform === 'wechat'" class="ml-1">（微信用户）</span>
                   <BaseBadge v-if="message.sender_side === 'self' && message.send_origin === 'agent'" intent="info" class="ml-1">Agent代发</BaseBadge>
                   <BaseBadge v-else-if="message.sender_side === 'self'" intent="warning" class="ml-1">本人，来源未确认</BaseBadge>
                   <span class="ml-1.5">{{ timeText(message) }}</span>
@@ -138,7 +138,8 @@
         <dl class="grid grid-cols-[110px_1fr] gap-y-1.5 text-xs">
           <dt class="text-muted">发言人</dt><dd>{{ detail.sender_name || '（名称未同步）' }} {{ detail.sender_id ? `· ${detail.sender_id}` : '' }}</dd>
           <dt class="text-muted">名称来源</dt><dd>{{ detail.name_source || '—' }}</dd>
-          <dt class="text-muted">平台 / 方向</dt><dd>{{ detail.sender_platform }} / {{ sideLabel(detail.sender_side) }}</dd>
+          <dt class="text-muted">方向</dt><dd>{{ sideLabel(detail.sender_side) }}</dd>
+          <template v-if="detail.sender_platform === 'wechat'"><dt class="text-muted">用户类型</dt><dd>微信用户</dd></template>
           <dt class="text-muted">操作来源</dt><dd>{{ originLabel(detail) }}</dd>
           <dt class="text-muted">原消息ID</dt><dd class="break-all">{{ detail.source_message_id }}（{{ detail.source_generation }}）</dd>
           <dt class="text-muted">server_id</dt><dd class="break-all">{{ detail.server_id || '—' }}</dd>
@@ -224,7 +225,7 @@ function avatarChar(message: WecomMessage) {
 }
 function displaySender(message: WecomMessage) {
   if (message.sender_side === 'self') return '本人'
-  return message.sender_name || (message.sender_platform === 'unknown' ? '未知身份' : message.sender_platform === 'wechat' ? '微信用户' : '企微用户')
+  return message.sender_name || (message.sender_platform === 'wechat' ? '微信用户' : '发言人')
 }
 function timeText(message: WecomMessage) {
   if (message.sent_at) return new Date(message.sent_at).toLocaleString()

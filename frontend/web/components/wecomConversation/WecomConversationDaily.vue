@@ -147,7 +147,7 @@
               :aria-label="`选择${item.name || shortSession(item.session)}`" @change="toggleDirectory(item.session)" />
             <div class="flex-1 min-w-0"><div class="flex items-center gap-2"><span class="truncate text-default">{{ item.name || '未命名会话' }}</span>
               <span class="text-xs text-muted">{{ item.added ? '已添加' : kindLabel(item.kind) }}</span></div>
-              <span class="text-xs text-muted">{{ shortSession(item.session) }} · {{ item.peer_platform }}</span>
+              <span class="text-xs text-muted">{{ shortSession(item.session) }}<template v-if="item.kind !== 'group'"> · {{ item.peer_platform }}</template></span>
               <BaseButton v-if="item.same_name && !item.added" intent="ghost" @click="preview(item.session)">查看最近 3 条</BaseButton>
               <p v-if="previews[item.session]" class="text-xs text-muted m-0 whitespace-pre-wrap">{{ previews[item.session] }}</p>
             </div>
