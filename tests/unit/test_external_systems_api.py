@@ -34,6 +34,14 @@ def _request(tenant_id=None) -> Request:
     return req
 
 
+@pytest.fixture(autouse=True)
+def _no_subscription_lookup(monkeypatch):
+    """隔离租户订阅读取（单元测试不访问 DB）；None = fail-open 不过滤"""
+    monkeypatch.setattr(
+        "src.services.tenant_api_doc._tenant_subscribed_agent_ids", lambda tid: None
+    )
+
+
 @pytest.fixture
 def authed(monkeypatch):
     monkeypatch.setattr(external_systems, "get_current_user", lambda req: {"user_id": "u1", "phone": "13800000000"})

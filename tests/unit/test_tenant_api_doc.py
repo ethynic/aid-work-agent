@@ -167,6 +167,11 @@ class TestDocScan:
             "src.services.tenant_api_doc.load_tenant_env_vars_map",
             lambda tid: {"*": {}},
         )
+        # 订阅读取返回 None（fail-open）：既有用例保持未过滤语义，过滤行为单独测
+        monkeypatch.setattr(
+            "src.services.tenant_api_doc._tenant_subscribed_agent_ids",
+            lambda tid: None,
+        )
 
     def test_list_names_from_templates_dir(self, monkeypatch, tmp_path):
         """glob 真实逻辑：只认 {name}-api.md，其余文件忽略；路径基于模块 __file__ 推导"""
@@ -224,6 +229,77 @@ class TestDocScan:
         )
         assert list_sso_candidate_subagent_names("tenant_x") == [
             "pre-sales", "auto-form-filler", "sales-assistant",
+        ]
+
+    def test_candidate_names_narrowed_by_subscription(self, monkeypatch):
+        """扫描范围按订阅收窄：未订阅的内置/自定义智能体不扫文档，
+        租户自有文档不受订阅过滤（2026-11-05 巡检：只用 travel-consultant
+        的租户被扫出 pre-sales/auto-form-filler 的 APP_ID 渲染告警）"""
+        monkeypatch.setattr(
+            "src.services.tenant_api_doc.list_doc_subagent_names",
+            lambda tid: ["travel-consultant"],
+        )
+        monkeypatch.setattr(
+            "src.services.tenant_api_doc._list_builtin_subagent_names",
+            lambda: ["pre-sales", "travel-consultant", "auto-form-filler"],
+        )
+        monkeypatch.setattr(
+            "src.services.tenant_api_doc._list_custom_agent_ids",
+            lambda: ["sales-assistant"],
+        )
+        monkeypatch.setattr(
+            "src.services.tenant_api_doc._tenant_subscribed_agent_ids",
+            lambda tid: {"travel-consultant"},
+        )
+        assert list_sso_candidate_subagent_names("tenant_x") == ["travel-consultant"]
+
+    def test_tenant_doc_kept_even_when_not_subscribed(self, monkeypatch):
+        """租户主动上传的接口文档视为使用意图，未订阅也保留候选"""
+        monkeypatch.setattr(
+            "src.services.tenant_api_doc.list_doc_subagent_names",
+            lambda tid: ["legacy-agent"],
+        )
+        monkeypatch.setattr(
+            "src.services.tenant_api_doc._list_builtin_subagent_names",
+            lambda: ["pre-sales"],
+        )
+        monkeypatch.setattr(
+            "src.services.tenant_api_doc._list_custom_agent_ids",
+            lambda: [],
+        )
+        monkeypatch.setattr(
+            "src.services.tenant_api_doc._tenant_subscribed_agent_ids",
+            lambda tid: set(),
+        )
+        assert list_sso_candidate_subagent_names("tenant_x") == ["legacy-agent"]
+
+    def test_subscription_read_failure_fails_open(self, monkeypatch):
+        """底层订阅读取异常 → _tenant_subscribed_agent_ids 返回 None（fail-open），
+        候选与未过滤行为一致"""
+        from src.services import tenant_api_doc as tad
+
+        def _boom(tid):
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(
+            "src.saas.services.tenant_agent_instance_service.get_tenant_subscribed_agent_ids",
+            _boom,
+        )
+        assert tad._tenant_subscribed_agent_ids("tenant_x") is None
+        monkeypatch.setattr(
+            "src.services.tenant_api_doc.list_doc_subagent_names",
+            lambda tid: ["pre-sales"],
+        )
+        monkeypatch.setattr(
+            "src.services.tenant_api_doc._list_builtin_subagent_names",
+            lambda: ["auto-form-filler"],
+        )
+        monkeypatch.setattr(
+            "src.services.tenant_api_doc._list_custom_agent_ids",
+            lambda: [],
+        )
+        assert list_sso_candidate_subagent_names("tenant_x") == [
+            "pre-sales", "auto-form-filler",
         ]
 
 

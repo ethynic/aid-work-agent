@@ -162,7 +162,9 @@ def load_sso_config(
     if cfg is None:
         return None
     if "${" in (cfg.get("login_url") or "") or "${" in (cfg.get("sso_url") or ""):
-        logger.warning(
+        # info 而非 warning：环境变量未配置 → 入口不显示是 fail-closed 预期行为，
+        # 不应进 WARNING 日志巡检清单（2026-11-05 巡检定性：告警噪音）
+        logger.info(
             f"[external_systems] 接口文档占位符未解析（环境变量未配置），入口按未配置处理 "
             f"tenant={tenant_id}, subagent={subagent_name}"
         )
@@ -236,6 +238,24 @@ def _allowed_skills_map(subagent_names: List[str]) -> Dict[str, List[str]]:
     return {name: (db_skills.get(name) or builtin_skills.get(name) or []) for name in names}
 
 
+def _tenant_subscribed_agent_ids(tenant_id: str) -> Optional[Set[str]]:
+    """租户当前有效订阅的基础员工 agent_id 集合（与委托/Runner 同一订阅边界）。
+
+    读取失败返回 None，调用方按未过滤处理（fail-open，入口行为不回归）。
+    """
+    try:
+        from src.saas.services.tenant_agent_instance_service import (
+            get_tenant_subscribed_agent_ids,
+        )
+
+        return set(get_tenant_subscribed_agent_ids(tenant_id))
+    except Exception as e:
+        logger.warning(
+            f"[tenant_api_doc] 读取租户订阅列表失败，SSO 候选按未过滤处理 tenant={tenant_id}: {e}"
+        )
+        return None
+
+
 def list_sso_candidate_subagent_names(tenant_id: str) -> List[str]:
     """外部系统入口候选子智能体名：租户文档 + 内置 + 自定义（去重保序）
 
@@ -245,14 +265,23 @@ def list_sso_candidate_subagent_names(tenant_id: str) -> List[str]:
     """
     names: List[str] = []
     seen: Set[str] = set()
+    tenant_doc_names = [n for n in list_doc_subagent_names(tenant_id) if n]
+    subscribed = _tenant_subscribed_agent_ids(tenant_id)
     for name in (
-        list_doc_subagent_names(tenant_id)
+        tenant_doc_names
         + _list_builtin_subagent_names()
         + _list_custom_agent_ids()
     ):
-        if name and name not in seen:
-            seen.add(name)
-            names.append(name)
+        if not name or name in seen:
+            continue
+        # 扫描范围按租户订阅收窄：租户用不到的智能体不扫文档（曾致未订阅智能体的
+        # 通用模板 ${VAR} 渲染告警刷屏，如只用 travel-consultant 的租户被扫出
+        # pre-sales/auto-form-filler 的 APP_ID 告警）。租户自有文档视为使用意图，
+        # 不受订阅过滤；订阅读取失败（None）按未过滤处理，入口行为与收窄前一致。
+        if subscribed is not None and name not in subscribed and name not in tenant_doc_names:
+            continue
+        seen.add(name)
+        names.append(name)
     return names
 
 
@@ -482,7 +511,9 @@ def render_doc_placeholders(
 
     rendered = _PLACEHOLDER_RE.sub(_replace, doc_text)
     if unresolved:
-        logger.warning(
+        # info 而非 warning：未配置占位符渲染失败是 fail-closed 预期路径
+        # （入口按未配置处理），不应进 WARNING 日志巡检清单
+        logger.info(
             f"[tenant_api_doc] 租户环境变量未配置，占位符保留原样 tenant={tenant_id}, "
             f"subagent={subagent_name}, vars={sorted(unresolved)}"
         )
