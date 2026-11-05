@@ -3,16 +3,13 @@
  * runDriverFn 注入发送驱动 mock——绝不触达真实企微窗口）。
  *
  * 覆盖：db 核验命中（local-record + 匹配 message_id；基线-发送-匹配时序由「发送 mock 落库
- * 后仍命中」证明——基线若晚于发送则 after-id 查不到新记录）/ 未命中转 -VerifyOnly
- * （ocr-bubble）/ db 核验失败（快照类）转 -VerifyOnly / 双不足 EXECUTION_UNKNOWN（effect=
- * unknown，不重入发送）/ localdb 不可用走老路径零改动（无 -SkipVerify、无 verification）/
- * 取消（发送后）→ CANCELLED partial 不重入核验与发送。
+ * 后仍命中」证明——基线若晚于发送则 after-id 查不到新记录）/ 未命中与快照失败保持
+ * EXECUTION_UNKNOWN（effect=unknown，不调用 OCR 补验或重入发送）/ localdb 不可用走老路径
+ * 零改动（无 -SkipVerify、无 verification）/ 取消（发送后）→ CANCELLED partial。
  * 第八轮评审修复：跨账号 target_ref 发送前拒绝（TARGET_REF_STALE / 驱动零调用，校验在本地
  * 库兜底 try 之外；含真实签发+真实验签、仅 payload.account 为他账号的整链形态）/ 账号匹配
- * ref 正常发送 / probe 身份失败按自身错误码透传不静默 / 核验阶段一切错误（UI_CHANGED 等
- * Coded 与非 Coded 驱动错误）归并 EXECUTION_UNKNOWN 不误报 effect=none / ps1 -VerifyOnly
- * 标题一致性静态核对（核对先于三选二终态、不一致抛错中止、发送路径 step4 复核保持
- * UI_CHANGED）。
+ * ref 正常发送 / probe 身份失败按自身错误码透传不静默 / ps1 -VerifyOnly 的旧路径
+ * 标题一致性静态核对（核对先于三选二终态、不一致抛错中止）。
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -49,14 +46,6 @@ const SKIP_OK = {
   input_point: { x: 640, y: 648, source: 'jev' },
   timing_ms: { total: 5000 },
   screenshot_paths: ['a.png'],
-}
-const VERIFY_OK = {
-  navigate_required: false,
-  title: 'Peer',
-  sent_verification: { method: 'jev', result: 'sent' },
-  input_point: null,
-  timing_ms: { final_ocr: 800, jev2: 700, total: 3000 },
-  screenshot_paths: ['b.png'],
 }
 
 interface Fixture {
@@ -129,7 +118,7 @@ test('db 核验命中：-SkipVerify 发送 → 本地记录匹配 → applied + 
   try {
     const mock: DriverMock = { calls: [], stages: [{ ...SKIP_OK }] }
     // 发送动作落库（时序证明：基线必须在发送前记录——基线若含 id13/14，after-id 查询将
-    // 查不到新记录，核验只能落 ocr-bubble；命中 local-record 即证明基线先于发送）
+    // 查不到新记录，核验只能保持 unknown；命中 local-record 即证明基线先于发送）
     mock.onSend = () => f.appendTwo()
     const op = createWecomMessageSendOperation({
       runDriverFn: makeRunDriver(mock),
@@ -144,7 +133,10 @@ test('db 核验命中：-SkipVerify 发送 → 本地记录匹配 → applied + 
     assert.equal(r.code, 'OK')
     assert.equal(r.effect, 'applied')
     assert.equal(r.data.verification, 'local-record')
-    assert.deepEqual(r.data.verification_detail, { method: 'local-record', message_id: 14 })
+    const detail = r.data.verification_detail as {method: string;message_id: number;source_generation: string}
+    assert.equal(detail.method, 'local-record')
+    assert.equal(detail.message_id, 14)
+    assert.match(detail.source_generation, /^[a-f0-9]{64}$/)
     assert.equal(r.data.verification_local_note, undefined)
     assert.match(r.message, /不代表对方已收到/)
     // 发送驱动仅一次调用且带 -SkipVerify；无 -VerifyOnly 补验
@@ -155,11 +147,11 @@ test('db 核验命中：-SkipVerify 发送 → 本地记录匹配 → applied + 
   } finally { f.close() }
 })
 
-test('未命中转 OCR 核验：-VerifyOnly 命中 → applied + verification=ocr-bubble', windows, async () => {
+test('本地库正文不匹配：即使截图核验可能成功也保持 unknown', windows, async () => {
   const f = await fixture()
   try {
-    const mock: DriverMock = { calls: [], stages: [{ ...SKIP_OK }, { ...VERIFY_OK }] }
-    mock.onSend = () => f.appendTwo() // 落库文本与发送文本不一致 → 本地库不匹配
+    const mock: DriverMock = { calls: [], stages: [{ ...SKIP_OK }] }
+    mock.onSend = () => f.appendTwo() // 库内正文包含预期短前缀，但不是完整的本次消息
     const op = createWecomMessageSendOperation({
       runDriverFn: makeRunDriver(mock),
       verifyRefFn: () => ({ name: 'Peer', type: 'other', subtitle: '' }),
@@ -168,21 +160,25 @@ test('未命中转 OCR 核验：-VerifyOnly 命中 → applied + verification=oc
       localdb: f.deps,
       localdbVerifyPoll: { attempts: 2, delayMs: 1 },
     })
-    const r = await op.execute({ target_ref: 'ref-peer', text: '完全不同的文本' }, silentCtx())
-    assert.equal(r.success, true)
-    assert.equal(r.data.verification, 'ocr-bubble')
-    assert.equal(r.data.verification_detail, undefined)
-    assert.equal(mock.calls.length, 2)
+    const r = await op.execute({ target_ref: 'ref-peer', text: 'synthetic' }, silentCtx())
+    assert.equal(r.success, false)
+    assert.equal(r.code, 'EXECUTION_UNKNOWN')
+    assert.equal(r.effect, 'unknown')
+    assert.equal(r.data.verification, undefined)
+    assert.equal(typeof r.data.receipt_id, 'string')
+    assert.equal(mock.calls.length, 1)
     assert.ok(driverArgs(mock.calls[0]!).includes('-SkipVerify'))
-    assert.ok(driverArgs(mock.calls[1]!).includes('-VerifyOnly'), '未命中应补 -VerifyOnly 核验')
-    assert.ok(!driverArgs(mock.calls[1]!).includes('-SkipVerify'), '核验调用绝不带 -SkipVerify（不重入发送）')
+    assert.ok(!mock.calls.some(call => driverArgs(call).includes('-VerifyOnly')), '数据库不匹配不得被 OCR 前缀覆盖')
+    const status = await createWecomSendStatusOperation({ artifactDirFn: () => f.artifactRoot, localdb: f.deps })
+      .execute({ receipt_id: r.data.receipt_id as string }, silentCtx())
+    assert.equal(status.data.send_status, 'unknown', '凭据仍可只读对账，但相似前缀不能确认发送')
   } finally { f.close() }
 })
 
-test('db 核验失败（快照类）转 -VerifyOnly：ocr-bubble + localdb_verify_failed 透传', windows, async () => {
+test('本地库快照失败：保持 unknown 供原凭据只读对账', windows, async () => {
   const f = await fixture()
   try {
-    const mock: DriverMock = { calls: [], stages: [{ ...SKIP_OK }, { ...VERIFY_OK }] }
+    const mock: DriverMock = { calls: [], stages: [{ ...SKIP_OK }] }
     mock.onSend = () => f.appendTwo()
     let captureCalls = 0
     const op = createWecomMessageSendOperation({
@@ -203,18 +199,18 @@ test('db 核验失败（快照类）转 -VerifyOnly：ocr-bubble + localdb_verif
       localdbVerifyPoll: { attempts: 1, delayMs: 1 },
     })
     const r = await op.execute({ target_ref: 'ref-peer', text: 'synthetic-14' }, silentCtx())
-    assert.equal(r.success, true)
-    assert.equal(r.data.verification, 'ocr-bubble')
-    assert.equal(r.data.localdb_verify_failed, 'SNAPSHOT_UNSTABLE')
-    assert.equal(mock.calls.length, 2)
+    assert.equal(r.success, false)
+    assert.equal(r.code, 'EXECUTION_UNKNOWN')
+    assert.equal(r.effect, 'unknown')
+    assert.equal(typeof r.data.receipt_id, 'string')
+    assert.equal(mock.calls.length, 1)
   } finally { f.close() }
 })
 
-test('双不足 → EXECUTION_UNKNOWN（effect=unknown），不重入发送阶段（无第三次驱动调用）', windows, async () => {
+test('数据库未命中 → EXECUTION_UNKNOWN，不重入发送或补验驱动', windows, async () => {
   const f = await fixture()
   try {
-    const mock: DriverMock = { calls: [], stages: [{ ...SKIP_OK },
-      new CodedOperationError('EXECUTION_UNKNOWN', '发送后校验失败（三选二仅过 1/3 项）：消息可能已发出，不会自动重试，请人工核对（详见 driver-log.txt）')] }
+    const mock: DriverMock = { calls: [], stages: [{ ...SKIP_OK }] }
     mock.onSend = () => f.appendTwo()
     const op = createWecomMessageSendOperation({
       runDriverFn: makeRunDriver(mock),
@@ -229,35 +225,8 @@ test('双不足 → EXECUTION_UNKNOWN（effect=unknown），不重入发送阶�
     assert.equal(r.code, 'EXECUTION_UNKNOWN')
     assert.equal(r.effect, 'unknown')
     assert.equal(r.data.verification, undefined, 'EXECUTION_UNKNOWN 时 verification 缺省（三值语义）')
-    assert.equal(mock.calls.length, 2, '发送 1 次 + 核验 1 次，绝不重入发送')
+    assert.equal(mock.calls.length, 1, '仅发送 1 次，绝不重入发送或 OCR 补验')
     assert.ok(driverArgs(mock.calls[0]!).includes('-SkipVerify'))
-    assert.ok(driverArgs(mock.calls[1]!).includes('-VerifyOnly'))
-  } finally { f.close() }
-})
-
-test('核验驱动超时：-VerifyOnly RESULT_TIMEOUT → 归并 EXECUTION_UNKNOWN（effect=unknown，不误报 effect=none）', windows, async () => {
-  const f = await fixture()
-  try {
-    const mock: DriverMock = { calls: [], stages: [{ ...SKIP_OK },
-      new CodedOperationError('RESULT_TIMEOUT', 'PowerShell 驱动执行超时（>300s），已终止子进程')] }
-    mock.onSend = () => f.appendTwo() // 落库文本与发送文本不一致 → 本地库未命中 → 转 -VerifyOnly
-    const op = createWecomMessageSendOperation({
-      runDriverFn: makeRunDriver(mock),
-      verifyRefFn: () => ({ name: 'Peer', type: 'other', subtitle: '' }),
-      createRefFn: (name, type, subtitle) => `ref:${name}:${type}:${subtitle}`,
-      artifactDirFn: () => f.artifactRoot,
-      localdb: f.deps,
-      localdbVerifyPoll: { attempts: 1, delayMs: 1 },
-    })
-    const r = await op.execute({ target_ref: 'ref-peer', text: '完全不同的文本' }, silentCtx())
-    assert.equal(r.success, false)
-    assert.equal(r.code, 'EXECUTION_UNKNOWN', '核验阶段超时按「消息可能已发出」归并，不透传 RESULT_TIMEOUT')
-    assert.equal(r.effect, 'unknown', 'completed=1 时 effect=unknown，绝不是 none（消息已发出）')
-    assert.equal(r.data.completed, 1)
-    assert.equal(r.data.verification, undefined)
-    assert.equal(mock.calls.length, 2, '超时后不重入发送与核验')
-    assert.ok(driverArgs(mock.calls[0]!).includes('-SkipVerify'))
-    assert.ok(driverArgs(mock.calls[1]!).includes('-VerifyOnly'))
   } finally { f.close() }
 })
 
@@ -429,53 +398,6 @@ test('账号匹配 target_ref：核对通过正常发送（local-record 命中�
   } finally { f.close() }
 })
 
-test('发送后核验失败（VerifyOnly 抛 UI_CHANGED）：归并 EXECUTION_UNKNOWN（effect=unknown），不透传、不重入发送', windows, async () => {
-  const f = await fixture()
-  try {
-    const mock: DriverMock = { calls: [], stages: [{ ...SKIP_OK },
-      new CodedOperationError('UI_CHANGED', '发送后校验失败（UI 变化）：证据不可信')] }
-    mock.onSend = () => f.appendTwo() // 落库文本与发送文本不一致 → 本地库未命中 → 转 -VerifyOnly
-    const op = createWecomMessageSendOperation({
-      runDriverFn: makeRunDriver(mock),
-      verifyRefFn: () => ({ name: 'Peer', type: 'other', subtitle: '' }),
-      createRefFn: (name, type, subtitle) => `ref:${name}:${type}:${subtitle}`,
-      artifactDirFn: () => f.artifactRoot,
-      localdb: f.deps,
-      localdbVerifyPoll: { attempts: 1, delayMs: 1 },
-    })
-    const r = await op.execute({ target_ref: 'ref-peer', text: '完全不同的文本' }, silentCtx())
-    assert.equal(r.success, false)
-    assert.equal(r.code, 'EXECUTION_UNKNOWN', '发送已完成：核验阶段错误一律不透传原码（UI_CHANGED 会被归为 effect=none，把「可能已发出」误报成「未写入」误导重发）')
-    assert.equal(r.effect, 'unknown')
-    assert.equal(r.data.completed, 1)
-    assert.equal(r.data.verification, undefined, 'EXECUTION_UNKNOWN 时 verification 缺省（三值语义）')
-    assert.equal(mock.calls.length, 2, '不重入发送阶段')
-    assert.ok(driverArgs(mock.calls[1]!).includes('-VerifyOnly'))
-  } finally { f.close() }
-})
-
-test('核验驱动非 Coded 错误（驱动崩溃）：同样归并 EXECUTION_UNKNOWN（effect=unknown，不透传崩溃）', windows, async () => {
-  const f = await fixture()
-  try {
-    const mock: DriverMock = { calls: [], stages: [{ ...SKIP_OK }, new Error('ocr 引擎崩溃（非 Coded）')] }
-    mock.onSend = () => f.appendTwo() // 落库文本与发送文本不一致 → 本地库未命中 → 转 -VerifyOnly
-    const op = createWecomMessageSendOperation({
-      runDriverFn: makeRunDriver(mock),
-      verifyRefFn: () => ({ name: 'Peer', type: 'other', subtitle: '' }),
-      artifactDirFn: () => f.artifactRoot,
-      localdb: f.deps,
-      localdbVerifyPoll: { attempts: 1, delayMs: 1 },
-    })
-    const r = await op.execute({ target_ref: 'ref-peer', text: '完全不同的文本' }, silentCtx())
-    assert.equal(r.code, 'EXECUTION_UNKNOWN', '非 Coded 驱动错误同样按「消息可能已发出」归并（消息注明驱动执行失败）')
-    assert.match(r.message, /驱动执行失败/, '非 Coded 分支的消息标注（区别于 Coded 错误的 err.code 插值）')
-    assert.equal(r.effect, 'unknown')
-    assert.equal(r.data.completed, 1)
-    assert.equal(mock.calls.length, 2, '不重入发送阶段')
-    assert.ok(driverArgs(mock.calls[1]!).includes('-VerifyOnly'))
-  } finally { f.close() }
-})
-
 test('静态核对（P2）：-VerifyOnly 分支的标题一致性检查存在且先于三选二终态判定', () => {
   // dist/tests → 包根 drivers/ps1（编译布局；测试断言源文件内容，与运行平台无关）
   const src = readFileSync(fileURLToPath(new URL('../../drivers/ps1/message-send.ps1', import.meta.url)), 'utf8')
@@ -519,7 +441,10 @@ test('繁忙会话超过50条仍可核验尾部，diagnostics明确分页且不�
     } }
     const r = await recoverySend(f, mock).execute({ target_ref: 'ref', text: 'synthetic-76' }, silentCtx())
     assert.equal(r.data.verification, 'local-record')
-    assert.deepEqual(r.data.verification_detail, { method: 'local-record', message_id: 76 })
+    const detail = r.data.verification_detail as {method: string;message_id: number;source_generation: string}
+    assert.equal(detail.method, 'local-record')
+    assert.equal(detail.message_id, 76)
+    assert.match(detail.source_generation, /^[a-f0-9]{64}$/)
     assert.equal((r.data.localdb_verification as Array<{pages: number}>)[0]!.pages, 2)
     assert.ok(!JSON.stringify(r.data.localdb_verification).includes('synthetic-76'))
     assert.equal(mock.calls.length, 1)

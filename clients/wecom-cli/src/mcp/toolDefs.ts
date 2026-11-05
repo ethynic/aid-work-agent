@@ -109,13 +109,13 @@ export const TOOL_DEFS: WecomToolDef[] = [
       '不是目标或无法判定时自动执行 search（Jev 选最优候选）+ select（点击进会话并校验标题）后再发送，' +
       '两轮均不在目标会话返回 TARGET_NOT_FOUND（未发送消息）。' +
       '草稿防串：输入区已有用户草稿时立即 UI_CHANGED 中止（绝不动用户草稿）；输入后发送前复核会话标题，' +
-      '不一致会清空自己刚输入的草稿并中止。多行文本（含换行）经剪贴板粘贴通道输入并 OCR 回读校验，' +
+      '不一致会清空自己刚输入的草稿并中止。多行文本（含换行）经剪贴板粘贴通道输入，' +
       '副作用：发送多行消息会覆盖用户剪贴板且不恢复。Jev 不可用时逐级降级为标题规则匹配、比例坐标输入点、' +
       '输入区判空与终态三选二规则。' +
-      '终态核验（data.verification，成功时两值）：本地库可用时发送后按本地记录核验，verification=local-record' +
+      '终态核验：本地库可用时发送后按本地记录核验，成功为 verification=local-record' +
       '（发送前基线之后出现「方向=本人 ∧ 正文全等 ∧ trusted」的新记录，verification_detail.message_id 为匹配记录；' +
-      '含义=客户端已记录并经本地核验，不代表对方已收到/已读）；未命中或本地库核验失败转 OCR 气泡核验，' +
-      'verification=ocr-bubble。本地库不可用走驱动内 OCR 核验（无 verification 字段，行为不变）。' +
+      '含义=客户端已记录并经本地核验，不代表对方已收到/已读）；未命中或本地库核验失败保持结果未知。' +
+      '无本地库基线的旧路径仍走驱动内 OCR 核验（无 verification 字段）。' +
       '核验失败返回 EXECUTION_UNKNOWN（消息可能已发出，系统不会自动重试、绝不重入发送阶段）。' +
       '本地库基线可用时，发送前保存加密凭据；结果或错误data.receipt_id供wecom_send_status只读对账，' +
       '不能因unknown再次调用发送。无receipt_id时须人工核对，不猜测凭据。',

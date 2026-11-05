@@ -322,7 +322,7 @@ def analyze_input(boxes, img_path):
         w, h = Image.open(img_path).size
     except Exception:
         return {'input_empty': False, 'texts': []}
-    x_min = chat_area_x_min(w)
+    x_min = min(620, w * 0.34)
     # 输入区 band [0.855h, 0.97h]：2026-09-04 实测工具栏图标行在 ≈0.83h（碎字「X·四·
     # 回口·」会被当草稿文本误判非空 → send 恒拒发），文本区在其下、发送按钮行之上；
     # 外部联系人布局下右侧「智能总结」侧栏的「立即总结」按钮（≈0.89h）也在该 y 带内，
@@ -333,7 +333,7 @@ def analyze_input(boxes, img_path):
     texts = [b['text'] for b in sorted(band, key=lambda b: (b['y0'], b['x0']))]
     # 发送按钮标签（「发送(S)」，实测固定出现在输入区右下角）不是草稿内容
     real = [t for t in texts
-            if not any(m in t for m in PLACEHOLDER_MARKERS)
+            if t.strip() not in PLACEHOLDER_MARKERS
             and normalize_button_label(t) not in BUTTON_LABEL_MARKERS]
     return {'input_empty': len(real) == 0, 'texts': texts}
 

@@ -23,6 +23,7 @@
 | W15 兼容收尾 | 修复升级边界后复评 | ✅ 完成（2026-10-30） | 整合10b579759；独测49项unit/15项PG、CR通过，三项升级阻塞闭环；提交合并见末尾，未部署 |
 | W15 提交与合并 | 特性分支推送及master整合 | ✅ 完成（2026-10-30） | 特性分支1b0759cd已双远程推送；master保留两边历史并完成合并核验，未部署监听 |
 | W16 客户端打包归拢复核 | master上验证旧Runtime/BOSS与发行改动并提交 | ✅ 完成（2026-10-30） | 主控60项、独测3专项/5批Windows实测及CR通过；仅本任务定向提交，未部署监听 |
+| W17 长文本粘贴与草稿误判修复 | 窄窗草稿保护、取消粘贴后 OCR 门禁、数据库唯一记录核验 | 🔧 进行中 | CLI 0.2.6 已签包并放 Downloads、目标 Runtime 静态验包通过；待用户安装及真机验收 |
 
 ## W14 通用Runtime业务工具自动装配（2026-10-29）
 
@@ -708,3 +709,13 @@ W16主控自测证据位于本机Temp `wecom-w16-root-tests-izpb63ob/summary.jso
 - 现场观察：Runtime相关进程8→7，已核实Runtime Host本身仍在，退出的是一个原Provider子Node，日志未确定原因。测试及CR核对关闭链路只操作自有ProviderSet/client/transport/PID，无向该现场PID发信号或写已安装目录的路径；没有确定的产品/隔离缺陷，也不能据代码审查声称绝无干扰或全进程不变。该观察单列保留，未扩大OS排查、重启、修复或恢复监听。
 - 独测证据：本机Temp `runtime-w16-independent-test-inyl4703/FINAL-INDEPENDENT-TEST.json/md`，JSON SHA256 `29874f18cc9cc45ae40cb779f4f4e89e1d2eccb6d4d54a02e14f6f405407d64a`。CR证据 `wecom-w16-independent-cr-rcgimeui/review.json/md`及`process-boundary-addendum.json`，无遗留P0/P1/P2。源码/规则/设计审查通过，不以CR代替实测；W15已匹配的服务端恢复及真实PG证据按原范围复用，未冒称本批重跑。
 - 提交仅23项客户端源码/版本/锁/历史公开根、两份兼容规则、三份设计/契约/计划及任务索引，共29个路径。AGENTS原有“禁止过度设计”用户hunk及索引内B2B用户条目保持未暂存；旧安装目录/二进制/报告、本地vite/compose及其他研究/视频不提交。仅提交推送当前master，不部署、不安装、不发送业务消息、不恢复监听；主工作区其余改动保留。
+
+## W17 长文本粘贴与监控等待故障（2026-11-05）
+
+agent2 的同一 Runner 在 10:46:55～10:49:35 发起五次 `wecom_message_send`。本机前四次驱动截图均已出现输入文字，但按“截图含正文开头”的校验误报 `UI_CHANGED`，且固定 x=620 的底部带排除了窄窗口 x≈437 起的草稿，后续调用继续粘贴。第五次按 Enter，截图出现累积重复内容；本地库与 OCR 未按第五次预期正文核验成功，回执为 `EXECUTION_UNKNOWN`。两次只读 `wecom_send_status` 返回 `unknown/not_observed`，不能把工具查询成功当作发送已确认。Runner 保持 `waiting`，原因为 `SLEEP_UNSAFE_BOUNDARY`，待核实发送阻止其进入定时监控；这不是已完成或已正常监控。未执行自动重发或远端状态修改。
+
+最小修复先调整 `message-send.ps1` 的输入区边界及草稿保护，`chat_ocr.py` 的 input 模式同步识别窄窗；占位符仅按完整文案排除。用户复核后取消粘贴后的 OCR 内容检查：Ctrl+V 投递流程失败时明确中止，流程完成则只复核目标标题并按 Enter；不再因截图看不到长文本而阻断发送。独立 CR 进一步发现数据库已读到不匹配正文时原 `VerifyOnly` OCR 前缀兜底可能误报成功，故本地库路径改为仅由唯一可信数据库记录确认；未命中、歧义或数据库核验失败保持 `EXECUTION_UNKNOWN`，原凭据仅供只读对账。无本地库基线的旧发送路径保留原驱动内 OCR 行为。主控补充回归用例覆盖 Jev 误说无草稿、OCR 无正文仍可到发送边界、投递流程失败不得按 Enter、数据库不匹配不能被 OCR 覆盖。对这次本机产物只读复核：首次粘贴后输入区 6 个文字 token，第二次调用前已有 6 个，修复后会阻止追加。当时客户端重新打包、安装及真实单条发送验收待完成；不会自行部署或恢复这条等待中的任务。
+
+首轮独立测试复核历史 1209px 窄窗 OCR 帧与合成含“发送消息”的正文输入判定；独立 CR 指出的粘贴 OCR 漏检/占位词误排及数据库不匹配被气泡前缀覆盖均已修复。最终独立测试在最新源码上完成 CLI 构建、两份完整 TS 发送测试 38 项与 PowerShell 输入测试 21 项，均通过；新增反例验证数据库仅有相似前缀时仍 `EXECUTION_UNKNOWN`、保留 receipt、`send-status` 只读仍 unknown，且不调用 `VerifyOnly`。此前两例 `source_generation` 旧测试断言已按实际结果字段更新；最终 CR 无 P0/P1/P2。agent2 于 11:00 只读复查仍为 `waiting/verification/SLEEP_UNSAFE_BOUNDARY`，更新时间仍为 10:51:18；本轮不篡改历史发送回执、远端 Runner 或用户群聊。
+
+2026-11-05 CLI-only 交付：版本升至 `0.2.6`，复用已登记稳定验收签名者及本机已验证 OCR/Python 资产；在 HEAD `3a59cb28` 的独立归档中仅覆盖本任务 9 个当时未提交的 WeCom CLI 文件，build-info 如实记录覆盖来源，不纳入其他工作区改动。发布脚本 `-Component Wecom -WorkspacePrepared` 构建、签包、离线验包（OCR/SQLite/AES）、目标已安装 Runtime 资源兼容检查及打包定向 19 项全部通过；未重建 Runtime。交付位置为 `C:/Users/PC/Downloads/AID-Work-WeCom-0.2.6-20261105-111834/` 及同名 ZIP；插件 SHA-256 `3df055c5ba4fdaf6f662030eac1e10cb078a4435ca7e0efeee534828390c3690`。包内发送 PS/Python 与编译后发送/工具说明 JS 四个摘要均与当时工作区一致，ZIP `.sha256` 核对通过。目标 Runtime 静态报告为 `WECOM_TARGET_RUNTIME_PASS`（Host 0.2.27/Core 0.2.24）；隔离验包 doctor 因无交互桌面标记未就绪，不代表真实登录验收。该出包发生在源码提交之前，build-info 保留当时工作区覆盖记录；是否安装成功与真实群发送仍待用户验收。本阶段未部署 agent2。

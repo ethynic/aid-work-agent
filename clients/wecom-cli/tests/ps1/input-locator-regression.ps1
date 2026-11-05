@@ -51,8 +51,11 @@ function Invoke-SendChatOcr { param($ImagePath,$Mode)
         @{text='快速会议';x0=1023;y0=1153;x1=1093;y1=1173},
         @{text='发送(S)';x0=1049;y0=1345;x1=1096;y1=1365})
     if ($script:withPlaceholder) { $boxes+=@{text='输入消息';x0=640;y0=1210;x1=720;y1=1230} }
+    if ($ImagePath -eq 'step1-precheck.png' -and $script:preDraft) {
+        $boxes+=@{text=$script:preDraft;x0=450;y0=1235;x1=700;y1=1255}
+    }
     if ($ImagePath -eq 'step2-typed.png' -and $script:readback) {
-        $boxes+=@{text='fixture-message';x0=500;y0=1235;x1=720;y1=1255}
+        $boxes+=@{text=$script:readbackText;x0=450;y0=1235;x1=720;y1=1255}
     }
     return @{boxes=$boxes}
 }
@@ -60,6 +63,7 @@ function Reset-Scenario {
     $script:actions=New-Object System.Collections.ArrayList
     $script:chordOk=$true;$script:searchChoice='T1';$script:right='yes';$script:draft='no'
     $script:inputChoice='B0';$script:withPlaceholder=$false;$script:readback=$false;$script:changedTitle=$false
+    $script:preDraft='';$script:readbackText='fixture-message'
     $script:title='fixture-group'
     $script:searchState=@{State='empty';TokensRaw=@(@{text='Q';x0=186;y0=28;x1=213;y1=44},
         @{text='搜索';x0=208;y0=28;x1=241;y1=44},@{text='+';x0=368;y0=28;x1=385;y1=44});
@@ -133,12 +137,27 @@ Assert-True (-not (Test-WeComTextInputToken @{text='发送(S)';x0=640;x1=710;y0=
 
 Reset-Scenario
 $failure=Run-Send
-Assert-True ($failure -like 'WECOMDRIVE|UI_CHANGED|*') 'missing pasted text must retain readback failure'
+Assert-True ($failure -eq 'TEST_ENTER_BOUNDARY') 'OCR echo must not gate a posted paste'
 Assert-True (-not $sendQuestions.ContainsKey('input_point')) 'toolbar-only OCR must not become a Jev input choice'
 $chatClick=@($actions | Where-Object {$_.kind -eq 'click'})[-1]
 Assert-True ($chatClick.x -eq 1917 -and $chatClick.y -eq 1253) 'unsafe B0 answer must use existing safe ratio, with screen offset'
-Assert-True (@($actions | Where-Object {$_.kind -eq 'enter'}).Count -eq 0) 'readback failure must never Enter'
+Assert-True (@($actions | Where-Object {$_.kind -eq 'enter'}).Count -eq 1) 'one posted paste reaches the send boundary'
 Assert-True (@($actions | Where-Object {$_.kind -eq 'chord' -and $_.vk -in @(0x41,0x46)}).Count -eq 0) 'empty search must skip Ctrl+F and Ctrl+A'
+
+Reset-Scenario;$script:chordOk=$false
+$failure=Run-Send
+Assert-True ($failure -like 'WECOMDRIVE|UI_CHANGED|*') 'failed Ctrl+V dispatch aborts before Enter'
+Assert-True (@($actions | Where-Object {$_.kind -eq 'enter'}).Count -eq 0) 'failed dispatch never sends'
+
+Reset-Scenario;$script:preDraft='older draft';$script:readback=$true
+$failure=Run-Send
+Assert-True ($failure -like 'WECOMDRIVE|UI_CHANGED|*') 'visible narrow-window draft overrides Jev no'
+Assert-True (@($actions | Where-Object {$_.kind -in @('clipboard','enter')}).Count -eq 0) 'existing draft must not be appended or sent'
+
+Reset-Scenario;$script:readback=$true;$script:readbackText='请发送消息，这是长文本末尾仍可见的一行'
+$failure=Run-Send
+Assert-True ($failure -eq 'TEST_ENTER_BOUNDARY') 'long message may scroll past its prefix after paste'
+Assert-True (@($actions | Where-Object {$_.kind -eq 'enter'}).Count -eq 1) 'visible input text permits exactly one Enter'
 
 Reset-Scenario;$script:draft='yes'
 $failure=Run-Send

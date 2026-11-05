@@ -245,10 +245,15 @@ Test-Intent 'existing user draft is never typed over or cleared' {
     Assert-Intent ($r.error -like 'WECOMDRIVE|UI_CHANGED|*') 'draft must block sending'
     Assert-Intent ($clipCalls -eq 0 -and (Count-Key 13) -eq 0 -and (Count-Key 65) -eq 0) 'existing draft must survive without any clear shortcut'
 }
-Test-Intent 'missing multiline echo cannot Enter or clear possibly existing input' {
-    $script:readback=$false;$r=Run-Send
-    Assert-Intent ($r.error -like 'WECOMDRIVE|UI_CHANGED|*') 'failed paste readback must abort'
-    Assert-Intent ($clipCalls -eq 1 -and (Count-Key 86) -eq 1 -and (Count-Key 13) -eq 0 -and (Count-Key 65) -eq 0) 'one paste, no send or destructive recovery after uncertain paste'
+Test-Intent 'multiline paste does not depend on OCR echo before database verification' {
+    $script:readback=$false;$r=Run-Send -Skip
+    Assert-Intent ($r.error -eq '') 'OCR echo must not gate a posted paste'
+    Assert-Intent ($clipCalls -eq 1 -and (Count-Key 86) -eq 1 -and (Count-Key 13) -eq 1 -and (Count-Key 65) -eq 0) 'one paste and one Enter without destructive recovery'
+}
+Test-Intent 'failed paste dispatch never presses Enter' {
+    [WeComAttach32]::AttachOk=$false;$r=Run-Send -Skip
+    Assert-Intent ($r.error -like 'WECOMDRIVE|UI_CHANGED|*') 'failed attach is a known pre-send rejection'
+    Assert-Intent ($clipCalls -eq 1 -and (Count-Key 86) -eq 0 -and (Count-Key 13) -eq 0) 'no paste or Enter after failed dispatch'
 }
 Test-Intent 'clipboard failure exhausts finite attempts without paste or Enter' {
     $script:clipFail=$true;$r=Run-Send

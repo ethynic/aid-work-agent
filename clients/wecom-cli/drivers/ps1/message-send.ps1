@@ -10,8 +10,8 @@
 #   3) 分支：非目标/无法判定 → 返回 data {navigate_required:true, reason}（驱动层 ok=true，
 #      TS 接管）；输入区有草稿 → UI_CHANGED 中止（**绝不动用户草稿**，防串消息）；
 #      目标且干净 → 点击 input_point → 输入：单行 Send-WeComText 逐字；多行（含 CR/LF）
-#      经剪贴板粘贴通道——Set-Clipboard 重试 → attachstate Ctrl+V → OCR 回读校验输入带
-#      含 text 归一化前 8 字（不符 → UI_CHANGED fail-closed，不按 Enter）。
+#      经剪贴板粘贴通道——Set-Clipboard 重试 → attachstate Ctrl+V；发送结果由后续
+#      本地库记录优先核验，粘贴后不再凭截图文字决定是否按 Enter。
 #      副作用：多行发送会覆盖用户剪贴板且**不恢复**（weixin-cli 先例：paste handler 异步
 #      读剪贴板，恢复竞态会粘贴到错的内容；README 已注明）
 #   4) 发送前会话复核（规则，不发 Jev——快）：重新截图 OCR 标题带，归一化严格匹配目标名
@@ -90,7 +90,7 @@ function Get-WeComBandTokens {
     #             旧 0.15w 会放进搜索框查询残留（x0≈0.13-0.17w）与会话列表首行（≈0.17w），
     #             与聊天区标题拼接成「文件传输助手文件传输助手」致复核误杀；标题带实测
     #             x0≥0.22w（外部联系人）/0.296w（普通），0.20w 两侧安全排除）
-    #   bottom — y0 >= 0.80h 且 x0 > max(0.10w,620)（含工具栏图标行 ≈0.83h 与文本输入区，
+    #   bottom — y0 >= 0.80h 且 x0 > min(620,0.34w)（含工具栏图标行 ≈0.83h 与文本输入区，
     #             排除左栏会话列表；右缘 0.95w 截掉窗口边框噪声）
     param(
         [Parameter(Mandatory)]$Boxes,
@@ -103,10 +103,23 @@ function Get-WeComBandTokens {
             [double]$_.y0 -lt ($H * 0.07) -and [double]$_.x0 -gt ($W * 0.20)
         } | Sort-Object { [double]$_.y0 }, { [double]$_.x0 })
     }
-    $chatXMin = [Math]::Max([int]($W * 0.10), 620)
+    $chatXMin = [Math]::Min(620, [int]($W * 0.34))
     return @($Boxes | Where-Object {
         [double]$_.y0 -ge ($H * 0.80) -and
         [double]$_.x0 -gt $chatXMin -and [double]$_.x0 -lt ($W * 0.95)
+    } | Sort-Object { [double]$_.y0 }, { [double]$_.x0 })
+}
+
+function Get-WeComDraftTokens {
+    param([Parameter(Mandatory)]$Boxes, [Parameter(Mandatory)][int]$W,
+        [Parameter(Mandatory)][int]$H)
+    $chatXMin = [Math]::Min(620, [int]($W * 0.34))
+    return @($Boxes | Where-Object {
+        $normalized = ConvertTo-WeComNormalized ([string]$_.text)
+        [double]$_.y0 -ge ($H * 0.855) -and [double]$_.y1 -le ($H * 0.97) -and
+        [double]$_.x0 -gt $chatXMin -and [double]$_.x0 -lt ($W * 0.74) -and
+        $normalized -ne '' -and $normalized -notin @('发送消息','输入消息','聊点什么') -and
+        $normalized -notmatch '^发送\([s5]\)$'
     } | Sort-Object { [double]$_.y0 }, { [double]$_.x0 })
 }
 
@@ -304,6 +317,9 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
         $draftYes = ($inputPre.input_empty -ne $true)
         Write-DriverLog ('step2 has_draft 降级规则：input_empty=' + $inputPre.input_empty + ' texts=[' + (@($inputPre.texts) -join '|') + ']')
     }
+    # Jev 的 no 不能覆盖截图里已经识别到的草稿；窄窗口的输入区从 x≈0.36w 开始。
+    $visibleDraft = @(Get-WeComDraftTokens -Boxes $boxes -W $pre.w -H $pre.h)
+    if ($visibleDraft.Count -gt 0) { $draftYes = $true; $draftSrc = 'ocr' }
     Write-DriverLog ('step2 判定：right=' + $rightOk + '（' + $rightSrc + '） draft=' + $draftYes + '（' + $draftSrc + '）')
     if ($draftYes) {
         Throw-DriverError 'UI_CHANGED' '输入框存在残留草稿，已中止防串消息（可能是用户未发送的文字，未做任何清除/输入）；请人工清空后重试'
@@ -360,6 +376,9 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
         Write-DriverLog ('step3 多行粘贴通道：剪贴板写入第 ' + $clipTries + ' 次成功；text 前 12 字=「' + $textPreview + '」共 ' + $Text.Length + ' 字（多行文本可能敏感，不记全文）')
         $pasted = Send-WeComAttachChordKey -Hwnd $mainHwnd -Vk 0x56
         Write-DriverLog ('step3 attachstate Ctrl+V 发出=' + $pasted)
+        if (-not $pasted) {
+            Throw-DriverError 'UI_CHANGED' 'Ctrl+V 未能投递到目标窗口，已中止且未按 Enter 发送'
+        }
         Start-Sleep -Milliseconds 500
     } else {
         Send-WeComText -Hwnd $mainHwnd -Text $Text
@@ -368,29 +387,7 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     $typed = Save-StepShot $mainHwnd 'step2-typed.png'
     [void]$shots.Add([string]$typed.path)
 
-    if ($isMultiline) {
-        # 粘贴回读校验（fail-closed）：粘贴是间接输入（剪贴板写入与 Ctrl+V 之间内容可能被
-        # 其他程序/用户改写），OCR 回读输入带确认文本开头真的落在输入框，防把错内容带进
-        # 发送与终态校验。输入带过滤（窗口像素，2026-09-28 真机标定）：y0≥0.80h 且
-        # 300<x0<0.97w——x>300 排除左栏会话列表（1280 宽下列内 token x≈218），0.97w 截掉
-        # 右缘噪声。多行输入框会向上生长、带内混入工具栏/发送按钮等噪声 token：按 (y,x)
-        # 序拼接整带后归一化，噪声只出现在前缀之外，不影响 Contains 前缀比对（多行首行
-        # 开头 = 归一化全文开头，与 step5 终态前缀同源）。
-        $readbackOcr = Invoke-SendChatOcr ([string]$typed.path) 'boxes'
-        $inputBand = @($readbackOcr.boxes | Where-Object {
-            [double]$_.y0 -ge ($typed.h * 0.80) -and
-            [double]$_.x0 -gt 300 -and [double]$_.x0 -lt ($typed.w * 0.97)
-        } | Sort-Object { [double]$_.y0 }, { [double]$_.x0 })
-        $bandNorm = ConvertTo-WeComNormalized (($inputBand | ForEach-Object { [string]$_.text }) -join '')
-        $readbackPrefix = ConvertTo-WeComNormalized $Text
-        if ($readbackPrefix.Length -gt 8) { $readbackPrefix = $readbackPrefix.Substring(0, 8) }
-        $readbackHit = $bandNorm.Contains($readbackPrefix)
-        Write-DriverLog ('step3 粘贴回读校验：输入带 ' + $inputBand.Count + ' token，拼接归一化含前缀「' + $readbackPrefix + '」=' + $readbackHit)
-        if (-not $readbackHit) {
-            Throw-DriverError 'UI_CHANGED' ('粘贴回读校验不符：OCR 输入带未读到文本开头（前缀「' + $readbackPrefix + '」），粘贴可能未落地或落到非预期位置，已中止未按 Enter 发送；输入框可能有残留，请人工检查')
-        }
-    }
-    # typing 覆盖完整输入阶段（逐字或 剪贴板写入+粘贴+回读校验）
+    # typing 覆盖完整输入阶段（逐字或剪贴板写入+粘贴）
     $timing.typing = [int]($swTotal.ElapsedMilliseconds - $t0)
 
     # 4) 发送前会话复核（规则）：重新截图 OCR 标题带严格匹配；不一致 → 清自己刚输入的

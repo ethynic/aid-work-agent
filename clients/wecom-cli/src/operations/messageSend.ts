@@ -35,14 +35,11 @@
  *      会话匹配 ∧ trusted 正文与发送文本全等（设计 §7：发送核验仅使用可信正文）。命中 →
  *      applied + data.verification='local-record'（verification_detail 含匹配 message_id）；
  *      发送后短轮询等待落库（P0：发送后落库延迟未实测，轮询次数/间隔可注入，缺省 3 次 × 1s）；
- *   4) 未命中/本地库核验失败 → 既有 OCR 核验：driver `-VerifyOnly`（仅终态证据 + 判定，
- *      不重入发送阶段）→ 命中 → applied + verification='ocr-bubble'；不命中 →
- *      EXECUTION_UNKNOWN。发送完成后核验阶段的一切错误（含 RESULT_TIMEOUT/UI_CHANGED/
- *      驱动失败）→ EXECUTION_UNKNOWN（绝不误报 effect=none），取消保持 CANCELLED/partial；
- *      不重入发送阶段，绝不自动重发。
+ *   4) 未命中/本地库核验失败 → EXECUTION_UNKNOWN；保持原凭据供只读 send-status
+ *      再次对账，不用 OCR 气泡前缀覆盖数据库的不匹配事实，也不重入发送阶段。
  * 核验语义（决策 #47）：message_table 无发送状态字段——success/applied=客户端动作已记录
- * 并经本地核验（local-record）/OCR 气泡证据（ocr-bubble），**不代表对方已收到/已读**；
- * EXECUTION_UNKNOWN 时 data.verification 缺省（三值：local-record/ocr-bubble/缺省）。
+ * 并经本地核验（local-record；旧无本地库路径仍可用 OCR 气泡证据），**不代表对方已收到/已读**；
+ * EXECUTION_UNKNOWN 时 data.verification 缺省。
  */
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -454,7 +451,7 @@ export function createWecomMessageSendOperation(
                 },
               })
               // 发送动作已完成（driver ok = Enter 已按、无 EXECUTION_UNKNOWN）：此后任何失败
-              // 都不能重入发送阶段——本地库核验失败转 -VerifyOnly，仍失败 EXECUTION_UNKNOWN
+              // 都不能重入发送阶段；本地库未确认保持 EXECUTION_UNKNOWN。
               tracker.completed = 1
 
               // 本地库核验（短轮询等待落库；轮询参数可注入）
@@ -538,45 +535,11 @@ export function createWecomMessageSendOperation(
                 }
               }
 
-              // 未命中/本地库核验失败 → 既有 OCR 核验：driver -VerifyOnly（仅终态证据与判定，
-              // 不重入发送阶段）；验证驱动失败按「消息可能已发出」归并 EXECUTION_UNKNOWN
-              opCtx.progress({ stage: 'execute', message: dbVerifyFailed !== null ? `本地库核验失败（${dbVerifyFailed}），转 OCR 气泡核验` : '本地库未匹配到新记录，转 OCR 气泡核验' })
-              const verifyDir = join(root, `send-verify-${new Date().toISOString().replace(/[:.]/g, '-')}`)
-              mkdirSync(verifyDir, { recursive: true })
-              try {
-                await runDriverFn({
-                  script: DRIVER_PATH,
-                  args: [
-                    '-TargetName', target.name,
-                    '-Subtitle', target.subtitle,
-                    '-Section', target.type,
-                    '-Text', args.text,
-                    '-ArtifactDir', verifyDir,
-                    '-VerifyOnly', // 仅核验：不输入、不发送（驱动内 step0.5-4 全跳过）
-                  ],
-                  signal: opCtx.signal,
-                })
-              } catch (err) {
-                // 核验调用直调驱动、不经 runStageWithNavigation 的写动作翻译：发送已完成
-                // （tracker.completed=1），核验阶段的任何失败（RESULT_TIMEOUT/UI_CHANGED/
-                // 驱动失败等）都不得透传原码——会被 writeEffect 归为 effect=none（消息已
-                // 发出却报「未发生写动作」，误导消费侧重发），统一按 §4.3「发送后的失败保持
-                // EXECUTION_UNKNOWN」归并（effect=unknown）；取消保持既有 CANCELLED/partial
-                if (err instanceof CancelledError || (err instanceof CodedOperationError && err.code === 'CANCELLED')) throw err
-                checkCancelled(opCtx.signal)
-                throw new CodedOperationError('EXECUTION_UNKNOWN',
-                  `核验链路失败（${err instanceof CodedOperationError ? err.code : '驱动执行失败'}）：` +
-                  '消息可能已发出，但本地库核验与 OCR 气泡核验均未完成（不会自动重试，请用 send-status 对账）', undefined, baseData)
-              }
-              // 驱动正常返回 = 终态核验通过（EXECUTION_UNKNOWN 由驱动抛出、原样向上传播）
-              return {
-                message: `已向「${target.name}」发送消息，发送后校验通过（OCR 气泡证据；本地库未命中${dbVerifyFailed !== null ? `，本地库核验失败 ${dbVerifyFailed}` : ''}）`,
-                data: {
-                  ...baseData,
-                  verification: 'ocr-bubble' as const,
-                  ...(dbVerifyFailed !== null ? { localdb_verify_failed: dbVerifyFailed } : {}),
-                },
-              }
+              throw new CodedOperationError('EXECUTION_UNKNOWN',
+                dbVerifyFailed !== null
+                  ? `本地库发送核验失败（${dbVerifyFailed}），结果未知；不会自动重试，请用 send-status 只读对账`
+                  : '本地库未找到唯一匹配的出站记录，结果未知；不会自动重试，请用 send-status 只读对账',
+                undefined, baseData)
             } catch (err) {
               const mapped = mapExecutorError(err)
               throw new CodedOperationError(mapped.code, mapped.message,
