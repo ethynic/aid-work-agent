@@ -10,10 +10,13 @@
 
 ## 0. 环境与访问速查
 
-| 环境 | 服务器 | SSH | 容器 | 宿主机日志 | 主库 | 日志库 |
-|------|--------|-----|------|-----------|------|--------|
-| 生产 | 129.211.65.243 | `ssh -p 10167 ubuntu@129.211.65.243`（密钥 `deploy/ssh_key`） | aid-agent-api / aid-postgres | `/var/www/agent/log` | `aid_work_agent` | `aid_work_logs` |
-| 测试 | 124.222.3.254 | `ssh ubuntu@124.222.3.254` | aid-agent-api2 / aid-postgres | `/var/www/agent2/log` | `aid_work_agent2` | `aid_work_logs2` |
+| 环境 | 服务器 | SSH | 容器 | 宿主机日志 | 租户存储 | 主库 | 日志库 |
+|------|--------|-----|------|-----------|---------|------|--------|
+| 生产 | 129.211.65.243 | `ssh -p 10167 ubuntu@129.211.65.243`（密钥 `deploy/ssh_key`） | aid-agent-api / aid-postgres | `/var/www/agent/log` | `/var/www/qb3_upload/agent_storage` | `aid_work_agent` | `aid_work_logs` |
+| 测试 | 124.222.3.254 | `ssh ubuntu@124.222.3.254` | aid-agent-api2 / aid-postgres | `/var/www/agent2/log` | `/var/www/qb3_upload/agent2_storage` | `aid_work_agent2` | `aid_work_logs2` |
+
+- 租户存储目录挂载为容器 `/app/storage`（宿主机 `/var/www/agent{,2}/storage` 为空壳，勿据此判定违规）
+- 宿主机主日志按日轮转：`log/agent/aid-work-agent_YYYYMMDD.log`（243）/ `aid-work-agent_*.log`（254），非 `aid-work-agent.log` 单文件
 
 - psql 统一经容器执行：`sudo docker exec aid-postgres psql -U aid_user -d <库名> -c "<SQL>"`（两台服务器 postgres 容器同名）
 - 测试库公网 5433 可直连；生产库走 SSH 隧道（见 [postgres.md](../deploy/postgres.md) §4）
@@ -37,17 +40,17 @@
 依据 [backend_dev.md](../../.claude/rules/backend_dev.md)「租户附件存储规范」。对每台服务器执行（只读）：
 
 ```bash
-# 散落在 storage/ 根目录的文件（应只存在 tenants/ 等已知顶层目录）
-ssh <srv> "find /var/www/agent{,2}/storage -maxdepth 1 -type f 2>/dev/null"
+# 散落在 storage/ 根目录的文件（应只存在 tenants/ 等已知顶层目录与系统心跳/健康文件）
+ssh <srv> "find /var/www/qb3_upload/agent{,2}_storage -maxdepth 1 -type f 2>/dev/null"
 
 # 旧路径 uploads/ 近 7 天的新写入（新代码禁止写 uploads/）
-ssh <srv> "find /var/www/agent{,2}/storage/uploads -type f -mtime -7 2>/dev/null | head -50"
+ssh <srv> "find /var/www/qb3_upload/agent{,2}_storage/uploads -type f -mtime -7 2>/dev/null | head -50"
 
 # 租户目录下跳过场景子目录直接存放的文件（深度 2 出现文件即违规）
-ssh <srv> "find /var/www/agent{,2}/storage/tenants -mindepth 2 -maxdepth 2 -type f 2>/dev/null | head -50"
+ssh <srv> "find /var/www/qb3_upload/agent{,2}_storage/tenants -mindepth 2 -maxdepth 2 -type f 2>/dev/null | head -50"
 
 # 未知顶层目录
-ssh <srv> "ls /var/www/agent/storage /var/www/agent2/storage"
+ssh <srv> "ls /var/www/qb3_upload/agent_storage /var/www/qb3_upload/agent2_storage"
 ```
 
 - 逐条核对命中项：是否属于 `tenants/{tid}/{scene}/` 合法结构（scene ∈ conversation/knowledge/export/report/memory/avatar/temp/…）；`documents.file_path` 等登记值与磁盘路径抽样比对（按环境连主库 `SELECT file_path FROM documents ORDER BY doc_id DESC LIMIT 20`）。
@@ -78,8 +81,8 @@ ssh <srv> "grep -hE '(ERROR|WARNING)' /var/www/agent{,2}/log/aid-work-agent.log*
 筛选条件：带 `tool_error` 标签、非 running、且满足「反复发生 ≥3 次 / 消耗大量 token（单 trace total_tokens > 5000）/ 最终任务失败」任一条。
 
 ```sql
--- 聚类：按错误聚合，定位反复发生 + token 消耗
-SELECT left(COALESCE(error_code, error_message), 150) AS err, count(*) AS cnt,
+-- 聚类：按错误聚合，定位反复发生 + token 消耗（obs_traces 无 error_code 列，错误信息在 error_message）
+SELECT left(COALESCE(error_message, '(null)'), 150) AS err, count(*) AS cnt,
        sum(total_tokens) AS total_tokens, max(created_at) AS last_seen
 FROM obs_traces
 WHERE created_at > NOW() - INTERVAL '7 days'
@@ -88,15 +91,15 @@ GROUP BY 1 ORDER BY total_tokens DESC, cnt DESC LIMIT 30;
 
 -- 明细：top token 消耗的单个 trace
 SELECT trace_id, session_id, tenant_id, created_at, total_tokens,
-       left(COALESCE(error_code, error_message), 200) AS err
+       left(COALESCE(error_message, '(null)'), 200) AS err
 FROM obs_traces
 WHERE created_at > NOW() - INTERVAL '7 days'
   AND tags @> '["tool_error"]' AND status <> 'running'
 ORDER BY total_tokens DESC LIMIT 30;
 
--- 失败工具分布
+-- 失败工具分布（obs_spans 无 success 列，失败判定用 status='failed'）
 SELECT name, count(*) AS cnt FROM obs_spans
-WHERE success = false AND start_time > NOW() - INTERVAL '7 days'
+WHERE status = 'failed' AND start_time > NOW() - INTERVAL '7 days'
 GROUP BY 1 ORDER BY cnt DESC LIMIT 20;
 ```
 
@@ -126,6 +129,8 @@ git log -1 --format="%ci %h" -- <file>
 ---
 
 ## 6. 报告模板
+
+**输出原则**：报告仅记录**需整改的条目**（P0/P1/P2 问题项）；合规/正常项不展开，各检查项用一行结论收尾（如「两环境无存储违规」「本周无新增计费缺口」）。整改条目建议同步摘录为独立整改清单 `weekly-YYYY-MM-DD-整改清单.md`（含现象/根因/整改/验收标准 + 处理记录表），供逐项处理闭环。
 
 ```markdown
 # 每周巡检报告 YYYY-MM-DD
