@@ -7,6 +7,7 @@
 
 | 故障主题 | 文档 | 摘要 |
 |---------|------|------|
+| 企微客服 95003 新客户回复全失败（未验证企业累计接待 100 客户上限） | [wecom-kf-send-95003-unverified-quota-20261105.md](wecom-kf-send-95003-unverified-quota-20261105.md) | 2026-11-05 宏陶租户 13 次 95003：未验证企业微信客服累计只能接待 100 个客户咨询，15:26:30 接待满后新客户回复全失败、老客户不受影响；与租户核实未验证（未缴 300 元认证费）；根解=企业验证，需人工跟进撞线后约 10 个新客户 |
 | Runner 终态事务永久失败致 30 秒重试风暴（243 生产） | [runner-finalize-orphan-retry-storm-20261030.md](runner-finalize-orphan-retry-storm-20261030.md) | 2026-10-30 周巡检发现：会话与 chat_records 被删致 `write_history` 抛 `FINALIZE_SESSION_OWNER_CHANGED`，finalizing 行的异常分支只调 no-op 的 `interrupt_attempt`，租约过期后被反复领取、每 30 秒重试一次累计 1809 次；当日 14:00 事务终结止血，修复 = finalizer 有限重试（5 次）+ 孤儿放弃（释放 claim/回执/租约），待发版 |
 | 数字员工实例入口普通用户消息 403 与数据分析「没有数据」误报 | [tenant-instance-agent-403-incident-20261026.md](tenant-instance-agent-403-incident-20261026.md) | 2026-10-26 agent2：授权按实例 ID 写 user_agent_permissions、runner `_profile` 归并 base 后查询致 PROFILE_FORBIDDEN 403（修复=权限查询兼容实例/base 双 ID，已开发待提交）；10-23「没有数据」为主智能体会话按名单看不到受限数据表（设计内），403 修复后经实例入口即正常 |
 | 诺度wecom_kf客户发消息红色感叹号（腾讯侧未收消息） | [wecom-kf-customer-send-failure-20261025.md](wecom-kf-customer-send-failure-20261025.md) | 2026-10-25 15:00起：我方回调/sync/出站全正常，客户消息未进腾讯系统（10-25 14:38后仅enter_session无text/voice）；servicer/list对全部kfid报95000，疑企微后台「通过API管理」被关；排查中待诺度管理员反馈 |

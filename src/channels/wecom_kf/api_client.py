@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 from loguru import logger
 
+from src.channels.wecom_kf.error_hints import append_known_error_hint
+
 
 MAX_MEDIA_SIZE = 20 * 1024 * 1024  # 20MB
 
@@ -72,7 +74,7 @@ class WeComKfApiClient:
                 if errcode != 0:
                     raise RuntimeError(
                         f"获取 access_token 失败: errcode={errcode}, "
-                        f"errmsg={data.get('errmsg')}"
+                        f"errmsg={append_known_error_hint(errcode, data.get('errmsg'))}"
                     )
                 self._access_token = data["access_token"]
                 self._token_expires = time.time() + data["expires_in"] - 300
@@ -133,6 +135,12 @@ class WeComKfApiClient:
                     logger.warning("微信客服 access_token 已过期，正在刷新")
                     self._invalidate_token()
                     continue
+
+                # 已知错误码时把简要解释并入 errmsg，所有下游错误日志自动携带
+                if errcode != 0:
+                    enriched = append_known_error_hint(errcode, data.get("errmsg"))
+                    if enriched:
+                        data["errmsg"] = enriched
 
                 return data
             except Exception as e:
