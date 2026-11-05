@@ -71,7 +71,7 @@ if (!$WorkspacePrepared) {
         # wecom 日期/IANA 能力门槛（评审三 P1-5）：旧 ocr-python-final 缺 tzdata
         # 会在 WeCom 打包/离线验包冒烟失败；此处提前拦截并指向 prepare 刷新。
         if ($includeWecom) {
-            $dayProbe = & (Join-Path $OcrDirectory 'python.exe') -I -B -c 'from zoneinfo import ZoneInfo; ZoneInfo("Asia/Shanghai"); print("TZDATA_OK")'
+            $dayProbe = & (Join-Path $OcrDirectory 'python.exe') -I -B -c "from zoneinfo import ZoneInfo; ZoneInfo('Asia/Shanghai'); print('TZDATA_OK')"
             if ($LASTEXITCODE -ne 0 -or $dayProbe -notmatch 'TZDATA_OK') { throw '嵌入式 Python 缺少日期/IANA 能力（tzdata）；请先运行 clients/runtime-plugin-packaging/prepare-ocr.py 刷新 ocr-python-final 资产后重试' }
         }
     }

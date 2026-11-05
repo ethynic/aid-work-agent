@@ -59,6 +59,27 @@ test('WeCom delivery is independent of BOSS and can include its required Runtime
   assert.match(defaults.versionDefaults, /SourceRef/)
 })
 
+test('WeCom day preflight preserves Python timezone quotes through PowerShell -File', () => {
+  const home = mkdtempSync(resolve(tmpdir(), 'aid-wecom-day-preflight-'))
+  try {
+    const batch = readFileSync(script, 'utf8')
+    const line = batch.split(/\r?\n/).find(value => value.includes('$dayProbe = &'))
+    assert.ok(line, 'The release entry must check the packaged Python timezone capability')
+    // Use the build machine Python and replace only the timezone lookup: this checks
+    // PowerShell argument transport without requiring the release OCR asset in CI.
+    const command = line.replace('from zoneinfo import ZoneInfo', 'from builtins import str as ZoneInfo')
+    assert.notEqual(command, line, 'The preflight must still call ZoneInfo')
+    const fixture = resolve(home, 'preflight.ps1')
+    writeFileSync(fixture, [
+      '$OcrDirectory = Split-Path -Parent (Get-Command python.exe).Source',
+      command,
+      "if ($LASTEXITCODE -ne 0 -or $dayProbe -notmatch 'TZDATA_OK') { exit 1 }",
+    ].join('\r\n') + '\r\n')
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', fixture], { encoding: 'utf8', windowsHide: true })
+    assert.equal(result.status, 0, result.stderr)
+  } finally { rmSync(home, { recursive: true, force: true }) }
+})
+
 test('isolated source extraction preserves real git archive Chinese filenames and bytes', () => {
   const home = mkdtempSync(resolve(tmpdir(), 'aid-release-unicode-'))
   try {

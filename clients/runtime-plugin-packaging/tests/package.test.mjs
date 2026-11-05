@@ -268,5 +268,5 @@ test('wecom release closure verifies date/IANA capability end to end (review 3 P
   assert.match(verify, /ZoneInfo\("Asia\/Shanghai"\)/)
   // 发行批次入口：打包前预检嵌入式解释器 tzdata 能力
   assert.match(batch, /prepare-ocr\.py 刷新 ocr-python-final/)
-  assert.match(batch, /ZoneInfo\("Asia\/Shanghai"\)/)
+  assert.match(batch, /ZoneInfo\('Asia\/Shanghai'\)/, 'PowerShell must pass the quoted timezone to embedded Python when launched with -File')
 })

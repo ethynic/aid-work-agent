@@ -250,7 +250,14 @@ export async function main(argv) {
     }
     writeFileSync(path.join(resources, 'runtime/resource-manifest.json'), JSON.stringify(manifest, null, 2) + '\n')
     if (existsSync(resourcesRoot)) safeRemoveBuild(resourcesRoot)
-    renameSync(resources, resourcesRoot)
+    // Windows can briefly hold a file opened during the dependency check.
+    for (let attempt = 0; ; attempt++) {
+      try { renameSync(resources, resourcesRoot); break }
+      catch (error) {
+        if (error.code !== 'EPERM' || attempt >= 9) throw error
+        await new Promise(resolve => setTimeout(resolve, 1000))
+      }
+    }
     console.log(JSON.stringify({ resourcesPath: resourcesRoot, profile: options.profile, hostVersion: version, files: manifest.files.length }))
   } finally { safeRemoveBuild(stage) }
 }
