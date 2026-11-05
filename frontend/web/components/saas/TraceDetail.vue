@@ -107,7 +107,14 @@
             <pre class="text-sm text-default whitespace-pre-wrap break-words max-h-60 overflow-auto">{{ trace.input || '(空)' }}</pre>
           </div>
           <div class="bg-white rounded-xl shadow-sm border border-default p-4">
-            <h3 class="text-sm font-medium text-muted mb-2">AI 输出</h3>
+            <h3 class="text-sm font-medium text-muted mb-2 flex items-center gap-2">
+              <span>AI 输出</span>
+              <span
+                v-if="transferredToHuman"
+                class="px-1.5 py-0.5 bg-warning-100 text-warning-700 rounded text-xs font-normal"
+                title="本次对话已转接人工客服，AI 回复按转人工语义抑制未发送，仅记账"
+              >转人工</span>
+            </h3>
             <pre class="text-sm text-default whitespace-pre-wrap break-words max-h-60 overflow-auto">{{ trace.output || '(空)' }}</pre>
           </div>
         </div>
@@ -289,6 +296,11 @@ const lastLlmInput = computed(() => {
   if (!lastLlmSpan.value?.input) return null
   return parseJson(lastLlmSpan.value.input)
 })
+
+// 转人工抑制语义：wecom_kf 下 transfer_to_human 成功后 AI 回复被置空不发送，output 为空是预期形态
+const transferredToHuman = computed(() =>
+  spans.value.some(s => s.name === 'tool:transfer_to_human' && s.status === 'completed')
+)
 
 function goBack() {
   router.back()
