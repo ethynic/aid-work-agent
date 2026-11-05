@@ -93,12 +93,16 @@
                 <div v-else class="px-5 py-5 md:px-7 text-default">
                   <section class="md:grid md:grid-cols-[7rem_minmax(0,1fr)] gap-5 pb-5">
                     <h5 class="text-sm font-semibold text-default m-0 mb-2 md:mb-0">当日概览</h5>
-                    <p class="text-[15px] leading-7 whitespace-pre-wrap m-0">{{ entry.summary.overview || '—' }}</p>
+                    <ol v-if="Array.isArray(entry.summary.overview)" class="m-0 pl-6 list-decimal space-y-2 text-[15px] leading-7">
+                      <li v-for="(item, index) in entry.summary.overview" :key="index">{{ item }}</li>
+                    </ol>
+                    <p v-else class="text-[15px] leading-7 whitespace-pre-wrap m-0">{{ entry.summary.overview || '—' }}</p>
                   </section>
                   <section v-for="section in summarySections(entry.summary)" :key="section.key"
                     class="md:grid md:grid-cols-[7rem_minmax(0,1fr)] gap-5 border-t border-default py-5 last:pb-0">
                     <h5 class="text-sm font-semibold text-default m-0 mb-2 md:mb-0">{{ section.title }}</h5>
-                    <ul class="m-0 pl-5 space-y-2">
+                    <component :is="section.key === 'pending_human' ? 'ol' : 'ul'" class="m-0 space-y-2"
+                      :class="section.key === 'pending_human' ? 'pl-6 list-decimal' : 'pl-5'">
                       <li v-for="(item, index) in section.items" :key="index" class="text-[15px] leading-7"
                         :class="section.key === 'anomalies' ? 'list-none -ml-5 pl-3 border-l-[3px] border-warning-500' : ''">
                         <template v-if="item.topic">{{ item.topic }}<template v-if="item.count"> ×{{ item.count }}</template>：</template>{{ item.detail }}
@@ -107,7 +111,7 @@
                             :title="`在会话记录中定位消息 ${msgId}`" @click="jumpToMessage(entry.conversation_id, msgId)">{{ msgId }}</button>
                         </span>
                       </li>
-                    </ul>
+                    </component>
                   </section>
                   <p v-if="entry.summary.notes" class="text-xs text-muted m-0 pt-5">说明：{{ entry.summary.notes }}</p>
                   <details v-if="entry.source_runner_id" class="text-xs text-muted mt-4"><summary class="cursor-pointer">报告信息</summary>

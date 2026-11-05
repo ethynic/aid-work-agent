@@ -48,8 +48,9 @@ afterEach(() => { wrapper?.unmount(); wrapper = null; focusHost?.remove(); focus
 describe('每日总结工作台', () => {
   it('新版日报只展示概览、文本跟进和已发生异常，保留消息证据', async () => {
     api.dailyReports.mockResolvedValue({ reports: [{ ...report(1, '孙晨咨询优惠和女鞋，确认购买两双。'),
-      summary: { overview: '孙晨咨询优惠和女鞋，确认购买两双。',
-        pending_human: [{ detail: '确认颜色和收件方式。', evidence: [1980, 1981] }],
+      summary: { overview: ['本人宣布测试代理聊天和群聊总结。', '孙晨咨询优惠和女鞋，确认购买两双。'],
+        pending_human: [{ detail: '确认颜色和收件方式。', evidence: [1980, 1981] },
+          { detail: '核对下单信息。', evidence: [1981] }],
         anomalies: [{ detail: '欢迎语重复、截断。', evidence: [1970] }] },
       coverage: { day_count: 15 }, generated_at: '2026-11-05T11:57:24',
       snapshot_at: '2026-11-05T11:56:38', source_runner_id: 'runner-saved' }],
@@ -61,6 +62,14 @@ describe('每日总结工作台', () => {
     expect(card.text()).toContain('当日 15 条消息')
     expect(card.text()).toContain('确认颜色和收件方式。')
     expect(card.text()).toContain('欢迎语重复、截断。')
+    const orderedLists = card.findAll('ol')
+    expect(orderedLists).toHaveLength(2)
+    expect(orderedLists[0]!.findAll('li').map(item => item.text())).toEqual([
+      '本人宣布测试代理聊天和群聊总结。', '孙晨咨询优惠和女鞋，确认购买两双。',
+    ])
+    expect(orderedLists[1]!.findAll('li').map(item => item.text().split('证据')[0]!.trim())).toEqual([
+      '确认颜色和收件方式。', '核对下单信息。',
+    ])
     expect(card.findAll('h5').map(heading => heading.text())).toEqual(['当日概览', '待跟进', '异常'])
     expect(card.text()).not.toContain('咨询与问题分类')
     expect(card.find('button[title="在会话记录中定位消息 1970"]').exists()).toBe(true)
@@ -77,11 +86,12 @@ describe('每日总结工作台', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('咨询 ×1：店铺活动')
     expect(wrapper.text()).toContain('回复：已告知活动')
+    expect(wrapper.find('article ol').exists()).toBe(false)
   })
 
   it('只有寒暄的日报只显示无实质内容，不空挂跟进和异常标题', async () => {
     api.dailyReports.mockResolvedValue({ reports: [{ ...report(1, '当日无实质内容'),
-      summary: { overview: '当日无实质内容', pending_human: [], anomalies: [] } }],
+      summary: { overview: ['当日无实质内容'], pending_human: [], anomalies: [] } }],
       has_more: false, next_cursor: null, last_generation: null })
     wrapper = mount(WecomConversationDaily, { global: { provide: { toggleSidebar: () => {} }, stubs: { AppHeader: true } } })
     await flushPromises()

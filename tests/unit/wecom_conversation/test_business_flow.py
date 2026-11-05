@@ -70,8 +70,8 @@ def _background_message(msg_id, send_time=500):
             'sender_name': '李四', 'sender_platform': 'wecom'}
 
 
-def _summary(overview, **overrides):
-    value = {'overview': overview, 'pending_human': [], 'anomalies': []}
+def _summary(overview_text, **overrides):
+    value = {'overview': [overview_text], 'pending_human': [], 'anomalies': []}
     value.update(overrides)
     return json.dumps(value, ensure_ascii=False)
 
@@ -285,7 +285,7 @@ async def test_daily_empty_day_saves_explicit_empty_report():
          patch.object(flow, '_save_report', fake_save), \
          patch.object(flow, '_descriptor_date', lambda descriptor: '2026-11-02'):
         await _collect(flow.run_wecom_business(execution, {'kind': 'daily'}, adapter))
-    assert saved and saved[0][1]['overview'] == '当日无消息'
+    assert saved and saved[0][1]['overview'] == ['当日无消息']
     assert llm.calls == []
 
 
@@ -295,7 +295,7 @@ async def test_empty_day_with_unreadable_timestamps_keeps_read_gap_visible():
     result = await flow._analyze_conversation(
         None, {}, {'name': '项目群'}, '2026-11-02', 'Asia/Shanghai', [_page([])],
         notes='1 条记录无有效时间未纳入')
-    assert result['summary']['overview'] == '当日无可确认的消息'
+    assert result['summary']['overview'] == ['当日无可确认的消息']
     assert '无有效时间' in result['summary']['notes']
     assert result['summary']['pending_human'] == result['summary']['anomalies'] == []
 
@@ -594,7 +594,7 @@ async def test_long_content_groups_pages_before_synthesis():
          patch.object(flow, '_descriptor_date', lambda descriptor: '2026-11-02'):
         await _collect(flow.run_wecom_business(execution, {'kind': 'daily'}, adapter))
     assert len(llm.calls) == 3  # 2 页分组 + 1 次合成
-    assert saved[0]['overview'] == '合成'
+    assert saved[0]['overview'] == ['合成']
     # 中间结论不被硬截断（P2-16）：digest 完整进入合成输入
     assert '组1' in llm.calls[2]['user'] and '组2' in llm.calls[2]['user']
 
@@ -626,17 +626,20 @@ async def test_summary_parser_rejects_non_json_and_missing_structure():
     assert flow._parse_summary_json('{"overview":"ok"}') is None
     assert flow._parse_summary_json(_digest('group result')) is None
     assert flow._parse_summary_json(_digest('group result'), chunk=True)['digest'] == 'group result'
-    assert flow._parse_summary_json(_summary('ok'))['overview'] == 'ok'
+    assert flow._parse_summary_json(_summary('ok'))['overview'] == ['ok']
 
 
 def test_summary_contract_keeps_only_actionable_followups_and_observed_anomalies():
     """新报告不再要求分类计数；无证据或旧结构不能冒充成功日报。"""
-    concise = _summary('孙晨咨询优惠和女鞋，确认两双并获报价。',
+    concise = _summary('本人宣布测试代理与群聊总结。',
+                       overview=['本人宣布测试代理与群聊总结。', '孙晨咨询优惠和女鞋，确认两双并获报价。'],
                        pending_human=[{'detail': '确认颜色及收件方式。', 'evidence': [1980, 1981]}],
                        anomalies=[{'detail': '欢迎语重复、截断。', 'evidence': [1970]}])
     parsed = flow._parse_summary_json(concise)
+    assert len(parsed['overview']) == 2
     assert parsed['pending_human'][0]['evidence'] == [1980, 1981]
     assert parsed['anomalies'][0]['detail'] == '欢迎语重复、截断。'
+    assert flow._parse_summary_json(_summary('ok', overview='合成的一整段')) is None
     assert flow._parse_summary_json(_summary('ok', anomalies=[{'detail': '缺证据'}])) is None
     legacy = json.dumps({'overview': '旧报告', 'categories': [], 'handled': [],
                          'pending_human': [], 'noteworthy': []}, ensure_ascii=False)
@@ -694,7 +697,7 @@ async def test_oversized_digest_compressed_before_synthesis():
                       _async_save(lambda e, c, d, a, s, r: saved.append(a['summary']))), \
          patch.object(flow, '_descriptor_date', lambda descriptor: '2026-11-02'):
         await _collect(flow.run_wecom_business(execution, {'kind': 'daily'}, adapter))
-    assert saved and saved[0]['overview'] == '合成'
+    assert saved and saved[0]['overview'] == ['合成']
     synthesis_input = llm.calls[-1]['user']
     assert len(synthesis_input) <= flow.SYNTHESIS_INPUT_CHAR_LIMIT  # 构造性受控
     assert '压缩' in llm.calls[2]['user']  # 走了压缩步

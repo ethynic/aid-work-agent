@@ -103,7 +103,7 @@ export interface AttachmentIndex {
 }
 
 export interface DailySummaryBody {
-  overview?: string
+  overview?: string | string[]
   /** 旧版已保存报告仍可能含以下字段。 */
   categories?: SummaryItem[]
   handled?: SummaryItem[]

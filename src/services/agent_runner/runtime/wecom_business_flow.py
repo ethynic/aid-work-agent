@@ -51,13 +51,13 @@ SUMMARY_SYSTEM_TEMPLATE = '''你是企业微信会话日报分析引擎，负责
 
 输出必须是合法 JSON（UTF-8，不带其它文字），结构：
 {
-  "overview": "当日概览",
+  "overview": ["一件独立事情的概览，不带序号"],
   "pending_human": [{"detail": "需本账号或团队跟进的下一步", "evidence": [消息ID]}],
   "anomalies": [{"detail": "已发生且需关注的异常", "evidence": [消息ID]}],
   "notes": "确实影响理解的读取缺口（无则省略）"
 }
 判定纪律：
-- 根据当日实际消息判断内容，不按会话名称预设主题。每件相对独立的实质事情写一句；同一人连续咨询并推进的同一件事合并表述，不拆成分类统计，也不固定句数。只有寒暄、普通系统通知等无实质内容时，overview 写“当日无实质内容”，其余列表为空；
+- 根据当日实际消息判断内容，不按会话名称预设主题。overview 按时间顺序列出独立事情，每件一项、一项一句；同一人连续咨询并推进的同一件事合并为一项，不拆成分类统计，也不固定项数。数组元素不要手写数字或序号，页面负责编号。只有寒暄、普通系统通知等无实质内容时，overview 为 ["当日无实质内容"]，其余列表为空；
 - overview 只交代主要事情及进展；pending_human 只写本账号或团队确需继续处理的具体下一步，不重复概览经过，不把群友之间尚未回复的交流自动变成待办；
 - anomalies 只收录消息中已发生且需关注的问题，不写泛泛风险、商机、正常操作或无关的系统通知；没有异常则为空列表；
 - 只描述本会话中可见的事实。“群内未见下单记录”不等于订单未完成，不推断私聊、外部系统或未给出的状态；不为凑内容追加通用建议或说明；
@@ -406,7 +406,9 @@ def _parse_summary_json(text, *, chunk=False):
                 or not isinstance(value.get('items'), list)):
             return None
         return value
-    if not isinstance(value.get('overview'), str) or not value['overview'].strip():
+    if (not isinstance(value.get('overview'), list) or not value['overview']
+            or any(not isinstance(item, str) or not item.strip()
+                   for item in value['overview'])):
         return None
     if any(not isinstance(value.get(key), list)
            for key in ('pending_human', 'anomalies')):
@@ -460,7 +462,7 @@ async def _analyze_conversation(execution, descriptor, conversation, business_da
         direct_input += f'\n计划特殊关注要求：{requirements}'
     if not day_messages:
         # 成功空日（设计 §5.2）：整段日期范围排空且无当日记录。
-        empty_summary = {'overview': '当日无消息' if not notes else '当日无可确认的消息',
+        empty_summary = {'overview': ['当日无消息' if not notes else '当日无可确认的消息'],
                          'pending_human': [], 'anomalies': []}
         if notes:
             empty_summary['notes'] = notes
