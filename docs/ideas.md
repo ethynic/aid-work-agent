@@ -27,7 +27,7 @@
 | 20261026-1130 | 调度器幽灵锁自愈修复（发版强杀后后台调度器永久罢工） | 🔧 部分完成（开发+测试+CR 完成，待提交发版） | 2026-10-21 生产发版强杀旧容器致 4 个后台调度器 Redis 锁未释放，新容器一次性抢锁失败即永久放弃（宏陶商城同步停摆 44h）。修复：三个 asyncio 调度器（hongtao_shop/wechat_mp/tencent_docs）抢锁失败仍启动驱动任务循环重试接管；manager.py 抢锁失败起 30s 重试线程。47 用例 + 1649 回归通过，CR 无 P0/P1。 | [事故复盘](incidents/scheduler-ghost-lock-stall-20261021.md) | — |
 | 20261028-1255 | 外发邮箱配置指南（域名 DNS 侧） | ✅ 已完成（2026-10-28） | 新增 [docs/ops/outbound-email-dns-setup-guide.md](ops/outbound-email-dns-setup-guide.md)：面向租户外发邮件域名配置的实操指南，沉淀 tulin.cn 体检实战——SPF/DKIM/DMARC/MX 四记录要点（163 免费企业邮 + 阿里云解析逐步操作）、MX 主机记录误填子域致主域收信中断、权威 DNS 与公共缓存验证口径、DMARC 报告解读与 p 策略升级路径、缺 DKIM 决策参考与验收清单。 | [指南](ops/outbound-email-dns-setup-guide.md) | — |
 | 20261029-1800 | agent3 在线开发环境拆库启用 | 🔧 部署验证中 | commit d928fc4b：agent3 独立库 aid_work_agent3/logs3（自 agent2 复制）+ runner 容器名参数化 + background3 + test2dev.sh 整库单向同步（test→dev，渠道配置各环境独立）。 | —（见 [服务器部署现状.md §5.2](../deploy/服务器部署现状.md)） | — |
-| 20261030-1644 | 每周例行巡检（计费/存储/日志/tool_error/tlog） | 🔧 部分完成 | 周四 11:30 定时巡检五项（cron 9540fb2b）；11-05 轮：无计费/存储缺口，P0 两项（scheduled-tasks 裸% 500、243 旧进程待重启）。 | [巡检规范](audit/weekly-inspection.md)（报告 [weekly-2026-11-05](audit/weekly-2026-11-05.md)、[整改清单](audit/weekly-2026-11-05-整改清单.md)） | — |
+| 20261030-1644 | 每周例行巡检（计费/存储/日志/tool_error/tlog） | 🔧 部分完成 | 周四 11:30 定时巡检五项（cron 9540fb2b）；11-05 轮：无计费/存储缺口，P0-1 已修提交 b33ce320 待部署 254，P0-2 243 重启待安排。 | [巡检规范](audit/weekly-inspection.md)（报告 [weekly-2026-11-05](audit/weekly-2026-11-05.md)、[整改清单](audit/weekly-2026-11-05-整改清单.md)） | — |
 | 20261030-1710 | 追踪库保留清理调度化（obs_* 表保留 30 天） | 🔧 部分完成（开发+测试完成，待提交部署） | TimescaleDB retention 因主键约束从未生效；新增每日分批删除（30 天，用户裁决）+ 周日 VACUUM 调度任务，17 单测绿，待部署。 | [设计 §8](system/observability-design.md) | — |
 
 ## 系统功能
