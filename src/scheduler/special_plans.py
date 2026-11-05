@@ -27,5 +27,7 @@ def first_line_sql(column='task_prompt'):
 
 
 def ordinary_task_sql(column='task_prompt'):
-    return ' AND '.join(f"{first_line_sql(column)} NOT LIKE '{marker}%'"
+    # % 双写转义：该片段全部以 f-string 内嵌进带参数的 cursor.execute，
+    # 裸 % 会被 psycopg2 当占位符解析（IndexError），必须用 %% 表示字面 %
+    return ' AND '.join(f"{first_line_sql(column)} NOT LIKE '{marker}%%'"
                         for marker in SPECIAL_PLAN_MARKERS)

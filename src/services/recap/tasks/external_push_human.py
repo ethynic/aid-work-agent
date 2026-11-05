@@ -28,7 +28,6 @@ from loguru import logger
 
 from src.core.cache_utils import CacheKeys
 from src.core.redis_client import redis_client
-from src.core.temp_logger import tlog
 from src.services.recap.runner import RecapPayload, defer_recap_task
 from src.services.recap.tasks.external_push import (
     _build_system_prompt,
@@ -217,7 +216,6 @@ async def _summarize_human(
         )
         data = _extract_json_object(response.get("content", ""))
         if not data:
-            tlog(topic, "人工期摘要输出解析失败，降级为提示语")
             return fallback
         return {
             "customer_need": _truncate(str(data.get("customer_need") or "")) or fallback["customer_need"],
@@ -314,7 +312,6 @@ class ExternalPushHumanAdapter:
         doc = _load_tenant_doc(payload.tenant_id, subagent_name)
         if doc is None:
             # 非 10605 对接租户：正常 no-op（入口 B 对全部 wecom_kf 会话触发）
-            tlog(topic, f"no-op: 租户未配置 {doc_filename}, tenant={payload.tenant_id}")
             _trace_summary(payload, "skipped", f"租户未配置 {doc_filename}")
             return
 
@@ -332,7 +329,6 @@ class ExternalPushHumanAdapter:
             logger.warning(
                 f"[external_push_human] 归属员工手机号缺失，放弃推送 session={payload.session_id}"
             )
-            tlog(topic, f"no-op: 归属员工手机号缺失, tenant={payload.tenant_id}, open_kfid={ctx['open_kfid']}")
             _trace_summary(payload, "skipped", "归属员工手机号缺失")
             return
 
@@ -341,7 +337,6 @@ class ExternalPushHumanAdapter:
             logger.warning(
                 f"[external_push_human] 租户未配置 AGENT_TOKEN，放弃推送 session={payload.session_id}"
             )
-            tlog(topic, f"no-op: 租户未配置 AGENT_TOKEN, tenant={payload.tenant_id}")
             _trace_summary(payload, "skipped", "租户未配置 AGENT_TOKEN")
             return
 
@@ -353,7 +348,6 @@ class ExternalPushHumanAdapter:
             _COLLECT_MESSAGE_LIMIT,
         )
         if not _has_human_period_message(raw_messages):
-            tlog(topic, "no-op: 窗口内无人工期消息, session={sid}", sid=payload.session_id)
             _trace_summary(payload, "skipped", "窗口内无人工期消息")
             return
 
@@ -371,14 +365,6 @@ class ExternalPushHumanAdapter:
                 else _HUMAN_COOLDOWN_SECONDS
             )
             deferred = defer_recap_task(payload, "external_push_human", delay)
-            tlog(
-                topic,
-                "cooldown skip: session={sid}, round={rid}, defer={res}(补推延迟{delay}s)",
-                sid=payload.session_id,
-                rid=payload.round_message_id,
-                res="ok" if deferred else "failed",
-                delay=round(delay),
-            )
             return
 
         try:

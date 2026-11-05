@@ -1,5 +1,6 @@
 """D2 dedicated plan timing and accepted scope facts (no external database)."""
 
+import re
 from datetime import date, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -135,3 +136,11 @@ def test_reserved_first_line_is_rejected_even_with_whitespace_or_invalid_json():
     assert '[wecom-conversation:backfill]' not in sql
     assert all(f'chr({point})' in first_line_sql()
                for point in (11, 12, 160, 12288))
+
+
+def test_ordinary_task_sql_escapes_percent_for_parametrized_execute():
+    """ordinary_task_sql() 全部内嵌进带参数的 cursor.execute，裸 % 会被
+    psycopg2 当占位符（IndexError: tuple index out of range，2026-11-05
+    /api/scheduled-tasks 事故），字面 % 必须双写转义。"""
+    for sql in (ordinary_task_sql(), ordinary_task_sql('other_column')):
+        assert not re.search(r'(?<!%)%(?!%)', sql), f'存在裸 %：{sql}'
