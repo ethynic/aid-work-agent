@@ -34,7 +34,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20261104-1639 | 知识库多轮检索新鲜度与结果去重 | 🔧 部分完成 | 本地合成知识多轮验收通过，待真实数据及渠道验收。 | [设计](system/knowledge-base/knowledge-search-freshness-design.md) | [计划](plans/plan-knowledge-search-freshness.md) |
+| 20261104-1639 | 知识库多轮检索新鲜度与结果去重 | 🔧 部分完成 | 强化提示词已修订，待发布及正式微信 KF 复验。 | [设计](system/knowledge-base/knowledge-search-freshness-design.md) | [计划](plans/plan-knowledge-search-freshness.md) |
 | 20261022-1606 | 本地工具失败与原会话恢复闭环 | 🔧 部分完成 | 0.3.27单调用归位续做真验通过，下一轮排除26份续读入库1份。 | [设计增量](system/agent-application-architecture-design.md#本地工具阻断与原会话恢复2026-10-22增量待实现)、[最小修复方案](design/recruiting/boss-overlay-heal-design.md#w4-原始日志核验后的最小修复方案2026-10-23)、[今日统一交接](incidents/boss-agent2-issues-and-minimal-repair-handoff-20261023.md) | [修复计划](plans/plan-runner-local-tool-recovery-lockup-fix.md)、[10-30事故取证](plans/plan-boss-widget-incident-evidence-collection.md) |
 | 20261026-1530 | 定时任务一次性提醒修复与渠道尽力投递 | ⛔ 已取消（随 Runner 化删除） | once 校验与 wecom_kf 尽力投递（delivery.py/scheduled_task_deliveries/补投挂点）随旧实现整体删除，功能未上线、无存量数据。 | — | [巡检报告 P1-1](plans/log-error-review-20261026.md) |
 | 20261020-recruiting-error-perf | 招聘链路单点错误治理与 Win32 输入性能修复 | 🔧 部分完成 | 单份跳过+多轮CR+读取链路PS全迁Node完成（双通道对照验证），Phase 6 真机观察待做 | [复盘](incidents/recruiting-runtime-filter-timeout-and-resume-blocked-20261020.md) | [计划](plans/plan-recruiting-error-containment-and-input-performance.md) |
