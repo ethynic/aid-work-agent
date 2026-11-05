@@ -521,6 +521,7 @@
           <div>
             <label class="text-sm text-muted mb-1 block">客服名称<span class="text-danger-500">*</span></label>
             <BaseInput v-model="kfForm.name" maxlength="16" placeholder="如：售前咨询" />
+            <p class="mt-0.5 text-xs text-muted">客户发起咨询时可见，建议用「公司简称 + 服务类型」命名</p>
           </div>
           <div>
             <label class="text-sm text-muted mb-1 block">头像（可选）</label>
@@ -549,6 +550,7 @@
               <option value="">请选择数字员工</option>
               <option v-for="sa in availableSubagents" :key="sa.agent_id" :value="sa.agent_id">{{ sa.name }} ({{ sa.agent_id }})</option>
             </BaseSelect>
+            <p class="mt-0.5 text-xs text-muted">该客服账号接待客户时使用的数字员工</p>
           </div>
           <div class="col-span-4">
             <label class="text-sm text-muted mb-1 block">欢迎语</label>
@@ -562,7 +564,7 @@
           <div>
             <label class="text-sm text-muted mb-1 block">人工接待人员（企微 userid）</label>
             <BaseInput v-model="kfForm.servicer_userid_list" placeholder="zhangsan, lisi" />
-            <p class="mt-0.5 text-xs text-muted">多个用逗号分隔</p>
+            <p class="mt-0.5 text-xs text-muted">多个用逗号分隔；在企业微信「通讯录 → 组织架构」选中成员后，右侧信息面板中的「账号」即为 userid</p>
           </div>
           <div>
             <label class="text-sm text-muted mb-1 block">转人工开关</label>

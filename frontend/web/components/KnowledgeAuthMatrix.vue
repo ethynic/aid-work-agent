@@ -8,7 +8,7 @@
     @update:model-value="emit('update:modelValue', $event)"
   >
     <div class="mb-3 text-xs text-muted">
-      半选 = 该数字员工未配置授权（默认可访问全部栏目）；勾选 = 允许访问该栏目；取消勾选 = 不允许。修改后点击「保存」生效。
+      按一级分类授权，一级分类下的子分类继承所属一级分类的授权。半选 = 该数字员工未配置授权（默认可访问全部栏目）；勾选 = 允许访问该栏目；取消勾选 = 不允许。修改后点击「保存」生效。
     </div>
 
     <div v-if="isLoading" class="flex items-center justify-center py-12 text-sm text-muted">加载中...</div>

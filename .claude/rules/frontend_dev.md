@@ -83,6 +83,26 @@
 - 用户要求 UI/UX 审计，或大范围布局/交互重构需要独立设计审查时使用 `web-design-guidelines`。局部修改不强制获取远程规则或进行全站审计。
 - build、行为测试和独立验证按 [开发流程规范](./dev_workflow.md) 执行；同一最终代码状态的有效结果可复用。
 
+## UI 内嵌帮助文字（HelpExpand / help text）同步规范
+
+租户后台页面上内嵌的帮助说明文字（字段旁 `text-xs text-muted` 说明、`HelpExpand` 组件展开内容）源自产品经理维护的《智能体后台操作指引》（docx，产品侧文档，不在仓库内）。
+
+**强制要求**：相关功能发生改版/变化时，必须同步修改对应页面的帮助文字。已覆盖的位置（2026-11-05 起）：
+
+| 页面 | 文件 | 同步内容 |
+|------|------|---------|
+| 定制页-扩展提示词 | `components/TenantAgentCustomizeDialog.vue` | 工作说明书定位 + 8 维度填写指引表（操作指引 4.2） |
+| 定制页-模板文件 | 同上 | Excel 可自动填充、Word/PDF 原样发送（操作指引 4.2） |
+| 定制页-复制为副本 | 同上 | 复制语义 + 4 个适用场景（操作指引 4.3） |
+| 访问授权矩阵 | `components/KnowledgeAuthMatrix.vue` | 三态规则 + 一级分类授权/子分类继承（操作指引 6.4） |
+| 知识中心-编辑分类 | `components/KnowledgeBase.vue` | 顶级栏目不支持移动的原因（操作指引 6.5） |
+| 客服账号表单 | `components/saas/ChannelConfig.vue` | 客服名称命名建议、归属用户、人工接待人员 userid 查看方法、积分上限 0=不限等（操作指引 7.2） |
+| 防滥用中心 | `components/saas/AbuseCenter.vue` | 三层策略与优先级（操作指引 8.7） |
+| 回复风格 | `components/saas/ReplyStyleManager.vue` | 预置拟人风格说明 + 定制引导去扩展提示词 + 自定义风格暂无法关联数字员工使用（操作指引 8.5，产品澄清口径 2026-11-05） |
+| 通知规则 | `components/saas/NotificationRules.vue` | 5 种预置事件含义 + 外发 Webhook 配置入口（操作指引 8.8） |
+
+新增帮助文字时遵循：短说明直接用 `text-xs text-muted` 惯例；长内容（表格、多段说明）用 `components/ui/HelpExpand.vue`，不要新建同类组件。
+
 ## 命令
 
 ```bash

@@ -22,7 +22,7 @@
           </div>
         </template>
         <p class="text-xs text-muted mb-3">
-          本租户未单独配置的用户与渠道，按此默认策略评估（user 级 > channel 级 > 本默认 > 平台默认）。
+          策略分三层：租户默认（本页）、渠道级（「连接中心 → 渠道配置」中该渠道的「防滥用」，作用于该渠道下每个用户各自的使用量）、用户级（「用户管理」中该用户的「防滥用设置」）；设置越具体越优先生效（user 级 > channel 级 > 本默认 > 平台默认）。用量超限时按「通知规则」发送通知，由管理员决定是否停用该用户。
         </p>
         <AbusePolicyEditor scope-type="tenant" @saved="onPolicySaved" />
       </BaseCard>

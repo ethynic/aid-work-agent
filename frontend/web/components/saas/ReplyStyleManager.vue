@@ -26,6 +26,11 @@
         </div>
       </div>
 
+      <!-- 帮助文案与《智能体后台操作指引》8.5 同步：回复风格能力变化时须同步更新 -->
+      <p class="text-xs text-muted mb-3">
+        系统预置「拟人风格」：像真人同事一样对话，隐藏 AI 工作过程。如需定制回复风格，可在「我的数字员工 → 定制」的扩展提示词中描述。新增的自定义风格暂无法关联到数字员工使用，该能力后续完善。
+      </p>
+
       <!-- 风格列表 -->
       <div class="table-scroll-wrapper">
         <BaseTable :columns="columns" :data="pagedStyles" row-key="style_id">

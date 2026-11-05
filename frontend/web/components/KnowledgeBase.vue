@@ -442,7 +442,7 @@
             </div>
             <BaseButton intent="secondary" @click="openMoveCategory">移动</BaseButton>
           </div>
-          <p v-else class="text-sm text-muted">顶级栏目，不支持移动</p>
+          <p v-else class="text-sm text-muted">顶级栏目，不支持移动（访问授权按一级栏目配置）</p>
         </div>
       </div>
       <template #footer>

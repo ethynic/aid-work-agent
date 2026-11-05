@@ -19,9 +19,20 @@
           <div class="flex items-start justify-between mb-4 gap-4">
             <div>
               <h2 class="text-base font-semibold text-default">通知规则</h2>
+              <!-- 帮助文案与《智能体后台操作指引》8.8 同步：预置事件变化时须同步更新 -->
               <p class="text-xs text-muted mt-1 leading-relaxed">
                 规则决定各事件的站内信接收人与外发投递；同一事件命中多条规则时各自独立通知。预置规则（系统）可停用与调整，不可删除。
               </p>
+              <HelpExpand label="各事件通知什么？" class="mt-1.5">
+                <ul class="list-disc pl-4 space-y-1">
+                  <li><span class="text-default font-medium">积分提醒</span>：客户积分快用完时提醒</li>
+                  <li><span class="text-default font-medium">到期提醒</span>：租户到期时提醒</li>
+                  <li><span class="text-default font-medium">滥用告警</span>：用量超限时告警（策略在「防滥用中心」设置）</li>
+                  <li><span class="text-default font-medium">客户留资</span>：客户在微信客服接待会话中留下联系方式（手机号、座机、邮箱）后通知</li>
+                  <li><span class="text-default font-medium">定时任务通知</span>：定时任务每次执行后的通知</li>
+                </ul>
+                <p class="mt-2">外发通知（飞书 / 钉钉 / 企微群机器人）需先在群中添加群机器人，再把 Webhook 地址配置到规则的外发目标，操作步骤见编辑规则时的「如何获取 webhook？」。</p>
+              </HelpExpand>
             </div>
             <div class="flex items-center gap-2 flex-shrink-0">
               <button
@@ -331,6 +342,7 @@ import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BaseTable, { type TableColumn } from '@/components/ui/BaseTable.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
+import HelpExpand from '@/components/ui/HelpExpand.vue'
 import {
   notificationsAPI,
   type NotificationRule,

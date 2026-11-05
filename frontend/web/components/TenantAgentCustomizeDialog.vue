@@ -19,9 +19,27 @@
       <!-- 扩展提示词 -->
       <section>
         <h4 class="text-sm font-semibold text-default mb-2">扩展提示词</h4>
+        <!-- 帮助文案与《智能体后台操作指引》4.2 同步：定制能力变化时须同步更新 -->
         <p class="text-xs text-muted mb-2 leading-relaxed">
-          追加到该数字员工系统提示词末尾的本租户定制需求，留空使用默认配置。
+          相当于给智能体写一份「工作说明书」：写清它要做哪些事情、怎么做；追加到该数字员工系统提示词末尾，留空使用默认配置。
         </p>
+        <HelpExpand class="mb-2">
+          <p class="mb-2">内容没有固定限制，可从以下维度描述：</p>
+          <table class="w-full text-xs border-collapse">
+            <thead>
+              <tr class="border-b border-default text-left">
+                <th class="py-1.5 pr-3 font-medium text-default whitespace-nowrap align-top">常见维度</th>
+                <th class="py-1.5 font-medium text-default align-top">可写内容</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="d in promptGuide" :key="d.dim" class="border-b border-default last:border-b-0">
+                <td class="py-1.5 pr-3 text-default whitespace-nowrap align-top">{{ d.dim }}</td>
+                <td class="py-1.5">{{ d.example }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </HelpExpand>
         <MyTextarea
           v-model="form.extra_prompt"
           :rows="6"
@@ -42,6 +60,7 @@
             <h4 class="text-sm font-semibold text-default">模板文件</h4>
             <p class="text-xs text-muted mt-1 leading-relaxed">
               上传后系统会在提示词末尾自动追加「相关模板位置信息」，数字员工可按 file_id 调用文档工具套用模板；点击模板名称可下载。
+              Excel 模板可自动填充内容（如报价单中的金额），Word、PDF 模板原样发送；什么场景用哪个模板，在扩展提示词中说明即可。
             </p>
           </div>
           <BaseButton
@@ -168,6 +187,22 @@
         </div>
       </section>
 
+      <!-- 复制为副本：按钮在页面底部 footer，此处仅放说明（帮助文案与《智能体后台操作指引》4.3 同步） -->
+      <section>
+        <h4 class="text-sm font-semibold text-default mb-2">复制为副本</h4>
+        <p class="text-xs text-muted mb-2 leading-relaxed">
+          在页面底部填写副本显示名并点击「复制为副本」，可在不改变智能体能力的前提下，创建出配置独立的新智能体（名称、简介、知识库和话术可单独设置）。
+        </p>
+        <HelpExpand label="什么场景适合复制？">
+          <ul class="list-disc pl-4 space-y-1">
+            <li><span class="text-default font-medium">一套能力、多条业务线</span>：如已购买旅游咨询智能体，可复制出「北京旅游咨询」「贵州旅游咨询」，各自挂接不同的知识库</li>
+            <li><span class="text-default font-medium">同一业务、不同客群</span>：如散客咨询、研学团咨询各有不同话术，可各复制一个分别配置</li>
+            <li><span class="text-default font-medium">绑定不同渠道</span>：复制出的新智能体可单独绑定到不同的渠道客服账号</li>
+            <li><span class="text-default font-medium">放心试新配置</span>：想调整知识库或话术时，复制一份再改，不影响原智能体</li>
+          </ul>
+        </HelpExpand>
+      </section>
+
       <!-- 错误提示 -->
       <div v-if="errorMsg" class="bg-danger-50 border border-danger-200 rounded-lg p-3 text-sm text-danger-700">
         {{ errorMsg }}
@@ -207,6 +242,7 @@ import BaseModal from '@/components/ui/BaseModal.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import MyTextarea from '@/components/ui/MyTextarea.vue'
+import HelpExpand from '@/components/ui/HelpExpand.vue'
 import {
   getTenantAgentInstanceOrDefault,
   updateTenantAgentInstance,
@@ -266,6 +302,18 @@ const greetingPrompts = ref<GreetingPrompt[]>([
   { label: '', message: '' },
 ])
 const copyName = ref('')
+
+// 扩展提示词填写指引维度（与《智能体后台操作指引》4.2 同步）
+const promptGuide = [
+  { dim: '工作流程', example: '先收集哪些信息，再做什么，最后产出什么（如先收集出行人数、天数、出发时间，再出行程方案）' },
+  { dim: '信息收集', example: '对话中需要向客户收集哪些信息，用什么方式引导' },
+  { dim: '服务范围', example: '只服务哪些业务，超出范围如何回应' },
+  { dim: '回复风格', example: '语气、篇幅、是否分点、是否使用口语' },
+  { dim: '模板使用规则', example: '什么场景用哪个模板；Excel 模板可自动填充（如报价单金额），Word/PDF 模板原样发送' },
+  { dim: '输出格式', example: '数据分析等结果的展示方式、字段要求、文件格式' },
+  { dim: '承诺边界', example: '哪些事情不能承诺、不能保证' },
+  { dim: '禁止事项', example: '明确不允许智能体做什么、不回答什么' },
+]
 
 // ============== 模板文件状态 ==============
 const templates = ref<TemplateFile[]>([])
