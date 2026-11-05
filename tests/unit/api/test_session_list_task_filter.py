@@ -1,7 +1,7 @@
 """定时任务重构 Phase 5 二轮评审第 3/8 项后端修复回归：
 
-1. SessionDB.list_by_user 前置过滤任务专属会话（metadata->'scheduled_task' IS NULL），
-   count 与列表同条件（total 与数据同口径）——普通会话分页不再出现"整页任务会话"；
+1. SessionDB.list_by_user 前置过滤定时任务及企微日报内部会话，
+   count 与列表同条件（total 与数据同口径）——普通会话分页不再出现任务会话；
 2. GET /api/sessions/{id} 详情端点透出 scheduled_task（= task_id | null，权威标记），
    兼容 metadata 为 JSONB dict / JSON 字符串 / None 三种形态。
 """
@@ -55,22 +55,24 @@ def capture_sql(monkeypatch):
 
 
 class TestListByUserFiltersTaskSessions:
-    def test_tenant_scoped_queries_filter_scheduled_task(self, capture_sql):
-        """租户分支：count 与 SELECT 都必须带任务会话过滤条件（同口径）"""
+    def test_tenant_scoped_queries_filter_internal_sessions(self, capture_sql):
+        """租户分支：定时与手动日报均不占聊天列表分页名额。"""
         SessionDB.list_by_user("u1", page=1, page_size=20, tenant_id="t1")
         statements = capture_sql["sql"]
         assert len(statements) == 2
         for sql in statements:
             assert "metadata->'scheduled_task' IS NULL" in sql
+            assert "metadata->>'wecom_conversation_ops' IS DISTINCT FROM 'true'" in sql
             assert "tenant_id" in sql
 
-    def test_non_tenant_queries_filter_scheduled_task(self, capture_sql):
-        """非租户分支（兼容非 SaaS 模式）：两查询同样带过滤条件"""
+    def test_non_tenant_queries_filter_internal_sessions(self, capture_sql):
+        """非租户分支也过滤已有手动日报，同时保留原定时任务过滤。"""
         SessionDB.list_by_user("u1", page=1, page_size=20, tenant_id=None)
         statements = capture_sql["sql"]
         assert len(statements) == 2
         for sql in statements:
             assert "metadata->'scheduled_task' IS NULL" in sql
+            assert "metadata->>'wecom_conversation_ops' IS DISTINCT FROM 'true'" in sql
 
 
 # ==================== 2. 会话详情 scheduled_task 标记（评审第 8 项） ====================

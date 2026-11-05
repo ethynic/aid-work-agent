@@ -78,7 +78,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20261104-2038 | 企微会话每日总结工作台与专属定时配置 | 🔧 部分完成 | 概览与待跟进已改编号列表，待 agent2 重算验收。 | [设计](design/wecom/wecom-conversation-operations-design.md) | [计划](plans/plan-wecom-daily-summary-workbench.md) |
+| 20261104-2038 | 企微会话每日总结工作台与专属定时配置 | 🔧 部分完成 | 日报内部会话已从聊天列表排除，待 agent2 发布验收。 | [设计](design/wecom/wecom-conversation-operations-design.md) | [计划](plans/plan-wecom-daily-summary-workbench.md) |
 | 20261103-1508 | 企微附件原件与持续任务后续优化 | 📋 待开发（用户暂缓） | 附件原件、预览及Runner恢复交互另行实施，不阻塞日志日报。 | [设计边界](design/wecom/wecom-conversation-operations-design.md#8-后置范围与验收原则) | [后续计划](plans/plan-wecom-conversation-followups.md) |
 | 20261105-1100 | 企微群聊长文本粘贴与监控等待修复 | 🔧 部分完成 | CLI 0.2.6 已签包放 Downloads，待安装与真机验收。 | [设计](design/wecom/wecom-cli-design.md#11-群聊实验的输入定位修正2026-10-23实施中) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w17-长文本粘贴与监控等待故障2026-11-05) |
 | 20261102-1430 | 企微旁路聊天日志、前端与按日日报 | 🔧 部分完成（工作台由新计划接续） | 旁路日志与日期读取已有初版实现；日报页面及计划按新方案重做。 | [设计](design/wecom/wecom-conversation-operations-design.md) | [历史计划](plans/plan-wecom-conversation-operations.md) / [新计划](plans/plan-wecom-daily-summary-workbench.md) |

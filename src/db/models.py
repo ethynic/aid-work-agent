@@ -858,8 +858,8 @@ class SessionDB:
     def list_by_user(user_id: str, page: int = 1, page_size: int = 20, tenant_id: str = None) -> Dict[str, Any]:
         """获取用户的会话列表（分页，优先从 Redis 缓存读取，TTL 30秒）
 
-        任务专属会话（metadata.scheduled_task）在 SQL 前置排除（Phase 5 二轮评审
-        第 3 项）：count 与列表同条件，total 与数据同口径；任务会话仍可经
+        任务专属会话（metadata.scheduled_task / wecom_conversation_ops）在 SQL 前置排除：
+        count 与列表同条件，total 与数据同口径；任务会话仍可经
         get_by_id / 详情端点访问（通知/旧链接路由），仅不出现在普通列表。
 
         Args:
@@ -875,9 +875,9 @@ class SessionDB:
 
         offset = (page - 1) * page_size
         placeholder = "%s"
-        # metadata 为 JSONB；无 metadata 的行 metadata->'scheduled_task' 为 NULL，
-        # IS NULL 同样成立（普通会话不受影响）
-        task_filter = "(metadata->'scheduled_task' IS NULL)"
+        # 日报手动执行会创建内部 Web 会话；既有标记同时覆盖已创建的记录。
+        task_filter = ("(metadata->'scheduled_task' IS NULL AND "
+                       "metadata->>'wecom_conversation_ops' IS DISTINCT FROM 'true')")
         with get_db_connection() as conn:
             cursor = conn.cursor()
             # 先统计总数（与列表同条件）

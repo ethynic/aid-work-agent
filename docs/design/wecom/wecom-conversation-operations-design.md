@@ -242,6 +242,7 @@ CLI 返回的群聊内容必须让每条消息都带 `sender_platform`：可靠�
 | `src/wecom_conversation/adapters.py` | 来源/姓名/身份/时间/附件索引映射、原消息去重输入 | 仅为完成证明服务的目标范围计算移除；日期读取身份继续沿原工具 |
 | `archive.py` | 纯批量UPSERT、记录范围筛选、可选出站来源补齐，由服务器异步回调调用 | `ArchiveStorageFailure(CheckpointFailure)`、完成marker、Runner锁/phase依赖、业务游标证明 |
 | `service.py` / `api.py` | 租户隔离的会话登记、分页报告查询、无计划手动提交、单计划配置和每次执行详情 | 旧手动 50 ID、日期页 500 会话固定截断，以及与多计划配置绑定的前端入口 |
+| `src/db/models.py` 的 Web 会话列表 | 手动日报使用现有 `wecom_conversation_ops` 内部会话标记；普通聊天侧栏的计数与分页均排除该标记，既有记录同样隐藏，日报执行详情仍由专用入口读取 | 不靠会话标题过滤，也不删除执行会话或报告 |
 | `plans.py` / `logsink.py` | 已接受读结果自动纳入 Agent 监控目标，保留成功读取/发送的旁路日志、稳定幂等意图 | Agent 建计划、首次纳入自动补录任务、多计划匹配与特殊关注要求 |
 | `wecom_flow.py` | 原读/发/对账逻辑 | 删除Agent工具流程里的同步归档依赖，日志回调移至服务器受理原结果之后；不改unknown恢复规则 |
 | `src/local_tools/api.py` / 原结果存储入口 | 原认证、原结果/计费/ACK幂等；仅追加WeCom结果已接受后的轻量异步回调 | 不让日志纳入原结果事务、ACK等待或业务成功条件 |
