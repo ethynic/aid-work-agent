@@ -6,6 +6,7 @@ Agent 优先传 instruction（用户目的）+ content（待导出数据）+ fil
 执行 pipeline 后返回结果。
 """
 
+import asyncio
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -559,9 +560,11 @@ class ExcelProcessTool(BaseTool):
         except FileNotFoundError as e:
             return {"success": False, "error": str(e)}
 
-        # 精确范围读取 或 公式读取 → 使用 read_sheet（结构化数据）
+        # openpyxl 读取是重 CPU 同步操作，必须 to_thread，否则 used range 膨胀的
+        # 文件（百万空行）会冻结 worker 事件循环（2026-11-05 TPG80509 事故根因）
         if params.get("range") or params.get("include_formulas"):
-            return read_sheet(
+            return await asyncio.to_thread(
+                read_sheet,
                 file_path,
                 sheet_name=params.get("sheet_name"),
                 cell_range=params.get("range"),
@@ -569,7 +572,8 @@ class ExcelProcessTool(BaseTool):
             )
 
         # 默认 → 使用 read_excel_document（完整文档信息 + 文本内容）
-        return read_excel_document(
+        return await asyncio.to_thread(
+            read_excel_document,
             file_path,
             sheet_name=params.get("sheet_name"),
         )
@@ -585,7 +589,8 @@ class ExcelProcessTool(BaseTool):
         except FileNotFoundError as e:
             return {"success": False, "error": str(e)}
 
-        return excel_to_markdown(
+        return await asyncio.to_thread(
+            excel_to_markdown,
             file_path,
             sheet_name=params.get("sheet_name"),
             max_rows=params.get("max_rows", 100),
@@ -636,7 +641,8 @@ class ExcelProcessTool(BaseTool):
             except json.JSONDecodeError:
                 return {"success": False, "error": "JSON 数据格式不正确，请检查数据内容"}
 
-        result = create_excel(
+        result = await asyncio.to_thread(
+            create_excel,
             data=data,
             data_type=data_type,
             file_name=ctx.output_name or self._safe_output_name(params.get("file_name") or params.get("output_name")),
@@ -664,22 +670,22 @@ class ExcelProcessTool(BaseTool):
         if not operations:
             return {"success": False, "error": "modify 操作需要 params.operations 参数"}
 
-        wb, info = ExcelFileHandler.copy_and_open(file_path)
-        result = batch_modify(wb, operations)
+        def _run_modify():
+            wb, info = ExcelFileHandler.copy_and_open(file_path)
+            try:
+                result = batch_modify(wb, operations)
+                if not result["success"]:
+                    return result
+                output_name = params.get("output_name") or (Path(file_path).stem + "_modified.xlsx")
+                save_result = ExcelFileHandler.save_temp(wb, file_name=output_name)
+                save_result["success"] = True
+                save_result["operations_applied"] = result["operations_applied"]
+                save_result["message"] = f"已完成{result['operations_applied']}项修改操作"
+                return save_result
+            finally:
+                wb.close()
 
-        if not result["success"]:
-            wb.close()
-            return result
-
-        output_name = params.get("output_name") or (Path(file_path).stem + "_modified.xlsx")
-        save_result = ExcelFileHandler.save_temp(wb, file_name=output_name)
-        wb.close()
-
-        save_result["success"] = True
-        save_result["operations_applied"] = result["operations_applied"]
-        save_result["message"] = f"已完成{result['operations_applied']}项修改操作"
-
-        return save_result
+        return await asyncio.to_thread(_run_modify)
 
     async def _handle_format(self, ctx: PipelineContext, params: Dict) -> Dict:
         from src.tools.excel.excel_formatter import batch_format
@@ -696,22 +702,22 @@ class ExcelProcessTool(BaseTool):
         if not operations:
             return {"success": False, "error": "format 操作需要 params.format_operations 参数"}
 
-        wb, info = ExcelFileHandler.copy_and_open(file_path)
-        result = batch_format(wb, operations)
+        def _run_format():
+            wb, info = ExcelFileHandler.copy_and_open(file_path)
+            try:
+                result = batch_format(wb, operations)
+                if not result["success"]:
+                    return result
+                output_name = params.get("output_name") or (Path(file_path).stem + "_formatted.xlsx")
+                save_result = ExcelFileHandler.save_temp(wb, file_name=output_name)
+                save_result["success"] = True
+                save_result["operations_applied"] = result["operations_applied"]
+                save_result["message"] = f"已完成{result['operations_applied']}项格式化操作"
+                return save_result
+            finally:
+                wb.close()
 
-        if not result["success"]:
-            wb.close()
-            return result
-
-        output_name = params.get("output_name") or (Path(file_path).stem + "_formatted.xlsx")
-        save_result = ExcelFileHandler.save_temp(wb, file_name=output_name)
-        wb.close()
-
-        save_result["success"] = True
-        save_result["operations_applied"] = result["operations_applied"]
-        save_result["message"] = f"已完成{result['operations_applied']}项格式化操作"
-
-        return save_result
+        return await asyncio.to_thread(_run_format)
 
     async def _handle_fill_template(self, ctx: PipelineContext, params: Dict) -> Dict:
         # 确定模板来源：template_file > template_name > 附件
@@ -749,7 +755,6 @@ class ExcelProcessTool(BaseTool):
                 ),
             )
         if data:
-            import asyncio
             from src.tools.excel.excel_template_ai import fill_with_sample
             # fill_with_sample 是纯同步重活（含阻塞式 LLM 结构分析与 openpyxl 渲染），
             # 必须丢线程池执行：直接在协程里调用会阻塞事件循环心跳，
@@ -768,7 +773,10 @@ class ExcelProcessTool(BaseTool):
         if not variables:
             return await self._fill_template_needs_data(template_path)
 
-        return fill_template(template_path, variables=variables, output_name=output_name)
+        return await asyncio.to_thread(
+            fill_template, template_path,
+            variables=variables, output_name=output_name,
+        )
 
     @staticmethod
     async def _fill_template_needs_data(template_path: str, shape_hint: str = "") -> Dict:
@@ -784,7 +792,6 @@ class ExcelProcessTool(BaseTool):
         """
         preview = ""
         try:
-            import asyncio
             from src.tools.excel.excel_to_md import excel_to_markdown
             md = await asyncio.to_thread(excel_to_markdown, template_path, max_rows=40)
             raw = md.get("markdown") or ""
@@ -816,7 +823,7 @@ class ExcelProcessTool(BaseTool):
 
     async def _handle_list_templates(self, ctx: PipelineContext, params: Dict) -> Dict:
         from src.tools.excel.excel_template import list_templates
-        templates = list_templates()
+        templates = await asyncio.to_thread(list_templates)
         return {"success": True, "templates": templates}
 
     async def _handle_merge(self, ctx: PipelineContext, params: Dict) -> Dict:
@@ -830,7 +837,8 @@ class ExcelProcessTool(BaseTool):
         except FileNotFoundError as e:
             return {"success": False, "error": str(e)}
 
-        result = merge_files(
+        result = await asyncio.to_thread(
+            merge_files,
             resolved_paths,
             output_name=params.get("output_name"),
             merge_mode=params.get("merge_mode", "sheets"),
@@ -853,7 +861,8 @@ class ExcelProcessTool(BaseTool):
             return {"success": False, "error": str(e)}
         target_format = params.get("target_format", "xlsx")
 
-        result = convert_format(
+        result = await asyncio.to_thread(
+            convert_format,
             file_path,
             target_format=target_format,
             output_name=ctx.output_name or self._safe_output_name(params.get("output_name")),
