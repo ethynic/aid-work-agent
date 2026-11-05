@@ -56,8 +56,15 @@ class KnowledgeBaseTool(BaseTool):
 
     name = "knowledge_base_search"
     description = (
+        "使用规则：只要准备回答企业知识库中的事实（如价格、库存、产品参数、政策、制度），"
+        "或继续追问、改写先前的知识库答案，就必须先在当前用户消息这一轮调用本工具，"
+        "拿到本轮结果后再给出事实值。即使历史工具结果或历史回答已有答案也不能跳过；"
+        "上一轮工具调用、already_in_context_* 清单、历史回答和摘要只用于理解用户所指，"
+        "不代表现在仍有效。优先使用本轮新返回的 results 和 documents；只有本轮"
+        "already_in_context_* 明确列出的相同内容，才可回看历史原文。新旧值冲突以本轮"
+        "结果为准；检索失败或尚未取得结果时，不报历史中的具体值。纯问候和闲聊无需"
+        "调用本工具；本轮检索完成后可直接回答。"
         "从知识中心按内容语义检索相关段落，回答用户问题。"
-        "当用户询问关于公司制度、文档资料、产品信息等问题时使用此工具。"
         "结果分两部分：results 为命中片段（text/doc_id/score/chunk_index/metadata）；"
         "documents 按 doc_id 归并文档信息（title/file_path/summary/doc_metadata 等），"
         "同一文档命中多个片段时文档信息只出现一次，片段经 doc_id 关联所属文档；"
@@ -68,7 +75,7 @@ class KnowledgeBaseTool(BaseTool):
         "already_in_context_chunks 所列片段正文及信息、already_in_context_documents 所列文档资料"
         "（包括 raw_payload）已完整在当前上下文中，本次确认相同后省略；仅这些历史内容获本次确认。"
         "matched_count>0 且 count=0 表示命中内容已在上下文，仍须查看 documents 是否有更新资料；"
-        "两者都为零才是未命中。回答时以本次新资料为准，勿推断其他旧知识仍有效。"
+        "两者都为零才是未命中。"
         "invalid_history_documents 是当前授权已确认失效的历史文档标识，勿使用其旧内容。"
         "若已知文件名/文档标题、需要读取整个文件，先用 knowledge_file_search 定位拿到 file_path，再用 read 读取。"
     )
