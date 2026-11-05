@@ -139,10 +139,26 @@ class TestClientModelWhitelist:
         assert exc.value.status_code == 400
         assert "MODEL_NOT_ALLOWED" in exc.value.detail
 
-    @patch("src.db.models.TokenCostPriceDB.get_by_model_name")
-    def test_model_without_price_rejected(self, mock_price):
-        """kimi-k3 无定价行 → 400 MODEL_NOT_PRICED（无单价 = 免单，fail closed）"""
+    def test_kimi_k3_disabled(self):
+        """2026-11-05 起 Kimi 禁用：白名单已清空，kimi-k3 → 400 MODEL_NOT_ALLOWED"""
         from fastapi import HTTPException
+
+        from src.api.client_routes import _get_model_gateway
+
+        with pytest.raises(HTTPException) as exc:
+            _get_model_gateway("kimi-k3")
+        assert exc.value.status_code == 400
+        assert "MODEL_NOT_ALLOWED" in exc.value.detail
+
+    @patch("src.db.models.TokenCostPriceDB.get_by_model_name")
+    def test_model_without_price_rejected(self, mock_price, monkeypatch):
+        """白名单模型无定价行 → 400 MODEL_NOT_PRICED（无单价 = 免单，fail closed）"""
+        from fastapi import HTTPException
+
+        from src.api import client_routes
+
+        # Kimi 已禁用（白名单为空），定价校验用临时条目覆盖
+        monkeypatch.setattr(client_routes, "CLIENT_MODEL_PROVIDER_MAP", {"kimi-k3": "moonshot"})
 
         from src.api.client_routes import _get_model_gateway
 
@@ -160,9 +176,12 @@ class TestClientModelWhitelist:
 
     @patch("src.api.client_routes.LLMGateway")
     @patch("src.db.models.TokenCostPriceDB.get_by_model_name")
-    def test_kimi_k3_routes_to_moonshot_gateway(self, mock_price, mock_gw_cls):
-        """kimi-k3 有定价行 → 构建 moonshot 专用网关（model_codes 覆盖为 kimi-k3）"""
+    def test_whitelisted_model_routes_to_dedicated_gateway(self, mock_price, mock_gw_cls, monkeypatch):
+        """白名单模型有定价行 → 构建对应专用网关（model_codes 覆盖）"""
         from src.api import client_routes
+
+        # Kimi 已禁用（白名单为空），路由逻辑用临时条目覆盖
+        monkeypatch.setattr(client_routes, "CLIENT_MODEL_PROVIDER_MAP", {"kimi-k3": "moonshot"})
 
         mock_price.return_value = {
             "model_name": "kimi-k3", "input_price_per_m": 21.0, "output_price_per_m": 105.0,

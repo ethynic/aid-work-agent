@@ -53,8 +53,11 @@ router = APIRouter(prefix="/api/client/v1", tags=["协会客户端"])
 # 客户端可指定模型的白名单：model -> provider（首期仅 kimi-k3 视觉模型，走 moonshot 网关，
 # 供 weixin-cli 视觉定位使用，见 docs/design/weixin/weixin-cli-billing.md §4.1）。
 # 未传 model 的请求仍走全局默认 llm_gateway，行为与改动前完全一致。
+# 2026-11-05 禁用 Kimi：项目已不使用 Kimi，243 key 失效持续报 401；
+# 白名单清空后 model=kimi-k3 的请求 fail-fast 返回 MODEL_NOT_ALLOWED（原本 401 也全失败，无功能回归）。
+# 如需恢复：补回条目 + 配置有效 MOONSHOT_API_KEYS + 改 .env 后 compose up -d 重建容器。
 CLIENT_MODEL_PROVIDER_MAP: Dict[str, str] = {
-    "kimi-k3": "moonshot",
+    # "kimi-k3": "moonshot",
 }
 
 # 按 model 缓存专用网关实例（KeyPool 级并发控制需跨请求复用）
