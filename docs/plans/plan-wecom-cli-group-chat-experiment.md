@@ -25,7 +25,7 @@
 | W16 客户端打包归拢复核 | master上验证旧Runtime/BOSS与发行改动并提交 | ✅ 完成（2026-10-30） | 主控60项、独测3专项/5批Windows实测及CR通过；仅本任务定向提交，未部署监听 |
 | W17 长文本粘贴与草稿误判修复 | 窄窗草稿保护、取消粘贴后 OCR 门禁、数据库唯一记录核验 | 🔧 进行中 | CLI 0.2.6 已签包并放 Downloads、目标 Runtime 静态验包通过；待用户安装及真机验收 |
 | W18 文本发送输入替换 | 当前目标标题复核后清空输入区，沿用单行/多行输入方式 | ✅ 完成（2026-11-06） | 独测、最终 CR、本机空框/带草稿真实发送通过；已合并 master 并出 0.2.7 包，待客户安装 |
-| W19 移除输入后标题门禁 | 文本发送只在输入前确认目标，输入后直接进入发送 | ✅ 完成（2026-11-06） | 定向测试和独立 CR 通过；本机非目标会话切群发送及本地库核验通过，待出包和 agent2 验收，未提交/部署 |
+| W19 移除输入后标题门禁 | 文本发送只在输入前确认目标，输入后直接进入发送 | ✅ 完成（2026-11-06） | 定向测试、独立 CR、本机切群发送通过；master `644b6328` 已出 WeCom 0.2.8，待安装及 agent2 验收 |
 
 ## W14 通用Runtime业务工具自动装配（2026-10-29）
 
@@ -752,4 +752,6 @@ agent2 16:10 首次进入会话时曾因 OCR 将目标「速动运动福利1群�
 
 验证结果：PowerShell `input-independent` 34/34、`input-locator-regression`、`search-input-regression`、`clipboard-policy-regression` 23/23 均 exit 0；CLI `npm run build` exit 0；Node `message-send-v2` 与 `operations-m2` 30/30、`message-send-localdb-verify` 中受影响静态用例 1/1 均 exit 0；独立 CodeReview 无新增 P0/P1。完整本地库测试因该独立工作区缺少 `venv/Scripts/python.exe` 报 `ENOENT`，未计入通过。随后完成下述本机真机发送；首次进入会话时的 OCR“+”误判仍可能阻断。
 
-本机真机验收（2026-11-06 16:40–16:44）：用户授权从当前非目标会话定位“售前客服群”并发送一条测试消息。CLI `probe` 确认已登录；预先执行的只读 `search` 找到唯一同名群，但在搜索框留下查询词，导致第一次自动 `send --target-name` 在搜索框状态校验处 `UI_CHANGED/effect=none`，未进入输入或发送。手动点搜索框清除按钮后仍处于“新劳务云系统项目沟通群”；再次只调用一次相同 `send --target-name`，自动搜索、选择并进入“售前客服群”，输入后直接发送，返回 `OK/effect=applied/navigated=true/verification=local-record`，唯一匹配本地出站 `message_id=1989`。发送后截图可见目标群内一条测试消息且输入框为空；这证明本机客户端动作和落库，不证明群成员已收到。两次尝试中实际仅一条消息发送成功；第一轮的残留搜索词由本次预检造成，正式自动发送前需确保搜索框为空。未出包、安装、部署 agent2 或提交代码。首次定位时其他群名末尾 OCR“+”的误判仍未覆盖。
+本机真机验收（2026-11-06 16:40–16:44）：用户授权从当前非目标会话定位“售前客服群”并发送一条测试消息。CLI `probe` 确认已登录；预先执行的只读 `search` 找到唯一同名群，但在搜索框留下查询词，导致第一次自动 `send --target-name` 在搜索框状态校验处 `UI_CHANGED/effect=none`，未进入输入或发送。手动点搜索框清除按钮后仍处于“新劳务云系统项目沟通群”；再次只调用一次相同 `send --target-name`，自动搜索、选择并进入“售前客服群”，输入后直接发送，返回 `OK/effect=applied/navigated=true/verification=local-record`，唯一匹配本地出站 `message_id=1989`。发送后截图可见目标群内一条测试消息且输入框为空；这证明本机客户端动作和落库，不证明群成员已收到。两次尝试中实际仅一条消息发送成功；第一轮的残留搜索词由本次预检造成，正式自动发送前需确保搜索框为空。此项验收当时尚未出包、安装、部署 agent2 或提交代码。首次定位时其他群名末尾 OCR“+”的误判仍未覆盖。
+
+2026-11-06 交付：用户要求先合并 master 再打包。功能分支提交 `644b6328` 经 Codeup/GitHub 推送后快进合入 master，两端 master 均推送成功；源码与锁文件版本同步为 `0.2.8`。首次隔离打包目录中的 npm workspace 链接无法被 Node 解析，止于共享依赖构建，未产出交付包；改用短路径从合并后的 master 提交 `644b6328` 重新归档，仅构建 WeCom。稳定 acceptance 发布者签包、离线验包（OCR/SQLite/AES）、目标已安装 Runtime 信任根及四项工具兼容核验、19 项打包定向测试、最终 ZIP 内容与 SHA-256 校验均通过。包内 `drivers/ps1/message-send.ps1` 与 master 源码 SHA-256 一致，包内版本 `0.2.8`；`build-info.json` 记录 master 基线且无业务源码叠加。交付目录 `C:/Users/PC/Downloads/AID-Work-WeCom-0.2.8-20261106-165016/`，同名 ZIP 与 `.zip.sha256` 在 Downloads；插件 SHA-256 `3f6a7708cf2f558c4413765ad06b524be4e68f2f1f2eb9d7c92a13ea4c468ae5`，交付 ZIP SHA-256 `9fb459c93d9b43a994482934980c4f7d7586fcb7e425a467f5be9f806e68bdb0`。本批不含 Runtime 安装器，未安装插件、部署 agent2 或恢复监控；agent2 实际业务验收待用户进行。
