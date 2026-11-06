@@ -139,6 +139,7 @@ image_gen:
     mode: async_task                        # async_task（提交任务+轮询）| sync（同步直返，冒烟定版用）
     base_url: https://dashscope.aliyuncs.com/api/v1
     default_size: "1280*960"                # 宽*高
+    enable_thinking: false                  # 思考模式（默认关：增加生成耗时，实测同提示词 T2I 28.5s vs 56.9s）
   vl:                                       # image_read 读图模型（provider/model 语法，走 chat_direct）
     # 2026-11-06：qwen-vl-plus/qwen-vl-max 旧代模型在百炼已下线（agent2 实测 404 model_not_exist，
     # 官方文档 ext/qwen-图像与视频理解-API接口.md 仅存 qwen3-vl 系列），定版 qwen3-vl-plus（实测可用）

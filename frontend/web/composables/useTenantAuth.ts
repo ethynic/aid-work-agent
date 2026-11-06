@@ -29,6 +29,7 @@ export interface TenantInfo {
   status: string
   expire_at?: string
   logo_file_id?: string | null  // 租户 Logo 文件 ID（无 Logo 时为 null）
+  show_ai_badge?: boolean       // 会话图片“AI生成”角标开关（undefined 视为 true，兼容存量登录态）
 }
 
 const admin = ref<TenantAdmin | null>(null)
