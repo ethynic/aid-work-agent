@@ -16,12 +16,21 @@ export interface SendBaseline {
   schema: number
 }
 
-export interface SendReceipt extends SendBaseline {
+export interface TextSendReceipt extends SendBaseline {
   version: 1
   text: string
   since: number
   until: number
 }
+export interface MediaSendReceipt extends SendBaseline {
+  version: 1
+  kind: 'image' | 'file'
+  /** 文件只比较完整文件名；图片没有可证明原字节身份的库字段。 */
+  fileName?: string
+  since: number
+  until: number
+}
+export type SendReceipt = TextSendReceipt | MediaSendReceipt
 
 type Query = (params: string[]) => Promise<Record<string, unknown>>
 
@@ -115,9 +124,16 @@ export async function verifySendReceipt(receipt: SendReceipt, ctx: OpContext, lo
         if (row.trusted !== true) diagnostic.untrusted++
         if (observed.length < OBSERVED_WINDOW_ROW_CAP) observed.push(row)
         else observedTruncated = true
-        if ((row.content_type === 0 || row.content_type === 2) &&
-          row.trusted === true && row.sender_id === receipt.account && row.text === receipt.text &&
-          typeof row.send_time === 'number' && row.send_time >= receipt.since && row.send_time <= receipt.until) matches.push(after)
+        if (row.sender_id === receipt.account && typeof row.send_time === 'number' &&
+            row.send_time >= receipt.since && row.send_time <= receipt.until) {
+          if ('text' in receipt) {
+            if ((row.content_type === 0 || row.content_type === 2) && row.trusted === true && row.text === receipt.text) matches.push(after)
+          } else if (receipt.kind === 'image') {
+            if (row.content_type === 101 && (row.attachment as Record<string, unknown> | undefined)?.kind === 'image') matches.push(after)
+          } else if (row.content_type === 102 &&
+              (row.attachment as Record<string, unknown> | undefined)?.kind === 'file' &&
+              (row.attachment as Record<string, unknown>).name === receipt.fileName) matches.push(after)
+        }
       }
       if (res.messages.length < SEND_VERIFY_PAGE_SIZE) {
         return matches.length === 1

@@ -127,13 +127,13 @@ export const TOOL_DEFS: WecomToolDef[] = [
     name: 'wecom_send_status',
     title: '企业微信发送结果对账',
     description:
-      '使用原wecom_message_send返回的receipt_id只读核对发送结果；不搜索、切群、输入、OCR或发送，不自动重发。' +
+      '使用原文本/图片/文件发送返回的receipt_id只读核对发送结果；不搜索、切群、输入、OCR或发送，不自动重发。' +
       '凭据绑定本机Windows用户、原企微账号/会话/源库与时间窗。查询success=true/effect=none只表示读取完成，' +
-      '必须检查data.send_status：confirmed仅表示原发送窗口内有唯一可信全文匹配的客户端记录，' +
+      '必须检查data.send_status：confirmed仅表示原发送窗口内有唯一匹配的客户端记录（文本须可信全文，文件须同名，图片不证明原文件字节一致），' +
       '不代表对方收到/已读；unknown仍可能已发送，稍后只读核对或人工处理，禁止重试原发送。' +
       '凭据缺失、失效、不可解密、换账号/库、歧义、扫描达到上限均不推断未发送。',
     zodShape: {
-      receipt_id: z.string().min(1).max(96).describe('原文本发送结果data.receipt_id，非路径；不得猜测或改用其他发送的凭据'),
+      receipt_id: z.string().min(1).max(96).describe('原发送结果data.receipt_id，非路径；不得猜测或改用其他发送的凭据'),
     },
     annotations: { title: '企业微信发送结果对账', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
@@ -141,15 +141,15 @@ export const TOOL_DEFS: WecomToolDef[] = [
     name: 'wecom_send_image',
     title: '企业微信发送图片消息',
     description:
-      '向 target_ref 指定的联系人/群聊发送 1 张本地图片（写动作，单次单目标单张，智能分发同 wecom_message_send）。' +
+      '向 target_ref 指定的联系人/群聊发送 1 张本地图片（写动作，单次单目标单张）。' +
       'M11a 直达模式：改传 target_name（与 target_ref 二选一），内部自动 search 定位' +
       '（身份校验 + 唯一匹配，同名多候选无法消歧返回 TARGET_AMBIGUOUS），data 附 resolved_target。' +
       '文件契约：image_path 必须是本机（装有 runtime 与 wecom-cli 的机器）上的**绝对路径**，' +
       '调用方（agent/上层）负责先把文件落到该机器；仅支持 png/jpg/jpeg/bmp/gif，≤20MB。' +
       '粘贴经剪贴板通道（Clipboard.SetImage + Ctrl+V），副作用：覆盖用户剪贴板且不恢复。' +
-      '终态由两条证据与 Jev 判定：输入区像素方差回落 + 会话列表预览出现「[图片]」；' +
-      '校验失败返回 EXECUTION_UNKNOWN（图片可能已发出，系统不会自动重试，请人工确认）。' +
-      '已知限制：发送前标题复核失败中止时，输入区可能残留图片预览（非文本草稿无法自动清除），需人工清理。',
+      '发送前从本地库唯一解析会话并记录基线，复制标题核对后用缓存输入点清草稿、粘贴、Enter。' +
+      '发送后唯一 101 本人出站记录才确认客户端有图片记录，不证明原文件字节一致或对方已收到。' +
+      '未命中/歧义/库失败返回 EXECUTION_UNKNOWN，保留 receipt_id 供 wecom_send_status 只读对账，绝不自动重发。',
     zodShape: {
       target_ref: z.string().min(1).optional().describe('发送目标句柄（wecom_chat_search 唯一匹配返回；与 target_name 二选一）'),
       target_name: z.string().min(1).max(100).optional().describe('直达模式：按会话名（联系人/群名，可含 @微信 后缀）定位目标，内部自动 search 并做身份校验（同名多候选无法消歧返回 TARGET_AMBIGUOUS）；与 target_ref 二选一'),
@@ -161,21 +161,19 @@ export const TOOL_DEFS: WecomToolDef[] = [
     name: 'wecom_send_file',
     title: '企业微信发送文件消息',
     description:
-      '向 target_ref 指定的联系人/群聊发送 1 个本地文件（写动作，单次单目标单个，智能分发同 wecom_message_send）。' +
+      '向 target_ref 指定的联系人/群聊发送 1 个本地文件（写动作，单次单目标单个）。' +
       'M11a 直达模式：改传 target_name（与 target_ref 二选一），内部自动 search 定位' +
       '（身份校验 + 唯一匹配，同名多候选无法消歧返回 TARGET_AMBIGUOUS），data 附 resolved_target。' +
       '文件契约：file_path 必须是本机（装有 runtime 与 wecom-cli 的机器）上的**绝对路径**，' +
-      '调用方（agent/上层）负责先把文件落到该机器；扩展名不限（任意文件），≤100MB，' +
-      '文件名去空白后不足 3 字符会被拒绝（OCR 发送校验无法可靠区分，请改名）。' +
+      '调用方（agent/上层）负责先把文件落到该机器；扩展名不限（任意文件），≤100MB。' +
       '粘贴经剪贴板通道（Clipboard.SetFileDropList + Ctrl+V），副作用：覆盖用户剪贴板且不恢复。' +
-      '终态由两条证据与 Jev 判定（基线差分，只认新出现的 token）：输入区文件名 token 消失 + 会话列表预览出现「[文件名]」；' +
-      '校验失败返回 EXECUTION_UNKNOWN（文件可能已发出，系统不会自动重试，请人工确认）。' +
-      '已知限制：发送前标题复核失败中止时，输入区可能残留文件卡片（非文本草稿无法自动清除），需人工清理；' +
-      '重发同名文件时会话列表预览可能不变，校验或报 EXECUTION_UNKNOWN（属保守方向，人工确认即可）。',
+      '发送前从本地库唯一解析会话并记录基线，复制标题核对后用缓存输入点清草稿、粘贴、Enter。' +
+      '发送后唯一 102 本人出站记录且附件名与文件名全等才确认客户端有同名文件记录。' +
+      '未命中/歧义/库失败返回 EXECUTION_UNKNOWN，保留 receipt_id 供 wecom_send_status 只读对账，绝不自动重发。',
     zodShape: {
       target_ref: z.string().min(1).optional().describe('发送目标句柄（wecom_chat_search 唯一匹配返回；与 target_name 二选一）'),
       target_name: z.string().min(1).max(100).optional().describe('直达模式：按会话名（联系人/群名，可含 @微信 后缀）定位目标，内部自动 search 并做身份校验（同名多候选无法消歧返回 TARGET_AMBIGUOUS）；与 target_ref 二选一'),
-      file_path: z.string().min(1).describe('文件本地绝对路径（扩展名不限，≤100MB，文件名去空白后须 ≥3 字符；调用方负责先落盘到本机）'),
+      file_path: z.string().min(1).describe('文件本地绝对路径（扩展名不限，≤100MB；调用方负责先落盘到本机）'),
     },
     annotations: { title: '企业微信发送文件消息', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },

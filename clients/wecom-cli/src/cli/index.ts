@@ -76,7 +76,7 @@ const USAGE = `aid-wecom — 企业微信操作 CLI / MCP Provider（M1）
   send-file (--target-ref <ref> | --target-name <会话名>) --file <本地绝对路径> [--json]
                             向目标发送 1 个文件（写动作；扩展名不限，
                             ≤100MB，路径须为装有 wecom-cli 的机器上的本地绝对路径，
-                            文件名去空白后须 ≥3 字符（过短拒发），调用方负责落盘；
+                            调用方负责落盘；
                             粘贴经剪贴板通道会覆盖用户剪贴板；
                             发送后校验失败不自动重试，effect=unknown 时请人工核对）
   unread [--name <名>] [--channel local-db] [--focus <名1,名2>] [--json]

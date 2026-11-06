@@ -36,8 +36,7 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
         Throw-DriverError 'UI_CHANGED' '进入目标后窗口尺寸或 DPI 变化，未输入或发送消息'
     }
     $title = Get-WeComCopiedTitle -Hwnd $mainHwnd -Section $Section -Point $currentPoint
-    $requireWechat = $Section -ne 'group' -and (($TargetName -match '@微信$') -or ($Section -eq 'contact' -and $Subtitle -eq '微信联系人'))
-    if (-not (Test-WeComTitleMatch -Title $title -Expected $TargetName -RequireWechat:$requireWechat -Group:($Section -eq 'group'))) {
+    if (-not (Test-WeComSendTitleMatch -Title $title -Expected $TargetName -Section $Section)) {
         # 无法区分默认搜索结果偏离与缓存标题点偏离；本次拒发，下次重新标定。
         if ($currentPoint.source -eq 'cache' -and (Test-Path -LiteralPath $currentPoint.cache_path)) {
             Remove-Item -LiteralPath $currentPoint.cache_path -Force

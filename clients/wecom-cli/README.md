@@ -124,11 +124,11 @@ node dist/src/cli/index.js read-group --target-name "新劳务云系统项目沟
 
 ## target_ref（唯一名称目标句柄）
 
-`search` 只在本地库命中且完整名称跨联系人/群聊类型也唯一时签发 5 分钟有效的本机 HMAC 句柄，绑定当前账号和目标完整名称。新句柄没有 OCR 坐标。过期、篡改、切换账号或名称不再唯一时拒绝使用。旧含坐标句柄的坐标不会用于 `select`；图片/文件发送在每轮阶段驱动前重查绑定账号，旧无账号句柄拒绝。
+`search` 只在本地库命中且完整名称跨联系人/群聊类型也唯一时签发 5 分钟有效的本机 HMAC 句柄，绑定当前账号和目标完整名称。新句柄没有 OCR 坐标。过期、篡改、切换账号或名称不再唯一时拒绝使用。旧含坐标句柄的坐标不会用于 `select`；图片/文件发送在任何 UI 前核对账号、本地库目标唯一性与发送基线，旧无账号句柄拒绝。
 
 ## --target-name 直达模式
 
-`send` / `send-image` / `send-file` / `read-session` 仍支持 `target_name` 与 `target_ref` 二选一。文本发送和读取沿各自本地库目标解析；图片、文件发送的内部导航使用本地库唯一名称搜索和新 `select`。图片、文件发送阶段本身仍使用 OCR 判定，不属于本次搜索/选择去 OCR 范围。
+`send` / `send-image` / `send-file` / `read-session` 仍支持 `target_name` 与 `target_ref` 二选一。文本发送和读取沿各自本地库目标解析；图片、文件先由本地库唯一解析完整名称，再按双点缓存搜索、复制标题并发送。
 
 ## search 命令（本地库名称匹配）
 
@@ -149,100 +149,33 @@ node dist/src/cli/index.js read-group --target-name "新劳务云系统项目沟
 
 文本发送仅支持已验证版本的本地库。发送前解析当前账号、本人显示名和唯一目标，并记录消息基线；本地库不可用时拒发。独立 calibrate 命令可手动重标定，send 在双点缓存缺失或窗口宽高/DPI 变化时自动执行同一标定：搜索本人名、Enter 打开默认自会话，GLM 一次定位标题首字与输入区中心，复制自会话标题与本人名全等后缓存窗口相对坐标。缓存有效时不调用 GLM 或 OCR。
 
-send 搜索目标名时先用主线程焦点与搜索框区域内的 caret 确认 Ctrl+F 已聚焦搜索框，才清理并输入搜索词；全文复制回读且同进程新结果面板出现后才 Enter 打开默认会话。复制标题与目标全等（微信联系人须为明确的 `名字@微信`）后点击缓存输入点、Ctrl+A/Delete 清草稿、把发送文本复制到剪贴板并 Ctrl+V 粘贴、Enter 发送。不回读输入内容；单行和多行均覆盖系统剪贴板且不立即恢复，避免企微异步粘贴取到旧内容。标题不匹配时本次拒发并清除旧坐标缓存，下一次重新标定。发送后仅用本地库唯一出站记录核验；未知结果保留回执供 send-status 只读对账，不自动重发。文本发送链路不调用 chat-search/chat-select 的 OCR/Jev，也不使用旧 OCR 终态回退。独立 search/select 已改成本地目录与标题复制；媒体发送阶段仍保留原 OCR 判定。
+send 搜索目标名时先用主线程焦点与搜索框区域内的 caret 确认 Ctrl+F 已聚焦搜索框，才清理并输入搜索词；全文复制回读且同进程新结果面板出现后才 Enter 打开默认会话。复制标题与目标全等（微信联系人须为明确的 `名字@微信`）后点击缓存输入点、Ctrl+A/Delete 清草稿、把发送文本复制到剪贴板并 Ctrl+V 粘贴、Enter 发送。不回读输入内容；单行和多行均覆盖系统剪贴板且不立即恢复，避免企微异步粘贴取到旧内容。标题不匹配时本次拒发并清除旧坐标缓存，下一次重新标定。发送后仅用本地库唯一出站记录核验；未知结果保留回执供 send-status 只读对账，不自动重发。文本发送链路不调用 chat-search/chat-select 的 OCR/Jev，也不使用旧 OCR 终态回退。独立 search/select 与媒体发送也已改为本地目录、双点缓存和标题复制。
 
 ## send-image 命令（M7：发送图片）
 
-向 target_ref 目标发送 1 张本地图片（写动作，零自动重试）。编排骨架与 `send` 同源
-（M7 抽取的 `src/operations/navigate.ts` 智能分发共享实现），发送阶段驱动
-`drivers/ps1/send-image.ps1`。E2 真机验证 2026-09-28（`experiments/probes/e5-image`）。
+向唯一的 `target_ref` 或 `target_name` 目标发送 1 张本地图片。`--image` 须为本机绝对路径，支持 png/jpg/jpeg/bmp/gif、≤20MB；调用方负责先落盘。发送前本地库核对账号、唯一会话和消息基线并保存加密 receipt；双点缓存缺失时标定本人会话。Ctrl+F/Enter 打开目标，复制标题严格核对，点击缓存输入点并清草稿，`Clipboard.SetImage`、Ctrl+V、Enter。覆盖用户剪贴板且不立即恢复。
 
-- **文件契约**：`--image` 只收**本地绝对路径**——调用方（agent/上层）负责把文件落到装有
-  runtime 与 wecom-cli 的机器上；支持 png/jpg/jpeg/bmp/gif，**≤20MB**。TS 校验语义：
-  不存在/类型不符/超限/相对路径 → INVALID_ARGUMENT；路径存在但读取失败 → CONFIG_MISSING。
-  target_ref 可使用新搜索签发的无坐标账号绑定句柄。
-- **发送链路与判定链**（驱动内）：Jev #1 三问判定当前会话（措辞同 send；非目标 →
-  navigate_required 交还 TS 编排 search+select；输入区有用户草稿 → UI_CHANGED 中止）→
-  点输入框 → 取输入区（x∈[0.35w,0.90w]、y∈[0.82h,0.95h]）灰度方差基线 std0 →
-  `Clipboard.SetImage`（Bitmap FromFile，5 次重试×150ms，全败 CONFIG_MISSING）→
-  attachstate Ctrl+V → 1.5s 后方差复测：std1 ≤ std0+8 → UI_CHANGED「图片预览未出现
-  （粘贴可能未生效）」，**此时未按 Enter，无发送副作用** → 发送前标题复核（同 send 严格
-  匹配）→ Send-WeComEnter → 1.8s → 终态证据双判据：①输入区方差回落（std2 < std0+8）
-  ②会话列表（左栏）boxes OCR 归一化含「[图片]」；Jev #2 两问可用以其判定为准
-  （method=jev；state 含方差数值、列表证据行、图片文件名+sha256+大小；注明图片消息
-  无文本气泡属正常），no/unclear → EXECUTION_UNKNOWN；Jev 不可用/答案非法降级规则
-  双判据须 2/2 全过（method=rule_2of2），<2/2 → EXECUTION_UNKNOWN。
-- **副作用**：粘贴经剪贴板通道，**覆盖用户剪贴板且不恢复**（与 send 多行通道同款刻意
-  行为）；成功后剪贴板仍保留该图片。
-- **已知限制**：发送前标题复核失败中止时，输入区可能残留图片预览需**人工清理**——
-  图片预览不是文本草稿，Ctrl+A 清不掉，ESC 会最小化企微（禁用），驱动不做任何清理动作。
-- **artifact**：`send-image-<ts>/`（两轮分发则为两个目录）含 step1-precheck /
-  step2-baseline / step3-pasted / step4-after 四步截图 + `driver-log.txt`（记图片
-  文件名/sha256/大小/方差数值/Jev 摘要；**不复制图片本体**）。返回 data 附
-  `input_stddev:{before,paste,after}`、`image:{name,size_bytes,sha256}`、
-  `sent_verification`（method=jev|rule_2of2）、`navigated` 与 `timing_ms`。
-- MCP 工具 `wecom_send_image`（target_ref + image_path），description 注明同一文件契约。
+Enter 后只读本地库，基线后时间窗内唯一 101 本人出站记录表示**客户端有唯一图片记录**，不证明与原图片字节一致，也不代表对方已收到。无记录、多记录或库故障返回 `EXECUTION_UNKNOWN`，用 `receipt_id` 调 `send-status` 只读对账，绝不自动重发。此 W26 路径尚无真实 101 样本或媒体真机发送验收。
 
 ## send-file 命令（M8：发送文件）
 
-向 target_ref 目标发送 1 个本地文件（写动作，零自动重试）。编排骨架与 `send`/`send-image`
-同源（`src/operations/navigate.ts` 智能分发共享实现），发送阶段驱动
-`drivers/ps1/send-file.ps1`。E3 真机验证 2026-09-28（`experiments/probes/e6-file`）。
+向唯一的 `target_ref` 或 `target_name` 目标发送 1 个本地文件。`--file` 须为本机绝对路径，扩展名不限、≤100MB；调用方负责先落盘，极短文件名也可发送。发送前本地库核对账号、唯一会话和消息基线并保存加密 receipt；双点缓存缺失时标定本人会话。Ctrl+F/Enter 打开目标，复制标题严格核对，点击缓存输入点并清草稿，`Clipboard.SetFileDropList`、Ctrl+V、Enter。覆盖用户剪贴板且不立即恢复。
 
-- **文件契约**：`--file` 只收**本地绝对路径**——调用方（agent/上层）负责把文件落到装有
-  runtime 与 wecom-cli 的机器上；**扩展名不限**（任意文件），**≤100MB**（对齐 RPA
-  AttachmentDownloader 先例），**文件名去空白后须 ≥3 字符**（「a」「ab」这类极短名无论
-  主干还是全名都只有 1-2 字符，OCR contains 判据无法与无关 token 区分 → INVALID_ARGUMENT
-  拒发提示改名；「a.txt」不在拒绝范围——主干过短时驱动回退用完整文件名做匹配键）。TS
-  校验语义：不存在/是目录/超限/相对路径/文件名过短 → INVALID_ARGUMENT；路径存在但读取
-  失败 → CONFIG_MISSING（SHA-256 由 TS 计算，仅供日志/结果摘要，驱动不复算）。target_ref
-  可使用新搜索签发的无坐标账号绑定句柄。
-- **发送链路与判定链**（驱动内）：Jev #1 三问判定当前会话（措辞同 send-image；非目标 →
-  navigate_required 交还 TS 编排 search+select；输入区有用户草稿 → UI_CHANGED 中止，
-  上次失败尝试残留的文件卡片同样会被 input 判空拦下）→ 点输入框 → 取输入区
-  （y≥0.75h、x∈(聊天区左界 max(0.10w,620), 0.74w]——E3 标定带；左界像素锚定防宽窗口
-  漏卡片、右界 0.74w 排除外部联系人「智能总结」侧栏，同 chat_ocr.py input 模式阈值）
-  OCR 干净基线 → `Clipboard.SetFileDropList`（StringCollection + 绝对路径，5 次重试×
-  150ms，全败 CONFIG_MISSING）→ attachstate Ctrl+V → 1.5s 后粘贴校验：输入区出现
-  **基线没有的新 token** 且归一化 contains 文件名主干（去扩展名防 OCR 把 .txt 误读，
-  取前 12 字；主干归一化后 <3 字符回退完整文件名匹配键）——不含 → UI_CHANGED「文件卡片
-  未出现（粘贴可能未生效）」，**此时未按 Enter，无发送副作用** → 发送前标题复核（同
-  send-image 严格匹配）→ Send-WeComEnter → 1.8s → 终态证据双判据（同为**基线差分**，
-  只认基线之后新出现的 token，防占位符/侧栏/其他会话预览等既有 token 假命中）：①输入区
-  文件名 token 消失（复测粘贴校验同带）②会话列表（左栏 x0<0.40w）新 token 归一化含
-  「[+文件名主干」或文件名主干（列表预览格式实测「[e3-test-file.txt]」，容忍括号误读）；
-  Jev #2 两问可用以其判定为准（method=jev；state 含两判据结果、列表证据行、文件名+
-  sha256+大小；注明文件消息无文本气泡属正常、重发同名文件列表预览不变属正常），no/
-  unclear → EXECUTION_UNKNOWN；Jev 不可用/答案非法降级规则双判据须 2/2 全过
-  （method=rule_2of2），<2/2 → EXECUTION_UNKNOWN。
-- **副作用**：粘贴经剪贴板通道，**覆盖用户剪贴板且不恢复**（与 send-image 同款刻意
-  行为）；成功后剪贴板仍保留该文件列表。
-- **已知限制**：发送前标题复核失败中止时，输入区可能残留文件卡片需**人工清理**——
-  文件卡片不是文本草稿，Ctrl+A 清不掉，ESC 会最小化企微（禁用），驱动不做任何清理动作；
-  **重发同名文件**时会话列表预览保持不变、基线差分不命中 → 规则链可能报
-  EXECUTION_UNKNOWN（保守方向：文件实际已发出，人工确认即可；Jev 链有重发例外提示）。
-- **artifact**：`send-file-<ts>/`（两轮分发则为两个目录）含 step1-precheck /
-  step2-baseline / step3-pasted / step4-after 四步截图 + `driver-log.txt`（记文件
-  文件名/sha256/大小/匹配键/判据结果/Jev 摘要；**不复制文件本体**）。返回 data 附
-  `paste_check:{stem,paste_hit,input_gone,list_hit}`（stem=实际匹配键：主干，主干
-  过短时为完整文件名）、`file:{name,size_bytes,sha256}`、`sent_verification`
-  （method=jev|rule_2of2）、`navigated` 与 `timing_ms`。
-- MCP 工具 `wecom_send_file`（target_ref + file_path），description 注明同一文件契约。
+Enter 后只读本地库，基线后时间窗内唯一 102 本人出站记录且 `attachment.name` 与文件名全等，表示**客户端有唯一同名文件记录**，不代表对方已收到。无记录、多记录、名称不符或库故障返回 `EXECUTION_UNKNOWN`，用 `receipt_id` 调 `send-status` 只读对账，绝不自动重发。此 W26 路径尚无真实 102 样本或媒体真机发送验收。
 
 ## 运行依赖
 
 - **Windows（win32-x64）**，已登录且未锁屏的交互桌面会话；
 - 企业微信 Windows 客户端（WXWork.exe）**已登录**（5.0.9 实测）；
 - PowerShell（powershell.exe 在 PATH）；
-- `add-customer` / `send-image` / `send-file` 的业务阶段仍需 OCR：仓库根 `venv` 的 python + `rapidocr_onnxruntime`
-  （`drivers/ps1` 上四级为仓库根，取 `venv\Scripts\python.exe`；缺失 → CONFIG_MISSING）；`probe` 不依赖 OCR；
-- `send-image` / `send-file` 等仍用 Jev 判定的业务阶段可选 `TYPESAFE_API_KEY`；本地名称搜索、进入会话和文本发送不使用 Jev；
+- `add-customer` 业务阶段仍需 OCR；图片/文件发送与文本发送均不调用 OCR/Jev。
+- 本地库解密和只读核验仍需 Python 运行环境；双点缓存缺失时需要已配置的 GLM 标定代理。
 - `read-session` 的**模型主通道**另需可选环境变量 `AID_WECOM_SERVER_URL`（服务端地址）+
   `AID_WECOM_SERVER_TOKEN`（服务端长期 token，管理端 `POST /api/saas/client-bindings/static`
   签发）——两者均未配置时直接走本地 OCR 通道（不报错）；模型通道按次计积分，详见
   M10b 章节。
 
-## 关键实现事实（真机实测，勿随意改）
+## 关键实现事实（历史实验记录；当前发送以 W26 为准）
 
 - 主窗口 = 可见、class `WeWorkWindow`、标题「企业微信」、≥600x400 且面积最大者；hwnd 动态，每次重新解析。
 - 内容子窗口 class `WXworkWindow - 企业微信-<页名>`，类名编码页名（M1 时代页面状态校验用；

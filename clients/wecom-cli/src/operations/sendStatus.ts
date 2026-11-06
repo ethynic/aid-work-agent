@@ -29,7 +29,9 @@ export function createWecomSendStatusOperation(deps: {
         const check = await verifySendReceipt(receipt, opCtx, deps.localdb ?? {})
         if (check.status === 'confirmed') assertSendReceiptPresent(root!, args.receipt_id)
         return { message: check.status === 'confirmed'
-          ? '已匹配原发送窗口内的唯一可信客户端记录；不代表对方已收到或已读'
+          ? ('kind' in receipt
+            ? (receipt.kind === 'image' ? '客户端有唯一图片出站记录；不证明与原图片字节一致，也不代表对方已收到' : '客户端有唯一同名文件出站记录；不代表对方已收到')
+            : '已匹配原发送窗口内的唯一可信客户端记录；不代表对方已收到或已读')
           : '发送结果仍未知，请稍后只读对账或人工核对，勿自动重发',
         data: { receipt_id: args.receipt_id, send_status: check.status, reconciliation: check } }
       } catch (err) {

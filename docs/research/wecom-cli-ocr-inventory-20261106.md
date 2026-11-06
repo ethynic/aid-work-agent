@@ -2,7 +2,7 @@
 
 ## 范围与状态
 
-基于 WeCom CLI 0.2.8 源码逐个检查实际 OCR 调用；按讨论目的整理为 **9 组原使用场景**。`localdb-login.ps1` 仅在注释中提到 OCR，实际只枚举窗口，不调用 OCR。`wecom_read_sessions`、`wecom_session_directory`、群目录/群轮询等稳定本地库读取没有 OCR 路径。2026-11-06 W21 源码调整后，第 5、6 项 operation 已停止调用 OCR 驱动；W22 源码调整后，第 2 项搜索框准备/清理不再调用搜索框状态 OCR；W24 源码调整后，第 1 项文本发送全链路不再调用 OCR。2026-11-07 W25 源码将独立搜索/选择改成本地库名称判断、默认搜索结果 Enter 与标题复制，第 3、4 项不再运行 OCR；旧 `chat-search.ps1` 脚本仍在仓库但 operation 不派发。媒体发送阶段和添加客户仍会运行 OCR。W25 独立测试、三例本机真机验收及 CR 通过，未部署。
+基于 WeCom CLI 0.2.8 源码逐个检查实际 OCR 调用；按讨论目的整理为 **9 组原使用场景**。`localdb-login.ps1` 仅在注释中提到 OCR，实际只枚举窗口，不调用 OCR。`wecom_read_sessions`、`wecom_session_directory`、群目录/群轮询等稳定本地库读取没有 OCR 路径。W21/W22/W24/W25 分别去除读取、搜索框清理、文本发送、会话搜索与进入的 OCR。2026-11-07 W26 源码将图片/文件发送改为双点缓存、剪贴板粘贴和本地库 101/102 唯一记录核验，第 7 项不再运行 OCR/Jev；尚无真实 101/102 样本或媒体真机验收。旧 `chat-search.ps1` 脚本仍在仓库但 operation 不派发。当前仍运行 OCR 的业务入口仅添加客户。W25 独立测试、三例本机真机验收及 CR 通过，未部署；W26 尚待独立 TEST/CR。
 
 | 序号 | 业务入口 | OCR 当前作用 | 已有非 OCR 通道 / 失败影响 | 源码 |
 |---|---|---|---|---|
@@ -12,13 +12,13 @@
 | 4 | 进入会话 `wecom_chat_select` | **W25 源码已移除 OCR**：复查唯一名称，Ctrl+F 输入全名 Enter，复制缓存点标题全等核对 | 进入会话仍会切换视图并清未读角标；标题不符拒绝报告成功 | [chat-select.ps1](../../clients/wecom-cli/drivers/ps1/chat-select.ps1) |
 | 5 | 读取会话 `wecom_read_session` 的旧 UI 路径 | **已退役**：旧 `target_name/ref` 只用本地库，失败报原码；显式 UI 报不支持 | 稳定 `session`/日期读取原已是本地库；旧无账号 ref 拒绝，不靠 UI 兜底 | [readSession.ts](../../clients/wecom-cli/src/operations/readSession.ts) |
 | 6 | 未读列表 `wecom_unread_list` 与监控 UI 兜底 | **已退役**：只用本地库；监控失败轮保留水位 | doctor 未设或 UI 兼容态也尝试受实际版本矩阵约束的本地库；失败明确报错 | [unreadList.ts](../../clients/wecom-cli/src/operations/unreadList.ts)、[watchPoll.ts](../../clients/wecom-cli/src/operations/watchPoll.ts) |
-| 7 | 发图片、发文件 | 发送前标题、输入区/预览、发送后气泡或列表结果；含 Jev 可选判断 | 当前仍是 UI/OCR 发送链，未接入文本的本地库发送回执；误读可能拒发或得到不确定结果 | [send-image.ps1](../../clients/wecom-cli/drivers/ps1/send-image.ps1)、[send-file.ps1](../../clients/wecom-cli/drivers/ps1/send-file.ps1) |
+| 7 | 发图片、发文件 | **W26 源码已移除发送链 OCR/Jev**：双点缓存、标题复制、剪贴板粘贴、Enter 后本地库核验 | 图片唯一 101 只证明客户端有图片记录，不证明原字节；文件唯一同名 102 证明客户端有同名文件记录。无真实媒体库样本与真机验收 | [send-image.ps1](../../clients/wecom-cli/drivers/ps1/send-image.ps1)、[send-file.ps1](../../clients/wecom-cli/drivers/ps1/send-file.ps1) |
 | 8 | 添加客户 | 搜索框、候选、确认对话框及结果/失败原因 | 这是 UI 写操作，现有本地库通道不承担添加客户；OCR 影响候选选择和结果判断 | [add-customer.ps1](../../clients/wecom-cli/drivers/ps1/add-customer.ps1) |
 | 9 | 登录探测 `wecom_probe` | **源码已移除 OCR 调用**；窗口枚举判断登录态，二维码截图供扫码，`qr_status_hint` 固定为 `unknown` | 窗口信息不能证明二维码是否过期或受限；现行探测不再依赖 OCR，待真机复验 | [probe.ps1](../../clients/wecom-cli/drivers/ps1/probe.ps1)、[localdb-login.ps1](../../clients/wecom-cli/drivers/ps1/localdb-login.ps1) |
 
 ## 剩余依赖的层次
 
-- **仍会运行 OCR 的业务入口**：第 7、8 项，即图片/文件发送阶段和添加客户。媒体发送的内部目标导航已改成本地库 search/select，但发送阶段仍调用共享 `Invoke-WeComChatOcr`；添加客户同时使用 `chat_ocr.py` 与 `add_customer_result.py`。
+- **仍会运行 OCR 的业务入口**：第 8 项添加客户，使用 `chat_ocr.py` 与 `add_customer_result.py`；W26 媒体发送入口不再调用共享 `Invoke-WeComChatOcr`。
 - **已退役但源码仍含 OCR**：`drivers/ps1/chat-search.ps1`、`read-session.ps1` 与 `unread-list.ps1` 仍直接调用 OCR，当前同名 TS operation 已不再派发它们；`_common.ps1` 还保留部分旧 OCR 搜索框助手。删除这些文件或函数前须核对发行包与手动调用入口。
 - **发行包依赖**：`clients/runtime-plugin-packaging/package.mjs` 仍为 `wecom` 设置 `ocr: true`，拷入 `ocr-python` 并执行 RapidOCR 启动检查。`wecom-cli/src/platform/localdb/driver.ts` 在发行态也使用该目录下的 `python.exe` 运行本地库解密和查询。因此文本发送虽不调用 OCR 识别，现有发行包仍依赖这份带 OCR 的 Python 资产；移除它之前需给本地库提供可用的 Python 运行环境，再调整打包检查。
 

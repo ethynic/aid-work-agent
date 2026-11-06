@@ -32,6 +32,7 @@
 | W23 文本发送标题复制 | GLM 标定首字坐标，企微自身复制标题后核对 | 🔧 进行中 | agent2 的 max 档定位→复制两轮成功；发送路径已改为只复制一次，完整发送待验收 |
 | W24 文本发送双点标定与去 OCR | 自会话标定标题与输入区，发送仅用本地库核验 | ✅ 完成（2026-11-06） | 双点缓存复用、目标标题核对与单聊发送真机通过；本地库命中出站记录，未部署 |
 | W25 会话搜索与进入去 OCR | 本地目录唯一匹配后 Ctrl+F/Enter，复制标题核对 | ✅ 完成（2026-11-07） | 整数 ID 与两项 P1 修复；独测、真机及 CR 通过，025bb14f，未部署 |
+| W26 图片与文件发送去 OCR | 双点缓存粘贴附件，Enter 后本地库只读对账 | ✅ 完成（2026-11-07） | 独测 Node 65/65、PS 标题行为及 CR 通过；无真实 101/102 样本和媒体真机验收，未部署 |
 
 ## W14 通用Runtime业务工具自动装配（2026-10-29）
 
@@ -831,6 +832,22 @@ P1 修复后独立 TEST（2026-11-06）：复核 `GetGUIThreadInfo` 的线程 ID
 本机自会话标定（2026-11-06）：主控重试 `node dist/src/cli/index.js calibrate --json`，约 22 秒、exit 0；返回的窗口相对标题首字 `(437,39)`、输入区中心 `(760,1245)`，窗口 `1117×1354`、DPI `96`。独立读取 `send-points.json` 的 schema 2 缓存，双点与窗口参数均与返回值一致。该结果证明本机自会话搜索、标题复制核对与双点缓存流程完成；GLM 给出的输入点未经过独立焦点验证，真实目标搜索与文本发送尚未验收，本次没有发送消息。
 
 本机文本发送验收（2026-11-06）：用户明确指定联系人后，主控运行 `send --target-name <指定联系人> --text <测试消息> --json`，约 16 秒、exit 0；CLI 返回 `OK/effect=applied`，复制标题与目标全等，输入点为缓存中的 `(760,1245)`，本地库唯一出站记录核验命中 `message_id=1990`。发送前后 schema 2 缓存内容及修改时间一致，证明本轮复用已有双点；未自动重发。此结果只证明企微客户端记录落库，不代表对方已收到。W24 开发与本机单聊主路径验收完成，未部署；其他 OCR 入口按独立事项继续处理。
+
+## W26 图片与文件发送去 OCR（2026-11-07）
+
+目标：复用 W24 已验证的双点缓存、自会话标定、搜索默认结果 Enter 与标题复制全等。发送前本地库唯一解析目标、账号、本人成员、源库和消息基线并保存加密 receipt；图片/文件驱动只清草稿、剪贴板粘贴和 Enter，不再调用 OCR/Jev 或视觉判据。发送后以原 receipt 只读核验：图片为唯一 101 本人出站记录，文件为唯一 102 且附件名全等的本人出站记录；未知保留凭据给 send-status，不重发。图片结论不声称原文件 SHA 一致。保留既有图片类型/大小、文件大小和 CLI/MCP 参数；去掉仅服务于 OCR 的极短文件名限制。没有真实 101/102 本地库样本，本轮合成投影及回执测试不能替代真机媒体验收。
+
+验收：无 OCR/Jev 驱动执行；缓存点与标题核对正确；101/102 唯一命中、歧义、未落库、文件名不符、库失败及 Enter 超时均按契约返回；账号切换在 UI 前拒发；unknown 的 send-status 只读、零重发。开发自测后交独立 TEST/CR；本轮不实际发送媒体、不部署。
+
+开发自测（2026-11-07）：`cd clients/wecom-cli && npm run build` exit 0；`node --test dist/tests/media-send.test.js dist/tests/send-receipt.test.js dist/tests/message-send-localdb-verify.test.js` 39/39、exit 0；`..\\..\\venv\\Scripts\\python.exe -m unittest discover -s tests/py -p test_send_messages.py -q` 10/10、exit 0。两个媒体 PS 脚本经 Windows PowerShell parser 检查 0 错且 UTF-8 BOM；实际媒体执行路径静态检索不到 `Invoke-WeComChatOcr`、Jev、旧 search/select 驱动调用；`git diff --check` exit 0。图片和文件唯一记录、未落库/歧义、文件名不符、库失败、驱动超时、账号切换及 send-status 仅只读均有合成回归。尚无真实 101/102 本地库样本、媒体真机发送或独立 TEST/CR，不视为业务验收完成。
+
+TEST 回炉（2026-11-07）：独立验证指出 Enter 后首轮未落库、第二轮等待时取消会漏出 `CANCELLED/effect=partial` 且无 receipt。轮询等待现纳入核验异常处理，统一返回 `EXECUTION_UNKNOWN/effect=unknown` 和原 receipt；动态测试按首轮读库后取消验证零重发。媒体 Ctrl+V 到 Enter 恢复旧驱动已使用的 1500ms 等待。`target-name.test.ts` 旧 OCR/Jev 导航夹具迁到 W26 本地库基线、无坐标账号句柄和单次驱动路径，保留唯一成功、无匹配、歧义、前缀陷阱及参数互斥；原文本参数矩阵亦保留。`npm run build` exit 0；`node --test dist/tests/media-send.test.js dist/tests/target-name.test.js dist/tests/send-receipt.test.js dist/tests/message-send-localdb-verify.test.js` 52/52、exit 0；随后补回原文本矩阵，`node --test dist/tests/target-name.test.js` 13/13、exit 0。Python `test_send_messages.py` 10/10、exit 0；两个媒体 PS parser 0 错、UTF-8 BOM 且 1500ms 等待存在；`git diff --check` exit 0。独立 TEST 对回炉代码复测及 CR 尚未完成。
+
+CR 标题规则回炉（2026-11-07）：独立审查指出 W25 无坐标联系人 ref 的副标题为空，裸名联系人在发送驱动中只接受全等，企微标题若显示 `名字@微信` / `名字 @微信` 则误拒。三条发送驱动统一复用 W25 select 的严格规则；PowerShell 合成行为覆盖裸名联系人两种微信后缀、任意后缀拒绝、群聊全等与三驱动接线。顺带修复 W24 文本发送同源缺口。群名字面以 `@微信` 结尾时搜索词被既有 `Open-WeComNamedChat` 截短，属于 W25 可用性边界、无真机样本，本轮不扩散独立 `chat-select`；后续另行验收。`send-title-wechat-regression.ps1` 9 项行为+3 驱动接线、`title-point-regression.ps1`、`send-search-gate-regression.ps1` 均 exit 0；五份 PS 文件 parser 0 错且 UTF-8 BOM；CLI `npm run build` exit 0；`git diff --check` exit 0（仅换行提示）。待独立 TEST/CR 复验。
+
+TEST 旧断言回炉（2026-11-07）：`message-send-localdb-verify.test.ts` 原静态顺序断言仍扫描旧 `Test-WeComTitleMatch` 名称，已仅改为新 `Test-WeComSendTitleMatch`，保留“标题核对早于清草稿与 Enter”断言。`npm run build` exit 0；媒体、目标名、回执、文本本地库四套 Node 联合 53/53、exit 0；PowerShell 标题行为 9 项/3 驱动接线 exit 0；`git diff --check` exit 0（仅换行提示）。待独立 TEST/CR 复验。
+
+独立 TEST/CR 收尾（2026-11-07）：最终构建、六文件 Node 联合 65/65、PowerShell 新旧三项脚本、五文件语法/BOM 与差异检查均通过；Python `test_send_messages.py` 10/10 的有效结果复用（Python 与夹具未改）。CR 复核发送标题规则、账号和目标预检、媒体回执及 Enter 后未知结果路径，无 P0/P1。此阶段仅完成源码与合成验证；真实 101/102 本地库样本和图片/文件真机发送均未验收，不据此宣称媒体业务已在客户机通过。
 
 ## W25 会话搜索与进入去 OCR（2026-11-07）
 

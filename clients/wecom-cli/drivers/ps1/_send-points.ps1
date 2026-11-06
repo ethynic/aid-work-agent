@@ -256,6 +256,16 @@ function Test-WeComTitleMatch {
     return [string]::Equals($Title, $Expected, [StringComparison]::Ordinal)
 }
 
+function Test-WeComSendTitleMatch {
+    param([string]$Title, [string]$Expected, [string]$Section)
+    # 与 chat-select 一致：先严格全等；只有联系人可再接受两种完整微信后缀。
+    $matched = Test-WeComTitleMatch -Title $Title -Expected $Expected -Group:($Section -eq 'group')
+    if (-not $matched -and $Section -eq 'contact') {
+        $matched = Test-WeComTitleMatch -Title $Title -Expected $Expected -RequireWechat
+    }
+    return $matched
+}
+
 function Assert-WeComSearchCaret([int64]$Hwnd) {
     # 2026-11-06 真机只按 Ctrl+F：主线程 focus/caret 均为主 HWND，caret=(212,27)；
     # 同刻截图搜索框 x≈176..353、y≈23..54。无该证据时不能 Ctrl+A/Delete。

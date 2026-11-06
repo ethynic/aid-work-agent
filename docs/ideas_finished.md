@@ -196,6 +196,7 @@
 | 20261106-2052 | wecom-cli 登录探测移除 OCR | ✅ 已完成开发；登录态按窗口枚举判断，扫码截图保留，待真机复验。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-probe-remove-ocr.md) |
 | 20261106-1200 | 企微文本发送双点标定与去 OCR | ✅ 已完成开发；双点缓存复用单聊发送及本地库核验真机通过，未部署。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w24-文本发送双点标定与去-ocr2026-11-06) |
 | 20261107-0001 | 企微会话搜索与进入去 OCR | ✅ 已完成开发；独测、真机及 CR 通过，未部署。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w25-会话搜索与进入去-ocr2026-11-07) |
+| 20261107-0037 | 企微图片与文件发送去 OCR | ✅ 已完成开发；独测和 CR 通过，媒体真机与真实库样本待验。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w26-图片与文件发送去-ocr2026-11-07) |
 | 20261105-2300 | wecom-personal-rpa 全量删除（废弃功能清退） | ✅ 已完成开发（cleanup SQL 与 nginx 同步待择机执行） | 已被 runtime+wecom-cli 取代的企微个人号 RPA 整链路删除。 | — | [删除计划](plans/plan-wecom-personal-rpa-removal.md) |
 | 20261105-1011 | 企微群聊目录平台标签 | ✅ 已完成开发；群聊不显示会话级平台，仅微信发言人显示标记，待真机视觉验收。 | [设计](design/wecom/wecom-conversation-operations-design.md#621-后续任务群聊平台标签与逐消息发言人) | [计划](plans/plan-wecom-group-platform-label.md) |
 | 20261008-1603 | 飞书、钉钉对话服务接入 AgentRunner | ✅ 已完成开发（待部署真机验收）：保留原渠道业务，仅接入独立 Runner 并传递可信渠道来源；两轮审核修复完成。 | [接入边界](system/agent-application-architecture-design.md#81-后续接入的固定边界) | [飞书](channel/feishu/implementation_plan.md#agentrunner-接入后续独立事项) / [钉钉](channel/dingtalk/implementation_plan.md#agentrunner-接入后续独立事项) / [审核](reviews/feishu-dingtalk-agentrunner-review-2026-10-09.md) |

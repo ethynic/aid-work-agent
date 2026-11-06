@@ -413,7 +413,7 @@ test('账号匹配 target_ref：核对通过正常发送（local-record 命中�
 
 test('文本发送先核对目标标题才清草稿，Enter 后不再走 OCR 终态', () => {
   const src = readFileSync(fileURLToPath(new URL('../../drivers/ps1/message-send.ps1', import.meta.url)), 'utf8')
-  const titleCheck = src.indexOf('Test-WeComTitleMatch -Title $title')
+  const titleCheck = src.indexOf('Test-WeComSendTitleMatch -Title $title')
   const clear = src.indexOf('Clear-WeComFocusedInput -Hwnd $mainHwnd')
   const enter = src.indexOf('Send-WeComEnter -Hwnd $mainHwnd', clear)
   assert.ok(titleCheck > -1 && clear > titleCheck && enter > clear)
@@ -499,6 +499,7 @@ test('驱动超时返回恢复ID；迟到落库后只读对账收敛，重复查
       assert.equal(result.effect, 'none')
     }
     const receipt = await loadSendReceipt(f.artifactRoot, id)
+    assert.ok('text' in receipt)
     assert.equal(receipt.text, 'synthetic-14')
     const disk = readFileSync(join(f.artifactRoot, id, 'send-receipt.dpapi'), 'utf8')
     assert.ok(!disk.includes(receipt.text) && !disk.includes(SELF), '真实DPAPI密文不得包含正文或账号明文')
@@ -542,6 +543,7 @@ test('同文歧义、时间窗外相同文本和扫描上限都保持unknown', w
   try {
     const id = await unknownReceipt(f)
     const receipt = await loadSendReceipt(f.artifactRoot, id)
+    assert.ok('text' in receipt)
     for (const mode of ['ambiguous', 'outside', 'limit'] as const) {
       let pages = 0
       const localdb: LocaldbReadDeps = { ...f.deps, runPyFn: async (params, opts) => {
@@ -570,6 +572,7 @@ test('可读卡片和系统事件即使同文且trusted也不能确认普通文�
   try {
     const id = await unknownReceipt(f)
     const receipt = await loadSendReceipt(f.artifactRoot, id)
+    assert.ok('text' in receipt)
     for (const ct of [80, 1001, 2]) {
       const localdb: LocaldbReadDeps = { ...f.deps, runPyFn: async (params, opts) => {
         if (params[params.indexOf('--task') + 1] !== 'send-messages') return runLocaldbPy(params, opts)
