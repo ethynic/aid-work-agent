@@ -3,16 +3,16 @@
  *
  * 编排（M7 起由 navigate.ts 的 runStageWithNavigation 共享承载，send-image 同源复用）：
  * verifyTargetRef 解出目标（过期 TARGET_REF_STALE / 篡改 INVALID_ARGUMENT；坐标可有无
- * 皆可，本命令不要求）→ spawn message-send.ps1（发送阶段驱动：OCR 两带 + Jev 三问判定
- * 当前会话/输入点/草稿）→ 驱动返回 navigate_required=true（当前会话不是目标/无法判定）
+ * 皆可，本命令不要求）→ spawn message-send.ps1（发送阶段驱动：OCR 标题带 + Jev 判断
+ * 当前会话/输入点，标题规则确认后替换输入区内容）→ 驱动返回 navigate_required=true（当前会话不是目标/无法判定）
  * → 内部编排：chatSearch（Jev 选 best，须与目标消歧键一致，否则规则唯一匹配项）→
  * chatSelect（点击进会话并校验标题）→ 再次 spawn message-send.ps1 完成发送。两轮都不在
  * 目标会话 → TARGET_NOT_FOUND；编排失败透传对应错误码（此时未发送任何消息），不重试。
  *
- * 发送阶段驱动契约：当前会话对 → 点输入框（Jev 选 token / 降级比例坐标）→ 输入
- * （单行 Send-WeComText 逐字；多行剪贴板粘贴通道 + OCR 回读校验，副作用：覆盖用户
- * 剪贴板且不恢复）→ 发送前规则复核标题（不一致 → 清空自己刚输入的草稿 + UI_CHANGED；
- * 用户草稿一律 UI_CHANGED 中止不清除）→ Enter → Jev 终态判定（降级 M2 三选二）。
+ * 发送阶段驱动契约：目标标题确认 → 点输入框（Jev 选 token / 降级比例坐标）→
+ * Ctrl+A/Delete 清空旧内容（失败中止）→ 单行沿用 Send-WeComText，多行沿用剪贴板
+ * 粘贴（多行覆盖用户剪贴板且不恢复）→ 发送前规则复核标题（不一致 → 清空本次输入 + UI_CHANGED）→ Enter →
+ * Jev 终态判定（降级 M2 三选二）。已有未发送文字会被覆盖。
  *
  * 写语义：发送后校验失败 → EXECUTION_UNKNOWN，绝不自动重试；驱动超时（写可能已落地）
  * 同样归并 EXECUTION_UNKNOWN，而不是 RESULT_TIMEOUT；驱动执行中被取消 →
@@ -260,8 +260,8 @@ export function createWecomMessageSendOperation(
           if (args.text.length > MAX_TEXT_LENGTH) {
             return `text 长度不能超过 ${MAX_TEXT_LENGTH} 字（请调用方分段发送）`
           }
-          // 多行文本（含 \r\n）放行：驱动侧经剪贴板粘贴通道输入（attachstate Ctrl+V，
-          // 2026-09-28 真机验证），副作用是覆盖用户剪贴板且不恢复
+          // 文本单行/多行均放行：驱动侧先清空目标输入区，再沿原单行逐字/多行剪贴板方式输入；
+          // 副作用是覆盖原未发送文字；多行还覆盖用户剪贴板且不恢复
           return null
         },
         async (opCtx, tracker) => {

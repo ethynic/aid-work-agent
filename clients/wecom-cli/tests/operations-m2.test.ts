@@ -204,9 +204,9 @@ test('message_send：标题不一致 → UI_CHANGED 透传，effect=none（动�
   assert.equal(r.retryable, false)
 })
 
-test('message_send：输入框残留草稿 → UI_CHANGED 透传，effect=none', async () => {
+test('message_send：输入框清理失败 → UI_CHANGED 透传，effect=none', async () => {
   const { op } = makeSendOp(async () => {
-    throw new CodedOperationError('UI_CHANGED', '输入框存在残留草稿，为避免串消息已中止')
+    throw new CodedOperationError('UI_CHANGED', '目标输入框清理键未成功投递，已中止')
   })
   const r = await op.execute({ target_ref: VALID_REF, text: 'hello' }, silentCtx())
   assert.equal(r.code, 'UI_CHANGED')

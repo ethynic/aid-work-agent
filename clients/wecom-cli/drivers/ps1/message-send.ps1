@@ -4,19 +4,17 @@
 # 流程：
 #   1) 解析主窗口 → PrintWindow 截图 → OCR 两带（boxes 模式拿 token+坐标）：
 #      标题带（y<0.07h，聊天区顶部）+ 底部输入带（y>0.80h，含工具栏图标行与输入区）
-#   2) Jev #1（三问合一）：right_conversation（当前会话是否目标）/ input_point（点哪
-#      聚焦文本输入框）/ has_draft（输入区是否有草稿）。降级链：标题归一化规则匹配 /
-#      比例坐标 (0.500w,0.900h)（M2 标定）/ input 模式判空（占位符与图标碎字剔除）
+#   2) Jev #1：right_conversation（当前会话是否目标）/ input_point（聚焦文本输入框位置）；
+#      清理前必须由标题规则确认目标会话，不接受 Jev 单独授权清理。
 #   3) 分支：非目标/无法判定 → 返回 data {navigate_required:true, reason}（驱动层 ok=true，
-#      TS 接管）；输入区有草稿 → UI_CHANGED 中止（**绝不动用户草稿**，防串消息）；
-#      目标且干净 → 点击 input_point → 输入：单行 Send-WeComText 逐字；多行（含 CR/LF）
-#      经剪贴板粘贴通道——Set-Clipboard 重试 → attachstate Ctrl+V；发送结果由后续
+#      TS 接管）；目标确认 → 点击 input_point → 重新核对当前标题 → Ctrl+A/Delete
+#      清理编辑区 → 单行沿用 Send-WeComText，多行沿用剪贴板 Ctrl+V；发送结果由后续
 #      本地库记录优先核验，粘贴后不再凭截图文字决定是否按 Enter。
 #      副作用：多行发送会覆盖用户剪贴板且**不恢复**（weixin-cli 先例：paste handler 异步
 #      读剪贴板，恢复竞态会粘贴到错的内容；README 已注明）
 #   4) 发送前会话复核（规则，不发 Jev——快）：重新截图 OCR 标题带，归一化严格匹配目标名
 #      （剥 @微信 双向、相等或「名+@/（」前缀、防「陆伟」落入「陆伟民」前缀陷阱）；
-#      不一致 → **清空自己刚输入的草稿**（Clear-WeComFocusedInput，同 Clear-WeComSearchBoxV2
+#      不一致 → **清空自己刚输入的文本**（Clear-WeComFocusedInput，Ctrl+A/Delete
 #      原语；自己输入的可以清）→ UI_CHANGED（防把文字留给错误会话）
 #   5) Send-WeComEnter 发送 → 1.2s → 截图 → OCR（input/bubble/preview 三模式终态证据）
 #   6) Jev #2（两问合一）：sent_successfully / failure_mode；no/unclear → EXECUTION_UNKNOWN
@@ -26,8 +24,8 @@
 #   input_point:{x,y,source}|null, timing_ms, screenshot_paths }。
 # P2 任务 3.4（发送动作与核验分离，设计 §4.3）：-SkipVerify 跳过 step5/6 终态证据与判定，
 #   发送完成后直接返回 sent=true/verified=false（TS 层用本地库核验接管）；-VerifyOnly 不做
-#   输入/发送（跳过 step0.5-4），仅执行既有 step5 终态证据 + step6 判定（TS 在本地库核验
-#   未命中时补做 OCR 气泡核验），input_point 返回 null；两开关互斥，既有默认行为零改动。
+#   输入/发送（跳过 step1-4），仅执行既有 step5 终态证据 + step6 判定（TS 在本地库核验
+#   未命中时补做 OCR 气泡核验），input_point 返回 null；两开关互斥。
 # artifact：各步截图 + driver-log.txt（Jev state/answer 摘要、OCR 摘要、timing；
 # 绝不含 TYPESAFE_API_KEY——key 只在 Invoke-WeComJev 内经临时头文件瞬态使用）。
 # 注意：本文件含中文，必须以 UTF-8 with BOM 保存。
@@ -110,19 +108,6 @@ function Get-WeComBandTokens {
     } | Sort-Object { [double]$_.y0 }, { [double]$_.x0 })
 }
 
-function Get-WeComDraftTokens {
-    param([Parameter(Mandatory)]$Boxes, [Parameter(Mandatory)][int]$W,
-        [Parameter(Mandatory)][int]$H)
-    $chatXMin = [Math]::Min(620, [int]($W * 0.34))
-    return @($Boxes | Where-Object {
-        $normalized = ConvertTo-WeComNormalized ([string]$_.text)
-        [double]$_.y0 -ge ($H * 0.855) -and [double]$_.y1 -le ($H * 0.97) -and
-        [double]$_.x0 -gt $chatXMin -and [double]$_.x0 -lt ($W * 0.74) -and
-        $normalized -ne '' -and $normalized -notin @('发送消息','输入消息','聊点什么') -and
-        $normalized -notmatch '^发送\([s5]\)$'
-    } | Sort-Object { [double]$_.y0 }, { [double]$_.x0 })
-}
-
 function Test-WeComTextInputToken($Token, [int]$W, [int]$H) {
     # 工具栏约 0.83h；右侧总结/群信息栏也不是编辑区。与 input OCR 判空带一致，
     # 只有编辑区内部 token 可供 Jev 选择；空白框保留既有 0.5w/0.9h 回退坐标。
@@ -197,14 +182,8 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     }
 
     if (-not $VerifyOnly) {
-    # 0.5) 搜索框残留防御：空搜索不聚焦/清除；非空只按已实证布局点击搜索专属清空点。
-    #     无可靠布局证明时保守中止，绝不盲发 Ctrl+A/Delete 伤及聊天草稿。
     $mainHwnd = Resolve-WeComMainWindow
     $main = Get-WeComWindowInfo ([IntPtr]$mainHwnd)
-    $t0 = $swTotal.ElapsedMilliseconds
-    [void](Clear-WeComSearchBoxV2 -MainHwnd $mainHwnd)
-    $timing.precheck = [int]($swTotal.ElapsedMilliseconds - $t0)
-    Write-DriverLog ('step0.5 已确认搜索框为空，未使用键盘清理；耗时=' + $timing.precheck + 'ms')
 
     # 1) 主窗口 + 截图 + boxes OCR 两带（标题带 + 底部输入带）
     Write-DriverLog ('target=' + $TargetName + ' subtitle=' + $Subtitle + ' section=' + $Section + ' mainHwnd=' + $mainHwnd + ' rect=(' + $main.X + ',' + $main.Y + ',' + $main.W + 'x' + $main.H + ')')
@@ -220,7 +199,7 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     $timing.precheck = [int]($swTotal.ElapsedMilliseconds - $t0)
     Write-DriverLog ('step1 两带 OCR：标题带 ' + $titleTokens.Count + ' token（title=' + $title + '）；底部带 ' + $bottomTokens.Count + ' token：' + (($bottomTokens | ForEach-Object { [string]$_.text }) -join '|'))
 
-    # 2) Jev #1 三问合一（right_conversation / input_point / has_draft；措辞保持稳定）
+    # 2) Jev #1 判断目标会话并选择输入点；清理前仍须由标题规则确认目标
     $t0 = $swTotal.ElapsedMilliseconds
     $stateLines = @()
     $stateLines += '企业微信主窗口 OCR 两带结果（窗口像素坐标）：'
@@ -236,8 +215,6 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     $questions = @{
         right_conversation = @{ type = 'choice'; instructions = '当前主窗口打开的会话是否就是目标会话？同时核对标题姓名、目标section（群聊/联系人）和subtitle；同名联系人不能当作目标群，类型无法确认应选unclear'; criteria = @{
             yes = '标题带显示的就是目标会话'; no = '显示的是别的会话'; unclear = '证据不足无法判断' } }
-        has_draft = @{ type = 'choice'; instructions = '底部文本输入区是否已有输入的草稿文本？（灰色占位符（如「发送消息」）不算草稿；工具栏图标行的碎字不算草稿）'; criteria = @{
-            yes = '输入区有已输入的草稿文本'; no = '输入区干净（无草稿）' } }
     }
     $critInput = @{}
     if ($bottomTokens.Count -gt 0) {
@@ -260,11 +237,10 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     Write-DriverLog ('step2 jev#1 used=' + $jev1.used + ' latency=' + $jev1.latency_ms + 'ms reason=' + [string]$jev1.reason)
     Write-DriverLog ('step2 jev#1 state: ' + ($stateText -replace "`r?`n", ' / '))
     if ($jev1.used) {
-        Write-DriverLog ('step2 jev#1 answers: right=' + [string]$jev1.answers.right_conversation.choice + ' draft=' + [string]$jev1.answers.has_draft.choice + ' point=' + [string]$jev1.answers.input_point.choice)
+        Write-DriverLog ('step2 jev#1 answers: right=' + [string]$jev1.answers.right_conversation.choice + ' point=' + [string]$jev1.answers.input_point.choice)
     }
 
-    # 三问逐一取值（Jev 不可用/单问答案非法 → 该问走规则降级，其余仍可用 Jev 结论）
-    # ① right_conversation：no/unclear → navigate_required=true 交还 TS 编排
+    # right_conversation：no/unclear → navigate_required=true 交还 TS 编排
     $rightOk = $false
     $rightSrc = 'rule'
     $navReason = ''
@@ -288,8 +264,12 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     if ($requireWechat -and -not (Test-WeComTitleMatch -Title $title -Expected $TargetName -RequireWechat)) {
         Throw-DriverError 'UI_CHANGED' '当前标题未确认微信外部联系人，已中止；未输入或发送消息'
     }
+    if ($rightOk -and -not (Test-WeComTitleMatch -Title $title -Expected $TargetName -RequireWechat:$requireWechat)) {
+        $rightOk = $false
+        $navReason = ('标题归一化规则未命中（当前标题「' + $title + '」≠ 目标「' + $expectedName + '」）')
+    }
     if (-not $rightOk) {
-        # 非目标/无法判定：不做任何输入，交还 TS 编排（search+select 后二次调用本驱动）
+        # 非目标/无法判定：不清理输入区，交还 TS 编排（search+select 后二次调用本驱动）
         $timing.total = [int]$swTotal.ElapsedMilliseconds
         Write-DriverLog ('navigate_required=true reason=' + $navReason + ' timing=' + ($timing | ConvertTo-Json -Compress))
         return @{
@@ -302,30 +282,7 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
         }
     }
 
-    # ② has_draft：yes → UI_CHANGED 中止（可能是用户未发送的文字，绝不清除）
-    $draftYes = $false
-    $draftSrc = 'rule'
-    $jevDraft = ''
-    if ($jev1.used) { $jevDraft = [string]$jev1.answers.has_draft.choice }
-    if ($jevDraft -eq 'yes' -or $jevDraft -eq 'no') {
-        $draftSrc = 'jev'
-        $draftYes = ($jevDraft -eq 'yes')
-    } else {
-        # 降级：input 模式判空（py 侧已剔除占位符「发送消息/输入消息/聊点什么」、发送按钮
-        # 标签、右侧栏与工具栏图标行碎字——band 卡 0.855-0.97h 排除 ≈0.83h 图标行）
-        $inputPre = Invoke-SendChatOcr ([string]$pre.path) 'input'
-        $draftYes = ($inputPre.input_empty -ne $true)
-        Write-DriverLog ('step2 has_draft 降级规则：input_empty=' + $inputPre.input_empty + ' texts=[' + (@($inputPre.texts) -join '|') + ']')
-    }
-    # Jev 的 no 不能覆盖截图里已经识别到的草稿；窄窗口的输入区从 x≈0.36w 开始。
-    $visibleDraft = @(Get-WeComDraftTokens -Boxes $boxes -W $pre.w -H $pre.h)
-    if ($visibleDraft.Count -gt 0) { $draftYes = $true; $draftSrc = 'ocr' }
-    Write-DriverLog ('step2 判定：right=' + $rightOk + '（' + $rightSrc + '） draft=' + $draftYes + '（' + $draftSrc + '）')
-    if ($draftYes) {
-        Throw-DriverError 'UI_CHANGED' '输入框存在残留草稿，已中止防串消息（可能是用户未发送的文字，未做任何清除/输入）；请人工清空后重试'
-    }
-
-    # ③ input_point：Jev 选 token 中心；降级比例坐标 (0.500w,0.900h)（M2 标定）
+    # input_point：Jev 选 token 中心；降级比例坐标 (0.500w,0.900h)（M2 标定）
     $ipX = [int]($main.X + $main.W * $script:ChatInputRx)
     $ipY = [int]($main.Y + $main.H * $script:ChatInputRy)
     $ipSrc = 'ratio'
@@ -342,26 +299,46 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
         }
     }
 
-    # 3) 点击输入框聚焦 → Send-WeComText 逐字输入（中文 WM_CHAR）
+    # 3) 点击目标输入框聚焦 → 最新截图核对标题 → 清空旧内容 → 沿原输入方式输入本次消息
     #    动作前重验主窗口存活：布局切换会销毁重建窗口（hwnd 变化），失效则重解析
     if (-not [WeComWin32]::IsWindow([IntPtr]$mainHwnd)) {
         $mainHwnd = Resolve-WeComMainWindow
+        $main = Get-WeComWindowInfo ([IntPtr]$mainHwnd)
+        # 旧窗口截图中的 Jev 坐标不属于新窗口；改用新窗口的既有比例输入点。
+        $ipX = [int]($main.X + $main.W * $script:ChatInputRx)
+        $ipY = [int]($main.Y + $main.H * $script:ChatInputRy)
+        $ipSrc = 'ratio'
         Write-DriverLog ('step3 主窗口已重建，重解析 hwnd=' + $mainHwnd)
     }
     $t0 = $swTotal.ElapsedMilliseconds
     Write-DriverLog ('step3 click 输入框 screen=(' + $ipX + ',' + $ipY + ') source=' + $ipSrc)
     [void](Send-WeComClick -Hwnd $mainHwnd -ScreenX $ipX -ScreenY $ipY)
     Start-Sleep -Milliseconds 300
+    if (-not [WeComWin32]::IsWindow([IntPtr]$mainHwnd)) {
+        Throw-DriverError 'UI_CHANGED' '点击输入框后主窗口已重建，无法确认输入焦点；未清理或发送消息'
+    }
+    $beforeClear = Save-StepShot $mainHwnd 'step2-before-clear.png'
+    [void]$shots.Add([string]$beforeClear.path)
+    $beforeClearBoxes = Invoke-SendChatOcr ([string]$beforeClear.path) 'boxes'
+    $beforeClearTitle = Get-WeComTitleFromTokens -Tokens @(Get-WeComBandTokens -Boxes @($beforeClearBoxes.boxes) -W $beforeClear.w -H $beforeClear.h -Band 'title')
+    if (-not (Test-WeComTitleMatch -Title $beforeClearTitle -Expected $TargetName -RequireWechat:$requireWechat)) {
+        Throw-DriverError 'UI_CHANGED' ('清理前复核：当前会话标题「' + $beforeClearTitle + '」与目标「' + $expectedName + '」不一致，未清理或发送消息')
+    }
+    if (-not [WeComWin32]::IsWindow([IntPtr]$mainHwnd)) {
+        Throw-DriverError 'UI_CHANGED' '清理前主窗口已重建，未清理或发送消息'
+    }
+    $cleared = Clear-WeComFocusedInput -Hwnd $mainHwnd
+    if (-not $cleared) {
+        Throw-DriverError 'UI_CHANGED' '目标输入框清理键未成功投递，已中止且未输入或发送消息'
+    }
+    Write-DriverLog 'step3 目标输入框已投递 Ctrl+A/Delete，准备输入本次消息'
     $timing.input_click = [int]($swTotal.ElapsedMilliseconds - $t0)
 
     $t0 = $swTotal.ElapsedMilliseconds
-    # 多行文本（含 CR/LF）走剪贴板粘贴通道：逐字 WM_CHAR 的换行会提前触发发送或被静默
-    # 丢弃（2026-09-28 真机验证：输入框已聚焦时 attachstate Ctrl+V 粘贴可用、换行保留）。
-    # 副作用：覆盖用户剪贴板且不恢复——不备份恢复是刻意为之（weixin-cli 先例：目标程序
-    # paste handler 异步读剪贴板，恢复竞态会粘贴到错的内容）。
+    # 多行沿用剪贴板通道；单行沿用 Send-WeComText。两者都输入到已清理的目标输入框。
     $isMultiline = ($Text -match "[`r`n]")
     if ($isMultiline) {
-        # 日志只记前 12 字（换行替换为 ⏎）+ 总字数，多行文本可能敏感，不落全文
+        # 副作用：覆盖用户剪贴板且不恢复，避免异步 paste handler 读到恢复后的旧内容。
         $textPreview = $Text.Substring(0, [Math]::Min(12, $Text.Length)) -replace "[`r`n]", '⏎'
         $clipOk = $false
         $clipTries = 0
@@ -387,7 +364,7 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     $typed = Save-StepShot $mainHwnd 'step2-typed.png'
     [void]$shots.Add([string]$typed.path)
 
-    # typing 覆盖完整输入阶段（逐字或剪贴板写入+粘贴）
+    # typing 覆盖逐字输入或剪贴板写入与粘贴
     $timing.typing = [int]($swTotal.ElapsedMilliseconds - $t0)
 
     # 4) 发送前会话复核（规则）：重新截图 OCR 标题带严格匹配；不一致 → 清自己刚输入的
@@ -399,11 +376,12 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     Write-DriverLog ('step4 发送前复核 title=' + $title2)
     if (-not (Test-WeComTitleMatch -Title $title2 -Expected $TargetName -RequireWechat:$requireWechat)) {
         $cleared = Clear-WeComFocusedInput -Hwnd $mainHwnd
-        Write-DriverLog ('step4 标题不一致，已清理自己刚输入的草稿（attach=' + $cleared + '）')
-        Throw-DriverError 'UI_CHANGED' ('发送前复核：会话标题「' + $title2 + '」与目标「' + $expectedName + '」不一致，已清空自己刚输入的草稿并中止（防串消息，未按 Enter 发送）')
+        Write-DriverLog ('step4 标题不一致，清理本次输入按键投递=' + $cleared)
+        $cleanup = if ($cleared) { '已投递清理本次输入的按键' } else { '本次输入的清理按键未成功投递，请人工检查输入框' }
+        Throw-DriverError 'UI_CHANGED' ('发送前复核：会话标题「' + $title2 + '」与目标「' + $expectedName + '」不一致，' + $cleanup + '并中止（未按 Enter 发送）')
     }
     } else {
-        # —— -VerifyOnly 模式（任务 3.4）：不做输入/发送（跳过 step0.5-4 的全部输入动作，
+        # —— -VerifyOnly 模式（任务 3.4）：不做输入/发送（跳过 step1-4 的全部输入动作，
         #    不点输入框、不碰草稿、不按 Enter），仅准备既有 step5 终态证据的输入：
         #    当前窗口截图 + 标题带 OCR + 核验文本前缀（-ExpectedPrefix 优先，缺省 -Text）
         $mainHwnd = Resolve-WeComMainWindow

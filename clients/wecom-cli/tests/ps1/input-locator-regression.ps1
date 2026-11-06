@@ -32,7 +32,7 @@ function Write-DriverLog { param($Msg) }
 function Save-StepShot { param($Hwnd,$Name) return @{path=$Name;left=1277;top=0;w=1280;h=1392} }
 function Set-Clipboard { param($Value) [void]$script:actions.Add(@{kind='clipboard';text=$Value}) }
 function Send-WeComText { param($Hwnd,$Text) [void]$script:actions.Add(@{kind='text';text=$Text}) }
-function Clear-WeComFocusedInput { param($Hwnd) [void]$script:actions.Add(@{kind='clear-own-draft'}) }
+function Clear-WeComFocusedInput { param($Hwnd) [void]$script:actions.Add(@{kind='clear-input'}); return $script:clearOk }
 function Send-WeComEnter { param($Hwnd) [void]$script:actions.Add(@{kind='enter'});throw 'TEST_ENTER_BOUNDARY' }
 function Invoke-WeComJev { param($StateText,$Questions)
     if ($Questions.ContainsKey('click_which')) {
@@ -52,6 +52,7 @@ function Invoke-SendChatOcr { param($ImagePath,$Mode)
         @{text='发送(S)';x0=1049;y0=1345;x1=1096;y1=1365})
     if ($script:withPlaceholder) { $boxes+=@{text='输入消息';x0=640;y0=1210;x1=720;y1=1230} }
     if ($ImagePath -eq 'step1-precheck.png' -and $script:preDraft) {
+        # Synthetic overlap with the old OCR guard; not a measured customer screenshot coordinate.
         $boxes+=@{text=$script:preDraft;x0=450;y0=1235;x1=700;y1=1255}
     }
     if ($ImagePath -eq 'step2-typed.png' -and $script:readback) {
@@ -63,7 +64,7 @@ function Reset-Scenario {
     $script:actions=New-Object System.Collections.ArrayList
     $script:chordOk=$true;$script:searchChoice='T1';$script:right='yes';$script:draft='no'
     $script:inputChoice='B0';$script:withPlaceholder=$false;$script:readback=$false;$script:changedTitle=$false
-    $script:preDraft='';$script:readbackText='fixture-message'
+    $script:preDraft='';$script:readbackText='fixture-message';$script:clearOk=$true
     $script:title='fixture-group'
     $script:searchState=@{State='empty';TokensRaw=@(@{text='Q';x0=186;y0=28;x1=213;y1=44},
         @{text='搜索';x0=208;y0=28;x1=241;y1=44},@{text='+';x0=368;y0=28;x1=385;y1=44});
@@ -118,13 +119,13 @@ $script:searchState=@{State='empty';TokensRaw=@(@{text='unread-badge';x0=120;x1=
     PlaceholderPos=$null;ContentPos=$null}
 $script:searchChoice='T0';$script:draft='yes'
 $failure=Run-Send
-Assert-True ($failure -like 'WECOMDRIVE|UI_CHANGED|*') 'draft blocks sending even with misleading OCR elsewhere'
-Assert-True ($actions.Count -eq 0) 'empty search must neither move focus nor clear before user draft check'
+Assert-True ($failure -eq 'TEST_ENTER_BOUNDARY') 'unrelated search OCR must not block an already open target conversation'
+Assert-True (@($actions | Where-Object {$_.kind -eq 'clear-input'}).Count -eq 1) 'target editor is cleared before one send'
 
 Reset-Scenario;$script:searchState.State='has_content'
 $failure=Run-Send
-Assert-True ($failure -like 'WECOMDRIVE|UI_CHANGED|*') 'nonempty search must block until a safe clear control is calibrated'
-Assert-True ($actions.Count -eq 0) 'nonempty search refusal must not touch any focused draft'
+Assert-True ($failure -eq 'TEST_ENTER_BOUNDARY') 'nonempty search must not block an already open target conversation'
+Assert-True (@($actions | Where-Object {$_.kind -eq 'clear-input'}).Count -eq 1) 'only the confirmed target editor is cleared'
 
 foreach ($scale in @(1,1.5)) {
     $toolbar=@{text='快速会议';x0=1023*$scale;x1=1093*$scale;y0=1153*$scale;y1=1173*$scale}
@@ -139,10 +140,17 @@ Reset-Scenario
 $failure=Run-Send
 Assert-True ($failure -eq 'TEST_ENTER_BOUNDARY') 'OCR echo must not gate a posted paste'
 Assert-True (-not $sendQuestions.ContainsKey('input_point')) 'toolbar-only OCR must not become a Jev input choice'
+Assert-True (-not $sendQuestions.ContainsKey('has_draft')) 'visual draft guess must not veto deliberate replacement'
 $chatClick=@($actions | Where-Object {$_.kind -eq 'click'})[-1]
 Assert-True ($chatClick.x -eq 1917 -and $chatClick.y -eq 1253) 'unsafe B0 answer must use existing safe ratio, with screen offset'
 Assert-True (@($actions | Where-Object {$_.kind -eq 'enter'}).Count -eq 1) 'one posted paste reaches the send boundary'
-Assert-True (@($actions | Where-Object {$_.kind -eq 'chord' -and $_.vk -in @(0x41,0x46)}).Count -eq 0) 'empty search must skip Ctrl+F and Ctrl+A'
+Assert-True (@($actions | Where-Object {$_.kind -eq 'chord' -and $_.vk -in @(0x41,0x46)}).Count -eq 0) 'send must not touch the search field'
+Assert-True (($actions | Where-Object {$_.kind -in @('clear-input','clipboard','chord','enter')} | ForEach-Object {$_.kind}) -join ',' -eq 'clear-input,clipboard,chord,enter') 'clear precedes clipboard paste and Enter'
+
+Reset-Scenario;$script:clearOk=$false
+$failure=Run-Send
+Assert-True ($failure -like 'WECOMDRIVE|UI_CHANGED|*') 'failed editor clear aborts before paste'
+Assert-True (@($actions | Where-Object {$_.kind -in @('clipboard','enter')}).Count -eq 0) 'failed clear cannot paste or Enter'
 
 Reset-Scenario;$script:chordOk=$false
 $failure=Run-Send
@@ -151,8 +159,13 @@ Assert-True (@($actions | Where-Object {$_.kind -eq 'enter'}).Count -eq 0) 'fail
 
 Reset-Scenario;$script:preDraft='older draft';$script:readback=$true
 $failure=Run-Send
-Assert-True ($failure -like 'WECOMDRIVE|UI_CHANGED|*') 'visible narrow-window draft overrides Jev no'
-Assert-True (@($actions | Where-Object {$_.kind -in @('clipboard','enter')}).Count -eq 0) 'existing draft must not be appended or sent'
+Assert-True ($failure -eq 'TEST_ENTER_BOUNDARY') 'OCR text in editor does not veto deliberate replacement'
+Assert-True (@($actions | Where-Object {$_.kind -eq 'clear-input'}).Count -eq 1) 'old editor content is cleared before new paste'
+
+Reset-Scenario;$script:preDraft='[草稿]'
+$failure=Run-Send
+Assert-True ($failure -eq 'TEST_ENTER_BOUNDARY') 'a draft marker from another chat row cannot veto a confirmed target send'
+Assert-True (@($actions | Where-Object {$_.kind -eq 'clear-input'}).Count -eq 1) 'only target editor receives the intentional clear'
 
 Reset-Scenario;$script:readback=$true;$script:readbackText='请发送消息，这是长文本末尾仍可见的一行'
 $failure=Run-Send
@@ -161,8 +174,8 @@ Assert-True (@($actions | Where-Object {$_.kind -eq 'enter'}).Count -eq 1) 'visi
 
 Reset-Scenario;$script:draft='yes'
 $failure=Run-Send
-Assert-True ($failure -like 'WECOMDRIVE|UI_CHANGED|*') 'user draft must still block send'
-Assert-True (@($actions | Where-Object {$_.kind -in @('clipboard','text','enter','clear-own-draft')}).Count -eq 0) 'user draft must remain untouched'
+Assert-True ($failure -eq 'TEST_ENTER_BOUNDARY') 'Jev draft answer does not veto deliberate replacement'
+Assert-True (@($actions | Where-Object {$_.kind -eq 'clear-input'}).Count -eq 1) 'existing input is cleared once before send'
 
 Reset-Scenario;$script:withPlaceholder=$true;$script:inputChoice='B1';$script:readback=$true
 $failure=Run-Send
@@ -175,7 +188,13 @@ Reset-Scenario;$script:changedTitle=$true
 $failure=Run-Send $false
 Assert-True ($failure -like 'WECOMDRIVE|UI_CHANGED|*') 'changed conversation must still block send'
 Assert-True (@($actions | Where-Object {$_.kind -eq 'enter'}).Count -eq 0) 'title mismatch must never Enter'
-Assert-True (@($actions | Where-Object {$_.kind -eq 'clear-own-draft'}).Count -eq 1) 'only our newly typed draft is cleared on title mismatch'
+Assert-True (@($actions | Where-Object {$_.kind -eq 'clear-input'}).Count -eq 2) 'pre-clear and own typed content clear both occur on title mismatch'
+Assert-True (@($actions | Where-Object {$_.kind -eq 'text'}).Count -eq 1) 'single-line send keeps original text primitive'
+Assert-True (@($actions | Where-Object {$_.kind -eq 'clipboard'}).Count -eq 0) 'single-line send does not touch clipboard'
+
+Reset-Scenario;$script:title='other-group'
+$failure=Run-Send
+Assert-True (@($actions | Where-Object {$_.kind -in @('clear-input','clipboard','enter')}).Count -eq 0) 'Jev yes cannot authorize clearing a different group'
 # Execute the production body: a Jev yes must not override an internal/other external title.
 foreach ($wrongTitle in @('fixture-peer','fixture-peer@其他企业','fixture-peer（2）','fixture-peer-more@微信')) {
     Reset-Scenario;$script:title=$wrongTitle
@@ -191,5 +210,5 @@ Reset-Scenario;$script:title='fixture-peer @微信';$script:changedTitle=$true
 $failure=Run-Send $false $true
 Assert-True ($failure -like 'WECOMDRIVE|UI_CHANGED|*') 'changing title after input still rejects Enter'
 Assert-True (@($actions | Where-Object {$_.kind -eq 'enter'}).Count -eq 0) 'external scope is rechecked immediately before Enter'
-Assert-True (@($actions | Where-Object {$_.kind -eq 'clear-own-draft'}).Count -eq 1) 'only this attempt own draft is cleared'
+Assert-True (@($actions | Where-Object {$_.kind -eq 'clear-input'}).Count -eq 2) 'only this attempt editor and own pasted text are cleared'
 Write-Output 'PS_INPUT_LOCATOR_OK external_cases=6'

@@ -105,13 +105,12 @@ export const TOOL_DEFS: WecomToolDef[] = [
       'target_ref 必须来自 wecom_chat_search（有效期 5 分钟，过期 TARGET_REF_STALE 需重新搜索）。' +
       'M11a 直达模式：改传 target_name（与 target_ref 二选一，可选 subtitle 消歧），内部自动 search 定位' +
       '（身份校验 + 唯一匹配，同名多候选无法消歧返回 TARGET_AMBIGUOUS），data 附 resolved_target。' +
-      '智能分发：发送驱动先 OCR 标题带+输入带并由 Jev 判定——当前会话就是目标时直接输入发送（快路径）；' +
+      '智能分发：发送驱动核对当前标题——当前会话就是目标时清空输入区并沿原输入方式发送（快路径）；' +
       '不是目标或无法判定时自动执行 search（Jev 选最优候选）+ select（点击进会话并校验标题）后再发送，' +
       '两轮均不在目标会话返回 TARGET_NOT_FOUND（未发送消息）。' +
-      '草稿防串：输入区已有用户草稿时立即 UI_CHANGED 中止（绝不动用户草稿）；输入后发送前复核会话标题，' +
-      '不一致会清空自己刚输入的草稿并中止。多行文本（含换行）经剪贴板粘贴通道输入，' +
-      '副作用：发送多行消息会覆盖用户剪贴板且不恢复。Jev 不可用时逐级降级为标题规则匹配、比例坐标输入点、' +
-      '输入区判空与终态三选二规则。' +
+      '输入替换：目标标题确认后清空该会话输入区已有内容；单行逐字输入，多行经剪贴板粘贴；' +
+      '清理失败不发送，发送前标题复核不一致则清理本次输入并中止。' +
+      '副作用：已有未发送文字会被覆盖；多行发送会覆盖用户剪贴板且不恢复。Jev 不可用时降级为标题规则匹配、比例坐标输入点；终态沿三选二规则。' +
       '终态核验：本地库可用时发送后按本地记录核验，成功为 verification=local-record' +
       '（发送前基线之后出现「方向=本人 ∧ 正文全等 ∧ trusted」的新记录，verification_detail.message_id 为匹配记录；' +
       '含义=客户端已记录并经本地核验，不代表对方已收到/已读）；未命中或本地库核验失败保持结果未知。' +
@@ -124,7 +123,7 @@ export const TOOL_DEFS: WecomToolDef[] = [
       target_ref: z.string().min(1).optional().describe('发送目标句柄（wecom_chat_search 返回的 target_ref；与 target_name 二选一）'),
       target_name: z.string().min(1).max(100).optional().describe('直达模式：按会话名（联系人/群名，可含 @微信 后缀）定位目标，内部自动 search 并做身份校验（同名多候选无法消歧返回 TARGET_AMBIGUOUS）；与 target_ref 二选一'),
       subtitle: z.string().max(100).optional().describe('直达模式可选消歧副标题（同名多候选时收紧匹配，如「微信联系人」）；仅 target_name 模式生效'),
-      text: z.string().min(1).max(2000).describe('消息文本（最长 2000 字，支持多行：含换行时经剪贴板粘贴通道输入并覆盖用户剪贴板且不恢复；更长请分段多次发送）'),
+      text: z.string().min(1).max(2000).describe('消息文本（最长 2000 字；发送前覆盖目标输入区已有文字；单行逐字输入，多行经剪贴板粘贴并覆盖用户剪贴板且不恢复；更长请分段多次发送）'),
       group_cursor: z.string().min(1).max(2048).optional().describe('监控群回复时必须原样传wecom_group_poll的cursor；核验原账号/群/源库，不可用即拒绝发送'),
     },
     annotations: { title: '企业微信发送文本消息', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
