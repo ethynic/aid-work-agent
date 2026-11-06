@@ -736,3 +736,7 @@ agent2 的 `tr_runner_05033bd35b3642889245230f576a8a4d:1` 及同用户后续会�
 独立 TEST 第二轮在最终 CLI 代码上完成：`input-independent` 34/34、剪贴板策略 23/23、Node 发送与本地库 72/72、相邻工具 27/27 及 CLI build 均 exit 0。首轮 CR 的三项 P1 已回炉修复，最终复审通过；功能分支代码提交 `974cf54d`，Codeup 与 GitHub 同一分支推送成功。主控已将独立工作树基线从 `a128527e` fast-forward 到 `origin/master` 的 `3b4655bd`；新增三项提交仅涉及 ImageRead、配置、相关文档与 Python 测试，与 WeCom/本计划路径无重叠，未产生冲突，WeCom 代码、依赖和验证环境未变，故复用上述定向测试结果。
 
 用户明确授权在本机已打开的企业微信“售前客服群”做真实发送测试。2026-11-06 15:36–15:37，系统会话表确认当前命令与企业微信都位于活动 Console 会话；CLI 子进程补入缺失的真实 `SESSIONNAME=Console` 后，`probe --json` 返回在线，`list-groups --query '售前客服群' --limit 10 --json` 在本地库唯一命中。以功能分支源码执行一次 `send --session '售前客服群' --text <唯一测试标记> --json`，回执 exit 0、`OK`、`effect=applied`、`verification=local-record`，本地库出站 `message_id=1987`；驱动日志显示已点击输入区、投递 Ctrl+A/Delete、发送前复核标题为目标群。只读 `read-group --target-name '售前客服群' --limit 20 --json` exit 0，唯一测试标记在最近 20 条中出现 1 次，ID 同为 1987。该证据确认本机客户端动作与本地记录，不能证明群成员已收到或客户机已安装新版。没有第二次发送、agent2 部署、客户端安装或 master 合并。
+
+用户随后在同一群输入框中手动放入草稿，明确授权覆盖草稿再试一次。2026-11-06 15:40–15:41，功能分支 CLI 的 `probe --json` 在线、本地库群名唯一命中；仅执行一次 `send --session '售前客服群' --text <新唯一测试标记> --json`，exit 0、`OK`、`effect=applied`、`verification=local-record`，新增 `message_id=1988`。本次驱动截图 `step2-before-clear.png` 可见目标群标题及输入框内原草稿，`step2-typed.png` 可见输入框仅剩新测试文本，`step3-after.png` 可见该文本成为群内一条出站消息且输入框为空；驱动日志记录 Ctrl+A/Delete 投递及发送前标题复核。原草稿未混入出站消息；本地库单条匹配只证明客户端记录，不证明群成员送达。未重复发送，也未安装或部署客户端。
+
+用户确认看到发送成功，授权合并 master 并将最新 WeCom CLI 放入 Downloads。现有 0.2.6 已有不同内容的交付包，因此本次源码版本与锁文件同步升为 0.2.7；打包只选择 WeCom，不构建或安装 Runtime。合并、签包与交付结果待记录。
