@@ -40,9 +40,12 @@ metadata:
    用户个人邮箱（邮箱设置）-> 租户邮箱兜底 -> 两者皆无时脚本退出并提示用户去配置。
    系统 .env 邮箱仅用于平台通知，**本技能禁止使用**。SMTP/IMAP 密码只在脚本内存中
    解密，不落盘、不打印、不进对话上下文。
-3. **campaign 工作目录**：`storage/tenants/{tenant}/lead-gen/campaign_{id}/`
+3. **campaign 工作目录**：`/app/storage/tenants/{tenant}/lead-gen/campaign_{id}/`
    （brief.md、intel/、emails/、logs/、contact_targets.json）。退订黑名单在
-   租户级 `lead-gen/unsubscribed.csv`，跨 campaign 共享。
+   租户级 `/app/storage/tenants/{tenant}/lead-gen/unsubscribed.csv`，跨 campaign 共享。
+   路径由脚本自动解析为绝对路径，**不要传相对路径**（skill_execute 的 CWD 是
+   /tmp 临时目录，相对路径会写错位置）；`sender_profile.py` 不带 `--profile`
+   即读写租户级 `lead-gen/sender_profile.json`。
 4. **对话内 / 定时同一条管线**，只差 campaign 的 `send_mode` 编排方式：
    - `review`（对话内编排）：在当前对话中完成发送编排，邮箱就绪后直接批量发送；
    - `auto`（定时编排）：复用系统定时任务（scheduler）按 cron 以用户身份执行
@@ -80,6 +83,11 @@ metadata:
    stdout）或 `list-contacts` / `list-leads` 的查询结果。拿不到 ID 就先跑
    `list-contacts` 查，报错信息里返回的有效 ID 清单直接取用，**不得编造连续
    编号去试**——历史实测盲猜 ID 连续 10 次 not found 空转烧掉大量迭代。
+12. **禁止把自写脚本（write 工具产物）当程序执行**。批量数据操作（改状态、
+   批量入库、导出）一律用 `lead_db.py` 既有子命令完成；确需临时脚本时写到
+   `/tmp/` 下并用**绝对路径**执行，不要落租户 conversation 目录，也不要用
+   相对路径引用存储文件（skill_execute 的 CWD 是临时目录，相对路径会读错
+   位置且报错难排查——2026-11-06 实测该模式直接烧光 50 轮迭代上限）。
 
 ## 脚本清单（经 skill_execute 调用；仅 `lead_db.py` 与 `send_emails.py` 需要 --campaign-id，其余为账号级或单目标脚本）
 
