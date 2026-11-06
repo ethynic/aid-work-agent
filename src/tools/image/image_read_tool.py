@@ -23,7 +23,7 @@ from src.tools._helpers import sanitize_error
 class ImageReadInputModel(BaseModel):
     image: str = Field(..., description="待判读图片：file_id（file_xxx）/ 本地绝对路径 / http(s) URL")
     question: str = Field(..., description="判读问题，要求结构化输出（如：数清深色墙围合的房间数与方位；给出产品主体色的 HEX 值）")
-    model: Optional[str] = Field(None, description="判读模型，provider/model 语法（如 qwen/qwen-vl-plus）；缺省用平台默认，显式指定须在白名单内")
+    model: Optional[str] = Field(None, description="判读模型，provider/model 语法（如 qwen/qwen3-vl-plus）；缺省用平台默认，显式指定须在白名单内")
 
 
 class ImageReadTool(BaseTool):
@@ -66,6 +66,12 @@ class ImageReadTool(BaseTool):
         except ValueError as e:
             return {"success": False, "error": str(e)}
         except Exception as e:
+            # 兜底文案进对话上下文，真实异常必须落错误日志（否则上游模型 404 等问题无法排查）
+            from loguru import logger
+
+            logger.opt(exception=True).error(
+                f"[image_read] VL 判读失败: image={image_input[:80]}, model={kwargs.get('model') or 'default'}: {e}"
+            )
             return {
                 "success": False,
                 "error": "图片判读失败，请稍后重试",
@@ -124,7 +130,7 @@ class ImageReadTool(BaseTool):
         spec = (model_param or "").strip() or vl_cfg.model
         provider, sep, model = spec.partition("/")
         if not sep or not provider.strip() or not model.strip():
-            raise ValueError(f"模型标识 {spec!r} 格式非法：须为 provider/model（如 qwen/qwen-vl-plus）")
+            raise ValueError(f"模型标识 {spec!r} 格式非法：须为 provider/model（如 qwen/qwen3-vl-plus）")
         if spec != vl_cfg.model and vl_cfg.allowed_models and spec not in vl_cfg.allowed_models:
             raise ValueError(f"判读模型 {spec!r} 不在白名单内，可用：{vl_cfg.allowed_models}")
         return provider.strip(), model.strip()

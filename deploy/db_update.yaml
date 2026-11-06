@@ -4530,3 +4530,13 @@
     INSERT INTO token_cost_prices (model_name, price_per_call)
     VALUES ('qwen-image-3.0-pro', 0.25)
     ON CONFLICT (model_name) DO NOTHING;
+- datetime: "2026-11-06 16:00:00"
+  remark: "qwen3-vl-plus 价目行（image_read 读图默认模型定版，qwen-vl-plus 旧代模型百炼已下线致 404）；分段计价按百炼官方华北2 三档落 tiered_pricing，缺行时计费走 deepseek-flash 兜底单价有偏差"
+  statements: |
+    INSERT INTO token_cost_prices (model_name, tiered_pricing, is_multimodal)
+    VALUES ('qwen3-vl-plus', '[
+      {"max_input": 32768,  "input_per_m": 1.0, "cached_input_per_m": 0.2,  "output_per_m": 10.0},
+      {"max_input": 131072, "input_per_m": 1.5, "cached_input_per_m": 0.3,  "output_per_m": 15.0},
+      {"max_input": 262144, "input_per_m": 3.0, "cached_input_per_m": 0.6,  "output_per_m": 30.0}
+    ]'::jsonb, TRUE)
+    ON CONFLICT (model_name) DO NOTHING;
