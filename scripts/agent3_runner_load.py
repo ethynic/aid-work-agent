@@ -13,6 +13,7 @@ import json
 import re
 import secrets
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -39,7 +40,20 @@ CASES = {
         "假设两个独立执行槽处理三个只读任务，其中一个任务耗时较长。用不超过五句话说明预期排队和完成顺序，不调用外部工具。"),
     "travel_short": (OTHER_TENANT, "travel-consultant",
         "为第一次来上海的游客给出一天的步行与地铁行程建议，只给文字建议，不订票、不联系商家、不生成文件。"),
+    # 修复后 excel_process 无 range 的全文读取走流式路径并在 500 行截断（秒级返回），
+    # 不再构成事故形态的长调用；长调用样本改用显式 range（read_sheet 对 range 无截断）。
+    # range 上界与 --excel-rows 默认值对应（1000000 数据行 + 1 表头 = A1:J1000001）。
+    "excel_range_full": (DATA_TENANT, "main",
+        "使用 excel_process 工具读取我上传的 Excel 文件，range 参数设为 A1:J1000001 一次性读取全部数据，"
+        "然后报告每个 channel 的订单数量和 sales_amount 合计（表格形式）。"),
+    "excel_range_chunks": (DATA_TENANT, "main",
+        "我上传的 Excel 文件约有一百万行数据。请用 excel_process 工具分块读取：每次用 range 读 5 万行"
+        "（第一次 A1:J50000，之后 A50001:J100000、A100001:J150000……依此类推），一直读到文件末尾，"
+        "最后报告实际读取的总行数和各 channel 的订单数量。不要中途放弃。"),
 }
+
+# 这些用例在提交 Runner 时携带 prepare_excel 上传的大文件附件
+CASES_NEED_EXCEL = {"excel_range_full", "excel_range_chunks"}
 
 
 def run_sql(ssh_key: Path, sql: str) -> str:
@@ -71,8 +85,8 @@ def temporary_token(ssh_key: Path, tenant_id: str, user_id: str) -> str:
     return token
 
 
-def call(session: requests.Session, method: str, path: str, **kwargs) -> dict:
-    response = session.request(method, BASE_URL + path, timeout=(10, 40), **kwargs)
+def call(session: requests.Session, method: str, path: str, timeout=(10, 40), **kwargs) -> dict:
+    response = session.request(method, BASE_URL + path, timeout=timeout, **kwargs)
     try:
         value = response.json()
     except ValueError:
@@ -145,6 +159,107 @@ def prepare_data(session: requests.Session) -> int:
     return doc_id
 
 
+def synthetic_xlsx(rows: int) -> Path:
+    """Generate a deterministic business-data workbook with real values in every row.
+
+    Reuses a previously generated file of the same size; generation is slow for
+    large row counts, so progress is printed. No customer or personnel fields.
+    """
+    from openpyxl import Workbook
+
+    target = Path(tempfile.gettempdir()) / f"agent3_loadtest_big_{rows}.xlsx"
+    if target.is_file() and target.stat().st_size > 0:
+        try:
+            from openpyxl import load_workbook
+            probe = load_workbook(target, read_only=True)
+            complete = (probe["orders"].max_row == rows + 1)
+            probe.close()
+        except Exception:
+            complete = False
+        if complete:
+            print(f"[excel] reuse generated workbook {target} ({target.stat().st_size} bytes)")
+            return target
+        print(f"[excel] cached workbook is incomplete, regenerating")
+    channels = ("web", "store", "partner", "app")
+    regions = ("east", "north", "south", "west")
+    categories = ("office", "home", "outdoor")
+    statuses = ("paid", "shipped", "closed")
+    workbook = Workbook(write_only=True)
+    sheet = workbook.create_sheet("orders")
+    sheet.append(("order_id", "order_date", "channel", "region", "category",
+                  "quantity", "sales_amount", "cost_amount", "margin_rate", "status"))
+    for i in range(rows):
+        day = date(2024, 1, 1) + timedelta(days=i % 730)
+        quantity = i % 5 + 1
+        sales = quantity * (80 + i % 31) + (i // 730) % 13
+        cost = round(sales * (0.57 + (i % 9) / 100), 2)
+        sheet.append((f"SYN{i:08d}", day.isoformat(), channels[i % 4],
+                      regions[(i // 4) % 4], categories[(i // 16) % 3],
+                      quantity, sales, cost, round(1 - cost / sales, 4),
+                      statuses[i % 3]))
+        if (i + 1) % 100_000 == 0:
+            print(f"[excel] generated {i + 1}/{rows} rows")
+    workbook.save(target)
+    _inject_sheet_dimensions(target)
+    print(f"[excel] workbook ready {target} ({target.stat().st_size} bytes)")
+    return target
+
+
+def _inject_sheet_dimensions(path: Path) -> None:
+    """openpyxl write_only omits <dimension>; readers then treat the sheet as unsized.
+
+    Excel files written by streaming exporters can lack it too, which bypasses the
+    inflated-range defense (read_only max_row is None). Rebuild the zip with an
+    explicit dimension per worksheet so the workbook takes the streaming read path.
+    """
+    import re
+    import zipfile
+
+    patched = path.with_suffix(".patched.xlsx")
+    with zipfile.ZipFile(path) as source, \
+            zipfile.ZipFile(patched, "w", zipfile.ZIP_DEFLATED) as dest:
+        for item in source.infolist():
+            data = source.read(item.filename)
+            if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", item.filename):
+                text = data.decode("utf-8")
+                if "<dimension" not in text:
+                    max_row = text.count("<row ")
+                    text = text.replace(
+                        "<sheetData", f'<dimension ref="A1:J{max_row}"/><sheetData', 1)
+                data = text.encode("utf-8")
+            dest.writestr(item, data)
+    patched.replace(path)
+
+
+def prepare_excel(session: requests.Session, rows: int) -> dict:
+    """Upload the synthetic workbook as a conversation attachment; return AttachmentRef."""
+    path = synthetic_xlsx(rows)
+    size = path.stat().st_size
+    if size > 48 * 1024 * 1024:
+        raise RuntimeError(f"workbook too large for /api/upload limit: {size} bytes")
+    print(f"[excel] uploading {path.name} ({size} bytes) ...")
+    # 本机 python-requests 2.25 对 46MB multipart 发送停滞（write timeout，curl 同路 7MB/s），
+    # 大文件上传改用 curl 子进程；认证头取自会话，保证文件落在测试租户存储作用域。
+    auth = session.headers.get("Authorization", "")
+    tenant = session.headers.get("X-Tenant-Id", "")
+    command = ["curl", "-s", "--max-time", "300", "-X", "POST", BASE_URL + "/api/upload",
+               "-H", f"Authorization: {auth}", "-H", f"X-Tenant-Id: {tenant}",
+               "-F", f"file=@{path};type=application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]
+    result = subprocess.run(command, text=True, capture_output=True, timeout=320, check=False)
+    if result.returncode:
+        raise RuntimeError(f"workbook upload curl failed: {result.returncode}")
+    try:
+        uploaded = json.loads(result.stdout)
+    except ValueError:
+        raise RuntimeError("workbook upload returned invalid JSON") from None
+    if not uploaded.get("file_id"):
+        raise RuntimeError("workbook upload did not return a file_id")
+    return {"file_id": uploaded["file_id"], "name": path.name, "type": "file",
+            "mime_type": uploaded.get("mime_type") or
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "size": size}
+
+
 def sample_state(ssh_key: Path, run_id: str) -> dict:
     lines = run_sql(ssh_key, f"""
         SELECT 'R|' || runner_id || '|' || status || '|' || attempt || '|' ||
@@ -208,7 +323,8 @@ def cancel_and_observe(session: requests.Session, runner_id: str) -> dict:
     return observed
 
 
-def run_case(name: str, tokens: dict, deadline_seconds: int, run_id: str) -> dict:
+def run_case(name: str, tokens: dict, deadline_seconds: int, run_id: str,
+             files: list | None = None) -> dict:
     identity, profile_id, prompt = CASES[name]
     tenant_id, _ = identity
     session = make_session(tokens[identity], tenant_id)
@@ -231,7 +347,8 @@ def run_case(name: str, tokens: dict, deadline_seconds: int, run_id: str) -> dic
         session_id = chat["session_id"]
         accepted = call(session, "POST", "/api/chat/runners", json={
             "client_request_id": f"agent3-load-{run_id}-{name}-{uuid.uuid4().hex[:8]}",
-            "message": prompt, "session_id": session_id, "files": [], "subagent": profile_id,
+            "message": prompt, "session_id": session_id,
+            "files": files or [], "subagent": profile_id,
         })
         runner_id = accepted["runner"]["runner_id"]
         accepted_at = accepted["runner"].get("accepted_at")
@@ -289,11 +406,16 @@ def main() -> int:
     parser.add_argument("--concurrency", type=int, default=2)
     parser.add_argument("--timeout-seconds", type=int, default=600)
     parser.add_argument("--prepare-data", action="store_true")
+    parser.add_argument("--prepare-excel", action="store_true",
+                        help="Generate and upload a synthetic workbook for excel_* cases")
+    parser.add_argument("--excel-rows", type=int, default=1_000_000,
+                        help="Row count of the generated workbook (default 1000000)")
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
     names = [name.strip() for name in args.cases.split(",")]
-    if not names or any(name not in CASES for name in names) or len(set(names)) != len(names):
-        parser.error("unknown or duplicate case")
+    if not names or any(name not in CASES for name in names):
+        parser.error("unknown case")
+    # 允许重复同名用例（如 OOM 探界需要 excel_range_full 双发占满双槽）
     if not 1 <= args.concurrency <= 4 or not 60 <= args.timeout_seconds <= 1800:
         parser.error("concurrency must be 1..4 and timeout 60..1800 seconds")
     if not args.ssh_key.is_file():
@@ -303,8 +425,14 @@ def main() -> int:
     identities = {CASES[name][0] for name in names}
     if args.prepare_data:
         identities.add(DATA_TENANT)
+    needs_excel = any(name in CASES_NEED_EXCEL for name in names)
+    if needs_excel and not args.prepare_excel:
+        parser.error("selected cases need --prepare-excel to upload the workbook")
+    if not 1 <= args.excel_rows <= 1_048_000:
+        parser.error("excel-rows must be between 1 and 1048000")
     tokens = {}
     data_doc_id = None
+    excel_attachment = None
     samples = []
     watch_errors = []
     cleanup_errors = []
@@ -319,13 +447,17 @@ def main() -> int:
         if args.prepare_data:
             with make_session(tokens[DATA_TENANT], DATA_TENANT[0]) as session:
                 data_doc_id = prepare_data(session)
+        if args.prepare_excel:
+            with make_session(tokens[DATA_TENANT], DATA_TENANT[0]) as session:
+                excel_attachment = prepare_excel(session, args.excel_rows)
         stop = threading.Event()
         watcher = threading.Thread(target=watch_state,
             args=(args.ssh_key, run_id, stop, samples, watch_errors), daemon=True)
         watcher.start()
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=args.concurrency) as pool:
-                futures = [pool.submit(run_case, name, tokens, args.timeout_seconds, run_id)
+                futures = [pool.submit(run_case, name, tokens, args.timeout_seconds, run_id,
+                                       files=[excel_attachment] if name in CASES_NEED_EXCEL else None)
                            for name in names]
                 results = [future.result() for future in futures]
         finally:
@@ -340,7 +472,11 @@ def main() -> int:
                 cleanup_errors.append(identity[0])
 
     report = {"run_id": run_id, "base_url": BASE_URL, "concurrency": args.concurrency,
-              "data_doc_id": data_doc_id, "results": results, "samples": samples,
+              "data_doc_id": data_doc_id,
+              "excel_attachment": ({"name": excel_attachment["name"], "size": excel_attachment["size"]}
+                                   if excel_attachment else None),
+              "excel_rows": args.excel_rows if args.prepare_excel else None,
+              "results": results, "samples": samples,
               "sample_errors": watch_errors, "token_cleanup_failed_tenants": cleanup_errors}
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)

@@ -124,6 +124,14 @@ Worker 跨任务进程内资源盘点（Phase 2 收尾超时回收前置核对�
 - 原 agent3 `.env` 将 `AGENT_RUNNER_WEB_ENABLED` 显式关为 `false`，本轮临时开启后测试、结束时曾恢复；用户随后要求 Runner 模式常开，现已设回 `true` 并重建主 API，运行时配置与 6 容器健康均复核。主 API 重建时发现 `.env` 原 `600` 权限使容器运行用户无法读取，出现 9 次启动重试；已改为组 `999`、权限 `640`。未完成的精确定向同步阻塞、30 分钟告警/飞书及旧 Runtime＋CLI 组合仍留 Phase 4。
 - 槽数按实测资源而非逻辑 CPU 线程数定值：agent3 当前 4 逻辑 CPU、约 7.3 GiB 内存，双槽负载后可用约 1.8 GiB；业务库 `max_connections=80`，单 Worker 默认池上限 15 加监督进程 2。直接设 8 槽的理论连接上限为 136（未计其它服务），8×1 GiB 容器内存上限也超过整机内存；保持 2 槽，下一档只考虑逐级实测 3 槽，不据本轮推导正式环境槽数。
 
+### Phase 4 agent3 Excel 重负载专项（2026-11-06，事故回归验证）
+
+- 在真实混合负载之后追加 Excel 专项：百万行（1,000,000 数据行）合成 xlsx 经 `/api/upload` 上传测试租户并作对话附件提交，共 6 个用例（轮次 A 隔离验证、轮次 B 三并发、轮次 C 双并发＋补发 1 条），脚本与脱敏证据同 [`scripts/agent3_runner_load.py`](../../scripts/agent3_runner_load.py)、[evidence/agent3-load-excelA/B/C/C2-20261106.json](../research/evidence/)。总成本 8.08 积分/约 35.4 万 token（ExcelRouter 将请求规则路由为 `to_md` 本地转换，LLM 调用占比极低）。长任务 30 分钟告警 3/3 准确触发并随任务结束自动关闭。
+- **发现 3 个 P0 缺陷**（详见 Phase 4 待整改清单）：① Runner 任务取消/中断后槽位进程挂死，2/2 复现，取消后槽位永久损失须人工重启容器；② 长工具调用期间租约 heartbeat 与监督扫描报 `psycopg2.errors.LockNotAvailable`（lock timeout），运行中任务被误判 `interrupted`，2/2 复现；③ `upload_data_tool.py:90` 假异步（对未 await 的 `extract_schema` coroutine 调 `.get`），每轮 Excel 流程必触发，轮次 C 一次直接把任务带偏提前 completed。
+- OOM 探界结论：双 to_md 并发将双 Worker 同时钉到 1 GiB 容器内存上限 15 分钟以上，cgroup 拦截有效、dmesg 无 OOM、宿主 available 最低 666 MiB、swap 用量 4.5～5 GiB 未恶化；容器内存限额是有效的爆炸半径边界，但双槽满载下宿主余量薄。
+- 其余发现：`to_thread` 长调用下取消生效延迟 10～17 分钟；无效认证的 `/api/upload` 请求落 `_anonymous` 租户目录（本轮诊断残留 46 MiB 文件已删除）；agent3 NFS 存储上工作区清理遇 stale handle（OSError errno 16），是挂死链条的可见症状。ExcelRouter 强制改写显式 range 意图为 `to_md`，使 range 读路径在本轮无法被验证。
+- 事故整改回归结论：excel_process 长调用不再阻塞其他槽（隔离性达成），但**取消与租约路径引入了新的可用性缺陷**，槽位扩容评估前必须先修复 P0 三项；agent3 维持 2 槽不变。
+
 ### Phase 4 正式服容量初评（2026-11-06，只读；尚未部署）
 
 - 正式服为 4 逻辑 CPU、约 15.1 GiB 内存，检查时约 9.6 GiB available；仍运行旧的单 `aid-runner-worker`，没有部署本阶段多槽拓扑。业务库 `max_connections=80`、检查时约 20 个连接。近 7 天完成 502 个 Runner，最忙一小时接收 88 个；按接收至结束区间统计，峰值有 13 个未结束任务，**其中包含排队，不代表 13 个同时执行**。这些是一次只读快照及历史量，不能单独推断用户排队分位数或所需槽数。

@@ -28,3 +28,7 @@ agent3 宿主向系统提供 4 个逻辑 CPU（`nproc=4`，`lscpu` 显示每核 
 agent3 原有 `.env` 显式配置 `AGENT_RUNNER_WEB_ENABLED=false`，最初准入检查因此停止，没有产生 Runner。为完成端到端试验，备份 `.env` 后临时改为 `true` 并仅重建主 API。重建暴露出此前 `.env` 的 `600` 权限/所属组与容器内 `appuser` 不匹配，主 API 曾因 `PermissionError` 重启 9 次；将该文件改为组 `999`、权限 `640` 后恢复。实验结束曾把开关恢复为 `false` 并确认健康。随后用户明确要求 Runner 模式常开，已再次将 agent3 设为 `true`，主 API 运行时配置读到 `True`，6 个容器均健康。备份留在 agent3 的 `.env.bak.runner-load-20261106` 和 `.env.bak.runner-web-on-20261106`，未输出其中任何值。
 
 本轮没有复现“某个同步工具调用连续阻塞超过 30 秒租约”的精确定向场景；数据分析总执行超过 30 秒不能替代单次阻塞工具证据。也未触发默认 30 分钟运行告警、验证平台飞书发送或已交付旧 Runtime＋CLI 组合；未审查模型回答质量或跨租户内容隔离。因此 Phase 4 仍在进行中。合成表与标记为 `LOADTEST` 的会话保留在专用测试租户，供后续对照；不将本轮 2 槽/1 GiB 配置推广为正式环境容量定值。
+
+## Excel 重负载专项（同日追加）
+
+上表之后追加 Excel 专项：百万行合成 xlsx（48 MiB）作为对话附件提交，共 6 个用例（隔离验证、三并发、双并发＋补发），脱敏指标见 [单条隔离](evidence/agent3-load-excelA-20261106.json)、[三并发](evidence/agent3-load-excelB-20261106.json)、[双并发](evidence/agent3-load-excelC-20261106.json)、[补发](evidence/agent3-load-excelC2-20261106.json)。执行摘要与 3 个 P0 缺陷（取消后槽位挂死、心跳锁超时误判 interrupted、upload_data_tool 假异步）记录在 [Phase 4 计划](../plans/plan-runner-execution-slot-isolation-and-alerts.md#phase-4-agent3-excel-重负载专项2026-11-06事故回归验证)，此处不重复。要点：槽位隔离达成、30 分钟告警 3/3 准确、双 Worker 满载无宿主 OOM；总成本 8.08 积分/约 35.4 万 token。
