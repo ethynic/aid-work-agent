@@ -33,6 +33,7 @@
 | W24 文本发送双点标定与去 OCR | 自会话标定标题与输入区，发送仅用本地库核验 | ✅ 完成（2026-11-06） | 双点缓存复用、目标标题核对与单聊发送真机通过；本地库命中出站记录，未部署 |
 | W25 会话搜索与进入去 OCR | 本地目录唯一匹配后 Ctrl+F/Enter，复制标题核对 | ✅ 完成（2026-11-07） | 整数 ID 与两项 P1 修复；独测、真机及 CR 通过，025bb14f，未部署 |
 | W26 图片与文件发送去 OCR | 双点缓存粘贴附件，Enter 后本地库只读对账 | ✅ 完成（2026-11-07） | 独测 Node 65/65、PS 标题行为及 CR 通过；无真实 101/102 样本和媒体真机验收，未部署 |
+| W27 企微删除添加客户与 OCR 发行依赖 | 退役唯一 OCR 入口，拆独立便携本地库 Python 资产 | ✅ 完成（2026-11-07） | 独测、隔离签包及 CR 通过；未正式发行、部署或验证真实超长安装路径 |
 
 ## W14 通用Runtime业务工具自动装配（2026-10-29）
 
@@ -832,6 +833,20 @@ P1 修复后独立 TEST（2026-11-06）：复核 `GetGUIThreadInfo` 的线程 ID
 本机自会话标定（2026-11-06）：主控重试 `node dist/src/cli/index.js calibrate --json`，约 22 秒、exit 0；返回的窗口相对标题首字 `(437,39)`、输入区中心 `(760,1245)`，窗口 `1117×1354`、DPI `96`。独立读取 `send-points.json` 的 schema 2 缓存，双点与窗口参数均与返回值一致。该结果证明本机自会话搜索、标题复制核对与双点缓存流程完成；GLM 给出的输入点未经过独立焦点验证，真实目标搜索与文本发送尚未验收，本次没有发送消息。
 
 本机文本发送验收（2026-11-06）：用户明确指定联系人后，主控运行 `send --target-name <指定联系人> --text <测试消息> --json`，约 16 秒、exit 0；CLI 返回 `OK/effect=applied`，复制标题与目标全等，输入点为缓存中的 `(760,1245)`，本地库唯一出站记录核验命中 `message_id=1990`。发送前后 schema 2 缓存内容及修改时间一致，证明本轮复用已有双点；未自动重发。此结果只证明企微客户端记录落库，不代表对方已收到。W24 开发与本机单聊主路径验收完成，未部署；其他 OCR 入口按独立事项继续处理。
+
+## W27 企微删除添加客户与 OCR 发行依赖（2026-11-07）
+
+成功条件：`wecom_add_customer` 不再出现在新 CLI/MCP/manifest/Runtime 能力；新企微签名 payload 无 add-customer/旧 OCR 驱动、RapidOCR/Pillow/模型/旧 dist 残留；企微本地库在独立 `localdb-python` 便携资产上实际可解密合成快照并进行 SQLite/IANA 日期查询；微信 Provider 的 OCR 资产和能力保持。旧客户机已交付包及服务端不修改，也不改变 Device/Runtime wire 或 Runner 恢复语义。不得依赖客户机系统 Python、真实添加客户或部署。
+
+共同检查点与唯一写入者：本开发角色唯一修改企微 CLI/驱动、`clients/runtime-plugin-packaging/{package.mjs,verify-offline.py,prepare-localdb.py,localdb-assets.lock.json}`、`clients/agent-desktop/scripts/release-batch.ps1` 及其测试和现有设计/计划/索引；独立 TEST/CR 只读。生产者 `wecom-cli version --json` 的工具集合与 `package.mjs` 的 `runtime-manifest.json/distribution.required_files` 同步去掉添加客户与 OCR；消费者 Runtime 仍按现有签名/manifest/能力协商装载，不新增 wire，缺新能力仅影响该企微工具，不改旧客户机原包。生产/消费验证：当前 TS build → 新 dist/src 复制过滤 → 便携资产准备/签包 → 离线验签/搬迁/doctor/本地库合成解密及 IANA → Runtime manifest/capability 测试；微信包仍具 OCR。
+
+最小实施：删除已退役的企微 OCR PS/Python 驱动及其无用共享 helper，保留非 OCR 窗口/搜索/剪贴板函数；包内 `localdb-python` 由锁定 CPython、pycryptodome、tzdata、CRT 构建并验证，`weixin` 继续使用原 `ocr-python`。打包时以精确生产输出清单剔除旧 dist 残留，不能只依赖 `tsc` 覆盖。同步脚本、说明与有业务意义的测试；源码完成后登记自测及独立验收结果。
+
+开发自测（2026-11-07）：退役 add-customer、旧 OCR PS/Python 与死 `serverProxy.ts`，删除 `navigate.ts` 未被生产调用的旧 Jev/两阶段导航；保留现用目标名称解析。本机以独立锁定资产构建 `localdb-python` exit 0（AES/SQLite/IANA）；固定 Node 22.23.3 用**当前工作区**签出隔离 WeCom 0.2.8 测试包 exit 0（15 工具），不是 `git archive HEAD` 的旧代码。离线验签/搬迁/doctor/包内 AES/IANA exit 0，`synthetic_ocr=false`；真实 payload 4,640 文件，`localdb-python/` 1,032 文件，`drivers/py/` 仅本地库和 bootstrap，OCR/add-customer/旧 dist 文件为零。包内 Python 与包内 `wecom_localdb.py` 解密独立参考加密器生成的 8,192 字节合成 SQLite，查询回读成功。`wecom-cli` 相关 Node 50/50、打包 15/15、发行入口 5/5、Runtime capability/provider 20/20 均 exit 0；九份 live PS parse 0 错、函数引用无缺项。没有真实企微写动作、部署或正式签署；待独立 TEST/CR。
+
+独立 TEST 回炉（2026-11-07）：独测其余 WeCom/Runtime build、Node 80/80 + 63/63、Runtime 20/20、package 15/15、release 5/5、Python 1+22+6+8、隔离包验签/包内合成解密均通过；唯一阻断为旧 `tray-escape-regression.ps1` 还导入已删 `Close-WeComSearchOverlay`。仅删除该旧 overlay 清理段，保留隐藏主窗 probe、注销优先、恢复原隐藏窗口及本地库登录语义；剩余实际 7 项检查与 `cases=7` 一致。六份现存 PS 行为脚本均 exit 0，tray Node + input-locator Node 4/4 exit 0，WeCom build 与 `git diff --check` exit 0；待独立 TEST 复测和 CR。
+
+独立 TEST/CR 收尾（2026-11-07）：最终 WeCom/Runtime build、受影响 Node 80/80 与 63/63、Runtime 20/20、打包 15/15、发行入口 5/5、Python 1/1、22/22、6/6、8/8、六份 PS 行为脚本、九份驱动语法/BOM 与差异检查均通过。隔离签名包 SHA256 `1f8d199b5a00977ab2c94f49ed5c70d176f30148fcf192eded9f1b5a2d54582c`；离线验签、required_files 和 payload 校验通过，15 个工具且无 OCR/add-customer/旧 dist，包内 Python 解密合成 SQLite 并读回。CR 未发现 P0/P1。P2：打包时只比对来源声明与锁文件，未逐文件重验已准备目录；准备时已校验下载 SHA，签名绑定实际包内容，本轮隔离包文件与工作区校验一致。没有真实超长安装路径验收、正式发行或部署。
 
 ## W26 图片与文件发送去 OCR（2026-11-07）
 

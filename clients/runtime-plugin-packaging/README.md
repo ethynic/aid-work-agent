@@ -17,21 +17,15 @@
 - 每次交付保留完整公开根快照；同步这些公开资产即可换构建机，不要求用户解绑重配。新私钥只驻签名进程，不能为同一已交付版本重签不同内容。
 - 正式签署使用外部 `--signer` 和不可变 `--release-id`，不能混用 `--test`；Windows production 另需有效代码签名，详见[发行边界](../../docs/ops/runtime-boss-release-guide.md#10-正式签名发行与故障排查)。
 
-如需构建微信或企业微信，`package.mjs` 还支持 `--provider weixin`、`--provider wecom`，不传 provider 才会遍历三个 Provider；对应源码先分别构建，OCR 资产按下节准备。不要为只交付 BOSS 的任务额外构建全部三包。
+如需构建微信或企业微信，`package.mjs` 还支持 `--provider weixin`、`--provider wecom`，不传 provider 才会遍历三个 Provider；对应源码先分别构建，各自便携 Python 资产按下节准备。不要为只交付 BOSS 的任务额外构建全部三包。
 
-## 微信 / 企业微信的 OCR 资产（BOSS-only 跳过）
+## 微信 OCR 与企微本地库 Python 资产
 
-`ocr-assets.lock.json` 固定 CPython 3.12.10 embed-amd64、19 份官方 PyPI wheels、Microsoft VC Runtime 14.44.35211 和构建机解包工具的版本/原始 SHA256/来源。Python 摘要来自官方 Sigstore bundle；wheel 摘要来自官方 PyPI release metadata。所有 wheel 包内许可证/模型保留，Python LICENSE 和 Microsoft CRT license 一并交付。MSVC exe 另外核对 Microsoft Authenticode；仅解包 CAB，绝不运行其安装器。构建用的 7-Zip 不进入客户机包。
+微信 Provider 保持 `prepare-ocr.py`、`ocr-assets.lock.json` 和 `ocr-python` 原路径，用于现有 OCR 能力。企微 Provider 使用独立的 `prepare-localdb.py`、`localdb-assets.lock.json` 和 `localdb-python`，只包含锁定来源和 SHA256 的 CPython 3.12.10、pycryptodome、tzdata 与 app-local CRT；不带 RapidOCR、Pillow、ORT、OpenCV 或模型。
 
-企微本地库解密延迟使用 `Crypto.Cipher.AES`，发行依赖包含锁定的 pycryptodome 3.23.0 Windows x64 ABI3 wheel及许可证。仅SQLite查询/OCR成功不能证明能解密；资产准备、企微签包及离线验包均验证包内AES-CBC与SQLite，交付还用包内driver解密独立生成的合成加密快照。复用旧OCR目录缺Crypto时应在签包前准确失败，不能借用系统Python掩盖缺依赖。
+两种资产均在构建机下载并核对来源摘要，MSVC 包还核对 Microsoft Authenticode，仅解包 CAB。企微资产构建、签包及离线验包分别验证包内 AES-CBC、SQLite 和 Asia/Shanghai IANA 日期能力。发行包内 Python 以 `-I -B` 运行，签名 payload 不含 `__pycache__`。`python_bootstrap.py` 保留便携解释器在 Runtime 深路径的兼容处理；开发 checkout 可用仓库 venv，已安装插件依赖包内解释器。
 
-`prepare-ocr.py` 下载并校验所有字节，产生 `assets/ocr-python-final`。内部 Python 自带通用 `msvcp140.dll`/`msvcp140_1.dll` 等 CRT 文件，不依赖本机 System32 中已有的 VC Redistributable。RapidOCR/ORT/OpenCV/Pillow 初始化在复制后的目录内验证。Windows 系统 API/DLL、PowerShell 和目标业务软件仍是平台条件。
-
-发行包里的所有 Python 调用使用 `-I -B`，忽略开发 Python 环境且不向签名 payload 写入 `__pycache__`。微信 history/Win32 底座已迁入 drivers，运行不再读取 experiments。仅没有 runtime-manifest 的开发 checkout 保留旧仓库 venv 回退；已安装包缺内部 OCR 则明确失败。
-
-复制drivers时排除开发机重生成的`__pycache__`、`.pyc`和`.pyo`，保留其余源文件原始字节；无需在每轮测试后手动清空开发缓存。
-
-企微0.2.1的TS本地库与两个PS OCR调用共用包内python_bootstrap.py，处理实际安装布局的Windows进程/原生DLL长路径。仅嵌入Python启用，DLL句柄保留至退出，只读选取系统现成短路径，realpath兼容表示限runtime目录；业务文件/argv/stdin及退出码保持，不导入Crypto、不复制缓存或调整系统策略。签包后还须在实际已装深目录以默认TS桥解密合成快照、实际PS OCR识别合成图片；短目录/import成功不替代该检查。无现成短名的卷设置未宣称经过验证，代码不增加可用性门禁。
+复制 drivers 时排除开发机的 `__pycache__`、`.pyc` 和 `.pyo`。企微打包只复制当前源码对应的 `dist/src` 模块，避免 TypeScript 删除模块后旧编译文件混入签名包。
 
 ## 隔离验收包与信任根
 

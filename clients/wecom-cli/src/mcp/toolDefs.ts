@@ -5,7 +5,7 @@
  * 保证「Host 看到的 schema」与「manifest digest 的 schema」同源（SDK 1.30.0 内部同样
  * 用 zod v4 toJSONSchema 生成 list_tools 的 inputSchema）。
  *
- * M1 有 wecom_probe（只读）与 wecom_add_customer（写）；M2 增加 wecom_chat_search（只读）
+ * M1 有 wecom_probe（只读）；M2 增加 wecom_chat_search（只读）
  * 与 wecom_message_send（写）；M3 增加 wecom_unread_list 与 wecom_watch_poll（读）；
  * M5 增加 wecom_chat_select（半写：无出站消息，但进会话清角标/切换会话视图）；
  * M7 增加 wecom_send_image（写：向 target_ref 目标发送 1 张本地图片）；
@@ -50,20 +50,6 @@ export const TOOL_DEFS: WecomToolDef[] = [
     annotations: { title: '企业微信环境探测', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
-    name: 'wecom_add_customer',
-    title: '企业微信添加客户',
-    description:
-      '按手机号在企业微信「通讯录 → 新的客户 → 添加」中检索微信用户并发送添加邀请（写动作，单次单号码）。' +
-      'confirm 必须显式为 true 才会执行。成功后返回对方微信名与各步骤截图路径；' +
-      '号码无检索结果返回 CUSTOMER_NOT_FOUND（不重试）；' +
-      'effect=unknown 表示邀请可能已发出但校验失败，系统不会自动重试，请人工确认。',
-    zodShape: {
-      phone: z.string().regex(/^1\d{10}$/).describe('客户手机号（11 位数字，1 开头）'),
-      confirm: z.literal(true).describe('显式确认：这是对外发送添加邀请的写动作，必须传 true'),
-    },
-    annotations: { title: '企业微信添加客户', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  },
-  {
     name: 'wecom_chat_search',
     title: '企业微信搜索联系人/会话',
     description:
@@ -100,16 +86,12 @@ export const TOOL_DEFS: WecomToolDef[] = [
       'target_ref 必须来自 wecom_chat_search（有效期 5 分钟，过期 TARGET_REF_STALE 需重新搜索）。' +
       'M11a 直达模式：改传 target_name（与 target_ref 二选一，可选 subtitle 消歧），内部自动 search 定位' +
       '（身份校验 + 唯一匹配，同名多候选无法消歧返回 TARGET_AMBIGUOUS），data 附 resolved_target。' +
-      '智能分发：发送驱动核对当前标题——当前会话就是目标时清空输入区并沿原输入方式发送（快路径）；' +
-      '不是目标或无法判定时自动执行 search（Jev 选最优候选）+ select（点击进会话并校验标题）后再发送，' +
-      '两轮均不在目标会话返回 TARGET_NOT_FOUND（未发送消息）。' +
-      '输入替换：目标标题确认后清空该会话输入区已有内容；单行逐字输入，多行经剪贴板粘贴；' +
-      '清理失败不发送，发送前标题复核不一致则清理本次输入并中止。' +
-      '副作用：已有未发送文字会被覆盖；多行发送会覆盖用户剪贴板且不恢复。Jev 不可用时降级为标题规则匹配、比例坐标输入点；终态沿三选二规则。' +
+      '发送前从本地库确认唯一目标与当前账号，必要时通过本地搜索和标题复制进入目标会话；' +
+      '点击缓存输入点、清除已有草稿、粘贴文本并按 Enter。剪贴板内容会被覆盖且不立即恢复。' +
       '终态核验：本地库可用时发送后按本地记录核验，成功为 verification=local-record' +
       '（发送前基线之后出现「方向=本人 ∧ 正文全等 ∧ trusted」的新记录，verification_detail.message_id 为匹配记录；' +
       '含义=客户端已记录并经本地核验，不代表对方已收到/已读）；未命中或本地库核验失败保持结果未知。' +
-      '无本地库基线的旧路径仍走驱动内 OCR 核验（无 verification 字段）。' +
+      '本地库不可用时拒绝发送，不进入旧视觉回退。' +
       '核验失败返回 EXECUTION_UNKNOWN（消息可能已发出，系统不会自动重试、绝不重入发送阶段）。' +
       '本地库基线可用时，发送前保存加密凭据；结果或错误data.receipt_id供wecom_send_status只读对账，' +
       '不能因unknown再次调用发送。无receipt_id时须人工核对，不猜测凭据。',

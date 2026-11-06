@@ -113,11 +113,6 @@ test('text send cannot fall into OCR search when the driver cannot confirm the t
           assert.ok(options.args?.includes('group'), 'driver must receive expected group type')
           return { navigate_required: true, reason: 'current conversation is a contact, not the target group' }
         }
-        if (options.script.endsWith('chat-search.ps1')) {
-          searches++
-          return { query: '合成群甲', items: [{ name: '合成群甲', subtitle: '', section: '联系人', x: 100, y: 100 }],
-            best_index: 0, overlay: { x: 0, y: 0, w: 400, h: 500 }, jev: { used: false } }
-        }
         throw new Error('must not select or send to contact')
       },
     })

@@ -15,7 +15,7 @@ Windows 10/11 x64，Node/npm、Git、Windows 自带 tar.exe、PowerShell 5.1、�
 
 入口默认将 `-SourceRef`（默认 HEAD）的已提交源码归档到 `%TEMP%/aid-release-<批次>/workspace` 独立工作区，仅覆盖当前入口、插件验包辅助脚本/测试、Runtime打包与验包脚本、签名策略及测试、品牌ICO这11个打包文件；不复制业务代码的未提交修改。需要把新业务功能出包时，先确认其已在指定提交中。显式版本参数仅修改隔离副本。shared 是 npm workspace 根，脚本从该根一次安装，避免逐成员安装破坏 hoisted 依赖；保留受管构建输出与压缩占用重试。
 
-WeCom 还需要 `-OcrDirectory` 指向既有验证的 `ocr-python-final`；省略时使用仓库默认资产目录，不存在则在构建前报错。复制时过滤 `__pycache__`、`.pyc`、`.pyo`，保留嵌入式 Python 必需的 `python312.zip`，不修改原资产目录。构建副本使用 Temp：本机实测 AidWorkBuild 下的 npm junction 无法被 Node 跟随，而 Temp 下同样链接正常；最终交付文件仍集中在 AidWorkBuild，不添加链接修复框架。
+WeCom 还需要 `-LocaldbPythonDirectory` 指向独立构建且已验证的 `localdb-python-final`；省略时使用仓库默认资产目录，不存在则在构建前报错。复制时过滤 `__pycache__`、`.pyc`、`.pyo`，保留嵌入式 Python 必需的 `python312.zip`，不修改原资产目录。构建副本使用 Temp：本机实测 AidWorkBuild 下的 npm junction 无法被 Node 跟随，而 Temp 下同样链接正常；最终交付文件仍集中在 AidWorkBuild，不添加链接修复框架。
 
 ## 3. 选择组件与独立版本
 
@@ -56,10 +56,10 @@ powershell.exe -NoProfile -File clients/agent-desktop/scripts/release-batch.ps1 
 powershell.exe -NoProfile -File clients/agent-desktop/scripts/release-batch.ps1 -Component Both -Signer C:\secure-build\boss-signer.json -RuntimeVersion 0.0.32 -BossVersion 0.3.28
 
 # WeCom 配套交付：实际生成的 Runtime 必须信任该插件，并支持四项必需工具；不构建 BOSS。
-powershell.exe -NoProfile -File clients/agent-desktop/scripts/release-batch.ps1 -Component RuntimeWecom -Signer C:\secure-build\cli-signer.json -RuntimeVersion 0.0.38 -WecomVersion 0.2.5 -OcrDirectory C:\build-assets\ocr-python-final
+powershell.exe -NoProfile -File clients/agent-desktop/scripts/release-batch.ps1 -Component RuntimeWecom -Signer C:\secure-build\cli-signer.json -RuntimeVersion 0.0.38 -WecomVersion 0.2.5 -LocaldbPythonDirectory C:\build-assets\localdb-python-final
 
 # 已有 Runtime 满足要求时，只更新 WeCom；目标目录只读核验，不安装或改写信任根。
-powershell.exe -NoProfile -File clients/agent-desktop/scripts/release-batch.ps1 -Component Wecom -Signer C:\secure-build\cli-signer.json -WecomVersion 0.2.5 -OcrDirectory C:\build-assets\ocr-python-final -TargetRuntimeResources C:\target-runtime\resources
+powershell.exe -NoProfile -File clients/agent-desktop/scripts/release-batch.ps1 -Component Wecom -Signer C:\secure-build\cli-signer.json -WecomVersion 0.2.5 -LocaldbPythonDirectory C:\build-assets\localdb-python-final -TargetRuntimeResources C:\target-runtime\resources
 
 # 正式产品沿生产身份与正式公开根；默认签名。用户明确选择未签名时加 -Unsigned。
 powershell.exe -NoProfile -File clients/agent-desktop/scripts/release-batch.ps1 -Component Both -Profile production -Signer C:\secure-build\boss-signer.json -TrustRoots C:\secure-build\production-roots.json -RuntimeVersion 0.0.32 -BossVersion 0.3.28

@@ -238,28 +238,5 @@ Case 'late nonempty copy before original deadline may prove and restore after tr
   Assert-Intent ($r.matched-and$r.restored-and[PolicyClipboardFacade]::Text-ceq$saved) 'empty publications are not proof, but a later exact stable copy within original deadline is valid'
  }
 }
-Case 'actual search Body reports permanent copy-empty restoration uncertainty without retyping' {
- $tokens=$null;$errors=$null
- $searchAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $DriverDir 'chat-search.ps1'),[ref]$tokens,[ref]$errors)
- if($errors.Count){throw($errors|Out-String)}
- $command=$searchAst.FindAll({param($n)$n-is[Management.Automation.Language.CommandAst]-and$n.GetCommandName()-eq'Invoke-DriverMain'},$true)[0]
- $body=($command.CommandElements|Where-Object{$_-is[Management.Automation.Language.ScriptBlockExpressionAst]}|Select-Object -First 1).ScriptBlock.GetScriptBlock()
- function Resolve-WeComMainWindow{return 101}
- function Write-DriverLog{param($Msg)}
- function Invoke-WeComJev{param($StateText,$Questions)return @{used=$false}}
- function Send-WeComClick{param($Hwnd,$ScreenX,$ScreenY)$script:clicks++;return 101}
- function Send-WeComText{param($Hwnd,$Text)$script:typed++}
- function Wait-WeComWindow{param($ClassName,$TimeoutMs)$script:overlay++;throw 'FORBIDDEN_OVERLAY'}
- function Get-WeComSearchBoxState{param($MainHwnd,$Tag)
-  if($Tag-in@('pre','focus')){return @{State='empty';Content='';PlaceholderPos=@(224,36);TokensRaw=@(@{text='搜索';x0=208;x1=240;y0=28;y1=44})}}
-  return @{State='unknown';Content='clipped';ContentPos=@(268,36);TokensRaw=@(@{text='fixture';x0=208;x1=328;y0=26;y1=46},@{text='+';x0=368;x1=384;y0=28;y1=44})}
- }
- $script:typed=0;$script:overlay=0;$script:expireCopyWait=$true;$script:expireDelay=1600
- foreach($s in @(0,0,1,1,0)){[PolicyClipboardFacade]::Plan.Enqueue($s)}
- $Query='fixture';$ArtifactDir='unused';$failure=''
- try{&$body|Out-Null}catch{$failure=$_.Exception.Message}
- Assert-Intent ($failure-like'WECOMDRIVE|UI_CHANGED|*剪贴板写入/恢复失败*原内容可能未恢复*') 'actual user-visible failure must explain restoration uncertainty'
- Assert-Intent ($typed-eq1-and$overlay-eq0-and[WeComWin32]::Writes-eq1) 'do not retype, proceed to overlay or blindly restore after copy publication deadline'
-}
 if($failures.Count){throw($failures-join"`n")}
 Write-Output('PS_CLIPBOARD_POLICY_OK cases='+$passes)

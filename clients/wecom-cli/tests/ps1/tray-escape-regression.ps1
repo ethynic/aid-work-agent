@@ -13,7 +13,6 @@ function Import-Function($Ast, [string]$Name) {
     . $definition
 }
 $common = Read-Ast '_common.ps1'
-Import-Function $common 'Close-WeComSearchOverlay'
 Import-Function $common 'Resolve-WeComMainWindow'
 $probe = Read-Ast 'probe.ps1'
 $command = $probe.Find({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Invoke-DriverMain' }, $true)
@@ -37,11 +36,6 @@ if ($logout.login_state -ne 'need_login') { throw 'real login window takes prece
 $script:Login = $null
 $restored = Resolve-WeComMainWindow
 if ($restored -ne 42 -or [WeComWin32]::Restores -ne 1) { throw 'restore only original hidden main once' }
-$script:Clears=0
-function Clear-WeComSearchBox { param($MainHwnd,[switch]$BestEffort) $script:Clears++; return $true }
-function Send-WeComEscape { throw 'normal cleanup must not send Escape' }
-Close-WeComSearchOverlay -OverlayHwnd 42 -MainHwnd 42
-if ($script:Clears -ne 1) { throw 'cleanup must use the located search control' }
 $script:Window = $null
 $offline = & $runProbe
 if ($offline.login_state -ne 'offline') { throw 'no recognised window is offline' }

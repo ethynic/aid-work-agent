@@ -73,24 +73,27 @@ def main():
                 code = "from PIL import Image,ImageDraw,ImageFont; from rapidocr_onnxruntime import RapidOCR; import sys,json; im=Image.new('RGB',(700,160),'white'); ImageDraw.Draw(im).text((25,40),'Runtime 123',fill='black',font=ImageFont.truetype(sys.argv[1],48)); result,_=RapidOCR()(im); assert result and any('Runtime' in x[1] for x in result); print('SYNTHETIC_OCR_OK')"
                 subprocess.run([str(stage / 'ocr-python/python.exe'), '-I', '-B', '-c', code, str(windows / 'Fonts/arial.ttf')], cwd=stage, env=env, check=True, timeout=90, capture_output=True)
             if manifest['provider_id'] == 'ai.aidwork.wecom':
+                if (stage / 'ocr-python').exists() or not (stage / 'localdb-python' / 'asset-provenance.json').is_file():
+                    raise ValueError('WeCom requires independent localdb-python without OCR payload')
+                if any(token in file.lower() for file in before for token in ('rapidocr', 'onnxruntime', 'pillow', '/pil/', 'chat_ocr.py', 'add_customer_result.py')):
+                    raise ValueError('WeCom payload contains OCR assets')
                 code = ('from Crypto.Cipher import AES; import sqlite3; '
                         'encrypted=AES.new(bytes(16),AES.MODE_CBC,bytes(16)).encrypt(bytes(16)); '
                         'assert encrypted.hex()=="66e94bd4ef8a2c3b884cfa59ca342b2e"; '
                         'assert AES.new(bytes(16),AES.MODE_CBC,bytes(16)).decrypt(encrypted)==bytes(16)')
-                subprocess.run([str(stage / 'ocr-python/python.exe'), '-I', '-B', '-c', code],
+                subprocess.run([str(stage / 'localdb-python/python.exe'), '-I', '-B', '-c', code],
                                cwd=stage, env=env, check=True, timeout=30, capture_output=True)
-                # wecom 日期/IANA 能力（评审三 P1-5）：离线验包同样验证——旧
-                # ocr-python-final（无 tzdata）在此失败，指向 prepare 刷新资产。
+                # WeCom local database date mode needs IANA timezone data.
                 daymode = ('from zoneinfo import ZoneInfo; from datetime import datetime, timedelta; '
                            'tz=ZoneInfo("Asia/Shanghai"); '
                            'start=datetime(2026,11,4,tzinfo=tz); '
                            'end=(datetime(2026,11,4)+timedelta(days=1)).replace(tzinfo=tz); '
                            'assert int(end.timestamp())-int(start.timestamp())==86400')
-                probe = subprocess.run([str(stage / 'ocr-python/python.exe'), '-I', '-B', '-c', daymode],
+                probe = subprocess.run([str(stage / 'localdb-python/python.exe'), '-I', '-B', '-c', daymode],
                                        cwd=stage, env=env, timeout=30, capture_output=True)
                 if probe.returncode != 0:
                     raise ValueError('WeCom date/IANA capability missing in embedded python; '
-                                     'refresh assets via prepare-ocr.py (tzdata wheel) before packaging')
+                                     'refresh assets via prepare-localdb.py (tzdata wheel) before packaging')
             if snapshot(stage) != before:
                 raise ValueError('Read-only smoke mutated signed payload')
             summaries.append({'archive': archive.name, 'sha256': digest(archive), 'size': archive.stat().st_size, 'files': len(before), 'tools': len(manifest['tools']), 'doctor_exit': doctor.returncode, 'runtime_readiness': report['runtime_readiness'], 'payload_unchanged': True, 'synthetic_ocr': (stage / 'ocr-python').exists(), 'wecom_sqlite_aes': manifest['provider_id'] == 'ai.aidwork.wecom'})

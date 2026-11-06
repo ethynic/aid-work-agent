@@ -172,7 +172,7 @@ test('wecom manifest：页面目录进入受信调用白名单，旧业务工具
   assert.ok(!isToolAllowedFor(wecom, 'wecom_chat_search'))
   assert.ok(!isToolAllowedFor(wecom, 'wecom_chat_select'))
   assert.ok(!isToolAllowedFor(wecom, 'wecom_watch_poll'))
-  assert.ok(!isToolAllowedFor(wecom, 'wecom_add_customer'))
+  assert.ok(!wecom.tools.includes('wecom_add_customer'))
   // digest 独立计算（与 boss/weixin 各不相同，boss 基线不受影响——见上）
   assert.match(manifestDigestFor('wecom'), /^[0-9a-f]{64}$/)
   assert.notEqual(manifestDigestFor('wecom'), manifestDigestFor('boss-recruiting'), '各 Provider digest 应独立')

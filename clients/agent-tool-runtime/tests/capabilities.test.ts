@@ -86,7 +86,7 @@ test('配置 wecom entry：providers 数组含 wecom，manifests 含独立摘要
     assert.ok(capabilities.includes(tool), `${tool} 应在 capabilities`)
   }
   // 未接入 runtime 受信面的工具不得上报
-  for (const tool of ['wecom_chat_search', 'wecom_chat_select', 'wecom_watch_poll', 'wecom_add_customer']) {
+  for (const tool of ['wecom_chat_search', 'wecom_chat_select', 'wecom_watch_poll']) {
     assert.ok(!capabilities.includes(tool), `${tool} 未接入不得上报`)
   }
 })

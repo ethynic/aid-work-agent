@@ -59,8 +59,8 @@ test('manifest 字段完整且与静态 provider-manifest.json 同源', () => {
   // M7：wecom_send_image（写：发图片）；M8：wecom_send_file（写：发文件）；
   // M11b：wecom_read_session 进 MCP（撤销 M3 决策——runtime 模式调用方是 agent，
   // 低频理性，模型通道已把长滚动抓取变快）
-  assert.deepEqual(TOOL_NAMES, ['wecom_probe', 'wecom_add_customer', 'wecom_chat_search', 'wecom_chat_select', 'wecom_message_send', 'wecom_send_status', 'wecom_send_image', 'wecom_send_file', 'wecom_unread_list', 'wecom_read_session', 'wecom_session_directory', 'wecom_read_sessions', 'wecom_watch_poll', 'wecom_group_list', 'wecom_group_read', 'wecom_group_poll'])
-  assert.equal(m.tools.length, 16)
+  assert.deepEqual(TOOL_NAMES, ['wecom_probe', 'wecom_chat_search', 'wecom_chat_select', 'wecom_message_send', 'wecom_send_status', 'wecom_send_image', 'wecom_send_file', 'wecom_unread_list', 'wecom_read_session', 'wecom_session_directory', 'wecom_read_sessions', 'wecom_watch_poll', 'wecom_group_list', 'wecom_group_read', 'wecom_group_poll'])
+  assert.equal(m.tools.length, 15)
   const probe = m.tools[0]!
   assert.equal(probe.name, 'wecom_probe')
   assert.ok(probe.title.length > 0 && probe.description.length > 0)
@@ -69,7 +69,7 @@ test('manifest 字段完整且与静态 provider-manifest.json 同源', () => {
 
   // 注解语义：add_customer / message_send / send_image / send_file 是写动作（readOnly=false 且非幂等），search 只读幂等
   const byName = new Map(m.tools.map((t) => [t.name, t]))
-  for (const n of ['wecom_add_customer', 'wecom_message_send', 'wecom_send_image', 'wecom_send_file']) {
+  for (const n of ['wecom_message_send', 'wecom_send_image', 'wecom_send_file']) {
     assert.equal(byName.get(n)!.annotations.readOnlyHint, false, `${n} 应为写动作`)
     assert.equal(byName.get(n)!.annotations.idempotentHint, false, `${n} 应非幂等`)
   }
@@ -98,12 +98,12 @@ test('tool schema 单一来源：manifestTools 的 inputSchema 由 toolDefs 推�
   const tools = manifestTools()
   const probeProps = tools[0]!.inputSchema.properties as Record<string, { type?: string }>
   assert.equal(probeProps.verbose!.type, 'boolean')
-  const addSchema = tools[1]!.inputSchema
-  assert.deepEqual(addSchema.required, ['phone', 'confirm'])
-  const selectSchema = tools[3]!.inputSchema
+  const searchSchema = tools[1]!.inputSchema
+  assert.deepEqual(searchSchema.required, ['query'])
+  const selectSchema = tools[2]!.inputSchema
   assert.deepEqual(selectSchema.required, ['target_ref'])
   // M11a：send 三工具的 target_ref 转可选（target_name 二选一，XOR 在 operation 层校验）
-  const sendSchema = tools[4]!.inputSchema
+  const sendSchema = tools[3]!.inputSchema
   assert.deepEqual(sendSchema.required, ['text'])
   const sendProps = sendSchema.properties as Record<string, { type?: string }>
   assert.equal(sendProps.target_name!.type, 'string')
@@ -142,7 +142,7 @@ test('toolDefs ↔ registry 一致性守卫：每个 toolDef 可取到 operation
   // registry ⊇ toolDefs：M11b 起 registry 10 个 operation 且全部进 MCP toolDefs
   // （read_session 由仅 CLI 改为同时暴露 MCP，watch_poll 留 CLI——runtime 受信清单
   // 不含 watch_poll/add_customer，见 agent-tool-runtime providers.ts）
-  assert.equal(OPERATION_NAMES.length, 16)
+  assert.equal(OPERATION_NAMES.length, 15)
   assert.ok(OPERATION_NAMES.includes('wecom_read_session'))
   for (const name of TOOL_NAMES) {
     assert.ok(OPERATION_NAMES.includes(name), `MCP tool「${name}」必须在 OPERATIONS 注册`)

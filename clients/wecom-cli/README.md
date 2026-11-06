@@ -20,7 +20,7 @@ Runner 将首次按名称发送拆为内部只读定位与稳定会话发送：�
 
 企业微信（WXWork.exe）操作 CLI / MCP Provider。整体骨架与 `clients/weixin-cli` 同范式：
 CLI 动词子命令与 MCP stdio server 共用同一 operation 层，UI 自动化下沉到
-`drivers/ps1`（DRIVER_JSON 进程协议）+ `drivers/py`（RapidOCR）。
+`drivers/ps1`（DRIVER_JSON 进程协议）+ `drivers/py`（本地库只读驱动）。
 
 设计与真机验证依据：`docs/research/wecom-cli/probe-and-design-20260829.md`
 （2026-08-29 企业微信 5.0.9 全流程实测）。
@@ -55,7 +55,6 @@ aid-wecom read-session (--target-ref <ref> | --target-name <会话名>) [--limit
                                             # 本地库读取精确消息/游标；同名消歧，不切会话/清角标
 aid-wecom watch [--interval 秒] [--once] [--focus <名1,名2>]
                                             # 本地库增量事件 NDJSON；失败轮保留水位
-aid-wecom add-customer --phone <11位> --yes [--json]
                                             # 写动作：主窗口搜索手机号→「网络查找」→检索→发邀请（--yes 显式确认；
                                             # M12 搜索直达路线，旧通讯录路线已废弃，见「关键实现事实」M12 条）
 aid-wecom mcp --stdio                       # MCP server（stdout 只承载协议）
@@ -168,123 +167,11 @@ Enter 后只读本地库，基线后时间窗内唯一 102 本人出站记录且
 - **Windows（win32-x64）**，已登录且未锁屏的交互桌面会话；
 - 企业微信 Windows 客户端（WXWork.exe）**已登录**（5.0.9 实测）；
 - PowerShell（powershell.exe 在 PATH）；
-- `add-customer` 业务阶段仍需 OCR；图片/文件发送与文本发送均不调用 OCR/Jev。
-- 本地库解密和只读核验仍需 Python 运行环境；双点缓存缺失时需要已配置的 GLM 标定代理。
-- `read-session` 的**模型主通道**另需可选环境变量 `AID_WECOM_SERVER_URL`（服务端地址）+
-  `AID_WECOM_SERVER_TOKEN`（服务端长期 token，管理端 `POST /api/saas/client-bindings/static`
-  签发）——两者均未配置时直接走本地 OCR 通道（不报错）；模型通道按次计积分，详见
-  M10b 章节。
+- 企微发行包使用独立的 `localdb-python`（便携 Python + pycryptodome + tzdata + app-local CRT），不含 OCR 资产；双点缓存缺失时需要已配置的 GLM 标定代理。
 
-## 关键实现事实（历史实验记录；当前发送以 W26 为准）
+## 实现记录
 
-- 主窗口 = 可见、class `WeWorkWindow`、标题「企业微信」、≥600x400 且面积最大者；hwnd 动态，每次重新解析。
-- 内容子窗口 class `WXworkWindow - 企业微信-<页名>`，类名编码页名（M1 时代页面状态校验用；
-  **2026-09-29 客户端更新后已不存在**——主窗口 0 子窗口，probe current_page=null 同源，勿再依赖，见 M12 条）。
-- 点击走 PostMessage（WM_MOUSEMOVE+LBUTTONDOWN/UP），按 WindowFromPoint 路由到坐标归属 HWND；
-  截图走 `PrintWindow(hwnd, hdc, 2)`（遮挡/最小化可用，9 点采样全黑回退 CopyFromScreen）。
-- 文本输入只用纯 WM_KEYDOWN+WM_KEYUP（**禁止同发 WM_CHAR**，双倍字符）；
-  注入输入（SendInput/keybd_event，**键盘与鼠标**）被企微 5.0.9 完全丢弃，**禁止**（2026-08-30 真机复核，
-  覆盖早期"SendInput 鼠标可用"的误判）——全部交互走 PostMessage，驱动层不提供任何 SendInput 原语。
-- Enter 触发检索用 PostMessage（焦点由 PostMessage 点击输入框 + WM_KEYDOWN 输入建立）；
-  「添加」按钮 PostMessage 点击有效，但 `InputReasonWnd` 弹窗有数秒延迟（等 15s）。
-- 实测时序（2026-08-30）：PostMessage 点「发送」后 `InputReasonWnd` ≤1s 关闭，检索弹窗结果行
-  ≤3s 才变「已发送申请」——终态校验必须轮询（每 1s，上限 10s），单次快照会误报 EXECUTION_UNKNOWN。
-- 每次 add-customer 运行的点击坐标与 OCR 原始输出写 artifact 目录 `driver-log.txt`（真机排障用）。
-- 写动作零自动重试：`effect=unknown` 一律人工核对；`CUSTOMER_NOT_FOUND` 不重试。
-- M2（2026-08-31 实测；**2026-09-04 随客户端更新重新标定**）：搜索 = 点主窗口搜索框
-  （**像素锚定 (330,72)**，新版客户端左栏为固定像素列、比例坐标在窗口变宽后全部偏移；
-  × 清空按钮同理 (473,77)）→ 输入关键词 → `SearchResultWindow2` overlay，OCR 读分区结果
-  列表；点结果行进会话 overlay 自动关闭。中文输入必须 WM_CHAR 逐字（VkKeyScanW 对中文
-  返回 -1，Send-WeComText 自动降级），英文/数字纯 WM_KEYDOWN。发送 = PostMessage Enter；
-   文本发送前确认目标标题，清空其输入框后沿原方式输入；
-  打开外部联系人会话主窗口可能变宽（2196→2916 物理 px）。
-- **2026-09-04 客户端更新后的布局事实（真机实测，勿随意改）**：
-  - 搜索框固定在左栏 x∈[154,505]、y∈[44,100]（物理 px @2x DPI）；框内文本 x0≈221；
-    右侧聊天区会话标题与框同高（普通会话 x0≈0.296w、外部联系人 x0≈0.22w），
-    searchbox 残留检查必须用像素带 x∈[140,510]。
-  - 新版搜索 overlay 分区新增「应用提醒」（官方应用账号如文件传输助手归此分区）；
-    搜「陆伟@微信」零结果——驱动搜索词必须剥掉 @微信 后缀（结果行名称本就带后缀）。
-  - 外部联系人（@微信）会话右侧出现「智能总结」侧栏（客户需求/客户意向/成交卡点…，
-    x0≥0.76w），且主窗口撑宽到 2916：history/bubble/input 的 OCR band 必须检测并排除
-    侧栏（「立即总结」按钮会被误判成输入草稿、侧栏标签会被误读成 self 消息）；
-    聊天区左边界从比例改为像素锚定 max(0.10w, 620)。
-  - 未读角标在头像右上角 x≈[0.09w,0.11w]（旧标定 [0.15w,0.26w] 完全错过）；会话列表列
-    文本中心 x∈[0.08w,0.30w]；时间列中心 ≈0.257w；输入工具栏图标行移到 ≈0.83h。
-  - MCP stdio 场景下 Host 可能只传白名单环境变量（SDK getDefaultEnvironment）：PS 5.1
-    对管道化原生命令在该环境下抛 CantActivateDocumentInPipeline（python 未执行、
-    $LASTEXITCODE 为空）——驱动内 OCR 必须用 System.Diagnostics.Process 直启。
-- M3（2026-08-31 截图校 OCR）：未读角标是**会话行头像右上角**的红色圆形白字数字
-  （不是行右侧——任务书描述与实测不符，以像素为准）；RapidOCR 对角标白字小数字漏检率高，
-  必须红色像素 blob 检测定位 + 裁切 5x 放大（原图/二值化各试一次）OCR 读数，读不出兜底 1。
-  会话行右侧时间列误识多（「07/09」→「60/L0」），按宽松形近字符模式剔除。
-  消息区滚动：PostMessage WM_MOUSEWHEEL（wParam=delta<<16 按 uint32 掩码，lParam=屏幕坐标）有效；
-  输入工具栏图标行在 0.71-0.73h（OCR 会读成「X·三」碎字），history 模式消息区上界卡 0.70h。
-- M4（2026-09-28 实测）：attachstate 组合键（AttachThreadInput 共享键状态 + PostMessage
-  Ctrl+F/Ctrl+A）全后台 ~250ms 可用，是聚焦/全选主路径；ESC 禁用（最小化企微）。
-  搜索框状态检测必须动态裁切（x∈[120,420]、y∈[0,62] + 4x 放大 + 坐标判态，内容 token
-  按 x1∈[212,400] 判定）：旧固定像素带在 1280 宽窗口把聊天区标题误判为残留（已证实 bug）。
-  搜索 overlay 用后**保持打开**（坐标句柄供 select 消费）；overlay 关闭后窗口以
-  visible=False 残留，判开必须带可见性过滤。Jev 决策 API 措辞敏感，state 模板不得随意改。
-- M6（2026-09-28 设计定稿）：send 智能分发——驱动返回 `navigate_required=true` 表示当前
-  会话非目标，TS 层内部编排 chatSearch→chatSelect→二次 send（不经 CLI，注入同一驱动依赖）；
-   文本发送现按用户要求先确认目标，再覆盖目标输入区已有内容；输入后不再以标题 OCR 阻断发送
-   （Clear-WeComFocusedInput 使用 Ctrl+A+Delete）；
-  终态 Jev 判定 no/unclear 或降级三选二 <2 项 → EXECUTION_UNKNOWN 绝不自动重试。
-- M7（2026-09-28 真机验证 e5-image）：Clipboard.SetImage（System.Windows.Forms，FromFile
-  加载 Bitmap）+ attachstate Ctrl+V（Send-WeComAttachChordKey -Vk 0x56）在输入框聚焦时
-  可后台粘贴图片；输入区缩略图使灰度方差 9.8→36.5（检测函数 Get-WeComRegionStddev，
-  区域 x∈[0.35w,0.90w]、y∈[0.82h,0.95h] 隔 4px 采样，判据 ±8）；Send-WeComEnter 发送后
-  1.8s 方差回落 + 会话列表预览出现「[图片]」。图片消息无文本气泡，终态双判据 =
-  方差回落 + 列表 [图片]，Jev state 须注明气泡空白属正常。智能分发编排在 M7 抽取为
-  navigate.ts 共享实现（send 与 send-image 共用）。
-- M8（2026-09-28 真机验证 e6-file）：Clipboard.SetFileDropList（StringCollection 装绝对
-  路径）+ attachstate Ctrl+V → **无确认弹窗**，输入区直接出现内联文件卡片（OCR 可读
-  文件名 + 大小标签「53B」，y≈0.86h）→ Send-WeComEnter 后卡片消失 + 会话列表预览出现
-  「[e3-test-file.txt]」，文件真实送达。文件卡片是 OCR 可读文本，判据直接 token 匹配
-  文件名主干（去扩展名取前 12 字，防 .txt 误读），无需图片方差通道。CR 加固（2026-09-28）：
-  三判据全部**基线差分**（只认粘贴/发送后新出现的 token，防占位符「发送消息」/侧栏/其他
-  会话预览含主干假命中——通用主干「a」「test」的假阳性链由差分+短主干全名回退+TS 极短
-  名拒发三层关闭）；输入区带左界像素锚定 max(0.10w,620)（纯比例 0.30w 在 2916 宽窗口会
-  整段漏掉卡片 x0≈650px≈0.22w）、右界 0.74w 无条件排除智能总结侧栏（chat_ocr.py input
-  模式同阈值）。
-- M9（2026-09-28 设计定稿）：read → read-session 改名（旧动词废弃）+ 导航迁移共享
-  智能分发（navigate.ts readonly 模式：阶段超时/取消原样透传，不套写动作 unknown
-  语义）+ 时间戳沿袭（页合并后沿消息流记最近 timeline 分割线原文为 time，近似时间）。
-  旧驱动内搜索链退役原因：固定像素带在窄窗口把聊天区标题误判为搜索框残留（已证实
-  bug），且 ESC 关闭路径有最小化企微风险——搜索/清空统一走 M4 V2 链（Ctrl+F 聚焦 +
-  Ctrl+A+Delete 清空），会话切换交 TS 编排 chatSearch+chatSelect。
-- M10b（历史实现，2026-11-06 已退出 read-session）：截图双通道解析——模型主通道（截图 base64 上传
-  服务端 `/api/client/v1/session-history`，GLM-5.3-Flash 多模态并行分页 + 服务端重叠
-  去重，来源 E7 实验结论）+ OCR 兜底。驱动加 `-ParseMode ocr|none`（none=只截图不逐页
-  OCR，省每页 ~2s 冷启动；缺省 ocr 向后兼容 watch）；TS 侧 serverProxy.ts；
-  402 余额不足/配置错误不降级直接报错（INSUFFICIENT_CREDIT / CONFIG_MISSING）。
-- M10c（2026-09-29 用户定稿）：模型通道鉴权由「激活码模式」简化为「直连长期 token
-  模式」——自有机器调自有服务端，去掉激活码；配置 `AID_WECOM_SERVER_URL`+
-  `AID_WECOM_SERVER_TOKEN`（服务端管理端签发的 static 长期 token，见 M10b 章节配置
-  说明）直接调用扣积分。激活码链路（`AID_WECOM_ACTIVATION_CODE`、/activate 调用、
-  401 重激活、DPAPI 缓存 server-binding.json、src/security/dpapi.ts）全部移除；
-  401 token 无效改判 config 直报不重试不降级。
-- **M12（2026-09-29 真机重标定）：add-customer 改走主窗口搜索直达路线，旧「通讯录→新的
-  客户→⊕添加」路线整体废弃**——客户端更新后内容子窗口 `WXworkWindow - 企业微信-<页名>`
-  已不存在（子窗口校验失效）、通讯录导航坐标漂移、④添加按钮 PostMessage/mouse_event 均
-  无效（真机逐步验证）。新流程：attachstate **Ctrl+F 聚焦搜索框**（失败 fail-closed，绝不
-  带不确定焦点输入）→ `Clear-WeComSearchBoxV2` 残留清空 + 状态复核 → 输入手机号 + 搜索框
-  带 token 回读（**contains 判定**：天然容忍前导 Q 图标伪读/末尾光标伪影/「网络查找」行
-  混入；截断丢字必失败）→ 等 `SearchResultWindow2` overlay 高度稳定（手机号搜索形态实测
-  高 148 = 单行 + 底部按钮行）→ boxes OCR 找「网络查找」行（实测 token 形态
-  「网络查找手机W/邮箱：13671705876」，W=「号」误读，按 contains '网络查找' 匹配 + **同
-  视觉行拼接校验含手机号**防点错行/陈旧面板）→ PostMessage 点行中心（显式投 overlay
-  hwnd，同 M2 结果行点击模式）→ **SearchExternalsWnd 弹窗（400x292，类名与 M1 相同）
-  自动填号**（标题「网络查找手机/邮箱：\<号\>」+ 输入框数字两处 OCR 可验；未自动填回退：
-  点输入框 M1 标定 0.5w/0.257h + 清空 + 手输 + 回读）→ 弹窗段（Enter 检索重发 / result
-  模式 OCR / InputReasonWnd 15s / 发送 / 终态「已发送申请」10s 轮询）**M1 原样保留**。
-  收尾成功/失败统一 best-effort：关两弹窗 + 清空搜索框手机号残留（Ctrl+F + Ctrl+A+Delete，
-  同时关掉可能残留的 overlay）。**陈旧弹窗防御**：点「网络查找」行与点结果行「添加」之前
-  先关闭已存在的同类可见弹窗（SearchExternalsWnd/InputReasonWnd；上轮被超时 kill 或人工
-  遗留时，残留旧号码的结果行/「发送」窗无法与新开弹窗区分，会被当成新结果误发——关不掉
-  → UI_CHANGED 中止；正常路径无残留时为空操作）。`add_customer_result.py` result/reason
-  模式对新弹窗兼容（同布局，实测结果行「WayneLu」+「添加」可解析），原样复用。
-- 含中文的 .ps1 必须 **UTF-8 with BOM**。
+旧 OCR/添加客户实验已退役；当前路径与验证边界见 `docs/design/wecom/wecom-cli-design.md`、`docs/plans/plan-wecom-cli-group-chat-experiment.md`。含中文的 `.ps1` 使用 UTF-8 with BOM。
 
 ## 目录
 
@@ -292,10 +179,10 @@ Enter 后只读本地库，基线后时间窗内唯一 102 本人出站记录且
 src/cli/          动词子命令 + 薄 renderer（进度/退出码/跨进程互斥）
 src/mcp/          MCP stdio server + toolDefs + manifest digest
 src/operations/   业务能力层（统一 OperationResult 契约，永不 reject）
-src/platform/     PowerShell 驱动执行器 / 环境探测 / 命名互斥 / target_ref（HMAC 短期句柄）/ watch 水位状态 / serverProxy（M10c 模型通道：长期 token 直连 /session-history）
-src/security/     日志脱敏（手机号不明文入日志）
-drivers/ps1/      UI 自动化驱动（_common.ps1 底座 + probe/add-customer/chat-search/chat-select/message-send/send-image/send-file/unread-list/read-session）
-drivers/py/       RapidOCR：add_customer_result.py（添加客户弹窗）+ chat_ocr.py（search/send/unread/history 单一入口）
+src/platform/     PowerShell 驱动执行器 / 环境探测 / 命名互斥 / target_ref（HMAC 短期句柄）/ watch 水位状态
+src/security/     日志脱敏
+drivers/ps1/      UI 自动化驱动（_common.ps1 底座 + probe/chat-select/message-send/send-image/send-file/point-calibrate）
+drivers/py/       本地库驱动 wecom_localdb.py + python_bootstrap.py
 tests/            node:test，全部 mock（绝不触达真实企微窗口）
 ```
 
@@ -327,4 +214,4 @@ node dist/src/cli/index.js send-status --receipt-id <原receipt_id> --json
 
 明确无发送动作的阶段会删除凭据（如checkpoint取消、导航前检查、写前拒绝）；删除失败立即停止，`receipt_invalidation_failed=true`的ID不可用于自动确认。驱动中超时/取消/unknown保留证据用于只读核对。
 
-凭据位于既有`artifacts/send-*/send-receipt.dpapi`，一个发送阶段一个小文件；清理该证据目录后无法恢复。不要将密文或原始群消息上传日志。只有旧OCR路径的发送没有可重建本地证明，不产生receipt。MCP同时暴露`wecom_send_status({receipt_id})`，沿用CLI同一只读operation；Runtime受信清单追加此只读工具，并在调用前核实际Provider能力，旧CLI提示升级而不重发。云端代理接收`send_invocation_id`，服务端从原发送可信结果提取receipt，核对同主体/会话/固定原设备后派发；不允许用模型自报receipt绕过权限或其他设备hold。对账调用本身0积分，模型实际用量照常计费；查询成功仍须看`data.send_status`，不自动改变原unknown/hold或解除原Runner核验等待。新真实发送、多天持续任务及正式发行升级仍待后续验收，不改原Runtime结果补传设施。
+凭据位于既有`artifacts/send-*/send-receipt.dpapi`，一个发送阶段一个小文件；清理该证据目录后无法恢复。不要将密文或原始群消息上传日志。MCP同时暴露`wecom_send_status({receipt_id})`，沿用CLI同一只读operation；Runtime受信清单追加此只读工具，并在调用前核实际Provider能力，旧CLI提示升级而不重发。云端代理接收`send_invocation_id`，服务端从原发送可信结果提取receipt，核对同主体/会话/固定原设备后派发；不允许用模型自报receipt绕过权限或其他设备hold。对账调用本身0积分，模型实际用量照常计费；查询成功仍须看`data.send_status`，不自动改变原unknown/hold或解除原Runner核验等待。新真实发送、多天持续任务及正式发行升级仍待后续验收，不改原Runtime结果补传设施。

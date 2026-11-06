@@ -36,11 +36,6 @@ export async function groupMonitorFixture(base: string, setup = true, searchSect
     const script = options.script.replace(/^.*[\\/]/, '')
     calls.push(script)
     const value = (key: string) => options.args?.[(options.args?.indexOf(key) ?? -2) + 1] as string
-    if (script === 'chat-search.ps1') {
-      const name = value('-Query')
-      return { query: name, items: [{ name, subtitle: '', section: searchSection, x: 100, y: 100 }], best_index: 0,
-        overlay: { x: 0, y: 0, w: 400, h: 500 }, jev: { used: false }, timing_ms: {} }
-    }
     if (script !== 'message-send.ps1' || options.args?.includes('-VerifyOnly')) throw new Error('unexpected fixture driver')
     const text = value('-Text')
     const name = value('-TargetName')

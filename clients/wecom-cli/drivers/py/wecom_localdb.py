@@ -1,5 +1,5 @@
 # drivers/py/wecom_localdb.py — 本地库驱动：可信快照判定 + 解密（设计 §3.3，任务 1.4）
-# 对齐 chat_ocr.py 单脚本多模式先例：argv 模式分发、stdout 最后一行单行 JSON、
+# 单脚本多模式：argv 模式分发、stdout 最后一行单行 JSON、
 # \u 转义中文（ensure_ascii，规避控制台编码）、任何错误（含用法/环境缺失）也输出 JSON 且退出码 0。
 #
 # 模式（argv 分发）：

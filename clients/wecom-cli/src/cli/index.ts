@@ -1,7 +1,7 @@
 /**
  * aid-wecom CLI 入口。
  *
- * M1 实现：probe / add-customer / mcp / doctor / version。
+ * M1 实现：probe / mcp / doctor / version。
  * M2 增加：search / send。
  * M3 增加：unread / read / watch。
  * M5 增加：select。
@@ -24,7 +24,6 @@
  *   node dist/src/cli/index.js read-session (--target-ref <ref> | --target-name <会话名>) [--channel local-db] [--limit N] [--cursor <cursor>] [--since-days N] [--json]
  *   node dist/src/cli/index.js read-session --session <ws1.…> (--date YYYY-MM-DD | --cursor <wd1.…>) [--timezone IANA] [--include-context] [--limit N] [--json]
  *   node dist/src/cli/index.js watch [--interval 秒] [--once] [--channel local-db] [--focus <名1,名2>]
- *   node dist/src/cli/index.js add-customer --phone <11位手机号> --yes [--json]
  *   node dist/src/cli/index.js mcp --stdio
  *   node dist/src/cli/index.js doctor [--json] [--localdb]
  *   node dist/src/cli/index.js version [--json]
@@ -53,9 +52,6 @@ const USAGE = `aid-wecom — 企业微信操作 CLI / MCP Provider（M1）
   probe [--verbose] [--json]
                             只读环境探测：平台 / 交互会话 / PowerShell / WXWork.exe 进程 /
                             主窗口解析 / 登录态 / 当前内容页（不激活窗口、不发送输入、不改剪贴板）
-  add-customer --phone <11位手机号> --yes [--json]
-                            按手机号检索并发送添加客户邀请（写动作；--yes 显式确认；
-                            失败不自动重试，effect=unknown 时请人工核对）
   search --query <词> [--type contact|group|any] [--limit N] [--json]
                             本地库匹配联系人/群聊名称（只读）；唯一命中返回 target_ref
   select --target-ref <ref> [--json]
@@ -206,14 +202,6 @@ async function main(): Promise<number> {
         once: hasFlag(args, 'once'),
         channel: flagString(args, 'channel'),
         focus: flagString(args, 'focus'),
-      })
-    }
-    case 'add-customer': {
-      const { addCustomerCommand } = await import('./commands/addCustomer.js')
-      return addCustomerCommand({
-        phone: flagString(args, 'phone'),
-        yes: hasFlag(args, 'yes'),
-        json: hasFlag(args, 'json'),
       })
     }
     case 'mcp': {
