@@ -2977,6 +2977,7 @@ CREATE TABLE IF NOT EXISTS agent_runners (
     attempt INTEGER NOT NULL DEFAULT 0,
     worker_id TEXT,
     lease_until TIMESTAMPTZ,
+    execution_started_at TIMESTAMPTZ,
     wake_at TIMESTAMPTZ,
     revision BIGINT NOT NULL DEFAULT 0,
     view_revision BIGINT NOT NULL DEFAULT 0,
@@ -2998,6 +2999,35 @@ CREATE INDEX IF NOT EXISTS idx_agent_runners_session ON agent_runners(scope_key,
 CREATE INDEX IF NOT EXISTS idx_agent_runners_lease ON agent_runners(lease_until) WHERE status IN ('running','finalizing');
 CREATE INDEX IF NOT EXISTS idx_agent_runners_wake ON agent_runners(wake_at,runner_id)
     WHERE status='waiting' AND wake_at IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS agent_runner_alert_thresholds (
+    tenant_id TEXT NOT NULL,
+    profile_id TEXT NOT NULL,
+    threshold_minutes INTEGER NOT NULL CHECK (threshold_minutes >= 1),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY (tenant_id, profile_id)
+);
+CREATE TABLE IF NOT EXISTS agent_runner_alerts (
+    alert_id TEXT PRIMARY KEY,
+    runner_id TEXT NOT NULL,
+    attempt INTEGER NOT NULL,
+    tenant_id TEXT,
+    profile_id TEXT NOT NULL,
+    started_at TIMESTAMPTZ NOT NULL,
+    threshold_minutes INTEGER NOT NULL,
+    alerted_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    ended_at TIMESTAMPTZ,
+    notification_ref TEXT,
+    UNIQUE (runner_id, attempt)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runner_alerts_recent ON agent_runner_alerts(alerted_at DESC, alert_id DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_runner_alerts_current ON agent_runner_alerts(alerted_at DESC, alert_id DESC)
+    WHERE ended_at IS NULL;
+CREATE TABLE IF NOT EXISTS agent_runner_monitor_status (
+    monitor_key TEXT PRIMARY KEY CHECK (monitor_key='runner-long-running'),
+    last_successful_scan_at TIMESTAMPTZ
+);
+INSERT INTO agent_runner_monitor_status (monitor_key) VALUES ('runner-long-running') ON CONFLICT DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS agent_runner_session_claims (
     scope_key TEXT NOT NULL,

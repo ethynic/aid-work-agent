@@ -957,6 +957,12 @@ Web 与 KF 恢复均须核验原 claim，并将新 attempt/lease 和消费后的
 
 message、target、preference 的 scope CHECK 保证 NULL tenant 对应 `global`，有 tenant 对应 `tenant:<id>`，用户始终独立隔离。delivery 不重复存租户，所有读写通过原 message/target 核验精确归属。四表无外键、触发器；引用完整性和原资源权限由通知核心在短事务内检查。网络发送不持数据库锁；清理仅删除过保留期的通知消息及其投递账本，不删除 Runner、会话、目标或偏好。参数、配置及渲染内容沿用既有 EncryptionManager，目标配置不存登录 bearer。
 
+## Runner 运行告警（2026-11-06）
+
+`agent_runners.execution_started_at` 在每次普通领取、控制恢复、定时唤醒和持续任务领取事务中记录数据库时钟起点；后续 attempt 覆盖旧起点，`updated_at` 不承担本次执行计时。`agent_runner_alert_thresholds` 以 `(tenant_id,profile_id)` 保存分钟阈值覆盖，未配置时应用默认 30 分钟。
+
+`agent_runner_alerts` 以 `(runner_id,attempt)` 唯一记录平台运行告警，保存该次起点、触发时阈值、告警时间、业务结束时间及通知引用；告警表负责 Portal 当前/历史视图，通知表负责外发。`agent_runner_monitor_status` 是固定 `runner-long-running` 单行状态，记录最近完整扫描成功时间；超过 3 分钟表示扫描停滞。三表无外键和触发器，新库初始化同时维护主部署与诺度独立 SQL，升级通过 `deploy/db_update.yaml`。
+
 ### `chat_message_shares` — Web 单条回复分享
 
 2026-10-22 新增，属于系统表；`share_key` 随机主键标识一个独立分享页面。

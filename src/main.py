@@ -1912,6 +1912,10 @@ app.include_router(external_customers.router)
 app.include_router(web_sessions.router)
 from src.notifications.api import router as notification_router
 app.include_router(notification_router)
+from src.api.runner_alerts import router as runner_alerts_router
+from src.api.runner_alert_targets import router as runner_alert_targets_router
+app.include_router(runner_alerts_router)
+app.include_router(runner_alert_targets_router)
 app.include_router(tenant_migration.router)
 app.include_router(context_compression_routes.router)
 app.include_router(billing_recharges.router)

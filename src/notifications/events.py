@@ -5,7 +5,8 @@ import uuid
 from typing import Literal
 
 from pydantic import Field
-from .contracts import RULE_EVENT_POLICY_KEY, SCHEMA_VERSION, StrictDTO
+from .contracts import (PLATFORM_RUNNER_POLICY_KEY, RULE_EVENT_POLICY_KEY,
+                        SCHEMA_VERSION, StrictDTO)
 from .repository import protected
 
 
@@ -164,6 +165,13 @@ class LeadCapturedParameters(StrictDTO):
     previous_captured_at: str = Field(default='', max_length=32)
 
 
+class RunnerLongRunningParameters(StrictDTO):
+    runner_id: str = Field(min_length=1, max_length=256)
+    tenant_id: str | None = Field(default=None, max_length=128)
+    profile_id: str = Field(min_length=1, max_length=128)
+    duration_seconds: int = Field(ge=0, le=1_000_000_000)
+
+
 @dataclass(frozen=True)
 class EventDefinition:
     template_key: str
@@ -212,6 +220,7 @@ EVENTS.register('abuse.rule_triggered',EventDefinition('abuse_rule_triggered',Ab
 EVENTS.register('leadgen.reply_intent',EventDefinition('leadgen_reply_intent',LeadGenReplyIntentParameters,'leadgen_campaign'))
 EVENTS.register('leadgen.daily_summary',EventDefinition('leadgen_daily_summary',LeadGenDailySummaryParameters,'leadgen_campaign'))
 EVENTS.register('lead.captured',EventDefinition('lead_captured',LeadCapturedParameters,'lead_capture_lead'))
+EVENTS.register('runner.long_running',EventDefinition('runner_long_running',RunnerLongRunningParameters,'runner_alert'))
 
 
 def _non_work_time_note(now=None):
@@ -314,7 +323,26 @@ def render_message_text(event_type, parameters):
     """外发渠道统一文本（标题, 正文）；测试事件也走此渲染。"""
     if event_type == 'notification.test':
         return '通知渠道测试', '这是一条测试通知，收到即表示外发渠道配置有效。'
+    if event_type == 'runner.long_running':
+        minutes = parameters['duration_seconds'] // 60
+        return 'Runner 运行较久', (
+            f'Runner ID：{parameters["runner_id"]}\n'
+            f'租户标识：{parameters.get("tenant_id") or "无"}\n'
+            f'数字员工：{parameters["profile_id"]}\n'
+            f'本次执行时长：{minutes} 分钟。')
     return render_inbox_text(event_type, parameters)
+
+
+def runner_alert_detail_link(message):
+    if message.get('event_type') != 'runner.long_running':
+        return None
+    from urllib.parse import quote
+    from src.config.settings import settings
+    base = (getattr(settings.app, 'public_base_url', '') or '').strip().rstrip('/')
+    runner_id = (message.get('parameters') or {}).get('runner_id')
+    if not base or not runner_id:
+        return None
+    return base + '/portal/runner-alerts?runner_id=' + quote(str(runner_id), safe='')
 
 
 def scheduled_result_link(message):

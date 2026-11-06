@@ -34,7 +34,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20261105-1902 | Runner 执行槽隔离与运行告警 | 🔧 部分完成（Phase 1 已完成） | 单 Runner 独立执行槽；按数字员工占槽时长告警，Portal 与飞书可见。 | [设计](system/agent-application-architecture-design.md#10-runner-执行槽隔离与运行告警2026-11-05待开发) | [计划](plans/plan-runner-execution-slot-isolation-and-alerts.md) |
+| 20261105-1902 | Runner 执行槽隔离与运行告警 | 🔧 部分完成（Phase 4 待验） | Phase 4 本地准备完成待评审，真机容量与交付验证待授权。 | [设计](system/agent-application-architecture-design.md#10-runner-执行槽隔离与运行告警2026-11-05) | [计划](plans/plan-runner-execution-slot-isolation-and-alerts.md) |
 | 20261104-1639 | 知识库多轮检索新鲜度与结果去重 | 🔧 部分完成 | 工具说明对照无差异，待 Web 与正式微信 KF 复验。 | [设计](system/knowledge-base/knowledge-search-freshness-design.md) | [计划](plans/plan-knowledge-search-freshness.md) |
 | 20261022-1606 | 本地工具失败与原会话恢复闭环 | 🔧 部分完成 | 0.3.27单调用归位续做真验通过，下一轮排除26份续读入库1份。 | [设计增量](system/agent-application-architecture-design.md#本地工具阻断与原会话恢复2026-10-22增量待实现)、[最小修复方案](design/recruiting/boss-overlay-heal-design.md#w4-原始日志核验后的最小修复方案2026-10-23)、[今日统一交接](incidents/boss-agent2-issues-and-minimal-repair-handoff-20261023.md) | [修复计划](plans/plan-runner-local-tool-recovery-lockup-fix.md)、[10-30事故取证](plans/plan-boss-widget-incident-evidence-collection.md) |
 | 20261026-1530 | 定时任务一次性提醒修复与渠道尽力投递 | ⛔ 已取消（随 Runner 化删除） | once 校验与 wecom_kf 尽力投递（delivery.py/scheduled_task_deliveries/补投挂点）随旧实现整体删除，功能未上线、无存量数据。 | — | [巡检报告 P1-1](plans/log-error-review-20261026.md) |

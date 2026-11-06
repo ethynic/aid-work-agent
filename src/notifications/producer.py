@@ -1,7 +1,60 @@
 """Cursor-only producer at the original Runner terminal transaction tail."""
 from datetime import timedelta
+import json
+import uuid
 
-from .contracts import Subject, session_title
+from .contracts import (PLATFORM_RUNNER_POLICY_KEY, SCHEMA_VERSION, Subject,
+                        session_title)
+
+
+def publish_platform_runner_alert_in_tx(cursor, *, runner, duration_seconds):
+    """Publish one global event inside the caller's locked Runner transaction."""
+    runner_id, attempt = runner['runner_id'], runner['attempt']
+    if runner['execution_started_at'] is None or attempt < 1 or duration_seconds < 0:
+        raise ValueError('RUNNER_ALERT_NOT_ACTIVE')
+    cursor.execute('''SELECT status,attempt,tenant_id,profile_id,execution_started_at FROM agent_runners
+        WHERE runner_id=%s FOR UPDATE''', (runner_id,))
+    current = cursor.fetchone()
+    if (not current or current['status'] not in ('running', 'finalizing')
+            or current['attempt'] != attempt
+            or current['tenant_id'] != runner.get('tenant_id')
+            or current['profile_id'] != runner['profile_id']
+            or current['execution_started_at'] != runner['execution_started_at']):
+        raise ValueError('RUNNER_ALERT_NOT_ACTIVE')
+    from .events import EVENTS
+    from .repository import protected
+    from src.config.settings import settings
+    resource = {'type': 'runner_alert', 'id': runner_id}
+    definition, parameters = EVENTS.validate('runner.long_running', {
+        'runner_id': runner_id, 'tenant_id': runner.get('tenant_id'),
+        'profile_id': runner['profile_id'], 'duration_seconds': duration_seconds,
+    }, resource)
+    cursor.execute('SELECT clock_timestamp() AS now')
+    now = cursor.fetchone()['now']
+    event_key = f'{runner_id}:{attempt}'
+    cursor.execute('''INSERT INTO notification_messages
+        (notification_id,notification_ref,schema_version,producer,event_type,event_key,
+         scope_key,tenant_id,recipient_user_id,resource_ref,template_key,template_version,
+         parameters_encrypted,occurred_at,accepted_at,expires_at,category,priority,policy_key)
+        VALUES(%s,%s,%s,'runner-monitor','runner.long_running',%s,
+            'global',NULL,NULL,%s::jsonb,%s,1,%s,%s,%s,%s,'system',0,%s)
+        ON CONFLICT(scope_key,producer,event_key) WHERE recipient_user_id IS NULL DO NOTHING
+        RETURNING notification_ref''',
+        ('notification_'+uuid.uuid4().hex, uuid.uuid4().hex, SCHEMA_VERSION, event_key,
+         json.dumps(resource), definition.template_key, protected(parameters), now,
+         runner.get('accepted_at') or now, now+timedelta(seconds=settings.notifications.ttl_seconds),
+         PLATFORM_RUNNER_POLICY_KEY))
+    created = cursor.fetchone()
+    if created:
+        return created['notification_ref']
+    cursor.execute('''SELECT notification_ref FROM notification_messages
+        WHERE scope_key='global' AND tenant_id IS NULL AND recipient_user_id IS NULL
+          AND producer='runner-monitor' AND event_type='runner.long_running'
+          AND policy_key=%s AND event_key=%s''', (PLATFORM_RUNNER_POLICY_KEY, event_key))
+    existing = cursor.fetchone()
+    if existing is None:
+        raise ValueError('RUNNER_ALERT_EVENT_IDENTITY_CONFLICT')
+    return existing['notification_ref']
 
 
 def _user_owned_web_runner(runner):

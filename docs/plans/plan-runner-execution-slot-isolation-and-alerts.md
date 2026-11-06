@@ -5,11 +5,11 @@
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
 | Phase 1 | 废弃 `browser_automation` 工具入口 | ✅ 完成（2026-11-06） | 目录/指引零残留，16 个 real_browser 套件显式下线+兜底用例；三轮评审通过；资源盘点结论见 Phase 1 完成记录 |
-| Phase 2 | 单并发 Worker 副本、独立租约监督与可扩槽部署 | 📋 待开发 | — |
-| Phase 3 | 执行计时、运行告警、平台飞书目标与 Portal 页面 | 📋 待开发 | — |
-| Phase 4 | agent2 容量测试、旧客户端兼容及发布检查 | 📋 待开发 | agent2 部署与真机测试需用户当场明确指示 |
+| Phase 2 | 单并发 Worker 副本、独立租约监督与可扩槽部署 | ✅ 完成（2026-11-06） | 独立测试 92 通过；CR 无未解决 P0/P1/P2；未部署，真实 Linux/PG/旧客户端组合待验 |
+| Phase 3 | 执行计时、运行告警、平台飞书目标与 Portal 页面 | ✅ 完成（2026-11-06） | 独立测试 Runner 76、通知 64、前端 2 通过，构建通过；CR 无遗留 P0/P1/P2；未部署 |
+| Phase 4 | agent2 容量测试、旧客户端兼容及发布检查 | 🔧 进行中 | 本地准备完成待独立评审；真机双槽、旧包和容量实测待用户当场授权 |
 
-> 日期：2026-11-05；2026-11-06 按两轮独立架构评审修订；状态：待整体评审，尚未开发、提交或部署。设计依据：[AgentRunner 架构 §10](../system/agent-application-architecture-design.md#10-runner-执行槽隔离与运行告警2026-11-05待开发)；事故证据：[Excel 阻塞复盘](../incidents/excel-process-shared-runner-blocking-20261105.md)。Excel 读取算法修复由另一任务负责。
+> 日期：2026-11-05；2026-11-06 按两轮独立架构评审修订；Phase 1～3 已完成本地开发，未提交或部署。Phase 4 已获放行仅开展本地/只读准备，真机部署与压测仍待用户当场明确指示。设计依据：[AgentRunner 架构 §10](../system/agent-application-architecture-design.md#10-runner-执行槽隔离与运行告警2026-11-05)；事故证据：[Excel 阻塞复盘](../incidents/excel-process-shared-runner-blocking-20261105.md)。Excel 读取算法修复由另一任务负责。
 
 ## 成功标准
 
@@ -51,10 +51,18 @@ Worker 跨任务进程内资源盘点（Phase 2 收尾超时回收前置核对�
 
 - 将现有 `runner-worker` 调整为多个独立副本，每副本根 Runner 并发数为 1。Worker 自行执行 `_acquire_next()`、普通及恢复领取核验、浏览器 owner、Engine/工具、业务提交、计费和 Trace；同一进程顺序复用，不做每任务进程重建。不同 Runner 的上下文继续按现有方式逐次创建和清理。
 - 每副本另设一个轻量监督进程。它启动 Worker 时给出本次唯一 `worker_id`，检查执行进程存活，仅查询数据库中仍归属于 `runner_id + attempt + worker_id` 的合法执行并补续租。Worker 领取事务提交后，监督进程即可查到 attempt，无需额外领取通知；每次补租仍核对数据库归属。Worker 原有心跳及暂停/取消读取、安全点处理保留；监督进程不领取任务、不迁移恢复核验、不把请求送达当成暂停/取消完成。父子不传活对象或完整上下文。
-- 增加仅供收尾回收判断的共享槽位状态：Worker 在执行前写 `BUSY(runner_id, attempt)`，本次 `execute()` 连同 Trace、清理全部返回后、下一次领取前写 `IDLE`。监督进程只在数据库显示同一 attempt 已提交结束状态而共享状态仍是对应 `BUSY` 时开始两分钟计时；`IDLE` 或新 attempt 的 `BUSY` 立即取消旧计时。共享状态更新和超时回收的最后身份核对使用同一跨进程锁，核对通过才结束旧进程；确认退出后以新 `worker_id` 启动新进程。不能只凭数据库终态杀进程。执行进程异常退出时立即停止补续租；旧 Runner 沿现有租约过期、中断和外部效果核验处理，不自动重放。监督进程自身退出不能留下无人续租但仍执行的孤儿 Worker。
+- 增加仅供收尾回收判断的共享槽位状态：Worker 在执行前写 `BUSY(runner_id, attempt)`，本次 `execute()` 连同 Trace、清理全部返回后、下一次领取前写 `IDLE`。监督进程只在数据库显示同一 attempt 已提交结束状态而共享状态仍是对应 `BUSY` 时开始两分钟计时；`IDLE` 或新 attempt 的 `BUSY` 立即取消旧计时。共享状态更新和超时回收的最后身份核对使用同一跨进程锁，核对通过才结束旧进程；确认退出后监督进程退出本槽容器，由容器重启清理所有旧子进程并以新 `worker_id` 建槽，不在同一容器内直接复用旧进程命名空间。不能只凭数据库终态杀进程。执行进程异常退出时立即停止补续租并退出容器；旧 Runner 沿现有租约过期、中断和外部效果核验处理，不自动重放。监督进程作为 Linux 容器主进程，其自身退出不能留下无人续租但仍执行的孤儿工具。
 - 保持 Worker 先提交业务终态/等待状态，再在 `finally` 写 Trace、清理资源的原顺序，计费仍由原 finalizer 按用量记录结算。只有 Phase 1 已核对无跨任务保留资源，才启用两分钟收尾超时回收；不能证明资源归属时标记槽位不可用并告警，不以回收冒险中断其它业务。收尾超时可造成 Trace 或清理不完整，已提交的状态和费用不回退；仍在执行的长工具不因运行时长被终止。未来若引入会在等待期间保留进程内对象的工具，须先复核回收条件。Trace 数据库操作本身设置合理超时并记录失败，不改变原采集和计费路径。
 - 调整 Compose 与环境脚本中的固定容器名、单实例假设及健康检查，使多个独立副本可按配置启动；每副本 CPU/内存限额与总数由 Phase 4 实测定值。保留 Runner API/渠道/Runtime 的现有协议。
 - 定向验证一个同步阻塞工具超过 30 秒只占一个 Worker，另一 Worker 自行接单、续租并完成；阻塞 attempt 不被误接管；领取提交后监督进程可从数据库发现 attempt、旧 `worker_id` 无法补租、异常退出及恢复核验；同一 Worker 顺序处理不同租户 Runner；业务终态已提交而 Trace/清理卡住时 2 分钟后只回收仍为对应 `BUSY` 的进程，新任务已开始或 Worker 已空闲时不误杀，状态和费用不回退；正常 Trace、等待、暂停/取消、休眠唤醒及旧 attempt 隔离不回退。
+
+### Phase 2 完成记录（2026-11-06，本地开发，待逐阶段评审）
+
+- Worker 根 Runner 并发固定为 1；独立监督进程用独立 1–2 连接数据库池按 `worker_id + runner_id + attempt` 发现并补续租，原 Worker 自行领取、恢复核验、暂停/取消安全点、业务提交、计费与 Trace 路径保留。`BUSY/IDLE` 由跨进程文件锁保护；仅提交了本次业务结束且同一 `BUSY` 连续两分钟时回收。正常停止先向 Worker 发信号，给原取消/清理路径 30 秒。
+- `skill_execute` 可启动独立进程组；Worker 异常退出或收尾超时后，监督进程不在同一容器内启动新 Worker，而是以非零状态退出，由容器进程命名空间清理旧工具后按 restart policy 建立新 `worker_id`。Linux 入口要求监督进程为 PID 1。三个环境 overlay 的 Worker 停止宽限为 75 秒；仿真使用 `on-failure` 保持按需停机且可异常重启。
+- Compose 的 `deploy.replicas` 按 `AGENT_RUNNER_WORKER_SLOTS` 配置，移除固定 Worker 容器名；每副本 CPU/内存可配置。默认内存保留原 overlay 上限：生产 6G、诺度 3G、仿真 4G；agent2/agent3 更新脚本维持原实际 1G 限额。容量和数据库连接总量仍须在 Phase 4 按目标环境实测，尤其诺度 PostgreSQL `max_connections=40`。
+- 开发者定向自测 32 通过；独立测试在最终核心状态运行相关 Runner 用例 92 通过、0 跳过；独立 CodeReview 无未解决 P0/P1/P2。`git diff --check`、Python/YAML 解析、Shell 语法及生产/test/dev/仿真/诺度 Compose 只读配置校验通过。另有未改动的 `test_durable_sleep_boundaries.py` 旧 fixture 6 例因缺 `RuntimeExecution.catalog` 失败，不计为本阶段通过。
+- 未部署，未运行真实 Linux PID 命名空间清理、PostgreSQL 双槽阻塞与租约竞争、旧 Runtime/CLI 二进制组合或容量压测；这些留待获授权的环境验收。
 
 ## Phase 3：只读告警与 Portal
 
@@ -66,8 +74,38 @@ Worker 跨任务进程内资源盘点（Phase 2 收尾超时回收前置核对�
 - Portal 增加独立 **Runner 告警** 页面，查看当前/历史及监控最近成功扫描时间。详情按 Runner ID 读取原问题及已保存的最近模型返回和上下文，按现有平台管理员权限与脱敏规范开放；缺数据明确显示，不推断执行步骤。本期不建设平台运行工作台。
 - 定向验证阈值调整对在执行任务下次扫描生效、完成/持久休眠时告警结束而本次 Trace/清理未返回前仍不接新任务、扫描与完成并发不生成错误的当前运行告警、新 attempt 重新计时、同次执行只建一次告警及一条逻辑通知事件、事务中断后重复扫描可重新写入两者、飞书重试不重复建告警、平台目标与租户目标严格隔离、目标失效仍保留告警及投递原因、监控进程停滞在 Portal 可见且不影响 `runner-api`。
 
+### Phase 3 完成记录（2026-11-06，本地开发，待逐阶段评审）
+
+- 各领取路径记录 `execution_started_at`，业务结束或旧 `finalizing` attempt 被重领时在同一事务关闭告警。监控按本次起点、当前阈值和数据库状态复核，原子写入唯一告警与平台通知事件；独立 `runner-monitor` 定期扫描并报告最近成功扫描时间。主库和诺度新库初始化 SQL、增量迁移及系统表说明已同步。
+- 平台通知使用独立全局发布、展开、发送准入及固定飞书目标；未配置或失效目标保留告警和投递状态。缺少 `PUBLIC_BASE_URL` 时不发送无详情链接的飞书消息。Portal 提供当前/历史、监控状态、阈值和平台飞书目标管理；详情原问题作为有权管理员可见的原始输入，模型返回与上下文仅为既有 `mask_tool_args` 脱敏摘录，普通长字符串保留前 200 字符。历史 attempt 不显示后续 attempt 的模型事实；自由文本内嵌任意凭据不保证被识别。
+- 开发者定向自测 Runner 72、通知 64、前端 2 通过。独立测试在最终代码状态运行 Runner 76、通知 64、前端 API 2 例均通过；前端构建、相关 Python 编译、生产/test/dev/local/仿真/诺度 Compose 只读解析及监控 CLI 帮助检查通过。隔离 TestClient 验证新路由的鉴权与响应；完整 `src.main` 导入在本机被既有 Wanx/Qwen 密钥依赖阻断，使用测试期初始化替身与网络/数据库连接禁用后核对了 8 条路由。独立 CR 修复并复核旧 `finalizing` attempt 告警未关闭的问题后，无遗留 P0/P1/P2。
+- 独立测试对开发者全量 notifications 套件的 10 个失败做了窄范围复现：`test_web_push.py::test_real_library_encryption_normalizes_provider_results_without_redirect` 的 8 个参数用例均在第 57 行因本机缺少 `py_vapid` 失败；`test_im_webhook.py::TestRender::test_render_terminal_task_completed` 预期“任务执行完成”，实际为“定时任务执行结果”；`test_rule_engine.py::TestLeadCapturedContract::test_render_template_with_previous_capture` 预期 `a@b.com留资`，实际为 `a@b.com 留资`。独立测试从未提交 Phase 3 改动前的 `HEAD` 提取通知渲染函数，在内存中执行同样输入，确认两处实际输出逐字相同；Web Push 源码和上述三份旧测试相对 `HEAD` 均未改动，本机 `py_vapid` 不可导入。结论为 8 项环境依赖缺失、2 项既有断言失配，未发现 Phase 3 回归；全量套件仍不计为通过。
+- 未在真实 PostgreSQL 执行迁移、事务竞争或回滚验证，未实际投递飞书、运行 Docker 容器、验证旧 Runtime/CLI 交付组合或做容量压测；这些留待获授权的 Phase 4 环境验收。未提交、未推送、未部署。
+
 ## Phase 4：容量与交付验证
 
-- 经用户明确授权部署 agent2 后，逐级测试槽数和每槽 CPU/内存上限，记录容器首次启动、连续排队与顺序复用时的吞吐、排队时间、API/DB/模型负载、常驻进程内存变化、资源峰值及告警准确性；正式服按同机资源余量选择配置，不直接按内存倍数换算。
+- 经用户明确授权部署 agent2 后，逐级测试槽数和每槽 CPU/内存上限，记录容器首次启动、连续排队与顺序复用时的吞吐、排队时间、API/DB/模型负载、各 Worker 与监督进程数据库连接总量、常驻进程内存变化、资源峰值及告警准确性；将独立 runner-monitor 的资源与数据库连接一并计入。正式服按同机资源余量选择配置，不直接按内存倍数换算。
+- Compose 默认仅 1 槽、每 Worker 并发 1；默认配置不能证明“一个槽被同步工具阻塞时另一槽继续完成”的事故目标。须先在 agent2 完成容量与并发验证，再为目标环境显式配置至少 2 槽并复验，才能宣称此项成功标准成立；不在本地开发阶段猜定副本数。
 - 覆盖“只升级服务端、客户机保持已交付旧版本”的受影响组合，核对原工具、恢复、结果回报和计费。部署脚本及回退检查随多槽拓扑更新，不能遗漏其它环境的固定容器名假设。
 - 代码开发按项目非平凡任务流程完成独立测试、CodeReview 和主控发布前检查；每阶段实际完成时先更新本计划进度，再同步 `docs/ideas.md`。提交与任何环境部署分别等待用户明确指示。
+
+### Phase 4 本地准备与真机验收方案（2026-11-06）
+
+本次仅做本地/只读核对与清单准备；下面涉及 agent2 的操作均为用户当场明确授权后的验收步骤，尚未执行。默认 `AGENT_RUNNER_WORKER_SLOTS=1` 只可作为单槽基线，不能证明事故目标。目标环境至少配置 2 槽并实测资源余量后，才能判定“长同步工具不阻塞其他 Runner”成立。
+
+| 验收面 | 授权后在 agent2 取得的证据 | 通过条件 |
+|---|---|---|
+| 迁移与拓扑 | 迁移时间/表列、实际 Compose project 与 2 个独立 Worker 容器、各自 `worker_id`、单个 monitor、主 API 到 runner-api 路由 | 迁移先于 monitor，副本不共用容器名/进程；旧客户端仍可接入 |
+| 阻塞隔离与租约 | 同一批中一个受控同步工具占槽超过 30 秒租约，另一个普通 Runner 被第二槽领取；记录 runner/attempt/worker_id、领取和完成时间、lease 与恢复判定 | 第二个 Runner 在第一个尚未结束时完成；第一个保持原 attempt 并正常结算，不被误接管或重放 |
+| 顺序复用与终态 | 每槽连续处理不同租户任务；暂停/取消、持久等待/唤醒、收尾 Trace/清理延迟、Worker 异常退出的受控样本 | 租户上下文不串用；业务终态、费用和 Trace 沿原路径；异常退出不自动重放未知外部效果；仅精确旧 `BUSY` 超时回收 |
+| 告警与通知 | 将测试 profile 阈值暂设 1 分钟，运行跨阈值样本，记录告警/事件唯一键、结束时间、monitor 最近成功扫描与投递状态；试验后恢复原阈值 | 同 attempt 一条告警/逻辑事件，正常长任务不被终止；结束后历史保留；飞书失败不抹告警，停滞超过 3 分钟在 Portal 可见 |
+| 旧客户端 | 取实际已交付 Runtime＋CLI 版本/包，在“只升级服务端”的组合执行原 BOSS 工具发现与调用、原任务恢复、未知结果原回执重投、结果上报与计费核对 | 原能力无需升级即可继续；缺新能力仅影响对应新功能，原调用不被新全局门禁阻断 |
+
+容量分级先记录 agent2 实际 CPU/内存、PostgreSQL `max_connections` 与现有 API/background/日志库连接占用，再在相同任务输入下测单槽基线和双槽；只有双槽留有余量时才考虑更高槽数。每档记录排队时间、完成吞吐、CPU/常驻内存峰值与 OOM、业务库/日志库活跃连接、DB/模型延迟与错误、monitor 扫描延迟和重启次数。业务库连接预算须含每槽 Worker 默认池上限 15、监督进程上限 2、单 monitor 上限 2、runner-api、主 API、background 及运维余量；monitor healthcheck 另有短连接。实际池配置与连接数以目标环境读数为准，不按内存上限直接推槽数。发现 DB 连接耗尽、OOM、错误接管、重复外部效果或原有 API 明显退化时停止升档，保留现场证据并按[部署清单](../../deploy/agent-runner-deploy-checklist.md)的排空/回退顺序处理。容量结论需同时给出槽数、每槽 CPU/内存和同机余量，不能仅以测试通过给正式环境套用数值。
+
+### Phase 4 本地核对记录（2026-11-06，待独立评审）
+
+- `git diff --quiet HEAD -- clients src/local_tools src/api/agent_runner_web.py src/services/agent_runner/adapter_contract.py src/services/agent_runner/runtime_manifest.py src/services/agent_runner/recovery.py src/services/agent_runner/usage_repository.py src/services/agent_runner/usage_pricing.py src/core/agent_engine` 退出码 0；Device API/CLI 生产消费契约、恢复格式和计费实现未因本阶段改写。Worker 改动仅涉及单并发槽位状态、续租监督及已有执行事务的计时/告警；Phase 3 迁移只加可空 `execution_started_at` 与新表，没有修改旧客户端 wire。此为源码兼容核对，不等于已交付二进制验收。
+- 宿主 Python 定向运行 `test_master_upgrade_compatibility.py`、`test_runner_adapter_contract.py`、`test_boss_cli_recovery_ownership.py`、`test_boss_tool_billing.py`：**53 passed、0 failed、14 warnings**。额外纳入旧 `test_agent_local_tool_registration.py` 时共 **56 passed、4 failed**；四项均断言已过时的 master/BOSS/WeCom 工具可见集合，该测试、Agent 装配、工具清单及 recruiting-operator 配置相对 `HEAD` 无改动，`configs/config.yaml` 仅改 Runner 并发与 Browser view 注释，不影响这些断言；不把该组合记为全绿，也不借本任务改动旧测试。
+- 通过 WSL Docker Compose 对 agent2 主配置叠加 Runner overlay 做只读解析，临时传入 `AGENT_RUNNER_WORKER_SLOTS=2`、`AGENT_RUNNER_WORKER_MEMORY=1g`：解析结果 `worker.replicas=2`、每副本 `cpus=1`/`mem_limit=1073741824`、无固定 `container_name`，单个 monitor 服务 `mem_limit=268435456`。`bash -n` 检查 agent2/agent3/诺度更新脚本通过；未启动容器。
+- 已校正[部署清单](../../deploy/agent-runner-deploy-checklist.md)中 monitor 的数据库写入边界、Browser view 跨容器可达性与端口说明、agent2/agent3 当前拆库事实、默认单槽不能验收及回退记录。当前工作树没有已交付 Runtime＋CLI 的实际发行包，也没有授权的 agent2 资源/数据库读数；真实旧包组合、PostgreSQL 迁移与竞争、两槽阻塞场景及容量结论全部待授权环境验证。[Excel 事故复盘](../incidents/excel-process-shared-runner-blocking-20261105.md)已由远程 `master` 正式登记；主工作区另有未跟踪长版报告，未在本任务改写或覆盖。

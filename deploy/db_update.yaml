@@ -4524,3 +4524,36 @@
     ALTER TABLE bs_wecom_daily_summaries ADD COLUMN IF NOT EXISTS source_runner_id TEXT;
     CREATE INDEX IF NOT EXISTS idx_bs_wecom_conversations_plan
         ON bs_wecom_conversations (tenant_id, user_id, daily_plan_task_id);
+- datetime: "2026-11-06 11:10:00"
+  remark: "Runner Phase 3：本次执行起点、运行告警、阈值覆盖与监控扫描状态"
+  statements: |
+    ALTER TABLE agent_runners ADD COLUMN IF NOT EXISTS execution_started_at TIMESTAMPTZ;
+    CREATE TABLE IF NOT EXISTS agent_runner_alert_thresholds (
+        tenant_id TEXT NOT NULL,
+        profile_id TEXT NOT NULL,
+        threshold_minutes INTEGER NOT NULL CHECK (threshold_minutes >= 1),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        PRIMARY KEY (tenant_id, profile_id)
+    );
+    CREATE TABLE IF NOT EXISTS agent_runner_alerts (
+        alert_id TEXT PRIMARY KEY,
+        runner_id TEXT NOT NULL,
+        attempt INTEGER NOT NULL,
+        tenant_id TEXT,
+        profile_id TEXT NOT NULL,
+        started_at TIMESTAMPTZ NOT NULL,
+        threshold_minutes INTEGER NOT NULL,
+        alerted_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        ended_at TIMESTAMPTZ,
+        notification_ref TEXT,
+        UNIQUE (runner_id, attempt)
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_runner_alerts_recent
+        ON agent_runner_alerts(alerted_at DESC, alert_id DESC);
+    CREATE INDEX IF NOT EXISTS idx_agent_runner_alerts_current
+        ON agent_runner_alerts(alerted_at DESC, alert_id DESC) WHERE ended_at IS NULL;
+    CREATE TABLE IF NOT EXISTS agent_runner_monitor_status (
+        monitor_key TEXT PRIMARY KEY CHECK (monitor_key='runner-long-running'),
+        last_successful_scan_at TIMESTAMPTZ
+    );
+    INSERT INTO agent_runner_monitor_status (monitor_key) VALUES ('runner-long-running') ON CONFLICT DO NOTHING;

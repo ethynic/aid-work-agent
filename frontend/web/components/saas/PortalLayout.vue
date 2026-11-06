@@ -230,6 +230,7 @@ const portalMenuItems = [
   { path: '/portal/wechat-mp', label: '公众号内容', icon: 'M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1zM8 9h8M8 13h8M8 17h5' },
   // 追踪查看：搜索/放大镜
   { path: '/portal/monitoring', label: '追踪查看', icon: 'M21 21l-4.35-4.35M10.5 18a7.5 7.5 0 100-15 7.5 7.5 0 000 15z' },
+  { path: '/portal/runner-alerts', label: 'Runner 告警', icon: 'M12 3a9 9 0 019 9c0 4-3 7-3 7H6s-3-3-3-7a9 9 0 019-9zM12 8v5M12 16h.01' },
   // 上下文压缩：压缩/方块缩小
   { path: '/portal/context-compression', label: '上下文压缩', icon: 'M4 9h6V3M20 15h-6v6M4 15l4-4M20 9l-4 4' },
   // 客户端运行日志：列表

@@ -104,7 +104,7 @@ class TimerRepository:
             snapshot=project_public_snapshot(cursor,row,checkpoint=checkpoint,
                 snapshot={**row.get('public_snapshot',{}),'waiting':None},status='running')
             cursor.execute('''UPDATE agent_runners SET status='running',attempt=attempt+1,worker_id=%s,
-                lease_until=clock_timestamp()+(%s*INTERVAL '1 second'),checkpoint=%s::jsonb,
+                lease_until=clock_timestamp()+(%s*INTERVAL '1 second'),execution_started_at=clock_timestamp(),checkpoint=%s::jsonb,
                 public_snapshot=%s::jsonb,wake_at=NULL,revision=revision+1,view_revision=view_revision+1,
                 updated_at=clock_timestamp() WHERE runner_id=%s RETURNING *''',
                 (worker_id,lease_seconds,capped_checkpoint_dumps(checkpoint),capped_snapshot_dumps(snapshot),row['runner_id']))

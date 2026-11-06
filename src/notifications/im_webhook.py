@@ -42,7 +42,7 @@ class ImWebhookAdapterBase:
         return endpoint_parts(url, list(self.provider_hosts))
 
     def render(self, message, target):
-        from .events import render_message_text, scheduled_result_link
+        from .events import render_message_text, runner_alert_detail_link, scheduled_result_link
         title, body = render_message_text(message['event_type'], message['parameters'])
         text = f'【AI通知】{title}\n{body}'
         # scheduled 终态附「查看本次执行结果」登录后链接（设计 §15.5；链接仅
@@ -50,6 +50,11 @@ class ImWebhookAdapterBase:
         link = scheduled_result_link(message)
         if link:
             text += f'\n查看本次执行结果：{link}'
+        alert_link = runner_alert_detail_link(message)
+        if message['event_type'] == 'runner.long_running' and not alert_link:
+            raise ValueError('RUNNER_ALERT_PUBLIC_URL_REQUIRED')
+        if alert_link:
+            text += f'\n查看告警详情：{alert_link}'
         return {'schema_version': 1, 'notification_ref': message['notification_ref'],
                 'text': text}
 

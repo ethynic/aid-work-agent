@@ -225,18 +225,16 @@ fi
 #    不先 down：up --force-recreate 会自动 stop→remove→create，api 与 background
 #    由 compose 串行错开重建，避免所有容器同时停止的全停窗口
 #    AgentRunner overlay：分支含 docker-compose.agent-runner.yml 时叠加一并重建
-#    （runner-api/runner-worker）。必须与主 compose 一起传给同一条 up，否则
+#    （runner-api/runner-worker/runner-monitor）。必须与主 compose 一起传给同一条 up，否则
 #    --remove-orphans 会把 overlay 服务当孤儿容器删除。KF 恢复原主 API 渠道入口；
 #    发布前须按 agent-runner-deploy-checklist.md 完成旧 KF 存量/送达核对与 cursor 交接，
 #    停止旧 KF 消费者及仍读写 gate 的旧 Runner API/worker，清理专属凭据；
 #    主 API 启动会执行 gate 退役迁移，不能只等孤儿清理。
 #    --remove-orphans 只移除同 compose project 的旧 KF 容器，发布后须核对实际残留。
 #    overlay 缺失（如早期分支）自动退回纯主 compose。
-#    agent2 特有：与 agent3 共库 aid_work_agent2 且同宿主机（共享 uploads/storage
-#    目录，overlay 容器名固定无环境后缀），同一时刻只允许一个环境常驻 Runner
-#    容器——叠加前做互斥预检，发现 Runner 容器被其他 compose project（agent3）占用即
-#    报错退出；三个宿主变量为 test 环境专属值（overlay 默认值对齐生产，不注入会
-#    接错网络/目录），在此 export 为唯一来源，不依赖服务器 .env 是否配置。
+#    agent2 的 runner-api 固定容器名须避免被其它 compose project 占用；worker
+#    使用 Compose project/service/副本序号命名，按 overlay 的 replicas 扩槽。
+#    三个宿主变量在此固定为 test 环境专属值，避免接错网络/目录。
 echo "[6] 重启后端服务..."
 COMPOSE_FILES=(-f docker-compose.test.yml)
 if [ -f docker-compose.agent-runner.yml ]; then
@@ -244,19 +242,17 @@ if [ -f docker-compose.agent-runner.yml ]; then
     export AGENT_RUNNER_NETWORK=aid-network2
     export AGENT_RUNNER_UPLOADS_HOST_DIR=/var/www/qb3_upload/agent2_uploads
     export AGENT_RUNNER_STORAGE_HOST_DIR=/var/www/qb3_upload/agent2_storage
-    echo "    叠加 AgentRunner overlay（runner-api/runner-worker）"
+    export AGENT_RUNNER_WORKER_MEMORY="${AGENT_RUNNER_WORKER_MEMORY:-1g}"
+    echo "    叠加 AgentRunner overlay（runner-api/runner-worker/runner-monitor）"
     # 互斥预检：用本环境主 API 容器的 compose project 标签锚定当前 project 名
     # （首次部署容器不存在时退回目录名，与 compose 默认 project 命名一致）
     CURRENT_PROJECT=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' aid-agent-api2 2>/dev/null || true)
     [ -z "$CURRENT_PROJECT" ] && CURRENT_PROJECT="${PWD##*/}"
-    for c in aid-runner-api aid-runner-worker; do
+    for c in aid-runner-api; do
         OWNER=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$c" 2>/dev/null || true)
         if [ -n "$OWNER" ] && [ "$OWNER" != "$CURRENT_PROJECT" ]; then
             echo "错误：容器 $c 已被 compose project '$OWNER'（另一环境）占用。"
-            echo "  agent2/agent3 共库 aid_work_agent2，同一时刻只允许一个环境常驻"
-            echo "  Runner 容器（lease 池跨环境抢任务 + 同名容器冲突）。请先在该"
-            echo "  环境移除 Runner 容器后再发布："
-            echo "    docker rm -f aid-runner-api aid-runner-worker"
+            echo "  请先核对该环境的 runner-api 容器归属，再处理命名冲突。"
             exit 1
         fi
     done
@@ -267,7 +263,7 @@ docker compose "${COMPOSE_FILES[@]}" up -d --force-recreate --remove-orphans --w
 
 # 7. 施加资源限制（docker compose 非 swarm 会忽略 deploy.resources，改用 docker update
 #    显式施加 cgroup 限制；资源值在本脚本内维护，为唯一来源）
-#    runner-api 为轻量 IO 进程给 0.5C/512M；runner-worker 执行负载给 1C/1G。
+#    runner-api 为轻量 IO 进程给 0.5C/512M；worker 限额由 overlay 每副本配置。
 #    容器不存在时（未启用 overlay 的分支）docker update 报错忽略。
 echo "[7] 施加容器资源限制..."
 docker update --cpus 1 --memory 1G --memory-reservation 512M aid-agent-api2
@@ -276,8 +272,6 @@ for c in aid-runner-api; do
     docker update --cpus 0.5 --memory 512M --memory-reservation 256M "$c" 2>/dev/null \
         || echo "  跳过 $c（不存在）"
 done
-docker update --cpus 1 --memory 1G --memory-reservation 512M aid-runner-worker 2>/dev/null \
-    || echo "  跳过 aid-runner-worker（不存在）"
 
 # 8. 修复容器内 /tmp 权限（python:3.11-slim 的 /tmp 是 tmpfs 且默认 755，
 #    Dockerfile 的 chmod 不生效，entrypoint 已处理；此处作为运行时兜底）

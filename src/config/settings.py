@@ -726,7 +726,7 @@ class AgentRunnerConfig(BaseModel):
     lease_seconds: int = Field(default=30, ge=5)
     heartbeat_seconds: int = Field(default=10, ge=1)
     poll_seconds: float = Field(default=1.0, gt=0)
-    concurrency: int = Field(default=4, ge=1, le=100)
+    concurrency: int = Field(default=1, ge=1, le=1)
     browser_owner: AgentRunnerBrowserOwnerConfig = Field(default_factory=AgentRunnerBrowserOwnerConfig)
     limits: AgentRunnerLimitsConfig = Field(default_factory=AgentRunnerLimitsConfig)
 

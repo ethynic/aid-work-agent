@@ -1,6 +1,6 @@
 # Runner Worker 看门狗与队列堆积告警设计（供决策）
 
-> 状态：**历史候选方案，未采纳**（后续方案见 [AgentRunner 架构 §10](agent-application-architecture-design.md#10-runner-执行槽隔离与运行告警2026-11-05待开发)；本文件保留调研记录）
+> 状态：**历史候选方案，未采纳**（后续方案见 [AgentRunner 架构 §10](agent-application-architecture-design.md#10-runner-执行槽隔离与运行告警2026-11-05)；本文件保留调研记录）
 > 背景：2026-11-05 TPG80509 生产事故——excel_process 读取 used range 膨胀的 Excel（声明 ~104.8 万行）在 async handler 里同步逐格遍历，冻结 aid-runner-worker 事件循环 50 分钟，所有智能体无响应，唯一破局是重启容器。
 > P0 修复（已实施）：excel handler 全量 to_thread 包裹 + 双 ExcelReader 底层归一到 `src/tools/file/excel_reader.py` + used range 膨胀防御（流式探测真实数据边界）。
 
