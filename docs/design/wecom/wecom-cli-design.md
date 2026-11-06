@@ -1,8 +1,12 @@
 # wecom-cli：第一方企业微信操作 CLI / MCP Provider 设计
 
-2026-11-06 W19 文本发送标题复核调整：进入会话及点击输入区后的清理前标题校验仍执行；确认目标后清理、输入，输入完成至按 Enter 前不再对标题截图做 OCR 复核。agent2 已见同一群名末尾被 OCR 误读为“+”，致输入后误报 `UI_CHANGED` 且停止发送。输入后截图仅留作诊断，发送结果仍由本地库唯一记录优先核验；`-VerifyOnly` 的只读标题校验保留。此次只改文本发送，不改首次定位、图片/文件、Runtime/Device 协议。当前各步骤仍是独立 UI 操作，不声称已具备原子性；首次定位时同类 OCR 误判另行处理。[W19 实施计划](../../plans/plan-wecom-cli-group-chat-experiment.md#w19-文本发送移除输入后标题门禁2026-11-06)。
+W23 模型调用契约：`GLM-5.3-Flash` 强制思考，客户端代理路由调用时使用 `reasoning_effort=max`；其他客户端模型沿用 `enable_thinking=False`。agent2 已以真实标题截图验证代理接口返回坐标，Windows PowerShell 5.1 下的标题点击复制也已真机验证；完整发送仍需单独验收。
 
-2026-11-06 文本发送输入替换规则：`wecom_message_send` 先用标题规则确认目标，点击聊天输入区后重新截图复核当前标题，再投递 Ctrl+A/Delete 清理旧内容；单行沿用 `Send-WeComText`，多行沿用剪贴板 Ctrl+V。不再用搜索框残留或 OCR/Jev 草稿判定阻断已打开的目标会话；标题变化或清理按键投递失败时不继续输入、不按 Enter，非目标会话不清理。15:06–15:07 截图显示目标群输入框为空；客户随后清掉其他会话的草稿，旧版重试仍误报“有草稿”。缺旧客户端 driver-log 与原始 OCR token，不能确定误判来源。此行为按用户明确要求会覆盖原输入区的未发送文字；多行仍会覆盖系统剪贴板，单行不碰剪贴板。发送后本地库/原终态核验、unknown 不自动重试保持；`-VerifyOnly` 仍只读。只改文本发送驱动，不改变图片/文件发送、Runtime/Device wire。[实施计划](../../plans/plan-wecom-cli-group-chat-experiment.md#w18-文本发送输入替换修复2026-11-06)。本机功能分支源码已完成单条真实群发送与本地库核验；客户端安装交付和原业务场景验收仍待进行。
+2026-11-06 W23 文本发送标题识别：当前会话名改由企微自身复制。主窗口顶部 64×DPI/96 像素截图只发给受权客户端 `/api/client/v1/llm/chat` 的 `GLM-5.3-Flash` 一次性定位右侧标题首字中心，不让模型判断标题内容；坐标按窗口宽、高、DPI 缓存，成功复制到任意当前会话标题即证明坐标有效并写入缓存；与目标不符时保留缓存交由导航，只有标题坐标或复制失败才清缓存并在下次调用重新标定。群聊先枚举目标主窗口内、覆盖首字点的同进程顶部 `EditWnd`：已有则直接向该子窗口投递 Ctrl+A/C；没有才向主窗口 PostMessage 单击一次，再检查 `EditWnd`，失败即中止，不盲目重试点击。普通单聊向主窗口投递真实 `WM_LBUTTONDBLCLK` 再 Ctrl+C。复制结果须由企微剪贴板所有者和新序号证明，原剪贴板仅接受可保存的纯文本并按序号恢复。复制全文与目标按原身份规则核对，群名严格全等。底部输入点选定后只复制一次标题确认目标，随即点击一次输入框；确认已核对的主窗身份和几何未变才 Ctrl+A/Delete，主窗销毁重建则停止本次发送。任一步失败均不清理、输入或发送。缓存点若无法选中标题或确认复制，则删除缓存并在本次停止，下次调用才重新 GLM 标定；剪贴板不可用或被改写不判定为坐标失效。不回退标题 OCR。真机独立复位实验确认同一群在未选中态单击一次会出现 `EditWnd` 并可复制；重复点击已选中的标题会取消选中，旧“有群无法复制”的判断已撤回。底部输入点 OCR、旧结果核验、搜索/选择、媒体发送不在 W23 范围。GLM 代理复用既有客户端鉴权、非零价目检查和 ×10 计费，无 Device/Runtime wire 变化；尚待服务端发布和插件安装后的业务验收。[W23 实施记录](../../plans/plan-wecom-cli-group-chat-experiment.md#w23-文本发送标题复制与-glm-标定2026-11-06)。
+
+2026-11-06 W19 文本发送标题复核调整：当前 W23 只在准备发送时复制标题核对一次；确认目标后清理、输入，输入完成至按 Enter 前不再对标题截图做 OCR 复核。agent2 已见同一群名末尾被 OCR 误读为“+”，致输入后误报 `UI_CHANGED` 且停止发送。输入后截图仅留作诊断，发送结果仍由本地库唯一记录优先核验；`-VerifyOnly` 的只读标题校验保留。此次只改文本发送，不改首次定位、图片/文件、Runtime/Device 协议。当前各步骤仍是独立 UI 操作，不声称已具备原子性；首次定位时同类 OCR 误判另行处理。[W19 实施计划](../../plans/plan-wecom-cli-group-chat-experiment.md#w19-文本发送移除输入后标题门禁2026-11-06)。
+
+2026-11-06 文本发送输入替换规则：`wecom_message_send` 先用标题规则确认目标，点击聊天输入区后直接投递 Ctrl+A/Delete 清理旧内容；单行沿用 `Send-WeComText`，多行沿用剪贴板 Ctrl+V。不再用搜索框残留或 OCR/Jev 草稿判定阻断已打开的目标会话；标题变化或清理按键投递失败时不继续输入、不按 Enter，非目标会话不清理。15:06–15:07 截图显示目标群输入框为空；客户随后清掉其他会话的草稿，旧版重试仍误报“有草稿”。缺旧客户端 driver-log 与原始 OCR token，不能确定误判来源。此行为按用户明确要求会覆盖原输入区的未发送文字；多行仍会覆盖系统剪贴板，单行不碰剪贴板。发送后本地库/原终态核验、unknown 不自动重试保持；`-VerifyOnly` 仍只读。只改文本发送驱动，不改变图片/文件发送、Runtime/Device wire。[实施计划](../../plans/plan-wecom-cli-group-chat-experiment.md#w18-文本发送输入替换修复2026-11-06)。本机功能分支源码已完成单条真实群发送与本地库核验；客户端安装交付和原业务场景验收仍待进行。
 
 2026-10-30 W16发行收尾：只修正包内Python/AES依赖、字节缓存排除与Windows长路径启动；旧BOSS/Runtime协议及历史验收根保持，新增根仅限WeCom。客户端够用不强制升级，新能力按现有能力协商，不加全局版本门禁。历史W11安装产物不冒充当前master的新构建。主控维护源码，独测/CR分别验证已交付0.0.29＋0.3.27原包及隔离长路径；详见[W16计划](../../plans/plan-wecom-cli-group-chat-experiment.md#w16-master客户端打包改动复核2026-10-30)。
 
@@ -43,18 +47,18 @@
 | `wecom_probe` | 平台/交互会话/PowerShell/WXWork 进程/主窗口/登录态三态（online/need_login/offline，need_login 附二维码 PNG base64） | 只读 |
 | `wecom_chat_search` | 搜索联系人/群，返回 best/items + 带坐标 target_ref | 只读 |
 | `wecom_chat_select` | 点击搜索结果进会话 | 半写（清角标） |
-| `wecom_read_session` | 读会话消息，双通道路由（§5） | 半写（清角标） |
-| `wecom_watch_poll` | 新消息跟踪单轮，水位 diff 只返增量 | 半写 |
-| `wecom_unread_list` | 未读会话快照 | 只读 |
+| `wecom_read_session` | 本地库读取会话消息（§5） | 只读 |
+| `wecom_watch_poll` | 本地库新消息跟踪单轮，按数据库水位返回增量 | 只读 |
+| `wecom_unread_list` | 本地库待回复会话快照 | 只读 |
 | `wecom_message_send` | 文本 ≤2000 字（多行走剪贴板） | 写 |
 | `wecom_send_image` | png/jpg/jpeg/bmp/gif ≤20MB | 写 |
 | `wecom_send_file` | 任意扩展 ≤100MB，文件名去空白 ≥3 字符 | 写 |
 | `wecom_add_customer` | 按手机号检索并发添加邀请（confirm 显式 true；M12 网络查找直达路线） | 写 |
 
-- 智能分发（M11a）：send/send-image/send-file/read-session 支持 `target_ref`/
+- 智能分发（M11a）：send/send-image/send-file 支持 `target_ref`/
   `target_name` 二选一；驱动返回 `navigate_required=true` 时 TS 层（`src/operations/
   navigate.ts`）编排内部 chatSearch+chatSelect 后二次调用；`resolveTargetByName`
-  走 Jev best 身份校验 → 唯一匹配回退 → 歧义 fail-closed（`TARGET_AMBIGUOUS`）。
+  走 Jev best 身份校验 → 唯一匹配回退 → 歧义 fail-closed（`TARGET_AMBIGUOUS`）。`read-session` 的旧 `target_name` 改由本地库精确消歧，不导航 UI。
 
 ## 3. 架构分层与操作契约
 
@@ -97,42 +101,22 @@ CLI 动词 / MCP stdio ──> operations（10 个，统一 OperationResult，�
   KimiVision 链路）未引入本 CLI。
 - **已知启发式弱点**：消息 side（左右）判定仍为启发式，代码注释自认不可靠（§10 遗留）。
 
-## 5. read_session 双通道路由（M10）
+## 5. 会话读取、待回复和监控（2026-11-06 修订）
 
-`serverUrlConfigured(env)` 检查 `AID_WECOM_SERVER_URL`：
+`wecom_read_session` 的稳定 `session`、日期模式及旧 `target_name`/账号绑定 `target_ref` 均只从本地库读取；旧目标名沿本地库精确解析与同名消歧。`wecom_unread_list` 返回本地库待回复快照；`wecom_watch_poll` 返回数据库水位后的新消息，失败轮保留水位。三者均不截图、搜索、切换会话或清除未读角标。
 
-- **未配置 → 本地 OCR 通道**：驱动 `-ParseMode ocr`（channel="ocr"，免费）。
-- **已配置 → 服务端模型通道**：驱动 `-ParseMode none` 只截图 → TS 读 page-*.png 转
-  base64（反转旧→新，单图 ≤5MB）→ `parseSessionHistory` 上传
-  `POST {AID_WECOM_SERVER_URL}/api/client/v1/session-history`（channel="model"，
-  透传 model_usage/billing）。
-- **失败分类**（`serverProxy.ts` ProxyError.kind）：`unavailable`（网络/超时/5xx/422/
-  截图缺失超限）→ 二次调驱动 OCR 兜底并记 fallback_reason；`config`（401/缺 token）与
-  `insufficient_credit`（402）→ 不降级直报。
-- **watch 轮询内的 read-session 不走计费通道**（缺省 ocr，维持纯本地）。
+这些读取入口每次核对当前进程版本与既有支持矩阵、账号和本地库；`forced` 只绕过 doctor 落盘模式，不绕过实际版本准入。版本不支持、密钥/快照失败直接返回原错误；监控额外返回 `db_unavailable=true` 以说明本轮水位未推进。旧 `channel=ui` 明确报 `VERSION_UNSUPPORTED`，旧 `max_pages` 明确报参数错误。无账号绑定的旧 ref 拒绝并提示重新搜索或用目标名称。M10 截图模型/OCR 读取通道已退出这三个 operation，云端 `WecomReadSessionTool`/`WecomUnreadListTool` 的字段和工具描述按本地库结果同步；服务端历史解析接口不再由这些入口调用。其它 UI 写动作的 OCR 不在本次修改范围。
 
-服务端实现 `src/api/client_routes.py:603`：GLM-5.3-Flash 多模态并行分页
-（asyncio.gather）+ 页间重叠去重合并；计费 `_session_history_credit_cost` =
-`ceil(token 成本(元) × credit_multiplier × 100)/100`（Decimal 防浮点），不足最低值按
-最低收（口径"成本×100 积分、最低 1 积分/次"），余额不足 402 阻断。
+## 6. 历史模型接口
 
-## 6. 服务端协作与鉴权
-
-- 唯一服务端接口 `/api/client/v1/session-history`，`Authorization: Bearer
-  <AID_WECOM_SERVER_TOKEN>`；超时 150s；单图 ≤5MB、1..10 张。
-- 鉴权为 **M10c 直连长期静态 token**：服务端 `POST /api/saas/client-bindings/static`
-  签发（token_type='static' 跳过过期检查）；无激活流程、无本地缓存（激活码链路与
-  DPAPI server-binding.json 已移除）；401 判 config 直报不重试。
-- Runtime 集成（M11b）：`clients/agent-tool-runtime` 的 productTrust 白名单含
-  `ai.aidwork.wecom`，Host 将 `AID_WECOM_SERVER_URL/TOKEN` 注入 provider 进程环境
-  （runtimeHost.ts）。
+原 `/api/client/v1/session-history` 与 `serverProxy.ts` 属 M10 截图解析接口；当前 `wecom_read_session` 已不调用。服务端接口与 Runtime 的旧环境变量可暂保留供旧插件版本兼容，不作为新版消息读取路径。
 
 ## 7. add-customer 路线（M12 重标定后现行）
 
 旧通讯录路线因 2026-09-29 客户端更新失效（④添加按钮 CEF 渲染 + 注入过滤，PostMessage/
 mouse_event 均无效）。现行**网络查找直达路线**（全程 PostMessage 零真实点击）：
 
-Ctrl+F 聚焦搜索框 → 清残留 → WM_CHAR 输入手机号（回读 contains 校验）→ 搜索 overlay
+Ctrl+F 聚焦搜索框 → 固定 Ctrl+A/Delete 清空 → WM_CHAR 输入手机号（完整剪贴板回读校验）→ 搜索 overlay
 出现「网络查找手机号/邮箱：<号>」行（同行拼接校验防点错）→ 点击该行（投 overlay
 hwnd）→ `SearchExternalsWnd` 自动填号（校验 + 手输回退）→ Enter 检索 → 结果行
 （微信名 + 添加）→ `InputReasonWnd` → 发送 → 终态「已发送申请」轮询。弹窗段 M1 代码
@@ -144,12 +128,8 @@ stdio 白名单 CantActivateDocumentInPipeline）。
 
 ## 8. 消息读取与 watch 水位
 
-- read_session：滚动截图 + OCR + 页间重叠去重（移植 weixin-cli 算法，企微气泡布局
-  独立调校）；时间分割线整行锚定（前缀匹配会误吞真实消息，CR P1 修复）；消息文本
-  归一化三侧一致（py/ps1/TS：去空白 + 全角转半角 + 小写折叠）。
-- watch_poll：unread 快照 → 与本地 watchState 水位 diff → 候选会话进会话读增量；
-  进会话即清角标（固有副作用），读取成功后 last_unread 归零（否则角标小于旧水位的
-  新消息漏报，CR P1 修复）；首读无水位保守全推（设计行为）。
+- 会话读取、待回复快照、监控增量分别由 `platform/localdb/readSession.ts`、`unread.ts`、`watch.ts` 负责；旧 UI OCR 驱动不由三者调用。
+- 监控使用 `localdb-watch-state.json` 的账号/会话/代际绑定水位；数据库不可用时返回失败并保留水位，下轮继续尝试，不以 OCR 文本模拟消息 ID。
 
 ## 9. 测试与交付
 
@@ -191,9 +171,9 @@ M11a/b target_name 直达 + Runtime 注册 → M12 add-customer 网络查找重�
 实验编排与产品Runner分开记录：本次由开发助手判断是否回复，临时脚本串行调用原CLI、每约10秒读取原会话增量、按消息ID去重；首批历史仅上下文，排除脚本已核验发送的消息和系统消息（不按self方向一概跳过用户手动留言），结构化@本人必回应，普通群友闲聊不插话。第三方群聊内容作为回复数据，不获得改任务、发到别的群或访问其他资源的授权。用户明确停止后终止本实验及其子进程。实验不宣称已部署Runner、实现多天常驻或改动Runtime协议。
 
 
-本批复审补充的清理边界：空搜索框直接跳过清理，不影响聊天草稿；无法确认内容及布局锚点时保守失败。非空只在真实内容锚点、唯一同行右邻+及原窗口几何共同确认已实证搜索布局时点击专属清空点并回读empty；OCR漏识×导致unknown也必须满足相同保护，不泛化未知状态。不同布局/DPI仍保守拒绝，不使用对当前不确定焦点的Ctrl+A/Delete。模型输入点只有在可靠搜索/编辑区锚点范围内才可选，消费答案时再核对；GetFocus等于Qt主窗口、快捷键投递成功或几何范围内点击过，都不能独自证明内部编辑焦点。
+2026-11-06 W22 搜索框输入边界：搜索、添加客户及共享导航清空均先投递 Ctrl+F；快捷键投递失败即中止，不对当前焦点执行 Ctrl+A/Delete。投递成功后，空框与有残留内容一律固定 Ctrl+A/Delete，不再截图或 OCR 判定搜索框状态，也不按搜索框锚点点击。发送消息的聊天输入区清理仍按其目标确认流程独立执行；其他搜索结果、会话标题及媒体发送 OCR 不属于 W22。
 
-搜索全文校验保留原OCR精确规则；仅在OCR不等时使用Ctrl+A/C非破坏性复制兜底，不接受缺字/子串作为成功。复制结果需证明为本次企微写入、全文精确相等且不把正文写入新诊断日志；富格式在覆写前拒绝，预检/恢复剪贴板使用短锁内原子比较与替换保护外部新写入，系统写入失败时同锁仅尝试一次预分配原文补救。系统写入、恢复或关闭失败均中止并明确提示原剪贴板可能未恢复，不报成功。UIA不提供可用全文pattern。2026-10-26当前布局完整搜索及连续搜索已真实验收；群聊实验仍保持结束，不恢复监听。实际进度和证据以开发计划为准。
+W22 搜索词输入后固定 Ctrl+F 重新聚焦并以 Ctrl+A/C 完整复制回读，不再用 OCR 作为前置校验；复制全文与查询词严格相等才继续，不接受缺字或子串。复制结果需证明为本次企微写入，且不把正文写入新诊断日志；富格式在覆写前拒绝，预检/恢复剪贴板使用短锁内原子比较与替换保护外部新写入。系统写入、恢复或关闭失败均中止并明确提示原剪贴板可能未恢复，不报成功。UIA不提供可用全文 pattern。旧版 2026-10-26 当前布局完整搜索及连续搜索曾真实验收；W22 仅做合成验证，尚未真机验收。实际进度和证据以开发计划为准。
 
 ### 11.1 完整搜索与剪贴板恢复收尾（2026-10-26）
 
@@ -353,3 +333,7 @@ sequenceDiagram
 - **批量局部失败**：一个会话读失败在failed中返回会话、原因和恢复提示，其他成功内容正常交给Agent；该会话cursor不推进，不伪报“无新消息”。整体DB不可用才返回整体读取失败并沿原任务退避；不退UI慢扫冒充DB批量读取。
 - **兼容范围**：新任务的Agent工具目录、配置入口及示例统一为三项。旧已接受invocation仍按原release与旧工具执行，隐藏工具不等于删除旧恢复实现。底层探测、send-status等继续由既有受信内部通道调用，不因从Agent目录隐藏就绕过其身份/原发送校验。首批聚焦文本监控与回复，媒体不为凑三项而塞进本轮发送schema。
 - **验证不扩圈**：V1～V6保持；在原场景增加“当前目标不调用搜索”“目标不符才search/select”“batch部分失败不丢其他消息”“已读/老客户新问题不漏、群同事发言不误清待办”断言即可，不另起第七套验收或把每个内部步骤暴露为新工具。
+
+### 12.8 稳定会话发送与标题识别待解问题（2026-11-06）
+
+稳定 `session` 已由本地库解析为当前账号的会话 ID，发送后的结果应由本地出站记录核对，不再回退旧 OCR 终态判定。发送前仍须确认客户端当前打开的群，不能仅凭数据库目标 ID 向任意当前窗口按 Enter。当前标题 OCR 可能把「速动运动福利1群」读成「速动运动福利1群+」并误触发搜索；独立 `+` token 也可能属于真实的另一个群名，因此不能仅按间距删除或做任意字符模糊匹配。当前会话的可靠身份来源仍在调研，找到可验证的替代来源前保持原严格标题核对与安全拒发。不能宣称标题 OCR 误判已修复。

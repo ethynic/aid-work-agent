@@ -17,7 +17,7 @@ $command = $ast.FindAll({ param($a) $a -is [System.Management.Automation.Languag
 $body = ($command.CommandElements | Where-Object {
     $_ -is [System.Management.Automation.Language.ScriptBlockExpressionAst]
 } | Select-Object -First 1).ScriptBlock.GetScriptBlock()
-Add-Type 'public class WeComWin32 { public static bool IsWindow(System.IntPtr h) { return true; } }'
+Add-Type 'public class WeComWin32 { public static bool Live = true; public static bool IsWindow(System.IntPtr h) { return Live; } }'
 
 function Assert-True($Value, $Why) { if (-not $Value) { throw $Why } }
 function Start-Sleep { param($Milliseconds) }
@@ -30,6 +30,19 @@ function Send-WeComAttachChordKey { param($Hwnd,$Vk)
     [void]$script:actions.Add(@{kind='chord';vk=$Vk});return $script:chordOk }
 function Write-DriverLog { param($Msg) }
 function Save-StepShot { param($Hwnd,$Name) return @{path=$Name;left=1277;top=0;w=1280;h=1392} }
+function Get-WeComTitlePoint { param($Hwnd,$ImagePath)
+    if ($script:titlePointError) { throw 'TEST_TITLE_POINT_ERROR' }
+    if ($script:cachedPoint) { return @{x=435;y=38;cache_path='synthetic-title-cache.json';source='cache'} }
+    $script:modelCalls++
+    return @{x=435;y=38;cache_path='synthetic-title-cache.json';source='glm'} }
+function Get-WeComCopiedTitle { param($Hwnd,$Section,$Point)
+    $script:titleCopies++
+    [void]$script:actions.Add(@{kind='title-copy';number=$script:titleCopies})
+    if ($script:windowDiesAfterTitleCopy) { [WeComWin32]::Live=$false }
+    if ($script:titleCopyError) { throw 'TEST_TITLE_COPY_ERROR' }
+    return $script:title }
+function Save-WeComTitlePoint { param($Point)
+    if ($Point.source -eq 'glm') { $script:cachedPoint=$true } }
 function Set-Clipboard { param($Value) [void]$script:actions.Add(@{kind='clipboard';text=$Value}) }
 function Send-WeComText { param($Hwnd,$Text) [void]$script:actions.Add(@{kind='text';text=$Text}) }
 function Clear-WeComFocusedInput { param($Hwnd) [void]$script:actions.Add(@{kind='clear-input'}); return $script:clearOk }
@@ -61,9 +74,15 @@ function Invoke-SendChatOcr { param($ImagePath,$Mode)
     return @{boxes=$boxes}
 }
 function Reset-Scenario {
+    [WeComWin32]::Live=$true
     $script:actions=New-Object System.Collections.ArrayList
     $script:chordOk=$true;$script:searchChoice='T1';$script:right='yes';$script:draft='no'
     $script:inputChoice='B0';$script:withPlaceholder=$false;$script:readback=$false;$script:changedTitle=$false
+    $script:sendQuestions=$null
+    $script:titlePointError=$false;$script:titleCopyError=$false
+    $script:windowDiesAfterTitleCopy=$false
+    $script:titleCopies=0
+    $script:cachedPoint=$false;$script:modelCalls=0
     $script:preDraft='';$script:readbackText='fixture-message';$script:clearOk=$true
     $script:title='fixture-group'
     $script:searchState=@{State='empty';TokensRaw=@(@{text='Q';x0=186;y0=28;x1=213;y1=44},
@@ -80,38 +99,33 @@ function Run-Send($Multiline=$true,$External=$false) {
 
 Reset-Scenario
 $method=Focus-WeComSearchBox -MainHwnd 101
-Assert-True ($method -eq 'jev_click') 'Ctrl+F dispatch alone must not complete focus'
-Assert-True (@($actions | Where-Object {$_.kind -eq 'click'}).Count -eq 1) 'must explicitly click the search anchor'
-Reset-Scenario;$script:searchChoice='T2'
-Assert-True ((Focus-WeComSearchBox -MainHwnd 101) -eq 'placeholder_click') 'invalid Jev + choice must fall back to actual search anchor'
+Assert-True ($method -eq 'shortcut') 'Ctrl+F dispatch establishes search focus'
+Assert-True (@($actions | Where-Object {$_.kind -eq 'click'}).Count -eq 0) 'search focus must not use OCR anchor clicks'
 Reset-Scenario;$script:chordOk=$false
-Assert-True ((Focus-WeComSearchBox -MainHwnd 101) -eq 'jev_click') 'failed shortcut keeps OCR/Jev fallback'
+ $failure='';try{Focus-WeComSearchBox -MainHwnd 101}catch{$failure=$_.Exception.Message}
+Assert-True ($failure -like 'WECOMDRIVE|UI_CHANGED|*') 'failed shortcut must abort search focus'
 Reset-Scenario
 $script:searchState=@{State='has_content';TokensRaw=@(@{text='fixture';x0=208;y0=28;x1=268;y1=44});
     PlaceholderPos=$null;ContentPos=@(238,36)}
-$script:searchChoice='T0'
-Assert-True ((Focus-WeComSearchBox -MainHwnd 101) -eq 'jev_click') 'verified content anchor remains focusable without destructive clearing'
+Assert-True ((Focus-WeComSearchBox -MainHwnd 101) -eq 'shortcut') 'search focus is independent of OCR content state'
 Reset-Scenario;$script:searchState=@{TokensRaw=@();PlaceholderPos=$null;ContentPos=$null}
-$failure='';try { Focus-WeComSearchBox -MainHwnd 101 } catch {$failure=$_.Exception.Message}
-Assert-True ($failure -like 'WECOMDRIVE|UI_CHANGED|*') 'no search anchor must fail closed'
-Assert-True ($actions.Count -eq 1) 'no anchor must not click or clear input'
+Assert-True ((Focus-WeComSearchBox -MainHwnd 101) -eq 'shortcut') 'missing OCR anchor must not block Ctrl+F focus'
+Assert-True ($actions.Count -eq 1) 'focus must only dispatch Ctrl+F'
 
 # Execute the actual Clear helper, rather than replacing its dangerous boundary.
 foreach ($searchStatus in @('empty','has_content','unknown')) {
     Reset-Scenario;$script:searchState.State=$searchStatus
     $failure='';$result=$false
     try { $result=Clear-WeComSearchBoxV2 -MainHwnd 101 } catch {$failure=$_.Exception.Message}
-    if ($searchStatus -eq 'empty') { Assert-True $result 'empty search is a no-op success' }
-    else { Assert-True ($failure -like 'WECOMDRIVE|UI_CHANGED|*') 'unproved search clear must fail closed' }
-    Assert-True ($actions.Count -eq 0) 'clear must never send chords, mouse or Delete into an unproved focus'
+    Assert-True $result 'all OCR search states receive the same fixed clear'
+    Assert-True ($actions[0].kind-eq'chord'-and$actions[0].vk-eq0x46) 'clear must first dispatch Ctrl+F'
 }
 
 Reset-Scenario
 $script:searchState=@{State='empty';TokensRaw=@(@{text='unread-badge';x0=120;x1=150;y0=0;y1=20});
     PlaceholderPos=$null;ContentPos=$null}
 $script:searchChoice='T0'
-$failure='';try { Focus-WeComSearchBox -MainHwnd 101 } catch {$failure=$_.Exception.Message}
-Assert-True ($failure -like 'WECOMDRIVE|UI_CHANGED|*') 'arbitrary crop token cannot become a search anchor'
+Assert-True ((Focus-WeComSearchBox -MainHwnd 101) -eq 'shortcut') 'arbitrary crop token cannot block Ctrl+F'
 Assert-True (@($actions | Where-Object {$_.kind -eq 'click'}).Count -eq 0) 'untrusted crop token must never be clicked'
 
 Reset-Scenario
@@ -139,8 +153,9 @@ Assert-True (-not (Test-WeComTextInputToken @{text='发送(S)';x0=640;x1=710;y0=
 Reset-Scenario
 $failure=Run-Send
 Assert-True ($failure -eq 'TEST_ENTER_BOUNDARY') 'OCR echo must not gate a posted paste'
-Assert-True (-not $sendQuestions.ContainsKey('input_point')) 'toolbar-only OCR must not become a Jev input choice'
-Assert-True (-not $sendQuestions.ContainsKey('has_draft')) 'visual draft guess must not veto deliberate replacement'
+Assert-True ((@($actions | ForEach-Object {$_.kind}) -join ',') -like 'title-copy,click,clear-input,*') 'confirmed title is copied once, then the editor is focused and cleared'
+Assert-True ($script:titleCopies -eq 1 -and $script:modelCalls -eq 1) 'send path must not repeat title copy or model lookup before clearing'
+Assert-True ($null -eq $sendQuestions) 'toolbar-only OCR must not call Jev for a missing editor candidate'
 $chatClick=@($actions | Where-Object {$_.kind -eq 'click'})[-1]
 Assert-True ($chatClick.x -eq 1917 -and $chatClick.y -eq 1253) 'unsafe B0 answer must use existing safe ratio, with screen offset'
 Assert-True (@($actions | Where-Object {$_.kind -eq 'enter'}).Count -eq 1) 'one posted paste reaches the send boundary'
@@ -151,6 +166,19 @@ Reset-Scenario;$script:clearOk=$false
 $failure=Run-Send
 Assert-True ($failure -like 'WECOMDRIVE|UI_CHANGED|*') 'failed editor clear aborts before paste'
 Assert-True (@($actions | Where-Object {$_.kind -in @('clipboard','enter')}).Count -eq 0) 'failed clear cannot paste or Enter'
+
+foreach ($failureKind in @('titlePointError','titleCopyError')) {
+    Reset-Scenario
+    Set-Variable -Scope Script -Name $failureKind -Value $true
+    $failure=Run-Send
+    Assert-True ($failure -like 'TEST_TITLE_*_ERROR') 'title coordinate/copy failure must surface before any send action'
+    Assert-True (@($actions | Where-Object {$_.kind -in @('clear-input','clipboard','text','enter')}).Count -eq 0) 'unconfirmed title must never clear or send'
+}
+
+Reset-Scenario;$script:windowDiesAfterTitleCopy=$true
+$failure=Run-Send
+Assert-True ($failure -like 'WECOMDRIVE|UI_CHANGED|*') 'a rebuilt window invalidates the only copied title before input focus'
+Assert-True ((@($actions | ForEach-Object {$_.kind}) -join ',') -eq 'title-copy') 'window rebuild after title copy must not click, clear, type or send'
 
 Reset-Scenario;$script:chordOk=$false
 $failure=Run-Send
@@ -194,7 +222,11 @@ Assert-True (@($actions | Where-Object {$_.kind -eq 'clipboard'}).Count -eq 0) '
 
 Reset-Scenario;$script:title='other-group'
 $failure=Run-Send
+Assert-True ($failure.navigate_required -eq $true -and $script:cachedPoint -and $script:modelCalls -eq 1) 'a copied non-target title must retain its calibrated point while requesting navigation'
 Assert-True (@($actions | Where-Object {$_.kind -in @('clear-input','clipboard','enter')}).Count -eq 0) 'Jev yes cannot authorize clearing a different group'
+$script:title='fixture-group'
+$failure=Run-Send
+Assert-True ($failure -eq 'TEST_ENTER_BOUNDARY' -and $script:modelCalls -eq 1) 'navigating to the target must reuse the one calibrated point without another model call'
 # Execute the production body: a Jev yes must not override an internal/other external title.
 foreach ($wrongTitle in @('fixture-peer','fixture-peer@其他企业','fixture-peer（2）','fixture-peer-more@微信')) {
     Reset-Scenario;$script:title=$wrongTitle

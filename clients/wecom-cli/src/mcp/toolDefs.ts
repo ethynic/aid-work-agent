@@ -189,16 +189,15 @@ export const TOOL_DEFS: WecomToolDef[] = [
     title: '企业微信未读/待回复会话快照',
     description:
       '读取企业微信会话快照（只读，不打开会话、不清除未读角标）。' +
-      '缺省按doctor状态分派：本地库可用时返回待回复快照（channel=local-db，judgment_basis=last_sender，' +
+      '仅支持已验证企业微信版本的本地库，返回待回复快照（channel=local-db，judgment_basis=last_sender，' +
       '会话最后一条可参与判定的消息来自对方即待回复，可发现已读未回复，系统消息不参与判定）；' +
-      '否则走UI角标快照（channel=ui，judgment_basis=badge，无法覆盖已读未回复，结果附能力差异说明）。' +
-      '本地库失败可兜底UI（附原因），取消/身份/目标类失败不兜底；channel=local-db强制本地库失败不回退。' +
-      '可选name子串过滤（两通道同语义：对会话显示名做子串包含匹配；本地库通道仅 focus 命中的会话携带显示名，无显示名的会话在指定 name 时排除）；' +
-      'focus为关注会话名列表（本地库逐名解析，失败进failed部分返回，UI通道忽略）。' +
+      '本地库不可用时明确报错，不读取 UI 或 OCR。' +
+      '可选name子串过滤：按会话名称、别名或备注匹配；命名来源不可用时明确报错，未指定 name 的快照可省略显示名；' +
+      'focus为关注会话名列表，逐名解析失败进failed部分返回。' +
       '适合作为自动回复目标的探测：待回复会话可再调 wecom_read_session 取内容。',
     zodShape: {
-      name: z.string().max(100).optional().describe('可选：按会话显示名子串过滤（两通道一致；本地库通道无显示名的会话会被排除，建议配合 focus 使用）'),
-      channel: z.enum(['local-db', 'ui']).optional().describe('显式通道；缺省按 doctor 状态分派；强制 local-db 失败不兜底'),
+      name: z.string().max(100).optional().describe('可选：按会话名称、别名或备注子串过滤；命名来源不可用时明确报错'),
+      channel: z.enum(['local-db', 'ui']).optional().describe('仅 local-db 可用；旧 ui 值会明确报 VERSION_UNSUPPORTED'),
       focus: z.array(z.string().min(1)).min(1).optional().describe('关注会话名列表（可含@微信后缀）；未传=全部；空数组非法；单名解析失败进 failed 部分返回'),
     },
     annotations: { title: '企业微信未读/待回复会话快照', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -214,11 +213,8 @@ export const TOOL_DEFS: WecomToolDef[] = [
       '日期读取返回read_window（start_utc/end_utc/snapshot_at）且不推进增量cursor、不产生待回复候选。' +
       '图片/文件在时间线返回附件信息；附件内容本轮仅元数据展示，需要内容时传attachment.message_id按需读取，文本以字节offset/max_bytes分页、图片返回实际图片内容，不推进时间线cursor。' +
       '旧调用兼容：读取目标会话消息，effect=none，无出站消息。target_ref（搜索返回、有效5分钟）与target_name二选一，同名无法消歧返回TARGET_AMBIGUOUS。' +
-      'doctor已启用时优先本地库，默认最近100条；精确时间、消息ID和增量cursor，不切换会话或清角标，非文本占位。' +
-      '可指定channel=local-db强制本地库（失败不回退）或ui；cursor绑定账号/会话/数据库代际，UI不能执行cursor。旧ref可用于UI，本地库要求账号绑定ref或target_name。' +
-      '本地库不可用的普通首读可回退UI，返回原因与能力差异；取消、参数、账号/目标错误不回退。未初始化走UI并提示doctor。' +
-      'UI保留model/ocr两种输出channel：配置服务端时模型解析按次计积分，余额不足或配置错误不降级；未配置或模型暂不可用走本地OCR。' +
-      'UI按max_pages翻屏，可能自动搜索/切换会话并清除角标，时间/方向可能近似；数据含messages、channel及相应通道元数据。',
+      '旧目标参数也只使用已验证企业微信版本的本地库，默认最近100条；精确时间、消息ID和增量cursor，不切换会话或清角标，非文本占位。' +
+      '本地库不可用时明确报错，不读取 UI 或 OCR；cursor绑定账号/会话/数据库代际。旧无账号ref拒绝，请重新搜索或使用target_name。',
     zodShape: {
       session: z.string().min(1).max(2048).optional().describe('会话完整名称或读取返回的稳定session；与旧target参数互斥'),
       attachment: z.object({
@@ -231,12 +227,12 @@ export const TOOL_DEFS: WecomToolDef[] = [
       timezone: z.string().min(1).max(64).optional().describe('日期模式IANA时区，缺省Asia/Shanghai；仅date模式可用，续页省略以继承原范围'),
       include_context: z.boolean().optional().describe('日期模式背景：true首次带该日零点前最近100条，与当日消息共同分页；首次缺省false，续页省略继承原值'),
       target_ref: z.string().min(1).optional().describe('目标句柄（wecom_chat_search 返回的 target_ref；与 target_name 二选一）'),
-      target_name: z.string().min(1).max(100).optional().describe('按会话名定位（可含@微信后缀）；本地库精确匹配并消歧，UI必要时内部search，歧义返回TARGET_AMBIGUOUS；与target_ref二选一'),
-      channel: z.enum(['local-db', 'ui']).optional().describe('显式通道；缺省按doctor状态，本地库强制模式失败不回退'),
-      limit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional().describe('本地库最多返回条数，默认100；日期模式每页默认100条、上限100（超出会被服务端拒绝）；UI仍由max_pages控制，不承诺数据库分页'),
-      cursor: z.string().min(1).optional().describe('上次本地库返回的增量游标；绑定账号、会话和代际，UI不支持。日期模式返回独立日期游标（wd1），续页原样回传'),
-      max_pages: z.number().int().min(1).max(10).optional().describe('最多向上翻几屏（含底部当前屏，默认 1，上限 10）'),
-      since_days: z.number().int().min(1).optional().describe('本地库按精确发送时间过滤最近N天；UI仅OCR按分割线超龄早停，模型通道仍抓max_pages'),
+      target_name: z.string().min(1).max(100).optional().describe('按会话名定位（可含@微信后缀）；本地库精确匹配并消歧，歧义返回TARGET_AMBIGUOUS；与target_ref二选一'),
+      channel: z.enum(['local-db', 'ui']).optional().describe('仅 local-db 可用；旧 ui 值会明确报 VERSION_UNSUPPORTED'),
+      limit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional().describe('本地库最多返回条数，默认100；日期模式每页默认100条、上限100（超出会被服务端拒绝）'),
+      cursor: z.string().min(1).optional().describe('上次本地库返回的增量游标；绑定账号、会话和代际。日期模式返回独立日期游标（wd1），续页原样回传'),
+      max_pages: z.number().int().min(1).max(10).optional().describe('旧 UI 参数，已停用；请使用 limit'),
+      since_days: z.number().int().min(1).optional().describe('本地库按精确发送时间过滤最近N天'),
     },
     annotations: { title: '企业微信读取会话消息', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
@@ -274,23 +270,21 @@ export const TOOL_DEFS: WecomToolDef[] = [
     title: '企业微信新消息跟踪（单轮）',
     description:
       '新消息跟踪单轮（无会话归档时的核心读能力：增量检测 + 待回复场景的持续监控）。' +
-      '缺省按 doctor 状态分派通道：本地库可用（channel=local-db）返回自上轮水位以来的全部新消息' +
+      '仅支持已验证企业微信版本的本地库，返回自上轮水位以来的全部新消息' +
       '（data={new_messages:[{conversation_id,messages:[{side,system?,msg_id,text,time,parse_trusted}],has_more?}],' +
       'last_sender:{<conv_id>:"self"|"peer"|null}}，msg_id 为会话内去重键；last_sender 为最后一条可参与回复判定' +
       '消息的方向，系统消息不参与），不切会话、不清角标、零 UI 副作用；首次见到的会话建立基线=当前水位，' +
       '只报之后的新消息（存量不回放，存量待回复请先调 wecom_unread_list）。' +
       '本地库不可用时本轮结构化失败（db_unavailable=true，水位保留），不自动降级 UI，下轮重试；' +
-      '取消/身份类失败同样不吞。否则走 UI 通道（channel=ui）：未读快照与水位 diff → 读候选会话当前屏 → 只返回增量，' +
-      'data.events={type:"new_messages",session,unread_count,messages:[{side,text}]} 或 {type:"tick",unread_total}；' +
-      '副作用：读取候选会话会清除其未读角标并推进本机文本水位。' +
-      'focus 为关注输入列表（每项为会话名或账号绑定 target_ref；仅本地库通道解析，失败进 failed 部分返回，UI 通道忽略）。' +
+      '取消/身份类失败同样不吞；不读取 UI 或 OCR。' +
+      'focus 为关注输入列表（每项为会话名或账号绑定 target_ref；解析失败进 failed 部分返回）。' +
       'focus 建立时一次性解析并持久绑定到会话身份，后续轮次按绑定轮询、不再按名解析（联系人改名不影响跟踪），' +
       '显式关注的空会话从首批新消息起全量上报。同账号源库被替换/重建时该轮 generation_changed=true 且基线按当前水位重建（不回放）。' +
       '注意：DB 中断恢复后消费增量前，应核对会话最新发言方与已回复状态（不承诺不漏检）。' +
       '长循环请用 CLI watch 动词（aid-wecom watch --channel local-db [--focus 名1,名2]，本工具每轮一次调用）。',
     zodShape: {
-      channel: z.enum(['local-db', 'ui']).optional().describe('显式通道；缺省按 doctor 状态分派；本地库失败不落 UI（db_unavailable 结构化失败，水位保留）'),
-      focus: z.array(z.string().min(1)).min(1).optional().describe('关注输入列表（会话名，可含@微信后缀，或账号绑定 target_ref）；未传=全部会话；空数组非法；仅本地库通道解析（失败进 failed），UI 通道忽略；建立时一次性解析持久绑定，后续按绑定轮询（改名不影响跟踪）'),
+      channel: z.enum(['local-db', 'ui']).optional().describe('仅 local-db 可用；旧 ui 值会明确报 VERSION_UNSUPPORTED；本地库失败水位保留'),
+      focus: z.array(z.string().min(1)).min(1).optional().describe('关注输入列表（会话名，可含@微信后缀，或账号绑定 target_ref）；未传=全部会话；空数组非法；解析失败进 failed；建立时一次性解析持久绑定，后续按绑定轮询（改名不影响跟踪）'),
     },
     annotations: { title: '企业微信新消息跟踪（单轮）', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },

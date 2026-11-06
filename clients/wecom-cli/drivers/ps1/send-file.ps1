@@ -201,8 +201,6 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.SendFile' -Body {
     $mainHwnd = Resolve-WeComMainWindow
     $main = Get-WeComWindowInfo ([IntPtr]$mainHwnd)
     $t0 = $swTotal.ElapsedMilliseconds
-    [void](Send-WeComAttachChordKey -Hwnd $mainHwnd -Vk 0x46)
-    Start-Sleep -Milliseconds 150
     [void](Clear-WeComSearchBoxV2 -MainHwnd $mainHwnd)
     Start-Sleep -Milliseconds 200
     $timing.precheck = [int]($swTotal.ElapsedMilliseconds - $t0)

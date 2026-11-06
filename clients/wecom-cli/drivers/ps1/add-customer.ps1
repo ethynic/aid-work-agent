@@ -2,12 +2,9 @@
 # M12 新流程（2026-09-29 真机逐步验证重标定；取代旧「通讯录→子窗口⊕添加」路线——
 # 客户端更新后内容子窗口 WXworkWindow-企业微信-<页名> 已不存在、④添加按钮
 # PostMessage/mouse_event 均无效，旧路线整体废弃）：
-#   1) 解析主窗口 → attachstate Ctrl+F 聚焦搜索框（Send-WeComAttachChordKey，全后台）
-#   2) 残留检测 + 清空（Clear-WeComSearchBoxV2 = Ctrl+A+Delete；Get-WeComSearchBoxState
-#      复核，清不空 fail-closed）——清空副作用会关掉上次 search 留下的 overlay
-#   3) Send-WeComText 输入手机号（纯数字走 WM_KEYDOWN）→ 搜索框带 token 回读验证
-#      （contains 手机号即过：天然容忍前导 Q 图标伪读/末尾光标伪影/overlay「网络查找」
-#      行混入带内；截断丢字不含完整手机号必失败）；失败清空补输 1 次，仍失败 → UI_CHANGED
+#   1) 解析主窗口 → Ctrl+F 成功后固定 Ctrl+A/Delete 清空搜索框
+#   2) Send-WeComText 输入手机号 → 完整剪贴板复制回读；不符时清空补输 1 次
+#      （W22 搜索框准备链仅合成验证，尚待真机验收）
 #   4) 等 SearchResultWindow2 overlay → 高度稳定轮询（连续两次等高；手机号形态实测高 148）→
 #      boxes OCR 找「网络查找」行（实测单 token 形态「网络查找手机W/邮箱：13671705876」
 #      @y37-48，W=「号」误读——按 contains '网络查找' 匹配，同视觉行拼起来校验含手机号，
@@ -164,11 +161,8 @@ function Clear-SearchResidualBestEffort([int64]$MainHwnd) {
     # best-effort：失败仅记日志，不影响结果语义。
     try {
         if ($MainHwnd -ne 0 -and [WeComWin32]::IsWindow([IntPtr]$MainHwnd)) {
-            [void](Send-WeComAttachChordKey -Hwnd $MainHwnd -Vk 0x46)
-            Start-Sleep -Milliseconds 150
             [void](Clear-WeComSearchBoxV2 -MainHwnd $MainHwnd)
-            $sb = Get-WeComSearchBoxState -MainHwnd $MainHwnd -Tag 'cleanup'
-            Write-DriverLog ('收尾清空搜索框 state=' + $sb.State + ' content=[' + $sb.Content + ']')
+            Write-DriverLog '收尾 Ctrl+F 后清空搜索框'
         }
     } catch {
         # best-effort 契约：catch 内日志自身失败（如磁盘满 Add-Content 抛错）也不得外抛——
@@ -186,52 +180,40 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.AddCustomer' -Body {
     $shots = New-Object System.Collections.ArrayList
     # 句柄跟踪：失败路径 finally 恢复原状（关弹窗 + 清搜索框残留）
     $mainHwnd = [int64]0
+    $searchPrepared = $false
     $dlgHwnd = [int64]0
     $reasonHwnd = [int64]0
     try {
-    # 1) 解析主窗口 + attachstate Ctrl+F 聚焦搜索框（attach 失败 fail-closed：不聚焦就
-    #    输入会把手机号打进当前会话输入框，绝不带着不确定焦点往下走）
+    # 1) 解析主窗口；清空 helper 先投递 Ctrl+F，失败即中止。
     $mainHwnd = Resolve-WeComMainWindow
     $main = Get-WeComWindowInfo ([IntPtr]$mainHwnd)
     Write-DriverLog ('step1 mainHwnd=' + $mainHwnd + ' rect=(' + $main.X + ',' + $main.Y + ',' + $main.W + 'x' + $main.H + ')')
-    if (-not (Send-WeComAttachChordKey -Hwnd $mainHwnd -Vk 0x46)) {
-        Throw-DriverError 'UI_CHANGED' 'attachstate Ctrl+F 聚焦搜索框失败（AttachThreadInput 失败），为避免输入落错位置已中止'
-    }
-    Start-Sleep -Milliseconds 150
+    # 2) 空框也固定清空，避免残留搜索词拼接手机号。
+    [void](Clear-WeComSearchBoxV2 -MainHwnd $mainHwnd)
+    $searchPrepared = $true
 
-    # 2) 残留检测 + 清空（同 chat-search：has_content/unknown 都清；复核仍非 empty → UI_CHANGED）
-    $sb = Get-WeComSearchBoxState -MainHwnd $mainHwnd -Tag 'pre'
-    Write-DriverLog ('step2 box pre state=' + $sb.State + ' content=[' + $sb.Content + '] tokens: ' + $sb.Tokens)
-    if ($sb.State -ne 'empty') {
-        [void](Clear-WeComSearchBoxV2 -MainHwnd $mainHwnd)
-        $sb2 = Get-WeComSearchBoxState -MainHwnd $mainHwnd -Tag 'cleared'
-        Write-DriverLog ('step2 box cleared state=' + $sb2.State + ' content=[' + $sb2.Content + '] tokens: ' + $sb2.Tokens)
-        if ($sb2.State -ne 'empty') {
-            Throw-DriverError 'UI_CHANGED' ('搜索框残留清空后仍非空（state=' + $sb2.State + '，残留：' + $sb2.Content + '），为避免拼接旧查询词已中止')
-        }
-    }
-
-    # 3) 输入手机号 + 搜索框带 token 回读验证：剥空白后 contains 手机号即过——前导 Q 图标
-    #    伪读（「Q13671705876」）、末尾光标伪影、overlay「网络查找」行混入带内都天然容忍；
-    #    截断/丢字（如末位丢失）不含完整手机号必失败。失败 → 清空补输 1 次 → 仍失败 UI_CHANGED
+    # 3) 输入后完整复制回读手机号；不匹配时重新聚焦清空，最多补输一次。
     $typedOk = $false
     $echo = ''
     for ($attempt = 1; $attempt -le 2; $attempt++) {
         Send-WeComText -Hwnd $mainHwnd -Text $Phone
         Start-Sleep -Milliseconds 400
-        $sbT = Get-WeComSearchBoxState -MainHwnd $mainHwnd -Tag ('typed' + $attempt)
-        $echo = ($sbT.Content -replace '\s+', '')
-        Write-DriverLog ('step3 typed#' + $attempt + ' state=' + $sbT.State + ' content=[' + $sbT.Content + '] tokens: ' + $sbT.Tokens)
-        if ($echo.Contains($Phone)) { $typedOk = $true; break }
+        $echo = Test-WeComSearchClipboardEcho -MainHwnd $mainHwnd -Query $Phone
+        Write-DriverLog ('step3 typed#' + $attempt + ' copy matched=' + $echo.matched + ' reason=' + $echo.reason + ' restored=' + $echo.restored)
+        if ($echo.matched) { $typedOk = $true; break }
+        if ($echo.reason -eq 'search_focus_failed') {
+            Throw-DriverError 'UI_CHANGED' '搜索框 Ctrl+F 聚焦失败，已中止且未补输'
+        }
+        if ($echo.reason -in @('clipboard_write_failed','clipboard_close_failed','clipboard_restore_failed','clipboard_changed')) {
+            Throw-DriverError 'UI_CHANGED' '剪贴板写入或恢复失败，已中止且未重试'
+        }
         if ($attempt -lt 2) {
-            # 补输前重新聚焦 + 清空（焦点可能被 overlay 抢走；清空同时关掉已弹 overlay）
-            [void](Send-WeComAttachChordKey -Hwnd $mainHwnd -Vk 0x46)
-            Start-Sleep -Milliseconds 150
+            # 补输前重新聚焦 + 清空（焦点可能被 overlay 抢走）。
             [void](Clear-WeComSearchBoxV2 -MainHwnd $mainHwnd)
         }
     }
     if (-not $typedOk) {
-        Throw-DriverError 'UI_CHANGED' ('搜索框回读文本不含完整手机号（补输 1 次后仍不符：框内「' + $echo + '」），聚焦/输入链路未生效，已中止')
+        Throw-DriverError 'UI_CHANGED' ('搜索框完整复制回读未确认手机号（补输 1 次后仍不符：' + $echo.reason + '），聚焦/输入链路未生效，已中止')
     }
     $s1 = Save-StepShot $mainHwnd 'step1-typed.png'
     [void]$shots.Add([string]$s1.path)
@@ -450,6 +432,6 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.AddCustomer' -Body {
         # 检索弹窗点 × 后 IsWindow 兜底为空操作
         if ($reasonHwnd -ne 0) { Close-ReasonDialogBestEffort $reasonHwnd }
         if ($dlgHwnd -ne 0) { Close-SearchDialogBestEffort $dlgHwnd }
-        if ($mainHwnd -ne 0) { Clear-SearchResidualBestEffort $mainHwnd }
+        if ($searchPrepared) { Clear-SearchResidualBestEffort $mainHwnd }
     }
 }

@@ -50,14 +50,14 @@ from src.services.boss_visual_service import BossVisualRequestBody, diagnose_vis
 router = APIRouter(prefix="/api/client/v1", tags=["协会客户端"])
 
 
-# 客户端可指定模型的白名单：model -> provider（首期仅 kimi-k3 视觉模型，走 moonshot 网关，
-# 供 weixin-cli 视觉定位使用，见 docs/design/weixin/weixin-cli-billing.md §4.1）。
+# 客户端可指定模型的白名单：model -> provider。
 # 未传 model 的请求仍走全局默认 llm_gateway，行为与改动前完全一致。
 # 2026-11-05 禁用 Kimi：项目已不使用 Kimi，243 key 失效持续报 401；
-# 白名单清空后 model=kimi-k3 的请求 fail-fast 返回 MODEL_NOT_ALLOWED（原本 401 也全失败，无功能回归）。
+# model=kimi-k3 的请求 fail-fast 返回 MODEL_NOT_ALLOWED（原本 401 也全失败，无功能回归）。
 # 如需恢复：补回条目 + 配置有效 MOONSHOT_API_KEYS + 改 .env 后 compose up -d 重建容器。
 CLIENT_MODEL_PROVIDER_MAP: Dict[str, str] = {
     # "kimi-k3": "moonshot",
+    "GLM-5.3-Flash": "zhipu",  # WeCom 标题坐标一次性视觉标定
 }
 
 # 按 model 缓存专用网关实例（KeyPool 级并发控制需跨请求复用）
@@ -335,9 +335,7 @@ async def llm_chat(
     gateway = _get_model_gateway(req.model) if req.model else llm_gateway
 
     try:
-        # 协会客户端场景=信息收集小任务（JSON 抽取/解析），统一关思考：
-        # CLI 侧 ProxyLLMGateway 不透传 thinking 参数，开关只能在服务端端点定；
-        # 思考会显著拉长耗时并多扣积分 token，且烧穿小 max_tokens 致 content 为空。
+        # CLI 侧不透传思考参数：GLM-5.3-Flash 强制思考，标题定位使用 max；其他模型沿用关闭思考。
         # 注意：req.model 命中白名单时 gateway 是模型专用网关（如 kimi-k3→moonshot），
         # 否则为全局默认网关。
         response = await gateway.chat(
@@ -345,7 +343,7 @@ async def llm_chat(
             temperature=req.temperature,
             max_tokens=req.max_tokens,
             response_format=req.response_format,
-            enable_thinking=False,
+            **({"reasoning_effort": "max"} if req.model == "GLM-5.3-Flash" else {"enable_thinking": False}),
         )
     except Exception as e:
         logger.opt(exception=True).error(f"客户端LLM代理调用失败 binding={binding.binding_id}: {e}")

@@ -1,8 +1,7 @@
 ﻿# drivers/ps1/chat-search.ps1 — wecom_chat_search 驱动（M4：Jev 决策 + overlay 保持打开）
-# 流程（2026-09-28 真机验证，experiments/probes/e1-e3 系列）：
-#   1) 解析主窗口，先按已验证搜索布局点击专属清空点并复核 empty；不做键盘清理；
-#   2) Focus-WeComSearchBox（attachstate Ctrl+F + OCR/Jev 可靠锚点点击）；
-#   3) 输入 query → 原 OCR 严格回读；裁切时以新鲜完整复制结果兜底，恢复剪贴板失败则中止；
+# 流程（搜索结果识别沿 2026-09-28 真机验证；W22 搜索框准备链尚待真机验收）：
+#   1) 解析主窗口，Ctrl+F 成功后固定 Ctrl+A/Delete 清空搜索框；
+#   2) 输入 query → 完整剪贴板复制回读，恢复失败则中止；
 #   4) 等 SearchResultWindow2 可见 + 高度稳定（400ms 轮询，连续两次等高，≤10s）→ 稳定帧
 #      chat_ocr search 模式 OCR 结果条目；
 #   5) Jev 单次合并调用（best_result + is_ambiguous 两问）；降级 → 规则 best + 概率全 null；
@@ -40,55 +39,23 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.ChatSearch' -Body {
     $mainHwnd = Resolve-WeComMainWindow
     Write-DriverLog ('query=' + $Query + ' mainHwnd=' + $mainHwnd)
 
-    # 2) 残留检测 + 清空（动态裁切 OCR 判态；has_content/unknown 都清，清不空 fail-closed）
+    # 2) Ctrl+F 聚焦后固定清空搜索框，空框执行清空也无害。
     $t0 = $swTotal.ElapsedMilliseconds
-    $sb = Get-WeComSearchBoxState -MainHwnd $mainHwnd -Tag 'pre'
-    Write-DriverLog ('step2 box pre state=' + $sb.State + ' content=[' + $sb.Content + '] tokens: ' + $sb.Tokens)
-    if ($sb.State -ne 'empty') {
-        [void](Clear-WeComSearchBoxV2 -MainHwnd $mainHwnd)
-        $sb2 = Get-WeComSearchBoxState -MainHwnd $mainHwnd -Tag 'cleared'
-        Write-DriverLog ('step2 box cleared state=' + $sb2.State + ' content=[' + $sb2.Content + '] tokens: ' + $sb2.Tokens)
-        if ($sb2.State -ne 'empty') {
-            Throw-DriverError 'UI_CHANGED' ('搜索框残留清空后仍非空（state=' + $sb2.State + '，残留：' + $sb2.Content + '），为避免拼接旧查询词已中止')
-        }
-    }
+    [void](Clear-WeComSearchBoxV2 -MainHwnd $mainHwnd)
     $timing.box_check = [int]($swTotal.ElapsedMilliseconds - $t0)
+    Write-DriverLog ('step2 Ctrl+F 后固定清空搜索框 耗时=' + $timing.box_check + 'ms')
 
-    $t0 = $swTotal.ElapsedMilliseconds
-    $focusMethod = Focus-WeComSearchBox -MainHwnd $mainHwnd
-    $timing.focus = [int]($swTotal.ElapsedMilliseconds - $t0)
-    Write-DriverLog ('step2.5 focus method=' + $focusMethod + ' 耗时=' + $timing.focus + 'ms')
-
-    # 3) 输入 query + OCR 回读验证（失败 UI_CHANGED；聚焦降级链是否成功也由此兜底）
+    # 3) 输入 query 后完整复制回读，确认未落入其他输入框或拼接旧词。
     $t0 = $swTotal.ElapsedMilliseconds
     Send-WeComText -Hwnd $mainHwnd -Text $Query
     Start-Sleep -Milliseconds 400
-    $sb3 = Get-WeComSearchBoxState -MainHwnd $mainHwnd -Tag 'typed'
-    Write-DriverLog ('step3 typed content=[' + $sb3.Content + '] state=' + $sb3.State + ' tokens: ' + $sb3.Tokens)
-    $normQuery = ($Query -replace '\s+', '')
-    # 剥前导 [Qq]：OCR 常把框内图标+文本合并成「Q 陆伟」。剥前/剥后基底任一匹配即可——
-    # 只比剥后值会误杀 q/Q 开头的 query 本体；光标伪影容忍：echo 仅比 query 多末尾 1 个
-    # 字符且属于误识集合 l|I1i! 才放行（方向不可逆，真丢字符必须失败），两种基底都查
-    $rawNorm = ($sb3.Content -replace '\s+', '')
-    $echoNorm = $rawNorm -replace '^[Qq]', ''
-    $echoOk = ($rawNorm -eq $normQuery) -or ($echoNorm -eq $normQuery) -or (
-        $rawNorm.Length -eq $normQuery.Length + 1 -and
-        $rawNorm.StartsWith($normQuery) -and
-        'l|I1i!'.Contains($rawNorm.Substring($rawNorm.Length - 1))
-    ) -or (
-        $echoNorm.Length -eq $normQuery.Length + 1 -and
-        $echoNorm.StartsWith($normQuery) -and
-        'l|I1i!'.Contains($echoNorm.Substring($echoNorm.Length - 1))
-    )
-    if (-not $echoOk) {
-        $copiedEcho = Test-WeComSearchClipboardEcho -MainHwnd $mainHwnd -Query $Query
-        Write-DriverLog ('step3 全文复制核验 matched=' + $copiedEcho.matched + ' length=' + $copiedEcho.copied_length + ' reason=' + $copiedEcho.reason + ' restored=' + $copiedEcho.restored)
-        if (-not $copiedEcho.matched) {
-            if ($copiedEcho.reason -in @('clipboard_write_failed','clipboard_close_failed','clipboard_restore_failed')) {
-                Throw-DriverError 'UI_CHANGED' '剪贴板写入/恢复失败，原内容可能未恢复，请检查；已中止且未重试'
-            }
-            Throw-DriverError 'UI_CHANGED' '搜索框 OCR 与完整复制回读均未确认 query，已中止；未清除未知焦点或自动重新输入'
+    $copiedEcho = Test-WeComSearchClipboardEcho -MainHwnd $mainHwnd -Query $Query
+    Write-DriverLog ('step3 全文复制核验 matched=' + $copiedEcho.matched + ' length=' + $copiedEcho.copied_length + ' reason=' + $copiedEcho.reason + ' restored=' + $copiedEcho.restored)
+    if (-not $copiedEcho.matched) {
+        if ($copiedEcho.reason -in @('clipboard_write_failed','clipboard_close_failed','clipboard_restore_failed')) {
+            Throw-DriverError 'UI_CHANGED' '剪贴板写入/恢复失败，原内容可能未恢复，请检查；已中止且未重试'
         }
+        Throw-DriverError 'UI_CHANGED' ('搜索框完整复制回读未确认 query（' + $copiedEcho.reason + '），已中止且未重试')
     }
     $timing.typing = [int]($swTotal.ElapsedMilliseconds - $t0)
 

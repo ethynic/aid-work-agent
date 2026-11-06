@@ -2,17 +2,16 @@
 # 前提：由 TS 层 messageSend.ts 调用；当前会话是否为目标由本驱动判定——
 # 不对时返回 navigate_required=true 交还 TS 编排（search+select 后二次调用本驱动）。
 # 流程：
-#   1) 解析主窗口 → PrintWindow 截图 → OCR 两带（boxes 模式拿 token+坐标）：
-#      标题带（y<0.07h，聊天区顶部）+ 底部输入带（y>0.80h，含工具栏图标行与输入区）
-#   2) Jev #1：right_conversation（当前会话是否目标）/ input_point（聚焦文本输入框位置）；
-#      清理前必须由标题规则确认目标会话，不接受 Jev 单独授权清理。
+#   1) 截主窗口顶部 → GLM-5.3-Flash 按窗口尺寸一次性标定标题首字中心；
+#      群单击 / 单聊双击后由企微 Ctrl+C 复制完整标题，严格与目标比较。
+#      底部 OCR 只提供输入点候选，Jev 只选择候选输入点。
 #   3) 分支：非目标/无法判定 → 返回 data {navigate_required:true, reason}（驱动层 ok=true，
-#      TS 接管）；目标确认 → 点击 input_point → 重新核对当前标题 → Ctrl+A/Delete
+#      TS 接管）；目标确认 → 点击 input_point → Ctrl+A/Delete
 #      清理编辑区 → 单行沿用 Send-WeComText，多行沿用剪贴板 Ctrl+V；发送结果由后续
 #      本地库记录优先核验，粘贴后不再凭截图文字决定是否按 Enter。
 #      副作用：多行发送会覆盖用户剪贴板且**不恢复**（weixin-cli 先例：paste handler 异步
 #      读剪贴板，恢复竞态会粘贴到错的内容；README 已注明）
-#   4) 输入后保留诊断截图，不再对标题做 OCR 复核；沿用步骤 3 清理前确认的目标。
+#   4) 输入后保留诊断截图，不再复核标题；沿用步骤 1 首次确认的目标。
 #   5) Send-WeComEnter 发送 → 1.2s → 截图 → OCR（input/bubble/preview 三模式终态证据）
 #   6) Jev #2（两问合一）：sent_successfully / failure_mode；no/unclear → EXECUTION_UNKNOWN
 #      绝不自动重试。降级：M2 三选二（输入框清空 / 消息区末尾任一行含 text 归一化前缀 12 字 /
@@ -23,7 +22,7 @@
 #   发送完成后直接返回 sent=true/verified=false（TS 层用本地库核验接管）；-VerifyOnly 不做
 #   输入/发送（跳过 step1-4），仅执行既有 step5 终态证据 + step6 判定（TS 在本地库核验
 #   未命中时补做 OCR 气泡核验），input_point 返回 null；两开关互斥。
-# artifact：各步截图 + driver-log.txt（Jev state/answer 摘要、OCR 摘要、timing；
+# artifact：各步截图 + driver-log.txt（输入带 OCR 摘要、timing；
 # 绝不含 TYPESAFE_API_KEY——key 只在 Invoke-WeComJev 内经临时头文件瞬态使用）。
 # 注意：本文件含中文，必须以 UTF-8 with BOM 保存。
 param(
@@ -72,6 +71,255 @@ function Save-StepShot([int64]$Hwnd, [string]$Name) {
     return @{ path = $path; left = [int]$snap[0]; top = [int]$snap[1]; w = [int]$snap[2]; h = [int]$snap[3] }
 }
 
+function Get-WeComTitlePoint([int64]$Hwnd, [string]$ImagePath) {
+    # GLM 只定位标题首字；真正的会话名随后由企微自身复制，模型文字不参与身份判断。
+    $main = Get-WeComWindowInfo ([IntPtr]$Hwnd)
+    $dpi = [int][WeComWin32]::GetDpiForWindow([IntPtr]$Hwnd)
+    if ($dpi -le 0) { Throw-DriverError 'UI_CHANGED' '无法取得企业微信窗口 DPI，未触碰输入区' }
+    $cacheDir = Join-Path $env:LOCALAPPDATA 'AidWorkAgent\wecom-cli'
+    $cachePath = Join-Path $cacheDir 'title-point.json'
+    $cached = $null
+    if (Test-Path -LiteralPath $cachePath) {
+        try { $cached = Get-Content -LiteralPath $cachePath -Raw -Encoding UTF8 | ConvertFrom-Json }
+        catch { $cached = $null }
+    }
+    if ($null -ne $cached -and $cached.schema -eq 1 -and $cached.w -eq $main.W -and
+            $cached.h -eq $main.H -and $cached.dpi -eq $dpi -and
+            ($cached.x -is [int] -or $cached.x -is [long]) -and
+            ($cached.y -is [int] -or $cached.y -is [long]) -and
+            ($cached.divider_x -is [int] -or $cached.divider_x -is [long]) -and
+            $cached.divider_x -ge [int]($main.W * 0.20) -and $cached.divider_x -le [int]($main.W * 0.70) -and
+            $cached.x -ge ($cached.divider_x + [int](8 * $dpi / 96)) -and
+            $cached.x -le ($cached.divider_x + [int](100 * $dpi / 96)) -and
+            $cached.y -ge [int](12 * $dpi / 96) -and $cached.y -le [int](56 * $dpi / 96) -and
+            $cached.x -lt $main.W -and $cached.y -lt $main.H) {
+        return @{ x = [int]$cached.x; y = [int]$cached.y; cache_path = $cachePath; source = 'cache' }
+    }
+    $url = ([string]$env:AID_WECOM_SERVER_URL).TrimEnd('/')
+    $token = [string]$env:AID_WECOM_SERVER_TOKEN
+    if (-not $url -or -not $token) {
+        Throw-DriverError 'CONFIG_MISSING' '缺少 AID_WECOM_SERVER_URL 或 AID_WECOM_SERVER_TOKEN，无法用 GLM 标定会话标题；未触碰输入区'
+    }
+    Add-Type -AssemblyName System.Drawing
+    $source = [Drawing.Image]::FromFile($ImagePath)
+    $headerBytes = $null
+    try {
+        if ($source.Width -ne $main.W -or $source.Height -ne $main.H) {
+            Throw-DriverError 'UI_CHANGED' '标题截图与当前窗口尺寸不一致，未触碰输入区'
+        }
+        $headerH = [Math]::Min($source.Height, [int][Math]::Ceiling(64 * $dpi / 96))
+        $header = [Drawing.Bitmap]::new($source.Width, $headerH)
+        try {
+            $graphics = [Drawing.Graphics]::FromImage($header)
+            try { $graphics.DrawImage($source, [Drawing.Rectangle]::new(0, 0, $source.Width, $headerH),
+                    [Drawing.Rectangle]::new(0, 0, $source.Width, $headerH), [Drawing.GraphicsUnit]::Pixel) }
+            finally { $graphics.Dispose() }
+            $memory = [IO.MemoryStream]::new()
+            try {
+                $header.Save($memory, [Drawing.Imaging.ImageFormat]::Png)
+                $headerBytes = $memory.ToArray()
+            } finally { $memory.Dispose() }
+        } finally { $header.Dispose() }
+    } finally { $source.Dispose() }
+    $image = 'data:image/png;base64,' + [Convert]::ToBase64String($headerBytes)
+    $system = '你只负责定位企业微信主窗口右侧聊天区顶部标题的第一个字中心。左侧搜索框和会话列表不是标题。返回单个 JSON 对象，字段 divider_x、x、y 都是相对这张截图左上角的整数像素坐标；divider_x 是左侧会话列表与右侧聊天区的竖向分界线，x/y 是右侧标题第一个字的中心。没有清楚标题或布局不是双栏时返回 {"error":"title_not_found"}。不要返回文字内容。'
+    $request = @{
+        model = 'GLM-5.3-Flash'; purpose = 'wecom-title-coordinate'; temperature = 0
+        messages = @(
+            @{ role = 'system'; content = $system },
+            @{ role = 'user'; content = @(
+                @{ type = 'text'; text = '请按截图原像素给出 divider_x、x、y；不要缩放坐标。' },
+                @{ type = 'image_url'; image_url = @{ url = $image } }
+            ) }
+        )
+    }
+    try {
+        $bytes = [Text.Encoding]::UTF8.GetBytes(($request | ConvertTo-Json -Depth 8 -Compress))
+        $response = Invoke-RestMethod -Uri ($url + '/api/client/v1/llm/chat') -Method Post `
+            -Headers @{ Authorization = ('Bearer ' + $token) } -ContentType 'application/json' `
+            -Body $bytes -TimeoutSec 60
+    } catch {
+        $status = 0
+        if ($null -ne $_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+        if ($status -eq 401) { Throw-DriverError 'CONFIG_MISSING' 'GLM 标定鉴权失败（HTTP 401），检查 WeCom 服务端 token；未发送消息' }
+        Throw-DriverError 'CONTENT_UNAVAILABLE' ('GLM 标定会话标题坐标失败（HTTP ' + $status + '），未触碰输入区或发送消息')
+    }
+    $raw = ([string]$response.content).Trim()
+    if ($raw.StartsWith('```')) { $raw = ($raw -replace '^```(?:json)?\s*', '' -replace '\s*```$', '').Trim() }
+    try { $point = $raw | ConvertFrom-Json -ErrorAction Stop }
+    catch { Throw-DriverError 'CONTENT_UNAVAILABLE' 'GLM 返回的标题坐标不是 JSON，未触碰输入区' }
+    if ($point.error -or ($point.x -isnot [int] -and $point.x -isnot [long]) -or
+            ($point.y -isnot [int] -and $point.y -isnot [long]) -or
+            ($point.divider_x -isnot [int] -and $point.divider_x -isnot [long]) -or
+            $point.divider_x -lt [int]($main.W * 0.20) -or $point.divider_x -gt [int]($main.W * 0.70) -or
+            $point.x -lt ($point.divider_x + [int](8 * $dpi / 96)) -or
+            $point.x -gt ($point.divider_x + [int](100 * $dpi / 96)) -or
+            $point.y -lt [int](12 * $dpi / 96) -or $point.y -gt [int](56 * $dpi / 96) -or
+            $point.x -ge $main.W -or $point.y -ge $main.H) {
+        Throw-DriverError 'CONTENT_UNAVAILABLE' 'GLM 标定坐标不在聊天标题区域，未触碰输入区'
+    }
+    return @{ x = [int]$point.x; y = [int]$point.y; divider_x = [int]$point.divider_x;
+        w = $main.W; h = $main.H; dpi = $dpi; cache_path = $cachePath; source = 'glm' }
+}
+
+function Save-WeComTitlePoint($Point) {
+    if ($Point.source -ne 'glm') { return }
+    $dir = Split-Path -Parent $Point.cache_path
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    @{ schema = 1; w = $Point.w; h = $Point.h; dpi = $Point.dpi; divider_x = $Point.divider_x;
+        x = $Point.x; y = $Point.y } | ConvertTo-Json -Compress |
+        Set-Content -LiteralPath $Point.cache_path -Encoding UTF8
+}
+
+function Clear-WeComCachedTitlePointOnCopyFailure($Point, [string]$Failure) {
+    # 剪贴板占用/被外部改写属于环境故障，不把可用坐标误判为失效。
+    if ($Point.source -ne 'cache' -or
+            $Failure -notin @('title_edit_not_focused', 'title_copy_unconfirmed')) { return }
+    if (Test-Path -LiteralPath $Point.cache_path) {
+        Remove-Item -LiteralPath $Point.cache_path -Force -ErrorAction Stop
+    }
+}
+
+function Send-WeComTitleDoubleClick([int64]$Hwnd, [int]$ScreenX, [int]$ScreenY) {
+    # 两次 WM_LBUTTONDOWN 只是两个单击；企微单聊标题需真正的 WM_LBUTTONDBLCLK。
+    $point = New-Object WeComWin32+POINT
+    $point.X = $ScreenX; $point.Y = $ScreenY
+    [void][WeComWin32]::ScreenToClient([IntPtr]$Hwnd, [ref]$point)
+    $lp = [IntPtr](($point.Y -shl 16) -bor ($point.X -band 0xFFFF))
+    $ok = [WeComWin32]::PostMessageW([IntPtr]$Hwnd, 0x0201, [IntPtr]1, $lp)
+    Start-Sleep -Milliseconds 60
+    $ok = [WeComWin32]::PostMessageW([IntPtr]$Hwnd, 0x0202, [IntPtr]::Zero, $lp) -and $ok
+    Start-Sleep -Milliseconds 80
+    $ok = [WeComWin32]::PostMessageW([IntPtr]$Hwnd, 0x0203, [IntPtr]1, $lp) -and $ok
+    Start-Sleep -Milliseconds 60
+    $ok = [WeComWin32]::PostMessageW([IntPtr]$Hwnd, 0x0202, [IntPtr]::Zero, $lp) -and $ok
+    if (-not $ok) { Throw-DriverError 'UI_CHANGED' '单聊标题双击消息未成功投递，未触碰输入区' }
+}
+
+function Get-WeComTitleEditWindow([int64]$Hwnd, [int]$ScreenX, [int]$ScreenY) {
+    # 标题编辑框可能已因上一次点击存在；从目标主窗枚举，避免 WindowFromPoint
+    # 在企微被其他窗口遮挡时误取到前台应用的 HWND。
+    $main = Get-WeComWindowInfo ([IntPtr]$Hwnd)
+    $dpi = [int][WeComWin32]::GetDpiForWindow([IntPtr]$Hwnd)
+    $headerBottom = $main.Y + [int][Math]::Ceiling(64 * $dpi / 96)
+    $edits = New-Object System.Collections.ArrayList
+    $callback = [WeComWin32+EnumWindowsProc]{
+        param($child, $unused)
+        $info = Get-WeComWindowInfo $child
+        if ($info.Class -eq 'EditWnd' -and $info.Visible -and $info.Pid -eq $main.Pid -and
+                $info.X -le $ScreenX -and $ScreenX -lt ($info.X + $info.W) -and
+                $info.Y -le $ScreenY -and $ScreenY -lt ($info.Y + $info.H) -and
+                $info.Y -ge $main.Y -and ($info.Y + $info.H) -le $headerBottom) {
+            [void]$edits.Add($info.Hwnd)
+        }
+        return $true
+    }
+    [void][WeComWin32]::EnumChildWindows([IntPtr]$Hwnd, $callback, [IntPtr]::Zero)
+    if ($edits.Count -gt 1) { Throw-DriverError 'UI_CHANGED' '标题位置存在多个编辑框，未触碰输入区' }
+    if ($edits.Count -eq 0) { return [IntPtr]::Zero }
+    return [IntPtr][int64]$edits[0]
+}
+
+function Get-WeComGroupTitleEditWindow([int64]$Hwnd, [int]$ScreenX, [int]$ScreenY) {
+    $edit = Get-WeComTitleEditWindow -Hwnd $Hwnd -ScreenX $ScreenX -ScreenY $ScreenY
+    if ($edit -ne [IntPtr]::Zero) { return $edit }
+    # 一次点击会从未选中态选中完整群名；重复点击可能取消全选。
+    [void](Send-WeComClick -Hwnd $Hwnd -ScreenX $ScreenX -ScreenY $ScreenY)
+    Start-Sleep -Milliseconds 150
+    $edit = Get-WeComTitleEditWindow -Hwnd $Hwnd -ScreenX $ScreenX -ScreenY $ScreenY
+    if ($edit -eq [IntPtr]::Zero) { throw 'title_edit_not_focused' }
+    return $edit
+}
+
+function Get-WeComCopiedTitle([int64]$Hwnd, [string]$Section, $Point) {
+    # 保存纯文本剪贴板 → 写唯一 nonce → 选中标题复制 → 按序号 CAS 恢复。
+    # 原剪贴板是图片/富格式时不触碰；若外部进程同时改剪贴板，不覆盖其新内容。
+    $main = Get-WeComWindowInfo ([IntPtr]$Hwnd)
+    $screenX = [int]($main.X + $Point.x)
+    $screenY = [int]($main.Y + $Point.y)
+    $nonce = 'AidWecomTitle:' + [guid]::NewGuid().ToString('N')
+    $window = $null; $original = $null; $touched = $false
+    $copied = ''; $copySeq = $null; $nonceSeq = $null; $failure = ''
+    $restored = $false
+    try {
+        $originalSeq = [WeComWin32]::GetClipboardSequenceNumber()
+        $original = Get-WeComPlainClipboard
+        if ($originalSeq -ne [WeComWin32]::GetClipboardSequenceNumber()) { throw 'clipboard_changed' }
+        $window = New-WeComClipboardOwner
+        $written = [uint32]0
+        $touched = $true
+        if (-not [WeComWin32]::ExchangeClipboardText($window.Handle, $originalSeq, $original.text,
+                $original.empty, $nonce, $false, [ref]$written)) { throw 'clipboard_changed' }
+        $nonceSeq = [WeComWin32]::GetClipboardSequenceNumber()
+        $check = Get-WeComPlainClipboard
+        if ($check.empty -or $check.text -cne $nonce -or
+                [WeComWin32]::GetClipboardOwner() -ne $window.Handle -or
+                $nonceSeq -ne [WeComWin32]::GetClipboardSequenceNumber()) { throw 'clipboard_nonce_unconfirmed' }
+        if (-not [WeComWin32]::IsWindow([IntPtr]$Hwnd)) { throw 'window_changed' }
+        if ($Section -eq 'group') {
+            $copyHwnd = Get-WeComGroupTitleEditWindow -Hwnd $Hwnd -ScreenX $screenX -ScreenY $screenY
+            if (-not (Send-WeComAttachChordKey -Hwnd $copyHwnd.ToInt64() -Vk 0x41)) { throw 'title_select_failed' }
+        } elseif ($Section -eq 'contact' -or $Section -eq 'other') {
+            Send-WeComTitleDoubleClick -Hwnd $Hwnd -ScreenX $screenX -ScreenY $screenY
+            $copyHwnd = [IntPtr]$Hwnd
+        } else {
+            throw 'section_missing'
+        }
+        Start-Sleep -Milliseconds 120
+        $current = Get-WeComWindowInfo ([IntPtr]$Hwnd)
+        if ($current.Pid -ne $main.Pid -or $current.X -ne $main.X -or $current.Y -ne $main.Y -or
+                $current.W -ne $main.W -or $current.H -ne $main.H) { throw 'window_changed' }
+        if (-not (Send-WeComAttachChordKey -Hwnd $copyHwnd.ToInt64() -Vk 0x43)) { throw 'title_copy_failed' }
+        $deadline = [DateTime]::UtcNow.AddMilliseconds(1500)
+        while ([DateTime]::UtcNow -lt $deadline) {
+            $seq = [WeComWin32]::GetClipboardSequenceNumber()
+            if ($seq -ne $nonceSeq) {
+                # 企微复制标题会同时发布 WeWork/HTML 富格式；只读取其 UnicodeText。
+                $read = @{ empty = -not [Windows.Forms.Clipboard]::ContainsText(); text = [Windows.Forms.Clipboard]::GetText() }
+                $owner = [WeComWin32]::GetClipboardOwner()
+                $ownerPid = 0
+                [void][WeComWin32]::GetWindowThreadProcessId($owner, [ref]$ownerPid)
+                if ($owner -ne $window.Handle -and $ownerPid -ne $main.Pid) {
+                    throw 'clipboard_changed'
+                }
+                if ($seq -eq [WeComWin32]::GetClipboardSequenceNumber() -and
+                        $ownerPid -eq $main.Pid -and -not $read.empty -and
+                        $read.text -cne $nonce -and $read.text.Length -gt 0) {
+                    $copied = $read.text; $copySeq = $seq
+                    break
+                }
+            }
+            Start-Sleep -Milliseconds 75
+        }
+        if ($null -eq $copySeq) { throw 'title_copy_unconfirmed' }
+    } catch { $failure = $_.Exception.Message }
+    finally {
+        if ($touched -and $null -ne $original) {
+            try {
+                $seq = [WeComWin32]::GetClipboardSequenceNumber()
+                $now = @{ empty = -not [Windows.Forms.Clipboard]::ContainsText(); text = [Windows.Forms.Clipboard]::GetText() }
+                $stable = $seq -eq [WeComWin32]::GetClipboardSequenceNumber()
+                $nonceOwned = $null -ne $window -and -not $now.empty -and
+                    [WeComWin32]::GetClipboardOwner() -eq $window.Handle -and $now.text -ceq $nonce
+                $copyOwned = $null -ne $copySeq -and $seq -eq $copySeq -and $now.text -ceq $copied
+                if ($stable -and ($nonceOwned -or $copyOwned)) {
+                    $written = [uint32]0
+                    $restored = [WeComWin32]::ExchangeClipboardText($window.Handle, $seq, $now.text,
+                        $now.empty, $original.text, $original.empty, [ref]$written)
+                }
+            } catch { $failure = 'clipboard_restore_failed' }
+            if (-not $restored) { $failure = 'clipboard_restore_failed' }
+        }
+        if ($null -ne $window) { $window.Dispose() }
+    }
+    if ($failure) {
+        try { Clear-WeComCachedTitlePointOnCopyFailure -Point $Point -Failure $failure }
+        catch { $failure += ';title_cache_invalidate_failed' }
+    }
+    if ($failure) { Throw-DriverError 'UI_CHANGED' ('标题复制或剪贴板恢复失败（' + $failure + '），未触碰输入区或发送消息') }
+    return $copied
+}
+
 function Invoke-SendChatOcr([string]$ImagePath, [string]$Mode) {
     # _common 的 OCR 入口 + 原始输出落 driver-log（真机排障）
     $parsed = Invoke-WeComChatOcr -ImagePath $ImagePath -Mode $Mode
@@ -79,25 +327,14 @@ function Invoke-SendChatOcr([string]$ImagePath, [string]$Mode) {
     return $parsed
 }
 
-function Get-WeComBandTokens {
-    # boxes 模式产物按带过滤（坐标 = 窗口像素坐标，与 py 侧 band 语义一致）：
-    #   title  — y0 < 0.07h 且 x0 > 0.20w（聊天区顶部标题带；0.20w 阈值 2026-09-28 真机修订：
-    #             旧 0.15w 会放进搜索框查询残留（x0≈0.13-0.17w）与会话列表首行（≈0.17w），
-    #             与聊天区标题拼接成「文件传输助手文件传输助手」致复核误杀；标题带实测
-    #             x0≥0.22w（外部联系人）/0.296w（普通），0.20w 两侧安全排除）
-    #   bottom — y0 >= 0.80h 且 x0 > min(620,0.34w)（含工具栏图标行 ≈0.83h 与文本输入区，
+function Get-WeComBottomTokens {
+    # boxes 只取底部输入带：y0 >= 0.80h 且 x0 > min(620,0.34w)（含工具栏与输入区，
     #             排除左栏会话列表；右缘 0.95w 截掉窗口边框噪声）
     param(
         [Parameter(Mandatory)]$Boxes,
         [Parameter(Mandatory)][int]$W,
-        [Parameter(Mandatory)][int]$H,
-        [Parameter(Mandatory)][string]$Band
+        [Parameter(Mandatory)][int]$H
     )
-    if ($Band -eq 'title') {
-        return @($Boxes | Where-Object {
-            [double]$_.y0 -lt ($H * 0.07) -and [double]$_.x0 -gt ($W * 0.20)
-        } | Sort-Object { [double]$_.y0 }, { [double]$_.x0 })
-    }
     $chatXMin = [Math]::Min(620, [int]($W * 0.34))
     return @($Boxes | Where-Object {
         [double]$_.y0 -ge ($H * 0.80) -and
@@ -114,30 +351,17 @@ function Test-WeComTextInputToken($Token, [int]$W, [int]$H) {
         $cx -gt $W * 0.40 -and $cx -lt $W * 0.74 -and -not $text.StartsWith('发送'))
 }
 
-function Get-WeComTitleFromTokens {
-    # 标题带 token → 标题行文本：按 y 中心聚类成视觉行（同行 = y 中心差 ≤14px，标题
-    # token 高约 20-24px，同 py cluster_lines 的 0.7 行高语义），取首行按 x 序拼接
-    param([Parameter(Mandatory)]$Tokens)
-    if ($Tokens.Count -eq 0) { return '' }
-    $anchor = $Tokens[0]
-    $anchorCy = ([double]$anchor.y0 + [double]$anchor.y1) / 2
-    $line = @($Tokens | Where-Object {
-        $cy = ([double]$_.y0 + [double]$_.y1) / 2
-        [Math]::Abs($cy - $anchorCy) -le 14
-    } | Sort-Object { [double]$_.x0 })
-    return (($line | ForEach-Object { [string]$_.text }) -join '')
-}
-
 function Test-WeComTitleMatch {
-    # 标题严格匹配（同 chat-select.ps1 步骤 6 / M2 语义）：目标名剥 @微信 后缀，
-    # 归一化后相等，或以「名字 + 分隔符」开头（外部联系人「陆伟 @微信」、群「产品讨论群（13）」）；
-    # 纯子串不放行（防「陆伟」落入「陆伟民」前缀陷阱）。Title 允许空串
-    # （OCR 读不到标题 = 不匹配 → navigate_required，是合法分支而非错误）。
+    # 群标题使用企微复制的原文全等；单聊沿用 chat-select.ps1 的身份规则：
+    # 目标名剥 @微信 后缀，归一化后相等或以「名字 + 分隔符」开头。
+    # 纯子串不放行（防「陆伟」落入「陆伟民」前缀陷阱）。
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string]$Title,
         [Parameter(Mandatory)][string]$Expected,
-        [switch]$RequireWechat
+        [switch]$RequireWechat,
+        [switch]$Group
     )
+    if ($Group) { return [string]::Equals($Title, $Expected, [StringComparison]::Ordinal) }
     $expected = $Expected -replace '@微信$', ''
     $tn = ConvertTo-WeComNormalized $Title
     $en = ConvertTo-WeComNormalized $expected
@@ -164,12 +388,9 @@ function Format-WeComTokenLines {
 
 Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     $swTotal = [System.Diagnostics.Stopwatch]::StartNew()
-    $timing = @{ precheck = 0; jev1 = 0; input_click = 0; typing = 0; title_recheck = 0; send_wait = 0; final_ocr = 0; jev2 = 0; total = 0 }
+    $timing = @{ precheck = 0; jev1 = 0; input_click = 0; typing = 0; send_wait = 0; final_ocr = 0; jev2 = 0; total = 0 }
     $shots = New-Object System.Collections.ArrayList
     $requireWechat = $Section -ne 'group' -and (($TargetName -match '@微信$') -or ($Section -eq 'contact' -and $Subtitle -eq '微信联系人'))
-    $sectionMap = @{ contact = '联系人'; group = '群聊' }
-    $sectionDesc = $Section
-    if ($sectionMap.ContainsKey($Section)) { $sectionDesc = $sectionMap[$Section] + '（' + $Section + '）' }
     $expectedName = $TargetName -replace '@微信$', ''
     # 核验文本（step5/6 前缀与 Jev 关联证据用）：-ExpectedPrefix 优先，缺省取 -Text 原文
     $verifyText = $Text
@@ -182,37 +403,28 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     $mainHwnd = Resolve-WeComMainWindow
     $main = Get-WeComWindowInfo ([IntPtr]$mainHwnd)
 
-    # 1) 主窗口 + 截图 + boxes OCR 两带（标题带 + 底部输入带）
+    # 1) GLM 标定标题首字坐标；OCR 仅用于底部输入点候选。
     Write-DriverLog ('target=' + $TargetName + ' subtitle=' + $Subtitle + ' section=' + $Section + ' mainHwnd=' + $mainHwnd + ' rect=(' + $main.X + ',' + $main.Y + ',' + $main.W + 'x' + $main.H + ')')
     $t0 = $swTotal.ElapsedMilliseconds
     $pre = Save-StepShot $mainHwnd 'step1-precheck.png'
     [void]$shots.Add([string]$pre.path)
+    $titlePoint = Get-WeComTitlePoint -Hwnd $mainHwnd -ImagePath $pre.path
     $boxesOcr = Invoke-SendChatOcr ([string]$pre.path) 'boxes'
     $boxes = @($boxesOcr.boxes)
-    # 调用侧必须 @() 包裹：PS 函数返回单元素数组会被解包成标量（.Count/索引失效）
-    $titleTokens = @(Get-WeComBandTokens -Boxes $boxes -W $pre.w -H $pre.h -Band 'title')
-    $bottomTokens = @(Get-WeComBandTokens -Boxes $boxes -W $pre.w -H $pre.h -Band 'bottom')
-    $title = Get-WeComTitleFromTokens -Tokens $titleTokens
+    $bottomTokens = @(Get-WeComBottomTokens -Boxes $boxes -W $pre.w -H $pre.h)
     $timing.precheck = [int]($swTotal.ElapsedMilliseconds - $t0)
-    Write-DriverLog ('step1 两带 OCR：标题带 ' + $titleTokens.Count + ' token（title=' + $title + '）；底部带 ' + $bottomTokens.Count + ' token：' + (($bottomTokens | ForEach-Object { [string]$_.text }) -join '|'))
+    Write-DriverLog ('step1 标题坐标 point=' + $titlePoint.x + ',' + $titlePoint.y + ' source=' + $titlePoint.source + '；底部 OCR ' + $bottomTokens.Count + ' token')
 
-    # 2) Jev #1 判断目标会话并选择输入点；清理前仍须由标题规则确认目标
+    # 2) Jev 只选底部输入点；等待结束后复制标题作唯一会话门禁。
     $t0 = $swTotal.ElapsedMilliseconds
     $stateLines = @()
-    $stateLines += '企业微信主窗口 OCR 两带结果（窗口像素坐标）：'
-    $stateLines += '—— 标题带（y<0.07h，聊天区顶部会话标题区）：'
-    if ($titleTokens.Count -gt 0) { $stateLines += (Format-WeComTokenLines -Tokens $titleTokens -KeyPrefix 'T') }
-    else { $stateLines += '（无 token）' }
+    $stateLines += '企业微信主窗口底部输入带 OCR 结果（窗口像素坐标）：'
     $stateLines += '—— 底部输入带（y>0.80h，含工具栏图标行与文本输入区；右侧可能有智能总结侧栏，非输入框）：'
     if ($bottomTokens.Count -gt 0) { $stateLines += (Format-WeComTokenLines -Tokens $bottomTokens -KeyPrefix 'B') }
     else { $stateLines += '（无 token）' }
-    $stateLines += ('目标会话：name=' + $TargetName + ' subtitle=' + $Subtitle + ' section=' + $sectionDesc)
-    $stateLines += '任务：准备在目标会话的文本输入框中输入一条消息并发送。当前窗口可能已打开目标会话，也可能停留在别的会话。'
+    $stateLines += '任务：从底部候选中选聊天文本输入框位置；标题随后由本机复制校验，不需要判断会话。'
     $stateText = $stateLines -join "`n"
-    $questions = @{
-        right_conversation = @{ type = 'choice'; instructions = '当前主窗口打开的会话是否就是目标会话？同时核对标题姓名、目标section（群聊/联系人）和subtitle；同名联系人不能当作目标群，类型无法确认应选unclear'; criteria = @{
-            yes = '标题带显示的就是目标会话'; no = '显示的是别的会话'; unclear = '证据不足无法判断' } }
-    }
+    $questions = @{}
     $critInput = @{}
     if ($bottomTokens.Count -gt 0) {
         # 输入点选择只在底部带有 token 时可问（Jev 按 token 中心点击）；
@@ -229,41 +441,23 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
             $questions.input_point = @{ type = 'choice'; instructions = '点击底部输入带中哪个 token 的位置可以聚焦文本输入框？（输入框是可输入文字的大块空白区域）'; criteria = $critInput }
         }
     }
-    $jev1 = Invoke-WeComJev -StateText $stateText -Questions $questions
+    $jev1 = @{ used = $false; latency_ms = 0; reason = 'no_input_candidate'; answers = @{} }
+    if ($questions.Count -gt 0) { $jev1 = Invoke-WeComJev -StateText $stateText -Questions $questions }
     $timing.jev1 = [int]($swTotal.ElapsedMilliseconds - $t0)
     Write-DriverLog ('step2 jev#1 used=' + $jev1.used + ' latency=' + $jev1.latency_ms + 'ms reason=' + [string]$jev1.reason)
-    Write-DriverLog ('step2 jev#1 state: ' + ($stateText -replace "`r?`n", ' / '))
     if ($jev1.used) {
-        Write-DriverLog ('step2 jev#1 answers: right=' + [string]$jev1.answers.right_conversation.choice + ' point=' + [string]$jev1.answers.input_point.choice)
+        Write-DriverLog ('step2 jev#1 input point=' + [string]$jev1.answers.input_point.choice)
     }
 
-    # right_conversation：no/unclear → navigate_required=true 交还 TS 编排
-    $rightOk = $false
-    $rightSrc = 'rule'
+    $title = Get-WeComCopiedTitle -Hwnd $mainHwnd -Section $Section -Point $titlePoint
+    # 复制到当前标题就证明坐标有效，即使当前会话不是目标，导航后仍可复用。
+    Save-WeComTitlePoint $titlePoint
+    Write-DriverLog ('step2 标题复制 title=' + $title)
+    $rightOk = Test-WeComTitleMatch -Title $title -Expected $TargetName -RequireWechat:$requireWechat -Group:($Section -eq 'group')
     $navReason = ''
-    $jevRight = ''
-    if ($jev1.used) { $jevRight = [string]$jev1.answers.right_conversation.choice }
-    if ($jevRight -eq 'yes') {
-        $rightOk = $true; $rightSrc = 'jev'
-    } elseif ($jevRight -eq 'no' -or $jevRight -eq 'unclear') {
-        $rightSrc = 'jev'
-        $navReason = ('Jev 判定当前会话非目标（' + $jevRight + '，标题带 title=' + $title + '）')
-    } else {
-        # 降级：标题归一化规则匹配（同步骤 5 语义）
-        if (Test-WeComTitleMatch -Title $title -Expected $TargetName -RequireWechat:$requireWechat) {
-            $rightOk = $true
-        } else {
-            $navReason = ('标题归一化规则未命中（当前标题「' + $title + '」≠ 目标「' + $expectedName + '」）')
-        }
-        Write-DriverLog ('step2 right_conversation 降级规则：title=' + $title + ' 匹配=' + $rightOk)
-    }
-    # Jev cannot override the explicitly requested WeChat identity boundary.
+    if (-not $rightOk) { $navReason = ('当前会话标题「' + $title + '」与目标「' + $expectedName + '」不一致') }
     if ($requireWechat -and -not (Test-WeComTitleMatch -Title $title -Expected $TargetName -RequireWechat)) {
         Throw-DriverError 'UI_CHANGED' '当前标题未确认微信外部联系人，已中止；未输入或发送消息'
-    }
-    if ($rightOk -and -not (Test-WeComTitleMatch -Title $title -Expected $TargetName -RequireWechat:$requireWechat)) {
-        $rightOk = $false
-        $navReason = ('标题归一化规则未命中（当前标题「' + $title + '」≠ 目标「' + $expectedName + '」）')
     }
     if (-not $rightOk) {
         # 非目标/无法判定：不清理输入区，交还 TS 编排（search+select 后二次调用本驱动）
@@ -278,6 +472,7 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
             screenshot_paths = @($shots.ToArray())
         }
     }
+    $title2 = $title
 
     # input_point：Jev 选 token 中心；降级比例坐标 (0.500w,0.900h)（M2 标定）
     $ipX = [int]($main.X + $main.W * $script:ChatInputRx)
@@ -296,34 +491,23 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
         }
     }
 
-    # 3) 点击目标输入框聚焦 → 最新截图核对标题 → 清空旧内容 → 沿原输入方式输入本次消息
-    #    动作前重验主窗口存活：布局切换会销毁重建窗口（hwnd 变化），失效则重解析
+    # 3) 首次标题已确认；点击输入框后直接清理并输入。
+    #    已确认的窗口若销毁重建，停止本次发送，不能沿用旧窗口的标题结论。
     if (-not [WeComWin32]::IsWindow([IntPtr]$mainHwnd)) {
-        $mainHwnd = Resolve-WeComMainWindow
-        $main = Get-WeComWindowInfo ([IntPtr]$mainHwnd)
-        # 旧窗口截图中的 Jev 坐标不属于新窗口；改用新窗口的既有比例输入点。
-        $ipX = [int]($main.X + $main.W * $script:ChatInputRx)
-        $ipY = [int]($main.Y + $main.H * $script:ChatInputRy)
-        $ipSrc = 'ratio'
-        Write-DriverLog ('step3 主窗口已重建，重解析 hwnd=' + $mainHwnd)
+        Throw-DriverError 'UI_CHANGED' '已确认的主窗口重建，未清理或发送消息'
     }
     $t0 = $swTotal.ElapsedMilliseconds
     Write-DriverLog ('step3 click 输入框 screen=(' + $ipX + ',' + $ipY + ') source=' + $ipSrc)
     [void](Send-WeComClick -Hwnd $mainHwnd -ScreenX $ipX -ScreenY $ipY)
     Start-Sleep -Milliseconds 300
     if (-not [WeComWin32]::IsWindow([IntPtr]$mainHwnd)) {
-        Throw-DriverError 'UI_CHANGED' '点击输入框后主窗口已重建，无法确认输入焦点；未清理或发送消息'
+        Throw-DriverError 'UI_CHANGED' '点击输入框后主窗口已重建，未清理或发送消息'
     }
-    $beforeClear = Save-StepShot $mainHwnd 'step2-before-clear.png'
-    [void]$shots.Add([string]$beforeClear.path)
-    $beforeClearBoxes = Invoke-SendChatOcr ([string]$beforeClear.path) 'boxes'
-    $beforeClearTitle = Get-WeComTitleFromTokens -Tokens @(Get-WeComBandTokens -Boxes @($beforeClearBoxes.boxes) -W $beforeClear.w -H $beforeClear.h -Band 'title')
-    if (-not (Test-WeComTitleMatch -Title $beforeClearTitle -Expected $TargetName -RequireWechat:$requireWechat)) {
-        Throw-DriverError 'UI_CHANGED' ('清理前复核：当前会话标题「' + $beforeClearTitle + '」与目标「' + $expectedName + '」不一致，未清理或发送消息')
-    }
-    $title2 = $beforeClearTitle
-    if (-not [WeComWin32]::IsWindow([IntPtr]$mainHwnd)) {
-        Throw-DriverError 'UI_CHANGED' '清理前主窗口已重建，未清理或发送消息'
+    $focusedMain = Get-WeComWindowInfo ([IntPtr]$mainHwnd)
+    if ($focusedMain.Pid -ne $main.Pid -or $focusedMain.Class -ne $main.Class -or -not $focusedMain.Visible -or
+            $focusedMain.X -ne $main.X -or $focusedMain.Y -ne $main.Y -or
+            $focusedMain.W -ne $main.W -or $focusedMain.H -ne $main.H) {
+        Throw-DriverError 'UI_CHANGED' '点击输入框后主窗口身份或位置变化，未清理或发送消息'
     }
     $cleared = Clear-WeComFocusedInput -Hwnd $mainHwnd
     if (-not $cleared) {
@@ -369,23 +553,24 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     } else {
         # —— -VerifyOnly 模式（任务 3.4）：不做输入/发送（跳过 step1-4 的全部输入动作，
         #    不点输入框、不碰草稿、不按 Enter），仅准备既有 step5 终态证据的输入：
-        #    当前窗口截图 + 标题带 OCR + 核验文本前缀（-ExpectedPrefix 优先，缺省 -Text）
+        #    当前窗口截图 + 复制标题 + 核验文本前缀（-ExpectedPrefix 优先，缺省 -Text）
         $mainHwnd = Resolve-WeComMainWindow
         $main = Get-WeComWindowInfo ([IntPtr]$mainHwnd)
         Write-DriverLog ('verify-only target=' + $TargetName + ' section=' + $Section + ' mainHwnd=' + $mainHwnd + ' rect=(' + $main.X + ',' + $main.Y + ',' + $main.W + 'x' + $main.H + ')')
         $after = Save-StepShot $mainHwnd 'step3-after.png'
         [void]$shots.Add([string]$after.path)
-        $afterBoxes = Invoke-SendChatOcr ([string]$after.path) 'boxes'
-        $title2 = Get-WeComTitleFromTokens -Tokens @(Get-WeComBandTokens -Boxes @($afterBoxes.boxes) -W $after.w -H $after.h -Band 'title')
+        $afterPoint = Get-WeComTitlePoint -Hwnd $mainHwnd -ImagePath $after.path
+        $title2 = Get-WeComCopiedTitle -Hwnd $mainHwnd -Section $Section -Point $afterPoint
         Write-DriverLog ('verify-only 当前标题 title=' + $title2)
         # 第八轮评审 P2：核验证据一致性——当前标题与目标严格匹配（使用
         # Test-WeComTitleMatch 规则，含 @微信 后缀/「名+@/（」前缀形态），且必须先于 §5-6
         # 三选二/Jev 判定。否则「输入框空 + 气泡/列表含前缀」可能在非目标会话凑满两项，
         # 把别的会话的证据当成目标会话发送成功；不一致 → 无法确认（EXECUTION_UNKNOWN，
         # 绝不 ocr-bubble 成功），消息可能已发出，不自动重试
-        if (-not (Test-WeComTitleMatch -Title $title2 -Expected $TargetName -RequireWechat:$requireWechat)) {
+        if (-not (Test-WeComTitleMatch -Title $title2 -Expected $TargetName -RequireWechat:$requireWechat -Group:($Section -eq 'group'))) {
             Throw-DriverError 'EXECUTION_UNKNOWN' ('发送后校验无法确认：当前会话标题「' + $title2 + '」与目标「' + $expectedName + '」不一致，核验证据可能来自其他会话（不会自动重试，请人工核对）')
         }
+        Save-WeComTitlePoint $afterPoint
         # step5/6 的核验前缀与 Jev 关联文本统一由下方 §5-6 按 $verifyText 计算（-ExpectedPrefix 优先，缺省 -Text）
         # step6 Jev 状态文本复用：多行脱敏预览变量与发送路径同源
         $isMultiline = ($verifyText -match "[`r`n]")

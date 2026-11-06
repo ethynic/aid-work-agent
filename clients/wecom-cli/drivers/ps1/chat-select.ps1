@@ -142,8 +142,6 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.ChatSelect' -Body {
     #      与碎片合并所致，校验误杀）。Ctrl+F 聚焦框 → Ctrl+A+Delete 清空（已验证原语，
     #      清空后框回占位符、overlay 保持关闭，标题带干净）。
     $t0 = $swTotal.ElapsedMilliseconds
-    [void](Send-WeComAttachChordKey -Hwnd $mainHwnd -Vk 0x46)
-    Start-Sleep -Milliseconds 150
     [void](Clear-WeComSearchBoxV2 -MainHwnd $mainHwnd)
     Start-Sleep -Milliseconds 200
     $timing.box_clear = [int]($swTotal.ElapsedMilliseconds - $t0)

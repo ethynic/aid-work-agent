@@ -235,3 +235,42 @@ test('a known empty group has a stable session and can receive its first confirm
     assert.deepEqual(f.calls, ['message-send.ps1'])
   } finally { rmSync(base, { recursive: true, force: true }) }
 })
+
+test('a stable session uses DB confirmation even without a saved doctor state', windows, async () => {
+  const base = mkdtempSync(join(tmpdir(), 'wecom-business-'))
+  try {
+    const f = await groupMonitorFixture(base)
+    f.deps.readStateFn = () => null
+    const result = await f.send.execute({ session: '合成群甲', text: 'state-free DB send' }, ctx())
+    assert.equal(result.success, true, result.message)
+    assert.equal(result.data.verification, 'local-record')
+    assert.deepEqual(f.calls, ['message-send.ps1'])
+  } finally { rmSync(base, { recursive: true, force: true }) }
+})
+
+test('a stale doctor version cannot force a stable session back to OCR confirmation', windows, async () => {
+  const base = mkdtempSync(join(tmpdir(), 'wecom-business-'))
+  try {
+    const f = await groupMonitorFixture(base)
+    f.deps.readStateFn = () => ({ mode: 'ui', kind: 'compat', version: 'older-doctor-version' })
+    const result = await f.send.execute({ session: '合成群甲', text: 'process version wins' }, ctx())
+    assert.equal(result.success, true, result.message)
+    assert.equal(result.data.verification, 'local-record')
+    assert.deepEqual(f.calls, ['message-send.ps1'])
+  } finally { rmSync(base, { recursive: true, force: true }) }
+})
+
+test('a stable session with DB baseline failure never falls back to OCR sending', windows, async () => {
+  const base = mkdtempSync(join(tmpdir(), 'wecom-business-'))
+  try {
+    const f = await groupMonitorFixture(base)
+    const validMatrix = f.deps.loadMatrixFn!
+    let admissions = 0
+    f.deps.loadMatrixFn = () => ++admissions === 1 ? validMatrix() : { entries: {} }
+    const result = await f.send.execute({ session: '合成群甲', text: 'must not send' }, ctx())
+    assert.equal(result.success, false)
+    assert.equal(result.effect, 'none')
+    assert.equal(result.code, 'VERSION_UNSUPPORTED')
+    assert.deepEqual(f.calls, [], 'no UI driver may run after DB baseline admission fails')
+  } finally { rmSync(base, { recursive: true, force: true }) }
+})

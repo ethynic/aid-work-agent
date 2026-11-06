@@ -43,10 +43,10 @@ test('watch：轮询间隔不持锁——间隔窗口内其他进程可 acquire�
   let exited = false
   child.on('close', () => (exited = true))
 
-  const ticks = () => stdout.split('\n').filter((l) => l.includes('"type":"tick"')).length
+  const rounds = () => stdout.split('\n').filter((l) => l.includes('"channel":"local-db"')).length
   try {
     // 轮 1 完成（首个 tick）；桩轮瞬时完成，此后 watch 处于轮询间隔（不持锁）
-    await waitFor('首个 tick（轮 1 完成）', 15000, () => ticks() >= 1)
+    await waitFor('首个本地库事件（轮 1 完成）', 15000, () => rounds() >= 1)
 
     // 1) 间隔窗口内：另一进程成功 acquire 同 scope 互斥（证明锁已释放）
     const probe = new NamedMutex(scope)
@@ -65,8 +65,8 @@ test('watch：轮询间隔不持锁——间隔窗口内其他进程可 acquire�
     }
 
     // 3) 释放后：下一轮 watch 仍能自行 acquire 并继续产出 tick
-    const before = ticks()
-    await waitFor('释放后 watch 继续产出 tick（下一轮自行获取成功）', 15000, () => ticks() >= before + 1)
+    const before = rounds()
+    await waitFor('释放后 watch 继续产出本地库事件（下一轮自行获取成功）', 15000, () => rounds() >= before + 1)
     assert.ok(!exited, 'watch 循环在锁竞争后仍存活')
   } finally {
     child.kill()
@@ -76,5 +76,5 @@ test('watch：轮询间隔不持锁——间隔窗口内其他进程可 acquire�
       setTimeout(resolve, 5000).unref()
     })
   }
-  assert.ok(ticks() >= 2, `应观察到至少两轮 tick（实际 ${ticks()}）`)
+  assert.ok(rounds() >= 2, `应观察到至少两轮事件（实际 ${rounds()}）`)
 })

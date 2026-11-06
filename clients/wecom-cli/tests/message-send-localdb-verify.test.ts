@@ -402,19 +402,20 @@ test('静态核对（P2）：-VerifyOnly 分支的标题一致性检查存在且
   // dist/tests → 包根 drivers/ps1（编译布局；测试断言源文件内容，与运行平台无关）
   const src = readFileSync(fileURLToPath(new URL('../../drivers/ps1/message-send.ps1', import.meta.url)), 'utf8')
   const verifyTitleLog = src.indexOf("Write-DriverLog ('verify-only 当前标题 title='")
-  assert.ok(verifyTitleLog > -1, '定位 -VerifyOnly 分支（标题 OCR 日志锚点）')
-  const check = src.indexOf('if (-not (Test-WeComTitleMatch -Title $title2 -Expected $TargetName -RequireWechat:$requireWechat)) {', verifyTitleLog)
+  assert.ok(verifyTitleLog > -1, '定位 -VerifyOnly 分支（复制标题日志锚点）')
+  const check = src.indexOf('if (-not (Test-WeComTitleMatch -Title $title2 -Expected $TargetName -RequireWechat:$requireWechat -Group:($Section -eq \'group\'))) {', verifyTitleLog)
   assert.ok(check > verifyTitleLog, '标题一致性检查位于 -VerifyOnly 分支内（复用发送路径 Test-WeComTitleMatch 规则）')
   const ruleSection = src.indexOf('终态规则三选二')
   assert.ok(ruleSection > check, '标题一致性检查先于三选二/Jev 终态判定（防非目标会话的证据凑满两项）')
   const checkBlock = src.slice(check, ruleSection)
   assert.ok(checkBlock.includes('EXECUTION_UNKNOWN'), '不一致 → EXECUTION_UNKNOWN（无法确认），绝不 ocr-bubble 成功')
   assert.ok(checkBlock.includes('Throw-DriverError'), '不一致必须抛错中止（Throw-DriverError）')
-  // 输入前仍须确认目标；输入后不再让群名 OCR 误差阻断 Enter。
-  const preInputCheck = src.indexOf('if (-not (Test-WeComTitleMatch -Title $beforeClearTitle -Expected $TargetName -RequireWechat:$requireWechat)) {')
+  // 首次复制确认目标；输入前不重复复制，输入后也不让标题 OCR 阻断 Enter。
+  const preInputCheck = src.indexOf('$rightOk = Test-WeComTitleMatch -Title $title -Expected $TargetName -RequireWechat:$requireWechat -Group:($Section -eq \'group\')')
   assert.ok(preInputCheck > -1 && preInputCheck < verifyTitleLog, '发送路径在清理与输入前确认目标标题')
   const preInputBlock = src.slice(preInputCheck, src.indexOf('$cleared = Clear-WeComFocusedInput', preInputCheck))
-  assert.ok(preInputBlock.includes('UI_CHANGED'), '输入前标题不符仍拒绝发送')
+  assert.ok(preInputBlock.includes('navigate_required = $true'), '首次标题不符须交给导航，不得清理输入框')
+  assert.ok(!preInputBlock.includes('Get-WeComCopiedTitle'), '首次确认后至清理前不重复复制标题')
   assert.equal(src.indexOf('step4 发送前复核'), -1, '输入后的标题 OCR 不再作为发送门禁')
 })
 

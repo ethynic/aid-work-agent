@@ -3,15 +3,15 @@
  *
  * 编排（M7 起由 navigate.ts 的 runStageWithNavigation 共享承载，send-image 同源复用）：
  * verifyTargetRef 解出目标（过期 TARGET_REF_STALE / 篡改 INVALID_ARGUMENT；坐标可有无
- * 皆可，本命令不要求）→ spawn message-send.ps1（发送阶段驱动：OCR 标题带 + Jev 判断
- * 当前会话/输入点，标题规则确认后替换输入区内容）→ 驱动返回 navigate_required=true（当前会话不是目标/无法判定）
+ * 皆可，本命令不要求）→ spawn message-send.ps1（发送阶段驱动：企微复制标题确认当前会话，
+ * 底部 OCR/Jev 只选输入点，标题规则确认后替换输入区内容）→ 驱动返回 navigate_required=true（当前会话不是目标/无法判定）
  * → 内部编排：chatSearch（Jev 选 best，须与目标消歧键一致，否则规则唯一匹配项）→
  * chatSelect（点击进会话并校验标题）→ 再次 spawn message-send.ps1 完成发送。两轮都不在
  * 目标会话 → TARGET_NOT_FOUND；编排失败透传对应错误码（此时未发送任何消息），不重试。
  *
  * 发送阶段驱动契约：目标标题确认 → 点输入框（Jev 选 token / 降级比例坐标）→
  * Ctrl+A/Delete 清空旧内容（失败中止）→ 单行沿用 Send-WeComText，多行沿用剪贴板
- * 粘贴（多行覆盖用户剪贴板且不恢复）→ 发送前规则复核标题（不一致 → 清空本次输入 + UI_CHANGED）→ Enter →
+ * 粘贴（多行覆盖用户剪贴板且不恢复）→ Enter →
  * Jev 终态判定（降级 M2 三选二）。已有未发送文字会被覆盖。
  *
  * 写语义：发送后校验失败 → EXECUTION_UNKNOWN，绝不自动重试；驱动超时（写可能已落地）
@@ -39,7 +39,8 @@
  *      再次对账，不用 OCR 气泡前缀覆盖数据库的不匹配事实，也不重入发送阶段。
  * 核验语义（决策 #47）：message_table 无发送状态字段——success/applied=客户端动作已记录
  * 并经本地核验（local-record；旧无本地库路径仍可用 OCR 气泡证据），**不代表对方已收到/已读**；
- * EXECUTION_UNKNOWN 时 data.verification 缺省。
+ * EXECUTION_UNKNOWN 时 data.verification 缺省。W23 标题复制短暂使用剪贴板并按序号恢复，
+ * 原剪贴板不是可安全保存的纯文本时发送前拒绝；输入后不再读取标题。
  */
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -325,12 +326,14 @@ export function createWecomMessageSendOperation(
           /**
            * 本地库方案准备（发送前）：分派读法同 unread（db / ui(transient)），probe 身份链 →
            * resolve 目标 conversation_id → conversations 任务取基线。任何失败（身份/版本/
-           * 快照/resolve 等）→ null = 回退老路径（此时未发送任何消息，零损失）；取消照常抛。
+           * 快照/resolve 等）仅旧目标入口可回退老路径；稳定 session 的本地库失败直接拒发。
            */
           const planLocaldb = async (): Promise<SendBaseline | null> => {
             try {
               const state = getLocalState()
-              if (!bound && (!state || !(state.mode === 'db' || (state.mode === 'ui' && state.kind === 'transient')))) return null
+              // A stable session was just resolved from the local DB. Its send must not
+              // silently fall back to the OCR-only path when doctor state is absent.
+              if (!bound && !deps.resolvedSession && (!state || !(state.mode === 'db' || (state.mode === 'ui' && state.kind === 'transient')))) return null
               const current = await (local.probeAccountFn ?? probeCurrentAccount)(opCtx)
               checkCancelled(opCtx.signal)
               let conversationId: string | null = null
@@ -358,7 +361,7 @@ export function createWecomMessageSendOperation(
                 if (baseline > 0 && !/^[a-f0-9]{64}$/.test(anchor)) throw new Error('missing baseline anchor')
                 source = sourceId
                 schema = meta.schema_version as number
-              })
+              }, deps.resolvedSession !== undefined)
               checkCancelled(opCtx.signal)
               opCtx.progress({ stage: 'execute', message: `本地库发送基线已记录（「${target.name}」max message_id=${baseline}）` })
               return { account: current.account, conversationId: conversationId!, baseline, anchor, sourceId: source, schema }

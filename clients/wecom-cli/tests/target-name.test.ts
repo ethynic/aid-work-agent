@@ -24,7 +24,6 @@ import test, { after } from 'node:test'
 import { createWecomMessageSendOperation, type WecomMessageSendArgs } from '../src/operations/messageSend.js'
 import { createWecomSendImageOperation, type WecomSendImageArgs } from '../src/operations/sendImage.js'
 import { createWecomSendFileOperation, type WecomSendFileArgs } from '../src/operations/sendFile.js'
-import { createWecomReadSessionOperation, type WecomReadSessionArgs } from '../src/operations/readSession.js'
 import type { WecomOperation, OpContext } from '../src/operations/types.js'
 import {
   createTargetRef,
@@ -34,8 +33,8 @@ import {
 } from '../src/platform/targetRef.js'
 import type { PowerShellScriptOptions, RunPowerShellDriverFn } from '../src/platform/powershell.js'
 
-type OpKind = 'send' | 'send-image' | 'send-file' | 'read-session'
-const KINDS: OpKind[] = ['send', 'send-image', 'send-file', 'read-session']
+type OpKind = 'send' | 'send-image' | 'send-file'
+const KINDS: OpKind[] = ['send', 'send-image', 'send-file']
 
 function silentCtx(): OpContext {
   return { signal: new AbortController().signal, progress: () => {} }
@@ -81,7 +80,6 @@ const STAGE_SCRIPT: Record<OpKind, string> = {
   send: 'message-send.ps1',
   'send-image': 'send-image.ps1',
   'send-file': 'send-file.ps1',
-  'read-session': 'read-session.ps1',
 }
 
 function makeRunDriver(mock: DriverMock): RunPowerShellDriverFn {
@@ -120,10 +118,6 @@ function makeOp(kind: OpKind, keyDir: string, root: string, mock: DriverMock): A
       return createWecomSendImageOperation(shared)
     case 'send-file':
       return createWecomSendFileOperation(shared)
-    case 'read-session':
-      // env 不配置 SERVER_URL → OCR 通道直连（不触网），聚焦 target-name 定位语义
-      return createWecomReadSessionOperation({
-    localdb: { readStateFn: () => null }, ...shared, env: {} as NodeJS.ProcessEnv })
   }
 }
 
@@ -140,15 +134,13 @@ function kindExtras(kind: OpKind): Record<string, unknown> {
       return { image_path: makeRealFile('target-name.png') }
     case 'send-file':
       return { file_path: makeRealFile('target-name-report.txt') }
-    case 'read-session':
-      return {}
   }
 }
 
-const expectEffect = (kind: OpKind) => (kind === 'read-session' ? 'none' : 'applied')
+const expectEffect = (_kind: OpKind) => 'applied'
 const expectNotSent = (kind: OpKind) =>
   kind === 'send' ? '未发送消息' : kind === 'send-image' ? '未发送图片' : kind === 'send-file' ? '未发送文件' : '未读取消息'
-const expectRefuse = (kind: OpKind) => (kind === 'read-session' ? '已中止读取' : '已拒绝发送')
+const expectRefuse = (_kind: OpKind) => '已拒绝发送'
 
 const NAV_REQUIRED = {
   navigate_required: true,
@@ -168,17 +160,6 @@ function okStage(kind: OpKind): Record<string, unknown> {
       return { ...base, sent_verification: { method: 'jev', result: 'sent' }, input_stddev: { before: 9.8, paste: 36.5, after: 9.9 } }
     case 'send-file':
       return { ...base, sent_verification: { method: 'jev', result: 'sent' }, paste_check: { stem: 'target-name', paste_hit: true, input_gone: true, list_hit: true } }
-    case 'read-session':
-      return {
-        navigate_required: false,
-        title: '陆伟 @微信',
-        parse_mode: 'ocr',
-        messages: [{ side: 'peer', text: '在吗' }],
-        page_paths: [],
-        pages_read: 1,
-        timing_ms: { total: 9000 },
-        screenshot_paths: [],
-      }
   }
 }
 
@@ -435,20 +416,6 @@ test('M11a 参数校验矩阵补充：target_name 空/纯空白/超长、subtitl
   const r4 = await sendOp.execute({ target_ref: '', text: 'hi' }, silentCtx())
   assert.equal(r4.code, 'INVALID_ARGUMENT')
   assert.equal(mock.calls.length, 0)
-})
-
-// —— read-session 直达模式与 MCP 外契约对齐：args 形态直接走 operation（CLI 同款） —— //
-
-test('M11a read-session：target_name + max_pages 透传阶段驱动（-MaxPages），resolved_target 在 OCR 通道 data 中', async () => {
-  const keyDir = tempDir('wecom-tn-key-')
-  const mock = makeMock('read-session', [okStage('read-session')], { ...SEARCH_OK })
-  const op = makeOp('read-session', keyDir, tempDir('wecom-tn-root-'), mock)
-  const r = await (op as WecomOperation<WecomReadSessionArgs>).execute({ target_name: '陆伟', max_pages: 3 }, silentCtx())
-  assert.equal(r.success, true, r.message)
-  assert.equal(r.effect, 'none')
-  assert.equal(r.data.channel, 'ocr')
-  assert.deepEqual(r.data.resolved_target, { name: '陆伟@微信', subtitle: '微信联系人', section: '联系人' })
-  assert.equal(argAfter(mock.calls[1]!, '-MaxPages'), '3')
 })
 
 test('M11a send-image / send-file：target_name 模式下内部签发的 ref 含坐标（分发链路可消费，不触发旧版签发拒绝）', async () => {

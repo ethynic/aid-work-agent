@@ -181,8 +181,6 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.ReadSession' -Body {
     # 0.5) 搜索框残留防御（best-effort，同 send-file）：Ctrl+F 聚焦 → Ctrl+A+Delete 清空
     $t0 = $swTotal.ElapsedMilliseconds
     $mainHwnd = Resolve-WeComMainWindow
-    [void](Send-WeComAttachChordKey -Hwnd $mainHwnd -Vk 0x46)
-    Start-Sleep -Milliseconds 150
     [void](Clear-WeComSearchBoxV2 -MainHwnd $mainHwnd)
     Start-Sleep -Milliseconds 200
     Write-DriverLog ('step0.5 搜索框残留清空（防御性，best-effort）耗时=' + [int]($swTotal.ElapsedMilliseconds - $t0) + 'ms')

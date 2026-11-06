@@ -2479,6 +2479,7 @@ class WecomTargetInput(BaseModel):
 
     CLI 侧 XOR 在 operation 层做（M11a）；云端在 Input 模型层先拦（executor
     validate_parameters 即拒绝），双端同一语义——两个都传/都不传无效。
+    发送与读取的定位通道不同：发送可走 UI 搜索，读取只走本地库精确消歧。
     """
 
     target_ref: Optional[str] = Field(
@@ -2494,8 +2495,8 @@ class WecomTargetInput(BaseModel):
         min_length=1,
         max_length=100,
         description=(
-            "直达模式（M11a）：按会话名（联系人/群名，可含 @微信 后缀）定位目标，"
-            "内部自动搜索并做身份校验（同名多候选无法消歧返回 TARGET_AMBIGUOUS 不执行）；"
+            "按会话名（联系人/群名，可含 @微信 后缀）定位目标；发送时自动搜索并校验身份，"
+            "读取时在本地库精确匹配并消歧；同名多候选返回 TARGET_AMBIGUOUS；"
             "与 target_ref 二选一"
         ),
     )
@@ -2513,7 +2514,7 @@ class WecomLocalToolProxyTool(LocalToolProxyTool):
     - invocation 行 provider_key='wecom'：claim 过滤只派给 wecom 能力设备
       （weixin_name_resolve 传 provider_key 的同款行级路由先例）
     - heal_eligible=False：弹层自愈是 BOSS 页面专用编排（导出 Chrome DOM 候选），
-      对 wecom（原生窗口 OCR 链路）失败码不适用，绝不触发
+      对 wecom 本地工具失败码不适用，绝不触发
     - 计价 0：防双计费（见 _tool_credit_price 注释）
     """
 
@@ -2548,9 +2549,8 @@ class WecomLocalToolProxyTool(LocalToolProxyTool):
         return device, None
 
     def _tool_credit_price(self) -> float:
-        # 防双计费（M11c 定稿）：wecom_read_session 的模型解析通道已在服务端
-        # /session-history 按次计积分（M10a，结果 data.billing.credits_charged），
-        # 工具层再计即双重扣费；send 系 Phase 1 暂不收工具积分。
+        # WeCom 本地工具层暂不另收工具积分。会话读取当前只走本地库，
+        # 不调用旧 /session-history 截图模型解析或按次计费路径。
         # 后续调价改两处并保持一致：本覆写（余额预检口径）+
         # configs/config.yaml boss_tool_billing.tool_credit_prices（write_result
         # 落库计费口径，当前走 default_credit_price=0）。
@@ -2696,14 +2696,13 @@ class WecomReadSessionInput(WecomTargetInput):
         None,
         ge=1,
         le=10,
-        description="最多向上翻几屏（含底部当前屏，默认 1，上限 10）",
+        description="旧 UI 读取参数，当前已停用；保留字段兼容旧请求，但 CLI 会返回 INVALID_ARGUMENT。请用 limit 控制本地库读取条数",
     )
     since_days: Optional[int] = Field(
         None,
         ge=1,
         description=(
-            "只读最近 N 天：某屏最早时间分割线超龄即停止上翻"
-            "（仅 OCR 通道生效；模型通道抓满 max_pages，按返回 time 自行过滤）"
+            "只读最近 N 天：本地库按消息 send_time 精确过滤；仅旧目标参数读取可用"
         ),
     )
 
@@ -2726,7 +2725,7 @@ class WecomReadSessionInput(WecomTargetInput):
 
 
 class WecomReadSessionTool(WecomLocalToolProxyTool):
-    """企业微信读取会话消息（只读内容，纯代理本机执行；进会话清角标为客户端固有副作用）。"""
+    """企业微信本地库读取会话消息（只读，不进入会话或清除未读角标）。"""
 
     name = "wecom_read_session"
     display_name = "企业微信读取会话消息"
@@ -2811,18 +2810,21 @@ class WecomSessionDirectoryTool(WecomLocalToolProxyTool):
 
 
 class WecomUnreadListInput(BaseModel):
-    name: Optional[str] = Field(None, max_length=100, description="可选：按会话名子串过滤")
+    name: Optional[str] = Field(None, max_length=100,
+                                description="可选：按会话名称、别名或备注子串过滤；命名来源不可用时明确报错")
 
 
 class WecomUnreadListTool(WecomLocalToolProxyTool):
-    """企业微信未读会话快照（只读，纯代理本机执行）。"""
+    """企业微信本地库待回复会话快照（只读，纯代理本机执行）。"""
 
     name = "wecom_unread_list"
-    display_name = "企业微信未读会话快照"
+    display_name = "企业微信待回复会话快照"
     description = (
-        "读取本机企业微信主窗口会话列表的未读会话快照（只读，不打开会话、不清除未读角标）。"
-        "返回 [{name, preview, unread_count}]（无未读的会话不出现）；可选 name 子串过滤。"
-        "适合「谁给我发消息了/有多少未读」的轻量探测，有未读再用 wecom_read_session 读取具体内容"
+        "从已验证企业微信版本的本地库读取待回复会话快照（只读，不打开会话、不清除未读角标）。"
+        "返回 data.conversations：仅含最后一条可参与判定的消息来自对方的会话，"
+        "每项有 conversation_id、last_time、last_text_preview、unreplied=true，name 可能缺失；"
+        "data.judgment_basis=last_sender。已读未回复仍会出现；可选 name 子串过滤，"
+        "命名来源不可用时过滤会明确失败。本地库不可用直接报错，不回退角标 OCR。"
     )
     InputModel = WecomUnreadListInput
 

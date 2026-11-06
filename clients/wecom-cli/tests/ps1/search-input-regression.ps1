@@ -11,7 +11,10 @@ public class WeComWin32 {
  public static uint Sequence;
  public static int Owner, Exchanges, RaceOnExchange, FailOnExchange, PublishAdvance, FailAfterWriteOnExchange;
  public static bool ForeignOwnerAfterWrite;
+ public static int Posts;
  public static string FailureCode;
+ public static uint MapVirtualKeyW(uint key,uint map) { return key; }
+ public static bool PostMessageW(IntPtr hwnd,uint msg,IntPtr key,IntPtr data) { Posts++;return true; }
  public static uint GetClipboardSequenceNumber() { return Sequence; }
  public static IntPtr GetClipboardOwner() { return (IntPtr)Owner; }
  public static uint GetWindowThreadProcessId(IntPtr hwnd,out int pid) {
@@ -33,6 +36,7 @@ public class WeComWin32 {
 '@
 function Assert-True($Value,$Why) { if(-not $Value){throw $Why} }
 function Start-Sleep {param($Milliseconds)}
+function Initialize-WeComWin32 {}
 function Get-WeComWindowInfo {param($Hwnd)
  $script:windowReads++
  return @{Hwnd=101;Pid=42;Class='WeWorkWindow';Visible=$true;X=1277;Y=0;
@@ -73,6 +77,7 @@ function New-WeComClipboardOwner {
 }
 function Send-WeComAttachChordKey {param($Hwnd,$Vk)
  [void]$script:actions.Add(@{kind='chord';vk=$Vk})
+ if($Vk-eq0x46){$script:focusCalls++;if($script:failFocusCall-eq$script:focusCalls){return $false}}
  if($Vk-eq$script:failedChord){return $false}
  if($Vk-eq0x43-and-not$script:noCopy){
   [WeComWin32]::Text=[WeComWin32]::CopyPayload;[WeComWin32]::Empty=$false
@@ -84,11 +89,13 @@ function Reset-Case {
  [WeComWin32]::Text='original-text';[WeComWin32]::Empty=$false;[WeComWin32]::NonText=$false
  [WeComWin32]::WindowDisposed=$false;[WeComWin32]::Sequence=10;[WeComWin32]::Owner=77
  [WeComWin32]::Exchanges=0;[WeComWin32]::RaceOnExchange=0;[WeComWin32]::WriteFail=$false
+ [WeComWin32]::Posts=0
  [WeComWin32]::FailOnExchange=0;[WeComWin32]::FailureCode='CLIPBOARD_WRITE_FAILED'
  [WeComWin32]::PublishAdvance=0;[WeComWin32]::FailAfterWriteOnExchange=0;[WeComWin32]::ForeignOwnerAfterWrite=$false
  [WeComWin32]::CopyPayload='full-query'
  $script:actions=New-Object Collections.ArrayList
  $script:windowReads=0;$script:moveOnRead=0;$script:clipboardReads=0;$script:failedChord=0
+ $script:focusCalls=0;$script:failFocusCall=0
  $script:clearEmpty=$true;$script:noCopy=$false;$script:foreignCopy=$false
  $script:clipboardReadFails=$false;$script:raceOnCopyRead=$false
  $script:advanceOnReceiptRead=$false;$script:raceOnReceiptRead=$false
@@ -105,17 +112,17 @@ $result=Invoke-EchoProbe
 Assert-True ($result.matched-and$result.restored) 'fresh exact full copy must verify and restore original text'
 Assert-True ([WeComWin32]::Text-ceq'original-text') 'original text must return unchanged'
 Assert-True ([WeComWin32]::WindowDisposed) 'hidden clipboard owner must be disposed'
-Assert-True (@($actions|Where-Object {$_.kind-eq'chord'-and$_.vk-notin@(0x41,0x43)}).Count-eq0) 'copy verification must never Delete/Enter'
+Assert-True ($actions.Count-eq3-and$actions[0].vk-eq0x46-and$actions[1].vk-eq0x41-and$actions[2].vk-eq0x43) 'copy verification must refocus search before selecting and copying'
 
 Reset-Case;[WeComWin32]::PublishAdvance=3
 $result=Invoke-EchoProbe
 Assert-True ($result.matched-and$result.restored-and[WeComWin32]::Text-ceq'original-text') 'Close publication sequence advances must not invalidate fresh copy or abandon the saved clipboard'
 Reset-Case;$script:advanceOnReceiptRead=$true
 $result=Invoke-EchoProbe
-Assert-True (-not$result.matched-and$result.restored-and$actions.Count-eq0-and[WeComWin32]::Text-ceq'original-text') 'unstable receipt must block copying but its still-owned unique nonce must be retired'
+Assert-True (-not$result.matched-and$result.restored-and$actions.Count-eq0-and[WeComWin32]::Text-ceq'original-text') 'unstable receipt must block all input while its still-owned unique nonce is retired'
 Reset-Case;$script:raceOnReceiptRead=$true
 $result=Invoke-EchoProbe
-Assert-True (-not$result.matched-and-not$result.restored-and$actions.Count-eq0-and[WeComWin32]::Text-ceq'external-write') 'foreign write during receipt must prevent copying and must never be restored over'
+Assert-True (-not$result.matched-and-not$result.restored-and$actions.Count-eq0-and[WeComWin32]::Text-ceq'external-write') 'foreign write during receipt must prevent all input and must never be restored over'
 Reset-Case;[WeComWin32]::ForeignOwnerAfterWrite=$true
 $result=Invoke-EchoProbe
 Assert-True (-not$result.matched-and-not$result.restored-and$actions.Count-eq0-and[WeComWin32]::Owner-eq777) 'identical nonce under another owner must not establish a receipt or permit restoration'
@@ -143,7 +150,7 @@ Reset-Case;$script:foreignCopy=$true
 Assert-True (-not(Invoke-EchoProbe).matched) 'fresh clipboard data from another owner must not pass'
 Assert-True ([WeComWin32]::Text-ceq'full-query') 'external-owned clipboard must not be overwritten on failure'
 Reset-Case;[WeComWin32]::NonText=$true
-Assert-True (-not(Invoke-EchoProbe).matched-and[WeComWin32]::Exchanges-eq0-and$actions.Count-eq0) 'rich formats must be refused before writing sentinel'
+Assert-True (-not(Invoke-EchoProbe).matched-and[WeComWin32]::Exchanges-eq0-and$actions.Count-eq0) 'rich formats must be refused before writing sentinel or touching UI'
 Reset-Case;$script:clipboardReadFails=$true
 Assert-True (-not(Invoke-EchoProbe).matched-and[WeComWin32]::Exchanges-eq0) 'unreadable original clipboard must never be overwritten'
 Reset-Case;[WeComWin32]::Empty=$true;[WeComWin32]::Text=''
@@ -177,25 +184,20 @@ $result=Invoke-EchoProbe
 Assert-True (-not$result.matched-and$result.reason-eq'clipboard_close_failed') 'owner close failure must be explicit and cannot leave matched true'
 Reset-Case;$script:moveOnRead=3
 $result=Invoke-EchoProbe
-Assert-True (-not$result.matched-and$result.restored-and$actions.Count-eq0) 'window geometry change before copying must block all copy chords'
+Assert-True (-not$result.matched-and$result.restored-and$actions.Count-eq1) 'window geometry change before copying must block copy chords after focus'
 
 Reset-Case
-Assert-True (Clear-WeComSearchBoxV2 -MainHwnd 101) 'unknown state with actual content/plus anchors must safely clear despite missing OCR cross'
-Assert-True ($actions.Count-eq1-and$actions[0].x-eq1614-and$actions[0].y-eq38) 'clear must only click observed search cross plus actual window origin'
-foreach($invalid in @('missing-content','missing-plus','moved-plus','changed-window','uncleared')){
- Reset-Case
- switch($invalid){
-  'missing-content' {$script:state.ContentPos=$null}
-  'missing-plus' {$script:state.TokensRaw=$script:state.TokensRaw[0..1]}
-  'moved-plus' {$script:state.TokensRaw[2].x0=400;$script:state.TokensRaw[2].x1=415}
-  'changed-window' {$script:moveOnRead=2}
-  'uncleared' {$script:clearEmpty=$false}
- }
- $failure='';try{Clear-WeComSearchBoxV2 -MainHwnd 101}catch{$failure=$_.Exception.Message}
- Assert-True ($failure-like'WECOMDRIVE|UI_CHANGED|*') 'unproved clear must fail closed'
- Assert-True (@($actions|Where-Object {$_.kind-eq'chord'}).Count-eq0) 'clear must never use keyboard fallback'
- if($invalid-ne'uncleared'){Assert-True ($actions.Count-eq0) 'invalid layout must not be clicked'}
+Assert-True (Clear-WeComSearchBoxV2 -MainHwnd 101) 'search clear must work regardless of OCR search state'
+Assert-True ($actions.Count-eq2-and$actions[0].vk-eq0x46-and$actions[1].vk-eq0x41-and[WeComWin32]::Posts-eq2) 'Ctrl+F must precede Ctrl+A and Delete'
+foreach($stateName in @('empty','has_content','unknown')){
+ Reset-Case;$script:state.State=$stateName
+ Assert-True (Clear-WeComSearchBoxV2 -MainHwnd 101) 'empty and nonempty search receive the same fixed clear'
+ Assert-True ($actions.Count-eq2-and$actions[0].vk-eq0x46-and$actions[1].vk-eq0x41-and[WeComWin32]::Posts-eq2) 'OCR state cannot alter fixed clear sequence'
 }
+Reset-Case;$script:failedChord=0x46
+$failure='';try{Clear-WeComSearchBoxV2 -MainHwnd 101}catch{$failure=$_.Exception.Message}
+Assert-True ($failure-like'WECOMDRIVE|UI_CHANGED|*') 'failed Ctrl+F must abort'
+Assert-True ($actions.Count-eq1-and[WeComWin32]::Posts-eq0) 'failed Ctrl+F must never clear a chat draft'
 
 # Execute the actual chat-search body up to its external overlay wait boundary.
 $tokens=$null;$errors=$null
@@ -208,21 +210,49 @@ function Write-DriverLog {param($Msg)}
 function Send-WeComText {param($Hwnd,$Text)}
 function Invoke-WeComJev {param($StateText,$Questions)return @{used=$false}}
 function Wait-WeComWindow {param($ClassName,$TimeoutMs)$script:overlayReached=$true;throw 'TEST_OVERLAY_BOUNDARY'}
-foreach($case in @('ocr-exact','clipped-copy-exact','copy-mismatch','copy-read-failure','restore-read-failure','restore-write-failure','restore-close-failure')){
+foreach($case in @('copy-exact','copy-mismatch','copy-read-failure','restore-read-failure','restore-write-failure','restore-close-failure','focus-failure')){
  Reset-Case;$script:overlayReached=$false;$Query='full-query'
- if($case-eq'ocr-exact'){$script:state.Content=$Query}
  if($case-eq'copy-mismatch'){[WeComWin32]::CopyPayload='tail-query'}
  if($case-eq'copy-read-failure'){$script:copyReadFails=$true}
  if($case-eq'restore-read-failure'){$script:restoreReadFails=$true}
  if($case-eq'restore-write-failure'){[WeComWin32]::FailOnExchange=2}
  if($case-eq'restore-close-failure'){[WeComWin32]::FailOnExchange=2;[WeComWin32]::FailureCode='CLIPBOARD_CLOSE_FAILED'}
+ if($case-eq'focus-failure'){$script:failedChord=0x46}
  $failure='';try{& $body}catch{$failure=$_.Exception.Message}
- Assert-True ($overlayReached-eq($case-in@('ocr-exact','clipped-copy-exact'))) 'only a proved complete query with safe restoration may reach the search overlay'
- if($case-eq'ocr-exact'){Assert-True ([WeComWin32]::Exchanges-eq0) 'successful original OCR must not use clipboard at all'}
+ Assert-True ($overlayReached-eq($case-eq'copy-exact')) 'only a proved complete query with safe restoration may reach the search overlay'
  if($case-like'restore-*-failure'-or$case-eq'copy-read-failure'){
   Assert-True ($failure-like'*剪贴板写入/恢复失败*原内容可能未恢复*已中止且未重试*') 'clipboard system failure must be visible to the user, not merely logged'
  }
 }
+# Execute add-customer through its first screenshot boundary with synthetic OS hooks.
+$addAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $DriverDir 'add-customer.ps1'),[ref]$tokens,[ref]$errors)
+if($errors.Count){throw ($errors|Out-String)}
+$addCommand=$addAst.FindAll({param($a)$a-is[Management.Automation.Language.CommandAst]-and$a.GetCommandName()-eq'Invoke-DriverMain'},$true)[0]
+$addBody=($addCommand.CommandElements|Where-Object {$_-is[Management.Automation.Language.ScriptBlockExpressionAst]}|Select-Object -First 1).ScriptBlock.GetScriptBlock()
+function Clear-SearchResidualBestEffort {param($MainHwnd) $script:cleanupCalls++}
+function Save-StepShot {param($Hwnd,$Name) throw 'TEST_ADD_BOUNDARY'}
+function Send-WeComText {param($Hwnd,$Text)
+ $script:sendCalls++
+ if($script:retryCopy-and$script:sendCalls-eq2){[WeComWin32]::CopyPayload=$Text}
+}
+foreach($retry in @($false,$true)){
+ Reset-Case;$Phone='13671705876';$script:sendCalls=0;$script:retryCopy=$retry;$script:cleanupCalls=0
+ [WeComWin32]::CopyPayload=$(if($retry){'wrong'}else{$Phone})
+ $failure='';try{& $addBody}catch{$failure=$_.Exception.Message}
+ Assert-True ($failure-eq'TEST_ADD_BOUNDARY') 'exact copied phone must reach candidate search'
+ Assert-True ($sendCalls-eq$(if($retry){2}else{1})) 'phone retries only after a failed full copy'
+ Assert-True (@($actions|Where-Object {$_.kind-eq'chord'-and$_.vk-eq0x46}).Count-eq$(if($retry){4}else{2})) 'each clear and copy starts with Ctrl+F'
+ Assert-True ([WeComWin32]::Text-ceq'original-text') 'add-customer copy must restore original clipboard'
+ Assert-True ($cleanupCalls-eq1) 'prepared search receives one cleanup attempt'
+}
+Reset-Case;$Phone='13671705876';$script:sendCalls=0;$script:cleanupCalls=0;$script:failedChord=0x46
+$failure='';try{& $addBody}catch{$failure=$_.Exception.Message}
+Assert-True ($failure-like'WECOMDRIVE|UI_CHANGED|*') 'add-customer Ctrl+F failure aborts'
+Assert-True ($sendCalls-eq0-and$cleanupCalls-eq0) 'initial Ctrl+F failure cannot type or retry cleanup on unknown focus'
+Reset-Case;$Phone='13671705876';$script:sendCalls=0;$script:cleanupCalls=0;$script:failFocusCall=2
+$failure='';try{& $addBody}catch{$failure=$_.Exception.Message}
+Assert-True ($failure-like'WECOMDRIVE|UI_CHANGED|*聚焦失败*未补输*') 'copy readback Ctrl+F failure must abort add-customer'
+Assert-True ($sendCalls-eq1-and$focusCalls-eq2-and[WeComWin32]::Posts-eq2) 'failed readback focus cannot trigger a second clear or input'
 # Replay the actual state producer with de-identified OCR boxes, including icon-first ordering.
 # Only the screenshot/OCR boundary is synthetic; no identity screenshot enters the project fixture.
 function Get-WeComWindowSnapshot {param($Hwnd,$Path)
@@ -250,7 +280,7 @@ try{
  $result=Invoke-EchoProbe
  Assert-True ($result.matched-and$result.restored) 'merged-cross layout still requires fresh exact clipboard evidence'
  Reset-Case;$script:state=$produced
- Assert-True (Clear-WeComSearchBoxV2 -MainHwnd 101) 'merged cross may use the observed clear point with empty readback'
+ Assert-True (Clear-WeComSearchBoxV2 -MainHwnd 101) 'merged cross does not alter fixed clear sequence'
 
  foreach($variant in @('wide-no-cross','ascii-x','outside-cross-roi','icon-only')){
   Reset-Case
@@ -272,7 +302,7 @@ try{
  $combined=& $searchStateProducer -MainHwnd 1 -Tag ('synthetic-'+[guid]::NewGuid().ToString('N'))
  Assert-True ($combined.ContentPos[0]-eq243-and$combined.State-eq'has_content') 'combined icon/text fallback must retain its previous position'
  $script:state=$combined;$script:useProducerFocus=$true
- Assert-True ((Focus-WeComSearchBox -MainHwnd 101)-eq'placeholder_click') 'existing combined icon/text Focus fallback must remain available'
+ Assert-True ((Focus-WeComSearchBox -MainHwnd 101)-eq'shortcut') 'search focus no longer depends on combined OCR tokens'
  Assert-True (-not(Test-WeComSearchBoxLayout $combined)) 'the looser legacy Focus fallback must never authorize clear/copy layout'
 }finally{
  foreach($path in $script:producerFiles){Remove-Item -LiteralPath $path -ErrorAction SilentlyContinue}

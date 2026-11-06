@@ -44,6 +44,7 @@ public class WeComWin32 {
     [DllImport("user32.dll")] public static extern uint MapVirtualKeyW(uint code, uint mapType);
     [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr v);
     [DllImport("user32.dll")] public static extern uint GetClipboardSequenceNumber();
+    [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern IntPtr GetClipboardOwner();
     [DllImport("user32.dll")] static extern bool OpenClipboard(IntPtr owner);
     [DllImport("user32.dll")] static extern bool CloseClipboard();
@@ -808,23 +809,11 @@ function Get-WeComSearchBoxState {
 }
 
 function Clear-WeComSearchBoxV2 {
-    # 主窗口 HWND 或一次点击不能证明 Qt 内部编辑焦点；禁止 Ctrl+A/Delete 盲清当前焦点。
-    # 空搜索是无操作成功；其余只在已实证搜索 ROI/内容锚点匹配时点击专属清空点并回读。
-    # 未确认布局时保守中止，不能以键盘兜底损伤聊天草稿。
+    # 先用 Ctrl+F 聚焦搜索框，再固定 Ctrl+A/Delete；快捷键失败时绝不清理当前焦点。
     param([Parameter(Mandatory)][int64]$MainHwnd)
-    $before = Get-WeComWindowInfo ([IntPtr]$MainHwnd)
-    $state = Get-WeComSearchBoxState -MainHwnd $MainHwnd -Tag 'safe-clear'
-    if ($state.State -eq 'empty') { return $true }
-    $main = Get-WeComWindowInfo ([IntPtr]$MainHwnd)
-    if (-not (Test-WeComSearchWindowUnchanged $before $main) -or -not (Test-WeComSearchBoxLayout $state)) {
-        Throw-DriverError 'UI_CHANGED' '搜索框布局或内容锚点无法确认，未清除任何内容；请人工清空搜索框后重试'
-    }
-    # 1086/1280 宽的真机搜索文本框右端均为 (337,38)；布局锚点不符时不套用该标定。
-    [void](Send-WeComClick -Hwnd $MainHwnd -ScreenX ($main.X + 337) -ScreenY ($main.Y + 38))
-    Start-Sleep -Milliseconds 300
-    $after = Get-WeComSearchBoxState -MainHwnd $MainHwnd -Tag 'safe-cleared'
-    if ($after.State -ne 'empty' -or -not (Test-WeComSearchWindowUnchanged $main (Get-WeComWindowInfo ([IntPtr]$MainHwnd)))) {
-        Throw-DriverError 'UI_CHANGED' '点击搜索专属清空位置后未确认搜索为空，已中止且未使用键盘清理；请人工检查'
+    [void](Focus-WeComSearchBox -MainHwnd $MainHwnd)
+    if (-not (Clear-WeComFocusedInput -Hwnd $MainHwnd)) {
+        Throw-DriverError 'UI_CHANGED' '搜索框 Ctrl+A/Delete 投递失败，已中止'
     }
     return $true
 }
@@ -984,11 +973,6 @@ function Test-WeComSearchClipboardEcho {
     try {
         if ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') { return $result }
         $before=Get-WeComWindowInfo ([IntPtr]$MainHwnd)
-        $state=Get-WeComSearchBoxState -MainHwnd $MainHwnd -Tag 'copy-check'
-        if ($state.State -eq 'empty' -or -not (Test-WeComSearchBoxLayout $state) -or
-                -not (Test-WeComSearchWindowUnchanged $before (Get-WeComWindowInfo ([IntPtr]$MainHwnd)))) {
-            $result.reason='search_layout_changed';return $result
-        }
         $originalSeq=[WeComWin32]::GetClipboardSequenceNumber()
         $original=Get-WeComPlainClipboard
         $ownerPid=0
@@ -1009,6 +993,13 @@ function Test-WeComSearchClipboardEcho {
                 $publishedOwner -ne $window.Handle -or $publishedSeq -ne $publishedAfter) { return $result }
         $sentinelSeq=$publishedSeq
         if (-not (Test-WeComSearchWindowUnchanged $before (Get-WeComWindowInfo ([IntPtr]$MainHwnd)))) { return $result }
+        if (-not (Send-WeComAttachChordKey -Hwnd $MainHwnd -Vk 0x46)) {
+            $result.reason='search_focus_failed';return $result
+        }
+        Start-Sleep -Milliseconds 150
+        if (-not (Test-WeComSearchWindowUnchanged $before (Get-WeComWindowInfo ([IntPtr]$MainHwnd)))) {
+            $result.reason='search_window_changed';return $result
+        }
         if (-not (Send-WeComAttachChordKey -Hwnd $MainHwnd -Vk 0x41)) { return $result }
         Start-Sleep -Milliseconds 100
         $copyRequested=$true
@@ -1085,60 +1076,13 @@ function Test-WeComSearchClipboardEcho {
 }
 
 function Focus-WeComSearchBox {
-    # 聚焦主窗口搜索框：Ctrl+F 发出不证明焦点已转移，仍按搜索框 OCR 锚点显式点击。
-    # 1) attachstate Ctrl+F（best-effort）；
-    # 2) 裁切 OCR 顶部布局 → Jev 选搜索框 token → 点击其中心；
-    # 3) Jev 不可用 → 规则：点击占位符 token 中心（token 匹配 搜[索素粟]）；
-    #    占位符不可见（框内有残留内容）时点首个内容 token 中心（同在框内）。
-    # 聚焦是否真正成功由调用方输入后的 OCR 回读兜底校验（此处不做二次确认）。
-    # 返回聚焦方法 'jev_click' | 'placeholder_click'；无可靠搜索框锚点 → UI_CHANGED。
+    # Ctrl+F 是搜索框聚焦原语；输入后的完整剪贴板回读验证实际目标。
     param([Parameter(Mandatory)][int64]$MainHwnd)
-    if (Send-WeComAttachChordKey -Hwnd $MainHwnd -Vk 0x46) {
-        Start-Sleep -Milliseconds 150
+    if (-not (Send-WeComAttachChordKey -Hwnd $MainHwnd -Vk 0x46)) {
+        Throw-DriverError 'UI_CHANGED' 'attachstate Ctrl+F 聚焦搜索框失败，已中止且未清除当前输入'
     }
-    $main = Get-WeComWindowInfo ([IntPtr]$MainHwnd)
-    $sb = Get-WeComSearchBoxState -MainHwnd $MainHwnd -Tag 'focus'
-    $tokens = @($sb.TokensRaw)
-    if ($tokens.Count -gt 0) {
-        $lines = @(); $crit = @{}
-        for ($i = 0; $i -lt $tokens.Count; $i++) {
-            $tk = $tokens[$i]
-            $cx = [int](($tk.x0 + $tk.x1) / 2); $cy = [int](($tk.y0 + $tk.y1) / 2)
-            $lines += ('T{0}: text={1} x0={2} x1={3} y0={4} y1={5} center=({6},{7})' -f $i, $tk.text, $tk.x0, $tk.x1, $tk.y0, $tk.y1, $cx, $cy)
-            $anchorOk = Test-WeComSearchBoxAnchor $tk $sb.PlaceholderPos 'placeholder'
-            if (-not $anchorOk -and $sb.State -eq 'has_content') {
-                $anchorOk = Test-WeComSearchBoxAnchor $tk $sb.ContentPos 'content'
-            }
-            if (-not $anchorOk) { continue }
-            $crit[('T' + $i)] = ('OCR文本「' + $tk.text + '」中心坐标')
-        }
-        $stateText = '企业微信主窗口顶部区域 OCR 结果（窗口像素坐标）：' + "`n" + ($lines -join "`n") + "`n" + '任务：点击搜索输入框以聚焦它（准备输入搜索关键词）。'
-        $r = @{ used = $false }
-        if ($crit.Count -gt 0) {
-            $r = Invoke-WeComJev -StateText $stateText -Questions @{
-                click_which = @{ type = 'choice'; instructions = '点击哪个位置可以聚焦搜索输入框？'; criteria = $crit }
-            }
-        }
-        if ($r.used -and $r.answers.click_which.choice -match '^T(\d+)$') {
-            $idx = [int]$Matches[1]
-            if ($idx -lt $tokens.Count -and $crit.ContainsKey(('T' + $idx))) {
-                $tk = $tokens[$idx]
-                $clickX = [int]($main.X + ($tk.x0 + $tk.x1) / 2)
-                $clickY = [int]($main.Y + ($tk.y0 + $tk.y1) / 2)
-                [void](Send-WeComClick -Hwnd $MainHwnd -ScreenX $clickX -ScreenY $clickY)
-                Start-Sleep -Milliseconds 400
-                return 'jev_click'
-            }
-        }
-        $fallback = @(0..($tokens.Count - 1) | Where-Object { $crit.ContainsKey(('T' + $_)) })
-        if ($fallback.Count -gt 0) {
-            $tk = $tokens[$fallback[0]]
-            [void](Send-WeComClick -Hwnd $MainHwnd -ScreenX ([int]($main.X + ($tk.x0 + $tk.x1) / 2)) -ScreenY ([int]($main.Y + ($tk.y0 + $tk.y1) / 2)))
-            Start-Sleep -Milliseconds 400
-            return 'placeholder_click'
-        }
-    }
-    Throw-DriverError 'UI_CHANGED' '无法可靠定位搜索框占位符或内容锚点，已中止且未清除任何内容；页面结构可能已变化'
+    Start-Sleep -Milliseconds 150
+    return 'shortcut'
 }
 
 # ---------- M6：发送 V2 共享助手（message-send 用；只增不改，M1-M5 函数不动） ----------

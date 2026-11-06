@@ -76,8 +76,8 @@ function Initialize-WeComWin32 {}
 function Initialize-WeComAttachInput {}
 function Start-Sleep { param($Milliseconds) }
 function Get-WeComWindowInfo { param($Hwnd)
-    if ([int64]$Hwnd -eq 202) { return @{ X=300;Y=400;W=1280;H=1000 } }
-    return @{ X=100;Y=200;W=1280;H=1000 }
+    if ([int64]$Hwnd -eq 202) { return @{ Hwnd=202;Pid=42;Class='WeWorkWindow';Visible=$true;X=300;Y=400;W=1280;H=1000 } }
+    return @{ Hwnd=101;Pid=42;Class='WeWorkWindow';Visible=$true;X=100;Y=200;W=1280;H=1000 }
 }
 function Resolve-WeComMainWindow {
     $script:resolveCalls++
@@ -87,9 +87,20 @@ function Resolve-WeComMainWindow {
 function Write-DriverLog { param($Msg) }
 function Save-StepShot { param($Hwnd,$Name)
     [void]$script:shots.Add(@{name=$Name;hwnd=$Hwnd})
-    if ($Name -eq 'step2-before-clear.png' -and $script:rebuildDuringShot) { [WeComWin32]::OldWindowAlive=$false }
     return @{path=$Name;left=100;top=200;w=1280;h=1000}
 }
+function Get-WeComTitlePoint { param($Hwnd,$ImagePath)
+    return @{x=435;y=38;source='glm';cache_path='synthetic-title-cache.json'}
+}
+function Get-WeComCopiedTitle { param($Hwnd,$Section,$Point)
+    $script:titleCopyCalls++
+    [WeComWin32]::Audit.Add('copy-title')
+    if ($script:rebuildAfterTitleCopy) { [WeComWin32]::OldWindowAlive=$false }
+    if ($script:wrongVerifyTitle) { return 'another-group' }
+    if ($script:lateTitle) { return $script:lateTitle }
+    return 'fixture-group'
+}
+function Save-WeComTitlePoint { param($Point) }
 function Set-Clipboard { param($Value)
     $script:clipCalls++; [WeComWin32]::Audit.Add('clipboard')
     if ($script:clipFail) { throw 'fixture clipboard unavailable' }
@@ -104,15 +115,18 @@ function Get-WeComSearchBoxState { param($MainHwnd,$Tag)
     if ($Tag -in @('pre','cleared')) { return @{State='empty';Content='';Tokens=@()} }
     return $script:anchor
 }
+function Test-WeComSearchClipboardEcho { param($MainHwnd,$Query)
+    return @{matched=[string]::Equals($script:echo,$Query,[StringComparison]::Ordinal);
+        restored=$true;reason='copied';copied_length=$script:echo.Length}
+}
 function Invoke-WeComJev { param($StateText,$Questions)
     if ($Questions.ContainsKey('click_which')) {
         $script:focusCriteria=$Questions.click_which.criteria
         return @{used=$script:useFocusJev;answers=@{click_which=@{choice=$script:focusChoice}}}
     }
-    if ($Questions.ContainsKey('right_conversation')) {
+    if ($Questions.ContainsKey('input_point')) {
         $script:sendCriteria=$Questions
-        return @{used=$true;answers=@{right_conversation=@{choice=$script:right};
-            has_draft=@{choice=$script:draft};input_point=@{choice=$script:inputChoice}}}
+        return @{used=$true;answers=@{input_point=@{choice=$script:inputChoice}}}
     }
     return @{used=$false;reason='fixture offline'}
 }
@@ -123,7 +137,6 @@ function Invoke-SendChatOcr { param($ImagePath,$Mode)
     $title='fixture-group'
     if ($script:changedTitle -and $ImagePath -eq 'step2-typed.png') { $title='fixture-group+' }
     if ($script:wrongVerifyTitle) { $title='another-group' }
-    if ($ImagePath -eq 'step2-before-clear.png' -and $script:lateTitle) { $title=$script:lateTitle }
     $boxes=@(@{text=$title;x0=500;y0=20;x1=680;y1=40},
         @{text='快速会议';x0=1000;y0=820;x1=1100;y1=840},
         @{text='立即总结';x0=1120;y0=900;x1=1210;y1=920})
@@ -142,7 +155,8 @@ function Reset-Test {
     [WeComWin32]::OldWindowAlive=$true;[WeComWin32]::RebuildOnClick=$false
     $script:clipCalls=0;$script:clipFail=$false;$script:overlayCalls=0
     $script:shots=New-Object System.Collections.ArrayList
-    $script:resolveCalls=0;$script:rebuildBeforeClick=$false;$script:rebuildDuringShot=$false;$script:lateTitle=''
+    $script:resolveCalls=0;$script:rebuildBeforeClick=$false;$script:rebuildAfterTitleCopy=$false;$script:lateTitle=''
+    $script:titleCopyCalls=0
     $script:readback=$true;$script:placeholder=$false;$script:changedTitle=$false;$script:wrongVerifyTitle=$false
     $script:typedOcrCalls=0
     $script:right='yes';$script:draft='no';$script:inputChoice='B0'
@@ -223,9 +237,9 @@ Test-Intent 'failed Delete keyup aborts before clipboard paste' {
     Assert-Intent ($r.error -like 'WECOMDRIVE|UI_CHANGED|*') 'failed Delete keyup must report pre-send UI error'
     Assert-Intent ($clipCalls -eq 0 -and (Count-Key 86) -eq 0 -and (Count-Key 13) -eq 0) 'failed clear cannot paste or send'
 }
-Test-Intent 'successful CtrlF still clicks OCR anchor rather than assuming focus' {
-    Assert-Intent ((Focus-WeComSearchBox -MainHwnd 101) -eq 'placeholder_click') 'shortcut dispatch alone cannot prove focus'
-    Assert-Intent (@([WeComWin32]::Messages | Where-Object {$_.M -eq 0x201}).Count -eq 1) 'explicit search-anchor click required after CtrlF'
+Test-Intent 'successful CtrlF focuses search without OCR click or destructive clear' {
+    Assert-Intent ((Focus-WeComSearchBox -MainHwnd 101) -eq 'shortcut') 'focus uses the accepted Ctrl+F contract'
+    Assert-Intent (@([WeComWin32]::Messages | Where-Object {$_.M -eq 0x201}).Count -eq 0) 'search focus does not click an OCR anchor'
     Assert-Intent ((Count-Key 65) -eq 0 -and (Count-Key 46) -eq 0) 'focus operation cannot destructively clear input'
 }
 Test-Intent 'single-line send clears target editor then uses original text primitive' {
@@ -244,11 +258,11 @@ Test-Intent 'missing search anchor does not block an already open target convers
     Assert-Intent ($r.error -eq '') 'search anchor is irrelevant after target title is confirmed'
     Assert-Intent ((Count-Key 65) -eq 1 -and (Count-Key 46) -eq 1 -and $clipCalls -eq 1 -and (Count-Key 13) -eq 1) 'target editor replacement reaches one send'
 }
-Test-Intent 'unrelated crop OCR token plus Jev cannot authorize clearing chat draft' {
+Test-Intent 'unrelated crop OCR token does not change shortcut focus or chat send' {
     $script:anchor=@{TokensRaw=@(@{text='99';x0=300;y0=30;x1=330;y1=50});PlaceholderPos=$null;ContentPos=$null}
     $script:useFocusJev=$true;$script:focusChoice='T0';$script:draft='yes'
-    $focusError='';try { Focus-WeComSearchBox -MainHwnd 101 | Out-Null } catch {$focusError=$_.Exception.Message}
-    Assert-Intent ($focusError -like 'WECOMDRIVE|UI_CHANGED|*') 'unrelated token cannot authorize even a search-focus click'
+    Assert-Intent ((Focus-WeComSearchBox -MainHwnd 101) -eq 'shortcut') 'search focus ignores unrelated OCR tokens'
+    Assert-Intent (@([WeComWin32]::Messages | Where-Object {$_.M -eq 0x201}).Count -eq 0) 'unrelated token cannot authorize a search-focus click'
     $script:clearState='unknown'
     $r=Run-Send -Skip
     Assert-Intent ($r.error -eq '') 'search token does not decide an already open target conversation'
@@ -260,22 +274,21 @@ Test-Intent 'nonempty search does not authorize or block target editor replaceme
     Assert-Intent ($r.error -eq '') 'unrelated search state must not block a confirmed target chat'
     Assert-Intent ((Count-Key 65) -eq 1 -and (Count-Key 46) -eq 1 -and $clipCalls -eq 1) 'only target editor is cleared and repopulated'
 }
-Test-Intent 'stale placeholder coordinate cannot authorize a different token click' {
+Test-Intent 'stale placeholder coordinate does not cause a search click' {
     $script:anchor.PlaceholderPos=@(330,40);$script:useFocusJev=$true;$script:focusChoice='T0'
-    $failure='';try { Focus-WeComSearchBox -MainHwnd 101 | Out-Null } catch {$failure=$_.Exception.Message}
-    Assert-Intent ($failure -like 'WECOMDRIVE|UI_CHANGED|*') 'placeholder position must correspond to actual trusted token'
-    Assert-Intent (@([WeComWin32]::Messages | Where-Object {$_.M -eq 0x201}).Count -eq 0) 'stale source evidence cannot be repaired by guessing click target'
+    Assert-Intent ((Focus-WeComSearchBox -MainHwnd 101) -eq 'shortcut') 'shortcut focus ignores stale OCR coordinates'
+    Assert-Intent (@([WeComWin32]::Messages | Where-Object {$_.M -eq 0x201}).Count -eq 0) 'stale source evidence cannot cause a guessed click'
 }
-Test-Intent 'Jev cannot smuggle excluded plus button back as focus candidate' {
+Test-Intent 'Jev plus-button choice is ignored by shortcut focus' {
     $script:useFocusJev=$true;$script:focusChoice='T1'
     $method=Focus-WeComSearchBox -MainHwnd 101
-    Assert-Intent (-not $focusCriteria.ContainsKey('T1')) 'plus button must not be offered'
-    $click=@([WeComWin32]::Messages | Where-Object {$_.M -eq 0x201})[0]
-    Assert-Intent ($method -eq 'placeholder_click' -and ($click.L -band 65535) -eq 220) 'unoffered answer must resolve to real search anchor'
+    Assert-Intent ($method -eq 'shortcut' -and $null -eq $focusCriteria) 'search focus does not ask Jev for OCR tokens'
+    Assert-Intent (@([WeComWin32]::Messages | Where-Object {$_.M -eq 0x201}).Count -eq 0) 'plus button is never clicked'
 }
-Test-Intent 'attach failure retains safe explicit search anchor fallback' {
+Test-Intent 'attach failure aborts search focus without an OCR fallback' {
     [WeComAttach32]::AttachOk=$false
-    Assert-Intent ((Focus-WeComSearchBox -MainHwnd 101) -eq 'placeholder_click') 'failed shortcut must not skip safe fallback'
+    $failure='';try { Focus-WeComSearchBox -MainHwnd 101 | Out-Null } catch {$failure=$_.Exception.Message}
+    Assert-Intent ($failure -like 'WECOMDRIVE|UI_CHANGED|*') 'failed shortcut must abort before clear or input'
     Assert-Intent ((Count-Key 70) -eq 0) 'failed attachment must not post unmodified f'
 }
 Test-Intent 'Chinese search readback must pass before overlay lookup' {
@@ -293,7 +306,7 @@ Test-Intent 'empty or truncated Chinese echo cannot be treated as successful sea
 Test-Intent 'toolbar-only candidates use editor fallback even with stale B0 answer' {
     $r=Run-Send -Skip
     Assert-Intent ($r.error -eq '') ('fixture paste/title should permit one send: '+$r.error)
-    Assert-Intent (-not $sendCriteria.ContainsKey('input_point')) 'toolbar and sidebar tokens must not be offered'
+    Assert-Intent ($null -eq $sendCriteria) 'toolbar and sidebar tokens must not be offered to Jev'
     Assert-Intent ($r.data.input_point.source -ne 'jev' -and $r.data.input_point.x -eq 740 -and $r.data.input_point.y -eq 1100) 'stale unsafe answer must not click quick meeting or sidebar'
 }
 Test-Intent 'valid editor candidate still usable with exact screen offset' {
@@ -324,26 +337,18 @@ Test-Intent 'clipboard failure exhausts finite attempts without paste or Enter' 
     Assert-Intent ($r.error -like 'WECOMDRIVE|CONFIG_MISSING|*') 'clipboard exhaustion must fail loudly'
     Assert-Intent ($clipCalls -eq 5 -and (Count-Key 86) -eq 0 -and (Count-Key 13) -eq 0) 'no partial input/send after clipboard failure'
 }
-Test-Intent 'conversation switch after Jev but before clear leaves both editors untouched' {
+Test-Intent 'conversation switch before the only title copy leaves both editors untouched' {
     $script:lateTitle='another-group';$r=Run-Send -Skip
-    Assert-Intent ($r.error -like 'WECOMDRIVE|UI_CHANGED|*') 'late title mismatch must reject before input'
-    Assert-Intent (@($script:shots | Where-Object {$_.name -eq 'step2-before-clear.png'}).Count -eq 1) 'title must be captured after editor click'
+    Assert-Intent ($r.error -eq '' -and $r.data.navigate_required) 'copied non-target title must request navigation before input'
+    Assert-Intent ($script:titleCopyCalls -eq 1 -and @([WeComWin32]::Messages | Where-Object {$_.M -eq 0x201}).Count -eq 0) 'one title copy, zero editor clicks'
     Assert-Intent ((Count-Key 65) -eq 0 -and (Count-Key 46) -eq 0 -and $clipCalls -eq 0 -and (Count-Key 13) -eq 0) 'no clear, paste or Enter on new conversation'
 }
-Test-Intent 'rebuilt window is rechecked before clearing its editor' {
-    $script:rebuildBeforeClick=$true;[WeComWin32]::OldWindowAlive=$false
-    $script:lateTitle='another-group';$r=Run-Send -Skip
-    Assert-Intent ($r.error -like 'WECOMDRIVE|UI_CHANGED|*') 'rebuilt window with another title must reject send'
-    Assert-Intent ($script:resolveCalls -ge 2 -and @($script:shots | Where-Object {$_.name -eq 'step2-before-clear.png' -and $_.hwnd -eq 202}).Count -eq 1) 'fresh title screenshot must use rebuilt HWND'
-    Assert-Intent ((Count-Key 65) -eq 0 -and (Count-Key 46) -eq 0 -and $clipCalls -eq 0 -and (Count-Key 13) -eq 0) 'rebuilt wrong conversation must not be cleared'
-}
-Test-Intent 'rebuilt matching window receives the clear and text itself' {
+Test-Intent 'rebuilt window with a matching copied title still stops before input' {
     $script:rebuildBeforeClick=$true;[WeComWin32]::OldWindowAlive=$false
     $r=Run-Send -Single -Skip
-    Assert-Intent ($r.error -eq '') 'rebuilt target should remain sendable after fresh title check'
-    Assert-Intent ($r.data.input_point.x -eq 940 -and $r.data.input_point.y -eq 1300 -and $r.data.input_point.source -eq 'ratio') 'new window must use fresh geometry instead of stale Jev point'
-    Assert-Intent (@([WeComWin32]::Messages | Where-Object {$_.M -eq 0x100 -and $_.W -eq 46 -and $_.H -eq 202}).Count -eq 1) 'clear must use rebuilt HWND'
-    Assert-Intent (@([WeComWin32]::Messages | Where-Object {$_.M -eq 0x100 -and $_.W -eq 13 -and $_.H -eq 202}).Count -eq 1) 'send must use rebuilt HWND'
+    Assert-Intent ($r.error -like 'WECOMDRIVE|UI_CHANGED|*') 'old title proof cannot authorize a new HWND'
+    Assert-Intent ($script:resolveCalls -eq 1 -and $script:titleCopyCalls -eq 1) 'driver does not silently re-resolve and send through a rebuilt window'
+    Assert-Intent ((Count-Key 65) -eq 0 -and (Count-Key 46) -eq 0 -and (Count-Key 13) -eq 0) 'no clear or send through a rebuilt HWND'
 }
 Test-Intent 'window rebuilt after click aborts before any clear' {
     [WeComWin32]::RebuildOnClick=$true
@@ -351,11 +356,12 @@ Test-Intent 'window rebuilt after click aborts before any clear' {
     Assert-Intent ($r.error -like 'WECOMDRIVE|UI_CHANGED|*') 'focus on destroyed window cannot be trusted'
     Assert-Intent ((Count-Key 65) -eq 0 -and (Count-Key 46) -eq 0 -and $clipCalls -eq 0 -and (Count-Key 13) -eq 0) 'must not clear or send after click destroys window'
 }
-Test-Intent 'window rebuilt during latest screenshot aborts before any clear' {
-    $script:rebuildDuringShot=$true
+Test-Intent 'window rebuilt after title copy aborts before any click or clear' {
+    $script:rebuildAfterTitleCopy=$true
     $r=Run-Send -Skip
-    Assert-Intent ($r.error -like 'WECOMDRIVE|UI_CHANGED|*') 'snapshot on stale window cannot authorize clearing'
-    Assert-Intent ((Count-Key 65) -eq 0 -and (Count-Key 46) -eq 0 -and $clipCalls -eq 0 -and (Count-Key 13) -eq 0) 'no clear or send after screenshot rebuild'
+    Assert-Intent ($r.error -like 'WECOMDRIVE|UI_CHANGED|*') 'stale window after copied title cannot authorize clearing'
+    Assert-Intent (@([WeComWin32]::Messages | Where-Object {$_.M -eq 0x201}).Count -eq 0) 'no editor click after title copy destroys the window'
+    Assert-Intent ((Count-Key 65) -eq 0 -and (Count-Key 46) -eq 0 -and $clipCalls -eq 0 -and (Count-Key 13) -eq 0) 'no clear or send after window rebuild'
 }
 Test-Intent 'post-input title OCR plus cannot veto confirmed send' {
     $script:changedTitle=$true;$r=Run-Send -Single -Skip

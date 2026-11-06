@@ -85,6 +85,7 @@ function Get-WeComSearchBoxState{param($MainHwnd,$Tag)return @{State='unknown';C
  @{text='fixture';x0=208;x1=328;y0=26;y1=46},@{text='+';x0=368;x1=384;y0=28;y1=44})}}
 function New-WeComClipboardOwner{$script:owners++;$w=[pscustomobject]@{Handle=[IntPtr]303};$w|Add-Member ScriptMethod Dispose {};return $w}
 function Send-WeComAttachChordKey{param($Hwnd,$Vk)$script:keys++;if($Vk-eq[WeComWin32]::FailChord){return $false};if($Vk-eq0x43){[PolicyClipboardFacade]::Text='fixture';[PolicyClipboardFacade]::Empty=$false;[PolicyClipboardFacade]::HasText=$true;[PolicyClipboardFacade]::Formats=@('UnicodeText');[WeComWin32]::Owner=202;[WeComWin32]::Sequence++};return $true}
+function Clear-WeComFocusedInput{param($Hwnd)return $true}
 function Send-WeComClick{param($Hwnd,$ScreenX,$ScreenY)$script:clicks++;throw 'FORBIDDEN_CLICK'}
 function Assert-Intent($Value,$Why){if(-not$Value){throw $Why}}
 function Reset-Case{

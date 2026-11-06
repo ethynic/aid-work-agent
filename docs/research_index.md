@@ -6,6 +6,7 @@
 
 | 调研主题 | 文档 | 关联功能 |
 |---------|------|---------|
+| WeCom CLI OCR 使用点清单 | [调研](research/wecom-cli-ocr-inventory-20261106.md) | 2026-11-06：9 组 OCR 使用场景、已有本地库路径和本轮文本发送两种故障；逐项讨论替代方案。 |
 | 「社会治理智能体」技术要求评估 | [评估](research/social-governance-agent-requirement-assessment.md) | 2026-11-03：高校采购标书 vs 本项目能力对照；约 60% 吻合可投，缺口为工作流编排与知识空间，投标前需定应对策略。 |
 | Runtime 与 CLI 安装升级简化评估 | [评估](research/runtime-cli-install-upgrade-simplicity-review.md) | 2026-10-30：审查安装、任务恢复、验包与信任耦合，建议覆盖升级优先、重装白名单保留配置。 |
 | 企业微信群接入自研 Agent 自动问答 | [调研](research/wecom-group-agent-bot-research.md) | 2026-10-22：内部群 @智能机器人可走官方 API；外部客户群不能按同一路线承诺，现有应用渠道需另做适配。 |
