@@ -8,6 +8,8 @@
 |---------|------|---------|
 | 「社会治理智能体」技术要求评估 | [评估](research/social-governance-agent-requirement-assessment.md) | 2026-11-03：高校采购标书 vs 本项目能力对照；约 60% 吻合可投，缺口为工作流编排与知识空间，投标前需定应对策略。 |
 | Runtime 与 CLI 安装升级简化评估 | [评估](research/runtime-cli-install-upgrade-simplicity-review.md) | 2026-10-30：审查安装、任务恢复、验包与信任耦合，建议覆盖升级优先、重装白名单保留配置。 |
+| 企业微信群接入自研 Agent 自动问答 | [调研](research/wecom-group-agent-bot-research.md) | 2026-10-22：内部群 @智能机器人可走官方 API；外部客户群不能按同一路线承诺，现有应用渠道需另做适配。 |
+| 连接器架构与飞书连接器实现路径调研（WorkBuddy/豆包工作/灵光） | [调研](research/connector-architecture-feishu-research.md) | 连接中心 Phase 2 飞书连接器输入（2026-10-27）：WorkBuddy=官方确认 MCP+CLI 连接器框架+代建飞书自建应用授权；飞书官方 2026-03 开源 lark-cli（17.9k★，Agent 集成文档齐全），官方 MCP 已停更；建议一期 lark-oapi SDK 直连+每租户自建应用（路径 B）。 |
 | BOSS CLI 视觉识别与恢复真机实验 | [实验记录](research/boss-visual-recovery-machine-experiments.md) | 累计126次实调；霍接收预览关闭故障链通过，视觉20倍。 |
 | ZCode / DeepSeek Harness 搜索工具与中文检索增强 | [调研](research/agent-web-search-harness-research.md) | Read/PDF修复保留，实验研究流程已撤回；旧Pro实测不作Flash验收。 |
 | WorkBuddy B2B 获客 skill 兼容性与能力评估 | [调研](research/b2b-lead-gen-workbuddy-compatibility-research.md) / [实验计划](plans/plan-b2b-harness-probe.md) | 完整Skill复跑已停止；当前收敛到Search/Fetch组件验收。 |

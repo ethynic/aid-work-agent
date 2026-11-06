@@ -1,6 +1,6 @@
 # Runner Worker 看门狗与队列堆积告警设计（供决策）
 
-> 状态：**待决策**（用户要求先出方案再考虑实现，2026-11-05）
+> 状态：**历史候选方案，未采纳**（后续方案见 [AgentRunner 架构 §10](agent-application-architecture-design.md#10-runner-执行槽隔离与运行告警2026-11-05待开发)；本文件保留调研记录）
 > 背景：2026-11-05 TPG80509 生产事故——excel_process 读取 used range 膨胀的 Excel（声明 ~104.8 万行）在 async handler 里同步逐格遍历，冻结 aid-runner-worker 事件循环 50 分钟，所有智能体无响应，唯一破局是重启容器。
 > P0 修复（已实施）：excel handler 全量 to_thread 包裹 + 双 ExcelReader 底层归一到 `src/tools/file/excel_reader.py` + used range 膨胀防御（流式探测真实数据边界）。
 
@@ -12,7 +12,7 @@ worker 现有四层防御（`src/services/agent_runner/worker.py`）：
 |------|------|------|
 | 租约 lease 30s | 心跳续约，过期可被 reap | 心跳协程 `_heartbeat` 与任务同在一个事件循环，循环冻结则心跳停发 |
 | 心跳 heartbeat 10s | `heartbeat_seconds×2 ≤ lease_seconds` 校验 | 同上 |
-| `reap_expired` | 过期 running → interrupted 可重认领 | 主循环 `run()` 里同步执行，循环冻结则 reap 也不跑 |
+| `reap_expired` | 过期 running → interrupted，后续须按原规则核验 | 主循环 `run()` 里同步执行，循环冻结则 reap 也不跑 |
 | concurrency 4 | 并发上限 | 冻结的任务占用 1 个槽位，其他 3 个任务依赖同一冻结的循环 |
 
 **结论**：一个违反假异步规范的工具调用（`async def` 里直接调重 CPU 同步函数）即可击穿全部防线，租约过期后其他 worker 可以接走任务（多 worker 部署时可缓解），但单 worker 部署下队列整体停摆，进程自身无任何自愈手段。
@@ -76,7 +76,7 @@ class LoopWatchdog(threading.Thread):
 | 选项 | 行为 | 优点 | 缺点 |
 |------|------|------|------|
 | a) 仅告警 | 飞书通知 + 日志，人工重启 | 最安全，零误伤 | 夜间/无人时段任务持续冻结，回到本次事故的恢复速度 |
-| b) 告警 + 自愈退出 | 连续 2 次超限 → `os._exit(1)`，容器自动重启拉起 | 唯一能自动破局的手段；冻结期间任务本就无进度可保，`reap_expired` 会让过期任务转 interrupted 重新入队 | 依赖容器 restart policy（需确认生产 `restart: unless-stopped`）；系统级异常（CPU 饥饿、宿主机卡顿）可能误判 → 需连续 2 次确认 + 重启频率熔断 |
+| b) 告警 + 自愈退出 | 连续 2 次超限 → `os._exit(1)`，容器自动重启拉起 | 可恢复进程接单；`reap_expired` 会将过期的 running 标记为 interrupted，后续仍需核验恢复资格和未知外部效果 | 可能中断尚未核实的外部效果；依赖容器 restart policy；系统级异常（CPU 饥饿、宿主机卡顿）可能误判 |
 | c) b + 栈转储 | 退出前 `faulthandler.dump_traceback()` 落 `log/temp/` | 事后可直接定位是哪个函数阻塞 | 多几行代码，无额外风险 |
 
 **推荐 c（b+c 组合）**：critical 判定条件用「连续 2 次 × critical_seconds」避免单次抖动误杀；退出前把全线程栈写入 `log/temp/事件循环阻塞.log`，重启后飞书通知附栈文件路径。
@@ -177,7 +177,7 @@ def send_ops_alert(title: str, detail: str = "") -> bool:
 
 1. 单测：watchdog 用假 loop（受控 Event）模拟阻塞/恢复，断言 warn/critical 分支与熔断计数。
 2. 单测：水位巡检用隔离 DB（`--isolated-db`）构造 queued/过期 running 行，断言告警触发与静默区间。
-3. 仿真演练（agent1）：注入一个 `time.sleep(60)` 的假异步测试任务，验证看门狗 30s 告警、自愈重启、reap 后任务重新入队、飞书消息到达。
+3. 仿真演练（agent1）：注入一个 `time.sleep(60)` 的假异步测试任务，验证看门狗告警、自愈重启、reap 后任务转为 interrupted 并遵守恢复核验、飞书消息到达。
 4. 飞书通道：仿真环境配置真实 webhook，验证关键词命中与超时降级。
 
 ## 关联
