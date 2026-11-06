@@ -16,6 +16,12 @@
 | 8 | 添加客户 | 搜索框、候选、确认对话框及结果/失败原因 | 这是 UI 写操作，现有本地库通道不承担添加客户；OCR 影响候选选择和结果判断 | [add-customer.ps1](../../clients/wecom-cli/drivers/ps1/add-customer.ps1) |
 | 9 | 登录探测 `wecom_probe` | **源码已移除 OCR 调用**；窗口枚举判断登录态，二维码截图供扫码，`qr_status_hint` 固定为 `unknown` | 窗口信息不能证明二维码是否过期或受限；现行探测不再依赖 OCR，待真机复验 | [probe.ps1](../../clients/wecom-cli/drivers/ps1/probe.ps1)、[localdb-login.ps1](../../clients/wecom-cli/drivers/ps1/localdb-login.ps1) |
 
+## 剩余依赖的层次
+
+- **仍会运行 OCR 的业务入口**：第 3、4、7、8 项，即独立会话搜索、进入会话、图片/文件发送、添加客户。独立搜索/选择及媒体导航还会调用共享的 `Invoke-WeComChatOcr`；添加客户同时使用 `chat_ocr.py` 与 `add_customer_result.py`。
+- **已退役但源码仍含 OCR**：`drivers/ps1/read-session.ps1` 与 `unread-list.ps1` 仍直接调用 OCR，当前同名 TS operation 已不再派发它们；`_common.ps1` 还保留部分旧 OCR 搜索框助手。删除这些文件或函数前须核对发行包与手动调用入口。
+- **发行包依赖**：`clients/runtime-plugin-packaging/package.mjs` 仍为 `wecom` 设置 `ocr: true`，拷入 `ocr-python` 并执行 RapidOCR 启动检查。`wecom-cli/src/platform/localdb/driver.ts` 在发行态也使用该目录下的 `python.exe` 运行本地库解密和查询。因此文本发送虽不调用 OCR 识别，现有发行包仍依赖这份带 OCR 的 Python 资产；移除它之前需给本地库提供可用的 Python 运行环境，再调整打包检查。
+
 ## 与本次故障直接相关
 
 - 17:02 的文本发送：服务端收到旧 OCR 后验 `0/3`、`EXECUTION_UNKNOWN`；0.2.8 发送状态门与稳定会话读取准入不一致。W20 未提交改动已修稳定 `session` 不回退 OCR 后验，但还未独立 CodeReview、打包和真机验证。
