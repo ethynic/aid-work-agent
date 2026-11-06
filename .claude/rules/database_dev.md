@@ -24,7 +24,7 @@
 
 #### 消息表分离规则（web vs 第三方渠道，必须严格遵守）
 
-**`chat_messages` 专供 web 端；`channel_` 前缀的表（`channel_sessions` / `channel_messages` 等）专供第三方渠道（wecom_kf / wecom / wecom_personal_rpa / dingtalk / feishu）。读写都按此分离，严禁混用。**
+**`chat_messages` 专供 web 端；`channel_` 前缀的表（`channel_sessions` / `channel_messages` 等）专供第三方渠道（wecom_kf / wecom / dingtalk / feishu）。读写都按此分离，严禁混用。**
 
 | 来源 | 会话表 | 消息表 | session_id 格式 |
 |------|--------|--------|----------------|

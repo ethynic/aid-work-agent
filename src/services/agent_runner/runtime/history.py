@@ -10,7 +10,7 @@ class SessionHistory:
         self.memory, self.source_type, self.reader = memory, source_type, reader
         self.tolerate_read_failure = tolerate_read_failure
         self.session_kind = session_kind or ("channel" if source_type in {
-            "wecom", "wecom_kf", "wecom_personal_rpa", "feishu", "dingtalk", "channel"} else "web")
+            "wecom", "wecom_kf", "feishu", "dingtalk", "channel"} else "web")
 
     def _detect_source_type(self):
         return self.source_type

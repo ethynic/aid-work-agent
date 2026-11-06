@@ -199,7 +199,7 @@ from .logging import setup_logging     # logging 内部 import src.core.log_rete
                                         # → 触发 src.core/__init__.py → 全套 Agent 启动
 ```
 
-**真实事故**：曾经 `from src.channels.wecom_personal_rpa.archive import wecom_finance_sdk`（一个纯 ctypes 封装）被迫拉起 100+ 个 src 模块、构造 Agent + 27 工具 + 8 子智能体，根因就是 `src.core/__init__.py` 在顶层 import `master_agent`。
+**真实事故**：曾经一个渠道子模块的纯 ctypes 封装 import（经 `src.channels.*.archive` 包）被迫拉起 100+ 个 src 模块、构造 Agent + 27 工具 + 8 子智能体，根因就是 `src.core/__init__.py` 在顶层 import `master_agent`（该渠道已清退，此处保留案例脱敏描述）。
 
 ### 正确做法：模块级 `__getattr__` 懒加载
 
@@ -315,7 +315,6 @@ print('是否拉起 agent:', any('src.core.agent' in m for m in new))
 | `/api/saas/tenant/config-file/{subagent_name}` | 子智能体配置文件下载 |
 | `/api/v1/travel-quote/{vehicles,meals,guides,fees,seasons,kb/attractions,kb/hotels}/export` | 旅游报价 Excel 导出 |
 | `/api/v1/travel-quote/import/template` | 导入模板下载 |
-| `/api/v1/channels/wecom-personal-rpa/files/{file_id}` | RPA 签名文件下载 |
 
 **例外**：`/api/files/{file_id}`（inline 预览）不纳入限速 location，因为聊天图片会并发批量加载，`limit_conn` 并发限制会导致第 3 个请求直接 503、图片挂掉。小文件也基本不受 `limit_rate_after 1m` 影响。
 

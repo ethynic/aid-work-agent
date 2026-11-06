@@ -403,7 +403,7 @@ class ContextCompressionService:
         """从 DB 解析 session 元数据（v3.1 Phase 3；v3.2.1 真正非阻塞）。
 
         - source_type='chat' → 查 chat_sessions 表（SessionDB.get_by_id）
-        - 其他 source_type（wecom_kf/dingtalk/feishu/wecom_personal_rpa）
+        - 其他 source_type（wecom_kf/dingtalk/feishu）
           → 查 channel_sessions 表（CompressionSessionRepository.get_session）
 
         v3.2.1（P0-2）：底层 DB 调用是同步阻塞的（psycopg2），用 asyncio.to_thread
@@ -1203,7 +1203,7 @@ class ContextCompressionService:
           ③ UPDATE 旧 active summary → status='superseded'
           ④ UPDATE compacted=true（按 source_type 分流）：
              - source_type='chat' → UPDATE chat_messages
-             - 其他 source_type（wecom_kf/dingtalk/feishu/wecom_personal_rpa）
+             - 其他 source_type（wecom_kf/dingtalk/feishu）
                → UPDATE channel_messages
         任一步失败 → 整个事务回滚，对外抛异常。
 
@@ -1375,7 +1375,7 @@ class ContextCompressionService:
 
         Args:
             session_id: 会话 ID
-            source_type: 'chat' / 'wecom_kf' / 'dingtalk' / 'feishu' / 'wecom_personal_rpa'
+            source_type: 'chat' / 'wecom_kf' / 'dingtalk' / 'feishu'
 
         Returns:
             (should_compress, reason, session_meta)
@@ -1680,8 +1680,7 @@ class ContextCompressionService:
 
         Args:
             session_id: 会话 ID
-            source_type: 来源类型（chat / wecom_kf / dingtalk / feishu /
-                         wecom_personal_rpa）
+            source_type: 来源类型（chat / wecom_kf / dingtalk / feishu）
 
         Returns:
             session 归属租户的 tenant_id；session 不存在或解析失败时返回 None。

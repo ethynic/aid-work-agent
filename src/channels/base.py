@@ -147,7 +147,7 @@ class ChannelAdapter(ABC):
         - 不支持安全预留的渠道**默认抑制**（本基类实现），绝不降级调
           ``send_message``——否则 verbose 可能占掉 final 的最后一个额度。
 
-        仅 wecom / dingtalk / feishu / wecom_kf / wecom_personal_rpa 覆盖本方法。
+        仅 wecom / dingtalk / feishu / wecom_kf 覆盖本方法。
         """
         return StatusDeliveryResult.suppressed_unsupported(
             "adapter does not support atomic-reserved status send"

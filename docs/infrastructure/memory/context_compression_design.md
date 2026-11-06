@@ -26,7 +26,7 @@
 |---------|------|------------|------|
 | `tr_01a7697db1f24a69` | Web | 103 | 接近模型 token 上限，延迟显著上升 |
 
-对 Web 渠道用户可以「新建对话」规避；但**企业微信客服、企微个人账号 RPA、钉钉、飞书**这类渠道，一个用户在系统里**永远只有一个 session**（绑定的外部 customer_id 唯一），所有对话都堆积在同一个 session 下，几天/几周后上下文必然爆。
+对 Web 渠道用户可以「新建对话」规避；但**企业微信客服、钉钉、飞书**这类渠道，一个用户在系统里**永远只有一个 session**（绑定的外部 customer_id 唯一），所有对话都堆积在同一个 session 下，几天/几周后上下文必然爆。
 
 ### 0.2 既有相关实现（部分覆盖，但不够）
 
@@ -41,7 +41,7 @@
 
 一套**渠道无关**的会话内上下文压缩机制，作用范围：
 - ✅ Web 渠道（SSE）
-- ✅ 企业微信客服、企微个人账号 RPA、钉钉、飞书
+- ✅ 企业微信客服、钉钉、飞书
 - ✅ 主智能体（master）和被委派的子智能体（`delegate_to_subagent`）
 - ❌ 不作用于 STANDALONE 子智能体（它们每次都是无状态执行，无历史）
 
@@ -396,7 +396,7 @@ CREATE TABLE IF NOT EXISTS chat_context_summaries (
     id SERIAL PRIMARY KEY,
     summary_id TEXT UNIQUE NOT NULL,          -- csum_xxxxxxxx 格式
     session_id TEXT NOT NULL,                 -- chat_session.session_id 或 channel_session.session_id
-    source_type TEXT NOT NULL,                -- 'chat' / 'wecom_kf' / 'dingtalk' / 'feishu' / 'wecom_personal_rpa'
+    source_type TEXT NOT NULL,                -- 'chat' / 'wecom_kf' / 'dingtalk' / 'feishu'
     tenant_id TEXT,                           -- 租户隔离
     user_id TEXT,
     subagent_id TEXT,                         -- 关联的子智能体（NULL 表示主智能体）

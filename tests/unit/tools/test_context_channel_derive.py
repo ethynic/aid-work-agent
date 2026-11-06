@@ -29,7 +29,6 @@ def _clean_record_context():
     ("chat", "web"),
     ("wecom", "wecom"),
     ("wecom_kf", "wecom_kf"),
-    ("wecom_personal_rpa", "wecom_personal_rpa"),
     ("dingtalk", "dingtalk"),
     ("feishu", "feishu"),
 ])

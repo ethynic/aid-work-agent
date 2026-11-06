@@ -43,7 +43,7 @@
 | **会话发送封装** | `src/channels/session.py`（`make_send_response`/`send_response`/`process_and_persist`） | **分段信息经 UnifiedResponse 传到 adapter 逐段发送；发送事实在实际发送确认处记录** |
 | 渠道共享渲染 | 新建 `src/channels/ask_render.py` | 按字节分段（逻辑行优先、单行字符边界跨消息、续段题号）、wecom_kf 预算核算 |
 | wecom_kf | `src/channels/wecom_kf/renderer.py`、`budget.py` | **提问分段绕过长图合成**；预算用当前入站 owner 对象 |
-| 五渠道 | `src/channels/{wecom,dingtalk,feishu,wecom_kf,wecom_personal_rpa}/` | 各自发送类型接入 |
+| 渠道 | `src/channels/{wecom,dingtalk,feishu,wecom_kf}/` | 各自发送类型接入（原 wecom_personal_rpa 接入已随渠道清退删除） |
 | 契约登记 | `contracts/runtime-host/v1/` | ask-form / errors DTO schema + fixture（幂等四例），可并入既有 schema 文件结构 |
 | Web 前端 | `frontend/web/api/runner.ts`、`composables/useAgent.ts`、`utils/runnerMessages.ts`、`components/MessageItem.vue`、新建 `components/chat/QuestionCard.vue` | 类型、提交/重试/换键、**卡片绑定原 wait**、历史只读投影、提问卡片、状态机、capabilities 缓存降级 |
 | 通知（Phase 2） | `src/services/agent_runner/event_repository.py`（事务尾登记模式）、`src/background_runner.py` | `runner_waiting_input` 生产者，以原 wait 标识去重 |
@@ -112,14 +112,14 @@
 
 ### WP5 渠道层（五渠道文字问答）
 
-1. **渲染到发送的接线责任（P1-2，实施后口径）**：`runner_agent.py` 渲染提问结构后**不自行承诺送达**——经**既有会话回复封装**（`session.py` 的 `make_send_response` 构造 UnifiedResponse）传到 adapter 发送；**发送事实在实际发送确认处记录**。wecom/dingtalk/feishu 按字节分段逐段发送；kf/RPA 一表单合并为**单条消息**（分段渠道的逐段事实仅适用前者），kf 精简后仍超单条硬限时生成 Markdown 文件（提问确认单.md，临时文件入租户 temp 目录即删）以 file 消息完整发送——**不截断正文冒充完整发送**。
+1. **渲染到发送的接线责任（P1-2，实施后口径）**：`runner_agent.py` 渲染提问结构后**不自行承诺送达**——经**既有会话回复封装**（`session.py` 的 `make_send_response` 构造 UnifiedResponse）传到 adapter 发送；**发送事实在实际发送确认处记录**。wecom/dingtalk/feishu 按字节分段逐段发送；kf 一表单合并为**单条消息**（分段渠道的逐段事实仅适用前者），kf 精简后仍超单条硬限时生成 Markdown 文件（提问确认单.md，临时文件入租户 temp 目录即删）以 file 消息完整发送——**不截断正文冒充完整发送**。
 2. **预算接线**：wecom_kf 核算使用**当前入站 owner 的 `WeComKfReplyBudget` 对象**（单条方案 N=1，提问轮次不为 final 预留——已核实 `reserve_for_final` 仅存在于 verbose 路径，结论回写设计 §11.2）。
-3. `ask_render.py` 渲染规则（**仅适用于分段渠道 wecom/dingtalk/feishu**；kf/RPA 走 `render_single_message` 单条合并）：按实际字节、逻辑行优先、单行字符边界跨消息、续段保留题号/选项号、description 优先省略。kf 精简后仍超单条硬限时由 session 侧生成 Markdown 文件（提问确认单.md，临时文件入租户 temp 目录即删，已登记 file_usage.md）以 file 消息完整发送。
+3. `ask_render.py` 渲染规则（**仅适用于分段渠道 wecom/dingtalk/feishu**；kf 走 `render_single_message` 单条合并）：按实际字节、逻辑行优先、单行字符边界跨消息、续段保留题号/选项号、description 优先省略。kf 精简后仍超单条硬限时由 session 侧生成 Markdown 文件（提问确认单.md，临时文件入租户 temp 目录即删，已登记 file_usage.md）以 file 消息完整发送。
 4. 入站单管线（所有渠道一致，不分投递状态）：隐藏命令 → 精确"跳过"（skip=true）→ Q 编号解析（三分法 + 归一化，协议错误纠正一次）→ 精确"重发/简化"（按发送事实记录续传缺段）→ **其余一律沿现有 reply 路径**。
 5. 受理/应用边界（设计 v6 口径）：受理后暂停旧表单补发；control `consumed` 且快照无 wait → 清理剩余发送记录；被拒且 wait 有效 → 可修正重发。读既有 control 状态 + waiting 快照，无新状态机。
 6. **不新增**渠道队列、独立投递服务或第二套 outbox。
 
-验收（实际发送链路）：**多段提问实际按文本逐段发送（wecom/dingtalk/feishu）**；**kf/RPA 一表单单条到达，kf 超硬限走 Markdown 文件完整发送**；**中途失败只记录已确认段（分段渠道）/单条失败事实（kf/RPA），重发分别续传缺段或整条重发**；wecom_kf 预算核算端到端；五渠道各一例端到端。
+验收（实际发送链路）：**多段提问实际按文本逐段发送（wecom/dingtalk/feishu）**；**kf 一表单单条到达，kf 超硬限走 Markdown 文件完整发送**；**中途失败只记录已确认段（分段渠道）/单条失败事实（kf），重发分别续传缺段或整条重发**；wecom_kf 预算核算端到端；五渠道各一例端到端。
 
 **唯一写入者**：`ask_render.py`、`runner_agent.py` 改动、`session.py` 发送封装接线、wecom_kf renderer/budget 接线归 WP5。
 
@@ -132,7 +132,7 @@
 
 - **发布顺序**：后端（Runner API + Web BFF 同部署单元）全实例健康确认后，再放开前端结构化提交（feature flag）；滚动期以"capabilities 未确认支持 = 文本路径"为基准，不做逐次探测。
 - **回滚**：回滚目标版本需保留 ask 受理能力（处理在途 form wait），或回滚前取消在途 ask 任务。
-- **遗留 P2（登记不阻断，后续顺手收敛）**：capabilities 静态标志在前后端混合版本窗口不实；channel_sessions.metadata 读改写无跨进程锁（单会话串行兜底，模块已声明取舍）；"Q1…" 开头的自然语言会被当作 q1 文字答案（协议模式的显式取舍）。二轮复审已收敛：重发计数双记、结构化提交丢附件、旧 form 发送事实残留、text 题数字误拒、kf/RPA 合并为单条发送。
+- **遗留 P2（登记不阻断，后续顺手收敛）**：capabilities 静态标志在前后端混合版本窗口不实；channel_sessions.metadata 读改写无跨进程锁（单会话串行兜底，模块已声明取舍）；"Q1…" 开头的自然语言会被当作 q1 文字答案（协议模式的显式取舍）。二轮复审已收敛：重发计数双记、结构化提交丢附件、旧 form 发送事实残留、text 题数字误拒、kf 合并为单条发送。
 - **测试装置已知问题**：`test_channel_config_update_wecom_kf` 导入时 pop `DATABASE_URL`，与其他集成文件同批混跑互相干扰——集成测试必须逐文件跑。
 
 ## 4. Phase 2：同源待答可达性（验证角色按实际风险确定）

@@ -130,14 +130,6 @@ Agent Desktop installation identity，不建立浏览器专用长期设备记录
 **清理策略**：通过 `zremrangebyscore` 自动清理过期分数
 **源文件**：`src/api/rate_limit.py`
 
-### 3.4 企业微信个人 RPA 危险 echo 窗口
-
-**存储**：Redis Sorted Set + 内存降级
-**键模式**：`wecom_rpa:self_echo_escape:{tenant_id}:{account_id}`
-**TTL**：600s；判定窗口 300s
-**失效时机**：窗口自动过期；管理员恢复账号时主动清除
-**源文件**：`src/saas/api/wecom_personal_rpa_routes.py`
-
 ---
 
 ## 4. Prompt 版本管理缓存

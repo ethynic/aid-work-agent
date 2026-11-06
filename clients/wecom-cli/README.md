@@ -87,8 +87,9 @@ aid-wecom version [--json]                  # 版本 + provider manifest（含 s
   绝不写 driver-log、绝不存 artifact（probe 无 artifact）；OCR 临时文件固定名、用完即删，
   文件名不含敏感信息。online/offline 状态不返回任何 qr 字段。
 - **待真机复验**：本机开发态已登录，need_login 分支（登出/断网凭据失效场景）未真机实测，
-  代码按 wecom-personal-rpa `wecom-ops.ps1` get_login_state 先例实现（小窗判定 +
-  CopyFromScreen 截图 base64）；上线前需登出企微复验二维码可见性与 hint 判定。
+  实现参照原 wecom-personal-rpa `wecom-ops.ps1` get_login_state 的先例（该脚本已随
+  RPA 清退删除；小窗判定 + CopyFromScreen 截图 base64 思路保留在本 CLI）；
+  上线前需登出企微复验二维码可见性与 hint 判定。
 
 ## 本地库读取（P1b）
 
@@ -563,9 +564,10 @@ tests/            node:test，全部 mock（绝不触达真实企微窗口）
 ## 与相邻项目的关系
 
 - **weixin-cli**：骨架/契约/驱动协议的直接参照（个人微信版）。
-- **wecom-personal-rpa**：被取代对象——wecom-cli 接管其 UI 执行职责
-  （C# 客户端 + `wecom-ops.ps1` 将瘦身为调用本 CLI 的壳）；服务端会话归档
-  （`wecom_personal_rpa` channel 的 outbox/签名/inbox）不动，入站消息不走 CLI。
+- **wecom-personal-rpa**：已全量删除（2026-09-29 废弃，2026-11-05 删除完毕，
+  见 `docs/plans/plan-wecom-personal-rpa-removal.md`）。其 UI 执行职责由
+  runtime + wecom-cli 接管；服务端 `wecom_personal_rpa` channel（outbox/签名/
+  inbox）随清退一并删除，入站消息不再经过该链路。
 
 ## 开发
 

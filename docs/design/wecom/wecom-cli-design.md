@@ -9,9 +9,8 @@
 > 姊妹实现：[weixin-cli 设计](../weixin/weixin-cli-design.md)（操作模式与契约来源）
 >
 > 本文档是 wecom-cli 的唯一现行架构设计文档，整合自已删除的真机探测与方案设计
-> （2026-08-29）、RPA 取代差距分析与实验设计（2026-09-28）两份过程文档及 README
-> 里程碑记录（过程明细见 git 历史；工程内 `clients/wecom-cli/README.md` 保留详细
-> 真机实测叙事）。
+> （2026-08-29）及 README 里程碑记录（过程明细见 git 历史；工程内
+> `clients/wecom-cli/README.md` 保留详细真机实测叙事）。
 
 ## 1. 定位
 
@@ -21,12 +20,10 @@
 （provider_id `ai.aidwork.wecom`，可执行 `aid-wecom`，stdio transport，`local_required`，
 平台 `win32-x64`），操作已登录的企业微信 Windows 客户端（WXWork.exe，5.0.9 系实测）。
 
-与旧 RPA 的关系：**取代 `clients/wecom-personal-rpa` 的 UI 执行职责**——约 5600 行 C#
-工程中真正操作企微的只有 ~770 行 PowerShell；wecom-cli 以 TypeScript Provider + 精简
-驱动承接全部 UI 能力，C# 壳计划瘦身为调用本 CLI 的协议壳（对接尚未落地，见 §10）。
-RPA 已于 2026-09-29 标记废弃（6d48163e：README/STATUS 横幅 + 前端渠道入口移除 +
-激活码管理越权收口）。服务端会话归档栈（`src/channels/wecom_personal_rpa/archive/`）
-不属于本 CLI 职责。
+历史沿革：本项目曾有 C# 形态的企微个人号 RPA 客户端（`clients/wecom-personal-rpa`），
+其中真正操作企微的只有 ~770 行 PowerShell；wecom-cli 以 TypeScript Provider + 精简
+驱动承接了全部 UI 执行职责。该 RPA 已于 2026-09-29 废弃并随清退删除，企业微信
+操作统一走本 CLI。
 
 ## 2. 工程形态与命令面
 
@@ -171,12 +168,12 @@ M11a/b target_name 直达 + Runtime 注册 → M12 add-customer 网络查找重�
 
 1. **常驻/远程 OCR 迁移**：weixin-cli 的 ocr_server.py 常驻进程方案未引入，仍每次
    拉起 python；
-2. **协议壳对接**：wecom-personal-rpa 的 C# 壳未瘦身为调用本 CLI 的壳
-   （wecom-ops.ps1 无 aid-wecom 引用）——RPA 废弃后的最终清退步骤；
-3. 消息 side 判定仍为启发式（不可靠，待决策模型化）；
-4. probe 的 need_login 分支待真机复验（开发机已登录未实测登出场景）；
-5. `dist/` 编译产物时间戳落后 src（2026-09-28 后未重打包）；package.json description
+2. 消息 side 判定仍为启发式（不可靠，待决策模型化）；
+3. probe 的 need_login 分支待真机复验（开发机已登录未实测登出场景）；
+4. `dist/` 编译产物时间戳落后 src（2026-09-28 后未重打包）；package.json description
    仍写 "M1 骨架"。
+
+（原「协议壳对接」遗留项已随 wecom-personal-rpa 客户端清退关闭，不再维护。）
 
 
 ## 11. 群聊实验的输入定位修正（2026-10-23，实施中）

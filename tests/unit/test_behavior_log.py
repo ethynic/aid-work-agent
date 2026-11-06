@@ -145,13 +145,13 @@ async def test_record_behavior_channel_event_semantics():
     with patch("src.services.behavior_log._insert_sync") as mock_insert:
         await record_behavior(
             None, BehaviorAction.CHANNEL_BIND, entry=BehaviorEntry.CHANNEL.value,
-            channel="wecom_personal_rpa", channel_user_id="external_userid_1",
+            channel="wecom_kf", channel_user_id="external_userid_1",
             tenant_id="tenant_1", user_id="user_1",
         )
 
     row = mock_insert.call_args[0][0]
     assert row["entry"] == BehaviorEntry.CHANNEL.value
-    assert row["channel"] == "wecom_personal_rpa"
+    assert row["channel"] == "wecom_kf"
     assert row["channel_user_id"] == "external_userid_1"
     assert row["user_agent"] is None
     assert row["device_info"] == "unknown"

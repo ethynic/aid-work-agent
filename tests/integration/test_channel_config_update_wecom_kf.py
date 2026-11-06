@@ -5,7 +5,7 @@
 丢失（客户扫码链接失效）。修复：update_channel 对 wecom_kf 类型保存时以数据库
 现有 kf_account 为准，账号增删改只走 /wecom-kf/accounts 独立接口。
 
-测试隔离策略（参照 test_channel_config_generate_keypair.py）：
+测试隔离策略（最小 FastAPI app + 依赖 mock）：
 - 最小 FastAPI app + include channel_config.router
 - mock require_admin（鉴权）、ChannelConfigDB（DB 层）、ChannelFactory.invalidate_adapter
 """

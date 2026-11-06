@@ -16,7 +16,6 @@ try:
 except ImportError:  # psycopg2 未安装（开发/测试场景）
     IntegrityError = None  # type: ignore[assignment,misc]
 
-from src.channels.wecom_personal_rpa.archive import credential_codec as rpa_credential_codec
 from src.core import master_agent
 from src.saas.api.tenant_auth import require_admin
 from src.saas.db.channel_config_db import ChannelConfigDB
@@ -56,7 +55,6 @@ class ChannelConfigUpdateRequest(BaseModel):
 
 
 # 各渠道类型必填字段
-# wecom_personal_rpa 走动态校验（见 _validate_rpa_required_fields），不在此静态映射
 _REQUIRED_FIELDS = {
     "wecom": {
         "corp_id": "企业ID（在「我的企业」页面获取，格式 ww 开头）",
@@ -114,18 +112,6 @@ def _attach_wechat_mp_callback_url(request: Request, channel: Optional[dict]) ->
         channel = dict(channel)
         channel["callback_url"] = _build_wechat_mp_callback_url(request, channel["config_id"])
     return channel
-
-
-def _validate_rpa_required_fields(config: dict) -> None:
-    """校验 wecom_personal_rpa 渠道的必填字段。
-
-    根据 listen_mode 动态判断（第一期 MVP 强制 server，client 分支保留为未来开放做准备）。
-    校验失败抛 HTTPException(400)。
-    """
-    missing = rpa_credential_codec.validate_required_fields(config)
-    if missing:
-        detail = "缺少必填字段: " + ", ".join(f"{k}（{v}）" for k, v in missing.items())
-        raise HTTPException(status_code=400, detail=detail)
 
 
 def _validate_wechat_mp_custom_token(config: dict) -> str:
@@ -199,20 +185,16 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
     """新增渠道配置"""
     admin = require_admin(request)
 
-    if body.channel_type not in ("wecom", "wecom_kf", "wecom_personal_rpa", "dingtalk", "feishu", _WECHAT_MP_CHANNEL_TYPE):
+    if body.channel_type not in ("wecom", "wecom_kf", "dingtalk", "feishu", _WECHAT_MP_CHANNEL_TYPE):
         raise HTTPException(status_code=400, detail=f"不支持的渠道类型: {body.channel_type}")
 
-    # wecom_personal_rpa 走动态校验（按 listen_mode），其他渠道走静态必填字段表
-    if body.channel_type == "wecom_personal_rpa":
-        _validate_rpa_required_fields(body.config)
-    else:
-        required = _REQUIRED_FIELDS.get(body.channel_type, {})
-        missing = [f"{k}（{v}）" for k, v in required.items() if not body.config.get(k)]
-        if missing:
-            raise HTTPException(
-                status_code=400,
-                detail=f"缺少必填字段: {', '.join(missing)}",
-            )
+    required = _REQUIRED_FIELDS.get(body.channel_type, {})
+    missing = [f"{k}（{v}）" for k, v in required.items() if not body.config.get(k)]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"缺少必填字段: {', '.join(missing)}",
+        )
 
     # wechat_mp：appid/original_id 可选（空值规整删除）；original_id 有值才校验 gh_
     # 前缀（运行时 callback.py 同为可选旁路校验，留空即跳过）；callback_token 可选
@@ -241,13 +223,8 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
             subagent_type=body.subagent_type,
         )
     except Exception as e:
-        # IntegrityError 为 DB 部分唯一索引拦截（如 wecom_personal_rpa 并发创建同租户第二条）
+        # IntegrityError 为 DB 部分唯一索引拦截（如 wechat_mp 同租户同 appid 并发创建）
         if IntegrityError is not None and isinstance(e, IntegrityError):
-            if body.channel_type == "wecom_personal_rpa":
-                raise HTTPException(
-                    status_code=400,
-                    detail="该租户已有 wecom_personal_rpa 渠道配置，请编辑现有配置切换模式（同租户仅允许一份该类型配置）",
-                )
             if body.channel_type == _WECHAT_MP_CHANNEL_TYPE:
                 raise HTTPException(
                     status_code=409,
@@ -289,10 +266,6 @@ async def update_channel(config_id: str, request: Request, body: ChannelConfigUp
         raise HTTPException(status_code=404, detail="渠道配置不存在")
     if existing["tenant_id"] != admin["tenant_id"]:
         raise HTTPException(status_code=403, detail="无权操作此配置")
-
-    # wecom_personal_rpa 走动态校验（按 listen_mode 判断必填字段）
-    if existing["channel_type"] == "wecom_personal_rpa":
-        _validate_rpa_required_fields(body.config)
 
     # wecom_kf：客服账号（kf_account）由 /wecom-kf/accounts 独立接口管理创建/编辑/删除，
     # 渠道保存只更新凭证、等待提示等渠道级配置。保存时以数据库现有 kf_account 为准，
@@ -388,87 +361,6 @@ async def delete_channel(config_id: str, request: Request):
     return {"success": success}
 
 
-@router.post("/{config_id}/generate-keypair")
-@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.CONFIG, id_arg="config_id")
-async def generate_keypair(config_id: str, request: Request):
-    """为 wecom_personal_rpa 渠道生成 RSA 2048bit 密钥对。
-
-    业务场景：企微会话存档要求企业自己生成 RSA 密钥对，私钥自留解密消息，公钥上传到企微后台。
-    本接口替用户在服务端生成密钥对，私钥 Fernet 加密后入库（不出 API 响应），公钥返回前端展示供用户复制上传企微。
-
-    鉴权：require_admin + 校验租户归属（参照 update_channel 模式）。
-    校验：config 必须存在 + 必须是 wecom_personal_rpa 渠道类型。
-    覆盖语义：若 config.private_key 已有值，覆盖（用户主动点生成就是想换）。
-    """
-    admin = require_admin(request)
-
-    existing = ChannelConfigDB.get_by_id(config_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="渠道配置不存在")
-    if existing["tenant_id"] != admin["tenant_id"]:
-        raise HTTPException(status_code=403, detail="无权操作此配置")
-    if existing["channel_type"] != "wecom_personal_rpa":
-        raise HTTPException(
-            status_code=400,
-            detail=f"仅 wecom_personal_rpa 渠道支持生成密钥对，当前渠道类型: {existing['channel_type']}",
-        )
-
-    try:
-        # RSA 2048bit 生成约 50-200ms 阻塞，丢线程池避免阻塞事件循环（按 backend_dev.md 规范）
-        private_pem, public_pem = await asyncio.to_thread(rpa_credential_codec.generate_rsa_keypair)
-    except Exception as e:
-        logger.error(f"generate_keypair 生成密钥失败 config_id={config_id}: {type(e).__name__}: {e}")
-        return {
-            "success": False,
-            "message": "生成密钥对失败，请稍后重试",
-            "debug": str(type(e).__name__),
-        }
-
-    # 私钥加密入库（覆盖旧值，用户主动点生成就是想换）
-    try:
-        # store_private_key 内部走同步 DB 读写（psycopg2），包 to_thread 避免阻塞事件循环
-        ok = await asyncio.to_thread(rpa_credential_codec.store_private_key, config_id, private_pem)
-    except Exception as e:
-        logger.error(
-            f"generate_keypair 私钥入库失败 config_id={config_id}: {type(e).__name__}: {e}"
-        )
-        return {
-            "success": False,
-            "message": "私钥保存失败，请稍后重试",
-            "debug": str(type(e).__name__),
-        }
-
-    if not ok:
-        # store_private_key 返回 False 通常意味着配置已被删（前面 get_by_id 已校验存在，理论不会发生）
-        raise HTTPException(status_code=500, detail="私钥保存失败：配置可能已被删除")
-
-    # 失效缓存的 adapter（私钥变了，下次回调/拉取需重建）
-    # 按 config_id 精确失效（避免清掉同租户同渠道其他 config 的缓存）
-    try:
-        await ChannelFactory.invalidate_adapter(
-            existing["tenant_id"],
-            existing["channel_type"],
-            config_id=existing["config_id"],
-            close=True,
-        )
-    except Exception as e:
-        logger.warning(f"失效 adapter 缓存失败: {e}")
-
-    logger.info(
-        f"Keypair generated for config_id={config_id} tenant={admin['tenant_id']} "
-        f"(private_key 已加密入库，公钥返回前端)"
-    )
-
-    # public_key_raw：原始 PEM 文本（含真实换行）
-    # public_key：JSON 安全的转义版本（\n 替换真实换行，方便前端直接展示在 textarea 内 value 属性）
-    # 两者内容一致，只是换行表示方式不同；前端按需取用
-    return {
-        "success": True,
-        "public_key": public_pem.replace("\n", "\\n"),
-        "public_key_raw": public_pem,
-    }
-
-
 def _run_wechat_mp_api_check(tenant_id: str, config_id: str, appid: str, secret: str) -> dict:
     """接口通道三步实测（WP9，同步实现，调用方放 asyncio.to_thread）。
 
@@ -528,43 +420,11 @@ def _wechat_mp_api_check_steps(client, steps: list) -> dict:
 @router.post("/{config_id}/verify")
 @audit_action(BehaviorAction.UPDATE, BehaviorResourceType.CONFIG, id_arg="config_id")
 async def verify_channel(config_id: str, request: Request):
-    """验证渠道凭证有效性
+    """验证渠道凭证有效性。
 
-    对 wecom_personal_rpa 类型走专属验证（按 listen_mode 分支）：
-    - server 模式：拉一批密文 + RSA 解密一条 + 自测验签 AES 解密，5 步链路自测
-    - client 模式：函数代码保留，路由层注释（第一期不开放）
-
-    其他渠道走原有 ChannelFactory.create_adapter 路径。
+    wechat_mp 走回调三态 + 接口通道三步实测；其他渠道走 ChannelFactory.create_adapter 路径。
     """
     admin = require_admin(request)
-
-    # wecom_personal_rpa 需要明文凭证做实测，用 get_by_id_decrypted
-    if _is_wecom_personal_rpa(config_id):
-        from src.channels.wecom_personal_rpa.archive import verifier as rpa_verifier
-
-        config = ChannelConfigDB.get_by_id_decrypted(config_id)
-        if not config:
-            raise HTTPException(status_code=404, detail="渠道配置不存在")
-        if config["tenant_id"] != admin["tenant_id"]:
-            raise HTTPException(status_code=403, detail="无权操作此配置")
-
-        config_data = config.get("config") or {}
-        listen_mode = config_data.get("listen_mode", "server")
-
-        if listen_mode == "server":
-            result = await rpa_verifier.verify_archive_server_mode(
-                config_data, admin["tenant_id"]
-            )
-        else:
-            # 第一期永远不会进入此分支（codec 强制 server）
-            # 代码保留为未来开放 client 模式做准备
-            result = await rpa_verifier.verify_archive_client_mode(
-                config_data, admin["tenant_id"]
-            )
-
-        # 根据验证结果更新 verified 字段
-        ChannelConfigDB.set_verified(config_id, bool(result.get("verified")))
-        return result
 
     # wechat_mp：回调三态（config_verified_at / last_event_at / last_error）+（WP9）
     # config 含 appid+secret 时的接口通道三步实测（stable_token → batchget → getarticle）
@@ -631,15 +491,6 @@ async def verify_channel(config_id: str, request: Request):
     except Exception as e:
         ChannelConfigDB.set_verified(config_id, False)
         return {"success": False, "message": f"验证失败: {str(e)}", "verified": False}
-
-
-def _is_wecom_personal_rpa(config_id: str) -> bool:
-    """判断 config_id 对应的配置是否是 wecom_personal_rpa 类型。
-
-    用于 verify 路由分流。查不到配置返回 False（让后续 404 检查处理）。
-    """
-    cfg = ChannelConfigDB.get_by_id(config_id)
-    return bool(cfg and cfg.get("channel_type") == "wecom_personal_rpa")
 
 
 @router.post("/{config_id}/rotate-wechat-mp-token")

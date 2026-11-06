@@ -1,13 +1,13 @@
 """
 ChannelSessionManager.make_send_response 单元测试
 
-背景：本次重构把 6 个渠道调用点（5 个 channel_routes + 1 个 wecom_personal_rpa_routes）
+背景：本次重构把 5 个 channel_routes 渠道调用点
 里重复定义的 _send_response 内联函数收敛到 ChannelSessionManager.make_send_response 工厂方法。
 
 工厂职责：
 - 构造 UnifiedResponse（含 DownloadableFileInfo 转换、extra_content 合并）
 - 调用 adapter.send_message 并把返回值收敛为 bool
-- 可选 pre_send 钩子（RPA 用 set_reply_context 注入）
+- 可选 pre_send 钩子（渠道侧用 set_reply_context 注入）
 - 异常吞掉并返回 False（不让 process_and_persist 上层崩溃）
 
 本测试验证上述契约为何重要——不是单纯复现代码逻辑。
@@ -139,7 +139,7 @@ async def test_extra_content_merged_with_text():
 @pytest.mark.asyncio
 async def test_pre_send_hook_called_once_before_send():
     """
-    RPA 场景：pre_send 钩子（set_reply_context 注入）必须在 send_message 之前被调用一次。
+    pre_send 钩子（唯一投递 ID 注入）必须在 send_message 之前被调用一次。
     用 call_order 验证次序。
     """
     manager = _make_manager()
@@ -158,7 +158,7 @@ async def test_pre_send_hook_called_once_before_send():
         adapter=adapter,
         message_id="event_001",
         reply_to="user_rpa",
-        log_tag="[RPA]",
+        log_tag="[Test]",
         pre_send=pre_send,
     )
 
@@ -255,7 +255,7 @@ async def test_pre_send_exception_returns_false_no_propagation():
     """
     pre_send 钩子抛异常时，callable 必须返回 False 且不向上传播。
 
-    为何重要：RPA 的 set_reply_context 内部可能触发 DB 异常（如租户配置读取失败）。
+    为何重要：pre_send 钩子内部可能触发 DB 异常（如租户配置读取失败）。
     如果异常向上传播到 process_and_persist，会让整条消息处理崩溃；如果异常被吞掉
     但 send_message 仍然继续执行，会因缺少 reply_context 在 adapter 内部失败。
     正确契约是：pre_send 失败 → 整个 send_response 返回 False，由调用方决定后续。

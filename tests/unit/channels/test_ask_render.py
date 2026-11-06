@@ -4,7 +4,7 @@
 - render_segments：逻辑行优先分段、单行超限字符边界跨消息（内容不丢）、
   续段题号/选项号前缀（选项行 ``Q1 选项2（续）``、题头行 ``Q1（续）``）、
   紧凑模式省 description、末行操作提示（allow_skip=false 口径）；
-- render_single_message：kf/RPA 单条合并、超长依次精简 intro → 重复操作
+- render_single_message：kf 单条合并、超长依次精简 intro → 重复操作
   提示 → 选项 description（评审修正 §7.2）；
 - parse_reply 三分法：自然语言 None、协议错误纠正、可解析结构化（选项序号→key、
   题号→question_id）、混合编号+文字、重复选项去重、否定句归自然语言、
@@ -139,7 +139,7 @@ def test_render_segments_empty_form_returns_empty():
     assert ask_render.render_segments({}, 2048) == []
 
 
-# ==================== render_single_message（kf/RPA 单条合并，评审修正 §7.2） ====================
+# ==================== render_single_message（kf 单条合并，评审修正 §7.2） ====================
 
 
 def _single_form():

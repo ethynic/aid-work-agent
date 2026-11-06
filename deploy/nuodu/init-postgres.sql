@@ -1,6 +1,6 @@
 -- PostgreSQL 数据库初始化脚本
 -- 用于 AID Work Agent 数据库初始化
--- 包含核心业务表、SaaS 多租户表，及渠道(wecom_rpa)/社媒/视频/工作报告等全部系统表
+-- 包含核心业务表、SaaS 多租户表，及渠道/社媒/视频/工作报告等全部系统表
 -- 不含 bs_ 开头的业务表（由子智能体初始化时自动创建）
 --
 -- 目标数据库：请勿在本文件中写 \c 切库——历史上这里的 \c 曾把对测试库执行的
@@ -168,7 +168,7 @@ CREATE TABLE IF NOT EXISTS chat_context_summaries (
     id SERIAL PRIMARY KEY,
     summary_id TEXT UNIQUE NOT NULL,          -- csum_xxxxxxxx 格式
     session_id TEXT NOT NULL,                 -- chat_sessions.session_id 或 channel_session.session_id
-    source_type TEXT NOT NULL,                -- 'chat' / 'wecom_kf' / 'dingtalk' / 'feishu' / 'wecom_personal_rpa'
+    source_type TEXT NOT NULL,                -- 'chat' / 'wecom_kf' / 'dingtalk' / 'feishu'
     tenant_id TEXT,                           -- 租户隔离
     user_id TEXT,
     subagent_id TEXT,                         -- 关联的子智能体（NULL 表示主智能体）
@@ -258,7 +258,7 @@ CREATE TABLE IF NOT EXISTS user_behavior_logs (
     error_msg TEXT,                      -- 失败原因（截断 500 字符）
     entry VARCHAR(16),                   -- 入口：web / api / channel（渠道回调），见枚举 BehaviorEntry
     login_method VARCHAR(32),            -- 登录方式：password / sms / sso；仅登录事件有值
-    channel VARCHAR(16),                 -- 渠道：wecom / wecom_kf / wecom_personal_rpa / dingtalk / feishu；仅渠道事件有值
+    channel VARCHAR(16),                 -- 渠道：wecom / wecom_kf / dingtalk / feishu；仅渠道事件有值
     channel_user_id TEXT,                -- 渠道侧用户标识（external_userid 等）；仅渠道事件有值
     token_id TEXT,                       -- 当前 token 的 SHA256 前 8 位（关联登录态，不存原文）
     request_id TEXT,                     -- obs 系统 trace_id，无则 NULL
@@ -821,18 +821,12 @@ CREATE TABLE IF NOT EXISTS tenant_channel_configs (
     config TEXT,
     verified INTEGER DEFAULT 0,
     subagent_type TEXT,
-    mode TEXT,  -- 渠道模式（如 wecom_personal_rpa 的 server/client），历史遗留列
+    mode TEXT,  -- 渠道模式，历史遗留列
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_tenant_channel_configs_tenant ON tenant_channel_configs(tenant_id, channel_type);
-
--- wecom_personal_rpa 渠道单例约束：同 tenant 只能有一份该类型配置
--- （切换 server/client 模式 = 编辑现有配置，不允许创建第二条）
-CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_channel_configs_wecom_personal_rpa
-    ON tenant_channel_configs(tenant_id, channel_type)
-    WHERE channel_type = 'wecom_personal_rpa';
 
 -- wechat_mp 渠道（公众号内容入知识库 WP4）：同租户同 appid 唯一（设计 §4）
 -- config 为 TEXT 列，jsonb 取值需显式 ::jsonb 转换
@@ -1059,129 +1053,6 @@ CREATE TABLE IF NOT EXISTS channel_message_dedup (
     PRIMARY KEY (message_id)
 );
 CREATE INDEX IF NOT EXISTS idx_dedup_created_at ON channel_message_dedup USING btree (created_at);
-
-
--- =================== 渠道系统补充表（wecom_personal_rpa）===================
-CREATE TABLE IF NOT EXISTS wecom_rpa_clients (
-    id TEXT NOT NULL,
-    tenant_id TEXT NOT NULL,
-    user_id TEXT,
-    name TEXT,
-    encrypted_secret TEXT,
-    status TEXT DEFAULT 'active' NOT NULL,
-    min_version TEXT,
-    last_seen_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    agent_base_url TEXT,
-    listen_mode TEXT,
-    PRIMARY KEY (id)
-);
-CREATE INDEX IF NOT EXISTS idx_wecom_rpa_clients_tenant ON wecom_rpa_clients USING btree (tenant_id);
-
-CREATE TABLE IF NOT EXISTS wecom_rpa_accounts (
-    id TEXT NOT NULL,
-    tenant_id TEXT NOT NULL,
-    user_id TEXT,
-    client_id TEXT,
-    display_name TEXT,
-    status TEXT DEFAULT 'offline' NOT NULL,
-    paused_reason TEXT,
-    last_login_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    wecom_user_id TEXT,
-    wecom_user_aliases TEXT[] DEFAULT '{}',
-    identity_verified_at TIMESTAMP,
-    identity_verified_by TEXT,
-    PRIMARY KEY (id)
-);
-CREATE INDEX IF NOT EXISTS idx_wecom_rpa_accounts_tenant_client ON wecom_rpa_accounts USING btree (tenant_id, client_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_wecom_rpa_accounts_tenant_wecom_user ON wecom_rpa_accounts USING btree (tenant_id, wecom_user_id) WHERE (wecom_user_id IS NOT NULL);
-
-CREATE TABLE IF NOT EXISTS wecom_rpa_action_outbox (
-    id TEXT NOT NULL,
-    tenant_id TEXT NOT NULL,
-    user_id TEXT,
-    account_id TEXT NOT NULL,
-    conversation_id TEXT,
-    request_id TEXT NOT NULL,
-    session_id TEXT,
-    actions TEXT,
-    status TEXT DEFAULT 'pending' NOT NULL,
-    attempts INTEGER DEFAULT 0 NOT NULL,
-    next_retry_at TIMESTAMP,
-    completed_at TIMESTAMP,
-    error_message TEXT,
-    dedup_key TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    reply_context JSONB,
-    action_results JSONB DEFAULT '{}' NOT NULL,
-    target_peer_id TEXT,
-    reply_digest TEXT,
-    reply_digests JSONB DEFAULT '[]' NOT NULL,
-    send_started_at TIMESTAMP,
-    UNIQUE (dedup_key),
-    PRIMARY KEY (id)
-);
-CREATE INDEX IF NOT EXISTS idx_wecom_rpa_outbox_recent_echo ON wecom_rpa_action_outbox USING btree (tenant_id, account_id, target_peer_id, completed_at DESC) WHERE (status = 'succeeded'::text);
-CREATE INDEX IF NOT EXISTS idx_wecom_rpa_outbox_status_retry ON wecom_rpa_action_outbox USING btree (status, next_retry_at);
-CREATE INDEX IF NOT EXISTS idx_wecom_rpa_outbox_tenant_account ON wecom_rpa_action_outbox USING btree (tenant_id, account_id);
-
-CREATE TABLE IF NOT EXISTS wecom_rpa_archive_inbox (
-    id SERIAL,
-    tenant_id TEXT NOT NULL,
-    config_id TEXT NOT NULL,
-    event_id TEXT NOT NULL,
-    envelope JSONB NOT NULL,
-    status TEXT DEFAULT 'pending' NOT NULL,
-    attempts INTEGER DEFAULT 0 NOT NULL,
-    claim_token TEXT,
-    error_message TEXT,
-    next_retry_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    completed_at TIMESTAMP,
-    PRIMARY KEY (id),
-    UNIQUE (tenant_id, event_id)
-);
-CREATE INDEX IF NOT EXISTS idx_wecom_rpa_archive_inbox_claim ON wecom_rpa_archive_inbox USING btree (tenant_id, status, next_retry_at, created_at);
-
-CREATE TABLE IF NOT EXISTS wecom_rpa_audit_logs (
-    id TEXT NOT NULL,
-    tenant_id TEXT NOT NULL,
-    user_id TEXT,
-    client_id TEXT,
-    account_id TEXT,
-    action_id TEXT,
-    category TEXT,
-    payload TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (id)
-);
-CREATE INDEX IF NOT EXISTS idx_wecom_rpa_audit_tenant_account ON wecom_rpa_audit_logs USING btree (tenant_id, account_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_wecom_rpa_audit_tenant_category ON wecom_rpa_audit_logs USING btree (tenant_id, category, created_at DESC);
-
-CREATE TABLE IF NOT EXISTS wecom_rpa_conversation_bindings (
-    id TEXT NOT NULL,
-    tenant_id TEXT NOT NULL,
-    user_id TEXT,
-    account_id TEXT NOT NULL,
-    conversation_type TEXT,
-    display_name TEXT,
-    search_key TEXT NOT NULL,
-    stable_id TEXT,
-    status TEXT DEFAULT 'pending' NOT NULL,
-    last_verified_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    monitor_user_names TEXT[] DEFAULT '{}',
-    monitor_user_ids TEXT[] DEFAULT '{}',
-    UNIQUE (account_id, search_key),
-    PRIMARY KEY (id)
-);
-CREATE INDEX IF NOT EXISTS idx_wecom_rpa_bindings_tenant_account ON wecom_rpa_conversation_bindings USING btree (tenant_id, account_id);
 
 
 -- =================== SaaS 多租户补充表（子智能体定义 / 充值 / 桌面客户端）===================

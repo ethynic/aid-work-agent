@@ -2,7 +2,7 @@
 
 按 wait_id 记录，两种粒度（评审修正 §7.2）：
 - 分段渠道（wecom/dingtalk/feishu）：分段全文、已确认发送的段、最近失败原因；
-- 单条渠道（wecom_kf/RPA 等按条数计费渠道）：整条全文、sent 是/否、最近失败
+- 单条渠道（wecom_kf 等按条数计费渠道）：整条全文、sent 是/否、最近失败
   原因——重发=整条重发，不再用逐段 facts。
 两种粒度共有的：重投次数与在途提交（reply control id）。存放于
 ``channel_sessions.metadata`` 的 ``ask_send_facts`` 键——渠道入站与发送路径
@@ -169,7 +169,7 @@ def missing_segments(facts: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
             for index, text in enumerate(facts['segments']) if index not in sent]
 
 
-# ==================== 单条粒度（wecom_kf/RPA 等按条数计费渠道） ====================
+# ==================== 单条粒度（wecom_kf 等按条数计费渠道） ====================
 
 
 def init_single_facts(session_id: str, wait_id: str, text: str) -> None:

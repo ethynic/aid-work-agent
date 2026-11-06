@@ -3,7 +3,6 @@
 承载：
 - APScheduler（系统任务），在其后台线程跑；用户定时任务由 src/scheduler/dispatch.py
   到期循环提交 Runner（asyncio 兄弟任务，不经 APScheduler，2026-10-28 Runner 化）
-- wecom_personal_rpa 服务端会话存档兜底轮询（asyncio 兄弟任务，内部自带 Redis 锁）
 - recap 轮后任务消费者（API worker 入队 Redis，本进程执行，与 HTTP worker 重启解耦）
 - wechat_mp 队列驱动 + 定时复核调度（WP7，asyncio 兄弟任务，内部自带单副本 Redis 锁）
 - 心跳文件（供 healthcheck 判活）
@@ -50,7 +49,7 @@ def _init_resources():
     except Exception as e:
         logger.warning(f"background runner: logs pool init failed (non-critical): {e}")
 
-    # channel 表（wecom_kf 回调 / archive poller 需要）
+    # channel 表（wecom_kf 回调需要）
     try:
         from src.channels.session import channel_session_manager
         channel_session_manager._ensure_tables()
@@ -173,7 +172,7 @@ _recap_bg_tasks: set = set()
 
 
 async def _run():
-    """主协程：初始化 → 启调度器 → 启 poller → 启心跳 → 等停机信号 → 优雅关闭。"""
+    """主协程：初始化 → 启调度器 → 启心跳 → 等停机信号 → 优雅关闭。"""
     logger.info("background runner 启动")
 
     _init_resources()
@@ -182,26 +181,16 @@ async def _run():
     from src.scheduler.manager import scheduled_task_manager
     scheduled_task_manager.start()  # 抢 Redis 锁；失败（已有副本）→ 空转返回
 
-    # 2. archive poller（兄弟异步任务，自带 Redis 锁，不改其内部）
-    _poller = None
-    try:
-        from src.channels.wecom_personal_rpa.archive.poller import poller as _poller
-        await _poller.start()
-    except Exception as e:
-        logger.opt(exception=True).error(
-            f"background runner: archive poller 启动失败（不影响 runner）: {e}",
-        )
-
-    # 3. 心跳
+    # 2. 心跳
     asyncio.create_task(_heartbeat())
 
-    # 4. recap 任务消费者（API worker 入队 Redis、本进程执行，与 HTTP worker
+    # 3. recap 任务消费者（API worker 入队 Redis、本进程执行，与 HTTP worker
     # 重启解耦；多副本下 LPOP 天然单消费者，配 RECAP_TASK_DEDUP 双保险）
     recap_consumer=asyncio.create_task(_recap_consumer())
 
-    # 5. wechat_mp 队列驱动 + 定时复核（WP7；单副本 Redis 锁，抢不到时驱动任务
-    # 仍启动并循环重试接管（幽灵锁自愈）；Redis 不可用时拒绝启动。对齐 poller
-    # 模式 try/except，启动失败不影响 runner）
+    # 4. wechat_mp 队列驱动 + 定时复核（WP7；单副本 Redis 锁，抢不到时驱动任务
+    # 仍启动并循环重试接管（幽灵锁自愈）；Redis 不可用时拒绝启动。沿用
+    # try/except 模式，启动失败不影响 runner）
     _wmp_scheduler = None
     try:
         from src.wechat_mp.scheduler import WeChatMPScheduler
@@ -286,13 +275,7 @@ async def _run():
     if _billing_scheduler is not None:
         await _billing_scheduler.stop()
 
-    # 停机：poller → wechat_mp scheduler → tencent_docs 调度器 → hongtao_shop scheduler → scheduler → DB 池
-    try:
-        if _poller is not None:
-            await _poller.stop()
-    except Exception as e:
-        logger.warning(f"background runner: poller stop 异常: {e}")
-
+    # 停机：wechat_mp scheduler → tencent_docs 调度器 → hongtao_shop scheduler → scheduler → DB 池
     try:
         if _tdoc_scheduler is not None:
             await _tdoc_scheduler.stop()
@@ -332,7 +315,7 @@ async def _run():
 
 
 def main():
-    """入口：主线程 asyncio loop 承载 poller + 心跳；信号经 call_soon_threadsafe 唤醒 Event。"""
+    """入口：主线程 asyncio loop 承载调度器 + 心跳；信号经 call_soon_threadsafe 唤醒 Event。"""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 

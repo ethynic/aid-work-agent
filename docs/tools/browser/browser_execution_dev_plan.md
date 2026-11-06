@@ -332,4 +332,3 @@ Phase 3R 实施按项目三智能体流程串行执行：开发与自测 → 独
 - 不在首期支持 Linux 桌面客户端。
 - 不把 CDP/Playwright endpoint 暴露公网。
 - 不在此次顺便重写语义快照或更换 Browser Agent 框架。
-- 不修改、不引用、不复用 `clients/wecom-personal-rpa/` 的工程、协议、身份或发布产物。

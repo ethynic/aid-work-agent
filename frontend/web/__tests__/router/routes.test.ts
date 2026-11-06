@@ -52,7 +52,6 @@ describe('entry route responsibilities', () => {
         "monitoring/:session_id",
         "monitoring/trace/:trace_id",
         "context-compression",
-        "rpa-bindings",
         "wechat-mp",
         "redis-cache",
       ]
@@ -70,7 +69,6 @@ describe('entry route responsibilities', () => {
         "channels",
         "wechat-mp",
         "hongtao-shop",
-        "wecom-personal-rpa",
         "settings",
         "notification-rules",
         "local-tools",

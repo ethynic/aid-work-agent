@@ -632,7 +632,7 @@ async def get_trace_detail(
             )
 
             # 渠道来源时，跨库补充 channel_sessions 业务信息（失败不影响 trace 返回）
-            if trace.source_type in ('wecom', 'wecom_kf', 'dingtalk', 'feishu', 'wecom_personal_rpa'):
+            if trace.source_type in ('wecom', 'wecom_kf', 'dingtalk', 'feishu'):
                 try:
                     from src.db.database import get_db_connection
                     with get_db_connection() as biz_cur:

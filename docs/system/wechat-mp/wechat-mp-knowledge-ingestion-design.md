@@ -42,7 +42,7 @@
 | 能力 | 复用点 |
 |------|--------|
 | 租户凭据存储 | `tenant_channel_configs` 表 + `/api/saas/channels/*` + `ChannelConfig.vue`（新增 channel_type=`wechat_mp`） |
-| 敏感字段加密 | 现有 `src/channels/wecom_personal_rpa/secret_crypto.py` 的 Fernet；公共模块尚不存在，需要最小抽取并保留旧导入兼容，不复制密钥策略 |
+| 敏感字段加密 | Fernet 加解密统一走公共模块 `src/core/secret_crypto.py`（已从原渠道模块抽取落地），不复制密钥策略 |
 | 调度 | `src/scheduler/manager.py` APScheduler + Redis 分布式锁（对齐 crawler `job_system_crawler_tick` 模式） |
 | 知识库入库 | `TextChunker` / `TextEmbeddingV3Client` / `get_vector_db` / documents+chunks+chunks_vec 三表单事务 |
 | 分类体系 | `knowledge_categories` 树（`parent_id`），文档落 `source_type`（顶级）+ `sub_category` |

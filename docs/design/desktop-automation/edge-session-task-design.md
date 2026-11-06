@@ -318,7 +318,7 @@ opening 不调用模型，不占 max_decisions，照常预留发送次数/费用
 
 ### 13.3 受控存储和未验证绑定（B6–B7）
 
-服务端加密明确复用 `src/channels/wecom_personal_rpa/secret_crypto.py` 的 `encrypt_secret/decrypt_secret`（后者返回 bytes，UTF-8 解码）；`src/weixin_marketing/event_sources.py` 已有跨模块调用先例。不得把营销素材引用本身当加密。沿既有主密钥配置，不新增算法/派生方案；缺密钥拒绝本功能发布，解密失败 blocked，不降级明文。模块关闭不能导致整个应用启动失败。
+服务端加密明确复用 `src/core/secret_crypto.py` 的 `encrypt_secret/decrypt_secret`（后者返回 bytes，UTF-8 解码）；`src/weixin_marketing/event_sources.py` 已有跨模块调用先例。不得把营销素材引用本身当加密。沿既有主密钥配置，不新增算法/派生方案；缺密钥拒绝本功能发布，解密失败 blocked，不降级明文。模块关闭不能导致整个应用启动失败。
 
 C1 新建 `session_task_texts`：`text_id, tenant_id, task_id, purpose, encrypted_payload, created_at`，复合唯一 `(tenant_id, task_id, text_id)`；purpose 枚举 spec/message/decision/event/summary。payload 为加密 JSON 字符串，存 goal、policy、completion 中自然语言、opening、消息正文、回复及理由。spec/messages/decisions/events 的对应字段存同租户同任务 FK 引用；公开计数/状态/limits 可明文，列表摘要由授权服务端解密后生成，不另存明文副本。text_ref 为 text_id，不是公开 URL 或文件路径。读前统一查 task 租户及属主，后台 worker 仅能读取其已领取任务；设备仅取当前有效 assignment 所需内容。日志/错误不得包含解密值；底座 payload 使用已有鉴权 serve_payload，不复制到普通日志或公开素材库。
 

@@ -12,7 +12,7 @@
 - 生产部署：单容器 `aid-agent-api`，Gunicorn + UvicornWorker（默认 9 worker），入口固定 `gunicorn src.main:app`。
 - 后台任务分两类：
   - **APScheduler**（`src/scheduler/manager.py`）：靠 Redis 分布式锁，仅抢到锁的 1 个 worker 启动调度器，承载用户 cron 任务 + 每日记忆总结 + 上下文压缩扫描。**但调度器线程仍跑在那个 HTTP worker 进程内。**
-  - **`asyncio.create_task` 循环**（main.py lifespan）：5 个循环（memory/dedup/kf-timeout/rpa-poller/instance-lock）每个 worker 都跑一份（#38 待处理）。
+  - **`asyncio.create_task` 循环**（main.py lifespan）：4 个循环（memory/dedup/kf-timeout/instance-lock）每个 worker 都跑一份（#38 待处理）。
 
 ### 1.2 问题（用户定调）
 后台定时任务与 FastAPI worker 绑定：
@@ -64,7 +64,7 @@
           └── BackgroundScheduler（Redis 锁单实例）
                 ├── 系统任务：每日记忆总结 / 上下文压缩扫描
                 ├── 用户定时任务（原 ScheduledTaskExecutor 槽位，lazy 加载 master_agent；2026-10-28 起 Runner 化为 dispatch 到期循环）
-                ├── 迁入循环：memory_cleanup / dedup_cleanup / wecom_kf_timeout / rpa_archive_poller
+                ├── 迁入循环：memory_cleanup / dedup_cleanup / wecom_kf_timeout
                 └── S1 发布调度：PublishJobDispatcher（每分钟）
 ```
 
@@ -85,7 +85,7 @@
 | PublishJobDispatcher（S1） | background runner | **P0（本期随 S1）** |
 | 每日记忆总结 / 上下文压缩扫描 | background runner | P0（已是 APScheduler 系统任务，随进程迁移） |
 | 用户定时任务（原 ScheduledTaskExecutor） | background runner | P0 随进程迁移；2026-10-28 起 Runner 化为 dispatch 到期循环（见[定时任务重构设计](../system/scheduled-task-runner-refactor-design.md)） |
-| memory_cleanup / dedup_cleanup / wecom_kf_timeout / rpa_archive_poller（#38 的 5 循环） | background runner | P1（#38 迁移工作，独立于 S1） |
+| memory_cleanup / dedup_cleanup / wecom_kf_timeout（#38 循环，原 rpa_archive_poller 随渠道清退删除） | background runner | P1（#38 迁移工作，独立于 S1） |
 | instance_lock_cleanup | 删除（#38 已定） | P1 |
 | session_queue heartbeat watchdog | 留在 HTTP worker（与 request 生命周期绑定） | 不动 |
 

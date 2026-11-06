@@ -25,13 +25,13 @@ from typing import Any, Dict, List, Optional
 import psycopg2.extras
 from loguru import logger
 
-from src.channels.wecom_personal_rpa.secret_crypto import decrypt_secret, encrypt_secret
+from src.core.secret_crypto import decrypt_secret, encrypt_secret
 from src.db.database import get_db_connection
 from src.services import wecom_bot
 
 NOTIFY_KINDS = ("pre", "done")
 
-# 掩码前缀（与 wecom_personal_rpa credential_codec 范式一致：***+末4位）
+# 掩码前缀（渠道凭据 codec 通用范式：***+末4位）
 _MASK_PREFIX = "***"
 
 

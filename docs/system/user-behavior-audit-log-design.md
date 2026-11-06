@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS user_behavior_logs (
     error_msg TEXT,                      -- 失败原因（截断 500 字符）
     entry VARCHAR(16),                   -- 入口：web / api / channel（渠道回调），见枚举 BehaviorEntry
     login_method VARCHAR(32),            -- 登录方式：password / sms / sso；仅登录事件有值
-    channel VARCHAR(16),                 -- 渠道：wecom / wecom_kf / wecom_personal_rpa / dingtalk / feishu；仅渠道事件有值
+    channel VARCHAR(16),                 -- 渠道：wecom / wecom_kf / dingtalk / feishu；仅渠道事件有值
     channel_user_id TEXT,                -- 渠道侧用户标识（external_userid 等）；仅渠道事件有值
     token_id TEXT,                       -- 当前 token 的 SHA256 前 8 位（关联登录态，不存原文）
     request_id TEXT,                     -- obs 系统 trace_id，无则 NULL
@@ -208,7 +208,7 @@ UA 来源只有两种（web 前端、微信/钉钉/飞书内置浏览器），�
 飞书、钉钉、企微、企微客服（wecom_kf）渠道会话**没有登录步骤**，用户直接对话。处理原则：
 
 - **渠道对话本身不逐条入行为日志**——与不在 `chat_records` 逐条记 IP/UA 同理，高频重复无审计价值。渠道侧的用户触达追溯由会话/消息表承担。
-- **有审计价值的渠道事件**：渠道账号绑定/解绑（action=`channel_bind` / `channel_unbind`，Phase 1 随认证事件落地）、个人微信 RPA 账号上下线等低频状态事件。渠道配置类变更已归管理后台 CRUD 范围。
+- **有审计价值的渠道事件**：渠道账号绑定/解绑（action=`channel_bind` / `channel_unbind`，Phase 1 随认证事件落地）等低频状态事件。渠道配置类变更已归管理后台 CRUD 范围。
 - **字段语义**（渠道事件）：
 
   | 字段 | 取值 |
@@ -253,8 +253,8 @@ API 设计（已实现）：`GET /api/admin/behavior-logs`（租户管理员/平
 | 阶段 | 内容 | 说明 |
 |------|------|------|
 | Phase 1 | 表 + 写入模块 + 登录/登出/改密/渠道绑定事件全量挂点 | ✅ 已完成（80b1c0d3）。渠道绑定挂点留 Phase 3（现有绑定走回调链路自动创建，挂点会双写） |
-| Phase 2 | `audit_action` 装饰器挂平台管理员 `/api/saas/*` CRUD | ✅ 已完成（2026-09-06，三智能体流程通过）。实际范围按 §2 表格含 `/api/admin/*` 平台管理员端点；共 75 端点挂点（saas/api 15 文件 + api 4 文件）。装饰器实施时增强 4 处：Request 识别加 isinstance 防误拿同名 Pydantic body、name_arg 扫描任意参数名的 Pydantic body、同步 def 路由经 `asyncio.to_thread` 执行、业务级 `{"success": False}` 返回记失败；UPDATE 动作自动记 body 字段名列表（`exclude_unset`）入 detail。BehaviorResourceType 新增 9 细分值（activation_code / client_binding / rpa_client / channel_account / external_customer / reply_style / skill / error_log / knowledge_share），前后端同步 |
-| Phase 3 | 租户管理员 `/api/admin/*` CRUD + 普通用户动作 | ✅ 已完成（2026-09-06，三智能体流程通过）。实际挂点 15 端点：prompt_management 租户级 router（/api/prompts）5 端点、session.py 会话创建/重命名/删除 3 端点（消息级高频操作不记）、knowledge/api.py 上传/批量上传/删除/移动 + 分类增删改 7 端点、memory.py 长期记忆编辑、email_settings.py 邮箱凭证删除。BehaviorResourceType 新增 `knowledge_category`。实施决策：①「批量删除会话」端点实际不存在，未实现（batch_delete 暂无使用点）；②wecom_personal_rpa_admin 11 端点装饰器与内部 write_audit（wecom_rpa_audit_logs，服务独立 RPA 审计页）双写保留——两表受众不同（平台统一审计 vs RPA 业务审计页），存储成本可忽略；③渠道回调路径（channel_routes/wecom_personal_rpa_routes 的 write_audit）不挂装饰器；④测试根级 conftest.py 增加 autouse fixture mock `_insert_sync` 防测试脏数据 |
+| Phase 2 | `audit_action` 装饰器挂平台管理员 `/api/saas/*` CRUD | ✅ 已完成（2026-09-06，三智能体流程通过）。实际范围按 §2 表格含 `/api/admin/*` 平台管理员端点；共 75 端点挂点（saas/api 15 文件 + api 4 文件）。装饰器实施时增强 4 处：Request 识别加 isinstance 防误拿同名 Pydantic body、name_arg 扫描任意参数名的 Pydantic body、同步 def 路由经 `asyncio.to_thread` 执行、业务级 `{"success": False}` 返回记失败；UPDATE 动作自动记 body 字段名列表（`exclude_unset`）入 detail。BehaviorResourceType 新增细分值（activation_code / client_binding / channel_account / external_customer / reply_style / skill / error_log / knowledge_share；原 rpa_client 已随企微个人号 RPA 清退删除），前后端同步 |
+| Phase 3 | 租户管理员 `/api/admin/*` CRUD + 普通用户动作 | ✅ 已完成（2026-09-06，三智能体流程通过）。实际挂点 15 端点：prompt_management 租户级 router（/api/prompts）5 端点、session.py 会话创建/重命名/删除 3 端点（消息级高频操作不记）、knowledge/api.py 上传/批量上传/删除/移动 + 分类增删改 7 端点、memory.py 长期记忆编辑、email_settings.py 邮箱凭证删除。BehaviorResourceType 新增 `knowledge_category`。实施决策：①「批量删除会话」端点实际不存在，未实现（batch_delete 暂无使用点）；②（已随企微个人号 RPA 清退删除：原 wecom_personal_rpa_admin 11 端点装饰器与 wecom_rpa_audit_logs 双写不再存在）；③渠道回调路径（channel_routes 的 write_audit）不挂装饰器；④测试根级 conftest.py 增加 autouse fixture mock `_insert_sync` 防测试脏数据 |
 | Phase 4 | 管理后台查询页面 | ✅ 已完成（2026-09-06，三智能体流程通过）。后端 `src/api/behavior_logs.py` 2 个查询 API（admin 端租户隔离取 request.state、platform 端仅 platform_admin 全局视图）；前端 `BehaviorLogs.vue` 单组件双视角（scope prop）+ portalRoutes/agentRoutes 路由 + PortalLayout/MenuSidebar 菜单；不登记 page_metadata.yaml（管理页惯例，见 §7 偏差说明）；20 个集成测试（双租户隔离实测）+ 前端 288 测试全绿 |
 
 **回滚安全**：写入失败不影响业务；下线只需移除装饰器与显式调用，表保留。

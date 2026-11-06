@@ -30,7 +30,7 @@
 - Agent 内核、独立服务与 Web 接入已完成；微信客服已按原渠道恢复方案接入。飞书、钉钉后续逐个接入，分别验证原渠道行为与服务调用，综合验收继续覆盖现有客户工具链。
 - 已完成的重构范围是 Agent 执行内核及 Runner 服务职责。后续渠道仅调整对话调用边界、必要的身份映射和结果转换，保留渠道实现、界面及用户操作；不得据此重写回调、消息调度、媒体处理、历史或发送流程，也不新增暂停/继续等用户操作作为接入条件。
 - 客户正在使用的 Runtime + BOSS CLI 是本地工具执行链路，必须保持兼容，不要求客户为此次服务拆分重新安装、配对或修改配置。
-- 定时任务、调试 CLI、企微个人 RPA、桌面 D1、Runtime 自动会话决策不迁移，保留原有流程（定时任务已于 2026-10-28 单独 Runner 化为 scheduled 来源，见[定时任务重构设计](scheduled-task-runner-refactor-design.md)）；未来自有客户端预留相同接口。
+- 定时任务、调试 CLI、桌面 D1、Runtime 自动会话决策不迁移，保留原有流程（定时任务已于 2026-10-28 单独 Runner 化为 scheduled 来源，见[定时任务重构设计](scheduled-task-runner-refactor-design.md)）；未来自有客户端预留相同接口。（企微个人 RPA 已于 2026-11 清退删除，不涉及迁移）
 
 已完成的重构包括主/子 Loop 共用内核、上下文/工具/生命周期分离，以及持久执行、恢复和事件订阅。后续渠道复用这些能力；不捆绑渠道业务重写、通知中心、其他入口服务化或大规模分布式调度。
 
@@ -294,7 +294,7 @@ Agent 执行结束和平台消息送达是两个事实。平台发送失败不�
 
 **Runner 集成**：Runner worker 执行时以 `iter_with_verbose_feedback` 包装 runtime 事件流（`surface="web"|"channel"`，`src/services/agent_runner/worker.py`）；渠道级 verbose 配置经请求 `request_data.verbose_feedback` 传入并与全局配置合并（`force_disabled` 取或）。每轮状态（event/emitted/response_started/closed）在 owner 生命周期创建一次，session queue 取消/合并导致的 attempt 重跑不重置，因此累计仍最多一条。
 
-**渠道投递**（`src/channels/verbose_dispatcher.py`，渠道侧沿用原流程）：容量 1 的 dispatcher 串行发送，DB batch 前 drain 冻结投递状态；发送走 adapter 低优先级 `send_status_message(reserve_for_final=1)`——限流判定与扣减必须原子完成并为最终正文预留额度，不支持安全预留的 adapter 默认抑制（`suppressed_rate_limit`），不能降级调用普通 `send_message` 挤占 final 额度。微信客服由 owner 级回复预算（单次咨询 5 条）同时约束 verbose 与 final：正文优先、长内容合成长图或截断、超预算资产记 `suppressed_reply_budget` 不发送。verbose 失败为 best-effort，不影响工具执行与最终回复；不调用 `mark_responding`，不改变 cancel/merge 语义。企微个人 RPA 的 outbox 幂等键使用唯一 delivery_id（`{event_id}:verbose:1` / `{event_id}:final`），不能复用 `UnifiedResponse.message_id`。
+**渠道投递**（`src/channels/verbose_dispatcher.py`，渠道侧沿用原流程）：容量 1 的 dispatcher 串行发送，DB batch 前 drain 冻结投递状态；发送走 adapter 低优先级 `send_status_message(reserve_for_final=1)`——限流判定与扣减必须原子完成并为最终正文预留额度，不支持安全预留的 adapter 默认抑制（`suppressed_rate_limit`），不能降级调用普通 `send_message` 挤占 final 额度。微信客服由 owner 级回复预算（单次咨询 5 条）同时约束 verbose 与 final：正文优先、长内容合成长图或截断、超预算资产记 `suppressed_reply_budget` 不发送。verbose 失败为 best-effort，不影响工具执行与最终回复；不调用 `mark_responding`，不改变 cancel/merge 语义。
 
 **配置**（`agent.verbose_feedback`，Pydantic 强类型）：`force_disabled=true` 为最高优先级 kill switch（请求/渠道/旧配置均不可覆盖）；其余优先级为请求级 → 渠道级 → 微信客服旧 `waiting_indicator` 兼容映射（`enabled=false` 或 `delay<=0` 视为关闭，`message` 映射 fallback）→ 全局 → 代码默认。默认 `enabled=true`（2026-09-01 产品决策，替代原灰度策略）。kill switch 在 owner 创建与 dispatcher 发送前各读一次；不支持热加载时改配置需重启。可观测性经 feedback observer 记录 source、time-to-first、delivery outcome、suppressed reason 与文本长度（不记全文），结束时合并进 trace metadata。
 
@@ -415,3 +415,31 @@ Agent/AgentRunner 重构已完成。后续接入工作复用现有独立服务�
 7. 按2026-10-22用户补充，浏览器/CDP故障默认自动恢复：先核验并重试页面步骤，再重连、重建tab或按原受权profile重开浏览器，回指定职位/筛选页面并复用已完成结果。tab/session可重建，业务身份保持；CLI当前调用内确定性退避，Reader保留半批资料，Runtime独立续租，不引入新调度器。诊断不可用不阻止确定性恢复，真实登录/人工验证依赖保留可恢复状态，用户明确停止或撤权时不得重开。旧调用release固定；需新版插件时，旧执行收尾后在原会话建立新版接续执行。具体规则以[BOSS设计W节](../design/recruiting/boss-overlay-heal-design.md#w-浏览器cdp故障自动恢复2026-10-22用户补充待实施)及计划4.6～4.7为准。
 
 如实施需改公开恢复动作、CLI回执或outbox持久格式，先按[共同契约](runner-desktop-runtime-integration-contract.md)登记版本、唯一写入者和生产/消费/存量兼容；CLI内部重试不为此额外改wire或增加授权账。验收只保留计划第6节六个业务场景，内部异常由开发按修改自动化回归；CLI按受影响路径独立验证交付。声明“原会话已恢复”须覆盖原故障状态，新会话成功不能替代。过度门禁删减及CLI具体改动以计划3.2、5.3为准。
+
+## 10. Runner 执行槽隔离与运行告警（2026-11-05，待开发）
+
+本节是[Excel 阻塞事故](../incidents/excel-process-shared-runner-blocking-20261105.md)之后的 **Runner 级执行槽隔离**方案，实施进度见[开发计划](../plans/plan-runner-execution-slot-isolation-and-alerts.md)。2026-11-06 独立架构评审后，保留隔离目标，改为 Worker 自行领取与恢复、独立小进程补续租；不逐个改造已实现工具。Excel 读取算法由另一任务修复，不属于本计划。以下均为待开发设计，不表示当前生产已具备多槽或告警能力。
+
+### 10.1 执行与管理边界
+
+- 一个执行槽对应一个独立 Worker 容器，Worker 内根 Runner 并发数固定为 1，常驻进程顺序复用。Worker 保留现有 `_acquire_next()`、恢复核验、浏览器 owner、Engine/工具、状态提交、计费和 Trace 的所有权；不把领取与恢复逻辑迁给监督进程。不同 Runner 的执行上下文、控制和 Trace 继续逐次创建和清理。槽数不预设为 4；先在 agent2 用实际模型与混合工具负载测量，再结合正式服 CPU、内存、数据库及模型限额决定配置，不能按内存倍数机械换算。
+- 每个 Worker 容器另有一个轻量监督进程，与执行进程分属不同操作系统进程。监督进程启动 Worker 时给它本次唯一的 `worker_id`，只确认进程存活，并查询数据库中仍由这个进程持有的准确 `runner_id + attempt + worker_id` 来补续租。Worker 仍自行领取任务；领取事务一旦提交，监督进程即可从数据库发现该 attempt，无需另发领取通知。续租每次核对数据库归属，不凭进程存活自行认定执行权。Worker 原有暂停、取消读取和安全点处理不迁移到监督进程；同步工具占住 Worker 事件循环时不能宣称控制已完成。
+- 监督进程只在执行进程仍存活、数据库归属有效时续租；业务终态或持久等待/休眠提交后，按原规则停止该 attempt 的续租。数据库状态不能证明本次 `execute()` 已返回。为保留已确认的两分钟收尾上限，Worker 在开始执行前把共享槽位状态置为 `BUSY(runner_id, attempt)`，在 `execute()` 的 `finally`（包括原有 Trace 和清理）全部返回后、领取下一任务前置为 `IDLE`。监督进程只在数据库显示同一 attempt 已提交业务结束状态、共享状态仍是对应 `BUSY` 时，从首次观察到该组合起计时；看到 `IDLE` 或另一 attempt 的 `BUSY` 就清除旧计时。共享状态更新与两分钟后的回收决定由同一跨进程锁串行化，回收时在锁内再次核对当前 `BUSY` 身份，避免误杀已经空闲或开始下一任务的 Worker。领取与补租仍以数据库为准，共享状态只用于判断进程是否卡在本次收尾。
+- Worker 的原有终态、计费、Trace 和资源清理顺序不变；在本次 `execute()` 全部返回前不接下一任务。收尾超过两分钟且上述身份复核通过时，监督进程回收旧 Worker、确认其退出，再以新 `worker_id` 启动进程；已提交的业务结果和计费不回退，Trace 或清理可能不完整。运行中的工具不因时长被终止。启用自动回收前，按 §10.3 停止新任务使用 `browser_automation`，并核对当前 Worker 没有其它跨任务保留的进程内资源；用户确认该浏览器工具无历史运行，不为其增加存量迁移。若资源归属无法确认，本次不自动回收，标记槽位不可用并告警；未来新增这类资源时须先复核回收条件。
+- 执行进程异常退出后监督进程立即停止续租，丢弃旧进程的共享槽位状态，并以新 `worker_id` 启动新进程；旧 Runner 沿现有租约过期、中断和外部效果核验路径处理，不因进程重启自动重放。监督进程作为容器主进程，其自身退出不能留下继续执行而无人续租的子进程。一个 Worker 被同步工具占住不妨碍其它空槽领取、续租和完成 Runner；所有槽都被占用时新任务仍排队，告警不自动终止正在执行的任务。
+- 每槽设置 CPU、内存上限，额度与槽数通过 agent2 压测确定，并为 API、数据库及其它服务留余量。容器上限是最大占用而非预留内存。进程隔离不消除共享数据库、模型服务或整机资源故障。
+
+### 10.2 只读运行告警
+
+- 监控程序 B 使用同一镜像部署为单进程的独立 `runner-monitor` 小容器；它不进入 `runner-api` 的 HTTP 执行循环，也不调用 Worker。每分钟从数据库读取当前仍在执行的有限 Runner 及未结束告警的小量状态，按“当前数据库时间－本次领取开始时间”判断。由 Worker 在各类领取事务中写入本次起点，覆盖普通排队、控制恢复、定时唤醒和持续任务；不从会变化的 `updated_at` 推算。Runner 提交完成或持久等待/休眠等本次执行结束状态时停止计时并结束告警，历史保留。状态提交后的 Trace/清理收尾不计入长时间执行告警。任务醒来重新领取即重新计时；中间模型或工具步骤不重置计时。B 只处理有限当前状态，数据库操作设置有界超时；进程退出由容器重启策略拉起。单行 `agent_runner_monitor_status` 记录最近成功扫描时间，超过 3 分钟未成功扫描时 Portal 显示监控停滞；容器 healthcheck 也核对该时间，但不把 Docker 的 `unhealthy` 状态误称为自动重启能力。
+- 默认本次连续执行 30 分钟报警；Portal 支持按 `(tenant_id, profile_id)` 覆盖。配置修改在下一轮扫描生效，包括正在执行的 Runner。正常长任务也可能报警，这是“运行较久，需关注”，不是故障判定；只展示与通知，不自动处置。
+- 告警以 `runner_id + attempt` 唯一。B 扫描到候选后，在写入事务中锁定并重读该 Runner，核对 attempt、本次领取起点、当前阈值以及状态仍为 `running`/`finalizing` 且已达到阈值；不满足就不创建当前运行告警。满足时在同一事务内插入 `agent_runner_alerts` 和一条通知事件，重复扫描靠唯一键复用；事务要么同时提交两者，要么都不提交。结束状态提交后标记告警结束，历史保留。告警表是 Portal 的权威来源，既有通知表负责外发重试；飞书发送结果不明后可能出现少量群消息重复。一分钟采样只保证扫描时仍在执行且达到阈值的任务被记录；两次扫描之间越过阈值又结束的执行可能没有告警。
+- 平台事件定为 `runner.long_running`，`producer=runner-monitor`，`event_key=runner_id + ':' + attempt`，`scope_key='global'`、`tenant_id=NULL`、`recipient_user_id=NULL`、`policy_key='platform_runner_alert'`。复用 `notification_messages` 现有事件级唯一键 `(scope_key, producer, event_key)`；告警事务对已有告警也查询或插入同一个事件，取得同一 `notification_ref`，不创建第二个逻辑通知。不能给现有只接受租户 ID 的 `publish_event_in_tx()` 填入虚构租户；为平台事件增加单独发布入口与事件模板。
+- 平台管理员在 Portal 告警设置中管理唯一的平台飞书目标：`notification_targets` 的 `scope_key='global'`、`tenant_id=NULL`、`recipient_user_id=NULL`、`channel='im_webhook'`、`provider='feishu_bot'`、固定 `installation_ref='runner_alert_platform'`，现有活动安装唯一约束保证至多一个活动目标，凭据按原加密及脱敏规范保存。设置和读取接口只接受平台管理员，且处于平台上下文，不接受租户代管上下文。通知展开按 `platform_runner_alert` 单独选取此目标，生成至多一条 `notification_deliveries`；发送前也只允许此平台目标与平台事件配对，不走租户规则、租户目标或个人偏好。未配置目标时事件仍写入，展开状态记为 `expanded`，路由快照记 `platform_target_missing` 且无投递行；后续配置目标不追发旧事件。目标被撤销、更换或失效时保留现有 `skipped`/`failed` 投递状态与原因，不改写 Portal 告警，也不把旧事件改投其它租户目标。投递程序继续使用现有飞书适配器。
+- Portal 本期新增独立的 **Runner 告警** 页面，展示当前与历史告警及监控最近成功扫描时间。飞书只发 Runner ID、租户标识、数字员工、执行时长和登录后 Portal 详情链接，不发送用户、原问题、模型返回或上下文。页面按 Runner ID 查询完整原问题与 checkpoint 中已保存的最近一次模型返回及上下文，沿用平台管理员权限与既有脱敏规范，标明数据时间与缺失情况，不分析“已完成步骤/当前步骤”，也不把上下文重建称作精确原始请求。模型要求调用工具的返回先于工具派发落 checkpoint，故本次 Excel 一类“工具开始后卡住”的场景可读取该模型返回。未来平台运行工作台的其它指标汇总不在本期范围。
+
+### 10.3 工具目录、兼容及验证
+
+`browser_automation` 从新任务可见的工具目录移除并标记废弃；用户已确认该工具没有历史使用，不为其设计历史任务迁移。当前 `create_browser_tools()` 只提供这一项服务端浏览器工具，移除后新任务不再获得这项能力，这是用户确认的产品决定。同步清点 `src/skills/` 中引用该名称的运行时指引（当前已知 `competitor-research-1.0.0`），更新或停用相应指引，避免新任务仍被提示调用废弃工具。先完成下线及跨任务进程内资源核对，再启用 §10.1 的收尾超时回收；不连带删除已交付 Runtime/CLI 的浏览器能力或其它浏览器流程。其它业务工具继续按原接口执行，无工具级统一子进程改造。
+
+服务端改动保持已交付 Runtime/CLI 的原有工具、任务恢复、结果上报和计费能力；新能力不要求旧客户端升级。验收至少覆盖：一个同步工具长时间占用单个 Worker 超过现有 30 秒租约时，另一个 Worker 仍能自行领取、续租和完成任务，原 attempt 不被误接管；普通领取、恢复、唤醒和持续任务均保持原 Worker 资格核验；暂停/取消在原安全点传达；同一 Worker 顺序复用不同租户 Runner 而上下文互不串用，业务终态、计费和 Trace 保持原路径；收尾卡住时只回收共享状态仍为同一 attempt 的进程，不误杀已空闲或已领取新任务的 Worker；执行进程异常退出停止补租、换新 `worker_id`，保留 checkpoint 和未知外部效果核验，不自动重放；告警写入前二次核验执行状态，与通知事件同事务唯一写入；平台事件不能流入租户目标，飞书不含原问题；监控进程停滞在 Portal 可见。容量与资源上限在 agent2 分级压测，部署须另获用户当场明确指示。

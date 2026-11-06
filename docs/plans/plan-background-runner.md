@@ -28,7 +28,7 @@
    - `src/subagents/executor.py`：子智能体异步执行，单 session 内执行，**不外置**。
    - `src/saas/api/channel_routes.py`：渠道消息后台处理，每个请求独立，**不外置**。
    - `src/core/session_queue.py` watchdog：与 request 生命周期绑定的锁续期，**留 HTTP worker**（§8 排除项已明确）。
-   - `src/channels/wecom_personal_rpa/archive/poller.py`：已迁入 background（§3.3）。
+   - ~~`src/channels/wecom_personal_rpa/archive/poller.py`~~：曾迁入 background（§3.3），已随企微个人号 RPA 渠道清退删除。
 
 ---
 
@@ -124,14 +124,7 @@ async def _run():
     # 1. APScheduler（线程化，非阻塞）
     from src.scheduler.manager import scheduled_task_manager
     scheduled_task_manager.start()             # 抢 Redis 锁；失败(已有副本)→return 空转
-    # 2. archive poller（兄弟异步任务，自带 Redis 锁）
-    _poller = None
-    try:
-        from src.channels.wecom_personal_rpa.archive.poller import poller as _poller
-        await _poller.start()
-    except Exception as e:
-        logger.error(f"archive poller 启动失败（不影响 runner）: {e}", exc_info=True)
-    # 3. 心跳
+    # 2. 心跳
     asyncio.create_task(_heartbeat())
     logger.info("background runner 就绪")
     await _stop.wait()
@@ -329,7 +322,7 @@ except Exception as e:
 |---|---|---|
 | A. APScheduler 系统任务 | ① 每日记忆总结 ② 上下文压缩扫描 | ❌ standalone |
 | B. APScheduler 用户任务 | ③ 用户前端定时任务 | ✅ 执行时 |
-| C. 原 main.py 循环 | ④ memory_cleanup ⑤ dedup_cleanup ⑥ wecom_kf_timeout ⑦ rpa_archive_poller | ④⑦✅ ⑤⑥❌ |
+| C. 原 main.py 循环 | ④ memory_cleanup ⑤ dedup_cleanup ⑥ wecom_kf_timeout（原 ⑦ rpa_archive_poller 已随渠道清退删除） | ④✅ ⑤⑥❌ |
 | D. HTTP 请求级 | ⑧ session_queue watchdog | — 留 worker |
 
 ### 7.2 一次性迁移后的影响（无中间态）
@@ -341,7 +334,6 @@ except Exception as e:
 | ④ memory_cleanup | background APScheduler interval | 低-中（需 master_agent） |
 | ⑤ dedup_cleanup | background APScheduler cron | ✅ 低（无 master_agent） |
 | ⑥ wecom_kf_timeout | background APScheduler interval | ⚠️ 中（需 ChannelFactory 验证） |
-| ⑦ rpa_archive_poller | background asyncio 兄弟任务 | ⚠️ 高（inbound 可能触发 agent + asyncio 停机） |
 | ⑧ session watchdog | 不动 | ✅ 无 |
 
 > 一次性完成后，**HTTP worker 不再跑任何后台任务**（纯 HTTP），所有后台任务在 background 单实例运行，#38 多 worker 重复执行问题彻底消除。

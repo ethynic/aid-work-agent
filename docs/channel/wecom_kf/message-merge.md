@@ -1,6 +1,6 @@
 # wecom_kf 消息合并处理机制
 
-> 本文记录 wecom_kf（企业微信客服）渠道在「用户连续发送多条文本/语音消息」场景下的合并处理逻辑，以及开发过程中踩过的坑，供其他渠道（wecom / dingtalk / feishu / wecom_personal_rpa）借鉴。
+> 本文记录 wecom_kf（企业微信客服）渠道在「用户连续发送多条文本/语音消息」场景下的合并处理逻辑，以及开发过程中踩过的坑，供其他渠道（wecom / dingtalk / feishu）借鉴。
 
 ## 1. 问题背景
 
@@ -310,7 +310,6 @@ async def _processor(cancel_check, user_input_override=None):
 | wecom | ✅ 推荐 | 同上 |
 | dingtalk | ⚠️ 视场景 | 钉钉机器人无硬性回复限额，但合并可避免多轮误判 |
 | feishu | ⚠️ 视场景 | 同 dingtalk |
-| wecom_personal_rpa | ✅ 推荐 | RPA 模拟人工操作，合并可减少 LLM 调用次数 |
 
 ### 9.2 复用 `session_queue` 的最小条件
 
@@ -325,7 +324,6 @@ async def _processor(cancel_check, user_input_override=None):
 - **wecom_kf**：语音需 ASR（阿里云），SILK 格式需先解码为 WAV；附件存 `storage/tenants/{tid}/conversation/`
 - **wecom**：企业微信自建应用，语音自带 `recognition` 字段，无需 ASR
 - **dingtalk/feishu**：无语音 ASR 需求，但文本合并逻辑可直接复用
-- **wecom_personal_rpa**：RPA 场景下回复延迟较高，合并窗口可适当调大
 
 ### 9.4 合并窗口调优
 

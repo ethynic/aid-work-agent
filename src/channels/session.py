@@ -90,8 +90,9 @@ def _invoke_pre_send(pre_send: Callable[..., Any], delivery_id: str) -> None:
     """按 pre_send 签名注入 delivery_id（设计 §9.4 唯一投递 ID）。
 
     兼容两种钩子形态：``pre_send()``（既有零参 lambda，行为不变）与
-    ``pre_send(delivery_id)``（企微个人 RPA 等需要把唯一投递 ID 写入
-    set_reply_context(request_id=...) 的渠道）。签名解析失败时回退零参调用。
+    ``pre_send(delivery_id)``（需要把唯一投递 ID 写入外发上下文的渠道——
+    该形态源于已清退的企微个人号 RPA set_reply_context(request_id=...)）。
+    签名解析失败时回退零参调用。
     """
     try:
         takes_arg = False
@@ -1591,7 +1592,7 @@ class ChannelSessionManager:
             reply_to: 回复目标（用户/群会话ID）
             extra_content: 额外的 content 字段（如 dingtalk 的 conversation_type）
             log_tag: 日志前缀（如 "[Tenant WeCom]"）
-            pre_send: 发送前的钩子（如 RPA 的 set_reply_context 注入）。支持两种签名：
+            pre_send: 发送前的钩子。支持两种签名：
                       ``pre_send()``（零参，行为不变）或 ``pre_send(delivery_id)``
                       （接收唯一投递 ID ``{message_id}:final``，设计 §9.4）
             reply_budget: 可选 owner 级回复预算（如 wecom_kf WeComKfReplyBudget），
@@ -1660,10 +1661,11 @@ class ChannelSessionManager:
 
         async def _dispatch_ask_segment(text: str, index: int) -> bool:
             """单段按渠道对应发送方法投递（wecom=markdown、dingtalk=sampleMarkdown、
-            feishu=post、wecom_kf/RPA=text）。改动收口在本层，不进各 adapter 分支。"""
+            feishu=post、wecom_kf=text）。改动收口在本层，不进各 adapter 分支。"""
             if pre_send is not None:
-                # RPA 等按段注入投递上下文：每段独立 delivery id（幂等键分离，
-                # 后段不会被 outbox 去重吞掉）。
+                # 需要注入投递上下文的渠道按段注入：每段独立 delivery id
+                # （幂等键分离，后段不会被渠道侧去重吞掉；机制源于已清退的
+                # 企微个人号 RPA 渠道）。
                 _invoke_pre_send(pre_send, f"{message_id}:final:seg{index}")
             if hasattr(adapter, "send_ask_segment"):
                 # wecom_kf：纯文本直发（绕过 renderer 长图合成），成功一段扣 1 预算。
@@ -1676,7 +1678,7 @@ class ChannelSessionManager:
             if hasattr(adapter, "send_long_message"):
                 # 飞书：markdown 经 builder 自动转 post（拆分逻辑复用既有实现）。
                 return bool(await adapter.send_long_message(text, reply_to))
-            # 兜底（RPA 等仅有 send_message 的渠道）：单段构造 UnifiedResponse。
+            # 兜底（仅有 send_message 的渠道）：单段构造 UnifiedResponse。
             content: Dict[str, Any] = {"text": text}
             for key, value in (extra_content or {}).items():
                 if not str(key).startswith("_"):
@@ -1689,7 +1691,7 @@ class ChannelSessionManager:
         async def _send_ask_segments(payload: Dict[str, Any]) -> bool:
             """结构化提问发送（分段/单条 → 发送 → 事实记录的实际接线）。
 
-            - 单条渠道（kf/RPA，payload.single=True）：一表单一条消息，预算核算
+            - 单条渠道（kf，payload.single=True）：一表单一条消息，预算核算
               N=1，事实为单条粒度（sent 是/否 + 失败原因；重发=整条重发）；
             - 分段渠道（wecom/dingtalk/feishu）：首次投递按 adapter 现有配置重排
               分段（runner_agent 渲染用渠道默认上限，配置覆盖时以 adapter 为准），
@@ -1750,7 +1752,7 @@ class ChannelSessionManager:
 
         async def _send_ask_single(payload: Dict[str, Any], items: List[Dict[str, Any]],
                                    wait_id: str, session_id: str) -> bool:
-            """单条渠道（kf/RPA）发送：一表单一条消息（评审修正 §7.2）。
+            """单条渠道（kf）发送：一表单一条消息（评审修正 §7.2）。
 
             - 首次投递：按 adapter 现有上限重排单条合并文本（超长依次精简
               intro/重复操作提示/选项 description），先登记单条事实（零预算场景
@@ -1759,8 +1761,7 @@ class ChannelSessionManager:
             - 重发：整条重发（不再重排），重投次数记一次。
             - 仍超渠道单条硬限：kf 生成 Markdown 文件（提问确认单.md）以
               既有 file 消息完整发送（题号/选项完整；临时文件入租户 temp
-              目录即删；失败如实记失败事实允许重发）；RPA 沿用 send_message
-              既有超 2000 字自动分段 actions，不在此预截断。
+              目录即删；失败如实记失败事实允许重发）。
             """
             from src.channels import ask_delivery, ask_render
 
@@ -1817,7 +1818,7 @@ class ChannelSessionManager:
                         session_id, wait_id, "over channel limit and no file fallback")
                 logger.error(f"{log_tag} 提问超渠道单条上限且无文件发送能力，不发送")
                 return False
-            # RPA 等无条数配额的渠道超限时，沿用其 adapter 既有的自动分段兜底
+            # 无条数配额的渠道超限时，沿用其 adapter 既有的发送方式兜底
             # （单条长度限制按实际渠道处理，内容不丢）。
             try:
                 ok = await _dispatch_ask_segment(text, 0)
@@ -1863,7 +1864,6 @@ class ChannelSessionManager:
             extra_content: 额外 content 字段（如 dingtalk conversation_type，
                      保证群聊投递目标/conversation type 与 final 一致）
             pre_send: 发送前钩子，接收 delivery_id ``{eventId}:verbose:1``
-                     （RPA set_reply_context 用）
             reply_budget: wecom_kf owner 级回复预算（可选）
             reserve_for_final: 最终交付预留条数；KF 完整文件交付使用 2，其他渠道默认 1
         """

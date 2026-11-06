@@ -90,7 +90,7 @@ class CompressionMetrics:
                    - fallback: 摘要 LLM 失败，走降级路径
                    - skipped: check_threshold 未通过（本轮未触发）
                    - failed: compress_now 抛异常
-            source_type: 渠道来源（chat / wecom_kf / dingtalk / feishu / wecom_personal_rpa）
+            source_type: 渠道来源（chat / wecom_kf / dingtalk / feishu）
 
         v3.2.1 P1-4：Redis 路径改用 HINCRBY 原子自增，消除并发 read-modify-write
         在多 worker 高并发下的计数丢失。Redis 不可用时仍走内存兜底（不保证跨

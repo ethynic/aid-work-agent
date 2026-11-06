@@ -319,7 +319,7 @@ class ChannelRunnerAgent:
             ask_delivery.clear_submission(session_id, wait_id)
         single_text = ask_delivery.single_message(facts)
         if single_text is not None:
-            # 单条粒度（kf/RPA）：整条重发，无逐段 facts
+            # 单条粒度（kf）：整条重发，无逐段 facts
             if facts.get('sent'):
                 return AgentResponse('提问内容此前均已发送；如仍需查看，请直接回复文字说明具体问题。')
             missing = [{'index': 0, 'text': single_text}]
@@ -337,7 +337,7 @@ class ChannelRunnerAgent:
     def _ask_wait_response(self, wait):
         """提问等待的出站响应：form → 发送结构（不预判送达）；无 form 退回 question。
 
-        按条数计费渠道（kf/RPA）：一表单合并为一条消息（single 载荷）；分段渠道
+        按条数计费渠道（kf）：一表单合并为一条消息（single 载荷）；分段渠道
         按字节分段。旧 runner 兼容：wait 无 form（旧 clarify）时行为与历史逐字节一致。
         """
         question = wait.get('question') or ''

@@ -8,9 +8,10 @@
   ``Q1 选项2（续）``，题头行续段为 ``Q1（续）``）；紧凑模式（省 description）
   作为压缩手段。题干与选项内容**永不丢失**——「不截断」指不丢内容，允许
   一行跨消息（设计 v6 口径）。
-- ``render_single_message``：**按条数计费/限制**的渠道（wecom_kf / RPA，见
-  ``SINGLE_MESSAGE_SOURCES``）把 AskForm 合并为**一条消息**整体发送，超长时
-  依次精简 intro、题头重复操作提示、选项 description（评审修正 §7.2）。
+- ``render_single_message``：**按条数计费/限制**的渠道（见
+  ``SINGLE_MESSAGE_SOURCES``，现为 wecom_kf）把 AskForm 合并为**一条消息**整体
+  发送，超长时依次精简 intro、题头重复操作提示、选项 description（评审修正
+  §7.2）。
 - ``parse_reply``：入站单管线的解析半边（三分法）：
   * 无编号协议特征 → 自然语言，返回 ``None``（调用方沿既有 reply 路径透传）；
   * 明确使用协议（出现题号）但含无法解释项（未知题号、越界选项、同题矛盾等）
@@ -28,14 +29,11 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 # 各渠道默认分段字节上限（设计 §2.3；session 发送侧会用 adapter 现有配置覆盖）。
-# wecom_personal_rpa 平台口径为 2000 字符；UTF-8 字节数 ≥ 字符数，按 2000 字节
-# 分段可保证每段 ≤ 2000 字符（保守但不超限）。
 _SOURCE_SEGMENT_LIMITS = {
     'wecom': 2048,
     'dingtalk': 4000,
     'feishu': 4000,
     'wecom_kf': 2048,
-    'wecom_personal_rpa': 2000,
 }
 
 
@@ -46,7 +44,7 @@ def source_segment_limit(source: str) -> int:
 
 # 按条数计费/限制回复条数的渠道：AskForm 整体渲染为一条消息发送（评审修正 §7.2），
 # 不按题拆段、不为多段维护续传/额度管理。
-SINGLE_MESSAGE_SOURCES = frozenset({'wecom_kf', 'wecom_personal_rpa'})
+SINGLE_MESSAGE_SOURCES = frozenset({'wecom_kf'})
 
 
 def _blen(text: str) -> int:
@@ -267,13 +265,12 @@ _SINGLE_STAGES = (
 
 
 def render_single_message(form: Dict[str, Any], limit_bytes: int) -> str:
-    """AskForm → 单条合并文本（wecom_kf/RPA 等按条数计费渠道，评审修正 §7.2）。
+    """AskForm → 单条合并文本（wecom_kf 等按条数计费渠道，评审修正 §7.2）。
 
     一表单渲染为一条消息整体发送，不按题拆多条。超长时依次精简 intro、
     题头重复操作提示、选项 description（保留问题、必要选项与清晰编号）；
     全部阶段后仍超 limit_bytes 时返回最简文本，由 session 发送侧按渠道
-    既有完整展示方式兜底（kf 生成 Markdown 文件以 file 消息完整发送、
-    RPA 既有超长自动分段）。
+    既有完整展示方式兜底（kf 生成 Markdown 文件以 file 消息完整发送）。
     """
     limit = int(limit_bytes)
     if limit < 64:

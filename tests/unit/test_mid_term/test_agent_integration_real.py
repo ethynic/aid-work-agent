@@ -180,7 +180,7 @@ def test_build_messages_real_code_call_args_to_get_active_summary():
 
     # 验证 source_type 路由：返回特定值，看是否被传给 get_active_summary
     captured = {"sid": None, "st": None}
-    agent = _make_history(fake_memory, "wecom_personal_rpa")
+    agent = _make_history(fake_memory, "wecom_kf")
 
     import src.services.agent_runner.runtime.history as agent_mod
     mp = pytest.MonkeyPatch()
@@ -199,7 +199,7 @@ def test_build_messages_real_code_call_args_to_get_active_summary():
     try:
         agent._build_messages("my_sess")
         assert captured["sid"] == "my_sess"
-        assert captured["st"] == "wecom_personal_rpa"
+        assert captured["st"] == "wecom_kf"
     finally:
         mp.undo()
 

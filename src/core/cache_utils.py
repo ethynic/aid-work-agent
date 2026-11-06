@@ -53,7 +53,6 @@ class CacheKeys:
     # 空转重试；多副本部署时只允许一个副本驱动任务循环，其余副本空转等待）
     WECHAT_MP_SCHEDULER_LOCK = "wechat_mp_scheduler_lock"        # 公众号内容调度器驱动锁（src/wechat_mp/scheduler.py）
     HONGTAO_SHOP_SCHEDULER_LOCK = "hongtao_shop_scheduler_lock"  # hongtao_shop 调度器驱动锁（src/tenant_custom/hongtao_shop/scheduler.py）
-    WECOM_RPA_SELF_ECHO_ESCAPE = "wecom_rpa:self_echo_escape"  # :{tenant_id}:{account_id}（ZSET，危险 echo 五分钟窗口）
     BROWSER_RUN = "browser_run"              # browser_run:{tenant_id}:{run_id}
     BROWSER_OWNER = "browser_owner"          # browser_owner:{tenant_id}:{run_id}
     BROWSER_CONTROL = "browser_control"      # browser_control:{tenant_id}:{run_id}

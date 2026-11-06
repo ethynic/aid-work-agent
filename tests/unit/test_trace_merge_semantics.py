@@ -13,7 +13,7 @@ from src.services.session_record import SessionRecordService
 
 def test_collector_and_record_service_write_structured_merge_metadata():
     record = SessionRecordService("sid", "user", "input", tenant_id="t1")
-    collector = TraceCollector("sid", "t1", "user", "input", "wecom_personal_rpa")
+    collector = TraceCollector("sid", "t1", "user", "input", "wecom_kf")
     record.trace_collector = collector
     with patch("src.core.trace_persist.update_trace_metadata") as update:
         record.set_trace_merge_semantics(
@@ -31,13 +31,13 @@ def test_failed_trace_is_never_interrupted_even_with_explicit_reason():
     assert not is_interrupted_trace({
         "metadata": {"termination_reason": "message_merged"},
         "status": "failed",
-        "source_type": "wecom_personal_rpa",
+        "source_type": "wecom_kf",
     })
 
 
 def test_strict_historical_interrupted_fallback_and_exclusions():
     base = {
-        "metadata": {}, "status": "completed", "source_type": "wecom_personal_rpa",
+        "metadata": {}, "status": "completed", "source_type": "wecom_kf",
         "subagent_id": None, "error_message": None, "output": None,
         "user_message_id": None,
     }
@@ -79,7 +79,7 @@ def test_update_before_insert_is_replayed_by_trace_upsert():
         "merge_role": "merged_follower"
     }
 
-    trace = TraceCollector("sid", "t1", "user", "input", "wecom_personal_rpa").trace
+    trace = TraceCollector("sid", "t1", "user", "input", "wecom_kf").trace
     trace.trace_id = "tr_race"
     persist_cursor = MagicMock()
     with patch("src.db.database.get_logs_connection", return_value=_logs_cm(persist_cursor)):

@@ -61,8 +61,9 @@ def final_delivery_id(event_id: str) -> str:
 def verbose_delivery_id(event: Dict[str, Any]) -> str:
     """verbose 出站投递 ID：``{event_id}:verbose:1``（MVP 每轮最多一条，固定序号 1）。
 
-    企微个人 RPA 的 outbox 幂等键由 request_id 派生；verbose 与 final 必须使用
-    不同 delivery_id，否则后发消息会被 outbox 去重吞掉（设计 §3.3 陷阱 B）。
+    verbose 与 final 必须使用不同 delivery_id——该约定源于已清退的企微个人号
+    RPA 渠道（其 outbox 幂等键由 request_id 派生，同键后发消息会被 outbox
+    去重吞掉，设计 §3.3 陷阱 B），现作为通用投递约定保留。
     """
     event_id = str((event or {}).get("eventId") or "verbose")
     return f"{event_id}:verbose:1"

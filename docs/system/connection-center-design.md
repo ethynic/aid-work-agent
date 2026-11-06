@@ -35,7 +35,7 @@
 
 **关键借鉴**：
 - **作用域**：选 workspace 级（即租户级），租户管理员配置一次，全员可用--对齐 Dify 模式
-- **加密**：Fernet AES-128（项目已有 `wecom_personal_rpa/secret_crypto.py` 可复用）
+- **加密**：Fernet AES-128（项目已有 `src/core/secret_crypto.py` 可复用）
 - **测试连接**：每个连接器提供「测试连接」按钮，调用最小请求验证
 - **配置 schema**：JSON Schema 描述配置项，前端动态渲染表单（对齐 Dify/Coze）
 
@@ -66,7 +66,7 @@ src/
 │   ├── subagent_env_var.py         # 复用
 │   └── connector_config.py        # 【新】连接器配置 DB 层
 ├── core/
-│   └── secret_crypto.py           # 【新】公共加密模块（抽取自 wecom_personal_rpa）
+│   └── secret_crypto.py           # 【新】公共加密模块（自渠道模块最小抽取）
 ├── connectors/                    # 【新】内置连接器目录
 │   ├── base.py                    # BaseConnector 基类 + ConnectorRegistry
 │   ├── tavily.py
@@ -146,12 +146,12 @@ CREATE INDEX IF NOT EXISTS idx_tenant_connector_configs_tenant ON tenant_connect
 
 ### 3.2 加密模块抽取
 
-新建 `src/core/secret_crypto.py`，从 `src/channels/wecom_personal_rpa/secret_crypto.py` 抽取 `encrypt_secret` / `decrypt_secret` 函数：
+新建 `src/core/secret_crypto.py`，从渠道侧模块抽取 `encrypt_secret` / `decrypt_secret` 函数（已落地）：
 
 - **算法**：Fernet（AES-128-CBC + HMAC-SHA256）
 - **主密钥环境变量优先级**：`APP_SECRET_KEY` > `RPA_SECRET_KEY`（向后兼容，现有部署不改）
 - **缺失时**：抛 `RuntimeError`（启动安全，与现状一致）
-- **`wecom_personal_rpa/secret_crypto.py` 改造**：改为 `from src.core.secret_crypto import encrypt_secret, decrypt_secret`，保留旧环境变量回退
+- **原渠道侧 `secret_crypto.py` 改造**：改为 `from src.core.secret_crypto import encrypt_secret, decrypt_secret`，保留旧环境变量回退（原渠道已清退，公共模块保留）
 
 **API 返回掩码**：列表查询时对 `encrypted_secret` 解密后做掩码处理（`sk-***...***ab12` 格式），不返回明文。
 
@@ -338,7 +338,7 @@ async def list_configs(request_admin: dict = Depends(require_admin)):
 |------|------|------|
 | 环境变量 API | `src/api/subagent_env_var.py` | Tab 2 直接复用 |
 | API 配置文件 API | `src/api/tenant_config_file.py` | Tab 1 直接复用 |
-| 加密能力 | `src/channels/wecom_personal_rpa/secret_crypto.py` | Phase 2 抽取到 `src/core/secret_crypto.py` 后复用 |
+| 加密能力 | `src/core/secret_crypto.py` | 公共 Fernet 模块（已抽取落地） |
 | 鉴权 | `src/saas/api/tenant_auth.py:require_admin` | 新 API 直接复用 |
 | 前端菜单模式 | `MenuSidebar.vue:116-132`（「知识中心」模式） | 照搬 |
 | 前端路由模式 | `router/agentRoutes.ts:77-153` | 加一条 child route |

@@ -27,7 +27,7 @@ try {
   extractAll(asarPath, temporary)
   const renderer = path.join(temporary, 'dist', 'renderer')
   const stack = [renderer]
-  const forbidden = /portal_token|portalRoutes|TenantDashboard|AgentDefinitionManager|RpaBindingPanel|BEGIN (RSA |EC )?PRIVATE KEY/i
+  const forbidden = /portal_token|portalRoutes|TenantDashboard|AgentDefinitionManager|BEGIN (RSA |EC )?PRIVATE KEY/i
   while (stack.length) {
     const current = stack.pop()
     for (const entry of readdirSync(current, { withFileTypes: true })) {

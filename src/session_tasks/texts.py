@@ -1,6 +1,6 @@
 """受控文本存储（C1，设计 §13.3）。
 
-复用 src/channels/wecom_personal_rpa/secret_crypto 的 Fernet 实现（主密钥
+复用 src/core/secret_crypto 的 Fernet 实现（主密钥
 settings.app.secret_key → RPA_SECRET_KEY，缺失抛错、不降级明文）。普通计数/
 状态/limits 明文存列；goal/policy/completion 自然语言/opening/消息正文/决策
 正文一律走本模块：text_ref = session_task_texts.id（UUID），不是 URL/路径。
@@ -18,7 +18,7 @@ from .constants import ERR_CRYPTO_UNAVAILABLE, TEXT_PURPOSES, SessionTaskError
 
 
 def _crypto():
-    from src.channels.wecom_personal_rpa.secret_crypto import decrypt_secret, encrypt_secret
+    from src.core.secret_crypto import decrypt_secret, encrypt_secret
 
     return encrypt_secret, decrypt_secret
 

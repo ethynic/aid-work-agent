@@ -10,7 +10,7 @@
 
 import sys
 import types
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -116,10 +116,10 @@ class TestBackgroundRunnerImportSafety:
 # ==================== background_runner._run 轻量流程（mock）====================
 
 class TestBackgroundRunnerRun:
-    """验证 _run 协程：初始化 → 启调度器 → 启 poller → 启心跳 → 停机"""
+    """验证 _run 协程：初始化 → 启调度器 → 启心跳 → 停机"""
 
-    def test_run_starts_scheduler_and_poller_then_stops(self, tmp_path, monkeypatch):
-        """_run 应启动 scheduler + poller，并在 _stop.set 后优雅关闭"""
+    def test_run_starts_scheduler_then_stops(self, tmp_path, monkeypatch):
+        """_run 应启动 scheduler，并在 _stop.set 后优雅关闭"""
         import asyncio
         from src import background_runner
 
@@ -129,14 +129,9 @@ class TestBackgroundRunnerRun:
         monkeypatch.setattr(background_runner, "HEARTBEAT_FILE", str(tmp_path / ".bg_runner_alive"))
 
         mock_manager = MagicMock()
-        mock_poller = MagicMock()
-        # poller 的 start/stop 是 async，必须用 AsyncMock 才能被 await
-        mock_poller.start = AsyncMock()
-        mock_poller.stop = AsyncMock()
 
         with patch("src.background_runner._init_resources", return_value=None), \
-             patch("src.scheduler.manager.scheduled_task_manager", mock_manager), \
-             patch("src.channels.wecom_personal_rpa.archive.poller.poller", mock_poller):
+             patch("src.scheduler.manager.scheduled_task_manager", mock_manager):
 
             # 在后台跑 _run，然后触发停机
             async def _driver():
@@ -150,5 +145,3 @@ class TestBackgroundRunnerRun:
 
         mock_manager.start.assert_called_once()
         mock_manager.shutdown.assert_called_once()
-        mock_poller.start.assert_awaited_once()
-        mock_poller.stop.assert_awaited_once()

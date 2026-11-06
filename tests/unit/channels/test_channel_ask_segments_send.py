@@ -1,12 +1,12 @@
 """make_send_response 结构化提问发送接线测试（WP5，设计 §7.2 / 计划 §WP5 P1-2）。
 
 覆盖：
-- 分段渠道（wecom=markdown / dingtalk=sampleMarkdown / RPA 兜底=send_message）：
+- 分段渠道（wecom=markdown / dingtalk=sampleMarkdown / 通用兜底=send_message）：
   逐段调用渠道对应发送方法，发送事实在实际发送确认处记录（成功一段记一段，
   失败停止并记原因）；渠道配置覆盖按 adapter 现有 max_bytes 重排分段；
-- 单条渠道（kf/RPA，评审修正 §7.2）：一表单合并为一条消息，kf 预算核算 N=1
+- 单条渠道（kf，评审修正 §7.2）：一表单合并为一条消息，kf 预算核算 N=1
   （零预算登记事实不发送，预算恢复后可整条重发），超单条硬限生成 Markdown
-  文件以 file 消息完整发送（不截断；RPA send_message 既有超长分段）；
+  文件以 file 消息完整发送（不截断）；
 - ask_delivery 发送事实：分段/单条两种粒度，metadata 读改写保留其他键
   （fake manager 承载）。
 """
@@ -154,7 +154,7 @@ async def test_resend_sends_only_missing_indexes(monkeypatch):
     assert calls["sent"] == [2, 4]
 
 
-# ==================== 渠道分发（dingtalk / RPA 兜底） ====================
+# ==================== 渠道分发（dingtalk / 通用兜底） ====================
 
 
 async def test_dingtalk_dispatch_passes_conversation_type(monkeypatch):
@@ -189,9 +189,9 @@ async def test_rpa_per_segment_fallback_uses_send_message(monkeypatch):
     assert [c["text"] for c in contents] == ["s0", "s1"]
 
 
-async def test_rpa_single_message_keeps_full_text_for_adapter_split(monkeypatch):
-    # RPA 单条路径（评审修正 §7.2）：一表单一条 send_message；超过 2000 字的
-    # 超长兜底由 RPA adapter 既有 _segment_text 自动分段 actions 完成，
+async def test_generic_single_message_keeps_full_text_for_adapter_split(monkeypatch):
+    # 仅有 send_message 的渠道单条路径（评审修正 §7.2）：一表单一条
+    # send_message；超长兜底由 adapter 自身既有分段能力完成，
     # session 侧不预截断（内容不丢）
     calls = _facts_stub(monkeypatch)
     adapter = MagicMock(spec=["send_message", "channel_type"])
@@ -490,7 +490,7 @@ def test_ask_delivery_facts_roundtrip_preserves_other_metadata(fake_db):
 def test_ask_delivery_single_facts_roundtrip(fake_db):
     from src.channels import ask_delivery
 
-    # 单条粒度（kf/RPA）：sent 是/否 + 失败原因，重发=整条重发
+    # 单条粒度（kf）：sent 是/否 + 失败原因，重发=整条重发
     ask_delivery.init_single_facts("s-1", "wait_2", "整条表单文本")
     ask_delivery.init_single_facts("s-1", "wait_2", "重跑不覆盖")
     assert ask_delivery.load_facts("s-1", "wait_2")["message"] == "整条表单文本"

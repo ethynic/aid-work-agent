@@ -14,7 +14,7 @@ import os
 import uuid as uuid_module
 from unittest.mock import AsyncMock, patch
 
-# 必须在导入服务前设置主密钥（Fernet 加解密用，沿 wecom_personal_rpa 测试范式）
+# 必须在导入服务前设置主密钥（Fernet 加解密用；RPA_SECRET_KEY 为历史兼容环境变量名）
 os.environ.setdefault("RPA_SECRET_KEY", "test-recruiting-notify-key-32-bytes+")
 
 import pytest

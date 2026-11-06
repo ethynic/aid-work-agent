@@ -284,7 +284,6 @@ const channelLabels: Record<string, string> = {
   dingtalk: '钉钉',
   feishu: '飞书',
   wecom_kf: '企微客服',
-  wecom_personal_rpa: '企微个人RPA',
 }
 
 function outcomeTypeBadgeClass(type: string): string {

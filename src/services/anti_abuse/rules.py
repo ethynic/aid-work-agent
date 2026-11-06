@@ -12,7 +12,6 @@ SESSION_SOURCE_TYPES: Tuple[str, ...] = (
     "chat",
     "wecom",
     "wecom_kf",
-    "wecom_personal_rpa",
     "dingtalk",
     "feishu",
 )

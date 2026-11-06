@@ -488,8 +488,8 @@ async def lifespan(app: FastAPI):
         logger.opt(exception=True).error(f"[pid={_pid}] step4 FAILED (critical): {e}")
         raise
 
-    # 注意：定时任务调度器 + 后台循环（memory_cleanup / dedup_cleanup / wecom_kf_timeout /
-    # archive poller）已迁移至独立后台运行时（SERVER_MODE=background，见
+    # 注意：定时任务调度器 + 后台循环（memory_cleanup / dedup_cleanup / wecom_kf_timeout）
+    # 已迁移至独立后台运行时（SERVER_MODE=background，见
     # src/background_runner.py）。HTTP worker 不再承载任何后台任务。
 
     _browser_reaper = None
@@ -545,8 +545,6 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning("browser run reaper 关闭异常: type={}", type(e).__name__)
         await _close_browser_runs_on_shutdown()
-
-        # 关闭 archive poller 已迁移至 background runner，HTTP worker 不再启停 poller。
 
         # Close PostgreSQL connection pool
         close_postgres_pool()
@@ -1899,16 +1897,12 @@ from src.saas.api import billing_recharges, billing_balance
 from src.saas.api.abuse import router as abuse_router
 from src.saas.api.knowledge_share import router as knowledge_share_router
 from src.saas.api.wecom_kf_account import router as wecom_kf_account_router
-from src.saas.api.wecom_personal_rpa_routes import router as wecom_personal_rpa_router
-from src.saas.api.wecom_personal_rpa_admin import router as wecom_personal_rpa_admin_router
 app.include_router(tenant_auth.router)
 app.include_router(tenant_mgmt.router)
 app.include_router(subscriptions.router)
 app.include_router(channel_config.router)
 app.include_router(tenant_skills.router)
 app.include_router(channel_routes.router)
-app.include_router(wecom_personal_rpa_router)
-app.include_router(wecom_personal_rpa_admin_router)
 app.include_router(tenant_users.router)
 app.include_router(usage_reports.router)
 app.include_router(usage_reports.public_router)

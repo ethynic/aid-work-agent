@@ -21,7 +21,7 @@ WP13-r1 新增（设计 §3.4 首次回填上限）：
     重绑（重扫码，含换号）一律重置 False 重新按上限回填）
 其余非敏感字段（appid / original_id / enabled / sync_interval_hours / 三态字段等）保持明文。
 
-与 RPA credential_codec 的差异：本 codec **不带 listen_mode 副作用**，
+两条硬约定：本 codec **不带 listen_mode 副作用**，
 且敏感字段**不允许清空**（缺失/空串/掩码/null 一律保留旧值，由 channel_config_db 处理）。
 
 调用约定：

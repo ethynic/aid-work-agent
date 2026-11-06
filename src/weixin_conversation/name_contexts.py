@@ -42,7 +42,7 @@ def _json(value):
 def from_resolution(conn, tenant_id, user_id, device_id, invocation_id):
     """Consume an owned real readonly result inside the draft creation transaction."""
     from .config import scenario_enabled
-    from src.channels.wecom_personal_rpa.secret_crypto import encrypt_secret
+    from src.core.secret_crypto import encrypt_secret
     if not scenario_enabled(tenant_id):
         raise SessionTaskError("微信会话场景未启用", "FEATURE_DISABLED", 403)
     cur = conn.cursor()

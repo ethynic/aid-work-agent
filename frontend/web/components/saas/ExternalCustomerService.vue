@@ -851,7 +851,7 @@ async function loadUserSessions() {
   try {
     // 组合粒度：仅 wecom_kf 按客服账号（channel_chat_id）拆分过滤；
     // 其它渠道组合为「客户 × 渠道」折叠行，channel_chat_id 不传，避免 NULL-or-empty
-    // 过滤漏掉非空 channel_chat_id（如 wecom_personal_rpa 的 conversation_id）的会话。
+    // 过滤漏掉非空 channel_chat_id 的会话。
     const isKfCombo = selectedChannelType.value === 'wecom_kf'
     const res = await getUserSessions({
       user_id: selectedUserId.value,

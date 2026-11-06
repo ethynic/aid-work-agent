@@ -11,7 +11,7 @@ def test_display_state_priority_failed_message_interrupted_internal():
 
     message = _trace_display_fields({
         "status": "completed", "user_message_id": "msg_1", "output": None,
-        "source_type": "wecom_personal_rpa",
+        "source_type": "wecom_kf",
     })
     assert message["display_state"] == "message"
     assert message["is_persisted_message"] is True
@@ -19,7 +19,7 @@ def test_display_state_priority_failed_message_interrupted_internal():
     interrupted = _trace_display_fields({
         "status": "cancelled", "metadata": {
             "termination_reason": "message_merged", "merge_role": "merged_follower",
-        }, "source_type": "wecom_personal_rpa",
+        }, "source_type": "wecom_kf",
     })
     assert interrupted == {
         "termination_reason": "message_merged",

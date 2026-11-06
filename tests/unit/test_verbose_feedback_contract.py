@@ -10,13 +10,14 @@ Phase 0 契约测试：预期在 Phase 1 `src/core/verbose_feedback.py` 落地�
 - 尚不存在的符号一律在用例内部延迟导入（见下方 _make_verbose_event_fn /
   _verbose_feedback_module），保证每条契约用例独立变红，而不是整个文件收集错误。
 - 依赖 verbose 设施的审计 P0 回归草案：P0-1 已在 Phase 1 落地后激活运行；
-  P0-2 已于 Phase 3 激活（RPA delivery_id 注入 pre_send 落地），断言逻辑完整可执行。
+  P0-2 已于 Phase 3 激活（delivery_id 注入 pre_send 落地），断言逻辑完整可执行。
 
 本文件同时承载两个审计 P0 回归草案（选择放同一文件的原因：Phase 0 白名单
 只允许新增契约测试文件，契约与回归草案共用 fixture 与门禁命令，便于统一运行）：
 - P0-1 追加消息不得导致 final 消失（设计 §3.3 陷阱 A / §7，计划 Phase 3 回归 #1）
-- P0-2 RPA verbose/final 不得共用幂等键（设计 §3.3 陷阱 B / §9.4，计划 Phase 3 回归 #3；
-  已于 Phase 3 激活：make_send_verbose / delivery_id 注入 RPA pre_send 已落地）
+- P0-2 verbose/final 不得共用幂等键（设计 §3.3 陷阱 B / §9.4，计划 Phase 3 回归 #3；
+  已于 Phase 3 激活：make_send_verbose / delivery_id 注入 pre_send 已落地；
+  该约定源于已清退的企微个人号 RPA 渠道）
 
 冻结的契约签名（Phase 1 实现必须满足；若实现签名与本文不同，
 必须先修改本文件并按流程评审契约变更，不得静默偏离）：
@@ -505,89 +506,6 @@ class TestP0AppendAfterVerboseKeepsFinal:
         )
         assert verbose_events[0]["eventId"] == "verbose_p0_1"
         assert state.event is verbose_events[0]
-
-
-# ============================================================
-# 审计 P0-2 回归草案：RPA verbose/final 不得共用幂等键
-# ============================================================
-
-
-class TestP0RpaVerboseFinalDistinctDedupKey:
-    """P0-2 回归草案：企微个人 RPA 的 verbose 与 final 不得共用幂等键。
-
-    现状（src/channels/wecom_personal_rpa/action_client.py）：
-        dedup_key = f"wecom_personal_rpa:{tenant_id}:{request_id}"
-    outbox 以 dedup_key 做 ON CONFLICT DO NOTHING；pre_send 目前每次写原始
-    event_id。若 verbose 与 final 共用同一个 request_id，后发消息会被 outbox
-    去重吞掉（设计 §3.3 陷阱 B / §9.4）。
-
-    契约（设计 §9.4）：
-        verbose request_id = f"{event_id}:verbose:1"
-        final   request_id = f"{event_id}:final"
-    两个 dedup_key 必须不同，且两次投递都能入队（各自幂等重试）。
-    """
-
-    @pytest.mark.asyncio
-    async def test_verbose_and_final_produce_distinct_dedup_keys(self, monkeypatch):
-        from src.channels.wecom_personal_rpa import action_client
-
-        # 前置：deliver_actions → _build_reply_digests → _hmac_key() 在
-        # WECOM_RPA_AUDIT_HMAC_KEY / RPA_SECRET_KEY 均缺失时抛 RuntimeError
-        # （deliver_actions 不捕获）。与 tests/unit/channels/wecom_personal_rpa/
-        # test_action_client.py 模块级 setdefault 同款。
-        monkeypatch.setenv("RPA_SECRET_KEY", "test-rpa-audit-key-32-bytes-minimum")
-
-        captured = []
-
-        # 注意：真实 db.enqueue_action 是同步函数，fake 必须同为同步——
-        # 若用 async fake，deliver_actions 拿到的是未 await 的协程对象（恒 truthy），
-        # captured 永远为空，断言失效（Phase 0 草案从未执行过，激活时修正）。
-        def fake_enqueue_action(**kwargs):
-            captured.append(kwargs)
-            return {"id": len(captured)}
-
-        # 账号存在但 client_id=None：跳过在线直推，只走权威 outbox 入队路径
-        monkeypatch.setattr(
-            action_client.db, "get_account_for_tenant",
-            lambda tenant_id, account_id: {
-                "client_id": None, "wecom_user_id": "self_wecom_user",
-            },
-        )
-        monkeypatch.setattr(action_client.db, "enqueue_action", fake_enqueue_action)
-
-        event_id = "evt_rpa_p0"
-        verbose_request_id = f"{event_id}:verbose:1"
-        final_request_id = f"{event_id}:final"
-
-        ok_verbose = await action_client.deliver_actions(
-            tenant_id="tenant_p0", account_id="acc_p0",
-            conversation_id="dm:peer_p0", request_id=verbose_request_id,
-            session_id="wecom_personal_rpa:acc_p0:route_p0",
-            actions=[{"type": "send_text", "text": VALID_TEXT}],
-        )
-        ok_final = await action_client.deliver_actions(
-            tenant_id="tenant_p0", account_id="acc_p0",
-            conversation_id="dm:peer_p0", request_id=final_request_id,
-            session_id="wecom_personal_rpa:acc_p0:route_p0",
-            actions=[{"type": "send_text", "text": "报价单已生成，请查收。"}],
-        )
-
-        assert ok_verbose is True and ok_final is True, "两次投递都应判定为逻辑成功"
-        assert len(captured) == 2, (
-            "verbose 与 final 必须是两次独立 outbox 入队；后者被去重吞掉即为本 P0"
-        )
-        assert [c["request_id"] for c in captured] == [
-            verbose_request_id, final_request_id,
-        ]
-        # dedup_key 契约：以 request_id 派生（action_client 现有公式），断言 outbox
-        # 层的幂等键，而不是 UnifiedResponse.message_id（设计 §9.4 明确要求）
-        dedup_keys = [c["dedup_key"] for c in captured]
-        assert dedup_keys[0] == f"wecom_personal_rpa:tenant_p0:{verbose_request_id}"
-        assert dedup_keys[1] == f"wecom_personal_rpa:tenant_p0:{final_request_id}"
-        assert len(set(dedup_keys)) == 2, "verbose/final 的 dedup_key 必须不同"
-        # 契约字符串冻结（设计 §9.4）
-        assert verbose_request_id == "evt_rpa_p0:verbose:1"
-        assert final_request_id == "evt_rpa_p0:final"
 
 
 # ============================================================

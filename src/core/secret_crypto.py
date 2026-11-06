@@ -1,10 +1,7 @@
 """公共 Fernet 对称加解密原语（渠道凭据/敏感配置通用）。
 
-从 ``src.channels.wecom_personal_rpa.secret_crypto`` 最小抽取而来（设计文档
-docs/system/wechat-mp/wechat-mp-knowledge-ingestion-design.md §4 要求）：
-- 密钥策略只在本模块维护一份，各渠道 codec（RPA credential_codec、
-  wechat_mp config_codec 等）复用，不得各自复制派生逻辑。
-- 旧导入路径 ``src.channels.wecom_personal_rpa.secret_crypto`` 保留兼容（re-export）。
+渠道凭据等敏感配置的加解密统一走本模块：密钥策略只在本模块维护一份，
+各渠道 codec（wechat_mp config_codec 等）复用，不得各自复制派生逻辑。
 
 主密钥来源（优先级递减）：
 1. ``settings.app.secret_key``（AppConfig 当前未定义该字段，保留以备未来扩展）

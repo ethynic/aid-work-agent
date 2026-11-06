@@ -189,20 +189,17 @@ class UserSource(str, Enum):
     数据库存储：TEXT
     - NULL / 空字符串 = 内部用户（管理员创建）
     - wecom_kf = 企微客服
-    - wecom_personal_rpa = 企微RPA
     """
     WECOM_KF = "wecom_kf"
-    WECOM_PERSONAL_RPA = "wecom_personal_rpa"
 
     @classmethod
     def all_values(cls) -> list[str]:
-        return [cls.WECOM_KF.value, cls.WECOM_PERSONAL_RPA.value]
+        return [cls.WECOM_KF.value]
 
     @property
     def display_name(self) -> str:
         mapping = {
             self.WECOM_KF: "企微客服",
-            self.WECOM_PERSONAL_RPA: "企微RPA",
         }
         return mapping.get(self, "未知")
 
@@ -354,7 +351,6 @@ class BehaviorResourceType(str, Enum):
     ACCOUNT = "account"            # 自己的账号（改密码/改资料）
     ACTIVATION_CODE = "activation_code"      # 激活码（协会客户端）
     CLIENT_BINDING = "client_binding"        # 客户端绑定（协会客户端激活/管理）
-    RPA_CLIENT = "rpa_client"                # RPA客户端（个人微信 RPA）
     CHANNEL_ACCOUNT = "channel_account"      # 客服账号（企微客服等渠道账号）
     EXTERNAL_CUSTOMER = "external_customer"  # 外部客户（线索/外部联系人）
     REPLY_STYLE = "reply_style"              # 回复风格
@@ -381,7 +377,6 @@ class BehaviorResourceType(str, Enum):
             self.ACCOUNT: "账号",
             self.ACTIVATION_CODE: "激活码",
             self.CLIENT_BINDING: "客户端绑定",
-            self.RPA_CLIENT: "RPA客户端",
             self.CHANNEL_ACCOUNT: "客服账号",
             self.EXTERNAL_CUSTOMER: "外部客户",
             self.REPLY_STYLE: "回复风格",
@@ -431,7 +426,6 @@ class ChatRecordSourceType(str, Enum):
     - chat                  = Web 端对话
     - wecom                 = 企业微信应用消息
     - wecom_kf              = 企业微信客服
-    - wecom_personal_rpa    = 企微个人号 RPA
     - dingtalk              = 钉钉
     - feishu                = 飞书
     - report_personal       = 个人日报生成（LLM 摘要调用）
@@ -455,7 +449,6 @@ class ChatRecordSourceType(str, Enum):
     CHAT = "chat"
     WECOM = "wecom"
     WECOM_KF = "wecom_kf"
-    WECOM_PERSONAL_RPA = "wecom_personal_rpa"
     DINGTALK = "dingtalk"
     FEISHU = "feishu"
     REPORT_PERSONAL = "report_personal"
@@ -495,7 +488,6 @@ class ChatRecordSourceType(str, Enum):
             self.CHAT: "Web 对话",
             self.WECOM: "企业微信",
             self.WECOM_KF: "企微客服",
-            self.WECOM_PERSONAL_RPA: "企微个人号",
             self.DINGTALK: "钉钉",
             self.FEISHU: "飞书",
             self.REPORT_PERSONAL: "个人日报",

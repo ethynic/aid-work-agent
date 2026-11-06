@@ -21,14 +21,11 @@
 | `toast.info` | 7 处 |
 | `toast.warning` | 2 处 |
 | 全局注册 | `main.ts`（插件 + CSS） |
-| 测试 mock | 1 处（`useRpaPauseResume.test.ts`） |
 
 #### 使用最密集的文件 Top 5
 
 | 文件 | 调用数 | 主要操作 |
 |------|--------|---------|
-| `WecomPersonalRpaManager.vue` | 24 | RPA 配置增删改查 |
-| `RpaBindingPanel.vue` | 18 | RPA 绑定管理 |
 | `KnowledgeBase.vue` | 17 | 知识库文档管理 |
 | `ReplyStyleManager.vue` | 12 | 回复风格管理 |
 | `ContextCompressionManager.vue` | 12 | 上下文压缩管理 |
@@ -213,7 +210,6 @@ import { ElMessage } from 'element-plus'
 ### 2.6 测试文件同步
 
 ```diff
-// frontend/src/__tests__/composables/useRpaPauseResume.test.ts
 
 - vi.mock('vue-toastification', () => ({
 -   useToast: () => toastMock,

@@ -54,7 +54,7 @@
 
 消除「每次输入起 2 个 PowerShell 进程 + 现场编译 C# + WMI 查询」的公共退化面（健康机器 ~2.2s → ~1.1s，拟人节奏为地板；病态机器直接消除进程创建/csc/WMI/AV 扫描敏感面）。
 
-**共享复用定位（2026-10-20 用户确定）**：输入能力实现于共享层（候选 `local-tool-host-core` 或独立共享包），BOSS CLI 为首个接入方；已知复用方：`wecom-cli`、`wecom-personal-rpa`（现有 C# `Win32Input.cs`/`InputExecutor.cs`）、`wechat-souyisou-rpa`（PS 点击脚本）、`association-client-cli`（共用 souyisou 脚本）、`weixin-cli`。其余 CLI 的迁移替换另行立项（列迁移计划统一替换），不阻塞本阶段。
+**共享复用定位（2026-10-20 用户确定）**：输入能力实现于共享层（候选 `local-tool-host-core` 或独立共享包），BOSS CLI 为首个接入方；已知复用方：`wecom-cli`、`wechat-souyisou-rpa`（PS 点击脚本）、`association-client-cli`（共用 souyisou 脚本）、`weixin-cli`。其余 CLI 的迁移替换另行立项（列迁移计划统一替换），不阻塞本阶段。
 
 **验证策略（不依赖 BOSS 场景）**：独立测试用例先行——Windows 真机对专用测试目标窗口的真实点击/拖动/键盘输入（环境变量门控 opt-in，避免干扰日常使用）+ 守卫反例（遮挡、几何变化、光标被移、双端拖动）以窗口操作构造 + FFI/逻辑单元测试。真实 BOSS 网页实测由用户次日安排（2026-10-21）。
 

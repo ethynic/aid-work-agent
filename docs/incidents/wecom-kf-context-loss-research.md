@@ -405,19 +405,19 @@ P0 三项是必须做的最小集，顺序不能颠倒：P0-1 保证写入一致
 
 ## 8. 落地方案：一次改造全渠道复用
 
-> **核心诉求**：所有第三方渠道（wecom_kf / wecom / wecom_personal_rpa / dingtalk / feishu）共用一套处理路径，不为每个渠道重复改造。P0-1（事务化）和 P0-2（推迟 user 写入）必须**下沉到共享层**，而不是在每个渠道路由里改一遍。
+> **核心诉求**：所有第三方渠道（wecom_kf / wecom / dingtalk / feishu）共用一套处理路径，不为每个渠道重复改造。P0-1（事务化）和 P0-2（推迟 user 写入）必须**下沉到共享层**，而不是在每个渠道路由里改一遍。
 
-### 8.1 现状盘点：5 个调用点的共性与差异
+### 8.1 现状盘点：4 个调用点的共性与差异
 
 所有渠道处理路径都通过 `channel_session_manager` 单例 + `session_queue` 单例：
 
-| 步骤 | wecom_kf | wecom (租户) | wecom_personal_rpa | dingtalk | feishu |
-|------|----------|--------------|---------------------|----------|--------|
-| ① user 写入时机 | enqueue 前（1984） | enqueue 前（434） | enqueue 前（~440） | enqueue 前（推断） | enqueue 前（推断） |
-| ② enqueue_and_process | ✓ | ✓ | ✓ | ✓ | ✓ |
-| ③ 写 assistant 单条 | ✓ | ✓ | ✓ | ✓ | ✓ |
-| ④ 写 tool_messages 序列 | ✓（独有） | ✗ | ✗ | ✗ | ✗ |
-| ⑤ send_message | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 步骤 | wecom_kf | wecom (租户) | dingtalk | feishu |
+|------|----------|--------------|----------|--------|
+| ① user 写入时机 | enqueue 前（1984） | enqueue 前（434） | enqueue 前（推断） | enqueue 前（推断） |
+| ② enqueue_and_process | ✓ | ✓ | ✓ | ✓ |
+| ③ 写 assistant 单条 | ✓ | ✓ | ✓ | ✓ |
+| ④ 写 tool_messages 序列 | ✓（独有） | ✗ | ✗ | ✗ |
+| ⑤ send_message | ✓ | ✓ | ✓ | ✓ |
 
 **关键差异点**：
 1. **wecom_kf 多写了 tool_messages 序列**（其他渠道缺失，已是另一个 bug——上下文里 tool_calls 信息丢失）
@@ -624,9 +624,8 @@ async def enqueue_and_process(...) -> EnqueueResult:
 |------|------|------|
 | 1 | `src/channels/session.py` | 新增 `add_messages_batch_transactional` + `process_and_persist` |
 | 2 | `src/core/session_queue.py` | `enqueue_and_process` 返回 `EnqueueResult`（含 merged_input / was_merged） |
-| 3 | `src/saas/api/channel_routes.py` | 5 个渠道调用点全部替换为 `channel_session_manager.process_and_persist(...)` |
-| 4 | `src/saas/api/wecom_personal_rpa_routes.py` | 同上 |
-| 5 | `src/core/agent.py` | `_reorder_messages_for_llm` 加连续 user 兜底（P0-3，独立改动） |
+| 3 | `src/saas/api/channel_routes.py` | 各渠道调用点全部替换为 `channel_session_manager.process_and_persist(...)`（原 wecom_personal_rpa_routes 调用点已随渠道清退删除） |
+| 4 | `src/core/agent.py` | `_reorder_messages_for_llm` 加连续 user 兜底（P0-3，独立改动） |
 | 6 | 单元测试 | `tests/unit/channels/test_session_manager.py` 新增 `process_and_persist` 测试 |
 
 ### 8.5 不在本次范围内（后续）

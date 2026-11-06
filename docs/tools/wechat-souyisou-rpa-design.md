@@ -32,7 +32,7 @@
 
 - 所有关键 Win32、键盘、鼠标、剪贴板链路均已用 PowerShell 真机验证；
 - 无需引入 Python、OCR 服务或浏览器调试端口；
-- 可直接复用企业微信个人号 RPA 的前台锁、按键释放、JSON 协议经验；
+- 复用既有前台锁、按键释放、JSON 协议经验（来源项目已清退，经验沉淀保留）；
 - 后续如需常驻运行，可用 .NET 8 Console Host 或计划任务包装，不影响核心脚本协议。
 
 ## 2. 已验证事实
@@ -422,7 +422,7 @@ RECOVERY_FAILED
 - 必须运行在“用户已登录”的交互桌面会话，不能直接跑 Session 0 服务；
 - Console Host 轮询服务端任务或保持 WebSocket；
 - 收到任务后启动 PowerShell CLI，读取单行 JSON；
-- 复用企业微信个人号 RPA 的 HMAC、队列、Supervisor 和审计模式；
+- 复用既有 HMAC、队列、Supervisor 和审计模式；
 - Console Host 不复制自动化逻辑，只负责进程管理和安全通信。
 
 ### 10.3 Agent 工具

@@ -12,7 +12,7 @@ from typing import Any, Iterator, Mapping, Optional
 from src.core.request_context import freeze_request_mapping
 
 # 渠道入口 start_record 使用的 source_type 值（与前端 WorkOutcomes channelLabels 对齐）
-_CHANNEL_SOURCE_TYPES = {"wecom", "wecom_kf", "wecom_personal_rpa", "dingtalk", "feishu"}
+_CHANNEL_SOURCE_TYPES = {"wecom", "wecom_kf", "dingtalk", "feishu"}
 
 
 @dataclass(frozen=True)
@@ -144,7 +144,7 @@ class ExecutionContextFactory:
         """从当前 SessionRecordService.source_type 派生渠道标识，供工具执行上下文使用。
 
         渠道入口（channel_routes 等）start_record 时 source_type 即渠道名
-        （wecom / wecom_kf / wecom_personal_rpa / dingtalk / feishu）原样返回；
+        （wecom / wecom_kf / dingtalk / feishu）原样返回；
         web 入口 source_type="chat" 映射为 "web"；无 record 或其余后台类
         source_type 返回 None。
         """

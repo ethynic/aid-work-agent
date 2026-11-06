@@ -151,7 +151,7 @@ def create_event_source(
     if source_type not in SOURCE_TYPES:
         raise ValueError(f"未知事件源类型: {source_type}")
     ensure_event_source_tables()
-    from src.channels.wecom_personal_rpa.secret_crypto import encrypt_secret
+    from src.core.secret_crypto import encrypt_secret
 
     payload: Dict[str, Any] = {
         "description": description,
@@ -287,7 +287,7 @@ def rotate_key(
 
     管理权限：keys 表 created_by（源创建者）或 platform_admin（调用方判定后传入）。"""
     ensure_event_source_tables()
-    from src.channels.wecom_personal_rpa.secret_crypto import encrypt_secret
+    from src.core.secret_crypto import encrypt_secret
 
     source = _get_source_source_row(tenant_id, source_id)
     if source is None:
@@ -411,7 +411,7 @@ def load_verifying_keys(tenant_id: str, source_id: str, now: datetime) -> List[D
     """取可验签密钥（active + 窗口内 retiring）；含 key_id 与解密后 secret 明文
     （仅进程内使用，不入日志/响应）。"""
     ensure_event_source_tables()
-    from src.channels.wecom_personal_rpa.secret_crypto import decrypt_secret
+    from src.core.secret_crypto import decrypt_secret
 
     with get_db_connection() as conn:
         cur = conn.cursor()

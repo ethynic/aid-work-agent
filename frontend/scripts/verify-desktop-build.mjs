@@ -21,7 +21,6 @@ const forbiddenModules = [
   'web/components/saas/SessionTraces.vue',
   'web/components/saas/TraceDetail.vue',
   'web/components/saas/ContextCompressionManager.vue',
-  'web/components/saas/RpaBindingPanel.vue',
   'web/components/saas/RedisCacheManager.vue',
 ]
 

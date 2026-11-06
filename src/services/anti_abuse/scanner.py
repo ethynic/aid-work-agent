@@ -33,7 +33,6 @@ NOTIFY_CATEGORY = "abuse"
 SOURCE_TYPE_LABELS = {
     "wecom_kf": "微信用户",
     "wecom": "企微用户",
-    "wecom_personal_rpa": "企微用户",
     "dingtalk": "钉钉用户",
     "feishu": "飞书用户",
 }

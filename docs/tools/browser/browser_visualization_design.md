@@ -286,7 +286,7 @@ clients/agent-desktop/
 └── tests/
 ```
 
-Agent Desktop main 按需加载 `BrowserRuntimeManager`，后者为每个 run 启动独立 Node Worker。Windows 使用 Job Object（`KILL_ON_JOB_CLOSE`）托管 Worker 与 Chromium 进程树；macOS 使用独立 process group，按 SIGTERM 5 秒、SIGKILL 2 秒回收。Playwright 不进入 Vue renderer，browser runtime 不得成为主窗口创建、登录或普通 Agent API 初始化的依赖。`clients/wecom-personal-rpa/` 不增加项目引用、不接收 Browser 消息、不共享配置目录。
+Agent Desktop main 按需加载 `BrowserRuntimeManager`，后者为每个 run 启动独立 Node Worker。Windows 使用 Job Object（`KILL_ON_JOB_CLOSE`）托管 Worker 与 Chromium 进程树；macOS 使用独立 process group，按 SIGTERM 5 秒、SIGKILL 2 秒回收。Playwright 不进入 Vue renderer，browser runtime 不得成为主窗口创建、登录或普通 Agent API 初始化的依赖。
 
 ### 6.2 浏览器 Profile
 

@@ -300,7 +300,7 @@ class TestProcessAndPersist:
                 patch("src.channels.session.delete_cached_pattern") as delete_cache:
             migrated = manager.rebind_existing_session_channel_user(
                 tenant_id="t1",
-                channel_type="wecom_personal_rpa",
+                channel_type="wecom_kf",
                 old_channel_user_id="acc:local_conversation",
                 new_channel_user_id="acc:stable_user",
                 metadata_patch={"stable_id": "stable_user"},

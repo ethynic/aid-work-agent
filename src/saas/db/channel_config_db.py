@@ -1,12 +1,5 @@
 """租户渠道配置 CRUD 操作
 
-wecom_personal_rpa 类型配置的特殊处理（第一期 MVP）：
-- 写入前对敏感字段（archive_secret / external_contact_secret / private_key / token / encoding_aes_key / client_secret）
-  做 Fernet 加密（复用 src.channels.wecom_personal_rpa.archive.credential_codec）
-- 强制 listen_mode='server'（前端禁用 client，后端兜底防 API 绕过）
-- 同 tenant 单例：不允许同租户创建两份 wecom_personal_rpa 配置
-- API 响应给前端时返回掩码（不会泄漏明文凭证）
-
 wechat_mp 类型配置的特殊处理（公众号内容入知识库 WP4，设计 §4）：
 - 敏感字段（secret / encoding_aes_key / callback_token）Fernet 加密
   （复用 src.wechat_mp.config_codec，无 listen_mode 副作用）
@@ -18,9 +11,9 @@ wechat_mp 类型配置的特殊处理（公众号内容入知识库 WP4，设计
 - API 响应给前端时返回掩码
 
 调用方约定：
-- 服务端内部需要明文凭证时（fetcher / poller / callback_handler / verify 等），调
-  decrypt_config_field 或直接用 credential_codec.decrypt_sensitive_fields
-- API 响应给前端时调 mask_config_field 或直接用 credential_codec.mask_sensitive_fields
+- 服务端内部需要明文凭证时（callback_handler / verify 等），调
+  get_by_id_decrypted 或直接用 wechat_mp_codec.decrypt_sensitive_fields
+- API 响应给前端时调 get_by_id / list_by_tenant（敏感字段掩码）
 """
 
 import json
@@ -35,12 +28,10 @@ try:
 except ImportError:  # psycopg2 未安装（开发/测试场景）
     IntegrityError = None  # type: ignore[assignment,misc]
 
-from src.channels.wecom_personal_rpa.archive import credential_codec
 from src.db.database import get_db_connection
 from src.wechat_mp import config_codec as wechat_mp_codec
 
 # 需要特殊处理的渠道类型
-_RPA_CHANNEL_TYPE = "wecom_personal_rpa"
 _WECHAT_MP_CHANNEL_TYPE = "wechat_mp"
 
 # wechat_mp 运行时/三态字段：更新配置时若调用方未提供则保留旧值
@@ -96,34 +87,10 @@ class ChannelConfigDB:
     ) -> Optional[Dict[str, Any]]:
         """创建渠道配置。
 
-        wecom_personal_rpa 类型特殊处理：
-        - 单例检查：同 tenant 已存在则返回 None（调用方应转 400 错误）
-        - 加密敏感字段 + 强制 listen_mode='server'
-
-        **client 模式注册例外**：admin.register_client 用 config={"client_id":...}
-        走 client 模式注册路径（不含 server 凭证，不强制 server，不加密）。
-        第一期 client 模式前端禁用，但 register_client 仍保留兼容已有客户端。
-
-        name 字段：用户自定义渠道名称，用于区分同租户多个同类渠道；可为空（兼容 register_client）。
+        name 字段：用户自定义渠道名称，用于区分同租户多个同类渠道；可为空。
         """
         config_id = f"chan_{uuid.uuid4().hex[:12]}"
         config_to_write = dict(config or {})
-
-        if channel_type == _RPA_CHANNEL_TYPE:
-            is_client_register = "client_id" in config_to_write and "archive_secret" not in config_to_write
-            if is_client_register:
-                # 旧 client 注册路径（admin.register_client）：仅记 client_id，
-                # 不强制 server、不加密（无敏感字段），仍走单例检查
-                config_to_write.setdefault("listen_mode", "client")
-            else:
-                # server 模式（用户从渠道配置页录入 5 个凭证）：加密 + 强制 server
-                # 单例检查
-                if ChannelConfigDB._rpa_config_exists(tenant_id):
-                    logger.warning(
-                        f"RPA 渠道配置创建被拒绝（同租户已存在）：tenant_id={tenant_id}"
-                    )
-                    return None
-                config_to_write = credential_codec.encrypt_sensitive_fields(config_to_write)
 
         if _is_wechat_mp(channel_type):
             # WP11：callback_token 支持可选自定义（3~32 位字母数字，公众平台 Token 规则），
@@ -176,8 +143,8 @@ class ChannelConfigDB:
                 logger.info(f"Channel config created: {config_id} ({channel_type}, name={name})")
                 return ChannelConfigDB.get_by_id(config_id)
             except Exception as e:
-                # IntegrityError 为部分唯一索引拦截（如 wecom_personal_rpa 同租户单例
-                # 约束的并发竞争），向上抛出由 API 层给出友好提示（区分 400 与 500）
+                # IntegrityError 为部分唯一索引拦截（如 wechat_mp 同租户同 appid
+                # 唯一约束的并发竞争），向上抛出由 API 层给出友好提示（区分 400 与 500）
                 if IntegrityError is not None and isinstance(e, IntegrityError):
                     logger.warning(
                         f"Channel config create 触发唯一约束冲突 "
@@ -210,7 +177,7 @@ class ChannelConfigDB:
     def get_by_id(config_id: str) -> Optional[Dict[str, Any]]:
         """根据 ID 获取渠道配置。
 
-        wecom_personal_rpa 类型返回的 config 中的敏感字段为**掩码**（用于 API 响应）。
+        wechat_mp 类型返回的 config 中的敏感字段为**掩码**（用于 API 响应）。
         服务端内部需要明文时请用 ``get_by_id_decrypted``。
         """
         with get_db_connection() as conn:
@@ -223,9 +190,7 @@ class ChannelConfigDB:
             if row:
                 d = dict(row)
                 d["config"] = json.loads(d["config"]) if d.get("config") else {}
-                if d.get("channel_type") == _RPA_CHANNEL_TYPE:
-                    d["config"] = credential_codec.mask_sensitive_fields(d["config"])
-                elif _is_wechat_mp(d.get("channel_type")):
+                if _is_wechat_mp(d.get("channel_type")):
                     d["config"] = wechat_mp_codec.mask_sensitive_fields(d["config"])
                 return d
             return None
@@ -246,9 +211,7 @@ class ChannelConfigDB:
             if row:
                 d = dict(row)
                 d["config"] = json.loads(d["config"]) if d.get("config") else {}
-                if d.get("channel_type") == _RPA_CHANNEL_TYPE:
-                    d["config"] = credential_codec.decrypt_sensitive_fields(d["config"])
-                elif _is_wechat_mp(d.get("channel_type")):
+                if _is_wechat_mp(d.get("channel_type")):
                     d["config"] = wechat_mp_codec.decrypt_sensitive_fields(d["config"])
                 return d
             return None
@@ -268,9 +231,7 @@ class ChannelConfigDB:
             if row:
                 d = dict(row)
                 d["config"] = json.loads(d["config"]) if d.get("config") else {}
-                if d.get("channel_type") == _RPA_CHANNEL_TYPE:
-                    d["config"] = credential_codec.decrypt_sensitive_fields(d["config"])
-                elif _is_wechat_mp(d.get("channel_type")):
+                if _is_wechat_mp(d.get("channel_type")):
                     d["config"] = wechat_mp_codec.decrypt_sensitive_fields(d["config"])
                 return d
             return None
@@ -283,7 +244,7 @@ class ChannelConfigDB:
 
         ``config_reference`` 来自公开路由，必须同时约束 tenant 和 channel_type，
         避免兼容历史数字 ID 时跨租户或跨渠道命中。返回结构与
-        :meth:`get_by_tenant_and_id` 一致，RPA 敏感字段仅供服务端内部解密。
+        :meth:`get_by_tenant_and_id` 一致，敏感字段仅供服务端内部解密。
         """
         reference = str(config_reference or "").strip()
         if not reference:
@@ -304,61 +265,10 @@ class ChannelConfigDB:
             if row:
                 d = dict(row)
                 d["config"] = json.loads(d["config"]) if d.get("config") else {}
-                if d.get("channel_type") == _RPA_CHANNEL_TYPE:
-                    d["config"] = credential_codec.decrypt_sensitive_fields(d["config"])
-                elif _is_wechat_mp(d.get("channel_type")):
+                if _is_wechat_mp(d.get("channel_type")):
                     d["config"] = wechat_mp_codec.decrypt_sensitive_fields(d["config"])
                 return d
             return None
-
-    @staticmethod
-    def claim_client_if_unowned(
-        tenant_id: str, channel_type: str, config_id: str, client_id: str
-    ) -> bool:
-        """原子认领未归属的渠道配置，已有归属绝不覆盖。
-
-        WebSocket 握手可能由多个 worker/客户端并发执行，必须在同一事务中锁定记录并
-        检查 ``config.client_id``，避免普通的读后写造成后写者劫持归属。
-        """
-        if not tenant_id or not channel_type or not config_id or not client_id:
-            return False
-
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT config FROM tenant_channel_configs
-                WHERE tenant_id = %s AND channel_type = %s AND config_id = %s
-                FOR UPDATE
-                """,
-                (tenant_id, channel_type, config_id),
-            )
-            row = cursor.fetchone()
-            if not row:
-                return False
-
-            raw_config = row["config"] if isinstance(row, dict) else row[0]
-            config = json.loads(raw_config) if raw_config else {}
-            configured_client_id = config.get("client_id")
-            if configured_client_id:
-                return configured_client_id == client_id
-
-            config["client_id"] = client_id
-            cursor.execute(
-                """
-                UPDATE tenant_channel_configs
-                SET config = %s, updated_at = CURRENT_TIMESTAMP
-                WHERE tenant_id = %s AND channel_type = %s AND config_id = %s
-                """,
-                (
-                    json.dumps(config, ensure_ascii=False),
-                    tenant_id,
-                    channel_type,
-                    config_id,
-                ),
-            )
-            conn.commit()
-            return cursor.rowcount > 0
 
     @staticmethod
     def list_by_tenant(
@@ -381,9 +291,7 @@ class ChannelConfigDB:
             for row in cursor.fetchall():
                 d = dict(row)
                 d["config"] = json.loads(d["config"]) if d.get("config") else {}
-                if d.get("channel_type") == _RPA_CHANNEL_TYPE:
-                    d["config"] = credential_codec.mask_sensitive_fields(d["config"])
-                elif _is_wechat_mp(d.get("channel_type")):
+                if _is_wechat_mp(d.get("channel_type")):
                     d["config"] = wechat_mp_codec.mask_sensitive_fields(d["config"])
                 results.append(d)
             return results
@@ -392,7 +300,7 @@ class ChannelConfigDB:
     def list_by_channel_type(
         channel_type: str, verified_only: bool = False
     ) -> List[Dict[str, Any]]:
-        """按 channel_type 跨租户查询（poller 兜底轮询用，含明文凭证）。"""
+        """按 channel_type 跨租户查询（含明文凭证，wechat_mp 类型敏感字段解密）。"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
             if verified_only:
@@ -409,10 +317,7 @@ class ChannelConfigDB:
             for row in cursor.fetchall():
                 d = dict(row)
                 d["config"] = json.loads(d["config"]) if d.get("config") else {}
-                # wecom_personal_rpa 类型：返回明文凭证（poller / fetcher 兜底用）
-                if d.get("channel_type") == _RPA_CHANNEL_TYPE:
-                    d["config"] = credential_codec.decrypt_sensitive_fields(d["config"])
-                elif _is_wechat_mp(d.get("channel_type")):
+                if _is_wechat_mp(d.get("channel_type")):
                     d["config"] = wechat_mp_codec.decrypt_sensitive_fields(d["config"])
                 results.append(d)
             return results
@@ -423,11 +328,8 @@ class ChannelConfigDB:
     ) -> bool:
         """更新渠道配置。
 
-        wecom_personal_rpa 类型：
-        - 加密敏感字段（空值时保留原 DB 值，避免被覆盖为空）
-        - 强制 listen_mode='server'
-        - last_seq / last_callback_at / last_fetch_at / last_error_* 等运行时字段
-          若调用方未提供，从 DB 读原值保留（防止前端更新凭证时把这些状态字段重置）
+        wechat_mp 类型：敏感字段缺失/空串/掩码保留旧值，运行时三态字段保留，
+        凭据/身份变更递增凭据版本并撤销回调验证态。
 
         name 字段：传 None 时不动；传空串则清空；传非空串则更新。
         """
@@ -453,45 +355,7 @@ class ChannelConfigDB:
             # WP11：wechat_mp 自定义回调 Token 标记（仅 wechat_mp 分支会赋值）
             custom_token = ""
 
-            if existing_channel_type == _RPA_CHANNEL_TYPE:
-                # 保留运行时字段（前端不传时用旧值，避免被重置）
-                _RUNTIME_FIELDS = (
-                    "last_seq",
-                    "last_callback_at",
-                    "last_fetch_at",
-                    "last_error_at",
-                    "last_error_msg",
-                    "poll_interval_seconds",
-                    "batch_limit",
-                )
-                for k in _RUNTIME_FIELDS:
-                    if k not in new_config and k in existing_config:
-                        new_config[k] = existing_config[k]
-
-                # 敏感字段：字段缺失、空串或掩码（***开头）时保留 DB 原值；
-                # 显式传 null 表示清空，避免“留空保留”和“清除凭证”语义冲突。
-                # - 字段缺失/空串：前端未改动该字段
-                # - ***xxxx 掩码：前端从 get_by_id 拿到掩码后原样回传，未被改动
-                # - null：用户明确点击清除，删除该配置键
-                for k in credential_codec.SENSITIVE_KEYS:
-                    if k not in new_config:
-                        if existing_config.get(k):
-                            new_config[k] = existing_config[k]
-                        continue
-                    incoming = new_config.get(k)
-                    if incoming is None:
-                        new_config.pop(k, None)
-                        continue
-                    is_blank = incoming == "" or not isinstance(incoming, str)
-                    is_mask = isinstance(incoming, str) and incoming.startswith("***")
-                    if (is_blank or is_mask) and existing_config.get(k):
-                        # 旧值是密文，直接搬运；加密函数对密文会跳过
-                        new_config[k] = existing_config[k]
-
-                # 加密 + 强制 server
-                new_config = credential_codec.encrypt_sensitive_fields(new_config)
-
-            elif _is_wechat_mp(existing_channel_type):
+            if _is_wechat_mp(existing_channel_type):
                 # 清单源服务端拥有字段：无条件丢弃传入值（防旧快照覆盖刚扫码
                 # 绑定的会话状态），随后由下方运行时字段保留逻辑回填库内值
                 for k in _WECHAT_MP_SERVER_OWNED_LIST_FIELDS:
@@ -519,7 +383,7 @@ class ChannelConfigDB:
                     new_config["callback_token"] = existing_config["callback_token"]
 
                 # 敏感字段不允许清空：字段缺失、空串、掩码（***开头）或 null 一律保留 DB 原值
-                # （与 RPA 的 null=清除语义不同，公众号配置没有"清除凭据"场景，防误操作丢回调能力）
+                # （公众号配置没有"清除凭据"场景，防误操作丢回调能力）
                 for k in wechat_mp_codec.SENSITIVE_KEYS:
                     incoming = new_config.get(k)
                     is_mask = isinstance(incoming, str) and incoming.startswith("***")
@@ -641,19 +505,16 @@ class ChannelConfigDB:
     def update_config_field(
         config_id: str, field_name: str, field_value: Any
     ) -> bool:
-        """更新 config JSON 中的单个字段（如 last_seq / last_callback_at）。
+        """更新 config JSON 中的单个字段（如 last_event_at 等运行时状态）。
 
-        用于 fetcher 推进 seq、callback_handler 更新回调时间等增量更新场景。
-        对 wecom_personal_rpa 类型直接读-改-写（避免影响其他字段）。
+        用于 callback_handler 更新回调时间等增量更新场景，直接读-改-写（避免影响其他字段）。
 
-        安全约束：禁止通过此函数写入敏感字段（archive_secret / private_key / token /
-        encoding_aes_key / client_secret / external_contact_secret）以及 listen_mode 字段。这些字段必须走
-        create/update 主路径，经过加密和 server 模式强制（防止 API 绕过）。
+        安全约束：禁止通过此函数写入敏感字段（secret / encoding_aes_key / callback_token）
+        以及 listen_mode 字段。这些字段必须走 create/update 主路径，经过加密处理（防止 API 绕过）。
         """
         # 安全护栏：防止绕过主路径写入敏感字段或 listen_mode
         _PROTECTED_FIELDS = (
-            set(credential_codec.SENSITIVE_KEYS)
-            | set(wechat_mp_codec.SENSITIVE_KEYS)
+            set(wechat_mp_codec.SENSITIVE_KEYS)
             | {"listen_mode"}
         )
         if field_name in _PROTECTED_FIELDS:
@@ -681,17 +542,6 @@ class ChannelConfigDB:
             )
             conn.commit()
             return cursor.rowcount > 0
-
-    @staticmethod
-    def _rpa_config_exists(tenant_id: str) -> bool:
-        """检查租户是否已有 wecom_personal_rpa 类型配置（单例约束）。"""
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT 1 FROM tenant_channel_configs WHERE tenant_id = %s AND channel_type = %s LIMIT 1",
-                (tenant_id, _RPA_CHANNEL_TYPE),
-            )
-            return cursor.fetchone() is not None
 
     @staticmethod
     def _wechat_mp_appid_exists(tenant_id: str, appid: str) -> bool:

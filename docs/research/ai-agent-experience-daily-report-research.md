@@ -84,7 +84,7 @@
 | `execution_details`（JSON） | 工具调用、子智能体调用、迭代次数、执行计划 |
 | `prompt_tokens` / `completion_tokens` / `credit_cost` | 成本维度 |
 | `duration_ms` / `status` / `error_message` | 性能与质量维度 |
-| `source_type` | 渠道分布（chat / wecom_kf / dingtalk / feishu / wecom_personal_rpa） |
+| `source_type` | 渠道分布（chat / wecom_kf / dingtalk / feishu） |
 | `created_at` | 时间维度（按日/周/月聚合） |
 
 **结论**：数据基础完备，无需新增埋点，只需在现有数据上做聚合 + LLM 摘要。

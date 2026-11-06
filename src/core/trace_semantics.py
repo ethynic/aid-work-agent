@@ -1,7 +1,7 @@
 """Trace 展示语义的集中兼容判定。"""
 
 PERSISTED_CHANNEL_SOURCES = frozenset({
-    "wecom", "wecom_kf", "dingtalk", "feishu", "wecom_personal_rpa",
+    "wecom", "wecom_kf", "dingtalk", "feishu",
 })
 
 

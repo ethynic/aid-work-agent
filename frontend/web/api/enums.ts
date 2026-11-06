@@ -33,12 +33,10 @@ export const TenantTypeMap = {
 /** 用户来源 */
 export enum UserSource {
   WECOM_KF = 'wecom_kf',
-  WECOM_PERSONAL_RPA = 'wecom_personal_rpa',
 }
 
 export const UserSourceMap = {
   [UserSource.WECOM_KF]: { label: '企微客服', color: 'blue' },
-  [UserSource.WECOM_PERSONAL_RPA]: { label: '企微RPA', color: 'green' },
 } as const;
 
 /**
@@ -61,62 +59,11 @@ export function getStatusLabel<T extends string | number>(
   return statusMap[status]?.label ?? '未知';
 }
 
-// ============================================================================
-// 企业微信个人账号 RPA 状态枚举
-//
-// 注意：后端这些状态值目前是 src/channels/wecom_personal_rpa/db.py 中的字符串字面量，
-// 尚未 formalize 进 src/saas/models/enums.py。此处为前端展示映射，后端 db.py 为唯一真源。
-// ============================================================================
-
-/** RPA 客户端状态（wecom_rpa_clients.status） */
-export enum WecomRpaClientStatus {
-  ACTIVE = 'active',       // 正常
-  DISABLED = 'disabled',   // 已停用
-}
-
-export const WecomRpaClientStatusMap = {
-  [WecomRpaClientStatus.ACTIVE]: { label: '正常', color: 'green' },
-  [WecomRpaClientStatus.DISABLED]: { label: '已停用', color: 'gray' },
-} as const;
-
-/** RPA 账号状态（wecom_rpa_accounts.status） */
-export enum WecomRpaAccountStatus {
-  ONLINE = 'online',         // 在线
-  OFFLINE = 'offline',       // 离线
-  NEED_LOGIN = 'need_login', // 待登录
-  PAUSED = 'paused',         // 已暂停
-}
-
-export const WecomRpaAccountStatusMap = {
-  [WecomRpaAccountStatus.ONLINE]: { label: '在线', color: 'green' },
-  [WecomRpaAccountStatus.OFFLINE]: { label: '离线', color: 'gray' },
-  [WecomRpaAccountStatus.NEED_LOGIN]: { label: '待登录', color: 'orange' },
-  [WecomRpaAccountStatus.PAUSED]: { label: '已暂停', color: 'yellow' },
-} as const;
-
-/** RPA 会话绑定状态（wecom_rpa_bindings.status） */
-export enum WecomRpaBindingStatus {
-  PENDING = 'pending',           // 待确认
-  ACTIVE = 'active',             // 正常
-  PAUSED = 'paused',             // 已暂停
-  INVALID = 'invalid',           // 已失效
-  NEEDS_REVIEW = 'needs_review', // 待复核
-}
-
-export const WecomRpaBindingStatusMap = {
-  [WecomRpaBindingStatus.PENDING]: { label: '待确认', color: 'orange' },
-  [WecomRpaBindingStatus.ACTIVE]: { label: '正常', color: 'green' },
-  [WecomRpaBindingStatus.PAUSED]: { label: '已暂停', color: 'yellow' },
-  [WecomRpaBindingStatus.INVALID]: { label: '已失效', color: 'gray' },
-  [WecomRpaBindingStatus.NEEDS_REVIEW]: { label: '待复核', color: 'red' },
-} as const;
-
 /** chat_records.source_type 枚举（与后端 ChatRecordSourceType 同步） */
 export enum ChatRecordSourceType {
   CHAT = 'chat',
   WECOM = 'wecom',
   WECOM_KF = 'wecom_kf',
-  WECOM_PERSONAL_RPA = 'wecom_personal_rpa',
   DINGTALK = 'dingtalk',
   FEISHU = 'feishu',
   REPORT_PERSONAL = 'report_personal',
@@ -131,7 +78,6 @@ export const ChatRecordSourceTypeMap: Record<string, { label: string; color: str
   [ChatRecordSourceType.CHAT]: { label: 'Web 对话', color: 'blue' },
   [ChatRecordSourceType.WECOM]: { label: '企业微信', color: 'green' },
   [ChatRecordSourceType.WECOM_KF]: { label: '企微客服', color: 'green' },
-  [ChatRecordSourceType.WECOM_PERSONAL_RPA]: { label: '企微个人号', color: 'green' },
   [ChatRecordSourceType.DINGTALK]: { label: '钉钉', color: 'blue' },
   [ChatRecordSourceType.FEISHU]: { label: '飞书', color: 'blue' },
   [ChatRecordSourceType.REPORT_PERSONAL]: { label: '个人日报', color: 'orange' },
@@ -221,7 +167,6 @@ export enum BehaviorResourceType {
   ACCOUNT = 'account',
   ACTIVATION_CODE = 'activation_code',
   CLIENT_BINDING = 'client_binding',
-  RPA_CLIENT = 'rpa_client',
   CHANNEL_ACCOUNT = 'channel_account',
   EXTERNAL_CUSTOMER = 'external_customer',
   REPLY_STYLE = 'reply_style',
@@ -243,7 +188,6 @@ export const BehaviorResourceTypeMap: Record<string, { label: string }> = {
   [BehaviorResourceType.ACCOUNT]: { label: '账号' },
   [BehaviorResourceType.ACTIVATION_CODE]: { label: '激活码' },
   [BehaviorResourceType.CLIENT_BINDING]: { label: '客户端绑定' },
-  [BehaviorResourceType.RPA_CLIENT]: { label: 'RPA客户端' },
   [BehaviorResourceType.CHANNEL_ACCOUNT]: { label: '客服账号' },
   [BehaviorResourceType.EXTERNAL_CUSTOMER]: { label: '外部客户' },
   [BehaviorResourceType.REPLY_STYLE]: { label: '回复风格' },

@@ -75,7 +75,7 @@ class Agent:
         tenant = getattr(user, "tenant_id", None) or get_current_tenant_id() or self.__dict__.get("_default_tenant_id")
         user_id = getattr(user, "user_id", None) or get_current_user_id() or self.__dict__.get("_default_user_id")
         source = getattr(record, "source_type", None) or "chat"
-        kind = "channel" if source in {"wecom", "wecom_kf", "wecom_personal_rpa", "dingtalk", "feishu"} else "web"
+        kind = "channel" if source in {"wecom", "wecom_kf", "dingtalk", "feishu"} else "web"
         # Legacy background callers did not carry source; check registration,
         # never select history by whichever message table happens to have rows.
         if record is None:

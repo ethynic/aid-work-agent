@@ -391,8 +391,7 @@ class UserDB:
 
         返回组合粒度：每个「用户 × 渠道会话（客服账号）」一行。
         仅 wecom_kf 渠道按 channel_chat_id（open_kfid，客服账号）拆分，
-        其它渠道折叠为单个组合（channel_chat_id 为空），避免 wecom_personal_rpa
-        等渠道因 conversation_id 不稳定导致一个客户多行。
+        其它渠道折叠为单个组合（channel_chat_id 为空）。
         不传 channel_type 时排除办公软件渠道（wecom/dingtalk/feishu）会话组合，
         避免内部员工混入微信接待客户页；传 channel_type（办公软件会话页）不过滤。
 
@@ -454,7 +453,7 @@ class UserDB:
             # （存量办公软件渠道用户 source 可能未回填，有会话即应可见）
             conditions = ["u.tenant_id = %s"]
             if not channel_type:
-                # 微信接待客户页口径：只显示接待类会话组合（wecom_kf / wecom_personal_rpa 等）。
+                # 微信接待客户页口径：只显示接待类会话组合（wecom_kf 等）。
                 # 办公软件渠道（wecom/dingtalk/feishu）用户注册时也写 source（2edf4007 起），
                 # 仅凭 source IS NOT NULL 会把内部员工的企微办公会话混入本页，按组合行排除
                 conditions.append(
@@ -2400,7 +2399,7 @@ class ContextSummaryDB:
         Args:
             summary_id: 摘要唯一 ID（csum_xxx）
             session_id: 会话 ID
-            source_type: 来源类型（chat / wecom_kf / dingtalk / feishu / wecom_personal_rpa）
+            source_type: 来源类型（chat / wecom_kf / dingtalk / feishu）
             tenant_id: 租户 ID（租户隔离）
             user_id: 用户 ID
             subagent_id: 子智能体 ID（NULL 表示主智能体）

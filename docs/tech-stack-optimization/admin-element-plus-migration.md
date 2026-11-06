@@ -22,7 +22,6 @@
 | Token 报表 | `PlatformTokenUsage.vue`、`TenantTokenUsage.vue` | 平台/租户 Token 消耗报表 |
 | 渠道配置 | `ChannelConfig.vue` | 企微/钉钉/飞书渠道配置 |
 | 外部客服 | `ExternalCustomerService.vue` | 企微客服管理 |
-| RPA 管理 | `WecomPersonalRpaManager.vue`、`RpaBindingPanel.vue` | RPA 绑定与配置 |
 | 回复风格 | `ReplyStyleManager.vue`、`SystemReplyStyleManager.vue` | 回复风格管理 |
 | 错误日志 | `ErrorLogs.vue` | 错误日志查看 |
 | 上下文压缩 | `ContextCompressionManager.vue` | 压缩记录管理 |
@@ -219,7 +218,7 @@ Element Plus 使用 SCSS 变量，TailwindCSS 使用 utility class，两者在�
 
 1. 先迁移**最简单**的页面（如 `TenantLogin.vue`）作为试点
 2. 再迁移**典型表格**页面（如 `TenantMgmt.vue`）验证组件库可行性
-3. 最后迁移最复杂的页面（如 `WecomPersonalRpaManager.vue`）
+3. 最后迁移最复杂的页面
 
 ---
 

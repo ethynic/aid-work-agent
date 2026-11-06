@@ -144,24 +144,6 @@
 
         <!-- 表单字段（一行4个） -->
         <div class="grid grid-cols-4 gap-3">
-          <!-- 企微个人号 RPA 特有：会话存档模式开关（第一期固定 server，client 禁用） -->
-          <div v-if="form.channel_type === 'wecom_personal_rpa'" class="col-span-4">
-            <label class="text-sm text-muted mb-1 block">会话存档拉取模式</label>
-            <div class="flex items-center gap-4">
-              <label class="flex items-center gap-2 cursor-pointer">
-                <input type="radio" value="server" v-model="form.config.listen_mode"
-                  class="w-4 h-4 text-primary-600 focus:ring-primary-500" />
-                <span class="text-sm text-default">服务端拉取（推荐）：凭证存服务端，企微推送回调</span>
-              </label>
-              <label class="flex items-center gap-2 cursor-not-allowed opacity-60" title="即将开放">
-                <input type="radio" value="client" disabled
-                  class="w-4 h-4 text-primary-600" />
-                <span class="text-sm text-muted">客户端拉取（即将开放）</span>
-              </label>
-            </div>
-            <p class="mt-1 text-xs text-warning-700">⚠️ 第一期仅支持服务端拉取模式。客户端拉取模式代码已就绪，前端暂未开放。</p>
-          </div>
-
           <div v-for="field in channelFields" :key="field.key">
             <label class="text-sm text-muted mb-1 block">{{ field.label }}</label>
             <!-- file 类型：用 input[type=file] 上传，读为文本后存入 config -->
@@ -177,34 +159,8 @@
               v-model="form.config[field.key]"
               :placeholder="field.placeholder"
             />
-            <BaseButton
-              v-if="editingId && form.channel_type === 'wecom_personal_rpa' && field.key === 'external_contact_secret'"
-              intent="danger-ghost"
-              size="sm"
-              class="mt-1"
-              @click="form.config[field.key] = null"
-            >
-              清除已保存的客户联系 Secret
-            </BaseButton>
             <p v-if="field.hint" class="mt-1 text-xs text-muted">{{ field.hint }}</p>
             <p v-if="field.type === 'file' && form.config[field.key]" class="mt-1 text-xs text-success-700">✓ 已上传</p>
-            <!-- wecom_personal_rpa 私钥字段：附加「生成密钥对」按钮 -->
-            <div
-              v-if="field.key === 'private_key' && form.channel_type === 'wecom_personal_rpa' && editingId"
-              class="mt-2"
-            >
-              <BaseButton
-                intent="secondary"
-                size="sm"
-                :disabled="generatingKeypair"
-                @click="handleGenerateKeypair"
-              >
-                {{ generatingKeypair ? '生成中...' : '🔑 生成密钥对' }}
-              </BaseButton>
-              <p class="mt-1 text-xs text-muted">
-                点击自动生成 RSA 2048 密钥对。私钥自动加密保存到本系统，公钥将弹出供您上传到企业微信后台。
-              </p>
-            </div>
           </div>
 
           <!-- 关联数字员工（wecom_kf 渠道由客服账号级"绑定数字员工"决定，wechat_mp 内容源不进收发消息链路，均隐藏主表字段避免误导） -->
@@ -639,43 +595,6 @@
       </template>
     </BaseModal>
 
-    <!-- ==================== 公钥展示弹窗（生成密钥对后） ==================== -->
-    <BaseModal
-      v-model="showPublicKeyModal"
-      title="公钥已生成 - 请上传到企业微信后台"
-      size="lg"
-      :close-on-overlay="false"
-    >
-      <div class="space-y-4">
-        <div class="bg-warning-50 border border-warning-200 rounded-lg p-3 text-sm text-warning-800">
-          <p class="font-medium mb-1">操作指引</p>
-          <p class="text-warning-700">
-            请将下方公钥内容粘贴到企业微信管理后台 → 管理工具 → 会话内容存档 → 密钥管理 → 设置公钥，然后点保存。
-            私钥已自动保存到本系统，无需手动操作。
-          </p>
-        </div>
-        <div>
-          <div class="flex items-center justify-between mb-1">
-            <label class="text-sm text-muted">公钥 PEM 文本（只读）</label>
-            <BaseButton intent="ghost" size="sm" @click="copyPublicKey">
-              {{ publicKeyCopied ? '已复制' : '复制公钥' }}
-            </BaseButton>
-          </div>
-          <textarea
-            ref="publicKeyTextareaRef"
-            :value="publicKeyText"
-            readonly
-            rows="10"
-            class="block w-full text-xs text-default font-mono bg-canvas border border-default rounded-lg p-3 resize-none focus:outline-none"
-            @focus="($event.target as HTMLTextAreaElement).select()"
-          />
-        </div>
-      </div>
-      <template #footer>
-        <BaseButton intent="primary" @click="showPublicKeyModal = false">我已上传，关闭</BaseButton>
-      </template>
-    </BaseModal>
-
     <!-- ==================== 历史文章清单弹窗（WP13-r1，实时只读不落库） ==================== -->
     <BaseModal v-model="mpHistory.open" title="历史文章清单" size="lg">
       <div class="space-y-3">
@@ -752,7 +671,7 @@ import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
-import { listChannels, createChannel, updateChannel, deleteChannel, verifyChannel, getAvailableSubagents, type SubagentOption, generateChannelKeypair, rotateWechatMpToken, listTenantUsers, listKfAccounts, createKfAccount, updateKfAccount, deleteKfAccount } from '@/api/saasTenant'
+import { listChannels, createChannel, updateChannel, deleteChannel, verifyChannel, getAvailableSubagents, type SubagentOption, rotateWechatMpToken, listTenantUsers, listKfAccounts, createKfAccount, updateKfAccount, deleteKfAccount } from '@/api/saasTenant'
 import AbusePolicyEditor from '@/components/saas/AbusePolicyEditor.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
@@ -1167,9 +1086,6 @@ function closeModal() {
 const channelTypes = [
   { value: 'wecom', label: '企业微信', icon: '' },
   { value: 'wecom_kf', label: '企业微信客服', icon: '' },
-  // wecom_personal_rpa 已废弃（2026-09-29）：UI 执行职责由 clients/wecom-cli（agent-tool-runtime）替代，
-  // 新增渠道入口移除；下方 label/字段映射/配置指引保留，供存量租户编辑既有配置。
-  // 待 runtime + wecom 生产稳定后随渠道整体删除（RPA 客户端代码同步删除）。
   { value: 'wechat_mp', label: '公众号内容', icon: '' },
   { value: 'dingtalk', label: '钉钉', icon: '' },
   { value: 'feishu', label: '飞书', icon: '' },
@@ -1179,7 +1095,6 @@ function channelTypeLabel(type: string) {
   const map: Record<string, string> = {
     wecom: '企业微信',
     wecom_kf: '企业微信客服',
-    wecom_personal_rpa: '企微个人号RPA（会话存档）',
     wechat_mp: '微信公众号内容（入知识库）',
     dingtalk: '钉钉',
     feishu: '飞书',
@@ -1202,17 +1117,6 @@ const channelFieldMap: Record<string, { key: string; label: string; placeholder:
     { key: 'secret', label: '应用 Secret', placeholder: '', hint: '自建应用的 Secret（微信客服无独立 Secret）', location: '「应用管理」→ 自建应用详情页' },
     { key: 'token', label: '回调 Token', placeholder: '', hint: '设置 API 接收时自行设定或随机生成', location: '「微信客服」→「API」→ 回调配置' },
     { key: 'encoding_aes_key', label: 'EncodingAESKey', placeholder: '43 字符', hint: '点击「随机获取」，43 字符 Base64', location: '「微信客服」→「API」→ 回调配置' },
-  ],
-  // 企业微信个人号 RPA：服务端拉取模式（第一期唯一可选）
-  // listen_mode 单选固定为 server（client 选项禁用灰显「即将开放」）
-  // private_key 用 file input 上传 .pem 文件，读为文本后与其他字段一起提交
-  wecom_personal_rpa: [
-    { key: 'corp_id', label: '企业 ID (CorpID)', placeholder: 'ww...', hint: '以 ww 开头的字符串', location: '「我的企业」→「企业信息」' },
-    { key: 'archive_secret', label: '会话存档 Secret', placeholder: '', hint: '会话存档专用 Secret（与自建应用 Secret 不同）', location: '「管理后台」→「会话内容存档」→「API 基本信息」' },
-    { key: 'external_contact_secret', label: '客户联系 Secret', placeholder: '', hint: '用于把 wm/wo 外部联系人 ID 解析为企微可搜索姓名；未配置时不会用 ID 尝试发送', location: '「客户与上下游」→「客户联系」→「API」' },
-    { key: 'private_key', label: 'RSA 私钥', placeholder: '点击上传 .pem 文件', hint: '上传后会以文本形式保存（加密存储）', location: '「会话内容存档」→「生成密钥对」下载私钥', type: 'file' },
-    { key: 'token', label: '回调 Token', placeholder: '', hint: '企微后台「接收消息服务器」生成', location: '「会话内容存档」→「接收消息服务器」' },
-    { key: 'encoding_aes_key', label: 'EncodingAESKey', placeholder: '43 字符', hint: '点击「随机获取」，43 字符 Base64', location: '「会话内容存档」→「接收消息服务器」' },
   ],
   dingtalk: [
     { key: 'app_key', label: 'App Key', placeholder: '', location: '「基础信息」页面' },
@@ -1278,19 +1182,6 @@ const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: st
       '先在此页面保存凭证，再到企业微信后台点击保存完成验证',
     ],
     docUrl: 'https://work.weixin.qq.com/wework_admin/frame',
-  },
-  wecom_personal_rpa: {
-    title: '企业微信个人号 RPA 接入步骤（服务端拉取模式）',
-    steps: [
-      '前往企业微信管理后台 →「管理后台」→「会话内容存档」→ 开通功能',
-      '在「会话内容存档 → API 基本信息」记录 CorpID 和会话存档 Secret',
-      '在「客户联系 → API」配置可读取客户详情的 Secret，用于解析外部联系人姓名',
-      '在「会话内容存档 → 密钥管理」生成密钥对，下载 RSA 私钥 .pem 文件',
-      '在「会话内容存档 → 接收消息服务器」配置回调地址（下方 URL）+ Token + EncodingAESKey',
-      '先在此页面保存所有凭证（含 RSA 私钥），再到企业微信后台点击保存完成验证',
-      '保存后点「验证连接」自测 5 步链路：access_token / 拉取 / RSA 解密 / 自测验签',
-    ],
-    docUrl: 'https://developer.work.weixin.qq.com/document/path/91360',
   },
   dingtalk: {
     title: '钉钉接入步骤',
@@ -1805,11 +1696,6 @@ async function saveChannel(): Promise<boolean> {
       config: { ...form.value.config },
       subagent_type: form.value.subagent_type || undefined
     }
-    // wecom_personal_rpa：第一期强制 listen_mode='server'（前端禁用 client，
-    // 此处兜底防止用户通过 DevTools 改单选值提交 client）
-    if (form.value.channel_type === 'wecom_personal_rpa') {
-      payload.config.listen_mode = 'server'
-    }
     // wecom_kf：写入处理等待提示（渠道级配置）；不写 delay_seconds（watchdog 已删除）
     if (form.value.channel_type === 'wecom_kf') {
       payload.config.waiting_indicator = wi.enabled
@@ -1909,57 +1795,6 @@ async function handleVerify(configId: string) {
     await loadChannels()
   } catch (e: any) {
     toast.error(e.message || '验证失败')
-  }
-}
-
-// ==================== 生成 RSA 密钥对（wecom_personal_rpa 服务端拉取模式） ====================
-
-const generatingKeypair = ref(false)
-const showPublicKeyModal = ref(false)
-const publicKeyText = ref('')
-const publicKeyCopied = ref(false)
-const publicKeyTextareaRef = ref<HTMLTextAreaElement | null>(null)
-
-async function handleGenerateKeypair() {
-  if (!editingId.value) {
-    toast.error('请先保存配置后再生成密钥对')
-    return
-  }
-  if (!confirm('确定要生成新的密钥对吗？如果之前已生成过，将覆盖旧私钥。')) return
-
-  generatingKeypair.value = true
-  try {
-    const res = await generateChannelKeypair(editingId.value)
-    if (res.success && res.public_key_raw) {
-      // 用原始 PEM 文本（含真实换行）展示在 textarea 中
-      publicKeyText.value = res.public_key_raw
-      publicKeyCopied.value = false
-      showPublicKeyModal.value = true
-      // 同步更新表单中的 private_key 字段状态（实际入库的是加密后的密文，前端拿不到明文，
-      // 这里仅用占位提示用户「私钥已由系统保存」，避免空字段让用户以为没保存）
-      form.value.config.private_key = '***（已由系统生成并加密保存）'
-      toast.success('密钥对已生成，私钥已加密保存')
-    } else {
-      toast.error(res.message || '生成密钥对失败')
-    }
-  } catch (e: any) {
-    toast.error(e.message || '生成密钥对失败')
-  } finally {
-    generatingKeypair.value = false
-  }
-}
-
-async function copyPublicKey() {
-  if (!publicKeyText.value) return
-  try {
-    await navigator.clipboard.writeText(publicKeyText.value)
-    publicKeyCopied.value = true
-    setTimeout(() => { publicKeyCopied.value = false }, 2000)
-  } catch {
-    // 降级：选中文本供用户手动 Ctrl+C
-    publicKeyTextareaRef.value?.focus()
-    publicKeyTextareaRef.value?.select()
-    toast.info('请按 Ctrl+C 复制选中的公钥文本')
   }
 }
 

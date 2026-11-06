@@ -4,7 +4,7 @@
 >
 > **判定口径**：A=仍与代码一致（现役）；B=部分过时（核心机制在，细节有出入，保留但建议修正）；C=严重过时/与现有代码明显不符；D=纯历史记录（已完成计划/一次性调研，无现役参考价值）。删除候选 = C + D。
 >
-> **执行状态**：✅ 已执行（2026-10-13）。41 个删除项已 `git rm`；待定文件 wecom-integration.md 摘取「加解密说明 + 消息处理架构 + 故障排查」至 [wecom-crypto-troubleshooting.md](../channel/wecom/wecom-crypto-troubleshooting.md)（回调路由按现行 `/t/{tid}/wecom/callback/{config_id}` 修正）后删除；§3.1 research_index 8 条目已删；§3.2 悬空引用已全部清理（含表外补充：wecom-personal-rpa-design/protocol/plan-wecom-personal-rpa、douyin-lifeservice 调研、context_compression_design 剩余 4 处 research 引用）；§4 重点项 6 处已修（2 个部署文档凭证已脱敏、context_compression_design 补记 v3.3 2026-09-30 改造、llm-failover 改链式启用方式说明、RPA 协议版本 1.2.0、image-asset 状态头、dingtalk onboarding 回调路径 + frontend/web 路径），其余 B 级小修仍待后续。
+> **执行状态**：✅ 已执行（2026-10-13）。41 个删除项已 `git rm`；待定文件 wecom-integration.md 摘取「加解密说明 + 消息处理架构 + 故障排查」至 [wecom-crypto-troubleshooting.md](../channel/wecom/wecom-crypto-troubleshooting.md)（回调路由按现行 `/t/{tid}/wecom/callback/{config_id}` 修正）后删除；§3.1 research_index 8 条目已删；§3.2 悬空引用已全部清理（含表外补充：wecom-personal-rpa-design/protocol/plan-wecom-personal-rpa 等当时现存文件、douyin-lifeservice 调研、context_compression_design 剩余 4 处 research 引用；上述 rpa 文档已于本轮清退删除）；§4 重点项已修（2 个部署文档凭证已脱敏、context_compression_design 补记 v3.3 2026-09-30 改造、llm-failover 改链式启用方式说明、image-asset 状态头、dingtalk onboarding 回调路径 + frontend/web 路径；原 RPA 协议版本项相关文档已随渠道清退删除），其余 B 级小修仍待后续。
 
 ## 1. 删除清单（41 个）
 
@@ -60,12 +60,6 @@
 | docs/tools/file-tools-claude-code-parity-design.md | 2026-07-07 | D | 已于 2026-10-10 实现，文中「现状 0-based/无 replace_all」已全部失真 |
 | docs/tools/large-content-retrieval-dev-plan.md | 2026-07-07 | D | Phase A-D 全部 ✅；现行设计见 large-content-retrieval-design.md（保留） |
 
-### 企微个人号 RPA（1）
-
-| 文件 | 创建日期 | 判定 | 理由 |
-|---|---|---|---|
-| docs/system/wecom-personal-rpa-client-phase5-test-guide.md | 2026-07-02 | D | 绑定特定 commit（4ac87cc）的一次性真机验证指引，Phase 1-12 已上线 |
-
 ### 调研报告（13）
 
 | 文件 | 创建日期 | 判定 | 理由 |
@@ -78,11 +72,11 @@
 | docs/research/pilotdeck-agent-research.md | 2026-06-01 | D | 外部项目调研，index/ideas 均未登记，建议未被采纳 |
 | docs/research/enterprise-agent-platform-research.md | 2026-06-02 | D | 竞品横评，时效数据过时，无落地映射 |
 | docs/research/text-to-sql-data-analysis-agent-research.md | 2026-06-02 | D | 数据分析智能体已完成开发，调研使命完成 |
-| docs/research/wecom-kf-ai-chatbot-binding-research.md | 2026-06-02 | D | 结论已落地（wecom_kf 渠道 + 个人号 RPA 均已实现） |
+| docs/research/wecom-kf-ai-chatbot-binding-research.md | 2026-06-02 | D | 结论已落地（wecom_kf 渠道已实现） |
 | docs/research/html-to-pptx-conversion-research.md | 2026-06-22 | D | 自述「结论已落地，以 ppt_tool_design.md 为准」 |
 | docs/research/context_compression_research.md | 2026-06-24 | D | 关联设计+计划已落地（含 2026-09-30 改造），纯历史调研 |
-| docs/research/wecom-personal-account-rpa-research.md | 2026-06-22 | D | 路径选型调研（首选安卓无障碍），实际落地走 PC 端 .NET RPA，结论以 wecom-personal-rpa-design.md 为准 |
-| docs/research/wecom-personal-rpa-client-implementation-research.md | 2026-06-22 | D | 自注「历史调研（交付结论已废弃）」，WiX/MSIX 安装包方案 2026-07-13 废弃，现以 client-design + publish.ps1 为准 |
+| docs/research/wecom-personal-account-rpa-research.md | 2026-06-22 | D | 路径选型调研（首选安卓无障碍），实际落地走 PC 端 .NET RPA（该客户端已随渠道清退删除） |
+| docs/research/wecom-personal-rpa-client-implementation-research.md | 2026-06-22 | D | 自注「历史调研（交付结论已废弃）」，WiX/MSIX 安装包方案 2026-07-13 废弃（关联设计文档已随渠道清退删除） |
 
 ## 2. 待定（1 个）
 
@@ -132,7 +126,6 @@
 - docs/channel/wecom/wecom_setup_verification.md、wecom_kf/wecom_kf_deployment_guide.md：**含明文 Secret/Token/appid 样例，无论删改都应先脱敏**
 - docs/infrastructure/memory/context_compression_design.md：补记 2026-09-30 自适应预算 clamp(÷50,1500,4096)+续写+50:1 闸门改造
 - docs/infrastructure/llm-failover-design.md：启用方式已改为 `LLM_PROVIDER` a/b/c 链式推导，非 `failover.enabled`
-- docs/system/wecom-personal-rpa-protocol.md：PROTOCOL_VERSION 代码已 1.2.0，文档 1.0.0
 - docs/system/image-asset-pipeline-design.md：被活规则引用，仅状态头「待开发」过时（已实现）
 - docs/channel/dingtalk/onboarding_guide.md：回调路径误写 `{config_id}/{config_id}`、引用已删除的 integration_guide.md
 

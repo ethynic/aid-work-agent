@@ -552,7 +552,7 @@ CREATE INDEX IF NOT EXISTS idx_customer_referrals_referrer ON customer_referrals
 -- 2026-08-19 招聘面试邀约企微通知 Phase 1（两点式：邀约前知会 + 邀约后通报）
 -- 见 docs/design/recruiting/recruiting-interview-notify-design.md。
 -- bs_recruiting_notify_settings：租户通知配置（webhook_url 为 Fernet 密文，
--- 主密钥同 wecom_personal_rpa secret_crypto；API 层只出掩码 ***+末4位）；
+-- 主密钥同 src/core secret_crypto（渠道凭据 Fernet 公共原语）；API 层只出掩码 ***+末4位）；
 -- at_mobiles 为事后通报 @人 手机号 JSON 数组；pre_notify_enabled 事前知会开关。
 -- bs_recruiting_notify_logs：通知留痕（kind=pre|done / candidates JSONB /
 -- content 全文 / status=sent|failed / error），failed 可走手动补推 API 重发。

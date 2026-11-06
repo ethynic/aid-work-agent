@@ -12,7 +12,7 @@
 | 扫描对象 | 覆盖范围 |
 |---------|---------|
 | 上传路由 | `/api/upload`、子智能体模板/配置文件、知识库、Excel 导入、头像/Logo、客户端 OCR |
-| 渠道媒体落盘 | wecom / dingtalk / feishu / wecom_kf（含 RPA） |
+| 渠道媒体落盘 | wecom / dingtalk / feishu / wecom_kf |
 | 工具侧文件生成 | cp_tool / write_tool / 文档转换类工具 |
 | 会话附件 | agent 会话 workspace、图片资产注册 |
 | 临时文件 | OCR、Excel 解析、skill 工作目录 |

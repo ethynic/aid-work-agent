@@ -21,7 +21,7 @@ if db_url:
     os.environ["DATABASE_URL"] = db_url
     os.environ.setdefault("DB_POOL_MIN", "2")
     os.environ.setdefault("DB_POOL_MAX", "10")
-# P4-B webhook 密钥加密（secret_crypto 主密钥；沿 wecom_personal_rpa 测试惯例）
+# P4-B webhook 密钥加密（secret_crypto 主密钥，RPA_SECRET_KEY 为历史兼容环境变量名）
 os.environ.setdefault("RPA_SECRET_KEY", "test-wxm-event-source-key-32bytes")
 
 # weixin 业务表（audit 追加行也随租户清理）+ 底座表（复用 desktop_automation conftest 顺序）

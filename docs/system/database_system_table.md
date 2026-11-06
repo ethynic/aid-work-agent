@@ -436,11 +436,10 @@ chunks_vec（向量）      chunks_fts（全文搜索）
 租户在各渠道（企业微信、钉钉、飞书、微信公众号内容等）上的配置信息。
 
 **关键约束**：
-- `uq_tenant_channel_configs_wecom_personal_rpa`：wecom_personal_rpa 同租户单例部分唯一索引
 - `uq_tenant_channel_configs_wechat_mp_appid`：wechat_mp 同租户同 appid 部分唯一索引
   （`(tenant_id, config->>'appid') WHERE channel_type='wechat_mp'`，公众号内容入知识库 WP4，设计 §4）
 
-**敏感字段**：wecom_personal_rpa / wechat_mp 类型的 config JSON 中敏感字段 Fernet 加密存储
+**敏感字段**：wechat_mp 类型的 config JSON 中敏感字段 Fernet 加密存储
 （公共原语 `src/core/secret_crypto.py`，主密钥 settings.app.secret_key → APP_SECRET_KEY → RPA_SECRET_KEY）。
 
 **关系**：`tenant_channel_configs.tenant_id` → `tenants.tenant_id`

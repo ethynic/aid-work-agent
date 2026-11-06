@@ -12,7 +12,7 @@
 
 本项让企业微信自建应用渠道 `wecom` 的对话执行使用现有独立 Runner API/worker。采用已接入微信客服、飞书和钉钉的薄桥模式，保留原回调、会话队列、历史与发送流程。业务代码已按本计划接入并完成定向自测、独立测试与审查；最终审核已批准提交，提交记录通过本计划的 Git 关联查询，部署与真机验收尚未完成。
 
-范围是 `/t/{tenant_id}/wecom/callback/{config_id}`；`wecom_kf`、`wecom_personal_rpa` 及 Runtime 的 `wecom-cli` 是不同入口，不因本项重新接入或调整。实施遵循 [AgentRunner 架构 §8.1](../system/agent-application-architecture-design.md#81-后续接入的固定边界)、[Runner / Desktop / Runtime 共同契约](../system/runner-desktop-runtime-integration-contract.md)和[开发流程](../../.claude/rules/dev_workflow.md)。
+范围是 `/t/{tenant_id}/wecom/callback/{config_id}`；`wecom_kf` 与 Runtime 的 `wecom-cli` 是不同入口，不因本项重新接入或调整（原 `wecom_personal_rpa` 渠道已清退删除）。实施遵循 [AgentRunner 架构 §8.1](../system/agent-application-architecture-design.md#81-后续接入的固定边界)、[Runner / Desktop / Runtime 共同契约](../system/runner-desktop-runtime-integration-contract.md)和[开发流程](../../.claude/rules/dev_workflow.md)。
 
 ## 1. 接入前代码基线与文档差异
 

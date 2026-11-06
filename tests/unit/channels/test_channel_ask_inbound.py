@@ -275,7 +275,7 @@ async def test_resend_sends_only_missing_segments(facts):
 
 
 async def test_resend_single_granularity_resends_whole_message(facts):
-    # 单条粒度（kf/RPA）：sent=否 → 整条重发；sent=是 → 提示已发送
+    # 单条粒度（kf）：sent=否 → 整条重发；sent=是 → 提示已发送
     facts["facts"] = {"message": "整条表单文本", "sent": False,
                       "last_error": "reply budget exhausted", "retries": 0, "submitted": None}
     client = FakeRunnerClient().with_waiting(_waiting_row())

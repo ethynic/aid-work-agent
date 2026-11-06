@@ -89,7 +89,7 @@
 | `clients/association-enrichment-ui/static/index.html`（UI参考） | **UI 风格参考**，重写为 Electron renderer |
 | `src/llm/gateway.py`（LLM网关） | **服务端使用**，新增的代理端点调用它 |
 | `src/services/billing.py`（积分计算） | **服务端使用**，代理端点调用，增加10倍系数 |
-| `src/channels/wecom_personal_rpa/auth.py`（HMAC鉴权） | **参考**，客户端激活后的令牌鉴权可简化为 Bearer Token |
+| 服务端既有渠道 HMAC 鉴权实现（原 `src/channels/wecom_personal_rpa/auth.py`，已随渠道清退删除） | **参考**，客户端激活后的令牌鉴权可简化为 Bearer Token |
 | `clients/agent-desktop/electron/*`（Electron壳） | **参考** security/credentials/config 模式 |
 
 ---

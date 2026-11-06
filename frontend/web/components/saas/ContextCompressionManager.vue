@@ -20,7 +20,6 @@
           <option value="wecom_kf">wecom_kf</option>
           <option value="dingtalk">dingtalk</option>
           <option value="feishu">feishu</option>
-          <option value="wecom_personal_rpa">wecom_personal_rpa</option>
         </BaseSelect>
         <BaseButton size="sm" intent="secondary" @click="refresh">刷新</BaseButton>
       </div>
@@ -125,7 +124,6 @@
           <option value="wecom_kf">wecom_kf</option>
           <option value="dingtalk">dingtalk</option>
           <option value="feishu">feishu</option>
-          <option value="wecom_personal_rpa">wecom_personal_rpa</option>
         </BaseSelect>
         <BaseButton size="sm" :disabled="!manualSessionId || manualLoading" @click="handleManualCompact">
           {{ manualLoading ? '压缩中...' : '立即压缩' }}

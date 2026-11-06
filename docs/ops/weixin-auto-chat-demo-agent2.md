@@ -83,7 +83,7 @@ weixin_conversation:
 - 检查服务器现有 `.env` 的 `LLM_PROVIDER`、相应模型配置与密钥是否有效；不把密钥写入本文、客户端或截图。
 - 当前仓库 DeepSeek 模型默认名已为 `deepseek-flash`，历史实验日志中的 `deepseek-v4-flash` 是当时配置。使用 agent2 已验证可用的实际模型；不要混淆历史名字与当前 provider 配置。
 - `session_tasks.decision_model_max_tokens` 为10000。当前服务端决策调用走 `chat_no_thinking`；这来自后续已合并代码，与9月17日原实验环境不能直接等同。
-- API 与后台进程必须使用既有一致的加密配置。遇到 `CRYPTO_UNAVAILABLE` 检查既有应用/RPA加密设置，不临时换密钥，否则旧数据可能无法解密。
+- API 与后台进程必须使用既有一致的加密配置。遇到 `CRYPTO_UNAVAILABLE` 检查既有应用加密设置，不临时换密钥，否则旧数据可能无法解密。
 
 修改配置后，在约定维护时段重建两个容器以重新载入配置/环境（会短暂影响 agent2）：
 

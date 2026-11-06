@@ -621,10 +621,9 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     // 管理项对普通用户隐藏
     expect(flyoutText).not.toContain('API配置')
     expect(flyoutText).not.toContain('渠道配置')
-    expect(flyoutText).not.toContain('企微个人RPA')
   })
 
-  it('连接中心：管理员子菜单含全部 4 项（API配置/渠道配置/企微个人RPA/本地工具）', async () => {
+  it('连接中心：管理员子菜单含全部 3 项（API配置/渠道配置/本地工具）', async () => {
     const wrapper = mountTenantSidebar()
     await flushPromises()
 
@@ -638,7 +637,6 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     const flyoutText = flyout!.textContent || ''
     expect(flyoutText).toContain('API配置')
     expect(flyoutText).toContain('渠道配置')
-    expect(flyoutText).toContain('企微个人RPA')
     expect(flyoutText).toContain('本地工具')
   })
 
