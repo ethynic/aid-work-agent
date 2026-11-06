@@ -12,10 +12,7 @@
 #      本地库记录优先核验，粘贴后不再凭截图文字决定是否按 Enter。
 #      副作用：多行发送会覆盖用户剪贴板且**不恢复**（weixin-cli 先例：paste handler 异步
 #      读剪贴板，恢复竞态会粘贴到错的内容；README 已注明）
-#   4) 发送前会话复核（规则，不发 Jev——快）：重新截图 OCR 标题带，归一化严格匹配目标名
-#      （剥 @微信 双向、相等或「名+@/（」前缀、防「陆伟」落入「陆伟民」前缀陷阱）；
-#      不一致 → **清空自己刚输入的文本**（Clear-WeComFocusedInput，Ctrl+A/Delete
-#      原语；自己输入的可以清）→ UI_CHANGED（防把文字留给错误会话）
+#   4) 输入后保留诊断截图，不再对标题做 OCR 复核；沿用步骤 3 清理前确认的目标。
 #   5) Send-WeComEnter 发送 → 1.2s → 截图 → OCR（input/bubble/preview 三模式终态证据）
 #   6) Jev #2（两问合一）：sent_successfully / failure_mode；no/unclear → EXECUTION_UNKNOWN
 #      绝不自动重试。降级：M2 三选二（输入框清空 / 消息区末尾任一行含 text 归一化前缀 12 字 /
@@ -324,6 +321,7 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     if (-not (Test-WeComTitleMatch -Title $beforeClearTitle -Expected $TargetName -RequireWechat:$requireWechat)) {
         Throw-DriverError 'UI_CHANGED' ('清理前复核：当前会话标题「' + $beforeClearTitle + '」与目标「' + $expectedName + '」不一致，未清理或发送消息')
     }
+    $title2 = $beforeClearTitle
     if (-not [WeComWin32]::IsWindow([IntPtr]$mainHwnd)) {
         Throw-DriverError 'UI_CHANGED' '清理前主窗口已重建，未清理或发送消息'
     }
@@ -367,19 +365,7 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     # typing 覆盖逐字输入或剪贴板写入与粘贴
     $timing.typing = [int]($swTotal.ElapsedMilliseconds - $t0)
 
-    # 4) 发送前会话复核（规则）：重新截图 OCR 标题带严格匹配；不一致 → 清自己刚输入的
-    #    草稿（这是我们自己输入的，可以清）→ UI_CHANGED（防把文字留给错误会话）
-    $t0 = $swTotal.ElapsedMilliseconds
-    $boxes2 = Invoke-SendChatOcr ([string]$typed.path) 'boxes'
-    $title2 = Get-WeComTitleFromTokens -Tokens @(Get-WeComBandTokens -Boxes @($boxes2.boxes) -W $typed.w -H $typed.h -Band 'title')
-    $timing.title_recheck = [int]($swTotal.ElapsedMilliseconds - $t0)
-    Write-DriverLog ('step4 发送前复核 title=' + $title2)
-    if (-not (Test-WeComTitleMatch -Title $title2 -Expected $TargetName -RequireWechat:$requireWechat)) {
-        $cleared = Clear-WeComFocusedInput -Hwnd $mainHwnd
-        Write-DriverLog ('step4 标题不一致，清理本次输入按键投递=' + $cleared)
-        $cleanup = if ($cleared) { '已投递清理本次输入的按键' } else { '本次输入的清理按键未成功投递，请人工检查输入框' }
-        Throw-DriverError 'UI_CHANGED' ('发送前复核：会话标题「' + $title2 + '」与目标「' + $expectedName + '」不一致，' + $cleanup + '并中止（未按 Enter 发送）')
-    }
+    # 4) 输入后的标题 OCR 不再作为发送门禁；沿用清理前确认的目标会话。
     } else {
         # —— -VerifyOnly 模式（任务 3.4）：不做输入/发送（跳过 step1-4 的全部输入动作，
         #    不点输入框、不碰草稿、不按 Enter），仅准备既有 step5 终态证据的输入：
@@ -392,7 +378,7 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
         $afterBoxes = Invoke-SendChatOcr ([string]$after.path) 'boxes'
         $title2 = Get-WeComTitleFromTokens -Tokens @(Get-WeComBandTokens -Boxes @($afterBoxes.boxes) -W $after.w -H $after.h -Band 'title')
         Write-DriverLog ('verify-only 当前标题 title=' + $title2)
-        # 第八轮评审 P2：核验证据一致性——当前标题与目标严格匹配（复用发送路径 step4 的
+        # 第八轮评审 P2：核验证据一致性——当前标题与目标严格匹配（使用
         # Test-WeComTitleMatch 规则，含 @微信 后缀/「名+@/（」前缀形态），且必须先于 §5-6
         # 三选二/Jev 判定。否则「输入框空 + 气泡/列表含前缀」可能在非目标会话凑满两项，
         # 把别的会话的证据当成目标会话发送成功；不一致 → 无法确认（EXECUTION_UNKNOWN，

@@ -142,7 +142,7 @@ class ImageGenConfig(BaseModel):
     dashscope: DashScopeImageGenConfig = Field(default_factory=DashScopeImageGenConfig)
     vl: ImageVLConfig = Field(default_factory=ImageVLConfig)
     poll_interval_seconds: int = 3
-    poll_timeout_seconds: int = 180
+    poll_timeout_seconds: int = 300
 
 
 class LLMConfig(BaseModel):

@@ -4573,3 +4573,9 @@
       {"max_input": 262144, "input_per_m": 3.0, "cached_input_per_m": 0.6,  "output_per_m": 30.0}
     ]'::jsonb, TRUE)
     ON CONFLICT (model_name) DO NOTHING;
+- datetime: "2026-11-06 16:12:00"
+  remark: "补种 qwen-image-3.0-pro 价目行：agent2 2026-11-06 15:14 应用 db_update 时所用文件版本（file_hash 22d531ad）缺 11:30 价目块，水位已越过 11:30 导致该 INSERT 在部分环境永不执行，image_render 计费落 credit_cost=0；本块幂等补种，与 11:30 块语义一致"
+  statements: |
+    INSERT INTO token_cost_prices (model_name, price_per_call)
+    VALUES ('qwen-image-3.0-pro', 0.25)
+    ON CONFLICT (model_name) DO NOTHING;
