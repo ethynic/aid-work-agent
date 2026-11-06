@@ -117,10 +117,12 @@ function Invoke-WeComJev { param($StateText,$Questions)
     return @{used=$false;reason='fixture offline'}
 }
 function Invoke-SendChatOcr { param($ImagePath,$Mode)
+    if ($ImagePath -eq 'step2-typed.png') { $script:typedOcrCalls++ }
     if ($Mode -eq 'input') { return @{input_empty=$true;texts=@()} }
     if ($Mode -eq 'preview') { return @{texts=@();texts_norm=@()} }
     $title='fixture-group'
-    if (($script:changedTitle -and $ImagePath -eq 'step2-typed.png') -or $script:wrongVerifyTitle) { $title='another-group' }
+    if ($script:changedTitle -and $ImagePath -eq 'step2-typed.png') { $title='fixture-group+' }
+    if ($script:wrongVerifyTitle) { $title='another-group' }
     if ($ImagePath -eq 'step2-before-clear.png' -and $script:lateTitle) { $title=$script:lateTitle }
     $boxes=@(@{text=$title;x0=500;y0=20;x1=680;y1=40},
         @{text='快速会议';x0=1000;y0=820;x1=1100;y1=840},
@@ -142,6 +144,7 @@ function Reset-Test {
     $script:shots=New-Object System.Collections.ArrayList
     $script:resolveCalls=0;$script:rebuildBeforeClick=$false;$script:rebuildDuringShot=$false;$script:lateTitle=''
     $script:readback=$true;$script:placeholder=$false;$script:changedTitle=$false;$script:wrongVerifyTitle=$false
+    $script:typedOcrCalls=0
     $script:right='yes';$script:draft='no';$script:inputChoice='B0'
     $script:clearState='empty'
     $script:useFocusJev=$false;$script:focusChoice='T0';$script:echo='中文群'
@@ -354,10 +357,11 @@ Test-Intent 'window rebuilt during latest screenshot aborts before any clear' {
     Assert-Intent ($r.error -like 'WECOMDRIVE|UI_CHANGED|*') 'snapshot on stale window cannot authorize clearing'
     Assert-Intent ((Count-Key 65) -eq 0 -and (Count-Key 46) -eq 0 -and $clipCalls -eq 0 -and (Count-Key 13) -eq 0) 'no clear or send after screenshot rebuild'
 }
-Test-Intent 'title changed after our input clears only our draft and never sends' {
-    $script:changedTitle=$true;$r=Run-Send -Single
-    Assert-Intent ($r.error -like 'WECOMDRIVE|UI_CHANGED|*') 'strict final title must reject other conversation'
-    Assert-Intent ((Count-Key 65) -eq 2 -and (Count-Key 13) -eq 0) 'pre-clear and own pasted text clear happen, no Enter'
+Test-Intent 'post-input title OCR plus cannot veto confirmed send' {
+    $script:changedTitle=$true;$r=Run-Send -Single -Skip
+    Assert-Intent ($r.error -eq '') 'confirmed pre-input title permits send despite noisy later OCR'
+    Assert-Intent ($script:typedOcrCalls -eq 0) 'typed screenshot must not be OCR-checked before Enter'
+    Assert-Intent ((Count-Key 65) -eq 1 -and (Count-Key 13) -eq 1) 'one pre-input clear and one Enter occur'
 }
 Test-Intent 'Jev yes cannot clear a different group editor' {
     $script:wrongVerifyTitle=$true

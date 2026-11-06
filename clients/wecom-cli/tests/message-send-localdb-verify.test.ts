@@ -410,11 +410,12 @@ test('静态核对（P2）：-VerifyOnly 分支的标题一致性检查存在且
   const checkBlock = src.slice(check, ruleSection)
   assert.ok(checkBlock.includes('EXECUTION_UNKNOWN'), '不一致 → EXECUTION_UNKNOWN（无法确认），绝不 ocr-bubble 成功')
   assert.ok(checkBlock.includes('Throw-DriverError'), '不一致必须抛错中止（Throw-DriverError）')
-  // 发送路径的 step4 发送前复核仍是 UI_CHANGED（不被 -VerifyOnly 分支的修复误改）
-  const sendRecheck = src.indexOf('step4 发送前复核')
-  assert.ok(sendRecheck > -1 && sendRecheck < verifyTitleLog, '定位发送路径 step4 复核（位于 -VerifyOnly 分支之前）')
-  const sendBlock = src.slice(sendRecheck, verifyTitleLog)
-  assert.ok(sendBlock.includes('UI_CHANGED'), '发送路径 step4 复核语义保持 UI_CHANGED')
+  // 输入前仍须确认目标；输入后不再让群名 OCR 误差阻断 Enter。
+  const preInputCheck = src.indexOf('if (-not (Test-WeComTitleMatch -Title $beforeClearTitle -Expected $TargetName -RequireWechat:$requireWechat)) {')
+  assert.ok(preInputCheck > -1 && preInputCheck < verifyTitleLog, '发送路径在清理与输入前确认目标标题')
+  const preInputBlock = src.slice(preInputCheck, src.indexOf('$cleared = Clear-WeComFocusedInput', preInputCheck))
+  assert.ok(preInputBlock.includes('UI_CHANGED'), '输入前标题不符仍拒绝发送')
+  assert.equal(src.indexOf('step4 发送前复核'), -1, '输入后的标题 OCR 不再作为发送门禁')
 })
 
 function recoverySend(f: Fixture, mock: DriverMock, overrides: Parameters<typeof createWecomMessageSendOperation>[0] = {}) {
