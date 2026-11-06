@@ -2,11 +2,11 @@
 
 ## 范围与状态
 
-基于 WeCom CLI 0.2.8 源码逐个检查实际 OCR 调用；按讨论目的整理为 **9 组原使用场景**。`localdb-login.ps1` 仅在注释中提到 OCR，实际只枚举窗口，不调用 OCR。`wecom_read_sessions`、`wecom_session_directory`、群目录/群轮询等稳定本地库读取没有 OCR 路径。2026-11-06 W21 源码调整后，第 5、6 项 operation 已停止调用 OCR 驱动；W22 源码调整后，第 2 项搜索框准备/清理不再调用搜索框状态 OCR；W24 源码调整后，第 1 项文本发送全链路不再调用 OCR。独立搜索/选择、媒体发送和添加客户仍可能使用 OCR。W24 独立测试与 CR 已通过，真机完整搜索、标定和发送仍待验收。
+基于 WeCom CLI 0.2.8 源码逐个检查实际 OCR 调用；按讨论目的整理为 **9 组原使用场景**。`localdb-login.ps1` 仅在注释中提到 OCR，实际只枚举窗口，不调用 OCR。`wecom_read_sessions`、`wecom_session_directory`、群目录/群轮询等稳定本地库读取没有 OCR 路径。2026-11-06 W21 源码调整后，第 5、6 项 operation 已停止调用 OCR 驱动；W22 源码调整后，第 2 项搜索框准备/清理不再调用搜索框状态 OCR；W24 源码调整后，第 1 项文本发送全链路不再调用 OCR。独立搜索/选择、媒体发送和添加客户仍可能使用 OCR。W24 独立测试与 CR 已通过，本机自会话双点标定已成功并落盘；真实目标搜索与文本发送尚未验收。
 
 | 序号 | 业务入口 | OCR 当前作用 | 已有非 OCR 通道 / 失败影响 | 源码 |
 |---|---|---|---|---|
-| 1 | 文本发送 `wecom_message_send` | **W24 源码已移除发送链 OCR**：自会话 GLM 双点标定并复制标题核对，搜索默认结果直接 Enter，目标标题复制核对，后验只查本地库 | 有效双点缓存无需 GLM/OCR；本地库准入失败发送前拒绝；独立测试与 CR 已通过，待真机发送验收 | [message-send.ps1](../../clients/wecom-cli/drivers/ps1/message-send.ps1)、[messageSend.ts](../../clients/wecom-cli/src/operations/messageSend.ts) |
+| 1 | 文本发送 `wecom_message_send` | **W24 源码已移除发送链 OCR**：自会话 GLM 双点标定并复制标题核对，搜索默认结果直接 Enter，目标标题复制核对，后验只查本地库 | 本机自会话标定 exit 0，schema 2 双点缓存与返回值一致；输入点未独立验证焦点。有效缓存无需 GLM/OCR；真实目标搜索与文本发送待验收 | [message-send.ps1](../../clients/wecom-cli/drivers/ps1/message-send.ps1)、[messageSend.ts](../../clients/wecom-cli/src/operations/messageSend.ts) |
 | 2 | 搜索框状态（共享） | **W22 源码已移除该门禁**：Ctrl+F 成功后固定 Ctrl+A/Delete 清空；搜索词输入后完整剪贴板回读，不再 OCR 判空、残留或清空结果 | Ctrl+F 失败即中止且不清聊天草稿；全文复制不匹配即中止。合成测试与独立 CR 已通过，待真机验收 | [_common.ps1](../../clients/wecom-cli/drivers/ps1/_common.ps1)、[chat-search.ps1](../../clients/wecom-cli/drivers/ps1/chat-search.ps1)、[add-customer.ps1](../../clients/wecom-cli/drivers/ps1/add-customer.ps1) |
 | 3 | 搜索会话 `wecom_chat_search` | 识别搜索结果名称、分区、位置，必要时让 Jev 选最佳项 | 已有本地库稳定会话 ID 和显示名，但 UI 搜索结果的具体点击位置仍从视觉获得；误读可能找不到候选 | [chat-search.ps1](../../clients/wecom-cli/drivers/ps1/chat-search.ps1) |
 | 4 | 进入会话 `wecom_chat_select` | 点击前重读搜索结果项和坐标；点击后读标题确认已进入目标 | 本地库能确认目标 ID/名称，当前没有已验证的“正在显示哪个会话 ID”来源；误读会拒绝进入或把标题验证报错 | [chat-select.ps1](../../clients/wecom-cli/drivers/ps1/chat-select.ps1) |

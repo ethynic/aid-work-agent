@@ -30,7 +30,7 @@
 | W21 会话读取移除 OCR 兜底 | read-session、unread_list、watch_poll 只用已验证版本本地库 | ✅ 完成（2026-11-06） | 独立 TEST 合成回归 95/95、代理工具 25/25、构建及 CR 通过；真机验收另行安排 |
 | W22 搜索框清理移除 OCR | Ctrl+F 后固定清空，输入后完整复制回读 | 🔧 进行中 | 独立 TEST 四组合成 PS 回归与 CR 通过；待真机验收及打包 |
 | W23 文本发送标题复制 | GLM 标定首字坐标，企微自身复制标题后核对 | 🔧 进行中 | agent2 的 max 档定位→复制两轮成功；发送路径已改为只复制一次，完整发送待验收 |
-| W24 文本发送双点标定与去 OCR | 自会话标定标题与输入区，发送仅用本地库核验 | 🔧 进行中 | P1 修复后独立 TEST 53/53、PS 合成及 CR 通过；待真机验收 |
+| W24 文本发送双点标定与去 OCR | 自会话标定标题与输入区，发送仅用本地库核验 | 🔧 进行中 | 本机自会话标定成功；目标搜索与文本发送待真机验收 |
 
 ## W14 通用Runtime业务工具自动装配（2026-10-29）
 
@@ -823,4 +823,8 @@ CR 回炉（2026-11-06）：旧无 OCR 搜索在 Ctrl+F 后立即 Ctrl+A/Delete�
 
 P1 修复后独立 TEST（2026-11-06）：复核 `GetGUIThreadInfo` 的线程 ID、`GUITHREADINFO` 布局与 `cbSize` 赋值在 PowerShell 5.1 合成脚本可运行；生产 `Open-WeComNamedChat` 的动态测试验证错误/缺失 caret 时零清理零 Enter、搜索词全文回读失败或结果面板未出现/残留/异进程时零 Enter，成功路径仅一次 Enter。联系人标题严格全等；补足既有企微标题格式“名字 @微信”，只允许“名字@微信”与“名字 @微信”两种全等，不接受相似名或任意后缀。`npm run build` exit 0，发送及搜索门禁 Node 30/30 exit 0，三份 PowerShell 合成脚本 exit 0，三份生产驱动 PS 语法 0 错且 UTF-8 BOM，`git diff --check` exit 0。此前 Python 101/101 和邻接 Node 11/11 结果可复用：本轮仅修改 PowerShell 标题匹配、对应合成断言与文档，未修改其代码/依赖/环境。尚待 CR 与真机完整搜索、标定、发送验收。
 
+首次真机标定入口（2026-11-06）：主控运行 `node dist/src/cli/index.js calibrate --json` exit 1，脚本路径被错误解析到不存在的 `dist/drivers/ps1/point-calibrate.ps1`，在启动驱动前失败，未触碰企微 UI。修复 `calibrate.ts` 相对编译后模块的路径为包根 `drivers/ps1/point-calibrate.ps1`；新增从实际 `dist` 模块读取运行时路径并检查脚本存在的回归测试。修复后 `npm run build` exit 0、`node --test dist/tests/calibrate-driver-path.test.js` 1/1 exit 0、标定 PowerShell BOM/语法及 `git diff --check` 均 exit 0；真实标定结果待主控重试。
+
 独立 CR 复审（2026-11-06）：两处 P1 已修复。搜索清理前后的主窗口 caret 证据、搜索词全文回读及同进程新结果面板共同约束 Enter；联系人标题仅按全文或明确微信后缀全等，相关合成回归通过。源码审查无剩余 P0/P1。真实企微完整搜索、标定和发送仍待验收，故 W24 保持进行中。
+
+本机自会话标定（2026-11-06）：主控重试 `node dist/src/cli/index.js calibrate --json`，约 22 秒、exit 0；返回的窗口相对标题首字 `(437,39)`、输入区中心 `(760,1245)`，窗口 `1117×1354`、DPI `96`。独立读取 `send-points.json` 的 schema 2 缓存，双点与窗口参数均与返回值一致。该结果证明本机自会话搜索、标题复制核对与双点缓存流程完成；GLM 给出的输入点未经过独立焦点验证，真实目标搜索与文本发送尚未验收，本次没有发送消息。

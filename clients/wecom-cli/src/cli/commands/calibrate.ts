@@ -9,7 +9,7 @@ import { artifactDir } from '../../platform/environment.js'
 import { probeCurrentAccount } from '../../platform/localdb/identity.js'
 import { withSendSnapshot } from '../../platform/localdb/sendVerification.js'
 
-const DRIVER_PATH = fileURLToPath(new URL('../../../drivers/ps1/point-calibrate.ps1', import.meta.url))
+export const DRIVER_PATH = fileURLToPath(new URL('../../../../drivers/ps1/point-calibrate.ps1', import.meta.url))
 
 export async function calibrateCommand(opts: { json?: boolean }): Promise<number> {
   const operation = {
