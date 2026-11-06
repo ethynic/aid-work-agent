@@ -176,3 +176,8 @@ test_uploads/office_preview/
 deploy/codex_readonly
 .claude/settings.local.json
 ext_package/
+
+# 个人 agent skill（团队共享规范在 .claude/rules/ 与 AGENTS.md，个人流程 skill 不入库）
+.agents/skills/dev-workflow/
+.agents/skills/phased-dev-review/
+.claude/skills/dev-workflow/
