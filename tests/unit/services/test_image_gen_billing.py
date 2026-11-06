@@ -14,7 +14,7 @@ import pytest
 
 def _make_tcp(price_per_call: float) -> dict:
     return {
-        "model_name": "qwen-image-edit",
+        "model_name": "qwen-image-3.0-pro",
         "price_per_call": price_per_call,
     }
 
@@ -34,11 +34,11 @@ class TestCalculateImageCreditCost:
         with patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
              patch("src.services.billing.create_settings", return_value=fixed_settings):
             mock_tcp_db.get_by_model_name.return_value = _make_tcp(0.25)
-            credit, bd = calculate_image_credit_cost_with_breakdown(images=2, model="qwen-image-edit")
+            credit, bd = calculate_image_credit_cost_with_breakdown(images=2, model="qwen-image-3.0-pro")
 
         assert credit == 50.0
         assert bd == {"unit_price_per_call": 0.25, "usage_factor": 100}
-        mock_tcp_db.get_by_model_name.assert_called_once_with("qwen-image-edit")
+        mock_tcp_db.get_by_model_name.assert_called_once_with("qwen-image-3.0-pro")
 
     def test_ceil_to_two_decimals(self, fixed_settings):
         """2 张 × 0.13 元 × 100 = 26.0；1 张 × 0.11 × 100 = 11.0（不进位场景核对）"""
@@ -111,13 +111,13 @@ class TestSessionRecordImageUsage:
         record = SessionRecordManager.start_record(
             session_id="s_img", user_id="u1", user_message="m", tenant_id="t1"
         )
-        record.add_image_usage(images=1, model="qwen-image-edit")
-        record.add_image_usage(images=2, model="qwen-image-edit")
+        record.add_image_usage(images=1, model="qwen-image-3.0-pro")
+        record.add_image_usage(images=2, model="qwen-image-3.0-pro")
 
         assert record.image_calls == 3
         bd = record.usage_breakdown["image"]
         assert bd["images"] == 3
-        assert bd["model"] == "qwen-image-edit"
+        assert bd["model"] == "qwen-image-3.0-pro"
         SessionRecordManager.end_record()
 
     def test_add_image_usage_ignores_non_positive(self):
@@ -149,7 +149,7 @@ class TestSessionRecordImageUsage:
         record = SessionRecordManager.start_record(
             session_id="s_img_save", user_id="u1", user_message="出图", tenant_id="t1"
         )
-        record.add_image_usage(images=2, model="qwen-image-edit")
+        record.add_image_usage(images=2, model="qwen-image-3.0-pro")
 
         with patch("src.db.models.ChatRecordDB.create", side_effect=_fake_create), \
              patch("src.services.billing.TokenCostPriceDB") as mock_tcp_db, \
@@ -161,7 +161,7 @@ class TestSessionRecordImageUsage:
         assert kwargs["credit_cost"] == 50.0
         image_bd = kwargs["usage_breakdown"]["image"]
         assert image_bd["images"] == 2
-        assert image_bd["model"] == "qwen-image-edit"
+        assert image_bd["model"] == "qwen-image-3.0-pro"
         assert image_bd["credit"] == 50.0
         assert image_bd["unit_price_per_call"] == 0.25
         assert image_bd["usage_factor"] == 100

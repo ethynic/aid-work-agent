@@ -114,13 +114,13 @@ class VideoGenConfig(BaseModel):
 
 
 class DashScopeImageGenConfig(BaseModel):
-    """DashScope 百炼图像生成/编辑配置（qwen-image-edit 系列，按张计费）。
+    """DashScope 百炼图像生成配置（qwen-image-3.0 系列，文生图/图生图，按张计费）。
 
     与万相同属百炼，同一 API key 通用，api_key 空回退 settings.llm.qwen.api_keys[0]。
     mode: async_task（提交任务 + 轮询，默认）| sync（同步直返，真机冒烟定版用）。
     """
     api_key: str = ""                          # 优先读 WANX_API_KEY；空则回退 qwen.api_keys[0]
-    model: str = "qwen-image-edit"             # 与 token_cost_prices.model_name 严格相等
+    model: str = "qwen-image-3.0-pro"             # 与 token_cost_prices.model_name 严格相等
     mode: str = "async_task"
     base_url: str = "https://dashscope.aliyuncs.com/api/v1"
     default_size: str = "1280*960"

@@ -128,14 +128,14 @@ video_gen:
     poll_interval_seconds: 30
     task_max_age_hours: 168                 # MiniMax 7 天查询窗口
 
-# 图像生成配置（DashScope 百炼图像编辑/文生图，qwen-image-edit 系列）
+# 图像生成配置（DashScope 百炼，qwen-image-3.0 系列，文生图/图生图）
 image_gen:
   provider: dashscope                       # 预留多 provider 扩展位
   poll_interval_seconds: 3                  # 异步任务轮询间隔
   poll_timeout_seconds: 180                 # 单次出图等待上限（工具层默认 300s 内）
   dashscope:
     api_key: ${WANX_API_KEY:-}              # 空：回退 qwen.api_keys[0]（同百炼账号通用）
-    model: qwen-image-edit                  # 与 token_cost_prices.model_name 严格相等（按张计费单价行）
+    model: qwen-image-3.0-pro                  # 与 token_cost_prices.model_name 严格相等（按张计费单价行）
     mode: async_task                        # async_task（提交任务+轮询）| sync（同步直返，冒烟定版用）
     base_url: https://dashscope.aliyuncs.com/api/v1
     default_size: "1280*960"                # 宽*高

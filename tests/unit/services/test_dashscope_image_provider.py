@@ -1,9 +1,9 @@
 """DashScope 图像生成 provider 单测（httpx MockTransport，全 mock 外部 API）
 
-覆盖：
-- async 提交：endpoint 选择（参考图有无 → image2image/text2image）、body/headers 组装
-- 轮询状态机：SUCCEEDED 取 results[].url、FAILED 带 error、成功无 url 转 FAILED
-- sync 提交：messages 多模态形态（image parts + text）、两种响应结构兼容
+覆盖（qwen-image-3.0 系列 wire 形态，API 文档定版）：
+- async 提交：统一端点 image-generation/generation、messages 形态 body（T2I 仅 text / I2I image+text）、headers 组装
+- 轮询状态机：SUCCEEDED 取 choices[].message.content[].image、FAILED 带 error、成功无 url 转 FAILED
+- sync 提交：multimodal-generation 端点、相同 messages 形态、两种响应结构兼容
 - 参考图 >3 拒绝、mode 非法拒绝、非 2xx 抛 ImageGenProviderError
 """
 import json
@@ -35,7 +35,7 @@ def _patch_async_client(handler):
 
 def _make_provider(mode="async_task"):
     return DashScopeImageProvider(
-        api_key="sk-test", model="qwen-image-edit", mode=mode, base_url=BASE_URL
+        api_key="sk-test", model="qwen-image-3.0-pro", mode=mode, base_url=BASE_URL
     )
 
 
@@ -55,8 +55,8 @@ class TestInit:
 
 class TestSubmitAsync:
     @pytest.mark.asyncio
-    async def test_text2image_endpoint_when_no_refs(self):
-        """无参考图走 text2image/image-synthesis，X-DashScope-Async header 必带"""
+    async def test_text2image_body_and_headers(self):
+        """无参考图（T2I）：统一端点 image-generation/generation，content 仅含 text"""
         captured = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -71,19 +71,19 @@ class TestSubmitAsync:
 
         assert result.task_id == "t-1"
         assert result.task_status == "PENDING"
-        assert captured["url"].endswith("/services/aigc/text2image/image-synthesis")
+        assert captured["url"].endswith("/services/aigc/image-generation/generation")
         assert captured["headers"].get("x-dashscope-async") == "enable"
         assert captured["headers"].get("authorization") == "Bearer sk-test"
         body = captured["body"]
-        assert body["model"] == "qwen-image-edit"
-        assert body["input"]["prompt"] == "效果图"
-        assert "images" not in body["input"]
+        assert body["model"] == "qwen-image-3.0-pro"
+        content = body["input"]["messages"][0]["content"]
+        assert content == [{"text": "效果图"}]
         assert body["parameters"]["size"] == "1280*960"
         assert body["parameters"]["n"] == 2
 
     @pytest.mark.asyncio
-    async def test_image2image_endpoint_and_ref_order(self):
-        """有参考图走 image2image，input.images 顺序保持（材质锚点在前）"""
+    async def test_image2image_body_and_ref_order(self):
+        """有参考图（I2I）：content 为 image parts 在前 + text 在后，顺序即语义顺序"""
         captured = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -96,8 +96,11 @@ class TestSubmitAsync:
         with _patch_async_client(handler):
             await provider.submit(ImageGenRequest(prompt="p", reference_images_data_urls=refs))
 
-        assert captured["url"].endswith("/services/aigc/image2image/image-synthesis")
-        assert captured["body"]["input"]["images"] == refs
+        assert captured["url"].endswith("/services/aigc/image-generation/generation")
+        content = captured["body"]["input"]["messages"][0]["content"]
+        assert content[0] == {"image": refs[0]}
+        assert content[1] == {"image": refs[1]}
+        assert content[2] == {"text": "p"}
 
     @pytest.mark.asyncio
     async def test_negative_prompt_and_seed_in_body(self):
@@ -113,7 +116,7 @@ class TestSubmitAsync:
                 prompt="p", negative_prompt="水印, logo", seed=42))
 
         body = captured["body"]
-        assert body["input"]["negative_prompt"] == "水印, logo"
+        assert body["parameters"]["negative_prompt"] == "水印, logo"
         assert body["parameters"]["seed"] == 42
 
 
@@ -148,12 +151,16 @@ class TestSubmitAsync:
 class TestPoll:
     @pytest.mark.asyncio
     async def test_succeeded_extracts_urls(self):
+        """SUCCEEDED：结果在 choices[].message.content[].image（3.0 系列轮询结构）"""
         def handler(request: httpx.Request) -> httpx.Response:
             assert request.url.path.endswith("/tasks/t-9")
             return httpx.Response(200, json={
                 "output": {
                     "task_status": "SUCCEEDED",
-                    "results": [{"url": "http://img/1.png"}, {"url": "http://img/2.png"}],
+                    "choices": [
+                        {"message": {"content": [{"image": "http://img/1.png"}]}},
+                        {"message": {"content": [{"image": "http://img/2.png"}]}},
+                    ],
                 }
             })
 
@@ -169,7 +176,7 @@ class TestPoll:
     async def test_succeeded_without_urls_becomes_failed(self):
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={
-                "output": {"task_status": "SUCCEEDED", "results": [{}]}
+                "output": {"task_status": "SUCCEEDED", "choices": [{"message": {"content": []}}]}
             })
 
         provider = _make_provider()

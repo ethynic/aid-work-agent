@@ -257,7 +257,7 @@ class SessionRecordService:
         breakdown["calls"] += calls
         breakdown["model"] = model
 
-    def add_image_usage(self, images: int = 1, model: str = "qwen-image-edit"):
+    def add_image_usage(self, images: int = 1, model: str = "qwen-image-3.0-pro"):
         """添加图像生成张数（累加，纯内存操作）
 
         image_render 等出图工具调用，按张计费，累加到当前会话记录。
@@ -417,7 +417,7 @@ class SessionRecordService:
             image_bd: Dict[str, Any] = {}
             if self.image_calls > 0:
                 try:
-                    image_model = (self.usage_breakdown.get("image") or {}).get("model") or "qwen-image-edit"
+                    image_model = (self.usage_breakdown.get("image") or {}).get("model") or "qwen-image-3.0-pro"
                     image_credit_cost, image_bd = calculate_image_credit_cost_with_breakdown(
                         images=self.image_calls, model=image_model
                     )

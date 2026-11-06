@@ -1,15 +1,19 @@
 """DashScope 百炼图像生成 provider（提交 + 轮询）。
 
-wire 形态说明（mode 可配置，真机冒烟定版，见计划 docs）：
-- async_task（默认）：POST {base_url}/services/aigc/{endpoint}，header X-DashScope-Async: enable；
-  有参考图走 image2image/image-synthesis（input.images 携带 data URL），纯文生图走
-  text2image/image-synthesis；轮询 GET /api/v1/tasks/{task_id}，结果在 output.results[].url。
+wire 形态说明（qwen-image-3.0 系列，API 文档定版，见 ext/qwen-image API文档.md）：
+- async_task（默认）：POST {base_url}/services/aigc/image-generation/generation，
+  header X-DashScope-Async: enable；请求体为 messages 多模态形态（与 sync 共用结构），
+  T2I 仅 {text}、I2I 3.0 系列 1-3 个 {image} + 1 个 {text}（顺序即语义顺序）；
+  轮询 GET /api/v1/tasks/{task_id}，结果在 output.choices[].message.content[].image（24h 有效）。
 - sync：POST {base_url}/services/aigc/multimodal-generation/generation 同步直返
-  （messages 多模态形态），结果直接在 output 中，不走任务轮询。
+  （相同 messages 形态），结果直接在 output 中，不走任务轮询。
 
-图片传输：base64 data URL 直传（与 wanx 视频 provider 相同约定），无需公网 URL/OSS。
+图片传输：base64 data URL 直传（data:{MIME};base64,{data}，与 wanx 视频 provider 相同约定），
+无需公网 URL/OSS。
 """
 from __future__ import annotations
+
+from typing import Any, Dict
 
 import httpx
 from loguru import logger
@@ -25,11 +29,11 @@ _MAX_REFERENCE_IMAGES = 3
 
 
 class DashScopeImageProvider:
-    """DashScope 图像生成调用（qwen-image-edit 系列）。"""
+    """DashScope 图像生成调用（qwen-image-3.0 系列，默认 qwen-image-3.0-pro）。"""
 
     name = "dashscope"
 
-    def __init__(self, api_key: str, model: str = "qwen-image-edit",
+    def __init__(self, api_key: str, model: str = "qwen-image-3.0-pro",
                  mode: str = "async_task", base_url: str = "https://dashscope.aliyuncs.com/api/v1"):
         if not api_key:
             raise ImageGenProviderError("图像生成 api_key 未配置（需 WANX_API_KEY 或 QWEN_API_KEYS）")
@@ -43,7 +47,7 @@ class DashScopeImageProvider:
     async def submit(self, req: ImageGenRequest, default_size: str = "1280*960") -> SubmitResult:
         """提交出图请求。
 
-        参考图上限 3 张（qwen-image-edit 约束，参考图顺序即语义顺序）。
+        参考图上限 3 张（qwen-image-3.0 系列约束，参考图顺序即语义顺序）。
         """
         refs = req.reference_images_data_urls or []
         if len(refs) > _MAX_REFERENCE_IMAGES:
@@ -57,28 +61,8 @@ class DashScopeImageProvider:
     # ---------------- async_task 模式 ----------------
 
     async def _submit_async(self, req: ImageGenRequest, refs: list, size: str) -> SubmitResult:
-        endpoint = (
-            "image2image/image-synthesis" if refs else "text2image/image-synthesis"
-        )
-        url = f"{self._base_url}/services/aigc/{endpoint}"
-        input_payload: Dict[str, Any] = {
-            "prompt": req.prompt,
-        }
-        if req.negative_prompt:
-            input_payload["negative_prompt"] = req.negative_prompt
-        if refs:
-            input_payload["images"] = refs
-        body = {
-            "model": self._model,
-            "input": input_payload,
-            "parameters": {
-                "size": size,
-                "n": req.n,
-                "watermark": False,   # 平台合规水印由业务层决定，不在 provider 硬加
-            },
-        }
-        if req.seed is not None:
-            body["parameters"]["seed"] = req.seed
+        url = f"{self._base_url}/services/aigc/image-generation/generation"
+        body = self._build_messages_body(req, refs, size)
 
         headers = {
             "Content-Type": "application/json",
@@ -105,8 +89,27 @@ class DashScopeImageProvider:
         logger.info(f"[image_gen] 提交成功 model={self._model} task_id={task_id} status={task_status} refs={len(refs)}")
         return SubmitResult(task_id=task_id, task_status=task_status, raw=data)
 
+    def _build_messages_body(self, req: ImageGenRequest, refs: list, size: str) -> dict:
+        """构造 messages 形态请求体（async_task 与 sync 共用，qwen-image-3.0 约定）。"""
+        content: list = [{"image": ref} for ref in refs]
+        content.append({"text": req.prompt})
+        body = {
+            "model": self._model,
+            "input": {"messages": [{"role": "user", "content": content}]},
+            "parameters": {
+                "size": size,
+                "n": req.n,
+                "watermark": False,   # 平台合规水印由业务层决定，不在 provider 硬加
+            },
+        }
+        if req.negative_prompt:
+            body["parameters"]["negative_prompt"] = req.negative_prompt
+        if req.seed is not None:
+            body["parameters"]["seed"] = req.seed
+        return body
+
     async def poll(self, task_id: str) -> PollResult:
-        """查询异步任务状态（SUCCEEDED 时提取 output.results[].url）。"""
+        """查询异步任务状态（SUCCEEDED 时提取 choices[].message.content[].image）。"""
         headers = {"Authorization": f"Bearer {self._api_key}"}
         url = f"{self._base_url}/tasks/{task_id}"
         try:
@@ -127,11 +130,7 @@ class DashScopeImageProvider:
         image_urls: list = []
         error = None
         if task_status == "SUCCEEDED":
-            results = output.get("results") or []
-            for item in results:
-                url_ = (item or {}).get("url") if isinstance(item, dict) else None
-                if url_:
-                    image_urls.append(url_)
+            image_urls = self._extract_sync_urls(output)
             if not image_urls:
                 task_status = "FAILED"
                 error = "任务成功但未返回图片 url"
@@ -144,21 +143,7 @@ class DashScopeImageProvider:
 
     async def _submit_sync(self, req: ImageGenRequest, refs: list, size: str) -> SubmitResult:
         url = f"{self._base_url}/services/aigc/multimodal-generation/generation"
-        content: list = [{"image": ref} for ref in refs]
-        content.append({"text": req.prompt})
-        body = {
-            "model": self._model,
-            "input": {"messages": [{"role": "user", "content": content}]},
-            "parameters": {
-                "size": size,
-                "n": req.n,
-                "watermark": False,
-            },
-        }
-        if req.negative_prompt:
-            body["parameters"]["negative_prompt"] = req.negative_prompt
-        if req.seed is not None:
-            body["parameters"]["seed"] = req.seed
+        body = self._build_messages_body(req, refs, size)
 
         headers = {
             "Content-Type": "application/json",
@@ -185,7 +170,8 @@ class DashScopeImageProvider:
 
     @staticmethod
     def _extract_sync_urls(output: Dict[str, Any]) -> list:
-        """兼容 sync 响应的两种常见结构：output.results[].url 与 choices[].message.content[].image。"""
+        """提取图片 url：优先 output.results[].url，回退 choices[].message.content[].image
+        （qwen-image-3.0 系列同步响应与异步轮询结果均为后者结构）。"""
         urls: list = []
         for item in output.get("results") or []:
             if isinstance(item, dict) and item.get("url"):

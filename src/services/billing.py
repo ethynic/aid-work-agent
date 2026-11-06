@@ -193,19 +193,19 @@ def calculate_asr_credit_cost(
 
 def calculate_image_credit_cost(
     images: int,
-    model: str = "qwen-image-edit",
+    model: str = "qwen-image-3.0-pro",
     usage_factor_override: Optional[int] = None,
 ) -> float:
     """计算图像生成消耗的积分（按张计费）
 
-    DashScope 百炼图像生成按张计费（qwen-image-edit 等模型）。
+    DashScope 百炼图像生成按张计费（qwen-image-3.0-pro 等模型）。
     单价查 token_cost_prices.price_per_call（通用按次单价列，与 ASR 的
     asr_price_per_call 区分，避免混用）。
     公式：credit_cost = ceil(images × price_per_call × image_usage_factor × 100) / 100
 
     Args:
         images: 生成图片张数（实际交付/下载注册成功的张数）
-        model: 图像模型名（默认 qwen-image-edit），用于查 price_per_call 单价
+        model: 图像模型名（默认 qwen-image-3.0-pro），用于查 price_per_call 单价
         usage_factor_override: 用量系数覆盖值
 
     Returns:
@@ -616,7 +616,7 @@ def calculate_asr_credit_cost_with_breakdown(
 
 def calculate_image_credit_cost_with_breakdown(
     images: int,
-    model: str = "qwen-image-edit",
+    model: str = "qwen-image-3.0-pro",
     usage_factor_override: Optional[int] = None,
     *, price_snapshot: Optional[dict] = None,
 ) -> tuple:

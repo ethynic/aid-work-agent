@@ -124,7 +124,7 @@ class TestReferenceResolution:
 
         async def fake_render(req, **kw):
             captured["refs"] = req.reference_images_data_urls
-            return [mock_ref], {"task_id": "task-1", "model": "qwen-image-edit",
+            return [mock_ref], {"task_id": "task-1", "model": "qwen-image-3.0-pro",
                                 "requested_n": 1, "succeeded_n": 1}
 
         tool = ImageRenderTool()
@@ -151,7 +151,7 @@ class TestExecuteSuccess:
             svc = MagicMock()
             svc.render = AsyncMock(return_value=(
                 [mock_ref, mock_ref],
-                {"task_id": "task-2", "model": "qwen-image-edit", "requested_n": 2, "succeeded_n": 2},
+                {"task_id": "task-2", "model": "qwen-image-3.0-pro", "requested_n": 2, "succeeded_n": 2},
             ))
             mock_get_svc.return_value = svc
             mock_mgr.get_current_record.return_value = record
@@ -160,12 +160,12 @@ class TestExecuteSuccess:
         assert result["success"] is True
         assert result["images_count"] == 2
         assert result["requested_n"] == 2
-        assert result["model"] == "qwen-image-edit"
+        assert result["model"] == "qwen-image-3.0-pro"
         assert result["task_id"] == "task-2"
         img = result["images"][0]
         assert img["file_id"] == "file_gen001"
         assert img["download_url"] == "/api/files/file_gen001/download"
-        record.add_image_usage.assert_called_once_with(images=2, model="qwen-image-edit")
+        record.add_image_usage.assert_called_once_with(images=2, model="qwen-image-3.0-pro")
 
     @pytest.mark.asyncio
     async def test_partial_success_billed_by_succeeded_count(self, mock_ref):
@@ -178,14 +178,14 @@ class TestExecuteSuccess:
             svc = MagicMock()
             svc.render = AsyncMock(return_value=(
                 [mock_ref],
-                {"task_id": "t", "model": "qwen-image-edit", "requested_n": 4, "succeeded_n": 1},
+                {"task_id": "t", "model": "qwen-image-3.0-pro", "requested_n": 4, "succeeded_n": 1},
             ))
             mock_get_svc.return_value = svc
             mock_mgr.get_current_record.return_value = record
             result = await tool.execute(prompt="p", n=4)
 
         assert result["images_count"] == 1
-        record.add_image_usage.assert_called_once_with(images=1, model="qwen-image-edit")
+        record.add_image_usage.assert_called_once_with(images=1, model="qwen-image-3.0-pro")
 
     @pytest.mark.asyncio
     async def test_billing_fallback_without_record(self, mock_ref):
@@ -205,12 +205,12 @@ class TestExecuteSuccess:
              patch("src.db.models.ChatRecordDB.create", side_effect=_fake_create):
             svc = MagicMock()
             svc.render = AsyncMock(return_value=(
-                [mock_ref], {"task_id": "t", "model": "qwen-image-edit",
+                [mock_ref], {"task_id": "t", "model": "qwen-image-3.0-pro",
                              "requested_n": 1, "succeeded_n": 1},
             ))
             mock_get_svc.return_value = svc
             mock_mgr.get_current_record.return_value = None
-            mock_tcp.get_by_model_name.return_value = {"model_name": "qwen-image-edit",
+            mock_tcp.get_by_model_name.return_value = {"model_name": "qwen-image-3.0-pro",
                                                        "price_per_call": 0.25}
             settings = MagicMock()
             settings.billing.image_usage_factor = 100

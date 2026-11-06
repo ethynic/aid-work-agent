@@ -1,4 +1,4 @@
-"""image_render AI 出图工具 — DashScope qwen-image-edit 系列通用入口。
+"""image_render AI 出图工具 — DashScope qwen-image-3.0 系列通用入口。
 
 有参考图（1-3 张）= 图生图/edit；无参考图 = 纯文生图。生成图按张计费
 （token_cost_prices.price_per_call × image_usage_factor），生成图注册为租户
@@ -38,7 +38,7 @@ class ImageRenderTool(BaseTool):
     name = "image_render"
     display_name = "AI图片生成"
     description = (
-        "AI 图像生成/编辑：按提示词生成图片；提供 1-3 张参考图时做图生图"
+        "AI 图像生成：按提示词生成图片；提供 1-3 张参考图时做图生图（如产品图叠加户型图渲染效果图）"
         "（产品材质/造型还原、户型空间还原等）。生成图自动交付到会话并按张计费。"
     )
     InputModel = ImageRenderInputModel
@@ -156,7 +156,7 @@ class ImageRenderTool(BaseTool):
         """按成功张数计费：有会话记录累加；无记录（后台/无会话上下文）独立落账。"""
         if not images or images <= 0:
             return
-        model = model or "qwen-image-edit"
+        model = model or "qwen-image-3.0-pro"
         try:
             from src.services.session_record import SessionRecordManager
             record = SessionRecordManager.get_current_record()
