@@ -24,7 +24,7 @@
 | W15 提交与合并 | 特性分支推送及master整合 | ✅ 完成（2026-10-30） | 特性分支1b0759cd已双远程推送；master保留两边历史并完成合并核验，未部署监听 |
 | W16 客户端打包归拢复核 | master上验证旧Runtime/BOSS与发行改动并提交 | ✅ 完成（2026-10-30） | 主控60项、独测3专项/5批Windows实测及CR通过；仅本任务定向提交，未部署监听 |
 | W17 长文本粘贴与草稿误判修复 | 窄窗草稿保护、取消粘贴后 OCR 门禁、数据库唯一记录核验 | 🔧 进行中 | CLI 0.2.6 已签包并放 Downloads、目标 Runtime 静态验包通过；待用户安装及真机验收 |
-| W18 文本发送输入替换 | 当前目标标题复核后清空输入区，沿用单行/多行输入方式 | ✅ 完成（2026-11-06） | 独测、最终 CR 通过；本机真实群单条发送及本地库唯一记录通过；待合并交付 |
+| W18 文本发送输入替换 | 当前目标标题复核后清空输入区，沿用单行/多行输入方式 | ✅ 完成（2026-11-06） | 独测、最终 CR、本机空框/带草稿真实发送通过；已合并 master 并出 0.2.7 包，待客户安装 |
 
 ## W14 通用Runtime业务工具自动装配（2026-10-29）
 
@@ -739,4 +739,6 @@ agent2 的 `tr_runner_05033bd35b3642889245230f576a8a4d:1` 及同用户后续会�
 
 用户随后在同一群输入框中手动放入草稿，明确授权覆盖草稿再试一次。2026-11-06 15:40–15:41，功能分支 CLI 的 `probe --json` 在线、本地库群名唯一命中；仅执行一次 `send --session '售前客服群' --text <新唯一测试标记> --json`，exit 0、`OK`、`effect=applied`、`verification=local-record`，新增 `message_id=1988`。本次驱动截图 `step2-before-clear.png` 可见目标群标题及输入框内原草稿，`step2-typed.png` 可见输入框仅剩新测试文本，`step3-after.png` 可见该文本成为群内一条出站消息且输入框为空；驱动日志记录 Ctrl+A/Delete 投递及发送前标题复核。原草稿未混入出站消息；本地库单条匹配只证明客户端记录，不证明群成员送达。未重复发送，也未安装或部署客户端。
 
-用户确认看到发送成功，授权合并 master 并将最新 WeCom CLI 放入 Downloads。现有 0.2.6 已有不同内容的交付包，因此本次源码版本与锁文件同步升为 0.2.7；打包只选择 WeCom，不构建或安装 Runtime。合并、签包与交付结果待记录。
+用户确认看到发送成功，授权合并 master 并将最新 WeCom CLI 放入 Downloads。现有 0.2.6 已有不同内容的交付包，因此本次源码版本与锁文件同步升为 0.2.7；打包只选择 WeCom，不构建或安装 Runtime。
+
+交付结果：功能分支 `888ce07a` 已快进合并 master 并推送 Codeup/GitHub；从该提交 `HEAD` 隔离构建 WeCom 0.2.7，复用已登记 acceptance 发布者及上次出包的 OCR 资产。仓库默认 `ocr-python-final` 缺 `tzdata`，首次打包在产物生成前中止；改用已有 `ocr-python-wecom-daily-20261105` 后单次打包成功。脚本 exit 0，插件签名与离线验包、目标已安装 Runtime 的公开根/四项工具兼容、打包定向测试及 ZIP SHA-256 均通过。交付目录 `C:/Users/PC/Downloads/AID-Work-WeCom-0.2.7-20261106-154406/`，同名 ZIP 与 `.zip.sha256` 在 Downloads；ZIP SHA-256 `ff5923b4dbfeb580cc6757794f46456a4322a2ef0ff065e54c4e87dcb8a3ea66`。build-info 的 `baseCommit=888ce07a35951cd17f6bdde9f8a3f0345e9cab29`、`component=Wecom`、`wecom=0.2.7`；未构建 Runtime、未安装客户端、未部署 agent2，原客户场景仍待验收。

@@ -85,7 +85,7 @@
 | 20261105-1540 | Excel 工具假异步与 used range 膨胀防御修复（TPG80509） | ✅ 已完成开发（待部署） | 生产 243 全智能体无响应事故修复：excel_process 8 个 handler 全量 to_thread 包裹；双 ExcelReader 归一到 file/excel_reader.py（excel/excel_reader.py read_excel_document 薄委托）；used range 膨胀走 read_only 流式探测真实边界 + 截断提示。270 个相关测试通过。 | — | — |
 | 20261104-2038 | 企微会话每日总结工作台与专属定时配置 | 🔧 部分完成 | 日报内部会话已从聊天列表排除，待 agent2 发布验收。 | [设计](design/wecom/wecom-conversation-operations-design.md) | [计划](plans/plan-wecom-daily-summary-workbench.md) |
 | 20261103-1508 | 企微附件原件与持续任务后续优化 | 📋 待开发（用户暂缓） | 附件原件、预览及Runner恢复交互另行实施，不阻塞日志日报。 | [设计边界](design/wecom/wecom-conversation-operations-design.md#8-后置范围与验收原则) | [后续计划](plans/plan-wecom-conversation-followups.md) |
-| 20261105-1100 | 企微群聊长文本粘贴与监控等待修复 | 🔧 部分完成 | W18 独测、CR及本机单条群发送通过，待合并和客户端交付。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w18-文本发送输入替换修复2026-11-06) |
+| 20261105-1100 | 企微群聊长文本粘贴与监控等待修复 | 🔧 部分完成 | W18 已合并 master 并出 0.2.7 包，待客户安装验收。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w18-文本发送输入替换修复2026-11-06) |
 | 20261102-1430 | 企微旁路聊天日志、前端与按日日报 | 🔧 部分完成（工作台由新计划接续） | 旁路日志与日期读取已有初版实现；日报页面及计划按新方案重做。 | [设计](design/wecom/wecom-conversation-operations-design.md) | [历史计划](plans/plan-wecom-conversation-operations.md) / [新计划](plans/plan-wecom-daily-summary-workbench.md) |
 | 20261018-1736 | wecom-cli 登录引导增强（自动拉起 + 二维码直返） | 💡 灵感 | 三态验收发现：need_login 态 probe 已返回登录二维码 base64，缺口是 WECOM_NOT_FOUND（进程未启动）时不自动拉起企微——增加自动启动后把二维码转交 agent 引导用户扫码。 | [验收记录](plans/wecom-cli-localdb-three-state-acceptance.md) | — |
 | 20261014-2043 | wecom-cli 本地库数据通道（local-db） | 🔧 部分完成 | 统一打包入口及Runtime＋WeCom配套验包完成，实际安装待验。 | [设计](design/wecom/wecom-cli-localdb-design.md) | [开发计划](plans/plan-wecom-cli-localdb.md) |
