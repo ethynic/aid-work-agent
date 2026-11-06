@@ -323,9 +323,8 @@ def scheduled_result_link(message):
     - 仅 scheduled 终态（task.completed/failed 且 parameters 带 task_id——
       scheduled 生产者必带，普通聊天终态不带）生成链接；聊天终态返回 None
       不误导到任务页；
-    - 链接是登录后定位符（/notification?ref=... 复用既有归属核验入口），
-      不授予访问权；未配置 app.public_base_url 时不拼假地址，记录配置缺口
-      并按原文本投递。
+    - 分享映射由通知展开事务预备并随 message 传入；补建失败时回落旧
+      /notification 定位符，不阻塞投递。未配置 app.public_base_url 时不拼假地址。
     """
     if message.get('event_type') not in ('task.completed', 'task.failed'):
         return None
@@ -338,6 +337,9 @@ def scheduled_result_link(message):
     if not base:
         _log_public_base_url_gap()
         return None
+    share_key = message.get('_task_result_share_key')
+    if share_key:
+        return base + '/share/task-result/' + quote(str(share_key), safe='')
     ref = str(message.get('notification_ref') or '')
     if not ref:
         return None

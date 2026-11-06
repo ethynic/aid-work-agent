@@ -9,7 +9,7 @@
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
 | Phase 1 | 后端：share 记录 + 公开路由 | ✅ 完成（2026-11-06） | 79 通过、1 跳过；隔离 PG 实测通过；CR 通过 |
-| Phase 2 | 渠道切换（web push / 站内信 / IM webhook） | 📋 待开发 | |
+| Phase 2 | 渠道切换（web push / 站内信 / IM webhook） | ✅ 完成（2026-11-06） | 后端 47、SW 19 通过；隔离 PG、build 与 CR 通过；旧断言 2 失败 |
 | Phase 3 | 前端：免登录结果页 | 📋 待开发 | |
 | Phase 4 | 汇总回归、独立测试与 CodeReview；真机验收待授权 | 📋 待开发 | |
 
@@ -31,6 +31,7 @@
 
 - 站内信：`repository._inbox_link` task.completed/failed（params 带 task_id）分支 → 免登录链接；`inbox()` 渲染处按通知的 `resource_ref.id`（runner_id）定位任务并批量惰性回填 share 记录；普通聊天终态保持旧链接
 - IM webhook / 邮件：`events.scheduled_result_link` → 免登录链接，渲染时惰性创建 share 记录，失败回落旧链接并记脱敏日志；通知已送达的旧文案不回改
+- 外发 adapter 在 `NotificationRepository.expand()` 的消息锁事务内渲染：回填使用该事务已有 cursor，先以 savepoint 隔离可恢复的回填失败，再将 share_key 作为内存字段交给各 adapter；不在 adapter 内另开连接
 - web push：scheduled 终态 payload 增加同源相对路径 `share_url`，SW 存入 notification data 并在点击时优先使用；缺失回退现逻辑，校验相对路径形态，避免任意跳转
 - 单测：三类渠道链接生成与回退分支；惰性回填幂等
 
@@ -43,7 +44,7 @@
 
 ## Phase 4 汇总回归与验收
 
-- 每个开发 Phase 执行开发自测 → 独立测试回归与启动安全检查 → 只读 CR；通过后由 CR 提交并推送本 Phase。Phase 4 汇总跨渠道回归与证据，不把已通过的相同代码状态机械重测
+- 每个开发 Phase 执行开发自测 → 独立测试回归与启动安全检查 → 只读 CR；通过后由 CR 提交本 Phase。本次按用户选择只本地提交、不推送。Phase 4 汇总跨渠道回归与证据，不把已通过的相同代码状态机械重测
 - agent2 真机：设计「测试与验收要点」全项走查（免登录打开/文件下载/自动跳转/非本人只读/任务删除失效）；所有环境的部署必须等用户明确指示“部署到 XX”，未授权时记录为待验收
 - 兼容验证：只升级服务端，存量旧通知链接（web push/IM 已发出文案）仍可按原逻辑打开
 

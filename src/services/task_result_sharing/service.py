@@ -32,6 +32,35 @@ def ensure_task_result_share_in_tx(cursor, task, runner):
     return cursor.fetchone()['share_key']
 
 
+def task_result_links_for_runners_in_tx(cursor, runner_ids, tenant_id, user_id):
+    """Backfill old terminal notices in one cursor, returning only live owned runs."""
+    ids = list(dict.fromkeys(runner_id for runner_id in runner_ids if runner_id))
+    if not ids or not tenant_id or not user_id:
+        return {}
+    keys = [secrets.token_urlsafe(24) for _ in ids]
+    cursor.execute('''INSERT INTO task_result_shares
+        (share_key,tenant_id,user_id,task_id,runner_id,session_id)
+        SELECT seed.share_key,t.tenant_id,t.user_id,t.task_id,r.runner_id,t.session_id
+        FROM unnest(%s::text[],%s::text[]) AS seed(share_key,runner_id)
+        JOIN agent_runners r ON r.runner_id=seed.runner_id
+        JOIN scheduled_tasks t ON t.session_id=r.session_id
+            AND t.user_id=r.user_id AND t.tenant_id=r.tenant_id
+        WHERE r.source='scheduled' AND r.session_kind='web'
+          AND r.status IN ('completed','failed') AND r.user_id=%s AND r.tenant_id=%s
+        ON CONFLICT (task_id, runner_id) DO NOTHING''',
+        (keys, ids, user_id, tenant_id))
+    cursor.execute('''SELECT s.runner_id,s.share_key FROM task_result_shares s
+        JOIN agent_runners r ON r.runner_id=s.runner_id AND r.session_id=s.session_id
+            AND r.user_id=s.user_id AND r.tenant_id=s.tenant_id
+        JOIN scheduled_tasks t ON t.task_id=s.task_id AND t.session_id=s.session_id
+            AND t.user_id=s.user_id AND t.tenant_id=s.tenant_id
+        WHERE s.runner_id=ANY(%s) AND s.user_id=%s AND s.tenant_id=%s
+          AND r.source='scheduled' AND r.session_kind='web'
+          AND r.status IN ('completed','failed')''',
+        (ids, user_id, tenant_id))
+    return {row['runner_id']: row['share_key'] for row in cursor.fetchall()}
+
+
 def _row(cursor, sql, values):
     cursor.execute(sql, values)
     row = cursor.fetchone()

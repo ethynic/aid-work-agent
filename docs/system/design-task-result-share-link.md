@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS task_result_shares (
 
 - **生成**：`publish_runner_terminal_in_tx`（producer.py scheduled 分支）生产通知的**同一事务内**惰性创建（`ON CONFLICT (task_id, runner_id) DO NOTHING` 后读回）。保持该函数现有 `notification_ref` 返回契约；后续渠道从映射查询 share_key。与通知同事务保证"通知存在则链接存在"。
 - **存量通知回填**：站内信 link 与 IM webhook 文案均为**渲染时**动态生成——渲染路径按通知资源（task_id + runner_id）查 `task_result_shares`，缺失则惰性补建（UNIQUE 幂等）。已发出的 web push / IM 文案固化在投递产物中，不回改。
+- 外发通知的 adapter 在 `NotificationRepository.expand()` 持有消息锁的事务内渲染；回填沿用同一 cursor，savepoint 只包可回退的映射补建，把 share_key 临时放入渲染消息，不在 adapter 内另开数据库连接。站内信列表在自身连接内批量回填并提交。回填失败仅记异常类型并回落旧链接。
 - **失效**：不主动删记录；实时读 join 校验失败即 404（见下）。通知消息自身 24h TTL 与本链接无关（通知过期 ≠ 链接失效）。
 - **范围外事件**：paused / needs_action / manual_rejected / 普通聊天终态不创建 share，链接维持 `/notification?ref=`。
 
