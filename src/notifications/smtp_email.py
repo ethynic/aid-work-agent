@@ -39,8 +39,7 @@ class SmtpEmailAdapter:
     def render(self, message, target):
         from .events import render_message_text, scheduled_result_link
         title, body = render_message_text(message['event_type'], message['parameters'])
-        # scheduled 终态附「查看本次执行结果」登录后链接（设计 §15.5；链接仅
-        # 属主可读，普通聊天终态与未配置 public_base_url 时不附加）
+        # scheduled 终态附免登录结果链接；旧通知回填失败时仍用登录定位符。
         link = scheduled_result_link(message)
         if link:
             body = f'{body}\n\n查看本次执行结果：{link}'

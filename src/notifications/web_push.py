@@ -144,12 +144,20 @@ class WebPushAdapter:
         else:
             session_title = message['parameters']['session_title']
             event_kind = message['parameters']['event_kind']
-        return {'schema_version':1, 'notification_ref':message['notification_ref'],
+        payload = {'schema_version':1, 'notification_ref':message['notification_ref'],
                 'session_title':session_title,
                 'event_kind':event_kind,
                 'installation_ref':target['installation_ref'],
                 'binding_version':target['binding_version'],
                 'expiry':int(message['expires_at'].timestamp())}
+        if (message['event_type'] in ('task.completed', 'task.failed')
+                and message['parameters'].get('task_id')
+                and message.get('_task_result_share_key')):
+            from urllib.parse import quote
+
+            payload['share_url'] = ('/share/task-result/'
+                                    + quote(str(message['_task_result_share_key']), safe=''))
+        return payload
 
     def send(self, configuration, payload, ttl):
         connection = None
