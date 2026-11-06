@@ -72,7 +72,8 @@ class TestScheduledTerminalParametersAccepted:
         cursor = self._cursor(
             {'title': '每日日报'},
             {'notification_target_id': 'target_9', 'name': '每日日报'})
-        with patch.object(events_mod, 'publish_in_tx', spy_publish):
+        with patch.object(events_mod, 'publish_in_tx', spy_publish), patch(
+                'src.services.task_result_sharing.service.ensure_task_result_share_in_tx'):
             # producer 内部 from .events import publish_in_tx 为函数内延迟导入，
             # patch events 模块属性即可拦截
             publish_runner_terminal_in_tx(cursor, self._runner(), NotificationsConfig())

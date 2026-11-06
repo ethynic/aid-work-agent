@@ -259,9 +259,10 @@ def view_share(record, password=None):
     return {'state': 'ready', 'message': message, 'access_ticket': ticket}
 
 
-def shared_file(record, alias, ticket, download=False):
+def shared_file(record, alias, ticket, download=False, base_path=None):
+    base = base_path or share_path(record['share_key'])
     try:
-        access = validate_download_ticket(ticket, share_path(record['share_key']))
+        access = validate_download_ticket(ticket, base)
     except (ValueError, TypeError, OverflowError):
         access = None
     if access is None:
@@ -282,7 +283,7 @@ def shared_file(record, alias, ticket, download=False):
             text = Path(info['path']).read_text(encoding='utf-8-sig')
             def replace_reference(value):
                 target = reference['links'].get(value)
-                return share_path(record['share_key']) + '/files/' + target + '?' + urlencode({'ticket': ticket}) if target else value
+                return base + '/files/' + target + '?' + urlencode({'ticket': ticket}) if target else value
 
             text = _rewrite_references(text, replace_reference)
             return {**info, 'text': text}

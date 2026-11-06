@@ -72,7 +72,7 @@ def _wecom_daily_terminal_extras(cursor, runner, task, event_kind):
     return extras
 
 
-def _scheduled_parameters(cursor, runner, event_kind):
+def _scheduled_parameters(cursor, runner, event_kind, *, include_task=False):
     """scheduled 事件参数：会话标题（=任务名）+ session_id/task_id/绑定快照
     （设计 §8.2：notify_rule_id/notify_target_id 在事件生成时从任务行快照，
     规则优先、目标仅存量任务兜底，加密存储不可变）。"""
@@ -82,9 +82,13 @@ def _scheduled_parameters(cursor, runner, event_kind):
     session = cursor.fetchone()
     if not session:
         return None
-    cursor.execute('''SELECT task_id,notification_rule_id,notification_target_id,name,task_prompt
-        FROM scheduled_tasks WHERE session_id=%s''', (runner['session_id'],))
+    cursor.execute('''SELECT task_id,session_id,tenant_id,user_id,notification_rule_id,
+        notification_target_id,name,task_prompt FROM scheduled_tasks
+        WHERE session_id=%s AND user_id=%s AND tenant_id=%s''',
+        (runner['session_id'], runner['user_id'], runner['tenant_id']))
     task = cursor.fetchone()
+    if not task:
+        return None
     scheduled_meta = ((runner.get('input') or {}).get('request_data') or {}).get('scheduled') or {}
     parameters = {'session_title': session_title(session['title']),
                   'event_kind': event_kind,
@@ -98,7 +102,7 @@ def _scheduled_parameters(cursor, runner, event_kind):
         parameters['notify_rule_id'] = str(rule_id)[:128]
     elif target_id:
         parameters['notify_target_id'] = str(target_id)[:128]
-    return parameters
+    return (parameters, task) if include_task else parameters
 
 
 def publish_runner_terminal_in_tx(cursor, runner, config=None):
@@ -113,9 +117,13 @@ def publish_runner_terminal_in_tx(cursor, runner, config=None):
         raise ValueError('NOTIFICATION_RUNNER_SCOPE_MISMATCH')
     event_kind = runner['status']
     if runner['source'] == 'scheduled':
-        parameters = _scheduled_parameters(cursor, runner, event_kind)
-        if parameters is None:
+        scheduled = _scheduled_parameters(cursor, runner, event_kind, include_task=True)
+        if scheduled is None:
             return  # Deleted resources have no recipient-readable result.
+        parameters, task = scheduled
+        from src.services.task_result_sharing.service import ensure_task_result_share_in_tx
+
+        ensure_task_result_share_in_tx(cursor, task, runner)
         occurred = runner['finished_at']
         from .events import publish_in_tx
         return publish_in_tx(cursor, subject=subject, producer='runner',

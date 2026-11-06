@@ -5632,6 +5632,18 @@ CREATE TABLE IF NOT EXISTS chat_message_shares (
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 定时任务终态结果免登录链接；内容实时读取，不复制回复或文件
+CREATE TABLE IF NOT EXISTS task_result_shares (
+    share_key TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    runner_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (task_id, runner_id)
+);
+
 -- ==================== AI获客智能体业务表（bs_ai_lead_gen_*） ====================
 -- 名单/联系人/邮件/回复五表；与 src/skills/ai-lead-gen-1.0.0/scripts/lead_db.py
 -- init_tables() 同构（幂等 IF NOT EXISTS）。外键完整性应用层保证。
