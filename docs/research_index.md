@@ -6,6 +6,7 @@
 
 | 调研主题 | 文档 | 关联功能 |
 |---------|------|---------|
+| agent3 Runner 端到端混合负载实验 | [实测报告](research/agent3-runner-end-to-end-load-test-20261106.md) | Runner 执行槽隔离 Phase 4：三档 8/8 任务完成结算，双槽并行已验；同步阻塞、告警与旧客户端仍待验。 |
 | 「社会治理智能体」技术要求评估 | [评估](research/social-governance-agent-requirement-assessment.md) | 2026-11-03：高校采购标书 vs 本项目能力对照；约 60% 吻合可投，缺口为工作流编排与知识空间，投标前需定应对策略。 |
 | Runtime 与 CLI 安装升级简化评估 | [评估](research/runtime-cli-install-upgrade-simplicity-review.md) | 2026-10-30：审查安装、任务恢复、验包与信任耦合，建议覆盖升级优先、重装白名单保留配置。 |
 | 企业微信群接入自研 Agent 自动问答 | [调研](research/wecom-group-agent-bot-research.md) | 2026-10-22：内部群 @智能机器人可走官方 API；外部客户群不能按同一路线承诺，现有应用渠道需另做适配。 |
