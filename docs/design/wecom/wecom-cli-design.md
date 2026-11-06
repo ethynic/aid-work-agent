@@ -55,6 +55,8 @@ W23 模型调用契约：`GLM-5.3-Flash` 强制思考，客户端代理路由调
 | `wecom_send_file` | 任意扩展 ≤100MB，文件名去空白 ≥3 字符 | 写 |
 | `wecom_add_customer` | 按手机号检索并发添加邀请（confirm 显式 true；M12 网络查找直达路线） | 写 |
 
+`wecom_probe` 的登录态由窗口枚举判断；二维码截图仅供用户扫码。窗口信息无法证明二维码是否过期或账号是否受限，因此保留兼容字段 `qr_status_hint=unknown`，不再调用 OCR 推测细状态。变更见 [开发计划](../../plans/plan-wecom-cli-probe-remove-ocr.md)。
+
 - 智能分发（M11a）：send/send-image/send-file 支持 `target_ref`/
   `target_name` 二选一；驱动返回 `navigate_required=true` 时 TS 层（`src/operations/
   navigate.ts`）编排内部 chatSearch+chatSelect 后二次调用；`resolveTargetByName`

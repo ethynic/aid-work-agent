@@ -30,7 +30,7 @@ CLI 动词子命令与 MCP stdio server 共用同一 operation 层，UI 自动�
 ```
 aid-wecom probe [--verbose] [--json]        # 只读环境探测：平台/交互会话/PowerShell/进程/主窗口/登录态/当前页
                                             # 登录态三态 online/need_login/offline；need_login 时附登录窗二维码
-                                            # PNG base64 + qr_status_hint 供扫码上线（见 probe 命令章节）
+                                            # PNG base64 供扫码，qr_status_hint 固定 unknown（见 probe 命令章节）
 aid-wecom search --query <词> [--type contact|group|any] [--limit N] [--json]
                                             # 搜索联系人/群聊（只读）：Jev 选最优候选，返回 best/坐标/概率 + 带 target_ref 的候选
                                             # 副作用：搜索结果面板保持打开（坐标句柄供后续 select 命令消费）
@@ -71,21 +71,19 @@ aid-wecom version [--json]                  # 版本 + provider manifest（含 s
   `need_login` = 检测到登录二维码小窗（宽<500 且高<700 的可见 WeWorkWindow，复用
   Find-WeComLoginWindow）；`offline` = WXWork 进程不在或无任何 WeWorkWindow（托盘隐藏/已退出）。
 - **need_login 时额外返回**：`login_window`（登录窗 rect {x,y,w,h}）、`qr_image_base64`
-  （登录窗**整窗** PNG base64，供扫码上线）、`qr_status_hint`（`normal|expired|limited|unknown`）。
+  （登录窗**整窗** PNG base64，供扫码上线）、`qr_status_hint=unknown`（兼容既有字段）。
   截图策略：PrintWindow(hwnd,2) 优先 → 9 点采样**全黑或全白**回退 Graphics.CopyFromScreen 按窗口
   rect（M6 真机实测 PrintWindow 对 CEF 区域出纯白 mean=247 stddev=0，登录页同源——
   **CopyFromScreen 是主路径而非兜底**，需登录窗在屏幕可见，登录窗通常前台弹出，成立）。
-  截图失败不致命：仅缺 `qr_image_base64`（hint=unknown），need_login 语义不变。
-- **qr_status_hint 判定**（best-effort）：对同一张登录窗截图跑 RapidOCR，
-  「已失效/过期/刷新」→ `expired`、「受限/冻结/异常」→ `limited`；OCR 不可用（venv 缺失）或
-  无标记 → `normal`——探测不因可选依赖缺席而失败。
+  截图失败不致命：仅缺 `qr_image_base64`，need_login 语义不变。窗口枚举只能确认登录窗存在，
+  无法判断二维码是否过期或受限，因此 `qr_status_hint` 固定为 `unknown`，probe 不调用 OCR。
 - **安全注记**：二维码是登录凭证——`qr_image_base64` 只随 OperationResult 走 stdout，
-  绝不写 driver-log、绝不存 artifact（probe 无 artifact）；OCR 临时文件固定名、用完即删，
+  绝不写 driver-log、绝不存 artifact（probe 无 artifact）；截图临时文件固定名、用完即删，
   文件名不含敏感信息。online/offline 状态不返回任何 qr 字段。
 - **待真机复验**：本机开发态已登录，need_login 分支（登出/断网凭据失效场景）未真机实测，
   实现参照原 wecom-personal-rpa `wecom-ops.ps1` get_login_state 的先例（该脚本已随
   RPA 清退删除；小窗判定 + CopyFromScreen 截图 base64 思路保留在本 CLI）；
-  上线前需登出企微复验二维码可见性与 hint 判定。
+  上线前需登出企微复验二维码可见性与登录态判定。
 
 ## 本地库读取（P1b）
 
@@ -319,8 +317,7 @@ target_ref 走既有发送链路**（快路径直发；navigate_required 时二�
 - 企业微信 Windows 客户端（WXWork.exe）**已登录**（5.0.9 实测）；
 - PowerShell（powershell.exe 在 PATH）；
 - `add-customer` / `search` / `select` / `send` / `send-image` / `send-file` 另需 OCR：仓库根 `venv` 的 python + `rapidocr_onnxruntime`
-  （`drivers/ps1` 上四级为仓库根，取 `venv\Scripts\python.exe`；缺失 → CONFIG_MISSING）；
-  `probe` 的 `qr_status_hint` 也走该 OCR 但为 best-effort（缺失 → hint=normal，探测不失败）；
+  （`drivers/ps1` 上四级为仓库根，取 `venv\Scripts\python.exe`；缺失 → CONFIG_MISSING）；`probe` 不依赖 OCR；
 - `search` / `send` / `send-image` / `send-file` / `read-session` 的 Jev 决策另需可选环境变量 `TYPESAFE_API_KEY`（缺失自动降级规则链，功能不中断；watch 轮询内的 read-session 同样适用）；
 - `read-session` 的**模型主通道**另需可选环境变量 `AID_WECOM_SERVER_URL`（服务端地址）+
   `AID_WECOM_SERVER_TOKEN`（服务端长期 token，管理端 `POST /api/saas/client-bindings/static`

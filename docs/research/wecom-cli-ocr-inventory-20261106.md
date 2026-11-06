@@ -14,7 +14,7 @@
 | 6 | 未读列表 `wecom_unread_list` 与监控 UI 兜底 | **已退役**：只用本地库；监控失败轮保留水位 | doctor 未设或 UI 兼容态也尝试受实际版本矩阵约束的本地库；失败明确报错 | [unreadList.ts](../../clients/wecom-cli/src/operations/unreadList.ts)、[watchPoll.ts](../../clients/wecom-cli/src/operations/watchPoll.ts) |
 | 7 | 发图片、发文件 | 发送前标题、输入区/预览、发送后气泡或列表结果；含 Jev 可选判断 | 当前仍是 UI/OCR 发送链，未接入文本的本地库发送回执；误读可能拒发或得到不确定结果 | [send-image.ps1](../../clients/wecom-cli/drivers/ps1/send-image.ps1)、[send-file.ps1](../../clients/wecom-cli/drivers/ps1/send-file.ps1) |
 | 8 | 添加客户 | 搜索框、候选、确认对话框及结果/失败原因 | 这是 UI 写操作，现有本地库通道不承担添加客户；OCR 影响候选选择和结果判断 | [add-customer.ps1](../../clients/wecom-cli/drivers/ps1/add-customer.ps1) |
-| 9 | 登录探测 `wecom_probe` | 只对登录二维码截图识别“过期/受限”等提示 | 登录态和主窗口 PID 可由窗口枚举判断；该 OCR 失败仅使提示退化为普通状态，不阻断探测 | [probe.ps1](../../clients/wecom-cli/drivers/ps1/probe.ps1)、[localdb-login.ps1](../../clients/wecom-cli/drivers/ps1/localdb-login.ps1) |
+| 9 | 登录探测 `wecom_probe` | **源码已移除 OCR 调用**；窗口枚举判断登录态，二维码截图供扫码，`qr_status_hint` 固定为 `unknown` | 窗口信息不能证明二维码是否过期或受限；现行探测不再依赖 OCR，待真机复验 | [probe.ps1](../../clients/wecom-cli/drivers/ps1/probe.ps1)、[localdb-login.ps1](../../clients/wecom-cli/drivers/ps1/localdb-login.ps1) |
 
 ## 与本次故障直接相关
 

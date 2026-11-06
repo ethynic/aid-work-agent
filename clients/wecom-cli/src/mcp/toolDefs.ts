@@ -42,7 +42,7 @@ export const TOOL_DEFS: WecomToolDef[] = [
     description:
       '只读探测企业微信操作环境：Windows 平台、交互桌面会话（已登录未锁屏）、PowerShell 可用性、' +
       'WXWork.exe 进程存在性；进程运行时再解析主窗口 rect、登录态（online/need_login/offline）与当前内容页；' +
-      'need_login 时附登录窗二维码截图（qr_image_base64，PNG base64）与状态提示 qr_status_hint（normal/expired/limited/unknown），供扫码上线。' +
+      'need_login 时附登录窗二维码截图（qr_image_base64，PNG base64）供扫码上线；保留 qr_status_hint 字段，当前返回 unknown。' +
       '不激活窗口、不发送输入、不改剪贴板，无外部写副作用。',
     zodShape: {
       verbose: z.boolean().optional().describe('返回更多诊断字段（系统版本/Node 版本），默认 false'),
