@@ -34,7 +34,8 @@ class DashScopeImageProvider:
     name = "dashscope"
 
     def __init__(self, api_key: str, model: str = "qwen-image-3.0-pro",
-                 mode: str = "async_task", base_url: str = "https://dashscope.aliyuncs.com/api/v1"):
+                 mode: str = "async_task", base_url: str = "https://dashscope.aliyuncs.com/api/v1",
+                 enable_thinking: bool = False):
         if not api_key:
             raise ImageGenProviderError("图像生成 api_key 未配置（需 WANX_API_KEY 或 QWEN_API_KEYS）")
         if mode not in ("async_task", "sync"):
@@ -43,6 +44,9 @@ class DashScopeImageProvider:
         self._model = model
         self._mode = mode
         self._base_url = base_url.rstrip("/")
+        # 思考模式默认关闭：官方文档明确开启会增加生成耗时（agent2 实测同提示词 T2I
+        # 28.5s vs 56.9s）；原生 messages 端点虽未在文档参数表中列出该字段，实测宽容接受
+        self._enable_thinking = enable_thinking
 
     async def submit(self, req: ImageGenRequest, default_size: str = "1280*960") -> SubmitResult:
         """提交出图请求。
@@ -100,6 +104,7 @@ class DashScopeImageProvider:
                 "size": size,
                 "n": req.n,
                 "watermark": False,   # 平台合规水印由业务层决定，不在 provider 硬加
+                "enable_thinking": self._enable_thinking,
             },
         }
         if req.negative_prompt:

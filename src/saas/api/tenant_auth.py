@@ -855,6 +855,8 @@ async def get_admin_info(request: Request, tenant_id: Optional[str] = None):
             "status": tenant["status"],
             "expire_at": tenant.get("expire_at"),
             "logo_file_id": tenant.get("logo_file_id"),
+            # 租户偏好：会话图片“AI生成”角标开关（缺省显示，兼容存量登录态）
+            "show_ai_badge": bool((tenant.get("settings") or {}).get("show_ai_badge", True)) if isinstance(tenant.get("settings"), dict) else True,
         } if tenant else None,
         "tenant_check": tenant_check,
     }

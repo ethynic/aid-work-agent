@@ -13,7 +13,7 @@
         class="gallery-img"
         @error="onImgError($event, img)"
       />
-      <div class="source-badge">{{ sourceLabel(img.source) }}</div>
+      <div v-if="showSourceBadge" class="source-badge">{{ sourceLabel(img.source) }}</div>
     </div>
 
     <!-- Lightbox -->
@@ -42,6 +42,7 @@ import { ref, computed } from 'vue'
 import type { ImageRef } from '@/types'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
+import { useTenantAuth } from '@/composables/useTenantAuth'
 
 /**
  * ImageGallery 组件
@@ -57,6 +58,10 @@ import BaseModal from '@/components/ui/BaseModal.vue'
 const props = defineProps<{
   images: ImageRef[]
 }>()
+
+// 租户偏好：会话图片“AI生成”角标开关（缺省显示）
+const { tenant } = useTenantAuth()
+const showSourceBadge = computed(() => tenant.value?.show_ai_badge !== false)
 
 /** 布局模式：根据图片数量自动选择 */
 const layoutMode = computed<'single' | 'row' | 'grid'>(() => {

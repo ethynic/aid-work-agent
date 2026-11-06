@@ -124,6 +124,8 @@ class DashScopeImageGenConfig(BaseModel):
     mode: str = "async_task"
     base_url: str = "https://dashscope.aliyuncs.com/api/v1"
     default_size: str = "1280*960"
+    # 思考模式开关（默认关：开启会增加生成耗时，agent2 实测同提示词 T2I 28.5s vs 56.9s）
+    enable_thinking: bool = False
 
 
 class ImageVLConfig(BaseModel):
@@ -1032,6 +1034,8 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         ig_dash["model"] = os.getenv("IMAGE_GEN_MODEL")
     if os.getenv("IMAGE_GEN_MODE"):
         ig_dash["mode"] = os.getenv("IMAGE_GEN_MODE")
+    if os.getenv("IMAGE_GEN_ENABLE_THINKING"):
+        ig_dash["enable_thinking"] = os.getenv("IMAGE_GEN_ENABLE_THINKING").lower() in ("true", "1", "yes")
     ig_vl = ig_cfg.setdefault("vl", {})
     if os.getenv("IMAGE_VL_MODEL"):
         ig_vl["model"] = os.getenv("IMAGE_VL_MODEL")

@@ -31,6 +31,7 @@ def _build_provider():
         model=dash.model,
         mode=dash.mode,
         base_url=dash.base_url,
+        enable_thinking=dash.enable_thinking,
     ), cfg
 
 
