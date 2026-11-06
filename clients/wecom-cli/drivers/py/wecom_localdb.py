@@ -1971,12 +1971,16 @@ def _query_context(workdir, conn, account):
         return {'ok': False, 'error': 'DB_UNREADABLE'}
     user = _open_ro(path)
     try:
-        if 'id' not in _table_columns(user, 'user_table'):
+        columns = _table_columns(user, 'user_table')
+        if 'id' not in columns:
             return {'ok': False, 'error': 'SCHEMA_UNSUPPORTED'}
-        rows = user.execute('SELECT CAST(id AS TEXT) FROM user_table WHERE CAST(id AS TEXT)=?', (account,)).fetchall()
+        name_expr = 'name' if 'name' in columns else 'NULL'
+        rows = user.execute('SELECT CAST(id AS TEXT), %s FROM user_table WHERE CAST(id AS TEXT)=?' % name_expr,
+                            (account,)).fetchall()
         if len(rows) != 1:
             return {'ok': False, 'error': 'IDENTITY_UNCONFIRMED'}
         return {'ok': True, 'self_user_id': rows[0][0],
+                'self_name': rows[0][1] if isinstance(rows[0][1], str) and rows[0][1].strip() else None,
                 'schema_version': conn.execute('PRAGMA schema_version').fetchone()[0]}
     finally:
         user.close()

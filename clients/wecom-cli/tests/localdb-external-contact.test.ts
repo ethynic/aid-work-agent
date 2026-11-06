@@ -84,7 +84,7 @@ test('外部目标按DB唯一定位直接发送，不搜索；真实新出站记
       localdbVerifyPoll: { attempts: 1, delayMs: 1 },
       runDriverFn: async opts => {
         assert.ok(opts.script.endsWith('message-send.ps1'), '可信DB定位不能再搜索或选择联系人')
-        assert.ok(opts.args?.includes('-SkipVerify'))
+        assert.ok(!opts.args?.includes('-VerifyOnly'), '发送后只用本地库核验')
         sends++
         f.command('append', 2)
         return { navigate_required: false, title: 'Peer @微信', sent_verification: { method: 'skipped', result: 'unverified' } }

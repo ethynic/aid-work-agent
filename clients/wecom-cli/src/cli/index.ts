@@ -9,7 +9,7 @@
  * M8 增加：send-file。
  * M9：read 改名 read-session（旧 read 动词直接废弃，无别名）。
  * M11a：send / send-image / send-file / read-session 增加 --target-name 直达模式
- * （与 --target-ref 二选一：内部自动 search 定位，data 附 resolved_target）。
+ * （与 --target-ref 二选一：文本发送先由本地库唯一解析目标）。
  * 动词子命令集合固定；不存在按对象命名的子命令——`aid-wecom contacts` 之类
  * 一律落入 default 报「未知子命令」。
  *
@@ -39,7 +39,8 @@ const USAGE = `aid-wecom — 企业微信操作 CLI / MCP Provider（M1）
   read-sessions [--sessions <JSON字符串数组>] [--cursor <原游标>] [--limit N] [--json]
                             DB批量聊天记录与待回复候选，单批最多50条/16KiB
   send --session <会话名或稳定标识> --text <文本> [--json]
-                            当前目标匹配时直接发送，不匹配才内部搜索选择
+                            本地库准入、双点缓存标定、复制标题确认、发送后本地库核验
+  calibrate [--json]         用本人会话标定标题首字和文本输入区中心并缓存窗口相对坐标
 
 兼容与诊断命令：
   poll-group --target-name <完整群名> [--cursor <原游标>] [--json]
@@ -62,9 +63,8 @@ const USAGE = `aid-wecom — 企业微信操作 CLI / MCP Provider（M1）
                             进入会话会清除其未读角标并切换当前会话视图；
                             前置：搜索面板仍打开，ref 5 分钟内有效）
   send (--target-ref <ref> | --target-name <会话名> [--subtitle <副标题>]) --text <文本> [--json]
-                            向目标发送 1 条文本消息（写动作；target-ref 与 target-name
-                            二选一——name 直达模式内部自动 search 定位，同名多候选
-                            无法消歧时拒绝；发送后校验失败不自动重试，
+                            向目标发送 1 条文本消息（写动作；本地库唯一解析目标；
+                            无法消歧时拒绝；发送后本地库核验失败不自动重试，
                             effect=unknown 时请人工核对）
   send-status --receipt-id <ID> [--json]
                             只读对账原发送凭据；unknown 时勿重发，不切群、不输入、不发消息
@@ -141,6 +141,10 @@ async function main(): Promise<number> {
         text: flagString(args, 'text'),
         json: hasFlag(args, 'json'),
       })
+    }
+    case 'calibrate': {
+      const { calibrateCommand } = await import('./commands/calibrate.js')
+      return calibrateCommand({ json: hasFlag(args, 'json') })
     }
     case 'send-status': {
       const { sendStatusCommand } = await import('./commands/sendStatus.js')

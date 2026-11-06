@@ -195,43 +195,11 @@ target_ref 走既有发送链路**（快路径直发；navigate_required 时二�
 - artifact 目录 `artifacts/select-<ts>/`：点击前 overlay 截图 + 点击后主窗口截图 +
   `driver-log.txt`（各步耗时、OCR 摘要、坐标换算记录）。
 
-## send 命令（M6：智能分发发送）
+## send 与 calibrate 命令（文本发送双点标定）
 
-向 target_ref 目标发送 1 条文本（写动作，零自动重试）。TS 层编排 + 发送阶段驱动
-（`drivers/ps1/message-send.ps1`）两阶段交互：
+文本发送仅支持已验证版本的本地库。发送前解析当前账号、本人显示名和唯一目标，并记录消息基线；本地库不可用时拒发。独立 calibrate 命令可手动重标定，send 在双点缓存缺失或窗口宽高/DPI 变化时自动执行同一标定：搜索本人名、Enter 打开默认自会话，GLM 一次定位标题首字与输入区中心，复制自会话标题与本人名全等后缓存窗口相对坐标。缓存有效时不调用 GLM 或 OCR。
 
-- **两条路径**：
-  1. **快路径**——发送驱动截取标题带，由 GLM 标定标题点击坐标（同尺寸复用缓存）；底部输入带
-     OCR 提供输入点候选，Jev #1 只选输入点；随后从企微复制当前标题一次，与目标核对通过后
-     点击输入框、清理旧内容并沿原方式输入发送；
-  2. **分发路径**——驱动判定非目标/无法判定 → 返回 `navigate_required=true` 交还 TS 层 →
-     内部依次调用 chatSearch（注入同一 runDriverFn，Jev 选 best）与 chatSelect（点击进会话 +
-     标题严格校验）→ **再次调用发送驱动**完成发送。两轮均不在目标会话 → TARGET_NOT_FOUND；
-     编排失败（search 无结果 / select 校验失败等）透传对应错误码（此时未发送消息，effect=none）。
-- **Jev 两次判定**：#1 只选输入点（见上）；#2 终态两问（sent_successfully / failure_mode，
-     state = 发送后输入区/消息区末尾/会话列表 OCR 证据）。#2 判 no/unclear →
-     EXECUTION_UNKNOWN（消息可能已发出，绝不自动重试）。
-- **降级链**（Jev 无 key/超时/坏响应，逐问独立降级）：会话标题由企微复制后按目标规则
-     核对；input_point → 比例坐标 (0.500w, 0.900h)（M2 标定）；终态 → M2 三选二（输入框清空 /
-     消息区末尾任一行含 text 归一化前缀 12 字 / 会话列表含目标名且含前缀），<2 项 →
-     EXECUTION_UNKNOWN。
-- **文本输入替换**：目标标题确认后只点击一次输入区，投递 Ctrl+A + Delete 清理既有内容，清理键
-     投递失败不粘贴或发送；不再以 OCR/Jev 草稿判定拒发，也不重复复制标题。
-     此行为会覆盖已有未发送文字。
-- **text 约束**：≤2000 字、纯空白拒绝（归一化后为空会使终态校验失真）；单行沿用
-   `Send-WeComText` 逐字输入；含换行的多行沿用**剪贴板粘贴通道**：`Set-Clipboard` 重试 5 次
-   （×150ms，全败 CONFIG_MISSING）→ attachstate Ctrl+V（投递失败不按 Enter）→ 500ms。
-   粘贴后不再以 OCR 正文回读作发送门禁。**副作用：发送多行消息会覆盖用户剪贴板且不恢复**
-   （paste handler 异步读取，立即恢复可能粘贴到错误内容）；driver-log 对多行只记前 12 字
-   与总字数，不落全文。
-  输入前标题确认与终态校验对多行无需特判（气泡/会话列表预览显示为单行截断，归一化前缀取整文
-  开头 8 字 = 首行开头）。驱动超时 → EXECUTION_UNKNOWN；取消 → CANCELLED。
-- **artifact 结构**（同一 artifact 根下独立留痕）：`send-<ts>/`（两轮分发则为两个目录）
-  含 `step1-precheck.png`（两带判定现场）、`step2-typed.png`（输入后诊断截图）、
-  `step3-after.png`（发送后终态现场）与 `driver-log.txt`（Jev state/answer 摘要、OCR 摘要、
-  各阶段耗时；绝不含 TYPESAFE_API_KEY）；分发路径另有 `search-<ts>/`、`select-<ts>/`
-  （内部命令自建）。返回 data 附 `navigated`（是否走了分发）、`sent_verification`
-  （method=jev|rule_2of3）、`input_point` 与 `timing_ms`。
+send 搜索目标名时先用主线程焦点与搜索框区域内的 caret 确认 Ctrl+F 已聚焦搜索框，才清理并输入搜索词；全文复制回读且同进程新结果面板出现后才 Enter 打开默认会话。复制标题与目标全等（微信联系人须为明确的 `名字@微信`）后点击缓存输入点、Ctrl+A/Delete 清草稿、把发送文本复制到剪贴板并 Ctrl+V 粘贴、Enter 发送。不回读输入内容；单行和多行均覆盖系统剪贴板且不立即恢复，避免企微异步粘贴取到旧内容。标题不匹配时本次拒发并清除旧坐标缓存，下一次重新标定。发送后仅用本地库唯一出站记录核验；未知结果保留回执供 send-status 只读对账，不自动重发。文本发送链路不调用 chat-search/chat-select 的 OCR/Jev，也不使用旧 OCR 终态回退。独立 search/select 与媒体发送工具各自保持原契约。
 
 ## send-image 命令（M7：发送图片）
 

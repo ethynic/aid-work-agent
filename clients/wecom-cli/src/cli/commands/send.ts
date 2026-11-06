@@ -5,7 +5,7 @@
  *   aid-wecom send --target-ref <ref> --text <文本> [--json]
  *   aid-wecom send --target-name <会话名> [--subtitle <副标题>] --text <文本> [--json]
  *
- * --target-name 直达模式：CLI 内部自动 search 定位（身份校验 + 唯一匹配，歧义拒绝），
+ * --target-name 直达模式：本地库唯一解析目标，歧义时发送前拒绝，
  * data 附 resolved_target；其余契约与 --target-ref 模式一致。
  * 写动作执行前打印 ⚠️ 提示（registry cli.write=true 元数据）；发送后校验失败
  * 返回 EXECUTION_UNKNOWN 且绝不自动重试。

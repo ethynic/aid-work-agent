@@ -1,100 +1,79 @@
-param([Parameter(Mandatory)][string]$DriverDir)
-$ErrorActionPreference = 'Stop'
-$ProgressPreference = 'SilentlyContinue'
-$parseTokens = $null; $parseErrors = $null
-$ast = [Management.Automation.Language.Parser]::ParseFile(
-    (Join-Path $DriverDir 'message-send.ps1'), [ref]$parseTokens, [ref]$parseErrors)
-if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
-foreach ($fn in $ast.FindAll({ param($a) $a -is [Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
-    . ([scriptblock]::Create($fn.Extent.Text))
-}
+﻿param([Parameter(Mandatory)][string]$DriverDir)
+$ErrorActionPreference='Stop'
+. (Join-Path $DriverDir '_send-points.ps1')
 Add-Type -AssemblyName System.Drawing
-Add-Type 'public class WeComWin32 { public static uint GetDpiForWindow(System.IntPtr h) { return 96; } }'
-function Get-WeComWindowInfo { param($Hwnd) return @{ W=1117; H=1354 } }
-function Throw-DriverError { param($Code,$Message) throw "WECOMDRIVE|$Code|$Message" }
+Add-Type 'public class WeComWin32 { public static uint Dpi = 96; public static uint GetDpiForWindow(System.IntPtr h) { return Dpi; } }'
+function Assert-True($Value,[string]$Why) { if (-not $Value) { throw $Why } }
+function Get-WeComWindowInfo { param($Hwnd) return @{W=$script:width;H=800} }
+function Throw-DriverError { param($Code,$Message) throw ('WECOMDRIVE|'+$Code+'|'+$Message) }
 function Invoke-RestMethod { param($Uri,$Method,$Headers,$ContentType,$Body,$TimeoutSec)
-    $script:calls++
-    $script:lastRequest = [Text.Encoding]::UTF8.GetString($Body) | ConvertFrom-Json
-    return @{ content = $script:modelContent }
+    $script:modelCalls++
+    $script:lastRequest=[Text.Encoding]::UTF8.GetString($Body) | ConvertFrom-Json
+    return @{content=$script:modelContent}
 }
-function Assert-True($Value,$Why) { if (-not $Value) { throw $Why } }
-Assert-True (Test-WeComTitleMatch -Title '群 A' -Expected '群 A' -Group) 'copied group title must match the complete target name'
-Assert-True (-not (Test-WeComTitleMatch -Title '群 A' -Expected '群A' -Group)) 'spaces distinguish two group names when exact text is available'
-
-$oldLocal = $env:LOCALAPPDATA; $oldUrl = $env:AID_WECOM_SERVER_URL; $oldToken = $env:AID_WECOM_SERVER_TOKEN
-$testDir = Join-Path $env:TEMP ('wecom-title-point-' + [guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $testDir | Out-Null
-$env:LOCALAPPDATA = $testDir
-$env:AID_WECOM_SERVER_URL = 'https://example.invalid'
-$env:AID_WECOM_SERVER_TOKEN = 'synthetic-token'
-$shot = Join-Path $testDir 'window.png'
-$bmp = [Drawing.Bitmap]::new(1117,1354)
-try { $bmp.Save($shot,[Drawing.Imaging.ImageFormat]::Png) } finally { $bmp.Dispose() }
+function Write-DriverLog { param($Message) }
+function Open-WeComNamedChat { param($Hwnd,$Name) $script:searched=$Name }
+function Resolve-WeComMainWindow { return 101 }
+function Get-WeComWindowSnapshot { param($Hwnd,$Path) Copy-Item -LiteralPath $script:shot -Destination $Path;return @(0,0,1000,800) }
+function Get-WeComCopiedTitle { param($Hwnd,$Section,$Point) return $script:copied }
+$oldLocal=$env:LOCALAPPDATA;$oldUrl=$env:AID_WECOM_SERVER_URL;$oldToken=$env:AID_WECOM_SERVER_TOKEN
+$dir=Join-Path $env:TEMP ('wecom-send-points-'+[guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $dir | Out-Null
+$env:LOCALAPPDATA=$dir;$env:AID_WECOM_SERVER_URL='https://example.invalid';$env:AID_WECOM_SERVER_TOKEN='synthetic'
+$script:width=1000;$script:shot=Join-Path $dir 'shot.png'
+$bmp=[Drawing.Bitmap]::new(1000,800)
+try { $bmp.Save($script:shot,[Drawing.Imaging.ImageFormat]::Png) } finally { $bmp.Dispose() }
 try {
-    $script:calls=0
-    $script:modelContent='{"divider_x":409,"x":435,"y":38}'
-    $point=Get-WeComTitlePoint -Hwnd 1 -ImagePath $shot
-    Assert-True ($point.source -eq 'glm' -and $point.x -eq 435 -and $point.y -eq 38) 'GLM must locate the title first character'
-    Assert-True (-not (Test-Path -LiteralPath $point.cache_path)) 'unverified model coordinates must not enter cache'
-    Assert-True ($lastRequest.model -eq 'GLM-5.3-Flash') 'title calibration must pin the vision model'
-    $dataUrl=$lastRequest.messages[1].content[1].image_url.url
-    Assert-True ($dataUrl.StartsWith('data:image/png;base64,')) 'model must receive a PNG header image'
-    $bytes=[Convert]::FromBase64String($dataUrl.Substring('data:image/png;base64,'.Length))
+    Assert-True (Test-WeComTitleMatch -Title '群 A' -Expected '群 A' -Group) 'group title must compare exact text'
+    Assert-True (-not (Test-WeComTitleMatch -Title '群 A' -Expected '群A' -Group)) 'group title cannot ignore spaces'
+    Assert-True (Test-WeComTitleMatch -Title '陆伟' -Expected '陆伟') 'personal target requires an exact title'
+    Assert-True (-not (Test-WeComTitleMatch -Title '陆伟民' -Expected '陆伟')) 'similar default search result must not be sent a message'
+    Assert-True (-not (Test-WeComTitleMatch -Title '陆伟（技术部）' -Expected '陆伟')) 'unknown identity suffix must not turn a prefix into a match'
+    Assert-True (-not (Test-WeComTitleMatch -Title '陆伟@其他' -Expected '陆伟')) 'unknown account suffix must not turn a prefix into a match'
+    Assert-True (Test-WeComTitleMatch -Title '陆伟@微信' -Expected '陆伟' -RequireWechat) 'known WeChat identity suffix is an exact match'
+    Assert-True (Test-WeComTitleMatch -Title '陆伟 @微信' -Expected '陆伟' -RequireWechat) 'known displayed separator before WeChat suffix remains an exact match'
+    Assert-True (-not (Test-WeComTitleMatch -Title '陆伟@其他' -Expected '陆伟' -RequireWechat)) 'WeChat target cannot match another account suffix'
+    $script:modelCalls=0
+    $script:modelContent='{"divider_x":400,"title_x":440,"title_y":38,"input_x":620,"input_y":710}'
+    $point=Get-WeComTitlePoint -Hwnd 101 -ImagePath $script:shot
+    Assert-True ($point.x -eq 440 -and $point.input_x -eq 620 -and $point.input_y -eq 710) 'one model response must provide both points'
+    Assert-True ($script:modelCalls -eq 1) 'one calibration invokes model exactly once'
+    Assert-True (-not (Test-Path -LiteralPath $point.cache_path)) 'unverified model points must not enter cache'
+    $url=$lastRequest.messages[1].content[1].image_url.url
+    $bytes=[Convert]::FromBase64String($url.Substring('data:image/png;base64,'.Length))
     $memory=[IO.MemoryStream]::new($bytes)
-    try { $image=[Drawing.Image]::FromStream($memory); try {
-        Assert-True ($image.Width -eq 1117 -and $image.Height -eq 64) 'only the header is sent to the model'
-    } finally { $image.Dispose() } } finally { $memory.Dispose() }
+    try { $img=[Drawing.Image]::FromStream($memory); try {
+        Assert-True ($img.Width -eq 1000 -and $img.Height -eq 800) 'model must see title and input in one full-window frame'
+    } finally {$img.Dispose()} } finally {$memory.Dispose()}
     Save-WeComTitlePoint $point
-    $cached=Get-WeComTitlePoint -Hwnd 1 -ImagePath $shot
-    Assert-True ($cached.source -eq 'cache' -and $script:calls -eq 1) 'same window reuses only a verified point'
-
-    Remove-Item -LiteralPath $point.cache_path
-    $script:modelContent='{"divider_x":409,"x":300,"y":38}'
-    $failure=''; try { Get-WeComTitlePoint -Hwnd 1 -ImagePath $shot | Out-Null } catch { $failure=$_.Exception.Message }
-    Assert-True ($failure -like 'WECOMDRIVE|CONTENT_UNAVAILABLE|*') 'coordinates outside the right title area must fail before any click'
-    Assert-True (-not (Test-Path -LiteralPath $point.cache_path)) 'rejected point must not poison cache'
+    $cached=Get-WeComCachedPoints -Hwnd 101
+    Assert-True ($cached.source -eq 'cache' -and $cached.x -eq 440 -and $cached.input_x -eq 620) 'same geometry reuses both cached points'
+    Assert-True ($script:modelCalls -eq 1) 'cache read must not invoke GLM'
+    $script:width=1100
+    Assert-True ($null -eq (Get-WeComCachedPoints -Hwnd 101)) 'width change invalidates both points'
+    $script:width=1000
+    [WeComWin32]::Dpi=120
+    Assert-True ($null -eq (Get-WeComCachedPoints -Hwnd 101)) 'DPI change invalidates both points'
+    [WeComWin32]::Dpi=96
+    Remove-Item -LiteralPath $point.cache_path -Force
+    $script:modelContent='{"divider_x":400,"title_x":440,"title_y":38,"input_x":300,"input_y":710}'
+    $failure='';try{Get-WeComTitlePoint -Hwnd 101 -ImagePath $script:shot | Out-Null}catch{$failure=$_.Exception.Message}
+    Assert-True ($failure -like 'WECOMDRIVE|CONTENT_UNAVAILABLE|*') 'input point outside chat area must fail without caching'
+    Assert-True (-not (Test-Path -LiteralPath $point.cache_path)) 'bad point must not poison cache'
+    # 自会话标题全等是模型坐标写入缓存的最后条件。
+    function Get-WeComTitlePoint { param($Hwnd,$ImagePath)
+        return @{x=440;y=38;input_x=620;input_y=710;w=1000;h=800;dpi=96;cache_path=(Get-WeComPointCachePath);source='glm'}
+    }
+    $script:copied='Wrong'
+    $failure='';try{Invoke-WeComCalibration -SelfName 'Self' -ArtifactDir $dir | Out-Null}catch{$failure=$_.Exception.Message}
+    Assert-True ($failure -like 'WECOMDRIVE|UI_CHANGED|*') 'wrong self title must reject calibration'
+    Assert-True (-not (Test-Path -LiteralPath $point.cache_path)) 'wrong self title must not cache'
+    $script:copied='Self'
+    $ok=Invoke-WeComCalibration -SelfName 'Self' -ArtifactDir $dir
+    Assert-True ($script:searched -eq 'Self' -and $ok.input_y -eq 710) 'self search and exact title verify both points'
+    Assert-True (Test-Path -LiteralPath $point.cache_path) 'verified self title caches both points'
 } finally {
-    $env:LOCALAPPDATA=$oldLocal; $env:AID_WECOM_SERVER_URL=$oldUrl; $env:AID_WECOM_SERVER_TOKEN=$oldToken
-    Remove-Item -LiteralPath $testDir -Recurse -Force
+    $env:LOCALAPPDATA=$oldLocal;$env:AID_WECOM_SERVER_URL=$oldUrl;$env:AID_WECOM_SERVER_TOKEN=$oldToken
+    Remove-Item -LiteralPath $dir -Recurse -Force
 }
-
-$cacheFile=Join-Path $env:TEMP ('wecom-title-cache-' + [guid]::NewGuid().ToString('N') + '.json')
-try {
-    Set-Content -LiteralPath $cacheFile -Value 'synthetic'
-    Clear-WeComCachedTitlePointOnCopyFailure -Point @{source='cache';cache_path=$cacheFile} -Failure 'clipboard_changed'
-    Assert-True (Test-Path -LiteralPath $cacheFile) 'clipboard contention must not invalidate a valid title coordinate'
-    Clear-WeComCachedTitlePointOnCopyFailure -Point @{source='cache';cache_path=$cacheFile} -Failure 'title_copy_unconfirmed'
-    Assert-True (-not (Test-Path -LiteralPath $cacheFile)) 'unconfirmed title copy must force recalibration on the next call'
-    Set-Content -LiteralPath $cacheFile -Value 'synthetic'
-    Clear-WeComCachedTitlePointOnCopyFailure -Point @{source='glm';cache_path=$cacheFile} -Failure 'title_edit_not_focused'
-    Assert-True (Test-Path -LiteralPath $cacheFile) 'a newly calibrated point must not delete another cache record'
-    Clear-WeComCachedTitlePointOnCopyFailure -Point @{source='cache';cache_path=$cacheFile} -Failure 'title_edit_not_focused'
-    Assert-True (-not (Test-Path -LiteralPath $cacheFile)) 'missing title edit must invalidate a stale cached point'
-} finally {
-    if (Test-Path -LiteralPath $cacheFile) { Remove-Item -LiteralPath $cacheFile -Force }
-}
-
-# A second click on an already selected group title can cancel the selection.
-# The send path must reuse an existing title edit, click only once when absent,
-# and stop before copying if that one click does not create the edit.
-function Get-WeComTitleEditWindow { param($Hwnd,$ScreenX,$ScreenY)
-    $script:probes++
-    if ($script:probes -le $script:missingProbes) { return [IntPtr]::Zero }
-    return [IntPtr]77
-}
-function Send-WeComClick { param($Hwnd,$ScreenX,$ScreenY) $script:clicks++; return 1 }
-function Start-Sleep { param($Milliseconds) }
-
-$script:probes=0; $script:clicks=0; $script:missingProbes=0
-$edit=Get-WeComGroupTitleEditWindow -Hwnd 1 -ScreenX 455 -ScreenY 85
-Assert-True ($edit -eq [IntPtr]77 -and $script:clicks -eq 0) 'an existing title selection must not be clicked away'
-
-$script:probes=0; $script:clicks=0; $script:missingProbes=1
-$edit=Get-WeComGroupTitleEditWindow -Hwnd 1 -ScreenX 455 -ScreenY 85
-Assert-True ($edit -eq [IntPtr]77 -and $script:clicks -eq 1 -and $script:probes -eq 2) 'an unselected group title gets exactly one click before copy'
-
-$script:probes=0; $script:clicks=0; $script:missingProbes=2
-$failure=''; try { Get-WeComGroupTitleEditWindow -Hwnd 1 -ScreenX 455 -ScreenY 85 | Out-Null }
-catch { $failure=$_.Exception.Message }
-Assert-True ($failure -eq 'title_edit_not_focused' -and $script:clicks -eq 1) 'a failed title click must stop rather than retry blindly'
 Write-Output 'PS_TITLE_POINT_AND_CLICK_OK'

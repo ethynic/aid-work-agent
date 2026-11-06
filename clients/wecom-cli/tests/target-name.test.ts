@@ -34,7 +34,7 @@ import {
 import type { PowerShellScriptOptions, RunPowerShellDriverFn } from '../src/platform/powershell.js'
 
 type OpKind = 'send' | 'send-image' | 'send-file'
-const KINDS: OpKind[] = ['send', 'send-image', 'send-file']
+const KINDS: OpKind[] = ['send-image', 'send-file']
 
 function silentCtx(): OpContext {
   return { signal: new AbortController().signal, progress: () => {} }
@@ -320,84 +320,6 @@ for (const kind of KINDS) {
     assert.equal(mock.calls.length, 0, '参数错误绝不调驱动（不触达企微）')
   })
 }
-
-// —— send 专属：--subtitle 消歧收紧 —— //
-
-test('M11a send：--subtitle 收紧消歧——best 身份符（同名）但 subtitle 消歧键不符 → 不信 best，回退唯一匹配项', async () => {
-  const keyDir = tempDir('wecom-tn-key-')
-  const searchResult = {
-    query: '陆伟',
-    items: [
-      // best（Jev 选中的同名条目）subtitle 与调用方消歧键不符
-      { name: '陆伟@微信', subtitle: '其他（待设置部门）', section: '联系人', x: 200, y: 60, probability: 0.8 },
-      { name: '陆伟', subtitle: '微信联系人', section: '联系人', x: 200, y: 120, probability: 0.2 },
-    ],
-    best_index: 0,
-    overlay: { x: 100, y: 50, w: 400, h: 542 },
-    jev: { used: true, latency_ms: 700, best_confidence: 0.8 },
-    timing_ms: { total: 5000 },
-  }
-  const mock = makeMock('send', [{ ...NAV_REQUIRED }, okStage('send')], searchResult)
-  const op = makeOp('send', keyDir, tempDir('wecom-tn-root-'), mock)
-  const r = await op.execute({ target_name: '陆伟', subtitle: '微信联系人', text: '带副标题消歧' }, silentCtx())
-  assert.equal(r.success, true, r.message)
-  // resolved 到 subtitle 匹配的唯一项（items[1]「陆伟」），不是 best（items[0]「陆伟@微信」）
-  assert.deepEqual(r.data.resolved_target, { name: '陆伟', subtitle: '微信联系人', section: '联系人' })
-  assert.equal(mock.calls.length, 5)
-  assert.ok(mock.calls[3]!.script.endsWith('chat-select.ps1'))
-  assert.equal(argAfter(mock.calls[3]!, '-X'), '200')
-  assert.equal(argAfter(mock.calls[3]!, '-Y'), '120')
-  assert.equal(argAfter(mock.calls[3]!, '-TargetName'), '陆伟')
-})
-
-test('M11a send：前缀陷阱——搜索仅返回更长同首名候选「陆伟民」（best 即它）→ 绝不匹配「陆伟」，TARGET_NOT_FOUND 不调阶段驱动', async () => {
-  const keyDir = tempDir('wecom-tn-key-')
-  // 归一化严格相等（normNameForMatch）：「陆伟」≠「陆伟民」——best 采纳分支与回退分支都必须拒绝
-  const searchResult = {
-    query: '陆伟',
-    items: [
-      { name: '陆伟民', subtitle: '微信联系人', section: '联系人', x: 200, y: 120, probability: 0.9 },
-    ],
-    best_index: 0,
-    overlay: { x: 100, y: 50, w: 400, h: 300 },
-    jev: { used: true, latency_ms: 700, best_confidence: 0.9 },
-    timing_ms: { total: 5000 },
-  }
-  const mock = makeMock('send', [], searchResult)
-  const op = makeOp('send', keyDir, tempDir('wecom-tn-root-'), mock)
-  const r = await (op as WecomOperation<WecomMessageSendArgs>).execute({ target_name: '陆伟', text: 'hi' }, silentCtx())
-  assert.equal(r.success, false)
-  assert.equal(r.code, 'TARGET_NOT_FOUND')
-  assert.equal(r.effect, 'none')
-  assert.match(r.message, /没有匹配候选/)
-  assert.match(r.message, /未发送消息/)
-  // search 成功但身份零命中：只调了一次内部 search，绝不 select / 不调阶段驱动
-  assert.equal(mock.calls.length, 1)
-  assert.ok(mock.calls[0]!.script.endsWith('chat-search.ps1'))
-})
-
-test('M11a send：target_name 带 @微信 后缀——内部 query 剥后缀（-Query 陆伟），身份比对两侧归一化后命中', async () => {
-  const keyDir = tempDir('wecom-tn-key-')
-  const mock = makeMock('send', [okStage('send')], { ...SEARCH_OK })
-  const op = makeOp('send', keyDir, tempDir('wecom-tn-root-'), mock)
-  const r = await (op as WecomOperation<WecomMessageSendArgs>).execute({ target_name: '陆伟@微信', text: '带后缀直达' }, silentCtx())
-  assert.equal(r.success, true, r.message)
-  assert.deepEqual(mock.calls[0]!.args?.slice(0, 2), ['-Query', '陆伟'])
-  assert.deepEqual(r.data.resolved_target, { name: '陆伟@微信', subtitle: '微信联系人', section: '联系人' })
-  assert.equal(mock.calls.length, 2)
-})
-
-test('M11a send：ref 模式不受影响——subtitle 未传 / resolved_target 不出现，行为与 M6 完全一致', async () => {
-  const keyDir = tempDir('wecom-tn-key-')
-  const mock = makeMock('send', [okStage('send')], { ...SEARCH_OK })
-  const op = makeOp('send', keyDir, tempDir('wecom-tn-root-'), mock)
-  const ref = createTargetRef('陆伟@微信', 'contact', '微信联系人', { keyDir, coords: { x: 1, y: 2 } })
-  const r = await (op as WecomOperation<WecomMessageSendArgs>).execute({ target_ref: ref, text: 'ref 模式回归' }, silentCtx())
-  assert.equal(r.success, true, r.message)
-  assert.equal(r.effect, 'applied')
-  assert.equal(r.data.resolved_target, undefined, 'ref 模式无解析步骤，不附 resolved_target')
-  assert.equal(mock.calls.length, 1, 'ref 模式快路径不调内部 search')
-})
 
 test('M11a 参数校验矩阵补充：target_name 空/纯空白/超长、subtitle 类型错 → INVALID_ARGUMENT，不调驱动', async () => {
   const keyDir = tempDir('wecom-tn-key-')

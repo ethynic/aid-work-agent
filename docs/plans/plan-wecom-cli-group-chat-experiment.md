@@ -30,6 +30,7 @@
 | W21 会话读取移除 OCR 兜底 | read-session、unread_list、watch_poll 只用已验证版本本地库 | ✅ 完成（2026-11-06） | 独立 TEST 合成回归 95/95、代理工具 25/25、构建及 CR 通过；真机验收另行安排 |
 | W22 搜索框清理移除 OCR | Ctrl+F 后固定清空，输入后完整复制回读 | 🔧 进行中 | 独立 TEST 四组合成 PS 回归与 CR 通过；待真机验收及打包 |
 | W23 文本发送标题复制 | GLM 标定首字坐标，企微自身复制标题后核对 | 🔧 进行中 | agent2 的 max 档定位→复制两轮成功；发送路径已改为只复制一次，完整发送待验收 |
+| W24 文本发送双点标定与去 OCR | 自会话标定标题与输入区，发送仅用本地库核验 | 🔧 进行中 | P1 修复后独立 TEST 53/53、PS 合成及 CR 通过；待真机验收 |
 
 ## W14 通用Runtime业务工具自动装配（2026-10-29）
 
@@ -805,3 +806,21 @@ W23 独立 TEST/CR 最终复核通过：生产 PowerShell 5.1 的 Int32 坐标�
 后续纠正：`low` 档对同一张图偶尔把标题首字报到左边界 `(410,38)`，不能用；先恢复 GLM 默认思考，完整 CLI 标定→复制得到 `(438,36)` 和完整群名。用户要求最高档后将 agent2 与本地路由改为 `reasoning_effort=max`。两轮各自先切离再进入『售前客服群』，通过 Windows PowerShell 5.1 调用实际 `Get-WeComTitlePoint` → `Get-WeComCopiedTitle`，分别得到 `(444,38)`、`(436,36)`，两次都复制完整群名并恢复原剪贴板；无消息输入或发送。早先 `title_edit_not_focused` 来自用 PowerShell 7 临时测试生产 PowerShell 5.1 驱动，不代表真实 CLI 复制失败。最高档仍需在不同窗口尺寸和单聊场景验证；完整发送未验。agent2 仍是现场热修复，正式发布需合入本地代码。
 
 用户取消清理输入框前的第二次标题复制：上述 W23 最终复核顺序已废止。发送路径现为“截图/GLM 坐标与底部 OCR/Jev 输入点选择 → 唯一一次复制标题并与目标核对 → 点击输入框一次 → 核已确认主窗身份/几何 → Ctrl+A/Delete → 输入/发送”。标题不符在点击输入框前返回导航，主窗口销毁重建则停止本次发送，不沿用旧标题结论；`-VerifyOnly` 的只读标题核验仍保留。PS5 `input-locator-regression.ps1` 通过，CLI 构建通过；相关 TS 静态与发送核验测试通过，独立验证复核了首次不符、仅一次复制/点击和窗口重建路径。未发真实消息，完整发送仍待验收。已补齐 `input-independent.ps1` 的 W23 标题坐标/复制测试桩及单次核对断言，PS5 33/33 通过，Node 包装用例同步通过。同步最新远端 master 后，CLI 定向 122 项、服务端 74 项、四组 PowerShell 回归及 CLI 构建均通过；全量 npm test 因旧 dist 保留已删除源码的编译测试而未作为验收依据。
+
+## W24 文本发送双点标定与去 OCR（2026-11-06）
+
+范围仅 `wecom_message_send` 与新 `calibrate` CLI。本人显示名取自已验证账号对应的 `user_table.name` 唯一行，不凭 UI 或模型猜测。新命令搜索本人名称、Enter 打开默认自会话，GLM 一次定位标题首字及输入区中心；企微自身复制的标题与本人名全等才缓存两个窗口相对点及宽、高、DPI。缺缓存或尺寸/DPI 不符时发送前自动执行该命令的同一标定逻辑。缓存有效时无需模型与 OCR。
+
+本地库版本/身份/唯一目标/发送基线都在 UI 写入前验证；不满足时拒发。发送前搜索目标名并 Enter 进入默认结果，再复制标题核对；微信联系人标题仅接受“名字@微信”或“名字 @微信”两种全等形式，同名无法消歧或标题不符拒发。目标确认后点击缓存输入点、Ctrl+A/Delete、单行/多行统一复制到剪贴板并 Ctrl+V 粘贴后 Enter，不回读输入文字；标题不符清缓存供下次标定，本次拒发。只用本地库唯一出站记录作发送后核验，未知结果保留凭据供 `send-status` 只读对账，绝不自动重发。删除本链路搜索/选择、输入点及终态 OCR/Jev 调用和本地库不可用时的旧发送回退；独立 search/select 和媒体工具不变。无服务端与 Runtime wire 更改，已交付旧插件继续由服务端兼容。
+
+验收：有效缓存无 GLM/OCR；缺缓存成功自会话标题核对后双点落盘；尺寸/DPI 变化重标定；本地库准入失败时没有 UI 写入；目标标题核对在清理前；发送后只查本地库；未知时不自动重试。合成测试、CLI 构建与 PowerShell 语法/BOM 检查完成后由独立 TEST/CR 复核；真机发送单独验收。
+
+开发自测（2026-11-06）：`npm run build` exit 0；`node --test dist/tests/message-send-localdb-verify.test.js` 26/26、exit 0；相关导航/PowerShell 包装 31/31、exit 0；`python -m unittest discover -s tests/py -p test_localdb_query.py -q` 79/79、exit 0，`test_wecom_localdb.py` 22/22、exit 0；三份新/改 PowerShell 驱动均 UTF-8 BOM、PS 5.1 语法 0 错，双点与输入合成脚本 exit 0。完整 `npm test` 512 项中 491 过、21 失败：1 项既有指纹断言、1 项旧 dist 残留已删除源测试仍导入 `computeDelta`、10 项旧 unread/watch UI 兜底断言、9 项旧 read-session 模型/OCR 双通道断言；这些测试/模块均非 W24 改动。旧 dist 单文件清理被自动审批审查拒绝，未绕过。未执行真实企微标定或发送；独立 TEST/CR 和真机验收待续。
+
+CR 回炉（2026-11-06）：旧无 OCR 搜索在 Ctrl+F 后立即 Ctrl+A/Delete，快捷键成功只证明消息投递，不能证明聚焦搜索框；搜索词输入后也缺少本次结果面板证据。最小真机实验只投递 Ctrl+F，未输入/清理/发送：Win32 子窗口 0，UIA 仅不可聚焦 Pane；Ctrl+F 前后可见 SearchResultWindow2 均为 0；主线程 `GetGUIThreadInfo` 此后回报 focus/caret HWND 均为主窗口，caret 相对 `(212,27)`，同刻截图搜索框约 `x=176..353,y=23..54`。据此增加清理前及清理后 caret 区域门禁；清空后无旧面板，搜索词全文回读、同 PID 新结果面板与主窗身份稳定后才按 Enter；不能建立证据时在发送前失败。另一 P1 将联系人标题匹配收紧为完整标题/明确 `@微信` 后缀全等，不再接受任意 @/括号前缀。PowerShell 合成用例覆盖编辑区 caret/无 caret 均零清理零 Enter、查询回读失败/无新面板零 Enter、相似姓名和未知身份后缀拒发；实测仅覆盖 Ctrl+F 的焦点证据，未输入真实搜索词或真实发送。`npm run build`、43 项定向 Node 测试、两项 PowerShell 合成测试、三份驱动 BOM/语法检查及 `git diff --check` 均 exit 0；待独立复审与真机完整验收。
+
+独立 TEST（2026-11-06）：`npm run build` exit 0；相关 Node 测试（发送、本地库目标、群监控、PowerShell 包装与通用结果）80/80 exit 0，`send-receipt` 与 DB-only 邻接回归 11/11 exit 0；Python 查询 79/79、加密库 22/22 exit 0，`py_compile drivers/py/wecom_localdb.py` exit 0；双点与输入 PowerShell 合成脚本 exit 0，三份驱动 PowerShell 语法 0 错且 UTF-8 BOM；`git diff --check` exit 0。独立核对旧完整套件 21 项失败日志：指纹 1、旧 dist 残留 1、未改 unread/watch 10、未改 read-session 9，均不触及本次文本发送与 context 分支。本次未执行真实企微 UI 标定或发送，待 CR 和真机验收。
+
+P1 修复后独立 TEST（2026-11-06）：复核 `GetGUIThreadInfo` 的线程 ID、`GUITHREADINFO` 布局与 `cbSize` 赋值在 PowerShell 5.1 合成脚本可运行；生产 `Open-WeComNamedChat` 的动态测试验证错误/缺失 caret 时零清理零 Enter、搜索词全文回读失败或结果面板未出现/残留/异进程时零 Enter，成功路径仅一次 Enter。联系人标题严格全等；补足既有企微标题格式“名字 @微信”，只允许“名字@微信”与“名字 @微信”两种全等，不接受相似名或任意后缀。`npm run build` exit 0，发送及搜索门禁 Node 30/30 exit 0，三份 PowerShell 合成脚本 exit 0，三份生产驱动 PS 语法 0 错且 UTF-8 BOM，`git diff --check` exit 0。此前 Python 101/101 和邻接 Node 11/11 结果可复用：本轮仅修改 PowerShell 标题匹配、对应合成断言与文档，未修改其代码/依赖/环境。尚待 CR 与真机完整搜索、标定、发送验收。
+
+独立 CR 复审（2026-11-06）：两处 P1 已修复。搜索清理前后的主窗口 caret 证据、搜索词全文回读及同进程新结果面板共同约束 Enter；联系人标题仅按全文或明确微信后缀全等，相关合成回归通过。源码审查无剩余 P0/P1。真实企微完整搜索、标定和发送仍待验收，故 W24 保持进行中。
