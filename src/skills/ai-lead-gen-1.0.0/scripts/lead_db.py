@@ -80,8 +80,12 @@ def get_conn():
 
 
 def campaign_dir(tenant_id, campaign_id):
-    from src.core.storage import get_tenant_storage_dir
-    return Path(get_tenant_storage_dir(tenant_id, "lead-gen")) / f"campaign_{campaign_id}"
+    # 必须返回绝对路径：skill_execute 的 CWD 是 /tmp/skill_executor 临时目录，
+    # 相对路径会把队列/日志写进临时目录，send_emails.py 等其他进程读 /app 绝对路径时找不到
+    # （2026-11-06 trace tr_runner_c1d7afa89a7a43e2a0b81e6ce556d7b2 事故根因）
+    from src.core.storage import configured_storage_root, normalize_tenant_id
+    return (configured_storage_root() / "tenants" / normalize_tenant_id(tenant_id)
+            / "lead-gen" / f"campaign_{campaign_id}")
 
 
 def init_tables():

@@ -5,7 +5,7 @@
 为什么需要
 ----------
 域名体检（SPF/DKIM/DMARC/MX/PTR/黑名单）与合规判定是一次性结论，不会天天变。
-把结果存到 `workspace/sender_profile.json`，下次调用技能时：
+把结果存到租户级 `lead-gen/sender_profile.json`，下次调用技能时：
   - 档案存在且 domain_check / compliance 均通过 → 跳过体检、不再询问发件人信息；
   - 用户提供新的域名/邮箱/SMTP/发件人 → 覆写对应字段并重新校验；
   - 档案缺失或上次未通过 → 走完整校验流程。
@@ -13,22 +13,41 @@
 用法
 ----
   # 查看当前档案状态（是否需要重新校验）
-  python sender_profile.py status --profile workspace/sender_profile.json
+  python sender_profile.py status
 
   # 保存/新建档案（从一份 JSON 读入；密码只存环境变量名，不落明文）
-  python sender_profile.py save --profile workspace/sender_profile.json --data profile.json
-  # 或管道： cat profile.json | python sender_profile.py save --profile workspace/sender_profile.json
+  python sender_profile.py save --data profile.json
+  # 或管道： cat profile.json | python sender_profile.py save
 
   # 删除档案（下次调用将重新校验）
-  python sender_profile.py reset --profile workspace/sender_profile.json
+  python sender_profile.py reset
 """
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 DEFAULT_PATH = "workspace/sender_profile.json"
+
+
+def _resolve_default_profile_path():
+    """默认档案路径对齐 send_emails.py 的读取位置（租户 lead-gen/sender_profile.json）。
+
+    skill_execute 的 CWD 是 /tmp/skill_executor 临时目录，相对路径会写错位置，
+    与发送侧读不到同一份档案（2026-11-06 trace 事故同类根因）。
+    """
+    tenant_id = (os.environ.get("AID_TENANT_ID")
+                 or os.environ.get("CURRENT_TENANT_ID") or "").strip()
+    if not tenant_id:
+        return DEFAULT_PATH
+    try:
+        from src.core.storage import configured_storage_root, normalize_tenant_id
+        return str(configured_storage_root() / "tenants"
+                   / normalize_tenant_id(tenant_id) / "lead-gen" / "sender_profile.json")
+    except Exception:
+        return DEFAULT_PATH
 
 
 def now_iso():
@@ -113,7 +132,8 @@ def main():
     ap = argparse.ArgumentParser(
         description="发件人档案管理（复用已校验的发件域名/邮箱）")
     parent = argparse.ArgumentParser(add_help=False)
-    parent.add_argument("--profile", default=DEFAULT_PATH, help="档案路径")
+    parent.add_argument("--profile", default=_resolve_default_profile_path(),
+                        help="档案路径（缺省自动解析为租户 lead-gen/sender_profile.json）")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status", parents=[parent], help="查看档案状态（是否需要重新校验）")
     ps = sub.add_parser("save", parents=[parent], help="保存/更新档案")
