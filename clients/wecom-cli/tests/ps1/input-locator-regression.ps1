@@ -46,7 +46,7 @@ function Invoke-WeComJev { param($StateText,$Questions)
 function Invoke-SendChatOcr { param($ImagePath,$Mode)
     if ($Mode -eq 'input') { return @{input_empty=$true;texts=@()} }
     $title = $script:title
-    if ($ImagePath -eq 'step2-typed.png' -and $script:changedTitle) { $title='other-group' }
+    if ($ImagePath -eq 'step2-typed.png' -and $script:changedTitle) { $title+='+' }
     $boxes=@(@{text=$title;x0=426;y0=28;x1=580;y1=48},
         @{text='快速会议';x0=1023;y0=1153;x1=1093;y1=1173},
         @{text='发送(S)';x0=1049;y0=1345;x1=1096;y1=1365})
@@ -186,9 +186,9 @@ Assert-True (@($actions | Where-Object {$_.kind -eq 'enter'}).Count -eq 1) 'vali
 
 Reset-Scenario;$script:changedTitle=$true
 $failure=Run-Send $false
-Assert-True ($failure -like 'WECOMDRIVE|UI_CHANGED|*') 'changed conversation must still block send'
-Assert-True (@($actions | Where-Object {$_.kind -eq 'enter'}).Count -eq 0) 'title mismatch must never Enter'
-Assert-True (@($actions | Where-Object {$_.kind -eq 'clear-input'}).Count -eq 2) 'pre-clear and own typed content clear both occur on title mismatch'
+Assert-True ($failure -eq 'TEST_ENTER_BOUNDARY') 'post-input OCR plus must not veto confirmed conversation'
+Assert-True (@($actions | Where-Object {$_.kind -eq 'enter'}).Count -eq 1) 'one confirmed send reaches Enter despite OCR drift'
+Assert-True (@($actions | Where-Object {$_.kind -eq 'clear-input'}).Count -eq 1) 'input is cleared only before typing'
 Assert-True (@($actions | Where-Object {$_.kind -eq 'text'}).Count -eq 1) 'single-line send keeps original text primitive'
 Assert-True (@($actions | Where-Object {$_.kind -eq 'clipboard'}).Count -eq 0) 'single-line send does not touch clipboard'
 
@@ -208,7 +208,7 @@ Assert-True ($failure -eq 'TEST_ENTER_BOUNDARY') 'exact WeChat contact can reach
 Assert-True (@($actions | Where-Object {$_.kind -eq 'enter'}).Count -eq 1) 'valid external send reaches Enter exactly once'
 Reset-Scenario;$script:title='fixture-peer @微信';$script:changedTitle=$true
 $failure=Run-Send $false $true
-Assert-True ($failure -like 'WECOMDRIVE|UI_CHANGED|*') 'changing title after input still rejects Enter'
-Assert-True (@($actions | Where-Object {$_.kind -eq 'enter'}).Count -eq 0) 'external scope is rechecked immediately before Enter'
-Assert-True (@($actions | Where-Object {$_.kind -eq 'clear-input'}).Count -eq 2) 'only this attempt editor and own pasted text are cleared'
+Assert-True ($failure -eq 'TEST_ENTER_BOUNDARY') 'external send also uses confirmed pre-input title'
+Assert-True (@($actions | Where-Object {$_.kind -eq 'enter'}).Count -eq 1) 'external send has one Enter despite post-input OCR drift'
+Assert-True (@($actions | Where-Object {$_.kind -eq 'clear-input'}).Count -eq 1) 'external editor is cleared only before typing'
 Write-Output 'PS_INPUT_LOCATOR_OK external_cases=6'

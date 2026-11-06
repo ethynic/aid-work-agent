@@ -325,18 +325,18 @@ target_ref 走既有链路**（快路径直发/直读；navigate_required 时二
      消息区末尾任一行含 text 归一化前缀 12 字 / 会话列表含目标名且含前缀），<2 项 →
      EXECUTION_UNKNOWN。
 - **文本输入替换**：目标标题确认后点击输入区，投递 Ctrl+A + Delete 清理既有内容，清理键
-     投递失败不粘贴或发送；不再以 OCR/Jev 草稿判定拒发。输入后、发送前复核标题，不一致
-     则清理本次输入并中止，绝不带着错误标题按 Enter。此行为会覆盖已有未发送文字。
+     投递失败不粘贴或发送；不再以 OCR/Jev 草稿判定拒发。输入前再次确认标题；输入后
+     不再用标题 OCR 阻断 Enter。此行为会覆盖已有未发送文字。
 - **text 约束**：≤2000 字、纯空白拒绝（归一化后为空会使终态校验失真）；单行沿用
    `Send-WeComText` 逐字输入；含换行的多行沿用**剪贴板粘贴通道**：`Set-Clipboard` 重试 5 次
    （×150ms，全败 CONFIG_MISSING）→ attachstate Ctrl+V（投递失败不按 Enter）→ 500ms。
    粘贴后不再以 OCR 正文回读作发送门禁。**副作用：发送多行消息会覆盖用户剪贴板且不恢复**
    （paste handler 异步读取，立即恢复可能粘贴到错误内容）；driver-log 对多行只记前 12 字
    与总字数，不落全文。
-  发送前复核与终态校验对多行无需特判（气泡/会话列表预览显示为单行截断，归一化前缀取整文
+  输入前标题确认与终态校验对多行无需特判（气泡/会话列表预览显示为单行截断，归一化前缀取整文
   开头 8 字 = 首行开头）。驱动超时 → EXECUTION_UNKNOWN；取消 → CANCELLED。
 - **artifact 结构**（同一 artifact 根下独立留痕）：`send-<ts>/`（两轮分发则为两个目录）
-  含 `step1-precheck.png`（两带判定现场）、`step2-typed.png`（输入后复核现场）、
+  含 `step1-precheck.png`（两带判定现场）、`step2-typed.png`（输入后诊断截图）、
   `step3-after.png`（发送后终态现场）与 `driver-log.txt`（Jev state/answer 摘要、OCR 摘要、
   各阶段耗时；绝不含 TYPESAFE_API_KEY）；分发路径另有 `search-<ts>/`、`select-<ts>/`
   （内部命令自建）。返回 data 附 `navigated`（是否走了分发）、`sent_verification`
@@ -486,7 +486,7 @@ target_ref 走既有链路**（快路径直发/直读；navigate_required 时二
   visible=False 残留，判开必须带可见性过滤。Jev 决策 API 措辞敏感，state 模板不得随意改。
 - M6（2026-09-28 设计定稿）：send 智能分发——驱动返回 `navigate_required=true` 表示当前
   会话非目标，TS 层内部编排 chatSearch→chatSelect→二次 send（不经 CLI，注入同一驱动依赖）；
-   文本发送现按用户要求先覆盖目标输入区已有内容，发送前复核失败再清本次输入
+   文本发送现按用户要求先确认目标，再覆盖目标输入区已有内容；输入后不再以标题 OCR 阻断发送
    （Clear-WeComFocusedInput 使用 Ctrl+A+Delete）；
   终态 Jev 判定 no/unclear 或降级三选二 <2 项 → EXECUTION_UNKNOWN 绝不自动重试。
 - M7（2026-09-28 真机验证 e5-image）：Clipboard.SetImage（System.Windows.Forms，FromFile
