@@ -19,7 +19,7 @@
 | [.claude/rules/testing.md](.claude/rules/testing.md) | 测试目录结构、分层规则、Fixtures、运行命令 |
 | [.claude/rules/architecture.md](.claude/rules/architecture.md) | 系统架构、核心组件、扩展点 |
 | [.claude/rules/database_dev.md](.claude/rules/database_dev.md) | 数据库表开发规范，包括表分类、租户隔离要求、变更记录 |
-| [.claude/rules/dev_workflow.md](.claude/rules/dev_workflow.md) | **开发流程规范**：三智能体开发流程（开发→测试→CodeReview），非平凡任务必读 |
+| [dev-workflow skill](.agents/skills/dev-workflow/SKILL.md) | **开发流程**：三智能体开发流程（worktree 功能分支、测试先行、CR 只读评审），非平凡任务必读；项目特化见 [AGENTS.md 开发流程节](AGENTS.md#开发流程) |
 | [.claude/rules/skill_integration.md](.claude/rules/skill_integration.md) | **外部技能包整合规范**：第三方（workbuddy/豆包等）技能包移植与增量合并流程，补丁清单核对、合并策略、三层验证、登记闭环。整合新技能必读 |
 | [.claude/rules/billing_audit.md](.claude/rules/billing_audit.md) | **计费审计规范**：LLM/Embedding/ASR/视频调用点全量扫描 + 已计费五条件核对 + 工具入口 vs 渠道入口分离 + 同步/异步核对。新增计费调用点、修改计费函数、定期审计必读 |
 | [.claude/rules/powershell.md](.claude/rules/powershell.md) | **PowerShell 脚本规范**：UTF-8 BOM、字符串插值用 `-f`、HTTP 用 curl.exe、外部 API 重试、写完强制 ParseFile 检查 |
@@ -33,10 +33,7 @@
 **避免长输出**：一次性输出 32000 个 token，会触发"output token maximum"错误
 
 ## Git 提交规范
-**不要自动提交代码，仅当用户明确说“提交代码”才提交**
-1. 提交前执行 `git fetch` 拉取远程最新代码
-2. 检查是否有冲突，如有冲突先解决冲突再提交
-3. 提交后立即 `git push` 推送到远程
+非平凡开发走 dev-workflow skill 的 worktree + 功能分支模式：每阶段验证通过即 commit+push 到功能分支；**合并回主分支必须用户当场明确确认**（人工审核 + 线下验证后说"合并"）。简化流程仍遵循"仅用户明确说'提交代码'才提交"。提交前 `git fetch`；只暂存本任务相关改动；提交说明末尾加 `文档: docs/plans/<计划文档名>.md`。
 
 ## 文档登记规范
 
