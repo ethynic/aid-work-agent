@@ -83,9 +83,13 @@ def parse_kf_message(msg: Dict[str, Any]) -> UnifiedMessage:
     )
 
 
-# 微信客服仅处理文字 + 语音消息；图片/视频/文件等附件消息即使转发给
-# 智能体也无法识别，会产生"看不了视频"等无效回复消耗积分，渠道层直接过滤
-_PROCESSABLE_KF_MESSAGE_TYPES = ("text", "voice")
+# 微信客服处理 text/voice/image 消息（image 2026-11-06 放行：效果图/判读场景，
+# 附件经 AttachmentAssembler 落盘后智能体可调 image_read/image_render）；
+# video/file 等附件消息即使转发给智能体也无法识别，会产生"看不了视频"等
+# 无效回复消耗积分，渠道层直接过滤。
+# 注意：该常量当前无调用方（channel_routes.py 智能体期过滤用字面量元组），
+# 仅作语义登记防误用，与 channel_routes.py 的放行清单保持一致。
+_PROCESSABLE_KF_MESSAGE_TYPES = ("text", "voice", "image")
 
 
 def should_process_kf_message(msgtype: str) -> bool:
@@ -100,8 +104,8 @@ def should_process_kf_message(msgtype: str) -> bool:
     return msgtype in _PROCESSABLE_KF_MESSAGE_TYPES
 
 
-# 拦截非文字/语音消息时回复客户的固定话术
-KF_FILTER_HINT_MESSAGE = "我无法识别该类型文件，请用文字或语音描述您的需求。"
+# 拦截 video/file 等不支持消息时回复客户的固定话术（image/text/voice 已放行）
+KF_FILTER_HINT_MESSAGE = "我无法识别该类型文件，请直接发送图片，并用文字描述您的需求。"
 
 
 def markdown_to_plain_text(md: str) -> str:

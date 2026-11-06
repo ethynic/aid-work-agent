@@ -4524,3 +4524,9 @@
     ALTER TABLE bs_wecom_daily_summaries ADD COLUMN IF NOT EXISTS source_runner_id TEXT;
     CREATE INDEX IF NOT EXISTS idx_bs_wecom_conversations_plan
         ON bs_wecom_conversations (tenant_id, user_id, daily_plan_task_id);
+- datetime: "2026-11-06 11:30:00"
+  remark: "图像生成按张计费单价种子：qwen-image-3.0-pro 复用 token_cost_prices 通用 price_per_call 列（0.25 元/张为 1K 输出档单价，已按百炼控制台核实；默认出图 1280*960 面积属 1K 档，2K 档 0.5 元/张如启用需另行调价；×image_usage_factor 100 = 25 积分/张；运营改 DB 调价）"
+  statements: |
+    INSERT INTO token_cost_prices (model_name, price_per_call)
+    VALUES ('qwen-image-3.0-pro', 0.25)
+    ON CONFLICT (model_name) DO NOTHING;

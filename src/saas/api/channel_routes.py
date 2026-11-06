@@ -498,7 +498,10 @@ def _build_user_input_for_agent(msg: dict, attachments: list) -> str:
         recognition = msg.get("voice", {}).get("recognition", "")
         return recognition or "[语音消息]"
     elif msgtype == "image":
-        return "[图片消息]"
+        # 图片已放行给智能体（效果图/判读场景）；附件由 AttachmentAssembler
+        # 落盘到会话工作区并在 enhanced_input 注入本地路径，智能体可拿路径
+        # 调 image_read / image_render 等工具
+        return "[图片消息：客户发来的图片见附件，可判读其内容]"
     elif msgtype == "file":
         filename = msg.get("file", {}).get("filename", "文件")
         return f"[文件: {filename}]"
@@ -2748,10 +2751,11 @@ async def _process_tenant_wecom_kf_messages(
 
                 # 智能体期附件消息拦截：到达这里说明会话由智能体接待（人工期/已结束期
                 # 已在上方 _persist_kf_context_customer_message 分支落库并 continue）。
-                # 图片/视频/文件等附件消息转发给智能体会产生"看不了视频"等无效回复
+                # video/file 等附件消息转发给智能体会产生"看不了视频"等无效回复
                 # 消耗积分，此处提示客户并跳过（与历史收集层过滤行为一致）。
+                # image 已放行（2026-11-06 产品效果图助手：客户发户型图 → 智能体判读出图）。
                 # 按客户维度节流（复用 dedup，5 分钟窗口），避免连续发文件刷屏
-                if msg.get("msgtype", "") not in ("text", "voice"):
+                if msg.get("msgtype", "") not in ("text", "voice", "image"):
                     logger.info(
                         f"[wecom_kf] 智能体期跳过非文字/语音消息: msgid={msg_id}, "
                         f"msgtype={msg.get('msgtype', '')}"

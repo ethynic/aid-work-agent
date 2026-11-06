@@ -1,5 +1,5 @@
 ---
-name: 自动填表
+name: AI系统助手
 description: 通过接口代填第三方系统表单（客户信息、跟进记录等），面向内部员工，写前确认、写后回执
 version: 1.1.0
 author: system

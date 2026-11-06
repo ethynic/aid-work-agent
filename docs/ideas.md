@@ -80,6 +80,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261106-1310 | 产品效果图助手（interior-render）：image_gen 服务 + 出图/读图工具 + 技能移植 + wecom_kf 图片链路 | 🔧 部分完成（开发+单测+CodeReview 修复完成，待真机冒烟定版） | 基于第三方 qwen-interior-render 技能包移植：image_gen 服务层（DashScope qwen-image-3.0-pro，wire 形态按官方文档适配）、image_render/image_read 通用工具（按张计费）、interior-render 技能与子智能体、wecom_kf 入站图片放行。 | — | [计划](plans/plan-image-gen-interior-render.md) |
 | 20261105-1550 | Runner Worker 看门狗与队列堆积飞书告警 | 📋 待决策（设计稿完成，用户考虑实现方式） | TPG80509 事故后的最后防线：事件循环阻塞看门狗线程 + 队列水位巡检 + 独立飞书告警通道，三个方案选项与落地组合建议待裁决。 | [设计](system/runner-worker-watchdog-design.md) | — |
 | 20261105-1540 | Excel 工具假异步与 used range 膨胀防御修复（TPG80509） | ✅ 已完成开发（待部署） | 生产 243 全智能体无响应事故修复：excel_process 8 个 handler 全量 to_thread 包裹；双 ExcelReader 归一到 file/excel_reader.py（excel/excel_reader.py read_excel_document 薄委托）；used range 膨胀走 read_only 流式探测真实边界 + 截断提示。270 个相关测试通过。 | — | — |
 | 20261104-2038 | 企微会话每日总结工作台与专属定时配置 | 🔧 部分完成 | 日报内部会话已从聊天列表排除，待 agent2 发布验收。 | [设计](design/wecom/wecom-conversation-operations-design.md) | [计划](plans/plan-wecom-daily-summary-workbench.md) |
@@ -100,6 +101,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261106-1145 | wecom_kf 人工超时智能体接管 | 📋 待开发（设计待评审） | 转人工后人工超时限无发言且客户来新消息时，自动结束人工会话切回智能体接待（企业微信状态图 3 只能转 4，无热切换）；含 reason 白名单豁免、接管标记与审计字段、配置字段及前端表单。 | [设计](channel/wecom_kf/wecom_kf_design.md)（§十五） | — |
 | 20261029-1200 | 飞书/钉钉/企业微信渠道语音输入（阿里云 ASR） | 🔧 部分完成（开发+单测完成，待部署真机验证） | 复刻 wecom_kf 语音链路到三渠道：下载音频 -> 规范化 -> ASR 转文字入对话，计费对齐 KF；飞书/钉钉下载接口待实测。 | — | — |
 | 20261029-1140 | 留资口径调整（qr 不算留资 + 联系方式类型扩展） | 🔧 开发中 | qr 发码拆独立工具 send_advisor_qr；contact_method 扩展为手机号/固话/邮箱，other_contact JSONB 逐条加密存储。 | [设计](subagent/pre-sales/lead-capture-design.md)（§十六修订） | — |
 | 20260910-1259 | 留资线索动态刷新（lead_refresh：意向度 + 需求分条 + 人工归属） | 🔧 部分完成 | **Phase 1 开发+单测完成（2026-09-16），待部署真机验证；Phase 2 §9.5 人工期对话推送（external_push_human：节流推送 + 转人工字段 + 跟进汇总摘要同步 + 不要求留资）开发+单测完成（2026-09-16）**。触发：2026-09-10 产品需求——留资后客户继续交流（智能体轮次 + 转人工期）仅落 `channel_messages`，线索行不再更新，运营页看不到最新客户状态。2026-10-23 补充：新增租户级守卫，对接外部 CRM（qbweb3.1）的租户跳过意向度分析（`load_sso_configs` 非空即 no-op，与前端隐藏留资线索 Tab 同口径，见设计文档 §9.7）。 | [设计](subagent/pre-sales/lead-capture-refresh-design.md) | — |
