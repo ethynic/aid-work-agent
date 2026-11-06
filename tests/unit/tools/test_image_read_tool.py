@@ -41,8 +41,8 @@ def png_file(tmp_path):
 @pytest.fixture
 def vl_settings():
     settings = MagicMock()
-    settings.image_gen.vl.model = "qwen/qwen-vl-plus"
-    settings.image_gen.vl.allowed_models = ["qwen/qwen-vl-plus", "qwen/qwen-vl-max"]
+    settings.image_gen.vl.model = "qwen/qwen3-vl-plus"
+    settings.image_gen.vl.allowed_models = ["qwen/qwen3-vl-plus"]
     return settings
 
 
@@ -51,19 +51,20 @@ class TestResolveModel:
         tool = ImageReadTool()
         with patch("src.config.settings.create_settings", return_value=vl_settings):
             provider, model = tool._resolve_model(None)
-        assert (provider, model) == ("qwen", "qwen-vl-plus")
+        assert (provider, model) == ("qwen", "qwen3-vl-plus")
 
     def test_model_equal_default_passes(self, vl_settings):
         tool = ImageReadTool()
         with patch("src.config.settings.create_settings", return_value=vl_settings):
-            provider, model = tool._resolve_model("qwen/qwen-vl-plus")
-        assert (provider, model) == ("qwen", "qwen-vl-plus")
+            provider, model = tool._resolve_model("qwen/qwen3-vl-plus")
+        assert (provider, model) == ("qwen", "qwen3-vl-plus")
 
-    def test_model_in_whitelist_passes(self, vl_settings):
+    def test_model_not_in_whitelist_rejected(self, vl_settings):
+        """等于默认模型免白名单校验；其他显式指定须命中白名单"""
         tool = ImageReadTool()
         with patch("src.config.settings.create_settings", return_value=vl_settings):
-            provider, model = tool._resolve_model("qwen/qwen-vl-max")
-        assert (provider, model) == ("qwen", "qwen-vl-max")
+            with pytest.raises(ValueError, match="白名单"):
+                tool._resolve_model("qwen/qwen-vl-max")
 
     def test_model_outside_whitelist_rejected(self, vl_settings):
         tool = ImageReadTool()
@@ -107,7 +108,7 @@ class TestExecuteSuccess:
 
         assert result["success"] is True
         assert result["answer"] == "深色墙围合的房间数：3 个"
-        assert result["model"] == "qwen/qwen-vl-plus"
+        assert result["model"] == "qwen/qwen3-vl-plus"
         assert result["file_path"] == png_file
         msg = captured["messages"][0]
         parts = msg["content"]
