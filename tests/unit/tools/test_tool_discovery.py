@@ -51,6 +51,13 @@ wechat_mp_sync / wechat_mp_sync_status，薄入口直调 src/wechat_mp/service.p
 （Runner 化 Phase 4，chat_only 仅 web 对话可见，渠道与 scheduled 执行经
 filter_source_visible_tools 滤除，见 plan-scheduled-task-runner-refactor.md）：
 create_scheduled_task / manage_scheduled_task。
+
+2026-11-06 移除 browser_automation（Runner 执行槽隔离计划 Phase 1 废弃：
+服务端浏览器工具不再注册、发现或提供给新任务；类保留供恢复链路与生命周期
+测试引用，确认无历史使用，不增加存量迁移，见
+plan-runner-execution-slot-isolation-and-alerts.md）。随工具下线的还有经真实
+Worker 调用它的 real_browser 集成套件（显式 skip，Phase 2 按新拓扑处置）；
+本文件新增未声明调用的软错误兜底用例。
 """
 
 import pytest
@@ -63,7 +70,6 @@ from src.tools.registry import ToolRegistry, discover_tool_classes
 GOLDEN_TOOLS = [
     "ai_call",
     "analyze_data",
-    "browser_automation",
     "content_generate",
     "cp",
     "create_scheduled_task",
@@ -108,6 +114,8 @@ SPECIAL_REGISTERED_TOOLS = set()
 # attraction_search / hotel_search：2026-10-11 Phase 4 软下线（统一工具
 # knowledge_base_search 替代，见 plan-unified-kb-resource-metadata.md），
 # 真机观察稳定后随工具文件一并删除
+# browser_automation：2026-11-06 废弃退出目录（Runner 执行槽隔离计划 Phase 1，
+# 不再提供给新任务；类保留供恢复链路与测试）
 CATALOG_EXCLUDED_TOOLS = {
     "create_plan",
     "use_skill",
@@ -118,6 +126,7 @@ CATALOG_EXCLUDED_TOOLS = {
     "speech_to_text",
     "attraction_search",
     "hotel_search",
+    "browser_automation",
 }
 
 
@@ -171,7 +180,8 @@ class TestCatalogExclusions:
         assert not leaked, f"本地代理工具不应进入 _CATALOG: {leaked}"
 
     def test_legacy_browser_tools_not_in_catalog(self):
-        """旧版浏览器工具保留兼容，agent 只注册统一入口 browser_automation"""
+        """旧版浏览器工具保留兼容；统一入口 browser_automation 亦已废弃退出目录
+        （由 test_special_tools_not_in_catalog 断言）"""
         legacy_names = {
             "browser_open", "browser_click", "browser_fill", "browser_get_content",
             "browser_navigate", "browser_close", "browser_screenshot", "browser_snapshot",
@@ -181,6 +191,33 @@ class TestCatalogExclusions:
         discover_tool_classes()
         leaked = legacy_names & {cls.name for cls in _CATALOG.values()}
         assert not leaked, f"旧版浏览器工具不应进入 _CATALOG: {leaked}"
+
+
+class TestRetiredBrowserToolNotDispatchable:
+    """browser_automation 下线后新任务的兜底行为（Phase 1 评审要求）：
+    即使模型幻觉发出未声明的 browser_automation 调用，也只返回工具不存在
+    软错误，不创建任何浏览器资源。"""
+
+    def test_undeclared_call_returns_soft_error_without_browser_resources(self):
+        import asyncio
+
+        from src.tools.browser.run_manager import _ACTIVE_MANAGERS
+        from src.tools.executor import ToolExecutor
+
+        registry = ToolRegistry()
+        for cls in discover_tool_classes().values():
+            registry.register(cls())
+        assert not registry.has_tool("browser_automation")
+
+        managers_before = len(list(_ACTIVE_MANAGERS))
+        result = asyncio.run(
+            ToolExecutor(registry).execute("browser_automation", {"task": "打开示例页"})
+        )
+
+        assert result["success"] is False
+        assert "工具不存在" in result["error"]
+        assert "browser_automation" in result["error"]
+        assert len(list(_ACTIVE_MANAGERS)) == managers_before, "未知工具调用不得创建浏览器运行资源"
 
 
 class TestDiscoveryIdempotent:

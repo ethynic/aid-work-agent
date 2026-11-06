@@ -95,6 +95,8 @@ Step 5: 最新动态（2-3 轮搜索）
 
 **搜索工具选择**：
 
+> 2026-11-06：下表中的 `browser_automation`、`browser_get_content` 均已下线（不在工具目录）；当前运行时指引见 `subagents/competitor-research/SUBAGENT.md` 与 `src/skills/competitor-research-1.0.0/SKILL.md`，页面内容采集改用 `web_fetch`。本节保留作历史设计参考。
+
 | 场景 | 工具 | 说明 |
 |------|------|------|
 | 快速信息检索 | `web_search` | Tavily 搜索，返回结构化结果摘要 |

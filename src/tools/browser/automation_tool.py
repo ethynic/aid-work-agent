@@ -90,6 +90,11 @@ def _has_interactive_desktop() -> bool:
 class BrowserAutomationTool(BaseTool):
     """每次调用独占 browser run，任何终态均关闭。"""
 
+    # 2026-11-06 废弃退出自动目录（Runner 执行槽隔离计划 Phase 1）：不再注册、
+    # 发现或提供给新任务。类保留供恢复链路（browser_recovery/runtime 浏览器分支）
+    # 与生命周期测试引用；确认无历史使用，不增加存量迁移。
+    catalog = False
+
     name = "browser_automation"
     description = """通过完整自然语言任务自动执行网页操作。
 

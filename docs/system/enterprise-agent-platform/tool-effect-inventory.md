@@ -7,6 +7,8 @@
 > 本清单是独立安全审计资料，不创建业务对象、不自动授权重试；代码变化后必须重新核对。[运行时安全加固设计](../agent-runtime-safety-hardening-design.md)
 >
 > 2026-10-08 边界说明：这是 2026-08-19 的工具安全盘点，旧注册位置和 agent.py 行数不是当前装配架构。AgentEngine/Runner 当前工具由 Catalog、Assembly 与运行时工具派发装配；新增或续接操作以当前代码、授权和调用事实核定，不按旧工具数量或位置实施。此审计独立于已撤销的平台蓝图，保留供安全追溯。
+>
+> 2026-11-06：`browser_automation` 已废弃退出工具自动目录（`catalog=False`），不再提供给新任务；下文该工具行仅保留作历史盘点参考。依据：[Runner 执行槽隔离计划 Phase 1](../../plans/plan-runner-execution-slot-isolation-and-alerts.md)。
 
 ---
 

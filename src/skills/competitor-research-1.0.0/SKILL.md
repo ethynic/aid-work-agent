@@ -46,7 +46,7 @@ metadata:
 
 **搜索执行建议**：
 - 先用 `web_search` 进行广度搜索，获取概览信息
-- 发现重要页面（如官网、定价页）后，用 `browser_get_content` 采集完整内容
+- 发现重要页面（如官网、定价页）后，用 `web_fetch` 读取完整内容
 - 国内竞品补充使用 `use_skill("baidu-search")` 进行中文搜索
 - 关键数据（定价、市场份额）至少从 2 个不同来源确认
 
@@ -61,7 +61,7 @@ metadata:
 | 5 | `{竞品名} API 集成 开放平台` | 生态能力、集成友好度 |
 
 **搜索执行建议**：
-- 产品功能页是重点采集目标，用 `browser_get_content` 获取完整功能列表
+- 产品功能页是重点采集目标，用 `web_fetch` 获取完整功能列表
 - 技术博客或开发者文档能反映技术实力，优先采集
 - 产品更新日志（changelog）是推断路线图的直接依据
 
@@ -126,11 +126,10 @@ metadata:
 | 场景 | 工具 | 说明 |
 |------|------|------|
 | 快速信息检索 | `web_search` | Tavily 搜索，返回结构化结果摘要 |
-| 具体页面内容采集 | `browser_get_content` | 直接打开 URL 返回页面 markdown（最长 50000 字符） |
-| 需要交互的页面 | `browser_automation` | LLM 驱动的浏览器操作（点击、翻页、填表） |
+| 具体页面内容采集 | `web_fetch` | 读取公开网页/文字型 PDF 正文，原文经 body_file_path 用 `read` 分页阅读 |
 | 中文搜索补充 | `use_skill("baidu-search")` | 百度 AI 搜索，适合国内竞品 |
 
-**典型组合**：先用 `web_search` 搜索获取相关 URL 列表，再用 `browser_get_content` 逐个打开采集完整内容。需要交互时改用 `browser_automation`。
+**典型组合**：先用 `web_search` 搜索获取相关 URL 列表，再用 `web_fetch` 逐个读取采集完整内容。
 
 ---
 

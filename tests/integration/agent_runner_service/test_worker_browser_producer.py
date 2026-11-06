@@ -15,7 +15,7 @@ from .conftest import wait_for
 from .provider import Reply, tool_reply
 from .test_worker import workers, api_pair, prices, accept, runner, terminal, decoded
 
-pytestmark = [pytest.mark.integration, pytest.mark.real_browser]
+pytestmark = [pytest.mark.integration, pytest.mark.real_browser, pytest.mark.skip(reason='browser_automation 服务端工具已废弃下线（plan-runner-execution-slot-isolation-and-alerts.md Phase 1）：套件经真实 Worker 调用该工具，随被测能力停用，Phase 2 按 Worker 新拓扑处置')]
 
 
 def test_actual_browser_start_live_original_fence_and_confirmed_close(

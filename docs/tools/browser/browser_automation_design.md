@@ -1,6 +1,6 @@
 # 浏览器自动化工具重构设计文档
 
-> 创建日期: 2026-04-30 | 状态: 已实现
+> 创建日期: 2026-04-30 | 状态: 已实现 | **已废弃（2026-11-06）**：`browser_automation` 已退出工具自动目录（`catalog=False`），不再注册、发现或提供给新任务；本文保留作历史设计参考。依据：[Runner 执行槽隔离计划 Phase 1](../../plans/plan-runner-execution-slot-isolation-and-alerts.md)。
 
 ## 1. 问题背景
 

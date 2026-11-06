@@ -15,7 +15,7 @@ from .test_browser_continuation_races import ask, done, native_wait, complete_or
 from .test_browser_owner_boundaries import delete_browser_facts
 from .test_worker import workers, api_pair, prices, accept, runner, decoded
 
-pytestmark = [pytest.mark.integration, pytest.mark.real_browser]
+pytestmark = [pytest.mark.integration, pytest.mark.real_browser, pytest.mark.skip(reason='browser_automation 服务端工具已废弃下线（plan-runner-execution-slot-isolation-and-alerts.md Phase 1）：套件经真实 Worker 调用该工具，随被测能力停用，Phase 2 按 Worker 新拓扑处置')]
 
 
 def test_actual_bad_checkpoint_completion_bridge_keeps_worker_alive_for_another_legal_session(

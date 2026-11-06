@@ -78,11 +78,10 @@ context:
 | 场景 | 工具 |
 |------|------|
 | 快速信息检索 | `web_search` |
-| 采集具体页面内容 | `browser_get_content` |
-| 需要交互的页面 | `browser_automation` |
+| 采集具体页面内容 | `web_fetch` |
 | 中文搜索补充 | `use_skill("baidu-search")` |
 
-**典型组合**：先用 `web_search` 获取相关 URL 列表，再用 `browser_get_content` 逐个采集完整内容。
+**典型组合**：先用 `web_search` 获取相关 URL 列表，再用 `web_fetch` 逐个采集完整内容。
 
 ### 材料文件保存
 

@@ -1,19 +1,20 @@
 """Browser工具模块
 
-## 新工具（推荐）
+## 已废弃（2026-11-06）
 
-| 工具 | 描述 |
-|------|------|
-| BrowserAutomationTool | 统一浏览器自动化工具，一个工具完成所有浏览器操作 |
+`browser_automation`（BrowserAutomationTool）已退出工具自动目录，不再注册、
+发现或提供给新任务（Runner 执行槽隔离计划 Phase 1）。类保留供恢复链路与
+生命周期测试引用；包级工厂 create_browser_tools 已删除（browser_tool.py 内
+同名旧版函数保留兼容，长期无调用方）。
 
 ## 旧工具（保留兼容）
 
-以下工具已保留用于兼容性，新代码应使用 BrowserAutomationTool：
+以下工具长期未注册（catalog=False），仅保留类型兼容：
 - BrowserOpenTool, BrowserSnapshotTool, BrowserClickTool, BrowserFillTool 等
 """
 
 # ============================================
-# 新工具：统一浏览器自动化
+# 已废弃工具：统一浏览器自动化（仅类型保留，不进目录）
 # ============================================
 from .automation_tool import BrowserAutomationTool
 
@@ -37,7 +38,6 @@ from .browser_tool import (
     BrowserNavigateTool,
     BrowserCloseTool,
     BrowserScreenshotTool,
-    create_browser_tools as _create_legacy_tools,
 )
 from .browser_tool import (
     BrowserClickTool as _LegacyBrowserClickTool,
@@ -87,20 +87,8 @@ from .semantic import (
 )
 
 
-def create_browser_tools() -> list:
-    """创建浏览器工具列表
-
-    Returns:
-        工具列表
-    """
-    return [
-        # 新版统一工具
-        BrowserAutomationTool(),
-    ]
-
-
 __all__ = [
-    # 新工具
+    # 已废弃工具（仅类型保留，不进目录）
     "BrowserAutomationTool",
     # 会话管理
     "BrowserSession",
@@ -143,6 +131,4 @@ __all__ = [
     "IFrameHandler",
     "IFrameInfo",
     "get_page_iframes",
-    # 工厂函数
-    "create_browser_tools",
 ]
