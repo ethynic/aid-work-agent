@@ -113,6 +113,37 @@ class VideoGenConfig(BaseModel):
     task_max_age_hours: int = 24               # 全局兜底（provider 未声明时用）
 
 
+class DashScopeImageGenConfig(BaseModel):
+    """DashScope 百炼图像生成/编辑配置（qwen-image-edit 系列，按张计费）。
+
+    与万相同属百炼，同一 API key 通用，api_key 空回退 settings.llm.qwen.api_keys[0]。
+    mode: async_task（提交任务 + 轮询，默认）| sync（同步直返，真机冒烟定版用）。
+    """
+    api_key: str = ""                          # 优先读 WANX_API_KEY；空则回退 qwen.api_keys[0]
+    model: str = "qwen-image-edit"             # 与 token_cost_prices.model_name 严格相等
+    mode: str = "async_task"
+    base_url: str = "https://dashscope.aliyuncs.com/api/v1"
+    default_size: str = "1280*960"
+
+
+class ImageVLConfig(BaseModel):
+    """image_read 读图模型配置（provider/model 语法，经 chat_direct 指定通道直连）。
+
+    白名单模式与 ResumeVLConfig 一致：显式指定其他模型必须命中 allowed_models。
+    """
+    model: str = "qwen/qwen-vl-plus"
+    allowed_models: List[str] = Field(default_factory=lambda: ["qwen/qwen-vl-plus", "qwen/qwen-vl-max"])
+
+
+class ImageGenConfig(BaseModel):
+    """图像生成配置（统一管理 provider 与读图模型）。"""
+    provider: str = "dashscope"
+    dashscope: DashScopeImageGenConfig = Field(default_factory=DashScopeImageGenConfig)
+    vl: ImageVLConfig = Field(default_factory=ImageVLConfig)
+    poll_interval_seconds: int = 3
+    poll_timeout_seconds: int = 180
+
+
 class LLMConfig(BaseModel):
     """LLM配置"""
     provider: str = "zhipu"
@@ -489,6 +520,7 @@ class BillingConfig(BaseModel):
     video_gen_usage_factor: int = 33
     embedding_usage_factor: int = 100
     asr_usage_factor: int = 100
+    image_usage_factor: int = 100
 
 
 class DeploymentConfig(BaseModel):
@@ -807,6 +839,7 @@ class Settings(BaseModel):
     billing: BillingConfig = Field(default_factory=BillingConfig)
     deployment: DeploymentConfig = Field(default_factory=DeploymentConfig)
     video_gen: VideoGenConfig = Field(default_factory=VideoGenConfig)
+    image_gen: ImageGenConfig = Field(default_factory=ImageGenConfig)
     client: ClientConfig = Field(default_factory=ClientConfig)
     boss_tool_billing: BossToolBillingConfig = Field(default_factory=BossToolBillingConfig)
     resume_vl: ResumeVLConfig = Field(default_factory=ResumeVLConfig)
@@ -987,6 +1020,19 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         vg_minimax["model"] = os.getenv("MINIMAX_VIDEO_MODEL_CODE")
     if os.getenv("MINIMAX_BASE_URL"):
         vg_minimax["base_url"] = os.getenv("MINIMAX_BASE_URL")
+
+    # 图像生成（dashscope）：模型/模式可 env 覆盖，便于冒烟切换不动 yaml
+    ig_cfg = yaml_config.setdefault("image_gen", {})
+    ig_dash = ig_cfg.setdefault("dashscope", {})
+    if not ig_dash.get("api_key") and os.getenv("WANX_API_KEY"):
+        ig_dash["api_key"] = os.getenv("WANX_API_KEY")
+    if os.getenv("IMAGE_GEN_MODEL"):
+        ig_dash["model"] = os.getenv("IMAGE_GEN_MODEL")
+    if os.getenv("IMAGE_GEN_MODE"):
+        ig_dash["mode"] = os.getenv("IMAGE_GEN_MODE")
+    ig_vl = ig_cfg.setdefault("vl", {})
+    if os.getenv("IMAGE_VL_MODEL"):
+        ig_vl["model"] = os.getenv("IMAGE_VL_MODEL")
 
     if os.getenv("DEBUG", "").lower() in ("true", "1", "yes"):
         yaml_config.setdefault("app", {})["debug"] = True
@@ -1193,6 +1239,11 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
     if os.getenv("ASR_USAGE_FACTOR") is not None:
         try:
             billing_cfg["asr_usage_factor"] = int(os.getenv("ASR_USAGE_FACTOR"))
+        except ValueError:
+            pass
+    if os.getenv("IMAGE_USAGE_FACTOR") is not None:
+        try:
+            billing_cfg["image_usage_factor"] = int(os.getenv("IMAGE_USAGE_FACTOR"))
         except ValueError:
             pass
 

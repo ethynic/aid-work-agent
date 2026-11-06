@@ -191,6 +191,34 @@ def calculate_asr_credit_cost(
     return credit_cost
 
 
+def calculate_image_credit_cost(
+    images: int,
+    model: str = "qwen-image-edit",
+    usage_factor_override: Optional[int] = None,
+) -> float:
+    """计算图像生成消耗的积分（按张计费）
+
+    DashScope 百炼图像生成按张计费（qwen-image-edit 等模型）。
+    单价查 token_cost_prices.price_per_call（通用按次单价列，与 ASR 的
+    asr_price_per_call 区分，避免混用）。
+    公式：credit_cost = ceil(images × price_per_call × image_usage_factor × 100) / 100
+
+    Args:
+        images: 生成图片张数（实际交付/下载注册成功的张数）
+        model: 图像模型名（默认 qwen-image-edit），用于查 price_per_call 单价
+        usage_factor_override: 用量系数覆盖值
+
+    Returns:
+        积分用量（2 位小数，向上取整到 0.01）；单价缺失或张数 ≤ 0 返回 0.0
+    """
+    credit_cost, _ = calculate_image_credit_cost_with_breakdown(
+        images=images,
+        model=model,
+        usage_factor_override=usage_factor_override,
+    )
+    return credit_cost
+
+
 # ============== 带 breakdown 的计算函数（usage_breakdown 单价追溯） ==============
 # 返回 (credit_cost, breakdown)，breakdown 记录写入时的单价快照与分项积分，
 # 使 chat_records.usage_breakdown 不依赖 token_cost_prices 表的当前快照即可独立对账。
@@ -581,6 +609,52 @@ def calculate_asr_credit_cost_with_breakdown(
 
     breakdown = {
         "unit_price_per_call": asr_price,
+        "usage_factor": usage_factor,
+    }
+    return credit_cost, breakdown
+
+
+def calculate_image_credit_cost_with_breakdown(
+    images: int,
+    model: str = "qwen-image-edit",
+    usage_factor_override: Optional[int] = None,
+    *, price_snapshot: Optional[dict] = None,
+) -> tuple:
+    """计算图像生成积分，并返回单价/系数 breakdown。
+
+    按张计费（DashScope 图像模型按张计费），单价读 token_cost_prices.price_per_call
+    通用按次单价列。返回 (credit_cost, breakdown)，breakdown 结构：
+    {"unit_price_per_call": float, "usage_factor": int}
+    """
+    if not images or images <= 0:
+        return 0.0, {}
+
+    if not model:
+        logger.warning("图像生成计费：model 为空，credit_cost=0")
+        return 0.0, {}
+
+    tcp = price_snapshot if price_snapshot is not None else TokenCostPriceDB.get_by_model_name(model)
+    if not tcp:
+        logger.warning(f"图像生成计费：模型 {model} 未配置单价，credit_cost=0")
+        return 0.0, {}
+
+    image_price = float(tcp.get("price_per_call") or 0)
+    if image_price <= 0:
+        logger.warning(f"图像生成计费：模型 {model} 的 price_per_call 为空或 0，credit_cost=0")
+        return 0.0, {}
+
+    if usage_factor_override is not None:
+        usage_factor = usage_factor_override
+    else:
+        settings = create_settings()
+        usage_factor = getattr(settings.billing, "image_usage_factor", 100) or 100
+
+    cost = images * image_price
+    credit_cost = math.ceil(cost * usage_factor * 100) / 100
+    credit_cost = max(credit_cost, 0.0)
+
+    breakdown = {
+        "unit_price_per_call": image_price,
         "usage_factor": usage_factor,
     }
     return credit_cost, breakdown

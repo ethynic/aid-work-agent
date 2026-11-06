@@ -378,6 +378,11 @@ INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m
 VALUES ('qwen3.8-flash', 0.8, 2.7, 0.16)
 ON CONFLICT (model_name) DO NOTHING;
 
+-- 图像生成按张计费单价：qwen-image-edit 0.25 元/张（×usage_factor 100 = 25 积分/张；运营改 DB 调价；以百炼控制台核实为准）
+INSERT INTO token_cost_prices (model_name, price_per_call)
+VALUES ('qwen-image-edit', 0.25)
+ON CONFLICT (model_name) DO NOTHING;
+
 
 -- 验证码表
 CREATE TABLE IF NOT EXISTS sms_codes (
