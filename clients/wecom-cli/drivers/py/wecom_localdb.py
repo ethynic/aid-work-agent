@@ -122,6 +122,7 @@
 # v1 快照/库整读入内存（生产 WAL checkpoint 后很小、P0 实测库+WAL 合计 1.28MB；超大文件
 # 整读为已知限制）。
 import hashlib
+import difflib
 import json
 import os
 import re
@@ -2612,9 +2613,71 @@ def cmd_query(args):
         conn.close()
 
 
+def _directory_search(workdir, session, account, request):
+    """Name resolution before UI search; one row per group or user identity."""
+    query = request.get('query')
+    kind = request.get('type', 'any')
+    limit = request.get('limit', 20)
+    if (not isinstance(query, str) or not query.strip() or len(query) > 100 or
+            kind not in ('any', 'contact', 'group') or type(limit) is not int or not 1 <= limit <= 50):
+        return {'ok': False, 'error': 'BAD_ARGS'}
+    rows = []
+    if kind != 'contact':
+        columns = _table_columns(session, 'conversation_table')
+        id_col = _find_conversation_id_column(session, 'conversation_table', columns)
+        if not id_col or 'name' not in columns:
+            return {'ok': False, 'error': 'SCHEMA_UNSUPPORTED'}
+        for cid, name in session.execute('SELECT %s, %s FROM conversation_table'
+                                         % (_qi(id_col), _qi('name'))):
+            if isinstance(cid, str) and cid.startswith('R:') and isinstance(name, str) and name.strip():
+                rows.append({'identity': cid, 'name': name.strip(), 'section': '群聊',
+                             'match_names': [name.strip()]})
+    if kind != 'group':
+        user_path = _resolve_dec_db(workdir, 'user')
+        if not user_path:
+            return {'ok': False, 'error': 'DB_UNREADABLE'}
+        user = _open_ro(user_path)
+        try:
+            columns = _table_columns(user, 'user_table')
+            name_cols = [col for col in _USER_NAME_COLUMN_CANDIDATES if col in columns]
+            if 'id' not in columns or not name_cols:
+                return {'ok': False, 'error': 'SCHEMA_UNSUPPORTED'}
+            select = ', '.join(['CAST(%s AS TEXT)' % _qi('id')] + [_qi(col) for col in name_cols])
+            for record in user.execute('SELECT %s FROM user_table' % select):
+                uid = record[0]
+                names = list(dict.fromkeys(value.strip() for value in record[1:]
+                                           if isinstance(value, str) and value.strip()))
+                if names:
+                    rows.append({'identity': uid, 'name': names[0], 'section': '联系人',
+                                 'match_names': names})
+        finally:
+            user.close()
+    needle = query.strip().casefold()
+    exact = [row for row in rows if any(value.casefold() == needle for value in row['match_names'])]
+    matched = exact if exact else [row for row in rows
+                                   if any(needle in value.casefold() for value in row['match_names'])]
+    matched.sort(key=lambda row: (row['name'].casefold(), row['section'], row['identity']))
+    if matched:
+        names = {row['name'] for row in matched}
+        return {'ok': True, 'self_user_id': account, 'match_kind': 'exact' if exact else 'contains',
+                'match_count': len(matched), 'same_name': len(matched) > 1 and len(names) == 1,
+                'candidates': [{key: row[key] for key in ('name', 'section')} for row in matched[:limit]]}
+    suggested = []
+    for row in rows:
+        score = max(difflib.SequenceMatcher(None, needle, name.casefold()).ratio()
+                    for name in row['match_names'])
+        if score >= 0.45:
+            suggested.append((score, row))
+    suggested.sort(key=lambda item: (-item[0], item[1]['name'].casefold(), item[1]['identity']))
+    return {'ok': True, 'self_user_id': account, 'match_kind': 'none', 'match_count': 0,
+            'same_name': False,
+            'candidates': [{key: row[key] for key in ('name', 'section')}
+                           for _, row in suggested[:limit]]}
+
+
 def cmd_directory(workdir, account, request):
     """Read-only synchronized conversation catalog; never reads or writes monitor state."""
-    if not isinstance(request, dict) or request.get('mode') not in ('list', 'preview', 'resolve'):
+    if not isinstance(request, dict) or request.get('mode') not in ('list', 'preview', 'resolve', 'search'):
         return {'ok': False, 'error': 'BAD_ARGS'}
     message_path = _resolve_dec_db(workdir, 'message')
     session_path = _resolve_dec_db(workdir, 'session')
@@ -2627,6 +2690,8 @@ def cmd_directory(workdir, account, request):
             identity = _query_context(workdir, msg, account)
             if not identity.get('ok'):
                 return identity
+            if request['mode'] == 'search':
+                return _directory_search(workdir, session, account, request)
             columns = _table_columns(session, 'conversation_table')
             id_col = _find_conversation_id_column(session, 'conversation_table', columns)
             if not id_col or 'name' not in columns:

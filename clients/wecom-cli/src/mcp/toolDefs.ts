@@ -67,12 +67,9 @@ export const TOOL_DEFS: WecomToolDef[] = [
     name: 'wecom_chat_search',
     title: '企业微信搜索联系人/会话',
     description:
-      '在企业微信主窗口搜索框按关键词检索联系人/群聊（只读，不打开会话、不读历史消息）。' +
-      '返回候选列表（name/subtitle/section/x/y 及 Jev 概率）与 best 最优候选（含置信度与概率分布），' +
-      '每个候选带 target_ref（HMAC 签名短期句柄，有效期 5 分钟，payload 含 overlay 相对坐标），' +
-      '供 wecom_message_send 等后续命令作为目标使用。' +
-      '注意：搜索结果面板（overlay）在返回后保持打开，其坐标句柄由后续 select 类命令消费。' +
-      '无结果返回 TARGET_NOT_FOUND（data 附 reason 与 jev/timing_ms 诊断信息）。',
+      '先从企业微信本地库的群会话与联系人名称中匹配，不操作窗口。完整名称优先，其次关键词包含。' +
+      '完整名称跨联系人/群聊类型也唯一时返回账号绑定 target_ref，供 wecom_chat_select 进入会话；无命中返回近似名称候选供判断，不能擅自改目标。' +
+      '多个不同名称返回候选，请用户指定完整名称；多个同名目标须备注或重命名。',
     zodShape: {
       query: z.string().min(1).max(100).describe('搜索关键词（联系人/群名，1-100 字）'),
       type: z.enum(['contact', 'group', 'any']).optional().describe('过滤分区：contact=联系人，group=群聊，any=全部（默认）'),
@@ -84,14 +81,12 @@ export const TOOL_DEFS: WecomToolDef[] = [
     name: 'wecom_chat_select',
     title: '企业微信进入会话',
     description:
-      '点击 wecom_chat_search 返回的搜索结果条目，进入对应联系人/群聊会话（不发送任何消息）。' +
-      '前置条件：必须先调 wecom_chat_search 且搜索结果面板（overlay）仍处于打开状态，' +
-      'target_ref 有效期 5 分钟；面板已关或 ref 过期返回 TARGET_REF_STALE（需重新 search）。' +
-      '点击前 OCR 复核面板条目与坐标（防陈旧面板），点击后校验会话标题与目标一致，不符返回 UI_CHANGED。' +
+      '消费 wecom_chat_search 的唯一匹配 target_ref：复查本地名称唯一性，然后 Ctrl+F 搜索完整名称并回车。' +
+      '进入后用缓存标题点复制标题严格核对；无缓存先标定。target_ref 有效期 5 分钟。' +
       '副作用（半写动作，无出站消息）：进入会话会清除该会话未读角标（企微客户端固有行为），' +
       '并切换主窗口当前会话视图。',
     zodShape: {
-      target_ref: z.string().min(1).describe('目标句柄（wecom_chat_search 返回的 target_ref，须含坐标的 M4+ 版本）'),
+      target_ref: z.string().min(1).describe('唯一匹配的账号绑定目标句柄（wecom_chat_search 返回）'),
     },
     annotations: { title: '企业微信进入会话', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
@@ -156,7 +151,7 @@ export const TOOL_DEFS: WecomToolDef[] = [
       '校验失败返回 EXECUTION_UNKNOWN（图片可能已发出，系统不会自动重试，请人工确认）。' +
       '已知限制：发送前标题复核失败中止时，输入区可能残留图片预览（非文本草稿无法自动清除），需人工清理。',
     zodShape: {
-      target_ref: z.string().min(1).optional().describe('发送目标句柄（wecom_chat_search 返回的 target_ref，须为含坐标的 M4+ 版本；与 target_name 二选一）'),
+      target_ref: z.string().min(1).optional().describe('发送目标句柄（wecom_chat_search 唯一匹配返回；与 target_name 二选一）'),
       target_name: z.string().min(1).max(100).optional().describe('直达模式：按会话名（联系人/群名，可含 @微信 后缀）定位目标，内部自动 search 并做身份校验（同名多候选无法消歧返回 TARGET_AMBIGUOUS）；与 target_ref 二选一'),
       image_path: z.string().min(1).describe('图片本地绝对路径（png/jpg/jpeg/bmp/gif，≤20MB；调用方负责先落盘到本机）'),
     },
@@ -178,7 +173,7 @@ export const TOOL_DEFS: WecomToolDef[] = [
       '已知限制：发送前标题复核失败中止时，输入区可能残留文件卡片（非文本草稿无法自动清除），需人工清理；' +
       '重发同名文件时会话列表预览可能不变，校验或报 EXECUTION_UNKNOWN（属保守方向，人工确认即可）。',
     zodShape: {
-      target_ref: z.string().min(1).optional().describe('发送目标句柄（wecom_chat_search 返回的 target_ref，须为含坐标的 M4+ 版本；与 target_name 二选一）'),
+      target_ref: z.string().min(1).optional().describe('发送目标句柄（wecom_chat_search 唯一匹配返回；与 target_name 二选一）'),
       target_name: z.string().min(1).max(100).optional().describe('直达模式：按会话名（联系人/群名，可含 @微信 后缀）定位目标，内部自动 search 并做身份校验（同名多候选无法消歧返回 TARGET_AMBIGUOUS）；与 target_ref 二选一'),
       file_path: z.string().min(1).describe('文件本地绝对路径（扩展名不限，≤100MB，文件名去空白后须 ≥3 字符；调用方负责先落盘到本机）'),
     },

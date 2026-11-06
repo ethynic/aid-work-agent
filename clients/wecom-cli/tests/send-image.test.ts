@@ -63,13 +63,14 @@ function makeImageFile(name = 'test.png', size = 64): string {
 function realDeps(keyDir: string): { verifyRefFn: VerifyTargetRefFn; createRefFn: CreateTargetRefFn } {
   return {
     verifyRefFn: (ref) => verifyTargetRef(ref, { keyDir }),
-    createRefFn: (name, type, subtitle, coords) => createTargetRef(name, type, subtitle, { keyDir, coords }),
+    createRefFn: (name, type, subtitle, coords, account) => createTargetRef(name, type, subtitle, { keyDir, coords, account }),
   }
 }
 
 /** 按脚本名分发的驱动 mock：send-image.ps1 消费 sendStages 队列（逐次出队） */
 interface DriverMock {
   calls: PowerShellScriptOptions[]
+  catalogCalls?: string[]
   sendStages: Array<Record<string, unknown> | Error>
   searchResult: Record<string, unknown> | Error
   selectResult: Record<string, unknown> | Error
@@ -97,10 +98,21 @@ function makeRunDriver(mock: DriverMock): RunPowerShellDriverFn {
   }) as RunPowerShellDriverFn
 }
 
-function makeOp(keyDir: string, root: string, mock: DriverMock) {
+function makeOp(keyDir: string, root: string, mock: DriverMock, probeAccounts = ['account']) {
+  mock.catalogCalls = []
+  let probes = 0
   return createWecomSendImageOperation({
     runDriverFn: makeRunDriver(mock),
     artifactDirFn: () => root,
+    probeAccountFn: async () => ({ account: probeAccounts[Math.min(probes++, probeAccounts.length - 1)]! }),
+    readCatalogFn: async args => {
+      mock.catalogCalls!.push(args.query!)
+      if (mock.searchResult instanceof Error) throw mock.searchResult
+      const raw = Array.isArray(mock.searchResult.items) ? mock.searchResult.items as { name: string }[] : []
+      const hits = raw.filter(row => row.name.includes(args.query!))
+      return { message: '', data: { self_user_id: 'account', self_name: '本人', match_count: hits.length,
+        candidates: hits.map(row => ({ name: row.name, section: '联系人' })) } }
+    },
     ...realDeps(keyDir),
   })
 }
@@ -147,10 +159,9 @@ function argAfter(call: PowerShellScriptOptions, flag: string): string {
   return call.args![i + 1]! as string
 }
 
-test('M7 参数校验矩阵：图片不存在 / 扩展名不符 / 超 20MB / 无坐标旧 ref → INVALID_ARGUMENT，均不调驱动', async () => {
+test('M7 参数校验矩阵：图片不存在 / 扩展名不符 / 超 20MB / 相对路径 → INVALID_ARGUMENT，均不调驱动', async () => {
   const keyDir = makeKeyDir()
-  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, coords: { x: 200, y: 60 } })
-  const oldRef = createTargetRef('文件传输助手', 'other', '', { keyDir }) // 无坐标（旧版签发）
+  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, account: 'account', coords: { x: 200, y: 60 } })
   const mock: DriverMock = { calls: [], sendStages: [], searchResult: {}, selectResult: {} }
   const op = makeOp(keyDir, makeArtifactRoot(), mock)
   const imagePath = makeImageFile()
@@ -169,10 +180,6 @@ test('M7 参数校验矩阵：图片不存在 / 扩展名不符 / 超 20MB / 无
   assert.equal(r3.code, 'INVALID_ARGUMENT')
   assert.match(r3.message, /20MB/)
 
-  const r4 = await op.execute({ target_ref: oldRef, image_path: imagePath }, silentCtx())
-  assert.equal(r4.code, 'INVALID_ARGUMENT')
-  assert.match(r4.message, /不含坐标/)
-
   const r5 = await op.execute({ target_ref: ref, image_path: 'relative.png' }, silentCtx())
   assert.equal(r5.code, 'INVALID_ARGUMENT')
   assert.match(r5.message, /绝对路径/)
@@ -184,7 +191,7 @@ test('M7 快路径：navigate_required=false → 成功透传方差字段与图�
   const keyDir = makeKeyDir()
   const root = makeArtifactRoot()
   const mock: DriverMock = { calls: [], sendStages: [{ ...SENT_OK }], searchResult: {}, selectResult: {} }
-  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, coords: { x: 200, y: 60 } })
+  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, account: 'account', coords: { x: 200, y: 60 } })
   const op = makeOp(keyDir, root, mock)
   const imagePath = makeImageFile('chart.png', 4096)
   const r = await op.execute({ target_ref: ref, image_path: imagePath }, silentCtx())
@@ -229,7 +236,7 @@ test('M7 分发路径：第一轮 navigate_required=true → chatSearch → chat
     searchResult: { ...SEARCH_OK },
     selectResult: { ...SELECT_OK },
   }
-  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, coords: { x: 200, y: 60 } })
+  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, account: 'account', coords: { x: 200, y: 60 } })
   const op = makeOp(keyDir, root, mock)
   const imagePath = makeImageFile()
   const r = await op.execute({ target_ref: ref, image_path: imagePath }, silentCtx())
@@ -239,19 +246,18 @@ test('M7 分发路径：第一轮 navigate_required=true → chatSearch → chat
   assert.equal((r.data.sent_verification as Record<string, unknown>).method, 'rule_2of2')
   assert.deepEqual(r.data.input_stddev, { before: 9.8, paste: 36.5, after: 9.7 })
   assert.match(r.message, /已自动搜索并切换会话/)
-  // 编排顺序：send-image → search → select → send-image
-  assert.equal(mock.calls.length, 4)
+  // 本地库搜索不调用 OCR 驱动；阶段 → select → 阶段。
+  assert.deepEqual(mock.catalogCalls, ['文件传输助手', '文件传输助手'])
+  assert.equal(mock.calls.length, 3)
   assert.ok(mock.calls[0]!.script.endsWith('send-image.ps1'))
-  assert.ok(mock.calls[1]!.script.endsWith('chat-search.ps1'))
-  assert.ok(mock.calls[2]!.script.endsWith('chat-select.ps1'))
-  assert.ok(mock.calls[3]!.script.endsWith('send-image.ps1'))
-  assert.deepEqual(mock.calls[1]!.args?.slice(0, 2), ['-Query', '文件传输助手'])
+  assert.ok(mock.calls[1]!.script.endsWith('chat-select.ps1'))
+  assert.ok(mock.calls[2]!.script.endsWith('send-image.ps1'))
   // 两次 send-image 驱动身份/图片参数一致、artifact 目录相互独立
   assert.equal(argAfter(mock.calls[0]!, '-ImagePath'), imagePath)
-  assert.equal(argAfter(mock.calls[3]!, '-ImagePath'), imagePath)
-  assert.equal(argAfter(mock.calls[0]!, '-ImageHash'), argAfter(mock.calls[3]!, '-ImageHash'))
+  assert.equal(argAfter(mock.calls[2]!, '-ImagePath'), imagePath)
+  assert.equal(argAfter(mock.calls[0]!, '-ImageHash'), argAfter(mock.calls[2]!, '-ImageHash'))
   const dir1 = sendImageArtifactDir(mock.calls[0]!)
-  const dir2 = sendImageArtifactDir(mock.calls[3]!)
+  const dir2 = sendImageArtifactDir(mock.calls[2]!)
   assert.notEqual(dir1, dir2, '两轮 send-image 的 artifact 目录必须独立')
   assert.ok(existsSync(dir1) && existsSync(dir2))
 })
@@ -264,7 +270,7 @@ test('M7 两轮都 navigate_required → TARGET_NOT_FOUND（message 写明两轮
     searchResult: { ...SEARCH_OK },
     selectResult: { ...SELECT_OK },
   }
-  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, coords: { x: 200, y: 60 } })
+  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, account: 'account', coords: { x: 200, y: 60 } })
   const op = makeOp(keyDir, makeArtifactRoot(), mock)
   const r = await op.execute({ target_ref: ref, image_path: makeImageFile() }, silentCtx())
   assert.equal(r.success, false)
@@ -273,7 +279,7 @@ test('M7 两轮都 navigate_required → TARGET_NOT_FOUND（message 写明两轮
   assert.equal(r.retryable, false)
   assert.match(r.message, /两轮/)
   assert.match(r.message, /未发送图片/)
-  assert.equal(mock.calls.length, 4)
+  assert.equal(mock.calls.length, 3)
 })
 
 test('M7 驱动剪贴板失败（CONFIG_MISSING）→ 透传，effect=none（粘贴阶段失败，未发送）', async () => {
@@ -284,7 +290,7 @@ test('M7 驱动剪贴板失败（CONFIG_MISSING）→ 透传，effect=none（粘
     searchResult: {},
     selectResult: {},
   }
-  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, coords: { x: 200, y: 60 } })
+  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, account: 'account', coords: { x: 200, y: 60 } })
   const op = makeOp(keyDir, makeArtifactRoot(), mock)
   const r = await op.execute({ target_ref: ref, image_path: makeImageFile() }, silentCtx())
   assert.equal(r.success, false)
@@ -302,7 +308,7 @@ test('M7 驱动超时（RESULT_TIMEOUT）→ EXECUTION_UNKNOWN + effect=unknown�
     searchResult: {},
     selectResult: {},
   }
-  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, coords: { x: 200, y: 60 } })
+  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, account: 'account', coords: { x: 200, y: 60 } })
   const op = makeOp(keyDir, makeArtifactRoot(), mock)
   const r = await op.execute({ target_ref: ref, image_path: makeImageFile() }, silentCtx())
   assert.equal(r.success, false)
@@ -311,6 +317,32 @@ test('M7 驱动超时（RESULT_TIMEOUT）→ EXECUTION_UNKNOWN + effect=unknown�
   assert.equal(r.retryable, false)
   assert.match(r.message, /图片消息可能已发出/)
   assert.equal(mock.calls.length, 1, '超时不触发第二次 send-image')
+})
+
+test('M7 账号在首轮或导航后切换时，不进入发送驱动且不自动重试', async () => {
+  const keyDir = makeKeyDir()
+  const targetRef = createTargetRef('文件传输助手', 'other', '', { keyDir, account: 'account' })
+  const first: DriverMock = { calls: [], sendStages: [{ ...SENT_OK }], searchResult: SEARCH_OK, selectResult: SELECT_OK }
+  const firstResult = await makeOp(keyDir, makeArtifactRoot(), first, ['other'])
+    .execute({ target_ref: targetRef, image_path: makeImageFile() }, silentCtx())
+  assert.equal(firstResult.code, 'TARGET_REF_STALE')
+  assert.equal(first.calls.length, 0, '首轮账号不符，零驱动调用')
+
+  const second: DriverMock = { calls: [], sendStages: [{ ...NAV_REQUIRED }, { ...SENT_OK }],
+    searchResult: SEARCH_OK, selectResult: SELECT_OK }
+  const secondResult = await makeOp(keyDir, makeArtifactRoot(), second, ['account', 'other'])
+    .execute({ target_ref: targetRef, image_path: makeImageFile() }, silentCtx())
+  assert.equal(secondResult.code, 'TARGET_REF_STALE')
+  assert.equal(second.calls.filter(call => call.script.endsWith('send-image.ps1')).length, 1,
+    '首轮只返回 navigate_required，切号后不得执行第二轮发送')
+  assert.equal(second.sendStages.length, 1, '未消费可发送阶段，不重试')
+
+  const legacy = createTargetRef('文件传输助手', 'other', '', { keyDir })
+  const old: DriverMock = { calls: [], sendStages: [{ ...SENT_OK }], searchResult: SEARCH_OK, selectResult: SELECT_OK }
+  const oldResult = await makeOp(keyDir, makeArtifactRoot(), old)
+    .execute({ target_ref: legacy, image_path: makeImageFile() }, silentCtx())
+  assert.equal(oldResult.code, 'TARGET_REF_STALE')
+  assert.equal(old.calls.length, 0)
 })
 
 const DIST_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')

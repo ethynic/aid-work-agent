@@ -37,6 +37,9 @@ import { runWecomOperation } from './context.js'
 import { CodedOperationError, type OperationResult, type OpContext, type WecomOperation } from './types.js'
 import { runPowerShellDriver, type RunPowerShellDriverFn } from '../platform/powershell.js'
 import { artifactDir } from '../platform/environment.js'
+import { probeCurrentAccount } from '../platform/localdb/identity.js'
+import type { DirectoryArgs } from './sessionDirectory.js'
+import type { OperationOutcome } from './context.js'
 import {
   createTargetRef,
   verifyTargetRef,
@@ -84,13 +87,15 @@ export function createWecomSendFileOperation(
     /** 内部 chatSearch 签发 target_ref 用（与 verifyRefFn 配套注入，测试可替换） */
     createRefFn?: CreateTargetRefFn
     artifactDirFn?: () => string | null
+    readCatalogFn?: (args: DirectoryArgs, ctx: OpContext) => Promise<OperationOutcome>
+    probeAccountFn?: (ctx: OpContext) => Promise<{ account: string }>
   } = {},
 ): WecomOperation<WecomSendFileArgs> {
   const runDriverFn = deps.runDriverFn ?? runPowerShellDriver
   const verifyRefFn = deps.verifyRefFn ?? verifyTargetRef
   // 与 chatSearch 的默认签发适配保持一致（坐标随条目写入 payload，select 消费）
   const createRefFn: CreateTargetRefFn =
-    deps.createRefFn ?? ((name, type, subtitle, coords) => createTargetRef(name, type, subtitle, { coords }))
+    deps.createRefFn ?? ((name, type, subtitle, coords, account) => createTargetRef(name, type, subtitle, { coords, account }))
   const artifactDirFn = deps.artifactDirFn ?? (() => artifactDir())
   return {
     name: 'wecom_send_file',
@@ -162,21 +167,22 @@ export function createWecomSendFileOperation(
           let resolved: ResolvedByNameTarget | null = null
           if (args.target_name !== undefined) {
             resolved = await resolveTargetByName(
-              { runDriverFn, createRefFn, opCtx, root },
+              { runDriverFn, createRefFn, opCtx, root, readCatalogFn: deps.readCatalogFn },
               args.target_name,
               '',
               { notSentNote: '未发送文件' },
             )
           }
           const target = verifyRefFn(resolved !== null ? resolved.target_ref : args.target_ref!)
-          // 与 chat_select 同款要求 M4+ 含坐标 ref（send-file 分发链路消费坐标句柄）
-          if (target.x === undefined || target.y === undefined) {
-            throw new CodedOperationError('INVALID_ARGUMENT', '该 target_ref 不含坐标（旧版签发），请重新 search')
-          }
+          if (!target.account)
+            throw new CodedOperationError('TARGET_REF_STALE', '旧目标句柄缺少账号绑定，请重新 search', 'none')
           opCtx.progress({ stage: 'execute', message: `解析目标「${target.name}」，粘贴文件前检查当前会话` })
 
-          const spawnSendFileDriver = (dir: string): Promise<Record<string, unknown>> =>
-            runDriverFn({
+          const spawnSendFileDriver = async (dir: string): Promise<Record<string, unknown>> => {
+            const current = await (deps.probeAccountFn ?? probeCurrentAccount)(opCtx)
+            if (current.account !== target.account)
+              throw new CodedOperationError('TARGET_REF_STALE', '目标句柄属于另一个账号，请重新 search', 'none')
+            return runDriverFn({
               script: DRIVER_PATH,
               args: [
                 '-TargetName', target.name,
@@ -188,6 +194,7 @@ export function createWecomSendFileOperation(
               ],
               signal: opCtx.signal,
             })
+          }
 
           const { data, navigated } = await runStageWithNavigation({
             runDriverFn,
@@ -195,6 +202,7 @@ export function createWecomSendFileOperation(
             createRefFn,
             opCtx,
             root,
+            readCatalogFn: deps.readCatalogFn,
             target,
             artifactPrefix: 'send-file',
             spawnStage: spawnSendFileDriver,

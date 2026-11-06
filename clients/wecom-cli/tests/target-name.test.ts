@@ -55,7 +55,7 @@ function tempDir(prefix: string): string {
 function realDeps(keyDir: string): { verifyRefFn: VerifyTargetRefFn; createRefFn: CreateTargetRefFn } {
   return {
     verifyRefFn: (ref) => verifyTargetRef(ref, { keyDir }),
-    createRefFn: (name, type, subtitle, coords) => createTargetRef(name, type, subtitle, { keyDir, coords }),
+    createRefFn: (name, type, subtitle, coords, account) => createTargetRef(name, type, subtitle, { keyDir, coords, account }),
   }
 }
 
@@ -70,6 +70,7 @@ function makeRealFile(name: string, size = 64): string {
 /** 按脚本名分发的驱动 mock：各命令的阶段驱动消费 stages 队列（逐次出队） */
 interface DriverMock {
   calls: PowerShellScriptOptions[]
+  catalogCalls?: string[]
   stageScript: string
   stages: Array<Record<string, unknown> | Error>
   searchResult: Record<string, unknown> | Error
@@ -109,7 +110,18 @@ function makeRunDriver(mock: DriverMock): RunPowerShellDriverFn {
 type AnyOp = WecomOperation<any>
 
 function makeOp(kind: OpKind, keyDir: string, root: string, mock: DriverMock): AnyOp {
-  const shared = { runDriverFn: makeRunDriver(mock), artifactDirFn: () => root, ...realDeps(keyDir) }
+  mock.catalogCalls = []
+  const shared = { runDriverFn: makeRunDriver(mock), artifactDirFn: () => root,
+    probeAccountFn: async () => ({ account: 'account' }), ...realDeps(keyDir),
+    readCatalogFn: async (args: { query?: string }) => {
+      mock.catalogCalls!.push(args.query!)
+      if (mock.searchResult instanceof Error) throw mock.searchResult
+      const raw = Array.isArray(mock.searchResult.items) ? mock.searchResult.items as { name: string }[] : []
+      const hits = raw.filter(row => row.name.includes(args.query!))
+      return { message: '', data: { self_user_id: 'account', self_name: '本人', match_count: hits.length,
+        candidates: hits.map(row => ({ name: row.name, section: '联系人' })) } }
+    },
+  }
   switch (kind) {
     case 'send':
       // P2 任务 3.4：显式置空本地库状态（锁定老路径契约，不依赖测试机真实 localdb-state.json）
@@ -211,7 +223,7 @@ const SEARCH_EMPTY = {
 
 const SELECT_OK = {
   target: { name: '陆伟@微信', subtitle: '微信联系人', section: 'contact' },
-  title: '陆伟',
+  title: '陆伟@微信',
   clicked: { x: 300, y: 170 },
   timing_ms: {},
   screenshot_paths: [],
@@ -237,17 +249,16 @@ for (const kind of KINDS) {
     assert.equal(r.effect, expectEffect(kind))
     assert.equal(r.retryable, false)
     // resolved_target 三元组透传（命中条目的身份，供调用方观察实际定位到谁）
-    assert.deepEqual(r.data.resolved_target, { name: '陆伟@微信', subtitle: '微信联系人', section: '联系人' })
+    assert.deepEqual(r.data.resolved_target, { name: '陆伟@微信', subtitle: '', section: '联系人' })
     assert.equal(r.data.navigated, false)
-    // 调用顺序：先内部 search（定位），再阶段驱动（快路径直发/直读，无 select）
-    assert.equal(mock.calls.length, 2)
-    assert.ok(mock.calls[0]!.script.endsWith('chat-search.ps1'))
-    assert.ok(mock.calls[1]!.script.endsWith(STAGE_SCRIPT[kind]))
-    assert.deepEqual(mock.calls[0]!.args?.slice(0, 2), ['-Query', '陆伟'])
+    // 本地目录先定位，再阶段驱动；未调用 OCR 搜索脚本。
+    assert.deepEqual(mock.catalogCalls, ['陆伟'])
+    assert.equal(mock.calls.length, 1)
+    assert.ok(mock.calls[0]!.script.endsWith(STAGE_SCRIPT[kind]))
     // 阶段驱动收到 resolved ref 解出的条目身份（ref 模式同款参数形态）
     assert.deepEqual(
-      mock.calls[1]!.args?.slice(0, 6),
-      ['-TargetName', '陆伟@微信', '-Subtitle', '微信联系人', '-Section', 'contact'],
+      mock.calls[0]!.args?.slice(0, 6),
+      ['-TargetName', '陆伟@微信', '-Subtitle', '', '-Section', 'contact'],
     )
   })
 
@@ -257,18 +268,14 @@ for (const kind of KINDS) {
     const op = makeOp(kind, keyDir, tempDir('wecom-tn-root-'), mock)
     const r = await op.execute({ target_name: '陆伟', ...kindExtras(kind) }, silentCtx())
     assert.equal(r.success, true, r.message)
-    assert.deepEqual(r.data.resolved_target, { name: '陆伟@微信', subtitle: '微信联系人', section: '联系人' })
-    // 定位 search → 阶段驱动 navigate_required → 分发 search（同一 mock 结果）→ select → 二次阶段驱动
-    assert.equal(mock.calls.length, 5)
-    assert.ok(mock.calls[0]!.script.endsWith('chat-search.ps1'))
-    assert.ok(mock.calls[1]!.script.endsWith(STAGE_SCRIPT[kind]))
-    assert.ok(mock.calls[2]!.script.endsWith('chat-search.ps1'))
-    assert.ok(mock.calls[3]!.script.endsWith('chat-select.ps1'))
-    assert.ok(mock.calls[4]!.script.endsWith(STAGE_SCRIPT[kind]))
-    // select 拿到的是回退规则唯一匹配项（陆伟@微信, 200/120）的坐标，不是 best（张三, 200/60）
-    assert.equal(argAfter(mock.calls[3]!, '-X'), '200')
-    assert.equal(argAfter(mock.calls[3]!, '-Y'), '120')
-    assert.equal(argAfter(mock.calls[3]!, '-TargetName'), '陆伟@微信')
+    assert.deepEqual(r.data.resolved_target, { name: '陆伟@微信', subtitle: '', section: '联系人' })
+    // 目录忽略不匹配的张三；定位 → 阶段 → 目录复核 → select → 阶段。
+    assert.deepEqual(mock.catalogCalls, ['陆伟', '陆伟', '陆伟@微信', '陆伟@微信'])
+    assert.equal(mock.calls.length, 3)
+    assert.ok(mock.calls[0]!.script.endsWith(STAGE_SCRIPT[kind]))
+    assert.ok(mock.calls[1]!.script.endsWith('chat-select.ps1'))
+    assert.ok(mock.calls[2]!.script.endsWith(STAGE_SCRIPT[kind]))
+    assert.equal(argAfter(mock.calls[1]!, '-TargetName'), '陆伟@微信')
   })
 
   test(`M11a ${kind}：同名多候选无法消歧 → TARGET_AMBIGUOUS（fail-closed 不猜，不调阶段驱动）`, async () => {
@@ -283,9 +290,9 @@ for (const kind of KINDS) {
     assert.match(r.message, /陆伟/)
     assert.match(r.message, new RegExp(expectRefuse(kind)))
     assert.match(r.message, new RegExp(expectNotSent(kind)))
-    // 只调了一次内部 search；歧义时绝不 select / 不调阶段驱动
-    assert.equal(mock.calls.length, 1)
-    assert.ok(mock.calls[0]!.script.endsWith('chat-search.ps1'))
+    // 歧义时绝不 select / 不调阶段驱动
+    assert.deepEqual(mock.catalogCalls, ['陆伟'])
+    assert.equal(mock.calls.length, 0)
   })
 
   test(`M11a ${kind}：搜索无结果 → TARGET_NOT_FOUND（内部 search 诊断 data 透传）`, async () => {
@@ -300,8 +307,8 @@ for (const kind of KINDS) {
     assert.match(r.message, new RegExp(expectNotSent(kind)))
     // chatSearch 的结构化诊断（query/reason）透传给调用方
     assert.equal(r.data.query, '陆伟')
-    assert.equal(r.data.reason, 'no_results')
-    assert.equal(mock.calls.length, 1)
+    assert.equal(r.data.match_count, 0)
+    assert.equal(mock.calls.length, 0)
   })
 
   test(`M11a ${kind}：target_ref + target_name 双传 / 都不传 → INVALID_ARGUMENT，不调驱动`, async () => {
@@ -340,7 +347,7 @@ test('M11a 参数校验矩阵补充：target_name 空/纯空白/超长、subtitl
   assert.equal(mock.calls.length, 0)
 })
 
-test('M11a send-image / send-file：target_name 模式下内部签发的 ref 含坐标（分发链路可消费，不触发旧版签发拒绝）', async () => {
+test('M11a send-image / send-file：无坐标账号绑定 ref 仍可走分发链路', async () => {
   for (const kind of ['send-image', 'send-file'] as const) {
     const keyDir = tempDir('wecom-tn-key-')
     const mock = makeMock(kind, [{ ...NAV_REQUIRED }, okStage(kind)], { ...SEARCH_OK })
@@ -351,8 +358,7 @@ test('M11a send-image / send-file：target_name 模式下内部签发的 ref 含
         : ({ target_name: '陆伟', file_path: makeRealFile('coord-report.txt') } as WecomSendFileArgs)
     const r = await op.execute(args, silentCtx())
     assert.equal(r.success, true, `${kind}: ${r.message}`)
-    // 走到分发路径（search → 阶段 → search → select → 阶段）说明 resolved ref 通过了坐标校验
-    assert.equal(mock.calls.length, 5)
-    assert.ok(mock.calls[3]!.script.endsWith('chat-select.ps1'), `${kind} 分发链消费内部签发的带坐标 ref`)
+    assert.equal(mock.calls.length, 3)
+    assert.ok(mock.calls[1]!.script.endsWith('chat-select.ps1'), `${kind} 分发链消费无坐标 ref`)
   }
 })

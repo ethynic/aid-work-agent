@@ -23,104 +23,38 @@ function silentCtx(): OpContext {
 }
 
 // ---------- wecom_chat_search ----------
-
 const tempDirs: string[] = []
-after(() => {
-  for (const d of tempDirs) rmSync(d, { recursive: true, force: true })
-})
+after(() => { for (const d of tempDirs) rmSync(d, { recursive: true, force: true }) })
 
-function makeSearchOp(
-  runDriverFn: RunPowerShellDriverFn,
-  createRefFn?: (name: string, type: string, subtitle?: string, coords?: { x: number; y: number }) => string,
-) {
-  // M4 起 search 也会建 artifact 目录（稳定帧截图 + driver-log）：测试注入临时目录，不碰真实 %LOCALAPPDATA%
-  const dir = mkdtempSync(join(tmpdir(), 'wecom-chat-search-test-'))
-  tempDirs.push(dir)
-  return createWecomChatSearchOperation({
-    accountFn: async () => null,
-    runDriverFn,
-    createRefFn: createRefFn ?? ((name, type, subtitle) => `ref:${type}:${name}:${subtitle ?? ''}`),
-    artifactDirFn: () => dir,
+test('chat_search 本地库唯一匹配才签发目标句柄；无匹配不操作窗口', async () => {
+  let calls = 0
+  const op = createWecomChatSearchOperation({
+    readCatalogFn: async () => {
+      calls++
+      return { message: 'ok', data: { self_user_id: 'self', source_generation: 'g', match_kind: 'exact',
+        match_count: 1, candidates: [{ name: '售前客服群', section: '群聊' }] } }
+    },
+    createRefFn: (name, type, _subtitle, coords, account) => {
+      assert.equal(coords, undefined, '不再签发 OCR 坐标')
+      assert.equal(account, 'self')
+      return `ref:${type}:${name}`
+    },
   })
-}
-
-test('chat_search：成功 → 候选带 name/subtitle/section/target_ref，effect=none', async () => {
-  const op = makeSearchOp(async (opts) => {
-    assert.ok(opts.script.endsWith('chat-search.ps1'))
-    assert.deepEqual(opts.args?.slice(0, 2), ['-Query', '陆伟'])
-    assert.equal(opts.args?.[2], '-ArtifactDir')
-    return {
-      items: [
-        { name: '陆伟', subtitle: '微信联系人', section: '联系人' },
-        { name: '陆伟', subtitle: '其他（待设置部门）', section: '联系人' },
-        { name: '产品讨论群', subtitle: '', section: '群聊' },
-      ],
-    }
-  })
-  const r = await op.execute({ query: '陆伟' }, silentCtx())
-  assert.equal(r.success, true)
-  assert.equal(r.code, 'OK')
-  assert.equal(r.effect, 'none')
-  const items = r.data.items as Array<{ name: string; subtitle: string; section: string; target_ref: string }>
-  assert.equal(items.length, 3)
-  assert.equal(items[0]!.target_ref, 'ref:contact:陆伟:微信联系人')
-  assert.equal(items[2]!.target_ref, 'ref:group:产品讨论群:')
+  const result = await op.execute({ query: '售前客服群' }, silentCtx())
+  assert.equal(result.code, 'OK')
+  assert.equal((result.data.best as { target_ref: string }).target_ref, 'ref:group:售前客服群')
+  assert.equal(calls, 1)
 })
 
-test('chat_search：type=group 只留群聊分区；limit 截断', async () => {
-  const op = makeSearchOp(async () => ({
-    items: [
-      { name: '陆伟', subtitle: '微信联系人', section: '联系人' },
-      { name: '产品讨论群', subtitle: '', section: '群聊' },
-    ],
-  }))
-  const r = await op.execute({ query: '陆', type: 'group' }, silentCtx())
-  const items = r.data.items as Array<{ section: string }>
-  assert.equal(items.length, 1)
-  assert.equal(items[0]!.section, '群聊')
-})
-
-test('chat_search：过滤后无结果 → TARGET_NOT_FOUND（effect=none，不重试）', async () => {
-  const op = makeSearchOp(async () => ({ items: [] }))
-  const r = await op.execute({ query: '不存在的人' }, silentCtx())
-  assert.equal(r.success, false)
-  assert.equal(r.code, 'TARGET_NOT_FOUND')
-  assert.equal(r.effect, 'none')
-  assert.equal(r.retryable, false)
-})
-
-test('chat_search：驱动 UI_CHANGED（overlay 未出现）透传，不 reject', async () => {
-  const op = makeSearchOp(async () => {
-    throw new CodedOperationError('UI_CHANGED', '未等到搜索结果面板')
-  })
-  const r = await op.execute({ query: '陆伟' }, silentCtx())
-  assert.equal(r.success, false)
-  assert.equal(r.code, 'UI_CHANGED')
-  assert.equal(r.effect, 'none')
-})
-
-test('chat_search：空 query / 超长 / 非法 type / 非法 limit → INVALID_ARGUMENT，不调驱动', async () => {
-  let called = 0
-  const op = makeSearchOp(async () => {
-    called++
-    return { items: [] }
-  })
-  for (const bad of [
-    { query: '' },
-    { query: '   ' },
-    { query: 'x'.repeat(101) },
-    { query: 'a', type: 'friend' },
-    { query: 'a', limit: 0 },
-    { query: 'a', limit: 21 },
-    { query: 'a', limit: 1.5 },
-  ]) {
-    // @ts-expect-error 故意传非法值
-    const r = await op.execute(bad, silentCtx())
-    assert.equal(r.code, 'INVALID_ARGUMENT', JSON.stringify(bad))
+test('chat_search 参数非法时不读本地库', async () => {
+  let calls = 0
+  const op = createWecomChatSearchOperation({ readCatalogFn: async () => { calls++; return { message: '', data: {} } } })
+  for (const args of [{ query: '' }, { query: 'x'.repeat(101) }, { query: 'a', limit: 21 }]) {
+    const result = await op.execute(args, silentCtx())
+    assert.equal(result.code, 'INVALID_ARGUMENT')
   }
-  assert.equal(called, 0)
+  assert.equal(calls, 0)
 })
-
 // ---------- wecom_message_send ----------
 // M6：send 的智能分发（navigate_required → search+select → 二次 send）细测见
 // message-send-v2.test.ts；本段保留驱动层错误透传 / 超时 / 取消 / 参数校验契约

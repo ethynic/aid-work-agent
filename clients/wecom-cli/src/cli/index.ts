@@ -57,11 +57,11 @@ const USAGE = `aid-wecom — 企业微信操作 CLI / MCP Provider（M1）
                             按手机号检索并发送添加客户邀请（写动作；--yes 显式确认；
                             失败不自动重试，effect=unknown 时请人工核对）
   search --query <词> [--type contact|group|any] [--limit N] [--json]
-                            搜索联系人/群聊（只读），返回带 target_ref 的候选（5 分钟有效）
+                            本地库匹配联系人/群聊名称（只读）；唯一命中返回 target_ref
   select --target-ref <ref> [--json]
-                            点击 search 返回的搜索结果进入会话（动作；不发送消息，
+                            对唯一匹配目标搜索并回车进入会话（动作；不发送消息，
                             进入会话会清除其未读角标并切换当前会话视图；
-                            前置：搜索面板仍打开，ref 5 分钟内有效）
+                            前置：账号绑定 ref 5 分钟内有效，进入后复制标题核对）
   send (--target-ref <ref> | --target-name <会话名> [--subtitle <副标题>]) --text <文本> [--json]
                             向目标发送 1 条文本消息（写动作；本地库唯一解析目标；
                             无法消歧时拒绝；发送后本地库核验失败不自动重试，

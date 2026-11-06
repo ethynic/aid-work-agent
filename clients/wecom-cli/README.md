@@ -33,7 +33,7 @@ aid-wecom probe [--verbose] [--json]        # 只读环境探测：平台/交互
                                             # PNG base64 供扫码，qr_status_hint 固定 unknown（见 probe 命令章节）
 aid-wecom search --query <词> [--type contact|group|any] [--limit N] [--json]
                                             # 搜索联系人/群聊（只读）：Jev 选最优候选，返回 best/坐标/概率 + 带 target_ref 的候选
-                                            # 副作用：搜索结果面板保持打开（坐标句柄供后续 select 命令消费）
+                                            # 本地库唯一匹配返回账号绑定句柄；不打开搜索面板
 aid-wecom select --target-ref <ref> [--json]
                                             # 点击 search 返回的搜索结果进入会话（动作；不发送消息，
                                             # 进入会话会清除其未读角标并切换当前会话视图）
@@ -122,84 +122,34 @@ node dist/src/cli/index.js read-group --target-name "新劳务云系统项目沟
 - `read-session` 返回消息 ID、精确时间、发送方向与账号/会话/源库代际绑定游标。
 - `watch` 每轮按数据库水位返回 `{channel:'local-db',new_messages,last_sender,failed?}`；新关注首轮建立基线，只返回之后的新消息。存量待回复请先用 `unread` 读取。失败轮不推进水位，CLI 按轮释放互斥，轮间不占锁。
 
-## target_ref（搜索 → 发送 的目标句柄）
+## target_ref（唯一名称目标句柄）
 
-`search` 返回的每个候选带 `target_ref`：base64url(payload) + HMAC-SHA256 签名
-（本机密钥 `%LOCALAPPDATA%\AidWorkAgent\wecom-cli\target-ref.key`，不可跨机验证），
-payload 含 name/type/subtitle 与条目 overlay 相对坐标 x/y（M4 起可选；老 ref 无坐标对，
-verify 不因未知字段失败；`send` 不要求坐标，`select` 要求），**有效期 5 分钟**。`send` 必须持有效
-target_ref：过期 → TARGET_REF_STALE（重新 search 获取）；篡改/格式非法 → INVALID_ARGUMENT。
-send 的分发阶段按 name+section（subtitle 优先收紧）匹配搜索候选：取 Jev best（须与目标
-name+section+subtitle 消歧键一致才可信——Jev 看不到 target_ref 的 subtitle，同名同分区
-多条时直接信任 best 会发错人），否则取规则唯一匹配项；多项无法消歧 → TARGET_AMBIGUOUS 拒绝发送。
+`search` 只在本地库命中且完整名称跨联系人/群聊类型也唯一时签发 5 分钟有效的本机 HMAC 句柄，绑定当前账号和目标完整名称。新句柄没有 OCR 坐标。过期、篡改、切换账号或名称不再唯一时拒绝使用。旧含坐标句柄的坐标不会用于 `select`；图片/文件发送在每轮阶段驱动前重查绑定账号，旧无账号句柄拒绝。
 
-## --target-name 直达模式（M11a：runtime/agent 路径只有会话名时的免 ref 接入）
+## --target-name 直达模式
 
-`send` / `send-image` / `send-file` / `read-session` 四命令支持 `--target-name`（`target_name`）与 `--target-ref`（`target_ref`）**二选一**：
-两个都传或都不传 → INVALID_ARGUMENT。发送类操作的定位语义（`src/operations/navigate.ts` 的
-`resolveTargetByName`，runtime 接入 M11a 的前置）：内部调 chatSearch（query 剥
-`@微信` 后缀，type=any）→ Jev best 过身份校验（best.name 剥 @微信 归一化 == target_name
-归一化，且落在 subtitle 收紧后的候选集内）才采纳；best 身份不符 → 回退 items 里
-name（+send 的 `--subtitle` 消歧键）唯一匹配；多项 → TARGET_AMBIGUOUS 拒绝（fail-closed
-不猜）；0 项 → TARGET_NOT_FOUND；search 失败透传错误码。定位成功后**用命中条目的
-target_ref 走既有发送链路**（快路径直发；navigate_required 时二次 search+select 分发，
-首次 search 的 overlay 由分发 search 开头的残留清空处理，ref 5 分钟 TTL 在内部链路
-耗时可忽略）。`data.resolved_target = {name, subtitle, section}` 透传实际定位到的条目，
-供 agent 观察定位结果；effect/错误码/零重试契约与 ref 模式完全一致。`read-session` 的旧目标参数改由本地库精确定位，同名歧义拒绝，不走这条 UI 搜索链。
+`send` / `send-image` / `send-file` / `read-session` 仍支持 `target_name` 与 `target_ref` 二选一。文本发送和读取沿各自本地库目标解析；图片、文件发送的内部导航使用本地库唯一名称搜索和新 `select`。图片、文件发送阶段本身仍使用 OCR 判定，不属于本次搜索/选择去 OCR 范围。
 
-## search 命令（M4：Jev 决策 + 坐标句柄）
+## search 命令（本地库名称匹配）
 
-流程（2026-09-28 真机验证）：attachstate Ctrl+F 聚焦搜索框（attach 失败降级
-「裁切 OCR → Jev 选 token → 点击」，Jev 不可用再降级规则点占位符 token）→
-动态搜索框状态检测（裁 x∈[120,420]/y∈[0,62] + 4x 放大 OCR，坐标判态；替代已证实
-有误判 bug 的固定像素带）→ 残留清空（Ctrl+A+Delete，清不空 UI_CHANGED fail-closed）→
-输入 query + OCR 回读验证 → 等 SearchResultWindow2 高度稳定 → 稳定帧 OCR 条目 →
-**Jev 单次合并调用**（best_result + is_ambiguous，附概率分布）。
+在操作企微窗口前读取已验证账号的本地群会话和联系人名称，同一联系人只计一个身份。完整名称匹配优先；没有完整匹配再按关键词包含匹配。
 
-- 返回 `data.best`（最优候选：name/坐标/screen 参考坐标/confidence/概率分布）与
-  `items`（每项含 overlay 相对坐标 x/y、probability、target_ref）；`search_successful`
-  按规则判定（items 非空），不用 Jev；无结果 → TARGET_NOT_FOUND（data 附
-  reason=no_results/filtered_out 与 jev/timing_ms 诊断）。`--type` 过滤把 best 滤掉时，
-  从过滤后候选重选（probability 最高，全 null 则第一条）。
-- **副作用：搜索结果面板（overlay）在返回后保持打开**——条目坐标与 overlay rect 是
-  后续 select 命令的消费句柄；下一次 search 开头的残留清空会自动关掉旧 overlay。
-- **Jev 集成与降级**：决策 API `api.typesafe.ai/v1/systemone`（模型 jev-latest），
-  需要环境变量 `TYPESAFE_API_KEY`（可选依赖；MCP stdio 白名单场景回退用户级 env）。
-  无 key/超时/HTTP 错 → `jev.used=false` + reason，best 走规则（归一化 name 精确 ==
-  query 的第一条，否则第一条），probability 全 null。key 只经临时头文件瞬态使用，
-  绝不入日志/命令行/artifact。
-- artifact 目录 `artifacts/search-<ts>/`：稳定帧截图 + `driver-log.txt`（OCR 原始
-  token、Jev state/answer 摘要、各阶段耗时）。
+- 唯一命中：返回账号绑定 `target_ref`，可交给 `select`。
+- 无命中：`TARGET_NOT_FOUND`，返回近似名称供 agent 向用户核对；不会自动把错字改成另一人。
+- 多个不同名称：`TARGET_AMBIGUOUS`，列出名称，请用户提供完整名称。多个身份完全同名时提示备注或重命名。结果超过 `limit` 时注明已截断及总数。
 
-## select 命令（M5：点击搜索结果进入会话）
+此命令不打开搜索框、不切换会话，也不调用 OCR。
 
-消费 `search` 留下的搜索结果面板（overlay），点击指定条目进入会话。**不发送任何消息**
-（effect 恒 none），但属「半写」动作——CLI 执行前打印 ⚠️ 提示，MCP 注解非幂等。
+## select 命令（唯一名称进入会话）
 
-- **前置条件**：必须先 `search` 且搜索结果面板（SearchResultWindow2）仍处于打开状态；
-  `target_ref` 有效期 5 分钟，且必须是 M4+ 签发的含坐标版本（旧版无坐标 ref →
-  INVALID_ARGUMENT，提示重新 search）。
-- **点击前校验（防陈旧面板）**：驱动按类名 + 可见性找 overlay（面板关闭后窗口以
-  visible=False 残留，只按类名会误判），PrintWindow 截图 OCR 复核条目名称（剥 @微信
-  后缀双向归一化比较；同名多条——同一人在「联系人」与「聊天记录」分区各一行——
-  取距 payload 坐标最近的一条）。**坐标信任策略**：OCR 复核到的条目自身 x/y 优先，
-  payload 坐标作对照——两者中心距 >40px 判 UI_CHANGED（面板可能已变）；≤40px 用
-  OCR 坐标（更新鲜）；OCR 坐标缺失时退用 payload 坐标。点击后等面板自动关闭
-  （≤3s），再重新解析主窗口（外部联系人会话会撑宽主窗口）并 OCR 校验会话标题
-  （复用 send 的严格语义：归一化相等或「名字+@/（」前缀，防「陆伟」误入「陆伟民」）。
-- **副作用**：进入会话会**清除该会话未读角标**（企微客户端固有行为，与 read-session 同款），
-  并切换主窗口当前会话视图；不清理搜索框内残留查询词（下次 search 自行清空）。
-- **失败语义**：面板已关或 ref 过期 → TARGET_REF_STALE（重新 search 获取新句柄）；
-  面板内容与句柄不符 / 坐标漂移 >40px / 点击后面板未关 / 会话标题不一致 → UI_CHANGED
-  （同样建议重新 search）；链路超时 → EXECUTION_UNKNOWN（可能已切换会话，不自动重试）。
-- artifact 目录 `artifacts/select-<ts>/`：点击前 overlay 截图 + 点击后主窗口截图 +
-  `driver-log.txt`（各步耗时、OCR 摘要、坐标换算记录）。
+消费 `search` 的唯一目标句柄。先复查当前账号及本地名称仍唯一，再复用文本发送已验证的 Ctrl+F、搜索词全文回读、默认结果 Enter 路径；进入后用双点缓存复制标题核对：群名全等，联系人只接受全名或全名后接 `@微信` / ` @微信` 两种全等形式。没有有效缓存时先标定本人会话。
 
+`select` 不发送消息，但进入会话会清除未读角标并切换视图。标题不符时报 `UI_CHANGED`；超时结果不明时报 `EXECUTION_UNKNOWN`，不自动重试。新路径不调用 OCR。
 ## send 与 calibrate 命令（文本发送双点标定）
 
 文本发送仅支持已验证版本的本地库。发送前解析当前账号、本人显示名和唯一目标，并记录消息基线；本地库不可用时拒发。独立 calibrate 命令可手动重标定，send 在双点缓存缺失或窗口宽高/DPI 变化时自动执行同一标定：搜索本人名、Enter 打开默认自会话，GLM 一次定位标题首字与输入区中心，复制自会话标题与本人名全等后缓存窗口相对坐标。缓存有效时不调用 GLM 或 OCR。
 
-send 搜索目标名时先用主线程焦点与搜索框区域内的 caret 确认 Ctrl+F 已聚焦搜索框，才清理并输入搜索词；全文复制回读且同进程新结果面板出现后才 Enter 打开默认会话。复制标题与目标全等（微信联系人须为明确的 `名字@微信`）后点击缓存输入点、Ctrl+A/Delete 清草稿、把发送文本复制到剪贴板并 Ctrl+V 粘贴、Enter 发送。不回读输入内容；单行和多行均覆盖系统剪贴板且不立即恢复，避免企微异步粘贴取到旧内容。标题不匹配时本次拒发并清除旧坐标缓存，下一次重新标定。发送后仅用本地库唯一出站记录核验；未知结果保留回执供 send-status 只读对账，不自动重发。文本发送链路不调用 chat-search/chat-select 的 OCR/Jev，也不使用旧 OCR 终态回退。独立 search/select 与媒体发送工具各自保持原契约。
+send 搜索目标名时先用主线程焦点与搜索框区域内的 caret 确认 Ctrl+F 已聚焦搜索框，才清理并输入搜索词；全文复制回读且同进程新结果面板出现后才 Enter 打开默认会话。复制标题与目标全等（微信联系人须为明确的 `名字@微信`）后点击缓存输入点、Ctrl+A/Delete 清草稿、把发送文本复制到剪贴板并 Ctrl+V 粘贴、Enter 发送。不回读输入内容；单行和多行均覆盖系统剪贴板且不立即恢复，避免企微异步粘贴取到旧内容。标题不匹配时本次拒发并清除旧坐标缓存，下一次重新标定。发送后仅用本地库唯一出站记录核验；未知结果保留回执供 send-status 只读对账，不自动重发。文本发送链路不调用 chat-search/chat-select 的 OCR/Jev，也不使用旧 OCR 终态回退。独立 search/select 已改成本地目录与标题复制；媒体发送阶段仍保留原 OCR 判定。
 
 ## send-image 命令（M7：发送图片）
 
@@ -210,7 +160,7 @@ send 搜索目标名时先用主线程焦点与搜索框区域内的 caret 确�
 - **文件契约**：`--image` 只收**本地绝对路径**——调用方（agent/上层）负责把文件落到装有
   runtime 与 wecom-cli 的机器上；支持 png/jpg/jpeg/bmp/gif，**≤20MB**。TS 校验语义：
   不存在/类型不符/超限/相对路径 → INVALID_ARGUMENT；路径存在但读取失败 → CONFIG_MISSING。
-  target_ref 须为 M4+ 含坐标版本（旧版无坐标 ref → INVALID_ARGUMENT，重新 search）。
+  target_ref 可使用新搜索签发的无坐标账号绑定句柄。
 - **发送链路与判定链**（驱动内）：Jev #1 三问判定当前会话（措辞同 send；非目标 →
   navigate_required 交还 TS 编排 search+select；输入区有用户草稿 → UI_CHANGED 中止）→
   点输入框 → 取输入区（x∈[0.35w,0.90w]、y∈[0.82h,0.95h]）灰度方差基线 std0 →
@@ -246,7 +196,7 @@ send 搜索目标名时先用主线程焦点与搜索框区域内的 caret 确�
   拒发提示改名；「a.txt」不在拒绝范围——主干过短时驱动回退用完整文件名做匹配键）。TS
   校验语义：不存在/是目录/超限/相对路径/文件名过短 → INVALID_ARGUMENT；路径存在但读取
   失败 → CONFIG_MISSING（SHA-256 由 TS 计算，仅供日志/结果摘要，驱动不复算）。target_ref
-  须为 M4+ 含坐标版本（旧版无坐标 ref → INVALID_ARGUMENT，重新 search）。
+  可使用新搜索签发的无坐标账号绑定句柄。
 - **发送链路与判定链**（驱动内）：Jev #1 三问判定当前会话（措辞同 send-image；非目标 →
   navigate_required 交还 TS 编排 search+select；输入区有用户草稿 → UI_CHANGED 中止，
   上次失败尝试残留的文件卡片同样会被 input 判空拦下）→ 点输入框 → 取输入区
@@ -284,9 +234,9 @@ send 搜索目标名时先用主线程焦点与搜索框区域内的 caret 确�
 - **Windows（win32-x64）**，已登录且未锁屏的交互桌面会话；
 - 企业微信 Windows 客户端（WXWork.exe）**已登录**（5.0.9 实测）；
 - PowerShell（powershell.exe 在 PATH）；
-- `add-customer` / `search` / `select` / `send` / `send-image` / `send-file` 另需 OCR：仓库根 `venv` 的 python + `rapidocr_onnxruntime`
+- `add-customer` / `send-image` / `send-file` 的业务阶段仍需 OCR：仓库根 `venv` 的 python + `rapidocr_onnxruntime`
   （`drivers/ps1` 上四级为仓库根，取 `venv\Scripts\python.exe`；缺失 → CONFIG_MISSING）；`probe` 不依赖 OCR；
-- `search` / `send` / `send-image` / `send-file` / `read-session` 的 Jev 决策另需可选环境变量 `TYPESAFE_API_KEY`（缺失自动降级规则链，功能不中断；watch 轮询内的 read-session 同样适用）；
+- `send-image` / `send-file` 等仍用 Jev 判定的业务阶段可选 `TYPESAFE_API_KEY`；本地名称搜索、进入会话和文本发送不使用 Jev；
 - `read-session` 的**模型主通道**另需可选环境变量 `AID_WECOM_SERVER_URL`（服务端地址）+
   `AID_WECOM_SERVER_TOKEN`（服务端长期 token，管理端 `POST /api/saas/client-bindings/static`
   签发）——两者均未配置时直接走本地 OCR 通道（不报错）；模型通道按次计积分，详见

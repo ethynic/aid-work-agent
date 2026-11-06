@@ -63,13 +63,14 @@ function makeFile(name = 'test-file.txt', size = 64): string {
 function realDeps(keyDir: string): { verifyRefFn: VerifyTargetRefFn; createRefFn: CreateTargetRefFn } {
   return {
     verifyRefFn: (ref) => verifyTargetRef(ref, { keyDir }),
-    createRefFn: (name, type, subtitle, coords) => createTargetRef(name, type, subtitle, { keyDir, coords }),
+    createRefFn: (name, type, subtitle, coords, account) => createTargetRef(name, type, subtitle, { keyDir, coords, account }),
   }
 }
 
 /** 按脚本名分发的驱动 mock：send-file.ps1 消费 sendStages 队列（逐次出队） */
 interface DriverMock {
   calls: PowerShellScriptOptions[]
+  catalogCalls?: string[]
   sendStages: Array<Record<string, unknown> | Error>
   searchResult: Record<string, unknown> | Error
   selectResult: Record<string, unknown> | Error
@@ -97,10 +98,21 @@ function makeRunDriver(mock: DriverMock): RunPowerShellDriverFn {
   }) as RunPowerShellDriverFn
 }
 
-function makeOp(keyDir: string, root: string, mock: DriverMock) {
+function makeOp(keyDir: string, root: string, mock: DriverMock, probeAccounts = ['account']) {
+  mock.catalogCalls = []
+  let probes = 0
   return createWecomSendFileOperation({
     runDriverFn: makeRunDriver(mock),
     artifactDirFn: () => root,
+    probeAccountFn: async () => ({ account: probeAccounts[Math.min(probes++, probeAccounts.length - 1)]! }),
+    readCatalogFn: async args => {
+      mock.catalogCalls!.push(args.query!)
+      if (mock.searchResult instanceof Error) throw mock.searchResult
+      const raw = Array.isArray(mock.searchResult.items) ? mock.searchResult.items as { name: string }[] : []
+      const hits = raw.filter(row => row.name.includes(args.query!))
+      return { message: '', data: { self_user_id: 'account', self_name: '本人', match_count: hits.length,
+        candidates: hits.map(row => ({ name: row.name, section: '联系人' })) } }
+    },
     ...realDeps(keyDir),
   })
 }
@@ -147,10 +159,9 @@ function argAfter(call: PowerShellScriptOptions, flag: string): string {
   return call.args![i + 1]! as string
 }
 
-test('M8 参数校验矩阵：文件不存在 / 是目录 / 超 100MB / 无坐标旧 ref / 相对路径 → INVALID_ARGUMENT，均不调驱动', async () => {
+test('M8 参数校验矩阵：文件不存在 / 是目录 / 超 100MB / 相对路径 → INVALID_ARGUMENT，均不调驱动', async () => {
   const keyDir = makeKeyDir()
-  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, coords: { x: 200, y: 60 } })
-  const oldRef = createTargetRef('文件传输助手', 'other', '', { keyDir }) // 无坐标（旧版签发）
+  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, account: 'account', coords: { x: 200, y: 60 } })
   const mock: DriverMock = { calls: [], sendStages: [], searchResult: {}, selectResult: {} }
   const op = makeOp(keyDir, makeArtifactRoot(), mock)
   const filePath = makeFile()
@@ -170,10 +181,6 @@ test('M8 参数校验矩阵：文件不存在 / 是目录 / 超 100MB / 无坐�
   const r3 = await op.execute({ target_ref: ref, file_path: bigPath }, silentCtx())
   assert.equal(r3.code, 'INVALID_ARGUMENT')
   assert.match(r3.message, /100MB/)
-
-  const r4 = await op.execute({ target_ref: oldRef, file_path: filePath }, silentCtx())
-  assert.equal(r4.code, 'INVALID_ARGUMENT')
-  assert.match(r4.message, /不含坐标/)
 
   const r5 = await op.execute({ target_ref: ref, file_path: 'relative.txt' }, silentCtx())
   assert.equal(r5.code, 'INVALID_ARGUMENT')
@@ -196,7 +203,7 @@ test('M8 快路径：navigate_required=false → 成功透传粘贴判据字段�
   const keyDir = makeKeyDir()
   const root = makeArtifactRoot()
   const mock: DriverMock = { calls: [], sendStages: [{ ...SENT_OK }], searchResult: {}, selectResult: {} }
-  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, coords: { x: 200, y: 60 } })
+  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, account: 'account', coords: { x: 200, y: 60 } })
   const op = makeOp(keyDir, root, mock)
   const filePath = makeFile('report.pdf', 4096)
   const r = await op.execute({ target_ref: ref, file_path: filePath }, silentCtx())
@@ -241,7 +248,7 @@ test('M8 分发路径：第一轮 navigate_required=true → chatSearch → chat
     searchResult: { ...SEARCH_OK },
     selectResult: { ...SELECT_OK },
   }
-  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, coords: { x: 200, y: 60 } })
+  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, account: 'account', coords: { x: 200, y: 60 } })
   const op = makeOp(keyDir, root, mock)
   const filePath = makeFile()
   const r = await op.execute({ target_ref: ref, file_path: filePath }, silentCtx())
@@ -251,19 +258,18 @@ test('M8 分发路径：第一轮 navigate_required=true → chatSearch → chat
   assert.equal((r.data.sent_verification as Record<string, unknown>).method, 'rule_2of2')
   assert.deepEqual(r.data.paste_check, { stem: 'report', paste_hit: true, input_gone: true, list_hit: true })
   assert.match(r.message, /已自动搜索并切换会话/)
-  // 编排顺序：send-file → search → select → send-file
-  assert.equal(mock.calls.length, 4)
+  // 本地库搜索不调用 OCR 驱动；阶段 → select → 阶段。
+  assert.deepEqual(mock.catalogCalls, ['文件传输助手', '文件传输助手'])
+  assert.equal(mock.calls.length, 3)
   assert.ok(mock.calls[0]!.script.endsWith('send-file.ps1'))
-  assert.ok(mock.calls[1]!.script.endsWith('chat-search.ps1'))
-  assert.ok(mock.calls[2]!.script.endsWith('chat-select.ps1'))
-  assert.ok(mock.calls[3]!.script.endsWith('send-file.ps1'))
-  assert.deepEqual(mock.calls[1]!.args?.slice(0, 2), ['-Query', '文件传输助手'])
+  assert.ok(mock.calls[1]!.script.endsWith('chat-select.ps1'))
+  assert.ok(mock.calls[2]!.script.endsWith('send-file.ps1'))
   // 两次 send-file 驱动身份/文件参数一致、artifact 目录相互独立
   assert.equal(argAfter(mock.calls[0]!, '-FilePath'), filePath)
-  assert.equal(argAfter(mock.calls[3]!, '-FilePath'), filePath)
-  assert.equal(argAfter(mock.calls[0]!, '-FileHash'), argAfter(mock.calls[3]!, '-FileHash'))
+  assert.equal(argAfter(mock.calls[2]!, '-FilePath'), filePath)
+  assert.equal(argAfter(mock.calls[0]!, '-FileHash'), argAfter(mock.calls[2]!, '-FileHash'))
   const dir1 = sendFileArtifactDir(mock.calls[0]!)
-  const dir2 = sendFileArtifactDir(mock.calls[3]!)
+  const dir2 = sendFileArtifactDir(mock.calls[2]!)
   assert.notEqual(dir1, dir2, '两轮 send-file 的 artifact 目录必须独立')
   assert.ok(existsSync(dir1) && existsSync(dir2))
 })
@@ -271,7 +277,7 @@ test('M8 分发路径：第一轮 navigate_required=true → chatSearch → chat
 test('M8 短主干文件（a.txt）不在 TS 拒发范围：驱动侧回退完整文件名匹配键，正常放行', async () => {
   const keyDir = makeKeyDir()
   const mock: DriverMock = { calls: [], sendStages: [{ ...SENT_OK }], searchResult: {}, selectResult: {} }
-  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, coords: { x: 200, y: 60 } })
+  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, account: 'account', coords: { x: 200, y: 60 } })
   const op = makeOp(keyDir, makeArtifactRoot(), mock)
   const r = await op.execute({ target_ref: ref, file_path: makeFile('a.txt', 32) }, silentCtx())
   assert.equal(r.success, true)
@@ -287,7 +293,7 @@ test('M8 两轮都 navigate_required → TARGET_NOT_FOUND（message 写明两轮
     searchResult: { ...SEARCH_OK },
     selectResult: { ...SELECT_OK },
   }
-  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, coords: { x: 200, y: 60 } })
+  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, account: 'account', coords: { x: 200, y: 60 } })
   const op = makeOp(keyDir, makeArtifactRoot(), mock)
   const r = await op.execute({ target_ref: ref, file_path: makeFile() }, silentCtx())
   assert.equal(r.success, false)
@@ -296,7 +302,7 @@ test('M8 两轮都 navigate_required → TARGET_NOT_FOUND（message 写明两轮
   assert.equal(r.retryable, false)
   assert.match(r.message, /两轮/)
   assert.match(r.message, /未发送文件/)
-  assert.equal(mock.calls.length, 4)
+  assert.equal(mock.calls.length, 3)
 })
 
 test('M8 驱动剪贴板失败（CONFIG_MISSING）→ 透传，effect=none（粘贴阶段失败，未发送）', async () => {
@@ -307,7 +313,7 @@ test('M8 驱动剪贴板失败（CONFIG_MISSING）→ 透传，effect=none（粘
     searchResult: {},
     selectResult: {},
   }
-  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, coords: { x: 200, y: 60 } })
+  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, account: 'account', coords: { x: 200, y: 60 } })
   const op = makeOp(keyDir, makeArtifactRoot(), mock)
   const r = await op.execute({ target_ref: ref, file_path: makeFile() }, silentCtx())
   assert.equal(r.success, false)
@@ -325,7 +331,7 @@ test('M8 粘贴校验失败（UI_CHANGED：文件卡片未出现）→ 透传，
     searchResult: {},
     selectResult: {},
   }
-  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, coords: { x: 200, y: 60 } })
+  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, account: 'account', coords: { x: 200, y: 60 } })
   const op = makeOp(keyDir, makeArtifactRoot(), mock)
   const r = await op.execute({ target_ref: ref, file_path: makeFile('e3-test-file.txt') }, silentCtx())
   assert.equal(r.success, false)
@@ -343,7 +349,7 @@ test('M8 驱动超时（RESULT_TIMEOUT）→ EXECUTION_UNKNOWN + effect=unknown�
     searchResult: {},
     selectResult: {},
   }
-  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, coords: { x: 200, y: 60 } })
+  const ref = createTargetRef('文件传输助手', 'other', '', { keyDir, account: 'account', coords: { x: 200, y: 60 } })
   const op = makeOp(keyDir, makeArtifactRoot(), mock)
   const r = await op.execute({ target_ref: ref, file_path: makeFile() }, silentCtx())
   assert.equal(r.success, false)
@@ -352,6 +358,32 @@ test('M8 驱动超时（RESULT_TIMEOUT）→ EXECUTION_UNKNOWN + effect=unknown�
   assert.equal(r.retryable, false)
   assert.match(r.message, /文件消息可能已发出/)
   assert.equal(mock.calls.length, 1, '超时不触发第二次 send-file')
+})
+
+test('M8 账号在首轮或导航后切换时，不进入发送驱动且不自动重试', async () => {
+  const keyDir = makeKeyDir()
+  const targetRef = createTargetRef('文件传输助手', 'other', '', { keyDir, account: 'account' })
+  const first: DriverMock = { calls: [], sendStages: [{ ...SENT_OK }], searchResult: SEARCH_OK, selectResult: SELECT_OK }
+  const firstResult = await makeOp(keyDir, makeArtifactRoot(), first, ['other'])
+    .execute({ target_ref: targetRef, file_path: makeFile() }, silentCtx())
+  assert.equal(firstResult.code, 'TARGET_REF_STALE')
+  assert.equal(first.calls.length, 0, '首轮账号不符，零驱动调用')
+
+  const second: DriverMock = { calls: [], sendStages: [{ ...NAV_REQUIRED }, { ...SENT_OK }],
+    searchResult: SEARCH_OK, selectResult: SELECT_OK }
+  const secondResult = await makeOp(keyDir, makeArtifactRoot(), second, ['account', 'other'])
+    .execute({ target_ref: targetRef, file_path: makeFile() }, silentCtx())
+  assert.equal(secondResult.code, 'TARGET_REF_STALE')
+  assert.equal(second.calls.filter(call => call.script.endsWith('send-file.ps1')).length, 1,
+    '首轮只返回 navigate_required，切号后不得执行第二轮发送')
+  assert.equal(second.sendStages.length, 1, '未消费可发送阶段，不重试')
+
+  const legacy = createTargetRef('文件传输助手', 'other', '', { keyDir })
+  const old: DriverMock = { calls: [], sendStages: [{ ...SENT_OK }], searchResult: SEARCH_OK, selectResult: SELECT_OK }
+  const oldResult = await makeOp(keyDir, makeArtifactRoot(), old)
+    .execute({ target_ref: legacy, file_path: makeFile() }, silentCtx())
+  assert.equal(oldResult.code, 'TARGET_REF_STALE')
+  assert.equal(old.calls.length, 0)
 })
 
 const DIST_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')

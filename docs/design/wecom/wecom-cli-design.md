@@ -1,5 +1,7 @@
 # wecom-cli：第一方企业微信操作 CLI / MCP Provider 设计
 
+2026-11-07 W25 会话搜索与进入去 OCR：`wecom_chat_search` 在任何窗口操作前，从已验证账号的本地 `conversation_table` 群名与 `user_table` 联系人名称/别名/备注取目录；同一联系人按用户 ID 只计一次。完整名称命中优先，否则按包含匹配。唯一目标且完整名称跨联系人/群聊类型也唯一时，才签发 5 分钟账号绑定、无坐标的 `target_ref`；无命中返回近似名称供 agent 建议用户核对，不自动纠错；多个不同名称返回候选请用户指定完整名称；多个真正同名身份提示备注或重命名。`wecom_chat_select` 消费前复查账号和名称仍唯一，复用 W24 的 Ctrl+F、搜索词全文回读、默认结果 Enter 路径；进入后用双点缓存复制标题并核对：群名全等，联系人只接受本地全名或全名后接 `@微信` / ` @微信` 两种全等形式；缺缓存时经自会话标定。旧 OCR 坐标句柄不再用于选择；图片/文件发送内部导航改用同一本地目录和新选择路径；每轮发送阶段驱动前都复核当前账号与句柄绑定账号，旧无账号句柄拒绝。图片/文件发送阶段自身的 OCR 仍独立保留。只读目录不可用时明确报错，不回退 UI OCR；没有改变 Runtime/Device wire。[W25 计划](../../plans/plan-wecom-cli-group-chat-experiment.md#w25-会话搜索与进入去-ocr2026-11-07)。
+
 W24 本机验收（2026-11-06）：修复 CLI 编译后驱动路径后，`calibrate --json` 在已登录企微上 exit 0；自会话标题复制与本人显示名核对通过，schema 2 缓存与返回值一致。窗口 `1117×1354`、DPI `96`，标题首字相对 `(437,39)`、GLM 输入区中心相对 `(760,1245)`。随后按用户指示向指定联系人发送一条测试消息，目标标题复制全等，复用缓存输入点 `(760,1245)`，本地库命中唯一出站记录 `message_id=1990`；缓存未重写。未部署，其他 OCR 入口仍按独立事项处理。
 
 W23 模型调用契约：`GLM-5.3-Flash` 强制思考，客户端代理路由调用时使用 `reasoning_effort=max`；其他客户端模型沿用 `enable_thinking=False`。agent2 已以真实标题截图验证代理接口返回坐标，Windows PowerShell 5.1 下的标题点击复制也已真机验证；完整发送仍需单独验收。
@@ -51,8 +53,8 @@ W24 CR 回炉：搜索动作在任何 Ctrl+A/Delete 前，先 Ctrl+F，再用企
 | tool | 作用 | 写语义 |
 |------|------|--------|
 | `wecom_probe` | 平台/交互会话/PowerShell/WXWork 进程/主窗口/登录态三态（online/need_login/offline，need_login 附二维码 PNG base64） | 只读 |
-| `wecom_chat_search` | 搜索联系人/群，返回 best/items + 带坐标 target_ref | 只读 |
-| `wecom_chat_select` | 点击搜索结果进会话 | 半写（清角标） |
+| `wecom_chat_search` | 本地库名称预匹配；唯一命中返回无坐标、账号绑定 target_ref；未命中或多命中给候选 | 只读 |
+| `wecom_chat_select` | 唯一名称 Ctrl+F/Enter，复制标题核对 | 半写（清角标） |
 | `wecom_read_session` | 本地库读取会话消息（§5） | 只读 |
 | `wecom_watch_poll` | 本地库新消息跟踪单轮，按数据库水位返回增量 | 只读 |
 | `wecom_unread_list` | 本地库待回复会话快照 | 只读 |

@@ -37,6 +37,10 @@ import {
 } from '../platform/targetRef.js'
 import { createWecomChatSearchOperation } from './chatSearch.js'
 import { createWecomChatSelectOperation } from './chatSelect.js'
+import type { DirectoryArgs } from './sessionDirectory.js'
+import type { OperationOutcome } from './context.js'
+
+type ReadCatalogFn = (args: DirectoryArgs, ctx: OpContext) => Promise<OperationOutcome>
 
 /** 定位阶段选中条目（来自内部 chatSearch 结果的 best 或规则匹配唯一项） */
 export interface LocatedTarget {
@@ -182,6 +186,7 @@ export async function resolveTargetByName(
     createRefFn: CreateTargetRefFn
     opCtx: OpContext
     root: string
+    readCatalogFn?: ReadCatalogFn
   },
   targetName: string,
   subtitle: string,
@@ -190,35 +195,27 @@ export async function resolveTargetByName(
   const query = targetName.replace(/@微信$/, '').trim()
   cfg.opCtx.progress({ stage: 'execute', message: `按名称「${targetName}」直达：内部搜索定位目标` })
   const searchOp = createWecomChatSearchOperation({
-    runDriverFn: cfg.runDriverFn,
     createRefFn: cfg.createRefFn,
-    artifactDirFn: () => cfg.root,
-    accountFn: async () => null, // 内部临时 UI ref，不用于跨调用 DB 读取。
+    readCatalogFn: cfg.readCatalogFn,
   })
   const searchRes = await searchOp.execute({ query, type: 'any' }, cfg.opCtx)
   if (!searchRes.success) {
     // search 本身失败（面板未出现/驱动错等）：透传错误码，未发生任何写动作
     throw new CodedOperationError(
       searchRes.code as ErrorCode,
-      `按名称定位「${targetName}」失败（搜索阶段，${texts.notSentNote}）：${searchRes.message}`,
+      `按名称定位「${targetName}」失败（搜索阶段，${searchRes.code === 'TARGET_AMBIGUOUS' ? (texts.refuseDesc ?? '已拒绝发送') + '，' : ''}${texts.notSentNote}）：${searchRes.message}`,
       'none',
       searchRes.data,
     )
   }
   // 身份未知（不带 type）→ pickLocatedTarget 的分区匹配不限定，仅按 name（+subtitle）消歧
-  const picked = pickLocatedTarget(searchRes.data, { name: targetName, type: 'other', subtitle })
+  const unique = searchRes.data.best as { name?: string; target_ref?: string } | undefined
+  const picked = unique?.name && unique.target_ref
+    ? { name: unique.name, target_ref: unique.target_ref } : null
   if (picked === null) {
     throw new CodedOperationError(
       'TARGET_NOT_FOUND',
       `按名称「${targetName}」搜索结果中没有匹配候选（${texts.notSentNote}）`,
-      'none',
-      searchRes.data,
-    )
-  }
-  if (picked === 'ambiguous') {
-    throw new CodedOperationError(
-      'TARGET_AMBIGUOUS',
-      `按名称「${targetName}」搜索有多个匹配候选且无法消歧，${texts.refuseDesc ?? '已拒绝发送'}（${texts.notSentNote}）`,
       'none',
       searchRes.data,
     )
@@ -268,6 +265,7 @@ export interface StageNavigationConfig {
   opCtx: OpContext
   /** artifact 根目录（已存在；阶段目录在本编排内创建） */
   root: string
+  readCatalogFn?: ReadCatalogFn
   target: TargetRefIdentity
   /** 阶段驱动 artifact 目录前缀（send / send-image / read-session），时间戳冲突加序号后缀 */
   artifactPrefix: string
@@ -342,10 +340,8 @@ export async function runStageWithNavigation(cfg: StageNavigationConfig): Promis
     const query = cfg.target.name.replace(/@微信$/, '').trim()
     const searchType = cfg.target.type === 'contact' || cfg.target.type === 'group' ? cfg.target.type : 'any'
     const searchOp = createWecomChatSearchOperation({
-      runDriverFn: cfg.runDriverFn,
       createRefFn: cfg.createRefFn,
-      artifactDirFn: () => cfg.root,
-      accountFn: async () => null, // 内部临时 UI ref，不用于跨调用 DB 读取。
+      readCatalogFn: cfg.readCatalogFn,
     })
     const searchRes = await searchOp.execute({ query, type: searchType }, cfg.opCtx)
     if (!searchRes.success) {
@@ -378,6 +374,7 @@ export async function runStageWithNavigation(cfg: StageNavigationConfig): Promis
       runDriverFn: cfg.runDriverFn,
       verifyRefFn: cfg.verifyRefFn,
       artifactDirFn: () => cfg.root,
+      readCatalogFn: cfg.readCatalogFn,
     })
     const selectRes = await selectOp.execute({ target_ref: picked.target_ref }, cfg.opCtx)
     if (!selectRes.success) {

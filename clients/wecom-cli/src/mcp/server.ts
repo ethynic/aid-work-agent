@@ -38,7 +38,7 @@ const INSTRUCTIONS =
   'wecom_send_status（只读：用原发送receipt_id对账；查询成功不等于发送confirmed，unknown禁止重发）、' +
   'wecom_group_list（本地库群关键词搜索/列群，limit控制数量）、' +
   'wecom_group_read（本地库读群消息，支持时间范围，最近N条按时间升序；两工具不切会话、不清未读）、' +
-  'wecom_chat_search（只读搜索联系人/群聊，返回带 target_ref 的候选）、' +
+  'wecom_chat_search（只读查询本地联系人/群聊名称，唯一匹配返回 target_ref）、' +
   'wecom_message_send（写：向 target_ref/target_name 目标发送 1 条文本消息；target_name 直达模式内部自动 search 定位）、' +
   'wecom_send_image（写：向 target_ref 目标发送 1 张本地图片，image_path 须为本机绝对路径且 ≤20MB，调用方负责落盘）、' +
   'wecom_add_customer（写：按手机号检索并发送添加客户邀请，confirm 必须显式为 true）、' +
