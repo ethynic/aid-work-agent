@@ -29,8 +29,6 @@ export async function uploadFile(file: File, authHeaders?: Record<string, string
       body: formData,
     })
 
-    console.log('前端日志：upload 响应状态码', response.status)
-
     if (!response.ok) {
       const errorData = await response.json().catch(() => null)
       console.log('前端日志：upload 错误响应', errorData)
@@ -50,7 +48,6 @@ export async function uploadFile(file: File, authHeaders?: Record<string, string
       console.error('前端日志：upload 响应解析失败，响应内容不是有效的 JSON')
       throw new Error('服务器响应异常，请刷新页面后重试')
     }
-    console.log('前端日志：upload 响应数据', result)
     if (!result.success) {
       throw new Error(result.error || '上传失败')
     }

@@ -131,18 +131,15 @@ export function useSession() {
 
       // 先从列表中移除，再在后台并行删除（不阻塞创建新会话）
       for (const empty of emptySessions) {
-        console.log(`[Cleanup] 计划删除空会话 ${empty.session_id} - 未发送任何消息`)
         sessions.value = sessions.value.filter(s => s.session_id !== empty.session_id)
       }
       // 后台并行删除，不需要阻塞创建新会话
       if (emptySessions.length > 0) {
-        Promise.all(emptySessions.map(empty =>
+        emptySessions.forEach(empty =>
           removeSession(empty.session_id).catch(err =>
             console.error(`[Cleanup] 删除空会话 ${empty.session_id} 失败:`, err)
           )
-        )).then(() => {
-          console.log(`[Cleanup] 完成批量删除，共 ${emptySessions.length} 个空会话`)
-        })
+        )
       }
 
       // 创建新会话
