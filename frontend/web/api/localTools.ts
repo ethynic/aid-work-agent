@@ -77,7 +77,6 @@ async function ensureSuccess(res: Response, fallback: string): Promise<any> {
  * 查询当前用户的本地工具设备列表
  */
 export async function listDevices(): Promise<LocalToolDevice[]> {
-  console.log('前端日志：查询本地工具设备列表')
   const res = await fetch(`${API_BASE}/devices`, {
     headers: { ...getAuthHeader() }
   })
@@ -89,7 +88,6 @@ export async function listDevices(): Promise<LocalToolDevice[]> {
  * 生成一次性配对码（明文仅此一次返回，5 分钟有效）
  */
 export async function createPairingTicket(): Promise<PairingTicket> {
-  console.log('前端日志：生成本地工具配对码')
   const res = await fetch(`${API_BASE}/pairing-tickets`, {
     method: 'POST',
     headers: { ...getAuthHeader() }
@@ -121,7 +119,6 @@ export async function createReplacementPairingTicket(deviceId: string): Promise<
  * 选定当前设备（单选，新选定会取消其他设备的选定状态）
  */
 export async function selectDevice(deviceId: string): Promise<void> {
-  console.log('前端日志：选定本地工具设备', { deviceId })
   const res = await fetch(`${API_BASE}/devices/${encodeURIComponent(deviceId)}/select`, {
     method: 'POST',
     headers: { ...getAuthHeader() }
@@ -133,7 +130,6 @@ export async function selectDevice(deviceId: string): Promise<void> {
  * 撤销（解绑）设备，设备 token 立即失效
  */
 export async function revokeDevice(deviceId: string): Promise<void> {
-  console.log('前端日志：解绑本地工具设备', { deviceId })
   const res = await fetch(`${API_BASE}/devices/${encodeURIComponent(deviceId)}`, {
     method: 'DELETE',
     headers: { ...getAuthHeader() }

@@ -546,11 +546,9 @@ async function handleSubagentChange(agentId: string) {
     return
   }
 
-  console.log(`[${now()}] [ConfirmDialog] router.push to`, targetPath, 'query:', query)
   // 导航到对应路由
   // 现有代码已经监听 subagentName 变化，会自动清空会话并创建新会话
   await router.push({ path: targetPath, query: Object.keys(query).length > 0 ? query : undefined })
-  console.log(`[${now()}] [ConfirmDialog] router.push done`)
 
   // 保存用户选择的数字员工ID
   saveLastSelectedAgentId(agentId)
@@ -619,8 +617,6 @@ function handleQuickPrompt(message: string) {
 async function handleSend(content: string) {
   if (existingSessionLoading.value || existingSessionError.value) return
 
-  //console.log(`[${now()}] [handleSend] start, content length=${content.length}, currentSessionId=`, currentSessionId.value)
-
   // 如果有预生成的会话ID，直接使用它
   let sid: string | null | undefined
   if (pregeneratedSessionId.value) {
@@ -639,7 +635,6 @@ async function handleSend(content: string) {
       agentSessionId.value = newSession.session_id
       // 手动等待 switchSession 完成，避免 watcher 异步覆盖后续 sendMessage 的消息
       await switchSession(newSession.session_id)
-      //console.log(`[${now()}] [handleSend] switchSession done, ready to send message`)
       sid = newSession.session_id
     }
   } else {
@@ -647,7 +642,6 @@ async function handleSend(content: string) {
   }
 
   if (!sid) {
-    //console.log(`[${now()}] [handleSend] still no sessionId, abort`)
     return
   }
 
@@ -675,9 +669,7 @@ async function handleUpload(file: File) {
     return
   }
   try {
-    console.log('前端日志：开始上传文件', file.name, file.size)
-    const result = await uploadAttachment(file)
-    console.log('前端日志：文件上传成功', result)
+    await uploadAttachment(file)
   } catch (error: any) {
     console.error('前端日志：文件上传失败', error)
     const errorMsg = error?.message || error?.toString?.() || '文件上传失败'
@@ -697,11 +689,6 @@ function handleToggleSidebar() {
   } else {
     isSidebarCollapsed.value = !isSidebarCollapsed.value
   }
-}
-
-function now(): string {
-  const d = new Date()
-  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}.${d.getMilliseconds().toString().padStart(3, '0')}`
 }
 
 async function handleLogout() {

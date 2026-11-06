@@ -9,8 +9,8 @@ def test_billing_video_gen_usage_factor_default():
     """默认 video_gen_usage_factor=33"""
     cfg = BillingConfig()
     assert cfg.video_gen_usage_factor == 33
-    # 主业务 usage_factor 保持原值
-    assert cfg.usage_factor == 100
+    # 主业务 usage_factor 默认 50（2026-11-06 定版）
+    assert cfg.usage_factor == 50
 
 
 def test_search_config_without_provider_uses_deepseek():
@@ -57,7 +57,7 @@ def test_billing_usage_factor_unchanged(monkeypatch):
     """主业务 usage_factor 不受 video_gen_usage_factor 影响"""
     monkeypatch.delenv("VIDEO_GEN_USAGE_FACTOR", raising=False)
     settings = create_settings()
-    assert settings.billing.usage_factor == 100
+    assert settings.billing.usage_factor == 50
 
 
 def test_billing_usage_factor_env_override(monkeypatch):
@@ -71,8 +71,8 @@ def test_billing_usage_factor_invalid_env_fallback(monkeypatch):
     """非法 USAGE_FACTOR env 值时回退到 yaml/默认值"""
     monkeypatch.setenv("USAGE_FACTOR", "not-a-number")
     settings = create_settings()
-    # 非法值不覆盖，沿用 yaml 中的 100
-    assert settings.billing.usage_factor == 100
+    # 非法值不覆盖，沿用 yaml 中的 50
+    assert settings.billing.usage_factor == 50
 
 
 # ---------------------------------------------------------------------------

@@ -34,6 +34,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261106-1010 | 定时任务结果免登录链接 | 📋 设计完成，待开发 | 定时任务终态通知链接免登录化（复用回复分享的公开路由/ticket/只读渲染）：只读结果页+登录入口、无密码链接即凭证、实时读跟随任务生命周期、web push/站内信/IM webhook 三处全换、产物文件免登录可下载。10 项决策已与用户逐条定稿（2026-11-06）。 | [设计](system/design-task-result-share-link.md) | [计划](plans/plan-task-result-share-link.md) |
 | 20261105-1902 | Runner 执行槽隔离与运行告警 | 🔧 部分完成（agent3 双槽） | agent3 双槽已部署，业务压测与旧客户端验收待完成。 | [设计](system/agent-application-architecture-design.md#10-runner-执行槽隔离与运行告警2026-11-05) | [计划](plans/plan-runner-execution-slot-isolation-and-alerts.md) |
 | 20261104-1639 | 知识库多轮检索新鲜度与结果去重 | 🔧 部分完成 | 工具说明对照无差异，待 Web 与正式微信 KF 复验。 | [设计](system/knowledge-base/knowledge-search-freshness-design.md) | [计划](plans/plan-knowledge-search-freshness.md) |
 | 20261022-1606 | 本地工具失败与原会话恢复闭环 | 🔧 部分完成 | 0.3.27单调用归位续做真验通过，下一轮排除26份续读入库1份。 | [设计增量](system/agent-application-architecture-design.md#本地工具阻断与原会话恢复2026-10-22增量待实现)、[最小修复方案](design/recruiting/boss-overlay-heal-design.md#w4-原始日志核验后的最小修复方案2026-10-23)、[今日统一交接](incidents/boss-agent2-issues-and-minimal-repair-handoff-20261023.md) | [修复计划](plans/plan-runner-local-tool-recovery-lockup-fix.md)、[10-30事故取证](plans/plan-boss-widget-incident-evidence-collection.md) |
@@ -79,11 +80,12 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261106-1310 | 产品效果图助手（interior-render）：image_gen 服务 + 出图/读图工具 + 技能移植 + wecom_kf 图片链路 | 🔧 部分完成（开发+单测+CodeReview 修复完成，待真机冒烟定版） | 基于第三方 qwen-interior-render 技能包移植：image_gen 服务层（DashScope qwen-image-3.0-pro，wire 形态按官方文档适配）、image_render/image_read 通用工具（按张计费）、interior-render 技能与子智能体、wecom_kf 入站图片放行。 | — | [计划](plans/plan-image-gen-interior-render.md) |
 | 20261105-1550 | Runner Worker 看门狗与队列堆积飞书告警 | 📋 待决策（设计稿完成，用户考虑实现方式） | TPG80509 事故后的最后防线：事件循环阻塞看门狗线程 + 队列水位巡检 + 独立飞书告警通道，三个方案选项与落地组合建议待裁决。 | [设计](system/runner-worker-watchdog-design.md) | — |
 | 20261105-1540 | Excel 工具假异步与 used range 膨胀防御修复（TPG80509） | ✅ 已完成开发（待部署） | 生产 243 全智能体无响应事故修复：excel_process 8 个 handler 全量 to_thread 包裹；双 ExcelReader 归一到 file/excel_reader.py（excel/excel_reader.py read_excel_document 薄委托）；used range 膨胀走 read_only 流式探测真实边界 + 截断提示。270 个相关测试通过。 | — | — |
 | 20261104-2038 | 企微会话每日总结工作台与专属定时配置 | 🔧 部分完成 | 日报内部会话已从聊天列表排除，待 agent2 发布验收。 | [设计](design/wecom/wecom-conversation-operations-design.md) | [计划](plans/plan-wecom-daily-summary-workbench.md) |
 | 20261103-1508 | 企微附件原件与持续任务后续优化 | 📋 待开发（用户暂缓） | 附件原件、预览及Runner恢复交互另行实施，不阻塞日志日报。 | [设计边界](design/wecom/wecom-conversation-operations-design.md#8-后置范围与验收原则) | [后续计划](plans/plan-wecom-conversation-followups.md) |
-| 20261105-1100 | 企微群聊长文本粘贴与监控等待修复 | 🔧 部分完成 | CLI 0.2.6 已签包放 Downloads，待安装与真机验收。 | [设计](design/wecom/wecom-cli-design.md#11-群聊实验的输入定位修正2026-10-23实施中) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w17-长文本粘贴与监控等待故障2026-11-05) |
+| 20261105-1100 | 企微群聊长文本粘贴与监控等待修复 | 🔧 部分完成 | W18 已合并 master 并出 0.2.7 包，待客户安装验收。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w18-文本发送输入替换修复2026-11-06) |
 | 20261102-1430 | 企微旁路聊天日志、前端与按日日报 | 🔧 部分完成（工作台由新计划接续） | 旁路日志与日期读取已有初版实现；日报页面及计划按新方案重做。 | [设计](design/wecom/wecom-conversation-operations-design.md) | [历史计划](plans/plan-wecom-conversation-operations.md) / [新计划](plans/plan-wecom-daily-summary-workbench.md) |
 | 20261018-1736 | wecom-cli 登录引导增强（自动拉起 + 二维码直返） | 💡 灵感 | 三态验收发现：need_login 态 probe 已返回登录二维码 base64，缺口是 WECOM_NOT_FOUND（进程未启动）时不自动拉起企微——增加自动启动后把二维码转交 agent 引导用户扫码。 | [验收记录](plans/wecom-cli-localdb-three-state-acceptance.md) | — |
 | 20261014-2043 | wecom-cli 本地库数据通道（local-db） | 🔧 部分完成 | 统一打包入口及Runtime＋WeCom配套验包完成，实际安装待验。 | [设计](design/wecom/wecom-cli-localdb-design.md) | [开发计划](plans/plan-wecom-cli-localdb.md) |

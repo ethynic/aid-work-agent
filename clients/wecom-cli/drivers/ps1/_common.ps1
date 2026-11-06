@@ -695,7 +695,7 @@ function Send-WeComAttachChordKey {
     # GetKeyboardState 存副本 → ks[0x11]=0x80（Ctrl 按下）→ SetKeyboardState → PostMessage
     # WM_KEYDOWN（lParam=1|(scan<<16)）→ 60ms → WM_KEYUP（lParam 再 |0xC0000000）→ finally
     # 恢复键状态 + detach。scan=MapVirtualKeyW(Vk,0)。
-    # 返回 $true=按键已发出；$false=AttachThreadInput 失败（调用方走降级链）。
+    # 返回 $true=按下/抬起消息均已投递；$false=attach 或任一投递失败。
     param(
         [Parameter(Mandatory)][int64]$Hwnd,
         [Parameter(Mandatory)][int]$Vk
@@ -715,15 +715,15 @@ function Send-WeComAttachChordKey {
         $scan = [WeComWin32]::MapVirtualKeyW([uint32]$Vk, 0)
         $lpDown = [IntPtr](1 -bor ($scan -shl 16))
         $lpUp = [IntPtr](1 -bor ($scan -shl 16) -bor 0xC0000000L)
-        [void][WeComWin32]::PostMessageW([IntPtr]$Hwnd, 0x0100, [IntPtr]$Vk, $lpDown)
+        $down = [WeComWin32]::PostMessageW([IntPtr]$Hwnd, 0x0100, [IntPtr]$Vk, $lpDown)
         Start-Sleep -Milliseconds 60
-        [void][WeComWin32]::PostMessageW([IntPtr]$Hwnd, 0x0101, [IntPtr]$Vk, $lpUp)
+        $up = [WeComWin32]::PostMessageW([IntPtr]$Hwnd, 0x0101, [IntPtr]$Vk, $lpUp)
         Start-Sleep -Milliseconds 60
     } finally {
         [void][WeComAttach32]::SetKeyboardState($saved)
         [void][WeComAttach32]::AttachThreadInput($me, $wxThread, $false)
     }
-    return $true
+    return ($down -and $up)
 }
 
 function Get-WeComSearchBoxState {
@@ -1145,24 +1145,22 @@ function Focus-WeComSearchBox {
 
 function Clear-WeComFocusedInput {
     # 清空当前聚焦的文本输入框内容（attachstate Ctrl+A 全选 + VK_DELETE 删除）。
-    # M6 message-send 发送前会话复核失败时，用它清理
-    # **自己刚输入**的会话草稿（防把文字留给错误会话）——只清自己输入的内容，
-    # 绝不用于清除用户草稿（用户草稿场景一律 UI_CHANGED 中止，不触碰）。
-    # 前提：目标输入框已聚焦（M6 驱动先点输入框并完成逐字输入，焦点确定在输入区）。
-    # 复核是否真清空由调用方决定（尽力而为的防护动作，失败不阻断后续中止语义）。
-    # 返回 $true=按键序列已发出；$false=attach 失败（调用方记录日志即可）。
+    # message-send 确认目标并点击输入区后，用它替换既有内容；发送前标题变化时也清理
+    # 本次已输入内容。调用方负责确认目标与焦点，不在此处做 OCR 草稿判定。
+    # 返回 $true=全选与删除按键已投递；$false=任一按键投递失败。
     param([Parameter(Mandatory)][int64]$Hwnd)
     $ok = Send-WeComAttachChordKey -Hwnd $Hwnd -Vk 0x41
+    if (-not $ok) { return $false }
     Start-Sleep -Milliseconds 150
     Initialize-WeComWin32
     $scan = [WeComWin32]::MapVirtualKeyW([uint32]0x2E, 0)
     $lpDown = [IntPtr](1 -bor ($scan -shl 16))
     $lpUp = [IntPtr](1 -bor ($scan -shl 16) -bor 0xC0000000L)
-    [void][WeComWin32]::PostMessageW([IntPtr]$Hwnd, 0x0100, [IntPtr]0x2E, $lpDown)
+    $down = [WeComWin32]::PostMessageW([IntPtr]$Hwnd, 0x0100, [IntPtr]0x2E, $lpDown)
     Start-Sleep -Milliseconds 50
-    [void][WeComWin32]::PostMessageW([IntPtr]$Hwnd, 0x0101, [IntPtr]0x2E, $lpUp)
+    $up = [WeComWin32]::PostMessageW([IntPtr]$Hwnd, 0x0101, [IntPtr]0x2E, $lpUp)
     Start-Sleep -Milliseconds 300
-    return $ok
+    return ($down -and $up)
 }
 
 # ---------- M7：图片发送共享助手（send-image 用；只增不改，M1-M6 函数不动） ----------

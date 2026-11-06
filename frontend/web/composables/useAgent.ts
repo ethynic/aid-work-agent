@@ -881,11 +881,6 @@ export function useAgent() {
     }
   }
 
-  function now(): string {
-    const d = new Date()
-    return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(3, '0')}.${d.getMilliseconds().toString().padStart(3, '0')}`
-  }
-
   // ---- 结构化提问提交（WP4，设计 §4.2/§5.7/§7.1/§8）----
 
   /** 组装提问卡片控制请求：结构化 answers/skip（answer 留空，canonical 服务端生成）；
@@ -1580,6 +1575,7 @@ export function useAgent() {
     if (type === 'error') {
       console.error(`${ts} ${label}`, content, { toolName, toolArgs, result })
     } else if (type === 'tool_result' || type === 'tool_start') {
+      // 豁免清理：后台 tool 调用起止与结果输出，便于排查后台工具执行问题，保留观察
       console.info(`${ts} ${label}`, content, { toolName, toolArgs, result })
     } else {
       console.log(`${ts} ${label}`, content)
@@ -1609,7 +1605,6 @@ export function useAgent() {
    * 预先标记一个新建的空会话（跳过后续 DB 请求）
    */
   function precacheNewSession(sid: string) {
-    console.log(`[${now()}] [precacheNewSession] precache empty session:`, sid)
     const state = getStreamState(sid)
     state.messages.value = []
     state.dbLoaded = true
@@ -1700,7 +1695,6 @@ export function useAgent() {
       } catch (issue) { if (current()) runnerError(sid, issue as Error) }
       return
     }
-    console.log(`[${now()}] [abortStreaming] called, sid=`, sid, 'isProcessing=', state?.isProcessing.value)
     if (state?.isProcessing.value) {
       // 标记为用户主动取消，让 onComplete 显示取消状态
       state.cancelledByUser = true
@@ -1713,7 +1707,6 @@ export function useAgent() {
           method: 'POST',
           headers: getEffectiveAuthHeader()
         })
-        console.log(`[${now()}] [abortStreaming] backend cancel request sent`)
       } catch (err) {
         console.warn('[abortStreaming] failed to notify backend:', err)
         // 即使后端通知失败，前端仍然中止

@@ -25,6 +25,7 @@ from src.services.billing import (
     calculate_llm_credit_cost_with_breakdown,
     calculate_embedding_credit_cost_with_breakdown,
     calculate_asr_credit_cost_with_breakdown,
+    calculate_image_credit_cost_with_breakdown,
 )
 
 _RESULT_MAX_LENGTH = 2000
@@ -118,6 +119,8 @@ class SessionRecordService:
         # Embedding / ASR 用量（LLM 计费接入改造 2026-08-12）
         self.embedding_tokens = 0
         self.asr_calls = 0
+        # 图像生成张数（按张计费 2026-11-06）
+        self.image_calls = 0
         self.usage_breakdown: Dict[str, Any] = {}  # 详细分项明细 JSON
 
         # 模型信息
@@ -252,6 +255,20 @@ class SessionRecordService:
             "asr", {"calls": 0, "model": model}
         )
         breakdown["calls"] += calls
+        breakdown["model"] = model
+
+    def add_image_usage(self, images: int = 1, model: str = "qwen-image-3.0-pro"):
+        """添加图像生成张数（累加，纯内存操作）
+
+        image_render 等出图工具调用，按张计费，累加到当前会话记录。
+        """
+        if not images or images <= 0:
+            return
+        self.image_calls += images
+        breakdown = self.usage_breakdown.setdefault(
+            "image", {"images": 0, "model": model}
+        )
+        breakdown["images"] += images
         breakdown["model"] = model
 
     def set_model(self, model: str):
@@ -395,8 +412,22 @@ class SessionRecordService:
                 asr_credit_cost = 0.0
                 asr_bd = {}
 
-            # 合并总积分（chat + embedding + asr）
-            credit_cost = round(chat_credit_cost + embedding_credit_cost + asr_credit_cost, 2)
+            # 图像生成积分（按张计费，image_render 等出图工具）
+            image_credit_cost = 0.0
+            image_bd: Dict[str, Any] = {}
+            if self.image_calls > 0:
+                try:
+                    image_model = (self.usage_breakdown.get("image") or {}).get("model") or "qwen-image-3.0-pro"
+                    image_credit_cost, image_bd = calculate_image_credit_cost_with_breakdown(
+                        images=self.image_calls, model=image_model
+                    )
+                except Exception as billing_err:
+                    logger.error(f"图像生成计费计算失败，降级为 0: {billing_err}")
+                    image_credit_cost = 0.0
+                    image_bd = {}
+
+            # 合并总积分（chat + embedding + asr + image）
+            credit_cost = round(chat_credit_cost + embedding_credit_cost + asr_credit_cost + image_credit_cost, 2)
 
             # 构造 usage_breakdown：补充 chat 分项单价/分项积分与各分项 credit
             usage_breakdown: Dict[str, Any] = dict(self.usage_breakdown)
@@ -433,6 +464,13 @@ class SessionRecordService:
                     usage_breakdown["asr"].update({
                         "unit_price_per_call": asr_bd.get("unit_price_per_call"),
                         "usage_factor": asr_bd.get("usage_factor"),
+                    })
+            if self.image_calls > 0 and "image" in usage_breakdown:
+                usage_breakdown["image"]["credit"] = round(image_credit_cost, 2)
+                if image_bd:
+                    usage_breakdown["image"].update({
+                        "unit_price_per_call": image_bd.get("unit_price_per_call"),
+                        "usage_factor": image_bd.get("usage_factor"),
                     })
 
             # 合并语义标记（语音合并等场景）：merged_follower 记录 token 天然为 0，

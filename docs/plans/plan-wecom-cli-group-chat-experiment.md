@@ -24,6 +24,7 @@
 | W15 提交与合并 | 特性分支推送及master整合 | ✅ 完成（2026-10-30） | 特性分支1b0759cd已双远程推送；master保留两边历史并完成合并核验，未部署监听 |
 | W16 客户端打包归拢复核 | master上验证旧Runtime/BOSS与发行改动并提交 | ✅ 完成（2026-10-30） | 主控60项、独测3专项/5批Windows实测及CR通过；仅本任务定向提交，未部署监听 |
 | W17 长文本粘贴与草稿误判修复 | 窄窗草稿保护、取消粘贴后 OCR 门禁、数据库唯一记录核验 | 🔧 进行中 | CLI 0.2.6 已签包并放 Downloads、目标 Runtime 静态验包通过；待用户安装及真机验收 |
+| W18 文本发送输入替换 | 当前目标标题复核后清空输入区，沿用单行/多行输入方式 | ✅ 完成（2026-11-06） | 独测、最终 CR、本机空框/带草稿真实发送通过；已合并 master 并出 0.2.7 包，待客户安装 |
 
 ## W14 通用Runtime业务工具自动装配（2026-10-29）
 
@@ -719,3 +720,25 @@ agent2 的同一 Runner 在 10:46:55～10:49:35 发起五次 `wecom_message_send
 首轮独立测试复核历史 1209px 窄窗 OCR 帧与合成含“发送消息”的正文输入判定；独立 CR 指出的粘贴 OCR 漏检/占位词误排及数据库不匹配被气泡前缀覆盖均已修复。最终独立测试在最新源码上完成 CLI 构建、两份完整 TS 发送测试 38 项与 PowerShell 输入测试 21 项，均通过；新增反例验证数据库仅有相似前缀时仍 `EXECUTION_UNKNOWN`、保留 receipt、`send-status` 只读仍 unknown，且不调用 `VerifyOnly`。此前两例 `source_generation` 旧测试断言已按实际结果字段更新；最终 CR 无 P0/P1/P2。agent2 于 11:00 只读复查仍为 `waiting/verification/SLEEP_UNSAFE_BOUNDARY`，更新时间仍为 10:51:18；本轮不篡改历史发送回执、远端 Runner 或用户群聊。
 
 2026-11-05 CLI-only 交付：版本升至 `0.2.6`，复用已登记稳定验收签名者及本机已验证 OCR/Python 资产；在 HEAD `3a59cb28` 的独立归档中仅覆盖本任务 9 个当时未提交的 WeCom CLI 文件，build-info 如实记录覆盖来源，不纳入其他工作区改动。发布脚本 `-Component Wecom -WorkspacePrepared` 构建、签包、离线验包（OCR/SQLite/AES）、目标已安装 Runtime 资源兼容检查及打包定向 19 项全部通过；未重建 Runtime。交付位置为 `C:/Users/PC/Downloads/AID-Work-WeCom-0.2.6-20261105-111834/` 及同名 ZIP；插件 SHA-256 `3df055c5ba4fdaf6f662030eac1e10cb078a4435ca7e0efeee534828390c3690`。包内发送 PS/Python 与编译后发送/工具说明 JS 四个摘要均与当时工作区一致，ZIP `.sha256` 核对通过。目标 Runtime 静态报告为 `WECOM_TARGET_RUNTIME_PASS`（Host 0.2.27/Core 0.2.24）；隔离验包 doctor 因无交互桌面标记未就绪，不代表真实登录验收。该出包发生在源码提交之前，build-info 保留当时工作区覆盖记录；是否安装成功与真实群发送仍待用户验收。本阶段未部署 agent2。
+
+## W18 文本发送输入替换修复（2026-11-06）
+
+agent2 的 `tr_runner_05033bd35b3642889245230f576a8a4d:1` 及同用户后续会话显示：原群名搜索回读失败后，改名后的目标群仍被搜索框布局检查拦住；人工清空搜索框后，又三次因“输入框存在残留草稿”被拒发。服务端回执均 `effect=none`，目标群可读且五次发送解析到同一稳定会话。客户端原始 OCR token 不在服务端日志中，不能据此断言真实草稿存在；用户确认没有草稿并要求每次文本发送前主动覆盖输入区内容。
+
+用户 15:06–15:07 新截图显示右侧已选目标群输入框为空，左侧另两个会话列表行有红色 `[草稿]` 标记。客户随后已清掉左侧其他会话草稿，用旧版重试仍报“有草稿”，故不能将左侧标记认定为触发来源。新 trace `tr_runner_e79205f2b8514da4add2027c58759c3a:1` 在 15:07:33、15:08:12 对同一稳定会话发送均被“残留草稿”拒发、`effect=none`，期间该会话读取成功。服务端没有本机 driver-log 或原始 OCR token，无法确定 Jev/OCR 实际命中来源。回归意图为目标无真实草稿时不受预检阻断，合成 `[草稿]` 文字只用于覆盖误判路径，不代表现场坐标。15:14 另有 `TARGET_NOT_FOUND` 名称定位失败，不归入本次草稿门禁修复。
+
+本阶段只调整 `wecom_message_send` 文本驱动：当前标题按既有目标规则确认前不清理；已在目标会话时不受无关搜索框残留硬阻断；点击输入区后再次截图并按同一标题规则核对，窗口重建则使用新窗口比例输入点与最新标题，不匹配或点击后窗口失效时零清理。随后投递 Ctrl+A/Delete，Ctrl+A 的按下或抬起、Delete 任一投递失败均中止；清理成功后单行沿用 `Send-WeComText`，多行沿用剪贴板 Ctrl+V，之后保持已有发送前复核、发送与结果核验。取消发送前 OCR/Jev“草稿存在即拒发”判断，不追加清空后 OCR 门禁。此行为会覆盖输入区已有的未发送文字，按用户本次明确要求实施；`-VerifyOnly` 保持零输入，图片/文件发送、Runtime/Device wire、已交付旧客户端不变。新增定向测试覆盖搜索框残留、误报草稿、清理先于输入、清理失败不发送、两次截图间标题变化、窗口重建、单行/多行原方式以及 unknown 不重发；模拟测试不冒充真机验收。
+
+边界：清理成功而后续单行逐字输入或多行剪贴板写入/Ctrl+V 失败时，原未发送文字可能已被清空；单行不覆盖系统剪贴板。现有 Qt 客户端不提供可复用的内部编辑焦点回读，驱动只能沿“最新目标标题核对 + 输入点点击”路径建立输入焦点；搜索面板仍在前台时的实际焦点转移需真实客户端验收，不能把模拟按键投递通过当作真机证明。
+
+开发自测：首轮测试先于生产修改，`input-locator-regression.ps1`、`input-independent.ps1` 分别 exit 1，覆盖搜索框/草稿误判及清理失败等预期失败。CR 发现清理前标题使用 Jev 前旧截图、Ctrl+A 投递返回被忽略，随后按用户澄清将单行恢复原逐字输入；补充用例先运行 `input-independent.ps1` exit 1，复现 Ctrl+A/Ctrl+V keydown/up 故障、两次截图间标题变化、窗口重建及单行方式误改；截图中窗口重建用例亦先 exit 1。最终 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File clients/wecom-cli/tests/ps1/input-independent.ps1 -DriverDir clients/wecom-cli/drivers/ps1` exit 0（34 项），同参数 `input-locator-regression.ps1`、`search-input-regression.ps1`、`clipboard-policy-regression.ps1` 均 exit 0（剪贴板策略 23 项）；`cd clients/wecom-cli && npm run build` exit 0；`node --test dist/tests/message-send-v2.test.js dist/tests/operations-m2.test.js dist/tests/manifest.test.js` exit 0（36 项），`send-image.test.js` 与 `send-file.test.js` exit 0（18 项）。`message-send-localdb-verify.test.js` 在独立 worktree 中因缺 `venv/Scripts/python.exe` 的 24 项 fixture 全部 `ENOENT`，不能称该套件通过；本次没有修改本地库代码或恢复契约，交独立测试评估是否需在可用环境复核。尚待独立测试/复审，没有真实企业微信发送、客户机安装或部署。
+
+独立 TEST 第二轮在最终 CLI 代码上完成：`input-independent` 34/34、剪贴板策略 23/23、Node 发送与本地库 72/72、相邻工具 27/27 及 CLI build 均 exit 0。首轮 CR 的三项 P1 已回炉修复，最终复审通过；功能分支代码提交 `974cf54d`，Codeup 与 GitHub 同一分支推送成功。主控已将独立工作树基线从 `a128527e` fast-forward 到 `origin/master` 的 `3b4655bd`；新增三项提交仅涉及 ImageRead、配置、相关文档与 Python 测试，与 WeCom/本计划路径无重叠，未产生冲突，WeCom 代码、依赖和验证环境未变，故复用上述定向测试结果。
+
+用户明确授权在本机已打开的企业微信“售前客服群”做真实发送测试。2026-11-06 15:36–15:37，系统会话表确认当前命令与企业微信都位于活动 Console 会话；CLI 子进程补入缺失的真实 `SESSIONNAME=Console` 后，`probe --json` 返回在线，`list-groups --query '售前客服群' --limit 10 --json` 在本地库唯一命中。以功能分支源码执行一次 `send --session '售前客服群' --text <唯一测试标记> --json`，回执 exit 0、`OK`、`effect=applied`、`verification=local-record`，本地库出站 `message_id=1987`；驱动日志显示已点击输入区、投递 Ctrl+A/Delete、发送前复核标题为目标群。只读 `read-group --target-name '售前客服群' --limit 20 --json` exit 0，唯一测试标记在最近 20 条中出现 1 次，ID 同为 1987。该证据确认本机客户端动作与本地记录，不能证明群成员已收到或客户机已安装新版。没有第二次发送、agent2 部署、客户端安装或 master 合并。
+
+用户随后在同一群输入框中手动放入草稿，明确授权覆盖草稿再试一次。2026-11-06 15:40–15:41，功能分支 CLI 的 `probe --json` 在线、本地库群名唯一命中；仅执行一次 `send --session '售前客服群' --text <新唯一测试标记> --json`，exit 0、`OK`、`effect=applied`、`verification=local-record`，新增 `message_id=1988`。本次驱动截图 `step2-before-clear.png` 可见目标群标题及输入框内原草稿，`step2-typed.png` 可见输入框仅剩新测试文本，`step3-after.png` 可见该文本成为群内一条出站消息且输入框为空；驱动日志记录 Ctrl+A/Delete 投递及发送前标题复核。原草稿未混入出站消息；本地库单条匹配只证明客户端记录，不证明群成员送达。未重复发送，也未安装或部署客户端。
+
+用户确认看到发送成功，授权合并 master 并将最新 WeCom CLI 放入 Downloads。现有 0.2.6 已有不同内容的交付包，因此本次源码版本与锁文件同步升为 0.2.7；打包只选择 WeCom，不构建或安装 Runtime。
+
+交付结果：功能分支 `888ce07a` 已快进合并 master 并推送 Codeup/GitHub；从该提交 `HEAD` 隔离构建 WeCom 0.2.7，复用已登记 acceptance 发布者及上次出包的 OCR 资产。仓库默认 `ocr-python-final` 缺 `tzdata`，首次打包在产物生成前中止；改用已有 `ocr-python-wecom-daily-20261105` 后单次打包成功。脚本 exit 0，插件签名与离线验包、目标已安装 Runtime 的公开根/四项工具兼容、打包定向测试及 ZIP SHA-256 均通过。交付目录 `C:/Users/PC/Downloads/AID-Work-WeCom-0.2.7-20261106-154406/`，同名 ZIP 与 `.zip.sha256` 在 Downloads；ZIP SHA-256 `ff5923b4dbfeb580cc6757794f46456a4322a2ef0ff065e54c4e87dcb8a3ea66`。build-info 的 `baseCommit=888ce07a35951cd17f6bdde9f8a3f0345e9cab29`、`component=Wecom`、`wecom=0.2.7`；未构建 Runtime、未安装客户端、未部署 agent2，原客户场景仍待验收。

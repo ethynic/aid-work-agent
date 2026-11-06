@@ -311,31 +311,28 @@ target_ref 走既有链路**（快路径直发/直读；navigate_required 时二
 
 - **两条路径**：
   1. **快路径**——发送驱动先 PrintWindow 截图 + OCR 两带（标题带 y<0.07h、底部输入带
-     y>0.72h 含工具栏图标行与输入区，boxes 模式带坐标），**Jev #1 三问合一**（当前会话是否
-     目标 / 点哪聚焦输入框 / 输入区是否有草稿）判定当前会话就是目标 → 直接输入发送；
+     y>0.80h 含工具栏图标行与输入区，boxes 模式带坐标），**Jev #1 两项判定**（当前会话是否
+     目标 / 点哪聚焦输入框）及标题规则确认当前会话就是目标 → 清空输入区并沿原方式输入发送；
   2. **分发路径**——驱动判定非目标/无法判定 → 返回 `navigate_required=true` 交还 TS 层 →
      内部依次调用 chatSearch（注入同一 runDriverFn，Jev 选 best）与 chatSelect（点击进会话 +
      标题严格校验）→ **再次调用发送驱动**完成发送。两轮均不在目标会话 → TARGET_NOT_FOUND；
      编排失败（search 无结果 / select 校验失败等）透传对应错误码（此时未发送消息，effect=none）。
-- **Jev 两次判定**：#1 发送前三问（见上）；#2 终态两问（sent_successfully / failure_mode，
+- **Jev 两次判定**：#1 发送前确认目标和输入点（见上）；#2 终态两问（sent_successfully / failure_mode，
      state = 发送后输入区/消息区末尾/会话列表 OCR 证据）。#2 判 no/unclear →
      EXECUTION_UNKNOWN（消息可能已发出，绝不自动重试）。
 - **降级链**（Jev 无 key/超时/坏响应，逐问独立降级）：right_conversation → 标题归一化规则
-     匹配；input_point → 比例坐标 (0.500w, 0.900h)（M2 标定）；has_draft → input 模式判空
-     （占位符「发送消息/输入消息/聊点什么」与图标行碎字剔除）；终态 → M2 三选二（输入框清空 /
+     匹配；清理前必须由标题规则再次确认目标；input_point → 比例坐标 (0.500w, 0.900h)（M2 标定）；终态 → M2 三选二（输入框清空 /
      消息区末尾任一行含 text 归一化前缀 12 字 / 会话列表含目标名且含前缀），<2 项 →
      EXECUTION_UNKNOWN。
-- **草稿防串**：输入区已有**用户草稿** → 立即 UI_CHANGED 中止，绝不清除（可能是用户未发送
-     的文字）；输入后、发送前规则复核会话标题，不一致 → **清空自己刚输入的草稿**
-     （attachstate Ctrl+A + Delete，只清自己输入的内容）再 UI_CHANGED 中止，绝不把文字留在
-     错误会话、绝不带着错误标题按 Enter。
-- **text 约束**：≤2000 字、纯空白拒绝（归一化后为空会使终态校验失真）；**支持多行**——
-  含换行时驱动走**剪贴板粘贴通道**：`Set-Clipboard` 重试 5 次（×150ms，全败 CONFIG_MISSING）→
-  attachstate Ctrl+V（输入框已聚焦，2026-09-28 真机验证换行保留）→ 500ms → OCR 回读输入带
-  （y≥0.80h、300<x<0.97w，token 按 (y,x) 序拼接归一化）须含 text 归一化前 8 字，不符 →
-  UI_CHANGED fail-closed（不按 Enter，输入框可能有残留需人工检查）。**副作用：发送多行消息
-  会覆盖用户剪贴板且不恢复**（不备份恢复是刻意为之：paste handler 异步读剪贴板，恢复竞态会
-  粘贴到错的内容，weixin-cli 先例）；driver-log 对多行文本只记前 12 字 + 总字数，不落全文。
+- **文本输入替换**：目标标题确认后点击输入区，投递 Ctrl+A + Delete 清理既有内容，清理键
+     投递失败不粘贴或发送；不再以 OCR/Jev 草稿判定拒发。输入后、发送前复核标题，不一致
+     则清理本次输入并中止，绝不带着错误标题按 Enter。此行为会覆盖已有未发送文字。
+- **text 约束**：≤2000 字、纯空白拒绝（归一化后为空会使终态校验失真）；单行沿用
+   `Send-WeComText` 逐字输入；含换行的多行沿用**剪贴板粘贴通道**：`Set-Clipboard` 重试 5 次
+   （×150ms，全败 CONFIG_MISSING）→ attachstate Ctrl+V（投递失败不按 Enter）→ 500ms。
+   粘贴后不再以 OCR 正文回读作发送门禁。**副作用：发送多行消息会覆盖用户剪贴板且不恢复**
+   （paste handler 异步读取，立即恢复可能粘贴到错误内容）；driver-log 对多行只记前 12 字
+   与总字数，不落全文。
   发送前复核与终态校验对多行无需特判（气泡/会话列表预览显示为单行截断，归一化前缀取整文
   开头 8 字 = 首行开头）。驱动超时 → EXECUTION_UNKNOWN；取消 → CANCELLED。
 - **artifact 结构**（同一 artifact 根下独立留痕）：`send-<ts>/`（两轮分发则为两个目录）
@@ -458,7 +455,7 @@ target_ref 走既有链路**（快路径直发/直读；navigate_required 时二
   × 清空按钮同理 (473,77)）→ 输入关键词 → `SearchResultWindow2` overlay，OCR 读分区结果
   列表；点结果行进会话 overlay 自动关闭。中文输入必须 WM_CHAR 逐字（VkKeyScanW 对中文
   返回 -1，Send-WeComText 自动降级），英文/数字纯 WM_KEYDOWN。发送 = PostMessage Enter；
-  发送前必须 OCR 校验会话标题一致 + 输入框无残留草稿（fail-closed 防串消息）；
+   文本发送前确认目标标题，清空其输入框后沿原方式输入；
   打开外部联系人会话主窗口可能变宽（2196→2916 物理 px）。
 - **2026-09-04 客户端更新后的布局事实（真机实测，勿随意改）**：
   - 搜索框固定在左栏 x∈[154,505]、y∈[44,100]（物理 px @2x DPI）；框内文本 x0≈221；
@@ -489,8 +486,8 @@ target_ref 走既有链路**（快路径直发/直读；navigate_required 时二
   visible=False 残留，判开必须带可见性过滤。Jev 决策 API 措辞敏感，state 模板不得随意改。
 - M6（2026-09-28 设计定稿）：send 智能分发——驱动返回 `navigate_required=true` 表示当前
   会话非目标，TS 层内部编排 chatSearch→chatSelect→二次 send（不经 CLI，注入同一驱动依赖）；
-  用户草稿绝不清除（UI_CHANGED 中止），自己输入的草稿发送前复核失败必清
-  （Clear-WeComFocusedInput，与 Clear-WeComSearchBoxV2 同款 Ctrl+A+Delete 原语）；
+   文本发送现按用户要求先覆盖目标输入区已有内容，发送前复核失败再清本次输入
+   （Clear-WeComFocusedInput 使用 Ctrl+A+Delete）；
   终态 Jev 判定 no/unclear 或降级三选二 <2 项 → EXECUTION_UNKNOWN 绝不自动重试。
 - M7（2026-09-28 真机验证 e5-image）：Clipboard.SetImage（System.Windows.Forms，FromFile
   加载 Bitmap）+ attachstate Ctrl+V（Send-WeComAttachChordKey -Vk 0x56）在输入框聚焦时

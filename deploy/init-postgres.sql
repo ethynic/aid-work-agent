@@ -323,6 +323,16 @@ INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m
 VALUES ('qwen3-vl-flash',0.6, 6, 0.012, TRUE)    -- 按顶格 128K<Token≤256K 计算
 ON CONFLICT (model_name) DO NOTHING;
 
+-- qwen3-vl-plus（image_read 读图默认模型，2026-11-06 定版；qwen-vl-plus/qwen-vl-max 旧代模型百炼已下线）
+-- 分段计价（百炼官方华北2，北京）：0<T≤32K=输入1/输出10/缓存命中0.2；32K<T≤128K=1.5/15/0.3；128K<T≤256K=3/30/0.6
+INSERT INTO token_cost_prices (model_name, tiered_pricing, is_multimodal)
+VALUES ('qwen3-vl-plus', '[
+  {"max_input": 32768,  "input_per_m": 1.0, "cached_input_per_m": 0.2,  "output_per_m": 10.0},
+  {"max_input": 131072, "input_per_m": 1.5, "cached_input_per_m": 0.3,  "output_per_m": 15.0},
+  {"max_input": 262144, "input_per_m": 3.0, "cached_input_per_m": 0.6,  "output_per_m": 30.0}
+]'::jsonb, TRUE)
+ON CONFLICT (model_name) DO NOTHING;
+
 -- GLM-5.3-Flash（zhipu 默认模型，2026-08-28 起；GLM-5 系列首个原生多模态模型，is_multimodal=TRUE）
 -- 智谱官方定价：输入 0.8 元/M、输出 2.8 元/M；缓存命中价官方公布 0.23 元/M（2026-09-17 确认）
 INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m, is_multimodal)
@@ -376,6 +386,11 @@ ON CONFLICT (model_name) DO NOTHING;
 -- 缓存走隐式缓存（自动前缀匹配，context_cache=false 不加 cache_control），命中按输入价 20% = 0.16 元/M
 INSERT INTO token_cost_prices (model_name, input_price_per_m, output_price_per_m, cached_input_price_per_m)
 VALUES ('qwen3.8-flash', 0.8, 2.7, 0.16)
+ON CONFLICT (model_name) DO NOTHING;
+
+-- 图像生成按张计费单价：qwen-image-3.0-pro 0.25 元/张（1K 输出档，已按百炼控制台核实；×usage_factor 100 = 25 积分/张；运营改 DB 调价）
+INSERT INTO token_cost_prices (model_name, price_per_call)
+VALUES ('qwen-image-3.0-pro', 0.25)
 ON CONFLICT (model_name) DO NOTHING;
 
 

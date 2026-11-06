@@ -296,10 +296,10 @@ class TestShouldProcessKfMessage:
         from src.channels.wecom_kf.message import should_process_kf_message
         assert should_process_kf_message("voice") is True
 
-    def test_image_message_filtered(self):
-        """图片消息应过滤。"""
+    def test_image_message_processed(self):
+        """图片消息放行（2026-11-06 效果图/判读场景：附件落盘后智能体可调 image_read/image_render）。"""
         from src.channels.wecom_kf.message import should_process_kf_message
-        assert should_process_kf_message("image") is False
+        assert should_process_kf_message("image") is True
 
     def test_video_message_filtered(self):
         """视频消息应过滤。"""
@@ -336,6 +336,6 @@ class TestShouldProcessKfMessage:
 
 class TestKfFilterHintMessage:
     def test_filter_hint_message_defined(self):
-        """拦截非文字/语音消息时回复客户的固定话术已定义。"""
+        """拦截 video/file 等不支持消息时回复客户的固定话术已定义（image 已放行）。"""
         from src.channels.wecom_kf.message import KF_FILTER_HINT_MESSAGE
-        assert KF_FILTER_HINT_MESSAGE == "我无法识别该类型文件，请用文字或语音描述您的需求。"
+        assert KF_FILTER_HINT_MESSAGE == "我无法识别该类型文件，请直接发送图片，并用文字描述您的需求。"
