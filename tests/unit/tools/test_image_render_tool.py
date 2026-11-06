@@ -225,19 +225,25 @@ class TestExecuteSuccess:
 
 class TestExecuteFailure:
     @pytest.mark.asyncio
-    async def test_provider_error_sanitized(self):
+    async def test_provider_error_passthrough(self):
+        """ImageGenProviderError 消息为受控文本（含 task_id/超时诊断），直接透传不做 sanitize 兜底。
+
+        回归场景：2026-11-06 产品效果图事故，轮询超时被兜底成「操作失败，请稍后重试」，
+        trace 与对话上下文完全丢失真实原因。
+        """
         from src.services.image_gen.base import ImageGenProviderError
 
+        timeout_msg = "图像生成等待超时（300s，task=task_abc123，最后状态 RUNNING）"
         tool = ImageRenderTool()
         with tool_execution_scope(ToolExecutionContext(tenant_id="t1")), \
              patch("src.services.image_gen.get_image_gen_service") as mock_get_svc:
             svc = MagicMock()
-            svc.render = AsyncMock(side_effect=ImageGenProviderError("api_key=sk-secret-xxx 失效"))
+            svc.render = AsyncMock(side_effect=ImageGenProviderError(timeout_msg))
             mock_get_svc.return_value = svc
             result = await tool.execute(prompt="p")
 
         assert result["success"] is False
-        assert "sk-secret" not in result["error"]
+        assert result["error"] == timeout_msg
 
     @pytest.mark.asyncio
     async def test_unexpected_error_generic_message_with_debug(self):

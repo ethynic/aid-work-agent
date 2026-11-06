@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from loguru import logger
 from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
@@ -88,8 +89,13 @@ class ImageRenderTool(BaseTool):
                 req, tenant_id=tenant_id, user_id=user_id, session_id=session_id
             )
         except ImageGenProviderError as e:
-            return {"success": False, "error": sanitize_error(str(e))}
+            # provider 错误消息是本项目构造的受控中文文本（含 task_id/超时上限/最后状态等
+            # 诊断信息），直接透传；经 sanitize_error 无白名单兜底会把真实原因全部掩盖
+            # （2026-11-06 产品效果图事故：轮询超时在 trace 中只显示「操作失败」）
+            logger.opt(exception=True).warning(f"[image_render] provider 返回失败: {e}")
+            return {"success": False, "error": str(e)}
         except Exception as e:
+            logger.opt(exception=True).error(f"[image_render] 生成异常: {e}")
             return {
                 "success": False,
                 "error": "图片生成失败，请稍后重试",

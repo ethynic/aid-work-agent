@@ -132,7 +132,7 @@ video_gen:
 image_gen:
   provider: dashscope                       # 预留多 provider 扩展位
   poll_interval_seconds: 3                  # 异步任务轮询间隔
-  poll_timeout_seconds: 180                 # 单次出图等待上限（工具层默认 300s 内）
+  poll_timeout_seconds: 300                 # 单次出图等待上限（qwen-image-3.0-pro 实测出图 ~3min，180s 高频撞超时，2026-11-06 上调）
   dashscope:
     api_key: ${WANX_API_KEY:-}              # 空：回退 qwen.api_keys[0]（同百炼账号通用）
     model: qwen-image-3.0-pro                  # 与 token_cost_prices.model_name 严格相等（按张计费单价行）
