@@ -24,7 +24,7 @@
 | W15 提交与合并 | 特性分支推送及master整合 | ✅ 完成（2026-10-30） | 特性分支1b0759cd已双远程推送；master保留两边历史并完成合并核验，未部署监听 |
 | W16 客户端打包归拢复核 | master上验证旧Runtime/BOSS与发行改动并提交 | ✅ 完成（2026-10-30） | 主控60项、独测3专项/5批Windows实测及CR通过；仅本任务定向提交，未部署监听 |
 | W17 长文本粘贴与草稿误判修复 | 窄窗草稿保护、取消粘贴后 OCR 门禁、数据库唯一记录核验 | 🔧 进行中 | CLI 0.2.6 已签包并放 Downloads、目标 Runtime 静态验包通过；待用户安装及真机验收 |
-| W18 文本发送输入替换 | 当前目标标题复核后清空输入区，沿用单行/多行输入方式 | 🔧 进行中 | 独立 TEST 第二轮通过；首轮 CR 三项 P1 已修，待最终复审与真机验收 |
+| W18 文本发送输入替换 | 当前目标标题复核后清空输入区，沿用单行/多行输入方式 | ✅ 完成（2026-11-06） | 独测、最终 CR 通过；本机真实群单条发送及本地库唯一记录通过；待合并交付 |
 
 ## W14 通用Runtime业务工具自动装配（2026-10-29）
 
@@ -733,4 +733,6 @@ agent2 的 `tr_runner_05033bd35b3642889245230f576a8a4d:1` 及同用户后续会�
 
 开发自测：首轮测试先于生产修改，`input-locator-regression.ps1`、`input-independent.ps1` 分别 exit 1，覆盖搜索框/草稿误判及清理失败等预期失败。CR 发现清理前标题使用 Jev 前旧截图、Ctrl+A 投递返回被忽略，随后按用户澄清将单行恢复原逐字输入；补充用例先运行 `input-independent.ps1` exit 1，复现 Ctrl+A/Ctrl+V keydown/up 故障、两次截图间标题变化、窗口重建及单行方式误改；截图中窗口重建用例亦先 exit 1。最终 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File clients/wecom-cli/tests/ps1/input-independent.ps1 -DriverDir clients/wecom-cli/drivers/ps1` exit 0（34 项），同参数 `input-locator-regression.ps1`、`search-input-regression.ps1`、`clipboard-policy-regression.ps1` 均 exit 0（剪贴板策略 23 项）；`cd clients/wecom-cli && npm run build` exit 0；`node --test dist/tests/message-send-v2.test.js dist/tests/operations-m2.test.js dist/tests/manifest.test.js` exit 0（36 项），`send-image.test.js` 与 `send-file.test.js` exit 0（18 项）。`message-send-localdb-verify.test.js` 在独立 worktree 中因缺 `venv/Scripts/python.exe` 的 24 项 fixture 全部 `ENOENT`，不能称该套件通过；本次没有修改本地库代码或恢复契约，交独立测试评估是否需在可用环境复核。尚待独立测试/复审，没有真实企业微信发送、客户机安装或部署。
 
-独立 TEST 第二轮在最终 CLI 代码上完成：`input-independent` 34/34、剪贴板策略 23/23、Node 发送与本地库 72/72、相邻工具 27/27 及 CLI build 均 exit 0；没有真实企业微信发送。首轮 CR 的三项 P1 已回炉修复，仍待最终复审。主控已将独立工作树基线从 `a128527e` fast-forward 到 `origin/master` 的 `3b4655bd`；新增三项提交仅涉及 ImageRead、配置、相关文档与 Python 测试，与 WeCom/本计划路径无重叠，未产生冲突，WeCom 代码、依赖和验证环境未变，故复用上述定向测试结果。W18 仍处于开发中，待 CR 与真机验收。
+独立 TEST 第二轮在最终 CLI 代码上完成：`input-independent` 34/34、剪贴板策略 23/23、Node 发送与本地库 72/72、相邻工具 27/27 及 CLI build 均 exit 0。首轮 CR 的三项 P1 已回炉修复，最终复审通过；功能分支代码提交 `974cf54d`，Codeup 与 GitHub 同一分支推送成功。主控已将独立工作树基线从 `a128527e` fast-forward 到 `origin/master` 的 `3b4655bd`；新增三项提交仅涉及 ImageRead、配置、相关文档与 Python 测试，与 WeCom/本计划路径无重叠，未产生冲突，WeCom 代码、依赖和验证环境未变，故复用上述定向测试结果。
+
+用户明确授权在本机已打开的企业微信“售前客服群”做真实发送测试。2026-11-06 15:36–15:37，系统会话表确认当前命令与企业微信都位于活动 Console 会话；CLI 子进程补入缺失的真实 `SESSIONNAME=Console` 后，`probe --json` 返回在线，`list-groups --query '售前客服群' --limit 10 --json` 在本地库唯一命中。以功能分支源码执行一次 `send --session '售前客服群' --text <唯一测试标记> --json`，回执 exit 0、`OK`、`effect=applied`、`verification=local-record`，本地库出站 `message_id=1987`；驱动日志显示已点击输入区、投递 Ctrl+A/Delete、发送前复核标题为目标群。只读 `read-group --target-name '售前客服群' --limit 20 --json` exit 0，唯一测试标记在最近 20 条中出现 1 次，ID 同为 1987。该证据确认本机客户端动作与本地记录，不能证明群成员已收到或客户机已安装新版。没有第二次发送、agent2 部署、客户端安装或 master 合并。
