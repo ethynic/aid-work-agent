@@ -131,8 +131,9 @@ class ImageVLConfig(BaseModel):
 
     白名单模式与 ResumeVLConfig 一致：显式指定其他模型必须命中 allowed_models。
     """
-    model: str = "qwen/qwen-vl-plus"
-    allowed_models: List[str] = Field(default_factory=lambda: ["qwen/qwen-vl-plus", "qwen/qwen-vl-max"])
+    # 2026-11-06：qwen-vl-plus/qwen-vl-max 旧代模型百炼已下线（agent2 实测 404），定版 qwen3-vl-plus
+    model: str = "qwen/qwen3-vl-plus"
+    allowed_models: List[str] = Field(default_factory=lambda: ["qwen/qwen3-vl-plus"])
 
 
 class ImageGenConfig(BaseModel):
@@ -516,7 +517,8 @@ class BillingConfig(BaseModel):
     - asr_usage_factor: 语音识别用量系数，ASR 调用次数 × 单价 × 系数 = 积分用量
       阿里云 NLS 一句话识别按次计费
     """
-    usage_factor: int = 100
+    # 2026-11-06 定版 50：积分售价 0.1 元/积分下的正式用量系数（此前 100 为早期占位）
+    usage_factor: int = 50
     video_gen_usage_factor: int = 33
     embedding_usage_factor: int = 100
     asr_usage_factor: int = 100
