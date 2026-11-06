@@ -1347,3 +1347,106 @@ agent2 测试反馈（2026-10-20 11:20 前后，实际会话样本《详细答�
 **调整**：修订 §14.1/§14.2 中「短表格加固定提示，不总结」的决策。进入完整 MD 路径（超长、真实表格或正文图片）的答复一律以 §14.4.1 确定性原文前缀算法作文字呈现：表格投影为「字段：值」顺序文本，投影整体可放下则全量直发，超出则前缀 + 省略号，均含附件提示并受 500 字符与渠道字节上限约束；投影为空或失败才退回固定提示。`summary_mode=llm` 的模型摘要仍仅在超长正文触发——短表格投影即原文本身，无需模型压缩，短表格回复不产生摘要模型费用。
 
 **实现**：`prepare_reply` 移除「未超长即固定提示」分支，`build_prefix_preview` 统一应用于全部文件路径回复，mode 仍区分 prefix/notice/llm/image。更新与新增单测 3 项（短表格前缀投影、长投影截断、短图片渲染失败前缀），定向回归：reply_delivery 单测 38、集成 13、format/budget/adapter 102 全部通过；待部署真机验收。
+
+## 十五、人工超时智能体接管（2026-11-06 设计）
+
+### 15.1 背景与目标
+
+会话转人工后若人工一直未回复也未结束会话，客户处于「无人应答」状态：智能体期消息处理逻辑（§八）在远程状态为人工接待（remote=3）时一律跳过 AI，客户消息只落库不回复，直到客户主动命中 `exit_human_keywords` 退出人工或人工结束会话。本节设计「人工超时智能体接管」：客户在人工期发来新消息时，若人工超过配置时限未有任何发言，自动结束人工会话并切回智能体接待，消除客户被晾置的体验空洞。
+
+**企业微信状态约束（已由现有代码验证）**：人工接待（3）经 API 只能流转到结束会话（4），无法直接切回智能助手接待（1）——`WeComKfAdapter.end_human_service` docstring 明确记载该状态图结论。因此接管语义只能是「结束本次人工会话 → 客户重新发消息 → 智能体接待」，不存在无感热切换路径。
+
+### 15.2 触发机制与判定
+
+**触发时机**：事件驱动，不做后台轮询。仅在客户发来新消息、且远程状态校准后仍为 remote=3 的分支（`channel_routes.py` 人工期跳过 AI 处）插入判定。客户不发消息则无接管需求，无需定时器。
+
+**超时基准 T0** = 以下两者的较大者：
+
+1. `metadata.last_transferred_at`（转人工时刻，`transfer_to_human` 工具已写入）
+2. `metadata.last_servicer_reply_at`（人工最后发言时刻，冗余字段，见下）
+
+`last_servicer_reply_at` 由 `_persist_kf_servicer_message`（员工消息 origin=5 落库，`metadata.source='servicer'`）在入库时顺手 `update_session` 冗余写入，判定时 O(1) 读取会话元信息，不查 `channel_messages`。该字段语义为「人工在本次转接周期内的最近活动」，员工在人工期任何发言（含图片/文件的占位落库）都会刷新，天然实现「人工有动作就重置计时」。
+
+**判定式**：`本条客户消息 send_time - T0 >= timeout_minutes`。使用消息自身时间戳而非服务器当前时间，与 `_is_stale_kf_message`（30 分钟旧消息过滤）同口径，避免 cursor 积压重放场景误判接管。
+
+**豁免条件**（任一命中则不接管，走原跳过 AI 路径）：
+
+| 条件 | 来源 | 理由 |
+|---|---|---|
+| 未配置超时或配置为 0 | `kf_config.human_takeover_timeout_minutes` | 默认禁用，显式开启才生效 |
+| `transfer_reason` 不在白名单 | `metadata.transfer_reason` + `kf_config.human_takeover_reasons` | `user_request`（用户明确要求人工）违背用户意愿；`complaint`（投诉/情绪强烈）AI 接管易火上浇油。默认白名单 `["out_of_scope", "repeated_failure", "other"]` |
+| 客户消息命中 `exit_human_keywords` | 既有 `should_exit_human` 判断在前 | 客户主动退出路径保持不变，优先级高于超时接管 |
+
+`transfer_source` 目前恒为 `agent`（转人工仅由工具触发），若未来出现人工侧主动转接入口且无 `transfer_reason`，缺省视为不可豁免（按白名单判定），不做静默特判。
+
+### 15.3 配置设计
+
+沿用 `kf_config`（租户渠道配置 JSON，`tenant_channel_configs`），与 `servicer_userid_list` / `exit_human_keywords` / `allow_agent_transfer` 同层，不新增全局 Settings/YAML 节点：
+
+| 字段 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `human_takeover_timeout_minutes` | int | 0（禁用） | 人工无发言超过 N 分钟且客户发来新消息时接管；建议值 10 |
+| `human_takeover_reasons` | list\<str\> | `["out_of_scope", "repeated_failure", "other"]` | 允许接管的转人工原因白名单，枚举值同 `TransferToHumanInput.reason` |
+
+前端 `ChannelConfig.vue` 客服账号表单同步新增两项（超时分钟数输入框 + 原因多选），并按 frontend_dev.md「UI 内嵌帮助文字同步规范」补帮助文字（说明默认禁用、豁免语义、与退出人工关键词的关系）。
+
+### 15.4 接管动作与状态流转
+
+接管复用既有退出人工路径 `_exit_kf_human_service` 的核心动作，在其之上补充接管专属语义。单条消息处理内顺序：
+
+```mermaid
+flowchart TD
+    A[客户消息 remote=3] --> B{命中 exit_human_keywords}
+    B -->|是| C[既有退出路径 保持不变]
+    B -->|否| D{超时判定 + 豁免判定}
+    D -->|不接管| E[customer_human 落库 跳过 AI]
+    D -->|接管| F[end_human_service 3->4]
+    F -->|成功或 95016 已结束| G[本地 metadata 写入接管字段]
+    F -->|失败| E
+    G --> H[发送接管提示语]
+    H --> I[system 标记消息 agent_takeover_marker]
+    I --> J[触发消息按 customer_human 落库 本轮不 AI 回复]
+```
+
+1. **结束会话**：`end_human_service`（3→4）。errcode=95016 时沿用现有校准（查远程已为 4 视为成功）；其他失败放弃接管，消息按原路径落库，状态不回滚。
+2. **本地状态**：`metadata` 增量写入 `service_state=4` + 审计字段 `agent_takeover_at`（接管时刻）、`agent_takeover_reason`（命中的转人工原因）、`agent_takeover_timeout`（生效阈值），便于事后统计接管率与阈值调优。`last_servicer_reply_at`、`last_transferred_at` 保留不清除（历史事实）。
+3. **客户提示语**：发送一条纯文本，如「人工客服暂时无人响应，已为您转回智能助手接待，请重新发送您的问题，我将为您解答。」发送失败吞异常留日志（与 `_exit_kf_human_service` 一致），不阻断。
+4. **system 标记消息**：向 `channel_messages` 写入 `kind=agent_takeover_marker` 的 role=system 消息（与 `transfer_to_human_marker` 同模式），内容说明「人工超时未回复，智能体已接管」。作用：上下文重建时让模型明确当前处于智能体接待期，不因历史中的转人工字样再次触发 `transfer_to_human`；同时供外部接待页面/排查时区分接管会话。
+5. **触发消息**：按 `customer_human` 口径落库，本轮不交 AI 回复（见 15.5）；客户重新发消息后，远程状态为新会话（remote=1），走正常智能体链路。
+
+**关于「结束会话后 AI 直接回复触发消息」的说明**：`_exit_kf_human_service` 在 end 后成功发送过提示语，说明 state=4 下短消息发送未必被微信拒绝；若真机验证长回复（多段/长图/MD 文件）在 state=4 下也能可靠发送，可在后续版本升级为「接管提示语 + AI 直接回答本条消息」（需本轮内存 flag 跳过发送前远程校验的 remote=4 分支）。该优化存在「提示语说会话已结束、AI 又接着回答」的语义矛盾与发送不可靠风险，首期不做，仅登记方向。
+
+### 15.5 会话上下文语义
+
+session 行按 `channel_user_id` 复用（`get_or_create_session`），接管不新建 session：历史中人工发言（`[人工客服] ` 前缀）、客户消息、两条 system 标记（转人工完成 + 智能体接管）连续可见，客户重发消息后 AI 重建上下文时拥有完整人工期背景，无需人工重新复述问题。接管后的客户消息走智能体期链路，留资状态机、recap、计费均沿既有智能体轮次语义，无新增计费调用点。
+
+### 15.6 联动影响
+
+| 关联面 | 影响 | 改动 |
+|---|---|---|
+| `external_push_human` | 按 `service_state in (3,4)` 门控；接管后回到智能体期，第三方推送由 AI 轮正常链路接管，与「转人工期推送」语义自然衔接 | 无需改动 |
+| 线索人工归属 | `transfer_to_human` 已即时回写 servicer；接管不回写、不清除（人工曾实际参与，归属语义为「最近一次」） | 无需改动 |
+| `lead_refresh` 意向度 | 仅智能体轮触发；人工期消息本就不分析，接管后恢复分析 | 无需改动 |
+| 通知规则引擎 | 可选增强（P2）：人工超时未响应发租户通知，帮助运营发现接待缺口 | 首期不做 |
+| 员工侧感知 | 企微无「机器人接管」通知 API；员工在新消息周期仍可正常接待/再转人工 | 无需改动 |
+
+### 15.7 边界与风险
+
+| 风险 | 分析 | 缓解 |
+|---|---|---|
+| 抢单（人工正在输入但未发出） | 接管瞬间人工恰好要回复，两边先后发言，客户可能收到重复内容 | 阈值默认 10 分钟大幅压缩概率；接管后员工仍可正常发言/接待，实际影响为轻微重复而非服务中断 |
+| 阈值配置过短 | 人工思考/查询耗时被误判超时 | 默认禁用 + 帮助文字建议值；接管有 system 标记可追溯 |
+| 人工长时间未回复期间客户连发多条 | 每条消息独立判定，T0 未刷新则首条超时消息即触发接管，其余随会话结束落库 | 符合预期：接管动作幂等（95016 校准兜底），提示语只发一次 |
+| 提示语与 AI 回复风格不一致 | 提示语为固定文案 | 文案口径纳入渠道文案统一维护 |
+| 接管后员工仍需介入 | 智能体无法解决问题时需再次转人工 | `transfer_to_human` 工具在智能体期依然可用，闭环不变 |
+
+### 15.8 验证计划
+
+- **单测**：超时判定函数（超时触发 / 未超时跳过 / 禁用不触发 / `transfer_reason` 豁免 / 员工最近发言重置基准 / 消息时间戳口径）；接管动作（end 成功 / 95016 已结束 / 失败放弃）；metadata 审计字段与 `agent_takeover_marker` 写入；`_persist_kf_servicer_message` 冗余字段更新。
+- **集成**：remote=3 分支接入点——接管路径不进 AI、原路径不回归；`exit_human_keywords` 优先级高于超时接管。
+- **真机（待部署）**：转人工后人工零发言超时 → 客户重发 → AI 接管全链路（含上下文可见人工期历史、无重复触发转人工）；人工在阈值内发言 → 不接管；complaint 转人工不接管；接管提示语送达。
+- **前端**：客服账号表单新字段保存回读、帮助文字展示。
+
+### 15.9 开发切分
+
+Phase 1（本设计范围）：超时判定 + 接管动作 + 标记/审计 + 配置字段 + 前端表单。Phase 2（登记不做）：state=4 下 AI 直接回复触发消息、人工超时租户通知、接管率统计报表。
