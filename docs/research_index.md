@@ -6,6 +6,7 @@
 
 | 调研主题 | 文档 | 关联功能 |
 |---------|------|---------|
+| 多智能体接入 WeCom CLI 回复能力 | [调研](research/wecom-cli-agent-onboarding-20261107.md) | 2026-11-07：核对在线电商客服手工工具配置，给出可执行的多智能体接入步骤与自动路由缺口。 |
 | WeCom CLI OCR 使用点清单 | [调研](research/wecom-cli-ocr-inventory-20261106.md) | 2026-11-06：9 组原使用场景，区分仍运行的入口、退役脚本与发行包 OCR 依赖。 |
 | 「社会治理智能体」技术要求评估 | [评估](research/social-governance-agent-requirement-assessment.md) | 2026-11-03：高校采购标书 vs 本项目能力对照；约 60% 吻合可投，缺口为工作流编排与知识空间，投标前需定应对策略。 |
 | Runtime 与 CLI 安装升级简化评估 | [评估](research/runtime-cli-install-upgrade-simplicity-review.md) | 2026-10-30：审查安装、任务恢复、验包与信任耦合，建议覆盖升级优先、重装白名单保留配置。 |
