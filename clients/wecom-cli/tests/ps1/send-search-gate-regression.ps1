@@ -32,7 +32,7 @@ function Focus-WeComSearchBox { param($MainHwnd) [void]$script:actions.Add('focu
 function Clear-WeComFocusedInput { param($Hwnd) [void]$script:actions.Add('clear');return $true }
 function Get-WeComTopLevelWindows { if ($script:prior) {return @{Class='SearchResultWindow2';Visible=$true;Pid=7}} }
 function Send-WeComText { param($Hwnd,$Text) [void]$script:actions.Add('query');Assert-True ($Text -eq '陆伟') 'must type the requested query' }
-function Test-WeComSearchClipboardEcho { param($MainHwnd,$Query) [void]$script:actions.Add('echo');return @{matched=$script:echo;restored=$true;reason='copied'} }
+function Test-WeComSearchClipboardEcho { throw 'retired clipboard echo must not run' }
 function Wait-WeComWindow { param($ClassName,$TimeoutMs) [void]$script:actions.Add('wait');if ($script:overlay) {return 202};return 0 }
 function Test-WeComSearchWindowUnchanged { param($Before,$After) return $true }
 function Send-WeComEnter { param($Hwnd) [void]$script:actions.Add('enter') }
@@ -44,9 +44,9 @@ function Invoke-Scenario([string]$Name) {
 }
 [WeComSearchFocusWin32]::Focus=[IntPtr]101
 [WeComSearchFocusWin32]::Caret=[IntPtr]101
-$script:echo=$true;$script:overlay=$true;$script:prior=$false;$script:foreign=$false
+$script:overlay=$true;$script:prior=$false;$script:foreign=$false
 $r=Invoke-Scenario 'valid search'
-Assert-True (-not $r.failure -and ($r.actions -join ',') -eq 'focus,clear,query,echo,wait,enter') 'validated query and fresh result panel may Enter'
+Assert-True (-not $r.failure -and ($r.actions -join ',') -eq 'focus,clear,query,wait,enter') 'caret-confirmed query and fresh result panel may Enter without clipboard echo'
 
 [WeComSearchFocusWin32]::X=600;[WeComSearchFocusWin32]::Y=700
 $r=Invoke-Scenario 'caret in message editor'
@@ -56,10 +56,7 @@ Assert-True ($r.failure -like 'WECOMDRIVE|UI_CHANGED|*' -and ($r.actions -join '
 $r=Invoke-Scenario 'no caret'
 Assert-True ($r.failure -like 'WECOMDRIVE|UI_CHANGED|*' -and ($r.actions -join ',') -eq 'focus') 'missing search caret must prevent draft clearing and Enter'
 [WeComSearchFocusWin32]::Caret=[IntPtr]101
-$script:echo=$false
-$r=Invoke-Scenario 'query not copied from search'
-Assert-True ($r.failure -like 'WECOMDRIVE|UI_CHANGED|*' -and $r.actions[-1] -eq 'echo' -and -not ($r.actions -contains 'enter')) 'unproven query must not Enter'
-$script:echo=$true;$script:overlay=$false
+$script:overlay=$false
 $r=Invoke-Scenario 'no new result panel'
 Assert-True ($r.failure -like 'WECOMDRIVE|UI_CHANGED|*' -and $r.actions[-1] -eq 'wait' -and -not ($r.actions -contains 'enter')) 'missing search result panel must not Enter'
 $script:overlay=$true;$script:prior=$true

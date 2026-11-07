@@ -317,10 +317,6 @@ function Open-WeComNamedChat([int64]$Hwnd, [string]$Name) {
     if ($prior.Count -ne 0) { Throw-DriverError 'UI_CHANGED' '清空搜索框后仍有结果面板，未输入搜索词' }
     Send-WeComText -Hwnd $Hwnd -Text $Name
     Start-Sleep -Milliseconds 400
-    $echo = Test-WeComSearchClipboardEcho -MainHwnd $Hwnd -Query $Name
-    if (-not $echo.matched -or -not $echo.restored) {
-        Throw-DriverError 'UI_CHANGED' ('搜索词全文未由企微确认（' + $echo.reason + '），未按 Enter')
-    }
     $overlayHwnd = Wait-WeComWindow -ClassName 'SearchResultWindow2' -TimeoutMs 8000
     if ($overlayHwnd -eq 0) { Throw-DriverError 'UI_CHANGED' '本次搜索结果面板未出现，未按 Enter' }
     $overlay = Get-WeComWindowInfo ([IntPtr]$overlayHwnd)
