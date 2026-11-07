@@ -147,6 +147,8 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261107-0949 | 企微搜索门禁真机回炉 | ✅ 已完成开发；唯一搜索、标题核对及文本发送真机通过。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w28-搜索门禁真机回炉2026-11-07) |
+| 20261107-1004 | 企微标题复制剪贴板诊断 | ✅ 已完成开发；定位远控剪贴板阻塞，可用状态下发送与本地库核验通过。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w29-标题复制剪贴板诊断2026-11-07) |
 | 20261015-1457 | Excel读取性能与正式库KB补迁 | ✅ 已完成开发；正式库240份已补迁，Excel修复独验96通过，代码未部署。 | [设计](tools/excel-read-performance-design.md) | [计划](plans/plan-excel-read-performance.md) |
 | 20261015-1516 | BOSS部分筛选项不可读时继续执行 | ✅ 已完成开发：跳过未匹配条件，独立测试与CR通过，待部署验收。 | [设计](design/recruiting/resume-job-matching-design.md) | [计划](plans/desktop-automation/plan-boss-partial-filter-discovery.md) |
 | 20261013-1410 | BOSS 会员筛选与聊天补充条件 | ✅ 已完成开发；会员滚动和聊天补充条件已通过真机验证。 | [设计](design/recruiting/resume-job-matching-design.md) | [开发计划](plans/desktop-automation/plan-boss-vip-dynamic-filters.md) |
