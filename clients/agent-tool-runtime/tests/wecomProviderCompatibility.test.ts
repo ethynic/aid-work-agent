@@ -58,16 +58,46 @@ test('a failed capability connection is a safe pre-send failure and the next cal
   assert.equal(launches, 2, 'a transient startup failure is not cached as missing capability')
 })
 
-test('directory is advertised only after actual MCP schema inspection and leaves old reads available', async t => {
+test('page-only directory keeps page access but cannot advertise or execute Agent search', async t => {
   const manager = new ProviderManager(fakeProviderEntry(), { env: { FAKE_WECOM_DIRECTORY: '1' } })
   t.after(() => manager.shutdown())
   const config: RuntimeConfig = { server: 'https://fixture.invalid', device_id: 'fixture', providers: { wecom: { entry: fakeProviderEntry() } } }
   assert.equal(manager.wecomDirectoryReady, false)
   await manager.inspectWecomBusinessTools()
   assert.equal(manager.wecomDirectoryReady, true)
-  assert.ok((deviceCapabilities(config, manager.wecomBusinessReady, manager.wecomDirectoryReady).capabilities as string[]).includes('wecom_session_directory'))
+  assert.equal(manager.wecomDirectorySearchReady, false)
+  const capabilities = deviceCapabilities(config, manager.wecomBusinessReady, manager.wecomDirectoryReady, manager.wecomDirectorySearchReady).capabilities as string[]
+  assert.ok(capabilities.includes('wecom_session_directory'))
+  assert.ok(!capabilities.includes('wecom_session_directory_search'))
   assert.equal((await manager.callTool('wecom_session_directory', { mode: 'list' })).success, true)
+  const search = await manager.callTool('wecom_session_directory', { mode: 'search', query: '沟通' })
+  assert.equal(search.code, 'TOOL_NOT_SUPPORTED')
   assert.equal((await manager.callTool('wecom_read_session', { session: 'fixture' })).success, true)
+})
+
+test('search directory capability requires actual MCP mode, type and query schema', async t => {
+  const manager = new ProviderManager(fakeProviderEntry(), { env: {
+    FAKE_WECOM_DIRECTORY: '1', FAKE_WECOM_DIRECTORY_SEARCH: '1' } })
+  t.after(() => manager.shutdown())
+  const config: RuntimeConfig = { server: 'https://fixture.invalid', device_id: 'fixture', providers: { wecom: { entry: fakeProviderEntry() } } }
+  await manager.inspectWecomBusinessTools()
+  assert.equal(manager.wecomDirectoryReady, true)
+  assert.equal(manager.wecomDirectorySearchReady, true)
+  const capabilities = deviceCapabilities(config, manager.wecomBusinessReady, manager.wecomDirectoryReady, manager.wecomDirectorySearchReady).capabilities as string[]
+  assert.ok(capabilities.includes('wecom_session_directory'))
+  assert.ok(capabilities.includes('wecom_session_directory_search'))
+  assert.equal((await manager.callTool('wecom_session_directory', { mode: 'search', query: '沟通', type: 'group' })).success, true)
+})
+
+test('search mode without type filter remains a page capability only', async t => {
+  const manager = new ProviderManager(fakeProviderEntry(), { env: {
+    FAKE_WECOM_DIRECTORY: '1', FAKE_WECOM_DIRECTORY_SEARCH_NO_TYPE: '1' } })
+  t.after(() => manager.shutdown())
+  await manager.inspectWecomBusinessTools()
+  assert.equal(manager.wecomDirectoryReady, true)
+  assert.equal(manager.wecomDirectorySearchReady, false)
+  assert.equal((await manager.callTool('wecom_session_directory', { mode: 'list' })).success, true)
+  assert.equal((await manager.callTool('wecom_session_directory', { mode: 'search', query: '孙程' })).code, 'TOOL_NOT_SUPPORTED')
 })
 
 test('shutdown waits for an in-flight discovery launch to close before resource-stop can finish', async () => {

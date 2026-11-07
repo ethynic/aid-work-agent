@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { z } from 'zod'
 import {
   buildManifest,
   canonicalSerialize,
@@ -14,8 +15,9 @@ import {
   manifestTools,
   staticManifestFields,
 } from '../src/mcp/manifest.js'
-import { TOOL_NAMES } from '../src/mcp/toolDefs.js'
+import { TOOL_DEFS, TOOL_NAMES } from '../src/mcp/toolDefs.js'
 import { getOperationEntry, OPERATION_NAMES } from '../src/operations/registry.js'
+import { createWecomSessionDirectoryOperation } from '../src/operations/sessionDirectory.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -131,6 +133,41 @@ test('tool schema 单一来源：manifestTools 的 inputSchema 由 toolDefs 推�
   assert.equal(readProps.target_name!.type, 'string')
   assert.equal(readProps.max_pages!.type, 'integer')
   assert.equal(readProps.since_days!.type, 'integer')
+})
+
+test('directory MCP input accepts name search while preserving page modes', () => {
+  const definition = TOOL_DEFS.find(tool => tool.name === 'wecom_session_directory')!
+  const input = z.object(definition.zodShape)
+  for (const args of [
+    { mode: 'list' }, { mode: 'preview', session: 'ws1.x' },
+    { mode: 'resolve', sessions: ['ws1.x'] },
+    { mode: 'search', query: '孙程' },
+    { mode: 'search', query: '沟通', type: 'group', limit: 50 },
+  ]) assert.equal(input.safeParse(args).success, true, JSON.stringify(args))
+  for (const args of [
+    { mode: 'search', query: '沟通', type: 'unknown' },
+    { mode: 'search', query: '沟通', limit: 51 },
+  ]) assert.equal(input.safeParse(args).success, false, JSON.stringify(args))
+  const props = manifestTools().find(tool => tool.name === 'wecom_session_directory')!.inputSchema.properties as
+    Record<string, { type?: string; enum?: string[] }>
+  assert.ok(props.mode!.enum!.includes('search'))
+  assert.deepEqual(props.type!.enum, ['contact', 'group', 'any'])
+  assert.equal(props.query!.type, 'string')
+  assert.equal(props.limit!.type, 'integer')
+})
+
+test('directory operation rejects incomplete search before opening local data', async () => {
+  const op = createWecomSessionDirectoryOperation()
+  const context = { signal: new AbortController().signal, progress() {} }
+  for (const args of [
+    { mode: 'search', query: '  ' },
+    { mode: 'search', query: '沟通', cursor: 'wdir1.old' },
+    { mode: 'search', query: '沟通', type: 'unknown' },
+    { mode: 'search', query: '沟通', limit: 51 },
+  ]) {
+    const result = await op.execute(args as never, context)
+    assert.equal(result.code, 'INVALID_ARGUMENT', JSON.stringify(args))
+  }
 })
 
 test('toolDefs ↔ registry 一致性守卫：每个 toolDef 可取到 operation，未注册名 fail-loud', () => {

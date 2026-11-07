@@ -88,7 +88,8 @@ TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
         "provider_id": "ai.aidwork.wecom",
         "min_provider_version": "1.0.0",
         "execution_target": "local_required",
-        "agent_tools": ["wecom_read_session", "wecom_message_send", "wecom_read_sessions"],
+        "agent_tools": ["wecom_read_session", "wecom_message_send", "wecom_read_sessions",
+                        "wecom_session_directory"],
         "agent_tool_aliases": {
             "wecom_read_session": ["wecom_read_session", "wecom_read_sessions"],
             "wecom_unread_list": ["wecom_read_session", "wecom_read_sessions"],

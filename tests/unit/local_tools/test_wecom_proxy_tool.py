@@ -117,6 +117,14 @@ SUCCEEDED_INVOCATION = {
 
 
 class TestCatalogWecomEntry:
+    def test_agent_surface_adds_only_readonly_directory(self):
+        """名称检索应可见，但不能顺带开放内部导航或媒体写工具。"""
+        assert catalog.agent_tools("wecom") == [
+            "wecom_read_session", "wecom_message_send", "wecom_read_sessions",
+            "wecom_session_directory",
+        ]
+        assert set(catalog.agent_tools("wecom")) <= set(catalog.allowed_tools("wecom"))
+
     def test_wecom_entry_registered_with_contract_fields(self):
         entry = catalog.TRUSTED_PROVIDERS["wecom"]
         assert entry["provider_id"] == "ai.aidwork.wecom"
@@ -254,6 +262,44 @@ class TestWecomInputValidation:
         assert '不发送、不搜索切换UI' in read
         assert 'INVALID_ARGUMENT' in WecomReadSessionTool.InputModel.model_fields['max_pages'].description
         assert 'send_time' in WecomReadSessionTool.InputModel.model_fields['since_days'].description
+
+    def test_directory_search_for_name_resolution_before_read_or_send(self):
+        """错名与同名必须给 Agent 可用候选，不能直接推断发送目标。"""
+        tool = WecomSessionDirectoryTool()
+        definition = tool.to_tool_definition()
+        assert 'search' in definition['input_schema']['properties']['mode']['enum']
+        assert 'wecom_session_directory' in WecomReadSessionTool().description
+        assert 'wecom_session_directory' in WecomMessageSendTool().description
+        for phrase in ('match_count', 'same_name', 'candidates', '不自动', '完整名称', '只读'):
+            assert phrase in definition['description']
+        assert tool.validate_parameters(mode='search', query='孙程')
+        assert tool.validate_parameters(mode='search', query='沟通', type='group', limit=50)
+        assert tool.validate_parameters(mode='search', query='孙晨', type='contact', limit=1)
+        assert tool.validate_parameters(mode='search', query='孙晨', type='any')
+
+    @pytest.mark.parametrize('arguments', [
+        {'mode': 'search'}, {'mode': 'search', 'query': ''},
+        {'mode': 'search', 'query': '  '}, {'mode': 'search', 'query': 'x' * 101},
+        {'mode': 'search', 'query': '沟通', 'type': 'unknown'},
+        {'mode': 'search', 'query': '沟通', 'limit': 0},
+        {'mode': 'search', 'query': '沟通', 'limit': 51},
+        {'mode': 'search', 'query': '沟通', 'limit': 1.5},
+        {'mode': 'search', 'query': '沟通', 'cursor': 'wdir1.x'},
+        {'mode': 'search', 'query': '沟通', 'session': 'ws1.x'},
+        {'mode': 'search', 'query': '沟通', 'sessions': ['ws1.x']},
+        {'mode': 'list', 'type': 'group'},
+        {'mode': 'preview', 'session': 'ws1.x', 'type': 'contact'},
+        {'mode': 'resolve', 'sessions': ['ws1.x'], 'type': 'group'},
+    ])
+    def test_directory_rejects_invalid_search_or_mode_combinations(self, arguments):
+        assert not WecomSessionDirectoryTool().validate_parameters(**arguments)
+
+    def test_directory_keeps_page_modes(self):
+        """Agent 投影不能改变既有页面列表、预览和核验请求。"""
+        tool = WecomSessionDirectoryTool()
+        assert tool.validate_parameters(mode='list', query='售前', limit=50)
+        assert tool.validate_parameters(mode='preview', session='ws1.x', limit=3)
+        assert tool.validate_parameters(mode='resolve', sessions=['ws1.x'])
 
     def test_probe_and_unread_accept_no_args(self):
         assert WecomProbeTool().validate_parameters() is True

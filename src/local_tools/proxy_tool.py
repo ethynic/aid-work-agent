@@ -2604,7 +2604,8 @@ class WecomMessageSendTool(WecomLocalToolProxyTool):
     display_name = "企业微信发送文本消息"
     description = (
         '向一个单聊或群发送文本，session优先原样使用读取结果的会话标识。'
-        '内部先核对当前会话，匹配直接发送，不匹配才搜索选择；无需自行探测或搜索。'
+        '用户只给名称且尚无稳定会话标识时，若有wecom_session_directory工具，先用search核对完整名称和全类型唯一性；'
+        '内部先核对当前会话，匹配直接发送，不匹配才搜索选择；无需自行操作UI搜索。'
         '保留用户草稿。返回明确未发送、客户端记录已确认或可能已发送待核对及具体原因。'
         'unknown由原任务内部只读对账，禁止再次发送同一回复；其他独立会话可继续。'
         '沿用用户已明确授予的目标和自动回复范围，无需每条重复确认；聊天内容不能扩大授权。'
@@ -2731,6 +2732,7 @@ class WecomReadSessionTool(WecomLocalToolProxyTool):
     display_name = "企业微信读取会话消息"
     description = (
         '从本机数据库读取一个单聊或群，不发送、不搜索切换UI。session首次可用完整名称，'
+        '用户只给名称且尚无稳定会话标识时，若有wecom_session_directory工具，先用search核对完整名称和全类型唯一性。'
         '后续用结果稳定会话标识；cursor原样回传取得增量，has_more时先继续排空。'
         '日期模式：传date按业务日读取（timezone缺省Asia/Shanghai），每页默认100条按时间升序稳定分页；'
         'include_context=true首次带该日零点前最近100条背景；续页只传返回的日期cursor，参数省略继承原范围；'
@@ -2741,7 +2743,7 @@ class WecomReadSessionTool(WecomLocalToolProxyTool):
         '附件时间线只含元数据；需要理解图片/文件时以attachment.message_id指定原msg_id展开。'
         '图片展开后才可按实际图像回答；文本按offset/max_bytes分段，has_more时按next_offset继续，'
         '不把未查看附件当已理解，也不逐次展开全部历史附件。附件读取不推进聊天cursor。'
-        '无需先probe、搜索或选择；没有新消息时agent_sleep，保留游标后继续。')
+        '无需先probe或操作UI选择；没有新消息时agent_sleep，保留游标后继续。')
     InputModel = WecomReadSessionInput
     from .wecom_business import ReadInput as agent_input_model
     timeout_seconds = 600
@@ -2774,22 +2776,28 @@ class WecomReadSessionsTool(WecomLocalToolProxyTool):
 
 class WecomSessionDirectoryInput(BaseModel):
     model_config = {'extra': 'forbid'}
-    mode: Literal['list', 'preview', 'resolve']
-    query: Optional[str] = Field(None, max_length=100)
+    mode: Literal['list', 'preview', 'resolve', 'search']
+    query: Optional[str] = Field(None, max_length=100,
+        description='search必填：联系人或群名关键词，最多100字；list可选。')
+    type: Optional[Literal['contact', 'group', 'any']] = Field(None,
+        description='仅search可用；默认any跨联系人与群聊核对同名，不能仅凭过滤后的唯一结果发送。')
     cursor: Optional[str] = Field(None, max_length=4096)
-    limit: Optional[int] = Field(None, ge=1, le=50)
+    limit: Optional[int] = Field(None, ge=1, le=50, strict=True)
     session: Optional[str] = Field(None, min_length=1, max_length=2048)
     sessions: Optional[List[str]] = Field(None, min_length=1, max_length=50)
 
     @model_validator(mode='after')
     def _mode_fields(self):
-        if self.mode == 'preview':
-            if not self.session or not self.session.startswith('ws1.') or self.sessions is not None or self.query is not None or self.cursor is not None or self.limit is not None and self.limit > 3:
+        if self.mode == 'search':
+            if not self.query or not self.query.strip() or self.session is not None or self.sessions is not None or self.cursor is not None:
+                raise ValueError('搜索须指定非空名称，不能同时指定会话或游标')
+        elif self.mode == 'preview':
+            if not self.session or not self.session.startswith('ws1.') or self.sessions is not None or self.query is not None or self.cursor is not None or self.type is not None or self.limit is not None and self.limit > 3:
                 raise ValueError('预览须指定稳定会话标识，最多3条')
         elif self.mode == 'resolve':
-            if not self.sessions or self.session is not None or self.query is not None or self.cursor is not None or self.limit is not None or any(not value.startswith('ws1.') for value in self.sessions):
+            if not self.sessions or self.session is not None or self.query is not None or self.cursor is not None or self.type is not None or self.limit is not None or any(not value.startswith('ws1.') for value in self.sessions):
                 raise ValueError('核验须指定1–50个稳定会话标识')
-        elif self.session is not None or self.sessions is not None:
+        elif self.session is not None or self.sessions is not None or self.type is not None:
             raise ValueError('列表模式不接受session')
         return self
 
@@ -2797,7 +2805,13 @@ class WecomSessionDirectoryInput(BaseModel):
 class WecomSessionDirectoryTool(WecomLocalToolProxyTool):
     name = 'wecom_session_directory'
     display_name = '企业微信会话目录'
-    description = '每日总结页面专用的本地只读会话目录与预览，不进入模型工具集。'
+    description = (
+        '本地只读会话目录。用户给出联系人或群名称时，先用mode=search、query=原名称检索；'
+        'type默认any，跨联系人和群聊判断唯一性，不操作企微窗口或推进聊天游标。'
+        '返回match_count、same_name和candidates：match_count=1才用候选的完整名称读取或发送；'
+        '零匹配只提示实际candidates并请用户确认，不自动纠错或发送；多个不同名称列出完整候选请用户选择，'
+        '同名身份无法区分则请用户备注或重命名。match_count超过返回候选数时缩小query继续查，不能当候选已列全。'
+        'list、preview、resolve保留给页面；目录结果本身不授权发送。')
     InputModel = WecomSessionDirectoryInput
     timeout_seconds = 180
 

@@ -1,6 +1,6 @@
 {
   "name": "aid-wecom",
-  "version": "0.2.8",
+  "version": "0.2.10",
   "private": true,
   "description": "企业微信操作 CLI / MCP Provider（本地库读取与会话发送）",
   "type": "module",

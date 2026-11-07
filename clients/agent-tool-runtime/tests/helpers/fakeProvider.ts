@@ -57,6 +57,8 @@ function sleep(ms: number, signal?: AbortSignal): Promise<boolean> {
 export async function startFakeProvider(): Promise<void> {
   const server = new McpServer({ name: 'fake-provider', version: '0.0.1' })
   const legacyWecom = process.env.FAKE_WECOM_LEGACY === '1'
+  const searchDirectory = process.env.FAKE_WECOM_DIRECTORY_SEARCH === '1'
+  const searchModeOnly = process.env.FAKE_WECOM_DIRECTORY_SEARCH_NO_TYPE === '1'
 
   for (const name of TOOL_NAMES) {
     if (legacyWecom && name === 'wecom_read_sessions') continue
@@ -67,7 +69,11 @@ export async function startFakeProvider(): Promise<void> {
         title: name,
         description: `fake ${name}`,
         inputSchema: {
-          ...(name === 'wecom_session_directory' ? { mode: z.string() } : {}),
+          ...(name === 'wecom_session_directory' ? {
+            mode: z.enum(searchDirectory || searchModeOnly ? ['list', 'preview', 'resolve', 'search'] : ['list', 'preview', 'resolve']),
+            ...(searchDirectory || searchModeOnly ? { query: z.string().optional() } : {}),
+            ...(searchDirectory ? { type: z.enum(['contact', 'group', 'any']).optional() } : {}),
+          } : {}),
           ...(!legacyWecom ? {
             session: z.string().optional(), sessions: z.array(z.string()).optional(),
             cursor: z.string().optional(), limit: z.number().int().optional(),
