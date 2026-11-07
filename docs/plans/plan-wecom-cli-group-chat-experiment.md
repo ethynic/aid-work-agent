@@ -53,7 +53,7 @@ TEST 回炉自测（2026-11-07）：独立 TEST 指出初始 CAS false 分支缺
 
 主控真机验收（2026-11-07）：用户无法关闭远控剪贴板同步，但手动复制后 Win32 owner 变为 WXWork，普通只读 `Get-Clipboard` 在 0.4 秒内返回；复制内容含企微富文本格式，CLI 的原剪贴板保护按设计不接受。主控将剪贴板换为普通测试文字（`UnicodeText/Locale/Text/OEMText`），`search` 唯一命中孙晨后 `select` 在约 14 秒内返回 `OK`，复制标题严格全等“孙晨”，且普通测试文字得到恢复。随后仅执行一次 `send`：发送前基线 `message_id=1733`，驱动标题仍为“孙晨”，本地库确认唯一出站 `message_id=1991`，CLI 返回 `effect=applied`；再次 `read-session --limit 2` 读取到孙晨原提问及完整新增回复。结论限于客户端本地库已记录发送，不代表对方已收到。没有关闭远控连接、部署或合并 master。
 
-Agent 调度验收边界（2026-11-07）：上述 `read-session`、`search`、`select`、`send` 对应已暴露的 `wecom_read_session`、`wecom_chat_search`、`wecom_chat_select`、`wecom_message_send`，但本轮还用了 Agent 工具清单之外的剪贴板读写、Win32 诊断、窗口激活和终端会话环境变量设置。因此只证明 CLI/驱动在人工准备后的真实企微与本地库行为，**未证明 Agent 仅用已暴露工具可独立完成全链路**。后续 Agent 验收须在实际 Runtime/MCP 环境中仅按工具 schema 调用，读取会话、唯一搜索、选择、发送、只读对账；遇到剪贴板异常应返回工具错误并报告，不通过未暴露命令修环境。孙晨这条消息已确认入库，不能为补验收重发同一条。
+Agent 调度验收边界（2026-11-07，更正工具口径）：Provider 的 CLI/MCP 清单不等于模型可见工具。当前服务端 `src/local_tools/catalog.py` 的 `agent_tools` 只有 `wecom_read_session`（读单会话）、`wecom_read_sessions`（批量读会话并返回会话与待回复候选）、`wecom_message_send`（发送）；独立的 `wecom_session_directory` 仅供页面使用，不进入模型工具集。`wecom_chat_search`、`wecom_chat_select` 虽在 Provider MCP/CLI 清单，当前并未投影给 Agent。上述真机实验在终端直接调用了这两个非 Agent 业务工具，还用了剪贴板读写、Win32 诊断、窗口激活和终端会话环境变量设置，因此只证明 CLI/驱动在人工准备后的真实企微与本地库行为，**未证明 Agent 仅用已暴露工具可独立完成全链路**。后续应在实际 Runtime 中仅调用当次模型可见的工具定义，由 `wecom_message_send(session,text)` 内部完成目标定位与发送，结果未知时由系统内部只读对账；遇到剪贴板异常应返回工具错误，不通过未暴露命令修环境。孙晨这条消息已确认入库，不能为补验收重发同一条。用户记忆中的独立“读会话列表”若指 `wecom_session_directory`，它与当前模型投影不一致，需单独确认是否要作为第四个业务工具暴露。
 
 ## W28 搜索门禁真机回炉（2026-11-07）
 
