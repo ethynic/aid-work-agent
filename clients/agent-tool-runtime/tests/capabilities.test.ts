@@ -75,18 +75,26 @@ test('配置 wecom entry：providers 数组含 wecom，manifests 含独立摘要
   const capabilities = caps['capabilities'] as string[]
   assert.ok(!capabilities.includes('wecom_read_sessions'), 'a configured path does not prove the new plugin capability')
   assert.ok(!capabilities.includes('wecom_session_directory'), 'a configured path does not prove the picker capability')
+  assert.ok(!capabilities.includes('wecom_session_directory_search'))
   const verified = deviceCapabilities(makeConfig({ providers: { wecom: { entry: existingEntry } } }), true)
   assert.ok((verified.capabilities as string[]).includes('wecom_read_sessions'))
   assert.ok(!(verified.capabilities as string[]).includes('wecom_session_directory'))
+  assert.ok(!(verified.capabilities as string[]).includes('wecom_session_directory_search'))
   assert.equal((verified.provider_manifests as Record<string, Record<string, unknown>>).wecom!.manifest_digest,
     manifestDigestOf({ ...TRUSTED_MANIFESTS.wecom!, tools: TRUSTED_MANIFESTS.wecom!.tools.filter(name => name !== 'wecom_session_directory') }))
   const directoryVerified = deviceCapabilities(makeConfig({ providers: { wecom: { entry: existingEntry } } }), true, true)
   assert.equal((directoryVerified.provider_manifests as Record<string, Record<string, unknown>>).wecom!.manifest_digest, manifestDigestFor('wecom'))
+  assert.ok((directoryVerified.capabilities as string[]).includes('wecom_session_directory'))
+  assert.ok(!(directoryVerified.capabilities as string[]).includes('wecom_session_directory_search'), 'page-only schema does not prove search')
+  const searchVerified = deviceCapabilities(makeConfig({ providers: { wecom: { entry: existingEntry } } }), true, true, true)
+  assert.ok((searchVerified.capabilities as string[]).includes('wecom_session_directory_search'))
+  assert.equal((searchVerified.provider_manifests as Record<string, Record<string, unknown>>).wecom!.manifest_digest,
+    manifestDigestFor('wecom'), 'search is a feature capability, not a new trusted tool')
   for (const tool of ['wecom_probe', 'wecom_message_send', 'wecom_send_status', 'wecom_group_poll', 'wecom_send_image', 'wecom_send_file', 'wecom_read_session', 'wecom_unread_list']) {
     assert.ok(capabilities.includes(tool), `${tool} 应在 capabilities`)
   }
   // 未接入 runtime 受信面的工具不得上报
-  for (const tool of ['wecom_chat_search', 'wecom_chat_select', 'wecom_watch_poll', 'wecom_add_customer']) {
+  for (const tool of ['wecom_chat_search', 'wecom_chat_select', 'wecom_watch_poll']) {
     assert.ok(!capabilities.includes(tool), `${tool} 未接入不得上报`)
   }
 })

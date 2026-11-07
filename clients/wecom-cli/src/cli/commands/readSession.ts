@@ -1,28 +1,8 @@
 /**
- * CLI 子命令 read-session：读取与目标的会话消息（只读消息内容）。
- *
- * 用法（target-ref 与 target-name 二选一，M11a）：
- *   aid-wecom read-session --target-ref <ref> [--max-pages N] [--since-days N] [--json]
- *   aid-wecom read-session --target-name <会话名> [--max-pages N] [--since-days N] [--json]
- *
- * 日期模式（wecom-conversation 设计 §4.1，稳定 session 单会话）：
- *   aid-wecom read-session --session <ws1.…> --date YYYY-MM-DD [--timezone IANA]
- *                          [--include-context] [--limit N] [--cursor <wd1.…>] [--json]
- * 续页只传返回的日期 cursor（wd1.），date/时区/背景参数省略即继承原范围。
- *
- * --target-name 直达模式：CLI 内部自动 search 定位（身份校验 + 唯一匹配，歧义拒绝），
- * data 附 resolved_target；其余契约与 --target-ref 模式一致。
- *
- * M10b 双通道解析（M10c 起直连 token）：配置 AID_WECOM_SERVER_URL +
- * AID_WECOM_SERVER_TOKEN 时走服务端模型通道（按次计积分，data.channel="model"，
- * 附 model_usage/billing/model_latency_ms）；未配置或模型不可用（网络/超时/5xx）
- * 时本地 OCR 兜底（data.channel="ocr"）；余额不足（402）与 token 配置错误直接
- * 报错不降级。详见 README M10b 章节。
- *
- * 副作用提示：进入会话会清除该会话未读角标（企微客户端固有行为，stderr 提示）；
- * 抓取完成后驱动滚回底部恢复原位。M11b 起同名 MCP tool 也暴露（runtime/agent 路径），
- * 本命令仍是 CLI 本地用法（交互提示与 artifact 输出更完整）。
- * （M9 由 read 改名而来，旧 read 动词直接废弃，无别名。）
+ * CLI read-session：只通过受支持企业微信版本的本地库读取消息。
+ * target_ref 与 target_name 二选一；旧无账号 ref 拒绝，同名按本地库精确消歧。
+ * 日期模式可传稳定 session、date、timezone 和日期游标；均不切换会话或清角标。
+ * 旧 --channel ui / --max-pages 不再支持，返回明确错误。
  */
 import { getOperationEntry } from '../../operations/registry.js'
 import { runCliOperation } from '../render.js'
@@ -73,6 +53,5 @@ export async function readSessionCommand(opts: ReadSessionCommandOptions): Promi
     ...(opts.timezone !== undefined ? { timezone: opts.timezone } : {}),
     ...(opts.includeContext === true ? { include_context: true } : {}),
   }
-  console.error('ℹ️ 若使用 UI 通道，进入会话会清除未读角标；本地库读取不切换会话')
   return runCliOperation(getOperationEntry('wecom_read_session').operation, args, { exclusive: true, json: opts.json })
 }

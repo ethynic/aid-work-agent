@@ -25,7 +25,7 @@ test('fifty explicit empty ws1 targets keep every locator within the existing 16
         captureFn: async () => ({ ok: true, dbSnapshot: base, walSnapshot: null, capture: {} as never }),
         runPyFn: async (params, options) => {
           if (params[0] === 'decrypt') return { ok: true, data: { ok: true }, raw_last_line: null }
-          if (params[0] === 'query') return { ok: true, data: { ok: true, self_user_id: fixture.current.account, schema_version: 1 }, raw_last_line: null }
+          if (params[0] === 'query') return { ok: true, data: { ok: true, self_user_id: fixture.current.account, self_name: '本人', schema_version: 1 }, raw_last_line: null }
           if (params[0] === 'directory') {
             const request = JSON.parse(options?.stdin ?? '{}') as { mode: string; limit?: number; conversation_ids?: string[] }
             if (request.mode === 'list') {
@@ -34,6 +34,9 @@ test('fifty explicit empty ws1 targets keep every locator within the existing 16
                 conversations: ids.slice(0, 30).map(conversation_id => ({ conversation_id,
                   name: '同名'.repeat(64), kind: 'group', peer_platform: 'unknown', same_name: true })), next_after: ids[29] }, raw_last_line: null }
             }
+            if (request.mode === 'search') return { ok: true, data: { ok: true,
+              self_user_id: fixture.current.account, match_kind: 'exact', match_count: 1, same_name: false,
+              candidates: [{ name: '售前客服群', section: '群聊' }] }, raw_last_line: null }
             return { ok: true, data: { ok: true, self_user_id: fixture.current.account,
               resolved_targets: request.conversation_ids!.map(conversation_id => ({ conversation_id,
                 name: '同名'.repeat(64), kind: 'group', peer_platform: 'unknown' })) }, raw_last_line: null }
@@ -65,5 +68,9 @@ test('fifty explicit empty ws1 targets keep every locator within the existing 16
       assert.equal(resolved.success, true, resolved.message)
       assert.equal((resolved.data.resolved_targets as unknown[]).length, 50)
       assert.ok(Buffer.byteLength(JSON.stringify(resolved.data), 'utf8') <= 64 * 1024)
+      const search = await directory.execute({ mode: 'search', query: '售前客服群' }, context())
+      assert.equal(search.success, true, search.message)
+      assert.equal(search.data.self_name, '本人', 'select 按需标定须拿到已验证的本人名称')
+      assert.equal(search.data.match_count, 1)
     } finally { rmSync(base, { recursive: true, force: true }) }
   })

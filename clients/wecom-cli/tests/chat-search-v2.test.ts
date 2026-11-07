@@ -1,260 +1,88 @@
-/**
- * wecom_chat_search M4 契约测试（Jev 决策 + 坐标句柄 + overlay 保持打开；全 mock，
- * 绝不触达真实企微窗口/驱动脚本）。
- *
- * 覆盖：新 payload 透传（best/坐标/概率/jev/timing）/ 空 items → TARGET_NOT_FOUND+reason /
- * type 过滤后 best 重选（probability 最高，全 null 则第一条）/ jev degraded（规则 best、
- * 概率 null）/ target_ref 真实签发含 overlay 相对坐标（老式无坐标 ref 仍可验证）。
- */
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import test, { after } from 'node:test'
+import test from 'node:test'
 import { createWecomChatSearchOperation } from '../src/operations/chatSearch.js'
 import { createTargetRef, verifyTargetRef } from '../src/platform/targetRef.js'
 import type { OpContext } from '../src/operations/types.js'
-import type { RunPowerShellDriverFn } from '../src/platform/powershell.js'
 
-function silentCtx(): OpContext {
-  return { signal: new AbortController().signal, progress: () => {} }
-}
-
-const tempDirs: string[] = []
-after(() => {
-  for (const d of tempDirs) rmSync(d, { recursive: true, force: true })
-})
-
-/** mock createRefFn：坐标拼进 ref 字符串，便于断言 createRefFn 收到了 overlay 相对坐标 */
-const refWithCoords = (name: string, type: string, subtitle?: string, coords?: { x: number; y: number }) =>
-  `ref:${type}:${name}:${subtitle ?? ''}:${coords ? `${coords.x},${coords.y}` : 'nocoords'}`
-
-function makeOp(
-  runDriverFn: RunPowerShellDriverFn,
-  createRefFn: (name: string, type: string, subtitle?: string, coords?: { x: number; y: number }) => string = refWithCoords,
-) {
-  const dir = mkdtempSync(join(tmpdir(), 'wecom-chat-search-v2-test-'))
-  tempDirs.push(dir)
+const ctx: OpContext = { signal: new AbortController().signal, progress: () => {} }
+const candidate = (name: string, section: '联系人' | '群聊') => ({ name, section })
+function searchResult(query: string, match_kind: string, candidates: ReturnType<typeof candidate>[], same_name = false) {
   const op = createWecomChatSearchOperation({
-    runDriverFn,
-    accountFn: async () => null,
-    createRefFn,
-    artifactDirFn: () => dir,
+    readCatalogFn: async (args) => {
+      assert.equal(args.mode, 'search')
+      assert.equal(args.query, query)
+      return { message: 'ok', data: { self_user_id: 'account', source_generation: 'generation',
+        match_kind, match_count: match_kind === 'none' ? 0 : candidates.length, same_name, candidates } }
+    },
+    createRefFn: (name, type, _subtitle, coords, account) => {
+      assert.equal(coords, undefined, '搜索只签名称和账号，不签 OCR 坐标')
+      return `ref:${account}:${type}:${name}`
+    },
   })
-  return { op, dir }
+  return op.execute({ query }, ctx)
 }
 
-test('v2：新 payload 透传 → best=items[best_index]，screen 坐标=overlay+相对坐标，jev/timing 原样', async () => {
-  const { op, dir } = makeOp(async (opts) => {
-    // ArtifactDir 已创建且为 search-<ts> 目录（稳定帧截图/driver-log 落点）
-    assert.equal(opts.args?.[2], '-ArtifactDir')
-    const artifactDir = opts.args?.[3] as string
-    assert.ok(artifactDir.startsWith(dir) && /search-\d{4}-\d{2}-\d{2}T/.test(artifactDir))
-    assert.ok(existsSync(artifactDir))
-    return {
-      query: '陆伟',
-      items: [
-        { name: '陆伟', subtitle: '微信联系人', section: '联系人', x: 200, y: 60, probability: 0.2 },
-        { name: '陆伟@微信', subtitle: '', section: '联系人', x: 200, y: 120, probability: 0.71 },
-        { name: '产品讨论群', subtitle: '3人', section: '群聊', x: 210, y: 200, probability: 0.09 },
-      ],
-      best_index: 1,
-      overlay: { x: 100, y: 50, w: 400, h: 542 },
-      jev: { used: true, latency_ms: 812, is_ambiguous: false, ambiguous_confidence: 0.93, best_confidence: 0.71 },
-      timing_ms: { focus: 250, box_check: 900, typing: 1200, overlay: 2100, jev: 812, total: 5300 },
-    }
-  })
-  const r = await op.execute({ query: '陆伟' }, silentCtx())
-  assert.equal(r.success, true)
-  assert.equal(r.code, 'OK')
-  assert.equal(r.effect, 'none')
-  assert.equal(r.data.search_successful, true)
-  const best = r.data.best as Record<string, unknown>
-  assert.equal(best.name, '陆伟@微信')
-  assert.equal(best.screen_x, 300, 'screen_x = overlay.x + item.x')
-  assert.equal(best.screen_y, 170, 'screen_y = overlay.y + item.y')
-  assert.equal(best.confidence, 0.71)
-  assert.deepEqual(best.probabilities, { R0: 0.2, R1: 0.71, R2: 0.09 })
-  assert.equal(best.target_ref, 'ref:contact:陆伟@微信::200,120')
-  const items = r.data.items as Array<{ name: string; x: number; y: number; probability: number | null; target_ref: string }>
-  assert.equal(items.length, 3)
-  assert.equal(items[0]!.probability, 0.2)
-  assert.equal(items[0]!.x, 200)
-  assert.equal(items[2]!.target_ref, 'ref:group:产品讨论群:3人:210,200')
-  const jev = r.data.jev as Record<string, unknown>
-  assert.equal(jev.used, true)
-  assert.equal(jev.best_confidence, 0.71)
-  assert.equal(jev.is_ambiguous, false)
-  assert.equal(jev.ambiguous_confidence, 0.93)
-  assert.deepEqual(r.data.timing_ms, { focus: 250, box_check: 900, typing: 1200, overlay: 2100, jev: 812, total: 5300 })
-  assert.match(r.message, /Jev 最优「陆伟@微信」/)
+test('售前客服群唯一匹配：返回可进入会话的账号绑定句柄', async () => {
+  const result = await searchResult('售前客服群', 'exact', [candidate('售前客服群', '群聊')])
+  assert.equal(result.success, true)
+  assert.equal(result.effect, 'none')
+  assert.equal((result.data.best as { target_ref: string }).target_ref, 'ref:account:group:售前客服群')
 })
 
-test('v2：空 items → TARGET_NOT_FOUND + reason=no_results，data 附 jev/timing 透传', async () => {
-  const { op } = makeOp(async () => ({
-    query: '不存在的人',
-    items: [],
-    best_index: null,
-    overlay: { x: 100, y: 50, w: 400, h: 84 },
-    jev: { used: false, latency_ms: 0, reason: 'no_items' },
-    timing_ms: { focus: 250, box_check: 900, typing: 1100, overlay: 1900, jev: 0, total: 4200 },
-  }))
-  const r = await op.execute({ query: '不存在的人' }, silentCtx())
-  assert.equal(r.success, false)
-  assert.equal(r.code, 'TARGET_NOT_FOUND')
-  assert.equal(r.effect, 'none')
-  assert.equal(r.retryable, false)
-  assert.equal(r.data.search_successful, false)
-  assert.equal(r.data.reason, 'no_results')
-  assert.deepEqual(r.data.items, [])
-  assert.equal(r.data.best, null)
-  assert.equal((r.data.jev as { reason?: string }).reason, 'no_items')
-  assert.equal((r.data.timing_ms as { total?: number }).total, 4200)
+test('孙程未命中：把孙晨候选交给 agent，不自动改目标或签发句柄', async () => {
+  const result = await searchResult('孙程', 'none', [candidate('孙晨', '联系人')])
+  assert.equal(result.code, 'TARGET_NOT_FOUND')
+  assert.deepEqual(result.data.candidates, [candidate('孙晨', '联系人')])
+  assert.equal(result.data.best, undefined)
 })
 
-test('v2：type 过滤把驱动 best 滤掉 → 从过滤后 items 重选（probability 最高）', async () => {
-  const { op } = makeOp(async () => ({
-    items: [
-      { name: '陆伟', subtitle: '', section: '联系人', x: 200, y: 60, probability: 0.55 },
-      { name: '产品讨论群', subtitle: '3人', section: '群聊', x: 210, y: 120, probability: 0.8 },
-      { name: '项目协调群', subtitle: '', section: '群聊', x: 210, y: 180, probability: 0.3 },
-    ],
-    best_index: 0,
-    overlay: { x: 10, y: 20, w: 400, h: 500 },
-    jev: { used: true, latency_ms: 700, best_confidence: 0.55 },
-    timing_ms: { total: 3000 },
-  }))
-  const r = await op.execute({ query: '群', type: 'group' }, silentCtx())
-  assert.equal(r.success, true)
-  const items = r.data.items as Array<{ name: string }>
-  assert.equal(items.length, 2)
-  const best = r.data.best as Record<string, unknown>
-  assert.equal(best.name, '产品讨论群', 'best 重选为过滤后 probability 最高项')
-  assert.equal(best.confidence, 0.8, 'jev.best_confidence 不适用（指向被滤项）时回落到条目概率')
-  assert.equal(best.screen_x, 220)
-  // 概率分布仍覆盖驱动全部原始条目（含被 type 过滤的 R0）
-  assert.deepEqual(best.probabilities, { R0: 0.55, R1: 0.8, R2: 0.3 })
+test('沟通命中两个不同会话：逐名列出，请用户指定', async () => {
+  const names = [candidate('新劳务云系统项目沟通群', '群聊'), candidate('行政合同归档 智能体 沟通', '群聊')]
+  const result = await searchResult('沟通', 'contains', names)
+  assert.equal(result.code, 'TARGET_AMBIGUOUS')
+  assert.deepEqual(result.data.candidates, names)
+  assert.equal(result.data.same_name, false)
+  assert.match(result.message, /指定完整名称/)
 })
 
-test('v2：过滤后 best 全 null probability → 重选第一条；全被滤掉 → filtered_out', async () => {
-  const { op } = makeOp(async () => ({
-    items: [
-      { name: '产品讨论群', subtitle: '', section: '群聊', x: 210, y: 120, probability: null },
-      { name: '项目协调群', subtitle: '', section: '群聊', x: 210, y: 180, probability: null },
-    ],
-    best_index: 5, // 越界/无效 → 不在集合内，触发重选
-    overlay: { x: 10, y: 20, w: 400, h: 500 },
-    jev: { used: false, latency_ms: 0, reason: 'no_api_key' },
-    timing_ms: { total: 2000 },
-  }))
-  const r = await op.execute({ query: '群', type: 'group' }, silentCtx())
-  assert.equal(r.success, true)
-  const best = r.data.best as Record<string, unknown>
-  assert.equal(best.name, '产品讨论群', '全 null 重选第一条')
-  assert.equal(best.confidence, null)
-
-  const { op: op2 } = makeOp(async () => ({
-    items: [{ name: '陆伟', subtitle: '', section: '联系人', x: 200, y: 60, probability: 0.9 }],
-    best_index: 0,
-    overlay: { x: 10, y: 20, w: 400, h: 500 },
-    jev: { used: true, latency_ms: 600, best_confidence: 0.9 },
-    timing_ms: { total: 2000 },
-  }))
-  const r2 = await op2.execute({ query: '陆伟', type: 'group' }, silentCtx())
-  assert.equal(r2.success, false)
-  assert.equal(r2.code, 'TARGET_NOT_FOUND')
-  assert.equal(r2.data.reason, 'filtered_out')
-  assert.deepEqual(r2.data.items, [])
-  assert.equal(r2.data.best, null)
-  assert.equal((r2.data.jev as { used?: boolean }).used, true, 'filtered_out 分支仍透传 jev')
+test('真正同名的两个身份：提示备注或重命名', async () => {
+  const result = await searchResult('张三', 'exact', [candidate('张三', '联系人'), candidate('张三', '联系人')], true)
+  assert.equal(result.code, 'TARGET_AMBIGUOUS')
+  assert.match(result.message, /备注或重命名/)
 })
 
-test('v2：jev degraded → probability 全 null，best 按驱动规则结果（name==query 优先）', async () => {
-  const { op } = makeOp(async () => ({
-    items: [
-      { name: '产品讨论群', subtitle: '3人', section: '群聊', x: 210, y: 120, probability: null },
-      { name: '陆伟', subtitle: '微信联系人', section: '联系人', x: 200, y: 60, probability: null },
-    ],
-    best_index: 1, // 驱动规则：归一化 name == query 的第一条
-    overlay: { x: 100, y: 50, w: 400, h: 300 },
-    jev: { used: false, latency_ms: 0, reason: 'no_api_key' },
-    timing_ms: { total: 1800 },
-  }))
-  const r = await op.execute({ query: '陆伟' }, silentCtx())
-  assert.equal(r.success, true)
-  const best = r.data.best as Record<string, unknown>
-  assert.equal(best.name, '陆伟')
-  assert.equal(best.confidence, null)
-  assert.deepEqual(best.probabilities, { R0: null, R1: null })
-  const jev = r.data.jev as Record<string, unknown>
-  assert.equal(jev.used, false)
-  assert.equal(jev.reason, 'no_api_key')
-  assert.doesNotMatch(r.message, /Jev/, '降级时 message 不提 Jev')
-})
-
-test('v2：target_ref 真实签发含 overlay 相对坐标；老式无坐标 ref 仍可验证', async () => {
-  const keyDir = mkdtempSync(join(tmpdir(), 'wecom-targetref-v2-'))
-  tempDirs.push(keyDir)
-  const { op } = makeOp(
-    async () => ({
-      items: [{ name: '陆伟', subtitle: '微信联系人', section: '联系人', x: 180, y: 88, probability: null }],
-      best_index: 0,
-      overlay: { x: 100, y: 50, w: 400, h: 300 },
-      jev: { used: false, latency_ms: 0, reason: 'no_items' },
-      timing_ms: { total: 900 },
-    }),
-    (name, type, subtitle, coords) => createTargetRef(name, type, subtitle, { keyDir, coords }),
-  )
-  const r = await op.execute({ query: '陆伟' }, silentCtx())
-  assert.equal(r.success, true)
-  const items = r.data.items as Array<{ target_ref: string }>
-  const id = verifyTargetRef(items[0]!.target_ref, { keyDir })
-  assert.equal(id.name, '陆伟')
-  assert.equal(id.type, 'contact')
-  assert.equal(id.subtitle, '微信联系人')
-  assert.equal(id.x, 180, 'verify 解出 payload 内的 overlay 相对坐标')
-  assert.equal(id.y, 88)
-
-  // 老式（无坐标）签发与验证不受影响
-  const oldRef = createTargetRef('张三', 'contact', '', { keyDir })
-  const oldId = verifyTargetRef(oldRef, { keyDir })
-  assert.equal(oldId.x, undefined)
-  assert.equal(oldId.y, undefined)
-})
-
-test('账号ref只在搜索前后直接证据一致时签发；切号或缺证据保留legacy', async () => {
-  for (const afterAccount of ['account-a', 'account-b', null]) {
-    const dir = mkdtempSync(join(tmpdir(), 'wecom-search-binding-'))
-    tempDirs.push(dir)
-    let probes = 0
-    const op = createWecomChatSearchOperation({
-      artifactDirFn: () => dir,
-      accountFn: async () => ++probes === 1 ? 'account-a' : afterAccount,
-      createRefFn: (name, type, subtitle, coords, account) => createTargetRef(name, type, subtitle, { keyDir: dir, coords, account }),
-      runDriverFn: async () => ({ items: [{ name: 'Synthetic', section: '联系人' }], best_index: 0 }),
-    })
-    const result = await op.execute({ query: 'Synthetic' }, silentCtx())
-    assert.equal(result.success, true)
-    const ref = (result.data.best as { target_ref: string }).target_ref
-    assert.equal(verifyTargetRef(ref, { keyDir: dir }).account, afterAccount === 'account-a' ? 'account-a' : undefined)
-    assert.equal(result.data.target_ref_account_bound, afterAccount === 'account-a')
-  }
-
-  const dir = mkdtempSync(join(tmpdir(), 'wecom-search-cancel-'))
-  tempDirs.push(dir)
-  const controller = new AbortController()
-  let probes = 0
+test('指定联系人类型仍须跨群聊核对同名，不能签发默认 Enter 句柄', async () => {
   let signed = false
   const op = createWecomChatSearchOperation({
-    artifactDirFn: () => dir,
-    accountFn: async () => {
-      if (++probes === 2) controller.abort()
-      return 'account-a'
-    },
-    createRefFn: () => { signed = true; return 'unexpected' },
-    runDriverFn: async () => ({ items: [{ name: 'Synthetic', section: '联系人' }], best_index: 0 }),
+    readCatalogFn: async args => ({ message: '', data: { self_user_id: 'account',
+      match_count: args.type === 'contact' ? 1 : 2, same_name: args.type === 'any',
+      candidates: args.type === 'contact'
+        ? [candidate('同名目标', '联系人')]
+        : [candidate('同名目标', '联系人'), candidate('同名目标', '群聊')] } }),
+    createRefFn: () => { signed = true; return 'must-not-sign' },
   })
-  const result = await op.execute({ query: 'Synthetic' }, { signal: controller.signal, progress: () => {} })
-  assert.equal(result.code, 'CANCELLED', '异步账号探针成功时的取消仍阻止结果签发')
+  const result = await op.execute({ query: '同名目标', type: 'contact' }, ctx)
+  assert.equal(result.code, 'TARGET_AMBIGUOUS')
+  assert.match(result.message, /备注或重命名/)
   assert.equal(signed, false)
+})
+
+test('真实签发的唯一 ref 绑定账号且没有 OCR 坐标', async () => {
+  const keyDir = mkdtempSync(join(tmpdir(), 'wecom-search-ref-'))
+  try {
+    const op = createWecomChatSearchOperation({
+      readCatalogFn: async () => ({ message: '', data: { self_user_id: 'account', match_kind: 'exact',
+        match_count: 1, candidates: [candidate('孙晨', '联系人')] } }),
+      createRefFn: (name, type, subtitle, coords, account) => createTargetRef(name, type, subtitle, { keyDir, coords, account }),
+    })
+    const result = await op.execute({ query: '孙晨' }, ctx)
+    const identity = verifyTargetRef((result.data.best as { target_ref: string }).target_ref, { keyDir })
+    assert.equal(identity.account, 'account')
+    assert.equal(identity.name, '孙晨')
+    assert.equal(identity.x, undefined)
+    assert.equal(identity.y, undefined)
+  } finally { rmSync(keyDir, { recursive: true, force: true }) }
 })

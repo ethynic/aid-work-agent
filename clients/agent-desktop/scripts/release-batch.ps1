@@ -11,7 +11,7 @@ param(
     [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$')][string]$RuntimeVersion,
     [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$')][string]$BossVersion,
     [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$')][string]$WecomVersion,
-    [string]$OcrDirectory,
+    [string]$LocaldbPythonDirectory,
     [string]$TargetRuntimeResources,
     [string]$SourceRef = 'HEAD',
     [string]$OutputDirectory = (Join-Path $env:LOCALAPPDATA 'AidWorkBuild/deliveries'),
@@ -65,14 +65,13 @@ if ($Plan) {
 # Plan returns before external tools, version writes, output creation or private-key access.
 if (!$WorkspacePrepared) {
     if ($includeWecom) {
-        if (!$OcrDirectory) { $OcrDirectory = Join-Path $repo 'clients/runtime-plugin-packaging/assets/ocr-python-final' }
-        $OcrDirectory = [IO.Path]::GetFullPath($OcrDirectory)
-        if (!(Test-Path -LiteralPath (Join-Path $OcrDirectory 'python.exe'))) { throw '缺少嵌入式 OCR 输入；请用 -OcrDirectory 指定已验证的 ocr-python-final 目录（不从工作区复制业务产物）' }
-        # wecom 日期/IANA 能力门槛（评审三 P1-5）：旧 ocr-python-final 缺 tzdata
-        # 会在 WeCom 打包/离线验包冒烟失败；此处提前拦截并指向 prepare 刷新。
+        if (!$LocaldbPythonDirectory) { $LocaldbPythonDirectory = Join-Path $repo 'clients/runtime-plugin-packaging/assets/localdb-python-final' }
+        $LocaldbPythonDirectory = [IO.Path]::GetFullPath($LocaldbPythonDirectory)
+        if (!(Test-Path -LiteralPath (Join-Path $LocaldbPythonDirectory 'python.exe'))) { throw '缺少嵌入式本地库 Python；请用 -LocaldbPythonDirectory 指定已验证的 localdb-python-final 目录' }
+        # WeCom date/IANA capability must be present in the independent local database Python.
         if ($includeWecom) {
-            $dayProbe = & (Join-Path $OcrDirectory 'python.exe') -I -B -c "from zoneinfo import ZoneInfo; ZoneInfo('Asia/Shanghai'); print('TZDATA_OK')"
-            if ($LASTEXITCODE -ne 0 -or $dayProbe -notmatch 'TZDATA_OK') { throw '嵌入式 Python 缺少日期/IANA 能力（tzdata）；请先运行 clients/runtime-plugin-packaging/prepare-ocr.py 刷新 ocr-python-final 资产后重试' }
+            $dayProbe = & (Join-Path $LocaldbPythonDirectory 'python.exe') -I -B -c "from zoneinfo import ZoneInfo; ZoneInfo('Asia/Shanghai'); print('TZDATA_OK')"
+            if ($LASTEXITCODE -ne 0 -or $dayProbe -notmatch 'TZDATA_OK') { throw '嵌入式 Python 缺少日期/IANA 能力（tzdata）；请先运行 clients/runtime-plugin-packaging/prepare-localdb.py 刷新 localdb-python-final 资产后重试' }
         }
     }
     $commit = (& git -C $repo rev-parse --verify "$SourceRef^{commit}").Trim()
@@ -95,10 +94,10 @@ if (!$WorkspacePrepared) {
         if ($key -in @('Plan', 'WorkspacePrepared', 'SourceCommit')) { continue }
         if ($key -eq 'Unsigned') { if ($Unsigned) { $forward += '-Unsigned' }; continue }
         $value = $PSBoundParameters[$key]
-        if ($key -in @('Signer', 'TrustRoots', 'OcrDirectory', 'TargetRuntimeResources', 'OutputDirectory')) { $value = [IO.Path]::GetFullPath($value) }
+        if ($key -in @('Signer', 'TrustRoots', 'LocaldbPythonDirectory', 'TargetRuntimeResources', 'OutputDirectory')) { $value = [IO.Path]::GetFullPath($value) }
         $forward += @("-$key", [string]$value)
     }
-    if ($includeWecom -and !$PSBoundParameters.ContainsKey('OcrDirectory')) { $forward += @('-OcrDirectory', $OcrDirectory) }
+    if ($includeWecom -and !$PSBoundParameters.ContainsKey('LocaldbPythonDirectory')) { $forward += @('-LocaldbPythonDirectory', $LocaldbPythonDirectory) }
     & powershell.exe @forward
     if ($LASTEXITCODE -ne 0) { throw '隔离打包失败；保留隔离目录供诊断' }
     return
@@ -310,7 +309,7 @@ if ($includePlugin) {
         '--signer', $Signer, '--release-id', $ReleaseId, '--node', $fixedNode,
         '--npm-cli', $npmCli, '--output', $pluginDir
     )
-    if ($OcrDirectory) { $packageArgs += @('--ocr', $OcrDirectory) }
+    if ($LocaldbPythonDirectory) { $packageArgs += @('--localdb-python', $LocaldbPythonDirectory) }
     Invoke-Checked $nodeExe $packageArgs
     $pluginPath = Join-Path $pluginDir "$provider-$providerVersion.aidplugin.zip"
     $deliveryFilesToCopy += @($pluginPath, "$pluginPath.manifest.json")

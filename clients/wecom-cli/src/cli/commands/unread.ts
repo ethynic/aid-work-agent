@@ -1,14 +1,4 @@
-/**
- * CLI 子命令 unread：读取会话快照（只读，不开会话不清角标）。
- *
- * 用法：
- *   aid-wecom unread [--name <名>] [--channel local-db|ui] [--focus <名1,名2>] [--json]
- *
- * P2 任务 3.1：缺省按 doctor 状态分派通道——本地库可用返回待回复快照（last_sender 判定，
- * 可发现已读未回复），否则 UI 角标快照；--channel 显式覆盖。--focus 为关注会话名列表
- * （本地库逐名解析，失败进 failed 部分返回；UI 通道忽略并注明）。
- * 与 MCP tool wecom_unread_list 调用同一 operation（业务能力只实现一次）。
- */
+/** CLI unread：只通过受支持企业微信版本的本地库读取待回复快照。 */
 import { getOperationEntry } from '../../operations/registry.js'
 import { runCliOperation } from '../render.js'
 import type { WecomUnreadListArgs } from '../../operations/unreadList.js'

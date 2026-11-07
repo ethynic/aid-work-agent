@@ -5,10 +5,9 @@
 #   当前内容页（内容子窗口类名「WXworkWindow - 企业微信-<页名>」编码）。
 # E5 登录态增强（RPA get_login_state 完整替代，参照 wecom-personal-rpa wecom-ops.ps1 思路）：
 #   need_login 时附 login_window rect + 登录窗整窗 PNG base64（qr_image_base64，供扫码上线）
-#   + 二维码状态提示（qr_status_hint：normal/expired/limited/unknown，RapidOCR best-effort，
-#   OCR 不可用不算失败——探测职责是报告能力矩阵，不因可选依赖缺席而失败）。
+#   + qr_status_hint 固定 unknown：窗口枚举能判断登录态，不能判断二维码是否过期/受限。
 # 安全：二维码是登录凭证——qr base64 只经 DRIVER_JSON stdout 返回给调用方，绝不写日志、
-#   绝不存 artifact（probe 无 artifact，保持）；OCR 临时文件固定名、用完即删（probe 命名
+#   绝不存 artifact（probe 无 artifact，保持）；截图临时文件固定名、用完即删（probe 命名
 #   mutex 单飞无并发写冲突），文件名不含任何敏感信息。
 # 绝不激活窗口、不发送输入、不改剪贴板（EnumWindows/EnumChildWindows/GetWindowRect/
 #   PrintWindow/CopyFromScreen 均纯读，截图不改变系统状态）。
@@ -70,23 +69,6 @@ function Get-WeComLoginWindowBmp {
     return $bmp
 }
 
-function Get-WeComQrStatusHint {
-    # 对登录窗截图跑 RapidOCR（boxes 模式，与 qr_image_base64 同一张截图）best-effort
-    # 判二维码状态：「已失效/过期/刷新」→ expired；「受限/冻结/异常」→ limited；
-    # OCR 不可用（venv 缺失等 CONFIG_MISSING）/无标记/识别异常 → normal。
-    # 任何异常吞掉返回 normal，绝不因 OCR 让 probe 失败。
-    param([Parameter(Mandatory)][string]$ImagePath)
-    try {
-        $ocr = Invoke-WeComChatOcr -ImagePath $ImagePath -Mode 'boxes'
-        $text = (@($ocr.boxes | ForEach-Object { [string]$_.text }) -join '')
-        if ($text -match '已失效|过期|刷新') { return 'expired' }
-        if ($text -match '受限|冻结|异常') { return 'limited' }
-        return 'normal'
-    } catch {
-        return 'normal'
-    }
-}
-
 Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.Probe' -Body {
     $all = @(Get-WeComTopLevelWindows)
     $candidates = @($all | Where-Object {
@@ -98,20 +80,18 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.Probe' -Body {
         # 「进程在但无窗口/托盘隐藏」（offline 兜底）
         $login = Find-WeComLoginWindow
         if ($null -ne $login) {
-            # 登录窗整窗截图 → TEMP PNG → base64 + OCR 状态提示（同一张截图，用完即删）。
-            # 截图与 OCR 均 best-effort：任一失败只缺 qr 字段（hint=unknown），不影响
+            # 登录窗整窗截图 → TEMP PNG → base64（用完即删）。
+            # 截图 best-effort：失败只缺 qr 字段，二维码细状态始终 unknown，不影响
             # need_login 上报（登录窗 rect 来自枚举结果，不依赖截图成功）。
             $qrBase64 = $null
-            $hint = 'unknown'
             $shotPath = Join-Path $env:TEMP 'wecom-driver-login-qr.png'
             $bmp = Get-WeComLoginWindowBmp -Hwnd ([int64]$login.Hwnd)
             if ($null -ne $bmp) {
                 try {
                     $bmp.Save($shotPath, [System.Drawing.Imaging.ImageFormat]::Png)
                     $qrBase64 = [System.Convert]::ToBase64String([System.IO.File]::ReadAllBytes($shotPath))
-                    $hint = Get-WeComQrStatusHint -ImagePath $shotPath
                 } catch {
-                    # 截图存盘/读回/OCR 任一失败：保持 qr=null/hint=unknown，不上抛
+                    # 截图存盘/读回失败：保持 qr=null，不上抛
                 } finally {
                     $bmp.Dispose()
                     Remove-Item -LiteralPath $shotPath -ErrorAction SilentlyContinue
@@ -128,7 +108,7 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.Probe' -Body {
                     h = [int]$login.H
                 }
                 qr_image_base64 = $qrBase64
-                qr_status_hint = $hint
+                qr_status_hint = 'unknown'
             }
         }
         # A recognised hidden main window belongs to the logged-in tray session.

@@ -1,7 +1,7 @@
 /**
  * aid-wecom CLI 入口。
  *
- * M1 实现：probe / add-customer / mcp / doctor / version。
+ * M1 实现：probe / mcp / doctor / version。
  * M2 增加：search / send。
  * M3 增加：unread / read / watch。
  * M5 增加：select。
@@ -9,7 +9,7 @@
  * M8 增加：send-file。
  * M9：read 改名 read-session（旧 read 动词直接废弃，无别名）。
  * M11a：send / send-image / send-file / read-session 增加 --target-name 直达模式
- * （与 --target-ref 二选一：内部自动 search 定位，data 附 resolved_target）。
+ * （与 --target-ref 二选一：文本发送先由本地库唯一解析目标）。
  * 动词子命令集合固定；不存在按对象命名的子命令——`aid-wecom contacts` 之类
  * 一律落入 default 报「未知子命令」。
  *
@@ -20,11 +20,10 @@
  *   node dist/src/cli/index.js send (--target-ref <ref> | --target-name <会话名> [--subtitle <副标题>]) --text <文本> [--json]
  *   node dist/src/cli/index.js send-image (--target-ref <ref> | --target-name <会话名>) --image <本地绝对路径> [--json]
  *   node dist/src/cli/index.js send-file (--target-ref <ref> | --target-name <会话名>) --file <本地绝对路径> [--json]
- *   node dist/src/cli/index.js unread [--name <名>] [--channel local-db|ui] [--focus <名1,名2>] [--json]
- *   node dist/src/cli/index.js read-session (--target-ref <ref> | --target-name <会话名>) [--channel local-db|ui] [--limit N] [--cursor <cursor>] [--max-pages N] [--since-days N] [--json]
+ *   node dist/src/cli/index.js unread [--name <名>] [--channel local-db] [--focus <名1,名2>] [--json]
+ *   node dist/src/cli/index.js read-session (--target-ref <ref> | --target-name <会话名>) [--channel local-db] [--limit N] [--cursor <cursor>] [--since-days N] [--json]
  *   node dist/src/cli/index.js read-session --session <ws1.…> (--date YYYY-MM-DD | --cursor <wd1.…>) [--timezone IANA] [--include-context] [--limit N] [--json]
- *   node dist/src/cli/index.js watch [--interval 秒] [--once] [--channel local-db|ui] [--focus <名1,名2>]
- *   node dist/src/cli/index.js add-customer --phone <11位手机号> --yes [--json]
+ *   node dist/src/cli/index.js watch [--interval 秒] [--once] [--channel local-db] [--focus <名1,名2>]
  *   node dist/src/cli/index.js mcp --stdio
  *   node dist/src/cli/index.js doctor [--json] [--localdb]
  *   node dist/src/cli/index.js version [--json]
@@ -39,7 +38,8 @@ const USAGE = `aid-wecom — 企业微信操作 CLI / MCP Provider（M1）
   read-sessions [--sessions <JSON字符串数组>] [--cursor <原游标>] [--limit N] [--json]
                             DB批量聊天记录与待回复候选，单批最多50条/16KiB
   send --session <会话名或稳定标识> --text <文本> [--json]
-                            当前目标匹配时直接发送，不匹配才内部搜索选择
+                            本地库准入、双点缓存标定、复制标题确认、发送后本地库核验
+  calibrate [--json]         用本人会话标定标题首字和文本输入区中心并缓存窗口相对坐标
 
 兼容与诊断命令：
   poll-group --target-name <完整群名> [--cursor <原游标>] [--json]
@@ -52,19 +52,15 @@ const USAGE = `aid-wecom — 企业微信操作 CLI / MCP Provider（M1）
   probe [--verbose] [--json]
                             只读环境探测：平台 / 交互会话 / PowerShell / WXWork.exe 进程 /
                             主窗口解析 / 登录态 / 当前内容页（不激活窗口、不发送输入、不改剪贴板）
-  add-customer --phone <11位手机号> --yes [--json]
-                            按手机号检索并发送添加客户邀请（写动作；--yes 显式确认；
-                            失败不自动重试，effect=unknown 时请人工核对）
   search --query <词> [--type contact|group|any] [--limit N] [--json]
-                            搜索联系人/群聊（只读），返回带 target_ref 的候选（5 分钟有效）
+                            本地库匹配联系人/群聊名称（只读）；唯一命中返回 target_ref
   select --target-ref <ref> [--json]
-                            点击 search 返回的搜索结果进入会话（动作；不发送消息，
+                            对唯一匹配目标搜索并回车进入会话（动作；不发送消息，
                             进入会话会清除其未读角标并切换当前会话视图；
-                            前置：搜索面板仍打开，ref 5 分钟内有效）
+                            前置：账号绑定 ref 5 分钟内有效，进入后复制标题核对）
   send (--target-ref <ref> | --target-name <会话名> [--subtitle <副标题>]) --text <文本> [--json]
-                            向目标发送 1 条文本消息（写动作；target-ref 与 target-name
-                            二选一——name 直达模式内部自动 search 定位，同名多候选
-                            无法消歧时拒绝；发送后校验失败不自动重试，
+                            向目标发送 1 条文本消息（写动作；本地库唯一解析目标；
+                            无法消歧时拒绝；发送后本地库核验失败不自动重试，
                             effect=unknown 时请人工核对）
   send-status --receipt-id <ID> [--json]
                             只读对账原发送凭据；unknown 时勿重发，不切群、不输入、不发消息
@@ -76,31 +72,18 @@ const USAGE = `aid-wecom — 企业微信操作 CLI / MCP Provider（M1）
   send-file (--target-ref <ref> | --target-name <会话名>) --file <本地绝对路径> [--json]
                             向目标发送 1 个文件（写动作；扩展名不限，
                             ≤100MB，路径须为装有 wecom-cli 的机器上的本地绝对路径，
-                            文件名去空白后须 ≥3 字符（过短拒发），调用方负责落盘；
+                            调用方负责落盘；
                             粘贴经剪贴板通道会覆盖用户剪贴板；
                             发送后校验失败不自动重试，effect=unknown 时请人工核对）
-  unread [--name <名>] [--channel local-db|ui] [--focus <名1,名2>] [--json]
-                            未读/待回复会话快照（只读，不开会话不清角标）：
-                            缺省按 doctor 状态分派——本地库可用返回待回复快照
-                            （judgment_basis=last_sender，可发现已读未回复）；否则 UI 角标
-                            快照（judgment_basis=badge，附能力差异说明）。
-                            --channel 显式覆盖（local-db 失败不兜底）；--name 按会话显示名
-                            子串过滤（两通道一致；本地库通道无显示名的会话会被排除）；
-                            --focus 关注会话名列表（本地库逐名解析，失败进 failed；UI 通道忽略）
-  read-session (--target-ref <ref> | --target-name <会话名>) [--channel local-db|ui] [--limit N] [--cursor <cursor>] [--max-pages N] [--since-days N] [--json]
-                            读会话消息（只读内容；进入会话会清除其未读角标）：
-                            智能分发进会话（当前会话对→直读；不对→自动 search+select
-                            切换后读）→ 滚动截屏 OCR + 页间去重，返回
-                            {title, messages:[{side,text,time?}], pages_read}
-                            （M9 由 read 改名，旧 read 动词废弃）
-  watch [--interval 秒] [--once] [--channel local-db|ui] [--focus <名1,名2>]
-                            新消息跟踪循环：事件 NDJSON 逐行写 stdout，Ctrl+C 干净退出；
-                            --once 单轮。--channel 显式通道（缺省按 doctor 状态分派：
-                            本地库可用走 local-db 冻结点 4 增量事件 {channel,new_messages,
-                            last_sender}，含消息 ID 与精确方向、不切会话清角标，DB 不可用
-                            轮不落 UI 等下轮）；--focus 关注输入列表（会话名或账号绑定
-                            target_ref；仅本地库通道生效，建立时一次性解析持久绑定、后续
-                            按绑定轮询（改名不影响跟踪），解析失败进 failed；UI 模式忽略）
+  unread [--name <名>] [--channel local-db] [--focus <名1,名2>] [--json]
+                            从本地库读取待回复会话快照，可发现已读未回复；不切会话或清角标。
+                            --name 按显示名子串过滤；--focus 逐名解析，失败进 failed。
+  read-session (--target-ref <ref> | --target-name <会话名>) [--channel local-db] [--limit N] [--cursor <cursor>] [--since-days N] [--json]
+                            从本地库读取消息与增量游标；同名目标须消歧，不切会话或清角标。
+  watch [--interval 秒] [--once] [--channel local-db] [--focus <名1,名2>]
+                            本地库新消息跟踪循环：事件 NDJSON 逐行写 stdout，Ctrl+C 退出。
+                            DB 不可用时保留水位并报错，下轮重试；--focus 首次解析后绑定会话身份。
+                            以上读取只支持已验证的企业微信版本，旧 --channel ui 会明确报错。
 
 Provider 命令：
   mcp --stdio               启动标准本地 MCP server（stdout 只承载协议，供 agent Host 使用）
@@ -154,6 +137,10 @@ async function main(): Promise<number> {
         text: flagString(args, 'text'),
         json: hasFlag(args, 'json'),
       })
+    }
+    case 'calibrate': {
+      const { calibrateCommand } = await import('./commands/calibrate.js')
+      return calibrateCommand({ json: hasFlag(args, 'json') })
     }
     case 'send-status': {
       const { sendStatusCommand } = await import('./commands/sendStatus.js')
@@ -215,14 +202,6 @@ async function main(): Promise<number> {
         once: hasFlag(args, 'once'),
         channel: flagString(args, 'channel'),
         focus: flagString(args, 'focus'),
-      })
-    }
-    case 'add-customer': {
-      const { addCustomerCommand } = await import('./commands/addCustomer.js')
-      return addCustomerCommand({
-        phone: flagString(args, 'phone'),
-        yes: hasFlag(args, 'yes'),
-        json: hasFlag(args, 'json'),
       })
     }
     case 'mcp': {

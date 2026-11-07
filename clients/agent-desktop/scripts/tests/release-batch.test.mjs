@@ -71,7 +71,7 @@ test('WeCom day preflight preserves Python timezone quotes through PowerShell -F
     assert.notEqual(command, line, 'The preflight must still call ZoneInfo')
     const fixture = resolve(home, 'preflight.ps1')
     writeFileSync(fixture, [
-      '$OcrDirectory = Split-Path -Parent (Get-Command python.exe).Source',
+      '$LocaldbPythonDirectory = Split-Path -Parent (Get-Command python.exe).Source',
       command,
       "if ($LASTEXITCODE -ne 0 -or $dayProbe -notmatch 'TZDATA_OK') { exit 1 }",
     ].join('\r\n') + '\r\n')

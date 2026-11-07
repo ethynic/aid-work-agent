@@ -61,7 +61,9 @@ export async function loadSendReceipt(root: string, id: string, crypto: ReceiptC
     typeof r.conversationId !== 'string' || !r.conversationId || typeof r.sourceId !== 'string' || !r.sourceId ||
     !Number.isSafeInteger(r.schema) || r.schema < 0 || !Number.isSafeInteger(r.baseline) || r.baseline < 0 ||
     typeof r.anchor !== 'string' || (r.baseline > 0 && !/^[a-f0-9]{64}$/.test(r.anchor)) ||
-    typeof r.text !== 'string' || r.text.length < 1 || r.text.length > 2000 ||
+    !((('text' in r) && typeof r.text === 'string' && r.text.length >= 1 && r.text.length <= 2000) ||
+      (('kind' in r) && (r.kind === 'image' || r.kind === 'file') &&
+        (r.kind === 'image' || (typeof r.fileName === 'string' && r.fileName.length > 0 && r.fileName.length <= 255)))) ||
     !Number.isSafeInteger(r.since) || !Number.isSafeInteger(r.until) || r.since < 0 ||
     r.until < r.since || r.until - r.since > 310) throw new Error('invalid receipt payload')
   return r

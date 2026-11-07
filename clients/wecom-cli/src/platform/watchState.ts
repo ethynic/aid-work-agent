@@ -2,7 +2,7 @@
  * wecom_watch_poll 的会话水位状态文件（%LOCALAPPDATA%\AidWorkAgent\wecom-cli\watch-state.json）。
  *
  * 结构：{ sessions: { <会话名>: { last_seen_text_norm, last_unread, updated_at } } }
- * - last_seen_text_norm：上次成功读取时最后一行消息的归一化文本（与 chat_ocr.py
+ * - last_seen_text_norm：上次成功读取时最后一行消息的归一化文本（与旧消息文本归一化规则
  *   normalize_text 同规则），下一轮据此取增量；
  * - last_unread：上一轮到该会话的未读角标数（diff 依据：增大或新出现 → 候选）；
  *   读取成功后归零（进会话已清角标，之后出现的任何角标都是新消息）；

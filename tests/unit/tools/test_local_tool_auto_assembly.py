@@ -48,12 +48,14 @@ def config(allowed=(), excluded=(), inherit=False):
 async def test_two_installed_providers_project_business_schemas_and_guides_without_internal_steps(monkeypatch):
     tools = tool_catalog()
     lookup = Mock(return_value=[{**device('wecom'), 'capabilities_json': {
-        'providers': ['wecom', 'boss-recruiting']}}])
+        'providers': ['wecom', 'boss-recruiting'],
+        'capabilities': ['wecom_session_directory', 'wecom_session_directory_search']}}])
     monkeypatch.setattr('src.local_tools.repository.list_devices', lookup)
     await tools.prime_local_tools(IDENTITY)
     lookup.assert_called_once_with('tenant', 'user')
     actual = names(tools)
     assert set(catalog.agent_tools('wecom')) <= actual
+    assert actual & set(catalog.allowed_tools('wecom')) == set(catalog.agent_tools('wecom'))
     assert {'boss_filter', 'boss_read_chat', 'boss_jobs_list'} <= actual
     assert not {'wecom_probe', 'wecom_group_poll', 'wecom_send_status',
                 'boss_overlay_inspect', 'skill_script_run', 'runtime_recovery_observe'} & actual
@@ -62,6 +64,19 @@ async def test_two_installed_providers_project_business_schemas_and_guides_witho
     guides = tools._collect_tool_usage_guides()
     assert 'GUIDE:boss_filter' in guides and 'GUIDE:wecom_read_sessions' in guides
     assert 'GUIDE:wecom_probe' not in guides
+
+
+@pytest.mark.asyncio
+async def test_old_wecom_device_keeps_read_send_without_directory(monkeypatch):
+    """旧客户端的 provider 能力不足以证明已安装目录工具。"""
+    tools = tool_catalog()
+    page_only = {**device('wecom'), 'capabilities_json': {
+        'providers': ['wecom'], 'capabilities': ['wecom_session_directory']}}
+    monkeypatch.setattr('src.local_tools.repository.list_devices', Mock(return_value=[page_only]))
+    await tools.prime_local_tools(IDENTITY)
+    assert names(tools) & set(catalog.allowed_tools('wecom')) == {
+        'wecom_read_session', 'wecom_message_send', 'wecom_read_sessions'}
+    assert tools.tool_registry.has_tool('wecom_session_directory')
 
 
 @pytest.mark.asyncio

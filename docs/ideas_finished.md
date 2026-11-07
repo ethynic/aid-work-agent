@@ -7,6 +7,8 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261107-0103 | 企微删除添加客户与 OCR 发行依赖 | ✅ 已完成开发；独测、隔离签包及 CR 通过，未正式发行或部署。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w27-企微删除添加客户与-ocr-发行依赖2026-11-07) |
+| 20261107-1045 | 企微无 OCR Agent→Runtime 真机验收 | ✅ 已完成开发；四工具真机读发、错名及歧义场景通过。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w30-无-ocr-agentruntime-真机验收2026-11-07) |
 | 20261103-1306 | 任务计划时间窗、最短间隔与用户任务数约束 | ✅ 已完成开发；独立测试与 CR 通过（1 P0+2 P1 修复关闭），发布验收与部署待授权。 | [设计 §15](system/scheduled-task-runner-refactor-design.md#15-时间窗最短间隔与用户任务数2026-11-03-待开发扩展) | [计划](plans/plan-scheduled-task-schedule-constraints.md) |
 | 20261102-1037 | BOSS沟通混排与搜索定位修复 | ✅ 已完成开发；混排与搜索真机回归通过，0.3.29签名出包并验包，未安装。 | [原设计§10.6.1](design/recruiting/boss-resume-assistant-native-cdp-design.md#1061-沟通页混排与搜索定位修正2026-11-02) | [原计划§17](plans/recruiting/boss-resume-assistant-native-cdp-dev-plan.md#17-沟通页混排与搜索定位修正2026-11-02) |
 | 20261023-1226 | wecom CLI 三工具与持续恢复 | ✅ 已完成开发；打包兼容复核完成，旧包验签/MCP、长路径及CR通过。 | [设计](design/wecom/wecom-cli-design.md#12-持续监控端到端收敛2026-10-27) | [开发计划](plans/plan-wecom-cli-group-chat-experiment.md) |
@@ -146,6 +148,8 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261107-0949 | 企微搜索门禁真机回炉 | ✅ 已完成开发；CLI 真机通过，Agent 工具调度待验。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w28-搜索门禁真机回炉2026-11-07) |
+| 20261107-1004 | 企微标题复制剪贴板诊断 | ✅ 已完成开发；远控剪贴板阻塞已定位，Agent 工具调度待验。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w29-标题复制剪贴板诊断2026-11-07) |
 | 20261015-1457 | Excel读取性能与正式库KB补迁 | ✅ 已完成开发；正式库240份已补迁，Excel修复独验96通过，代码未部署。 | [设计](tools/excel-read-performance-design.md) | [计划](plans/plan-excel-read-performance.md) |
 | 20261015-1516 | BOSS部分筛选项不可读时继续执行 | ✅ 已完成开发：跳过未匹配条件，独立测试与CR通过，待部署验收。 | [设计](design/recruiting/resume-job-matching-design.md) | [计划](plans/desktop-automation/plan-boss-partial-filter-discovery.md) |
 | 20261013-1410 | BOSS 会员筛选与聊天补充条件 | ✅ 已完成开发；会员滚动和聊天补充条件已通过真机验证。 | [设计](design/recruiting/resume-job-matching-design.md) | [开发计划](plans/desktop-automation/plan-boss-vip-dynamic-filters.md) |
@@ -193,6 +197,10 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261106-2052 | wecom-cli 登录探测移除 OCR | ✅ 已完成开发；登录态按窗口枚举判断，扫码截图保留，待真机复验。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-probe-remove-ocr.md) |
+| 20261106-1200 | 企微文本发送双点标定与去 OCR | ✅ 已完成开发；双点缓存复用单聊发送及本地库核验真机通过，未部署。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w24-文本发送双点标定与去-ocr2026-11-06) |
+| 20261107-0001 | 企微会话搜索与进入去 OCR | ✅ 已完成开发；独测、真机及 CR 通过，未部署。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w25-会话搜索与进入去-ocr2026-11-07) |
+| 20261107-0037 | 企微图片与文件发送去 OCR | ✅ 已完成开发；独测和 CR 通过，媒体真机与真实库样本待验。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w26-图片与文件发送去-ocr2026-11-07) |
 | 20261105-2300 | wecom-personal-rpa 全量删除（废弃功能清退） | ✅ 已完成开发（cleanup SQL 与 nginx 同步待择机执行） | 已被 runtime+wecom-cli 取代的企微个人号 RPA 整链路删除。 | — | [删除计划](plans/plan-wecom-personal-rpa-removal.md) |
 | 20261105-1011 | 企微群聊目录平台标签 | ✅ 已完成开发；群聊不显示会话级平台，仅微信发言人显示标记，待真机视觉验收。 | [设计](design/wecom/wecom-conversation-operations-design.md#621-后续任务群聊平台标签与逐消息发言人) | [计划](plans/plan-wecom-group-platform-label.md) |
 | 20261008-1603 | 飞书、钉钉对话服务接入 AgentRunner | ✅ 已完成开发（待部署真机验收）：保留原渠道业务，仅接入独立 Runner 并传递可信渠道来源；两轮审核修复完成。 | [接入边界](system/agent-application-architecture-design.md#81-后续接入的固定边界) | [飞书](channel/feishu/implementation_plan.md#agentrunner-接入后续独立事项) / [钉钉](channel/dingtalk/implementation_plan.md#agentrunner-接入后续独立事项) / [审核](reviews/feishu-dingtalk-agentrunner-review-2026-10-09.md) |

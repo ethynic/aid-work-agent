@@ -274,7 +274,8 @@ export class LegacyExecution implements HostAdapter {
       // Discovery never delays heartbeat/claim and cannot invoke a business tool.
       // A failed transport is retried by the next heartbeat, without another worker.
       void wecom?.inspectWecomBusinessTools().catch(() => {})
-      const value = deviceCapabilities(this.effectiveConfig(config), wecom?.wecomBusinessReady, wecom?.wecomDirectoryReady)
+      const value = deviceCapabilities(this.effectiveConfig(config), wecom?.wecomBusinessReady,
+        wecom?.wecomDirectoryReady, wecom?.wecomDirectorySearchReady)
       if (recoveryReady && this.supervision.enabled) value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_stop_v1']
       if (wecomRecoveryReady) value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_wecom_v1']
       if (recoveryReady) { value.providers = [...(value.providers as string[]), 'runtime-recovery']; value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_observe_v2'] }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-test('production PS bodies distinguish tray/logout and clean search without Escape', { skip: process.platform !== 'win32' }, () => {
+test('production PS bodies distinguish hidden tray window, logout, and local database login', { skip: process.platform !== 'win32' }, () => {
   const script = fileURLToPath(new URL('../../tests/ps1/tray-escape-regression.ps1', import.meta.url))
   const drivers = fileURLToPath(new URL('../../drivers/ps1/', import.meta.url))
   const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-DriverDir', drivers], {

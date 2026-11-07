@@ -42,7 +42,12 @@ class ToolCatalog:
                 device = next((d for d in devices if str(d['id']) == overrides[key]
                                and d.get('status') == 'active'), None)
             if device and key in catalog.get_provider_keys_for_device(device.get('capabilities_json')):
-                self._device_tools.update(catalog.agent_tools(key))
+                visible = catalog.agent_tools(key)
+                if key == 'wecom' and 'wecom_session_directory_search' not in (
+                    (device.get('capabilities_json') or {}).get('capabilities') or []
+                ):
+                    visible = [name for name in visible if name != 'wecom_session_directory']
+                self._device_tools.update(visible)
 
     def _visible_definitions(self):
         from src.local_tools.catalog import project_agent_definitions

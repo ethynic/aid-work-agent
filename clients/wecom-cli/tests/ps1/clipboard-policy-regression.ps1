@@ -85,6 +85,7 @@ function Get-WeComSearchBoxState{param($MainHwnd,$Tag)return @{State='unknown';C
  @{text='fixture';x0=208;x1=328;y0=26;y1=46},@{text='+';x0=368;x1=384;y0=28;y1=44})}}
 function New-WeComClipboardOwner{$script:owners++;$w=[pscustomobject]@{Handle=[IntPtr]303};$w|Add-Member ScriptMethod Dispose {};return $w}
 function Send-WeComAttachChordKey{param($Hwnd,$Vk)$script:keys++;if($Vk-eq[WeComWin32]::FailChord){return $false};if($Vk-eq0x43){[PolicyClipboardFacade]::Text='fixture';[PolicyClipboardFacade]::Empty=$false;[PolicyClipboardFacade]::HasText=$true;[PolicyClipboardFacade]::Formats=@('UnicodeText');[WeComWin32]::Owner=202;[WeComWin32]::Sequence++};return $true}
+function Clear-WeComFocusedInput{param($Hwnd)return $true}
 function Send-WeComClick{param($Hwnd,$ScreenX,$ScreenY)$script:clicks++;throw 'FORBIDDEN_CLICK'}
 function Assert-Intent($Value,$Why){if(-not$Value){throw $Why}}
 function Reset-Case{
@@ -96,8 +97,7 @@ function Reset-Case{
 function Assert-Rejected{
  $failure='';try{Get-WeComPlainClipboard|Out-Null}catch{$failure=$_.Exception.Message}
  Assert-Intent ($failure-ne'') 'actual plain policy must reject this clipboard'
- $r=Test-WeComSearchClipboardEcho -MainHwnd 101 -Query 'fixture' -TimeoutMs 100
- Assert-Intent (-not$r.matched-and[WeComWin32]::Writes-eq0-and$owners-eq0-and$keys-eq0-and$clicks-eq0) 'rejection must occur before owner creation, any write or input'
+ Assert-Intent ([WeComWin32]::Writes-eq0-and$owners-eq0-and$keys-eq0-and$clicks-eq0) 'rejected clipboard must not cause a write or input'
 }
 $script:passes=0;$script:failures=New-Object 'Collections.Generic.List[string]'
 function Case($Name,[scriptblock]$Test){
@@ -119,7 +119,7 @@ Case 'personal marker accepts only successful NULL identity and preserves exact 
 }
 Case 'nonnull identity even an empty identity buffer is protected and released once' {
  [PolicyCore]::NonNull=$true;Assert-Rejected
- Assert-Intent ([PolicyCore]::Allocated-eq2-and[PolicyCore]::FreeAttempts-eq2-and[PolicyCore]::Freed-eq2) 'each actual policy invocation must release its returned pointer exactly once'
+ Assert-Intent ([PolicyCore]::Allocated-eq1-and[PolicyCore]::FreeAttempts-eq1-and[PolicyCore]::Freed-eq1) 'each actual policy invocation must release its returned pointer exactly once'
 }
 Case 'failed or nonzero HRESULT never makes NULL identity personal' {
  foreach($hr in @(-2147467259,1)){
@@ -153,7 +153,7 @@ Case 'HeapFree failure is explicit and cannot admit or write protected clipboard
  $failure='';try{[PolicyCore]::IsPersonalClipboard()|Out-Null}catch{$failure=$_.Exception.Message}
  Assert-Intent ($failure-match'CLIPBOARD_PROTECTION_CHECK_FAILED') 'failed cleanup must surface explicitly'
  Assert-Rejected
- Assert-Intent ([PolicyCore]::FreeAttempts-eq3-and[PolicyCore]::Freed-eq0) 'each failed release must be attempted once; harness cleans its injected failed frees afterward'
+ Assert-Intent ([PolicyCore]::FreeAttempts-eq2-and[PolicyCore]::Freed-eq0) 'each failed release must be attempted once; harness cleans its injected failed frees afterward'
 }
 Case 'null or no-formats first object refreshes to personal plaintext once' {
  foreach($step in @(1,2)){
@@ -168,97 +168,6 @@ Case 'permanent empty reads are bounded and never invent text' {
   $r=Get-WeComPlainClipboard
   Assert-Intent ($r.empty-and[PolicyClipboardFacade]::Reads-eq2-and[PolicyClipboardFacade]::Plan.Count-eq1) 'read at most two objects, even if a third might later appear'
  }
-}
-Case 'actually empty original clipboard is restored empty after nonce and copy' {
- [PolicyClipboardFacade]::Empty=$true;[PolicyClipboardFacade]::Text='';[PolicyClipboardFacade]::HasText=$false;[PolicyClipboardFacade]::Formats=@()
- $r=Test-WeComSearchClipboardEcho -MainHwnd 101 -Query 'fixture' -TimeoutMs 100
- Assert-Intent ($r.matched-and$r.restored-and[PolicyClipboardFacade]::Empty) 'an actually empty original is distinct from missing evidence for an owned nonce'
-}
-Case 'receipt null or format0 then published nonce verifies and restores' {
- foreach($step in @(1,2)){
-  Reset-Case;foreach($s in @(0,$step,0,0,0)){[PolicyClipboardFacade]::Plan.Enqueue($s)}
-  $saved=[PolicyClipboardFacade]::Text
-  $r=Test-WeComSearchClipboardEcho -MainHwnd 101 -Query 'fixture' -TimeoutMs 100
-  Assert-Intent ($r.matched-and$r.restored-and[PolicyClipboardFacade]::Text-ceq$saved) 'same-sequence transient empty publication must not strand nonce or abandon original'
- }
-}
-Case 'retry cannot discard new rich or enterprise-protected formats' {
- foreach($step in @(4,5)){
-  Reset-Case;[PolicyClipboardFacade]::Plan.Enqueue(1);[PolicyClipboardFacade]::Plan.Enqueue($step)
-  $r=Test-WeComSearchClipboardEcho -MainHwnd 101 -Query 'fixture' -TimeoutMs 100
-  Assert-Intent (-not$r.matched-and[WeComWin32]::Writes-eq0-and$owners-eq0-and$keys-eq0) 'second object must undergo full policy checks before any clipboard write'
- }
-}
-Case 'foreign sequence change while refreshing original cannot be overwritten by CAS' {
- [PolicyClipboardFacade]::Plan.Enqueue(1);[PolicyClipboardFacade]::Plan.Enqueue(3)
- $r=Test-WeComSearchClipboardEcho -MainHwnd 101 -Query 'fixture' -TimeoutMs 100
- Assert-Intent (-not$r.matched-and[WeComWin32]::Writes-eq0-and[PolicyClipboardFacade]::Text-ceq'external'-and$keys-eq0) 'outer original sequence and native CAS remain mandatory after refresh'
-}
-Case 'permanently empty own receipt reports possible unrestored original without blind write' {
- foreach($s in @(0,1,1,1,1)){[PolicyClipboardFacade]::Plan.Enqueue($s)}
- $r=Test-WeComSearchClipboardEcho -MainHwnd 101 -Query 'fixture' -TimeoutMs 100
- Assert-Intent (-not$r.matched-and-not$r.restored-and$r.reason-eq'clipboard_restore_failed') 'same hidden owner without readable nonce still cannot prove restoration'
- Assert-Intent ([WeComWin32]::Writes-eq1-and$keys-eq0) 'unreadable owned clipboard must never be blindly overwritten'
-}
-Case 'permanently empty copy read cannot hide possible unrestored original' {
- $script:expireCopyWait=$true
- foreach($s in @(0,0,1,1,0)){[PolicyClipboardFacade]::Plan.Enqueue($s)}
- $r=Test-WeComSearchClipboardEcho -MainHwnd 101 -Query 'fixture' -TimeoutMs 100
- Assert-Intent (-not$r.matched-and-not$r.restored-and$r.reason-eq'clipboard_restore_failed') 'two empty copy-result reads are missing proof, not an ordinary nonmatching query'
- Assert-Intent ([WeComWin32]::Writes-eq1) 'missing copy text must not authorize blind restoration'
-}
-Case 'foreign write during receipt refresh cannot establish nonce receipt or be restored over' {
- foreach($s in @(0,1,3,0)){[PolicyClipboardFacade]::Plan.Enqueue($s)}
- $r=Test-WeComSearchClipboardEcho -MainHwnd 101 -Query 'fixture' -TimeoutMs 100
- Assert-Intent (-not$r.matched-and-not$r.restored-and[WeComWin32]::Writes-eq1-and$keys-eq0) 'receipt refresh must retain sequence and exact hidden owner proof'
- Assert-Intent ([PolicyClipboardFacade]::Text-ceq'external') 'external clipboard arriving after nonce must remain authoritative'
-}
-Case 'finally may refresh a transiently empty own nonce and safely recover original' {
- foreach($step in @(1,2)){
-  Reset-Case;$saved=[PolicyClipboardFacade]::Text;[WeComWin32]::FailChord=0x41
-  foreach($s in @(0,0,$step,0)){[PolicyClipboardFacade]::Plan.Enqueue($s)}
-  $r=Test-WeComSearchClipboardEcho -MainHwnd 101 -Query 'fixture' -TimeoutMs 100
-  Assert-Intent (-not$r.matched-and$r.restored-and[PolicyClipboardFacade]::Text-ceq$saved) 'failed query copying must still recover a readable exact owned nonce after one refresh'
- }
-}
-Case 'false-empty original cannot overwrite underlying nonempty data through native CAS' {
- $saved=[PolicyClipboardFacade]::Text
- foreach($s in @(1,1,0)){[PolicyClipboardFacade]::Plan.Enqueue($s)}
- $r=Test-WeComSearchClipboardEcho -MainHwnd 101 -Query 'fixture' -TimeoutMs 100
- Assert-Intent (-not$r.matched-and[WeComWin32]::Writes-eq0-and$keys-eq0) 'missing OLE evidence cannot bypass native empty-format precondition'
- Assert-Intent ([PolicyClipboardFacade]::Text-ceq$saved) 'unread original contents must remain intact'
-}
-Case 'late nonempty copy before original deadline may prove and restore after transient empty' {
- foreach($variant in @('null-objects','empty-string')){
-  Reset-Case;$saved=[PolicyClipboardFacade]::Text
-  $steps=if($variant-eq'null-objects'){@(0,0,1,1,0,0)}else{@(0,0,6,0,0)}
-  foreach($s in $steps){[PolicyClipboardFacade]::Plan.Enqueue($s)}
-  $r=Test-WeComSearchClipboardEcho -MainHwnd 101 -Query 'fixture' -TimeoutMs 100
-  Assert-Intent ($r.matched-and$r.restored-and[PolicyClipboardFacade]::Text-ceq$saved) 'empty publications are not proof, but a later exact stable copy within original deadline is valid'
- }
-}
-Case 'actual search Body reports permanent copy-empty restoration uncertainty without retyping' {
- $tokens=$null;$errors=$null
- $searchAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $DriverDir 'chat-search.ps1'),[ref]$tokens,[ref]$errors)
- if($errors.Count){throw($errors|Out-String)}
- $command=$searchAst.FindAll({param($n)$n-is[Management.Automation.Language.CommandAst]-and$n.GetCommandName()-eq'Invoke-DriverMain'},$true)[0]
- $body=($command.CommandElements|Where-Object{$_-is[Management.Automation.Language.ScriptBlockExpressionAst]}|Select-Object -First 1).ScriptBlock.GetScriptBlock()
- function Resolve-WeComMainWindow{return 101}
- function Write-DriverLog{param($Msg)}
- function Invoke-WeComJev{param($StateText,$Questions)return @{used=$false}}
- function Send-WeComClick{param($Hwnd,$ScreenX,$ScreenY)$script:clicks++;return 101}
- function Send-WeComText{param($Hwnd,$Text)$script:typed++}
- function Wait-WeComWindow{param($ClassName,$TimeoutMs)$script:overlay++;throw 'FORBIDDEN_OVERLAY'}
- function Get-WeComSearchBoxState{param($MainHwnd,$Tag)
-  if($Tag-in@('pre','focus')){return @{State='empty';Content='';PlaceholderPos=@(224,36);TokensRaw=@(@{text='搜索';x0=208;x1=240;y0=28;y1=44})}}
-  return @{State='unknown';Content='clipped';ContentPos=@(268,36);TokensRaw=@(@{text='fixture';x0=208;x1=328;y0=26;y1=46},@{text='+';x0=368;x1=384;y0=28;y1=44})}
- }
- $script:typed=0;$script:overlay=0;$script:expireCopyWait=$true;$script:expireDelay=1600
- foreach($s in @(0,0,1,1,0)){[PolicyClipboardFacade]::Plan.Enqueue($s)}
- $Query='fixture';$ArtifactDir='unused';$failure=''
- try{&$body|Out-Null}catch{$failure=$_.Exception.Message}
- Assert-Intent ($failure-like'WECOMDRIVE|UI_CHANGED|*剪贴板写入/恢复失败*原内容可能未恢复*') 'actual user-visible failure must explain restoration uncertainty'
- Assert-Intent ($typed-eq1-and$overlay-eq0-and[WeComWin32]::Writes-eq1) 'do not retype, proceed to overlay or blindly restore after copy publication deadline'
 }
 if($failures.Count){throw($failures-join"`n")}
 Write-Output('PS_CLIPBOARD_POLICY_OK cases='+$passes)

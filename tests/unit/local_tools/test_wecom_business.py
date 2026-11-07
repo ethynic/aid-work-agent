@@ -1,4 +1,4 @@
-"""Three business tools hide navigation, while failed sends never get replayed."""
+"""Four business tools hide navigation, while failed sends never get replayed."""
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -6,14 +6,14 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.local_tools.proxy_tool import (WecomReadSessionTool, WecomMessageSendTool,
-    WecomReadSessionsTool, WecomGroupPollTool, WecomSendStatusTool)
+    WecomReadSessionsTool, WecomSessionDirectoryTool, WecomGroupPollTool, WecomSendStatusTool)
 from src.local_tools.wecom_business import BUSINESS_TOOLS, project_definitions
 from src.local_tools import wecom_flow
 
 
-def test_only_three_business_schemas_are_advertised_without_removing_legacy_execution():
+def test_only_four_business_schemas_are_advertised_without_removing_legacy_execution():
     tools = [WecomReadSessionTool(), WecomMessageSendTool(), WecomReadSessionsTool(),
-             WecomGroupPollTool(), WecomSendStatusTool()]
+             WecomSessionDirectoryTool(), WecomGroupPollTool(), WecomSendStatusTool()]
     definitions = project_definitions([tool.to_tool_definition() for tool in tools])
     assert {item['name'] for item in definitions} == BUSINESS_TOOLS
     for item in definitions:
@@ -21,6 +21,14 @@ def test_only_three_business_schemas_are_advertised_without_removing_legacy_exec
         assert not {'target_ref', 'target_name', 'group_cursor', 'send_invocation_id','resolve_only'} & properties.keys()
     assert WecomMessageSendTool.InputModel(target_name='Old group', text='text', group_cursor='old').group_cursor == 'old'
     assert WecomReadSessionTool.InputModel(session='stable-session').session == 'stable-session'
+
+
+def test_directory_preview_does_not_enter_message_recovery_flow():
+    """页面预览带 session，仍是原只读目录调用，不做消息发送对账。"""
+    from src.local_tools.wecom_flow import modern_call
+
+    assert not modern_call('wecom_session_directory', {'mode': 'preview', 'session': 'ws1.x'})
+    assert modern_call('wecom_read_session', {'session': 'ws1.x'})
 
 
 def context(pending=None):

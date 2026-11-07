@@ -123,7 +123,7 @@ class TestRecordLlmUsageBilling:
         assert result["balance_after"] == 90.0
 
 
-# ============== 客户端 model 白名单路由（kimi-k3 → moonshot） ==============
+# ============== 客户端 model 白名单路由（GLM-5.3-Flash → zhipu） ==============
 
 class TestClientModelWhitelist:
     """LlmChatRequest.model 白名单 + 定价 fail closed 校验。"""
@@ -151,52 +151,72 @@ class TestClientModelWhitelist:
         assert "MODEL_NOT_ALLOWED" in exc.value.detail
 
     @patch("src.db.models.TokenCostPriceDB.get_by_model_name")
-    def test_model_without_price_rejected(self, mock_price, monkeypatch):
+    def test_model_without_price_rejected(self, mock_price):
         """白名单模型无定价行 → 400 MODEL_NOT_PRICED（无单价 = 免单，fail closed）"""
         from fastapi import HTTPException
-
-        from src.api import client_routes
-
-        # Kimi 已禁用（白名单为空），定价校验用临时条目覆盖
-        monkeypatch.setattr(client_routes, "CLIENT_MODEL_PROVIDER_MAP", {"kimi-k3": "moonshot"})
 
         from src.api.client_routes import _get_model_gateway
 
         mock_price.return_value = None
         with pytest.raises(HTTPException) as exc:
-            _get_model_gateway("kimi-k3")
+            _get_model_gateway("GLM-5.3-Flash")
         assert exc.value.status_code == 400
         assert "MODEL_NOT_PRICED" in exc.value.detail
 
         # 单价为 0 同样拒绝
-        mock_price.return_value = {"model_name": "kimi-k3", "input_price_per_m": 0, "output_price_per_m": 0}
+        mock_price.return_value = {"model_name": "GLM-5.3-Flash", "input_price_per_m": 0, "output_price_per_m": 0}
         with pytest.raises(HTTPException) as exc:
-            _get_model_gateway("kimi-k3")
+            _get_model_gateway("GLM-5.3-Flash")
         assert exc.value.status_code == 400
 
     @patch("src.api.client_routes.LLMGateway")
     @patch("src.db.models.TokenCostPriceDB.get_by_model_name")
-    def test_whitelisted_model_routes_to_dedicated_gateway(self, mock_price, mock_gw_cls, monkeypatch):
+    def test_whitelisted_model_routes_to_dedicated_gateway(self, mock_price, mock_gw_cls):
         """白名单模型有定价行 → 构建对应专用网关（model_codes 覆盖）"""
         from src.api import client_routes
 
-        # Kimi 已禁用（白名单为空），路由逻辑用临时条目覆盖
-        monkeypatch.setattr(client_routes, "CLIENT_MODEL_PROVIDER_MAP", {"kimi-k3": "moonshot"})
-
         mock_price.return_value = {
-            "model_name": "kimi-k3", "input_price_per_m": 21.0, "output_price_per_m": 105.0,
+            "model_name": "GLM-5.3-Flash", "input_price_per_m": 0.8, "output_price_per_m": 2.8,
         }
-        client_routes._model_gateways.pop("kimi-k3", None)
+        client_routes._model_gateways.pop("GLM-5.3-Flash", None)
         try:
-            client_routes._get_model_gateway("kimi-k3")
+            client_routes._get_model_gateway("GLM-5.3-Flash")
             mock_gw_cls.assert_called_once_with(
-                provider_name="moonshot", model_codes={"moonshot": "kimi-k3"}, use_failover=False,
+                provider_name="zhipu", model_codes={"zhipu": "GLM-5.3-Flash"}, use_failover=False,
             )
             # 第二次调用复用缓存实例，不重复构建
-            client_routes._get_model_gateway("kimi-k3")
+            client_routes._get_model_gateway("GLM-5.3-Flash")
             assert mock_gw_cls.call_count == 1
         finally:
-            client_routes._model_gateways.pop("kimi-k3", None)
+            client_routes._model_gateways.pop("GLM-5.3-Flash", None)
+
+
+def test_client_glm_title_coordinate_uses_supported_reasoning_mode():
+    """GLM 强制思考；标题定位请求使用 max，不传通用关闭参数。"""
+    from types import SimpleNamespace
+
+    from src.api.client_routes import LlmChatRequest, llm_chat
+
+    seen = {}
+
+    async def fake_chat(**kwargs):
+        seen.update(kwargs)
+        return {"content": '{"x":433,"y":38}', "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+
+    gateway = SimpleNamespace(chat=fake_chat, get_model_name=lambda: "GLM-5.3-Flash",
+                              get_provider_name=lambda: "zhipu")
+    binding = SimpleNamespace(binding_id="cb_test", tenant_id="tenant_test")
+    req = LlmChatRequest(messages=[{"role": "user", "content": "locate"}],
+                         model="GLM-5.3-Flash", purpose="wecom-title-coordinate")
+    with patch("src.api.client_routes._check_credit"), \
+         patch("src.api.client_routes._get_model_gateway", return_value=gateway), \
+         patch("src.api.client_routes.ClientUsageLogDB.record_llm_usage", return_value={
+             "raw_credit_cost": 0.01, "credit_cost": 0.1, "balance_after": 99.9,
+         }):
+        asyncio.run(llm_chat(req, binding))
+
+    assert seen["reasoning_effort"] == "max"
+    assert "enable_thinking" not in seen
 
 
 class TestClientLlmChatMoonshotBilling:
@@ -264,8 +284,10 @@ class TestClientLlmChatMoonshotBilling:
         gateway = SimpleNamespace()
         gateway.get_model_name = lambda: "deepseek-flash"
         gateway.get_provider_name = lambda: "deepseek"
+        seen = {}
 
         async def fake_chat(**kwargs):
+            seen.update(kwargs)
             return {"content": "ok", "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
 
         gateway.chat = fake_chat
@@ -285,6 +307,8 @@ class TestClientLlmChatMoonshotBilling:
 
         mock_get_gw.assert_not_called()
         assert result["model"] == "deepseek-flash"
+        assert seen["enable_thinking"] is False
+        assert "reasoning_effort" not in seen
 
 
 # ============== 激活码生成与校验 ==============

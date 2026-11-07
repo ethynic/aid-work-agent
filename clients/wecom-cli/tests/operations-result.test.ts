@@ -190,7 +190,7 @@ test('probe：企微进程在运行 → 走驱动（mock）带回窗口/登录�
   assert.ok(typeof r.data.node_version === 'string')
 })
 
-test('probe：need_login → 透传 qr_image_base64/qr_status_hint/login_window（E5）', async () => {
+test('probe：登录窗可识别时返回扫码截图与登录态，二维码细状态保持未知', async () => {
   const { fn } = fakeExec({
     'where.exe': 'C:\\powershell.exe\r\n',
     tasklist: '"WXWork.exe","12345","Console","1","100,000 K"\r\n',
@@ -203,7 +203,7 @@ test('probe：need_login → 透传 qr_image_base64/qr_status_hint/login_window�
       current_page: null,
       login_window: { x: 770, y: 270, w: 380, h: 540 },
       qr_image_base64: 'iVBORw0KGgoAAAANSUhEUg==',
-      qr_status_hint: 'expired',
+      qr_status_hint: 'unknown',
     }),
   })
   const r = await op.execute({}, silentCtx())
@@ -212,7 +212,7 @@ test('probe：need_login → 透传 qr_image_base64/qr_status_hint/login_window�
   assert.equal(r.data.login_state, 'need_login')
   assert.equal(r.data.main_window, null)
   assert.equal(r.data.qr_image_base64, 'iVBORw0KGgoAAAANSUhEUg==')
-  assert.equal(r.data.qr_status_hint, 'expired')
+  assert.equal(r.data.qr_status_hint, 'unknown')
   assert.deepEqual(r.data.login_window, { x: 770, y: 270, w: 380, h: 540 })
 })
 

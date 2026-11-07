@@ -5,7 +5,7 @@
  * 保证「Host 看到的 schema」与「manifest digest 的 schema」同源（SDK 1.30.0 内部同样
  * 用 zod v4 toJSONSchema 生成 list_tools 的 inputSchema）。
  *
- * M1 有 wecom_probe（只读）与 wecom_add_customer（写）；M2 增加 wecom_chat_search（只读）
+ * M1 有 wecom_probe（只读）；M2 增加 wecom_chat_search（只读）
  * 与 wecom_message_send（写）；M3 增加 wecom_unread_list 与 wecom_watch_poll（读）；
  * M5 增加 wecom_chat_select（半写：无出站消息，但进会话清角标/切换会话视图）；
  * M7 增加 wecom_send_image（写：向 target_ref 目标发送 1 张本地图片）；
@@ -42,7 +42,7 @@ export const TOOL_DEFS: WecomToolDef[] = [
     description:
       '只读探测企业微信操作环境：Windows 平台、交互桌面会话（已登录未锁屏）、PowerShell 可用性、' +
       'WXWork.exe 进程存在性；进程运行时再解析主窗口 rect、登录态（online/need_login/offline）与当前内容页；' +
-      'need_login 时附登录窗二维码截图（qr_image_base64，PNG base64）与状态提示 qr_status_hint（normal/expired/limited/unknown），供扫码上线。' +
+      'need_login 时附登录窗二维码截图（qr_image_base64，PNG base64）供扫码上线；保留 qr_status_hint 字段，当前返回 unknown。' +
       '不激活窗口、不发送输入、不改剪贴板，无外部写副作用。',
     zodShape: {
       verbose: z.boolean().optional().describe('返回更多诊断字段（系统版本/Node 版本），默认 false'),
@@ -50,29 +50,12 @@ export const TOOL_DEFS: WecomToolDef[] = [
     annotations: { title: '企业微信环境探测', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
-    name: 'wecom_add_customer',
-    title: '企业微信添加客户',
-    description:
-      '按手机号在企业微信「通讯录 → 新的客户 → 添加」中检索微信用户并发送添加邀请（写动作，单次单号码）。' +
-      'confirm 必须显式为 true 才会执行。成功后返回对方微信名与各步骤截图路径；' +
-      '号码无检索结果返回 CUSTOMER_NOT_FOUND（不重试）；' +
-      'effect=unknown 表示邀请可能已发出但校验失败，系统不会自动重试，请人工确认。',
-    zodShape: {
-      phone: z.string().regex(/^1\d{10}$/).describe('客户手机号（11 位数字，1 开头）'),
-      confirm: z.literal(true).describe('显式确认：这是对外发送添加邀请的写动作，必须传 true'),
-    },
-    annotations: { title: '企业微信添加客户', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  },
-  {
     name: 'wecom_chat_search',
     title: '企业微信搜索联系人/会话',
     description:
-      '在企业微信主窗口搜索框按关键词检索联系人/群聊（只读，不打开会话、不读历史消息）。' +
-      '返回候选列表（name/subtitle/section/x/y 及 Jev 概率）与 best 最优候选（含置信度与概率分布），' +
-      '每个候选带 target_ref（HMAC 签名短期句柄，有效期 5 分钟，payload 含 overlay 相对坐标），' +
-      '供 wecom_message_send 等后续命令作为目标使用。' +
-      '注意：搜索结果面板（overlay）在返回后保持打开，其坐标句柄由后续 select 类命令消费。' +
-      '无结果返回 TARGET_NOT_FOUND（data 附 reason 与 jev/timing_ms 诊断信息）。',
+      '先从企业微信本地库的群会话与联系人名称中匹配，不操作窗口。完整名称优先，其次关键词包含。' +
+      '完整名称跨联系人/群聊类型也唯一时返回账号绑定 target_ref，供 wecom_chat_select 进入会话；无命中返回近似名称候选供判断，不能擅自改目标。' +
+      '多个不同名称返回候选，请用户指定完整名称；多个同名目标须备注或重命名。',
     zodShape: {
       query: z.string().min(1).max(100).describe('搜索关键词（联系人/群名，1-100 字）'),
       type: z.enum(['contact', 'group', 'any']).optional().describe('过滤分区：contact=联系人，group=群聊，any=全部（默认）'),
@@ -84,14 +67,12 @@ export const TOOL_DEFS: WecomToolDef[] = [
     name: 'wecom_chat_select',
     title: '企业微信进入会话',
     description:
-      '点击 wecom_chat_search 返回的搜索结果条目，进入对应联系人/群聊会话（不发送任何消息）。' +
-      '前置条件：必须先调 wecom_chat_search 且搜索结果面板（overlay）仍处于打开状态，' +
-      'target_ref 有效期 5 分钟；面板已关或 ref 过期返回 TARGET_REF_STALE（需重新 search）。' +
-      '点击前 OCR 复核面板条目与坐标（防陈旧面板），点击后校验会话标题与目标一致，不符返回 UI_CHANGED。' +
+      '消费 wecom_chat_search 的唯一匹配 target_ref：复查本地名称唯一性，然后 Ctrl+F 搜索完整名称并回车。' +
+      '进入后用缓存标题点复制标题严格核对；无缓存先标定。target_ref 有效期 5 分钟。' +
       '副作用（半写动作，无出站消息）：进入会话会清除该会话未读角标（企微客户端固有行为），' +
       '并切换主窗口当前会话视图。',
     zodShape: {
-      target_ref: z.string().min(1).describe('目标句柄（wecom_chat_search 返回的 target_ref，须含坐标的 M4+ 版本）'),
+      target_ref: z.string().min(1).describe('唯一匹配的账号绑定目标句柄（wecom_chat_search 返回）'),
     },
     annotations: { title: '企业微信进入会话', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
@@ -105,16 +86,12 @@ export const TOOL_DEFS: WecomToolDef[] = [
       'target_ref 必须来自 wecom_chat_search（有效期 5 分钟，过期 TARGET_REF_STALE 需重新搜索）。' +
       'M11a 直达模式：改传 target_name（与 target_ref 二选一，可选 subtitle 消歧），内部自动 search 定位' +
       '（身份校验 + 唯一匹配，同名多候选无法消歧返回 TARGET_AMBIGUOUS），data 附 resolved_target。' +
-      '智能分发：发送驱动核对当前标题——当前会话就是目标时清空输入区并沿原输入方式发送（快路径）；' +
-      '不是目标或无法判定时自动执行 search（Jev 选最优候选）+ select（点击进会话并校验标题）后再发送，' +
-      '两轮均不在目标会话返回 TARGET_NOT_FOUND（未发送消息）。' +
-      '输入替换：目标标题确认后清空该会话输入区已有内容；单行逐字输入，多行经剪贴板粘贴；' +
-      '清理失败不发送，发送前标题复核不一致则清理本次输入并中止。' +
-      '副作用：已有未发送文字会被覆盖；多行发送会覆盖用户剪贴板且不恢复。Jev 不可用时降级为标题规则匹配、比例坐标输入点；终态沿三选二规则。' +
+      '发送前从本地库确认唯一目标与当前账号，必要时通过本地搜索和标题复制进入目标会话；' +
+      '点击缓存输入点、清除已有草稿、粘贴文本并按 Enter。剪贴板内容会被覆盖且不立即恢复。' +
       '终态核验：本地库可用时发送后按本地记录核验，成功为 verification=local-record' +
       '（发送前基线之后出现「方向=本人 ∧ 正文全等 ∧ trusted」的新记录，verification_detail.message_id 为匹配记录；' +
       '含义=客户端已记录并经本地核验，不代表对方已收到/已读）；未命中或本地库核验失败保持结果未知。' +
-      '无本地库基线的旧路径仍走驱动内 OCR 核验（无 verification 字段）。' +
+      '本地库不可用时拒绝发送，不进入旧视觉回退。' +
       '核验失败返回 EXECUTION_UNKNOWN（消息可能已发出，系统不会自动重试、绝不重入发送阶段）。' +
       '本地库基线可用时，发送前保存加密凭据；结果或错误data.receipt_id供wecom_send_status只读对账，' +
       '不能因unknown再次调用发送。无receipt_id时须人工核对，不猜测凭据。',
@@ -132,13 +109,13 @@ export const TOOL_DEFS: WecomToolDef[] = [
     name: 'wecom_send_status',
     title: '企业微信发送结果对账',
     description:
-      '使用原wecom_message_send返回的receipt_id只读核对发送结果；不搜索、切群、输入、OCR或发送，不自动重发。' +
+      '使用原文本/图片/文件发送返回的receipt_id只读核对发送结果；不搜索、切群、输入、OCR或发送，不自动重发。' +
       '凭据绑定本机Windows用户、原企微账号/会话/源库与时间窗。查询success=true/effect=none只表示读取完成，' +
-      '必须检查data.send_status：confirmed仅表示原发送窗口内有唯一可信全文匹配的客户端记录，' +
+      '必须检查data.send_status：confirmed仅表示原发送窗口内有唯一匹配的客户端记录（文本须可信全文，文件须同名，图片不证明原文件字节一致），' +
       '不代表对方收到/已读；unknown仍可能已发送，稍后只读核对或人工处理，禁止重试原发送。' +
       '凭据缺失、失效、不可解密、换账号/库、歧义、扫描达到上限均不推断未发送。',
     zodShape: {
-      receipt_id: z.string().min(1).max(96).describe('原文本发送结果data.receipt_id，非路径；不得猜测或改用其他发送的凭据'),
+      receipt_id: z.string().min(1).max(96).describe('原发送结果data.receipt_id，非路径；不得猜测或改用其他发送的凭据'),
     },
     annotations: { title: '企业微信发送结果对账', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
@@ -146,17 +123,17 @@ export const TOOL_DEFS: WecomToolDef[] = [
     name: 'wecom_send_image',
     title: '企业微信发送图片消息',
     description:
-      '向 target_ref 指定的联系人/群聊发送 1 张本地图片（写动作，单次单目标单张，智能分发同 wecom_message_send）。' +
+      '向 target_ref 指定的联系人/群聊发送 1 张本地图片（写动作，单次单目标单张）。' +
       'M11a 直达模式：改传 target_name（与 target_ref 二选一），内部自动 search 定位' +
       '（身份校验 + 唯一匹配，同名多候选无法消歧返回 TARGET_AMBIGUOUS），data 附 resolved_target。' +
       '文件契约：image_path 必须是本机（装有 runtime 与 wecom-cli 的机器）上的**绝对路径**，' +
       '调用方（agent/上层）负责先把文件落到该机器；仅支持 png/jpg/jpeg/bmp/gif，≤20MB。' +
       '粘贴经剪贴板通道（Clipboard.SetImage + Ctrl+V），副作用：覆盖用户剪贴板且不恢复。' +
-      '终态由两条证据与 Jev 判定：输入区像素方差回落 + 会话列表预览出现「[图片]」；' +
-      '校验失败返回 EXECUTION_UNKNOWN（图片可能已发出，系统不会自动重试，请人工确认）。' +
-      '已知限制：发送前标题复核失败中止时，输入区可能残留图片预览（非文本草稿无法自动清除），需人工清理。',
+      '发送前从本地库唯一解析会话并记录基线，复制标题核对后用缓存输入点清草稿、粘贴、Enter。' +
+      '发送后唯一 101 本人出站记录才确认客户端有图片记录，不证明原文件字节一致或对方已收到。' +
+      '未命中/歧义/库失败返回 EXECUTION_UNKNOWN，保留 receipt_id 供 wecom_send_status 只读对账，绝不自动重发。',
     zodShape: {
-      target_ref: z.string().min(1).optional().describe('发送目标句柄（wecom_chat_search 返回的 target_ref，须为含坐标的 M4+ 版本；与 target_name 二选一）'),
+      target_ref: z.string().min(1).optional().describe('发送目标句柄（wecom_chat_search 唯一匹配返回；与 target_name 二选一）'),
       target_name: z.string().min(1).max(100).optional().describe('直达模式：按会话名（联系人/群名，可含 @微信 后缀）定位目标，内部自动 search 并做身份校验（同名多候选无法消歧返回 TARGET_AMBIGUOUS）；与 target_ref 二选一'),
       image_path: z.string().min(1).describe('图片本地绝对路径（png/jpg/jpeg/bmp/gif，≤20MB；调用方负责先落盘到本机）'),
     },
@@ -166,21 +143,19 @@ export const TOOL_DEFS: WecomToolDef[] = [
     name: 'wecom_send_file',
     title: '企业微信发送文件消息',
     description:
-      '向 target_ref 指定的联系人/群聊发送 1 个本地文件（写动作，单次单目标单个，智能分发同 wecom_message_send）。' +
+      '向 target_ref 指定的联系人/群聊发送 1 个本地文件（写动作，单次单目标单个）。' +
       'M11a 直达模式：改传 target_name（与 target_ref 二选一），内部自动 search 定位' +
       '（身份校验 + 唯一匹配，同名多候选无法消歧返回 TARGET_AMBIGUOUS），data 附 resolved_target。' +
       '文件契约：file_path 必须是本机（装有 runtime 与 wecom-cli 的机器）上的**绝对路径**，' +
-      '调用方（agent/上层）负责先把文件落到该机器；扩展名不限（任意文件），≤100MB，' +
-      '文件名去空白后不足 3 字符会被拒绝（OCR 发送校验无法可靠区分，请改名）。' +
+      '调用方（agent/上层）负责先把文件落到该机器；扩展名不限（任意文件），≤100MB。' +
       '粘贴经剪贴板通道（Clipboard.SetFileDropList + Ctrl+V），副作用：覆盖用户剪贴板且不恢复。' +
-      '终态由两条证据与 Jev 判定（基线差分，只认新出现的 token）：输入区文件名 token 消失 + 会话列表预览出现「[文件名]」；' +
-      '校验失败返回 EXECUTION_UNKNOWN（文件可能已发出，系统不会自动重试，请人工确认）。' +
-      '已知限制：发送前标题复核失败中止时，输入区可能残留文件卡片（非文本草稿无法自动清除），需人工清理；' +
-      '重发同名文件时会话列表预览可能不变，校验或报 EXECUTION_UNKNOWN（属保守方向，人工确认即可）。',
+      '发送前从本地库唯一解析会话并记录基线，复制标题核对后用缓存输入点清草稿、粘贴、Enter。' +
+      '发送后唯一 102 本人出站记录且附件名与文件名全等才确认客户端有同名文件记录。' +
+      '未命中/歧义/库失败返回 EXECUTION_UNKNOWN，保留 receipt_id 供 wecom_send_status 只读对账，绝不自动重发。',
     zodShape: {
-      target_ref: z.string().min(1).optional().describe('发送目标句柄（wecom_chat_search 返回的 target_ref，须为含坐标的 M4+ 版本；与 target_name 二选一）'),
+      target_ref: z.string().min(1).optional().describe('发送目标句柄（wecom_chat_search 唯一匹配返回；与 target_name 二选一）'),
       target_name: z.string().min(1).max(100).optional().describe('直达模式：按会话名（联系人/群名，可含 @微信 后缀）定位目标，内部自动 search 并做身份校验（同名多候选无法消歧返回 TARGET_AMBIGUOUS）；与 target_ref 二选一'),
-      file_path: z.string().min(1).describe('文件本地绝对路径（扩展名不限，≤100MB，文件名去空白后须 ≥3 字符；调用方负责先落盘到本机）'),
+      file_path: z.string().min(1).describe('文件本地绝对路径（扩展名不限，≤100MB；调用方负责先落盘到本机）'),
     },
     annotations: { title: '企业微信发送文件消息', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
@@ -189,16 +164,15 @@ export const TOOL_DEFS: WecomToolDef[] = [
     title: '企业微信未读/待回复会话快照',
     description:
       '读取企业微信会话快照（只读，不打开会话、不清除未读角标）。' +
-      '缺省按doctor状态分派：本地库可用时返回待回复快照（channel=local-db，judgment_basis=last_sender，' +
+      '仅支持已验证企业微信版本的本地库，返回待回复快照（channel=local-db，judgment_basis=last_sender，' +
       '会话最后一条可参与判定的消息来自对方即待回复，可发现已读未回复，系统消息不参与判定）；' +
-      '否则走UI角标快照（channel=ui，judgment_basis=badge，无法覆盖已读未回复，结果附能力差异说明）。' +
-      '本地库失败可兜底UI（附原因），取消/身份/目标类失败不兜底；channel=local-db强制本地库失败不回退。' +
-      '可选name子串过滤（两通道同语义：对会话显示名做子串包含匹配；本地库通道仅 focus 命中的会话携带显示名，无显示名的会话在指定 name 时排除）；' +
-      'focus为关注会话名列表（本地库逐名解析，失败进failed部分返回，UI通道忽略）。' +
+      '本地库不可用时明确报错，不读取 UI 或 OCR。' +
+      '可选name子串过滤：按会话名称、别名或备注匹配；命名来源不可用时明确报错，未指定 name 的快照可省略显示名；' +
+      'focus为关注会话名列表，逐名解析失败进failed部分返回。' +
       '适合作为自动回复目标的探测：待回复会话可再调 wecom_read_session 取内容。',
     zodShape: {
-      name: z.string().max(100).optional().describe('可选：按会话显示名子串过滤（两通道一致；本地库通道无显示名的会话会被排除，建议配合 focus 使用）'),
-      channel: z.enum(['local-db', 'ui']).optional().describe('显式通道；缺省按 doctor 状态分派；强制 local-db 失败不兜底'),
+      name: z.string().max(100).optional().describe('可选：按会话名称、别名或备注子串过滤；命名来源不可用时明确报错'),
+      channel: z.enum(['local-db', 'ui']).optional().describe('仅 local-db 可用；旧 ui 值会明确报 VERSION_UNSUPPORTED'),
       focus: z.array(z.string().min(1)).min(1).optional().describe('关注会话名列表（可含@微信后缀）；未传=全部；空数组非法；单名解析失败进 failed 部分返回'),
     },
     annotations: { title: '企业微信未读/待回复会话快照', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -214,11 +188,8 @@ export const TOOL_DEFS: WecomToolDef[] = [
       '日期读取返回read_window（start_utc/end_utc/snapshot_at）且不推进增量cursor、不产生待回复候选。' +
       '图片/文件在时间线返回附件信息；附件内容本轮仅元数据展示，需要内容时传attachment.message_id按需读取，文本以字节offset/max_bytes分页、图片返回实际图片内容，不推进时间线cursor。' +
       '旧调用兼容：读取目标会话消息，effect=none，无出站消息。target_ref（搜索返回、有效5分钟）与target_name二选一，同名无法消歧返回TARGET_AMBIGUOUS。' +
-      'doctor已启用时优先本地库，默认最近100条；精确时间、消息ID和增量cursor，不切换会话或清角标，非文本占位。' +
-      '可指定channel=local-db强制本地库（失败不回退）或ui；cursor绑定账号/会话/数据库代际，UI不能执行cursor。旧ref可用于UI，本地库要求账号绑定ref或target_name。' +
-      '本地库不可用的普通首读可回退UI，返回原因与能力差异；取消、参数、账号/目标错误不回退。未初始化走UI并提示doctor。' +
-      'UI保留model/ocr两种输出channel：配置服务端时模型解析按次计积分，余额不足或配置错误不降级；未配置或模型暂不可用走本地OCR。' +
-      'UI按max_pages翻屏，可能自动搜索/切换会话并清除角标，时间/方向可能近似；数据含messages、channel及相应通道元数据。',
+      '旧目标参数也只使用已验证企业微信版本的本地库，默认最近100条；精确时间、消息ID和增量cursor，不切换会话或清角标，非文本占位。' +
+      '本地库不可用时明确报错，不读取 UI 或 OCR；cursor绑定账号/会话/数据库代际。旧无账号ref拒绝，请重新搜索或使用target_name。',
     zodShape: {
       session: z.string().min(1).max(2048).optional().describe('会话完整名称或读取返回的稳定session；与旧target参数互斥'),
       attachment: z.object({
@@ -231,22 +202,23 @@ export const TOOL_DEFS: WecomToolDef[] = [
       timezone: z.string().min(1).max(64).optional().describe('日期模式IANA时区，缺省Asia/Shanghai；仅date模式可用，续页省略以继承原范围'),
       include_context: z.boolean().optional().describe('日期模式背景：true首次带该日零点前最近100条，与当日消息共同分页；首次缺省false，续页省略继承原值'),
       target_ref: z.string().min(1).optional().describe('目标句柄（wecom_chat_search 返回的 target_ref；与 target_name 二选一）'),
-      target_name: z.string().min(1).max(100).optional().describe('按会话名定位（可含@微信后缀）；本地库精确匹配并消歧，UI必要时内部search，歧义返回TARGET_AMBIGUOUS；与target_ref二选一'),
-      channel: z.enum(['local-db', 'ui']).optional().describe('显式通道；缺省按doctor状态，本地库强制模式失败不回退'),
-      limit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional().describe('本地库最多返回条数，默认100；日期模式每页默认100条、上限100（超出会被服务端拒绝）；UI仍由max_pages控制，不承诺数据库分页'),
-      cursor: z.string().min(1).optional().describe('上次本地库返回的增量游标；绑定账号、会话和代际，UI不支持。日期模式返回独立日期游标（wd1），续页原样回传'),
-      max_pages: z.number().int().min(1).max(10).optional().describe('最多向上翻几屏（含底部当前屏，默认 1，上限 10）'),
-      since_days: z.number().int().min(1).optional().describe('本地库按精确发送时间过滤最近N天；UI仅OCR按分割线超龄早停，模型通道仍抓max_pages'),
+      target_name: z.string().min(1).max(100).optional().describe('按会话名定位（可含@微信后缀）；本地库精确匹配并消歧，歧义返回TARGET_AMBIGUOUS；与target_ref二选一'),
+      channel: z.enum(['local-db', 'ui']).optional().describe('仅 local-db 可用；旧 ui 值会明确报 VERSION_UNSUPPORTED'),
+      limit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional().describe('本地库最多返回条数，默认100；日期模式每页默认100条、上限100（超出会被服务端拒绝）'),
+      cursor: z.string().min(1).optional().describe('上次本地库返回的增量游标；绑定账号、会话和代际。日期模式返回独立日期游标（wd1），续页原样回传'),
+      max_pages: z.number().int().min(1).max(10).optional().describe('旧 UI 参数，已停用；请使用 limit'),
+      since_days: z.number().int().min(1).optional().describe('本地库按精确发送时间过滤最近N天'),
     },
     annotations: { title: '企业微信读取会话消息', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   {
     name: 'wecom_session_directory',
     title: '企业微信会话目录',
-    description: '每日总结页面专用只读本地会话目录与最近三条预览；不推进监控游标。',
+    description: '只读本地会话目录：页面列表、预览、核验及按联系人/群名搜索；不推进监控游标。',
     zodShape: {
-      mode: z.enum(['list', 'preview', 'resolve']),
+      mode: z.enum(['list', 'preview', 'resolve', 'search']),
       query: z.string().max(100).optional(),
+      type: z.enum(['contact', 'group', 'any']).optional(),
       cursor: z.string().max(4096).optional(),
       limit: z.number().int().min(1).max(50).optional(),
       session: z.string().min(1).max(2048).optional(),
@@ -274,23 +246,21 @@ export const TOOL_DEFS: WecomToolDef[] = [
     title: '企业微信新消息跟踪（单轮）',
     description:
       '新消息跟踪单轮（无会话归档时的核心读能力：增量检测 + 待回复场景的持续监控）。' +
-      '缺省按 doctor 状态分派通道：本地库可用（channel=local-db）返回自上轮水位以来的全部新消息' +
+      '仅支持已验证企业微信版本的本地库，返回自上轮水位以来的全部新消息' +
       '（data={new_messages:[{conversation_id,messages:[{side,system?,msg_id,text,time,parse_trusted}],has_more?}],' +
       'last_sender:{<conv_id>:"self"|"peer"|null}}，msg_id 为会话内去重键；last_sender 为最后一条可参与回复判定' +
       '消息的方向，系统消息不参与），不切会话、不清角标、零 UI 副作用；首次见到的会话建立基线=当前水位，' +
       '只报之后的新消息（存量不回放，存量待回复请先调 wecom_unread_list）。' +
       '本地库不可用时本轮结构化失败（db_unavailable=true，水位保留），不自动降级 UI，下轮重试；' +
-      '取消/身份类失败同样不吞。否则走 UI 通道（channel=ui）：未读快照与水位 diff → 读候选会话当前屏 → 只返回增量，' +
-      'data.events={type:"new_messages",session,unread_count,messages:[{side,text}]} 或 {type:"tick",unread_total}；' +
-      '副作用：读取候选会话会清除其未读角标并推进本机文本水位。' +
-      'focus 为关注输入列表（每项为会话名或账号绑定 target_ref；仅本地库通道解析，失败进 failed 部分返回，UI 通道忽略）。' +
+      '取消/身份类失败同样不吞；不读取 UI 或 OCR。' +
+      'focus 为关注输入列表（每项为会话名或账号绑定 target_ref；解析失败进 failed 部分返回）。' +
       'focus 建立时一次性解析并持久绑定到会话身份，后续轮次按绑定轮询、不再按名解析（联系人改名不影响跟踪），' +
       '显式关注的空会话从首批新消息起全量上报。同账号源库被替换/重建时该轮 generation_changed=true 且基线按当前水位重建（不回放）。' +
       '注意：DB 中断恢复后消费增量前，应核对会话最新发言方与已回复状态（不承诺不漏检）。' +
       '长循环请用 CLI watch 动词（aid-wecom watch --channel local-db [--focus 名1,名2]，本工具每轮一次调用）。',
     zodShape: {
-      channel: z.enum(['local-db', 'ui']).optional().describe('显式通道；缺省按 doctor 状态分派；本地库失败不落 UI（db_unavailable 结构化失败，水位保留）'),
-      focus: z.array(z.string().min(1)).min(1).optional().describe('关注输入列表（会话名，可含@微信后缀，或账号绑定 target_ref）；未传=全部会话；空数组非法；仅本地库通道解析（失败进 failed），UI 通道忽略；建立时一次性解析持久绑定，后续按绑定轮询（改名不影响跟踪）'),
+      channel: z.enum(['local-db', 'ui']).optional().describe('仅 local-db 可用；旧 ui 值会明确报 VERSION_UNSUPPORTED；本地库失败水位保留'),
+      focus: z.array(z.string().min(1)).min(1).optional().describe('关注输入列表（会话名，可含@微信后缀，或账号绑定 target_ref）；未传=全部会话；空数组非法；解析失败进 failed；建立时一次性解析持久绑定，后续按绑定轮询（改名不影响跟踪）'),
     },
     annotations: { title: '企业微信新消息跟踪（单轮）', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },

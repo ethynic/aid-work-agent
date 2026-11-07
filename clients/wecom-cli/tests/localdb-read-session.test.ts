@@ -180,86 +180,6 @@ test('contact已有实际S时不依赖可选session；空S无可用session明确
   }
 })
 
-test('ref账号错误优先于版本不可用；legacy仅UI兼容，cursor/强制DB不降级', windows, async () => {
-  const f = await fixture(1)
-  try {
-    let uiCalls = 0, dbCalls = 0
-    const op = createWecomReadSessionOperation({
-      localdb: f.deps, artifactDirFn: () => f.base, env: {},
-      verifyRefFn: ref => ({ name: 'Peer', type: 'contact', subtitle: '', ...(ref === 'legacy' ? {} : { account: 'another-account' }) }),
-      runDriverFn: async () => { uiCalls++; return { messages: [{ side: 'peer', text: 'synthetic-ui' }] } },
-      readDbFn: async () => { dbCalls++; throw new CodedOperationError('VERSION_UNSUPPORTED', 'synthetic-version') },
-    })
-    assert.equal((await op.execute({ target_ref: 'bound' }, ctx())).code, 'TARGET_REF_STALE')
-    assert.equal((await op.execute({ target_ref: 'bound', channel: 'ui' }, ctx())).code, 'TARGET_REF_STALE')
-    assert.equal((await op.execute({ target_ref: 'legacy' }, ctx())).code, 'TARGET_REF_STALE')
-    const legacy = await op.execute({ target_ref: 'legacy', channel: 'ui' }, ctx())
-    assert.equal(legacy.success, true)
-    assert.equal(legacy.data.target_ref_legacy, true)
-    const first = await readLocaldbSession({ name: 'Peer' }, ctx(), f.current, f.deps)
-    const incremental = await op.execute({ target_name: 'Peer', cursor: first.data!.cursor as string }, ctx())
-    assert.equal(incremental.code, 'CURSOR_UNSUPPORTED')
-    const forced = await op.execute({ target_name: 'Peer', channel: 'local-db' }, ctx())
-    assert.equal(forced.code, 'VERSION_UNSUPPORTED')
-    assert.equal(uiCalls, 1)
-    assert.equal(dbCalls, 2)
-  } finally { f.close() }
-})
-
-test('unset/compat保持UI，transient成功提升；强制本地库不改compat落盘模式', windows, async () => {
-  const f = await fixture(1)
-  try {
-    const op = createWecomReadSessionOperation({ localdb: f.deps, artifactDirFn: () => f.base, env: {},
-      verifyRefFn: () => ({ name: 'Peer', type: 'contact', subtitle: '', account: SELF }),
-      runDriverFn: async () => ({ messages: [{ side: 'peer', text: 'synthetic-ui' }] }),
-    })
-    for (const mode of ['unset', 'compat', 'transient']) {
-      writeLocalState(mode === 'unset' ? { mode: 'unset' } : { mode: 'ui', kind: mode as 'compat' | 'transient', version: VERSION }, f.stateDir)
-      const result = await op.execute({ target_ref: 'bound' }, ctx())
-      assert.equal(result.success, true)
-      assert.equal(result.data.channel, mode === 'transient' ? 'local-db' : 'ocr')
-      if (mode === 'transient') assert.equal(readLocalState(f.stateDir)!.mode, 'db')
-    }
-    writeLocalState({ mode: 'ui', kind: 'compat', version: VERSION }, f.stateDir)
-    assert.equal((await op.execute({ target_ref: 'bound', channel: 'local-db' }, ctx())).data.channel, 'local-db')
-    assert.equal(readLocalState(f.stateDir)!.mode, 'ui')
-  } finally { f.close() }
-})
-
-test('bound ref UI长读取后账号变化不返回结果，legacy UI不新增身份依赖', windows, async () => {
-  const f = await fixture(1)
-  try {
-    let probes = 0
-    f.deps.probeAccountFn = async () => ++probes === 1 ? f.current : { ...f.current, account: 'changed' }
-    const op = createWecomReadSessionOperation({ localdb: f.deps, artifactDirFn: () => f.base, env: {},
-      verifyRefFn: () => ({ name: 'Peer', type: 'contact', subtitle: '', account: SELF }),
-      runDriverFn: async () => ({ messages: [{ side: 'peer', text: 'synthetic-ui' }] }),
-    })
-    assert.equal((await op.execute({ target_ref: 'bound', channel: 'ui' }, ctx())).code, 'TARGET_REF_STALE')
-    assert.equal(probes, 2)
-  } finally { f.close() }
-})
-
-test('DB失败且清理失败后UI也失败，保留UI错误与cleanup_failed', windows, async () => {
-  const f = await fixture(1)
-  try {
-    f.deps.captureFn = async () => ({ ok: false, reason: 'copy-failed', detail: 'synthetic' })
-    f.deps.workDirFn = () => {
-      const work = createLocaldbWorkDir('read-session', f.deps.workBaseDir)!
-      return { ...work, cleanup: () => false }
-    }
-    const op = createWecomReadSessionOperation({ localdb: f.deps, artifactDirFn: () => f.base, env: {},
-      verifyRefFn: () => ({ name: 'Peer', type: 'contact', subtitle: '', account: SELF }),
-      runDriverFn: async () => { throw new CodedOperationError('UI_CHANGED', 'synthetic-ui-failed') },
-    })
-    const result = await op.execute({ target_ref: 'bound' }, ctx())
-    assert.equal(result.code, 'UI_CHANGED')
-    assert.equal(result.message, 'synthetic-ui-failed')
-    assert.equal(result.effect, 'none')
-    assert.equal((result.data.cleanup_failed as unknown[]).length, 1)
-  } finally { f.close() }
-})
-
 test('带cursor取消等待真实Python close后才删工作目录，不改成游标失败或启动UI', windows, async () => {
   const f = await fixture(1)
   const ac = new AbortController()
@@ -282,7 +202,7 @@ test('带cursor取消等待真实Python close后才删工作目录，不改成�
     }
     poll = setInterval(() => { if (existsSync(marker)) ac.abort() }, 10)
     deadline = setTimeout(() => ac.abort(), 5000)
-    const op = createWecomReadSessionOperation({ localdb: f.deps, env: {}, runDriverFn: async () => { throw new Error('UI must not run') } })
+    const op = createWecomReadSessionOperation({ localdb: f.deps })
     const result = await op.execute({ target_name: 'Peer', cursor: first.data!.cursor as string }, { signal: ac.signal, progress() {} })
     assert.equal(result.code, 'CANCELLED')
     assert.ok(existsSync(marker), '必须真实启动过子进程，不能仅覆盖spawn前取消')
