@@ -35,6 +35,19 @@
 | W26 图片与文件发送去 OCR | 双点缓存粘贴附件，Enter 后本地库只读对账 | ✅ 完成（2026-11-07） | 独测 Node 65/65、PS 标题行为及 CR 通过；无真实 101/102 样本和媒体真机验收，未部署 |
 | W27 企微删除添加客户与 OCR 发行依赖 | 退役唯一 OCR 入口，拆独立便携本地库 Python 资产 | ✅ 完成（2026-11-07） | 独测、隔离签包及 CR 通过；未正式发行、部署或验证真实超长安装路径 |
 | W28 搜索门禁真机回炉 | 唯一本地目录后直接输入搜索并 Enter，标题复制做最终核对 | 🔧 进行中 | 独测 Node 42/42、Python 5/5、PS 四份及 CR 通过；待真机复验 |
+| W29 标题复制剪贴板诊断 | 分辨 OLE 读取阻塞、远控接管与 CAS 恢复结果 | 🔧 进行中 | 独测与 CR 通过；待受控真机探针，未验证真实发送 |
+
+## W29 标题复制剪贴板诊断（2026-11-07）
+
+事实：W28 真机 `select` 已实际切到孙晨，但 120 秒驱动超时；之后发送在复制标题/恢复剪贴板阶段返回 `UI_CHANGED clipboard_restore_failed`，明确未触碰输入区，库内最后 `message_id=1733` 无新增出站。普通 shell 只读 `Get-Clipboard -Raw` 10 秒无输出后被终止；仅 Win32 元数据读到剪贴板 owner PID 49232 为 `AweSun.exe`（远控），不是企微。远控同步/延迟渲染可能使 OLE 读阻塞，但未有分段计时，不能归因坐标或标题文字。`Get-WeComCopiedTitle` 当前恢复分支把初始错误、未尝试 CAS、CAS 返回 false 混报为 `clipboard_restore_failed`。
+
+开发范围：先在现有设计和自测中只观察无内容元数据，记录标题复制各同步剪贴板调用的开始/结束阶段、耗时、剪贴板序号与 owner PID，判断卡在哪一处；不读取或输出剪贴板文本、标题、凭据。仅在有明确代码证据时修复错误覆盖或更准确报告，不更改标题严格核对、自动重试、发送或设备协议。开发不在真机操作企微、发送、提交、推送或部署；独立 TEST/CR 后由主控决定可控真机探针。
+
+开发自测（2026-11-07）：`Get-WeComCopiedTitle` 在原剪贴板读取、nonce CAS、nonce 核验、标题 UI、复制、复制结果读取和恢复读取/CAS 前后记录 `phase`、`elapsed_ms`、剪贴板序号、owner PID 与是否企微 PID；日志不含标题、剪贴板文本、nonce 或凭据。C# `ExchangeClipboardText` 的 false 分支均在 `EmptyClipboard` 前，初始 CAS 返回 false 时不再做无需的恢复读取。真实已触碰后若外部 owner 接管，复制/恢复阶段先核 owner PID，跳过对远控数据的 OLE 文本读取并报原失败加 `restore=external_owner`；只有恢复 CAS 确实拒绝才报 `clipboard_restore_failed:cas_rejected`。原 120 秒超时尚无分段日志，不能宣称已定位为哪一次 OLE 调用。PowerShell 合成行为 5 项涵盖初始读失败零写、初始 CAS 拒绝保留原错误且零恢复/标题 UI、远控 PID 接管零 OLE 文本读取且不误称 CAS 失败、严格复制标题并恢复、真正 CAS 拒绝，且断言日志无正文；七份现存 PS 行为脚本 exit 0，CLI build exit 0、相关 Node 36/36 exit 0。真机探针需由主控在受控条件下先读当前 Win32 seq/owner/PID 和 artifact 最后阶段，再决定是否禁用远控剪贴板同步并重试；不得用 `Get-Clipboard` 文本读取作诊断，不自动重发。
+
+TEST 回炉自测（2026-11-07）：独立 TEST 指出初始 CAS false 分支缺少动态行为覆盖；新增合成用例模拟首次 `ExchangeClipboardText` 拒绝，断言保留 `clipboard_changed`、原剪贴板未变、零恢复读取、零标题点击/按键。PowerShell 行为脚本 7/7、CLI build、相关 Node 10/10、`git diff --check` 均 exit 0；待独立 TEST 复测。
+
+独立 TEST/CR 收尾（2026-11-07）：最终代码 CLI build、相关 Node 47/47、PowerShell 行为、驱动语法/BOM 与 `git diff --check` 均通过；标题复制诊断五项合成行为通过。CR 核对原生 CAS false 均在 `EmptyClipboard` 前、外部 owner 的复制/恢复 OLE 读取跳过、错误保因及日志无标题/剪贴板正文，无 P0/P1。P2：若诊断日志本身写入失败，异常仍可能覆盖原错误；当前 artifact 路径创建及写入已验证，本轮按最小范围记录。真实远控环境下卡住的具体同步调用仍待受控真机阶段日志确认，未实际发送或部署。
 
 ## W28 搜索门禁真机回炉（2026-11-07）
 

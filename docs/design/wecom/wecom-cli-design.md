@@ -1,5 +1,9 @@
 # wecom-cli：第一方企业微信操作 CLI / MCP Provider 设计
 
+2026-11-07 W29 标题复制剪贴板诊断：W28 真机选择已切到目标会话，但 `chat-select` 在 120 秒驱动期限内未返回；随后文本发送在标题复制/恢复阶段报 `clipboard_restore_failed` 且未触碰输入区，本地库无新出站。普通 shell 的 `Get-Clipboard -Raw` 只读文本调用 10 秒无响应；仅用 Win32 元数据读到剪贴板 owner PID 为远控 `AweSun.exe`，不是 WXWork。`Get-WeComCopiedTitle` 的 `GetDataObject`、`ContainsText`、`GetText` 为同步 OLE 读取，内层 1500 毫秒期限只覆盖复制后的循环，不能约束这些调用；远控剪贴板延迟渲染是可解释阻塞的候选，尚无分段计时证明。恢复 `finally` 在未尝试 CAS、CAS 返回 false 或读失败时都覆盖主因报 `clipboard_restore_failed`，需要分开观察。诊断只写阶段、耗时、序号与 owner PID 等元数据，不写剪贴板内容、标题或凭据；标题未严格核对时继续拒绝输入和发送。解决远控剪贴板同步需先取阶段证据，不以超时自动重试或放宽标题匹配。[W29 计划](../../plans/plan-wecom-cli-group-chat-experiment.md#w29-标题复制剪贴板诊断2026-11-07)。
+
+W29 实施：阶段元数据日志用于区分读取阻塞、远控接管与恢复 CAS；初始 CAS 拒绝未触碰剪贴板，跳过恢复；若标题复制后外部 owner 接管则跳过其 OLE 文本读取，主因保留并追加恢复原因。合成测试不代替远控真机阶段证据，标题严格核对与零自动重发仍保留。
+
 2026-11-07 W28 搜索门禁回炉：本地库先确认完整名称在联系人与群聊中全局唯一，才允许对企微主窗执行 Ctrl+F；焦点 caret 必须落在搜索框，清空旧词后输入完整名称，等待同进程新结果面板并按 Enter。旧搜索词剪贴板全文回读在真机已出现 `clipboard_changed`，当界面已显示唯一“孙晨”结果时仍拒绝 Enter；此证明路径撤销，搜索动作不再读写剪贴板。进入会话后由调用方使用双点缓存复制标题并与本地库完整名称严格核对，标题不符时不清草稿、不发送；发送结果仍由本地库只读对账。保留焦点、清框、结果面板、标题核对与账号绑定，不增加视觉或文本回读门禁。[W28 计划](../../plans/plan-wecom-cli-group-chat-experiment.md#w28-搜索门禁真机回炉2026-11-07)。
 
 2026-11-07 W27 企微移除 OCR 发行依赖：退役 `add-customer` CLI/MCP/operation 与其 OCR 驱动；此前已退役但仍残留的会话搜索、读取、未读 OCR 驱动和仅供 OCR 的共享 helper/Python 文件一并清理。企微发行包不得含 RapidOCR、Pillow、模型、OCR 脚本或旧 `dist/src` 编译残留。企微本地库仍使用包内便携 CPython 3.12.10、锁定的 pycryptodome 与 tzdata wheel 和 app-local CRT，独立为 `localdb-python`；构建时按来源 SHA256 校验，签包/离线验包均在包内解释器下验证 AES-CBC、SQLite、`Asia/Shanghai`。开发态可保留仓库 venv 与显式解释器覆盖，已安装包不借系统 Python。微信 `weixin` Provider 的原 OCR 资产和能力不变。旧 `serverProxy.ts` 与 `navigate.ts` 旧 Jev/双阶段导航死链随 OCR 清理，保留现用名称解析；旧已交付客户机原包保持可运行；本轮不改服务端、Device/Runtime wire、其余工具调用形态或既有 Runner 恢复规则。发行包工具集合由当前 CLI `version --json` 产生，删除的工具不再声明能力。共同接口唯一写入者、离线生产/消费检查见[W27 计划](../../plans/plan-wecom-cli-group-chat-experiment.md#w27-企微删除添加客户与-ocr-发行依赖2026-11-07)。

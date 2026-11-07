@@ -80,6 +80,7 @@
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
 | 20261107-0949 | 企微搜索门禁真机回炉 | 🔧 部分完成 | 搜索词回读已撤销，独测及 CR 通过，待真机复验。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w28-搜索门禁真机回炉2026-11-07) |
+| 20261107-1004 | 企微标题复制剪贴板诊断 | 🔧 部分完成 | 阶段日志及失败保因经独测和 CR，待受控真机诊断。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w29-标题复制剪贴板诊断2026-11-07) |
 | 20261106-1310 | 产品效果图助手（interior-render）：image_gen 服务 + 出图/读图工具 + 技能移植 + wecom_kf 图片链路 | ✅ 已完成开发（待部署） | 基于第三方 qwen-interior-render 技能包移植：image_gen 服务层（DashScope qwen-image-3.0-pro，wire 形态按官方文档适配）、image_render/image_read 通用工具（按张计费）、interior-render 技能与子智能体、wecom_kf 入站图片放行。首轮 trace 506s 调优：n=1、判读收紧、enable_thinking=false 实测提速一倍、wecom_kf 只发图、AI 角标加租户开关。 | — | [计划](plans/plan-image-gen-interior-render.md) |
 | 20261105-1550 | Runner Worker 看门狗与队列堆积飞书告警 | 📋 待决策（设计稿完成，用户考虑实现方式） | TPG80509 事故后的最后防线：事件循环阻塞看门狗线程 + 队列水位巡检 + 独立飞书告警通道，三个方案选项与落地组合建议待裁决。 | [设计](system/runner-worker-watchdog-design.md) | — |
 | 20261105-1540 | Excel 工具假异步与 used range 膨胀防御修复（TPG80509） | ✅ 已完成开发（待部署） | 生产 243 全智能体无响应事故修复：excel_process 8 个 handler 全量 to_thread 包裹；双 ExcelReader 归一到 file/excel_reader.py（excel/excel_reader.py read_excel_document 薄委托）；used range 膨胀走 read_only 流式探测真实边界 + 截断提示。270 个相关测试通过。 | — | — |

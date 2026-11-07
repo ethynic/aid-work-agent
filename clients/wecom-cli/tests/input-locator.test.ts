@@ -7,6 +7,7 @@ for (const suite of [
   { file: 'input-locator-regression.ps1', marker: /PS_INPUT_LOCATOR_OK/ },
   { file: 'clipboard-policy-regression.ps1', marker: /PS_CLIPBOARD_POLICY_OK/ },
   { file: 'send-search-gate-regression.ps1', marker: /PS_SEND_SEARCH_GATE_OK/ },
+  { file: 'title-copy-diagnostics-regression.ps1', marker: /PS_TITLE_COPY_DIAGNOSTICS_OK cases=5/ },
 ]) test(`real PowerShell ${suite.file} preserves input and clipboard safety`, {
   skip: process.platform !== 'win32',
 }, () => {
