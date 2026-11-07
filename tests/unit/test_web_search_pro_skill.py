@@ -24,7 +24,7 @@ class TestWebSearchProSkill:
         registry = _load_registry()
         skill = registry.get("web-search-pro")
         assert skill is not None
-        assert skill.version == "1.0.0"
+        assert skill.version == "1.1.0"
 
     def test_skill_in_master_content_readable(self):
         registry = _load_registry()
@@ -34,7 +34,7 @@ class TestWebSearchProSkill:
         assert "skill_execute" in content
 
     def test_scripts_present(self):
-        for name in ("web_search.py", "pipeline.py", "render.py"):
+        for name in ("web_search.py", "pipeline.py", "render.py", "efficiency.py"):
             assert (SKILL_DIR / "scripts" / name).is_file()
         assert (SKILL_DIR / "references" / "retrieval-notes.md").is_file()
 
@@ -100,14 +100,24 @@ class TestBaiduProxyAndWarmCookies:
     """百度通道渠道级代理 + cookie 预热（2026-10-27 风控治理）。"""
 
     @pytest.fixture(autouse=True)
-    def _setup(self, monkeypatch):
+    def _setup(self, monkeypatch, tmp_path):
         sys.path.insert(0, str(SKILL_DIR / "scripts"))
         monkeypatch.syspath_prepend(str(SKILL_DIR / "scripts"))
         import web_search
+        import efficiency
         self.ws = web_search
         self.monkeypatch = monkeypatch
         monkeypatch.setattr(web_search, "_baidu_warm_cookies", None)
         monkeypatch.setattr(web_search, "BAIDU_PROXY", "http://u:p@127.0.0.1:18080")
+        # efficiency 节流/冷却状态落盘（throttle.json）：隔离到 tmp，
+        # 防止污染仓库目录与用例间互扰（缓存映射保留在进程内即可）
+        import tempfile
+        cache_dir = Path(tempfile.mkdtemp())
+        monkeypatch.setattr(efficiency.throttle, "path", cache_dir / "throttle.json")
+        monkeypatch.setattr(efficiency.throttle, "_mem",
+                            {"last": {}, "cooldown_until": {}})
+        monkeypatch.setattr(efficiency, "CACHE_DIR", cache_dir)
+        monkeypatch.setattr(efficiency, "LLM_CACHE_DIR", cache_dir / "llm")
         yield
         if sys.path[0] == str(SKILL_DIR / "scripts"):
             sys.path.pop(0)

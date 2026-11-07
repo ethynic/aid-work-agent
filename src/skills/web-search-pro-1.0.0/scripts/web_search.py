@@ -51,6 +51,10 @@ import time
 import urllib.parse
 from html import unescape
 
+# 效率层：请求节流 / 风控冷却 / LLM 缓存（与 pipeline.py 共用同一份落盘状态）
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import efficiency
+
 # 共享的格式化器：用于从模板中解析占位符，过滤掉未使用的 market 参数，
 # 避免 str.format 因多余关键字参数抛出 KeyError。
 _FMT = string.Formatter()
@@ -79,6 +83,10 @@ CONNECT_TIMEOUT = 8.0          # 连接阶段短超时：不可达主机快速�
 READ_TIMEOUT = 15.0             # 读取阶段：慢引擎/大页面容忍
 TIMEOUT = READ_TIMEOUT
 SEARCH_DEADLINE = 75.0          # 整次搜索的总预算（秒）；跨引擎尝试时在引擎间检查，避免病态挂起
+# baidu_m 冷静重试：PC 端触发风控后，移动端最多等这么久，并为后续通道留出预算。
+# 等待长度即同组冷却剩余时间（WSP_BLOCK_COOLDOWN，默认 20s），调小它即可缩短冷静期。
+CALM_RETRY_MAX_WAIT = 25.0      # 单次冷静等待上限（秒），防止其它进程反复刷新冷却
+CALM_RETRY_RESERVE = 10.0       # 为后续降级通道保留的搜索预算（秒）
 # 同一引擎在「结果不相关（分词漂移）」时的最大重试次数。百度等结果非确定性，
 # 一次漂移不代表该引擎无正确结果，重试（并轻微扰动 rn）常常能命中正确结果集。
 # 实测约 1/3 请求会返回空/漂移页，4 次尝试可将命中率提升到 ~96%+。
@@ -173,14 +181,35 @@ def fetch_raw(url, verify=True, headers=None, proxy=None, cookies=None):
     """
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
+    # 可选：按目标域名限速。默认 0（关闭），不改变既有 fetch / batch / pipeline 行为。
+    # 对「访问太快会触发验证或禁用」的站点，设 WSP_DOMAIN_MIN_INTERVAL
+    # 或 pipeline 的 --min-domain-interval 即可打开；只减速，不加速。
+    if efficiency.DOMAIN_MIN_INTERVAL > 0:
+        efficiency.throttle.wait(efficiency.group_key(url),
+                                 efficiency.DOMAIN_MIN_INTERVAL)
     with _client(verify, proxy=proxy, cookies=cookies) as c:
         r = c.get(url, headers=headers or DEFAULT_HEADERS)
         r.raise_for_status()
-        if not r.encoding or r.encoding.lower() == "iso-8859-1":
-            r.encoding = r.apparent_encoding or "utf-8"
+        # 注意：httpx.Response 没有 requests 的 `apparent_encoding`，旧写法在响应头
+        # 声明 iso-8859-1 时会直接抛 AttributeError；且 httpx 未声明 charset 时
+        # 默认按 utf-8 解码，GBK/GB18030 中文页会整页乱码。
+        # 改为：响应头 charset 为准 → 通用单字节声明时用 HTML meta 覆盖 →
+        # strict 解码失败则回退 GB18030 → 最后才 replace 兜底。
+        enc = (r.charset_encoding or "").strip()
+        head = r.content[:4096]
+        m = re.search(rb"""charset\s*=\s*["']?\s*([\w\-]+)""", head, re.I)
+        if m and (not enc or enc.lower().replace("_", "-") in
+                  ("iso-8859-1", "us-ascii", "windows-1252")):
+            enc = m.group(1).decode("ascii", "ignore")
+        enc = enc or "utf-8"
         try:
-            return r.text
-        except Exception:
+            return r.content.decode(enc)
+        except (LookupError, UnicodeDecodeError):
+            if enc.lower().replace("_", "-") in ("utf-8", "utf8"):
+                try:
+                    return r.content.decode("gb18030")
+                except UnicodeDecodeError:
+                    pass
             return r.content.decode("utf-8", errors="replace")
 
 
@@ -204,27 +233,81 @@ def _is_blocked(html):
     if len(html) >= 5000:
         return False
     low = html.lower()
+    # 只认强信号。裸词「验证」会误判「邮箱验证 / 验证通过」等正常短页，
+    # 一旦误判就会让整组引擎进入冷却，连专门救场的移动端通道也要多等一轮冷静期。
     markers = ("wappass.baidu.com", "百度安全验证", "安全验证",
-               "验证", "captcha", "qcaptcha", "antispider")
+               "请输入验证码", "拖动滑块", "captcha", "qcaptcha",
+               "antispider")
     return any(m in html or m in low for m in markers)
+
+
+# 跳转链接解析的去重缓存与单次预算。
+# 原实现会对 SERP 里**每一条** /link?url= 结果发一次 HEAD，且完全没有间隔：
+# 一次搜索（最多 50 条结果 × 4 次漂移重试）可能对百度系连发上百次请求，
+# 这正是「访问太快触发验证码 / 临时禁用」的主要来源。
+_REDIRECT_CACHE = {}          # 跳转 URL -> 真实 URL；跨重试、跨搜索复用（映射稳定）
+_REDIRECT_BUDGET = {"left": efficiency.MAX_REDIRECT_RESOLVES}
+
+
+def reset_redirect_budget():
+    """新的一次 search() 重置解析预算（不清缓存，好让重试复用已解析结果）。"""
+    _REDIRECT_BUDGET["left"] = efficiency.MAX_REDIRECT_RESOLVES
+
+
+def _wait_out_cooldown(group, max_wait):
+    """等某组风控冷却自然结束，期间不发起任何请求；最多等 max_wait 秒。
+
+    返回 True = 冷却已结束、可放行一次；False = 超时放弃（调用方跳过该通道）。
+    刻意不清除/绕过冷却状态：冷却结束后，循环内的检查与 SERP 跳转解析的
+    冷却保护会自然解除，无需为这一次重试开任何例外通道。
+    """
+    deadline = time.time() + max(0.0, max_wait)
+    while efficiency.throttle.is_cooling(group):
+        now = time.time()
+        if now >= deadline:
+            return False
+        time.sleep(min(0.5, deadline - now))
+    return True
 
 
 def _resolve_redirect(url, verify=True):
     """解析搜索引擎的跳转链接（如百度 /link?url=、搜狗 link?url= 的 302）。
 
-    直接用 href 会得到一堆指向搜索站的无意义 URL。这里用 HEAD 跟随重定向拿到
-    最终地址；失败则原样返回。
+    直接用 href 会得到一堆指向搜索站的无意义 URL，故用 HEAD 跟随重定向拿最终地址。
+    效率与风控三重保护：
+      * 同一 URL 本次进程内只解析一次（重试返回的结果集高度重叠，省请求最多）；
+      * 解析前按厂商组补最小间隔（默认 0.35s），不再零间隔连发；
+      * 同组处于风控冷却期时直接跳过请求，返回原链接交由解析器过滤。
     """
     if not url or not url.startswith("http"):
         return url
+    if url in _REDIRECT_CACHE:
+        return _REDIRECT_CACHE[url]
+
+    cap = efficiency.MAX_REDIRECT_RESOLVES
+    if cap > 0:
+        if _REDIRECT_BUDGET["left"] <= 0:
+            return url          # 不写缓存：下一次搜索预算重置后可正常解析
+        _REDIRECT_BUDGET["left"] -= 1
+
+    group = efficiency.group_key(url)
+    if efficiency.throttle.is_cooling(group):
+        # 该组刚触发风控：不再对它发任何请求，原链接交由解析器过滤掉。
+        # 同样不写缓存，冷却结束后仍可解析出真实 URL。
+        return url
+    resolved = url
+    efficiency.throttle.wait(group, efficiency.REDIRECT_MIN_INTERVAL)
     try:
         with _client(verify) as c:
             r = c.head(url, follow_redirects=True)
             if r.url and str(r.url) != url:
-                return str(r.url)
+                resolved = str(r.url)
     except Exception:
         pass
-    return url
+    # 只缓存成功解析的结果；临时失败留待下次重试，不把失败固化
+    if resolved != url:
+        _REDIRECT_CACHE[url] = resolved
+    return resolved
 
 
 # JS 重定向跟随：Cốc Cốc / Parsijoo 等首页会先返回一段设置 cookie 后
@@ -406,14 +489,18 @@ def extract_contacts(html, url=""):
     # 只扫数字会引入噪音，故只认三种结构明确的完整号码格式。
     num_names = []
     for line in body_lines:
-        if len(line) > 200:
-            continue
-        for rx in (MOBILE_RE, SERVICE_RE, LANDLINE_RE):
-            for m in rx.finditer(line):
-                tels.append(m.group(1))
-                nm = _split_name_from_number(line, m.group(1))
-                if nm:
-                    num_names.append(nm)
+        # 长单行（整段无换行的页面）不能整行跳过，否则里面的号码会全部漏掉。
+        # 切成 200 字窗口、步长 180（重叠 20 字）再扫：11 位号码不会被切断，
+        # 又保留「号码后置称谓」需要的局部上下文；后面 tels 会统一去重。
+        windows = ([line] if len(line) <= 200 else
+                   [line[i:i + 200] for i in range(0, len(line), 180)])
+        for seg in windows:
+            for rx in (MOBILE_RE, SERVICE_RE, LANDLINE_RE):
+                for m in rx.finditer(seg):
+                    tels.append(m.group(1))
+                    nm = _split_name_from_number(seg, m.group(1))
+                    if nm:
+                        num_names.append(nm)
 
     phones, pseen = [], set()
     for p in tels:
@@ -493,21 +580,19 @@ def extract_contacts_from_text(text, url=""):
             emails.append(e)
 
     tels, num_names = [], []
-    for line in text.splitlines():
-        if len(line) > 200:
-            continue
-        for rx in (MOBILE_RE, SERVICE_RE, LANDLINE_RE):
-            for m in rx.finditer(line):
-                tels.append(m.group(1))
-                nm = _split_name_from_number(line, m.group(1))
-                if nm:
-                    num_names.append(nm)
-    # 单行过长也兜底扫一遍（摘要常是整段无换行）
-    if len(text) <= 200:
-        for rx in (MOBILE_RE, SERVICE_RE, LANDLINE_RE):
-            for m in rx.finditer(text):
-                if m.group(1) not in tels:
+    for line in text.splitlines() or [text]:
+        # 同上：搜索引擎 snippet 常是整段无换行，旧逻辑「>200 字跳过」+
+        # 「<=200 字才兜底」会让 200 字以上的单行丢掉全部电话，
+        # 进而使管线的「快照确认即停」永远不触发。
+        windows = ([line] if len(line) <= 200 else
+                   [line[i:i + 200] for i in range(0, len(line), 180)])
+        for seg in windows:
+            for rx in (MOBILE_RE, SERVICE_RE, LANDLINE_RE):
+                for m in rx.finditer(seg):
                     tels.append(m.group(1))
+                    nm = _split_name_from_number(seg, m.group(1))
+                    if nm:
+                        num_names.append(nm)
 
     phones, pseen = [], set()
     for p in tels:
@@ -1232,6 +1317,7 @@ def search(query, limit=8, engine="auto", verify=True, companies_only=False):
     q_plain = _strip_site_operators(query)   # 用于相关性校验，不含 site: 噪声 token
     key_terms, generic_terms, brand = _query_terms(q_plain)   # 反分词漂移：拆分关键/通用/品牌
     order = select_engines(query, engine)
+    reset_redirect_budget()   # 每次新搜索重置跳转解析预算（URL 级缓存仍复用）
     # 百度 PC 端常因风控弹出图形验证码（wappass）：在其后紧跟移动端通道作为降级，
     # 移动端风控画像不同，通常仍可访问，从而避免「PC 被拦截就彻底无结果」。
     if "baidu" in order and "baidu_m" not in order:
@@ -1241,6 +1327,7 @@ def search(query, limit=8, engine="auto", verify=True, companies_only=False):
 
     errors = []
     start = time.time()
+    calm_retry_used = False   # 本次搜索是否已给 baidu_m 用过冷静重试（仅一次）
     for name in order:
         # 整体截止：已尝试多个通道并耗尽预算则停止，避免死引擎长时间挂起
         if time.time() - start > SEARCH_DEADLINE:
@@ -1250,6 +1337,27 @@ def search(query, limit=8, engine="auto", verify=True, companies_only=False):
         if not spec:
             errors.append(f"[错误] 未知引擎 {name}，可用: {', '.join(ENGINES)}")
             continue
+        group = efficiency.group_key(name)
+        if efficiency.throttle.is_cooling(group):
+            # 同一厂商组刚触发风控：继续加压只会把 IP 从「验证码」推到「临时禁用」，
+            # 因此默认跳过；不同厂商的降级通道照常可用。
+            # 例外：baidu_m 与 PC 端风控画像不同，给它一次「冷静重试」——等冷却
+            # 自然走完（期间不发任何请求）再试一次，而不是被拦后立刻换端加压。
+            # 冷却结束后才放行，所以循环内检查与跳转解析的冷却保护都不被绕过；
+            # 一次搜索仅此一次，若它自己再命中风控，cooldown 会重新计时，
+            # 后续所有同组通道照常跳过。
+            if name == "baidu_m" and not calm_retry_used:
+                calm_retry_used = True
+                budget = SEARCH_DEADLINE - (time.time() - start) - CALM_RETRY_RESERVE
+                if _wait_out_cooldown(group, min(CALM_RETRY_MAX_WAIT, budget)):
+                    errors.append("baidu_m: 已等同组风控冷却结束，冷静重试一次")
+                else:
+                    errors.append("baidu_m: 冷静重试等待超出本次搜索预算，跳过")
+                    continue
+            else:
+                errors.append(f"{name}: 同组通道刚触发风控，冷却中，跳过（可设 "
+                              "WSP_BLOCK_COOLDOWN=0 恢复旧的移动端降级行为）")
+                continue
         q_sent = urllib.parse.quote(_build_engine_query(query, name))
         policy = CHANNEL_POLICY.get(name, {"delay": 1.5, "retries": 1})
         # 渠道级代理：百度通道支持经办公网代理执行；代理连接失败自动回落直连
@@ -1272,6 +1380,12 @@ def search(query, limit=8, engine="auto", verify=True, companies_only=False):
             _needed = {fn for _, fn, _, _ in _FMT.parse(spec["url"]) if fn}
             _mkt = {k: v for k, v in market.items() if k in _needed}
             url = spec["url"].format(q=q_sent, n=n_var, **_mkt)
+            if efficiency.throttle.is_cooling(group):
+                errors.append(f"{name}: 本轮尝试中命中风控，停止继续请求该组")
+                break
+            # 登记本次请求时间戳：让紧随其后的 SERP 跳转解析（HEAD）与本组共享
+            # 最小间隔，避免「搜索刚完就零间隔连发几十个 HEAD」。
+            efficiency.throttle.wait(group)
             try:
                 # 移动端引擎（baidu_m）用移动 UA，否则用桌面 UA
                 hdrs = MOBILE_HEADERS if spec.get("mobile") else DEFAULT_HEADERS
@@ -1291,7 +1405,10 @@ def search(query, limit=8, engine="auto", verify=True, companies_only=False):
                 html = _follow_js_redirect(html, url, verify=verify)
                 # 风控验证码/拦截页：不是正常结果，立即放弃本通道，转下一引擎/降级通道
                 if _is_blocked(html):
-                    errors.append(f"{name}: 命中风控验证码/拦截页，跳过（可能为本机 IP 被标记）")
+                    errors.append(
+                        f"{name}: 命中风控验证码/拦截页，跳过（可能为本机 IP 被标记）；"
+                        "同厂商组的其它通道一并进入冷却，避免继续加压")
+                    efficiency.throttle.cooldown(group)
                     break
                 parsed = spec["parse"](html, verify=verify)
                 clean, noise = _split_noise(parsed)
@@ -1342,7 +1459,7 @@ def search(query, limit=8, engine="auto", verify=True, companies_only=False):
 
 def cmd_search(a):
     res = search(a.query, limit=a.limit, engine=a.engine,
-                 companies_only=a.companies_only)
+                 companies_only=a.companies_only, verify=not a.insecure)
     if a.json:
         print(json.dumps(res, ensure_ascii=False, indent=2))
         return 0 if res["results"] else 2
@@ -1382,7 +1499,12 @@ def cmd_extract(a):
 
 
 def cmd_batch(a):
-    with open(a.list, encoding="utf-8") as f:
+    # --min-domain-interval 叠加在 --delay 之上：对「同站多 tab」场景再兜一层，
+    # 默认 0 表示完全沿用原有节奏，不改变既有行为。
+    efficiency.DOMAIN_MIN_INTERVAL = a.min_domain_interval
+    # utf-8-sig：兼容 Windows 记事本存出的带 BOM 的 URL 列表，
+    # 否则第一行 URL 会带 \ufeff 前缀而抓不到。
+    with open(a.list, encoding="utf-8-sig") as f:
         urls = [l.strip() for l in f if l.strip() and not l.startswith("#")]
     results, ok, fail = [], 0, 0
     for i, u in enumerate(urls, 1):
@@ -1436,6 +1558,10 @@ def main():
     p.add_argument("list", help="文件，每行一个 URL")
     p.add_argument("--full-text", action="store_true", help="同时保留正文（前 8000 字）")
     p.add_argument("--delay", type=float, default=1.5, help="每条间隔秒数")
+    p.add_argument("--min-domain-interval", type=float,
+                   default=efficiency.DOMAIN_MIN_INTERVAL,
+                   help="同一域名两次请求的最小间隔秒数，叠加在 --delay 之上；"
+                        "用于访问过快会触发验证/禁用的站点，默认 0=关闭")
     p.add_argument("--insecure", action="store_true")
     p.set_defaults(func=cmd_batch)
 
