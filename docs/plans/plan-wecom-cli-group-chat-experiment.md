@@ -72,7 +72,9 @@ W30 回炉独立 TEST：真实新 CLI MCP stdio 清单同时含 `search/type` �
 | 唯一联系人「孙晨」 | 目录搜索→单会话读取 | 精确唯一，读取 2 条成功，`navigated=false`；未复述正文、未发送 |
 | 唯一群「售前客服群」 | 目录搜索→读取→发送一次 A4 标记→增量回读 | 精确唯一；发送 receipt `send-2026-11-07T03-46-10-544Z`，本地库 `message_id=1994,rows=1`；回读恰一条本人原文，无重复 |
 
-A4 的 Runtime 日志依次记录 `wecom_session_directory`、`wecom_read_session`、`wecom_message_send`、`wecom_read_session` 四次成功调用，发送 `effect=applied`；本次日志尾部未见 OCR/Jev，双点缓存文件仍为 2026-11-06 23:21:28、长度 100 字节，未重新标定。结果仅证明客户端本地库确认出站记录，不代表收件人已收到或已读。所有业务测试只由网页 Agent 调用模型可见工具，主控的文件/数据库读取仅用于部署监控和对账。关联产品 Skill 的“三工具”历史文案已更新为按实际可见工具使用目录/读发；独立验证实际 SkillLoader 可加载、定向 27 项通过、差异检查通过，待服务端同步部署。
+A4 的 Runtime 日志依次记录 `wecom_session_directory`、`wecom_read_session`、`wecom_message_send`、`wecom_read_session` 四次成功调用，发送 `effect=applied`；本次日志尾部未见 OCR/Jev，双点缓存文件仍为 2026-11-06 23:21:28、长度 100 字节，未重新标定。结果仅证明客户端本地库确认出站记录，不代表收件人已收到或已读。所有业务测试只由网页 Agent 调用模型可见工具，主控的文件/数据库读取仅用于部署监控和对账。关联产品 Skill 的“三工具”历史文案已更新为按实际可见工具使用目录/读发；独立验证实际 SkillLoader 可加载、定向 27 项通过、差异检查通过。
+
+补充提交 `475a5bc2` 已推送并按用户授权再次部署到 agent2：更新脚本退出 0，API、Runner API、Runner Worker 均健康；容器内可读取 Skill 2.1.0，数据库中的 `after-sales` 显式白名单重启后仍含第四工具。部署前的 1 项已跟踪改动与 34 项未跟踪文件再次按原哈希和原 Git 排除配置恢复，服务器现场状态仍为 35 项。该次部署未追加群发消息；真机业务验收结果以部署前同一代码功能的上述用例为准。
 
 ## W29 标题复制剪贴板诊断（2026-11-07）
 
