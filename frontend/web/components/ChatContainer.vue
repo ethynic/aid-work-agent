@@ -78,6 +78,7 @@
               :upload-accept="currentUploadAccept"
               :toolbar-buttons="currentToolbarButtons"
               :quick-prompts="currentQuickPrompts"
+              :session-id="currentSessionId"
             />
           </div>
         </div>
@@ -614,7 +615,7 @@ function handleQuickPrompt(message: string) {
   chatInputRef.value?.fillQuickPrompt(message)
 }
 
-async function handleSend(content: string) {
+async function handleSend(content: string, executionMode?: 'continuous') {
   if (existingSessionLoading.value || existingSessionError.value) return
 
   // 如果有预生成的会话ID，直接使用它
@@ -642,6 +643,7 @@ async function handleSend(content: string) {
   }
 
   if (!sid) {
+    chatInputRef.value?.restoreDraft(content, executionMode === 'continuous')
     return
   }
 
@@ -655,9 +657,10 @@ async function handleSend(content: string) {
     }
   }
 
-  const disposition = await sendMessage(content, subagentName.value, sid, instanceId.value)
+  const disposition = await sendMessage(content, subagentName.value, sid, instanceId.value,
+    undefined, undefined, executionMode)
   if (disposition?.restoreInput && disposition.canRestore() && currentSessionId.value === sid) {
-    chatInputRef.value?.fillQuickPrompt(content, true)
+    chatInputRef.value?.restoreDraft(content, executionMode === 'continuous')
   }
 }
 
