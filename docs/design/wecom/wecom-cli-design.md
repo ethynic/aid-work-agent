@@ -367,3 +367,5 @@ W30 真机验收修订此前“三工具”范围：新版无 OCR 插件的读�
 Agent 处理用户给出的非稳定名称时先调用目录 `search`：唯一匹配才把返回的完整名称交给读或发送工具；零匹配只提示实际返回的候选并请用户确认；多个不同名称则列出完整名称让用户选，完全同名且无法区分才建议备注或重命名。目录结果不构成发送授权，不能据相似候选自动改目标；目标最终由读/发送工具按当前账号和稳定会话核实。`wecom_chat_search`、`wecom_chat_select` 仍是 Provider 内部入口，不投影给 Agent。目录只读，不触发 Ctrl+F、Enter、OCR 或会话 UI 导航。
 
 旧 0.2.9 插件虽然提供页面目录，但 MCP 参数定义尚不接受 `search`；Runtime 原有 `wecom_session_directory` 能力只证明页面目录可用。新增独立 `wecom_session_directory_search` 能力，由 Runtime 检查插件 MCP schema 确实接受 `search` 和 `type` 后上报；服务端在正常能力查询时仅凭新能力投影第四项。原目录能力、页面路径、旧客户端三项 Agent 工具及既有恢复路径不变。能力查询异常时沿既有可见性回退，旧插件也会在 Runtime 派发前拒绝不支持的 `search`，不会执行 UI 或发送。新 MCP schema、Runtime 和服务端须配套发行验证。
+
+Agent 自身的显式工具白名单仍是独立权限边界：即使设备上报搜索能力，使用 `inherit=false` 的 Agent 定义也须将 `wecom_session_directory` 加入允许列表才会注册第四项。agent2“在线电商客服”真机验收中先因该白名单仍为三项而未展示目录；仅追加目录只读项后，新会话实际完成错名、不同名称多匹配、完全同名、唯一联系人及唯一群读发回读。业务 Skill 按实际可见工具指导搜索，旧设备未展示目录时继续原完整名称读发。

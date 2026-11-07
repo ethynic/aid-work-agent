@@ -8,6 +8,7 @@
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
 | 20261107-0103 | 企微删除添加客户与 OCR 发行依赖 | ✅ 已完成开发；独测、隔离签包及 CR 通过，未正式发行或部署。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w27-企微删除添加客户与-ocr-发行依赖2026-11-07) |
+| 20261107-1045 | 企微无 OCR Agent→Runtime 真机验收 | ✅ 已完成开发；四工具真机读发、错名及歧义场景通过。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w30-无-ocr-agentruntime-真机验收2026-11-07) |
 | 20261103-1306 | 任务计划时间窗、最短间隔与用户任务数约束 | ✅ 已完成开发；独立测试与 CR 通过（1 P0+2 P1 修复关闭），发布验收与部署待授权。 | [设计 §15](system/scheduled-task-runner-refactor-design.md#15-时间窗最短间隔与用户任务数2026-11-03-待开发扩展) | [计划](plans/plan-scheduled-task-schedule-constraints.md) |
 | 20261102-1037 | BOSS沟通混排与搜索定位修复 | ✅ 已完成开发；混排与搜索真机回归通过，0.3.29签名出包并验包，未安装。 | [原设计§10.6.1](design/recruiting/boss-resume-assistant-native-cdp-design.md#1061-沟通页混排与搜索定位修正2026-11-02) | [原计划§17](plans/recruiting/boss-resume-assistant-native-cdp-dev-plan.md#17-沟通页混排与搜索定位修正2026-11-02) |
 | 20261023-1226 | wecom CLI 三工具与持续恢复 | ✅ 已完成开发；打包兼容复核完成，旧包验签/MCP、长路径及CR通过。 | [设计](design/wecom/wecom-cli-design.md#12-持续监控端到端收敛2026-10-27) | [开发计划](plans/plan-wecom-cli-group-chat-experiment.md) |
