@@ -99,6 +99,32 @@
           </div>
         </div>
 
+        <!-- 显示偏好（会话图片“AI生成”角标开关） -->
+        <div class="bg-white rounded-xl shadow-sm border border-default p-6 space-y-4">
+          <div>
+            <h2 class="text-base font-semibold text-default">显示偏好</h2>
+            <p class="mt-1 text-sm text-muted">会话界面的内容标识显示开关，对本租户所有用户生效。</p>
+          </div>
+          <div>
+            <label class="flex items-center gap-3 cursor-pointer">
+              <input v-model="showAiBadge" type="checkbox" :disabled="prefSaving"
+                class="w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500" />
+              <span class="text-sm text-default">会话图片显示“AI 生成”角标</span>
+            </label>
+            <p class="mt-1 text-xs text-muted">
+              按国家《人工智能生成合成内容标识办法》，AI 生成内容应有显式标识；关闭后由本企业自行承担合规责任。生成图片文件本身不含水印。
+            </p>
+          </div>
+          <button @click="handleSavePreferences" :disabled="prefSaving"
+            class="px-4 py-2 bg-primary-500 hover:bg-primary-600 disabled:bg-surface-hover text-white rounded-lg text-sm font-medium transition-colors">
+            {{ prefSaving ? '保存中…' : '保存' }}
+          </button>
+          <div v-if="prefMessage" class="p-3 rounded-lg text-sm"
+            :class="prefMessageType === 'success' ? 'bg-success-50 border border-success-200 text-success-600' : 'bg-danger-50 border border-danger-200 text-danger-600'">
+            {{ prefMessage }}
+          </div>
+        </div>
+
         <!-- 租户邮箱（邮箱三层解析第 2 层兜底，AI获客等数字员工发信用） -->
         <div id="tenant-email" class="scroll-mt-4">
           <TenantEmailSettings />
@@ -114,7 +140,7 @@ import { useRoute, useRouter } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import LogoUpload from '@/components/ui/LogoUpload.vue'
 import TenantEmailSettings from '@/components/email/TenantEmailSettings.vue'
-import { getTenantInfo, updateTenantInfo, getTenantScheduler, updateTenantScheduler, type TenantSchedulerSettings } from '@/api/saasTenant'
+import { getTenantInfo, updateTenantInfo, getTenantScheduler, updateTenantScheduler, updateTenantPreferences, type TenantSchedulerSettings } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
 const route = useRoute()
@@ -270,6 +296,35 @@ async function saveSchedulerOverride(value: number | null) {
     schedulerMessageType.value = 'error'
   } finally {
     schedulerSaving.value = false
+  }
+}
+
+// ==================== 显示偏好（“AI生成”角标开关） ====================
+
+const { tenant: tenantInfo } = useTenantAuth()
+const showAiBadge = ref(true)
+const prefSaving = ref(false)
+const prefMessage = ref('')
+const prefMessageType = ref<'success' | 'error'>('success')
+
+showAiBadge.value = tenantInfo.value?.show_ai_badge !== false
+
+async function handleSavePreferences() {
+  prefSaving.value = true
+  prefMessage.value = ''
+  try {
+    const res = await updateTenantPreferences(showAiBadge.value)
+    // 同步本地登录态里的租户信息，角标开关立即生效（无需刷新/重新登录）
+    if (tenantInfo.value) {
+      tenantInfo.value.show_ai_badge = res.show_ai_badge
+    }
+    prefMessage.value = '已保存'
+    prefMessageType.value = 'success'
+  } catch (e: any) {
+    prefMessage.value = e?.message || '保存失败'
+    prefMessageType.value = 'error'
+  } finally {
+    prefSaving.value = false
   }
 }
 </script>

@@ -5557,3 +5557,15 @@ CREATE TABLE IF NOT EXISTS tenant_agent_instances (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_agent_inst_copy ON tenant_agent_instances(agent_id) WHERE agent_id <> base_agent_id;
 CREATE INDEX IF NOT EXISTS idx_tenant_agent_inst_tenant ON tenant_agent_instances(tenant_id, status);
 CREATE INDEX IF NOT EXISTS idx_tenant_agent_inst_base ON tenant_agent_instances(tenant_id, base_agent_id);
+
+-- 定时任务终态结果免登录链接；内容实时读取，不复制回复或文件
+CREATE TABLE IF NOT EXISTS task_result_shares (
+    share_key TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    runner_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (task_id, runner_id)
+);

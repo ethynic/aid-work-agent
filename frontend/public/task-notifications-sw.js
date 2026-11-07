@@ -1,5 +1,6 @@
 /* Web-only push worker: no fetch handler, API calls, tokens, or background tasks. */
 const DB = 'task-notifications-v1'
+const SHARE_PATH = /^\/share\/task-result\/[A-Za-z0-9_-]{1,160}$/
 function bindingStore(write, value) {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB, 1)
@@ -32,6 +33,8 @@ self.addEventListener('push', event => {
     const binding = await bindingStore(false)
     if (!binding || binding.installation_ref !== payload.installation_ref || binding.binding_version !== payload.binding_version) return
     const sessionTitle = String(payload.session_title || '').replace(/[\u0000-\u001f\u007f-\u009f]/g, '').trim().slice(0, 80) || '未命名会话'
+    const shareUrl = ['completed', 'failed'].includes(payload.event_kind)
+      && typeof payload.share_url === 'string' && SHARE_PATH.test(payload.share_url) ? payload.share_url : null
     const title = payload.event_kind === 'test' ? '浏览器通知测试'
       : payload.event_kind === 'waiting_input' ? `${sessionTitle}等待你的回答`
       : payload.event_kind === 'manual_rejected' ? `${sessionTitle}手动执行未成功`
@@ -46,7 +49,8 @@ self.addEventListener('push', event => {
         : payload.event_kind === 'needs_action' ? '点击查看需要处理的事项，处理后自动继续'
         : '点击查看结果或详情',
       icon: '/favicon.ico', tag: payload.notification_ref, renotify: false,
-      data: { ref: payload.notification_ref, tenant: binding.tenant_id },
+      data: { ref: payload.notification_ref, tenant: binding.tenant_id,
+        ...(shareUrl ? { share_url: shareUrl } : {}) },
     })
   })())
 })
@@ -56,6 +60,7 @@ self.addEventListener('notificationclick', event => {
   if (!/^[a-zA-Z0-9_-]{1,160}$/.test(data.ref || '')) return
   const query = new URLSearchParams({ ref: data.ref })
   if (typeof data.tenant === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(data.tenant)) query.set('tenant', data.tenant)
-  const url = new URL(`/notification?${query}`, self.location.origin).href
+  const url = new URL(typeof data.share_url === 'string' && SHARE_PATH.test(data.share_url)
+    ? data.share_url : `/notification?${query}`, self.location.origin).href
   event.waitUntil(self.clients.openWindow(url))
 })

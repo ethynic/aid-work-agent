@@ -58,12 +58,13 @@ CREATE TABLE IF NOT EXISTS task_result_shares (
 - 公开 API（新 router，建议 `src/api/task_result_share.py`）：
   - `GET /api/public/task-result-shares/{share_key}`（view；可选 `Authorization` 头）
   - `GET /api/public/task-result-shares/{share_key}/files/{alias}?ticket=&download=`
-- 安全头与限流：与 reply share 同款（`Cache-Control: no-store` / `Referrer-Policy: no-referrer` / `X-Robots-Tag: noindex, nofollow` / `X-Content-Type-Options: nosniff`；view 基础 IP 滑窗限流，复用 `SlidingWindowRateLimiter`）。
+- 安全头与限流：安全头与 reply share 同款（`Cache-Control: no-store` / `Referrer-Policy: no-referrer` / `X-Robots-Tag: noindex, nofollow` / `X-Content-Type-Options: nosniff`）；view 在鉴权前按 IP 滑窗限流，复用 `SlidingWindowRateLimiter`（无效 Bearer 仍受限；现有 reply share 仅限制密码尝试）。
 
 ## share_key 生命周期
 
-- **生成**：`publish_runner_terminal_in_tx`（producer.py scheduled 分支）生产通知的**同一事务内**惰性创建（`ON CONFLICT (task_id, runner_id) DO NOTHING` 后读回），通知文案与落地 URL 使用返回的 share_key。与通知同事务保证"通知存在则链接存在"。
+- **生成**：`publish_runner_terminal_in_tx`（producer.py scheduled 分支）生产通知的**同一事务内**惰性创建（`ON CONFLICT (task_id, runner_id) DO NOTHING` 后读回）。保持该函数现有 `notification_ref` 返回契约；后续渠道从映射查询 share_key。与通知同事务保证"通知存在则链接存在"。
 - **存量通知回填**：站内信 link 与 IM webhook 文案均为**渲染时**动态生成——渲染路径按通知资源（task_id + runner_id）查 `task_result_shares`，缺失则惰性补建（UNIQUE 幂等）。已发出的 web push / IM 文案固化在投递产物中，不回改。
+- 外发通知的 adapter 在 `NotificationRepository.expand()` 持有消息锁的事务内渲染；回填沿用同一 cursor，savepoint 只包可回退的映射补建，把 share_key 临时放入渲染消息，不在 adapter 内另开数据库连接。站内信列表在自身连接内批量回填并提交。回填失败仅记异常类型并回落旧链接。
 - **失效**：不主动删记录；实时读 join 校验失败即 404（见下）。通知消息自身 24h TTL 与本链接无关（通知过期 ≠ 链接失效）。
 - **范围外事件**：paused / needs_action / manual_rejected / 普通聊天终态不创建 share，链接维持 `/notification?ref=`。
 
@@ -73,25 +74,26 @@ CREATE TABLE IF NOT EXISTS task_result_shares (
 
 1. 按 `share_key` 查 `task_result_shares`；不存在 → 404 `SHARE_NOT_FOUND`。
 2. join `scheduled_tasks`（task_id 存活 + user_id/租户一致）；不存在 → 404 `TASK_GONE`「任务已删除或链接已失效」。
-3. join `agent_runners`（runner_id，`status IN ('completed','failed')`，`session_kind='web'`）；不存在 → 404 `TASK_GONE`。
-4. 读本次执行最终回复：`chat_messages WHERE session_id=%s AND (metadata::jsonb)->>'runner_id'=%s AND role='assistant' ORDER BY id DESC LIMIT 1`；不存在（消息已清）→ 404 `TASK_GONE`。
+3. join `agent_runners`（runner_id 与任务 session_id、tenant_id、user_id 一致，`source='scheduled'`，`status IN ('completed','failed')`，`session_kind='web'`）；不存在 → 404 `TASK_GONE`。
+4. 读本次执行最终回复：优先取 `chat_messages WHERE session_id=%s AND (metadata::jsonb)->>'runner_id'=%s AND role='assistant'`，筛除 `tool_calls` / `tool_call_id` / `wait_id` 消息，按创建时间及 id 降序取最终回复。仅文件结果本来可能不落 assistant 消息，此时须确认该 runner 的持久 user 消息仍在，才沿用现有回复分享的 projected runner 口径，从同一已验证 Runner 的 `result` / `public_snapshot` 实时投影文件结果。文本/图片 assistant 消息缺失、user 消息已清理或两处均无可见结果均返回 404 `TASK_GONE`。
 5. 组装响应：
    - 任务头：`task_name`（scheduled_tasks.name）、`task_status`、`runner_status`、`finished_at`、`tenant_id`、`task_id`、`runner_id`；
    - 回复体：按 reply_snapshot 同款字段口径（content + images + attachments + downloadableFiles），**内部引用全部 alias 化**（见下）；
-   - `viewer_is_owner`：请求带 `Authorization` 且解析成功（`fresh_web_subject`，失败静默按匿名）且 user_id == 记录 `user_id` 且租户匹配 → `true`。
+   - `viewer_is_owner`：请求带 `Authorization` 且解析成功（`fresh_web_subject`，失败静默按匿名），user_id == 记录 `user_id` 且租户匹配 → `true`。普通用户以认证主体 tenant_id 为准；平台管理员代管租户时须请求 `X-Tenant-Id` 与记录 tenant_id 一致，不能仅因 user_id 相同跨租户判本人。
 6. **不落库快照、不存 files 映射**：alias 按提取顺序确定性生成（`asset_N`），同一数据重算稳定；`files/{alias}` 请求重跑步骤 1-4 + 提取后按 alias 定位。每次文件请求多几条主键查询，任务结果页文件数少，可接受（设计取舍：零额外存储 vs 轻微重复计算）。
 
 ### 内部引用不出库（安全契约，对齐 reply share）
 
 - `content` 中内部 `/api/files/{id}` / `file_id:` 引用与 `metadata` 的 images / attachments / downloadableFiles 全部改写为 `share-file:{alias}`；
 - 响应中出现的文件 URL 一律是公开路由 + ticket 形态；内部 `file_id`、`session_id`、消息 ID 不出现在响应；
-- `files/{alias}`：校验 ticket（`issue_download_ticket(base=share_path, ttl=12h)`，同 reply share）→ 重聚合定位 alias → `resolve_scoped_uploaded_file` → 流式返回，CSP sandbox / Content-Disposition 同 reply share。
+- `files/{alias}`：先校验 ticket（`issue_download_ticket(base=share_path, ttl=12h)`，同 reply share），无效时不触发重聚合或文件扫描；有效后重聚合定位 alias → `resolve_scoped_uploaded_file` → 流式返回，CSP sandbox / Content-Disposition 同 reply share。
 
 ## 前端页面行为（TaskResultSharePage.vue）
 
-- `onMounted`：从 view 响应取 `tenant_id`，读取本地 `saas_token_{tenant}`（如有）作为可选 Bearer 调 view 接口。
+- `onMounted`：先匿名调 view 取得 `tenant_id`，读取本地 `saas_token_{tenant}`（如有）后再带 Bearer 与 `X-Tenant-Id: {tenant}` 调 view 接口，以判定本人身份（平台管理员代管租户也适用）；匿名结果可先展示。
 - `viewer_is_owner=true` → `router.replace(/t/{tenant}/tasks/{task_id}?runner_id={runner_id})`（完整任务视图）。
 - 否则渲染任务头 + 只读回复 + 文件列表；「登录查看完整任务」按钮 → `/t/{tenant}/login?return_to=/share/task-result/{share_key}`，登录回到本页后走同一自动跳转逻辑。
+- 当前登录页的 `notificationReturnUrl` 只接受 `/notification`；需扩展白名单为严格的 `/share/task-result/{share_key}` 规范路径，拒绝其他外部 URL 与任意 query，避免登录后回跳丢失或开放重定向。
 - 404 → 「任务已删除或链接已失效」+ 返回登录按钮。
 
 ## 渠道切换明细（三处全换）
@@ -102,7 +104,9 @@ CREATE TABLE IF NOT EXISTS task_result_shares (
 | 站内信 | `repository._inbox_link` 对 task.completed/failed 生成 `/notification?ref=` | 该分支改为免登录链接；渲染时批量惰性回填 share 记录（inbox 列表 limit ≤100，一次查询/批建可承受）。普通聊天终态（无 task_id）保持旧链接 |
 | IM webhook / 邮件 | `events.scheduled_result_link` 生成 `/notification?ref=` 文案链接 | 改为免登录链接；渲染时惰性创建 share 记录，失败回落旧登录链接并记日志（不阻塞投递） |
 
-## 兼容与回滚
+## 数据库落地与兼容回滚
+
+- 新建库的 `deploy/init-postgres.sql` 与 `deploy/nuodu/init-postgres.sql`、存量库的 `deploy/db_update.yaml` 均需包含新表；系统表目录同步登记。
 
 - 旧 `/notification?ref=` 入口与解析逻辑**不动**（paused/needs_action/manual_rejected、普通聊天终态、存量旧 web push 链接仍走原路）。
 - 新表独立、内容零迁移；回滚 = 关闭新链接生成逻辑，无数据破坏。
@@ -110,7 +114,7 @@ CREATE TABLE IF NOT EXISTS task_result_shares (
 
 ## 测试与验收要点
 
-- 单测：share 事务内创建幂等（同 runner 重复通知同 key）；实时读聚合正常 / 任务删除 / runner 非终态 / 消息缺失 → 404；alias 确定性；ticket 校验；`viewer_is_owner` 判定（本人 / 非本人 / 无效 token）。
+- 单测：share 事务内创建幂等（同 runner 重复通知同 key）；实时读聚合正常 / 任务删除 / runner 非终态 → 404；仅文件结果未落 assistant 消息仍可读，消息与 Runner 投影均无可见结果 → 404；alias 确定性；ticket 校验；`viewer_is_owner` 判定（本人 / 非本人 / 无效 token）。
 - 渠道：站内信 link（completed/failed 带 task_id → 新链接；普通聊天终态 → 旧链接）；IM webhook 文案；SW payload `share_url` 优先级与回退。
 - 真机（agent2）：免登录打开只读页 → 产物文件预览/下载 → 本人登录态自动跳任务视图 → 非本人停留只读页 → 任务删除后链接失效提示。
 

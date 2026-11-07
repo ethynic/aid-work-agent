@@ -1,5 +1,6 @@
-// Only the fixed notification entry is accepted as a login return URL.
+// Only the fixed notification entry or one public task result is a login return URL.
 export function notificationReturnUrl(value: unknown): string | null {
+  if (typeof value === 'string' && /^\/share\/task-result\/[A-Za-z0-9_-]{1,160}$/.test(value)) return value
   if (typeof value !== 'string' || !value.startsWith('/notification?')) return null
   try {
     const url = new URL(value, window.location.origin)

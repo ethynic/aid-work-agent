@@ -4579,3 +4579,16 @@
     INSERT INTO token_cost_prices (model_name, price_per_call)
     VALUES ('qwen-image-3.0-pro', 0.25)
     ON CONFLICT (model_name) DO NOTHING;
+- datetime: "2026-11-06 19:00:00"
+  remark: "定时任务终态结果免登录链接：映射表只保存任务/执行归属，回复与文件实时读取"
+  statements: |
+    CREATE TABLE IF NOT EXISTS task_result_shares (
+        share_key TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        runner_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (task_id, runner_id)
+    );

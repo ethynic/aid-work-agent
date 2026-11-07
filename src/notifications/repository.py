@@ -894,13 +894,15 @@ class NotificationRepository:
                          'task.needs_action','task.manual_rejected','lead.captured')
 
     @staticmethod
-    def _inbox_link(event_type, params, subject, notification_ref=None):
+    def _inbox_link(event_type, params, subject, notification_ref=None, share_key=None):
         """点击站内信的跳转地址；abuse 告警跳防滥用中心并定位到该用户明细；
         提问等待通知复用既有通知解析入口 /notification?ref=——入口完成认证与
         resource 解析后带 _load_session/数字员工路由回原会话（五轮评审 P2-4：
-        不自行拼 chat 路径，避免遗漏非默认数字员工路由）。task.completed/
-        failed（§15.5）同样经通知入口：scheduled 终态解析 runner_result 后由
-        前端带 runner_id 定位任务视图的本次执行行，普通聊天终态回原会话。"""
+        不自行拼 chat 路径，避免遗漏非默认数字员工路由）。scheduled 的
+        task.completed/failed 有结果分享映射时跳只读结果页；回填失败及普通聊天
+        终态仍走通知入口。"""
+        if event_type in ('task.completed', 'task.failed') and params.get('task_id') and share_key:
+            return '/share/task-result/' + quote(share_key, safe='')
         if event_type in ('task.waiting_input', 'task.paused', 'task.needs_action',
                           'task.completed', 'task.failed', 'task.manual_rejected'):
             # 提问等待与定时任务暂停通知复用既有通知解析入口 /notification?ref=
@@ -960,13 +962,13 @@ class NotificationRepository:
                 (*scope_params,subject.user_id,list(self.INBOX_EVENT_TYPES)))
             unread = cursor.fetchone()['unread']
             sql = f'''SELECT notification_ref,event_type,category,priority,read_at,created_at,
-                parameters_encrypted FROM notification_messages
+                parameters_encrypted,resource_ref FROM notification_messages
                 WHERE {scope_sql} AND recipient_user_id=%s AND event_type=ANY(%s)'''
             if unread_only:
                 sql += ' AND read_at IS NULL'
             sql += ' ORDER BY created_at DESC LIMIT %s'
             cursor.execute(sql,(*scope_params,subject.user_id,list(self.INBOX_EVENT_TYPES),limit))
-            items = []
+            prepared = []
             for row in cursor.fetchall():
                 try:
                     params = unprotect(row['parameters_encrypted'])
@@ -974,10 +976,34 @@ class NotificationRepository:
                 except Exception:
                     params = {}
                     title,body = row['event_type'],''
+                prepared.append((row, params, title, body))
+            runner_ids = [row['resource_ref']['id'] for row, params, _, _ in prepared
+                if row['event_type'] in ('task.completed', 'task.failed') and params.get('task_id')
+                and isinstance(row.get('resource_ref'), dict)
+                and row['resource_ref'].get('type') == 'runner_result'
+                and row['resource_ref'].get('id')]
+            share_keys = {}
+            if runner_ids:
+                from src.services.task_result_sharing.service import task_result_links_for_runners_in_tx
+
+                cursor.execute('SAVEPOINT inbox_result_share')
+                try:
+                    share_keys = task_result_links_for_runners_in_tx(
+                        cursor, runner_ids, subject.tenant_id, subject.user_id)
+                    cursor.execute('RELEASE SAVEPOINT inbox_result_share')
+                    conn.commit()
+                except Exception as error:
+                    cursor.execute('ROLLBACK TO SAVEPOINT inbox_result_share')
+                    cursor.execute('RELEASE SAVEPOINT inbox_result_share')
+                    logger.warning('后端日志：站内信结果分享链接回填失败 异常类型={}', type(error).__name__)
+            items = []
+            for row, params, title, body in prepared:
+                resource = row.get('resource_ref') or {}
                 items.append({'notification_ref':row['notification_ref'],'event_type':row['event_type'],
                     'category':row['category'],'priority':row['priority'],'title':title,'body':body,
                     'link':self._inbox_link(row['event_type'],params,subject,
-                                            notification_ref=row['notification_ref']),
+                                            notification_ref=row['notification_ref'],
+                                            share_key=share_keys.get(resource.get('id'))),
                     'read_at':row['read_at'],'created_at':row['created_at']})
             return {'unread_count':unread,'items':items}
 
@@ -1223,6 +1249,24 @@ class NotificationRepository:
                         route_snapshot=%s::jsonb WHERE notification_id=%s''',
                         (state,json.dumps(route),message['notification_id']))
                     continue
+                resource = message.get('resource_ref') or {}
+                if (message['event_type'] in ('task.completed', 'task.failed')
+                        and isinstance(resource, dict) and resource.get('type') == 'runner_result'
+                        and message['expires_at'] > message['database_now']):
+                    from src.services.task_result_sharing.service import task_result_links_for_runners_in_tx
+
+                    cursor.execute('SAVEPOINT delivery_result_share')
+                    try:
+                        keys = task_result_links_for_runners_in_tx(
+                            cursor, [resource.get('id')], message['tenant_id'],
+                            message['recipient_user_id'])
+                        message['_task_result_share_key'] = keys.get(resource.get('id'))
+                        cursor.execute('RELEASE SAVEPOINT delivery_result_share')
+                    except Exception as error:
+                        cursor.execute('ROLLBACK TO SAVEPOINT delivery_result_share')
+                        cursor.execute('RELEASE SAVEPOINT delivery_result_share')
+                        logger.warning('后端日志：外发结果分享链接回填失败 notification_id={} 异常类型={}',
+                                       message['notification_id'], type(error).__name__)
                 if message['policy_key'] == RULE_EVENT_POLICY_KEY:
                     state, route = self._expand_rule_event(cursor, message)
                     cursor.execute('''UPDATE notification_messages SET expansion_state=%s,route_snapshot=%s::jsonb

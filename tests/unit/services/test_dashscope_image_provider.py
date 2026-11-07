@@ -80,6 +80,24 @@ class TestSubmitAsync:
         assert content == [{"text": "效果图"}]
         assert body["parameters"]["size"] == "1280*960"
         assert body["parameters"]["n"] == 2
+        assert body["parameters"]["enable_thinking"] is False
+
+    @pytest.mark.asyncio
+    async def test_enable_thinking_passthrough(self):
+        """enable_thinking=True 透传进 parameters（思考模式开关，默认关）"""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(200, json={"output": {"task_id": "t-1", "task_status": "PENDING"}})
+
+        provider = DashScopeImageProvider(
+            api_key="sk-test", model="qwen-image-3.0-pro", base_url=BASE_URL, enable_thinking=True
+        )
+        with _patch_async_client(handler):
+            await provider.submit(ImageGenRequest(prompt="效果图", n=1))
+
+        assert captured["body"]["parameters"]["enable_thinking"] is True
 
     @pytest.mark.asyncio
     async def test_image2image_body_and_ref_order(self):

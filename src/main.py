@@ -1794,6 +1794,8 @@ app.include_router(auth.router)
 app.include_router(session_api.router)
 from src.api.message_share import router as message_share_router
 app.include_router(message_share_router)
+from src.api.task_result_share import router as task_result_share_router
+app.include_router(task_result_share_router)
 from src.api.agent_runner_web import router as agent_runner_web_router
 app.include_router(agent_runner_web_router)
 # 定时任务管理 API（Runner 化 v2，Phase 4）

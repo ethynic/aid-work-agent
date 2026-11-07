@@ -970,3 +970,7 @@ message、target、preference 的 scope CHECK 保证 NULL tenant 对应 `global`
 展示副本只含所选回复的正文、图片、附件及下载卡片信息，不包含完整会话、工具参数或登录凭证；文件仍使用现有存储，服务端保存引用，公开文件标识使用分享内别名。
 创建按 fresh 登录主体核对源会话归属，匿名阅读在可选密码验证后返回整条回复；图片预览与下载使用绑定分享路径的现有短期资源签名，并限制到该条回复内的文件。
 不使用外键、触发器或新增访客会话表。DDL 同步在 `deploy/init-postgres.sql` 与 `deploy/db_update.yaml`，服务与数据访问分别为 `src/services/message_sharing/`、`src/db/message_share_db.py`。
+
+### `task_result_shares` — 定时任务终态结果免登录映射
+
+2026-11-06 新增系统表；`share_key` 为随机主键，`(task_id,runner_id)` 唯一保证同次执行通知幂等。仅保存 `tenant_id/user_id/task_id/runner_id/session_id` 归属和创建时间，不复制回复或文件。公开读取同时核对任务、任务会话、终态 scheduled Web Runner 和最终回复；任务删除后映射行即使残留也不可访问。文件以分享内 alias 加下载票据读取。DDL 同步于 `deploy/init-postgres.sql`、`deploy/nuodu/init-postgres.sql` 与 `deploy/db_update.yaml`，服务为 `src/services/task_result_sharing/`。

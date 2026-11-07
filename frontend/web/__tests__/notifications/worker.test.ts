@@ -79,6 +79,29 @@ describe('Web push worker privacy and routing', () => {
     expect(close).toHaveBeenCalled()
     expect(sw.openWindow).toHaveBeenCalledWith('https://agent.example.test/notification?ref=notification-1&tenant=tenant-1')
   })
+  it('opens a validated task result path and preserves old push fallback', async () => {
+    const sw = worker(active)
+    await sw.dispatch('push', { data: { json: () => ({ ...payload, share_url: '/share/task-result/safe_key' }) } })
+    const shown = sw.showNotification.mock.calls[0][1]
+    await sw.dispatch('notificationclick', { notification: { close() {}, data: shown.data } })
+    expect(sw.openWindow).toHaveBeenCalledWith('https://agent.example.test/share/task-result/safe_key')
+    const old = worker(active)
+    await old.dispatch('push', { data: { json: () => payload } })
+    await old.dispatch('notificationclick', { notification: { close() {}, data: old.showNotification.mock.calls[0][1].data } })
+    expect(old.openWindow).toHaveBeenCalledWith('https://agent.example.test/notification?ref=notification-1&tenant=tenant-1')
+  })
+  it.each(['https://evil.example', '//evil.example', '/share/task-result/a/../b', '/share/task-result/a?next=//evil.example'])('rejects unsafe share_url %s and uses notification entry', async share_url => {
+    const sw = worker(active)
+    await sw.dispatch('push', { data: { json: () => ({ ...payload, share_url }) } })
+    await sw.dispatch('notificationclick', { notification: { close() {}, data: sw.showNotification.mock.calls[0][1].data } })
+    expect(sw.openWindow).toHaveBeenCalledWith('https://agent.example.test/notification?ref=notification-1&tenant=tenant-1')
+  })
+  it('keeps interactive events on their login route even with a share field', async () => {
+    const sw = worker(active)
+    await sw.dispatch('push', { data: { json: () => ({ ...payload, event_kind: 'paused', share_url: '/share/task-result/safe_key' }) } })
+    const shown = sw.showNotification.mock.calls[0][1]
+    expect(shown.data.share_url).toBeUndefined()
+  })
   it('ignores invalid click references', async () => {
     const sw = worker(active)
     await sw.dispatch('notificationclick', { notification: { close() {}, data: { ref: 'https://evil.example' } } })

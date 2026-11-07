@@ -21,6 +21,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from src.saas.api.tenant_auth import require_admin
+from src.core.cache_utils import invalidate_tenant_cache
 from src.saas.db.tenant_db import TenantDB
 from src.saas.db.subscription_db import SubscriptionDB
 from src.saas.models.enums import BehaviorAction, BehaviorResourceType, TenantStatus, TenantType
@@ -271,6 +272,53 @@ async def update_tenant_scheduler(request: Request, body: TenantSchedulerSetting
     return {"success": True, "data": {
         "max_tasks_per_user": _tenant_scheduler_override(tenant_id),
     }}
+
+
+# ============== 租户偏好设置（租户管理员） ==============
+
+class TenantPreferencesRequest(BaseModel):
+    """租户偏好设置更新：AI 生成角标显示开关"""
+    show_ai_badge: bool = Field(..., description="会话图片是否显示“AI生成”角标（默认 true）")
+
+
+@router.patch("/me/preferences")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.TENANT)
+async def update_tenant_preferences(request: Request, body: TenantPreferencesRequest):
+    """更新本租户偏好设置（租户管理员专用）。
+
+    只写 tenants.settings.show_ai_badge（事务内 JSON 整体更新，保留其他租户设置键）。
+    会话图片右下角“AI生成”角标为前端显示标识（生成图片文件本身无水印）；默认显示，
+    关闭有合规责任（《人工智能生成合成内容标识办法》要求 AI 生成内容显式标识），由租户自担。"""
+    admin = require_admin(request)
+    _require_tenant_admin_role(admin)
+    tenant_id = admin.get("tenant_id")
+    if not tenant_id:
+        raise HTTPException(status_code=403, detail="缺少租户上下文")
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT settings FROM tenants WHERE tenant_id = %s FOR UPDATE",
+                           (tenant_id,))
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="企业不存在")
+            settings = row["settings"]
+            if isinstance(settings, str):
+                settings = json.loads(settings or "{}")
+            settings = settings if isinstance(settings, dict) else {}
+            settings["show_ai_badge"] = bool(body.show_ai_badge)
+            cursor.execute("UPDATE tenants SET settings = %s WHERE tenant_id = %s",
+                           (json.dumps(settings, ensure_ascii=False), tenant_id))
+            conn.commit()
+        # get_by_id 走 30 分钟 Redis 缓存，改完立即失效保证 auth/me 即时生效
+        invalidate_tenant_cache(tenant_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.opt(exception=True).error(f"更新租户偏好设置失败 tenant_id={tenant_id} {e}")
+        raise HTTPException(status_code=500, detail="保存失败，请稍后重试")
+    logger.info(f"Tenant preferences updated: tenant_id={tenant_id}, show_ai_badge={body.show_ai_badge}")
+    return {"success": True, "data": {"show_ai_badge": bool(body.show_ai_badge)}}
 
 
 # ============== 平台管理员 - 租户 CRUD ==============

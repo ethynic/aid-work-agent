@@ -167,6 +167,20 @@ export async function updateTenantScheduler(maxTasksPerUser: number | null): Pro
   return data?.data || { max_tasks_per_user: null }
 }
 
+export async function updateTenantPreferences(showAiBadge: boolean): Promise<{ show_ai_badge: boolean }> {
+  const res = await fetch(`${API_BASE}/tenants/me/preferences`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
+    body: JSON.stringify({ show_ai_badge: showAiBadge })
+  })
+  const data = await res.json().catch(() => null)
+  if (!res.ok) {
+    const detail = typeof data?.detail === 'string' ? data.detail : '保存失败'
+    throw new Error(detail)
+  }
+  return data?.data || { show_ai_badge: showAiBadge }
+}
+
 export async function listTenants(params?: {
   page?: number
   page_size?: number

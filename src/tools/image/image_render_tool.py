@@ -31,7 +31,7 @@ class ImageRenderInputModel(BaseModel):
                     "支持 file_id（file_xxx）/ 本地绝对路径 / http(s) URL；为空则纯文生图"
     )
     size: Optional[str] = Field(None, description="图片尺寸，宽*高（如 1280*960）；缺省用平台默认")
-    n: int = Field(1, description="生成张数 1-4，按张计费；效果图场景建议 2（择优留量）")
+    n: int = Field(1, description="生成张数 1-4，按张计费；默认 1 张")
     seed: Optional[int] = Field(None, description="随机种子；同一 seed+prompt 可复现，调优对比时使用")
 
 

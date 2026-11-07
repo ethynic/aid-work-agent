@@ -15,6 +15,13 @@ import pytest
 from src.wecom_conversation import archive, plans
 
 
+@pytest.fixture(autouse=True)
+def isolate_share_creation(monkeypatch):
+    """These notification wording tests predate the terminal share side effect."""
+    monkeypatch.setattr('src.services.task_result_sharing.service.ensure_task_result_share_in_tx',
+                        lambda *args: 'share_key')
+
+
 def _locator(account='acc1', conversation='R:m1'):
     return 'ws1.' + base64.urlsafe_b64encode(
         json.dumps({'account': account, 'conversation_id': conversation}).encode()).decode().rstrip('=')
