@@ -30,11 +30,15 @@ from .proxy_api import READ_MAX_PAGES
 _MONITOR_REQUIRED_TOOLS = ('wecom_read_sessions',)
 
 # 瞬态失败：本轮跳过等待重试，不判会话失败不 halt（外部 BUSY 等待重试，
-# Runtime 离线恢复后自动从原位置继续；设备生命周期问题不转嫁为会话 halted）
+# Runtime 离线恢复后自动从原位置继续；设备生命周期问题不转嫁为会话 halted）。
+# IDENTITY_UNCONFIRMED＝企微切号（§9.3：中断且不改绑定，原账号重新登录后自动
+# 继续）；PROXY_CAPABILITY_MISSING 为 invocation 级重映射码，与 failed 路径的
+# LOCAL_DEVICE_UNSUPPORTED 对齐——缺读能力属环境条件，升级后恢复
 _TRANSIENT_READ_CODES = frozenset({
     'BUSY', 'LOCAL_RECOVERY_BUSY',
-    'DEVICE_OFFLINE', 'DEVICE_UNAVAILABLE',
+    'DEVICE_OFFLINE', 'DEVICE_UNAVAILABLE', 'PROXY_CAPABILITY_MISSING',
     'LOCAL_DEVICE_OFFLINE', 'LOCAL_DEVICE_UNSUPPORTED', 'LOCAL_DEVICE_NOT_READY',
+    'IDENTITY_UNCONFIRMED',
 })
 
 # 会话占用状态：未决批次（pending/running/waiting/reconcile_hold，契约 §4 队列
@@ -179,8 +183,28 @@ def _requeue_waiting(tasks):
 
 # ==================== 组处理：设备闸门 → 占用核对 → 逐目标受信读 ====================
 
+def _group_runner_busy(tenant_id, device_id, account):
+    """组级 Runner 占用：同（租户/设备/企微账号）存在 running 批次时整组本轮不读。
+
+    设计 §9.3：队列占用覆盖监控读与回答两阶段，Runner 运行时不发起下一轮
+    监控读（避免监控读与自己的 Runner 抢 CLI），结束或进入等待后再补读。
+    waiting/reconcile_hold 已释放/结束执行，不阻塞组级读取，仅按会话级占用跳过。
+    """
+    from src.db.database import get_db_connection
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            '''SELECT 1 FROM bs_wecom_proxy_batches b
+               JOIN bs_wecom_proxy_tasks t ON t.id=b.task_id AND t.tenant_id=b.tenant_id
+               WHERE b.tenant_id=%s AND t.device_id=%s AND t.wecom_account_id=%s
+                 AND b.status=%s LIMIT 1''',
+            (tenant_id, device_id, account, proxy_tasks.BATCH_RUNNING))
+        return cursor.fetchone() is not None
+
+
 async def _run_group(items):
-    """单设备/账号组一轮：设备闸门 → 会话占用核对 → 逐目标串行受信读。"""
+    """单设备/账号组一轮：设备闸门 → 组级 Runner 占用 → 会话占用 → 逐目标读。"""
     first = items[0]
     tenant_id, user_id = first['tenant_id'], first['user_id']
     device_id = str(first['device_id'])
@@ -193,6 +217,11 @@ async def _run_group(items):
         logger.warning(f'后端日志：企微代理监控设备不可用本轮跳过 device={device_id} '
                        f'code={code} message={message}')
         return
+    if await asyncio.to_thread(_group_runner_busy, tenant_id, device_id,
+                               first['wecom_account_id']):
+        logger.info(f'后端日志：企微代理组内回答 Runner 执行中，本轮整组不读 '
+                    f'device={device_id} account={first["wecom_account_id"]}')
+        return
     occupied = await asyncio.to_thread(_occupied_sessions, tenant_id,
                                        [item['session'] for item in items])
     handled = set()
@@ -204,7 +233,7 @@ async def _run_group(items):
         if item['stop_requested']:
             continue  # stop_requested 任务不读不建新批（契约 §4 停止检查点）
         if locator in occupied:
-            continue  # 会话已被未决/失败批占用：Runner 执行期间不读，推进属 P6
+            continue  # 会话已有未决/失败批：不重读不重建（推进属 P6/人工）
         if not item['wb1_cursor']:
             # 无基线不读（启动流程保证有基线；防御中途数据异常避免盲读）
             logger.warning(f'后端日志：企微代理目标缺少基线游标本轮跳过 '

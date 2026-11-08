@@ -221,8 +221,9 @@ async def test_same_session_single_undecided_batch_invariant(tenant_id):
 
 
 @pytest.mark.asyncio
-async def test_monitor_race_with_existing_batch_skips_and_no_double_read(tenant_id):
-    """会话已有未决批（含 running）：监控本轮跳过该目标；其他目标继续。"""
+async def test_running_batch_blocks_whole_group_read(tenant_id):
+    """A 会话有 running 批（Runner 执行中）：整组本轮零读取（设计 §9.3 队列占用
+    覆盖监控读与回答两阶段），B 会话也不读，Runner 结束或进入等待后再补读。"""
     _register(tenant_id, _locator(1))
     _register(tenant_id, _locator(2))
     task = _create_started(tenant_id, [_locator(1), _locator(2)])
@@ -233,11 +234,32 @@ async def test_monitor_race_with_existing_batch_skips_and_no_double_read(tenant_
         proxy_tasks.transition_batch_in_tx(cursor, tenant_id, batch['id'], 'running')
         conn.commit()
     read = await _tick([(_page(locator2, [_peer(201)], cursor='wb1.p2'), None)])
-    assert read.await_count == 1  # 只有未占用会话被读（Runner 执行期间不读）
-    assert read.await_args.args[3]['sessions'] == [locator2]
+    read.assert_not_awaited()  # 组级占用：B 会话也不读
     batches = _batch_rows(tenant_id, task['id'])
-    assert len(batches) == 2  # 占用会话不重复建批，空闲会话正常建批
-    assert len([item for item in batches if item['session'] == locator2]) == 1  # 不双建
+    assert len(batches) == 1 and batches[0]['status'] == 'running'  # 不新建批
+
+
+@pytest.mark.asyncio
+async def test_session_level_occupation_skips_only_that_session(tenant_id):
+    """waiting（Runner 已释放）不阻塞组级读取：A 会话不读，B 会话正常读建批。"""
+    _register(tenant_id, _locator(1))
+    _register(tenant_id, _locator(2))
+    task = _create_started(tenant_id, [_locator(1), _locator(2)])
+    locator1, locator2 = _locator(1), _locator(2)
+    batch = _make_batch(tenant_id, task['id'], locator1)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        proxy_tasks.transition_batch_in_tx(cursor, tenant_id, batch['id'], 'running')
+        proxy_tasks.transition_batch_in_tx(cursor, tenant_id, batch['id'], 'waiting')
+        conn.commit()
+    read = await _tick([(_page(locator2, [_peer(201)], cursor='wb1.p2'), None)])
+    assert read.await_count == 1  # 组未被 running 批阻塞
+    assert read.await_args.args[3]['sessions'] == [locator2]  # 仅占用会话跳过
+    batches = _batch_rows(tenant_id, task['id'])
+    assert len([item for item in batches if item['session'] == locator1]) == 1  # A 不重读重建
+    # （tick 内恢复机制把 waiting 重排为 pending 属设计行为；A 的会话仍被该批占用）
+    assert [item for item in batches
+            if item['session'] == locator2][0]['batch_end_msg_id'] == 201
 
 
 @pytest.mark.asyncio
@@ -475,6 +497,49 @@ async def test_busy_skips_target_without_halt(tenant_id):
     _register(tenant_id, _locator(1))
     task = _create_started(tenant_id, [_locator(1)])
     await _tick([(None, _err_stub('企微忙碌', 'BUSY'))])
+    target = _target(tenant_id, task['id'], _locator(1))
+    assert target['status'] == 'active' and target['halted_reason'] is None
+    assert target['wb1_cursor'] == 'wb1.base-0'
+    assert _batch_rows(tenant_id, task['id']) == []
+
+
+@pytest.mark.asyncio
+async def test_identity_unconfirmed_skips_and_auto_resumes(tenant_id):
+    """切号（IDENTITY_UNCONFIRMED）：瞬态跳过——active 保持、游标保留；原账号重新
+    登录后下一轮成功读自动继续（§9.3：中断且不改绑定）。"""
+    _register(tenant_id, _locator(1))
+    task = _create_started(tenant_id, [_locator(1)])
+    locator = _locator(1)
+    await _tick([(None, _err_stub('账号已切换', 'IDENTITY_UNCONFIRMED'))])
+    target = _target(tenant_id, task['id'], locator)
+    assert target['status'] == 'active' and target['halted_reason'] is None
+    assert target['wb1_cursor'] == 'wb1.base-0'  # 游标与位置保留
+    assert target['halted_at'] is None
+    assert _batch_rows(tenant_id, task['id']) == []
+    read = await _tick([(_page(locator, [_peer(101)], cursor='wb1.i1'), None)])
+    read.assert_awaited_once()  # 切回后自动继续
+    assert len(_batch_rows(tenant_id, task['id'])) == 1
+    assert _target(tenant_id, task['id'], locator)['status'] == 'active'
+
+
+@pytest.mark.asyncio
+async def test_identity_unconfirmed_via_failed_array_skips(tenant_id):
+    """failed 数组路径透传 IDENTITY_UNCONFIRMED：同样走瞬态集，不 halt。"""
+    _register(tenant_id, _locator(1))
+    task = _create_started(tenant_id, [_locator(1)])
+    await _tick([(_page(_locator(1), [], failed=[{'code': 'IDENTITY_UNCONFIRMED'}]), None)])
+    target = _target(tenant_id, task['id'], _locator(1))
+    assert target['status'] == 'active' and target['halted_reason'] is None
+    assert target['wb1_cursor'] == 'wb1.base-0'
+    assert _batch_rows(tenant_id, task['id']) == []
+
+
+@pytest.mark.asyncio
+async def test_capability_missing_skips_without_halt(tenant_id):
+    """PROXY_CAPABILITY_MISSING（invocation 级重映射码）：跳过不 halt，升级后恢复。"""
+    _register(tenant_id, _locator(1))
+    task = _create_started(tenant_id, [_locator(1)])
+    await _tick([(None, _err_stub('缺少监控读取能力', 'PROXY_CAPABILITY_MISSING'))])
     target = _target(tenant_id, task['id'], _locator(1))
     assert target['status'] == 'active' and target['halted_reason'] is None
     assert target['wb1_cursor'] == 'wb1.base-0'
