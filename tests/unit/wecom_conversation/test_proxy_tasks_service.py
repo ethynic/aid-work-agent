@@ -232,12 +232,16 @@ def test_edit_running_rejected_and_add_uses_edit_join_baseline(tenant_id):
 
 
 def test_remove_target_ends_undecided_batches(tenant_id):
+    """移除目标使未决批次（含 waiting）转 ended_by_removal；同会话单未决批不变式下
+    pending/waiting 分属不同会话目标（P5 部分唯一索引）。"""
     _register(tenant_id, _locator(1))
     _register(tenant_id, _locator(2))
-    task = _create(tenant_id, [_locator(1), _locator(2)])
+    _register(tenant_id, _locator(3))
+    task = _create(tenant_id, [_locator(1), _locator(2), _locator(3)])
     proxy_tasks.complete_start(tenant_id, USER, task['id'], device_id=DEVICE,
                                self_user_id=ACCOUNT,
-                               baselines={_locator(1): _baseline(), _locator(2): _baseline()})
+                               baselines={_locator(1): _baseline(), _locator(2): _baseline(),
+                                          _locator(3): _baseline()})
     proxy_tasks.request_stop(tenant_id, USER, task['id'])
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -246,22 +250,23 @@ def test_remove_target_ends_undecided_batches(tenant_id):
             batch_end_msg_id=100, input_snapshot=None, agent_id='agent-a',
             instruction_snapshot='I', web_session_id='wecom_proxy_1')
         waiting = proxy_tasks.create_batch_in_tx(
-            cursor, tenant_id, USER, task_id=task['id'], session=_locator(1),
+            cursor, tenant_id, USER, task_id=task['id'], session=_locator(2),
             batch_end_msg_id=110, input_snapshot=None, agent_id='agent-a',
-            instruction_snapshot='I', web_session_id='wecom_proxy_1')
+            instruction_snapshot='I', web_session_id='wecom_proxy_2')
         proxy_tasks.transition_batch_in_tx(cursor, tenant_id, waiting['id'], 'running')
         proxy_tasks.transition_batch_in_tx(cursor, tenant_id, waiting['id'], 'waiting')
         succeeded = proxy_tasks.create_batch_in_tx(
-            cursor, tenant_id, USER, task_id=task['id'], session=_locator(2),
+            cursor, tenant_id, USER, task_id=task['id'], session=_locator(3),
             batch_end_msg_id=120, input_snapshot=None, agent_id='agent-a',
-            instruction_snapshot='I', web_session_id='wecom_proxy_2')
+            instruction_snapshot='I', web_session_id='wecom_proxy_3')
         proxy_tasks.transition_batch_in_tx(cursor, tenant_id, succeeded['id'], 'running')
         proxy_tasks.transition_batch_in_tx(cursor, tenant_id, succeeded['id'], 'succeeded')
         conn.commit()
     edited = proxy_tasks.edit_stopped_task(tenant_id, USER, task['id'],
-                                           remove_sessions=[_locator(1)])
-    removed = [item for item in edited['targets'] if item['session'] == _locator(1)][0]
-    assert removed['status'] == 'removed'
+                                           remove_sessions=[_locator(1), _locator(2)])
+    status_by_session = {item['session']: item['status'] for item in edited['targets']}
+    assert status_by_session[_locator(1)] == 'removed'
+    assert status_by_session[_locator(2)] == 'removed'
     detail = proxy_tasks.get_task_detail(tenant_id, USER, task['id'])
     status_by_id = {item['id']: item['status'] for item in detail['batches']}
     assert status_by_id[pending['id']] == 'ended_by_removal'
@@ -339,6 +344,7 @@ def test_start_without_active_targets_rejected(tenant_id):
 
 def test_batch_transition_state_machine(tenant_id):
     _register(tenant_id, _locator(1))
+    _register(tenant_id, _locator(2))  # reconcile_hold 用第二会话（同会话单未决批不变式）
     task = _create(tenant_id, [_locator(1)])
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -370,7 +376,7 @@ def test_batch_transition_state_machine(tenant_id):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         hold = proxy_tasks.create_batch_in_tx(
-            cursor, tenant_id, USER, task_id=task['id'], session=_locator(1),
+            cursor, tenant_id, USER, task_id=task['id'], session=_locator(2),
             batch_end_msg_id=120, input_snapshot=None, agent_id='agent-a',
             instruction_snapshot='I', web_session_id='wecom_proxy_1')
         proxy_tasks.transition_batch_in_tx(cursor, tenant_id, hold['id'], 'running')

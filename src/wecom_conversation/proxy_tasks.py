@@ -17,6 +17,7 @@ invocation 由 API 层沿目录先例发起（结果作为参数传入，失败�
 """
 from __future__ import annotations
 
+from psycopg2 import errors as pg_errors
 from psycopg2.extras import Json
 
 from src.db.database import get_db_connection
@@ -603,16 +604,62 @@ def soft_delete_task(tenant_id, user_id, task_id):
 
 def create_batch_in_tx(cursor, tenant_id, user_id, *, task_id, session, batch_end_msg_id,
                        input_snapshot, agent_id, instruction_snapshot, web_session_id):
-    """建 pending 批次（冻结上界＋输入快照＋当时指令；P5 监控循环接入）。"""
-    cursor.execute(
-        '''INSERT INTO bs_wecom_proxy_batches
-               (tenant_id, user_id, task_id, session, batch_end_msg_id, input_snapshot,
-                agent_id, instruction_snapshot, web_session_id, status)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending') RETURNING *''',
-        (tenant_id, user_id, task_id, session, batch_end_msg_id,
-         Json(input_snapshot) if input_snapshot is not None else None,
-         agent_id, instruction_snapshot, web_session_id))
+    """建 pending 批次（冻结上界＋输入快照＋当时指令；P5 监控循环接入）。
+
+    同会话仅一个未决批次由部分唯一索引 uq_bs_wecom_proxy_batches_session_undecided
+    在事务内核对（P4 CR 备注③）：SELECT FOR UPDATE 锁不住不存在的行（幻影读），
+    唯一索引在 READ COMMITTED 下原子判重且覆盖 P6 全部写入路径。并发重复建批时
+    后写方收到 PROXY_BATCH_OCCUPIED（唯一冲突已中止当前事务，由调用方回滚）。
+    """
+    try:
+        cursor.execute(
+            '''INSERT INTO bs_wecom_proxy_batches
+                   (tenant_id, user_id, task_id, session, batch_end_msg_id, input_snapshot,
+                    agent_id, instruction_snapshot, web_session_id, status)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending') RETURNING *''',
+            (tenant_id, user_id, task_id, session, batch_end_msg_id,
+             Json(input_snapshot) if input_snapshot is not None else None,
+             agent_id, instruction_snapshot, web_session_id))
+    except pg_errors.UniqueViolation:
+        raise _err('PROXY_BATCH_OCCUPIED',
+                   f'该会话已有未决批次，不重复建批：{(session or "")[:60]}') from None
     return _row(cursor.fetchone())
+
+
+def requeue_waiting_batches_in_tx(cursor, tenant_id, *, task_ids=None):
+    """waiting 批次恢复重排（P5 机制，恢复 Runner 提交属 P6 挂钩）。
+
+    任务 running、目标 active 且任务未 stop_requested 的等待批 waiting→pending
+    回队列；updated_at 刷新为重排时间，派发侧（P6）按 updated_at 取队首即得
+    "重排到队尾、其他会话先执行"语义。stop_requested、目标 removed 或任务
+    deleted 的等待批不恢复（批次保留，留待下次启动后排队）。reconcile_hold
+    不可自动恢复（状态白名单拒绝）；终态 failed 不在此恢复——failed→pending
+    仅承载零发送重试一次，由 P6 核定路径执行，监控/恢复路径不对终态失败批
+    再建同 Runner。返回重排批次数。
+    """
+    sql = '''SELECT b.id FROM bs_wecom_proxy_batches b
+             JOIN bs_wecom_proxy_tasks t ON t.id=b.task_id AND t.tenant_id=b.tenant_id
+             JOIN bs_wecom_proxy_task_sessions s ON s.tenant_id=b.tenant_id
+                    AND s.task_id=b.task_id AND s.session=b.session
+             WHERE b.tenant_id=%s AND b.status=%s AND t.status=%s
+               AND t.stop_requested=FALSE AND s.status=%s'''
+    params = [tenant_id, BATCH_WAITING, TASK_RUNNING, TARGET_ACTIVE]
+    if task_ids:
+        sql += ' AND b.task_id=ANY(%s)'
+        params.append(list(task_ids))
+    sql += ' ORDER BY b.id'
+    cursor.execute(sql, tuple(params))
+    batch_ids = [row['id'] for row in cursor.fetchall()]
+    requeued = 0
+    for batch_id in batch_ids:
+        try:
+            transition_batch_in_tx(cursor, tenant_id, batch_id, BATCH_PENDING)
+            requeued += 1
+        except ConversationServiceError as exc:
+            if exc.code != 'PROXY_BATCH_STATE_INVALID':
+                raise
+            # 并发下状态已变（如 P6 已恢复派发）：跳过该批，不中断重排
+    return requeued
 
 
 def transition_batch_in_tx(cursor, tenant_id, batch_id, to_status, *, runner_id=None,

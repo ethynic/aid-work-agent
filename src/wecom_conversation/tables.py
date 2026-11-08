@@ -222,6 +222,15 @@ CREATE INDEX IF NOT EXISTS idx_bs_wecom_proxy_batches_task
     ON bs_wecom_proxy_batches (tenant_id, task_id, status)
 """
 
+# 同会话单未决批不变式（代理任务契约 §9.3，P4 CR 备注③）：事务内 SELECT FOR
+# UPDATE 锁不住不存在的行（幻影），部分唯一索引在 READ COMMITTED 下原子判重，
+# 并覆盖 P6 全部写入路径；failed→pending 重试一次不受影响（failed 不在谓词内）
+PROXY_BATCHES_UNDECIDED_UNIQUE_DDL = """
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bs_wecom_proxy_batches_session_undecided
+    ON bs_wecom_proxy_batches (tenant_id, session)
+    WHERE status IN ('pending', 'running', 'waiting', 'reconcile_hold')
+"""
+
 # 已按旧未交付 DDL 建表的环境补齐新列（幂等；与 CREATE TABLE 同步维护）
 _ALTER_STATEMENTS = (
     "ALTER TABLE bs_wecom_conversations ADD COLUMN IF NOT EXISTS enroll_reasons JSONB",
@@ -247,6 +256,7 @@ _DDL_ITEMS = (
     PROXY_BATCHES_DDL,
     PROXY_BATCHES_QUEUE_INDEX_DDL,
     PROXY_BATCHES_TASK_INDEX_DDL,
+    PROXY_BATCHES_UNDECIDED_UNIQUE_DDL,
 )
 
 

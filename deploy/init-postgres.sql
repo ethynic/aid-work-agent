@@ -5941,3 +5941,7 @@ CREATE INDEX IF NOT EXISTS idx_bs_wecom_proxy_batches_queue
     ON bs_wecom_proxy_batches (tenant_id, task_id, session, status);
 CREATE INDEX IF NOT EXISTS idx_bs_wecom_proxy_batches_task
     ON bs_wecom_proxy_batches (tenant_id, task_id, status);
+-- 同会话单未决批不变式（代理任务契约 §9.3）：failed→pending 重试一次不受影响
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bs_wecom_proxy_batches_session_undecided
+    ON bs_wecom_proxy_batches (tenant_id, session)
+    WHERE status IN ('pending', 'running', 'waiting', 'reconcile_hold');

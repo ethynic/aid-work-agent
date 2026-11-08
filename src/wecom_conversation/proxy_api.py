@@ -22,6 +22,9 @@ router = APIRouter(prefix="/api/wecom-proxy-tasks", tags=["wecom-proxy-tasks"])
 # 本地执行失败码中代表"客户端缺少该工具能力"的子集（沿目录先例映射为需升级）
 _CLIENT_UPGRADE_CODES = ('TOOL_NOT_SUPPORTED', 'TOOL_NOT_ALLOWED', 'LOCAL_DEVICE_UNSUPPORTED')
 
+# 受信读取排空页数上限（基线读取与 P5 监控读同上限；超限明确报错不静默截断）
+READ_MAX_PAGES = 20
+
 
 def _service_error(exc: service.ConversationServiceError):
     return _err(exc.status, str(exc), exc.code)
@@ -153,7 +156,8 @@ async def _baseline_read(tenant_id, user_id, device, locator):
     generation = None
     watermark = None
     self_user_id = None
-    for _ in range(20):
+    drained = False
+    for _ in range(READ_MAX_PAGES):
         arguments = {'sessions': [locator], 'limit': 50}
         if cursor:
             arguments['cursor'] = cursor
@@ -177,7 +181,12 @@ async def _baseline_read(tenant_id, user_id, device, locator):
         if value is not None and (watermark is None or value > watermark):
             watermark = value
         if data.get('has_more') is not True:
+            drained = True
             break
+    if not drained:
+        # P4 遗留①：排空页数用尽仍 has_more=true → 明确报错，不静默截断末页
+        return None, _err(409, '会话积压超过单次读取上限（20 页×50 条），请先消化积压后重试',
+                          'PROXY_BACKLOG_TOO_LARGE')
     return {'cursor': cursor, 'generation': generation, 'watermark': watermark,
             'self_user_id': self_user_id}, None
 
@@ -292,6 +301,10 @@ async def start_proxy_task(task_id: int, request: Request):
             baseline, error = await _baseline_read(tenant_id, user_id, device, target['session'])
             if error:
                 return error
+            # 逐基线核对当前登录账号（P4 遗留②，与编辑路径一致），不取最后一个基线
+            if baseline['self_user_id'] != task['wecom_account_id']:
+                return _err(409, '设备当前企微账号与任务固定账号不一致，未启动',
+                            'PROXY_ACCOUNT_MISMATCH')
             baselines[target['session']] = baseline
             identity = baseline['self_user_id']
         if identity is None and targets:

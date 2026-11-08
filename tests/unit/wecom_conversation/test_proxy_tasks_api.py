@@ -274,6 +274,45 @@ async def test_baseline_read_rejects_per_target_failed_entry():
 
 
 @pytest.mark.asyncio
+async def test_baseline_read_backlog_reports_error_instead_of_truncation():
+    """P4 遗留①：20 页排空后仍 has_more=true → 明确报错，不静默截断末页。"""
+    with patch.object(proxy_api, '_read_sessions_call', AsyncMock(
+            return_value=_read_page(has_more=True))) as read, \
+         patch.object(proxy_api, '_err', _err_stub):
+        result, error = await proxy_api._baseline_read('tenant-1', 'user-1',
+                                                       {'id': 'device-a'}, 'ws1.a')
+    assert result is None
+    assert error['code'] == 'PROXY_BACKLOG_TOO_LARGE'
+    assert read.await_count == proxy_api.READ_MAX_PAGES
+
+
+@pytest.mark.asyncio
+async def test_start_account_checked_per_baseline_not_last_only():
+    """P4 遗留②：start 逐基线核对账号（与编辑路径一致），首个基线不符即拒绝。"""
+    good = {'cursor': 'wb1.b', 'generation': 'g', 'watermark': 2, 'self_user_id': 'account-a'}
+    bad = {'cursor': 'wb1.a', 'generation': 'g', 'watermark': 1, 'self_user_id': 'account-b'}
+    with patch.object(proxy_api, '_current_user_context', AsyncMock(
+            return_value=('tenant-1', 'user-1', USER))), \
+         patch.object(proxy_api, '_agent_allowed', AsyncMock(return_value=True)), \
+         patch.object(proxy_tasks, 'get_task', return_value={
+             'id': 1, 'status': 'stopped', 'agent_id': 'agent-a',
+             'wecom_account_id': 'account-a'}), \
+         patch.object(proxy_tasks, 'start_prep', return_value=(
+             {'id': 1, 'device_id': 'device-a', 'wecom_account_id': 'account-a'},
+             [{'id': 11, 'session': 'ws1.a', 'wb1_cursor': None},
+              {'id': 12, 'session': 'ws1.b', 'wb1_cursor': None}], [])), \
+         patch.object(proxy_api, '_task_device', AsyncMock(
+             return_value=({'id': 'device-a'}, None))), \
+         patch.object(proxy_api, '_baseline_read', AsyncMock(
+             side_effect=[(bad, None), (good, None)])), \
+         patch.object(proxy_tasks, 'complete_start') as complete, \
+         patch.object(proxy_api, '_err', _err_stub):
+        result = await proxy_api.start_proxy_task(1, Request())
+    assert result['code'] == 'PROXY_ACCOUNT_MISMATCH'
+    complete.assert_not_called()  # 不以最后一个基线的账号冒充整体核对
+
+
+@pytest.mark.asyncio
 async def test_start_per_target_failed_read_does_not_start():
     """启动读取遇到单目标 failed：不启动、不写基线游标（回归 2026-11-08 评审）。"""
     with patch.object(proxy_api, '_current_user_context', AsyncMock(

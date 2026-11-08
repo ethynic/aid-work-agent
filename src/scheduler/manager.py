@@ -296,6 +296,23 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.error(f"后端日志：注册视频生成轮询任务失败: {e}")
 
+        # ===== 企微代理任务监控循环（每 10s，只在 background_runner 进程跑）=====
+        # 设计 docs/design/wecom/wecom-conversation-operations-design.md §9.3
+        # （契约 Q1 裁决：background_runner 进程内按设备＋账号逻辑监控循环，
+        # 不新建部署单元）；max_instances=1 保证整轮未完成不重叠
+        try:
+            self._scheduler.add_job(
+                self._run_wecom_proxy_monitor,
+                IntervalTrigger(seconds=10),
+                id="job_system_wecom_proxy_monitor",
+                name="WeCom Proxy Task Monitor",
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("后端日志：已注册企微代理任务监控循环 (interval=10s)")
+        except Exception as e:
+            logger.error(f"后端日志：注册企微代理监控任务失败: {e}")
+
         # ===== skill_ws 临时工作目录残留清理（每日 03:30）=====
         # 正常路径由 agent.process_message 结束时删除工作目录；
         # 本任务兜底清理进程崩溃 / 异常退出遗留的 skill_ws_* 目录
@@ -1296,6 +1313,27 @@ class ScheduledTaskManager:
                 tlog("video-agent-阶段三", "background_runner 轮询异常 err={err}", err=str(e), level="ERROR")
             except Exception:
                 pass
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
+
+    # ===== 企微代理任务监控回调（async tick，每 10s）=====
+    def _run_wecom_proxy_monitor(self):
+        """企微代理任务监控循环（APScheduler 回调，后台线程执行）。
+
+        设计 docs/design/wecom/wecom-conversation-operations-design.md §9.3。
+        只在 background_runner 进程跑（调度器有 manager 级 Redis 锁）；
+        新建 event loop run_until_complete（同 _run_video_gen_poll 模式）。
+        """
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            from src.wecom_conversation.proxy_monitor import run_tick
+            loop.run_until_complete(run_tick())
+        except Exception as e:
+            logger.opt(exception=True).error(f"后端日志：企微代理监控轮询异常: {e}")
         finally:
             try:
                 loop.close()
