@@ -59,6 +59,11 @@ export async function startFakeProvider(): Promise<void> {
   const legacyWecom = process.env.FAKE_WECOM_LEGACY === '1'
   const searchDirectory = process.env.FAKE_WECOM_DIRECTORY_SEARCH === '1'
   const searchModeOnly = process.env.FAKE_WECOM_DIRECTORY_SEARCH_NO_TYPE === '1'
+  // 代理任务 P3 夹具：FAKE_WECOM_CONFIG_TOOLS=1 模拟新增配置工具的新版 wecom CLI；
+  // FAKE_WECOM_CONFIG_DOCTOR_MUTATED=1 模拟 schema 变形（readOnlyHint 丢失），
+  // 对应 runtime 端「真实 schema 检查不通过 → 能力串不上报」路径
+  const configTools = process.env.FAKE_WECOM_CONFIG_TOOLS === '1'
+  const doctorMutated = process.env.FAKE_WECOM_CONFIG_DOCTOR_MUTATED === '1'
 
   for (const name of TOOL_NAMES) {
     if (legacyWecom && name === 'wecom_read_sessions') continue
@@ -162,6 +167,66 @@ export async function startFakeProvider(): Promise<void> {
         return { content: [{ type: 'text' as const, text: JSON.stringify(result) }], structuredContent: result }
       },
     )
+  }
+
+  // 代理任务 P3 配置工具（契约 §2：无参输入；doctor 只读诊断，calibrate 写动作）。
+  // 结果沿外层 OperationResult.data 内契约业务报告形状的最小夹具；
+  // 输入 schema 保持空对象（真实发现按无参校验），测试控制用环境变量而非未声明参数
+  if (configTools) {
+    if (doctorMutated) {
+      // schema 变形夹具仅用于真实发现检查（能力串不上报路径），调用方不会被派发到该工具
+      server.registerTool('wecom_config_doctor', {
+        title: 'wecom_config_doctor',
+        description: 'fake wecom_config_doctor (mutated schema)',
+        inputSchema: { broken: z.string().optional() },
+        annotations: { readOnlyHint: false },
+      }, async () => {
+        const result = { success: false, code: 'FAKE_FAIL', message: 'mutated fixture', effect: 'none', data: null, retryable: false, run_id: randomUUID() }
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result) }], structuredContent: result }
+      })
+    } else {
+      server.registerTool('wecom_config_doctor', {
+        title: 'wecom_config_doctor',
+        description: 'fake wecom_config_doctor',
+        inputSchema: {},
+        annotations: { readOnlyHint: true },
+      }, async () => {
+        const runId = randomUUID()
+        const data = {
+          schema_version: 1,
+          self_user_id: '1688fixture',
+          success: true,
+          checks: [{ name: 'fixture', ok: true, severity: 'gate', detail: 'fake doctor' }],
+          runtime_readiness: { ready: true, reason: '' },
+          localdb: {
+            success: true,
+            steps: [{ step: 1, name: 'fixture', ok: true, kind: null, detail: '', elapsed_ms: 1 }],
+            localdb_ready: true,
+            mode_decision: { mode: 'db', kind: null, version: 'fixture', checked_at: new Date().toISOString() },
+            ui_ready: { ready: true, platform_ok: true, interactive_session: true, powershell_available: true },
+            state_saved: true,
+            guidance: [],
+          },
+        }
+        const result = { success: true, code: 'OK', message: 'fake doctor 完成', effect: 'none', data, retryable: false, run_id: runId }
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result) }], structuredContent: result }
+      })
+    }
+    server.registerTool('wecom_config_calibrate', {
+      title: 'wecom_config_calibrate',
+      description: 'fake wecom_config_calibrate',
+      inputSchema: {},
+      annotations: { readOnlyHint: false },
+    }, async () => {
+      const runId = randomUUID()
+      const result = {
+        success: true, code: 'OK', message: 'fake 标定完成', effect: 'applied',
+        data: { schema_version: 1, self_user_id: '1688fixture', title_point: { x: 1310, y: 218 },
+          input_point: { x: 1310, y: 976 }, width: 2560, height: 1440, dpi: 96 },
+        retryable: false, run_id: runId,
+      }
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result) }], structuredContent: result }
+    })
   }
 
   const transport = new StdioServerTransport()

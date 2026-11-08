@@ -80,16 +80,22 @@ test('配置 wecom entry：providers 数组含 wecom，manifests 含独立摘要
   assert.ok((verified.capabilities as string[]).includes('wecom_read_sessions'))
   assert.ok(!(verified.capabilities as string[]).includes('wecom_session_directory'))
   assert.ok(!(verified.capabilities as string[]).includes('wecom_session_directory_search'))
+  // 代理任务 P3：配置工具未验证（缺省 false）→ 与 session_directory 同规则被过滤出摘要
   assert.equal((verified.provider_manifests as Record<string, Record<string, unknown>>).wecom!.manifest_digest,
-    manifestDigestOf({ ...TRUSTED_MANIFESTS.wecom!, tools: TRUSTED_MANIFESTS.wecom!.tools.filter(name => name !== 'wecom_session_directory') }))
+    manifestDigestOf({ ...TRUSTED_MANIFESTS.wecom!, tools: TRUSTED_MANIFESTS.wecom!.tools.filter(name =>
+      name !== 'wecom_session_directory' && name !== 'wecom_config_doctor' && name !== 'wecom_config_calibrate') }))
   const directoryVerified = deviceCapabilities(makeConfig({ providers: { wecom: { entry: existingEntry } } }), true, true)
-  assert.equal((directoryVerified.provider_manifests as Record<string, Record<string, unknown>>).wecom!.manifest_digest, manifestDigestFor('wecom'))
+  assert.equal((directoryVerified.provider_manifests as Record<string, Record<string, unknown>>).wecom!.manifest_digest,
+    manifestDigestOf({ ...TRUSTED_MANIFESTS.wecom!, tools: TRUSTED_MANIFESTS.wecom!.tools.filter(name =>
+      name !== 'wecom_config_doctor' && name !== 'wecom_config_calibrate') }))
   assert.ok((directoryVerified.capabilities as string[]).includes('wecom_session_directory'))
   assert.ok(!(directoryVerified.capabilities as string[]).includes('wecom_session_directory_search'), 'page-only schema does not prove search')
   const searchVerified = deviceCapabilities(makeConfig({ providers: { wecom: { entry: existingEntry } } }), true, true, true)
   assert.ok((searchVerified.capabilities as string[]).includes('wecom_session_directory_search'))
   assert.equal((searchVerified.provider_manifests as Record<string, Record<string, unknown>>).wecom!.manifest_digest,
-    manifestDigestFor('wecom'), 'search is a feature capability, not a new trusted tool')
+    manifestDigestOf({ ...TRUSTED_MANIFESTS.wecom!, tools: TRUSTED_MANIFESTS.wecom!.tools.filter(name =>
+      name !== 'wecom_config_doctor' && name !== 'wecom_config_calibrate') }),
+    'search is a feature capability, not a new trusted tool')
   for (const tool of ['wecom_probe', 'wecom_message_send', 'wecom_send_status', 'wecom_group_poll', 'wecom_send_image', 'wecom_send_file', 'wecom_read_session', 'wecom_unread_list']) {
     assert.ok(capabilities.includes(tool), `${tool} 应在 capabilities`)
   }
