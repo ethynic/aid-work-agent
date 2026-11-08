@@ -107,6 +107,11 @@
           </div>
 
           <div class="flex items-center gap-2">
+            <label class="inline-flex items-center gap-1.5 text-xs text-muted cursor-pointer" title="任务会持续运行，直到您停止或遇到需要处理的阻断">
+              <input v-model="continuousSelected" type="checkbox" :disabled="disabled || isProcessing"
+                class="accent-primary-600 disabled:cursor-not-allowed" />
+              <span>持续执行</span>
+            </label>
             <!-- Processing indicator -->
             <span v-if="isProcessing" class="flex items-center gap-1.5 text-primary-500 text-xs">
               <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -146,8 +151,18 @@
             </button>
           </div>
         </div>
+        <p v-if="continuousSelected" class="px-4 pb-2 text-xs text-muted">持续运行按实际用量累计积分，可在任务卡停止。</p>
       </div>
     </div>
+    <BaseModal v-model="showContinuousPrompt" title="是否持续执行？" size="sm" mode="view" accessible :show-fullscreen="false">
+      <p class="text-sm text-default">检测到长期跟进任务。持续任务可在后台休眠并继续，按实际用量累计积分；遇到阻断时会在任务状态中提示您处理。普通任务结束后不会继续监控。</p>
+      <template #footer>
+        <div class="flex flex-wrap justify-end gap-2">
+          <BaseButton intent="secondary" @click="submitMessage(false)">按普通任务发送</BaseButton>
+          <BaseButton @click="submitMessage(true)">持续执行</BaseButton>
+        </div>
+      </template>
+    </BaseModal>
   </div>
 </template>
 
@@ -160,6 +175,9 @@ import type { QuickPrompt } from '@/utils/quickPrompts'
 import { detectFileIconKind } from '@/utils/file'
 import ChatToolbar from './chat/ChatToolbar.vue'
 import FileTypeIcon from './FileTypeIcon.vue'
+import BaseButton from './ui/BaseButton.vue'
+import BaseModal from './ui/BaseModal.vue'
+import { suggestsContinuousMode } from '@/utils/continuousIntent'
 
 interface Props {
   disabled: boolean
@@ -172,11 +190,12 @@ interface Props {
   toolbarButtons?: string[] | null
   /** 子智能体快捷按钮（utils/quickPrompts.ts 按 subagent_type 映射）；空/缺省不渲染 */
   quickPrompts?: QuickPrompt[] | null
+  sessionId?: string | null
 }
 
 const props = defineProps<Props>()
 const emit = defineEmits<{
-  (e: 'send', content: string): void
+  (e: 'send', content: string, executionMode?: 'continuous'): void
   (e: 'upload', file: File): void
   (e: 'remove', file_id: string): void
   (e: 'stop'): void
@@ -185,6 +204,8 @@ const emit = defineEmits<{
 const { isMobile } = useMobile()
 const { openPreview } = useAttachmentPreview()
 const inputText = ref('')
+const continuousSelected = ref(false)
+const showContinuousPrompt = ref(false)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
@@ -211,6 +232,10 @@ watch(() => props.disabled, (newVal, oldVal) => {
       inputRef.value?.focus()
     })
   }
+})
+watch(() => props.sessionId, () => {
+  showContinuousPrompt.value = false
+  continuousSelected.value = false
 })
 
 function handleEnter(e: KeyboardEvent) {
@@ -242,13 +267,31 @@ function handleSend() {
   // 有文字内容或有附件时都可以发送
   if (!inputText.value.trim() && props.files.length === 0) return
 
-  emit('send', inputText.value.trim())
+  if (!continuousSelected.value && suggestsContinuousMode(inputText.value)) {
+    showContinuousPrompt.value = true
+    return
+  }
+
+  submitMessage(continuousSelected.value)
+}
+
+function submitMessage(continuous: boolean) {
+  if (!canSend.value || hasUploading.value || (!inputText.value.trim() && props.files.length === 0)) return
+  showContinuousPrompt.value = false
+  emit('send', inputText.value.trim(), continuous ? 'continuous' : undefined)
   inputText.value = ''
+  continuousSelected.value = false
 
   // Reset textarea height
   if (inputRef.value) {
     inputRef.value.style.height = 'auto'
   }
+}
+
+function restoreDraft(message: string, continuous = false) {
+  if (inputText.value.trim()) return
+  continuousSelected.value = continuous
+  fillQuickPrompt(message, true)
 }
 
 /** 快捷按钮点击：把预设消息填入输入框并聚焦，用户补充细节后手动发送 */
@@ -261,7 +304,7 @@ function fillQuickPrompt(message: string, onlyIfEmpty = false) {
   })
 }
 
-defineExpose({ fillQuickPrompt })
+defineExpose({ fillQuickPrompt, restoreDraft })
 
 function newLine() {
   // Allow default behavior for Shift+Enter
