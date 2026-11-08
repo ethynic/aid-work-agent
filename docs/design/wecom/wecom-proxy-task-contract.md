@@ -52,6 +52,7 @@
 ### 2.2 `wecom_config_calibrate` v1
 
 - 输入：无参数。执行与 `aid-wecom calibrate` 相同的身份预核＋双点标定（独占运行，走 CLI 既有互斥）。
+- 真机创建检查必须能访问标定服务：Desktop Runtime 仅将已有的 `AID_WECOM_SERVER_URL` / `AID_WECOM_SERVER_TOKEN` 传至 Host，再只注入 WeCom Provider；缺少配置时标定返回 `CONFIG_MISSING`，任务不创建。该凭据与 Runtime 设备配对凭据分开。
 - 结果：`OperationResult.data` 内：
 
 ```json
