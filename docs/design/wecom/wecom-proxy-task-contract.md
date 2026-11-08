@@ -70,7 +70,7 @@
 
 ## 3. Runtime 能力上报与受信调用（P3 落点）
 
-- **能力字符串＝MCP 工具名**（沿用现有粒度对齐约定）：`wecom_config_doctor`、`wecom_config_calibrate` 纳入 wecom manifest 工具名单；`deviceCapabilities` 仅在真实检查插件 MCP listTools 中存在该工具且 schema 校验通过后上报对应能力串（沿 W30 先例）。插件已安装但工具缺失/被裁剪 → 不上报该能力串；能力上报不使配置工具进入模型工具集。
+- **能力字符串＝MCP 工具名**（沿用现有粒度对齐约定）：`wecom_config_doctor`、`wecom_config_calibrate` 纳入 wecom manifest 工具名单；`deviceCapabilities` 在真实检查插件 MCP listTools 后上报对应能力串——`wecom_config_doctor` 须 schema 校验通过（`readOnlyHint=true` 且无参输入），`wecom_config_calibrate` 从实际 listTools **确认工具存在即上报**（存在性检查；P4 创建检查会真实执行该工具并核对坐标字段，安全兜底）。插件已安装但工具缺失/被裁剪 → 不上报对应能力串；能力上报不使配置工具进入模型工具集。**修改 P2 配置工具的输入格式时，须同步更新 Runtime 能力判断、后台调用与对应测试。**
 - 心跳能力数组为加性元素，Device wire 无字段结构变化；manifest digest 按实际工具集合变化属既有协商机制的正常演进，旧客户端按旧 digest 正常运行，不强制升级。
 - 两个配置工具与监控读共用**原 local-tool invocation/result 通路**（Device API → Runtime → MCP → CLI），不新建通道、不建本地 Agent loop、不让浏览器直连 CLI。
 - **创建检查与启动运行条件分别定义**：
