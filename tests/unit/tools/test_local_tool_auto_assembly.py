@@ -228,3 +228,40 @@ async def test_production_execution_uses_real_recruiting_profile_for_legacy_visi
     await runtime._prime_local_tools()
     assert set(catalog.agent_tools('boss-recruiting')) <= names(runtime.catalog)
     assert 'boss_overlay_inspect' not in names(runtime.catalog)
+
+
+@pytest.mark.asyncio
+async def test_wecom_proxy_adds_read_send_only_for_its_runner(monkeypatch, tmp_path):
+    """代理任务无需把企微工具写回智能体配置；普通对话不得借此获得企微工具。"""
+    from src.core.agent_engine.contracts import Identity
+    from src.core.skill_registry import SkillRegistry
+    from src.services.agent_runner.runtime.executor import RuntimeExecution
+    from src.services.agent_runner.runtime.profile import RuntimeResources
+
+    profile = SimpleNamespace(
+        tools={'inherit': False}, llm_provider=None, dir_name='after-sales',
+        get_allowed_tools=lambda: ['http_api'], get_excluded_tools=lambda: [],
+        get_allowed_skills=lambda: [],
+    )
+    monkeypatch.setattr('src.services.agent_runner.runtime.profile.cached_skill_registry',
+                        lambda allowed: SkillRegistry())
+    monkeypatch.setattr('src.local_tools.repository.list_devices',
+                        Mock(return_value=[device('wecom')]))
+
+    async def visible(source):
+        resources = RuntimeResources(
+            is_master=False, subagent_config=profile, tenant_id='tenant', user_id='user',
+            session_id='session', resource_directory=tmp_path, source=source)
+        runtime = RuntimeExecution(
+            resources, Identity('tenant', 'user', 'session', source, 'web'))
+        await runtime._prime_local_tools({'wecom_task_device': 'selected'})
+        return names(runtime.catalog)
+
+    proxy_tools = await visible('wecom_proxy')
+    chat_tools = await visible('chat')
+    scheduled_tools = await visible('scheduled')
+    assert {name for name in proxy_tools if name.startswith('wecom_')} == {
+        'wecom_read_session', 'wecom_read_sessions', 'wecom_message_send'}
+    assert all('http_api' in tools for tools in (proxy_tools, chat_tools, scheduled_tools))
+    assert not {name for name in chat_tools if name.startswith('wecom_')}
+    assert not {name for name in scheduled_tools if name.startswith('wecom_')}

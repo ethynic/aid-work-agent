@@ -88,7 +88,9 @@ class RuntimeResources:
             role=ToolAssemblyRole(self.mode.value), subagent_config=subagent_config,
             plan_manager=self.plan_manager, skill_registry=self.skill_registry,
             skill_executor=self.skill_executor, subagent_registry=self.subagent_registry,
-            non_interactive=non_interactive))
+            non_interactive=non_interactive,
+            additional_tools=('wecom_read_session', 'wecom_read_sessions', 'wecom_message_send')
+            if source == 'wecom_proxy' else ()))
         filter_source_visible_tools(self._tool_bundle, source)
         self.tool_registry, self._tool_controls = self._tool_bundle.registry, self._tool_bundle.controls
         self.tool_executor = ToolExecutor(self.tool_registry)
