@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from collections import OrderedDict
 
 from loguru import logger
@@ -55,6 +56,22 @@ def _proxy_api():
     """受信读取与设备闸门沿 P4 API 层（延迟导入，保持本模块轻量可测）。"""
     from . import proxy_api
     return proxy_api
+
+
+# 组级互斥锁（P6 派发协调）：同进程内监控组读与派发器的"占用＋提交"临界区
+# 互斥（try-acquire，抢不到本轮跳过），双向不与对方抢占同一设备 CLI；跨进程
+# 单持有者由调度器 manager 级 Redis 锁保证（Q1）。
+_group_locks_guard = threading.Lock()
+_group_locks: dict = {}
+
+
+def group_lock(key):
+    """同设备/账号组的互斥锁（监控读与 P6 派发共用，惰性创建）。"""
+    with _group_locks_guard:
+        lock = _group_locks.get(key)
+        if lock is None:
+            lock = _group_locks[key] = threading.Lock()
+        return lock
 
 
 def _error_parts(error):
@@ -204,7 +221,27 @@ def _group_runner_busy(tenant_id, device_id, account):
 
 
 async def _run_group(items):
-    """单设备/账号组一轮：设备闸门 → 组级 Runner 占用 → 会话占用 → 逐目标读。"""
+    """单设备/账号组一轮：设备闸门 → 组级 Runner 占用 → 会话占用 → 逐目标读。
+
+    全程持有组级锁（P6 派发协调）：派发器正占用/提交该组批次时本轮跳过，
+    不与 Runner 启动抢占同一 CLI（设计 §9.3 串行占用）。
+    """
+    first = items[0]
+    key = (first['tenant_id'], str(first['device_id']), first['wecom_account_id'])
+    lock = group_lock(key)
+    if not lock.acquire(blocking=False):
+        # P6 派发器正占用/提交该组批次：本轮跳过，下轮再读
+        logger.info(f'后端日志：企微代理派发器占用组级锁，本轮跳过读取 '
+                    f'device={key[1]} account={key[2]}')
+        return
+    try:
+        await _run_group_locked(items)
+    finally:
+        lock.release()
+
+
+async def _run_group_locked(items):
+    """组级锁内的单组处理体。"""
     first = items[0]
     tenant_id, user_id = first['tenant_id'], first['user_id']
     device_id = str(first['device_id'])

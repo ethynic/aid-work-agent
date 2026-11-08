@@ -533,6 +533,11 @@ agent_runner:
     # token 复用同一 .env 的 AGENT_RUNNER_WEB_SERVICE_TOKEN，无新增 env。
     scheduler:
       sources: ["scheduled"]
+    # 企微代理批次服务身份（代理任务契约 §6，P6）：background_runner 派发循环
+    # 提交 wecom_proxy 执行与恢复等待 Runner；token 复用同一 .env 的
+    # AGENT_RUNNER_WEB_SERVICE_TOKEN，无新增 env。web 网关不含该 source。
+    wecom_proxy:
+      sources: ["wecom_proxy"]
   host: "127.0.0.1"
   port: 8091
   lease_seconds: 30

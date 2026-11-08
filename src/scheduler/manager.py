@@ -313,6 +313,22 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.error(f"后端日志：注册企微代理监控任务失败: {e}")
 
+        # ===== 企微代理批次派发循环（每 10s，只在 background_runner 进程跑）=====
+        # 代理任务契约 §5/§6、设计 §9.3（P6）：核定终态 Runner、释放等待、
+        # 恢复驱动与派发 pending 批次；与监控循环经组级锁互斥（同进程协调）
+        try:
+            self._scheduler.add_job(
+                self._run_wecom_proxy_dispatch,
+                IntervalTrigger(seconds=10),
+                id="job_system_wecom_proxy_dispatch",
+                name="WeCom Proxy Batch Dispatcher",
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("后端日志：已注册企微代理批次派发循环 (interval=10s)")
+        except Exception as e:
+            logger.error(f"后端日志：注册企微代理派发任务失败: {e}")
+
         # ===== skill_ws 临时工作目录残留清理（每日 03:30）=====
         # 正常路径由 agent.process_message 结束时删除工作目录；
         # 本任务兜底清理进程崩溃 / 异常退出遗留的 skill_ws_* 目录
@@ -1334,6 +1350,26 @@ class ScheduledTaskManager:
             loop.run_until_complete(run_tick())
         except Exception as e:
             logger.opt(exception=True).error(f"后端日志：企微代理监控轮询异常: {e}")
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
+
+    # ===== 企微代理批次派发回调（async tick，每 10s）=====
+    def _run_wecom_proxy_dispatch(self):
+        """企微代理批次派发循环（APScheduler 回调，后台线程执行）。
+
+        代理任务契约 §5/§6（P6）：核定终态 Runner、释放等待、恢复驱动与派发；
+        与监控循环同进程（Q1 单持有者），组级锁互斥见两模块 docstring。
+        """
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            from src.wecom_conversation.proxy_dispatcher import run_tick
+            loop.run_until_complete(run_tick())
+        except Exception as e:
+            logger.opt(exception=True).error(f"后端日志：企微代理派发轮询异常: {e}")
         finally:
             try:
                 loop.close()

@@ -55,10 +55,12 @@ BATCH_TERMINAL = (BATCH_SUCCEEDED, BATCH_FAILED, BATCH_ENDED_BY_REMOVAL, BATCH_E
 BATCH_END_STATUSES = (BATCH_ENDED_BY_REMOVAL, BATCH_ENDED_BY_DELETE)
 
 # 批次状态迁移白名单（契约 §4/§5）：reconcile_hold 不可自动恢复（仅人工处置或
-# 任务级结束）；failed→pending 仅承载"零发送重试一次"（retry_count 门槛由调用方核对）
+# 任务级结束）；failed→pending 仅承载"零发送重试一次"（retry_count 门槛由调用方核对）；
+# running→pending 仅承载 P6 派发提交失败的回退（批次未真正开始执行，回队列重排）
 BATCH_TRANSITIONS = {
     BATCH_PENDING: {BATCH_RUNNING, BATCH_ENDED_BY_REMOVAL, BATCH_ENDED_BY_DELETE},
-    BATCH_RUNNING: {BATCH_WAITING, BATCH_RECONCILE_HOLD, BATCH_SUCCEEDED, BATCH_FAILED},
+    BATCH_RUNNING: {BATCH_PENDING, BATCH_WAITING, BATCH_RECONCILE_HOLD, BATCH_SUCCEEDED,
+                    BATCH_FAILED},
     BATCH_WAITING: {BATCH_PENDING, BATCH_RUNNING, BATCH_ENDED_BY_REMOVAL, BATCH_ENDED_BY_DELETE},
     BATCH_RECONCILE_HOLD: {BATCH_SUCCEEDED, BATCH_FAILED,
                            BATCH_ENDED_BY_REMOVAL, BATCH_ENDED_BY_DELETE},
@@ -335,8 +337,8 @@ def get_task_detail(tenant_id, user_id, task_id, *, batch_limit=50):
         targets = _task_targets(cursor, tenant_id, task_id)
         cursor.execute(
             '''SELECT id, task_id, session, batch_end_msg_id, agent_id, web_session_id,
-                      runner_id, status, cli_error, retry_count, created_at, updated_at,
-                      started_at, finished_at
+                      runner_id, status, end_json, cli_error, retry_count,
+                      created_at, updated_at, started_at, finished_at
                FROM bs_wecom_proxy_batches WHERE tenant_id=%s AND task_id=%s
                ORDER BY id DESC LIMIT %s''',
             (tenant_id, task_id, min(int(batch_limit), 200)))
@@ -722,3 +724,51 @@ def session_watermark(data, locator):
                and not isinstance(item.get('msg_id'), bool)]
         return max(ids) if ids else None
     return None
+
+
+# ==================== 派发与核定（P6：回答 Runner 编排） ====================
+
+def start_batch_in_tx(cursor, tenant_id, batch_id):
+    """派发占用：pending→running（占用即监控组级阻塞信号，proxy_monitor 复用）。"""
+    return transition_batch_in_tx(cursor, tenant_id, batch_id, BATCH_RUNNING)
+
+
+def revert_batch_in_tx(cursor, tenant_id, batch_id, error):
+    """派发提交失败回退：running→pending 并记 cli_error（队列不卡死）。"""
+    return transition_batch_in_tx(cursor, tenant_id, batch_id, BATCH_PENDING,
+                                  cli_error=error)
+
+
+def retry_zero_send_batch_in_tx(cursor, tenant_id, batch_id):
+    """零发送重试一次（契约 §5 规则 3/5）：failed→pending＋retry_count+1＋清 runner_id。
+
+    重试使用同批冻结上界、指令快照与输入快照，派发器按新 runner_id 走新执行；
+    runner_id 置空同时使旧 runner 的企微工具派发门（WECOM_PROXY_BATCH_MISSING）
+    自然失效。调用方须先核对 retry_count==0（重试仅一次）。
+    """
+    batch = transition_batch_in_tx(cursor, tenant_id, batch_id, BATCH_PENDING, retry=True)
+    cursor.execute(
+        '''UPDATE bs_wecom_proxy_batches SET runner_id=NULL, updated_at=CURRENT_TIMESTAMP
+           WHERE id=%s AND tenant_id=%s''', (batch_id, tenant_id))
+    return batch
+
+
+def get_batch(tenant_id, batch_id):
+    """按 id 取批次行（核定与派发路径用）。"""
+    from src.db.database import get_db_connection
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM bs_wecom_proxy_batches WHERE id=%s AND tenant_id=%s',
+                       (batch_id, tenant_id))
+        return _row(cursor.fetchone())
+
+
+def update_processed_position_in_tx(cursor, tenant_id, task_id, session, position):
+    """核定推进：processed_position → 批次冻结上界（契约 §5 推进语义）。"""
+    cursor.execute(
+        '''UPDATE bs_wecom_proxy_task_sessions SET processed_position=%s,
+               updated_at=CURRENT_TIMESTAMP
+           WHERE tenant_id=%s AND task_id=%s AND session=%s AND status='active' ''',
+        (position, tenant_id, task_id, session))
+    return cursor.rowcount > 0
