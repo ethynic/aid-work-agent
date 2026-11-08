@@ -287,7 +287,7 @@ async def test_waiting_and_reconcile_hold_occupy_sessions(tenant_id):
 
 @pytest.mark.asyncio
 async def test_cross_task_occupation_skips_read(tenant_id):
-    """同设备其他任务对同会话的占用同样跳过（同账号同稳定会话单运行归属）。"""
+    """旧任务遗留未决批仍占同会话，避免违反数据库单未决批约束。"""
     locator = _locator(1)
     _register(tenant_id, locator)
     other = _create_started(tenant_id, [locator])
@@ -302,6 +302,34 @@ async def test_cross_task_occupation_skips_read(tenant_id):
     read = await _tick([(_page(locator, [_peer(101)], cursor='wb1.x'), None)])
     read.assert_not_awaited()
     assert _batch_rows(tenant_id, task_b['id']) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('old_status', ['stopped', 'deleted'])
+async def test_old_task_failed_batch_does_not_block_new_running_task(tenant_id, old_status):
+    """旧任务终态失败只留历史；新任务应读新消息并建批，不能被旧失败卡住。"""
+    locator = _locator(1)
+    _register(tenant_id, locator)
+    old_task = _create_started(tenant_id, [locator])
+    old_batch = _make_batch(tenant_id, old_task['id'], locator,
+                            web_session_id='wecom_proxy_old')
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        proxy_tasks.transition_batch_in_tx(cursor, tenant_id, old_batch['id'], 'running')
+        proxy_tasks.transition_batch_in_tx(cursor, tenant_id, old_batch['id'], 'failed',
+                                           cli_error='SEND_FAILED')
+        cursor.execute('UPDATE bs_wecom_proxy_tasks SET status=%s WHERE id=%s',
+                       (old_status, old_task['id']))
+        conn.commit()
+    new_task = _create_started(tenant_id, [locator])
+
+    read = await _tick([(_page(locator, [_peer(101)], cursor='wb1.new'), None)])
+
+    read.assert_awaited_once()
+    assert _batch_rows(tenant_id, old_task['id'])[0]['status'] == 'failed'
+    new_batches = _batch_rows(tenant_id, new_task['id'])
+    assert len(new_batches) == 1
+    assert new_batches[0]['batch_end_msg_id'] == 101
 
 
 @pytest.mark.asyncio
