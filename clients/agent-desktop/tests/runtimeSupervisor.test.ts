@@ -247,18 +247,21 @@ test('disconnect finishes pending queries immediately rather than keeping the fu
 
 for (const product of ['desktop', 'runtime_app'] as const) {
   for (const configured of [true, false]) {
-    test(`${product} Host spawn ignores ambient BOSS and device credentials when configured=${configured}`, async () => {
+    test(`${product} Host forwards only WeCom calibration settings and keeps other ambient credentials isolated when configured=${configured}`, async () => {
       const root = await mkdtemp(path.join(os.tmpdir(), 'h3-boss-env-'))
       const entry = path.join(root, 'host.cjs')
       const excluded = ['OPENAI_API_KEY', 'ZHIPUAI_API_KEY', 'DEVICE_TOKEN', 'AIDWORK_DEVICE_TOKEN',
-        'AIDWORK_RUNTIME_DEVICE_TOKEN', 'AID_BOSS_DEVICE_TOKEN', 'AID_WECOM_SERVER_TOKEN',
+        'AIDWORK_RUNTIME_DEVICE_TOKEN', 'AID_BOSS_DEVICE_TOKEN',
         'NODE_OPTIONS', 'NODE_PATH', 'AID_BOSS_SERVER_EXTRA', 'AIDWORK_RUNTIME_SERVER', 'AIDWORK_RUNTIME_DEVICE_TOKEN']
-      const keys = [...excluded, 'AID_BOSS_SERVER_URL', 'AID_BOSS_SERVER_TOKEN', 'AIDWORK_RUNTIME_HOME', 'AIDWORK_RUNTIME_CLEAN_GENERATION', 'APPDATA']
+      const keys = [...excluded, 'AID_BOSS_SERVER_URL', 'AID_BOSS_SERVER_TOKEN', 'AID_WECOM_SERVER_URL', 'AID_WECOM_SERVER_TOKEN', 'AIDWORK_RUNTIME_HOME', 'AIDWORK_RUNTIME_CLEAN_GENERATION', 'APPDATA']
       const previous = new Map(keys.map(key => [key, process.env[key]]))
       const url = 'https://vision-backend.invalid', token = 'fixture-boss-token-not-a-real-credential'
+      const wecomUrl = 'https://wecom-calibration.invalid', wecomToken = 'fixture-wecom-token-not-a-real-credential'
       const evidence = `{
         boss_url: process.env.AID_BOSS_SERVER_URL === undefined,
         boss_token: process.env.AID_BOSS_SERVER_TOKEN === undefined,
+        wecom_url: process.env.AID_WECOM_SERVER_URL === ${JSON.stringify(wecomUrl)},
+        wecom_token: process.env.AID_WECOM_SERVER_TOKEN === ${JSON.stringify(wecomToken)},
         unrelated_secrets_absent: ${JSON.stringify(excluded)}.every(key => process.env[key] === undefined),
         controlled_home: process.env.AIDWORK_RUNTIME_HOME === ${JSON.stringify(root)},
         controlled_generation: process.env.AIDWORK_RUNTIME_CLEAN_GENERATION === ${product === 'runtime_app' ? "'1'" : 'undefined'},
@@ -272,12 +275,14 @@ for (const product of ['desktop', 'runtime_app'] as const) {
         process.env.AIDWORK_RUNTIME_HOME = 'parent-home-must-not-override-product-home'
         process.env.AIDWORK_RUNTIME_CLEAN_GENERATION = 'parent-generation-must-not-override-product'
         process.env.APPDATA = 'fixture-system-appdata'
+        process.env.AID_WECOM_SERVER_URL = wecomUrl; process.env.AID_WECOM_SERVER_TOKEN = wecomToken
         if (configured) { process.env.AID_BOSS_SERVER_URL = url; process.env.AID_BOSS_SERVER_TOKEN = token }
         else { delete process.env.AID_BOSS_SERVER_URL; delete process.env.AID_BOSS_SERVER_TOKEN }
         const reply = await supervisor.request({ request_id: 'environment-proof', method: 'describe', params: {} })
         assert.equal(reply.code, 0)
         assert.deepEqual((reply.result as { environment_evidence: unknown }).environment_evidence, {
-          boss_url: true, boss_token: true, unrelated_secrets_absent: true, controlled_home: true,
+          boss_url: true, boss_token: true, wecom_url: true, wecom_token: true,
+          unrelated_secrets_absent: true, controlled_home: true,
           controlled_generation: true, system_environment_preserved: true,
         })
       } finally {

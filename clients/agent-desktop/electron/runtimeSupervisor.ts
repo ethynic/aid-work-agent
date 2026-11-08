@@ -53,7 +53,7 @@ export class RuntimeSupervisor {
     const generation = ++this.generation
     this.childExited = false; this.instanceId = ''; this.stopOperation = undefined; this.recoveredInstanceId = ''; this.lifecycleInstanceId = ''
     const env: NodeJS.ProcessEnv = {}
-    for (const key of ['PATH', 'Path', 'SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'USERNAME', 'SESSIONNAME', 'PROCESSOR_ARCHITECTURE']) if (process.env[key] !== undefined) env[key] = process.env[key]
+    for (const key of ['PATH', 'Path', 'SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'USERNAME', 'SESSIONNAME', 'PROCESSOR_ARCHITECTURE', 'AID_WECOM_SERVER_URL', 'AID_WECOM_SERVER_TOKEN']) if (process.env[key] !== undefined) env[key] = process.env[key]
     env.AIDWORK_RUNTIME_HOME = this.options.home
     if (this.options.supervisor === 'runtime_app') env.AIDWORK_RUNTIME_CLEAN_GENERATION = '1'
     const child = (this.options.spawnChild ?? spawn)(this.options.nodeExecutable, [this.options.hostEntry, `--supervisor=${this.options.supervisor}`], { env, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] })
