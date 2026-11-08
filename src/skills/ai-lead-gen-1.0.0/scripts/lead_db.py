@@ -682,6 +682,53 @@ def cmd_set_status(args):
     return 0
 
 
+def cmd_set_status_batch(args):
+    """批量改 lead 状态：一次调用改完全表（200 家规模避免 200 次 Bash/turn）。
+
+    输入 JSON 数组：[{"company": "...", "status": "qualified|rejected|...",
+                      "reason": "可选"}]
+    --data 给文件路径，否则从 stdin 读。单事务提交，逐条报告未命中公司。
+    """
+    tenant_id, _ = get_identity()
+    if args.data:
+        items = json.loads(Path(args.data).read_text(encoding="utf-8"))
+    else:
+        items = json.loads(sys.stdin.read())
+    if not isinstance(items, list) or not items:
+        print("ERROR: 输入必须是非空 JSON 数组 [{company, status, reason?}]")
+        return 1
+    for i, it in enumerate(items):
+        if not isinstance(it, dict) or not it.get("company") or it.get("status") not in LEAD_STATUS:
+            print(f"ERROR: 第 {i} 项格式非法（需 company + 合法 status "
+                  f"{'/'.join(sorted(LEAD_STATUS))}）")
+            return 1
+
+    updated, missing = 0, []
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
+        get_campaign(cur, tenant_id, args.campaign_id)
+        cur.execute(
+            "SELECT id, company_name FROM bs_ai_lead_gen_leads WHERE campaign_id = %s",
+            (args.campaign_id,))
+        all_leads = cur.fetchall()
+        for it in items:
+            target = norm_company(it["company"])
+            matched = [(i, n) for i, n in all_leads if norm_company(n) == target]
+            if not matched:
+                missing.append(it["company"])
+                continue
+            for lead_id, _name in matched:
+                cur.execute(
+                    "UPDATE bs_ai_lead_gen_leads SET status = %s, "
+                    "reject_reason = COALESCE(%s, reject_reason), updated_at = CURRENT_TIMESTAMP "
+                    "WHERE id = %s",
+                    (it["status"], it.get("reason"), lead_id),
+                )
+            updated += len(matched)
+        conn.commit()
+    print(json.dumps({"updated": updated, "missing": missing}, ensure_ascii=False))
+    return 0 if not missing else 2
+
+
 # ---------- contacts ----------
 
 def cmd_add_contact(args):
@@ -1117,6 +1164,12 @@ def main():
     p.add_argument("--status", required=True)
     p.add_argument("--reason", default=None)
     p.set_defaults(func=cmd_set_status)
+
+    p = sub.add_parser("set-status-batch")
+    p.add_argument("--campaign-id", required=True, type=int)
+    p.add_argument("--data", default=None,
+                   help="JSON 数组文件路径（[{company, status, reason?}]）；不传则从 stdin 读")
+    p.set_defaults(func=cmd_set_status_batch)
 
     p = sub.add_parser("add-contact")
     p.add_argument("--campaign-id", required=True, type=int)

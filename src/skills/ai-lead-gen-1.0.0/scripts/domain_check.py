@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""发件域名健康检测 —— 发送冷邮件前必须先跑一遍。
+"""发件域名健康检测 —— **独立方法，仅人工指令触发**。
+
+⚠ 自 v3.3.6 起，本脚本**不属于 11 步主流程**：技能不会在发送前自动调用它，
+也不会因「未体检 / 体检未通过」阻塞发送。仅在用户明确下指令时运行。
+调用入口见 `SKILL.md` 文末「附录：域名体检」；配置手册见
+`references/domain-warming.md`。脚本功能与输出格式保持不变。
 
 为什么需要这个脚本
 ------------------
@@ -28,7 +33,7 @@ python domain_check.py outreach.yourdomain.com --blacklist
 python domain_check.py outreach.yourdomain.com --json
 ```
 
-退出码：0 = 全部通过；1 = 有警告但可发；2 = 有失败项，发送前必须修。
+退出码：0 = 全部通过；1 = 有警告但可发；2 = 有失败项或全部无法判定（建议修复后重跑）。
 """
 
 import argparse
@@ -152,14 +157,24 @@ def _read_name(data, off):
     p = off
     end_off = None
     jumped = False
-    while p < len(data):
+    visited = set()
+    hops = 0
+    # 护栏：DNS 压缩指针可能成环（畸形/伪造响应），必须限制跳转次数与重复偏移，
+    # 否则 while 永不退出（v3.3.7 修复）。
+    while p < len(data) and hops < 64:
+        if p in visited:
+            break
+        visited.add(p)
         length = data[p]
         if length & 0xC0 == 0xC0:
+            if p + 2 > len(data):
+                break
             ptr = struct.unpack(">H", data[p:p + 2])[0] & 0x3FFF
             if not jumped:
                 end_off = p + 2
                 jumped = True
             p = ptr
+            hops += 1
             continue
         if length == 0:
             if not jumped:
@@ -217,8 +232,13 @@ def _dns_query_udp(name, qtype, resolver, timeout=8):
     recs = []
     for _ in range(an):
         off, _ = _read_name(data, off)        # 答案名（常为 0xC00C 指针）
+        # 畸形报文可能让 off 越界，struct.unpack 会抛未捕获异常；提前判长度
+        if off + 10 > len(data):
+            return recs, "DNS 响应截断"
         rtype, rclass, ttl, rdlen = struct.unpack(">HHIH", data[off:off + 10])
         rs = off + 10
+        if rs + rdlen > len(data):
+            return recs, "DNS 响应截断"
         rdata = data[rs:rs + rdlen]
         off = rs + rdlen
         if rtype == _DNS_TYPES["TXT"]:
@@ -244,9 +264,9 @@ def _nslookup(qtype, name, timeout=None):
 
     设计动机：办公/内网常把系统 DNS 指向企业自建服务器，这类服务器对公网
     域名经常返回陈旧的 SOA（NODATA）或干脆不给权威记录，把"查不到"误判成
-    "域名没配"。本机测试 archiproducts.com.cn 时就因此把 SPF/MX 误报成
-    "查询失败"。纯 UDP 直连公共权威 resolver 可彻底绕过该问题，且不再依赖
-    易碎的 nslookup 文本解析（GBK 乱码、解析器 IP 误当记录等）。
+    "域名没配"。实测中就因此把 SPF/MX 误报成"查询失败"。纯 UDP 直连公共权威
+    resolver 可彻底绕过该问题，且不再依赖易碎的 nslookup 文本解析
+    （GBK 乱码、解析器 IP 误当记录等）。
 
     判定优先级：拿到记录 > NXDOMAIN/NODATA（确定没记录）> 查询故障（无法判定）。
     只有全部通道都故障，才返回"无法判定"，绝不把故障写成"记录缺失"。
@@ -800,7 +820,7 @@ def format_report(rep):
                      f"—— 请检查网络/代理后重跑，不要据此认为记录缺失")
     if s["fail"]:
         lines.append(f"结论：{s['fail']} 项失败 / {s['warn']} 项警告 "
-                     f"—— 发送前必须修复失败项")
+                     f"—— 建议修复失败项后再发信（由用户决定）")
     elif s.get("unknown") and s["pass"] == 0:
         # 全部未判定时绝不能说"达标" —— 那等于什么都没查就放行发信。
         lines.append("结论：无法判定 —— 所有检查项都因 DNS 查询失败而未得出结果，"
@@ -849,11 +869,11 @@ def main():
 
     print(json.dumps(rep, ensure_ascii=False, indent=2) if a.json
           else format_report(rep))
-    s = rep["summary"]
     # --json 的消费方是 LLM（skill_execute），结论看 JSON 的 summary；
     # 检测完成即 exit 0，避免非零退出码被投影层误记为 failed（tr_runner_3a12186 案）。
     if a.json:
         return 0
+    s = rep["summary"]
     if s["fail"]:
         return 2
     # 全部未判定时退出码不能是 0，否则脚本调用方会误以为域名已达标。

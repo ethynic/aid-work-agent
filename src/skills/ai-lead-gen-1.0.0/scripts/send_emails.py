@@ -2,12 +2,15 @@
 """冷邮件群发引擎 (SMTP)。
 
 内置能力:
-  - 每域日限额 (默认 3 封/24h)
-  - 全局日限额与 ramp-up 提示
+  - 每域日限额 (默认 3 封/24h，防轰炸合规红线，与发送量无关)
+  - 全局日限额 (campaign.daily_limit，不填/0 = 不限量，发送量由用户决定)
+  - SMTP 会话自愈: 每封前 NOOP 复检、定期轮换会话、断连/会话污染自动重连
+  - 发件方限流识别 (MI:STC/5.5.0/rate limit 等) -> 整批停发，区别于收件人退信
+  - 收件地址清洗 (u003e/&gt;/mailto:/<> 抽取残留)
   - 永久退订黑名单 (unsubscribed.csv) 与抑制列表
   - 随机化延迟, 避免固定节奏被判定为机器行为
   - 退信分类: 硬退信自动退订, 软退信退避重试
-  - 失败不中断整批 (除黑名单类错误外)
+  - 失败不中断整批 (除黑名单/限流类错误外)
   - 发送日志 CSV
 
 用法 (本系统版: SMTP 凭据经邮箱三层解析自动获取, 不再使用 cfg.json):
@@ -61,6 +64,19 @@ SOFT_BOUNCE_CODES = ["450", "451", "452", "421", "4.2.0", "4.2.1", "try again",
 
 MIN_INTERVAL_SEC = 30
 MAX_RETRY = 2
+MAX_CONN_RETRY = 2
+
+# 发件方反垃圾 / 频率拦截（不是收件人退信）。命中后整批停发：
+# 继续群发只会加重发件域信誉损伤，应降速后另起一批续跑。
+# 典型样本：网易企业邮 554 b'5.5.0 MI:STC ...'。
+THROTTLE_CODES = ["mi:stc", "5.5.0", "too many", "rate limit", "frequency",
+                  "sender rejected", "message rejected", "spam"]
+# SMTP 会话污染 / 断连特征：必须丢弃旧会话并重连，不能当成永久失败。
+# 典型样本：503 'nested MAIL command'（会话状态错乱）、
+#           smtplib 'please run connect() first'（服务端静默断开后空转）。
+SESSION_ERRORS = ["nested mail", "connect() first", "connection", "broken pipe",
+                  "reset by peer", "timed out", "server disconnected",
+                  "not connected", "421", "socket"]
 
 # Role mailboxes: valid for domain verification, poor for personalised outreach.
 ROLE_PREFIXES = {
@@ -203,33 +219,75 @@ def classify_bounce(code, msg):
     return "unknown"
 
 
-# Warm-up ramp. The input is the LIFETIME number of successful sends from this
-# domain, not today's count: domain reputation accumulates over time, so a new
-# day must not reset the allowance. A fresh domain therefore ramps:
-#
-#   cumulative sent    daily cap
-#   0 - 49             20
-#   50 - 149           50
-#   150 - 499          100
-#   500+               200   <- production baseline
-#
-# With a dedicated IP and a clean record you may deliberately raise
-# daily_limit to 300-500; the script only warns, it does not block.
-RAMP_TABLE = [
-    (50, 20),
-    (150, 50),
-    (500, 100),
-]
-RAMP_PRODUCTION = 200
-RAMP_MIN_DAILY = 20
+# 发送量由用户决定。无自动上限、无声誉分档、无最低日限。campaign 的
+# daily_limit 是唯一全局上限；不填 / 0 / 负数 = 不限量。每域 3 封/24h 是
+# 防轰炸合规红线（铁律 6），与发送量无关。
+def daily_limit_of(cfg):
+    """返回用户设置的全局日上限；不限量时返回 None。"""
+    raw = cfg.get("daily_limit")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
 
 
-def rampup_cap(total):
-    """Recommended daily cap for a domain that has sent `total` emails so far."""
-    for threshold, cap in RAMP_TABLE:
-        if total < threshold:
-            return cap
-    return RAMP_PRODUCTION
+def min_interval_of(cfg):
+    """两封邮件之间的间隔下限；用户可经 min_interval_seconds 覆盖（0=不限速）。"""
+    raw = cfg.get("min_interval_seconds", MIN_INTERVAL_SEC)
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return MIN_INTERVAL_SEC
+
+
+def clean_addr(addr):
+    """清洗从网页/JSON 抽取时残留的转义前缀与包裹字符。
+
+    真实事故样本：'u003einfo@seepex.com'（HTML 实体 '>' 的 unicode 转义被写成
+    字面量），此外还有 '&gt;info@x.de'、'mailto:info@x.de'、'<info@x.de>'。
+    这类地址若直接投给 SMTP 会污染发件日志、拉高退信率。
+    """
+    a = (addr or "").strip().lower()
+    for junk in ("u003e", "\\u003e", "&gt;", "mailto:", "<", ">"):
+        while a.startswith(junk):
+            a = a[len(junk):].lstrip()
+    while a.endswith((">", "<")):
+        a = a[:-1].rstrip()
+    return a.strip()
+
+
+def ensure_session(cfg, server):
+    """每封发送前确认 SMTP 会话仍健康，不健康则重连。
+
+    SMTP_SSL 长连接被发件方反垃圾策略或空闲超时静默断开后，下一次
+    send_message 会抛 'please run connect() first'；若不做会话复检，
+    后续整批会一路空转失败（上游真实事故：45 封连续空转、无重连）。
+    """
+    if server is not None:
+        try:
+            code, _ = server.noop()
+            if code == 250:
+                return server
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            server.close()
+        except Exception:  # noqa: BLE001
+            pass
+    return connect(cfg)
+
+
+def is_throttle(text):
+    """发件方反垃圾/频率拦截（非收件人退信），需整批停发而非继续重试。"""
+    low = (text or "").lower()
+    return any(k in low for k in THROTTLE_CODES)
+
+
+def is_session_error(text):
+    """会话污染/断连特征，需丢弃旧会话并重连。"""
+    low = (text or "").lower()
+    return any(k in low for k in SESSION_ERRORS)
 
 
 def build_message(item, cfg):
@@ -310,8 +368,11 @@ def build_cfg(campaign, mailbox, cdir):
         "reply_to": campaign.get("reply_mailbox") or mailbox["email_address"],
         "unsubscribe_url": sender.get("unsubscribe_url", ""),
         "postal_address": sender.get("postal_address", ""),
-        "daily_limit": int(campaign.get("daily_limit") or 20),
+        # 不填 / 0 / 负数 = 不限量（daily_limit_of 解析），发送量由用户决定
+        "daily_limit": campaign.get("daily_limit"),
         "per_domain_daily_limit": 3,
+        "min_interval_seconds": MIN_INTERVAL_SEC,
+        "session_recycle_every": 20,
         "delay_seconds": 90,
         "random_delay_extra": 60,
     }
@@ -350,7 +411,6 @@ def cmd_dry_run(items, cfg, unsubscribed, log_rows=None, target_config=None):
     targets = tcfg.get("target_functions")
     excludes = tcfg.get("exclude_functions")
 
-    lifetime_sent = count_sent(log_rows or [])
     domains = {}
     groups = {}
     for i, item in enumerate(items, 1):
@@ -443,9 +503,9 @@ def cmd_dry_run(items, cfg, unsubscribed, log_rows=None, target_config=None):
 
     per_domain_limit = cfg.get("per_domain_daily_limit", 3)
     over = {d: c for d, c in domains.items() if c > per_domain_limit}
-    cap = plan_capacity(items, log_rows or [],
-                        int(cfg.get("daily_limit", 50)), per_domain_limit)
-    base_delay = max(MIN_INTERVAL_SEC, int(cfg.get("delay_seconds", 90)))
+    daily_limit = daily_limit_of(cfg)
+    cap = plan_capacity(items, log_rows or [], daily_limit, per_domain_limit)
+    base_delay = max(min_interval_of(cfg), int(cfg.get("delay_seconds", 90)))
     extra = int(cfg.get("random_delay_extra", 60))
     avg_delay = base_delay + extra / 2
     est_minutes = int(len(items) * avg_delay / 60)
@@ -453,11 +513,8 @@ def cmd_dry_run(items, cfg, unsubscribed, log_rows=None, target_config=None):
     print("\n" + "=" * 72)
     print(f"total emails   : {len(items)}")
     print(f"unique domains : {len(domains)}")
-    print(f"daily_limit    : {cfg.get('daily_limit', 'unset')}")
+    print(f"daily_limit    : {daily_limit if daily_limit is not None else 'unlimited'}")
     print(f"per-domain cap : {per_domain_limit}")
-    print(f"lifetime sent  : {lifetime_sent} (drives the warm-up ramp)")
-    print(f"warmup cap     : ~{rampup_cap(lifetime_sent)}/day at {lifetime_sent} "
-          f"cumulative sends")
     print(f"sendable today : ~{cap['room']} (per-domain cap is the binding limit)")
     if cap["shortfall"]:
         print(f"cannot send today: {cap['shortfall']} emails — "
@@ -479,18 +536,13 @@ def cmd_dry_run(items, cfg, unsubscribed, log_rows=None, target_config=None):
     print("before sending, and get explicit user approval.")
 
 
-def count_sent(rows):
-    """Lifetime count of successfully sent emails (drives the warm-up ramp)."""
-    return sum(1 for r in (rows or []) if r.get("status") == "sent")
-
-
 def plan_capacity(queue, log_rows, daily_limit, per_domain_limit):
     """Real sendable volume for today, after the per-domain cap is applied.
 
-    The per-domain cap (3/day) is usually the binding constraint, not
-    daily_limit: sending 200 emails needs ~67 distinct recipient domains.
-    Returns the room left per domain plus the domains that cannot be
-    completed today.
+    `daily_limit` is the user's own ceiling; None means unlimited. The
+    per-domain cap (3/24h by default) is a compliance guard against
+    bombarding one company -- not a volume rule. Returns the room left per
+    domain plus the domains that cannot be completed today.
     """
     today = datetime.now(timezone.utc).date().isoformat()
     domain_today = {}
@@ -512,12 +564,13 @@ def plan_capacity(queue, log_rows, daily_limit, per_domain_limit):
             capped[d] = c - left
         room += min(c, left)
 
+    effective = room if daily_limit is None else min(room, daily_limit)
     return {
         "domain_today": domain_today,
         "queued": queued,
-        "room": min(room, daily_limit),
+        "room": effective,
         "capped": capped,
-        "shortfall": max(0, len(queue) - min(room, daily_limit)),
+        "shortfall": max(0, len(queue) - effective),
     }
 
 
@@ -553,6 +606,9 @@ def main():
                          "请先执行 python lead_db.py export-send-queue --campaign-id "
                          f"{campaign_id} 生成")
     items = load_json(queue_file)
+    # 入库前统一清洗地址，拦截 HTML/JSON 抽取残留（u003e、&gt;、mailto: 等）。
+    for it in items:
+        it["to"] = clean_addr(it.get("to", ""))
     for item in items:
         if not item.get("email_id"):
             raise SystemExit("队列项缺少 email_id —— 队列必须由 lead_db.py "
@@ -597,15 +653,14 @@ def main():
     if args.limit:
         queue = queue[: args.limit]
 
-    daily_limit = cfg["daily_limit"]
+    daily_limit = daily_limit_of(cfg)
     per_domain_limit = cfg["per_domain_daily_limit"]
-    base_delay = max(MIN_INTERVAL_SEC, int(cfg.get("delay_seconds", 90)))
+    base_delay = max(min_interval_of(cfg), int(cfg.get("delay_seconds", 90)))
     extra = int(cfg.get("random_delay_extra", 60))
 
     today = datetime.now(timezone.utc).date().isoformat()
     sent_today = sum(1 for r in log_rows
                      if r.get("status") == "sent" and r.get("timestamp", "").startswith(today))
-    lifetime_sent = count_sent(log_rows)
     domain_today = {}
     for r in log_rows:
         if r.get("status") == "sent" and r.get("timestamp", "").startswith(today):
@@ -613,22 +668,7 @@ def main():
             domain_today[d] = domain_today.get(d, 0) + 1
 
     print(f"queue: {len(queue)} emails | already sent today: {sent_today} | "
-          f"daily cap: {daily_limit}")
-
-    # The warm-up ramp is driven by LIFETIME sends, not today's count: a new
-    # calendar day must not reset the allowance, otherwise the ramp never
-    # climbs and a warming domain is stuck at 20/day forever.
-    recommended = rampup_cap(lifetime_sent)
-    print(f"warm-up ramp   : {lifetime_sent} lifetime sends -> "
-          f"~{recommended}/day recommended")
-    if daily_limit > recommended:
-        print(f"note: daily_limit {daily_limit} exceeds warmup recommendation "
-              f"~{recommended} for a new/low-reputation domain")
-    if daily_limit < 20:
-        print("ERROR: refusing to send. A warming domain must start at <= 20/day.")
-        print("       If this domain has a long clean history, raise daily_limit "
-              "on the campaign deliberately.")
-        return 1
+          f"daily cap: {daily_limit if daily_limit is not None else 'unlimited'}")
 
     # Capacity preview: the per-domain cap usually binds before daily_limit.
     cap = plan_capacity(queue, log_rows, daily_limit, per_domain_limit)
@@ -655,8 +695,12 @@ def main():
     deadline = (time.monotonic() + args.max_minutes * 60
                 if args.max_minutes else None)
     print("connected. starting send...\n")
-    sent = failed = bounced = 0
+    sent = failed = bounced = throttled = 0
     stop_all = False
+    # 同一 SMTP 长连接连续群发会触发发件方反垃圾策略（网易企业邮 554 MI:STC）。
+    # 每 N 封主动轮换会话，降低单连接频率特征；0 = 不轮换。
+    recycle_every = int(cfg.get("session_recycle_every", 20))
+    sends_on_session = 0
 
     try:
         for i, item in enumerate(queue, 1):
@@ -696,6 +740,23 @@ def main():
                 # 保持 approved 不动：下次导出自然重新排队，改日再发
                 continue
 
+            # 每封发送前确认会话健康；断连则重连，并定期主动轮换会话。
+            if recycle_every and sends_on_session >= recycle_every:
+                try:
+                    server.quit()
+                except Exception:  # noqa: BLE001
+                    pass
+                server = None
+                sends_on_session = 0
+                print("    recycling SMTP session (anti-throttle)")
+            try:
+                server = ensure_session(cfg, server)
+            except SystemExit:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                print(f"[{i}] reconnect failed: {exc}; stopping batch (resumable)")
+                break
+
             msg = build_message(item, cfg)
             attempt = 0
             success = False
@@ -704,6 +765,7 @@ def main():
                     server.send_message(msg)
                     success = True
                     sent += 1
+                    sends_on_session += 1
                     sent_today += 1
                     domain_today[d] = domain_today.get(d, 0) + 1
                     message_id = str(msg["Message-ID"] or "")
@@ -712,6 +774,15 @@ def main():
                     record_result(tenant_id, email_id, "sent", message_id=message_id)
                 except smtplib.SMTPRecipientsRefused as exc:
                     detail = str(exc)
+                    # 发件方限流（非收件人退信）：整批停发，不退订、不重试，
+                    # 当前地址保持 approved 待降速后续跑。
+                    if is_throttle(detail):
+                        throttled += 1
+                        log_rows.append(log_entry(item, "throttled", detail[:200]))
+                        print(f"[{i}] THROTTLE ({detail[:140]}); stopping batch.")
+                        stop_all = True
+                        success = True
+                        break
                     kind = classify_bounce("", detail)
                     log_rows.append(log_entry(item, f"bounce_{kind}", detail[:200]))
                     if kind in ("hard", "blacklist"):
@@ -731,61 +802,91 @@ def main():
                 except (smtplib.SMTPSenderRefused, smtplib.SMTPResponseException) as exc:
                     code = str(getattr(exc, "smtp_code", ""))
                     msg_text = str(getattr(exc, "smtp_error", exc))
+                    combined = f"{code} {msg_text}"
                     kind = classify_bounce(code, msg_text)
+
+                    # 发件方反垃圾/频率拦截：不是收件人退信，不重试、不退订，
+                    # 整批停发并把当前地址留待降速后续跑。
+                    if is_throttle(combined):
+                        throttled += 1
+                        log_rows.append(log_entry(item, "throttled", combined[:200]))
+                        print(f"[{i}] THROTTLE ({combined}); stopping batch to protect "
+                              "sender reputation. Resume later at a slower rate.")
+                        stop_all = True
+                        success = True
+                        break
                     if kind == "blacklist":
                         stop_all = True
-                        print(f"[{i}] BLACKLIST error ({code} {msg_text}); stopping all sends.")
+                        print(f"[{i}] BLACKLIST error ({combined}); stopping all sends.")
                         record_result(tenant_id, email_id, "bounced",
-                                      error=f"blacklist: {code} {msg_text}"[:200])
+                                      error=f"blacklist: {combined}"[:200])
                         break
+
+                    # 会话污染（如 503 nested MAIL command）：丢弃旧会话重连后重试。
+                    if is_session_error(combined):
+                        attempt += 1
+                        if attempt > MAX_CONN_RETRY:
+                            failed += 1
+                            log_rows.append(log_entry(item, "failed", combined[:200]))
+                            print(f"[{i}] FAILED (session) -> {to}: {combined}")
+                            record_result(tenant_id, email_id, "failed", error=combined[:200])
+                            success = True
+                        else:
+                            try:
+                                server.close()
+                            except Exception:  # noqa: BLE001
+                                pass
+                            server = None
+                            sends_on_session = 0
+                            print(f"[{i}] session corrupted ({code}); reconnecting "
+                                  f"({attempt}/{MAX_CONN_RETRY})")
+                            time.sleep(10)
+                        continue
+
                     attempt += 1
                     if attempt > MAX_RETRY:
                         failed += 1
-                        log_rows.append(log_entry(item, "failed", f"{code} {msg_text}"[:200]))
-                        print(f"[{i}] FAILED -> {to}: {code} {msg_text}")
-                        record_result(tenant_id, email_id, "failed", error=f"{code} {msg_text}"[:200])
+                        log_rows.append(log_entry(item, "failed", combined[:200]))
+                        print(f"[{i}] FAILED -> {to}: {combined}")
+                        record_result(tenant_id, email_id, "failed", error=combined[:200])
                     else:
                         wait = 10 * (2 ** (attempt - 1))
                         print(f"[{i}] retry in {wait}s -> {to} ({code})")
                         time.sleep(wait)
-                except smtplib.SMTPServerDisconnected as exc:
-                    # 长跑中断线：重连后重试当前邮件，避免断线把整批毒化为 failed
-                    try:
-                        server.quit()
-                    except Exception:  # noqa: BLE001
-                        pass
-                    try:
-                        server = connect(cfg)
-                    except Exception as recon_exc:  # noqa: BLE001
-                        failed += 1
-                        log_rows.append(log_entry(item, "failed",
-                                                  f"reconnect failed: {recon_exc}"[:200]))
-                        print(f"[{i}] ERROR -> {to}: reconnect failed: {recon_exc}")
-                        record_result(tenant_id, email_id, "failed",
-                                      error=f"reconnect failed: {recon_exc}"[:200])
-                        success = True
-                        continue
-                    attempt += 1
-                    if attempt > MAX_RETRY:
-                        failed += 1
-                        log_rows.append(log_entry(item, "failed", str(exc)[:200]))
-                        print(f"[{i}] FAILED -> {to}: {exc}")
-                        record_result(tenant_id, email_id, "failed", error=str(exc)[:200])
-                    else:
-                        print(f"[{i}] SMTP disconnected, reconnected; "
-                              f"retry {attempt}/{MAX_RETRY} -> {to}")
                 except Exception as exc:  # noqa: BLE001
+                    detail = str(exc)
+                    # 'please run connect() first' / 断连：重连后重试，不判永久失败。
+                    if is_session_error(detail):
+                        attempt += 1
+                        if attempt > MAX_CONN_RETRY:
+                            failed += 1
+                            log_rows.append(log_entry(item, "failed", detail[:200]))
+                            print(f"[{i}] FAILED (session) -> {to}: {detail}")
+                            record_result(tenant_id, email_id, "failed", error=detail[:200])
+                            success = True
+                        else:
+                            try:
+                                server.close()
+                            except Exception:  # noqa: BLE001
+                                pass
+                            server = None
+                            sends_on_session = 0
+                            print(f"[{i}] session lost ({detail}); reconnecting "
+                                  f"({attempt}/{MAX_CONN_RETRY})")
+                            time.sleep(10)
+                        continue
                     failed += 1
-                    log_rows.append(log_entry(item, "failed", str(exc)[:200]))
+                    log_rows.append(log_entry(item, "failed", detail[:200]))
                     print(f"[{i}] ERROR -> {to}: {exc}")
-                    record_result(tenant_id, email_id, "failed", error=str(exc)[:200])
+                    record_result(tenant_id, email_id, "failed", error=detail[:200])
                     success = True
 
             save_log(log_path, log_rows)
             if unsubscribed:
                 save_unsubscribed(tenant_leadgen_dir, unsubscribed)
             if stop_all:
-                print("\nstopped early due to blacklist signal.")
+                print("\nstopped early due to throttle/blacklist signal. "
+                      "Remaining addresses stay in the queue for a slower later run.")
                 break
 
             if i < len(queue):
@@ -793,17 +894,19 @@ def main():
                 print(f"    sleeping {delay}s before next send")
                 time.sleep(delay)
     finally:
-        try:
-            server.quit()
-        except Exception:  # noqa: BLE001
-            pass
+        if server is not None:
+            try:
+                server.quit()
+            except Exception:  # noqa: BLE001
+                pass
         save_log(log_path, log_rows)
 
     print("\n" + "=" * 72)
-    print(f"sent   : {sent}")
-    print(f"failed : {failed}")
-    print(f"bounced: {bounced}")
-    print(f"log    : {log_path}")
+    print(f"sent     : {sent}")
+    print(f"failed   : {failed}")
+    print(f"bounced  : {bounced}")
+    print(f"throttled: {throttled}  (sender-side anti-spam; retry later at a slower rate)")
+    print(f"log      : {log_path}")
     if bounced:
         print(f"unsub  : {len(unsubscribed)} entries in "
               f"{tenant_leadgen_dir}/unsubscribed.csv")
