@@ -1083,6 +1083,9 @@ const connectionSubMenuItems = computed(() => {
     { path: `${base}/wechat-mp`, label: '公众号内容', icon: 'M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1zM8 9h8M8 13h8M8 17h5', adminOnly: true },
     // 本地工具：电脑
     { path: `${base}/local-tools`, label: '本地工具', icon: 'M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z', adminOnly: false },
+    { path: `${base}/wecom-conversations`, label: '企业微信会话', icon: 'M4 5h16v12H8l-4 3V5zM8 9h8M8 13h5', adminOnly: false },
+    { path: `${base}/wecom-conversations/daily`, label: '企业微信每日总结', icon: 'M5 4h14v16H5zM8 8h8M8 12h8M8 16h5', adminOnly: false },
+    { path: `${base}/wecom-conversations/proxy`, label: '企业微信代理任务', icon: 'M12 3a8 8 0 018 8v6H4v-6a8 8 0 018-8zM9 21h6M9 11h6', adminOnly: false },
     // 外部系统：链接（管理员与普通员工均可见）
     { path: `${base}/connections/external-systems`, label: '外部系统', icon: 'M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71', adminOnly: false },
   ]
@@ -1110,6 +1113,9 @@ const isConnectionActive = computed(() => {
     `${base}/wechat-mp`,
     `${base}/hongtao-shop`,
     `${base}/local-tools`,
+    `${base}/wecom-conversations`,
+    `${base}/wecom-conversations/daily`,
+    `${base}/wecom-conversations/proxy`,
   ].includes(route.path)
 })
 

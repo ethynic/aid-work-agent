@@ -271,7 +271,7 @@
     <!-- ==================== 会话目录弹框（复用每日总结目录来源） ==================== -->
     <BaseModal v-model="pickerOpen" title="选择监控会话" size="lg" accessible :show-fullscreen="false">
       <div class="space-y-3">
-        <p class="text-xs text-muted m-0">{{ directoryIdentity || '正在连接当前选定设备与企微账号…' }}。仅已登记会话可加入代理任务；未登记会话请先在会话记录页添加。</p>
+        <p class="text-xs text-muted m-0">{{ directoryIdentity || '正在连接当前选定设备与企微账号…' }}。仅已登记会话可加入代理任务；未登记会话请先在每日总结页添加。</p>
         <div class="flex gap-2"><BaseInput v-model="directoryQuery" placeholder="搜索会话名称" maxlength="100" aria-label="搜索会话名称" @keyup.enter="searchDirectory" />
           <BaseButton intent="secondary" @click="searchDirectory">搜索</BaseButton></div>
         <p v-if="directoryError" role="alert" class="text-sm text-danger-700">{{ directoryError }}</p>
