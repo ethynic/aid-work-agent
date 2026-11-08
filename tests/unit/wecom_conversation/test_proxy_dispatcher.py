@@ -8,6 +8,7 @@
 
 import base64
 import json
+import asyncio
 import uuid
 from unittest.mock import AsyncMock, patch
 
@@ -74,13 +75,14 @@ def _web_session_id(tenant_id, task_id, session):
 
 
 def _make_batch(tenant_id, task_id, session, *, end=100, runner_id=None, status='pending',
-                updated_at=None):
+                updated_at=None, messages=None):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         batch = proxy_tasks.create_batch_in_tx(
             cursor, tenant_id, USER, task_id=task_id, session=session, batch_end_msg_id=end,
             input_snapshot={'schema_version': 1, 'session': session,
-                            'source_generation': 'gen-2', 'messages': [_peer(99)]},
+                            'source_generation': 'gen-2',
+                            'messages': messages if messages is not None else [_peer(99)]},
             agent_id='agent-a', instruction_snapshot='有客户提问时回答',
             web_session_id=_web_session_id(tenant_id, task_id, session))
         if status != 'pending' or runner_id:
@@ -184,19 +186,31 @@ class _ClientStub:
         return _submit_response(runner_id)
 
 
-def _patches(client, *, device_ok=True, agent_ok=True):
+def _patches(client, *, device_ok=True, agent_ok=True, recent_page=None, recent_error=None):
     device = {'id': DEVICE, 'capabilities_json': {'capabilities': list(proxy_tasks.RUNTIME_TOOL_NAMES)}}
     device_error = None if device_ok else ({'code': 'DEVICE_OFFLINE', 'message': '离线'})
+    if recent_error is not None:
+        recent = AsyncMock(return_value=(None, recent_error))
+    else:
+        recent = AsyncMock(return_value=(recent_page if recent_page is not None else
+                                         {'self_user_id': ACCOUNT, 'cursor': 'wb1.h',
+                                          'has_more': False}, None))
     return (patch.object(proxy_api, '_task_device', AsyncMock(
                 return_value=(device, device_error))),
+            patch.object(proxy_api, '_read_sessions_call', recent),
             patch.object(proxy_dispatcher, '_agent_allowed', AsyncMock(return_value=agent_ok)),
             patch.object(proxy_dispatcher, '_proxy_client', lambda: client))
 
 
-async def _tick(client, *, device_ok=True, agent_ok=True):
-    device_patch, agent_patch, client_patch = _patches(client, device_ok=device_ok,
-                                                       agent_ok=agent_ok)
-    with device_patch, agent_patch, client_patch:
+async def _tick(client, *, device_ok=True, agent_ok=True, recent_page=None, recent_error=None,
+                clear_memo=True):
+    """跑一轮派发；clear_memo 清近期往来备忘（用例间隔离）。"""
+    if clear_memo:
+        proxy_dispatcher._recent_context_memo.clear()
+    device_patch, recent_patch, agent_patch, client_patch = _patches(
+        client, device_ok=device_ok, agent_ok=agent_ok,
+        recent_page=recent_page, recent_error=recent_error)
+    with device_patch, recent_patch, agent_patch, client_patch:
         await run_tick()
 
 
@@ -625,3 +639,202 @@ def test_gate_missing_user_row_fail_closed(tenant_id):
     assert _gate_call(tenant_id, batch, 'wecom_read_session',
                       {'session': locator}) == 'WECOM_PROXY_AGENT_REVOKED'
     assert _task_row(tenant_id, task['id'])['stop_requested'] is True
+
+
+# ==================== 评审问题 1：本批之前的近期往来 ====================
+
+
+def _page(locator, messages, *, cursor='wb1.recent', has_more=False):
+    return {'self_user_id': ACCOUNT, 'source_generation': 'gen-2', 'cursor': cursor,
+            'has_more': has_more,
+            'sessions': [{'session': locator, 'messages': list(messages)}]}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_includes_recent_context_before_batch(tenant_id):
+    """①近期前文：提交文本含"本批之前"段且只含 msg_id<本批最小值的消息——
+    本批内（97/100，97＝本批最小值）与批后（101-109 场景的 105）不入前文段。"""
+    locator = _locator(1)
+    _register(tenant_id, locator)
+    task = _create_started(tenant_id, [locator])
+    batch = _make_batch(tenant_id, task['id'], locator, end=100, runner_id=None,
+                        updated_at='2026-11-08 09:00:00')
+    # 先终结占位批（同会话仅一个未决批），再建本批：快照消息 97/100（min=97）
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''UPDATE bs_wecom_proxy_batches SET status='failed'
+                          WHERE id=%s''', (batch['id'],))
+        conn.commit()
+    batch = _make_batch(tenant_id, task['id'], locator, end=100,
+                        updated_at='2026-11-08 09:01:00',
+                        messages=[_peer(97, text='本批第一条'), _peer(100, text='本批末条')])
+    recent_page = _page(locator, [
+        _peer(90, text='之前的上下文'),
+        _peer(95, text='本批前最后一条'),
+        _peer(97),   # 本批消息（等于本批最小值）：排除
+        _peer(105, text='批后新消息'),  # 101-109 场景：排除
+    ])
+    client = _ClientStub()
+    await _tick(client, recent_page=recent_page)
+    assert len(client.requests) == 1
+    text = client.requests[0][2]['text']
+    assert '本批之前的近期往来' in text
+    assert 'msg_id=95' in text and '本批前最后一条' in text
+    assert 'msg_id=90' in text
+    assert 'msg_id=105' not in text           # 批后新消息不入前文
+    assert text.count('msg_id=97') == 1       # 本批消息只出现在本批段
+    recent_segment = text.split('本批之前的近期往来')[1].split('本批新消息')[0]
+    assert 'msg_id=97' not in recent_segment  # 97（＝本批最小值）不入前文段
+    assert 'msg_id=99' not in text            # 快照外的旧默认消息不存在（防串批次）
+    # 本批段在前文段之后（前文为背景，本批为待处理）
+    assert text.index('本批之前的近期往来') < text.index('本批新消息')
+
+
+@pytest.mark.asyncio
+async def test_dispatch_recent_read_failure_continues_without_section(tenant_id):
+    """①前文读取失败：记日志并继续提交，提交文本无前文段，批次正常派发。"""
+    from loguru import logger
+
+    locator = _locator(2)
+    _register(tenant_id, locator)
+    task = _create_started(tenant_id, [locator])
+    batch = _make_batch(tenant_id, task['id'], locator)
+    records = []
+    handler_id = logger.add(lambda message: records.append(message), level='WARNING')
+    try:
+        client = _ClientStub()
+        await _tick(client, recent_error={'code': 'DEVICE_OFFLINE', 'message': '离线'})
+    finally:
+        logger.remove(handler_id)
+    assert len(client.requests) == 1   # 提交未因前文读取失败而放弃
+    text = client.requests[0][2]['text']
+    assert '本批之前的近期往来' not in text
+    assert 'msg_id=99' in text         # 本批原文仍在
+    assert any('近期往来读取失败' in str(message) for message in records)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_reuses_recent_context_for_same_key_retry(tenant_id):
+    """①备忘：提交瞬时失败后的同键重试复用首次近期往来（幂等意图逐字节一致），
+    不重读最新页。"""
+    locator = _locator(4)
+    _register(tenant_id, locator)
+    task = _create_started(tenant_id, [locator])
+    batch = _make_batch(tenant_id, task['id'], locator)
+    recent_page = _page(locator, [_peer(95, text='本批前消息')])
+    client = _ClientStub(responses=[RunnerError('RUNNER_SERVICE_UNAVAILABLE', 503)])
+    await _tick(client, recent_page=recent_page)
+    assert _batch_row(tenant_id, batch['id'])['status'] == 'running'
+    # 第二轮孤儿重提：备忘命中，不再发起受信读（读 mock 计数不变）
+    with patch.object(proxy_api, '_read_sessions_call') as read_mock:
+        read_mock.side_effect = AssertionError('重试不应重读近期往来')
+        device = {'id': DEVICE, 'capabilities_json': {'capabilities': list(proxy_tasks.RUNTIME_TOOL_NAMES)}}
+        with patch.object(proxy_api, '_task_device', AsyncMock(return_value=(device, None))), \
+             patch.object(proxy_dispatcher, '_agent_allowed', AsyncMock(return_value=True)), \
+             patch.object(proxy_dispatcher, '_proxy_client', lambda: client):
+            await run_tick()
+    assert len(client.requests) == 2
+    assert client.requests[1][2]['client_request_id'] == client.requests[0][2][
+        'client_request_id']
+    assert client.requests[1][2]['text'] == client.requests[0][2]['text']
+
+
+@pytest.mark.asyncio
+async def test_orphan_resubmit_digest_mismatch_fails_deterministically(tenant_id):
+    """①幂等失配（进程重启备忘不可得、重读漂移）：同键重提交遇
+    IDEMPOTENCY_INPUT_MISMATCH 走确定性拒绝——批次 failed＋目标 halted，
+    不再重试、不产生第二次 Runner 执行。"""
+    locator = _locator(9)
+    _register(tenant_id, locator)
+    task = _create_started(tenant_id, [locator])
+    batch = _make_batch(tenant_id, task['id'], locator)
+    client = _ClientStub(responses=[RunnerError('RUNNER_SERVICE_UNAVAILABLE', 503)])
+    await _tick(client, recent_page=_page(locator, [_peer(95, text='旧前文')]))
+    assert _batch_row(tenant_id, batch['id'])['status'] == 'running'
+    # 模拟进程重启：备忘清空后重读最新页（新消息使前文漂移→text 与首次不同）
+    client2 = _ClientStub(responses=[RunnerError('IDEMPOTENCY_INPUT_MISMATCH', 409)])
+    await _tick(client2, recent_page=_page(locator, [_peer(95, text='旧前文'),
+                                                     _peer(96, text='期间新到')]))
+    assert len(client2.requests) == 1          # 失配即确定性拒绝，不二刷同键
+    assert _batch_row(tenant_id, batch['id'])['status'] == 'failed'
+    assert _target_row(tenant_id, task['id'], locator)['status'] == 'halted'
+    assert _task_row(tenant_id, task['id'])['status'] == 'running'  # 非权限类不停任务
+    # 后续轮次不再对该批发起任何提交（failed 为终态，不产生第二次执行）
+    client3 = _ClientStub()
+    await _tick(client3)
+    assert client3.requests == []
+
+
+# ==================== 评审问题 2：占用事务内任务/目标复核 ====================
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('branch', ['task_stopped', 'stop_requested', 'target_removed'])
+async def test_occupy_rechecks_task_and_target_in_tx(tenant_id, branch):
+    """②占用复核：任务已 stopped/stop_requested=true/目标 removed 三分支——
+    occupy 返回 False、批次保持 pending（停止任务的 pending 批留待下次启动）。"""
+    locator = _locator(5 if branch == 'task_stopped' else
+                       6 if branch == 'stop_requested' else 7)
+    _register(tenant_id, locator)
+    task = _create_started(tenant_id, [locator])
+    batch = _make_batch(tenant_id, task['id'], locator)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if branch == 'task_stopped':
+            cursor.execute('''UPDATE bs_wecom_proxy_tasks SET status='stopped'
+                              WHERE id=%s AND tenant_id=%s''', (task['id'], tenant_id))
+        elif branch == 'stop_requested':
+            cursor.execute('''UPDATE bs_wecom_proxy_tasks SET stop_requested=TRUE
+                              WHERE id=%s AND tenant_id=%s''', (task['id'], tenant_id))
+        else:
+            cursor.execute('''UPDATE bs_wecom_proxy_task_sessions SET status='removed'
+                              WHERE tenant_id=%s AND task_id=%s AND session=%s''',
+                           (tenant_id, task['id'], locator))
+        conn.commit()
+    batch = _batch_row(tenant_id, batch['id'])
+    occupied = await asyncio.to_thread(proxy_dispatcher._occupy_batch, batch)
+    assert occupied is False
+    assert _batch_row(tenant_id, batch['id'])['status'] == 'pending'
+
+
+@pytest.mark.asyncio
+async def test_occupy_still_succeeds_on_healthy_batch(tenant_id):
+    """②正常路径不回归：健康 pending 批占用成功置 running。"""
+    locator = _locator(8)
+    _register(tenant_id, locator)
+    task = _create_started(tenant_id, [locator])
+    batch = _make_batch(tenant_id, task['id'], locator)
+    occupied = await asyncio.to_thread(proxy_dispatcher._occupy_batch, batch)
+    assert occupied is True
+    assert _batch_row(tenant_id, batch['id'])['status'] == 'running'
+
+
+# ==================== 评审问题 3：消息时间按北京时间渲染 ====================
+
+
+def test_render_batch_text_uses_shanghai_time_with_label():
+    """③send_time 渲染为上海时间（+8）且显式标注北京时间，非 UTC。"""
+    from datetime import datetime as dt
+    from zoneinfo import ZoneInfo
+
+    batch = {'id': 1, 'session': 'ws1.x', 'batch_end_msg_id': 100,
+             'input_snapshot': {'messages': [_peer(99, send_time=1760000000)]}}
+    text = proxy_dispatcher.render_batch_text(batch)
+    expected = dt.fromtimestamp(1760000000, ZoneInfo('Asia/Shanghai')).strftime('%m-%d %H:%M')
+    utc_text = dt.fromtimestamp(1760000000, ZoneInfo('UTC')).strftime('%m-%d %H:%M')
+    assert expected != utc_text                        # 该时点上海与 UTC 相差 8 小时
+    assert f'[msg_id=99 {expected} 北京时间]' in text  # 上海时间＋显式标注
+    assert utc_text not in text                        # 不再渲染 UTC
+    assert '时间均为北京时间' in text
+
+
+def test_render_batch_text_recent_section_same_format():
+    """①③前文段与本批段同格式（时间/发送人/提及，北京时间标注）。"""
+    batch = {'id': 1, 'session': 'ws1.x', 'batch_end_msg_id': 100,
+             'input_snapshot': {'messages': [_peer(100, send_time=1760000000)]}}
+    recent = [_peer(95, send_time=1759999000,
+                    mentions=[{'kind': 'user', 'user_id': 'acc1', 'name': '我'}])]
+    text = proxy_dispatcher.render_batch_text(batch, recent)
+    recent_segment = text.split('本批之前的近期往来')[1].split('本批新消息')[0]
+    assert 'msg_id=95' in recent_segment and '@我' in recent_segment
+    assert '北京时间]' in recent_segment

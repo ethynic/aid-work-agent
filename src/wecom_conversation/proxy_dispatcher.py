@@ -23,7 +23,8 @@ Runner 运行期间监控经 _group_runner_busy（查 running 批）整组不读
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from loguru import logger
 
@@ -295,8 +296,11 @@ async def _dispatch_batch(batch, runner_states):
             await _post_resume(batch, batch['runner_id'],
                                int(state.get('attempt') or 0), key_prefix='wecom-proxy-wake')
             return True
+        # 近期往来在占用后、提交前经受信读取（组级锁＋批次 running 双重串行，
+        # CLI 互斥兜底）；备忘使同键重试重建逐字节相同的意图
+        recent = await _recent_context_for(batch, device)
         try:
-            runner = await _submit_runner(batch)
+            runner = await _submit_runner(batch, recent)
         except Exception as error:  # noqa: BLE001
             await _handle_submit_error(batch, error)
             return False
@@ -311,9 +315,23 @@ async def _dispatch_batch(batch, runner_states):
 
 
 async def _submit_running_batch(batch):
-    """孤儿批（占用已置、Runner 行缺失/提交结果未知）同键重试提交。"""
+    """孤儿批（占用已置、Runner 行缺失/提交结果未知）同键重试提交。
+
+    近期往来按备忘复用（进程重启后重读，漂移导致的幂等失配沿确定性拒绝
+    分支停住待人工，不重复建执行）。"""
+    proxy_api = _proxy_api()
+    device, error = await proxy_api._task_device(batch['tenant_id'], batch['user_id'],
+                                                 str(batch['device_id']),
+                                                 DISPATCH_REQUIRED_TOOLS)
+    if error:
+        # 设备不可用：占用保持，下轮同键重试
+        code, message = proxy_monitor_error_parts(error)
+        logger.warning(f'后端日志：企微代理孤儿批重提设备不可用本轮跳过 '
+                       f'batch={batch["id"]} code={code} message={message}')
+        return
+    recent = await _recent_context_for(batch, device)
     try:
-        runner = await _submit_runner(batch)
+        runner = await _submit_runner(batch, recent)
     except Exception as error:  # noqa: BLE001
         await _handle_submit_error(batch, error)
         return
@@ -353,12 +371,35 @@ def _group_has_running(tenant_id, device_id, account):
 
 
 def _occupy_batch(batch):
-    """pending→running（组内占用原子取得；状态已变返回 False）。"""
+    """pending→running（组内占用原子取得；核对失效返回 False，批次保持 pending）。
+
+    迁移与派发前核对同事务闭合窗口（评审问题 2）：任务行 FOR UPDATE 复核
+    running 且未 stop_requested、目标行 active——用户停止（settle 落 stopped）
+    或目标移除与派发并发时不得再占用/提交（停止任务的 pending 批留待下次
+    启动，P4 语义）。锁序 task→target→batch 与停止/编辑/建批路径一致。
+    """
     from src.db.database import get_db_connection
 
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
+            cursor.execute(
+                '''SELECT status, stop_requested FROM bs_wecom_proxy_tasks
+                   WHERE id=%s AND tenant_id=%s FOR UPDATE''',
+                (batch['task_id'], batch['tenant_id']))
+            task = cursor.fetchone()
+            if (task is None or task['status'] != proxy_tasks.TASK_RUNNING
+                    or task['stop_requested']):
+                conn.rollback()
+                return False
+            cursor.execute(
+                '''SELECT status FROM bs_wecom_proxy_task_sessions
+                   WHERE tenant_id=%s AND task_id=%s AND session=%s FOR UPDATE''',
+                (batch['tenant_id'], batch['task_id'], batch['session']))
+            target = cursor.fetchone()
+            if target is None or target['status'] != proxy_tasks.TARGET_ACTIVE:
+                conn.rollback()
+                return False
             proxy_tasks.start_batch_in_tx(cursor, batch['tenant_id'], batch['id'])
             conn.commit()
         return True
@@ -462,28 +503,46 @@ async def _fail_deterministic(batch, code, *, stop_task):
 
 # ==================== 提交体（契约 §6 受信提交） ====================
 
-def render_batch_text(batch):
-    """本批原文与身份 → Runner 输入文本（不能只传消息 ID 让 Runner 猜内容）。"""
+# 消息时间渲染时区：CLI 只提供 send_time Unix 秒，按业务时区（设计 §9.4 默认
+# Asia/Shanghai）渲染并显式标注，避免 Agent 误判"今天上午"类时间表述
+_PROXY_TZ = ZoneInfo('Asia/Shanghai')
+
+
+def _format_message_line(message):
+    """单条消息 → 模型输入行（时间/发送人/提及同本批格式，评审问题 3：北京时间）。"""
+    send_time = message.get('send_time')
+    time_text = datetime.fromtimestamp(send_time, _PROXY_TZ).strftime('%m-%d %H:%M') \
+        if isinstance(send_time, int) else '--'
+    mentions = [item for item in message.get('mentions') or [] if isinstance(item, dict)]
+    mention_text = ''
+    if mentions:
+        parts = [('@所有人' if item.get('kind') == 'all'
+                  else f"@{item.get('name') or item.get('user_id')}") for item in mentions]
+        mention_text = f' mentions={",".join(parts)}'
+        if message.get('mentions_complete') is False:
+            mention_text += '（提及解析不完整，需结合原文判断是否 @ 本人）'
+    return (f'[msg_id={message.get("msg_id")} {time_text} 北京时间] '
+            f'{message.get("sender_name") or "未知"}'
+            f'({message.get("sender_platform") or "?"},sender_id='
+            f'{message.get("sender_id")}){mention_text}: {message.get("text") or ""}')
+
+
+def render_batch_text(batch, recent_messages=None):
+    """本批原文与身份 → Runner 输入文本（不能只传消息 ID 让 Runner 猜内容）。
+
+    recent_messages：本批之前的近期往来（设计 §9.4 本批原文＋该会话近期原始
+    往来；派发前经受信读 best-effort 获取，msg_id 已过滤低于本批最小值）；
+    无可用前文则省略该段。"""
     snapshot = batch.get('input_snapshot') or {}
     messages = [item for item in snapshot.get('messages') or [] if isinstance(item, dict)]
-    lines = [f'目标会话：{batch["session"]}',
-             f'本批新消息 {len(messages)} 条，批次截止 msg_id={batch["batch_end_msg_id"]}：']
-    for message in messages:
-        send_time = message.get('send_time')
-        time_text = datetime.fromtimestamp(send_time, tz=timezone.utc).strftime('%m-%d %H:%M') \
-            if isinstance(send_time, int) else '--'
-        mentions = [item for item in message.get('mentions') or [] if isinstance(item, dict)]
-        mention_text = ''
-        if mentions:
-            parts = [('@所有人' if item.get('kind') == 'all'
-                      else f"@{item.get('name') or item.get('user_id')}") for item in mentions]
-            mention_text = f' mentions={",".join(parts)}'
-            if message.get('mentions_complete') is False:
-                mention_text += '（提及解析不完整，需结合原文判断是否 @ 本人）'
-        lines.append(f'[msg_id={message.get("msg_id")} {time_text}] '
-                     f'{message.get("sender_name") or "未知"}'
-                     f'({message.get("sender_platform") or "?"},sender_id='
-                     f'{message.get("sender_id")}){mention_text}: {message.get("text") or ""}')
+    lines = [f'目标会话：{batch["session"]}']
+    if recent_messages:
+        lines.append(f'以下为本批之前的近期往来 {len(recent_messages)} 条（背景上下文，'
+                     '不计入本批待处理范围）：')
+        lines.extend(_format_message_line(message) for message in recent_messages)
+    lines.append(f'本批新消息 {len(messages)} 条，批次截止 msg_id={batch["batch_end_msg_id"]}'
+                 '（时间均为北京时间）：')
+    lines.extend(_format_message_line(message) for message in messages)
     return '\n'.join(lines)
 
 
@@ -520,7 +579,7 @@ def reply_discipline_augmentation(batch):
     )
 
 
-def build_submit_body(batch):
+def build_submit_body(batch, recent_messages=None):
     """RunnerSubmit 字典（契约 §6）：固定 web_session_id＋冻结指令快照＋本批原文。"""
     return {
         'source': PROXY_SERVICE_ID,
@@ -528,7 +587,7 @@ def build_submit_body(batch):
         # 幂等键：同批同 retry_count 重试返回原 Runner；零发送重试 retry_count+1
         # 换新键 → 新 Runner（契约 §5 规则 3）
         'client_request_id': f'{batch["id"]}:{int(batch.get("retry_count") or 0)}',
-        'text': render_batch_text(batch),
+        'text': render_batch_text(batch, recent_messages),
         'attachments': [],
         'profile_id': batch['agent_id'],
         'instance_id': None,
@@ -552,6 +611,67 @@ def build_submit_body(batch):
     }
 
 
-async def _submit_runner(batch):
+async def _submit_runner(batch, recent_messages=None):
     return await _proxy_client().request('POST', '/v1/runners', authorization=None,
-                                         body=build_submit_body(batch))
+                                         body=build_submit_body(batch, recent_messages))
+
+
+# ==================== 本批之前的近期往来（设计 §9.4） ====================
+
+# 同 (tenant, batch, retry_count) 的近期往来备忘：提交层瞬时失败后同键重试必须
+# 重建逐字节相同的意图（幂等 digest 覆盖 text），重读最新页会随新消息漂移——
+# 同进程内复用首次读取结果；进程重启后的孤儿重提读不到备忘时按 best-effort
+# 重读，若幂等命中失配（IDEMPOTENCY_INPUT_MISMATCH）按确定性拒绝停住待人工。
+_recent_context_memo: dict = {}
+_RECENT_MEMO_MAX = 512
+
+
+def _batch_min_msg_id(batch):
+    snapshot = batch.get('input_snapshot') or {}
+    ids = [item.get('msg_id') for item in snapshot.get('messages') or []
+           if isinstance(item, dict) and isinstance(item.get('msg_id'), int)
+           and not isinstance(item.get('msg_id'), bool)]
+    return min(ids) if ids else None
+
+
+async def _fetch_recent_context(tenant_id, user_id, device, locator, before_msg_id):
+    """经受信读取最新页取本批之前的近期往来（评审问题 1）。
+
+    复用 P4 受信读 _read_sessions_call（沿既有受信派发路径，CLI 互斥已兜底
+    串行）；仅保留 msg_id 低于本批最小值的消息——排除本批消息与批后新消息
+    （如 100 批执行期间到达的 101-109）。best-effort：失败记日志返回空列表，
+    不因此失败批次（远期事实智能体仍可按需经读取工具核对）。
+    """
+    proxy_api = _proxy_api()
+    data, error = await proxy_api._read_sessions_call(
+        tenant_id, user_id, device, {'sessions': [locator], 'limit': 50})
+    if error is not None:
+        code, message = proxy_monitor_error_parts(error)
+        logger.warning(f'后端日志：企微代理近期往来读取失败本批不带前文 '
+                       f'session={locator[:60]} code={code} message={message}')
+        return []
+    from .proxy_monitor import _page_messages
+
+    messages = [item for item in _page_messages(data, locator)
+                if isinstance(item.get('msg_id'), int)
+                and not isinstance(item.get('msg_id'), bool)
+                and item['msg_id'] < before_msg_id]
+    messages.sort(key=lambda item: item['msg_id'])
+    return messages
+
+
+async def _recent_context_for(batch, device):
+    """按（租户/批次/retry_count）取近期往来，命中备忘不重读（见备忘注释）。"""
+    memo_key = (batch['tenant_id'], batch['id'], int(batch.get('retry_count') or 0))
+    cached = _recent_context_memo.get(memo_key)
+    if cached is not None:
+        return cached
+    before_msg_id = _batch_min_msg_id(batch)
+    if before_msg_id is None:
+        return []
+    recent = await _fetch_recent_context(batch['tenant_id'], batch['user_id'], device,
+                                         batch['session'], before_msg_id)
+    if len(_recent_context_memo) >= _RECENT_MEMO_MAX:
+        _recent_context_memo.clear()
+    _recent_context_memo[memo_key] = recent
+    return recent
