@@ -253,7 +253,7 @@ export function listProxyTasks(options: ProxyTaskListOptions = {}): Promise<{ ta
   if (options.includeDeleted) query.set('include_deleted', 'true')
   if (options.limit) query.set('limit', String(options.limit))
   if (options.offset) query.set('offset', String(options.offset))
-  return request('GET', `/${query.size ? `?${query}` : ''}`)
+  return request('GET', query.size ? `?${query}` : '')
 }
 
 export function getProxyTask(taskId: number, options: { batchOffset?: number; batchLimit?: number } = {}): Promise<{ task: WecomProxyTask }> {
